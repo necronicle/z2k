@@ -227,29 +227,15 @@ prompt_install_or_menu() {
     printf "\n"
 
     if is_zapret2_installed; then
-        # Уже установлен - открыть меню
         print_info "Открываю меню управления..."
         sleep 1
         show_main_menu
     else
-        # Не установлен - предложить установку
-        printf "Установить zapret2 сейчас? [Y/n]: "
-        read -r answer
-
-        case "$answer" in
-            [Nn]|[Nn][Oo])
-                print_info "Установка отменена"
-                print_info "Для установки позже запустите: sh z2k.sh install"
-                print_info "Для меню запустите: sh z2k.sh menu"
-                exit 0
-                ;;
-            *)
-                # Запустить установку
-                run_full_install
-                ;;
-        esac
+        print_info "zapret2 не установлен — запускаю установку..."
+        run_full_install
     fi
 }
+
 
 # ==============================================================================
 # ОБРАБОТКА АРГУМЕНТОВ КОМАНДНОЙ СТРОКИ
