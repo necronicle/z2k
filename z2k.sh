@@ -39,6 +39,46 @@ die() {
     [ -n "$2" ] && exit "$2" || exit 1
 }
 
+clear_screen() {
+    if [ -t 1 ]; then
+        clear 2>/dev/null || printf "\033c"
+    fi
+}
+
+print_header() {
+    printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    printf "  %s\n" "$1"
+    printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+}
+
+print_separator() {
+    printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+}
+
+confirm() {
+    local prompt=${1:-"Продолжить?"}
+    local default=${2:-"Y"}
+
+    if [ "$default" = "Y" ]; then
+        printf "%s [Y/n]: " "$prompt"
+    else
+        printf "%s [y/N]: " "$prompt"
+    fi
+
+    read -r answer
+
+    case "$answer" in
+        [Yy]|[Yy][Ee][Ss]|"")
+            [ "$default" = "Y" ] && return 0
+            [ "$answer" != "" ] && return 0
+            return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # ==============================================================================
 # ПРОВЕРКИ ОКРУЖЕНИЯ
 # ==============================================================================
