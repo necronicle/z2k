@@ -142,36 +142,50 @@ step_build_zapret2() {
 
     print_info "Определена архитектура: $arch"
 
-    # Скачать готовый бинарник nfqws2
-    print_info "Загрузка pre-built nfqws2 для $arch..."
+    # Скачать OpenWrt embedded версию с готовыми бинарниками
+    print_info "Загрузка zapret2 OpenWrt embedded (содержит готовые бинарники)..."
 
-    local binary_url="https://github.com/bol-van/zapret2/releases/latest/download/nfqws2-${arch}"
+    local openwrt_url="https://github.com/bol-van/zapret2/releases/latest/download/zapret2-openwrt-embedded.tar.gz"
 
-    # Если latest не найден, попробовать из исходников (fallback)
-    if ! curl -fsSL "$binary_url" -o "${ZAPRET2_DIR}/nfq2/nfqws2"; then
-        print_warning "Pre-built бинарник не найден, пробую альтернативный источник..."
+    if curl -fsSL "$openwrt_url" -o openwrt-embedded.tar.gz; then
+        print_success "OpenWrt embedded загружен"
 
-        # Fallback: скачать из zapret (не zapret2) релизов
-        binary_url="https://github.com/bol-van/zapret/releases/latest/download/binaries.tar.gz"
+        # Распаковать и найти бинарник
+        print_info "Извлечение nfqws2..."
 
-        if curl -fsSL "$binary_url" -o binaries.tar.gz; then
-            tar -xzf binaries.tar.gz || return 1
+        # Временная директория для распаковки
+        mkdir -p openwrt_binaries
+        tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries || return 1
 
-            # Найти nfqws для нашей архитектуры
-            if [ -f "binaries/aarch64-linux-musl/nfqws" ]; then
-                cp "binaries/aarch64-linux-musl/nfqws" "${ZAPRET2_DIR}/nfq2/nfqws2"
-            elif [ -f "binaries/x86_64-linux-musl/nfqws" ]; then
-                cp "binaries/x86_64-linux-musl/nfqws" "${ZAPRET2_DIR}/nfq2/nfqws2"
-            elif [ -f "binaries/mips32r1-linux-musl/nfqws" ]; then
-                cp "binaries/mips32r1-linux-musl/nfqws" "${ZAPRET2_DIR}/nfq2/nfqws2"
-            else
-                print_error "Не найден совместимый бинарник для $arch"
-                return 1
+        # Найти исполняемый файл nfqws2
+        local binary_found=0
+
+        # Поиск в разных возможных локациях
+        for binary_path in \
+            "openwrt_binaries/nfq2/nfqws2" \
+            "openwrt_binaries/binaries/aarch64-3.10-linux-musl/nfqws2" \
+            "openwrt_binaries/binaries/aarch64-openwrt/nfqws2" \
+            "openwrt_binaries/binaries/nfqws2" \
+            $(find openwrt_binaries -name "nfqws2" -o -name "nfqws" 2>/dev/null | head -1); do
+
+            if [ -f "$binary_path" ]; then
+                cp "$binary_path" "${ZAPRET2_DIR}/nfq2/nfqws2"
+                binary_found=1
+                print_success "Найден и скопирован: $binary_path"
+                break
             fi
-        else
-            print_error "Не удалось загрузить бинарники zapret"
+        done
+
+        # Очистка
+        rm -rf openwrt_binaries openwrt-embedded.tar.gz
+
+        if [ $binary_found -eq 0 ]; then
+            print_error "nfqws2 не найден в OpenWrt embedded архиве"
             return 1
         fi
+    else
+        print_error "Не удалось загрузить zapret2 OpenWrt embedded"
+        return 1
     fi
 
     # Сделать исполняемым
