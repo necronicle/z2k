@@ -524,13 +524,41 @@ INIT_SCRIPT
 step_finalize() {
     print_header "Шаг 9/9: Финализация установки"
 
+    # Проверить бинарник перед запуском
+    print_info "Проверка nfqws2 перед запуском..."
+
+    if [ ! -x "${ZAPRET2_DIR}/nfq2/nfqws2" ]; then
+        print_error "nfqws2 не найден или не исполняемый"
+        return 1
+    fi
+
+    # Проверить зависимости бинарника
+    print_info "Проверка библиотек..."
+    if ldd "${ZAPRET2_DIR}/nfq2/nfqws2" 2>&1 | grep -q "not found"; then
+        print_warning "Отсутствуют некоторые библиотеки:"
+        ldd "${ZAPRET2_DIR}/nfq2/nfqws2" | grep "not found"
+    fi
+
+    # Попробовать запустить напрямую для диагностики
+    print_info "Тест запуска nfqws2..."
+    if "${ZAPRET2_DIR}/nfq2/nfqws2" --help >/dev/null 2>&1; then
+        print_success "nfqws2 исполняется корректно"
+    else
+        print_error "nfqws2 не может быть запущен"
+        print_info "Вывод ошибки:"
+        "${ZAPRET2_DIR}/nfq2/nfqws2" --help 2>&1 | head -10
+        return 1
+    fi
+
     # Запустить сервис
     print_info "Запуск сервиса zapret2..."
 
-    if "$INIT_SCRIPT" start; then
-        print_success "Сервис zapret2 запущен"
+    if "$INIT_SCRIPT" start 2>&1; then
+        print_success "Команда start выполнена"
     else
         print_error "Не удалось запустить сервис"
+        print_info "Пробую запустить с подробным выводом..."
+        sh -x "$INIT_SCRIPT" start 2>&1 | tail -20
         return 1
     fi
 
@@ -541,6 +569,8 @@ step_finalize() {
         print_success "zapret2 работает"
     else
         print_warning "Сервис запущен, но процесс не обнаружен"
+        print_info "Проверка процессов:"
+        ps | grep -i nfqws || echo "Процессов nfqws не найдено"
         print_info "Проверьте логи: $INIT_SCRIPT status"
     fi
 
