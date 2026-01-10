@@ -32,13 +32,19 @@ step_install_dependencies() {
 gcc
 make
 libmnl
+libmnl-dev
 libnetfilter-queue
+libnetfilter-queue-dev
 libnfnetlink
+libnfnetlink-dev
 libcap
+libcap-dev
 zlib
+zlib-dev
 curl
 unzip
 lua
+lua-dev
 "
 
     print_info "Установка пакетов..."
