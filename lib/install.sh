@@ -181,24 +181,61 @@ step_build_zapret2() {
         mkdir -p openwrt_binaries
         tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries || return 1
 
-        # Найти исполняемый файл nfqws2
+        # Найти исполняемый файл nfqws2 для правильной архитектуры
         local binary_found=0
+        local binary_path=""
 
-        # Поиск в разных возможных локациях
-        for binary_path in \
-            "openwrt_binaries/nfq2/nfqws2" \
-            "openwrt_binaries/binaries/aarch64-3.10-linux-musl/nfqws2" \
-            "openwrt_binaries/binaries/aarch64-openwrt/nfqws2" \
-            "openwrt_binaries/binaries/nfqws2" \
-            $(find openwrt_binaries -name "nfqws2" -o -name "nfqws" 2>/dev/null | head -1); do
+        # Определить правильную директорию в зависимости от архитектуры
+        case "$arch" in
+            aarch64)
+                # ARM64 - искать в aarch64 директориях
+                for path in \
+                    "openwrt_binaries/*/binaries/aarch64-3.10-linux-musl/nfqws2" \
+                    "openwrt_binaries/*/binaries/linux-aarch64/nfqws2" \
+                    "openwrt_binaries/*/binaries/aarch64/nfqws2"; do
 
-            if [ -f "$binary_path" ]; then
-                cp "$binary_path" "${ZAPRET2_DIR}/nfq2/nfqws2"
-                binary_found=1
-                print_success "Найден и скопирован: $binary_path"
-                break
-            fi
-        done
+                    binary_path=$(find openwrt_binaries -path "$path" 2>/dev/null | head -1)
+                    if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
+                        break
+                    fi
+                done
+                ;;
+            mips|mipsel)
+                # MIPS - искать в mips директориях
+                for path in \
+                    "openwrt_binaries/*/binaries/linux-mipsel/nfqws2" \
+                    "openwrt_binaries/*/binaries/mips/nfqws2"; do
+
+                    binary_path=$(find openwrt_binaries -path "$path" 2>/dev/null | head -1)
+                    if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
+                        break
+                    fi
+                done
+                ;;
+            x86_64)
+                # x86_64
+                for path in \
+                    "openwrt_binaries/*/binaries/linux-x86_64/nfqws2" \
+                    "openwrt_binaries/*/binaries/x86_64/nfqws2"; do
+
+                    binary_path=$(find openwrt_binaries -path "$path" 2>/dev/null | head -1)
+                    if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
+                        break
+                    fi
+                done
+                ;;
+            *)
+                print_warning "Неизвестная архитектура: $arch"
+                ;;
+        esac
+
+        if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
+            cp "$binary_path" "${ZAPRET2_DIR}/nfq2/nfqws2"
+            binary_found=1
+            print_success "Найден и скопирован: $binary_path"
+        else
+            binary_found=0
+        fi
 
         # Очистка
         rm -rf openwrt_binaries openwrt-embedded.tar.gz
