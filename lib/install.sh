@@ -183,10 +183,14 @@ step_build_zapret2() {
         print_info "ARM64 патч уже применен"
     fi
 
-    # Компиляция nfqws2
+    # Компиляция nfqws2 с путями Entware
     print_info "Компиляция nfqws2..."
 
-    if make; then
+    # Entware использует /opt вместо /usr
+    # Явно указываем пути к lua библиотекам
+    if make LUA_JIT=0 LUA_VER=5.1 \
+            LUA_CFLAGS="-I/opt/include" \
+            LUA_LIB="-L/opt/lib -llua"; then
         print_success "nfqws2 собран успешно"
     else
         print_error "Ошибка компиляции nfqws2"
@@ -548,11 +552,6 @@ run_full_install() {
     print_header "Установка zapret2 для Keenetic"
     print_info "Процесс установки: 9 шагов"
     print_separator
-
-    if ! confirm "Начать установку?"; then
-        print_info "Установка отменена"
-        return 0
-    fi
 
     # Выполнить все шаги последовательно
     step_update_packages || return 1
