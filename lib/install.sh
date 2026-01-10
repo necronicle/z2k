@@ -142,10 +142,22 @@ step_build_zapret2() {
 
     print_info "Определена архитектура: $arch"
 
-    # Скачать OpenWrt embedded версию с готовыми бинарниками
-    print_info "Загрузка zapret2 OpenWrt embedded (содержит готовые бинарники)..."
+    # Получить правильный URL через GitHub API
+    print_info "Получение последней версии zapret2..."
 
-    local openwrt_url="https://github.com/bol-van/zapret2/releases/latest/download/zapret2-openwrt-embedded.tar.gz"
+    local api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
+    local openwrt_url
+
+    # Получить URL файла openwrt-embedded из API
+    openwrt_url=$(curl -fsSL "$api_url" | grep -o '"browser_download_url":[^,]*openwrt-embedded\.tar\.gz"' | cut -d'"' -f4)
+
+    if [ -z "$openwrt_url" ]; then
+        print_error "Не удалось получить URL для OpenWrt embedded"
+        return 1
+    fi
+
+    print_info "Загрузка zapret2 OpenWrt embedded..."
+    print_info "URL: $openwrt_url"
 
     if curl -fsSL "$openwrt_url" -o openwrt-embedded.tar.gz; then
         print_success "OpenWrt embedded загружен"
