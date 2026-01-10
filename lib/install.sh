@@ -27,18 +27,16 @@ step_update_packages() {
 step_install_dependencies() {
     print_header "Шаг 2/9: Установка зависимостей"
 
-    # Список необходимых пакетов
+    # Список необходимых пакетов для Entware
     local packages="
 gcc
 make
-libmnl-dev
-libnetfilter-queue-dev
-libnfnetlink-dev
-iptables-mod-extra
-kmod-nf-conntrack
-kmod-nfnetlink-queue
-kmod-ipt-extra
+libmnl
+libnetfilter-queue
+libnfnetlink
 curl
+unzip
+lua
 "
 
     print_info "Установка пакетов..."
