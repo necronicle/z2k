@@ -216,48 +216,39 @@ step_build_zapret2() {
         local binary_path=""
 
         # Определить правильную директорию в зависимости от архитектуры
+        # Структура архива: zapret2-v0.8.3/binaries/linux-XXX/nfqws2
         case "$arch" in
             aarch64)
-                # ARM64 - искать в aarch64 директориях
-                for path in \
-                    "openwrt_binaries/*/binaries/aarch64-3.10-linux-musl/nfqws2" \
-                    "openwrt_binaries/*/binaries/linux-aarch64/nfqws2" \
-                    "openwrt_binaries/*/binaries/aarch64/nfqws2"; do
-
-                    binary_path=$(find openwrt_binaries -path "$path" 2>/dev/null | head -1)
-                    if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
-                        break
-                    fi
-                done
+                # ARM64 - искать в linux-arm64
+                binary_path=$(find openwrt_binaries -path "*/binaries/linux-arm64/nfqws2" 2>/dev/null | head -1)
                 ;;
-            mips|mipsel)
-                # MIPS - искать в mips директориях
-                for path in \
-                    "openwrt_binaries/*/binaries/linux-mipsel/nfqws2" \
-                    "openwrt_binaries/*/binaries/mips/nfqws2"; do
-
-                    binary_path=$(find openwrt_binaries -path "$path" 2>/dev/null | head -1)
-                    if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
-                        break
-                    fi
-                done
+            armv7l|armv6l|arm)
+                # ARM 32bit - искать в linux-arm
+                binary_path=$(find openwrt_binaries -path "*/binaries/linux-arm/nfqws2" 2>/dev/null | head -1)
+                ;;
+            mips)
+                # MIPS big-endian
+                binary_path=$(find openwrt_binaries -path "*/binaries/linux-mips/nfqws2" 2>/dev/null | head -1)
+                ;;
+            mipsel)
+                # MIPS little-endian
+                binary_path=$(find openwrt_binaries -path "*/binaries/linux-mipsel/nfqws2" 2>/dev/null | head -1)
                 ;;
             x86_64)
                 # x86_64
-                for path in \
-                    "openwrt_binaries/*/binaries/linux-x86_64/nfqws2" \
-                    "openwrt_binaries/*/binaries/x86_64/nfqws2"; do
-
-                    binary_path=$(find openwrt_binaries -path "$path" 2>/dev/null | head -1)
-                    if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
-                        break
-                    fi
-                done
+                binary_path=$(find openwrt_binaries -path "*/binaries/linux-x86_64/nfqws2" 2>/dev/null | head -1)
+                ;;
+            i386|i686)
+                # x86 32bit
+                binary_path=$(find openwrt_binaries -path "*/binaries/linux-x86/nfqws2" 2>/dev/null | head -1)
                 ;;
             *)
                 print_warning "Неизвестная архитектура: $arch"
+                binary_path=""
                 ;;
         esac
+
+        echo "DEBUG: Выбран бинарник: $binary_path"
 
         if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
             cp "$binary_path" "${ZAPRET2_DIR}/nfq2/nfqws2"
