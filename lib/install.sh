@@ -27,24 +27,15 @@ step_update_packages() {
 step_install_dependencies() {
     print_header "Шаг 2/9: Установка зависимостей"
 
-    # Список необходимых пакетов для Entware
+    # Список необходимых пакетов для Entware (только runtime)
     local packages="
-gcc
-make
 libmnl
-libmnl-dev
 libnetfilter-queue
-libnetfilter-queue-dev
 libnfnetlink
-libnfnetlink-dev
 libcap
-libcap-dev
 zlib
-zlib-dev
 curl
 unzip
-lua
-lua-dev
 "
 
     print_info "Установка пакетов..."
@@ -109,35 +100,23 @@ step_load_kernel_modules() {
 # ==============================================================================
 
 step_build_zapret2() {
-    print_header "Шаг 4/9: Сборка zapret2"
+    print_header "Шаг 4/9: Установка zapret2"
 
     # Удалить старую установку если существует
     if [ -d "$ZAPRET2_DIR" ]; then
-        print_warning "Найдена старая установка zapret2"
-        printf "Удалить и установить заново? [Y/n]: "
-        read -r answer
-
-        case "$answer" in
-            [Nn]|[Nn][Oo])
-                print_info "Установка отменена"
-                return 1
-                ;;
-            *)
-                print_info "Удаление старой установки..."
-                rm -rf "$ZAPRET2_DIR"
-                print_success "Старая установка удалена"
-                ;;
-        esac
+        print_info "Удаление старой установки..."
+        rm -rf "$ZAPRET2_DIR"
+        print_success "Старая установка удалена"
     fi
 
-    # Создать временную директорию для сборки
+    # Создать временную директорию
     local build_dir="/tmp/zapret2_build"
     rm -rf "$build_dir"
     mkdir -p "$build_dir"
 
     cd "$build_dir" || return 1
 
-    # Скачать zapret2 master.zip
+    # Скачать zapret2 master.zip (для lua, files, docs)
     print_info "Загрузка zapret2 с GitHub..."
 
     local zapret2_url="https://github.com/bol-van/zapret2/archive/refs/heads/master.zip"
@@ -151,67 +130,58 @@ step_build_zapret2() {
 
     # Распаковать
     print_info "Распаковка архива..."
-    if command -v unzip >/dev/null 2>&1; then
-        unzip -q master.zip || return 1
-    else
-        print_error "unzip не установлен"
-        print_info "Установка unzip..."
-        opkg install unzip || return 1
-        unzip -q master.zip || return 1
-    fi
+    unzip -q master.zip || return 1
 
     # Переместить в /opt/zapret2
     print_info "Установка в $ZAPRET2_DIR..."
     mv zapret2-master "$ZAPRET2_DIR" || return 1
 
-    cd "$ZAPRET2_DIR/nfq2" || return 1
+    # Определить архитектуру
+    local arch
+    arch=$(uname -m)
 
-    # Патч для ARM64 (старые заголовки Entware)
-    print_info "Применение ARM64 патча..."
+    print_info "Определена архитектура: $arch"
 
-    local sec_h="sec.h"
+    # Скачать готовый бинарник nfqws2
+    print_info "Загрузка pre-built nfqws2 для $arch..."
 
-    if ! grep -q "AUDIT_ARCH_AARCH64" "$sec_h" 2>/dev/null; then
-        # Вставить определения перед первым #endif
-        awk '
-            !inserted && /#endif/ {
-                print "#define EM_AARCH64 183"
-                print "#define __AUDIT_ARCH_64BIT 0x80000000"
-                print "#define __AUDIT_ARCH_LE 0x40000000"
-                print "#define AUDIT_ARCH_AARCH64 (EM_AARCH64|__AUDIT_ARCH_64BIT|__AUDIT_ARCH_LE)"
-                print ""
-                inserted=1
-            }
-            { print }
-        ' "$sec_h" > "${sec_h}.patched"
+    local binary_url="https://github.com/bol-van/zapret2/releases/latest/download/nfqws2-${arch}"
 
-        mv "${sec_h}.patched" "$sec_h"
-        print_success "ARM64 патч применен"
-    else
-        print_info "ARM64 патч уже применен"
+    # Если latest не найден, попробовать из исходников (fallback)
+    if ! curl -fsSL "$binary_url" -o "${ZAPRET2_DIR}/nfq2/nfqws2"; then
+        print_warning "Pre-built бинарник не найден, пробую альтернативный источник..."
+
+        # Fallback: скачать из zapret (не zapret2) релизов
+        binary_url="https://github.com/bol-van/zapret/releases/latest/download/binaries.tar.gz"
+
+        if curl -fsSL "$binary_url" -o binaries.tar.gz; then
+            tar -xzf binaries.tar.gz || return 1
+
+            # Найти nfqws для нашей архитектуры
+            if [ -f "binaries/aarch64-linux-musl/nfqws" ]; then
+                cp "binaries/aarch64-linux-musl/nfqws" "${ZAPRET2_DIR}/nfq2/nfqws2"
+            elif [ -f "binaries/x86_64-linux-musl/nfqws" ]; then
+                cp "binaries/x86_64-linux-musl/nfqws" "${ZAPRET2_DIR}/nfq2/nfqws2"
+            elif [ -f "binaries/mips32r1-linux-musl/nfqws" ]; then
+                cp "binaries/mips32r1-linux-musl/nfqws" "${ZAPRET2_DIR}/nfq2/nfqws2"
+            else
+                print_error "Не найден совместимый бинарник для $arch"
+                return 1
+            fi
+        else
+            print_error "Не удалось загрузить бинарники zapret"
+            return 1
+        fi
     fi
 
-    # Компиляция nfqws2 с путями Entware
-    print_info "Компиляция nfqws2..."
-
-    # Entware использует /opt вместо /usr
-    # Явно указываем пути к lua и другим библиотекам
-    if make LUA_JIT=0 LUA_VER=5.1 \
-            LUA_CFLAGS="-I/opt/include -I/opt/include/lua5.1" \
-            LUA_LIB="-L/opt/lib -llua" \
-            CFLAGS="-I/opt/include" \
-            LDFLAGS="-L/opt/lib"; then
-        print_success "nfqws2 собран успешно"
-    else
-        print_error "Ошибка компиляции nfqws2"
-        return 1
-    fi
+    # Сделать исполняемым
+    chmod +x "${ZAPRET2_DIR}/nfq2/nfqws2" || return 1
 
     # Проверить бинарник
     if [ -x "${ZAPRET2_DIR}/nfq2/nfqws2" ]; then
         print_success "nfqws2 готов: ${ZAPRET2_DIR}/nfq2/nfqws2"
     else
-        print_error "nfqws2 не найден после сборки"
+        print_error "nfqws2 не найден после установки"
         return 1
     fi
 
@@ -219,7 +189,7 @@ step_build_zapret2() {
     cd / || return 1
     rm -rf "$build_dir"
 
-    print_success "zapret2 собран и установлен"
+    print_success "zapret2 установлен"
     return 0
 }
 
