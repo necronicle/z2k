@@ -181,6 +181,12 @@ step_build_zapret2() {
         mkdir -p openwrt_binaries
         tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries || return 1
 
+        # DEBUG: Показать структуру архива
+        print_info "Содержимое архива:"
+        find openwrt_binaries -type f -name "nfqws*" 2>/dev/null | head -10 || echo "Файлы nfqws не найдены"
+        print_info "Все директории binaries:"
+        find openwrt_binaries -type d -name "binaries" 2>/dev/null | head -5
+
         # Найти исполняемый файл nfqws2 для правильной архитектуры
         local binary_found=0
         local binary_path=""
