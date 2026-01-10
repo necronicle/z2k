@@ -398,11 +398,21 @@ start() {
     modprobe xt_NFQUEUE 2>/dev/null
     modprobe nfnetlink_queue 2>/dev/null
 
-    # Очистить старые правила iptables
+    # Очистить старые правила iptables (правильный порядок)
+    # 1. Убить старые процессы nfqws2
+    killall nfqws2 2>/dev/null
+    sleep 0.5
+
+    # 2. Удалить правило из FORWARD (чтобы цепочку можно было удалить)
+    iptables -t mangle -D FORWARD -j ZAPRET 2>/dev/null
+
+    # 3. Очистить содержимое цепочки
     iptables -t mangle -F ZAPRET 2>/dev/null
+
+    # 4. Удалить цепочку
     iptables -t mangle -X ZAPRET 2>/dev/null
 
-    # Создать цепочку ZAPRET
+    # Создать цепочку ZAPRET заново
     iptables -t mangle -N ZAPRET
     iptables -t mangle -A FORWARD -j ZAPRET
 
@@ -442,13 +452,15 @@ start() {
             >/dev/null 2>&1 &
     fi
 
-    sleep 1
+    sleep 2
 
     if pgrep -f "$NFQWS" >/dev/null; then
         echo "zapret2 started"
         return 0
     else
         echo "zapret2 failed to start"
+        echo "Debug: checking processes..."
+        ps | grep nfqws || echo "No nfqws process found"
         return 1
     fi
 }
