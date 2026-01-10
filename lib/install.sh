@@ -179,13 +179,29 @@ step_build_zapret2() {
 
         # Временная директория для распаковки
         mkdir -p openwrt_binaries
-        tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries || return 1
+
+        # Распаковка с диагностикой
+        if tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries 2>&1; then
+            print_success "Архив распакован"
+        else
+            print_error "Ошибка распаковки архива"
+            ls -lh openwrt-embedded.tar.gz
+            file openwrt-embedded.tar.gz
+            return 1
+        fi
 
         # DEBUG: Показать структуру архива
-        print_info "Содержимое архива:"
-        find openwrt_binaries -type f -name "nfqws*" 2>/dev/null | head -10 || echo "Файлы nfqws не найдены"
-        print_info "Все директории binaries:"
-        find openwrt_binaries -type d -name "binaries" 2>/dev/null | head -5
+        print_info "Содержимое openwrt_binaries/:"
+        ls -la openwrt_binaries/ | head -20
+
+        print_info "Поиск файлов nfqws*:"
+        find openwrt_binaries -type f -name "nfqws*" 2>/dev/null || echo "Файлы nfqws не найдены"
+
+        print_info "Поиск всех исполняемых файлов:"
+        find openwrt_binaries -type f -executable 2>/dev/null | head -10 || echo "Исполняемых файлов не найдено"
+
+        print_info "Поиск директорий binaries:"
+        find openwrt_binaries -type d -name "binaries" 2>/dev/null || echo "Директорий binaries не найдено"
 
         # Найти исполняемый файл nfqws2 для правильной архитектуры
         local binary_found=0
