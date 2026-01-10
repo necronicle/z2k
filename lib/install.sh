@@ -142,21 +142,33 @@ step_build_zapret2() {
 
     print_info "Определена архитектура: $arch"
 
-    # Получить правильный URL через GitHub API
-    print_info "Получение последней версии zapret2..."
+    # Скачать OpenWrt embedded через GitHub API (с редиректом)
+    print_info "Загрузка zapret2 OpenWrt embedded..."
 
+    # GitHub API автоматически редиректит на последнюю версию
     local api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
-    local openwrt_url
 
-    # Получить URL файла openwrt-embedded из API
-    openwrt_url=$(curl -fsSL "$api_url" | grep -o '"browser_download_url":[^,]*openwrt-embedded\.tar\.gz"' | cut -d'"' -f4)
+    # Получаем JSON и парсим URL для openwrt-embedded
+    print_info "Получение информации о релизе..."
 
-    if [ -z "$openwrt_url" ]; then
-        print_error "Не удалось получить URL для OpenWrt embedded"
-        return 1
+    local release_data
+    release_data=$(curl -fsSL "$api_url" 2>&1)
+
+    if [ $? -ne 0 ]; then
+        print_warning "API недоступен, пробую прямую ссылку на v0.8.3..."
+        # Fallback на известную версию
+        local openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.3/zapret2-v0.8.3-openwrt-embedded.tar.gz"
+    else
+        # Ищем URL в JSON
+        local openwrt_url
+        openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/bol-van/zapret2/releases/download/[^"]*openwrt-embedded\.tar\.gz' | head -1)
+
+        if [ -z "$openwrt_url" ]; then
+            print_warning "Не найден в API, пробую прямую ссылку на v0.8.3..."
+            openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.3/zapret2-v0.8.3-openwrt-embedded.tar.gz"
+        fi
     fi
 
-    print_info "Загрузка zapret2 OpenWrt embedded..."
     print_info "URL: $openwrt_url"
 
     if curl -fsSL "$openwrt_url" -o openwrt-embedded.tar.gz; then
