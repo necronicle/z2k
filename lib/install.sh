@@ -177,31 +177,39 @@ step_build_zapret2() {
         # Распаковать и найти бинарник
         print_info "Извлечение nfqws2..."
 
+        # Проверить размер архива
+        echo "DEBUG: Размер архива:"
+        ls -lh openwrt-embedded.tar.gz
+
         # Временная директория для распаковки
+        echo "DEBUG: Создание директории openwrt_binaries"
         mkdir -p openwrt_binaries
 
-        # Распаковка с диагностикой
-        if tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries 2>&1; then
-            print_success "Архив распакован"
-        else
-            print_error "Ошибка распаковки архива"
-            ls -lh openwrt-embedded.tar.gz
-            file openwrt-embedded.tar.gz
+        # Попытка распаковки
+        echo "DEBUG: Попытка распаковки..."
+        tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries
+        local tar_result=$?
+        echo "DEBUG: tar exit code = $tar_result"
+
+        if [ $tar_result -ne 0 ]; then
+            print_error "Ошибка распаковки архива (код $tar_result)"
             return 1
         fi
 
+        print_success "Архив распакован"
+
         # DEBUG: Показать структуру архива
-        print_info "Содержимое openwrt_binaries/:"
-        ls -la openwrt_binaries/ | head -20
+        echo "DEBUG: Содержимое openwrt_binaries/:"
+        ls -la openwrt_binaries/ 2>&1 | head -20
+        echo "DEBUG: ---"
 
-        print_info "Поиск файлов nfqws*:"
-        find openwrt_binaries -type f -name "nfqws*" 2>/dev/null || echo "Файлы nfqws не найдены"
+        echo "DEBUG: Все файлы (рекурсивно):"
+        ls -lR openwrt_binaries/ 2>&1 | head -50
+        echo "DEBUG: ---"
 
-        print_info "Поиск всех исполняемых файлов:"
-        find openwrt_binaries -type f -executable 2>/dev/null | head -10 || echo "Исполняемых файлов не найдено"
-
-        print_info "Поиск директорий binaries:"
-        find openwrt_binaries -type d -name "binaries" 2>/dev/null || echo "Директорий binaries не найдено"
+        echo "DEBUG: Поиск nfqws:"
+        find openwrt_binaries -name "*nfqws*" -type f 2>&1
+        echo "DEBUG: Поиск завершён"
 
         # Найти исполняемый файл nfqws2 для правильной архитектуры
         local binary_found=0
