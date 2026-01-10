@@ -34,6 +34,8 @@ make
 libmnl
 libnetfilter-queue
 libnfnetlink
+libcap
+zlib
 curl
 unzip
 lua
@@ -187,10 +189,12 @@ step_build_zapret2() {
     print_info "Компиляция nfqws2..."
 
     # Entware использует /opt вместо /usr
-    # Явно указываем пути к lua библиотекам
+    # Явно указываем пути к lua и другим библиотекам
     if make LUA_JIT=0 LUA_VER=5.1 \
-            LUA_CFLAGS="-I/opt/include" \
-            LUA_LIB="-L/opt/lib -llua"; then
+            LUA_CFLAGS="-I/opt/include -I/opt/include/lua5.1" \
+            LUA_LIB="-L/opt/lib -llua" \
+            CFLAGS="-I/opt/include" \
+            LDFLAGS="-L/opt/lib"; then
         print_success "nfqws2 собран успешно"
     else
         print_error "Ошибка компиляции nfqws2"
