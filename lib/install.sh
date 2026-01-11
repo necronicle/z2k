@@ -459,7 +459,7 @@ start() {
     # Очистить старые правила iptables (правильный порядок)
     # 1. Убить старые процессы nfqws2
     killall nfqws2 2>/dev/null
-    sleep 0.5
+    sleep 1
 
     # 2. Удалить правило из FORWARD (чтобы цепочку можно было удалить)
     iptables -t mangle -D FORWARD -j ZAPRET 2>/dev/null
