@@ -689,18 +689,13 @@ run_full_install() {
     step_create_init_script || return 1
     step_finalize || return 1
 
-    # После установки - запустить автотест TOP-20
+    # После установки - автоматически запустить автотест TOP-20
     print_separator
     print_info "Установка завершена успешно!"
-    print_info "Теперь нужно выбрать стратегию обхода"
+    print_info "Запуск автоматического подбора стратегии..."
     print_separator
 
-    if confirm "Запустить автотест TOP-20 стратегий?" "Y"; then
-        auto_test_top20
-    else
-        print_info "Автотест пропущен"
-        print_info "Используйте меню для выбора стратегии: sh z2k.sh menu"
-    fi
+    auto_test_top20 --auto
 
     return 0
 }

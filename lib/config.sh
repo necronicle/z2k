@@ -22,7 +22,6 @@ download_domain_lists() {
     local lists="
 russia-discord.txt:discord.txt
 russia-youtube.txt:youtube.txt
-russia-youtube-XXL.txt:youtube-xxl.txt
 "
 
     local success=0
@@ -72,7 +71,7 @@ update_domain_lists() {
 
     # Создать backup существующих списков
     print_info "Создание резервных копий..."
-    for list in discord.txt youtube.txt youtube-xxl.txt; do
+    for list in discord.txt youtube.txt; do
         if [ -f "${LISTS_DIR}/${list}" ]; then
             cp "${LISTS_DIR}/${list}" "${LISTS_DIR}/${list}.backup"
         fi
@@ -85,7 +84,7 @@ update_domain_lists() {
     print_separator
     print_info "Текущие списки доменов:"
 
-    for list in discord.txt youtube.txt youtube-xxl.txt custom.txt; do
+    for list in discord.txt youtube.txt custom.txt; do
         if [ -f "${LISTS_DIR}/${list}" ]; then
             local count
             count=$(wc -l < "${LISTS_DIR}/${list}" 2>/dev/null || echo "0")
@@ -133,7 +132,7 @@ show_domain_lists_stats() {
     printf "%-20s | %-10s | %s\n" "Список" "Доменов" "Путь"
     print_separator
 
-    for list in discord.txt youtube.txt youtube-xxl.txt custom.txt; do
+    for list in discord.txt youtube.txt custom.txt; do
         local path="${LISTS_DIR}/${list}"
         if [ -f "$path" ]; then
             local count
@@ -311,7 +310,7 @@ show_current_config() {
     # Списки доменов
     if [ -d "$LISTS_DIR" ]; then
         print_info "Списки доменов:"
-        for list in discord.txt youtube.txt youtube-xxl.txt custom.txt; do
+        for list in discord.txt youtube.txt custom.txt; do
             if [ -f "${LISTS_DIR}/${list}" ]; then
                 local count
                 count=$(wc -l < "${LISTS_DIR}/${list}" 2>/dev/null || echo "0")
