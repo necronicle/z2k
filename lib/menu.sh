@@ -172,7 +172,7 @@ menu_select_strategy() {
     print_separator
 
     printf "\nПрименить эту стратегию? [Y/n]: "
-    read -r answer
+    read_input answer
 
     case "$answer" in
         [Nn]|[Nn][Oo])
@@ -374,7 +374,7 @@ menu_update_lists() {
     show_domain_lists_stats
 
     printf "\nОбновить списки из zapret4rocket? [Y/n]: "
-    read -r answer
+    read_input answer
 
     case "$answer" in
         [Nn]|[Nn][Oo])

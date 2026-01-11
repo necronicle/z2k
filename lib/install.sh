@@ -722,10 +722,8 @@ uninstall_zapret2() {
     print_warning "  - Конфигурацию ($CONFIG_DIR)"
     print_warning "  - Init скрипт ($INIT_SCRIPT)"
 
-    printf "\nВы уверены? Введите 'yes' для подтверждения: "
-    read -r answer
-
-    if [ "$answer" != "yes" ]; then
+    printf "\n"
+    if ! confirm "Вы уверены? Это действие необратимо!" "N"; then
         print_info "Удаление отменено"
         return 0
     fi

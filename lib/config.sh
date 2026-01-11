@@ -98,7 +98,7 @@ update_domain_lists() {
     # Спросить о перезапуске сервиса
     if is_zapret2_running; then
         printf "Перезапустить сервис для применения изменений? [Y/n]: "
-        read -r answer
+        read -r answer </dev/tty </dev/tty
 
         case "$answer" in
             [Nn]|[Nn][Oo])
@@ -240,7 +240,7 @@ clear_custom_domains() {
     fi
 
     printf "Очистить список пользовательских доменов? [y/N]: "
-    read -r answer
+    read -r answer </dev/tty
 
     case "$answer" in
         [Yy]|[Yy][Ee][Ss])
@@ -335,7 +335,7 @@ reset_config() {
     print_warning "Списки discord/youtube НЕ будут удалены"
 
     printf "\nПродолжить сброс? [y/N]: "
-    read -r answer
+    read -r answer </dev/tty
 
     case "$answer" in
         [Yy]|[Yy][Ee][Ss])
@@ -356,7 +356,7 @@ reset_config() {
             # Предложить перезапуск
             if is_zapret2_running; then
                 printf "\nПерезапустить сервис? [Y/n]: "
-                read -r restart_answer
+                read -r restart_answer </dev/tty
 
                 case "$restart_answer" in
                     [Nn]|[Nn][Oo])
@@ -435,7 +435,7 @@ restore_config() {
 
     print_info "Последний backup: $latest_backup"
     printf "Восстановить? [y/N]: "
-    read -r answer
+    read -r answer </dev/tty
 
     case "$answer" in
         [Yy]|[Yy][Ee][Ss])
@@ -450,7 +450,7 @@ restore_config() {
                 # Предложить перезапуск
                 if is_zapret2_running; then
                     printf "Перезапустить сервис? [Y/n]: "
-                    read -r restart_answer
+                    read -r restart_answer </dev/tty
 
                     case "$restart_answer" in
                         [Nn]|[Nn][Oo])
