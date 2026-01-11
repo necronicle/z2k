@@ -53,12 +53,7 @@ EOF
         # Пропустить пустые строки
         [ -z "$test_cmd" ] && continue
 
-        # Фильтр: только HTTPS/TLS стратегии
-        if ! echo "$test_cmd" | grep -q "curl_test_https"; then
-            continue
-        fi
-
-        # Определить тип по команде
+        # Все стратегии в файле - HTTPS (HTTP удалены из strats.txt)
         local type="https"
         https_count=$((https_count + 1))
 

@@ -266,7 +266,7 @@ menu_autotest() {
 [1] TOP-20 по категориям (рекомендуется, ~5 мин)
 [2] TOP-20 общий (быстрый тест, ~2 мин)
 [3] Диапазон (укажите вручную)
-[4] Все HTTPS стратегии (~10 мин)
+[4] Все стратегии (только HTTPS, 119 шт, ~10 мин)
 [B] Назад
 
 SUBMENU
@@ -303,7 +303,7 @@ SUBMENU
             clear_screen
             print_warning "Это займет около 10 минут!"
             if confirm "Продолжить?" "N"; then
-                test_strategy_range 1 118
+                test_strategy_range 1 119
             fi
             ;;
         [Bb])
