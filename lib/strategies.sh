@@ -6,8 +6,9 @@
 # КОНСТАНТЫ ДЛЯ СТРАТЕГИЙ
 # ==============================================================================
 
-# TOP-20 предопределенные стратегии (наиболее эффективные по опыту сообщества)
-TOP20_STRATEGIES="4 7 11 21 23 24 27 30 51 65 80 88 101 110 125 150 200 250 300 350"
+# TOP-20 предопределенные стратегии HTTPS/TLS (наиболее эффективные по опыту сообщества)
+# Теперь выбираются только из 118 HTTPS стратегий (равномерное распределение)
+TOP20_STRATEGIES="1 7 13 19 25 31 37 43 49 55 61 67 73 79 85 91 97 103 109 115"
 
 # Домены для тестирования стратегий
 TEST_DOMAINS="
@@ -52,15 +53,14 @@ EOF
         # Пропустить пустые строки
         [ -z "$test_cmd" ] && continue
 
-        # Определить тип по команде
-        local type="other"
-        if echo "$test_cmd" | grep -q "curl_test_https"; then
-            type="https"
-            https_count=$((https_count + 1))
-        elif echo "$test_cmd" | grep -q "curl_test_http"; then
-            type="http"
-            http_count=$((http_count + 1))
+        # Фильтр: только HTTPS/TLS стратегии
+        if ! echo "$test_cmd" | grep -q "curl_test_https"; then
+            continue
         fi
+
+        # Определить тип по команде
+        local type="https"
+        https_count=$((https_count + 1))
 
         # Извлечь nfqws2 параметры (удалить " nfqws2 " в начале)
         local params
@@ -386,6 +386,13 @@ apply_strategy_safe() {
 
 # Автоматическое тестирование TOP-20 стратегий
 auto_test_top20() {
+    local auto_mode=0
+
+    # Проверить флаг --auto
+    if [ "$1" = "--auto" ]; then
+        auto_mode=1
+    fi
+
     print_header "Автотест TOP-20 стратегий"
 
     print_info "Будут протестированы 20 наиболее эффективных стратегий"
@@ -393,9 +400,11 @@ auto_test_top20() {
     print_info "Это займет около 2-3 минут"
     printf "\n"
 
-    if ! confirm "Начать тестирование?"; then
-        print_info "Автотест отменен"
-        return 0
+    if [ "$auto_mode" -eq 0 ]; then
+        if ! confirm "Начать тестирование?"; then
+            print_info "Автотест отменен"
+            return 0
+        fi
     fi
 
     local best_score=0
@@ -443,6 +452,14 @@ auto_test_top20() {
         return 1
     fi
 
+    # В автоматическом режиме сразу применить
+    if [ "$auto_mode" -eq 1 ]; then
+        apply_strategy "$best_strategy"
+        print_success "Стратегия #$best_strategy применена автоматически"
+        return 0
+    fi
+
+    # В интерактивном режиме спросить
     printf "\nПрименить стратегию #%s? [Y/n]: " "$best_strategy"
     read -r answer </dev/tty
 
