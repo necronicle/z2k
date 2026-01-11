@@ -65,7 +65,7 @@ confirm() {
         printf "%s [y/N]: " "$prompt"
     fi
 
-    read -r answer
+    read -r answer </dev/tty
 
     case "$answer" in
         [Yy]|[Yy][Ee][Ss]|"")
@@ -105,7 +105,7 @@ check_environment() {
         print_info "ВНИМАНИЕ: z2k разработан для ARM64 Keenetic"
         print_info "Ваша архитектура: $arch"
         printf "Продолжить? [y/N]: "
-        read -r answer
+        read -r answer </dev/tty
         [ "$answer" = "y" ] || [ "$answer" = "Y" ] || die "Отменено пользователем" 0
     fi
 

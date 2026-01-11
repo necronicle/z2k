@@ -115,7 +115,7 @@ check_arch() {
             print_warning "Архитектура $arch не протестирована"
             print_warning "z2k предназначен для ARM64 Keenetic роутеров"
             printf "Продолжить? [y/N]: "
-            read -r answer
+            read -r answer </dev/tty
             [ "$answer" = "y" ] || return 1
             ;;
     esac
@@ -363,7 +363,7 @@ confirm() {
         printf "%s [y/N]: " "$prompt"
     fi
 
-    read -r answer
+    read -r answer </dev/tty
 
     case "$answer" in
         [Yy]|[Yy][Ee][Ss]|"")
@@ -381,7 +381,7 @@ confirm() {
 pause() {
     local message=${1:-"Нажмите Enter для продолжения..."}
     printf "%s" "$message"
-    read -r _
+    read -r _ </dev/tty
 }
 
 # Очистить экран (если в интерактивном режиме)
