@@ -602,17 +602,24 @@ step_finalize() {
         return 1
     fi
 
-    # Проверить зависимости бинарника
-    print_info "Проверка библиотек..."
-    if ldd "${ZAPRET2_DIR}/nfq2/nfqws2" 2>&1 | grep -q "not found"; then
-        print_warning "Отсутствуют некоторые библиотеки:"
-        ldd "${ZAPRET2_DIR}/nfq2/nfqws2" | grep "not found"
+    # Проверить зависимости бинарника (если ldd доступен)
+    if command -v ldd >/dev/null 2>&1; then
+        print_info "Проверка библиотек..."
+        if ldd "${ZAPRET2_DIR}/nfq2/nfqws2" 2>&1 | grep -q "not found"; then
+            print_warning "Отсутствуют некоторые библиотеки:"
+            ldd "${ZAPRET2_DIR}/nfq2/nfqws2" | grep "not found"
+        else
+            print_success "Все библиотеки найдены"
+        fi
     fi
 
     # Попробовать запустить напрямую для диагностики
     print_info "Тест запуска nfqws2..."
-    if "${ZAPRET2_DIR}/nfq2/nfqws2" --version >/dev/null 2>&1; then
-        print_success "nfqws2 исполняется корректно"
+    local version_output
+    version_output=$("${ZAPRET2_DIR}/nfq2/nfqws2" --version 2>&1 | head -1)
+
+    if echo "$version_output" | grep -q "github version"; then
+        print_success "nfqws2 исполняется корректно: $version_output"
     else
         print_error "nfqws2 не может быть запущен"
         print_info "Вывод ошибки:"

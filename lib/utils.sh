@@ -273,7 +273,10 @@ verify_binary() {
     fi
 
     # Попробовать запустить с --version
-    if "$binary" --version >/dev/null 2>&1; then
+    local version_output
+    version_output=$("$binary" --version 2>&1 | head -1)
+
+    if echo "$version_output" | grep -q "github version"; then
         return 0
     fi
 
