@@ -333,6 +333,111 @@ test_strategy_score() {
     echo "$score"
 }
 
+# Тест стратегии для конкретной категории с оценкой 0-5
+test_strategy_score_category() {
+    local category=$1
+    local score=0
+    local timeout=5
+
+    case "$category" in
+        youtube)
+            # YouTube главный
+            if curl -s -m "$timeout" -I https://www.youtube.com 2>/dev/null | grep -q "200"; then
+                score=$((score + 1))
+            fi
+
+            # YouTube CDN (googlevideo)
+            if curl -s -m "$timeout" -I https://googlevideo.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # YouTube API
+            if curl -s -m "$timeout" -I https://www.googleapis.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # YouTube embed
+            if curl -s -m "$timeout" -I https://www.youtube-nocookie.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # ytimg (thumbnails)
+            if curl -s -m "$timeout" -I https://i.ytimg.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+            ;;
+
+        discord)
+            # Discord главный
+            if curl -s -m "$timeout" -I https://discord.com 2>/dev/null | grep -q "200"; then
+                score=$((score + 1))
+            fi
+
+            # Discord invite links
+            if curl -s -m "$timeout" -I https://discord.gg 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # Discord CDN
+            if curl -s -m "$timeout" -I https://cdn.discordapp.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # Discord media
+            if curl -s -m "$timeout" -I https://media.discordapp.net 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # Discord gateway (для подключения)
+            if curl -s -m "$timeout" -I https://gateway.discord.gg 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+            ;;
+
+        custom)
+            # RKN: Meduza
+            if curl -s -m "$timeout" -I https://meduza.io 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # RKN: Instagram
+            if curl -s -m "$timeout" -I https://www.instagram.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # Общий тест: rutracker
+            if curl -s -m "$timeout" -I https://rutracker.org 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # Общий тест: Twitter/X
+            if curl -s -m "$timeout" -I https://twitter.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+
+            # Общий тест: Facebook
+            if curl -s -m "$timeout" -I https://www.facebook.com 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+            ;;
+
+        *)
+            # По умолчанию - общий тест
+            if curl -s -m "$timeout" -I https://rutracker.org 2>/dev/null | grep -q "HTTP"; then
+                score=$((score + 1))
+            fi
+            if curl -s -m "$timeout" -I https://www.youtube.com 2>/dev/null | grep -q "200"; then
+                score=$((score + 1))
+            fi
+            if curl -s -m "$timeout" -I https://discord.com 2>/dev/null | grep -q "200"; then
+                score=$((score + 1))
+            fi
+            ;;
+    esac
+
+    echo "$score"
+}
+
 # Применить стратегию с тестом и откатом при неудаче
 apply_strategy_safe() {
     local num=$1
@@ -478,6 +583,145 @@ auto_test_top20() {
 }
 
 # ==============================================================================
+# АВТОТЕСТ ПО КАТЕГОРИЯМ
+# ==============================================================================
+
+# Автоматическое тестирование TOP-20 стратегий для каждой категории
+auto_test_categories() {
+    local auto_mode=0
+
+    # Проверить флаг --auto
+    if [ "$1" = "--auto" ]; then
+        auto_mode=1
+    fi
+
+    print_header "Автоподбор стратегий по категориям"
+
+    print_info "Будут протестированы стратегии для каждой категории:"
+    print_info "  - YouTube (видео и CDN)"
+    print_info "  - Discord (сообщения и голос)"
+    print_info "  - Custom (RKN и общие домены)"
+    print_info "Это займет около 5-7 минут"
+    printf "\n"
+
+    if [ "$auto_mode" -eq 0 ]; then
+        if ! confirm "Начать тестирование?"; then
+            print_info "Автотест отменен"
+            return 0
+        fi
+    fi
+
+    local categories="youtube discord custom"
+    local best_strategies=""
+    local config_file="${CONFIG_DIR}/category_strategies.conf"
+
+    # Создать конфиг файл если не существует
+    mkdir -p "$CONFIG_DIR"
+
+    for category in $categories; do
+        printf "\n"
+        print_separator
+        print_info "Категория: $category"
+        print_separator
+
+        local best_score=0
+        local best_strategy=0
+        local tested=0
+
+        for num in $TOP20_STRATEGIES; do
+            tested=$((tested + 1))
+
+            printf "\n[%d/20] Тестирование стратегии #%s для $category...\n" "$tested" "$num"
+
+            # Применить стратегию (без подтверждения)
+            apply_strategy "$num" >/dev/null 2>&1 || {
+                print_warning "Не удалось применить стратегию #$num"
+                continue
+            }
+
+            # Подождать
+            sleep 3
+
+            # Протестировать для этой категории
+            local score
+            score=$(test_strategy_score_category "$category")
+
+            printf "  Оценка для $category: %s/5\n" "$score"
+
+            # Обновить лучшую
+            if [ "$score" -gt "$best_score" ]; then
+                best_score=$score
+                best_strategy=$num
+                print_success "  Новый лидер для $category: #$num ($score/5)"
+            fi
+        done
+
+        print_separator
+        if [ "$best_strategy" -eq 0 ]; then
+            print_warning "Для $category не найдено работающих стратегий, используется стратегия #1"
+            best_strategy=1
+            best_strategies="${best_strategies}${category}:${best_strategy}:0 "
+        else
+            print_success "Лучшая для $category: #$best_strategy (оценка: $best_score/5)"
+            best_strategies="${best_strategies}${category}:${best_strategy}:${best_score} "
+        fi
+    done
+
+    # Сохранить результаты в файл
+    printf "# Category Strategies Configuration\n" > "$config_file"
+    printf "# Format: CATEGORY:STRATEGY_NUM:SCORE\n" >> "$config_file"
+    printf "# Generated: %s\n\n" "$(date)" >> "$config_file"
+
+    for entry in $best_strategies; do
+        echo "$entry" >> "$config_file"
+    done
+
+    printf "\n"
+    print_separator
+    print_success "Автотест по категориям завершен"
+    print_separator
+
+    # Показать итоговую таблицу
+    printf "\nРезультаты:\n"
+    printf "%-15s | %-10s | %s\n" "Категория" "Стратегия" "Оценка"
+    print_separator
+
+    for entry in $best_strategies; do
+        local cat=$(echo "$entry" | cut -d: -f1)
+        local strat=$(echo "$entry" | cut -d: -f2)
+        local sc=$(echo "$entry" | cut -d: -f3)
+        printf "%-15s | #%-9s | %s/5\n" "$cat" "$strat" "$sc"
+    done
+
+    print_separator
+
+    # В автоматическом режиме сразу применить
+    if [ "$auto_mode" -eq 1 ]; then
+        print_info "Применение стратегий по категориям..."
+        apply_category_strategies "$best_strategies"
+        print_success "Стратегии применены автоматически"
+        return 0
+    fi
+
+    # В интерактивном режиме спросить
+    printf "\nПрименить эти стратегии? [Y/n]: "
+    read -r answer </dev/tty
+
+    case "$answer" in
+        [Nn]|[Nn][Oo])
+            print_info "Стратегии не применены"
+            print_info "Используйте меню для ручного выбора"
+            return 0
+            ;;
+        *)
+            apply_category_strategies "$best_strategies"
+            print_success "Стратегии применены"
+            return 0
+            ;;
+    esac
+}
+
+# ==============================================================================
 # ТЕСТИРОВАНИЕ ДИАПАЗОНА СТРАТЕГИЙ
 # ==============================================================================
 
@@ -557,6 +801,137 @@ test_strategy_range() {
                 ;;
         esac
     fi
+}
+
+# ==============================================================================
+# ПРИМЕНЕНИЕ СТРАТЕГИЙ ПО КАТЕГОРИЯМ
+# ==============================================================================
+
+# Применить разные стратегии для разных категорий
+# Параметр: строка вида "youtube:4:5 discord:7:4 custom:11:3"
+apply_category_strategies() {
+    local category_strategies=$1
+    local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
+
+    if [ -z "$category_strategies" ]; then
+        print_error "Не указаны стратегии для категорий"
+        return 1
+    fi
+
+    if [ ! -f "$init_script" ]; then
+        print_error "Init скрипт не найден: $init_script"
+        return 1
+    fi
+
+    print_info "Применение стратегий по категориям..."
+
+    # Обработать каждую категорию
+    for entry in $category_strategies; do
+        local category=$(echo "$entry" | cut -d: -f1)
+        local strategy_num=$(echo "$entry" | cut -d: -f2)
+        local score=$(echo "$entry" | cut -d: -f3)
+
+        print_info "  $category -> стратегия #$strategy_num (оценка: $score/5)"
+
+        # Получить параметры стратегии
+        local params
+        params=$(get_strategy "$strategy_num")
+
+        if [ -z "$params" ]; then
+            print_warning "Стратегия #$strategy_num не найдена, пропускаем $category"
+            continue
+        fi
+
+        # Конвертировать в TCP/UDP профили
+        local tcp_params
+        local udp_params
+
+        # Определить тип стратегии
+        local type
+        type=$(get_strategy_type "$strategy_num")
+
+        if [ "$type" = "https" ]; then
+            # HTTPS стратегия
+            tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${params}"
+            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+        else
+            # HTTP стратегия (на всякий случай)
+            tcp_params="--filter-tcp=80,443 --filter-l7=http ${params}"
+            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+        fi
+
+        # Обновить маркеры в init скрипте
+        case "$category" in
+            youtube)
+                update_init_section "YOUTUBE" "$tcp_params" "$udp_params" "$init_script"
+                ;;
+            discord)
+                update_init_section "DISCORD" "$tcp_params" "$udp_params" "$init_script"
+                ;;
+            custom)
+                update_init_section "CUSTOM" "$tcp_params" "$udp_params" "$init_script"
+                ;;
+        esac
+    done
+
+    print_success "Стратегии применены к init скрипту"
+
+    # Перезапустить сервис
+    print_info "Перезапуск сервиса..."
+    "$init_script" restart >/dev/null 2>&1
+
+    sleep 2
+
+    if is_zapret2_running; then
+        print_success "Сервис перезапущен с новыми стратегиями"
+        return 0
+    else
+        print_warning "Сервис не запустился, проверьте логи"
+        return 1
+    fi
+}
+
+# Обновить секцию в init скрипте для конкретной категории
+update_init_section() {
+    local marker=$1
+    local tcp_params=$2
+    local udp_params=$3
+    local init_script=$4
+
+    local start_marker="${marker}_MARKER_START"
+    local end_marker="${marker}_MARKER_END"
+
+    # Создать временный файл
+    local temp_file="${init_script}.tmp"
+
+    # Флаг - внутри ли мы секции для замены
+    local inside_section=0
+
+    while IFS= read -r line; do
+        if echo "$line" | grep -q "# ${start_marker}"; then
+            # Начало секции - записать маркер и новые параметры
+            echo "$line"
+            echo "${marker}_TCP=\"${tcp_params}\""
+            echo "${marker}_UDP=\"${udp_params}\""
+            inside_section=1
+        elif echo "$line" | grep -q "# ${end_marker}"; then
+            # Конец секции - записать маркер и выйти из режима
+            echo "$line"
+            inside_section=0
+        elif [ "$inside_section" -eq 0 ]; then
+            # Вне секции - просто копировать
+            echo "$line"
+        fi
+        # Внутри секции - пропускать старые строки (кроме маркеров)
+    done < "$init_script" > "$temp_file"
+
+    # Заменить init скрипт
+    mv "$temp_file" "$init_script" || {
+        print_error "Не удалось обновить init скрипт"
+        return 1
+    }
+
+    chmod +x "$init_script"
 }
 
 # ==============================================================================
