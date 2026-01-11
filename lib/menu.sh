@@ -3,6 +3,15 @@
 # 9 опций для полного управления zapret2
 
 # ==============================================================================
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ЧТЕНИЯ ВВОДА
+# ==============================================================================
+
+# Читать ввод пользователя (работает даже когда stdin перенаправлен через pipe)
+read_input() {
+    read -r "$@" </dev/tty
+}
+
+# ==============================================================================
 # ГЛАВНОЕ МЕНЮ
 # ==============================================================================
 
@@ -41,7 +50,7 @@ MENU
 MENU
 
         printf "Выберите опцию [0-9]: "
-        read -r choice
+        read_input choice
 
         case "$choice" in
             1)
@@ -94,7 +103,7 @@ menu_install() {
     if is_zapret2_installed; then
         print_warning "zapret2 уже установлен"
         printf "\nПереустановить? [y/N]: "
-        read -r answer
+        read_input answer
 
         case "$answer" in
             [Yy]|[Yy][Ee][Ss])
@@ -131,7 +140,7 @@ menu_select_strategy() {
 
     printf "Всего доступно стратегий: %s\n\n" "$total_count"
     printf "Введите номер стратегии (1-%s): " "$total_count"
-    read -r strategy_num
+    read_input strategy_num
 
     # Проверить что это число
     if ! echo "$strategy_num" | grep -qE '^[0-9]+$'; then
@@ -203,7 +212,7 @@ menu_autotest() {
 SUBMENU
 
     printf "Выберите режим: "
-    read -r test_mode
+    read_input test_mode
 
     case "$test_mode" in
         1)
@@ -212,9 +221,9 @@ SUBMENU
             ;;
         2)
             printf "\nНачало диапазона: "
-            read -r start_range
+            read_input start_range
             printf "Конец диапазона: "
-            read -r end_range
+            read_input end_range
 
             if [ -n "$start_range" ] && [ -n "$end_range" ]; then
                 clear_screen
@@ -272,7 +281,7 @@ menu_service_control() {
 SUBMENU
 
     printf "Выберите действие: "
-    read -r action
+    read_input action
 
     case "$action" in
         1)
@@ -422,7 +431,7 @@ menu_backup_restore() {
 SUBMENU
 
     printf "Выберите действие: "
-    read -r action
+    read_input action
 
     case "$action" in
         1)
