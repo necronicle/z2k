@@ -611,12 +611,12 @@ step_finalize() {
 
     # Попробовать запустить напрямую для диагностики
     print_info "Тест запуска nfqws2..."
-    if "${ZAPRET2_DIR}/nfq2/nfqws2" --help >/dev/null 2>&1; then
+    if "${ZAPRET2_DIR}/nfq2/nfqws2" --version >/dev/null 2>&1; then
         print_success "nfqws2 исполняется корректно"
     else
         print_error "nfqws2 не может быть запущен"
         print_info "Вывод ошибки:"
-        "${ZAPRET2_DIR}/nfq2/nfqws2" --help 2>&1 | head -10
+        "${ZAPRET2_DIR}/nfq2/nfqws2" --version 2>&1 | head -10
         return 1
     fi
 

@@ -272,8 +272,8 @@ verify_binary() {
         return 1
     fi
 
-    # Попробовать запустить с --help
-    if "$binary" --help >/dev/null 2>&1 || "$binary" -h >/dev/null 2>&1; then
+    # Попробовать запустить с --version
+    if "$binary" --version >/dev/null 2>&1; then
         return 0
     fi
 
