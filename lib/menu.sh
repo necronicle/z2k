@@ -31,7 +31,15 @@ MENU
 
         if is_zapret2_installed; then
             printf " Сервис: %s\n" "$(get_service_status)"
-            printf " Текущая стратегия: #%s\n" "$(get_current_strategy)"
+
+            # Проверить режим стратегий
+            if [ -f "$CATEGORY_STRATEGIES_CONF" ]; then
+                local count
+                count=$(grep -c ":" "$CATEGORY_STRATEGIES_CONF" 2>/dev/null || echo 0)
+                printf " Стратегии: %s категорий\n" "$count"
+            else
+                printf " Текущая стратегия: #%s\n" "$(get_current_strategy)"
+            fi
         fi
 
         cat <<'MENU'
@@ -138,7 +146,37 @@ menu_select_strategy() {
     local total_count
     total_count=$(get_strategies_count)
 
-    printf "Всего доступно стратегий: %s\n\n" "$total_count"
+    # Проверить режим категорий
+    local target_category=""
+    if [ -f "$CATEGORY_STRATEGIES_CONF" ]; then
+        cat <<'SUBMENU'
+
+Выберите категорию:
+[1] YouTube
+[2] Discord
+[3] Custom/RKN
+[A] Все категории (одна стратегия)
+[B] Назад
+
+SUBMENU
+        printf "Ваш выбор: "
+        read_input cat_choice
+
+        case "$cat_choice" in
+            1) target_category="youtube" ;;
+            2) target_category="discord" ;;
+            3) target_category="custom" ;;
+            [Aa]) target_category="all" ;;
+            [Bb]) return ;;
+            *)
+                print_error "Неверный выбор"
+                pause
+                return
+                ;;
+        esac
+    fi
+
+    printf "\nВсего доступно стратегий: %s\n\n" "$total_count"
     printf "Введите номер стратегии (1-%s): " "$total_count"
     read_input strategy_num
 
@@ -179,7 +217,29 @@ menu_select_strategy() {
             print_info "Отменено"
             ;;
         *)
-            apply_strategy_safe "$strategy_num"
+            if [ -n "$target_category" ] && [ "$target_category" != "all" ]; then
+                # Обновить стратегию для конкретной категории
+                print_info "Применение стратегии #$strategy_num для категории $target_category..."
+
+                # Обновить запись в category_strategies.conf
+                local temp_file="/tmp/category_strategies.tmp"
+                while IFS=':' read -r cat strat score; do
+                    if [ "$cat" = "$target_category" ]; then
+                        echo "$cat:$strategy_num:5"
+                    else
+                        echo "$cat:$strat:$score"
+                    fi
+                done < "$CATEGORY_STRATEGIES_CONF" > "$temp_file"
+                mv "$temp_file" "$CATEGORY_STRATEGIES_CONF"
+
+                # Применить все стратегии заново
+                local all_strategies
+                all_strategies=$(awk -F: '{printf "%s:%s:%s ", $1, $2, $3}' "$CATEGORY_STRATEGIES_CONF")
+                apply_category_strategies "$all_strategies"
+            else
+                # Старый режим или "все категории"
+                apply_strategy_safe "$strategy_num"
+            fi
             ;;
     esac
 
@@ -203,9 +263,9 @@ menu_autotest() {
     cat <<'SUBMENU'
 Режимы тестирования:
 
-[1] TOP-20 (быстрый тест, ~2 мин)
-[2] Диапазон (укажите вручную)
-[3] Все HTTP стратегии (~30 мин)
+[1] TOP-20 по категориям (рекомендуется, ~5 мин)
+[2] TOP-20 общий (быстрый тест, ~2 мин)
+[3] Диапазон (укажите вручную)
 [4] Все HTTPS стратегии (~10 мин)
 [B] Назад
 
@@ -217,9 +277,16 @@ SUBMENU
     case "$test_mode" in
         1)
             clear_screen
-            auto_test_top20
+            print_info "Автотест по категориям (YouTube, Discord, Custom)"
+            if confirm "Начать тестирование?" "Y"; then
+                auto_test_categories
+            fi
             ;;
         2)
+            clear_screen
+            auto_test_top20
+            ;;
+        3)
             printf "\nНачало диапазона: "
             read_input start_range
             printf "Конец диапазона: "
@@ -232,18 +299,11 @@ SUBMENU
                 print_error "Неверный диапазон"
             fi
             ;;
-        3)
-            clear_screen
-            print_warning "Это займет около 30 минут!"
-            if confirm "Продолжить?" "N"; then
-                test_strategy_range 1 340
-            fi
-            ;;
         4)
             clear_screen
             print_warning "Это займет около 10 минут!"
             if confirm "Продолжить?" "N"; then
-                test_strategy_range 341 458
+                test_strategy_range 1 118
             fi
             ;;
         [Bb])
@@ -316,7 +376,7 @@ SUBMENU
 
 menu_view_strategy() {
     clear_screen
-    print_header "[5] Текущая стратегия"
+    print_header "[5] Текущие стратегии"
 
     if ! is_zapret2_installed; then
         print_error "zapret2 не установлен"
@@ -324,25 +384,47 @@ menu_view_strategy() {
         return
     fi
 
-    local current
-    current=$(get_current_strategy)
+    # Проверить наличие файла с категориями
+    if [ -f "$CATEGORY_STRATEGIES_CONF" ]; then
+        print_info "Стратегии по категориям:"
+        print_separator
 
-    if [ "$current" = "не задана" ] || [ -z "$current" ]; then
-        print_warning "Стратегия не выбрана"
-        print_info "Используется стратегия по умолчанию из init скрипта"
+        # Прочитать и показать стратегии для каждой категории
+        while IFS=':' read -r category strategy score; do
+            [ -z "$category" ] && continue
+
+            local params
+            params=$(get_strategy "$strategy" 2>/dev/null)
+            local type
+            type=$(get_strategy_type "$strategy" 2>/dev/null)
+
+            printf "\n[%s]\n" "$(echo "$category" | tr '[:lower:]' '[:upper:]')"
+            printf "  Стратегия: #%s (оценка: %s/5)\n" "$strategy" "$score"
+            printf "  Тип: %s\n" "$type"
+        done < "$CATEGORY_STRATEGIES_CONF"
+
+        print_separator
     else
-        print_info "Текущая стратегия: #$current"
-        print_separator
+        # Старый режим - одна стратегия
+        local current
+        current=$(get_current_strategy)
 
-        # Показать параметры
-        local params
-        params=$(get_strategy "$current")
-        local type
-        type=$(get_strategy_type "$current")
+        if [ "$current" = "не задана" ] || [ -z "$current" ]; then
+            print_warning "Стратегия не выбрана"
+            print_info "Используется стратегия по умолчанию из init скрипта"
+        else
+            print_info "Текущая стратегия: #$current"
+            print_separator
 
-        printf "Тип: %s\n\n" "$type"
-        printf "Параметры:\n%s\n" "$params"
-        print_separator
+            local params
+            params=$(get_strategy "$current")
+            local type
+            type=$(get_strategy_type "$current")
+
+            printf "Тип: %s\n\n" "$type"
+            printf "Параметры:\n%s\n" "$params"
+            print_separator
+        fi
     fi
 
     # Показать статус сервиса

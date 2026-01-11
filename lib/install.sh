@@ -421,22 +421,26 @@ LUA_DIR="${ZAPRET2_DIR}/lua"
 LISTS_DIR="${ZAPRET2_DIR}/lists"
 
 # ==============================================================================
-# СТРАТЕГИИ
+# СТРАТЕГИИ ПО КАТЕГОРИЯМ
 # ==============================================================================
 
-# STRATEGY_MARKER_START
-# Стратегия будет инжектирована сюда автоматически
-# По умолчанию: базовая fake стратегия
-STRATEGY_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-STRATEGY_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
-# STRATEGY_MARKER_END
+# YouTube стратегия
+# YOUTUBE_MARKER_START
+YOUTUBE_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+YOUTUBE_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+# YOUTUBE_MARKER_END
 
+# Discord стратегия
 # DISCORD_MARKER_START
-# Discord-специфичная конфигурация (если включена)
-DISCORD_ENABLED=0
-DISCORD_TCP=""
-DISCORD_UDP=""
+DISCORD_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+DISCORD_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # DISCORD_MARKER_END
+
+# Custom/RKN стратегия
+# CUSTOM_MARKER_START
+CUSTOM_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+CUSTOM_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+# CUSTOM_MARKER_END
 
 # ==============================================================================
 # ФУНКЦИИ УПРАВЛЕНИЯ СЕРВИСОМ
@@ -474,41 +478,63 @@ start() {
     iptables -t mangle -N ZAPRET
     iptables -t mangle -A FORWARD -j ZAPRET
 
-    # Добавить правила для перенаправления в NFQUEUE
-    # TCP правила
-    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 200 --queue-bypass
+    # ===========================================================================
+    # Process 1: YouTube (queue 200)
+    # ===========================================================================
 
-    # UDP правила (QUIC)
+    # TCP/UDP правила для YouTube
+    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 200 --queue-bypass
     iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass
 
-    # Запустить основной nfqws2 процесс
+    # Запустить nfqws2 для YouTube
     $NFQWS \
         --qnum=200 \
         --lua-init="@${LUA_DIR}/zapret-lib.lua" \
         --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
         --hostlist="${LISTS_DIR}/youtube.txt" \
-        --hostlist="${LISTS_DIR}/discord.txt" \
-        --hostlist="${LISTS_DIR}/custom.txt" \
-        $STRATEGY_TCP \
+        $YOUTUBE_TCP \
         --new \
-        $STRATEGY_UDP \
+        $YOUTUBE_UDP \
         >/dev/null 2>&1 &
 
-    # Discord процесс (если включен)
-    if [ "$DISCORD_ENABLED" = "1" ]; then
-        # Дополнительные UDP порты для Discord voice
-        iptables -t mangle -A ZAPRET -p udp -m multiport --dports 50000:50099,1400,3478:3481,5349 -j NFQUEUE --queue-num 201 --queue-bypass
+    # ===========================================================================
+    # Process 2: Discord (queue 201)
+    # ===========================================================================
 
-        $NFQWS \
-            --qnum=201 \
-            --lua-init="@${LUA_DIR}/zapret-lib.lua" \
-            --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
-            --hostlist="${LISTS_DIR}/discord.txt" \
-            $DISCORD_TCP \
-            --new \
-            $DISCORD_UDP \
-            >/dev/null 2>&1 &
-    fi
+    # TCP/UDP правила для Discord (включая voice порты)
+    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 201 --queue-bypass
+    iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 201 --queue-bypass
+    iptables -t mangle -A ZAPRET -p udp -m multiport --dports 50000:50099,1400,3478:3481,5349 -j NFQUEUE --queue-num 201 --queue-bypass
+
+    # Запустить nfqws2 для Discord
+    $NFQWS \
+        --qnum=201 \
+        --lua-init="@${LUA_DIR}/zapret-lib.lua" \
+        --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        --hostlist="${LISTS_DIR}/discord.txt" \
+        $DISCORD_TCP \
+        --new \
+        $DISCORD_UDP \
+        >/dev/null 2>&1 &
+
+    # ===========================================================================
+    # Process 3: Custom/RKN (queue 202)
+    # ===========================================================================
+
+    # TCP/UDP правила для Custom
+    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 202 --queue-bypass
+    iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 202 --queue-bypass
+
+    # Запустить nfqws2 для Custom
+    $NFQWS \
+        --qnum=202 \
+        --lua-init="@${LUA_DIR}/zapret-lib.lua" \
+        --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        --hostlist="${LISTS_DIR}/custom.txt" \
+        $CUSTOM_TCP \
+        --new \
+        $CUSTOM_UDP \
+        >/dev/null 2>&1 &
 
     sleep 2
 
@@ -689,13 +715,13 @@ run_full_install() {
     step_create_init_script || return 1
     step_finalize || return 1
 
-    # После установки - автоматически запустить автотест TOP-20
+    # После установки - автоматически запустить автотест по категориям
     print_separator
     print_info "Установка завершена успешно!"
-    print_info "Запуск автоматического подбора стратегии..."
+    print_info "Запуск автоматического подбора стратегий по категориям..."
     print_separator
 
-    auto_test_top20 --auto
+    auto_test_categories --auto
 
     return 0
 }
