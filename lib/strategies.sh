@@ -356,7 +356,7 @@ apply_strategy_safe() {
     if [ "$score" -lt 3 ]; then
         print_warning "Стратегия работает плохо (оценка: $score/5)"
         printf "Применить всё равно? [y/N]: "
-        read -r answer
+        read -r answer </dev/tty </dev/tty
 
         case "$answer" in
             [Yy]|[Yy][Ee][Ss])
@@ -444,7 +444,7 @@ auto_test_top20() {
     fi
 
     printf "\nПрименить стратегию #%s? [Y/n]: " "$best_strategy"
-    read -r answer
+    read -r answer </dev/tty
 
     case "$answer" in
         [Nn]|[Nn][Oo])
@@ -529,7 +529,7 @@ test_strategy_range() {
 
     if [ "$best_strategy" -ne 0 ]; then
         printf "\nПрименить стратегию #%s? [Y/n]: " "$best_strategy"
-        read -r answer
+        read -r answer </dev/tty </dev/tty
 
         case "$answer" in
             [Nn]|[Nn][Oo])

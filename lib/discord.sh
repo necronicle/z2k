@@ -60,16 +60,16 @@ configure_discord_voice() {
         print_warning "Текущая стратегия не задана"
         printf "\nВыберите стратегию для Discord (рекомендуется из TOP-20).\n"
         printf "Введите номер стратегии: "
-        read -r strategy_num
+        read -r strategy_num </dev/tty
     else
         printf "\nТекущая стратегия: #%s\n" "$current_strategy"
         printf "Использовать её для Discord? [Y/n]: "
-        read -r answer
+        read -r answer </dev/tty
 
         case "$answer" in
             [Nn]|[Nn][Oo])
                 printf "Введите номер новой стратегии: "
-                read -r strategy_num
+                read -r strategy_num </dev/tty
                 ;;
             *)
                 strategy_num=$current_strategy
