@@ -263,7 +263,7 @@ menu_autotest() {
     cat <<'SUBMENU'
 Режимы тестирования:
 
-[1] TOP-20 по категориям (рекомендуется, ~5 мин)
+[1] TOP-20 по категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)
 [2] TOP-20 общий (быстрый тест, ~2 мин)
 [3] Диапазон (укажите вручную)
 [4] Все стратегии (только HTTPS, 119 шт, ~10 мин)
@@ -277,7 +277,7 @@ SUBMENU
     case "$test_mode" in
         1)
             clear_screen
-            print_info "Автотест по категориям (YouTube, Discord, Custom)"
+            print_info "Автотест по категориям Z4R (YouTube TCP, YouTube GV, RKN)"
             if confirm "Начать тестирование?" "Y"; then
                 auto_test_categories
             fi

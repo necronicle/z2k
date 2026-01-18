@@ -328,110 +328,8 @@ test_strategy_score() {
     echo "$score"
 }
 
-# Тест стратегии для конкретной категории с оценкой 0-5
-test_strategy_score_category() {
-    local category=$1
-    local score=0
-    local timeout=5
-
-    case "$category" in
-        youtube)
-            # YouTube главный
-            if curl -s -m "$timeout" -I https://www.youtube.com 2>/dev/null | grep -q "200"; then
-                score=$((score + 1))
-            fi
-
-            # YouTube CDN (googlevideo)
-            if curl -s -m "$timeout" -I https://googlevideo.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # YouTube API
-            if curl -s -m "$timeout" -I https://www.googleapis.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # YouTube embed
-            if curl -s -m "$timeout" -I https://www.youtube-nocookie.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # ytimg (thumbnails)
-            if curl -s -m "$timeout" -I https://i.ytimg.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-            ;;
-
-        discord)
-            # Discord главный
-            if curl -s -m "$timeout" -I https://discord.com 2>/dev/null | grep -q "200"; then
-                score=$((score + 1))
-            fi
-
-            # Discord invite links
-            if curl -s -m "$timeout" -I https://discord.gg 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # Discord CDN
-            if curl -s -m "$timeout" -I https://cdn.discordapp.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # Discord media
-            if curl -s -m "$timeout" -I https://media.discordapp.net 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # Discord gateway (для подключения)
-            if curl -s -m "$timeout" -I https://gateway.discord.gg 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-            ;;
-
-        custom)
-            # RKN: Meduza
-            if curl -s -m "$timeout" -I https://meduza.io 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # RKN: Instagram
-            if curl -s -m "$timeout" -I https://www.instagram.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # Общий тест: rutracker
-            if curl -s -m "$timeout" -I https://rutracker.org 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # Общий тест: Twitter/X
-            if curl -s -m "$timeout" -I https://twitter.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-
-            # Общий тест: Facebook
-            if curl -s -m "$timeout" -I https://www.facebook.com 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-            ;;
-
-        *)
-            # По умолчанию - общий тест
-            if curl -s -m "$timeout" -I https://rutracker.org 2>/dev/null | grep -q "HTTP"; then
-                score=$((score + 1))
-            fi
-            if curl -s -m "$timeout" -I https://www.youtube.com 2>/dev/null | grep -q "200"; then
-                score=$((score + 1))
-            fi
-            if curl -s -m "$timeout" -I https://discord.com 2>/dev/null | grep -q "200"; then
-                score=$((score + 1))
-            fi
-            ;;
-    esac
-
-    echo "$score"
-}
+# Старая функция test_strategy_score_category() удалена
+# Используйте test_strategy_tls() вместо неё
 
 # Применить стратегию с тестом и откатом при неудаче
 apply_strategy_safe() {
@@ -478,6 +376,220 @@ apply_strategy_safe() {
 
     print_success "Стратегия #$num применена успешно (оценка: $score/5)"
     return 0
+}
+
+# ==============================================================================
+# ТЕСТИРОВАНИЕ СТРАТЕГИЙ (TLS HANDSHAKE)
+# ==============================================================================
+
+# Тест доступности домена через TLS (на основе check_access из Z4R)
+# Проверяет TLS 1.2 и TLS 1.3 после применения стратегии
+test_strategy_tls() {
+    local domain=$1
+    local timeout=${2:-3}  # По умолчанию 3 секунды
+
+    local tls12_success=0
+    local tls13_success=0
+
+    # Проверка TLS 1.2
+    if curl --tls-max 1.2 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
+        tls12_success=1
+    fi
+
+    # Проверка TLS 1.3
+    if curl --tlsv1.3 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
+        tls13_success=1
+    fi
+
+    # Успех если хотя бы один из протоколов работает
+    if [ "$tls12_success" -eq 1 ] || [ "$tls13_success" -eq 1 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Генерация тестового домена Google Video (на основе get_yt_cluster_domain из Z4R)
+# Использует внешний API для получения реального живого кластера YouTube
+generate_gv_domain() {
+    # Попытаться получить имя кластера через API
+    local cluster_name
+    cluster_name=$(curl -s -m 3 "https://redirector.googlevideo.com/report_mapping" 2>/dev/null)
+
+    # Если API не ответил, использовать известный рабочий домен
+    if [ -z "$cluster_name" ]; then
+        echo "rr1---sn-jvhnu5g-n8vr.googlevideo.com"
+        return 0
+    fi
+
+    # Карты букв для cipher mapping (как в Z4R)
+    local letters_map_a="abcdefghijklmnopqrstuvwxyz234567"
+    local letters_map_b="qwertyuiopasdfghjklzxcvbnm012345"
+
+    local converted_name=""
+    local i=0
+
+    # Преобразование имени кластера
+    while [ "$i" -lt "${#cluster_name}" ]; do
+        local char="${cluster_name:$i:1}"
+
+        # Найти позицию символа в map_a
+        local pos=0
+        local found=0
+        while [ "$pos" -lt "${#letters_map_a}" ]; do
+            if [ "${letters_map_a:$pos:1}" = "$char" ]; then
+                converted_name="${converted_name}${letters_map_b:$pos:1}"
+                found=1
+                break
+            fi
+            pos=$((pos + 1))
+        done
+
+        # Если символ не найден в map_a, оставить как есть
+        if [ "$found" -eq 0 ]; then
+            converted_name="${converted_name}${char}"
+        fi
+
+        i=$((i + 1))
+    done
+
+    echo "rr1---sn-${converted_name}.googlevideo.com"
+}
+
+# ==============================================================================
+# АВТОТЕСТ ПО КАТЕГОРИЯМ (Z4R МЕТОД)
+# ==============================================================================
+
+# Автотест YouTube TCP (youtube.com)
+# Тестирует TOP-20 стратегий и возвращает номер первой работающей
+auto_test_youtube_tcp() {
+    local strategies_list="${1:-$TOP20_STRATEGIES}"
+    local domain="www.youtube.com"
+    local tested=0
+    local total=20
+
+    print_info "Тестирование YouTube TCP (youtube.com)..."
+
+    for num in $strategies_list; do
+        tested=$((tested + 1))
+        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
+
+        # Применить стратегию (без вывода)
+        if ! apply_strategy "$num" >/dev/null 2>&1; then
+            printf "ОШИБКА\n"
+            continue
+        fi
+
+        # Подождать 2 секунды для применения
+        sleep 2
+
+        # Протестировать через TLS
+        if test_strategy_tls "$domain" 3; then
+            printf "РАБОТАЕТ\n"
+            print_success "Найдена работающая стратегия для YouTube TCP: #$num"
+            echo "$num"
+            return 0
+        else
+            printf "НЕ РАБОТАЕТ\n"
+        fi
+    done
+
+    # Если ничего не работает, вернуть стратегию по умолчанию
+    print_warning "Не найдено работающих стратегий для YouTube TCP, используется #1"
+    echo "1"
+    return 1
+}
+
+# Автотест YouTube GV (googlevideo CDN)
+# Тестирует TOP-20 стратегий для Google Video и возвращает номер первой работающей
+auto_test_youtube_gv() {
+    local strategies_list="${1:-$TOP20_STRATEGIES}"
+    local tested=0
+    local total=20
+
+    print_info "Генерация тестового домена Google Video..."
+    local domain
+    domain=$(generate_gv_domain)
+    print_info "Тестовый домен: $domain"
+
+    print_info "Тестирование YouTube GV (Google Video)..."
+
+    for num in $strategies_list; do
+        tested=$((tested + 1))
+        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
+
+        # Применить стратегию (без вывода)
+        if ! apply_strategy "$num" >/dev/null 2>&1; then
+            printf "ОШИБКА\n"
+            continue
+        fi
+
+        # Подождать 2 секунды для применения
+        sleep 2
+
+        # Протестировать через TLS
+        if test_strategy_tls "$domain" 3; then
+            printf "РАБОТАЕТ\n"
+            print_success "Найдена работающая стратегия для YouTube GV: #$num"
+            echo "$num"
+            return 0
+        else
+            printf "НЕ РАБОТАЕТ\n"
+        fi
+    done
+
+    # Если ничего не работает, вернуть стратегию по умолчанию
+    print_warning "Не найдено работающих стратегий для YouTube GV, используется #1"
+    echo "1"
+    return 1
+}
+
+# Автотест RKN (meduza.io, facebook.com, rutracker.org)
+# Тестирует TOP-20 стратегий для RKN доменов и возвращает номер первой работающей
+auto_test_rkn() {
+    local strategies_list="${1:-$TOP20_STRATEGIES}"
+    local test_domains="meduza.io facebook.com rutracker.org"
+    local tested=0
+    local total=20
+
+    print_info "Тестирование RKN (meduza.io, facebook.com, rutracker.org)..."
+
+    for num in $strategies_list; do
+        tested=$((tested + 1))
+        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
+
+        # Применить стратегию (без вывода)
+        if ! apply_strategy "$num" >/dev/null 2>&1; then
+            printf "ОШИБКА\n"
+            continue
+        fi
+
+        # Подождать 2 секунды для применения
+        sleep 2
+
+        # Протестировать на всех трех доменах
+        local success_count=0
+        for domain in $test_domains; do
+            if test_strategy_tls "$domain" 3; then
+                success_count=$((success_count + 1))
+            fi
+        done
+
+        # Успех если работает хотя бы на 2 из 3 доменов
+        if [ "$success_count" -ge 2 ]; then
+            printf "РАБОТАЕТ (%d/3)\n" "$success_count"
+            print_success "Найдена работающая стратегия для RKN: #$num"
+            echo "$num"
+            return 0
+        else
+            printf "НЕ РАБОТАЕТ (%d/3)\n" "$success_count"
+        fi
+    done
+
+    # Если ничего не работает, вернуть стратегию по умолчанию
+    print_warning "Не найдено работающих стратегий для RKN, используется #1"
+    echo "1"
+    return 1
 }
 
 # ==============================================================================
@@ -578,11 +690,13 @@ auto_test_top20() {
 }
 
 # ==============================================================================
-# АВТОТЕСТ ПО КАТЕГОРИЯМ
+# АВТОТЕСТ ПО КАТЕГОРИЯМ V2 (Z4R РЕФЕРЕНС)
 # ==============================================================================
 
-# Автоматическое тестирование TOP-20 стратегий для каждой категории
-auto_test_categories() {
+# Автоматическое тестирование TOP-20 стратегий для каждой категории (Z4R метод)
+# Тестирует 3 категории: YouTube TCP, YouTube GV, RKN
+# Каждая категория получает свою первую работающую стратегию
+auto_test_all_categories_v2() {
     local auto_mode=0
 
     # Проверить флаг --auto
@@ -590,13 +704,13 @@ auto_test_categories() {
         auto_mode=1
     fi
 
-    print_header "Автоподбор стратегий по категориям"
+    print_header "Автоподбор стратегий по категориям (Z4R метод)"
 
     print_info "Будут протестированы стратегии для каждой категории:"
-    print_info "  - YouTube (видео и CDN)"
-    print_info "  - Discord (сообщения и голос)"
-    print_info "  - Custom (RKN и общие домены)"
-    print_info "Это займет около 5-7 минут"
+    print_info "  - YouTube TCP (youtube.com)"
+    print_info "  - YouTube GV (googlevideo CDN)"
+    print_info "  - RKN (meduza.io, facebook.com, rutracker.org)"
+    print_info "Это займет около 8-10 минут"
     printf "\n"
 
     if [ "$auto_mode" -eq 0 ]; then
@@ -606,95 +720,55 @@ auto_test_categories() {
         fi
     fi
 
-    local categories="youtube discord custom"
-    local best_strategies=""
     local config_file="${CONFIG_DIR}/category_strategies.conf"
-
-    # Создать конфиг файл если не существует
     mkdir -p "$CONFIG_DIR"
 
-    for category in $categories; do
-        printf "\n"
-        print_separator
-        print_info "Категория: $category"
-        print_separator
-
-        local best_score=0
-        local best_strategy=0
-        local tested=0
-
-        for num in $TOP20_STRATEGIES; do
-            tested=$((tested + 1))
-
-            printf "\n[%d/20] Тестирование стратегии #%s для $category...\n" "$tested" "$num"
-
-            # Применить стратегию (без подтверждения)
-            apply_strategy "$num" >/dev/null 2>&1 || {
-                print_warning "Не удалось применить стратегию #$num"
-                continue
-            }
-
-            # Подождать
-            sleep 3
-
-            # Протестировать для этой категории
-            local score
-            score=$(test_strategy_score_category "$category")
-
-            printf "  Оценка для $category: %s/5\n" "$score"
-
-            # Обновить лучшую
-            if [ "$score" -gt "$best_score" ]; then
-                best_score=$score
-                best_strategy=$num
-                print_success "  Новый лидер для $category: #$num ($score/5)"
-            fi
-        done
-
-        print_separator
-        if [ "$best_strategy" -eq 0 ]; then
-            print_warning "Для $category не найдено работающих стратегий, используется стратегия #1"
-            best_strategy=1
-            best_strategies="${best_strategies}${category}:${best_strategy}:0 "
-        else
-            print_success "Лучшая для $category: #$best_strategy (оценка: $best_score/5)"
-            best_strategies="${best_strategies}${category}:${best_strategy}:${best_score} "
-        fi
-    done
-
-    # Сохранить результаты в файл
-    printf "# Category Strategies Configuration\n" > "$config_file"
-    printf "# Format: CATEGORY:STRATEGY_NUM:SCORE\n" >> "$config_file"
-    printf "# Generated: %s\n\n" "$(date)" >> "$config_file"
-
-    for entry in $best_strategies; do
-        echo "$entry" >> "$config_file"
-    done
+    # Тестировать каждую категорию
+    print_separator
+    local yt_tcp_strategy
+    yt_tcp_strategy=$(auto_test_youtube_tcp "$TOP20_STRATEGIES")
+    local yt_tcp_result=$?
 
     printf "\n"
     print_separator
-    print_success "Автотест по категориям завершен"
+    local yt_gv_strategy
+    yt_gv_strategy=$(auto_test_youtube_gv "$TOP20_STRATEGIES")
+    local yt_gv_result=$?
+
+    printf "\n"
     print_separator
+    local rkn_strategy
+    rkn_strategy=$(auto_test_rkn "$TOP20_STRATEGIES")
+    local rkn_result=$?
+
+    # Сохранить результаты
+    cat > "$config_file" <<EOF
+# Category Strategies Configuration (Z4R format)
+# Format: CATEGORY:STRATEGY_NUM
+# Generated: $(date)
+
+youtube_tcp:$yt_tcp_strategy
+youtube_gv:$yt_gv_strategy
+rkn:$rkn_strategy
+EOF
 
     # Показать итоговую таблицу
-    printf "\nРезультаты:\n"
-    printf "%-15s | %-10s | %s\n" "Категория" "Стратегия" "Оценка"
+    printf "\n"
     print_separator
-
-    for entry in $best_strategies; do
-        local cat=$(echo "$entry" | cut -d: -f1)
-        local strat=$(echo "$entry" | cut -d: -f2)
-        local sc=$(echo "$entry" | cut -d: -f3)
-        printf "%-15s | #%-9s | %s/5\n" "$cat" "$strat" "$sc"
-    done
-
+    print_success "Автотест завершен"
+    print_separator
+    printf "\nРезультаты:\n"
+    printf "%-15s | %-10s | %s\n" "Категория" "Стратегия" "Статус"
+    print_separator
+    printf "%-15s | #%-9s | %s\n" "YouTube TCP" "$yt_tcp_strategy" "$([ $yt_tcp_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
+    printf "%-15s | #%-9s | %s\n" "YouTube GV" "$yt_gv_strategy" "$([ $yt_gv_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
+    printf "%-15s | #%-9s | %s\n" "RKN" "$rkn_strategy" "$([ $rkn_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
     print_separator
 
     # В автоматическом режиме сразу применить
     if [ "$auto_mode" -eq 1 ]; then
-        print_info "Применение стратегий по категориям..."
-        apply_category_strategies "$best_strategies"
-        print_success "Стратегии применены автоматически"
+        printf "\n"
+        apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
         return 0
     fi
 
@@ -709,11 +783,15 @@ auto_test_categories() {
             return 0
             ;;
         *)
-            apply_category_strategies "$best_strategies"
-            print_success "Стратегии применены"
+            apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
             return 0
             ;;
     esac
+}
+
+# Алиас для обратной совместимости
+auto_test_categories() {
+    auto_test_all_categories_v2 "$@"
 }
 
 # ==============================================================================
@@ -927,6 +1005,77 @@ update_init_section() {
     }
 
     chmod +x "$init_script"
+}
+
+# Применить разные стратегии для YouTube TCP, YouTube GV, RKN (Z4R метод)
+# Параметры: номера стратегий для каждой категории
+apply_category_strategies_v2() {
+    local yt_tcp_strategy=$1
+    local yt_gv_strategy=$2
+    local rkn_strategy=$3
+
+    local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
+
+    if [ ! -f "$init_script" ]; then
+        print_error "Init скрипт не найден: $init_script"
+        return 1
+    fi
+
+    print_info "Применение стратегий по категориям..."
+    print_info "  YouTube TCP -> стратегия #$yt_tcp_strategy"
+    print_info "  YouTube GV  -> стратегия #$yt_gv_strategy"
+    print_info "  RKN         -> стратегия #$rkn_strategy"
+
+    # Получить параметры для каждой стратегии
+    local yt_tcp_params
+    yt_tcp_params=$(get_strategy "$yt_tcp_strategy")
+    if [ -z "$yt_tcp_params" ]; then
+        print_warning "Стратегия #$yt_tcp_strategy не найдена, используется дефолтная"
+        yt_tcp_params="--lua-desync=fake:blob=fake_default_tls:repeats=6"
+    fi
+
+    local yt_gv_params
+    yt_gv_params=$(get_strategy "$yt_gv_strategy")
+    if [ -z "$yt_gv_params" ]; then
+        print_warning "Стратегия #$yt_gv_strategy не найдена, используется дефолтная"
+        yt_gv_params="--lua-desync=fake:blob=fake_default_tls:repeats=6"
+    fi
+
+    local rkn_params
+    rkn_params=$(get_strategy "$rkn_strategy")
+    if [ -z "$rkn_params" ]; then
+        print_warning "Стратегия #$rkn_strategy не найдена, используется дефолтная"
+        rkn_params="--lua-desync=fake:blob=fake_default_tls:repeats=6"
+    fi
+
+    # Формировать полные параметры TCP для каждой категории
+    local yt_tcp_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_tcp_params}"
+    local yt_gv_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_gv_params}"
+    local rkn_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${rkn_params}"
+
+    # UDP параметры (одинаковые для всех)
+    local udp_full="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+
+    # Обновить маркеры в init скрипте
+    update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "$udp_full" "$init_script"
+    update_init_section "YOUTUBE_GV" "$yt_gv_full" "$udp_full" "$init_script"
+    update_init_section "RKN" "$rkn_full" "$udp_full" "$init_script"
+
+    print_success "Стратегии применены к init скрипту"
+
+    # Перезапустить сервис
+    print_info "Перезапуск сервиса..."
+    "$init_script" restart >/dev/null 2>&1
+
+    sleep 2
+
+    if is_zapret2_running; then
+        print_success "Сервис перезапущен с новыми стратегиями"
+        return 0
+    else
+        print_error "Сервис не запустился, проверьте логи"
+        return 1
+    fi
 }
 
 # ==============================================================================

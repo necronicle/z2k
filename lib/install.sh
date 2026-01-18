@@ -421,22 +421,34 @@ LUA_DIR="${ZAPRET2_DIR}/lua"
 LISTS_DIR="${ZAPRET2_DIR}/lists"
 
 # ==============================================================================
-# СТРАТЕГИИ ПО КАТЕГОРИЯМ
+# СТРАТЕГИИ ПО КАТЕГОРИЯМ (Z4R АРХИТЕКТУРА)
 # ==============================================================================
 
-# YouTube стратегия
-# YOUTUBE_MARKER_START
-YOUTUBE_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-YOUTUBE_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
-# YOUTUBE_MARKER_END
+# YouTube TCP стратегия (интерфейс YouTube)
+# YOUTUBE_TCP_MARKER_START
+YOUTUBE_TCP_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+YOUTUBE_TCP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+# YOUTUBE_TCP_MARKER_END
 
-# Discord стратегия
+# YouTube GV стратегия (Google Video CDN)
+# YOUTUBE_GV_MARKER_START
+YOUTUBE_GV_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+YOUTUBE_GV_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+# YOUTUBE_GV_MARKER_END
+
+# RKN стратегия (заблокированные сайты)
+# RKN_MARKER_START
+RKN_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+# RKN_MARKER_END
+
+# Discord стратегия (сообщения и голос)
 # DISCORD_MARKER_START
 DISCORD_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 DISCORD_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # DISCORD_MARKER_END
 
-# Custom/RKN стратегия
+# Custom стратегия (пользовательские домены)
 # CUSTOM_MARKER_START
 CUSTOM_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 CUSTOM_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
@@ -479,22 +491,24 @@ start() {
     iptables -t mangle -A FORWARD -j ZAPRET
 
     # ===========================================================================
-    # Process 1: YouTube (queue 200)
+    # Process 1: YouTube (TCP + GV через --new) (queue 200)
     # ===========================================================================
 
     # TCP/UDP правила для YouTube
     iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 200 --queue-bypass
     iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass
 
-    # Запустить nfqws2 для YouTube
+    # Запустить nfqws2 для YouTube (TCP и GV в одном процессе)
     $NFQWS \
         --qnum=200 \
         --lua-init="@${LUA_DIR}/zapret-lib.lua" \
         --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
         --hostlist="${LISTS_DIR}/youtube.txt" \
-        $YOUTUBE_TCP \
+        $YOUTUBE_TCP_TCP \
         --new \
-        $YOUTUBE_UDP \
+        $YOUTUBE_GV_TCP \
+        --new \
+        $YOUTUBE_TCP_UDP \
         >/dev/null 2>&1 &
 
     # ===========================================================================
@@ -518,16 +532,35 @@ start() {
         >/dev/null 2>&1 &
 
     # ===========================================================================
-    # Process 3: Custom/RKN (queue 202)
+    # Process 3: RKN (queue 202)
     # ===========================================================================
 
-    # TCP/UDP правила для Custom
+    # TCP/UDP правила для RKN
     iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 202 --queue-bypass
     iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 202 --queue-bypass
 
-    # Запустить nfqws2 для Custom
+    # Запустить nfqws2 для RKN
     $NFQWS \
         --qnum=202 \
+        --lua-init="@${LUA_DIR}/zapret-lib.lua" \
+        --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        --hostlist="${LISTS_DIR}/rkn.txt" \
+        $RKN_TCP \
+        --new \
+        $RKN_UDP \
+        >/dev/null 2>&1 &
+
+    # ===========================================================================
+    # Process 4: Custom (пользовательские домены) (queue 203)
+    # ===========================================================================
+
+    # TCP/UDP правила для Custom
+    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 203 --queue-bypass
+    iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 203 --queue-bypass
+
+    # Запустить nfqws2 для Custom
+    $NFQWS \
+        --qnum=203 \
         --lua-init="@${LUA_DIR}/zapret-lib.lua" \
         --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
         --hostlist="${LISTS_DIR}/custom.txt" \
