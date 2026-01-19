@@ -463,10 +463,14 @@ generate_gv_domain() {
 # Автотест YouTube TCP (youtube.com)
 # Тестирует TOP-20 стратегий и возвращает номер первой работающей
 auto_test_youtube_tcp() {
+    echo "DEBUG: ВОШЛИ в функцию auto_test_youtube_tcp" >&2
     local strategies_list="${1:-$TOP20_STRATEGIES}"
+    echo "DEBUG: strategies_list присвоен" >&2
     local domain="www.youtube.com"
+    echo "DEBUG: domain присвоен" >&2
     local tested=0
     local total=20
+    echo "DEBUG: переменные инициализированы" >&2
 
     print_info "Тестирование YouTube TCP (youtube.com)..."
     print_info "DEBUG: strategies_list=$strategies_list"
@@ -735,9 +739,16 @@ auto_test_all_categories_v2() {
     print_separator
     print_info "DEBUG: Начало тестирования YouTube TCP..."
     print_info "DEBUG: TOP20_STRATEGIES=$TOP20_STRATEGIES"
+
+    # Проверить что функция существует
+    print_info "DEBUG: Проверка функции auto_test_youtube_tcp..."
+    type auto_test_youtube_tcp >/dev/null 2>&1 && print_info "DEBUG: Функция найдена" || print_error "DEBUG: Функция НЕ найдена!"
+
+    print_info "DEBUG: ПЕРЕД вызовом auto_test_youtube_tcp"
     local yt_tcp_strategy
     yt_tcp_strategy=$(auto_test_youtube_tcp "$TOP20_STRATEGIES")
     local yt_tcp_result=$?
+    print_info "DEBUG: ПОСЛЕ вызова auto_test_youtube_tcp"
     print_info "DEBUG: YouTube TCP завершен, результат=$yt_tcp_strategy"
 
     printf "\n"
