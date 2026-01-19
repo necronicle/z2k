@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git remote add:*)",
+      "Bash(git config:*)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(git -C \"E:\\\\Zapret2-keenetik\" remote -v)",
+      "Bash(git -C \"E:\\\\Zapret2-keenetik\" log --oneline -10)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(ls:*)",
+      "Bash(pkg-config:*)",
+      "Bash(opkg list-installed:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:git.openwrt.org)",
+      "Bash(chmod:*)"
+    ]
+  }
+}

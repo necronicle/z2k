@@ -196,12 +196,15 @@ apply_strategy() {
     local strategy_num=$1
     local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 
+    echo "DEBUG: apply_strategy начало для #$strategy_num" >&2
+
     # Проверить существование стратегии
     if ! strategy_exists "$strategy_num"; then
         print_error "Стратегия #$strategy_num не найдена"
         return 1
     fi
 
+    echo "DEBUG: Получаем параметры стратегии..." >&2
     # Получить параметры стратегии
     local params
     params=$(get_strategy "$strategy_num")
@@ -217,6 +220,7 @@ apply_strategy() {
 
     print_info "Применение стратегии #$strategy_num (тип: $type)..."
 
+    echo "DEBUG: Генерируем мульти-профиль..." >&2
     # Генерация мульти-профиля
     local multiprofile
     multiprofile=$(generate_multiprofile "$params" "$type")
@@ -276,17 +280,22 @@ apply_strategy() {
 
     print_success "Стратегия #$strategy_num применена"
 
+    echo "DEBUG: Перезапускаем сервис..." >&2
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
     "$init_script" restart >/dev/null 2>&1
 
+    echo "DEBUG: Ждем 2 сек после рестарта..." >&2
     sleep 2
 
+    echo "DEBUG: Проверяем запуск сервиса..." >&2
     if is_zapret2_running; then
         print_success "Сервис перезапущен"
+        echo "DEBUG: apply_strategy завершена успешно" >&2
         return 0
     else
         print_warning "Сервис не запустился, проверьте логи"
+        echo "DEBUG: apply_strategy завершена с ошибкой" >&2
         return 1
     fi
 }
@@ -391,20 +400,32 @@ test_strategy_tls() {
     local tls12_success=0
     local tls13_success=0
 
+    echo "DEBUG: test_strategy_tls для $domain (timeout=$timeout)" >&2
+
     # Проверка TLS 1.2
+    echo "DEBUG: Пробуем TLS 1.2..." >&2
     if curl --tls-max 1.2 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
         tls12_success=1
+        echo "DEBUG: TLS 1.2 успех" >&2
+    else
+        echo "DEBUG: TLS 1.2 провал" >&2
     fi
 
     # Проверка TLS 1.3
+    echo "DEBUG: Пробуем TLS 1.3..." >&2
     if curl --tlsv1.3 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
         tls13_success=1
+        echo "DEBUG: TLS 1.3 успех" >&2
+    else
+        echo "DEBUG: TLS 1.3 провал" >&2
     fi
 
     # Успех если хотя бы один из протоколов работает
     if [ "$tls12_success" -eq 1 ] || [ "$tls13_success" -eq 1 ]; then
+        echo "DEBUG: test_strategy_tls = SUCCESS" >&2
         return 0
     else
+        echo "DEBUG: test_strategy_tls = FAIL" >&2
         return 1
     fi
 }
@@ -469,28 +490,35 @@ auto_test_youtube_tcp() {
     local total=20
 
     print_info "Тестирование YouTube TCP (youtube.com)..."
+    echo "DEBUG: Начало цикла тестирования" >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
-        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
+        echo "DEBUG: Тест $tested/$total, стратегия #$num" >&2
+        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
+
+        echo "DEBUG: Применяем стратегию #$num..." >&2
 
         # Применить стратегию (без вывода)
         if ! apply_strategy "$num" >/dev/null 2>&1; then
-            printf "ОШИБКА\n"
+            printf "ОШИБКА\n" >&2
+            echo "DEBUG: Ошибка применения стратегии #$num" >&2
             continue
         fi
 
+        echo "DEBUG: Стратегия применена, ждем 2 сек..." >&2
         # Подождать 2 секунды для применения
         sleep 2
 
+        echo "DEBUG: Тестируем TLS для $domain..." >&2
         # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
-            printf "РАБОТАЕТ\n"
+            printf "РАБОТАЕТ\n" >&2
             print_success "Найдена работающая стратегия для YouTube TCP: #$num"
             echo "$num"
             return 0
         else
-            printf "НЕ РАБОТАЕТ\n"
+            printf "НЕ РАБОТАЕТ\n" >&2
         fi
     done
 
@@ -513,14 +541,16 @@ auto_test_youtube_gv() {
     print_info "Тестовый домен: $domain"
 
     print_info "Тестирование YouTube GV (Google Video)..."
+    echo "DEBUG: Начало цикла тестирования GV" >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
-        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
+        echo "DEBUG: GV Тест $tested/$total, стратегия #$num" >&2
+        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
         # Применить стратегию (без вывода)
         if ! apply_strategy "$num" >/dev/null 2>&1; then
-            printf "ОШИБКА\n"
+            printf "ОШИБКА\n" >&2
             continue
         fi
 
@@ -529,12 +559,12 @@ auto_test_youtube_gv() {
 
         # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
-            printf "РАБОТАЕТ\n"
+            printf "РАБОТАЕТ\n" >&2
             print_success "Найдена работающая стратегия для YouTube GV: #$num"
             echo "$num"
             return 0
         else
-            printf "НЕ РАБОТАЕТ\n"
+            printf "НЕ РАБОТАЕТ\n" >&2
         fi
     done
 
@@ -553,14 +583,16 @@ auto_test_rkn() {
     local total=20
 
     print_info "Тестирование RKN (meduza.io, facebook.com, rutracker.org)..."
+    echo "DEBUG: Начало цикла тестирования RKN" >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
-        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
+        echo "DEBUG: RKN Тест $tested/$total, стратегия #$num" >&2
+        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
         # Применить стратегию (без вывода)
         if ! apply_strategy "$num" >/dev/null 2>&1; then
-            printf "ОШИБКА\n"
+            printf "ОШИБКА\n" >&2
             continue
         fi
 
@@ -570,6 +602,7 @@ auto_test_rkn() {
         # Протестировать на всех трех доменах
         local success_count=0
         for domain in $test_domains; do
+            echo "DEBUG: Тестируем $domain..." >&2
             if test_strategy_tls "$domain" 3; then
                 success_count=$((success_count + 1))
             fi
@@ -577,12 +610,12 @@ auto_test_rkn() {
 
         # Успех если работает хотя бы на 2 из 3 доменов
         if [ "$success_count" -ge 2 ]; then
-            printf "РАБОТАЕТ (%d/3)\n" "$success_count"
+            printf "РАБОТАЕТ (%d/3)\n" "$success_count" >&2
             print_success "Найдена работающая стратегия для RKN: #$num"
             echo "$num"
             return 0
         else
-            printf "НЕ РАБОТАЕТ (%d/3)\n" "$success_count"
+            printf "НЕ РАБОТАЕТ (%d/3)\n" "$success_count" >&2
         fi
     done
 
