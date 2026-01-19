@@ -469,22 +469,30 @@ auto_test_youtube_tcp() {
     local total=20
 
     print_info "Тестирование YouTube TCP (youtube.com)..."
+    print_info "DEBUG: strategies_list=$strategies_list"
+    print_info "DEBUG: domain=$domain"
 
     for num in $strategies_list; do
+        print_info "DEBUG: Начинаем тест стратегии #$num"
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
 
         # Применить стратегию (без вывода)
+        print_info "DEBUG: Вызов apply_strategy #$num"
         if ! apply_strategy "$num" >/dev/null 2>&1; then
             printf "ОШИБКА\n"
+            print_info "DEBUG: apply_strategy failed"
             continue
         fi
+        print_info "DEBUG: apply_strategy успешно"
 
         # Подождать 2 секунды для применения
         sleep 2
+        print_info "DEBUG: sleep завершён, начинаем TLS тест"
 
         # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
+            print_info "DEBUG: TLS тест успешен"
             printf "РАБОТАЕТ\n"
             print_success "Найдена работающая стратегия для YouTube TCP: #$num"
             echo "$num"
@@ -725,9 +733,12 @@ auto_test_all_categories_v2() {
 
     # Тестировать каждую категорию
     print_separator
+    print_info "DEBUG: Начало тестирования YouTube TCP..."
+    print_info "DEBUG: TOP20_STRATEGIES=$TOP20_STRATEGIES"
     local yt_tcp_strategy
     yt_tcp_strategy=$(auto_test_youtube_tcp "$TOP20_STRATEGIES")
     local yt_tcp_result=$?
+    print_info "DEBUG: YouTube TCP завершен, результат=$yt_tcp_strategy"
 
     printf "\n"
     print_separator
