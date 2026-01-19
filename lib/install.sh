@@ -25,14 +25,57 @@ step_update_packages() {
     else
         print_error "Не удалось обновить список пакетов (код: $exit_code)"
 
+        # Проверка на Illegal instruction - типичная проблема на Keenetic из-за блокировки РКН
+        if echo "$opkg_output" | grep -qi "illegal instruction"; then
+            print_warning "Обнаружена ошибка 'Illegal instruction'"
+            print_info "Это часто связано с блокировкой РКН репозитория bin.entware.net"
+            print_separator
+
+            # Попытка переключения на альтернативное зеркало (метод от zapret4rocket)
+            print_info "Попытка переключения на альтернативное зеркало Entware..."
+
+            local current_mirror
+            current_mirror=$(grep -m1 "^src" /opt/etc/opkg.conf | awk '{print $3}' | grep -o 'bin.entware.net')
+
+            if [ -n "$current_mirror" ]; then
+                print_info "Меняю bin.entware.net → entware.diversion.ch"
+
+                # Создать backup конфига
+                cp /opt/etc/opkg.conf /opt/etc/opkg.conf.backup
+
+                # Заменить зеркало
+                sed -i 's|bin.entware.net|entware.diversion.ch|g' /opt/etc/opkg.conf
+
+                print_info "Повторная попытка обновления с новым зеркалом..."
+
+                # Повторить opkg update
+                opkg_output=$(opkg update 2>&1)
+                exit_code=$?
+
+                echo "$opkg_output"
+
+                if [ "$exit_code" -eq 0 ]; then
+                    print_success "Список пакетов обновлен через альтернативное зеркало!"
+                    print_info "Backup старого конфига: /opt/etc/opkg.conf.backup"
+                    return 0
+                else
+                    print_error "Не помогло - ошибка осталась"
+                    print_info "Восстанавливаю оригинальный конфиг..."
+                    mv /opt/etc/opkg.conf.backup /opt/etc/opkg.conf
+                fi
+            else
+                print_info "Зеркало bin.entware.net не найдено в конфиге"
+            fi
+
+            printf "\n"
+        fi
+
         # Диагностика причины ошибки
-        print_info "Диагностика проблемы..."
+        print_info "Углубленная диагностика проблемы..."
         print_separator
 
         # Анализ вывода opkg для определения точного места ошибки
         if echo "$opkg_output" | grep -q "Illegal instruction"; then
-            print_warning "Обнаружена ошибка 'Illegal instruction' в процессе обновления"
-
             # Попробовать найти контекст
             local error_context
             error_context=$(echo "$opkg_output" | grep -B2 "Illegal instruction" | head -5)
@@ -124,37 +167,45 @@ EOF
             cat <<'EOF'
 ⚠️  СЛОЖНАЯ ПРОБЛЕМА: opkg update падает с "Illegal instruction"
 
-Диагностика показала необычную ситуацию:
+Диагностика и попытки исправления:
 - ✓ opkg бинарник запускается (opkg --version работает)
-- ✓ Архитектура системы корректная
-- ✓ Репозиторий доступен
-- ✗ НО "opkg update" падает с "Illegal instruction"
+- ✓ Архитектура системы корректная (aarch64)
+- ✓ Репозиторий доступен (curl тест успешен)
+- ✓ Попробовали альтернативное зеркало (entware.diversion.ch)
+- ✗ НО "opkg update" всё равно падает с "Illegal instruction"
 
-ВОЗМОЖНЫЕ ПРИЧИНЫ:
-1. Поврежденная зависимая библиотека (libcurl, libssl, и др.)
-2. Проблема с одним из пакетов в репозитории
-3. Поврежденная база данных opkg
-4. Конфликт версий библиотек
+Это редкая проблема, которая может быть связана с:
+1. Поврежденной зависимой библиотекой (libcurl, libssl, и др.)
+2. Несовместимостью конкретной версии пакета с вашим CPU
+3. Поврежденной базой данных opkg
+4. Проблемой с самой установкой Entware
 
 РЕКОМЕНДАЦИИ ПО УСТРАНЕНИЮ:
-1. Попробуйте запустить вручную с verbose:
-   opkg update --verbosity=2
-   (это покажет где именно происходит ошибка)
 
-2. Проверьте системные библиотеки:
+1. Проверьте какая библиотека вызывает ошибку:
    ldd /opt/bin/opkg
-   (покажет какие библиотеки использует opkg)
+   (покажет все зависимые библиотеки)
 
-3. Попробуйте очистить кэш opkg:
+2. Попробуйте детальную диагностику:
+   opkg update --verbosity=2 2>&1 | tee /tmp/opkg_debug.log
+   (сохранит полный вывод в файл)
+
+3. Очистите кэш и попробуйте снова:
    rm -rf /opt/var/opkg-lists/*
    opkg update
 
-4. Если ничего не помогает - переустановите Entware:
+4. Проверьте место на диске:
+   df -h /opt
+   (убедитесь что есть свободное место)
+
+5. Если ничего не помогает - переустановите Entware:
    https://help.keenetic.com/hc/ru/articles/360021888880
+   Убедитесь что выбираете версию для aarch64!
 
 ПРОДОЛЖИТЬ БЕЗ ОБНОВЛЕНИЯ?
-Можно попробовать продолжить установку z2k без обновления пакетов.
-Если нужные пакеты уже установлены - всё может заработать.
+Можно попробовать продолжить установку z2k.
+Если нужные пакеты (iptables, ipset, curl) уже установлены -
+всё может заработать и без обновления списков пакетов.
 EOF
         else
             cat <<'EOF'
