@@ -102,10 +102,7 @@ get_strategy() {
         return 1
     fi
 
-    local result
-    result=$(grep "^${num}|" "$conf" | cut -d'|' -f3)
-    echo "DEBUG: get_strategy($num) вернула: [$result]" >&2
-    echo "$result"
+    grep "^${num}|" "$conf" | cut -d'|' -f3
 }
 
 # Получить тип стратегии (http/https)
@@ -161,10 +158,6 @@ generate_multiprofile() {
     local base_params=$1
     local type=$2
 
-    echo "DEBUG: generate_multiprofile вызвана" >&2
-    echo "DEBUG:   base_params: [$base_params]" >&2
-    echo "DEBUG:   type: [$type]" >&2
-
     # Генерация переменных для init скрипта (применяется ко всем категориям)
     local tcp_params udp_params
 
@@ -175,9 +168,6 @@ generate_multiprofile() {
         tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello $base_params"
         udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
     fi
-
-    echo "DEBUG:   tcp_params: [$tcp_params]" >&2
-    echo "DEBUG:   udp_params: [$udp_params]" >&2
 
     # Генерировать переменные для всех категорий (YouTube TCP, GV, RKN)
     cat <<PROFILE
@@ -222,26 +212,12 @@ apply_strategy() {
     local strategy_num=$1
     local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 
-    echo "DEBUG: apply_strategy начало для #$strategy_num" >&2
-
-    # Проверить файл strategies.conf
-    local conf="${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}"
-    if [ -f "$conf" ]; then
-        local strats_count=$(grep -c '^[0-9]' "$conf" 2>/dev/null || echo "0")
-        echo "DEBUG: strategies.conf существует, стратегий: $strats_count" >&2
-        echo "DEBUG: Первая стратегия в файле:" >&2
-        head -5 "$conf" | tail -1 >&2
-    else
-        echo "DEBUG: ОШИБКА - strategies.conf не найден: $conf" >&2
-    fi
-
     # Проверить существование стратегии
     if ! strategy_exists "$strategy_num"; then
         print_error "Стратегия #$strategy_num не найдена"
         return 1
     fi
 
-    echo "DEBUG: Получаем параметры стратегии..." >&2
     # Получить параметры стратегии
     local params
     params=$(get_strategy "$strategy_num")
@@ -251,26 +227,15 @@ apply_strategy() {
         return 1
     fi
 
-    echo "DEBUG: Параметры стратегии #$strategy_num:" >&2
-    echo "DEBUG:   [$params]" >&2
-    echo "DEBUG:   Длина: ${#params} символов" >&2
-
     # Получить тип стратегии
     local type
     type=$(get_strategy_type "$strategy_num")
 
     print_info "Применение стратегии #$strategy_num (тип: $type)..."
 
-    echo "DEBUG: Генерируем мульти-профиль..." >&2
     # Генерация мульти-профиля
     local multiprofile
     multiprofile=$(generate_multiprofile "$params" "$type")
-
-    echo "DEBUG: Мульти-профиль сгенерирован, длина: ${#multiprofile} символов" >&2
-    echo "DEBUG: Первые 200 символов мульти-профиля:" >&2
-    echo "$multiprofile" | head -c 200 >&2
-    echo "" >&2
-    echo "DEBUG: [...]" >&2
 
     # Создать backup init скрипта
     if [ -f "$init_script" ]; then
@@ -327,22 +292,17 @@ apply_strategy() {
 
     print_success "Стратегия #$strategy_num применена"
 
-    echo "DEBUG: Перезапускаем сервис..." >&2
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
     "$init_script" restart >/dev/null 2>&1
 
-    echo "DEBUG: Ждем 2 сек после рестарта..." >&2
     sleep 2
 
-    echo "DEBUG: Проверяем запуск сервиса..." >&2
     if is_zapret2_running; then
         print_success "Сервис перезапущен"
-        echo "DEBUG: apply_strategy завершена успешно" >&2
         return 0
     else
         print_warning "Сервис не запустился, проверьте логи"
-        echo "DEBUG: apply_strategy завершена с ошибкой" >&2
         return 1
     fi
 }
@@ -447,42 +407,28 @@ test_strategy_tls() {
     local tls12_success=0
     local tls13_success=0
 
-    echo "DEBUG: test_strategy_tls для $domain (timeout=$timeout)" >&2
-
     # КРИТИЧНО: Добавить временные правила в OUTPUT chain для curl с роутера
-    echo "DEBUG: Добавляем временные правила в OUTPUT chain..." >&2
     iptables -t mangle -I OUTPUT -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
     iptables -t mangle -I OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
 
     # Проверка TLS 1.2
-    echo "DEBUG: Пробуем TLS 1.2..." >&2
     if curl --tls-max 1.2 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
         tls12_success=1
-        echo "DEBUG: TLS 1.2 успех" >&2
-    else
-        echo "DEBUG: TLS 1.2 провал" >&2
     fi
 
     # Проверка TLS 1.3
-    echo "DEBUG: Пробуем TLS 1.3..." >&2
     if curl --tlsv1.3 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
         tls13_success=1
-        echo "DEBUG: TLS 1.3 успех" >&2
-    else
-        echo "DEBUG: TLS 1.3 провал" >&2
     fi
 
     # Удалить временные правила
-    echo "DEBUG: Удаляем временные правила из OUTPUT chain..." >&2
     iptables -t mangle -D OUTPUT -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
     iptables -t mangle -D OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
 
     # Успех если хотя бы один из протоколов работает
     if [ "$tls12_success" -eq 1 ] || [ "$tls13_success" -eq 1 ]; then
-        echo "DEBUG: test_strategy_tls = SUCCESS" >&2
         return 0
     else
-        echo "DEBUG: test_strategy_tls = FAIL" >&2
         return 1
     fi
 }
@@ -547,36 +493,22 @@ auto_test_youtube_tcp() {
     local total=20
 
     print_info "Тестирование YouTube TCP (youtube.com)..."
-    echo "DEBUG: Начало цикла тестирования" >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
-        echo "DEBUG: Тест $tested/$total, стратегия #$num" >&2
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        echo "DEBUG: Применяем стратегию #$num..." >&2
-
-        # Проверить что функция определена
-        if ! type apply_strategy >/dev/null 2>&1; then
-            echo "DEBUG: КРИТИЧЕСКАЯ ОШИБКА - функция apply_strategy не найдена!" >&2
-            printf "ОШИБКА (функция не найдена)\n" >&2
-            continue
-        fi
-
-        # Применить стратегию (показываем вывод для debug)
-        apply_strategy "$num" >&2
+        # Применить стратегию
+        apply_strategy "$num" >/dev/null 2>&1
         local apply_result=$?
         if [ "$apply_result" -ne 0 ]; then
-            printf "ОШИБКА (exit code: %d)\n" "$apply_result" >&2
-            echo "DEBUG: Ошибка применения стратегии #$num" >&2
+            printf "ОШИБКА\n" >&2
             continue
         fi
 
-        echo "DEBUG: Стратегия применена, ждем 2 сек..." >&2
         # Подождать 2 секунды для применения
         sleep 2
 
-        echo "DEBUG: Тестируем TLS для $domain..." >&2
         # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
             printf "РАБОТАЕТ\n" >&2
@@ -607,18 +539,16 @@ auto_test_youtube_gv() {
     print_info "Тестовый домен: $domain"
 
     print_info "Тестирование YouTube GV (Google Video)..."
-    echo "DEBUG: Начало цикла тестирования GV" >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
-        echo "DEBUG: GV Тест $tested/$total, стратегия #$num" >&2
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (показываем вывод для debug)
-        apply_strategy "$num" >&2
+        # Применить стратегию
+        apply_strategy "$num" >/dev/null 2>&1
         local apply_result=$?
         if [ "$apply_result" -ne 0 ]; then
-            printf "ОШИБКА (exit code: %d)\n" "$apply_result" >&2
+            printf "ОШИБКА\n" >&2
             continue
         fi
 
@@ -651,18 +581,16 @@ auto_test_rkn() {
     local total=20
 
     print_info "Тестирование RKN (meduza.io, facebook.com, rutracker.org)..."
-    echo "DEBUG: Начало цикла тестирования RKN" >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
-        echo "DEBUG: RKN Тест $tested/$total, стратегия #$num" >&2
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (показываем вывод для debug)
-        apply_strategy "$num" >&2
+        # Применить стратегию
+        apply_strategy "$num" >/dev/null 2>&1
         local apply_result=$?
         if [ "$apply_result" -ne 0 ]; then
-            printf "ОШИБКА (exit code: %d)\n" "$apply_result" >&2
+            printf "ОШИБКА\n" >&2
             continue
         fi
 
@@ -672,7 +600,6 @@ auto_test_rkn() {
         # Протестировать на всех трех доменах
         local success_count=0
         for domain in $test_domains; do
-            echo "DEBUG: Тестируем $domain..." >&2
             if test_strategy_tls "$domain" 3; then
                 success_count=$((success_count + 1))
             fi
