@@ -19,17 +19,18 @@ download_domain_lists() {
     print_info "Источник: zapret4rocket (master branch)"
 
     # Списки для загрузки (Z4R структура)
-    # Формат: source:target или special:url:target
+    # Формат: source|target или special|url|target
+    # ВАЖНО: разделитель "|", а НЕ ":", т.к. URL содержат двоеточия!
     local lists="
-russia-discord.txt:discord.txt
-russia-youtube.txt:youtube.txt
-special:${Z4R_RKN_URL}:rkn.txt
+russia-discord.txt|discord.txt
+russia-youtube.txt|youtube.txt
+special|${Z4R_RKN_URL}|rkn.txt
 "
 
     local success=0
     local failed=0
 
-    echo "$lists" | while IFS=':' read -r source target extra; do
+    echo "$lists" | while IFS='|' read -r source target extra; do
         [ -z "$source" ] && continue
 
         local url
