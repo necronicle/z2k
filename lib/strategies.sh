@@ -102,7 +102,10 @@ get_strategy() {
         return 1
     fi
 
-    grep "^${num}|" "$conf" | cut -d'|' -f3
+    local result
+    result=$(grep "^${num}|" "$conf" | cut -d'|' -f3)
+    echo "DEBUG: get_strategy($num) вернула: [$result]" >&2
+    echo "$result"
 }
 
 # Получить тип стратегии (http/https)
@@ -158,6 +161,10 @@ generate_multiprofile() {
     local base_params=$1
     local type=$2
 
+    echo "DEBUG: generate_multiprofile вызвана" >&2
+    echo "DEBUG:   base_params: [$base_params]" >&2
+    echo "DEBUG:   type: [$type]" >&2
+
     # Генерация переменных для init скрипта (применяется ко всем категориям)
     local tcp_params udp_params
 
@@ -168,6 +175,9 @@ generate_multiprofile() {
         tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello $base_params"
         udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
     fi
+
+    echo "DEBUG:   tcp_params: [$tcp_params]" >&2
+    echo "DEBUG:   udp_params: [$udp_params]" >&2
 
     # Генерировать переменные для всех категорий (YouTube TCP, GV, RKN)
     cat <<PROFILE
@@ -214,6 +224,17 @@ apply_strategy() {
 
     echo "DEBUG: apply_strategy начало для #$strategy_num" >&2
 
+    # Проверить файл strategies.conf
+    local conf="${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}"
+    if [ -f "$conf" ]; then
+        local strats_count=$(grep -c '^[0-9]' "$conf" 2>/dev/null || echo "0")
+        echo "DEBUG: strategies.conf существует, стратегий: $strats_count" >&2
+        echo "DEBUG: Первая стратегия в файле:" >&2
+        head -5 "$conf" | tail -1 >&2
+    else
+        echo "DEBUG: ОШИБКА - strategies.conf не найден: $conf" >&2
+    fi
+
     # Проверить существование стратегии
     if ! strategy_exists "$strategy_num"; then
         print_error "Стратегия #$strategy_num не найдена"
@@ -230,6 +251,10 @@ apply_strategy() {
         return 1
     fi
 
+    echo "DEBUG: Параметры стратегии #$strategy_num:" >&2
+    echo "DEBUG:   [$params]" >&2
+    echo "DEBUG:   Длина: ${#params} символов" >&2
+
     # Получить тип стратегии
     local type
     type=$(get_strategy_type "$strategy_num")
@@ -240,6 +265,12 @@ apply_strategy() {
     # Генерация мульти-профиля
     local multiprofile
     multiprofile=$(generate_multiprofile "$params" "$type")
+
+    echo "DEBUG: Мульти-профиль сгенерирован, длина: ${#multiprofile} символов" >&2
+    echo "DEBUG: Первые 200 символов мульти-профиля:" >&2
+    echo "$multiprofile" | head -c 200 >&2
+    echo "" >&2
+    echo "DEBUG: [...]" >&2
 
     # Создать backup init скрипта
     if [ -f "$init_script" ]; then
