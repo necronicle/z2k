@@ -11,12 +11,58 @@ step_update_packages() {
 
     print_info "Обновление списка пакетов Entware..."
 
-    if opkg update; then
+    # Попытка обновления с перехватом ошибок
+    if opkg update 2>&1; then
         print_success "Список пакетов обновлен"
         return 0
     else
-        print_error "Не удалось обновить список пакетов"
-        return 1
+        local exit_code=$?
+        print_error "Не удалось обновить список пакетов (код: $exit_code)"
+
+        # Проверка на "Illegal instruction"
+        if [ "$exit_code" -eq 132 ] || opkg --version 2>&1 | grep -qi "Illegal"; then
+            print_error "Обнаружена ошибка 'Illegal instruction'"
+            print_separator
+            cat <<'EOF'
+⚠️  ПРОБЛЕМА С ENTWARE:
+
+Ваш Entware установлен неправильно или поврежден.
+Это НЕ проблема z2k - это проблема окружения роутера.
+
+Возможные причины:
+1. Entware установлен для неправильной архитектуры процессора
+2. Поврежденные бинарники в /opt/bin/
+3. Несовместимая версия Entware для вашей модели роутера
+
+РЕКОМЕНДАЦИИ:
+1. Переустановите Entware заново:
+   https://help.keenetic.com/hc/ru/articles/360021888880
+
+2. Убедитесь что выбрана правильная архитектура для вашего роутера
+
+3. После переустановки Entware запустите z2k снова
+
+ПРОДОЛЖИТЬ БЕЗ ОБНОВЛЕНИЯ? (не рекомендуется)
+Установка может продолжиться, но пакеты могут быть устаревшими.
+EOF
+            printf "\nПродолжить без opkg update? [y/N]: "
+            read -r answer </dev/tty
+
+            case "$answer" in
+                [Yy]|[Yy][Ee][Ss])
+                    print_warning "Продолжаем без обновления пакетов..."
+                    return 0
+                    ;;
+                *)
+                    print_info "Установка прервана"
+                    print_info "Исправьте проблему с Entware и запустите снова"
+                    return 1
+                    ;;
+            esac
+        else
+            print_warning "Продолжаем установку без обновления..."
+            return 0
+        fi
     fi
 }
 
