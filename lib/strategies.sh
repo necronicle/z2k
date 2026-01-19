@@ -499,8 +499,8 @@ auto_test_youtube_tcp() {
 
         echo "DEBUG: Применяем стратегию #$num..." >&2
 
-        # Применить стратегию (без вывода)
-        if ! apply_strategy "$num" >/dev/null 2>&1; then
+        # Применить стратегию (показываем вывод для debug)
+        if ! apply_strategy "$num" 2>&1; then
             printf "ОШИБКА\n" >&2
             echo "DEBUG: Ошибка применения стратегии #$num" >&2
             continue
@@ -548,8 +548,8 @@ auto_test_youtube_gv() {
         echo "DEBUG: GV Тест $tested/$total, стратегия #$num" >&2
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (без вывода)
-        if ! apply_strategy "$num" >/dev/null 2>&1; then
+        # Применить стратегию (показываем вывод для debug)
+        if ! apply_strategy "$num" 2>&1; then
             printf "ОШИБКА\n" >&2
             continue
         fi
@@ -590,8 +590,8 @@ auto_test_rkn() {
         echo "DEBUG: RKN Тест $tested/$total, стратегия #$num" >&2
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (без вывода)
-        if ! apply_strategy "$num" >/dev/null 2>&1; then
+        # Применить стратегию (показываем вывод для debug)
+        if ! apply_strategy "$num" 2>&1; then
             printf "ОШИБКА\n" >&2
             continue
         fi
