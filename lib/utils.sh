@@ -305,7 +305,8 @@ load_kernel_module() {
     fi
 
     print_info "Загрузка модуля: $module"
-    if modprobe "$module" 2>/dev/null; then
+    # Использовать системный modprobe (/sbin), а не Entware (/opt/sbin)
+    if /sbin/modprobe "$module" 2>/dev/null; then
         print_success "Модуль $module загружен"
         return 0
     else

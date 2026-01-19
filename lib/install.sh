@@ -690,11 +690,11 @@ start() {
 
     echo "Starting $DESC"
 
-    # Загрузить модули ядра
-    modprobe xt_multiport 2>/dev/null
-    modprobe xt_connbytes 2>/dev/null
-    modprobe xt_NFQUEUE 2>/dev/null
-    modprobe nfnetlink_queue 2>/dev/null
+    # Загрузить модули ядра (использовать системный modprobe)
+    /sbin/modprobe xt_multiport 2>/dev/null
+    /sbin/modprobe xt_connbytes 2>/dev/null
+    /sbin/modprobe xt_NFQUEUE 2>/dev/null
+    /sbin/modprobe nfnetlink_queue 2>/dev/null
 
     # Очистить старые правила iptables (правильный порядок)
     # 1. Убить старые процессы nfqws2
