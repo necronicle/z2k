@@ -449,6 +449,11 @@ test_strategy_tls() {
 
     echo "DEBUG: test_strategy_tls для $domain (timeout=$timeout)" >&2
 
+    # КРИТИЧНО: Добавить временные правила в OUTPUT chain для curl с роутера
+    echo "DEBUG: Добавляем временные правила в OUTPUT chain..." >&2
+    iptables -t mangle -I OUTPUT -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
+    iptables -t mangle -I OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
+
     # Проверка TLS 1.2
     echo "DEBUG: Пробуем TLS 1.2..." >&2
     if curl --tls-max 1.2 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
@@ -466,6 +471,11 @@ test_strategy_tls() {
     else
         echo "DEBUG: TLS 1.3 провал" >&2
     fi
+
+    # Удалить временные правила
+    echo "DEBUG: Удаляем временные правила из OUTPUT chain..." >&2
+    iptables -t mangle -D OUTPUT -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
+    iptables -t mangle -D OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
 
     # Успех если хотя бы один из протоколов работает
     if [ "$tls12_success" -eq 1 ] || [ "$tls13_success" -eq 1 ]; then
