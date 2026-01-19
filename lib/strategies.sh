@@ -463,40 +463,28 @@ generate_gv_domain() {
 # Автотест YouTube TCP (youtube.com)
 # Тестирует TOP-20 стратегий и возвращает номер первой работающей
 auto_test_youtube_tcp() {
-    echo "DEBUG: ВОШЛИ в функцию auto_test_youtube_tcp" >&2
     local strategies_list="${1:-$TOP20_STRATEGIES}"
-    echo "DEBUG: strategies_list присвоен" >&2
     local domain="www.youtube.com"
-    echo "DEBUG: domain присвоен" >&2
     local tested=0
     local total=20
-    echo "DEBUG: переменные инициализированы" >&2
 
     print_info "Тестирование YouTube TCP (youtube.com)..."
-    print_info "DEBUG: strategies_list=$strategies_list"
-    print_info "DEBUG: domain=$domain"
 
     for num in $strategies_list; do
-        print_info "DEBUG: Начинаем тест стратегии #$num"
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num"
 
         # Применить стратегию (без вывода)
-        print_info "DEBUG: Вызов apply_strategy #$num"
         if ! apply_strategy "$num" >/dev/null 2>&1; then
             printf "ОШИБКА\n"
-            print_info "DEBUG: apply_strategy failed"
             continue
         fi
-        print_info "DEBUG: apply_strategy успешно"
 
         # Подождать 2 секунды для применения
         sleep 2
-        print_info "DEBUG: sleep завершён, начинаем TLS тест"
 
         # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
-            print_info "DEBUG: TLS тест успешен"
             printf "РАБОТАЕТ\n"
             print_success "Найдена работающая стратегия для YouTube TCP: #$num"
             echo "$num"
@@ -736,32 +724,33 @@ auto_test_all_categories_v2() {
     mkdir -p "$CONFIG_DIR"
 
     # Тестировать каждую категорию
+    # Используем временные файлы вместо subshell чтобы функции utils.sh были доступны
+    local result_file_tcp="/tmp/z2k_yt_tcp_result.txt"
+    local result_file_gv="/tmp/z2k_yt_gv_result.txt"
+    local result_file_rkn="/tmp/z2k_rkn_result.txt"
+
     print_separator
-    print_info "DEBUG: Начало тестирования YouTube TCP..."
-    print_info "DEBUG: TOP20_STRATEGIES=$TOP20_STRATEGIES"
-
-    # Проверить что функция существует
-    print_info "DEBUG: Проверка функции auto_test_youtube_tcp..."
-    type auto_test_youtube_tcp >/dev/null 2>&1 && print_info "DEBUG: Функция найдена" || print_error "DEBUG: Функция НЕ найдена!"
-
-    print_info "DEBUG: ПЕРЕД вызовом auto_test_youtube_tcp"
-    local yt_tcp_strategy
-    yt_tcp_strategy=$(auto_test_youtube_tcp "$TOP20_STRATEGIES")
+    print_info "Тестирование YouTube TCP..."
+    auto_test_youtube_tcp "$TOP20_STRATEGIES" > "$result_file_tcp"
     local yt_tcp_result=$?
-    print_info "DEBUG: ПОСЛЕ вызова auto_test_youtube_tcp"
-    print_info "DEBUG: YouTube TCP завершен, результат=$yt_tcp_strategy"
+    local yt_tcp_strategy=$(cat "$result_file_tcp" 2>/dev/null || echo "1")
 
     printf "\n"
     print_separator
-    local yt_gv_strategy
-    yt_gv_strategy=$(auto_test_youtube_gv "$TOP20_STRATEGIES")
+    print_info "Тестирование YouTube GV..."
+    auto_test_youtube_gv "$TOP20_STRATEGIES" > "$result_file_gv"
     local yt_gv_result=$?
+    local yt_gv_strategy=$(cat "$result_file_gv" 2>/dev/null || echo "1")
 
     printf "\n"
     print_separator
-    local rkn_strategy
-    rkn_strategy=$(auto_test_rkn "$TOP20_STRATEGIES")
+    print_info "Тестирование RKN..."
+    auto_test_rkn "$TOP20_STRATEGIES" > "$result_file_rkn"
     local rkn_result=$?
+    local rkn_strategy=$(cat "$result_file_rkn" 2>/dev/null || echo "1")
+
+    # Очистить временные файлы
+    rm -f "$result_file_tcp" "$result_file_gv" "$result_file_rkn"
 
     # Сохранить результаты
     cat > "$config_file" <<EOF
