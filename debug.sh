@@ -114,9 +114,72 @@ lsmod | grep nfnetlink
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "10. СОСТОЯНИЕ ПОСЛЕ ПОПЫТОК ЗАГРУЗКИ"
+echo "10. ПОПЫТКА ЗАГРУЗКИ ЧЕРЕЗ /opt/sbin/insmod (с полным путём)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+kernel_ver=$(uname -r)
+for mod in xt_NFQUEUE xt_multiport xt_connbytes; do
+    mod_file="/lib/modules/${kernel_ver}/${mod}.ko"
+    echo "Попытка: /opt/sbin/insmod $mod_file"
+    /opt/sbin/insmod "$mod_file" 2>&1
+    exitcode=$?
+    echo "Exit code: $exitcode"
+
+    # Проверить загрузился ли
+    if lsmod | grep -q "^${mod} "; then
+        echo "✓ Модуль $mod успешно загружен!"
+    else
+        echo "✗ Модуль $mod НЕ загрузился"
+        # Показать последние строки dmesg
+        echo "Последние сообщения ядра:"
+        dmesg | tail -5
+    fi
+    echo ""
+done
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "11. ПОПЫТКА ЗАГРУЗКИ ЧЕРЕЗ /opt/sbin/modprobe -d"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+kernel_ver=$(uname -r)
+mod_dir="/lib/modules/${kernel_ver}"
+echo "Директория модулей: $mod_dir"
+echo ""
+
+for mod in xt_NFQUEUE xt_multiport xt_connbytes; do
+    echo "Попытка: /opt/sbin/modprobe -d $mod_dir $mod"
+    /opt/sbin/modprobe -d "$mod_dir" "$mod" 2>&1
+    exitcode=$?
+    echo "Exit code: $exitcode"
+
+    # Проверить загрузился ли
+    if lsmod | grep -q "^${mod} "; then
+        echo "✓ Модуль $mod успешно загружен!"
+    else
+        echo "✗ Модуль $mod НЕ загрузился"
+    fi
+    echo ""
+done
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "12. ФИНАЛЬНОЕ СОСТОЯНИЕ МОДУЛЕЙ"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Загруженные модули:"
 lsmod | grep -E 'xt_NFQUEUE|xt_multiport|xt_connbytes|nfnetlink_queue'
+echo ""
+
+echo "Проверка каждого модуля:"
+for mod in xt_NFQUEUE xt_multiport xt_connbytes nfnetlink_queue; do
+    if lsmod | grep -q "^${mod} "; then
+        echo "  ✓ $mod загружен"
+    else
+        echo "  ✗ $mod НЕ загружен"
+    fi
+done
+echo ""
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "13. ПОСЛЕДНИЕ СООБЩЕНИЯ DMESG"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+dmesg | tail -20
 echo ""
 
 echo "╔══════════════════════════════════════════════════╗"
