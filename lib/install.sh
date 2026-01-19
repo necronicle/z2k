@@ -648,6 +648,8 @@ LISTS_DIR="${ZAPRET2_DIR}/lists"
 # СТРАТЕГИИ ПО КАТЕГОРИЯМ (Z4R АРХИТЕКТУРА)
 # ==============================================================================
 
+# STRATEGY_MARKER_START
+
 # YouTube TCP стратегия (интерфейс YouTube)
 # YOUTUBE_TCP_MARKER_START
 YOUTUBE_TCP_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
@@ -677,6 +679,8 @@ DISCORD_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desy
 CUSTOM_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 CUSTOM_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # CUSTOM_MARKER_END
+
+# STRATEGY_MARKER_END
 
 # ==============================================================================
 # ФУНКЦИИ УПРАВЛЕНИЯ СЕРВИСОМ

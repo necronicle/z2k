@@ -151,40 +151,49 @@ generate_multiprofile() {
     local base_params=$1
     local type=$2
 
+    # Генерация переменных для init скрипта (применяется ко всем категориям)
+    local tcp_params udp_params
+
     if [ "$type" = "http" ]; then
-        # HTTP стратегия: TCP:80,443 + UDP:443 QUIC
-        cat <<PROFILE
-# TCP Profile (HTTP)
---filter-tcp=80,443
---filter-l7=http
-$base_params
-
---new
-
-# UDP Profile (QUIC)
---filter-udp=443
---filter-l7=quic
---payload=quic_initial
---lua-desync=fake:blob=fake_default_quic:repeats=4
-PROFILE
+        tcp_params="--filter-tcp=80,443 --filter-l7=http $base_params"
+        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
     else
-        # HTTPS/TLS стратегия: TCP:443 TLS + UDP:443 QUIC
-        cat <<PROFILE
-# TCP Profile (HTTPS/TLS)
---filter-tcp=443
---filter-l7=tls
---payload=tls_client_hello
-$base_params
-
---new
-
-# UDP Profile (QUIC)
---filter-udp=443
---filter-l7=quic
---payload=quic_initial
---lua-desync=fake:blob=fake_default_quic:repeats=4
-PROFILE
+        tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello $base_params"
+        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
     fi
+
+    # Генерировать переменные для всех категорий (YouTube TCP, GV, RKN)
+    cat <<PROFILE
+# YouTube TCP стратегия (интерфейс YouTube)
+# YOUTUBE_TCP_MARKER_START
+YOUTUBE_TCP_TCP="$tcp_params"
+YOUTUBE_TCP_UDP="$udp_params"
+# YOUTUBE_TCP_MARKER_END
+
+# YouTube GV стратегия (Google Video CDN)
+# YOUTUBE_GV_MARKER_START
+YOUTUBE_GV_TCP="$tcp_params"
+YOUTUBE_GV_UDP="$udp_params"
+# YOUTUBE_GV_MARKER_END
+
+# RKN стратегия (заблокированные сайты)
+# RKN_MARKER_START
+RKN_TCP="$tcp_params"
+RKN_UDP="$udp_params"
+# RKN_MARKER_END
+
+# Discord стратегия (сообщения и голос)
+# DISCORD_MARKER_START
+DISCORD_TCP="$tcp_params"
+DISCORD_UDP="$udp_params"
+# DISCORD_MARKER_END
+
+# Custom стратегия (пользовательские домены)
+# CUSTOM_MARKER_START
+CUSTOM_TCP="$tcp_params"
+CUSTOM_UDP="$udp_params"
+# CUSTOM_MARKER_END
+PROFILE
 }
 
 # ==============================================================================
