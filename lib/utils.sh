@@ -305,8 +305,19 @@ load_kernel_module() {
     fi
 
     print_info "Загрузка модуля: $module"
-    # Использовать системный modprobe (/sbin), а не Entware (/opt/sbin)
-    if /sbin/modprobe "$module" 2>/dev/null; then
+
+    # На Keenetic нет системного modprobe, только Entware
+    # Используем /opt/sbin/insmod с полным путём к .ko файлу
+    local kernel_ver
+    kernel_ver=$(uname -r)
+    local module_path="/lib/modules/${kernel_ver}/${module}.ko"
+
+    if [ ! -f "$module_path" ]; then
+        print_error "Файл модуля не найден: $module_path"
+        return 1
+    fi
+
+    if /opt/sbin/insmod "$module_path" 2>/dev/null; then
         print_success "Модуль $module загружен"
         return 0
     else

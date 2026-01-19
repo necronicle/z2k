@@ -690,11 +690,12 @@ start() {
 
     echo "Starting $DESC"
 
-    # Загрузить модули ядра (использовать системный modprobe)
-    /sbin/modprobe xt_multiport 2>/dev/null
-    /sbin/modprobe xt_connbytes 2>/dev/null
-    /sbin/modprobe xt_NFQUEUE 2>/dev/null
-    /sbin/modprobe nfnetlink_queue 2>/dev/null
+    # Загрузить модули ядра (через Entware insmod с полными путями)
+    local kernel_ver=$(uname -r)
+    /opt/sbin/insmod /lib/modules/${kernel_ver}/xt_multiport.ko 2>/dev/null
+    /opt/sbin/insmod /lib/modules/${kernel_ver}/xt_connbytes.ko 2>/dev/null
+    /opt/sbin/insmod /lib/modules/${kernel_ver}/xt_NFQUEUE.ko 2>/dev/null
+    /opt/sbin/insmod /lib/modules/${kernel_ver}/nfnetlink_queue.ko 2>/dev/null
 
     # Очистить старые правила iptables (правильный порядок)
     # 1. Убить старые процессы nfqws2
