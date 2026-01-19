@@ -499,9 +499,18 @@ auto_test_youtube_tcp() {
 
         echo "DEBUG: Применяем стратегию #$num..." >&2
 
+        # Проверить что функция определена
+        if ! type apply_strategy >/dev/null 2>&1; then
+            echo "DEBUG: КРИТИЧЕСКАЯ ОШИБКА - функция apply_strategy не найдена!" >&2
+            printf "ОШИБКА (функция не найдена)\n" >&2
+            continue
+        fi
+
         # Применить стратегию (показываем вывод для debug)
-        if ! apply_strategy "$num" 2>&1; then
-            printf "ОШИБКА\n" >&2
+        apply_strategy "$num" >&2
+        local apply_result=$?
+        if [ "$apply_result" -ne 0 ]; then
+            printf "ОШИБКА (exit code: %d)\n" "$apply_result" >&2
             echo "DEBUG: Ошибка применения стратегии #$num" >&2
             continue
         fi
@@ -549,8 +558,10 @@ auto_test_youtube_gv() {
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
         # Применить стратегию (показываем вывод для debug)
-        if ! apply_strategy "$num" 2>&1; then
-            printf "ОШИБКА\n" >&2
+        apply_strategy "$num" >&2
+        local apply_result=$?
+        if [ "$apply_result" -ne 0 ]; then
+            printf "ОШИБКА (exit code: %d)\n" "$apply_result" >&2
             continue
         fi
 
@@ -591,8 +602,10 @@ auto_test_rkn() {
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
         # Применить стратегию (показываем вывод для debug)
-        if ! apply_strategy "$num" 2>&1; then
-            printf "ОШИБКА\n" >&2
+        apply_strategy "$num" >&2
+        local apply_result=$?
+        if [ "$apply_result" -ne 0 ]; then
+            printf "ОШИБКА (exit code: %d)\n" "$apply_result" >&2
             continue
         fi
 
