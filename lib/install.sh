@@ -11,17 +11,37 @@ step_update_packages() {
 
     print_info "Обновление списка пакетов Entware..."
 
-    # Попытка обновления с перехватом ошибок
-    if opkg update 2>&1; then
+    # Попытка обновления с полным перехватом вывода
+    local opkg_output
+    opkg_output=$(opkg update 2>&1)
+    local exit_code=$?
+
+    # Показать вывод opkg
+    echo "$opkg_output"
+
+    if [ "$exit_code" -eq 0 ]; then
         print_success "Список пакетов обновлен"
         return 0
     else
-        local exit_code=$?
         print_error "Не удалось обновить список пакетов (код: $exit_code)"
 
         # Диагностика причины ошибки
         print_info "Диагностика проблемы..."
         print_separator
+
+        # Анализ вывода opkg для определения точного места ошибки
+        if echo "$opkg_output" | grep -q "Illegal instruction"; then
+            print_warning "Обнаружена ошибка 'Illegal instruction' в процессе обновления"
+
+            # Попробовать найти контекст
+            local error_context
+            error_context=$(echo "$opkg_output" | grep -B2 "Illegal instruction" | head -5)
+            if [ -n "$error_context" ]; then
+                print_info "Контекст ошибки:"
+                echo "$error_context"
+            fi
+        fi
+        printf "\n"
 
         # 1. Проверка архитектуры системы
         local sys_arch=$(uname -m)
@@ -47,24 +67,31 @@ step_update_packages() {
         fi
 
         # 4. Проверка самого opkg
-        print_info "Проверка opkg..."
+        print_info "Проверка opkg бинарника..."
         if opkg --version 2>&1 | grep -qi "illegal"; then
-            print_error "✗ opkg не может выполниться (Illegal instruction)"
+            print_error "✗ opkg --version падает (Illegal instruction)"
             print_warning "ПРИЧИНА: opkg установлен для неправильной архитектуры CPU!"
         elif opkg --version >/dev/null 2>&1; then
             local opkg_version=$(opkg --version 2>&1 | head -1)
-            print_success "✓ opkg работает: $opkg_version"
+            print_success "✓ opkg бинарник запускается: $opkg_version"
+            print_warning "Но 'opkg update' падает - возможно проблема в зависимости или скрипте"
         else
             print_error "✗ opkg не работает по неизвестной причине"
         fi
 
         # 5. Проверка файла opkg
-        if [ -f "/opt/bin/opkg" ]; then
-            local opkg_file_info=$(file /opt/bin/opkg 2>&1 | head -1)
-            print_info "Бинарник opkg: $opkg_file_info"
+        if command -v file >/dev/null 2>&1; then
+            if [ -f "/opt/bin/opkg" ]; then
+                local opkg_file_info=$(file /opt/bin/opkg 2>&1 | head -1)
+                print_info "Бинарник opkg: $opkg_file_info"
+            fi
         fi
 
         print_separator
+
+        # 6. Рекомендации по дополнительной диагностике
+        print_info "Для детальной диагностики попробуйте вручную:"
+        printf "  opkg update --verbosity=2\n\n"
 
         # Определяем основную причину на основе диагностики
         if opkg --version 2>&1 | grep -qi "illegal"; then
@@ -93,6 +120,42 @@ Intel на процессоре ARM.
 
 ВАЖНО: z2k не может работать с неправильной версией Entware!
 EOF
+        elif echo "$opkg_output" | grep -qi "illegal instruction"; then
+            cat <<'EOF'
+⚠️  СЛОЖНАЯ ПРОБЛЕМА: opkg update падает с "Illegal instruction"
+
+Диагностика показала необычную ситуацию:
+- ✓ opkg бинарник запускается (opkg --version работает)
+- ✓ Архитектура системы корректная
+- ✓ Репозиторий доступен
+- ✗ НО "opkg update" падает с "Illegal instruction"
+
+ВОЗМОЖНЫЕ ПРИЧИНЫ:
+1. Поврежденная зависимая библиотека (libcurl, libssl, и др.)
+2. Проблема с одним из пакетов в репозитории
+3. Поврежденная база данных opkg
+4. Конфликт версий библиотек
+
+РЕКОМЕНДАЦИИ ПО УСТРАНЕНИЮ:
+1. Попробуйте запустить вручную с verbose:
+   opkg update --verbosity=2
+   (это покажет где именно происходит ошибка)
+
+2. Проверьте системные библиотеки:
+   ldd /opt/bin/opkg
+   (покажет какие библиотеки использует opkg)
+
+3. Попробуйте очистить кэш opkg:
+   rm -rf /opt/var/opkg-lists/*
+   opkg update
+
+4. Если ничего не помогает - переустановите Entware:
+   https://help.keenetic.com/hc/ru/articles/360021888880
+
+ПРОДОЛЖИТЬ БЕЗ ОБНОВЛЕНИЯ?
+Можно попробовать продолжить установку z2k без обновления пакетов.
+Если нужные пакеты уже установлены - всё может заработать.
+EOF
         else
             cat <<'EOF'
 ⚠️  ОШИБКА ПРИ ОБНОВЛЕНИИ ПАКЕТОВ
@@ -103,9 +166,9 @@ EOF
 - Проблемы с сетью, DNS или блокировка
 - Проверьте: curl -I http://bin.entware.net/
 
-Если репозиторий доступен, но opkg не работает:
-- Возможно поврежден Entware
-- Попробуйте переустановить Entware
+Если другая проблема:
+- Попробуйте вручную: opkg update --verbosity=2
+- Проверьте логи: cat /opt/var/log/opkg.log
 
 ПРОДОЛЖИТЬ БЕЗ ОБНОВЛЕНИЯ?
 Установка продолжится с текущими пакетами.
