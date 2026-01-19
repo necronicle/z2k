@@ -17,7 +17,14 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebSearch",
       "WebFetch(domain:git.openwrt.org)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(source lib/utils.sh)",
+      "Bash(source:*)",
+      "Bash(get_strategy 1)",
+      "Bash(while IFS=':' read -r test_cmd nfqws_params)",
+      "Bash(do echo \"test_cmd=[$test_cmd]\")",
+      "Bash(echo:*)",
+      "Bash(done)"
     ]
   }
 }

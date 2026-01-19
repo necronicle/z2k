@@ -49,9 +49,16 @@ EOF
     local https_count=0
 
     # Пропустить первую строку (заголовок)
-    tail -n +2 "$input_file" | while IFS=':' read -r test_cmd nfqws_params; do
+    # ВАЖНО: разделитель " : " (пробел-двоеточие-пробел), а НЕ ":", т.к. параметры содержат двоеточия!
+    tail -n +2 "$input_file" | while read -r line; do
         # Пропустить пустые строки
-        [ -z "$test_cmd" ] && continue
+        [ -z "$line" ] && continue
+
+        # Разделить по " : " используя awk
+        local test_cmd
+        test_cmd=$(echo "$line" | awk -F ' : ' '{print $1}')
+        local nfqws_params
+        nfqws_params=$(echo "$line" | awk -F ' : ' '{print $2}')
 
         # Все стратегии в файле - HTTPS (HTTP удалены из strats.txt)
         local type="https"
