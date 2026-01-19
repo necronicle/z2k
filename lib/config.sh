@@ -16,33 +16,46 @@ download_domain_lists() {
         return 1
     }
 
-    print_info "Источник: zapret4rocket (z4r branch)"
+    print_info "Источник: zapret4rocket (master branch)"
 
     # Списки для загрузки (Z4R структура)
+    # Формат: source:target или special:url:target
     local lists="
 russia-discord.txt:discord.txt
 russia-youtube.txt:youtube.txt
-russia-rkn.txt:rkn.txt
+special:${Z4R_RKN_URL}:rkn.txt
 "
 
     local success=0
     local failed=0
 
-    echo "$lists" | while IFS=':' read -r source target; do
+    echo "$lists" | while IFS=':' read -r source target extra; do
         [ -z "$source" ] && continue
 
-        local url="${Z4R_LISTS_URL}/${source}"
-        local output="${LISTS_DIR}/${target}"
+        local url
+        local output
+        local display_name
 
-        print_info "Загрузка ${source}..."
+        # Специальная обработка для файлов с custom URL
+        if [ "$source" = "special" ]; then
+            url="$target"
+            output="${LISTS_DIR}/${extra}"
+            display_name="RKN List"
+        else
+            url="${Z4R_LISTS_URL}/${source}"
+            output="${LISTS_DIR}/${target}"
+            display_name="${source}"
+        fi
+
+        print_info "Загрузка ${display_name}..."
 
         if curl -fsSL "$url" -o "$output"; then
             local count
             count=$(wc -l < "$output" 2>/dev/null || echo "0")
-            print_success "${target}: $count доменов"
+            print_success "$(basename "$output"): $count доменов"
             success=$((success + 1))
         else
-            print_error "Ошибка загрузки: ${source}"
+            print_error "Ошибка загрузки: ${display_name}"
             failed=$((failed + 1))
         fi
     done

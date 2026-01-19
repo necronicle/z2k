@@ -21,7 +21,8 @@ LIB_DIR="${WORK_DIR}/lib"
 
 # GitHub URLs
 GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
-Z4R_LISTS_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/z2r/lists"
+Z4R_LISTS_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/lists"
+Z4R_RKN_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/extra_strats/TCP/RKN/List.txt"
 
 # Файлы конфигурации
 STRATEGIES_CONF="${CONFIG_DIR}/strategies.conf"
