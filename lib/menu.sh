@@ -137,7 +137,7 @@ menu_install() {
 
 menu_select_strategy() {
     clear_screen
-    print_header "[2] Выбор стратегии"
+    print_header "[2] Выбор стратегии по категориям"
 
     if ! is_zapret2_installed; then
         print_error "zapret2 не установлен"
@@ -149,70 +149,130 @@ menu_select_strategy() {
     local total_count
     total_count=$(get_strategies_count)
 
-    # Проверить режим категорий
-    local target_category=""
-    if [ -f "$CATEGORY_STRATEGIES_CONF" ]; then
-        cat <<'SUBMENU'
-
-Выберите категорию:
-[1] YouTube
-[2] Discord
-[3] Custom/RKN
-[A] Все категории (одна стратегия)
-[B] Назад
-
-SUBMENU
-        printf "Ваш выбор: "
-        read_input cat_choice
-
-        case "$cat_choice" in
-            1) target_category="youtube" ;;
-            2) target_category="discord" ;;
-            3) target_category="custom" ;;
-            [Aa]) target_category="all" ;;
-            [Bb]) return ;;
-            *)
-                print_error "Неверный выбор"
-                pause
-                return
-                ;;
-        esac
-    fi
-
-    printf "\nВсего доступно стратегий: %s\n\n" "$total_count"
-    printf "Введите номер стратегии (1-%s): " "$total_count"
-    read_input strategy_num
-
-    # Проверить что это число
-    if ! echo "$strategy_num" | grep -qE '^[0-9]+$'; then
-        print_error "Неверный формат номера"
-        pause
-        return
-    fi
-
-    # Проверить диапазон
-    if [ "$strategy_num" -lt 1 ] || [ "$strategy_num" -gt "$total_count" ]; then
-        print_error "Номер вне диапазона: $strategy_num"
-        pause
-        return
-    fi
-
-    # Проверить существование
-    if ! strategy_exists "$strategy_num"; then
-        print_error "Стратегия #$strategy_num не найдена"
-        pause
-        return
-    fi
-
-    # Показать параметры
-    print_separator
-    print_info "Стратегия #$strategy_num:"
-    local params
-    params=$(get_strategy "$strategy_num")
-    echo "$params"
+    print_info "Всего доступно стратегий: $total_count"
     print_separator
 
-    printf "\nПрименить эту стратегию? [Y/n]: "
+    # Интерактивный выбор стратегий по категориям (как в автотесте)
+    print_info "Выберите стратегии для каждой категории:"
+    printf "\n"
+
+    # YouTube TCP
+    local yt_tcp_strategy
+    while true; do
+        printf "YouTube TCP (youtube.com) [1-%s]: " "$total_count"
+        read_input yt_tcp_strategy
+
+        # Проверки
+        if ! echo "$yt_tcp_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат номера"
+            continue
+        fi
+
+        if [ "$yt_tcp_strategy" -lt 1 ] || [ "$yt_tcp_strategy" -gt "$total_count" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! strategy_exists "$yt_tcp_strategy"; then
+            print_error "Стратегия #$yt_tcp_strategy не найдена"
+            continue
+        fi
+
+        # Показать параметры
+        local params
+        params=$(get_strategy "$yt_tcp_strategy")
+        print_info "Выбрана: $params"
+        break
+    done
+
+    printf "\n"
+
+    # YouTube GV
+    local yt_gv_strategy
+    while true; do
+        printf "YouTube GV (googlevideo CDN) [1-%s, Enter=использовать %s]: " "$total_count" "$yt_tcp_strategy"
+        read_input yt_gv_strategy
+
+        # Если пусто, использовать как для YouTube TCP
+        if [ -z "$yt_gv_strategy" ]; then
+            yt_gv_strategy="$yt_tcp_strategy"
+            print_info "Используется та же стратегия: #$yt_gv_strategy"
+            break
+        fi
+
+        # Проверки
+        if ! echo "$yt_gv_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат номера"
+            continue
+        fi
+
+        if [ "$yt_gv_strategy" -lt 1 ] || [ "$yt_gv_strategy" -gt "$total_count" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! strategy_exists "$yt_gv_strategy"; then
+            print_error "Стратегия #$yt_gv_strategy не найдена"
+            continue
+        fi
+
+        # Показать параметры
+        local params
+        params=$(get_strategy "$yt_gv_strategy")
+        print_info "Выбрана: $params"
+        break
+    done
+
+    printf "\n"
+
+    # RKN
+    local rkn_strategy
+    while true; do
+        printf "RKN (заблокированные сайты) [1-%s, Enter=использовать %s]: " "$total_count" "$yt_tcp_strategy"
+        read_input rkn_strategy
+
+        # Если пусто, использовать как для YouTube TCP
+        if [ -z "$rkn_strategy" ]; then
+            rkn_strategy="$yt_tcp_strategy"
+            print_info "Используется та же стратегия: #$rkn_strategy"
+            break
+        fi
+
+        # Проверки
+        if ! echo "$rkn_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат номера"
+            continue
+        fi
+
+        if [ "$rkn_strategy" -lt 1 ] || [ "$rkn_strategy" -gt "$total_count" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! strategy_exists "$rkn_strategy"; then
+            print_error "Стратегия #$rkn_strategy не найдена"
+            continue
+        fi
+
+        # Показать параметры
+        local params
+        params=$(get_strategy "$rkn_strategy")
+        print_info "Выбрана: $params"
+        break
+    done
+
+    # Итоговая таблица
+    printf "\n"
+    print_separator
+    print_info "Итоговый выбор:"
+    printf "%-20s | %s\n" "Категория" "Стратегия"
+    print_separator
+    printf "%-20s | #%s\n" "YouTube TCP" "$yt_tcp_strategy"
+    printf "%-20s | #%s\n" "YouTube GV" "$yt_gv_strategy"
+    printf "%-20s | #%s\n" "RKN" "$rkn_strategy"
+    print_separator
+
+    printf "\nПрименить выбранные стратегии? [Y/n]: "
     read_input answer
 
     case "$answer" in
@@ -220,29 +280,9 @@ SUBMENU
             print_info "Отменено"
             ;;
         *)
-            if [ -n "$target_category" ] && [ "$target_category" != "all" ]; then
-                # Обновить стратегию для конкретной категории
-                print_info "Применение стратегии #$strategy_num для категории $target_category..."
-
-                # Обновить запись в category_strategies.conf
-                local temp_file="/tmp/category_strategies.tmp"
-                while IFS=':' read -r cat strat score; do
-                    if [ "$cat" = "$target_category" ]; then
-                        echo "$cat:$strategy_num:5"
-                    else
-                        echo "$cat:$strat:$score"
-                    fi
-                done < "$CATEGORY_STRATEGIES_CONF" > "$temp_file"
-                mv "$temp_file" "$CATEGORY_STRATEGIES_CONF"
-
-                # Применить все стратегии заново
-                local all_strategies
-                all_strategies=$(awk -F: '{printf "%s:%s:%s ", $1, $2, $3}' "$CATEGORY_STRATEGIES_CONF")
-                apply_category_strategies "$all_strategies"
-            else
-                # Старый режим или "все категории"
-                apply_strategy_safe "$strategy_num"
-            fi
+            print_info "Применение стратегий..."
+            apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
+            print_success "Стратегии применены!"
             ;;
     esac
 
