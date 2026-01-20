@@ -492,7 +492,7 @@ auto_test_youtube_tcp() {
     local tested=0
     local total=20
 
-    print_info "Тестирование YouTube TCP (youtube.com)..."
+    print_info "Тестирование YouTube TCP (youtube.com)..." >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
@@ -512,7 +512,7 @@ auto_test_youtube_tcp() {
         # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
             printf "РАБОТАЕТ\n" >&2
-            print_success "Найдена работающая стратегия для YouTube TCP: #$num"
+            print_success "Найдена работающая стратегия для YouTube TCP: #$num" >&2
             echo "$num"
             return 0
         else
@@ -521,7 +521,7 @@ auto_test_youtube_tcp() {
     done
 
     # Если ничего не работает, вернуть стратегию по умолчанию
-    print_warning "Не найдено работающих стратегий для YouTube TCP, используется #1"
+    print_warning "Не найдено работающих стратегий для YouTube TCP, используется #1" >&2
     echo "1"
     return 1
 }
@@ -533,12 +533,12 @@ auto_test_youtube_gv() {
     local tested=0
     local total=20
 
-    print_info "Генерация тестового домена Google Video..."
+    print_info "Генерация тестового домена Google Video..." >&2
     local domain
     domain=$(generate_gv_domain)
-    print_info "Тестовый домен: $domain"
+    print_info "Тестовый домен: $domain" >&2
 
-    print_info "Тестирование YouTube GV (Google Video)..."
+    print_info "Тестирование YouTube GV (Google Video)..." >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
@@ -558,7 +558,7 @@ auto_test_youtube_gv() {
         # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
             printf "РАБОТАЕТ\n" >&2
-            print_success "Найдена работающая стратегия для YouTube GV: #$num"
+            print_success "Найдена работающая стратегия для YouTube GV: #$num" >&2
             echo "$num"
             return 0
         else
@@ -567,7 +567,7 @@ auto_test_youtube_gv() {
     done
 
     # Если ничего не работает, вернуть стратегию по умолчанию
-    print_warning "Не найдено работающих стратегий для YouTube GV, используется #1"
+    print_warning "Не найдено работающих стратегий для YouTube GV, используется #1" >&2
     echo "1"
     return 1
 }
@@ -580,7 +580,7 @@ auto_test_rkn() {
     local tested=0
     local total=20
 
-    print_info "Тестирование RKN (meduza.io, facebook.com, rutracker.org)..."
+    print_info "Тестирование RKN (meduza.io, facebook.com, rutracker.org)..." >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
@@ -608,7 +608,7 @@ auto_test_rkn() {
         # Успех если работает хотя бы на 2 из 3 доменов
         if [ "$success_count" -ge 2 ]; then
             printf "РАБОТАЕТ (%d/3)\n" "$success_count" >&2
-            print_success "Найдена работающая стратегия для RKN: #$num"
+            print_success "Найдена работающая стратегия для RKN: #$num" >&2
             echo "$num"
             return 0
         else
@@ -617,7 +617,7 @@ auto_test_rkn() {
     done
 
     # Если ничего не работает, вернуть стратегию по умолчанию
-    print_warning "Не найдено работающих стратегий для RKN, используется #1"
+    print_warning "Не найдено работающих стратегий для RKN, используется #1" >&2
     echo "1"
     return 1
 }
@@ -763,21 +763,21 @@ auto_test_all_categories_v2() {
     print_info "Тестирование YouTube TCP..."
     auto_test_youtube_tcp "$TOP20_STRATEGIES" > "$result_file_tcp"
     local yt_tcp_result=$?
-    local yt_tcp_strategy=$(cat "$result_file_tcp" 2>/dev/null || echo "1")
+    local yt_tcp_strategy=$(tail -1 "$result_file_tcp" 2>/dev/null | tr -d '\n' || echo "1")
 
     printf "\n"
     print_separator
     print_info "Тестирование YouTube GV..."
     auto_test_youtube_gv "$TOP20_STRATEGIES" > "$result_file_gv"
     local yt_gv_result=$?
-    local yt_gv_strategy=$(cat "$result_file_gv" 2>/dev/null || echo "1")
+    local yt_gv_strategy=$(tail -1 "$result_file_gv" 2>/dev/null | tr -d '\n' || echo "1")
 
     printf "\n"
     print_separator
     print_info "Тестирование RKN..."
     auto_test_rkn "$TOP20_STRATEGIES" > "$result_file_rkn"
     local rkn_result=$?
-    local rkn_strategy=$(cat "$result_file_rkn" 2>/dev/null || echo "1")
+    local rkn_strategy=$(tail -1 "$result_file_rkn" 2>/dev/null | tr -d '\n' || echo "1")
 
     # Очистить временные файлы
     rm -f "$result_file_tcp" "$result_file_gv" "$result_file_rkn"
