@@ -66,11 +66,12 @@ MENU
 [8] Резервная копия/Восстановление
 [9] Удалить zapret2
 [A] Режим ALL TCP-443 (без хостлистов)
+[W] Whitelist (исключения)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-9,A]: "
+        printf "Выберите опцию [0-9,A,W]: "
         read_input choice
 
         case "$choice" in
@@ -103,6 +104,9 @@ MENU
                 ;;
             a|A)
                 menu_all_tcp443
+                ;;
+            w|W)
+                menu_whitelist
                 ;;
             0|q|Q)
                 print_info "Выход из меню"
@@ -916,6 +920,144 @@ SUBMENU
                 print_success "Сервис перезапущен"
             fi
 
+            pause
+            ;;
+
+        b|B)
+            return 0
+            ;;
+
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: WHITELIST (ИСКЛЮЧЕНИЯ)
+# ==============================================================================
+
+menu_whitelist() {
+    clear_screen
+    print_header "Whitelist - Исключения из обработки"
+
+    local whitelist_file="${LISTS_DIR}/whitelist.txt"
+
+    # Проверить существование файла
+    if [ ! -f "$whitelist_file" ]; then
+        print_error "Файл whitelist не найден: $whitelist_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    print_separator
+
+    cat <<'INFO'
+
+Whitelist содержит домены, которые ИСКЛЮЧЕНЫ из обработки zapret2.
+Это полезно для критичных сервисов, которые могут сломаться
+при применении DPI-обхода (госуслуги, банки, и т.д.)
+
+По умолчанию в whitelist включены:
+  - gosuslugi.ru (Госуслуги, ЕСИА)
+  - nalog.gov.ru (Налоговая служба)
+  - pfr.gov.ru (Пенсионный фонд)
+  - mos.ru (Москва)
+
+[1] Просмотреть whitelist
+[2] Редактировать whitelist (vi)
+[3] Добавить домен
+[4] Удалить домен
+[B] Назад
+
+INFO
+
+    printf "Выберите опцию [1-4,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            # Просмотр
+            clear_screen
+            print_header "Текущий whitelist"
+            print_separator
+            cat "$whitelist_file"
+            print_separator
+            pause
+            ;;
+
+        2)
+            # Редактирование в vi
+            print_info "Открытие whitelist в редакторе..."
+            vi "$whitelist_file"
+
+            # Перезапуск сервиса
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса для применения изменений..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+            pause
+            ;;
+
+        3)
+            # Добавить домен
+            printf "Введите домен для добавления (например: example.com): "
+            read_input new_domain
+
+            # Простая валидация домена
+            if ! echo "$new_domain" | grep -qE '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
+                print_error "Неверный формат домена: $new_domain"
+                pause
+                return 1
+            fi
+
+            # Проверить дубликаты
+            if grep -qx "$new_domain" "$whitelist_file"; then
+                print_warning "Домен $new_domain уже в whitelist"
+                pause
+                return 0
+            fi
+
+            # Добавить домен
+            echo "$new_domain" >> "$whitelist_file"
+            print_success "Домен $new_domain добавлен в whitelist"
+            print_separator
+
+            # Перезапуск сервиса
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса для применения изменений..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+            pause
+            ;;
+
+        4)
+            # Удалить домен
+            printf "Введите домен для удаления: "
+            read_input del_domain
+
+            # Проверить наличие
+            if ! grep -qx "$del_domain" "$whitelist_file"; then
+                print_error "Домен $del_domain не найден в whitelist"
+                pause
+                return 1
+            fi
+
+            # Удалить домен
+            sed -i "/^${del_domain}$/d" "$whitelist_file"
+            print_success "Домен $del_domain удален из whitelist"
+            print_separator
+
+            # Перезапуск сервиса
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса для применения изменений..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
             pause
             ;;
 

@@ -26,7 +26,8 @@
       "Bash(echo:*)",
       "Bash(done)",
       "Bash(curl:*)",
-      "WebFetch(domain:ntc.party)"
+      "WebFetch(domain:ntc.party)",
+      "Bash(grep:*)"
     ]
   }
 }

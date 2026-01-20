@@ -763,6 +763,7 @@ start() {
         --qnum=200 \
         --lua-init="@${LUA_DIR}/zapret-lib.lua" \
         --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        --hostlist-exclude="${LISTS_DIR}/whitelist.txt" \
         \
         --hostlist="${LISTS_DIR}/youtube.txt" \
         $YOUTUBE_TCP_TCP \

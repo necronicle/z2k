@@ -353,6 +353,40 @@ EOF
         print_success "Создан конфиг режима ALL_TCP443"
     fi
 
+    # Создать whitelist для исключения критичных сервисов
+    local whitelist="${LISTS_DIR}/whitelist.txt"
+    if [ ! -f "$whitelist" ]; then
+        cat > "$whitelist" <<'EOF'
+# Whitelist - домены исключенные из обработки zapret2
+# Критичные государственные сервисы РФ
+
+# Госуслуги (ЕСИА)
+gosuslugi.ru
+esia.gosuslugi.ru
+lk.gosuslugi.ru
+static.gosuslugi.ru
+beta.gosuslugi.ru
+pos.gosuslugi.ru
+
+# Налоговая служба
+nalog.gov.ru
+lkfl2.nalog.ru
+lkul.nalog.ru
+service.nalog.ru
+
+# Пенсионный фонд
+pfr.gov.ru
+es.pfr.gov.ru
+lkfr.pfr.gov.ru
+
+# Другие важные госсервисы
+mos.ru
+pgu.mos.ru
+uslugi.mosreg.ru
+EOF
+        print_success "Создан whitelist: $whitelist"
+    fi
+
     print_success "Базовая конфигурация создана"
     return 0
 }
