@@ -758,6 +758,16 @@ start() {
     # Дополнительные порты для Discord Voice
     iptables -t mangle -A ZAPRET -p udp -m multiport --dports 50000:50099,1400,3478:3481,5349 -j NFQUEUE --queue-num 200 --queue-bypass
 
+    # Проверить существование whitelist.txt перед запуском
+    if [ ! -f "${LISTS_DIR}/whitelist.txt" ]; then
+        echo "WARNING: whitelist.txt не найден, будет создан пустой файл"
+        mkdir -p "$LISTS_DIR" 2>/dev/null
+        touch "${LISTS_DIR}/whitelist.txt" 2>/dev/null || {
+            echo "ERROR: Не удалось создать whitelist.txt"
+            return 1
+        }
+    fi
+
     # Запустить единый nfqws2 процесс с множественными профилями
     $NFQWS \
         --qnum=200 \

@@ -354,9 +354,17 @@ EOF
     fi
 
     # Создать директорию для списков если не существует
-    mkdir -p "$LISTS_DIR" 2>/dev/null || {
-        print_warning "Не удалось создать директорию: $LISTS_DIR"
-    }
+    if ! mkdir -p "$LISTS_DIR" 2>/dev/null; then
+        print_error "Не удалось создать директорию: $LISTS_DIR"
+        print_info "Проверьте права доступа"
+        return 1
+    fi
+
+    # Проверить что директория действительно существует
+    if [ ! -d "$LISTS_DIR" ]; then
+        print_error "Директория не существует: $LISTS_DIR"
+        return 1
+    fi
 
     # Создать whitelist для исключения критичных сервисов
     local whitelist="${LISTS_DIR}/whitelist.txt"
@@ -389,6 +397,14 @@ mos.ru
 pgu.mos.ru
 uslugi.mosreg.ru
 EOF
+
+        # Проверить что файл действительно создался
+        if [ ! -f "$whitelist" ]; then
+            print_error "Не удалось создать whitelist: $whitelist"
+            print_info "Проверьте права доступа к директории"
+            return 1
+        fi
+
         print_success "Создан whitelist: $whitelist"
     fi
 

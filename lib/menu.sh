@@ -946,10 +946,48 @@ menu_whitelist() {
 
     # Проверить существование файла
     if [ ! -f "$whitelist_file" ]; then
-        print_error "Файл whitelist не найден: $whitelist_file"
-        print_info "Запустите установку сначала"
-        pause
-        return 1
+        print_warning "Файл whitelist не найден: $whitelist_file"
+        print_info "Создаю файл..."
+
+        # Создать директорию если не существует
+        if ! mkdir -p "$LISTS_DIR" 2>/dev/null; then
+            print_error "Не удалось создать директорию: $LISTS_DIR"
+            print_info "Проверьте права доступа"
+            pause
+            return 1
+        fi
+
+        # Создать базовый whitelist
+        cat > "$whitelist_file" <<'EOF'
+# Whitelist - домены исключенные из обработки zapret2
+# Критичные государственные сервисы РФ
+
+# Госуслуги (ЕСИА)
+gosuslugi.ru
+esia.gosuslugi.ru
+lk.gosuslugi.ru
+
+# Налоговая служба
+nalog.gov.ru
+lkfl2.nalog.ru
+
+# Пенсионный фонд
+pfr.gov.ru
+es.pfr.gov.ru
+
+# Другие важные госсервисы
+mos.ru
+pgu.mos.ru
+EOF
+
+        if [ ! -f "$whitelist_file" ]; then
+            print_error "Не удалось создать файл whitelist"
+            print_info "Проверьте права доступа"
+            pause
+            return 1
+        fi
+
+        print_success "Файл whitelist создан: $whitelist_file"
     fi
 
     print_separator
