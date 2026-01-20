@@ -24,7 +24,8 @@
       "Bash(while IFS=':' read -r test_cmd nfqws_params)",
       "Bash(do echo \"test_cmd=[$test_cmd]\")",
       "Bash(echo:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(curl:*)"
     ]
   }
 }
