@@ -25,7 +25,8 @@
       "Bash(do echo \"test_cmd=[$test_cmd]\")",
       "Bash(echo:*)",
       "Bash(done)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "WebFetch(domain:ntc.party)"
     ]
   }
 }
