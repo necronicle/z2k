@@ -474,7 +474,7 @@ menu_autotest() {
 [1] TOP-20 по категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)
 [2] TOP-20 общий (быстрый тест, ~2 мин)
 [3] Диапазон (укажите вручную)
-[4] Все стратегии (только HTTPS, 119 шт, ~10 мин)
+[4] Все стратегии (только HTTPS, 199 шт, ~15 мин)
 [B] Назад
 
 SUBMENU
@@ -509,9 +509,9 @@ SUBMENU
             ;;
         4)
             clear_screen
-            print_warning "Это займет около 10 минут!"
+            print_warning "Это займет около 15 минут!"
             if confirm "Продолжить?" "N"; then
-                test_strategy_range 1 119
+                test_strategy_range 1 199
             fi
             ;;
         [Bb])
@@ -833,7 +833,7 @@ SUBMENU
             printf "  #67 - fakedsplit с ip_autottl (продвинутая)\n"
             print_separator
 
-            printf "Введите номер стратегии [1-119] или Enter для #1: "
+            printf "Введите номер стратегии [1-199] или Enter для #1: "
             read_input strategy_num
 
             # Валидация
@@ -841,7 +841,7 @@ SUBMENU
                 strategy_num=1
             fi
 
-            if ! echo "$strategy_num" | grep -qE '^[0-9]+$' || [ "$strategy_num" -lt 1 ] || [ "$strategy_num" -gt 119 ]; then
+            if ! echo "$strategy_num" | grep -qE '^[0-9]+$' || [ "$strategy_num" -lt 1 ] || [ "$strategy_num" -gt 199 ]; then
                 print_error "Неверный номер стратегии: $strategy_num"
                 pause
                 return 1
@@ -899,11 +899,11 @@ SUBMENU
 
             printf "Текущая стратегия: #%s\n" "$current_strategy"
             print_separator
-            printf "Введите новый номер стратегии [1-119]: "
+            printf "Введите новый номер стратегии [1-199]: "
             read_input new_strategy
 
             # Валидация
-            if ! echo "$new_strategy" | grep -qE '^[0-9]+$' || [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt 119 ]; then
+            if ! echo "$new_strategy" | grep -qE '^[0-9]+$' || [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt 199 ]; then
                 print_error "Неверный номер стратегии: $new_strategy"
                 pause
                 return 1

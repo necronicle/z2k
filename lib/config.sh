@@ -347,11 +347,16 @@ create_base_config() {
 # Включить режим: 1 = включен, 0 = выключен
 ENABLED=0
 
-# Номер стратегии для применения (1-119)
+# Номер стратегии для применения (1-199)
 STRATEGY=1
 EOF
         print_success "Создан конфиг режима ALL_TCP443"
     fi
+
+    # Создать директорию для списков если не существует
+    mkdir -p "$LISTS_DIR" 2>/dev/null || {
+        print_warning "Не удалось создать директорию: $LISTS_DIR"
+    }
 
     # Создать whitelist для исключения критичных сервисов
     local whitelist="${LISTS_DIR}/whitelist.txt"
