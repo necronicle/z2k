@@ -206,9 +206,9 @@ SUBMENU
     case "$category_choice" in
         1)
             # YouTube TCP
-            menu_select_single_strategy "YouTube TCP" "$current_yt_tcp" "$total_count"
-            local new_strategy=$?
-            if [ "$new_strategy" -gt 0 ]; then
+            local new_strategy
+            new_strategy=$(menu_select_single_strategy "YouTube TCP" "$current_yt_tcp" "$total_count")
+            if [ -n "$new_strategy" ] && [ "$new_strategy" -gt 0 ]; then
                 print_separator
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$new_strategy" "$current_yt_gv" "$current_rkn"
@@ -233,9 +233,9 @@ SUBMENU
             ;;
         2)
             # YouTube GV
-            menu_select_single_strategy "YouTube GV" "$current_yt_gv" "$total_count"
-            local new_strategy=$?
-            if [ "$new_strategy" -gt 0 ]; then
+            local new_strategy
+            new_strategy=$(menu_select_single_strategy "YouTube GV" "$current_yt_gv" "$total_count")
+            if [ -n "$new_strategy" ] && [ "$new_strategy" -gt 0 ]; then
                 print_separator
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$new_strategy" "$current_rkn"
@@ -260,9 +260,9 @@ SUBMENU
             ;;
         3)
             # RKN
-            menu_select_single_strategy "RKN" "$current_rkn" "$total_count"
-            local new_strategy=$?
-            if [ "$new_strategy" -gt 0 ]; then
+            local new_strategy
+            new_strategy=$(menu_select_single_strategy "RKN" "$current_rkn" "$total_count")
+            if [ -n "$new_strategy" ] && [ "$new_strategy" -gt 0 ]; then
                 print_separator
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
@@ -363,8 +363,9 @@ menu_select_single_strategy() {
         print_info "Выбрана стратегия #$new_strategy:"
         printf "  %s\n\n" "$params"
 
-        # Возвращаем номер стратегии для дальнейшего тестирования
-        return "$new_strategy"
+        # Возвращаем номер стратегии для дальнейшего тестирования через echo
+        echo "$new_strategy"
+        return 0
     done
 }
 
