@@ -643,6 +643,7 @@ ZAPRET2_DIR="/opt/zapret2"
 NFQWS="${ZAPRET2_DIR}/nfq2/nfqws2"
 LUA_DIR="${ZAPRET2_DIR}/lua"
 LISTS_DIR="${ZAPRET2_DIR}/lists"
+CONFIG_DIR="${ZAPRET2_DIR}/config"
 
 # ==============================================================================
 # СТРАТЕГИИ ПО КАТЕГОРИЯМ (Z4R АРХИТЕКТУРА)
@@ -693,6 +694,30 @@ start() {
     fi
 
     echo "Starting $DESC"
+
+    # Загрузить конфигурацию режима ALL_TCP443
+    local ALL_TCP443_ENABLED=0
+    local ALL_TCP443_STRATEGY_NUM=1
+    local ALL_TCP443_CONF="${CONFIG_DIR}/all_tcp443.conf"
+
+    if [ -f "$ALL_TCP443_CONF" ]; then
+        . "$ALL_TCP443_CONF"
+        ALL_TCP443_ENABLED=$ENABLED
+        ALL_TCP443_STRATEGY_NUM=$STRATEGY
+    fi
+
+    # Получить стратегию для ALL_TCP443 режима
+    local ALL_TCP443_STRATEGY=""
+    if [ "$ALL_TCP443_ENABLED" = "1" ]; then
+        # Загрузить стратегию из strategies.conf
+        if [ -f "${CONFIG_DIR}/strategies.conf" ]; then
+            ALL_TCP443_STRATEGY=$(sed -n "${ALL_TCP443_STRATEGY_NUM}p" "${CONFIG_DIR}/strategies.conf" 2>/dev/null | awk -F ' : ' '{print $2}')
+            if [ -z "$ALL_TCP443_STRATEGY" ]; then
+                echo "WARNING: Strategy #${ALL_TCP443_STRATEGY_NUM} not found, using default"
+                ALL_TCP443_STRATEGY="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+            fi
+        fi
+    fi
 
     # Загрузить модули ядра (через Entware insmod с полными путями)
     local kernel_ver=$(uname -r)
@@ -763,6 +788,9 @@ start() {
         $CUSTOM_TCP \
         --new \
         $CUSTOM_UDP \
+        $([ "$ALL_TCP443_ENABLED" = "1" ] && echo "\
+        --new \
+        $ALL_TCP443_STRATEGY") \
         >/dev/null 2>&1 &
 
     sleep 2

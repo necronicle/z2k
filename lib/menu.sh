@@ -43,6 +43,15 @@ MENU
             else
                 printf " Текущая стратегия: #%s\n" "$(get_current_strategy)"
             fi
+
+            # Проверить режим ALL TCP-443
+            local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
+            if [ -f "$all_tcp443_conf" ]; then
+                . "$all_tcp443_conf"
+                if [ "$ENABLED" = "1" ]; then
+                    printf " ALL TCP-443: Включен (стратегия #%s)\n" "$STRATEGY"
+                fi
+            fi
         fi
 
         cat <<'MENU'
@@ -56,11 +65,12 @@ MENU
 [7] Настроить Discord (голос)
 [8] Резервная копия/Восстановление
 [9] Удалить zapret2
+[A] Режим ALL TCP-443 (без хостлистов)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-9]: "
+        printf "Выберите опцию [0-9,A]: "
         read_input choice
 
         case "$choice" in
@@ -90,6 +100,9 @@ MENU
                 ;;
             9)
                 menu_uninstall
+                ;;
+            a|A)
+                menu_all_tcp443
                 ;;
             0|q|Q)
                 print_info "Выход из меню"
@@ -709,6 +722,177 @@ menu_uninstall() {
     uninstall_zapret2
 
     pause
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: РЕЖИМ ALL TCP-443 (БЕЗ ХОСТЛИСТОВ)
+# ==============================================================================
+
+menu_all_tcp443() {
+    clear_screen
+    print_header "Режим ALL TCP-443 (без хостлистов)"
+
+    local conf_file="${CONFIG_DIR}/all_tcp443.conf"
+
+    # Проверить существование конфига
+    if [ ! -f "$conf_file" ]; then
+        print_error "Файл конфигурации не найден: $conf_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    # Прочитать текущую конфигурацию
+    . "$conf_file"
+    local current_enabled=$ENABLED
+    local current_strategy=$STRATEGY
+
+    print_separator
+
+    print_info "Текущая конфигурация:"
+    printf "  Статус: %s\n" "$([ "$current_enabled" = "1" ] && echo 'Включен' || echo 'Выключен')"
+    printf "  Стратегия: #%s\n" "$current_strategy"
+
+    print_separator
+
+    cat <<'SUBMENU'
+
+ВНИМАНИЕ: Этот режим применяет стратегию ко ВСЕМУ трафику HTTPS (TCP-443)
+без фильтрации по доменам из хостлистов!
+
+Использование:
+  - Для обхода блокировок ВСЕХ сайтов одной стратегией
+  - Когда хостлисты не помогают
+  - Для тестирования универсальных стратегий
+
+Недостатки:
+  - Может замедлить ВСЕ HTTPS соединения
+  - Увеличивает нагрузку на роутер
+  - Может вызвать проблемы с некоторыми сайтами
+
+[1] Включить режим ALL TCP-443
+[2] Выключить режим ALL TCP-443
+[3] Изменить стратегию
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-3,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            # Включить режим
+            print_info "Выбор стратегии для режима ALL TCP-443..."
+            print_separator
+
+            # Показать топ стратегий
+            print_info "Рекомендуемые стратегии для режима ALL TCP-443:"
+            printf "  #1  - multidisorder (базовая)\n"
+            printf "  #7  - multidisorder:pos=1\n"
+            printf "  #13 - multidisorder:pos=sniext+1\n"
+            printf "  #67 - fakedsplit с ip_autottl (продвинутая)\n"
+            print_separator
+
+            printf "Введите номер стратегии [1-119] или Enter для #1: "
+            read_input strategy_num
+
+            # Валидация
+            if [ -z "$strategy_num" ]; then
+                strategy_num=1
+            fi
+
+            if ! echo "$strategy_num" | grep -qE '^[0-9]+$' || [ "$strategy_num" -lt 1 ] || [ "$strategy_num" -gt 119 ]; then
+                print_error "Неверный номер стратегии: $strategy_num"
+                pause
+                return 1
+            fi
+
+            # Обновить конфиг
+            sed -i "s/^ENABLED=.*/ENABLED=1/" "$conf_file"
+            sed -i "s/^STRATEGY=.*/STRATEGY=$strategy_num/" "$conf_file"
+
+            print_success "Режим ALL TCP-443 включен с стратегией #$strategy_num"
+            print_separator
+
+            # Перезапуск сервиса
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса для применения изменений..."
+                restart_zapret2
+                print_success "Сервис перезапущен"
+            else
+                print_warning "Сервис не запущен. Запустите через [4] Управление сервисом"
+            fi
+
+            pause
+            ;;
+
+        2)
+            # Выключить режим
+            if [ "$current_enabled" != "1" ]; then
+                print_info "Режим ALL TCP-443 уже выключен"
+                pause
+                return 0
+            fi
+
+            sed -i "s/^ENABLED=.*/ENABLED=0/" "$conf_file"
+            print_success "Режим ALL TCP-443 выключен"
+            print_separator
+
+            # Перезапуск сервиса
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса для применения изменений..."
+                restart_zapret2
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+
+        3)
+            # Изменить стратегию
+            if [ "$current_enabled" != "1" ]; then
+                print_warning "Режим ALL TCP-443 выключен"
+                print_info "Сначала включите режим через [1]"
+                pause
+                return 0
+            fi
+
+            printf "Текущая стратегия: #%s\n" "$current_strategy"
+            print_separator
+            printf "Введите новый номер стратегии [1-119]: "
+            read_input new_strategy
+
+            # Валидация
+            if ! echo "$new_strategy" | grep -qE '^[0-9]+$' || [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt 119 ]; then
+                print_error "Неверный номер стратегии: $new_strategy"
+                pause
+                return 1
+            fi
+
+            sed -i "s/^STRATEGY=.*/STRATEGY=$new_strategy/" "$conf_file"
+            print_success "Стратегия изменена на #$new_strategy"
+            print_separator
+
+            # Перезапуск сервиса
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса для применения изменений..."
+                restart_zapret2
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+
+        b|B)
+            return 0
+            ;;
+
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
 }
 
 # ==============================================================================
