@@ -67,6 +67,29 @@ special|${Z4R_RKN_URL}|rkn.txt
         print_info "Создан custom.txt для пользовательских доменов"
     fi
 
+    # Дополнить RKN список критически важными доменами (fix rutracker issue)
+    # static.rutracker.cc - статический контент RuTracker (картинки, CSS)
+    # cloudflare-ech.com/dns.com - Cloudflare ECH обход (используется многими сайтами)
+    if [ -f "${LISTS_DIR}/rkn.txt" ]; then
+        local rkn_additions="
+static.rutracker.cc
+cloudflare-ech.com
+cloudflare-dns.com
+"
+        local added=0
+        echo "$rkn_additions" | while read -r domain; do
+            [ -z "$domain" ] && continue
+            if ! grep -qFx "$domain" "${LISTS_DIR}/rkn.txt" 2>/dev/null; then
+                echo "$domain" >> "${LISTS_DIR}/rkn.txt"
+                added=$((added + 1))
+            fi
+        done
+
+        if [ "$added" -gt 0 ]; then
+            print_info "Добавлено критически важных доменов в RKN: static.rutracker.cc, Cloudflare ECH"
+        fi
+    fi
+
     print_separator
     print_success "Списки доменов загружены"
 
