@@ -209,47 +209,97 @@ SUBMENU
             menu_select_single_strategy "YouTube TCP" "$current_yt_tcp" "$total_count"
             local new_strategy=$?
             if [ "$new_strategy" -gt 0 ]; then
+                print_separator
+                print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$new_strategy" "$current_yt_gv" "$current_rkn"
-                print_success "Стратегия YouTube TCP обновлена!"
                 print_separator
                 test_category_availability "YouTube TCP" "youtube.com"
+                print_separator
+
+                printf "Применить эту стратегию постоянно? [Y/n]: "
+                read_input apply_confirm
+                case "$apply_confirm" in
+                    [Nn]|[Nn][Oo])
+                        print_info "Откатываю к предыдущей стратегии #$current_yt_tcp..."
+                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+                        print_success "Откат выполнен"
+                        ;;
+                    *)
+                        print_success "Стратегия YouTube TCP применена постоянно!"
+                        ;;
+                esac
             fi
+            return
             ;;
         2)
             # YouTube GV
             menu_select_single_strategy "YouTube GV" "$current_yt_gv" "$total_count"
             local new_strategy=$?
             if [ "$new_strategy" -gt 0 ]; then
+                print_separator
+                print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$new_strategy" "$current_rkn"
-                print_success "Стратегия YouTube GV обновлена!"
                 print_separator
                 test_category_availability "YouTube GV" "yt3.ggpht.com"
+                print_separator
+
+                printf "Применить эту стратегию постоянно? [Y/n]: "
+                read_input apply_confirm
+                case "$apply_confirm" in
+                    [Nn]|[Nn][Oo])
+                        print_info "Откатываю к предыдущей стратегии #$current_yt_gv..."
+                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+                        print_success "Откат выполнен"
+                        ;;
+                    *)
+                        print_success "Стратегия YouTube GV применена постоянно!"
+                        ;;
+                esac
             fi
+            return
             ;;
         3)
             # RKN
             menu_select_single_strategy "RKN" "$current_rkn" "$total_count"
             local new_strategy=$?
             if [ "$new_strategy" -gt 0 ]; then
+                print_separator
+                print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
-                print_success "Стратегия RKN обновлена!"
                 print_separator
                 test_category_availability "RKN" "rutracker.org"
+                print_separator
+
+                printf "Применить эту стратегию постоянно? [Y/n]: "
+                read_input apply_confirm
+                case "$apply_confirm" in
+                    [Nn]|[Nn][Oo])
+                        print_info "Откатываю к предыдущей стратегии #$current_rkn..."
+                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+                        print_success "Откат выполнен"
+                        ;;
+                    *)
+                        print_success "Стратегия RKN применена постоянно!"
+                        ;;
+                esac
             fi
+            return
             ;;
         4)
             # Все категории
             menu_select_all_strategies "$total_count"
+            pause
+            return
             ;;
         [Bb])
             return
             ;;
         *)
             print_error "Неверный выбор"
+            pause
+            return
             ;;
     esac
-
-    pause
 }
 
 # Вспомогательная функция: проверка доступности категории
@@ -313,18 +363,8 @@ menu_select_single_strategy() {
         print_info "Выбрана стратегия #$new_strategy:"
         printf "  %s\n\n" "$params"
 
-        printf "Применить эту стратегию? [Y/n]: "
-        read_input confirm
-
-        case "$confirm" in
-            [Nn]|[Nn][Oo])
-                print_info "Отменено"
-                return 0
-                ;;
-            *)
-                return "$new_strategy"
-                ;;
-        esac
+        # Возвращаем номер стратегии для дальнейшего тестирования
+        return "$new_strategy"
     done
 }
 
