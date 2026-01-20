@@ -149,22 +149,159 @@ menu_select_strategy() {
     local total_count
     total_count=$(get_strategies_count)
 
+    # Прочитать текущие стратегии
+    local config_file="${CONFIG_DIR}/category_strategies.conf"
+    local current_yt_tcp="1"
+    local current_yt_gv="1"
+    local current_rkn="1"
+
+    if [ -f "$config_file" ]; then
+        current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        current_yt_gv=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        current_rkn=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        [ -z "$current_yt_tcp" ] && current_yt_tcp="1"
+        [ -z "$current_yt_gv" ] && current_yt_gv="1"
+        [ -z "$current_rkn" ] && current_rkn="1"
+    fi
+
     print_info "Всего доступно стратегий: $total_count"
     print_separator
+    print_info "Текущие стратегии:"
+    printf "  YouTube TCP: #%s\n" "$current_yt_tcp"
+    printf "  YouTube GV:  #%s\n" "$current_yt_gv"
+    printf "  RKN:         #%s\n" "$current_rkn"
+    print_separator
 
-    # Интерактивный выбор стратегий по категориям (как в автотесте)
-    print_info "Выберите стратегии для каждой категории:"
+    # Подменю выбора категории
+    cat <<'SUBMENU'
+
+Выберите категорию для изменения стратегии:
+[1] YouTube TCP (youtube.com)
+[2] YouTube GV (googlevideo CDN)
+[3] RKN (заблокированные сайты)
+[4] Все категории сразу
+[B] Назад
+
+SUBMENU
+    printf "Ваш выбор: "
+    read_input category_choice
+
+    case "$category_choice" in
+        1)
+            # YouTube TCP
+            menu_select_single_strategy "YouTube TCP" "$current_yt_tcp" "$total_count"
+            local new_strategy=$?
+            if [ "$new_strategy" -gt 0 ]; then
+                apply_category_strategies_v2 "$new_strategy" "$current_yt_gv" "$current_rkn"
+                print_success "Стратегия YouTube TCP обновлена!"
+            fi
+            ;;
+        2)
+            # YouTube GV
+            menu_select_single_strategy "YouTube GV" "$current_yt_gv" "$total_count"
+            local new_strategy=$?
+            if [ "$new_strategy" -gt 0 ]; then
+                apply_category_strategies_v2 "$current_yt_tcp" "$new_strategy" "$current_rkn"
+                print_success "Стратегия YouTube GV обновлена!"
+            fi
+            ;;
+        3)
+            # RKN
+            menu_select_single_strategy "RKN" "$current_rkn" "$total_count"
+            local new_strategy=$?
+            if [ "$new_strategy" -gt 0 ]; then
+                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
+                print_success "Стратегия RKN обновлена!"
+            fi
+            ;;
+        4)
+            # Все категории
+            menu_select_all_strategies "$total_count"
+            ;;
+        [Bb])
+            return
+            ;;
+        *)
+            print_error "Неверный выбор"
+            ;;
+    esac
+
+    pause
+}
+
+# Вспомогательная функция: выбор стратегии для одной категории
+menu_select_single_strategy() {
+    local category_name=$1
+    local current_strategy=$2
+    local total_count=$3
+
+    printf "\n"
+    print_info "Выбор стратегии для: $category_name"
+    printf "Текущая стратегия: #%s\n\n" "$current_strategy"
+
+    while true; do
+        printf "Введите номер стратегии [1-%s] или Enter для отмены: " "$total_count"
+        read_input new_strategy
+
+        # Отмена
+        if [ -z "$new_strategy" ]; then
+            print_info "Отменено"
+            return 0
+        fi
+
+        # Проверки
+        if ! echo "$new_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат номера"
+            continue
+        fi
+
+        if [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt "$total_count" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! strategy_exists "$new_strategy"; then
+            print_error "Стратегия #$new_strategy не найдена"
+            continue
+        fi
+
+        # Показать параметры
+        local params
+        params=$(get_strategy "$new_strategy")
+        print_info "Выбрана стратегия #$new_strategy:"
+        printf "  %s\n\n" "$params"
+
+        printf "Применить эту стратегию? [Y/n]: "
+        read_input confirm
+
+        case "$confirm" in
+            [Nn]|[Nn][Oo])
+                print_info "Отменено"
+                return 0
+                ;;
+            *)
+                return "$new_strategy"
+                ;;
+        esac
+    done
+}
+
+# Вспомогательная функция: выбор стратегий для всех категорий
+menu_select_all_strategies() {
+    local total_count=$1
+
+    printf "\n"
+    print_info "Выбор стратегий для всех категорий:"
     printf "\n"
 
     # YouTube TCP
     local yt_tcp_strategy
     while true; do
-        printf "YouTube TCP (youtube.com) [1-%s]: " "$total_count"
+        printf "YouTube TCP [1-%s]: " "$total_count"
         read_input yt_tcp_strategy
 
-        # Проверки
         if ! echo "$yt_tcp_strategy" | grep -qE '^[0-9]+$'; then
-            print_error "Неверный формат номера"
+            print_error "Неверный формат"
             continue
         fi
 
@@ -174,35 +311,27 @@ menu_select_strategy() {
         fi
 
         if ! strategy_exists "$yt_tcp_strategy"; then
-            print_error "Стратегия #$yt_tcp_strategy не найдена"
+            print_error "Стратегия не найдена"
             continue
         fi
 
-        # Показать параметры
-        local params
-        params=$(get_strategy "$yt_tcp_strategy")
-        print_info "Выбрана: $params"
         break
     done
-
-    printf "\n"
 
     # YouTube GV
     local yt_gv_strategy
     while true; do
-        printf "YouTube GV (googlevideo CDN) [1-%s, Enter=использовать %s]: " "$total_count" "$yt_tcp_strategy"
+        printf "YouTube GV [1-%s, Enter=использовать %s]: " "$total_count" "$yt_tcp_strategy"
         read_input yt_gv_strategy
 
-        # Если пусто, использовать как для YouTube TCP
         if [ -z "$yt_gv_strategy" ]; then
             yt_gv_strategy="$yt_tcp_strategy"
-            print_info "Используется та же стратегия: #$yt_gv_strategy"
+            print_info "Используется: #$yt_gv_strategy"
             break
         fi
 
-        # Проверки
         if ! echo "$yt_gv_strategy" | grep -qE '^[0-9]+$'; then
-            print_error "Неверный формат номера"
+            print_error "Неверный формат"
             continue
         fi
 
@@ -212,35 +341,27 @@ menu_select_strategy() {
         fi
 
         if ! strategy_exists "$yt_gv_strategy"; then
-            print_error "Стратегия #$yt_gv_strategy не найдена"
+            print_error "Стратегия не найдена"
             continue
         fi
 
-        # Показать параметры
-        local params
-        params=$(get_strategy "$yt_gv_strategy")
-        print_info "Выбрана: $params"
         break
     done
-
-    printf "\n"
 
     # RKN
     local rkn_strategy
     while true; do
-        printf "RKN (заблокированные сайты) [1-%s, Enter=использовать %s]: " "$total_count" "$yt_tcp_strategy"
+        printf "RKN [1-%s, Enter=использовать %s]: " "$total_count" "$yt_tcp_strategy"
         read_input rkn_strategy
 
-        # Если пусто, использовать как для YouTube TCP
         if [ -z "$rkn_strategy" ]; then
             rkn_strategy="$yt_tcp_strategy"
-            print_info "Используется та же стратегия: #$rkn_strategy"
+            print_info "Используется: #$rkn_strategy"
             break
         fi
 
-        # Проверки
         if ! echo "$rkn_strategy" | grep -qE '^[0-9]+$'; then
-            print_error "Неверный формат номера"
+            print_error "Неверный формат"
             continue
         fi
 
@@ -250,21 +371,16 @@ menu_select_strategy() {
         fi
 
         if ! strategy_exists "$rkn_strategy"; then
-            print_error "Стратегия #$rkn_strategy не найдена"
+            print_error "Стратегия не найдена"
             continue
         fi
 
-        # Показать параметры
-        local params
-        params=$(get_strategy "$rkn_strategy")
-        print_info "Выбрана: $params"
         break
     done
 
     # Итоговая таблица
     printf "\n"
     print_separator
-    print_info "Итоговый выбор:"
     printf "%-20s | %s\n" "Категория" "Стратегия"
     print_separator
     printf "%-20s | #%s\n" "YouTube TCP" "$yt_tcp_strategy"
@@ -272,7 +388,7 @@ menu_select_strategy() {
     printf "%-20s | #%s\n" "RKN" "$rkn_strategy"
     print_separator
 
-    printf "\nПрименить выбранные стратегии? [Y/n]: "
+    printf "\nПрименить? [Y/n]: "
     read_input answer
 
     case "$answer" in
@@ -280,13 +396,10 @@ menu_select_strategy() {
             print_info "Отменено"
             ;;
         *)
-            print_info "Применение стратегий..."
             apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
-            print_success "Стратегии применены!"
+            print_success "Все стратегии применены!"
             ;;
     esac
-
-    pause
 }
 
 # ==============================================================================
