@@ -207,6 +207,8 @@ SUBMENU
             if [ "$new_strategy" -gt 0 ]; then
                 apply_category_strategies_v2 "$new_strategy" "$current_yt_gv" "$current_rkn"
                 print_success "Стратегия YouTube TCP обновлена!"
+                print_separator
+                test_category_availability "YouTube TCP" "youtube.com"
             fi
             ;;
         2)
@@ -216,6 +218,8 @@ SUBMENU
             if [ "$new_strategy" -gt 0 ]; then
                 apply_category_strategies_v2 "$current_yt_tcp" "$new_strategy" "$current_rkn"
                 print_success "Стратегия YouTube GV обновлена!"
+                print_separator
+                test_category_availability "YouTube GV" "yt3.ggpht.com"
             fi
             ;;
         3)
@@ -225,6 +229,8 @@ SUBMENU
             if [ "$new_strategy" -gt 0 ]; then
                 apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
                 print_success "Стратегия RKN обновлена!"
+                print_separator
+                test_category_availability "RKN" "rutracker.org"
             fi
             ;;
         4)
@@ -240,6 +246,25 @@ SUBMENU
     esac
 
     pause
+}
+
+# Вспомогательная функция: проверка доступности категории
+test_category_availability() {
+    local category_name=$1
+    local test_domain=$2
+
+    print_info "Проверка доступности: $category_name ($test_domain)..."
+
+    # Подождать 2 секунды для применения правил
+    sleep 2
+
+    # Запустить тест
+    if test_strategy_tls "$test_domain" 5; then
+        print_success "✓ $category_name доступен! Стратегия работает."
+    else
+        print_error "✗ $category_name недоступен. Попробуйте другую стратегию."
+        print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
+    fi
 }
 
 # Вспомогательная функция: выбор стратегии для одной категории
@@ -411,6 +436,16 @@ menu_select_all_strategies() {
         *)
             apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
             print_success "Все стратегии применены!"
+            print_separator
+
+            # Автопроверка всех категорий
+            print_info "Запуск проверки доступности..."
+            print_separator
+            test_category_availability "YouTube TCP" "youtube.com"
+            print_separator
+            test_category_availability "YouTube GV" "yt3.ggpht.com"
+            print_separator
+            test_category_availability "RKN" "rutracker.org"
             ;;
     esac
 }
