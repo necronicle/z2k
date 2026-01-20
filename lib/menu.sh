@@ -206,9 +206,9 @@ SUBMENU
     case "$category_choice" in
         1)
             # YouTube TCP
-            local new_strategy
-            new_strategy=$(menu_select_single_strategy "YouTube TCP" "$current_yt_tcp" "$total_count")
-            if [ -n "$new_strategy" ] && [ "$new_strategy" -gt 0 ]; then
+            menu_select_single_strategy "YouTube TCP" "$current_yt_tcp" "$total_count"
+            if [ $? -eq 0 ] && [ -n "$SELECTED_STRATEGY" ]; then
+                local new_strategy="$SELECTED_STRATEGY"
                 print_separator
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$new_strategy" "$current_yt_gv" "$current_rkn"
@@ -233,9 +233,9 @@ SUBMENU
             ;;
         2)
             # YouTube GV
-            local new_strategy
-            new_strategy=$(menu_select_single_strategy "YouTube GV" "$current_yt_gv" "$total_count")
-            if [ -n "$new_strategy" ] && [ "$new_strategy" -gt 0 ]; then
+            menu_select_single_strategy "YouTube GV" "$current_yt_gv" "$total_count"
+            if [ $? -eq 0 ] && [ -n "$SELECTED_STRATEGY" ]; then
+                local new_strategy="$SELECTED_STRATEGY"
                 print_separator
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$new_strategy" "$current_rkn"
@@ -260,9 +260,9 @@ SUBMENU
             ;;
         3)
             # RKN
-            local new_strategy
-            new_strategy=$(menu_select_single_strategy "RKN" "$current_rkn" "$total_count")
-            if [ -n "$new_strategy" ] && [ "$new_strategy" -gt 0 ]; then
+            menu_select_single_strategy "RKN" "$current_rkn" "$total_count"
+            if [ $? -eq 0 ] && [ -n "$SELECTED_STRATEGY" ]; then
+                local new_strategy="$SELECTED_STRATEGY"
                 print_separator
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
@@ -321,11 +321,17 @@ test_category_availability() {
     fi
 }
 
+# Глобальная переменная для передачи выбранной стратегии
+SELECTED_STRATEGY=""
+
 # Вспомогательная функция: выбор стратегии для одной категории
 menu_select_single_strategy() {
     local category_name=$1
     local current_strategy=$2
     local total_count=$3
+
+    # Сброс глобальной переменной
+    SELECTED_STRATEGY=""
 
     printf "\n"
     print_info "Выбор стратегии для: $category_name"
@@ -338,7 +344,7 @@ menu_select_single_strategy() {
         # Отмена
         if [ -z "$new_strategy" ]; then
             print_info "Отменено"
-            return 0
+            return 1
         fi
 
         # Проверки
@@ -363,8 +369,8 @@ menu_select_single_strategy() {
         print_info "Выбрана стратегия #$new_strategy:"
         printf "  %s\n\n" "$params"
 
-        # Возвращаем номер стратегии для дальнейшего тестирования через echo
-        echo "$new_strategy"
+        # Сохраняем в глобальную переменную
+        SELECTED_STRATEGY="$new_strategy"
         return 0
     done
 }
