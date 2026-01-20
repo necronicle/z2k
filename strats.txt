@@ -193,4 +193,9 @@ curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:sc
 curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=fake:ip_ttl=4:blob=fake_default_tls:tcp_seq=-10000
 curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=fake:ip_ttl=5:blob=fake_default_tls:tcp_seq=-10000
 curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=fake:ip_ttl=6:blob=fake_default_tls:tcp_seq=-10000
+curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=fakedsplit:pos=2:ipfrag:ipfrag_len=24
+curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=fakedsplit:pos=sniext+1:ipfrag:ipfrag_len=24
+curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=multisplit:pos=2:ipfrag:ipfrag_len=32
+curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=multidisorder:pos=2:ipfrag:ipfrag_len=32
+curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --lua-desync=wssize:wsize=1:scale=6 --payload=tls_client_hello --lua-desync=fakedsplit:pos=2:ip_ttl=5:ipfrag:ipfrag_len=24
 
