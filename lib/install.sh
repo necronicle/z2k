@@ -720,78 +720,45 @@ start() {
     iptables -t mangle -A FORWARD -j ZAPRET
 
     # ===========================================================================
-    # Process 1: YouTube (TCP + GV через --new) (queue 200)
+    # ЕДИНЫЙ ПРОЦЕСС NFQWS2 С МНОЖЕСТВЕННЫМИ ПРОФИЛЯМИ (queue 200)
+    # ===========================================================================
+    # Эффективная архитектура: один процесс обрабатывает все категории через --new
+    # Каждый профиль имеет свой --hostlist и свою стратегию
     # ===========================================================================
 
-    # TCP/UDP правила для YouTube
+    # Единое правило для всех категорий (TCP/UDP порты 80, 443)
     iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 200 --queue-bypass
     iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass
 
-    # Запустить nfqws2 для YouTube (TCP и GV в одном процессе)
+    # Дополнительные порты для Discord Voice
+    iptables -t mangle -A ZAPRET -p udp -m multiport --dports 50000:50099,1400,3478:3481,5349 -j NFQUEUE --queue-num 200 --queue-bypass
+
+    # Запустить единый nfqws2 процесс с множественными профилями
     $NFQWS \
         --qnum=200 \
         --lua-init="@${LUA_DIR}/zapret-lib.lua" \
         --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        \
         --hostlist="${LISTS_DIR}/youtube.txt" \
         $YOUTUBE_TCP_TCP \
         --new \
         $YOUTUBE_GV_TCP \
         --new \
         $YOUTUBE_TCP_UDP \
-        >/dev/null 2>&1 &
-
-    # ===========================================================================
-    # Process 2: Discord (queue 201)
-    # ===========================================================================
-
-    # TCP/UDP правила для Discord (включая voice порты)
-    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 201 --queue-bypass
-    iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 201 --queue-bypass
-    iptables -t mangle -A ZAPRET -p udp -m multiport --dports 50000:50099,1400,3478:3481,5349 -j NFQUEUE --queue-num 201 --queue-bypass
-
-    # Запустить nfqws2 для Discord
-    $NFQWS \
-        --qnum=201 \
-        --lua-init="@${LUA_DIR}/zapret-lib.lua" \
-        --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        \
+        --new \
         --hostlist="${LISTS_DIR}/discord.txt" \
         $DISCORD_TCP \
         --new \
         $DISCORD_UDP \
-        >/dev/null 2>&1 &
-
-    # ===========================================================================
-    # Process 3: RKN (queue 202)
-    # ===========================================================================
-
-    # TCP/UDP правила для RKN
-    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 202 --queue-bypass
-    iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 202 --queue-bypass
-
-    # Запустить nfqws2 для RKN
-    $NFQWS \
-        --qnum=202 \
-        --lua-init="@${LUA_DIR}/zapret-lib.lua" \
-        --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        \
+        --new \
         --hostlist="${LISTS_DIR}/rkn.txt" \
         $RKN_TCP \
         --new \
         $RKN_UDP \
-        >/dev/null 2>&1 &
-
-    # ===========================================================================
-    # Process 4: Custom (пользовательские домены) (queue 203)
-    # ===========================================================================
-
-    # TCP/UDP правила для Custom
-    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 203 --queue-bypass
-    iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 203 --queue-bypass
-
-    # Запустить nfqws2 для Custom
-    $NFQWS \
-        --qnum=203 \
-        --lua-init="@${LUA_DIR}/zapret-lib.lua" \
-        --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        \
+        --new \
         --hostlist="${LISTS_DIR}/custom.txt" \
         $CUSTOM_TCP \
         --new \
