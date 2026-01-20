@@ -619,7 +619,7 @@ step_disable_hwnat() {
 # ==============================================================================
 
 step_create_init_script() {
-    print_header "Шаг 8/9: Создание init скрипта"
+    print_header "Шаг 8/10: Создание init скрипта"
 
     print_info "Создание $INIT_SCRIPT..."
 
@@ -871,11 +871,80 @@ INIT_SCRIPT
 }
 
 # ==============================================================================
-# ШАГ 9: ФИНАЛИЗАЦИЯ
+# ШАГ 9: УСТАНОВКА NETFILTER ХУКА
+# ==============================================================================
+
+step_install_netfilter_hook() {
+    print_header "Шаг 9/10: Установка netfilter хука"
+
+    print_info "Установка хука для автоматического восстановления правил..."
+
+    # Создать директорию для NDM хуков
+    local hook_dir="/opt/etc/ndm/netfilter.d"
+    mkdir -p "$hook_dir" || {
+        print_error "Не удалось создать $hook_dir"
+        return 1
+    }
+
+    local hook_file="${hook_dir}/000-zapret2.sh"
+
+    # Скопировать хук из files/
+    if [ -f "${WORK_DIR}/files/000-zapret2.sh" ]; then
+        cp "${WORK_DIR}/files/000-zapret2.sh" "$hook_file" || {
+            print_error "Не удалось скопировать хук"
+            return 1
+        }
+    else
+        print_warning "Файл хука не найден в ${WORK_DIR}/files/"
+        print_info "Создание хука вручную..."
+
+        # Создать хук напрямую
+        cat > "$hook_file" <<'HOOK'
+#!/bin/sh
+# Keenetic NDM netfilter hook для автоматического восстановления правил zapret2
+# Вызывается при изменениях в netfilter (iptables)
+
+INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
+
+# Обрабатываем только изменения в таблице mangle
+[ "$table" != "mangle" ] && exit 0
+
+# Проверить что init скрипт существует
+[ ! -f "$INIT_SCRIPT" ] && exit 0
+
+# Проверить что zapret2 включен
+if ! grep -q "^ENABLED=yes" "$INIT_SCRIPT" 2>/dev/null; then
+    exit 0
+fi
+
+# Небольшая задержка для стабильности
+sleep 2
+
+# Перезапустить правила zapret2
+"$INIT_SCRIPT" restart >/dev/null 2>&1 &
+
+exit 0
+HOOK
+    fi
+
+    # Сделать исполняемым
+    chmod +x "$hook_file" || {
+        print_error "Не удалось установить права на хук"
+        return 1
+    }
+
+    print_success "Netfilter хук установлен: $hook_file"
+    print_info "Хук будет восстанавливать правила при переподключении интернета"
+
+    return 0
+}
+
+# ==============================================================================
+# ШАГ 10: ФИНАЛИЗАЦИЯ
 # ==============================================================================
 
 step_finalize() {
-    print_header "Шаг 9/9: Финализация установки"
+    print_header "Шаг 10/10: Финализация установки"
 
     # Проверить бинарник перед запуском
     print_info "Проверка nfqws2 перед запуском..."
@@ -970,6 +1039,7 @@ run_full_install() {
     step_download_domain_lists || return 1
     step_disable_hwnat || return 1
     step_create_init_script || return 1
+    step_install_netfilter_hook || return 1
     step_finalize || return 1
 
     # После установки - автоматически запустить автотест по категориям
@@ -1016,6 +1086,13 @@ uninstall_zapret2() {
     if [ -f "$INIT_SCRIPT" ]; then
         rm -f "$INIT_SCRIPT"
         print_info "Удален init скрипт"
+    fi
+
+    # Удалить netfilter хук
+    local hook_file="/opt/etc/ndm/netfilter.d/000-zapret2.sh"
+    if [ -f "$hook_file" ]; then
+        rm -f "$hook_file"
+        print_info "Удален netfilter хук"
     fi
 
     # Удалить zapret2
