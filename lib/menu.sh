@@ -818,7 +818,7 @@ SUBMENU
             # Перезапуск сервиса
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса для применения изменений..."
-                restart_zapret2
+                "$INIT_SCRIPT" restart
                 print_success "Сервис перезапущен"
             else
                 print_warning "Сервис не запущен. Запустите через [4] Управление сервисом"
@@ -842,7 +842,7 @@ SUBMENU
             # Перезапуск сервиса
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса для применения изменений..."
-                restart_zapret2
+                "$INIT_SCRIPT" restart
                 print_success "Сервис перезапущен"
             fi
 
@@ -877,7 +877,7 @@ SUBMENU
             # Перезапуск сервиса
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса для применения изменений..."
-                restart_zapret2
+                "$INIT_SCRIPT" restart
                 print_success "Сервис перезапущен"
             fi
 
