@@ -13,12 +13,26 @@ if [ -n "$BLOCKCHECK2" ]; then
 else
   BC=$(command -v blockcheck2 2>/dev/null || true)
   if [ -z "$BC" ]; then
-    for candidate in /opt/zapret2/blockcheck2 /opt/zapret2/nfq2/blockcheck2 /opt/bin/blockcheck2; do
+    for candidate in \
+      /opt/zapret2/nfq2/blockcheck2 \
+      /opt/zapret2/nfq2/blockcheck2.sh \
+      /opt/zapret2/blockcheck2 \
+      /opt/zapret2/blockcheck2.sh \
+      /opt/bin/blockcheck2 \
+      /opt/bin/blockcheck2.sh; do
       if [ -x "$candidate" ]; then
         BC="$candidate"
         break
       fi
     done
+  fi
+fi
+
+# Try to locate with find as a last resort
+if [ -z "$BC" ]; then
+  FOUND=$(find /opt -maxdepth 4 -type f -name 'blockcheck2*' -perm /111 2>/dev/null | head -n 1)
+  if [ -n "$FOUND" ]; then
+    BC="$FOUND"
   fi
 fi
 
