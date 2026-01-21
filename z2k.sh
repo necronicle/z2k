@@ -12,7 +12,7 @@ set -e
 Z2K_VERSION="2.0.0"
 WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"
-GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
+GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/test"
 
 # Список модулей для загрузки
 MODULES="utils install strategies config menu discord"
@@ -207,6 +207,10 @@ generate_strategies_database() {
 
 generate_http_strategies_database() {
     print_info "Генерация базы HTTP стратегий (http_strategies.conf)..."
+
+    if [ ! -f "${WORK_DIR}/http_strats.txt" ]; then
+        die "Файл http_strats.txt не найден"
+    fi
 
     if command -v generate_http_strategies_conf >/dev/null 2>&1; then
         generate_http_strategies_conf "${WORK_DIR}/http_strats.txt" "${WORK_DIR}/http_strategies.conf" || \
