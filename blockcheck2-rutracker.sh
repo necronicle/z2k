@@ -70,13 +70,22 @@ if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; the
 
   tmp_tar="/tmp/zapret2-openwrt-embedded.tar.gz"
   if curl -fsSL "$openwrt_url" -o "$tmp_tar"; then
-    tar -xzf "$tmp_tar" -C /tmp || true
-    # Find extracted dir
-    rel_dir=$(find /tmp -maxdepth 2 -type d -name 'zapret2-*' | head -n 1)
-    if [ -n "$rel_dir" ]; then
+    list=$(tar -tzf "$tmp_tar" 2>/dev/null || true)
+    nfqws_path=$(echo "$list" | grep '/nfqws2$' | head -n 1)
+    mdig_path=$(echo "$list" | grep '/mdig$' | head -n 1)
+
+    if [ -n "$nfqws_path" ] && [ -n "$mdig_path" ]; then
+      tmp_dir="/tmp/zapret2-extract-$$"
+      mkdir -p "$tmp_dir"
+      tar -xzf "$tmp_tar" -C "$tmp_dir" "$nfqws_path" "$mdig_path" 2>/dev/null || true
+
       mkdir -p /opt/zapret2/nfq2 /opt/zapret2/mdig
-      [ -f "$rel_dir/nfq2/nfqws2" ] && cp "$rel_dir/nfq2/nfqws2" /opt/zapret2/nfq2/
-      [ -f "$rel_dir/mdig/mdig" ] && cp "$rel_dir/mdig/mdig" /opt/zapret2/mdig/
+      if [ -f "$tmp_dir/$nfqws_path" ]; then
+        cp "$tmp_dir/$nfqws_path" /opt/zapret2/nfq2/nfqws2
+      fi
+      if [ -f "$tmp_dir/$mdig_path" ]; then
+        cp "$tmp_dir/$mdig_path" /opt/zapret2/mdig/mdig
+      fi
       chmod +x /opt/zapret2/nfq2/nfqws2 /opt/zapret2/mdig/mdig 2>/dev/null || true
     fi
   fi
