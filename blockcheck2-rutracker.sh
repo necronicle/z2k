@@ -7,6 +7,15 @@ URL="https://rutracker.org/forum/index.php"
 HOST="rutracker.org"
 URI="/forum/index.php"
 
+is_elf() {
+  local f="$1"
+  [ -f "$f" ] || return 1
+  # Check ELF magic
+  local magic
+  magic=$(dd if="$f" bs=1 count=4 2>/dev/null | od -An -t x1 | tr -d ' \n')
+  [ "$magic" = "7f454c46" ]
+}
+
 # Allow override
 if [ -n "$BLOCKCHECK2" ]; then
   BC="$BLOCKCHECK2"
@@ -42,7 +51,7 @@ if [ -z "$BC" ] || [ ! -x "$BC" ]; then
 fi
 
 # Ensure required binaries are present
-if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; then
+if ! is_elf "/opt/zapret2/nfq2/nfqws2" || ! is_elf "/opt/zapret2/mdig/mdig"; then
   if [ -x "/opt/zapret2/install_bin.sh" ]; then
     echo "[i] Отсутствуют бинарники nfqws2/mdig. Запускаю /opt/zapret2/install_bin.sh" >&2
     if ! /opt/zapret2/install_bin.sh; then
@@ -53,47 +62,40 @@ if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; the
   fi
 fi
 
-# If install_bin.sh failed or binaries still missing, try downloading release
-if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; then
-  echo "[i] Пытаюсь загрузить prebuilt бинарники zapret2..." >&2
+# If binaries still missing, download zapret2 source release and run install_bin.sh
+if ! is_elf "/opt/zapret2/nfq2/nfqws2" || ! is_elf "/opt/zapret2/mdig/mdig"; then
+  echo "[i] Пытаюсь загрузить исходники zapret2 с binaries..." >&2
   api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
+  release_data=""
   if command -v curl >/dev/null 2>&1; then
     release_data=$(curl -fsSL "$api_url" 2>/dev/null || true)
-  else
-    release_data=""
   fi
 
-  openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/bol-van/zapret2/releases/download/[^" ]*openwrt-embedded\.tar\.gz' | head -n 1)
-  if [ -z "$openwrt_url" ]; then
-    openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.3/zapret2-v0.8.3-openwrt-embedded.tar.gz"
+  tarball_url=$(echo "$release_data" | grep -o '"tarball_url"[^"]*"[^"]*"' | head -n 1 | cut -d'"' -f4)
+  if [ -z "$tarball_url" ]; then
+    tarball_url="https://api.github.com/repos/bol-van/zapret2/tarball/master"
   fi
 
-  tmp_tar="/tmp/zapret2-openwrt-embedded.tar.gz"
-  if curl -fsSL "$openwrt_url" -o "$tmp_tar"; then
-    list=$(tar -tzf "$tmp_tar" 2>/dev/null || true)
-    nfqws_path=$(echo "$list" | grep '/nfqws2$' | head -n 1)
-    mdig_path=$(echo "$list" | grep '/mdig$' | head -n 1)
-
-    if [ -n "$nfqws_path" ] && [ -n "$mdig_path" ]; then
-      tmp_dir="/tmp/zapret2-extract-$$"
-      mkdir -p "$tmp_dir"
-      tar -xzf "$tmp_tar" -C "$tmp_dir" "$nfqws_path" "$mdig_path" 2>/dev/null || true
-
-      mkdir -p /opt/zapret2/nfq2 /opt/zapret2/mdig
-      if [ -f "$tmp_dir/$nfqws_path" ]; then
-        cp "$tmp_dir/$nfqws_path" /opt/zapret2/nfq2/nfqws2
-      fi
-      if [ -f "$tmp_dir/$mdig_path" ]; then
-        cp "$tmp_dir/$mdig_path" /opt/zapret2/mdig/mdig
-      fi
-      chmod +x /opt/zapret2/nfq2/nfqws2 /opt/zapret2/mdig/mdig 2>/dev/null || true
+  tmp_tar="/tmp/zapret2-src.tar.gz"
+  if curl -fsSL "$tarball_url" -o "$tmp_tar"; then
+    tmp_dir="/tmp/zapret2-src-$$"
+    mkdir -p "$tmp_dir"
+    tar -xzf "$tmp_tar" -C "$tmp_dir" || true
+    src_root=$(find "$tmp_dir" -maxdepth 1 -type d -name 'bol-van-zapret2-*' | head -n 1)
+    if [ -n "$src_root" ] && [ -d "$src_root/binaries" ]; then
+      mkdir -p /opt/zapret2/binaries
+      cp -r "$src_root/binaries/." /opt/zapret2/binaries/ 2>/dev/null || true
     fi
+  fi
+
+  if [ -x "/opt/zapret2/install_bin.sh" ]; then
+    /opt/zapret2/install_bin.sh || true
   fi
 fi
 
 # Final check
-if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; then
-  echo "[ERROR] nfqws2/mdig не установлены. Установите вручную или через install_bin.sh" >&2
+if ! is_elf "/opt/zapret2/nfq2/nfqws2" || ! is_elf "/opt/zapret2/mdig/mdig"; then
+  echo "[ERROR] nfqws2/mdig не установлены корректно. Установите вручную или через install_bin.sh" >&2
   exit 1
 fi
 
