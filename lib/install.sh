@@ -671,7 +671,7 @@ RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=f
 
 # RKN HTTP стратегия (HTTP-стратегии для RKN списка)
 # RKN_HTTP_MARKER_START
-RKN_HTTP_TCP="--filter-tcp=80,443 --filter-l7=http --lua-desync=fake:blob=fake_default_http:repeats=1"
+RKN_HTTP_TCP="--filter-tcp=80,443 --filter-l7=http --hostlist-domains=t-ru.org --lua-desync=fake:blob=fake_default_http:repeats=1"
 RKN_HTTP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # RKN_HTTP_MARKER_END
 

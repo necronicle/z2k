@@ -598,7 +598,7 @@ apply_rkn_http_strategy() {
         return 1
     fi
 
-    local tcp_params="--filter-tcp=80,443 --filter-l7=http ${params}"
+    local tcp_params="--filter-tcp=80,443 --filter-l7=http --hostlist-domains=t-ru.org ${params}"
     local udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 
     update_init_section "RKN_HTTP" "$tcp_params" "$udp_params" "$init_script"
@@ -1375,7 +1375,7 @@ apply_category_strategies_v2() {
     local yt_tcp_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_tcp_params}"
     local yt_gv_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_gv_params}"
     local rkn_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${rkn_params}"
-    local rkn_http_full="--filter-tcp=80,443 --filter-l7=http ${rkn_http_params}"
+    local rkn_http_full="--filter-tcp=80,443 --filter-l7=http --hostlist-domains=t-ru.org ${rkn_http_params}"
 
     # UDP параметры (одинаковые для всех)
     local udp_full="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
