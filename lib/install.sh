@@ -1026,6 +1026,21 @@ step_finalize() {
         print_info "Проверьте логи: $INIT_SCRIPT status"
     fi
 
+    # Установить tools
+    local tools_dir="${ZAPRET2_DIR}/tools"
+    mkdir -p "$tools_dir"
+    if [ -f "${WORK_DIR}/tools/blockcheck2-rutracker.sh" ]; then
+        cp "${WORK_DIR}/tools/blockcheck2-rutracker.sh" "$tools_dir/" || {
+            print_warning "Не удалось скопировать blockcheck2-rutracker.sh в tools"
+        }
+        chmod +x "${tools_dir}/blockcheck2-rutracker.sh" 2>/dev/null || true
+    else
+        if [ -n "$GITHUB_RAW" ]; then
+            curl -fsSL "${GITHUB_RAW}/blockcheck2-rutracker.sh" -o "${tools_dir}/blockcheck2-rutracker.sh" && \
+                chmod +x "${tools_dir}/blockcheck2-rutracker.sh" 2>/dev/null || true
+        fi
+    fi
+
     # Показать итоговую информацию
     print_separator
     print_success "Установка zapret2 завершена!"
@@ -1038,6 +1053,7 @@ step_finalize() {
     printf "  %-25s: %s\n" "Конфигурация" "$CONFIG_DIR"
     printf "  %-25s: %s\n" "Списки доменов" "$LISTS_DIR"
     printf "  %-25s: %s\n" "Стратегии" "$STRATEGIES_CONF"
+    printf "  %-25s: %s\n" "Tools" "$tools_dir"
 
     print_separator
 
