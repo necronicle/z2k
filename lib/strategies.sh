@@ -265,7 +265,20 @@ get_http_top20_strategies() {
         return 1
     fi
 
-    cut -d'|' -f1 "$conf" | head -n 20 | tr '\n' ' '
+    awk -F'|' '
+        /^[0-9]+\\|/ { nums[++n]=$1 }
+        END {
+            if (n <= 20) {
+                for (i = 1; i <= n; i++) print nums[i]
+                exit
+            }
+            step = (n - 1) / 19
+            for (i = 0; i < 20; i++) {
+                idx = 1 + int(i * step)
+                if (!seen[idx]++) print nums[idx]
+            }
+        }
+    ' "$conf" | tr -d '\r' | tr '\n' ' '
 }
 
 # ==============================================================================
@@ -822,10 +835,16 @@ auto_test_rkn_http() {
         return 1
     fi
 
-    total=$(echo "$strategies_list" | wc -w | tr -d ' ')
+    set -- $strategies_list
+    total=$#
     print_info "Тестирование RKN HTTP (meduza.io, facebook.com, rutracker.org)..." >&2
 
     for num in $strategies_list; do
+        case "$num" in
+            ''|*[!0-9]*)
+                continue
+                ;;
+        esac
         tested=$((tested + 1))
         printf "  [%d/%d] HTTP стратегия #%s... " "$tested" "$total" "$num" >&2
 
