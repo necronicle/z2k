@@ -669,12 +669,6 @@ RKN_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls
 RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # RKN_MARKER_END
 
-# RKN HTTP стратегия (HTTP-стратегии для RKN списка)
-# RKN_HTTP_MARKER_START
-RKN_HTTP_TCP="--filter-tcp=80,443,2053,2083,2087,2096,8443 --filter-l7=http --hostlist-domains=t-ru.org --lua-desync=fake:blob=fake_default_http:repeats=1"
-RKN_HTTP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
-# RKN_HTTP_MARKER_END
-
 # Discord стратегия (сообщения и голос)
 # DISCORD_MARKER_START
 DISCORD_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
@@ -799,12 +793,6 @@ start() {
         $RKN_TCP \
         --new \
         $RKN_UDP \
-        \
-        --new \
-        --hostlist="${LISTS_DIR}/rkn.txt" \
-        $RKN_HTTP_TCP \
-        --new \
-        $RKN_HTTP_UDP \
         \
         --new \
         --hostlist="${LISTS_DIR}/custom.txt" \
