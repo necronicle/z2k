@@ -50,9 +50,48 @@ if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; the
       exit 1
     }
   else
-    echo "[ERROR] Не найдены nfqws2/mdig и нет /opt/zapret2/install_bin.sh" >&2
+    if [ -x "/opt/zapret2/nfq2/nfqws2" ] || [ -x "/opt/zapret2/mdig/mdig" ]; then
+      echo "[ERROR] Не найдены все бинарники nfqws2/mdig" >&2
+    else
+      echo "[ERROR] Не найдены nfqws2/mdig и нет /opt/zapret2/install_bin.sh" >&2
+    fi
     exit 1
   fi
+fi
+
+# If install_bin.sh failed due to missing binaries, try downloading release
+if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; then
+  echo "[i] Пытаюсь загрузить prebuilt бинарники zapret2..." >&2
+  api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
+  if command -v curl >/dev/null 2>&1; then
+    release_data=$(curl -fsSL "$api_url" 2>/dev/null || true)
+  else
+    release_data=""
+  fi
+
+  openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/bol-van/zapret2/releases/download/[^" ]*openwrt-embedded\.tar\.gz' | head -1)
+  if [ -z "$openwrt_url" ]; then
+    openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.3/zapret2-v0.8.3-openwrt-embedded.tar.gz"
+  fi
+
+  tmp_tar="/tmp/zapret2-openwrt-embedded.tar.gz"
+  if curl -fsSL "$openwrt_url" -o "$tmp_tar"; then
+    tar -xzf "$tmp_tar" -C /tmp || true
+    # Find extracted dir
+    rel_dir=$(find /tmp -maxdepth 2 -type d -name 'zapret2-*' | head -n 1)
+    if [ -n "$rel_dir" ]; then
+      mkdir -p /opt/zapret2/nfq2 /opt/zapret2/mdig
+      [ -f "$rel_dir/nfq2/nfqws2" ] && cp "$rel_dir/nfq2/nfqws2" /opt/zapret2/nfq2/
+      [ -f "$rel_dir/mdig/mdig" ] && cp "$rel_dir/mdig/mdig" /opt/zapret2/mdig/
+      chmod +x /opt/zapret2/nfq2/nfqws2 /opt/zapret2/mdig/mdig 2>/dev/null || true
+    fi
+  fi
+fi
+
+# Final check
+if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; then
+  echo "[ERROR] nfqws2/mdig не установлены. Установите вручную или через install_bin.sh" >&2
+  exit 1
 fi
 
 # Detect supported flags (prefer --uri for rutracker)
