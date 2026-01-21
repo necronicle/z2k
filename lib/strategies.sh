@@ -1,6 +1,6 @@
 #!/bin/sh
 # lib/strategies.sh - Управление стратегиями zapret2
-# Парсинг, тестирование, применение стратегий из strats.txt
+# Парсинг, тестирование, применение стратегий из strats_new.txt
 
 # ==============================================================================
 # КОНСТАНТЫ ДЛЯ СТРАТЕГИЙ
@@ -23,7 +23,7 @@ https://googlevideo.com
 # ПАРСИНГ STRATS.TXT → STRATEGIES.CONF
 # ==============================================================================
 
-# Генерация strategies.conf из strats.txt
+# Генерация strategies.conf из strats_new.txt
 # Формат входа: curl_test_http[s] ipv4 rutracker.org : nfqws2 <параметры>
 # Формат выхода: [NUMBER]|[TYPE]|[PARAMETERS]
 generate_strategies_conf() {
@@ -60,7 +60,7 @@ EOF
         local nfqws_params
         nfqws_params=$(echo "$line" | awk -F ' : ' '{print $2}')
 
-        # Все стратегии в файле - HTTPS (HTTP удалены из strats.txt)
+        # Все стратегии в файле - HTTPS (HTTP удалены из strats_new.txt)
         local type="https"
         https_count=$((https_count + 1))
 
