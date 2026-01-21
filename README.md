@@ -45,7 +45,7 @@
 
 ```bash
 # НЕ РЕКОМЕНДУЕТСЯ! Только для тестирования!
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/test/z2k.sh | sh
 ```
 
 ### Что происходит при установке:

@@ -337,7 +337,7 @@ show_help() {
   - Если zapret2 установлен: откроет меню
 
 Примеры:
-  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/test/z2k.sh | sh
   sh z2k.sh install
   sh z2k.sh menu
 
