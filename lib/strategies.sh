@@ -201,10 +201,16 @@ list_strategies_by_type() {
 }
 
 # Проверки наличия параметров в стратегии
-params_has_tcp_filter_l7() {
+params_has_filter_tcp() {
     case " $1 " in
-        *" --filter-tcp="*" --filter-l7="*) return 0 ;;
-        *" --filter-l7="*" --filter-tcp="*) return 0 ;;
+        *" --filter-tcp="*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+params_has_filter_l7() {
+    case " $1 " in
+        *" --filter-l7="*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -221,8 +227,11 @@ build_tls_profile_params() {
     local prefix=""
     local payload=""
 
-    if ! params_has_tcp_filter_l7 "$params"; then
-        prefix="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls"
+    if ! params_has_filter_tcp "$params"; then
+        prefix="--filter-tcp=443,2053,2083,2087,2096,8443"
+    fi
+    if ! params_has_filter_l7 "$params"; then
+        prefix="${prefix} --filter-l7=tls"
     fi
     if ! params_has_payload "$params"; then
         payload="--payload=tls_client_hello"
@@ -235,8 +244,11 @@ build_http_profile_params() {
     local params=$1
     local prefix=""
 
-    if ! params_has_tcp_filter_l7 "$params"; then
-        prefix="--filter-tcp=80,443,2053,2083,2087,2096,8443 --filter-l7=http"
+    if ! params_has_filter_tcp "$params"; then
+        prefix="--filter-tcp=80,443,2053,2083,2087,2096,8443"
+    fi
+    if ! params_has_filter_l7 "$params"; then
+        prefix="${prefix} --filter-l7=http"
     fi
 
     printf "%s %s" "$prefix" "$params"
