@@ -174,21 +174,6 @@ download_strategies_source() {
     fi
 }
 
-download_http_strategies_source() {
-    print_info "Загрузка файла HTTP стратегий (http_strats.txt)..."
-
-    local url="${GITHUB_RAW}/http_strats.txt"
-    local output="${WORK_DIR}/http_strats.txt"
-
-    if curl -fsSL "$url" -o "$output"; then
-        local lines
-        lines=$(wc -l < "$output")
-        print_success "Загружено: http_strats.txt ($lines строк)"
-    else
-        die "Ошибка загрузки http_strats.txt"
-    fi
-}
-
 download_tools() {
     print_info "Загрузка tools (blockcheck2-rutracker.sh)..."
 
@@ -219,25 +204,6 @@ generate_strategies_database() {
         print_success "Сгенерировано стратегий: $count"
     else
         die "Функция generate_strategies_conf не найдена"
-    fi
-}
-
-generate_http_strategies_database() {
-    print_info "Генерация базы HTTP стратегий (http_strategies.conf)..."
-
-    if [ ! -f "${WORK_DIR}/http_strats.txt" ]; then
-        die "Файл http_strats.txt не найден"
-    fi
-
-    if command -v generate_http_strategies_conf >/dev/null 2>&1; then
-        generate_http_strategies_conf "${WORK_DIR}/http_strats.txt" "${WORK_DIR}/http_strategies.conf" || \
-            die "Ошибка генерации http_strategies.conf"
-
-        local count
-        count=$(wc -l < "${WORK_DIR}/http_strategies.conf" | tr -d ' ')
-        print_success "Сгенерировано HTTP стратегий: $count"
-    else
-        die "Функция generate_http_strategies_conf не найдена"
     fi
 }
 
@@ -454,17 +420,11 @@ main() {
     # Скачать strats_new.txt
     download_strategies_source
 
-    # Скачать http_strats.txt
-    download_http_strategies_source
-
     # Скачать tools
     download_tools
 
     # Сгенерировать strategies.conf
     generate_strategies_database
-
-    # Сгенерировать http_strategies.conf
-    generate_http_strategies_database
 
     # Обработать аргументы командной строки
     handle_arguments "$1"
