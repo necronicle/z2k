@@ -201,9 +201,10 @@ list_strategies_by_type() {
 }
 
 # Проверки наличия параметров в стратегии
-params_has_filter() {
+params_has_tcp_filter_l7() {
     case " $1 " in
-        *" --filter-"*) return 0 ;;
+        *" --filter-tcp="*" --filter-l7="*) return 0 ;;
+        *" --filter-l7="*" --filter-tcp="*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -220,7 +221,7 @@ build_tls_profile_params() {
     local prefix=""
     local payload=""
 
-    if ! params_has_filter "$params"; then
+    if ! params_has_tcp_filter_l7 "$params"; then
         prefix="--filter-tcp=443 --filter-l7=tls"
     fi
     if ! params_has_payload "$params"; then
@@ -234,7 +235,7 @@ build_http_profile_params() {
     local params=$1
     local prefix=""
 
-    if ! params_has_filter "$params"; then
+    if ! params_has_tcp_filter_l7 "$params"; then
         prefix="--filter-tcp=80,443 --filter-l7=http"
     fi
 
