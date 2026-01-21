@@ -41,13 +41,13 @@ if [ -z "$BC" ] || [ ! -x "$BC" ]; then
   exit 1
 fi
 
-# Detect supported flags
+# Detect supported flags (prefer --uri for rutracker)
 HELP_TEXT="$($BC --help 2>/dev/null || true)"
 ARGS=""
-if echo "$HELP_TEXT" | grep -q "--url"; then
-  ARGS="--url=$URL"
-elif echo "$HELP_TEXT" | grep -q "--uri"; then
+if echo "$HELP_TEXT" | grep -q "--uri"; then
   ARGS="--host=$HOST --uri=$URI"
+elif echo "$HELP_TEXT" | grep -q "--url"; then
+  ARGS="--url=$URL"
 else
   ARGS="--host=$HOST"
 fi
