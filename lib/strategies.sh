@@ -200,6 +200,47 @@ list_strategies_by_type() {
     grep "|${type}|" "$conf"
 }
 
+# Проверки наличия параметров в стратегии
+params_has_filter() {
+    case " $1 " in
+        *" --filter-"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+params_has_payload() {
+    case " $1 " in
+        *" --payload="*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+build_tls_profile_params() {
+    local params=$1
+    local prefix=""
+    local payload=""
+
+    if ! params_has_filter "$params"; then
+        prefix="--filter-tcp=443 --filter-l7=tls"
+    fi
+    if ! params_has_payload "$params"; then
+        payload="--payload=tls_client_hello"
+    fi
+
+    printf "%s %s %s" "$prefix" "$payload" "$params"
+}
+
+build_http_profile_params() {
+    local params=$1
+    local prefix=""
+
+    if ! params_has_filter "$params"; then
+        prefix="--filter-tcp=80,443 --filter-l7=http"
+    fi
+
+    printf "%s %s" "$prefix" "$params"
+}
+
 # Убедиться, что HTTP база стратегий доступна
 ensure_http_strategies_conf() {
     local conf="${HTTP_STRATEGIES_CONF:-${CONFIG_DIR}/http_strategies.conf}"
@@ -294,10 +335,10 @@ generate_multiprofile() {
     local tcp_params udp_params
 
     if [ "$type" = "http" ]; then
-        tcp_params="--filter-tcp=80,443 --filter-l7=http $base_params"
+        tcp_params=$(build_http_profile_params "$base_params")
         udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
     else
-        tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello $base_params"
+        tcp_params=$(build_tls_profile_params "$base_params")
         udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
     fi
 
@@ -598,7 +639,8 @@ apply_rkn_http_strategy() {
         return 1
     fi
 
-    local tcp_params="--filter-tcp=80,443 --filter-l7=http --hostlist-domains=t-ru.org ${params}"
+    local tcp_params
+    tcp_params=$(build_http_profile_params "--hostlist-domains=t-ru.org ${params}")
     local udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 
     update_init_section "RKN_HTTP" "$tcp_params" "$udp_params" "$init_script"
@@ -1372,10 +1414,14 @@ apply_category_strategies_v2() {
     fi
 
     # Формировать полные параметры TCP для каждой категории
-    local yt_tcp_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_tcp_params}"
-    local yt_gv_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_gv_params}"
-    local rkn_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${rkn_params}"
-    local rkn_http_full="--filter-tcp=80,443 --filter-l7=http --hostlist-domains=t-ru.org ${rkn_http_params}"
+    local yt_tcp_full
+    local yt_gv_full
+    local rkn_full
+    local rkn_http_full
+    yt_tcp_full=$(build_tls_profile_params "$yt_tcp_params")
+    yt_gv_full=$(build_tls_profile_params "$yt_gv_params")
+    rkn_full=$(build_tls_profile_params "$rkn_params")
+    rkn_http_full=$(build_http_profile_params "--hostlist-domains=t-ru.org ${rkn_http_params}")
 
     # UDP параметры (одинаковые для всех)
     local udp_full="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
