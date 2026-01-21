@@ -165,20 +165,25 @@ menu_select_strategy() {
 
     local total_count
     total_count=$(get_strategies_count)
+    local http_total_count
+    http_total_count=$(get_http_strategies_count)
 
     # Прочитать текущие стратегии
     local config_file="${CONFIG_DIR}/category_strategies.conf"
     local current_yt_tcp="1"
     local current_yt_gv="1"
     local current_rkn="1"
+    local current_rkn_http="1"
 
     if [ -f "$config_file" ]; then
         current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
         current_yt_gv=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
         current_rkn=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        current_rkn_http=$(grep "^rkn_http:" "$config_file" 2>/dev/null | cut -d':' -f2)
         [ -z "$current_yt_tcp" ] && current_yt_tcp="1"
         [ -z "$current_yt_gv" ] && current_yt_gv="1"
         [ -z "$current_rkn" ] && current_rkn="1"
+        [ -z "$current_rkn_http" ] && current_rkn_http="1"
     fi
 
     print_info "Всего доступно стратегий: $total_count"
@@ -187,6 +192,7 @@ menu_select_strategy() {
     printf "  YouTube TCP: #%s\n" "$current_yt_tcp"
     printf "  YouTube GV:  #%s\n" "$current_yt_gv"
     printf "  RKN:         #%s\n" "$current_rkn"
+    printf "  RKN HTTP:    #%s\n" "$current_rkn_http"
     print_separator
 
     # Подменю выбора категории
@@ -196,7 +202,8 @@ menu_select_strategy() {
 [1] YouTube TCP (youtube.com)
 [2] YouTube GV (googlevideo CDN)
 [3] RKN (заблокированные сайты)
-[4] Все категории сразу
+[4] RKN HTTP (HTTP стратегии для RKN списка)
+[5] Все категории сразу
 [B] Назад
 
 SUBMENU
@@ -265,7 +272,7 @@ SUBMENU
                 local new_strategy="$SELECTED_STRATEGY"
                 print_separator
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
-                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
+                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy" "$current_rkn_http"
                 print_separator
                 test_category_availability "RKN" "rutracker.org"
                 print_separator
@@ -275,7 +282,7 @@ SUBMENU
                 case "$apply_confirm" in
                     [Nn]|[Nn][Oo])
                         print_info "Откатываю к предыдущей стратегии #$current_rkn..."
-                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn" "$current_rkn_http"
                         print_success "Откат выполнен"
                         ;;
                     *)
@@ -286,6 +293,45 @@ SUBMENU
             return
             ;;
         4)
+            # RKN HTTP
+            if ! ensure_http_strategies_conf; then
+                pause
+                return
+            fi
+
+            http_total_count=$(get_http_strategies_count)
+            if [ "$http_total_count" -lt 1 ]; then
+                print_error "HTTP стратегии не найдены"
+                pause
+                return
+            fi
+
+            menu_select_single_http_strategy "RKN HTTP" "$current_rkn_http" "$http_total_count"
+            if [ $? -eq 0 ] && [ -n "$SELECTED_STRATEGY" ]; then
+                local new_strategy="$SELECTED_STRATEGY"
+                print_separator
+                print_info "Применяю HTTP стратегию #$new_strategy для тестирования..."
+                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn" "$new_strategy"
+                print_separator
+                test_category_availability_http "RKN HTTP" "rutracker.org"
+                print_separator
+
+                printf "Применить эту стратегию постоянно? [Y/n]: "
+                read_input apply_confirm
+                case "$apply_confirm" in
+                    [Nn]|[Nn][Oo])
+                        print_info "Откатываю к предыдущей HTTP стратегии #$current_rkn_http..."
+                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn" "$current_rkn_http"
+                        print_success "Откат выполнен"
+                        ;;
+                    *)
+                        print_success "Стратегия RKN HTTP применена постоянно!"
+                        ;;
+                esac
+            fi
+            return
+            ;;
+        5)
             # Все категории
             menu_select_all_strategies "$total_count"
             pause
@@ -321,6 +367,22 @@ test_category_availability() {
     fi
 }
 
+# Вспомогательная функция: проверка доступности категории по HTTP
+test_category_availability_http() {
+    local category_name=$1
+    local test_domain=$2
+
+    print_info "Проверка доступности HTTP: $category_name ($test_domain:80)..."
+
+    sleep 2
+
+    if test_strategy_http "$test_domain" 5; then
+        print_success "✓ $category_name доступен по HTTP! Стратегия работает."
+    else
+        print_error "✗ $category_name недоступен по HTTP. Попробуйте другую стратегию."
+        print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
+    fi
+}
 # Глобальная переменная для передачи выбранной стратегии
 SELECTED_STRATEGY=""
 
@@ -375,9 +437,56 @@ menu_select_single_strategy() {
     done
 }
 
+# Вспомогательная функция: выбор HTTP стратегии для одной категории
+menu_select_single_http_strategy() {
+    local category_name=$1
+    local current_strategy=$2
+    local total_count=$3
+
+    SELECTED_STRATEGY=""
+
+    printf "\n"
+    print_info "Выбор HTTP стратегии для: $category_name"
+    printf "Текущая стратегия: #%s\n\n" "$current_strategy"
+
+    while true; do
+        printf "Введите номер HTTP стратегии [1-%s] или Enter для отмены: " "$total_count"
+        read_input new_strategy
+
+        if [ -z "$new_strategy" ]; then
+            print_info "Отменено"
+            return 1
+        fi
+
+        if ! echo "$new_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат номера"
+            continue
+        fi
+
+        if [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt "$total_count" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! http_strategy_exists "$new_strategy"; then
+            print_error "HTTP стратегия #$new_strategy не найдена"
+            continue
+        fi
+
+        local params
+        params=$(get_http_strategy "$new_strategy")
+        print_info "Выбрана HTTP стратегия #$new_strategy:"
+        printf "  %s\n\n" "$params"
+
+        SELECTED_STRATEGY="$new_strategy"
+        return 0
+    done
+}
 # Вспомогательная функция: выбор стратегий для всех категорий
 menu_select_all_strategies() {
     local total_count=$1
+    local http_total_count
+    http_total_count=$(get_http_strategies_count)
 
     printf "\n"
     print_info "Выбор стратегий для всех категорий:"
@@ -467,6 +576,46 @@ menu_select_all_strategies() {
         break
     done
 
+    # RKN HTTP
+    if ! ensure_http_strategies_conf; then
+        return 1
+    fi
+
+    http_total_count=$(get_http_strategies_count)
+    if [ "$http_total_count" -lt 1 ]; then
+        print_error "HTTP стратегии не найдены"
+        return 1
+    fi
+
+    local rkn_http_strategy
+    while true; do
+        printf "RKN HTTP [1-%s, Enter=использовать %s]: " "$http_total_count" "$rkn_strategy"
+        read_input rkn_http_strategy
+
+        if [ -z "$rkn_http_strategy" ]; then
+            rkn_http_strategy="$rkn_strategy"
+            print_info "Используется: #$rkn_http_strategy"
+            break
+        fi
+
+        if ! echo "$rkn_http_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат"
+            continue
+        fi
+
+        if [ "$rkn_http_strategy" -lt 1 ] || [ "$rkn_http_strategy" -gt "$http_total_count" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! http_strategy_exists "$rkn_http_strategy"; then
+            print_error "HTTP стратегия не найдена"
+            continue
+        fi
+
+        break
+    done
+
     # Итоговая таблица
     printf "\n"
     print_separator
@@ -475,6 +624,7 @@ menu_select_all_strategies() {
     printf "%-20s | #%s\n" "YouTube TCP" "$yt_tcp_strategy"
     printf "%-20s | #%s\n" "YouTube GV" "$yt_gv_strategy"
     printf "%-20s | #%s\n" "RKN" "$rkn_strategy"
+    printf "%-20s | #%s\n" "RKN HTTP" "$rkn_http_strategy"
     print_separator
 
     printf "\nПрименить? [Y/n]: "
@@ -485,7 +635,7 @@ menu_select_all_strategies() {
             print_info "Отменено"
             ;;
         *)
-            apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
+            apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy" "$rkn_http_strategy"
             print_success "Все стратегии применены!"
             print_separator
 
@@ -497,6 +647,8 @@ menu_select_all_strategies() {
             test_category_availability "YouTube GV" "yt3.ggpht.com"
             print_separator
             test_category_availability "RKN" "rutracker.org"
+            print_separator
+            test_category_availability_http "RKN HTTP" "rutracker.org"
             ;;
     esac
 }
@@ -518,10 +670,11 @@ menu_autotest() {
     cat <<'SUBMENU'
 Режимы тестирования:
 
-[1] TOP-20 по категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)
+[1] TOP-20 по категориям Z4R (YouTube TCP/GV + RKN + RKN HTTP, ~8-10 мин)
 [2] TOP-20 общий (быстрый тест, ~2 мин)
 [3] Диапазон (укажите вручную)
 [4] Все стратегии (только HTTPS, 199 шт, ~15 мин)
+[5] RKN HTTP (TOP-20 HTTP, ~2-3 мин)
 [B] Назад
 
 SUBMENU
@@ -532,7 +685,7 @@ SUBMENU
     case "$test_mode" in
         1)
             clear_screen
-            print_info "Автотест по категориям Z4R (YouTube TCP, YouTube GV, RKN)"
+            print_info "Автотест по категориям Z4R (YouTube TCP, YouTube GV, RKN, RKN HTTP)"
             if confirm "Начать тестирование?" "Y"; then
                 auto_test_categories
             fi
@@ -560,6 +713,11 @@ SUBMENU
             if confirm "Продолжить?" "N"; then
                 test_strategy_range 1 199
             fi
+            ;;
+        5)
+            clear_screen
+            print_info "Автотест RKN HTTP (HTTP стратегии)"
+            auto_test_rkn_http
             ;;
         [Bb])
             return
@@ -649,9 +807,14 @@ menu_view_strategy() {
             [ -z "$category" ] && continue
 
             local params
-            params=$(get_strategy "$strategy" 2>/dev/null)
             local type
-            type=$(get_strategy_type "$strategy" 2>/dev/null)
+            if [ "$category" = "rkn_http" ]; then
+                params=$(get_http_strategy "$strategy" 2>/dev/null)
+                type="http"
+            else
+                params=$(get_strategy "$strategy" 2>/dev/null)
+                type=$(get_strategy_type "$strategy" 2>/dev/null)
+            fi
 
             printf "\n[%s]\n" "$(echo "$category" | tr '[:lower:]' '[:upper:]')"
             printf "  Стратегия: #%s (оценка: %s/5)\n" "$strategy" "$score"

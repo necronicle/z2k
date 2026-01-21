@@ -26,6 +26,7 @@ Z4R_RKN_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/ex
 
 # Файлы конфигурации
 STRATEGIES_CONF="${CONFIG_DIR}/strategies.conf"
+HTTP_STRATEGIES_CONF="${CONFIG_DIR}/http_strategies.conf"
 CURRENT_STRATEGY_FILE="${CONFIG_DIR}/current_strategy"
 
 # Цвета для вывода (если терминал поддерживает)

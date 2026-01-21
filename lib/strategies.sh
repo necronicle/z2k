@@ -88,6 +88,57 @@ EOF
     return 0
 }
 
+# Генерация http_strategies.conf из http_strats.txt (только HTTP стратегии)
+generate_http_strategies_conf() {
+    local input_file=$1
+    local output_file=$2
+
+    if [ ! -f "$input_file" ]; then
+        print_error "Файл не найден: $input_file"
+        return 1
+    fi
+
+    print_info "Парсинг $input_file..."
+
+    cat > "$output_file" <<'EOF'
+# Zapret2 HTTP Strategies Database
+# Сгенерировано из blockcheck2 output (HTTP)
+# Формат: [NUMBER]|[TYPE]|[PARAMETERS]
+EOF
+
+    local num=1
+    local http_count=0
+
+    tail -n +2 "$input_file" | while read -r line; do
+        [ -z "$line" ] && continue
+
+        local test_cmd
+        test_cmd=$(echo "$line" | awk -F ' : ' '{print $1}')
+        local nfqws_params
+        nfqws_params=$(echo "$line" | awk -F ' : ' '{print $2}')
+
+        local type="http"
+        http_count=$((http_count + 1))
+
+        local params
+        params=$(echo "$nfqws_params" | sed 's/^ *nfqws2 *//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+
+        [ -z "$params" ] && continue
+
+        echo "${num}|${type}|${params}" >> "$output_file"
+
+        num=$((num + 1))
+    done
+
+    local total_count
+    total_count=$(grep -c '^[0-9]' "$output_file" 2>/dev/null || echo "0")
+
+    print_success "Сгенерировано HTTP стратегий: $total_count"
+    print_info "HTTP стратегии: ~$http_count"
+
+    return 0
+}
+
 # ==============================================================================
 # РАБОТА СО СТРАТЕГИЯМИ
 # ==============================================================================
@@ -149,6 +200,74 @@ list_strategies_by_type() {
     grep "|${type}|" "$conf"
 }
 
+# Убедиться, что HTTP база стратегий доступна
+ensure_http_strategies_conf() {
+    local conf="${HTTP_STRATEGIES_CONF:-${CONFIG_DIR}/http_strategies.conf}"
+
+    if [ -f "$conf" ]; then
+        return 0
+    fi
+
+    # Попытаться скопировать из WORK_DIR, если есть
+    if [ -f "${WORK_DIR}/http_strategies.conf" ]; then
+        mkdir -p "$CONFIG_DIR" 2>/dev/null
+        cp "${WORK_DIR}/http_strategies.conf" "$conf" 2>/dev/null && return 0
+    fi
+
+    # Попытаться сгенерировать из исходника
+    if [ -f "${WORK_DIR}/http_strats.txt" ]; then
+        mkdir -p "$CONFIG_DIR" 2>/dev/null
+        generate_http_strategies_conf "${WORK_DIR}/http_strats.txt" "$conf" && return 0
+    fi
+
+    print_error "HTTP стратегии не найдены: $conf"
+    print_info "Проверьте наличие http_strats.txt и сгенерируйте http_strategies.conf"
+    return 1
+}
+
+# Получить HTTP стратегию по номеру
+get_http_strategy() {
+    local num=$1
+    local conf="${HTTP_STRATEGIES_CONF:-${CONFIG_DIR}/http_strategies.conf}"
+
+    if [ ! -f "$conf" ]; then
+        return 1
+    fi
+
+    grep "^${num}|" "$conf" | cut -d'|' -f3
+}
+
+# Получить количество HTTP стратегий
+get_http_strategies_count() {
+    local conf="${HTTP_STRATEGIES_CONF:-${CONFIG_DIR}/http_strategies.conf}"
+
+    if [ ! -f "$conf" ]; then
+        echo "0"
+        return
+    fi
+
+    grep -c '^[0-9]' "$conf" 2>/dev/null || echo "0"
+}
+
+# Проверить существование HTTP стратегии
+http_strategy_exists() {
+    local num=$1
+    local conf="${HTTP_STRATEGIES_CONF:-${CONFIG_DIR}/http_strategies.conf}"
+
+    [ -f "$conf" ] && grep -q "^${num}|" "$conf"
+}
+
+# Взять первые 20 HTTP стратегий (для автотеста)
+get_http_top20_strategies() {
+    local conf="${HTTP_STRATEGIES_CONF:-${CONFIG_DIR}/http_strategies.conf}"
+
+    if ! ensure_http_strategies_conf; then
+        return 1
+    fi
+
+    cut -d'|' -f1 "$conf" | head -n 20 | tr '\n' ' '
+}
+
 # ==============================================================================
 # ГЕНЕРАЦИЯ MULTI-PROFILE КОНФИГУРАЦИИ
 # ==============================================================================
@@ -188,6 +307,12 @@ YOUTUBE_GV_UDP="$udp_params"
 RKN_TCP="$tcp_params"
 RKN_UDP="$udp_params"
 # RKN_MARKER_END
+
+# RKN HTTP стратегия (HTTP-стратегии для RKN списка)
+# RKN_HTTP_MARKER_START
+RKN_HTTP_TCP="$tcp_params"
+RKN_HTTP_UDP="$udp_params"
+# RKN_HTTP_MARKER_END
 
 # Discord стратегия (сообщения и голос)
 # DISCORD_MARKER_START
@@ -433,6 +558,64 @@ test_strategy_tls() {
     fi
 }
 
+# Применить HTTP стратегию только для RKN_HTTP категории
+apply_rkn_http_strategy() {
+    local strategy_num=$1
+    local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
+
+    if ! ensure_http_strategies_conf; then
+        return 1
+    fi
+
+    if [ ! -f "$init_script" ]; then
+        print_error "Init скрипт не найден: $init_script"
+        return 1
+    fi
+
+    if ! grep -q "RKN_HTTP_MARKER_START" "$init_script" 2>/dev/null; then
+        print_error "RKN_HTTP маркер не найден в init скрипте. Переустановите zapret2."
+        return 1
+    fi
+
+    local params
+    params=$(get_http_strategy "$strategy_num")
+
+    if [ -z "$params" ]; then
+        print_error "HTTP стратегия #$strategy_num не найдена"
+        return 1
+    fi
+
+    local tcp_params="--filter-tcp=80,443 --filter-l7=http ${params}"
+    local udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+
+    update_init_section "RKN_HTTP" "$tcp_params" "$udp_params" "$init_script"
+
+    "$init_script" restart >/dev/null 2>&1
+    sleep 2
+
+    if is_zapret2_running; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Тест доступности домена через HTTP (порт 80)
+test_strategy_http() {
+    local domain=$1
+    local timeout=${2:-3}
+
+    iptables -t mangle -I OUTPUT -p tcp --dport 80 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
+
+    if curl -s -m "$timeout" -I "http://${domain}" 2>/dev/null | grep -q "HTTP"; then
+        iptables -t mangle -D OUTPUT -p tcp --dport 80 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
+        return 0
+    fi
+
+    iptables -t mangle -D OUTPUT -p tcp --dport 80 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
+    return 1
+}
+
 # Генерация тестового домена Google Video (на основе get_yt_cluster_domain из Z4R)
 # Использует внешний API для получения реального живого кластера YouTube
 generate_gv_domain() {
@@ -622,6 +805,62 @@ auto_test_rkn() {
     return 1
 }
 
+# Автотест RKN HTTP (meduza.io, facebook.com, rutracker.org)
+# Тестирует HTTP стратегии и возвращает номер первой работающей
+auto_test_rkn_http() {
+    local strategies_list="${1:-$(get_http_top20_strategies)}"
+    local test_domains="meduza.io facebook.com rutracker.org"
+    local tested=0
+    local total
+
+    if [ -z "$strategies_list" ]; then
+        print_error "Нет списка HTTP стратегий для автотеста"
+        return 1
+    fi
+
+    if ! ensure_http_strategies_conf; then
+        return 1
+    fi
+
+    total=$(echo "$strategies_list" | wc -w | tr -d ' ')
+    print_info "Тестирование RKN HTTP (meduza.io, facebook.com, rutracker.org)..." >&2
+
+    for num in $strategies_list; do
+        tested=$((tested + 1))
+        printf "  [%d/%d] HTTP стратегия #%s... " "$tested" "$total" "$num" >&2
+
+        # Применить HTTP стратегию только для RKN_HTTP
+        apply_rkn_http_strategy "$num" >/dev/null 2>&1
+        local apply_result=$?
+        if [ "$apply_result" -ne 0 ]; then
+            printf "ОШИБКА\n" >&2
+            continue
+        fi
+
+        sleep 2
+
+        local success_count=0
+        for domain in $test_domains; do
+            if test_strategy_http "$domain" 3; then
+                success_count=$((success_count + 1))
+            fi
+        done
+
+        if [ "$success_count" -ge 2 ]; then
+            printf "РАБОТАЕТ (%d/3)\n" "$success_count" >&2
+            print_success "Найдена рабочая HTTP стратегия для RKN: #$num" >&2
+            echo "$num"
+            return 0
+        else
+            printf "НЕ РАБОТАЕТ (%d/3)\n" "$success_count" >&2
+        fi
+    done
+
+    print_warning "Не найдено рабочих HTTP стратегий для RKN, используется #1" >&2
+    echo "1"
+    return 1
+}
+
 # ==============================================================================
 # АВТОТЕСТ TOP-20
 # ==============================================================================
@@ -724,7 +963,7 @@ auto_test_top20() {
 # ==============================================================================
 
 # Автоматическое тестирование TOP-20 стратегий для каждой категории (Z4R метод)
-# Тестирует 3 категории: YouTube TCP, YouTube GV, RKN
+# Тестирует 4 категории: YouTube TCP, YouTube GV, RKN, RKN HTTP
 # Каждая категория получает свою первую работающую стратегию
 auto_test_all_categories_v2() {
     local auto_mode=0
@@ -740,6 +979,7 @@ auto_test_all_categories_v2() {
     print_info "  - YouTube TCP (youtube.com)"
     print_info "  - YouTube GV (googlevideo CDN)"
     print_info "  - RKN (meduza.io, facebook.com, rutracker.org)"
+    print_info "  - RKN HTTP (meduza.io, facebook.com, rutracker.org)"
     print_info "Это займет около 8-10 минут"
     printf "\n"
 
@@ -758,6 +998,7 @@ auto_test_all_categories_v2() {
     local result_file_tcp="/tmp/z2k_yt_tcp_result.txt"
     local result_file_gv="/tmp/z2k_yt_gv_result.txt"
     local result_file_rkn="/tmp/z2k_rkn_result.txt"
+    local result_file_rkn_http="/tmp/z2k_rkn_http_result.txt"
 
     print_separator
     print_info "Тестирование YouTube TCP..."
@@ -779,8 +1020,15 @@ auto_test_all_categories_v2() {
     local rkn_result=$?
     local rkn_strategy=$(tail -1 "$result_file_rkn" 2>/dev/null | tr -d '\n' || echo "1")
 
+    printf "\n"
+    print_separator
+    print_info "Тестирование RKN HTTP..."
+    auto_test_rkn_http > "$result_file_rkn_http"
+    local rkn_http_result=$?
+    local rkn_http_strategy=$(tail -1 "$result_file_rkn_http" 2>/dev/null | tr -d '\n' || echo "1")
+
     # Очистить временные файлы
-    rm -f "$result_file_tcp" "$result_file_gv" "$result_file_rkn"
+    rm -f "$result_file_tcp" "$result_file_gv" "$result_file_rkn" "$result_file_rkn_http"
 
     # Сохранить результаты
     cat > "$config_file" <<EOF
@@ -791,6 +1039,7 @@ auto_test_all_categories_v2() {
 youtube_tcp:$yt_tcp_strategy
 youtube_gv:$yt_gv_strategy
 rkn:$rkn_strategy
+rkn_http:$rkn_http_strategy
 EOF
 
     # Показать итоговую таблицу
@@ -804,12 +1053,13 @@ EOF
     printf "%-15s | #%-9s | %s\n" "YouTube TCP" "$yt_tcp_strategy" "$([ $yt_tcp_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
     printf "%-15s | #%-9s | %s\n" "YouTube GV" "$yt_gv_strategy" "$([ $yt_gv_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
     printf "%-15s | #%-9s | %s\n" "RKN" "$rkn_strategy" "$([ $rkn_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
+    printf "%-15s | #%-9s | %s\n" "RKN HTTP" "$rkn_http_strategy" "$([ $rkn_http_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
     print_separator
 
     # В автоматическом режиме сразу применить
     if [ "$auto_mode" -eq 1 ]; then
         printf "\n"
-        apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
+        apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy" "$rkn_http_strategy"
         return 0
     fi
 
@@ -824,7 +1074,7 @@ EOF
             return 0
             ;;
         *)
-            apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
+            apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy" "$rkn_http_strategy"
             return 0
             ;;
     esac
@@ -1054,6 +1304,7 @@ apply_category_strategies_v2() {
     local yt_tcp_strategy=$1
     local yt_gv_strategy=$2
     local rkn_strategy=$3
+    local rkn_http_strategy=$4
 
     local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 
@@ -1066,6 +1317,7 @@ apply_category_strategies_v2() {
     print_info "  YouTube TCP -> стратегия #$yt_tcp_strategy"
     print_info "  YouTube GV  -> стратегия #$yt_gv_strategy"
     print_info "  RKN         -> стратегия #$rkn_strategy"
+    print_info "  RKN HTTP    -> стратегия #$rkn_http_strategy"
 
     # Получить параметры для каждой стратегии
     local yt_tcp_params
@@ -1089,10 +1341,22 @@ apply_category_strategies_v2() {
         rkn_params="--lua-desync=fake:blob=fake_default_tls:repeats=6"
     fi
 
+    if ! ensure_http_strategies_conf; then
+        print_warning "HTTP стратегии недоступны, используется дефолтная для RKN HTTP"
+    fi
+
+    local rkn_http_params
+    rkn_http_params=$(get_http_strategy "$rkn_http_strategy")
+    if [ -z "$rkn_http_params" ]; then
+        print_warning "HTTP стратегия #$rkn_http_strategy не найдена, используется дефолтная"
+        rkn_http_params="--lua-desync=fake:blob=fake_default_http:repeats=1"
+    fi
+
     # Формировать полные параметры TCP для каждой категории
     local yt_tcp_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_tcp_params}"
     local yt_gv_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${yt_gv_params}"
     local rkn_full="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${rkn_params}"
+    local rkn_http_full="--filter-tcp=80,443 --filter-l7=http ${rkn_http_params}"
 
     # UDP параметры (одинаковые для всех)
     local udp_full="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
@@ -1101,6 +1365,11 @@ apply_category_strategies_v2() {
     update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "$udp_full" "$init_script"
     update_init_section "YOUTUBE_GV" "$yt_gv_full" "$udp_full" "$init_script"
     update_init_section "RKN" "$rkn_full" "$udp_full" "$init_script"
+    if grep -q "RKN_HTTP_MARKER_START" "$init_script" 2>/dev/null; then
+        update_init_section "RKN_HTTP" "$rkn_http_full" "$udp_full" "$init_script"
+    else
+        print_warning "RKN_HTTP маркер не найден в init скрипте, пропускаю обновление"
+    fi
 
     print_success "Стратегии применены к init скрипту"
 
@@ -1124,3 +1393,4 @@ apply_category_strategies_v2() {
 # ==============================================================================
 
 # Все функции доступны после source этого файла
+    [ -z "$rkn_http_strategy" ] && rkn_http_strategy="1"
