@@ -653,37 +653,37 @@ CONFIG_DIR="${ZAPRET2_DIR}/config"
 
 # YouTube TCP стратегия (интерфейс YouTube)
 # YOUTUBE_TCP_MARKER_START
-YOUTUBE_TCP_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+YOUTUBE_TCP_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 YOUTUBE_TCP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # YOUTUBE_TCP_MARKER_END
 
 # YouTube GV стратегия (Google Video CDN)
 # YOUTUBE_GV_MARKER_START
-YOUTUBE_GV_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+YOUTUBE_GV_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 YOUTUBE_GV_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # YOUTUBE_GV_MARKER_END
 
 # RKN стратегия (заблокированные сайты)
 # RKN_MARKER_START
-RKN_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+RKN_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # RKN_MARKER_END
 
 # RKN HTTP стратегия (HTTP-стратегии для RKN списка)
 # RKN_HTTP_MARKER_START
-RKN_HTTP_TCP="--filter-tcp=80,443 --filter-l7=http --hostlist-domains=t-ru.org --lua-desync=fake:blob=fake_default_http:repeats=1"
+RKN_HTTP_TCP="--filter-tcp=80,443,2053,2083,2087,2096,8443 --filter-l7=http --hostlist-domains=t-ru.org --lua-desync=fake:blob=fake_default_http:repeats=1"
 RKN_HTTP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # RKN_HTTP_MARKER_END
 
 # Discord стратегия (сообщения и голос)
 # DISCORD_MARKER_START
-DISCORD_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+DISCORD_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 DISCORD_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # DISCORD_MARKER_END
 
 # Custom стратегия (пользовательские домены)
 # CUSTOM_MARKER_START
-CUSTOM_TCP="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+CUSTOM_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
 CUSTOM_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
 # CUSTOM_MARKER_END
 
@@ -758,7 +758,7 @@ start() {
     # ===========================================================================
 
     # Единое правило для всех категорий (TCP/UDP порты 80, 443)
-    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 200 --queue-bypass
+    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -j NFQUEUE --queue-num 200 --queue-bypass
     iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass
 
     # Дополнительные порты для Discord Voice

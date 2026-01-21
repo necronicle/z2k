@@ -222,7 +222,7 @@ build_tls_profile_params() {
     local payload=""
 
     if ! params_has_tcp_filter_l7 "$params"; then
-        prefix="--filter-tcp=443 --filter-l7=tls"
+        prefix="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls"
     fi
     if ! params_has_payload "$params"; then
         payload="--payload=tls_client_hello"
@@ -236,7 +236,7 @@ build_http_profile_params() {
     local prefix=""
 
     if ! params_has_tcp_filter_l7 "$params"; then
-        prefix="--filter-tcp=80,443 --filter-l7=http"
+        prefix="--filter-tcp=80,443,2053,2083,2087,2096,8443 --filter-l7=http"
     fi
 
     printf "%s %s" "$prefix" "$params"
