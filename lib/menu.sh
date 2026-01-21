@@ -67,6 +67,7 @@ MENU
 [9] Удалить zapret2
 [A] Режим ALL TCP-443 (без хостлистов)
 [W] Whitelist (исключения)
+[T] Blockcheck2 (RuTracker)
 [0] Выход
 
 MENU
@@ -107,6 +108,9 @@ MENU
                 ;;
             w|W)
                 menu_whitelist
+                ;;
+            t|T)
+                menu_blockcheck2_rutracker
                 ;;
             0|q|Q)
                 print_info "Выход из меню"
@@ -726,6 +730,49 @@ SUBMENU
             print_error "Неверный выбор"
             ;;
     esac
+
+    pause
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: BLOCKCHECK2 RUTRACKER
+# ==============================================================================
+
+menu_blockcheck2_rutracker() {
+    clear_screen
+    print_header "[T] Blockcheck2 для RuTracker"
+
+    if ! is_zapret2_installed; then
+        print_error "zapret2 не установлен"
+        pause
+        return
+    fi
+
+    local tool="/opt/zapret2/tools/blockcheck2-rutracker.sh"
+    if [ ! -x "$tool" ]; then
+        print_error "Скрипт не найден: $tool"
+        print_info "Переустановите zapret2 или скачайте tools"
+        pause
+        return
+    fi
+
+    print_warning "Будет выполнен blockcheck2 для rutracker.org/forum/index.php"
+    print_info "Сервис zapret2 будет остановлен на время теста"
+    if ! confirm "Продолжить?" "N"; then
+        return
+    fi
+
+    if is_zapret2_running; then
+        print_info "Остановка сервиса..."
+        "$INIT_SCRIPT" stop >/dev/null 2>&1
+        sleep 2
+    fi
+
+    print_info "Запуск blockcheck2 (результат сохранится в tools)..."
+    (cd /opt/zapret2/tools && sh "./blockcheck2-rutracker.sh")
+
+    print_info "Запуск сервиса zapret2..."
+    "$INIT_SCRIPT" start >/dev/null 2>&1
 
     pause
 }

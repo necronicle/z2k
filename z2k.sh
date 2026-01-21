@@ -189,6 +189,23 @@ download_http_strategies_source() {
     fi
 }
 
+download_tools() {
+    print_info "Загрузка tools (blockcheck2-rutracker.sh)..."
+
+    local tools_dir="${WORK_DIR}/tools"
+    local url="${GITHUB_RAW}/blockcheck2-rutracker.sh"
+    local output="${tools_dir}/blockcheck2-rutracker.sh"
+
+    mkdir -p "$tools_dir" || die "Не удалось создать $tools_dir"
+
+    if curl -fsSL "$url" -o "$output"; then
+        chmod +x "$output" || true
+        print_success "Загружено: tools/blockcheck2-rutracker.sh"
+    else
+        die "Ошибка загрузки blockcheck2-rutracker.sh"
+    fi
+}
+
 generate_strategies_database() {
     print_info "Генерация базы стратегий (strategies.conf)..."
 
@@ -439,6 +456,9 @@ main() {
 
     # Скачать http_strats.txt
     download_http_strategies_source
+
+    # Скачать tools
+    download_tools
 
     # Сгенерировать strategies.conf
     generate_strategies_database
