@@ -41,6 +41,20 @@ if [ -z "$BC" ] || [ ! -x "$BC" ]; then
   exit 1
 fi
 
+# Ensure required binaries are present
+if [ ! -x "/opt/zapret2/nfq2/nfqws2" ] || [ ! -x "/opt/zapret2/mdig/mdig" ]; then
+  if [ -x "/opt/zapret2/install_bin.sh" ]; then
+    echo "[i] Отсутствуют бинарники nfqws2/mdig. Запускаю /opt/zapret2/install_bin.sh" >&2
+    /opt/zapret2/install_bin.sh || {
+      echo "[ERROR] install_bin.sh завершился с ошибкой" >&2
+      exit 1
+    }
+  else
+    echo "[ERROR] Не найдены nfqws2/mdig и нет /opt/zapret2/install_bin.sh" >&2
+    exit 1
+  fi
+fi
+
 # Detect supported flags (prefer --uri for rutracker)
 HELP_TEXT="$($BC --help 2>/dev/null || true)"
 ARGS=""
