@@ -878,8 +878,21 @@ auto_test_rkn_http() {
         return 1
     fi
 
+    # Нормализовать список и жёстко ограничить 20 стратегиями
     set -- $strategies_list
-    total=$#
+    strategies_list=""
+    total=0
+    for num in "$@"; do
+        case "$num" in
+            ''|*[!0-9]*)
+                continue
+                ;;
+        esac
+        total=$((total + 1))
+        strategies_list="$strategies_list $num"
+        [ "$total" -ge 20 ] && break
+    done
+    strategies_list=$(echo "$strategies_list")
     print_info "Тестирование RKN HTTP (meduza.io, facebook.com, rutracker.org)..." >&2
 
     for num in $strategies_list; do
