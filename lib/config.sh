@@ -381,9 +381,9 @@ create_base_config() {
     # Создать файл QUIC стратегий по категориям
     if [ ! -f "$QUIC_CATEGORY_STRATEGIES_CONF" ]; then
         cat > "$QUIC_CATEGORY_STRATEGIES_CONF" <<'EOF'
-youtube_quic:2
+youtube_quic:43
 rkn_quic:1
-custom_quic:2
+custom_quic:43
 EOF
     fi
 
