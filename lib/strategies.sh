@@ -497,15 +497,10 @@ test_strategy_http() {
 generate_gv_domain() {
     # Попытаться получить имя кластера через API
     local cluster_name
-    # Временно исключить трафик API из NFQUEUE, чтобы стратегии не мешали запросу
-    iptables -t mangle -I OUTPUT -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -j RETURN 2>/dev/null
-    iptables -t mangle -I OUTPUT -p udp --dport 443 -j RETURN 2>/dev/null
     cluster_name=$(curl -s -m 3 "https://redirector.googlevideo.com/report_mapping" 2>/dev/null)
 
     # Если API не ответил, использовать известный рабочий домен
     if [ -z "$cluster_name" ]; then
-        iptables -t mangle -D OUTPUT -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -j RETURN 2>/dev/null
-        iptables -t mangle -D OUTPUT -p udp --dport 443 -j RETURN 2>/dev/null
         echo "rr1---sn-jvhnu5g-n8vr.googlevideo.com"
         return 0
     fi
@@ -541,8 +536,6 @@ generate_gv_domain() {
         i=$((i + 1))
     done
 
-    iptables -t mangle -D OUTPUT -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -j RETURN 2>/dev/null
-    iptables -t mangle -D OUTPUT -p udp --dport 443 -j RETURN 2>/dev/null
     echo "rr1---sn-${converted_name}.googlevideo.com"
 }
 
