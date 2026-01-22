@@ -192,112 +192,18 @@ download_tools() {
 }
 
 download_fake_blobs() {
-    print_info "Загрузка fake blobs (files/fake)..."
+    print_info "Загрузка fake blobs (tls_clienthello_14.bin)..."
 
     local fake_dir="${WORK_DIR}/files/fake"
+    local url="${GITHUB_RAW}/files/fake/tls_clienthello_14.bin"
+    local output="${fake_dir}/tls_clienthello_14.bin"
+
     mkdir -p "$fake_dir" || die "Не удалось создать $fake_dir"
 
-    local blobs="
-1.bin
-2.bin
-3.bin
-4.bin
-dht_find_node.bin
-dht_get_peers.bin
-discord-ip-discovery-with-port.bin
-discord-ip-discovery-without-port.bin
-dtls_clienthello_w3_org.bin
-fake_quic_1.bin
-fake_quic_2.bin
-fake_quic_3.bin
-fake_syndata.bin
-fake_tls_1.bin
-fake_tls_2.bin
-fake_tls_3.bin
-fake_tls_4.bin
-fake_tls_5.bin
-fake_tls_6.bin
-fake_tls_7.bin
-fake_tls_8.bin
-http_fake_MS.bin
-http_iana_org.bin
-isakmp_initiator_request.bin
-quic_1.bin
-quic_2.bin
-quic_3.bin
-quic_4.bin
-quic_5.bin
-quic_6.bin
-quic_7.bin
-quic_initial_facebook_com.bin
-quic_initial_facebook_com_quiche.bin
-quic_initial_google_com.bin
-quic_initial_rr1---sn-xguxaxjvh-n8me_googlevideo_com_kyber_1.bin
-quic_initial_rr1---sn-xguxaxjvh-n8me_googlevideo_com_kyber_2.bin
-quic_initial_rr2---sn-gvnuxaxjvh-o8ge_googlevideo_com.bin
-quic_initial_rutracker_org.bin
-quic_initial_rutracker_org_kyber_1.bin
-quic_initial_rutracker_org_kyber_2.bin
-quic_initial_vk_com.bin
-quic_initial_www_google_com.bin
-quic_short_header.bin
-quic_test_00.bin
-stun.bin
-syn_packet.bin
-tls_clienthello_1.bin
-tls_clienthello_10.bin
-tls_clienthello_11.bin
-tls_clienthello_12.bin
-tls_clienthello_13.bin
-tls_clienthello_14.bin
-tls_clienthello_15.bin
-tls_clienthello_16.bin
-tls_clienthello_17.bin
-tls_clienthello_18.bin
-tls_clienthello_2.bin
-tls_clienthello_2n.bin
-tls_clienthello_3.bin
-tls_clienthello_4.bin
-tls_clienthello_4pda_to.bin
-tls_clienthello_5.bin
-tls_clienthello_6.bin
-tls_clienthello_7.bin
-tls_clienthello_8.bin
-tls_clienthello_9.bin
-tls_clienthello_chat_deepseek_com.bin
-tls_clienthello_gosuslugi_ru.bin
-tls_clienthello_iana_org.bin
-tls_clienthello_max_ru.bin
-tls_clienthello_rutracker_org_kyber.bin
-tls_clienthello_sberbank_ru.bin
-tls_clienthello_vk_com.bin
-tls_clienthello_vk_com_kyber.bin
-tls_clienthello_www_google_com.bin
-tls_clienthello_www_google_com_2.bin
-wireguard_initiation.bin
-wireguard_response.bin
-zero_1024.bin
-zero_256.bin
-zero_512.bin
-"
-
-    local ok=0
-    local total=0
-    local name
-    echo "$blobs" | while read -r name; do
-        [ -z "$name" ] && continue
-        total=$((total + 1))
-        if curl -fsSL "${GITHUB_RAW}/files/fake/${name}" -o "${fake_dir}/${name}"; then
-            ok=$((ok + 1))
-        else
-            print_warning "Не удалось загрузить files/fake/${name}"
-        fi
-    done
-
-    if [ "$ok" -gt 0 ]; then
-        print_success "Загружено fake blobs: ${ok}/${total}"
+    if curl -fsSL "$url" -o "$output"; then
+        print_success "Загружено: files/fake/tls_clienthello_14.bin"
     else
-        die "Ошибка загрузки fake blobs"
+        die "Ошибка загрузки files/fake/tls_clienthello_14.bin"
     fi
 }
 
