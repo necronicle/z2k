@@ -361,8 +361,22 @@ create_base_config() {
         print_success "Создан файл стратегий: $STRATEGIES_CONF"
     fi
 
+    # Копировать quic_strategies.conf из рабочей директории
+    if [ -f "${WORK_DIR}/quic_strategies.conf" ]; then
+        cp "${WORK_DIR}/quic_strategies.conf" "$QUIC_STRATEGIES_CONF" || {
+            print_error "Не удалось скопировать quic_strategies.conf"
+            return 1
+        }
+        print_success "Создан файл QUIC стратегий: $QUIC_STRATEGIES_CONF"
+    fi
+
     # Создать файл для текущей стратегии
     touch "$CURRENT_STRATEGY_FILE"
+
+    # Создать файл для текущей QUIC стратегии
+    if [ ! -f "$QUIC_STRATEGY_FILE" ]; then
+        echo "QUIC_STRATEGY=1" > "$QUIC_STRATEGY_FILE"
+    fi
 
     # Создать конфиг для режима ALL_TCP443 (без хостлистов)
     local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
@@ -460,6 +474,18 @@ show_current_config() {
         printf "%-25s: %s\n" "Всего стратегий" "$count"
     else
         printf "%-25s: %s\n" "Всего стратегий" "не установлено"
+    fi
+
+    if [ -f "$QUIC_STRATEGIES_CONF" ]; then
+        local qcount
+        qcount=$(get_quic_strategies_count)
+        printf "%-25s: %s\n" "QUIC стратегий" "$qcount"
+    fi
+
+    if [ -f "$QUIC_STRATEGY_FILE" ]; then
+        local current_quic
+        current_quic=$(get_current_quic_strategy)
+        printf "%-25s: #%s\n" "Текущая QUIC" "$current_quic"
     fi
 
     print_separator

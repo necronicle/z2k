@@ -1,6 +1,7 @@
 #!/bin/sh
 # lib/strategies.sh - Управление стратегиями zapret2
 # Парсинг, тестирование, применение стратегий из strats_new2.txt
+# QUIC/UDP стратегии берутся из quic_strats.ini
 
 # ==============================================================================
 # КОНСТАНТЫ ДЛЯ СТРАТЕГИЙ
@@ -112,6 +113,100 @@ get_strategy_type() {
     grep "^${num}|" "$conf" | cut -d'|' -f2
 }
 
+# Получить QUIC стратегию по номеру
+get_quic_strategy() {
+    local num=$1
+    local conf="${QUIC_STRATEGIES_CONF:-${CONFIG_DIR}/quic_strategies.conf}"
+
+    if [ ! -f "$conf" ]; then
+        print_error "Файл QUIC стратегий не найден: $conf"
+        return 1
+    fi
+
+    grep "^${num}|" "$conf" | cut -d'|' -f3
+}
+
+# Получить имя QUIC стратегии
+get_quic_strategy_name() {
+    local num=$1
+    local conf="${QUIC_STRATEGIES_CONF:-${CONFIG_DIR}/quic_strategies.conf}"
+
+    if [ ! -f "$conf" ]; then
+        return 1
+    fi
+
+    grep "^${num}|" "$conf" | cut -d'|' -f2
+}
+
+# Получить описание QUIC стратегии
+get_quic_strategy_desc() {
+    local num=$1
+    local conf="${QUIC_STRATEGIES_CONF:-${CONFIG_DIR}/quic_strategies.conf}"
+
+    if [ ! -f "$conf" ]; then
+        return 1
+    fi
+
+    grep "^${num}|" "$conf" | cut -d'|' -f4
+}
+
+# Получить общее количество QUIC стратегий
+get_quic_strategies_count() {
+    local conf="${QUIC_STRATEGIES_CONF:-${CONFIG_DIR}/quic_strategies.conf}"
+
+    if [ ! -f "$conf" ]; then
+        echo "0"
+        return
+    fi
+
+    grep -c '^[0-9]' "$conf" 2>/dev/null || echo "0"
+}
+
+# Проверить существование QUIC стратегии
+quic_strategy_exists() {
+    local num=$1
+    local conf="${QUIC_STRATEGIES_CONF:-${CONFIG_DIR}/quic_strategies.conf}"
+
+    [ -f "$conf" ] && grep -q "^${num}|" "$conf"
+}
+
+# Получить текущую QUIC стратегию
+get_current_quic_strategy() {
+    local conf="${QUIC_STRATEGY_FILE:-${CONFIG_DIR}/quic_strategy.conf}"
+    if [ -f "$conf" ]; then
+        . "$conf"
+        [ -n "$QUIC_STRATEGY" ] && echo "$QUIC_STRATEGY" && return 0
+    fi
+    echo "1"
+}
+
+# Сохранить текущую QUIC стратегию
+set_current_quic_strategy() {
+    local num=$1
+    local conf="${QUIC_STRATEGY_FILE:-${CONFIG_DIR}/quic_strategy.conf}"
+    echo "QUIC_STRATEGY=$num" > "$conf"
+}
+
+# Построить параметры QUIC профиля из стратегии
+build_quic_profile_params() {
+    local params=$1
+    echo "--filter-udp=443 --filter-l7=quic ${params}"
+}
+
+# Получить текущие параметры QUIC профиля
+get_current_quic_profile_params() {
+    local quic_strategy
+    quic_strategy=$(get_current_quic_strategy 2>/dev/null || echo "1")
+    local quic_params
+    quic_params=$(get_quic_strategy "$quic_strategy" 2>/dev/null)
+
+    if [ -z "$quic_params" ]; then
+        quic_params="--payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+    fi
+
+    build_quic_profile_params "$quic_params"
+}
+
 # Получить общее количество стратегий
 get_strategies_count() {
     local conf="${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}"
@@ -209,10 +304,10 @@ generate_multiprofile() {
 
     if [ "$type" = "http" ]; then
         tcp_params=$(build_http_profile_params "$base_params")
-        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+            udp_params=$(get_current_quic_profile_params)
     else
         tcp_params=$(build_tls_profile_params "$base_params")
-        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+            udp_params=$(get_current_quic_profile_params)
     fi
 
     # Генерировать переменные для всех категорий (YouTube TCP, GV, RKN)
@@ -537,6 +632,65 @@ generate_gv_domain() {
     done
 
     echo "rr1---sn-${converted_name}.googlevideo.com"
+}
+
+# Генерация quic_strategies.conf из quic_strats.ini
+# Формат входа: INI секции [name], desc=..., args=...
+# Формат выхода: [NUMBER]|[NAME]|[ARGS]|[DESC]
+generate_quic_strategies_conf() {
+    local input_file=$1
+    local output_file=$2
+
+    if [ ! -f "$input_file" ]; then
+        print_error "Файл не найден: $input_file"
+        return 1
+    fi
+
+    print_info "Парсинг $input_file..."
+
+    cat > "$output_file" <<'EOF'
+# Zapret2 QUIC/UDP Strategies Database
+# Сгенерировано из quic_strats.ini
+# Формат: [NUMBER]|[NAME]|[ARGS]|[DESC]
+EOF
+
+    local num=1
+    local name=""
+    local desc=""
+    local args=""
+
+    while IFS= read -r line; do
+        line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        [ -z "$line" ] && continue
+        case "$line" in
+            \#*) continue ;;
+            \[*\])
+                if [ -n "$name" ] && [ -n "$args" ]; then
+                    echo "${num}|${name}|${args}|${desc}" >> "$output_file"
+                    num=$((num + 1))
+                fi
+                name=$(echo "$line" | sed 's/^\[\(.*\)\]$/\1/')
+                desc=""
+                args=""
+                ;;
+            desc=*)
+                desc=${line#desc=}
+                ;;
+            args=*)
+                args=${line#args=}
+                ;;
+        esac
+    done < "$input_file"
+
+    if [ -n "$name" ] && [ -n "$args" ]; then
+        echo "${num}|${name}|${args}|${desc}" >> "$output_file"
+    fi
+
+    local total_count
+    total_count=$(grep -c '^[0-9]' "$output_file" 2>/dev/null || echo "0")
+    print_success "Сгенерировано QUIC стратегий: $total_count"
+
+    return 0
 }
 
 # ==============================================================================
@@ -1078,10 +1232,10 @@ apply_category_strategies() {
 
         if [ "$type" = "https" ]; then
             tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${params}"
-            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+            udp_params=$(get_current_quic_profile_params)
         else
             tcp_params="--filter-tcp=80,443 --filter-l7=http ${params}"
-            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+            udp_params=$(get_current_quic_profile_params)
         fi
 
         # Обновить маркеры в init скрипте
@@ -1208,7 +1362,8 @@ apply_category_strategies_v2() {
     rkn_full=$(build_tls_profile_params "$rkn_params")
 
     # UDP параметры (одинаковые для всех)
-    local udp_full="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+    local udp_full
+    udp_full=$(get_current_quic_profile_params)
 
     # Обновить маркеры в init скрипте
     update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "$udp_full" "$init_script"

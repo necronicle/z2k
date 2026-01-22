@@ -162,6 +162,7 @@ menu_select_strategy() {
     local current_yt_tcp="1"
     local current_yt_gv="1"
     local current_rkn="1"
+    local current_quic="1"
 
     if [ -f "$config_file" ]; then
         current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
@@ -171,6 +172,7 @@ menu_select_strategy() {
         [ -z "$current_yt_gv" ] && current_yt_gv="1"
         [ -z "$current_rkn" ] && current_rkn="1"
     fi
+    current_quic=$(get_current_quic_strategy 2>/dev/null || echo "1")
 
     print_info "Всего доступно стратегий: $total_count"
     print_separator
@@ -178,6 +180,7 @@ menu_select_strategy() {
     printf "  YouTube TCP: #%s\n" "$current_yt_tcp"
     printf "  YouTube GV:  #%s\n" "$current_yt_gv"
     printf "  RKN:         #%s\n" "$current_rkn"
+    printf "  QUIC (UDP):  #%s\n" "$current_quic"
     print_separator
 
     # Подменю выбора категории
@@ -187,7 +190,7 @@ menu_select_strategy() {
 [1] YouTube TCP (youtube.com)
 [2] YouTube GV (googlevideo CDN)
 [3] RKN (заблокированные сайты)
-[4] RKN static (static.rutracker.cc)
+[4] QUIC (UDP 443)
 [5] Все категории сразу
 [B] Назад
 
@@ -280,30 +283,8 @@ SUBMENU
             return
             ;;
         4)
-            # RKN static
-            menu_select_single_strategy "RKN static" "$current_rkn" "$total_count"
-            if [ $? -eq 0 ] && [ -n "$SELECTED_STRATEGY" ]; then
-                local new_strategy="$SELECTED_STRATEGY"
-                print_separator
-                print_info "Применяю стратегию #$new_strategy для тестирования..."
-                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
-                print_separator
-                test_category_availability_rkn_static
-                print_separator
-
-                printf "Применить эту стратегию постоянно? [Y/n]: "
-                read_input apply_confirm
-                case "$apply_confirm" in
-                    [Nn]|[Nn][Oo])
-                        print_info "Откатываю к предыдущей стратегии #$current_rkn..."
-                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
-                        print_success "Откат выполнен"
-                        ;;
-                    *)
-                        print_success "Стратегия RKN применена постоянно!"
-                        ;;
-                esac
-            fi
+            # QUIC (UDP 443)
+            menu_select_quic_strategy
             return
             ;;
         5)
@@ -365,22 +346,6 @@ test_category_availability_rkn() {
     fi
 }
 
-# Вспомогательная функция: проверка доступности RKN статики (static.rutracker.cc)
-test_category_availability_rkn_static() {
-    local test_domain="static.rutracker.cc"
-
-    print_info "Проверка доступности: RKN static ($test_domain)..."
-
-    sleep 2
-
-    if test_strategy_tls "$test_domain" 5; then
-        print_success "✓ RKN static доступен! Стратегия работает."
-    else
-        print_error "✗ RKN static недоступен. Попробуйте другую стратегию."
-        print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
-    fi
-}
-
 # Глобальная переменная для передачи выбранной стратегии
 SELECTED_STRATEGY=""
 
@@ -432,6 +397,101 @@ menu_select_single_strategy() {
         # Сохраняем в глобальную переменную
         SELECTED_STRATEGY="$new_strategy"
         return 0
+    done
+}
+
+# Вспомогательная функция: выбор стратегии QUIC (UDP 443)
+menu_select_quic_strategy() {
+    clear_screen
+    print_header "QUIC стратегия (UDP 443)"
+
+    if ! is_zapret2_installed; then
+        print_error "zapret2 не установлен"
+        pause
+        return
+    fi
+
+    local total_quic
+    total_quic=$(get_quic_strategies_count)
+    if [ "$total_quic" -lt 1 ]; then
+        print_error "QUIC стратегии не найдены"
+        pause
+        return
+    fi
+
+    local current_quic
+    current_quic=$(get_current_quic_strategy 2>/dev/null || echo "1")
+
+    printf "\n"
+    print_info "Всего QUIC стратегий: $total_quic"
+    printf "Текущая QUIC стратегия: #%s\n\n" "$current_quic"
+
+    while true; do
+        printf "Введите номер QUIC стратегии [1-%s] или Enter для отмены: " "$total_quic"
+        read_input new_strategy
+
+        if [ -z "$new_strategy" ]; then
+            print_info "Отменено"
+            return
+        fi
+
+        if ! echo "$new_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат номера"
+            continue
+        fi
+
+        if [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt "$total_quic" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! quic_strategy_exists "$new_strategy"; then
+            print_error "QUIC стратегия #$new_strategy не найдена"
+            continue
+        fi
+
+        local name
+        local desc
+        local params
+        name=$(get_quic_strategy_name "$new_strategy")
+        desc=$(get_quic_strategy_desc "$new_strategy")
+        params=$(get_quic_strategy "$new_strategy")
+
+        print_info "Выбрана QUIC стратегия #$new_strategy (${name})"
+        [ -n "$desc" ] && printf "  %s\n" "$desc"
+        printf "  %s\n\n" "$params"
+
+        printf "Применить эту QUIC стратегию? [Y/n]: "
+        read_input apply_confirm
+        case "$apply_confirm" in
+            [Nn]|[Nn][Oo])
+                print_info "Отменено"
+                return
+                ;;
+            *)
+                set_current_quic_strategy "$new_strategy"
+
+                # Применить с текущими TCP стратегиями
+                local config_file="${CONFIG_DIR}/category_strategies.conf"
+                local current_yt_tcp="1"
+                local current_yt_gv="1"
+                local current_rkn="1"
+                if [ -f "$config_file" ]; then
+                    current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
+                    current_yt_gv=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
+                    current_rkn=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
+                    [ -z "$current_yt_tcp" ] && current_yt_tcp="1"
+                    [ -z "$current_yt_gv" ] && current_yt_gv="1"
+                    [ -z "$current_rkn" ] && current_rkn="1"
+                fi
+
+                print_info "Применяю QUIC стратегию #$new_strategy..."
+                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+                print_success "QUIC стратегия применена"
+                pause
+                return
+                ;;
+        esac
     done
 }
 

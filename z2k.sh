@@ -172,6 +172,18 @@ download_strategies_source() {
     else
         die "Ошибка загрузки strats_new2.txt"
     fi
+
+    print_info "Загрузка QUIC стратегий (quic_strats.ini)..."
+    local quic_url="${GITHUB_RAW}/quic_strats.ini"
+    local quic_output="${WORK_DIR}/quic_strats.ini"
+
+    if curl -fsSL "$quic_url" -o "$quic_output"; then
+        local lines
+        lines=$(wc -l < "$quic_output")
+        print_success "Загружено: quic_strats.ini ($lines строк)"
+    else
+        die "Ошибка загрузки quic_strats.ini"
+    fi
 }
 
 download_tools() {
@@ -192,19 +204,40 @@ download_tools() {
 }
 
 download_fake_blobs() {
-    print_info "Загрузка fake blobs (tls_clienthello_14.bin)..."
+    print_info "Загрузка fake blobs (TLS + QUIC)..."
 
     local fake_dir="${WORK_DIR}/files/fake"
-    local url="${GITHUB_RAW}/files/fake/tls_clienthello_14.bin"
-    local output="${fake_dir}/tls_clienthello_14.bin"
-
     mkdir -p "$fake_dir" || die "Не удалось создать $fake_dir"
 
-    if curl -fsSL "$url" -o "$output"; then
-        print_success "Загружено: files/fake/tls_clienthello_14.bin"
-    else
-        die "Ошибка загрузки files/fake/tls_clienthello_14.bin"
-    fi
+    local files="
+tls_clienthello_14.bin
+quic_initial_www_google_com.bin
+quic_initial_vk_com.bin
+quic_initial_facebook_com.bin
+quic_initial_rutracker_org.bin
+quic_1.bin
+quic_2.bin
+quic_3.bin
+quic_4.bin
+quic_5.bin
+quic_6.bin
+quic_7.bin
+quic_test_00.bin
+fake_quic_1.bin
+fake_quic_2.bin
+fake_quic_3.bin
+"
+
+    echo "$files" | while read -r file; do
+        [ -z "$file" ] && continue
+        local url="${GITHUB_RAW}/files/fake/${file}"
+        local output="${fake_dir}/${file}"
+        if curl -fsSL "$url" -o "$output"; then
+            print_success "Загружено: files/fake/${file}"
+        else
+            die "Ошибка загрузки files/fake/${file}"
+        fi
+    done
 }
 
 generate_strategies_database() {
@@ -220,6 +253,14 @@ generate_strategies_database() {
         print_success "Сгенерировано стратегий: $count"
     else
         die "Функция generate_strategies_conf не найдена"
+    fi
+
+    print_info "Генерация базы QUIC стратегий (quic_strategies.conf)..."
+    if command -v generate_quic_strategies_conf >/dev/null 2>&1; then
+        generate_quic_strategies_conf "${WORK_DIR}/quic_strats.ini" "${WORK_DIR}/quic_strategies.conf" || \
+            die "Ошибка генерации quic_strategies.conf"
+    else
+        die "Функция generate_quic_strategies_conf не найдена"
     fi
 }
 

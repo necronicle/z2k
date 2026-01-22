@@ -377,6 +377,13 @@ step_build_zapret2() {
         }
     fi
 
+    if [ -f "${WORK_DIR}/quic_strats.ini" ]; then
+        print_info "Копирование quic_strats.ini..."
+        cp -f "${WORK_DIR}/quic_strats.ini" "${ZAPRET2_DIR}/quic_strats.ini" 2>/dev/null || {
+            print_warning "Не удалось скопировать quic_strats.ini"
+        }
+    fi
+
     # Определить архитектуру
     local arch
     arch=$(uname -m)
@@ -791,6 +798,22 @@ start() {
         --lua-init="@${LUA_DIR}/zapret-lib.lua" \
         --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
         --blob=tls_clienthello_14:@${ZAPRET2_DIR}/files/fake/tls_clienthello_14.bin \
+        --blob=quic_google:@${ZAPRET2_DIR}/files/fake/quic_initial_www_google_com.bin \
+        --blob=quic_vk:@${ZAPRET2_DIR}/files/fake/quic_initial_vk_com.bin \
+        --blob=quic_facebook:@${ZAPRET2_DIR}/files/fake/quic_initial_facebook_com.bin \
+        --blob=quic_rutracker:@${ZAPRET2_DIR}/files/fake/quic_initial_rutracker_org.bin \
+        --blob=quic1:@${ZAPRET2_DIR}/files/fake/quic_1.bin \
+        --blob=quic2:@${ZAPRET2_DIR}/files/fake/quic_2.bin \
+        --blob=quic3:@${ZAPRET2_DIR}/files/fake/quic_3.bin \
+        --blob=quic4:@${ZAPRET2_DIR}/files/fake/quic_4.bin \
+        --blob=quic5:@${ZAPRET2_DIR}/files/fake/quic_5.bin \
+        --blob=quic6:@${ZAPRET2_DIR}/files/fake/quic_6.bin \
+        --blob=quic7:@${ZAPRET2_DIR}/files/fake/quic_7.bin \
+        --blob=quic_test:@${ZAPRET2_DIR}/files/fake/quic_test_00.bin \
+        --blob=fake_quic:@${ZAPRET2_DIR}/files/fake/fake_quic_1.bin \
+        --blob=fake_quic1:@${ZAPRET2_DIR}/files/fake/fake_quic_1.bin \
+        --blob=fake_quic2:@${ZAPRET2_DIR}/files/fake/fake_quic_2.bin \
+        --blob=fake_quic3:@${ZAPRET2_DIR}/files/fake/fake_quic_3.bin \
         --hostlist-exclude="${LISTS_DIR}/whitelist.txt" \
         \
         --hostlist="${LISTS_DIR}/youtube.txt" \
