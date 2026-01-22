@@ -191,6 +191,22 @@ download_tools() {
     fi
 }
 
+download_fake_blobs() {
+    print_info "Загрузка fake blobs (tls_clienthello_14.bin)..."
+
+    local fake_dir="${WORK_DIR}/files/fake"
+    local url="${GITHUB_RAW}/files/fake/tls_clienthello_14.bin"
+    local output="${fake_dir}/tls_clienthello_14.bin"
+
+    mkdir -p "$fake_dir" || die "Не удалось создать $fake_dir"
+
+    if curl -fsSL "$url" -o "$output"; then
+        print_success "Загружено: files/fake/tls_clienthello_14.bin"
+    else
+        die "Ошибка загрузки files/fake/tls_clienthello_14.bin"
+    fi
+}
+
 generate_strategies_database() {
     print_info "Генерация базы стратегий (strategies.conf)..."
 
@@ -425,6 +441,9 @@ main() {
 
     # Скачать tools
     download_tools
+
+    # Скачать fake blobs
+    download_fake_blobs
 
     # Сгенерировать strategies.conf
     generate_strategies_database
