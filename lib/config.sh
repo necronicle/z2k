@@ -109,6 +109,26 @@ cloudflaretest.com
         fi
     fi
 
+
+    # Дополнить Discord список важными доменами
+    if [ -f "${LISTS_DIR}/discord.txt" ]; then
+        local discord_additions="
+ntc.party
+"
+        local added=0
+        echo "$discord_additions" | while read -r domain; do
+            [ -z "$domain" ] && continue
+            if ! grep -qFx "$domain" "${LISTS_DIR}/discord.txt" 2>/dev/null; then
+                echo "$domain" >> "${LISTS_DIR}/discord.txt"
+                added=$((added + 1))
+            fi
+        done
+
+        if [ "$added" -gt 0 ]; then
+            print_info "Добавлено $added дополнительных доменов для Discord"
+        fi
+    fi
+
     print_separator
     print_success "Списки доменов загружены"
 

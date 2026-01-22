@@ -360,6 +360,15 @@ step_build_zapret2() {
     print_info "Установка в $ZAPRET2_DIR..."
     mv zapret2-master "$ZAPRET2_DIR" || return 1
 
+    # Обновить fake blobs из репозитория (если есть)
+    if [ -d "${WORK_DIR}/files/fake" ]; then
+        print_info "Синхронизация fake blobs..."
+        mkdir -p "${ZAPRET2_DIR}/files/fake" || return 1
+        cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || {
+            print_warning "Не удалось скопировать fake blobs"
+        }
+    fi
+
     # Определить архитектуру
     local arch
     arch=$(uname -m)
@@ -671,8 +680,8 @@ RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=f
 
 # Discord стратегия (сообщения и голос)
 # DISCORD_MARKER_START
-DISCORD_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-DISCORD_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+DISCORD_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=tls_clienthello_14:tls_mod=rnd,dupsid:ip_autottl=-2,3-20 --lua-desync=multisplit:pos=sld+1"
+DISCORD_UDP="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,stun --payload=discord_ip_discovery,stun --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2"
 # DISCORD_MARKER_END
 
 # Custom стратегия (пользовательские домены)
@@ -773,6 +782,7 @@ start() {
         --qnum=200 \
         --lua-init="@${LUA_DIR}/zapret-lib.lua" \
         --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
+        --blob=tls_clienthello_14:@${ZAPRET2_DIR}/files/fake/tls_clienthello_14.bin \
         --hostlist-exclude="${LISTS_DIR}/whitelist.txt" \
         \
         --hostlist="${LISTS_DIR}/youtube.txt" \
