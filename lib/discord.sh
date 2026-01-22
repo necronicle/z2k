@@ -132,9 +132,10 @@ $tcp_params
 # Discord UDP Profile (голос/видео)
 --filter-udp=${DISCORD_UDP_PORTS}
 --hostlist=${LISTS_DIR}/discord.txt
---payload=quic_initial
---lua-desync=fake:blob=fake_default_quic:repeats=6
---lua-desync=multidisorder:pos=1,2
+--filter-l7=discord,stun
+--payload=stun,discord_ip_discovery
+--out-range=-n10
+--lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2
 DISCORD_PROFILE
 
     # Инжектировать в init скрипт
