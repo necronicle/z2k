@@ -1077,6 +1077,10 @@ run_full_install() {
 
     auto_test_categories --auto
 
+    print_info "Открываю меню управления..."
+    sleep 1
+    show_main_menu
+
     return 0
 }
 
