@@ -272,7 +272,7 @@ SUBMENU
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
                 print_separator
-                test_category_availability "RKN" "rutracker.org"
+                test_category_availability_rkn
                 print_separator
 
                 printf "Применить эту стратегию постоянно? [Y/n]: "
@@ -322,6 +322,29 @@ test_category_availability() {
         print_success "✓ $category_name доступен! Стратегия работает."
     else
         print_error "✗ $category_name недоступен. Попробуйте другую стратегию."
+        print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
+    fi
+}
+
+# Вспомогательная функция: проверка доступности RKN (3 домена)
+test_category_availability_rkn() {
+    local test_domains="meduza.io facebook.com rutracker.org"
+    local success_count=0
+
+    print_info "Проверка доступности: RKN (meduza.io, facebook.com, rutracker.org)..."
+
+    sleep 2
+
+    for domain in $test_domains; do
+        if test_strategy_tls "$domain" 5; then
+            success_count=$((success_count + 1))
+        fi
+    done
+
+    if [ "$success_count" -ge 2 ]; then
+        print_success "✓ RKN доступен! Стратегия работает. (${success_count}/3)"
+    else
+        print_error "✗ RKN недоступен. Попробуйте другую стратегию. (${success_count}/3)"
         print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
     fi
 }
@@ -503,7 +526,7 @@ menu_select_all_strategies() {
             gv_domain=$(generate_gv_domain)
             test_category_availability "YouTube GV" "$gv_domain"
             print_separator
-            test_category_availability "RKN" "rutracker.org"
+            test_category_availability_rkn
             ;;
     esac
 }
