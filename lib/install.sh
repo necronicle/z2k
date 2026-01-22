@@ -743,6 +743,7 @@ start() {
     # Создать цепочку ZAPRET заново
     iptables -t mangle -N ZAPRET
     iptables -t mangle -A FORWARD -j ZAPRET
+    iptables -t mangle -A OUTPUT -j ZAPRET
 
     # ===========================================================================
     # ЕДИНЫЙ ПРОЦЕСС NFQWS2 С МНОЖЕСТВЕННЫМИ ПРОФИЛЯМИ (queue 200)
@@ -825,6 +826,7 @@ stop() {
 
     # Очистить правила iptables
     iptables -t mangle -F ZAPRET 2>/dev/null
+    iptables -t mangle -D OUTPUT -j ZAPRET 2>/dev/null
     iptables -t mangle -D FORWARD -j ZAPRET 2>/dev/null
     iptables -t mangle -X ZAPRET 2>/dev/null
 
