@@ -124,6 +124,17 @@ get_strategies_count() {
     grep -c '^[0-9]' "$conf" 2>/dev/null || echo "0"
 }
 
+# Получить список всех стратегий из strategies.conf
+get_all_strategies_list() {
+    local conf="${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}"
+
+    if [ ! -f "$conf" ]; then
+        return 1
+    fi
+
+    grep -o '^[0-9]\+' "$conf" | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+}
+
 # Проверить существование стратегии
 strategy_exists() {
     local num=$1
@@ -533,12 +544,22 @@ generate_gv_domain() {
 # ==============================================================================
 
 # Автотест YouTube TCP (youtube.com)
-# Тестирует TOP-20 стратегий и возвращает номер первой работающей
+# Тестирует все стратегии и возвращает номер первой работающей
 auto_test_youtube_tcp() {
-    local strategies_list="${1:-$TOP20_STRATEGIES}"
+    local strategies_list="${1:-$(get_all_strategies_list)}"
     local domain="www.youtube.com"
     local tested=0
-    local total=20
+    local total=0
+
+    for _ in $strategies_list; do
+        total=$((total + 1))
+    done
+
+    if [ "$total" -eq 0 ]; then
+        print_warning "Список стратегий пуст"
+        echo "1"
+        return 1
+    fi
 
     print_info "Тестирование YouTube TCP (youtube.com)..." >&2
 
@@ -575,11 +596,21 @@ auto_test_youtube_tcp() {
 }
 
 # Автотест YouTube GV (googlevideo CDN)
-# Тестирует TOP-20 стратегий для Google Video и возвращает номер первой работающей
+# Тестирует все стратегии для Google Video и возвращает номер первой работающей
 auto_test_youtube_gv() {
-    local strategies_list="${1:-$TOP20_STRATEGIES}"
+    local strategies_list="${1:-$(get_all_strategies_list)}"
     local tested=0
-    local total=20
+    local total=0
+
+    for _ in $strategies_list; do
+        total=$((total + 1))
+    done
+
+    if [ "$total" -eq 0 ]; then
+        print_warning "Список стратегий пуст"
+        echo "1"
+        return 1
+    fi
 
     print_info "Генерация тестового домена Google Video..." >&2
     local domain
@@ -621,12 +652,22 @@ auto_test_youtube_gv() {
 }
 
 # Автотест RKN (meduza.io, facebook.com, rutracker.org)
-# Тестирует TOP-20 стратегий для RKN доменов и возвращает номер первой работающей
+# Тестирует все стратегии для RKN доменов и возвращает номер первой работающей
 auto_test_rkn() {
-    local strategies_list="${1:-$TOP20_STRATEGIES}"
+    local strategies_list="${1:-$(get_all_strategies_list)}"
     local test_domains="meduza.io facebook.com rutracker.org"
     local tested=0
-    local total=20
+    local total=0
+
+    for _ in $strategies_list; do
+        total=$((total + 1))
+    done
+
+    if [ "$total" -eq 0 ]; then
+        print_warning "Список стратегий пуст"
+        echo "1"
+        return 1
+    fi
 
     print_info "Тестирование RKN (meduza.io, facebook.com, rutracker.org)..." >&2
 
@@ -671,10 +712,10 @@ auto_test_rkn() {
 }
 
 # ==============================================================================
-# АВТОТЕСТ TOP-20
+# АВТОТЕСТ ВСЕХ СТРАТЕГИЙ
 # ==============================================================================
 
-# Автоматическое тестирование TOP-20 стратегий
+# Автоматическое тестирование всех стратегий
 auto_test_top20() {
     local auto_mode=0
 
@@ -688,9 +729,9 @@ auto_test_top20() {
         return 1
     fi
 
-    print_header "Автотест TOP-20 стратегий"
+    print_header "Автотест стратегий"
 
-    print_info "Будут протестированы 20 наиболее эффективных стратегий"
+    print_info "Будут протестированы все доступные стратегии"
     print_info "Оценка: 0-5 баллов (5 доменов)"
     print_info "Это займет около 2-3 минут"
     printf "\n"
@@ -702,12 +743,23 @@ auto_test_top20() {
         fi
     fi
 
+    local strategies_list
+    strategies_list=$(get_all_strategies_list)
     local best_score=0
     local best_strategy=0
     local tested=0
-    local total=20
+    local total=0
 
-    for num in $TOP20_STRATEGIES; do
+    for _ in $strategies_list; do
+        total=$((total + 1))
+    done
+
+    if [ "$total" -eq 0 ]; then
+        print_error "Не найдены стратегии для тестирования"
+        return 1
+    fi
+
+    for num in $strategies_list; do
         tested=$((tested + 1))
 
         printf "\n[%d/%d] Тестирование стратегии #%s...\n" "$tested" "$total" "$num"
@@ -776,7 +828,7 @@ auto_test_top20() {
 # АВТОТЕСТ ПО КАТЕГОРИЯМ V2 (Z4R РЕФЕРЕНС)
 # ==============================================================================
 
-# Автоматическое тестирование TOP-20 стратегий для каждой категории (Z4R метод)
+# Автоматическое тестирование всех стратегий для каждой категории (Z4R метод)
 # Тестирует 3 категории: YouTube TCP, YouTube GV, RKN
 # Каждая категория получает свою первую работающую стратегию
 auto_test_all_categories_v2() {
@@ -819,21 +871,23 @@ auto_test_all_categories_v2() {
 
     print_separator
     print_info "Тестирование YouTube TCP..."
-    auto_test_youtube_tcp "$TOP20_STRATEGIES" > "$result_file_tcp"
+    local strategies_list
+    strategies_list=$(get_all_strategies_list)
+    auto_test_youtube_tcp "$strategies_list" > "$result_file_tcp"
     local yt_tcp_result=$?
     local yt_tcp_strategy=$(tail -1 "$result_file_tcp" 2>/dev/null | tr -d '\n' || echo "1")
 
     printf "\n"
     print_separator
     print_info "Тестирование YouTube GV..."
-    auto_test_youtube_gv "$TOP20_STRATEGIES" > "$result_file_gv"
+    auto_test_youtube_gv "$strategies_list" > "$result_file_gv"
     local yt_gv_result=$?
     local yt_gv_strategy=$(tail -1 "$result_file_gv" 2>/dev/null | tr -d '\n' || echo "1")
 
     printf "\n"
     print_separator
     print_info "Тестирование RKN..."
-    auto_test_rkn "$TOP20_STRATEGIES" > "$result_file_rkn"
+    auto_test_rkn "$strategies_list" > "$result_file_rkn"
     local rkn_result=$?
     local rkn_strategy=$(tail -1 "$result_file_rkn" 2>/dev/null | tr -d '\n' || echo "1")
 

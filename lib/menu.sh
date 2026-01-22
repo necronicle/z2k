@@ -552,8 +552,8 @@ menu_autotest() {
     fi
 
     printf "Режимы тестирования:\n\n"
-    printf "[1] TOP-20 по категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)\n"
-    printf "[2] TOP-20 общий (быстрый тест, ~2 мин)\n"
+    printf "[1] По категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)\n"
+    printf "[2] Общий тест (все стратегии, ~2-3 мин)\n"
     printf "[3] Диапазон (укажите вручную)\n"
     printf "[4] Все стратегии (только HTTPS, %s шт, ~15 мин)\n" "$total_count"
     printf "[B] Назад\n\n"
