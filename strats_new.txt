@@ -4,11 +4,7 @@
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multisplit:pos=sniext+1
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multisplit:pos=host+1
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multisplit:pos=midsld
-- curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=fakedsplit:pos=sniext+1:fakettl=6
-- curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multisplit:pos=sniext+1
-- curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multisplit:pos=sniext+1:pktlen=1200
-- curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=fakedsplit:pos=midsld:fakettl=6
-- curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=fakedsplit:pos=sniext+1:fakettl=8
+- curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multisplit:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multidisorder:pos=2
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multidisorder:pos=sniext+1
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multidisorder:pos=host+1
