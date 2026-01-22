@@ -351,26 +351,26 @@ test_strategy_score() {
     local score=0
     local timeout=5
 
-    if curl -s -m "$timeout" -I http://rutracker.org 2>/dev/null | grep -q "HTTP"; then
+    if test_strategy_http "rutracker.org" "$timeout"; then
         score=$((score + 1))
     fi
 
-    if curl -s -m "$timeout" -I https://rutracker.org 2>/dev/null | grep -q "HTTP"; then
+    if test_strategy_tls "rutracker.org" "$timeout"; then
         score=$((score + 1))
     fi
 
     # Тест YouTube
-    if curl -s -m "$timeout" -I https://www.youtube.com 2>/dev/null | grep -q "200"; then
+    if test_strategy_tls "www.youtube.com" "$timeout"; then
         score=$((score + 1))
     fi
 
     # Тест Discord
-    if curl -s -m "$timeout" -I https://discord.com 2>/dev/null | grep -q "200"; then
+    if test_strategy_tls "discord.com" "$timeout"; then
         score=$((score + 1))
     fi
 
     # Тест googlevideo
-    if curl -s -m "$timeout" -I https://googlevideo.com 2>/dev/null | grep -q "HTTP"; then
+    if test_strategy_tls "googlevideo.com" "$timeout"; then
         score=$((score + 1))
     fi
 
