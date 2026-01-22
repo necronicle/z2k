@@ -162,7 +162,6 @@ menu_select_strategy() {
     local current_yt_tcp="1"
     local current_yt_gv="1"
     local current_rkn="1"
-    local current_quic="1"
 
     if [ -f "$config_file" ]; then
         current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
@@ -172,7 +171,6 @@ menu_select_strategy() {
         [ -z "$current_yt_gv" ] && current_yt_gv="1"
         [ -z "$current_rkn" ] && current_rkn="1"
     fi
-    current_quic=$(get_current_quic_strategy 2>/dev/null || echo "1")
 
     print_info "Всего доступно стратегий: $total_count"
     print_separator
@@ -180,7 +178,9 @@ menu_select_strategy() {
     printf "  YouTube TCP: #%s\n" "$current_yt_tcp"
     printf "  YouTube GV:  #%s\n" "$current_yt_gv"
     printf "  RKN:         #%s\n" "$current_rkn"
-    printf "  QUIC (UDP):  #%s\n" "$current_quic"
+    printf "  QUIC YouTube: #%s\n" "$(get_quic_strategy_for_category "youtube_quic")"
+    printf "  QUIC RKN:     #%s\n" "$(get_quic_strategy_for_category "rkn_quic")"
+    printf "  QUIC Custom:  #%s\n" "$(get_quic_strategy_for_category "custom_quic")"
     print_separator
 
     # Подменю выбора категории
@@ -400,6 +400,26 @@ menu_select_single_strategy() {
     done
 }
 
+# Применить текущие стратегии категорий (YouTube TCP/GV/RKN)
+apply_current_category_strategies() {
+    local config_file="${CONFIG_DIR}/category_strategies.conf"
+    local current_yt_tcp="1"
+    local current_yt_gv="1"
+    local current_rkn="1"
+
+    if [ -f "$config_file" ]; then
+        current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        current_yt_gv=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        current_rkn=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        [ -z "$current_yt_tcp" ] && current_yt_tcp="1"
+        [ -z "$current_yt_gv" ] && current_yt_gv="1"
+        [ -z "$current_rkn" ] && current_rkn="1"
+    fi
+
+    print_info "Применяю текущие стратегии категорий..."
+    apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+}
+
 # Вспомогательная функция: выбор стратегии QUIC (UDP 443)
 menu_select_quic_strategy() {
     clear_screen
@@ -419,11 +439,57 @@ menu_select_quic_strategy() {
         return
     fi
 
-    local current_quic
-    current_quic=$(get_current_quic_strategy 2>/dev/null || echo "1")
-
     printf "\n"
     print_info "Всего QUIC стратегий: $total_quic"
+    printf "Текущие QUIC стратегии:\n"
+    printf "  YouTube: #%s\n" "$(get_quic_strategy_for_category "youtube_quic")"
+    printf "  RKN:     #%s\n" "$(get_quic_strategy_for_category "rkn_quic")"
+    printf "  Custom:  #%s\n\n" "$(get_quic_strategy_for_category "custom_quic")"
+
+    cat <<'SUBMENU'
+[1] YouTube QUIC
+[2] RKN QUIC
+[3] Custom QUIC
+[4] Все категории сразу
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите категорию: "
+    read_input quic_choice
+
+    case "$quic_choice" in
+        1)
+            menu_select_quic_for_category "youtube_quic" "YouTube QUIC" "$total_quic"
+            ;;
+        2)
+            menu_select_quic_for_category "rkn_quic" "RKN QUIC" "$total_quic"
+            ;;
+        3)
+            menu_select_quic_for_category "custom_quic" "Custom QUIC" "$total_quic"
+            ;;
+        4)
+            menu_select_quic_for_all "$total_quic"
+            ;;
+        [Bb])
+            return
+            ;;
+        *)
+            print_error "Неверный выбор"
+            ;;
+    esac
+}
+
+menu_select_quic_for_category() {
+    local category_key=$1
+    local category_name=$2
+    local total_quic=$3
+
+    local current_quic
+    current_quic=$(get_quic_strategy_for_category "$category_key")
+
+    printf "\n"
+    print_info "Категория: $category_name"
     printf "Текущая QUIC стратегия: #%s\n\n" "$current_quic"
 
     while true; do
@@ -461,7 +527,7 @@ menu_select_quic_strategy() {
         [ -n "$desc" ] && printf "  %s\n" "$desc"
         printf "  %s\n\n" "$params"
 
-        printf "Применить эту QUIC стратегию? [Y/n]: "
+        printf "Применить эту QUIC стратегию для %s? [Y/n]: " "$category_name"
         read_input apply_confirm
         case "$apply_confirm" in
             [Nn]|[Nn][Oo])
@@ -469,25 +535,56 @@ menu_select_quic_strategy() {
                 return
                 ;;
             *)
-                set_current_quic_strategy "$new_strategy"
-
-                # Применить с текущими TCP стратегиями
-                local config_file="${CONFIG_DIR}/category_strategies.conf"
-                local current_yt_tcp="1"
-                local current_yt_gv="1"
-                local current_rkn="1"
-                if [ -f "$config_file" ]; then
-                    current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
-                    current_yt_gv=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
-                    current_rkn=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
-                    [ -z "$current_yt_tcp" ] && current_yt_tcp="1"
-                    [ -z "$current_yt_gv" ] && current_yt_gv="1"
-                    [ -z "$current_rkn" ] && current_rkn="1"
-                fi
-
-                print_info "Применяю QUIC стратегию #$new_strategy..."
-                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+                set_quic_strategy_for_category "$category_key" "$new_strategy"
+                apply_current_category_strategies
                 print_success "QUIC стратегия применена"
+                pause
+                return
+                ;;
+        esac
+    done
+}
+
+menu_select_quic_for_all() {
+    local total_quic=$1
+
+    while true; do
+        printf "Введите номер QUIC стратегии [1-%s] или Enter для отмены: " "$total_quic"
+        read_input new_strategy
+
+        if [ -z "$new_strategy" ]; then
+            print_info "Отменено"
+            return
+        fi
+
+        if ! echo "$new_strategy" | grep -qE '^[0-9]+$'; then
+            print_error "Неверный формат номера"
+            continue
+        fi
+
+        if [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt "$total_quic" ]; then
+            print_error "Номер вне диапазона"
+            continue
+        fi
+
+        if ! quic_strategy_exists "$new_strategy"; then
+            print_error "QUIC стратегия #$new_strategy не найдена"
+            continue
+        fi
+
+        printf "Применить QUIC стратегию #%s для всех категорий? [Y/n]: " "$new_strategy"
+        read_input apply_confirm
+        case "$apply_confirm" in
+            [Nn]|[Nn][Oo])
+                print_info "Отменено"
+                return
+                ;;
+            *)
+                set_quic_strategy_for_category "youtube_quic" "$new_strategy"
+                set_quic_strategy_for_category "rkn_quic" "$new_strategy"
+                set_quic_strategy_for_category "custom_quic" "$new_strategy"
+                apply_current_category_strategies
+                print_success "QUIC стратегия применена для всех категорий"
                 pause
                 return
                 ;;
@@ -648,6 +745,7 @@ menu_autotest() {
     printf "[2] Общий тест (все стратегии, ~2-3 мин)\n"
     printf "[3] Диапазон (укажите вручную)\n"
     printf "[4] Все стратегии (только HTTPS, %s шт, ~15 мин)\n" "$total_count"
+    printf "[5] QUIC тест (UDP 443, ~5-10 мин)\n"
     printf "[B] Назад\n\n"
 
     printf "Выберите режим: "
@@ -691,6 +789,10 @@ menu_autotest() {
                 fi
                 test_strategy_range 1 "$total_count"
             fi
+            ;;
+        5)
+            clear_screen
+            auto_test_quic
             ;;
         [Bb])
             return

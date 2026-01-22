@@ -378,6 +378,15 @@ create_base_config() {
         echo "QUIC_STRATEGY=1" > "$QUIC_STRATEGY_FILE"
     fi
 
+    # Создать файл QUIC стратегий по категориям
+    if [ ! -f "$QUIC_CATEGORY_STRATEGIES_CONF" ]; then
+        cat > "$QUIC_CATEGORY_STRATEGIES_CONF" <<'EOF'
+youtube_quic:1
+rkn_quic:1
+custom_quic:1
+EOF
+    fi
+
     # Создать конфиг для режима ALL_TCP443 (без хостлистов)
     local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
     if [ ! -f "$all_tcp443_conf" ]; then
@@ -482,10 +491,10 @@ show_current_config() {
         printf "%-25s: %s\n" "QUIC стратегий" "$qcount"
     fi
 
-    if [ -f "$QUIC_STRATEGY_FILE" ]; then
-        local current_quic
-        current_quic=$(get_current_quic_strategy)
-        printf "%-25s: #%s\n" "Текущая QUIC" "$current_quic"
+    if [ -f "$QUIC_CATEGORY_STRATEGIES_CONF" ]; then
+        printf "%-25s: #%s\n" "QUIC YouTube" "$(get_quic_strategy_for_category "youtube_quic")"
+        printf "%-25s: #%s\n" "QUIC RKN" "$(get_quic_strategy_for_category "rkn_quic")"
+        printf "%-25s: #%s\n" "QUIC Custom" "$(get_quic_strategy_for_category "custom_quic")"
     fi
 
     print_separator
