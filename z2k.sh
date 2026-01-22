@@ -267,6 +267,9 @@ handle_arguments() {
         install|i)
             print_info "Запуск установки zapret2..."
             run_full_install
+            print_info "Открываю меню управления..."
+            sleep 1
+            show_main_menu
             ;;
         menu|m)
             print_info "Открытие меню..."

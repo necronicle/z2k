@@ -683,6 +683,11 @@ auto_test_top20() {
         auto_mode=1
     fi
 
+    if [ ! -f "${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}" ]; then
+        print_error "Файл стратегий не найден: ${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}"
+        return 1
+    fi
+
     print_header "Автотест TOP-20 стратегий"
 
     print_info "Будут протестированы 20 наиболее эффективных стратегий"
@@ -780,6 +785,11 @@ auto_test_all_categories_v2() {
     # Проверить флаг --auto
     if [ "$1" = "--auto" ]; then
         auto_mode=1
+    fi
+
+    if [ ! -f "${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}" ]; then
+        print_error "Файл стратегий не найден: ${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}"
+        return 1
     fi
 
     print_header "Автоподбор стратегий по категориям (Z4R метод)"

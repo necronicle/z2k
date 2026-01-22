@@ -518,16 +518,18 @@ menu_autotest() {
         return
     fi
 
-    cat <<'SUBMENU'
-Режимы тестирования:
+    local total_count
+    total_count=$(get_strategies_count)
+    if [ "$total_count" -lt 1 ]; then
+        total_count="?"
+    fi
 
-[1] TOP-20 по категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)
-[2] TOP-20 общий (быстрый тест, ~2 мин)
-[3] Диапазон (укажите вручную)
-[4] Все стратегии (только HTTPS, ~15 мин)
-[B] Назад
-
-SUBMENU
+    printf "Режимы тестирования:\n\n"
+    printf "[1] TOP-20 по категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)\n"
+    printf "[2] TOP-20 общий (быстрый тест, ~2 мин)\n"
+    printf "[3] Диапазон (укажите вручную)\n"
+    printf "[4] Все стратегии (только HTTPS, %s шт, ~15 мин)\n" "$total_count"
+    printf "[B] Назад\n\n"
 
     printf "Выберите режим: "
     read_input test_mode
@@ -561,7 +563,14 @@ SUBMENU
             clear_screen
             print_warning "Это займет около 15 минут!"
             if confirm "Продолжить?" "N"; then
-                test_strategy_range 1 199
+                local total_count
+                total_count=$(get_strategies_count)
+                if [ "$total_count" -lt 1 ]; then
+                    print_error "Стратегии не найдены"
+                    pause
+                    return
+                fi
+                test_strategy_range 1 "$total_count"
             fi
             ;;
         [Bb])
