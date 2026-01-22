@@ -107,6 +107,14 @@ cloudflaretest.com
         if [ "$added" -gt 0 ]; then
             print_info "Добавлено $added критически важных доменов (RuTracker, Cloudflare)"
         fi
+
+        # Удалить дубликаты и пустые строки, сохраняя порядок
+        if awk 'NF { sub(/\r$/, ""); if (!seen[$0]++) print }' "${LISTS_DIR}/rkn.txt" \
+            > "${LISTS_DIR}/rkn.txt.tmp" 2>/dev/null; then
+            mv "${LISTS_DIR}/rkn.txt.tmp" "${LISTS_DIR}/rkn.txt"
+        else
+            rm -f "${LISTS_DIR}/rkn.txt.tmp"
+        fi
     fi
 
 

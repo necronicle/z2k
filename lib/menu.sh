@@ -187,7 +187,8 @@ menu_select_strategy() {
 [1] YouTube TCP (youtube.com)
 [2] YouTube GV (googlevideo CDN)
 [3] RKN (заблокированные сайты)
-[4] Все категории сразу
+[4] RKN static (static.rutracker.cc)
+[5] Все категории сразу
 [B] Назад
 
 SUBMENU
@@ -279,6 +280,33 @@ SUBMENU
             return
             ;;
         4)
+            # RKN static
+            menu_select_single_strategy "RKN static" "$current_rkn" "$total_count"
+            if [ $? -eq 0 ] && [ -n "$SELECTED_STRATEGY" ]; then
+                local new_strategy="$SELECTED_STRATEGY"
+                print_separator
+                print_info "Применяю стратегию #$new_strategy для тестирования..."
+                apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
+                print_separator
+                test_category_availability_rkn_static
+                print_separator
+
+                printf "Применить эту стратегию постоянно? [Y/n]: "
+                read_input apply_confirm
+                case "$apply_confirm" in
+                    [Nn]|[Nn][Oo])
+                        print_info "Откатываю к предыдущей стратегии #$current_rkn..."
+                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
+                        print_success "Откат выполнен"
+                        ;;
+                    *)
+                        print_success "Стратегия RKN применена постоянно!"
+                        ;;
+                esac
+            fi
+            return
+            ;;
+        5)
             # Все категории
             menu_select_all_strategies "$total_count"
             pause
@@ -333,6 +361,22 @@ test_category_availability_rkn() {
         print_success "✓ RKN доступен! Стратегия работает. (${success_count}/3)"
     else
         print_error "✗ RKN недоступен. Попробуйте другую стратегию. (${success_count}/3)"
+        print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
+    fi
+}
+
+# Вспомогательная функция: проверка доступности RKN статики (static.rutracker.cc)
+test_category_availability_rkn_static() {
+    local test_domain="static.rutracker.cc"
+
+    print_info "Проверка доступности: RKN static ($test_domain)..."
+
+    sleep 2
+
+    if test_strategy_tls "$test_domain" 5; then
+        print_success "✓ RKN static доступен! Стратегия работает."
+    else
+        print_error "✗ RKN static недоступен. Попробуйте другую стратегию."
         print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
     fi
 }
