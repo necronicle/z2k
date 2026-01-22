@@ -243,7 +243,9 @@ SUBMENU
                 print_info "Применяю стратегию #$new_strategy для тестирования..."
                 apply_category_strategies_v2 "$current_yt_tcp" "$new_strategy" "$current_rkn"
                 print_separator
-                test_category_availability "YouTube GV" "yt3.ggpht.com"
+                local gv_domain
+                gv_domain=$(generate_gv_domain)
+                test_category_availability "YouTube GV" "$gv_domain"
                 print_separator
 
                 printf "Применить эту стратегию постоянно? [Y/n]: "
@@ -497,7 +499,9 @@ menu_select_all_strategies() {
             print_separator
             test_category_availability "YouTube TCP" "youtube.com"
             print_separator
-            test_category_availability "YouTube GV" "yt3.ggpht.com"
+            local gv_domain
+            gv_domain=$(generate_gv_domain)
+            test_category_availability "YouTube GV" "$gv_domain"
             print_separator
             test_category_availability "RKN" "rutracker.org"
             ;;
