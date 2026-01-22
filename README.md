@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/test/z2k.sh | sh
 
 1. **Проверка окружения** - Entware, архитектура, свободное место
 2. **Загрузка модулей** - скачивание lib/*.sh с GitHub
-3. **Парсинг стратегий** - генерация strategies.conf из strats_new.txt (458 стратегий)
+3. **Парсинг стратегий** - генерация strategies.conf из strats_new2.txt (458 стратегий)
 4. **9-шаговая установка zapret2**:
    - Обновление пакетов
    - Установка зависимостей (runtime библиотеки)
@@ -122,7 +122,7 @@ sh z2k.sh help
 ```
 z2k/
 ├── z2k.sh                    # Bootstrap скрипт (300 строк)
-├── strats_new.txt                # 458 стратегий из blockcheck2
+├── strats_new2.txt                # 458 стратегий из blockcheck2
 ├── lib/
 │   ├── utils.sh             # Утилиты, проверки (370 строк)
 │   ├── install.sh           # 9-шаговая установка (720 строк)
@@ -156,7 +156,7 @@ z2k/
 ```
 
 **Функции:**
-- Парсинг strats_new.txt → strategies.conf
+- Парсинг strats_new2.txt → strategies.conf
 - Получение стратегии по номеру/типу
 - Генерация multi-profile (TCP + UDP)
 - Тестирование с оценкой 0-5

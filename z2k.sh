@@ -160,17 +160,17 @@ source_modules() {
 # ==============================================================================
 
 download_strategies_source() {
-    print_info "Загрузка файла стратегий (strats_new.txt)..."
+    print_info "Загрузка файла стратегий (strats_new2.txt)..."
 
-    local url="${GITHUB_RAW}/strats_new.txt"
-    local output="${WORK_DIR}/strats_new.txt"
+    local url="${GITHUB_RAW}/strats_new2.txt"
+    local output="${WORK_DIR}/strats_new2.txt"
 
     if curl -fsSL "$url" -o "$output"; then
         local lines
         lines=$(wc -l < "$output")
-        print_success "Загружено: strats_new.txt ($lines строк)"
+        print_success "Загружено: strats_new2.txt ($lines строк)"
     else
-        die "Ошибка загрузки strats_new.txt"
+        die "Ошибка загрузки strats_new2.txt"
     fi
 }
 
@@ -196,7 +196,7 @@ generate_strategies_database() {
 
     # Эта функция определена в lib/strategies.sh
     if command -v generate_strategies_conf >/dev/null 2>&1; then
-        generate_strategies_conf "${WORK_DIR}/strats_new.txt" "${WORK_DIR}/strategies.conf" || \
+        generate_strategies_conf "${WORK_DIR}/strats_new2.txt" "${WORK_DIR}/strategies.conf" || \
             die "Ошибка генерации strategies.conf"
 
         local count
@@ -420,7 +420,7 @@ main() {
         check_root || die "Требуются права root для установки"
     fi
 
-    # Скачать strats_new.txt
+    # Скачать strats_new2.txt
     download_strategies_source
 
     # Скачать tools

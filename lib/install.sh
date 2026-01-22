@@ -369,6 +369,14 @@ step_build_zapret2() {
         }
     fi
 
+    # Скопировать файл стратегий, если он есть в репозитории
+    if [ -f "${WORK_DIR}/strats_new2.txt" ]; then
+        print_info "Копирование strats_new2.txt..."
+        cp -f "${WORK_DIR}/strats_new2.txt" "${ZAPRET2_DIR}/strats_new2.txt" 2>/dev/null || {
+            print_warning "Не удалось скопировать strats_new2.txt"
+        }
+    fi
+
     # Определить архитектуру
     local arch
     arch=$(uname -m)
