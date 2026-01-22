@@ -671,19 +671,19 @@ CONFIG_DIR="${ZAPRET2_DIR}/config"
 # YouTube TCP стратегия (интерфейс YouTube)
 # YOUTUBE_TCP_MARKER_START
 YOUTUBE_TCP_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-YOUTUBE_TCP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+YOUTUBE_TCP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
 # YOUTUBE_TCP_MARKER_END
 
 # YouTube GV стратегия (Google Video CDN)
 # YOUTUBE_GV_MARKER_START
 YOUTUBE_GV_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-YOUTUBE_GV_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+YOUTUBE_GV_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
 # YOUTUBE_GV_MARKER_END
 
 # RKN стратегия (заблокированные сайты)
 # RKN_MARKER_START
 RKN_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
 # RKN_MARKER_END
 
 # Discord стратегия (сообщения и голос)
@@ -695,7 +695,7 @@ DISCORD_UDP="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,st
 # Custom стратегия (пользовательские домены)
 # CUSTOM_MARKER_START
 CUSTOM_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-CUSTOM_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+CUSTOM_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
 # CUSTOM_MARKER_END
 
 # STRATEGY_MARKER_END

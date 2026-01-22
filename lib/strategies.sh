@@ -209,10 +209,10 @@ generate_multiprofile() {
 
     if [ "$type" = "http" ]; then
         tcp_params=$(build_http_profile_params "$base_params")
-        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
     else
         tcp_params=$(build_tls_profile_params "$base_params")
-        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+        udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
     fi
 
     # Генерировать переменные для всех категорий (YouTube TCP, GV, RKN)
@@ -1078,10 +1078,10 @@ apply_category_strategies() {
 
         if [ "$type" = "https" ]; then
             tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${params}"
-            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
         else
             tcp_params="--filter-tcp=80,443 --filter-l7=http ${params}"
-            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+            udp_params="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
         fi
 
         # Обновить маркеры в init скрипте
@@ -1208,7 +1208,7 @@ apply_category_strategies_v2() {
     rkn_full=$(build_tls_profile_params "$rkn_params")
 
     # UDP параметры (одинаковые для всех)
-    local udp_full="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=4"
+    local udp_full="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
 
     # Обновить маркеры в init скрипте
     update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "$udp_full" "$init_script"
