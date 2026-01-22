@@ -1075,7 +1075,9 @@ run_full_install() {
     print_info "Запуск автоматического подбора стратегий по категориям..."
     print_separator
 
-    auto_test_categories --auto
+    if ! auto_test_categories --auto; then
+        print_warning "Автотест завершился с ошибкой, продолжайте с ручного выбора"
+    fi
 
     return 0
 }
