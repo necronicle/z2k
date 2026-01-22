@@ -60,14 +60,11 @@ MENU
 [2] Выбрать стратегию по номеру
 [3] Автотест стратегий
 [4] Управление сервисом
-[5] Просмотр текущей стратегии
 [6] Обновить списки доменов
-[7] Настроить Discord (голос)
 [8] Резервная копия/Восстановление
 [9] Удалить zapret2
 [A] Режим ALL TCP-443 (без хостлистов)
 [W] Whitelist (исключения)
-[T] Blockcheck2 (RuTracker)
 [0] Выход
 
 MENU
@@ -88,14 +85,8 @@ MENU
             4)
                 menu_service_control
                 ;;
-            5)
-                menu_view_strategy
-                ;;
             6)
                 menu_update_lists
-                ;;
-            7)
-                menu_discord
                 ;;
             8)
                 menu_backup_restore
@@ -108,9 +99,6 @@ MENU
                 ;;
             w|W)
                 menu_whitelist
-                ;;
-            t|T)
-                menu_blockcheck2_rutracker
                 ;;
             0|q|Q)
                 print_info "Выход из меню"
