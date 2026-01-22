@@ -1,5 +1,5 @@
 * curl_test_https_tls12 ipv4 rutracker.org
-- curl_test_https_tls12 ipv4 rzd.ru : nfqws2 --filter-tcp=443 --payload=tls_client_hello --lua-desync=fakedsplit:pos=host-2:seqovl=726:badsum:badseq:badseq_increment=0
+- curl_test_https_tls12 ipv4 rzd.ru : nfqws2 --filter-tcp=443 --payload=tls_client_hello --lua-desync=hostfakesplit:host=rzd.ru:midhost=host-2:seqovl=726:badsum:badseq:badseq_increment=0
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multidisorder:pos=host+1
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multidisorder:pos=midsld
 - curl_test_https_tls12 ipv4 rutracker.org : nfqws2 --payload=tls_client_hello --lua-desync=multidisorder:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1
