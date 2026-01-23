@@ -31,6 +31,7 @@ HTTP_STRATEGIES_CONF="${CONFIG_DIR}/http_strategies.conf"
 CURRENT_STRATEGY_FILE="${CONFIG_DIR}/current_strategy"
 QUIC_STRATEGIES_CONF="${CONFIG_DIR}/quic_strategies.conf"
 QUIC_STRATEGY_FILE="${CONFIG_DIR}/quic_strategy.conf"
+RUTRACKER_QUIC_STRATEGY_FILE="${CONFIG_DIR}/rutracker_quic_strategy.conf"
 
 # Цвета для вывода (если терминал поддерживает)
 if [ -t 1 ]; then

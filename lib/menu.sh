@@ -178,7 +178,8 @@ menu_select_strategy() {
     printf "  YouTube TCP: #%s\n" "$current_yt_tcp"
     printf "  YouTube GV:  #%s\n" "$current_yt_gv"
     printf "  RKN:         #%s\n" "$current_rkn"
-    printf "  QUIC:        #%s\n" "$(get_current_quic_strategy)"
+    printf "  QUIC YouTube:   #%s\n" "$(get_current_quic_strategy)"
+    printf "  QUIC RuTracker: #%s\n" "$(get_rutracker_quic_strategy)"
     print_separator
 
     # Подменю выбора категории
@@ -445,9 +446,39 @@ menu_select_quic_strategy() {
 
     printf "\n"
     print_info "Всего QUIC стратегий: $total_quic"
-    printf "Текущая QUIC стратегия: #%s\n\n" "$(get_current_quic_strategy)"
+    printf "Текущие QUIC стратегии:\n"
+    printf "  YouTube:   #%s\n" "$(get_current_quic_strategy)"
+    printf "  RuTracker: #%s\n\n" "$(get_rutracker_quic_strategy)"
 
     while true; do
+        printf "Выберите категорию QUIC:\n"
+        printf "[1] YouTube QUIC\n"
+        printf "[2] RuTracker QUIC\n"
+        printf "[B] Назад\n\n"
+        printf "Ваш выбор: "
+        read_input quic_choice
+
+        case "$quic_choice" in
+            1)
+                local category_name="YouTube QUIC"
+                local current_quic
+                current_quic=$(get_current_quic_strategy)
+                ;;
+            2)
+                local category_name="RuTracker QUIC"
+                local current_quic
+                current_quic=$(get_rutracker_quic_strategy)
+                ;;
+            [Bb])
+                return
+                ;;
+            *)
+                print_error "Неверный выбор"
+                continue
+                ;;
+        esac
+
+        printf "\nТекущая QUIC стратегия: #%s\n" "$current_quic"
         printf "Введите номер QUIC стратегии [1-%s] или Enter для отмены: " "$total_quic"
         read_input new_strategy
 
@@ -482,7 +513,7 @@ menu_select_quic_strategy() {
         [ -n "$desc" ] && printf "  %s\n" "$desc"
         printf "  %s\n\n" "$params"
 
-        printf "Применить эту QUIC стратегию? [Y/n]: "
+        printf "Применить эту QUIC стратегию для %s? [Y/n]: " "$category_name"
         read_input apply_confirm
         case "$apply_confirm" in
             [Nn]|[Nn][Oo])
@@ -490,7 +521,11 @@ menu_select_quic_strategy() {
                 return
                 ;;
             *)
-                set_current_quic_strategy "$new_strategy"
+                if [ "$quic_choice" = "1" ]; then
+                    set_current_quic_strategy "$new_strategy"
+                else
+                    set_rutracker_quic_strategy "$new_strategy"
+                fi
                 apply_current_category_strategies
                 print_success "QUIC стратегия применена"
                 pause

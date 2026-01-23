@@ -421,6 +421,11 @@ create_base_config() {
         echo "QUIC_STRATEGY=43" > "$QUIC_STRATEGY_FILE"
     fi
 
+    # Создать файл для QUIC стратегии RuTracker
+    if [ ! -f "$RUTRACKER_QUIC_STRATEGY_FILE" ]; then
+        echo "RUTRACKER_QUIC_STRATEGY=43" > "$RUTRACKER_QUIC_STRATEGY_FILE"
+    fi
+
     # Удалить старый файл QUIC стратегий по категориям (больше не используется)
     local quic_category_conf="${CONFIG_DIR}/quic_category_strategies.conf"
     if [ -f "$quic_category_conf" ]; then
@@ -532,7 +537,10 @@ show_current_config() {
     fi
 
     if [ -f "$QUIC_STRATEGY_FILE" ]; then
-        printf "%-25s: #%s\n" "QUIC стратегия" "$(get_current_quic_strategy)"
+        printf "%-25s: #%s\n" "QUIC YouTube" "$(get_current_quic_strategy)"
+    fi
+    if [ -f "$RUTRACKER_QUIC_STRATEGY_FILE" ]; then
+        printf "%-25s: #%s\n" "QUIC RuTracker" "$(get_rutracker_quic_strategy)"
     fi
 
     print_separator
