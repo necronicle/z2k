@@ -1372,6 +1372,7 @@ update_init_section() {
 
     # Флаг - внутри ли мы секции для замены
     local inside_section=0
+    local found_section=0
 
     while IFS= read -r line; do
         if echo "$line" | grep -q "# ${start_marker}"; then
@@ -1380,6 +1381,7 @@ update_init_section() {
             echo "${marker}_TCP=\"${tcp_params}\""
             echo "${marker}_UDP=\"${udp_params}\""
             inside_section=1
+            found_section=1
         elif echo "$line" | grep -q "# ${end_marker}"; then
             # Конец секции - записать маркер и выйти из режима
             echo "$line"
@@ -1390,6 +1392,17 @@ update_init_section() {
         fi
         # Внутри секции - пропускать старые строки (кроме маркеров)
     done < "$init_script" > "$temp_file"
+
+    # Если секции не было в файле - добавить в конец
+    if [ "$found_section" -eq 0 ]; then
+        {
+            echo ""
+            echo "# ${start_marker}"
+            echo "${marker}_TCP=\"${tcp_params}\""
+            echo "${marker}_UDP=\"${udp_params}\""
+            echo "# ${end_marker}"
+        } >> "$temp_file"
+    fi
 
     # Заменить init скрипт
     mv "$temp_file" "$init_script" || {

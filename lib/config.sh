@@ -99,6 +99,7 @@ special|${Z4R_RKN_URL}|rkn.txt
 
     cat > "$rt_quic_list" <<'EOF'
 rutracker.org
+www.rutracker.org
 static.rutracker.cc
 fastpic.org
 cloudflare-ech.com
