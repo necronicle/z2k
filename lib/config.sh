@@ -91,13 +91,13 @@ special|${Z4R_RKN_URL}|rkn.txt
     done
 
     # Список для QUIC RuTracker (локальный)
-    local rkn_quic_dir="${ZAPRET2_DIR}/extra_strats/UDP/RKN"
-    local rkn_quic_list="${rkn_quic_dir}/List.txt"
-    mkdir -p "$rkn_quic_dir" || {
-        print_warning "Не удалось создать каталог QUIC RKN: $rkn_quic_dir"
+    local rt_quic_dir="${ZAPRET2_DIR}/extra_strats/UDP/RUTRACKER"
+    local rt_quic_list="${rt_quic_dir}/List.txt"
+    mkdir -p "$rt_quic_dir" || {
+        print_warning "Не удалось создать каталог QUIC RuTracker: $rt_quic_dir"
     }
 
-    cat > "$rkn_quic_list" <<'EOF'
+    cat > "$rt_quic_list" <<'EOF'
 rutracker.org
 static.rutracker.cc
 fastpic.org
@@ -553,11 +553,11 @@ show_current_config() {
             yt_quic_count=$(wc -l < "$yt_quic_list" 2>/dev/null || echo "0")
             printf "  %-20s: %s доменов\n" "extra_strats/UDP/YT/List.txt" "$yt_quic_count"
         fi
-        local rkn_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/RKN/List.txt"
-        if [ -f "$rkn_quic_list" ]; then
-            local rkn_quic_count
-            rkn_quic_count=$(wc -l < "$rkn_quic_list" 2>/dev/null || echo "0")
-            printf "  %-20s: %s доменов\n" "extra_strats/UDP/RKN/List.txt" "$rkn_quic_count"
+        local rt_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/RUTRACKER/List.txt"
+        if [ -f "$rt_quic_list" ]; then
+            local rt_quic_count
+            rt_quic_count=$(wc -l < "$rt_quic_list" 2>/dev/null || echo "0")
+            printf "  %-20s: %s доменов\n" "extra_strats/UDP/RUTRACKER/List.txt" "$rt_quic_count"
         fi
     else
         print_info "Списки доменов: не установлены"

@@ -844,7 +844,7 @@ start() {
         $QUIC_UDP \
         \
         --new \
-        --hostlist="${EXTRA_STRATS_DIR}/UDP/RKN/List.txt" \
+        --hostlist="${EXTRA_STRATS_DIR}/UDP/RUTRACKER/List.txt" \
         $QUIC_RKN_UDP \
         \
         --new \
