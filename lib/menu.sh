@@ -218,6 +218,8 @@ SUBMENU
                         print_success "Откат выполнен"
                         ;;
                     *)
+                        save_category_strategies "$new_strategy" "$current_yt_gv" "$current_rkn"
+                        apply_category_strategies_v2 "$new_strategy" "$current_yt_gv" "$current_rkn"
                         print_success "Стратегия YouTube TCP применена постоянно!"
                         ;;
                 esac
@@ -247,6 +249,8 @@ SUBMENU
                         print_success "Откат выполнен"
                         ;;
                     *)
+                        save_category_strategies "$current_yt_tcp" "$new_strategy" "$current_rkn"
+                        apply_category_strategies_v2 "$current_yt_tcp" "$new_strategy" "$current_rkn"
                         print_success "Стратегия YouTube GV применена постоянно!"
                         ;;
                 esac
@@ -274,6 +278,8 @@ SUBMENU
                         print_success "Откат выполнен"
                         ;;
                     *)
+                        save_category_strategies "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
+                        apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$new_strategy"
                         print_success "Стратегия RKN применена постоянно!"
                         ;;
                 esac
@@ -604,6 +610,7 @@ menu_select_all_strategies() {
             print_info "Отменено"
             ;;
         *)
+            save_category_strategies "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
             apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
             print_success "Все стратегии применены!"
             print_separator

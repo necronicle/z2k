@@ -1611,6 +1611,26 @@ apply_category_strategies_v2() {
     fi
 }
 
+# Сохранить стратегии по категориям (YouTube TCP/GV/RKN)
+save_category_strategies() {
+    local yt_tcp_strategy=$1
+    local yt_gv_strategy=$2
+    local rkn_strategy=$3
+    local config_file="${CONFIG_DIR}/category_strategies.conf"
+
+    mkdir -p "$CONFIG_DIR" 2>/dev/null
+
+    cat > "$config_file" <<EOF
+# Category Strategies Configuration (Z4R format)
+# Format: CATEGORY:STRATEGY_NUM
+# Updated: $(date)
+
+youtube_tcp:${yt_tcp_strategy}
+youtube_gv:${yt_gv_strategy}
+rkn:${rkn_strategy}
+EOF
+}
+
 # ==============================================================================
 # ЭКСПОРТ ФУНКЦИЙ
 # ==============================================================================
