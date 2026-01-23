@@ -178,9 +178,7 @@ menu_select_strategy() {
     printf "  YouTube TCP: #%s\n" "$current_yt_tcp"
     printf "  YouTube GV:  #%s\n" "$current_yt_gv"
     printf "  RKN:         #%s\n" "$current_rkn"
-    printf "  QUIC YouTube: #%s\n" "$(get_quic_strategy_for_category "youtube_quic")"
-    printf "  QUIC RKN:     #%s\n" "$(get_quic_strategy_for_category "rkn_quic")"
-    printf "  QUIC Custom:  #%s\n" "$(get_quic_strategy_for_category "custom_quic")"
+    printf "  QUIC:        #%s\n" "$(get_current_quic_strategy)"
     print_separator
 
     # Подменю выбора категории
@@ -441,56 +439,7 @@ menu_select_quic_strategy() {
 
     printf "\n"
     print_info "Всего QUIC стратегий: $total_quic"
-    printf "Текущие QUIC стратегии:\n"
-    printf "  YouTube: #%s\n" "$(get_quic_strategy_for_category "youtube_quic")"
-    printf "  RKN:     #%s\n" "$(get_quic_strategy_for_category "rkn_quic")"
-    printf "  Custom:  #%s\n\n" "$(get_quic_strategy_for_category "custom_quic")"
-
-    cat <<'SUBMENU'
-[1] YouTube QUIC
-[2] RKN QUIC
-[3] Custom QUIC
-[4] Все категории сразу
-[B] Назад
-
-SUBMENU
-
-    printf "Выберите категорию: "
-    read_input quic_choice
-
-    case "$quic_choice" in
-        1)
-            menu_select_quic_for_category "youtube_quic" "YouTube QUIC" "$total_quic"
-            ;;
-        2)
-            menu_select_quic_for_category "rkn_quic" "RKN QUIC" "$total_quic"
-            ;;
-        3)
-            menu_select_quic_for_category "custom_quic" "Custom QUIC" "$total_quic"
-            ;;
-        4)
-            menu_select_quic_for_all "$total_quic"
-            ;;
-        [Bb])
-            return
-            ;;
-        *)
-            print_error "Неверный выбор"
-            ;;
-    esac
-}
-
-menu_select_quic_for_category() {
-    local category_key=$1
-    local category_name=$2
-    local total_quic=$3
-
-    local current_quic
-    current_quic=$(get_quic_strategy_for_category "$category_key")
-
-    printf "\n"
-    print_info "Категория: $category_name"
-    printf "Текущая QUIC стратегия: #%s\n\n" "$current_quic"
+    printf "Текущая QUIC стратегия: #%s\n\n" "$(get_current_quic_strategy)"
 
     while true; do
         printf "Введите номер QUIC стратегии [1-%s] или Enter для отмены: " "$total_quic"
@@ -527,7 +476,7 @@ menu_select_quic_for_category() {
         [ -n "$desc" ] && printf "  %s\n" "$desc"
         printf "  %s\n\n" "$params"
 
-        printf "Применить эту QUIC стратегию для %s? [Y/n]: " "$category_name"
+        printf "Применить эту QUIC стратегию? [Y/n]: "
         read_input apply_confirm
         case "$apply_confirm" in
             [Nn]|[Nn][Oo])
@@ -535,56 +484,9 @@ menu_select_quic_for_category() {
                 return
                 ;;
             *)
-                set_quic_strategy_for_category "$category_key" "$new_strategy"
+                set_current_quic_strategy "$new_strategy"
                 apply_current_category_strategies
                 print_success "QUIC стратегия применена"
-                pause
-                return
-                ;;
-        esac
-    done
-}
-
-menu_select_quic_for_all() {
-    local total_quic=$1
-
-    while true; do
-        printf "Введите номер QUIC стратегии [1-%s] или Enter для отмены: " "$total_quic"
-        read_input new_strategy
-
-        if [ -z "$new_strategy" ]; then
-            print_info "Отменено"
-            return
-        fi
-
-        if ! echo "$new_strategy" | grep -qE '^[0-9]+$'; then
-            print_error "Неверный формат номера"
-            continue
-        fi
-
-        if [ "$new_strategy" -lt 1 ] || [ "$new_strategy" -gt "$total_quic" ]; then
-            print_error "Номер вне диапазона"
-            continue
-        fi
-
-        if ! quic_strategy_exists "$new_strategy"; then
-            print_error "QUIC стратегия #$new_strategy не найдена"
-            continue
-        fi
-
-        printf "Применить QUIC стратегию #%s для всех категорий? [Y/n]: " "$new_strategy"
-        read_input apply_confirm
-        case "$apply_confirm" in
-            [Nn]|[Nn][Oo])
-                print_info "Отменено"
-                return
-                ;;
-            *)
-                set_quic_strategy_for_category "youtube_quic" "$new_strategy"
-                set_quic_strategy_for_category "rkn_quic" "$new_strategy"
-                set_quic_strategy_for_category "custom_quic" "$new_strategy"
-                apply_current_category_strategies
-                print_success "QUIC стратегия применена для всех категорий"
                 pause
                 return
                 ;;

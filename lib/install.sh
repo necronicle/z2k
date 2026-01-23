@@ -667,6 +667,7 @@ ZAPRET2_DIR="/opt/zapret2"
 NFQWS="${ZAPRET2_DIR}/nfq2/nfqws2"
 LUA_DIR="${ZAPRET2_DIR}/lua"
 LISTS_DIR="${ZAPRET2_DIR}/lists"
+EXTRA_STRATS_DIR="${ZAPRET2_DIR}/extra_strats"
 CONFIG_DIR="${ZAPRET2_DIR}/config"
 
 # ==============================================================================
@@ -678,19 +679,19 @@ CONFIG_DIR="${ZAPRET2_DIR}/config"
 # YouTube TCP стратегия (интерфейс YouTube)
 # YOUTUBE_TCP_MARKER_START
 YOUTUBE_TCP_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-YOUTUBE_TCP_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+YOUTUBE_TCP_UDP=""
 # YOUTUBE_TCP_MARKER_END
 
 # YouTube GV стратегия (Google Video CDN)
 # YOUTUBE_GV_MARKER_START
 YOUTUBE_GV_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-YOUTUBE_GV_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+YOUTUBE_GV_UDP=""
 # YOUTUBE_GV_MARKER_END
 
 # RKN стратегия (заблокированные сайты)
 # RKN_MARKER_START
 RKN_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+RKN_UDP=""
 # RKN_MARKER_END
 
 # Discord стратегия (сообщения и голос)
@@ -702,8 +703,14 @@ DISCORD_UDP="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,st
 # Custom стратегия (пользовательские домены)
 # CUSTOM_MARKER_START
 CUSTOM_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-CUSTOM_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+CUSTOM_UDP=""
 # CUSTOM_MARKER_END
+
+# QUIC стратегия (YouTube UDP 443)
+# QUIC_MARKER_START
+QUIC_TCP=""
+QUIC_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+# QUIC_MARKER_END
 
 # STRATEGY_MARKER_END
 
@@ -818,9 +825,6 @@ start() {
         \
         --hostlist="${LISTS_DIR}/rkn.txt" \
         $RKN_TCP \
-        --new \
-        --hostlist="${LISTS_DIR}/rkn.txt" \
-        $RKN_UDP \
         \
         --new \
         --hostlist="${LISTS_DIR}/youtube.txt" \
@@ -828,9 +832,10 @@ start() {
         --new \
         --hostlist="${LISTS_DIR}/youtube.txt" \
         $YOUTUBE_GV_TCP \
+        \
         --new \
-        --hostlist="${LISTS_DIR}/youtube.txt" \
-        $YOUTUBE_TCP_UDP \
+        --hostlist="${EXTRA_STRATS_DIR}/UDP/YT/List.txt" \
+        $QUIC_UDP \
         \
         --new \
         --hostlist="${LISTS_DIR}/discord.txt" \
@@ -842,9 +847,6 @@ start() {
         --new \
         --hostlist="${LISTS_DIR}/custom.txt" \
         $CUSTOM_TCP \
-        --new \
-        --hostlist="${LISTS_DIR}/custom.txt" \
-        $CUSTOM_UDP \
         $([ "$ALL_TCP443_ENABLED" = "1" ] && echo "\
         --new \
         $ALL_TCP443_STRATEGY") \

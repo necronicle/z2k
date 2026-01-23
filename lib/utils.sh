@@ -23,6 +23,7 @@ LIB_DIR="${WORK_DIR}/lib"
 GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/test"
 Z4R_LISTS_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/lists"
 Z4R_RKN_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/extra_strats/TCP/RKN/List.txt"
+Z4R_UDP_YT_LIST_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/extra_strats/UDP/YT/List.txt"
 
 # Файлы конфигурации
 STRATEGIES_CONF="${CONFIG_DIR}/strategies.conf"
@@ -30,7 +31,6 @@ HTTP_STRATEGIES_CONF="${CONFIG_DIR}/http_strategies.conf"
 CURRENT_STRATEGY_FILE="${CONFIG_DIR}/current_strategy"
 QUIC_STRATEGIES_CONF="${CONFIG_DIR}/quic_strategies.conf"
 QUIC_STRATEGY_FILE="${CONFIG_DIR}/quic_strategy.conf"
-QUIC_CATEGORY_STRATEGIES_CONF="${CONFIG_DIR}/quic_category_strategies.conf"
 
 # Цвета для вывода (если терминал поддерживает)
 if [ -t 1 ]; then

@@ -67,6 +67,29 @@ special|${Z4R_RKN_URL}|rkn.txt
         print_info "Создан custom.txt для пользовательских доменов"
     fi
 
+    # Списки для QUIC YouTube (zapret4rocket структура)
+    local yt_quic_dir="${ZAPRET2_DIR}/extra_strats/UDP/YT"
+    local yt_quic_list="${yt_quic_dir}/List.txt"
+    mkdir -p "$yt_quic_dir" || {
+        print_warning "Не удалось создать каталог QUIC YT: $yt_quic_dir"
+    }
+
+    print_info "Загрузка списка QUIC YT..."
+    if curl -fsSL "$Z4R_UDP_YT_LIST_URL" -o "$yt_quic_list"; then
+        local yt_count
+        yt_count=$(wc -l < "$yt_quic_list" 2>/dev/null || echo "0")
+        print_success "List.txt: $yt_count доменов"
+    else
+        print_warning "Не удалось загрузить список QUIC YT"
+    fi
+
+    # Создать пустые файлы 1..8 (совместимость с zapret4rocket)
+    for num in 1 2 3 4 5 6 7 8; do
+        if [ ! -f "${yt_quic_dir}/${num}.txt" ]; then
+            : > "${yt_quic_dir}/${num}.txt"
+        fi
+    done
+
     # Дополнить RKN список критически важными доменами
     # RuTracker требует static.rutracker.cc для статики (картинки, CSS)
     # Cloudflare домены нужны для сайтов за CDN (rutracker, многие заблокированные сайты)
@@ -375,16 +398,13 @@ create_base_config() {
 
     # Создать файл для текущей QUIC стратегии
     if [ ! -f "$QUIC_STRATEGY_FILE" ]; then
-        echo "QUIC_STRATEGY=1" > "$QUIC_STRATEGY_FILE"
+        echo "QUIC_STRATEGY=43" > "$QUIC_STRATEGY_FILE"
     fi
 
-    # Создать файл QUIC стратегий по категориям
-    if [ ! -f "$QUIC_CATEGORY_STRATEGIES_CONF" ]; then
-        cat > "$QUIC_CATEGORY_STRATEGIES_CONF" <<'EOF'
-youtube_quic:43
-rkn_quic:1
-custom_quic:43
-EOF
+    # Удалить старый файл QUIC стратегий по категориям (больше не используется)
+    local quic_category_conf="${CONFIG_DIR}/quic_category_strategies.conf"
+    if [ -f "$quic_category_conf" ]; then
+        rm -f "$quic_category_conf"
     fi
 
     # Создать конфиг для режима ALL_TCP443 (без хостлистов)
@@ -491,10 +511,8 @@ show_current_config() {
         printf "%-25s: %s\n" "QUIC стратегий" "$qcount"
     fi
 
-    if [ -f "$QUIC_CATEGORY_STRATEGIES_CONF" ]; then
-        printf "%-25s: #%s\n" "QUIC YouTube" "$(get_quic_strategy_for_category "youtube_quic")"
-        printf "%-25s: #%s\n" "QUIC RKN" "$(get_quic_strategy_for_category "rkn_quic")"
-        printf "%-25s: #%s\n" "QUIC Custom" "$(get_quic_strategy_for_category "custom_quic")"
+    if [ -f "$QUIC_STRATEGY_FILE" ]; then
+        printf "%-25s: #%s\n" "QUIC стратегия" "$(get_current_quic_strategy)"
     fi
 
     print_separator
@@ -509,6 +527,12 @@ show_current_config() {
                 printf "  %-20s: %s доменов\n" "$list" "$count"
             fi
         done
+        local yt_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt"
+        if [ -f "$yt_quic_list" ]; then
+            local yt_quic_count
+            yt_quic_count=$(wc -l < "$yt_quic_list" 2>/dev/null || echo "0")
+            printf "  %-20s: %s доменов\n" "extra_strats/UDP/YT/List.txt" "$yt_quic_count"
+        fi
     else
         print_info "Списки доменов: не установлены"
     fi

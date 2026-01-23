@@ -204,48 +204,10 @@ build_quic_profile_params() {
     echo "--filter-udp=443 --filter-l7=quic ${params}"
 }
 
-# Получить стратегию QUIC для категории
-get_quic_strategy_for_category() {
-    local category=$1
-    local conf="${QUIC_CATEGORY_STRATEGIES_CONF:-${CONFIG_DIR}/quic_category_strategies.conf}"
-
-    if [ -f "$conf" ]; then
-        local val
-        val=$(grep "^${category}:" "$conf" 2>/dev/null | cut -d':' -f2)
-        if [ -n "$val" ]; then
-            echo "$val"
-            return 0
-        fi
-    fi
-
-    get_current_quic_strategy 2>/dev/null || echo "1"
-}
-
-# Установить стратегию QUIC для категории
-set_quic_strategy_for_category() {
-    local category=$1
-    local num=$2
-    local conf="${QUIC_CATEGORY_STRATEGIES_CONF:-${CONFIG_DIR}/quic_category_strategies.conf}"
-
-    mkdir -p "$CONFIG_DIR" 2>/dev/null
-
-    if [ ! -f "$conf" ]; then
-        echo "${category}:${num}" > "$conf"
-        return 0
-    fi
-
-    if grep -q "^${category}:" "$conf" 2>/dev/null; then
-        sed -i "s/^${category}:.*/${category}:${num}/" "$conf"
-    else
-        echo "${category}:${num}" >> "$conf"
-    fi
-}
-
-# Получить параметры QUIC профиля для категории
-get_quic_profile_params_for_category() {
-    local category=$1
+# Получить параметры текущей QUIC стратегии
+get_current_quic_profile_params() {
     local quic_strategy
-    quic_strategy=$(get_quic_strategy_for_category "$category")
+    quic_strategy=$(get_current_quic_strategy)
     local quic_params
     quic_params=$(get_quic_strategy "$quic_strategy" 2>/dev/null)
 
@@ -376,14 +338,21 @@ generate_multiprofile() {
     local type=$2
 
     # Генерация переменных для init скрипта (применяется ко всем категориям)
-    local tcp_params udp_params
+    local tcp_params
 
     if [ "$type" = "http" ]; then
         tcp_params=$(build_http_profile_params "$base_params")
-            udp_params=$(get_current_quic_profile_params)
     else
         tcp_params=$(build_tls_profile_params "$base_params")
-            udp_params=$(get_current_quic_profile_params)
+    fi
+
+    local quic_params
+    quic_params=$(get_current_quic_profile_params)
+
+    local discord_udp
+    discord_udp=$(get_init_udp_params "DISCORD" "${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}")
+    if [ -z "$discord_udp" ]; then
+        discord_udp="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,stun --payload=stun,discord_ip_discovery --out-range=-n10 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2"
     fi
 
     # Генерировать переменные для всех категорий (YouTube TCP, GV, RKN)
@@ -391,32 +360,38 @@ generate_multiprofile() {
 # YouTube TCP стратегия (интерфейс YouTube)
 # YOUTUBE_TCP_MARKER_START
 YOUTUBE_TCP_TCP="$tcp_params"
-YOUTUBE_TCP_UDP="$udp_params"
+YOUTUBE_TCP_UDP=""
 # YOUTUBE_TCP_MARKER_END
 
 # YouTube GV стратегия (Google Video CDN)
 # YOUTUBE_GV_MARKER_START
 YOUTUBE_GV_TCP="$tcp_params"
-YOUTUBE_GV_UDP="$udp_params"
+YOUTUBE_GV_UDP=""
 # YOUTUBE_GV_MARKER_END
 
 # RKN стратегия (заблокированные сайты)
 # RKN_MARKER_START
 RKN_TCP="$tcp_params"
-RKN_UDP="$udp_params"
+RKN_UDP=""
 # RKN_MARKER_END
 
 # Discord стратегия (сообщения и голос)
 # DISCORD_MARKER_START
 DISCORD_TCP="$tcp_params"
-DISCORD_UDP="$udp_params"
+DISCORD_UDP="$discord_udp"
 # DISCORD_MARKER_END
 
 # Custom стратегия (пользовательские домены)
 # CUSTOM_MARKER_START
 CUSTOM_TCP="$tcp_params"
-CUSTOM_UDP="$udp_params"
+CUSTOM_UDP=""
 # CUSTOM_MARKER_END
+
+# QUIC стратегия (YouTube UDP 443)
+# QUIC_MARKER_START
+QUIC_TCP=""
+QUIC_UDP="$quic_params"
+# QUIC_MARKER_END
 PROFILE
 }
 
@@ -1308,10 +1283,10 @@ apply_category_strategies() {
 
         if [ "$type" = "https" ]; then
             tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${params}"
-            udp_params=$(get_quic_profile_params_for_category "youtube_quic")
+            udp_params=""
         else
             tcp_params="--filter-tcp=80,443 --filter-l7=http ${params}"
-            udp_params=$(get_quic_profile_params_for_category "youtube_quic")
+            udp_params=""
         fi
 
         # Обновить маркеры в init скрипте
@@ -1452,14 +1427,14 @@ auto_test_quic() {
     fi
 
     local original_quic
-    original_quic=$(get_quic_strategy_for_category "rkn_quic")
+    original_quic=$(get_current_quic_strategy)
 
     for num in $strategies_list; do
         tested=$((tested + 1))
 
         printf "\n[%d/%d] Тестирование QUIC стратегии #%s...\n" "$tested" "$total" "$num"
 
-        set_quic_strategy_for_category "rkn_quic" "$num"
+        set_current_quic_strategy "$num"
         apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn" >/dev/null 2>&1 || {
             print_warning "Не удалось применить QUIC стратегию #$num"
             continue
@@ -1468,10 +1443,10 @@ auto_test_quic() {
         sleep 3
 
         local score=0
-        if test_strategy_quic "rutracker.org" 5; then
+        if test_strategy_quic "youtube.com" 5; then
             score=$((score + 1))
         fi
-        if test_strategy_quic "static.rutracker.cc" 5; then
+        if test_strategy_quic "googlevideo.com" 5; then
             score=$((score + 1))
         fi
 
@@ -1485,7 +1460,7 @@ auto_test_quic() {
     done
 
     if [ -n "$original_quic" ]; then
-        set_quic_strategy_for_category "rkn_quic" "$original_quic"
+        set_current_quic_strategy "$original_quic"
         apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn" >/dev/null 2>&1 || true
     fi
 
@@ -1501,13 +1476,13 @@ auto_test_quic() {
     fi
 
     if [ "$auto_mode" -eq 1 ]; then
-        set_quic_strategy_for_category "rkn_quic" "$best_strategy"
+        set_current_quic_strategy "$best_strategy"
         apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
         print_success "QUIC стратегия #$best_strategy применена автоматически"
         return 0
     fi
 
-    printf "\nПрименить QUIC стратегию #%s для RKN? [Y/n]: " "$best_strategy"
+    printf "\nПрименить QUIC стратегию #%s? [Y/n]: " "$best_strategy"
     read -r answer </dev/tty
 
     case "$answer" in
@@ -1516,7 +1491,7 @@ auto_test_quic() {
             return 0
             ;;
         *)
-            set_quic_strategy_for_category "rkn_quic" "$best_strategy"
+            set_current_quic_strategy "$best_strategy"
             apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
             print_success "QUIC стратегия применена"
             return 0
@@ -1536,6 +1511,20 @@ get_init_tcp_params() {
     local line
     line=$(grep "^${marker}_TCP=" "$init_script" 2>/dev/null | head -n 1)
     echo "$line" | sed "s/^${marker}_TCP=\"//" | sed 's/\"$//'
+}
+
+# Получить текущие UDP параметры из init скрипта для секции
+get_init_udp_params() {
+    local marker=$1
+    local init_script=$2
+
+    if [ ! -f "$init_script" ]; then
+        return 1
+    fi
+
+    local line
+    line=$(grep "^${marker}_UDP=" "$init_script" 2>/dev/null | head -n 1)
+    echo "$line" | sed "s/^${marker}_UDP=\"//" | sed 's/\"$//'
 }
 
 # Применить разные стратегии для YouTube TCP, YouTube GV, RKN (Z4R метод)
@@ -1587,18 +1576,14 @@ apply_category_strategies_v2() {
     yt_gv_full=$(build_tls_profile_params "$yt_gv_params")
     rkn_full=$(build_tls_profile_params "$rkn_params")
 
-    # UDP параметры (одинаковые для всех)
-    local udp_yt
-    local udp_rkn
-    local udp_custom
-    udp_yt=$(get_quic_profile_params_for_category "youtube_quic")
-    udp_rkn=$(get_quic_profile_params_for_category "rkn_quic")
-    udp_custom=$(get_quic_profile_params_for_category "custom_quic")
+    # QUIC параметры (единый профиль)
+    local udp_quic
+    udp_quic=$(get_current_quic_profile_params)
 
     # Обновить маркеры в init скрипте
-    update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "$udp_yt" "$init_script"
-    update_init_section "YOUTUBE_GV" "$yt_gv_full" "$udp_yt" "$init_script"
-    update_init_section "RKN" "$rkn_full" "$udp_rkn" "$init_script"
+    update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "" "$init_script"
+    update_init_section "YOUTUBE_GV" "$yt_gv_full" "" "$init_script"
+    update_init_section "RKN" "$rkn_full" "" "$init_script"
 
     # Обновить QUIC для CUSTOM, сохранив текущий TCP профиль
     local custom_tcp
@@ -1606,7 +1591,8 @@ apply_category_strategies_v2() {
     if [ -z "$custom_tcp" ]; then
         custom_tcp="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
     fi
-    update_init_section "CUSTOM" "$custom_tcp" "$udp_custom" "$init_script"
+    update_init_section "CUSTOM" "$custom_tcp" "" "$init_script"
+    update_init_section "QUIC" "" "$udp_quic" "$init_script"
 
     print_success "Стратегии применены к init скрипту"
 
