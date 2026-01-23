@@ -1642,6 +1642,11 @@ apply_category_strategies_v2() {
 
     sleep 2
 
+    if ! is_zapret2_running; then
+        # Иногда nfqws2 стартует с задержкой
+        sleep 2
+    fi
+
     if is_zapret2_running; then
         print_success "Сервис перезапущен с новыми стратегиями"
         return 0
