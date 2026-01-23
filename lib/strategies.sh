@@ -392,6 +392,12 @@ CUSTOM_UDP=""
 QUIC_TCP=""
 QUIC_UDP="$quic_params"
 # QUIC_MARKER_END
+
+# QUIC стратегия (RuTracker UDP 443)
+# QUIC_RKN_MARKER_START
+QUIC_RKN_TCP=""
+QUIC_RKN_UDP="$quic_params"
+# QUIC_RKN_MARKER_END
 PROFILE
 }
 
@@ -1593,6 +1599,7 @@ apply_category_strategies_v2() {
     fi
     update_init_section "CUSTOM" "$custom_tcp" "" "$init_script"
     update_init_section "QUIC" "" "$udp_quic" "$init_script"
+    update_init_section "QUIC_RKN" "" "$udp_quic" "$init_script"
 
     print_success "Стратегии применены к init скрипту"
 

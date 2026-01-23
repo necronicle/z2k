@@ -90,6 +90,21 @@ special|${Z4R_RKN_URL}|rkn.txt
         fi
     done
 
+    # Список для QUIC RuTracker (локальный)
+    local rkn_quic_dir="${ZAPRET2_DIR}/extra_strats/UDP/RKN"
+    local rkn_quic_list="${rkn_quic_dir}/List.txt"
+    mkdir -p "$rkn_quic_dir" || {
+        print_warning "Не удалось создать каталог QUIC RKN: $rkn_quic_dir"
+    }
+
+    cat > "$rkn_quic_list" <<'EOF'
+rutracker.org
+static.rutracker.cc
+fastpic.org
+cloudflare-ech.com
+cloudflare-dns.com
+EOF
+
     # Дополнить RKN список критически важными доменами
     # RuTracker требует static.rutracker.cc для статики (картинки, CSS)
     # Cloudflare домены нужны для сайтов за CDN (rutracker, многие заблокированные сайты)
@@ -537,6 +552,12 @@ show_current_config() {
             local yt_quic_count
             yt_quic_count=$(wc -l < "$yt_quic_list" 2>/dev/null || echo "0")
             printf "  %-20s: %s доменов\n" "extra_strats/UDP/YT/List.txt" "$yt_quic_count"
+        fi
+        local rkn_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/RKN/List.txt"
+        if [ -f "$rkn_quic_list" ]; then
+            local rkn_quic_count
+            rkn_quic_count=$(wc -l < "$rkn_quic_list" 2>/dev/null || echo "0")
+            printf "  %-20s: %s доменов\n" "extra_strats/UDP/RKN/List.txt" "$rkn_quic_count"
         fi
     else
         print_info "Списки доменов: не установлены"
