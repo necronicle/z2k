@@ -816,29 +816,34 @@ start() {
         --blob=fake_quic3:@${ZAPRET2_DIR}/files/fake/fake_quic_3.bin \
         --hostlist-exclude="${LISTS_DIR}/whitelist.txt" \
         \
+        --hostlist="${LISTS_DIR}/rkn.txt" \
+        $RKN_TCP \
+        --new \
+        --hostlist="${LISTS_DIR}/rkn.txt" \
+        $RKN_UDP \
+        \
+        --new \
         --hostlist="${LISTS_DIR}/youtube.txt" \
         $YOUTUBE_TCP_TCP \
         --new \
+        --hostlist="${LISTS_DIR}/youtube.txt" \
         $YOUTUBE_GV_TCP \
         --new \
+        --hostlist="${LISTS_DIR}/youtube.txt" \
         $YOUTUBE_TCP_UDP \
         \
         --new \
         --hostlist="${LISTS_DIR}/discord.txt" \
         $DISCORD_TCP \
         --new \
+        --hostlist="${LISTS_DIR}/discord.txt" \
         $DISCORD_UDP \
-        \
-        --new \
-        --hostlist="${LISTS_DIR}/rkn.txt" \
-        $RKN_TCP \
-        --new \
-        $RKN_UDP \
         \
         --new \
         --hostlist="${LISTS_DIR}/custom.txt" \
         $CUSTOM_TCP \
         --new \
+        --hostlist="${LISTS_DIR}/custom.txt" \
         $CUSTOM_UDP \
         $([ "$ALL_TCP443_ENABLED" = "1" ] && echo "\
         --new \
