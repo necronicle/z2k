@@ -403,17 +403,17 @@ step_build_zapret2() {
     release_data=$(curl -fsSL "$api_url" 2>&1)
 
     if [ $? -ne 0 ]; then
-        print_warning "API недоступен, пробую прямую ссылку на v0.8.3..."
+        print_warning "API недоступен, пробую прямую ссылку на v0.8.6..."
         # Fallback на известную версию
-        local openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.3/zapret2-v0.8.3-openwrt-embedded.tar.gz"
+        local openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.6/zapret2-v0.8.6-openwrt-embedded.tar.gz"
     else
         # Ищем URL в JSON
         local openwrt_url
         openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/bol-van/zapret2/releases/download/[^"]*openwrt-embedded\.tar\.gz' | head -1)
 
         if [ -z "$openwrt_url" ]; then
-            print_warning "Не найден в API, пробую прямую ссылку на v0.8.3..."
-            openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.3/zapret2-v0.8.3-openwrt-embedded.tar.gz"
+            print_warning "Не найден в API, пробую прямую ссылку на v0.8.6..."
+            openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.6/zapret2-v0.8.6-openwrt-embedded.tar.gz"
         fi
     fi
 
@@ -464,7 +464,7 @@ step_build_zapret2() {
         local binary_path=""
 
         # Определить правильную директорию в зависимости от архитектуры
-        # Структура архива: zapret2-v0.8.3/binaries/linux-XXX/nfqws2
+        # Структура архива: zapret2-v0.8.6/binaries/linux-XXX/nfqws2
         case "$arch" in
             aarch64)
                 # ARM64 - искать в linux-arm64
