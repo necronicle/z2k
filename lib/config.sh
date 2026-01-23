@@ -108,6 +108,7 @@ cloudflarebolt.com
 cloudflareclient.com
 cloudflareinsights.com
 cloudflareok.com
+cloudflarecp.com
 cloudflarepartners.com
 cloudflareportal.com
 cloudflarepreview.com
@@ -117,6 +118,10 @@ cloudflarestatus.com
 cloudflarestorage.com
 cloudflarestream.com
 cloudflaretest.com
+cloudfront.net
+one.one.one.one
+1.1.1.1
+warp.plus
 "
         local added=0
         echo "$rkn_additions" | while read -r domain; do
