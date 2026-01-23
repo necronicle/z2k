@@ -102,6 +102,8 @@ rutracker.org
 www.rutracker.org
 static.rutracker.cc
 fastpic.org
+t-ru.org
+www.t-ru.org
 cloudflare-ech.com
 cloudflare-dns.com
 EOF
