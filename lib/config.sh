@@ -437,7 +437,7 @@ create_base_config() {
 
     # Создать файл для текущей QUIC стратегии
     if [ ! -f "$QUIC_STRATEGY_FILE" ]; then
-        echo "QUIC_STRATEGY=43" > "$QUIC_STRATEGY_FILE"
+        echo "QUIC_STRATEGY=24" > "$QUIC_STRATEGY_FILE"
     fi
 
     # Создать файл для QUIC стратегии RuTracker
