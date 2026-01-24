@@ -178,8 +178,9 @@ menu_select_strategy() {
     printf "  YouTube TCP: #%s\n" "$current_yt_tcp"
     printf "  YouTube GV:  #%s\n" "$current_yt_gv"
     printf "  RKN:         #%s\n" "$current_rkn"
-    printf "  QUIC YouTube:   #%s\n" "$(get_current_quic_strategy)"
-    printf "  QUIC RuTracker: #%s\n" "$(get_rutracker_quic_strategy)"
+    printf "  QUIC YouTube:    #%s\n" "$(get_current_quic_strategy)"
+    printf "  QUIC RuTracker:  #%s\n" "$(get_rutracker_quic_strategy)"
+    printf "  QUIC Cloudflare: #%s\n" "$(get_cloudflare_quic_strategy)"
     print_separator
 
     # Подменю выбора категории
@@ -447,13 +448,15 @@ menu_select_quic_strategy() {
     printf "\n"
     print_info "Всего QUIC стратегий: $total_quic"
     printf "Текущие QUIC стратегии:\n"
-    printf "  YouTube:   #%s\n" "$(get_current_quic_strategy)"
-    printf "  RuTracker: #%s\n\n" "$(get_rutracker_quic_strategy)"
+    printf "  YouTube:    #%s\n" "$(get_current_quic_strategy)"
+    printf "  RuTracker:  #%s\n" "$(get_rutracker_quic_strategy)"
+    printf "  Cloudflare: #%s\n\n" "$(get_cloudflare_quic_strategy)"
 
     while true; do
         printf "Выберите категорию QUIC:\n"
         printf "[1] YouTube QUIC\n"
         printf "[2] RuTracker QUIC\n"
+        printf "[3] Cloudflare QUIC\n"
         printf "[B] Назад\n\n"
         printf "Ваш выбор: "
         read_input quic_choice
@@ -468,6 +471,11 @@ menu_select_quic_strategy() {
                 local category_name="RuTracker QUIC"
                 local current_quic
                 current_quic=$(get_rutracker_quic_strategy)
+                ;;
+            3)
+                local category_name="Cloudflare QUIC"
+                local current_quic
+                current_quic=$(get_cloudflare_quic_strategy)
                 ;;
             [Bb])
                 return
@@ -523,8 +531,10 @@ menu_select_quic_strategy() {
             *)
                 if [ "$quic_choice" = "1" ]; then
                     set_current_quic_strategy "$new_strategy"
-                else
+                elif [ "$quic_choice" = "2" ]; then
                     set_rutracker_quic_strategy "$new_strategy"
+                else
+                    set_cloudflare_quic_strategy "$new_strategy"
                 fi
                 apply_current_category_strategies
                 print_success "QUIC стратегия применена"
