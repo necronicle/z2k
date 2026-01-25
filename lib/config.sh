@@ -429,6 +429,12 @@ create_base_config() {
         echo "RUTRACKER_QUIC_STRATEGY=43" > "$RUTRACKER_QUIC_STRATEGY_FILE"
     fi
 
+    # Создать конфиг для включения/выключения QUIC RuTracker (по умолчанию выключено)
+    local rutracker_quic_enabled_conf="${CONFIG_DIR}/rutracker_quic_enabled.conf"
+    if [ ! -f "$rutracker_quic_enabled_conf" ]; then
+        echo "RUTRACKER_QUIC_ENABLED=0" > "$rutracker_quic_enabled_conf"
+        print_success "RuTracker QUIC по умолчанию выключен"
+    fi
 
     # Удалить старый файл QUIC стратегий по категориям (больше не используется)
     local quic_category_conf="${CONFIG_DIR}/quic_category_strategies.conf"
