@@ -671,254 +671,80 @@ step_disable_hwnat() {
 }
 
 # ==============================================================================
-# ШАГ 8: СОЗДАНИЕ INIT СКРИПТА (С МАРКЕРАМИ)
+# ШАГ 8: СОЗДАНИЕ ОФИЦИАЛЬНОГО CONFIG И INIT СКРИПТА
 # ==============================================================================
 
-step_create_init_script() {
-    print_header "Шаг 8/10: Создание init скрипта"
+step_create_config_and_init() {
+    print_header "Шаг 8/10: Создание config и init скрипта"
 
-    print_info "Создание $INIT_SCRIPT..."
+    # ========================================================================
+    # 8.1: Создать официальный config файл
+    # ========================================================================
+
+    print_info "Создание официального config файла..."
+
+    local zapret_config="${ZAPRET2_DIR}/config"
+
+    # Source функции для генерации config
+    . "${LIB_DIR}/config_official.sh" || {
+        print_error "Не удалось загрузить config_official.sh"
+        return 1
+    }
+
+    # Создать config файл (с автогенерацией NFQWS2_OPT из стратегий)
+    create_official_config "$zapret_config" || {
+        print_error "Не удалось создать config файл"
+        return 1
+    }
+
+    print_success "Config файл создан: $zapret_config"
+
+    # ========================================================================
+    # 8.2: Установить новый init скрипт
+    # ========================================================================
+
+    print_info "Установка init скрипта..."
 
     # Создать директорию если не существует
     mkdir -p "$(dirname "$INIT_SCRIPT")"
 
-    # Создать init скрипт с маркерами для стратегий
-    cat > "$INIT_SCRIPT" <<'INIT_SCRIPT'
-#!/bin/sh
-
-# S99zapret2 - Init скрипт для zapret2
-# Управление сервисом DPI bypass
-
-ENABLED=yes
-PROCS=nfqws2
-ARGS=""
-PREARGS=""
-
-DESC="zapret2 DPI bypass"
-ZAPRET2_DIR="/opt/zapret2"
-NFQWS="${ZAPRET2_DIR}/nfq2/nfqws2"
-LUA_DIR="${ZAPRET2_DIR}/lua"
-LISTS_DIR="${ZAPRET2_DIR}/lists"
-EXTRA_STRATS_DIR="${ZAPRET2_DIR}/extra_strats"
-CONFIG_DIR="${ZAPRET2_DIR}/config"
-
-# ==============================================================================
-# СТРАТЕГИИ ПО КАТЕГОРИЯМ (Z4R АРХИТЕКТУРА)
-# ==============================================================================
-
-# STRATEGY_MARKER_START
-
-# YouTube TCP стратегия (интерфейс YouTube)
-# YOUTUBE_TCP_MARKER_START
-YOUTUBE_TCP_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-YOUTUBE_TCP_UDP=""
-# YOUTUBE_TCP_MARKER_END
-
-# YouTube GV стратегия (Google Video CDN)
-# YOUTUBE_GV_MARKER_START
-YOUTUBE_GV_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-YOUTUBE_GV_UDP=""
-# YOUTUBE_GV_MARKER_END
-
-# RKN стратегия (заблокированные сайты)
-# RKN_MARKER_START
-RKN_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-RKN_UDP=""
-# RKN_MARKER_END
-
-# Discord стратегия (сообщения и голос)
-# DISCORD_MARKER_START
-DISCORD_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=tls_clienthello_14:tls_mod=rnd,dupsid:ip_autottl=-2,3-20 --lua-desync=multisplit:pos=sld+1"
-DISCORD_UDP="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,stun --payload=stun,discord_ip_discovery --out-range=-n10 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2"
-# DISCORD_MARKER_END
-
-# Custom стратегия (пользовательские домены)
-# CUSTOM_MARKER_START
-CUSTOM_TCP="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-CUSTOM_UDP=""
-# CUSTOM_MARKER_END
-
-# QUIC стратегия (YouTube UDP 443)
-# QUIC_MARKER_START
-QUIC_TCP=""
-QUIC_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
-# QUIC_MARKER_END
-
-# QUIC стратегия (RuTracker UDP 443)
-# QUIC_RKN_MARKER_START
-QUIC_RKN_TCP=""
-QUIC_RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
-# QUIC_RKN_MARKER_END
-
-# STRATEGY_MARKER_END
-
-# ==============================================================================
-# ФУНКЦИИ УПРАВЛЕНИЯ СЕРВИСОМ
-# ==============================================================================
-
-start() {
-    if [ "$ENABLED" != "yes" ]; then
-        echo "zapret2 disabled in config"
-        return 1
-    fi
-
-    echo "Starting $DESC"
-
-    # Загрузить конфигурацию режима ALL_TCP443
-    local ALL_TCP443_ENABLED=0
-    local ALL_TCP443_STRATEGY_NUM=1
-    local ALL_TCP443_CONF="${CONFIG_DIR}/all_tcp443.conf"
-
-    if [ -f "$ALL_TCP443_CONF" ]; then
-        . "$ALL_TCP443_CONF"
-        ALL_TCP443_ENABLED=$ENABLED
-        ALL_TCP443_STRATEGY_NUM=$STRATEGY
-    fi
-
-    # Получить стратегию для ALL_TCP443 режима
-    local ALL_TCP443_STRATEGY=""
-    if [ "$ALL_TCP443_ENABLED" = "1" ]; then
-        # Загрузить стратегию из strategies.conf
-        if [ -f "${CONFIG_DIR}/strategies.conf" ]; then
-            ALL_TCP443_STRATEGY=$(sed -n "${ALL_TCP443_STRATEGY_NUM}p" "${CONFIG_DIR}/strategies.conf" 2>/dev/null | awk -F ' : ' '{print $2}')
-            if [ -z "$ALL_TCP443_STRATEGY" ]; then
-                echo "WARNING: Strategy #${ALL_TCP443_STRATEGY_NUM} not found, using default"
-                ALL_TCP443_STRATEGY="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-            fi
-        fi
-    fi
-
-    # Загрузить модули ядра (через Entware insmod с полными путями)
-    local kernel_ver=$(uname -r)
-    /opt/sbin/insmod /lib/modules/${kernel_ver}/xt_multiport.ko 2>/dev/null
-    /opt/sbin/insmod /lib/modules/${kernel_ver}/xt_connbytes.ko 2>/dev/null
-    /opt/sbin/insmod /lib/modules/${kernel_ver}/xt_NFQUEUE.ko 2>/dev/null
-    /opt/sbin/insmod /lib/modules/${kernel_ver}/nfnetlink_queue.ko 2>/dev/null
-
-    # Очистить старые правила iptables (правильный порядок)
-    # 1. Убить старые процессы nfqws2
-    killall nfqws2 2>/dev/null
-    sleep 1
-
-    # 2. Удалить правило из FORWARD (чтобы цепочку можно было удалить)
-    iptables -t mangle -D FORWARD -j ZAPRET 2>/dev/null
-
-    # 3. Очистить содержимое цепочки
-    iptables -t mangle -F ZAPRET 2>/dev/null
-
-    # 4. Удалить цепочку
-    iptables -t mangle -X ZAPRET 2>/dev/null
-
-    # Создать цепочку ZAPRET заново
-    iptables -t mangle -N ZAPRET
-    iptables -t mangle -A FORWARD -j ZAPRET
-
-    # ===========================================================================
-    # ЕДИНЫЙ ПРОЦЕСС NFQWS2 С МНОЖЕСТВЕННЫМИ ПРОФИЛЯМИ (queue 200)
-    # ===========================================================================
-    # Эффективная архитектура: один процесс обрабатывает все категории через --new
-    # Каждый профиль имеет свой --hostlist и свою стратегию
-    # ===========================================================================
-
-    # Единое правило для всех категорий (TCP/UDP порты 80, 443)
-    iptables -t mangle -A ZAPRET -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -j NFQUEUE --queue-num 200 --queue-bypass
-    iptables -t mangle -A ZAPRET -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass
-
-    # Дополнительные порты для Discord Voice
-    iptables -t mangle -A ZAPRET -p udp -m multiport --dports 50000:50099,1400,3478:3481,5349 -j NFQUEUE --queue-num 200 --queue-bypass
-
-    # Проверить существование whitelist.txt перед запуском
-    if [ ! -f "${LISTS_DIR}/whitelist.txt" ]; then
-        echo "WARNING: whitelist.txt не найден, будет создан пустой файл"
-        mkdir -p "$LISTS_DIR" 2>/dev/null
-        touch "${LISTS_DIR}/whitelist.txt" 2>/dev/null || {
-            echo "ERROR: Не удалось создать whitelist.txt"
+    # Скопировать новый init скрипт из files/
+    if [ -f "${WORK_DIR}/files/S99zapret2.new" ]; then
+        print_info "Копирование S99zapret2.new → $INIT_SCRIPT"
+        cp "${WORK_DIR}/files/S99zapret2.new" "$INIT_SCRIPT" || {
+            print_error "Не удалось скопировать init скрипт"
             return 1
         }
-    fi
-
-    # Запустить единый nfqws2 процесс с множественными профилями
-    $NFQWS \
-        --qnum=200 \
-        --lua-init="@${LUA_DIR}/zapret-lib.lua" \
-        --lua-init="@${LUA_DIR}/zapret-antidpi.lua" \
-        --blob=tls_clienthello_14:@${ZAPRET2_DIR}/files/fake/tls_clienthello_14.bin \
-        --blob=quic_google:@${ZAPRET2_DIR}/files/fake/quic_initial_www_google_com.bin \
-        --blob=quic_vk:@${ZAPRET2_DIR}/files/fake/quic_initial_vk_com.bin \
-        --blob=quic_facebook:@${ZAPRET2_DIR}/files/fake/quic_initial_facebook_com.bin \
-        --blob=quic_rutracker:@${ZAPRET2_DIR}/files/fake/quic_initial_rutracker_org.bin \
-        --blob=quic1:@${ZAPRET2_DIR}/files/fake/quic_1.bin \
-        --blob=quic2:@${ZAPRET2_DIR}/files/fake/quic_2.bin \
-        --blob=quic3:@${ZAPRET2_DIR}/files/fake/quic_3.bin \
-        --blob=quic4:@${ZAPRET2_DIR}/files/fake/quic_4.bin \
-        --blob=quic5:@${ZAPRET2_DIR}/files/fake/quic_5.bin \
-        --blob=quic6:@${ZAPRET2_DIR}/files/fake/quic_6.bin \
-        --blob=quic7:@${ZAPRET2_DIR}/files/fake/quic_7.bin \
-        --blob=quic_test:@${ZAPRET2_DIR}/files/fake/quic_test_00.bin \
-        --blob=fake_quic:@${ZAPRET2_DIR}/files/fake/fake_quic_1.bin \
-        --blob=fake_quic1:@${ZAPRET2_DIR}/files/fake/fake_quic_1.bin \
-        --blob=fake_quic2:@${ZAPRET2_DIR}/files/fake/fake_quic_2.bin \
-        --blob=fake_quic3:@${ZAPRET2_DIR}/files/fake/fake_quic_3.bin \
-        --hostlist-exclude="${LISTS_DIR}/whitelist.txt" \
-        \
-        --hostlist="${EXTRA_STRATS_DIR}/TCP/RKN/List.txt" \
-        $RKN_TCP \
-        \
-        --new \
-        --hostlist="${EXTRA_STRATS_DIR}/TCP/YT/List.txt" \
-        $YOUTUBE_TCP_TCP \
-        --new \
-        --hostlist-domains=googlevideo.com \
-        $YOUTUBE_GV_TCP \
-        \
-        --new \
-        --hostlist="${EXTRA_STRATS_DIR}/UDP/YT/List.txt" \
-        $QUIC_UDP \
-        \
-        --new \
-        --hostlist="${EXTRA_STRATS_DIR}/UDP/RUTRACKER/List.txt" \
-        $QUIC_RKN_UDP \
-        \
-        --new \
-        --hostlist="${LISTS_DIR}/discord.txt" \
-        $DISCORD_TCP \
-        --new \
-        --hostlist="${LISTS_DIR}/discord.txt" \
-        $DISCORD_UDP \
-        \
-        --new \
-        --hostlist="${LISTS_DIR}/custom.txt" \
-        $CUSTOM_TCP \
-        $([ "$ALL_TCP443_ENABLED" = "1" ] && echo "\
-        --new \
-        $ALL_TCP443_STRATEGY") \
-        >/dev/null 2>&1 &
-
-    sleep 2
-
-    if pgrep -f "$NFQWS" >/dev/null; then
-        echo "zapret2 started"
-        return 0
     else
-        echo "zapret2 failed to start"
-        echo "Debug: checking processes..."
-        ps | grep nfqws || echo "No nfqws process found"
-        return 1
-    fi
+        print_warning "S99zapret2.new не найден в files/, создаю встроенную версию..."
+
+        # Fallback: создать минимальный init скрипт на основе официального
+        cat > "$INIT_SCRIPT" <<'INIT_SCRIPT'
+#!/bin/sh
+# Minimal fallback init script if S99zapret2.new is not available
+# This should not normally be used - main installation uses S99zapret2.new
+
+ZAPRET_BASE=/opt/zapret2
+ZAPRET_CONFIG="\$ZAPRET_BASE/config"
+
+# Source official modules
+[ -f "\$ZAPRET_BASE/common/base.sh" ] && . "\$ZAPRET_BASE/common/base.sh"
+[ -f "\$ZAPRET_BASE/common/linux_fw.sh" ] && . "\$ZAPRET_BASE/common/linux_fw.sh"
+[ -f "\$ZAPRET_BASE/common/linux_daemons.sh" ] && . "\$ZAPRET_BASE/common/linux_daemons.sh"
+
+# Load config
+[ -f "\$ZAPRET_CONFIG" ] && . "\$ZAPRET_CONFIG"
+
+start() {
+    echo "Starting zapret2 (fallback mode)"
+    zapret_apply_firewall
+    zapret_run_daemons
 }
 
 stop() {
-    echo "Stopping $DESC"
-
-    # Убить все процессы nfqws2
-    killall nfqws2 2>/dev/null
-
-    # Очистить правила iptables
-    iptables -t mangle -F ZAPRET 2>/dev/null
-    iptables -t mangle -D FORWARD -j ZAPRET 2>/dev/null
-    iptables -t mangle -X ZAPRET 2>/dev/null
-
-    echo "zapret2 stopped"
+    echo "Stopping zapret2 (fallback mode)"
+    zapret_stop_daemons
+    zapret_unapply_firewall
 }
 
 restart() {
@@ -928,45 +754,38 @@ restart() {
 }
 
 status() {
-    if pgrep -f "$NFQWS" >/dev/null; then
-        echo "zapret2 is running"
-        echo "Processes:"
-        pgrep -af "$NFQWS"
-        return 0
-    else
-        echo "zapret2 is not running"
-        return 1
-    fi
+    pgrep -af nfqws2
 }
 
-# ==============================================================================
-# MAIN
-# ==============================================================================
-
-case "$1" in
-    start)
-        start
-        ;;
-    stop)
-        stop
-        ;;
-    restart)
-        restart
-        ;;
-    status)
-        status
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|status}"
-        exit 1
-        ;;
+case "\$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) restart ;;
+    status) status ;;
+    *) echo "Usage: \$0 {start|stop|restart|status}"; exit 1 ;;
 esac
 INIT_SCRIPT
+    fi
+
+    # ========================================================================
+    # 8.3: Финализация init скрипта
+    # ========================================================================
 
     # Сделать исполняемым
-    chmod +x "$INIT_SCRIPT"
+    chmod +x "$INIT_SCRIPT" || {
+        print_error "Не удалось установить права на init скрипт"
+        return 1
+    }
 
-    print_success "Init скрипт создан: $INIT_SCRIPT"
+    print_success "Init скрипт установлен: $INIT_SCRIPT"
+
+    # Показать информацию о новом подходе
+    print_info "Init скрипт использует:"
+    print_info "  - Модули из $ZAPRET2_DIR/common/"
+    print_info "  - Config файл: $zapret_config"
+    print_info "  - Стратегии из config (config-driven, не hardcoded)"
+    print_info "  - PID файлы для graceful shutdown"
+    print_info "  - Разделение firewall/daemons"
 
     return 0
 }
@@ -1155,7 +974,7 @@ run_full_install() {
     step_verify_installation || return 1
     step_download_domain_lists || return 1
     step_disable_hwnat || return 1
-    step_create_init_script || return 1
+    step_create_config_and_init || return 1
     step_install_netfilter_hook || return 1
     step_finalize || return 1
 
