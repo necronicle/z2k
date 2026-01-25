@@ -238,8 +238,20 @@ download_file() {
 backup_file() {
     local file=$1
     local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
+    local max_backups=5  # Хранить только последние 5 бэкапов
 
     if [ -f "$file" ]; then
+        # Очистить старые бэкапы, оставив только последние (max_backups - 1)
+        # -1 потому что сейчас создадим еще один
+        local old_backups
+        old_backups=$(ls -t "${file}.backup."* 2>/dev/null | tail -n +${max_backups})
+        if [ -n "$old_backups" ]; then
+            echo "$old_backups" | while read -r old_backup; do
+                rm -f "$old_backup" 2>/dev/null
+            done
+        fi
+
+        # Создать новый бэкап
         cp "$file" "$backup" || return 1
         print_info "Резервная копия: $backup"
     fi
@@ -262,6 +274,40 @@ restore_backup() {
         print_error "Резервная копия не найдена"
         return 1
     fi
+}
+
+# Очистить старые бэкапы для файла
+cleanup_backups() {
+    local file=$1
+    local keep=${2:-5}  # По умолчанию хранить 5 последних
+
+    local all_backups
+    all_backups=$(ls -t "${file}.backup."* 2>/dev/null)
+
+    if [ -z "$all_backups" ]; then
+        print_info "Бэкапы не найдены для $file"
+        return 0
+    fi
+
+    local total_count
+    total_count=$(echo "$all_backups" | wc -l)
+
+    if [ "$total_count" -le "$keep" ]; then
+        print_info "Бэкапов: $total_count (в пределах нормы)"
+        return 0
+    fi
+
+    local to_delete
+    to_delete=$(echo "$all_backups" | tail -n +$((keep + 1)))
+
+    local deleted=0
+    echo "$to_delete" | while read -r backup; do
+        rm -f "$backup" 2>/dev/null && deleted=$((deleted + 1))
+    done
+
+    local remaining=$keep
+    print_success "Очищено бэкапов: $((total_count - remaining)), осталось: $remaining"
+    return 0
 }
 
 # Проверить бинарный файл

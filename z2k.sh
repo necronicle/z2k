@@ -347,6 +347,10 @@ handle_arguments() {
             echo "z2k v${Z2K_VERSION}"
             echo "zapret2: $(get_nfqws2_version)"
             ;;
+        cleanup)
+            print_info "Очистка старых бэкапов..."
+            cleanup_backups "${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}" 5
+            ;;
         help|h|-h|--help)
             show_help
             ;;
@@ -372,6 +376,7 @@ show_help() {
   uninstall        Удалить zapret2
   status, s        Показать статус системы
   update, u        Обновить z2k до последней версии
+  cleanup          Очистить старые бэкапы (оставить 5 последних)
   version, v       Показать версию
   help, h          Показать эту справку
 
@@ -383,6 +388,7 @@ show_help() {
   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/test/z2k.sh | sh
   sh z2k.sh install
   sh z2k.sh menu
+  sh z2k.sh cleanup
 
 EOF
 }
