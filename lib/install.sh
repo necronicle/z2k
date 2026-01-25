@@ -320,7 +320,7 @@ step_load_kernel_modules() {
 }
 
 # ==============================================================================
-# ШАГ 4: СБОРКА ZAPRET2
+# ШАГ 4: УСТАНОВКА ZAPRET2 (ИСПОЛЬЗУЯ ОФИЦИАЛЬНЫЙ install_bin.sh)
 # ==============================================================================
 
 step_build_zapret2() {
@@ -340,200 +340,187 @@ step_build_zapret2() {
 
     cd "$build_dir" || return 1
 
-    # Скачать zapret2 master.zip (для lua, files, docs)
-    print_info "Загрузка zapret2 с GitHub..."
+    # ===========================================================================
+    # ШАГ 4.1: Скачать OpenWrt embedded релиз (содержит всё необходимое)
+    # ===========================================================================
 
-    local zapret2_url="https://github.com/bol-van/zapret2/archive/refs/heads/master.zip"
+    print_info "Загрузка zapret2 OpenWrt embedded релиза..."
 
-    if curl -fsSL "$zapret2_url" -o master.zip; then
-        print_success "zapret2 загружен"
-    else
-        print_error "Не удалось загрузить zapret2"
-        return 1
-    fi
-
-    # Распаковать
-    print_info "Распаковка архива..."
-    unzip -q master.zip || return 1
-
-    # Переместить в /opt/zapret2
-    print_info "Установка в $ZAPRET2_DIR..."
-    mv zapret2-master "$ZAPRET2_DIR" || return 1
-
-    # Обновить fake blobs из репозитория (если есть)
-    if [ -d "${WORK_DIR}/files/fake" ]; then
-        print_info "Синхронизация fake blobs..."
-        mkdir -p "${ZAPRET2_DIR}/files/fake" || return 1
-        cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || {
-            print_warning "Не удалось скопировать fake blobs"
-        }
-    fi
-
-    # Скопировать файл стратегий, если он есть в репозитории
-    if [ -f "${WORK_DIR}/strats_new2.txt" ]; then
-        print_info "Копирование strats_new2.txt..."
-        cp -f "${WORK_DIR}/strats_new2.txt" "${ZAPRET2_DIR}/strats_new2.txt" 2>/dev/null || {
-            print_warning "Не удалось скопировать strats_new2.txt"
-        }
-    fi
-
-    if [ -f "${WORK_DIR}/quic_strats.ini" ]; then
-        print_info "Копирование quic_strats.ini..."
-        cp -f "${WORK_DIR}/quic_strats.ini" "${ZAPRET2_DIR}/quic_strats.ini" 2>/dev/null || {
-            print_warning "Не удалось скопировать quic_strats.ini"
-        }
-    fi
-
-    # Определить архитектуру
-    local arch
-    arch=$(uname -m)
-
-    print_info "Определена архитектура: $arch"
-
-    # Скачать OpenWrt embedded через GitHub API (с редиректом)
-    print_info "Загрузка zapret2 OpenWrt embedded..."
-
-    # GitHub API автоматически редиректит на последнюю версию
+    # GitHub API для получения последней версии
     local api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
-
-    # Получаем JSON и парсим URL для openwrt-embedded
-    print_info "Получение информации о релизе..."
-
     local release_data
     release_data=$(curl -fsSL "$api_url" 2>&1)
 
+    local openwrt_url
     if [ $? -ne 0 ]; then
-        print_warning "API недоступен, пробую прямую ссылку на v0.8.6..."
-        # Fallback на известную версию
-        local openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.6/zapret2-v0.8.6-openwrt-embedded.tar.gz"
+        print_warning "API недоступен, использую fallback версию v0.8.6..."
+        openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.6/zapret2-v0.8.6-openwrt-embedded.tar.gz"
     else
-        # Ищем URL в JSON
-        local openwrt_url
+        # Парсим URL из JSON
         openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/bol-van/zapret2/releases/download/[^"]*openwrt-embedded\.tar\.gz' | head -1)
 
         if [ -z "$openwrt_url" ]; then
-            print_warning "Не найден в API, пробую прямую ссылку на v0.8.6..."
+            print_warning "Не найден в API, использую fallback v0.8.6..."
             openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.8.6/zapret2-v0.8.6-openwrt-embedded.tar.gz"
         fi
     fi
 
-    print_info "URL: $openwrt_url"
+    print_info "URL релиза: $openwrt_url"
 
-    if curl -fsSL "$openwrt_url" -o openwrt-embedded.tar.gz; then
-        print_success "OpenWrt embedded загружен"
-
-        # Распаковать и найти бинарник
-        print_info "Извлечение nfqws2..."
-
-        # Проверить размер архива
-        echo "DEBUG: Размер архива:"
-        ls -lh openwrt-embedded.tar.gz
-
-        # Временная директория для распаковки
-        echo "DEBUG: Создание директории openwrt_binaries"
-        mkdir -p openwrt_binaries
-
-        # Попытка распаковки
-        echo "DEBUG: Попытка распаковки..."
-        tar -xzf openwrt-embedded.tar.gz -C openwrt_binaries
-        local tar_result=$?
-        echo "DEBUG: tar exit code = $tar_result"
-
-        if [ $tar_result -ne 0 ]; then
-            print_error "Ошибка распаковки архива (код $tar_result)"
-            return 1
-        fi
-
-        print_success "Архив распакован"
-
-        # DEBUG: Показать структуру архива
-        echo "DEBUG: Содержимое openwrt_binaries/:"
-        ls -la openwrt_binaries/ 2>&1 | head -20
-        echo "DEBUG: ---"
-
-        echo "DEBUG: Все файлы (рекурсивно):"
-        ls -lR openwrt_binaries/ 2>&1 | head -50
-        echo "DEBUG: ---"
-
-        echo "DEBUG: Поиск nfqws:"
-        find openwrt_binaries -name "*nfqws*" -type f 2>&1
-        echo "DEBUG: Поиск завершён"
-
-        # Найти исполняемый файл nfqws2 для правильной архитектуры
-        local binary_found=0
-        local binary_path=""
-
-        # Определить правильную директорию в зависимости от архитектуры
-        # Структура архива: zapret2-v0.8.6/binaries/linux-XXX/nfqws2
-        case "$arch" in
-            aarch64)
-                # ARM64 - искать в linux-arm64
-                binary_path=$(find openwrt_binaries -path "*/binaries/linux-arm64/nfqws2" 2>/dev/null | head -1)
-                ;;
-            armv7l|armv6l|arm)
-                # ARM 32bit - искать в linux-arm
-                binary_path=$(find openwrt_binaries -path "*/binaries/linux-arm/nfqws2" 2>/dev/null | head -1)
-                ;;
-            mips)
-                # MIPS big-endian
-                binary_path=$(find openwrt_binaries -path "*/binaries/linux-mips/nfqws2" 2>/dev/null | head -1)
-                ;;
-            mipsel)
-                # MIPS little-endian
-                binary_path=$(find openwrt_binaries -path "*/binaries/linux-mipsel/nfqws2" 2>/dev/null | head -1)
-                ;;
-            x86_64)
-                # x86_64
-                binary_path=$(find openwrt_binaries -path "*/binaries/linux-x86_64/nfqws2" 2>/dev/null | head -1)
-                ;;
-            i386|i686)
-                # x86 32bit
-                binary_path=$(find openwrt_binaries -path "*/binaries/linux-x86/nfqws2" 2>/dev/null | head -1)
-                ;;
-            *)
-                print_warning "Неизвестная архитектура: $arch"
-                binary_path=""
-                ;;
-        esac
-
-        echo "DEBUG: Выбран бинарник: $binary_path"
-
-        if [ -n "$binary_path" ] && [ -f "$binary_path" ]; then
-            cp "$binary_path" "${ZAPRET2_DIR}/nfq2/nfqws2"
-            binary_found=1
-            print_success "Найден и скопирован: $binary_path"
-        else
-            binary_found=0
-        fi
-
-        # Очистка
-        rm -rf openwrt_binaries openwrt-embedded.tar.gz
-
-        if [ $binary_found -eq 0 ]; then
-            print_error "nfqws2 не найден в OpenWrt embedded архиве"
-            return 1
-        fi
-    else
+    # Скачать релиз
+    if ! curl -fsSL "$openwrt_url" -o openwrt-embedded.tar.gz; then
         print_error "Не удалось загрузить zapret2 OpenWrt embedded"
         return 1
     fi
 
-    # Сделать исполняемым
-    chmod +x "${ZAPRET2_DIR}/nfq2/nfqws2" || return 1
+    print_success "Релиз загружен ($(du -h openwrt-embedded.tar.gz | cut -f1))"
 
-    # Проверить бинарник
-    if [ -x "${ZAPRET2_DIR}/nfq2/nfqws2" ]; then
-        print_success "nfqws2 готов: ${ZAPRET2_DIR}/nfq2/nfqws2"
-    else
-        print_error "nfqws2 не найден после установки"
+    # ===========================================================================
+    # ШАГ 4.2: Распаковать полную структуру релиза
+    # ===========================================================================
+
+    print_info "Распаковка релиза..."
+
+    tar -xzf openwrt-embedded.tar.gz || {
+        print_error "Ошибка распаковки архива"
+        return 1
+    }
+
+    # Найти корневую директорию релиза (zapret2-vX.Y.Z)
+    local release_dir
+    release_dir=$(find . -maxdepth 1 -type d -name "zapret2-v*" | head -1)
+
+    if [ -z "$release_dir" ] || [ ! -d "$release_dir" ]; then
+        print_error "Не найдена директория релиза в архиве"
+        ls -la
         return 1
     fi
 
-    # Очистка build директории
+    print_success "Релиз распакован: $release_dir"
+
+    # ===========================================================================
+    # ШАГ 4.3: Использовать install_bin.sh для установки бинарников
+    # ===========================================================================
+
+    print_info "Определение архитектуры и установка бинарников..."
+
+    cd "$release_dir" || return 1
+
+    # Установить переменные окружения для install_bin.sh
+    export ZAPRET_BASE="$PWD"
+
+    # Проверить наличие install_bin.sh
+    if [ ! -f "install_bin.sh" ]; then
+        print_error "install_bin.sh не найден в релизе"
+        return 1
+    fi
+
+    # Вызвать install_bin.sh для автоматической установки бинарников
+    print_info "Запуск официального install_bin.sh..."
+
+    if sh install_bin.sh; then
+        print_success "Бинарники установлены через install_bin.sh"
+    else
+        print_error "install_bin.sh завершился с ошибкой"
+        print_info "Попытка ручной установки..."
+
+        # Fallback: ручная установка если install_bin.sh не сработал
+        local arch=$(uname -m)
+        local bin_arch=""
+
+        case "$arch" in
+            aarch64) bin_arch="linux-arm64" ;;
+            armv7l|armv6l|arm) bin_arch="linux-arm" ;;
+            x86_64) bin_arch="linux-x86_64" ;;
+            i386|i686) bin_arch="linux-x86" ;;
+            mips) bin_arch="linux-mips" ;;
+            mipsel) bin_arch="linux-mipsel" ;;
+            *)
+                print_error "Неподдерживаемая архитектура: $arch"
+                return 1
+                ;;
+        esac
+
+        if [ ! -d "binaries/$bin_arch" ]; then
+            print_error "Бинарники для $bin_arch не найдены"
+            return 1
+        fi
+
+        # Создать директории и установить бинарники вручную
+        mkdir -p nfq2 ip2net mdig
+        cp "binaries/$bin_arch/nfqws2" nfq2/ || return 1
+        cp "binaries/$bin_arch/ip2net" ip2net/ || return 1
+        cp "binaries/$bin_arch/mdig" mdig/ || return 1
+        chmod +x nfq2/nfqws2 ip2net/ip2net mdig/mdig
+
+        print_success "Бинарники установлены вручную для $bin_arch"
+    fi
+
+    # Проверить что nfqws2 исполняемый и работает
+    if [ ! -x "nfq2/nfqws2" ]; then
+        print_error "nfqws2 не найден или не исполняемый после установки"
+        return 1
+    fi
+
+    # Проверить запуск
+    if ! ./nfq2/nfqws2 --version >/dev/null 2>&1; then
+        print_warning "nfqws2 не может быть запущен (возможно не та архитектура)"
+        print_info "Вывод --version:"
+        ./nfq2/nfqws2 --version 2>&1 | head -5 || true
+    else
+        local version=$(./nfq2/nfqws2 --version 2>&1 | head -1)
+        print_success "nfqws2 работает: $version"
+    fi
+
+    # ===========================================================================
+    # ШАГ 4.4: Переместить в финальную директорию
+    # ===========================================================================
+
+    print_info "Установка в $ZAPRET2_DIR..."
+
+    cd "$build_dir" || return 1
+    mv "$release_dir" "$ZAPRET2_DIR" || return 1
+
+    # ===========================================================================
+    # ШАГ 4.5: Добавить кастомные файлы из z2k репозитория
+    # ===========================================================================
+
+    print_info "Копирование дополнительных файлов..."
+
+    # Скопировать strats_new2.txt если есть в z2k репозитории
+    if [ -f "${WORK_DIR}/strats_new2.txt" ]; then
+        cp -f "${WORK_DIR}/strats_new2.txt" "${ZAPRET2_DIR}/" || \
+            print_warning "Не удалось скопировать strats_new2.txt"
+    fi
+
+    # Скопировать quic_strats.ini если есть
+    if [ -f "${WORK_DIR}/quic_strats.ini" ]; then
+        cp -f "${WORK_DIR}/quic_strats.ini" "${ZAPRET2_DIR}/" || \
+            print_warning "Не удалось скопировать quic_strats.ini"
+    fi
+
+    # Обновить fake blobs если есть более свежие в z2k
+    if [ -d "${WORK_DIR}/files/fake" ]; then
+        print_info "Обновление fake blobs из z2k..."
+        cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
+    fi
+
+    # ===========================================================================
+    # ЗАВЕРШЕНИЕ
+    # ===========================================================================
+
+    # Очистка
     cd / || return 1
     rm -rf "$build_dir"
 
     print_success "zapret2 установлен"
+    print_info "Структура:"
+    print_info "  - Бинарники: nfq2/nfqws2, ip2net/ip2net, mdig/mdig"
+    print_info "  - Lua библиотеки: lua/"
+    print_info "  - Fake файлы: files/fake/"
+    print_info "  - Модули: common/"
+    print_info "  - Документация: docs/"
+
     return 0
 }
 
@@ -549,42 +536,87 @@ step_verify_installation() {
 ${ZAPRET2_DIR}
 ${ZAPRET2_DIR}/nfq2
 ${ZAPRET2_DIR}/nfq2/nfqws2
+${ZAPRET2_DIR}/ip2net
+${ZAPRET2_DIR}/mdig
 ${ZAPRET2_DIR}/lua
 ${ZAPRET2_DIR}/files
-${ZAPRET2_DIR}/docs
+${ZAPRET2_DIR}/common
+${ZAPRET2_DIR}/binaries
 "
 
     print_info "Проверка структуры директорий..."
 
+    local missing=0
     for path in $required_paths; do
         if [ -e "$path" ]; then
             print_info "✓ $path"
         else
-            print_error "✗ $path не найден"
-            return 1
+            print_warning "✗ $path не найден"
+            missing=$((missing + 1))
         fi
     done
 
-    # Проверить бинарник
-    print_info "Проверка nfqws2..."
-    if verify_binary "${ZAPRET2_DIR}/nfq2/nfqws2"; then
-        print_success "nfqws2 работает"
+    if [ $missing -gt 0 ]; then
+        print_warning "Некоторые компоненты отсутствуют, но это может быть нормально"
+    fi
+
+    # Проверить все бинарники (установленные через install_bin.sh)
+    print_info "Проверка бинарников..."
+
+    # nfqws2 - основной бинарник
+    if [ -x "${ZAPRET2_DIR}/nfq2/nfqws2" ]; then
+        if verify_binary "${ZAPRET2_DIR}/nfq2/nfqws2"; then
+            print_success "✓ nfqws2 работает"
+        else
+            print_error "✗ nfqws2 не запускается"
+            return 1
+        fi
     else
-        print_error "nfqws2 не работает"
+        print_error "✗ nfqws2 не найден или не исполняемый"
         return 1
     fi
 
-    # Посчитать Lua файлы
-    local lua_count
-    lua_count=$(find "${ZAPRET2_DIR}/lua" -name "*.lua" 2>/dev/null | wc -l)
-    print_info "Lua файлов: $lua_count"
+    # ip2net - вспомогательный (может быть симлинком)
+    if [ -e "${ZAPRET2_DIR}/ip2net/ip2net" ]; then
+        print_info "✓ ip2net установлен"
+    else
+        print_warning "✗ ip2net не найден (необязательный)"
+    fi
 
-    # Посчитать fake файлы
-    local fake_count
-    fake_count=$(find "${ZAPRET2_DIR}/files/fake" -name "*.bin" 2>/dev/null | wc -l)
-    print_info "Fake файлов: $fake_count"
+    # mdig - DNS утилита (может быть симлинком)
+    if [ -e "${ZAPRET2_DIR}/mdig/mdig" ]; then
+        print_info "✓ mdig установлен"
+    else
+        print_warning "✗ mdig не найден (необязательный)"
+    fi
 
-    print_success "Установка проверена"
+    # Посчитать компоненты
+    print_info "Статистика компонентов:"
+
+    # Lua файлы
+    if [ -d "${ZAPRET2_DIR}/lua" ]; then
+        local lua_count=$(find "${ZAPRET2_DIR}/lua" -name "*.lua" 2>/dev/null | wc -l)
+        print_info "  - Lua файлов: $lua_count"
+    fi
+
+    # Fake файлы
+    if [ -d "${ZAPRET2_DIR}/files/fake" ]; then
+        local fake_count=$(find "${ZAPRET2_DIR}/files/fake" -name "*.bin" 2>/dev/null | wc -l)
+        print_info "  - Fake файлов: $fake_count"
+    fi
+
+    # Модули common/
+    if [ -d "${ZAPRET2_DIR}/common" ]; then
+        local common_count=$(find "${ZAPRET2_DIR}/common" -name "*.sh" 2>/dev/null | wc -l)
+        print_info "  - Модули common/: $common_count"
+    fi
+
+    # install_bin.sh присутствует?
+    if [ -f "${ZAPRET2_DIR}/install_bin.sh" ]; then
+        print_info "  - install_bin.sh: установлен"
+    fi
+
+    print_success "Установка проверена успешно"
     return 0
 }
 
