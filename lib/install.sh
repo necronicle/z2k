@@ -718,12 +718,6 @@ QUIC_RKN_TCP=""
 QUIC_RKN_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
 # QUIC_RKN_MARKER_END
 
-# QUIC стратегия (Cloudflare UDP 443)
-# QUIC_CF_MARKER_START
-QUIC_CF_TCP=""
-QUIC_CF_UDP="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
-# QUIC_CF_MARKER_END
-
 # STRATEGY_MARKER_END
 
 # ==============================================================================
@@ -852,10 +846,6 @@ start() {
         --new \
         --hostlist="${EXTRA_STRATS_DIR}/UDP/RUTRACKER/List.txt" \
         $QUIC_RKN_UDP \
-        \
-        --new \
-        --ipset="${EXTRA_STRATS_DIR}/UDP/CLOUDFLARE/ipset-cloudflare4.txt" \
-        $QUIC_CF_UDP \
         \
         --new \
         --hostlist="${LISTS_DIR}/discord.txt" \
