@@ -187,6 +187,134 @@ show_domain_lists_stats() {
     print_separator
 }
 
+# Показать какие списки обрабатываются и режим работы
+show_active_processing() {
+    print_header "Активная обработка трафика"
+
+    # Проверить режим ALL_TCP443
+    local all_tcp443_enabled=0
+    local all_tcp443_strategy=""
+    local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
+
+    if [ -f "$all_tcp443_conf" ]; then
+        . "$all_tcp443_conf"
+        all_tcp443_enabled=$ENABLED
+        all_tcp443_strategy=$STRATEGY
+    fi
+
+    # Проверить QUIC RuTracker
+    local rkn_quic_enabled=0
+    if is_rutracker_quic_enabled 2>/dev/null; then
+        rkn_quic_enabled=1
+    fi
+
+    # Показать режим работы
+    print_info "Режим обработки трафика:"
+    printf "\n"
+
+    if [ "$all_tcp443_enabled" = "1" ]; then
+        print_warning "⚠️  РЕЖИМ ALL TCP-443 ВКЛЮЧЕН"
+        printf "    Обрабатывается ВЕСЬ HTTPS трафик (порт 443)\n"
+        printf "    Стратегия: #%s\n" "$all_tcp443_strategy"
+        printf "    Списки доменов НЕ используются!\n"
+        print_separator
+    else
+        print_success "✓ Режим по спискам доменов (нормальный)"
+        printf "\n"
+    fi
+
+    # Показать активные списки
+    print_info "Обрабатываемые списки доменов:"
+    print_separator
+    printf "%-30s | %-10s | %s\n" "Категория" "Доменов" "Статус"
+    print_separator
+
+    # RKN TCP
+    local rkn_list="${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt"
+    if [ -f "$rkn_list" ]; then
+        local count
+        count=$(wc -l < "$rkn_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s | %s\n" "RKN (заблокированные)" "$count" "Активен"
+    fi
+
+    # YouTube TCP
+    local yt_tcp_list="${ZAPRET2_DIR}/extra_strats/TCP/YT/List.txt"
+    if [ -f "$yt_tcp_list" ]; then
+        local count
+        count=$(wc -l < "$yt_tcp_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s | %s\n" "YouTube TCP" "$count" "Активен"
+    fi
+
+    # YouTube GV
+    printf "%-30s | %-10s | %s\n" "YouTube GV (CDN)" "googlevideo.com" "Активен"
+
+    # QUIC YouTube
+    local quic_yt_list="${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt"
+    if [ -f "$quic_yt_list" ]; then
+        local count
+        count=$(wc -l < "$quic_yt_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s | %s\n" "QUIC YouTube (UDP 443)" "$count" "Активен"
+    fi
+
+    # QUIC RuTracker
+    local rt_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/RUTRACKER/List.txt"
+    if [ -f "$rt_quic_list" ]; then
+        local count
+        count=$(wc -l < "$rt_quic_list" 2>/dev/null || echo "0")
+        local status
+        if [ "$rkn_quic_enabled" = "1" ]; then
+            status="Активен"
+        else
+            status="Выключен"
+        fi
+        printf "%-30s | %-10s | %s\n" "QUIC RuTracker (UDP 443)" "$count" "$status"
+    fi
+
+    # Discord
+    local discord_list="${LISTS_DIR}/discord.txt"
+    if [ -f "$discord_list" ]; then
+        local count
+        count=$(wc -l < "$discord_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s | %s\n" "Discord (TCP+UDP)" "$count" "Активен"
+    fi
+
+    # Custom
+    local custom_list="${LISTS_DIR}/custom.txt"
+    if [ -f "$custom_list" ]; then
+        local count
+        count=$(wc -l < "$custom_list" 2>/dev/null || echo "0")
+        local status="Пустой"
+        if [ "$count" -gt 0 ]; then
+            status="Активен"
+        fi
+        printf "%-30s | %-10s | %s\n" "Custom (пользовательские)" "$count" "$status"
+    fi
+
+    print_separator
+
+    # Показать исключения
+    print_info "Исключения (whitelist):"
+    local whitelist="${LISTS_DIR}/whitelist.txt"
+    if [ -f "$whitelist" ]; then
+        local count
+        count=$(grep -v "^#" "$whitelist" | grep -v "^$" | wc -l 2>/dev/null || echo "0")
+        printf "  %s доменов исключено из обработки\n" "$count"
+        printf "  Файл: %s\n" "$whitelist"
+    else
+        printf "  Whitelist не найден\n"
+    fi
+
+    print_separator
+
+    # Итого
+    if [ "$all_tcp443_enabled" = "1" ]; then
+        print_warning "ВНИМАНИЕ: Весь HTTPS трафик обрабатывается!"
+        print_info "Чтобы выключить: sh z2k.sh menu → [A] Режим ALL TCP-443"
+    else
+        print_success "Режим работы: только списки доменов (рекомендуется)"
+    fi
+}
+
 # Добавить домен в custom.txt
 add_custom_domain() {
     local domain=$1

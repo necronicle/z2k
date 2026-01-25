@@ -351,6 +351,10 @@ handle_arguments() {
             print_info "Очистка старых бэкапов..."
             cleanup_backups "${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}" 5
             ;;
+        check|info)
+            print_info "Проверка активной конфигурации..."
+            show_active_processing
+            ;;
         help|h|-h|--help)
             show_help
             ;;
@@ -375,6 +379,7 @@ show_help() {
   menu, m          Открыть интерактивное меню
   uninstall        Удалить zapret2
   status, s        Показать статус системы
+  check, info      Показать какие списки обрабатываются
   update, u        Обновить z2k до последней версии
   cleanup          Очистить старые бэкапы (оставить 5 последних)
   version, v       Показать версию
@@ -388,6 +393,7 @@ show_help() {
   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/test/z2k.sh | sh
   sh z2k.sh install
   sh z2k.sh menu
+  sh z2k.sh check
   sh z2k.sh cleanup
 
 EOF
