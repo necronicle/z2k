@@ -15,7 +15,7 @@ LIB_DIR="${WORK_DIR}/lib"
 GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/test"
 
 # Список модулей для загрузки
-MODULES="utils install strategies config menu discord"
+MODULES="utils install strategies config config_official menu discord"
 
 # ==============================================================================
 # ВСТРОЕННЫЕ FALLBACK ФУНКЦИИ
