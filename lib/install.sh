@@ -1127,13 +1127,34 @@ run_full_install() {
     step_install_netfilter_hook || return 1
     step_finalize || return 1
 
-    # После установки - автоматически запустить автотест по категориям
+    # После установки - выбор между автоподбором и дефолтными стратегиями
     print_separator
     print_info "Установка завершена успешно!"
-    print_info "Запуск автоматического подбора стратегий по категориям..."
     print_separator
 
-    auto_test_categories --auto
+    printf "\nНастройка стратегий DPI bypass:\n\n"
+    printf "1) Запустить автоподбор стратегий (рекомендуется)\n"
+    printf "   - Автоматическое тестирование для вашей сети\n"
+    printf "   - Занимает 8-10 минут\n"
+    printf "   - Подберет оптимальные стратегии для YouTube и RKN\n\n"
+    printf "2) Применить дефолтные стратегии\n"
+    printf "   - Быстрое применение проверенных стратегий\n"
+    printf "   - YouTube TCP: #252, YouTube GV: #790, RKN: #3\n"
+    printf "   - Может работать не во всех сетях\n\n"
+    printf "Ваш выбор [1/2]: "
+    read -r choice </dev/tty
+
+    case "$choice" in
+        2)
+            print_info "Применение дефолтных стратегий..."
+            apply_default_strategies --auto
+            ;;
+        *)
+            print_info "Запуск автоматического подбора стратегий..."
+            print_separator
+            auto_test_categories --auto
+            ;;
+    esac
 
     print_info "Открываю меню управления..."
     sleep 1

@@ -1693,6 +1693,69 @@ EOF
 }
 
 # ==============================================================================
+# ПРИМЕНЕНИЕ ДЕФОЛТНЫХ СТРАТЕГИЙ
+# ==============================================================================
+
+# Применить дефолтные стратегии без автоподбора
+apply_default_strategies() {
+    local auto_mode=0
+
+    # Проверить флаг --auto
+    if [ "$1" = "--auto" ]; then
+        auto_mode=1
+    fi
+
+    print_header "Применение дефолтных стратегий"
+
+    # Дефолтные стратегии:
+    # YouTube TCP: #252
+    # YouTube GV:  #790
+    # RKN:         #3
+    local default_yt_tcp=252
+    local default_yt_gv=790
+    local default_rkn=3
+
+    print_info "Будут применены следующие стратегии:"
+    print_info "  YouTube TCP: #$default_yt_tcp"
+    print_info "  YouTube GV:  #$default_yt_gv"
+    print_info "  RKN:         #$default_rkn"
+    printf "\n"
+
+    if [ "$auto_mode" -eq 0 ]; then
+        if ! confirm "Применить дефолтные стратегии?"; then
+            print_info "Отменено"
+            return 0
+        fi
+    fi
+
+    # Проверить существование стратегий
+    if ! strategy_exists "$default_yt_tcp"; then
+        print_warning "Стратегия #$default_yt_tcp не найдена, используется #1"
+        default_yt_tcp=1
+    fi
+
+    if ! strategy_exists "$default_yt_gv"; then
+        print_warning "Стратегия #$default_yt_gv не найдена, используется #1"
+        default_yt_gv=1
+    fi
+
+    if ! strategy_exists "$default_rkn"; then
+        print_warning "Стратегия #$default_rkn не найдена, используется #1"
+        default_rkn=1
+    fi
+
+    # Сохранить конфигурацию
+    save_category_strategies "$default_yt_tcp" "$default_yt_gv" "$default_rkn"
+
+    # Применить стратегии
+    apply_category_strategies_v2 "$default_yt_tcp" "$default_yt_gv" "$default_rkn"
+
+    print_success "Дефолтные стратегии применены"
+
+    return 0
+}
+
+# ==============================================================================
 # ЭКСПОРТ ФУНКЦИЙ
 # ==============================================================================
 
