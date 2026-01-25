@@ -829,14 +829,14 @@ start() {
         --blob=fake_quic3:@${ZAPRET2_DIR}/files/fake/fake_quic_3.bin \
         --hostlist-exclude="${LISTS_DIR}/whitelist.txt" \
         \
-        --hostlist="${LISTS_DIR}/rkn.txt" \
+        --hostlist="${EXTRA_STRATS_DIR}/TCP/RKN/List.txt" \
         $RKN_TCP \
         \
         --new \
-        --hostlist="${LISTS_DIR}/youtube.txt" \
+        --hostlist="${EXTRA_STRATS_DIR}/TCP/YT/List.txt" \
         $YOUTUBE_TCP_TCP \
         --new \
-        --hostlist="${LISTS_DIR}/youtube.txt" \
+        --hostlist-domains=googlevideo.com \
         $YOUTUBE_GV_TCP \
         \
         --new \

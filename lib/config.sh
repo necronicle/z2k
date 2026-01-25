@@ -9,179 +9,79 @@
 # Скачать списки доменов из zapret4rocket (z4r)
 download_domain_lists() {
     print_header "Загрузка списков доменов"
+    print_info "Источник: zapret4rocket (master branch)"
+    print_info "Списки используются как есть, без модификаций"
 
-    # Создать директорию для списков
-    mkdir -p "$LISTS_DIR" || {
-        print_error "Не удалось создать директорию: $LISTS_DIR"
+    # Создать структуру директорий
+    local yt_tcp_dir="${ZAPRET2_DIR}/extra_strats/TCP/YT"
+    local rkn_tcp_dir="${ZAPRET2_DIR}/extra_strats/TCP/RKN"
+    local yt_udp_dir="${ZAPRET2_DIR}/extra_strats/UDP/YT"
+    local rt_udp_dir="${ZAPRET2_DIR}/extra_strats/UDP/RUTRACKER"
+
+    mkdir -p "$yt_tcp_dir" "$rkn_tcp_dir" "$yt_udp_dir" "$rt_udp_dir" "$LISTS_DIR" || {
+        print_error "Не удалось создать директории"
         return 1
     }
 
-    print_info "Источник: zapret4rocket (master branch)"
+    # 1. YouTube TCP - загрузить из extra_strats/TCP/YT/List.txt
+    print_info "Загрузка YouTube TCP list..."
+    if curl -fsSL "${Z4R_BASE_URL}/extra_strats/TCP/YT/List.txt" -o "${yt_tcp_dir}/List.txt"; then
+        local count
+        count=$(wc -l < "${yt_tcp_dir}/List.txt" 2>/dev/null || echo "0")
+        print_success "YouTube TCP: $count доменов"
+    else
+        print_error "Ошибка загрузки YouTube TCP list"
+    fi
 
-    # Списки для загрузки (Z4R структура)
-    # Формат: source|target или special|url|target
-    # ВАЖНО: разделитель "|", а НЕ ":", т.к. URL содержат двоеточия!
-    local lists="
-russia-discord.txt|discord.txt
-russia-youtube.txt|youtube.txt
-special|${Z4R_RKN_URL}|rkn.txt
-"
+    # 2. YouTube GV - использует --hostlist-domains=googlevideo.com (список не нужен)
+    print_info "YouTube GV: используется --hostlist-domains=googlevideo.com"
 
-    local success=0
-    local failed=0
+    # 3. RKN - загрузить из extra_strats/TCP/RKN/List.txt (БЕЗ модификаций)
+    print_info "Загрузка RKN list..."
+    if curl -fsSL "${Z4R_BASE_URL}/extra_strats/TCP/RKN/List.txt" -o "${rkn_tcp_dir}/List.txt"; then
+        local count
+        count=$(wc -l < "${rkn_tcp_dir}/List.txt" 2>/dev/null || echo "0")
+        print_success "RKN: $count доменов"
+    else
+        print_error "Ошибка загрузки RKN list"
+    fi
 
-    echo "$lists" | while IFS='|' read -r source target extra; do
-        [ -z "$source" ] && continue
+    # 4. QUIC YouTube - загрузить из extra_strats/UDP/YT/List.txt
+    print_info "Загрузка QUIC YouTube list..."
+    if curl -fsSL "${Z4R_BASE_URL}/extra_strats/UDP/YT/List.txt" -o "${yt_udp_dir}/List.txt"; then
+        local count
+        count=$(wc -l < "${yt_udp_dir}/List.txt" 2>/dev/null || echo "0")
+        print_success "QUIC YouTube: $count доменов"
+    else
+        print_warning "Не удалось загрузить QUIC YouTube list"
+    fi
 
-        local url
-        local output
-        local display_name
+    # 5. Discord - загрузить из lists/russia-discord.txt
+    print_info "Загрузка Discord list..."
+    if curl -fsSL "${Z4R_LISTS_URL}/russia-discord.txt" -o "${LISTS_DIR}/discord.txt"; then
+        local count
+        count=$(wc -l < "${LISTS_DIR}/discord.txt" 2>/dev/null || echo "0")
+        print_success "Discord: $count доменов"
+    else
+        print_error "Ошибка загрузки Discord list"
+    fi
 
-        # Специальная обработка для файлов с custom URL
-        if [ "$source" = "special" ]; then
-            url="$target"
-            output="${LISTS_DIR}/${extra}"
-            display_name="RKN List"
-        else
-            url="${Z4R_LISTS_URL}/${source}"
-            output="${LISTS_DIR}/${target}"
-            display_name="${source}"
-        fi
-
-        print_info "Загрузка ${display_name}..."
-
-        if curl -fsSL "$url" -o "$output"; then
-            local count
-            count=$(wc -l < "$output" 2>/dev/null || echo "0")
-            print_success "$(basename "$output"): $count доменов"
-            success=$((success + 1))
-        else
-            print_error "Ошибка загрузки: ${display_name}"
-            failed=$((failed + 1))
-        fi
-    done
-
-    # Создать пустой custom.txt если не существует
+    # 6. Custom - создать пустой файл для пользовательских доменов
     if [ ! -f "${LISTS_DIR}/custom.txt" ]; then
         touch "${LISTS_DIR}/custom.txt"
         print_info "Создан custom.txt для пользовательских доменов"
     fi
 
-    # Списки для QUIC YouTube (zapret4rocket структура)
-    local yt_quic_dir="${ZAPRET2_DIR}/extra_strats/UDP/YT"
-    local yt_quic_list="${yt_quic_dir}/List.txt"
-    mkdir -p "$yt_quic_dir" || {
-        print_warning "Не удалось создать каталог QUIC YT: $yt_quic_dir"
-    }
-
-    print_info "Загрузка списка QUIC YT..."
-    if curl -fsSL "$Z4R_UDP_YT_LIST_URL" -o "$yt_quic_list"; then
-        local yt_count
-        yt_count=$(wc -l < "$yt_quic_list" 2>/dev/null || echo "0")
-        print_success "List.txt: $yt_count доменов"
-    else
-        print_warning "Не удалось загрузить список QUIC YT"
-    fi
-
-    # Создать пустые файлы 1..8 (совместимость с zapret4rocket)
-    for num in 1 2 3 4 5 6 7 8; do
-        if [ ! -f "${yt_quic_dir}/${num}.txt" ]; then
-            : > "${yt_quic_dir}/${num}.txt"
-        fi
-    done
-
-    # Список для QUIC RuTracker (локальный)
-    local rt_quic_dir="${ZAPRET2_DIR}/extra_strats/UDP/RUTRACKER"
-    local rt_quic_list="${rt_quic_dir}/List.txt"
-    mkdir -p "$rt_quic_dir" || {
-        print_warning "Не удалось создать каталог QUIC RuTracker: $rt_quic_dir"
-    }
-
-    cat > "$rt_quic_list" <<'EOF'
+    # 7. RuTracker QUIC - локальный список
+    cat > "${rt_udp_dir}/List.txt" <<'EOF'
 rutracker.org
 www.rutracker.org
 static.rutracker.cc
 fastpic.org
 t-ru.org
 www.t-ru.org
-cloudflare-ech.com
-cloudflare-dns.com
 EOF
-
-    # Дополнить RKN список критически важными доменами
-    # RuTracker требует static.rutracker.cc для статики (картинки, CSS)
-    # Cloudflare домены нужны для сайтов за CDN (rutracker, многие заблокированные сайты)
-    # Источник: https://github.com/Flowseal/zapret-discord-youtube/blob/main/lists/list-general.txt
-    if [ -f "${LISTS_DIR}/rkn.txt" ]; then
-        local rkn_additions="
-static.rutracker.cc
-static.t-ru.org
-cloudflare.com
-cloudflare.net
-cloudflare-dns.com
-cloudflare-ech.com
-cloudflareaccess.com
-cloudflareapps.com
-cloudflarebolt.com
-cloudflareclient.com
-cloudflareinsights.com
-cloudflareok.com
-cloudflarecp.com
-cloudflarepartners.com
-cloudflareportal.com
-cloudflarepreview.com
-cloudflareresolve.com
-cloudflaressl.com
-cloudflarestatus.com
-cloudflarestorage.com
-cloudflarestream.com
-cloudflaretest.com
-cloudfront.net
-one.one.one.one
-1.1.1.1
-warp.plus
-"
-        local added=0
-        echo "$rkn_additions" | while read -r domain; do
-            [ -z "$domain" ] && continue
-            if ! grep -qFx "$domain" "${LISTS_DIR}/rkn.txt" 2>/dev/null; then
-                echo "$domain" >> "${LISTS_DIR}/rkn.txt"
-                added=$((added + 1))
-            fi
-        done
-
-        if [ "$added" -gt 0 ]; then
-            print_info "Добавлено $added критически важных доменов (RuTracker, Cloudflare)"
-        fi
-
-        # Удалить дубликаты и пустые строки, сохраняя порядок
-        if awk 'NF { sub(/\r$/, ""); if (!seen[$0]++) print }' "${LISTS_DIR}/rkn.txt" \
-            > "${LISTS_DIR}/rkn.txt.tmp" 2>/dev/null; then
-            mv "${LISTS_DIR}/rkn.txt.tmp" "${LISTS_DIR}/rkn.txt"
-        else
-            rm -f "${LISTS_DIR}/rkn.txt.tmp"
-        fi
-    fi
-
-
-    # Дополнить Discord список важными доменами
-    if [ -f "${LISTS_DIR}/discord.txt" ]; then
-        local discord_additions="
-ntc.party
-"
-        local added=0
-        echo "$discord_additions" | while read -r domain; do
-            [ -z "$domain" ] && continue
-            if ! grep -qFx "$domain" "${LISTS_DIR}/discord.txt" 2>/dev/null; then
-                echo "$domain" >> "${LISTS_DIR}/discord.txt"
-                added=$((added + 1))
-            fi
-        done
-
-        if [ "$added" -gt 0 ]; then
-            print_info "Добавлено $added дополнительных доменов для Discord"
-        fi
-    fi
+    print_success "RuTracker QUIC: создан локальный список"
 
     print_separator
     print_success "Списки доменов загружены"
@@ -193,42 +93,17 @@ ntc.party
 update_domain_lists() {
     print_header "Обновление списков доменов"
 
-    # Проверить существование директории
-    if [ ! -d "$LISTS_DIR" ]; then
-        print_error "Директория списков не найдена: $LISTS_DIR"
-        print_info "Запустите установку сначала"
-        return 1
-    fi
-
-    # Создать backup существующих списков
-    print_info "Создание резервных копий..."
-    for list in discord.txt youtube.txt rkn.txt; do
-        if [ -f "${LISTS_DIR}/${list}" ]; then
-            cp "${LISTS_DIR}/${list}" "${LISTS_DIR}/${list}.backup"
-        fi
-    done
-
     # Скачать обновленные списки
     download_domain_lists
 
-    # Показать изменения
+    # Показать статистику
     print_separator
-    print_info "Текущие списки доменов:"
-
-    for list in discord.txt youtube.txt rkn.txt custom.txt; do
-        if [ -f "${LISTS_DIR}/${list}" ]; then
-            local count
-            count=$(wc -l < "${LISTS_DIR}/${list}" 2>/dev/null || echo "0")
-            printf "  %-20s: %s доменов\n" "$list" "$count"
-        fi
-    done
-
-    print_separator
+    show_domain_lists_stats
 
     # Спросить о перезапуске сервиса
     if is_zapret2_running; then
-        printf "Перезапустить сервис для применения изменений? [Y/n]: "
-        read -r answer </dev/tty </dev/tty
+        printf "\nПерезапустить сервис для применения изменений? [Y/n]: "
+        read -r answer </dev/tty
 
         case "$answer" in
             [Nn]|[Nn][Oo])
@@ -255,24 +130,59 @@ update_domain_lists() {
 show_domain_lists_stats() {
     print_header "Статистика списков доменов"
 
-    if [ ! -d "$LISTS_DIR" ]; then
-        print_error "Списки доменов не установлены"
-        return 1
-    fi
-
-    printf "%-20s | %-10s | %s\n" "Список" "Доменов" "Путь"
+    printf "%-30s | %-10s\n" "Список" "Доменов"
     print_separator
 
-    for list in discord.txt youtube.txt rkn.txt custom.txt; do
-        local path="${LISTS_DIR}/${list}"
-        if [ -f "$path" ]; then
-            local count
-            count=$(wc -l < "$path" 2>/dev/null || echo "0")
-            printf "%-20s | %-10s | %s\n" "$list" "$count" "$path"
-        else
-            printf "%-20s | %-10s | %s\n" "$list" "не найден" "-"
-        fi
-    done
+    # YouTube TCP
+    local yt_tcp_list="${ZAPRET2_DIR}/extra_strats/TCP/YT/List.txt"
+    if [ -f "$yt_tcp_list" ]; then
+        local count
+        count=$(wc -l < "$yt_tcp_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s\n" "YouTube TCP" "$count"
+    fi
+
+    # YouTube GV
+    printf "%-30s | %-10s\n" "YouTube GV" "--hostlist-domains"
+
+    # RKN
+    local rkn_list="${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt"
+    if [ -f "$rkn_list" ]; then
+        local count
+        count=$(wc -l < "$rkn_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s\n" "RKN" "$count"
+    fi
+
+    # QUIC YouTube
+    local quic_yt_list="${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt"
+    if [ -f "$quic_yt_list" ]; then
+        local count
+        count=$(wc -l < "$quic_yt_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s\n" "QUIC YouTube" "$count"
+    fi
+
+    # Discord
+    local discord_list="${LISTS_DIR}/discord.txt"
+    if [ -f "$discord_list" ]; then
+        local count
+        count=$(wc -l < "$discord_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s\n" "Discord" "$count"
+    fi
+
+    # Custom
+    local custom_list="${LISTS_DIR}/custom.txt"
+    if [ -f "$custom_list" ]; then
+        local count
+        count=$(wc -l < "$custom_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s\n" "Custom" "$count"
+    fi
+
+    # RuTracker QUIC
+    local rt_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/RUTRACKER/List.txt"
+    if [ -f "$rt_quic_list" ]; then
+        local count
+        count=$(wc -l < "$rt_quic_list" 2>/dev/null || echo "0")
+        printf "%-30s | %-10s\n" "RuTracker QUIC" "$count"
+    fi
 
     print_separator
 }
