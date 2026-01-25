@@ -201,6 +201,24 @@ get_rutracker_quic_strategy() {
     echo "43"
 }
 
+# Проверить включен ли QUIC для RuTracker
+is_rutracker_quic_enabled() {
+    local conf="${CONFIG_DIR}/rutracker_quic_enabled.conf"
+    if [ -f "$conf" ]; then
+        . "$conf"
+        [ "$RUTRACKER_QUIC_ENABLED" = "1" ] && return 0
+    fi
+    return 1
+}
+
+# Включить/выключить QUIC для RuTracker
+set_rutracker_quic_enabled() {
+    local enabled=$1  # 1 или 0
+    local conf="${CONFIG_DIR}/rutracker_quic_enabled.conf"
+    mkdir -p "$CONFIG_DIR" 2>/dev/null
+    echo "RUTRACKER_QUIC_ENABLED=${enabled}" > "$conf"
+}
+
 
 # Сохранить текущую QUIC стратегию
 set_current_quic_strategy() {
@@ -1633,7 +1651,13 @@ apply_category_strategies_v2() {
     local udp_quic
     local udp_quic_rutracker
     udp_quic=$(get_current_quic_profile_params)
-    udp_quic_rutracker=$(get_rutracker_quic_profile_params)
+
+    # QUIC для RuTracker применяется только если включено
+    if is_rutracker_quic_enabled; then
+        udp_quic_rutracker=$(get_rutracker_quic_profile_params)
+    else
+        udp_quic_rutracker=""
+    fi
 
     # Обновить маркеры в init скрипте
     update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "" "$init_script"
