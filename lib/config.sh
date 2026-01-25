@@ -387,31 +387,49 @@ EOF
     if [ ! -f "$whitelist" ]; then
         cat > "$whitelist" <<'EOF'
 # Whitelist - домены исключенные из обработки zapret2
-# Критичные государственные сервисы РФ
+# Сервисы, которые могут работать некорректно с DPI bypass
 
-# Госуслуги (ЕСИА)
+# Социальные сети и медиа
+pinterest.com
+vkvideo.ru
+vk.com
+rutube.ru
+
+# E-commerce и объявления
+avito.ru
+
+# Стриминг
+netflix.com
+vsetop.org
+twitch.tv
+ttvnw.net
+static-cdn.jtvnw.net
+
+# Google API
+jnn-pa.googleapis.com
+ogs.google.com
+encrypted-tbn0.gstatic.com
+encrypted-tbn1.gstatic.com
+encrypted-tbn2.gstatic.com
+encrypted-tbn3.gstatic.com
+
+# Gaming
+steamcommunity.com
+steampowered.com
+tarkov.com
+escapefromtarkov.com
+
+# Мониторинг и CDN
+browser-intake-datadoghq.com
+datadoghq.com
+okcdn.ru
+api.mycdn.me
+
+# Госуслуги
 gosuslugi.ru
-esia.gosuslugi.ru
-lk.gosuslugi.ru
-static.gosuslugi.ru
-beta.gosuslugi.ru
-pos.gosuslugi.ru
 
-# Налоговая служба
-nalog.gov.ru
-lkfl2.nalog.ru
-lkul.nalog.ru
-service.nalog.ru
-
-# Пенсионный фонд
-pfr.gov.ru
-es.pfr.gov.ru
-lkfr.pfr.gov.ru
-
-# Другие важные госсервисы
-mos.ru
-pgu.mos.ru
-uslugi.mosreg.ru
+# Разработка
+raw.githubusercontent.com
 EOF
 
         # Проверить что файл действительно создался
