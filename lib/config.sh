@@ -108,22 +108,6 @@ cloudflare-ech.com
 cloudflare-dns.com
 EOF
 
-    # Список IP для QUIC Cloudflare
-    local cf_quic_dir="${ZAPRET2_DIR}/extra_strats/UDP/CLOUDFLARE"
-    local cf_quic_list="${cf_quic_dir}/ipset-cloudflare4.txt"
-    mkdir -p "$cf_quic_dir" || {
-        print_warning "Не удалось создать каталог QUIC Cloudflare: $cf_quic_dir"
-    }
-
-    print_info "Загрузка IP Cloudflare (IPv4)..."
-    if curl -fsSL "https://www.cloudflare.com/ips-v4/" | tr -d '\r' > "$cf_quic_list"; then
-        local cf_count
-        cf_count=$(wc -l < "$cf_quic_list" 2>/dev/null || echo "0")
-        print_success "ipset-cloudflare4.txt: $cf_count подсетей"
-    else
-        print_warning "Не удалось загрузить IP Cloudflare"
-    fi
-
     # Дополнить RKN список критически важными доменами
     # RuTracker требует static.rutracker.cc для статики (картинки, CSS)
     # Cloudflare домены нужны для сайтов за CDN (rutracker, многие заблокированные сайты)
@@ -445,10 +429,6 @@ create_base_config() {
         echo "RUTRACKER_QUIC_STRATEGY=43" > "$RUTRACKER_QUIC_STRATEGY_FILE"
     fi
 
-    # Создать файл для QUIC стратегии Cloudflare
-    if [ ! -f "$CLOUDFLARE_QUIC_STRATEGY_FILE" ]; then
-        echo "CLOUDFLARE_QUIC_STRATEGY=43" > "$CLOUDFLARE_QUIC_STRATEGY_FILE"
-    fi
 
     # Удалить старый файл QUIC стратегий по категориям (больше не используется)
     local quic_category_conf="${CONFIG_DIR}/quic_category_strategies.conf"
@@ -566,9 +546,6 @@ show_current_config() {
     if [ -f "$RUTRACKER_QUIC_STRATEGY_FILE" ]; then
         printf "%-25s: #%s\n" "QUIC RuTracker" "$(get_rutracker_quic_strategy)"
     fi
-    if [ -f "$CLOUDFLARE_QUIC_STRATEGY_FILE" ]; then
-        printf "%-25s: #%s\n" "QUIC Cloudflare" "$(get_cloudflare_quic_strategy)"
-    fi
 
     print_separator
 
@@ -593,12 +570,6 @@ show_current_config() {
             local rt_quic_count
             rt_quic_count=$(wc -l < "$rt_quic_list" 2>/dev/null || echo "0")
             printf "  %-20s: %s доменов\n" "extra_strats/UDP/RUTRACKER/List.txt" "$rt_quic_count"
-        fi
-        local cf_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/CLOUDFLARE/ipset-cloudflare4.txt"
-        if [ -f "$cf_quic_list" ]; then
-            local cf_quic_count
-            cf_quic_count=$(wc -l < "$cf_quic_list" 2>/dev/null || echo "0")
-            printf "  %-20s: %s подсетей\n" "extra_strats/UDP/CLOUDFLARE/ipset-cloudflare4.txt" "$cf_quic_count"
         fi
     else
         print_info "Списки доменов: не установлены"

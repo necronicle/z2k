@@ -201,15 +201,6 @@ get_rutracker_quic_strategy() {
     echo "43"
 }
 
-# Получить текущую QUIC стратегию для Cloudflare
-get_cloudflare_quic_strategy() {
-    local conf="${CLOUDFLARE_QUIC_STRATEGY_FILE:-${CONFIG_DIR}/cloudflare_quic_strategy.conf}"
-    if [ -f "$conf" ]; then
-        . "$conf"
-        [ -n "$CLOUDFLARE_QUIC_STRATEGY" ] && echo "$CLOUDFLARE_QUIC_STRATEGY" && return 0
-    fi
-    echo "43"
-}
 
 # Сохранить текущую QUIC стратегию
 set_current_quic_strategy() {
@@ -225,12 +216,6 @@ set_rutracker_quic_strategy() {
     echo "RUTRACKER_QUIC_STRATEGY=$num" > "$conf"
 }
 
-# Сохранить текущую QUIC стратегию для Cloudflare
-set_cloudflare_quic_strategy() {
-    local num=$1
-    local conf="${CLOUDFLARE_QUIC_STRATEGY_FILE:-${CONFIG_DIR}/cloudflare_quic_strategy.conf}"
-    echo "CLOUDFLARE_QUIC_STRATEGY=$num" > "$conf"
-}
 
 # Построить параметры QUIC профиля из стратегии
 build_quic_profile_params() {
@@ -266,19 +251,6 @@ get_rutracker_quic_profile_params() {
     build_quic_profile_params "$quic_params"
 }
 
-# Получить параметры QUIC профиля для Cloudflare
-get_cloudflare_quic_profile_params() {
-    local quic_strategy
-    quic_strategy=$(get_cloudflare_quic_strategy)
-    local quic_params
-    quic_params=$(get_quic_strategy "$quic_strategy" 2>/dev/null)
-
-    if [ -z "$quic_params" ]; then
-        quic_params="--payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
-    fi
-
-    build_quic_profile_params "$quic_params"
-}
 
 # Проверить поддержку HTTP/3 (QUIC) в curl
 curl_supports_http3() {
@@ -460,12 +432,6 @@ QUIC_UDP="$quic_params"
 QUIC_RKN_TCP=""
 QUIC_RKN_UDP="$quic_params"
 # QUIC_RKN_MARKER_END
-
-# QUIC стратегия (Cloudflare UDP 443)
-# QUIC_CF_MARKER_START
-QUIC_CF_TCP=""
-QUIC_CF_UDP="$quic_params"
-# QUIC_CF_MARKER_END
 PROFILE
 }
 
@@ -1666,10 +1632,8 @@ apply_category_strategies_v2() {
     # QUIC параметры (единый профиль)
     local udp_quic
     local udp_quic_rutracker
-    local udp_quic_cloudflare
     udp_quic=$(get_current_quic_profile_params)
     udp_quic_rutracker=$(get_rutracker_quic_profile_params)
-    udp_quic_cloudflare=$(get_cloudflare_quic_profile_params)
 
     # Обновить маркеры в init скрипте
     update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "" "$init_script"
@@ -1685,7 +1649,6 @@ apply_category_strategies_v2() {
     update_init_section "CUSTOM" "$custom_tcp" "" "$init_script"
     update_init_section "QUIC" "" "$udp_quic" "$init_script"
     update_init_section "QUIC_RKN" "" "$udp_quic_rutracker" "$init_script"
-    update_init_section "QUIC_CF" "" "$udp_quic_cloudflare" "$init_script"
 
     print_success "Стратегии применены к init скрипту"
 
