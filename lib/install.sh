@@ -1,13 +1,39 @@
 #!/bin/sh
 # lib/install.sh - Полный процесс установки zapret2 для Keenetic
-# 9-шаговая установка с интеграцией списков доменов и стратегий
+# 12-шаговая установка с интеграцией списков доменов и стратегий
+
+# ==============================================================================
+# ШАГ 0: ПРОВЕРКА ROOT ПРАВ (КРИТИЧНО)
+# ==============================================================================
+
+step_check_root() {
+    print_header "Шаг 0/12: Проверка прав доступа"
+
+    print_info "Проверка root прав..."
+
+    if [ "$(id -u)" -ne 0 ]; then
+        print_error "Требуются root права для установки zapret2"
+        print_separator
+        print_info "Запустите установку с правами root:"
+        printf "  sudo sh z2k.sh install\n\n"
+        print_warning "Без root прав невозможно:"
+        print_warning "  - Установить пакеты через opkg"
+        print_warning "  - Создать init скрипт в /opt/etc/init.d/"
+        print_warning "  - Настроить iptables правила"
+        print_warning "  - Загрузить модули ядра"
+        return 1
+    fi
+
+    print_success "Root права подтверждены (UID=$(id -u))"
+    return 0
+}
 
 # ==============================================================================
 # ШАГ 1: ОБНОВЛЕНИЕ ПАКЕТОВ
 # ==============================================================================
 
 step_update_packages() {
-    print_header "Шаг 1/9: Обновление пакетов"
+    print_header "Шаг 1/12: Обновление пакетов"
 
     print_info "Обновление списка пакетов Entware..."
 
@@ -245,11 +271,61 @@ EOF
 }
 
 # ==============================================================================
-# ШАГ 2: УСТАНОВКА ЗАВИСИМОСТЕЙ
+# ШАГ 2: ПРОВЕРКА DNS (ВАЖНО)
+# ==============================================================================
+
+step_check_dns() {
+    print_header "Шаг 2/12: Проверка DNS"
+
+    print_info "Проверка работы DNS и доступности интернета..."
+
+    # Проверить несколько серверов
+    local test_hosts="github.com google.com cloudflare.com"
+    local dns_works=0
+
+    for host in $test_hosts; do
+        if nslookup "$host" >/dev/null 2>&1; then
+            print_success "DNS работает ($host разрешён)"
+            dns_works=1
+            break
+        fi
+    done
+
+    if [ $dns_works -eq 0 ]; then
+        print_error "DNS не работает!"
+        print_separator
+        print_warning "Возможные причины:"
+        print_warning "  1. Нет подключения к интернету"
+        print_warning "  2. DNS сервер не настроен"
+        print_warning "  3. Блокировка РКН (bin.entware.net, github.com)"
+        print_separator
+
+        printf "Продолжить установку без работающего DNS? [y/N]: "
+        read -r answer </dev/tty
+
+        case "$answer" in
+            [Yy]*)
+                print_warning "Продолжаем без DNS..."
+                print_info "Установка может не удаться при загрузке файлов"
+                return 0
+                ;;
+            *)
+                print_info "Установка прервана"
+                print_info "Исправьте DNS и запустите снова"
+                return 1
+                ;;
+        esac
+    fi
+
+    return 0
+}
+
+# ==============================================================================
+# ШАГ 3: УСТАНОВКА ЗАВИСИМОСТЕЙ (РАСШИРЕНО)
 # ==============================================================================
 
 step_install_dependencies() {
-    print_header "Шаг 2/9: Установка зависимостей"
+    print_header "Шаг 3/12: Установка зависимостей"
 
     # Список необходимых пакетов для Entware (только runtime)
     local packages="
@@ -298,6 +374,108 @@ unzip
 
     cd - >/dev/null || return 1
 
+    # =========================================================================
+    # КРИТИЧНЫЕ ПАКЕТЫ ДЛЯ ZAPRET2 (из check_prerequisites_openwrt)
+    # =========================================================================
+
+    print_separator
+    print_info "Установка критичных пакетов для zapret2..."
+
+    local critical_packages=""
+
+    # ipset - КРИТИЧНО для фильтрации по спискам доменов
+    if ! opkg list-installed | grep -q "^ipset "; then
+        print_info "ipset требуется для фильтрации трафика"
+        critical_packages="$critical_packages ipset"
+    else
+        print_success "ipset уже установлен"
+    fi
+
+    # iptables-mod-nfqueue - КРИТИЧНО для перенаправления в NFQUEUE
+    if ! opkg list-installed | grep -q "^iptables-mod-nfqueue "; then
+        print_info "iptables-mod-nfqueue требуется для NFQUEUE"
+        critical_packages="$critical_packages iptables-mod-nfqueue"
+    else
+        print_success "iptables-mod-nfqueue уже установлен"
+    fi
+
+    # iptables-mod-extra - для дополнительных match модулей (connbytes, multiport)
+    if ! opkg list-installed | grep -q "^iptables-mod-extra "; then
+        print_info "iptables-mod-extra требуется для connbytes/multiport"
+        critical_packages="$critical_packages iptables-mod-extra"
+    else
+        print_success "iptables-mod-extra уже установлен"
+    fi
+
+    # Установить критичные пакеты если нужно
+    if [ -n "$critical_packages" ]; then
+        print_info "Установка:$critical_packages"
+        if opkg install $critical_packages; then
+            print_success "Критичные пакеты установлены"
+        else
+            print_error "Не удалось установить критичные пакеты"
+            print_warning "zapret2 может не работать без этих пакетов!"
+
+            printf "Продолжить без них? [y/N]: "
+            read -r answer </dev/tty
+            case "$answer" in
+                [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
+                *) return 1 ;;
+            esac
+        fi
+    else
+        print_success "Все критичные пакеты уже установлены"
+    fi
+
+    # =========================================================================
+    # ОПЦИОНАЛЬНЫЕ ОПТИМИЗАЦИИ (GNU gzip/sort)
+    # =========================================================================
+
+    print_separator
+    print_info "Проверка опциональных оптимизаций..."
+
+    # Проверить busybox gzip
+    if command -v gzip >/dev/null 2>&1; then
+        if readlink "$(which gzip)" 2>/dev/null | grep -q busybox; then
+            print_info "Обнаружен busybox gzip (медленный, ~3x медленнее GNU)"
+            printf "Установить GNU gzip для ускорения обработки списков? [y/N]: "
+            read -r answer </dev/tty
+            case "$answer" in
+                [Yy]*)
+                    if opkg install --force-overwrite gzip; then
+                        print_success "GNU gzip установлен"
+                    else
+                        print_warning "Не удалось установить GNU gzip"
+                    fi
+                    ;;
+                *)
+                    print_info "Пропускаем установку GNU gzip"
+                    ;;
+            esac
+        fi
+    fi
+
+    # Проверить busybox sort
+    if command -v sort >/dev/null 2>&1; then
+        if readlink "$(which sort)" 2>/dev/null | grep -q busybox; then
+            print_info "Обнаружен busybox sort (медленный, использует много RAM)"
+            printf "Установить GNU sort для ускорения? [y/N]: "
+            read -r answer </dev/tty
+            case "$answer" in
+                [Yy]*)
+                    if opkg install --force-overwrite sort; then
+                        print_success "GNU sort установлен"
+                    else
+                        print_warning "Не удалось установить GNU sort"
+                    fi
+                    ;;
+                *)
+                    print_info "Пропускаем установку GNU sort"
+                    ;;
+            esac
+        fi
+    fi
+
     print_success "Зависимости установлены"
     return 0
 }
@@ -307,7 +485,7 @@ unzip
 # ==============================================================================
 
 step_load_kernel_modules() {
-    print_header "Шаг 3/9: Загрузка модулей ядра"
+    print_header "Шаг 4/12: Загрузка модулей ядра"
 
     local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue"
 
@@ -324,7 +502,7 @@ step_load_kernel_modules() {
 # ==============================================================================
 
 step_build_zapret2() {
-    print_header "Шаг 4/9: Установка zapret2"
+    print_header "Шаг 5/12: Установка zapret2"
 
     # Удалить старую установку если существует
     if [ -d "$ZAPRET2_DIR" ]; then
@@ -529,7 +707,7 @@ step_build_zapret2() {
 # ==============================================================================
 
 step_verify_installation() {
-    print_header "Шаг 5/9: Проверка установки"
+    print_header "Шаг 6/12: Проверка установки"
 
     # Проверить структуру директорий
     local required_paths="
@@ -621,11 +799,77 @@ ${ZAPRET2_DIR}/binaries
 }
 
 # ==============================================================================
-# ШАГ 6: ЗАГРУЗКА СПИСКОВ ДОМЕНОВ (НОВЫЙ ШАГ)
+# ШАГ 7: ОПРЕДЕЛЕНИЕ ТИПА FIREWALL (КРИТИЧНО)
+# ==============================================================================
+
+step_check_and_select_fwtype() {
+    print_header "Шаг 7/12: Определение типа firewall"
+
+    print_info "Автоопределение типа firewall системы..."
+
+    # Source модуль fwtype из zapret2
+    if [ -f "${ZAPRET2_DIR}/common/fwtype.sh" ]; then
+        . "${ZAPRET2_DIR}/common/fwtype.sh"
+    else
+        print_error "Модуль fwtype.sh не найден в ${ZAPRET2_DIR}/common/"
+        return 1
+    fi
+
+    # Автоопределение через функцию из zapret2
+    linux_fwtype
+
+    if [ -z "$FWTYPE" ]; then
+        print_error "Не удалось определить тип firewall"
+        FWTYPE="iptables"  # fallback
+        print_warning "Используем fallback: iptables"
+    fi
+
+    print_success "Обнаружен firewall: $FWTYPE"
+
+    # Показать информацию
+    case "$FWTYPE" in
+        iptables)
+            print_info "iptables - традиционный firewall Linux"
+            print_info "Keenetic обычно использует iptables"
+            ;;
+        nftables)
+            print_info "nftables - современный firewall Linux (kernel 3.13+)"
+            print_info "Более эффективен чем iptables"
+            ;;
+        *)
+            print_warning "Неизвестный тип firewall: $FWTYPE"
+            ;;
+    esac
+
+    # Записать FWTYPE в config файл (если он уже существует)
+    local config="${ZAPRET2_DIR}/config"
+    if [ -f "$config" ]; then
+        # Проверить есть ли уже FWTYPE в config
+        if grep -q "^#*FWTYPE=" "$config"; then
+            # Обновить существующую строку
+            sed -i "s|^#*FWTYPE=.*|FWTYPE=$FWTYPE|" "$config"
+            print_info "FWTYPE=$FWTYPE записан в config"
+        else
+            # Добавить в конец FIREWALL SETTINGS секции
+            sed -i "/# FIREWALL SETTINGS/a FWTYPE=$FWTYPE" "$config"
+            print_info "FWTYPE=$FWTYPE добавлен в config"
+        fi
+    else
+        print_info "Config файл ещё не создан, FWTYPE будет установлен позже"
+    fi
+
+    # Экспортировать для использования в других функциях
+    export FWTYPE
+
+    return 0
+}
+
+# ==============================================================================
+# ШАГ 8: ЗАГРУЗКА СПИСКОВ ДОМЕНОВ
 # ==============================================================================
 
 step_download_domain_lists() {
-    print_header "Шаг 6/9: Загрузка списков доменов"
+    print_header "Шаг 8/12: Загрузка списков доменов"
 
     # Использовать функцию из lib/config.sh
     download_domain_lists || {
@@ -647,26 +891,79 @@ step_download_domain_lists() {
 # ШАГ 7: ОТКЛЮЧЕНИЕ HARDWARE NAT
 # ==============================================================================
 
-step_disable_hwnat() {
-    print_header "Шаг 7/9: Отключение Hardware NAT"
+step_disable_hwnat_and_offload() {
+    print_header "Шаг 9/12: Отключение Hardware NAT и Flow Offloading"
 
-    print_info "Hardware NAT может конфликтовать с DPI bypass"
+    # =========================================================================
+    # 9.1: Hardware NAT (fastnat на Keenetic)
+    # =========================================================================
+
+    print_info "Проверка Hardware NAT (fastnat)..."
 
     # Проверить наличие системы управления HWNAT
-    if [ -f "/opt/etc/ndm/fs.d/100-ipv4-forward.sh" ]; then
-        print_info "Найдена система управления HWNAT"
+    if [ -f "/sys/kernel/fastnat/mode" ]; then
+        local current_mode
+        current_mode=$(cat /sys/kernel/fastnat/mode 2>/dev/null || echo "unknown")
 
-        # Отключить HWNAT
-        if echo 0 > /sys/kernel/fastnat/mode 2>/dev/null; then
-            print_success "Hardware NAT отключен"
+        print_info "Текущий режим fastnat: $current_mode"
+
+        if [ "$current_mode" != "0" ] && [ "$current_mode" != "unknown" ]; then
+            print_warning "Hardware NAT включен - может конфликтовать с DPI bypass"
+
+            # Попытка отключения
+            if echo 0 > /sys/kernel/fastnat/mode 2>/dev/null; then
+                print_success "Hardware NAT отключен"
+            else
+                print_warning "Не удалось отключить Hardware NAT"
+                print_info "Возможно требуются дополнительные права"
+                print_info "Попробуйте вручную: echo 0 > /sys/kernel/fastnat/mode"
+            fi
         else
-            print_warning "Не удалось отключить Hardware NAT"
-            print_warning "Это нормально на некоторых моделях"
+            print_success "Hardware NAT уже отключен или недоступен"
         fi
     else
-        print_info "Система HWNAT не обнаружена, пропускаем"
+        print_info "Hardware NAT (fastnat) не обнаружен на этой системе"
     fi
 
+    # =========================================================================
+    # 9.2: Flow Offloading (критично для nfqws)
+    # =========================================================================
+
+    print_separator
+    print_info "Проверка Flow Offloading..."
+
+    # На Keenetic flow offloading управляется через другие механизмы
+    # В основном через iptables/nftables правила
+
+    # Проверка через sysctl (если доступно)
+    if [ -f "/proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal" ]; then
+        print_info "Проверка conntrack liberal mode..."
+
+        # zapret2 может требовать liberal mode для обработки invalid RST пакетов
+        local liberal_mode
+        liberal_mode=$(cat /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal 2>/dev/null || echo "0")
+
+        if [ "$liberal_mode" = "0" ]; then
+            print_info "conntrack liberal mode выключен (будет включен при старте zapret2)"
+        else
+            print_info "conntrack liberal mode уже включен"
+        fi
+    fi
+
+    # Записать FLOWOFFLOAD=none в config (безопасный вариант)
+    print_info "Установка FLOWOFFLOAD=none в config (рекомендуется для Keenetic)"
+
+    # Это будет использовано при создании config файла
+    export FLOWOFFLOAD=none
+
+    print_separator
+    print_info "Информация о flow offloading:"
+    print_info "  - Flow offloading ускоряет routing но может ломать DPI bypass"
+    print_info "  - nfqws трафик ДОЛЖЕН быть исключен из offloading"
+    print_info "  - На Keenetic используется FLOWOFFLOAD=none (безопасно)"
+    print_info "  - Официальный init скрипт автоматически настроит exemption rules"
+
+    print_success "Hardware NAT и Flow Offloading проверены"
     return 0
 }
 
@@ -675,7 +972,7 @@ step_disable_hwnat() {
 # ==============================================================================
 
 step_create_config_and_init() {
-    print_header "Шаг 8/10: Создание config и init скрипта"
+    print_header "Шаг 10/12: Создание config и init скрипта"
 
     # ========================================================================
     # 8.1: Создать официальный config файл
@@ -795,7 +1092,7 @@ INIT_SCRIPT
 # ==============================================================================
 
 step_install_netfilter_hook() {
-    print_header "Шаг 9/10: Установка netfilter хука"
+    print_header "Шаг 11/12: Установка netfilter хука"
 
     print_info "Установка хука для автоматического восстановления правил..."
 
@@ -864,7 +1161,7 @@ HOOK
 # ==============================================================================
 
 step_finalize() {
-    print_header "Шаг 10/10: Финализация установки"
+    print_header "Шаг 12/12: Финализация установки"
 
     # Проверить бинарник перед запуском
     print_info "Проверка nfqws2 перед запуском..."
@@ -963,20 +1260,23 @@ step_finalize() {
 
 run_full_install() {
     print_header "Установка zapret2 для Keenetic"
-    print_info "Процесс установки: 9 шагов"
+    print_info "Процесс установки: 12 шагов (расширенная проверка)"
     print_separator
 
     # Выполнить все шаги последовательно
-    step_update_packages || return 1
-    step_install_dependencies || return 1
-    step_load_kernel_modules || return 1
-    step_build_zapret2 || return 1
-    step_verify_installation || return 1
-    step_download_domain_lists || return 1
-    step_disable_hwnat || return 1
-    step_create_config_and_init || return 1
-    step_install_netfilter_hook || return 1
-    step_finalize || return 1
+    step_check_root || return 1                    # ← НОВОЕ (0/12)
+    step_update_packages || return 1               # 1/12
+    step_check_dns || return 1                     # ← НОВОЕ (2/12)
+    step_install_dependencies || return 1          # 3/12 (расширено)
+    step_load_kernel_modules || return 1           # 4/12
+    step_build_zapret2 || return 1                 # 5/12
+    step_verify_installation || return 1           # 6/12
+    step_check_and_select_fwtype || return 1       # ← НОВОЕ (7/12)
+    step_download_domain_lists || return 1         # 8/12
+    step_disable_hwnat_and_offload || return 1     # 9/12 (расширено)
+    step_create_config_and_init || return 1        # 10/12
+    step_install_netfilter_hook || return 1        # 11/12
+    step_finalize || return 1                      # 12/12
 
     # После установки - выбор между автоподбором и дефолтными стратегиями
     print_separator
