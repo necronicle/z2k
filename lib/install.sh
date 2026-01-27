@@ -824,6 +824,14 @@ step_check_and_select_fwtype() {
         return 1
     fi
 
+    # Переопределить linux_ipt_avail для Keenetic (IPv4-only режим)
+    # Официальная функция требует iptables И ip6tables, но Keenetic с DISABLE_IPV6=1
+    # не имеет ip6tables, поэтому проверяем только iptables
+    linux_ipt_avail()
+    {
+        exists iptables
+    }
+
     # Автоопределение через функцию из zapret2
     linux_fwtype
 
@@ -1258,6 +1266,35 @@ restart_daemons()
 # ФУНКЦИИ START/STOP FIREWALL
 # ==============================================================================
 
+load_modules()
+{
+    echo "Loading required kernel modules"
+
+    # Список необходимых модулей для работы zapret2
+    local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue"
+
+    for module in \$modules; do
+        if ! lsmod | grep -q "^\$module"; then
+            [ -n "\$Z2K_DEBUG" ] && echo "DEBUG: Loading module: \$module"
+            modprobe "\$module" 2>/dev/null || {
+                echo "Warning: Failed to load module \$module (may be built-in)"
+            }
+        else
+            [ -n "\$Z2K_DEBUG" ] && echo "DEBUG: Module already loaded: \$module"
+        fi
+    done
+
+    # Проверить критичный модуль nfnetlink_queue
+    if ! lsmod | grep -q "nfnetlink_queue" && ! modinfo nfnetlink_queue >/dev/null 2>&1; then
+        echo "WARNING: nfnetlink_queue module not available!"
+        echo "nfqws2 may fail with 'Operation not permitted'"
+        return 1
+    fi
+
+    echo "Kernel modules loaded"
+    return 0
+}
+
 start_fw()
 {
     echo "Applying zapret2 firewall rules"
@@ -1312,10 +1349,13 @@ start()
 
     echo "Starting zapret2 service"
 
-    # 1. Применить firewall правила
+    # 1. Загрузить необходимые модули ядра
+    load_modules || echo "Warning: Some modules failed to load"
+
+    # 2. Применить firewall правила
     [ "$INIT_APPLY_FW" = "1" ] && start_fw
 
-    # 2. Запустить daemon процессы
+    # 3. Запустить daemon процессы
     start_daemons
 
     echo "zapret2 service started"
