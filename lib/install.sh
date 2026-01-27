@@ -391,23 +391,28 @@ unzip
         print_success "ipset уже установлен"
     fi
 
-    # iptables-mod-nfqueue - КРИТИЧНО для перенаправления в NFQUEUE
-    if ! opkg list-installed | grep -q "^iptables-mod-nfqueue "; then
-        print_info "iptables-mod-nfqueue требуется для NFQUEUE"
-        critical_packages="$critical_packages iptables-mod-nfqueue"
+    # Проверка kernel модулей (на Keenetic встроены в ядро, не требуют установки)
+    # xt_NFQUEUE - КРИТИЧНО для перенаправления в NFQUEUE
+    if [ -f "/lib/modules/$(uname -r)/xt_NFQUEUE.ko" ] || lsmod | grep -q "xt_NFQUEUE" || modinfo xt_NFQUEUE >/dev/null 2>&1; then
+        print_success "Модуль xt_NFQUEUE доступен"
     else
-        print_success "iptables-mod-nfqueue уже установлен"
+        print_warning "Модуль xt_NFQUEUE не найден (может быть встроен в ядро)"
     fi
 
-    # iptables-mod-extra - для дополнительных match модулей (connbytes, multiport)
-    if ! opkg list-installed | grep -q "^iptables-mod-extra "; then
-        print_info "iptables-mod-extra требуется для connbytes/multiport"
-        critical_packages="$critical_packages iptables-mod-extra"
+    # xt_connbytes, xt_multiport - для фильтрации пакетов
+    if modinfo xt_connbytes >/dev/null 2>&1 || grep -q "xt_connbytes" /proc/modules 2>/dev/null; then
+        print_success "Модуль xt_connbytes доступен"
     else
-        print_success "iptables-mod-extra уже установлен"
+        print_warning "Модуль xt_connbytes не найден (может быть встроен в ядро)"
     fi
 
-    # Установить критичные пакеты если нужно
+    if modinfo xt_multiport >/dev/null 2>&1 || grep -q "xt_multiport" /proc/modules 2>/dev/null; then
+        print_success "Модуль xt_multiport доступен"
+    else
+        print_warning "Модуль xt_multiport не найден (может быть встроен в ядро)"
+    fi
+
+    # Установить критичные пакеты если нужно (только ipset для Keenetic)
     if [ -n "$critical_packages" ]; then
         print_info "Установка:$critical_packages"
         if opkg install $critical_packages; then
@@ -426,6 +431,10 @@ unzip
     else
         print_success "Все критичные пакеты уже установлены"
     fi
+
+    print_separator
+    print_info "ПРИМЕЧАНИЕ: На Keenetic модули iptables (xt_NFQUEUE, xt_connbytes,"
+    print_info "xt_multiport) встроены в ядро и не требуют отдельной установки."
 
     # =========================================================================
     # ОПЦИОНАЛЬНЫЕ ОПТИМИЗАЦИИ (GNU gzip/sort)
