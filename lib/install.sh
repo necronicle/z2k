@@ -1106,6 +1106,12 @@ existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 # DEBUG: Проверить FWTYPE после загрузки config
 [ -n "$Z2K_DEBUG" ] && echo "DEBUG: После загрузки config - FWTYPE='$FWTYPE'"
 
+# КРИТИЧНО: Преобразовать порты в формат iptables (заменить - на :)
+# std_ports() была вызвана при загрузке ipt.sh, но тогда переменные были пустые
+# Повторно вызвать std_ports() ПОСЛЕ загрузки config
+std_ports
+[ -n "$Z2K_DEBUG" ] && echo "DEBUG: std_ports() вызвана - NFQWS2_PORTS_TCP_IPT='$NFQWS2_PORTS_TCP_IPT'"
+
 # ==============================================================================
 # НАСТРОЙКИ СПЕЦИФИЧНЫЕ ДЛЯ KEENETIC
 # ==============================================================================
