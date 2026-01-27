@@ -1054,7 +1054,7 @@ ZAPRET_CONFIG=${ZAPRET_CONFIG:-"$ZAPRET_RW/config"}
 }
 
 # ==============================================================================
-# SOURCE ОФИЦИАЛЬНЫХ МОДУЛЕЙ
+# SOURCE ОФИЦИАЛЬНЫХ МОДУЛЕЙ (как в init.d/openwrt/functions)
 # ==============================================================================
 
 # Базовые утилиты
@@ -1062,6 +1062,17 @@ ZAPRET_CONFIG=${ZAPRET_CONFIG:-"$ZAPRET_RW/config"}
 
 # Определение типа firewall (iptables/nftables)
 . "$ZAPRET_BASE/common/fwtype.sh"
+
+# KEENETIC FIX: Переопределить linux_ipt_avail для работы без ip6tables
+# На Keenetic может быть DISABLE_IPV6=1, но iptables все равно работает
+linux_ipt_avail()
+{
+	# Для Keenetic достаточно только iptables (IPv4-only режим)
+	exists iptables
+}
+
+# IP helper functions
+. "$ZAPRET_BASE/common/linux_iphelper.sh"
 
 # Функции для работы с iptables
 . "$ZAPRET_BASE/common/ipt.sh"
@@ -1074,6 +1085,9 @@ existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 
 # Управление daemon процессами
 . "$ZAPRET_BASE/common/linux_daemons.sh"
+
+# Работа со списками доменов
+. "$ZAPRET_BASE/common/list.sh"
 
 # Поддержка custom scripts
 . "$ZAPRET_BASE/common/custom.sh"
