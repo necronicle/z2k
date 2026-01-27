@@ -19,6 +19,72 @@ https://googlevideo.com
 "
 
 # ==============================================================================
+# РАБОТА С ФАЙЛАМИ СТРАТЕГИЙ ПО КАТЕГОРИЯМ (CONFIG-DRIVEN АРХИТЕКТУРА)
+# ==============================================================================
+
+# Сохранить стратегию в файл категории
+# $1 - категория (YT, YT_GV, RKN, RUTRACKER)
+# $2 - протокол (TCP или UDP)
+# $3 - параметры стратегии
+save_strategy_to_category() {
+    local category=$1
+    local protocol=$2
+    local params=$3
+
+    if [ -z "$category" ] || [ -z "$protocol" ] || [ -z "$params" ]; then
+        print_error "save_strategy_to_category: некорректные параметры"
+        return 1
+    fi
+
+    local strategy_file="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats/${protocol}/${category}/Strategy.txt"
+
+    # Создать директорию если не существует
+    mkdir -p "$(dirname "$strategy_file")" || {
+        print_error "Не удалось создать директорию для стратегии $category/$protocol"
+        return 1
+    }
+
+    # Сохранить параметры
+    echo "$params" > "$strategy_file" || {
+        print_error "Не удалось сохранить стратегию в $strategy_file"
+        return 1
+    }
+
+    return 0
+}
+
+# Создать дефолтные файлы стратегий при установке
+# Вызывается из step_create_config_and_init()
+create_default_strategy_files() {
+    local extra_strats_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats"
+
+    print_info "Создание дефолтных файлов стратегий..."
+
+    # Дефолтная TCP стратегия
+    local default_tcp="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+
+    # Дефолтная UDP стратегия (QUIC)
+    local default_udp="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+
+    # Создать директории и файлы
+    mkdir -p "$extra_strats_dir/TCP/YT"
+    mkdir -p "$extra_strats_dir/TCP/YT_GV"
+    mkdir -p "$extra_strats_dir/TCP/RKN"
+    mkdir -p "$extra_strats_dir/UDP/YT"
+    mkdir -p "$extra_strats_dir/UDP/RUTRACKER"
+
+    # Сохранить дефолтные стратегии
+    echo "$default_tcp" > "$extra_strats_dir/TCP/YT/Strategy.txt"
+    echo "$default_tcp" > "$extra_strats_dir/TCP/YT_GV/Strategy.txt"
+    echo "$default_tcp" > "$extra_strats_dir/TCP/RKN/Strategy.txt"
+    echo "$default_udp" > "$extra_strats_dir/UDP/YT/Strategy.txt"
+    echo "$default_udp" > "$extra_strats_dir/UDP/RUTRACKER/Strategy.txt"
+
+    print_success "Дефолтные файлы стратегий созданы"
+    return 0
+}
+
+# ==============================================================================
 # ПАРСИНГ STRATS.TXT → STRATEGIES.CONF
 # ==============================================================================
 
@@ -457,9 +523,11 @@ PROFILE
 # ПРИМЕНЕНИЕ СТРАТЕГИЙ К INIT СКРИПТУ
 # ==============================================================================
 
-# Применить стратегию к init скрипту
+# Применить стратегию (config-driven архитектура)
+# Сохраняет стратегию в файлы категорий и обновляет config файл
 apply_strategy() {
     local strategy_num=$1
+    local zapret_config="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 
     # Проверить существование стратегии
@@ -483,58 +551,37 @@ apply_strategy() {
 
     print_info "Применение стратегии #$strategy_num (тип: $type)..."
 
-    # Генерация мульти-профиля
-    local multiprofile
-    multiprofile=$(generate_multiprofile "$params" "$type")
-
-    # Создать backup init скрипта
-    if [ -f "$init_script" ]; then
-        backup_file "$init_script" || {
-            print_error "Не удалось создать backup"
-            return 1
-        }
+    # Построить полные TCP параметры
+    local tcp_params
+    if [ "$type" = "http" ]; then
+        tcp_params=$(build_http_profile_params "$params")
     else
-        print_error "Init скрипт не найден: $init_script"
-        return 1
+        tcp_params=$(build_tls_profile_params "$params")
     fi
 
-    # Заменить секцию между STRATEGY_MARKER_START и STRATEGY_MARKER_END
-    awk -v profile="$multiprofile" '
-        BEGIN { in_marker=0; marker_found=0 }
-        /STRATEGY_MARKER_START/ {
-            print
-            print profile
-            in_marker=1
-            marker_found=1
-            next
-        }
-        /STRATEGY_MARKER_END/ {
-            in_marker=0
-            print
-            next
-        }
-        !in_marker { print }
-        END {
-            if (!marker_found) {
-                print "ERROR: STRATEGY_MARKER not found" > "/dev/stderr"
-                exit 1
-            }
-        }
-    ' "$init_script" > "${init_script}.tmp"
+    # Получить текущие QUIC параметры
+    local udp_params
+    udp_params=$(get_current_quic_profile_params)
 
-    # Проверить успешность awk
-    if [ $? -ne 0 ]; then
-        print_error "Ошибка модификации init скрипта"
-        return 1
-    fi
+    # Сохранить стратегию во все категории (единая стратегия для всех)
+    print_info "Сохранение стратегии в файлы категорий..."
+    save_strategy_to_category "YT" "TCP" "$tcp_params" || return 1
+    save_strategy_to_category "YT_GV" "TCP" "$tcp_params" || return 1
+    save_strategy_to_category "RKN" "TCP" "$tcp_params" || return 1
+    save_strategy_to_category "YT" "UDP" "$udp_params" || return 1
+    save_strategy_to_category "RUTRACKER" "UDP" "$udp_params" || return 1
 
-    # Заменить init скрипт
-    mv "${init_script}.tmp" "$init_script" || {
-        print_error "Не удалось заменить init скрипт"
+    # Обновить config файл (NFQWS2_OPT секцию)
+    print_info "Обновление config файла..."
+    . "${LIB_DIR}/config_official.sh" || {
+        print_error "Не удалось загрузить config_official.sh"
         return 1
     }
 
-    chmod +x "$init_script"
+    update_nfqws2_opt_in_config "$zapret_config" || {
+        print_error "Не удалось обновить config файл"
+        return 1
+    }
 
     # Сохранить номер текущей стратегии
     mkdir -p "$CONFIG_DIR"
@@ -1605,12 +1652,8 @@ apply_category_strategies_v2() {
     local yt_gv_strategy=$2
     local rkn_strategy=$3
 
+    local zapret_config="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
-
-    if [ ! -f "$init_script" ]; then
-        print_error "Init скрипт не найден: $init_script"
-        return 1
-    fi
 
     print_info "Применение стратегий по категориям..."
     print_info "  YouTube TCP -> стратегия #$yt_tcp_strategy"
@@ -1649,32 +1692,32 @@ apply_category_strategies_v2() {
 
     # QUIC параметры (единый профиль)
     local udp_quic
-    local udp_quic_rutracker
     udp_quic=$(get_current_quic_profile_params)
 
-    # QUIC для RuTracker применяется только если включено
-    if is_rutracker_quic_enabled; then
-        udp_quic_rutracker=$(get_rutracker_quic_profile_params)
-    else
-        udp_quic_rutracker=""
-    fi
+    # Сохранить стратегии в файлы категорий (config-driven)
+    print_info "Сохранение стратегий в файлы категорий..."
+    save_strategy_to_category "YT" "TCP" "$yt_tcp_full" || return 1
+    save_strategy_to_category "YT_GV" "TCP" "$yt_gv_full" || return 1
+    save_strategy_to_category "RKN" "TCP" "$rkn_full" || return 1
+    save_strategy_to_category "YT" "UDP" "$udp_quic" || return 1
+    save_strategy_to_category "RUTRACKER" "UDP" "$udp_quic" || return 1
 
-    # Обновить маркеры в init скрипте
-    update_init_section "YOUTUBE_TCP" "$yt_tcp_full" "" "$init_script"
-    update_init_section "YOUTUBE_GV" "$yt_gv_full" "" "$init_script"
-    update_init_section "RKN" "$rkn_full" "" "$init_script"
+    # Обновить config файл (NFQWS2_OPT секцию)
+    print_info "Обновление config файла..."
+    . "${LIB_DIR}/config_official.sh" || {
+        print_error "Не удалось загрузить config_official.sh"
+        return 1
+    }
 
-    # Обновить QUIC для CUSTOM, сохранив текущий TCP профиль
-    local custom_tcp
-    custom_tcp=$(get_init_tcp_params "CUSTOM" "$init_script")
-    if [ -z "$custom_tcp" ]; then
-        custom_tcp="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
-    fi
-    update_init_section "CUSTOM" "$custom_tcp" "" "$init_script"
-    update_init_section "QUIC" "" "$udp_quic" "$init_script"
-    update_init_section "QUIC_RKN" "" "$udp_quic_rutracker" "$init_script"
+    update_nfqws2_opt_in_config "$zapret_config" || {
+        print_error "Не удалось обновить config файл"
+        return 1
+    }
 
-    print_success "Стратегии применены к init скрипту"
+    # Сохранить выбранные стратегии в конфигурацию
+    save_category_strategies "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
+
+    print_success "Стратегии применены"
 
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
