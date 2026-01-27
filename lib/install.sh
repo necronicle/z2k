@@ -1014,64 +1014,350 @@ step_create_config_and_init() {
     # Создать директорию если не существует
     mkdir -p "$(dirname "$INIT_SCRIPT")"
 
-    # Скопировать новый init скрипт из files/
-    if [ -f "${WORK_DIR}/files/S99zapret2.new" ]; then
-        print_info "Копирование S99zapret2.new → $INIT_SCRIPT"
-        cp "${WORK_DIR}/files/S99zapret2.new" "$INIT_SCRIPT" || {
-            print_error "Не удалось скопировать init скрипт"
-            return 1
-        }
-    else
-        print_warning "S99zapret2.new не найден в files/, создаю встроенную версию..."
+    # Создать init скрипт (embedded version of S99zapret2.new)
+    print_info "Создание init скрипта..."
 
-        # Fallback: создать минимальный init скрипт на основе официального
-        cat > "$INIT_SCRIPT" <<'INIT_SCRIPT'
+    cat > "$INIT_SCRIPT" <<'INIT_EOF'
 #!/bin/sh
-# Minimal fallback init script if S99zapret2.new is not available
-# This should not normally be used - main installation uses S99zapret2.new
+# /opt/etc/init.d/S99zapret2
+# Адаптация официального init.d/openwrt/zapret2 для Keenetic
+# Использует модули common/ и config файл вместо hardcoded настроек
+
+# ==============================================================================
+# ПУТИ И ПЕРЕМЕННЫЕ
+# ==============================================================================
 
 ZAPRET_BASE=/opt/zapret2
-ZAPRET_CONFIG="\$ZAPRET_BASE/config"
+ZAPRET_RW=${ZAPRET_RW:-"$ZAPRET_BASE"}
+ZAPRET_CONFIG=${ZAPRET_CONFIG:-"$ZAPRET_RW/config"}
 
-# Source official modules
-[ -f "\$ZAPRET_BASE/common/base.sh" ] && . "\$ZAPRET_BASE/common/base.sh"
-[ -f "\$ZAPRET_BASE/common/linux_fw.sh" ] && . "\$ZAPRET_BASE/common/linux_fw.sh"
-[ -f "\$ZAPRET_BASE/common/linux_daemons.sh" ] && . "\$ZAPRET_BASE/common/linux_daemons.sh"
+# Проверка что zapret2 установлен
+[ -d "$ZAPRET_BASE" ] || {
+    echo "ERROR: zapret2 not installed in $ZAPRET_BASE"
+    exit 1
+}
 
-# Load config
-[ -f "\$ZAPRET_CONFIG" ] && . "\$ZAPRET_CONFIG"
+# ==============================================================================
+# SOURCE ОФИЦИАЛЬНЫХ МОДУЛЕЙ
+# ==============================================================================
 
-start() {
-    echo "Starting zapret2 (fallback mode)"
+# Базовые утилиты
+. "$ZAPRET_BASE/common/base.sh"
+
+# Определение типа firewall (iptables/nftables)
+. "$ZAPRET_BASE/common/fwtype.sh"
+
+# Функции для работы с iptables
+. "$ZAPRET_BASE/common/ipt.sh"
+
+# Функции для работы с nftables (если доступны)
+existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
+
+# Управление firewall
+. "$ZAPRET_BASE/common/linux_fw.sh"
+
+# Управление daemon процессами
+. "$ZAPRET_BASE/common/linux_daemons.sh"
+
+# Поддержка custom scripts
+. "$ZAPRET_BASE/common/custom.sh"
+
+# ==============================================================================
+# ЗАГРУЗКА КОНФИГУРАЦИИ
+# ==============================================================================
+
+# Загрузить конфигурацию
+. "$ZAPRET_CONFIG"
+
+# ==============================================================================
+# НАСТРОЙКИ СПЕЦИФИЧНЫЕ ДЛЯ KEENETIC
+# ==============================================================================
+
+PIDDIR=/var/run
+NFQWS2="${NFQWS2:-$ZAPRET_BASE/nfq2/nfqws2}"
+LUAOPT="--lua-init=@$ZAPRET_BASE/lua/zapret-lib.lua --lua-init=@$ZAPRET_BASE/lua/zapret-antidpi.lua"
+NFQWS2_OPT_BASE="--fwmark=$DESYNC_MARK $LUAOPT"
+LISTS_DIR="$ZAPRET_BASE/lists"
+EXTRA_STRATS_DIR="$ZAPRET_BASE/extra_strats"
+CONFIG_DIR="/opt/etc/zapret2"
+CUSTOM_DIR="${CUSTOM_DIR:-$ZAPRET_RW/init.d/keenetic}"
+
+# ==============================================================================
+# ФУНКЦИИ УПРАВЛЕНИЯ DAEMON (АДАПТИРОВАНО ДЛЯ KEENETIC БЕЗ PROCD)
+# ==============================================================================
+
+run_daemon()
+{
+    # $1 - daemon ID
+    # $2 - daemon binary
+    # $3 - daemon args
+    local DAEMONBASE="$(basename "$2")"
+    local PIDFILE="$PIDDIR/${DAEMONBASE}_$1.pid"
+
+    echo "Starting daemon $1: $2 $3"
+
+    # Запуск в фоне с сохранением PID
+    $2 $3 >/dev/null 2>&1 &
+    local PID=$!
+
+    # Сохранить PID
+    echo $PID > "$PIDFILE"
+
+    # Проверить что процесс запустился
+    sleep 1
+    if kill -0 $PID 2>/dev/null; then
+        echo "Daemon $1 started with PID $PID"
+        return 0
+    else
+        echo "ERROR: Daemon $1 failed to start"
+        rm -f "$PIDFILE"
+        return 1
+    fi
+}
+
+run_nfqws()
+{
+    # $1 - instance ID
+    # $2 - nfqws options
+    run_daemon $1 "$NFQWS2" "$NFQWS2_OPT_BASE $2"
+}
+
+do_nfqws()
+{
+    # $1 - 0 (stop) or 1 (start)
+    # $2 - instance ID
+    # $3 - nfqws options
+    [ "$1" = 0 ] || { shift; run_nfqws "$@"; }
+}
+
+stop_daemon_by_pidfile()
+{
+    # $1 - pidfile path
+    if [ -f "$1" ]; then
+        local PID=$(cat "$1")
+        if [ -n "$PID" ] && kill -0 $PID 2>/dev/null; then
+            echo "Stopping daemon with PID $PID"
+            kill $PID 2>/dev/null
+            sleep 1
+            # Force kill если не остановился
+            kill -0 $PID 2>/dev/null && kill -9 $PID 2>/dev/null
+        fi
+        rm -f "$1"
+    fi
+}
+
+stop_all_nfqws()
+{
+    echo "Stopping all nfqws daemons"
+
+    # Остановить по PID файлам
+    for pidfile in $PIDDIR/nfqws2_*.pid; do
+        [ -f "$pidfile" ] && stop_daemon_by_pidfile "$pidfile"
+    done
+
+    # Fallback: killall если что-то осталось
+    killall nfqws2 2>/dev/null
+
+    # Очистить все PID файлы
+    rm -f $PIDDIR/nfqws2_*.pid 2>/dev/null
+}
+
+# ==============================================================================
+# ФУНКЦИИ START/STOP DAEMONS
+# ==============================================================================
+
+start_daemons()
+{
+    echo "Starting zapret2 daemons"
+
+    # Использовать функции из common/linux_daemons.sh
+    # standard_mode_daemons вызывает do_nfqws
+    standard_mode_daemons 1
+
+    # Запустить custom scripts если есть
+    custom_runner zapret_custom_daemons 1
+
+    return 0
+}
+
+stop_daemons()
+{
+    echo "Stopping zapret2 daemons"
+
+    # Остановить все nfqws процессы
+    stop_all_nfqws
+
+    # Запустить custom scripts для остановки
+    custom_runner zapret_custom_daemons 0
+
+    return 0
+}
+
+restart_daemons()
+{
+    stop_daemons
+    sleep 2
+    start_daemons
+}
+
+# ==============================================================================
+# ФУНКЦИИ START/STOP FIREWALL
+# ==============================================================================
+
+start_fw()
+{
+    echo "Applying zapret2 firewall rules"
+
+    # Определить тип firewall (iptables/nftables)
+    linux_fwtype
+
+    echo "Detected firewall type: $FWTYPE"
+
+    # Использовать официальную функцию из common/linux_fw.sh
     zapret_apply_firewall
-    zapret_run_daemons
+
+    return 0
 }
 
-stop() {
-    echo "Stopping zapret2 (fallback mode)"
-    zapret_stop_daemons
+stop_fw()
+{
+    echo "Removing zapret2 firewall rules"
+
+    # Определить тип firewall
+    linux_fwtype
+
+    # Использовать официальную функцию
     zapret_unapply_firewall
+
+    return 0
 }
 
-restart() {
+restart_fw()
+{
+    stop_fw
+    sleep 1
+    start_fw
+}
+
+# ==============================================================================
+# ОСНОВНЫЕ ФУНКЦИИ START/STOP/RESTART
+# ==============================================================================
+
+start()
+{
+    if [ "$ENABLED" != "1" ]; then
+        echo "zapret2 is disabled in config"
+        return 1
+    fi
+
+    echo "Starting zapret2 service"
+
+    # 1. Применить firewall правила
+    [ "$INIT_APPLY_FW" = "1" ] && start_fw
+
+    # 2. Запустить daemon процессы
+    start_daemons
+
+    echo "zapret2 service started"
+    return 0
+}
+
+stop()
+{
+    echo "Stopping zapret2 service"
+
+    # 1. Остановить daemon процессы
+    stop_daemons
+
+    # 2. Удалить firewall правила
+    [ "$INIT_APPLY_FW" = "1" ] && stop_fw
+
+    echo "zapret2 service stopped"
+    return 0
+}
+
+restart()
+{
     stop
     sleep 2
     start
 }
 
-status() {
-    pgrep -af nfqws2
+status()
+{
+    echo "Checking zapret2 status..."
+
+    # Проверить процессы по PID файлам
+    local running=0
+    for pidfile in $PIDDIR/nfqws2_*.pid; do
+        if [ -f "$pidfile" ]; then
+            local PID=$(cat "$pidfile")
+            if kill -0 $PID 2>/dev/null; then
+                echo "nfqws2 daemon running (PID $PID)"
+                running=$((running + 1))
+            else
+                echo "Stale PID file: $pidfile"
+            fi
+        fi
+    done
+
+    if [ $running -gt 0 ]; then
+        echo "zapret2 is running ($running daemons)"
+
+        # Показать процессы
+        echo "Processes:"
+        pgrep -af nfqws2
+
+        return 0
+    else
+        echo "zapret2 is not running"
+        return 1
+    fi
 }
 
-case "\$1" in
-    start) start ;;
-    stop) stop ;;
-    restart) restart ;;
-    status) status ;;
-    *) echo "Usage: \$0 {start|stop|restart|status}"; exit 1 ;;
+# ==============================================================================
+# MAIN
+# ==============================================================================
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    status)
+        status
+        ;;
+    start_fw)
+        start_fw
+        ;;
+    stop_fw)
+        stop_fw
+        ;;
+    restart_fw)
+        restart_fw
+        ;;
+    start_daemons)
+        start_daemons
+        ;;
+    stop_daemons)
+        stop_daemons
+        ;;
+    restart_daemons)
+        restart_daemons
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|start_fw|stop_fw|restart_fw|start_daemons|stop_daemons|restart_daemons}"
+        exit 1
+        ;;
 esac
-INIT_SCRIPT
-    fi
+
+exit $?
+INIT_EOF
 
     # ========================================================================
     # 8.3: Финализация init скрипта
