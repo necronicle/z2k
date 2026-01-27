@@ -1118,6 +1118,17 @@ LISTS_DIR="$ZAPRET_BASE/lists"
 EXTRA_STRATS_DIR="$ZAPRET_BASE/extra_strats"
 CONFIG_DIR="/opt/etc/zapret2"
 CUSTOM_DIR="${CUSTOM_DIR:-$ZAPRET_RW/init.d/keenetic}"
+IPSET_CR="$ZAPRET_BASE/ipset/create_ipset.sh"
+
+# ==============================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С IPSET
+# ==============================================================================
+
+create_ipset()
+{
+	echo "Creating ip list table (firewall type $FWTYPE)"
+	"$IPSET_CR" "$@"
+}
 
 # ==============================================================================
 # ФУНКЦИИ УПРАВЛЕНИЯ DAEMON (АДАПТИРОВАНО ДЛЯ KEENETIC БЕЗ PROCD)
