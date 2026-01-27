@@ -746,45 +746,52 @@ test_strategy_http() {
 # Генерация тестового домена Google Video (на основе get_yt_cluster_domain из Z4R)
 # Использует внешний API для получения реального живого кластера YouTube
 generate_gv_domain() {
-    # Попытаться получить имя кластера через API
-    local cluster_name
-    cluster_name=$(curl -s -m 3 "https://redirector.googlevideo.com/report_mapping" 2>/dev/null)
+    # Оригинальный алгоритм из zapret4rocket (lib/netcheck.sh)
+    # Карты букв для cipher mapping (32 символа через пробелы)
+    local letters_map_a="u z p k f a 5 0 v q l g b 6 1 w r m h c 7 2 x s n i d 8 3 y t o j e 9 4 -"
+    local letters_map_b="0 1 2 3 4 5 6 7 8 9 a b c d e f g h i j k l m n o p q r s t u v w x y z -"
 
-    # Если API не ответил, использовать известный рабочий домен
-    if [ -z "$cluster_name" ]; then
-        echo "rr1---sn-jvhnu5g-n8vr.googlevideo.com"
+    # Получить cluster codename (ДВА РАЗА для пробития нерелевантного ответа)
+    local cluster_codename
+    cluster_codename=$(curl -s --max-time 2 "https://redirector.xn--ngstr-lra8j.com/report_mapping?di=no" 2>/dev/null | sed -n 's/.*=>[[:space:]]*\([^ (:)]*\).*/\1/p')
+    # Второй раз для пробития нерелевантного ответа
+    cluster_codename=$(curl -s --max-time 2 "https://redirector.xn--ngstr-lra8j.com/report_mapping?di=no" 2>/dev/null | sed -n 's/.*=>[[:space:]]*\([^ (:)]*\).*/\1/p')
+
+    # Если не удалось получить, вернуть известный рабочий домен
+    if [ -z "$cluster_codename" ]; then
+        echo "rr1---sn-5goeenes.googlevideo.com" >&2
+        echo "rr1---sn-5goeenes.googlevideo.com"
         return 0
     fi
 
-    # Карты букв для cipher mapping (как в Z4R)
-    local letters_map_a="abcdefghijklmnopqrstuvwxyz234567"
-    local letters_map_b="qwertyuiopasdfghjklzxcvbnm012345"
-
+    # Cipher mapping
     local converted_name=""
     local i=0
-
-    # Преобразование имени кластера
-    while [ "$i" -lt "${#cluster_name}" ]; do
-        local char="${cluster_name:$i:1}"
-
-        # Найти позицию символа в map_a
-        local pos=0
-        local found=0
-        while [ "$pos" -lt "${#letters_map_a}" ]; do
-            if [ "${letters_map_a:$pos:1}" = "$char" ]; then
-                converted_name="${converted_name}${letters_map_b:$pos:1}"
-                found=1
-                break
-            fi
-            pos=$((pos + 1))
-        done
-
-        # Если символ не найден в map_a, оставить как есть
-        if [ "$found" -eq 0 ]; then
-            converted_name="${converted_name}${char}"
+    while [ "$i" -lt "${#cluster_codename}" ]; do
+        # Получить символ
+        local char
+        if command -v cut >/dev/null 2>&1; then
+            char=$(echo "$cluster_codename" | cut -c$((i+1)))
+        else
+            # Fallback для систем без cut
+            char="${cluster_codename:$i:1}"
         fi
 
-        i=$((i + 1))
+        # Найти индекс в map_a
+        local idx=1
+        for a in $letters_map_a; do
+            if [ "$a" = "$char" ]; then
+                break
+            fi
+            idx=$((idx+1))
+        done
+
+        # Получить соответствующий символ из map_b
+        local b
+        b=$(echo "$letters_map_b" | cut -d' ' -f $idx)
+        converted_name="${converted_name}${b}"
+
+        i=$((i+1))
     done
 
     echo "rr1---sn-${converted_name}.googlevideo.com"
