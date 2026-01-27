@@ -1204,17 +1204,6 @@ auto_test_all_categories_v2() {
     # Очистить временные файлы
     rm -f "$result_file_tcp" "$result_file_gv" "$result_file_rkn"
 
-    # Сохранить результаты
-    cat > "$config_file" <<EOF
-# Category Strategies Configuration (Z4R format)
-# Format: CATEGORY:STRATEGY_NUM
-# Generated: $(date)
-
-youtube_tcp:$yt_tcp_strategy
-youtube_gv:$yt_gv_strategy
-rkn:$rkn_strategy
-EOF
-
     # Показать итоговую таблицу
     printf "\n"
     print_separator
@@ -1228,28 +1217,25 @@ EOF
     printf "%-15s | #%-9s | %s\n" "RKN" "$rkn_strategy" "$([ $rkn_result -eq 0 ] && echo 'OK' || echo 'ДЕФОЛТ')"
     print_separator
 
-    # В автоматическом режиме сразу применить
-    if [ "$auto_mode" -eq 1 ]; then
-        printf "\n"
-        apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
-        return 0
+    # Применить стратегии (в авто и интерактивном режиме одинаково)
+    if [ "$auto_mode" -eq 0 ]; then
+        # В интерактивном режиме спросить подтверждение
+        printf "\nПрименить эти стратегии? [Y/n]: "
+        read -r answer </dev/tty
+
+        case "$answer" in
+            [Nn]|[Nn][Oo])
+                print_info "Стратегии не применены"
+                print_info "Используйте меню для ручного выбора"
+                return 0
+                ;;
+        esac
     fi
 
-    # В интерактивном режиме спросить
-    printf "\nПрименить эти стратегии? [Y/n]: "
-    read -r answer </dev/tty
-
-    case "$answer" in
-        [Nn]|[Nn][Oo])
-            print_info "Стратегии не применены"
-            print_info "Используйте меню для ручного выбора"
-            return 0
-            ;;
-        *)
-            apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
-            return 0
-            ;;
-    esac
+    # Применить выбранные стратегии (автотест и дефолтные работают одинаково)
+    printf "\n"
+    apply_category_strategies_v2 "$yt_tcp_strategy" "$yt_gv_strategy" "$rkn_strategy"
+    return 0
 }
 
 # Алиас для обратной совместимости
@@ -1811,13 +1797,8 @@ apply_default_strategies() {
         default_rkn=1
     fi
 
-    # Сохранить конфигурацию
-    save_category_strategies "$default_yt_tcp" "$default_yt_gv" "$default_rkn"
-
-    # Применить стратегии
+    # Применить стратегии (работает абсолютно так же как автотест)
     apply_category_strategies_v2 "$default_yt_tcp" "$default_yt_gv" "$default_rkn"
-
-    print_success "Дефолтные стратегии применены"
 
     return 0
 }
