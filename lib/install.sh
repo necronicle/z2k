@@ -1068,7 +1068,11 @@ ZAPRET_CONFIG=${ZAPRET_CONFIG:-"$ZAPRET_RW/config"}
 linux_ipt_avail()
 {
 	# Для Keenetic достаточно только iptables (IPv4-only режим)
+	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: linux_ipt_avail() вызвана"
 	exists iptables
+	local result=$?
+	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: exists iptables = $result"
+	return $result
 }
 
 # IP helper functions
@@ -1098,6 +1102,9 @@ existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 
 # Загрузить конфигурацию
 . "$ZAPRET_CONFIG"
+
+# DEBUG: Проверить FWTYPE после загрузки config
+[ -n "$Z2K_DEBUG" ] && echo "DEBUG: После загрузки config - FWTYPE='$FWTYPE'"
 
 # ==============================================================================
 # НАСТРОЙКИ СПЕЦИФИЧНЫЕ ДЛЯ KEENETIC
@@ -1238,8 +1245,14 @@ start_fw()
 {
     echo "Applying zapret2 firewall rules"
 
+    # DEBUG: Проверить FWTYPE перед linux_fwtype
+    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: В start_fw() перед linux_fwtype - FWTYPE='$FWTYPE'"
+
     # Определить тип firewall (iptables/nftables)
     linux_fwtype
+
+    # DEBUG: Проверить FWTYPE после linux_fwtype
+    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: В start_fw() после linux_fwtype - FWTYPE='$FWTYPE'"
 
     echo "Detected firewall type: $FWTYPE"
 
