@@ -832,6 +832,9 @@ step_check_and_select_fwtype() {
         return 1
     fi
 
+    # ВАЖНО: Восстановить Z2K путь к init скрипту (он перезаписывается модулями zapret2)
+    INIT_SCRIPT="$Z2K_INIT_SCRIPT"
+
     # Переопределить linux_ipt_avail для Keenetic (IPv4-only режим)
     # Официальная функция требует iptables И ip6tables, но Keenetic с DISABLE_IPV6=1
     # не имеет ip6tables, поэтому проверяем только iptables
@@ -1774,6 +1777,9 @@ step_finalize() {
     # Source модуль installer.sh для функций crontab
     if [ -f "${ZAPRET2_DIR}/common/installer.sh" ]; then
         . "${ZAPRET2_DIR}/common/installer.sh"
+
+        # ВАЖНО: Восстановить Z2K путь к init скрипту (он перезаписывается модулями zapret2)
+        INIT_SCRIPT="$Z2K_INIT_SCRIPT"
 
         # Удалить старые записи cron если есть
         crontab_del_quiet

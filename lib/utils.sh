@@ -13,12 +13,18 @@ Z2K_VERSION="2.0.0"
 ZAPRET2_DIR="/opt/zapret2"
 CONFIG_DIR="/opt/etc/zapret2"
 LISTS_DIR="${ZAPRET2_DIR}/lists"
+
+# Z2K-специфичная переменная для init скрипта (не конфликтует с zapret2)
+Z2K_INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
+
+# Обратная совместимость (может перезаписываться модулями zapret2)
 INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
 
 # Экспортировать для использования в функциях
 export ZAPRET2_DIR
 export CONFIG_DIR
 export LISTS_DIR
+export Z2K_INIT_SCRIPT
 export INIT_SCRIPT
 
 # Рабочая директория

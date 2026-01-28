@@ -528,7 +528,8 @@ PROFILE
 apply_strategy() {
     local strategy_num=$1
     local zapret_config="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
+    # Использовать Z2K_INIT_SCRIPT который не перезаписывается модулями zapret2
+    local init_script="${Z2K_INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 
     # Проверить существование стратегии
     if ! strategy_exists "$strategy_num"; then
@@ -591,8 +592,9 @@ apply_strategy() {
 
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
-    printf "[DEBUG] init_script path: %s\n" "$init_script" >&2
-    printf "[DEBUG] INIT_SCRIPT env: %s\n" "$INIT_SCRIPT" >&2
+    printf "[DEBUG] init_script (local): %s\n" "$init_script" >&2
+    printf "[DEBUG] Z2K_INIT_SCRIPT: %s\n" "$Z2K_INIT_SCRIPT" >&2
+    printf "[DEBUG] INIT_SCRIPT: %s\n" "$INIT_SCRIPT" >&2
 
     # Проверить что init скрипт существует
     if [ ! -f "$init_script" ]; then
