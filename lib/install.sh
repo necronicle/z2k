@@ -688,10 +688,29 @@ step_build_zapret2() {
 
     # РћР±РЅРѕРІРёС‚СЊ fake blobs РµСЃР»Рё РµСЃС‚СЊ Р±РѕР»РµРµ СЃРІРµР¶РёРµ РІ z2k
     if [ -d "${WORK_DIR}/files/fake" ]; then
-        print_info "РћР±РЅРѕРІР»РµРЅРёРµ fake blobs РёР· z2k..."
+        print_info "Обновление fake blobs из z2k..."
         cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
     fi
 
+    # Распаковать lua.gz (если релиз openwrt-embedded)
+    if [ -d "${ZAPRET2_DIR}/lua" ]; then
+        if command -v gzip >/dev/null 2>&1; then
+            for f in "${ZAPRET2_DIR}/lua/"*.lua.gz; do
+                [ -f "$f" ] || continue
+                local out="${f%.gz}"
+                print_info "Распаковка $(basename "$f")..."
+                if gzip -dc "$f" > "${out}.tmp" 2>/dev/null; then
+                    mv -f "${out}.tmp" "$out"
+                    rm -f "$f"
+                else
+                    rm -f "${out}.tmp"
+                    print_warning "Не удалось распаковать $f"
+                fi
+            done
+        else
+            print_warning "gzip не найден, распаковка lua.gz пропущена"
+        fi
+    fi
     # ===========================================================================
     # Р—РђР’Р•Р РЁР•РќРР•
     # ===========================================================================
