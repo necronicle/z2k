@@ -86,8 +86,8 @@ generate_nfqws2_opt_from_strategies() {
     # QUIC YT
     add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp <HOSTLIST_NOAUTO> --new"
 
-    # QUIC RUTRACKER
-    add_hostlist_line "${extra_strats_dir}/UDP/RUTRACKER/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/RUTRACKER/List.txt $quic_rkn_udp <HOSTLIST_NOAUTO> --new"
+    # QUIC RUTRACKER (disabled)
+    : # disabled by default
 
     # Discord TCP/UDP
     add_hostlist_line "${lists_dir}/discord.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/discord.txt $discord_tcp <HOSTLIST> --new"
