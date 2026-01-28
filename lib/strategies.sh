@@ -592,9 +592,6 @@ apply_strategy() {
 
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
-    printf "[DEBUG] init_script (local): %s\n" "$init_script" >&2
-    printf "[DEBUG] Z2K_INIT_SCRIPT: %s\n" "$Z2K_INIT_SCRIPT" >&2
-    printf "[DEBUG] INIT_SCRIPT: %s\n" "$INIT_SCRIPT" >&2
 
     # Проверить что init скрипт существует
     if [ ! -f "$init_script" ]; then
@@ -602,13 +599,8 @@ apply_strategy() {
         return 1
     fi
 
-    # DEBUG: показываем вывод restart для отладки
-    "$init_script" restart 2>&1
-    local restart_result=$?
-
-    if [ "$restart_result" -ne 0 ]; then
-        print_warning "restart вернул код ошибки: $restart_result"
-    fi
+    # Подавляем вывод restart для чистоты (только ошибки видны)
+    "$init_script" restart >/dev/null 2>&1
 
     sleep 2
 
@@ -901,25 +893,18 @@ auto_test_youtube_tcp() {
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (показываем ошибки для отладки)
-        printf "[DEBUG] Вызов apply_strategy #%s\n" "$num" >&2
-        apply_strategy "$num" >&2
+        # Применить стратегию (подавляем вывод для чистоты)
+        apply_strategy "$num" >/dev/null 2>&1
         local apply_result=$?
-        printf "[DEBUG] apply_strategy вернул код: %s\n" "$apply_result" >&2
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
             continue
         fi
-        printf "[DEBUG] apply_strategy успешно выполнен\n" >&2
 
         # Подождать 2 секунды для применения
         sleep 2
 
-        # DEBUG: Проверка что код доходит до теста
-        printf "[DEBUG] Начало теста стратегии #%s\n" "$num" >&2
-
         # Протестировать через TLS
-        printf "[DEBUG] Вызов test_strategy_tls %s 3\n" "$domain" >&2
         if test_strategy_tls "$domain" 3; then
             printf "РАБОТАЕТ\n" >&2
             print_success "Найдена работающая стратегия для YouTube TCP: #$num" >&2
@@ -928,7 +913,6 @@ auto_test_youtube_tcp() {
         else
             printf "НЕ РАБОТАЕТ\n" >&2
         fi
-        printf "[DEBUG] Тест завершён\n" >&2
     done
 
     # Если ничего не работает, вернуть стратегию по умолчанию
@@ -965,16 +949,13 @@ auto_test_youtube_gv() {
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (показываем ошибки для отладки)
-        printf "[DEBUG] Вызов apply_strategy #%s\n" "$num" >&2
-        apply_strategy "$num" >&2
+        # Применить стратегию (подавляем вывод для чистоты)
+        apply_strategy "$num" >/dev/null 2>&1
         local apply_result=$?
-        printf "[DEBUG] apply_strategy вернул код: %s\n" "$apply_result" >&2
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
             continue
         fi
-        printf "[DEBUG] apply_strategy успешно выполнен\n" >&2
 
         # Подождать 2 секунды для применения
         sleep 2
@@ -1020,16 +1001,13 @@ auto_test_rkn() {
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (показываем ошибки для отладки)
-        printf "[DEBUG] Вызов apply_strategy #%s\n" "$num" >&2
-        apply_strategy "$num" >&2
+        # Применить стратегию (подавляем вывод для чистоты)
+        apply_strategy "$num" >/dev/null 2>&1
         local apply_result=$?
-        printf "[DEBUG] apply_strategy вернул код: %s\n" "$apply_result" >&2
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
             continue
         fi
-        printf "[DEBUG] apply_strategy успешно выполнен\n" >&2
 
         # Подождать 2 секунды для применения
         sleep 2
