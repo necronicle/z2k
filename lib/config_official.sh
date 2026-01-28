@@ -60,16 +60,45 @@ generate_nfqws2_opt_from_strategies() {
     custom_tcp="$default_strategy"
 
     # Р“РµРЅРµСЂРёСЂРѕРІР°С‚СЊ NFQWS2_OPT РІ С„РѕСЂРјР°С‚Рµ РѕС„РёС†РёР°Р»СЊРЅРѕРіРѕ config
+    # Генерировать NFQWS2_OPT в формате официального config
+    local nfqws2_opt_lines=""
+
+    # Helper: добавить строку если hostlist существует и не пустой
+    add_hostlist_line() {
+        local list_path="$1"
+        shift
+        if [ -s "$list_path" ]; then
+            nfqws2_opt_lines="$nfqws2_opt_lines$*\\n"
+        else
+            echo "WARN: hostlist file missing or empty: $list_path (skip profile)"
+        fi
+    }
+
+    # RKN TCP
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt $rkn_tcp --new"
+
+    # YouTube TCP
+    add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp_tcp --new"
+
+    # YouTube GV (domains list встроен)
+    nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp --new\\n"
+
+    # QUIC YT
+    add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp --new"
+
+    # QUIC RUTRACKER
+    add_hostlist_line "${extra_strats_dir}/UDP/RUTRACKER/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/RUTRACKER/List.txt $quic_rkn_udp --new"
+
+    # Discord TCP/UDP
+    add_hostlist_line "${lists_dir}/discord.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/discord.txt $discord_tcp --new"
+    add_hostlist_line "${lists_dir}/discord.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/discord.txt $discord_udp --new"
+
+    # Custom TCP
+    add_hostlist_line "${lists_dir}/custom.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/custom.txt $custom_tcp"
+
     cat <<NFQWS2_OPT
 NFQWS2_OPT="
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt $rkn_tcp --new
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp_tcp --new
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp --new
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp --new
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/RUTRACKER/List.txt $quic_rkn_udp --new
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/discord.txt $discord_tcp --new
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/discord.txt $discord_udp --new
---hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/custom.txt $custom_tcp
+$(echo -e "$nfqws2_opt_lines" | sed '/^$/d')
 "
 NFQWS2_OPT
 }
