@@ -15,6 +15,12 @@ CONFIG_DIR="/opt/etc/zapret2"
 LISTS_DIR="${ZAPRET2_DIR}/lists"
 INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
 
+# Экспортировать для использования в функциях
+export ZAPRET2_DIR
+export CONFIG_DIR
+export LISTS_DIR
+export INIT_SCRIPT
+
 # Рабочая директория
 WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"

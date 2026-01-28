@@ -591,6 +591,14 @@ apply_strategy() {
 
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
+    printf "[DEBUG] init_script path: %s\n" "$init_script" >&2
+    printf "[DEBUG] INIT_SCRIPT env: %s\n" "$INIT_SCRIPT" >&2
+
+    # Проверить что init скрипт существует
+    if [ ! -f "$init_script" ]; then
+        print_error "Init скрипт не найден: $init_script"
+        return 1
+    fi
 
     # DEBUG: показываем вывод restart для отладки
     "$init_script" restart 2>&1
