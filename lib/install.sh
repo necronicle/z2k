@@ -905,6 +905,23 @@ step_download_domain_lists() {
         return 1
     }
 
+    # Доп. проверка: список QUIC YT (zapret4rocket)
+    local yt_quic_list="/opt/zapret2/extra_strats/UDP/YT/List.txt"
+    if [ ! -s "$yt_quic_list" ]; then
+        print_warning "Список QUIC YT отсутствует или пустой: $yt_quic_list"
+        print_info "Пробую загрузить напрямую из zapret4rocket..."
+        local base_url="${Z4R_BASE_URL:-https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master}"
+        mkdir -p "$(dirname "$yt_quic_list")"
+        if curl -fsSL "$base_url/extra_strats/UDP/YT/List.txt" -o "$yt_quic_list"; then
+            if [ -s "$yt_quic_list" ]; then
+                print_success "Список QUIC YT загружен: $yt_quic_list"
+            else
+                print_warning "Список QUIC YT скачан, но пустой: $yt_quic_list"
+            fi
+        else
+            print_warning "Не удалось загрузить QUIC YT list с $base_url"
+        fi
+    fi
     # РЎРѕР·РґР°С‚СЊ Р±Р°Р·РѕРІСѓСЋ РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ
     create_base_config || {
         print_error "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ"
