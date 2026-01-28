@@ -76,6 +76,19 @@ existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 std_ports
 [ -n "$Z2K_DEBUG" ] && echo "DEBUG: std_ports() вызвана - NFQWS2_PORTS_TCP_IPT='$NFQWS2_PORTS_TCP_IPT'"
 
+# ------------------------------------------------------------------------------
+# AUTOHOSTLIST: ensure required files exist to avoid nfqws2 start failures
+# ------------------------------------------------------------------------------
+ensure_autohostlist_files()
+{
+	[ "$MODE_FILTER" = "autohostlist" ] || return 0
+	local base="${HOSTLIST_BASE:-$ZAPRET_BASE/ipset}"
+	mkdir -p "$base" || return 1
+	local auto="$base/zapret-hosts-auto.txt"
+	local debuglog="$base/zapret-hosts-auto-debug.log"
+	[ -f "$auto" ] || : > "$auto"
+	[ "$AUTOHOSTLIST_DEBUGLOG" = "1" ] && [ -f "$debuglog" ] || : > "$debuglog"
+}
 # ==============================================================================
 # НАСТРОЙКИ СПЕЦИФИЧНЫЕ ДЛЯ KEENETIC
 # ==============================================================================
@@ -502,6 +515,9 @@ start()
 
     # 2. Применить firewall правила
     [ "$INIT_APPLY_FW" = "1" ] && start_fw
+
+    # 2.1. Подготовить autohostlist файлы (если включено)
+    ensure_autohostlist_files
 
     # 3. Запустить daemon процессы
     start_daemons
