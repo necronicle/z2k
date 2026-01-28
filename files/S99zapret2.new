@@ -147,8 +147,8 @@ fw_nfqws_post4()
 	if [ -n "$wan" ]; then
 		_fw_nfqws_post4 "$1" "$2" "$3" "$wan"
 	else
-		[ -n "$Z2K_DEBUG" ] && echo "WARN: WAN iface not found (IPv4), applying without -o"
-		_fw_nfqws_post4 "$1" "$2" "$3" ""
+		echo "WARN: WAN iface not found (IPv4), skip applying nfqws rules"
+		return 0
 	fi
 }
 
@@ -163,8 +163,8 @@ fw_nfqws_post6()
 	if [ -n "$wan" ]; then
 		_fw_nfqws_post6 "$1" "$2" "$3" "$wan"
 	else
-		[ -n "$Z2K_DEBUG" ] && echo "WARN: WAN iface not found (IPv6), applying without -o"
-		_fw_nfqws_post6 "$1" "$2" "$3" ""
+		echo "WARN: WAN iface not found (IPv6), skip applying nfqws rules"
+		return 0
 	fi
 }
 
@@ -178,8 +178,8 @@ fw_nfqws_pre4()
 	if [ -n "$wan" ]; then
 		_fw_nfqws_pre4 "$1" "$2" "$3" "$wan"
 	else
-		[ -n "$Z2K_DEBUG" ] && echo "WARN: WAN iface not found (IPv4), applying without -i"
-		_fw_nfqws_pre4 "$1" "$2" "$3" ""
+		echo "WARN: WAN iface not found (IPv4), skip applying nfqws rules"
+		return 0
 	fi
 }
 
@@ -194,8 +194,8 @@ fw_nfqws_pre6()
 	if [ -n "$wan" ]; then
 		_fw_nfqws_pre6 "$1" "$2" "$3" "$wan"
 	else
-		[ -n "$Z2K_DEBUG" ] && echo "WARN: WAN iface not found (IPv6), applying without -i"
-		_fw_nfqws_pre6 "$1" "$2" "$3" ""
+		echo "WARN: WAN iface not found (IPv6), skip applying nfqws rules"
+		return 0
 	fi
 }
 
