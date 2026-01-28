@@ -203,6 +203,9 @@ INIT_APPLY_FW=1
 # Set during installation based on system detection
 FLOWOFFLOAD=$flowoffload_value
 
+# WAN interface override (space/comma separated). Empty = auto-detect
+#WAN_IFACE=
+
 # Disable IPv6 processing (0=enabled, 1=disabled)
 # По умолчанию отключен для Keenetic (большинство роутеров не используют IPv6)
 DISABLE_IPV6=1
