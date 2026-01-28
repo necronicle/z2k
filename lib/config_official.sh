@@ -130,9 +130,12 @@ NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 NFQWS2_PORTS_UDP="443,50000:50099,1400,3478:3481,5349"
 
 # Packet direction filters (connbytes)
-NFQWS2_TCP_PKT_OUT="1-10"
+# NOTE: These are packet counts, NOT ranges
+# PKT_OUT=20 means "first 20 packets" (connbytes 1:20)
+# Official zapret2 defaults: TCP_PKT_OUT=20, UDP_PKT_OUT=5
+NFQWS2_TCP_PKT_OUT="20"
 NFQWS2_TCP_PKT_IN=""
-NFQWS2_UDP_PKT_OUT="1-10"
+NFQWS2_UDP_PKT_OUT="5"
 NFQWS2_UDP_PKT_IN=""
 
 # ==============================================================================
