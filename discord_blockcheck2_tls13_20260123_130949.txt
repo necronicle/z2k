@@ -1,0 +1,145 @@
+* checking system
+Linux detected
+kernel: Linux version 6.6.87.2-microsoft-standard-WSL2 (root@439a258ad544) (gcc (GCC) 11.2.0, GNU ld (GNU Binutils) 2.37) #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025
+distro: Ubuntu 24.04.3 LTS
+firewall type is nftables
+CURL=curl
+curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.7
+Release-Date: 2023-12-06, security patched: 8.5.0-2ubuntu10.6
+Protocols: dict file ftp ftps gopher gophers http https imap imaps ldap ldaps mqtt pop3 pop3s rtmp rtsp scp sftp smb smbs smtp smtps telnet tftp
+Features: alt-svc AsynchDNS brotli GSS-API HSTS HTTP2 HTTPS-proxy IDN IPv6 Kerberos Largefile libz NTLM PSL SPNEGO SSL threadsafe TLS-SRP UnixSockets zstd
+* checking already running DPI bypass processes
+* checking privileges
+root is required
+elevating with sudo
+* checking system
+Linux detected
+kernel: Linux version 6.6.87.2-microsoft-standard-WSL2 (root@439a258ad544) (gcc (GCC) 11.2.0, GNU ld (GNU Binutils) 2.37) #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025
+distro: Ubuntu 24.04.3 LTS
+firewall type is nftables
+CURL=curl
+curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.7
+Release-Date: 2023-12-06, security patched: 8.5.0-2ubuntu10.6
+Protocols: dict file ftp ftps gopher gophers http https imap imaps ldap ldaps mqtt pop3 pop3s rtmp rtsp scp sftp smb smbs smtp smtps telnet tftp
+Features: alt-svc AsynchDNS brotli GSS-API HSTS HTTP2 HTTPS-proxy IDN IPv6 Kerberos Largefile libz NTLM PSL SPNEGO SSL threadsafe TLS-SRP UnixSockets zstd
+* checking already running DPI bypass processes
+* checking privileges
+* checking prerequisites
+* checking DNS
+system DNS is working
+comparing system resolver to public DNS : 8.8.8.8
+pornhub.com : OK
+ej.ru : MISMATCH
+-- system resolver :
+213.166.70.101
+-- 8.8.8.8 :
+188.186.154.88
+-- POSSIBLE DNS HIJACK DETECTED. ZAPRET WILL NOT HELP YOU IN CASE DNS IS SPOOFED !!!
+-- DNS CHANGE OR DNSCRYPT MAY BE REQUIRED
+* searching working DoH server
+https://cloudflare-dns.com/dns-query : OK
+* checking virtualization
+!!! WARNING. microsoft virtualization detected !!!
+!!! WARNING. vmware and virtualbox are known to break most of the DPI bypass techniques when network is NATed using internal hypervisor NAT !!!
+!!! WARNING. if this is your case make sure you are bridged not NATed !!!
+
+NOTE ! this test should be run with zapret or any other bypass software disabled, without VPN
+
+ping: connect: Network is unreachable
+
+installed curl version does not support http3 QUIC. tests disabled.
+
+
+* port block tests ipv4 rutracker.org:80
+nc -z -w 2 104.21.32.39 80
+Connection to 104.21.32.39 80 port [tcp/http] succeeded!
+104.21.32.39 connects
+nc -z -w 2 172.67.182.196 80
+Connection to 172.67.182.196 80 port [tcp/http] succeeded!
+172.67.182.196 connects
+
+* curl_test_http ipv4 rutracker.org
+- checking without DPI bypass
+suspicious redirection 302 to : http://lawfilter.ertelecom.ru
+UNAVAILABLE
+
+- IP block tests (requires manual interpretation)
+> testing iana.org on it's original ip
+!!!!! AVAILABLE !!!!!
+> testing rutracker.org on 192.0.43.8 (iana.org)
+HTTP/1.1 302 Moved Temporarily
+Location: http://lawfilter.ertelecom.ru
+> testing iana.org on 104.21.32.39 (rutracker.org)
+HTTP/1.1 530 <none>
+> testing iana.org on 172.67.182.196 (rutracker.org)
+HTTP/1.1 530 <none>
+
+preparing nfqws2 redirection
+
+* script : standard/10-http-basic.sh
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=http_hostcase
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=http_hostcase:spell=hoSt
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=http_domcase
+suspicious redirection 302 to : http://lawfilter.ertelecom.ru
+UNAVAILABLE
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=http_methodeol
+!!!!! AVAILABLE !!!!!
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=http_unixeol
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+
+* script : standard/15-misc.sh
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,method+2:ip_id=rnd:repeats=1
+curl: (28) Connection timed out after 2002 milliseconds
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,midsld:ip_id=rnd:repeats=1
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,method+2:ip_id=rnd:repeats=20
+suspicious redirection 302 to : http://lawfilter.ertelecom.ru
+UNAVAILABLE
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,midsld:ip_id=rnd:repeats=20
+curl: (28) Connection timed out after 2068 milliseconds
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,method+2:ip_id=rnd:repeats=100
+curl: (28) Operation timed out after 2080 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,midsld:ip_id=rnd:repeats=100
+curl: (28) Operation timed out after 2080 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,method+2:ip_id=rnd:repeats=260
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=tcpseg:pos=0,midsld:ip_id=rnd:repeats=260
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+
+* script : standard/17-oob.sh
+- curl_test_http ipv4 rutracker.org : nfqws2 --in-range=-s1 --lua-desync=oob:urp=b
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --in-range=-s1 --lua-desync=oob:urp=0
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --in-range=-s1 --lua-desync=oob:urp=2
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --in-range=-s1 --lua-desync=oob:urp=midsld
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+
+* script : standard/20-multi.sh
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=multisplit:pos=method+2
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=multisplit:pos=midsld
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=multisplit:pos=method+2,midsld
+curl: (28) Operation timed out after 2002 milliseconds with 0 bytes received
+UNAVAILABLE code=28
+- curl_test_http ipv4 rutracker.org : nfqws2 --payload=http_req --lua-desync=multidisorder:pos=method+2
