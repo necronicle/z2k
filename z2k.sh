@@ -14,6 +14,11 @@ WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"
 GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/test"
 
+# Экспортировать переменные для использования в функциях
+export WORK_DIR
+export LIB_DIR
+export GITHUB_RAW
+
 # Список модулей для загрузки
 MODULES="utils system_init install strategies config config_official menu discord"
 
