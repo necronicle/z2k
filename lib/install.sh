@@ -1233,14 +1233,36 @@ get_default_ifaces6()
 get_wan_ifaces4()
 {
 	local ifaces
-	ifaces="$(get_default_ifaces4)"
+	if [ -n "$WAN_IFACE" ]; then
+		ifaces="$(echo "$WAN_IFACE" | tr ',' ' ')"
+	else
+		ifaces="$(get_default_ifaces4)"
+	fi
+	ifaces="$(echo "$ifaces" | xargs)"
+	if [ -n "$ifaces" ] && exists ip; then
+		local i
+		for i in $ifaces; do
+			ip link show "$i" >/dev/null 2>&1 || echo "WARN: WAN iface '$i' not found"
+		done
+	fi
 	[ -n "$ifaces" ] && unique $ifaces || true
 }
 
 get_wan_ifaces6()
 {
 	local ifaces
-	ifaces="$(get_default_ifaces6)"
+	if [ -n "$WAN_IFACE" ]; then
+		ifaces="$(echo "$WAN_IFACE" | tr ',' ' ')"
+	else
+		ifaces="$(get_default_ifaces6)"
+	fi
+	ifaces="$(echo "$ifaces" | xargs)"
+	if [ -n "$ifaces" ] && exists ip; then
+		local i
+		for i in $ifaces; do
+			ip link show "$i" >/dev/null 2>&1 || echo "WARN: WAN iface '$i' not found"
+		done
+	fi
 	[ -n "$ifaces" ] && unique $ifaces || true
 }
 
@@ -1343,10 +1365,47 @@ run_daemon()
     fi
 }
 
+extract_hostlist_paths()
+{
+	echo "$1" | tr ' ' '\n' | sed -n 's/^--hostlist=//p'
+}
+
+has_hostlist_domains()
+{
+	echo "$1" | tr ' ' '\n' | grep -q '^--hostlist-domains='
+}
+
+validate_profile_hostlist()
+{
+	local opts="$1"
+	local has_hostlist=0
+	local has_domains=0
+	local path
+
+	for path in $(extract_hostlist_paths "$opts"); do
+		has_hostlist=1
+		if [ ! -s "$path" ]; then
+			echo "WARN: hostlist file missing or empty: $path (skip profile)"
+			return 1
+		fi
+	done
+
+	if has_hostlist_domains "$opts"; then
+		has_domains=1
+	fi
+
+	if [ $has_hostlist -eq 0 ] && [ $has_domains -eq 0 ]; then
+		echo "WARN: profile has no hostlist/hostlist-domains (skip profile)"
+		return 1
+	fi
+
+	return 0
+}
 run_nfqws()
 {
     # $1 - instance ID
     # $2 - nfqws options
+    validate_profile_hostlist "$2" || return 0
     run_daemon $1 "$NFQWS2" "$NFQWS2_OPT_BASE $2"
 }
 
