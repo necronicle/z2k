@@ -892,17 +892,24 @@ auto_test_youtube_tcp() {
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
         # Применить стратегию (показываем ошибки для отладки)
+        printf "[DEBUG] Вызов apply_strategy #%s\n" "$num" >&2
         apply_strategy "$num" >&2
         local apply_result=$?
+        printf "[DEBUG] apply_strategy вернул код: %s\n" "$apply_result" >&2
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
             continue
         fi
+        printf "[DEBUG] apply_strategy успешно выполнен\n" >&2
 
         # Подождать 2 секунды для применения
         sleep 2
 
+        # DEBUG: Проверка что код доходит до теста
+        printf "[DEBUG] Начало теста стратегии #%s\n" "$num" >&2
+
         # Протестировать через TLS
+        printf "[DEBUG] Вызов test_strategy_tls %s 3\n" "$domain" >&2
         if test_strategy_tls "$domain" 3; then
             printf "РАБОТАЕТ\n" >&2
             print_success "Найдена работающая стратегия для YouTube TCP: #$num" >&2
@@ -911,6 +918,7 @@ auto_test_youtube_tcp() {
         else
             printf "НЕ РАБОТАЕТ\n" >&2
         fi
+        printf "[DEBUG] Тест завершён\n" >&2
     done
 
     # Если ничего не работает, вернуть стратегию по умолчанию
@@ -948,12 +956,15 @@ auto_test_youtube_gv() {
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
         # Применить стратегию (показываем ошибки для отладки)
+        printf "[DEBUG] Вызов apply_strategy #%s\n" "$num" >&2
         apply_strategy "$num" >&2
         local apply_result=$?
+        printf "[DEBUG] apply_strategy вернул код: %s\n" "$apply_result" >&2
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
             continue
         fi
+        printf "[DEBUG] apply_strategy успешно выполнен\n" >&2
 
         # Подождать 2 секунды для применения
         sleep 2
@@ -1000,12 +1011,15 @@ auto_test_rkn() {
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
         # Применить стратегию (показываем ошибки для отладки)
+        printf "[DEBUG] Вызов apply_strategy #%s\n" "$num" >&2
         apply_strategy "$num" >&2
         local apply_result=$?
+        printf "[DEBUG] apply_strategy вернул код: %s\n" "$apply_result" >&2
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
             continue
         fi
+        printf "[DEBUG] apply_strategy успешно выполнен\n" >&2
 
         # Подождать 2 секунды для применения
         sleep 2
