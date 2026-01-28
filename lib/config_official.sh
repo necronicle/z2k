@@ -91,9 +91,41 @@ create_official_config() {
     # Генерировать NFQWS2_OPT
     local nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies)
 
+    # =========================================================================
+    # ВАЛИДАЦИЯ NFQWS2 ОПЦИЙ (ВАЖНО)
+    # =========================================================================
+    print_info "Валидация сгенерированных опций nfqws2..."
+
+    # Извлечь NFQWS2_OPT из сгенерированной секции
+    local nfqws2_opt_value=$(echo "$nfqws2_opt_section" | grep "^NFQWS2_OPT=" | sed 's/^NFQWS2_OPT=//' | tr -d '"')
+
+    # Загрузить модули для dry_run_nfqws()
+    if [ -f "/opt/zapret2/common/base.sh" ]; then
+        . "/opt/zapret2/common/base.sh"
+    fi
+
+    if [ -f "/opt/zapret2/common/linux_daemons.sh" ]; then
+        . "/opt/zapret2/common/linux_daemons.sh"
+
+        # Установить временно NFQWS2_OPT для проверки
+        export NFQWS2_OPT="$nfqws2_opt_value"
+        export NFQWS2="/opt/zapret2/nfq2/nfqws2"
+
+        # Проверить опции
+        if dry_run_nfqws 2>/dev/null; then
+            print_success "Опции nfqws2 валидны"
+        else
+            print_warning "Некоторые опции nfqws2 могут быть некорректными"
+            print_info "Продолжаем установку (init скрипт повторно проверит при запуске)"
+        fi
+    else
+        print_info "Модули валидации не найдены, пропускаем проверку"
+    fi
+
     # Получить FWTYPE и FLOWOFFLOAD из окружения (если установлены)
     local fwtype_value="${FWTYPE:-iptables}"
     local flowoffload_value="${FLOWOFFLOAD:-none}"
+    local tmpdir_value="${TMPDIR:-}"
 
     # Создать полный config файл
     cat > "$config_file" <<CONFIG
@@ -172,7 +204,25 @@ INIT_APPLY_FW=1
 FLOWOFFLOAD=$flowoffload_value
 
 # Disable IPv6 processing (0=enabled, 1=disabled)
-DISABLE_IPV6=0
+# По умолчанию отключен для Keenetic (большинство роутеров не используют IPv6)
+DISABLE_IPV6=1
+
+# ==============================================================================
+# SYSTEM SETTINGS
+# ==============================================================================
+
+# Temporary directory for downloads and processing
+# Empty = use system default /tmp (tmpfs, in RAM)
+# Set to disk path for low RAM systems (e.g., /opt/zapret2/tmp)
+CONFIG
+    # Добавить TMPDIR только если установлен
+    if [ -n "$tmpdir_value" ]; then
+        echo "TMPDIR=$tmpdir_value" >> "$config_file"
+    else
+        echo "#TMPDIR=/opt/zapret2/tmp" >> "$config_file"
+    fi
+
+    cat >> "$config_file" <<'CONFIG'
 
 # ==============================================================================
 # IPSET SETTINGS

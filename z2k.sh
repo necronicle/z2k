@@ -15,7 +15,7 @@ LIB_DIR="${WORK_DIR}/lib"
 GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/test"
 
 # Список модулей для загрузки
-MODULES="utils install strategies config config_official menu discord"
+MODULES="utils system_init install strategies config config_official menu discord"
 
 # ==============================================================================
 # ВСТРОЕННЫЕ FALLBACK ФУНКЦИИ
@@ -480,6 +480,9 @@ main() {
     # Теперь доступны все функции из модулей
     # Переустановить обработчики сигналов с правильными функциями
     setup_signal_handlers
+
+    # Инициализировать системные переменные (SYSTEM, UNAME, INIT)
+    init_system_vars || die "Ошибка определения типа системы"
 
     # Инициализация (создание рабочей директории с проверками из utils.sh)
     init_work_dir || die "Ошибка инициализации"

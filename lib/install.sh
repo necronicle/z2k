@@ -993,7 +993,63 @@ step_disable_hwnat_and_offload() {
 }
 
 # ==============================================================================
-# ШАГ 8: СОЗДАНИЕ ОФИЦИАЛЬНОГО CONFIG И INIT СКРИПТА
+# ШАГ 9.5: НАСТРОЙКА TMPDIR ДЛЯ LOW RAM СИСТЕМ
+# ==============================================================================
+
+step_configure_tmpdir() {
+    print_header "Шаг 9.5/12: Настройка TMPDIR для low RAM систем"
+
+    # Получить объём RAM
+    local ram_mb
+    if [ -f "${ZAPRET2_DIR}/common/base.sh" ]; then
+        . "${ZAPRET2_DIR}/common/base.sh"
+        ram_mb=$(get_ram_mb)
+    else
+        # Fallback: определить RAM вручную
+        if [ -f /proc/meminfo ]; then
+            ram_mb=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}')
+        else
+            ram_mb=999  # Предполагаем достаточно RAM если не можем определить
+        fi
+    fi
+
+    print_info "Обнаружено RAM: ${ram_mb}MB"
+
+    # АВТОМАТИЧЕСКИЙ выбор TMPDIR на основе RAM
+    if [ "$ram_mb" -le 400 ]; then
+        print_warning "Low RAM система - используем диск для временных файлов"
+
+        local disk_tmpdir="/opt/zapret2/tmp"
+
+        # Создать директорию
+        mkdir -p "$disk_tmpdir" || {
+            print_error "Не удалось создать $disk_tmpdir"
+            return 1
+        }
+
+        export TMPDIR="$disk_tmpdir"
+        print_success "TMPDIR установлен: $disk_tmpdir (защита от OOM)"
+
+        # Проверить свободное место на диске
+        if command -v df >/dev/null 2>&1; then
+            local free_mb
+            free_mb=$(df -m "$disk_tmpdir" | tail -1 | awk '{print $4}')
+            print_info "Свободно на диске: ${free_mb}MB"
+
+            if [ "$free_mb" -lt 200 ]; then
+                print_warning "Мало свободного места (<200MB)"
+            fi
+        fi
+    else
+        print_success "Достаточно RAM (${ram_mb}MB) - используем /tmp (быстрее)"
+        export TMPDIR=""
+    fi
+
+    return 0
+}
+
+# ==============================================================================
+# ШАГ 10: СОЗДАНИЕ ОФИЦИАЛЬНОГО CONFIG И INIT СКРИПТА
 # ==============================================================================
 
 step_create_config_and_init() {
@@ -1133,9 +1189,12 @@ std_ports
 # ==============================================================================
 
 PIDDIR=/var/run
+USEROPT=""
+[ -n "$WS_USER" ] && USEROPT="--user=$WS_USER"
 NFQWS2="${NFQWS2:-$ZAPRET_BASE/nfq2/nfqws2}"
 LUAOPT="--lua-init=@$ZAPRET_BASE/lua/zapret-lib.lua --lua-init=@$ZAPRET_BASE/lua/zapret-antidpi.lua"
-NFQWS2_OPT_BASE="--fwmark=$DESYNC_MARK $LUAOPT"
+[ -f "$ZAPRET_BASE/lua/zapret-auto.lua" ] && LUAOPT="$LUAOPT --lua-init=@$ZAPRET_BASE/lua/zapret-auto.lua"
+NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 LISTS_DIR="$ZAPRET_BASE/lists"
 EXTRA_STRATS_DIR="$ZAPRET_BASE/extra_strats"
 CONFIG_DIR="/opt/etc/zapret2"
@@ -1372,6 +1431,37 @@ restart_fw()
 }
 
 # ==============================================================================
+# OPTIONAL NFTABLES HELPERS (IF AVAILABLE)
+# ==============================================================================
+
+reload_ifsets()
+{
+    existf zapret_reload_ifsets || {
+        echo "reload_ifsets not available (nftables functions not loaded)"
+        return 1
+    }
+    zapret_reload_ifsets
+}
+
+list_ifsets()
+{
+    existf zapret_list_ifsets || {
+        echo "list_ifsets not available (nftables functions not loaded)"
+        return 1
+    }
+    zapret_list_ifsets
+}
+
+list_table()
+{
+    existf zapret_list_table || {
+        echo "list_table not available (nftables functions not loaded)"
+        return 1
+    }
+    zapret_list_table
+}
+
+# ==============================================================================
 # ОСНОВНЫЕ ФУНКЦИИ START/STOP/RESTART
 # ==============================================================================
 
@@ -1485,8 +1575,17 @@ case "$1" in
     restart_daemons)
         restart_daemons
         ;;
+    reload_ifsets)
+        reload_ifsets
+        ;;
+    list_ifsets)
+        list_ifsets
+        ;;
+    list_table)
+        list_table
+        ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|start_fw|stop_fw|restart_fw|start_daemons|stop_daemons|restart_daemons}"
+        echo "Usage: $0 {start|stop|restart|status|start_fw|stop_fw|restart_fw|start_daemons|stop_daemons|restart_daemons|reload_ifsets|list_ifsets|list_table}"
         exit 1
         ;;
 esac
@@ -1665,6 +1764,41 @@ step_finalize() {
         fi
     fi
 
+    # =========================================================================
+    # НАСТРОЙКА АВТООБНОВЛЕНИЯ СПИСКОВ ДОМЕНОВ (КРИТИЧНО)
+    # =========================================================================
+
+    print_separator
+    print_info "Настройка автообновления списков доменов..."
+
+    # Source модуль installer.sh для функций crontab
+    if [ -f "${ZAPRET2_DIR}/common/installer.sh" ]; then
+        . "${ZAPRET2_DIR}/common/installer.sh"
+
+        # Удалить старые записи cron если есть
+        crontab_del_quiet
+
+        # Добавить новую задачу: обновление каждый день в 06:00
+        # Роутеры работают 24/7, поэтому ночное время идеально
+        if crontab_add 0 6; then
+            print_success "Автообновление настроено (ежедневно в 06:00)"
+        else
+            print_warning "Не удалось настроить crontab"
+            print_info "Списки нужно будет обновлять вручную:"
+            print_info "  ${ZAPRET2_DIR}/ipset/get_config.sh"
+        fi
+
+        # Убедиться что cron демон запущен
+        if cron_ensure_running; then
+            print_info "Cron демон запущен"
+        else
+            print_warning "Cron демон не запущен, автообновление не будет работать"
+        fi
+    else
+        print_warning "Модуль installer.sh не найден, пропускаем настройку cron"
+        print_info "Автообновление не настроено - списки нужно обновлять вручную"
+    fi
+
     # Показать итоговую информацию
     print_separator
     print_success "Установка zapret2 завершена!"
@@ -1704,6 +1838,7 @@ run_full_install() {
     step_check_and_select_fwtype || return 1       # ← НОВОЕ (7/12)
     step_download_domain_lists || return 1         # 8/12
     step_disable_hwnat_and_offload || return 1     # 9/12 (расширено)
+    step_configure_tmpdir || return 1              # ← НОВОЕ (9.5/12)
     step_create_config_and_init || return 1        # 10/12
     step_install_netfilter_hook || return 1        # 11/12
     step_finalize || return 1                      # 12/12
