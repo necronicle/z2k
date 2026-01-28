@@ -884,8 +884,8 @@ auto_test_youtube_tcp() {
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию
-        apply_strategy "$num" >/dev/null 2>&1
+        # Применить стратегию (показываем ошибки для отладки)
+        apply_strategy "$num" >&2
         local apply_result=$?
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
@@ -940,8 +940,8 @@ auto_test_youtube_gv() {
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию
-        apply_strategy "$num" >/dev/null 2>&1
+        # Применить стратегию (показываем ошибки для отладки)
+        apply_strategy "$num" >&2
         local apply_result=$?
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
@@ -992,8 +992,8 @@ auto_test_rkn() {
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию
-        apply_strategy "$num" >/dev/null 2>&1
+        # Применить стратегию (показываем ошибки для отладки)
+        apply_strategy "$num" >&2
         local apply_result=$?
         if [ "$apply_result" -ne 0 ]; then
             printf "ОШИБКА\n" >&2
