@@ -70,7 +70,7 @@ generate_nfqws2_opt_from_strategies() {
         if [ -s "$list_path" ]; then
             nfqws2_opt_lines="$nfqws2_opt_lines$*\\n"
         else
-            echo "WARN: hostlist file missing or empty: $list_path (skip profile)"
+            echo "WARN: hostlist file missing or empty: $list_path (skip profile)" 1>&2
         fi
     }
 
