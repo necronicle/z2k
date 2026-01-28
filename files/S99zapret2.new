@@ -1,38 +1,38 @@
-п»ї#!/bin/sh
+#!/bin/sh
 # /opt/etc/init.d/S99zapret2
-# РђРґР°РїС‚Р°С†РёСЏ РѕС„РёС†РёР°Р»СЊРЅРѕРіРѕ init.d/openwrt/zapret2 РґР»СЏ Keenetic
-# РСЃРїРѕР»СЊР·СѓРµС‚ РјРѕРґСѓР»Рё common/ Рё config С„Р°Р№Р» РІРјРµСЃС‚Рѕ hardcoded РЅР°СЃС‚СЂРѕРµРє
+# Адаптация официального init.d/openwrt/zapret2 для Keenetic
+# Использует модули common/ и config файл вместо hardcoded настроек
 
 # ==============================================================================
-# РџРЈРўР Р РџР•Р Р•РњР•РќРќР«Р•
+# ПУТИ И ПЕРЕМЕННЫЕ
 # ==============================================================================
 
 ZAPRET_BASE=/opt/zapret2
 ZAPRET_RW=${ZAPRET_RW:-"$ZAPRET_BASE"}
 ZAPRET_CONFIG=${ZAPRET_CONFIG:-"$ZAPRET_RW/config"}
 
-# РџСЂРѕРІРµСЂРєР° С‡С‚Рѕ zapret2 СѓСЃС‚Р°РЅРѕРІР»РµРЅ
+# Проверка что zapret2 установлен
 [ -d "$ZAPRET_BASE" ] || {
     echo "ERROR: zapret2 not installed in $ZAPRET_BASE"
     exit 1
 }
 
 # ==============================================================================
-# SOURCE РћР¤РР¦РРђР›Р¬РќР«РҐ РњРћР”РЈР›Р•Р™ (РєР°Рє РІ init.d/openwrt/functions)
+# SOURCE ОФИЦИАЛЬНЫХ МОДУЛЕЙ (как в init.d/openwrt/functions)
 # ==============================================================================
 
-# Р‘Р°Р·РѕРІС‹Рµ СѓС‚РёР»РёС‚С‹
+# Базовые утилиты
 . "$ZAPRET_BASE/common/base.sh"
 
-# РћРїСЂРµРґРµР»РµРЅРёРµ С‚РёРїР° firewall (iptables/nftables)
+# Определение типа firewall (iptables/nftables)
 . "$ZAPRET_BASE/common/fwtype.sh"
 
-# KEENETIC FIX: РџРµСЂРµРѕРїСЂРµРґРµР»РёС‚СЊ linux_ipt_avail РґР»СЏ СЂР°Р±РѕС‚С‹ Р±РµР· ip6tables
-# РќР° Keenetic РјРѕР¶РµС‚ Р±С‹С‚СЊ DISABLE_IPV6=1, РЅРѕ iptables РІСЃРµ СЂР°РІРЅРѕ СЂР°Р±РѕС‚Р°РµС‚
+# KEENETIC FIX: Переопределить linux_ipt_avail для работы без ip6tables
+# На Keenetic может быть DISABLE_IPV6=1, но iptables все равно работает
 linux_ipt_avail()
 {
-	# Р”Р»СЏ Keenetic РґРѕСЃС‚Р°С‚РѕС‡РЅРѕ С‚РѕР»СЊРєРѕ iptables (IPv4-only СЂРµР¶РёРј)
-	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: linux_ipt_avail() РІС‹Р·РІР°РЅР°"
+	# Для Keenetic достаточно только iptables (IPv4-only режим)
+	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: linux_ipt_avail() вызвана"
 	exists iptables
 	local result=$?
 	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: exists iptables = $result"
@@ -42,42 +42,42 @@ linux_ipt_avail()
 # IP helper functions
 . "$ZAPRET_BASE/common/linux_iphelper.sh"
 
-# Р¤СѓРЅРєС†РёРё РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ iptables
+# Функции для работы с iptables
 . "$ZAPRET_BASE/common/ipt.sh"
 
-# Р¤СѓРЅРєС†РёРё РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ nftables (РµСЃР»Рё РґРѕСЃС‚СѓРїРЅС‹)
+# Функции для работы с nftables (если доступны)
 existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 
-# РЈРїСЂР°РІР»РµРЅРёРµ firewall
+# Управление firewall
 . "$ZAPRET_BASE/common/linux_fw.sh"
 
-# РЈРїСЂР°РІР»РµРЅРёРµ daemon РїСЂРѕС†РµСЃСЃР°РјРё
+# Управление daemon процессами
 . "$ZAPRET_BASE/common/linux_daemons.sh"
 
-# Р Р°Р±РѕС‚Р° СЃРѕ СЃРїРёСЃРєР°РјРё РґРѕРјРµРЅРѕРІ
+# Работа со списками доменов
 . "$ZAPRET_BASE/common/list.sh"
 
-# РџРѕРґРґРµСЂР¶РєР° custom scripts
+# Поддержка custom scripts
 . "$ZAPRET_BASE/common/custom.sh"
 
 # ==============================================================================
-# Р—РђР“Р РЈР—РљРђ РљРћРќР¤РР“РЈР РђР¦РР
+# ЗАГРУЗКА КОНФИГУРАЦИИ
 # ==============================================================================
 
-# Р—Р°РіСЂСѓР·РёС‚СЊ РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ
+# Загрузить конфигурацию
 . "$ZAPRET_CONFIG"
 
-# DEBUG: РџСЂРѕРІРµСЂРёС‚СЊ FWTYPE РїРѕСЃР»Рµ Р·Р°РіСЂСѓР·РєРё config
-[ -n "$Z2K_DEBUG" ] && echo "DEBUG: РџРѕСЃР»Рµ Р·Р°РіСЂСѓР·РєРё config - FWTYPE='$FWTYPE'"
+# DEBUG: Проверить FWTYPE после загрузки config
+[ -n "$Z2K_DEBUG" ] && echo "DEBUG: После загрузки config - FWTYPE='$FWTYPE'"
 
-# РљР РРўРР§РќРћ: РџСЂРµРѕР±СЂР°Р·РѕРІР°С‚СЊ РїРѕСЂС‚С‹ РІ С„РѕСЂРјР°С‚ iptables (Р·Р°РјРµРЅРёС‚СЊ - РЅР° :)
-# std_ports() Р±С‹Р»Р° РІС‹Р·РІР°РЅР° РїСЂРё Р·Р°РіСЂСѓР·РєРµ ipt.sh, РЅРѕ С‚РѕРіРґР° РїРµСЂРµРјРµРЅРЅС‹Рµ Р±С‹Р»Рё РїСѓСЃС‚С‹Рµ
-# РџРѕРІС‚РѕСЂРЅРѕ РІС‹Р·РІР°С‚СЊ std_ports() РџРћРЎР›Р• Р·Р°РіСЂСѓР·РєРё config
+# КРИТИЧНО: Преобразовать порты в формат iptables (заменить - на :)
+# std_ports() была вызвана при загрузке ipt.sh, но тогда переменные были пустые
+# Повторно вызвать std_ports() ПОСЛЕ загрузки config
 std_ports
-[ -n "$Z2K_DEBUG" ] && echo "DEBUG: std_ports() РІС‹Р·РІР°РЅР° - NFQWS2_PORTS_TCP_IPT='$NFQWS2_PORTS_TCP_IPT'"
+[ -n "$Z2K_DEBUG" ] && echo "DEBUG: std_ports() вызвана - NFQWS2_PORTS_TCP_IPT='$NFQWS2_PORTS_TCP_IPT'"
 
 # ==============================================================================
-# РќРђРЎРўР РћР™РљР РЎРџР•Р¦РР¤РР§РќР«Р• Р”Р›РЇ KEENETIC
+# НАСТРОЙКИ СПЕЦИФИЧНЫЕ ДЛЯ KEENETIC
 # ==============================================================================
 
 PIDDIR=/var/run
@@ -94,7 +94,7 @@ CUSTOM_DIR="${CUSTOM_DIR:-$ZAPRET_RW/init.d/keenetic}"
 IPSET_CR="$ZAPRET_BASE/ipset/create_ipset.sh"
 
 # ==============================================================================
-# Р¤РЈРќРљР¦РР Р”Р›РЇ Р РђР‘РћРўР« РЎ IPSET
+# ФУНКЦИИ ДЛЯ РАБОТЫ С IPSET
 # ==============================================================================
 
 create_ipset()
@@ -104,7 +104,7 @@ create_ipset()
 }
 
 # ==============================================================================
-# KEENETIC FIREWALL FUNCTIONS (Р·Р°РјРµРЅР° OpenWrt network.sh Р·Р°РІРёСЃРёРјРѕСЃС‚РµР№)
+# KEENETIC FIREWALL FUNCTIONS (замена OpenWrt network.sh зависимостей)
 # ==============================================================================
 
 get_default_ifaces4()
@@ -133,9 +133,9 @@ get_wan_ifaces6()
 	[ -n "$ifaces" ] && unique $ifaces || true
 }
 
-# Keenetic-specific: СѓРїСЂРѕС‰РµРЅРЅС‹Рµ РІРµСЂСЃРёРё fw_nfqws_post4/post6/pre4/pre6
-# Р’ РѕС‚Р»РёС‡РёРµ РѕС‚ OpenWrt, РЅРµ С‚СЂРµР±СѓСЋС‚ network.sh Рё РѕРїСЂРµРґРµР»РµРЅРёСЏ WAN РёРЅС‚РµСЂС„РµР№СЃРѕРІ
-# РџС‹С‚Р°РµРјСЃСЏ РѕРїСЂРµРґРµР»РёС‚СЊ WAN РїРѕ default route
+# Keenetic-specific: упрощенные версии fw_nfqws_post4/post6/pre4/pre6
+# В отличие от OpenWrt, не требуют network.sh и определения WAN интерфейсов
+# Пытаемся определить WAN по default route
 
 fw_nfqws_post4()
 {
@@ -200,7 +200,7 @@ fw_nfqws_pre6()
 }
 
 # ==============================================================================
-# Р¤РЈРќРљР¦РР РЈРџР РђР’Р›Р•РќРРЇ DAEMON (РђР”РђРџРўРР РћР’РђРќРћ Р”Р›РЇ KEENETIC Р‘Р•Р— PROCD)
+# ФУНКЦИИ УПРАВЛЕНИЯ DAEMON (АДАПТИРОВАНО ДЛЯ KEENETIC БЕЗ PROCD)
 # ==============================================================================
 
 run_daemon()
@@ -213,14 +213,14 @@ run_daemon()
 
     echo "Starting daemon $1: $2 $3"
 
-    # Р—Р°РїСѓСЃРє РІ С„РѕРЅРµ СЃ СЃРѕС…СЂР°РЅРµРЅРёРµРј PID
+    # Запуск в фоне с сохранением PID
     $2 $3 >/dev/null 2>&1 &
     local PID=$!
 
-    # РЎРѕС…СЂР°РЅРёС‚СЊ PID
+    # Сохранить PID
     echo $PID > "$PIDFILE"
 
-    # РџСЂРѕРІРµСЂРёС‚СЊ С‡С‚Рѕ РїСЂРѕС†РµСЃСЃ Р·Р°РїСѓСЃС‚РёР»СЃСЏ
+    # Проверить что процесс запустился
     sleep 1
     if kill -0 $PID 2>/dev/null; then
         echo "Daemon $1 started with PID $PID"
@@ -256,7 +256,7 @@ stop_daemon_by_pidfile()
             echo "Stopping daemon with PID $PID"
             kill $PID 2>/dev/null
             sleep 1
-            # Force kill РµСЃР»Рё РЅРµ РѕСЃС‚Р°РЅРѕРІРёР»СЃСЏ
+            # Force kill если не остановился
             kill -0 $PID 2>/dev/null && kill -9 $PID 2>/dev/null
         fi
         rm -f "$1"
@@ -267,31 +267,31 @@ stop_all_nfqws()
 {
     echo "Stopping all nfqws daemons"
 
-    # РћСЃС‚Р°РЅРѕРІРёС‚СЊ РїРѕ PID С„Р°Р№Р»Р°Рј
+    # Остановить по PID файлам
     for pidfile in $PIDDIR/nfqws2_*.pid; do
         [ -f "$pidfile" ] && stop_daemon_by_pidfile "$pidfile"
     done
 
-    # Fallback: killall РµСЃР»Рё С‡С‚Рѕ-С‚Рѕ РѕСЃС‚Р°Р»РѕСЃСЊ
+    # Fallback: killall если что-то осталось
     killall nfqws2 2>/dev/null
 
-    # РћС‡РёСЃС‚РёС‚СЊ РІСЃРµ PID С„Р°Р№Р»С‹
+    # Очистить все PID файлы
     rm -f $PIDDIR/nfqws2_*.pid 2>/dev/null
 }
 
 # ==============================================================================
-# Р¤РЈРќРљР¦РР START/STOP DAEMONS
+# ФУНКЦИИ START/STOP DAEMONS
 # ==============================================================================
 
 start_daemons()
 {
     echo "Starting zapret2 daemons"
 
-    # РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ С„СѓРЅРєС†РёРё РёР· common/linux_daemons.sh
-    # standard_mode_daemons РІС‹Р·С‹РІР°РµС‚ do_nfqws
+    # Использовать функции из common/linux_daemons.sh
+    # standard_mode_daemons вызывает do_nfqws
     standard_mode_daemons 1
 
-    # Р—Р°РїСѓСЃС‚РёС‚СЊ custom scripts РµСЃР»Рё РµСЃС‚СЊ
+    # Запустить custom scripts если есть
     custom_runner zapret_custom_daemons 1
 
     return 0
@@ -301,10 +301,10 @@ stop_daemons()
 {
     echo "Stopping zapret2 daemons"
 
-    # РћСЃС‚Р°РЅРѕРІРёС‚СЊ РІСЃРµ nfqws РїСЂРѕС†РµСЃСЃС‹
+    # Остановить все nfqws процессы
     stop_all_nfqws
 
-    # Р—Р°РїСѓСЃС‚РёС‚СЊ custom scripts РґР»СЏ РѕСЃС‚Р°РЅРѕРІРєРё
+    # Запустить custom scripts для остановки
     custom_runner zapret_custom_daemons 0
 
     return 0
@@ -318,14 +318,14 @@ restart_daemons()
 }
 
 # ==============================================================================
-# Р¤РЈРќРљР¦РР START/STOP FIREWALL
+# ФУНКЦИИ START/STOP FIREWALL
 # ==============================================================================
 
 load_modules()
 {
     echo "Loading required kernel modules"
 
-    # РЎРїРёСЃРѕРє РЅРµРѕР±С…РѕРґРёРјС‹С… РјРѕРґСѓР»РµР№ РґР»СЏ СЂР°Р±РѕС‚С‹ zapret2
+    # Список необходимых модулей для работы zapret2
     local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue"
 
     for module in $modules; do
@@ -339,7 +339,7 @@ load_modules()
         fi
     done
 
-    # РџСЂРѕРІРµСЂРёС‚СЊ РєСЂРёС‚РёС‡РЅС‹Р№ РјРѕРґСѓР»СЊ nfnetlink_queue
+    # Проверить критичный модуль nfnetlink_queue
     if ! lsmod | grep -q "nfnetlink_queue" && ! modinfo nfnetlink_queue >/dev/null 2>&1; then
         echo "WARNING: nfnetlink_queue module not available!"
         echo "nfqws2 may fail with 'Operation not permitted'"
@@ -354,18 +354,18 @@ start_fw()
 {
     echo "Applying zapret2 firewall rules"
 
-    # DEBUG: РџСЂРѕРІРµСЂРёС‚СЊ FWTYPE РїРµСЂРµРґ linux_fwtype
-    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Р’ start_fw() РїРµСЂРµРґ linux_fwtype - FWTYPE='$FWTYPE'"
+    # DEBUG: Проверить FWTYPE перед linux_fwtype
+    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: В start_fw() перед linux_fwtype - FWTYPE='$FWTYPE'"
 
-    # РћРїСЂРµРґРµР»РёС‚СЊ С‚РёРї firewall (iptables/nftables)
+    # Определить тип firewall (iptables/nftables)
     linux_fwtype
 
-    # DEBUG: РџСЂРѕРІРµСЂРёС‚СЊ FWTYPE РїРѕСЃР»Рµ linux_fwtype
-    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Р’ start_fw() РїРѕСЃР»Рµ linux_fwtype - FWTYPE='$FWTYPE'"
+    # DEBUG: Проверить FWTYPE после linux_fwtype
+    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: В start_fw() после linux_fwtype - FWTYPE='$FWTYPE'"
 
     echo "Detected firewall type: $FWTYPE"
 
-    # РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РѕС„РёС†РёР°Р»СЊРЅСѓСЋ С„СѓРЅРєС†РёСЋ РёР· common/linux_fw.sh
+    # Использовать официальную функцию из common/linux_fw.sh
     zapret_apply_firewall
 
     return 0
@@ -375,10 +375,10 @@ stop_fw()
 {
     echo "Removing zapret2 firewall rules"
 
-    # РћРїСЂРµРґРµР»РёС‚СЊ С‚РёРї firewall
+    # Определить тип firewall
     linux_fwtype
 
-    # РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РѕС„РёС†РёР°Р»СЊРЅСѓСЋ С„СѓРЅРєС†РёСЋ
+    # Использовать официальную функцию
     zapret_unapply_firewall
 
     return 0
@@ -423,7 +423,7 @@ list_table()
 }
 
 # ==============================================================================
-# РћРЎРќРћР’РќР«Р• Р¤РЈРќРљР¦РР START/STOP/RESTART
+# ОСНОВНЫЕ ФУНКЦИИ START/STOP/RESTART
 # ==============================================================================
 
 start()
@@ -435,13 +435,13 @@ start()
 
     echo "Starting zapret2 service"
 
-    # 1. Р—Р°РіСЂСѓР·РёС‚СЊ РЅРµРѕР±С…РѕРґРёРјС‹Рµ РјРѕРґСѓР»Рё СЏРґСЂР°
+    # 1. Загрузить необходимые модули ядра
     load_modules || echo "Warning: Some modules failed to load"
 
-    # 2. РџСЂРёРјРµРЅРёС‚СЊ firewall РїСЂР°РІРёР»Р°
+    # 2. Применить firewall правила
     [ "$INIT_APPLY_FW" = "1" ] && start_fw
 
-    # 3. Р—Р°РїСѓСЃС‚РёС‚СЊ daemon РїСЂРѕС†РµСЃСЃС‹
+    # 3. Запустить daemon процессы
     start_daemons
 
     echo "zapret2 service started"
@@ -452,10 +452,10 @@ stop()
 {
     echo "Stopping zapret2 service"
 
-    # 1. РћСЃС‚Р°РЅРѕРІРёС‚СЊ daemon РїСЂРѕС†РµСЃСЃС‹
+    # 1. Остановить daemon процессы
     stop_daemons
 
-    # 2. РЈРґР°Р»РёС‚СЊ firewall РїСЂР°РІРёР»Р°
+    # 2. Удалить firewall правила
     [ "$INIT_APPLY_FW" = "1" ] && stop_fw
 
     echo "zapret2 service stopped"
@@ -473,7 +473,7 @@ status()
 {
     echo "Checking zapret2 status..."
 
-    # РџСЂРѕРІРµСЂРёС‚СЊ РїСЂРѕС†РµСЃСЃС‹ РїРѕ PID С„Р°Р№Р»Р°Рј
+    # Проверить процессы по PID файлам
     local running=0
     for pidfile in $PIDDIR/nfqws2_*.pid; do
         if [ -f "$pidfile" ]; then
@@ -490,7 +490,7 @@ status()
     if [ $running -gt 0 ]; then
         echo "zapret2 is running ($running daemons)"
 
-        # РџРѕРєР°Р·Р°С‚СЊ РїСЂРѕС†РµСЃСЃС‹
+        # Показать процессы
         echo "Processes:"
         pgrep -af nfqws2
 
