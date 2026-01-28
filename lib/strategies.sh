@@ -591,7 +591,14 @@ apply_strategy() {
 
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
-    "$init_script" restart >/dev/null 2>&1
+
+    # DEBUG: показываем вывод restart для отладки
+    "$init_script" restart 2>&1
+    local restart_result=$?
+
+    if [ "$restart_result" -ne 0 ]; then
+        print_warning "restart вернул код ошибки: $restart_result"
+    fi
 
     sleep 2
 
