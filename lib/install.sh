@@ -1300,14 +1300,14 @@ load_modules()
     # Список необходимых модулей для работы zapret2
     local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue"
 
-    for module in \$modules; do
-        if ! lsmod | grep -q "^\$module"; then
-            [ -n "\$Z2K_DEBUG" ] && echo "DEBUG: Loading module: \$module"
-            modprobe "\$module" 2>/dev/null || {
-                echo "Warning: Failed to load module \$module (may be built-in)"
+    for module in $modules; do
+        if ! lsmod | grep -q "^$module"; then
+            [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Loading module: $module"
+            modprobe "$module" 2>/dev/null || {
+                echo "Warning: Failed to load module $module (may be built-in)"
             }
         else
-            [ -n "\$Z2K_DEBUG" ] && echo "DEBUG: Module already loaded: \$module"
+            [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Module already loaded: $module"
         fi
     done
 
