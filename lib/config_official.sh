@@ -112,9 +112,10 @@ ENABLED=1
 # For z2k we use hostlist mode with multi-profile filtering
 MODE_FILTER=hostlist
 
-# Firewall type (auto-detected during installation)
-# Options: iptables, nftables
-FWTYPE=$fwtype_value
+# Firewall type - AUTO-DETECTED by init script, DO NOT set manually
+# Init script calls linux_fwtype() which detects iptables/nftables automatically
+# If FWTYPE is set here, linux_fwtype() will skip detection!
+#FWTYPE=iptables
 
 # ==============================================================================
 # NFQWS2 DAEMON SETTINGS
