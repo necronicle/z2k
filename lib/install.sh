@@ -1384,9 +1384,12 @@ validate_profile_hostlist()
 
 	for path in $(extract_hostlist_paths "$opts"); do
 		has_hostlist=1
-		if [ ! -s "$path" ]; then
-			echo "WARN: hostlist file missing or empty: $path (skip profile)"
+		if [ ! -f "$path" ]; then
+			echo "WARN: hostlist file not found: $path (skip daemon)"
 			return 1
+		fi
+		if [ ! -s "$path" ]; then
+			echo "WARN: hostlist file empty: $path (profile may be ineffective)"
 		fi
 	done
 
@@ -1395,7 +1398,7 @@ validate_profile_hostlist()
 	fi
 
 	if [ $has_hostlist -eq 0 ] && [ $has_domains -eq 0 ]; then
-		echo "WARN: profile has no hostlist/hostlist-domains (skip profile)"
+		echo "WARN: NFQWS2_OPT has no hostlist/hostlist-domains (skip daemon)"
 		return 1
 	fi
 
