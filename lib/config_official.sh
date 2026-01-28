@@ -96,9 +96,11 @@ generate_nfqws2_opt_from_strategies() {
     # Custom TCP
     add_hostlist_line "${lists_dir}/custom.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/custom.txt $custom_tcp"
 
+    local nfqws2_opt_value
+    nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d')
     cat <<NFQWS2_OPT
 NFQWS2_OPT="
-$(echo -e "$nfqws2_opt_lines" | sed '/^$/d')
+$nfqws2_opt_value
 "
 NFQWS2_OPT
 }
