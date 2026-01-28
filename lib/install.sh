@@ -816,6 +816,14 @@ step_check_and_select_fwtype() {
 
     print_info "Автоопределение типа firewall системы..."
 
+    # ВАЖНО: Загрузить base.sh ПЕРЕД fwtype.sh, т.к. нужна функция exists()
+    if [ -f "${ZAPRET2_DIR}/common/base.sh" ]; then
+        . "${ZAPRET2_DIR}/common/base.sh"
+    else
+        print_error "Модуль base.sh не найден в ${ZAPRET2_DIR}/common/"
+        return 1
+    fi
+
     # Source модуль fwtype из zapret2
     if [ -f "${ZAPRET2_DIR}/common/fwtype.sh" ]; then
         . "${ZAPRET2_DIR}/common/fwtype.sh"
