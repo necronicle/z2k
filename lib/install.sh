@@ -1430,50 +1430,14 @@ run_full_install() {
     step_install_netfilter_hook || return 1        # 11/12
     step_finalize || return 1                      # 12/12
 
-    # После установки - выбор между автоподбором и дефолтными стратегиями
+    # После установки - без вопросов применяем autocircular стратегии по умолчанию
     print_separator
     print_info "Установка завершена успешно!"
     print_separator
 
     printf "\nНастройка стратегий DPI bypass:\n\n"
-    printf "1) Применить autocircular (автоперебор внутри профиля)\n"
-    printf "   - Сам выбирает вариант стратегии при неудаче\n"
-    printf "   - YouTube TCP: #10, YouTube GV: #11, RKN: #12, QUIC: #7\n\n"
-    printf "2) Применить МЯГКИЕ стратегии (soft)\n"
-    printf "   - Быстрое применение безопасных стратегий\n"
-    printf "   - YouTube TCP: #1, YouTube GV: #4, RKN: #7, QUIC: #1\n\n"
-    printf "3) Применить СРЕДНИЕ стратегии (medium)\n"
-    printf "   - Более агрессивные, но еще умеренные\n"
-    printf "   - YouTube TCP: #2, YouTube GV: #5, RKN: #8, QUIC: #2\n\n"
-    printf "4) Применить АГРЕССИВНЫЕ стратегии (aggressive)\n"
-    printf "   - Максимальная агрессия, может ломать часть сайтов\n"
-    printf "   - YouTube TCP: #3, YouTube GV: #6, RKN: #9, QUIC: #3\n\n"
-    printf "Ваш выбор [1/2/3/4, Enter=2]: "
-    read -r choice </dev/tty
-    [ -z "$choice" ] && choice=2
-
-    case "$choice" in
-        1)
-            print_info "Применение autocircular стратегий..."
-            apply_autocircular_strategies --auto
-            ;;
-        2)
-            print_info "Применение мягких стратегий..."
-            apply_default_strategies --auto
-            ;;
-        3)
-            print_info "Применение средних стратегий..."
-            apply_medium_strategies --auto
-            ;;
-        4)
-            print_info "Применение агрессивных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
-        *)
-            print_warning "Неверный выбор, применяю мягкие стратегии"
-            apply_default_strategies --auto
-            ;;
-    esac
+    print_info "Автоматически применяю autocircular стратегии (без запроса выбора)..."
+    apply_autocircular_strategies --auto
 
     print_info "Открываю меню управления..."
     sleep 1
