@@ -77,6 +77,14 @@ std_ports
 [ -n "$Z2K_DEBUG" ] && echo "DEBUG: std_ports() вызвана - NFQWS2_PORTS_TCP_IPT='$NFQWS2_PORTS_TCP_IPT'"
 
 # ------------------------------------------------------------------------------
+# ВХОДЯЩИЙ ТРАФИК ДЛЯ ORCHESTRATION (STRICT MANUAL MODE)
+# ------------------------------------------------------------------------------
+# Для корректной работы оркестраторов (например, circular) требуется видеть
+# входящие RST/redirect и т.п. Поэтому включаем входящие правила по умолчанию.
+[ -z "$NFQWS2_TCP_PKT_IN" ] && NFQWS2_TCP_PKT_IN="$NFQWS2_TCP_PKT_OUT"
+[ -z "$NFQWS2_UDP_PKT_IN" ] && NFQWS2_UDP_PKT_IN="$NFQWS2_UDP_PKT_OUT"
+
+# ------------------------------------------------------------------------------
 # AUTOHOSTLIST: ensure required files exist to avoid nfqws2 start failures
 # ------------------------------------------------------------------------------
 ensure_autohostlist_files()
