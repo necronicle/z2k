@@ -209,10 +209,10 @@ download_tools() {
 }
 
 download_fake_blobs() {
-    print_info "�������� fake blobs (TLS + QUIC)..."
+    print_info "Загрузка fake blobs (TLS + QUIC)..."
 
     local fake_dir="${WORK_DIR}/files/fake"
-    mkdir -p "$fake_dir" || die "�� ������� ������� $fake_dir"
+    mkdir -p "$fake_dir" || die "Не удалось создать $fake_dir"
 
     local files="
 tls_clienthello_14.bin
@@ -238,26 +238,26 @@ fake_quic_3.bin
         local url="${GITHUB_RAW}/files/fake/${file}"
         local output="${fake_dir}/${file}"
         if curl -fsSL "$url" -o "$output"; then
-            print_success "���������: files/fake/${file}"
+            print_success "Загружено: files/fake/${file}"
         else
-            die "������ �������� files/fake/${file}"
+            die "Ошибка загрузки files/fake/${file}"
         fi
     done
 }
 
 download_init_script() {
-    print_info "�������� init ������� (S99zapret2.new)..."
+    print_info "Загрузка init скрипта (S99zapret2.new)..."
 
     local files_dir="${WORK_DIR}/files"
-    mkdir -p "$files_dir" || die "�� ������� ������� $files_dir"
+    mkdir -p "$files_dir" || die "Не удалось создать $files_dir"
 
     local url="${GITHUB_RAW}/files/S99zapret2.new"
     local output="${files_dir}/S99zapret2.new"
 
     if curl -fsSL "$url" -o "$output"; then
-        print_success "���������: files/S99zapret2.new"
+        print_success "Загружено: files/S99zapret2.new"
     else
-        die "������ �������� files/S99zapret2.new"
+        die "Ошибка загрузки files/S99zapret2.new"
     fi
 }
 
@@ -522,7 +522,7 @@ main() {
     # Скачать fake blobs
     download_fake_blobs
 
-    # ������� init ������
+    # Скачать init скрипт
     download_init_script
 
 
