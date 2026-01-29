@@ -1436,10 +1436,9 @@ run_full_install() {
     print_separator
 
     printf "\nНастройка стратегий DPI bypass:\n\n"
-    printf "1) Запустить автоподбор стратегий (рекомендуется)\n"
-    printf "   - Автоматическое тестирование для вашей сети\n"
-    printf "   - Занимает 8-10 минут\n"
-    printf "   - Подберет оптимальные стратегии для YouTube и RKN\n\n"
+    printf "1) Применить autocircular (автоперебор внутри профиля)\n"
+    printf "   - Сам выбирает вариант стратегии при неудаче\n"
+    printf "   - YouTube TCP: #10, YouTube GV: #11, RKN: #12, QUIC: #7\n\n"
     printf "2) Применить МЯГКИЕ стратегии (soft)\n"
     printf "   - Быстрое применение безопасных стратегий\n"
     printf "   - YouTube TCP: #1, YouTube GV: #4, RKN: #7, QUIC: #1\n\n"
@@ -1454,6 +1453,10 @@ run_full_install() {
     [ -z "$choice" ] && choice=2
 
     case "$choice" in
+        1)
+            print_info "Применение autocircular стратегий..."
+            apply_autocircular_strategies --auto
+            ;;
         2)
             print_info "Применение мягких стратегий..."
             apply_default_strategies --auto
@@ -1467,9 +1470,8 @@ run_full_install() {
             apply_new_default_strategies --auto
             ;;
         *)
-            print_info "Запуск автоматического подбора стратегий..."
-            print_separator
-            auto_test_categories --auto
+            print_warning "Неверный выбор, применяю мягкие стратегии"
+            apply_default_strategies --auto
             ;;
     esac
 

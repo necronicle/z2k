@@ -1850,3 +1850,55 @@ apply_medium_strategies() {
 apply_new_default_strategies() {
     apply_tiered_strategies aggressive "$@"
 }
+
+# Применить autocircular стратегии (автоперебор внутри профиля)
+apply_autocircular_strategies() {
+    local auto_mode=0
+
+    if [ "$1" = "--auto" ]; then
+        auto_mode=1
+    fi
+
+    local yt_tcp=10
+    local yt_gv=11
+    local rkn=12
+    local quic=7
+
+    print_header "Применение autocircular стратегий"
+    print_info "Будут применены следующие стратегии:"
+    print_info "  YouTube TCP: #$yt_tcp"
+    print_info "  YouTube GV:  #$yt_gv"
+    print_info "  RKN:         #$rkn"
+    print_info "  YouTube QUIC: #$quic"
+    printf "\n"
+
+    if [ "$auto_mode" -eq 0 ]; then
+        if ! confirm "Применить autocircular стратегии?"; then
+            print_info "Отменено"
+            return 0
+        fi
+    fi
+
+    if ! strategy_exists "$yt_tcp"; then
+        print_warning "Стратегия #$yt_tcp не найдена, используется #1"
+        yt_tcp=1
+    fi
+    if ! strategy_exists "$yt_gv"; then
+        print_warning "Стратегия #$yt_gv не найдена, используется #1"
+        yt_gv=1
+    fi
+    if ! strategy_exists "$rkn"; then
+        print_warning "Стратегия #$rkn не найдена, используется #1"
+        rkn=1
+    fi
+
+    apply_category_strategies_v2 "$yt_tcp" "$yt_gv" "$rkn"
+
+    if quic_strategy_exists "$quic"; then
+        set_current_quic_strategy "$quic"
+    else
+        print_warning "QUIC стратегия #$quic не найдена, оставляю текущую"
+    fi
+
+    return 0
+}
