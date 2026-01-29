@@ -1824,3 +1824,63 @@ apply_default_strategies() {
 # ==============================================================================
 
 # Р’СЃРµ С„СѓРЅРєС†РёРё РґРѕСЃС‚СѓРїРЅС‹ РїРѕСЃР»Рµ source СЌС‚РѕРіРѕ С„Р°Р№Р»Р°
+
+# Применить наши дефолтные стратегии (autocircular)
+apply_new_default_strategies() {
+    local auto_mode=0
+
+    if [ "$1" = "--auto" ]; then
+        auto_mode=1
+    fi
+
+    print_header "Применение нового дефолтного набора стратегий"
+
+    # Наши дефолты:
+    # YouTube TCP: #880
+    # YouTube GV:  #881
+    # RKN:         #882
+    # YouTube QUIC: #2
+    local default_yt_tcp=880
+    local default_yt_gv=881
+    local default_rkn=882
+    local default_quic=2
+
+    print_info "Будут применены следующие стратегии:"
+    print_info "  YouTube TCP: #$default_yt_tcp"
+    print_info "  YouTube GV:  #$default_yt_gv"
+    print_info "  RKN:         #$default_rkn"
+    print_info "  YouTube QUIC: #$default_quic"
+    printf "\n"
+
+    if [ "$auto_mode" -eq 0 ]; then
+        if ! confirm "Применить новый дефолтный набор стратегий?"; then
+            print_info "Отменено"
+            return 0
+        fi
+    fi
+
+    if ! strategy_exists "$default_yt_tcp"; then
+        print_warning "Стратегия #$default_yt_tcp не найдена, используется #1"
+        default_yt_tcp=1
+    fi
+    if ! strategy_exists "$default_yt_gv"; then
+        print_warning "Стратегия #$default_yt_gv не найдена, используется #1"
+        default_yt_gv=1
+    fi
+    if ! strategy_exists "$default_rkn"; then
+        print_warning "Стратегия #$default_rkn не найдена, используется #1"
+        default_rkn=1
+    fi
+
+    # Применить TCP категории
+    apply_category_strategies_v2 "$default_yt_tcp" "$default_yt_gv" "$default_rkn"
+
+    # Применить QUIC для YouTube
+    if quic_strategy_exists "$default_quic"; then
+        set_current_quic_strategy "$default_quic"
+    else
+        print_warning "QUIC стратегия #$default_quic не найдена, оставляем текущую"
+    fi
+
+    return 0
+}
