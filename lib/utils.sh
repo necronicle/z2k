@@ -64,11 +64,11 @@ fi
 # ==============================================================================
 
 print_success() {
-    printf "${COLOR_GREEN}[✓]${COLOR_RESET} %s\n" "$1"
+    printf "${COLOR_GREEN}[[OK]]${COLOR_RESET} %s\n" "$1"
 }
 
 print_error() {
-    printf "${COLOR_RED}[✗]${COLOR_RESET} %s\n" "$1" >&2
+    printf "${COLOR_RED}[[FAIL]]${COLOR_RESET} %s\n" "$1" >&2
 }
 
 print_warning() {
