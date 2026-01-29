@@ -261,6 +261,10 @@ EOF
                 print_info "РСЃРїСЂР°РІСЊС‚Рµ РїСЂРѕР±Р»РµРјСѓ Рё Р·Р°РїСѓСЃС‚РёС‚Рµ СЃРЅРѕРІР°"
                 return 1
                 ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
+            ;;
             *)
                 print_warning "РџСЂРѕРґРѕР»Р¶Р°РµРј Р±РµР· РѕР±РЅРѕРІР»РµРЅРёСЏ РїР°РєРµС‚РѕРІ..."
                 print_info "Р‘СѓРґРµС‚ РёСЃРїРѕР»СЊР·РѕРІР°РЅР° С‚РµРєСѓС‰Р°СЏ Р»РѕРєР°Р»СЊРЅР°СЏ Р±Р°Р·Р° РїР°РєРµС‚РѕРІ"
@@ -309,6 +313,10 @@ step_check_dns() {
                 print_info "РЈСЃС‚Р°РЅРѕРІРєР° РјРѕР¶РµС‚ РЅРµ СѓРґР°С‚СЊСЃСЏ РїСЂРё Р·Р°РіСЂСѓР·РєРµ С„Р°Р№Р»РѕРІ"
                 return 0
                 ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
+            ;;
             *)
                 print_info "РЈСЃС‚Р°РЅРѕРІРєР° РїСЂРµСЂРІР°РЅР°"
                 print_info "РСЃРїСЂР°РІСЊС‚Рµ DNS Рё Р·Р°РїСѓСЃС‚РёС‚Рµ СЃРЅРѕРІР°"
@@ -425,6 +433,10 @@ unzip
             read -r answer </dev/tty
             case "$answer" in
                 [Yy]*) print_warning "РџСЂРѕРґРѕР»Р¶Р°РµРј РЅР° СЃРІРѕР№ СЃС‚СЂР°С… Рё СЂРёСЃРє..." ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
+            ;;
                 *) return 1 ;;
             esac
         fi
@@ -457,6 +469,10 @@ unzip
                         print_warning "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ GNU gzip"
                     fi
                     ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
+            ;;
                 *)
                     print_info "РџСЂРѕРїСѓСЃРєР°РµРј СѓСЃС‚Р°РЅРѕРІРєСѓ GNU gzip"
                     ;;
@@ -478,6 +494,10 @@ unzip
                         print_warning "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ GNU sort"
                     fi
                     ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
+            ;;
                 *)
                     print_info "РџСЂРѕРїСѓСЃРєР°РµРј СѓСЃС‚Р°РЅРѕРІРєСѓ GNU sort"
                     ;;
@@ -622,6 +642,10 @@ step_build_zapret2() {
             i386|i686) bin_arch="linux-x86" ;;
             mips) bin_arch="linux-mips" ;;
             mipsel) bin_arch="linux-mipsel" ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
+            ;;
             *)
                 print_error "РќРµРїРѕРґРґРµСЂР¶РёРІР°РµРјР°СЏ Р°СЂС…РёС‚РµРєС‚СѓСЂР°: $arch"
                 return 1
@@ -882,6 +906,10 @@ step_check_and_select_fwtype() {
         nftables)
             print_info "nftables - СЃРѕРІСЂРµРјРµРЅРЅС‹Р№ firewall Linux (kernel 3.13+)"
             print_info "Р‘РѕР»РµРµ СЌС„С„РµРєС‚РёРІРµРЅ С‡РµРј iptables"
+            ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
             ;;
         *)
             print_warning "РќРµРёР·РІРµСЃС‚РЅС‹Р№ С‚РёРї firewall: $FWTYPE"
@@ -1412,17 +1440,25 @@ run_full_install() {
     printf "   - РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРµ С‚РµСЃС‚РёСЂРѕРІР°РЅРёРµ РґР»СЏ РІР°С€РµР№ СЃРµС‚Рё\n"
     printf "   - Р—Р°РЅРёРјР°РµС‚ 8-10 РјРёРЅСѓС‚\n"
     printf "   - РџРѕРґР±РµСЂРµС‚ РѕРїС‚РёРјР°Р»СЊРЅС‹Рµ СЃС‚СЂР°С‚РµРіРёРё РґР»СЏ YouTube Рё RKN\n\n"
-    printf "2) РџСЂРёРјРµРЅРёС‚СЊ РґРµС„РѕР»С‚РЅС‹Рµ СЃС‚СЂР°С‚РµРіРёРё\n"
-    printf "   - Р‘С‹СЃС‚СЂРѕРµ РїСЂРёРјРµРЅРµРЅРёРµ РїСЂРѕРІРµСЂРµРЅРЅС‹С… СЃС‚СЂР°С‚РµРіРёР№\n"
+    printf "2) Применить дефолтные стратегии\n"
+    printf "   - Быстрое применение проверенных стратегий\n"
     printf "   - YouTube TCP: #252, YouTube GV: #790, RKN: #3\n"
-    printf "   - РњРѕР¶РµС‚ СЂР°Р±РѕС‚Р°С‚СЊ РЅРµ РІРѕ РІСЃРµС… СЃРµС‚СЏС…\n\n"
-    printf "Р’Р°С€ РІС‹Р±РѕСЂ [1/2]: "
+    printf "   - Может работать не во всех сетях\n\n"
+    printf "3) Применить НОВЫЕ дефолтные стратегии (autocircular)\n"
+    printf "   - YouTube TCP: #880, YouTube GV: #881, RKN: #882\n"
+    printf "   - YouTube QUIC: #2\n"
+    printf "   - Строго по мануалу (in/out + входящий NFQUEUE)\n\n"
+    printf "Ваш выбор [1/2/3]: "
     read -r choice </dev/tty
 
     case "$choice" in
         2)
             print_info "РџСЂРёРјРµРЅРµРЅРёРµ РґРµС„РѕР»С‚РЅС‹С… СЃС‚СЂР°С‚РµРіРёР№..."
             apply_default_strategies --auto
+            ;;
+        3)
+            print_info "Применение НОВОГО дефолтного набора стратегий..."
+            apply_new_default_strategies --auto
             ;;
         *)
             print_info "Р—Р°РїСѓСЃРє Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРіРѕ РїРѕРґР±РѕСЂР° СЃС‚СЂР°С‚РµРіРёР№..."
