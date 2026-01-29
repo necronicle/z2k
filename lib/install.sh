@@ -1440,24 +1440,30 @@ run_full_install() {
     printf "   - Автоматическое тестирование для вашей сети\n"
     printf "   - Занимает 8-10 минут\n"
     printf "   - Подберет оптимальные стратегии для YouTube и RKN\n\n"
-    printf "2) Применить дефолтные стратегии\n"
-    printf "   - Быстрое применение проверенных стратегий\n"
-    printf "   - YouTube TCP: #252, YouTube GV: #790, RKN: #3\n"
-    printf "   - Может работать не во всех сетях\n\n"
-    printf "3) Применить НОВЫЕ дефолтные стратегии (autocircular)\n"
-    printf "   - YouTube TCP: #880, YouTube GV: #881, RKN: #882\n"
-    printf "   - YouTube QUIC: #2\n"
-    printf "   - Строгий ручной режим (in/out + inbound NFQUEUE)\n\n"
-    printf "Ваш выбор [1/2/3]: "
+    printf "2) Применить МЯГКИЕ стратегии (soft)\n"
+    printf "   - Быстрое применение безопасных стратегий\n"
+    printf "   - YouTube TCP: #1, YouTube GV: #4, RKN: #7, QUIC: #1\n\n"
+    printf "3) Применить СРЕДНИЕ стратегии (medium)\n"
+    printf "   - Более агрессивные, но еще умеренные\n"
+    printf "   - YouTube TCP: #2, YouTube GV: #5, RKN: #8, QUIC: #2\n\n"
+    printf "4) Применить АГРЕССИВНЫЕ стратегии (aggressive)\n"
+    printf "   - Максимальная агрессия, может ломать часть сайтов\n"
+    printf "   - YouTube TCP: #3, YouTube GV: #6, RKN: #9, QUIC: #3\n\n"
+    printf "Ваш выбор [1/2/3/4, Enter=2]: "
     read -r choice </dev/tty
+    [ -z "$choice" ] && choice=2
 
     case "$choice" in
         2)
-            print_info "Применение дефолтных стратегий..."
+            print_info "Применение мягких стратегий..."
             apply_default_strategies --auto
             ;;
         3)
-            print_info "Применение новых дефолтных стратегий..."
+            print_info "Применение средних стратегий..."
+            apply_medium_strategies --auto
+            ;;
+        4)
+            print_info "Применение агрессивных стратегий..."
             apply_new_default_strategies --auto
             ;;
         *)

@@ -61,10 +61,10 @@ create_default_strategy_files() {
     print_info "Создание дефолтных файлов стратегий..."
 
     # Дефолтная TCP стратегия
-    local default_tcp="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+    local default_tcp="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --out-range=-n10 --lua-desync=fake:blob=fake_default_tls:repeats=4"
 
     # Дефолтная UDP стратегия (QUIC)
-    local default_udp="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+    local default_udp="--filter-udp=443 --filter-l7=quic --payload=quic_initial --out-range=-n10 --lua-desync=fake:blob=fake_default_quic:repeats=3"
 
     # Создать директории и файлы
     mkdir -p "$extra_strats_dir/TCP/YT"
@@ -1765,122 +1765,88 @@ EOF
 # ПРИМЕНЕНИЕ ДЕФОЛТНЫХ СТРАТЕГИЙ
 # ==============================================================================
 
-# Применить дефолтные стратегии без автоподбора
-apply_default_strategies() {
+# Применить набор стратегий по уровню (soft/medium/aggressive)
+apply_tiered_strategies() {
+    local tier="$1"
     local auto_mode=0
 
-    # Проверить флаг --auto
-    if [ "$1" = "--auto" ]; then
+    if [ "$2" = "--auto" ]; then
         auto_mode=1
     fi
 
-    print_header "Применение дефолтных стратегий"
+    local yt_tcp=""
+    local yt_gv=""
+    local rkn=""
+    local quic=""
 
-    # Дефолтные стратегии:
-    # YouTube TCP: #252
-    # YouTube GV:  #790
-    # RKN:         #3
-    local default_yt_tcp=252
-    local default_yt_gv=790
-    local default_rkn=3
+    case "$tier" in
+        soft)
+            yt_tcp=1; yt_gv=4; rkn=7; quic=1
+            print_header "Применение мягких стратегий"
+            ;;
+        medium)
+            yt_tcp=2; yt_gv=5; rkn=8; quic=2
+            print_header "Применение средних стратегий"
+            ;;
+        aggressive)
+            yt_tcp=3; yt_gv=6; rkn=9; quic=3
+            print_header "Применение агрессивных стратегий"
+            ;;
+        *)
+            print_error "Неизвестный уровень: $tier"
+            return 1
+            ;;
+    esac
 
     print_info "Будут применены следующие стратегии:"
-    print_info "  YouTube TCP: #$default_yt_tcp"
-    print_info "  YouTube GV:  #$default_yt_gv"
-    print_info "  RKN:         #$default_rkn"
+    print_info "  YouTube TCP: #$yt_tcp"
+    print_info "  YouTube GV:  #$yt_gv"
+    print_info "  RKN:         #$rkn"
+    print_info "  YouTube QUIC: #$quic"
     printf "\n"
 
     if [ "$auto_mode" -eq 0 ]; then
-        if ! confirm "Применить дефолтные стратегии?"; then
+        if ! confirm "Применить выбранный набор стратегий?"; then
             print_info "Отменено"
             return 0
         fi
     fi
 
-    # Проверить существование стратегий
-    if ! strategy_exists "$default_yt_tcp"; then
-        print_warning "Стратегия #$default_yt_tcp не найдена, используется #1"
-        default_yt_tcp=1
+    if ! strategy_exists "$yt_tcp"; then
+        print_warning "Стратегия #$yt_tcp не найдена, используется #1"
+        yt_tcp=1
+    fi
+    if ! strategy_exists "$yt_gv"; then
+        print_warning "Стратегия #$yt_gv не найдена, используется #1"
+        yt_gv=1
+    fi
+    if ! strategy_exists "$rkn"; then
+        print_warning "Стратегия #$rkn не найдена, используется #1"
+        rkn=1
     fi
 
-    if ! strategy_exists "$default_yt_gv"; then
-        print_warning "Стратегия #$default_yt_gv не найдена, используется #1"
-        default_yt_gv=1
-    fi
+    apply_category_strategies_v2 "$yt_tcp" "$yt_gv" "$rkn"
 
-    if ! strategy_exists "$default_rkn"; then
-        print_warning "Стратегия #$default_rkn не найдена, используется #1"
-        default_rkn=1
+    if quic_strategy_exists "$quic"; then
+        set_current_quic_strategy "$quic"
+    else
+        print_warning "QUIC стратегия #$quic не найдена, оставляю текущую"
     fi
-
-    # Применить стратегии (работает абсолютно так же как автотест)
-    apply_category_strategies_v2 "$default_yt_tcp" "$default_yt_gv" "$default_rkn"
 
     return 0
 }
 
-# ==============================================================================
-# ЭКСПОРТ ФУНКЦИЙ
-# ==============================================================================
+# Применить мягкие стратегии (по умолчанию)
+apply_default_strategies() {
+    apply_tiered_strategies soft "$@"
+}
 
-# Все функции доступны после source этого файла
+# Применить средние стратегии
+apply_medium_strategies() {
+    apply_tiered_strategies medium "$@"
+}
 
-# ��������� ���� ��������� ��������� (autocircular)
+# Применить агрессивные стратегии (совместимость)
 apply_new_default_strategies() {
-    local auto_mode=0
-
-    if [ "$1" = "--auto" ]; then
-        auto_mode=1
-    fi
-
-    print_header "���������� ������ ���������� ������ ���������"
-
-    # ���� �������:
-    # YouTube TCP: #880
-    # YouTube GV:  #881
-    # RKN:         #882
-    # YouTube QUIC: #2
-    local default_yt_tcp=880
-    local default_yt_gv=881
-    local default_rkn=882
-    local default_quic=2
-
-    print_info "����� ��������� ��������� ���������:"
-    print_info "  YouTube TCP: #$default_yt_tcp"
-    print_info "  YouTube GV:  #$default_yt_gv"
-    print_info "  RKN:         #$default_rkn"
-    print_info "  YouTube QUIC: #$default_quic"
-    printf "\n"
-
-    if [ "$auto_mode" -eq 0 ]; then
-        if ! confirm "��������� ����� ��������� ����� ���������?"; then
-            print_info "��������"
-            return 0
-        fi
-    fi
-
-    if ! strategy_exists "$default_yt_tcp"; then
-        print_warning "��������� #$default_yt_tcp �� �������, ������������ #1"
-        default_yt_tcp=1
-    fi
-    if ! strategy_exists "$default_yt_gv"; then
-        print_warning "��������� #$default_yt_gv �� �������, ������������ #1"
-        default_yt_gv=1
-    fi
-    if ! strategy_exists "$default_rkn"; then
-        print_warning "��������� #$default_rkn �� �������, ������������ #1"
-        default_rkn=1
-    fi
-
-    # ��������� TCP ���������
-    apply_category_strategies_v2 "$default_yt_tcp" "$default_yt_gv" "$default_rkn"
-
-    # ��������� QUIC ��� YouTube
-    if quic_strategy_exists "$default_quic"; then
-        set_current_quic_strategy "$default_quic"
-    else
-        print_warning "QUIC ��������� #$default_quic �� �������, ��������� �������"
-    fi
-
-    return 0
+    apply_tiered_strategies aggressive "$@"
 }

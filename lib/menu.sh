@@ -200,6 +200,7 @@ menu_select_strategy() {
 [3] RKN (заблокированные сайты)
 [4] QUIC (UDP 443)
 [5] Все категории сразу
+[6] Уровень агрессивности (soft/medium/aggressive)
 [B] Назад
 
 SUBMENU
@@ -304,6 +305,24 @@ SUBMENU
         5)
             # Все категории
             menu_select_all_strategies "$total_count"
+            pause
+            return
+            ;;
+        6)
+            print_separator
+            print_info "Выберите уровень агрессивности:"
+            printf "  [1] Мягкий (soft)     -> TCP #1/#4/#7, QUIC #1\n"
+            printf "  [2] Средний (medium)  -> TCP #2/#5/#8, QUIC #2\n"
+            printf "  [3] Агрессивный (hard)-> TCP #3/#6/#9, QUIC #3\n"
+            printf "Ваш выбор [1/2/3]: "
+            read_input tier_choice
+
+            case "$tier_choice" in
+                1) apply_default_strategies ;;
+                2) apply_medium_strategies ;;
+                3) apply_new_default_strategies ;;
+                *) print_warning "Неверный выбор уровня" ;;
+            esac
             pause
             return
             ;;
