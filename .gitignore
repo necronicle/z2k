@@ -1,4 +1,12 @@
-﻿# Документация (не для публикации)
+# Local-only docs / agent config
 manual.en.md
 AGENTS.md
+
+# Local tools and agent state
 tools/
+/.claude/
+
+# Local blockcheck logs
+discord_blockcheck2_tls13_20260123_130435.txt
+discord_blockcheck2_tls13_20260123_130949.txt
+discord_blockcheck2_tls13_20260123_131631.txt
