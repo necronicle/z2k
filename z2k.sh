@@ -32,11 +32,11 @@ print_info() {
 }
 
 print_success() {
-    printf "[✓] %s\n" "$1"
+    printf "[[OK]] %s\n" "$1"
 }
 
 print_error() {
-    printf "[✗] %s\n" "$1" >&2
+    printf "[[FAIL]] %s\n" "$1" >&2
 }
 
 die() {
@@ -209,10 +209,10 @@ download_tools() {
 }
 
 download_fake_blobs() {
-    print_info "�������� fake blobs (TLS + QUIC)..."
+    print_info "�������� fake blobs (TLS + QUIC)..."
 
     local fake_dir="${WORK_DIR}/files/fake"
-    mkdir -p "$fake_dir" || die "�� ������� ������� $fake_dir"
+    mkdir -p "$fake_dir" || die "�� ������� ������� $fake_dir"
 
     local files="
 tls_clienthello_14.bin
@@ -238,26 +238,26 @@ fake_quic_3.bin
         local url="${GITHUB_RAW}/files/fake/${file}"
         local output="${fake_dir}/${file}"
         if curl -fsSL "$url" -o "$output"; then
-            print_success "���������: files/fake/${file}"
+            print_success "���������: files/fake/${file}"
         else
-            die "������ �������� files/fake/${file}"
+            die "������ �������� files/fake/${file}"
         fi
     done
 }
 
 download_init_script() {
-    print_info "�������� init ������� (S99zapret2.new)..."
+    print_info "�������� init ������� (S99zapret2.new)..."
 
     local files_dir="${WORK_DIR}/files"
-    mkdir -p "$files_dir" || die "�� ������� ������� $files_dir"
+    mkdir -p "$files_dir" || die "�� ������� ������� $files_dir"
 
     local url="${GITHUB_RAW}/files/S99zapret2.new"
     local output="${files_dir}/S99zapret2.new"
 
     if curl -fsSL "$url" -o "$output"; then
-        print_success "���������: files/S99zapret2.new"
+        print_success "���������: files/S99zapret2.new"
     else
-        die "������ �������� files/S99zapret2.new"
+        die "������ �������� files/S99zapret2.new"
     fi
 }
 
@@ -293,13 +293,13 @@ show_welcome() {
     clear_screen
 
     cat <<'EOF'
-╔═══════════════════════════════════════════════════╗
-║   z2k - Zapret2 для Keenetic (PRE-ALPHA)        ║
-║                   Версия 2.0.0                    ║
-╚═══════════════════════════════════════════════════╝
++===================================================+
+|   z2k - Zapret2 для Keenetic (PRE-ALPHA)        |
+|                   Версия 2.0.0                    |
++===================================================+
 
-  ⚠️  ВНИМАНИЕ: Проект в активной разработке!
-  ⚠️  Это пре-альфа версия - НЕ используйте в production!
+  [WARN]  ВНИМАНИЕ: Проект в активной разработке!
+  [WARN]  Это пре-альфа версия - НЕ используйте в production!
 
   GitHub: https://github.com/necronicle/z2k
 
@@ -328,7 +328,7 @@ prompt_install_or_menu() {
         sleep 1
         show_main_menu
     else
-        print_info "zapret2 не установлен — запускаю установку..."
+        print_info "zapret2 не установлен - запускаю установку..."
         run_full_install
     fi
 }
@@ -522,7 +522,7 @@ main() {
     # Скачать fake blobs
     download_fake_blobs
 
-    # ������� init ������
+    # ������� init ������
     download_init_script
 
 

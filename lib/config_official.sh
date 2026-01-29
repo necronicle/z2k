@@ -60,10 +60,10 @@ generate_nfqws2_opt_from_strategies() {
     custom_tcp="$default_strategy"
 
     # Р“РµРЅРµСЂРёСЂРѕРІР°С‚СЊ NFQWS2_OPT РІ С„РѕСЂРјР°С‚Рµ РѕС„РёС†РёР°Р»СЊРЅРѕРіРѕ config
-    # Генерировать NFQWS2_OPT в формате официального config
+    # пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ NFQWS2_OPT пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ config
     local nfqws2_opt_lines=""
 
-    # Helper: добавить строку если hostlist существует и не пустой
+    # Helper: пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ hostlist пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
     add_hostlist_line() {
         local list_path="$1"
         shift
@@ -80,7 +80,7 @@ generate_nfqws2_opt_from_strategies() {
     # YouTube TCP
     add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp_tcp <HOSTLIST> --new"
 
-    # YouTube GV (domains list встроен)
+    # YouTube GV (domains list пїЅпїЅпїЅпїЅпїЅпїЅпїЅ)
     nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp <HOSTLIST> --new\\n"
 
     # QUIC YT

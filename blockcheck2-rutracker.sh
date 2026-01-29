@@ -46,25 +46,25 @@ if [ -z "$BC" ]; then
 fi
 
 if [ -z "$BC" ] || [ ! -x "$BC" ]; then
-  echo "[ERROR] blockcheck2 не найден. Укажите путь через BLOCKCHECK2=/path/to/blockcheck2" >&2
+  echo "[ERROR] blockcheck2 пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ. пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ BLOCKCHECK2=/path/to/blockcheck2" >&2
   exit 1
 fi
 
 # Ensure required binaries are present
 if ! is_elf "/opt/zapret2/nfq2/nfqws2" || ! is_elf "/opt/zapret2/mdig/mdig"; then
   if [ -x "/opt/zapret2/install_bin.sh" ]; then
-    echo "[i] Отсутствуют бинарники nfqws2/mdig. Запускаю /opt/zapret2/install_bin.sh" >&2
+    echo "[i] пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ nfqws2/mdig. пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ /opt/zapret2/install_bin.sh" >&2
     if ! /opt/zapret2/install_bin.sh; then
-      echo "[WARN] install_bin.sh завершился с ошибкой, попробую скачать релиз" >&2
+      echo "[WARN] install_bin.sh пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ, пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ" >&2
     fi
   else
-    echo "[WARN] Нет /opt/zapret2/install_bin.sh, попробую скачать релиз" >&2
+    echo "[WARN] пїЅпїЅпїЅ /opt/zapret2/install_bin.sh, пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ" >&2
   fi
 fi
 
 # If binaries still missing, download zapret2 source release and run install_bin.sh
 if ! is_elf "/opt/zapret2/nfq2/nfqws2" || ! is_elf "/opt/zapret2/mdig/mdig"; then
-  echo "[i] Пытаюсь загрузить исходники zapret2 с binaries..." >&2
+  echo "[i] пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ zapret2 пїЅ binaries..." >&2
   api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
   release_data=""
   if command -v curl >/dev/null 2>&1; then
@@ -95,7 +95,7 @@ fi
 
 # Final check
 if ! is_elf "/opt/zapret2/nfq2/nfqws2" || ! is_elf "/opt/zapret2/mdig/mdig"; then
-  echo "[ERROR] nfqws2/mdig не установлены корректно. Установите вручную или через install_bin.sh" >&2
+  echo "[ERROR] nfqws2/mdig пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ. пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ install_bin.sh" >&2
   exit 1
 fi
 
@@ -115,4 +115,4 @@ OUT_FILE="rutracker_blockcheck2_$(date +%Y%m%d_%H%M%S).txt"
 # Use GET for HTTPS if supported by environment
 CURL_HTTPS_GET=1 "$BC" --auto $ARGS 2>&1 | tee "$OUT_FILE"
 
-echo "[OK] Результаты сохранены в $OUT_FILE"
+echo "[OK] пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ $OUT_FILE"

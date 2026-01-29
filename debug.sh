@@ -1,9 +1,9 @@
 #!/bin/sh
 # debug.sh - Диагностика модулей ядра для z2k на Keenetic
 
-echo "╔══════════════════════════════════════════════════╗"
-echo "║  z2k - Диагностика модулей ядра                 ║"
-echo "╚══════════════════════════════════════════════════╝"
+echo "+==================================================+"
+echo "|  z2k - Диагностика модулей ядра                 |"
+echo "+==================================================+"
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -43,9 +43,9 @@ echo ""
 echo "Интересующие нас модули:"
 for mod in xt_NFQUEUE xt_multiport xt_connbytes nfnetlink_queue; do
     if lsmod | grep -q "^${mod} "; then
-        echo "  ✓ $mod загружен"
+        echo "  [OK] $mod загружен"
     else
-        echo "  ✗ $mod НЕ загружен"
+        echo "  [FAIL] $mod НЕ загружен"
     fi
 done
 echo ""
@@ -126,9 +126,9 @@ for mod in xt_NFQUEUE xt_multiport xt_connbytes; do
 
     # Проверить загрузился ли
     if lsmod | grep -q "^${mod} "; then
-        echo "✓ Модуль $mod успешно загружен!"
+        echo "[OK] Модуль $mod успешно загружен!"
     else
-        echo "✗ Модуль $mod НЕ загрузился"
+        echo "[FAIL] Модуль $mod НЕ загрузился"
         # Показать последние строки dmesg
         echo "Последние сообщения ядра:"
         dmesg | tail -5
@@ -152,9 +152,9 @@ for mod in xt_NFQUEUE xt_multiport xt_connbytes; do
 
     # Проверить загрузился ли
     if lsmod | grep -q "^${mod} "; then
-        echo "✓ Модуль $mod успешно загружен!"
+        echo "[OK] Модуль $mod успешно загружен!"
     else
-        echo "✗ Модуль $mod НЕ загрузился"
+        echo "[FAIL] Модуль $mod НЕ загрузился"
     fi
     echo ""
 done
@@ -169,9 +169,9 @@ echo ""
 echo "Проверка каждого модуля:"
 for mod in xt_NFQUEUE xt_multiport xt_connbytes nfnetlink_queue; do
     if lsmod | grep -q "^${mod} "; then
-        echo "  ✓ $mod загружен"
+        echo "  [OK] $mod загружен"
     else
-        echo "  ✗ $mod НЕ загружен"
+        echo "  [FAIL] $mod НЕ загружен"
     fi
 done
 echo ""
@@ -182,6 +182,6 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 dmesg | tail -20
 echo ""
 
-echo "╔══════════════════════════════════════════════════╗"
-echo "║  Диагностика завершена                          ║"
-echo "╚══════════════════════════════════════════════════╝"
+echo "+==================================================+"
+echo "|  Диагностика завершена                          |"
+echo "+==================================================+"

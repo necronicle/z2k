@@ -128,9 +128,9 @@ step_update_packages() {
             if [ -n "$repo_url" ]; then
                 print_info "Проверка доступности репозитория..."
                 if curl -s -m 5 --head "$repo_url/Packages.gz" >/dev/null 2>&1; then
-                    print_success "✓ Репозиторий доступен"
+                    print_success "[OK] Репозиторий доступен"
                 else
-                    print_error "✗ Репозиторий недоступен"
+                    print_error "[FAIL] Репозиторий недоступен"
                 fi
             fi
         fi
@@ -138,14 +138,14 @@ step_update_packages() {
         # 4. Проверка самого opkg
         print_info "Проверка opkg бинарника..."
         if opkg --version 2>&1 | grep -qi "illegal"; then
-            print_error "✗ opkg --version падает (Illegal instruction)"
+            print_error "[FAIL] opkg --version падает (Illegal instruction)"
             print_warning "ПРИЧИНА: opkg установлен для неправильной архитектуры CPU!"
         elif opkg --version >/dev/null 2>&1; then
             local opkg_version=$(opkg --version 2>&1 | head -1)
-            print_success "✓ opkg бинарник запускается: $opkg_version"
+            print_success "[OK] opkg бинарник запускается: $opkg_version"
             print_warning "Но 'opkg update' падает - возможно проблема в зависимости или скрипте"
         else
-            print_error "✗ opkg не работает по неизвестной причине"
+            print_error "[FAIL] opkg не работает по неизвестной причине"
         fi
 
         # 5. Проверка файла opkg
@@ -165,7 +165,7 @@ step_update_packages() {
         # Определяем основную причину на основе диагностики
         if opkg --version 2>&1 | grep -qi "illegal"; then
             cat <<'EOF'
-⚠️  КРИТИЧЕСКАЯ ПРОБЛЕМА: НЕПРАВИЛЬНАЯ АРХИТЕКТУРА ENTWARE
+[WARN]  КРИТИЧЕСКАЯ ПРОБЛЕМА: НЕПРАВИЛЬНАЯ АРХИТЕКТУРА ENTWARE
 
 Диагностика показала: opkg не может выполниться на этом роутере.
 Это означает что Entware установлен для НЕПРАВИЛЬНОЙ архитектуры CPU.
@@ -191,14 +191,14 @@ Intel на процессоре ARM.
 EOF
         elif echo "$opkg_output" | grep -qi "illegal instruction"; then
             cat <<'EOF'
-⚠️  СЛОЖНАЯ ПРОБЛЕМА: opkg update падает с "Illegal instruction"
+[WARN]  СЛОЖНАЯ ПРОБЛЕМА: opkg update падает с "Illegal instruction"
 
 Диагностика и попытки исправления:
-- ✓ opkg бинарник запускается (opkg --version работает)
-- ✓ Архитектура системы корректная (aarch64)
-- ✓ Репозиторий доступен (curl тест успешен)
-- ✓ Попробовали альтернативное зеркало (entware.diversion.ch)
-- ✗ НО "opkg update" всё равно падает с "Illegal instruction"
+- [OK] opkg бинарник запускается (opkg --version работает)
+- [OK] Архитектура системы корректная (aarch64)
+- [OK] Репозиторий доступен (curl тест успешен)
+- [OK] Попробовали альтернативное зеркало (entware.diversion.ch)
+- [FAIL] НО "opkg update" всё равно падает с "Illegal instruction"
 
 Это редкая проблема, которая может быть связана с:
 1. Поврежденной зависимой библиотекой (libcurl, libssl, и др.)
@@ -235,7 +235,7 @@ EOF
 EOF
         else
             cat <<'EOF'
-⚠️  ОШИБКА ПРИ ОБНОВЛЕНИИ ПАКЕТОВ
+[WARN]  ОШИБКА ПРИ ОБНОВЛЕНИИ ПАКЕТОВ
 
 Проверьте результаты диагностики выше.
 
@@ -688,27 +688,27 @@ step_build_zapret2() {
 
     # Обновить fake blobs если есть более свежие в z2k
     if [ -d "${WORK_DIR}/files/fake" ]; then
-        print_info "���������� fake blobs �� z2k..."
+        print_info "���������� fake blobs �� z2k..."
         cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
     fi
 
-    # ����������� lua.gz (���� ����� openwrt-embedded)
+    # ����������� lua.gz (���� ����� openwrt-embedded)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then
             for f in "${ZAPRET2_DIR}/lua/"*.lua.gz; do
                 [ -f "$f" ] || continue
                 local out="${f%.gz}"
-                print_info "���������� $(basename "$f")..."
+                print_info "���������� $(basename "$f")..."
                 if gzip -dc "$f" > "${out}.tmp" 2>/dev/null; then
                     mv -f "${out}.tmp" "$out"
                     rm -f "$f"
                 else
                     rm -f "${out}.tmp"
-                    print_warning "�� ������� ����������� $f"
+                    print_warning "�� ������� ����������� $f"
                 fi
             done
         else
-            print_warning "gzip �� ������, ���������� lua.gz ���������"
+            print_warning "gzip �� ������, ���������� lua.gz ���������"
         fi
     fi
     # ===========================================================================
@@ -755,9 +755,9 @@ ${ZAPRET2_DIR}/binaries
     local missing=0
     for path in $required_paths; do
         if [ -e "$path" ]; then
-            print_info "✓ $path"
+            print_info "[OK] $path"
         else
-            print_warning "✗ $path не найден"
+            print_warning "[FAIL] $path не найден"
             missing=$((missing + 1))
         fi
     done
@@ -772,28 +772,28 @@ ${ZAPRET2_DIR}/binaries
     # nfqws2 - основной бинарник
     if [ -x "${ZAPRET2_DIR}/nfq2/nfqws2" ]; then
         if verify_binary "${ZAPRET2_DIR}/nfq2/nfqws2"; then
-            print_success "✓ nfqws2 работает"
+            print_success "[OK] nfqws2 работает"
         else
-            print_error "✗ nfqws2 не запускается"
+            print_error "[FAIL] nfqws2 не запускается"
             return 1
         fi
     else
-        print_error "✗ nfqws2 не найден или не исполняемый"
+        print_error "[FAIL] nfqws2 не найден или не исполняемый"
         return 1
     fi
 
     # ip2net - вспомогательный (может быть симлинком)
     if [ -e "${ZAPRET2_DIR}/ip2net/ip2net" ]; then
-        print_info "✓ ip2net установлен"
+        print_info "[OK] ip2net установлен"
     else
-        print_warning "✗ ip2net не найден (необязательный)"
+        print_warning "[FAIL] ip2net не найден (необязательный)"
     fi
 
     # mdig - DNS утилита (может быть симлинком)
     if [ -e "${ZAPRET2_DIR}/mdig/mdig" ]; then
-        print_info "✓ mdig установлен"
+        print_info "[OK] mdig установлен"
     else
-        print_warning "✗ mdig не найден (необязательный)"
+        print_warning "[FAIL] mdig не найден (необязательный)"
     fi
 
     # Посчитать компоненты
@@ -924,21 +924,21 @@ step_download_domain_lists() {
         return 1
     }
 
-    # ���. ��������: ������ QUIC YT (zapret4rocket)
+    # ���. ��������: ������ QUIC YT (zapret4rocket)
     local yt_quic_list="/opt/zapret2/extra_strats/UDP/YT/List.txt"
     if [ ! -s "$yt_quic_list" ]; then
-        print_warning "������ QUIC YT ����������� ��� ������: $yt_quic_list"
-        print_info "������ ��������� �������� �� zapret4rocket..."
+        print_warning "������ QUIC YT ����������� ��� ������: $yt_quic_list"
+        print_info "������ ��������� �������� �� zapret4rocket..."
         local base_url="${Z4R_BASE_URL:-https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master}"
         mkdir -p "$(dirname "$yt_quic_list")"
         if curl -fsSL "$base_url/extra_strats/UDP/YT/List.txt" -o "$yt_quic_list"; then
             if [ -s "$yt_quic_list" ]; then
-                print_success "������ QUIC YT ��������: $yt_quic_list"
+                print_success "������ QUIC YT ��������: $yt_quic_list"
             else
-                print_warning "������ QUIC YT ������, �� ������: $yt_quic_list"
+                print_warning "������ QUIC YT ������, �� ������: $yt_quic_list"
             fi
         else
-            print_warning "�� ������� ��������� QUIC YT list � $base_url"
+            print_warning "�� ������� ��������� QUIC YT list � $base_url"
         fi
     fi
     # Создать базовую конфигурацию
@@ -1136,21 +1136,21 @@ step_create_config_and_init() {
     # 8.2: Установить новый init скрипт
     # ========================================================================
 
-    print_info "��������� init �������..."
+    print_info "��������� init �������..."
 
-    # ������� ���������� ���� �� ����������
+    # ������� ���������� ���� �� ����������
     mkdir -p "$(dirname "$INIT_SCRIPT")"
 
-    # ����������� init ������ �� �����������
-    print_info "�������� init �������..."
+    # ����������� init ������ �� �����������
+    print_info "�������� init �������..."
 
     if [ -f "${WORK_DIR}/files/S99zapret2.new" ]; then
         cp -f "${WORK_DIR}/files/S99zapret2.new" "$INIT_SCRIPT" || {
-            print_error "�� ������� ����������� init ������"
+            print_error "�� ������� ����������� init ������"
             return 1
         }
     else
-        print_error "Init ������ �� ������: ${WORK_DIR}/files/S99zapret2.new"
+        print_error "Init ������ �� ������: ${WORK_DIR}/files/S99zapret2.new"
         return 1
     fi
 

@@ -20,11 +20,11 @@ show_main_menu() {
         clear_screen
 
         cat <<'MENU'
-╔═══════════════════════════════════════════════════╗
-║   z2k - Zapret2 для Keenetic (PRE-ALPHA)        ║
-╚═══════════════════════════════════════════════════╝
++===================================================+
+|   z2k - Zapret2 для Keenetic (PRE-ALPHA)        |
++===================================================+
 
-    ⚠️  Пре-альфа версия - в активной разработке!
+    [WARN]  Пре-альфа версия - в активной разработке!
 
 MENU
 
@@ -330,9 +330,9 @@ test_category_availability() {
 
     # Запустить тест
     if test_strategy_tls "$test_domain" 5; then
-        print_success "✓ $category_name доступен! Стратегия работает."
+        print_success "[OK] $category_name доступен! Стратегия работает."
     else
-        print_error "✗ $category_name недоступен. Попробуйте другую стратегию."
+        print_error "[FAIL] $category_name недоступен. Попробуйте другую стратегию."
         print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
     fi
 }
@@ -353,9 +353,9 @@ test_category_availability_rkn() {
     done
 
     if [ "$success_count" -ge 2 ]; then
-        print_success "✓ RKN доступен! Стратегия работает. (${success_count}/3)"
+        print_success "[OK] RKN доступен! Стратегия работает. (${success_count}/3)"
     else
-        print_error "✗ RKN недоступен. Попробуйте другую стратегию. (${success_count}/3)"
+        print_error "[FAIL] RKN недоступен. Попробуйте другую стратегию. (${success_count}/3)"
         print_info "Рекомендация: запустите автотест [3] для поиска рабочей стратегии"
     fi
 }

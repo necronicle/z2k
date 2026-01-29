@@ -213,13 +213,13 @@ show_active_processing() {
     printf "\n"
 
     if [ "$all_tcp443_enabled" = "1" ]; then
-        print_warning "⚠️  РЕЖИМ ALL TCP-443 ВКЛЮЧЕН"
+        print_warning "[WARN]  РЕЖИМ ALL TCP-443 ВКЛЮЧЕН"
         printf "    Обрабатывается ВЕСЬ HTTPS трафик (порт 443)\n"
         printf "    Стратегия: #%s\n" "$all_tcp443_strategy"
         printf "    Списки доменов НЕ используются!\n"
         print_separator
     else
-        print_success "✓ Режим по спискам доменов (нормальный)"
+        print_success "[OK] Режим по спискам доменов (нормальный)"
         printf "\n"
     fi
 
