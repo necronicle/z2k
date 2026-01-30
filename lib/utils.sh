@@ -32,7 +32,7 @@ WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"
 
 # GitHub URLs
-GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
+GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/test"
 Z4R_BASE_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master"
 Z4R_LISTS_URL="${Z4R_BASE_URL}/lists"
 

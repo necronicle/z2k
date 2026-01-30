@@ -64,7 +64,7 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 ### 3) Установка z2k (Zapret2 для Keenetic)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/test/z2k.sh | sh
 ```
 
 ---
@@ -84,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 ### Повторный запуск установщика
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/test/z2k.sh | sh
 ```
 
 ### Управление сервисом zapret2
