@@ -113,6 +113,8 @@ LUAOPT="--lua-init=@$LUA_LIB --lua-init=@$LUA_ANTIDPI"
 LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 [ -f "$LUA_AUTO" ] || LUA_AUTO="$LUA_AUTO.gz"
 [ -f "$LUA_AUTO" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_AUTO"
+LUA_PERSIST="$ZAPRET_BASE/lua/z2k-persist.lua"
+[ -f "$LUA_PERSIST" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_PERSIST"
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 
 # Load custom TLS ClientHello blob for strategies (manual: --blob is engine init option).

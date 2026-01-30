@@ -199,6 +199,9 @@ download_fake_blobs() {
 
     local files="
 tls_clienthello_max_ru.bin
+tls_clienthello_chat_deepseek_com.bin
+tls_clienthello_gosuslugi_ru.bin
+tls_clienthello_www_google_com.bin
 "
 
     echo "$files" | while read -r file; do
@@ -226,6 +229,15 @@ download_init_script() {
         print_success "Загружено: files/S99zapret2.new"
     else
         die "Ошибка загрузки files/S99zapret2.new"
+    fi
+
+    local url2="${GITHUB_RAW}/files/z2k-persist.lua"
+    local output2="${files_dir}/z2k-persist.lua"
+
+    if curl -fsSL "$url2" -o "$output2"; then
+        print_success "Загружено: files/z2k-persist.lua"
+    else
+        die "Ошибка загрузки files/z2k-persist.lua"
     fi
 }
 

@@ -714,6 +714,12 @@ step_build_zapret2() {
     if [ -d "${WORK_DIR}/files/fake" ]; then
         print_info "���������� fake blobs �� z2k..."
         cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
+
+    if [ -f "${WORK_DIR}/files/z2k-persist.lua" ] && [ -d "${ZAPRET2_DIR}/lua" ]; then
+        cp -f "${WORK_DIR}/files/z2k-persist.lua" "${ZAPRET2_DIR}/lua/" || \
+            print_warning "Failed to copy z2k-persist.lua"
+    fi
+
     fi
 
     # ����������� lua.gz (���� ����� openwrt-embedded)
