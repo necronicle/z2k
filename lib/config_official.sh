@@ -7,10 +7,11 @@
 # ==============================================================================
 
 generate_nfqws2_opt_from_strategies() {
-    # Генерирует 3-профильный NFQWS2_OPT:
-    #   1) TCP autocircular + <HOSTLIST>
-    #   2) QUIC autocircular + <HOSTLIST_NOAUTO>
-    #   3) Discord UDP + <HOSTLIST_NOAUTO>
+    # Генерирует 4-профильный NFQWS2_OPT:
+    #   1) Discord TCP (стабильный fake, без circular) — для обновлений/загрузок
+    #   2) TCP autocircular + <HOSTLIST>
+    #   3) QUIC autocircular + <HOSTLIST_NOAUTO>
+    #   4) Discord UDP + <HOSTLIST_NOAUTO>
 
     local conf_dir="${CONFIG_DIR:-/opt/etc/zapret2}"
     local strategies_conf="${conf_dir}/strategies.conf"
@@ -53,12 +54,21 @@ generate_nfqws2_opt_from_strategies() {
     local quic_full_params
     quic_full_params=$(build_quic_profile_params "$quic_raw_params")
 
+    # --- Discord TCP параметры (простой стабильный fake, без circular) ---
+    # Discord обновления — длинные HTTPS-загрузки, circular ломает их переключением стратегий.
+    # Отдельный профиль с одним fake обеспечивает стабильное соединение.
+    local discord_tcp_domains="discord.com,discordapp.com,discord.gg,discordapp.net,discord.media,discord.new"
+    local discord_tcp_params="--filter-tcp=443 --filter-l7=tls --hostlist-domains=${discord_tcp_domains} --payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:repeats=6"
+
     # --- Discord UDP параметры ---
     local discord_udp_params="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,stun --payload=stun,discord_ip_discovery --out-range=-n10 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2"
 
-    # --- Собрать NFQWS2_OPT (3 профиля) ---
+    # --- Собрать NFQWS2_OPT (4 профиля) ---
+    # ВАЖНО: Discord TCP должен быть ПЕРЕД общим TCP autocircular,
+    # т.к. профили проверяются последовательно — первый совпавший побеждает.
     cat <<NFQWS2_OPT
 NFQWS2_OPT="
+${discord_tcp_params} --new
 ${tcp_full_params} <HOSTLIST> --new
 ${quic_full_params} <HOSTLIST_NOAUTO> --new
 ${discord_udp_params} <HOSTLIST_NOAUTO>
@@ -213,12 +223,13 @@ NFQWS2_UDP_PKT_OUT="5"
 NFQWS2_UDP_PKT_IN=""
 
 # ==============================================================================
-# NFQWS2 OPTIONS (3-PROFILE MODE)
+# NFQWS2 OPTIONS (4-PROFILE MODE)
 # ==============================================================================
 # Auto-generated from z2k strategy database
-# Profile 1: TCP autocircular (all blocked domains) + <HOSTLIST>
-# Profile 2: QUIC autocircular (YouTube UDP) + <HOSTLIST_NOAUTO>
-# Profile 3: Discord UDP (STUN/voice) + <HOSTLIST_NOAUTO>
+# Profile 1: Discord TCP (stable fake, no circular) — prevents update/download breakage
+# Profile 2: TCP autocircular (all blocked domains) + <HOSTLIST>
+# Profile 3: QUIC autocircular (YouTube UDP) + <HOSTLIST_NOAUTO>
+# Profile 4: Discord UDP (STUN/voice) + <HOSTLIST_NOAUTO>
 # Placeholders <HOSTLIST> / <HOSTLIST_NOAUTO> expanded by init script based on MODE_FILTER
 CONFIG
 
