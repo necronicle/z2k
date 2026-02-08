@@ -1293,35 +1293,61 @@ step_finalize() {
     print_separator
     print_info "Настройка автообновления списков доменов..."
 
-    # Source модуль installer.sh для функций crontab
-    if [ -f "${ZAPRET2_DIR}/common/installer.sh" ]; then
-        . "${ZAPRET2_DIR}/common/installer.sh"
+    # На Keenetic (Entware) cron работает через /opt/etc/crontab
+    # НЕ используем installer.sh из zapret2 — он ищет /etc/init.d/cron (OpenWrt)
+    local cron_line="0 6 * * * ZAPRET_BASE=${ZAPRET2_DIR} ${ZAPRET2_DIR}/ipset/get_config.sh"
+    local crontab_file="/opt/etc/crontab"
+    local cron_ok=0
 
-        # ВАЖНО: Восстановить Z2K путь к init скрипту (он перезаписывается модулями zapret2)
-        INIT_SCRIPT="$Z2K_INIT_SCRIPT"
+    # Установить cron если не установлен
+    if ! command -v crontab >/dev/null 2>&1 && ! [ -f "$crontab_file" ]; then
+        print_info "Установка cron..."
+        opkg install cron 2>/dev/null || true
+    fi
 
-        # Удалить старые записи cron если есть
-        crontab_del_quiet
-
-        # Добавить новую задачу: обновление каждый день в 06:00
-        # Роутеры работают 24/7, поэтому ночное время идеально
-        if crontab_add 0 6; then
-            print_success "Автообновление настроено (ежедневно в 06:00)"
-        else
-            print_warning "Не удалось настроить crontab"
-            print_info "Списки нужно будет обновлять вручную:"
-            print_info "  ${ZAPRET2_DIR}/ipset/get_config.sh"
+    # Метод 1: /opt/etc/crontab (Entware cron)
+    if [ -f "$crontab_file" ] || [ -d "/opt/etc" ]; then
+        # Удалить старые записи zapret2
+        if [ -f "$crontab_file" ]; then
+            grep -v "get_config.sh" "$crontab_file" > "${crontab_file}.tmp" 2>/dev/null
+            mv "${crontab_file}.tmp" "$crontab_file"
         fi
+        # Добавить новую задачу
+        echo "$cron_line" >> "$crontab_file"
+        print_success "Автообновление настроено в $crontab_file (ежедневно в 06:00)"
+        cron_ok=1
+    fi
 
-        # Убедиться что cron демон запущен
-        if cron_ensure_running; then
+    # Метод 2: crontab -l / crontab - (если Entware crontab не работает)
+    if [ "$cron_ok" = "0" ] && command -v crontab >/dev/null 2>&1; then
+        # Удалить старые записи zapret2 и добавить новую
+        (crontab -l 2>/dev/null | grep -v "get_config.sh"; echo "$cron_line") | crontab -
+        if [ $? -eq 0 ]; then
+            print_success "Автообновление настроено через crontab (ежедневно в 06:00)"
+            cron_ok=1
+        fi
+    fi
+
+    if [ "$cron_ok" = "0" ]; then
+        print_warning "Не удалось настроить crontab"
+        print_info "Списки нужно будет обновлять вручную:"
+        print_info "  ZAPRET_BASE=${ZAPRET2_DIR} ${ZAPRET2_DIR}/ipset/get_config.sh"
+    fi
+
+    # Запустить cron демон если есть init скрипт Entware
+    local cron_init="/opt/etc/init.d/S10cron"
+    if [ -x "$cron_init" ]; then
+        "$cron_init" start >/dev/null 2>&1
+        if pgrep -f "cron" >/dev/null 2>&1; then
             print_info "Cron демон запущен"
         else
-            print_warning "Cron демон не запущен, автообновление не будет работать"
+            print_warning "Не удалось запустить cron демон"
         fi
+    elif pgrep -f "cron" >/dev/null 2>&1; then
+        print_info "Cron демон уже запущен"
     else
-        print_warning "Модуль installer.sh не найден, пропускаем настройку cron"
-        print_info "Автообновление не настроено - списки нужно обновлять вручную"
+        print_warning "Cron демон не найден"
+        print_info "Установите: opkg install cron"
     fi
 
     # Показать итоговую информацию
