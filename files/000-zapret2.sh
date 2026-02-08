@@ -31,7 +31,9 @@ fi
 # Небольшая задержка для стабильности
 sleep 2
 
-# Перезапустить правила zapret2
-"$INIT_SCRIPT" restart >/dev/null 2>&1 &
+# Восстановить только firewall-правила (НЕ restart!)
+# restart убивает nfqws2, обнуляя Lua-состояние autocircular (per-domain стратегии).
+# restart_fw пересоздаёт только NFQUEUE правила в mangle, демоны продолжают работу.
+"$INIT_SCRIPT" restart_fw >/dev/null 2>&1 &
 
 exit 0
