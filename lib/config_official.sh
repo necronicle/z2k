@@ -19,7 +19,7 @@ generate_nfqws2_opt_from_strategies() {
     # --- TCP параметры ---
     local tcp_raw_params=""
     local tcp_num
-    tcp_num=$(find_strategy_by_name "manual_autocircular_yt")
+    tcp_num=$(find_strategy_by_name "manual_autocircular")
     if [ -n "$tcp_num" ]; then
         tcp_raw_params=$(get_strategy "$tcp_num")
     fi

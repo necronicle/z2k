@@ -1237,7 +1237,7 @@ apply_autocircular_strategies() {
 
     # Динамический поиск TCP autocircular стратегии
     local tcp_num
-    tcp_num=$(find_strategy_by_name "manual_autocircular_yt")
+    tcp_num=$(find_strategy_by_name "manual_autocircular")
     if [ -z "$tcp_num" ]; then
         print_warning "Autocircular TCP стратегия не найдена в базе, используется #1"
         tcp_num=1
@@ -1558,7 +1558,7 @@ show_circular_info() {
 
     # TCP стратегия
     local tcp_num
-    tcp_num=$(find_strategy_by_name "manual_autocircular_yt")
+    tcp_num=$(find_strategy_by_name "manual_autocircular")
     if [ -n "$tcp_num" ]; then
         local p
         p=$(get_strategy "$tcp_num")
