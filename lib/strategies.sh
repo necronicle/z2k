@@ -1610,14 +1610,16 @@ send_nfqws2_signal() {
 # Чтение логов nfqws2 с платформо-зависимым источником
 _read_nfqws2_log() {
     local lines=${1:-50}
-    if command -v logread >/dev/null 2>&1; then
+    if [ -f /opt/var/log/messages ]; then
+        grep -i "nfqws2" /opt/var/log/messages | tail -"$lines"
+    elif command -v logread >/dev/null 2>&1; then
         logread 2>/dev/null | grep -i "nfqws2" | tail -"$lines"
     elif [ -f /var/log/syslog ]; then
         grep -i "nfqws2" /var/log/syslog | tail -"$lines"
     elif command -v journalctl >/dev/null 2>&1; then
         journalctl -u zapret2 --no-pager -n "$lines" 2>/dev/null
     else
-        print_info "Попробуйте: logread | grep nfqws2"
+        print_info "Лог не найден. Попробуйте: cat /opt/var/log/messages | grep nfqws2"
     fi
 }
 
