@@ -97,32 +97,3 @@ get_keenetic_version() {
     fi
 }
 
-# ==============================================================================
-# KEENETIC СПЕЦИФИЧНЫЕ ПРОВЕРКИ
-# ==============================================================================
-
-check_keenetic_specifics() {
-    if is_keenetic; then
-        print_info "Обнаружен роутер Keenetic"
-
-        local fw_version
-        fw_version=$(get_keenetic_version)
-        [ "$fw_version" != "unknown" ] && print_info "Firmware версия: $fw_version"
-
-        # Проверить наличие NDM hooks
-        if [ -d /opt/etc/ndm ]; then
-            print_info "NDM hooks доступны"
-        fi
-
-        # Проверить fastnat
-        if [ -f /sys/kernel/fastnat/mode ]; then
-            local fastnat_mode
-            fastnat_mode=$(cat /sys/kernel/fastnat/mode 2>/dev/null || echo "unknown")
-            print_info "Fastnat mode: $fastnat_mode"
-        fi
-
-        return 0
-    fi
-
-    return 1
-}

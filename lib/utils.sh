@@ -6,8 +6,8 @@
 # КОНСТАНТЫ
 # ==============================================================================
 
-# Версия z2k
-Z2K_VERSION="2.0.0"
+# Версия z2k (основное определение в z2k.sh)
+[ -z "$Z2K_VERSION" ] && Z2K_VERSION="2.0.0"
 
 # Пути установки
 ZAPRET2_DIR="/opt/zapret2"
@@ -43,6 +43,7 @@ CURRENT_STRATEGY_FILE="${CONFIG_DIR}/current_strategy"
 QUIC_STRATEGIES_CONF="${CONFIG_DIR}/quic_strategies.conf"
 QUIC_STRATEGY_FILE="${CONFIG_DIR}/quic_strategy.conf"
 RUTRACKER_QUIC_STRATEGY_FILE="${CONFIG_DIR}/rutracker_quic_strategy.conf"
+CATEGORY_STRATEGIES_CONF="${CONFIG_DIR}/category_strategies.conf"
 
 # Цвета для вывода (если терминал поддерживает)
 if [ -t 1 ]; then

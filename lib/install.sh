@@ -261,10 +261,6 @@ EOF
                 print_info "Исправьте проблему и запустите снова"
                 return 1
                 ;;
-        3)
-            print_info "Применение новых дефолтных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
             *)
                 print_warning "Продолжаем без обновления пакетов..."
                 print_info "Будет использована текущая локальная база пакетов"
@@ -313,10 +309,6 @@ step_check_dns() {
                 print_info "Установка может не удаться при загрузке файлов"
                 return 0
                 ;;
-        3)
-            print_info "Применение новых дефолтных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
             *)
                 print_info "Установка прервана"
                 print_info "Исправьте DNS и запустите снова"
@@ -433,10 +425,6 @@ unzip
             read -r answer </dev/tty
             case "$answer" in
                 [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
-        3)
-            print_info "Применение новых дефолтных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
                 *) return 1 ;;
             esac
         fi
@@ -469,10 +457,6 @@ unzip
                         print_warning "Не удалось установить GNU gzip"
                     fi
                     ;;
-        3)
-            print_info "Применение новых дефолтных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
                 *)
                     print_info "Пропускаем установку GNU gzip"
                     ;;
@@ -494,10 +478,6 @@ unzip
                         print_warning "Не удалось установить GNU sort"
                     fi
                     ;;
-        3)
-            print_info "Применение новых дефолтных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
                 *)
                     print_info "Пропускаем установку GNU sort"
                     ;;
@@ -642,10 +622,6 @@ step_build_zapret2() {
             i386|i686) bin_arch="linux-x86" ;;
             mips) bin_arch="linux-mips" ;;
             mipsel) bin_arch="linux-mipsel" ;;
-        3)
-            print_info "Применение новых дефолтных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
             *)
                 print_error "Неподдерживаемая архитектура: $arch"
                 return 1
@@ -712,27 +688,27 @@ step_build_zapret2() {
 
     # Обновить fake blobs если есть более свежие в z2k
     if [ -d "${WORK_DIR}/files/fake" ]; then
-        print_info "���������� fake blobs �� z2k..."
+        print_info "Обновление fake blobs из z2k..."
         cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
     fi
 
-    # ����������� lua.gz (���� ����� openwrt-embedded)
+    # Распаковка lua.gz (если пакет openwrt-embedded)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then
             for f in "${ZAPRET2_DIR}/lua/"*.lua.gz; do
                 [ -f "$f" ] || continue
                 local out="${f%.gz}"
-                print_info "���������� $(basename "$f")..."
+                print_info "Распаковка $(basename "$f")..."
                 if gzip -dc "$f" > "${out}.tmp" 2>/dev/null; then
                     mv -f "${out}.tmp" "$out"
                     rm -f "$f"
                 else
                     rm -f "${out}.tmp"
-                    print_warning "�� ������� ����������� $f"
+                    print_warning "Не удалось распаковать $f"
                 fi
             done
         else
-            print_warning "gzip �� ������, ���������� lua.gz ���������"
+            print_warning "gzip не найден, распаковка lua.gz пропущена"
         fi
     fi
     # ===========================================================================
@@ -907,10 +883,6 @@ step_check_and_select_fwtype() {
             print_info "nftables - современный firewall Linux (kernel 3.13+)"
             print_info "Более эффективен чем iptables"
             ;;
-        3)
-            print_info "Применение новых дефолтных стратегий..."
-            apply_new_default_strategies --auto
-            ;;
         *)
             print_warning "Неизвестный тип firewall: $FWTYPE"
             ;;
@@ -952,21 +924,21 @@ step_download_domain_lists() {
         return 1
     }
 
-    # ���. ��������: ������ QUIC YT (zapret4rocket)
+    # Доп. проверка: список QUIC YT (zapret4rocket)
     local yt_quic_list="/opt/zapret2/extra_strats/UDP/YT/List.txt"
     if [ ! -s "$yt_quic_list" ]; then
-        print_warning "������ QUIC YT ����������� ��� ������: $yt_quic_list"
-        print_info "������ ��������� �������� �� zapret4rocket..."
+        print_warning "Список QUIC YT отсутствует или пустой: $yt_quic_list"
+        print_info "Попытка загрузить из zapret4rocket..."
         local base_url="${Z4R_BASE_URL:-https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master}"
         mkdir -p "$(dirname "$yt_quic_list")"
         if curl -fsSL "$base_url/extra_strats/UDP/YT/List.txt" -o "$yt_quic_list"; then
             if [ -s "$yt_quic_list" ]; then
-                print_success "������ QUIC YT ��������: $yt_quic_list"
+                print_success "Список QUIC YT загружен: $yt_quic_list"
             else
-                print_warning "������ QUIC YT ������, �� ������: $yt_quic_list"
+                print_warning "Список QUIC YT скачан, но пустой: $yt_quic_list"
             fi
         else
-            print_warning "�� ������� ��������� QUIC YT list � $base_url"
+            print_warning "Не удалось загрузить QUIC YT list из $base_url"
         fi
     fi
     # Создать базовую конфигурацию
@@ -1164,21 +1136,21 @@ step_create_config_and_init() {
     # 8.2: Установить новый init скрипт
     # ========================================================================
 
-    print_info "��������� init �������..."
+    print_info "Установка init скрипта..."
 
-    # ������� ���������� ���� �� ����������
+    # Создать директорию если не существует
     mkdir -p "$(dirname "$INIT_SCRIPT")"
 
-    # ����������� init ������ �� �����������
-    print_info "�������� init �������..."
+    # Копирование init скрипта из дистрибутива
+    print_info "Копирование init скрипта..."
 
     if [ -f "${WORK_DIR}/files/S99zapret2.new" ]; then
         cp -f "${WORK_DIR}/files/S99zapret2.new" "$INIT_SCRIPT" || {
-            print_error "�� ������� ����������� init ������"
+            print_error "Не удалось скопировать init скрипт"
             return 1
         }
     else
-        print_error "Init ������ �� ������: ${WORK_DIR}/files/S99zapret2.new"
+        print_error "Init скрипт не найден: ${WORK_DIR}/files/S99zapret2.new"
         return 1
     fi
 
@@ -1383,7 +1355,7 @@ step_finalize() {
     printf "  %-25s: %s\n" "Конфигурация" "$CONFIG_DIR"
     printf "  %-25s: %s\n" "Списки доменов" "$LISTS_DIR"
     printf "  %-25s: %s\n" "Стратегии" "$STRATEGIES_CONF"
-    printf "  %-25s: %s\n" "Tools" "$tools_dir"
+    printf "  %-25s: %s\n" "Tools" "${ZAPRET2_DIR}/nfq2"
 
     print_separator
 

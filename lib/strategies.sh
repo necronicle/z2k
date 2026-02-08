@@ -7,20 +7,27 @@
 # КОНСТАНТЫ ДЛЯ СТРАТЕГИЙ
 # ==============================================================================
 
-TOP20_STRATEGIES="1 7 13 19 25 31 37 43 49 55 61 67 73 79 85 91 97 103 109 115"
-
-# Домены для тестирования стратегий
-TEST_DOMAINS="
-http://rutracker.org
-https://rutracker.org
-https://www.youtube.com
-https://discord.com
-https://googlevideo.com
-"
-
 # ==============================================================================
 # РАБОТА С ФАЙЛАМИ СТРАТЕГИЙ ПО КАТЕГОРИЯМ (CONFIG-DRIVEN АРХИТЕКТУРА)
 # ==============================================================================
+
+# Загрузить текущие стратегии категорий в переменные
+# После вызова доступны: CURRENT_YT_TCP, CURRENT_YT_GV, CURRENT_RKN
+load_current_categories() {
+    local config_file="${CONFIG_DIR}/category_strategies.conf"
+    CURRENT_YT_TCP="1"
+    CURRENT_YT_GV="1"
+    CURRENT_RKN="1"
+    if [ -f "$config_file" ]; then
+        local val
+        val=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        [ -n "$val" ] && CURRENT_YT_TCP="$val"
+        val=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        [ -n "$val" ] && CURRENT_YT_GV="$val"
+        val=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
+        [ -n "$val" ] && CURRENT_RKN="$val"
+    fi
+}
 
 # Сохранить стратегию в файл категории
 # $1 - категория (YT, YT_GV, RKN, RUTRACKER)
@@ -721,7 +728,7 @@ apply_strategy_safe() {
     if [ "$score" -lt 3 ]; then
         print_warning "Стратегия работает плохо (оценка: $score/5)"
         printf "Применить всё равно? [y/N]: "
-        read -r answer </dev/tty </dev/tty
+        read -r answer </dev/tty
 
         case "$answer" in
             [Yy]|[Yy][Ee][Ss])
@@ -762,6 +769,9 @@ test_strategy_tls() {
     iptables -t mangle -I OUTPUT -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
     iptables -t mangle -I OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
 
+    # Гарантировать очистку iptables при любом выходе (Ctrl+C, ошибка и т.д.)
+    trap 'iptables -t mangle -D OUTPUT -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null; iptables -t mangle -D OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null' EXIT INT TERM
+
     # Проверка TLS 1.2
     if curl --tls-max 1.2 --max-time "$timeout" -s -o /dev/null "https://${domain}" 2>/dev/null; then
         tls12_success=1
@@ -772,9 +782,10 @@ test_strategy_tls() {
         tls13_success=1
     fi
 
-    # Удалить временные правила
+    # Удалить временные правила и снять trap
     iptables -t mangle -D OUTPUT -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
     iptables -t mangle -D OUTPUT -p udp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass 2>/dev/null
+    trap - EXIT INT TERM
 
     # Успех если хотя бы один из протоколов работает
     if [ "$tls12_success" -eq 1 ] || [ "$tls13_success" -eq 1 ]; then
@@ -815,7 +826,7 @@ generate_gv_domain() {
 
     # Если не удалось получить, вернуть известный рабочий домен
     if [ -z "$cluster_codename" ]; then
-        echo "rr1---sn-5goeenes.googlevideo.com" >&2
+        print_warning "GV redirector недоступен, используем fallback домен" >&2
         echo "rr1---sn-5goeenes.googlevideo.com"
         return 0
     fi
@@ -1375,7 +1386,7 @@ test_strategy_range() {
 
     if [ "$best_strategy" -ne 0 ]; then
         printf "\nПрименить стратегию #%s? [Y/n]: " "$best_strategy"
-        read -r answer </dev/tty </dev/tty
+        read -r answer </dev/tty
 
         case "$answer" in
             [Nn]|[Nn][Oo])

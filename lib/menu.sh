@@ -64,7 +64,9 @@ MENU
 [2] Выбрать стратегию по номеру
 [3] Автотест стратегий
 [4] Управление сервисом
+[5] Просмотр текущих стратегий
 [6] Обновить списки доменов
+[7] Настройка Discord
 [8] Резервная копия/Восстановление
 [9] Удалить zapret2
 [A] Режим ALL TCP-443 (без хостлистов)
@@ -76,6 +78,7 @@ MENU
 MENU
 
         printf "Выберите опцию [0-9,A,C,Q,W]: "
+
         read_input choice
 
         case "$choice" in
@@ -91,8 +94,14 @@ MENU
             4)
                 menu_service_control
                 ;;
+            5)
+                menu_view_strategy
+                ;;
             6)
                 menu_update_lists
+                ;;
+            7)
+                menu_discord
                 ;;
             8)
                 menu_backup_restore
@@ -170,19 +179,10 @@ menu_select_strategy() {
     local total_count
     total_count=$(get_strategies_count)
     # Прочитать текущие стратегии
-    local config_file="${CONFIG_DIR}/category_strategies.conf"
-    local current_yt_tcp="1"
-    local current_yt_gv="1"
-    local current_rkn="1"
-
-    if [ -f "$config_file" ]; then
-        current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
-        current_yt_gv=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
-        current_rkn=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
-        [ -z "$current_yt_tcp" ] && current_yt_tcp="1"
-        [ -z "$current_yt_gv" ] && current_yt_gv="1"
-        [ -z "$current_rkn" ] && current_rkn="1"
-    fi
+    load_current_categories
+    local current_yt_tcp="$CURRENT_YT_TCP"
+    local current_yt_gv="$CURRENT_YT_GV"
+    local current_rkn="$CURRENT_RKN"
 
     print_info "Всего доступно стратегий: $total_count"
     print_separator
@@ -438,19 +438,10 @@ menu_select_single_strategy() {
 
 # Применить текущие стратегии категорий (YouTube TCP/GV/RKN)
 apply_current_category_strategies() {
-    local config_file="${CONFIG_DIR}/category_strategies.conf"
-    local current_yt_tcp="1"
-    local current_yt_gv="1"
-    local current_rkn="1"
-
-    if [ -f "$config_file" ]; then
-        current_yt_tcp=$(grep "^youtube_tcp:" "$config_file" 2>/dev/null | cut -d':' -f2)
-        current_yt_gv=$(grep "^youtube_gv:" "$config_file" 2>/dev/null | cut -d':' -f2)
-        current_rkn=$(grep "^rkn:" "$config_file" 2>/dev/null | cut -d':' -f2)
-        [ -z "$current_yt_tcp" ] && current_yt_tcp="1"
-        [ -z "$current_yt_gv" ] && current_yt_gv="1"
-        [ -z "$current_rkn" ] && current_rkn="1"
-    fi
+    load_current_categories
+    local current_yt_tcp="$CURRENT_YT_TCP"
+    local current_yt_gv="$CURRENT_YT_GV"
+    local current_rkn="$CURRENT_RKN"
 
     print_info "Применяю текущие стратегии категорий..."
     apply_category_strategies_v2 "$current_yt_tcp" "$current_yt_gv" "$current_rkn"
@@ -1352,8 +1343,10 @@ INFO
                 return 1
             fi
 
-            # Удалить домен
-            sed -i "/^${del_domain}$/d" "$whitelist_file"
+            # Удалить домен (экранируем точки для sed regex)
+            local escaped_domain
+            escaped_domain=$(printf '%s' "$del_domain" | sed 's/\./\\./g')
+            sed -i "/^${escaped_domain}$/d" "$whitelist_file"
             print_success "Домен $del_domain удален из whitelist"
             print_separator
 

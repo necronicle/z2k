@@ -100,24 +100,26 @@ update_domain_lists() {
     print_separator
     show_domain_lists_stats
 
-    # Спросить о перезапуске сервиса
+    # Перезагрузить списки через SIGHUP (без перезапуска сервиса)
     if is_zapret2_running; then
-        printf "\nПерезапустить сервис для применения изменений? [Y/n]: "
+        printf "\nПерезагрузить списки в nfqws2? [Y/n]: "
         read -r answer </dev/tty
 
         case "$answer" in
             [Nn]|[Nn][Oo])
-                print_info "Сервис не перезапущен"
-                print_info "Перезапустите вручную: /opt/etc/init.d/S99zapret2 restart"
+                print_info "Списки не перезагружены"
+                print_info "Перезагрузите вручную: killall -HUP nfqws2"
                 ;;
             *)
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-                sleep 2
-                if is_zapret2_running; then
-                    print_success "Сервис перезапущен"
+                print_info "Отправка SIGHUP для перезагрузки списков..."
+                local pid
+                pid=$(pgrep -f "nfqws2" | head -n 1)
+                if [ -n "$pid" ]; then
+                    kill -HUP "$pid" 2>/dev/null
+                    print_success "Списки перезагружены (SIGHUP отправлен, pid=$pid)"
                 else
-                    print_error "Не удалось перезапустить сервис"
+                    print_warning "Процесс nfqws2 не найден, перезапуск сервиса..."
+                    "$INIT_SCRIPT" restart
                 fi
                 ;;
         esac

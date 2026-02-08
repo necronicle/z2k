@@ -59,11 +59,9 @@ generate_nfqws2_opt_from_strategies() {
     [ -z "$quic_rkn_udp" ] && quic_rkn_udp="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
     custom_tcp="$default_strategy"
 
-    # Генерировать NFQWS2_OPT в формате официального config
-    # ������������ NFQWS2_OPT � ������� ������������ config
     local nfqws2_opt_lines=""
 
-    # Helper: �������� ������ ���� hostlist ���������� � �� ������
+    # Helper: добавить профиль если hostlist существует и не пустой
     add_hostlist_line() {
         local list_path="$1"
         shift
@@ -80,7 +78,7 @@ generate_nfqws2_opt_from_strategies() {
     # YouTube TCP
     add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp_tcp <HOSTLIST> --new"
 
-    # YouTube GV (domains list �������)
+    # YouTube GV (domains list, без файла)
     nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp <HOSTLIST> --new\\n"
 
     # QUIC YT
@@ -97,7 +95,7 @@ generate_nfqws2_opt_from_strategies() {
     add_hostlist_line "${lists_dir}/custom.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/custom.txt $custom_tcp <HOSTLIST>"
 
     local nfqws2_opt_value
-    nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d')
+    nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d' | sed '$ s/ --new$//')
     cat <<NFQWS2_OPT
 NFQWS2_OPT="
 $nfqws2_opt_value
@@ -127,8 +125,9 @@ create_official_config() {
     # =========================================================================
     print_info "Валидация сгенерированных опций nfqws2..."
 
-    # Извлечь NFQWS2_OPT из сгенерированной секции
-    local nfqws2_opt_value=$(echo "$nfqws2_opt_section" | grep "^NFQWS2_OPT=" | sed 's/^NFQWS2_OPT=//' | tr -d '"')
+    # Извлечь NFQWS2_OPT из сгенерированной секции (многострочное значение)
+    local nfqws2_opt_value
+    nfqws2_opt_value=$(echo "$nfqws2_opt_section" | sed -n '/^NFQWS2_OPT="/,/^"/{/^NFQWS2_OPT="/d;/^"$/d;p;}')
 
     # Загрузить модули для dry_run_nfqws()
     if [ -f "/opt/zapret2/common/base.sh" ]; then
@@ -279,7 +278,10 @@ INIT_APPLY_FW=1
 
 # Flow offloading mode: none, software, hardware, donttouch
 # Set during installation based on system detection
-FLOWOFFLOAD=$flowoffload_value
+CONFIG
+    echo "FLOWOFFLOAD=$flowoffload_value" >> "$config_file"
+
+    cat >> "$config_file" <<'CONFIG'
 
 # WAN interface override (space/comma separated). Empty = auto-detect
 #WAN_IFACE=

@@ -9,18 +9,7 @@
 # Расширенные UDP порты для Discord voice/video (как в z4r)
 DISCORD_UDP_PORTS="443,50000:50099,1400,3478:3481,5349"
 
-# Домены Discord (будут загружены из discord.txt)
-DISCORD_DOMAINS="
-discord.com
-discord.gg
-discordapp.com
-discordapp.io
-discordapp.net
-discord.media
-discordcdn.com
-discordstatus.com
-discord-attachments-uploads-prd.storage.googleapis.com
-"
+# Домены Discord загружаются из ${LISTS_DIR}/discord.txt
 
 # ==============================================================================
 # НАСТРОЙКА DISCORD VOICE/VIDEO
@@ -188,7 +177,7 @@ inject_discord_to_init() {
             udp_part=""
             in_new=0
 
-            for (i in lines) {
+            for (i = 1; i <= length(lines); i++) {
                 line = lines[i]
                 if (line ~ /^--new/) {
                     in_new=1

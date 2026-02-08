@@ -19,8 +19,8 @@ INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
 # Проверить что init скрипт существует
 [ ! -f "$INIT_SCRIPT" ] && exit 0
 
-# Проверить что zapret2 включен
-if ! grep -q "^ENABLED=yes" "$INIT_SCRIPT" 2>/dev/null; then
+# Проверить что zapret2 включен (значение ENABLED=1 в config файле)
+if ! grep -q "^ENABLED=1" /opt/zapret2/config 2>/dev/null; then
     exit 0
 fi
 
