@@ -587,32 +587,88 @@ menu_view_strategy() {
 # ==============================================================================
 
 menu_update_lists() {
-    clear_screen
-    print_header "[6] Обновление списков доменов"
-
     if ! is_zapret2_installed; then
         print_error "zapret2 не установлен"
         pause
         return
     fi
 
-    # Показать текущие списки
-    show_domain_lists_stats
+    while true; do
+        clear_screen
+        print_header "[6] Управление списками доменов"
 
-    printf "\nОбновить списки доменов? [Y/n]: "
-    read_input answer
+        # Показать текущие списки
+        show_domain_lists_stats
 
-    case "$answer" in
-        [Nn]|[Nn][Oo])
-            print_info "Отменено"
-            ;;
-        *)
-            run_getlist
-            show_domain_lists_stats
-            ;;
-    esac
+        cat <<'SUBMENU'
 
-    pause
+[1] Обновить списки (скачать Re:filter)
+[2] Просмотреть пользовательские домены
+[3] Добавить домен
+[4] Удалить домен
+[5] Пересоздать seed-списки
+[B] Назад
+
+SUBMENU
+        printf "Выберите опцию [1-5,B]: "
+        read_input sub_choice
+
+        case "$sub_choice" in
+            1)
+                print_info "Загрузка списков доменов..."
+                run_getlist
+                print_separator
+                show_domain_lists_stats
+                pause
+                ;;
+            2)
+                show_custom_domains
+                pause
+                ;;
+            3)
+                printf "Введите домен (например: example.com): "
+                read_input new_domain
+                if [ -n "$new_domain" ]; then
+                    add_custom_domain "$new_domain"
+                else
+                    print_info "Отменено"
+                fi
+                pause
+                ;;
+            4)
+                printf "Введите домен для удаления: "
+                read_input del_domain
+                if [ -n "$del_domain" ]; then
+                    remove_custom_domain "$del_domain"
+                else
+                    print_info "Отменено"
+                fi
+                pause
+                ;;
+            5)
+                print_warning "Это пересоздаст seed-списки (пользовательские домены сохранятся)"
+                printf "Продолжить? [y/N]: "
+                read_input confirm
+                case "$confirm" in
+                    [Yy])
+                        seed_standard_lists
+                        print_success "Seed-списки пересозданы"
+                        ;;
+                    *)
+                        print_info "Отменено"
+                        ;;
+                esac
+                pause
+                ;;
+            b|B)
+                return
+                ;;
+            *)
+                print_error "Неверный выбор: $sub_choice"
+                pause
+                ;;
+        esac
+    done
 }
 
 # ==============================================================================
