@@ -109,6 +109,9 @@ run_getlist() {
     local ipset_dir="${ZAPRET2_DIR}/ipset"
     local config_file="${ZAPRET2_DIR}/config"
 
+    # ВАЖНО: Скрипты zapret2 используют ZAPRET_BASE для поиска common/base.sh
+    export ZAPRET_BASE="${ZAPRET2_DIR}"
+
     # Если config уже есть — штатный путь через get_config.sh
     if [ -f "$config_file" ] && grep -q "^GETLIST=" "$config_file" 2>/dev/null; then
         local getlist_script="${ipset_dir}/get_config.sh"
