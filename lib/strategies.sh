@@ -350,7 +350,15 @@ build_tls_profile_params() {
         payload="--payload=tls_client_hello"
     fi
 
-    printf "%s %s %s" "$prefix" "$payload" "$params"
+    # --out-range: прекращает обработку Lua после 32768+1460 байт исходящих данных.
+    # После TLS хендшейка DPI уже не вмешивается — экономим CPU на роутере.
+    local out_range=""
+    case " $params " in
+        *" --out-range="*) ;;
+        *) out_range="--out-range=-s34228" ;;
+    esac
+
+    printf "%s" "${prefix:+$prefix }${payload:+$payload }${out_range:+$out_range }${params}"
 }
 
 build_http_profile_params() {

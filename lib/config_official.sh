@@ -8,9 +8,9 @@
 
 generate_nfqws2_opt_from_strategies() {
     # Генерирует 3-профильный NFQWS2_OPT:
-    #   1) TCP autocircular + <HOSTLIST>
-    #   2) QUIC autocircular + <HOSTLIST_NOAUTO>
-    #   3) Discord UDP + <HOSTLIST_NOAUTO>
+    #   1) TCP autocircular + <HOSTLIST> (autohostlist — все заблокированные домены)
+    #   2) QUIC autocircular + hostlist-domains (только YouTube/Google Video)
+    #   3) Discord UDP — фильтрация по портам + L7 (без hostlist)
 
     local conf_dir="${CONFIG_DIR:-/opt/etc/zapret2}"
     local strategies_conf="${conf_dir}/strategies.conf"
@@ -37,7 +37,7 @@ generate_nfqws2_opt_from_strategies() {
     local tcp_full_params
     tcp_full_params=$(build_tls_profile_params "$tcp_raw_params")
 
-    # --- QUIC параметры ---
+    # --- QUIC параметры (только YouTube / Google Video) ---
     local quic_raw_params=""
     local quic_num
     quic_num=$(find_quic_strategy_by_name "yt_quic_autocircular")
@@ -53,15 +53,24 @@ generate_nfqws2_opt_from_strategies() {
     local quic_full_params
     quic_full_params=$(build_quic_profile_params "$quic_raw_params")
 
+    # Домены YouTube/Google Video для QUIC профиля
+    local yt_quic_domains="youtube.com,youtu.be,googlevideo.com,ytimg.com,ggpht.com,googleapis.com,gstatic.com,googleusercontent.com"
+
     # --- Discord UDP параметры ---
+    # Фильтрация только по портам и L7-протоколу (discord/stun).
+    # --hostlist-domains тут НЕ ИСПОЛЬЗУЕТСЯ: STUN/Discord UDP не содержат hostname,
+    # и профиль с hostlist никогда не выберется (мануал: "never selected if hostname missing").
     local discord_udp_params="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,stun --payload=stun,discord_ip_discovery --out-range=-n10 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2"
 
     # --- Собрать NFQWS2_OPT (3 профиля) ---
+    # Профиль 1: TCP — все домены через autohostlist (<HOSTLIST>)
+    # Профиль 2: QUIC — только YouTube/GV через hostlist-domains (QUIC Initial содержит SNI)
+    # Профиль 3: Discord UDP — голос/видео, фильтрация по портам + L7 (без hostlist)
     cat <<NFQWS2_OPT
 NFQWS2_OPT="
 ${tcp_full_params} <HOSTLIST> --new
-${quic_full_params} <HOSTLIST_NOAUTO> --new
-${discord_udp_params} <HOSTLIST_NOAUTO>
+${quic_full_params} --hostlist-domains=${yt_quic_domains} --new
+${discord_udp_params}
 "
 NFQWS2_OPT
 }
@@ -216,10 +225,10 @@ NFQWS2_UDP_PKT_IN=""
 # NFQWS2 OPTIONS (3-PROFILE MODE)
 # ==============================================================================
 # Auto-generated from z2k strategy database
-# Profile 1: TCP autocircular (all blocked domains) + <HOSTLIST>
-# Profile 2: QUIC autocircular (YouTube UDP) + <HOSTLIST_NOAUTO>
-# Profile 3: Discord UDP (STUN/voice) + <HOSTLIST_NOAUTO>
-# Placeholders <HOSTLIST> / <HOSTLIST_NOAUTO> expanded by init script based on MODE_FILTER
+# Profile 1: TCP autocircular (all blocked domains) + <HOSTLIST> + --out-range for CPU savings
+# Profile 2: QUIC autocircular (YouTube/Google Video only) + --hostlist-domains
+# Profile 3: Discord UDP (STUN/voice) — filtered by ports + L7 only (no hostlist)
+# <HOSTLIST> expanded by init script based on MODE_FILTER (autohostlist)
 CONFIG
 
     # Добавить сгенерированный NFQWS2_OPT
