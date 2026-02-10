@@ -470,7 +470,7 @@ generate_multiprofile() {
     local discord_udp
     discord_udp=$(get_init_udp_params "DISCORD" "${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}")
     if [ -z "$discord_udp" ]; then
-        discord_udp="--filter-udp=50000-50099,1400,3478-3481,5349 --filter-l7=discord,stun --payload=stun,discord_ip_discovery --out-range=-n10 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2"
+        discord_udp="--filter-udp=50000-50099,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --in-range=-d100 --out-range=-d100 --payload=quic_initial,discord_ip_discovery --lua-desync=circular_locked:key=6:allow_nohost=1 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2:out_range=-d10:strategy=1 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=3:out_range=-d3:strategy=2 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=4:out_range=-n5:strategy=3 --lua-desync=fake:blob=quic_google:repeats=2:out_range=-d10:strategy=4 --lua-desync=fake:blob=quic_google:repeats=3:out_range=-d3:strategy=5 --lua-desync=fake:blob=quic5:repeats=2:out_range=-d10:strategy=6 --lua-desync=fake:blob=quic5:repeats=3:out_range=-d3:strategy=7 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=6:out_range=-d100:strategy=8"
     fi
 
     # Генерировать переменные для всех категорий (YouTube TCP, GV, RKN)

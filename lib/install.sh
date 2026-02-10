@@ -739,6 +739,47 @@ step_build_zapret2() {
         fi
     fi
     # ===========================================================================
+    # ШАГ 4.6: Скачать locked.lua для circular_locked (Discord voice/video)
+    # ===========================================================================
+
+    print_info "Загрузка locked.lua для circular_locked..."
+
+    mkdir -p "${ZAPRET2_DIR}/lua"
+    mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/orchestra"
+
+    if curl -fsSL "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
+        -o "${ZAPRET2_DIR}/lua/locked.lua"; then
+        print_success "locked.lua загружен"
+    else
+        print_warning "Не удалось загрузить locked.lua (Discord voice может не работать)"
+    fi
+
+    # ===========================================================================
+    # ШАГ 4.7: Установить custom.d скрипты (STUN + Discord media backup)
+    # ===========================================================================
+
+    print_info "Установка custom.d скриптов для STUN/Discord media..."
+
+    local custom_dir="${ZAPRET2_DIR}/init.d/keenetic"
+    mkdir -p "$custom_dir"
+
+    if curl -fsSL "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-stun4all" \
+        -o "${custom_dir}/50-stun4all"; then
+        chmod +x "${custom_dir}/50-stun4all"
+        print_success "50-stun4all установлен"
+    else
+        print_warning "Не удалось загрузить 50-stun4all"
+    fi
+
+    if curl -fsSL "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-discord-media" \
+        -o "${custom_dir}/50-discord-media"; then
+        chmod +x "${custom_dir}/50-discord-media"
+        print_success "50-discord-media установлен"
+    else
+        print_warning "Не удалось загрузить 50-discord-media"
+    fi
+
+    # ===========================================================================
     # ЗАВЕРШЕНИЕ
     # ===========================================================================
 

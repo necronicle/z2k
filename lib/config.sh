@@ -66,6 +66,25 @@ download_domain_lists() {
         print_error "Ошибка загрузки Discord list"
     fi
 
+    # 5.1. Discord TCP hostlist (for --hostlist-exclude in RKN profile)
+    print_info "Загрузка Discord TCP hostlist..."
+    local discord_tcp_dir="${ZAPRET2_DIR}/extra_strats"
+    mkdir -p "$discord_tcp_dir"
+    if curl -fsSL "${Z4R_BASE_URL}/extra_strats/TCP/RKN/Discord.txt" \
+        -o "${discord_tcp_dir}/TCP_Discord.txt"; then
+        local count
+        count=$(wc -l < "${discord_tcp_dir}/TCP_Discord.txt" 2>/dev/null || echo "0")
+        print_success "Discord TCP hostlist: $count доменов"
+    else
+        # Fallback: create from main discord list
+        if [ -s "${LISTS_DIR}/discord.txt" ]; then
+            cp "${LISTS_DIR}/discord.txt" "${discord_tcp_dir}/TCP_Discord.txt"
+            print_warning "Использован fallback: discord.txt -> TCP_Discord.txt"
+        else
+            print_warning "Не удалось загрузить Discord TCP hostlist"
+        fi
+    fi
+
     # 6. Custom - создать пустой файл для пользовательских доменов
     if [ ! -f "${LISTS_DIR}/custom.txt" ]; then
         touch "${LISTS_DIR}/custom.txt"
