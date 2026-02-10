@@ -44,9 +44,17 @@ generate_nfqws2_opt_from_strategies() {
         quic_rkn_udp=$(cat "${extra_strats_dir}/UDP/RUTRACKER/Strategy.txt")
     fi
 
-    # Discord TCP: autocircular with circular_locked (key=4, isolates from other profiles)
-    # Based on RKN autocircular strategies but with key=4 for independent circular state
-    discord_tcp="--filter-tcp=80,443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req --out-range=-s34228 --lua-desync=circular_locked:key=4:fails=2:time=60 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_max_ru:repeats=4:badsum:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_md5:tls_mod=rnd,dupsid,sni=ilovepdf.com:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_14:repeats=6:badsum:tcp_ts=-1000:tls_mod=rnd,dupsid,sni=www.google.com:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=8:tcp_md5:tls_mod=rnd,dupsid,sni=fonts.google.com:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_max_ru:repeats=6:badsum:tls_mod=rnd,dupsid:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_14:repeats=11:badsum:tcp_ts=-1000:tls_mod=rnd,dupsid:ip_autottl=-2,3-20:strategy=6 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=midsld:strategy=7 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=2,midsld:seqovl=16:seqovl_pattern=tls_max_ru:strategy=8 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=2,midsld:strategy=9 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=2,midsld:seqovl=midsld-1:seqovl_pattern=tls_max_ru:strategy=10 --lua-desync=fakeddisorder:payload=tls_client_hello:dir=out:pos=1,midsld:strategy=11 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=midsld:badsum:strategy=12 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sld+1,endsld-2:strategy=13 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=1,sld+1,endsld-2:strategy=14 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=2,5,sld-1,endsld-5,endsld:strategy=15 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=google.com:badsum:strategy=16 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_max_ru:badsum:tls_mod=rnd,dupsid,sni=www.google.com:strategy=17 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=1,midsld:strategy=17 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_14:tcp_md5:tls_mod=sni=ilovepdf.com:strategy=18 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=sld+1:strategy=18 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=midsld:seqovl=32:seqovl_pattern=tls_max_ru:strategy=19 --lua-desync=fakeddisorder:payload=tls_client_hello:dir=out:pos=2,midsld:strategy=20"
+    # Discord TCP: derived from RKN strategy (same strategies, different header)
+    # Like z2r: no --filter-l7=tls, circular_locked:key=4, payload=discord_ip_discovery
+    if [ -n "$rkn_tcp" ]; then
+        discord_tcp=$(echo "$rkn_tcp" | sed \
+            -e 's/ --filter-l7=tls//' \
+            -e 's/--lua-desync=circular:fails/--lua-desync=circular_locked:key=4:fails/' \
+            -e 's/--payload=tls_client_hello /--payload=tls_client_hello,discord_ip_discovery /')
+    else
+        # Fallback if RKN strategy not loaded
+        discord_tcp="--filter-tcp=443 --payload=tls_client_hello,discord_ip_discovery --lua-desync=fake:blob=fake_default_tls:repeats=6"
+    fi
 
     # Discord UDP: 22-strategy autocircular with circular_locked (key=6, allow_nohost=1 for STUN)
     # STUN packets have no hostname, allow_nohost=1 enables processing without hostlist match
@@ -96,8 +104,9 @@ generate_nfqws2_opt_from_strategies() {
     # QUIC RUTRACKER (disabled)
     : # disabled by default
 
-    # Discord TCP (autocircular with circular_locked, key=4)
-    add_hostlist_line "${lists_dir}/discord.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/discord.txt $discord_tcp <HOSTLIST> --new"
+    # Discord TCP (same strategies as RKN but with key=4, no --filter-l7=tls, discord_ip_discovery)
+    # Uses TCP_Discord.txt — same file as RKN's hostlist-exclude (like z2r)
+    add_hostlist_line "${extra_strats_dir}/TCP_Discord.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP_Discord.txt $discord_tcp <HOSTLIST> --new"
 
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
@@ -358,8 +367,8 @@ CUSTOM_DIR="/opt/zapret2/init.d/keenetic"
 # Temporary directory (if /tmp is too small)
 #TMPDIR=/opt/zapret2/tmp
 
-# User for zapret daemons (required on Keenetic)
-#WS_USER=nobody
+# User for zapret daemons (security hardening: drop privileges to nobody)
+WS_USER=nobody
 
 # Compress large lists
 GZIP_LISTS=1
