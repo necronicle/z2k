@@ -754,6 +754,16 @@ step_build_zapret2() {
         print_warning "Не удалось загрузить locked.lua (Discord voice может не работать)"
     fi
 
+    print_info "Загрузка orchestrator.sh для управления circular_locked..."
+
+    if curl -fsSL "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/orchestrator.sh" \
+        -o "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"; then
+        chmod +x "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"
+        print_success "orchestrator.sh загружен"
+    else
+        print_warning "Не удалось загрузить orchestrator.sh (circular_locked будет без ротации)"
+    fi
+
     # ===========================================================================
     # ШАГ 4.7: Установить custom.d скрипты (STUN + Discord media backup)
     # ===========================================================================
