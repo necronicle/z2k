@@ -88,16 +88,16 @@ EOF
     # RKN TCP (with Discord hostlist-exclude to avoid overlap with Discord TCP profile)
     local rkn_exclude="--hostlist-exclude=${lists_dir}/whitelist.txt"
     [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_exclude="$rkn_exclude --hostlist-exclude=${extra_strats_dir}/TCP_Discord.txt"
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$rkn_exclude --hostlist=${extra_strats_dir}/TCP/RKN/List.txt $rkn_tcp <HOSTLIST> --new"
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$rkn_exclude --hostlist=${extra_strats_dir}/TCP/RKN/List.txt $rkn_tcp --new"
 
     # YouTube TCP
-    add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp_tcp <HOSTLIST> --new"
+    add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp_tcp --new"
 
     # YouTube GV (domains list �������)
-    nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp <HOSTLIST> --new\\n"
+    nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp --new\\n"
 
     # QUIC YT
-    add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp <HOSTLIST_NOAUTO> --new"
+    add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp --new"
 
     # QUIC RUTRACKER (disabled)
     : # disabled by default
@@ -109,7 +109,7 @@ EOF
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
     # Custom TCP
-    add_hostlist_line "${lists_dir}/custom.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/custom.txt $custom_tcp <HOSTLIST>"
+    add_hostlist_line "${lists_dir}/custom.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${lists_dir}/custom.txt $custom_tcp"
 
     local nfqws2_opt_value
     nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d')
@@ -268,8 +268,8 @@ NFQWS2_UDP_PKT_IN="3"
 # This section is auto-generated from z2k strategy database
 # Each --new separator creates independent profile with own filters and strategy
 # Order: RKN TCP → YouTube TCP → YouTube GV → QUIC YT → QUIC RKN → Discord TCP → Discord UDP → Custom
-# Placeholders: <HOSTLIST> and <HOSTLIST_NOAUTO> are expanded based on MODE_FILTER
-# This enables standard hostlists and autohostlist like upstream zapret2
+# Profiles use explicit hostlists from z2k list files without placeholder expansion.
+# This avoids mixing with global hostlists from MODE_FILTER.
 CONFIG
 
     # Добавить сгенерированный NFQWS2_OPT
