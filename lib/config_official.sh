@@ -44,17 +44,17 @@ generate_nfqws2_opt_from_strategies() {
         quic_rkn_udp=$(cat "${extra_strats_dir}/UDP/RUTRACKER/Strategy.txt")
     fi
 
-    # Discord TCP: derived from RKN strategy (same strategies, different header)
-    # No --filter-l7=tls (Discord uses non-TLS too), discord_ip_discovery in payload
-    # Keeps circular (auto-rotation) — circular_locked only needed for UDP (allow_nohost)
-    if [ -n "$rkn_tcp" ]; then
-        discord_tcp=$(echo "$rkn_tcp" | sed \
-            -e 's/ --filter-l7=tls//' \
-            -e 's/--payload=tls_client_hello /--payload=tls_client_hello,discord_ip_discovery /')
-    else
-        # Fallback if RKN strategy not loaded
-        discord_tcp="--filter-tcp=443 --payload=tls_client_hello,discord_ip_discovery --lua-desync=fake:blob=fake_default_tls:repeats=6"
-    fi
+    # Discord TCP: z2r-style dedicated autocircular block (circular_locked:key=4).
+    # Matches AloofLibra/z4r z2r config.default lines 201-231 exactly.
+    # - No --filter-l7=tls (Discord uses discord_ip_discovery, not just TLS).
+    # - Multi-port: 80,443,2053,2083,2087,2096,8443 (Cloudflare alt ports).
+    # - Uses tls_max_ru blob (our alias for z2r's "maxru").
+    # - 26 strategies with circular_locked:key=4 for isolated rotation.
+    local discord_tcp_block
+    discord_tcp_block=$(cat <<EOF
+--hostlist-exclude=${lists_dir}/whitelist.txt --filter-tcp=80,443,2053,2083,2087,2096,8443 --hostlist=${extra_strats_dir}/TCP_Discord.txt --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --in-range=-s32768 --lua-desync=circular_locked:key=4 --in-range=x --payload=tls_client_hello,discord_ip_discovery --lua-desync=multisplit:blob=tls_max_ru:tcp_seq=-3000:pos=2:nodrop:repeats=1:strategy=1 --lua-desync=fake:blob=tls_max_ru:tcp_ack=-66000:tcp_ts_up:tls_mod=rnd,dupsid:repeats=1:strategy=2 --lua-desync=fake:blob=tls_max_ru:tcp_ts=-1000:tls_mod=rnd,dupsid:repeats=1:strategy=3 --lua-desync=multisplit:blob=tls_max_ru:tcp_ts=-1000:pos=2:nodrop:repeats=1:strategy=4 --lua-desync=hostfakesplit:disorder_after:tcp_md5:repeats=1:strategy=5 --lua-desync=hostfakesplit:disorder_after:nofake2:tcp_md5:repeats=1:strategy=6 --lua-desync=hostfakesplit:tcp_ack=-66000:tcp_ts_up:repeats=1:strategy=7 --lua-desync=hostfakesplit:nofake2:tcp_ack=-66000:tcp_ts_up:repeats=1:strategy=8 --lua-desync=hostfakesplit:disorder_after:tcp_ack=-66000:tcp_ts_up:repeats=1:strategy=9 --lua-desync=hostfakesplit:disorder_after:nofake2:tcp_ack=-66000:tcp_ts_up:repeats=1:strategy=10 --lua-desync=hostfakesplit:tcp_ts=-1000:repeats=1:strategy=11 --lua-desync=fake:blob=tls_max_ru:tcp_ack=-66000:tcp_ts_up:tls_mod=rnd,dupsid:repeats=1:strategy=12 --lua-desync=multisplit:pos=sniext+4:strategy=12 --lua-desync=multisplit:blob=tls_max_ru:tcp_ts=-1000:pos=2:nodrop:repeats=1:strategy=13 --lua-desync=multisplit:pos=2:strategy=13 --lua-desync=fake:blob=tls_max_ru:tcp_ts=-1000:tls_mod=rnd,dupsid:repeats=1:strategy=14 --lua-desync=multidisorder:pos=sniext+4:strategy=14 --lua-desync=multisplit:blob=tls_max_ru:tcp_ts=-1000:pos=2:nodrop:repeats=1:strategy=15 --lua-desync=multidisorder:pos=sniext+4:strategy=15 --lua-desync=multisplit:blob=tls_max_ru:tcp_ts=-1000:pos=2:nodrop:repeats=1:strategy=16 --lua-desync=multidisorder:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1:strategy=16 --lua-desync=multisplit:blob=tls_max_ru:tcp_seq=-3000:pos=2:nodrop:repeats=1:strategy=17 --lua-desync=fakedsplit:pos=midsld:tcp_seq=-3000:strategy=17 --lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=1:strategy=18 --lua-desync=fakeddisorder:pos=sniext+1:tcp_ts=-1000:strategy=18 --lua-desync=multisplit:blob=fake_default_tls:tcp_ts=-1000:pos=2:nodrop:repeats=1:strategy=19 --lua-desync=fakeddisorder:pos=sniext+1:tcp_ts=-1000:strategy=19 --lua-desync=multisplit:blob=tls_max_ru:tcp_ts=-1000:pos=2:nodrop:repeats=1:strategy=20 --lua-desync=fakedsplit:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1:tcp_ts=-1000:strategy=20 --lua-desync=fake:blob=tls_max_ru:tcp_ts=-1000:repeats=1:strategy=21 --lua-desync=fakedsplit:pos=1,midsld:tcp_ts=-1000:strategy=21 --lua-desync=fake:blob=tls_max_ru:tcp_ts=-1000:tls_mod=rnd,dupsid:repeats=1:strategy=22 --lua-desync=fakedsplit:pos=1,midsld:tcp_ts=-1000:strategy=22 --lua-desync=multisplit:blob=tls_max_ru:tcp_ts=-1000:pos=2:nodrop:repeats=1:strategy=23 --lua-desync=fakedsplit:pos=1,midsld:tcp_ts=-100:strategy=23 --lua-desync=fake:blob=tls_max_ru:tcp_ts=-1000:repeats=1:strategy=24 --lua-desync=multisplit:pos=1,sniext+1,host+1,midsld-2,midsld,midsld+2,endhost-1:strategy=24 --lua-desync=fake:blob=tls_max_ru:tcp_ts=-1000:repeats=1:strategy=25 --lua-desync=multidisorder:pos=1,midsld:strategy=25 --lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=1:strategy=26 --lua-desync=multisplit:pos=1,midsld:strategy=26 --new
+EOF
+)
 
     # Discord UDP: 22-strategy autocircular with circular_locked (key=6, allow_nohost=1 for STUN)
     # STUN packets have no hostname, allow_nohost=1 enables processing without hostlist match
@@ -104,9 +104,8 @@ generate_nfqws2_opt_from_strategies() {
     # QUIC RUTRACKER (disabled)
     : # disabled by default
 
-    # Discord TCP (same strategies as RKN but with key=4, no --filter-l7=tls, discord_ip_discovery)
-    # Uses TCP_Discord.txt — same file as RKN's hostlist-exclude (like z2r)
-    add_hostlist_line "${extra_strats_dir}/TCP_Discord.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP_Discord.txt $discord_tcp <HOSTLIST> --new"
+    # Discord TCP: self-contained z2r block (hostlist, strategies, --new all included)
+    add_hostlist_line "${extra_strats_dir}/TCP_Discord.txt" "$discord_tcp_block"
 
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
