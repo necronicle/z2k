@@ -9,7 +9,7 @@ set -e
 # КОНСТАНТЫ
 # ==============================================================================
 
-Z2K_VERSION="2.0.0"
+Z2K_VERSION="2.0.1"
 WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"
 GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/test"
@@ -214,18 +214,41 @@ tls_clienthello_max_ru.bin
 }
 
 download_init_script() {
-    print_info "Загрузка init скрипта (S99zapret2.new)..."
+    print_info "Загрузка вспомогательных файлов (init + lua helpers)..."
 
     local files_dir="${WORK_DIR}/files"
     mkdir -p "$files_dir" || die "Не удалось создать $files_dir"
 
-    local url="${GITHUB_RAW}/files/S99zapret2.new"
-    local output="${files_dir}/S99zapret2.new"
+    local url
+    local output
+
+    url="${GITHUB_RAW}/files/S99zapret2.new"
+    output="${files_dir}/S99zapret2.new"
 
     if curl -fsSL "$url" -o "$output"; then
         print_success "Загружено: files/S99zapret2.new"
     else
         die "Ошибка загрузки files/S99zapret2.new"
+    fi
+
+    url="${GITHUB_RAW}/files/000-zapret2.sh"
+    output="${files_dir}/000-zapret2.sh"
+    if curl -fsSL "$url" -o "$output"; then
+        print_success "Загружено: files/000-zapret2.sh"
+    else
+        die "Ошибка загрузки files/000-zapret2.sh"
+    fi
+
+    # z2k Lua helpers (e.g., persistent autocircular strategy memory)
+    local lua_dir="${files_dir}/lua"
+    mkdir -p "$lua_dir" || die "Не удалось создать $lua_dir"
+
+    url="${GITHUB_RAW}/files/lua/z2k-autocircular.lua"
+    output="${lua_dir}/z2k-autocircular.lua"
+    if curl -fsSL "$url" -o "$output"; then
+        print_success "Загружено: files/lua/z2k-autocircular.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-autocircular.lua"
     fi
 }
 
