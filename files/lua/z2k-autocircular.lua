@@ -41,6 +41,15 @@ local function choose_state_file_for_read()
   return nil
 end
 
+local function create_empty_state_file(path)
+  local f = io.open(path, "w")
+  if not f then return false end
+  f:write("# z2k autocircular state (persisted circular nstrategy)\n")
+  f:write("# key\thost\tstrategy\tts\n")
+  f:close()
+  return true
+end
+
 local function choose_state_file_for_write()
   local f = io.open(STATE_FILE_PRIMARY, "a")
   if f then f:close(); return STATE_FILE_PRIMARY end
@@ -49,12 +58,25 @@ local function choose_state_file_for_write()
   return nil
 end
 
+local function ensure_state_file_exists()
+  local existing = choose_state_file_for_read()
+  if existing then return existing end
+
+  local writable = choose_state_file_for_write()
+  if not writable then return nil end
+
+  if create_empty_state_file(writable) then
+    return writable
+  end
+  return nil
+end
+
 local function load_state()
   if loaded then return end
   loaded = true
   state = {}
 
-  local path = choose_state_file_for_read()
+  local path = ensure_state_file_exists()
   if not path then return end
 
   local f = io.open(path, "r")
@@ -231,8 +253,10 @@ if type(circular) == "function" then
         return
       end
 
-      local success_event = (not nocheck_before) and nocheck_after and (not failure_after)
-      if success_event then
+      -- Persist whenever circular is in a known-good state.
+      -- This is intentionally broader than only first success transition to avoid missing saves.
+      local successful_state = nocheck_after and (not failure_after)
+      if successful_state then
         persist_if_changed(askey, hostn, hrec)
       end
     end)
