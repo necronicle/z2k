@@ -231,13 +231,6 @@ if type(circular) == "function" then
         return
       end
 
-      -- If we rotated due to repeated failures, drop the persisted entry so we don't
-      -- keep reseeding a now-bad strategy after restarts.
-      if failure_after and n_before and n_after and n_before ~= n_after then
-        clear_persisted(askey, hostn)
-        return
-      end
-
       local success_event = (not nocheck_before) and nocheck_after and (not failure_after)
       if success_event then
         persist_if_changed(askey, hostn, hrec)
