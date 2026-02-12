@@ -713,6 +713,12 @@ step_build_zapret2() {
             print_warning "Не удалось скопировать quic_strats.ini"
     fi
 
+    # Скопировать кастомные lua-хелперы z2k (например, персистентность autocircular)
+    if [ -d "${WORK_DIR}/files/lua" ]; then
+        mkdir -p "${ZAPRET2_DIR}/lua"
+        cp -f "${WORK_DIR}/files/lua/"*.lua "${ZAPRET2_DIR}/lua/" 2>/dev/null || true
+    fi
+
     # Обновить fake blobs если есть более свежие в z2k
     if [ -d "${WORK_DIR}/files/fake" ]; then
         print_info "���������� fake blobs �� z2k..."
@@ -746,6 +752,8 @@ step_build_zapret2() {
 
     mkdir -p "${ZAPRET2_DIR}/lua"
     mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/orchestra"
+    mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/autocircular"
+    chmod 777 "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
 
     if curl -fsSL "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
         -o "${ZAPRET2_DIR}/lua/locked.lua"; then

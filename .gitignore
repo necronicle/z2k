@@ -10,3 +10,9 @@ tools/
 discord_blockcheck2_tls13_20260123_130435.txt
 discord_blockcheck2_tls13_20260123_130949.txt
 discord_blockcheck2_tls13_20260123_131631.txt
+
+# Local temp / Codex artifacts
+/%TEMP%/
+/%TEMP%*.txt
+/__codex_quarantine/
+/nul
