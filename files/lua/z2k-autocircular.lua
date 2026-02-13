@@ -224,6 +224,12 @@ local function conn_record_flags(desync)
   return (crec.nocheck and true or false), (crec.failure and true or false)
 end
 
+local function has_positive_incoming_response(desync)
+  if not desync or desync.outgoing then return false end
+  local p = desync.l7payload
+  return p == "tls_server_hello" or p == "http_reply"
+end
+
 -- Wrap circular() from zapret-auto.lua.
 if type(circular) == "function" then
   local orig_circular = circular
@@ -252,7 +258,8 @@ if type(circular) == "function" then
       -- Persist whenever circular is in a known-good state.
       -- This is intentionally broader than only first success transition to avoid missing saves.
       local successful_state = nocheck_after and (not failure_after)
-      if successful_state then
+      local response_state = has_positive_incoming_response(desync) and (not failure_after)
+      if successful_state or response_state then
         persist_if_changed(askey, hostn, hrec)
       end
     end)
