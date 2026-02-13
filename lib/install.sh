@@ -754,10 +754,14 @@ step_build_zapret2() {
     mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/orchestra"
     mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/autocircular"
     chmod 777 "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
+    : > "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
+    chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
     # Enable autocircular debug by default on fresh install to simplify field diagnostics.
     # Can be disabled later by removing debug.flag.
     touch "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.flag" 2>/dev/null || true
+    chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.flag" 2>/dev/null || true
     : > "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
+    chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
 
     if curl -fsSL "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
         -o "${ZAPRET2_DIR}/lua/locked.lua"; then
