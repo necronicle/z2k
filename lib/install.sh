@@ -756,10 +756,8 @@ step_build_zapret2() {
     chmod 777 "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
     : > "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
     chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
-    # Enable autocircular debug by default on fresh install to simplify field diagnostics.
-    # Can be disabled later by removing debug.flag.
-    touch "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.flag" 2>/dev/null || true
-    chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.flag" 2>/dev/null || true
+    # Debug is opt-in. Keep log file prepared, but do not enable verbose logging by default.
+    rm -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.flag" 2>/dev/null || true
     : > "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
     chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
 

@@ -288,6 +288,12 @@ local function should_debug_key(askey)
   return s == "rkn_tcp" or s == "rkn_quic" or s == "custom_quic"
 end
 
+local function is_quic_key(askey)
+  if not askey then return false end
+  local s = tostring(askey)
+  return s == "yt_quic" or s == "rkn_quic" or s == "custom_quic"
+end
+
 -- Wrap circular() from zapret-auto.lua.
 if type(circular) == "function" then
   local orig_circular = circular
@@ -331,12 +337,20 @@ if type(circular) == "function" then
       -- This is intentionally broader than only first success transition to avoid missing saves.
       local successful_state = nocheck_after and (not failure_after)
       local response_state = has_positive_incoming_response(desync) and (not failure_after)
+      -- QUIC flows may not reliably trigger success detector, but nstrategy>1 already indicates
+      -- that circular has rotated this host. Persist that candidate for QUIC keys.
+      local quic_candidate_state =
+        is_quic_key(askey) and
+        (desync and desync.l7payload == "quic_initial") and
+        (not failure_after) and
+        n_after and n_after > 1
       local persisted = false
-      if successful_state or response_state then
+      if successful_state or response_state or quic_candidate_state then
         persisted = persist_if_changed(askey, hostn, hrec)
       end
 
-      if should_debug_key(askey_before) or should_debug_key(askey_after) then
+      local debug_event = persisted or failure_after or successful_state or response_state or quic_candidate_state
+      if debug_event and (should_debug_key(askey_before) or should_debug_key(askey_after)) then
         local track = desync and desync.track
         local hn = track and track.hostname or ""
         debug_log(
@@ -352,6 +366,7 @@ if type(circular) == "function" then
           " nocheck=" .. tostring(nocheck_after and 1 or 0) ..
           " success_state=" .. tostring(successful_state and 1 or 0) ..
           " response_state=" .. tostring(response_state and 1 or 0) ..
+          " quic_candidate_state=" .. tostring(quic_candidate_state and 1 or 0) ..
           " persisted=" .. tostring(persisted and 1 or 0)
         )
       end
