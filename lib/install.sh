@@ -725,6 +725,12 @@ step_build_zapret2() {
         cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
     fi
 
+    # Copy snapshot domain lists for local install flow (no external list repos)
+    if [ -d "${WORK_DIR}/files/lists" ]; then
+        print_info "Copying snapshot domain lists..."
+        mkdir -p "${ZAPRET2_DIR}/files/lists"
+        cp -Rf "${WORK_DIR}/files/lists/"* "${ZAPRET2_DIR}/files/lists/" 2>/dev/null || true
+    fi
     # ����������� lua.gz (���� ����� openwrt-embedded)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then
@@ -1023,21 +1029,10 @@ step_download_domain_lists() {
     # ���. ��������: ������ QUIC YT (zapret4rocket)
     local yt_quic_list="/opt/zapret2/extra_strats/UDP/YT/List.txt"
     if [ ! -s "$yt_quic_list" ]; then
-        print_warning "������ QUIC YT ����������� ��� ������: $yt_quic_list"
-        print_info "������ ��������� �������� �� zapret4rocket..."
-        local base_url="${Z4R_BASE_URL:-https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master}"
-        mkdir -p "$(dirname "$yt_quic_list")"
-        if curl -fsSL "$base_url/extra_strats/UDP/YT/List.txt" -o "$yt_quic_list"; then
-            if [ -s "$yt_quic_list" ]; then
-                print_success "������ QUIC YT ��������: $yt_quic_list"
-            else
-                print_warning "������ QUIC YT ������, �� ������: $yt_quic_list"
-            fi
-        else
-            print_warning "�� ������� ��������� QUIC YT list � $base_url"
-        fi
+        print_warning "QUIC YT list not found after local snapshot copy: $yt_quic_list"
+        print_warning "Install snapshot files first (files/lists/extra_strats/UDP/YT/List.txt)"
     fi
-    # Создать базовую конфигурацию
+    
     create_base_config || {
         print_error "Не удалось создать конфигурацию"
         return 1

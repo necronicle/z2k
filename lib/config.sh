@@ -9,8 +9,7 @@
 # Скачать списки доменов из zapret4rocket (z4r)
 download_domain_lists() {
     print_header "Загрузка списков доменов"
-    print_info "Источник: zapret4rocket (master branch)"
-    print_info "Списки используются как есть, без модификаций"
+    print_info "Источник: локальные snapshot-списки из ${ZAPRET2_DIR}/files/lists"
 
     # Создать структуру директорий
     local yt_tcp_dir="${ZAPRET2_DIR}/extra_strats/TCP/YT"
@@ -18,70 +17,77 @@ download_domain_lists() {
     local cf_tcp_dir="${ZAPRET2_DIR}/extra_strats/TCP/CF"
     local yt_udp_dir="${ZAPRET2_DIR}/extra_strats/UDP/YT"
     local rt_udp_dir="${ZAPRET2_DIR}/extra_strats/UDP/RUTRACKER"
+    local snapshot_dir="${ZAPRET2_DIR}/files/lists"
 
     mkdir -p "$yt_tcp_dir" "$rkn_tcp_dir" "$cf_tcp_dir" "$yt_udp_dir" "$rt_udp_dir" "$LISTS_DIR" || {
         print_error "Не удалось создать директории"
         return 1
     }
 
-    # 1. YouTube TCP - загрузить из extra_strats/TCP/YT/List.txt
-    print_info "Загрузка YouTube TCP list..."
-    if curl -fsSL "${Z4R_BASE_URL}/extra_strats/TCP/YT/List.txt" -o "${yt_tcp_dir}/List.txt"; then
+    # 1. YouTube TCP - скопировать из локального snapshot
+    print_info "Загрузка YouTube TCP list (local snapshot)..."
+    if [ -s "${snapshot_dir}/extra_strats/TCP/YT/List.txt" ]; then
+        cp -f "${snapshot_dir}/extra_strats/TCP/YT/List.txt" "${yt_tcp_dir}/List.txt"
         local count
         count=$(wc -l < "${yt_tcp_dir}/List.txt" 2>/dev/null || echo "0")
         print_success "YouTube TCP: $count доменов"
     else
-        print_error "Ошибка загрузки YouTube TCP list"
+        print_error "Отсутствует snapshot: ${snapshot_dir}/extra_strats/TCP/YT/List.txt"
     fi
 
     # 2. YouTube GV - использует --hostlist-domains=googlevideo.com (список не нужен)
     print_info "YouTube GV: используется --hostlist-domains=googlevideo.com"
 
-    # 3. RKN - загрузить из extra_strats/TCP/RKN/List.txt (БЕЗ модификаций)
-    print_info "Загрузка RKN list..."
-    if curl -fsSL "${Z4R_BASE_URL}/extra_strats/TCP/RKN/List.txt" -o "${rkn_tcp_dir}/List.txt"; then
+    # 3. RKN - скопировать из локального snapshot
+    print_info "Загрузка RKN list (local snapshot)..."
+    if [ -s "${snapshot_dir}/extra_strats/TCP/RKN/List.txt" ]; then
+        cp -f "${snapshot_dir}/extra_strats/TCP/RKN/List.txt" "${rkn_tcp_dir}/List.txt"
         local count
         count=$(wc -l < "${rkn_tcp_dir}/List.txt" 2>/dev/null || echo "0")
         print_success "RKN: $count доменов"
     else
-        print_error "Ошибка загрузки RKN list"
+        print_error "Отсутствует snapshot: ${snapshot_dir}/extra_strats/TCP/RKN/List.txt"
     fi
 
-    # 3.1. Cloudflare TCP - выделенный подсписок для отдельной ротации
-    # Subdomains match automatically, so base domains are enough.
-    cat > "${cf_tcp_dir}/List.txt" <<'EOF'
-cloudflare.com
-cloudflare-ech.com
-cloudflareclient.com
-EOF
-    print_success "Cloudflare TCP: создан выделенный список"
+    # 3.1. Cloudflare TCP - скопировать из локального snapshot
+    print_info "Загрузка Cloudflare TCP list (local snapshot)..."
+    if [ -s "${snapshot_dir}/extra_strats/TCP/CF/List.txt" ]; then
+        cp -f "${snapshot_dir}/extra_strats/TCP/CF/List.txt" "${cf_tcp_dir}/List.txt"
+        local count
+        count=$(wc -l < "${cf_tcp_dir}/List.txt" 2>/dev/null || echo "0")
+        print_success "Cloudflare TCP: $count доменов"
+    else
+        print_error "Отсутствует snapshot: ${snapshot_dir}/extra_strats/TCP/CF/List.txt"
+    fi
 
-    # 4. QUIC YouTube - загрузить из extra_strats/UDP/YT/List.txt
-    print_info "Загрузка QUIC YouTube list..."
-    if curl -fsSL "${Z4R_BASE_URL}/extra_strats/UDP/YT/List.txt" -o "${yt_udp_dir}/List.txt"; then
+    # 4. QUIC YouTube - скопировать из локального snapshot
+    print_info "Загрузка QUIC YouTube list (local snapshot)..."
+    if [ -s "${snapshot_dir}/extra_strats/UDP/YT/List.txt" ]; then
+        cp -f "${snapshot_dir}/extra_strats/UDP/YT/List.txt" "${yt_udp_dir}/List.txt"
         local count
         count=$(wc -l < "${yt_udp_dir}/List.txt" 2>/dev/null || echo "0")
         print_success "QUIC YouTube: $count доменов"
     else
-        print_warning "Не удалось загрузить QUIC YouTube list"
+        print_warning "Отсутствует snapshot: ${snapshot_dir}/extra_strats/UDP/YT/List.txt"
     fi
 
-    # 5. Discord - загрузить из lists/russia-discord.txt
-    print_info "Загрузка Discord list..."
-    if curl -fsSL "${Z4R_LISTS_URL}/russia-discord.txt" -o "${LISTS_DIR}/discord.txt"; then
+    # 5. Discord - скопировать из локального snapshot
+    print_info "Загрузка Discord list (local snapshot)..."
+    if [ -s "${snapshot_dir}/russia-discord.txt" ]; then
+        cp -f "${snapshot_dir}/russia-discord.txt" "${LISTS_DIR}/discord.txt"
         local count
         count=$(wc -l < "${LISTS_DIR}/discord.txt" 2>/dev/null || echo "0")
         print_success "Discord: $count доменов"
     else
-        print_error "Ошибка загрузки Discord list"
+        print_error "Отсутствует snapshot: ${snapshot_dir}/russia-discord.txt"
     fi
 
     # 5.1. Discord TCP hostlist (for --hostlist-exclude in RKN profile)
-    print_info "Загрузка Discord TCP hostlist..."
+    print_info "Загрузка Discord TCP hostlist (local snapshot)..."
     local discord_tcp_dir="${ZAPRET2_DIR}/extra_strats"
     mkdir -p "$discord_tcp_dir"
-    if curl -fsSL "${Z2R_BASE_URL}/extra_strats/TCP/RKN/Discord.txt" \
-        -o "${discord_tcp_dir}/TCP_Discord.txt"; then
+    if [ -s "${snapshot_dir}/extra_strats/TCP/RKN/Discord.txt" ]; then
+        cp -f "${snapshot_dir}/extra_strats/TCP/RKN/Discord.txt" "${discord_tcp_dir}/TCP_Discord.txt"
         local count
         count=$(wc -l < "${discord_tcp_dir}/TCP_Discord.txt" 2>/dev/null || echo "0")
         print_success "Discord TCP hostlist: $count доменов"

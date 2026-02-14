@@ -250,6 +250,32 @@ download_init_script() {
     else
         die "Ошибка загрузки files/lua/z2k-autocircular.lua"
     fi
+    # Snapshot domain lists used by local install flow (no external list repos)
+    local list_file
+    local lists_dir="${files_dir}/lists"
+    mkdir -p "$lists_dir" || die "Не удалось создать $lists_dir"
+
+    local list_files="
+extra_strats/TCP/YT/List.txt
+extra_strats/TCP/RKN/List.txt
+extra_strats/TCP/RKN/Discord.txt
+extra_strats/TCP/CF/List.txt
+extra_strats/UDP/YT/List.txt
+russia-discord.txt
+"
+
+    echo "$list_files" | while read -r list_file; do
+        [ -z "$list_file" ] && continue
+        local list_url="${GITHUB_RAW}/files/lists/${list_file}"
+        local list_out="${lists_dir}/${list_file}"
+        mkdir -p "$(dirname "$list_out")"
+
+        if curl -fsSL "$list_url" -o "$list_out"; then
+            print_success "Загружено: files/lists/${list_file}"
+        else
+            die "Ошибка загрузки files/lists/${list_file}"
+        fi
+    done
 }
 
 generate_strategies_database() {
