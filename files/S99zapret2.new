@@ -116,6 +116,97 @@ ensure_autocircular_files()
 	# Optional debug toggle file; keep if present and readable.
 	[ -f "$base/debug.flag" ] && chmod 666 "$base/debug.flag" 2>/dev/null || true
 }
+
+# ------------------------------------------------------------------------------
+# TRAFFIC DEBUG: capture "real traffic" (tcpdump pcap) and "traffic in zapret" (nfqws2 --debug log)
+# ------------------------------------------------------------------------------
+Z2K_TRAFFIC_DEBUG=0
+Z2K_TRAFFIC_DEBUG_BASE=""
+Z2K_TRAFFIC_DEBUG_PIDFILE=""
+
+ensure_traffic_debug_files()
+{
+	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic"
+	mkdir -p "$base" || return 1
+	chmod 777 "$base" 2>/dev/null || true
+
+	[ -f "$base/nfqws2.debug.log" ] || : > "$base/nfqws2.debug.log"
+	chmod 666 "$base/nfqws2.debug.log" 2>/dev/null || true
+
+	[ -f "$base/tcpdump.err.log" ] || : > "$base/tcpdump.err.log"
+	chmod 666 "$base/tcpdump.err.log" 2>/dev/null || true
+
+	# Optional toggle file; keep if present and readable.
+	[ -f "$base/debug.flag" ] && chmod 666 "$base/debug.flag" 2>/dev/null || true
+}
+
+traffic_debug_prepare()
+{
+	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic"
+	Z2K_TRAFFIC_DEBUG_BASE="$base"
+	Z2K_TRAFFIC_DEBUG_PIDFILE="$base/tcpdump.pid"
+
+	if [ -f "$base/debug.flag" ]; then
+		Z2K_TRAFFIC_DEBUG=1
+	else
+		Z2K_TRAFFIC_DEBUG=0
+	fi
+}
+
+traffic_debug_enable_nfqws2_log()
+{
+	[ "$Z2K_TRAFFIC_DEBUG" = "1" ] || return 0
+
+	# Avoid duplicating the option if start() is called twice in one script run.
+	case " $NFQWS2_OPT_BASE " in
+		*" --debug="*)
+			return 0
+			;;
+	esac
+
+	NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --debug=@$Z2K_TRAFFIC_DEBUG_BASE/nfqws2.debug.log"
+}
+
+traffic_debug_tcpdump_start()
+{
+	[ "$Z2K_TRAFFIC_DEBUG" = "1" ] || return 0
+
+	exists tcpdump || {
+		echo "WARN: traffic debug enabled, but tcpdump not found; skipping pcap capture"
+		return 0
+	}
+
+	# Stop previous tcpdump if pidfile exists (stale or running).
+	traffic_debug_tcpdump_stop
+
+	local pcap="$Z2K_TRAFFIC_DEBUG_BASE/traffic.pcap"
+	local err="$Z2K_TRAFFIC_DEBUG_BASE/tcpdump.err.log"
+	local filter='(tcp and (port 80 or port 443 or port 2053 or port 2083 or port 2087 or port 2096 or port 8443)) or (udp and port 443)'
+
+	# Rotate by size to avoid filling storage: 10 files x 5MB = ~50MB max.
+	# NOTE: if tcpdump doesn't support -C/-W, it will fail; see tcpdump.err.log.
+	tcpdump -i any -nn -s 0 -U -w "$pcap" -C 5 -W 10 "$filter" >/dev/null 2>>"$err" &
+	local pid=$!
+	echo "$pid" > "$Z2K_TRAFFIC_DEBUG_PIDFILE"
+	chmod 666 "$Z2K_TRAFFIC_DEBUG_PIDFILE" 2>/dev/null || true
+	echo "traffic debug: tcpdump started (PID $pid)"
+}
+
+traffic_debug_tcpdump_stop()
+{
+	local pidfile="${Z2K_TRAFFIC_DEBUG_PIDFILE:-${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic/tcpdump.pid}"
+	[ -f "$pidfile" ] || return 0
+
+	local pid
+	pid="$(cat "$pidfile" 2>/dev/null)"
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+		echo "traffic debug: stopping tcpdump (PID $pid)"
+		kill "$pid" 2>/dev/null || true
+		sleep 1
+		kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+	fi
+	rm -f "$pidfile" 2>/dev/null || true
+}
 # ==============================================================================
 # ��������� ����������� ��� KEENETIC
 # ==============================================================================
@@ -876,6 +967,12 @@ start()
     # 2.2. ����������� autocircular cache/debug files (writable by runtime user)
     ensure_autocircular_files
 
+    # traffic debug (optional): nfqws2 debug log + tcpdump pcap capture
+    ensure_traffic_debug_files
+    traffic_debug_prepare
+    traffic_debug_enable_nfqws2_log
+    traffic_debug_tcpdump_start
+
     # 3. ��������� daemon ��������
     start_daemons
 
@@ -889,6 +986,8 @@ start()
 stop()
 {
     echo "Stopping zapret2 service"
+
+    traffic_debug_tcpdump_stop
 
     # 0. ���������� orchestrator
     [ -x "$ORCH_SCRIPT" ] && "$ORCH_SCRIPT" stop
