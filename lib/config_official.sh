@@ -119,6 +119,36 @@ EOF
     }
     cf_tcp=$(normalize_cf_circular "$cf_tcp")
 
+    # Ensure all circular profiles use our enhanced failure detector.
+    # It keeps standard behavior but additionally treats inbound fatal TLS alerts as failures.
+    ensure_circular_failure_detector() {
+        local input="$1"
+        local out=""
+        local token=""
+
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    case "$token" in
+                        *failure_detector=*) ;;
+                        *) token="${token}:failure_detector=z2k_tls_alert_fatal" ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+
+        printf '%s' "$out"
+    }
+
+    youtube_tcp_tcp=$(ensure_circular_failure_detector "$youtube_tcp_tcp")
+    youtube_gv_tcp=$(ensure_circular_failure_detector "$youtube_gv_tcp")
+    rkn_tcp=$(ensure_circular_failure_detector "$rkn_tcp")
+    cf_tcp=$(ensure_circular_failure_detector "$cf_tcp")
+    quic_udp=$(ensure_circular_failure_detector "$quic_udp")
+    quic_custom_udp=$(ensure_circular_failure_detector "$quic_custom_udp")
+    quic_cf_udp=$(ensure_circular_failure_detector "$quic_cf_udp")
+
     # Генерировать NFQWS2_OPT в формате официального config
     # ������������ NFQWS2_OPT � ������� ������������ config
     local nfqws2_opt_lines=""

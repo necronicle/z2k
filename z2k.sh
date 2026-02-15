@@ -198,7 +198,7 @@ download_fake_blobs() {
     mkdir -p "$fake_dir" || die "Не удалось создать $fake_dir"
 
     local files="
-tls_clienthello_max_ru.bin
+tls_clienthello_sberbank_ru.bin
 "
 
     echo "$files" | while read -r file; do

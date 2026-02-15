@@ -230,7 +230,7 @@ LUA_Z2K_AUTOCIRCULAR="$ZAPRET_BASE/lua/z2k-autocircular.lua"
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 
 # Load custom TLS ClientHello blob for strategies (manual: --blob is engine init option).
-TLS_MAX_RU_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_max_ru.bin"
+TLS_MAX_RU_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_sberbank_ru.bin"
 [ -s "$TLS_MAX_RU_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_max_ru:@$TLS_MAX_RU_BLOB"
 
 TLS_14_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_14.bin"
