@@ -24,6 +24,53 @@ exists_cmd() {
 	command -v "$1" >/dev/null 2>&1
 }
 
+find_tcpdump_bin() {
+	if exists_cmd tcpdump; then
+		command -v tcpdump
+		return 0
+	fi
+	if [ -x /opt/sbin/tcpdump ]; then
+		echo /opt/sbin/tcpdump
+		return 0
+	fi
+	if [ -x /opt/bin/tcpdump ]; then
+		echo /opt/bin/tcpdump
+		return 0
+	fi
+	return 1
+}
+
+choose_capture_iface() {
+	# Prefer "any" when supported by local tcpdump build/libpcap.
+	if "$1" -D 2>/dev/null | grep -Eq '(^[0-9]+\.)?any([[:space:]]|$)'; then
+		echo any
+		return 0
+	fi
+
+	# Fallback: default route interface.
+	if exists_cmd ip; then
+		local defif
+		defif="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
+		if [ -n "$defif" ]; then
+			echo "$defif"
+			return 0
+		fi
+	fi
+
+	# Last fallback: first non-loopback interface from ifconfig.
+	if exists_cmd ifconfig; then
+		local ifc
+		ifc="$(ifconfig 2>/dev/null | awk -F: '/^[A-Za-z0-9._-]+:/{print $1}' | grep -v '^lo$' | head -n 1)"
+		if [ -n "$ifc" ]; then
+			echo "$ifc"
+			return 0
+		fi
+	fi
+
+	# Absolute fallback.
+	echo any
+}
+
 ensure_dirs() {
 	mkdir -p "$CACHE_DIR" || return 1
 	chmod 777 "$CACHE_DIR" 2>/dev/null || true
@@ -128,7 +175,8 @@ write_awk_parser() {
 	cat > "$AWK_FILE" <<'AWK'
 function split_endpoint(ep, out, s, p) {
 	s = ep
-	gsub(/[,:]/, "", s)
+	gsub(/,/, "", s)
+	sub(/:$/, "", s)
 	p = 0
 	for (i = length(s); i >= 1; i--) {
 		if (substr(s, i, 1) == ".") {
@@ -306,16 +354,23 @@ BEGIN {
 }
 
 {
-	if ($1 !~ /^[0-9]+\.[0-9]+$/) next
-	ts = $1 + 0
+	ts = systime()
+	if ($1 ~ /^[0-9]+\.[0-9]+$/) ts = $1 + 0
 
-	if ($2 != "IP") {
+	ippos = 0
+	for (i = 1; i <= NF; i++) {
+		if ($i == "IP" || $i == "IP6") {
+			ippos = i
+			break
+		}
+	}
+	if (ippos == 0) {
 		sweep(ts)
 		next
 	}
 
-	src_raw = $3
-	dst_raw = $5
+	src_raw = $(ippos + 1)
+	dst_raw = $(ippos + 3)
 	split_endpoint(src_raw, src)
 	split_endpoint(dst_raw, dst)
 
@@ -402,8 +457,9 @@ start_monitor() {
 		return 0
 	fi
 
-	exists_cmd tcpdump || {
-		echo "ERROR: tcpdump is required"
+	local tcpdump_bin
+	tcpdump_bin="$(find_tcpdump_bin)" || {
+		echo "ERROR: tcpdump not found (searched PATH, /opt/sbin/tcpdump, /opt/bin/tcpdump)"
 		return 1
 	}
 	exists_cmd awk || {
@@ -411,21 +467,24 @@ start_monitor() {
 		return 1
 	}
 
-	local tcp_ports udp_ports filter
+	local tcp_ports udp_ports filter iface
 	tcp_ports="$(collect_ports tcp)"
 	udp_ports="$(collect_ports udp)"
 	[ -n "$tcp_ports" ] || tcp_ports="$DEFAULT_TCP_PORTS"
 	[ -n "$udp_ports" ] || udp_ports="$DEFAULT_UDP_PORTS"
 
 	filter="$(build_tcpdump_filter)"
+	iface="$(choose_capture_iface "$tcpdump_bin")"
 	write_awk_parser || return 1
 
 	echo "# started: $(date)" >> "$ALL_TSV"
 	echo "# tcp_ports: $tcp_ports" >> "$ALL_TSV"
 	echo "# udp_ports: $udp_ports" >> "$ALL_TSV"
+	echo "# tcpdump_bin: $tcpdump_bin" >> "$ALL_TSV"
+	echo "# iface: $iface" >> "$ALL_TSV"
 	echo "# filter: $filter" >> "$ALL_TSV"
 
-	tcpdump -i any -nn -l -tt "$filter" 2>>"$ERR_LOG" | \
+	"$tcpdump_bin" -i "$iface" -nn -l -tt "$filter" 2>>"$ERR_LOG" | \
 		awk \
 			-v all_out="$ALL_TSV" \
 			-v tcp_out="$TCP_TSV" \
@@ -443,6 +502,15 @@ start_monitor() {
 
 	echo "$!" > "$PID_FILE"
 	chmod 666 "$PID_FILE" 2>/dev/null || true
+
+	sleep 1
+	if ! running_pid >/dev/null; then
+		echo "ERROR: monitor exited right after start"
+		echo "Check logs: $ERR_LOG and $PARSER_ERR_LOG"
+		tail -n 10 "$ERR_LOG" 2>/dev/null || true
+		tail -n 10 "$PARSER_ERR_LOG" 2>/dev/null || true
+		return 1
+	fi
 
 	echo "blocked monitor started (PID $(cat "$PID_FILE"))"
 	echo "output dir: $CACHE_DIR"
