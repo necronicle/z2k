@@ -1885,6 +1885,10 @@ run_blockcheck_modern() {
     local quic_count=0
     local num=1
     local line
+    local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
+    local service_was_running=0
+    local blockcheck_rc=0
+    local rc_file="${out_dir}/blockcheck.rc"
 
     blockcheck=$(find_blockcheck2_script) || {
         print_error "blockcheck2.sh не найден (ожидался в /opt/zapret2)"
@@ -1918,13 +1922,35 @@ run_blockcheck_modern() {
     print_info "  log: $log_file"
     print_separator
 
-    LIST_HTTP="${lists_dir}/list_http.txt" \
-    LIST_HTTPS_TLS12="${lists_dir}/list_https_tls12.txt" \
-    LIST_HTTPS_TLS13="${lists_dir}/list_https_tls13.txt" \
-    LIST_QUIC="${lists_dir}/list_quic.txt" \
-    BATCH=1 TEST="$test_profile" DOMAINS="$domains" IPVS="$ipvs" REPEATS="$repeats" CURL_HTTPS_GET=1 \
-    ENABLE_HTTP=0 ENABLE_HTTPS_TLS12=1 ENABLE_HTTPS_TLS13=1 ENABLE_HTTP3=1 \
-    "$blockcheck" 2>&1 | tee "$log_file"
+    # Для blockcheck нужен эксклюзивный доступ к NFQUEUE.
+    if is_zapret2_running; then
+        service_was_running=1
+        print_info "Останавливаю сервис zapret2 перед blockcheck..."
+        "$init_script" stop >/dev/null 2>&1 || true
+        sleep 1
+    fi
+
+    print_info "Останавливаю остаточные процессы nfqws2..."
+    pkill -9 -f nfqws2 >/dev/null 2>&1 || true
+    sleep 1
+
+    rm -f "$rc_file" 2>/dev/null || true
+    (
+        LIST_HTTP="${lists_dir}/list_http.txt" \
+        LIST_HTTPS_TLS12="${lists_dir}/list_https_tls12.txt" \
+        LIST_HTTPS_TLS13="${lists_dir}/list_https_tls13.txt" \
+        LIST_QUIC="${lists_dir}/list_quic.txt" \
+        BATCH=1 TEST="$test_profile" DOMAINS="$domains" IPVS="$ipvs" REPEATS="$repeats" CURL_HTTPS_GET=1 \
+        ENABLE_HTTP=0 ENABLE_HTTPS_TLS12=1 ENABLE_HTTPS_TLS13=1 ENABLE_HTTP3=1 WS_UID=0 WS_GID=0 \
+        "$blockcheck"
+        echo $? > "$rc_file"
+    ) 2>&1 | tee "$log_file"
+
+    blockcheck_rc=$(cat "$rc_file" 2>/dev/null || echo 1)
+    rm -f "$rc_file" 2>/dev/null || true
+    if [ "$blockcheck_rc" -ne 0 ]; then
+        print_warning "blockcheck завершился с кодом: $blockcheck_rc"
+    fi
 
     : > "$tcp_candidates"
     : > "$quic_candidates"
@@ -1990,6 +2016,7 @@ blockcheck=$blockcheck
 domains=$domains
 ipvs=$ipvs
 repeats=$repeats
+blockcheck_exit_code=$blockcheck_rc
 tls_candidates=$tcp_count
 quic_candidates=$quic_count
 tcp_file=$tcp_candidates
@@ -1998,10 +2025,18 @@ combined_file=$combined_candidates
 EOF
     grep '^!!!!! ' "$log_file" >> "$summary_file" 2>/dev/null || true
 
+    if [ "$service_was_running" = "1" ]; then
+        print_info "Возвращаю сервис zapret2 в исходное состояние (start)..."
+        "$init_script" start >/dev/null 2>&1 || {
+            print_warning "Не удалось запустить zapret2 после blockcheck"
+        }
+    fi
+
     print_separator
     print_success "Blockcheck modern завершен"
     print_info "  TLS кандидаты: $tcp_count"
     print_info "  QUIC кандидаты: $quic_count"
+    print_info "  blockcheck exit code: $blockcheck_rc"
     print_info "  Сводка: $summary_file"
     print_info "  Combined: $combined_candidates"
     print_info "  Log: $log_file"
