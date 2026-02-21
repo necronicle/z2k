@@ -717,6 +717,7 @@ menu_autotest() {
     printf "[3] Диапазон (укажите вручную)\n"
     printf "[4] Все стратегии (только HTTPS, %s шт, ~15 мин)\n" "$total_count"
     printf "[5] QUIC тест (UDP 443, ~5-10 мин)\n"
+    printf "[6] Blockcheck modern (custom + новые техники)\n"
     printf "[B] Назад\n\n"
 
     printf "Выберите режим: "
@@ -764,6 +765,13 @@ menu_autotest() {
         5)
             clear_screen
             auto_test_quic
+            ;;
+        6)
+            clear_screen
+            print_info "Blockcheck modern: тест наших manual_* modern техник через blockcheck2 custom"
+            if confirm "Запустить blockcheck modern?" "Y"; then
+                run_blockcheck_modern
+            fi
             ;;
         [Bb])
             return

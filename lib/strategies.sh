@@ -1561,6 +1561,459 @@ auto_test_quic() {
 }
 
 # Получить текущие TCP параметры из init скрипта для секции
+# ==============================================================================
+# BLOCKCHECK MODERN (CUSTOM LISTS + CANDIDATE GENERATION)
+# ==============================================================================
+
+# Удалить дубликаты стратегий в файле, сохраняя комментарии
+dedup_strategy_file() {
+    local file=$1
+    local tmp="${file}.tmp"
+
+    [ -f "$file" ] || return 1
+
+    awk '
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*$/ { next }
+        !seen[$0]++ { print }
+    ' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+# Найти blockcheck2.sh в стандартных локациях
+find_blockcheck2_script() {
+    local p
+    for p in \
+        "${ZAPRET2_DIR:-/opt/zapret2}/blockcheck2.sh" \
+        "/opt/zapret2/blockcheck2.sh" \
+        "${WORK_DIR:-/tmp/z2k}/zapret2_upstream/blockcheck2.sh"
+    do
+        [ -x "$p" ] && {
+            echo "$p"
+            return 0
+        }
+    done
+    return 1
+}
+
+# Удалить z2k_* токены из строки параметров (получить legacy-базу)
+strip_z2k_tokens_from_params() {
+    local params=$1
+    echo "$params" | awk '
+        {
+            out=""
+            for (i=1; i<=NF; i++) {
+                if ($i ~ /z2k_/) continue
+                out = out (out ? " " : "") $i
+            }
+            print out
+        }
+    '
+}
+
+# Сгенерировать custom list_* для blockcheck:
+# - исходные manual_* modern стратегии
+# - legacy-базы (без z2k_* токенов)
+# - комбинированные legacy + modern z2k-модули (с лимитом)
+# $1 - source strats file (optional, default: WORK_DIR/strats_new2.txt or ./strats_new2.txt)
+# $2 - output dir for list files
+generate_blockcheck_modern_lists() {
+    local input_file=$1
+    local out_dir=$2
+    local list_http list_tls12 list_tls13 list_quic
+    local tls_raw quic_raw tls_pool quic_pool
+    local line params legacy addon
+    local is_quic=0
+    local tls_combo_added=0
+    local quic_combo_added=0
+    local combo_limit="${Z2K_BLOCKCHECK_COMBO_LIMIT:-180}"
+    local upstream_custom="${ZAPRET2_DIR:-/opt/zapret2}/blockcheck2.d/custom"
+    local tls_count=0
+    local quic_count=0
+
+    [ -n "$out_dir" ] || {
+        print_error "Не указан каталог для list_* файлов blockcheck"
+        return 1
+    }
+
+    if [ -z "$input_file" ]; then
+        if [ -f "${WORK_DIR:-/tmp/z2k}/strats_new2.txt" ]; then
+            input_file="${WORK_DIR:-/tmp/z2k}/strats_new2.txt"
+        elif [ -f "./strats_new2.txt" ]; then
+            input_file="./strats_new2.txt"
+        else
+            print_error "Не найден strats_new2.txt для генерации blockcheck list_*"
+            return 1
+        fi
+    fi
+
+    [ -f "$input_file" ] || {
+        print_error "Файл не найден: $input_file"
+        return 1
+    }
+
+    mkdir -p "$out_dir" || {
+        print_error "Не удалось создать каталог: $out_dir"
+        return 1
+    }
+
+    list_http="${out_dir}/list_http.txt"
+    list_tls12="${out_dir}/list_https_tls12.txt"
+    list_tls13="${out_dir}/list_https_tls13.txt"
+    list_quic="${out_dir}/list_quic.txt"
+    tls_raw="${out_dir}/tls_raw.txt"
+    quic_raw="${out_dir}/quic_raw.txt"
+    tls_pool="${out_dir}/tls_modern_pool.txt"
+    quic_pool="${out_dir}/quic_modern_pool.txt"
+
+    cat > "$list_http" <<'EOF'
+# z2k blockcheck modern: HTTP disabled for this profile
+EOF
+    cat > "$list_tls12" <<'EOF'
+# z2k blockcheck modern: TLS candidates (manual + legacy+modern combos)
+EOF
+    cat > "$list_tls13" <<'EOF'
+# z2k blockcheck modern: TLS13 candidates (manual + legacy+modern combos)
+EOF
+    cat > "$list_quic" <<'EOF'
+# z2k blockcheck modern: QUIC candidates (manual + legacy+modern combos)
+EOF
+    : > "$tls_raw"
+    : > "$quic_raw"
+    : > "$tls_pool"
+    : > "$quic_pool"
+
+    # 1) Собрать raw seed-стратегии из manual_* и выделить pool modern токенов
+    while IFS= read -r line; do
+        case "$line" in
+            manual_autocircular_*|"") continue ;;
+            manual_*" : "*)
+                params=$(echo "$line" | awk -F ' : ' '{print $2}' | sed 's/^ *nfqws2 *//')
+                params=$(echo "$params" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                [ -z "$params" ] && continue
+
+                is_quic=0
+                case "$params" in
+                    *"--filter-udp="*|*"--payload=quic_initial"*|*"--filter-l7=quic"*) is_quic=1 ;;
+                esac
+
+                if [ "$is_quic" -eq 1 ]; then
+                    echo "$params" >> "$quic_raw"
+                else
+                    echo "$params" >> "$tls_raw"
+                fi
+
+                for addon in $params; do
+                    case "$addon" in
+                        *z2k_*)
+                            if [ "$is_quic" -eq 1 ]; then
+                                echo "$addon" >> "$quic_pool"
+                            else
+                                echo "$addon" >> "$tls_pool"
+                            fi
+                            ;;
+                    esac
+                done
+                ;;
+        esac
+    done < "$input_file"
+
+    # Legacy seeds upstream custom (если доступны) - чтобы реально смешивать старое+новое
+    if [ -f "${upstream_custom}/list_https_tls12.txt" ]; then
+        awk 'BEGIN{RS="\n"} /^[[:space:]]*#/ || /^[[:space:]]*$/ {next} {print}' "${upstream_custom}/list_https_tls12.txt" >> "$tls_raw"
+    fi
+    if [ -f "${upstream_custom}/list_https_tls13.txt" ]; then
+        awk 'BEGIN{RS="\n"} /^[[:space:]]*#/ || /^[[:space:]]*$/ {next} {print}' "${upstream_custom}/list_https_tls13.txt" >> "$tls_raw"
+    fi
+    if [ -f "${upstream_custom}/list_quic.txt" ]; then
+        awk 'BEGIN{RS="\n"} /^[[:space:]]*#/ || /^[[:space:]]*$/ {next} {print}' "${upstream_custom}/list_quic.txt" >> "$quic_raw"
+    fi
+
+    dedup_strategy_file "$tls_raw" >/dev/null 2>&1 || true
+    dedup_strategy_file "$quic_raw" >/dev/null 2>&1 || true
+    dedup_strategy_file "$tls_pool" >/dev/null 2>&1 || true
+    dedup_strategy_file "$quic_pool" >/dev/null 2>&1 || true
+
+    # 2) TLS: original + legacy-base + legacy+modern combinations
+    while IFS= read -r params; do
+        case "$params" in
+            ""|\#*) continue ;;
+        esac
+        echo "$params" >> "$list_tls12"
+        echo "$params" >> "$list_tls13"
+
+        legacy=$(strip_z2k_tokens_from_params "$params")
+        legacy=$(echo "$legacy" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        [ -z "$legacy" ] && continue
+
+        if [ "$legacy" != "$params" ]; then
+            echo "$legacy" >> "$list_tls12"
+            echo "$legacy" >> "$list_tls13"
+        fi
+
+        [ "$tls_combo_added" -ge "$combo_limit" ] && continue
+        while IFS= read -r addon; do
+            case "$addon" in
+                ""|\#*) continue ;;
+            esac
+            case " $legacy " in
+                *" $addon "*) continue ;;
+            esac
+            echo "$legacy $addon" >> "$list_tls12"
+            echo "$legacy $addon" >> "$list_tls13"
+            tls_combo_added=$((tls_combo_added + 1))
+            [ "$tls_combo_added" -ge "$combo_limit" ] && break
+        done < "$tls_pool"
+    done < "$tls_raw"
+
+    # 3) QUIC: original + legacy-base + legacy+modern combinations
+    while IFS= read -r params; do
+        case "$params" in
+            ""|\#*) continue ;;
+        esac
+        echo "$params" >> "$list_quic"
+
+        legacy=$(strip_z2k_tokens_from_params "$params")
+        legacy=$(echo "$legacy" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        [ -z "$legacy" ] && continue
+
+        if [ "$legacy" != "$params" ]; then
+            echo "$legacy" >> "$list_quic"
+        fi
+
+        [ "$quic_combo_added" -ge "$combo_limit" ] && continue
+        while IFS= read -r addon; do
+            case "$addon" in
+                ""|\#*) continue ;;
+            esac
+            case " $legacy " in
+                *" $addon "*) continue ;;
+            esac
+            echo "$legacy $addon" >> "$list_quic"
+            quic_combo_added=$((quic_combo_added + 1))
+            [ "$quic_combo_added" -ge "$combo_limit" ] && break
+        done < "$quic_pool"
+    done < "$quic_raw"
+
+    dedup_strategy_file "$list_tls12" >/dev/null 2>&1 || true
+    dedup_strategy_file "$list_tls13" >/dev/null 2>&1 || true
+    dedup_strategy_file "$list_quic" >/dev/null 2>&1 || true
+
+    tls_count=$(awk '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        { c++ }
+        END { print c+0 }
+    ' "$list_tls12")
+    quic_count=$(awk '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        { c++ }
+        END { print c+0 }
+    ' "$list_quic")
+
+    if [ "$tls_count" -eq 0 ] && [ "$quic_count" -eq 0 ]; then
+        print_error "Не найдено кандидатов для blockcheck в $input_file"
+        return 1
+    fi
+
+    print_success "Сгенерированы blockcheck list_* файлы (manual + legacy + combos)"
+    print_info "  TLS кандидаты: $tls_count"
+    print_info "  QUIC кандидаты: $quic_count"
+    print_info "  Добавлено combo TLS: $tls_combo_added (лимит: $combo_limit)"
+    print_info "  Добавлено combo QUIC: $quic_combo_added (лимит: $combo_limit)"
+    print_info "  Каталог: $out_dir"
+    return 0
+}
+
+# Подготовить профиль blockcheck "1:1 standard + z2k additions"
+# $1 - blockcheck base dir
+# stdout: имя профиля (z2k-modern)
+prepare_blockcheck_modern_profile() {
+    local blockcheck_dir=$1
+    local profile="z2k-modern"
+    local profile_dir="${blockcheck_dir}/blockcheck2.d/${profile}"
+    local standard_dir="${blockcheck_dir}/blockcheck2.d/standard"
+    local custom_dir="${blockcheck_dir}/blockcheck2.d/custom"
+
+    [ -d "$standard_dir" ] || {
+        print_error "Не найден standard профиль: $standard_dir"
+        return 1
+    }
+    [ -f "${custom_dir}/10-list.sh" ] || {
+        print_error "Не найден list runner: ${custom_dir}/10-list.sh"
+        return 1
+    }
+
+    mkdir -p "$profile_dir" || {
+        print_error "Не удалось создать профиль: $profile_dir"
+        return 1
+    }
+
+    cp -f "${standard_dir}/"*.sh "$profile_dir/" 2>/dev/null || {
+        print_error "Не удалось скопировать standard *.sh в $profile_dir"
+        return 1
+    }
+    [ -f "${standard_dir}/def.inc" ] && cp -f "${standard_dir}/def.inc" "$profile_dir/def.inc" 2>/dev/null || true
+    cp -f "${custom_dir}/10-list.sh" "$profile_dir/95-z2k-list.sh" 2>/dev/null || {
+        print_error "Не удалось добавить z2k list runner в $profile_dir"
+        return 1
+    }
+
+    echo "$profile"
+    return 0
+}
+
+# Запустить blockcheck2 на наших modern списках и собрать candidate-стратегии
+# $1 - domains (optional, default: youtube + googlevideo)
+# $2 - ip versions: 4, 6, 46 (optional, default: 4)
+# $3 - repeats per test (optional, default: 1)
+run_blockcheck_modern() {
+    local domains="${1:-www.youtube.com rr1---sn-p5qlsn7l.googlevideo.com}"
+    local ipvs="${2:-4}"
+    local repeats="${3:-1}"
+
+    local blockcheck
+    local blockcheck_dir
+    local custom_dir
+    local test_profile
+    local out_dir="${WORK_DIR:-/tmp/z2k}/blockcheck-modern"
+    local lists_dir="${out_dir}/lists"
+    local log_file="${out_dir}/blockcheck.log"
+    local summary_file="${out_dir}/summary.txt"
+    local tcp_candidates="${out_dir}/tcp_candidates.txt"
+    local quic_candidates="${out_dir}/quic_candidates.txt"
+    local combined_candidates="${out_dir}/combined_candidates.conf"
+    local tcp_count=0
+    local quic_count=0
+    local num=1
+    local line
+
+    blockcheck=$(find_blockcheck2_script) || {
+        print_error "blockcheck2.sh не найден (ожидался в /opt/zapret2)"
+        return 1
+    }
+
+    blockcheck_dir=$(cd "$(dirname "$blockcheck")" 2>/dev/null && pwd)
+    custom_dir="${blockcheck_dir}/blockcheck2.d/custom"
+
+    [ -f "${custom_dir}/10-list.sh" ] || {
+        print_error "Не найден custom профиль blockcheck: ${custom_dir}/10-list.sh"
+        print_info "Синхронизируйте /opt/zapret2 с upstream blockcheck2.d/custom"
+        return 1
+    }
+
+    mkdir -p "$out_dir" "$lists_dir" || {
+        print_error "Не удалось создать каталог: $out_dir"
+        return 1
+    }
+
+    generate_blockcheck_modern_lists "" "$lists_dir" || return 1
+    test_profile=$(prepare_blockcheck_modern_profile "$blockcheck_dir") || return 1
+
+    print_header "Blockcheck Modern (z2k)"
+    print_info "Запуск blockcheck2 1:1 (standard + z2k additions) ..."
+    print_info "  blockcheck: $blockcheck"
+    print_info "  profile: $test_profile"
+    print_info "  domains: $domains"
+    print_info "  ipvs: $ipvs"
+    print_info "  repeats: $repeats"
+    print_info "  log: $log_file"
+    print_separator
+
+    LIST_HTTP="${lists_dir}/list_http.txt" \
+    LIST_HTTPS_TLS12="${lists_dir}/list_https_tls12.txt" \
+    LIST_HTTPS_TLS13="${lists_dir}/list_https_tls13.txt" \
+    LIST_QUIC="${lists_dir}/list_quic.txt" \
+    BATCH=1 TEST="$test_profile" DOMAINS="$domains" IPVS="$ipvs" REPEATS="$repeats" CURL_HTTPS_GET=1 \
+    ENABLE_HTTP=0 ENABLE_HTTPS_TLS12=1 ENABLE_HTTPS_TLS13=1 ENABLE_HTTP3=1 \
+    "$blockcheck" 2>&1 | tee "$log_file"
+
+    : > "$tcp_candidates"
+    : > "$quic_candidates"
+
+    awk -v tcp="$tcp_candidates" -v quic="$quic_candidates" '
+        /^!!!!! .*working strategy found for ipv[46]/ {
+            line = $0
+            sub(/^!!!!![[:space:]]*/, "", line)
+            split(line, a, ": working strategy found")
+            testname = a[1]
+            pos = index(line, " : nfqws2 ")
+            if (pos > 0) {
+                params = substr(line, pos + 10)
+                sub(/[[:space:]]*!!!!![[:space:]]*$/, "", params)
+                if (testname ~ /http3/) {
+                    print params >> quic
+                } else if (testname ~ /https_tls12|https_tls13/) {
+                    print params >> tcp
+                }
+            }
+        }
+    ' "$log_file"
+
+    dedup_strategy_file "$tcp_candidates" >/dev/null 2>&1 || true
+    dedup_strategy_file "$quic_candidates" >/dev/null 2>&1 || true
+
+    tcp_count=$(awk '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        { c++ }
+        END { print c+0 }
+    ' "$tcp_candidates")
+    quic_count=$(awk '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        { c++ }
+        END { print c+0 }
+    ' "$quic_candidates")
+
+    cat > "$combined_candidates" <<'EOF'
+# z2k blockcheck modern combined candidates
+# Format: NUMBER|TYPE|PARAMETERS
+EOF
+
+    while IFS= read -r line; do
+        case "$line" in
+            ""|\#*) continue ;;
+        esac
+        echo "${num}|https|${line}" >> "$combined_candidates"
+        num=$((num + 1))
+    done < "$tcp_candidates"
+
+    while IFS= read -r line; do
+        case "$line" in
+            ""|\#*) continue ;;
+        esac
+        echo "${num}|quic|${line}" >> "$combined_candidates"
+        num=$((num + 1))
+    done < "$quic_candidates"
+
+    cat > "$summary_file" <<EOF
+# z2k blockcheck modern summary
+date=$(date)
+blockcheck=$blockcheck
+domains=$domains
+ipvs=$ipvs
+repeats=$repeats
+tls_candidates=$tcp_count
+quic_candidates=$quic_count
+tcp_file=$tcp_candidates
+quic_file=$quic_candidates
+combined_file=$combined_candidates
+EOF
+    grep '^!!!!! ' "$log_file" >> "$summary_file" 2>/dev/null || true
+
+    print_separator
+    print_success "Blockcheck modern завершен"
+    print_info "  TLS кандидаты: $tcp_count"
+    print_info "  QUIC кандидаты: $quic_count"
+    print_info "  Сводка: $summary_file"
+    print_info "  Combined: $combined_candidates"
+    print_info "  Log: $log_file"
+
+    if [ "$tcp_count" -eq 0 ] && [ "$quic_count" -eq 0 ]; then
+        print_warning "Рабочие кандидаты не найдены. Проверьте $log_file и скорректируйте list_*"
+        return 1
+    fi
+
+    return 0
+}
+
 get_init_tcp_params() {
     local marker=$1
     local init_script=$2
