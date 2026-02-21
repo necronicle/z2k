@@ -14,6 +14,8 @@
 local STATE_DIR_PRIMARY = "/opt/zapret2/extra_strats/cache/autocircular"
 local STATE_FILE_PRIMARY = STATE_DIR_PRIMARY .. "/state.tsv"
 local STATE_FILE_FALLBACK = "/tmp/z2k-autocircular-state.tsv"
+local TELEMETRY_FILE_PRIMARY = STATE_DIR_PRIMARY .. "/telemetry.tsv"
+local TELEMETRY_FILE_FALLBACK = "/tmp/z2k-autocircular-telemetry.tsv"
 local DEBUG_FLAG_PRIMARY = STATE_DIR_PRIMARY .. "/debug.flag"
 local DEBUG_FLAG_FALLBACK = "/tmp/z2k-autocircular-debug.flag"
 local DEBUG_LOG_PRIMARY = STATE_DIR_PRIMARY .. "/debug.log"
@@ -21,13 +23,33 @@ local DEBUG_LOG_FALLBACK = "/tmp/z2k-autocircular-debug.log"
 
 local loaded = false
 local state = {} -- state[askey][host_norm] = { strategy = N, ts = unix_time }
+local telemetry_loaded = false
+local telemetry = {} -- telemetry[askey][hostn][strategy] = { ok, fail, lat, ts, cooldown_until }
 
 local last_write = 0
 local write_interval = 2 -- seconds
+local last_telemetry_write = 0
+local telemetry_write_interval = 5 -- seconds
 
 local debug_enabled = false
 local debug_checked_at = 0
 local debug_refresh_interval = 5 -- seconds
+
+local policy_enabled = true
+local policy_epsilon = 0.15
+local policy_cooldown_sec = 120
+local policy_ucb_c = 0.65
+local policy_lat_penalty = 0.10
+
+local function now_f()
+  if type(clock_getfloattime) == "function" then
+    local ok, v = pcall(clock_getfloattime)
+    if ok and tonumber(v) then
+      return tonumber(v)
+    end
+  end
+  return tonumber(os.time() or 0) or 0
+end
 
 local function is_blank(s)
   return (s == nil) or (tostring(s) == "")
@@ -121,6 +143,42 @@ local function ensure_state_file_exists()
   return nil
 end
 
+local function create_empty_telemetry_file(path)
+  local f = io.open(path, "w")
+  if not f then return false end
+  f:write("# z2k autocircular telemetry\n")
+  f:write("# key\thost\tstrategy\tok\tfail\tlat\tts\tcooldown_until\n")
+  f:close()
+  return true
+end
+
+local function choose_telemetry_file_for_read()
+  local f = io.open(TELEMETRY_FILE_PRIMARY, "r")
+  if f then f:close(); return TELEMETRY_FILE_PRIMARY end
+  f = io.open(TELEMETRY_FILE_FALLBACK, "r")
+  if f then f:close(); return TELEMETRY_FILE_FALLBACK end
+  return nil
+end
+
+local function choose_telemetry_file_for_write()
+  local f = io.open(TELEMETRY_FILE_PRIMARY, "a")
+  if f then f:close(); return TELEMETRY_FILE_PRIMARY end
+  f = io.open(TELEMETRY_FILE_FALLBACK, "a")
+  if f then f:close(); return TELEMETRY_FILE_FALLBACK end
+  return nil
+end
+
+local function ensure_telemetry_file_exists()
+  local existing = choose_telemetry_file_for_read()
+  if existing then return existing end
+  local writable = choose_telemetry_file_for_write()
+  if not writable then return nil end
+  if create_empty_telemetry_file(writable) then
+    return writable
+  end
+  return nil
+end
+
 local function load_state()
   if loaded then return end
   loaded = true
@@ -181,6 +239,232 @@ local function write_state()
   os.rename(tmp, path)
 end
 
+local function telemetry_host(askey, hostn, create)
+  if not askey or not hostn then return nil end
+  local a = telemetry[askey]
+  if not a then
+    if not create then return nil end
+    a = {}
+    telemetry[askey] = a
+  end
+  local h = a[hostn]
+  if not h then
+    if not create then return nil end
+    h = {}
+    a[hostn] = h
+  end
+  return h
+end
+
+local function telemetry_rec(askey, hostn, strategy, create)
+  local s = tonumber(strategy)
+  if not s or s < 1 then return nil end
+  local h = telemetry_host(askey, hostn, create)
+  if not h then return nil end
+  local r = h[s]
+  if not r and create then
+    r = { ok = 0, fail = 0, lat = 0, ts = 0, cooldown_until = 0 }
+    h[s] = r
+  end
+  return r
+end
+
+local function load_telemetry()
+  if telemetry_loaded then return end
+  telemetry_loaded = true
+  telemetry = {}
+
+  local path = ensure_telemetry_file_exists()
+  if not path then return end
+  local f = io.open(path, "r")
+  if not f then return end
+
+  for line in f:lines() do
+    if line ~= "" and not line:match("^%s*#") then
+      local askey, hostn, strat, okv, failv, latv, tsv, cdv =
+        line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]*)\t?([^\t]*)")
+      local s = tonumber(strat)
+      if askey and hostn and s and s >= 1 then
+        local r = telemetry_rec(askey, hostn, s, true)
+        if r then
+          r.ok = tonumber(okv) or 0
+          r.fail = tonumber(failv) or 0
+          r.lat = tonumber(latv) or 0
+          r.ts = tonumber(tsv) or 0
+          r.cooldown_until = tonumber(cdv) or 0
+        end
+      end
+    end
+  end
+  f:close()
+end
+
+local function write_telemetry()
+  local now = now_f()
+  if now ~= 0 and (now - last_telemetry_write) < telemetry_write_interval then
+    return
+  end
+  last_telemetry_write = now
+
+  local path = choose_telemetry_file_for_write()
+  if not path then return end
+  local tmp = path .. ".tmp"
+  local f = io.open(tmp, "w")
+  if not f then return end
+
+  f:write("# z2k autocircular telemetry\n")
+  f:write("# key\thost\tstrategy\tok\tfail\tlat\tts\tcooldown_until\n")
+  for askey, hosts in pairs(telemetry) do
+    for hostn, strats in pairs(hosts) do
+      for s, rec in pairs(strats) do
+        if rec then
+          f:write(
+            tostring(askey), "\t",
+            tostring(hostn), "\t",
+            tostring(s), "\t",
+            tostring(rec.ok or 0), "\t",
+            tostring(rec.fail or 0), "\t",
+            tostring(rec.lat or 0), "\t",
+            tostring(rec.ts or 0), "\t",
+            tostring(rec.cooldown_until or 0), "\n"
+          )
+        end
+      end
+    end
+  end
+  f:close()
+  os.rename(tmp, path)
+end
+
+local function telemetry_total_attempts(h)
+  if type(h) ~= "table" then return 0 end
+  local n = 0
+  for _, rec in pairs(h) do
+    if rec then
+      n = n + (tonumber(rec.ok) or 0) + (tonumber(rec.fail) or 0)
+    end
+  end
+  return n
+end
+
+local function telemetry_is_cooldown(rec, now)
+  if not rec then return false end
+  local cd = tonumber(rec.cooldown_until) or 0
+  return cd > now
+end
+
+local function telemetry_record_event(askey, hostn, strategy, success, latency_s, now)
+  local r = telemetry_rec(askey, hostn, strategy, true)
+  if not r then return end
+  if success then
+    r.ok = (tonumber(r.ok) or 0) + 1
+    r.cooldown_until = 0
+  else
+    r.fail = (tonumber(r.fail) or 0) + 1
+    r.cooldown_until = now + policy_cooldown_sec
+  end
+  local lat = tonumber(latency_s)
+  if lat and lat > 0 then
+    local prev = tonumber(r.lat) or 0
+    if prev <= 0 then
+      r.lat = lat
+    else
+      r.lat = prev * 0.8 + lat * 0.2
+    end
+  end
+  r.ts = now
+  write_telemetry()
+end
+
+local function policy_pick_strategy(askey, hostn, ct, now)
+  if not policy_enabled then return nil, nil end
+  local ctn = tonumber(ct)
+  if not ctn or ctn < 2 then return nil, nil end
+
+  local h = telemetry_host(askey, hostn, false)
+  local total = telemetry_total_attempts(h)
+  local candidates = {}
+  local fallback = {}
+
+  for s = 1, ctn do
+    local rec = h and h[s] or nil
+    if not telemetry_is_cooldown(rec, now) then
+      table.insert(candidates, s)
+    end
+    table.insert(fallback, s)
+  end
+  if #candidates == 0 then
+    candidates = fallback
+  end
+  if #candidates == 0 then
+    return 1, 0
+  end
+
+  if math.random() < policy_epsilon then
+    local s = candidates[math.random(1, #candidates)]
+    return s, 0
+  end
+
+  local best_s = candidates[1]
+  local best_score = -1e9
+  for i = 1, #candidates do
+    local s = candidates[i]
+    local rec = h and h[s] or nil
+    local okn = rec and (tonumber(rec.ok) or 0) or 0
+    local fn = rec and (tonumber(rec.fail) or 0) or 0
+    local att = okn + fn
+    local mean = (okn + 1) / (att + 2)
+    local explore = policy_ucb_c * math.sqrt(math.log(total + 2) / (att + 1))
+    local lat = rec and (tonumber(rec.lat) or 0) or 0
+    local penalty = 0
+    if lat > 0 then
+      penalty = policy_lat_penalty * math.min(lat, 5.0)
+    end
+    local score = mean + explore - penalty
+    if score > best_score then
+      best_score = score
+      best_s = s
+    end
+  end
+  return best_s, best_score
+end
+
+local function flow_state(desync)
+  local ls = desync and desync.track and desync.track.lua_state
+  if type(ls) ~= "table" then return nil end
+  local key = "__z2k_flow_" .. tostring(desync.func_instance or "circular")
+  local st = ls[key]
+  if type(st) ~= "table" then
+    st = {}
+    ls[key] = st
+  end
+  return st
+end
+
+local function flow_start_if_needed(desync, strategy)
+  local st = flow_state(desync)
+  if not st then return end
+  if st.t0 and st.t0 > 0 then return end
+  local p = desync and desync.l7payload
+  if desync and desync.outgoing and (p == "tls_client_hello" or p == "quic_initial" or p == "http_req") then
+    st.t0 = now_f()
+    st.strategy = tonumber(strategy) or 1
+  end
+end
+
+local function flow_finish(desync)
+  local st = flow_state(desync)
+  if not st or not st.t0 then return nil, nil end
+  local dt = now_f() - (tonumber(st.t0) or 0)
+  local s = tonumber(st.strategy) or nil
+  st.t0 = nil
+  st.strategy = nil
+  if dt and dt > 0 then
+    return dt, s
+  end
+  return nil, s
+end
+
 local function get_hostkey_func(desync)
   if desync and desync.arg and desync.arg.hostkey then
     local fname = tostring(desync.arg.hostkey)
@@ -217,6 +501,7 @@ end
 local function get_record_for_desync(desync, do_seed)
   if do_seed then
     load_state()
+    load_telemetry()
   end
   local hkf = get_hostkey_func(desync)
   if not hkf then return nil, nil, nil end
@@ -266,6 +551,38 @@ local function persist_if_changed(askey, hostn, hrec)
   state[askey][hostn] = { strategy = n, ts = os.time() or 0 }
   write_state()
   return true
+end
+
+local function policy_seed_strategy(desync, askey, hostn, hrec)
+  if not policy_enabled then return nil, nil end
+  if not askey or not hostn or not hrec then return nil, nil end
+  if not desync or not desync.outgoing then return nil, nil end
+
+  local st = flow_state(desync)
+  if st and st.policy_seeded then
+    return nil, nil
+  end
+  local p = desync and desync.l7payload
+  if p ~= "tls_client_hello" and p ~= "quic_initial" and p ~= "http_req" then
+    return nil, nil
+  end
+
+  local ct = tonumber(hrec.ctstrategy)
+  if not ct or ct < 2 then
+    if st then st.policy_seeded = true end
+    return nil, nil
+  end
+
+  local pick, score = policy_pick_strategy(askey, hostn, ct, now_f())
+  if pick and pick >= 1 and pick <= ct then
+    hrec.nstrategy = pick
+  end
+  if st then
+    st.policy_seeded = true
+    st.strategy = tonumber(hrec.nstrategy) or pick or 1
+    st.policy_score = score
+  end
+  return pick, score
 end
 
 local function conn_record_flags(desync)
@@ -350,8 +667,13 @@ if type(circular) == "function" then
   local orig_circular = circular
   circular = function(ctx, desync)
     local askey_before, hostn_before, hrec_before
+    local policy_pick_before, policy_score_before
     pcall(function()
       askey_before, hostn_before, hrec_before = get_record_for_desync(desync, true)
+      if hrec_before then
+        policy_pick_before, policy_score_before = policy_seed_strategy(desync, askey_before, hostn_before, hrec_before)
+        flow_start_if_needed(desync, hrec_before.nstrategy)
+      end
     end)
     local verdict = orig_circular(ctx, desync)
     pcall(function()
@@ -374,6 +696,7 @@ if type(circular) == "function" then
 
       local nocheck_after, failure_after = conn_record_flags(desync)
       local n_after = hrec and tonumber(hrec.nstrategy) or nil
+      flow_start_if_needed(desync, n_after)
 
       -- If persisted state became incompatible with current strategy count (config changed),
       -- normalize it to strategy 1 for the next connection and drop the persisted entry.
@@ -395,12 +718,23 @@ if type(circular) == "function" then
         (desync and desync.l7payload == "quic_initial") and
         (not failure_after) and
         n_after and n_after > 1
+      local success_event = successful_state or response_state or quic_candidate_state
+      local failure_event = failure_after and (not success_event)
       local persisted = false
-      if successful_state or response_state or quic_candidate_state then
+      if success_event then
         persisted = persist_if_changed(askey, hostn, hrec)
       end
 
-      local debug_event = persisted or failure_after or successful_state or response_state or quic_candidate_state
+      local latency_s, flow_strategy = nil, nil
+      if success_event or failure_event then
+        latency_s, flow_strategy = flow_finish(desync)
+        local strat_for_stat = n_after or flow_strategy
+        if strat_for_stat then
+          telemetry_record_event(askey, hostn, strat_for_stat, success_event and (not failure_event), latency_s, now_f())
+        end
+      end
+
+      local debug_event = persisted or failure_after or success_event or failure_event or (policy_pick_before ~= nil)
       if debug_event and (should_debug_key(askey_before) or should_debug_key(askey_after)) then
         local track = desync and desync.track
         local hn = track and track.hostname or ""
@@ -412,12 +746,17 @@ if type(circular) == "function" then
           " track_host=" .. tostring(hn) ..
           " l7=" .. tostring(desync and desync.l7payload) ..
           " out=" .. tostring(desync and desync.outgoing and 1 or 0) ..
+          " policy_pick=" .. tostring(policy_pick_before or "") ..
+          " policy_score=" .. tostring(policy_score_before or "") ..
           " nstrategy=" .. tostring(n_after) ..
           " failure=" .. tostring(failure_after and 1 or 0) ..
           " nocheck=" .. tostring(nocheck_after and 1 or 0) ..
           " success_state=" .. tostring(successful_state and 1 or 0) ..
           " response_state=" .. tostring(response_state and 1 or 0) ..
           " quic_candidate_state=" .. tostring(quic_candidate_state and 1 or 0) ..
+          " success_event=" .. tostring(success_event and 1 or 0) ..
+          " failure_event=" .. tostring(failure_event and 1 or 0) ..
+          " latency_s=" .. tostring(latency_s or "") ..
           " persisted=" .. tostring(persisted and 1 or 0)
         )
       end
