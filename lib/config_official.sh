@@ -396,8 +396,8 @@ create_official_config() {
 ENABLED=1
 
 # Mode filter: none, ipset, hostlist, autohostlist
-# For z2k we use hostlist mode with multi-profile filtering
-MODE_FILTER=hostlist
+# For z2k we use autohostlist mode with multi-profile filtering
+MODE_FILTER=autohostlist
 
 # Firewall type - AUTO-DETECTED by init script, DO NOT set manually
 # Init script calls linux_fwtype() which detects iptables/nftables automatically

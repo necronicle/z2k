@@ -98,6 +98,87 @@ ensure_autohostlist_files()
 	[ "$AUTOHOSTLIST_DEBUGLOG" = "1" ] && [ -f "$debuglog" ] || : > "$debuglog"
 }
 
+normalize_autohost_domains()
+{
+	# Normalize possible host/domain forms to bare lowercase domain names.
+	awk '
+	{
+		s=$0
+		gsub(/\r/, "", s)
+		sub(/#.*/, "", s)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+		if (s == "") next
+
+		s=tolower(s)
+		sub(/^[a-z][a-z0-9+.-]*:\/\//, "", s)
+		sub(/\/.*/, "", s)
+		sub(/:[0-9]+$/, "", s)
+		gsub(/^\*\./, "", s)
+		sub(/\.$/, "", s)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+		if (s == "") next
+
+		if (s ~ /[^a-z0-9.-]/) next
+		if (s ~ /\.\./) next
+		if (index(s, ".") == 0) next
+
+		n=split(s, a, ".")
+		if (n < 2) next
+		bad=0
+		for (i=1; i<=n; i++) {
+			if (a[i] == "") { bad=1; break }
+			if (a[i] ~ /^-/ || a[i] ~ /-$/) { bad=1; break }
+			if (a[i] !~ /^[a-z0-9-]+$/) { bad=1; break }
+		}
+		if (bad) next
+		print s
+	}
+	'
+}
+
+sync_autohostlist_to_rkn()
+{
+	[ "${AUTOHOSTLIST_SYNC_TO_RKN:-1}" = "1" ] || return 0
+
+	local base="${HOSTLIST_BASE:-$ZAPRET_BASE/ipset}"
+	local auto="${AUTOHOSTLIST_FILE:-$base/zapret-hosts-auto.txt}"
+	local rkn_list="${AUTOHOSTLIST_RKN_LIST:-$ZAPRET_BASE/extra_strats/TCP/RKN/List.txt}"
+	local whitelist="${AUTOHOSTLIST_WHITELIST:-$ZAPRET_BASE/lists/whitelist.txt}"
+
+	[ -s "$auto" ] || return 0
+	mkdir -p "$(dirname "$rkn_list")" 2>/dev/null || true
+	[ -f "$rkn_list" ] || : > "$rkn_list"
+
+	local tmp_auto tmp_have tmp_add tmp_final
+	tmp_auto="$(mktemp /tmp/z2k_ah_auto.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_auto.$$")"
+	tmp_have="$(mktemp /tmp/z2k_ah_have.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_have.$$")"
+	tmp_add="$(mktemp /tmp/z2k_ah_add.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_add.$$")"
+	tmp_final="$(mktemp /tmp/z2k_ah_final.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_final.$$")"
+
+	normalize_autohost_domains < "$auto" | sort -u > "$tmp_auto" 2>/dev/null || true
+	[ -s "$tmp_auto" ] || {
+		rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" 2>/dev/null || true
+		return 0
+	}
+
+	{
+		[ -f "$rkn_list" ] && cat "$rkn_list"
+		[ -f "$whitelist" ] && cat "$whitelist"
+	} | normalize_autohost_domains | sort -u > "$tmp_have" 2>/dev/null || true
+
+	awk 'NR==FNR { seen[$0]=1; next } !($0 in seen) { print }' "$tmp_have" "$tmp_auto" > "$tmp_add"
+	local added
+	added=$(awk 'END { print NR+0 }' "$tmp_add")
+
+	if [ "$added" -gt 0 ]; then
+		cat "$tmp_add" >> "$rkn_list"
+		sort -u "$rkn_list" > "$tmp_final" 2>/dev/null && mv "$tmp_final" "$rkn_list"
+		echo "autohostlist sync: added $added domains to $rkn_list"
+	fi
+
+	rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" 2>/dev/null || true
+}
+
 # ------------------------------------------------------------------------------
 # AUTOCIRCULAR: ensure writable cache files for runtime user (WS_USER / nobody)
 # ------------------------------------------------------------------------------
@@ -1063,6 +1144,7 @@ start()
 
     # 2.1. ����������� autohostlist ����� (���� ��������)
     ensure_autohostlist_files
+    sync_autohostlist_to_rkn
 
     # 2.2. ����������� autocircular cache/debug files (writable by runtime user)
     ensure_autocircular_files
@@ -1093,6 +1175,9 @@ stop()
 
     # 1. ���������� daemon ��������
     stop_daemons
+
+    # Sync auto-detected domains after runtime updates.
+    sync_autohostlist_to_rkn
 
     # 2. ������� firewall �������
     [ "$INIT_APPLY_FW" = "1" ] && stop_fw
