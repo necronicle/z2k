@@ -2343,12 +2343,12 @@ apply_autocircular_strategies() {
         auto_mode=1
     fi
 
-    local yt_tcp=10
-    local yt_gv=11
-    local rkn=12
+    local yt_tcp=34
+    local yt_gv=35
+    local rkn=33
     local quic
-    quic=$(get_quic_strategy_num_by_name "yt_quic_autocircular")
-    [ -z "$quic" ] && quic=7
+    quic=$(get_quic_strategy_num_by_name "yt_quic_autocircular_z4r")
+    [ -z "$quic" ] && quic=9
 
     print_header "Применение autocircular стратегий"
     print_info "Будут применены следующие стратегии:"
