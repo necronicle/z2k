@@ -58,11 +58,11 @@ MENU
 
 [1] Установить/Переустановить zapret2
 [2] Выбрать стратегию
-[3] Автотест стратегий
+[3] RuTracker blockcheck
 [4] Управление сервисом
-[6] Обновить списки доменов
-[8] Резервная копия/Восстановление
-[9] Удалить zapret2
+[5] Обновить списки доменов
+[6] Резервная копия/Восстановление
+[7] Удалить zapret2
 [A] Режим ALL TCP-443 (без хостлистов)
 [Q] Настройки QUIC
 [W] Whitelist (исключения)
@@ -70,7 +70,7 @@ MENU
 
 MENU
 
-        printf "Выберите опцию [0-9,A,Q,W]: "
+        printf "Выберите опцию [0-7,A,Q,W]: "
         read_input choice
 
         case "$choice" in
@@ -81,18 +81,18 @@ MENU
                 menu_select_strategy
                 ;;
             3)
-                menu_autotest
+                menu_rutracker_blockcheck
                 ;;
             4)
                 menu_service_control
                 ;;
-            6)
+            5)
                 menu_update_lists
                 ;;
-            8)
+            6)
                 menu_backup_restore
                 ;;
-            9)
+            7)
                 menu_uninstall
                 ;;
             a|A)
@@ -359,9 +359,9 @@ apply_current_category_strategies() {
 # ПОДМЕНЮ: АВТОТЕСТ
 # ==============================================================================
 
-menu_autotest() {
+menu_rutracker_blockcheck() {
     clear_screen
-    print_header "[3] Автотест стратегий"
+    print_header "[3] RuTracker blockcheck"
 
     if ! is_zapret2_installed; then
         print_error "zapret2 не установлен"
@@ -369,89 +369,10 @@ menu_autotest() {
         return
     fi
 
-    local total_count
-    total_count=$(get_strategies_count)
-    if [ "$total_count" -lt 1 ]; then
-        total_count="?"
+    print_info "Запуск blockcheck для rutracker.org"
+    if confirm "Продолжить?" "Y"; then
+        run_blockcheck_modern "rutracker.org"
     fi
-
-    printf "Режимы тестирования:\n\n"
-    printf "[1] По категориям Z4R (YouTube TCP/GV + RKN, ~8-10 мин)\n"
-    printf "[2] Общий тест (все стратегии, ~2-3 мин)\n"
-    printf "[3] Диапазон (укажите вручную)\n"
-    printf "[4] Все стратегии (только HTTPS, %s шт, ~15 мин)\n" "$total_count"
-    printf "[5] QUIC тест (UDP 443, ~5-10 мин)\n"
-    printf "[6] Discord blockcheck modern (custom + новые техники)\n"
-    printf "[7] RuTracker blockcheck modern (custom + новые техники)\n"
-    printf "[B] Назад\n\n"
-
-    printf "Выберите режим: "
-    read_input test_mode
-
-    case "$test_mode" in
-        1)
-            clear_screen
-            print_info "Автотест по категориям Z4R (YouTube TCP, YouTube GV, RKN)"
-            if confirm "Начать тестирование?" "Y"; then
-                auto_test_categories
-            fi
-            ;;
-        2)
-            clear_screen
-            auto_test_top20
-            ;;
-        3)
-            printf "\nНачало диапазона: "
-            read_input start_range
-            printf "Конец диапазона: "
-            read_input end_range
-
-            if [ -n "$start_range" ] && [ -n "$end_range" ]; then
-                clear_screen
-                test_strategy_range "$start_range" "$end_range"
-            else
-                print_error "Неверный диапазон"
-            fi
-            ;;
-        4)
-            clear_screen
-            print_warning "Это займет около 15 минут!"
-            if confirm "Продолжить?" "N"; then
-                local total_count
-                total_count=$(get_strategies_count)
-                if [ "$total_count" -lt 1 ]; then
-                    print_error "Стратегии не найдены"
-                    pause
-                    return
-                fi
-                test_strategy_range 1 "$total_count"
-            fi
-            ;;
-        5)
-            clear_screen
-            auto_test_quic
-            ;;
-        6)
-            clear_screen
-            print_info "Discord blockcheck modern: тест наших manual_* modern техник через blockcheck2 custom"
-            if confirm "Запустить Discord blockcheck modern?" "Y"; then
-                run_blockcheck_modern "discord.com"
-            fi
-            ;;
-        7)
-            clear_screen
-            print_info "RuTracker blockcheck modern: тест наших manual_* modern техник через blockcheck2 custom (rutracker.org)"
-            if confirm "Запустить RuTracker blockcheck modern?" "Y"; then
-                run_blockcheck_modern "rutracker.org"
-            fi
-            ;;
-        [Bb])
-            return
-            ;;
-        *)
-            print_error "Неверный выбор"
-            ;;
-    esac
 
     pause
 }
