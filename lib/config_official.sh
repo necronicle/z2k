@@ -289,7 +289,6 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
-    rkn_tcp=$(ensure_tcp_gap_primitives "$rkn_tcp")
     discord_tcp_block=$(ensure_tcp_gap_primitives "$discord_tcp_block")
 
     # Генерировать NFQWS2_OPT в формате официального config
