@@ -420,6 +420,24 @@ TLS_14_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_14.bin"
 TLS_GOOGLE_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_www_google_com.bin"
 [ -s "$TLS_GOOGLE_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_www_google_com:@$TLS_GOOGLE_BLOB"
 
+TLS_STUN_BLOB="$ZAPRET_BASE/files/fake/stun.bin"
+[ -s "$TLS_STUN_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=stun:@$TLS_STUN_BLOB"
+
+TLS_4PDA_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_4pda_to.bin"
+[ -s "$TLS_4PDA_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_4pda_to:@$TLS_4PDA_BLOB"
+
+TLS_VK_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_vk_com.bin"
+[ -s "$TLS_VK_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_vk_com:@$TLS_VK_BLOB"
+
+TLS_GOSUSLUGI_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_gosuslugi_ru.bin"
+[ -s "$TLS_GOSUSLUGI_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_gosuslugi_ru:@$TLS_GOSUSLUGI_BLOB"
+
+TLS_ACTIVATED_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_activated.bin"
+[ -s "$TLS_ACTIVATED_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_activated:@$TLS_ACTIVATED_BLOB"
+
+SYN_PACKET_BLOB="$ZAPRET_BASE/files/fake/syn_packet.bin"
+[ -s "$SYN_PACKET_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=syn_packet:@$SYN_PACKET_BLOB"
+
 QUIC_GOOGLE_BLOB="$ZAPRET_BASE/files/fake/quic_initial_www_google_com.bin"
 [ -s "$QUIC_GOOGLE_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_google:@$QUIC_GOOGLE_BLOB"
 
