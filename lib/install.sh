@@ -1498,6 +1498,18 @@ step_finalize() {
     printf "  %-25s: %s\n" "Стратегии" "$STRATEGIES_CONF"
     printf "  %-25s: %s\n" "Tools" "$tools_dir"
 
+    # Save local z2k entrypoint for future runs without curl.
+    local local_z2k_script="${ZAPRET2_DIR}/z2k.sh"
+    local local_z2k_url="${GITHUB_RAW}/z2k.sh"
+    if curl -fsSL "$local_z2k_url" -o "$local_z2k_script"; then
+        chmod +x "$local_z2k_script" 2>/dev/null || true
+        printf "  %-25s: %s\n" "z2k script" "$local_z2k_script"
+        print_info "Открыть меню позже: sh ${local_z2k_script} menu"
+    else
+        print_warning "Не удалось сохранить z2k.sh в ${local_z2k_script}"
+        print_info "Для повторного запуска используйте curl-команду из README"
+    fi
+
     print_separator
 
     return 0
