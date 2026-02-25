@@ -96,6 +96,11 @@ ensure_autohostlist_files()
 	local debuglog="$base/zapret-hosts-auto-debug.log"
 	[ -f "$auto" ] || : > "$auto"
 	[ "$AUTOHOSTLIST_DEBUGLOG" = "1" ] && [ -f "$debuglog" ] || : > "$debuglog"
+
+	# Populate iptables exclude list from z2k whitelist so nfqueue never sees them
+	local whitelist="${AUTOHOSTLIST_WHITELIST:-$ZAPRET_BASE/lists/whitelist.txt}"
+	local exclude_txt="$base/zapret-hosts-exclude.txt"
+	[ -f "$whitelist" ] && cp -f "$whitelist" "$exclude_txt" 2>/dev/null || : > "$exclude_txt"
 }
 
 normalize_autohost_domains()
@@ -174,6 +179,8 @@ sync_autohostlist_to_rkn()
 		cat "$tmp_add" >> "$rkn_list"
 		sort -u "$rkn_list" > "$tmp_final" 2>/dev/null && mv "$tmp_final" "$rkn_list"
 		echo "autohostlist sync: added $added domains to $rkn_list"
+		# Clear the auto list to prevent infinite growth and redundant reparsing
+		: > "$auto"
 	fi
 
 	rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" 2>/dev/null || true

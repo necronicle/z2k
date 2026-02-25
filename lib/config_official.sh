@@ -327,6 +327,12 @@ generate_nfqws2_opt_from_strategies() {
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
+    # Catch-all TCP profile for autohostlist failure tracking
+    # Upstream zapret appends --hostlist-auto to the very end of NFQWS2_OPT, 
+    # so we place this empty profile last to receive those parameters.
+    # It catches unknown domains, tracks failures, and sync_autohostlist_to_rkn moves them to RKN.
+    nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=80,443 --hostlist-exclude=${lists_dir}/whitelist.txt\\n"
+
     local nfqws2_opt_value
     nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d')
     cat <<NFQWS2_OPT
