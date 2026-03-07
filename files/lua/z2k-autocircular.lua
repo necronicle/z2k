@@ -668,46 +668,69 @@ if type(cond_tcp_has_ts) ~= "function" then
   end
 end
 
--- Failure detector: treat any inbound fatal TLS alert record as a failure.
--- This helps autocircular rotate on early handshake aborts (e.g. Cloudflare ECH),
--- which are not counted by the standard retransmission-based detector.
-local function z2k_tcp_flag_set(dis, mask, letter)
-  local tcp = dis and dis.tcp
-  if not tcp then return false end
-  local flags = tcp.th_flags
-  if type(flags) == "number" then
-    return bitand(flags, mask) ~= 0
-  end
-  if type(flags) == "string" and letter and letter ~= "" then
-    return flags:find(letter, 1, true) ~= nil
-  end
-  return false
-end
+-- Extended failure detector beyond standard_failure_detector:
+-- 1. HTTP DPI redirect to block page (SLD mismatch for 301/303/308, not just 302/307)
+-- 2. HTTP block page keywords (lawfilter, rkn, etc.) as fallback
+-- 3. TLS fatal alert (Cloudflare ECH handshake_failure, etc.)
 
+-- Keyword-based block page detection (fallback when SLD check is unavailable).
+-- Catches DPI block pages by ISP-specific patterns in Location header or body.
 local function z2k_http_block_reply(payload)
   if type(payload) ~= "string" then return false end
   local code_s = payload:match("^HTTP/%d%.%d%s+([0-9][0-9][0-9])")
   local code = tonumber(code_s)
   if not code then return false end
 
+  -- Unambiguous block status codes
   if code == 403 or code == 451 then
     return true
   end
-  if code ~= 302 and code ~= 307 and code ~= 308 then
-    return false
-  end
 
-  local low = string.lower(payload)
-  if not low:find("\r\nlocation:", 1, true) then
-    return false
-  end
-  if low:find("block", 1, true) or
-     low:find("forbidden", 1, true) or
-     low:find("zapret", 1, true) or
-     low:find("rkn", 1, true) then
-    return true
+  -- Any redirect with block-indicating keywords in Location
+  if code == 301 or code == 302 or code == 303 or code == 307 or code == 308 then
+    local low = string.lower(payload)
+    if low:find("\r\nlocation:", 1, true) then
+      if low:find("block", 1, true) or
+         low:find("forbidden", 1, true) or
+         low:find("zapret", 1, true) or
+         low:find("rkn", 1, true) or
+         low:find("lawfilter", 1, true) or
+         low:find("restrict", 1, true) or
+         low:find("vigruzki", 1, true) or
+         low:find("eais", 1, true) or
+         low:find("warning", 1, true) or
+         low:find("blackhole", 1, true) then
+        return true
+      end
+    end
   end
   return false
+end
+
+-- SLD-based redirect detection: any redirect (301/302/303/307/308) to a
+-- different second-level domain is a DPI redirect. This is the most universal
+-- check — works for any ISP regardless of their block page URL patterns.
+-- standard_failure_detector only checks 302/307; we extend to all codes.
+local function z2k_http_dpi_redirect(desync)
+  if not desync or desync.outgoing then return false end
+  if desync.l7payload ~= "http_reply" then return false end
+  if not desync.track or not desync.track.hostname then return false end
+  if type(http_dissect_reply) ~= "function" then return false end
+  if type(array_field_search) ~= "function" then return false end
+  if type(is_dpi_redirect) ~= "function" then return false end
+
+  local hdis = http_dissect_reply(desync.dis.payload)
+  if not hdis then return false end
+  local c = hdis.code
+  -- 302/307 are already caught by standard_failure_detector, but re-checking
+  -- them here is harmless (crec.nocheck prevents double-counting) and makes
+  -- this function self-contained.
+  if c ~= 301 and c ~= 302 and c ~= 303 and c ~= 307 and c ~= 308 then
+    return false
+  end
+  local idx = array_field_search(hdis.headers, "header_low", "location")
+  if not idx then return false end
+  return is_dpi_redirect(desync.track.hostname, hdis.headers[idx].value)
 end
 
 function z2k_tls_alert_fatal(desync, crec)
@@ -719,21 +742,26 @@ function z2k_tls_alert_fatal(desync, crec)
   if not desync or desync.outgoing then return false end
   local dis = desync.dis
 
-  -- Transport-layer hard failures.
-  if z2k_tcp_flag_set(dis, 0x04, "R") then
+  -- RST and FIN are handled by standard_failure_detector (RST within inseq=4K,
+  -- retransmissions within maxseq=32K). We do NOT extend these checks because:
+  -- - DPI sends RST early (within first few hundred bytes), already covered
+  -- - FIN is normal TCP close, NOT a DPI signal. Short connections (TLS 1.3
+  --   session resumption + small API response < 4K) would cause false positives:
+  --   success_detector (inseq=4K) hasn't fired yet when FIN arrives, so the
+  --   failure detector runs and counts normal connection close as failure.
+  --   With fails=2, two short API calls within 60s = false rotation.
+
+  -- HTTP DPI redirect: ISP redirects to block page (e.g. lawfilter.ertelecom.ru).
+  -- SLD-based check is universal for any ISP; keyword-based is a fallback.
+  if z2k_http_dpi_redirect(desync) then
     return true
   end
-  if z2k_tcp_flag_set(dis, 0x01, "F") then
-    local pfin = dis and dis.payload
-    if type(pfin) ~= "string" or #pfin == 0 then
-      return true
-    end
-  end
-
   local payload = dis and dis.payload
   if z2k_http_block_reply(payload) then
     return true
   end
+
+  -- TLS fatal alert (e.g. Cloudflare ECH handshake_failure)
   if type(payload) ~= "string" then return false end
   if #payload < 7 then return false end
   if payload:byte(1) ~= 0x15 then return false end -- TLS record: alert (21)
