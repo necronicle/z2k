@@ -327,10 +327,9 @@ generate_nfqws2_opt_from_strategies() {
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # HTTP RKN (port 80): autocircular bypass for ISP DPI redirect on plain HTTP.
-    # Strategy 1 (z4r): fake (inline blob, tcp_md5) + multisplit at Host header with seqovl.
-    # Strategy 2 (remittor): fake (http_iana blob, ip_autottl, badsum) + fakedsplit at Host header.
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --payload=http_req --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --lua-desync=circular:fails=2:time=60:key=http_rkn --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=1 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=1 --lua-desync=fake:payload=http_req:dir=out:blob=http_iana:ip_autottl=2:badsum:strategy=2 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=host+1:strategy=2 --new"
+    # HTTP RKN (port 80): bypass ISP DPI redirect for plain HTTP blocked sites.
+    # z4r strategy: fake (inline junk blob, tcp_md5) + multisplit at Host header with seqovl.
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --payload=http_req --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2 --new"
 
     # Catch-all TCP profile for autohostlist failure tracking
     # Upstream zapret appends --hostlist-auto to the very end of NFQWS2_OPT, 
