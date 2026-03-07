@@ -12,6 +12,7 @@ Z2K_VERSION="2.0.0"
 # Пути установки
 ZAPRET2_DIR="/opt/zapret2"
 CONFIG_DIR="/opt/etc/zapret2"
+CATEGORY_STRATEGIES_CONF="${CONFIG_DIR}/category_strategies.conf"
 LISTS_DIR="${ZAPRET2_DIR}/lists"
 
 # Z2K-специфичная переменная для init скрипта (не конфликтует с zapret2)

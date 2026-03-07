@@ -199,7 +199,8 @@ local function load_state()
               if askey and host and strat then
                 local n = tonumber(strat)
                 if n and n >= 1 then
-                  local hn = normalize_hostkey_for_state(host)          if hn then
+                  local hn = normalize_hostkey_for_state(host)
+                  if hn then
             if not state[askey] then state[askey] = {} end
             state[askey][hn] = { strategy = n, ts = tonumber(ts) or 0 }
           end

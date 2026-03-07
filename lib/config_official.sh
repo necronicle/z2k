@@ -369,8 +369,8 @@ create_official_config() {
     # =========================================================================
     print_info "Валидация сгенерированных опций nfqws2..."
 
-    # Извлечь NFQWS2_OPT из сгенерированной секции
-    local nfqws2_opt_value=$(echo "$nfqws2_opt_section" | grep "^NFQWS2_OPT=" | sed 's/^NFQWS2_OPT=//' | tr -d '"')
+    # Извлечь NFQWS2_OPT из сгенерированной секции (многострочный heredoc между кавычками)
+    local nfqws2_opt_value=$(echo "$nfqws2_opt_section" | sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }')
 
     # Загрузить модули для dry_run_nfqws()
     if [ -f "/opt/zapret2/common/base.sh" ]; then

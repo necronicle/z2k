@@ -149,7 +149,6 @@ EOF
     total_count=$(grep -c '^[0-9]' "$output_file" 2>/dev/null || echo "0")
 
     print_success "Сгенерировано стратегий: $total_count"
-    print_info "HTTPS стратегии: ~$https_count"
 
     return 0
 }
@@ -912,9 +911,9 @@ auto_test_rkn() {
             fi
         done
 
-        # Успех если работает хотя бы на 2 из 3 доменов
-        if [ "$success_count" -ge 2 ]; then
-            printf "РАБОТАЕТ (%d/3)\n" "$success_count" >&2
+        # Успех если домен работает
+        if [ "$success_count" -ge 1 ]; then
+            printf "РАБОТАЕТ\n" >&2
             print_success "Найдена работающая стратегия для RKN: #$num" >&2
             echo "$num"
             return 0
@@ -2234,13 +2233,15 @@ apply_autocircular_strategies() {
         rkn=1
     fi
 
-    apply_category_strategies_v2 "$yt_tcp" "$yt_gv" "$rkn"
-
+    # Записать QUIC стратегию ДО рестарта (apply_category_strategies_v2 делает restart),
+    # иначе QUIC-профиль отстаёт на один цикл.
     if quic_strategy_exists "$quic"; then
         set_current_quic_strategy "$quic"
     else
         print_warning "QUIC стратегия #$quic не найдена, оставляю текущую"
     fi
+
+    apply_category_strategies_v2 "$yt_tcp" "$yt_gv" "$rkn"
 
     return 0
 }

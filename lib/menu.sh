@@ -494,7 +494,7 @@ menu_update_lists() {
     # Показать текущие списки
     show_domain_lists_stats
 
-    printf "\nОбновить списки из zapret4rocket? [Y/n]: "
+    printf "\nОбновить списки доменов? [Y/n]: "
     read_input answer
 
     case "$answer" in
