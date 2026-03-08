@@ -2046,6 +2046,137 @@ EOF
     return 0
 }
 
+# ==============================================================================
+# BLOCKCHECK HTTP (port 80)
+# ==============================================================================
+
+run_blockcheck_http() {
+    local domain="${1:-fast-torrent.ru}"
+    local ipvs="${2:-4}"
+    local repeats="${3:-1}"
+
+    local blockcheck
+    local out_dir="${WORK_DIR:-/tmp/z2k}/blockcheck-http"
+    local lists_dir="${out_dir}/lists"
+    local log_file="${out_dir}/blockcheck-http.log"
+    local http_candidates="${out_dir}/http_candidates.txt"
+    local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
+    local service_was_running=0
+    local blockcheck_rc=0
+    local rc_file="${out_dir}/blockcheck.rc"
+
+    blockcheck=$(find_blockcheck2_script) || {
+        print_error "blockcheck2.sh не найден (ожидался в /opt/zapret2)"
+        return 1
+    }
+
+    local blockcheck_dir
+    blockcheck_dir=$(cd "$(dirname "$blockcheck")" 2>/dev/null && pwd)
+    local custom_dir="${blockcheck_dir}/blockcheck2.d/custom"
+
+    [ -f "${custom_dir}/10-list.sh" ] || {
+        print_error "Не найден custom профиль blockcheck: ${custom_dir}/10-list.sh"
+        return 1
+    }
+
+    mkdir -p "$out_dir" "$lists_dir" || {
+        print_error "Не удалось создать каталог: $out_dir"
+        return 1
+    }
+
+    # Списки: только HTTP
+    printf '%s\n' "$domain" > "${lists_dir}/list_http.txt"
+    : > "${lists_dir}/list_https_tls12.txt"
+    : > "${lists_dir}/list_https_tls13.txt"
+    : > "${lists_dir}/list_quic.txt"
+
+    local test_profile
+    test_profile=$(prepare_blockcheck_modern_profile "$blockcheck_dir") || return 1
+
+    print_header "Blockcheck HTTP (port 80)"
+    print_info "  blockcheck: $blockcheck"
+    print_info "  domain: $domain"
+    print_info "  log: $log_file"
+    print_separator
+
+    if is_zapret2_running; then
+        service_was_running=1
+        print_info "Останавливаю сервис zapret2 перед blockcheck..."
+        "$init_script" stop >/dev/null 2>&1 || true
+        sleep 1
+    fi
+
+    print_info "Останавливаю остаточные процессы nfqws2..."
+    pkill -9 -f nfqws2 >/dev/null 2>&1 || true
+    sleep 1
+
+    rm -f "$rc_file" 2>/dev/null || true
+    (
+        LIST_HTTP="${lists_dir}/list_http.txt" \
+        LIST_HTTPS_TLS12="${lists_dir}/list_https_tls12.txt" \
+        LIST_HTTPS_TLS13="${lists_dir}/list_https_tls13.txt" \
+        LIST_QUIC="${lists_dir}/list_quic.txt" \
+        BATCH=1 TEST="$test_profile" DOMAINS="$domain" IPVS="$ipvs" REPEATS="$repeats" \
+        ENABLE_HTTP=1 ENABLE_HTTPS_TLS12=0 ENABLE_HTTPS_TLS13=0 ENABLE_HTTP3=0 WS_UID=0 WS_GID=0 \
+        "$blockcheck"
+        echo $? > "$rc_file"
+    ) 2>&1 | tee "$log_file"
+
+    blockcheck_rc=$(cat "$rc_file" 2>/dev/null || echo 1)
+    rm -f "$rc_file" 2>/dev/null || true
+
+    # Собрать HTTP кандидаты из лога
+    : > "$http_candidates"
+    awk '
+        /^curl_test_http ipv[46] / {
+            line = $0
+            if (line ~ /(not[[:space:]]+working|working[[:space:]]+without[[:space:]]+bypass|test[[:space:]]+aborted)/) next
+            if (!match(line, / : [^ ]+[[:space:]]+/)) next
+            params = substr(line, RSTART + RLENGTH)
+            sub(/[[:space:]]*!!!!![[:space:]]*$/, "", params)
+            sub(/[[:space:]]+$/, "", params)
+            if (params != "") print params
+        }
+        /^!!!!! .*curl_test_http.*working strategy found/ {
+            line = $0
+            sub(/^!!!!![[:space:]]*/, "", line)
+            if (!match(line, / : [^ ]+[[:space:]]+/)) next
+            params = substr(line, RSTART + RLENGTH)
+            sub(/[[:space:]]*!!!!![[:space:]]*$/, "", params)
+            sub(/[[:space:]]+$/, "", params)
+            if (params != "") print params
+        }
+    ' "$log_file" > "$http_candidates"
+
+    local http_count
+    http_count=$(awk '/^[[:space:]]*#/ || /^[[:space:]]*$/ { next } { c++ } END { print c+0 }' "$http_candidates")
+
+    if [ "$service_was_running" = "1" ]; then
+        print_info "Возвращаю сервис zapret2 в исходное состояние (start)..."
+        "$init_script" start >/dev/null 2>&1 || true
+    fi
+
+    print_separator
+    print_success "Blockcheck HTTP завершен"
+    print_info "  HTTP кандидаты: $http_count"
+    print_info "  Log: $log_file"
+
+    if [ "$http_count" -gt 0 ]; then
+        print_separator
+        print_info "Найденные рабочие HTTP стратегии:"
+        local n=1
+        while IFS= read -r line; do
+            case "$line" in ""|\#*) continue ;; esac
+            printf "  #%d: %s\n" "$n" "$line"
+            n=$((n + 1))
+        done < "$http_candidates"
+    else
+        print_warning "Рабочие HTTP стратегии не найдены. Проверьте $log_file"
+    fi
+
+    return 0
+}
+
 get_init_tcp_params() {
     local marker=$1
     local init_script=$2

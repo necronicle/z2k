@@ -355,7 +355,7 @@ menu_rutracker_blockcheck() {
     print_info "Запуск blockcheck для fast-torrent.ru (HTTP, порт 80)"
     print_info "Поиск рабочей стратегии обхода HTTP DPI redirect"
     if confirm "Продолжить?" "Y"; then
-        run_blockcheck_modern "fast-torrent.ru"
+        run_blockcheck_http "fast-torrent.ru"
     fi
 
     pause
