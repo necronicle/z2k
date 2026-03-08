@@ -53,10 +53,10 @@ MENU
             fi
 
             # Показать статус RST-фильтра
-            local config_file="${CONFIG_DIR}/config"
-            if [ -f "$config_file" ]; then
+            local rst_config_file="${ZAPRET2_DIR}/config"
+            if [ -f "$rst_config_file" ]; then
                 local DROP_DPI_RST=0
-                eval "$(grep '^DROP_DPI_RST=' "$config_file")"
+                eval "$(grep '^DROP_DPI_RST=' "$rst_config_file")"
                 if [ "$DROP_DPI_RST" = "1" ]; then
                     printf " RST-фильтр: Включен (пассивный DPI)\n"
                 fi
@@ -699,7 +699,7 @@ menu_rst_filter() {
     clear_screen
     print_header "RST-фильтр (пассивный DPI)"
 
-    local config_file="${CONFIG_DIR}/config"
+    local config_file="${ZAPRET2_DIR}/config"
 
     if [ ! -f "$config_file" ]; then
         print_error "Конфиг не найден: $config_file"
