@@ -1091,6 +1091,58 @@ z2k_udp_masquerade_fix_stop()
     iptablesw -t nat -F "$Z2K_IPT_NAT_CHAIN"
     iptablesw -t nat -X "$Z2K_IPT_NAT_CHAIN"
 }
+# ==============================================================================
+# PASSIVE DPI FILTER: drop TCP RST packets injected by TSPU/DPI
+# TSPU injects fake RST packets with IP ID in range 0x0000-0x000F.
+# These arrive BEFORE the real server response and kill the connection.
+# Dropping them lets the real response through.
+# Enable: DROP_DPI_RST=1 in /opt/zapret2/config
+# ==============================================================================
+
+Z2K_RST_CHAIN="z2k_dpi_rst"
+
+z2k_rst_filter_start()
+{
+    [ "$DROP_DPI_RST" = "1" ] || return 0
+    echo "Enabling passive DPI RST filter (IP ID 0x0-0xF)"
+
+    # Check u32 module availability
+    iptables -m u32 -h >/dev/null 2>&1 || {
+        echo "WARN: xt_u32 module not available, RST filter disabled"
+        return 1
+    }
+
+    # Create dedicated chain (idempotent)
+    iptables -t raw -N "$Z2K_RST_CHAIN" 2>/dev/null || iptables -t raw -F "$Z2K_RST_CHAIN"
+
+    # Match TCP RST where IP Identification field (offset 4, 2 bytes) is 0x0000-0x000F
+    # IP header byte 4-5 = Identification field
+    # u32 expression: "0>>22&0xFFFF=0x0:0xF" means: word at offset 0, shift right 22 bits (not needed)
+    # Actually: offset 4 in IP header = 2nd 32-bit word, upper 16 bits
+    # u32: "4&0xFFFF0000=0x0:0xF0000" or simpler via "0>>16&0xFFFF@0>>16&0xFFFF"
+    # Simplest: match raw bytes at offset 4-5
+    iptables -t raw -A "$Z2K_RST_CHAIN" -p tcp --tcp-flags RST RST \
+        -m u32 --u32 "4&0xFFFF0000=0x00000000:0x000F0000" \
+        -j DROP
+
+    # Hook into PREROUTING (incoming packets)
+    iptables -t raw -C PREROUTING -j "$Z2K_RST_CHAIN" 2>/dev/null || \
+        iptables -t raw -A PREROUTING -j "$Z2K_RST_CHAIN"
+
+    echo "Passive DPI RST filter active"
+}
+
+z2k_rst_filter_stop()
+{
+    # Remove hook
+    while iptables -t raw -C PREROUTING -j "$Z2K_RST_CHAIN" 2>/dev/null; do
+        iptables -t raw -D PREROUTING -j "$Z2K_RST_CHAIN" || break
+    done
+    # Flush and delete chain
+    iptables -t raw -F "$Z2K_RST_CHAIN" 2>/dev/null
+    iptables -t raw -X "$Z2K_RST_CHAIN" 2>/dev/null
+}
+
 start_fw()
 {
     echo "Applying zapret2 firewall rules"
@@ -1111,6 +1163,7 @@ start_fw()
     zapret_apply_firewall
     z2k_policy_connmark_start
     z2k_udp_masquerade_fix_start
+    z2k_rst_filter_start
 
     return 0
 }
@@ -1122,6 +1175,7 @@ stop_fw()
     # ���������� ��� firewall
     linux_fwtype
 
+    z2k_rst_filter_stop
     # ������������ ����������� �������
     z2k_connmark_init
     z2k_udp_masquerade_fix_stop

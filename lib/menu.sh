@@ -52,6 +52,16 @@ MENU
                 fi
             fi
 
+            # Показать статус RST-фильтра
+            local config_file="${CONFIG_DIR}/config"
+            if [ -f "$config_file" ]; then
+                local DROP_DPI_RST=0
+                eval "$(grep '^DROP_DPI_RST=' "$config_file")"
+                if [ "$DROP_DPI_RST" = "1" ]; then
+                    printf " RST-фильтр: Включен (пассивный DPI)\n"
+                fi
+            fi
+
         fi
 
         cat <<'MENU'
@@ -66,12 +76,13 @@ MENU
 [A] Режим без хостлистов (для Austerus)
 [Q] Настройки QUIC
 [W] Whitelist (исключения)
+[R] RST-фильтр (пассивный DPI)
 [S] Скрипты custom.d
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-7,A,Q,W,S]: "
+        printf "Выберите опцию [0-7,A,Q,R,W,S]: "
         read_input choice
 
         case "$choice" in
@@ -101,6 +112,9 @@ MENU
                 ;;
             q|Q)
                 menu_quic_settings
+                ;;
+            r|R)
+                menu_rst_filter
                 ;;
             w|W)
                 menu_whitelist
@@ -656,6 +670,101 @@ SUBMENU
             print_success "Режим Austerus выключен, возврат к автоциркулярам z2k"
             print_info "Пересоздание конфига..."
             create_official_config "/opt/zapret2/config"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+
+        b|B)
+            return 0
+            ;;
+
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: RST-ФИЛЬТР (ПАССИВНЫЙ DPI)
+# ==============================================================================
+
+menu_rst_filter() {
+    clear_screen
+    print_header "RST-фильтр (пассивный DPI)"
+
+    local config_file="${CONFIG_DIR}/config"
+
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local DROP_DPI_RST=0
+    eval "$(grep '^DROP_DPI_RST=' "$config_file")"
+
+    print_separator
+    print_info "Статус: $([ "$DROP_DPI_RST" = "1" ] && echo 'Включен' || echo 'Выключен')"
+    print_separator
+
+    cat <<'SUBMENU'
+
+ТСПУ (DPI провайдера) отправляет поддельные TCP RST пакеты
+раньше реального ответа сервера, чтобы разорвать соединение.
+Признак: IP Identification 0x0000-0x000F (в реальных пакетах
+это поле случайное).
+
+RST-фильтр блокирует такие пакеты через iptables raw/PREROUTING.
+Это помогает если сайты разрываются сразу после TLS handshake.
+
+Требуется модуль xt_u32 (есть в Keenetic с Entware).
+
+[1] Включить
+[2] Выключить
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            if grep -q '^DROP_DPI_RST=' "$config_file"; then
+                sed -i 's/^DROP_DPI_RST=.*/DROP_DPI_RST=1/' "$config_file"
+            else
+                echo "DROP_DPI_RST=1" >> "$config_file"
+            fi
+            print_success "RST-фильтр включен"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен с RST-фильтром"
+            else
+                print_warning "Сервис не запущен. Запустите через [4] Управление сервисом"
+            fi
+
+            pause
+            ;;
+
+        2)
+            if [ "$DROP_DPI_RST" != "1" ]; then
+                print_info "Фильтр уже выключен"
+                pause
+                return 0
+            fi
+
+            sed -i 's/^DROP_DPI_RST=.*/DROP_DPI_RST=0/' "$config_file"
+            print_success "RST-фильтр выключен"
 
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса..."

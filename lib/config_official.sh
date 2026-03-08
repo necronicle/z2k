@@ -624,6 +624,10 @@ DISABLE_CUSTOM=1
 # User for zapret daemons (security hardening: drop privileges to nobody)
 WS_USER=nobody
 
+# Passive DPI RST filter: drop injected TCP RST with IP ID 0x0-0xF
+# Enable if your ISP uses TSPU that sends fake RST before real server reply
+DROP_DPI_RST=0
+
 # Compress large lists
 GZIP_LISTS=1
 
