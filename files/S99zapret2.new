@@ -475,6 +475,9 @@ TLS_4PDA_SHORT_BLOB="$ZAPRET_BASE/files/fake/4pda.bin"
 HTTP_IANA_BLOB="$ZAPRET_BASE/files/fake/http_iana_org.bin"
 [ -s "$HTTP_IANA_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=http_iana:@$HTTP_IANA_BLOB"
 
+ZERO_256_BLOB="$ZAPRET_BASE/files/fake/zero_256.bin"
+[ -s "$ZERO_256_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=zero_256:@$ZERO_256_BLOB"
+
 LISTS_DIR="$ZAPRET_BASE/lists"
 EXTRA_STRATS_DIR="$ZAPRET_BASE/extra_strats"
 CONFIG_DIR="/opt/etc/zapret2"
