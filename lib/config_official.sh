@@ -193,15 +193,35 @@ generate_nfqws2_opt_from_strategies() {
     youtube_gv_tcp=$(ensure_circular_payload_empty "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_payload_empty "$rkn_tcp")
 
-    # Prepend user-contributed strategy as strategy=0 (tried first by circular).
+    # Prepend user-contributed strategy as strategy=1 (tried first by circular).
+    # Existing strategies are renumbered N→N+1 to maintain sequential numbering.
+    # Circular requires: start from 1, no gaps, sequential increment.
     # Source: known-working Zapret1 config, converted to nfqws2 syntax.
     prepend_user_strategy() {
         local input="$1"
         shift
         local out=""
         local inserted=0
+        local token=""
+        local prefix="" num="" suffix=""
 
         for token in $input; do
+            # Increment all existing strategy=N → strategy=N+1
+            case "$token" in
+                *:strategy=[0-9]*)
+                    prefix="${token%:strategy=*}"
+                    suffix="${token##*:strategy=}"
+                    num="${suffix%%:*}"
+                    if [ "$suffix" != "$num" ]; then
+                        suffix=":${suffix#*:}"
+                    else
+                        suffix=""
+                    fi
+                    num=$((num + 1))
+                    token="${prefix}:strategy=${num}${suffix}"
+                    ;;
+            esac
+
             out="${out:+$out }$token"
             if [ "$inserted" -eq 0 ]; then
                 case "$token" in
@@ -218,23 +238,23 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
-    # TLS strategy=0: fake(zero,badsum,badseq) + fake(google_hello,badsum,badseq,tls_mod) + multidisorder(method+2,midsld,5)
+    # TLS strategy=1: fake(zero,badsum,badseq) + fake(google_hello,badsum,badseq,tls_mod) + multidisorder(method+2,midsld,5)
     rkn_tcp=$(prepend_user_strategy "$rkn_tcp" \
-        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=0x00000000:badsum:badseq:repeats=1:strategy=0" \
-        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid:strategy=0" \
-        "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=0")
+        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=0x00000000:badsum:badseq:repeats=1:strategy=1" \
+        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid:strategy=1" \
+        "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=1")
     youtube_tcp_tcp=$(prepend_user_strategy "$youtube_tcp_tcp" \
-        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=0x00000000:badsum:badseq:repeats=1:strategy=0" \
-        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid:strategy=0" \
-        "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=0")
+        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=0x00000000:badsum:badseq:repeats=1:strategy=1" \
+        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid:strategy=1" \
+        "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=1")
     youtube_gv_tcp=$(prepend_user_strategy "$youtube_gv_tcp" \
-        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=0x00000000:badsum:badseq:repeats=1:strategy=0" \
-        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid:strategy=0" \
-        "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=0")
+        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=0x00000000:badsum:badseq:repeats=1:strategy=1" \
+        "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid:strategy=1" \
+        "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=1")
 
-    # QUIC strategy=0: fake(zero blob). badsum/badseq are TCP-only, omitted for UDP.
+    # QUIC strategy=1: fake(zero blob). badsum/badseq are TCP-only, omitted for UDP.
     quic_udp=$(prepend_user_strategy "$quic_udp" \
-        "--lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000:repeats=1:strategy=0")
+        "--lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000:repeats=1:strategy=1")
 
     # Fill TCP autocircular gaps with primitives that exist in nfqws2
     # but were not guaranteed in current z2k profile packs.
@@ -371,18 +391,18 @@ generate_nfqws2_opt_from_strategies() {
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
-    # 8 strategies: user-contributed (strategy=0) + 7 from blockcheck2 results.
+    # 8 strategies: user-contributed (strategy=1) + 7 from blockcheck2 (strategy=2-8).
     # standard_failure_detector detects HTTP 302 redirects natively.
     # --in-range=-s5556: let circular see HTTP response for failure detection.
-    # Strategy 0: user-contributed Zapret1 (fake zero+badsum+badseq + multisplit)
-    # Strategy 1: http_methodeol (simplest HTTP manipulation)
-    # Strategy 2: syndata + multisplit
-    # Strategy 3: hostfakesplit with TTL=2
-    # Strategy 4: fake with badsum
-    # Strategy 5: fakedsplit at method+2 with badsum
-    # Strategy 6: z4r original (fake 0x0E + tcp_md5 + multisplit host+1)
-    # Strategy 7: fake badsum + multisplit method+2
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2 --lua-desync=fake:payload=http_req:dir=out:blob=0x00000000:badsum:badseq:strategy=0 --lua-desync=multisplit:payload=http_req:dir=out:strategy=0 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
+    # Strategy 1: user-contributed Zapret1 (fake zero+badsum+badseq + multisplit)
+    # Strategy 2: http_methodeol (simplest HTTP manipulation)
+    # Strategy 3: syndata + multisplit
+    # Strategy 4: hostfakesplit with TTL=2
+    # Strategy 5: fake with badsum
+    # Strategy 6: fakedsplit at method+2 with badsum
+    # Strategy 7: z4r original (fake 0x0E + tcp_md5 + multisplit host+1)
+    # Strategy 8: fake badsum + multisplit method+2
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2 --lua-desync=fake:payload=http_req:dir=out:blob=0x00000000:badsum:badseq:strategy=1 --lua-desync=multisplit:payload=http_req:dir=out:strategy=1 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=2 --lua-desync=syndata:payload=http_req:dir=out:strategy=3 --lua-desync=multisplit:payload=http_req:dir=out:strategy=3 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=4 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=5 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=8 --in-range=x --new"
 
     # Catch-all TCP profile for autohostlist failure tracking
     # Upstream zapret appends --hostlist-auto to the very end of NFQWS2_OPT, 
