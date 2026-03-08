@@ -1008,6 +1008,13 @@ datadoghq.com
 okcdn.ru
 api.mycdn.me
 
+# === Keenetic (KeenDNS, облако, обновления) ===
+keenetic.pro
+keenetic.com
+keenetic.io
+keenetic.cloud
+keenetic.link
+
 # === Разработка ===
 raw.githubusercontent.com
 EOF
