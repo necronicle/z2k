@@ -66,11 +66,12 @@ MENU
 [A] Режим ALL TCP-443 (без хостлистов)
 [Q] Настройки QUIC
 [W] Whitelist (исключения)
+[S] Скрипты custom.d (не включать)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-7,A,Q,W]: "
+        printf "Выберите опцию [0-7,A,Q,W,S]: "
         read_input choice
 
         case "$choice" in
@@ -103,6 +104,9 @@ MENU
                 ;;
             w|W)
                 menu_whitelist
+                ;;
+            s|S)
+                menu_custom_scripts
                 ;;
             0)
                 print_info "Выход из меню"
@@ -738,6 +742,92 @@ SUBMENU
             return 0
             ;;
 
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: СКРИПТЫ CUSTOM.D
+# ==============================================================================
+
+menu_custom_scripts() {
+    clear_screen
+    print_header "Скрипты custom.d (не включать без необходимости)"
+
+    local zapret_config="/opt/zapret2/config"
+
+    if [ ! -f "$zapret_config" ]; then
+        print_error "Файл конфигурации не найден: $zapret_config"
+        pause
+        return 1
+    fi
+
+    # Прочитать текущее значение
+    local current_value
+    current_value=$(grep "^DISABLE_CUSTOM=" "$zapret_config" 2>/dev/null | cut -d= -f2)
+    [ -z "$current_value" ] && current_value="1"
+
+    print_separator
+
+    if [ "$current_value" = "1" ]; then
+        print_success "Скрипты custom.d: ОТКЛЮЧЕНЫ (рекомендуется)"
+    else
+        print_warning "Скрипты custom.d: ВКЛЮЧЕНЫ"
+    fi
+
+    print_separator
+
+    cat <<'INFO'
+
+Скрипты custom.d (50-stun4all, 50-discord-media) запускают
+дополнительные демоны nfqws2 для обхода Discord voice/video.
+
+ВНИМАНИЕ: Discord voice/video уже обрабатывается основными
+стратегиями (профиль 6 — Discord UDP). Включение скриптов
+создаст дублирующие демоны и может вызвать конфликты.
+
+Включайте только если основные стратегии не помогают с Discord.
+
+[1] Включить скрипты custom.d
+[2] Отключить скрипты custom.d (рекомендуется)
+[B] Назад
+
+INFO
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            sed -i 's/^DISABLE_CUSTOM=.*/DISABLE_CUSTOM=0/' "$zapret_config"
+            print_warning "Скрипты custom.d ВКЛЮЧЕНЫ"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+        2)
+            sed -i 's/^DISABLE_CUSTOM=.*/DISABLE_CUSTOM=1/' "$zapret_config"
+            print_success "Скрипты custom.d ОТКЛЮЧЕНЫ"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+        b|B)
+            return 0
+            ;;
         *)
             print_error "Неверный выбор: $sub_choice"
             pause
