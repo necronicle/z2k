@@ -327,10 +327,18 @@ generate_nfqws2_opt_from_strategies() {
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # HTTP RKN (port 80): bypass ISP DPI redirect for plain HTTP blocked sites.
-    # z4r strategy: fake(0x0E0E0F0E, tcp_md5) + multisplit(host+1, seqovl=2).
-    # No circular — HTTP DPI blocking is uniform, single strategy suffices.
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2 --new"
+    # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
+    # 7 diverse strategies from blockcheck2 results, ordered by simplicity.
+    # standard_failure_detector detects HTTP 302 redirects natively (no custom detector needed).
+    # --in-range=-s5556: let circular see HTTP response for failure detection.
+    # Strategy 1: http_methodeol (simplest HTTP manipulation)
+    # Strategy 2: syndata + multisplit
+    # Strategy 3: hostfakesplit with TTL=2
+    # Strategy 4: fake with badsum
+    # Strategy 5: fakedsplit at method+2 with badsum
+    # Strategy 6: z4r original (fake 0x0E + tcp_md5 + multisplit host+1)
+    # Strategy 7: fake badsum + multisplit method+2
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
 
     # Catch-all TCP profile for autohostlist failure tracking
     # Upstream zapret appends --hostlist-auto to the very end of NFQWS2_OPT, 
