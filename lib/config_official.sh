@@ -13,7 +13,7 @@ generate_nfqws2_opt_from_strategies() {
     local extra_strats_dir="/opt/zapret2/extra_strats"
     local lists_dir="/opt/zapret2/lists"
 
-    # Режим Austerus: простые стратегии без хостлистов, из Zapret1.
+    # Режим Austerusj: простые стратегии без хостлистов, из Zapret1.
     # Если включен — генерируем минимальный конфиг и выходим.
     local austerus_conf="${config_dir}/all_tcp443.conf"
     if [ -f "$austerus_conf" ]; then

@@ -48,7 +48,7 @@ MENU
             if [ -f "$all_tcp443_conf" ]; then
                 . "$all_tcp443_conf"
                 if [ "$ENABLED" = "1" ]; then
-                    printf " Режим Austerus: Включен (без хостлистов)\n"
+                    printf " Режим Austerusj: Включен (без хостлистов)\n"
                 fi
             fi
 
@@ -73,7 +73,7 @@ MENU
 [5] Обновить списки доменов
 [6] Резервная копия/Восстановление
 [7] Удалить zapret2
-[A] Режим без хостлистов (для Austerus)
+[A] Режим без хостлистов (для Austerusj)
 [Q] Настройки QUIC
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
@@ -599,7 +599,7 @@ menu_uninstall() {
 
 menu_all_tcp443() {
     clear_screen
-    print_header "Режим без хостлистов (для Austerus)"
+    print_header "Режим без хостлистов (для Austerusj)"
 
     local conf_file="${CONFIG_DIR}/all_tcp443.conf"
 
@@ -644,7 +644,7 @@ SUBMENU
     case "$sub_choice" in
         1)
             sed -i "s/^ENABLED=.*/ENABLED=1/" "$conf_file"
-            print_success "Режим Austerus включен"
+            print_success "Режим Austerusj включен"
             print_info "Пересоздание конфига..."
             create_official_config "/opt/zapret2/config"
 
@@ -667,7 +667,7 @@ SUBMENU
             fi
 
             sed -i "s/^ENABLED=.*/ENABLED=0/" "$conf_file"
-            print_success "Режим Austerus выключен, возврат к автоциркулярам z2k"
+            print_success "Режим Austerusj выключен, возврат к автоциркулярам z2k"
             print_info "Пересоздание конфига..."
             create_official_config "/opt/zapret2/config"
 
