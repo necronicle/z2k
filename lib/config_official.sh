@@ -24,7 +24,7 @@ generate_nfqws2_opt_from_strategies() {
 NFQWS2_OPT="
 --filter-tcp=80 --lua-desync=fake:payload=http_req:dir=out:blob=zero_256:ip_ttl=0:badsum:badseq --lua-desync=multisplit:payload=http_req:dir=out --new
 --filter-tcp=443 --out-range=-d4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=zero_256:ip_ttl=0:badsum:badseq --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:ip_ttl=0:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5 --new
---filter-udp=443 --out-range=-d4 --lua-desync=fake:payload=quic_initial:dir=out:blob=zero_256:ip_ttl=0:repeats=1
+--filter-udp=443 --out-range=-d4 --lua-desync=fake:payload=quic_initial:dir=out:blob=zero_256:ip_ttl=0:badsum:repeats=1
 "
 AUSTERUS_OPT
             return 0
