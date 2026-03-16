@@ -1597,10 +1597,10 @@ uninstall_zapret2() {
     fi
 
     # Очистка iptables цепочек zapret2
+    # Все команды с || true — скрипт запущен под set -e
     print_info "Очистка правил iptables..."
-    local chain
+    local chain parent
     for chain in ZAPRET ZAPRET2 z2k_connmark z2k_dpi_rst; do
-        local parent
         for parent in POSTROUTING PREROUTING FORWARD; do
             while iptables -t mangle -C "$parent" -j "$chain" 2>/dev/null; do
                 iptables -t mangle -D "$parent" -j "$chain" 2>/dev/null || break
@@ -1609,23 +1609,23 @@ uninstall_zapret2() {
                 ip6tables -t mangle -D "$parent" -j "$chain" 2>/dev/null || break
             done
         done
-        iptables -t mangle -F "$chain" 2>/dev/null
-        iptables -t mangle -X "$chain" 2>/dev/null
-        ip6tables -t mangle -F "$chain" 2>/dev/null
-        ip6tables -t mangle -X "$chain" 2>/dev/null
+        iptables -t mangle -F "$chain" 2>/dev/null || true
+        iptables -t mangle -X "$chain" 2>/dev/null || true
+        ip6tables -t mangle -F "$chain" 2>/dev/null || true
+        ip6tables -t mangle -X "$chain" 2>/dev/null || true
     done
     # raw table (RST filter)
     while iptables -t raw -C PREROUTING -j z2k_dpi_rst 2>/dev/null; do
         iptables -t raw -D PREROUTING -j z2k_dpi_rst 2>/dev/null || break
     done
-    iptables -t raw -F z2k_dpi_rst 2>/dev/null
-    iptables -t raw -X z2k_dpi_rst 2>/dev/null
+    iptables -t raw -F z2k_dpi_rst 2>/dev/null || true
+    iptables -t raw -X z2k_dpi_rst 2>/dev/null || true
     # nat table (masquerade fix)
     while iptables -t nat -C POSTROUTING -j z2k_masq_fix 2>/dev/null; do
         iptables -t nat -D POSTROUTING -j z2k_masq_fix 2>/dev/null || break
     done
-    iptables -t nat -F z2k_masq_fix 2>/dev/null
-    iptables -t nat -X z2k_masq_fix 2>/dev/null
+    iptables -t nat -F z2k_masq_fix 2>/dev/null || true
+    iptables -t nat -X z2k_masq_fix 2>/dev/null || true
 
     # Удалить init скрипт
     if [ -f "$INIT_SCRIPT" ]; then
@@ -1658,9 +1658,10 @@ uninstall_zapret2() {
     rm -rf /tmp/z2k /tmp/zapret2 /tmp/blockcheck* 2>/dev/null
 
     # Очистить ipset
-    local setname
-    for setname in $(ipset list -n 2>/dev/null | grep -i "zapret\|z2k" || true); do
-        ipset destroy "$setname" 2>/dev/null
+    local setname ipset_names
+    ipset_names=$(ipset list -n 2>/dev/null | grep -i "zapret\|z2k" || true)
+    for setname in $ipset_names; do
+        ipset destroy "$setname" 2>/dev/null || true
     done
 
     print_success "zapret2 полностью удален"
