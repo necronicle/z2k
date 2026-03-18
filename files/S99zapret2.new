@@ -672,7 +672,7 @@ stop_daemon_by_pidfile()
         if [ -n "$PID" ] && kill -0 $PID 2>/dev/null; then
             echo "Stopping daemon with PID $PID"
             kill $PID 2>/dev/null
-            sleep 1
+            sleep 3
             # Force kill ���� �� �����������
             kill -0 $PID 2>/dev/null && kill -9 $PID 2>/dev/null
         fi

@@ -579,6 +579,8 @@ local function persist_if_changed(askey, hostn, hrec)
   return true
 end
 
+local policy_explore_good = 0.03  -- exploration chance when current strategy is working (3%)
+
 local function policy_seed_strategy(desync, askey, hostn, hrec)
   if not policy_enabled then return nil, nil end
   if not askey or not hostn or not hrec then return nil, nil end
@@ -599,7 +601,35 @@ local function policy_seed_strategy(desync, askey, hostn, hrec)
     return nil, nil
   end
 
-  local pick, score = policy_pick_strategy(askey, hostn, ct, now_f())
+  local now = now_f()
+
+  -- Respect current working strategy: if it has good telemetry and is not in
+  -- cooldown, keep it.  Only override with very low probability (3%) to allow
+  -- occasional exploration without destroying a known-good choice.
+  local current = tonumber(hrec.nstrategy)
+  if current and current >= 1 and current <= ct then
+    local cur_rec = telemetry_rec(askey, hostn, current, false)
+    if cur_rec then
+      local cur_ok = tonumber(cur_rec.ok) or 0
+      local cur_fail = tonumber(cur_rec.fail) or 0
+      local cur_total = cur_ok + cur_fail
+      if not telemetry_is_cooldown(cur_rec, now) and cur_total >= 2 then
+        local cur_rate = cur_ok / cur_total
+        if cur_rate > 0.5 then
+          if math.random() >= policy_explore_good then
+            if st then st.policy_seeded = true end
+            return nil, nil
+          end
+        end
+      end
+    else
+      -- No telemetry for current strategy yet: let it accumulate data
+      if st then st.policy_seeded = true end
+      return nil, nil
+    end
+  end
+
+  local pick, score = policy_pick_strategy(askey, hostn, ct, now)
   if pick and pick >= 1 and pick <= ct then
     hrec.nstrategy = pick
   end

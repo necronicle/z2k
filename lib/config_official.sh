@@ -36,11 +36,8 @@ AUSTERUS_OPT
     local youtube_gv_tcp=""
     local rkn_tcp=""
     local quic_udp=""
-    local quic_custom_udp=""
     local discord_tcp=""
     local discord_udp=""
-    local custom_tcp=""
-
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
         youtube_tcp_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
@@ -58,15 +55,9 @@ AUSTERUS_OPT
     # key=yt_quic ensures stable persistence key; nld=2 reduces churn on CDN subdomains.
     quic_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=yt_quic:nld=2 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=1 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=2 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=4 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=4 --lua-desync=drop:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=7 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=7 --lua-desync=drop:strategy=7 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=8 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=10 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=10 --lua-desync=drop:strategy=10 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=11 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=11 --lua-desync=drop:strategy=11 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=12"
 
-    # QUIC Custom autocircular modern (12 strategies, same core as YouTube QUIC).
-    quic_custom_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=custom_quic:nld=2 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=1 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=2 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=4 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=4 --lua-desync=drop:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=7 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=7 --lua-desync=drop:strategy=7 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=8 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=10 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=10 --lua-desync=drop:strategy=10 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=11 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=11 --lua-desync=drop:strategy=11 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=12"
-
     # If category strategy files exist, prefer them over hardcoded QUIC defaults.
     if [ -f "${extra_strats_dir}/UDP/YT/Strategy.txt" ]; then
         quic_udp=$(cat "${extra_strats_dir}/UDP/YT/Strategy.txt")
-    fi
-    if [ -f "${extra_strats_dir}/UDP/CUSTOM/Strategy.txt" ]; then
-        quic_custom_udp=$(cat "${extra_strats_dir}/UDP/CUSTOM/Strategy.txt")
     fi
     # Discord TCP profiles from zapret4rocket are absent; disable dedicated TCP Discord profile.
     local discord_tcp_block=""
@@ -81,8 +72,6 @@ AUSTERUS_OPT
     [ -z "$youtube_tcp_tcp" ] && youtube_tcp_tcp="$default_strategy"
     [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp="$default_strategy"
     [ -z "$rkn_tcp" ] && rkn_tcp="$default_strategy"
-    [ -z "$quic_custom_udp" ] && quic_custom_udp="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
-    custom_tcp="$default_strategy"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -153,10 +142,9 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(ensure_circular_failure_detector "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_failure_detector "$rkn_tcp")
     quic_udp=$(ensure_circular_failure_detector "$quic_udp")
-    quic_custom_udp=$(ensure_circular_failure_detector "$quic_custom_udp")
 
-    # Ensure circular sees TCP RST/FIN packets without payload (payload_type=empty),
-    # otherwise early connection aborts can be invisible to failure detectors.
+    # Ensure circular sees TCP RST/FIN packets without payload (payload_type=empty)
+    # and incoming TLS ServerHello for success detection.
     # Only the --payload= token that is active for --lua-desync=circular:* is modified.
     ensure_circular_payload_empty() {
         local input="$1"
@@ -179,8 +167,12 @@ AUSTERUS_OPT
                     if [ -n "$pending_payload" ]; then
                         case "$pending_payload" in
                             --payload=all) ;;
-                            *empty*) ;;
-                            *) pending_payload="${pending_payload},empty" ;;
+                            *)
+                                # Add ,empty for failure detection (RST/FIN packets)
+                                case "$pending_payload" in *empty*) ;; *) pending_payload="${pending_payload},empty" ;; esac
+                                # Add ,tls_server_hello for success detection (incoming ServerHello)
+                                case "$pending_payload" in *tls_server_hello*) ;; *) pending_payload="${pending_payload},tls_server_hello" ;; esac
+                                ;;
                         esac
                         out="${out:+$out }$pending_payload"
                         [ -n "$buf" ] && out="${out:+$out }$buf"
@@ -210,104 +202,6 @@ AUSTERUS_OPT
     youtube_tcp_tcp=$(ensure_circular_payload_empty "$youtube_tcp_tcp")
     youtube_gv_tcp=$(ensure_circular_payload_empty "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_payload_empty "$rkn_tcp")
-
-    # Fill TCP autocircular gaps with primitives that exist in nfqws2
-    # but were not guaranteed in current z2k profile packs.
-    ensure_tcp_gap_primitives() {
-        local input="$1"
-        local out="$input"
-        local max_strategy=""
-        local next_strategy=1
-        local has_new=0
-
-        [ -n "$input" ] || {
-            printf '%s' "$input"
-            return
-        }
-        case "$input" in
-            *"--lua-desync=circular:"*) ;;
-            *)
-                printf '%s' "$input"
-                return
-                ;;
-        esac
-
-        case "$out" in
-            *" --new")
-                out="${out% --new}"
-                has_new=1
-                ;;
-        esac
-
-        max_strategy=$(
-            printf '%s\n' "$input" \
-                | tr ' ' '\n' \
-                | sed -n 's/.*:strategy=\([0-9][0-9]*\)$/\1/p' \
-                | sort -n \
-                | tail -1
-        )
-        [ -n "$max_strategy" ] && next_strategy=$((max_strategy + 1))
-
-        case "$out" in
-            *"--lua-desync=tcpseg:pos=0,-1:seqovl=1"*) ;;
-            *)
-                out="$out --payload=tls_client_hello --lua-desync=tcpseg:pos=0,-1:seqovl=1:strategy=$next_strategy --lua-desync=drop:strategy=$next_strategy"
-                next_strategy=$((next_strategy + 1))
-                ;;
-        esac
-
-        case "$out" in
-            *"--lua-desync=tcpseg:pos=0,-1:seqovl=16:seqovl_pattern=tls_max_ru"*) ;;
-            *)
-                out="$out --payload=tls_client_hello --lua-desync=tcpseg:pos=0,-1:seqovl=16:seqovl_pattern=tls_max_ru:strategy=$next_strategy --lua-desync=drop:strategy=$next_strategy"
-                next_strategy=$((next_strategy + 1))
-                ;;
-        esac
-
-        case "$out" in
-            *"--lua-desync=oob:urp=midsld"*) ;;
-            *)
-                out="$out --in-range=-s1 --payload=tls_client_hello --lua-desync=oob:urp=midsld:strategy=$next_strategy --in-range=x"
-                next_strategy=$((next_strategy + 1))
-                ;;
-        esac
-
-        case "$out" in
-            *"hostfakesplit:disorder_after"*) ;;
-            *)
-                out="$out --payload=tls_client_hello --lua-desync=hostfakesplit:disorder_after:tcp_md5:strategy=$next_strategy"
-                next_strategy=$((next_strategy + 1))
-                ;;
-        esac
-
-        case "$out" in
-            *"--lua-desync=http_hostcase:"*) ;;
-            *)
-                out="$out --payload=http_req --lua-desync=http_hostcase:strategy=$next_strategy"
-                next_strategy=$((next_strategy + 1))
-                ;;
-        esac
-
-        case "$out" in
-            *"--lua-desync=http_domcase:"*) ;;
-            *)
-                out="$out --payload=http_req --lua-desync=http_domcase:strategy=$next_strategy"
-                next_strategy=$((next_strategy + 1))
-                ;;
-        esac
-
-        case "$out" in
-            *"--lua-desync=http_methodeol:"*) ;;
-            *)
-                out="$out --payload=http_req --lua-desync=http_methodeol:strategy=$next_strategy"
-                ;;
-        esac
-
-        [ "$has_new" -eq 1 ] && out="$out --new"
-        printf '%s' "$out"
-    }
-
-    discord_tcp_block=$(ensure_tcp_gap_primitives "$discord_tcp_block")
 
     # Генерировать NFQWS2_OPT в формате официального config
     local nfqws2_opt_lines=""
