@@ -243,7 +243,7 @@ quic_5.bin
 quic_test_00.bin
 "
 
-    echo "$files" | while read -r file; do
+    while read -r file; do
         [ -z "$file" ] && continue
         local url="${GITHUB_RAW}/files/fake/${file}"
         local output="${fake_dir}/${file}"
@@ -252,7 +252,9 @@ quic_test_00.bin
         else
             die "Ошибка загрузки files/fake/${file}"
         fi
-    done
+    done <<EOF
+$files
+EOF
 }
 
 download_init_script() {
@@ -320,7 +322,7 @@ extra_strats/TCP/RKN/Discord.txt
 extra_strats/UDP/YT/List.txt
 "
 
-    echo "$list_files" | while read -r list_file; do
+    while read -r list_file; do
         [ -z "$list_file" ] && continue
         local list_url="${GITHUB_RAW}/files/lists/${list_file}"
         local list_out="${lists_dir}/${list_file}"
@@ -331,7 +333,9 @@ extra_strats/UDP/YT/List.txt
         else
             die "Ошибка загрузки files/lists/${list_file}"
         fi
-    done
+    done <<EOF
+$list_files
+EOF
 }
 
 generate_strategies_database() {
@@ -365,10 +369,10 @@ generate_strategies_database() {
 show_welcome() {
     clear_screen
 
-    cat <<'EOF'
+    cat <<EOF
 +===================================================+
 |   z2k - Zapret2 для Keenetic (BETA)             |
-|                   Версия 2.0.0                    |
+|                   Версия $Z2K_VERSION                    |
 +===================================================+
 
   [INFO]  Проект в активной разработке. Статус: beta.
@@ -380,18 +384,6 @@ EOF
     print_info "Инициализация..."
 }
 
-check_installation_status() {
-    if is_zapret2_installed; then
-        print_info "zapret2 уже установлен"
-        print_info "Статус сервиса: $(get_service_status)"
-        print_info "Текущая стратегия: #$(get_current_strategy)"
-        return 0
-    else
-        print_info "zapret2 не установлен"
-        return 1
-    fi
-}
-
 prompt_install_or_menu() {
     printf "\n"
 
@@ -401,6 +393,7 @@ prompt_install_or_menu() {
         show_main_menu
     else
         print_info "zapret2 не установлен - запускаю установку..."
+        check_root || die "Требуются права root для установки"
         run_full_install
     fi
 }
@@ -503,6 +496,13 @@ update_z2k() {
     local current_script
     current_script=$(readlink -f "$0")
 
+    case "$current_script" in
+        */sh|*/bash|*/ash|*/dash)
+            print_error "Cannot self-update: script was run via pipe. Please download and run directly."
+            return 1
+            ;;
+    esac
+
     print_info "Текущая версия: $Z2K_VERSION"
     print_info "Загрузка последней версии..."
 
@@ -552,6 +552,18 @@ update_z2k() {
 # ==============================================================================
 
 main() {
+    # Early-exit for help/version — no downloads needed
+    case "$1" in
+        help|h|-h|--help)
+            show_help
+            exit 0
+            ;;
+        version|v|--version)
+            echo "z2k v${Z2K_VERSION}"
+            exit 0
+            ;;
+    esac
+
     # Показать приветствие
     show_welcome
 
@@ -559,6 +571,7 @@ main() {
     check_environment
 
     # Инициализировать рабочую директорию
+    rm -rf "$WORK_DIR"
     mkdir -p "$WORK_DIR" "$LIB_DIR"
 
     # Установить обработчики сигналов (будет переопределено после загрузки utils.sh)

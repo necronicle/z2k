@@ -315,7 +315,7 @@ add_custom_domain() {
     fi
 
     # Проверить, не существует ли уже
-    if grep -qx "$domain" "$custom_list" 2>/dev/null; then
+    if grep -qxF "$domain" "$custom_list" 2>/dev/null; then
         print_warning "Домен уже в списке: $domain"
         return 0
     fi
@@ -343,8 +343,8 @@ remove_custom_domain() {
     fi
 
     # Удалить домен
-    if grep -qx "$domain" "$custom_list"; then
-        grep -vx "$domain" "$custom_list" > "${custom_list}.tmp"
+    if grep -qxF "$domain" "$custom_list"; then
+        grep -vxF "$domain" "$custom_list" > "${custom_list}.tmp"
         mv "${custom_list}.tmp" "$custom_list"
         print_success "Удален домен: $domain"
     else
@@ -720,24 +720,23 @@ show_current_config() {
     print_separator
 
     # Списки доменов
-    if [ -d "$LISTS_DIR" ]; then
-        print_info "Списки доменов:"
-        for list in discord.txt youtube.txt rkn.txt custom.txt; do
-            if [ -f "${LISTS_DIR}/${list}" ]; then
-                local count
-                count=$(wc -l < "${LISTS_DIR}/${list}" 2>/dev/null || echo "0")
-                printf "  %-20s: %s доменов\n" "$list" "$count"
-            fi
-        done
-        local yt_quic_list="${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt"
-        if [ -f "$yt_quic_list" ]; then
-            local yt_quic_count
-            yt_quic_count=$(wc -l < "$yt_quic_list" 2>/dev/null || echo "0")
-            printf "  %-20s: %s доменов\n" "extra_strats/UDP/YT/List.txt" "$yt_quic_count"
+    print_info "Списки доменов:"
+    local _list_path _list_label _list_count
+    for _list_label in "RKN TCP:${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt" \
+                       "YouTube TCP:${ZAPRET2_DIR}/extra_strats/TCP/YT/List.txt" \
+                       "YouTube GV:--hostlist-domains" \
+                       "QUIC YouTube:${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt" \
+                       "Discord TCP:${ZAPRET2_DIR}/extra_strats/TCP_Discord.txt" \
+                       "Custom:${LISTS_DIR}/custom.txt"; do
+        _list_path="${_list_label#*:}"
+        _list_label="${_list_label%%:*}"
+        if [ "$_list_path" = "--hostlist-domains" ]; then
+            printf "  %-25s: googlevideo.com\n" "$_list_label"
+        elif [ -f "$_list_path" ]; then
+            _list_count=$(wc -l < "$_list_path" 2>/dev/null || echo "0")
+            printf "  %-25s: %s доменов\n" "$_list_label" "$_list_count"
         fi
-    else
-        print_info "Списки доменов: не установлены"
-    fi
+    done
 
     print_separator
 }
@@ -858,10 +857,25 @@ restore_config() {
         [Yy]|[Yy][Ee][Ss])
             print_info "Восстановление..."
 
-            # Извлечь backup
-            tar -xzf "$latest_backup" -C "$CONFIG_DIR" 2>/dev/null
+            # Extract to a temp dir first, then move files to their correct locations.
+            # The tar archive contains files from both $CONFIG_DIR and $LISTS_DIR,
+            # but with different -C bases, so we cannot extract directly to one dir.
+            local tmpdir="${CONFIG_DIR}/backups/.restore_tmp"
+            rm -rf "$tmpdir"
+            mkdir -p "$tmpdir"
+            tar -xzf "$latest_backup" -C "$tmpdir" 2>/dev/null
 
             if [ $? -eq 0 ]; then
+                # Move config files to CONFIG_DIR
+                for f in strategies.conf current_strategy; do
+                    [ -f "${tmpdir}/${f}" ] && mv -f "${tmpdir}/${f}" "${CONFIG_DIR}/${f}"
+                done
+                # Move list files to LISTS_DIR
+                mkdir -p "$LISTS_DIR"
+                for f in custom.txt; do
+                    [ -f "${tmpdir}/${f}" ] && mv -f "${tmpdir}/${f}" "${LISTS_DIR}/${f}"
+                done
+                rm -rf "$tmpdir"
                 print_success "Конфигурация восстановлена"
 
                 # Предложить перезапуск

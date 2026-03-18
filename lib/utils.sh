@@ -40,7 +40,6 @@ Z2R_BASE_URL="https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r"
 
 # Файлы конфигурации
 STRATEGIES_CONF="${CONFIG_DIR}/strategies.conf"
-HTTP_STRATEGIES_CONF="${CONFIG_DIR}/http_strategies.conf"
 CURRENT_STRATEGY_FILE="${CONFIG_DIR}/current_strategy"
 QUIC_STRATEGIES_CONF="${CONFIG_DIR}/quic_strategies.conf"
 QUIC_STRATEGY_FILE="${CONFIG_DIR}/quic_strategy.conf"
@@ -387,7 +386,7 @@ verify_binary() {
 check_kernel_module() {
     local module=$1
 
-    if lsmod | grep -q "^${module}"; then
+    if lsmod | grep -q "^${module} "; then
         return 0
     else
         return 1

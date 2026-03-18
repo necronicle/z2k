@@ -93,7 +93,7 @@ log_info "Очистка iptables правил zapret/zapret2..."
 
 # Список известных цепочек zapret/zapret2
 chains_mangle="ZAPRET ZAPRET2 z2k_connmark"
-chains_nat="z2k_masq_fix"
+chains_nat="z2k_masq_fix zapret2_nat"
 chains_raw="z2k_dpi_rst"
 
 # Удаление из mangle

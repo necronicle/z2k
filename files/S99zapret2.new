@@ -193,16 +193,20 @@ ensure_autocircular_files()
 {
 	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/autocircular"
 	mkdir -p "$base" || return 1
-	chmod 777 "$base" 2>/dev/null || true
+	chmod 755 "$base" 2>/dev/null || true
+	chown nobody "$base" 2>/dev/null || true
 
 	[ -f "$base/state.tsv" ] || : > "$base/state.tsv"
-	chmod 666 "$base/state.tsv" 2>/dev/null || true
+	chmod 644 "$base/state.tsv" 2>/dev/null || true
+	chown nobody "$base/state.tsv" 2>/dev/null || true
 
 	[ -f "$base/debug.log" ] || : > "$base/debug.log"
-	chmod 666 "$base/debug.log" 2>/dev/null || true
+	chmod 644 "$base/debug.log" 2>/dev/null || true
+	chown nobody "$base/debug.log" 2>/dev/null || true
 
 	# Optional debug toggle file; keep if present and readable.
-	[ -f "$base/debug.flag" ] && chmod 666 "$base/debug.flag" 2>/dev/null || true
+	[ -f "$base/debug.flag" ] && chmod 644 "$base/debug.flag" 2>/dev/null || true
+	[ -f "$base/debug.flag" ] && chown nobody "$base/debug.flag" 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------------------
@@ -216,16 +220,20 @@ ensure_traffic_debug_files()
 {
 	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic"
 	mkdir -p "$base" || return 1
-	chmod 777 "$base" 2>/dev/null || true
+	chmod 755 "$base" 2>/dev/null || true
+	chown nobody "$base" 2>/dev/null || true
 
 	[ -f "$base/nfqws2.debug.log" ] || : > "$base/nfqws2.debug.log"
-	chmod 666 "$base/nfqws2.debug.log" 2>/dev/null || true
+	chmod 644 "$base/nfqws2.debug.log" 2>/dev/null || true
+	chown nobody "$base/nfqws2.debug.log" 2>/dev/null || true
 
 	[ -f "$base/tcpdump.err.log" ] || : > "$base/tcpdump.err.log"
-	chmod 666 "$base/tcpdump.err.log" 2>/dev/null || true
+	chmod 644 "$base/tcpdump.err.log" 2>/dev/null || true
+	chown nobody "$base/tcpdump.err.log" 2>/dev/null || true
 
 	# Optional toggle file; keep if present and readable.
-	[ -f "$base/debug.flag" ] && chmod 666 "$base/debug.flag" 2>/dev/null || true
+	[ -f "$base/debug.flag" ] && chmod 644 "$base/debug.flag" 2>/dev/null || true
+	[ -f "$base/debug.flag" ] && chown nobody "$base/debug.flag" 2>/dev/null || true
 }
 
 traffic_debug_prepare()
@@ -373,7 +381,7 @@ traffic_debug_tcpdump_start()
 	tcpdump -i any -nn -s 0 -U -w "$pcap" -C 5 -W 10 "$filter" >/dev/null 2>>"$err" &
 	local pid=$!
 	echo "$pid" > "$Z2K_TRAFFIC_DEBUG_PIDFILE"
-	chmod 666 "$Z2K_TRAFFIC_DEBUG_PIDFILE" 2>/dev/null || true
+	chmod 644 "$Z2K_TRAFFIC_DEBUG_PIDFILE" 2>/dev/null || true
 	echo "traffic debug: tcpdump filter: $filter"
 	echo "traffic debug: tcpdump started (PID $pid)"
 }
@@ -462,6 +470,9 @@ QUIC1_BLOB="$ZAPRET_BASE/files/fake/quic_1.bin"
 
 QUIC_TEST_BLOB="$ZAPRET_BASE/files/fake/quic_test_00.bin"
 [ -s "$QUIC_TEST_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_test:@$QUIC_TEST_BLOB"
+
+QUIC_RUTRACKER_BLOB="$ZAPRET_BASE/files/fake/quic_initial_rutracker_org.bin"
+[ -s "$QUIC_RUTRACKER_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_rutracker:@$QUIC_RUTRACKER_BLOB"
 
 TLS_ONETRUST_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_www_onetrust_com.bin"
 [ -s "$TLS_ONETRUST_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_www_onetrust_com:@$TLS_ONETRUST_BLOB"

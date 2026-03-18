@@ -73,17 +73,17 @@ choose_capture_iface() {
 
 ensure_dirs() {
 	mkdir -p "$CACHE_DIR" || return 1
-	chmod 777 "$CACHE_DIR" 2>/dev/null || true
+	chmod 755 "$CACHE_DIR" 2>/dev/null || true
 }
 
 init_output_files() {
-	[ -f "$ALL_TSV" ] || echo "# ts\thost\tip\tproto\tport\treason\tdetails" > "$ALL_TSV"
-	[ -f "$TCP_TSV" ] || echo "# ts\thost\tip\tproto\tport\treason\tdetails" > "$TCP_TSV"
-	[ -f "$UDP_TSV" ] || echo "# ts\thost\tip\tproto\tport\treason\tdetails" > "$UDP_TSV"
-	[ -f "$IPMAP_TSV" ] || echo "# ts\tip\thost" > "$IPMAP_TSV"
+	[ -f "$ALL_TSV" ] || printf '# ts\thost\tip\tproto\tport\treason\tdetails\n' > "$ALL_TSV"
+	[ -f "$TCP_TSV" ] || printf '# ts\thost\tip\tproto\tport\treason\tdetails\n' > "$TCP_TSV"
+	[ -f "$UDP_TSV" ] || printf '# ts\thost\tip\tproto\tport\treason\tdetails\n' > "$UDP_TSV"
+	[ -f "$IPMAP_TSV" ] || printf '# ts\tip\thost\n' > "$IPMAP_TSV"
 	[ -f "$ERR_LOG" ] || : > "$ERR_LOG"
 	[ -f "$PARSER_ERR_LOG" ] || : > "$PARSER_ERR_LOG"
-	chmod 666 "$ALL_TSV" "$TCP_TSV" "$UDP_TSV" "$IPMAP_TSV" "$ERR_LOG" "$PARSER_ERR_LOG" 2>/dev/null || true
+	chmod 644 "$ALL_TSV" "$TCP_TSV" "$UDP_TSV" "$IPMAP_TSV" "$ERR_LOG" "$PARSER_ERR_LOG" 2>/dev/null || true
 }
 
 collect_ports() {
@@ -484,7 +484,7 @@ start_monitor() {
 	echo "# iface: $iface" >> "$ALL_TSV"
 	echo "# filter: $filter" >> "$ALL_TSV"
 
-	"$tcpdump_bin" -i "$iface" -nn -l -tt "$filter" 2>>"$ERR_LOG" | \
+	( "$tcpdump_bin" -i "$iface" -nn -l -tt "$filter" 2>>"$ERR_LOG" | \
 		awk \
 			-v all_out="$ALL_TSV" \
 			-v tcp_out="$TCP_TSV" \
@@ -498,10 +498,10 @@ start_monitor() {
 			-v udp_min_out="4" \
 			-v udp_max_in="1" \
 			-v dedupe_sec="60" \
-			-f "$AWK_FILE" 2>>"$PARSER_ERR_LOG" &
+			-f "$AWK_FILE" 2>>"$PARSER_ERR_LOG" ) &
 
 	echo "$!" > "$PID_FILE"
-	chmod 666 "$PID_FILE" 2>/dev/null || true
+	chmod 644 "$PID_FILE" 2>/dev/null || true
 
 	sleep 1
 	if ! running_pid >/dev/null; then
@@ -524,9 +524,9 @@ stop_monitor() {
 		return 0
 	fi
 
-	kill "$pid" 2>/dev/null || true
+	kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
 	sleep 1
-	kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+	kill -0 "$pid" 2>/dev/null && { kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true; }
 	rm -f "$PID_FILE" 2>/dev/null || true
 	echo "blocked monitor stopped"
 }

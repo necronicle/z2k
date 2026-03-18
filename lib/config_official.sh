@@ -9,6 +9,9 @@
 generate_nfqws2_opt_from_strategies() {
     # Генерирует NFQWS2_OPT для config файла на основе текущих стратегий
 
+    # Intentionally hardcoded: this function may be called before utils.sh sets
+    # the global CONFIG_DIR / ZAPRET2_DIR / LISTS_DIR variables, so we use
+    # local copies with known absolute paths.
     local config_dir="/opt/etc/zapret2"
     local extra_strats_dir="/opt/zapret2/extra_strats"
     local lists_dir="/opt/zapret2/lists"
@@ -32,15 +35,14 @@ AUSTERUS_OPT
     fi
 
     # Загрузить текущие стратегии из категорий
-    local youtube_tcp_tcp=""
+    local youtube_tcp=""
     local youtube_gv_tcp=""
     local rkn_tcp=""
     local quic_udp=""
-    local discord_tcp=""
     local discord_udp=""
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
-        youtube_tcp_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
+        youtube_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
     fi
 
     if [ -f "${extra_strats_dir}/TCP/YT_GV/Strategy.txt" ]; then
@@ -69,7 +71,7 @@ AUSTERUS_OPT
     local default_strategy="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=6"
 
     # Использовать дефолт если стратегия пустая
-    [ -z "$youtube_tcp_tcp" ] && youtube_tcp_tcp="$default_strategy"
+    [ -z "$youtube_tcp" ] && youtube_tcp="$default_strategy"
     [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp="$default_strategy"
     [ -z "$rkn_tcp" ] && rkn_tcp="$default_strategy"
 
@@ -111,7 +113,7 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    youtube_tcp_tcp=$(ensure_circular_nld2 "$youtube_tcp_tcp")
+    youtube_tcp=$(ensure_circular_nld2 "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_nld2 "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
@@ -138,7 +140,7 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    youtube_tcp_tcp=$(ensure_circular_failure_detector "$youtube_tcp_tcp")
+    youtube_tcp=$(ensure_circular_failure_detector "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_failure_detector "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_failure_detector "$rkn_tcp")
     quic_udp=$(ensure_circular_failure_detector "$quic_udp")
@@ -197,7 +199,7 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    youtube_tcp_tcp=$(ensure_circular_payload_empty "$youtube_tcp_tcp")
+    youtube_tcp=$(ensure_circular_payload_empty "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_payload_empty "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_payload_empty "$rkn_tcp")
 
@@ -212,6 +214,7 @@ AUSTERUS_OPT
             nfqws2_opt_lines="$nfqws2_opt_lines$*\\n"
         else
             echo "WARN: hostlist file missing or empty: $list_path (skip profile)" 1>&2
+            print_warning "Hostlist missing or empty: $list_path — profile skipped"
         fi
     }
 
@@ -221,7 +224,7 @@ AUSTERUS_OPT
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt $rkn_hostlists $rkn_tcp --new"
 
     # YouTube TCP
-    add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp_tcp --new"
+    add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
 
     # YouTube GV (список доменов статичен)
     nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp --new\\n"
@@ -248,7 +251,7 @@ AUSTERUS_OPT
     # Strategy 5: fakedsplit at method+2 with badsum
     # Strategy 6: z4r original (fake 0x0E + tcp_md5 + multisplit host+1)
     # Strategy 7: fake badsum + multisplit method+2
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_tls_alert_fatal --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
 
     # Catch-all TCP profile for autohostlist failure tracking
     # Upstream zapret appends --hostlist-auto to the very end of NFQWS2_OPT, 
@@ -412,7 +415,7 @@ NFQWS2_UDP_PKT_IN="3"
 # ==============================================================================
 # This section is auto-generated from z2k strategy database
 # Each --new separator creates independent profile with own filters and strategy
-# Order: CF TCP → RKN TCP → YouTube TCP → YouTube GV → QUIC YT → QUIC Cloudflare → QUIC Custom → Discord TCP → Discord UDP → Custom
+# Order: RKN TCP → YouTube TCP → YouTube GV → QUIC YT → Discord UDP → HTTP RKN → Catch-all TCP
 # Profiles use explicit hostlists from z2k list files without placeholder expansion.
 # This avoids mixing with global hostlists from MODE_FILTER.
 CONFIG

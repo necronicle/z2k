@@ -33,7 +33,7 @@ is_nfqws2_running() {
     fi
 
     # Fallback: check common pidfile locations (our init uses nfqws2_*.pid).
-    for pidfile in /opt/var/run/nfqws2_*.pid /opt/var/run/nfqws2.pid; do
+    for pidfile in /var/run/nfqws2_*.pid /var/run/nfqws2.pid; do
         [ -f "$pidfile" ] || continue
         pid="$(cat "$pidfile" 2>/dev/null)"
         [ -n "$pid" ] || continue

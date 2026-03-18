@@ -212,6 +212,90 @@ local function load_state()
   f:close()
 end
 
+local MAX_ENTRIES_PER_KEY = 500
+
+local function evict_state_entries(merged)
+  for askey, hosts in pairs(merged) do
+    local count = 0
+    for _ in pairs(hosts) do count = count + 1 end
+    if count > MAX_ENTRIES_PER_KEY then
+      -- Collect entries with timestamps, sort by ts ascending, remove oldest
+      local entries = {}
+      for hostn, rec in pairs(hosts) do
+        table.insert(entries, { hostn = hostn, ts = (rec and rec.ts) or 0 })
+      end
+      table.sort(entries, function(a, b) return a.ts < b.ts end)
+      local to_remove = count - MAX_ENTRIES_PER_KEY
+      for i = 1, to_remove do
+        hosts[entries[i].hostn] = nil
+      end
+    end
+  end
+end
+
+local function evict_telemetry_entries(merged)
+  for askey, hosts in pairs(merged) do
+    local count = 0
+    for _ in pairs(hosts) do count = count + 1 end
+    if count > MAX_ENTRIES_PER_KEY then
+      -- Collect entries with total attempts, sort by att ascending, remove lowest
+      local entries = {}
+      for hostn, strats in pairs(hosts) do
+        local att = 0
+        if type(strats) == "table" then
+          for _, rec in pairs(strats) do
+            if rec then
+              att = att + (tonumber(rec.ok) or 0) + (tonumber(rec.fail) or 0)
+            end
+          end
+        end
+        table.insert(entries, { hostn = hostn, att = att })
+      end
+      table.sort(entries, function(a, b) return a.att < b.att end)
+      local to_remove = count - MAX_ENTRIES_PER_KEY
+      for i = 1, to_remove do
+        hosts[entries[i].hostn] = nil
+      end
+    end
+  end
+end
+
+local function acquire_lock(path)
+  local lockfile = path .. ".lock"
+  -- Check for stale lock (older than 10 seconds)
+  local lf_ts = io.open(lockfile, "r")
+  if lf_ts then
+    local content = lf_ts:read("*a")
+    lf_ts:close()
+    local lock_time = tonumber(content)
+    if lock_time and ((os.time() or 0) - lock_time) > 10 then
+      os.remove(lockfile)
+    else
+      return nil, lockfile -- lock is fresh, another process holds it
+    end
+  end
+  -- Try exclusive create: "wx" works in Lua 5.3+/glibc; fallback to "w" with
+  -- prior existence check (not perfectly atomic but good enough for our use case).
+  local lf = io.open(lockfile, "wx")
+  if not lf then
+    -- "wx" not supported or file appeared between check and open
+    local recheck = io.open(lockfile, "r")
+    if recheck then
+      recheck:close()
+      return nil, lockfile -- another process created it
+    end
+    lf = io.open(lockfile, "w")
+  end
+  if not lf then return nil, lockfile end
+  lf:write(tostring(os.time() or 0))
+  lf:close()
+  return true, lockfile
+end
+
+local function release_lock(lockfile)
+  if lockfile then os.remove(lockfile) end
+end
+
 local function write_state()
   local now = os.time() or 0
   if now ~= 0 and (now - last_write) < write_interval then
@@ -223,6 +307,11 @@ local function write_state()
 
   local path = choose_state_file_for_write()
   if not path then return end
+
+  -- Acquire lock to prevent concurrent writes
+  local locked, lockfile = acquire_lock(path)
+  if not locked then return end -- another process is writing, skip this cycle
+
   local tmp = path .. ".tmp"
 
   -- Read existing file to merge state (prevents split-brain across processes)
@@ -253,8 +342,14 @@ local function write_state()
     end
   end
 
+  -- Evict oldest entries if any key exceeds MAX_ENTRIES_PER_KEY
+  evict_state_entries(merged_state)
+
   local f = io.open(tmp, "w")
-  if not f then return end
+  if not f then
+    release_lock(lockfile)
+    return
+  end
 
   f:write("# z2k autocircular state (persisted circular nstrategy)\n")
   f:write("# key\thost\tstrategy\tts\n")
@@ -268,7 +363,12 @@ local function write_state()
   end
 
   f:close()
-  os.rename(tmp, path)
+  local ok, err = os.rename(tmp, path)
+  if not ok then
+    DLOG("ERROR: rename %s -> %s failed: %s\n", tmp, path, tostring(err))
+    os.remove(tmp)
+  end
+  release_lock(lockfile)
 end
 
 local function telemetry_host(askey, hostn, create)
@@ -340,13 +440,63 @@ local function write_telemetry()
 
   local path = choose_telemetry_file_for_write()
   if not path then return end
+
+  -- Acquire lock to prevent concurrent writes
+  local locked, lockfile = acquire_lock(path)
+  if not locked then return end
+
   local tmp = path .. ".tmp"
+
+  -- Read existing file to merge telemetry (prevents split-brain across processes)
+  local merged = {}
+  local f_in = io.open(path, "r")
+  if f_in then
+    for line in f_in:lines() do
+      if line ~= "" and not line:match("^%s*#") then
+        local askey, hostn, strat, okv, failv, latv, tsv, cdv =
+          line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]*)\t?([^\t]*)")
+        local s = tonumber(strat)
+        if askey and hostn and s and s >= 1 then
+          if not merged[askey] then merged[askey] = {} end
+          if not merged[askey][hostn] then merged[askey][hostn] = {} end
+          merged[askey][hostn][s] = {
+            ok = tonumber(okv) or 0,
+            fail = tonumber(failv) or 0,
+            lat = tonumber(latv) or 0,
+            ts = tonumber(tsv) or 0,
+            cooldown_until = tonumber(cdv) or 0,
+          }
+        end
+      end
+    end
+    f_in:close()
+  end
+
+  -- Apply our in-memory telemetry over the merged data
+  for askey, hosts in pairs(telemetry) do
+    if not merged[askey] then merged[askey] = {} end
+    for hostn, strats in pairs(hosts) do
+      if not merged[askey][hostn] then merged[askey][hostn] = {} end
+      for s, rec in pairs(strats) do
+        if rec then
+          merged[askey][hostn][s] = rec
+        end
+      end
+    end
+  end
+
+  -- Evict entries with lowest total attempts if any key exceeds MAX_ENTRIES_PER_KEY
+  evict_telemetry_entries(merged)
+
   local f = io.open(tmp, "w")
-  if not f then return end
+  if not f then
+    release_lock(lockfile)
+    return
+  end
 
   f:write("# z2k autocircular telemetry\n")
   f:write("# key\thost\tstrategy\tok\tfail\tlat\tts\tcooldown_until\n")
-  for askey, hosts in pairs(telemetry) do
+  for askey, hosts in pairs(merged) do
     for hostn, strats in pairs(hosts) do
       for s, rec in pairs(strats) do
         if rec then
@@ -365,7 +515,12 @@ local function write_telemetry()
     end
   end
   f:close()
-  os.rename(tmp, path)
+  local ok, err = os.rename(tmp, path)
+  if not ok then
+    DLOG("ERROR: rename %s -> %s failed: %s\n", tmp, path, tostring(err))
+    os.remove(tmp)
+  end
+  release_lock(lockfile)
 end
 
 local function telemetry_total_attempts(h)
@@ -623,7 +778,10 @@ local function policy_seed_strategy(desync, askey, hostn, hrec)
         end
       end
     else
-      -- No telemetry for current strategy yet: let it accumulate data
+      -- No telemetry for current strategy yet: let it accumulate data.
+      -- This is critical for TCP profiles where success telemetry is never
+      -- recorded (incoming packets don't reach circular). Without this,
+      -- UCB would override persisted working strategies on every connection.
       if st then st.policy_seeded = true end
       return nil, nil
     end

@@ -429,74 +429,6 @@ SUBMENU
 }
 
 # ==============================================================================
-# ПОДМЕНЮ: ПРОСМОТР СТРАТЕГИИ
-# ==============================================================================
-
-menu_view_strategy() {
-    clear_screen
-    print_header "[5] Текущие стратегии"
-
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
-
-    # Проверить наличие файла с категориями
-    if [ -f "$CATEGORY_STRATEGIES_CONF" ]; then
-        print_info "Стратегии по категориям:"
-        print_separator
-
-        # Прочитать и показать стратегии для каждой категории
-        while IFS=':' read -r category strategy score; do
-            [ -z "$category" ] && continue
-
-            local params
-            local type
-            params=$(get_strategy "$strategy" 2>/dev/null)
-            type=$(get_strategy_type "$strategy" 2>/dev/null)
-
-            printf "\n[%s]\n" "$(echo "$category" | tr '[:lower:]' '[:upper:]')"
-            printf "  Стратегия: #%s (оценка: %s/5)\n" "$strategy" "$score"
-            printf "  Тип: %s\n" "$type"
-        done < "$CATEGORY_STRATEGIES_CONF"
-
-        print_separator
-    else
-        # Старый режим - одна стратегия
-        local current
-        current=$(get_current_strategy)
-
-        if [ "$current" = "не задана" ] || [ -z "$current" ]; then
-            print_warning "Стратегия не выбрана"
-            print_info "Используется стратегия по умолчанию из init скрипта"
-        else
-            print_info "Текущая стратегия: #$current"
-            print_separator
-
-            local params
-            params=$(get_strategy "$current")
-            local type
-            type=$(get_strategy_type "$current")
-
-            printf "Тип: %s\n\n" "$type"
-            printf "Параметры:\n%s\n" "$params"
-            print_separator
-        fi
-    fi
-
-    # Показать статус сервиса
-    printf "\nСтатус сервиса: %s\n" "$(get_service_status)"
-
-    if is_zapret2_running; then
-        printf "\nПроцессы nfqws2:\n"
-        pgrep -af "nfqws2" 2>/dev/null || print_info "Процессы не найдены"
-    fi
-
-    pause
-}
-
-# ==============================================================================
 # ПОДМЕНЮ: ОБНОВЛЕНИЕ СПИСКОВ
 # ==============================================================================
 
@@ -561,6 +493,8 @@ SUBMENU
             restore_config
             ;;
         3)
+            print_warning "Это сбросит всю конфигурацию к значениям по умолчанию!"
+            confirm "Вы уверены?" "N" || { pause; return; }
             reset_config
             ;;
         [Bb])
@@ -1065,6 +999,7 @@ EOF
         print_success "Файл whitelist создан: $whitelist_file"
     fi
 
+    while true; do
     print_separator
 
     cat <<'INFO'
@@ -1125,14 +1060,14 @@ INFO
             if ! echo "$new_domain" | grep -qE '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
                 print_error "Неверный формат домена: $new_domain"
                 pause
-                return 1
+                continue
             fi
 
             # Проверить дубликаты
-            if grep -qx "$new_domain" "$whitelist_file"; then
+            if grep -qxF "$new_domain" "$whitelist_file"; then
                 print_warning "Домен $new_domain уже в whitelist"
                 pause
-                return 0
+                continue
             fi
 
             # Добавить домен
@@ -1155,14 +1090,14 @@ INFO
             read_input del_domain
 
             # Проверить наличие
-            if ! grep -qx "$del_domain" "$whitelist_file"; then
+            if ! grep -qxF "$del_domain" "$whitelist_file"; then
                 print_error "Домен $del_domain не найден в whitelist"
                 pause
-                return 1
+                continue
             fi
 
             # Удалить домен
-            sed -i "/^${del_domain}$/d" "$whitelist_file"
+            grep -vxF "$del_domain" "$whitelist_file" > "${whitelist_file}.tmp" && mv "${whitelist_file}.tmp" "$whitelist_file"
             print_success "Домен $del_domain удален из whitelist"
             print_separator
 
@@ -1184,6 +1119,7 @@ INFO
             pause
             ;;
     esac
+    done
 }
 
 # ==============================================================================

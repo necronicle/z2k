@@ -113,15 +113,18 @@ step_update_packages() {
         printf "\n"
 
         # 1. Проверка архитектуры системы
-        local sys_arch=$(uname -m)
+        local sys_arch
+        sys_arch=$(uname -m)
         print_info "Архитектура системы: $sys_arch"
 
         # 2. Проверка архитектуры Entware
         if [ -f "/opt/etc/opkg.conf" ]; then
-            local entware_arch=$(grep -m1 "^arch" /opt/etc/opkg.conf | awk '{print $2}')
+            local entware_arch
+            entware_arch=$(grep -m1 "^arch" /opt/etc/opkg.conf | awk '{print $2}')
             print_info "Архитектура Entware: ${entware_arch:-не определена}"
 
-            local repo_url=$(grep -m1 "^src" /opt/etc/opkg.conf | awk '{print $3}')
+            local repo_url
+            repo_url=$(grep -m1 "^src" /opt/etc/opkg.conf | awk '{print $3}')
             print_info "Репозиторий: $repo_url"
 
             # 3. Проверка доступности репозитория
@@ -141,7 +144,8 @@ step_update_packages() {
             print_error "[FAIL] opkg --version падает (Illegal instruction)"
             print_warning "ПРИЧИНА: opkg установлен для неправильной архитектуры CPU!"
         elif opkg --version >/dev/null 2>&1; then
-            local opkg_version=$(opkg --version 2>&1 | head -1)
+            local opkg_version
+            opkg_version=$(opkg --version 2>&1 | head -1)
             print_success "[OK] opkg бинарник запускается: $opkg_version"
             print_warning "Но 'opkg update' падает - возможно проблема в зависимости или скрипте"
         else
@@ -151,7 +155,8 @@ step_update_packages() {
         # 5. Проверка файла opkg
         if command -v file >/dev/null 2>&1; then
             if [ -f "/opt/bin/opkg" ]; then
-                local opkg_file_info=$(file /opt/bin/opkg 2>&1 | head -1)
+            local opkg_file_info
+            opkg_file_info=$(file /opt/bin/opkg 2>&1 | head -1)
                 print_info "Бинарник opkg: $opkg_file_info"
             fi
         fi
@@ -445,7 +450,7 @@ unzip
 
     # Проверить busybox gzip
     if command -v gzip >/dev/null 2>&1; then
-        if readlink "$(which gzip)" 2>/dev/null | grep -q busybox; then
+        if readlink "$(command -v gzip)" 2>/dev/null | grep -q busybox; then
             print_info "Обнаружен busybox gzip (медленный, ~3x медленнее GNU)"
             printf "Установить GNU gzip для ускорения обработки списков? [y/N]: "
             read -r answer </dev/tty
@@ -466,7 +471,7 @@ unzip
 
     # Проверить busybox sort
     if command -v sort >/dev/null 2>&1; then
-        if readlink "$(which sort)" 2>/dev/null | grep -q busybox; then
+        if readlink "$(command -v sort)" 2>/dev/null | grep -q busybox; then
             print_info "Обнаружен busybox sort (медленный, использует много RAM)"
             printf "Установить GNU sort для ускорения? [y/N]: "
             read -r answer </dev/tty
@@ -490,7 +495,7 @@ unzip
 }
 
 # ==============================================================================
-# ШАГ 3: ЗАГРУЗКА МОДУЛЕЙ ЯДРА
+# ШАГ 4: ЗАГРУЗКА МОДУЛЕЙ ЯДРА
 # ==============================================================================
 
 step_load_kernel_modules() {
@@ -507,7 +512,7 @@ step_load_kernel_modules() {
 }
 
 # ==============================================================================
-# ШАГ 4: УСТАНОВКА ZAPRET2 (ИСПОЛЬЗУЯ ОФИЦИАЛЬНЫЙ install_bin.sh)
+# ШАГ 5: УСТАНОВКА ZAPRET2 (ИСПОЛЬЗУЯ ОФИЦИАЛЬНЫЙ install_bin.sh)
 # ==============================================================================
 
 step_build_zapret2() {
@@ -678,7 +683,8 @@ step_build_zapret2() {
         print_info "Вывод --version:"
         ./nfq2/nfqws2 --version 2>&1 | head -5 || true
     else
-        local version=$(./nfq2/nfqws2 --version 2>&1 | head -1)
+        local version
+        version=$(./nfq2/nfqws2 --version 2>&1 | head -1)
         print_success "nfqws2 работает: $version"
     fi
 
@@ -689,7 +695,7 @@ step_build_zapret2() {
     print_info "Установка в $ZAPRET2_DIR..."
 
     cd "$build_dir" || return 1
-    mv "$release_dir" "$ZAPRET2_DIR" || return 1
+    cp -a "$release_dir" "$ZAPRET2_DIR" && rm -rf "$release_dir" || return 1
 
     # ВАЖНО: Обновить ZAPRET_BASE на финальный путь (был /tmp/zapret2_build/...)
     export ZAPRET_BASE="$ZAPRET2_DIR"
@@ -735,6 +741,8 @@ step_build_zapret2() {
         print_info "Copying snapshot domain lists..."
         mkdir -p "${ZAPRET2_DIR}/files/lists"
         cp -Rf "${WORK_DIR}/files/lists/"* "${ZAPRET2_DIR}/files/lists/" 2>/dev/null || true
+        # Strip CRLF from list files
+        find "${ZAPRET2_DIR}" -name "*.txt" -path "*/extra_strats/*" -exec sed -i 's/\r$//' {} + 2>/dev/null || true
     fi
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
@@ -764,13 +772,16 @@ step_build_zapret2() {
     mkdir -p "${ZAPRET2_DIR}/lua"
     mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/orchestra"
     mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/autocircular"
-    chmod 777 "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
+    chmod 755 "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
+    chown nobody "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
     : > "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
-    chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
+    chmod 644 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
+    chown nobody "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
     # Debug is opt-in. Keep log file prepared, but do not enable verbose logging by default.
     rm -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.flag" 2>/dev/null || true
     : > "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
-    chmod 666 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
+    chmod 644 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
+    chown nobody "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
 
     if curl -fsSL "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
         -o "${ZAPRET2_DIR}/lua/locked.lua"; then
@@ -834,7 +845,7 @@ step_build_zapret2() {
 }
 
 # ==============================================================================
-# ШАГ 5: ПРОВЕРКА УСТАНОВКИ
+# ШАГ 6: ПРОВЕРКА УСТАНОВКИ
 # ==============================================================================
 
 step_verify_installation() {
@@ -1044,7 +1055,7 @@ step_download_domain_lists() {
 }
 
 # ==============================================================================
-# ШАГ 7: ОТКЛЮЧЕНИЕ HARDWARE NAT
+# ШАГ 9: ОТКЛЮЧЕНИЕ HARDWARE NAT
 # ==============================================================================
 
 step_disable_hwnat_and_offload() {
@@ -1133,7 +1144,13 @@ step_configure_tmpdir() {
     # Получить объём RAM
     local ram_mb
     if [ -f "${ZAPRET2_DIR}/common/base.sh" ]; then
+        # Save overrides before re-sourcing
+        _saved_linux_ipt_avail="$(type linux_ipt_avail 2>/dev/null)"
         . "${ZAPRET2_DIR}/common/base.sh"
+        # Restore override if it was set
+        if [ -n "$_saved_linux_ipt_avail" ]; then
+            linux_ipt_avail() { true; }
+        fi
         ram_mb=$(get_ram_mb)
     else
         # Fallback: определить RAM вручную
@@ -1265,7 +1282,7 @@ step_create_config_and_init() {
 }
 
 # ==============================================================================
-# ШАГ 9: УСТАНОВКА NETFILTER ХУКА
+# ШАГ 11: УСТАНОВКА NETFILTER ХУКА
 # ==============================================================================
 
 step_install_netfilter_hook() {
@@ -1357,7 +1374,7 @@ HOOK
 }
 
 # ==============================================================================
-# ШАГ 10: ФИНАЛИЗАЦИЯ
+# ШАГ 12: ФИНАЛИЗАЦИЯ
 # ==============================================================================
 
 step_finalize() {
@@ -1496,7 +1513,7 @@ step_finalize() {
     printf "  %-25s: %s\n" "Конфигурация" "$CONFIG_DIR"
     printf "  %-25s: %s\n" "Списки доменов" "$LISTS_DIR"
     printf "  %-25s: %s\n" "Стратегии" "$STRATEGIES_CONF"
-    printf "  %-25s: %s\n" "Tools" "$tools_dir"
+    printf "  %-25s: %s\n" "Tools" "${ZAPRET2_DIR}/ip2net, ${ZAPRET2_DIR}/mdig"
 
     # Save local z2k entrypoint for future runs without curl.
     local local_z2k_script="${ZAPRET2_DIR}/z2k.sh"

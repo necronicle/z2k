@@ -4,19 +4,6 @@
 # QUIC/UDP стратегии берутся из quic_strats.ini
 
 # ==============================================================================
-# КОНСТАНТЫ ДЛЯ СТРАТЕГИЙ
-# ==============================================================================
-
-# Домены для тестирования стратегий
-TEST_DOMAINS="
-http://rutracker.org
-https://rutracker.org
-https://www.youtube.com
-https://discord.com
-https://googlevideo.com
-"
-
-# ==============================================================================
 # РАБОТА С ФАЙЛАМИ СТРАТЕГИЙ ПО КАТЕГОРИЯМ (CONFIG-DRIVEN АРХИТЕКТУРА)
 # ==============================================================================
 
@@ -446,11 +433,7 @@ apply_strategy() {
 
     # Построить полные TCP параметры
     local tcp_params
-    if [ "$type" = "http" ]; then
-        tcp_params=$(build_http_profile_params "$params")
-    else
-        tcp_params=$(build_tls_profile_params "$params")
-    fi
+    tcp_params=$(build_tls_profile_params "$params")
 
     # Получить текущие QUIC параметры
     local udp_params
@@ -723,6 +706,7 @@ EOF
     local args=""
 
     while IFS= read -r line; do
+        line=$(printf '%s' "$line" | sed 's/\r$//')
         line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
         [ -z "$line" ] && continue
         case "$line" in
@@ -1230,148 +1214,6 @@ test_strategy_range() {
                 ;;
         esac
     fi
-}
-
-# ==============================================================================
-# ПРИМЕНЕНИЕ СТРАТЕГИЙ ПО КАТЕГОРИЯМ
-# ==============================================================================
-
-# Применить разные стратегии для разных категорий
-# Параметр: строка вида "youtube:4:5 discord:7:4 custom:11:3"
-apply_category_strategies() {
-    local category_strategies=$1
-    local init_script="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
-
-    if [ -z "$category_strategies" ]; then
-        print_error "Не указаны стратегии для категорий"
-        return 1
-    fi
-
-    if [ ! -f "$init_script" ]; then
-        print_error "Init скрипт не найден: $init_script"
-        return 1
-    fi
-
-    print_info "Применение стратегий по категориям..."
-
-    # Обработать каждую категорию
-    for entry in $category_strategies; do
-        local category=$(echo "$entry" | cut -d: -f1)
-        local strategy_num=$(echo "$entry" | cut -d: -f2)
-        local score=$(echo "$entry" | cut -d: -f3)
-
-        print_info "  $category -> стратегия #$strategy_num (оценка: $score/5)"
-
-        # Получить параметры стратегии
-        local params
-        params=$(get_strategy "$strategy_num")
-
-        if [ -z "$params" ]; then
-            print_warning "Стратегия #$strategy_num не найдена, пропускаем $category"
-            continue
-        fi
-
-        # Конвертировать в TCP/UDP профили
-        local tcp_params
-        local udp_params
-
-        # Определить тип стратегии
-        local type
-        type=$(get_strategy_type "$strategy_num")
-
-        if [ "$type" = "https" ]; then
-            tcp_params="--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello ${params}"
-            udp_params=""
-        else
-            tcp_params="--filter-tcp=80,443 --filter-l7=http ${params}"
-            udp_params=""
-        fi
-
-        # Обновить маркеры в init скрипте
-        case "$category" in
-            youtube)
-                update_init_section "YOUTUBE" "$tcp_params" "$udp_params" "$init_script"
-                ;;
-            discord)
-                update_init_section "DISCORD" "$tcp_params" "$udp_params" "$init_script"
-                ;;
-            custom)
-                update_init_section "CUSTOM" "$tcp_params" "$udp_params" "$init_script"
-                ;;
-        esac
-    done
-
-    print_success "Стратегии применены к init скрипту"
-
-    # Перезапустить сервис
-    print_info "Перезапуск сервиса..."
-    "$init_script" restart >/dev/null 2>&1
-
-    sleep 2
-
-    if is_zapret2_running; then
-        print_success "Сервис перезапущен с новыми стратегиями"
-        return 0
-    else
-        print_warning "Сервис не запустился, проверьте логи"
-        return 1
-    fi
-}
-
-# Обновить секцию в init скрипте для конкретной категории
-update_init_section() {
-    local marker=$1
-    local tcp_params=$2
-    local udp_params=$3
-    local init_script=$4
-
-    local start_marker="${marker}_MARKER_START"
-    local end_marker="${marker}_MARKER_END"
-
-    # Создать временный файл
-    local temp_file="${init_script}.tmp"
-
-    # Флаг - внутри ли мы секции для замены
-    local inside_section=0
-    local found_section=0
-
-    while IFS= read -r line; do
-        if echo "$line" | grep -q "# ${start_marker}"; then
-            # Начало секции - записать маркер и новые параметры
-            echo "$line"
-            echo "${marker}_TCP=\"${tcp_params}\""
-            echo "${marker}_UDP=\"${udp_params}\""
-            inside_section=1
-            found_section=1
-        elif echo "$line" | grep -q "# ${end_marker}"; then
-            # Конец секции - записать маркер и выйти из режима
-            echo "$line"
-            inside_section=0
-        elif [ "$inside_section" -eq 0 ]; then
-            # Вне секции - просто копировать
-            echo "$line"
-        fi
-        # Внутри секции - пропускать старые строки (кроме маркеров)
-    done < "$init_script" > "$temp_file"
-
-    # Если секции не было в файле - добавить в конец
-    if [ "$found_section" -eq 0 ]; then
-        {
-            echo ""
-            echo "# ${start_marker}"
-            echo "${marker}_TCP=\"${tcp_params}\""
-            echo "${marker}_UDP=\"${udp_params}\""
-            echo "# ${end_marker}"
-        } >> "$temp_file"
-    fi
-
-    # Заменить init скрипт
-    mv "$temp_file" "$init_script" || {
-        print_error "Не удалось обновить init скрипт"
-        return 1
-    }
-
-    chmod +x "$init_script"
 }
 
 # ==============================================================================
@@ -2186,33 +2028,6 @@ run_blockcheck_http() {
     fi
 
     return 0
-}
-
-get_init_tcp_params() {
-    local marker=$1
-    local init_script=$2
-
-    if [ ! -f "$init_script" ]; then
-        return 1
-    fi
-
-    local line
-    line=$(grep "^${marker}_TCP=" "$init_script" 2>/dev/null | head -n 1)
-    echo "$line" | sed "s/^${marker}_TCP=\"//" | sed 's/\"$//'
-}
-
-# Получить текущие UDP параметры из init скрипта для секции
-get_init_udp_params() {
-    local marker=$1
-    local init_script=$2
-
-    if [ ! -f "$init_script" ]; then
-        return 1
-    fi
-
-    local line
-    line=$(grep "^${marker}_UDP=" "$init_script" 2>/dev/null | head -n 1)
-    echo "$line" | sed "s/^${marker}_UDP=\"//" | sed 's/\"$//'
 }
 
 # Применить разные стратегии для YouTube TCP, YouTube GV, RKN (Z4R метод)
