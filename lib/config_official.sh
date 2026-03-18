@@ -203,36 +203,66 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(ensure_circular_payload_empty "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_payload_empty "$rkn_tcp")
 
-    # Enable incoming packet range for circular to see RST/TLS alerts for failure detection.
-    # Without --in-range, the default is 'x' (never), so failure_detector never fires on TCP.
-    # Insert --in-range=-s5556 before circular and --in-range=x after the last strategy.
+    # Enable incoming packet range for circular() failure/success detection on TCP.
+    # Per nfqws2 manual: circular needs --in-range=-s5556 and --payload=all (default)
+    # to see incoming RST/TLS alerts. The --payload= filter must come AFTER circular
+    # (before strategy instances), not before it.
+    # Transform: move --payload= from before circular to after it, insert --in-range.
+    #
+    # Before: --payload=tls_client_hello,empty --out-range=-n10 --lua-desync=circular:... --lua-desync=fake:...
+    # After:  --out-range=-n10 --in-range=-s5556 --lua-desync=circular:... --in-range=x --payload=tls_client_hello,empty --lua-desync=fake:...
     ensure_circular_in_range() {
         local input="$1"
-        local out=""
         local token=""
         local has_in_range=""
 
-        # Check if --in-range is already set (e.g. HTTP RKN profile)
+        # Skip profiles that already have --in-range (e.g. HTTP RKN)
         for token in $input; do
             case "$token" in --in-range=*) has_in_range=1 ;; esac
         done
         [ -n "$has_in_range" ] && { printf '%s' "$input"; return; }
 
-        # Insert --in-range=-s5556 before --lua-desync=circular and --in-range=x at end
-        local in_range_inserted=""
+        # Phase 1: collect tokens before circular, the circular token, and tokens after
+        local before_circular=""
+        local circular_token=""
+        local after_circular=""
+        local saved_payload=""
+        local phase="before"  # before | circular | after
+
         for token in $input; do
-            case "$token" in
-                --lua-desync=circular:*)
-                    if [ -z "$in_range_inserted" ]; then
-                        out="${out:+$out }--in-range=-s5556"
-                        in_range_inserted=1
-                    fi
+            case "$phase" in
+                before)
+                    case "$token" in
+                        --payload=*)
+                            # Save payload filter, don't emit it here
+                            saved_payload="$token"
+                            ;;
+                        --lua-desync=circular:*)
+                            circular_token="$token"
+                            phase="after"
+                            ;;
+                        *)
+                            before_circular="${before_circular:+$before_circular }$token"
+                            ;;
+                    esac
+                    ;;
+                after)
+                    after_circular="${after_circular:+$after_circular }$token"
                     ;;
             esac
-            out="${out:+$out }$token"
         done
-        # Close incoming range after all strategies
-        [ -n "$in_range_inserted" ] && out="$out --in-range=x"
+
+        # If no circular found, return unchanged
+        [ -z "$circular_token" ] && { printf '%s' "$input"; return; }
+
+        # Phase 2: reconstruct
+        # before_circular --in-range=-s5556 circular --in-range=x --payload=<saved> after_circular
+        local out="$before_circular"
+        out="${out:+$out }--in-range=-s5556"
+        out="$out $circular_token"
+        out="$out --in-range=x"
+        [ -n "$saved_payload" ] && out="$out $saved_payload"
+        [ -n "$after_circular" ] && out="$out $after_circular"
 
         printf '%s' "$out"
     }
