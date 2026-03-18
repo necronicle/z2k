@@ -143,8 +143,8 @@ AUSTERUS_OPT
     rkn_tcp=$(ensure_circular_failure_detector "$rkn_tcp")
     quic_udp=$(ensure_circular_failure_detector "$quic_udp")
 
-    # Ensure circular sees TCP RST/FIN packets without payload (payload_type=empty)
-    # and incoming TLS ServerHello for success detection.
+    # Ensure circular sees TCP RST/FIN packets without payload (payload_type=empty),
+    # otherwise early connection aborts can be invisible to failure detectors.
     # Only the --payload= token that is active for --lua-desync=circular:* is modified.
     ensure_circular_payload_empty() {
         local input="$1"
@@ -170,8 +170,6 @@ AUSTERUS_OPT
                             *)
                                 # Add ,empty for failure detection (RST/FIN packets)
                                 case "$pending_payload" in *empty*) ;; *) pending_payload="${pending_payload},empty" ;; esac
-                                # Add ,tls_server_hello for success detection (incoming ServerHello)
-                                case "$pending_payload" in *tls_server_hello*) ;; *) pending_payload="${pending_payload},tls_server_hello" ;; esac
                                 ;;
                         esac
                         out="${out:+$out }$pending_payload"
