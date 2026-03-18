@@ -203,6 +203,44 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(ensure_circular_payload_empty "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_payload_empty "$rkn_tcp")
 
+    # Enable incoming packet range for circular to see RST/TLS alerts for failure detection.
+    # Without --in-range, the default is 'x' (never), so failure_detector never fires on TCP.
+    # Insert --in-range=-s5556 before circular and --in-range=x after the last strategy.
+    ensure_circular_in_range() {
+        local input="$1"
+        local out=""
+        local token=""
+        local has_in_range=""
+
+        # Check if --in-range is already set (e.g. HTTP RKN profile)
+        for token in $input; do
+            case "$token" in --in-range=*) has_in_range=1 ;; esac
+        done
+        [ -n "$has_in_range" ] && { printf '%s' "$input"; return; }
+
+        # Insert --in-range=-s5556 before --lua-desync=circular and --in-range=x at end
+        local in_range_inserted=""
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    if [ -z "$in_range_inserted" ]; then
+                        out="${out:+$out }--in-range=-s5556"
+                        in_range_inserted=1
+                    fi
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        # Close incoming range after all strategies
+        [ -n "$in_range_inserted" ] && out="$out --in-range=x"
+
+        printf '%s' "$out"
+    }
+
+    youtube_tcp=$(ensure_circular_in_range "$youtube_tcp")
+    youtube_gv_tcp=$(ensure_circular_in_range "$youtube_gv_tcp")
+    rkn_tcp=$(ensure_circular_in_range "$rkn_tcp")
+
     # Генерировать NFQWS2_OPT в формате официального config
     local nfqws2_opt_lines=""
 
