@@ -958,24 +958,6 @@ function z2k_tls_alert_fatal(desync, crec)
   return true
 end
 
--- Conservative success detector for TCP profiles.
--- Detects success (outgoing seq > maxseq or incoming data) but does NOT
--- reset the host failure counter. This allows per-device failures to
--- accumulate even when other devices succeed on the same domain.
--- Used with circular:success_detector=z2k_success_no_reset
-function z2k_success_no_reset(desync, crec)
-  if type(standard_success_detector) ~= "function" then return false end
-  local ok, result = pcall(standard_success_detector, desync, crec)
-  if ok and result then
-    crec.nocheck = true
-    if b_debug then
-      DLOG("z2k_success_no_reset: success detected, stopping checks but NOT resetting failure counter")
-    end
-    return false  -- returning false prevents automate_failure_check from resetting failure counter
-  end
-  return false
-end
-
 -- Wrap circular() from zapret-auto.lua.
 if type(circular) == "function" then
   local orig_circular = circular
