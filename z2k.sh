@@ -372,7 +372,7 @@ show_welcome() {
     cat <<EOF
 +===================================================+
 |          z2k - Zapret2 для Keenetic               |
-|                   Версия $Z2K_VERSION                     |
+|                   Версия $Z2K_VERSION                    |
 +===================================================+
 
   GitHub: https://github.com/necronicle/z2k
