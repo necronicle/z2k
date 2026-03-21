@@ -1,6 +1,4 @@
-# z2k v2.0 - Zapret2 для Keenetic (BETA VERSION)
-
-Проект в активной разработке. Статус: beta version. Возможны баги и изменения.
+# z2k v2.0 - Zapret2 для Keenetic
 
 Поддержать проект:
 
@@ -78,6 +76,24 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 - Скачивает/обновляет доменные списки (YT, RKN, Discord).
 - Генерирует и применяет autocircular стратегии для RKN / YouTube TCP / YouTube GV / QUIC / Discord.
 - Включает IPv6 правила, если IPv6 реально доступен.
+
+---
+
+## Поддерживаемые архитектуры
+
+Архитектура определяется автоматически. Поддерживаются все платформы из zapret2 openwrt-embedded:
+
+| Архитектура | Роутеры |
+|---|---|
+| `arm64` / `aarch64` | Keenetic Hero, Ultra, Giga, Hopper и другие на ARM Cortex-A |
+| `arm` | Более старые модели на ARM |
+| `mipsel` | Keenetic на MT7621 (Extra, Start, Air и др.) |
+| `mips` | Older MIPS big-endian |
+| `mips64` | MIPS64 |
+| `lexra` | Realtek Lexra |
+| `x86` / `x86_64` | x86-роутеры и виртуальные машины |
+| `riscv64` | RISC-V |
+| `ppc` | PowerPC |
 
 ---
 
