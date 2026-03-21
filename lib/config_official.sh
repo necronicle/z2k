@@ -123,7 +123,6 @@ AUSTERUS_OPT
 
     # Генерировать NFQWS2_OPT в формате официального config
     local nfqws2_opt_lines=""
-    local autohostlist_file="/opt/zapret2/ipset/zapret-hosts-auto.txt"
 
     # Helper: проверить наличие и непустоту hostlist-файлов
     add_hostlist_line() {
@@ -138,7 +137,7 @@ AUSTERUS_OPT
     }
 
     # RKN TCP (include Discord hostlist into RKN profile)
-    local rkn_hostlists="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt --hostlist=$autohostlist_file"
+    local rkn_hostlists="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt"
     [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt $rkn_hostlists $rkn_tcp --new"
 
@@ -172,20 +171,6 @@ AUSTERUS_OPT
     # Strategy 7: fake badsum + multisplit method+2
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_tls_alert_fatal --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
 
-    # Catch-all TCP profile for autohostlist failure tracking
-    # Upstream zapret appends --hostlist-auto to the very end of NFQWS2_OPT, 
-    # so we place this empty profile last to receive those parameters.
-    # It catches unknown domains, tracks failures, and sync_autohostlist_to_rkn moves them to RKN.
-    local catchall="--filter-tcp=80,443 --hostlist-exclude=${lists_dir}/whitelist.txt"
-    catchall="$catchall --hostlist=$autohostlist_file"
-    catchall="$catchall --hostlist-auto=$autohostlist_file"
-    catchall="$catchall --hostlist-auto-fail-threshold=3"
-    catchall="$catchall --hostlist-auto-fail-time=60"
-    catchall="$catchall --hostlist-auto-retrans-threshold=3"
-    catchall="$catchall --hostlist-auto-retrans-reset=1"
-    catchall="$catchall --hostlist-auto-retrans-maxseq=32768"
-    catchall="$catchall --hostlist-auto-incoming-maxseq=4096"
-    nfqws2_opt_lines="$nfqws2_opt_lines$catchall\\n"
 
     local nfqws2_opt_value
     nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d')
@@ -308,8 +293,8 @@ create_official_config() {
 ENABLED=1
 
 # Mode filter: none, ipset, hostlist, autohostlist
-# For z2k we use autohostlist mode with multi-profile filtering
-MODE_FILTER=autohostlist
+# z2k uses hostlist mode — domains are controlled via explicit hostlist files
+MODE_FILTER=hostlist
 
 # Firewall type - AUTO-DETECTED by init script, DO NOT set manually
 # Init script calls linux_fwtype() which detects iptables/nftables automatically
@@ -412,19 +397,7 @@ IPSET_OPT="hashsize 262144 maxelem $SET_MAXELEM"
 IP2NET_OPT4="--prefix-length=22-30 --v4-threshold=3/4"
 IP2NET_OPT6="--prefix-length=56-64 --v6-threshold=5"
 
-# ==============================================================================
-# AUTOHOSTLIST SETTINGS
-# ==============================================================================
-
-AUTOHOSTLIST_INCOMING_MAXSEQ=4096
-AUTOHOSTLIST_RETRANS_MAXSEQ=32768
-AUTOHOSTLIST_RETRANS_RESET=1
-AUTOHOSTLIST_RETRANS_THRESHOLD=3
-AUTOHOSTLIST_FAIL_THRESHOLD=3
-AUTOHOSTLIST_FAIL_TIME=60
-AUTOHOSTLIST_UDP_IN=1
-AUTOHOSTLIST_UDP_OUT=4
-AUTOHOSTLIST_DEBUGLOG=0
+# AUTOHOSTLIST SETTINGS отключены — используется режим hostlist с явными списками доменов
 
 # ==============================================================================
 # CUSTOM SCRIPTS
