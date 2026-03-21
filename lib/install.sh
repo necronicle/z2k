@@ -200,7 +200,7 @@ EOF
 
 Диагностика и попытки исправления:
 - [OK] opkg бинарник запускается (opkg --version работает)
-- [OK] Архитектура системы корректная (aarch64)
+- [OK] Архитектура системы корректная
 - [OK] Репозиторий доступен (curl тест успешен)
 - [OK] Попробовали альтернативное зеркало (entware.diversion.ch)
 - [FAIL] НО "opkg update" всё равно падает с "Illegal instruction"
@@ -231,7 +231,7 @@ EOF
 
 5. Если ничего не помогает - переустановите Entware:
    https://help.keenetic.com/hc/ru/articles/360021888880
-   Убедитесь что выбираете версию для aarch64!
+   Убедитесь что выбираете версию Entware для вашей архитектуры!
 
 ПРОДОЛЖИТЬ БЕЗ ОБНОВЛЕНИЯ?
 Можно попробовать продолжить установку z2k.
@@ -641,7 +641,7 @@ step_build_zapret2() {
             armv7l|armv6l|arm|*armv7*|*armv6*|arm*) bin_arch="linux-arm" ;;
             x86_64|amd64|*x86_64*|*amd64*) bin_arch="linux-x86_64" ;;
             i386|i486|i586|i686|x86) bin_arch="linux-x86" ;;
-            *mipsel64*|*mips64el*) bin_arch="linux-mipsel64" ;;
+            *mipsel64*|*mips64el*) bin_arch="linux-mipsel" ;;
             *mips64*) bin_arch="linux-mips64" ;;
             *mipsel*) bin_arch="linux-mipsel" ;;
             *mips*) bin_arch="linux-mips" ;;

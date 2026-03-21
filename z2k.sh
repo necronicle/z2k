@@ -108,7 +108,7 @@ z2k_map_arch_to_bin_arch() {
         armv7l|armv6l|arm|*armv7*|*armv6*|arm*) echo "linux-arm" ;;
         x86_64|amd64|*x86_64*|*amd64*) echo "linux-x86_64" ;;
         i386|i486|i586|i686|x86) echo "linux-x86" ;;
-        *mipsel64*|*mips64el*) echo "linux-mipsel64" ;;
+        *mipsel64*|*mips64el*) echo "linux-mipsel" ;;
         *mips64*) echo "linux-mips64" ;;
         *mipsel*) echo "linux-mipsel" ;;
         *mips*) echo "linux-mips" ;;
