@@ -72,7 +72,6 @@ MENU
 [4] Резервная копия/Восстановление
 [5] Удалить zapret2
 [A] Режим без хостлистов (для Austerusj)
-[Q] Настройки QUIC
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
 [S] Скрипты custom.d
@@ -80,7 +79,7 @@ MENU
 
 MENU
 
-        printf "Выберите опцию [0-5,A,Q,R,W,S]: "
+        printf "Выберите опцию [0-5,A,R,W,S]: "
         read_input choice
 
         case "$choice" in
@@ -101,9 +100,6 @@ MENU
                 ;;
             a|A)
                 menu_all_tcp443
-                ;;
-            q|Q)
-                menu_quic_settings
                 ;;
             r|R)
                 menu_rst_filter
