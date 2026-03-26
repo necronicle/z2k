@@ -1278,6 +1278,13 @@ start()
     # 3. ��������� daemon ��������
     start_daemons
 
+    # nfqws2 may touch autocircular state very early during startup, before the
+    # runtime user fully takes over. Re-apply ownership right after daemon start
+    # so persistence keeps using primary cache files instead of falling back to /tmp.
+    ensure_autocircular_files
+    sleep 1
+    ensure_autocircular_files
+
     # 4. ��������� orchestrator (circular_locked rotation)
     [ -x "$ORCH_SCRIPT" ] && "$ORCH_SCRIPT" start
 
