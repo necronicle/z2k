@@ -146,24 +146,20 @@ local function create_empty_state_file(path)
 end
 
 local function choose_state_file_for_write()
-  local f = io.open(STATE_FILE_PRIMARY, "a")
-  if f then f:close(); return STATE_FILE_PRIMARY end
-  f = io.open(STATE_FILE_FALLBACK, "a")
-  if f then f:close(); return STATE_FILE_FALLBACK end
+  if can_append_existing_file(STATE_FILE_PRIMARY) then
+    return STATE_FILE_PRIMARY
+  end
+  if can_append_existing_file(STATE_FILE_FALLBACK) then
+    return STATE_FILE_FALLBACK
+  end
+  if create_empty_state_file(STATE_FILE_FALLBACK) then
+    return STATE_FILE_FALLBACK
+  end
   return nil
 end
 
 local function ensure_state_file_exists()
-  local existing = choose_state_file_for_read()
-  if existing then return existing end
-
-  local writable = choose_state_file_for_write()
-  if not writable then return nil end
-
-  if create_empty_state_file(writable) then
-    return writable
-  end
-  return nil
+  return choose_state_file_for_read()
 end
 
 local function merge_state_file_into(path, dest)
@@ -217,22 +213,20 @@ local function choose_telemetry_file_for_read()
 end
 
 local function choose_telemetry_file_for_write()
-  local f = io.open(TELEMETRY_FILE_PRIMARY, "a")
-  if f then f:close(); return TELEMETRY_FILE_PRIMARY end
-  f = io.open(TELEMETRY_FILE_FALLBACK, "a")
-  if f then f:close(); return TELEMETRY_FILE_FALLBACK end
+  if can_append_existing_file(TELEMETRY_FILE_PRIMARY) then
+    return TELEMETRY_FILE_PRIMARY
+  end
+  if can_append_existing_file(TELEMETRY_FILE_FALLBACK) then
+    return TELEMETRY_FILE_FALLBACK
+  end
+  if create_empty_telemetry_file(TELEMETRY_FILE_FALLBACK) then
+    return TELEMETRY_FILE_FALLBACK
+  end
   return nil
 end
 
 local function ensure_telemetry_file_exists()
-  local existing = choose_telemetry_file_for_read()
-  if existing then return existing end
-  local writable = choose_telemetry_file_for_write()
-  if not writable then return nil end
-  if create_empty_telemetry_file(writable) then
-    return writable
-  end
-  return nil
+  return choose_telemetry_file_for_read()
 end
 
 local function merge_telemetry_file_into(path, dest)
