@@ -195,6 +195,10 @@ ensure_autocircular_files()
 	mkdir -p "$base" || return 1
 	chmod 755 "$base" 2>/dev/null || true
 	chown nobody "$base" 2>/dev/null || true
+	rm -f "$base/state.tsv.lock" \
+	      "$base/state.tsv.tmp" \
+	      "$base/telemetry.tsv.lock" \
+	      "$base/telemetry.tsv.tmp" 2>/dev/null || true
 
 	[ -f "$base/state.tsv" ] || : > "$base/state.tsv"
 	chmod 644 "$base/state.tsv" 2>/dev/null || true

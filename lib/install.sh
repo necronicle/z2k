@@ -790,6 +790,10 @@ step_build_zapret2() {
     : > "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
     chmod 644 "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
     chown nobody "${ZAPRET2_DIR}/extra_strats/cache/autocircular/debug.log" 2>/dev/null || true
+    rm -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv.lock" \
+          "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv.tmp" \
+          "${ZAPRET2_DIR}/extra_strats/cache/autocircular/telemetry.tsv.lock" \
+          "${ZAPRET2_DIR}/extra_strats/cache/autocircular/telemetry.tsv.tmp" 2>/dev/null || true
     # Fresh install/reinstall must not inherit stale fallback cache from /tmp.
     rm -f /tmp/z2k-autocircular-state.tsv \
           /tmp/z2k-autocircular-telemetry.tsv \

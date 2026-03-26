@@ -1068,10 +1068,11 @@ if type(circular) == "function" then
         (desync and desync.l7payload == "quic_initial") and
         (not failure_after) and
         n_after and n_after > 1
-      -- TCP strategies use --payload=tls_client_hello, so circular() is only called for outgoing
-      -- ClientHello packets. success_detector (inseq/maxseq) never fires because incoming data
-      -- packets never reach circular(). Persist on every outgoing initial packet instead:
-      -- write_state() is rate-limited (2s) and persist_if_changed() skips redundant writes.
+      -- Persist on every outgoing initial packet as a fallback. Some profiles
+      -- still expose success only indirectly, and even the restored manual
+      -- YouTube layout benefits from saving the active candidate immediately.
+      -- write_state() is rate-limited (2s) and persist_if_changed() skips
+      -- redundant writes.
       local outgoing_initial = desync and desync.outgoing and n_after and
         (desync.l7payload == "tls_client_hello" or
          desync.l7payload == "quic_initial" or

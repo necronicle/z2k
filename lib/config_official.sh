@@ -118,26 +118,32 @@ AUSTERUS_OPT
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
 
-    # Let YouTube TLS circular profiles observe incoming replies as well.
-    # Many legacy strategy packs use top-level --payload=tls_client_hello only,
-    # which means circular() sees only outgoing ClientHello packets and cannot
-    # classify reply-side success/failure for apps that stall before retry loops
-    # (notably Smart TV clients). We also force bidirectional visibility with
-    # --in-range=a so reply packets actually reach circular(); desync sub-actions
-    # still keep their own payload=tls_client_hello scopes.
-    ensure_tls_circular_payload_visibility() {
+    # Let YouTube TLS circular operate exactly as in the upstream manual.
+    # For LG webOS the orchestrator must see incoming packets on the circular
+    # stage itself (`--in-range=-s5556`), while actual desync instances must
+    # still stay limited by `--payload=tls_client_hello...`.
+    #
+    # This requires moving the top-level `--payload=` after circular and
+    # closing the incoming window right after circular with `--in-range=x`.
+    # Keeping payload before circular makes YouTube TCP/GV fail detection too
+    # blind and prevents real sequential rotation on TV clients.
+    ensure_youtube_tls_circular_manual_layout() {
         local input="$1"
-        local out=""
         local token=""
-        local payload=""
         local has_tls="0"
         local has_circular="0"
-        local has_in_range="0"
+        local has_in_range=""
+        local before_circular=""
+        local circular_token=""
+        local after_circular=""
+        local saved_payload=""
+        local phase="before"
 
         for token in $input; do
             case "$token" in
                 --filter-l7=tls) has_tls="1" ;;
                 --lua-desync=circular:*) has_circular="1" ;;
+                --in-range=*) has_in_range="1" ;;
             esac
         done
 
@@ -146,51 +152,52 @@ AUSTERUS_OPT
             return 0
         fi
 
+        # If a profile already has an explicit in-range, leave it alone.
+        [ -n "$has_in_range" ] && {
+            printf '%s' "$input"
+            return 0
+        }
+
         for token in $input; do
-            case "$token" in
-                --payload=*)
-                    payload="${token#--payload=}"
-                    case ",$payload," in
-                        *,tls_client_hello,*)
-                            case ",$payload," in
-                                *,tls_server_hello,*) ;;
-                                *) payload="${payload},tls_server_hello" ;;
-                            esac
-                            case ",$payload," in
-                                *,http_reply,*) ;;
-                                *) payload="${payload},http_reply" ;;
-                            esac
-                            case ",$payload," in
-                                *,unknown,*) ;;
-                                *) payload="${payload},unknown" ;;
-                            esac
-                            token="--payload=${payload}"
+            case "$phase" in
+                before)
+                    case "$token" in
+                        --payload=*)
+                            saved_payload="$token"
+                            ;;
+                        --lua-desync=circular:*)
+                            circular_token="$token"
+                            phase="after"
+                            ;;
+                        *)
+                            before_circular="${before_circular:+$before_circular }$token"
                             ;;
                     esac
                     ;;
-                --in-range=*)
-                    token="--in-range=a"
-                    has_in_range="1"
-                    ;;
-                --out-range=*)
-                    if [ "$has_in_range" != "1" ]; then
-                        out="${out:+$out }--in-range=a"
-                        has_in_range="1"
-                    fi
+                after)
+                    after_circular="${after_circular:+$after_circular }$token"
                     ;;
             esac
-            out="${out:+$out }$token"
         done
 
-        if [ "$has_in_range" != "1" ]; then
-            out="${out:+$out }--in-range=a"
-        fi
+        [ -z "$circular_token" ] && {
+            printf '%s' "$input"
+            return 0
+        }
 
-        printf '%s' "$out"
+        # Fallback for malformed legacy inputs with no payload token.
+        [ -z "$saved_payload" ] && saved_payload="--payload=tls_client_hello"
+
+        printf '%s --in-range=-s5556 %s --in-range=x %s%s%s' \
+            "$before_circular" \
+            "$circular_token" \
+            "$saved_payload" \
+            "${after_circular:+ }" \
+            "$after_circular"
     }
 
-    youtube_tcp=$(ensure_tls_circular_payload_visibility "$youtube_tcp")
-    youtube_gv_tcp=$(ensure_tls_circular_payload_visibility "$youtube_gv_tcp")
+    youtube_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_tcp")
+    youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
 
 
