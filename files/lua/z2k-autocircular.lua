@@ -820,6 +820,77 @@ local function persist_if_changed(askey, hostn, hrec)
 end
 
 local policy_explore_good = 0.03  -- exploration chance when current strategy is working (3%)
+local youtube_silent_retry_window_sec = 120
+local youtube_silent_retry_min_gap_sec = 2
+local youtube_silent_retry_threshold = 2
+local youtube_silent_retry = {}
+
+local function is_youtube_tcp_key(askey)
+  if not askey then return false end
+  local s = tostring(askey)
+  return s == "yt_tcp" or s == "gv_tcp"
+end
+
+local function youtube_silent_retry_rec(askey, hostn, create)
+  if not askey or not hostn then return nil end
+  local a = youtube_silent_retry[askey]
+  if not a then
+    if not create then return nil end
+    a = {}
+    youtube_silent_retry[askey] = a
+  end
+  local r = a[hostn]
+  if not r and create then
+    r = { attempts = 0, strategy = 0, last_t = 0 }
+    a[hostn] = r
+  end
+  return r
+end
+
+local function reset_youtube_silent_retry(askey, hostn)
+  local r = youtube_silent_retry_rec(askey, hostn, false)
+  if not r then return end
+  r.attempts = 0
+  r.last_t = 0
+end
+
+local function maybe_rotate_youtube_silent_retry(desync, askey, hostn, hrec)
+  if not is_youtube_tcp_key(askey) then return nil, nil, nil end
+  if not desync or not desync.outgoing or desync.l7payload ~= "tls_client_hello" then
+    return nil, nil, nil
+  end
+  if not hrec then return nil, nil, nil end
+
+  local ct = tonumber(hrec.ctstrategy) or 0
+  local cur = tonumber(hrec.nstrategy) or 1
+  if cur < 1 then cur = 1 end
+
+  local now = now_f()
+  local r = youtube_silent_retry_rec(askey, hostn, true)
+  if not r then return nil, nil, nil end
+
+  local gap = now - (tonumber(r.last_t) or 0)
+  if tonumber(r.strategy) == cur and gap >= youtube_silent_retry_min_gap_sec and gap <= youtube_silent_retry_window_sec then
+    r.attempts = (tonumber(r.attempts) or 0) + 1
+  else
+    r.attempts = 1
+  end
+  r.strategy = cur
+  r.last_t = now
+
+  local attempts = tonumber(r.attempts) or 0
+  if attempts < youtube_silent_retry_threshold or ct < 2 then
+    return nil, nil, attempts
+  end
+
+  local next_strategy = cur >= ct and 1 or (cur + 1)
+  telemetry_record_event(askey, hostn, cur, false, nil, now)
+  hrec.nstrategy = next_strategy
+  r.strategy = next_strategy
+  r.attempts = 0
+  r.last_t = now
+  return cur, next_strategy, attempts
+end
 
 local function policy_seed_strategy(desync, askey, hostn, hrec)
   if not policy_enabled then return nil, nil end
@@ -1043,15 +1114,34 @@ function z2k_tls_alert_fatal(desync, crec)
   return true
 end
 
+-- Conservative success detector for TCP profiles.
+-- Detects success but does NOT reset host failure counters.
+-- This is important for TV clients: successful handshakes from other devices
+-- on the same domain must not mask repeated webOS failures.
+function z2k_success_no_reset(desync, crec)
+  if type(standard_success_detector) ~= "function" then return false end
+  local ok, result = pcall(standard_success_detector, desync, crec)
+  if ok and result then
+    if crec then
+      crec.nocheck = true
+    end
+    return false
+  end
+  return false
+end
+
 -- Wrap circular() from zapret-auto.lua.
 if type(circular) == "function" then
   local orig_circular = circular
   circular = function(ctx, desync)
     local askey_before, hostn_before, hrec_before
     local policy_pick_before, policy_score_before
+    local silent_rotate_from_before, silent_rotate_to_before, silent_attempts_before
     pcall(function()
       askey_before, hostn_before, hrec_before = get_record_for_desync(desync, true)
       if hrec_before then
+        silent_rotate_from_before, silent_rotate_to_before, silent_attempts_before =
+          maybe_rotate_youtube_silent_retry(desync, askey_before, hostn_before, hrec_before)
         policy_pick_before, policy_score_before = policy_seed_strategy(desync, askey_before, hostn_before, hrec_before)
         flow_start_if_needed(desync, hrec_before.nstrategy)
       end
@@ -1115,6 +1205,10 @@ if type(circular) == "function" then
         persisted = persist_if_changed(askey, hostn, hrec)
       end
 
+      if success_event or failure_event then
+        reset_youtube_silent_retry(askey, hostn)
+      end
+
       local latency_s, flow_strategy = nil, nil
       if success_event or failure_event then
         latency_s, flow_strategy = flow_finish(desync)
@@ -1149,6 +1243,9 @@ if type(circular) == "function" then
           " response_state=" .. tostring(response_state and 1 or 0) ..
           " quic_candidate_state=" .. tostring(quic_candidate_state and 1 or 0) ..
           " outgoing_initial=" .. tostring(outgoing_initial and 1 or 0) ..
+          " silent_attempts=" .. tostring(silent_attempts_before or 0) ..
+          " silent_rotate_from=" .. tostring(silent_rotate_from_before or "") ..
+          " silent_rotate_to=" .. tostring(silent_rotate_to_before or "") ..
           " success_event=" .. tostring(success_event and 1 or 0) ..
           " failure_event=" .. tostring(failure_event and 1 or 0) ..
           " latency_s=" .. tostring(latency_s or "") ..

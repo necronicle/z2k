@@ -118,26 +118,27 @@ AUSTERUS_OPT
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
 
-    # Let YouTube TLS circular operate exactly as in the upstream manual.
-    # For LG webOS the orchestrator must see incoming packets on the circular
-    # stage itself (`--in-range=-s5556`), while actual desync instances must
-    # still stay limited by `--payload=tls_client_hello...`.
+    # YouTube TCP/GV on LG webOS often fails as a silent TCP blackhole:
+    # repeated ClientHello attempts with no visible response_state/success_state.
+    # Manual payload reordering alone is not sufficient in that mode.
     #
-    # This requires moving the top-level `--payload=` after circular and
-    # closing the incoming window right after circular with `--in-range=x`.
-    # Keeping payload before circular makes YouTube TCP/GV fail detection too
-    # blind and prevents real sequential rotation on TV clients.
-    ensure_youtube_tls_circular_manual_layout() {
+    # Restore the older YouTube-only conservative TCP failure path:
+    # - expose incoming packets to circular via --in-range=-s5556
+    # - expose empty packets / retrans context via --payload=tls_client_hello,empty
+    # - keep desync strategy instances restricted to the original TLS payload
+    # - prevent successes from other devices on the same domain from resetting
+    #   failure counters via success_detector=z2k_success_no_reset
+    #
+    # Scope is intentionally limited to youtube_tcp / youtube_gv_tcp.
+    ensure_youtube_tls_failure_detection() {
         local input="$1"
         local token=""
         local has_tls="0"
         local has_circular="0"
         local has_in_range=""
-        local before_circular=""
-        local circular_token=""
-        local after_circular=""
         local saved_payload=""
-        local phase="before"
+        local out=""
+        local circular_seen="0"
 
         for token in $input; do
             case "$token" in
@@ -158,46 +159,42 @@ AUSTERUS_OPT
             return 0
         }
 
-        for token in $input; do
-            case "$phase" in
-                before)
-                    case "$token" in
-                        --payload=*)
-                            saved_payload="$token"
-                            ;;
-                        --lua-desync=circular:*)
-                            circular_token="$token"
-                            phase="after"
-                            ;;
-                        *)
-                            before_circular="${before_circular:+$before_circular }$token"
-                            ;;
-                    esac
-                    ;;
-                after)
-                    after_circular="${after_circular:+$after_circular }$token"
-                    ;;
-            esac
-        done
-
-        [ -z "$circular_token" ] && {
-            printf '%s' "$input"
-            return 0
-        }
-
-        # Fallback for malformed legacy inputs with no payload token.
         [ -z "$saved_payload" ] && saved_payload="--payload=tls_client_hello"
 
-        printf '%s --in-range=-s5556 %s --in-range=x %s%s%s' \
-            "$before_circular" \
-            "$circular_token" \
-            "$saved_payload" \
-            "${after_circular:+ }" \
-            "$after_circular"
+        for token in $input; do
+            case "$token" in
+                --payload=*)
+                    saved_payload="$token"
+                    token=$(printf '%s' "$token" | sed 's/^--payload=tls_client_hello$/--payload=tls_client_hello,empty/')
+                    ;;
+                --lua-desync=circular:*)
+                    out="${out:+$out }--in-range=-s5556"
+                    case "$token" in
+                        *:success_detector=*) ;;
+                        *) token="${token}:success_detector=z2k_success_no_reset" ;;
+                    esac
+                    circular_seen="1"
+                    ;;
+            esac
+
+            if [ "$circular_seen" = "1" ]; then
+                case "$token" in
+                    --lua-desync=circular:*) ;;
+                    --lua-desync=*)
+                        out="${out:+$out }--in-range=x $saved_payload"
+                        circular_seen="2"
+                        ;;
+                esac
+            fi
+
+            out="${out:+$out }$token"
+        done
+
+        printf '%s' "$out"
     }
 
-    youtube_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_tcp")
-    youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
+    youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
+    youtube_gv_tcp=$(ensure_youtube_tls_failure_detection "$youtube_gv_tcp")
 
 
 
