@@ -828,7 +828,7 @@ local youtube_silent_retry = {}
 local function is_youtube_tcp_key(askey)
   if not askey then return false end
   local s = tostring(askey)
-  return s == "yt_tcp" or s == "gv_tcp"
+  return s == "yt_tcp"
 end
 
 local function youtube_silent_retry_rec(askey, hostn, create)

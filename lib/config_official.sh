@@ -118,7 +118,85 @@ AUSTERUS_OPT
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
 
-    # YouTube TCP/GV on LG webOS often fails as a silent TCP blackhole:
+    # Let YouTube TLS circular operate exactly as in the upstream manual.
+    # For LG webOS the orchestrator must see incoming packets on the circular
+    # stage itself (`--in-range=-s5556`), while actual desync instances must
+    # still stay limited by `--payload=tls_client_hello...`.
+    #
+    # This requires moving the top-level `--payload=` after circular and
+    # closing the incoming window right after circular with `--in-range=x`.
+    # Keeping payload before circular makes YouTube TCP/GV fail detection too
+    # blind and prevents real sequential rotation on TV clients.
+    ensure_youtube_tls_circular_manual_layout() {
+        local input="$1"
+        local token=""
+        local has_tls="0"
+        local has_circular="0"
+        local has_in_range=""
+        local before_circular=""
+        local circular_token=""
+        local after_circular=""
+        local saved_payload=""
+        local phase="before"
+
+        for token in $input; do
+            case "$token" in
+                --filter-l7=tls) has_tls="1" ;;
+                --lua-desync=circular:*) has_circular="1" ;;
+                --in-range=*) has_in_range="1" ;;
+            esac
+        done
+
+        if [ "$has_tls" != "1" ] || [ "$has_circular" != "1" ]; then
+            printf '%s' "$input"
+            return 0
+        fi
+
+        # If a profile already has an explicit in-range, leave it alone.
+        [ -n "$has_in_range" ] && {
+            printf '%s' "$input"
+            return 0
+        }
+
+        for token in $input; do
+            case "$phase" in
+                before)
+                    case "$token" in
+                        --payload=*)
+                            saved_payload="$token"
+                            ;;
+                        --lua-desync=circular:*)
+                            circular_token="$token"
+                            phase="after"
+                            ;;
+                        *)
+                            before_circular="${before_circular:+$before_circular }$token"
+                            ;;
+                    esac
+                    ;;
+                after)
+                    after_circular="${after_circular:+$after_circular }$token"
+                    ;;
+            esac
+        done
+
+        [ -z "$circular_token" ] && {
+            printf '%s' "$input"
+            return 0
+        }
+
+        # Fallback for malformed legacy inputs with no payload token.
+        [ -z "$saved_payload" ] && saved_payload="--payload=tls_client_hello"
+
+        printf '%s --in-range=-s5556 %s --in-range=x %s%s%s' \
+            "$before_circular" \
+            "$circular_token" \
+            "$saved_payload" \
+            "${after_circular:+ }" \
+            "$after_circular"
+    }
+
+    # YouTube TCP on LG webOS often fails as a silent TCP blackhole:
     # repeated ClientHello attempts with no visible response_state/success_state.
     # Manual payload reordering alone is not sufficient in that mode.
     #
@@ -129,7 +207,7 @@ AUSTERUS_OPT
     # - prevent successes from other devices on the same domain from resetting
     #   failure counters via success_detector=z2k_success_no_reset
     #
-    # Scope is intentionally limited to youtube_tcp / youtube_gv_tcp.
+    # Scope is intentionally limited to youtube_tcp.
     ensure_youtube_tls_failure_detection() {
         local input="$1"
         local token=""
@@ -194,7 +272,7 @@ AUSTERUS_OPT
     }
 
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
-    youtube_gv_tcp=$(ensure_youtube_tls_failure_detection "$youtube_gv_tcp")
+    youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
 
 
