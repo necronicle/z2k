@@ -274,8 +274,20 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
-
-
+    # Silent fallback для RKN — включается через меню (флаг-файл)
+    local rkn_silent_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
+    local RKN_SILENT_FALLBACK=0
+    if [ -f "$rkn_silent_conf" ]; then
+        eval "$(grep '^RKN_SILENT_FALLBACK=' "$rkn_silent_conf" 2>/dev/null)"
+    fi
+    local rkn_silent_flag="${extra_strats_dir}/cache/autocircular/rkn_silent_fallback.flag"
+    if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
+        rkn_tcp=$(ensure_youtube_tls_failure_detection "$rkn_tcp")
+        touch "$rkn_silent_flag" 2>/dev/null
+    else
+        rm -f "$rkn_silent_flag" 2>/dev/null
+        rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
+    fi
 
     # Генерировать NFQWS2_OPT в формате официального config
     local nfqws2_opt_lines=""
