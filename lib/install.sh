@@ -477,7 +477,7 @@ unzip
             read -r answer </dev/tty
             case "$answer" in
                 [Yy]*)
-                    if opkg install --force-overwrite sort; then
+                    if opkg install --force-overwrite coreutils-sort; then
                         print_success "GNU sort установлен"
                     else
                         print_warning "Не удалось установить GNU sort"
