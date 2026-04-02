@@ -125430,3 +125430,9 @@ zzzooo.space
 zzztube.com
 zzztube.tv
 zzzz2.live
+
+# === Samsung SmartThings ===
+smartthings.com
+samsungiotcloud.com
+samsungaccount.com
+samsungcloud.com
