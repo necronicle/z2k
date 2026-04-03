@@ -299,9 +299,10 @@ AUSTERUS_OPT
     }
 
     rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp")
-    rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
 
-    # Silent fallback для RKN — включается через меню (флаг-файл)
+    # Silent fallback для RKN — включается через меню (флаг-файл).
+    # failure_detection включает в себя manual_layout (--in-range + payload),
+    # поэтому они взаимоисключающие, не накладываются.
     local rkn_silent_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local RKN_SILENT_FALLBACK=0
     if [ -f "$rkn_silent_conf" ]; then
@@ -312,6 +313,7 @@ AUSTERUS_OPT
         rkn_tcp=$(ensure_youtube_tls_failure_detection "$rkn_tcp")
         touch "$rkn_silent_flag" 2>/dev/null
     else
+        rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
         rm -f "$rkn_silent_flag" 2>/dev/null
     fi
 
