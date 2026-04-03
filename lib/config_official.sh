@@ -274,6 +274,33 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
+    # RKN: всегда добавляем failure_detector=z2k_tls_alert_fatal.
+    # Без него circular слеп к ТСПУ-блокировкам (TLS alert от DPI не детектится,
+    # ротация не происходит). Убирали из-за false positives на YouTube,
+    # но для РКН это единственный надёжный детектор.
+    ensure_rkn_failure_detector() {
+        local input="$1"
+        local out=""
+        local token=""
+
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    case "$token" in
+                        *failure_detector=*) ;;
+                        *) token="${token}:failure_detector=z2k_tls_alert_fatal" ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp")
+    rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
+
     # Silent fallback для RKN — включается через меню (флаг-файл)
     local rkn_silent_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local RKN_SILENT_FALLBACK=0
@@ -286,7 +313,6 @@ AUSTERUS_OPT
         touch "$rkn_silent_flag" 2>/dev/null
     else
         rm -f "$rkn_silent_flag" 2>/dev/null
-        rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
     fi
 
     # Генерировать NFQWS2_OPT в формате официального config
