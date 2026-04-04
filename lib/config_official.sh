@@ -475,6 +475,16 @@ create_official_config() {
         print_info "DISABLE_IPV6 задан вручную: DISABLE_IPV6=$disable_ipv6_value"
     fi
 
+    # Сохранить пользовательские настройки из существующего конфига
+    local saved_DROP_DPI_RST="0"
+    local saved_RKN_SILENT_FALLBACK="0"
+    if [ -f "$config_file" ]; then
+        eval "$(grep '^DROP_DPI_RST=' "$config_file" 2>/dev/null)"
+        saved_DROP_DPI_RST="${DROP_DPI_RST:-0}"
+        eval "$(grep '^RKN_SILENT_FALLBACK=' "$config_file" 2>/dev/null)"
+        saved_RKN_SILENT_FALLBACK="${RKN_SILENT_FALLBACK:-0}"
+    fi
+
     # Создать полный config файл
     cat > "$config_file" <<CONFIG
 # zapret2 configuration for Keenetic
@@ -618,7 +628,11 @@ WS_USER=nobody
 
 # Passive DPI RST filter: drop injected TCP RST with IP ID 0x0-0xF
 # Enable if your ISP uses TSPU that sends fake RST before real server reply
-DROP_DPI_RST=0
+DROP_DPI_RST=${saved_DROP_DPI_RST}
+
+# Silent fallback for RKN: detect silent TCP blackholes and force circular rotation
+# Enable via menu [F] if many RKN sites don't open (especially on MTS/aggressive DPI)
+RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 
 # Compress large lists
 GZIP_LISTS=1

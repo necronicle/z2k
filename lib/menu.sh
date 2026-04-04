@@ -854,9 +854,12 @@ SUBMENU
             fi
             print_success "Silent fallback для РКН включен"
 
+            # Создать/удалить флаг-файл для Lua
+            local flag_dir="${ZAPRET2_DIR}/extra_strats/cache/autocircular"
+            touch "${flag_dir}/rkn_silent_fallback.flag" 2>/dev/null
+
             if is_zapret2_running; then
-                print_info "Перегенерация конфига и перезапуск сервиса..."
-                create_official_config 2>/dev/null
+                print_info "Перезапуск сервиса..."
                 "$INIT_SCRIPT" restart
                 print_success "Сервис перезапущен с silent fallback для РКН"
             else
@@ -874,11 +877,12 @@ SUBMENU
             fi
 
             sed -i 's/^RKN_SILENT_FALLBACK=.*/RKN_SILENT_FALLBACK=0/' "$config_file"
+            # Удалить флаг-файл
+            rm -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null
             print_success "Silent fallback для РКН выключен"
 
             if is_zapret2_running; then
-                print_info "Перегенерация конфига и перезапуск сервиса..."
-                create_official_config 2>/dev/null
+                print_info "Перезапуск сервиса..."
                 "$INIT_SCRIPT" restart
                 print_success "Сервис перезапущен"
             fi
