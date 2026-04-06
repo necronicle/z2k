@@ -811,14 +811,27 @@ backup_config() {
 
     print_info "Создание архива..."
 
-    # Создать tar.gz с конфигурацией
-    tar -czf "$backup_file" \
-        -C "$CONFIG_DIR" \
-        strategies.conf \
-        current_strategy \
-        -C "$LISTS_DIR" \
-        custom.txt \
-        2>/dev/null
+    # Собрать список существующих файлов для бэкапа
+    local file_list=""
+    for f in \
+        "${ZAPRET2_DIR}/config" \
+        "${LISTS_DIR}/whitelist.txt" \
+        "${ZAPRET2_DIR}/extra_strats/TCP/YT/Strategy.txt" \
+        "${ZAPRET2_DIR}/extra_strats/TCP/YT_GV/Strategy.txt" \
+        "${ZAPRET2_DIR}/extra_strats/TCP/RKN/Strategy.txt" \
+        "${ZAPRET2_DIR}/extra_strats/UDP/YT/Strategy.txt" \
+        "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" \
+    ; do
+        [ -f "$f" ] && file_list="$file_list $f"
+    done
+
+    if [ -z "$file_list" ]; then
+        print_error "Нет файлов для бэкапа"
+        return 1
+    fi
+
+    # Создать tar.gz
+    tar -czf "$backup_file" $file_list 2>/dev/null
 
     if [ -f "$backup_file" ]; then
         local size
@@ -868,15 +881,8 @@ restore_config() {
             tar -xzf "$latest_backup" -C "$tmpdir" 2>/dev/null
 
             if [ $? -eq 0 ]; then
-                # Move config files to CONFIG_DIR
-                for f in strategies.conf current_strategy; do
-                    [ -f "${tmpdir}/${f}" ] && mv -f "${tmpdir}/${f}" "${CONFIG_DIR}/${f}"
-                done
-                # Move list files to LISTS_DIR
-                mkdir -p "$LISTS_DIR"
-                for f in custom.txt; do
-                    [ -f "${tmpdir}/${f}" ] && mv -f "${tmpdir}/${f}" "${LISTS_DIR}/${f}"
-                done
+                # Архив содержит абсолютные пути — извлекаем поверх /
+                tar -xzf "$latest_backup" -C / 2>/dev/null
                 rm -rf "$tmpdir"
                 print_success "Конфигурация восстановлена"
 
