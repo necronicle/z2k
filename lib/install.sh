@@ -1604,10 +1604,18 @@ step_finalize() {
         esac
         if [ -n "$tg_arch" ]; then
             local tg_url="https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/tg-mtproxy-client-linux-${tg_arch}"
-            if curl -fsSL "$tg_url" -o /opt/sbin/tg-mtproxy-client; then
+            local tg_ok=false
+            if curl -fsSL "$tg_url" -o /opt/sbin/tg-mtproxy-client 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF"; then
+                tg_ok=true
+            fi
+            if ! $tg_ok && command -v wget >/dev/null 2>&1; then
+                wget -q -O /opt/sbin/tg-mtproxy-client "$tg_url" 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF" && tg_ok=true
+            fi
+            if $tg_ok; then
                 chmod +x /opt/sbin/tg-mtproxy-client
                 print_success "Telegram прокси установлен ($tg_arch)"
             else
+                rm -f /opt/sbin/tg-mtproxy-client
                 print_warning "Не удалось скачать Telegram прокси для $tg_arch"
             fi
         else
