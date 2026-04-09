@@ -1604,13 +1604,15 @@ step_finalize() {
         esac
         if [ -n "$tg_arch" ]; then
             local tg_url="https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/tg-mtproxy-client-linux-${tg_arch}"
+            local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
             local tg_ok=false
-            if curl -fsSL "$tg_url" -o /opt/sbin/tg-mtproxy-client 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF"; then
-                tg_ok=true
-            fi
-            if ! $tg_ok && command -v wget >/dev/null 2>&1; then
-                wget -q -O /opt/sbin/tg-mtproxy-client "$tg_url" 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF" && tg_ok=true
-            fi
+            for tg_try_url in \
+                "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/mtproxy-client/builds/${tg_bin}" \
+                "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/builds/${tg_bin}" \
+                "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
+                curl -fsSL "$tg_try_url" -o /opt/sbin/tg-mtproxy-client 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF" && tg_ok=true && break
+                command -v wget >/dev/null 2>&1 && wget -q -O /opt/sbin/tg-mtproxy-client "$tg_try_url" 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF" && tg_ok=true && break
+            done
             if $tg_ok; then
                 chmod +x /opt/sbin/tg-mtproxy-client
                 print_success "Telegram прокси установлен ($tg_arch)"
