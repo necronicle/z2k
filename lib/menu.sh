@@ -462,16 +462,17 @@ menu_update_lists() {
 # ==============================================================================
 
 menu_backup_restore() {
-    clear_screen
-    print_header "[8] Резервная копия/Восстановление"
+    while true; do
+        clear_screen
+        print_header "[4] Резервная копия/Восстановление"
 
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
+        if ! is_zapret2_installed; then
+            print_error "zapret2 не установлен"
+            pause
+            return
+        fi
 
-    cat <<'SUBMENU'
+        cat <<'SUBMENU'
 [1] Создать резервную копию
 [2] Восстановить из резервной копии
 [3] Сбросить конфигурацию
@@ -479,30 +480,31 @@ menu_backup_restore() {
 
 SUBMENU
 
-    printf "Выберите действие: "
-    read_input action
+        printf "Выберите действие: "
+        read_input action
 
-    case "$action" in
-        1)
-            backup_config
-            ;;
-        2)
-            restore_config
-            ;;
-        3)
-            print_warning "Это сбросит всю конфигурацию к значениям по умолчанию!"
-            confirm "Вы уверены?" "N" || { pause; return; }
-            reset_config
-            ;;
-        [Bb])
-            return
-            ;;
-        *)
-            print_error "Неверный выбор"
-            ;;
-    esac
+        case "$action" in
+            1)
+                backup_config
+                ;;
+            2)
+                restore_config
+                ;;
+            3)
+                print_warning "Это сбросит всю конфигурацию к значениям по умолчанию!"
+                confirm "Вы уверены?" "N" || { pause; continue; }
+                reset_config
+                ;;
+            [Bb])
+                return
+                ;;
+            *)
+                print_error "Неверный выбор"
+                ;;
+        esac
 
-    pause
+        pause
+    done
 }
 
 # ==============================================================================
