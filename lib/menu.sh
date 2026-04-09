@@ -80,12 +80,13 @@ MENU
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
+[T] Telegram MTProxy (тестовая функция)
 [S] Скрипты custom.d
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,W,S]: "
+        printf "Выберите опцию [0-5,A,R,F,T,W,S]: "
         read_input choice
 
         case "$choice" in
@@ -112,6 +113,9 @@ MENU
                 ;;
             f|F)
                 menu_rkn_silent_fallback
+                ;;
+            t|T)
+                menu_telegram_mtproxy
                 ;;
             w|W)
                 menu_whitelist
@@ -901,6 +905,126 @@ SUBMENU
             pause
             ;;
     esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: TELEGRAM MTPROXY
+# ==============================================================================
+
+menu_telegram_mtproxy() {
+    local MTPROXY_BIN="/opt/sbin/tg-mtproxy-client"
+    local MTPROXY_PID="/var/run/tg-mtproxy-client.pid"
+    local MTPROXY_PORT="9443"
+
+    while true; do
+        clear_screen
+        print_header "Telegram прокси (тестовая функция)"
+
+        # Check status
+        local running=false
+        if [ -f "$MTPROXY_PID" ] && kill -0 "$(cat $MTPROXY_PID 2>/dev/null)" 2>/dev/null; then
+            running=true
+        elif pgrep -f tg-mtproxy-client >/dev/null 2>&1; then
+            running=true
+        fi
+
+        print_separator
+        if $running; then
+            printf " Статус: Включен\n"
+            printf " Telegram работает автоматически на всех устройствах\n"
+        else
+            printf " Статус: Выключен\n"
+        fi
+        print_separator
+
+        cat <<'SUBMENU'
+
+Обход блокировки Telegram через Cloudflare WebSocket.
+Провайдер видит только HTTPS к Cloudflare CDN.
+Настройка устройств не требуется — работает прозрачно.
+
+[1] Включить
+[2] Выключить
+[B] Назад
+
+SUBMENU
+
+        printf "Выберите опцию [1-2,B]: "
+        read_input sub_choice
+
+        case "$sub_choice" in
+            1)
+                if ! [ -f "$MTPROXY_BIN" ]; then
+                    print_warning "Бинарник не найден, скачиваю..."
+                    local tg_arch=""
+                    case "$(uname -m)" in
+                        aarch64|arm64)  tg_arch="arm64" ;;
+                        armv7*|armv6*)  tg_arch="arm" ;;
+                        mipsel|mipsle)  tg_arch="mipsel" ;;
+                        mips)           tg_arch="mips" ;;
+                        x86_64|amd64)   tg_arch="amd64" ;;
+                        i?86)           tg_arch="x86" ;;
+                        *)              tg_arch="" ;;
+                    esac
+                    if [ -n "$tg_arch" ]; then
+                        if curl -fsSL "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/tg-mtproxy-client-linux-${tg_arch}" \
+                            -o "$MTPROXY_BIN"; then
+                            chmod +x "$MTPROXY_BIN"
+                            print_success "Скачан для $tg_arch"
+                        else
+                            print_error "Не удалось скачать для $tg_arch"
+                            pause
+                            continue
+                        fi
+                    else
+                        print_error "Неизвестная архитектура: $(uname -m)"
+                        pause
+                        continue
+                    fi
+                fi
+
+                # Use init script for proper restart loop
+                if [ -f "/opt/etc/init.d/S97tg-mtproxy" ]; then
+                    /opt/etc/init.d/S97tg-mtproxy restart
+                else
+                    # Fallback: download init script
+                    curl -fsSL "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/S97tg-mtproxy" \
+                        -o /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
+                    chmod +x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
+                    /opt/etc/init.d/S97tg-mtproxy start
+                fi
+                sleep 3
+
+                if pgrep -f tg-mtproxy-client >/dev/null 2>&1; then
+                    print_success "Telegram прокси включен"
+                    print_info "Все устройства — Telegram работает автоматически"
+                else
+                    print_error "Не удалось запустить"
+                    tail -5 /tmp/tg-mtproxy.log 2>/dev/null
+                fi
+                pause
+                ;;
+
+            2)
+                killall tg-mtproxy-client 2>/dev/null
+                rm -f "$MTPROXY_PID"
+                iptables -t nat -D PREROUTING -j TG_TRANSPARENT 2>/dev/null
+                iptables -t nat -F TG_TRANSPARENT 2>/dev/null
+                iptables -t nat -X TG_TRANSPARENT 2>/dev/null
+                print_success "Telegram прокси выключен"
+                pause
+                ;;
+
+            [Bb])
+                return
+                ;;
+
+            *)
+                print_error "Неверный выбор"
+                pause
+                ;;
+        esac
+    done
 }
 
 # ==============================================================================

@@ -523,8 +523,32 @@ step_load_kernel_modules() {
 step_build_zapret2() {
     print_header "Шаг 5/12: Установка zapret2"
 
-    # Удалить старую установку если существует
+    # Сохранить пользовательские данные перед удалением
+    local backup_tmp="/tmp/z2k_upgrade_backup"
+    rm -rf "$backup_tmp"
     if [ -d "$ZAPRET2_DIR" ]; then
+        print_info "Сохранение пользовательских настроек..."
+        mkdir -p "$backup_tmp"
+        # Config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK и др.)
+        [ -f "$ZAPRET2_DIR/config" ] && cp -f "$ZAPRET2_DIR/config" "$backup_tmp/config"
+        # Whitelist (пользовательские исключения)
+        [ -f "$ZAPRET2_DIR/lists/whitelist.txt" ] && cp -f "$ZAPRET2_DIR/lists/whitelist.txt" "$backup_tmp/whitelist.txt"
+        # Autocircular state (найденные рабочие стратегии)
+        [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" ] && \
+            cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv"
+        # Strategy.txt файлы
+        for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
+            local sfile="$ZAPRET2_DIR/extra_strats/$cat_dir/Strategy.txt"
+            if [ -f "$sfile" ]; then
+                mkdir -p "$backup_tmp/strats/$cat_dir"
+                cp -f "$sfile" "$backup_tmp/strats/$cat_dir/Strategy.txt"
+            fi
+        done
+        # Silent fallback flag
+        [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" ] && \
+            touch "$backup_tmp/rkn_silent_fallback.flag"
+        print_success "Настройки сохранены"
+
         print_info "Удаление старой установки..."
         rm -rf "$ZAPRET2_DIR"
         print_success "Старая установка удалена"
@@ -815,6 +839,51 @@ step_build_zapret2() {
         print_success "orchestrator.sh загружен"
     else
         print_warning "Не удалось загрузить orchestrator.sh (circular_locked будет без ротации)"
+    fi
+
+    # ===========================================================================
+    # Восстановление пользовательских данных после переустановки
+    # ===========================================================================
+    if [ -d "$backup_tmp" ]; then
+        print_info "Восстановление пользовательских настроек..."
+
+        # Восстановить config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK)
+        if [ -f "$backup_tmp/config" ]; then
+            cp -f "$backup_tmp/config" "$ZAPRET2_DIR/config"
+            print_success "Конфигурация восстановлена"
+        fi
+
+        # Восстановить whitelist
+        if [ -f "$backup_tmp/whitelist.txt" ]; then
+            mkdir -p "$ZAPRET2_DIR/lists"
+            cp -f "$backup_tmp/whitelist.txt" "$ZAPRET2_DIR/lists/whitelist.txt"
+            print_success "Whitelist восстановлен"
+        fi
+
+        # Восстановить autocircular state (рабочие стратегии)
+        if [ -f "$backup_tmp/state.tsv" ]; then
+            cp -f "$backup_tmp/state.tsv" "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
+            chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
+            print_success "Стратегии autocircular восстановлены"
+        fi
+
+        # Восстановить Strategy.txt файлы
+        for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
+            if [ -f "$backup_tmp/strats/$cat_dir/Strategy.txt" ]; then
+                mkdir -p "$ZAPRET2_DIR/extra_strats/$cat_dir"
+                cp -f "$backup_tmp/strats/$cat_dir/Strategy.txt" "$ZAPRET2_DIR/extra_strats/$cat_dir/Strategy.txt"
+            fi
+        done
+        print_success "Стратегии категорий восстановлены"
+
+        # Восстановить silent fallback flag
+        if [ -f "$backup_tmp/rkn_silent_fallback.flag" ]; then
+            touch "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag"
+            chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null || true
+        fi
+
+        rm -rf "$backup_tmp"
+        print_success "Все пользовательские настройки восстановлены"
     fi
 
     # ===========================================================================
@@ -1492,6 +1561,67 @@ step_finalize() {
     else
         print_warning "Cron демон не найден"
         print_info "Установите: opkg install cron"
+    fi
+
+    # Instagram DNS redirect (Keenetic static DNS)
+    # Прописывает рабочие IP для Instagram если записи ещё не заданы.
+    # Решает проблему DNS-отравления провайдером.
+    if command -v ndmc >/dev/null 2>&1; then
+        if ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host instagram.com"; then
+            print_info "Настройка DNS для Instagram..."
+            ndmc -c "ip host instagram.com 157.240.251.174" 2>/dev/null
+            ndmc -c "ip host www.instagram.com 157.240.9.174" 2>/dev/null
+            ndmc -c "ip host graph.instagram.com 157.240.0.63" 2>/dev/null
+            ndmc -c "ip host api.instagram.com 157.240.253.63" 2>/dev/null
+            ndmc -c "ip host instagram.c10r.instagram.com 157.240.214.63" 2>/dev/null
+            ndmc -c "ip host static.cdninstagram.com 163.70.147.63" 2>/dev/null
+            ndmc -c "ip host scontent.cdninstagram.com 163.70.147.63" 2>/dev/null
+            ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
+            ndmc -c "ip host static.cdninstagram.com 57.144.112.192" 2>/dev/null
+            ndmc -c "ip host scontent.cdninstagram.com 57.144.112.192" 2>/dev/null
+            ndmc -c "system configuration save" 2>/dev/null
+            print_success "DNS записи для Instagram добавлены"
+        else
+            print_info "DNS записи для Instagram уже настроены"
+        fi
+    fi
+
+    # Telegram transparent proxy (tg-mtproxy-client)
+    if true; then
+        print_info "Установка/обновление Telegram прокси..."
+        local tg_arch=""
+        local hw_arch=$(uname -m)
+        case "$hw_arch" in
+            aarch64|arm64)  tg_arch="arm64" ;;
+            armv7*|armv6*)  tg_arch="arm" ;;
+            mipsel|mipsle)  tg_arch="mipsel" ;;
+            mips)           tg_arch="mips" ;;
+            mips64el|mips64le) tg_arch="mips64el" ;;
+            x86_64|amd64)   tg_arch="amd64" ;;
+            i?86)           tg_arch="x86" ;;
+            riscv64)        tg_arch="riscv64" ;;
+            ppc64*)         tg_arch="ppc64" ;;
+        esac
+        if [ -n "$tg_arch" ]; then
+            local tg_url="https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/tg-mtproxy-client-linux-${tg_arch}"
+            if curl -fsSL "$tg_url" -o /opt/sbin/tg-mtproxy-client; then
+                chmod +x /opt/sbin/tg-mtproxy-client
+                print_success "Telegram прокси установлен ($tg_arch)"
+            else
+                print_warning "Не удалось скачать Telegram прокси для $tg_arch"
+            fi
+        else
+            print_warning "Неизвестная архитектура $hw_arch, пропускаем Telegram прокси"
+        fi
+    else
+        print_info "Telegram прокси уже установлен"
+    fi
+
+    # Init script — always update
+    local tg_init_url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}/mtproxy-client/S97tg-mtproxy"
+    if curl -fsSL "$tg_init_url" -o /opt/etc/init.d/S97tg-mtproxy; then
+        chmod +x /opt/etc/init.d/S97tg-mtproxy
+        print_success "Init скрипт Telegram прокси установлен"
     fi
 
     # Показать итоговую информацию

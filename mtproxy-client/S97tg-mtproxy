@@ -1,0 +1,71 @@
+#!/bin/sh
+# Telegram transparent proxy init script with auto-restart
+
+BINARY="/opt/sbin/tg-mtproxy-client"
+PIDFILE="/var/run/tg-mtproxy-client.pid"
+PORT="9443"
+LOGFILE="/tmp/tg-mtproxy.log"
+
+start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE 2>/dev/null)" 2>/dev/null; then
+        echo "tg-mtproxy already running (PID $(cat $PIDFILE))"
+        return 0
+    fi
+
+    [ ! -f "$BINARY" ] && { echo "Binary not found: $BINARY"; return 1; }
+
+    # Setup iptables
+    iptables -t nat -N TG_TRANSPARENT 2>/dev/null || iptables -t nat -F TG_TRANSPARENT
+    iptables -t nat -D PREROUTING -j TG_TRANSPARENT 2>/dev/null
+    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
+                91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 95.161.64.0/20 \
+                91.105.192.0/23 185.76.151.0/24; do
+        iptables -t nat -A TG_TRANSPARENT -d "$cidr" -p tcp -j REDIRECT --to-ports $PORT
+    done
+    iptables -t nat -I PREROUTING -j TG_TRANSPARENT
+
+    # Start with auto-restart loop
+    _run_loop &
+    echo $! > "$PIDFILE"
+    echo "tg-mtproxy started (PID $!)"
+}
+
+_run_loop() {
+    while true; do
+        "$BINARY" --transparent --listen ":$PORT" >> "$LOGFILE" 2>&1
+        EXIT_CODE=$?
+        echo "$(date '+%Y/%m/%d %H:%M:%S') [crash] process exited with code $EXIT_CODE, restarting..." >> "$LOGFILE"
+        iptables -t nat -D PREROUTING -j TG_TRANSPARENT 2>/dev/null
+        iptables -t nat -F TG_TRANSPARENT 2>/dev/null
+        sleep 1
+        # Re-add rules
+        for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
+                    91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 95.161.64.0/20 \
+                    91.105.192.0/23 185.76.151.0/24; do
+            iptables -t nat -A TG_TRANSPARENT -d "$cidr" -p tcp -j REDIRECT --to-ports $PORT
+        done
+        iptables -t nat -I PREROUTING -j TG_TRANSPARENT
+        sleep 1
+    done
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat $PIDFILE)" 2>/dev/null
+    fi
+    killall tg-mtproxy-client 2>/dev/null
+    rm -f "$PIDFILE"
+    iptables -t nat -D PREROUTING -j TG_TRANSPARENT 2>/dev/null
+    iptables -t nat -F TG_TRANSPARENT 2>/dev/null
+    iptables -t nat -X TG_TRANSPARENT 2>/dev/null
+    # Flush conntrack to force clients to reconnect immediately
+    conntrack -F 2>/dev/null
+    echo "tg-mtproxy stopped"
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart}" ;;
+esac

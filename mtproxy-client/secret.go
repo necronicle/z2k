@@ -3,34 +3,35 @@ package main
 import (
 	"encoding/hex"
 	"fmt"
+
+	"github.com/gotd/td/mtproxy"
 )
 
-// ProxySecret holds parsed MTProxy FakeTLS secret (ee-prefixed).
-type ProxySecret struct {
-	Tag    byte   // protocol tag (0xdd = PaddedIntermediate)
-	Secret []byte // 16-byte crypto secret
-	SNI    string // disguise domain (e.g. "s3.amazonaws.com")
-}
-
 // ParseSecret decodes an ee-prefixed hex secret string.
-// Format: "ee" + 1 byte tag + 16 bytes secret + N bytes SNI domain (ASCII).
-func ParseSecret(hexStr string) (*ProxySecret, error) {
+// Format (tdesktop-compatible): ee + tag(1) + secret(16) + sni(rest)
+// Tag byte may not match standard codec tags — we force PaddedIntermediate.
+func ParseSecret(hexStr string) (mtproxy.Secret, error) {
 	if len(hexStr) < 4 || hexStr[:2] != "ee" {
-		return nil, fmt.Errorf("secret must start with 'ee' (FakeTLS mode)")
+		return mtproxy.Secret{}, fmt.Errorf("secret must start with 'ee' (FakeTLS mode)")
 	}
 
 	raw, err := hex.DecodeString(hexStr[2:])
 	if err != nil {
-		return nil, fmt.Errorf("invalid hex in secret: %w", err)
+		return mtproxy.Secret{}, fmt.Errorf("invalid hex: %w", err)
 	}
 
 	if len(raw) < 17 {
-		return nil, fmt.Errorf("secret too short: need at least 17 bytes, got %d", len(raw))
+		return mtproxy.Secret{}, fmt.Errorf("secret too short: need 1+16+sni bytes, got %d", len(raw))
 	}
 
-	return &ProxySecret{
-		Tag:    raw[0],
-		Secret: raw[1:17],
-		SNI:    string(raw[17:]),
+	// mtg format (confirmed working with mtproto.ru servers):
+	// raw[0:16] = secret key (includes tag byte as part of key)
+	// raw[16:] = SNI domain
+	// Force PaddedIntermediate (0xdd) as protocol tag.
+	return mtproxy.Secret{
+		Secret:    raw[0:16],
+		Tag:       0xdd,
+		CloakHost: string(raw[16:]),
+		Type:      mtproxy.TLS,
 	}, nil
 }
