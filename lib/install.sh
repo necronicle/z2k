@@ -795,11 +795,13 @@ step_build_zapret2() {
         find "${ZAPRET2_DIR}" -name "*.txt" -path "*/extra_strats/*" -exec sed -i 's/\r$//' {} + 2>/dev/null || true
     fi
 
-    # Copy Roblox IP list
-    if [ -f "${WORK_DIR}/files/lists/roblox_ips.txt" ]; then
-        mkdir -p "${ZAPRET2_DIR}/lists"
-        cp -f "${WORK_DIR}/files/lists/roblox_ips.txt" "${ZAPRET2_DIR}/lists/roblox_ips.txt" 2>/dev/null || true
-    fi
+    # Copy IP lists (Roblox, Telegram)
+    mkdir -p "${ZAPRET2_DIR}/lists"
+    for iplist in roblox_ips.txt telegram_ips.txt; do
+        if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
+            cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
+        fi
+    done
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then

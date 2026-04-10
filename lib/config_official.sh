@@ -352,12 +352,25 @@ AUSTERUS_OPT
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # Roblox UDP (custom protocol, blocked by IP)
+    # Telegram DPI bypass (nfqws2 desync on TLS handshake to DC IPs)
+    # Instead of proxying ALL traffic through WebSocket (slow), we modify
+    # only the TLS ClientHello — traffic goes directly to Telegram DC.
+    local tg_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
+    local TG_DPI_BYPASS
+    TG_DPI_BYPASS=$(safe_config_read "TG_DPI_BYPASS" "$tg_conf" "0")
+    if [ "$TG_DPI_BYPASS" = "1" ] && [ -f "${lists_dir}/telegram_ips.txt" ]; then
+        # TCP/443: TLS ClientHello desync to Telegram DC IPs
+        # 6 autocircular strategies: fake+split variants proven effective against TSPU
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443 --filter-l7=tls --ipset=${lists_dir}/telegram_ips.txt --out-range=-s34228 --lua-desync=circular:fails=2:time=60:reset:key=tg_tcp:nld=2:failure_detector=z2k_tls_alert_fatal --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:badsum:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=8:badsum:tls_mod=rnd,dupsid,sni=www.google.com:strategy=2 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=2 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:badsum:tls_mod=rnd,dupsid,sni=www.google.com:strategy=4 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=1,midsld:strategy=4 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=www.google.com:badseq:badsum:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=6 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:strategy=6 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=6 --new\\n"
+        print_info "Telegram DPI bypass: nfqws2 desync on DC IPs (fast, direct connection)"
+    fi
+
+    # Roblox UDP (custom protocol on ephemeral ports, blocked by IP)
     local roblox_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local ROBLOX_UDP_BYPASS
     ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$roblox_conf" "0")
     if [ "$ROBLOX_UDP_BYPASS" = "1" ] && [ -f "${lists_dir}/roblox_ips.txt" ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/roblox_ips.txt --out-range=-n2 --lua-desync=fake:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=49152-65535 --filter-l7=unknown --ipset=${lists_dir}/roblox_ips.txt --out-range=-n2 --payload=all --lua-desync=fake:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
@@ -526,7 +539,7 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_ROBLOX_UDP_BYPASS:+$([ "$saved_ROBLOX_UDP_BYPASS" = "1" ] && echo ',1024-65535')}"
+NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_ROBLOX_UDP_BYPASS:+$([ "$saved_ROBLOX_UDP_BYPASS" = "1" ] && echo ',49152-65535')}"
 
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges
