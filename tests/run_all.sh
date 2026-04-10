@@ -21,12 +21,17 @@ for test_file in "$TESTS_DIR"/test_*.sh; do
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
 
     printf ">>> Running %s ...\n" "$suite_name"
-    printf "----------------------------------------------------\n"
+    printf '%s\n' "----------------------------------------------------"
 
     output=$(sh "$test_file" 2>&1)
     rc=$?
 
-    printf "%s\n" "$output"
+    # Use heredoc to safely print output that may start with dashes
+    if [ -n "$output" ]; then
+        cat <<Z2KOUT
+$output
+Z2KOUT
+    fi
 
     # Extract passed/failed counts from the output
     suite_passed=$(printf '%s' "$output" | grep -c '^\[PASS\]')

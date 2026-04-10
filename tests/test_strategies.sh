@@ -138,7 +138,7 @@ EMPTY_RC=$?
 # return 1, BUT due to pipe/subshell the exit code may not propagate.
 # Actual behavior: returns 0 (pipe subshell swallows the error).
 # We verify that the output file contains zero numbered lines instead.
-EMPTY_COUNT=$(grep -c '^[0-9]' "$EMPTY_OUTPUT" 2>/dev/null || echo "0")
+EMPTY_COUNT=$(grep '^[0-9]' "$EMPTY_OUTPUT" 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "generate: empty file produces 0 strategies" "0" "$EMPTY_COUNT"
 
 # ==============================================================================
