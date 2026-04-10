@@ -20,12 +20,14 @@ globals = {
     "z2k_ipfrag3_tiny",
     "cond_tcp_has_ts",
     "circular",
+    -- nfqws2 writable state/functions (set by fallback stubs or runtime)
+    "DLOG",
+    "DLOG_ERR",
+    "autostate",
 }
 
 read_globals = {
-    -- nfqws2 core functions
-    "DLOG",
-    "DLOG_ERR",
+    -- nfqws2 core functions (may be set by fallback stubs)
     "deepcopy",
     "l3_len",
     "l3_base_len",
@@ -62,8 +64,7 @@ read_globals = {
     "sld_hostkey",
     "tld_hostkey",
 
-    -- nfqws2 state
-    "autostate",
+    -- nfqws2 time
     "clock_getfloattime",
 
     -- nfqws2 constants
@@ -90,5 +91,10 @@ read_globals = {
     "bitlshift",
 }
 
--- Ignore unused loop variables (common pattern in eviction functions)
-ignore = {"21./_.*", "213"}
+-- Ignore unused loop variables and common nfqws2 patterns
+ignore = {
+    "21./_.*",  -- unused _ variables
+    "213",      -- unused loop variable
+    "212",      -- unused argument (ctx in desync actions)
+    "311",      -- unused assigned variable (common in multi-return)
+}

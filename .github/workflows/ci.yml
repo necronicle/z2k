@@ -52,7 +52,7 @@ jobs:
             "linux/arm"
             "linux/amd64"
             "linux/mips"
-            "linux/mipsel"
+            "linux/mipsle"
             "linux/mips64le"
           )
           for target in "${targets[@]}"; do
