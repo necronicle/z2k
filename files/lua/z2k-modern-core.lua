@@ -18,6 +18,10 @@ do
     math.randomseed(seed)
 end
 
+-- Fallback stubs for nfqws2 runtime globals (prevents crash if loaded standalone)
+if type(DLOG) ~= "function" then DLOG = function() end end
+if type(DLOG_ERR) ~= "function" then DLOG_ERR = function() end end
+
 local function z2k_num(v, fallback)
     local n = tonumber(v)
     if n == nil then return fallback end

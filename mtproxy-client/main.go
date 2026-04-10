@@ -412,8 +412,11 @@ func handleConnection(ctx context.Context, clientConn *net.TCPConn, secret []byt
 				return
 			default:
 			}
-			_, msg, err := ws.ReadMessage()
-			if err != nil {
+			_, msg, rerr := ws.ReadMessage()
+			if rerr != nil {
+				if *verbose && websocket.IsUnexpectedCloseError(rerr, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+					log.Printf("[debug] WS read error: %v", rerr)
+				}
 				break
 			}
 			if len(msg) > 0 {
