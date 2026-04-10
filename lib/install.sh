@@ -509,7 +509,7 @@ step_load_kernel_modules() {
 
     # Load ip_set_bitmap_port from system modules (Entware modprobe cannot find it)
     if ! lsmod | grep -q "ip_set_bitmap_port"; then
-        insmod /lib/modules/$(uname -r)/ip_set_bitmap_port.ko 2>/dev/null || true
+        insmod "/lib/modules/$(uname -r)/ip_set_bitmap_port.ko" 2>/dev/null || true
     fi
 
     print_success "Модули ядра загружены"
@@ -1016,19 +1016,22 @@ ${ZAPRET2_DIR}/binaries
 
     # Lua файлы
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
-        local lua_count=$(find "${ZAPRET2_DIR}/lua" -name "*.lua" 2>/dev/null | wc -l)
+        local lua_count
+        lua_count=$(find "${ZAPRET2_DIR}/lua" -name "*.lua" 2>/dev/null | wc -l)
         print_info "  - Lua файлов: $lua_count"
     fi
 
     # Fake файлы
     if [ -d "${ZAPRET2_DIR}/files/fake" ]; then
-        local fake_count=$(find "${ZAPRET2_DIR}/files/fake" -name "*.bin" 2>/dev/null | wc -l)
+        local fake_count
+        fake_count=$(find "${ZAPRET2_DIR}/files/fake" -name "*.bin" 2>/dev/null | wc -l)
         print_info "  - Fake файлов: $fake_count"
     fi
 
     # Модули common/
     if [ -d "${ZAPRET2_DIR}/common" ]; then
-        local common_count=$(find "${ZAPRET2_DIR}/common" -name "*.sh" 2>/dev/null | wc -l)
+        local common_count
+        common_count=$(find "${ZAPRET2_DIR}/common" -name "*.sh" 2>/dev/null | wc -l)
         print_info "  - Модули common/: $common_count"
     fi
 
@@ -1601,7 +1604,8 @@ step_finalize() {
     if true; then
         print_info "Установка/обновление Telegram прокси..."
         local tg_arch=""
-        local hw_arch=$(uname -m)
+        local hw_arch
+        hw_arch=$(uname -m)
         case "$hw_arch" in
             aarch64|arm64)  tg_arch="arm64" ;;
             armv7*|armv6*)  tg_arch="arm" ;;
@@ -1624,7 +1628,8 @@ step_finalize() {
                 curl -fsSL --connect-timeout 10 --max-time 120 "$tg_try_url" -o "$tg_dest" 2>/dev/null
                 if [ -f "$tg_dest" ] && [ "$(head -c 4 "$tg_dest" | hexdump -n 4 -e '"%02x"' 2>/dev/null || head -c 4 "$tg_dest" | od -x | head -1 | awk '{print $2}')" != "" ] && [ -s "$tg_dest" ]; then
                     # Check file size > 100KB (valid binary, not HTML page)
-                    local tg_size=$(wc -c < "$tg_dest" 2>/dev/null)
+                    local tg_size
+                    tg_size=$(wc -c < "$tg_dest" 2>/dev/null)
                     if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
                         tg_ok=true
                         break

@@ -64,7 +64,8 @@ _log() {
     local level="$1"
     shift
     local msg="$*"
-    local line="$(_ts) [$level] $msg"
+    local line
+    line="$(_ts) [$level] $msg"
 
     # В файл лога
     if [ -w "$(dirname "$LOG_FILE")" ] || [ -w "$LOG_FILE" ]; then

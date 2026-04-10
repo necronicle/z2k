@@ -398,7 +398,8 @@ create_official_config() {
     mkdir -p "$(dirname "$config_file")"
 
     # Генерировать NFQWS2_OPT
-    local nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies)
+    local nfqws2_opt_section
+    nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies)
 
     # =========================================================================
     # ВАЛИДАЦИЯ NFQWS2 ОПЦИЙ (ВАЖНО)
@@ -406,7 +407,8 @@ create_official_config() {
     print_info "Валидация сгенерированных опций nfqws2..."
 
     # Извлечь NFQWS2_OPT из сгенерированной секции (многострочный heredoc между кавычками)
-    local nfqws2_opt_value=$(echo "$nfqws2_opt_section" | sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }')
+    local nfqws2_opt_value
+    nfqws2_opt_value=$(echo "$nfqws2_opt_section" | sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }')
 
     # Загрузить модули для dry_run_nfqws()
     if [ -f "/opt/zapret2/common/base.sh" ]; then
@@ -680,7 +682,8 @@ update_nfqws2_opt_in_config() {
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
 
     # Генерировать новый NFQWS2_OPT
-    local nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies)
+    local nfqws2_opt_section
+    nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies)
 
     # Создать временный файл
     local temp_file="${config_file}.tmp"

@@ -393,7 +393,7 @@ clear_custom_domains() {
 
     case "$answer" in
         [Yy]|[Yy][Ee][Ss])
-            > "$custom_list"
+            : > "$custom_list"
             print_success "Список очищен"
             ;;
         *)
@@ -764,7 +764,7 @@ reset_config() {
 
             # Очистить custom.txt
             if [ -f "${LISTS_DIR}/custom.txt" ]; then
-                > "${LISTS_DIR}/custom.txt"
+                : > "${LISTS_DIR}/custom.txt"
                 print_info "Очищен список пользовательских доменов"
             fi
 

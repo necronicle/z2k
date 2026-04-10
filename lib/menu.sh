@@ -1,6 +1,7 @@
 #!/bin/sh
 # lib/menu.sh - Интерактивное меню управления z2k
 # 9 опций для полного управления zapret2
+# shellcheck disable=SC2154  # Variables assigned via read_input function
 
 # ==============================================================================
 # ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ЧТЕНИЯ ВВОДА
@@ -1234,7 +1235,8 @@ SUBMENU
                             "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
                             curl -fsSL "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
                             if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
-                                local tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
+                                local tg_size
+                                tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
                                 if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
                                     tg_ok=true
                                     break

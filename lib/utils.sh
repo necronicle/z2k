@@ -352,7 +352,8 @@ download_file_verified() {
 # Создать резервную копию файла
 backup_file() {
     local file=$1
-    local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
+    local backup
+    backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
     local max_backups=5  # Хранить только последние 5 бэкапов
 
     if [ -f "$file" ]; then

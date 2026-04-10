@@ -601,7 +601,7 @@ apply_strategy_safe() {
     if [ "$score" -lt 3 ]; then
         print_warning "Стратегия работает плохо (оценка: $score/5)"
         printf "Применить всё равно? [y/N]: "
-        read -r answer </dev/tty </dev/tty
+        read -r answer </dev/tty
 
         case "$answer" in
             [Yy]|[Yy][Ee][Ss])
@@ -709,8 +709,8 @@ generate_gv_domain() {
         if command -v cut >/dev/null 2>&1; then
             char=$(echo "$cluster_codename" | cut -c$((i+1)))
         else
-            # Fallback для систем без cut
-            char="${cluster_codename:$i:1}"
+            # Fallback для систем без cut (POSIX-compatible)
+            char=$(printf '%s' "$cluster_codename" | dd bs=1 skip="$i" count=1 2>/dev/null)
         fi
 
         # Найти индекс в map_a
@@ -1129,21 +1129,24 @@ auto_test_all_categories_v2() {
     strategies_list=$(get_all_strategies_list)
     auto_test_youtube_tcp "$strategies_list" > "$result_file_tcp"
     local yt_tcp_result=$?
-    local yt_tcp_strategy=$(tail -1 "$result_file_tcp" 2>/dev/null | tr -d '\n' || echo "1")
+    local yt_tcp_strategy
+    yt_tcp_strategy=$(tail -1 "$result_file_tcp" 2>/dev/null | tr -d '\n' || echo "1")
 
     printf "\n"
     print_separator
     print_info "Тестирование YouTube GV..."
     auto_test_youtube_gv "$strategies_list" > "$result_file_gv"
     local yt_gv_result=$?
-    local yt_gv_strategy=$(tail -1 "$result_file_gv" 2>/dev/null | tr -d '\n' || echo "1")
+    local yt_gv_strategy
+    yt_gv_strategy=$(tail -1 "$result_file_gv" 2>/dev/null | tr -d '\n' || echo "1")
 
     printf "\n"
     print_separator
     print_info "Тестирование RKN..."
     auto_test_rkn "$strategies_list" > "$result_file_rkn"
     local rkn_result=$?
-    local rkn_strategy=$(tail -1 "$result_file_rkn" 2>/dev/null | tr -d '\n' || echo "1")
+    local rkn_strategy
+    rkn_strategy=$(tail -1 "$result_file_rkn" 2>/dev/null | tr -d '\n' || echo "1")
 
     # Очистить временные файлы
     rm -f "$result_file_tcp" "$result_file_gv" "$result_file_rkn"
@@ -1256,7 +1259,7 @@ test_strategy_range() {
 
     if [ "$best_strategy" -ne 0 ]; then
         printf "\nПрименить стратегию #%s? [Y/n]: " "$best_strategy"
-        read -r answer </dev/tty </dev/tty
+        read -r answer </dev/tty
 
         case "$answer" in
             [Nn]|[Nn][Oo])

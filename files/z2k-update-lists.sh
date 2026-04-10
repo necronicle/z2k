@@ -19,7 +19,8 @@ CURL_OPTS="--connect-timeout 10 --max-time 60 -fsSL"
 # ==============================================================================
 
 log_msg() {
-    local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    local msg
+    msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
     echo "$msg" >> "$LOG_FILE" 2>/dev/null
 
     # Ротация лога
