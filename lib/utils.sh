@@ -7,7 +7,7 @@
 # ==============================================================================
 
 # Версия z2k
-Z2K_VERSION="2.0.0"
+Z2K_VERSION="2.0.1"
 
 # Пути установки
 ZAPRET2_DIR="/opt/zapret2"
@@ -136,7 +136,7 @@ map_arch_to_bin_arch() {
         armv7l|armv6l|arm|*armv7*|*armv6*|arm*) echo "linux-arm" ;;
         x86_64|amd64|*x86_64*|*amd64*) echo "linux-x86_64" ;;
         i386|i486|i586|i686|x86) echo "linux-x86" ;;
-        *mipsel64*|*mips64el*) echo "linux-mipsel64" ;;
+        *mipsel64*|*mips64el*) echo "linux-mipsel" ;;
         *mips64*) echo "linux-mips64" ;;
         *mipsel*) echo "linux-mipsel" ;;
         *mips*) echo "linux-mips" ;;
@@ -263,6 +263,31 @@ get_current_strategy() {
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==============================================================================
 
+# Безопасное чтение значения из config файла (без eval)
+# Использование: val=$(safe_config_read "KEY" "/path/to/config")
+safe_config_read() {
+    local key=$1
+    local file=$2
+    local default=${3:-""}
+
+    if [ ! -f "$file" ]; then
+        echo "$default"
+        return 0
+    fi
+
+    local raw
+    raw=$(grep "^${key}=" "$file" 2>/dev/null | head -1)
+    if [ -z "$raw" ]; then
+        echo "$default"
+        return 0
+    fi
+
+    # Извлечь значение после первого '=', удалить кавычки и пробелы
+    local val
+    val=$(printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')
+    echo "$val"
+}
+
 # Скачать файл с проверкой
 download_file() {
     local url=$1
@@ -271,13 +296,58 @@ download_file() {
 
     print_info "$description..."
 
-    if curl -fsSL "$url" -o "$output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
         print_success "Загружено: $output"
         return 0
     else
         print_error "Ошибка загрузки: $url"
         return 1
     fi
+}
+
+# Скачать файл с проверкой контрольной суммы (SHA256)
+# Использование: download_file_verified URL OUTPUT EXPECTED_SHA256 [DESCRIPTION]
+download_file_verified() {
+    local url=$1
+    local output=$2
+    local expected_sha256=$3
+    local description=${4:-"Загрузка файла"}
+
+    print_info "$description..."
+
+    if ! curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        print_error "Ошибка загрузки: $url"
+        return 1
+    fi
+
+    # Если SHA256 не указан, пропустить проверку
+    if [ -z "$expected_sha256" ] || [ "$expected_sha256" = "-" ]; then
+        print_success "Загружено (без верификации): $output"
+        return 0
+    fi
+
+    # Проверить контрольную сумму
+    local actual_sha256
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual_sha256=$(sha256sum "$output" | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+        actual_sha256=$(openssl dgst -sha256 "$output" | awk '{print $NF}')
+    else
+        print_warning "sha256sum/openssl не найден, проверка пропущена"
+        return 0
+    fi
+
+    if [ "$actual_sha256" != "$expected_sha256" ]; then
+        print_error "ВНИМАНИЕ: контрольная сумма не совпадает!"
+        print_error "  Ожидалось: $expected_sha256"
+        print_error "  Получено:  $actual_sha256"
+        print_error "Файл мог быть подменён (MITM-атака)!"
+        rm -f "$output"
+        return 1
+    fi
+
+    print_success "Загружено и верифицировано: $output"
+    return 0
 }
 
 # Создать резервную копию файла

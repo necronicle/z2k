@@ -3,7 +3,20 @@
 -- 1) custom 3-fragment IP fragmenters (with optional overlap)
 -- 2) TLS ClientHello extension-order morphing (fingerprint drift)
 
-math.randomseed(os.time() or 0)
+-- Seed PRNG with better entropy when available
+do
+    local seed = os.time() or 0
+    local f = io.open("/dev/urandom", "rb")
+    if f then
+        local bytes = f:read(4)
+        f:close()
+        if bytes and #bytes == 4 then
+            seed = seed + bytes:byte(1) + bytes:byte(2) * 256 +
+                   bytes:byte(3) * 65536 + bytes:byte(4) * 16777216
+        end
+    end
+    math.randomseed(seed)
+end
 
 local function z2k_num(v, fallback)
     local n = tonumber(v)

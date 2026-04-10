@@ -40,7 +40,20 @@ local debug_refresh_interval = 5 -- seconds
 local rkn_silent_enabled = false
 local rkn_silent_checked_at = 0
 
-math.randomseed(os.time() or 0)
+-- Seed PRNG with better entropy when available
+do
+    local seed = os.time() or 0
+    local f = io.open("/dev/urandom", "rb")
+    if f then
+        local bytes = f:read(4)
+        f:close()
+        if bytes and #bytes == 4 then
+            seed = seed + bytes:byte(1) + bytes:byte(2) * 256 +
+                   bytes:byte(3) * 65536 + bytes:byte(4) * 16777216
+        end
+    end
+    math.randomseed(seed)
+end
 
 local policy_enabled = false
 local policy_epsilon = 0.15

@@ -304,10 +304,8 @@ AUSTERUS_OPT
     # failure_detection включает в себя manual_layout (--in-range + payload),
     # поэтому они взаимоисключающие, не накладываются.
     local rkn_silent_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local RKN_SILENT_FALLBACK=0
-    if [ -f "$rkn_silent_conf" ]; then
-        eval "$(grep '^RKN_SILENT_FALLBACK=' "$rkn_silent_conf" 2>/dev/null)"
-    fi
+    local RKN_SILENT_FALLBACK
+    RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rkn_silent_conf" "0")
     local rkn_silent_flag="${extra_strats_dir}/cache/autocircular/rkn_silent_fallback.flag"
     if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
         rkn_tcp=$(ensure_youtube_tls_failure_detection "$rkn_tcp")
@@ -356,10 +354,8 @@ AUSTERUS_OPT
 
     # Roblox UDP (custom protocol, blocked by IP)
     local roblox_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local ROBLOX_UDP_BYPASS=0
-    if [ -f "$roblox_conf" ]; then
-        eval "$(grep '^ROBLOX_UDP_BYPASS=' "$roblox_conf" 2>/dev/null)"
-    fi
+    local ROBLOX_UDP_BYPASS
+    ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$roblox_conf" "0")
     if [ "$ROBLOX_UDP_BYPASS" = "1" ] && [ -f "${lists_dir}/roblox_ips.txt" ]; then
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/roblox_ips.txt --out-range=-n2 --lua-desync=fake:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
     fi
@@ -490,12 +486,9 @@ create_official_config() {
     local saved_RKN_SILENT_FALLBACK="0"
     local saved_ROBLOX_UDP_BYPASS="0"
     if [ -f "$config_file" ]; then
-        eval "$(grep '^DROP_DPI_RST=' "$config_file" 2>/dev/null)"
-        saved_DROP_DPI_RST="${DROP_DPI_RST:-0}"
-        eval "$(grep '^RKN_SILENT_FALLBACK=' "$config_file" 2>/dev/null)"
-        saved_RKN_SILENT_FALLBACK="${RKN_SILENT_FALLBACK:-0}"
-        eval "$(grep '^ROBLOX_UDP_BYPASS=' "$config_file" 2>/dev/null)"
-        saved_ROBLOX_UDP_BYPASS="${ROBLOX_UDP_BYPASS:-0}"
+        saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
+        saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
+        saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
     fi
 
     # Создать полный config файл

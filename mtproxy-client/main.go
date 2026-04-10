@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -11,24 +12,30 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
-	mrand "math/rand"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 var (
-	listenAddr   = flag.String("listen", ":1443", "Local listen address")
-	secretHex    = flag.String("secret", "", "Proxy secret (dd-prefixed hex, auto-generated if empty)")
-	transparent  = flag.Bool("transparent", false, "Transparent mode: redirect Telegram DC traffic via iptables (no client config needed)")
-	verbose      = flag.Bool("v", false, "Verbose logging")
+	listenAddr  = flag.String("listen", ":1443", "Local listen address")
+	secretHex   = flag.String("secret", "", "Proxy secret (dd-prefixed hex, auto-generated if empty)")
+	transparent = flag.Bool("transparent", false, "Transparent mode: redirect Telegram DC traffic via iptables (no client config needed)")
+	verbose     = flag.Bool("v", false, "Verbose logging")
+	connTimeout = flag.Duration("timeout", 5*time.Minute, "Idle connection timeout")
+	maxConns    = flag.Int("max-conns", 1024, "Maximum concurrent connections")
 )
 
 const handshakeLen = 64
+
+// connSemaphore limits concurrent connections
+var connSemaphore chan struct{}
 
 // DC WebSocket domains
 func wsDomains(dc int, isMedia bool) []string {
@@ -68,7 +75,10 @@ func tryHandshake(header []byte, secret []byte) (dc int, isMedia bool, protoTag 
 	decIV = rawIV
 
 	// Decrypt entire header to read protocol tag and DC
-	block, _ := aes.NewCipher(decKey)
+	block, cipherErr := aes.NewCipher(decKey)
+	if cipherErr != nil {
+		return 0, false, 0, nil, nil, nil, nil, fmt.Errorf("aes.NewCipher(decKey): %w", cipherErr)
+	}
 	stream := cipher.NewCTR(block, decIV)
 	decrypted := make([]byte, handshakeLen)
 	stream.XORKeyStream(decrypted, header)
@@ -143,7 +153,10 @@ func generateRelayInit(protoTag uint32, dcIdx int) (header []byte, relayEncKey, 
 	relayDecIV = reversed[32:48]
 
 	// Write protocol tag and DC, encrypt with AES-CTR
-	block, _ := aes.NewCipher(relayEncKey)
+	block, cipherErr := aes.NewCipher(relayEncKey)
+	if cipherErr != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("aes.NewCipher(relayEncKey): %w", cipherErr)
+	}
 	encStream := cipher.NewCTR(block, relayEncIV)
 	encrypted := make([]byte, handshakeLen)
 	encStream.XORKeyStream(encrypted, header)
@@ -180,7 +193,9 @@ func connectWS(dc int, isMedia bool) (*websocket.Conn, error) {
 	domains := wsDomains(dc, isMedia)
 
 	// Try direct WS first, then Cloudflare proxy fallback
-	allDomains := append(domains, fmt.Sprintf("kws%d.pclead.co.uk", dc))
+	allDomains := make([]string, 0, len(domains)+1)
+	allDomains = append(allDomains, domains...)
+	allDomains = append(allDomains, fmt.Sprintf("kws%d.pclead.co.uk", dc))
 
 	for _, domain := range allDomains {
 		ip, err := resolveIPv4(domain)
@@ -213,6 +228,8 @@ func connectWS(dc int, isMedia bool) (*websocket.Conn, error) {
 			}
 			continue
 		}
+		// Set read limit to prevent memory exhaustion
+		ws.SetReadLimit(1 * 1024 * 1024) // 1MB max message
 		if *verbose {
 			log.Printf("[debug] WS connected to %s (%s)", domain, ip)
 		}
@@ -221,8 +238,37 @@ func connectWS(dc int, isMedia bool) (*websocket.Conn, error) {
 	return nil, fmt.Errorf("all WS domains failed for DC%d", dc)
 }
 
-func handleConnection(clientConn *net.TCPConn, secret []byte) {
+// wsWriter serializes all writes to a WebSocket connection.
+// gorilla/websocket supports only one concurrent writer.
+type wsWriter struct {
+	ws *websocket.Conn
+	mu sync.Mutex
+}
+
+func (w *wsWriter) WriteMessage(messageType int, data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.ws.WriteMessage(messageType, data)
+}
+
+func (w *wsWriter) WriteControl(messageType int, data []byte, deadline time.Time) error {
+	// WriteControl is documented as thread-safe in gorilla/websocket,
+	// but we serialize anyway for safety
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.ws.WriteControl(messageType, data, deadline)
+}
+
+func handleConnection(ctx context.Context, clientConn *net.TCPConn, secret []byte) {
 	defer clientConn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[panic] %s: %v", clientConn.RemoteAddr(), r)
+		}
+	}()
+
+	// Set initial deadline for handshake
+	clientConn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	// Read client obfuscated2 header
 	header := make([]byte, handshakeLen)
@@ -267,37 +313,57 @@ func handleConnection(clientConn *net.TCPConn, secret []byte) {
 	}
 	defer ws.Close()
 
+	writer := &wsWriter{ws: ws}
+
 	// Send relay init header as first WS message
-	if err := ws.WriteMessage(websocket.BinaryMessage, relayInit); err != nil {
+	if err := writer.WriteMessage(websocket.BinaryMessage, relayInit); err != nil {
 		log.Printf("[error] WS write init: %v", err)
 		return
 	}
 
 	// Create AES-CTR streams
-	// Client decrypt: decrypt what client sends (client encrypted with SHA256(key+secret))
-	cltDecBlock, _ := aes.NewCipher(cltDecKey)
+	cltDecBlock, err := aes.NewCipher(cltDecKey)
+	if err != nil {
+		log.Printf("[error] aes.NewCipher(cltDecKey): %v", err)
+		return
+	}
 	cltDecStream := cipher.NewCTR(cltDecBlock, cltDecIV)
 	// Advance past the 64-byte header
 	skip := make([]byte, handshakeLen)
 	cltDecStream.XORKeyStream(skip, skip)
 
-	// Client encrypt: encrypt data we send back to client
-	cltEncBlock, _ := aes.NewCipher(cltEncKey)
+	cltEncBlock, err := aes.NewCipher(cltEncKey)
+	if err != nil {
+		log.Printf("[error] aes.NewCipher(cltEncKey): %v", err)
+		return
+	}
 	cltEncStream := cipher.NewCTR(cltEncBlock, cltEncIV)
 
-	// Relay encrypt: encrypt data for Telegram DC
-	relayEncBlock, _ := aes.NewCipher(relayEncKey)
+	relayEncBlock, err := aes.NewCipher(relayEncKey)
+	if err != nil {
+		log.Printf("[error] aes.NewCipher(relayEncKey): %v", err)
+		return
+	}
 	relayEncStream := cipher.NewCTR(relayEncBlock, relayEncIV)
-	// Advance past header
 	relayEncStream.XORKeyStream(make([]byte, handshakeLen), make([]byte, handshakeLen))
 
-	// Relay decrypt: decrypt data from Telegram DC
-	relayDecBlock, _ := aes.NewCipher(relayDecKey)
+	relayDecBlock, err := aes.NewCipher(relayDecKey)
+	if err != nil {
+		log.Printf("[error] aes.NewCipher(relayDecKey): %v", err)
+		return
+	}
 	relayDecStream := cipher.NewCTR(relayDecBlock, relayDecIV)
 
 	if *verbose {
 		log.Printf("[relay] %s <-> WS DC%d%s", clientConn.RemoteAddr(), dc, mediaTag)
 	}
+
+	// Reset deadline for data transfer
+	clientConn.SetDeadline(time.Now().Add(*connTimeout))
+
+	// Create cancellable context for this connection
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -306,15 +372,23 @@ func handleConnection(clientConn *net.TCPConn, secret []byte) {
 	// client → WS
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		buf := make([]byte, 65536)
 		for {
+			select {
+			case <-connCtx.Done():
+				return
+			default:
+			}
 			n, err := clientConn.Read(buf)
 			if n > 0 {
+				// Reset deadline on activity
+				clientConn.SetDeadline(time.Now().Add(*connTimeout))
 				plain := make([]byte, n)
 				cltDecStream.XORKeyStream(plain, buf[:n])
 				encrypted := make([]byte, n)
 				relayEncStream.XORKeyStream(encrypted, plain)
-				if werr := ws.WriteMessage(websocket.BinaryMessage, encrypted); werr != nil {
+				if werr := writer.WriteMessage(websocket.BinaryMessage, encrypted); werr != nil {
 					break
 				}
 				upBytes += int64(n)
@@ -328,12 +402,20 @@ func handleConnection(clientConn *net.TCPConn, secret []byte) {
 	// WS → client
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		for {
+			select {
+			case <-connCtx.Done():
+				return
+			default:
+			}
 			_, msg, err := ws.ReadMessage()
 			if err != nil {
 				break
 			}
 			if len(msg) > 0 {
+				// Reset deadline on activity
+				clientConn.SetDeadline(time.Now().Add(*connTimeout))
 				plain := make([]byte, len(msg))
 				relayDecStream.XORKeyStream(plain, msg)
 				encrypted := make([]byte, len(msg))
@@ -355,9 +437,6 @@ func handleConnection(clientConn *net.TCPConn, secret []byte) {
 
 func main() {
 	flag.Parse()
-
-	_ = mrand.Int63
-	_ = big.NewInt
 
 	if *transparent {
 		// Transparent mode: iptables REDIRECT, no client config needed
@@ -382,22 +461,63 @@ func main() {
 		secret = parsed
 	}
 
+	// Initialize connection limiter
+	connSemaphore = make(chan struct{}, *maxConns)
+
 	ln, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
 		log.Fatalf("Listen %s: %v", *listenAddr, err)
 	}
 
+	// Parse host and port safely
 	host := "ROUTER_IP"
-	port := (*listenAddr)[1:]
+	_, port, splitErr := net.SplitHostPort(*listenAddr)
+	if splitErr != nil {
+		port = *listenAddr
+	}
 	log.Printf("tg-ws-proxy listening on %s", *listenAddr)
 	log.Printf("Add proxy in Telegram: tg://proxy?server=%s&port=%s&secret=%s", host, port, *secretHex)
+
+	// Graceful shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		<-ctx.Done()
+		log.Println("[shutdown] Closing listener...")
+		ln.Close()
+	}()
 
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				log.Println("[shutdown] Server stopped")
+				return
+			default:
+				continue
+			}
+		}
+		tcpConn, ok := conn.(*net.TCPConn)
+		if !ok {
+			conn.Close()
 			continue
 		}
-		go handleConnection(conn.(*net.TCPConn), secret)
+
+		// Rate limit connections
+		select {
+		case connSemaphore <- struct{}{}:
+			go func() {
+				defer func() { <-connSemaphore }()
+				handleConnection(ctx, tcpConn, secret)
+			}()
+		default:
+			if *verbose {
+				log.Printf("[warn] max connections reached, rejecting %s", conn.RemoteAddr())
+			}
+			conn.Close()
+		}
 	}
 }
 

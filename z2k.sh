@@ -114,6 +114,9 @@ z2k_detect_entware_arch() {
     '
 }
 
+# ВНИМАНИЕ: эта функция дублирует map_arch_to_bin_arch из utils.sh
+# Дубликат необходим т.к. вызывается до загрузки модулей.
+# При изменении — синхронизировать с lib/utils.sh:map_arch_to_bin_arch()
 z2k_map_arch_to_bin_arch() {
     case "$1" in
         aarch64|arm64|*aarch64*|*arm64*) echo "linux-arm64" ;;
@@ -181,7 +184,7 @@ download_modules() {
 
         print_info "Загрузка lib/${module}.sh..."
 
-        if curl -fsSL "$url" -o "$output"; then
+        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
             print_success "Загружен: ${module}.sh"
         else
             die "Ошибка загрузки модуля: ${module}.sh"
@@ -217,7 +220,7 @@ download_strategies_source() {
     local url="${GITHUB_RAW}/strats_new2.txt"
     local output="${WORK_DIR}/strats_new2.txt"
 
-    if curl -fsSL "$url" -o "$output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
         local lines
         lines=$(wc -l < "$output")
         print_success "Загружено: strats_new2.txt ($lines строк)"
@@ -229,7 +232,7 @@ download_strategies_source() {
     local quic_url="${GITHUB_RAW}/quic_strats.ini"
     local quic_output="${WORK_DIR}/quic_strats.ini"
 
-    if curl -fsSL "$quic_url" -o "$quic_output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$quic_url" -o "$quic_output"; then
         local lines
         lines=$(wc -l < "$quic_output")
         print_success "Загружено: quic_strats.ini ($lines строк)"
@@ -259,7 +262,7 @@ quic_test_00.bin
         [ -z "$file" ] && continue
         local url="${GITHUB_RAW}/files/fake/${file}"
         local output="${fake_dir}/${file}"
-        if curl -fsSL "$url" -o "$output"; then
+        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
             print_success "Загружено: files/fake/${file}"
         else
             die "Ошибка загрузки files/fake/${file}"
@@ -281,7 +284,7 @@ download_init_script() {
     url="${GITHUB_RAW}/files/S99zapret2.new"
     output="${files_dir}/S99zapret2.new"
 
-    if curl -fsSL "$url" -o "$output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
         print_success "Загружено: files/S99zapret2.new"
     else
         die "Ошибка загрузки files/S99zapret2.new"
@@ -289,7 +292,7 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/000-zapret2.sh"
     output="${files_dir}/000-zapret2.sh"
-    if curl -fsSL "$url" -o "$output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
         print_success "Загружено: files/000-zapret2.sh"
     else
         die "Ошибка загрузки files/000-zapret2.sh"
@@ -297,11 +300,22 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/z2k-blocked-monitor.sh"
     output="${files_dir}/z2k-blocked-monitor.sh"
-    if curl -fsSL "$url" -o "$output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
         print_success "Загружено: files/z2k-blocked-monitor.sh"
     else
         die "Ошибка загрузки files/z2k-blocked-monitor.sh"
     fi
+
+    # z2k tools (healthcheck, config validator, list updater)
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh; do
+        url="${GITHUB_RAW}/files/${tool_name}"
+        output="${files_dir}/${tool_name}"
+        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+            print_success "Загружено: files/${tool_name}"
+        else
+            print_warning "Не удалось загрузить files/${tool_name} (необязательный)"
+        fi
+    done
 
     # z2k Lua helpers (e.g., persistent autocircular strategy memory)
     local lua_dir="${files_dir}/lua"
@@ -309,7 +323,7 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/lua/z2k-autocircular.lua"
     output="${lua_dir}/z2k-autocircular.lua"
-    if curl -fsSL "$url" -o "$output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
         print_success "Загружено: files/lua/z2k-autocircular.lua"
     else
         die "Ошибка загрузки files/lua/z2k-autocircular.lua"
@@ -317,7 +331,7 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/lua/z2k-modern-core.lua"
     output="${lua_dir}/z2k-modern-core.lua"
-    if curl -fsSL "$url" -o "$output"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
         print_success "Загружено: files/lua/z2k-modern-core.lua"
     else
         die "Ошибка загрузки files/lua/z2k-modern-core.lua"
@@ -340,7 +354,7 @@ extra_strats/UDP/YT/List.txt
         local list_out="${lists_dir}/${list_file}"
         mkdir -p "$(dirname "$list_out")"
 
-        if curl -fsSL "$list_url" -o "$list_out"; then
+        if curl -fsSL --connect-timeout 10 --max-time 120 "$list_url" -o "$list_out"; then
             print_success "Загружено: files/lists/${list_file}"
         else
             die "Ошибка загрузки files/lists/${list_file}"
@@ -451,6 +465,28 @@ handle_arguments() {
             print_info "Проверка активной конфигурации..."
             show_active_processing
             ;;
+        rollback)
+            print_info "Откат конфигурации..."
+            rollback_to_snapshot
+            ;;
+        snapshot)
+            print_info "Создание snapshot конфигурации..."
+            create_rollback_snapshot "cli"
+            ;;
+        healthcheck|hc)
+            if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/z2k-healthcheck.sh" ]; then
+                sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-healthcheck.sh" --status
+            else
+                print_error "Скрипт healthcheck не найден"
+            fi
+            ;;
+        validate)
+            if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/z2k-config-validator.sh" ]; then
+                sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-config-validator.sh"
+            else
+                print_error "Скрипт валидатора не найден"
+            fi
+            ;;
         help|h|-h|--help)
             show_help
             ;;
@@ -478,6 +514,10 @@ show_help() {
   check, info      Показать какие списки обрабатываются
   update, u        Обновить z2k до последней версии
   cleanup          Очистить старые бэкапы (оставить 5 последних)
+  rollback         Откатить конфигурацию к последнему snapshot
+  snapshot         Создать snapshot текущей конфигурации
+  healthcheck, hc  Проверить работоспособность DPI bypass
+  validate         Валидация текущей конфигурации
   version, v       Показать версию
   help, h          Показать эту справку
 
@@ -520,7 +560,7 @@ update_z2k() {
     local temp_file
     temp_file=$(mktemp)
 
-    if curl -fsSL "$latest_url" -o "$temp_file"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$latest_url" -o "$temp_file"; then
         # Получить версию из нового файла
         local new_version
         new_version=$(grep '^Z2K_VERSION=' "$temp_file" | cut -d'"' -f2)
@@ -585,7 +625,9 @@ main() {
     mkdir -p "$WORK_DIR" "$LIB_DIR"
 
     # Установить обработчики сигналов (будет переопределено после загрузки utils.sh)
-    trap 'echo ""; print_error "Прервано пользователем"; rm -rf "$WORK_DIR"; exit 130' INT TERM
+    # Также очищаем временные директории при любом выходе
+    trap 'echo ""; print_error "Прервано пользователем"; rm -rf "$WORK_DIR" /tmp/zapret2_build; exit 130' INT TERM
+    trap 'rm -rf /tmp/zapret2_build' EXIT
 
     # Скачать модули
     download_modules

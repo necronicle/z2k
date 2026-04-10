@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -14,49 +18,46 @@ import (
 
 // DNS cache to survive temporary resolver failures.
 var (
-	dnsCache     = make(map[string]string) // domain → IPv4
-	dnsCacheMu   sync.RWMutex
-	dnsCacheTTL  = 5 * time.Minute
-	dnsCacheTime = make(map[string]time.Time)
+	dnsCache    sync.Map // domain → *dnsCacheEntry
+	dnsCacheTTL = 5 * time.Minute
 )
 
+type dnsCacheEntry struct {
+	ip string
+	ts time.Time
+}
 
 func resolveIPv4Cached(host string) (string, error) {
-	dnsCacheMu.RLock()
-	ip, ok := dnsCache[host]
-	t := dnsCacheTime[host]
-	dnsCacheMu.RUnlock()
-
-	// Return cache if fresh
-	if ok && time.Since(t) < dnsCacheTTL {
-		return ip, nil
+	// Check cache
+	if val, ok := dnsCache.Load(host); ok {
+		entry := val.(*dnsCacheEntry)
+		if time.Since(entry.ts) < dnsCacheTTL {
+			return entry.ip, nil
+		}
 	}
 
 	// Try resolving
 	newIP, err := resolveIPv4(host)
 	if err != nil {
 		// DNS failed — use stale cache if available
-		if ok {
+		if val, ok := dnsCache.Load(host); ok {
+			entry := val.(*dnsCacheEntry)
 			if *verbose {
-				log.Printf("[debug] DNS failed for %s, using cached %s", host, ip)
+				log.Printf("[debug] DNS failed for %s, using cached %s", host, entry.ip)
 			}
-			return ip, nil
+			return entry.ip, nil
 		}
 		return "", err
 	}
 
-	// Update cache
-	dnsCacheMu.Lock()
-	dnsCache[host] = newIP
-	dnsCacheTime[host] = time.Now()
-	dnsCacheMu.Unlock()
-
+	// Update cache atomically
+	dnsCache.Store(host, &dnsCacheEntry{ip: newIP, ts: time.Now()})
 	return newIP, nil
 }
 
 // handleTransparent redirects intercepted Telegram traffic through
 // Cloudflare WebSocket without any encryption/decryption.
-func handleTransparent(clientConn *net.TCPConn) {
+func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 	defer clientConn.Close()
 	defer func() {
 		if r := recover(); r != nil {
@@ -75,6 +76,9 @@ func handleTransparent(clientConn *net.TCPConn) {
 	if *verbose {
 		log.Printf("[conn] %s -> DC%d (%s)", clientConn.RemoteAddr(), dc, origIP)
 	}
+
+	// Set initial deadline
+	clientConn.SetDeadline(time.Now().Add(*connTimeout))
 
 	// Connect via WebSocket with retry
 	var ws *websocket.Conn
@@ -95,17 +99,21 @@ func handleTransparent(clientConn *net.TCPConn) {
 	}
 	defer ws.Close()
 
-	// Keepalive: CF kills idle WS after 100s. Ping every 60s via WriteControl (thread-safe).
-	// No SetReadDeadline/SetWriteDeadline — those block data transfer.
-	done := make(chan struct{})
+	writer := &wsWriter{ws: ws}
+
+	// Create cancellable context for this connection
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Keepalive: CF kills idle WS after 100s. Ping every 60s.
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
-			case <-done:
+				writer.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+			case <-connCtx.Done():
 				return
 			}
 		}
@@ -120,11 +128,18 @@ func handleTransparent(clientConn *net.TCPConn) {
 
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		buf := make([]byte, 65536)
 		for {
+			select {
+			case <-connCtx.Done():
+				return
+			default:
+			}
 			n, err := clientConn.Read(buf)
 			if n > 0 {
-				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+				clientConn.SetDeadline(time.Now().Add(*connTimeout))
+				if werr := writer.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
 					break
 				}
 			}
@@ -136,12 +151,19 @@ func handleTransparent(clientConn *net.TCPConn) {
 
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		for {
+			select {
+			case <-connCtx.Done():
+				return
+			default:
+			}
 			_, msg, err := ws.ReadMessage()
 			if err != nil {
 				break
 			}
 			if len(msg) > 0 {
+				clientConn.SetDeadline(time.Now().Add(*connTimeout))
 				if _, werr := clientConn.Write(msg); werr != nil {
 					break
 				}
@@ -150,7 +172,6 @@ func handleTransparent(clientConn *net.TCPConn) {
 	}()
 
 	wg.Wait()
-	close(done)
 
 	if *verbose {
 		log.Printf("[done] %s DC%d", clientConn.RemoteAddr(), dc)
@@ -185,55 +206,94 @@ func connectWSTransparent(dc int, isMedia bool) (*websocket.Conn, error) {
 		return nil, fmt.Errorf("dial %s (%s): %w", cfDomain, ip, err)
 	}
 
+	// Set read limit to prevent memory exhaustion
+	ws.SetReadLimit(1 * 1024 * 1024) // 1MB
+
 	if *verbose {
 		log.Printf("[debug] WS connected to %s (%s)", cfDomain, ip)
 	}
 	return ws, nil
 }
 
-// transparentListener runs the transparent proxy mode.
+// transparentListener runs the transparent proxy mode with graceful shutdown.
 func transparentListener(listenAddr string) error {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
 	}
 
+	// Initialize connection limiter
+	connSemaphore = make(chan struct{}, *maxConns)
+
 	// Pre-warm DNS cache for all DCs
 	for _, dc := range []int{1, 2, 3, 4, 5} {
 		domain := fmt.Sprintf("kws%d.pclead.co.uk", dc)
 		if ip, err := resolveIPv4(domain); err == nil {
-			dnsCacheMu.Lock()
-			dnsCache[domain] = ip
-			dnsCacheTime[domain] = time.Now()
-			dnsCacheMu.Unlock()
+			dnsCache.Store(domain, &dnsCacheEntry{ip: ip, ts: time.Now()})
 			log.Printf("DNS cache: %s -> %s", domain, ip)
 		}
 	}
 
 	log.Printf("tg-transparent-proxy listening on %s", listenAddr)
 
+	// Graceful shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Periodic DNS cache refresh
 	go func() {
+		ticker := time.NewTicker(dnsCacheTTL)
+		defer ticker.Stop()
 		for {
-			time.Sleep(dnsCacheTTL)
-			for _, dc := range []int{1, 2, 3, 4, 5} {
-				domain := fmt.Sprintf("kws%d.pclead.co.uk", dc)
-				if ip, err := resolveIPv4(domain); err == nil {
-					dnsCacheMu.Lock()
-					dnsCache[domain] = ip
-					dnsCacheTime[domain] = time.Now()
-					dnsCacheMu.Unlock()
+			select {
+			case <-ticker.C:
+				for _, dc := range []int{1, 2, 3, 4, 5} {
+					domain := fmt.Sprintf("kws%d.pclead.co.uk", dc)
+					if ip, err := resolveIPv4(domain); err == nil {
+						dnsCache.Store(domain, &dnsCacheEntry{ip: ip, ts: time.Now()})
+					}
 				}
+			case <-ctx.Done():
+				return
 			}
 		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		log.Println("[shutdown] Closing listener...")
+		ln.Close()
 	}()
 
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				log.Println("[shutdown] Transparent proxy stopped")
+				return nil
+			default:
+				continue
+			}
+		}
+		tcpConn, ok := conn.(*net.TCPConn)
+		if !ok {
+			conn.Close()
 			continue
 		}
-		go handleTransparent(conn.(*net.TCPConn))
+
+		// Rate limit connections
+		select {
+		case connSemaphore <- struct{}{}:
+			go func() {
+				defer func() { <-connSemaphore }()
+				handleTransparent(ctx, tcpConn)
+			}()
+		default:
+			if *verbose {
+				log.Printf("[warn] max connections reached, rejecting %s", conn.RemoteAddr())
+			}
+			conn.Close()
+		}
 	}
-	return nil
 }

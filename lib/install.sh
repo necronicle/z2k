@@ -358,27 +358,26 @@ cron
     # Создать симлинки для библиотек (нужно для линковки)
     print_info "Создание симлинков библиотек..."
 
-    cd /opt/lib || return 1
+    # Создание симлинков в подоболочке (не меняет рабочую директорию)
+    (
+        cd /opt/lib || exit 1
 
-    # libmnl
-    if [ ! -e libmnl.so ] && [ -e libmnl.so.0 ]; then
-        ln -sf libmnl.so.0 libmnl.so
-        print_info "Создан симлинк: libmnl.so -> libmnl.so.0"
-    fi
+        # libmnl
+        if [ ! -e libmnl.so ] && [ -e libmnl.so.0 ]; then
+            ln -sf libmnl.so.0 libmnl.so
+        fi
 
-    # libnetfilter_queue
-    if [ ! -e libnetfilter_queue.so ] && [ -e libnetfilter_queue.so.1 ]; then
-        ln -sf libnetfilter_queue.so.1 libnetfilter_queue.so
-        print_info "Создан симлинк: libnetfilter_queue.so -> libnetfilter_queue.so.1"
-    fi
+        # libnetfilter_queue
+        if [ ! -e libnetfilter_queue.so ] && [ -e libnetfilter_queue.so.1 ]; then
+            ln -sf libnetfilter_queue.so.1 libnetfilter_queue.so
+        fi
 
-    # libnfnetlink
-    if [ ! -e libnfnetlink.so ] && [ -e libnfnetlink.so.0 ]; then
-        ln -sf libnfnetlink.so.0 libnfnetlink.so
-        print_info "Создан симлинк: libnfnetlink.so -> libnfnetlink.so.0"
-    fi
-
-    cd - >/dev/null || return 1
+        # libnfnetlink
+        if [ ! -e libnfnetlink.so ] && [ -e libnfnetlink.so.0 ]; then
+            ln -sf libnfnetlink.so.0 libnfnetlink.so
+        fi
+    ) || print_warning "Не удалось создать симлинки в /opt/lib"
+    print_info "Симлинки библиотек проверены"
 
     # =========================================================================
     # КРИТИЧНЫЕ ПАКЕТЫ ДЛЯ ZAPRET2 (из check_prerequisites_openwrt)
@@ -571,7 +570,7 @@ step_build_zapret2() {
     # GitHub API для получения последней версии
     local api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
     local release_data
-    release_data=$(curl -fsSL "$api_url" 2>&1)
+    release_data=$(curl -fsSL --connect-timeout 10 --max-time 120 "$api_url" 2>&1)
 
     local openwrt_url
     if [ $? -ne 0 ]; then
@@ -590,7 +589,7 @@ step_build_zapret2() {
     print_info "URL релиза: $openwrt_url"
 
     # Скачать релиз
-    if ! curl -fsSL "$openwrt_url" -o openwrt-embedded.tar.gz; then
+    if ! curl -fsSL --connect-timeout 10 --max-time 120 "$openwrt_url" -o openwrt-embedded.tar.gz; then
         print_error "Не удалось загрузить zapret2 OpenWrt embedded"
         return 1
     fi
@@ -766,6 +765,15 @@ step_build_zapret2() {
         chmod +x "${ZAPRET2_DIR}/z2k-blocked-monitor.sh" 2>/dev/null || true
     fi
 
+    # Install z2k tools (healthcheck, config validator, list updater)
+    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh; do
+        if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
+            cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
+            chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
+            print_info "Установлен: ${tool_script}"
+        fi
+    done
+
     # Copy snapshot domain lists for local install flow (no external list repos)
     if [ -d "${WORK_DIR}/files/lists" ]; then
         print_info "Copying snapshot domain lists..."
@@ -831,7 +839,7 @@ step_build_zapret2() {
           /tmp/z2k-autocircular-debug.flag \
           /tmp/z2k-autocircular-debug.log 2>/dev/null || true
 
-    if curl -fsSL "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
+    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
         -o "${ZAPRET2_DIR}/lua/locked.lua"; then
         print_success "locked.lua загружен"
     else
@@ -840,7 +848,7 @@ step_build_zapret2() {
 
     print_info "Загрузка orchestrator.sh для управления circular_locked..."
 
-    if curl -fsSL "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/orchestrator.sh" \
+    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/orchestrator.sh" \
         -o "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"; then
         chmod +x "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"
         print_success "orchestrator.sh загружен"
@@ -902,7 +910,7 @@ step_build_zapret2() {
     local custom_dir="${ZAPRET2_DIR}/init.d/keenetic/custom.d"
     mkdir -p "$custom_dir"
 
-    if curl -fsSL "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-stun4all" \
+    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-stun4all" \
         -o "${custom_dir}/50-stun4all"; then
         chmod +x "${custom_dir}/50-stun4all"
         print_success "50-stun4all установлен"
@@ -910,7 +918,7 @@ step_build_zapret2() {
         print_warning "Не удалось загрузить 50-stun4all"
     fi
 
-    if curl -fsSL "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-discord-media" \
+    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-discord-media" \
         -o "${custom_dir}/50-discord-media"; then
         chmod +x "${custom_dir}/50-discord-media"
         print_success "50-discord-media установлен"
@@ -1613,7 +1621,7 @@ step_finalize() {
                 "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/mtproxy-client/builds/${tg_bin}" \
                 "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/builds/${tg_bin}" \
                 "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
-                curl -fsSL "$tg_try_url" -o "$tg_dest" 2>/dev/null
+                curl -fsSL --connect-timeout 10 --max-time 120 "$tg_try_url" -o "$tg_dest" 2>/dev/null
                 if [ -f "$tg_dest" ] && [ "$(head -c 4 "$tg_dest" | hexdump -n 4 -e '"%02x"' 2>/dev/null || head -c 4 "$tg_dest" | od -x | head -1 | awk '{print $2}')" != "" ] && [ -s "$tg_dest" ]; then
                     # Check file size > 100KB (valid binary, not HTML page)
                     local tg_size=$(wc -c < "$tg_dest" 2>/dev/null)
@@ -1639,7 +1647,7 @@ step_finalize() {
 
     # Init script — always update
     local tg_init_url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}/mtproxy-client/S97tg-mtproxy"
-    if curl -fsSL "$tg_init_url" -o /opt/etc/init.d/S97tg-mtproxy; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$tg_init_url" -o /opt/etc/init.d/S97tg-mtproxy; then
         chmod +x /opt/etc/init.d/S97tg-mtproxy
         print_success "Init скрипт Telegram прокси установлен"
     fi
@@ -1661,7 +1669,7 @@ step_finalize() {
     # Save local z2k entrypoint for future runs without curl.
     local local_z2k_script="${ZAPRET2_DIR}/z2k.sh"
     local local_z2k_url="${GITHUB_RAW}/z2k.sh"
-    if curl -fsSL "$local_z2k_url" -o "$local_z2k_script"; then
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$local_z2k_url" -o "$local_z2k_script"; then
         chmod +x "$local_z2k_script" 2>/dev/null || true
         printf "  %-25s: %s\n" "z2k script" "$local_z2k_script"
         print_info "Открыть меню позже: sh ${local_z2k_script} menu"
@@ -1713,6 +1721,183 @@ run_full_install() {
     sleep 1
     show_main_menu
 
+    return 0
+}
+
+# ==============================================================================
+# ROLLBACK МЕХАНИЗМ
+# ==============================================================================
+
+ROLLBACK_DIR="/opt/zapret2/.rollback"
+
+# Создать snapshot перед изменениями
+create_rollback_snapshot() {
+    local reason=${1:-"manual"}
+
+    print_info "Создание rollback-snapshot..."
+
+    # Очистить предыдущий snapshot (хранится только последний)
+    rm -rf "$ROLLBACK_DIR"
+    mkdir -p "$ROLLBACK_DIR" || {
+        print_warning "Не удалось создать директорию rollback"
+        return 1
+    }
+
+    # Сохранить config
+    [ -f "${ZAPRET2_DIR}/config" ] && cp -f "${ZAPRET2_DIR}/config" "$ROLLBACK_DIR/config"
+
+    # Сохранить init script
+    [ -f "$INIT_SCRIPT" ] && cp -f "$INIT_SCRIPT" "$ROLLBACK_DIR/S99zapret2"
+
+    # Сохранить стратегии
+    for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
+        local sfile="${ZAPRET2_DIR}/extra_strats/$cat_dir/Strategy.txt"
+        if [ -f "$sfile" ]; then
+            mkdir -p "$ROLLBACK_DIR/strats/$cat_dir"
+            cp -f "$sfile" "$ROLLBACK_DIR/strats/$cat_dir/Strategy.txt"
+        fi
+    done
+
+    # Сохранить whitelist
+    [ -f "${ZAPRET2_DIR}/lists/whitelist.txt" ] && \
+        cp -f "${ZAPRET2_DIR}/lists/whitelist.txt" "$ROLLBACK_DIR/whitelist.txt"
+
+    # Сохранить autocircular state
+    [ -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" ] && \
+        cp -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" "$ROLLBACK_DIR/state.tsv"
+
+    # Записать метаданные
+    cat > "$ROLLBACK_DIR/metadata" <<ROLLBACK_META
+SNAPSHOT_TIME=$(date +%Y%m%d_%H%M%S)
+REASON=$reason
+Z2K_VERSION=${Z2K_VERSION:-unknown}
+NFQWS2_VERSION=$(get_nfqws2_version 2>/dev/null || echo unknown)
+ROLLBACK_META
+
+    print_success "Rollback snapshot создан: $ROLLBACK_DIR"
+    return 0
+}
+
+# Восстановить из rollback snapshot
+rollback_to_snapshot() {
+    if [ ! -d "$ROLLBACK_DIR" ] || [ ! -f "$ROLLBACK_DIR/metadata" ]; then
+        print_error "Rollback snapshot не найден"
+        return 1
+    fi
+
+    print_header "Восстановление из rollback snapshot"
+
+    # Показать информацию о snapshot
+    . "$ROLLBACK_DIR/metadata"
+    print_info "Snapshot от: ${SNAPSHOT_TIME:-unknown}"
+    print_info "Причина: ${REASON:-unknown}"
+    print_info "Версия: z2k ${Z2K_VERSION:-unknown}, nfqws2 ${NFQWS2_VERSION:-unknown}"
+
+    if ! confirm "Восстановить эту конфигурацию?" "N"; then
+        print_info "Rollback отменён"
+        return 0
+    fi
+
+    # Остановить сервис
+    if [ -x "$INIT_SCRIPT" ]; then
+        "$INIT_SCRIPT" stop 2>/dev/null || true
+    fi
+
+    # Восстановить config
+    [ -f "$ROLLBACK_DIR/config" ] && cp -f "$ROLLBACK_DIR/config" "${ZAPRET2_DIR}/config"
+
+    # Восстановить init script
+    [ -f "$ROLLBACK_DIR/S99zapret2" ] && cp -f "$ROLLBACK_DIR/S99zapret2" "$INIT_SCRIPT" && chmod +x "$INIT_SCRIPT"
+
+    # Восстановить стратегии
+    for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
+        local sfile="$ROLLBACK_DIR/strats/$cat_dir/Strategy.txt"
+        if [ -f "$sfile" ]; then
+            mkdir -p "${ZAPRET2_DIR}/extra_strats/$cat_dir"
+            cp -f "$sfile" "${ZAPRET2_DIR}/extra_strats/$cat_dir/Strategy.txt"
+        fi
+    done
+
+    # Восстановить whitelist
+    [ -f "$ROLLBACK_DIR/whitelist.txt" ] && \
+        cp -f "$ROLLBACK_DIR/whitelist.txt" "${ZAPRET2_DIR}/lists/whitelist.txt"
+
+    # Восстановить autocircular state
+    [ -f "$ROLLBACK_DIR/state.tsv" ] && \
+        cp -f "$ROLLBACK_DIR/state.tsv" "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv"
+
+    # Перезапустить сервис
+    if [ -x "$INIT_SCRIPT" ]; then
+        "$INIT_SCRIPT" start 2>/dev/null || true
+    fi
+
+    print_success "Конфигурация восстановлена из rollback snapshot"
+    return 0
+}
+
+# Автоматический rollback по таймеру
+# Вызывается после применения новой конфигурации
+auto_rollback_timer() {
+    local timeout=${1:-300}  # 5 минут по умолчанию
+
+    if [ ! -d "$ROLLBACK_DIR" ]; then
+        return 0
+    fi
+
+    print_warning "Авто-rollback активен: $timeout секунд"
+    print_info "Если сервис работает — подтвердите в меню"
+    print_info "Иначе конфигурация будет автоматически восстановлена"
+
+    # Создать таймер-файл
+    local timer_file="${ROLLBACK_DIR}/auto_timer"
+    echo "$(($(date +%s) + timeout))" > "$timer_file"
+
+    return 0
+}
+
+# Проверить истёк ли таймер авто-rollback (вызывается из cron)
+check_auto_rollback() {
+    local timer_file="${ROLLBACK_DIR}/auto_timer"
+    [ -f "$timer_file" ] || return 0
+
+    local deadline
+    deadline=$(cat "$timer_file" 2>/dev/null)
+    [ -z "$deadline" ] && return 0
+
+    local now
+    now=$(date +%s)
+
+    if [ "$now" -ge "$deadline" ]; then
+        print_warning "Авто-rollback: таймер истёк, восстанавливаю конфигурацию..."
+        rm -f "$timer_file"
+        # Не-интерактивный rollback
+        if [ -x "$INIT_SCRIPT" ]; then
+            "$INIT_SCRIPT" stop 2>/dev/null || true
+        fi
+        [ -f "$ROLLBACK_DIR/config" ] && cp -f "$ROLLBACK_DIR/config" "${ZAPRET2_DIR}/config"
+        [ -f "$ROLLBACK_DIR/S99zapret2" ] && cp -f "$ROLLBACK_DIR/S99zapret2" "$INIT_SCRIPT"
+        for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
+            local sfile="$ROLLBACK_DIR/strats/$cat_dir/Strategy.txt"
+            [ -f "$sfile" ] && cp -f "$sfile" "${ZAPRET2_DIR}/extra_strats/$cat_dir/Strategy.txt"
+        done
+        if [ -x "$INIT_SCRIPT" ]; then
+            "$INIT_SCRIPT" start 2>/dev/null || true
+        fi
+        logger -t z2k "Auto-rollback executed: timer expired"
+    fi
+
+    return 0
+}
+
+# Подтвердить новую конфигурацию (отменяет авто-rollback)
+confirm_config() {
+    local timer_file="${ROLLBACK_DIR}/auto_timer"
+    if [ -f "$timer_file" ]; then
+        rm -f "$timer_file"
+        print_success "Конфигурация подтверждена, авто-rollback отключён"
+    else
+        print_info "Авто-rollback не активен"
+    fi
     return 0
 }
 

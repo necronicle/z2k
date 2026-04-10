@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: |
+          find . -name '*.sh' \( -path './z2k.sh' -o -path './lib/*.sh' -o -path './files/*.sh' \) \
+            | xargs shellcheck --severity=warning --exclude=SC1090,SC1091
+
+  go-build:
+    name: Go Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache-dependency-path: mtproxy-client/go.sum
+
+      - name: Go vet
+        working-directory: mtproxy-client
+        run: go vet ./...
+
+      - name: Go test
+        working-directory: mtproxy-client
+        run: go test ./...
+
+      - name: Cross-compile
+        working-directory: mtproxy-client
+        run: |
+          targets=(
+            "linux/arm64"
+            "linux/arm"
+            "linux/amd64"
+            "linux/mips"
+            "linux/mipsel"
+            "linux/mips64le"
+          )
+          for target in "${targets[@]}"; do
+            GOOS="${target%%/*}"
+            GOARCH="${target##*/}"
+            echo "Building for ${GOOS}/${GOARCH}..."
+            GOOS="$GOOS" GOARCH="$GOARCH" go build -o /dev/null .
+          done
+
+  lua-check:
+    name: Luacheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install luarocks and luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luarocks
+          sudo luarocks install luacheck
+
+      - name: Run luacheck
+        run: luacheck files/lua/*.lua --std max --codes -q

@@ -55,13 +55,13 @@ MENU
             # Показать статус RST-фильтра и silent fallback
             local rst_config_file="${ZAPRET2_DIR}/config"
             if [ -f "$rst_config_file" ]; then
-                local DROP_DPI_RST=0
-                eval "$(grep '^DROP_DPI_RST=' "$rst_config_file")"
+                local DROP_DPI_RST
+                DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$rst_config_file" "0")
                 if [ "$DROP_DPI_RST" = "1" ]; then
                     printf " RST-фильтр: Включен (пассивный DPI)\n"
                 fi
-                local RKN_SILENT_FALLBACK=0
-                eval "$(grep '^RKN_SILENT_FALLBACK=' "$rst_config_file")"
+                local RKN_SILENT_FALLBACK
+                RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rst_config_file" "0")
                 if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
                     printf " Silent fallback РКН: Включен\n"
                 fi
@@ -83,11 +83,14 @@ MENU
 [G] Roblox (тестовая функция)
 [T] Telegram прокси (тестовая функция)
 [S] Скрипты custom.d
+[B] Rollback (откат конфигурации)
+[H] Health check (проверка работоспособности)
+[V] Валидация конфигурации
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,G,T,W,S]: "
+        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,B,H,V]: "
         read_input choice
 
         case "$choice" in
@@ -127,6 +130,15 @@ MENU
             s|S)
                 menu_custom_scripts
                 ;;
+            b|B)
+                menu_rollback
+                ;;
+            h|H)
+                menu_healthcheck
+                ;;
+            v|V)
+                menu_validate_config
+                ;;
             0)
                 print_info "Выход из меню"
                 return 0
@@ -137,6 +149,143 @@ MENU
                 ;;
         esac
     done
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: ROLLBACK
+# ==============================================================================
+
+menu_rollback() {
+    clear_screen
+    print_header "[B] Rollback конфигурации"
+
+    if ! is_zapret2_installed; then
+        print_error "zapret2 не установлен"
+        pause
+        return
+    fi
+
+    cat <<'SUBMENU'
+
+Rollback позволяет откатить конфигурацию к предыдущему
+сохранённому состоянию.
+
+[1] Создать snapshot текущей конфигурации
+[2] Восстановить из snapshot (rollback)
+[3] Подтвердить текущую конфигурацию (отменить авто-rollback)
+[0] Назад
+
+SUBMENU
+
+    printf "Выбор: "
+    read_input choice
+
+    case "$choice" in
+        1)
+            create_rollback_snapshot "manual"
+            ;;
+        2)
+            rollback_to_snapshot
+            ;;
+        3)
+            confirm_config
+            ;;
+        0)
+            return
+            ;;
+        *)
+            print_error "Неверный выбор"
+            ;;
+    esac
+
+    pause
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: HEALTH CHECK
+# ==============================================================================
+
+menu_healthcheck() {
+    clear_screen
+    print_header "[H] Health Check"
+
+    if ! is_zapret2_installed; then
+        print_error "zapret2 не установлен"
+        pause
+        return
+    fi
+
+    local hc_script="${ZAPRET2_DIR}/z2k-healthcheck.sh"
+
+    if [ ! -f "$hc_script" ]; then
+        print_error "Скрипт healthcheck не найден: $hc_script"
+        print_info "Переустановите z2k для получения скрипта"
+        pause
+        return
+    fi
+
+    cat <<'SUBMENU'
+
+Health Check проверяет доступность ключевых сервисов
+и работоспособность DPI bypass.
+
+[1] Запустить проверку сейчас
+[2] Показать статус
+[3] Показать лог
+[0] Назад
+
+SUBMENU
+
+    printf "Выбор: "
+    read_input choice
+
+    case "$choice" in
+        1)
+            sh "$hc_script" --status
+            ;;
+        2)
+            sh "$hc_script" --status
+            ;;
+        3)
+            if [ -f "${ZAPRET2_DIR}/healthcheck.log" ]; then
+                tail -30 "${ZAPRET2_DIR}/healthcheck.log"
+            else
+                print_info "Лог пуст"
+            fi
+            ;;
+        0)
+            return
+            ;;
+    esac
+
+    pause
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: ВАЛИДАЦИЯ КОНФИГУРАЦИИ
+# ==============================================================================
+
+menu_validate_config() {
+    clear_screen
+    print_header "[V] Валидация конфигурации"
+
+    if ! is_zapret2_installed; then
+        print_error "zapret2 не установлен"
+        pause
+        return
+    fi
+
+    local validator="${ZAPRET2_DIR}/z2k-config-validator.sh"
+
+    if [ ! -f "$validator" ]; then
+        print_error "Скрипт валидатора не найден: $validator"
+        print_info "Переустановите z2k для получения скрипта"
+        pause
+        return
+    fi
+
+    sh "$validator" "${ZAPRET2_DIR}/config"
+    pause
 }
 
 # ==============================================================================
@@ -649,8 +798,8 @@ menu_rst_filter() {
         return 1
     fi
 
-    local DROP_DPI_RST=0
-    eval "$(grep '^DROP_DPI_RST=' "$config_file")"
+    local DROP_DPI_RST
+    DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
 
     print_separator
     print_info "Статус: $([ "$DROP_DPI_RST" = "1" ] && echo 'Включен' || echo 'Выключен')"
@@ -826,8 +975,8 @@ menu_rkn_silent_fallback() {
         return 1
     fi
 
-    local RKN_SILENT_FALLBACK=0
-    eval "$(grep '^RKN_SILENT_FALLBACK=' "$config_file")"
+    local RKN_SILENT_FALLBACK
+    RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
 
     print_separator
     print_info "Статус: $([ "$RKN_SILENT_FALLBACK" = "1" ] && echo 'Включен' || echo 'Выключен')"
@@ -928,8 +1077,8 @@ menu_roblox_bypass() {
         return 1
     fi
 
-    local ROBLOX_UDP_BYPASS=0
-    eval "$(grep '^ROBLOX_UDP_BYPASS=' "$config_file")"
+    local ROBLOX_UDP_BYPASS
+    ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
 
     print_separator
     print_info "Статус: $([ "$ROBLOX_UDP_BYPASS" = "1" ] && echo 'Включен' || echo 'Выключен')"
