@@ -1214,14 +1214,19 @@ SUBMENU
                 if ! [ -f "$MTPROXY_BIN" ]; then
                     print_info "Скачиваю бинарник..."
                     local tg_arch=""
-                    case "$(uname -m)" in
-                        aarch64|arm64)  tg_arch="arm64" ;;
-                        armv7*|armv6*)  tg_arch="arm" ;;
-                        mipsel|mipsle)  tg_arch="mipsel" ;;
-                        mips)           tg_arch="mips" ;;
-                        x86_64|amd64)   tg_arch="amd64" ;;
-                        i?86)           tg_arch="x86" ;;
-                        *)              tg_arch="" ;;
+                    local _hw_arch _tg_bin_arch
+                    _hw_arch=$(get_arch 2>/dev/null || uname -m)
+                    _tg_bin_arch=$(map_arch_to_bin_arch "$_hw_arch" 2>/dev/null || true)
+                    case "$_tg_bin_arch" in
+                        linux-arm64)  tg_arch="arm64" ;;
+                        linux-arm)    tg_arch="arm" ;;
+                        linux-mipsel) tg_arch="mipsel" ;;
+                        linux-mips64) tg_arch="mips64el" ;;
+                        linux-mips)   tg_arch="mips" ;;
+                        linux-x86_64) tg_arch="amd64" ;;
+                        linux-x86)    tg_arch="x86" ;;
+                        linux-riscv64) tg_arch="riscv64" ;;
+                        linux-ppc)    tg_arch="ppc64" ;;
                     esac
                     if [ -n "$tg_arch" ]; then
                         local tg_bin="tg-mtproxy-client-linux-${tg_arch}"

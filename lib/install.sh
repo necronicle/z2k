@@ -1617,19 +1617,22 @@ step_finalize() {
     # Telegram transparent proxy (tg-mtproxy-client)
     if true; then
         print_info "Установка/обновление Telegram прокси..."
+        # Use same arch detection as zapret2 install (get_arch → map_arch_to_bin_arch)
         local tg_arch=""
         local hw_arch
-        hw_arch=$(uname -m)
-        case "$hw_arch" in
-            aarch64|arm64)  tg_arch="arm64" ;;
-            armv7*|armv6*)  tg_arch="arm" ;;
-            mipsel|mipsle)  tg_arch="mipsel" ;;
-            mips)           tg_arch="mips" ;;
-            mips64el|mips64le) tg_arch="mips64el" ;;
-            x86_64|amd64)   tg_arch="amd64" ;;
-            i?86)           tg_arch="x86" ;;
-            riscv64)        tg_arch="riscv64" ;;
-            ppc64*)         tg_arch="ppc64" ;;
+        hw_arch=$(get_arch 2>/dev/null || uname -m)
+        local tg_bin_arch
+        tg_bin_arch=$(map_arch_to_bin_arch "$hw_arch" 2>/dev/null || true)
+        case "$tg_bin_arch" in
+            linux-arm64)  tg_arch="arm64" ;;
+            linux-arm)    tg_arch="arm" ;;
+            linux-mipsel) tg_arch="mipsel" ;;
+            linux-mips64) tg_arch="mips64el" ;;
+            linux-mips)   tg_arch="mips" ;;
+            linux-x86_64) tg_arch="amd64" ;;
+            linux-x86)    tg_arch="x86" ;;
+            linux-riscv64) tg_arch="riscv64" ;;
+            linux-ppc)    tg_arch="ppc64" ;;
         esac
         if [ -n "$tg_arch" ]; then
             local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
