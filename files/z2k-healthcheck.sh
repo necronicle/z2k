@@ -194,10 +194,11 @@ run_checks() {
     fi
 
     # Проверки сервисов
+    # Note: Telegram excluded — healthcheck curl would go through tunnel
+    # and consume Cloudflare Worker free tier requests unnecessarily.
     for entry in \
         "${CHECK_YOUTUBE_URL}|${CHECK_YOUTUBE_NAME}" \
         "${CHECK_DISCORD_URL}|${CHECK_DISCORD_NAME}" \
-        "${CHECK_TELEGRAM_URL}|${CHECK_TELEGRAM_NAME}" \
         "${CHECK_RKN_URL}|${CHECK_RKN_NAME}" \
     ; do
         local url="${entry%%|*}"

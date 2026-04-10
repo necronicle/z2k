@@ -25,12 +25,12 @@ z2k — модульный установщик zapret2 для роутеров 
 
 - Установка zapret2 (openwrt-embedded релиз) без компиляции, с проверкой работоспособности `nfqws2`
 - Три TCP autocircular профиля с разными стратегиями:
-  - **General** — список ресурсов (TCP/TLS + HTTP) — 45 стратегий
+  - **RKN** — список ресурсов (TCP/TLS + HTTP) — 45 стратегий
   - **YouTube TCP** — youtube.com и связанные домены — 22 стратегии
   - **YouTube GV** — googlevideo CDN (стриминг) — 22 стратегии
 - QUIC autocircular профиль: YouTube QUIC (UDP/443) — 12 стратегий с z2k morph
 - Discord профили:
-  - TCP: hostlist Discord включён в General-профиль
+  - TCP: hostlist Discord включён в RKN-профиль
   - UDP voice/video: `circular_locked` (стратегия закрепляется per-domain)
 - ECH (Encrypted Client Hello) detection — автоматический пропуск desync когда SNI зашифрован
 - Hostlist режим: стратегии применяются только к доменам из списков
@@ -45,7 +45,7 @@ z2k — модульный установщик zapret2 для роутеров 
 ### Инструменты и мониторинг
 
 - **Веб-панель** — мониторинг через браузер (busybox httpd CGI): статус сервиса, стратегии, логи, управление
-- **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, Telegram, General)
+- **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, Telegram, RKN)
 - **Config validator** — валидация конфигурации перед применением (порты, hostlist-файлы, blob-файлы, lua-desync)
 - **Rollback** — откат конфигурации к предыдущему snapshot с авто-таймером
 - **Auto updater** — автоматическое обновление списков доменов по cron
@@ -287,7 +287,7 @@ z2k/
 │   ├── lua/
 │   │   ├── z2k-autocircular.lua    # Persistent strategy memory + telemetry
 │   │   └── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH
-│   ├── lists/                  # Domain lists (General, YouTube, Discord)
+│   ├── lists/                  # Domain lists (RKN, YouTube, Discord)
 │   ├── z2k-healthcheck.sh      # Service availability monitoring
 │   ├── z2k-config-validator.sh # Config validation
 │   ├── z2k-update-lists.sh     # Auto domain list updater
