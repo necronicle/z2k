@@ -14,15 +14,18 @@ start() {
 
     [ ! -f "$BINARY" ] && { echo "Binary not found: $BINARY"; return 1; }
 
+    # Load redirect module if needed
+    modprobe xt_REDIRECT 2>/dev/null || modprobe ipt_REDIRECT 2>/dev/null || true
+
     # Setup iptables
-    iptables -t nat -N TG_TRANSPARENT 2>/dev/null || iptables -t nat -F TG_TRANSPARENT
+    iptables -t nat -N TG_TRANSPARENT 2>/dev/null || iptables -t nat -F TG_TRANSPARENT 2>/dev/null
     iptables -t nat -D PREROUTING -j TG_TRANSPARENT 2>/dev/null
     for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
                 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 95.161.64.0/20 \
                 91.105.192.0/23 185.76.151.0/24; do
-        iptables -t nat -A TG_TRANSPARENT -d "$cidr" -p tcp -j REDIRECT --to-ports $PORT
+        iptables -t nat -A TG_TRANSPARENT -d "$cidr" -p tcp -j REDIRECT --to-ports $PORT 2>/dev/null
     done
-    iptables -t nat -I PREROUTING -j TG_TRANSPARENT
+    iptables -t nat -I PREROUTING -j TG_TRANSPARENT 2>/dev/null
 
     # Start with auto-restart loop
     _run_loop &
@@ -42,9 +45,9 @@ _run_loop() {
         for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
                     91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 95.161.64.0/20 \
                     91.105.192.0/23 185.76.151.0/24; do
-            iptables -t nat -A TG_TRANSPARENT -d "$cidr" -p tcp -j REDIRECT --to-ports $PORT
+            iptables -t nat -A TG_TRANSPARENT -d "$cidr" -p tcp -j REDIRECT --to-ports $PORT 2>/dev/null
         done
-        iptables -t nat -I PREROUTING -j TG_TRANSPARENT
+        iptables -t nat -I PREROUTING -j TG_TRANSPARENT 2>/dev/null
         sleep 1
     done
 }

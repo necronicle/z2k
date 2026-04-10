@@ -95,29 +95,56 @@ func handleTransparent(clientConn *net.TCPConn) {
 	}
 	defer ws.Close()
 
+	// Ping/pong to detect dead WS — if pong not received in 10s, WS is dead
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+	ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+
 	if *verbose {
 		log.Printf("[relay] %s <-> WS DC%d", clientConn.RemoteAddr(), dc)
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
+	// Pinger — sends ping every 30s
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+				ws.Close()
+				return
+			}
+			ws.SetWriteDeadline(time.Time{})
+		}
+	}()
+
+	// client → WS
 	go func() {
 		defer wg.Done()
 		buf := make([]byte, 65536)
 		for {
 			n, err := clientConn.Read(buf)
 			if n > 0 {
+				ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
 					break
 				}
+				ws.SetWriteDeadline(time.Time{})
 			}
 			if err != nil {
 				break
 			}
 		}
+		ws.Close()
 	}()
 
+	// WS → client
 	go func() {
 		defer wg.Done()
 		for {
@@ -131,6 +158,7 @@ func handleTransparent(clientConn *net.TCPConn) {
 				}
 			}
 		}
+		clientConn.Close()
 	}()
 
 	wg.Wait()
