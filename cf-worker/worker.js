@@ -166,6 +166,8 @@ export default {
       let socket;
       try {
         socket = connect({ hostname: target.address, port: target.port });
+        // Wait for TCP connection to actually establish
+        await socket.opened;
       } catch (e) {
         console.error(`stream ${streamId} connect failed: ${e.message}`);
         sendFrame(streamId, MUX_CONNECT_FAIL, null);
@@ -173,7 +175,9 @@ export default {
       }
 
       const writer = socket.writable.getWriter();
-      streams.set(streamId, { socket, writer });
+      // Store stream immediately so DATA frames arriving before
+      // read loop starts can be written to the socket.
+      streams.set(streamId, { socket, writer, ready: true });
 
       sendFrame(streamId, MUX_CONNECT_OK, null);
 
@@ -184,7 +188,9 @@ export default {
           const { done, value } = await reader.read();
           if (done) break;
           if (value && value.byteLength > 0) {
-            sendFrame(streamId, MUX_DATA, value.buffer || value);
+            // value may be Uint8Array — ensure we pass ArrayBuffer
+            const buf = value.buffer ? value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) : value;
+            sendFrame(streamId, MUX_DATA, buf);
           }
         }
       } catch (e) {

@@ -255,8 +255,7 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 			if *verbose {
 				log.Printf("[tunnel] stream %d CONNECT_OK", frame.StreamID)
 			}
-			// Connection established, start reading from TCP client
-			go tc.streamReadLoop(stream)
+			// streamReadLoop already started in handleTunnelConn
 
 		case muxCONNECT_FAIL:
 			log.Printf("[tunnel] stream %d CONNECT_FAIL", frame.StreamID)
@@ -426,7 +425,10 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		return
 	}
 
-	// streamReadLoop will be started when CONNECT_OK is received
+	// Start reading from client immediately — data will be buffered
+	// in WS until Worker's TCP connect completes. Worker queues DATA
+	// frames and writes them after socket.opened resolves.
+	go tc.streamReadLoop(stream)
 }
 
 // runTunnel is the entry point for tunnel mode.
