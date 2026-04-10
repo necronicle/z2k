@@ -8,13 +8,8 @@
 # ==============================================================================
 
 # Читать ввод пользователя (работает даже когда stdin перенаправлен через pipe)
-# Очищает невидимые символы (UTF-8 мусор от смены раскладки, backspace residue)
 read_input() {
-    local _z2k_raw=""
-    read -r _z2k_raw </dev/tty
-    # Strip non-ASCII, control chars, backspace residue — keep only printable ASCII
-    _z2k_raw=$(printf '%s' "$_z2k_raw" | tr -cd '[:print:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    eval "$1=\"\$_z2k_raw\""
+    read -r "$@" </dev/tty
 }
 
 # ==============================================================================
