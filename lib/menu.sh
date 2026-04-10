@@ -969,13 +969,18 @@ SUBMENU
                     if [ -n "$tg_arch" ]; then
                         local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
                         local tg_ok=false
-                        # Try jsdelivr CDN (not blocked in Russia)
                         for tg_url in \
                             "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/mtproxy-client/builds/${tg_bin}" \
                             "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/builds/${tg_bin}" \
                             "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
-                            curl -fsSL "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null && head -c 4 "$MTPROXY_BIN" | grep -q "ELF" && tg_ok=true && break
-                            command -v wget >/dev/null 2>&1 && wget -q -O "$MTPROXY_BIN" "$tg_url" 2>/dev/null && head -c 4 "$MTPROXY_BIN" | grep -q "ELF" && tg_ok=true && break
+                            curl -fsSL "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
+                            if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
+                                local tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
+                                if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
+                                    tg_ok=true
+                                    break
+                                fi
+                            fi
                         done
                         if $tg_ok; then
                             chmod +x "$MTPROXY_BIN"

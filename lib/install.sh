@@ -341,6 +341,7 @@ libcap
 zlib
 curl
 unzip
+cron
 "
 
     print_info "Установка пакетов..."
@@ -1512,11 +1513,7 @@ step_finalize() {
     local crontab_file="/opt/etc/crontab"
     local cron_ok=0
 
-    # Установить cron если не установлен
-    if ! command -v crontab >/dev/null 2>&1 && ! [ -f "$crontab_file" ]; then
-        print_info "Установка cron..."
-        opkg install cron 2>/dev/null || true
-    fi
+    # cron устанавливается в step_install_dependencies
 
     # Метод 1: /opt/etc/crontab (Entware cron)
     if [ -f "$crontab_file" ] || [ -d "/opt/etc" ]; then
@@ -1603,15 +1600,22 @@ step_finalize() {
             ppc64*)         tg_arch="ppc64" ;;
         esac
         if [ -n "$tg_arch" ]; then
-            local tg_url="https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/tg-mtproxy-client-linux-${tg_arch}"
             local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
             local tg_ok=false
+            local tg_dest="/opt/sbin/tg-mtproxy-client"
             for tg_try_url in \
                 "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/mtproxy-client/builds/${tg_bin}" \
                 "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/builds/${tg_bin}" \
                 "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
-                curl -fsSL "$tg_try_url" -o /opt/sbin/tg-mtproxy-client 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF" && tg_ok=true && break
-                command -v wget >/dev/null 2>&1 && wget -q -O /opt/sbin/tg-mtproxy-client "$tg_try_url" 2>/dev/null && head -c 4 /opt/sbin/tg-mtproxy-client | grep -q "ELF" && tg_ok=true && break
+                curl -fsSL "$tg_try_url" -o "$tg_dest" 2>/dev/null
+                if [ -f "$tg_dest" ] && [ "$(head -c 4 "$tg_dest" | hexdump -n 4 -e '"%02x"' 2>/dev/null || head -c 4 "$tg_dest" | od -x | head -1 | awk '{print $2}')" != "" ] && [ -s "$tg_dest" ]; then
+                    # Check file size > 100KB (valid binary, not HTML page)
+                    local tg_size=$(wc -c < "$tg_dest" 2>/dev/null)
+                    if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
+                        tg_ok=true
+                        break
+                    fi
+                fi
             done
             if $tg_ok; then
                 chmod +x /opt/sbin/tg-mtproxy-client
