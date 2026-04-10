@@ -422,12 +422,14 @@ create_official_config() {
         export NFQWS2_OPT="$nfqws2_opt_value"
         export NFQWS2="/opt/zapret2/nfq2/nfqws2"
 
-        # Проверить опции
-        if dry_run_nfqws 2>/dev/null; then
-            print_success "Опции nfqws2 валидны"
-        else
-            print_warning "Некоторые опции nfqws2 могут быть некорректными"
-            print_info "Продолжаем установку (init скрипт повторно проверит при запуске)"
+        # Проверить опции (dry_run может ложно падать если lua/blob файлы
+        # ещё не установлены — это нормально при первой установке)
+        if command -v dry_run_nfqws >/dev/null 2>&1; then
+            if dry_run_nfqws 2>/dev/null; then
+                print_success "Опции nfqws2 валидны (dry-run OK)"
+            else
+                print_info "dry-run nfqws2 не прошёл (нормально при установке — lua/blob файлы подключатся при запуске)"
+            fi
         fi
     else
         print_info "Модули валидации не найдены, пропускаем проверку"
