@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -62,7 +63,10 @@ func resolveIPCached(host string) (string, error) {
 }
 
 // handleTransparent redirects intercepted Telegram traffic through
-// Cloudflare WebSocket without any encryption/decryption.
+// Cloudflare WebSocket. Optimized for throughput:
+// - TCP_NODELAY on client connection (disable Nagle)
+// - Buffered reads with flush coalescing (reduce WS frame count)
+// - Large WebSocket write/read buffers
 func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 	defer clientConn.Close()
 	defer func() {
@@ -83,7 +87,8 @@ func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 		log.Printf("[conn] %s -> DC%d (%s)", clientConn.RemoteAddr(), dc, origIP)
 	}
 
-	// Set initial deadline
+	// Performance: disable Nagle's algorithm — send data immediately
+	clientConn.SetNoDelay(true)
 	clientConn.SetDeadline(time.Now().Add(*connTimeout))
 
 	// Connect via WebSocket with retry
@@ -105,15 +110,17 @@ func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 	}
 	defer ws.Close()
 
+	// Performance: enable WebSocket compression if server supports it
+	ws.EnableWriteCompression(true)
+
 	writer := &wsWriter{ws: ws}
 
-	// Create cancellable context for this connection
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Keepalive: CF kills idle WS after 100s. Ping every 60s.
+	// Keepalive: CF kills idle WS after 100s. Ping every 50s.
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		ticker := time.NewTicker(50 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -132,17 +139,23 @@ func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// client → WS: buffered reader coalesces small TCP segments into larger WS frames
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		buf := make([]byte, 65536)
+
+		reader := bufio.NewReaderSize(clientConn, 128*1024) // 128KB read buffer
+		buf := make([]byte, 128*1024)
+
 		for {
 			select {
 			case <-connCtx.Done():
 				return
 			default:
 			}
-			n, err := clientConn.Read(buf)
+
+			// Read as much as available (buffered — coalesces small segments)
+			n, err := reader.Read(buf)
 			if n > 0 {
 				clientConn.SetDeadline(time.Now().Add(*connTimeout))
 				if werr := writer.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
@@ -155,9 +168,13 @@ func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 		}
 	}()
 
+	// WS → client: direct write with write buffer
 	go func() {
 		defer wg.Done()
 		defer cancel()
+
+		clientWriter := bufio.NewWriterSize(clientConn, 128*1024) // 128KB write buffer
+
 		for {
 			select {
 			case <-connCtx.Done():
@@ -173,9 +190,11 @@ func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 			}
 			if len(msg) > 0 {
 				clientConn.SetDeadline(time.Now().Add(*connTimeout))
-				if _, werr := clientConn.Write(msg); werr != nil {
+				if _, werr := clientWriter.Write(msg); werr != nil {
 					break
 				}
+				// Flush immediately if buffer has enough data or ws has no more pending
+				clientWriter.Flush()
 			}
 		}
 	}()
@@ -198,7 +217,7 @@ func connectWSTransparent(dc int, isMedia bool) (*websocket.Conn, error) {
 	// Determine dial network and address format based on IP version
 	dialNetwork := "tcp4"
 	dialAddr := ip + ":443"
-	if net.ParseIP(ip).To4() == nil {
+	if net.ParseIP(ip) != nil && net.ParseIP(ip).To4() == nil {
 		dialNetwork = "tcp6"
 		dialAddr = "[" + ip + "]:443"
 	}
@@ -207,10 +226,21 @@ func connectWSTransparent(dc int, isMedia bool) (*websocket.Conn, error) {
 		TLSClientConfig: &tls.Config{
 			ServerName: cfDomain,
 		},
-		HandshakeTimeout: 5 * time.Second,
-		Subprotocols:     []string{"binary"},
+		HandshakeTimeout:  5 * time.Second,
+		Subprotocols:      []string{"binary"},
+		ReadBufferSize:    128 * 1024, // 128KB WS read buffer
+		WriteBufferSize:   128 * 1024, // 128KB WS write buffer
+		EnableCompression: true,       // per-message deflate
 		NetDial: func(network, addr string) (net.Conn, error) {
-			return net.DialTimeout(dialNetwork, dialAddr, 5*time.Second)
+			conn, err := net.DialTimeout(dialNetwork, dialAddr, 5*time.Second)
+			if err != nil {
+				return nil, err
+			}
+			// TCP_NODELAY on WS connection too
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				tcpConn.SetNoDelay(true)
+			}
+			return conn, nil
 		},
 	}
 	headers := http.Header{}
@@ -224,7 +254,7 @@ func connectWSTransparent(dc int, isMedia bool) (*websocket.Conn, error) {
 	}
 
 	// Set read limit to prevent memory exhaustion
-	ws.SetReadLimit(1 * 1024 * 1024) // 1MB
+	ws.SetReadLimit(2 * 1024 * 1024) // 2MB for media
 
 	if *verbose {
 		log.Printf("[debug] WS connected to %s (%s)", cfDomain, ip)

@@ -1194,84 +1194,29 @@ menu_telegram_mtproxy() {
         fi
 
         print_separator
-        printf " DPI bypass (nfqws2): %s\n" "$([ "$tg_dpi_enabled" = "1" ] && echo 'Включен (быстрый)' || echo 'Выключен')"
-        printf " WS proxy (fallback): %s\n" "$($running && echo 'Включен' || echo 'Выключен')"
+        printf " Прозрачный прокси: %s\n" "$($running && echo 'Включен' || echo 'Выключен')"
         print_separator
 
         cat <<'SUBMENU'
 
-Два режима обхода блокировки Telegram:
+Прозрачное проксирование Telegram через Cloudflare WebSocket.
+Трафик к серверам Telegram автоматически перенаправляется через
+Cloudflare CDN. Провайдер видит только HTTPS к Cloudflare.
 
-[1] DPI bypass (рекомендуется) — nfqws2 модифицирует только
-    TLS handshake к серверам Telegram. Трафик идёт НАПРЯМУЮ.
-    Скорость = как без блокировки. Не требует настройки устройств.
+Не требует настройки устройств — работает для ВСЕХ клиентов
+в сети (телефоны, ПК, ТВ) сразу после включения.
 
-[2] WS proxy (fallback) — весь трафик через Cloudflare WebSocket.
-    Медленнее, но работает при глубокой блокировке IP Telegram.
-    Не требует настройки устройств.
-
-[3] Выключить DPI bypass
-[4] Выключить WS proxy
+[1] Включить прозрачный прокси
+[2] Выключить прозрачный прокси
 [B] Назад
 
 SUBMENU
 
-        printf "Выберите опцию [1-4,B]: "
+        printf "Выберите опцию [1-2,B]: "
         read_input sub_choice
 
         case "$sub_choice" in
             1)
-                # Enable nfqws2 DPI bypass for Telegram
-                if [ ! -f "$config_file" ]; then
-                    print_error "Конфиг не найден. Установите zapret2 сначала"
-                    pause
-                    continue
-                fi
-
-                # Copy Telegram IP list
-                if [ -f "${WORK_DIR}/files/lists/telegram_ips.txt" ]; then
-                    mkdir -p "${ZAPRET2_DIR}/lists"
-                    cp -f "${WORK_DIR}/files/lists/telegram_ips.txt" "${ZAPRET2_DIR}/lists/telegram_ips.txt"
-                elif [ -f "${ZAPRET2_DIR}/files/lists/telegram_ips.txt" ]; then
-                    mkdir -p "${ZAPRET2_DIR}/lists"
-                    cp -f "${ZAPRET2_DIR}/files/lists/telegram_ips.txt" "${ZAPRET2_DIR}/lists/telegram_ips.txt"
-                fi
-
-                if [ ! -f "${ZAPRET2_DIR}/lists/telegram_ips.txt" ]; then
-                    # Download if not available locally
-                    curl -fsSL --connect-timeout 10 --max-time 30 \
-                        "https://raw.githubusercontent.com/necronicle/z2k/forge/files/lists/telegram_ips.txt" \
-                        -o "${ZAPRET2_DIR}/lists/telegram_ips.txt" 2>/dev/null || true
-                fi
-
-                if [ ! -s "${ZAPRET2_DIR}/lists/telegram_ips.txt" ]; then
-                    print_error "Не удалось получить список IP Telegram"
-                    pause
-                    continue
-                fi
-
-                # Set flag in config
-                if grep -q '^TG_DPI_BYPASS=' "$config_file"; then
-                    sed -i 's/^TG_DPI_BYPASS=.*/TG_DPI_BYPASS=1/' "$config_file"
-                else
-                    echo "TG_DPI_BYPASS=1" >> "$config_file"
-                fi
-
-                # Regenerate config and restart
-                print_info "Регенерация конфигурации..."
-                if command -v regenerate_and_apply_config >/dev/null 2>&1; then
-                    regenerate_and_apply_config
-                elif [ -x "$INIT_SCRIPT" ]; then
-                    "$INIT_SCRIPT" restart
-                fi
-
-                print_success "Telegram DPI bypass включен"
-                print_info "Трафик идёт напрямую к серверам Telegram"
-                print_info "nfqws2 модифицирует только TLS handshake"
-                pause
-                ;;
-
-            2)
                 if ! [ -f "$MTPROXY_BIN" ]; then
                     print_warning "Бинарник не найден, скачиваю..."
                     local tg_arch=""
@@ -1340,21 +1285,7 @@ SUBMENU
                 pause
                 ;;
 
-            3)
-                # Disable DPI bypass
-                if [ -f "$config_file" ]; then
-                    sed -i 's/^TG_DPI_BYPASS=.*/TG_DPI_BYPASS=0/' "$config_file"
-                    if [ -x "$INIT_SCRIPT" ] && is_zapret2_running; then
-                        "$INIT_SCRIPT" restart
-                    fi
-                    print_success "Telegram DPI bypass выключен"
-                else
-                    print_info "DPI bypass не был включен"
-                fi
-                pause
-                ;;
-
-            4)
+            2)
                 /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null
                 # Kill loop shell too
                 if [ -f "$MTPROXY_PID" ]; then
