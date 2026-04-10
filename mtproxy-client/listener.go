@@ -5,13 +5,31 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+	"unsafe"
 )
 
 const (
 	soOriginalDst  = 80 // SO_ORIGINAL_DST for IPv4 (SOL_IP = IPPROTO_IP)
 	soOriginalDst6 = 80 // IP6T_SO_ORIGINAL_DST for IPv6
-	solIPv6        = 41  // SOL_IPV6
+	solIPv6        = 41 // SOL_IPV6
 )
+
+// rawSockaddrIn6 matches the C struct sockaddr_in6 layout:
+//
+//	struct sockaddr_in6 {
+//	    uint16_t sin6_family;   // [0:2]
+//	    uint16_t sin6_port;     // [2:4]  big-endian
+//	    uint32_t sin6_flowinfo; // [4:8]
+//	    uint8_t  sin6_addr[16]; // [8:24]
+//	    uint32_t sin6_scope_id; // [24:28]
+//	};
+type rawSockaddrIn6 struct {
+	Family   uint16
+	Port     uint16 // big-endian
+	Flowinfo uint32
+	Addr     [16]byte
+	ScopeID  uint32
+}
 
 // getOriginalDst retrieves the original destination address from a redirected connection.
 // Works with iptables/ip6tables REDIRECT target. Supports both IPv4 and IPv6.
@@ -27,6 +45,7 @@ func getOriginalDst(conn *net.TCPConn) (net.IP, int, error) {
 
 	err = rawConn.Control(func(fd uintptr) {
 		// Try IPv4 first: getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, &addr, &len)
+		// GetsockoptIPv6Mreq gives us 20 bytes — enough for sockaddr_in (16 bytes)
 		addr, err := syscall.GetsockoptIPv6Mreq(int(fd), syscall.IPPROTO_IP, soOriginalDst)
 		if err == nil {
 			// addr.Multiaddr contains sockaddr_in as raw bytes:
@@ -42,39 +61,34 @@ func getOriginalDst(conn *net.TCPConn) (net.IP, int, error) {
 			}
 		}
 
-		// Try IPv6: getsockopt(fd, SOL_IPV6, IP6T_SO_ORIGINAL_DST, &addr, &len)
-		addr6, err6 := syscall.GetsockoptIPv6Mreq(int(fd), solIPv6, soOriginalDst6)
-		if err6 != nil {
-			// Both failed — report the IPv6 error (IPv4 either failed or had wrong family)
+		// Try IPv6: use raw getsockopt to get the full 28-byte sockaddr_in6
+		var sa6 rawSockaddrIn6
+		sa6Len := uint32(unsafe.Sizeof(sa6))
+		_, _, errno := syscall.Syscall6(
+			syscall.SYS_GETSOCKOPT,
+			fd,
+			uintptr(solIPv6),
+			uintptr(soOriginalDst6),
+			uintptr(unsafe.Pointer(&sa6)),
+			uintptr(unsafe.Pointer(&sa6Len)),
+			0,
+		)
+		if errno != 0 {
 			if err != nil {
-				syscallErr = fmt.Errorf("getsockopt SO_ORIGINAL_DST v4: %w, v6: %w", err, err6)
+				syscallErr = fmt.Errorf("getsockopt SO_ORIGINAL_DST v4: %w, v6: %v", err, errno)
 			} else {
-				syscallErr = fmt.Errorf("getsockopt IP6T_SO_ORIGINAL_DST: %w", err6)
+				syscallErr = fmt.Errorf("getsockopt IP6T_SO_ORIGINAL_DST: %v", errno)
 			}
 			return
 		}
 
-		// addr6.Multiaddr contains sockaddr_in6 as raw bytes:
-		// [0:2]  = family (AF_INET6=10)
-		// [2:4]  = port (big-endian)
-		// [4:8]  = flow info
-		// [8:24] = 16-byte IPv6 address (but Multiaddr is only 16 bytes,
-		//          so we use both Multiaddr and Interface for the full struct)
-		// With GetsockoptIPv6Mreq, the sockaddr_in6 is split:
-		//   Multiaddr [0:16] = bytes 0-15 of sockaddr_in6
-		//   Interface [0:4]  = bytes 16-19 of sockaddr_in6 (last 4 of IPv6 addr)
-		// So port is at Multiaddr[2:4], IPv6 address is at Multiaddr[4:16] + Interface bytes
-		raw6 := addr6.Multiaddr
-		origPort = int(binary.BigEndian.Uint16(raw6[2:4]))
-
-		// Reconstruct the 16-byte IPv6 address: bytes [4:16] from Multiaddr (12 bytes)
-		// plus 4 bytes from the Interface field
-		var ipv6Addr [16]byte
-		copy(ipv6Addr[0:12], raw6[4:16])
-		ifBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(ifBytes, addr6.Interface)
-		copy(ipv6Addr[12:16], ifBytes)
-		origIP = net.IP(ipv6Addr[:])
+		// Parse the full sockaddr_in6.
+		// Port is stored in network byte order (big-endian) by the kernel,
+		// but Go reads raw struct bytes as host-endian uint16.
+		// Convert from network to host byte order:
+		portBytes := (*[2]byte)(unsafe.Pointer(&sa6.Port))
+		origPort = int(binary.BigEndian.Uint16(portBytes[:]))
+		origIP = net.IP(sa6.Addr[:])
 	})
 
 	if err != nil {
