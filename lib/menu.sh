@@ -1089,7 +1089,7 @@ menu_roblox_bypass() {
     cat <<'SUBMENU'
 
 Игровые серверы Roblox используют кастомный UDP протокол
-на портах 49152-65535. Блокируются по IP диапазонам.
+на портах 1024-65535. Блокируются по IP диапазонам.
 
 При включении создается профиль nfqws2 с fake-пакетами,
 направленными на IP Roblox (AS22697). Остальной UDP
@@ -1116,8 +1116,8 @@ SUBMENU
             fi
 
             # Add ephemeral ports to UDP if not present
-            if ! grep -q "49152-65535" "$config_file"; then
-                sed -i 's/^NFQWS2_PORTS_UDP="\(.*\)"/NFQWS2_PORTS_UDP="\1,49152-65535"/' "$config_file"
+            if ! grep -q "1024-65535" "$config_file"; then
+                sed -i 's/^NFQWS2_PORTS_UDP="\(.*\)"/NFQWS2_PORTS_UDP="\1,1024-65535"/' "$config_file"
             fi
 
             print_success "Roblox UDP включен"
@@ -1143,7 +1143,7 @@ SUBMENU
             sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=0/' "$config_file"
 
             # Remove ephemeral ports
-            sed -i 's/,49152-65535//' "$config_file"
+            sed -i 's/,1024-65535//' "$config_file"
 
             print_success "Roblox UDP выключен"
 
