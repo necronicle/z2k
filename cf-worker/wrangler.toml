@@ -3,4 +3,4 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
-TUNNEL_SECRET = "CHANGE_ME_TO_RANDOM_SECRET"
+TUNNEL_SECRET = "d01f72f9543b29da4e3724b1530c0d11cb30a6f8db15bc0adfe8f2d37b5844b2"

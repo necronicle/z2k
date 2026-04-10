@@ -1272,42 +1272,12 @@ SUBMENU
                     fi
                 fi
 
-                cat <<'TUNNEL_INFO'
-
-Для работы tunnel-режима нужен Cloudflare Worker (бесплатный).
-
-Шаги:
-  1. Создайте аккаунт на https://dash.cloudflare.com/
-  2. Установите Wrangler: npm install -g wrangler
-  3. Скопируйте cf-worker/ из репозитория z2k
-  4. Измените TUNNEL_SECRET в wrangler.toml
-  5. Деплой: npx wrangler deploy
-  6. Получите URL: https://z2k-tunnel.YOUR_SUBDOMAIN.workers.dev
-
-TUNNEL_INFO
-
-                printf "Введите URL Worker (wss://...): "
-                read_input tunnel_url
-                if [ -z "$tunnel_url" ]; then
-                    print_error "URL не указан"
-                    pause
-                    continue
-                fi
-
-                printf "Введите секрет (из wrangler.toml): "
-                read_input tunnel_secret
-                if [ -z "$tunnel_secret" ]; then
-                    print_error "Секрет не указан"
-                    pause
-                    continue
-                fi
-
                 # Stop old processes
                 killall tg-mtproxy-client 2>/dev/null || true
                 sleep 1
 
-                # Start tunnel mode
-                "$MTPROXY_BIN" --tunnel --tunnel-url="$tunnel_url" --tunnel-secret="$tunnel_secret" --listen=:1443 &
+                # Start tunnel mode (URL and secret are built-in defaults)
+                "$MTPROXY_BIN" --tunnel --listen=:1443 &
                 local tunnel_pid=$!
                 sleep 2
 
