@@ -39,6 +39,11 @@ func init() {
 		{"185.76.151.0/24", 2},
 		{"91.105.192.0/23", 2},
 		{"95.161.64.0/20", 2},
+
+		// IPv6 Telegram ranges
+		{"2001:b28:f23d::/48", 2}, // DC2 main IPv6
+		{"2001:b28:f23f::/48", 5}, // DC5 IPv6
+		{"2001:67c:4e8::/48", 2},  // General Telegram IPv6
 	}
 
 	for _, e := range entries {
@@ -51,20 +56,46 @@ func init() {
 }
 
 // LookupDC returns the Telegram DC number for the given IP.
-// Returns 2 (default DC) if no match found.
+// Returns 2 (default DC) if no match found. Supports both IPv4 and IPv6.
 func LookupDC(ip net.IP) int16 {
-	// Check most specific first (single IPs for DC3/DC4).
-	for _, e := range dcTable {
-		ones, _ := e.cidr.Mask.Size()
-		if ones == 32 && e.cidr.IP.Equal(ip) {
-			return e.dc
+	isV6 := ip.To4() == nil
+
+	if !isV6 {
+		// IPv4: check most specific first (single IPs for DC3/DC4).
+		for _, e := range dcTable {
+			ones, _ := e.cidr.Mask.Size()
+			if ones == 32 && e.cidr.IP.Equal(ip) {
+				return e.dc
+			}
 		}
 	}
+
+	// Check all CIDR ranges (both v4 and v6).
+	// For IPv4, skip /32 (already checked above). For IPv6, check all.
+	bestOnes := -1
+	bestDC := int16(0)
 	for _, e := range dcTable {
-		ones, _ := e.cidr.Mask.Size()
-		if ones < 32 && e.cidr.Contains(ip) {
-			return e.dc
+		ones, bits := e.cidr.Mask.Size()
+		if !isV6 && ones == 32 {
+			continue // already handled above for v4
 		}
+		if e.cidr.Contains(ip) {
+			// Pick the most specific (longest prefix) match.
+			// Normalize: compare relative specificity (ones out of bits).
+			// For same address family, just compare ones directly.
+			specificity := ones
+			if bits == 128 {
+				// IPv6 range
+				specificity = ones
+			}
+			if specificity > bestOnes {
+				bestOnes = specificity
+				bestDC = e.dc
+			}
+		}
+	}
+	if bestOnes >= 0 {
+		return bestDC
 	}
 	return 2
 }

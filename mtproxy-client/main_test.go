@@ -153,6 +153,36 @@ func TestWsDomains(t *testing.T) {
 	}
 }
 
+func TestLookupDC_IPv6(t *testing.T) {
+	tests := []struct {
+		ip       string
+		expected int16
+	}{
+		{"2001:b28:f23d::1", 2},    // DC2 main IPv6 range
+		{"2001:b28:f23d:f:1::2", 2}, // DC2 within /48
+		{"2001:b28:f23f::1", 5},    // DC5 IPv6 range
+		{"2001:b28:f23f:a:b::c", 5}, // DC5 within /48
+		{"2001:67c:4e8::1", 2},     // General Telegram IPv6
+		{"2001:67c:4e8:ff::1", 2},  // General Telegram IPv6 within /48
+		{"2600:1234::1", 2},        // Unknown IPv6 → default DC2
+	}
+
+	for _, tt := range tests {
+		ip := net.ParseIP(tt.ip)
+		if ip == nil {
+			t.Fatalf("failed to parse IP %s", tt.ip)
+		}
+		got := LookupDC(ip)
+		if got != tt.expected {
+			t.Errorf("LookupDC(%s) = %d, want %d", tt.ip, got, tt.expected)
+		}
+	}
+}
+
+func TestGetOriginalDst_SkipWithoutIptables(t *testing.T) {
+	t.Skip("getOriginalDst requires iptables REDIRECT; skipping in unit tests")
+}
+
 func TestWsWriter_Serialization(t *testing.T) {
 	// Just verify the struct compiles and methods exist
 	var _ *wsWriter

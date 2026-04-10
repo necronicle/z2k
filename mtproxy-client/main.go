@@ -178,6 +178,28 @@ func generateRelayInit(protoTag uint32, dcIdx int) (header []byte, relayEncKey, 
 	return header, relayEncKey, relayEncIV, relayDecKey, relayDecIV, nil
 }
 
+// resolveIP resolves a hostname, preferring IPv4 but falling back to IPv6.
+func resolveIP(host string) (string, error) {
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return "", err
+	}
+	// Prefer IPv4
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip.String(), nil
+		}
+	}
+	// Fall back to IPv6
+	for _, ip := range ips {
+		if ip.To4() == nil && ip.To16() != nil {
+			return ip.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no IP for %s", host)
+}
+
+// resolveIPv4 resolves only IPv4 addresses (kept for backward compatibility).
 func resolveIPv4(host string) (string, error) {
 	ips, err := net.LookupIP(host)
 	if err != nil {
@@ -200,12 +222,20 @@ func connectWS(dc int, isMedia bool) (*websocket.Conn, error) {
 	allDomains = append(allDomains, fmt.Sprintf("kws%d.pclead.co.uk", dc))
 
 	for _, domain := range allDomains {
-		ip, err := resolveIPv4(domain)
+		ip, err := resolveIP(domain)
 		if err != nil {
 			if *verbose {
 				log.Printf("[debug] resolve %s failed: %v", domain, err)
 			}
 			continue
+		}
+
+		// Determine dial network and address format based on IP version
+		dialNetwork := "tcp4"
+		dialAddr := ip + ":443"
+		if net.ParseIP(ip).To4() == nil {
+			dialNetwork = "tcp6"
+			dialAddr = "[" + ip + "]:443"
 		}
 
 		dialer := websocket.Dialer{
@@ -215,7 +245,7 @@ func connectWS(dc int, isMedia bool) (*websocket.Conn, error) {
 			HandshakeTimeout: 5 * time.Second,
 			Subprotocols:     []string{"binary"},
 			NetDial: func(network, addr string) (net.Conn, error) {
-				return net.DialTimeout("tcp4", ip+":443", 5*time.Second)
+				return net.DialTimeout(dialNetwork, dialAddr, 5*time.Second)
 			},
 		}
 		headers := http.Header{}

@@ -27,7 +27,8 @@ type dnsCacheEntry struct {
 	ts time.Time
 }
 
-func resolveIPv4Cached(host string) (string, error) {
+// resolveIPCached resolves a hostname with caching, preferring IPv4 but supporting IPv6.
+func resolveIPCached(host string) (string, error) {
 	// Check cache
 	if val, ok := dnsCache.Load(host); ok {
 		entry := val.(*dnsCacheEntry)
@@ -36,8 +37,8 @@ func resolveIPv4Cached(host string) (string, error) {
 		}
 	}
 
-	// Try resolving
-	newIP, err := resolveIPv4(host)
+	// Try resolving (prefers IPv4, falls back to IPv6)
+	newIP, err := resolveIP(host)
 	if err != nil {
 		// DNS failed — use stale cache if available (max 1 hour)
 		if val, ok := dnsCache.Load(host); ok {
@@ -189,9 +190,17 @@ func handleTransparent(ctx context.Context, clientConn *net.TCPConn) {
 func connectWSTransparent(dc int, isMedia bool) (*websocket.Conn, error) {
 	cfDomain := fmt.Sprintf("kws%d.pclead.co.uk", dc)
 
-	ip, err := resolveIPv4Cached(cfDomain)
+	ip, err := resolveIPCached(cfDomain)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", cfDomain, err)
+	}
+
+	// Determine dial network and address format based on IP version
+	dialNetwork := "tcp4"
+	dialAddr := ip + ":443"
+	if net.ParseIP(ip).To4() == nil {
+		dialNetwork = "tcp6"
+		dialAddr = "[" + ip + "]:443"
 	}
 
 	dialer := websocket.Dialer{
@@ -201,7 +210,7 @@ func connectWSTransparent(dc int, isMedia bool) (*websocket.Conn, error) {
 		HandshakeTimeout: 5 * time.Second,
 		Subprotocols:     []string{"binary"},
 		NetDial: func(network, addr string) (net.Conn, error) {
-			return net.DialTimeout("tcp4", ip+":443", 5*time.Second)
+			return net.DialTimeout(dialNetwork, dialAddr, 5*time.Second)
 		},
 	}
 	headers := http.Header{}
@@ -236,7 +245,7 @@ func transparentListener(listenAddr string) error {
 	// Pre-warm DNS cache for all DCs
 	for _, dc := range []int{1, 2, 3, 4, 5} {
 		domain := fmt.Sprintf("kws%d.pclead.co.uk", dc)
-		if ip, err := resolveIPv4(domain); err == nil {
+		if ip, err := resolveIP(domain); err == nil {
 			dnsCache.Store(domain, &dnsCacheEntry{ip: ip, ts: time.Now()})
 			log.Printf("DNS cache: %s -> %s", domain, ip)
 		}
@@ -257,7 +266,7 @@ func transparentListener(listenAddr string) error {
 			case <-ticker.C:
 				for _, dc := range []int{1, 2, 3, 4, 5} {
 					domain := fmt.Sprintf("kws%d.pclead.co.uk", dc)
-					if ip, err := resolveIPv4(domain); err == nil {
+					if ip, err := resolveIP(domain); err == nil {
 						dnsCache.Store(domain, &dnsCacheEntry{ip: ip, ts: time.Now()})
 					}
 				}

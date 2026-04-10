@@ -1019,3 +1019,95 @@ function z2k_quic_morph_v2(ctx, desync)
         return VERDICT_DROP
     end
 end
+
+-- ==============================================================================
+-- ECH (Encrypted Client Hello) detection and preference
+-- ==============================================================================
+
+-- TLS extension type for ECH (RFC 9460, type 0xfe0d = 65037)
+local TLS_EXT_ECH = 65037
+-- TLS extension type for ECH outer (type 0xfe0e = 65038)
+local TLS_EXT_ECH_OUTER = 65038
+
+-- Detect if a TLS ClientHello contains ECH extension.
+-- If ECH is present, DPI cannot see the real SNI — desync may be unnecessary.
+-- Returns: true if ECH detected, false otherwise
+local function z2k_detect_ech(desync)
+    if not desync or not desync.dis then return false end
+    local payload = desync.dis.payload
+    if type(payload) ~= "string" or #payload < 10 then return false end
+
+    -- Quick check: TLS record type 0x16 (handshake)
+    if payload:byte(1) ~= 0x16 then return false end
+
+    -- Need tls_dissect from nfqws2 runtime
+    if type(tls_dissect) ~= "function" then return false end
+
+    local ok, tdis = pcall(tls_dissect, payload)
+    if not ok or not tdis then return false end
+
+    local hs = tdis.handshake
+    if not hs then return false end
+    local ch_type = TLS_HANDSHAKE_TYPE_CLIENT
+    if not ch_type then ch_type = 1 end
+    local ch = hs[ch_type]
+    if not ch or not ch.dis or type(ch.dis.ext) ~= "table" then return false end
+
+    for _, ext in ipairs(ch.dis.ext) do
+        if ext.type == TLS_EXT_ECH or ext.type == TLS_EXT_ECH_OUTER then
+            return true
+        end
+    end
+    return false
+end
+
+-- ECH-aware desync action: skip desync if ECH is detected.
+-- Use as: --lua-desync=z2k_ech_passthrough:payload=tls_client_hello:dir=out
+-- When ECH is detected, passes the packet through unmodified.
+-- When ECH is NOT detected, falls through to next desync action.
+function z2k_ech_passthrough(ctx, desync)
+    if not desync or not desync.dis then return end
+
+    direction_cutoff_opposite(ctx, desync, "out")
+    if not direction_check(desync, "out") then return end
+    if not payload_check(desync, "tls_client_hello") then return end
+
+    if z2k_detect_ech(desync) then
+        DLOG("z2k_ech_passthrough: ECH detected, skipping desync")
+        -- Cut off all remaining desync instances for this packet
+        instance_cutoff_shim(ctx, desync, true)
+        return
+    end
+    -- No ECH — fall through to next desync action
+end
+
+-- Strategy profiling: track per-strategy success rate and latency
+-- for automated strategy quality scoring.
+-- Data stored in telemetry.tsv via z2k-autocircular.lua integration.
+function z2k_strategy_profile(ctx, desync)
+    if not desync then return end
+
+    local arg = desync.arg or {}
+    local profile_key = arg.key or "default"
+    local strategy = tonumber(arg.strategy)
+    if not strategy then return end
+
+    -- Record start time for latency measurement
+    local st = desync.track and desync.track.lua_state
+    if type(st) ~= "table" then return end
+
+    local pkey = "__z2k_profile_" .. tostring(profile_key)
+    if not st[pkey] then
+        st[pkey] = { t0 = 0, strategy = strategy }
+    end
+
+    if desync.outgoing then
+        local p = desync.l7payload
+        if p == "tls_client_hello" or p == "quic_initial" or p == "http_req" then
+            if st[pkey].t0 == 0 then
+                st[pkey].t0 = (type(clock_getfloattime) == "function" and clock_getfloattime()) or os.time() or 0
+                st[pkey].strategy = strategy
+            end
+        end
+    end
+end

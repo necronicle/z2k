@@ -774,6 +774,18 @@ step_build_zapret2() {
         fi
     done
 
+    # Install web panel files
+    if [ -f "${WORK_DIR}/files/z2k-webpanel.sh" ]; then
+        mkdir -p "${ZAPRET2_DIR}/www/cgi-bin"
+        cp -f "${WORK_DIR}/files/z2k-webpanel.sh" "${ZAPRET2_DIR}/www/cgi-bin/index.cgi" 2>/dev/null || true
+        chmod +x "${ZAPRET2_DIR}/www/cgi-bin/index.cgi" 2>/dev/null || true
+        print_info "Установлена: веб-панель мониторинга"
+    fi
+    if [ -f "${WORK_DIR}/files/z2k-webpanel-install.sh" ]; then
+        cp -f "${WORK_DIR}/files/z2k-webpanel-install.sh" "${ZAPRET2_DIR}/z2k-webpanel-install.sh" 2>/dev/null || true
+        chmod +x "${ZAPRET2_DIR}/z2k-webpanel-install.sh" 2>/dev/null || true
+    fi
+
     # Copy snapshot domain lists for local install flow (no external list repos)
     if [ -d "${WORK_DIR}/files/lists" ]; then
         print_info "Copying snapshot domain lists..."

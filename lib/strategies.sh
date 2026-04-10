@@ -181,9 +181,10 @@ EOF
 
     # Подсчет и валидация
     local total_count
-    total_count=$(grep -c '^[0-9]' "$output_file" 2>/dev/null || echo "0")
+    total_count=$(grep -c '^[0-9]' "$output_file" 2>/dev/null | tr -d '[:space:]')
+    total_count=${total_count:-0}
 
-    if [ "$total_count" -eq 0 ]; then
+    if [ "$total_count" -eq 0 ] 2>/dev/null || [ -z "$total_count" ]; then
         print_error "Стратегии не найдены в $input_file (проверьте формат файла)"
         return 1
     fi

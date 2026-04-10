@@ -98,6 +98,10 @@ local function can_append_existing_file(path)
   return true
 end
 
+-- Note on TOCTOU: this check is a best-effort early bailout only.
+-- Actual write safety is guaranteed by acquire_lock() + write-to-tmp + os.rename().
+-- If permissions change between this check and the write, the rename will fail
+-- gracefully and pending_write will be set for retry.
 local function can_replace_file_via_parent_dir(path)
   if is_blank(path) then return false end
   local dir = tostring(path):match("^(.*)/[^/]+$")
