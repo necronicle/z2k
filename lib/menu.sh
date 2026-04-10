@@ -1247,8 +1247,6 @@ SUBMENU
 
                 # Stop any old processes
                 killall tg-mtproxy-client 2>/dev/null || true
-                /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null || true
-                chmod -x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null || true
                 sleep 1
 
                 # Start tunnel
@@ -1273,7 +1271,6 @@ SUBMENU
             2)
                 # Stop tunnel + cleanup
                 killall tg-mtproxy-client 2>/dev/null || true
-                /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null || true
                 for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                     iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || true
                 done

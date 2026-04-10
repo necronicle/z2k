@@ -1652,19 +1652,12 @@ step_finalize() {
         print_info "Telegram прокси уже установлен"
     fi
 
-    # Init script — always update
-    local tg_init_url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}/mtproxy-client/S97tg-mtproxy"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$tg_init_url" -o /opt/etc/init.d/S97tg-mtproxy; then
-        chmod +x /opt/etc/init.d/S97tg-mtproxy
-        print_success "Init скрипт Telegram прокси установлен"
-    fi
+    # Cleanup legacy WS proxy init script (replaced by tunnel)
+    rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
 
     # Auto-start Telegram tunnel
     if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
-        # Kill any old proxy processes
         killall tg-mtproxy-client 2>/dev/null || true
-        /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null || true
-        chmod -x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null || true
         sleep 1
 
         # Start tunnel mode
