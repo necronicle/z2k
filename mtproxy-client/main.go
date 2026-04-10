@@ -165,7 +165,9 @@ func generateRelayInit(protoTag uint32, dcIdx int) (header []byte, relayEncKey, 
 	tail := make([]byte, 8)
 	binary.LittleEndian.PutUint32(tail[0:4], protoTag)
 	binary.LittleEndian.PutUint16(tail[4:6], uint16(int16(dcIdx)))
-	rand.Read(tail[6:8])
+	if _, err := rand.Read(tail[6:8]); err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("rand.Read: %w", err)
+	}
 
 	// XOR tail with keystream at position 56
 	for i := 0; i < 8; i++ {
@@ -248,6 +250,7 @@ type wsWriter struct {
 func (w *wsWriter) WriteMessage(messageType int, data []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	return w.ws.WriteMessage(messageType, data)
 }
 
@@ -450,7 +453,9 @@ func main() {
 	var secret []byte
 	if *secretHex == "" {
 		secret = make([]byte, 16)
-		rand.Read(secret)
+		if _, err := rand.Read(secret); err != nil {
+			log.Fatalf("Failed to generate secret: %v", err)
+		}
 		*secretHex = fmt.Sprintf("dd%x", secret)
 		log.Printf("Generated secret: %s", *secretHex)
 	} else {

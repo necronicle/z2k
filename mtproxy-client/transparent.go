@@ -39,13 +39,18 @@ func resolveIPv4Cached(host string) (string, error) {
 	// Try resolving
 	newIP, err := resolveIPv4(host)
 	if err != nil {
-		// DNS failed — use stale cache if available
+		// DNS failed — use stale cache if available (max 1 hour)
 		if val, ok := dnsCache.Load(host); ok {
 			entry := val.(*dnsCacheEntry)
-			if *verbose {
-				log.Printf("[debug] DNS failed for %s, using cached %s", host, entry.ip)
+			if time.Since(entry.ts) < 1*time.Hour {
+				if *verbose {
+					log.Printf("[debug] DNS failed for %s, using cached %s (age %s)", host, entry.ip, time.Since(entry.ts))
+				}
+				return entry.ip, nil
 			}
-			return entry.ip, nil
+			if *verbose {
+				log.Printf("[debug] DNS failed for %s, stale cache expired (age %s)", host, time.Since(entry.ts))
+			}
 		}
 		return "", err
 	}
