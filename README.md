@@ -21,16 +21,16 @@ z2k — модульный установщик zapret2 для роутеров 
 
 ## Особенности
 
-### DPI bypass
+### Сетевые стратегии
 
 - Установка zapret2 (openwrt-embedded релиз) без компиляции, с проверкой работоспособности `nfqws2`
 - Три TCP autocircular профиля с разными стратегиями:
-  - **RKN** — список ресурсов (TCP/TLS + HTTP) — 45 стратегий
+  - **General** — список ресурсов (TCP/TLS + HTTP) — 45 стратегий
   - **YouTube TCP** — youtube.com и связанные домены — 22 стратегии
   - **YouTube GV** — googlevideo CDN (стриминг) — 22 стратегии
 - QUIC autocircular профиль: YouTube QUIC (UDP/443) — 12 стратегий с z2k morph
 - Discord профили:
-  - TCP: hostlist Discord включён в RKN-профиль
+  - TCP: hostlist Discord включён в General-профиль
   - UDP voice/video: `circular_locked` (стратегия закрепляется per-domain)
 - ECH (Encrypted Client Hello) detection — автоматический пропуск desync когда SNI зашифрован
 - Hostlist режим: стратегии применяются только к доменам из списков
@@ -38,14 +38,14 @@ z2k — модульный установщик zapret2 для роутеров 
 
 ### Сеть и прокси
 
-- **Telegram** — прозрачное проксирование через Cloudflare WebSocket (тестовая функция)
+- **Telegram** — прозрачный мультиплексированный туннель через Cloudflare. Все устройства в сети — автоматически, без настройки. Сетевой анализатор видит обычный HTTPS к CDN
 - **IPv6** — полная поддержка: dual-stack DNS, IPv6 SO_ORIGINAL_DST, Telegram DC IPv6 CIDR
-- **Roblox** — UDP bypass для игровых серверов
+- **Roblox** — UDP-транспорт для игровых серверов (порты 1024-65535)
 
 ### Инструменты и мониторинг
 
 - **Веб-панель** — мониторинг через браузер (busybox httpd CGI): статус сервиса, стратегии, логи, управление
-- **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, Telegram, RKN)
+- **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, Telegram, General)
 - **Config validator** — валидация конфигурации перед применением (порты, hostlist-файлы, blob-файлы, lua-desync)
 - **Rollback** — откат конфигурации к предыдущему snapshot с авто-таймером
 - **Auto updater** — автоматическое обновление списков доменов по cron
@@ -55,7 +55,7 @@ z2k — модульный установщик zapret2 для роутеров 
 
 - **0 shellcheck warnings** — все shell-скрипты чистые
 - **0 go vet issues** — Go код без замечаний
-- **98 автотестов** — 86 shell + 12 Go, все проходят
+- **109 автотестов** — 86 shell + 23 Go, все проходят
 - **CI/CD** — GitHub Actions: shellcheck, go build/test/vet, luacheck, кросс-компиляция 6 архитектур
 - **Безопасность** — нет eval/source инъекций, SHA256 верификация, rate limiting, connection deadlines
 
@@ -85,7 +85,7 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 ### 3) Установка z2k
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 ```
 
 ---
@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh
 После установки доступно интерактивное меню:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 ```
 
 | Пункт | Описание |
@@ -109,7 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh
 | **[W]** | Whitelist — управление списком исключений |
 | **[R]** | RST-фильтр — фильтрация аномальных TCP RST |
 | **[F]** | Silent fallback — ускоренная ротация при отсутствии ответа |
-| **[G]** | Roblox — UDP bypass для игровых серверов |
+| **[G]** | Roblox — UDP-транспорт для игровых серверов |
 | **[T]** | Telegram прокси — прозрачное проксирование через WebSocket |
 | **[S]** | Скрипты custom.d |
 | **[B]** | Rollback — откат конфигурации к snapshot |
@@ -148,7 +148,7 @@ sh z2k.sh [команда]
 ### Детекция неудач
 
 - **Стандартный детектор** — TCP ретрансмиссии и аномальные RST
-- **TLS alert детектор** (`z2k_tls_alert_fatal`) — анализирует TLS alert + HTTP DPI redirect. Включён по умолчанию для РКН
+- **TLS alert детектор** (`z2k_tls_alert_fatal`) — анализирует TLS alert + HTTP redirect
 - **Silent fallback** — детектор отсутствия ответа: если несколько запросов подряд без ответа, принудительно ротирует стратегию. Включается через меню [F]
 
 ### Персистентность
@@ -188,11 +188,21 @@ http://ROUTER_IP:8080/
 
 ---
 
-## Telegram прокси
+## Telegram tunnel
 
-Прозрачное проксирование Telegram через Cloudflare WebSocket. Не требует настройки на устройствах — работает автоматически для всех устройств в сети. Поддерживает IPv4 и IPv6.
+Прозрачное туннелирование Telegram-трафика для всех устройств в сети. Не требует настройки на клиентах — работает автоматически.
 
-Включается через меню `[T]`.
+Как это работает:
+
+```
+Устройства → TCP к Telegram DC → iptables REDIRECT → z2k-tunnel
+  → мультиплексированный WS → Cloudflare Worker → TCP к Telegram DC
+```
+
+- Все TCP-соединения к Telegram мультиплексируются через **один** WebSocket
+- Сетевой анализатор видит обычный HTTPS к Cloudflare CDN
+- Включается автоматически при установке, или через меню `[T]`
+- Протокол: кастомный бинарный мультиплексор с HMAC-SHA256 аутентификацией
 
 ---
 
@@ -224,7 +234,7 @@ http://ROUTER_IP:8080/
 Если zapret или zapret2 были удалены некорректно, остались зависшие процессы или мусорные правила — используйте скрипт полной зачистки:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k_cleanup.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh
 ```
 
 **ВНИМАНИЕ:** Скрипт удаляет ВСЁ связанное с zapret и zapret2:
@@ -277,20 +287,24 @@ z2k/
 │   ├── lua/
 │   │   ├── z2k-autocircular.lua    # Persistent strategy memory + telemetry
 │   │   └── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH
-│   ├── lists/                  # Domain lists (RKN, YouTube, Discord)
+│   ├── lists/                  # Domain lists (General, YouTube, Discord)
 │   ├── z2k-healthcheck.sh      # Service availability monitoring
 │   ├── z2k-config-validator.sh # Config validation
 │   ├── z2k-update-lists.sh     # Auto domain list updater
 │   ├── z2k-webpanel.sh         # Web monitoring CGI
 │   └── z2k-webpanel-install.sh # Web panel installer
-├── mtproxy-client/             # Telegram MTProxy (Go)
-│   ├── main.go                 # Obfuscated2 proxy + WS relay
-│   ├── transparent.go          # Transparent mode + DNS cache
+├── cf-worker/                  # Cloudflare Worker relay
+│   ├── worker.js               # Mux tunnel relay (TCP↔WS)
+│   └── wrangler.toml           # Deployment config
+├── mtproxy-client/             # Telegram tunnel + MTProxy (Go)
+│   ├── main.go                 # Entry point + MTProxy mode
+│   ├── tunnel.go               # Mux tunnel client (iptables REDIRECT → WS)
+│   ├── transparent.go          # Legacy transparent WS mode
 │   ├── listener.go             # SO_ORIGINAL_DST (IPv4 + IPv6)
 │   ├── dcmap.go                # Telegram DC IP mapping (v4 + v6)
 │   ├── relay.go                # Bidirectional MTProto relay
 │   ├── secret.go               # Secret key parsing
-│   └── main_test.go            # Unit tests (12 tests)
+│   └── main_test.go            # Unit tests (23 tests)
 ├── tests/                      # Test framework
 │   ├── run_all.sh              # Test runner
 │   ├── test_utils.sh           # Utils tests (23 tests)

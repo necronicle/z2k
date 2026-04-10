@@ -12,7 +12,7 @@ set -e
 Z2K_VERSION="2.0.1"
 WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"
-GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/forge"
+GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
 
 # Экспортировать переменные для использования в функциях
 export WORK_DIR
@@ -526,7 +526,7 @@ show_help() {
   - Если zapret2 установлен: откроет меню
 
 Примеры:
-  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
   sh z2k.sh install
   sh z2k.sh menu
   sh z2k.sh check

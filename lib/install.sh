@@ -1653,7 +1653,7 @@ step_finalize() {
     fi
 
     # Init script — always update
-    local tg_init_url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/forge}/mtproxy-client/S97tg-mtproxy"
+    local tg_init_url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}/mtproxy-client/S97tg-mtproxy"
     if curl -fsSL --connect-timeout 10 --max-time 120 "$tg_init_url" -o /opt/etc/init.d/S97tg-mtproxy; then
         chmod +x /opt/etc/init.d/S97tg-mtproxy
         print_success "Init скрипт Telegram прокси установлен"
