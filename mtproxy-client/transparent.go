@@ -95,6 +95,22 @@ func handleTransparent(clientConn *net.TCPConn) {
 	}
 	defer ws.Close()
 
+	// Keepalive: CF kills idle WS after 100s. Ping every 60s via WriteControl (thread-safe).
+	// No SetReadDeadline/SetWriteDeadline — those block data transfer.
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	if *verbose {
 		log.Printf("[relay] %s <-> WS DC%d", clientConn.RemoteAddr(), dc)
 	}
@@ -134,6 +150,7 @@ func handleTransparent(clientConn *net.TCPConn) {
 	}()
 
 	wg.Wait()
+	close(done)
 
 	if *verbose {
 		log.Printf("[done] %s DC%d", clientConn.RemoteAddr(), dc)
