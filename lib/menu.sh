@@ -995,6 +995,7 @@ SUBMENU
 
                 # Use init script for proper restart loop
                 if [ -f "/opt/etc/init.d/S97tg-mtproxy" ]; then
+                    chmod +x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
                     /opt/etc/init.d/S97tg-mtproxy restart
                 else
                     # Fallback: download init script
@@ -1016,12 +1017,16 @@ SUBMENU
                 ;;
 
             2)
+                /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null
+                # Kill loop shell too
+                if [ -f "$MTPROXY_PID" ]; then
+                    kill "$(cat $MTPROXY_PID)" 2>/dev/null
+                    rm -f "$MTPROXY_PID"
+                fi
                 killall tg-mtproxy-client 2>/dev/null
-                rm -f "$MTPROXY_PID"
-                iptables -t nat -D PREROUTING -j TG_TRANSPARENT 2>/dev/null
-                iptables -t nat -F TG_TRANSPARENT 2>/dev/null
-                iptables -t nat -X TG_TRANSPARENT 2>/dev/null
-                print_success "Telegram прокси выключен"
+                # Disable autostart
+                chmod -x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
+                print_success "Telegram прокси выключен (автозапуск отключен)"
                 pause
                 ;;
 
