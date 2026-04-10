@@ -11,7 +11,7 @@
 #   - Временные файлы
 #
 # Использование:
-#   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k_cleanup.sh | sh
 #   или
 #   sh z2k_cleanup.sh
 
@@ -255,6 +255,6 @@ echo ""
 echo "============================================"
 log_info "Зачистка завершена."
 log_info "Для переустановки z2k:"
-echo "  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh"
+echo "  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh"
 echo "============================================"
 echo ""

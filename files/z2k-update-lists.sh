@@ -9,7 +9,7 @@ INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
 LOG_FILE="${ZAPRET2_DIR}/update-lists.log"
 MAX_LOG_LINES=200
 
-GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
+GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/forge"
 
 # Настройки
 CURL_OPTS="--connect-timeout 10 --max-time 60 -fsSL"

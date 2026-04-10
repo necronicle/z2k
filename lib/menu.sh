@@ -1229,7 +1229,7 @@ SUBMENU
                         local tg_ok=false
                         for tg_url in \
                             "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/mtproxy-client/builds/${tg_bin}" \
-                            "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/builds/${tg_bin}" \
+                            "https://raw.githubusercontent.com/necronicle/z2k/forge/mtproxy-client/builds/${tg_bin}" \
                             "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
                             curl -fsSL "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
                             if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
@@ -1262,7 +1262,7 @@ SUBMENU
                     /opt/etc/init.d/S97tg-mtproxy restart
                 else
                     # Fallback: download init script
-                    curl -fsSL "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/S97tg-mtproxy" \
+                    curl -fsSL "https://raw.githubusercontent.com/necronicle/z2k/forge/mtproxy-client/S97tg-mtproxy" \
                         -o /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
                     chmod +x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
                     /opt/etc/init.d/S97tg-mtproxy start

@@ -1619,7 +1619,7 @@ step_finalize() {
             local tg_dest="/opt/sbin/tg-mtproxy-client"
             for tg_try_url in \
                 "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/mtproxy-client/builds/${tg_bin}" \
-                "https://raw.githubusercontent.com/necronicle/z2k/master/mtproxy-client/builds/${tg_bin}" \
+                "https://raw.githubusercontent.com/necronicle/z2k/forge/mtproxy-client/builds/${tg_bin}" \
                 "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
                 curl -fsSL --connect-timeout 10 --max-time 120 "$tg_try_url" -o "$tg_dest" 2>/dev/null
                 if [ -f "$tg_dest" ] && [ "$(head -c 4 "$tg_dest" | hexdump -n 4 -e '"%02x"' 2>/dev/null || head -c 4 "$tg_dest" | od -x | head -1 | awk '{print $2}')" != "" ] && [ -s "$tg_dest" ]; then
@@ -1646,7 +1646,7 @@ step_finalize() {
     fi
 
     # Init script — always update
-    local tg_init_url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}/mtproxy-client/S97tg-mtproxy"
+    local tg_init_url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/forge}/mtproxy-client/S97tg-mtproxy"
     if curl -fsSL --connect-timeout 10 --max-time 120 "$tg_init_url" -o /opt/etc/init.d/S97tg-mtproxy; then
         chmod +x /opt/etc/init.d/S97tg-mtproxy
         print_success "Init скрипт Telegram прокси установлен"

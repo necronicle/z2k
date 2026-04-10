@@ -63,7 +63,7 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 ### 3) Установка z2k (Zapret2 для Keenetic)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh
 ```
 
 ---
@@ -73,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 После установки доступно интерактивное меню:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k.sh | sh
 ```
 
 Пункты меню:
@@ -135,7 +135,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 Если zapret или zapret2 были удалены некорректно, остались зависшие процессы или мусорные правила — используйте скрипт полной зачистки:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/forge/z2k_cleanup.sh | sh
 ```
 
 **ВНИМАНИЕ:** Скрипт удаляет ВСЁ связанное с zapret и zapret2:

@@ -555,7 +555,7 @@ main() {
     printf "============================\n\n"
 
     # --- Этап 1: файл конфига ---
-    printf "--- Файл конфигурации ---\n"
+    printf "%s\n" "--- Файл конфигурации ---"
     if ! check_config_exists; then
         printf "\n=== ИТОГ: 0 OK, 0 WARN, %d FAIL ===\n" "$FAIL_COUNT"
         return 2
@@ -564,11 +564,11 @@ main() {
     check_required_vars
 
     # --- Этап 2: бинарник nfqws2 ---
-    printf "\n--- Бинарник nfqws2 ---\n"
+    printf "\n%s\n" "--- Бинарник nfqws2 ---"
     check_nfqws2_binary
 
     # --- Этап 3: извлечь и проверить NFQWS2_OPT ---
-    printf "\n--- Извлечение NFQWS2_OPT ---\n"
+    printf "\n%s\n" "--- Извлечение NFQWS2_OPT ---"
     NFQWS2_OPT_TEXT=$(extract_nfqws2_opt)
     _extract_rc=$?
 
@@ -584,19 +584,19 @@ main() {
     fi
 
     if [ -n "$NFQWS2_OPT_TEXT" ]; then
-        printf "\n--- Валидация портов ---\n"
+        printf "\n%s\n" "--- Валидация портов ---"
         check_filter_ports "$NFQWS2_OPT_TEXT"
 
-        printf "\n--- Валидация hostlist файлов ---\n"
+        printf "\n%s\n" "--- Валидация hostlist файлов ---"
         check_hostlist_files "$NFQWS2_OPT_TEXT"
 
-        printf "\n--- Валидация blob файлов ---\n"
+        printf "\n%s\n" "--- Валидация blob файлов ---"
         check_blob_references "$NFQWS2_OPT_TEXT"
 
-        printf "\n--- Валидация lua-desync действий ---\n"
+        printf "\n%s\n" "--- Валидация lua-desync действий ---"
         check_lua_desync_actions "$NFQWS2_OPT_TEXT"
 
-        printf "\n--- Структура профилей ---\n"
+        printf "\n%s\n" "--- Структура профилей ---"
         check_profile_structure "$NFQWS2_OPT_TEXT"
         check_missing_new_separator "$NFQWS2_OPT_TEXT"
     fi
