@@ -45,7 +45,7 @@ z2k — модульный установщик zapret2 для роутеров 
 ### Инструменты и мониторинг
 
 - **Веб-панель** — мониторинг через браузер (busybox httpd CGI): статус сервиса, стратегии, логи, управление
-- **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, Telegram, RKN)
+- **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, RKN)
 - **Config validator** — валидация конфигурации перед применением (порты, hostlist-файлы, blob-файлы, lua-desync)
 - **Rollback** — откат конфигурации к предыдущему snapshot с авто-таймером
 - **Auto updater** — автоматическое обновление списков доменов по cron
@@ -110,7 +110,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 | **[R]** | RST-фильтр — фильтрация аномальных TCP RST |
 | **[F]** | Silent fallback — ускоренная ротация при отсутствии ответа |
 | **[G]** | Roblox — UDP-транспорт для игровых серверов |
-| **[T]** | Telegram прокси — прозрачное проксирование через WebSocket |
+| **[T]** | Telegram tunnel — прозрачное туннелирование через Cloudflare |
 | **[S]** | Скрипты custom.d |
 | **[B]** | Rollback — откат конфигурации к snapshot |
 | **[H]** | Health check — проверка доступности сервисов |
