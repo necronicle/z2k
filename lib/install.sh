@@ -1633,26 +1633,16 @@ step_finalize() {
         esac
         if [ -n "$tg_arch" ]; then
             local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
-            local tg_ok=false
             local tg_dest="/opt/sbin/tg-mtproxy-client"
-            for tg_try_url in \
-                "${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"; do
-                curl -fsSL --connect-timeout 10 --max-time 120 "$tg_try_url" -o "$tg_dest" 2>/dev/null
-                if [ -f "$tg_dest" ] && [ "$(head -c 4 "$tg_dest" | hexdump -n 4 -e '"%02x"' 2>/dev/null || head -c 4 "$tg_dest" | od -x | head -1 | awk '{print $2}')" != "" ] && [ -s "$tg_dest" ]; then
-                    # Check file size > 100KB (valid binary, not HTML page)
-                    local tg_size
-                    tg_size=$(wc -c < "$tg_dest" 2>/dev/null)
-                    if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
-                        tg_ok=true
-                        break
-                    fi
-                fi
-            done
-            if $tg_ok; then
-                chmod +x /opt/sbin/tg-mtproxy-client
+            local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
+            curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$tg_dest" 2>/dev/null
+            local tg_size
+            tg_size=$(wc -c < "$tg_dest" 2>/dev/null || echo 0)
+            if [ -f "$tg_dest" ] && [ "$tg_size" -gt 100000 ] 2>/dev/null; then
+                chmod +x "$tg_dest"
                 print_success "Telegram прокси установлен ($tg_arch)"
             else
-                rm -f /opt/sbin/tg-mtproxy-client
+                rm -f "$tg_dest"
                 print_warning "Не удалось скачать Telegram прокси для $tg_arch"
             fi
         else

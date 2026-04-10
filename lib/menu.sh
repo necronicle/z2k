@@ -1243,25 +1243,16 @@ SUBMENU
                     esac
                     if [ -n "$tg_arch" ]; then
                         local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
-                        local tg_ok=false
-                        for tg_url in \
-                            "${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"; do
-                            curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
-                            if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
-                                local tg_size
-                                tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
-                                if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
-                                    tg_ok=true
-                                    break
-                                fi
-                            fi
-                        done
-                        if $tg_ok; then
+                        local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
+                        curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
+                        local tg_size
+                        tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null || echo 0)
+                        if [ -f "$MTPROXY_BIN" ] && [ "$tg_size" -gt 100000 ] 2>/dev/null; then
                             chmod +x "$MTPROXY_BIN"
                             print_success "Скачан для $tg_arch"
                         else
                             rm -f "$MTPROXY_BIN"
-                            print_error "Не удалось скачать"
+                            print_error "Не удалось скачать бинарник"
                             pause
                             continue
                         fi
@@ -1324,20 +1315,11 @@ SUBMENU
                     esac
                     if [ -n "$tg_arch" ]; then
                         local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
-                        local tg_ok=false
-                        for tg_url in \
-                            "${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"; do
-                            curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
-                            if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
-                                local tg_size
-                                tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
-                                if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
-                                    tg_ok=true
-                                    break
-                                fi
-                            fi
-                        done
-                        if $tg_ok; then
+                        local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
+                        curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
+                        local tg_size
+                        tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null || echo 0)
+                        if [ -f "$MTPROXY_BIN" ] && [ "$tg_size" -gt 100000 ] 2>/dev/null; then
                             chmod +x "$MTPROXY_BIN"
                             print_success "Скачан для $tg_arch"
                         else
