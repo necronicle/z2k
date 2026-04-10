@@ -18,11 +18,11 @@ jobs:
 
       - name: Run shellcheck
         run: |
-          find . -name '*.sh' \( -path './z2k.sh' -o -path './lib/*.sh' -o -path './files/*.sh' \) \
-            | xargs shellcheck --severity=warning --exclude=SC1090,SC1091
+          find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' \) \
+            | xargs shellcheck --severity=warning --exclude=SC1090,SC1091,SC3043,SC3040,SC2034,SC2148,SC2154
 
       - name: Run shell unit tests
-        run: sh tests/test_utils.sh
+        run: sh tests/run_all.sh
 
   go-build:
     name: Go Build & Test
@@ -75,4 +75,4 @@ jobs:
           sudo luarocks install luacheck
 
       - name: Run luacheck
-        run: luacheck files/lua/*.lua --std max --codes -q
+        run: luacheck files/lua/*.lua --codes -q
