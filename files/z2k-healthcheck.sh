@@ -85,9 +85,10 @@ _rotate_log() {
     local count
     count=$(wc -l < "$LOG_FILE" 2>/dev/null) || return 0
     if [ "$count" -gt "$LOG_MAX_LINES" ]; then
-        local tmp="${LOG_FILE}.tmp"
+        local tmp
+        tmp=$(mktemp "${LOG_FILE}.XXXXXX") || return 0
         tail -n "$LOG_MAX_LINES" "$LOG_FILE" > "$tmp" 2>/dev/null && \
-            mv -f "$tmp" "$LOG_FILE" 2>/dev/null
+            mv -f "$tmp" "$LOG_FILE" 2>/dev/null || rm -f "$tmp"
     fi
 }
 
@@ -153,12 +154,11 @@ clear_autocircular_state() {
 
     [ -f "$STATE_FILE" ] || return 0
 
-    local tmp="${STATE_FILE}.tmp.$$"
-    grep -iv "$pattern" "$STATE_FILE" > "$tmp" 2>/dev/null
-    if [ -f "$tmp" ]; then
-        mv -f "$tmp" "$STATE_FILE" 2>/dev/null
-        _log INFO "Cleared autocircular state for $name (pattern: $pattern)"
-    fi
+    local tmp
+    tmp=$(mktemp "${STATE_FILE}.XXXXXX") || return 1
+    grep -iv "$pattern" "$STATE_FILE" > "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    _log INFO "Cleared autocircular state for $name (pattern: $pattern)"
 }
 
 # Паттерны для категорий в state.tsv

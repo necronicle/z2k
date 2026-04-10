@@ -754,9 +754,21 @@ local function flow_finish(desync)
   return nil, s
 end
 
+-- Whitelist of allowed global hostkey function names
+local allowed_hostkey_funcs = {
+  standard_hostkey = true,
+  nld_hostkey = true,
+  sld_hostkey = true,
+  tld_hostkey = true,
+}
+
 local function get_hostkey_func(desync)
   if desync and desync.arg and desync.arg.hostkey then
     local fname = tostring(desync.arg.hostkey)
+    if not allowed_hostkey_funcs[fname] then
+      debug_log("get_hostkey_func: rejected non-whitelisted function: " .. fname)
+      return nil
+    end
     local f = _G[fname]
     if type(f) == "function" then
       return f

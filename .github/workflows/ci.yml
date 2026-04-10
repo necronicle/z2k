@@ -21,6 +21,9 @@ jobs:
           find . -name '*.sh' \( -path './z2k.sh' -o -path './lib/*.sh' -o -path './files/*.sh' \) \
             | xargs shellcheck --severity=warning --exclude=SC1090,SC1091
 
+      - name: Run shell unit tests
+        run: sh tests/test_utils.sh
+
   go-build:
     name: Go Build & Test
     runs-on: ubuntu-latest

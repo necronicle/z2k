@@ -27,9 +27,10 @@ log_msg() {
         local lines
         lines=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
         if [ "$lines" -gt "$MAX_LOG_LINES" ]; then
-            local tmp="${LOG_FILE}.tmp"
+            local tmp
+            tmp=$(mktemp "${LOG_FILE}.XXXXXX") || return
             tail -n "$((MAX_LOG_LINES / 2))" "$LOG_FILE" > "$tmp" 2>/dev/null
-            mv -f "$tmp" "$LOG_FILE" 2>/dev/null
+            mv -f "$tmp" "$LOG_FILE" 2>/dev/null || rm -f "$tmp"
         fi
     fi
 }
@@ -47,7 +48,8 @@ update_list() {
         return 1
     fi
 
-    local tmp="${dest}.update.tmp"
+    local tmp
+    tmp=$(mktemp "${dest}.XXXXXX") || return 1
 
     if ! curl $CURL_OPTS "$url" -o "$tmp" 2>/dev/null; then
         log_msg "FAIL: download $name from $url"
@@ -94,6 +96,9 @@ update_list() {
 # ==============================================================================
 
 main() {
+    # Убедиться что директория для логов существует
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
+
     log_msg "--- Update lists started ---"
 
     local changes=0
