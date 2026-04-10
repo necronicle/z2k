@@ -1787,11 +1787,15 @@ rollback_to_snapshot() {
 
     print_header "Восстановление из rollback snapshot"
 
-    # Показать информацию о snapshot
-    . "$ROLLBACK_DIR/metadata"
-    print_info "Snapshot от: ${SNAPSHOT_TIME:-unknown}"
-    print_info "Причина: ${REASON:-unknown}"
-    print_info "Версия: z2k ${Z2K_VERSION:-unknown}, nfqws2 ${NFQWS2_VERSION:-unknown}"
+    # Показать информацию о snapshot (без source — безопасный парсинг)
+    local SNAPSHOT_TIME REASON SNAP_Z2K_VERSION SNAP_NFQWS2_VERSION
+    SNAPSHOT_TIME=$(safe_config_read "SNAPSHOT_TIME" "$ROLLBACK_DIR/metadata" "unknown")
+    REASON=$(safe_config_read "REASON" "$ROLLBACK_DIR/metadata" "unknown")
+    SNAP_Z2K_VERSION=$(safe_config_read "Z2K_VERSION" "$ROLLBACK_DIR/metadata" "unknown")
+    SNAP_NFQWS2_VERSION=$(safe_config_read "NFQWS2_VERSION" "$ROLLBACK_DIR/metadata" "unknown")
+    print_info "Snapshot от: ${SNAPSHOT_TIME}"
+    print_info "Причина: ${REASON}"
+    print_info "Версия: z2k ${SNAP_Z2K_VERSION}, nfqws2 ${SNAP_NFQWS2_VERSION}"
 
     if ! confirm "Восстановить эту конфигурацию?" "N"; then
         print_info "Rollback отменён"

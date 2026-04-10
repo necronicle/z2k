@@ -200,9 +200,8 @@ show_active_processing() {
     local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
 
     if [ -f "$all_tcp443_conf" ]; then
-        . "$all_tcp443_conf"
-        all_tcp443_enabled=$ENABLED
-        all_tcp443_strategy=$STRATEGY
+        all_tcp443_enabled=$(safe_config_read "ENABLED" "$all_tcp443_conf" "0")
+        all_tcp443_strategy=$(safe_config_read "STRATEGY" "$all_tcp443_conf" "")
     fi
 
     # Показать режим работы

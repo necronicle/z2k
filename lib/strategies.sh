@@ -179,9 +179,14 @@ EOF
         num=$((num + 1))
     done
 
-    # Подсчет
+    # Подсчет и валидация
     local total_count
     total_count=$(grep -c '^[0-9]' "$output_file" 2>/dev/null || echo "0")
+
+    if [ "$total_count" -eq 0 ]; then
+        print_error "Стратегии не найдены в $input_file (проверьте формат файла)"
+        return 1
+    fi
 
     print_success "Сгенерировано стратегий: $total_count"
 

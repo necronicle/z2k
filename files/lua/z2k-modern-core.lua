@@ -21,6 +21,9 @@ end
 local function z2k_num(v, fallback)
     local n = tonumber(v)
     if n == nil then return fallback end
+    -- Clamp to safe range for bit operations and array indexing
+    if n > 2147483647 then n = 2147483647 end
+    if n < -2147483648 then n = -2147483648 end
     return n
 end
 
@@ -275,7 +278,10 @@ local function z2k_quic_reserved_version_bytes()
 end
 
 local function z2k_qvarint_decode_bytes(bytes, pos, nbytes)
-    local b0 = bytes and bytes[pos]
+    if type(bytes) ~= "table" then
+        return nil, nil
+    end
+    local b0 = bytes[pos]
     if not b0 then
         return nil, nil
     end

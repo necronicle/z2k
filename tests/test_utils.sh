@@ -21,9 +21,14 @@ WORK_DIR="/tmp/z2k_test_$$"
 LIB_DIR="${WORK_DIR}/lib"
 mkdir -p "$LIB_DIR"
 
-# Load utils
+# Load utils (it overrides WORK_DIR, so we re-set it after)
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$SCRIPT_DIR/lib/utils.sh"
+
+# Restore test WORK_DIR (utils.sh overrides it)
+WORK_DIR="/tmp/z2k_test_$$"
+LIB_DIR="${WORK_DIR}/lib"
+mkdir -p "$WORK_DIR" "$LIB_DIR"
 
 # ==============================================================================
 # TEST: safe_config_read
@@ -82,6 +87,65 @@ assert_eq "arch: riscv64" "linux-riscv64" "$(map_arch_to_bin_arch riscv64)"
 # Unknown arch should return error
 map_arch_to_bin_arch "unknown_arch_xyz" >/dev/null 2>&1
 assert_eq "arch: unknown returns error" "1" "$?"
+
+# ==============================================================================
+# TEST: safe_config_read edge cases
+# ==============================================================================
+
+# Config with shell metacharacters
+EVIL_CONFIG="${WORK_DIR}/evil_config"
+cat > "$EVIL_CONFIG" <<'EVILEOF'
+CMD=$(whoami)
+BACKTICK=`id`
+PIPE=a|b
+SEMICOLON=value; echo hacked
+AMPERSAND=val && rm -rf /
+DOLLAR=$HOME/path
+REDIRECT=val > /tmp/pwned
+EVILEOF
+
+# All of these should return the LITERAL text, not execute it
+assert_eq "safe_config_read: command substitution literal" \
+    '$(whoami)' "$(safe_config_read "CMD" "$EVIL_CONFIG")"
+
+assert_eq "safe_config_read: backtick literal" \
+    '`id`' "$(safe_config_read "BACKTICK" "$EVIL_CONFIG")"
+
+assert_eq "safe_config_read: pipe literal" \
+    "a|b" "$(safe_config_read "PIPE" "$EVIL_CONFIG")"
+
+assert_eq "safe_config_read: semicolon literal" \
+    "value; echo hacked" "$(safe_config_read "SEMICOLON" "$EVIL_CONFIG")"
+
+assert_eq "safe_config_read: dollar literal" \
+    '$HOME/path' "$(safe_config_read "DOLLAR" "$EVIL_CONFIG")"
+
+# ==============================================================================
+# TEST: backup_file and restore_backup
+# ==============================================================================
+
+TEST_FILE="${WORK_DIR}/test_backup_target"
+echo "original content" > "$TEST_FILE"
+
+# Create backup
+backup_file "$TEST_FILE" >/dev/null 2>&1
+BACKUP_EXISTS=$(ls "${TEST_FILE}.backup."* 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "backup_file: creates backup" "1" "$BACKUP_EXISTS"
+
+# Modify original
+echo "modified" > "$TEST_FILE"
+
+# Restore
+restore_backup "$TEST_FILE" >/dev/null 2>&1
+RESTORED=$(cat "$TEST_FILE")
+assert_eq "restore_backup: restores content" "original content" "$RESTORED"
+
+# ==============================================================================
+# TEST: is_zapret2_installed (negative — /opt/zapret2 doesn't exist here)
+# ==============================================================================
+
+is_zapret2_installed
+assert_eq "is_zapret2_installed: returns false when not installed" "1" "$?"
 
 # ==============================================================================
 # CLEANUP AND REPORT

@@ -252,8 +252,7 @@ get_service_status() {
 # Получить текущую стратегию
 get_current_strategy() {
     if [ -f "$CURRENT_STRATEGY_FILE" ]; then
-        . "$CURRENT_STRATEGY_FILE"
-        echo "$CURRENT_STRATEGY"
+        safe_config_read "CURRENT_STRATEGY" "$CURRENT_STRATEGY_FILE" "не задана"
     else
         echo "не задана"
     fi
@@ -359,13 +358,8 @@ backup_file() {
     if [ -f "$file" ]; then
         # Очистить старые бэкапы, оставив только последние (max_backups - 1)
         # -1 потому что сейчас создадим еще один
-        local old_backups
-        old_backups=$(ls -t "${file}.backup."* 2>/dev/null | tail -n +${max_backups})
-        if [ -n "$old_backups" ]; then
-            echo "$old_backups" | while read -r old_backup; do
-                rm -f "$old_backup" 2>/dev/null
-            done
-        fi
+        # Удалить старые бэкапы напрямую (без subshell)
+        ls -t "${file}.backup."* 2>/dev/null | tail -n +${max_backups} | xargs rm -f 2>/dev/null || true
 
         # Создать новый бэкап
         cp "$file" "$backup" || return 1
@@ -413,16 +407,11 @@ cleanup_backups() {
         return 0
     fi
 
-    local to_delete
-    to_delete=$(echo "$all_backups" | tail -n +$((keep + 1)))
+    # Удалить старые бэкапы напрямую (xargs — без subshell mutation)
+    local deleted
+    deleted=$(echo "$all_backups" | tail -n +$((keep + 1)) | xargs rm -f 2>/dev/null; echo "$all_backups" | tail -n +$((keep + 1)) | wc -l | tr -d ' ')
 
-    local deleted=0
-    echo "$to_delete" | while read -r backup; do
-        rm -f "$backup" 2>/dev/null && deleted=$((deleted + 1))
-    done
-
-    local remaining=$keep
-    print_success "Очищено бэкапов: $((total_count - remaining)), осталось: $remaining"
+    print_success "Очищено бэкапов: ${deleted}, осталось: ${keep}"
     return 0
 }
 

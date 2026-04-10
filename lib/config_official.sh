@@ -20,8 +20,8 @@ generate_nfqws2_opt_from_strategies() {
     # Если включен — генерируем минимальный конфиг и выходим.
     local austerus_conf="${config_dir}/all_tcp443.conf"
     if [ -f "$austerus_conf" ]; then
-        local ENABLED=0
-        . "$austerus_conf"
+        local ENABLED
+        ENABLED=$(safe_config_read "ENABLED" "$austerus_conf" "0")
         if [ "$ENABLED" = "1" ]; then
             cat <<'AUSTERUS_OPT'
 NFQWS2_OPT="

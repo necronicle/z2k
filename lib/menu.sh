@@ -46,7 +46,8 @@ MENU
             # Проверить режим ALL TCP-443
             local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
             if [ -f "$all_tcp443_conf" ]; then
-                . "$all_tcp443_conf"
+                local ENABLED
+                ENABLED=$(safe_config_read "ENABLED" "$all_tcp443_conf" "0")
                 if [ "$ENABLED" = "1" ]; then
                     printf " Режим Austerusj: Включен (без хостлистов)\n"
                 fi
@@ -700,8 +701,8 @@ menu_all_tcp443() {
         return 1
     fi
 
-    . "$conf_file"
-    local current_enabled=$ENABLED
+    local current_enabled
+    current_enabled=$(safe_config_read "ENABLED" "$conf_file" "0")
 
     print_separator
 
