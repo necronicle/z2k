@@ -1,0 +1,6 @@
+name = "z2k-tunnel"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+TUNNEL_SECRET = "CHANGE_ME_TO_RANDOM_SECRET"

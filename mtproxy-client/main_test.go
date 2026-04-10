@@ -188,3 +188,166 @@ func TestWsWriter_Serialization(t *testing.T) {
 	var _ *wsWriter
 	// Full test would require a mock WebSocket, skipping
 }
+
+func TestMuxEncodeDecode(t *testing.T) {
+	tests := []struct {
+		name     string
+		streamID uint16
+		msgType  byte
+		payload  []byte
+	}{
+		{"CONNECT empty", 1, muxCONNECT, []byte{addrIPv4, 149, 154, 175, 1, 0x01, 0xBB}},
+		{"DATA small", 42, muxDATA, []byte("hello world")},
+		{"DATA large", 65535, muxDATA, make([]byte, 64*1024)},
+		{"CLOSE no payload", 100, muxCLOSE, nil},
+		{"CONNECT_OK", 7, muxCONNECT_OK, nil},
+		{"CONNECT_FAIL", 8, muxCONNECT_FAIL, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded := encodeMuxFrame(tt.streamID, tt.msgType, tt.payload)
+
+			// Verify minimum length
+			if len(encoded) < 3 {
+				t.Fatalf("encoded frame too short: %d", len(encoded))
+			}
+
+			decoded, err := decodeMuxFrame(encoded)
+			if err != nil {
+				t.Fatalf("decodeMuxFrame failed: %v", err)
+			}
+
+			if decoded.StreamID != tt.streamID {
+				t.Errorf("StreamID = %d, want %d", decoded.StreamID, tt.streamID)
+			}
+			if decoded.MsgType != tt.msgType {
+				t.Errorf("MsgType = 0x%02x, want 0x%02x", decoded.MsgType, tt.msgType)
+			}
+
+			// Compare payloads
+			if tt.payload == nil {
+				if len(decoded.Payload) != 0 {
+					t.Errorf("Payload len = %d, want 0", len(decoded.Payload))
+				}
+			} else {
+				if len(decoded.Payload) != len(tt.payload) {
+					t.Fatalf("Payload len = %d, want %d", len(decoded.Payload), len(tt.payload))
+				}
+				for i := range tt.payload {
+					if decoded.Payload[i] != tt.payload[i] {
+						t.Errorf("Payload[%d] = 0x%02x, want 0x%02x", i, decoded.Payload[i], tt.payload[i])
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestMuxDecodeFrameTooShort(t *testing.T) {
+	_, err := decodeMuxFrame([]byte{0x00})
+	if err == nil {
+		t.Fatal("expected error for short frame")
+	}
+	_, err = decodeMuxFrame([]byte{0x00, 0x01})
+	if err == nil {
+		t.Fatal("expected error for 2-byte frame")
+	}
+}
+
+func TestConnectPayloadIPv4(t *testing.T) {
+	ip := net.ParseIP("149.154.175.1")
+	port := 443
+	payload := encodeConnectPayload(ip, port)
+
+	gotIP, gotPort, err := decodeConnectPayload(payload)
+	if err != nil {
+		t.Fatalf("decodeConnectPayload: %v", err)
+	}
+	if !gotIP.Equal(ip.To4()) {
+		t.Errorf("IP = %s, want %s", gotIP, ip)
+	}
+	if gotPort != port {
+		t.Errorf("Port = %d, want %d", gotPort, port)
+	}
+}
+
+func TestConnectPayloadIPv6(t *testing.T) {
+	ip := net.ParseIP("2001:b28:f23d::1")
+	port := 443
+	payload := encodeConnectPayload(ip, port)
+
+	gotIP, gotPort, err := decodeConnectPayload(payload)
+	if err != nil {
+		t.Fatalf("decodeConnectPayload: %v", err)
+	}
+	if !gotIP.Equal(ip) {
+		t.Errorf("IP = %s, want %s", gotIP, ip)
+	}
+	if gotPort != port {
+		t.Errorf("Port = %d, want %d", gotPort, port)
+	}
+}
+
+func TestConnectPayloadRoundtrip(t *testing.T) {
+	tests := []struct {
+		ip   string
+		port int
+	}{
+		{"149.154.167.91", 443},
+		{"91.108.56.1", 8443},
+		{"10.0.0.1", 1},
+		{"255.255.255.255", 65535},
+		{"2001:b28:f23f::1", 443},
+		{"::1", 80},
+	}
+	for _, tt := range tests {
+		ip := net.ParseIP(tt.ip)
+		payload := encodeConnectPayload(ip, tt.port)
+		gotIP, gotPort, err := decodeConnectPayload(payload)
+		if err != nil {
+			t.Errorf("decodeConnectPayload(%s:%d): %v", tt.ip, tt.port, err)
+			continue
+		}
+		// Normalize for comparison
+		if ip.To4() != nil {
+			ip = ip.To4()
+		}
+		if !gotIP.Equal(ip) {
+			t.Errorf("IP = %s, want %s", gotIP, ip)
+		}
+		if gotPort != tt.port {
+			t.Errorf("Port = %d, want %d", gotPort, tt.port)
+		}
+	}
+}
+
+func TestComputeAuthHMAC(t *testing.T) {
+	mac1 := computeAuthHMAC("test-secret")
+	mac2 := computeAuthHMAC("test-secret")
+	mac3 := computeAuthHMAC("different-secret")
+
+	if len(mac1) != 32 {
+		t.Fatalf("HMAC length = %d, want 32", len(mac1))
+	}
+
+	// Same secret should produce same HMAC
+	for i := range mac1 {
+		if mac1[i] != mac2[i] {
+			t.Fatal("same secret produced different HMACs")
+		}
+	}
+
+	// Different secret should produce different HMAC
+	same := true
+	for i := range mac1 {
+		if mac1[i] != mac3[i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("different secrets produced same HMAC")
+	}
+}

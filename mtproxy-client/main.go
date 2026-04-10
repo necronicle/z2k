@@ -24,12 +24,15 @@ import (
 )
 
 var (
-	listenAddr  = flag.String("listen", ":1443", "Local listen address")
-	secretHex   = flag.String("secret", "", "Proxy secret (dd-prefixed hex, auto-generated if empty)")
-	transparent = flag.Bool("transparent", false, "Transparent mode: redirect Telegram DC traffic via iptables (no client config needed)")
-	verbose     = flag.Bool("v", false, "Verbose logging")
-	connTimeout = flag.Duration("timeout", 5*time.Minute, "Idle connection timeout")
-	maxConns    = flag.Int("max-conns", 1024, "Maximum concurrent connections")
+	listenAddr   = flag.String("listen", ":1443", "Local listen address")
+	secretHex    = flag.String("secret", "", "Proxy secret (dd-prefixed hex, auto-generated if empty)")
+	transparent  = flag.Bool("transparent", false, "Transparent mode: redirect Telegram DC traffic via iptables (no client config needed)")
+	tunnelMode   = flag.Bool("tunnel", false, "Tunnel mode: multiplex TCP over single WS to Cloudflare Worker")
+	tunnelURL    = flag.String("tunnel-url", "", "Cloudflare Worker WebSocket URL (wss://...)")
+	tunnelSecret = flag.String("tunnel-secret", "", "Shared secret for tunnel auth (HMAC-SHA256)")
+	verbose      = flag.Bool("v", false, "Verbose logging")
+	connTimeout  = flag.Duration("timeout", 5*time.Minute, "Idle connection timeout")
+	maxConns     = flag.Int("max-conns", 1024, "Maximum concurrent connections")
 )
 
 const handshakeLen = 64
@@ -473,6 +476,14 @@ func handleConnection(ctx context.Context, clientConn *net.TCPConn, secret []byt
 
 func main() {
 	flag.Parse()
+
+	if *tunnelMode {
+		// Tunnel mode: multiplex TCP over single WS to Cloudflare Worker
+		if err := runTunnel(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if *transparent {
 		// Transparent mode: iptables REDIRECT, no client config needed

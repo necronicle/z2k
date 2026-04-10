@@ -1193,30 +1193,137 @@ menu_telegram_mtproxy() {
             running=true
         fi
 
+        # Check tunnel mode
+        local tunnel_running=false
+        if pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null 2>&1; then
+            tunnel_running=true
+        fi
+
         print_separator
-        printf " Прозрачный прокси: %s\n" "$($running && echo 'Включен' || echo 'Выключен')"
+        printf " Tunnel (рекомендуется): %s\n" "$($tunnel_running && echo 'Включен' || echo 'Выключен')"
+        printf " WS proxy (legacy):     %s\n" "$($running && echo 'Включен' || echo 'Выключен')"
         print_separator
 
         cat <<'SUBMENU'
 
-Прозрачное проксирование Telegram через Cloudflare WebSocket.
-Трафик к серверам Telegram автоматически перенаправляется через
-Cloudflare CDN. Провайдер видит только HTTPS к Cloudflare.
+Два режима обхода блокировки Telegram:
 
-Не требует настройки устройств — работает для ВСЕХ клиентов
-в сети (телефоны, ПК, ТВ) сразу после включения.
+[1] Tunnel (рекомендуется) — мультиплексированный туннель
+    через Cloudflare Worker. ВСЕ соединения через ОДИН канал.
+    Быстро, неотличимо от обычного HTTPS. Требует деплой
+    бесплатного Cloudflare Worker (инструкция при включении).
 
-[1] Включить прозрачный прокси
-[2] Выключить прозрачный прокси
+[2] WS proxy (legacy) — каждое соединение = новый WebSocket.
+    Работает без Cloudflare Worker, но медленнее.
+
+[3] Выключить tunnel
+[4] Выключить WS proxy
 [B] Назад
 
 SUBMENU
 
-        printf "Выберите опцию [1-2,B]: "
+        printf "Выберите опцию [1-4,B]: "
         read_input sub_choice
 
         case "$sub_choice" in
             1)
+                # Tunnel mode
+                clear_screen
+                print_header "Tunnel mode — настройка"
+
+                if ! [ -f "$MTPROXY_BIN" ]; then
+                    print_warning "Бинарник не найден, скачиваю..."
+                    # Use same download logic as WS proxy (below)
+                    local tg_arch=""
+                    case "$(uname -m)" in
+                        aarch64|arm64)  tg_arch="arm64" ;;
+                        armv7*|armv6*)  tg_arch="arm" ;;
+                        mipsel|mipsle)  tg_arch="mipsel" ;;
+                        mips)           tg_arch="mips" ;;
+                        x86_64|amd64)   tg_arch="amd64" ;;
+                        i?86)           tg_arch="x86" ;;
+                        *)              tg_arch="" ;;
+                    esac
+                    if [ -n "$tg_arch" ]; then
+                        local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
+                        local tg_ok=false
+                        for tg_url in \
+                            "https://raw.githubusercontent.com/necronicle/z2k/forge/mtproxy-client/builds/${tg_bin}" \
+                            "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
+                            curl -fsSL "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
+                            if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
+                                local tg_size
+                                tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
+                                if [ "$tg_size" -gt 100000 ] 2>/dev/null; then
+                                    tg_ok=true
+                                    break
+                                fi
+                            fi
+                        done
+                        if $tg_ok; then
+                            chmod +x "$MTPROXY_BIN"
+                            print_success "Скачан для $tg_arch"
+                        else
+                            rm -f "$MTPROXY_BIN"
+                            print_error "Не удалось скачать"
+                            pause
+                            continue
+                        fi
+                    fi
+                fi
+
+                cat <<'TUNNEL_INFO'
+
+Для работы tunnel-режима нужен Cloudflare Worker (бесплатный).
+
+Шаги:
+  1. Создайте аккаунт на https://dash.cloudflare.com/
+  2. Установите Wrangler: npm install -g wrangler
+  3. Скопируйте cf-worker/ из репозитория z2k
+  4. Измените TUNNEL_SECRET в wrangler.toml
+  5. Деплой: npx wrangler deploy
+  6. Получите URL: https://z2k-tunnel.YOUR_SUBDOMAIN.workers.dev
+
+TUNNEL_INFO
+
+                printf "Введите URL Worker (wss://...): "
+                read_input tunnel_url
+                if [ -z "$tunnel_url" ]; then
+                    print_error "URL не указан"
+                    pause
+                    continue
+                fi
+
+                printf "Введите секрет (из wrangler.toml): "
+                read_input tunnel_secret
+                if [ -z "$tunnel_secret" ]; then
+                    print_error "Секрет не указан"
+                    pause
+                    continue
+                fi
+
+                # Stop old processes
+                killall tg-mtproxy-client 2>/dev/null || true
+                sleep 1
+
+                # Start tunnel mode
+                "$MTPROXY_BIN" --tunnel --tunnel-url="$tunnel_url" --tunnel-secret="$tunnel_secret" --listen=:1443 &
+                local tunnel_pid=$!
+                sleep 2
+
+                if kill -0 "$tunnel_pid" 2>/dev/null; then
+                    print_success "Tunnel запущен (PID $tunnel_pid)"
+                    print_info "Настройте iptables для перенаправления Telegram IP:"
+                    print_info "  iptables -t nat -A PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443"
+                    print_info "  iptables -t nat -A PREROUTING -d 91.108.0.0/16 -p tcp --dport 443 -j REDIRECT --to-port 1443"
+                else
+                    print_error "Не удалось запустить tunnel"
+                fi
+                pause
+                ;;
+
+            2)
+                # WS proxy (legacy)
                 if ! [ -f "$MTPROXY_BIN" ]; then
                     print_warning "Бинарник не найден, скачиваю..."
                     local tg_arch=""
@@ -1285,17 +1392,23 @@ SUBMENU
                 pause
                 ;;
 
-            2)
+            3)
+                # Stop tunnel
+                pkill -f "tg-mtproxy-client.*--tunnel" 2>/dev/null || true
+                print_success "Tunnel выключен"
+                pause
+                ;;
+
+            4)
+                # Stop WS proxy
                 /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null
-                # Kill loop shell too
                 if [ -f "$MTPROXY_PID" ]; then
-                    kill "$(cat $MTPROXY_PID)" 2>/dev/null
+                    kill "$(cat "$MTPROXY_PID")" 2>/dev/null
                     rm -f "$MTPROXY_PID"
                 fi
                 killall tg-mtproxy-client 2>/dev/null
-                # Disable autostart
                 chmod -x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
-                print_success "Telegram WS proxy выключен (автозапуск отключен)"
+                print_success "WS proxy выключен"
                 pause
                 ;;
 
