@@ -80,13 +80,14 @@ MENU
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
-[T] Telegram MTProxy (тестовая функция)
+[G] Roblox (тестовая функция)
+[T] Telegram прокси (тестовая функция)
 [S] Скрипты custom.d
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,T,W,S]: "
+        printf "Выберите опцию [0-5,A,R,F,G,T,W,S]: "
         read_input choice
 
         case "$choice" in
@@ -113,6 +114,9 @@ MENU
                 ;;
             f|F)
                 menu_rkn_silent_fallback
+                ;;
+            g|G)
+                menu_roblox_bypass
                 ;;
             t|T)
                 menu_telegram_mtproxy
@@ -902,6 +906,111 @@ SUBMENU
 
         *)
             print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: ROBLOX
+# ==============================================================================
+
+menu_roblox_bypass() {
+    clear_screen
+    print_header "Roblox (тестовая функция)"
+
+    local config_file="${ZAPRET2_DIR}/config"
+
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local ROBLOX_UDP_BYPASS=0
+    eval "$(grep '^ROBLOX_UDP_BYPASS=' "$config_file")"
+
+    print_separator
+    print_info "Статус: $([ "$ROBLOX_UDP_BYPASS" = "1" ] && echo 'Включен' || echo 'Выключен')"
+    print_separator
+
+    cat <<'SUBMENU'
+
+Игровые серверы Roblox используют кастомный UDP протокол
+на портах 49152-65535. Блокируются по IP диапазонам.
+
+При включении создается профиль nfqws2 с fake-пакетами,
+направленными на IP Roblox (AS22697). Остальной UDP
+трафик не затрагивается.
+
+Сайт и API Roblox работают через РКН-список (TCP).
+Чат и голосовой чат Roblox не поддерживаются.
+
+[1] Включить
+[2] Выключить
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            if grep -q '^ROBLOX_UDP_BYPASS=' "$config_file"; then
+                sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=1/' "$config_file"
+            else
+                echo "ROBLOX_UDP_BYPASS=1" >> "$config_file"
+            fi
+
+            # Add ephemeral ports to UDP if not present
+            if ! grep -q "49152-65535" "$config_file"; then
+                sed -i 's/^NFQWS2_PORTS_UDP="\(.*\)"/NFQWS2_PORTS_UDP="\1,49152-65535"/' "$config_file"
+            fi
+
+            print_success "Roblox UDP включен"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен с Roblox UDP"
+            else
+                print_warning "Сервис не запущен. Запустите через [2] Управление сервисом"
+            fi
+
+            pause
+            ;;
+
+        2)
+            if [ "$ROBLOX_UDP_BYPASS" != "1" ]; then
+                print_info "Roblox UDP уже выключен"
+                pause
+                return 0
+            fi
+
+            sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=0/' "$config_file"
+
+            # Remove ephemeral ports
+            sed -i 's/,49152-65535//' "$config_file"
+
+            print_success "Roblox UDP выключен"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+
+        [Bb])
+            return 0
+            ;;
+
+        *)
+            print_error "Неверный выбор"
             pause
             ;;
     esac

@@ -354,6 +354,16 @@ AUSTERUS_OPT
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
+    # Roblox UDP (custom protocol on ephemeral ports, blocked by IP)
+    local roblox_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
+    local ROBLOX_UDP_BYPASS=0
+    if [ -f "$roblox_conf" ]; then
+        eval "$(grep '^ROBLOX_UDP_BYPASS=' "$roblox_conf" 2>/dev/null)"
+    fi
+    if [ "$ROBLOX_UDP_BYPASS" = "1" ] && [ -f "${lists_dir}/roblox_ips.txt" ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=49152-65535 --filter-l7=unknown --ipset=${lists_dir}/roblox_ips.txt --out-range=-n2 --payload=all --lua-desync=fake:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
+    fi
+
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
     # 7 strategies from blockcheck2 results, ordered by simplicity.
     # standard_failure_detector detects HTTP 302 redirects natively.
@@ -478,11 +488,14 @@ create_official_config() {
     # Сохранить пользовательские настройки из существующего конфига
     local saved_DROP_DPI_RST="0"
     local saved_RKN_SILENT_FALLBACK="0"
+    local saved_ROBLOX_UDP_BYPASS="0"
     if [ -f "$config_file" ]; then
         eval "$(grep '^DROP_DPI_RST=' "$config_file" 2>/dev/null)"
         saved_DROP_DPI_RST="${DROP_DPI_RST:-0}"
         eval "$(grep '^RKN_SILENT_FALLBACK=' "$config_file" 2>/dev/null)"
         saved_RKN_SILENT_FALLBACK="${RKN_SILENT_FALLBACK:-0}"
+        eval "$(grep '^ROBLOX_UDP_BYPASS=' "$config_file" 2>/dev/null)"
+        saved_ROBLOX_UDP_BYPASS="${ROBLOX_UDP_BYPASS:-0}"
     fi
 
     # Создать полный config файл
@@ -518,7 +531,7 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344"
+NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_ROBLOX_UDP_BYPASS:+$([ "$saved_ROBLOX_UDP_BYPASS" = "1" ] && echo ',49152-65535')}"
 
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges
@@ -633,6 +646,10 @@ DROP_DPI_RST=${saved_DROP_DPI_RST}
 # Silent fallback for RKN: detect silent TCP blackholes and force circular rotation
 # Enable via menu [F] if many RKN sites don't open (especially on MTS/aggressive DPI)
 RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
+
+# Roblox game server UDP bypass: fake packets to Roblox IPs on ephemeral UDP ports
+# Enable via menu [G] if Roblox games fail to connect (Error 279)
+ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
 
 # Compress large lists
 GZIP_LISTS=1

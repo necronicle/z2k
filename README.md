@@ -89,6 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 | **[W]** | Whitelist — управление списком исключений |
 | **[R]** | RST-фильтр — фильтрация аномальных TCP RST |
 | **[F]** | Silent fallback — ускоренная ротация при отсутствии ответа |
+| **[G]** | Roblox — UDP bypass для игровых серверов |
 | **[T]** | Telegram прокси — прозрачное проксирование через WebSocket |
 | **[S]** | Скрипты custom.d |
 

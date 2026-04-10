@@ -1,0 +1,12 @@
+# Roblox game server IP ranges (AS22697)
+# Used for UDP desync on ports 49152-65535
+# nfqws2 auto-reloads this file when modified
+128.116.0.0/17
+128.116.128.0/18
+23.173.192.0/24
+209.206.40.0/21
+204.9.184.0/24
+204.13.168.0/22
+205.201.62.0/24
+141.193.3.0/24
+103.140.28.0/23

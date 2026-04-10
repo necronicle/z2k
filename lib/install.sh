@@ -774,6 +774,12 @@ step_build_zapret2() {
         # Strip CRLF from list files
         find "${ZAPRET2_DIR}" -name "*.txt" -path "*/extra_strats/*" -exec sed -i 's/\r$//' {} + 2>/dev/null || true
     fi
+
+    # Copy Roblox IP list
+    if [ -f "${WORK_DIR}/files/lists/roblox_ips.txt" ]; then
+        mkdir -p "${ZAPRET2_DIR}/lists"
+        cp -f "${WORK_DIR}/files/lists/roblox_ips.txt" "${ZAPRET2_DIR}/lists/roblox_ips.txt" 2>/dev/null || true
+    fi
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then
