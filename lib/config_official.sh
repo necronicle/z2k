@@ -352,12 +352,12 @@ AUSTERUS_OPT
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # Roblox UDP (custom protocol, blocked by IP)
+    # Roblox UDP (custom protocol on ephemeral ports, blocked by IP)
     local roblox_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local ROBLOX_UDP_BYPASS
     ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$roblox_conf" "0")
     if [ "$ROBLOX_UDP_BYPASS" = "1" ] && [ -f "${lists_dir}/roblox_ips.txt" ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/roblox_ips.txt --out-range=-n2 --lua-desync=fake:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=49152-65535 --filter-l7=unknown --ipset=${lists_dir}/roblox_ips.txt --out-range=-n2 --payload=all --lua-desync=fake:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
@@ -526,7 +526,7 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_ROBLOX_UDP_BYPASS:+$([ "$saved_ROBLOX_UDP_BYPASS" = "1" ] && echo ',1024-65535')}"
+NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_ROBLOX_UDP_BYPASS:+$([ "$saved_ROBLOX_UDP_BYPASS" = "1" ] && echo ',49152-65535')}"
 
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges
