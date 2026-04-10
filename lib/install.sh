@@ -1659,6 +1659,30 @@ step_finalize() {
         print_success "Init скрипт Telegram прокси установлен"
     fi
 
+    # Auto-start Telegram tunnel
+    if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
+        # Kill any old proxy processes
+        killall tg-mtproxy-client 2>/dev/null || true
+        /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null || true
+        chmod -x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null || true
+        sleep 1
+
+        # Start tunnel mode
+        /opt/sbin/tg-mtproxy-client --tunnel --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+        sleep 2
+
+        if pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null 2>&1; then
+            # Setup iptables REDIRECT for Telegram DC IPs
+            for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+                iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                    iptables -t nat -A PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+            done
+            print_success "Telegram tunnel запущен автоматически"
+        else
+            print_warning "Не удалось запустить Telegram tunnel (можно включить позже через меню [T])"
+        fi
+    fi
+
     # Показать итоговую информацию
     print_separator
     print_success "Установка zapret2 завершена!"

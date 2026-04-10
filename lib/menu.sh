@@ -8,8 +8,13 @@
 # ==============================================================================
 
 # Читать ввод пользователя (работает даже когда stdin перенаправлен через pipe)
+# Очищает невидимые символы (UTF-8 мусор от смены раскладки, backspace residue)
 read_input() {
-    read -r "$@" </dev/tty
+    local _z2k_raw=""
+    read -r _z2k_raw </dev/tty
+    # Strip non-ASCII, control chars, backspace residue — keep only printable ASCII
+    _z2k_raw=$(printf '%s' "$_z2k_raw" | tr -cd '[:print:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    eval "$1=\"\$_z2k_raw\""
 }
 
 # ==============================================================================
@@ -1173,64 +1178,40 @@ SUBMENU
 
 menu_telegram_mtproxy() {
     local MTPROXY_BIN="/opt/sbin/tg-mtproxy-client"
-    local MTPROXY_PID="/var/run/tg-mtproxy-client.pid"
-    local MTPROXY_PORT="9443"
-    local config_file="${ZAPRET2_DIR}/config"
 
     while true; do
         clear_screen
         print_header "Telegram — обход блокировки"
 
-        # Check DPI bypass status
-        local tg_dpi_enabled
-        tg_dpi_enabled=$(safe_config_read "TG_DPI_BYPASS" "$config_file" "0")
-
-        # Check WS proxy status
-        local running=false
-        if [ -f "$MTPROXY_PID" ] && kill -0 "$(cat $MTPROXY_PID 2>/dev/null)" 2>/dev/null; then
-            running=true
-        elif pgrep -f tg-mtproxy-client >/dev/null 2>&1; then
-            running=true
-        fi
-
-        # Check tunnel mode
         local tunnel_running=false
         if pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null 2>&1; then
             tunnel_running=true
         fi
 
         print_separator
-        printf " Tunnel (рекомендуется): %s\n" "$($tunnel_running && echo 'Включен' || echo 'Выключен')"
-        printf " WS proxy (legacy):     %s\n" "$($running && echo 'Включен' || echo 'Выключен')"
+        printf " Статус: %s\n" "$($tunnel_running && echo 'Включен' || echo 'Выключен')"
         print_separator
 
         cat <<'SUBMENU'
 
-Обход блокировки Telegram для ВСЕХ устройств в сети.
-Настройка на устройствах не требуется.
+Прозрачный обход блокировки Telegram для ВСЕХ устройств в сети.
+Мультиплексированный туннель через Cloudflare — провайдер видит
+только обычный HTTPS. Настройка на устройствах не требуется.
 
-[1] Tunnel (рекомендуется) — мультиплексированный туннель
-    через Cloudflare. ВСЕ соединения через ОДИН канал.
-    Быстро, неотличимо от обычного HTTPS. Автоматически.
-
-[2] WS proxy (запасной) — каждое соединение отдельно.
-    Работает, но медленнее.
-
-[3] Выключить tunnel
-[4] Выключить WS proxy
+[1] Включить
+[2] Выключить
 [B] Назад
 
 SUBMENU
 
-        printf "Выберите опцию [1-4,B]: "
+        printf "Выберите опцию [1-2,B]: "
         read_input sub_choice
 
         case "$sub_choice" in
             1)
-                # Tunnel mode
+                # Download binary if missing
                 if ! [ -f "$MTPROXY_BIN" ]; then
-                    print_warning "Бинарник не найден, скачиваю..."
-                    # Use same download logic as WS proxy (below)
+                    print_info "Скачиваю бинарник..."
                     local tg_arch=""
                     case "$(uname -m)" in
                         aarch64|arm64)  tg_arch="arm64" ;;
@@ -1256,78 +1237,6 @@ SUBMENU
                             pause
                             continue
                         fi
-                    fi
-                fi
-
-                # Stop old processes
-                killall tg-mtproxy-client 2>/dev/null || true
-                sleep 1
-
-                # Start tunnel mode (URL and secret are built-in defaults)
-                "$MTPROXY_BIN" --tunnel --listen=:1443 &
-                local tunnel_pid=$!
-                sleep 2
-
-                if kill -0 "$tunnel_pid" 2>/dev/null; then
-                    print_success "Tunnel запущен (PID $tunnel_pid)"
-                    # Auto-setup iptables REDIRECT for Telegram DC IPs
-                    print_info "Настройка iptables..."
-                    iptables -t nat -C PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 91.108.4.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 91.108.4.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 91.108.8.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 91.108.8.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 91.108.12.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 91.108.12.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 91.108.16.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 91.108.16.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 91.108.20.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 91.108.20.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 91.108.56.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 91.108.56.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 91.105.192.0/23 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 91.105.192.0/23 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 95.161.64.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 95.161.64.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    iptables -t nat -C PREROUTING -d 185.76.151.0/24 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                        iptables -t nat -A PREROUTING -d 185.76.151.0/24 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    print_success "Telegram работает для всех устройств в сети"
-                else
-                    print_error "Не удалось запустить tunnel"
-                fi
-                pause
-                ;;
-
-            2)
-                # WS proxy (legacy)
-                if ! [ -f "$MTPROXY_BIN" ]; then
-                    print_warning "Бинарник не найден, скачиваю..."
-                    local tg_arch=""
-                    case "$(uname -m)" in
-                        aarch64|arm64)  tg_arch="arm64" ;;
-                        armv7*|armv6*)  tg_arch="arm" ;;
-                        mipsel|mipsle)  tg_arch="mipsel" ;;
-                        mips)           tg_arch="mips" ;;
-                        x86_64|amd64)   tg_arch="amd64" ;;
-                        i?86)           tg_arch="x86" ;;
-                        *)              tg_arch="" ;;
-                    esac
-                    if [ -n "$tg_arch" ]; then
-                        local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
-                        local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
-                        curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
-                        local tg_size
-                        tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null || echo 0)
-                        if [ -f "$MTPROXY_BIN" ] && [ "$tg_size" -gt 100000 ] 2>/dev/null; then
-                            chmod +x "$MTPROXY_BIN"
-                            print_success "Скачан для $tg_arch"
-                        else
-                            rm -f "$MTPROXY_BIN"
-                            print_error "Не удалось скачать для $tg_arch"
-                            pause
-                            continue
-                        fi
                     else
                         print_error "Неизвестная архитектура: $(uname -m)"
                         pause
@@ -1335,49 +1244,39 @@ SUBMENU
                     fi
                 fi
 
-                # Use init script for proper restart loop
-                if [ -f "/opt/etc/init.d/S97tg-mtproxy" ]; then
-                    chmod +x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
-                    /opt/etc/init.d/S97tg-mtproxy restart
-                else
-                    # Fallback: download init script
-                    curl -fsSL "https://raw.githubusercontent.com/necronicle/z2k/forge/mtproxy-client/S97tg-mtproxy" \
-                        -o /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
-                    chmod +x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
-                    /opt/etc/init.d/S97tg-mtproxy start
-                fi
-                sleep 3
+                # Stop any old processes
+                killall tg-mtproxy-client 2>/dev/null || true
+                /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null || true
+                chmod -x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null || true
+                sleep 1
 
-                if pgrep -f tg-mtproxy-client >/dev/null 2>&1; then
-                    print_success "Telegram прокси включен"
-                    print_info "Все устройства — Telegram работает автоматически"
+                # Start tunnel
+                "$MTPROXY_BIN" --tunnel --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+                sleep 2
+
+                if pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null 2>&1; then
+                    print_success "Tunnel запущен"
+                    # Setup iptables
+                    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+                        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                            iptables -t nat -A PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    done
+                    print_success "Telegram работает для всех устройств"
                 else
                     print_error "Не удалось запустить"
-                    tail -5 /tmp/tg-mtproxy.log 2>/dev/null
+                    tail -5 /tmp/tg-tunnel.log 2>/dev/null
                 fi
                 pause
                 ;;
 
-            3)
-                # Stop tunnel + cleanup iptables
-                pkill -f "tg-mtproxy-client.*--tunnel" 2>/dev/null || true
+            2)
+                # Stop tunnel + cleanup
+                killall tg-mtproxy-client 2>/dev/null || true
+                /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null || true
                 for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                     iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || true
                 done
-                print_success "Tunnel выключен, iptables очищены"
-                pause
-                ;;
-
-            4)
-                # Stop WS proxy
-                /opt/etc/init.d/S97tg-mtproxy stop 2>/dev/null
-                if [ -f "$MTPROXY_PID" ]; then
-                    kill "$(cat "$MTPROXY_PID")" 2>/dev/null
-                    rm -f "$MTPROXY_PID"
-                fi
-                killall tg-mtproxy-client 2>/dev/null
-                chmod -x /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
-                print_success "WS proxy выключен"
+                print_success "Telegram tunnel выключен"
                 pause
                 ;;
 
