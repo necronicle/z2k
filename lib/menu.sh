@@ -1206,15 +1206,15 @@ menu_telegram_mtproxy() {
 
         cat <<'SUBMENU'
 
-Два режима обхода блокировки Telegram:
+Обход блокировки Telegram для ВСЕХ устройств в сети.
+Настройка на устройствах не требуется.
 
 [1] Tunnel (рекомендуется) — мультиплексированный туннель
-    через Cloudflare Worker. ВСЕ соединения через ОДИН канал.
-    Быстро, неотличимо от обычного HTTPS. Требует деплой
-    бесплатного Cloudflare Worker (инструкция при включении).
+    через Cloudflare. ВСЕ соединения через ОДИН канал.
+    Быстро, неотличимо от обычного HTTPS. Автоматически.
 
-[2] WS proxy (legacy) — каждое соединение = новый WebSocket.
-    Работает без Cloudflare Worker, но медленнее.
+[2] WS proxy (запасной) — каждое соединение отдельно.
+    Работает, но медленнее.
 
 [3] Выключить tunnel
 [4] Выключить WS proxy
@@ -1228,9 +1228,6 @@ SUBMENU
         case "$sub_choice" in
             1)
                 # Tunnel mode
-                clear_screen
-                print_header "Tunnel mode — настройка"
-
                 if ! [ -f "$MTPROXY_BIN" ]; then
                     print_warning "Бинарник не найден, скачиваю..."
                     # Use same download logic as WS proxy (below)
@@ -1283,9 +1280,29 @@ SUBMENU
 
                 if kill -0 "$tunnel_pid" 2>/dev/null; then
                     print_success "Tunnel запущен (PID $tunnel_pid)"
-                    print_info "Настройте iptables для перенаправления Telegram IP:"
-                    print_info "  iptables -t nat -A PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443"
-                    print_info "  iptables -t nat -A PREROUTING -d 91.108.0.0/16 -p tcp --dport 443 -j REDIRECT --to-port 1443"
+                    # Auto-setup iptables REDIRECT for Telegram DC IPs
+                    print_info "Настройка iptables..."
+                    iptables -t nat -C PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 91.108.4.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 91.108.4.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 91.108.8.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 91.108.8.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 91.108.12.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 91.108.12.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 91.108.16.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 91.108.16.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 91.108.20.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 91.108.20.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 91.108.56.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 91.108.56.0/22 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 91.105.192.0/23 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 91.105.192.0/23 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 95.161.64.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 95.161.64.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -C PREROUTING -d 185.76.151.0/24 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                        iptables -t nat -A PREROUTING -d 185.76.151.0/24 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    print_success "Telegram работает для всех устройств в сети"
                 else
                     print_error "Не удалось запустить tunnel"
                 fi
@@ -1363,9 +1380,12 @@ SUBMENU
                 ;;
 
             3)
-                # Stop tunnel
+                # Stop tunnel + cleanup iptables
                 pkill -f "tg-mtproxy-client.*--tunnel" 2>/dev/null || true
-                print_success "Tunnel выключен"
+                for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+                    iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || true
+                done
+                print_success "Tunnel выключен, iptables очищены"
                 pause
                 ;;
 
