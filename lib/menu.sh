@@ -1245,9 +1245,8 @@ SUBMENU
                         local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
                         local tg_ok=false
                         for tg_url in \
-                            "https://raw.githubusercontent.com/necronicle/z2k/forge/mtproxy-client/builds/${tg_bin}" \
-                            "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
-                            curl -fsSL "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
+                            "${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"; do
+                            curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
                             if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
                                 local tg_size
                                 tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
@@ -1327,10 +1326,8 @@ SUBMENU
                         local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
                         local tg_ok=false
                         for tg_url in \
-                            "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/mtproxy-client/builds/${tg_bin}" \
-                            "https://raw.githubusercontent.com/necronicle/z2k/forge/mtproxy-client/builds/${tg_bin}" \
-                            "https://github.com/necronicle/z2k/releases/download/tg-mtproxy-v1.0/${tg_bin}"; do
-                            curl -fsSL "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
+                            "${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"; do
+                            curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
                             if [ -f "$MTPROXY_BIN" ] && [ -s "$MTPROXY_BIN" ]; then
                                 local tg_size
                                 tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null)
