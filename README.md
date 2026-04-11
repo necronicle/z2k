@@ -1,5 +1,7 @@
 # z2k v2.0 — Zapret2 для Keenetic
 
+**Telegram-группа: [@zapret2keenetic](https://t.me/zapret2keenetic)** — вопросы, помощь с настройкой, обсуждение
+
 Поддержать проект:
 
 - TON: `UQA6Y6Mf1Qge2dVSl3_vSqb29SKrhI8VgJtoRBjgp08oB8QY`
