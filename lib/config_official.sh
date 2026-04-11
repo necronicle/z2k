@@ -352,12 +352,13 @@ AUSTERUS_OPT
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # Roblox UDP (custom protocol, blocked by IP)
+    # Roblox UDP (custom protocol, not QUIC — needs payload=all to match unknown UDP)
+    # No ipset — Roblox IPs change constantly; port range + out-range is sufficient
     local roblox_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local ROBLOX_UDP_BYPASS
     ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$roblox_conf" "0")
-    if [ "$ROBLOX_UDP_BYPASS" = "1" ] && [ -f "${lists_dir}/roblox_ips.txt" ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/roblox_ips.txt --out-range=-n2 --lua-desync=fake:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
+    if [ "$ROBLOX_UDP_BYPASS" = "1" ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --out-range=-n2 --lua-desync=fake:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
