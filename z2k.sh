@@ -252,24 +252,10 @@ tls_clienthello_max_ru.bin
 tls_clienthello_sberbank_ru.bin
 tls_clienthello_14.bin
 tls_clienthello_www_google_com.bin
-tls_clienthello_www_onetrust_com.bin
-tls_clienthello_activated.bin
-tls_clienthello_4pda_to.bin
-tls_clienthello_vk_com.bin
-tls_clienthello_gosuslugi_ru.bin
-t2.bin
-syn_packet.bin
-stun.bin
-http_iana_org.bin
 quic_initial_www_google_com.bin
-quic_initial_google_com.bin
-quic_initial_rutracker_org.bin
 quic_1.bin
-quic_4.bin
 quic_5.bin
-quic_6.bin
 quic_test_00.bin
-zero_256.bin
 "
 
     while read -r file; do
