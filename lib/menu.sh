@@ -1185,7 +1185,7 @@ menu_telegram_mtproxy() {
         print_header "Telegram — обход блокировки"
 
         local tunnel_running=false
-        if pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null 2>&1; then
+        if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
             tunnel_running=true
         fi
 
@@ -1265,10 +1265,10 @@ SUBMENU
                 sleep 1
 
                 # Start tunnel
-                "$MTPROXY_BIN" --tunnel --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+                "$MTPROXY_BIN" --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
                 sleep 2
 
-                if pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null 2>&1; then
+                if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
                     print_success "Tunnel запущен"
                     # Setup iptables
                     for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do

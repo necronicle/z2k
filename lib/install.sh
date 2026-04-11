@@ -1700,10 +1700,10 @@ step_finalize() {
         sleep 1
 
         # Start tunnel mode
-        /opt/sbin/tg-mtproxy-client --tunnel --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+        /opt/sbin/tg-mtproxy-client --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
         sleep 2
 
-        if pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null 2>&1; then
+        if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
             # Setup iptables REDIRECT for Telegram DC IPs
             for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                 iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
@@ -1715,13 +1715,13 @@ step_finalize() {
 LOG="/tmp/tg-tunnel.log"
 BIN="/opt/sbin/tg-mtproxy-client"
 [ ! -f "$LOG" ] && exit 0
-pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null || exit 0
+pgrep -f "tg-mtproxy-client" >/dev/null || exit 0
 FAILS=$(tail -20 "$LOG" | grep -c "CONNECT_FAIL")
 if [ "$FAILS" -ge 10 ]; then
     logger -t tg-watchdog "Detected $FAILS CONNECT_FAILs, restarting tunnel"
     killall -9 tg-mtproxy-client 2>/dev/null
     sleep 2
-    $BIN --tunnel --listen=:1443 >> "$LOG" 2>&1 &
+    $BIN --listen=:1443 >> "$LOG" 2>&1 &
     echo "$(date) watchdog: restarted ($FAILS fails)" >> "$LOG"
 fi
 WDSCRIPT
