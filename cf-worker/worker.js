@@ -131,7 +131,8 @@ export default {
 
     // Track TCP streams: streamId → { socket, writer }
     const streams = new Map();
-    const MAX_STREAMS = 100; // prevent memory exhaustion
+    let totalConnects = 0;      // lifetime connect count for this WS session
+    const MAX_CONNECTS = 40;    // force WS reconnect after N connects (CF subrequest limit)
     let authenticated = false;
 
     // Pre-compute expected auth HMAC
@@ -164,12 +165,28 @@ export default {
 
       console.log(`stream ${streamId} CONNECT ${target.address}:${target.port}`);
 
+      totalConnects++;
+
+      // Proactively close WS before hitting CF subrequest limit
+      if (totalConnects > MAX_CONNECTS) {
+        console.warn(`hit ${MAX_CONNECTS} connects, closing WS for fresh invocation`);
+        sendFrame(streamId, MUX_CONNECT_FAIL, null);
+        server.close(1000, "connect limit");
+        return;
+      }
+
       let socket;
       try {
         socket = connect({ hostname: target.address, port: target.port });
       } catch (e) {
         console.error(`stream ${streamId} connect failed: ${e.message}`);
         sendFrame(streamId, MUX_CONNECT_FAIL, null);
+        // If connect() throws, we've likely hit CF subrequest limit — kill WS
+        // so client reconnects to a fresh Worker invocation
+        if (totalConnects > 10) {
+          console.error(`connect() failed after ${totalConnects} total connects, closing WS`);
+          server.close(1000, "subrequest limit");
+        }
         return;
       }
 
@@ -265,16 +282,11 @@ export default {
       // Dispatch by message type
       switch (frame.msgType) {
         case MUX_CONNECT:
-          if (streams.size >= MAX_STREAMS) {
-            console.warn(`stream ${frame.streamId} rejected: ${streams.size}/${MAX_STREAMS} streams active`);
-            sendFrame(frame.streamId, MUX_CONNECT_FAIL, null);
-          } else {
-            // No await — handleConnect runs its own read loop async
-            handleConnect(frame.streamId, frame.payload).catch(e => {
-              console.error(`stream ${frame.streamId} unhandled error: ${e.message}`);
-              closeStream(frame.streamId);
-            });
-          }
+          // No await — handleConnect runs its own read loop async
+          handleConnect(frame.streamId, frame.payload).catch(e => {
+            console.error(`stream ${frame.streamId} unhandled error: ${e.message}`);
+            closeStream(frame.streamId);
+          });
           break;
 
         case MUX_DATA: {
