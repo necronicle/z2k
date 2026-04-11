@@ -101,7 +101,6 @@ type tunnelClient struct {
 	nextID     atomic.Uint32
 	mu         sync.Mutex   // protects ws/writer replacement during reconnect
 	connectSem chan struct{} // limits concurrent CONNECT to CF Workers limit
-	wsReady    chan struct{} // closed when WS is connected, recreated on disconnect
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
@@ -110,21 +109,11 @@ type tunnelStream struct {
 	id        uint16
 	conn      *net.TCPConn
 	client    *tunnelClient
-	origIP    net.IP // original destination IP (for re-CONNECT after reconnect)
-	origPort  int    // original destination port
 	closeOnce sync.Once
-	upBytes   atomic.Int64
-	downBytes atomic.Int64
-	connected atomic.Bool // true after first CONNECT_OK
 }
 
 func (s *tunnelStream) close() {
 	s.closeOnce.Do(func() {
-		up := s.upBytes.Load()
-		down := s.downBytes.Load()
-		if *verbose {
-			log.Printf("[tunnel] stream %d closed (up=%d down=%d)", s.id, up, down)
-		}
 		s.conn.Close()
 		s.client.streams.Delete(s.id)
 		s.client.mu.Lock()
@@ -149,6 +138,7 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 		WriteBufferSize:   128 * 1024,
 		EnableCompression: true,
 		NetDial: func(network, addr string) (net.Conn, error) {
+			// Force IPv4 — IPv6 to Cloudflare is unstable on some ISPs
 			conn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
 			if err != nil {
 				return nil, err
@@ -180,33 +170,13 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 	return ws, nil
 }
 
-// reConnectStreams re-sends CONNECT for all surviving streams after WS reconnect.
-func (tc *tunnelClient) reConnectStreams() {
-	tc.mu.Lock()
-	w := tc.writer
-	tc.mu.Unlock()
-	if w == nil {
-		return
-	}
-
-	count := 0
+// closeAllStreams closes all active tunnel streams.
+func (tc *tunnelClient) closeAllStreams() {
 	tc.streams.Range(func(key, value any) bool {
 		stream := value.(*tunnelStream)
-		stream.connected.Store(false)
-
-		connectPayload := encodeConnectPayload(stream.origIP, stream.origPort)
-		frame := encodeMuxFrame(stream.id, muxCONNECT, connectPayload)
-		if err := w.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-			log.Printf("[tunnel] stream %d re-CONNECT write error: %v", stream.id, err)
-			stream.close()
-			return true
-		}
-		count++
+		stream.close()
 		return true
 	})
-	if count > 0 {
-		log.Printf("[tunnel] re-CONNECTed %d surviving streams", count)
-	}
 }
 
 // readLoop reads mux frames from the WS and dispatches to streams.
@@ -219,9 +189,6 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 			}
 			return
 		}
-
-		// Any incoming message means WS is alive — extend read deadline
-		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
 
 		frame, err := decodeMuxFrame(msg)
 		if err != nil {
@@ -242,7 +209,6 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 
 		switch frame.MsgType {
 		case muxDATA:
-			stream.downBytes.Add(int64(len(frame.Payload)))
 			stream.conn.SetDeadline(time.Now().Add(*connTimeout))
 			if _, err := stream.conn.Write(frame.Payload); err != nil {
 				if *verbose {
@@ -263,10 +229,10 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 			case <-tc.connectSem:
 			default:
 			}
-			stream.connected.Store(true)
 			if *verbose {
 				log.Printf("[tunnel] stream %d CONNECT_OK", frame.StreamID)
 			}
+			go tc.streamReadLoop(stream)
 
 		case muxCONNECT_FAIL:
 			select {
@@ -286,7 +252,6 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 }
 
 // streamReadLoop reads from a TCP client and sends DATA frames over WS.
-// Survives WS reconnects: waits for writer to become available again.
 func (tc *tunnelClient) streamReadLoop(stream *tunnelStream) {
 	defer stream.close()
 
@@ -296,28 +261,19 @@ func (tc *tunnelClient) streamReadLoop(stream *tunnelStream) {
 	for {
 		n, err := reader.Read(buf)
 		if n > 0 {
-			stream.upBytes.Add(int64(n))
 			stream.conn.SetDeadline(time.Now().Add(*connTimeout))
 			frame := encodeMuxFrame(stream.id, muxDATA, buf[:n])
-
-			// Wait for WS to be available (survives reconnect)
-			for attempt := 0; attempt < 50; attempt++ {
-				tc.mu.Lock()
-				w := tc.writer
-				tc.mu.Unlock()
-				if w != nil {
-					if werr := w.WriteMessage(websocket.BinaryMessage, frame); werr != nil {
-						if *verbose {
-							log.Printf("[tunnel] stream %d WS write error: %v", stream.id, werr)
-						}
-						// Write failed — WS probably just died, wait for reconnect
-						time.Sleep(100 * time.Millisecond)
-						continue
-					}
-					break // success
+			tc.mu.Lock()
+			w := tc.writer
+			tc.mu.Unlock()
+			if w == nil {
+				return
+			}
+			if werr := w.WriteMessage(websocket.BinaryMessage, frame); werr != nil {
+				if *verbose {
+					log.Printf("[tunnel] stream %d WS write error: %v", stream.id, werr)
 				}
-				// No writer — WS is reconnecting, wait
-				time.Sleep(100 * time.Millisecond)
+				return
 			}
 		}
 		if err != nil {
@@ -351,17 +307,6 @@ func (tc *tunnelClient) run() {
 		tc.writer = &wsWriter{ws: ws}
 		tc.mu.Unlock()
 
-		// PongHandler: update read deadline when pong received
-		ws.SetPongHandler(func(appData string) error {
-			ws.SetReadDeadline(time.Now().Add(120 * time.Second))
-			return nil
-		})
-		// Initial read deadline
-		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
-
-		// Re-CONNECT surviving streams from previous WS session
-		tc.reConnectStreams()
-
 		// Keepalive: ping every 50s (CF kills idle WS after 100s)
 		pingDone := make(chan struct{})
 		go func() {
@@ -386,13 +331,14 @@ func (tc *tunnelClient) run() {
 		// Read loop blocks until WS disconnects
 		tc.readLoop(ws)
 
-		// WS disconnected — DON'T close client TCP connections
-		log.Printf("[tunnel] WS disconnected, keeping streams alive for reconnect")
+		// WS disconnected — close all streams, Telegram clients will retry
+		log.Printf("[tunnel] WS disconnected, closing all streams")
 		tc.mu.Lock()
 		tc.ws = nil
 		tc.writer = nil
 		tc.mu.Unlock()
 		ws.Close()
+		tc.closeAllStreams()
 
 		// Drain connect semaphore — pending CONNECTs died with the WS
 		for {
@@ -444,35 +390,21 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		}
 	}
 
-	// Wait up to 5s for WS to be ready (handles new connections during reconnect)
 	tc.mu.Lock()
 	w := tc.writer
 	tc.mu.Unlock()
 	if w == nil {
-		for i := 0; i < 50; i++ {
-			time.Sleep(100 * time.Millisecond)
-			tc.mu.Lock()
-			w = tc.writer
-			tc.mu.Unlock()
-			if w != nil {
-				break
-			}
+		if *verbose {
+			log.Printf("[tunnel] no WS connection, dropping stream %d", streamID)
 		}
-		if w == nil {
-			if *verbose {
-				log.Printf("[tunnel] no WS connection after waiting, dropping stream %d", streamID)
-			}
-			clientConn.Close()
-			return
-		}
+		clientConn.Close()
+		return
 	}
 
 	stream := &tunnelStream{
-		id:       streamID,
-		conn:     clientConn,
-		client:   tc,
-		origIP:   origIP,
-		origPort: origPort,
+		id:     streamID,
+		conn:   clientConn,
+		client: tc,
 	}
 	tc.streams.Store(streamID, stream)
 
@@ -501,7 +433,7 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		return
 	}
 
-	go tc.streamReadLoop(stream)
+	// streamReadLoop starts when CONNECT_OK is received in readLoop
 }
 
 // runTunnel is the entry point for tunnel mode.
