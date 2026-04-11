@@ -47,22 +47,29 @@ jobs:
       - name: Cross-compile
         working-directory: mtproxy-client
         run: |
-          targets=(
-            "linux/arm64"
-            "linux/arm"
-            "linux/amd64"
-            "linux/mips"
-            "linux/mipsle"
-            "linux/mips64le"
+          # All targets with arch-specific flags for max compatibility
+          # MIPS: softfloat (Keenetic MT7621, KN-3610 etc.)
+          # MIPS64: softfloat
+          # ARM: GOARM=5 (ARMv5, no VFP — max compat)
+          # All: CGO_ENABLED=0 (static), -ldflags="-s -w" (strip)
+          declare -A flags=(
+            ["linux/arm64"]=""
+            ["linux/arm"]="GOARM=5"
+            ["linux/amd64"]=""
+            ["linux/mips"]="GOMIPS=softfloat"
+            ["linux/mipsle"]="GOMIPS=softfloat"
+            ["linux/mips64le"]="GOMIPS64=softfloat"
+            ["linux/ppc64"]=""
+            ["linux/riscv64"]=""
+            ["linux/386"]=""
           )
-          for target in "${targets[@]}"; do
+          for target in "${!flags[@]}"; do
             GOOS="${target%%/*}"
             GOARCH="${target##*/}"
-            echo "Building for ${GOOS}/${GOARCH}..."
-            # MIPS: use softfloat for Keenetic/OpenWrt compatibility
-            EXTRA=""
-            case "$GOARCH" in mips|mipsle) EXTRA="GOMIPS=softfloat" ;; esac
-            env GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA go build -o /dev/null .
+            EXTRA="${flags[$target]}"
+            echo "Building for ${GOOS}/${GOARCH} ${EXTRA}..."
+            env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA \
+              go build -ldflags="-s -w" -o /dev/null .
           done
 
   lua-check:
