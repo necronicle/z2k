@@ -153,6 +153,16 @@ check_environment() {
     local arch entware_arch bin_arch
     entware_arch=$(z2k_detect_entware_arch)
     arch="${entware_arch:-$(uname -m)}"
+    # uname -m returns "mips" for both mips and mipsel — detect endianness from ELF
+    if [ "$arch" = "mips" ]; then
+        local _ebin=""
+        for _f in /opt/bin/opkg /opt/bin/busybox; do [ -f "$_f" ] && _ebin="$_f" && break; done
+        if [ -n "$_ebin" ]; then
+            local _byte
+            _byte=$(dd if="$_ebin" bs=1 skip=5 count=1 2>/dev/null)
+            [ "$_byte" = "$(printf '\x01')" ] && arch="mipsel"
+        fi
+    fi
     bin_arch=$(z2k_map_arch_to_bin_arch "$arch" 2>/dev/null || true)
     [ -n "$bin_arch" ] && print_info "Detected architecture: $arch -> $bin_arch"
 

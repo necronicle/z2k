@@ -147,15 +147,47 @@ map_arch_to_bin_arch() {
     esac
 }
 
+# Detect endianness from ELF header of a binary
+detect_endianness() {
+    local bin=""
+    for f in /opt/bin/opkg /opt/bin/busybox /opt/sbin/nfqws2; do
+        [ -f "$f" ] && bin="$f" && break
+    done
+    [ -z "$bin" ] && return 1
+    # ELF EI_DATA is byte 6 (offset 5): \x01=LE, \x02=BE
+    # dd + comparison works on any busybox
+    local byte
+    byte=$(dd if="$bin" bs=1 skip=5 count=1 2>/dev/null)
+    case "$byte" in
+        "$(printf '\x01')") echo "le" ;;
+        "$(printf '\x02')") echo "be" ;;
+        *) return 1 ;;
+    esac
+}
+
 # Получить архитектуру системы (с приоритетом Entware)
 get_arch() {
     local entware_arch
     entware_arch=$(get_entware_arch)
     if [ -n "$entware_arch" ]; then
         echo "$entware_arch"
-    else
-        uname -m
+        return
     fi
+
+    local arch
+    arch=$(uname -m)
+
+    # uname -m returns "mips" for both mips and mipsel — detect endianness from ELF
+    if [ "$arch" = "mips" ]; then
+        local endian
+        endian=$(detect_endianness)
+        if [ "$endian" = "le" ]; then
+            echo "mipsel"
+            return
+        fi
+    fi
+
+    echo "$arch"
 }
 
 # Проверка архитектуры
