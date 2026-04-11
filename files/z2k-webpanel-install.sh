@@ -35,21 +35,23 @@ esac
 echo "=== z2k Web Panel Installer ==="
 echo ""
 
-# 0. Ensure httpd is available
-if ! command -v httpd >/dev/null 2>&1 && ! busybox httpd --help >/dev/null 2>&1; then
-    echo "[0/5] httpd не найден, устанавливаю..."
+# 0. Ensure a web server is available
+if ! command -v lighttpd >/dev/null 2>&1 && ! command -v httpd >/dev/null 2>&1; then
+    echo "[0/5] Веб-сервер не найден, устанавливаю..."
     if command -v opkg >/dev/null 2>&1; then
         opkg update >/dev/null 2>&1
-        if opkg install busybox-httpd 2>/dev/null; then
+        if opkg install lighttpd lighttpd-mod-cgi 2>/dev/null; then
+            echo "  Установлен: lighttpd + CGI"
+        elif opkg install busybox-httpd 2>/dev/null; then
             echo "  Установлен: busybox-httpd"
         elif opkg install uhttpd 2>/dev/null; then
             echo "  Установлен: uhttpd"
         else
-            echo "  ВНИМАНИЕ: не удалось установить httpd"
-            echo "  Установите вручную: opkg install busybox-httpd"
+            echo "  ВНИМАНИЕ: не удалось установить веб-сервер"
+            echo "  Установите вручную: opkg install lighttpd lighttpd-mod-cgi"
         fi
     else
-        echo "  ВНИМАНИЕ: opkg не найден, установите httpd вручную"
+        echo "  ВНИМАНИЕ: opkg не найден"
     fi
 fi
 
