@@ -1716,7 +1716,7 @@ LOG="/tmp/tg-tunnel.log"
 BIN="/opt/sbin/tg-mtproxy-client"
 [ ! -f "$LOG" ] && exit 0
 pgrep -f "tg-mtproxy-client" >/dev/null || exit 0
-FAILS=$(tail -20 "$LOG" | grep -c "CONNECT_FAIL")
+FAILS=$(tail -40 "$LOG" | grep -c "CONNECT_FAIL")
 if [ "$FAILS" -ge 10 ]; then
     logger -t tg-watchdog "Detected $FAILS CONNECT_FAILs, restarting tunnel"
     killall -9 tg-mtproxy-client 2>/dev/null
