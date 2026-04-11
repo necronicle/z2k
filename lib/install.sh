@@ -1731,6 +1731,52 @@ WDSCRIPT
             crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
                 (crontab -l 2>/dev/null; echo "$WDCRON") | crontab -
 
+            # Install init script for autostart on reboot
+            cat > /opt/etc/init.d/S98tg-tunnel << 'INITEOF'
+#!/bin/sh
+BIN="/opt/sbin/tg-mtproxy-client"
+LOG="/tmp/tg-tunnel.log"
+PIDFILE="/var/run/tg-tunnel.pid"
+
+start() {
+    [ -x "$BIN" ] || exit 0
+    if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+        echo "tg-tunnel already running"
+        return 0
+    fi
+    echo "Starting tg-tunnel..."
+    $BIN --listen=:1443 >> "$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 2
+    # Setup iptables REDIRECT for Telegram DC IPs
+    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -A PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+    done
+}
+
+stop() {
+    echo "Stopping tg-tunnel..."
+    killall tg-mtproxy-client 2>/dev/null
+    rm -f "$PIDFILE"
+    # Remove iptables REDIRECT rules
+    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+        iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+    done
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart}" ;;
+esac
+INITEOF
+            chmod +x /opt/etc/init.d/S98tg-tunnel
+
+            # Cleanup legacy cron entry for S97tg-mtproxy
+            crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null
+
             print_success "Telegram tunnel запущен автоматически"
         else
             print_warning "Не удалось запустить Telegram tunnel (можно включить позже через меню [T])"
