@@ -1709,6 +1709,28 @@ step_finalize() {
                 iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
                     iptables -t nat -A PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
             done
+            # Install watchdog — auto-restart tunnel on CONNECT_FAIL storms
+            cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDSCRIPT'
+#!/bin/sh
+LOG="/tmp/tg-tunnel.log"
+BIN="/opt/sbin/tg-mtproxy-client"
+[ ! -f "$LOG" ] && exit 0
+pgrep -f "tg-mtproxy-client.*--tunnel" >/dev/null || exit 0
+FAILS=$(tail -20 "$LOG" | grep -c "CONNECT_FAIL")
+if [ "$FAILS" -ge 10 ]; then
+    logger -t tg-watchdog "Detected $FAILS CONNECT_FAILs, restarting tunnel"
+    killall -9 tg-mtproxy-client 2>/dev/null
+    sleep 2
+    $BIN --tunnel --listen=:1443 >> "$LOG" 2>&1 &
+    echo "$(date) watchdog: restarted ($FAILS fails)" >> "$LOG"
+fi
+WDSCRIPT
+            chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
+            # Add to cron (every minute)
+            WDCRON="* * * * * /opt/zapret2/tg-tunnel-watchdog.sh"
+            crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
+                (crontab -l 2>/dev/null; echo "$WDCRON") | crontab -
+
             print_success "Telegram tunnel запущен автоматически"
         else
             print_warning "Не удалось запустить Telegram tunnel (можно включить позже через меню [T])"
