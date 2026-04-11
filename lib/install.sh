@@ -1626,9 +1626,10 @@ step_finalize() {
         case "$tg_bin_arch" in
             linux-arm64)  tg_arch="arm64" ;;
             linux-arm)    tg_arch="arm" ;;
-            linux-mipsel) tg_arch="mipsel" ;;
-            linux-mips64) tg_arch="mips64el" ;;
-            linux-mips)   tg_arch="mips" ;;
+            linux-mipsel)   tg_arch="mipsel" ;;
+            linux-mips64el) tg_arch="mips64el" ;;
+            linux-mips64)   tg_arch="mips" ;;
+            linux-mips)     tg_arch="mips" ;;
             linux-x86_64) tg_arch="amd64" ;;
             linux-x86)    tg_arch="x86" ;;
             linux-riscv64) tg_arch="riscv64" ;;

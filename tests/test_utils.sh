@@ -81,7 +81,7 @@ assert_eq "arch: aarch64" "linux-arm64" "$(map_arch_to_bin_arch aarch64)"
 assert_eq "arch: armv7l" "linux-arm" "$(map_arch_to_bin_arch armv7l)"
 assert_eq "arch: x86_64" "linux-x86_64" "$(map_arch_to_bin_arch x86_64)"
 assert_eq "arch: mipsel" "linux-mipsel" "$(map_arch_to_bin_arch mipsel)"
-assert_eq "arch: mips64el" "linux-mipsel" "$(map_arch_to_bin_arch mips64el)"
+assert_eq "arch: mips64el" "linux-mips64el" "$(map_arch_to_bin_arch mips64el)"
 assert_eq "arch: riscv64" "linux-riscv64" "$(map_arch_to_bin_arch riscv64)"
 
 # Unknown arch should return error
