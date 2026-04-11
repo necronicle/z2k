@@ -59,7 +59,10 @@ jobs:
             GOOS="${target%%/*}"
             GOARCH="${target##*/}"
             echo "Building for ${GOOS}/${GOARCH}..."
-            GOOS="$GOOS" GOARCH="$GOARCH" go build -o /dev/null .
+            # MIPS: use softfloat for Keenetic/OpenWrt compatibility
+            EXTRA=""
+            case "$GOARCH" in mips|mipsle) EXTRA="GOMIPS=softfloat" ;; esac
+            env GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA go build -o /dev/null .
           done
 
   lua-check:
