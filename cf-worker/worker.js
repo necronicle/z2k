@@ -190,19 +190,33 @@ export default {
         return;
       }
 
-      // Wait for TCP handshake before sending CONNECT_OK
-      // This avoids zombie streams where connect() succeeded but TCP never established
       const writer = socket.writable.getWriter();
+
+      // Wait for TCP handshake with timeout — avoids zombie streams
+      const connectTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("TCP connect timeout")), 5000)
+      );
       try {
-        await socket.opened;
+        await Promise.race([socket.opened, connectTimeout]);
       } catch (e) {
         console.error(`stream ${streamId} TCP handshake failed: ${e.message}`);
         try { writer.close(); } catch (_) {}
+        try { socket.close(); } catch (_) {}
         sendFrame(streamId, MUX_CONNECT_FAIL, null);
         return;
       }
+
       streams.set(streamId, { socket, writer });
       sendFrame(streamId, MUX_CONNECT_OK, null);
+
+      // Monitor socket close — catches silent disconnects
+      socket.closed.then(() => {
+        if (streams.has(streamId)) {
+          streams.delete(streamId);
+          sendFrame(streamId, MUX_CLOSE, null);
+          try { writer.close(); } catch (_) {}
+        }
+      });
 
       // Read from TCP socket, send DATA frames back to client
       try {
