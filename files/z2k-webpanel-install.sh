@@ -35,6 +35,24 @@ esac
 echo "=== z2k Web Panel Installer ==="
 echo ""
 
+# 0. Ensure httpd is available
+if ! command -v httpd >/dev/null 2>&1 && ! busybox httpd --help >/dev/null 2>&1; then
+    echo "[0/5] httpd не найден, устанавливаю..."
+    if command -v opkg >/dev/null 2>&1; then
+        opkg update >/dev/null 2>&1
+        if opkg install busybox-httpd 2>/dev/null; then
+            echo "  Установлен: busybox-httpd"
+        elif opkg install uhttpd 2>/dev/null; then
+            echo "  Установлен: uhttpd"
+        else
+            echo "  ВНИМАНИЕ: не удалось установить httpd"
+            echo "  Установите вручную: opkg install busybox-httpd"
+        fi
+    else
+        echo "  ВНИМАНИЕ: opkg не найден, установите httpd вручную"
+    fi
+fi
+
 # 1. Create directories
 echo "[1/5] Creating directories..."
 mkdir -p "$CGI_DIR"
