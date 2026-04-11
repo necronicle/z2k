@@ -131,6 +131,7 @@ export default {
 
     // Track TCP streams: streamId → { socket, writer }
     const streams = new Map();
+    const MAX_STREAMS = 100; // prevent memory exhaustion
     let authenticated = false;
 
     // Pre-compute expected auth HMAC
@@ -264,7 +265,16 @@ export default {
       // Dispatch by message type
       switch (frame.msgType) {
         case MUX_CONNECT:
-          handleConnect(frame.streamId, frame.payload);
+          if (streams.size >= MAX_STREAMS) {
+            console.warn(`stream ${frame.streamId} rejected: ${streams.size}/${MAX_STREAMS} streams active`);
+            sendFrame(frame.streamId, MUX_CONNECT_FAIL, null);
+          } else {
+            // No await — handleConnect runs its own read loop async
+            handleConnect(frame.streamId, frame.payload).catch(e => {
+              console.error(`stream ${frame.streamId} unhandled error: ${e.message}`);
+              closeStream(frame.streamId);
+            });
+          }
           break;
 
         case MUX_DATA: {
