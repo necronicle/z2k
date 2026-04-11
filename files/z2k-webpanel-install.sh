@@ -46,7 +46,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_SCRIPT=""
 for candidate in \
     "${SCRIPT_DIR}/${PANEL_SCRIPT}" \
+    "${ZAPRET_BASE}/${PANEL_SCRIPT}" \
     "${ZAPRET_BASE}/files/${PANEL_SCRIPT}" \
+    "${ZAPRET_BASE}/www/cgi-bin/index.cgi" \
+    "/tmp/z2k/files/${PANEL_SCRIPT}" \
     "/tmp/${PANEL_SCRIPT}" \
 ; do
     if [ -f "$candidate" ]; then
