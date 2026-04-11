@@ -529,7 +529,7 @@ menu_rutracker_blockcheck() {
     fi
 
     print_info "Запуск blockcheck для fast-torrent.ru (HTTP, порт 80)"
-    print_info "Поиск рабочей стратегии обхода HTTP DPI redirect"
+    print_info "Поиск рабочей стратегии для HTTP DPI redirect"
     if confirm "Продолжить?" "Y"; then
         run_blockcheck_http "fast-torrent.ru"
     fi
@@ -918,7 +918,7 @@ menu_custom_scripts() {
     cat <<'INFO'
 
 Скрипты custom.d (50-stun4all, 50-discord-media) запускают
-дополнительные демоны nfqws2 для обхода Discord voice/video.
+дополнительные демоны nfqws2 для Discord voice/video.
 
 ВНИМАНИЕ: Discord voice/video уже обрабатывается основными
 стратегиями (профиль 6 — Discord UDP). Включение скриптов
@@ -1094,15 +1094,8 @@ menu_roblox_bypass() {
 
     cat <<'SUBMENU'
 
-Игровые серверы Roblox используют кастомный UDP протокол
-на портах 1024-65535. Блокируются по IP диапазонам.
-
-При включении создается профиль nfqws2 с fake-пакетами,
-направленными на IP Roblox (AS22697). Остальной UDP
-трафик не затрагивается.
-
-Сайт и API Roblox работают через РКН-список (TCP).
-Чат и голосовой чат Roblox не поддерживаются.
+Roblox — игровые серверы (UDP, порты 1024-65535).
+Сайт и API работают через основные стратегии (TCP).
 
 [1] Включить
 [2] Выключить
@@ -1182,7 +1175,7 @@ menu_telegram_mtproxy() {
 
     while true; do
         clear_screen
-        print_header "Telegram — обход блокировки"
+        print_header "Telegram"
 
         local tunnel_running=false
         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
@@ -1195,9 +1188,8 @@ menu_telegram_mtproxy() {
 
         cat <<'SUBMENU'
 
-Прозрачный обход блокировки Telegram для ВСЕХ устройств в сети.
-Мультиплексированный туннель через Cloudflare — провайдер видит
-только обычный HTTPS. Настройка на устройствах не требуется.
+Telegram для всех устройств в сети.
+Настройка на устройствах не требуется.
 
 [1] Включить
 [2] Выключить
@@ -1506,7 +1498,7 @@ EOF
 
 Whitelist содержит домены, которые ИСКЛЮЧЕНЫ из обработки zapret2.
 Это полезно для критичных сервисов, которые могут сломаться
-при применении DPI-обхода (госуслуги, банки, и т.д.)
+при обработке (госуслуги, банки, и т.д.)
 
 По умолчанию в whitelist включены:
   - Госуслуги РФ (gosuslugi, nalog, pfr, mos, gov.ru...)
