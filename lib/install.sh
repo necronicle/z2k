@@ -759,6 +759,25 @@ step_build_zapret2() {
         cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
     fi
 
+    # Create blob aliases: strategies use short names, files have full names
+    local fakedir="${ZAPRET2_DIR}/files/fake"
+    if [ -d "$fakedir" ]; then
+        # tls_max_ru → tls_clienthello_max_ru.bin
+        [ ! -e "$fakedir/tls_max_ru" ] && [ -f "$fakedir/tls_clienthello_max_ru.bin" ] && \
+            ln -sf tls_clienthello_max_ru.bin "$fakedir/tls_max_ru"
+        # quic short aliases → quic_N.bin
+        [ ! -e "$fakedir/quic1" ] && [ -f "$fakedir/quic_1.bin" ] && ln -sf quic_1.bin "$fakedir/quic1"
+        [ ! -e "$fakedir/quic4" ] && [ -f "$fakedir/quic_4.bin" ] && ln -sf quic_4.bin "$fakedir/quic4"
+        [ ! -e "$fakedir/quic5" ] && [ -f "$fakedir/quic_5.bin" ] && ln -sf quic_5.bin "$fakedir/quic5"
+        [ ! -e "$fakedir/quic6" ] && [ -f "$fakedir/quic_6.bin" ] && ln -sf quic_6.bin "$fakedir/quic6"
+        # quic_google → quic_initial_google_com.bin
+        [ ! -e "$fakedir/quic_google" ] && [ -f "$fakedir/quic_initial_google_com.bin" ] && \
+            ln -sf quic_initial_google_com.bin "$fakedir/quic_google"
+        # quic_rutracker → quic_initial_rutracker_org.bin
+        [ ! -e "$fakedir/quic_rutracker" ] && [ -f "$fakedir/quic_initial_rutracker_org.bin" ] && \
+            ln -sf quic_initial_rutracker_org.bin "$fakedir/quic_rutracker"
+    fi
+
     # Install blocked-monitor helper (runtime diagnostics for blocked domains).
     if [ -f "${WORK_DIR}/files/z2k-blocked-monitor.sh" ]; then
         cp -f "${WORK_DIR}/files/z2k-blocked-monitor.sh" "${ZAPRET2_DIR}/z2k-blocked-monitor.sh" 2>/dev/null || true

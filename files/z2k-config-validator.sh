@@ -284,6 +284,10 @@ check_blob_references() {
                         esac
                         # Пропустить пустые
                         [ -z "$_blob_name" ] && continue
+                        # Пропустить встроенные блобы nfqws2 (hardcoded в бинарнике)
+                        case "$_blob_name" in
+                            fake_default_tls|fake_default_http|fake_default_quic) continue ;;
+                        esac
                         # Проверить файл в fake директории
                         if [ ! -f "${FAKE_DIR}/${_blob_name}" ] && [ ! -f "${FAKE_DIR}/${_blob_name}.bin" ]; then
                             _bad_blobs="$_bad_blobs $_blob_name"
