@@ -1233,10 +1233,9 @@ SUBMENU
                         local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
                         rm -f "$MTPROXY_BIN"
                         curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
-                        local tg_size tg_magic
+                        local tg_size
                         tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null || echo 0)
-                        tg_magic=$(head -c 4 "$MTPROXY_BIN" 2>/dev/null | od -A n -t x1 | tr -d ' ' | head -1)
-                        if [ -f "$MTPROXY_BIN" ] && [ "$tg_size" -gt 500000 ] 2>/dev/null && [ "$tg_magic" = "7f454c46" ]; then
+                        if [ -f "$MTPROXY_BIN" ] && [ "$tg_size" -gt 500000 ] 2>/dev/null && head -c 4 "$MTPROXY_BIN" 2>/dev/null | grep -q "ELF"; then
                             chmod +x "$MTPROXY_BIN"
                             if "$MTPROXY_BIN" --help >/dev/null 2>&1; then
                                 print_success "Скачан и проверен ($tg_arch)"

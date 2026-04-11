@@ -1645,9 +1645,8 @@ step_finalize() {
             # Validate: exists, >500KB, starts with ELF magic (\x7fELF), runs without crash
             local tg_valid=false
             if [ -f "$tg_dest" ] && [ "$tg_size" -gt 500000 ] 2>/dev/null; then
-                local tg_magic
-                tg_magic=$(head -c 4 "$tg_dest" 2>/dev/null | od -A n -t x1 | tr -d ' ' | head -1)
-                if [ "$tg_magic" = "7f454c46" ]; then
+                # Check ELF magic (works on any busybox — no od/hexdump needed)
+                if head -c 4 "$tg_dest" 2>/dev/null | grep -q "ELF"; then
                     chmod +x "$tg_dest"
                     # Test run — if wrong arch, kernel will fail and exit non-zero
                     if "$tg_dest" --help >/dev/null 2>&1; then
@@ -1659,9 +1658,7 @@ step_finalize() {
                 print_success "Telegram прокси установлен ($tg_arch)"
             else
                 rm -f "$tg_dest"
-                if [ "$tg_size" -gt 0 ] 2>/dev/null && [ "$tg_magic" != "7f454c46" ]; then
-                    print_warning "Скачанный файл — не бинарник (возможно HTML ошибка CDN). Попробуйте позже"
-                elif [ "$tg_size" -le 500000 ] 2>/dev/null; then
+                if [ "$tg_size" -le 500000 ] 2>/dev/null; then
                     print_warning "Файл слишком маленький (${tg_size} байт) — скачивание прервалось"
                 else
                     print_warning "Бинарник не запускается на этой архитектуре ($tg_arch). Проверьте: opkg print-architecture"
