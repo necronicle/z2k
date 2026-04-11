@@ -759,6 +759,35 @@ step_build_zapret2() {
         cp -f "${WORK_DIR}/files/fake/"* "${ZAPRET2_DIR}/files/fake/" 2>/dev/null || true
     fi
 
+    # Create blob aliases required by strategies
+    # Strategies use short names, actual files have full names
+    local fakedir="${ZAPRET2_DIR}/files/fake"
+    if [ -d "$fakedir" ]; then
+        # TLS defaults
+        [ ! -e "$fakedir/fake_default_tls" ] && [ -f "$fakedir/tls_clienthello_www_google_com.bin" ] && \
+            ln -sf tls_clienthello_www_google_com.bin "$fakedir/fake_default_tls" 2>/dev/null
+        [ ! -e "$fakedir/fake_default_http" ] && [ -f "$fakedir/http_iana_org.bin" ] && \
+            ln -sf http_iana_org.bin "$fakedir/fake_default_http" 2>/dev/null
+        [ ! -e "$fakedir/tls_max_ru" ] && [ -f "$fakedir/tls_clienthello_max_ru.bin" ] && \
+            ln -sf tls_clienthello_max_ru.bin "$fakedir/tls_max_ru" 2>/dev/null
+        # QUIC defaults
+        [ ! -e "$fakedir/fake_default_quic" ] && [ -f "$fakedir/quic_initial_www_google_com.bin" ] && \
+            ln -sf quic_initial_www_google_com.bin "$fakedir/fake_default_quic" 2>/dev/null
+        [ ! -e "$fakedir/quic5" ] && [ -f "$fakedir/quic_5.bin" ] && \
+            ln -sf quic_5.bin "$fakedir/quic5" 2>/dev/null
+        [ ! -e "$fakedir/quic4" ] && [ -f "$fakedir/quic_4.bin" ] && \
+            ln -sf quic_4.bin "$fakedir/quic4" 2>/dev/null
+        [ ! -e "$fakedir/quic1" ] && [ -f "$fakedir/quic_1.bin" ] && \
+            ln -sf quic_1.bin "$fakedir/quic1" 2>/dev/null
+        [ ! -e "$fakedir/quic6" ] && [ -f "$fakedir/quic_6.bin" ] && \
+            ln -sf quic_6.bin "$fakedir/quic6" 2>/dev/null
+        [ ! -e "$fakedir/quic_google" ] && [ -f "$fakedir/quic_initial_google_com.bin" ] && \
+            ln -sf quic_initial_google_com.bin "$fakedir/quic_google" 2>/dev/null
+        [ ! -e "$fakedir/quic_rutracker" ] && [ -f "$fakedir/quic_initial_rutracker_org.bin" ] && \
+            ln -sf quic_initial_rutracker_org.bin "$fakedir/quic_rutracker" 2>/dev/null
+        print_info "Blob aliases created"
+    fi
+
     # Install blocked-monitor helper (runtime diagnostics for blocked domains).
     if [ -f "${WORK_DIR}/files/z2k-blocked-monitor.sh" ]; then
         cp -f "${WORK_DIR}/files/z2k-blocked-monitor.sh" "${ZAPRET2_DIR}/z2k-blocked-monitor.sh" 2>/dev/null || true
