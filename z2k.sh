@@ -602,6 +602,72 @@ update_z2k() {
         print_success "z2k обновлен: $Z2K_VERSION → $new_version"
         print_info "Backup сохранен: ${current_script}.backup"
 
+        # Update Telegram tunnel binary
+        if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
+            print_info "Обновление Telegram tunnel..."
+            local tg_arch=""
+            local _arch _earch _barch
+            _earch=$(z2k_detect_entware_arch)
+            _arch="${_earch:-$(uname -m)}"
+            _barch=$(z2k_map_arch_to_bin_arch "$_arch" 2>/dev/null || true)
+            case "$_barch" in
+                linux-arm64)    tg_arch="arm64" ;;
+                linux-arm)      tg_arch="arm" ;;
+                linux-mipsel)   tg_arch="mipsel" ;;
+                linux-mips64el) tg_arch="mips64el" ;;
+                linux-mips64)   tg_arch="mips" ;;
+                linux-mips)     tg_arch="mips" ;;
+                linux-x86_64)   tg_arch="amd64" ;;
+                linux-x86)      tg_arch="x86" ;;
+                linux-riscv64)  tg_arch="riscv64" ;;
+                linux-ppc)      tg_arch="ppc64" ;;
+            esac
+            if [ -n "$tg_arch" ]; then
+                local tg_url="${GITHUB_RAW}/mtproxy-client/builds/tg-mtproxy-client-linux-${tg_arch}"
+                local tg_tmp
+                tg_tmp=$(mktemp)
+                if curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$tg_tmp" && \
+                   [ "$(wc -c < "$tg_tmp")" -gt 500000 ] && \
+                   head -c 4 "$tg_tmp" 2>/dev/null | grep -q "ELF"; then
+                    killall tg-mtproxy-client 2>/dev/null || true
+                    sleep 1
+                    cp "$tg_tmp" /opt/sbin/tg-mtproxy-client
+                    chmod +x /opt/sbin/tg-mtproxy-client
+                    /opt/sbin/tg-mtproxy-client --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+                    sleep 2
+                    if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+                        print_success "Telegram tunnel обновлён и перезапущен"
+                    else
+                        print_warning "Telegram tunnel обновлён, но не запустился"
+                    fi
+                else
+                    print_warning "Не удалось обновить Telegram tunnel"
+                fi
+                rm -f "$tg_tmp"
+            fi
+        fi
+
+        # Update watchdog script
+        if [ -f "/opt/zapret2/tg-tunnel-watchdog.sh" ]; then
+            cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDEOF'
+#!/bin/sh
+LOG="/tmp/tg-tunnel.log"
+BIN="/opt/sbin/tg-mtproxy-client"
+[ ! -f "$LOG" ] && exit 0
+pgrep -f "tg-mtproxy-client" >/dev/null || exit 0
+FAILS=$(tail -40 "$LOG" | grep -c "CONNECT_FAIL")
+if [ "$FAILS" -ge 10 ]; then
+    logger -t tg-watchdog "Detected $FAILS CONNECT_FAILs, restarting tunnel"
+    killall -9 tg-mtproxy-client 2>/dev/null
+    sleep 2
+    $BIN --listen=:1443 >> "$LOG" 2>&1 &
+    echo "$(date) watchdog: restarted ($FAILS fails)" >> "$LOG"
+fi
+WDEOF
+            chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
+            print_success "Watchdog обновлён"
+        fi
+
         print_info "Перезапустите z2k для применения изменений"
 
     else
