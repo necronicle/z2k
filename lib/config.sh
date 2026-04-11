@@ -209,7 +209,7 @@ show_active_processing() {
     printf "\n"
 
     if [ "$all_tcp443_enabled" = "1" ]; then
-        print_warning "[WARN]  РЕЖИМ AUSTERUS ВКЛЮЧЕН (без хостлистов)"
+        print_warning "[WARN]  РЕЖИМ AUSTERUSJ ВКЛЮЧЕН (без хостлистов)"
         printf "    Обрабатывается ВЕСЬ трафик (TCP 80/443, UDP 443)\n"
         printf "    Хостлисты и автоциркуляры НЕ используются!\n"
         print_separator
