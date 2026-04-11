@@ -190,20 +190,19 @@ export default {
         return;
       }
 
-      // Register stream and send CONNECT_OK immediately — don't wait
-      // for TCP handshake. Client data is buffered by socket.writable
-      // and flushed when connection establishes. This saves ~200ms per stream.
+      // Wait for TCP handshake before sending CONNECT_OK
+      // This avoids zombie streams where connect() succeeded but TCP never established
       const writer = socket.writable.getWriter();
+      try {
+        await socket.opened;
+      } catch (e) {
+        console.error(`stream ${streamId} TCP handshake failed: ${e.message}`);
+        try { writer.close(); } catch (_) {}
+        sendFrame(streamId, MUX_CONNECT_FAIL, null);
+        return;
+      }
       streams.set(streamId, { socket, writer });
       sendFrame(streamId, MUX_CONNECT_OK, null);
-
-      // Monitor connection failure asynchronously
-      socket.opened.catch((e) => {
-        console.error(`stream ${streamId} connect failed: ${e.message}`);
-        streams.delete(streamId);
-        try { writer.close(); } catch (_) {}
-        sendFrame(streamId, MUX_CLOSE, null);
-      });
 
       // Read from TCP socket, send DATA frames back to client
       try {
