@@ -165,7 +165,8 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 		WriteBufferSize:   128 * 1024,
 		EnableCompression: true,
 		NetDial: func(network, addr string) (net.Conn, error) {
-			conn, err := net.DialTimeout(network, addr, 10*time.Second)
+			// Force IPv4 — IPv6 to Cloudflare is unstable on some ISPs
+			conn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
 			if err != nil {
 				return nil, err
 			}
