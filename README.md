@@ -38,13 +38,13 @@ z2k — модульный установщик zapret2 для роутеров 
 
 ### Сеть и прокси
 
-- **Telegram** — прозрачный мультиплексированный туннель через Cloudflare. Все устройства в сети — автоматически, без настройки. Сетевой анализатор видит обычный HTTPS к CDN
+- **Telegram** — прозрачная работа для всех устройств в сети, без настройки на клиентах
 - **IPv6** — полная поддержка: dual-stack DNS, IPv6 SO_ORIGINAL_DST, Telegram DC IPv6 CIDR
-- **Roblox** — UDP-транспорт для игровых серверов (порты 1024-65535)
+- **Игровой режим** — UDP для игр (Roblox и др.), autocircular на портах 1024-65535
 
 ### Инструменты и мониторинг
 
-- **Веб-панель** — мониторинг через браузер (busybox httpd CGI): статус сервиса, стратегии, логи, управление
+- **Веб-панель** — мониторинг через браузер (CGI): статус сервиса, стратегии, логи
 - **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, RKN)
 - **Config validator** — валидация конфигурации перед применением (порты, hostlist-файлы, blob-файлы, lua-desync)
 - **Rollback** — откат конфигурации к предыдущему snapshot с авто-таймером
@@ -55,9 +55,7 @@ z2k — модульный установщик zapret2 для роутеров 
 
 - **0 shellcheck warnings** — все shell-скрипты чистые
 - **0 go vet issues** — Go код без замечаний
-- **109 автотестов** — 86 shell + 23 Go, все проходят
-- **CI/CD** — GitHub Actions: shellcheck, go build/test/vet, luacheck, кросс-компиляция 6 архитектур
-- **Безопасность** — нет eval/source инъекций, SHA256 верификация, rate limiting, connection deadlines
+- **CI/CD** — GitHub Actions: shellcheck, go build/vet, luacheck, кросс-компиляция 9 архитектур
 
 ---
 
@@ -109,8 +107,8 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 | **[W]** | Whitelist — управление списком исключений |
 | **[R]** | RST-фильтр — фильтрация аномальных TCP RST |
 | **[F]** | Silent fallback — ускоренная ротация при отсутствии ответа |
-| **[G]** | Roblox — UDP-транспорт для игровых серверов |
-| **[T]** | Telegram tunnel — прозрачное туннелирование через Cloudflare |
+| **[G]** | Игровой режим (Roblox и др.) |
+| **[T]** | Telegram |
 | **[S]** | Скрипты custom.d |
 | **[B]** | Rollback — откат конфигурации к snapshot |
 | **[H]** | Health check — проверка доступности сервисов |
@@ -148,6 +146,7 @@ sh z2k.sh [команда]
 ### Детекция неудач
 
 - **Стандартный детектор** — TCP ретрансмиссии и аномальные RST
+- **UDP детектор** — соотношение отправленных/полученных пакетов (4+ out, ≤1 in = неудача)
 - **TLS alert детектор** (`z2k_tls_alert_fatal`) — анализирует TLS alert + HTTP redirect
 - **Silent fallback** — детектор отсутствия ответа: если несколько запросов подряд без ответа, принудительно ротирует стратегию. Включается через меню [F]
 
@@ -166,7 +165,7 @@ sh z2k.sh [команда]
 
 ## Веб-панель мониторинга
 
-Встроенная веб-панель для просмотра состояния и управления через браузер:
+Встроенная веб-панель для просмотра состояния через браузер:
 
 ```bash
 # Установка
@@ -184,25 +183,11 @@ http://ROUTER_IP:8080/
 - Системную информацию (память, диск, нагрузка)
 - Статус rollback-snapshot
 
-Кнопки управления: restart / stop / start / очистка состояния.
-
 ---
 
-## Telegram tunnel
+## Telegram
 
-Прозрачное туннелирование Telegram-трафика для всех устройств в сети. Не требует настройки на клиентах — работает автоматически.
-
-Как это работает:
-
-```
-Устройства → TCP к Telegram DC → iptables REDIRECT → z2k-tunnel
-  → мультиплексированный WS → Cloudflare Worker → TCP к Telegram DC
-```
-
-- Все TCP-соединения к Telegram мультиплексируются через **один** WebSocket
-- Сетевой анализатор видит обычный HTTPS к Cloudflare CDN
-- Включается автоматически при установке, или через меню `[T]`
-- Протокол: кастомный бинарный мультиплексор с HMAC-SHA256 аутентификацией
+Telegram работает для всех устройств в сети автоматически, без настройки на клиентах. Включается при установке или через меню `[T]`.
 
 ---
 
@@ -294,17 +279,12 @@ z2k/
 │   ├── z2k-webpanel.sh         # Web monitoring CGI
 │   └── z2k-webpanel-install.sh # Web panel installer
 ├── cf-worker/                  # Cloudflare Worker relay
-│   ├── worker.js               # Mux tunnel relay (TCP↔WS)
+│   ├── worker.js               # Telegram relay
 │   └── wrangler.toml           # Deployment config
-├── mtproxy-client/             # Telegram tunnel + MTProxy (Go)
-│   ├── main.go                 # Entry point + MTProxy mode
-│   ├── tunnel.go               # Mux tunnel client (iptables REDIRECT → WS)
-│   ├── transparent.go          # Legacy transparent WS mode
-│   ├── listener.go             # SO_ORIGINAL_DST (IPv4 + IPv6)
-│   ├── dcmap.go                # Telegram DC IP mapping (v4 + v6)
-│   ├── relay.go                # Bidirectional MTProto relay
-│   ├── secret.go               # Secret key parsing
-│   └── main_test.go            # Unit tests (23 tests)
+├── mtproxy-client/             # Telegram tunnel (Go)
+│   ├── main.go                 # Entry point
+│   ├── tunnel.go               # Tunnel client
+│   └── listener.go             # SO_ORIGINAL_DST (IPv4 + IPv6)
 ├── tests/                      # Test framework
 │   ├── run_all.sh              # Test runner
 │   ├── test_utils.sh           # Utils tests (23 tests)
