@@ -1238,7 +1238,7 @@ SUBMENU
                         tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null || echo 0)
                         if [ -f "$MTPROXY_BIN" ] && [ "$tg_size" -gt 500000 ] 2>/dev/null && head -c 4 "$MTPROXY_BIN" 2>/dev/null | grep -q "ELF"; then
                             chmod +x "$MTPROXY_BIN"
-                            if "$MTPROXY_BIN" --help >/dev/null 2>&1; then
+                            if "$MTPROXY_BIN" --help 2>/dev/null; [ $? -le 2 ]; then
                                 print_success "Скачан и проверен ($tg_arch)"
                             else
                                 rm -f "$MTPROXY_BIN"

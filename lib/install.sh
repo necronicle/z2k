@@ -1650,7 +1650,7 @@ step_finalize() {
                 if head -c 4 "$tg_dest" 2>/dev/null | grep -q "ELF"; then
                     chmod +x "$tg_dest"
                     # Test run — if wrong arch, kernel will fail and exit non-zero
-                    if "$tg_dest" --help >/dev/null 2>&1; then
+                    if "$tg_dest" --help 2>/dev/null; [ $? -le 2 ]; then
                         tg_valid=true
                     fi
                 fi
