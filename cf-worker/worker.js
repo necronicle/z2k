@@ -132,7 +132,7 @@ export default {
     // Track TCP streams: streamId → { socket, writer }
     const streams = new Map();
     let totalConnects = 0;      // lifetime connect count for this WS session
-    const MAX_CONNECTS = 40;    // force WS reconnect after N connects (CF subrequest limit)
+    const MAX_CONNECTS = 200;   // force WS reconnect after N connects (CF subrequest limit)
     let authenticated = false;
 
     // Pre-compute expected auth HMAC
