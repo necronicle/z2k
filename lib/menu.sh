@@ -88,7 +88,7 @@ MENU
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
-[G] Roblox (тестовая функция)
+[G] Игровой режим (Roblox и др.)
 [T] Telegram прокси (тестовая функция)
 [S] Скрипты custom.d
 [B] Rollback (откат конфигурации)
@@ -1069,12 +1069,12 @@ SUBMENU
 }
 
 # ==============================================================================
-# ПОДМЕНЮ: ROBLOX
+# ПОДМЕНЮ: ИГРОВОЙ РЕЖИМ
 # ==============================================================================
 
 menu_roblox_bypass() {
     clear_screen
-    print_header "Roblox (тестовая функция)"
+    print_header "Игровой режим"
 
     local config_file="${ZAPRET2_DIR}/config"
 
@@ -1094,8 +1094,8 @@ menu_roblox_bypass() {
 
     cat <<'SUBMENU'
 
-Roblox — игровые серверы (UDP, порты 1024-65535).
-Сайт и API работают через основные стратегии (TCP).
+UDP для игр (Roblox, и др.) на портах 1024-65535.
+Автоциркуляр подбирает рабочую стратегию автоматически.
 
 [1] Включить
 [2] Выключить
@@ -1119,12 +1119,12 @@ SUBMENU
                 sed -i 's/^NFQWS2_PORTS_UDP="\(.*\)"/NFQWS2_PORTS_UDP="\1,1024-65535"/' "$config_file"
             fi
 
-            print_success "Roblox UDP включен"
+            print_success "Игровой режим включен"
 
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса..."
                 "$INIT_SCRIPT" restart
-                print_success "Сервис перезапущен с Roblox UDP"
+                print_success "Сервис перезапущен"
             else
                 print_warning "Сервис не запущен. Запустите через [2] Управление сервисом"
             fi
@@ -1134,7 +1134,7 @@ SUBMENU
 
         2)
             if [ "$ROBLOX_UDP_BYPASS" != "1" ]; then
-                print_info "Roblox UDP уже выключен"
+                print_info "Игровой режим уже выключен"
                 pause
                 return 0
             fi
@@ -1144,7 +1144,7 @@ SUBMENU
             # Remove ephemeral ports
             sed -i 's/,1024-65535//' "$config_file"
 
-            print_success "Roblox UDP выключен"
+            print_success "Игровой режим выключен"
 
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса..."

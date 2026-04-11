@@ -352,13 +352,21 @@ AUSTERUS_OPT
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # Roblox UDP (custom protocol, not QUIC — needs payload=all to match unknown UDP)
-    # No ipset — Roblox IPs change constantly; port range + out-range is sufficient
-    local roblox_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local ROBLOX_UDP_BYPASS
-    ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$roblox_conf" "0")
-    if [ "$ROBLOX_UDP_BYPASS" = "1" ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --out-range=-n2 --lua-desync=fake:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
+    # Game Filter UDP (custom protocols — needs payload=all to match unknown UDP)
+    # Autocircular rotates repeats/cutoff combinations on failure detection
+    local game_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
+    local GAME_UDP_BYPASS
+    GAME_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$game_conf" "0")
+    if [ "$GAME_UDP_BYPASS" = "1" ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=a --lua-desync=circular:fails=2:time=30:udp_in=1:udp_out=4:key=game_udp --new\\n"
+        # Strategy 1: repeats=12, cutoff=n2 (default, works for most ISPs)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=1:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
+        # Strategy 2: repeats=10, cutoff=n4 (deeper cutoff for aggressive DPI)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n4 --lua-desync=fake:strategy=2:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10 --new\\n"
+        # Strategy 3: repeats=14, cutoff=n3 (more fakes, medium cutoff)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n3 --lua-desync=fake:strategy=3:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=14 --new\\n"
+        # Strategy 4: repeats=8, cutoff=n2 (lighter, less fakes)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=4:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=8 --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
@@ -645,8 +653,8 @@ DROP_DPI_RST=${saved_DROP_DPI_RST}
 # Enable via menu [F] if many RKN sites don't open (especially on MTS/aggressive DPI)
 RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 
-# Roblox game server UDP bypass: fake packets to Roblox IPs on ephemeral UDP ports
-# Enable via menu [G] if Roblox games fail to connect (Error 279)
+# Game filter: UDP fake on ephemeral ports (Roblox, etc.)
+# Enable via menu [G]
 ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
 
 # Compress large lists
