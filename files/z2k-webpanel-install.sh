@@ -36,7 +36,7 @@ echo "=== z2k Web Panel Installer ==="
 echo ""
 
 # 0. Ensure a web server is available
-if ! command -v lighttpd >/dev/null 2>&1 && ! command -v httpd >/dev/null 2>&1; then
+if ! command -v lighttpd >/dev/null 2>&1 && ! command -v httpd >/dev/null 2>&1 && ! command -v uhttpd >/dev/null 2>&1; then
     echo "[0/5] Веб-сервер не найден, устанавливаю..."
     if command -v opkg >/dev/null 2>&1; then
         opkg update >/dev/null 2>&1
@@ -46,6 +46,8 @@ if ! command -v lighttpd >/dev/null 2>&1 && ! command -v httpd >/dev/null 2>&1; 
             echo "  Установлен: busybox-httpd"
         elif opkg install uhttpd 2>/dev/null; then
             echo "  Установлен: uhttpd"
+        elif opkg install uhttpd_kn 2>/dev/null; then
+            echo "  Установлен: uhttpd_kn (Keenetic)"
         else
             echo "  ВНИМАНИЕ: не удалось установить веб-сервер"
             echo "  Установите вручную: opkg install lighttpd lighttpd-mod-cgi"
