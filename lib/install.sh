@@ -1699,15 +1699,22 @@ step_finalize() {
         killall tg-mtproxy-client 2>/dev/null || true
         sleep 1
 
-        # Start tunnel mode
-        /opt/sbin/tg-mtproxy-client --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+        # Start tunnel mode.
+        # --parallel=6: open 6 parallel WS sessions = 6*6 = 36 concurrent CF
+        #   TCP slots (CF's 6-slot limit is per fetch invocation, not per client).
+        # --session-ttl=8s: voluntarily rotate each session before Cloudflare's
+        #   per-invocation CPU budget is exhausted. On the Free plan this is
+        #   required for a streaming workload; on Paid it can be relaxed to 0.
+        /opt/sbin/tg-mtproxy-client --listen=:1443 --parallel=6 --session-ttl=8s >> /tmp/tg-tunnel.log 2>&1 &
         sleep 2
 
         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
-            # Setup iptables REDIRECT for Telegram DC IPs
+            # Setup iptables REDIRECT for Telegram DC IPs.
+            # Use -I ... 1 (insert at top) so our rules precede Keenetic's
+            # _NDM_* chains, which intercept packets when using -A.
             for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                 iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                    iptables -t nat -A PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                    iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
             done
             # Install watchdog — auto-restart tunnel on CONNECT_FAIL storms
             cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDSCRIPT'
@@ -1738,6 +1745,8 @@ BIN="/opt/sbin/tg-mtproxy-client"
 LOG="/tmp/tg-tunnel.log"
 PIDFILE="/var/run/tg-tunnel.pid"
 
+CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
+
 start() {
     [ -x "$BIN" ] || exit 0
     if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
@@ -1745,13 +1754,15 @@ start() {
         return 0
     fi
     echo "Starting tg-tunnel..."
-    $BIN --listen=:1443 >> "$LOG" 2>&1 &
+    # See installer comments for flag rationale.
+    $BIN --listen=:1443 --parallel=6 --session-ttl=8s >> "$LOG" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 2
-    # Setup iptables REDIRECT for Telegram DC IPs
-    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+    # Insert REDIRECT rules at TOP of PREROUTING (-I 1) so they precede
+    # Keenetic's _NDM_* chains, which would otherwise swallow the packets.
+    for cidr in $CIDRS; do
         iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-            iptables -t nat -A PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
     done
 }
 
@@ -1759,9 +1770,11 @@ stop() {
     echo "Stopping tg-tunnel..."
     killall tg-mtproxy-client 2>/dev/null
     rm -f "$PIDFILE"
-    # Remove iptables REDIRECT rules
-    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
-        iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+    # Idempotent removal: drop every matching copy of the rule.
+    for cidr in $CIDRS; do
+        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
     done
 }
 

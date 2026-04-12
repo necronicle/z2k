@@ -7,6 +7,7 @@
 import { connect } from "cloudflare:sockets";
 
 // Mux message types
+const MUX_AUTH         = 0x00;
 const MUX_CONNECT      = 0x01;
 const MUX_DATA         = 0x02;
 const MUX_CLOSE        = 0x03;
@@ -38,9 +39,9 @@ const TELEGRAM_CIDRS = [
 });
 
 const TELEGRAM_V6_PREFIXES = [
-  "2001:b28:f23d:", // 2001:b28:f23d::/48
-  "2001:b28:f23f:", // 2001:b28:f23f::/48
-  "2001:67c:4e8:",  // 2001:67c:4e8::/48
+  "2001:b28:f23d:",
+  "2001:b28:f23f:",
+  "2001:67c:4e8:",
 ];
 
 function isTelegramIP(address) {
@@ -51,108 +52,72 @@ function isTelegramIP(address) {
     const ip = (nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3];
     return TELEGRAM_CIDRS.some(c => (ip & c.mask) === c.network);
   }
-  // IPv6: prefix match
   const lower = address.toLowerCase();
   return TELEGRAM_V6_PREFIXES.some(p => lower.startsWith(p));
 }
 
-/**
- * Encode a mux frame: [2 bytes stream_id BE][1 byte msg_type][payload]
- */
 function encodeMuxFrame(streamId, msgType, payload) {
-  const header = new Uint8Array(3);
-  header[0] = (streamId >> 8) & 0xff;
-  header[1] = streamId & 0xff;
-  header[2] = msgType;
-  if (!payload || payload.byteLength === 0) {
-    return header.buffer;
+  const plen = payload ? payload.byteLength : 0;
+  const buf = new Uint8Array(3 + plen);
+  buf[0] = (streamId >> 8) & 0xff;
+  buf[1] = streamId & 0xff;
+  buf[2] = msgType;
+  if (plen > 0) {
+    buf.set(new Uint8Array(payload), 3);
   }
-  const frame = new Uint8Array(3 + payload.byteLength);
-  frame.set(header);
-  frame.set(new Uint8Array(payload), 3);
-  return frame.buffer;
+  return buf.buffer;
 }
 
-/**
- * Decode a mux frame from an ArrayBuffer.
- */
 function decodeMuxFrame(buffer) {
-  const view = new DataView(buffer);
   if (buffer.byteLength < 3) {
     throw new Error(`mux frame too short: ${buffer.byteLength}`);
   }
+  const view = new DataView(buffer);
   return {
-    streamId: view.getUint16(0, false), // big-endian
+    streamId: view.getUint16(0, false),
     msgType: view.getUint8(2),
     payload: buffer.slice(3),
   };
 }
 
-/**
- * Parse CONNECT payload: [addr_type][addr][port BE]
- */
 function parseConnectPayload(buffer) {
   const view = new DataView(buffer);
   const addrType = view.getUint8(0);
-
   if (addrType === ADDR_IPV4) {
     if (buffer.byteLength < 7) throw new Error("IPv4 CONNECT too short");
-    const a = view.getUint8(1);
-    const b = view.getUint8(2);
-    const c = view.getUint8(3);
-    const d = view.getUint8(4);
-    const port = view.getUint16(5, false);
-    return { address: `${a}.${b}.${c}.${d}`, port };
+    const a = view.getUint8(1), b = view.getUint8(2), c = view.getUint8(3), d = view.getUint8(4);
+    return { address: `${a}.${b}.${c}.${d}`, port: view.getUint16(5, false) };
   }
-
   if (addrType === ADDR_IPV6) {
     if (buffer.byteLength < 19) throw new Error("IPv6 CONNECT too short");
     const parts = [];
-    for (let i = 0; i < 8; i++) {
-      parts.push(view.getUint16(1 + i * 2, false).toString(16));
-    }
-    const port = view.getUint16(17, false);
-    return { address: parts.join(":"), port };
+    for (let i = 0; i < 8; i++) parts.push(view.getUint16(1 + i * 2, false).toString(16));
+    return { address: parts.join(":"), port: view.getUint16(17, false) };
   }
-
   throw new Error(`unknown addr type: ${addrType}`);
 }
 
-/**
- * Compute HMAC-SHA256 of secret keyed by itself.
- */
 async function computeAuthHMAC(secret) {
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(secret);
-  const key = await crypto.subtle.importKey(
-    "raw", keyData, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
-  );
+  const enc = new TextEncoder();
+  const keyData = enc.encode(secret);
+  const key = await crypto.subtle.importKey("raw", keyData, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", key, keyData);
   return new Uint8Array(sig);
 }
 
-/**
- * Compare two Uint8Arrays in constant time.
- */
 function timingSafeEqual(a, b) {
   if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a[i] ^ b[i];
-  }
-  return result === 0;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i];
+  return r === 0;
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-
-    // Only handle /ws path
     if (url.pathname !== "/ws") {
       return new Response("z2k-tunnel relay", { status: 200 });
     }
-
-    // Must be WebSocket upgrade
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket", { status: 426 });
     }
@@ -165,154 +130,132 @@ export default {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-
     server.accept();
 
-    // Track TCP streams: streamId → { socket, writer }
+    const sessionId = Math.random().toString(36).slice(2, 8);
+    const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
+    const sessionStart = Date.now();
+    console.log(`[${sessionId}] WS accepted from ${clientIP}`);
+
+    // Per-stream state: { socket, writer, closed }
     const streams = new Map();
-    let totalConnects = 0;      // lifetime connect count for this WS session
-    const MAX_CONNECTS = 200;   // force WS reconnect after N connects (CF subrequest limit)
     let authenticated = false;
+    let totalConnects = 0;
+    let totalMessages = 0;
 
-    // Pre-compute expected auth HMAC
-    const expectedHMAC = await computeAuthHMAC(secret);
-
-    /**
-     * Send a mux frame to the client WS.
-     */
+    // Direct send — no Promise chaining (avoids microtask overhead per frame).
+    // server.send() is synchronous in CF Workers; on WS teardown it throws
+    // and we swallow since the close handler will clean up streams.
     function sendFrame(streamId, msgType, payload) {
       try {
-        const frame = encodeMuxFrame(streamId, msgType, payload);
-        server.send(frame);
-      } catch (e) {
-        console.error(`sendFrame error stream=${streamId}: ${e.message}`);
-      }
+        server.send(encodeMuxFrame(streamId, msgType, payload));
+      } catch (_) {}
     }
 
-    /**
-     * Handle a CONNECT request: open TCP to target and start reading.
-     */
+    const expectedHMAC = await computeAuthHMAC(secret);
+
+    function closeStream(streamId) {
+      const s = streams.get(streamId);
+      if (!s || s.closed) return;
+      s.closed = true;
+      streams.delete(streamId);
+      try { s.writer.close(); } catch (_) {}
+      try { s.socket.close(); } catch (_) {}
+    }
+
     async function handleConnect(streamId, payload) {
       let target;
       try {
         target = parseConnectPayload(payload);
       } catch (e) {
-        console.error(`stream ${streamId} bad CONNECT: ${e.message}`);
         sendFrame(streamId, MUX_CONNECT_FAIL, null);
         return;
       }
 
-      // Verify target is a Telegram DC IP on an allowed port
-      if (!isTelegramIP(target.address) || (target.port !== 443 && target.port !== 80)) {
-        console.error(`stream ${streamId} CONNECT rejected: ${target.address}:${target.port}`);
+      if (!isTelegramIP(target.address)) {
+        console.warn(`[${sessionId}] stream ${streamId} blocked non-Telegram target ${target.address}`);
         sendFrame(streamId, MUX_CONNECT_FAIL, null);
         return;
       }
-
-      console.log(`stream ${streamId} CONNECT ${target.address}:${target.port}`);
 
       totalConnects++;
-
-      // Proactively close WS before hitting CF subrequest limit
-      if (totalConnects > MAX_CONNECTS) {
-        console.warn(`hit ${MAX_CONNECTS} connects, closing WS for fresh invocation`);
-        sendFrame(streamId, MUX_CONNECT_FAIL, null);
-        server.close(1000, "connect limit");
-        return;
-      }
+      const t0 = Date.now();
 
       let socket;
       try {
-        socket = connect({ hostname: target.address, port: target.port });
+        socket = connect(
+          { hostname: target.address, port: target.port },
+          { allowHalfOpen: false }
+        );
       } catch (e) {
-        console.error(`stream ${streamId} connect failed: ${e.message}`);
+        console.error(`[${sessionId}] stream ${streamId} connect() threw: ${e.message}`);
         sendFrame(streamId, MUX_CONNECT_FAIL, null);
-        // If connect() throws, we've likely hit CF subrequest limit — kill WS
-        // so client reconnects to a fresh Worker invocation
-        if (totalConnects > 10) {
-          console.error(`connect() failed after ${totalConnects} total connects, closing WS`);
-          server.close(1000, "subrequest limit");
-        }
+        return;
+      }
+
+      // Wait for TCP handshake; confirms reachability before we tell the client OK.
+      try {
+        await socket.opened;
+      } catch (e) {
+        console.error(`[${sessionId}] stream ${streamId} opened rejected: ${e.message || e}`);
+        sendFrame(streamId, MUX_CONNECT_FAIL, null);
+        try { socket.close(); } catch (_) {}
         return;
       }
 
       const writer = socket.writable.getWriter();
-
-      // Wait for TCP handshake with timeout — avoids zombie streams
-      const connectTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("TCP connect timeout")), 5000)
-      );
-      try {
-        await Promise.race([socket.opened, connectTimeout]);
-      } catch (e) {
-        console.error(`stream ${streamId} TCP handshake failed: ${e.message}`);
-        try { writer.close(); } catch (_) {}
-        try { socket.close(); } catch (_) {}
-        sendFrame(streamId, MUX_CONNECT_FAIL, null);
-        return;
-      }
-
-      streams.set(streamId, { socket, writer });
+      const state = { socket, writer, closed: false };
+      streams.set(streamId, state);
       sendFrame(streamId, MUX_CONNECT_OK, null);
 
-      let closed = false;
-      function cleanupStream() {
-        if (closed) return;
-        closed = true;
-        if (streams.has(streamId)) {
-          streams.delete(streamId);
-          sendFrame(streamId, MUX_CLOSE, null);
-        }
-        try { writer.close(); } catch (_) {}
-      }
-
-      // Monitor socket close — catches silent disconnects
-      socket.closed.then(() => {
-        cleanupStream();
-      });
-
-      // Read from TCP socket, send DATA frames back to client
+      // TCP → WS pump. Direct synchronous server.send() per chunk — minimum
+      // CPU overhead to keep us under the Worker CPU-time limit.
+      let bytesIn = 0;
+      let reads = 0;
+      let closeReason = "eof";
       try {
         const reader = socket.readable.getReader();
-        while (true) {
+        while (!state.closed) {
           const { done, value } = await reader.read();
           if (done) break;
           if (value && value.byteLength > 0) {
-            // value may be Uint8Array — ensure we pass ArrayBuffer
-            const buf = value.buffer ? value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) : value;
-            sendFrame(streamId, MUX_DATA, buf);
+            bytesIn += value.byteLength;
+            reads++;
+            try {
+              server.send(encodeMuxFrame(streamId, MUX_DATA, value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)));
+            } catch (_) {
+              closeReason = "ws_send_err";
+              break;
+            }
           }
         }
       } catch (e) {
-        // Socket closed or errored
-        if (streams.has(streamId)) {
-          console.log(`stream ${streamId} TCP read ended: ${e.message}`);
-        }
+        closeReason = `read_err: ${e.message || e}`;
       }
 
-      cleanupStream();
-    }
+      const dur = Date.now() - t0;
+      // Only log long-lived or erroring streams to save CPU on log serialization.
+      if (dur > 5000 || closeReason !== "eof") {
+        console.log(`[${sessionId}] stream ${streamId} CLOSE reason=${closeReason} bytesIn=${bytesIn} reads=${reads} dur=${dur}ms`);
+      }
 
-    /**
-     * Close a stream and its TCP socket.
-     */
-    function closeStream(streamId) {
-      const entry = streams.get(streamId);
-      if (entry) {
+      if (!state.closed) {
+        state.closed = true;
         streams.delete(streamId);
-        try { entry.writer.close(); } catch (_) {}
-        try { entry.socket.close(); } catch (_) {}
+        sendFrame(streamId, MUX_CLOSE, null);
+        try { writer.close(); } catch (_) {}
+        try { socket.close(); } catch (_) {}
       }
     }
 
     server.addEventListener("message", async (event) => {
+      totalMessages++;
       let data;
       if (event.data instanceof ArrayBuffer) {
         data = event.data;
       } else if (event.data instanceof Blob) {
         data = await event.data.arrayBuffer();
       } else {
-        // string message — ignore
         return;
       }
 
@@ -320,72 +263,74 @@ export default {
       try {
         frame = decodeMuxFrame(data);
       } catch (e) {
-        console.error(`bad mux frame: ${e.message}`);
+        console.error(`[${sessionId}] bad mux frame #${totalMessages}: ${e.message}`);
         return;
       }
 
-      // First message must be auth
       if (!authenticated) {
-        if (frame.streamId !== 0 || frame.msgType !== 0x00) {
-          console.error("first message not auth frame");
-          server.close(4001, "auth required");
+        if (frame.streamId !== 0 || frame.msgType !== MUX_AUTH) {
+          console.error(`[${sessionId}] first message not auth`);
+          try { server.close(4001, "auth required"); } catch (_) {}
           return;
         }
-        const receivedHMAC = new Uint8Array(frame.payload);
-        if (receivedHMAC.length !== 32 || !timingSafeEqual(receivedHMAC, expectedHMAC)) {
-          console.error("auth failed: bad HMAC");
-          server.close(4002, "auth failed");
+        const got = new Uint8Array(frame.payload);
+        if (got.length !== 32 || !timingSafeEqual(got, expectedHMAC)) {
+          console.error(`[${sessionId}] auth failed`);
+          try { server.close(4002, "auth failed"); } catch (_) {}
           return;
         }
         authenticated = true;
-        console.log("client authenticated");
+        console.log(`[${sessionId}] authenticated`);
         return;
       }
 
-      // Dispatch by message type
       switch (frame.msgType) {
         case MUX_CONNECT:
-          // No await — handleConnect runs its own read loop async
+          // Fire-and-forget: handleConnect awaits internally.
           handleConnect(frame.streamId, frame.payload).catch(e => {
-            console.error(`stream ${frame.streamId} unhandled error: ${e.message}`);
+            console.error(`[${sessionId}] stream ${frame.streamId} handleConnect unhandled: ${e.message || e}`);
             closeStream(frame.streamId);
           });
           break;
 
         case MUX_DATA: {
-          const entry = streams.get(frame.streamId);
-          if (entry) {
-            entry.writer.write(new Uint8Array(frame.payload)).catch(e => {
-              console.error(`stream ${frame.streamId} TCP write error: ${e.message}`);
-              closeStream(frame.streamId);
-              sendFrame(frame.streamId, MUX_CLOSE, null);
-            });
+          const s = streams.get(frame.streamId);
+          if (!s || s.closed) {
+            // Silent drop — client closed or stream unknown (in-flight race is ok).
+            return;
           }
+          // Fire-and-forget TCP write; on error, close the stream asynchronously.
+          // Awaiting here would suspend/resume the message handler per packet,
+          // which costs too much CPU under heavy telegram load.
+          s.writer.write(new Uint8Array(frame.payload)).catch((e) => {
+            if (s.closed) return;
+            s.closed = true;
+            streams.delete(frame.streamId);
+            sendFrame(frame.streamId, MUX_CLOSE, null);
+            try { s.writer.close(); } catch (_) {}
+            try { s.socket.close(); } catch (_) {}
+          });
           break;
         }
 
         case MUX_CLOSE:
-          console.log(`stream ${frame.streamId} closed by client`);
           closeStream(frame.streamId);
           break;
 
         default:
-          console.warn(`unknown msg type 0x${frame.msgType.toString(16)} stream=${frame.streamId}`);
+          console.warn(`[${sessionId}] unknown msg type 0x${frame.msgType.toString(16)} stream=${frame.streamId}`);
       }
     });
 
-    server.addEventListener("close", () => {
-      console.log("WS closed, cleaning up all streams");
-      for (const [id] of streams) {
-        closeStream(id);
-      }
+    server.addEventListener("close", (event) => {
+      const dur = Date.now() - sessionStart;
+      console.log(`[${sessionId}] WS closed code=${event.code} reason="${event.reason}" dur=${dur}ms active=${streams.size} totalConnects=${totalConnects} totalMessages=${totalMessages}`);
+      for (const [id] of streams) closeStream(id);
     });
 
     server.addEventListener("error", (e) => {
-      console.error(`WS error: ${e.message || e}`);
-      for (const [id] of streams) {
-        closeStream(id);
-      }
+      console.error(`[${sessionId}] WS error: ${e.message || e} active=${streams.size}`);
+      for (const [id] of streams) closeStream(id);
     });
 
     return new Response(null, { status: 101, webSocket: client });
