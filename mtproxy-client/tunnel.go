@@ -290,6 +290,8 @@ func (tc *tunnelClient) streamReadLoop(stream *tunnelStream) {
 
 // run manages the persistent WS connection with auto-reconnect.
 func (tc *tunnelClient) run() {
+	consecutiveFails := 0
+
 	for {
 		select {
 		case <-tc.ctx.Done():
@@ -299,9 +301,18 @@ func (tc *tunnelClient) run() {
 
 		ws, err := tc.connectTunnelWS()
 		if err != nil {
-			log.Printf("[tunnel] connect failed: %v (retrying in 3s)", err)
+			consecutiveFails++
+			backoff := 3 * time.Second
+			if consecutiveFails >= 10 {
+				backoff = 120 * time.Second
+			} else if consecutiveFails >= 5 {
+				backoff = 30 * time.Second
+			} else if consecutiveFails >= 3 {
+				backoff = 10 * time.Second
+			}
+			log.Printf("[tunnel] connect failed (%d in a row, backoff %s): %v", consecutiveFails, backoff, err)
 			select {
-			case <-time.After(3 * time.Second):
+			case <-time.After(backoff):
 				continue
 			case <-tc.ctx.Done():
 				return
@@ -312,6 +323,8 @@ func (tc *tunnelClient) run() {
 		tc.ws = ws
 		tc.writer = &wsWriter{ws: ws}
 		tc.mu.Unlock()
+
+		connectedAt := time.Now()
 
 		// Keepalive: ping every 50s (CF kills idle WS after 100s)
 		wsDone := make(chan struct{})
@@ -366,11 +379,31 @@ func (tc *tunnelClient) run() {
 		case <-time.After(2 * time.Second):
 		}
 
-		select {
-		case <-tc.ctx.Done():
-			return
-		case <-time.After(1 * time.Second):
-			log.Printf("[tunnel] reconnecting...")
+		// If WS lived < 5 seconds, it's a rapid death — increase backoff
+		if time.Since(connectedAt) < 5*time.Second {
+			consecutiveFails++
+			backoff := 3 * time.Second
+			if consecutiveFails >= 10 {
+				backoff = 120 * time.Second
+			} else if consecutiveFails >= 5 {
+				backoff = 30 * time.Second
+			} else if consecutiveFails >= 3 {
+				backoff = 10 * time.Second
+			}
+			log.Printf("[tunnel] WS died too fast (%d in a row), backing off %s", consecutiveFails, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-tc.ctx.Done():
+				return
+			}
+		} else {
+			consecutiveFails = 0
+			select {
+			case <-tc.ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+				log.Printf("[tunnel] reconnecting...")
+			}
 		}
 	}
 }
