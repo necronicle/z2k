@@ -1700,12 +1700,7 @@ step_finalize() {
         sleep 1
 
         # Start tunnel mode.
-        # --parallel=6: open 6 parallel WS sessions = 6*6 = 36 concurrent CF
-        #   TCP slots (CF's 6-slot limit is per fetch invocation, not per client).
-        # --session-ttl=8s: voluntarily rotate each session before Cloudflare's
-        #   per-invocation CPU budget is exhausted. On the Free plan this is
-        #   required for a streaming workload; on Paid it can be relaxed to 0.
-        /opt/sbin/tg-mtproxy-client --listen=:1443 --parallel=6 --session-ttl=8s >> /tmp/tg-tunnel.log 2>&1 &
+        /opt/sbin/tg-mtproxy-client --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
         sleep 2
 
         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
@@ -1754,8 +1749,7 @@ start() {
         return 0
     fi
     echo "Starting tg-tunnel..."
-    # See installer comments for flag rationale.
-    $BIN --listen=:1443 --parallel=6 --session-ttl=8s >> "$LOG" 2>&1 &
+    $BIN --listen=:1443 >> "$LOG" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 2
     # Insert REDIRECT rules at TOP of PREROUTING (-I 1) so they precede

@@ -2,11 +2,5 @@ name = "z2k-tunnel"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
-# On the Paid plan, uncomment the block below to raise the per-invocation CPU
-# budget from the 30s default to the 5-minute maximum. On the Free plan this
-# setting is rejected by the API, so it stays commented out.
-# [limits]
-# cpu_ms = 300000
-
 [vars]
 TUNNEL_SECRET = "d01f72f9543b29da4e3724b1530c0d11cb30a6f8db15bc0adfe8f2d37b5844b2"
