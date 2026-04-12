@@ -249,10 +249,10 @@ SUBMENU
 
     case "$choice" in
         1)
-            sh "$hc_script" --status
+            sh "$hc_script" --check || true
             ;;
         2)
-            sh "$hc_script" --status
+            sh "$hc_script" --status || true
             ;;
         3)
             if [ -f "${ZAPRET2_DIR}/healthcheck.log" ]; then
