@@ -1111,3 +1111,104 @@ function z2k_strategy_profile(ctx, desync)
         end
     end
 end
+
+-- ---------------------------------------------------------------------------
+-- z2k_game_udp: UDP fake-injection desync for game/unknown protocols.
+-- ---------------------------------------------------------------------------
+-- Problem this solves
+--   nfqws2's built-in `fake` action (zapret-antidpi.lua:fake) calls
+--   rawsend_payload_segmented(desync, fake_payload) WITHOUT options and without
+--   apply_fooling(), so BOTH `ip_ttl` AND `repeats` are silently dropped for
+--   UDP fakes. That made it impossible to replicate the classic nfqws1 recipe
+--
+--       --dpi-desync=fake
+--       --dpi-desync-any-protocol=1
+--       --dpi-desync-fake-unknown-udp=<blob>
+--       --dpi-desync-ttl=4
+--       --dpi-desync-repeats=10
+--
+--   which works reliably for Roblox and other low-latency UDP game protocols
+--   behind Russian DPI on Keenetic.
+--
+-- What this handler does
+--   For each outgoing UDP datagram that matches the payload filter:
+--     1. deepcopy the current dissect
+--     2. replace the L7 payload with the configured blob
+--     3. apply_fooling(..)     — honours ip_ttl / ip6_ttl / ip_autottl / tcp_*
+--     4. apply_ip_id(..)       — keeps ip_id sane
+--     5. rawsend_dissect_ipfrag with desync_opts(desync) so `repeats=N` from
+--        the command line actually takes effect
+--   The original packet is kept (no drop), matching nfqws1's fake behaviour
+--   where the real packet is allowed through after the fakes.
+--
+-- Args (all optional unless noted)
+--   blob=<name>         REQUIRED. fake payload blob (e.g. quic_initial_www_google_com)
+--   ip_ttl=<int>        IPv4 TTL for the fake packet (e.g. 4)
+--   ip6_ttl=<int>       IPv6 hop limit for the fake packet
+--   ip_autottl=<spec>   auto-derived TTL (see zapret-lib parse_autottl)
+--   repeats=<int>       how many copies of the fake to emit per real packet
+--   dir=out|in|any      direction filter (default: out)
+--   payload=<list>      comma-separated l7 filter (default: all)
+--   optional            skip silently if blob is missing
+--   badsum              send with deliberately bad L4 checksum (DPI fooling)
+--
+-- Usage example (place in /opt/zapret2/init.d/<platform>/custom.d/)
+--   NFQWS_OPT_DESYNC_GAME="--filter-udp=1024-65535 ${GAME_IPSET_OPT}\
+--     --in-range=a --out-range=-n2 --payload=all \
+--     --lua-desync=z2k_game_udp:dir=out:blob=quic_initial_www_google_com:ip_ttl=4:repeats=10"
+--
+-- Mirrors nfqws1 cutoff=n2 via --out-range=-n2 at the wrapper level, and
+-- repeats=10 / ip_ttl=4 / blob=... via the handler args.
+
+function z2k_game_udp(ctx, desync)
+    -- Always fire on outgoing side by default; cut off opposite direction so
+    -- the instance doesn't waste cycles on inbound replies.
+    direction_cutoff_opposite(ctx, desync)
+
+    -- Only UDP. For related icmp packets (e.g. ICMP unreachable) pass through
+    -- without cutting off the instance, mirroring fake()/rst() in zapret-antidpi.
+    if not desync.dis.udp then
+        if not desync.dis.icmp then instance_cutoff_shim(ctx, desync) end
+        return
+    end
+
+    if not (direction_check(desync) and payload_check(desync, "all")) then
+        return
+    end
+
+    -- Only emit fakes on the first replay pass (mirrors built-in fake).
+    if not replay_first(desync) then
+        DLOG("z2k_game_udp: not acting on further replay pieces")
+        return
+    end
+
+    if not desync.arg.blob then
+        error("z2k_game_udp: 'blob' arg required")
+    end
+
+    if desync.arg.optional and not blob_exist(desync, desync.arg.blob) then
+        DLOG("z2k_game_udp: blob '"..desync.arg.blob.."' not found. skipped")
+        return
+    end
+
+    local fake_payload = blob(desync, desync.arg.blob)
+    if b_debug then
+        DLOG("z2k_game_udp: blob="..desync.arg.blob.." ttl="..tostring(desync.arg.ip_ttl).." repeats="..tostring(desync.arg.repeats))
+    end
+
+    -- Build the fake packet from the current dissect. deepcopy so we don't
+    -- perturb the real packet the kernel will deliver afterwards.
+    local dis = deepcopy(desync.dis)
+    dis.payload = fake_payload
+
+    -- Apply ip_ttl / ip_autottl / ip6_ttl / badsum etc. Crucially, this is
+    -- where ip_ttl actually gets written to dis.ip.ip_ttl — the built-in
+    -- fake() skips this step, which is the whole reason we exist.
+    apply_fooling(desync, dis)
+    apply_ip_id(desync, dis, nil, "none")
+
+    -- rawsend_dissect_ipfrag honours options.rawsend.repeats, so supplying
+    -- the full desync_opts bundle makes `repeats=N` on the command line
+    -- emit N copies per real packet.
+    rawsend_dissect_ipfrag(dis, desync_opts(desync))
+end
