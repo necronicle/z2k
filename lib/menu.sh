@@ -1463,7 +1463,6 @@ vsetop.org
 
 # === Google API ===
 ogs.google.com
-gstatic.com
 
 # === Мониторинг и CDN ===
 datadoghq.com
