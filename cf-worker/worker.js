@@ -17,6 +17,45 @@ const MUX_CONNECT_FAIL = 0x05;
 const ADDR_IPV4 = 1;
 const ADDR_IPV6 = 4;
 
+// Telegram DC IP allowlist (from AS62041, AS59930)
+const TELEGRAM_CIDRS = [
+  "149.154.160.0/20",
+  "91.108.4.0/22",
+  "91.108.8.0/22",
+  "91.108.12.0/22",
+  "91.108.16.0/22",
+  "91.108.20.0/22",
+  "91.108.56.0/22",
+  "91.105.192.0/23",
+  "95.161.64.0/20",
+  "185.76.151.0/24",
+].map(cidr => {
+  const [addr, bits] = cidr.split("/");
+  const parts = addr.split(".").map(Number);
+  const ip = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+  const mask = ~0 << (32 - parseInt(bits));
+  return { network: ip & mask, mask };
+});
+
+const TELEGRAM_V6_PREFIXES = [
+  "2001:b28:f23d:", // 2001:b28:f23d::/48
+  "2001:b28:f23f:", // 2001:b28:f23f::/48
+  "2001:67c:4e8:",  // 2001:67c:4e8::/48
+];
+
+function isTelegramIP(address) {
+  const v4parts = address.split(".");
+  if (v4parts.length === 4) {
+    const nums = v4parts.map(Number);
+    if (nums.some(n => isNaN(n) || n < 0 || n > 255)) return false;
+    const ip = (nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3];
+    return TELEGRAM_CIDRS.some(c => (ip & c.mask) === c.network);
+  }
+  // IPv6: prefix match
+  const lower = address.toLowerCase();
+  return TELEGRAM_V6_PREFIXES.some(p => lower.startsWith(p));
+}
+
 /**
  * Encode a mux frame: [2 bytes stream_id BE][1 byte msg_type][payload]
  */
@@ -163,6 +202,13 @@ export default {
         return;
       }
 
+      // Verify target is a Telegram DC IP on an allowed port
+      if (!isTelegramIP(target.address) || (target.port !== 443 && target.port !== 80)) {
+        console.error(`stream ${streamId} CONNECT rejected: ${target.address}:${target.port}`);
+        sendFrame(streamId, MUX_CONNECT_FAIL, null);
+        return;
+      }
+
       console.log(`stream ${streamId} CONNECT ${target.address}:${target.port}`);
 
       totalConnects++;
@@ -209,13 +255,20 @@ export default {
       streams.set(streamId, { socket, writer });
       sendFrame(streamId, MUX_CONNECT_OK, null);
 
-      // Monitor socket close — catches silent disconnects
-      socket.closed.then(() => {
+      let closed = false;
+      function cleanupStream() {
+        if (closed) return;
+        closed = true;
         if (streams.has(streamId)) {
           streams.delete(streamId);
           sendFrame(streamId, MUX_CLOSE, null);
-          try { writer.close(); } catch (_) {}
         }
+        try { writer.close(); } catch (_) {}
+      }
+
+      // Monitor socket close — catches silent disconnects
+      socket.closed.then(() => {
+        cleanupStream();
       });
 
       // Read from TCP socket, send DATA frames back to client
@@ -237,10 +290,7 @@ export default {
         }
       }
 
-      // TCP disconnected — send CLOSE
-      streams.delete(streamId);
-      sendFrame(streamId, MUX_CLOSE, null);
-      try { writer.close(); } catch (_) {}
+      cleanupStream();
     }
 
     /**
@@ -305,13 +355,11 @@ export default {
         case MUX_DATA: {
           const entry = streams.get(frame.streamId);
           if (entry) {
-            try {
-              await entry.writer.write(new Uint8Array(frame.payload));
-            } catch (e) {
+            entry.writer.write(new Uint8Array(frame.payload)).catch(e => {
               console.error(`stream ${frame.streamId} TCP write error: ${e.message}`);
               closeStream(frame.streamId);
               sendFrame(frame.streamId, MUX_CLOSE, null);
-            }
+            });
           }
           break;
         }

@@ -79,7 +79,7 @@ func getOriginalDst(conn *net.TCPConn) (net.IP, int, error) {
 		var ipv6Addr [16]byte
 		copy(ipv6Addr[0:8], raw6[8:16])
 		ifaceBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(ifaceBytes, addr6.Interface)
+		binary.NativeEndian.PutUint32(ifaceBytes, addr6.Interface)
 		copy(ipv6Addr[8:12], ifaceBytes)
 		// ipv6Addr[12:16] = 0 (truncated, acceptable for /48 and larger prefixes)
 		origIP = net.IP(ipv6Addr[:])

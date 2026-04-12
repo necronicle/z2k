@@ -106,23 +106,29 @@ type tunnelClient struct {
 }
 
 type tunnelStream struct {
-	id        uint16
-	conn      *net.TCPConn
-	client    *tunnelClient
-	closeOnce sync.Once
+	id          uint16
+	conn        *net.TCPConn
+	client      *tunnelClient
+	closeOnce   sync.Once
+	remoteClose atomic.Bool // set when relay initiated the close
 }
 
 func (s *tunnelStream) close() {
 	s.closeOnce.Do(func() {
 		s.conn.Close()
 		s.client.streams.Delete(s.id)
-		s.client.mu.Lock()
-		w := s.client.writer
-		s.client.mu.Unlock()
-		if w != nil {
-			frame := encodeMuxFrame(s.id, muxCLOSE, nil)
-			w.WriteMessage(websocket.BinaryMessage, frame)
+		// Only send CLOSE if we initiated the close (not the relay)
+		if !s.remoteClose.Load() {
+			s.client.mu.Lock()
+			w := s.client.writer
+			s.client.mu.Unlock()
+			if w != nil {
+				frame := encodeMuxFrame(s.id, muxCLOSE, nil)
+				w.WriteMessage(websocket.BinaryMessage, frame)
+			}
 		}
+		// Release connection semaphore
+		<-connSemaphore
 	})
 }
 
@@ -221,8 +227,8 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 			if *verbose {
 				log.Printf("[tunnel] stream %d closed by relay", frame.StreamID)
 			}
-			stream.conn.Close()
-			tc.streams.Delete(frame.StreamID)
+			stream.remoteClose.Store(true)
+			stream.close()
 
 		case muxCONNECT_OK:
 			select {
@@ -240,8 +246,8 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 			default:
 			}
 			log.Printf("[tunnel] stream %d CONNECT_FAIL", frame.StreamID)
-			stream.conn.Close()
-			tc.streams.Delete(frame.StreamID)
+			stream.remoteClose.Store(true)
+			stream.close()
 
 		default:
 			if *verbose {
@@ -308,6 +314,7 @@ func (tc *tunnelClient) run() {
 		tc.mu.Unlock()
 
 		// Keepalive: ping every 50s (CF kills idle WS after 100s)
+		wsDone := make(chan struct{})
 		pingDone := make(chan struct{})
 		go func() {
 			defer close(pingDone)
@@ -322,6 +329,8 @@ func (tc *tunnelClient) run() {
 					if w != nil {
 						w.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
 					}
+				case <-wsDone:
+					return
 				case <-tc.ctx.Done():
 					return
 				}
@@ -331,7 +340,8 @@ func (tc *tunnelClient) run() {
 		// Read loop blocks until WS disconnects
 		tc.readLoop(ws)
 
-		// WS disconnected — close all streams, Telegram clients will retry
+		// WS disconnected — signal ping goroutine, close all streams
+		close(wsDone)
 		log.Printf("[tunnel] WS disconnected, closing all streams")
 		tc.mu.Lock()
 		tc.ws = nil
@@ -377,17 +387,26 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 			log.Printf("[tunnel] getOriginalDst failed: %v", err)
 		}
 		clientConn.Close()
+		<-connSemaphore
 		return
 	}
 
 	// Allocate stream ID — skip IDs still in use (prevents wrap-around collision)
 	var streamID uint16
+	idFound := false
 	for i := 0; i < 100; i++ {
 		rawID := tc.nextID.Add(1)
 		streamID = uint16(rawID%65535) + 1
 		if _, exists := tc.streams.Load(streamID); !exists {
+			idFound = true
 			break
 		}
+	}
+	if !idFound {
+		log.Printf("[tunnel] stream ID exhaustion, dropping connection from %s", clientConn.RemoteAddr())
+		clientConn.Close()
+		<-connSemaphore
+		return
 	}
 
 	tc.mu.Lock()
@@ -398,6 +417,7 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 			log.Printf("[tunnel] no WS connection, dropping stream %d", streamID)
 		}
 		clientConn.Close()
+		<-connSemaphore
 		return
 	}
 
@@ -417,8 +437,8 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 	case tc.connectSem <- struct{}{}:
 	case <-time.After(10 * time.Second):
 		log.Printf("[tunnel] stream %d CONNECT throttled (timeout)", streamID)
-		stream.conn.Close()
-		tc.streams.Delete(streamID)
+		stream.remoteClose.Store(true)
+		stream.close()
 		return
 	}
 
@@ -428,8 +448,8 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 	if err := w.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 		<-tc.connectSem
 		log.Printf("[tunnel] stream %d CONNECT write error: %v", streamID, err)
-		stream.conn.Close()
-		tc.streams.Delete(streamID)
+		stream.remoteClose.Store(true)
+		stream.close()
 		return
 	}
 
@@ -492,10 +512,7 @@ func runTunnel() error {
 
 		select {
 		case connSemaphore <- struct{}{}:
-			go func() {
-				defer func() { <-connSemaphore }()
-				tc.handleTunnelConn(tcpConn)
-			}()
+			go tc.handleTunnelConn(tcpConn)
 		default:
 			if *verbose {
 				log.Printf("[tunnel] max connections reached, rejecting %s", conn.RemoteAddr())
