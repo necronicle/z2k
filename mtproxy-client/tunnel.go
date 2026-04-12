@@ -519,6 +519,18 @@ func runTunnel() error {
 
 	go tc.run()
 
+	// Wait for first WS connection before accepting TCP — prevents burst
+	// of connections hitting a not-yet-ready Worker
+	for i := 0; i < 100; i++ {
+		tc.mu.Lock()
+		w := tc.writer
+		tc.mu.Unlock()
+		if w != nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	go func() {
 		<-ctx.Done()
 		log.Println("[tunnel] shutting down...")
