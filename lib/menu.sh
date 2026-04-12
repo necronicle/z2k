@@ -1021,9 +1021,13 @@ SUBMENU
             fi
             print_success "Silent fallback для РКН включен"
 
-            # Создать/удалить флаг-файл для Lua
+            # Создать флаг-файл для Lua
             local flag_dir="${ZAPRET2_DIR}/extra_strats/cache/autocircular"
             touch "${flag_dir}/rkn_silent_fallback.flag" 2>/dev/null
+
+            # Перегенерировать конфиг с новыми параметрами circular
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
 
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса..."
@@ -1047,6 +1051,10 @@ SUBMENU
             # Удалить флаг-файл
             rm -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null
             print_success "Silent fallback для РКН выключен"
+
+            # Перегенерировать конфиг
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
 
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса..."
@@ -1121,6 +1129,10 @@ SUBMENU
 
             print_success "Игровой режим включен"
 
+            # Перегенерировать конфиг с game filter профилем
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
+
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса..."
                 "$INIT_SCRIPT" restart
@@ -1145,6 +1157,10 @@ SUBMENU
             sed -i 's/,1024-65535//' "$config_file"
 
             print_success "Игровой режим выключен"
+
+            # Перегенерировать конфиг без game filter
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
 
             if is_zapret2_running; then
                 print_info "Перезапуск сервиса..."
