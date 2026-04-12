@@ -353,20 +353,24 @@ AUSTERUS_OPT
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
     # Game Filter UDP (custom protocols — needs payload=all to match unknown UDP)
-    # Autocircular rotates repeats/cutoff combinations on failure detection
+    # Autocircular rotates strategies with autottl, repeats, cutoff combinations
     local game_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
     local GAME_UDP_BYPASS
     GAME_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$game_conf" "0")
     if [ "$GAME_UDP_BYPASS" = "1" ]; then
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=a --lua-desync=circular:fails=2:time=30:udp_in=1:udp_out=4:key=game_udp --new\\n"
-        # Strategy 1: repeats=12, cutoff=n2 (default, works for most ISPs)
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=1:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
-        # Strategy 2: repeats=10, cutoff=n4 (deeper cutoff for aggressive DPI)
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n4 --lua-desync=fake:strategy=2:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10 --new\\n"
-        # Strategy 3: repeats=14, cutoff=n3 (more fakes, medium cutoff)
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n3 --lua-desync=fake:strategy=3:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=14 --new\\n"
-        # Strategy 4: repeats=8, cutoff=n2 (lighter, less fakes)
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=4:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=8 --new\\n"
+        # Strategy 1: autottl=2, repeats=10, cutoff=n2 (flowseal FAKE TLS AUTO ALT3 equivalent)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=1:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10:ip_autottl=2,1-64 --new\\n"
+        # Strategy 2: autottl=2, repeats=12, cutoff=n2
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=2:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12:ip_autottl=2,1-64 --new\\n"
+        # Strategy 3: autottl=2, repeats=14, cutoff=n3
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n3 --lua-desync=fake:strategy=3:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=14:ip_autottl=2,1-64 --new\\n"
+        # Strategy 4: autottl=2, repeats=10, cutoff=n4
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n4 --lua-desync=fake:strategy=4:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10:ip_autottl=2,1-64 --new\\n"
+        # Strategy 5: no autottl, repeats=12, cutoff=n2 (for ISPs that detect TTL manipulation)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=5:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
+        # Strategy 6: no autottl, repeats=8, cutoff=n2 (lighter)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=-n2 --lua-desync=fake:strategy=6:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=8 --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
