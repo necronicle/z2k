@@ -654,18 +654,6 @@ DISABLE_CUSTOM=1
 # User for zapret daemons (security hardening: drop privileges to nobody)
 WS_USER=nobody
 
-# Passive DPI RST filter: drop injected TCP RST with IP ID 0x0-0xF
-# Enable if your ISP uses TSPU that sends fake RST before real server reply
-DROP_DPI_RST=${saved_DROP_DPI_RST}
-
-# Silent fallback for RKN: detect silent TCP blackholes and force circular rotation
-# Enable via menu [F] if many RKN sites don't open (especially on MTS/aggressive DPI)
-RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
-
-# Game filter: UDP fake on ephemeral ports (Roblox, etc.)
-# Enable via menu [G]
-ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
-
 # Compress large lists
 GZIP_LISTS=1
 
@@ -676,6 +664,19 @@ MDIG_THREADS=30
 MDIG_EAGAIN=10
 MDIG_EAGAIN_DELAY=500
 CONFIG
+
+    # Append settings that need variable expansion (heredoc with quotes doesn't expand)
+    cat >> "$config_file" <<EOF
+
+# Passive DPI RST filter: drop injected TCP RST with IP ID 0x0-0xF
+DROP_DPI_RST=${saved_DROP_DPI_RST}
+
+# Silent fallback for RKN
+RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
+
+# Game filter
+ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
+EOF
 
     print_success "Config файл создан: $config_file"
     return 0
