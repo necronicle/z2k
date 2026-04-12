@@ -352,9 +352,6 @@ AUSTERUS_OPT
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # Google Meet STUN/DTLS — no L7 filter, pure port-based fake
-    # STUN L7 detection misses DTLS which Meet uses for media
-    nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=19302-19309,3478 --out-range=-n4 --lua-desync=fake:payload=all:dir=out:blob=stun:repeats=6 --new\\n"
 
     # Game Filter UDP (custom protocols — needs payload=all to match unknown UDP)
     # Autocircular rotates strategies with autottl, repeats, cutoff combinations
