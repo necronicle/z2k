@@ -816,7 +816,7 @@ step_build_zapret2() {
 
     # Copy IP lists (Roblox, Telegram)
     mkdir -p "${ZAPRET2_DIR}/lists"
-    for iplist in roblox_ips.txt telegram_ips.txt; do
+    for iplist in roblox_ips.txt telegram_ips.txt ipset-exclude.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
