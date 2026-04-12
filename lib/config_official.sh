@@ -363,18 +363,19 @@ AUSTERUS_OPT
         local game_ipset_opt=""
         [ -f "$ipset_excl" ] && game_ipset_opt="--ipset-exclude=${ipset_excl} "
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=a --lua-desync=circular:fails=2:time=30:udp_in=1:udp_out=4:key=game_udp --new\\n"
-        # Strategy 1: flowseal FAKE TLS AUTO ALT3 exact equivalent (default first)
+        # All 6 unique flowseal game filter combinations (all with autottl=2):
+        # Strategy 1: repeats=10, cutoff=n2 (FAKE TLS AUTO / ALT / ALT2 / ALT4 / SIMPLE FAKE ALT)
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n2 --lua-desync=fake:strategy=1:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10:ip_autottl=2,1-64 --new\\n"
-        # Strategy 2: autottl=2, repeats=12, cutoff=n2
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n2 --lua-desync=fake:strategy=2:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12:ip_autottl=2,1-64 --new\\n"
-        # Strategy 3: autottl=2, repeats=14, cutoff=n3
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n3 --lua-desync=fake:strategy=3:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=14:ip_autottl=2,1-64 --new\\n"
-        # Strategy 4: autottl=2, repeats=10, cutoff=n4
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n4 --lua-desync=fake:strategy=4:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10:ip_autottl=2,1-64 --new\\n"
-        # Strategy 5: no autottl, repeats=12, cutoff=n2
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n2 --lua-desync=fake:strategy=5:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12 --new\\n"
-        # Strategy 6: no autottl, repeats=8, cutoff=n2
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n2 --lua-desync=fake:strategy=6:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=8 --new\\n"
+        # Strategy 2: repeats=10, cutoff=n3 (FAKE TLS AUTO ALT3)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n3 --lua-desync=fake:strategy=2:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10:ip_autottl=2,1-64 --new\\n"
+        # Strategy 3: repeats=10, cutoff=n4 (ALT3 / ALT11)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n4 --lua-desync=fake:strategy=3:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=10:ip_autottl=2,1-64 --new\\n"
+        # Strategy 4: repeats=12, cutoff=n2 (general / ALT2 / ALT6-10)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n2 --lua-desync=fake:strategy=4:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12:ip_autottl=2,1-64 --new\\n"
+        # Strategy 5: repeats=12, cutoff=n3 (ALT / SIMPLE FAKE / SIMPLE FAKE ALT2)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n3 --lua-desync=fake:strategy=5:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=12:ip_autottl=2,1-64 --new\\n"
+        # Strategy 6: repeats=14, cutoff=n3 (ALT5)
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=-n3 --lua-desync=fake:strategy=6:payload=all:dir=out:blob=quic_initial_www_google_com:repeats=14:ip_autottl=2,1-64 --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
