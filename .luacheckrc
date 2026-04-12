@@ -16,6 +16,7 @@ globals = {
     "z2k_quic_morph_v2",
     "z2k_ech_passthrough",
     "z2k_strategy_profile",
+    "z2k_game_udp",
     "z2k_ipfrag3",
     "z2k_ipfrag3_tiny",
     "cond_tcp_has_ts",
@@ -24,6 +25,7 @@ globals = {
     "DLOG",
     "DLOG_ERR",
     "autostate",
+    "b_debug",
 }
 
 read_globals = {
@@ -36,6 +38,11 @@ read_globals = {
     "rawsend_dissect",
     "rawsend_dissect_ipfrag",
     "rawsend_payload_segmented",
+    "blob",
+    "blob_exist",
+    "apply_fooling",
+    "apply_ip_id",
+    "desync_opts",
     "tls_dissect",
     "tls_reconstruct",
     "direction_check",
