@@ -252,7 +252,7 @@ SUBMENU
 
     case "$choice" in
         1)
-            sh "$hc_script" --check || true
+            sh "$hc_script" || true
             ;;
         2)
             sh "$hc_script" --status || true
