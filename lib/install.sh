@@ -1699,32 +1699,98 @@ step_finalize() {
         killall tg-mtproxy-client 2>/dev/null || true
         sleep 1
 
-        # Start tunnel mode.
-        /opt/sbin/tg-mtproxy-client --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+        # Start tunnel mode. -v enables stream-level logs needed by the
+        # watchdog's stale-detection mode.
+        /opt/sbin/tg-mtproxy-client --listen=:1443 -v >> /tmp/tg-tunnel.log 2>&1 &
         sleep 2
 
         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
             # Setup iptables REDIRECT for Telegram DC IPs.
             # Use -I ... 1 (insert at top) so our rules precede Keenetic's
             # _NDM_* chains, which intercept packets when using -A.
+            # Both PREROUTING (LAN clients) and OUTPUT (router-local
+            # processes, e.g. the watchdog probe) get the redirect.
             for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                 iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
                     iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                    iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
             done
-            # Install watchdog — auto-restart tunnel on CONNECT_FAIL storms
+            # Install watchdog — active end-to-end probe + CONNECT_FAIL storm
+            # detector. Runs every minute via cron. Restarts the tunnel via
+            # the init script (handles iptables + pid file properly).
             cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDSCRIPT'
 #!/bin/sh
-LOG="/tmp/tg-tunnel.log"
-BIN="/opt/sbin/tg-mtproxy-client"
-[ ! -f "$LOG" ] && exit 0
-pgrep -f "tg-mtproxy-client" >/dev/null || exit 0
-FAILS=$(tail -40 "$LOG" | grep -c "CONNECT_FAIL")
-if [ "$FAILS" -ge 10 ]; then
-    logger -t tg-watchdog "Detected $FAILS CONNECT_FAILs, restarting tunnel"
-    killall -9 tg-mtproxy-client 2>/dev/null
-    sleep 2
-    $BIN --listen=:1443 >> "$LOG" 2>&1 &
-    echo "$(date) watchdog: restarted ($FAILS fails)" >> "$LOG"
+# tg-tunnel watchdog
+#  1. Restart on CONNECT_FAIL storm (legacy passive check)
+#  2. Restart when an end-to-end HTTPS probe through the tunnel fails 3x
+#     in a row. The probe targets a Telegram-owned IP that is REDIRECTed
+#     to local :1443, so the request transits the tunnel. Catches the
+#     "tunnel process alive but silently dead after WS reconnect" mode
+#     that the CONNECT_FAIL detector misses entirely.
+
+LOG=/tmp/tg-tunnel.log
+BIN=/opt/sbin/tg-mtproxy-client
+INIT=/opt/etc/init.d/S98tg-tunnel
+STATE=/tmp/tg-tunnel-watchdog.state
+PROBE_URL=https://core.telegram.org/
+
+[ -x "$BIN" ] || exit 0
+
+restart_tunnel() {
+    local reason="$1"
+    logger -t tg-watchdog "restart: $reason"
+    echo "$(date) watchdog restart: $reason" >> "$LOG"
+    if [ -x "$INIT" ]; then
+        "$INIT" stop  >/dev/null 2>&1
+        sleep 1
+        # belt-and-suspenders kill in case init script left a leftover
+        killall -9 tg-mtproxy-client 2>/dev/null
+        sleep 1
+        "$INIT" start >/dev/null 2>&1
+    else
+        killall -9 tg-mtproxy-client 2>/dev/null
+        sleep 1
+        "$BIN" --listen=:1443 >> "$LOG" 2>&1 &
+    fi
+    echo 0 > "$STATE"
+}
+
+# 1) CONNECT_FAIL storm (legacy)
+if [ -f "$LOG" ] && pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+    FAILS=$(tail -40 "$LOG" 2>/dev/null | grep -c "CONNECT_FAIL")
+    if [ "$FAILS" -ge 10 ]; then
+        restart_tunnel "CONNECT_FAIL storm ($FAILS in last 40 lines)"
+        exit 0
+    fi
+fi
+
+# If the binary isn't running at all, just start it and reset state.
+if ! pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+    restart_tunnel "tunnel process not running"
+    exit 0
+fi
+
+# 2) Active end-to-end probe through the tunnel.
+#    core.telegram.org resolves into 149.154.0.0/16, which our PREROUTING
+#    REDIRECT bounces to 127.0.0.1:1443 → tg-mtproxy-client → cf worker →
+#    Telegram. Successful TLS + HTTP response = full path is healthy.
+if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null "$PROBE_URL" 2>/dev/null; then
+    echo 0 > "$STATE"
+    exit 0
+fi
+
+# Probe failed — increment consecutive-failure counter.
+FAIL_CNT=0
+[ -f "$STATE" ] && FAIL_CNT=$(head -1 "$STATE" 2>/dev/null)
+case "$FAIL_CNT" in ''|*[!0-9]*) FAIL_CNT=0 ;; esac
+FAIL_CNT=$((FAIL_CNT + 1))
+echo "$FAIL_CNT" > "$STATE"
+
+# Restart only after 3 consecutive failures (~3 minutes) to avoid
+# flapping when Telegram itself or the upstream worker has a brief blip.
+if [ "$FAIL_CNT" -ge 3 ]; then
+    restart_tunnel "active probe failed ${FAIL_CNT}x in a row"
 fi
 WDSCRIPT
             chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
@@ -1749,14 +1815,18 @@ start() {
         return 0
     fi
     echo "Starting tg-tunnel..."
-    $BIN --listen=:1443 >> "$LOG" 2>&1 &
+    $BIN --listen=:1443 -v >> "$LOG" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 2
-    # Insert REDIRECT rules at TOP of PREROUTING (-I 1) so they precede
-    # Keenetic's _NDM_* chains, which would otherwise swallow the packets.
+    # Insert REDIRECT rules at TOP of both PREROUTING and OUTPUT (-I 1) so
+    # they precede Keenetic's _NDM_* chains. PREROUTING catches forwarded
+    # traffic from LAN clients; OUTPUT catches locally-originated traffic
+    # from the router itself (e.g. the watchdog probe).
     for cidr in $CIDRS; do
         iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
             iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
     done
 }
 
@@ -1764,10 +1834,13 @@ stop() {
     echo "Stopping tg-tunnel..."
     killall tg-mtproxy-client 2>/dev/null
     rm -f "$PIDFILE"
-    # Idempotent removal: drop every matching copy of the rule.
+    # Idempotent removal: drop every matching copy of the rule from both chains.
     for cidr in $CIDRS; do
         while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
             iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
         done
     done
 }
