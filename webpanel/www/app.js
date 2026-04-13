@@ -45,6 +45,7 @@
     toggles: renderToggles,
     whitelist: renderWhitelist,
     logs: renderLogs,
+    credits: renderCredits,
   };
   function navigate() {
     const hash = location.hash.replace(/^#\//, "") || "dashboard";
@@ -352,6 +353,38 @@
       setTimeout(poll, 1000);
     }
     poll();
+  }
+
+  // ---------- Credits ----------
+  function renderCredits() {
+    $app.innerHTML = `
+      <h1 class="page-title">Благодарности</h1>
+      <p class="credits-intro">
+        Проект живёт благодаря людям, которые вкладывают в него время и ресурсы.
+      </p>
+
+      <div class="credits-grid">
+        <div class="card credits-card tester-card">
+          <div class="credits-badge tester-badge">★ Главный тестировщик</div>
+          <div class="credits-name">AusterusJ</div>
+          <p class="desc">
+            Бесконечные часы живых тестов на роутерах, отлов регрессий ещё
+            до релиза и терпение, с которым он проверяет каждую
+            экспериментальную стратегию. Без него z2k был бы сильно менее
+            стабильным.
+          </p>
+        </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-name">SupWgeneral</div>
+          <p class="desc">
+            Материальная поддержка, благодаря которой у z2k есть выделенный
+            VPS под Telegram-туннель и возможность развиваться дальше.
+          </p>
+        </div>
+      </div>
+    `;
   }
 
   // ---------- Utils ----------
