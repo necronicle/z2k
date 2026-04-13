@@ -1740,18 +1740,24 @@ PROBE_URL=https://core.telegram.org/
 restart_tunnel() {
     local reason="$1"
     logger -t tg-watchdog "restart: $reason"
-    echo "$(date) watchdog restart: $reason" >> "$LOG"
     if [ -x "$INIT" ]; then
         "$INIT" stop  >/dev/null 2>&1
         sleep 1
         # belt-and-suspenders kill in case init script left a leftover
         killall -9 tg-mtproxy-client 2>/dev/null
         sleep 1
+        # Truncate log to exactly one marker line. Without this, the very
+        # CONNECT_FAIL storm that triggered the restart is still sitting in
+        # tail -40 when cron runs again in a minute, and the detector fires
+        # a second restart before the new session has time to stabilise —
+        # classic restart loop.
+        echo "$(date) watchdog restart: $reason" > "$LOG"
         "$INIT" start >/dev/null 2>&1
     else
         killall -9 tg-mtproxy-client 2>/dev/null
         sleep 1
-        "$BIN" --listen=:1443 >> "$LOG" 2>&1 &
+        echo "$(date) watchdog restart: $reason" > "$LOG"
+        "$BIN" --listen=:1443 -v >> "$LOG" 2>&1 &
     fi
     echo 0 > "$STATE"
 }

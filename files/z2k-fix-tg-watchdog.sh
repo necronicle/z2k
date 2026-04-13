@@ -41,17 +41,21 @@ PROBE_URL=https://core.telegram.org/
 restart_tunnel() {
     reason="$1"
     logger -t tg-watchdog "restart: $reason"
-    echo "$(date) watchdog restart: $reason" >> "$LOG"
     if [ -x "$INIT" ]; then
         "$INIT" stop  >/dev/null 2>&1
         sleep 1
         killall -9 tg-mtproxy-client 2>/dev/null
         sleep 1
+        # Truncate the log to a single marker line so the CONNECT_FAIL
+        # storm that triggered this restart does not cause a second
+        # restart on the next cron tick.
+        echo "$(date) watchdog restart: $reason" > "$LOG"
         "$INIT" start >/dev/null 2>&1
     else
         killall -9 tg-mtproxy-client 2>/dev/null
         sleep 1
-        "$BIN" --listen=:1443 >> "$LOG" 2>&1 &
+        echo "$(date) watchdog restart: $reason" > "$LOG"
+        "$BIN" --listen=:1443 -v >> "$LOG" 2>&1 &
     fi
     echo 0 > "$STATE"
 }
