@@ -1,0 +1,72 @@
+#!/bin/sh
+# /opt/etc/init.d/S96z2k-webpanel — Entware rc script for z2k webpanel.
+# Runs a dedicated lighttpd instance for the panel on its own port, using the
+# config at /opt/zapret2/webpanel/lighttpd.conf. Independent of any system
+# lighttpd that may also be installed.
+
+CONF="/opt/zapret2/webpanel/lighttpd.conf"
+PIDFILE="/var/run/z2k-webpanel.pid"
+WWW_DIR="/opt/zapret2/www"
+BIN="/opt/sbin/lighttpd"
+[ -x "$BIN" ] || BIN="/opt/bin/lighttpd"
+[ -x "$BIN" ] || BIN="lighttpd"
+
+is_alive() {
+    [ -f "$PIDFILE" ] || return 1
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+start() {
+    if is_alive; then
+        echo "z2k-webpanel already running (pid $(cat "$PIDFILE"))"
+        return 0
+    fi
+    [ -d "$WWW_DIR" ] || { echo "www dir missing: $WWW_DIR" >&2; return 1; }
+    [ -f "$CONF" ]    || { echo "lighttpd config missing: $CONF" >&2; return 1; }
+    # Validate config first — lighttpd -tt exits non-zero on errors.
+    if ! "$BIN" -tt -f "$CONF" >/tmp/z2k-webpanel-startcheck.log 2>&1; then
+        echo "z2k-webpanel: lighttpd config invalid" >&2
+        cat /tmp/z2k-webpanel-startcheck.log >&2 2>/dev/null
+        return 1
+    fi
+    # Start daemonized (lighttpd forks itself and writes pid file from config).
+    "$BIN" -f "$CONF"
+    sleep 1
+    if is_alive; then
+        echo "z2k-webpanel started (pid $(cat "$PIDFILE"))"
+    else
+        echo "z2k-webpanel failed to start" >&2
+        cat /tmp/z2k-webpanel-error.log 2>/dev/null >&2
+        return 1
+    fi
+}
+
+stop() {
+    if is_alive; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null
+        sleep 1
+    fi
+    # Belt-and-suspenders: kill any lighttpd running with our config.
+    pkill -f "lighttpd.*$CONF" 2>/dev/null
+    rm -f "$PIDFILE"
+    echo "z2k-webpanel stopped"
+}
+
+status() {
+    if is_alive; then
+        echo "running (pid $(cat "$PIDFILE"))"
+        return 0
+    fi
+    echo "stopped"
+    return 1
+}
+
+case "${1:-}" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)  status ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

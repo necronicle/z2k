@@ -1,0 +1,145 @@
+#!/bin/sh
+# z2k webpanel installer (lighttpd-based, LAN-only, no auth).
+#
+# Usage:
+#   sh webpanel/install.sh [--port N] [--bind IP]
+#
+# Defaults: port 8088, bind 0.0.0.0. Idempotent — stops the panel,
+# overwrites files, regenerates config, restarts.
+
+set -eu
+
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+WEBPANEL_DIR="/opt/zapret2/webpanel"
+WWW_DIR="/opt/zapret2/www"
+INIT_DST="/opt/etc/init.d/S96z2k-webpanel"
+CONF_DST="$WEBPANEL_DIR/lighttpd.conf"
+
+PORT=8088
+BIND="0.0.0.0"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --port) PORT="$2"; shift 2 ;;
+        --bind) BIND="$2"; shift 2 ;;
+        -h|--help)
+            cat <<EOF
+z2k webpanel installer (lighttpd-based, LAN-only)
+Usage: install.sh [--port N] [--bind IP]
+Defaults: port 8088, bind 0.0.0.0
+EOF
+            exit 0
+            ;;
+        *) echo "unknown arg: $1" >&2; exit 1 ;;
+    esac
+done
+
+echo "[1/6] Checking dependencies"
+LIGHTTPD_BIN=""
+for c in /opt/sbin/lighttpd /opt/bin/lighttpd lighttpd; do
+    if command -v "$c" >/dev/null 2>&1; then
+        LIGHTTPD_BIN=$(command -v "$c" 2>/dev/null || echo "$c")
+        break
+    fi
+done
+
+# Auto-install lighttpd + mod_cgi if missing.
+if [ -z "$LIGHTTPD_BIN" ]; then
+    echo "  lighttpd not found — installing via opkg..."
+    if ! opkg install lighttpd lighttpd-mod-cgi 2>&1 | tail -3; then
+        echo "  opkg install failed — install manually: opkg install lighttpd lighttpd-mod-cgi" >&2
+        exit 1
+    fi
+    for c in /opt/sbin/lighttpd /opt/bin/lighttpd lighttpd; do
+        if command -v "$c" >/dev/null 2>&1; then
+            LIGHTTPD_BIN=$(command -v "$c" 2>/dev/null || echo "$c")
+            break
+        fi
+    done
+    [ -z "$LIGHTTPD_BIN" ] && { echo "  lighttpd still not found after install" >&2; exit 1; }
+fi
+echo "  lighttpd: $LIGHTTPD_BIN"
+
+# Verify mod_cgi module is physically present; auto-install if not.
+if ! find /opt/lib/lighttpd /opt/usr/lib/lighttpd 2>/dev/null -maxdepth 1 -name 'mod_cgi*' 2>/dev/null | head -1 | grep -q .; then
+    echo "  mod_cgi missing — installing..."
+    opkg install lighttpd-mod-cgi 2>&1 | tail -3 || {
+        echo "  mod_cgi install failed" >&2
+        exit 1
+    }
+fi
+
+echo "[2/6] Stopping existing panel (if any)"
+if [ -x "$INIT_DST" ]; then
+    "$INIT_DST" stop 2>/dev/null || true
+fi
+pkill -f "lighttpd.*$WEBPANEL_DIR" 2>/dev/null || true
+# Also stop any leftover busybox httpd bound to the same www dir from an
+# earlier (pre-lighttpd) install.
+pkill -f "httpd.*$WWW_DIR" 2>/dev/null || true
+
+echo "[3/6] Installing files"
+# Nuke any pre-existing panel tree to guarantee idempotency. Stale files
+# from a previous install (including the old z2k-webpanel-install.sh
+# monolith) must not leak through. /opt/zapret2/www is ours exclusively.
+rm -rf "$WWW_DIR" "$WEBPANEL_DIR"
+rm -f /opt/zapret2/z2k-webpanel-install.sh \
+      /opt/zapret2/z2k-httpd.sh \
+      2>/dev/null || true
+
+mkdir -p "$WEBPANEL_DIR/cgi" "$WWW_DIR/cgi-bin" /opt/etc/init.d
+
+cp -f "$SRC_DIR/cgi/auth.sh"    "$WEBPANEL_DIR/cgi/auth.sh"
+cp -f "$SRC_DIR/cgi/actions.sh" "$WEBPANEL_DIR/cgi/actions.sh"
+cp -f "$SRC_DIR/cgi/api.sh"     "$WEBPANEL_DIR/cgi/api.sh"
+chmod 755 "$WEBPANEL_DIR/cgi/"*.sh
+
+ln -sf "$WEBPANEL_DIR/cgi/api.sh" "$WWW_DIR/cgi-bin/api"
+
+cp -f "$SRC_DIR/www/index.html"  "$WWW_DIR/index.html"
+cp -f "$SRC_DIR/www/app.js"      "$WWW_DIR/app.js"
+cp -f "$SRC_DIR/www/style.css"   "$WWW_DIR/style.css"
+cp -f "$SRC_DIR/www/favicon.svg" "$WWW_DIR/favicon.svg"
+chmod 644 "$WWW_DIR/index.html" "$WWW_DIR/app.js" "$WWW_DIR/style.css" "$WWW_DIR/favicon.svg"
+
+echo "[4/6] Writing lighttpd config"
+sed \
+    -e "s|@WWW_DIR@|${WWW_DIR}|g" \
+    -e "s|@PORT@|${PORT}|g" \
+    -e "s|@BIND@|${BIND}|g" \
+    "$SRC_DIR/lighttpd.conf" > "$CONF_DST"
+
+printf '%s' "$PORT" > "$WEBPANEL_DIR/port"
+printf '%s' "$BIND" > "$WEBPANEL_DIR/bind"
+
+echo "[5/6] Installing init.d script"
+cp -f "$SRC_DIR/init.d/S96z2k-webpanel" "$INIT_DST"
+chmod 755 "$INIT_DST"
+
+echo "[6/6] Starting webpanel"
+"$INIT_DST" start || {
+    echo "Start failed. Check /tmp/z2k-webpanel-error.log and /tmp/z2k-webpanel-startcheck.log" >&2
+    exit 1
+}
+
+# Prefer an RFC1918 LAN address — default route often resolves to the
+# public WAN IP on Keenetic, which is useless as a panel URL.
+IP=$(ip -4 addr show 2>/dev/null \
+    | awk '/inet (10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {split($2,a,"/"); print a[1]; exit}')
+if [ -z "$IP" ]; then
+    IP=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+fi
+[ -z "$IP" ] && IP="<router-ip>"
+
+cat <<EOF
+
+===========================================================
+z2k webpanel installed
+-----------------------------------------------------------
+URL:     http://$IP:$PORT/
+Access:  LAN-only, no authentication
+-----------------------------------------------------------
+Control: $INIT_DST {start|stop|restart|status}
+Config:  $CONF_DST
+===========================================================
+EOF

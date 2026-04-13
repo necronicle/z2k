@@ -78,6 +78,14 @@ MENU
                 fi
             fi
 
+            # Показать статус веб-панели (если функция загружена)
+            if command -v webpanel_is_installed >/dev/null 2>&1 && webpanel_is_installed; then
+                if webpanel_is_running; then
+                    printf " Веб-панель: работает (%s)\n" "$(webpanel_url)"
+                else
+                    printf " Веб-панель: установлена, остановлена\n"
+                fi
+            fi
         fi
 
         cat <<'MENU'
@@ -94,6 +102,7 @@ MENU
 [G] Игровой режим (Roblox и др.)
 [T] Telegram прокси (тестовая функция)
 [S] Скрипты custom.d
+[P] Веб-панель (дубль меню в браузере)
 [B] Rollback (откат конфигурации)
 [H] Health check (проверка работоспособности)
 [V] Валидация конфигурации
@@ -101,7 +110,7 @@ MENU
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,B,H,V]: "
+        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V]: "
         read_input choice
 
         case "$choice" in
@@ -140,6 +149,9 @@ MENU
                 ;;
             s|S)
                 menu_custom_scripts
+                ;;
+            p|P)
+                menu_webpanel
                 ;;
             b|B)
                 menu_rollback

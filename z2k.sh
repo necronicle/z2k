@@ -20,7 +20,7 @@ export LIB_DIR
 export GITHUB_RAW
 
 # Список модулей для загрузки
-MODULES="utils system_init install strategies config config_official menu"
+MODULES="utils system_init install strategies config config_official webpanel menu"
 
 # ==============================================================================
 # ВСТРОЕННЫЕ FALLBACK ФУНКЦИИ
@@ -331,13 +331,32 @@ download_init_script() {
     fi
 
     # z2k tools (healthcheck, config validator, list updater)
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-webpanel.sh z2k-webpanel-install.sh; do
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
             print_success "Загружено: files/${tool_name}"
         else
             print_warning "Не удалось загрузить files/${tool_name} (необязательный)"
+        fi
+    done
+
+    # Web panel source tree — downloaded only if user installs via menu [P].
+    # z2k.sh bootstraps files into /tmp/z2k/; install.sh copies from /tmp/z2k/webpanel.
+    local webpanel_dir="${WORK_DIR}/webpanel"
+    mkdir -p "$webpanel_dir/cgi" "$webpanel_dir/www" "$webpanel_dir/init.d"
+    for wp_file in \
+        install.sh uninstall.sh lighttpd.conf \
+        init.d/S96z2k-webpanel \
+        cgi/api.sh cgi/auth.sh cgi/actions.sh \
+        www/index.html www/app.js www/style.css www/favicon.svg
+    do
+        url="${GITHUB_RAW}/webpanel/${wp_file}"
+        output="${webpanel_dir}/${wp_file}"
+        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output" 2>/dev/null; then
+            : # ok
+        else
+            print_warning "Не удалось загрузить webpanel/${wp_file} (опциональный компонент)"
         fi
     done
 

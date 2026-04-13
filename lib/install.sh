@@ -793,17 +793,9 @@ step_build_zapret2() {
         fi
     done
 
-    # Install web panel files
-    if [ -f "${WORK_DIR}/files/z2k-webpanel.sh" ]; then
-        mkdir -p "${ZAPRET2_DIR}/www/cgi-bin"
-        cp -f "${WORK_DIR}/files/z2k-webpanel.sh" "${ZAPRET2_DIR}/www/cgi-bin/index.cgi" 2>/dev/null || true
-        chmod +x "${ZAPRET2_DIR}/www/cgi-bin/index.cgi" 2>/dev/null || true
-        print_info "Установлена: веб-панель мониторинга"
-    fi
-    if [ -f "${WORK_DIR}/files/z2k-webpanel-install.sh" ]; then
-        cp -f "${WORK_DIR}/files/z2k-webpanel-install.sh" "${ZAPRET2_DIR}/z2k-webpanel-install.sh" 2>/dev/null || true
-        chmod +x "${ZAPRET2_DIR}/z2k-webpanel-install.sh" 2>/dev/null || true
-    fi
+    # Web panel is now installed on-demand via menu [P] → [1].
+    # Files live in webpanel/ in the repo and are copied to /tmp/z2k/webpanel
+    # by z2k.sh bootstrap; install.sh leaves the router filesystem alone.
 
     # Copy snapshot domain lists for local install flow (no external list repos)
     if [ -d "${WORK_DIR}/files/lists" ]; then
