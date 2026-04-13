@@ -530,6 +530,9 @@ beeline.tv
 ottai.com
 ipstream.one
 vkusvill.ru
+ozon.ru
+ozone.ru
+ozonusercontent.com
 
 # === Steam ===
 s.team
