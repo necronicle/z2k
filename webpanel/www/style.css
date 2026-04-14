@@ -172,6 +172,43 @@ body {
 }
 .sponsor-card .credits-name { color: var(--accent); }
 
+/* ---------- STATE TABLE (Phase 3 rotator viewer) ---------- */
+.state-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.state-table th,
+.state-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.state-table th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.state-table tbody tr:hover {
+  background: var(--bg-card-hover);
+}
+.state-table .state-strategy {
+  font-family: ui-monospace, monospace;
+  color: var(--accent);
+}
+.state-table .state-age {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.state-table .btn-danger {
+  padding: 2px 8px;
+  min-width: auto;
+  font-size: 14px;
+  line-height: 1;
+}
+
 /* ---------- STATUS GRID ---------- */
 .status-grid {
   display: grid;

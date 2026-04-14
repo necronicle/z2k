@@ -272,3 +272,107 @@ tail_healthcheck_log() {
         echo "(no healthcheck log)"
     fi
 }
+
+# --- diag (Phase 3) ---
+#
+# Runs z2k-diag.sh in full mode. The raw output is a plain-text multi-section
+# report designed for copy-paste. API caller embeds it as a JSON string and
+# the UI renders it inside a <pre> block.
+
+diag_run() {
+    local diag="$ZAPRET2_DIR/z2k-diag.sh"
+    if [ ! -x "$diag" ]; then
+        echo "(z2k-diag.sh not installed — reinstall z2k to get it)"
+        return 0
+    fi
+    sh "$diag" 2>&1
+}
+
+# --- rotator state (Phase 3) ---
+#
+# /opt/zapret2/extra_strats/cache/autocircular/state.tsv is a tab-separated
+# file maintained by z2k-autocircular.lua. Format:
+#   key\thost\tstrategy\tts
+# Lines starting with # are comments (header). Empty lines are skipped.
+
+STATE_FILE="${STATE_FILE:-$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv}"
+
+state_read() {
+    [ -f "$STATE_FILE" ] || return 0
+    grep -vE '^(#|[[:space:]]*$)' "$STATE_FILE" 2>/dev/null
+}
+
+# Delete one row by host+key. Host and key together uniquely identify a row.
+# The service restarts so the rotator starts fresh for that host on the next
+# attempt (equivalent to the manual `sed` fix we've been using in chat).
+state_delete() {
+    local key="$1" host="$2"
+    [ -z "$key" ] && { echo "key required" >&2; return 1; }
+    [ -z "$host" ] && { echo "host required" >&2; return 1; }
+    # Sanitize: key is [a-z0-9_], host has letters/digits/dots/dashes only.
+    case "$key"  in *[!a-zA-Z0-9_]*) echo "bad key" >&2; return 1 ;; esac
+    case "$host" in *[!a-zA-Z0-9.-]*) echo "bad host" >&2; return 1 ;; esac
+    [ -f "$STATE_FILE" ] || return 0
+    # In-place rewrite preserving inode.
+    local tmp="$STATE_FILE.z2k-new"
+    grep -vE "^${key}[[:space:]]+${host}[[:space:]]" "$STATE_FILE" > "$tmp" \
+        || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$STATE_FILE"
+    rm -f "$tmp"
+    chmod 644 "$STATE_FILE" 2>/dev/null || true
+    restart_service_if_running
+}
+
+# --- geosite (Phase 3) ---
+
+geosite_run_async() {
+    local gs="$ZAPRET2_DIR/z2k-geosite.sh"
+    [ -x "$gs" ] || { echo "z2k-geosite.sh missing" >&2; return 1; }
+    local job_id
+    job_id=$(date +%s)$$
+    (
+        sh "$gs" fetch > "/tmp/z2k-job-$job_id.log" 2>&1
+        echo "$?" > "/tmp/z2k-job-$job_id.exit"
+    ) &
+    echo "$!" > "/tmp/z2k-job-$job_id.pid"
+    printf '%s' "$job_id"
+}
+
+toggle_geosite_enabled() {
+    local want="$1"
+    set_flag "GEOSITE_ENABLED" "$want" "$CONFIG_FILE" || return 1
+    # No service restart needed — geosite just populates the staging tree.
+}
+
+# --- debug flag (Phase 3) ---
+#
+# Touch/rm /opt/zapret2/extra_strats/cache/autocircular/debug.flag. When
+# present, z2k-autocircular.lua writes per-packet decisions to
+# /opt/zapret2/extra_strats/cache/autocircular/debug.log. Useful for
+# debugging silent-stuck rotator behavior.
+
+debug_flag_path() {
+    printf '%s' "$ZAPRET2_DIR/extra_strats/cache/autocircular/debug.flag"
+}
+
+debug_flag_state() {
+    if [ -f "$(debug_flag_path)" ]; then
+        printf '1'
+    else
+        printf '0'
+    fi
+}
+
+debug_flag_set() {
+    local want="$1"
+    local p
+    p=$(debug_flag_path)
+    mkdir -p "$(dirname "$p")" 2>/dev/null
+    if [ "$want" = "1" ]; then
+        touch "$p" 2>/dev/null && return 0
+        return 1
+    else
+        rm -f "$p" 2>/dev/null
+        return 0
+    fi
+}

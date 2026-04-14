@@ -284,6 +284,95 @@ case "$method $path" in
         exit 0
         ;;
 
+    # ---------- DIAG (Phase 3) ----------
+    "GET /diag")
+        diag_content=$(diag_run)
+        json_header
+        printf '{"ok":true,"diag":'
+        json_string "$diag_content"
+        printf '}\n'
+        exit 0
+        ;;
+
+    # ---------- ROTATOR STATE (Phase 3) ----------
+    "GET /state")
+        json_header
+        printf '{"ok":true,"entries":['
+        first=1
+        state_read | while IFS="$(printf '\t')" read -r skey shost sstrategy sts; do
+            [ -z "$skey" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            printf '{"key":'; json_string "$skey"
+            printf ',"host":'; json_string "$shost"
+            printf ',"strategy":'; json_string "${sstrategy:-0}"
+            printf ',"ts":%s}' "${sts:-0}"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+
+    "POST /state/delete")
+        body=$(read_body)
+        s_key=$(form_value "$body" "key")
+        s_host=$(form_value "$body" "host")
+        [ -z "$s_key" ] || [ -z "$s_host" ] && json_fail "400 Bad Request" "key and host required"
+        state_delete "$s_key" "$s_host" || json_fail "400 Bad Request" "delete failed"
+        json_ok
+        ;;
+
+    # ---------- GEOSITE (Phase 3) ----------
+    "POST /toggle/geosite-enabled")
+        body=$(read_body)
+        val=$(form_value "$body" "value")
+        [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
+        case "$val" in
+            0|1) ;;
+            *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
+        esac
+        toggle_geosite_enabled "$val" || json_fail "500" "toggle failed"
+        json_ok
+        ;;
+
+    "POST /geosite/update")
+        job_id=$(geosite_run_async) || json_fail "500" "failed to start"
+        json_header
+        printf '{"ok":true,"job":'
+        json_string "$job_id"
+        printf '}\n'
+        exit 0
+        ;;
+
+    "GET /geosite/status")
+        gs_flag=$(read_flag "GEOSITE_ENABLED" "$CONFIG_FILE" "0")
+        staging_count=0
+        staging_dir="$ZAPRET2_DIR/files/lists/extra_strats/GEO"
+        if [ -d "$staging_dir" ]; then
+            staging_count=$(find "$staging_dir" -name 'List.txt' 2>/dev/null | wc -l | tr -d ' ')
+        fi
+        json_header
+        printf '{"ok":true,"enabled":"%s","staging_count":%s}\n' "$gs_flag" "$staging_count"
+        exit 0
+        ;;
+
+    # ---------- DEBUG FLAG (Phase 3) ----------
+    "GET /debug")
+        json_header
+        printf '{"ok":true,"enabled":"%s"}\n' "$(debug_flag_state)"
+        exit 0
+        ;;
+
+    "POST /debug")
+        body=$(read_body)
+        val=$(form_value "$body" "value")
+        [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
+        case "$val" in
+            0|1) ;;
+            *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
+        esac
+        debug_flag_set "$val" || json_fail "500" "debug set failed"
+        json_ok
+        ;;
+
     # ---------- DEFAULT ----------
     *)
         json_fail "404 Not Found" "no such endpoint: $method $path"

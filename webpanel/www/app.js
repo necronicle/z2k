@@ -45,6 +45,9 @@
     toggles: renderToggles,
     whitelist: renderWhitelist,
     logs: renderLogs,
+    state: renderState,
+    diag: renderDiag,
+    geosite: renderGeosite,
     credits: renderCredits,
   };
   function navigate() {
@@ -353,6 +356,200 @@
       setTimeout(poll, 1000);
     }
     poll();
+  }
+
+  // ---------- Rotator state (Phase 3) ----------
+  async function renderState() {
+    $app.innerHTML = `
+      <h1 class="page-title">Rotator state</h1>
+      <div class="card">
+        <h3>Выбранные стратегии по доменам</h3>
+        <p class="desc">
+          autocircular запоминает для каждого ключ/домен какая стратегия
+          сейчас используется. Застрял на неработающей — кнопка × слева
+          удалит запись, rotator стартанёт с первой стратегии при
+          следующей попытке.
+        </p>
+        <div class="btn-row" style="margin-bottom:10px">
+          <button class="btn" id="state-refresh">Обновить</button>
+        </div>
+        <div id="state-body">Загрузка…</div>
+      </div>
+    `;
+    document.getElementById("state-refresh").addEventListener("click", loadState);
+    loadState();
+  }
+
+  async function loadState() {
+    const body = document.getElementById("state-body");
+    if (!body) return;
+    try {
+      const d = await apiGet("/state");
+      if (!d.entries || !d.entries.length) {
+        body.innerHTML = `<p style="color:var(--text-muted)">state.tsv пуст или отсутствует</p>`;
+        return;
+      }
+      const nowSec = Math.floor(Date.now() / 1000);
+      const rows = d.entries.map(e => {
+        const age = nowSec - Number(e.ts || 0);
+        const ageStr = age < 60 ? age + "с" :
+                       age < 3600 ? Math.floor(age / 60) + "м" :
+                       age < 86400 ? Math.floor(age / 3600) + "ч" :
+                       Math.floor(age / 86400) + "д";
+        return `
+          <tr>
+            <td>
+              <button class="btn btn-danger state-del"
+                      data-key="${escapeHtml(e.key)}"
+                      data-host="${escapeHtml(e.host)}">×</button>
+            </td>
+            <td>${escapeHtml(e.key)}</td>
+            <td>${escapeHtml(e.host)}</td>
+            <td class="state-strategy">${escapeHtml(e.strategy)}</td>
+            <td class="state-age">${ageStr}</td>
+          </tr>
+        `;
+      }).join("");
+      body.innerHTML = `
+        <table class="state-table">
+          <thead>
+            <tr><th></th><th>Профиль</th><th>Домен</th><th>Стратегия</th><th>Возраст</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      body.querySelectorAll(".state-del").forEach(btn => {
+        btn.addEventListener("click", () => stateDelete(btn.dataset.key, btn.dataset.host));
+      });
+    } catch (e) {
+      body.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  async function stateDelete(key, host) {
+    if (!confirm(`Удалить запись rotator для ${host} (${key})?\n\nrotator стартанёт с первой стратегии при следующей попытке.`)) return;
+    try {
+      await apiPost("/state/delete", { key, host });
+      toast("Удалено");
+      loadState();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
+  // ---------- Diag (Phase 3) ----------
+  async function renderDiag() {
+    $app.innerHTML = `
+      <h1 class="page-title">Диагностика</h1>
+      <div class="card">
+        <h3>Сводка z2k-diag</h3>
+        <p class="desc">
+          Снимок всего, что мы обычно спрашиваем при траблшутинге: версия,
+          архитектура, сервис, iptables, tunnel, rotator state, последние
+          логи. Скопируй и пришли в чат проекта когда что-то не работает.
+        </p>
+        <div class="btn-row" style="margin-bottom:10px">
+          <button class="btn" id="diag-refresh">Обновить</button>
+          <button class="btn" id="diag-copy">Копировать</button>
+        </div>
+        <pre class="log" id="diag-output">Загрузка…</pre>
+      </div>
+    `;
+    document.getElementById("diag-refresh").addEventListener("click", loadDiag);
+    document.getElementById("diag-copy").addEventListener("click", () => {
+      const text = document.getElementById("diag-output").textContent;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => toast("Скопировано")).catch(() => toast("Не удалось скопировать", "bad"));
+      } else {
+        toast("Clipboard API недоступен (старый браузер)", "bad");
+      }
+    });
+    loadDiag();
+  }
+
+  async function loadDiag() {
+    const el = document.getElementById("diag-output");
+    if (!el) return;
+    el.textContent = "Загрузка…";
+    try {
+      const d = await apiGet("/diag");
+      el.textContent = d.diag || "(пусто)";
+    } catch (e) {
+      el.textContent = "Ошибка: " + e.message;
+    }
+  }
+
+  // ---------- Geosite (Phase 3) ----------
+  async function renderGeosite() {
+    $app.innerHTML = `
+      <h1 class="page-title">Geosite</h1>
+      <div class="card">
+        <h3>v2fly/domain-list-community</h3>
+        <p class="desc">
+          Авто-обновляемые доменные списки из открытого репозитория
+          v2fly. Phase 2: только staging (не трогает production-списки),
+          Phase 3 раскроет на consumption через webpanel отдельно.
+        </p>
+        <div id="geosite-status">Загрузка…</div>
+        <div class="btn-row" style="margin-top:12px">
+          <label class="switch">
+            <input type="checkbox" id="geosite-toggle" disabled>
+            <span class="slider"></span>
+          </label>
+          <span style="margin-left:10px">Ежедневный рефреш</span>
+        </div>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn btn-primary" id="geosite-fetch">Принудительно обновить сейчас</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("geosite-fetch").addEventListener("click", geositeFetch);
+    const box = document.getElementById("geosite-toggle");
+    box.addEventListener("change", () => geositeToggleClick(box));
+    loadGeositeStatus();
+  }
+
+  async function loadGeositeStatus() {
+    const st = document.getElementById("geosite-status");
+    if (!st) return;
+    try {
+      const d = await apiGet("/geosite/status");
+      const box = document.getElementById("geosite-toggle");
+      box.checked = d.enabled === "1";
+      box.disabled = false;
+      st.innerHTML = `
+        <p>
+          Статус: <strong>${d.enabled === "1" ? "включено" : "выключено"}</strong><br>
+          Staging-файлов в /opt/zapret2/files/lists/extra_strats/GEO/: <strong>${d.staging_count}</strong>
+        </p>
+      `;
+    } catch (e) {
+      st.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  async function geositeToggleClick(box) {
+    const wanted = box.checked ? "1" : "0";
+    try {
+      await apiPost("/toggle/geosite-enabled", { value: wanted });
+      toast(wanted === "1" ? "Geosite включён" : "Geosite выключен");
+      loadGeositeStatus();
+    } catch (e) {
+      box.checked = !box.checked;
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
+  async function geositeFetch() {
+    let resp;
+    try {
+      resp = await apiPost("/geosite/update");
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+      return;
+    }
+    openJobModal("Geosite fetch", resp.job);
+    setTimeout(loadGeositeStatus, 2000);
   }
 
   // ---------- Credits ----------
