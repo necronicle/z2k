@@ -285,10 +285,14 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
-    # RKN: всегда добавляем failure_detector=z2k_tls_alert_fatal.
-    # Без него circular слеп к ТСПУ-блокировкам (TLS alert от DPI не детектится,
-    # ротация не происходит). Убирали из-за false positives на YouTube,
-    # но для РКН это единственный надёжный детектор.
+    # RKN: всегда добавляем failure_detector=z2k_tls_stalled.
+    # Это superset z2k_tls_alert_fatal — наследует все его сигналы (retrans,
+    # incoming RST, HTTP DPI redirect, TLS fatal alert) и добавляет
+    # timeout-based детект «ClientHello ушёл, ServerHello так и не пришёл
+    # за 10 секунд». Это ловит silent-стопы Ростелекома (cloudflare.com,
+    # meet.google.com, discord.com), где TCP-уровень работает, а TLS
+    # молча виснет — без этого детектора circular не видит фейла и
+    # застревает на сломанной стратегии навсегда.
     ensure_rkn_failure_detector() {
         local input="$1"
         local out=""
@@ -299,7 +303,7 @@ AUSTERUS_OPT
                 --lua-desync=circular:*)
                     case "$token" in
                         *failure_detector=*) ;;
-                        *) token="${token}:failure_detector=z2k_tls_alert_fatal" ;;
+                        *) token="${token}:failure_detector=z2k_tls_stalled" ;;
                     esac
                     ;;
             esac

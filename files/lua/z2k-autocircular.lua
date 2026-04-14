@@ -1165,6 +1165,80 @@ function z2k_tls_alert_fatal(desync, crec)
   return true
 end
 
+-- Stalled TLS handshake detector — superset of z2k_tls_alert_fatal.
+--
+-- Inherits all of z2k_tls_alert_fatal's signals (retrans, incoming RST,
+-- HTTP DPI redirect, TLS fatal alert) and adds one more: if we've seen
+-- an outgoing TLS ClientHello and no incoming ServerHello arrived within
+-- Z2K_TLS_STALLED_SEC seconds, classify as a failure.
+--
+-- Why it exists: some ISPs (observed on Ростелеком against cloudflare.com,
+-- meet.google.com, discord.com) accept the TCP handshake and ACK our
+-- modified ClientHello at L4, but silently drop it at the application
+-- layer — no RST, no TLS alert, no response at all. The TCP client
+-- doesn't retransmit because data was ACK'd, so standard_failure_detector
+-- sees nothing, standard_success_detector may even mark the flow as
+-- successful once seqspace crosses 4K, and circular pins itself to the
+-- broken strategy forever. This detector breaks that stall by using a
+-- time-based heuristic: CH with no SH after N seconds == fail.
+--
+-- Callback timing caveat: nfqws2 is packet-driven. The stall check only
+-- runs when *some* packet crosses the filter (browser retry, TCP keepalive,
+-- FIN on tab close, or the next request). Purely silent flows without
+-- any packet activity won't trigger the check until something does flow.
+-- In practice browsers retry quickly enough for this to work.
+--
+-- Tuning: 10s is deliberately conservative to avoid false positives on
+-- slow legitimate servers (overloaded CDNs, satellite links). Combined
+-- with the rotator's fails=3, it takes roughly 30s of consistent stalls
+-- before circular rotates — noticeable delay on the first bad flow, but
+-- self-healing on subsequent attempts.
+local Z2K_TLS_STALLED_SEC = 10
+
+function z2k_tls_stalled(desync, crec)
+  -- Inherit existing fail signals
+  if type(z2k_tls_alert_fatal) == "function" then
+    local ok, res = pcall(z2k_tls_alert_fatal, desync, crec)
+    if ok and res then return true end
+  end
+
+  if not desync or not crec then return false end
+  local now = os.time and os.time() or 0
+  if now == 0 then return false end
+
+  -- Outgoing ClientHello: mark timestamp on first seen
+  if desync.outgoing and desync.l7payload == "tls_client_hello" then
+    if not crec.z2k_ch_time then
+      crec.z2k_ch_time = now
+    end
+    return false
+  end
+
+  -- Incoming ServerHello: handshake progressing, clear tracking
+  if not desync.outgoing and desync.l7payload == "tls_server_hello" then
+    crec.z2k_ch_time = nil
+    return false
+  end
+
+  -- Stall check: CH tracked, timeout elapsed, no SH seen
+  if crec.z2k_ch_time then
+    local elapsed = now - crec.z2k_ch_time
+    if elapsed >= Z2K_TLS_STALLED_SEC then
+      if type(DLOG) == "function" then
+        local host = "?"
+        if desync.track and desync.track.hostname then
+          host = tostring(desync.track.hostname)
+        end
+        DLOG("z2k_tls_stalled: ClientHello sent " .. elapsed .. "s ago, no ServerHello, host=" .. host)
+      end
+      crec.z2k_ch_time = nil
+      return true
+    end
+  end
+
+  return false
+end
+
 -- Conservative success detector for TCP profiles.
 -- Detects success but does NOT reset host failure counters.
 -- This is important for TV clients: successful handshakes from other devices
