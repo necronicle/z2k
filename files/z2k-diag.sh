@@ -147,6 +147,7 @@ print_version_host() {
         nfqws_ver="(nfqws2 binary missing at $nfqws_bin)"
     fi
     printf 'nfqws2            : %s\n' "$nfqws_ver"
+    printf 'nfqws2 fork       : necronicle/zapret2-z2k (based on bol-van/zapret2)\n'
 
     local lan_ip
     lan_ip=$(get_lan_ip)
