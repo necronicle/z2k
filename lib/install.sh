@@ -784,8 +784,8 @@ step_build_zapret2() {
         chmod +x "${ZAPRET2_DIR}/z2k-blocked-monitor.sh" 2>/dev/null || true
     fi
 
-    # Install z2k tools (healthcheck, config validator, list updater, diagnostics)
-    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh; do
+    # Install z2k tools (healthcheck, config validator, list updater, diagnostics, geosite)
+    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh; do
         if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
             cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true

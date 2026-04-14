@@ -330,8 +330,8 @@ download_init_script() {
         die "Ошибка загрузки files/z2k-blocked-monitor.sh"
     fi
 
-    # z2k tools (healthcheck, config validator, list updater, diagnostics)
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh; do
+    # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite)
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then

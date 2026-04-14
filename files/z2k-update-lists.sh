@@ -140,6 +140,23 @@ main() {
         "${ZAPRET2_DIR}/lists/game_ips.txt"
     [ $? -eq 2 ] && changes=$((changes + 1))
 
+    # Geosite — opt-in via GEOSITE_ENABLED=1 in /opt/zapret2/config. When
+    # enabled, refresh v2fly/domain-list-community staging files under
+    # ${ZAPRET2_DIR}/files/lists/extra_strats/GEO/. This does NOT replace
+    # any existing production lists in Phase 2 — it only writes staging
+    # data that Phase 3 (webpanel) will expose for opt-in consumption.
+    local geosite_enabled
+    geosite_enabled=$(grep -E '^GEOSITE_ENABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null \
+        | tail -1 | sed 's/^GEOSITE_ENABLED=//' | tr -d '"' 2>/dev/null)
+    if [ "$geosite_enabled" = "1" ] && [ -x "${ZAPRET2_DIR}/z2k-geosite.sh" ]; then
+        log_msg "Geosite enabled — refreshing staging lists..."
+        if sh "${ZAPRET2_DIR}/z2k-geosite.sh" fetch >>"$LOG_FILE" 2>&1; then
+            log_msg "Geosite refresh OK"
+        else
+            log_msg "WARN: geosite refresh failed (see log)"
+        fi
+    fi
+
     if [ "$changes" -gt 0 ]; then
         log_msg "Changes detected ($changes lists), restarting service..."
         if [ -x "$INIT_SCRIPT" ]; then

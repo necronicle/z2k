@@ -107,11 +107,12 @@ MENU
 [H] Health check (проверка работоспособности)
 [V] Валидация конфигурации
 [D] Диагностика (сводка для траблшутинга)
+[L] Geosite (v2fly доменные списки)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V,D]: "
+        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V,D,L]: "
         read_input choice
 
         case "$choice" in
@@ -165,6 +166,9 @@ MENU
                 ;;
             d|D)
                 menu_diag
+                ;;
+            l|L)
+                menu_geosite
                 ;;
             0)
                 print_info "Выход из меню"
@@ -332,6 +336,97 @@ menu_diag() {
     printf "\n"
     print_info "Сводка готова. Скопируй вывод выше и пришли в чат проекта при необходимости."
     pause
+}
+
+menu_geosite() {
+    clear_screen
+    print_header "[L] Geosite (v2fly доменные списки)"
+
+    local config_file="${ZAPRET2_DIR}/config"
+    local geosite_script="${ZAPRET2_DIR}/z2k-geosite.sh"
+
+    if [ ! -f "$geosite_script" ]; then
+        print_error "Скрипт geosite не найден: $geosite_script"
+        print_info "Переустановите z2k для получения скрипта"
+        pause
+        return
+    fi
+
+    local enabled
+    enabled=$(safe_config_read "GEOSITE_ENABLED" "$config_file" "0")
+
+    print_separator
+    print_info "Статус: $([ "$enabled" = "1" ] && echo 'Включено' || echo 'Выключено')"
+    print_info "Источник: v2fly/domain-list-community (обновляется ежедневно)"
+    print_separator
+    printf "\n"
+    print_info "Staging каталог: ${ZAPRET2_DIR}/files/lists/extra_strats/GEO/"
+    sh "$geosite_script" status 2>/dev/null
+    print_separator
+
+    cat <<'GEOMENU'
+
+Geosite скачивает доменные списки из открытого репозитория v2fly
+и кладёт их как staging-файлы под files/lists/extra_strats/GEO/.
+Phase 2 не заменяет существующие списки автоматически — это опция
+будущих фаз (webpanel). Сейчас можно посмотреть что доступно и
+включить ежедневный рефреш через z2k-update-lists.sh.
+
+[1] Включить (ежедневный рефреш через cron update-lists)
+[2] Выключить
+[3] Принудительный рефреш сейчас
+[4] Показать одну категорию (без записи)
+[5] Список staging-файлов
+[B] Назад
+
+GEOMENU
+    printf "Выберите опцию [1-5,B]: "
+    read_input gs_choice
+
+    case "$gs_choice" in
+        1)
+            if grep -q '^GEOSITE_ENABLED=' "$config_file"; then
+                sed -i 's/^GEOSITE_ENABLED=.*/GEOSITE_ENABLED=1/' "$config_file"
+            else
+                echo "GEOSITE_ENABLED=1" >> "$config_file"
+            fi
+            print_success "Geosite включён. Следующий update-lists подтянет списки."
+            pause
+            ;;
+        2)
+            if grep -q '^GEOSITE_ENABLED=' "$config_file"; then
+                sed -i 's/^GEOSITE_ENABLED=.*/GEOSITE_ENABLED=0/' "$config_file"
+            fi
+            print_success "Geosite выключен"
+            pause
+            ;;
+        3)
+            print_info "Запуск geosite fetch..."
+            sh "$geosite_script" fetch
+            pause
+            ;;
+        4)
+            printf "Введите имя категории (например telegram, discord, youtube): "
+            read_input gs_cat
+            if [ -n "$gs_cat" ]; then
+                sh "$geosite_script" show "$gs_cat" | head -30
+                printf "\n"
+                print_info "(показаны первые 30 строк)"
+            fi
+            pause
+            ;;
+        5)
+            sh "$geosite_script" status
+            pause
+            ;;
+        [Bb])
+            return 0
+            ;;
+        *)
+            print_error "Неверный выбор: $gs_choice"
+            pause
+            ;;
+    esac
 }
 
 # ==============================================================================
