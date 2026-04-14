@@ -331,7 +331,7 @@ download_init_script() {
     fi
 
     # z2k tools (healthcheck, config validator, list updater)
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh; do
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
@@ -340,6 +340,16 @@ download_init_script() {
             print_warning "Не удалось загрузить files/${tool_name} (необязательный)"
         fi
     done
+
+    # Keenetic NDM netfilter.d hook for auto-restoring TG REDIRECT rules.
+    mkdir -p "${files_dir}/ndm"
+    url="${GITHUB_RAW}/files/ndm/90-z2k-tg-redirect.sh"
+    output="${files_dir}/ndm/90-z2k-tg-redirect.sh"
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        print_success "Загружено: files/ndm/90-z2k-tg-redirect.sh"
+    else
+        print_warning "Не удалось загрузить ndm hook (iptables не будут авто-восстанавливаться)"
+    fi
 
     # Web panel source tree — downloaded only if user installs via menu [P].
     # z2k.sh bootstraps files into /tmp/z2k/; install.sh copies from /tmp/z2k/webpanel.

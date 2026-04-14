@@ -1708,6 +1708,19 @@ step_finalize() {
                 iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
                     iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
             done
+
+            # Install Keenetic netfilter.d hook so NDM re-inserts our
+            # REDIRECT rules automatically after every regen (WAN flap,
+            # tunnel up/down, reboot, etc). Without this, rules get
+            # silently wiped and Android Telegram (which doesn't use
+            # MTProxy Premium like desktop does) stops connecting.
+            mkdir -p /opt/etc/ndm/netfilter.d
+            if [ -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" ]; then
+                cp -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" \
+                      /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
+                chmod +x /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
+                print_success "Keenetic NDM hook установлен (auto-restore iptables)"
+            fi
             # Install watchdog — active end-to-end probe + CONNECT_FAIL storm
             # detector. Runs every minute via cron. Restarts the tunnel via
             # the init script (handles iptables + pid file properly).
