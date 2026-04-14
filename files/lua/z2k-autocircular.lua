@@ -1169,8 +1169,9 @@ end
 --
 -- Inherits all of z2k_tls_alert_fatal's signals (retrans, incoming RST,
 -- HTTP DPI redirect, TLS fatal alert) and adds one more: if we've seen
--- an outgoing TLS ClientHello and no incoming ServerHello arrived within
--- Z2K_TLS_STALLED_SEC seconds, classify as a failure.
+-- an outgoing TLS ClientHello for a host and no incoming ServerHello
+-- arrived within Z2K_TLS_STALLED_SEC seconds, classify the NEXT attempt
+-- to that host as a failure.
 --
 -- Why it exists: some ISPs (observed on Ростелеком against cloudflare.com,
 -- meet.google.com, discord.com) accept the TCP handshake and ACK our
@@ -1179,21 +1180,34 @@ end
 -- doesn't retransmit because data was ACK'd, so standard_failure_detector
 -- sees nothing, standard_success_detector may even mark the flow as
 -- successful once seqspace crosses 4K, and circular pins itself to the
--- broken strategy forever. This detector breaks that stall by using a
--- time-based heuristic: CH with no SH after N seconds == fail.
+-- broken strategy forever.
 --
--- Callback timing caveat: nfqws2 is packet-driven. The stall check only
--- runs when *some* packet crosses the filter (browser retry, TCP keepalive,
--- FIN on tab close, or the next request). Purely silent flows without
--- any packet activity won't trigger the check until something does flow.
--- In practice browsers retry quickly enough for this to work.
+-- Per-host design: nfqws2 detectors are packet-driven, so a purely silent
+-- flow never triggers a second callback for its own crec — the detector
+-- can only *record* on the outgoing CH and never gets another chance to
+-- check elapsed time. An earlier attempt used a per-crec timestamp and
+-- failed in the field because the timeout check had nobody to run it.
+-- This version keeps a PROCESS-GLOBAL map `host → last CH timestamp`
+-- that persists across connections. On every new CH for the same host,
+-- we compare to the previous timestamp and, if elapsed exceeds the
+-- threshold without any intervening ServerHello having cleared the
+-- entry, we count this attempt as a failure.
 --
--- Tuning: 10s is deliberately conservative to avoid false positives on
--- slow legitimate servers (overloaded CDNs, satellite links). Combined
--- with the rotator's fails=3, it takes roughly 30s of consistent stalls
--- before circular rotates — noticeable delay on the first bad flow, but
--- self-healing on subsequent attempts.
+-- Failure signal kicks in starting from the SECOND attempt that occurs
+-- more than Z2K_TLS_STALLED_SEC after the first. Combined with circular's
+-- fails=3 this means roughly 4-5 stalled attempts from the user before
+-- the rotator advances to the next strategy.
+--
+-- 10s timeout is deliberately conservative — legitimate slow servers
+-- (overloaded CDNs, satellite links) usually finish the TLS handshake
+-- well under that. If field testing shows false positives, bump up.
+--
+-- Memory: the host map grows monotonically. For a router gateway the
+-- distinct hostname set stabilises in the low thousands, each entry is
+-- roughly 50 bytes — <100 KB even under heavy use. ServerHello clears
+-- entries for working hosts, so only actually-stuck hosts accumulate.
 local Z2K_TLS_STALLED_SEC = 10
+local z2k_tls_stalled_host_ts = {}
 
 function z2k_tls_stalled(desync, crec)
   -- Inherit existing fail signals
@@ -1202,38 +1216,37 @@ function z2k_tls_stalled(desync, crec)
     if ok and res then return true end
   end
 
-  if not desync or not crec then return false end
+  if not desync then return false end
+  local host = desync.track and desync.track.hostname
+  if not host or host == "" then return false end
   local now = os.time and os.time() or 0
   if now == 0 then return false end
 
-  -- Outgoing ClientHello: mark timestamp on first seen
-  if desync.outgoing and desync.l7payload == "tls_client_hello" then
-    if not crec.z2k_ch_time then
-      crec.z2k_ch_time = now
-    end
-    return false
-  end
-
-  -- Incoming ServerHello: handshake progressing, clear tracking
+  -- Incoming ServerHello: handshake progressing for this host, clear tracking
   if not desync.outgoing and desync.l7payload == "tls_server_hello" then
-    crec.z2k_ch_time = nil
+    z2k_tls_stalled_host_ts[host] = nil
     return false
   end
 
-  -- Stall check: CH tracked, timeout elapsed, no SH seen
-  if crec.z2k_ch_time then
-    local elapsed = now - crec.z2k_ch_time
-    if elapsed >= Z2K_TLS_STALLED_SEC then
-      if type(DLOG) == "function" then
-        local host = "?"
-        if desync.track and desync.track.hostname then
-          host = tostring(desync.track.hostname)
+  -- Outgoing ClientHello: check previous CH timestamp for this host
+  if desync.outgoing and desync.l7payload == "tls_client_hello" then
+    local prev = z2k_tls_stalled_host_ts[host]
+    if prev then
+      local elapsed = now - prev
+      if elapsed >= Z2K_TLS_STALLED_SEC then
+        if type(DLOG) == "function" then
+          DLOG("z2k_tls_stalled: host=" .. host .. " prev ClientHello " .. elapsed .. "s ago with no ServerHello — counting as fail")
         end
-        DLOG("z2k_tls_stalled: ClientHello sent " .. elapsed .. "s ago, no ServerHello, host=" .. host)
+        z2k_tls_stalled_host_ts[host] = now
+        return true
       end
-      crec.z2k_ch_time = nil
-      return true
+      -- Too early: update to more recent value but don't fail yet
+      z2k_tls_stalled_host_ts[host] = now
+      return false
     end
+    -- First attempt for this host: just record
+    z2k_tls_stalled_host_ts[host] = now
+    return false
   end
 
   return false
