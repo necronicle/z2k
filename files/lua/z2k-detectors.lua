@@ -165,6 +165,121 @@ function z2k_tls_stalled(desync, crec)
   return false
 end
 
+-- Mid-stream stall detector — superset of z2k_tls_stalled.
+--
+-- Catches the class of failure where TLS handshake completes cleanly,
+-- the server sends some initial data, then the data stream halts mid-
+-- transfer and never resumes. Pattern observed in the field on
+-- Ростелеком against *.cloudflare.com: first ~10-14KB burst arrives
+-- normally, then all subsequent packets are silently dropped upstream
+-- (no RST, no TLS alert, no FIN). The user's curl / browser waits on
+-- TCP read until the client-side timeout fires.
+--
+-- Why z2k_tls_stalled and the other detectors miss this class:
+-- - standard_failure_detector counts retransmits with payload > 0,
+--   but there's nothing to retransmit — server-side ACKs progressed
+--   normally, then server just stopped sending.
+-- - standard_success_detector with inseq=4K fires as soon as ~4KB
+--   incoming sequence accumulates, which happens well before the
+--   ~10-14KB stall. Once success is recorded, the flow is pinned to
+--   the current strategy and further events are ignored.
+-- - z2k_tls_stalled only activates when NO ServerHello has arrived
+--   yet; it exits early once SH is seen.
+--
+-- Design: process-global `host → state` map, same persistence style
+-- as z2k_tls_stalled. For each host we track `last_in_ts` — the
+-- timestamp of the most recent incoming packet that carried a non-
+-- empty payload. When we see a new outgoing ClientHello for that
+-- same host, we compare `now` to the previous `last_in_ts`. If the
+-- gap is ≥ Z2K_MID_STREAM_STALL_SEC, that means the previous flow
+-- received some data but then went silent for long enough that the
+-- user (or their browser) gave up and started a fresh connection.
+-- That's our stall signature.
+--
+-- Failure signal kicks in from the SECOND connection attempt onwards
+-- for a given host — identical flavor to z2k_tls_stalled's logic,
+-- since the first attempt has no prior state to compare against.
+-- Combined with the rotator's fails=3 it takes ~3 reload cycles
+-- (≈30-60 seconds of real-user retrying) before circular rotates.
+--
+-- Known limitations / false positive sources:
+--   - A user who opens a page, reads it for >15s, and reloads will
+--     trip this detector even if the original flow completed cleanly.
+--     With fails=3 this means three such reads-and-reloads in a row
+--     to the same host before rotation fires. Rare in normal use but
+--     possible for "reference pages" that people read slowly.
+--   - We do NOT inspect TCP FIN flags to distinguish "flow closed
+--     cleanly" from "flow stalled". Pure time-based heuristic.
+--   - Hosts visited only once never trigger this detector. That's
+--     correct for rotation (no repeat pattern to learn from) but
+--     also means one-shot failures are not caught here.
+--
+-- 15s threshold: conservative enough that short-response flows
+-- (<1s turnaround) don't leak into the "stall" bucket, yet short
+-- enough that a user actively retrying a broken page will trip it
+-- within 1-2 retry cycles. Tunable if field testing shows drift.
+--
+-- Memory: same profile as z2k_tls_stalled_host_ts. One entry per
+-- distinct hostname seen, ~60 bytes each. Hosts whose flows
+-- complete cleanly still populate the table but never trigger
+-- (because they get fresh CHs faster than the 15s threshold).
+local Z2K_MID_STREAM_STALL_SEC = 15
+local z2k_mid_stream_state = {}
+
+function z2k_mid_stream_stall(desync, crec)
+  -- Inherit everything z2k_tls_stalled catches (which in turn inherits
+  -- z2k_tls_alert_fatal → standard_failure_detector). Strict superset.
+  if type(z2k_tls_stalled) == "function" then
+    local ok, res = pcall(z2k_tls_stalled, desync, crec)
+    if ok and res then return true end
+  end
+
+  if not desync then return false end
+  local host = desync.track and desync.track.hostname
+  if not host or host == "" then return false end
+  local now = os.time and os.time() or 0
+  if now == 0 then return false end
+
+  -- Incoming packet with non-empty payload → this host's flow is
+  -- actively receiving data. Remember the timestamp.
+  if not desync.outgoing then
+    local dis = desync.dis
+    if dis and type(dis.payload) == "string" and #dis.payload > 0 then
+      local st = z2k_mid_stream_state[host]
+      if not st then
+        st = {}
+        z2k_mid_stream_state[host] = st
+      end
+      st.last_in_ts = now
+    end
+    return false
+  end
+
+  -- Outgoing ClientHello → start of a fresh connection to this host.
+  -- Check whether the previous flow left us in a "got some data, then
+  -- silence" state for more than the threshold.
+  if desync.outgoing and desync.l7payload == "tls_client_hello" then
+    local st = z2k_mid_stream_state[host]
+    if st and st.last_in_ts and st.last_in_ts > 0 then
+      local since_last_in = now - st.last_in_ts
+      if since_last_in >= Z2K_MID_STREAM_STALL_SEC then
+        if type(DLOG) == "function" then
+          DLOG("z2k_mid_stream_stall: host=" .. host ..
+               " prev flow received data " .. since_last_in ..
+               "s ago, no further traffic until now — counting as mid-stream stall fail")
+        end
+        -- Reset state so we don't repeatedly fail against the same
+        -- stale timestamp. Next attempt starts clean.
+        st.last_in_ts = 0
+        return true
+      end
+    end
+    return false
+  end
+
+  return false
+end
+
 -- Conservative success detector for TCP profiles.
 -- Detects success but does NOT reset host failure counters.
 -- This is important for TV clients: successful handshakes from other devices
