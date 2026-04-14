@@ -1,0 +1,62 @@
+#!/bin/sh
+# /opt/etc/init.d/S98tg-tunnel — Telegram tunnel init script.
+#
+# start/stop/restart the tg-mtproxy-client daemon and manage the iptables
+# REDIRECT rules that bounce Telegram DC traffic (TCP 443) into the
+# locally-bound tunnel at :1443. Inserted at the top of PREROUTING and
+# OUTPUT so our rules precede Keenetic's _NDM_* chains.
+#
+# Installed by lib/install.sh from files/init.d/S98tg-tunnel.
+# The NDM netfilter.d hook (/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh)
+# re-inserts these rules after every NDM-driven netfilter regen so they
+# survive WAN flaps / tunnel up-down / hotplug / reboot.
+
+BIN="/opt/sbin/tg-mtproxy-client"
+LOG="/tmp/tg-tunnel.log"
+PIDFILE="/var/run/tg-tunnel.pid"
+
+CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
+
+start() {
+    [ -x "$BIN" ] || exit 0
+    if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+        echo "tg-tunnel already running"
+        return 0
+    fi
+    echo "Starting tg-tunnel..."
+    $BIN --listen=:1443 -v >> "$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 2
+    # Insert REDIRECT rules at TOP of both PREROUTING and OUTPUT (-I 1) so
+    # they precede Keenetic's _NDM_* chains. PREROUTING catches forwarded
+    # traffic from LAN clients; OUTPUT catches locally-originated traffic
+    # from the router itself (e.g. the watchdog probe).
+    for cidr in $CIDRS; do
+        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+    done
+}
+
+stop() {
+    echo "Stopping tg-tunnel..."
+    killall tg-mtproxy-client 2>/dev/null
+    rm -f "$PIDFILE"
+    # Idempotent removal: drop every matching copy of the rule from both chains.
+    for cidr in $CIDRS; do
+        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+    done
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart}" ;;
+esac

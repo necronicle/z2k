@@ -436,6 +436,12 @@ LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 [ -f "$LUA_AUTO" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_AUTO"
 LUA_LOCKED="$ZAPRET_BASE/lua/locked.lua"
 [ -f "$LUA_LOCKED" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_LOCKED"
+# Detectors must load BEFORE autocircular: the rotator resolves
+# failure_detector=z2k_tls_stalled by global name when parsing profiles,
+# so the functions need to exist already. Autocircular still references
+# z2k_tls_alert_fatal via name-lookup after Phase 4 refactor.
+LUA_Z2K_DETECTORS="$ZAPRET_BASE/lua/z2k-detectors.lua"
+[ -f "$LUA_Z2K_DETECTORS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DETECTORS"
 LUA_Z2K_AUTOCIRCULAR="$ZAPRET_BASE/lua/z2k-autocircular.lua"
 [ -f "$LUA_Z2K_AUTOCIRCULAR" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_AUTOCIRCULAR"
 LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"

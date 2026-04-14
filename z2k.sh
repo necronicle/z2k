@@ -330,8 +330,8 @@ download_init_script() {
         die "Ошибка загрузки files/z2k-blocked-monitor.sh"
     fi
 
-    # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite)
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh; do
+    # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, tg watchdog)
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
@@ -340,6 +340,17 @@ download_init_script() {
             print_warning "Не удалось загрузить files/${tool_name} (необязательный)"
         fi
     done
+
+    # init scripts extracted from install.sh heredocs — tg-tunnel S98
+    # autostart gets installed into /opt/etc/init.d/ later by lib/install.sh
+    mkdir -p "${files_dir}/init.d"
+    url="${GITHUB_RAW}/files/init.d/S98tg-tunnel"
+    output="${files_dir}/init.d/S98tg-tunnel"
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        print_success "Загружено: files/init.d/S98tg-tunnel"
+    else
+        print_warning "Не удалось загрузить files/init.d/S98tg-tunnel (TG tunnel не будет автостартовать после ребута)"
+    fi
 
     # Keenetic NDM netfilter.d hook for auto-restoring TG REDIRECT rules.
     mkdir -p "${files_dir}/ndm"
@@ -373,6 +384,17 @@ download_init_script() {
     # z2k Lua helpers (e.g., persistent autocircular strategy memory)
     local lua_dir="${files_dir}/lua"
     mkdir -p "$lua_dir" || die "Не удалось создать $lua_dir"
+
+    # z2k-detectors.lua must be downloaded (and later loaded by nfqws2) BEFORE
+    # z2k-autocircular.lua — the rotator resolves failure_detector= by global
+    # name, and detectors live there after the Phase 4 module split.
+    url="${GITHUB_RAW}/files/lua/z2k-detectors.lua"
+    output="${lua_dir}/z2k-detectors.lua"
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        print_success "Загружено: files/lua/z2k-detectors.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-detectors.lua"
+    fi
 
     url="${GITHUB_RAW}/files/lua/z2k-autocircular.lua"
     output="${lua_dir}/z2k-autocircular.lua"
