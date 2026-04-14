@@ -54,10 +54,6 @@ AUSTERUS_OPT
         rkn_tcp=$(cat "${extra_strats_dir}/TCP/RKN/Strategy.txt")
     fi
 
-    if [ -f "${extra_strats_dir}/UDP/GAMES/Strategy.txt" ]; then
-        game_udp=$(cat "${extra_strats_dir}/UDP/GAMES/Strategy.txt")
-    fi
-
     # YouTube QUIC autocircular modern (12 strategies, z2k morph prioritized).
     # key=yt_quic ensures stable persistence key; nld=2 reduces churn on CDN subdomains.
     quic_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=yt_quic:nld=2 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=1 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=2 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=4 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=4 --lua-desync=drop:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=7 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=7 --lua-desync=drop:strategy=7 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=8 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=10 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=10 --lua-desync=drop:strategy=10 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=11 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=11 --lua-desync=drop:strategy=11 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=12"
@@ -80,12 +76,14 @@ AUSTERUS_OPT
     [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp="$default_strategy"
     [ -z "$rkn_tcp" ] && rkn_tcp="$default_strategy"
 
-    # Fallback for game UDP: same 6 strategies that used to be hardcoded below.
-    # Keeps mobile Roblox working even if extra_strats/UDP/GAMES/Strategy.txt
-    # is missing (e.g. partial curl fail during install).
-    if [ -z "$game_udp" ]; then
-        game_udp="--lua-desync=circular:fails=2:time=30:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n4 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64:out_range=-n3"
-    fi
+    # Game UDP strategy: custom z2k_game_udp Lua handler (rather than built-in
+    # fake, which drops repeats=N for UDP payloads). 6 variants rotated by
+    # circular with aggressive fails=1 — one bad flow → rotate — and a 60s
+    # observation window. Positive --ipset=game_ips.txt on the profile
+    # constrains the rotator to real Roblox AS22697 IPs so Discord/Steam
+    # noise doesn't burn the fails counter. Hardcoded inline (like quic_udp
+    # and discord_udp above) — no external Strategy.txt to sync.
+    game_udp="--lua-desync=circular:fails=1:time=60:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n4 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64:out_range=-n3"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.

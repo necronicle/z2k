@@ -140,12 +140,6 @@ main() {
         "${ZAPRET2_DIR}/lists/game_ips.txt"
     [ $? -eq 2 ] && changes=$((changes + 1))
 
-    # Game UDP strategies (6 z2k_game_udp variants + circular rotator)
-    update_list "Game UDP Strategy" \
-        "${GITHUB_RAW}/files/lists/extra_strats/UDP/GAMES/Strategy.txt" \
-        "${ZAPRET2_DIR}/extra_strats/UDP/GAMES/Strategy.txt"
-    [ $? -eq 2 ] && changes=$((changes + 1))
-
     if [ "$changes" -gt 0 ]; then
         log_msg "Changes detected ($changes lists), restarting service..."
         if [ -x "$INIT_SCRIPT" ]; then
