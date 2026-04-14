@@ -40,6 +40,7 @@ AUSTERUS_OPT
     local rkn_tcp=""
     local quic_udp=""
     local discord_udp=""
+    local game_udp=""
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
         youtube_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
@@ -51,6 +52,10 @@ AUSTERUS_OPT
 
     if [ -f "${extra_strats_dir}/TCP/RKN/Strategy.txt" ]; then
         rkn_tcp=$(cat "${extra_strats_dir}/TCP/RKN/Strategy.txt")
+    fi
+
+    if [ -f "${extra_strats_dir}/UDP/GAMES/Strategy.txt" ]; then
+        game_udp=$(cat "${extra_strats_dir}/UDP/GAMES/Strategy.txt")
     fi
 
     # YouTube QUIC autocircular modern (12 strategies, z2k morph prioritized).
@@ -74,6 +79,13 @@ AUSTERUS_OPT
     [ -z "$youtube_tcp" ] && youtube_tcp="$default_strategy"
     [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp="$default_strategy"
     [ -z "$rkn_tcp" ] && rkn_tcp="$default_strategy"
+
+    # Fallback for game UDP: same 6 strategies that used to be hardcoded below.
+    # Keeps mobile Roblox working even if extra_strats/UDP/GAMES/Strategy.txt
+    # is missing (e.g. partial curl fail during install).
+    if [ -z "$game_udp" ]; then
+        game_udp="--lua-desync=circular:fails=2:time=30:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n4 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64:out_range=-n3"
+    fi
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -117,6 +129,7 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(ensure_circular_nld2 "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
+    game_udp=$(ensure_circular_nld2 "$game_udp")
 
     # Let YouTube TLS circular operate exactly as in the upstream manual.
     # For LG webOS the orchestrator must see incoming packets on the circular
@@ -330,6 +343,17 @@ AUSTERUS_OPT
         fi
     }
 
+    # Game mode flag — evaluated once, used by game UDP profile below.
+    # New flag GAME_MODE_ENABLED with backwards-compat fallback to the
+    # legacy ROBLOX_UDP_BYPASS so routers running older z2k (that wrote
+    # only the legacy name) continue to flip correctly after update.
+    local game_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
+    local GAME_MODE_ENABLED
+    GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$game_conf" "")
+    if [ -z "$GAME_MODE_ENABLED" ]; then
+        GAME_MODE_ENABLED=$(safe_config_read "ROBLOX_UDP_BYPASS" "$game_conf" "0")
+    fi
+
     # RKN TCP (include Discord hostlist into RKN profile)
     local rkn_hostlists="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt"
     [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
@@ -353,38 +377,25 @@ AUSTERUS_OPT
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
 
-    # Game Filter UDP (custom protocols — needs payload=all to match unknown UDP)
-    # Autocircular rotates strategies with repeats / cutoff combinations.
+    # Game Filter UDP — custom protocols, unknown payloads. Uses a positive
+    # --ipset=game_ips.txt match so strategies fire ONLY on real game server
+    # IPs (Roblox AS22697, etc), not on random Discord/Steam/BitTorrent UDP
+    # that would otherwise exhaust the circular rotator's fails counter.
     #
-    # Uses z2k_game_udp (defined in files/lua/z2k-modern-core.lua) instead of
-    # the built-in `fake` primitive because upstream fake() in
-    # zapret-antidpi.lua does not pass options to rawsend, so `repeats=N` is
-    # silently dropped for UDP payloads — which broke every variant of the
-    # nfqws1 Roblox recipe (fake + repeats=10 + blob=unknown_udp). Our custom
-    # handler threads desync_opts through rawsend_dissect_ipfrag so repeats is
-    # actually applied, matching classic zapret1 behaviour. The blob alias is
-    # `quic_google` (registered in install.sh; the on-disk filename is
-    # quic_initial_www_google_com.bin).
-    local game_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local GAME_UDP_BYPASS
-    GAME_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$game_conf" "0")
-    if [ "$GAME_UDP_BYPASS" = "1" ]; then
+    # Strategies live in extra_strats/UDP/GAMES/Strategy.txt (built-in fallback
+    # is hardcoded above in case the file is missing). The z2k_game_udp Lua
+    # handler (files/lua/z2k-modern-core.lua) is used instead of built-in
+    # `fake` because upstream fake() drops `repeats=N` for UDP payloads; our
+    # handler threads desync_opts through rawsend_dissect_ipfrag so repeats
+    # is actually applied. Blob alias `quic_google` → quic_initial_www_google_com.bin.
+    #
+    # Gated by GAME_MODE_ENABLED (new) with backwards-compat fallback to
+    # ROBLOX_UDP_BYPASS (old) — evaluated above for the game TCP profile.
+    if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
         local ipset_excl="${lists_dir}/ipset-exclude.txt"
-        local game_ipset_opt=""
-        [ -f "$ipset_excl" ] && game_ipset_opt="--ipset-exclude=${ipset_excl} "
-        # Single profile: circular selector + 6 z2k_game_udp strategies. nfqws2
-        # picks exactly one profile per flow, so the circular MUST live in the
-        # same profile as the strategies it rotates. Keeping them in separate
-        # --new profiles (as prior revisions did) meant the circular profile
-        # matched first and the strategies were never reached.
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 ${game_ipset_opt}--in-range=a --out-range=a --payload=all \
---lua-desync=circular:fails=2:time=30:udp_in=1:udp_out=4:key=game_udp \
---lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n2 \
---lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n3 \
---lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n4 \
---lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n2 \
---lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n3 \
---lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64:out_range=-n3 --new\\n"
+        local game_ipset_excl_opt=""
+        [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=a --payload=all $game_udp --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
@@ -516,11 +527,17 @@ create_official_config() {
     local saved_DROP_DPI_RST="0"
     local saved_RKN_SILENT_FALLBACK="0"
     local saved_ROBLOX_UDP_BYPASS="0"
+    local saved_GAME_MODE_ENABLED=""
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
         saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
+        saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
     fi
+    # Backwards compat: if the new flag isn't set yet on this router,
+    # inherit the legacy ROBLOX_UDP_BYPASS value so a single create_official_config
+    # pass transparently migrates old configs to the new variable.
+    [ -z "$saved_GAME_MODE_ENABLED" ] && saved_GAME_MODE_ENABLED="$saved_ROBLOX_UDP_BYPASS"
 
     # Создать полный config файл
     cat > "$config_file" <<CONFIG
@@ -555,7 +572,7 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_ROBLOX_UDP_BYPASS:+$([ "$saved_ROBLOX_UDP_BYPASS" = "1" ] && echo ',1024-65535')}"
+NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_GAME_MODE_ENABLED:+$([ "$saved_GAME_MODE_ENABLED" = "1" ] && echo ',1024-65535')}"
 
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges
@@ -683,7 +700,8 @@ DROP_DPI_RST=${saved_DROP_DPI_RST}
 # Silent fallback for RKN
 RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 
-# Game filter
+# Game bypass (one toggle = two flags; legacy name kept for rollback safety)
+GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}
 ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
 EOF
 

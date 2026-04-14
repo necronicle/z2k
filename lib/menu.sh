@@ -1117,8 +1117,10 @@ menu_roblox_bypass() {
 
     cat <<'SUBMENU'
 
-UDP для игр (Roblox, и др.) на портах 1024-65535.
-Автоциркуляр подбирает рабочую стратегию автоматически.
+UDP+TCP игровой bypass (Roblox, Fortnite, Apex, Hypixel, и др.).
+Данные о поддерживаемых играх — в files/lists/game_ips.txt и
+extra_strats/TCP/GAMES/List.txt. Автоциркуляр подбирает рабочую
+стратегию, правит только IP игровых AS (без шума Discord/Steam).
 
 [1] Включить
 [2] Выключить
@@ -1131,13 +1133,24 @@ SUBMENU
 
     case "$sub_choice" in
         1)
+            # New flag (GAME_MODE_ENABLED) + legacy alias (ROBLOX_UDP_BYPASS)
+            # written in lockstep. config_official.sh prefers GAME_MODE_ENABLED
+            # and falls back to the legacy name, so old routers that haven't
+            # updated yet still flip correctly off the same toggle.
+            if grep -q '^GAME_MODE_ENABLED=' "$config_file"; then
+                sed -i 's/^GAME_MODE_ENABLED=.*/GAME_MODE_ENABLED=1/' "$config_file"
+            else
+                echo "GAME_MODE_ENABLED=1" >> "$config_file"
+            fi
             if grep -q '^ROBLOX_UDP_BYPASS=' "$config_file"; then
                 sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=1/' "$config_file"
             else
                 echo "ROBLOX_UDP_BYPASS=1" >> "$config_file"
             fi
 
-            # Add ephemeral ports to UDP if not present
+            # Add ephemeral UDP ports if not present. TCP game ports
+            # (443,2053,2083,2087,2096,8443) are already in the default
+            # NFQWS2_PORTS_TCP template — no action needed for TCP.
             if ! grep -q "1024-65535" "$config_file"; then
                 sed -i 's/^NFQWS2_PORTS_UDP="\(.*\)"/NFQWS2_PORTS_UDP="\1,1024-65535"/' "$config_file"
             fi
@@ -1166,9 +1179,11 @@ SUBMENU
                 return 0
             fi
 
+            # Flip both flags in lockstep (see enable branch for rationale).
+            sed -i 's/^GAME_MODE_ENABLED=.*/GAME_MODE_ENABLED=0/' "$config_file"
             sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=0/' "$config_file"
 
-            # Remove ephemeral ports
+            # Remove ephemeral UDP ports
             sed -i 's/,1024-65535//' "$config_file"
 
             print_success "Игровой режим выключен"

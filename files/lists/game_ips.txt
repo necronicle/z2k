@@ -1,0 +1,22 @@
+# z2k game bypass — destination IP ranges (CIDR, IPv4 and IPv6).
+#
+# Used as positive `--ipset=` match by BOTH game profiles:
+#   - UDP 1024-65535 (gameplay traffic)
+#   - TCP 443,2053,2083,2087,2096,8443 (TLS/HTTPS assets/auth)
+#
+# nfqws2 auto-reloads this file when modified.
+#
+# To add a new game, append its CIDRs under a commented section header.
+# No code changes needed — config_official.sh picks the file up via
+# --ipset= and the rest is data.
+
+# === Roblox (AS22697) ===
+128.116.0.0/17
+128.116.128.0/18
+23.173.192.0/24
+209.206.40.0/21
+204.9.184.0/24
+204.13.168.0/22
+205.201.62.0/24
+141.193.3.0/24
+103.140.28.0/23

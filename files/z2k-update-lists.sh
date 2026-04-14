@@ -128,10 +128,22 @@ main() {
         "${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt"
     [ $? -eq 2 ] && changes=$((changes + 1))
 
-    # Roblox IPs
+    # Roblox IPs (legacy path — kept for rollback safety, new installs use game_ips.txt)
     update_list "Roblox IPs" \
         "${GITHUB_RAW}/files/lists/roblox_ips.txt" \
         "${ZAPRET2_DIR}/lists/roblox_ips.txt"
+    [ $? -eq 2 ] && changes=$((changes + 1))
+
+    # Game IPs (Roblox AS22697 — used as positive --ipset by the game UDP profile)
+    update_list "Game IPs" \
+        "${GITHUB_RAW}/files/lists/game_ips.txt" \
+        "${ZAPRET2_DIR}/lists/game_ips.txt"
+    [ $? -eq 2 ] && changes=$((changes + 1))
+
+    # Game UDP strategies (6 z2k_game_udp variants + circular rotator)
+    update_list "Game UDP Strategy" \
+        "${GITHUB_RAW}/files/lists/extra_strats/UDP/GAMES/Strategy.txt" \
+        "${ZAPRET2_DIR}/extra_strats/UDP/GAMES/Strategy.txt"
     [ $? -eq 2 ] && changes=$((changes + 1))
 
     if [ "$changes" -gt 0 ]; then
