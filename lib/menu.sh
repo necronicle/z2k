@@ -106,11 +106,12 @@ MENU
 [B] Rollback (откат конфигурации)
 [H] Health check (проверка работоспособности)
 [V] Валидация конфигурации
+[D] Диагностика (сводка для траблшутинга)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V]: "
+        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V,D]: "
         read_input choice
 
         case "$choice" in
@@ -161,6 +162,9 @@ MENU
                 ;;
             v|V)
                 menu_validate_config
+                ;;
+            d|D)
+                menu_diag
                 ;;
             0)
                 print_info "Выход из меню"
@@ -308,6 +312,25 @@ menu_validate_config() {
     fi
 
     sh "$validator" "${ZAPRET2_DIR}/config"
+    pause
+}
+
+menu_diag() {
+    clear_screen
+    print_header "[D] Диагностика"
+
+    local diag="${ZAPRET2_DIR}/z2k-diag.sh"
+
+    if [ ! -f "$diag" ]; then
+        print_error "Скрипт диагностики не найден: $diag"
+        print_info "Переустановите z2k или обновите tools"
+        pause
+        return
+    fi
+
+    sh "$diag"
+    printf "\n"
+    print_info "Сводка готова. Скопируй вывод выше и пришли в чат проекта при необходимости."
     pause
 }
 
