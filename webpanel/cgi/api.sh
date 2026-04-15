@@ -156,7 +156,6 @@ case "$method $path" in
         installed=$(is_installed && echo true || echo false)
         running=$(is_running   && echo true || echo false)
         svc_state=$(service_status_string)
-        austerusj=$(read_flag "ENABLED" "$AUSTERUSJ_CONF" "0")
         rst_filter=$(read_flag "DROP_DPI_RST" "$CONFIG_FILE" "0")
         game_mode=$(read_flag "ROBLOX_UDP_BYPASS" "$CONFIG_FILE" "0")
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
@@ -167,9 +166,9 @@ case "$method $path" in
         [ -n "$tpid" ] && tunnel_running=true
 
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"austerusj":%s,"rst_filter":%s,"game_mode":%s,"customd":%s},"tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":%s,"game_mode":%s,"customd":%s},"tunnel":{"running":%s}}\n' \
             "$installed" "$running" "$svc_state" \
-            "$austerusj" "$rst_filter" "$game_mode" "$customd" \
+            "$rst_filter" "$game_mode" "$customd" \
             "$tunnel_running"
         exit 0
         ;;
@@ -180,7 +179,6 @@ case "$method $path" in
     "POST /service/restart") require_method POST; svc_restart && json_ok || json_fail "500" "restart failed" ;;
 
     # ---------- TOGGLES ----------
-    "POST /toggle/austerusj"|\
     "POST /toggle/rst-filter"|\
     "POST /toggle/game-mode"|\
     "POST /toggle/customd")
@@ -192,7 +190,6 @@ case "$method $path" in
             *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
         esac
         case "$path" in
-            /toggle/austerusj)       toggle_austerusj       "$val" || json_fail "500" "toggle failed" ;;
             /toggle/rst-filter)      toggle_rst_filter      "$val" || json_fail "500" "toggle failed" ;;
             /toggle/game-mode)       toggle_game_mode       "$val" || json_fail "500" "toggle failed" ;;
             /toggle/customd)         toggle_customd         "$val" || json_fail "500" "toggle failed" ;;

@@ -10,7 +10,6 @@ CONFIG_DIR="${CONFIG_DIR:-/opt/etc/zapret2}"
 LISTS_DIR="${LISTS_DIR:-$ZAPRET2_DIR/lists}"
 INIT_SCRIPT="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
-AUSTERUSJ_CONF="${AUSTERUSJ_CONF:-$CONFIG_DIR/all_tcp443.conf}"
 WHITELIST_FILE="${WHITELIST_FILE:-$LISTS_DIR/whitelist.txt}"
 
 # --- read helpers (POSIX sh, no sourcing of lib/utils.sh required) ---
@@ -92,14 +91,6 @@ svc_restart() { "$INIT_SCRIPT" restart >/dev/null 2>&1; }
 # Each toggle reads the current flag, sets the new value, optionally regenerates
 # NFQWS2_OPT via create_official_config (only for toggles that affect it), and
 # restarts the running service. Idempotent — setting the same value twice is a no-op.
-
-toggle_austerusj() {
-    local want="$1"
-    [ -f "$AUSTERUSJ_CONF" ] || { echo "$AUSTERUSJ_CONF missing" >&2; return 1; }
-    set_flag "ENABLED" "$want" "$AUSTERUSJ_CONF" || return 1
-    regenerate_config
-    restart_service_if_running
-}
 
 toggle_rst_filter() {
     local want="$1"
