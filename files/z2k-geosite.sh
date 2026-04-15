@@ -367,7 +367,11 @@ status_report() {
     if [ -d "$ETAG_DIR" ]; then
         echo
         echo "ETag cache: $ETAG_DIR"
-        ls -la "$ETAG_DIR" 2>/dev/null | grep -v '^total' | awk '{print "  " $9 "  " $5 "B"}'
+        for f in "$ETAG_DIR"/*; do
+            [ -e "$f" ] || continue
+            size=$(wc -c < "$f" 2>/dev/null || echo 0)
+            printf '  %s  %sB\n' "$(basename "$f")" "$size"
+        done
     fi
 }
 
