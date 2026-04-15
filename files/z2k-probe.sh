@@ -144,6 +144,25 @@ fi
 # to kill mid-run. The trap restores the original file even on Ctrl-C.
 # -----------------------------------------------------------------------------
 
+# Single-instance lock. Two concurrent probes would race on state.tsv
+# pins — the second one's tmp file clobbers the first's, and each trap
+# cleanup restores its own backup, leaving state.tsv in an unpredictable
+# mix. The webpanel "Start" button can also double-fire if the user
+# clicks repeatedly before the modal opens, so this lock is a hard
+# backstop: second probe refuses to start and prints a clear message.
+LOCK_FILE="${Z2K_PROBE_LOCK:-/tmp/z2k-probe.lock}"
+mkdir -p "$(dirname "$LOCK_FILE")" 2>/dev/null
+if [ -f "$LOCK_FILE" ]; then
+    lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+        echo "z2k-probe: already running (pid $lock_pid). Wait for it to finish or kill it." >&2
+        exit 1
+    fi
+    # Stale lock from a crashed previous run — clear it.
+    rm -f "$LOCK_FILE"
+fi
+echo "$$" > "$LOCK_FILE"
+
 work_dir=$(mktemp -d 2>/dev/null || mktemp -d -t z2kprobe)
 state_backup="$work_dir/state.tsv.bak"
 results_file="$work_dir/results.tsv"
@@ -164,6 +183,13 @@ cleanup() {
         fi
     fi
     rm -rf "$work_dir"
+    # Only release the lock if WE own it (avoid a crashed-then-restarted
+    # probe wiping the lock of a legitimate parallel instance that
+    # somehow slipped through).
+    if [ -f "$LOCK_FILE" ]; then
+        owner=$(cat "$LOCK_FILE" 2>/dev/null)
+        [ "$owner" = "$$" ] && rm -f "$LOCK_FILE"
+    fi
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -175,7 +201,19 @@ trap cleanup EXIT INT TERM HUP
 pin_strategy() {
     s="$1"
     ts=$(date +%s 2>/dev/null || echo 0)
-    tmp="$STATE_TSV.probe.tmp"
+    tmp="$STATE_TSV.probe.$$.tmp"
+
+    # autocircular creates STATE_DIR lazily on first write — it may not
+    # exist yet on a freshly installed router, or may have been wiped
+    # by a reinstall. Ensure it's there before we redirect, otherwise
+    # the `> "$tmp"` below silently fails on busybox sh and the
+    # follow-up mv blows up with "No such file or directory".
+    if [ ! -d "$STATE_DIR" ]; then
+        mkdir -p "$STATE_DIR" 2>/dev/null || {
+            echo "z2k-probe: cannot create state dir $STATE_DIR" >&2
+            return 1
+        }
+    fi
 
     # Start from the backup (original state) and overwrite/add our row.
     # Preserves all other hosts' pins while we mutate just this one.
@@ -196,6 +234,15 @@ pin_strategy() {
         fi
         printf '%s\t%s\t%s\t%s\n' "$profile" "$host" "$s" "$ts"
     } > "$tmp"
+
+    # Guard against the redirect silently producing nothing (e.g. a
+    # concurrent FS hiccup) — check the tmp file is there before mv,
+    # otherwise print a clear diagnostic instead of the cryptic
+    # "can't rename: No such file or directory" from mv.
+    if [ ! -f "$tmp" ]; then
+        echo "z2k-probe: pin_strategy: failed to create $tmp" >&2
+        return 1
+    fi
     mv "$tmp" "$STATE_TSV"
 }
 

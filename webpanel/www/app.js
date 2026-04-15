@@ -567,6 +567,11 @@
   }
 
   async function probeStart() {
+    const btn = document.getElementById("probe-start");
+    // Hard gate against double-clicks: the probe takes ~2 minutes and
+    // a second concurrent run races on state.tsv pin writes, leaving
+    // autocircular in a mixed state. Disable immediately on first click.
+    if (btn.disabled) return;
     const host = document.getElementById("probe-host").value.trim();
     const profile = document.getElementById("probe-profile").value;
     const apply = document.getElementById("probe-apply").checked ? "1" : "0";
@@ -575,14 +580,24 @@
       toast("Недопустимый хост: только буквы, цифры, точка, дефис", "bad");
       return;
     }
+    btn.disabled = true;
+    btn.textContent = "Probe запущен…";
     let resp;
     try {
       resp = await apiPost("/probe/run", { host, profile, apply });
     } catch (e) {
       toast("Ошибка: " + e.message, "bad");
+      btn.disabled = false;
+      btn.textContent = "Запустить probe";
       return;
     }
     openJobModal("Probe: " + host + " (" + profile + ")", resp.job);
+    // Modal closes async — re-enable after a safety delay so the button
+    // doesn't stay stuck if the user dismisses the modal early.
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = "Запустить probe";
+    }, 5000);
   }
 
   // ---------- Credits ----------
