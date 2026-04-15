@@ -129,6 +129,48 @@ AUSTERUS_OPT
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
     game_udp=$(ensure_circular_nld2 "$game_udp")
 
+    # Phase 6A: auto-inject fool=z2k_dynamic_ttl into every
+    # --lua-desync=fake:*  (and fakedsplit/fakeddisorder/hostfakesplit) that
+    # doesn't already pin an explicit TTL via ip_ttl=/ip6_ttl=/ip_autottl=/
+    # ip6_autottl=/fool=. The z2k_dynamic_ttl fool hook (files/lua/z2k-fooling-ext.lua)
+    # clamps the fake packet TTL to real_egress_ttl-1, making fakes look
+    # identical to real client packets from a ТСПУ fingerprint standpoint.
+    # Explicit TTL setters are respected — the override is opt-out on a
+    # per-strategy basis by adding any of the above args to a strategy.
+    #
+    # Applied only to TCP profiles (rkn_tcp, yt_tcp, gv_tcp). UDP profiles
+    # (quic, discord, game) don't use the fake/fakedsplit family the same
+    # way and have their own tuning.
+    inject_z2k_dynamic_ttl() {
+        local input="$1"
+        local token=""
+        local out=""
+        local skip=""
+        for token in $input; do
+            case "$token" in
+                --lua-desync=fake:*|\
+                --lua-desync=fakedsplit:*|\
+                --lua-desync=fakeddisorder:*|\
+                --lua-desync=hostfakesplit:*)
+                    # Check if the token already pins TTL in any form.
+                    skip=""
+                    case "$token" in
+                        *:ip_ttl=*|*:ip6_ttl=*|*:ip_autottl=*|*:ip6_autottl=*|*:fool=*) skip="1" ;;
+                    esac
+                    if [ -z "$skip" ]; then
+                        token="${token}:fool=z2k_dynamic_ttl"
+                    fi
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(inject_z2k_dynamic_ttl "$rkn_tcp")
+    youtube_tcp=$(inject_z2k_dynamic_ttl "$youtube_tcp")
+    youtube_gv_tcp=$(inject_z2k_dynamic_ttl "$youtube_gv_tcp")
+
     # Let YouTube TLS circular operate exactly as in the upstream manual.
     # For LG webOS the orchestrator must see incoming packets on the circular
     # stage itself (`--in-range=-s5556`), while actual desync instances must
