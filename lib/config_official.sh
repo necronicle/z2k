@@ -171,6 +171,52 @@ AUSTERUS_OPT
     youtube_tcp=$(inject_z2k_dynamic_ttl "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_dynamic_ttl "$youtube_gv_tcp")
 
+    # Phase 8: auto-inject z2k JA3 fingerprint breakers (grease, alpn,
+    # psk, keyshare) into every --lua-desync=fake:... token that already
+    # carries a tls_mod= list. We only extend existing tls_mod arguments;
+    # strategies without tls_mod are left alone (they are either non-TLS
+    # or intentionally avoid any ClientHello munging). Idempotent — if
+    # z2k_grease/etc are already present, the token passes through
+    # unchanged so repeated runs of create_official_config don't stack
+    # duplicates.
+    #
+    # Depends on the fork nfqws2 build >= v0.9.4.7-z2k-r3 which
+    # introduces the z2k_tls_mod.c dispatcher and the z2k_* mode names.
+    # If an older upstream binary is running, parsing these tokens will
+    # fail at nfqws2 startup.
+    inject_z2k_tls_mods() {
+        local input="$1"
+        local token=""
+        local out=""
+        for token in $input; do
+            case "$token" in
+                *:tls_mod=*)
+                    case "$token" in
+                        *z2k_grease*|*z2k_alpn*|*z2k_psk*|*z2k_keyshare*)
+                            : # already extended, leave as-is
+                            ;;
+                        *)
+                            # Append z2k modes to the tls_mod list.
+                            # tls_mod= is comma-separated; we insert
+                            # right after the existing value by rewriting
+                            # the first `:tls_mod=VALUE` chunk so the
+                            # new modes sit adjacent to upstream modes.
+                            # Sed is enough because the value cannot
+                            # contain a ':' (would terminate the token).
+                            token=$(printf '%s' "$token" | sed 's|:tls_mod=\([^:]*\)|:tls_mod=\1,z2k_grease,z2k_alpn,z2k_psk,z2k_keyshare|')
+                            ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(inject_z2k_tls_mods "$rkn_tcp")
+    youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
+    youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
+
     # Let YouTube TLS circular operate exactly as in the upstream manual.
     # For LG webOS the orchestrator must see incoming packets on the circular
     # stage itself (`--in-range=-s5556`), while actual desync instances must
