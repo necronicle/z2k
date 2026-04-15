@@ -3,6 +3,23 @@
 # 12-шаговая установка с интеграцией списков доменов и стратегий
 
 # ==============================================================================
+# HELPER: Fix crontab spool file permissions after `crontab -` call
+# ==============================================================================
+# Entware's `crontab` util writes the spool file as mode 0775 owner root:1000
+# (inheriting group from the parent directory which is drwxrwxr-x root:1000).
+# cron daemon silently refuses to read crontabs with group/other write bits
+# as a security measure. Net effect: TG watchdog and get_config cron entries
+# are installed but never fire, and it looks like cron is broken.
+# Fix: force 0600 root:root after every `crontab -` invocation.
+z2k_fix_cron_perms() {
+    local spool="/opt/var/spool/cron/crontabs/root"
+    if [ -f "$spool" ]; then
+        chmod 600 "$spool" 2>/dev/null
+        chown root:root "$spool" 2>/dev/null
+    fi
+}
+
+# ==============================================================================
 # ШАГ 0: ПРОВЕРКА ROOT ПРАВ (КРИТИЧНО)
 # ==============================================================================
 
@@ -1581,6 +1598,7 @@ step_finalize() {
         # Удалить старые записи zapret2 и добавить новую
         (crontab -l 2>/dev/null | grep -v "get_config.sh"; echo "$cron_line") | crontab -
         if [ $? -eq 0 ]; then
+            z2k_fix_cron_perms
             print_success "Автообновление настроено через crontab (ежедневно в 06:00)"
             cron_ok=1
         fi
@@ -1744,6 +1762,7 @@ step_finalize() {
             WDCRON="* * * * * /opt/zapret2/tg-tunnel-watchdog.sh"
             crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
                 (crontab -l 2>/dev/null; echo "$WDCRON") | crontab -
+            z2k_fix_cron_perms
 
             # Install init script for autostart on reboot. Script body lives
             # in files/init.d/S98tg-tunnel (extracted from a prior heredoc).
@@ -1757,6 +1776,7 @@ step_finalize() {
 
             # Cleanup legacy cron entry for S97tg-mtproxy
             crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null
+            z2k_fix_cron_perms
 
             print_success "Telegram tunnel запущен автоматически"
         else
