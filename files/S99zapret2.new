@@ -448,6 +448,13 @@ LUA_Z2K_DETECTORS="$ZAPRET_BASE/lua/z2k-detectors.lua"
 # and before autocircular strategies that reference the new fools.
 LUA_Z2K_FOOLING="$ZAPRET_BASE/lua/z2k-fooling-ext.lua"
 [ -f "$LUA_Z2K_FOOLING" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_FOOLING"
+# Phase 7: z2k-range-rand.lua wraps upstream action functions (fake,
+# multisplit, fakedsplit, …) so strategies can use `repeats=2-6` style
+# range syntax on numeric args and get sticky per-flow randomised
+# values. MUST load AFTER zapret-antidpi.lua where the wrapped
+# functions are defined.
+LUA_Z2K_RANGE_RAND="$ZAPRET_BASE/lua/z2k-range-rand.lua"
+[ -f "$LUA_Z2K_RANGE_RAND" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_RANGE_RAND"
 LUA_Z2K_AUTOCIRCULAR="$ZAPRET_BASE/lua/z2k-autocircular.lua"
 [ -f "$LUA_Z2K_AUTOCIRCULAR" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_AUTOCIRCULAR"
 LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"

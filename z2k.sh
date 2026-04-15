@@ -408,6 +408,17 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-fooling-ext.lua"
     fi
 
+    # Phase 7: per-connection range randomisation for numeric strategy
+    # args. Wraps fake/multisplit/fakedsplit/fakeddisorder/hostfakesplit
+    # and resolves ranges like repeats=2-6 to sticky per-flow values.
+    url="${GITHUB_RAW}/files/lua/z2k-range-rand.lua"
+    output="${lua_dir}/z2k-range-rand.lua"
+    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        print_success "Загружено: files/lua/z2k-range-rand.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-range-rand.lua"
+    fi
+
     url="${GITHUB_RAW}/files/lua/z2k-autocircular.lua"
     output="${lua_dir}/z2k-autocircular.lua"
     if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
