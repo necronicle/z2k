@@ -15,8 +15,33 @@ WWW_DIR="/opt/zapret2/www"
 INIT_DST="/opt/etc/init.d/S96z2k-webpanel"
 CONF_DST="$WEBPANEL_DIR/lighttpd.conf"
 
+# Pick the real LAN IP. Priority: 192.168.* (practically never used for
+# ISP interconnect), then 172.16-31.*, then 10.* (most common CGNAT /
+# Rostelecom interconnect band). Within each band take the first hit.
+# Falls back to the source IP of the default route, then to empty.
+detect_lan_ip() {
+    local _ip=""
+    local _pat
+    for _pat in \
+        '192\.168\.' \
+        '172\.(1[6-9]|2[0-9]|3[01])\.' \
+        '10\.' ; do
+        _ip=$(ip -4 addr show 2>/dev/null \
+            | awk -v p="$_pat" '$0 ~ ("inet " p) {split($2,a,"/"); print a[1]; exit}')
+        [ -n "$_ip" ] && { printf '%s' "$_ip"; return 0; }
+    done
+    _ip=$(ip route get 1.1.1.1 2>/dev/null \
+        | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+    printf '%s' "$_ip"
+}
+
 PORT=8088
-BIND="0.0.0.0"
+# Default BIND is the detected LAN IP, NOT 0.0.0.0. On Rostelecom routers
+# 0.0.0.0 accidentally exposed the panel on the 10.4.x.x provider-side
+# interconnect interface (Владислав 2026-04-15). Use --bind 0.0.0.0
+# explicitly if you actually want multi-interface listening.
+BIND="$(detect_lan_ip)"
+[ -z "$BIND" ] && BIND="0.0.0.0"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -122,14 +147,14 @@ echo "[6/6] Starting webpanel"
     exit 1
 }
 
-# Prefer an RFC1918 LAN address — default route often resolves to the
-# public WAN IP on Keenetic, which is useless as a panel URL.
-IP=$(ip -4 addr show 2>/dev/null \
-    | awk '/inet (10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {split($2,a,"/"); print a[1]; exit}')
-if [ -z "$IP" ]; then
-    IP=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+# If the user forced --bind to something other than 0.0.0.0 we print
+# that as the URL. Otherwise fall back to the detect_lan_ip helper.
+if [ "$BIND" = "0.0.0.0" ]; then
+    IP=$(detect_lan_ip)
+    [ -z "$IP" ] && IP="<router-ip>"
+else
+    IP="$BIND"
 fi
-[ -z "$IP" ] && IP="<router-ip>"
 
 cat <<EOF
 
