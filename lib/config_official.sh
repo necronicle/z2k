@@ -217,6 +217,66 @@ AUSTERUS_OPT
     youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
 
+    # Phase 7: convert fixed `repeats=N` on fake-family actions to the
+    # range syntax `repeats=max(1,N-2)-(N+2)`. The z2k-range-rand.lua
+    # wrapper picks a sticky random integer per flow from this range,
+    # breaking per-flow DPI fingerprints that hash on fake-packet count.
+    # Midpoint matches the original value, so average behaviour is
+    # unchanged and there's no performance hit.
+    #
+    # Idempotent: tokens that already have a hyphen inside repeats=
+    # (user wrote the range manually, or we ran a previous pass) are
+    # left alone. Non-fake action families are untouched — only
+    # tokens starting with one of the whitelisted prefixes.
+    inject_z2k_range_rand() {
+        local input="$1"
+        local token=""
+        local out=""
+        for token in $input; do
+            case "$token" in
+                --lua-desync=fake:*|\
+                --lua-desync=fakedsplit:*|\
+                --lua-desync=fakeddisorder:*|\
+                --lua-desync=hostfakesplit:*|\
+                --lua-desync=syndata:*)
+                    case "$token" in
+                        *:repeats=*-*) : ;; # already a range
+                        *:repeats=*)
+                            token=$(printf '%s' "$token" | awk '
+                                {
+                                    n = split($0, parts, ":")
+                                    for (i = 1; i <= n; i++) {
+                                        if (parts[i] ~ /^repeats=[0-9]+$/) {
+                                            v = substr(parts[i], 9) + 0
+                                            lo = (v - 2 < 1) ? 1 : v - 2
+                                            hi = v + 2
+                                            parts[i] = "repeats=" lo "-" hi
+                                        }
+                                    }
+                                    out = parts[1]
+                                    for (i = 2; i <= n; i++) out = out ":" parts[i]
+                                    print out
+                                }
+                            ')
+                            ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(inject_z2k_range_rand "$rkn_tcp")
+    youtube_tcp=$(inject_z2k_range_rand "$youtube_tcp")
+    youtube_gv_tcp=$(inject_z2k_range_rand "$youtube_gv_tcp")
+
+    # NOTE: the z2k_mid_stream_stall detector replaces z2k_tls_stalled
+    # as the rkn_tcp default failure detector — that switch lives in
+    # ensure_rkn_failure_detector() below, not here, because the
+    # detector arg is added to the circular token AFTER our injectors
+    # run.
+
     # Let YouTube TLS circular operate exactly as in the upstream manual.
     # For LG webOS the orchestrator must see incoming packets on the circular
     # stage itself (`--in-range=-s5556`), while actual desync instances must
@@ -373,14 +433,16 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
-    # RKN: всегда добавляем failure_detector=z2k_tls_stalled.
-    # Это superset z2k_tls_alert_fatal — наследует все его сигналы (retrans,
-    # incoming RST, HTTP DPI redirect, TLS fatal alert) и добавляет
-    # timeout-based детект «ClientHello ушёл, ServerHello так и не пришёл
-    # за 10 секунд». Это ловит silent-стопы Ростелекома (cloudflare.com,
-    # meet.google.com, discord.com), где TCP-уровень работает, а TLS
-    # молча виснет — без этого детектора circular не видит фейла и
-    # застревает на сломанной стратегии навсегда.
+    # RKN: всегда добавляем failure_detector=z2k_mid_stream_stall.
+    # Это superset z2k_tls_stalled, который в свою очередь superset
+    # z2k_tls_alert_fatal — наследует все его сигналы (retrans,
+    # incoming RST, HTTP DPI redirect, TLS fatal alert) плюс
+    # timeout-based детект «ClientHello ушёл, ServerHello не пришёл»
+    # плюс класс post-handshake mid-stream stall (handshake прошёл,
+    # сервер отдал ~10-14 KB, затем поток тихо висит). Последний
+    # класс — это ровно то что ловит Сергеевский Cloudflare кейс на
+    # Ростелекоме, где TCP-уровень и TLS handshake работают, а
+    # данные silently пропадают mid-transfer.
     ensure_rkn_failure_detector() {
         local input="$1"
         local out=""
@@ -391,7 +453,7 @@ AUSTERUS_OPT
                 --lua-desync=circular:*)
                     case "$token" in
                         *failure_detector=*) ;;
-                        *) token="${token}:failure_detector=z2k_tls_stalled" ;;
+                        *) token="${token}:failure_detector=z2k_mid_stream_stall" ;;
                     esac
                     ;;
             esac

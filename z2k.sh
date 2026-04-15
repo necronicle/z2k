@@ -12,7 +12,11 @@ set -e
 Z2K_VERSION="2.0.1"
 WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"
-GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
+# GITHUB_RAW is overridable via env — useful for installing from a
+# feature branch during development (e.g. z2k-enhanced) without
+# merging to master first:
+#   GITHUB_RAW=https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced sh z2k.sh install
+GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}"
 
 # Экспортировать переменные для использования в функциях
 export WORK_DIR

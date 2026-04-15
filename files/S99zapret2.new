@@ -461,17 +461,15 @@ LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 [ -f "$LUA_Z2K_MODERN_CORE" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_MODERN_CORE"
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 
-# Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+). Complements
-# the existing xt_u32 IP-ID iptables rule (z2k_rst_filter_start/stop below) —
-# that one catches TSPU's low-IP-ID heuristic at raw PREROUTING before NFQUEUE,
-# this one catches fakes that IP-ID matching misses using three independent
-# checks (TTL fingerprint, RST-before-response, multi-RST). Both run together
-# when DROP_DPI_RST=1. --rst-filter is a fork-only flag; on upstream nfqws2 it
-# is an unknown option and the daemon aborts — but our install.sh pins the
-# fork release so this is safe as long as that invariant holds.
-if [ "$DROP_DPI_RST" = "1" ]; then
-    NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
-fi
+# Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+). Catches
+# DPI-injected fake RST packets using three independent heuristics:
+# TTL fingerprint mismatch, RST before any server data, multi-RST on
+# same flow. Enabled unconditionally — the 3-check design is conservative
+# enough that false positives on legitimate RSTs don't happen in
+# practice, and any DPI environment benefits from it.
+# The older xt_u32 IP-ID iptables rule (z2k_rst_filter_start/stop below)
+# still lives behind DROP_DPI_RST=1 and complements us at raw PREROUTING.
+NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
 
 # Phase 9: IP block detection + client RST (necronicle/zapret2-z2k r5+).
 # Watches outgoing ClientHello retransmits (upstream is_retransmission
