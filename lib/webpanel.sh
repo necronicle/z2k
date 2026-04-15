@@ -28,12 +28,21 @@ webpanel_url() {
     local port="8088"
     [ -r "$WEBPANEL_PORT_FILE" ] && port=$(cat "$WEBPANEL_PORT_FILE" 2>/dev/null | tr -dc '0-9')
     [ -z "$port" ] && port=8088
-    local ip
-    # Prefer an RFC1918 LAN address — on Keenetic routers the default route
-    # often resolves to the WAN public IP (e.g. 88.87.93.11) which is useless
-    # as a panel URL.
-    ip=$(ip -4 addr show 2>/dev/null \
-        | awk '/inet (10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {split($2,a,"/"); print a[1]; exit}')
+    local ip=""
+    # Pick the real LAN IP. History: we used to take "first RFC1918 hit",
+    # which on Rostelecom routers gave the 10.4.x.x provider-side interconnect
+    # instead of the 192.168.1.1 bridge (Владислав's report 2026-04-15).
+    # Priority: 192.168.* first (practically never used for ISP interconnect),
+    # then 172.16-31.* (rare private net), then 10.* (last — most common
+    # ISP interconnect/CGNAT). Within each band we take the first hit.
+    for pattern in \
+        '192\.168\.' \
+        '172\.(1[6-9]|2[0-9]|3[01])\.' \
+        '10\.' ; do
+        ip=$(ip -4 addr show 2>/dev/null \
+            | awk -v p="$pattern" '$0 ~ ("inet " p) {split($2,a,"/"); print a[1]; exit}')
+        [ -n "$ip" ] && break
+    done
     if [ -z "$ip" ]; then
         ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
     fi
