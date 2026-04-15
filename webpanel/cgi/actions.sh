@@ -18,13 +18,20 @@ read_flag() {
     # read_flag <key> <file> [default]
     local key="$1" file="$2" def="${3:-0}"
     [ -f "$file" ] || { printf '%s' "$def"; return 0; }
-    local raw
+    local raw val
     raw=$(grep "^${key}=" "$file" 2>/dev/null | head -1)
     if [ -z "$raw" ]; then
         printf '%s' "$def"
         return 0
     fi
-    printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//'
+    val=$(printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')
+    # An empty value (e.g. `DROP_DPI_RST=` with nothing after the equals)
+    # must fall back to the default, not propagate as "" — otherwise the
+    # caller's printf emits `"key":,` which breaks JSON. Caught in the wild
+    # on Владислав's router 2026-04-15 after a reinstall left DROP_DPI_RST
+    # with no value.
+    [ -z "$val" ] && val="$def"
+    printf '%s' "$val"
 }
 
 set_flag() {
