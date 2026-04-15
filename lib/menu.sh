@@ -108,11 +108,12 @@ MENU
 [V] Валидация конфигурации
 [D] Диагностика (сводка для траблшутинга)
 [L] Geosite (v2fly доменные списки)
+[X] Active probe (подбор стратегии под конкретный домен)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V,D,L]: "
+        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V,D,L,X]: "
         read_input choice
 
         case "$choice" in
@@ -169,6 +170,9 @@ MENU
                 ;;
             l|L)
                 menu_geosite
+                ;;
+            x|X)
+                menu_probe
                 ;;
             0)
                 print_info "Выход из меню"
@@ -335,6 +339,47 @@ menu_diag() {
     sh "$diag"
     printf "\n"
     print_info "Сводка готова. Скопируй вывод выше и пришли в чат проекта при необходимости."
+    pause
+}
+
+menu_probe() {
+    clear_screen
+    print_header "[X] Active probe — подбор стратегии под конкретный домен"
+
+    local probe="${ZAPRET2_DIR}/z2k-probe.sh"
+    if [ ! -f "$probe" ]; then
+        print_error "Скрипт active probe не найден: $probe"
+        print_info "Переустановите z2k или обновите tools"
+        pause
+        return
+    fi
+
+    print_info "Прогоняет все стратегии из rkn_tcp через целевой домен,"
+    print_info "пинит каждую в state.tsv и меряет throughput на 100 KB curl."
+    print_info "Основной сервис не останавливается — только один домен"
+    print_info "временно использует конкретную стратегию на время итерации."
+    print_separator
+    printf "Домен для probe (например www.cloudflare.com): "
+    read_input probe_host
+    if [ -z "$probe_host" ]; then
+        print_warning "Пустой домен, отмена"
+        pause
+        return
+    fi
+
+    printf "Автоматически применить лучшую стратегию в state.tsv? [y/N]: "
+    read_input apply_ans
+    local apply_flag=""
+    case "$apply_ans" in
+        y|Y|yes|YES) apply_flag="--apply" ;;
+    esac
+
+    print_info "Запуск probe (займёт ~2-3 минуты)..."
+    print_separator
+    sh "$probe" "$probe_host" $apply_flag
+    print_separator
+    print_info "Probe завершён. Если --apply был выбран — лучшая стратегия"
+    print_info "теперь пинится в state.tsv для $probe_host."
     pause
 }
 
