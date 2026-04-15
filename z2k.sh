@@ -520,6 +520,9 @@ prompt_install_or_menu() {
         print_info "zapret2 не установлен - запускаю установку..."
         check_root || die "Требуются права root для установки"
         run_full_install
+        print_info "Открываю меню управления..."
+        sleep 1
+        show_main_menu
     fi
 }
 

@@ -1858,10 +1858,6 @@ run_full_install() {
     print_info "Автоматически применяю autocircular стратегии (без запроса выбора)..."
     apply_autocircular_strategies --auto
 
-    print_info "Открываю меню управления..."
-    sleep 1
-    show_main_menu
-
     return 0
 }
 
