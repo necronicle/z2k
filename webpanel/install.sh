@@ -59,39 +59,93 @@ EOF
     esac
 done
 
+# On Keenetic the rootfs is a read-only squashfs. If opkg runs without
+# TMPDIR pointing at a writable dir (e.g. when invoked with cwd=/), it
+# tries to create its temp dir in / and falls over with
+#   "opkg_conf_load: Creating temp dir /opkg-XXXX failed: Read-only file system"
+# Alexey's Keenetic Viva KN-1912 hit this on 2026-04-16. /opt is always
+# writable on Entware-based installs, so pin TMPDIR there for the whole
+# install script.
+export TMPDIR=/opt/tmp
+mkdir -p /opt/tmp 2>/dev/null || true
+
+# Run opkg and propagate the REAL exit code. Previous version piped into
+# `tail -3` which swallowed opkg's exit status (the pipeline ended in
+# tail, always 0), so a failed opkg install looked like success and the
+# script happily continued to lighttpd startup which then died on a
+# missing module. Also surface the "Read-only file system" error with a
+# concrete hint, because that specific failure mode is the one users
+# hit and can't decode.
+run_opkg() {
+    local log=/tmp/z2k-webpanel-opkg.log
+    if opkg "$@" >"$log" 2>&1; then
+        tail -3 "$log"
+        return 0
+    fi
+    echo "  opkg $1 failed. Last lines:"
+    tail -10 "$log" | sed 's/^/    /'
+    if grep -q 'Read-only file system' "$log"; then
+        cat <<'HINT' >&2
+
+  HINT: opkg cannot create its temp dir because the filesystem is
+  read-only. Our script already exports TMPDIR=/opt/tmp, which is the
+  Entware writable mount — if you still see this error, /opt/tmp is
+  likely broken. Check:
+      mount | grep '/opt'
+      ls -ld /opt/tmp
+      df -h /opt
+  If /opt is full or the mount is gone, fix that first and retry.
+HINT
+    fi
+    return 1
+}
+
 echo "[1/6] Checking dependencies"
 LIGHTTPD_BIN=""
-for c in /opt/sbin/lighttpd /opt/bin/lighttpd lighttpd; do
-    if command -v "$c" >/dev/null 2>&1; then
-        LIGHTTPD_BIN=$(command -v "$c" 2>/dev/null || echo "$c")
+# Prefer Entware lighttpd ONLY. We cannot use the Keenetic stock lighttpd
+# at /usr/sbin/lighttpd because (a) its mod_cgi lives at
+# /usr/lib/lighttpd/ and opkg will not manage it, (b) Keenetic system
+# paths are read-only, and (c) the stock lighttpd is already used by the
+# Keenetic admin UI. We install our own Entware instance.
+for c in /opt/sbin/lighttpd /opt/bin/lighttpd; do
+    if [ -x "$c" ]; then
+        LIGHTTPD_BIN="$c"
         break
     fi
 done
 
-# Auto-install lighttpd + mod_cgi if missing.
+# Auto-install Entware lighttpd + mod_cgi if missing.
 if [ -z "$LIGHTTPD_BIN" ]; then
-    echo "  lighttpd not found — installing via opkg..."
-    if ! opkg install lighttpd lighttpd-mod-cgi 2>&1 | tail -3; then
-        echo "  opkg install failed — install manually: opkg install lighttpd lighttpd-mod-cgi" >&2
+    echo "  Entware lighttpd not found — installing via opkg..."
+    run_opkg install lighttpd lighttpd-mod-cgi || {
+        echo "  install manually: opkg install lighttpd lighttpd-mod-cgi" >&2
         exit 1
-    fi
-    for c in /opt/sbin/lighttpd /opt/bin/lighttpd lighttpd; do
-        if command -v "$c" >/dev/null 2>&1; then
-            LIGHTTPD_BIN=$(command -v "$c" 2>/dev/null || echo "$c")
+    }
+    for c in /opt/sbin/lighttpd /opt/bin/lighttpd; do
+        if [ -x "$c" ]; then
+            LIGHTTPD_BIN="$c"
             break
         fi
     done
-    [ -z "$LIGHTTPD_BIN" ] && { echo "  lighttpd still not found after install" >&2; exit 1; }
+    [ -z "$LIGHTTPD_BIN" ] && { echo "  lighttpd still not found after opkg install" >&2; exit 1; }
 fi
 echo "  lighttpd: $LIGHTTPD_BIN"
 
 # Verify mod_cgi module is physically present; auto-install if not.
-if ! find /opt/lib/lighttpd /opt/usr/lib/lighttpd 2>/dev/null -maxdepth 1 -name 'mod_cgi*' 2>/dev/null | head -1 | grep -q .; then
+# Search all Entware-standard lighttpd module locations.
+MOD_CGI_PATHS="/opt/lib/lighttpd /opt/usr/lib/lighttpd /opt/libexec/lighttpd"
+if ! find $MOD_CGI_PATHS -maxdepth 1 -name 'mod_cgi*' 2>/dev/null | head -1 | grep -q .; then
     echo "  mod_cgi missing — installing..."
-    opkg install lighttpd-mod-cgi 2>&1 | tail -3 || {
+    run_opkg install lighttpd-mod-cgi || {
         echo "  mod_cgi install failed" >&2
         exit 1
     }
+    # Re-check after install so a silent opkg success with no files
+    # still fails loudly here instead of in the lighttpd dlopen step.
+    if ! find $MOD_CGI_PATHS -maxdepth 1 -name 'mod_cgi*' 2>/dev/null | head -1 | grep -q .; then
+        echo "  mod_cgi still not installed after opkg install — aborting" >&2
+        exit 1
+    fi
 fi
 
 echo "[2/6] Stopping existing panel (if any)"
