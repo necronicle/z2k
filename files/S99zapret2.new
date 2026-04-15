@@ -473,6 +473,15 @@ if [ "$DROP_DPI_RST" = "1" ]; then
     NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
 fi
 
+# Phase 9: IP block detection + client RST (necronicle/zapret2-z2k r5+).
+# Watches outgoing ClientHello retransmits (upstream is_retransmission
+# detector) and on the 3rd confirmed retrans synthesises a RST from
+# server->client, so the app fails fast and reconnects to another
+# A-record IP. Zero false positives validated on 10 consecutive CF
+# curls with normal WAN. Enabled unconditionally — failure mode even
+# on pathological packet loss is a DNS retry, not a page failure.
+NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --ipblock-detect=on"
+
 # Load custom TLS ClientHello blob for strategies (manual: --blob is engine init option).
 TLS_MAX_RU_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_max_ru.bin"
 [ -s "$TLS_MAX_RU_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_max_ru:@$TLS_MAX_RU_BLOB"
