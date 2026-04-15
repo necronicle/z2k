@@ -109,7 +109,6 @@
         { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
         { label: "Austerusj", value: bool(s.toggles.austerusj), kind: s.toggles.austerusj === "1" ? "warn" : "" },
         { label: "RST фильтр", value: bool(s.toggles.rst_filter), kind: s.toggles.rst_filter === "1" ? "good" : "" },
-        { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
         { label: "Игровой режим", value: bool(s.toggles.game_mode), kind: s.toggles.game_mode === "1" ? "good" : "" },
         { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
       ];
@@ -132,8 +131,6 @@
       desc: "Простые стратегии ко ВСЕМУ трафику 80/443. Заменяет все профили z2k." },
     { key: "rst_filter", name: "RST фильтр (пассивный DPI)",
       desc: "Блокирует поддельные TCP RST от ТСПУ через iptables raw/PREROUTING." },
-    { key: "silent_fallback", name: "Silent fallback РКН",
-      desc: "Детект «тихих чёрных дыр» РКН. Осторожно — возможны ложные срабатывания." },
     { key: "game_mode", name: "Игровой режим (Roblox и др.)",
       desc: "UDP bypass для игровых портов 1024-65535 через z2k_game_udp." },
     { key: "customd", name: "Скрипты custom.d",
@@ -142,7 +139,6 @@
   const TOGGLE_API_NAME = {
     austerusj: "austerusj",
     rst_filter: "rst-filter",
-    silent_fallback: "silent-fallback",
     game_mode: "game-mode",
     customd: "customd",
   };

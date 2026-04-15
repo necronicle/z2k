@@ -465,20 +465,13 @@ AUSTERUS_OPT
 
     rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp")
 
-    # Silent fallback для RKN — включается через меню (флаг-файл).
-    # failure_detection включает в себя manual_layout (--in-range + payload),
-    # поэтому они взаимоисключающие, не накладываются.
-    local rkn_silent_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local RKN_SILENT_FALLBACK
-    RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rkn_silent_conf" "0")
-    local rkn_silent_flag="${extra_strats_dir}/cache/autocircular/rkn_silent_fallback.flag"
-    if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
-        rkn_tcp=$(ensure_youtube_tls_failure_detection "$rkn_tcp")
-        touch "$rkn_silent_flag" 2>/dev/null
-    else
-        rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
-        rm -f "$rkn_silent_flag" 2>/dev/null
-    fi
+    # RKN uses the manual_layout circular path (--in-range + payload).
+    # The legacy silent-fallback timer-based force-rotate mode was removed
+    # in favor of Phase 6 z2k_mid_stream_stall detector + Phase 9
+    # --ipblock-detect C hook, which catch the same blind-rotate scenarios
+    # per-flow instead of via a coarse 120 s window.
+    rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
+    rm -f "${extra_strats_dir}/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null
 
     # Генерировать NFQWS2_OPT в формате официального config
     local nfqws2_opt_lines=""
@@ -677,12 +670,10 @@ create_official_config() {
 
     # Сохранить пользовательские настройки из существующего конфига
     local saved_DROP_DPI_RST="0"
-    local saved_RKN_SILENT_FALLBACK="0"
     local saved_ROBLOX_UDP_BYPASS="0"
     local saved_GAME_MODE_ENABLED=""
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
-        saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
         saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
     fi
@@ -848,9 +839,6 @@ CONFIG
 
 # Passive DPI RST filter: drop injected TCP RST with IP ID 0x0-0xF
 DROP_DPI_RST=${saved_DROP_DPI_RST}
-
-# Silent fallback for RKN
-RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 
 # Game bypass (one toggle = two flags; legacy name kept for rollback safety)
 GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}

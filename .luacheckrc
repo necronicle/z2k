@@ -8,6 +8,8 @@ max_line_length = false
 globals = {
     -- Desync action entry points (registered by z2k)
     "z2k_tls_alert_fatal",
+    "z2k_tls_stalled",
+    "z2k_mid_stream_stall",
     "z2k_success_no_reset",
     "z2k_tls_extshuffle",
     "z2k_tls_fp_pack_v2",
@@ -19,6 +21,7 @@ globals = {
     "z2k_game_udp",
     "z2k_ipfrag3",
     "z2k_ipfrag3_tiny",
+    "z2k_dynamic_ttl",
     "cond_tcp_has_ts",
     "circular",
     -- nfqws2 writable state/functions (set by fallback stubs or runtime)

@@ -546,7 +546,7 @@ step_build_zapret2() {
     if [ -d "$ZAPRET2_DIR" ]; then
         print_info "Сохранение пользовательских настроек..."
         mkdir -p "$backup_tmp"
-        # Config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK и др.)
+        # Config (содержит DROP_DPI_RST и др.)
         [ -f "$ZAPRET2_DIR/config" ] && cp -f "$ZAPRET2_DIR/config" "$backup_tmp/config"
         # Whitelist (пользовательские исключения)
         [ -f "$ZAPRET2_DIR/lists/whitelist.txt" ] && cp -f "$ZAPRET2_DIR/lists/whitelist.txt" "$backup_tmp/whitelist.txt"
@@ -561,9 +561,6 @@ step_build_zapret2() {
                 cp -f "$sfile" "$backup_tmp/strats/$cat_dir/Strategy.txt"
             fi
         done
-        # Silent fallback flag
-        [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" ] && \
-            touch "$backup_tmp/rkn_silent_fallback.flag"
         print_success "Настройки сохранены"
 
         print_info "Удаление старой установки..."
@@ -910,7 +907,7 @@ step_build_zapret2() {
     if [ -d "$backup_tmp" ]; then
         print_info "Восстановление пользовательских настроек..."
 
-        # Восстановить config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK)
+        # Восстановить config (содержит DROP_DPI_RST и др.)
         if [ -f "$backup_tmp/config" ]; then
             cp -f "$backup_tmp/config" "$ZAPRET2_DIR/config"
             print_success "Конфигурация восстановлена"
@@ -939,11 +936,9 @@ step_build_zapret2() {
         done
         print_success "Стратегии категорий восстановлены"
 
-        # Восстановить silent fallback flag
-        if [ -f "$backup_tmp/rkn_silent_fallback.flag" ]; then
-            touch "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag"
-            chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null || true
-        fi
+        # Silent fallback был удалён — выкидываем stale flag файл, если он
+        # остался от предыдущих установок, чтобы autocircular его не нашёл.
+        rm -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null
 
         rm -rf "$backup_tmp"
         print_success "Все пользовательские настройки восстановлены"

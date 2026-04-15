@@ -158,7 +158,6 @@ case "$method $path" in
         svc_state=$(service_status_string)
         austerusj=$(read_flag "ENABLED" "$AUSTERUSJ_CONF" "0")
         rst_filter=$(read_flag "DROP_DPI_RST" "$CONFIG_FILE" "0")
-        silent_fb=$(read_flag "RKN_SILENT_FALLBACK" "$CONFIG_FILE" "0")
         game_mode=$(read_flag "ROBLOX_UDP_BYPASS" "$CONFIG_FILE" "0")
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
         # UI wants positive "customd_enabled"
@@ -168,9 +167,9 @@ case "$method $path" in
         [ -n "$tpid" ] && tunnel_running=true
 
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"austerusj":%s,"rst_filter":%s,"silent_fallback":%s,"game_mode":%s,"customd":%s},"tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"austerusj":%s,"rst_filter":%s,"game_mode":%s,"customd":%s},"tunnel":{"running":%s}}\n' \
             "$installed" "$running" "$svc_state" \
-            "$austerusj" "$rst_filter" "$silent_fb" "$game_mode" "$customd" \
+            "$austerusj" "$rst_filter" "$game_mode" "$customd" \
             "$tunnel_running"
         exit 0
         ;;
@@ -183,7 +182,6 @@ case "$method $path" in
     # ---------- TOGGLES ----------
     "POST /toggle/austerusj"|\
     "POST /toggle/rst-filter"|\
-    "POST /toggle/silent-fallback"|\
     "POST /toggle/game-mode"|\
     "POST /toggle/customd")
         body=$(read_body)
@@ -196,7 +194,6 @@ case "$method $path" in
         case "$path" in
             /toggle/austerusj)       toggle_austerusj       "$val" || json_fail "500" "toggle failed" ;;
             /toggle/rst-filter)      toggle_rst_filter      "$val" || json_fail "500" "toggle failed" ;;
-            /toggle/silent-fallback) toggle_silent_fallback "$val" || json_fail "500" "toggle failed" ;;
             /toggle/game-mode)       toggle_game_mode       "$val" || json_fail "500" "toggle failed" ;;
             /toggle/customd)         toggle_customd         "$val" || json_fail "500" "toggle failed" ;;
         esac
