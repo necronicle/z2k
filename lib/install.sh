@@ -593,18 +593,18 @@ step_build_zapret2() {
     local release_data
     release_data=$(curl -fsSL --connect-timeout 10 --max-time 120 "$api_url" 2>&1)
 
-    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v0.9.4.7-z2k-r0/zapret2-v0.9.4.7-z2k-r0-openwrt-embedded.tar.gz"
+    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v0.9.4.7-z2k-r2/zapret2-v0.9.4.7-z2k-r2-openwrt-embedded.tar.gz"
 
     local openwrt_url
     if [ $? -ne 0 ]; then
-        print_warning "API недоступен, использую fallback версию v0.9.4.7-z2k-r0..."
+        print_warning "API недоступен, использую fallback версию v0.9.4.7-z2k-r2..."
         openwrt_url="$fallback_url"
     else
         # Парсим URL из JSON
         openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/necronicle/zapret2-z2k/releases/download/[^"]*openwrt-embedded\.tar\.gz' | head -1)
 
         if [ -z "$openwrt_url" ]; then
-            print_warning "Не найден в API, использую fallback v0.9.4.7-z2k-r0..."
+            print_warning "Не найден в API, использую fallback v0.9.4.7-z2k-r2..."
             openwrt_url="$fallback_url"
         fi
     fi

@@ -454,6 +454,18 @@ LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 [ -f "$LUA_Z2K_MODERN_CORE" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_MODERN_CORE"
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 
+# Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+). Complements
+# the existing xt_u32 IP-ID iptables rule (z2k_rst_filter_start/stop below) —
+# that one catches TSPU's low-IP-ID heuristic at raw PREROUTING before NFQUEUE,
+# this one catches fakes that IP-ID matching misses using three independent
+# checks (TTL fingerprint, RST-before-response, multi-RST). Both run together
+# when DROP_DPI_RST=1. --rst-filter is a fork-only flag; on upstream nfqws2 it
+# is an unknown option and the daemon aborts — but our install.sh pins the
+# fork release so this is safe as long as that invariant holds.
+if [ "$DROP_DPI_RST" = "1" ]; then
+    NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
+fi
+
 # Load custom TLS ClientHello blob for strategies (manual: --blob is engine init option).
 TLS_MAX_RU_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_max_ru.bin"
 [ -s "$TLS_MAX_RU_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_max_ru:@$TLS_MAX_RU_BLOB"
