@@ -9,7 +9,18 @@ INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
 LOG_FILE="${ZAPRET2_DIR}/update-lists.log"
 MAX_LOG_LINES=200
 
-GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
+# GITHUB_RAW is resolved in this order:
+#   1. Explicit env var (useful for manual overrides and testing)
+#   2. Z2K_GITHUB_RAW from /opt/zapret2/config (persisted at install time)
+#   3. master branch default
+# This means clean installs from a non-master branch (e.g. z2k-enhanced
+# during feature testing) continue pulling domain lists from the SAME
+# branch via cron, instead of silently drifting back to master.
+if [ -z "${GITHUB_RAW:-}" ] && [ -r "${ZAPRET2_DIR}/config" ]; then
+    _persisted_raw=$(grep '^Z2K_GITHUB_RAW=' "${ZAPRET2_DIR}/config" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/^"//;s/"$//')
+    [ -n "$_persisted_raw" ] && GITHUB_RAW="$_persisted_raw"
+fi
+GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}"
 
 # Настройки
 CURL_OPTS="--connect-timeout 10 --max-time 60 -fsSL"

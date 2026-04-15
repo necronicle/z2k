@@ -862,6 +862,13 @@ ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
 # (files/lists/extra_strats/GEO/). Phase 2: только сбор данных, нет влияния
 # на production listов. Phase 3 добавит webpanel toggle на consumption.
 GEOSITE_ENABLED=${saved_GEOSITE_ENABLED}
+
+# Persist the branch URL that this install was booted from, so that
+# z2k-update-lists.sh and other post-install tools (cron-driven) can
+# continue pulling from the SAME branch instead of defaulting back to
+# master. Set automatically from \$GITHUB_RAW at install time; edit by
+# hand only if you know what you are doing.
+Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}"
 EOF
 
     print_success "Config файл создан: $config_file"
