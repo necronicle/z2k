@@ -29,11 +29,14 @@ export Z2K_INIT_SCRIPT
 export INIT_SCRIPT
 
 # Рабочая директория
-WORK_DIR="/tmp/z2k"
-LIB_DIR="${WORK_DIR}/lib"
+WORK_DIR="${WORK_DIR:-/tmp/z2k}"
+LIB_DIR="${LIB_DIR:-${WORK_DIR}/lib}"
 
-# GitHub URLs
-GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/master"
+# GitHub URLs. GITHUB_RAW must respect whatever z2k.sh set before
+# sourcing this lib — otherwise a bare assignment here would silently
+# override cross-branch test installs. Default only kicks in when
+# utils.sh is sourced from outside the z2k.sh bootstrap (rare path).
+GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 Z4R_BASE_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master"
 Z4R_LISTS_URL="${Z4R_BASE_URL}/lists"
 Z2R_BASE_URL="https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r"

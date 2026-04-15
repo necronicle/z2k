@@ -868,7 +868,7 @@ GEOSITE_ENABLED=${saved_GEOSITE_ENABLED}
 # continue pulling from the SAME branch instead of defaulting back to
 # master. Set automatically from \$GITHUB_RAW at install time; edit by
 # hand only if you know what you are doing.
-Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}"
+Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 EOF
 
     print_success "Config файл создан: $config_file"

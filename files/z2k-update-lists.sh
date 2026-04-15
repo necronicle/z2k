@@ -20,7 +20,7 @@ if [ -z "${GITHUB_RAW:-}" ] && [ -r "${ZAPRET2_DIR}/config" ]; then
     _persisted_raw=$(grep '^Z2K_GITHUB_RAW=' "${ZAPRET2_DIR}/config" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/^"//;s/"$//')
     [ -n "$_persisted_raw" ] && GITHUB_RAW="$_persisted_raw"
 fi
-GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/master}"
+GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 
 # Настройки
 CURL_OPTS="--connect-timeout 10 --max-time 60 -fsSL"
