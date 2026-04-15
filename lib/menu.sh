@@ -95,24 +95,20 @@ MENU
 [3] Обновить списки доменов
 [4] Резервная копия/Восстановление
 [5] Удалить zapret2
-[A] Режим без хостлистов (для Austerusj)
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
 [G] Игровой режим (Roblox и др.)
-[T] Telegram прокси (тестовая функция)
+[T] Telegram прокси
 [S] Скрипты custom.d
 [P] Веб-панель (дубль меню в браузере)
-[B] Rollback (откат конфигурации)
-[H] Health check (проверка работоспособности)
-[V] Валидация конфигурации
 [D] Диагностика (сводка для траблшутинга)
 [X] Active probe (подбор стратегии под конкретный домен)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,A,R,F,G,T,W,S,P,B,H,V,D,X]: "
+        printf "Выберите опцию [0-5,R,F,G,T,W,S,P,D,X]: "
         read_input choice
 
         case "$choice" in
@@ -130,9 +126,6 @@ MENU
                 ;;
             5)
                 menu_uninstall
-                ;;
-            a|A)
-                menu_all_tcp443
                 ;;
             r|R)
                 menu_rst_filter
@@ -155,15 +148,6 @@ MENU
             p|P)
                 menu_webpanel
                 ;;
-            b|B)
-                menu_rollback
-                ;;
-            h|H)
-                menu_healthcheck
-                ;;
-            v|V)
-                menu_validate_config
-                ;;
             d|D)
                 menu_diag
                 ;;
@@ -180,143 +164,6 @@ MENU
                 ;;
         esac
     done
-}
-
-# ==============================================================================
-# ПОДМЕНЮ: ROLLBACK
-# ==============================================================================
-
-menu_rollback() {
-    clear_screen
-    print_header "[B] Rollback конфигурации"
-
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
-
-    cat <<'SUBMENU'
-
-Rollback позволяет откатить конфигурацию к предыдущему
-сохранённому состоянию.
-
-[1] Создать snapshot текущей конфигурации
-[2] Восстановить из snapshot (rollback)
-[3] Подтвердить текущую конфигурацию (отменить авто-rollback)
-[0] Назад
-
-SUBMENU
-
-    printf "Выбор: "
-    read_input choice
-
-    case "$choice" in
-        1)
-            create_rollback_snapshot "manual"
-            ;;
-        2)
-            rollback_to_snapshot
-            ;;
-        3)
-            confirm_config
-            ;;
-        0)
-            return
-            ;;
-        *)
-            print_error "Неверный выбор"
-            ;;
-    esac
-
-    pause
-}
-
-# ==============================================================================
-# ПОДМЕНЮ: HEALTH CHECK
-# ==============================================================================
-
-menu_healthcheck() {
-    clear_screen
-    print_header "[H] Health Check"
-
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
-
-    local hc_script="${ZAPRET2_DIR}/z2k-healthcheck.sh"
-
-    if [ ! -f "$hc_script" ]; then
-        print_error "Скрипт healthcheck не найден: $hc_script"
-        print_info "Переустановите z2k для получения скрипта"
-        pause
-        return
-    fi
-
-    cat <<'SUBMENU'
-
-Health Check проверяет доступность ключевых сервисов
-и работоспособность DPI bypass.
-
-[1] Запустить проверку сейчас
-[2] Показать статус
-[3] Показать лог
-[0] Назад
-
-SUBMENU
-
-    printf "Выбор: "
-    read_input choice
-
-    case "$choice" in
-        1)
-            sh "$hc_script" || true
-            ;;
-        2)
-            sh "$hc_script" --status || true
-            ;;
-        3)
-            if [ -f "${ZAPRET2_DIR}/healthcheck.log" ]; then
-                tail -30 "${ZAPRET2_DIR}/healthcheck.log"
-            else
-                print_info "Лог пуст"
-            fi
-            ;;
-        0)
-            return
-            ;;
-    esac
-
-    pause
-}
-
-# ==============================================================================
-# ПОДМЕНЮ: ВАЛИДАЦИЯ КОНФИГУРАЦИИ
-# ==============================================================================
-
-menu_validate_config() {
-    clear_screen
-    print_header "[V] Валидация конфигурации"
-
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
-
-    local validator="${ZAPRET2_DIR}/z2k-config-validator.sh"
-
-    if [ ! -f "$validator" ]; then
-        print_error "Скрипт валидатора не найден: $validator"
-        print_info "Переустановите z2k для получения скрипта"
-        pause
-        return
-    fi
-
-    sh "$validator" "${ZAPRET2_DIR}/config"
-    pause
 }
 
 menu_diag() {
@@ -778,104 +625,6 @@ menu_uninstall() {
     uninstall_zapret2
 
     pause
-}
-
-# ==============================================================================
-# ПОДМЕНЮ: РЕЖИМ БЕЗ ХОСТЛИСТОВ (ДЛЯ AUSTERUSJ)
-# ==============================================================================
-
-menu_all_tcp443() {
-    clear_screen
-    print_header "Режим без хостлистов (для Austerusj)"
-
-    local conf_file="${CONFIG_DIR}/all_tcp443.conf"
-
-    if [ ! -f "$conf_file" ]; then
-        print_error "Файл конфигурации не найден: $conf_file"
-        print_info "Запустите установку сначала"
-        pause
-        return 1
-    fi
-
-    local current_enabled
-    current_enabled=$(safe_config_read "ENABLED" "$conf_file" "0")
-
-    print_separator
-
-    print_info "Статус: $([ "$current_enabled" = "1" ] && echo 'Включен' || echo 'Выключен')"
-
-    print_separator
-
-    cat <<'SUBMENU'
-
-Простые стратегии из Zapret1, без хостлистов и автоциркуляра.
-Применяются ко ВСЕМУ трафику на портах 80/443 (TCP+UDP).
-
-Стратегии:
-  HTTP  (TCP 80):  fake(zero_256, ttl=0, badsum+badseq) + multisplit
-  TLS   (TCP 443): 2x fake(zero_256+google_hello, ttl=0, badsum+badseq) + multidisorder
-  QUIC  (UDP 443): fake(zero_256, ttl=0)
-
-При включении заменяет ВСЕ профили z2k (YT/RKN/Discord/HTTP).
-При выключении возвращаются стандартные автоциркуляры z2k.
-
-[1] Включить
-[2] Выключить
-[B] Назад
-
-SUBMENU
-
-    printf "Выберите опцию [1-2,B]: "
-    read_input sub_choice
-
-    case "$sub_choice" in
-        1)
-            sed -i "s/^ENABLED=.*/ENABLED=1/" "$conf_file"
-            print_success "Режим Austerusj включен"
-            print_info "Пересоздание конфига..."
-            create_official_config "/opt/zapret2/config"
-
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-                print_success "Сервис перезапущен"
-            else
-                print_warning "Сервис не запущен. Запустите через [4] Управление сервисом"
-            fi
-
-            pause
-            ;;
-
-        2)
-            if [ "$current_enabled" != "1" ]; then
-                print_info "Режим уже выключен"
-                pause
-                return 0
-            fi
-
-            sed -i "s/^ENABLED=.*/ENABLED=0/" "$conf_file"
-            print_success "Режим Austerusj выключен, возврат к автоциркулярам z2k"
-            print_info "Пересоздание конфига..."
-            create_official_config "/opt/zapret2/config"
-
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-                print_success "Сервис перезапущен"
-            fi
-
-            pause
-            ;;
-
-        b|B)
-            return 0
-            ;;
-
-        *)
-            print_error "Неверный выбор: $sub_choice"
-            pause
-            ;;
-    esac
 }
 
 # ==============================================================================

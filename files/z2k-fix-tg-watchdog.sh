@@ -11,7 +11,7 @@
 #
 # Usage:
 #   ssh root@<router>
-#   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/files/z2k-fix-tg-watchdog.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/files/z2k-fix-tg-watchdog.sh | sh
 
 set -e
 
