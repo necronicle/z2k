@@ -1196,7 +1196,21 @@ step_download_domain_lists() {
         print_warning "QUIC YT list not found after local snapshot copy: $yt_quic_list"
         print_warning "Install snapshot files first (files/lists/extra_strats/UDP/YT/List.txt)"
     fi
-    
+
+    # Phase 12: replace shipped snapshots with fresh runetfreedom
+    # geosite data. shipped 125k → runetfreedom ru-blocked.txt (or
+    # ru-blocked-all on 1 GB+ routers, selected by z2k-geosite.sh
+    # RAM probe). Non-fatal — if fetch fails (DNS, GitHub down,
+    # rate limit), keep the shipped snapshot as fallback.
+    local geosite="${ZAPRET2_DIR}/z2k-geosite.sh"
+    if [ -x "$geosite" ]; then
+        print_info "Обновление списков из runetfreedom geosite..."
+        FORCE_REFETCH=1 sh "$geosite" fetch --force 2>&1 | sed 's/^/  /' || \
+            print_warning "geosite fetch partial/failed — using shipped fallback"
+    else
+        print_warning "z2k-geosite.sh не найден, пропускаю geosite fetch"
+    fi
+
     create_base_config || {
         print_error "Не удалось создать конфигурацию"
         return 1

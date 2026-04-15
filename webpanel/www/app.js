@@ -484,28 +484,21 @@
     $app.innerHTML = `
       <h1 class="page-title">Geosite</h1>
       <div class="card">
-        <h3>v2fly/domain-list-community</h3>
+        <h3>runetfreedom/russia-blocked-geosite</h3>
         <p class="desc">
-          Авто-обновляемые доменные списки из открытого репозитория
-          v2fly. Phase 2: только staging (не трогает production-списки),
-          Phase 3 раскроет на consumption через webpanel отдельно.
+          Production-списки для RKN / YouTube / Discord тянутся из
+          runetfreedom каждый день через cron (+ force refresh при
+          install). RAM-адаптивный выбор RKN-варианта: ≥900 MB RAM →
+          ru-blocked-all (~700k доменов), иначе ru-blocked (~80k).
+          Фича всегда включена — toggle удалён в Phase 12.
         </p>
         <div id="geosite-status">Загрузка…</div>
-        <div class="btn-row" style="margin-top:12px">
-          <label class="switch">
-            <input type="checkbox" id="geosite-toggle" disabled>
-            <span class="slider"></span>
-          </label>
-          <span style="margin-left:10px">Ежедневный рефреш</span>
-        </div>
         <div class="btn-row" style="margin-top:12px">
           <button class="btn btn-primary" id="geosite-fetch">Принудительно обновить сейчас</button>
         </div>
       </div>
     `;
     document.getElementById("geosite-fetch").addEventListener("click", geositeFetch);
-    const box = document.getElementById("geosite-toggle");
-    box.addEventListener("change", () => geositeToggleClick(box));
     loadGeositeStatus();
   }
 
@@ -514,29 +507,14 @@
     if (!st) return;
     try {
       const d = await apiGet("/geosite/status");
-      const box = document.getElementById("geosite-toggle");
-      box.checked = d.enabled === "1";
-      box.disabled = false;
       st.innerHTML = `
         <p>
-          Статус: <strong>${d.enabled === "1" ? "включено" : "выключено"}</strong><br>
-          Staging-файлов в /opt/zapret2/files/lists/extra_strats/GEO/: <strong>${d.staging_count}</strong>
+          Статус: <strong>всегда включено</strong><br>
+          Production-списков в /opt/zapret2/extra_strats/: <strong>${d.staging_count}</strong>
         </p>
       `;
     } catch (e) {
       st.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
-    }
-  }
-
-  async function geositeToggleClick(box) {
-    const wanted = box.checked ? "1" : "0";
-    try {
-      await apiPost("/toggle/geosite-enabled", { value: wanted });
-      toast(wanted === "1" ? "Geosite включён" : "Geosite выключен");
-      loadGeositeStatus();
-    } catch (e) {
-      box.checked = !box.checked;
-      toast("Ошибка: " + e.message, "bad");
     }
   }
 

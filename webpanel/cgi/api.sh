@@ -320,19 +320,7 @@ case "$method $path" in
         json_ok
         ;;
 
-    # ---------- GEOSITE (Phase 3) ----------
-    "POST /toggle/geosite-enabled")
-        body=$(read_body)
-        val=$(form_value "$body" "value")
-        [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
-        case "$val" in
-            0|1) ;;
-            *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
-        esac
-        toggle_geosite_enabled "$val" || json_fail "500" "toggle failed"
-        json_ok
-        ;;
-
+    # ---------- GEOSITE (Phase 12: always-on) ----------
     "POST /geosite/update")
         job_id=$(geosite_run_async) || json_fail "500" "failed to start"
         json_header
@@ -343,14 +331,20 @@ case "$method $path" in
         ;;
 
     "GET /geosite/status")
-        gs_flag=$(read_flag "GEOSITE_ENABLED" "$CONFIG_FILE" "0")
-        staging_count=0
-        staging_dir="$ZAPRET2_DIR/files/lists/extra_strats/GEO"
-        if [ -d "$staging_dir" ]; then
-            staging_count=$(find "$staging_dir" -name 'List.txt' 2>/dev/null | wc -l | tr -d ' ')
-        fi
+        # Phase 12: geosite is always-on — no user toggle. Report
+        # enabled:"1" unconditionally. Staging dir is legacy (Phase 2
+        # v2fly prototype path); we now count production List.txt
+        # files after geosite replacement.
+        extra_dir="$ZAPRET2_DIR/extra_strats"
+        lists_present=0
+        for f in "$extra_dir/TCP/RKN/List.txt" \
+                 "$extra_dir/TCP/YT/List.txt" \
+                 "$extra_dir/UDP/YT/List.txt" \
+                 "$extra_dir/TCP/RKN/Discord.txt"; do
+            [ -s "$f" ] && lists_present=$((lists_present + 1))
+        done
         json_header
-        printf '{"ok":true,"enabled":"%s","staging_count":%s}\n' "$gs_flag" "$staging_count"
+        printf '{"ok":true,"enabled":"1","staging_count":%s}\n' "$lists_present"
         exit 0
         ;;
 

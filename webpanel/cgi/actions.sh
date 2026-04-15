@@ -338,12 +338,6 @@ geosite_run_async() {
     printf '%s' "$job_id"
 }
 
-toggle_geosite_enabled() {
-    local want="$1"
-    set_flag "GEOSITE_ENABLED" "$want" "$CONFIG_FILE" || return 1
-    # No service restart needed — geosite just populates the staging tree.
-}
-
 # --- debug flag (Phase 3) ---
 #
 # Touch/rm /opt/zapret2/extra_strats/cache/autocircular/debug.flag. When

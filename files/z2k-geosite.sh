@@ -1,45 +1,69 @@
 #!/bin/sh
-# z2k-geosite.sh — fetch v2fly domain-list-community categories and
-# convert them to nfqws2 plain-text hostlist format.
+# z2k-geosite.sh — fetch runetfreedom/russia-blocked-geosite release
+# assets and replace z2k production hostlist files.
 #
-# Why: the extra_strats/TCP/<cat>/List.txt files are manually curated
-# (e.g. TCP/RKN/List.txt is 125k lines of boilerplate). v2fly/domain-list-
-# community maintains the same kind of data as daily-updated community
-# input files. This script pulls those files, expands `include:` chains,
-# strips `regexp:` / `keyword:` lines nfqws2 can't handle, drops `@attr`
-# tags, and writes the result to /opt/zapret2/files/lists/extra_strats/GEO/
-# as a staging ground. Phase 2 does NOT overwrite the existing production
-# lists — that's an opt-in Phase 3 step.
+# Phase 12: real geosite migration. Replaces the earlier Phase 2 v2fly
+# staging-only prototype. Pulls plain-text .txt release assets directly
+# from github.com/runetfreedom/russia-blocked-geosite/releases/latest,
+# which is the same source b4 ships as its "RUNET Freedom recommended"
+# GeoSite provider. Lists are auto-updated every 6 hours upstream; we
+# refresh daily via z2k-update-lists.sh cron and use ETag negotiation
+# to avoid re-downloading unchanged files.
+#
+# Target production paths (overwrites /opt/zapret2/extra_strats/*):
+#
+#   RKN TCP  ← ru-blocked.txt or ru-blocked-all.txt (RAM-adaptive)
+#   YT TCP   ← youtube.txt
+#   YT UDP   ← youtube.txt (same source for TCP and QUIC profiles)
+#   Discord  ← discord.txt (writes to TCP_Discord.txt and TCP/RKN/Discord.txt)
+#
+# On the very first replace the existing file is preserved as
+# `<name>.shipped` so you can manually revert with `cp *.shipped <name>`
+# and a service restart. No automated rollback UI by design.
+#
+# RAM-adaptive RKN selection:
+#
+#   ≥ 400 MB total RAM → ru-blocked-all.txt (~30 MB file, ~700k domains,
+#                         maximum coverage, upstream "use with caution")
+#   < 400 MB total RAM → ru-blocked.txt (~1.7 MB file, ~80k domains,
+#                         curated antifilter-download-community + re:filter)
+#
+# Tunable via env: Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB (default 400)
+# Override fully via env: Z2K_GEOSITE_RKN_ASSET=ru-blocked-all.txt
 #
 # Usage:
-#   z2k-geosite.sh fetch            fetch all default categories, write
-#                                   staging files
-#   z2k-geosite.sh fetch <cat> ...  fetch specific categories
-#   z2k-geosite.sh list             print known default categories
-#   z2k-geosite.sh show <cat>       fetch+parse one category, print to
-#                                   stdout without writing
-#   z2k-geosite.sh status           show which staging files exist and
-#                                   line counts
+#   z2k-geosite.sh fetch                fetch all, replace production lists
+#   z2k-geosite.sh show <asset>         fetch one asset to stdout (no write)
+#   z2k-geosite.sh status               show current production line counts
 #   z2k-geosite.sh --help
 #
 # Exit codes:
-#   0   — success
-#   1   — fatal (missing curl, unwritable dir, etc.)
-#   2   — partial: some categories failed but others succeeded
+#   0   all targets fetched and applied (or unchanged via ETag)
+#   1   fatal: missing dep, unwritable dir, no previous file AND fetch failed
+#   2   partial: some targets updated, others kept previous version
 
 set -u
 
-BASE_URL="${GEOSITE_BASE_URL:-https://raw.githubusercontent.com/v2fly/domain-list-community/master/data}"
+RELEASE_BASE="${Z2K_GEOSITE_RELEASE_BASE:-https://github.com/runetfreedom/russia-blocked-geosite/releases/latest/download}"
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
-STAGING_DIR="${ZAPRET2_DIR}/files/lists/extra_strats/GEO"
+EXTRA="${ZAPRET2_DIR}/extra_strats"
+ETAG_DIR="${ZAPRET2_DIR}/extra_strats/cache/geosite-etag"
 TMP_DIR="/tmp/z2k-geosite.$$"
 
-# Known-to-z2k default categories. Deliberately small set to validate the
-# pipeline. Add more via config or CLI args as needed.
-DEFAULT_CATEGORIES="telegram discord cloudflare speedtest"
+# RAM threshold for selecting the big ru-blocked-all list. Set
+# conservatively — field testing on a 489 MB router showed nfqws2
+# crashing when loading the 1.2M-line ru-blocked-all list. The
+# smaller ru-blocked (~80k lines) is safe on sub-gigabyte routers.
+# Only routers with ≥900 MB total RAM (typically the 1-2 GB Keenetic
+# Ultra/Giga-class) get the maximum-coverage variant automatically.
+# Users with medium routers who want more coverage can opt in via
+# Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB=500 or similar.
+RAM_THRESHOLD_MB="${Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB:-900}"
 
-# Max recursion depth for include: chains (defensive against cycles)
-MAX_DEPTH=10
+# Hostlist in nfqws2 loads faster if entries are unique & sorted;
+# runetfreedom already guarantees this for YT/Discord but ru-blocked
+# has ~0.3% duplicates from source merge. We re-dedupe on write.
+DEDUPE_ON_WRITE=1
 
 cleanup() {
     [ -n "${TMP_DIR:-}" ] && [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
@@ -52,226 +76,321 @@ die() {
 }
 
 log() {
-    echo "[geosite] $1" >&2
+    echo "[geosite] $*" >&2
 }
 
 ensure_deps() {
     command -v curl >/dev/null 2>&1 || die "curl not found"
     command -v awk  >/dev/null 2>&1 || die "awk not found"
-    command -v sort >/dev/null 2>&1 || die "sort not found"
+    mkdir -p "$TMP_DIR" "$ETAG_DIR" || die "cannot create tmp/etag dirs"
 }
 
-# Fetch a single category file into a specific local path.
-# Returns 0 on success, non-zero otherwise.
-fetch_raw() {
-    local cat="$1"
-    local dest="$2"
-    curl -fsSL --connect-timeout 10 --max-time 60 \
-        "${BASE_URL}/${cat}" -o "$dest"
-}
+# --- RAM-based RKN asset selection ------------------------------------------
 
-# Expand `include:` directives recursively into $output_file.
-# Arguments: source_file  output_file  visited_file  depth
-# Writes only non-include lines to output; follows include: to fetch
-# sub-categories if not yet visited.
-expand_one() {
-    local input="$1"
-    local output="$2"
-    local visited="$3"
-    local depth="${4:-0}"
-
-    if [ "$depth" -gt "$MAX_DEPTH" ]; then
-        log "max depth reached at $input — skipping deeper includes"
+pick_rkn_asset() {
+    if [ -n "${Z2K_GEOSITE_RKN_ASSET:-}" ]; then
+        echo "$Z2K_GEOSITE_RKN_ASSET"
         return
     fi
-
-    # Read line by line
-    while IFS= read -r line; do
-        # Strip CRLF if any
-        line="${line%
-}"
-        case "$line" in
-            '' | '#'*)
-                # skip empty and comment lines
-                continue
-                ;;
-            'include:'*)
-                # Extract category name: "include:X" or "include:X @attr"
-                local sub
-                sub=$(printf '%s' "$line" | sed 's/^include://' | awk '{print $1}')
-                [ -z "$sub" ] && continue
-                # Cycle check
-                if grep -qxF "$sub" "$visited" 2>/dev/null; then
-                    continue
-                fi
-                printf '%s\n' "$sub" >> "$visited"
-                # Fetch sub-category if not already cached
-                local sub_file="$TMP_DIR/raw_$sub"
-                if [ ! -f "$sub_file" ]; then
-                    if ! fetch_raw "$sub" "$sub_file"; then
-                        log "  include:$sub fetch failed, skipping"
-                        continue
-                    fi
-                fi
-                expand_one "$sub_file" "$output" "$visited" "$((depth + 1))"
-                ;;
-            *)
-                # Plain domain line (maybe with regexp:/keyword:/full: prefix
-                # and optional @attr tags). Write to output as-is, filtering
-                # happens in a later pass.
-                printf '%s\n' "$line" >> "$output"
-                ;;
-        esac
-    done < "$input"
+    local total_kb=0
+    if command -v free >/dev/null 2>&1; then
+        total_kb=$(free 2>/dev/null | awk '/^Mem:/ {print $2; exit}')
+    fi
+    case "$total_kb" in
+        ''|*[!0-9]*) total_kb=0 ;;
+    esac
+    local total_mb=$((total_kb / 1024))
+    if [ "$total_mb" -ge "$RAM_THRESHOLD_MB" ]; then
+        log "RAM ${total_mb} MB ≥ ${RAM_THRESHOLD_MB} MB threshold → ru-blocked-all"
+        echo "ru-blocked-all.txt"
+    else
+        log "RAM ${total_mb} MB < ${RAM_THRESHOLD_MB} MB threshold → ru-blocked"
+        echo "ru-blocked.txt"
+    fi
 }
 
-# Take an expanded (includes-resolved) file and filter down to plain
-# nfqws2-compatible hostlist (one domain per line, sorted + unique).
-# Rules:
-#   - drop lines starting with `regexp:` or `keyword:` — nfqws2 hostlist
-#     doesn't support either
-#   - strip leading `full:` — treat full-match the same as subdomain-match
-#     (nfqws2 hostlist does suffix matching, which covers both)
-#   - strip trailing `@attr` tags (e.g. `google.com @cn`)
-#   - drop comments and empty lines
-#   - collapse multiple whitespace, take only the first field
-#   - sort + dedup
-filter_to_hostlist() {
-    local input="$1"
-    local output="$2"
-    grep -vE '^(#|[[:space:]]*$|regexp:|keyword:)' "$input" \
-        | sed 's|^full:||' \
-        | sed 's|[[:space:]]*@[a-zA-Z0-9_.-]\+||g' \
-        | awk '{ if (NF > 0) print $1 }' \
-        | sort -u > "$output"
+# --- Download an asset ONCE to a canonical tmp file ------------------------
+#
+# Downloads $asset to $TMP_DIR/$asset and returns one of:
+#   0 — fresh content in tmp file, ready for apply
+#   3 — upstream unchanged (304 ETag match); tmp file not present
+#   1 — fetch failed; tmp file not present
+#
+# Because a single asset (e.g. youtube.txt, discord.txt) serves multiple
+# production targets, we MUST NOT re-download for each target and we
+# MUST NOT let the ETag cache block application to later targets. The
+# fetch is cached in TMP_DIR for the lifetime of this script run; apply
+# is a separate step that consumes the tmp file for each target.
+fetch_to_tmp() {
+    local asset="$1"
+    local url="$RELEASE_BASE/$asset"
+    local etag_file="$ETAG_DIR/${asset}.etag"
+    local tmp="$TMP_DIR/$asset"
+    local hdr="$TMP_DIR/$asset.hdr"
+
+    # Cached within this run: if we've already populated $tmp successfully,
+    # reuse it.
+    if [ -s "$tmp" ]; then
+        return 0
+    fi
+    # Cached within this run as 304: marker file tells us not to re-download.
+    if [ -f "$TMP_DIR/$asset.304" ]; then
+        return 3
+    fi
+
+    log "fetch $asset"
+
+    local http
+    http=$(curl -sSL --connect-timeout 15 --max-time 600 \
+                --etag-compare "$etag_file" \
+                --etag-save "$etag_file" \
+                -o "$tmp" \
+                -D "$hdr" \
+                -w '%{http_code}' \
+                "$url" 2>/dev/null) || http="000"
+
+    case "$http" in
+        200)
+            if [ ! -s "$tmp" ]; then
+                log "  $asset: HTTP 200 but empty body"
+                rm -f "$tmp"
+                return 1
+            fi
+            log "  $asset: HTTP 200, $(wc -c < "$tmp") bytes"
+            return 0
+            ;;
+        304)
+            log "  $asset: unchanged (ETag match)"
+            rm -f "$tmp"
+            : > "$TMP_DIR/$asset.304"
+            return 3
+            ;;
+        *)
+            log "  $asset: HTTP $http"
+            rm -f "$tmp"
+            return 1
+            ;;
+    esac
 }
 
-# Build a single category staging file.
-build_category() {
-    local cat="$1"
+# --- Fetch + apply to ONE target -------------------------------------------
+#
+# Args: asset, target
+# Returns: 0 applied (new content or unchanged-targets-current), 1 failed
+fetch_asset() {
+    local asset="$1"
+    local target="$2"
 
-    local raw="$TMP_DIR/raw_$cat"
-    local expanded="$TMP_DIR/exp_$cat"
-    local visited="$TMP_DIR/visited_$cat"
-    : > "$expanded"
-    : > "$visited"
+    mkdir -p "$(dirname "$target")" 2>/dev/null || true
 
-    if ! fetch_raw "$cat" "$raw"; then
-        log "fetch failed: $cat"
+    fetch_to_tmp "$asset"
+    local rc=$?
+
+    if [ "$rc" = "0" ]; then
+        # Fresh content in TMP_DIR/$asset — apply to this target
+        apply_new_list "$TMP_DIR/$asset" "$target" "$asset"
+        return $?
+    fi
+    if [ "$rc" = "3" ]; then
+        # Upstream unchanged. But our target might not yet be populated
+        # (first install after cold ETag cache; or upstream ETag matches
+        # but our target file was just created/copied from shipped). Two
+        # sub-cases:
+        #   a) target exists and non-empty → 304 is accurate for this
+        #      flow, leave as-is, return 0
+        #   b) target missing or empty → we have no local copy, need to
+        #      force a re-download. Delete ETag + retry once.
+        if [ -s "$target" ]; then
+            log "  $asset → $target: unchanged, keep existing"
+            return 0
+        fi
+        log "  $asset → $target: 304 but target empty, forcing re-download"
+        rm -f "$ETAG_DIR/${asset}.etag" "$TMP_DIR/$asset.304"
+        fetch_to_tmp "$asset"
+        rc=$?
+        if [ "$rc" = "0" ]; then
+            apply_new_list "$TMP_DIR/$asset" "$target" "$asset"
+            return $?
+        fi
+        log "  $asset → $target: retry failed"
         return 1
     fi
-    # Seed visited with the root to prevent self-include loops
-    printf '%s\n' "$cat" > "$visited"
-    expand_one "$raw" "$expanded" "$visited" 0
+    # rc=1 fetch failed, keep previous file if any
+    if [ -s "$target" ]; then
+        log "  $asset → $target: fetch failed, keeping existing"
+        return 0
+    fi
+    log "  $asset → $target: fetch failed, target empty/missing"
+    return 1
+}
 
-    # Target directory under the staging tree
-    mkdir -p "$STAGING_DIR/$cat"
-    local target="$STAGING_DIR/$cat/List.txt"
-    filter_to_hostlist "$expanded" "$target"
+# Args: $1 new content file, $2 target path, $3 asset name (for log)
+apply_new_list() {
+    local newf="$1"
+    local target="$2"
+    local asset="$3"
+
+    # Sanity: reject absurdly small new files that would be a regression.
+    # Threshold is 80% of the previous size (if any). Protects against
+    # upstream publishing a broken truncated asset.
+    if [ -s "$target" ]; then
+        local oldsz newsz
+        oldsz=$(wc -c < "$target" 2>/dev/null || echo 0)
+        newsz=$(wc -c < "$newf" 2>/dev/null || echo 0)
+        # Use awk for float math (busybox lacks bc)
+        local too_small
+        too_small=$(awk -v o="$oldsz" -v n="$newsz" 'BEGIN {
+            if (o == 0) { print 0; exit }
+            print (n * 100 < o * 80) ? 1 : 0
+        }')
+        if [ "$too_small" = "1" ]; then
+            log "  $asset: new file ${newsz}B < 80% of existing ${oldsz}B — refusing apply"
+            return 1
+        fi
+    fi
+
+    # Normalize + dedupe. Runetfreedom assets use v2fly domain-list
+    # prefix format (`domain:`, `full:`, `regexp:`, `keyword:`, optional
+    # trailing `@attr` tags). nfqws2 hostlist only understands plain
+    # domain lines (suffix match). We strip `domain:`/`full:` to bare
+    # domain, drop `regexp:`/`keyword:` (not expressible), clear
+    # trailing `@attr`, then sort -u. Without this the daemon parses
+    # literal "domain:youtube" strings and matches nothing — which is
+    # how the Phase 2 prototype failed live on the test router.
+    local final="$TMP_DIR/$asset.normalized"
+    awk '
+        /^[[:space:]]*#/ { next }
+        NF == 0 { next }
+        {
+            d = $1
+            sub(/^domain:/, "", d)
+            sub(/^full:/, "", d)
+            if (d ~ /^regexp:/) next
+            if (d ~ /^keyword:/) next
+            # Strip v2fly attribute suffix. The attribute may be
+            # preceded by space or colon separator (runetfreedom
+            # produces domain:ggpht.cn:@cn format). The colon MUST
+            # be consumed or the domain ends up with a trailing
+            # colon that nfqws2 will not match on.
+            sub(/[[:space:]:]*@[a-zA-Z0-9_.-]+.*$/, "", d)
+            if (length(d) > 0 && d ~ /[a-zA-Z0-9]/) print d
+        }
+    ' "$newf" | sort -u > "$final"
+
+    # First-run backup: save the shipped snapshot next to the target so
+    # manual rollback is a one-command cp. Only do this if we don't
+    # already have a .shipped backup.
+    local shipped="${target}.shipped"
+    if [ ! -e "$shipped" ] && [ -s "$target" ]; then
+        cp "$target" "$shipped" && log "  $asset: saved shipped backup → ${shipped##*/}"
+    fi
+
+    # Atomic rename over target. mv is atomic within same filesystem.
+    # nfqws2 re-reads the file only on restart, so no concurrent
+    # reader to worry about — but we still want to avoid torn writes
+    # if the install script is killed mid-copy.
+    local target_tmp="${target}.probe"
+    cp "$final" "$target_tmp" && mv "$target_tmp" "$target" \
+        || { log "  $asset: failed to write $target"; return 1; }
 
     local lines
-    lines=$(wc -l < "$target" 2>/dev/null | tr -d ' ')
-    log "$cat — $lines domains → $target"
+    lines=$(wc -l < "$target" 2>/dev/null || echo 0)
+    log "  $asset: applied, $lines lines"
     return 0
 }
 
-cmd_fetch() {
+# --- Fetch all targets ------------------------------------------------------
+
+fetch_all() {
     ensure_deps
-    mkdir -p "$STAGING_DIR" "$TMP_DIR" || die "cannot create $STAGING_DIR or $TMP_DIR"
 
-    local cats="$*"
-    [ -z "$cats" ] && cats="$DEFAULT_CATEGORIES"
+    # --force clears ETag cache before fetch. Used at install time so a
+    # reinstall always re-applies the latest upstream even when the
+    # router already had a stale ETag pointing to the same upstream
+    # version but a different (shipped) local file.
+    if [ "${FORCE_REFETCH:-0}" = "1" ]; then
+        log "force: clearing ETag cache in $ETAG_DIR"
+        rm -f "$ETAG_DIR"/*.etag 2>/dev/null || true
+    fi
 
-    local total=0
-    local ok=0
-    local failed=""
-    for c in $cats; do
-        total=$((total + 1))
-        if build_category "$c"; then
-            ok=$((ok + 1))
-        else
-            failed="$failed $c"
-        fi
-    done
+    local rkn_asset
+    rkn_asset=$(pick_rkn_asset)
 
-    log "fetched $ok/$total category/categories"
-    if [ -n "$failed" ]; then
-        log "failed:$failed"
+    local ok_count=0
+    local fail_count=0
+    local step_rc
+
+    fetch_asset "$rkn_asset"   "$EXTRA/TCP/RKN/List.txt" && ok_count=$((ok_count+1)) || fail_count=$((fail_count+1))
+    fetch_asset "youtube.txt"  "$EXTRA/TCP/YT/List.txt"  && ok_count=$((ok_count+1)) || fail_count=$((fail_count+1))
+    fetch_asset "youtube.txt"  "$EXTRA/UDP/YT/List.txt"  && ok_count=$((ok_count+1)) || fail_count=$((fail_count+1))
+    fetch_asset "discord.txt"  "$EXTRA/TCP/RKN/Discord.txt" && ok_count=$((ok_count+1)) || fail_count=$((fail_count+1))
+    # TCP_Discord.txt mirror path used by some config_official.sh branches
+    fetch_asset "discord.txt"  "$EXTRA/TCP_Discord.txt"  && ok_count=$((ok_count+1)) || fail_count=$((fail_count+1))
+
+    log "fetch summary: $ok_count ok, $fail_count failed"
+
+    if [ "$ok_count" = "0" ]; then
+        log "all targets failed"
+        return 1
+    fi
+    if [ "$fail_count" != "0" ]; then
         return 2
     fi
     return 0
 }
 
-cmd_list() {
-    echo "Default categories:"
-    for c in $DEFAULT_CATEGORIES; do
-        echo "  - $c"
-    done
-    echo
-    echo "Staging directory: $STAGING_DIR"
-    echo "Base URL:          $BASE_URL"
-}
+# --- show: single asset to stdout ------------------------------------------
 
-cmd_show() {
-    local cat="${1:-}"
-    [ -z "$cat" ] && die "usage: z2k-geosite.sh show <category>"
+show_asset() {
+    local asset="${1:-}"
+    [ -z "$asset" ] && die "show: asset name required (e.g. ru-blocked.txt)"
     ensure_deps
-    mkdir -p "$TMP_DIR" || die "cannot create $TMP_DIR"
-
-    local raw="$TMP_DIR/raw_$cat"
-    local expanded="$TMP_DIR/exp_$cat"
-    local visited="$TMP_DIR/visited_$cat"
-    : > "$expanded"
-    : > "$visited"
-
-    if ! fetch_raw "$cat" "$raw"; then
-        die "fetch failed: $cat"
-    fi
-    printf '%s\n' "$cat" > "$visited"
-    expand_one "$raw" "$expanded" "$visited" 0
-
-    local out="$TMP_DIR/out_$cat"
-    filter_to_hostlist "$expanded" "$out"
-    cat "$out"
+    curl -fsSL --connect-timeout 15 --max-time 600 \
+         "$RELEASE_BASE/$asset" || die "fetch $asset failed"
 }
 
-cmd_status() {
-    if [ ! -d "$STAGING_DIR" ]; then
-        echo "(staging dir $STAGING_DIR does not exist — run: z2k-geosite.sh fetch)"
-        return
-    fi
-    local found=0
-    for f in "$STAGING_DIR"/*/List.txt; do
-        [ -f "$f" ] || continue
-        found=$((found + 1))
-        local cat lines size
-        cat=$(basename "$(dirname "$f")")
-        lines=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
-        size=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
-        printf '%-24s %8s lines  %10s bytes  %s\n' "$cat" "$lines" "$size" "$f"
+# --- status: current production line counts --------------------------------
+
+status_report() {
+    local f
+    for f in "$EXTRA/TCP/RKN/List.txt" \
+             "$EXTRA/TCP/YT/List.txt" \
+             "$EXTRA/UDP/YT/List.txt" \
+             "$EXTRA/TCP/RKN/Discord.txt" \
+             "$EXTRA/TCP_Discord.txt"; do
+        if [ -s "$f" ]; then
+            printf '%s  %s lines\n' "$f" "$(wc -l < "$f")"
+        else
+            printf '%s  (missing or empty)\n' "$f"
+        fi
     done
-    [ "$found" = "0" ] && echo "(no staging lists yet — run: z2k-geosite.sh fetch)"
+    if [ -d "$ETAG_DIR" ]; then
+        echo
+        echo "ETag cache: $ETAG_DIR"
+        ls -la "$ETAG_DIR" 2>/dev/null | grep -v '^total' | awk '{print "  " $9 "  " $5 "B"}'
+    fi
 }
+
+# --- dispatch ---------------------------------------------------------------
 
 usage() {
-    sed -n '/^# Usage:/,/^# Exit/ { /^# Exit/d; s/^# \?//; p; }' "$0"
+    sed -n '2,/^set -u/p' "$0" | sed 's/^# \{0,1\}//;s/^#$//' | head -n 46
 }
 
-MODE="${1:-}"
-shift 2>/dev/null || true
-
-case "$MODE" in
-    fetch)  cmd_fetch "$@" ;;
-    list)   cmd_list ;;
-    show)   cmd_show "$@" ;;
-    status) cmd_status ;;
-    ''|-h|--help)
-        usage
-        exit 0
+cmd="${1:-fetch}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+    fetch)
+        for arg in "$@"; do
+            case "$arg" in
+                --force|-f) FORCE_REFETCH=1 ;;
+                *) die "unknown fetch arg: $arg" ;;
+            esac
+        done
+        fetch_all
         ;;
-    *)
-        echo "z2k-geosite: unknown command: $MODE" >&2
-        usage
-        exit 1
-        ;;
+    show)                    show_asset "$@" ;;
+    status)                  status_report ;;
+    -h|--help|help)          usage ;;
+    *)                       die "unknown command: $cmd" ;;
 esac

@@ -680,13 +680,11 @@ create_official_config() {
     local saved_RKN_SILENT_FALLBACK="0"
     local saved_ROBLOX_UDP_BYPASS="0"
     local saved_GAME_MODE_ENABLED=""
-    local saved_GEOSITE_ENABLED="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
         saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
-        saved_GEOSITE_ENABLED=$(safe_config_read "GEOSITE_ENABLED" "$config_file" "0")
     fi
     # Backwards compat: if the new flag isn't set yet on this router,
     # inherit the legacy ROBLOX_UDP_BYPASS value so a single create_official_config
@@ -857,11 +855,6 @@ RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 # Game bypass (one toggle = two flags; legacy name kept for rollback safety)
 GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}
 ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
-
-# Geosite — опт-ин загрузка v2fly/domain-list-community в staging директорию
-# (files/lists/extra_strats/GEO/). Phase 2: только сбор данных, нет влияния
-# на production listов. Phase 3 добавит webpanel toggle на consumption.
-GEOSITE_ENABLED=${saved_GEOSITE_ENABLED}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can

@@ -115,29 +115,31 @@ main() {
 
     local changes=0
 
-    # RKN список
-    update_list "RKN" \
-        "${GITHUB_RAW}/files/lists/extra_strats/TCP/RKN/List.txt" \
-        "${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt"
-    [ $? -eq 2 ] && changes=$((changes + 1))
-
-    # Discord
-    update_list "Discord" \
-        "${GITHUB_RAW}/files/lists/extra_strats/TCP/RKN/Discord.txt" \
-        "${ZAPRET2_DIR}/extra_strats/TCP/RKN/Discord.txt"
-    [ $? -eq 2 ] && changes=$((changes + 1))
-
-    # YouTube TCP
-    update_list "YouTube TCP" \
-        "${GITHUB_RAW}/files/lists/extra_strats/TCP/YT/List.txt" \
-        "${ZAPRET2_DIR}/extra_strats/TCP/YT/List.txt"
-    [ $? -eq 2 ] && changes=$((changes + 1))
-
-    # YouTube UDP/QUIC
-    update_list "YouTube QUIC" \
-        "${GITHUB_RAW}/files/lists/extra_strats/UDP/YT/List.txt" \
-        "${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt"
-    [ $? -eq 2 ] && changes=$((changes + 1))
+    # Phase 12: domain lists (RKN / Discord / YouTube TCP / YouTube QUIC)
+    # are now pulled from runetfreedom/russia-blocked-geosite release
+    # assets via z2k-geosite.sh. ETag-aware, RAM-adaptive RKN variant,
+    # atomic rename, sub-80% size guard. The old GitHub raw fetches
+    # from necronicle/z2k shipped snapshots are retired; they remain
+    # as first-install fallback via lib/install.sh step_download_domain_lists.
+    if [ -x "${ZAPRET2_DIR}/z2k-geosite.sh" ]; then
+        log_msg "Running z2k-geosite fetch (runetfreedom)..."
+        if sh "${ZAPRET2_DIR}/z2k-geosite.sh" fetch >>"$LOG_FILE" 2>&1; then
+            # z2k-geosite handles atomic rename + service-safe writes;
+            # count a change whenever at least one asset was applied.
+            # ETag cache makes 304-only runs a no-op, so we approximate
+            # "something changed" by checking log for "applied" markers.
+            if tail -30 "$LOG_FILE" | grep -q ': applied,'; then
+                changes=$((changes + 1))
+                log_msg "geosite: applied changes detected"
+            else
+                log_msg "geosite: all assets unchanged (ETag match)"
+            fi
+        else
+            log_msg "WARN: geosite fetch partial/failed"
+        fi
+    else
+        log_msg "z2k-geosite.sh missing, skipping list refresh"
+    fi
 
     # Roblox IPs (legacy path — kept for rollback safety, new installs use game_ips.txt)
     update_list "Roblox IPs" \
@@ -150,23 +152,6 @@ main() {
         "${GITHUB_RAW}/files/lists/game_ips.txt" \
         "${ZAPRET2_DIR}/lists/game_ips.txt"
     [ $? -eq 2 ] && changes=$((changes + 1))
-
-    # Geosite — opt-in via GEOSITE_ENABLED=1 in /opt/zapret2/config. When
-    # enabled, refresh v2fly/domain-list-community staging files under
-    # ${ZAPRET2_DIR}/files/lists/extra_strats/GEO/. This does NOT replace
-    # any existing production lists in Phase 2 — it only writes staging
-    # data that Phase 3 (webpanel) will expose for opt-in consumption.
-    local geosite_enabled
-    geosite_enabled=$(grep -E '^GEOSITE_ENABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null \
-        | tail -1 | sed 's/^GEOSITE_ENABLED=//' | tr -d '"' 2>/dev/null)
-    if [ "$geosite_enabled" = "1" ] && [ -x "${ZAPRET2_DIR}/z2k-geosite.sh" ]; then
-        log_msg "Geosite enabled — refreshing staging lists..."
-        if sh "${ZAPRET2_DIR}/z2k-geosite.sh" fetch >>"$LOG_FILE" 2>&1; then
-            log_msg "Geosite refresh OK"
-        else
-            log_msg "WARN: geosite refresh failed (see log)"
-        fi
-    fi
 
     if [ "$changes" -gt 0 ]; then
         log_msg "Changes detected ($changes lists), restarting service..."
