@@ -57,7 +57,7 @@ restart_tunnel() {
 }
 
 # 1) CONNECT_FAIL storm (legacy)
-if [ -f "$LOG" ] && pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+if [ -f "$LOG" ] && pidof tg-mtproxy-client >/dev/null 2>&1; then
     FAILS=$(tail -40 "$LOG" 2>/dev/null | grep -c "CONNECT_FAIL")
     if [ "$FAILS" -ge 10 ]; then
         restart_tunnel "CONNECT_FAIL storm ($FAILS in last 40 lines)"
@@ -66,9 +66,28 @@ if [ -f "$LOG" ] && pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
 fi
 
 # If the binary isn't running at all, just start it and reset state.
-if ! pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+if ! pidof tg-mtproxy-client >/dev/null 2>&1; then
     restart_tunnel "tunnel process not running"
     exit 0
+fi
+
+# 1.5) iptables REDIRECT rules check. nfqws2 restart (S99zapret2) can
+#   wipe the NAT PREROUTING/OUTPUT chains without triggering the NDM
+#   netfilter hooks that re-insert our REDIRECT rules. When this
+#   happens the tunnel process is alive and connected to the VPS, but
+#   LAN traffic to Telegram DCs goes straight out the WAN — blocked.
+#   Android Telegram is especially sensitive: it caches TCP connections
+#   aggressively and won't retry through the tunnel until the app is
+#   force-killed. Re-insert rules if even one is missing.
+if ! iptables -t nat -C PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; then
+    logger -t tg-watchdog "REDIRECT rules missing — re-inserting"
+    CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
+    for cidr in $CIDRS; do
+        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+    done
 fi
 
 # 2) Active end-to-end probe through the tunnel.

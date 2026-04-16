@@ -20,7 +20,7 @@
 # stopped the tunnel (menu [T] Disable), leave iptables clean so traffic
 # falls back to the direct (blocked-by-TSPU) path instead of being
 # REDIRECTed into a dead port.
-pgrep -f tg-mtproxy-client >/dev/null 2>&1 || exit 0
+pidof tg-mtproxy-client >/dev/null 2>&1 || exit 0
 
 CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
 
