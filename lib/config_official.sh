@@ -76,36 +76,18 @@ AUSTERUS_OPT
     [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp="$default_strategy"
     [ -z "$rkn_tcp" ] && rkn_tcp="$default_strategy"
 
-    # Game UDP strategy: flowseal-style fake+udplen chain for Roblox PC.
-    # Rationale (2026-04-15 fix):
-    #   Evgeniy (Rostelecom) reported Roblox works on Android but not on PC.
-    #   The original profile was z2k_game_udp-only (fake blob + repeats) and
-    #   missed flowseal's second action `udplen` — which pads the real UDP
-    #   payload to break Ростелеков-DPI first-packet-length fingerprint on
-    #   Roblox. upstream nfqws2 already exposes `udplen` via Lua
-    #   (zapret-antidpi.lua:1188); we now chain it in front of z2k_game_udp
-    #   in every strategy slot.
+    # Game UDP strategy: custom z2k_game_udp Lua handler (rather than built-in
+    # fake, which drops repeats=N for UDP payloads). 6 variants rotated by
+    # circular with fails=1 and a 60s observation window. Positive
+    # --ipset=game_ips.txt on the profile constrains the rotator to real
+    # Roblox AS22697 IPs so Discord/Steam noise does not burn the fails
+    # counter. Hardcoded inline — no external Strategy.txt to sync.
     #
-    #   Port filter is also narrowed from 1024-65535 to the flowseal Roblox
-    #   range (1200 + 17000-17500 + 49152-65535 — matches Windows ephemeral
-    #   and Android game client ranges). The old broad filter caught every
-    #   Discord/Steam/Windows-QUIC packet and burned the rotator's fails
-    #   counter before real game traffic arrived, which is exactly why the
-    #   previous profile worked on Android (quieter UDP background) but
-    #   not on PC.
-    #
-    #   fails=3 matches the sibling yt_quic profile — tolerant enough to
-    #   survive UDP packet loss, not so lazy that a genuinely-broken
-    #   strategy stays pinned forever.
-    #
-    #   Three strategies vary udplen increment (10/20/5) so circular has
-    #   distinct JA3-analogous fingerprints to try. blob=quic_google and
-    #   ip_autottl come from the original profile and are preserved.
-    #
-    # NOTE: cannot validate on author's Dom.ru router — game mode targets
-    # Rostelecom DPI specifically. Ship to Evgeniy as a smoke test; if it
-    # works we keep, otherwise revert.
-    game_udp="--lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=game_udp --lua-desync=udplen:strategy=1:dir=out:payload=all:increment=10 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=6:ip_autottl=2,1-64:out_range=-n2 --lua-desync=udplen:strategy=2:dir=out:payload=all:increment=20 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=6:ip_autottl=2,1-64:out_range=-n2 --lua-desync=udplen:strategy=3:dir=out:payload=all:increment=5 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=6:ip_autottl=2,1-64:out_range=-n2"
+    # NOTE: a flowseal-style udplen+fake chain with narrower port range was
+    # tested 2026-04-16 and broke Dom.ru (Roblox error 2). Reverted to the
+    # proven master profile. The flowseal variant may help Rostelecom PC
+    # users specifically — revisit as opt-in when Evgeniy can test.
+    game_udp="--lua-desync=circular:fails=1:time=60:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n4 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64:out_range=-n3"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -562,11 +544,7 @@ AUSTERUS_OPT
         local ipset_excl="${lists_dir}/ipset-exclude.txt"
         local game_ipset_excl_opt=""
         [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-        # Port range narrowed to flowseal Roblox spec: 1200 (matchmaker),
-        # 17000-17500 (Android client ephemeral), 49152-65535 (Windows
-        # ephemeral + in-game UDP). The old 1024-65535 range caught
-        # Discord/Steam/QUIC noise that burned the circular fails counter.
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1200,17000-17500,49152-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=a --payload=all $game_udp --new\\n"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=a --payload=all $game_udp --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
