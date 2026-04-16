@@ -1813,7 +1813,15 @@ step_finalize() {
     if curl -fsSL --connect-timeout 10 --max-time 120 "$local_z2k_url" -o "$local_z2k_script"; then
         chmod +x "$local_z2k_script" 2>/dev/null || true
         printf "  %-25s: %s\n" "z2k script" "$local_z2k_script"
-        print_info "Открыть меню позже: sh ${local_z2k_script} menu"
+        # Expose a short `z2k` command in /opt/bin/ so users can just type
+        # `z2k menu`, `z2k diag` etc. without remembering the full path.
+        # Symlink (not copy) so re-installs that refresh z2k.sh are picked
+        # up automatically. /opt/bin/ is on PATH in Entware by default.
+        if [ -d /opt/bin ] && ln -sf "$local_z2k_script" /opt/bin/z2k 2>/dev/null; then
+            print_info "Команда 'z2k <args>' доступна из любого места (${local_z2k_script})"
+        else
+            print_info "Открыть меню позже: sh ${local_z2k_script} menu"
+        fi
     else
         print_warning "Не удалось сохранить z2k.sh в ${local_z2k_script}"
         print_info "Для повторного запуска используйте curl-команду из README"
@@ -2142,6 +2150,12 @@ uninstall_zapret2() {
 
     # Очистить временные файлы
     rm -rf /tmp/z2k /tmp/zapret2 /tmp/blockcheck* 2>/dev/null
+
+    # Remove the /opt/bin/z2k shortcut if it points at our install.
+    if [ -L /opt/bin/z2k ]; then
+        rm -f /opt/bin/z2k 2>/dev/null
+        print_info "Удалена команда /opt/bin/z2k"
+    fi
 
     # Очистить ipset
     local setname ipset_names
