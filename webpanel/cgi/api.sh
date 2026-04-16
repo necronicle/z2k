@@ -165,11 +165,8 @@ case "$method $path" in
         tunnel_running=false
         [ -n "$tpid" ] && tunnel_running=true
 
-        # Belt-and-suspenders defaults: even if read_flag ever returns
-        # an empty value again, %s expansion with ${var:-0} keeps the
-        # JSON syntactically valid instead of producing `"key":,`.
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":%s,"game_mode":%s,"customd":%s},"tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","game_mode":"%s","customd":"%s"},"tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
             "${rst_filter:-0}" "${game_mode:-0}" "${customd:-0}" \
             "${tunnel_running:-false}"
