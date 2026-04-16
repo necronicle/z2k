@@ -31,4 +31,10 @@ for cidr in $CIDRS; do
         iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
 done
 
+# Flush stale conntrack so smartphones pick up the restored REDIRECT
+# path immediately instead of riding dead direct-to-DC entries.
+for cidr in $CIDRS; do
+    conntrack -D -d "$cidr" 2>/dev/null || true
+done
+
 exit 0

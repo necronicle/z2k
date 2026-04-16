@@ -37,6 +37,13 @@ start() {
         iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
             iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
     done
+    # Flush stale conntrack entries so Android/iOS Telegram clients
+    # immediately create new connections through the REDIRECT path
+    # instead of riding stale direct-to-DC entries from before the
+    # tunnel was (re)started.
+    for cidr in $CIDRS; do
+        conntrack -D -d "$cidr" 2>/dev/null || true
+    done
 }
 
 stop() {
