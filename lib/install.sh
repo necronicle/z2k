@@ -54,6 +54,16 @@ step_update_packages() {
 
     print_info "Обновление списка пакетов Entware..."
 
+    # On Keenetic rootfs is read-only squashfs. opkg tries to create its
+    # temp dir in the current working directory and fails with
+    # "opkg_conf_load: Creating temp dir /opkg-XXXX failed: Read-only
+    # file system" unless TMPDIR points at a writable mount. /opt/tmp is
+    # always writable on Entware installs. Previously this only bit
+    # webpanel/install.sh (fixed 25c0ece); fresh installs via curl|sh
+    # hit the same wall here on step 1/12 (Святой отец report 2026-04-17).
+    export TMPDIR=/opt/tmp
+    mkdir -p /opt/tmp 2>/dev/null || true
+
     # Попытка обновления с полным перехватом вывода
     local opkg_output
     opkg_output=$(opkg update 2>&1)
@@ -1840,6 +1850,13 @@ run_full_install() {
     print_header "Установка zapret2 для Keenetic"
     print_info "Процесс установки: 12 шагов (расширенная проверка)"
     print_separator
+
+    # Belt-and-suspenders: pin TMPDIR=/opt/tmp at the whole-install level
+    # so every opkg invocation (update, install, --force-overwrite, etc.)
+    # across all 12 steps has a writable temp dir. Keenetic rootfs is
+    # read-only squashfs and opkg defaults to cwd for its temp.
+    export TMPDIR=/opt/tmp
+    mkdir -p /opt/tmp 2>/dev/null || true
 
     # Выполнить все шаги последовательно
     step_check_root || return 1                    # ← НОВОЕ (0/12)
