@@ -2127,6 +2127,51 @@ uninstall_zapret2() {
         print_info "Удален init скрипт"
     fi
 
+    # Tear down the Telegram tunnel: stop the daemon, kill stragglers, drop
+    # its REDIRECT rules, remove the init script and the NDM hook that
+    # re-inserts those rules. Reported by Сергей 2026-04-16: after
+    # uninstall z2k, Telegram kept working because S98tg-tunnel + the
+    # 90-z2k-tg-redirect NDM hook stayed on the system and watchdog cron
+    # kept the daemon alive.
+    if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
+        print_info "Остановка Telegram tunnel..."
+        /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1 || true
+    fi
+    killall -9 tg-mtproxy-client 2>/dev/null || true
+    # Drop REDIRECT rules for every TG DC CIDR in case the init script
+    # stop path missed some or was already gone.
+    local tg_cidr
+    for tg_cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
+                   91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 \
+                   95.161.64.0/20 185.76.151.0/24; do
+        while iptables -t nat -C PREROUTING -d "$tg_cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D PREROUTING -d "$tg_cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+        while iptables -t nat -C OUTPUT -d "$tg_cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D OUTPUT -d "$tg_cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+    done
+    # Flush stale conntrack so nothing lingers through dead REDIRECT path.
+    for tg_cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
+                   91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 \
+                   95.161.64.0/20 185.76.151.0/24; do
+        conntrack -D -d "$tg_cidr" 2>/dev/null || true
+    done
+    # Init script, watchdog binary, PID file, log.
+    rm -f /opt/etc/init.d/S98tg-tunnel \
+          /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
+          /opt/sbin/tg-mtproxy-client \
+          /var/run/tg-tunnel.pid \
+          /tmp/tg-tunnel.log \
+          /tmp/tg-tunnel-watchdog.state \
+          /tmp/tg-crash.log 2>/dev/null || true
+    # Drop watchdog cron entry if present.
+    if crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog\|tg.tunnel"; then
+        crontab -l 2>/dev/null | grep -v "tg-tunnel-watchdog\|tg.tunnel" | crontab - 2>/dev/null || true
+        print_info "Удалена cron-запись watchdog TG tunnel"
+    fi
+    print_info "Удалены компоненты Telegram tunnel"
+
     # Удалить netfilter хуки (все связанные с zapret)
     local hook
     for hook in /opt/etc/ndm/netfilter.d/*zapret*; do

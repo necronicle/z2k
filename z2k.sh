@@ -593,6 +593,21 @@ handle_arguments() {
                 print_error "Скрипт валидатора не найден"
             fi
             ;;
+        diag|d)
+            if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/z2k-diag.sh" ]; then
+                sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-diag.sh"
+            else
+                print_error "Скрипт диагностики не найден"
+            fi
+            ;;
+        probe|p)
+            if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/z2k-probe.sh" ]; then
+                shift
+                sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-probe.sh" "$@"
+            else
+                print_error "Скрипт active probe не найден"
+            fi
+            ;;
         help|h|-h|--help)
             show_help
             ;;
@@ -624,6 +639,8 @@ show_help() {
   snapshot         Создать snapshot текущей конфигурации
   healthcheck, hc  Проверить работоспособность DPI bypass
   validate         Валидация текущей конфигурации
+  diag, d          Сводка для траблшутинга (скопируй вывод и пришли в чат)
+  probe, p <host>  Подбор стратегии под конкретный домен
   version, v       Показать версию
   help, h          Показать эту справку
 
@@ -633,10 +650,10 @@ show_help() {
 
 Примеры:
   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
-  sh z2k.sh install
-  sh z2k.sh menu
-  sh z2k.sh check
-  sh z2k.sh cleanup
+  z2k menu
+  z2k diag
+  z2k probe cloudflare.com
+  z2k check
 
 EOF
 }
