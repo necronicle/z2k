@@ -64,21 +64,23 @@ service_status_string() {
 }
 
 regenerate_config() {
-    # Source the generator on the fly. It's a long file that defines
-    # create_official_config; sourcing is cheap and keeps us in parity.
-    local lib="$ZAPRET2_DIR/lib/config_official.sh"
-    if [ ! -f "$lib" ]; then
-        # Fallback: try the staging dir used when running from /tmp/z2k
-        lib="/tmp/z2k/lib/config_official.sh"
-    fi
-    if [ -f "$lib" ]; then
-        # shellcheck disable=SC1090
-        . "$lib"
-        create_official_config "$CONFIG_FILE" >/dev/null 2>&1
-        return $?
-    fi
-    echo "config_official.sh not found" >&2
-    return 1
+    # Source BOTH utils.sh (for safe_config_read and helpers) and
+    # config_official.sh (for create_official_config). Without utils.sh,
+    # safe_config_read is undefined → every saved_* variable becomes "" →
+    # the heredoc emits empty-value flags → toggle never sticks. This was
+    # the root cause of the game-mode toggle bug (2026-04-16).
+    local utils="" lib=""
+    for d in "$ZAPRET2_DIR/lib" /tmp/z2k/lib; do
+        [ -f "$d/utils.sh" ] && [ -z "$utils" ] && utils="$d/utils.sh"
+        [ -f "$d/config_official.sh" ] && [ -z "$lib" ] && lib="$d/config_official.sh"
+    done
+    [ -z "$lib" ] && { echo "config_official.sh not found" >&2; return 1; }
+    # shellcheck disable=SC1090
+    [ -n "$utils" ] && . "$utils"
+    # shellcheck disable=SC1090
+    . "$lib"
+    create_official_config "$CONFIG_FILE" >/dev/null 2>&1
+    return $?
 }
 
 restart_service_if_running() {
@@ -108,6 +110,7 @@ toggle_rst_filter() {
 toggle_game_mode() {
     local want="$1"
     set_flag "ROBLOX_UDP_BYPASS" "$want" "$CONFIG_FILE" || return 1
+    set_flag "GAME_MODE_ENABLED" "$want" "$CONFIG_FILE" || return 1
     regenerate_config
     restart_service_if_running
 }

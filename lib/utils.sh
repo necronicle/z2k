@@ -319,6 +319,12 @@ safe_config_read() {
     # Извлечь значение после первого '=', удалить кавычки и пробелы
     local val
     val=$(printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')
+    # Empty value (e.g. `KEY=` with nothing after equals) must fall back
+    # to default, not propagate as "". Same fix as webpanel/cgi/actions.sh
+    # read_flag (Владислав's JSON breakage, 2026-04-15). Without this,
+    # create_official_config reads empty → emits empty → toggle → regen →
+    # reads empty again: infinite empty-value cycle.
+    [ -z "$val" ] && val="$default"
     echo "$val"
 }
 
