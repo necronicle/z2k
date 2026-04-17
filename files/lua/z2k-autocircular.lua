@@ -51,7 +51,19 @@ do
     math.randomseed(seed)
 end
 
-local policy_enabled = false
+-- UCB-based strategy seeding policy. Disabled by default: the only code
+-- paths that consume it are policy_pick_strategy + policy_seed_strategy,
+-- both of which early-return when this flag is false. Before 2026-04-18
+-- the telemetry_{load,record,write}_event stack ran regardless of this
+-- flag — a pure cost (each circular outcome appended to an in-memory
+-- map and was flushed to telemetry.tsv every 5 s). On Keenetic-class
+-- boxes this was ~5-15 MB of otherwise-dead state plus constant small
+-- flash writes. Gated now: when policy_enabled is false, the whole
+-- telemetry subsystem is a no-op.
+--
+-- Opt-in via Z2K_POLICY=1 env when a user wants to experiment with
+-- UCB-based seeding without editing code.
+local policy_enabled = (tonumber(os.getenv("Z2K_POLICY") or "0") or 0) == 1
 local policy_epsilon = 0.15
 local policy_cooldown_sec = 120
 local policy_ucb_c = 0.65
@@ -522,6 +534,7 @@ local function telemetry_rec(askey, hostn, strategy, create)
 end
 
 local function load_telemetry()
+  if not policy_enabled then return end
   if telemetry_loaded then return end
   telemetry_loaded = true
   telemetry = {}
@@ -534,6 +547,7 @@ local function load_telemetry()
 end
 
 local function write_telemetry()
+  if not policy_enabled then return end
   local now = now_f()
   if now ~= 0 and (now - last_telemetry_write) < telemetry_write_interval then
     return
@@ -643,6 +657,7 @@ local function telemetry_is_cooldown(rec, now)
 end
 
 local function telemetry_record_event(askey, hostn, strategy, success, latency_s, now)
+  if not policy_enabled then return end
   local r = telemetry_rec(askey, hostn, strategy, true)
   if not r then return end
   if success then
