@@ -474,11 +474,22 @@ NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
 # Phase 9: IP block detection + client RST (necronicle/zapret2-z2k r5+).
 # Watches outgoing ClientHello retransmits (upstream is_retransmission
 # detector) and on the 3rd confirmed retrans synthesises a RST from
-# server->client, so the app fails fast and reconnects to another
-# A-record IP. Zero false positives validated on 10 consecutive CF
-# curls with normal WAN. Enabled unconditionally — failure mode even
-# on pathological packet loss is a DNS retry, not a page failure.
-NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --ipblock-detect=on"
+# server->client.
+#
+# DEFAULT OFF as of 2026-04-18. Rationale: ipblock's 3-retrans threshold
+# fires BEFORE circular's rotator (`fails=3:retrans=2` needs 6 retrans)
+# can accumulate enough failure signal to rotate to the next strategy.
+# Result: client gets a RST and reconnects to the same strategy, same
+# DPI block, same RST — infinite loop that looks to users like
+# "rotation only works if I manually reload the page". Master's default
+# of off, letting the TCP-retrans→circular path rotate automatically,
+# matches the "rotation felt automatic" user experience we regressed.
+#
+# Opt-in via config flag IPBLOCK_DETECT=1 for users who specifically
+# want the DNS-retry fast-fail behaviour (multi-A-record sites, where
+# one IP is blocked and others work).
+IPBLOCK_DETECT=${IPBLOCK_DETECT:-0}
+[ "$IPBLOCK_DETECT" = "1" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --ipblock-detect=on"
 
 # Load custom TLS ClientHello blob for strategies (manual: --blob is engine init option).
 TLS_MAX_RU_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_max_ru.bin"
