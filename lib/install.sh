@@ -574,15 +574,15 @@ step_build_zapret2() {
 
     local openwrt_url
     if [ $? -ne 0 ]; then
-        print_warning "API недоступен, использую fallback версию v0.9.4.7..."
-        openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.9.4.7/zapret2-v0.9.4.7-openwrt-embedded.tar.gz"
+        print_warning "API недоступен, использую fallback версию v0.9.5..."
+        openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.9.5/zapret2-v0.9.5-openwrt-embedded.tar.gz"
     else
         # Парсим URL из JSON
         openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/bol-van/zapret2/releases/download/[^"]*openwrt-embedded\.tar\.gz' | head -1)
 
         if [ -z "$openwrt_url" ]; then
-            print_warning "Не найден в API, использую fallback v0.9.4.7..."
-            openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.9.4.7/zapret2-v0.9.4.7-openwrt-embedded.tar.gz"
+            print_warning "Не найден в API, использую fallback v0.9.5..."
+            openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.9.5/zapret2-v0.9.5-openwrt-embedded.tar.gz"
         fi
     fi
 
