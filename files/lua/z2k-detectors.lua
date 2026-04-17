@@ -138,13 +138,19 @@ local z2k_tls_stalled_insert_counter = 0
 -- timestamp. Check is amortised via a per-map counter so the O(n) scan
 -- fires only once every EVICT_INTERVAL inserts, not on every packet.
 --
--- Values chosen for Keenetic-class boxes: 512 hosts × ~120 B ≈ 60 KB per
--- map (fits comfortably in the memory budget we left nfqws2). Eviction
--- batch of 128 gives a 512→384 drop, trading some detector memory on
--- rarely-visited hosts for a bounded working set.
-local Z2K_DETECTOR_MAP_MAX = 512
-local Z2K_DETECTOR_EVICT_BATCH = 128
-local Z2K_DETECTOR_EVICT_INTERVAL = 64
+-- Cap scales with hardware class via Z2K_DETECTOR_CAP env (set by
+-- S99zapret2 from /proc/meminfo). Falls back to 512 when env is absent
+-- (hand-run nfqws2 for debugging). Evict batch is 1/4 of the cap —
+-- drops 25% of entries on overflow, which trades some detector memory
+-- on rarely-visited hosts for a bounded working set without thrashing.
+-- Eviction check amortised every 1/8 of cap inserts so the O(n) sweep
+-- does not fire on every packet.
+local Z2K_DETECTOR_MAP_MAX = tonumber(os.getenv("Z2K_DETECTOR_CAP")) or 512
+if Z2K_DETECTOR_MAP_MAX < 64 then Z2K_DETECTOR_MAP_MAX = 64 end
+if Z2K_DETECTOR_MAP_MAX > 2048 then Z2K_DETECTOR_MAP_MAX = 2048 end
+local Z2K_DETECTOR_EVICT_BATCH = math.floor(Z2K_DETECTOR_MAP_MAX / 4)
+local Z2K_DETECTOR_EVICT_INTERVAL = math.floor(Z2K_DETECTOR_MAP_MAX / 8)
+if Z2K_DETECTOR_EVICT_INTERVAL < 16 then Z2K_DETECTOR_EVICT_INTERVAL = 16 end
 
 local function z2k_detector_evict_oldest(map, batch, ts_of)
   local entries = {}

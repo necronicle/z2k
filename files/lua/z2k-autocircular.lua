@@ -336,7 +336,14 @@ local function load_state()
   merge_state_file_into(STATE_FILE_FALLBACK, state)
 end
 
-local MAX_ENTRIES_PER_KEY = 500
+-- Per-key cap on persisted state + in-memory telemetry maps. Scales with
+-- the hardware class via Z2K_HOST_CAP env (set by S99zapret2 from
+-- /proc/meminfo). Falls back to 500 on the legacy path where the env is
+-- not populated (e.g. running nfqws2 by hand for debugging). Clamped to
+-- [50, 2000] to catch a pathological env-var override.
+local MAX_ENTRIES_PER_KEY = tonumber(os.getenv("Z2K_HOST_CAP")) or 500
+if MAX_ENTRIES_PER_KEY < 50 then MAX_ENTRIES_PER_KEY = 50 end
+if MAX_ENTRIES_PER_KEY > 2000 then MAX_ENTRIES_PER_KEY = 2000 end
 
 local function evict_state_entries(merged)
   for askey, hosts in pairs(merged) do

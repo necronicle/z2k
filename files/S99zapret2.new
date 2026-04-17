@@ -426,6 +426,31 @@ PIDDIR=/var/run
 USEROPT=""
 [ -n "$WS_USER" ] && USEROPT="--user=$WS_USER"
 NFQWS2="${NFQWS2:-$ZAPRET_BASE/nfq2/nfqws2}"
+
+# Memory tier detection — scale Lua-side per-host state caps so MIPS/MIPSEL
+# Keenetics (64-256 MB RAM) don't get the same 500-host autocircular state
+# and 512-host detector maps that make sense on 500+ MB boxes. Three tiers,
+# passed to nfqws2 Lua via env vars (autocircular and detectors read them
+# via os.getenv at init). Defaults kick in if detection fails.
+#
+# Tiers chosen from Keenetic hardware range:
+#   <128 MB  Lite/4G class MIPS — halved caps
+#   128-384  Ultra/Giga class   — 2/5 caps
+#   ≥384     modern ARM/x86     — full caps (previous behaviour)
+TOTAL_RAM_MB=$(awk '/^MemTotal:/ {print int($2/1024); exit}' /proc/meminfo 2>/dev/null)
+[ -z "$TOTAL_RAM_MB" ] && TOTAL_RAM_MB=512
+if [ "$TOTAL_RAM_MB" -lt 128 ]; then
+    Z2K_HOST_CAP=100
+    Z2K_DETECTOR_CAP=128
+elif [ "$TOTAL_RAM_MB" -lt 384 ]; then
+    Z2K_HOST_CAP=250
+    Z2K_DETECTOR_CAP=256
+else
+    Z2K_HOST_CAP=500
+    Z2K_DETECTOR_CAP=512
+fi
+export Z2K_HOST_CAP Z2K_DETECTOR_CAP
+
 LUA_LIB="$ZAPRET_BASE/lua/zapret-lib.lua"
 [ -f "$LUA_LIB" ] || LUA_LIB="$LUA_LIB.gz"
 LUA_ANTIDPI="$ZAPRET_BASE/lua/zapret-antidpi.lua"
