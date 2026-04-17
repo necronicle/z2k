@@ -1,0 +1,15 @@
+# z2k extra domains — дополнения к RKN-списку из runetfreedom.
+# Обновляется при каждой установке z2k.
+#
+# Критерий: домен НЕ покрыт runetfreedom ru-blocked, но пользователи
+# жалуются что сайт не открывается без z2k обработки.
+
+# Торренты
+fast-torrent.ru
+
+# Нишевые/региональные сайты от Святого отца
+bible-center.ru
+numista.com
+rua.gr
+enimerosi.com
+katzauction.com
