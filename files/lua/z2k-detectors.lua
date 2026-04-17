@@ -121,6 +121,59 @@ end
 -- See full rationale + design notes below next to the function body.
 local Z2K_TLS_STALLED_SEC = 10
 local z2k_tls_stalled_host_ts = {}
+local z2k_tls_stalled_insert_counter = 0
+
+-- Bounded LRU policy for per-host detector state.
+--
+-- Why: both z2k_tls_stalled_host_ts and z2k_mid_stream_state are module-
+-- globals that accumulate one entry per unique SNI seen on the `rkn_tcp`
+-- profile (via failure_detector=z2k_mid_stream_stall). On Russian routers
+-- with 500 MB RAM and a CDN-heavy browsing pattern the unique-SNI set can
+-- grow into tens of thousands of entries over days of uptime, which
+-- triggered repeat OOM-kills of nfqws2 (confirmed in dmesg on Mark's
+-- test router: anon-rss 78 MB and 146 MB kills).
+--
+-- Strategy: cap each map at Z2K_DETECTOR_MAP_MAX entries; when an insert
+-- pushes the size past the cap, drop the oldest EVICT_BATCH entries by
+-- timestamp. Check is amortised via a per-map counter so the O(n) scan
+-- fires only once every EVICT_INTERVAL inserts, not on every packet.
+--
+-- Values chosen for Keenetic-class boxes: 512 hosts × ~120 B ≈ 60 KB per
+-- map (fits comfortably in the memory budget we left nfqws2). Eviction
+-- batch of 128 gives a 512→384 drop, trading some detector memory on
+-- rarely-visited hosts for a bounded working set.
+local Z2K_DETECTOR_MAP_MAX = 512
+local Z2K_DETECTOR_EVICT_BATCH = 128
+local Z2K_DETECTOR_EVICT_INTERVAL = 64
+
+local function z2k_detector_evict_oldest(map, batch, ts_of)
+  local entries = {}
+  local i = 0
+  for k, v in pairs(map) do
+    i = i + 1
+    entries[i] = { k = k, ts = ts_of(v) or 0 }
+  end
+  if i <= batch then return end
+  table.sort(entries, function(a, b) return a.ts < b.ts end)
+  for j = 1, batch do
+    map[entries[j].k] = nil
+  end
+end
+
+local function z2k_tls_stalled_ts_of(v)
+  return tonumber(v) or 0
+end
+
+local function z2k_tls_stalled_maybe_evict()
+  z2k_tls_stalled_insert_counter = z2k_tls_stalled_insert_counter + 1
+  if z2k_tls_stalled_insert_counter < Z2K_DETECTOR_EVICT_INTERVAL then return end
+  z2k_tls_stalled_insert_counter = 0
+
+  local n = 0
+  for _ in pairs(z2k_tls_stalled_host_ts) do n = n + 1 end
+  if n <= Z2K_DETECTOR_MAP_MAX then return end
+  z2k_detector_evict_oldest(z2k_tls_stalled_host_ts, Z2K_DETECTOR_EVICT_BATCH, z2k_tls_stalled_ts_of)
+end
 
 function z2k_tls_stalled(desync, crec)
   -- Inherit existing fail signals
@@ -146,19 +199,20 @@ function z2k_tls_stalled(desync, crec)
     local prev = z2k_tls_stalled_host_ts[host]
     if prev then
       local elapsed = now - prev
+      z2k_tls_stalled_host_ts[host] = now
+      z2k_tls_stalled_maybe_evict()
       if elapsed >= Z2K_TLS_STALLED_SEC then
         if type(DLOG) == "function" then
           DLOG("z2k_tls_stalled: host=" .. host .. " prev ClientHello " .. elapsed .. "s ago with no ServerHello — counting as fail")
         end
-        z2k_tls_stalled_host_ts[host] = now
         return true
       end
-      -- Too early: update to more recent value but don't fail yet
-      z2k_tls_stalled_host_ts[host] = now
+      -- Too early: timestamp already bumped above
       return false
     end
     -- First attempt for this host: just record
     z2k_tls_stalled_host_ts[host] = now
+    z2k_tls_stalled_maybe_evict()
     return false
   end
 
@@ -214,17 +268,36 @@ end
 --     correct for rotation (no repeat pattern to learn from) but
 --     also means one-shot failures are not caught here.
 --
--- 15s threshold: conservative enough that short-response flows
--- (<1s turnaround) don't leak into the "stall" bucket, yet short
--- enough that a user actively retrying a broken page will trip it
--- within 1-2 retry cycles. Tunable if field testing shows drift.
+-- 30s threshold: started at 15s but bumped after 2026-04-17 field feedback
+-- that slow page transitions on already-open sites felt like the rotator
+-- was "searching strategies from scratch". At 15s a user pausing on a
+-- reference page for ~20s was enough to trip a fail on every reload.
+-- 30s keeps short-response flows (<1s turnaround) out of the stall bucket
+-- while still tripping within a few retry cycles on genuine stalls.
 --
--- Memory: same profile as z2k_tls_stalled_host_ts. One entry per
--- distinct hostname seen, ~60 bytes each. Hosts whose flows
--- complete cleanly still populate the table but never trigger
--- (because they get fresh CHs faster than the 15s threshold).
-local Z2K_MID_STREAM_STALL_SEC = 15
+-- Memory: bounded via z2k_mid_stream_maybe_evict — cap Z2K_DETECTOR_MAP_MAX
+-- entries, LRU by last_in_ts. See the comment block next to the eviction
+-- helpers above for the memory rationale (previously unbounded, caused
+-- OOM-kills of nfqws2 at 146 MB anon-rss on 2026-04-17).
+local Z2K_MID_STREAM_STALL_SEC = 30
 local z2k_mid_stream_state = {}
+local z2k_mid_stream_insert_counter = 0
+
+local function z2k_mid_stream_ts_of(v)
+  if type(v) ~= "table" then return 0 end
+  return tonumber(v.last_in_ts) or 0
+end
+
+local function z2k_mid_stream_maybe_evict()
+  z2k_mid_stream_insert_counter = z2k_mid_stream_insert_counter + 1
+  if z2k_mid_stream_insert_counter < Z2K_DETECTOR_EVICT_INTERVAL then return end
+  z2k_mid_stream_insert_counter = 0
+
+  local n = 0
+  for _ in pairs(z2k_mid_stream_state) do n = n + 1 end
+  if n <= Z2K_DETECTOR_MAP_MAX then return end
+  z2k_detector_evict_oldest(z2k_mid_stream_state, Z2K_DETECTOR_EVICT_BATCH, z2k_mid_stream_ts_of)
+end
 
 function z2k_mid_stream_stall(desync, crec)
   -- Inherit everything z2k_tls_stalled catches (which in turn inherits
@@ -247,10 +320,12 @@ function z2k_mid_stream_stall(desync, crec)
     if dis and type(dis.payload) == "string" and #dis.payload > 0 then
       local st = z2k_mid_stream_state[host]
       if not st then
-        st = {}
+        st = { last_in_ts = now }
         z2k_mid_stream_state[host] = st
+        z2k_mid_stream_maybe_evict()
+      else
+        st.last_in_ts = now
       end
-      st.last_in_ts = now
     end
     return false
   end
@@ -268,9 +343,10 @@ function z2k_mid_stream_stall(desync, crec)
                " prev flow received data " .. since_last_in ..
                "s ago, no further traffic until now — counting as mid-stream stall fail")
         end
-        -- Reset state so we don't repeatedly fail against the same
-        -- stale timestamp. Next attempt starts clean.
-        st.last_in_ts = 0
+        -- Drop the record entirely rather than keep a zero'd stub —
+        -- the next fresh ClientHello for this host starts clean and
+        -- the map size stays bounded between evictions.
+        z2k_mid_stream_state[host] = nil
         return true
       end
     end
