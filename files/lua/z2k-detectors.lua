@@ -268,24 +268,43 @@ end
 --     correct for rotation (no repeat pattern to learn from) but
 --     also means one-shot failures are not caught here.
 --
--- 30s threshold: started at 15s but bumped after 2026-04-17 field feedback
--- that slow page transitions on already-open sites felt like the rotator
--- was "searching strategies from scratch". At 15s a user pausing on a
--- reference page for ~20s was enough to trip a fail on every reload.
--- 30s keeps short-response flows (<1s turnaround) out of the stall bucket
--- while still tripping within a few retry cycles on genuine stalls.
+-- Active-retry gating (revised 2026-04-18).
 --
--- Memory: bounded via z2k_mid_stream_maybe_evict — cap Z2K_DETECTOR_MAP_MAX
--- entries, LRU by last_in_ts. See the comment block next to the eviction
--- helpers above for the memory rationale (previously unbounded, caused
--- OOM-kills of nfqws2 at 146 MB anon-rss on 2026-04-17).
-local Z2K_MID_STREAM_STALL_SEC = 30
+-- The raw "previous flow got some data, then silence >= N s before the
+-- next CH" heuristic false-positives heavily on normal browsing: a user
+-- reads a page for 40 s and clicks a link, and the detector counts the
+-- idle gap as a stall — even though the previous flow had completed
+-- cleanly. Over fails=3 these innocent idle events silently rotate away
+-- from a known-working strategy, which users experienced as "долго
+-- подбирает стратегии / само не ротируется".
+--
+-- Refinement: only fire when the user is ACTIVELY RETRYING this host.
+-- Signal: the gap between consecutive ClientHellos to the same host is
+-- short (≤ Z2K_MID_STREAM_RETRY_WINDOW). Pattern matches "page doesn't
+-- load, user hits reload" — which is what true Rostelecom mid-stream
+-- stalls produce. Pattern does NOT match "user reads page, navigates
+-- somewhere else on the site an minute later" — which is the false
+-- positive we were eating.
+--
+-- Added state field `last_ch_ts`. Two numeric fields × ≤512 hosts =
+-- still bounded at well under 100 KB.
+--
+-- Z2K_MID_STREAM_STALL_SEC reverted to 15 s. With the active-retry
+-- gate we no longer need the 30 s buffer, and 15 s catches genuine
+-- CF post-handshake stalls (~10-14 KB burst → silence) within one
+-- retry cycle instead of two.
+local Z2K_MID_STREAM_STALL_SEC = 15
+local Z2K_MID_STREAM_RETRY_WINDOW = 60
 local z2k_mid_stream_state = {}
 local z2k_mid_stream_insert_counter = 0
 
 local function z2k_mid_stream_ts_of(v)
   if type(v) ~= "table" then return 0 end
-  return tonumber(v.last_in_ts) or 0
+  -- Evict by whichever timestamp is newer — keeps the "most recent
+  -- interaction with this host" entries alive through LRU sweeps.
+  local a = tonumber(v.last_in_ts) or 0
+  local b = tonumber(v.last_ch_ts) or 0
+  return (a > b) and a or b
 end
 
 local function z2k_mid_stream_maybe_evict()
@@ -320,7 +339,7 @@ function z2k_mid_stream_stall(desync, crec)
     if dis and type(dis.payload) == "string" and #dis.payload > 0 then
       local st = z2k_mid_stream_state[host]
       if not st then
-        st = { last_in_ts = now }
+        st = { last_in_ts = now, last_ch_ts = 0 }
         z2k_mid_stream_state[host] = st
         z2k_mid_stream_maybe_evict()
       else
@@ -330,20 +349,39 @@ function z2k_mid_stream_stall(desync, crec)
     return false
   end
 
-  -- Outgoing ClientHello → start of a fresh connection to this host.
-  -- Check whether the previous flow left us in a "got some data, then
-  -- silence" state for more than the threshold.
+  -- Outgoing ClientHello → check whether the user is actively retrying
+  -- this host and whether the previous flow stalled mid-stream.
   if desync.outgoing and desync.l7payload == "tls_client_hello" then
     local st = z2k_mid_stream_state[host]
-    if st and st.last_in_ts and st.last_in_ts > 0 then
+    if not st then
+      -- First CH ever for this host: just record, no signal yet.
+      z2k_mid_stream_state[host] = { last_in_ts = 0, last_ch_ts = now }
+      z2k_mid_stream_maybe_evict()
+      return false
+    end
+
+    local prev_ch_ts = tonumber(st.last_ch_ts) or 0
+    local ch_gap = now - prev_ch_ts
+    st.last_ch_ts = now
+
+    -- Gate: only fire if user is ACTIVELY retrying (second CH within
+    -- the retry window). A CH after a long idle gap is a fresh visit,
+    -- not a retry — don't count a stale idle gap as a stall signal.
+    if prev_ch_ts == 0 or ch_gap > Z2K_MID_STREAM_RETRY_WINDOW then
+      return false
+    end
+
+    -- User is retrying. Check the mid-stream stall condition.
+    if st.last_in_ts and st.last_in_ts > 0 then
       local since_last_in = now - st.last_in_ts
       if since_last_in >= Z2K_MID_STREAM_STALL_SEC then
         if type(DLOG) == "function" then
           DLOG("z2k_mid_stream_stall: host=" .. host ..
-               " prev flow received data " .. since_last_in ..
-               "s ago, no further traffic until now — counting as mid-stream stall fail")
+               " active retry (ch_gap=" .. ch_gap ..
+               "s) prev flow data " .. since_last_in ..
+               "s ago — counting as mid-stream stall fail")
         end
-        -- Drop the record entirely rather than keep a zero'd stub —
+        -- Drop the record entirely rather than keep a stale stub —
         -- the next fresh ClientHello for this host starts clean and
         -- the map size stays bounded between evictions.
         z2k_mid_stream_state[host] = nil

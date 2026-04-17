@@ -437,23 +437,23 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
-    # RKN: всегда добавляем failure_detector=z2k_tls_stalled.
-    # Это superset z2k_tls_alert_fatal — наследует все его сигналы
-    # (retrans, incoming RST, HTTP DPI redirect, TLS fatal alert) и
-    # добавляет timeout-based детект «ClientHello ушёл, ServerHello
-    # так и не пришёл за 10 секунд». Ловит silent-стопы Ростелекома
-    # (cloudflare.com, meet.google.com, discord.com), где TCP-уровень
-    # работает, а TLS молча виснет — без этого детектора circular не
-    # видит фейла и застревает на сломанной стратегии навсегда.
+    # RKN: всегда добавляем failure_detector=z2k_mid_stream_stall.
+    # Это superset z2k_tls_stalled, который в свою очередь superset
+    # z2k_tls_alert_fatal — наследует все его сигналы (retrans,
+    # incoming RST, HTTP DPI redirect, TLS fatal alert) плюс
+    # timeout-based детект «ClientHello ушёл, ServerHello не пришёл»
+    # плюс класс post-handshake mid-stream stall. Последний класс —
+    # это ровно то что ловит Ростелекомовский Cloudflare-кейс, где
+    # handshake проходит, сервер отдаёт ~10-14 KB, затем поток тихо
+    # виснет и стандартные детекторы его не видят.
     #
-    # Откат с z2k_mid_stream_stall на z2k_tls_stalled (2026-04-18):
-    # полевой тест Евгения показал, что mid_stream_stall с 15-30s
-    # порогом даёт false-positive на обычных idle-паузах пользователя
-    # (открыл страницу, прочитал, ушёл, вернулся через 35с), что
-    # ротирует circular С рабочей стратегии на сломанную. Ощущается
-    # как «неповоротливость» и «долго подбирает стратегии».
-    # z2k_tls_stalled проверяет только стадию handshake и таких
-    # false-positive'ов не даёт — поведение совпадает с master.
+    # Note: z2k_mid_stream_stall v2 (2026-04-18) добавляет active-retry
+    # gating — срабатывает только когда пользователь настойчиво
+    # пробует один и тот же хост (второй CH в пределах 60 с от
+    # предыдущего). Без этого gating у нас был false-positive на
+    # нормальной навигации «почитал страницу 40с, кликнул дальше»,
+    # который тихо ротировал circular с рабочей стратегии. См.
+    # files/lua/z2k-detectors.lua для деталей heuristic.
     ensure_rkn_failure_detector() {
         local input="$1"
         local out=""
@@ -464,7 +464,7 @@ AUSTERUS_OPT
                 --lua-desync=circular:*)
                     case "$token" in
                         *failure_detector=*) ;;
-                        *) token="${token}:failure_detector=z2k_tls_stalled" ;;
+                        *) token="${token}:failure_detector=z2k_mid_stream_stall" ;;
                     esac
                     ;;
             esac
