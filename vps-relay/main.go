@@ -182,7 +182,7 @@ func newSession(ws *websocket.Conn, id string) *session {
 	return &session{
 		id:      id,
 		ws:      ws,
-		writeCh: make(chan []byte, 512),
+		writeCh: make(chan []byte, 2048),
 		done:    make(chan struct{}),
 		streams: make(map[uint16]*stream),
 	}
@@ -216,7 +216,7 @@ func (s *session) send(frame []byte) {
 }
 
 func (s *session) writePump() {
-	ticker := time.NewTicker(25 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -303,7 +303,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 
 	// Pump TCP → WS
 	go func() {
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 64*1024)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
@@ -333,7 +333,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 func (s *session) readPump() {
 	defer s.kill()
 
-	s.ws.SetReadLimit(4 * 1024 * 1024)
+	s.ws.SetReadLimit(2 * 1024 * 1024)
 	_ = s.ws.SetReadDeadline(time.Now().Add(90 * time.Second))
 	s.ws.SetPongHandler(func(string) error {
 		_ = s.ws.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -409,8 +409,8 @@ func (s *session) readPump() {
 }
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:    128 * 1024,
-	WriteBufferSize:   128 * 1024,
+	ReadBufferSize:    256 * 1024,
+	WriteBufferSize:   256 * 1024,
 	CheckOrigin:       func(r *http.Request) bool { return true },
 	EnableCompression: false,
 }

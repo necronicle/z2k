@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -100,7 +99,7 @@ type tunnelClient struct {
 	streams    sync.Map     // uint16 → *tunnelStream
 	nextID     atomic.Uint32
 	mu         sync.Mutex   // protects ws/writer replacement during reconnect
-	connectSem chan struct{} // limits concurrent CONNECT to CF Workers limit
+	connectSem chan struct{} // limits concurrent in-flight CONNECTs — 6 keeps SYN rate under TG DC burst threshold
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
@@ -139,10 +138,9 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 			InsecureSkipVerify: false,
 		},
 		HandshakeTimeout:  10 * time.Second,
-		Subprotocols:      []string{"binary"},
-		ReadBufferSize:    128 * 1024,
-		WriteBufferSize:   128 * 1024,
-		EnableCompression: true,
+		ReadBufferSize:    256 * 1024,
+		WriteBufferSize:   256 * 1024,
+		EnableCompression: false,
 		NetDial: func(network, addr string) (net.Conn, error) {
 			// Force IPv4 — IPv6 to Cloudflare is unstable on some ISPs
 			conn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
@@ -261,11 +259,10 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 func (tc *tunnelClient) streamReadLoop(stream *tunnelStream) {
 	defer stream.close()
 
-	reader := bufio.NewReaderSize(stream.conn, 64*1024)
 	buf := make([]byte, 64*1024)
 
 	for {
-		n, err := reader.Read(buf)
+		n, err := stream.conn.Read(buf)
 		if n > 0 {
 			stream.conn.SetDeadline(time.Now().Add(*connTimeout))
 			frame := encodeMuxFrame(stream.id, muxDATA, buf[:n])
@@ -326,12 +323,12 @@ func (tc *tunnelClient) run() {
 
 		connectedAt := time.Now()
 
-		// Keepalive: ping every 50s (CF kills idle WS after 100s)
+		// Keepalive: ping every 30s (symmetric with server)
 		wsDone := make(chan struct{})
 		pingDone := make(chan struct{})
 		go func() {
 			defer close(pingDone)
-			ticker := time.NewTicker(50 * time.Second)
+			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
 			for {
 				select {
@@ -465,7 +462,7 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		log.Printf("[tunnel] stream %d: %s -> %s:%d", streamID, clientConn.RemoteAddr(), origIP, origPort)
 	}
 
-	// Rate-limit concurrent CONNECTs to stay within CF Workers 6-connection limit
+	// Rate-limit concurrent in-flight CONNECTs — TG DC throttles SYN bursts from single IP
 	select {
 	case tc.connectSem <- struct{}{}:
 	case <-time.After(10 * time.Second):
