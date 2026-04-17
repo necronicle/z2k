@@ -1369,6 +1369,54 @@ step_configure_tmpdir() {
 }
 
 # ==============================================================================
+# ШАГ 9.6: TCP тюнинг (буферы + congestion control)
+# ==============================================================================
+
+step_tcp_tuning() {
+    print_header "Шаг 9.6/12: TCP тюнинг"
+
+    # Stock Keenetic ядра отдают tcp_wmem default=16384 (16 KB).
+    # При 65 ms RTT до VPS это 16KB/65ms ≈ 2 Mbit/s потолка на одну TCP
+    # сессию. WS-туннель к Telegram relay = одно TCP → весь TG-трафик
+    # мультиплексируется через одну сессию с этим потолком, отсюда
+    # подтормаживания видео при нескольких клиентах одновременно.
+    # Поднимаем write buffer default до 524 KB, max до 4 MB — дальше
+    # Linux TCP auto-tuning сам выбирает нужное окно.
+    print_info "Подъём TCP буферов для WS-туннеля (upload к VPS)..."
+    sysctl -w net.ipv4.tcp_rmem="4096 524288 4194304" 2>/dev/null || true
+    sysctl -w net.ipv4.tcp_wmem="4096 524288 4194304" 2>/dev/null || true
+    sysctl -w net.core.rmem_max=4194304 2>/dev/null || true
+    sysctl -w net.core.wmem_max=4194304 2>/dev/null || true
+    # BBR если ядро поддерживает; на Keenetic обычно нет — cubic сойдёт.
+    sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null \
+        && print_info "Congestion control: BBR" \
+        || print_info "Congestion control: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+
+    # Персистентность между ребутами через Entware init.d.
+    # S02 стартует рано — до любых сетевых демонов.
+    local tune_script="/opt/etc/init.d/S02z2k-tcp-tuning"
+    cat > "$tune_script" <<'EOF'
+#!/bin/sh
+# z2k TCP tuning — applied on every boot.
+# Without it tcp_wmem default stays at 16 KB and upload through the
+# WS tunnel caps at ~2 Mbit/s per TCP session with 65ms RTT to VPS.
+case "$1" in
+    start)
+        sysctl -w net.ipv4.tcp_rmem="4096 524288 4194304" 2>/dev/null
+        sysctl -w net.ipv4.tcp_wmem="4096 524288 4194304" 2>/dev/null
+        sysctl -w net.core.rmem_max=4194304 2>/dev/null
+        sysctl -w net.core.wmem_max=4194304 2>/dev/null
+        sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
+        ;;
+esac
+EOF
+    chmod +x "$tune_script" 2>/dev/null
+    print_success "TCP тюнинг применён и сохранён ($tune_script)"
+
+    return 0
+}
+
+# ==============================================================================
 # ШАГ 10: СОЗДАНИЕ ОФИЦИАЛЬНОГО CONFIG И INIT СКРИПТА
 # ==============================================================================
 
@@ -1871,6 +1919,7 @@ run_full_install() {
     step_download_domain_lists || return 1         # 8/12
     step_disable_hwnat_and_offload || return 1     # 9/12 (расширено)
     step_configure_tmpdir || return 1              # ← НОВОЕ (9.5/12)
+    step_tcp_tuning || return 1                     # ← НОВОЕ (9.6/12)
     step_create_config_and_init || return 1        # 10/12
     step_install_netfilter_hook || return 1        # 11/12
     step_finalize || return 1                      # 12/12
@@ -2177,6 +2226,7 @@ uninstall_zapret2() {
     done
     # Init script, watchdog binary, PID file, log.
     rm -f /opt/etc/init.d/S98tg-tunnel \
+          /opt/etc/init.d/S02z2k-tcp-tuning \
           /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
           /opt/sbin/tg-mtproxy-client \
           /var/run/tg-tunnel.pid \
