@@ -2169,14 +2169,24 @@ uninstall_zapret2() {
         "$INIT_SCRIPT" stop 2>/dev/null || true
     fi
 
-    # Принудительно убить оставшиеся процессы nfqws2
-    local pids
-    pids=$(pidof nfqws2 2>/dev/null || true)
-    if [ -n "$pids" ]; then
-        print_info "Завершение зависших процессов nfqws2..."
-        kill -9 $pids 2>/dev/null || true
-        sleep 1
-    fi
+    # Принудительно убить оставшиеся процессы nfqws2 И nfqws (legacy от
+    # старых установок zapret до миграции на z2k).
+    local pids proc_name
+    for proc_name in nfqws2 nfqws; do
+        pids=$(pidof "$proc_name" 2>/dev/null || true)
+        if [ -n "$pids" ]; then
+            print_info "Завершение зависших процессов ${proc_name} (pidof)..."
+            kill -9 $pids 2>/dev/null || true
+        fi
+        # ps-fallback на случай если pidof не находит (бывает на busybox)
+        local ps_pids
+        ps_pids=$(ps w 2>/dev/null | awk -v name="$proc_name" '$0 ~ "/"name"( |$)" || $0 ~ " "name"( |$)" {print $1}' || true)
+        if [ -n "$ps_pids" ]; then
+            print_info "Завершение зависших процессов ${proc_name} (ps)..."
+            kill -9 $ps_pids 2>/dev/null || true
+        fi
+    done
+    sleep 1
 
     # Очистка iptables цепочек zapret2
     # Все команды с || true — скрипт запущен под set -e
@@ -2209,26 +2219,37 @@ uninstall_zapret2() {
     iptables -t nat -F z2k_masq_fix 2>/dev/null || true
     iptables -t nat -X z2k_masq_fix 2>/dev/null || true
 
-    # Удалить init скрипт
-    if [ -f "$INIT_SCRIPT" ]; then
-        rm -f "$INIT_SCRIPT"
-        print_info "Удален init скрипт"
-    fi
+    # Удалить init скрипт + legacy init-скрипты от старых установок
+    # zapret/nfqws (если миграция шла с предыдущих версий и они остались).
+    local _init
+    for _init in "$INIT_SCRIPT" \
+                 /opt/etc/init.d/S99zapret \
+                 /opt/etc/init.d/S99nfqws \
+                 /opt/etc/init.d/S99nfqws2; do
+        if [ -f "$_init" ]; then
+            rm -f "$_init"
+            print_info "Удален init скрипт: $_init"
+        fi
+    done
 
-    # Удалить netfilter хуки (все связанные с zapret)
+    # Удалить netfilter хуки (все связанные с zapret/z2k)
     local hook
-    for hook in /opt/etc/ndm/netfilter.d/*zapret*; do
+    for hook in /opt/etc/ndm/netfilter.d/*zapret* \
+                /opt/etc/ndm/netfilter.d/*z2k*; do
         if [ -f "$hook" ]; then
             rm -f "$hook"
             print_info "Удален netfilter хук: $(basename "$hook")"
         fi
     done
 
-    # Удалить zapret2
-    if [ -d "$ZAPRET2_DIR" ]; then
-        rm -rf "$ZAPRET2_DIR"
-        print_info "Удалена директория zapret2"
-    fi
+    # Удалить zapret2 и legacy zapret (от старых установок)
+    local _dir
+    for _dir in "$ZAPRET2_DIR" /opt/zapret; do
+        if [ -d "$_dir" ]; then
+            rm -rf "$_dir"
+            print_info "Удалена директория: $_dir"
+        fi
+    done
 
     # Удалить конфигурацию
     if [ -d "$CONFIG_DIR" ]; then
@@ -2236,8 +2257,8 @@ uninstall_zapret2() {
         print_info "Удалена конфигурация"
     fi
 
-    # Очистить временные файлы
-    rm -rf /tmp/z2k /tmp/zapret2 /tmp/blockcheck* 2>/dev/null
+    # Очистить временные файлы (включая legacy /tmp/zapret)
+    rm -rf /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* 2>/dev/null
 
     # Очистить ipset
     local setname ipset_names
@@ -2246,7 +2267,40 @@ uninstall_zapret2() {
         ipset destroy "$setname" 2>/dev/null || true
     done
 
-    print_success "zapret2 полностью удален"
+    # Подметание оставшихся NFQUEUE/zapret/z2k правил во всех таблицах,
+    # на случай если specific-цепочки выше что-то пропустили (старые
+    # инсталлы, нестандартные правила, и т.п.).
+    local _table _parent _num _rule_nums
+    for _table in mangle nat raw filter; do
+        for _parent in PREROUTING INPUT FORWARD OUTPUT POSTROUTING; do
+            _rule_nums=$(iptables -t "$_table" -L "$_parent" --line-numbers -n 2>/dev/null \
+                | grep -iE "NFQUEUE|zapret|nfqws|z2k" | awk '{print $1}' | sort -rn || true)
+            for _num in $_rule_nums; do
+                iptables -t "$_table" -D "$_parent" "$_num" 2>/dev/null || true
+            done
+        done
+    done
+
+    # Финальная проверка: что-то осталось?
+    local _leftover=0
+    for _proc in nfqws2 nfqws; do
+        if pidof "$_proc" >/dev/null 2>&1; then
+            print_warning "Остались процессы $_proc — попробуй снова с правами root"
+            _leftover=$((_leftover + 1))
+        fi
+    done
+    for _dir in /opt/zapret2 /opt/zapret; do
+        if [ -d "$_dir" ]; then
+            print_warning "Осталась директория: $_dir"
+            _leftover=$((_leftover + 1))
+        fi
+    done
+    if [ "$_leftover" -gt 0 ]; then
+        print_warning "Осталось ${_leftover} артефакт(ов). Если переустановка падает,"
+        print_warning "запусти добивающую зачистку: curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh"
+    else
+        print_success "zapret2 полностью удален"
+    fi
 
     return 0
 }
