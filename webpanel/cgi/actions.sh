@@ -19,13 +19,20 @@ read_flag() {
     # read_flag <key> <file> [default]
     local key="$1" file="$2" def="${3:-0}"
     [ -f "$file" ] || { printf '%s' "$def"; return 0; }
-    local raw
+    local raw val
     raw=$(grep "^${key}=" "$file" 2>/dev/null | head -1)
     if [ -z "$raw" ]; then
         printf '%s' "$def"
         return 0
     fi
-    printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//'
+    val=$(printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')
+    # An empty value (e.g. `ROBLOX_UDP_BYPASS=` with nothing after the
+    # equals sign) must fall back to the default, not propagate as ""
+    # — otherwise the caller's printf emits `"key":,` which breaks JSON.
+    # Caught by Алексей @Guf3477452 2026-04-18 after a reinstall left
+    # ROBLOX_UDP_BYPASS with no value.
+    [ -z "$val" ] && val="$def"
+    printf '%s' "$val"
 }
 
 set_flag() {

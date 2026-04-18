@@ -168,7 +168,10 @@ case "$method $path" in
         [ -n "$tpid" ] && tunnel_running=true
 
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"austerusj":%s,"rst_filter":%s,"silent_fallback":%s,"game_mode":%s,"customd":%s},"tunnel":{"running":%s}}\n' \
+        # toggle values quoted as strings so an empty value renders as `""`
+        # instead of `:,` (which breaks JSON.parse). read_flag now also
+        # falls back to default on empty, but the quotes are belt+braces.
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"austerusj":"%s","rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s"},"tunnel":{"running":%s}}\n' \
             "$installed" "$running" "$svc_state" \
             "$austerusj" "$rst_filter" "$silent_fb" "$game_mode" "$customd" \
             "$tunnel_running"
