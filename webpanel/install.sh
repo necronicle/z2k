@@ -101,6 +101,20 @@ if [ -z "$LIGHTTPD_BIN" ]; then
 fi
 echo "  lighttpd: $LIGHTTPD_BIN"
 
+# Neutralize the default Entware lighttpd init script. `opkg install
+# lighttpd` drops a generic S*lighttpd that auto-starts on next boot
+# bound to 0.0.0.0:8088 and fights our webpanel for the port.
+# Our own init script (S96z2k-webpanel) doesn't match S*lighttpd glob.
+# Эд (@GdalSef) 2026-04-18: stock S80lighttpd at PID 723 was holding
+# 0.0.0.0:8088 even after our installer ran, so bind() failed.
+for _init in /opt/etc/init.d/S*lighttpd; do
+    [ -e "$_init" ] || continue
+    echo "  disabling default lighttpd init: $_init"
+    "$_init" stop 2>/dev/null || true
+    mv "$_init" "${_init%/*}/.${_init##*/}.disabled-by-z2k" 2>/dev/null || \
+        rm -f "$_init" 2>/dev/null || true
+done
+
 # Verify mod_cgi module is physically present; auto-install if not.
 if ! find /opt/lib/lighttpd /opt/usr/lib/lighttpd 2>/dev/null -maxdepth 1 -name 'mod_cgi*' 2>/dev/null | head -1 | grep -q .; then
     echo "  mod_cgi missing — installing..."
