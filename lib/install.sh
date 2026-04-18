@@ -1126,21 +1126,28 @@ step_check_and_select_fwtype() {
     # ВАЖНО: Восстановить Z2K путь к init скрипту (он перезаписывается модулями zapret2)
     INIT_SCRIPT="$Z2K_INIT_SCRIPT"
 
-    # Переопределить linux_ipt_avail для Keenetic (IPv4-only режим)
-    # Официальная функция требует iptables И ip6tables, но Keenetic с DISABLE_IPV6=1
-    # не имеет ip6tables, поэтому проверяем только iptables
+    # Переопределить linux_ipt_avail для Keenetic (IPv4-only режим).
+    # Официальная функция требует iptables И ip6tables, но Keenetic с
+    # DISABLE_IPV6=1 не имеет ip6tables, поэтому проверяем только iptables.
+    # Не использовать upstream `exists` — она зависит от $PATH в момент
+    # установки, а на Keenetic под root часто нет /usr/sbin в PATH, и
+    # iptables «не находится», хотя физически на месте. Сергей @innotcommercial
+    # 2026-04-18: linux_fwtype вернул "unsupported", хотя iptables работал.
     linux_ipt_avail()
     {
-        exists iptables
+        [ -x /usr/sbin/iptables ] || [ -x /sbin/iptables ] || \
+        [ -x /opt/sbin/iptables ] || command -v iptables >/dev/null 2>&1
     }
 
     # Автоопределение через функцию из zapret2
     linux_fwtype
 
-    if [ -z "$FWTYPE" ]; then
-        print_error "Не удалось определить тип firewall"
-        FWTYPE="iptables"  # fallback
-        print_warning "Используем fallback: iptables"
+    # linux_fwtype может вернуть "unsupported" если ни iptables, ни nftables
+    # не нашлись (как раз случай с битым PATH выше). Старая проверка ловила
+    # только пустую строку — добавлено явное "unsupported".
+    if [ -z "$FWTYPE" ] || [ "$FWTYPE" = "unsupported" ]; then
+        print_warning "linux_fwtype вернул '$FWTYPE' — используем fallback iptables"
+        FWTYPE="iptables"
     fi
 
     print_success "Обнаружен firewall: $FWTYPE"
