@@ -1270,25 +1270,29 @@ step_disable_hwnat_and_offload() {
 step_configure_tmpdir() {
     print_header "Шаг 9.5/12: Настройка TMPDIR для low RAM систем"
 
-    # Получить объём RAM
-    local ram_mb
-    if [ -f "${ZAPRET2_DIR}/common/base.sh" ]; then
-        # Save overrides before re-sourcing
+    # Получить объём RAM. /proc/meminfo — основной путь (есть всегда на
+    # Linux и не зависит от того, что в нём определил upstream zapret).
+    # Раньше первичным был get_ram_mb из common/base.sh, но в части upstream-
+    # сборок этой функции нет, и установка падала с
+    #   "sh: get_ram_mb: not found" + "Обнаружено RAM: MB" + "sh: bad number"
+    # (Сергей @innotcommercial 2026-04-18, master).
+    local ram_mb=""
+    if [ -r /proc/meminfo ]; then
+        ram_mb=$(awk '/^MemTotal:/ {print int($2/1024); exit}' /proc/meminfo)
+    fi
+    # Fallback на upstream get_ram_mb, если /proc/meminfo не дался
+    if [ -z "$ram_mb" ] && [ -f "${ZAPRET2_DIR}/common/base.sh" ]; then
         _saved_linux_ipt_avail="$(type linux_ipt_avail 2>/dev/null)"
         . "${ZAPRET2_DIR}/common/base.sh"
-        # Restore override if it was set
         if [ -n "$_saved_linux_ipt_avail" ]; then
             linux_ipt_avail() { true; }
         fi
-        ram_mb=$(get_ram_mb)
-    else
-        # Fallback: определить RAM вручную
-        if [ -f /proc/meminfo ]; then
-            ram_mb=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}')
-        else
-            ram_mb=999  # Предполагаем достаточно RAM если не можем определить
+        if command -v get_ram_mb >/dev/null 2>&1; then
+            ram_mb=$(get_ram_mb)
         fi
     fi
+    # Если оба пути не сработали — предполагаем достаточно RAM
+    [ -z "$ram_mb" ] && ram_mb=999
 
     print_info "Обнаружено RAM: ${ram_mb}MB"
 
