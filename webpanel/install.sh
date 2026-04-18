@@ -4,8 +4,8 @@
 # Usage:
 #   sh webpanel/install.sh [--port N] [--bind IP]
 #
-# Defaults: port 8088, bind 0.0.0.0. Idempotent — stops the panel,
-# overwrites files, regenerates config, restarts.
+# Defaults: port 8088, bind = detected LAN IP. Idempotent — stops the
+# panel, overwrites files, regenerates config, restarts.
 
 set -eu
 
@@ -15,8 +15,49 @@ WWW_DIR="/opt/zapret2/www"
 INIT_DST="/opt/etc/init.d/S96z2k-webpanel"
 CONF_DST="$WEBPANEL_DIR/lighttpd.conf"
 
+# Pick the real LAN IP. Two-pass scan: first try bridge interfaces (br*)
+# only — they're the LAN side on Keenetic/OpenWRT — then fall back to any
+# interface. Within each pass: 192.168.* (practically never used for ISP
+# interconnect) → 172.16-31.* → 10.* (most common CGNAT / Rostelecom).
+# Falls back to the source IP of the default route, then to empty.
+#
+# Эд 2026-04-18: router with eth2.2 (192.168.0.4, WAN-side to upstream)
+# and br0 (192.168.3.1, real LAN). Single-pass logic took the first
+# 192.168.* match — eth2.2 — and bound the panel to the WAN interface.
+detect_lan_ip() {
+    local _ip=""
+    local _pat
+    local _ifprefix
+    for _ifprefix in 'br' ''; do
+        for _pat in \
+            '192\.168\.' \
+            '172\.(1[6-9]|2[0-9]|3[01])\.' \
+            '10\.' ; do
+            _ip=$(ip -4 addr show 2>/dev/null \
+                | awk -v p="$_pat" -v ifp="$_ifprefix" '
+                    /^[0-9]+: / {
+                        match($2, /^[^:@]+/)
+                        iface = substr($2, RSTART, RLENGTH)
+                        ok = (ifp == "" || index(iface, ifp) == 1)
+                        next
+                    }
+                    ok && $0 ~ ("inet " p) {
+                        split($2, a, "/")
+                        print a[1]
+                        exit
+                    }
+                ')
+            [ -n "$_ip" ] && { printf '%s' "$_ip"; return 0; }
+        done
+    done
+    _ip=$(ip route get 1.1.1.1 2>/dev/null \
+        | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+    printf '%s' "$_ip"
+}
+
 PORT=8088
-BIND="0.0.0.0"
+BIND="$(detect_lan_ip)"
+[ -z "$BIND" ] && BIND="0.0.0.0"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -122,12 +163,12 @@ echo "[6/6] Starting webpanel"
     exit 1
 }
 
-# Prefer an RFC1918 LAN address — default route often resolves to the
-# public WAN IP on Keenetic, which is useless as a panel URL.
-IP=$(ip -4 addr show 2>/dev/null \
-    | awk '/inet (10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {split($2,a,"/"); print a[1]; exit}')
-if [ -z "$IP" ]; then
-    IP=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+# Display the URL with a usable IP. If BIND is a specific address — show
+# that. Otherwise (0.0.0.0 or empty) re-run detect_lan_ip to pick one.
+if [ "$BIND" = "0.0.0.0" ] || [ -z "$BIND" ]; then
+    IP="$(detect_lan_ip)"
+else
+    IP="$BIND"
 fi
 [ -z "$IP" ] && IP="<router-ip>"
 

@@ -28,12 +28,35 @@ webpanel_url() {
     local port="8088"
     [ -r "$WEBPANEL_PORT_FILE" ] && port=$(cat "$WEBPANEL_PORT_FILE" 2>/dev/null | tr -dc '0-9')
     [ -z "$port" ] && port=8088
-    local ip
-    # Prefer an RFC1918 LAN address — on Keenetic routers the default route
-    # often resolves to the WAN public IP (e.g. 88.87.93.11) which is useless
-    # as a panel URL.
-    ip=$(ip -4 addr show 2>/dev/null \
-        | awk '/inet (10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {split($2,a,"/"); print a[1]; exit}')
+    local ip=""
+    # Pick the real LAN IP. Two-pass: bridge interfaces (br*) first, then
+    # any. Within each pass: 192.168.* → 172.16-31.* → 10.*.
+    # Эд 2026-04-18: routers with eth*.* in 192.168 range (WAN upstream)
+    # were leaking into URL display because old single-pass took the first
+    # 192.168.* match. Bridge-first skips that.
+    local pattern ifprefix
+    for ifprefix in 'br' ''; do
+        for pattern in \
+            '192\.168\.' \
+            '172\.(1[6-9]|2[0-9]|3[01])\.' \
+            '10\.' ; do
+            ip=$(ip -4 addr show 2>/dev/null \
+                | awk -v p="$pattern" -v ifp="$ifprefix" '
+                    /^[0-9]+: / {
+                        match($2, /^[^:@]+/)
+                        iface = substr($2, RSTART, RLENGTH)
+                        ok = (ifp == "" || index(iface, ifp) == 1)
+                        next
+                    }
+                    ok && $0 ~ ("inet " p) {
+                        split($2, a, "/")
+                        print a[1]
+                        exit
+                    }
+                ')
+            [ -n "$ip" ] && break 2
+        done
+    done
     if [ -z "$ip" ]; then
         ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
     fi
