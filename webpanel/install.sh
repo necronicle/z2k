@@ -15,20 +15,40 @@ WWW_DIR="/opt/zapret2/www"
 INIT_DST="/opt/etc/init.d/S96z2k-webpanel"
 CONF_DST="$WEBPANEL_DIR/lighttpd.conf"
 
-# Pick the real LAN IP. Priority: 192.168.* (practically never used for
-# ISP interconnect), then 172.16-31.*, then 10.* (most common CGNAT /
-# Rostelecom interconnect band). Within each band take the first hit.
+# Pick the real LAN IP. Two-pass scan: first try bridge interfaces (br*)
+# only — they're the LAN side on Keenetic/OpenWRT — then fall back to any
+# interface. Within each pass: 192.168.* (practically never used for ISP
+# interconnect) → 172.16-31.* → 10.* (most common CGNAT / Rostelecom).
 # Falls back to the source IP of the default route, then to empty.
+#
+# Эд 2026-04-18: router with eth2.2 (192.168.0.4, WAN-side to upstream)
+# and br0 (192.168.3.1, real LAN). Old single-pass logic took the first
+# 192.168.* match — eth2.2 — and bound the panel to the WAN interface.
 detect_lan_ip() {
     local _ip=""
     local _pat
-    for _pat in \
-        '192\.168\.' \
-        '172\.(1[6-9]|2[0-9]|3[01])\.' \
-        '10\.' ; do
-        _ip=$(ip -4 addr show 2>/dev/null \
-            | awk -v p="$_pat" '$0 ~ ("inet " p) {split($2,a,"/"); print a[1]; exit}')
-        [ -n "$_ip" ] && { printf '%s' "$_ip"; return 0; }
+    local _ifprefix
+    for _ifprefix in 'br' ''; do
+        for _pat in \
+            '192\.168\.' \
+            '172\.(1[6-9]|2[0-9]|3[01])\.' \
+            '10\.' ; do
+            _ip=$(ip -4 addr show 2>/dev/null \
+                | awk -v p="$_pat" -v ifp="$_ifprefix" '
+                    /^[0-9]+: / {
+                        match($2, /^[^:@]+/)
+                        iface = substr($2, RSTART, RLENGTH)
+                        ok = (ifp == "" || index(iface, ifp) == 1)
+                        next
+                    }
+                    ok && $0 ~ ("inet " p) {
+                        split($2, a, "/")
+                        print a[1]
+                        exit
+                    }
+                ')
+            [ -n "$_ip" ] && { printf '%s' "$_ip"; return 0; }
+        done
     done
     _ip=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
