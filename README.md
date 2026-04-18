@@ -179,7 +179,7 @@ z2k <команда>
 
 ```bash
 # Установка
-sh /opt/zapret2/z2k-webpanel-install.sh --port 8080
+sh /opt/zapret2/webpanel/install.sh --port 8080
 
 # Доступ
 http://ROUTER_IP:8080/
@@ -285,9 +285,7 @@ z2k/
 │   ├── lists/                  # Domain lists (RKN, YouTube, Discord)
 │   ├── z2k-healthcheck.sh      # Service availability monitoring
 │   ├── z2k-config-validator.sh # Config validation
-│   ├── z2k-update-lists.sh     # Auto domain list updater
-│   ├── z2k-webpanel.sh         # Web monitoring CGI
-│   └── z2k-webpanel-install.sh # Web panel installer
+│   └── z2k-update-lists.sh     # Auto domain list updater
 ├── cf-worker/                  # Cloudflare Worker relay
 │   ├── worker.js               # Telegram relay
 │   └── wrangler.toml           # Deployment config
