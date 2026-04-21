@@ -674,7 +674,7 @@ update_z2k() {
                     sleep 1
                     cp "$tg_tmp" /opt/sbin/tg-mtproxy-client
                     chmod +x /opt/sbin/tg-mtproxy-client
-                    /opt/sbin/tg-mtproxy-client --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+                    /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m >> /tmp/tg-tunnel.log 2>&1 &
                     sleep 2
                     if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
                         print_success "Telegram tunnel обновлён и перезапущен"

@@ -34,7 +34,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
-          cache-dependency-path: mtproxy-client/go.sum
+          cache-dependency-path: |
+            mtproxy-client/go.sum
+            vps-relay/go.sum
 
       - name: Go vet
         working-directory: mtproxy-client
@@ -71,6 +73,18 @@ jobs:
             env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA \
               go build -ldflags="-s -w" -o /dev/null .
           done
+
+      - name: Go vet (vps-relay)
+        working-directory: vps-relay
+        run: go vet ./...
+
+      - name: Go test (vps-relay)
+        working-directory: vps-relay
+        run: go test ./...
+
+      - name: Go build (vps-relay)
+        working-directory: vps-relay
+        run: go build ./...
 
   lua-check:
     name: Luacheck

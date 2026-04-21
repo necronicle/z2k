@@ -14,7 +14,7 @@ var (
 	tunnelURL    = flag.String("tunnel-url", "wss://213.176.74.63.nip.io/ws", "Tunnel relay WebSocket URL")
 	tunnelSecret = flag.String("tunnel-secret", "d01f72f9543b29da4e3724b1530c0d11cb30a6f8db15bc0adfe8f2d37b5844b2", "Shared secret for tunnel auth")
 	verbose      = flag.Bool("v", false, "Verbose logging")
-	connTimeout  = flag.Duration("timeout", 5*time.Minute, "Idle connection timeout")
+	connTimeout  = flag.Duration("timeout", 15*time.Minute, "Idle connection timeout")
 	maxConns     = flag.Int("max-conns", 1024, "Maximum concurrent connections")
 )
 

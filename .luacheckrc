@@ -8,6 +8,7 @@ max_line_length = false
 globals = {
     -- Desync action entry points (registered by z2k)
     "z2k_tls_alert_fatal",
+    "z2k_tls_stalled",
     "z2k_success_no_reset",
     "z2k_tls_extshuffle",
     "z2k_tls_fp_pack_v2",

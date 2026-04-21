@@ -1,12 +1,13 @@
 // vps-relay: TCP-over-WebSocket relay for the z2k tunnel client.
 //
 // Wire protocol (identical to cf-worker/worker.js):
-//   [streamId u16 BE][msgType u8][payload]
-//   Types: AUTH=0x00, CONNECT=0x01, DATA=0x02, CLOSE=0x03,
-//          CONNECT_OK=0x04, CONNECT_FAIL=0x05
-//   Auth:  streamId=0, type=0x00, payload = HMAC-SHA256(secret, secret) (32 bytes)
-//   CONNECT payload: [addr_type u8][addr][port u16 BE]
-//     addr_type 1 = IPv4 (4 bytes), 4 = IPv6 (16 bytes)
+//
+//	[streamId u16 BE][msgType u8][payload]
+//	Types: AUTH=0x00, CONNECT=0x01, DATA=0x02, CLOSE=0x03,
+//	       CONNECT_OK=0x04, CONNECT_FAIL=0x05
+//	Auth:  streamId=0, type=0x00, payload = HMAC-SHA256(secret, secret) (32 bytes)
+//	CONNECT payload: [addr_type u8][addr][port u16 BE]
+//	  addr_type 1 = IPv4 (4 bytes), 4 = IPv6 (16 bytes)
 //
 // No CF-style constraints: no 6-socket cap, no 10ms CPU limit, sessions
 // live as long as the WebSocket stays up.
@@ -23,8 +24,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -40,6 +44,11 @@ const (
 
 	addrIPv4 = 1
 	addrIPv6 = 4
+)
+
+const (
+	sessionWriteQueueDepth = 256
+	sessionWriteQueueBytes = 8 * 1024 * 1024
 )
 
 var (
@@ -168,8 +177,10 @@ type session struct {
 	done    chan struct{}
 	once    sync.Once
 
-	mu      sync.Mutex
-	streams map[uint16]*stream
+	mu          sync.Mutex
+	queueMu     sync.Mutex
+	queuedBytes int
+	streams     map[uint16]*stream
 }
 
 type stream struct {
@@ -182,7 +193,7 @@ func newSession(ws *websocket.Conn, id string) *session {
 	return &session{
 		id:      id,
 		ws:      ws,
-		writeCh: make(chan []byte, 512),
+		writeCh: make(chan []byte, sessionWriteQueueDepth),
 		done:    make(chan struct{}),
 		streams: make(map[uint16]*stream),
 	}
@@ -201,14 +212,43 @@ func (s *session) kill() {
 		}
 		s.streams = nil
 		s.mu.Unlock()
+		s.queueMu.Lock()
+		s.queuedBytes = 0
+		s.queueMu.Unlock()
 	})
 }
 
+func (s *session) reserveQueue(frameLen int) bool {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	if s.queuedBytes+frameLen > sessionWriteQueueBytes {
+		return false
+	}
+	s.queuedBytes += frameLen
+	return true
+}
+
+func (s *session) releaseQueue(frameLen int) {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	s.queuedBytes -= frameLen
+	if s.queuedBytes < 0 {
+		s.queuedBytes = 0
+	}
+}
+
 func (s *session) send(frame []byte) {
+	if !s.reserveQueue(len(frame)) {
+		log.Printf("[%s] write queue exceeded %d bytes, killing session", s.id, sessionWriteQueueBytes)
+		go s.kill()
+		return
+	}
 	select {
 	case s.writeCh <- frame:
 	case <-s.done:
+		s.releaseQueue(len(frame))
 	default:
+		s.releaseQueue(len(frame))
 		// Writer backpressure: drop the session if we can't keep up.
 		log.Printf("[%s] writeCh full, killing session", s.id)
 		go s.kill()
@@ -216,11 +256,12 @@ func (s *session) send(frame []byte) {
 }
 
 func (s *session) writePump() {
-	ticker := time.NewTicker(25 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case frame := <-s.writeCh:
+			s.releaseQueue(len(frame))
 			_ = s.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := s.ws.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 				if *verbose {
@@ -303,7 +344,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 
 	// Pump TCP → WS
 	go func() {
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 64*1024)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
@@ -333,7 +374,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 func (s *session) readPump() {
 	defer s.kill()
 
-	s.ws.SetReadLimit(4 * 1024 * 1024)
+	s.ws.SetReadLimit(2 * 1024 * 1024)
 	_ = s.ws.SetReadDeadline(time.Now().Add(90 * time.Second))
 	s.ws.SetPongHandler(func(string) error {
 		_ = s.ws.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -409,8 +450,8 @@ func (s *session) readPump() {
 }
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:    128 * 1024,
-	WriteBufferSize:   128 * 1024,
+	ReadBufferSize:    256 * 1024,
+	WriteBufferSize:   256 * 1024,
 	CheckOrigin:       func(r *http.Request) bool { return true },
 	EnableCompression: false,
 }
@@ -462,17 +503,30 @@ func main() {
 	}
 
 	// Graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	serveErr := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		sdCtx, sdCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer sdCancel()
-		_ = srv.Shutdown(sdCtx)
+		serveErr <- srv.ListenAndServe()
 	}()
 
 	log.Printf("z2k vps-relay listening on %s", *listenAddr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	select {
+	case err := <-serveErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown requested, draining active connections")
+		sdCtx, sdCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer sdCancel()
+		if err := srv.Shutdown(sdCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+			_ = srv.Close()
+		}
+		if err := <-serveErr; err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+		log.Printf("server stopped")
 	}
 }

@@ -1704,7 +1704,7 @@ step_finalize() {
 
         # Start tunnel mode. -v enables stream-level logs needed by the
         # watchdog's stale-detection mode.
-        /opt/sbin/tg-mtproxy-client --listen=:1443 -v >> /tmp/tg-tunnel.log 2>&1 &
+        /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
         sleep 2
 
         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
@@ -1837,7 +1837,7 @@ start() {
         return 0
     fi
     echo "Starting tg-tunnel..."
-    $BIN --listen=:1443 -v >> "$LOG" 2>&1 &
+    $BIN --listen=:1443 --timeout=15m -v >> "$LOG" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 2
     # Insert REDIRECT rules at TOP of both PREROUTING and OUTPUT (-I 1) so
