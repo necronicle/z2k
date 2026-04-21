@@ -1796,7 +1796,7 @@ step_finalize() {
 
         # Start tunnel mode. -v enables stream-level logs needed by the
         # watchdog's stale-detection mode.
-        /opt/sbin/tg-mtproxy-client --listen=:1443 -v >> /tmp/tg-tunnel.log 2>&1 &
+        /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
         sleep 2
 
         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then

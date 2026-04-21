@@ -24,7 +24,7 @@ start() {
         return 0
     fi
     echo "Starting tg-tunnel..."
-    $BIN --listen=:1443 -v >> "$LOG" 2>&1 &
+    $BIN --listen=:1443 --timeout=15m -v >> "$LOG" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 2
     # Insert REDIRECT rules at TOP of both PREROUTING and OUTPUT (-I 1) so

@@ -29,6 +29,11 @@ const (
 	muxCONNECT_FAIL = 0x05
 )
 
+const (
+	wsPingInterval = 30 * time.Second
+	wsReadTimeout  = 90 * time.Second
+)
+
 // Address types for CONNECT payload
 const (
 	addrIPv4 = 1
@@ -89,6 +94,19 @@ func computeAuthHMAC(secret string) []byte {
 	return mac.Sum(nil)
 }
 
+func configureWSKeepalive(ws *websocket.Conn) {
+	ws.SetReadLimit(2 * 1024 * 1024)
+	_ = ws.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	ws.SetPongHandler(func(string) error {
+		_ = ws.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		return nil
+	})
+	ws.SetPingHandler(func(data string) error {
+		_ = ws.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		return ws.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(5*time.Second))
+	})
+}
+
 // tunnelClient manages the multiplexed WS tunnel.
 type tunnelClient struct {
 	tunnelURL    string
@@ -96,9 +114,9 @@ type tunnelClient struct {
 
 	ws         *websocket.Conn
 	writer     *wsWriter
-	streams    sync.Map     // uint16 → *tunnelStream
+	streams    sync.Map // uint16 → *tunnelStream
 	nextID     atomic.Uint32
-	mu         sync.Mutex   // protects ws/writer replacement during reconnect
+	mu         sync.Mutex    // protects ws/writer replacement during reconnect
 	connectSem chan struct{} // limits concurrent in-flight CONNECTs — 6 keeps SYN rate under TG DC burst threshold
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -159,7 +177,7 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("WS dial %s: %w", tc.tunnelURL, err)
 	}
-	ws.SetReadLimit(2 * 1024 * 1024)
+	configureWSKeepalive(ws)
 
 	// Send auth message: [0x00 0x00][0x00][hmac_32_bytes]
 	authMAC := computeAuthHMAC(tc.tunnelSecret)
@@ -185,6 +203,7 @@ func (tc *tunnelClient) closeAllStreams() {
 
 // readLoop reads mux frames from the WS and dispatches to streams.
 func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
+	configureWSKeepalive(ws)
 	for {
 		_, msg, err := ws.ReadMessage()
 		if err != nil {
@@ -328,7 +347,7 @@ func (tc *tunnelClient) run() {
 		pingDone := make(chan struct{})
 		go func() {
 			defer close(pingDone)
-			ticker := time.NewTicker(30 * time.Second)
+			ticker := time.NewTicker(wsPingInterval)
 			defer ticker.Stop()
 			for {
 				select {
@@ -337,7 +356,13 @@ func (tc *tunnelClient) run() {
 					w := tc.writer
 					tc.mu.Unlock()
 					if w != nil {
-						w.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+						if err := w.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+							if *verbose {
+								log.Printf("[tunnel] ping failed: %v", err)
+							}
+							_ = ws.Close()
+							return
+						}
 					}
 				case <-wsDone:
 					return
