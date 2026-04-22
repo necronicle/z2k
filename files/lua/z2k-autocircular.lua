@@ -844,7 +844,16 @@ local function persist_if_changed(askey, hostn, hrec)
   if not n or n < 1 then return false end
 
   local prev = state[askey] and state[askey][hostn] and state[askey][hostn].strategy or nil
-  if prev == n then return false end
+  if prev == n then
+    -- Strategy unchanged: touch ts in memory so evict_state_entries (LRU by
+    -- ascending ts) treats this settled host as recently-used. Without this
+    -- the pinned ts stays frozen at first-pin time and the host gets evicted
+    -- before hosts that churn through many rotations — the opposite of what
+    -- we want. No disk write — the touched ts rides along with the next
+    -- write_state() triggered by another host changing strategy.
+    state[askey][hostn].ts = os.time() or 0
+    return false
+  end
 
   if not state[askey] then state[askey] = {} end
   state[askey][hostn] = { strategy = n, ts = os.time() or 0 }
