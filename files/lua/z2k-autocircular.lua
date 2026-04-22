@@ -336,61 +336,6 @@ local function load_state()
   merge_state_file_into(STATE_FILE_FALLBACK, state)
 end
 
--- Per-key cap on persisted state + in-memory telemetry maps. Scales with
--- the hardware class via Z2K_HOST_CAP env (set by S99zapret2 from
--- /proc/meminfo). Falls back to 500 on the legacy path where the env is
--- not populated (e.g. running nfqws2 by hand for debugging). Clamped to
--- [50, 2000] to catch a pathological env-var override.
-local MAX_ENTRIES_PER_KEY = tonumber(os.getenv("Z2K_HOST_CAP")) or 500
-if MAX_ENTRIES_PER_KEY < 50 then MAX_ENTRIES_PER_KEY = 50 end
-if MAX_ENTRIES_PER_KEY > 2000 then MAX_ENTRIES_PER_KEY = 2000 end
-
-local function evict_state_entries(merged)
-  for askey, hosts in pairs(merged) do
-    local count = 0
-    for _ in pairs(hosts) do count = count + 1 end
-    if count > MAX_ENTRIES_PER_KEY then
-      -- Collect entries with timestamps, sort by ts ascending, remove oldest
-      local entries = {}
-      for hostn, rec in pairs(hosts) do
-        table.insert(entries, { hostn = hostn, ts = (rec and rec.ts) or 0 })
-      end
-      table.sort(entries, function(a, b) return a.ts < b.ts end)
-      local to_remove = count - MAX_ENTRIES_PER_KEY
-      for i = 1, to_remove do
-        hosts[entries[i].hostn] = nil
-      end
-    end
-  end
-end
-
-local function evict_telemetry_entries(merged)
-  for askey, hosts in pairs(merged) do
-    local count = 0
-    for _ in pairs(hosts) do count = count + 1 end
-    if count > MAX_ENTRIES_PER_KEY then
-      -- Collect entries with total attempts, sort by att ascending, remove lowest
-      local entries = {}
-      for hostn, strats in pairs(hosts) do
-        local att = 0
-        if type(strats) == "table" then
-          for _, rec in pairs(strats) do
-            if rec then
-              att = att + (tonumber(rec.ok) or 0) + (tonumber(rec.fail) or 0)
-            end
-          end
-        end
-        table.insert(entries, { hostn = hostn, att = att })
-      end
-      table.sort(entries, function(a, b) return a.att < b.att end)
-      local to_remove = count - MAX_ENTRIES_PER_KEY
-      for i = 1, to_remove do
-        hosts[entries[i].hostn] = nil
-      end
-    end
-  end
-end
-
 local function acquire_lock(path)
   local lockfile = path .. ".lock"
   -- Check for stale lock (older than 10 seconds)
@@ -478,9 +423,6 @@ local function write_state()
       end
     end
   end
-
-  -- Evict oldest entries if any key exceeds MAX_ENTRIES_PER_KEY
-  evict_state_entries(merged_state)
 
   local f = io.open(tmp, "w")
   if not f then
@@ -607,9 +549,6 @@ local function write_telemetry()
       end
     end
   end
-
-  -- Evict entries with lowest total attempts if any key exceeds MAX_ENTRIES_PER_KEY
-  evict_telemetry_entries(merged)
 
   local f = io.open(tmp, "w")
   if not f then
@@ -862,16 +801,7 @@ local function persist_if_changed(askey, hostn, hrec)
   if not n or n < 1 then return false end
 
   local prev = state[askey] and state[askey][hostn] and state[askey][hostn].strategy or nil
-  if prev == n then
-    -- Strategy unchanged: touch ts in memory so evict_state_entries (LRU by
-    -- ascending ts) treats this settled host as recently-used. Without this
-    -- the pinned ts stays frozen at first-pin time and the host gets evicted
-    -- before hosts that churn through many rotations — the opposite of what
-    -- we want. No disk write — the touched ts rides along with the next
-    -- write_state() triggered by another host changing strategy.
-    state[askey][hostn].ts = os.time() or 0
-    return false
-  end
+  if prev == n then return false end
 
   if not state[askey] then state[askey] = {} end
   state[askey][hostn] = { strategy = n, ts = os.time() or 0 }
