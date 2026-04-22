@@ -1317,6 +1317,8 @@ SUBMENU
                 else
                     print_error "Не удалось запустить"
                     tail -5 /tmp/tg-tunnel.log 2>/dev/null
+                    rm -f "$MTPROXY_BIN"
+                    print_info "Бинарник удалён — нажмите [1] ещё раз для перескачивания"
                 fi
                 pause
                 ;;
