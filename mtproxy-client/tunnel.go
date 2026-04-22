@@ -203,7 +203,6 @@ func (tc *tunnelClient) closeAllStreams() {
 
 // readLoop reads mux frames from the WS and dispatches to streams.
 func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
-	configureWSKeepalive(ws)
 	for {
 		_, msg, err := ws.ReadMessage()
 		if err != nil {
