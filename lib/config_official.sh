@@ -88,7 +88,12 @@ AUSTERUS_OPT
     # game servers (client-side error code 2). Reverted to the proven master
     # profile. The flowseal variant may help Rostelecom PC users specifically —
     # revisit as opt-in when Evgeniy can test.
-    game_udp="--lua-desync=circular:fails=1:time=60:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n4 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64:out_range=-n3"
+    # out_range was previously set per-strategy here (-n2/-n3/-n4) but that
+    # key is not part of any Lua function's arg vocabulary — it's only a
+    # C-side in-profile filter (--out-range). Those inline values were
+    # dead ever since the profile's --out-range=a was applied. Moved to
+    # --out-range=-n4 on the profile itself (below) — real cutoff at last.
+    game_udp="--lua-desync=circular:fails=1:time=60:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -314,6 +319,60 @@ AUSTERUS_OPT
     rkn_tcp=$(expand_badseq_aliases "$rkn_tcp")
     youtube_tcp=$(expand_badseq_aliases "$youtube_tcp")
     youtube_gv_tcp=$(expand_badseq_aliases "$youtube_gv_tcp")
+
+    # Phase 14b: strip dead :out_range=*: / :in_range=*: tokens from
+    # inside --lua-desync=... args.
+    #
+    # These live as CLI-level in-profile filters (--out-range / --in-range
+    # per docs/manual.en.md:696, nfqws.c:2147-2148), NOT as per-strategy
+    # Lua args. When someone writes `:out_range=-n2:` inside a lua-desync
+    # token (a common mistake copied from bol-van syntax where
+    # --dpi-desync-cutoff=n2 lives on the command line), the Lua arg
+    # parser happily stores it in desync.arg.out_range and no Lua
+    # function ever reads it — silent no-op. blockcheck-generated
+    # Strategy.txt files from older z2k versions are full of these
+    # tokens, and they clutter the generated NFQWS2_OPT without
+    # doing anything. This preprocessor scrubs them.
+    #
+    # Applied to every strategy string that might have been hand-edited
+    # or imported from older Strategy.txt blockcheck output.
+    strip_dead_range_args() {
+        local input="$1"
+        local token=""
+        local out=""
+        for token in $input; do
+            case "$token" in
+                --lua-desync=*)
+                    case "$token" in
+                        *:out_range=*|*:in_range=*)
+                            token=$(printf '%s' "$token" | awk '
+                                BEGIN { FS = ":"; OFS = ":" }
+                                {
+                                    out = ""
+                                    for (i = 1; i <= NF; i++) {
+                                        p = $i
+                                        if (index(p, "out_range=") == 1) continue
+                                        if (index(p, "in_range=") == 1) continue
+                                        out = (out == "" ? p : out ":" p)
+                                    }
+                                    print out
+                                }
+                            ')
+                            ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(strip_dead_range_args "$rkn_tcp")
+    youtube_tcp=$(strip_dead_range_args "$youtube_tcp")
+    youtube_gv_tcp=$(strip_dead_range_args "$youtube_gv_tcp")
+    quic_udp=$(strip_dead_range_args "$quic_udp")
+    discord_udp=$(strip_dead_range_args "$discord_udp")
+    game_udp=$(strip_dead_range_args "$game_udp")
 
     # Phase 7: convert fixed `repeats=N` on fake-family actions to the
     # range syntax `repeats=max(1,N-2)-(N+2)`. The z2k-range-rand.lua
@@ -678,7 +737,14 @@ AUSTERUS_OPT
         local ipset_excl="${lists_dir}/ipset-exclude.txt"
         local game_ipset_excl_opt=""
         [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=a --payload=all $game_udp --new\\n"
+        # --out-range=-n4: apply the game_udp Lua chain only to the first
+        # 4 outgoing packets of each UDP flow. Circular needs a handful of
+        # early packets to pick + pin a strategy, z2k_game_udp's
+        # replay_first() gate fires once anyway — beyond the 4th packet
+        # the Lua layer is pure overhead, so we short-circuit in C. Was
+        # previously --out-range=a (no limit) because the per-strategy
+        # out_range=-nN tokens were silently dropped by the Lua parser.
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
     fi
 
     # Game catchall (hybrid/aggressive) — winws-style broad-sweep.
@@ -722,14 +788,20 @@ AUSTERUS_OPT
     # UDP uses the z2k_game_udp Lua handler (not built-in fake) because
     # built-in fake still drops repeats=N on UDP payloads.
     if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
-        local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64:out_range=-n4"
+        # out_range moved to the profile itself (--out-range=-n4 below),
+        # the inline value was dead (see game_udp comment above).
+        local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
         # Port 2408 excluded — Cloudflare Warp (AmneziaWG) control-plane endpoint
         # engage.cloudflareclient.com:2408 is the only port that still works for
         # Warp from RU (ntc.party 17013 #560), and any QUIC/fake shot at its
         # handshake packets kills the tunnel (ntc.party 17013 #568). Warp does
         # not use 2408 for anything else, so losing catchall coverage on that
         # single port is a safe tradeoff.
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --in-range=a --out-range=a --payload=all $game_catchall_udp --new\\n"
+        # --out-range=-n4: same first-4-packets cutoff as the ipset
+        # profile above. For the catchall this matters more — we're
+        # looking at every UDP flow on 1024-65535, so limiting Lua
+        # evaluation to the opening handshake is a big CPU win.
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --in-range=a --out-range=-n4 --payload=all $game_catchall_udp --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
