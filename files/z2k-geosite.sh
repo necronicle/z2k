@@ -299,6 +299,76 @@ apply_new_list() {
     return 0
 }
 
+# --- Subtract YT + googlevideo from RKN list -------------------------------
+#
+# runetfreedom's ru-blocked / ru-blocked-all lists include YouTube and
+# googlevideo domains. config_official.sh chains profiles as
+# RKN TCP → YouTube TCP → YouTube GV → QUIC YT, and nfqws2 is first-match-
+# wins, so any overlapping domain gets the generic RKN strategy instead of
+# the dedicated YT/GV one. We strip YT + googlevideo entries from the RKN
+# list after all assets are written so each domain reaches exactly the
+# profile it was tuned for.
+#
+# Matching is suffix-aware: if the YT list contains "youtube.com",
+# "m.youtube.com" in RKN is dropped too (nfqws2 hostlist does suffix
+# matching, so leaving the child entry in RKN would also be caught by
+# RKN first). googlevideo.com is hard-coded because YT GV uses
+# --hostlist-domains=googlevideo.com instead of a file.
+subtract_yt_from_rkn() {
+    local rkn_target="$EXTRA/TCP/RKN/List.txt"
+    local yt_target="$EXTRA/TCP/YT/List.txt"
+
+    [ -s "$rkn_target" ] || return 0
+
+    local exclude="$TMP_DIR/rkn.exclude"
+    : > "$exclude"
+    [ -s "$yt_target" ] && cat "$yt_target" >> "$exclude"
+
+    local before after removed filtered
+    before=$(wc -l < "$rkn_target" 2>/dev/null || echo 0)
+    filtered="$TMP_DIR/rkn.filtered"
+
+    awk -v excl="$exclude" '
+        BEGIN {
+            while ((getline line < excl) > 0) {
+                sub(/\r$/, "", line)
+                if (length(line) > 0) ex[line] = 1
+            }
+            close(excl)
+        }
+        {
+            d = $0
+            sub(/\r$/, "", d)
+            if (d == "googlevideo.com") next
+            if (d ~ /\.googlevideo\.com$/) next
+            tmp = d
+            if (tmp in ex) next
+            while (sub(/^[^.]*\./, "", tmp)) {
+                if (tmp in ex) next
+            }
+            print d
+        }
+    ' "$rkn_target" > "$filtered" || {
+        log "RKN subtract: awk failed, keeping original list"
+        rm -f "$filtered"
+        return 1
+    }
+
+    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    removed=$((before - after))
+    if [ "$removed" -gt 0 ]; then
+        mv "$filtered" "$rkn_target" || {
+            log "RKN subtract: rename failed"
+            return 1
+        }
+        log "RKN: removed $removed YT/googlevideo overlaps ($before → $after lines)"
+    else
+        rm -f "$filtered"
+        log "RKN: no YT/googlevideo overlaps found"
+    fi
+    return 0
+}
+
 # --- Fetch all targets ------------------------------------------------------
 
 fetch_all() {
@@ -328,6 +398,12 @@ fetch_all() {
     fetch_asset "discord.txt"  "$EXTRA/TCP_Discord.txt"  && ok_count=$((ok_count+1)) || fail_count=$((fail_count+1))
 
     log "fetch summary: $ok_count ok, $fail_count failed"
+
+    # Strip YT + googlevideo overlaps from RKN list (enhanced branch only).
+    # Runs unconditionally — even on all-304 runs an older on-disk RKN list
+    # may still carry overlaps from a time before this step existed, or from
+    # newly-added entries in the YT list.
+    subtract_yt_from_rkn || log "RKN subtract: non-fatal failure, continuing"
 
     if [ "$ok_count" = "0" ]; then
         log "all targets failed"
