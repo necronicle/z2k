@@ -1,0 +1,84 @@
+name: Purge jsdelivr cache
+
+# After each push, installers that fall back to cdn.jsdelivr.net/gh/... will
+# otherwise serve up to 12h of stale content from the CDN edge (see the
+# z2k_fetch 4-layer fallback in z2k.sh / lib/utils.sh). jsdelivr exposes a
+# no-auth purge endpoint (purge.jsdelivr.net/gh/owner/repo@branch/path) —
+# calling it evicts the branch-pinned URL from every edge in ~1 second.
+#
+# Triggered on push to master and z2k-enhanced (the two branches our
+# installers point at). Computes the set of files touched by the push
+# via the `before..after` diff supplied in the push event, and fires one
+# purge request per file in parallel.
+
+on:
+  push:
+    branches:
+      - master
+      - z2k-enhanced
+
+jobs:
+  purge:
+    name: Evict jsdelivr edge cache
+    runs-on: ubuntu-latest
+    # Don't block CI; cache-purge failure is annoying, not fatal.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need enough history to diff `before..after`. 0 = full history.
+          # Repo is small, extra checkout time is negligible vs. the
+          # robustness payoff when the push spans several commits.
+          fetch-depth: 0
+
+      - name: Compute changed files
+        id: files
+        run: |
+          set -eu
+          BEFORE='${{ github.event.before }}'
+          AFTER='${{ github.event.after }}'
+          mkdir -p /tmp/purge
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              # New branch / force-push-from-nothing: no before commit
+              # available. Fall back to purging the whole branch's top
+              # 200 files by name so at least the most common installer
+              # paths get refreshed. Full-tree purge would rate-limit.
+              echo "No before SHA — using top 200 files from HEAD tree"
+              git ls-tree -r --name-only HEAD | head -200 > /tmp/purge/files.txt
+          else
+              # `git diff --name-only before..after` covers every file
+              # touched in the push regardless of how many commits it
+              # contains.
+              git diff --name-only "$BEFORE" "$AFTER" > /tmp/purge/files.txt
+          fi
+          count=$(wc -l < /tmp/purge/files.txt | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "---Files to purge ($count)---"
+          cat /tmp/purge/files.txt
+          echo "---"
+
+      - name: Fire purge requests
+        if: steps.files.outputs.count != '0'
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -u
+          ok=0
+          fail=0
+          while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              url="https://purge.jsdelivr.net/gh/${REPO}@${BRANCH}/${f}"
+              code=$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 15 "$url" 2>/dev/null) || code="ERR"
+              case "$code" in
+                  2*) ok=$((ok + 1));  printf '  [%s] %s\n' "$code" "$f" ;;
+                  *)  fail=$((fail + 1)); printf '  [%s] %s\n' "$code" "$f" ;;
+              esac
+          done < /tmp/purge/files.txt
+          echo
+          echo "purge summary: ok=$ok fail=$fail"
+          # Even if every single URL returned 4xx/5xx (e.g. jsdelivr
+          # rate-limit during a big push), the workflow itself should
+          # not turn the commit red — `continue-on-error: true` above
+          # already ensures that, this `exit 0` is just belt-and-braces.
+          exit 0
