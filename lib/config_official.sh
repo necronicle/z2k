@@ -516,25 +516,22 @@ AUSTERUS_OPT
     #   safe       — positive --ipset=game_ips.txt + 6-strategy rotator.
     #                Only IPs listed in game_ips.txt pass the profile, so
     #                the rotator never burns fails on Discord/Steam noise.
-    #   hybrid     — same ipset profile first, PLUS catchall UDP/TCP
-    #                profiles for everything else. Picks up game flows
-    #                on IPs NOT in game_ips.txt (cloud-hosted titles with
-    #                no SNI, sessions on arbitrary high ports, etc).
-    #                Mirrors Smart-Zapret-Launcher gaming_*_ultimate layout.
-    #                Caveat: catchall can perturb the first 4 packets of
-    #                unrelated UDP/TCP flows on 1024-65535 — most visible
-    #                risks are Discord P2P voice/video, WebRTC calls
-    #                (Meet/Zoom/Teams peer mode), BitTorrent DHT, and
-    #                any app that opens a TLS session on non-standard
-    #                TCP ports. Discord server-routed voice (ports
-    #                50000-50099, 3478-3481, 5349, 19294-19344) is
-    #                caught by the earlier Discord UDP profile and is
-    #                unaffected.
-    #   aggressive — only catchall UDP/TCP, no ipset profile at all.
-    #                Same Discord/WebRTC caveat as hybrid, and now the
-    #                game_ips.txt-listed titles also lose their
-    #                dedicated rotator — they share the single catchall
-    #                strategy with everything else.
+    #   hybrid     — same ipset profile first, PLUS a UDP catchall on
+    #                1024-65535 (no ipset). Picks up cloud-hosted game
+    #                flows on IPs NOT in game_ips.txt (no-SNI sessions
+    #                on arbitrary high UDP ports).
+    #                Caveat: the UDP catchall perturbs the first 4
+    #                packets of unrelated UDP flows on 1024-65535 —
+    #                risks: Discord P2P voice/video, WebRTC calls
+    #                (Meet/Zoom/Teams peer mode), BitTorrent DHT.
+    #                Discord server-routed voice (ports 50000-50099,
+    #                3478-3481, 5349, 19294-19344) is caught by the
+    #                earlier Discord UDP profile and is unaffected.
+    #                TCP is NOT touched by the catchall — see note in
+    #                the profile block below (2026-04-24 regression fix).
+    #   aggressive — only the UDP catchall, no ipset profile at all.
+    #                Same UDP caveats as hybrid, and game_ips.txt-listed
+    #                titles also lose their dedicated rotator.
     local GAME_MODE_STYLE
     GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$game_conf" "")
     case "$GAME_MODE_STYLE" in
@@ -610,30 +607,30 @@ AUSTERUS_OPT
     #   • WebRTC in browsers (Google Meet / Zoom / Teams) when doing
     #     direct peer calls — same class of issue.
     #   • BitTorrent DHT / uTP traffic on 1024-65535.
-    #   • TLS on non-standard TCP ports (some self-hosted servers,
-    #     IoT dashboards, niche game launchers) — fake-TLS shot at the
-    #     first 4 packets can abort the handshake.
-    # If a user reports broken Discord calls after enabling hybrid, the
-    # usual fix is to turn off Discord's peer-to-peer toggle; keeps
-    # hybrid benefits for games without losing voice.
     #
-    # Flags chosen to match winws.exe gaming_5_ultimate:
+    # UDP-only design (2026-04-24 regression fix after Andrey report):
+    # a TCP catchall on 1024-65535 also fires on the router's OUTPUT
+    # chain, where LAN-bound responses from the router itself go — so
+    # the router's own web UI and the z2k webpanel became unreachable
+    # for any LAN client that ended up with an ephemeral source port in
+    # 1024-65535 (most Linux clients). Removed TCP catchall entirely.
+    # UDP catchall still covers the winws.exe gaming_N.conf (non-
+    # _ultimate) layout, which is what Andrey's working Windows config
+    # actually uses — the _ultimate TCP arm was our over-reach.
+    #
+    # Flags chosen to match winws.exe gaming_5 (non-ultimate):
     #   --lua-desync=fake   = --dpi-desync=fake
     #   payload=all         ≈ --dpi-desync-any-protocol=1 (process all L7)
-    #   blob=...            = --dpi-desync-fake-unknown-udp=<quic init>
-    #                         / --dpi-desync-fake-tls=<tls CH>
+    #   blob=quic_google    = --dpi-desync-fake-unknown-udp=<quic init>
     #   ip_autottl=4,1-64   = --dpi-desync-autottl=4
     #   out_range=-n4       = --dpi-desync-cutoff=n4
     #   repeats=8           = --dpi-desync-repeats=8
     #
     # UDP uses the z2k_game_udp Lua handler (not built-in fake) because
-    # built-in fake still drops repeats=N on UDP payloads. TCP uses the
-    # built-in fake (it honors repeats on TCP).
+    # built-in fake still drops repeats=N on UDP payloads.
     if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
         local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64:out_range=-n4"
-        local game_catchall_tcp="--lua-desync=fake:payload=all:dir=out:blob=fake_default_tls:repeats=8:ip_autottl=4,1-64:out_range=-n4"
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=a --payload=all $game_catchall_udp --new\\n"
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=1024-65535 --in-range=a --out-range=a --payload=all $game_catchall_tcp --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
@@ -813,11 +810,12 @@ MODE_FILTER=hostlist
 # Enable nfqws2
 NFQWS2_ENABLE=1
 
-# TCP ports to process (will be filtered by --filter-tcp in NFQWS2_OPT)
-# Base: HTTP/HTTPS + Cloudflare alternates. In game_mode hybrid/aggressive
-# the range 1024-65535 is appended so the catch-all TCP game profile can
-# actually see non-standard ports (EOS, BattlEye, Fatshark handshakes).
-NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443$([ "$saved_GAME_MODE_ENABLED" = "1" ] && [ "$saved_GAME_MODE_STYLE" != "safe" ] && echo ',1024-65535')"
+# TCP ports to process (will be filtered by --filter-tcp in NFQWS2_OPT).
+# Base only: HTTP/HTTPS + Cloudflare alternates. game_mode hybrid/aggressive
+# used to append 1024-65535 here to feed a catch-all TCP profile, but that
+# profile also matched the router's OUTPUT replies to LAN clients and
+# broke the web UI — removed 2026-04-24.
+NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
 NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_GAME_MODE_ENABLED:+$([ "$saved_GAME_MODE_ENABLED" = "1" ] && echo ',1024-65535')}"
@@ -950,11 +948,12 @@ GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}
 ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
 # Game mode topology:
 #   safe       — positive game_ips.txt ipset + circular rotator (default).
-#   hybrid     — ipset profile first, plus catchall UDP/TCP 1024-65535
+#   hybrid     — ipset profile first, plus UDP catchall on 1024-65535
 #                (one fixed strategy). Picks up cloud-hosted games with
 #                no usable SNI. May disturb Discord P2P / WebRTC /
-#                BitTorrent on high ports — first 4 packets of each flow.
-#   aggressive — catchall only, no ipset. Same collateral risks as hybrid,
+#                BitTorrent on high UDP ports — first 4 packets per flow.
+#                TCP is not touched by the catchall.
+#   aggressive — UDP catchall only, no ipset. Same UDP risks as hybrid,
 #                and listed games lose their dedicated rotator.
 GAME_MODE_STYLE=${saved_GAME_MODE_STYLE}
 

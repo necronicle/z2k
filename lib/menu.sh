@@ -936,23 +936,23 @@ UDP+TCP игровой bypass. Три режима:
                IP, шум Discord/Steam ротатор не трогает.
                Рекомендуется всем, кому нужны только игры из списка.
 
-  hybrid     — safe + catchall UDP/TCP 1024-65535 одной фиксированной
+  hybrid     — safe + catchall UDP 1024-65535 одной фиксированной
                стратегией (fake + autottl=4, cutoff=n4, repeats=8).
-               Подхватывает игровые потоки на IP ВНЕ списка
+               Подхватывает игровые UDP-потоки на IP ВНЕ списка
                (облачные игры без SNI, сессии на произвольных портах).
-               ⚠ Может ломать:
+               ⚠ Может ломать UDP-трафик на высоких портах:
                  • Discord peer-to-peer голос/видео (в настройках
                    Discord выключить "Use peer-to-peer" — чинит).
                  • WebRTC-звонки в браузере (Meet/Zoom/Teams) в P2P.
                  • BitTorrent DHT/uTP.
-                 • TLS на нестандартных TCP-портах.
                Серверный Discord voice (порты 50000-50099 и т.д.)
                не затрагивается — его ловит отдельный профиль раньше.
+               TCP не трогается — web-морды/обычный HTTPS безопасны.
 
-  aggressive — только catchall, без ipset-профиля. Максимум покрытия,
-               но игры из game_ips.txt теряют персональный ротатор
-               и идут по общей стратегии вместе со всем остальным.
-               Те же риски, что и у hybrid.
+  aggressive — только UDP catchall, без ipset-профиля. Максимум
+               покрытия, но игры из game_ips.txt теряют персональный
+               ротатор и идут по общей стратегии вместе со всем
+               остальным. Те же UDP-риски, что и у hybrid.
 
 [1] Safe (только из списка)
 [2] Hybrid (список + облачные)
@@ -1002,14 +1002,14 @@ SUBMENU
             ;;
         2)
             _set_game_style "hybrid"
-            print_success "Игровой режим: hybrid (+catchall для облачных игр)"
-            print_warning "Может задеть Discord P2P / WebRTC / BitTorrent — см. текст выше"
+            print_success "Игровой режим: hybrid (+UDP catchall для облачных игр)"
+            print_warning "Может задеть UDP на высоких портах: Discord P2P / WebRTC / BitTorrent"
             need_regen=1
             ;;
         3)
             _set_game_style "aggressive"
             print_warning "Игровой режим: aggressive (игры из списка теряют личный ротатор)"
-            print_warning "Те же риски, что у hybrid (Discord P2P, WebRTC, BitTorrent)"
+            print_warning "Те же UDP-риски, что у hybrid (Discord P2P, WebRTC, BitTorrent)"
             need_regen=1
             ;;
         0)
