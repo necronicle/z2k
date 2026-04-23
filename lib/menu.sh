@@ -98,11 +98,12 @@ MENU
 [P] Веб-панель (дубль меню в браузере)
 [D] Диагностика (сводка для траблшутинга)
 [X] Active probe (подбор стратегии под конкретный домен)
+[I] Убрать статические IP Instagram (обход DNS-отравления)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,R,G,T,W,S,P,D,X]: "
+        printf "Выберите опцию [0-5,R,G,T,W,S,P,D,X,I]: "
         read_input choice
 
         case "$choice" in
@@ -144,6 +145,9 @@ MENU
                 ;;
             x|X)
                 menu_probe
+                ;;
+            i|I)
+                menu_instagram_dns_clear
                 ;;
             0)
                 print_info "Выход из меню"
@@ -214,6 +218,94 @@ menu_probe() {
     print_separator
     print_info "Probe завершён. Если --apply был выбран — лучшая стратегия"
     print_info "теперь пинится в state.tsv для $probe_host."
+    pause
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: INSTAGRAM DNS CLEAR
+# ==============================================================================
+#
+# Снять статические записи `ip host` для Instagram / cdninstagram, которые
+# install.sh прошивает в Keenetic как быстрый обход провайдерского DNS-
+# отравления. Записи через месяц-другой протухают (Meta ротирует IP), и
+# тогда ручная очистка — единственный простой способ снять костыль,
+# чтобы трафик пошёл по обычному DNS + z2k DPI-bypass.
+menu_instagram_dns_clear() {
+    clear_screen
+    print_header "[I] Убрать статические IP Instagram"
+
+    if ! command -v ndmc >/dev/null 2>&1; then
+        print_error "ndmc не найден — это не Keenetic, функция не применима"
+        pause
+        return
+    fi
+
+    # Собрать текущие записи. Формат вывода show running-config:
+    #   ip host <domain> <ipv4>
+    local ig_entries
+    ig_entries=$(ndmc -c "show running-config" 2>/dev/null \
+        | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
+
+    if [ -z "$ig_entries" ]; then
+        print_info "Записей ip host для instagram / cdninstagram нет."
+        print_info "Чистить нечего."
+        pause
+        return
+    fi
+
+    local count
+    count=$(printf '%s\n' "$ig_entries" | wc -l | tr -d ' ')
+
+    print_separator
+    print_info "Найдено записей: $count"
+    print_separator
+    printf '%s\n' "$ig_entries"
+    print_separator
+    print_warning "Эти записи были прошиты при установке z2k как обход"
+    print_warning "DNS-отравления. После удаления резолв пойдёт через"
+    print_warning "провайдерский DNS (или через DoH, если настроен)."
+    print_warning "Если у провайдера активный DNS-блок Instagram — без"
+    print_warning "этих записей и без DoH инста открываться не будет."
+    echo
+
+    if ! confirm "Удалить все $count записей?" "N"; then
+        print_info "Отмена"
+        pause
+        return
+    fi
+
+    local removed=0 failed=0
+    # Пройти построчно. Каждая строка = "ip host <domain> <ip>".
+    # В ndmc удаление — "no ip host <domain> <ip>" с теми же аргументами.
+    local IFS_orig="$IFS"
+    IFS='
+'
+    for line in $ig_entries; do
+        IFS="$IFS_orig"
+        if ndmc -c "no $line" >/dev/null 2>&1; then
+            removed=$((removed + 1))
+            print_info "  removed: $line"
+        else
+            failed=$((failed + 1))
+            print_warning "  FAIL:    $line"
+        fi
+        IFS='
+'
+    done
+    IFS="$IFS_orig"
+
+    if [ "$removed" -gt 0 ]; then
+        if ndmc -c "system configuration save" >/dev/null 2>&1; then
+            print_success "Удалено: $removed (конфиг сохранён)"
+        else
+            print_warning "Удалено: $removed, но save конфига не прошёл"
+            print_warning "Запусти вручную: ndmc -c \"system configuration save\""
+        fi
+    fi
+    if [ "$failed" -gt 0 ]; then
+        print_warning "Не удалось удалить: $failed"
+    fi
+
     pause
 }
 
