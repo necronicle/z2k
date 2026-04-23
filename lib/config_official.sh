@@ -79,14 +79,15 @@ AUSTERUS_OPT
     # Game UDP strategy: custom z2k_game_udp Lua handler (rather than built-in
     # fake, which drops repeats=N for UDP payloads). 6 variants rotated by
     # circular with fails=1 and a 60s observation window. Positive
-    # --ipset=game_ips.txt on the profile constrains the rotator to real
-    # Roblox AS22697 IPs so Discord/Steam noise does not burn the fails
+    # --ipset=game_ips.txt on the profile constrains the rotator to the
+    # listed game-server IPs so Discord/Steam noise does not burn the fails
     # counter. Hardcoded inline — no external Strategy.txt to sync.
     #
     # NOTE: a flowseal-style udplen+fake chain with narrower port range was
-    # tested 2026-04-16 and broke Dom.ru (Roblox error 2). Reverted to the
-    # proven master profile. The flowseal variant may help Rostelecom PC
-    # users specifically — revisit as opt-in when Evgeniy can test.
+    # tested 2026-04-16 and broke a Dom.ru user's connection to the listed
+    # game servers (client-side error code 2). Reverted to the proven master
+    # profile. The flowseal variant may help Rostelecom PC users specifically —
+    # revisit as opt-in when Evgeniy can test.
     game_udp="--lua-desync=circular:fails=1:time=60:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64:out_range=-n4 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n2 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64:out_range=-n3 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64:out_range=-n3"
 
     # Force domain-level memory for all autocircular profiles.
@@ -510,16 +511,30 @@ AUSTERUS_OPT
         GAME_MODE_ENABLED=$(safe_config_read "ROBLOX_UDP_BYPASS" "$game_conf" "0")
     fi
     # GAME_MODE_STYLE — safe|hybrid|aggressive. Default "safe" for backwards
-    # compatibility (pre-hybrid routers keep their existing Roblox-ipset +
+    # compatibility (pre-hybrid routers keep their existing ipset +
     # circular-rotator behavior when this flag isn't in config yet).
-    #   safe       — positive --ipset=game_ips.txt + 6-strategy rotator
-    #                (only Roblox AS22697 IPs pass the profile)
+    #   safe       — positive --ipset=game_ips.txt + 6-strategy rotator.
+    #                Only IPs listed in game_ips.txt pass the profile, so
+    #                the rotator never burns fails on Discord/Steam noise.
     #   hybrid     — same ipset profile first, PLUS catchall UDP/TCP
-    #                profiles for everything else (AWS-hosted games like
-    #                Warhammer Darktide, Outlast Trials, that don't sit
-    #                on Roblox IPs and so are never caught by `safe`).
+    #                profiles for everything else. Picks up game flows
+    #                on IPs NOT in game_ips.txt (cloud-hosted titles with
+    #                no SNI, sessions on arbitrary high ports, etc).
     #                Mirrors Smart-Zapret-Launcher gaming_*_ultimate layout.
+    #                Caveat: catchall can perturb the first 4 packets of
+    #                unrelated UDP/TCP flows on 1024-65535 — most visible
+    #                risks are Discord P2P voice/video, WebRTC calls
+    #                (Meet/Zoom/Teams peer mode), BitTorrent DHT, and
+    #                any app that opens a TLS session on non-standard
+    #                TCP ports. Discord server-routed voice (ports
+    #                50000-50099, 3478-3481, 5349, 19294-19344) is
+    #                caught by the earlier Discord UDP profile and is
+    #                unaffected.
     #   aggressive — only catchall UDP/TCP, no ipset profile at all.
+    #                Same Discord/WebRTC caveat as hybrid, and now the
+    #                game_ips.txt-listed titles also lose their
+    #                dedicated rotator — they share the single catchall
+    #                strategy with everything else.
     local GAME_MODE_STYLE
     GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$game_conf" "")
     case "$GAME_MODE_STYLE" in
@@ -554,8 +569,8 @@ AUSTERUS_OPT
 
 
     # Game Filter UDP — custom protocols, unknown payloads. Uses a positive
-    # --ipset=game_ips.txt match so strategies fire ONLY on real game server
-    # IPs (Roblox AS22697, etc), not on random Discord/Steam/BitTorrent UDP
+    # --ipset=game_ips.txt match so the strategy rotator fires ONLY on
+    # listed game-server IPs, not on random Discord/Steam/BitTorrent UDP
     # that would otherwise exhaust the circular rotator's fails counter.
     #
     # Strategies live in extra_strats/UDP/GAMES/Strategy.txt (built-in fallback
@@ -566,7 +581,7 @@ AUSTERUS_OPT
     # is actually applied. Blob alias `quic_google` → quic_initial_www_google_com.bin.
     #
     # Gated by GAME_MODE_ENABLED (new) with backwards-compat fallback to
-    # ROBLOX_UDP_BYPASS (old) — evaluated above for the game TCP profile.
+    # ROBLOX_UDP_BYPASS (old) — evaluated above.
     # In style=aggressive the ipset profile is skipped entirely so everything
     # goes through the catchall below.
     if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "aggressive" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
@@ -576,18 +591,33 @@ AUSTERUS_OPT
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=a --payload=all $game_udp --new\\n"
     fi
 
-    # Game catchall (hybrid/aggressive) — Smart-Zapret-Launcher style.
+    # Game catchall (hybrid/aggressive) — winws-style broad-sweep.
     # One fixed strategy per protocol (no rotator with fails=1; the rotator
     # would be exhausted within seconds by Discord/Steam/BitTorrent UDP
     # noise, which is exactly why the ipset profile above has to be
-    # positive-filtered). The catchall targets AWS-hosted game flows that
-    # land on arbitrary high ports with no SNI — Warhammer Darktide,
-    # Outlast Trials, EOS P2P, etc — and relies on cutoff=n4 to only
-    # perturb the first 4 packets of each flow so legitimate non-game
-    # traffic is barely affected.
+    # positive-filtered). The catchall targets cloud-hosted game flows
+    # that land on arbitrary high ports with no usable hostname — and
+    # relies on cutoff=n4 to only perturb the first 4 packets of each
+    # flow so legitimate non-game traffic is barely affected.
     #
-    # Flags chosen to match winws.exe gaming_5_ultimate (empirically the
-    # config Andrey said works on Windows for Darktide/Outlast):
+    # Known collateral risks (watch these when triaging new reports):
+    #   • Discord peer-to-peer voice/video (Settings → Voice & Video →
+    #     "Use peer-to-peer") — P2P mode opens UDP on random high ports
+    #     outside the Discord profile's 50000-50099/3478-3481/5349/
+    #     19294-19344 whitelist, so those flows do hit the catchall and
+    #     the first-4-packet fake can break ICE handshake. Server-routed
+    #     Discord voice is unaffected.
+    #   • WebRTC in browsers (Google Meet / Zoom / Teams) when doing
+    #     direct peer calls — same class of issue.
+    #   • BitTorrent DHT / uTP traffic on 1024-65535.
+    #   • TLS on non-standard TCP ports (some self-hosted servers,
+    #     IoT dashboards, niche game launchers) — fake-TLS shot at the
+    #     first 4 packets can abort the handshake.
+    # If a user reports broken Discord calls after enabling hybrid, the
+    # usual fix is to turn off Discord's peer-to-peer toggle; keeps
+    # hybrid benefits for games without losing voice.
+    #
+    # Flags chosen to match winws.exe gaming_5_ultimate:
     #   --lua-desync=fake   = --dpi-desync=fake
     #   payload=all         ≈ --dpi-desync-any-protocol=1 (process all L7)
     #   blob=...            = --dpi-desync-fake-unknown-udp=<quic init>
@@ -918,9 +948,14 @@ DROP_DPI_RST=${saved_DROP_DPI_RST}
 # Game bypass (one toggle = two flags; legacy name kept for rollback safety)
 GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}
 ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
-# Game mode topology: safe (only Roblox ipset+rotator — default),
-# hybrid (ipset+rotator AND catch-all for AWS/Epic games),
-# aggressive (only catch-all, no ipset).
+# Game mode topology:
+#   safe       — positive game_ips.txt ipset + circular rotator (default).
+#   hybrid     — ipset profile first, plus catchall UDP/TCP 1024-65535
+#                (one fixed strategy). Picks up cloud-hosted games with
+#                no usable SNI. May disturb Discord P2P / WebRTC /
+#                BitTorrent on high ports — first 4 packets of each flow.
+#   aggressive — catchall only, no ipset. Same collateral risks as hybrid,
+#                and listed games lose their dedicated rotator.
 GAME_MODE_STYLE=${saved_GAME_MODE_STYLE}
 
 # Persist the branch URL that this install was booted from, so that
