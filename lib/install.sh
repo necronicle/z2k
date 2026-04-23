@@ -864,8 +864,8 @@ step_build_zapret2() {
           /tmp/z2k-autocircular-debug.flag \
           /tmp/z2k-autocircular-debug.log 2>/dev/null || true
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
-        -o "${ZAPRET2_DIR}/lua/locked.lua"; then
+    if z2k_fetch "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
+        "${ZAPRET2_DIR}/lua/locked.lua"; then
         print_success "locked.lua загружен"
     else
         print_warning "Не удалось загрузить locked.lua (Discord voice может не работать)"
@@ -873,8 +873,8 @@ step_build_zapret2() {
 
     print_info "Загрузка orchestrator.sh для управления circular_locked..."
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/orchestrator.sh" \
-        -o "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"; then
+    if z2k_fetch "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/orchestrator.sh" \
+        "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"; then
         chmod +x "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"
         print_success "orchestrator.sh загружен"
     else
@@ -935,16 +935,16 @@ step_build_zapret2() {
     local custom_dir="${ZAPRET2_DIR}/init.d/keenetic/custom.d"
     mkdir -p "$custom_dir"
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-stun4all" \
-        -o "${custom_dir}/50-stun4all"; then
+    if z2k_fetch "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-stun4all" \
+        "${custom_dir}/50-stun4all"; then
         chmod +x "${custom_dir}/50-stun4all"
         print_success "50-stun4all установлен"
     else
         print_warning "Не удалось загрузить 50-stun4all"
     fi
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-discord-media" \
-        -o "${custom_dir}/50-discord-media"; then
+    if z2k_fetch "https://raw.githubusercontent.com/bol-van/zapret2/master/init.d/custom.d.examples.linux/50-discord-media" \
+        "${custom_dir}/50-discord-media"; then
         chmod +x "${custom_dir}/50-discord-media"
         print_success "50-discord-media установлен"
     else

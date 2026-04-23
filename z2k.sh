@@ -97,6 +97,96 @@ confirm() {
 }
 
 # ==============================================================================
+# z2k_fetch — загрузка файла с GitHub через цепочку зеркал.
+# ==============================================================================
+#
+# Российские провайдеры местами режут raw.githubusercontent.com (DNS
+# poisoning / SNI block), из-за чего первый curl при установке падает и
+# ничего дальше не работает. Обходим тремя зеркалами + DNS-override на
+# Keenetic как последним шансом:
+#
+#   1. raw.githubusercontent.com           — прямой путь, самый свежий
+#   2. cdn.jsdelivr.net/gh/<o>/<r>@<br>/<p> — CDN, 12h edge-кеш
+#                                            (purge: https://purge.jsdelivr.net/gh/<o>/<r>@<br>/<p>)
+#   3. gh-proxy.com/<raw-url>              — reverse-proxy без кеша
+#   4. Keenetic-only: nslookup через 8.8.8.8 → `ndmc ip host`, повтор 1+2.
+#
+# Использование:
+#   z2k_fetch "https://raw.githubusercontent.com/owner/repo/branch/path" /tmp/dest
+#   z2k_fetch "relative/path"         /tmp/dest   # тогда префикс = $GITHUB_RAW
+#
+# Возвращает 0 при успехе (файл записан), 1 — все слои не сработали.
+z2k_fetch() {
+    local src="$1"
+    local dest="$2"
+    local url
+
+    case "$src" in
+        http://*|https://*) url="$src" ;;
+        /*) url="${GITHUB_RAW}${src}" ;;
+        *)  url="${GITHUB_RAW}/${src}" ;;
+    esac
+
+    # Derive jsdelivr + gh-proxy URLs. Only raw.githubusercontent.com URLs
+    # have a jsdelivr equivalent; gh-proxy works for any raw URL.
+    local jsdelivr="" gh_proxy=""
+    case "$url" in
+        https://raw.githubusercontent.com/*)
+            local _rest="${url#https://raw.githubusercontent.com/}"
+            local _owner="${_rest%%/*}";  _rest="${_rest#*/}"
+            local _repo="${_rest%%/*}";   _rest="${_rest#*/}"
+            local _branch="${_rest%%/*}"; _rest="${_rest#*/}"
+            jsdelivr="https://cdn.jsdelivr.net/gh/${_owner}/${_repo}@${_branch}/${_rest}"
+            gh_proxy="https://gh-proxy.com/${url}"
+            ;;
+    esac
+
+    # --- Layer 1: direct ---
+    if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
+        return 0
+    fi
+
+    # --- Layer 2: jsdelivr CDN ---
+    if [ -n "$jsdelivr" ] && \
+       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
+        return 0
+    fi
+
+    # --- Layer 3: gh-proxy.com reverse-proxy ---
+    if [ -n "$gh_proxy" ] && \
+       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
+        return 0
+    fi
+
+    # --- Layer 4: Keenetic DNS override via 8.8.8.8 + ndmc ip host ---
+    # Copied-in-spirit from zapret4rocket z4r.sh:1075-1107 — same failure
+    # mode (ISP DNS poisoning of github hosts), same fix.
+    if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
+        local resolved_any=0 host ip
+        for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
+            ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
+                 | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
+            if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
+                ndmc -c "ip host $host $ip" >/dev/null 2>&1 && resolved_any=1
+            fi
+        done
+        if [ "$resolved_any" = "1" ]; then
+            # Let NDM re-read DNS cache before we retry.
+            sleep 1
+            if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
+                return 0
+            fi
+            if [ -n "$jsdelivr" ] && \
+               curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}
+
+# ==============================================================================
 # ПРОВЕРКИ ОКРУЖЕНИЯ
 # ==============================================================================
 
@@ -194,7 +284,7 @@ download_modules() {
 
         print_info "Загрузка lib/${module}.sh..."
 
-        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        if z2k_fetch "$url" "$output"; then
             print_success "Загружен: ${module}.sh"
         else
             die "Ошибка загрузки модуля: ${module}.sh"
@@ -230,7 +320,7 @@ download_strategies_source() {
     local url="${GITHUB_RAW}/strats_new2.txt"
     local output="${WORK_DIR}/strats_new2.txt"
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         local lines
         lines=$(wc -l < "$output")
         print_success "Загружено: strats_new2.txt ($lines строк)"
@@ -242,7 +332,7 @@ download_strategies_source() {
     local quic_url="${GITHUB_RAW}/quic_strats.ini"
     local quic_output="${WORK_DIR}/quic_strats.ini"
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$quic_url" -o "$quic_output"; then
+    if z2k_fetch "$quic_url" "$quic_output"; then
         local lines
         lines=$(wc -l < "$quic_output")
         print_success "Загружено: quic_strats.ini ($lines строк)"
@@ -286,7 +376,7 @@ zero_256.bin
         [ -z "$file" ] && continue
         local url="${GITHUB_RAW}/files/fake/${file}"
         local output="${fake_dir}/${file}"
-        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        if z2k_fetch "$url" "$output"; then
             print_success "Загружено: files/fake/${file}"
         else
             die "Ошибка загрузки files/fake/${file}"
@@ -308,7 +398,7 @@ download_init_script() {
     url="${GITHUB_RAW}/files/S99zapret2.new"
     output="${files_dir}/S99zapret2.new"
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/S99zapret2.new"
     else
         die "Ошибка загрузки files/S99zapret2.new"
@@ -316,7 +406,7 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/000-zapret2.sh"
     output="${files_dir}/000-zapret2.sh"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/000-zapret2.sh"
     else
         die "Ошибка загрузки files/000-zapret2.sh"
@@ -324,7 +414,7 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/z2k-blocked-monitor.sh"
     output="${files_dir}/z2k-blocked-monitor.sh"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/z2k-blocked-monitor.sh"
     else
         die "Ошибка загрузки files/z2k-blocked-monitor.sh"
@@ -334,7 +424,7 @@ download_init_script() {
     for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
-        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+        if z2k_fetch "$url" "$output"; then
             print_success "Загружено: files/${tool_name}"
         else
             print_warning "Не удалось загрузить files/${tool_name} (необязательный)"
@@ -345,7 +435,7 @@ download_init_script() {
     mkdir -p "${files_dir}/ndm"
     url="${GITHUB_RAW}/files/ndm/90-z2k-tg-redirect.sh"
     output="${files_dir}/ndm/90-z2k-tg-redirect.sh"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/ndm/90-z2k-tg-redirect.sh"
     else
         print_warning "Не удалось загрузить ndm hook (iptables не будут авто-восстанавливаться)"
@@ -363,7 +453,7 @@ download_init_script() {
     do
         url="${GITHUB_RAW}/webpanel/${wp_file}"
         output="${webpanel_dir}/${wp_file}"
-        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output" 2>/dev/null; then
+        if z2k_fetch "$url" "$output"; then
             : # ok
         else
             print_warning "Не удалось загрузить webpanel/${wp_file} (опциональный компонент)"
@@ -376,7 +466,7 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/lua/z2k-autocircular.lua"
     output="${lua_dir}/z2k-autocircular.lua"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/lua/z2k-autocircular.lua"
     else
         die "Ошибка загрузки files/lua/z2k-autocircular.lua"
@@ -384,7 +474,7 @@ download_init_script() {
 
     url="${GITHUB_RAW}/files/lua/z2k-modern-core.lua"
     output="${lua_dir}/z2k-modern-core.lua"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/lua/z2k-modern-core.lua"
     else
         die "Ошибка загрузки files/lua/z2k-modern-core.lua"
@@ -409,7 +499,7 @@ roblox_ips.txt
         local list_out="${lists_dir}/${list_file}"
         mkdir -p "$(dirname "$list_out")"
 
-        if curl -fsSL --connect-timeout 10 --max-time 120 "$list_url" -o "$list_out"; then
+        if z2k_fetch "$list_url" "$list_out"; then
             print_success "Загружено: files/lists/${list_file}"
         else
             die "Ошибка загрузки files/lists/${list_file}"
@@ -615,7 +705,7 @@ update_z2k() {
     local temp_file
     temp_file=$(mktemp)
 
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$latest_url" -o "$temp_file"; then
+    if z2k_fetch "$latest_url" "$temp_file"; then
         # Получить версию из нового файла
         local new_version
         new_version=$(grep '^Z2K_VERSION=' "$temp_file" | cut -d'"' -f2)
@@ -667,7 +757,7 @@ update_z2k() {
                 local tg_url="${GITHUB_RAW}/mtproxy-client/builds/tg-mtproxy-client-linux-${tg_arch}"
                 local tg_tmp
                 tg_tmp=$(mktemp)
-                if curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$tg_tmp" && \
+                if z2k_fetch "$tg_url" "$tg_tmp" && \
                    [ "$(wc -c < "$tg_tmp")" -gt 500000 ] && \
                    head -c 4 "$tg_tmp" 2>/dev/null | grep -q "ELF"; then
                     killall tg-mtproxy-client 2>/dev/null || true
