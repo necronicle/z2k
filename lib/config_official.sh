@@ -509,6 +509,23 @@ AUSTERUS_OPT
     if [ -z "$GAME_MODE_ENABLED" ]; then
         GAME_MODE_ENABLED=$(safe_config_read "ROBLOX_UDP_BYPASS" "$game_conf" "0")
     fi
+    # GAME_MODE_STYLE — safe|hybrid|aggressive. Default "safe" for backwards
+    # compatibility (pre-hybrid routers keep their existing Roblox-ipset +
+    # circular-rotator behavior when this flag isn't in config yet).
+    #   safe       — positive --ipset=game_ips.txt + 6-strategy rotator
+    #                (only Roblox AS22697 IPs pass the profile)
+    #   hybrid     — same ipset profile first, PLUS catchall UDP/TCP
+    #                profiles for everything else (AWS-hosted games like
+    #                Warhammer Darktide, Outlast Trials, that don't sit
+    #                on Roblox IPs and so are never caught by `safe`).
+    #                Mirrors Smart-Zapret-Launcher gaming_*_ultimate layout.
+    #   aggressive — only catchall UDP/TCP, no ipset profile at all.
+    local GAME_MODE_STYLE
+    GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$game_conf" "")
+    case "$GAME_MODE_STYLE" in
+        safe|hybrid|aggressive) ;;
+        *) GAME_MODE_STYLE="safe" ;;
+    esac
 
     # RKN TCP (include Discord hostlist into RKN profile)
     local rkn_hostlists="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt"
@@ -550,11 +567,43 @@ AUSTERUS_OPT
     #
     # Gated by GAME_MODE_ENABLED (new) with backwards-compat fallback to
     # ROBLOX_UDP_BYPASS (old) — evaluated above for the game TCP profile.
-    if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
+    # In style=aggressive the ipset profile is skipped entirely so everything
+    # goes through the catchall below.
+    if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "aggressive" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
         local ipset_excl="${lists_dir}/ipset-exclude.txt"
         local game_ipset_excl_opt=""
         [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=a --payload=all $game_udp --new\\n"
+    fi
+
+    # Game catchall (hybrid/aggressive) — Smart-Zapret-Launcher style.
+    # One fixed strategy per protocol (no rotator with fails=1; the rotator
+    # would be exhausted within seconds by Discord/Steam/BitTorrent UDP
+    # noise, which is exactly why the ipset profile above has to be
+    # positive-filtered). The catchall targets AWS-hosted game flows that
+    # land on arbitrary high ports with no SNI — Warhammer Darktide,
+    # Outlast Trials, EOS P2P, etc — and relies on cutoff=n4 to only
+    # perturb the first 4 packets of each flow so legitimate non-game
+    # traffic is barely affected.
+    #
+    # Flags chosen to match winws.exe gaming_5_ultimate (empirically the
+    # config Andrey said works on Windows for Darktide/Outlast):
+    #   --lua-desync=fake   = --dpi-desync=fake
+    #   payload=all         ≈ --dpi-desync-any-protocol=1 (process all L7)
+    #   blob=...            = --dpi-desync-fake-unknown-udp=<quic init>
+    #                         / --dpi-desync-fake-tls=<tls CH>
+    #   ip_autottl=4,1-64   = --dpi-desync-autottl=4
+    #   out_range=-n4       = --dpi-desync-cutoff=n4
+    #   repeats=8           = --dpi-desync-repeats=8
+    #
+    # UDP uses the z2k_game_udp Lua handler (not built-in fake) because
+    # built-in fake still drops repeats=N on UDP payloads. TCP uses the
+    # built-in fake (it honors repeats on TCP).
+    if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
+        local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64:out_range=-n4"
+        local game_catchall_tcp="--lua-desync=fake:payload=all:dir=out:blob=fake_default_tls:repeats=8:ip_autottl=4,1-64:out_range=-n4"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=a --payload=all $game_catchall_udp --new\\n"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=1024-65535 --in-range=a --out-range=a --payload=all $game_catchall_tcp --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
@@ -688,15 +737,22 @@ create_official_config() {
     local saved_DROP_DPI_RST="0"
     local saved_ROBLOX_UDP_BYPASS="0"
     local saved_GAME_MODE_ENABLED=""
+    local saved_GAME_MODE_STYLE=""
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
+        saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
     fi
     # Backwards compat: if the new flag isn't set yet on this router,
     # inherit the legacy ROBLOX_UDP_BYPASS value so a single create_official_config
     # pass transparently migrates old configs to the new variable.
     [ -z "$saved_GAME_MODE_ENABLED" ] && saved_GAME_MODE_ENABLED="$saved_ROBLOX_UDP_BYPASS"
+    # GAME_MODE_STYLE default = safe (= pre-hybrid behavior) when missing.
+    case "$saved_GAME_MODE_STYLE" in
+        safe|hybrid|aggressive) ;;
+        *) saved_GAME_MODE_STYLE="safe" ;;
+    esac
 
     # Создать полный config файл
     cat > "$config_file" <<CONFIG
@@ -728,7 +784,10 @@ MODE_FILTER=hostlist
 NFQWS2_ENABLE=1
 
 # TCP ports to process (will be filtered by --filter-tcp in NFQWS2_OPT)
-NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
+# Base: HTTP/HTTPS + Cloudflare alternates. In game_mode hybrid/aggressive
+# the range 1024-65535 is appended so the catch-all TCP game profile can
+# actually see non-standard ports (EOS, BattlEye, Fatshark handshakes).
+NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443$([ "$saved_GAME_MODE_ENABLED" = "1" ] && [ "$saved_GAME_MODE_STYLE" != "safe" ] && echo ',1024-65535')"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
 NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_GAME_MODE_ENABLED:+$([ "$saved_GAME_MODE_ENABLED" = "1" ] && echo ',1024-65535')}"
@@ -859,6 +918,10 @@ DROP_DPI_RST=${saved_DROP_DPI_RST}
 # Game bypass (one toggle = two flags; legacy name kept for rollback safety)
 GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}
 ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
+# Game mode topology: safe (only Roblox ipset+rotator — default),
+# hybrid (ipset+rotator AND catch-all for AWS/Epic games),
+# aggressive (only catch-all, no ipset).
+GAME_MODE_STYLE=${saved_GAME_MODE_STYLE}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can
