@@ -222,6 +222,99 @@ AUSTERUS_OPT
     youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
 
+    # Phase 14: bol-van badseq alias expansion.
+    #
+    # Upstream bol-van/zapret has `--dpi-desync-fooling=badseq` with
+    # integer defaults -10000 for tcp_seq and -66000 for tcp_ack (the
+    # -66000 value is specifically chosen to drift past Linux conntrack's
+    # window-scaled tolerance introduced in 2.6.18; see GoodbyeDPI
+    # fakepackets.c:218 for the reference). The flag, when set, just
+    # does `th_seq += increment` and `th_ack += ack_increment` inside
+    # fill_tcphdr() on fake/decoy packets only, never on real data.
+    #
+    # Our zapret2 fork dropped FOOL_BADSEQ from C-side fooling bits
+    # (the whole fooling machinery was rewritten to Lua standard-fooling),
+    # so tokens like `:badseq:badseq_increment=N:badseq_ack_increment=M:`
+    # written in the spirit of bol-van get silently ignored by the Lua
+    # argument parser — they're dead noise in 8 of our rkn_tcp strategies
+    # and 6 yt/gv variants. The functional equivalent in our code is
+    # `tcp_seq=N:tcp_ack=M` inside standard fooling, which does land in
+    # apply_fooling() → reconstructed fake packet, matching bol-van's
+    # fill_tcphdr() behavior bit-for-bit.
+    #
+    # This preprocessor transparently rewrites the bol-van syntax into
+    # our tcp_seq/tcp_ack syntax:
+    #   `:badseq:`                        → `:tcp_seq=-10000:tcp_ack=-66000:`
+    #   `:badseq_increment=N:`            → `:tcp_seq=N:tcp_ack=-66000:`
+    #   `:badseq_increment=N:badseq_ack_increment=M:` → `:tcp_seq=N:tcp_ack=M:`
+    #
+    # Existing explicit `tcp_seq=` / `tcp_ack=` on the same token win
+    # (we never override an explicit user setting). The badseq tokens
+    # themselves are dropped from the output so there's no residual
+    # dead syntax in NFQWS2_OPT. Applied to fake-family tokens (fake,
+    # fakedsplit, fakeddisorder, hostfakesplit, rst, rstack, syndata,
+    # synack) — strictly mirroring bol-van's "fake/decoy only" invariant.
+    expand_badseq_aliases() {
+        local input="$1"
+        local token=""
+        local out=""
+        for token in $input; do
+            case "$token" in
+                --lua-desync=fake:*|\
+                --lua-desync=fakedsplit:*|\
+                --lua-desync=fakeddisorder:*|\
+                --lua-desync=hostfakesplit:*|\
+                --lua-desync=rst:*|\
+                --lua-desync=rstack:*|\
+                --lua-desync=syndata:*|\
+                --lua-desync=synack:*)
+                    case "$token" in
+                        *:badseq:*|*:badseq_increment=*|*:badseq_ack_increment=*)
+                            token=$(printf '%s' "$token" | awk '
+                                BEGIN { FS = ":"; OFS = ":"; DEF_SEQ = -10000; DEF_ACK = -66000 }
+                                {
+                                    has = 0
+                                    seq_set = 0; seq_val = DEF_SEQ
+                                    ack_set = 0; ack_val = DEF_ACK
+                                    ex_seq = 0; ex_ack = 0
+                                    out = ""
+                                    for (i = 1; i <= NF; i++) {
+                                        p = $i
+                                        if (p == "badseq") { has = 1; continue }
+                                        if (index(p, "badseq_increment=") == 1) {
+                                            has = 1; seq_set = 1
+                                            seq_val = substr(p, length("badseq_increment=") + 1)
+                                            continue
+                                        }
+                                        if (index(p, "badseq_ack_increment=") == 1) {
+                                            has = 1; ack_set = 1
+                                            ack_val = substr(p, length("badseq_ack_increment=") + 1)
+                                            continue
+                                        }
+                                        if (index(p, "tcp_seq=") == 1) ex_seq = 1
+                                        if (index(p, "tcp_ack=") == 1) ex_ack = 1
+                                        out = (out == "" ? p : out ":" p)
+                                    }
+                                    if (has) {
+                                        if (!ex_seq) out = out ":tcp_seq=" seq_val
+                                        if (!ex_ack) out = out ":tcp_ack=" ack_val
+                                    }
+                                    print out
+                                }
+                            ')
+                            ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(expand_badseq_aliases "$rkn_tcp")
+    youtube_tcp=$(expand_badseq_aliases "$youtube_tcp")
+    youtube_gv_tcp=$(expand_badseq_aliases "$youtube_gv_tcp")
+
     # Phase 7: convert fixed `repeats=N` on fake-family actions to the
     # range syntax `repeats=max(1,N-2)-(N+2)`. The z2k-range-rand.lua
     # wrapper picks a sticky random integer per flow from this range,
@@ -630,7 +723,13 @@ AUSTERUS_OPT
     # built-in fake still drops repeats=N on UDP payloads.
     if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
         local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64:out_range=-n4"
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --in-range=a --out-range=a --payload=all $game_catchall_udp --new\\n"
+        # Port 2408 excluded — Cloudflare Warp (AmneziaWG) control-plane endpoint
+        # engage.cloudflareclient.com:2408 is the only port that still works for
+        # Warp from RU (ntc.party 17013 #560), and any QUIC/fake shot at its
+        # handshake packets kills the tunnel (ntc.party 17013 #568). Warp does
+        # not use 2408 for anything else, so losing catchall coverage on that
+        # single port is a safe tradeoff.
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --in-range=a --out-range=a --payload=all $game_catchall_udp --new\\n"
     fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
