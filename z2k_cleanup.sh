@@ -9,6 +9,8 @@
 #   - Iptables цепочки и правила zapret/zapret2
 #   - Директории /opt/zapret и /opt/zapret2 (ПОЛНОСТЬЮ)
 #   - Временные файлы
+#   - Telegram-туннель: tg-mtproxy-client, S98tg-tunnel, NDM redirect hook,
+#     watchdog + cron-запись, iptables NAT REDIRECT на :1443, /opt/sbin бинарник
 #
 # Использование:
 #   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh
@@ -42,7 +44,8 @@ echo ""
 
 log_info "Попытка мягкой остановки через init-скрипты..."
 
-for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret; do
+for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
+            /opt/etc/init.d/S98tg-tunnel; do
     if [ -x "$init" ]; then
         log_info "Останавливаю: $init stop"
         "$init" stop 2>/dev/null || log_warn "  $init stop вернул ошибку (не критично)"
@@ -56,7 +59,8 @@ done
 log_info "Удаление init-скриптов..."
 
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
-            /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2; do
+            /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2 \
+            /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy; do
     if [ -f "$init" ]; then
         rm -f "$init"
         log_info "  Удалён: $init"
@@ -71,7 +75,9 @@ log_info "Удаление netfilter хуков..."
 
 for hook in /opt/etc/ndm/netfilter.d/000-zapret2.sh \
             /opt/etc/ndm/netfilter.d/000-zapret.sh \
-            /opt/etc/ndm/netfilter.d/*zapret*; do
+            /opt/etc/ndm/netfilter.d/*zapret* \
+            /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
+            /opt/etc/ndm/netfilter.d/*z2k-tg*; do
     if [ -f "$hook" ]; then
         rm -f "$hook"
         log_info "  Удалён: $hook"
@@ -85,7 +91,7 @@ done
 log_info "Поиск и завершение процессов nfqws / nfqws2..."
 
 killed=0
-for proc_name in nfqws2 nfqws; do
+for proc_name in nfqws2 nfqws tg-mtproxy-client; do
     pids=$(pidof "$proc_name" 2>/dev/null || true)
     if [ -n "$pids" ]; then
         for pid in $pids; do
@@ -97,7 +103,7 @@ for proc_name in nfqws2 nfqws; do
 done
 
 # Дополнительный поиск через ps (на случай если pidof не нашёл)
-for proc_name in nfqws2 nfqws; do
+for proc_name in nfqws2 nfqws tg-mtproxy-client; do
     ps_pids=$(ps w 2>/dev/null | awk -v name="$proc_name" '$0 ~ "/"name"( |$)" || $0 ~ " "name"( |$)" {print $1}' || true)
     if [ -n "$ps_pids" ]; then
         for pid in $ps_pids; do
@@ -109,7 +115,7 @@ for proc_name in nfqws2 nfqws; do
 done
 
 if [ "$killed" -eq 0 ]; then
-    log_skip "Запущенных процессов nfqws/nfqws2 не найдено"
+    log_skip "Запущенных процессов nfqws/nfqws2/tg-mtproxy-client не найдено"
 else
     log_info "Завершено процессов: $killed"
 fi
@@ -175,6 +181,45 @@ for table in mangle nat raw filter; do
 done
 
 # ==========================================
+# 5a. Telegram-туннель: NAT REDIRECT правила
+# ==========================================
+#
+# Меню [T] / install вставляет REDIRECT на :1443 для 10 Telegram DC CIDRs
+# в PREROUTING и OUTPUT (nat). NDM hook может продублировать их, поэтому
+# удаляем в цикле пока -C находит совпадение.
+
+log_info "Удаление iptables NAT REDIRECT правил Telegram-туннеля (:1443)..."
+
+TG_CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
+tg_rules_removed=0
+for cidr in $TG_CIDRS; do
+    for chain in PREROUTING OUTPUT; do
+        while iptables -t nat -C "$chain" -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D "$chain" -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+            tg_rules_removed=$((tg_rules_removed + 1))
+        done
+    done
+done
+if [ "$tg_rules_removed" -gt 0 ]; then
+    log_info "  Снято NAT правил Telegram: $tg_rules_removed"
+else
+    log_skip "Правил REDIRECT :1443 не найдено"
+fi
+
+# ==========================================
+# 5b. Cron-записи Telegram-туннеля
+# ==========================================
+
+if command -v crontab >/dev/null 2>&1; then
+    for pat in "tg-tunnel-watchdog" "S97tg-mtproxy"; do
+        if crontab -l 2>/dev/null | grep -q "$pat"; then
+            crontab -l 2>/dev/null | grep -v "$pat" | crontab - 2>/dev/null \
+                && log_info "  Удалена cron-запись: $pat"
+        fi
+    done
+fi
+
+# ==========================================
 # 6. Удаление директорий
 # ==========================================
 
@@ -189,13 +234,21 @@ for dir in /opt/zapret2 /opt/zapret; do
     fi
 done
 
+# Бинарник Telegram-туннеля живёт вне /opt/zapret2 — убираем отдельно.
+if [ -f /opt/sbin/tg-mtproxy-client ]; then
+    rm -f /opt/sbin/tg-mtproxy-client
+    log_info "  Удалён бинарник: /opt/sbin/tg-mtproxy-client"
+fi
+
 # ==========================================
 # 7. Очистка временных файлов
 # ==========================================
 
 log_info "Очистка временных файлов..."
 
-for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck*; do
+for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
+              /tmp/tg-tunnel.log /tmp/tg-tunnel-watchdog.state \
+              /var/run/tg-tunnel.pid; do
     if [ -e "$tmpdir" ]; then
         rm -rf "$tmpdir"
         log_info "  Удалён: $tmpdir"
@@ -235,6 +288,12 @@ else
     log_info "Процессы nfqws/nfqws2: не найдены"
 fi
 
+if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+    log_error "Остался запущенный tg-mtproxy-client! Проверьте: ps | grep tg-mtproxy"
+else
+    log_info "Процесс tg-mtproxy-client: не найден"
+fi
+
 # Проверка директорий
 for dir in /opt/zapret /opt/zapret2; do
     if [ -d "$dir" ]; then
@@ -245,11 +304,17 @@ for dir in /opt/zapret /opt/zapret2; do
 done
 
 # Проверка init-скриптов
-for init in /opt/etc/init.d/S99zapret /opt/etc/init.d/S99zapret2; do
+for init in /opt/etc/init.d/S99zapret /opt/etc/init.d/S99zapret2 \
+            /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy; do
     if [ -f "$init" ]; then
         log_error "Init-скрипт всё ещё существует: $init"
     fi
 done
+
+# Проверка Telegram-бинарника
+if [ -f /opt/sbin/tg-mtproxy-client ]; then
+    log_error "Бинарник всё ещё существует: /opt/sbin/tg-mtproxy-client"
+fi
 
 echo ""
 echo "============================================"
