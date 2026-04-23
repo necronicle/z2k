@@ -1015,7 +1015,7 @@ SUBMENU
                         local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
                         local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
                         rm -f "$MTPROXY_BIN"
-                        curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$MTPROXY_BIN" 2>/dev/null
+                        z2k_fetch "$tg_url" "$MTPROXY_BIN"
                         local tg_size
                         tg_size=$(wc -c < "$MTPROXY_BIN" 2>/dev/null || echo 0)
                         if [ -f "$MTPROXY_BIN" ] && [ "$tg_size" -gt 500000 ] 2>/dev/null && head -c 4 "$MTPROXY_BIN" 2>/dev/null | grep -q "ELF"; then

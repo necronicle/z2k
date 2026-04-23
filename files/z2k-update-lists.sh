@@ -22,8 +22,70 @@ if [ -z "${GITHUB_RAW:-}" ] && [ -r "${ZAPRET2_DIR}/config" ]; then
 fi
 GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 
-# Настройки
-CURL_OPTS="--connect-timeout 10 --max-time 60 -fsSL"
+# ==============================================================================
+# z2k_fetch — загрузка файла с GitHub через цепочку зеркал.
+# ==============================================================================
+# Дублирует логику z2k.sh / lib/utils.sh для standalone cron-запуска (этот
+# скрипт не source'ит utils.sh). Слои: raw.github → jsdelivr → gh-proxy →
+# Keenetic DNS override через 8.8.8.8 + ndmc.
+z2k_fetch() {
+    local src="$1"
+    local dest="$2"
+    local url
+
+    case "$src" in
+        http://*|https://*) url="$src" ;;
+        /*) url="${GITHUB_RAW}${src}" ;;
+        *)  url="${GITHUB_RAW}/${src}" ;;
+    esac
+
+    local jsdelivr="" gh_proxy=""
+    case "$url" in
+        https://raw.githubusercontent.com/*)
+            local _rest="${url#https://raw.githubusercontent.com/}"
+            local _owner="${_rest%%/*}";  _rest="${_rest#*/}"
+            local _repo="${_rest%%/*}";   _rest="${_rest#*/}"
+            local _branch="${_rest%%/*}"; _rest="${_rest#*/}"
+            jsdelivr="https://cdn.jsdelivr.net/gh/${_owner}/${_repo}@${_branch}/${_rest}"
+            gh_proxy="https://gh-proxy.com/${url}"
+            ;;
+    esac
+
+    if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
+        return 0
+    fi
+    if [ -n "$jsdelivr" ] && \
+       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
+        return 0
+    fi
+    if [ -n "$gh_proxy" ] && \
+       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
+        return 0
+    fi
+
+    if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
+        local resolved_any=0 host ip
+        for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
+            ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
+                 | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
+            if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
+                ndmc -c "ip host $host $ip" >/dev/null 2>&1 && resolved_any=1
+            fi
+        done
+        if [ "$resolved_any" = "1" ]; then
+            sleep 1
+            if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
+                return 0
+            fi
+            if [ -n "$jsdelivr" ] && \
+               curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}
 
 # ==============================================================================
 # ЛОГИРОВАНИЕ
@@ -63,8 +125,8 @@ update_list() {
     local tmp
     tmp=$(mktemp "${dest}.XXXXXX") || return 1
 
-    if ! curl $CURL_OPTS "$url" -o "$tmp" 2>/dev/null; then
-        log_msg "FAIL: download $name from $url"
+    if ! z2k_fetch "$url" "$tmp"; then
+        log_msg "FAIL: download $name from $url (all mirrors failed)"
         rm -f "$tmp"
         return 1
     fi
