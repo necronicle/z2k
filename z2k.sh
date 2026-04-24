@@ -118,7 +118,46 @@ confirm() {
 #   z2k_fetch "https://raw.githubusercontent.com/owner/repo/branch/path" /tmp/dest
 #   z2k_fetch "relative/path"         /tmp/dest   # тогда префикс = $GITHUB_RAW
 #
-# Возвращает 0 при успехе (файл записан), 1 — все слои не сработали.
+# Возвращает 0 при успехе (файл записан либо 304 Not Modified — кэш
+# валиден), 1 — все слои не сработали.
+#
+# ETag-aware: каждый слой отправляет `If-None-Match: <old_etag>` если
+# есть cached etag в `${dest}.etag`. На 304 тело не качается, файл
+# остаётся как был — типично ~500ms вместо ~5s на unchanged контент.
+_z2k_curl_etag() {
+    local url="$1" dest="$2"
+    local etag_file="${dest}.etag"
+    local hdr_file="${dest}.hdr.$$"
+    local tmp_body="${dest}.new.$$"
+    local old_etag="" http_status
+    if [ -f "$etag_file" ] && [ -s "$dest" ]; then
+        old_etag=$(cat "$etag_file" 2>/dev/null)
+    fi
+    if [ -n "$old_etag" ]; then
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+            -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
+            -w "%{http_code}" "$url" 2>/dev/null)
+    else
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+            -D "$hdr_file" -o "$tmp_body" \
+            -w "%{http_code}" "$url" 2>/dev/null)
+    fi
+    case "$http_status" in
+        304) rm -f "$hdr_file" "$tmp_body"; return 0 ;;
+        200)
+            [ ! -s "$tmp_body" ] && { rm -f "$hdr_file" "$tmp_body"; return 1; }
+            local new_etag
+            new_etag=$(grep -i '^etag:' "$hdr_file" 2>/dev/null | head -1 \
+                       | sed 's/^[^:]*:[[:space:]]*//; s/\r$//; s/[[:space:]]*$//')
+            mkdir -p "$(dirname "$dest")" 2>/dev/null
+            mv -f "$tmp_body" "$dest"
+            if [ -n "$new_etag" ]; then printf '%s\n' "$new_etag" > "$etag_file"
+            else rm -f "$etag_file"; fi
+            rm -f "$hdr_file"; return 0 ;;
+        *) rm -f "$hdr_file" "$tmp_body"; return 1 ;;
+    esac
+}
+
 z2k_fetch() {
     local src="$1"
     local dest="$2"
@@ -144,26 +183,15 @@ z2k_fetch() {
             ;;
     esac
 
-    # --- Layer 1: direct ---
-    if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
-        return 0
-    fi
-
-    # --- Layer 2: jsdelivr CDN ---
-    if [ -n "$jsdelivr" ] && \
-       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
-        return 0
-    fi
-
-    # --- Layer 3: gh-proxy.com reverse-proxy ---
-    if [ -n "$gh_proxy" ] && \
-       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
-        return 0
-    fi
+    # Каждый слой идёт через _z2k_curl_etag: на unchanged-контент 304 +
+    # пустое body ~10× быстрее чем полный GET. Etag sidecar ключован по
+    # $dest — переключение зеркала форсирует один full re-fetch
+    # (у raw.github и jsdelivr разные etag-ы), это приемлемо.
+    if _z2k_curl_etag "$url" "$dest"; then return 0; fi
+    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
+    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
 
     # --- Layer 4: Keenetic DNS override via 8.8.8.8 + ndmc ip host ---
-    # Copied-in-spirit from zapret4rocket z4r.sh:1075-1107 — same failure
-    # mode (ISP DNS poisoning of github hosts), same fix.
     if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
         for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
@@ -174,15 +202,9 @@ z2k_fetch() {
             fi
         done
         if [ "$resolved_any" = "1" ]; then
-            # Let NDM re-read DNS cache before we retry.
             sleep 1
-            if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
-                return 0
-            fi
-            if [ -n "$jsdelivr" ] && \
-               curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
-                return 0
-            fi
+            if _z2k_curl_etag "$url" "$dest"; then return 0; fi
+            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
         fi
     fi
 

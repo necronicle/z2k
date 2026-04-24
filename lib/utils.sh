@@ -76,6 +76,41 @@ fi
 #   2. cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>  (edge TTL 12ч)
 #   3. gh-proxy.com/<raw-url>                             (без кеша)
 #   4. (Keenetic) nslookup 8.8.8.8 → ndmc "ip host" → ретрай 1+2.
+# _z2k_curl_etag — helper для z2k_fetch. See z2k.sh for full docstring.
+_z2k_curl_etag() {
+    local url="$1" dest="$2"
+    local etag_file="${dest}.etag"
+    local hdr_file="${dest}.hdr.$$"
+    local tmp_body="${dest}.new.$$"
+    local old_etag="" http_status
+    if [ -f "$etag_file" ] && [ -s "$dest" ]; then
+        old_etag=$(cat "$etag_file" 2>/dev/null)
+    fi
+    if [ -n "$old_etag" ]; then
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+            -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
+            -w "%{http_code}" "$url" 2>/dev/null)
+    else
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+            -D "$hdr_file" -o "$tmp_body" \
+            -w "%{http_code}" "$url" 2>/dev/null)
+    fi
+    case "$http_status" in
+        304) rm -f "$hdr_file" "$tmp_body"; return 0 ;;
+        200)
+            [ ! -s "$tmp_body" ] && { rm -f "$hdr_file" "$tmp_body"; return 1; }
+            local new_etag
+            new_etag=$(grep -i '^etag:' "$hdr_file" 2>/dev/null | head -1 \
+                       | sed 's/^[^:]*:[[:space:]]*//; s/\r$//; s/[[:space:]]*$//')
+            mkdir -p "$(dirname "$dest")" 2>/dev/null
+            mv -f "$tmp_body" "$dest"
+            if [ -n "$new_etag" ]; then printf '%s\n' "$new_etag" > "$etag_file"
+            else rm -f "$etag_file"; fi
+            rm -f "$hdr_file"; return 0 ;;
+        *) rm -f "$hdr_file" "$tmp_body"; return 1 ;;
+    esac
+}
+
 z2k_fetch() {
     local src="$1"
     local dest="$2"
@@ -99,17 +134,9 @@ z2k_fetch() {
             ;;
     esac
 
-    if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
-        return 0
-    fi
-    if [ -n "$jsdelivr" ] && \
-       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
-        return 0
-    fi
-    if [ -n "$gh_proxy" ] && \
-       curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
-        return 0
-    fi
+    if _z2k_curl_etag "$url" "$dest"; then return 0; fi
+    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
+    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
 
     if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
@@ -122,13 +149,8 @@ z2k_fetch() {
         done
         if [ "$resolved_any" = "1" ]; then
             sleep 1
-            if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
-                return 0
-            fi
-            if [ -n "$jsdelivr" ] && \
-               curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
-                return 0
-            fi
+            if _z2k_curl_etag "$url" "$dest"; then return 0; fi
+            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
         fi
     fi
 
