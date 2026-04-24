@@ -922,17 +922,43 @@ main() {
     # Проверить окружение
     check_environment
 
-    # Инициализировать рабочую директорию
-    rm -rf "$WORK_DIR"
+    # Warm-cache fast-path: для non-install/update команд (menu, status,
+    # probe, diag, healthcheck, rollback, snapshot, etc.) кэш в /tmp/z2k
+    # переиспользуется между run'ами. ETag-свежесть все равно проверится
+    # z2k_fetch'ем на download_* если _need_fetch=1, но для интерактивных
+    # команд пропускаем fetch'и целиком — typical menu open ~1s вместо
+    # ~13s. Install/update/uninstall всегда режут /tmp/z2k для чистоты.
+    local _need_fetch=1
+    case "${1:-}" in
+        install|i|update|u|uninstall|remove)
+            # Чистая установка/обновление — обязательно свежие файлы.
+            rm -rf "$WORK_DIR"
+            ;;
+        *)
+            # Для интерактивных команд: кэш валиден если ключевые модули
+            # и strats в наличии. Если нет — первый run (или после reboot
+            # /tmp очищен), качаем всё.
+            if [ -f "$LIB_DIR/utils.sh" ] \
+               && [ -f "$LIB_DIR/config_official.sh" ] \
+               && [ -f "$LIB_DIR/menu.sh" ] \
+               && [ -s "$WORK_DIR/strats_new2.txt" ]; then
+                _need_fetch=0
+            fi
+            ;;
+    esac
     mkdir -p "$WORK_DIR" "$LIB_DIR"
 
     # Установить обработчики сигналов (будет переопределено после загрузки utils.sh)
-    # Также очищаем временные директории при любом выходе
-    trap 'echo ""; print_error "Прервано пользователем"; rm -rf "$WORK_DIR" /tmp/zapret2_build; exit 130' INT TERM
+    # Note: trap раньше чистил $WORK_DIR при Ctrl+C, теперь оставляем
+    # кэш целым даже при прерывании — если install прервался, следующий
+    # `z2k install` сам пересоздаст чистую директорию.
+    trap 'echo ""; print_error "Прервано пользователем"; rm -rf /tmp/zapret2_build; exit 130' INT TERM
     trap 'rm -rf /tmp/zapret2_build' EXIT
 
-    # Скачать модули
-    download_modules
+    # Скачать модули (если нужно — иначе используем кэшированные)
+    if [ "$_need_fetch" = "1" ]; then
+        download_modules
+    fi
 
     # Загрузить модули в память
     source_modules
@@ -952,18 +978,14 @@ main() {
         check_root || die "Требуются права root для установки"
     fi
 
-    # Скачать strats_new2.txt
-    download_strategies_source
-
-    # Скачать fake blobs
-    download_fake_blobs
-
-    # Скачать init скрипт
-    download_init_script
-
-
-    # Сгенерировать strategies.conf
-    generate_strategies_database
+    # Скачать artifacts (strats / fake blobs / init script) — пропускаем
+    # на warm cache, kin keeps cached copies intact.
+    if [ "$_need_fetch" = "1" ]; then
+        download_strategies_source
+        download_fake_blobs
+        download_init_script
+        generate_strategies_database
+    fi
 
     # Обработать аргументы командной строки
     handle_arguments "$1"
