@@ -16,7 +16,7 @@ INCLUDES  := -Isrc
 CC        ?= cc
 STRIP     ?= strip
 OPTIMIZE  ?= -Os -flto=auto -ffunction-sections -fdata-sections
-CFLAGS    += -std=c99 -Wall -Wextra -Wno-unused-parameter $(OPTIMIZE) $(INCLUDES)
+CFLAGS    += -std=gnu99 -Wall -Wextra -Wno-unused-parameter $(OPTIMIZE) $(INCLUDES)
 LDFLAGS   += -static -Wl,--gc-sections -flto=auto
 
 all: $(BIN)
