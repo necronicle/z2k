@@ -47,6 +47,14 @@ typedef struct {
 	block_type_t block_type;
 	char reason[512];         /* human-readable why this type */
 	char recommended[1024];   /* comma-list of candidate primitives (Phase 1 only) */
+
+	/* Phase 2 result fields — filled only when --apply was used. */
+	bool apply_attempted;     /* true if template probe phase ran */
+	bool apply_succeeded;     /* true if a strategy passed the post-pin probe */
+	int  winner_strategy;     /* strategy number that won; 0 if none */
+	char winner_profile[64];  /* profile key (rkn_tcp/cdn_tls/...) for winner */
+	int  strategies_tried;    /* how many probes ran */
+	char apply_note[256];     /* e.g. "pinned", "reverted", "no template" */
 } classify_result_t;
 
 /* Utility from classify.c. */
