@@ -1,44 +1,32 @@
-# z2k-classify Makefile — native + static cross builds.
+# z2k-classify — Linux-only, static, for Keenetic MIPS/ARM/x86 deploy.
 #
-# Native (on macOS/Linux dev host):
-#   make
+# Build for specific target with cross toolchain (bol-van/musl-cross):
+#   make CC=mipsel-linux-musl-gcc           # Keenetic MT7621
+#   make CC=aarch64-linux-musl-gcc          # Keenetic KN-1010/KN-3610 ARM64
+#   make CC=mips-linux-muslsf-gcc           # Keenetic KN-1910/2910 MIPS soft-float
+#   make CC=arm-linux-musleabi-gcc          # older ARM Keenetics
 #
-# Cross build (one arch, assumes toolchain on PATH):
-#   make CC=mipsel-linux-musl-gcc STATIC=1
-#
-# All-arch release (via GitHub Actions, see .github/workflows/build.yml
-# in this repo — Phase 3 integration).
+# Binary is statically linked (needed for some Keenetic/Entware combos
+# where glibc versions diverge) and stripped. Target size ≤ 60 KB.
 
 BIN       := z2k-classify
 SRC       := src/main.c src/probe.c src/classify.c
 INCLUDES  := -Isrc
 
 CC        ?= cc
+STRIP     ?= strip
 OPTIMIZE  ?= -Os -flto=auto -ffunction-sections -fdata-sections
 CFLAGS    += -std=c99 -Wall -Wextra -Wno-unused-parameter $(OPTIMIZE) $(INCLUDES)
-
-# Linux toolchains support --gc-sections + -static. macOS ld does not.
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-  LDFLAGS += -Wl,--gc-sections
-  ifeq ($(STATIC),1)
-    LDFLAGS += -static
-  endif
-endif
+LDFLAGS   += -static -Wl,--gc-sections -flto=auto
 
 all: $(BIN)
 
 $(BIN): $(SRC)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDFLAGS)
-	@if command -v strip >/dev/null 2>&1; then strip $@ || true; fi
+	$(STRIP) $@ 2>/dev/null || true
 	@ls -la $@
-
-# quick smoke test — probe a known-reachable domain (example.com)
-test: $(BIN)
-	./$(BIN) example.com
-	./$(BIN) --json example.com
 
 clean:
 	rm -f $(BIN)
 
-.PHONY: all clean test
+.PHONY: all clean

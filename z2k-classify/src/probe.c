@@ -33,20 +33,8 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
+#include <netinet/ip_icmp.h>
 #include <poll.h>
-
-/* ICMP header: use a plain struct to avoid platform header divergence
- * (Linux <linux/icmp.h> uses `struct icmphdr`, BSD/macOS uses `struct
- * icmp` with different field layout). We only need echo-request, which
- * is the same 8-byte wire format on all POSIX. */
-#define Z2K_ICMP_ECHO 8
-struct z2k_icmphdr {
-	uint8_t  type;
-	uint8_t  code;
-	uint16_t checksum;
-	uint16_t id;
-	uint16_t seq;
-};
 
 /* ---- helpers ---- */
 
@@ -56,61 +44,156 @@ static int64_t now_ms(void) {
 	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* Build a minimal TLS 1.2 ClientHello with SNI = sni_host.
- * Not a real Chrome fingerprint — enough to trigger DPI SNI inspection
- * for probing. Returns bytes written into buf. buf must hold ≥ 512. */
+/* Build a browser-like TLS 1.2/1.3 ClientHello with SNI = sni_host.
+ *
+ * Structure mirrors Chrome/Firefox defaults closely enough for strict
+ * servers (Cloudflare, Google frontends, AWS CloudFront) to respond
+ * with a real ServerHello instead of a TLS alert. NOT a JA3 fingerprint
+ * clone — we don't ship curl-impersonate. Enough for probe semantics:
+ * does the DPI inject RST? does the byte-gate fire? does the server
+ * negotiate TS?
+ *
+ * Includes:
+ *   - supported_versions: TLS 1.3 + 1.2
+ *   - supported_groups: x25519, secp256r1, secp384r1
+ *   - ec_point_formats: uncompressed
+ *   - signature_algorithms: common RSA+ECDSA+Ed25519
+ *   - ALPN: h2, http/1.1
+ *   - key_share: x25519 with zero pubkey (server responds with
+ *     HelloRetryRequest if it cares; we only need the SNI to be seen)
+ *
+ * Returns bytes written to buf. buf must hold >= 1024. */
 static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host) {
 	size_t sni_len = strlen(sni_host);
-	if (sni_len > 253) return 0;
-	if (buflen < 512) return 0;
+	if (sni_len > 253 || buflen < 1024) return 0;
 
-	/* Fixed section — 32B random is zero-filled, DPI cares only about
-	 * structure + SNI, not entropy. */
-	unsigned char body[512];
+	unsigned char body[1024];
 	size_t p = 0;
+
 	/* Handshake: ClientHello */
-	body[p++] = 0x01;  /* type: ClientHello */
-	size_t hs_len_off = p; p += 3;  /* 3-byte length, fill later */
-	/* Version TLS 1.2 */
+	body[p++] = 0x01;
+	size_t hs_len_off = p; p += 3;
+	/* Legacy version TLS 1.2 (real version in supported_versions ext) */
 	body[p++] = 0x03; body[p++] = 0x03;
-	/* 32 random bytes */
-	memset(&body[p], 0x5a, 32); p += 32;
-	/* Session ID length 0 */
-	body[p++] = 0x00;
-	/* Cipher suites length (2B), then suites. One suite: TLS_AES_128_GCM_SHA256 (0x1301). */
-	body[p++] = 0x00; body[p++] = 0x02;
-	body[p++] = 0x13; body[p++] = 0x01;
-	/* Compression methods length (1B), then methods: null */
+	/* 32B random — pseudo-random filler, DPI doesn't care about entropy */
+	for (int i = 0; i < 32; i++) body[p++] = (unsigned char)((i * 17 + 41) & 0xff);
+	/* Session ID — 32 bytes (Chrome-like; empty is allowed but less realistic) */
+	body[p++] = 0x20;
+	for (int i = 0; i < 32; i++) body[p++] = (unsigned char)((i * 13 + 7) & 0xff);
+
+	/* Cipher suites — 18 common Chrome suites */
+	static const unsigned char suites[] = {
+		0x13,0x01, 0x13,0x02, 0x13,0x03,           /* TLS 1.3 */
+		0xc0,0x2b, 0xc0,0x2f, 0xc0,0x2c, 0xc0,0x30, /* ECDHE-ECDSA/RSA AES-GCM */
+		0xcc,0xa9, 0xcc,0xa8,                       /* ECDHE CHACHA20 */
+		0xc0,0x13, 0xc0,0x14,                       /* ECDHE-RSA CBC */
+		0x00,0x9c, 0x00,0x9d,                       /* RSA AES-GCM */
+		0x00,0x2f, 0x00,0x35,                       /* RSA AES CBC */
+		0x00,0x0a,                                  /* 3DES (legacy padding) */
+	};
+	size_t sl = sizeof(suites);
+	body[p++] = (unsigned char)(sl >> 8); body[p++] = (unsigned char)(sl & 0xff);
+	memcpy(&body[p], suites, sl); p += sl;
+
+	/* Compression methods */
 	body[p++] = 0x01; body[p++] = 0x00;
 
-	/* Extensions */
-	size_t ext_len_off = p; p += 2;  /* 2-byte total length */
+	/* Extensions header */
+	size_t ext_len_off = p; p += 2;
 	size_t ext_start = p;
-	/* server_name extension (type 0x0000) */
-	body[p++] = 0x00; body[p++] = 0x00;           /* type */
-	body[p++] = 0x00; body[p++] = (unsigned char)(sni_len + 5);  /* ext data len */
-	body[p++] = 0x00; body[p++] = (unsigned char)(sni_len + 3);  /* SNI list len */
-	body[p++] = 0x00;                             /* name type: hostname */
-	body[p++] = 0x00; body[p++] = (unsigned char)sni_len;        /* hostname len */
+
+	/* ext: server_name */
+	body[p++] = 0x00; body[p++] = 0x00;
+	body[p++] = 0x00; body[p++] = (unsigned char)(sni_len + 5);
+	body[p++] = 0x00; body[p++] = (unsigned char)(sni_len + 3);
+	body[p++] = 0x00;
+	body[p++] = 0x00; body[p++] = (unsigned char)sni_len;
 	memcpy(&body[p], sni_host, sni_len); p += sni_len;
 
-	/* supported_versions: TLS 1.2 only for broad compat */
-	body[p++] = 0x00; body[p++] = 0x2b; /* type 0x002b */
-	body[p++] = 0x00; body[p++] = 0x03;
-	body[p++] = 0x02; body[p++] = 0x03; body[p++] = 0x03;
+	/* ext: ec_point_formats (0x000b) — uncompressed */
+	body[p++] = 0x00; body[p++] = 0x0b;
+	body[p++] = 0x00; body[p++] = 0x02;
+	body[p++] = 0x01; body[p++] = 0x00;
 
+	/* ext: supported_groups (0x000a) — x25519, secp256r1, secp384r1 */
+	body[p++] = 0x00; body[p++] = 0x0a;
+	body[p++] = 0x00; body[p++] = 0x08;
+	body[p++] = 0x00; body[p++] = 0x06;
+	body[p++] = 0x00; body[p++] = 0x1d;  /* x25519 */
+	body[p++] = 0x00; body[p++] = 0x17;  /* secp256r1 */
+	body[p++] = 0x00; body[p++] = 0x18;  /* secp384r1 */
+
+	/* ext: signature_algorithms (0x000d) */
+	static const unsigned char sigalgs[] = {
+		0x04,0x03,  /* ecdsa_secp256r1_sha256 */
+		0x05,0x03,  /* ecdsa_secp384r1_sha384 */
+		0x08,0x07,  /* ed25519 */
+		0x08,0x04,  /* rsa_pss_rsae_sha256 */
+		0x08,0x05,  /* rsa_pss_rsae_sha384 */
+		0x08,0x06,  /* rsa_pss_rsae_sha512 */
+		0x04,0x01,  /* rsa_pkcs1_sha256 */
+		0x05,0x01,  /* rsa_pkcs1_sha384 */
+		0x06,0x01,  /* rsa_pkcs1_sha512 */
+	};
+	size_t sa = sizeof(sigalgs);
+	body[p++] = 0x00; body[p++] = 0x0d;
+	body[p++] = (unsigned char)((sa + 2) >> 8); body[p++] = (unsigned char)((sa + 2) & 0xff);
+	body[p++] = (unsigned char)(sa >> 8); body[p++] = (unsigned char)(sa & 0xff);
+	memcpy(&body[p], sigalgs, sa); p += sa;
+
+	/* ext: ALPN (0x0010) — h2, http/1.1 */
+	body[p++] = 0x00; body[p++] = 0x10;
+	body[p++] = 0x00; body[p++] = 0x0e;  /* ext data len */
+	body[p++] = 0x00; body[p++] = 0x0c;  /* ALPN list len */
+	body[p++] = 0x02; body[p++] = 'h'; body[p++] = '2';
+	body[p++] = 0x08; body[p++] = 'h'; body[p++] = 't'; body[p++] = 't'; body[p++] = 'p';
+	body[p++] = '/'; body[p++] = '1'; body[p++] = '.'; body[p++] = '1';
+
+	/* ext: supported_versions (0x002b) — TLS 1.3, 1.2 */
+	body[p++] = 0x00; body[p++] = 0x2b;
+	body[p++] = 0x00; body[p++] = 0x05;
+	body[p++] = 0x04;  /* list len */
+	body[p++] = 0x03; body[p++] = 0x04;  /* TLS 1.3 */
+	body[p++] = 0x03; body[p++] = 0x03;  /* TLS 1.2 */
+
+	/* ext: key_share (0x0033) — one x25519 entry with zero 32B pubkey.
+	 * Server will respond with HelloRetryRequest (we don't care, we
+	 * read the bytes to count flow progress). */
+	body[p++] = 0x00; body[p++] = 0x33;
+	body[p++] = 0x00; body[p++] = 0x26;  /* ext data len */
+	body[p++] = 0x00; body[p++] = 0x24;  /* list len */
+	body[p++] = 0x00; body[p++] = 0x1d;  /* x25519 */
+	body[p++] = 0x00; body[p++] = 0x20;  /* key len */
+	memset(&body[p], 0x00, 32); p += 32;
+
+	/* ext: psk_key_exchange_modes (0x002d) — psk_dhe_ke */
+	body[p++] = 0x00; body[p++] = 0x2d;
+	body[p++] = 0x00; body[p++] = 0x02;
+	body[p++] = 0x01; body[p++] = 0x01;
+
+	/* ext: extended_master_secret (0x0017) — empty body */
+	body[p++] = 0x00; body[p++] = 0x17;
+	body[p++] = 0x00; body[p++] = 0x00;
+
+	/* ext: renegotiation_info (0xff01) — empty (0x00 inner) */
+	body[p++] = 0xff; body[p++] = 0x01;
+	body[p++] = 0x00; body[p++] = 0x01;
+	body[p++] = 0x00;
+
+	/* Close extensions length */
 	size_t ext_len = p - ext_start;
 	body[ext_len_off] = (unsigned char)(ext_len >> 8);
 	body[ext_len_off + 1] = (unsigned char)(ext_len & 0xff);
 
+	/* Close handshake length */
 	size_t hs_len = p - hs_len_off - 3;
 	body[hs_len_off]     = 0x00;
 	body[hs_len_off + 1] = (unsigned char)(hs_len >> 8);
 	body[hs_len_off + 2] = (unsigned char)(hs_len & 0xff);
 
-	/* Wrap in TLS record: type 0x16 (handshake), version 0x0303, len */
+	/* Wrap in TLS record */
 	buf[0] = 0x16;
-	buf[1] = 0x03; buf[2] = 0x01;   /* record version TLS 1.0 (historical) */
+	buf[1] = 0x03; buf[2] = 0x01;
 	buf[3] = (char)(p >> 8);
 	buf[4] = (char)(p & 0xff);
 	memcpy(&buf[5], body, p);
@@ -218,12 +301,12 @@ static bool subprobe_icmp(struct in_addr ip) {
 	set_socket_timeout(fd, 2000);
 
 	struct {
-		struct z2k_icmphdr h;
+		struct icmphdr h;
 		char pad[8];
 	} pkt = {0};
-	pkt.h.type = Z2K_ICMP_ECHO;
-	pkt.h.id = htons((uint16_t)getpid());
-	pkt.h.seq = htons(1);
+	pkt.h.type = ICMP_ECHO;
+	pkt.h.un.echo.id = htons((uint16_t)getpid());
+	pkt.h.un.echo.sequence = htons(1);
 	/* Checksum is filled by kernel for SOCK_DGRAM ICMP on Linux. For
 	 * SOCK_RAW we'd need to compute it here; Phase 1 accepts best-
 	 * effort (SOCK_DGRAM path). */

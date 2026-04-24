@@ -1,0 +1,73 @@
+name: build-classify
+
+# Builds z2k-classify binary for all supported Keenetic architectures.
+# Triggered on push to enhanced (so we have ready-to-install binaries
+# once the code merges), and on tags for release packaging.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - z2k-enhanced
+      - z2k-refactor-wip
+    paths:
+      - 'z2k-classify/**'
+      - '.github/workflows/build-classify.yml'
+  pull_request:
+    paths:
+      - 'z2k-classify/**'
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            tool: aarch64-unknown-linux-musl
+          - arch: arm
+            tool: armv6-unknown-linux-musleabi
+          - arch: mips64
+            tool: mips64-unknown-linux-musl
+          - arch: mipsel
+            tool: mipsel-unknown-linux-muslsf
+          - arch: mips
+            tool: mips-unknown-linux-muslsf
+          - arch: ppc
+            tool: powerpc-unknown-linux-musl
+          - arch: x86
+            tool: i586-unknown-linux-musl
+          - arch: x86_64
+            tool: x86_64-unknown-linux-musl
+          - arch: riscv64
+            tool: riscv64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross toolchain
+        env:
+          TOOL: ${{ matrix.tool }}
+        run: |
+          URL=https://github.com/bol-van/musl-cross/releases/download/latest/$TOOL.tar.xz
+          mkdir -p $HOME/tools
+          wget -qO- $URL | tar -C $HOME/tools -xJ
+          echo "$HOME/tools/$TOOL/bin" >> $GITHUB_PATH
+
+      - name: Build
+        working-directory: z2k-classify
+        env:
+          TARGET: ${{ matrix.tool }}
+        run: |
+          make clean
+          make CC=$TARGET-gcc STRIP=$TARGET-strip
+          ls -la z2k-classify
+          file z2k-classify
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: z2k-classify-${{ matrix.arch }}
+          path: z2k-classify/z2k-classify
+          retention-days: 30
