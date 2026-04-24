@@ -81,12 +81,15 @@ static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host)
 	body[p++] = 0x20;
 	for (int i = 0; i < 32; i++) body[p++] = (unsigned char)((i * 13 + 7) & 0xff);
 
-	/* Cipher suites — 18 common Chrome suites */
+	/* Cipher suites — TLS 1.2-only list. We intentionally do NOT offer
+	 * TLS 1.3 suites (0x1301-03) because we don't send a valid
+	 * supported_versions/key_share extension; offering 1.3 ciphers
+	 * without proper 1.3 setup causes alert from strict servers. */
 	static const unsigned char suites[] = {
-		0x13,0x01, 0x13,0x02, 0x13,0x03,           /* TLS 1.3 */
 		0xc0,0x2b, 0xc0,0x2f, 0xc0,0x2c, 0xc0,0x30, /* ECDHE-ECDSA/RSA AES-GCM */
 		0xcc,0xa9, 0xcc,0xa8,                       /* ECDHE CHACHA20 */
 		0xc0,0x13, 0xc0,0x14,                       /* ECDHE-RSA CBC */
+		0xc0,0x09, 0xc0,0x0a,                       /* ECDHE-ECDSA CBC */
 		0x00,0x9c, 0x00,0x9d,                       /* RSA AES-GCM */
 		0x00,0x2f, 0x00,0x35,                       /* RSA AES CBC */
 		0x00,0x0a,                                  /* 3DES (legacy padding) */
@@ -149,31 +152,17 @@ static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host)
 	body[p++] = 0x08; body[p++] = 'h'; body[p++] = 't'; body[p++] = 't'; body[p++] = 'p';
 	body[p++] = '/'; body[p++] = '1'; body[p++] = '.'; body[p++] = '1';
 
-	/* ext: supported_versions (0x002b) — TLS 1.3, 1.2 */
-	body[p++] = 0x00; body[p++] = 0x2b;
-	body[p++] = 0x00; body[p++] = 0x05;
-	body[p++] = 0x04;  /* list len */
-	body[p++] = 0x03; body[p++] = 0x04;  /* TLS 1.3 */
-	body[p++] = 0x03; body[p++] = 0x03;  /* TLS 1.2 */
-
-	/* ext: key_share (0x0033) — one x25519 entry with zero 32B pubkey.
-	 * Server will respond with HelloRetryRequest (we don't care, we
-	 * read the bytes to count flow progress). */
-	body[p++] = 0x00; body[p++] = 0x33;
-	body[p++] = 0x00; body[p++] = 0x26;  /* ext data len */
-	body[p++] = 0x00; body[p++] = 0x24;  /* list len */
-	body[p++] = 0x00; body[p++] = 0x1d;  /* x25519 */
-	body[p++] = 0x00; body[p++] = 0x20;  /* key len */
-	memset(&body[p], 0x00, 32); p += 32;
-
-	/* ext: psk_key_exchange_modes (0x002d) — psk_dhe_ke */
-	body[p++] = 0x00; body[p++] = 0x2d;
-	body[p++] = 0x00; body[p++] = 0x02;
-	body[p++] = 0x01; body[p++] = 0x01;
-
 	/* ext: extended_master_secret (0x0017) — empty body */
 	body[p++] = 0x00; body[p++] = 0x17;
 	body[p++] = 0x00; body[p++] = 0x00;
+
+	/* Intentionally NO supported_versions / key_share / psk_kex.
+	 * That would force TLS 1.3 which needs real ephemeral x25519 to
+	 * pass key validation — we'd need to ship mbedtls for that. By
+	 * omitting those, the server falls back to TLS 1.2 (legacy version
+	 * 0x0303 in the CH), which only requires the CH itself to be
+	 * well-formed to trigger a ServerHello + Certificate response
+	 * (~2-8 KB) and let the byte-count stall detector work. */
 
 	/* ext: renegotiation_info (0xff01) — empty (0x00 inner) */
 	body[p++] = 0xff; body[p++] = 0x01;

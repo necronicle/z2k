@@ -103,10 +103,33 @@ void classify_infer(classify_result_t *out) {
 		return;
 	}
 
-	/* Rule 6 — TCP connect OK but server never echoed TS option.
-	 * Critical for AWS frontend: our tcp_ts fooling becomes a no-op
-	 * because server ignores the option. Prefer TTL-based fooling. */
-	if (p->tcp_connect_ok && !p->server_ts_negotiated &&
+	/* Rule 6a — silent drop: TCP connect OK, but server sent NOTHING
+	 * at all (0 bytes) and no RST was injected. Common RKN DPI
+	 * pattern — ClientHello reaches DPI, DPI silently drops all
+	 * subsequent packets without injecting RST. Probe hits read
+	 * timeout with empty rx. Different from RKN_RST which injects
+	 * visible RST. */
+	if (p->tcp_connect_ok && p->size_final == 0 && !p->server_rst_received) {
+		out->block_type = BLOCK_RKN_RST;  /* reuse type; phase 2 will
+		                                     split into RKN_DROP sub-type */
+		snprintf(out->reason, sizeof(out->reason),
+		         "TCP connect OK but server sent NO bytes (silent DPI "
+		         "drop). Classical RKN filtering — ClientHello inspected, "
+		         "flow silently dropped without RST injection. Probe "
+		         "would have timed out waiting.");
+		snprintf(out->recommended, sizeof(out->recommended),
+		         "multisplit(pos=1,sniext+1,seqovl=1), "
+		         "fake(blob=tls_clienthello_www_google_com,repeats=6), "
+		         "fakedsplit(pos=method+2,badsum), "
+		         "syndata(blob=syn_packet), "
+		         "hostfakesplit(host=mail.ru,seqovl=1)");
+		return;
+	}
+
+	/* Rule 6b — AWS/CDN frontend that doesn't negotiate timestamps.
+	 * Critical: tcp_ts fooling becomes a no-op on such servers. Only
+	 * trigger when we got a response (not silent-drop case above). */
+	if (p->tcp_connect_ok && !p->server_ts_negotiated && p->size_final > 0 &&
 	    (p->server_rst_received || p->size_final < 500)) {
 		out->block_type = BLOCK_AWS_NO_TS;
 		snprintf(out->reason, sizeof(out->reason),
@@ -118,6 +141,26 @@ void classify_infer(classify_result_t *out) {
 		         "fake(ip_autottl=-2,3-20), "
 		         "multisplit(pos=1,sniext+1,seqovl=1), "
 		         "fake(blob=tls_clienthello_www_google_com,ip_ttl=4)");
+		return;
+	}
+
+	/* Rule 6c — server sent only a TLS alert record (~7 bytes) and
+	 * closed. Not a DPI block — the server itself rejected our probe's
+	 * ClientHello (likely TLS config mismatch: cipher-suite picky,
+	 * requires SNI-specific vhost, etc.). Report as tooling limitation
+	 * rather than misclassifying. */
+	if (p->tcp_connect_ok && p->tls_handshake_ok &&
+	    p->size_final >= 5 && p->size_final <= 50 &&
+	    !p->server_rst_received) {
+		out->block_type = BLOCK_UNKNOWN;
+		snprintf(out->reason, sizeof(out->reason),
+		         "Server replied with small (%u-byte) response — likely "
+		         "TLS alert rejecting our probe's ClientHello. This is a "
+		         "TOOLING limitation (our CH lacks TLS 1.3 key-share), "
+		         "not a DPI signature. To confirm a block, try curl or "
+		         "a browser and check what happens at network level.",
+		         p->size_final);
+		out->recommended[0] = '\0';
 		return;
 	}
 
