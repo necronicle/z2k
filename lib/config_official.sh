@@ -786,7 +786,15 @@ AUSTERUS_OPT
         # TSPU enforces per-AS whitelist and our hardcoded whitelist SNI
         # doesn't match that AS's set. padencap inflates reasm_data via
         # TLS padding extension, breaking size-hash DPI classifiers.
-        local cdn_tls_strats="--lua-desync=circular:fails=2:time=60:key=cdn_tls:nld=2 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,sni=www.google.com:tcp_seq=-10000:tcp_ack=-66000:strategy=2 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=mail.ru:seqovl=1:badsum:strategy=3 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:ip_autottl=-2,3-20:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,padencap,sni=www.google.com:tcp_ack=-66000:strategy=6 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rndsni,dupsid:tcp_ack=-66000:strategy=7"
+        # strategy=8 — per-CDN-provider SNI dispatch via
+        # z2k-cdn-dispatch.lua (ntc.party 17013 #851: per-AS whitelist
+        # enforcement). luaexec sets desync.cdn_sni from dst-IP prefix
+        # match (CF→www.google.com, OVH→4pda.to, Hetzner→max.ru,
+        # DO→vk.com, fallback→www.google.com). fake then rewrites the
+        # ClientHello SNI via tls_mod=sni=%cdn_sni substitution (handled
+        # by tls_mod_shim in zapret-lib.lua:633). Same circular slot =
+        # one dynamically-picked SNI per connection.
+        local cdn_tls_strats="--lua-desync=circular:fails=2:time=60:key=cdn_tls:nld=2 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,sni=www.google.com:tcp_seq=-10000:tcp_ack=-66000:strategy=2 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=mail.ru:seqovl=1:badsum:strategy=3 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:ip_autottl=-2,3-20:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,padencap,sni=www.google.com:tcp_ack=-66000:strategy=6 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rndsni,dupsid:tcp_ack=-66000:strategy=7 --lua-desync=luaexec:code=pick_cdn_sni(desync):strategy=8 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,sni=%cdn_sni:tcp_ack=-66000:strategy=8"
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --ipset=${lists_dir}/cdn_ips.txt --hostlist-exclude=${lists_dir}/whitelist.txt --payload=tls_client_hello $cdn_tls_strats --new\\n"
     fi
 
