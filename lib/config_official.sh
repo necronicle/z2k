@@ -104,15 +104,34 @@ AUSTERUS_OPT
     # C-side in-profile filter (--out-range). Those inline values were
     # dead ever since the profile's --out-range=a was applied. Moved to
     # --out-range=-n4 on the profile itself (below) — real cutoff at last.
-    # Strategy=7 is the former game_catchall_udp single strategy (gentle
-    # repeats=8/ip_autottl=4), appended as rotator tail so non-game AWS
-    # flows caught by the aws_oracle ipset in hybrid mode eventually pin
-    # on it after strategies 1-6 fail to complete their fake handshake.
-    # fails=2 (was 1) gives the rotator one extra retry — essential since
-    # the merged rotator has a mixed aggressive+gentle strategy set.
-    # nld=2 pins per-SLD so listed games (roblox.com) and cloud JSON APIs
-    # (aws.amazon.com) get independent rotator state.
-    game_udp="--lua-desync=circular:fails=2:time=60:udp_in=1:udp_out=4:key=game_udp:nld=2 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=7:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
+    # Extended 2026-04 rotator for the merged game_udp profile. Axes of
+    # variation (inspiration from Smart-Zapret-Launcher gaming_1..gaming_8
+    # + our existing quic_udp rotator primitives):
+    #
+    # - blob: quic_google (default Google QUIC ClientHello decoy) and
+    #   quic_ozon_ru (secondary decoy, SZL gaming_8 trick — if DPI
+    #   fingerprints per-SNI on fake QUIC, having two SNIs forces it
+    #   to allow both or block both known-good services).
+    # - ip_autottl=N,1-64: values 2,3,4,5 (previously only 2,4). Adaptive
+    #   TTL — delta from measured egress. SZL uses all four.
+    # - ip_ttl=N (hard TTL): new primitive, not auto. Packet dies at
+    #   hop N regardless of actual path. Values 3,4 from SZL gaming_7.
+    # - repeats: 8 (gentle), 10/12 (aggressive), 14 (max) kept from
+    #   original rotator.
+    # - Cross-family: udplen (payload size tamper) and send+ipfrag
+    #   (IP fragmentation) — same primitives already in production
+    #   inside quic_udp rotator. Circular supports mixed actions per
+    #   zapret-auto.lua:312-385 verification.
+    #
+    # Strategy ordering: aggressive first (1-11), gentle last (12) so
+    # non-game AWS flows caught by aws_oracle ipset in hybrid mode
+    # cycle through aggressive, fail, advance, and finally pin on the
+    # gentle strategy=12 — preserving the pre-Phase-2 catchall
+    # behavior for non-game traffic without a separate profile.
+    #
+    # fails=2 + nld=2: per-SLD pinning with 1 retry window, same as
+    # Phase 2 merge.
+    game_udp="--lua-desync=circular:fails=2:time=60:udp_in=1:udp_out=4:key=game_udp:nld=2 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=3,1-64 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=4,1-64 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=5,1-64 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_ozon_ru:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_ozon_ru:repeats=12:ip_autottl=4,1-64 --lua-desync=z2k_game_udp:strategy=7:payload=all:dir=out:blob=quic_google:repeats=10:ip_ttl=3 --lua-desync=z2k_game_udp:strategy=8:payload=all:dir=out:blob=quic_google:repeats=10:ip_ttl=4 --lua-desync=z2k_game_udp:strategy=9:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64 --lua-desync=udplen:payload=all:dir=out:increment=8:pattern=0xFEA82025:strategy=10 --lua-desync=send:payload=all:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=11 --lua-desync=z2k_game_udp:strategy=12:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.

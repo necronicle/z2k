@@ -557,6 +557,12 @@ QUIC_TEST_BLOB="$ZAPRET_BASE/files/fake/quic_test_00.bin"
 QUIC_RUTRACKER_BLOB="$ZAPRET_BASE/files/fake/quic_initial_rutracker_org.bin"
 [ -s "$QUIC_RUTRACKER_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_rutracker:@$QUIC_RUTRACKER_BLOB"
 
+# Second QUIC decoy for game_udp rotator fingerprint diversification
+# (Smart-Zapret-Launcher gaming_8 inspiration — per-SNI DPI fingerprint
+# finds google-QUIC suspicious but not ozon-QUIC).
+QUIC_OZON_BLOB="$ZAPRET_BASE/files/fake/quic_initial_ozon_ru.bin"
+[ -s "$QUIC_OZON_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_ozon_ru:@$QUIC_OZON_BLOB"
+
 TLS_ONETRUST_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_www_onetrust_com.bin"
 [ -s "$TLS_ONETRUST_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_www_onetrust_com:@$TLS_ONETRUST_BLOB"
 
