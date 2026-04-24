@@ -215,6 +215,130 @@ main() {
         "${ZAPRET2_DIR}/lists/game_ips.txt"
     [ $? -eq 2 ] && changes=$((changes + 1))
 
+    # CDN IPs (123jjck aggregation) — seeds the Phase 4 cdn_tls profile
+    # with CF+OVH+Hetzner+DO CIDRs. These ASNs fall under the TSPU 16KB
+    # whitelist-SNI block (autumn 2025, see ntc.party 17013). Fetched per
+    # provider and concatenated to keep one ipset file. If any provider
+    # fetch fails the rest still proceed — partial list is still useful.
+    update_cdn_ips() {
+        local dest="${ZAPRET2_DIR}/lists/cdn_ips.txt"
+        local tmp
+        tmp=$(mktemp "${dest}.XXXXXX") || return 1
+        local any_ok=0 provider url tmp_provider
+        for provider in cloudflare ovh hetzner digitalocean; do
+            url="https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/main/${provider}/${provider}_plain_ipv4.txt"
+            tmp_provider=$(mktemp) || continue
+            if z2k_fetch "$url" "$tmp_provider" && [ -s "$tmp_provider" ]; then
+                printf '# === %s ===\n' "$provider" >> "$tmp"
+                sed 's/\r$//' "$tmp_provider" >> "$tmp"
+                any_ok=1
+            else
+                log_msg "WARN: cdn_ips/$provider fetch failed"
+            fi
+            rm -f "$tmp_provider"
+        done
+        if [ "$any_ok" = "0" ]; then
+            log_msg "FAIL: all CDN providers failed"
+            rm -f "$tmp"
+            return 1
+        fi
+        local count
+        count=$(grep -c '^[0-9]' "$tmp" 2>/dev/null)
+        if [ -z "$count" ] || [ "$count" -lt 100 ]; then
+            log_msg "FAIL: CDN ipset too small ($count entries)"
+            rm -f "$tmp"
+            return 1
+        fi
+        if [ -f "$dest" ] && cmp -s "$tmp" "$dest" 2>/dev/null; then
+            rm -f "$tmp"
+            return 0
+        fi
+        mkdir -p "$(dirname "$dest")" 2>/dev/null
+        mv -f "$tmp" "$dest"
+        log_msg "OK: CDN ipset updated ($count entries)"
+        return 2
+    }
+    update_cdn_ips
+    [ $? -eq 2 ] && changes=$((changes + 1))
+
+    # AWS + Oracle cloud IPs — seeds Phase 5 aws_oracle_ips.txt which the
+    # merged game_udp profile (Phase 2) OR's with game_ips.txt in hybrid
+    # mode. AWS: service=AMAZON, excluding CLOUDFRONT / AMAZON_CONNECT /
+    # ROUTE53_HEALTHCHECKS (not gaming). Oracle: all public CIDRs with
+    # tags. Source JSONs served directly by AWS/Oracle; z2k_fetch's
+    # jsdelivr/gh-proxy layers don't apply to these hosts so we call
+    # curl directly (layer 4 Keenetic DNS override still adds value
+    # if the ISP poisons amazonaws.com/oracle.com).
+    update_aws_oracle_ips() {
+        local dest="${ZAPRET2_DIR}/lists/aws_oracle_ips.txt"
+        local tmp aws_json oracle_json
+        tmp=$(mktemp "${dest}.XXXXXX") || return 1
+        local any_ok=0
+
+        aws_json=$(mktemp) || { rm -f "$tmp"; return 1; }
+        if curl -fsSL --connect-timeout 10 --max-time 180 -o "$aws_json" \
+               "https://ip-ranges.amazonaws.com/ip-ranges.json" 2>/dev/null \
+               && [ -s "$aws_json" ]; then
+            awk 'BEGIN{RS="{"}
+                 /"service":[ ]*"AMAZON"/ && !/"service":[ ]*"(CLOUDFRONT|AMAZON_CONNECT|ROUTE53_HEALTHCHECKS)"/ {
+                     if (match($0, /"ip_prefix":[ ]*"[0-9.]+\/[0-9]+"/)) {
+                         s = substr($0, RSTART, RLENGTH)
+                         sub(/^[^"]*"[^"]+"[ ]*:[ ]*"/, "", s)
+                         sub(/".*$/, "", s)
+                         print s
+                     }
+                 }' "$aws_json" > "${tmp}.aws" 2>/dev/null
+            if [ -s "${tmp}.aws" ]; then
+                printf '# === aws ===\n' >> "$tmp"
+                cat "${tmp}.aws" >> "$tmp"
+                any_ok=1
+            fi
+            rm -f "${tmp}.aws"
+        else
+            log_msg "WARN: aws_oracle/aws fetch failed"
+        fi
+        rm -f "$aws_json"
+
+        oracle_json=$(mktemp) || { rm -f "$tmp"; return 1; }
+        if curl -fsSL --connect-timeout 10 --max-time 180 -o "$oracle_json" \
+               "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json" 2>/dev/null \
+               && [ -s "$oracle_json" ]; then
+            grep -oE '"cidr":[ ]*"[0-9./]+"' "$oracle_json" | cut -d'"' -f4 > "${tmp}.oracle"
+            if [ -s "${tmp}.oracle" ]; then
+                printf '# === oracle ===\n' >> "$tmp"
+                cat "${tmp}.oracle" >> "$tmp"
+                any_ok=1
+            fi
+            rm -f "${tmp}.oracle"
+        else
+            log_msg "WARN: aws_oracle/oracle fetch failed"
+        fi
+        rm -f "$oracle_json"
+
+        if [ "$any_ok" = "0" ]; then
+            log_msg "FAIL: aws_oracle both sources failed"
+            rm -f "$tmp"
+            return 1
+        fi
+        local count
+        count=$(grep -c '^[0-9]' "$tmp" 2>/dev/null)
+        if [ -z "$count" ] || [ "$count" -lt 50 ]; then
+            log_msg "FAIL: aws_oracle ipset too small ($count entries)"
+            rm -f "$tmp"
+            return 1
+        fi
+        if [ -f "$dest" ] && cmp -s "$tmp" "$dest" 2>/dev/null; then
+            rm -f "$tmp"
+            return 0
+        fi
+        mkdir -p "$(dirname "$dest")" 2>/dev/null
+        mv -f "$tmp" "$dest"
+        log_msg "OK: aws_oracle ipset updated ($count entries)"
+        return 2
+    }
+    update_aws_oracle_ips
+    [ $? -eq 2 ] && changes=$((changes + 1))
+
     if [ "$changes" -gt 0 ]; then
         log_msg "Changes detected ($changes lists), restarting service..."
         if [ -x "$INIT_SCRIPT" ]; then

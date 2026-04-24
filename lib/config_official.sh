@@ -41,6 +41,17 @@ AUSTERUS_OPT
     local quic_udp=""
     local discord_udp=""
     local game_udp=""
+
+    # Variant-A refactor feature flags. Each phase's emit block is guarded by
+    # the corresponding flag so individual phases can be toggled at runtime
+    # via /opt/zapret2/config without a push. Default "1" (enabled).
+    # Remove these flags entirely once all phases are soaked on production.
+    local Z2K_REFACTOR_PHASE1 Z2K_REFACTOR_PHASE2 Z2K_REFACTOR_PHASE3 Z2K_REFACTOR_PHASE4
+    Z2K_REFACTOR_PHASE1=$(safe_config_read "Z2K_REFACTOR_PHASE1" "/opt/zapret2/config" "1")
+    Z2K_REFACTOR_PHASE2=$(safe_config_read "Z2K_REFACTOR_PHASE2" "/opt/zapret2/config" "1")
+    Z2K_REFACTOR_PHASE3=$(safe_config_read "Z2K_REFACTOR_PHASE3" "/opt/zapret2/config" "1")
+    Z2K_REFACTOR_PHASE4=$(safe_config_read "Z2K_REFACTOR_PHASE4" "/opt/zapret2/config" "1")
+
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
         youtube_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
@@ -93,7 +104,15 @@ AUSTERUS_OPT
     # C-side in-profile filter (--out-range). Those inline values were
     # dead ever since the profile's --out-range=a was applied. Moved to
     # --out-range=-n4 on the profile itself (below) — real cutoff at last.
-    game_udp="--lua-desync=circular:fails=1:time=60:udp_in=1:udp_out=4:key=game_udp --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64"
+    # Strategy=7 is the former game_catchall_udp single strategy (gentle
+    # repeats=8/ip_autottl=4), appended as rotator tail so non-game AWS
+    # flows caught by the aws_oracle ipset in hybrid mode eventually pin
+    # on it after strategies 1-6 fail to complete their fake handshake.
+    # fails=2 (was 1) gives the rotator one extra retry — essential since
+    # the merged rotator has a mixed aggressive+gentle strategy set.
+    # nld=2 pins per-SLD so listed games (roblox.com) and cloud JSON APIs
+    # (aws.amazon.com) get independent rotator state.
+    game_udp="--lua-desync=circular:fails=2:time=60:udp_in=1:udp_out=4:key=game_udp:nld=2 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=7:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -373,6 +392,31 @@ AUSTERUS_OPT
     quic_udp=$(strip_dead_range_args "$quic_udp")
     discord_udp=$(strip_dead_range_args "$discord_udp")
     game_udp=$(strip_dead_range_args "$game_udp")
+
+    # Phase 3 helper: rebase every `:strategy=N` inside a strategy string
+    # by a fixed offset. Used to shift GV strategies (1..22) to (23..44)
+    # so they don't collide with youtube_tcp's 1..22 when the two
+    # profiles are merged into google_tls. Not applied unconditionally —
+    # only invoked inside the Phase 3 emit guard.
+    rebase_strategy_ids() {
+        local input="$1"
+        local offset="$2"
+        # Consume $0 by moving past each rewritten `:strategy=N` — naïve
+        # `while match` loops forever because the new (N+off) value is
+        # itself a :strategy=[0-9]+ match at the same position.
+        printf '%s' "$input" | awk -v off="$offset" '
+            {
+                result = ""
+                while (match($0, /:strategy=[0-9]+/)) {
+                    result = result substr($0, 1, RSTART - 1)
+                    sid = substr($0, RSTART + 10, RLENGTH - 10) + off
+                    result = result ":strategy=" sid
+                    $0 = substr($0, RSTART + RLENGTH)
+                }
+                result = result $0
+                print result
+            }'
+    }
 
     # Phase 7: convert fixed `repeats=N` on fake-family actions to the
     # range syntax `repeats=max(1,N-2)-(N+2)`. The z2k-range-rand.lua
@@ -687,7 +731,16 @@ AUSTERUS_OPT
     local GAME_MODE_STYLE
     GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$game_conf" "")
     case "$GAME_MODE_STYLE" in
-        safe|hybrid|aggressive) ;;
+        safe|hybrid) ;;
+        aggressive)
+            # Phase 2 merge: aggressive deprecated — aliased to hybrid when
+            # Phase 2 is active. aggressive was "catchall-only without
+            # positive ipset", which the merge collapses: the hybrid ipset
+            # now includes aws_oracle, and the gentle catchall strategy
+            # is just strategy=7 in the merged rotator. Pre-Phase-2 rollback
+            # path still honors legacy aggressive semantics.
+            [ "$Z2K_REFACTOR_PHASE2" = "1" ] && GAME_MODE_STYLE="hybrid"
+            ;;
         *) GAME_MODE_STYLE="safe" ;;
     esac
 
@@ -699,11 +752,55 @@ AUSTERUS_OPT
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${lists_dir}/extra-domains.txt"
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt $rkn_hostlists $rkn_tcp --new"
 
-    # YouTube TCP
-    add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
+    # Phase 4: cdn_tls — targets TSPU 16KB whitelist-SNI block on CF/OVH/
+    # Hetzner/DO (ntc.party 17013). ipset=cdn_ips.txt seeded by
+    # z2k-update-lists.sh (CF+OVH+Hetzner+DO ~1662 CIDR ≈ 80 KB RAM).
+    # 5 curated strategies tuned for the TSPU whitelist-SNI bypass shape,
+    # explicit tcp_ack=-66000 on fake (badseq primitive, ntc.party 17013).
+    # Positioned AFTER rkn_tcp so RKN-listed sites on CF still go through
+    # the proven 47-strategy RKN rotator, and only non-RKN CDN traffic
+    # hits cdn_tls. Profile skipped if ipset file missing/empty.
+    if [ "$Z2K_REFACTOR_PHASE4" = "1" ] && [ -s "${lists_dir}/cdn_ips.txt" ]; then
+        local cdn_tls_strats="--lua-desync=circular:fails=2:time=60:key=cdn_tls:nld=2 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,sni=www.google.com:tcp_seq=-10000:tcp_ack=-66000:strategy=2 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=mail.ru:seqovl=1:badsum:strategy=3 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:ip_autottl=-2,3-20:strategy=5"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --ipset=${lists_dir}/cdn_ips.txt --hostlist-exclude=${lists_dir}/whitelist.txt --payload=tls_client_hello $cdn_tls_strats --new\\n"
+    fi
 
-    # YouTube GV (список доменов статичен)
-    nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp --new\\n"
+    # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls
+    # profile. Hostlist triggers OR — hostlist=YT/List.txt ∪ hostlist-domains=
+    # googlevideo.com (confirmed by hostlist.c:262-281). Circular pins per-SLD
+    # thanks to nld=2, so youtube.com and googlevideo.com maintain independent
+    # strategy picks even though they share the key=google_tls state.
+    # GV strategies renumbered 23..44 to avoid collision with YT's 1..22.
+    # Pre-Phase-3 else path keeps the legacy two-profile layout for rollback.
+    if [ "$Z2K_REFACTOR_PHASE3" = "1" ]; then
+        local youtube_gv_rebased
+        youtube_gv_rebased=$(rebase_strategy_ids "$youtube_gv_tcp" 22)
+        # Extract ONLY non-circular --lua-desync=* tokens from GV.
+        # Global options (--filter-tcp, --filter-l7, --payload, --out-range,
+        # --in-range) are dropped — youtube_tcp's own globals govern the
+        # merged profile. Keeping GV globals would emit duplicate flags
+        # (e.g. --filter-tcp=443 after --filter-tcp=443,2053,...) which
+        # nfqws2 silently reinterprets as "last wins", shrinking the
+        # effective port coverage of the merged profile.
+        local gv_strategies_only=""
+        local _tok
+        for _tok in $youtube_gv_rebased; do
+            case "$_tok" in
+                --lua-desync=circular:*) ;;
+                --lua-desync=*) gv_strategies_only="${gv_strategies_only:+$gv_strategies_only }$_tok" ;;
+                *) ;;
+            esac
+        done
+        local merged_google_tls
+        merged_google_tls=$(printf '%s' "$youtube_tcp" | sed 's/key=yt_tcp/key=google_tls/')
+        merged_google_tls="$merged_google_tls $gv_strategies_only"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist-domains=googlevideo.com $merged_google_tls --new"
+    else
+        # YouTube TCP
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
+        # YouTube GV (список доменов статичен)
+        nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp --new\\n"
+    fi
 
     # QUIC YT
     add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp --new"
@@ -716,6 +813,22 @@ AUSTERUS_OPT
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
+    # webrtc_bypass — passthrough for non-Discord STUN flows (WebRTC P2P in
+    # browsers, Discord peer-to-peer voice/video, BitTorrent DHT-adjacent).
+    # A profile with --filter-l7=stun and no --lua-desync= short-circuits at
+    # desync.c:900 (VERDICT_PASS), so matched packets exit unmodified.
+    #
+    # Ordering: AFTER discord_udp (so Discord's server-routed STUN on the
+    # official port ranges still goes through Discord's dedicated rotator),
+    # BEFORE game_udp (so P2P STUN on arbitrary high ports isn't perturbed
+    # by the game ipset's fake shot).
+    #
+    # --out-range=-n4 keeps Lua short-circuit consistent with game_udp even
+    # though this profile has no Lua strategies — marginal safety against a
+    # future edit accidentally adding one.
+    if [ "$Z2K_REFACTOR_PHASE1" = "1" ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --filter-l7=stun --in-range=a --out-range=-n4 --new\\n"
+    fi
 
     # Game Filter UDP — custom protocols, unknown payloads. Uses a positive
     # --ipset=game_ips.txt match so the strategy rotator fires ONLY on
@@ -731,9 +844,31 @@ AUSTERUS_OPT
     #
     # Gated by GAME_MODE_ENABLED (new) with backwards-compat fallback to
     # ROBLOX_UDP_BYPASS (old) — evaluated above.
-    # In style=aggressive the ipset profile is skipped entirely so everything
-    # goes through the catchall below.
-    if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "aggressive" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
+    #
+    # Phase 2 merge: game_udp + game_catchall_udp collapsed to one profile
+    # with multi-ipset OR trigger. Safe = game_ips only, hybrid = +aws_oracle.
+    # Pre-Phase-2 path (else branch below) keeps the legacy two-profile
+    # layout for rollback.
+    if [ "$Z2K_REFACTOR_PHASE2" = "1" ]; then
+        if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
+            local ipset_excl="${lists_dir}/ipset-exclude.txt"
+            local game_ipset_excl_opt=""
+            [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
+            # In hybrid mode, broaden the trigger with AWS/Oracle ranges
+            # (populated by z2k-update-lists.sh Phase 5 fetcher). The
+            # merged rotator's strategy=7 (gentle) pins on non-game AWS
+            # flows after strategies 1-6 fail — replacing the old fixed
+            # catchall behavior without a separate profile.
+            local game_ipsets="--ipset=${lists_dir}/game_ips.txt"
+            if [ "$GAME_MODE_STYLE" != "safe" ] && [ -s "${lists_dir}/aws_oracle_ips.txt" ]; then
+                game_ipsets="$game_ipsets --ipset=${lists_dir}/aws_oracle_ips.txt"
+            fi
+            # Warp 2408 carve-out preserved (ntc.party 17013 #568).
+            # --out-range=-n4 cuts Lua pipeline after first 4 pkts.
+            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 $game_ipsets ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
+        fi
+    elif [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "aggressive" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
+        # Pre-Phase-2 legacy path: game_udp ipset profile.
         local ipset_excl="${lists_dir}/ipset-exclude.txt"
         local game_ipset_excl_opt=""
         [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
@@ -787,7 +922,11 @@ AUSTERUS_OPT
     #
     # UDP uses the z2k_game_udp Lua handler (not built-in fake) because
     # built-in fake still drops repeats=N on UDP payloads.
-    if [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
+    #
+    # Phase 2 merge makes this block dead — catchall behavior is absorbed
+    # into the merged game_udp rotator (strategy=7) above. Block retained
+    # as pre-Phase-2 rollback path, guarded by the negated flag.
+    if [ "$Z2K_REFACTOR_PHASE2" != "1" ] && [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
         # out_range moved to the profile itself (--out-range=-n4 below),
         # the inline value was dead (see game_udp comment above).
         local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"

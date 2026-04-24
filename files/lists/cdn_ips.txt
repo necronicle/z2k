@@ -1,0 +1,6 @@
+# CDN IPs placeholder — populated by z2k-update-lists.sh from
+# 123jjck/cdn-ip-ranges (cloudflare + ovh + hetzner + digitalocean).
+# Used as --ipset= by the Phase 4 cdn_tls nfqws2 profile to catch
+# TSPU 16KB whitelist-SNI blocks on non-RKN CDN-hosted sites
+# (see ntc.party thread 17013, autumn 2025).
+# Empty until first cron run — cdn_tls profile is skipped via -s guard.

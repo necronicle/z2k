@@ -1,0 +1,8 @@
+# AWS + Oracle cloud IP ranges placeholder — populated by
+# z2k-update-lists.sh from ip-ranges.amazonaws.com and
+# docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json.
+# Used by the Phase 2 merged game_udp profile in hybrid mode
+# (GAME_MODE_STYLE=hybrid) to catch cloud-hosted games whose
+# backends aren't in the curated game_ips.txt (Darktide, Outlast,
+# etc. — ntc.party 17013). Empty on fresh install; -s guard in
+# config_official.sh skips the ipset trigger until first cron.
