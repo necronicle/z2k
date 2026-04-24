@@ -12,8 +12,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+
+/* Portable sub-second sleep — avoids usleep's _XOPEN_SOURCE dance. */
+static void sleep_ms(int ms) {
+	struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };
+	nanosleep(&ts, NULL);
+}
 
 static const char *VERSION = "0.2.0-phase2";
 
@@ -93,7 +100,7 @@ static void phase2_apply(classify_result_t *res, bool dry_run, bool verbose) {
 		}
 		/* Let autocircular pick up the pin on next flow. Short sleep
 		 * matches z2k-probe.sh's 0.2-1 s gap. */
-		usleep(400 * 1000);
+		sleep_ms(400);
 
 		probe_result_t post = {0};
 		struct in_addr ip;
