@@ -721,6 +721,27 @@ handle_arguments() {
                 print_error "Скрипт active probe не найден"
             fi
             ;;
+        classify|c)
+            # z2k classify <domain> [--apply|--dry-run|--json|--verbose]
+            # Wraps the C-based block-type classifier installed by
+            # step_install_z2k_classify. Logs invocation to /opt/var/log/
+            # for the Phase 4 nightly drift detector to consume.
+            if [ -x "${ZAPRET2_DIR:-/opt/zapret2}/z2k-classify" ]; then
+                shift
+                local _classify_log="/opt/var/log/z2k-classify.log"
+                mkdir -p "$(dirname "$_classify_log")" 2>/dev/null || true
+                printf '%s | invoke %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" \
+                    >> "$_classify_log" 2>/dev/null || true
+                "${ZAPRET2_DIR:-/opt/zapret2}/z2k-classify" "$@"
+                local _rc=$?
+                printf '%s | exit %d args=%s\n' "$(date -Iseconds 2>/dev/null || date)" "$_rc" "$*" \
+                    >> "$_classify_log" 2>/dev/null || true
+                exit $_rc
+            else
+                print_error "z2k-classify не найден (rolling release ещё не создан или install неполный)"
+                exit 1
+            fi
+            ;;
         help|h|-h|--help)
             show_help
             ;;
@@ -753,7 +774,10 @@ show_help() {
   healthcheck, hc  Проверить работоспособность DPI bypass
   validate         Валидация текущей конфигурации
   diag, d          Сводка для траблшутинга (скопируй вывод и пришли в чат)
-  probe, p <host>  Подбор стратегии под конкретный домен
+  probe, p <host>  Подбор стратегии под конкретный домен (полный rotator)
+  classify, c <host> [--apply]
+                   Определить тип DPI-блока для домена и (с --apply)
+                   найти+пинить рабочую стратегию из template'a (5-30 сек)
   version, v       Показать версию
   help, h          Показать эту справку
 
@@ -766,6 +790,7 @@ show_help() {
   z2k menu
   z2k diag
   z2k probe cloudflare.com
+  z2k classify linkedin.com --apply
   z2k check
 
 EOF

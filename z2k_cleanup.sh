@@ -248,7 +248,8 @@ log_info "Очистка временных файлов..."
 
 for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
               /tmp/tg-tunnel.log /tmp/tg-tunnel-watchdog.state \
-              /var/run/tg-tunnel.pid; do
+              /var/run/tg-tunnel.pid \
+              /opt/var/log/z2k-classify.log; do
     if [ -e "$tmpdir" ]; then
         rm -rf "$tmpdir"
         log_info "  Удалён: $tmpdir"

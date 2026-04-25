@@ -98,12 +98,13 @@ MENU
 [P] Веб-панель (дубль меню в браузере)
 [D] Диагностика (сводка для траблшутинга)
 [X] Active probe (подбор стратегии под конкретный домен)
+[C] Classify (определить тип DPI-блока + найти стратегию, ~5-30с)
 [I] Убрать статические IP Instagram (обход DNS-отравления)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,R,G,T,W,S,P,D,X,I]: "
+        printf "Выберите опцию [0-5,R,G,T,W,S,P,D,X,C,I]: "
         read_input choice
 
         case "$choice" in
@@ -145,6 +146,9 @@ MENU
                 ;;
             x|X)
                 menu_probe
+                ;;
+            c|C)
+                menu_classify
                 ;;
             i|I)
                 menu_instagram_dns_clear
@@ -218,6 +222,47 @@ menu_probe() {
     print_separator
     print_info "Probe завершён. Если --apply был выбран — лучшая стратегия"
     print_info "теперь пинится в state.tsv для $probe_host."
+    pause
+}
+
+menu_classify() {
+    clear_screen
+    print_header "[C] Classify — определить тип DPI-блока для домена"
+
+    local classify="${ZAPRET2_DIR}/z2k-classify"
+    if [ ! -x "$classify" ]; then
+        print_error "z2k-classify не установлен: $classify"
+        print_info "Возможно rolling release ещё не создан в репо или install"
+        print_info "не докачал бинарь. Попробуйте переустановить z2k."
+        pause
+        return
+    fi
+
+    print_info "Быстрая (~5-30 сек) альтернатива active probe:"
+    print_info "  1. Делает 8-симптомную диагностику домена"
+    print_info "  2. Классифицирует тип блока (rkn_rst / tspu_16kb / aws_no_ts / ...)"
+    print_info "  3. С --apply прогоняет шаблон стратегий ТОЛЬКО подходящих"
+    print_info "     для этого типа блока (5-9 вместо 47 в active probe)"
+    print_info "  4. Пинит победителя в state.tsv"
+    print_separator
+    printf "Домен для classify (например linkedin.com): "
+    read_input cls_host
+    if [ -z "$cls_host" ]; then
+        print_warning "Пустой домен, отмена"
+        pause
+        return
+    fi
+
+    printf "Автоматически найти и пинить рабочую стратегию (--apply)? [Y/n]: "
+    read_input cls_apply_ans
+    local cls_apply_flag="--apply"
+    case "$cls_apply_ans" in
+        n|N|no|NO) cls_apply_flag="" ;;
+    esac
+
+    print_separator
+    "$classify" "$cls_host" $cls_apply_flag
+    print_separator
     pause
 }
 

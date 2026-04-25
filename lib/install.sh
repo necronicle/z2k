@@ -1608,6 +1608,67 @@ HOOK
 # ШАГ 12: ФИНАЛИЗАЦИЯ
 # ==============================================================================
 
+step_install_z2k_classify() {
+    print_header "Шаг 11.5/12: Установка z2k-classify (DPI block-type classifier)"
+
+    # Map host arch to release-asset suffix. Naming convention matches
+    # .github/workflows/build-classify.yml matrix names.
+    local sys_arch entware_arch arch suffix
+    sys_arch=$(uname -m)
+    entware_arch=""
+    if command -v opkg >/dev/null 2>&1; then
+        entware_arch=$(opkg print-architecture 2>/dev/null | awk '
+            $1 == "arch" && $2 != "all" {
+                prio = ($3 ~ /^[0-9]+$/) ? $3 + 0 : 0
+                if (prio >= max) { max = prio; arch = $2 }
+            }
+            END { if (arch != "") print arch }
+        ')
+    fi
+    arch="${entware_arch:-$sys_arch}"
+
+    case "$arch" in
+        aarch64|arm64|*aarch64*|*arm64*) suffix="arm64" ;;
+        armv7l|armv6l|arm|*armv7*|*armv6*|arm*) suffix="arm" ;;
+        x86_64|amd64|*x86_64*|*amd64*) suffix="x86_64" ;;
+        i386|i486|i586|i686|x86) suffix="x86" ;;
+        *mipsel*) suffix="mipsel" ;;
+        *mips64*) suffix="mips64" ;;
+        *mips*) suffix="mips" ;;
+        *ppc*) suffix="ppc" ;;
+        *riscv64*) suffix="riscv64" ;;
+        *)
+            print_warning "z2k-classify: unsupported arch '$arch' — пропускаем"
+            return 0  # non-fatal: install continues without classifier
+            ;;
+    esac
+
+    print_info "Архитектура: $arch → z2k-classify-$suffix"
+
+    # Rolling release tag is updated on every push to z2k-enhanced by
+    # .github/workflows/build-classify.yml. Single-asset download via
+    # raw releases URL — no API call, no auth, no rate limit.
+    local url="https://github.com/necronicle/z2k/releases/download/z2k-classify-rolling/z2k-classify-$suffix"
+    local dest="${ZAPRET2_DIR}/z2k-classify"
+
+    if z2k_fetch "$url" "$dest"; then
+        chmod +x "$dest"
+        if "$dest" --version >/dev/null 2>&1; then
+            local ver
+            ver=$("$dest" --version 2>&1 | head -1)
+            print_success "z2k-classify установлен: $ver"
+        else
+            print_warning "z2k-classify скачан, но --version не отрабатывает (несовместимость arch?)"
+        fi
+    else
+        print_warning "z2k-classify: не удалось скачать (rolling release ещё не создан?) — пропускаем"
+        # Non-fatal: classify is a support tool, not core DPI bypass.
+        return 0
+    fi
+
+    return 0
+}
+
 step_finalize() {
     print_header "Шаг 12/12: Финализация установки"
 
@@ -1938,6 +1999,7 @@ run_full_install() {
     step_tcp_tuning || return 1                     # ← НОВОЕ (9.6/12)
     step_create_config_and_init || return 1        # 10/12
     step_install_netfilter_hook || return 1        # 11/12
+    step_install_z2k_classify || true              # 11.5/12 (non-fatal — support tool)
     step_finalize || return 1                      # 12/12
 
     # После установки - без вопросов применяем autocircular стратегии по умолчанию
