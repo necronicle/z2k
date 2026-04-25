@@ -620,10 +620,16 @@ step_build_zapret2() {
     print_info "URL релиза: $openwrt_url"
 
     # Скачать релиз через z2k_fetch — он умеет fallback'и (raw → jsdelivr →
-    # gh-proxy → ndmc DNS) для github.com/releases/download/* URL, что
-    # критично у пользователей чьи провайдеры режут SNI на github.com.
-    if ! z2k_fetch "$openwrt_url" "openwrt-embedded.tar.gz"; then
+    # gh-proxy → ndmc DNS → DoH+pin) для github.com/releases/download/* URL.
+    # Если tarball уже лежит в cwd (build_dir = /tmp/zapret2_build) — пропускаем
+    # скачивание. Этот путь нужен пользователям с жёстким провайдер-блоком где
+    # все 5 наших слоёв не пробивают, но юзер вручную скачал tarball через DoH
+    # с другой машины / другим curl-вызовом и подложил сюда.
+    if [ -s openwrt-embedded.tar.gz ]; then
+        print_info "tarball уже в кэше build_dir — пропускаем скачивание"
+    elif ! z2k_fetch "$openwrt_url" "openwrt-embedded.tar.gz"; then
         print_error "Не удалось загрузить zapret2 OpenWrt embedded (все зеркала)"
+        print_info "Можно скачать вручную и положить в /tmp/zapret2_build/openwrt-embedded.tar.gz, перезапустить установку"
         return 1
     fi
 

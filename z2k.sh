@@ -158,6 +158,172 @@ _z2k_curl_etag() {
     esac
 }
 
+# Layer 5: DoH (1.1.1.1) + захардкоженные edge-IP пины. Включается
+# когда все 4 предыдущих слоя зафейлились — сценарий MTS/мобайл RU
+# где TSPU после 31.03.2026 интермиттентно RST'ит TLS handshake'и
+# по SNI И отдельно глушит DNS recursive resolver. DoH идёт TLS на
+# 1.1.1.1 (Cloudflare DNS), TSPU не видит query payload. --resolve
+# пинит connect address на anycast edge IP — TSPU не успевает
+# enumerate все anycast endpoint'ы и часть проходит.
+#
+# IP'ы Fastly/GitHub Pages иногда меняются (~24h окно), поэтому
+# здесь несколько IP per host: curl попробует по очереди. Если
+# Fastly разом ротанул весь блок — этот слой деградирует, но
+# слои 1-4 не должны зафейлиться одновременно с этим (кроме MTS),
+# так что на стабильных провайдерах DoH-слой никогда и не вызовут.
+#
+# Curl ≥ 7.62 нужен для --doh-url. На Entware mips старый curl
+# (7.60-) не имеет — graceful: проверяем поддержку при первом вызове
+# и кэшируем результат.
+_z2k_doh_supported=""
+_z2k_doh_check() {
+    [ -n "$_z2k_doh_supported" ] && return 0
+    if curl --help all 2>/dev/null | grep -q -- "--doh-url"; then
+        _z2k_doh_supported=1
+    else
+        _z2k_doh_supported=0
+    fi
+    return 0
+}
+_z2k_curl_doh() {
+    local url="$1" dest="$2"
+    _z2k_doh_check
+    [ "$_z2k_doh_supported" = "1" ] || return 1
+
+    # GitHub anycast pool (140.82.112-121.x) — frontends for github.com,
+    # api.github.com и редиректы release-asset на objects.githubusercontent.com.
+    # В release-download flow curl делает 302 редирект github.com →
+    # objects.githubusercontent.com (S3-стиль бэкенд) — оба нужно
+    # пинить иначе на shaге redirect снова идёт через провайдерский DNS.
+    # objects.githubusercontent.com живёт на той же anycast сетке
+    # что raw.githubusercontent.com (185.199.108-111.x — GitHub Pages).
+    local gh_pool="140.82.112.3 140.82.113.3 140.82.114.3 140.82.121.3 140.82.116.3"
+    local raw_pool="185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133"
+    local jsd_pool="151.101.1.229 151.101.65.229 151.101.129.229 151.101.193.229"
+
+    local resolve_args=""
+    add_resolve() {
+        local h=$1 ips=$2 ip
+        for ip in $ips; do
+            resolve_args="$resolve_args --resolve $h:443:$ip"
+        done
+    }
+
+    case "$url" in
+        *raw.githubusercontent.com*)
+            add_resolve raw.githubusercontent.com "$raw_pool" ;;
+        *cdn.jsdelivr.net*)
+            add_resolve cdn.jsdelivr.net "$jsd_pool" ;;
+        *gh-proxy.com*)
+            : ;;  # gh-proxy.com — small self-hosted, IP-пин нестабилен
+        *api.github.com*)
+            add_resolve api.github.com "$gh_pool" ;;
+        https://github.com/*/releases/download/*)
+            # Release tarballs: 302 от github.com на objects.githubusercontent.com.
+            # Пиним оба домена — иначе TSPU SNI-блок на любом из них режет.
+            add_resolve github.com "$gh_pool"
+            add_resolve objects.githubusercontent.com "$raw_pool" ;;
+    esac
+
+    local hdr_file="${dest}.hdr.$$"
+    local tmp_body="${dest}.new.$$"
+    local http_status
+
+    # Retry с jitter: TSPU sliding-window после успешных flow часто
+    # начинает резaть следующие. Pause между attempt дает state-window
+    # expired; чем дальше попытка тем длиннее sleep (3s, 8s, 15s).
+    local attempt sleeps='0 3 8'
+    for attempt in $sleeps; do
+        [ "$attempt" -gt 0 ] && sleep "$attempt"
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+            --doh-url https://1.1.1.1/dns-query $resolve_args \
+            -D "$hdr_file" -o "$tmp_body" \
+            -w "%{http_code}" "$url" 2>/dev/null)
+        case "$http_status" in
+            200)
+                [ ! -s "$tmp_body" ] && { rm -f "$hdr_file" "$tmp_body"; continue; }
+                local new_etag
+                new_etag=$(grep -i '^etag:' "$hdr_file" 2>/dev/null | head -1 \
+                           | sed 's/^[^:]*:[[:space:]]*//; s/\r$//; s/[[:space:]]*$//')
+                mkdir -p "$(dirname "$dest")" 2>/dev/null
+                mv -f "$tmp_body" "$dest"
+                if [ -n "$new_etag" ]; then printf '%s\n' "$new_etag" > "${dest}.etag"
+                else rm -f "${dest}.etag"; fi
+                rm -f "$hdr_file"
+                return 0 ;;
+        esac
+        rm -f "$hdr_file" "$tmp_body" 2>/dev/null
+    done
+
+    # Если single-shot не пробил (самый частый случай — большой файл,
+    # TSPU режет посредине long transfer), fallback на chunked range
+    # download. Каждый chunk отдельный TLS handshake → TSPU sliding-
+    # window не накапливает state. 500 KB на чанк подобрано так чтобы
+    # большинство файлов в repo (~95% < 500 KB) уложились в один chunk
+    # и для big snapshot files (RKN/List.txt 1.9 MB) получилось ровно
+    # 4 чанка с разумными jitter паузами.
+    _z2k_curl_doh_chunked "$url" "$dest" "$resolve_args" && return 0
+
+    return 1
+}
+
+# Chunked range-download через DoH+pin. Используется для files >500KB
+# когда single-shot DoH через TSPU не доходит до конца.
+_z2k_curl_doh_chunked() {
+    local url="$1" dest="$2" resolve_args="$3"
+    local tmp_body="${dest}.new.$$"
+    : > "$tmp_body" || return 1
+
+    local chunk_size=500000
+    local offset=0 chunk_count=0 max_chunks=20
+    local rc http_status
+
+    while [ "$chunk_count" -lt "$max_chunks" ]; do
+        local end=$((offset + chunk_size - 1))
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 60 \
+            --doh-url https://1.1.1.1/dns-query $resolve_args \
+            --range "${offset}-${end}" \
+            -o "${tmp_body}.chunk" \
+            -w "%{http_code}" "$url" 2>/dev/null)
+        case "$http_status" in
+            206|200)
+                cat "${tmp_body}.chunk" >> "$tmp_body"
+                local got
+                got=$(wc -c < "${tmp_body}.chunk" 2>/dev/null)
+                rm -f "${tmp_body}.chunk"
+                [ -z "$got" ] || [ "$got" -lt 1 ] && break
+                # Если меньше chunk_size получили — это последний chunk
+                if [ "$got" -lt "$chunk_size" ]; then
+                    rc=0
+                    break
+                fi
+                offset=$((offset + chunk_size))
+                chunk_count=$((chunk_count + 1))
+                # Jitter: TSPU sliding-window не накопит state если пауза
+                sleep 2
+                ;;
+            416)
+                # Range Not Satisfiable — мы прошли конец файла, всё OK
+                rc=0
+                rm -f "${tmp_body}.chunk"
+                break ;;
+            *)
+                rm -f "${tmp_body}.chunk"
+                rc=1
+                break ;;
+        esac
+    done
+
+    if [ "${rc:-1}" = "0" ] && [ -s "$tmp_body" ]; then
+        mkdir -p "$(dirname "$dest")" 2>/dev/null
+        mv -f "$tmp_body" "$dest"
+        rm -f "${dest}.etag"  # chunked download leaves no per-file etag
+        return 0
+    fi
+    rm -f "$tmp_body" "${tmp_body}.chunk" 2>/dev/null
+    return 1
+}
+
 z2k_fetch() {
     local src="$1"
     local dest="$2"
@@ -192,6 +358,19 @@ z2k_fetch() {
             ;;
     esac
 
+    # Auto-promote DoH: после первого fail на этом конкретном run'е (или
+    # по env var Z2K_FETCH_PREFER_DOH=1) ставим DoH+pin как ПЕРВЫЙ слой.
+    # Сценарий: установка качает 30+ файлов; если первый файл прошёл по
+    # raw — все ОК; если упал на середине (TSPU stateful sliding-window
+    # после N flow), не имеет смысла каждый последующий снова пробовать
+    # все 4 заведомо-резaнных слоя, проще сразу через DoH+pin.
+    if [ "${Z2K_FETCH_PREFER_DOH:-0}" = "1" ]; then
+        if _z2k_curl_doh "$url" "$dest"; then return 0; fi
+        [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest" && return 0
+        [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest" && return 0
+        # DoH тоже не сработал — на всякий case ещё попробуем normal layers
+    fi
+
     # Каждый слой идёт через _z2k_curl_etag: на unchanged-контент 304 +
     # пустое body ~10× быстрее чем полный GET. Etag sidecar ключован по
     # $dest — переключение зеркала форсирует один full re-fetch
@@ -201,9 +380,13 @@ z2k_fetch() {
     [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
 
     # --- Layer 4: Keenetic DNS override via 8.8.8.8 + ndmc ip host ---
+    # gh-proxy.com added 2026-04-25 after a user (Денис, MTS) hit the
+    # case where all three direct fetches failed mid-install and even
+    # the gh-proxy fallback couldn't resolve. Without it our retry loop
+    # below only reattempts raw + jsdelivr.
     if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
-        for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
+        for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
@@ -214,7 +397,30 @@ z2k_fetch() {
             sleep 1
             if _z2k_curl_etag "$url" "$dest"; then return 0; fi
             [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
+            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
         fi
+    fi
+
+    # --- Layer 5: DoH (Cloudflare 1.1.1.1) + pinned anycast edge IPs ---
+    # Last resort for MTS-style stateful TSPU (post-2026-03-31): RST'ит
+    # TLS handshake по SNI + интермиттентно глушит DNS resolver.
+    # DoH bypasses MTS resolver entirely; --resolve to anycast edge IP
+    # pool side-steps SNI-based connect blocks. Requires curl ≥ 7.62.
+    if _z2k_curl_doh "$url" "$dest"; then
+        # DoH сработал, а layer 1-4 не сработали — значит юзер в blokированном
+        # network'e. Промоутим DoH в начало для всех следующих fetch'ей в
+        # этом run'е, чтобы каждый файл не страдал через 4 заведомо-резaнных слоя.
+        Z2K_FETCH_PREFER_DOH=1
+        export Z2K_FETCH_PREFER_DOH
+        return 0
+    fi
+    if [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest"; then
+        Z2K_FETCH_PREFER_DOH=1; export Z2K_FETCH_PREFER_DOH
+        return 0
+    fi
+    if [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest"; then
+        Z2K_FETCH_PREFER_DOH=1; export Z2K_FETCH_PREFER_DOH
+        return 0
     fi
 
     return 1
