@@ -446,7 +446,7 @@ download_init_script() {
     fi
 
     # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, tg watchdog)
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-probe.sh; do
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-probe.sh z2k-classify-drift.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if z2k_fetch "$url" "$output"; then

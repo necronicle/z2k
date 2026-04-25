@@ -1719,6 +1719,10 @@ step_finalize() {
     # Runs 2h earlier than get_config.sh so new domains land before
     # get_config.sh resolves them.
     local z2k_update_cron="0 4 * * * ${ZAPRET2_DIR}/z2k-update-lists.sh >/dev/null 2>&1"
+    # z2k-classify-drift.sh — runs 30 min after update-lists so any
+    # newly-fetched ipsets / hostlists are reflected in the rotator
+    # before we probe canary domains.
+    local z2k_drift_cron="30 4 * * * ${ZAPRET2_DIR}/z2k-classify-drift.sh >/dev/null 2>&1"
     local crontab_file="/opt/etc/crontab"
     local cron_ok=0
 
@@ -1726,25 +1730,24 @@ step_finalize() {
 
     # Метод 1: /opt/etc/crontab (Entware cron)
     if [ -f "$crontab_file" ] || [ -d "/opt/etc" ]; then
-        # Удалить старые записи zapret2 (get_config.sh и z2k-update-lists.sh)
+        # Удалить старые записи zapret2 (get_config / update-lists / drift)
         if [ -f "$crontab_file" ]; then
-            grep -vE "get_config\.sh|z2k-update-lists\.sh" "$crontab_file" > "${crontab_file}.tmp" 2>/dev/null
+            grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh" "$crontab_file" > "${crontab_file}.tmp" 2>/dev/null
             mv "${crontab_file}.tmp" "$crontab_file"
         fi
-        # Добавить обе задачи
         echo "$cron_line" >> "$crontab_file"
         echo "$z2k_update_cron" >> "$crontab_file"
-        print_success "Автообновление настроено в $crontab_file (get_config 06:00, z2k-update-lists 04:00)"
+        echo "$z2k_drift_cron" >> "$crontab_file"
+        print_success "Автообновление настроено в $crontab_file (get_config 06:00, update-lists 04:00, drift 04:30)"
         cron_ok=1
     fi
 
     # Метод 2: crontab -l / crontab - (если Entware crontab не работает)
     if [ "$cron_ok" = "0" ] && command -v crontab >/dev/null 2>&1; then
-        # Удалить старые записи zapret2 и добавить обе новые
-        (crontab -l 2>/dev/null | grep -vE "get_config\.sh|z2k-update-lists\.sh"; echo "$cron_line"; echo "$z2k_update_cron") | crontab -
+        (crontab -l 2>/dev/null | grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh"; echo "$cron_line"; echo "$z2k_update_cron"; echo "$z2k_drift_cron") | crontab -
         if [ $? -eq 0 ]; then
             z2k_fix_cron_perms
-            print_success "Автообновление настроено через crontab (get_config 06:00, z2k-update-lists 04:00)"
+            print_success "Автообновление настроено через crontab (get_config 06:00, update-lists 04:00, drift 04:30)"
             cron_ok=1
         fi
     fi
