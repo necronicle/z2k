@@ -6,8 +6,9 @@
 #include "types.h"
 #include "probe.h"
 #include "classify.h"
-#include "templates.h"
-#include "state.h"
+#include "recipe.h"
+#include "generator.h"
+#include "inject.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,20 +23,21 @@ static void sleep_ms(int ms) {
 	nanosleep(&ts, NULL);
 }
 
-static const char *VERSION = "0.2.0-phase2";
+static const char *VERSION = "0.3.0-generator";
 
 static void print_usage(FILE *f) {
 	fprintf(f,
-		"z2k-classify %s — DPI block-type classifier + strategy pin\n"
+		"z2k-classify %s — DPI block-type classifier + strategy generator\n"
 		"\n"
 		"Usage: z2k-classify <domain> [options]\n"
 		"\n"
 		"Options:\n"
-		"  --apply         After classify, probe template strategies and\n"
-		"                  pin the winning one in autocircular state.tsv\n"
-		"                  (survives nfqws2 restart)\n"
-		"  --dry-run       With --apply: probe but don't keep pin (revert\n"
-		"                  state.tsv to original at end)\n"
+		"  --apply         Generator mode: synthesize fresh strategies from\n"
+		"                  per-block-type primitive recipes, inject each via\n"
+		"                  restart-cycle, find a winner, persist it as a new\n"
+		"                  strategy=N in strats_new2.txt. Takes 2-5 minutes.\n"
+		"  --dry-run       With --apply: synthesize and probe, but revert all\n"
+		"                  changes when done (don't persist the winner)\n"
 		"  --json          Machine-readable JSON output\n"
 		"  --timeout=N     Total probe budget in seconds (default 60)\n"
 		"  --verbose       Per-probe diagnostic prints\n"
@@ -50,67 +52,96 @@ static void print_usage(FILE *f) {
 		VERSION);
 }
 
-/* Phase 2 — probe per-template strategies, pin winner.
+/* Phase 2 generator — synthesize fresh strategies from primitive
+ * recipes and probe each one until we find a winner.
  *
- * For each candidate strategy in the block-type template:
- *   1. Write state.tsv pin for (profile_key, domain, strategy_num)
- *   2. Sleep briefly so autocircular picks up the pin on next flow
- *   3. Re-probe the domain
- *   4. If block_type now == NONE → winner. Pin stays (unless --dry-run).
- *   5. Else continue to next strategy.
+ * For each generated strategy:
+ *   1. inject_apply() writes it into strats_new2.txt at slot 200,
+ *      regenerates config, restarts nfqws2 (~3-5 s on Keenetic),
+ *      and pins our domain to slot 200 in state.tsv.
+ *   2. probe_run() retests the domain via the same minimal CH used
+ *      in baseline.
+ *   3. classify_infer() on the post-inject result. If block_type
+ *      flipped to BLOCK_NONE, this strategy is the winner.
+ *   4a. Winner + !dry_run: inject_persist_winner() promotes the
+ *       strategy from slot 200 to next-available permanent slot
+ *       (e.g. strategy=48 in rkn_tcp). Survives nfqws2 restarts;
+ *       rotator picks it up for future hosts too.
+ *   4b. Winner + dry_run: inject_revert() removes the slot-200
+ *       entry and the state.tsv pin so nothing persists.
+ *   5. No winner after exhausting recipe: inject_revert() to clean
+ *      slate, report failure to caller.
  *
- * Leaves state.tsv in one of three end states:
- *   - winner strategy pinned (default --apply behavior)
- *   - pinned with original pin (or none) restored (--dry-run, or no winner)
+ * Cost: each iteration ≈ 5-7 s (regen ~1 s, restart ~3 s, probe ~2 s,
+ * settle 0.4 s). For a 30-combination recipe = 2.5-3.5 minutes total.
  *
- * Side effect: may temporarily alter autocircular pin state for other
- * users during the probe. z2k-probe.sh has the same limitation.
+ * Side effect: every iteration restarts production nfqws2, briefly
+ * interrupting other users' DPI bypass. Acceptable for one-off
+ * support-tool runs. The drift cron deliberately does NOT use the
+ * generator path — it only runs the classifier (read-only).
  */
-static void phase2_apply(classify_result_t *res, bool dry_run, bool verbose) {
+static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
+                            int max_attempts) {
 	res->apply_attempted = true;
 	res->apply_succeeded = false;
 	res->winner_strategy = 0;
 	res->winner_profile[0] = '\0';
 	res->strategies_tried = 0;
 
-	const template_t *t = template_for_block(res->block_type);
-	if (!t) {
+	const recipe_t *r = recipe_for_block(res->block_type);
+	if (!r) {
 		snprintf(res->apply_note, sizeof(res->apply_note),
-		         "no template for block_type=%s — try manual z2k-probe",
+		         "no recipe for block_type=%s — generator cannot synthesize",
 		         block_type_name(res->block_type));
 		return;
 	}
 
-	const char *state_path = state_path_pick();
-	snprintf(res->winner_profile, sizeof(res->winner_profile), "%s", t->profile_key);
+	snprintf(res->winner_profile, sizeof(res->winner_profile), "%s", r->profile_key);
 
+	int total = gen_total_count(r);
 	if (verbose) {
-		fprintf(stderr, "phase2: probing %d strategies for %s (profile=%s, path=%s)\n",
-		        t->count, res->domain, t->profile_key, state_path);
+		fprintf(stderr, "phase2 generator: %d candidate(s) across %d famil(ies) for block_type=%s, profile=%s\n",
+		        total, r->family_count, block_type_name(res->block_type),
+		        r->profile_key);
 	}
 
-	for (int i = 0; i < t->count; i++) {
-		int s = t->strategy_nums[i];
+	if (max_attempts > 0 && total > max_attempts) {
+		if (verbose) fprintf(stderr, "phase2 generator: capping attempts at %d (recipe has %d)\n",
+		                     max_attempts, total);
+		total = max_attempts;
+	}
+
+	generator_t g;
+	gen_init(&g, r);
+
+	char strategy_buf[2048];
+	const char *family = NULL;
+
+	for (int i = 0; i < total; i++) {
+		int gen_rc = gen_next(&g, strategy_buf, sizeof(strategy_buf), &family);
+		if (gen_rc <= 0) break;
 		res->strategies_tried = i + 1;
 
-		if (state_pin(state_path, t->profile_key, res->domain, s) != 0) {
-			snprintf(res->apply_note, sizeof(res->apply_note),
-			         "state_pin failed for strategy=%d (errno?)", s);
-			return;
+		if (verbose) {
+			fprintf(stderr, "  [%d/%d] family=%s\n    %s\n",
+			        i + 1, total, family ? family : "?", strategy_buf);
 		}
-		/* Let autocircular pick up the pin on next flow. Short sleep
-		 * matches z2k-probe.sh's 0.2-1 s gap. */
-		sleep_ms(400);
 
-		probe_result_t post = {0};
-		struct in_addr ip;
-		if (probe_run(res->domain, 15, &post, &ip) != 0) {
-			if (verbose) fprintf(stderr, "  strategy=%d: probe failed\n", s);
+		/* Inject + restart cycle. */
+		if (inject_apply(strategy_buf, r->profile_key, res->domain) != 0) {
+			if (verbose) fprintf(stderr, "    inject_apply failed, skipping\n");
 			continue;
 		}
 
-		/* Reinterpret post-pin symptoms. Use a throwaway result so we
-		 * don't clobber the baseline saved in *res. */
+		/* Re-probe the domain. */
+		probe_result_t post = {0};
+		struct in_addr ip;
+		if (probe_run(res->domain, 15, &post, &ip) != 0) {
+			if (verbose) fprintf(stderr, "    probe_run failed\n");
+			inject_revert(r->profile_key, res->domain);
+			continue;
+		}
+
 		classify_result_t after = {0};
 		snprintf(after.domain, sizeof(after.domain), "%s", res->domain);
 		after.resolved_ip = ip;
@@ -118,33 +149,52 @@ static void phase2_apply(classify_result_t *res, bool dry_run, bool verbose) {
 		classify_infer(&after);
 
 		if (verbose) {
-			fprintf(stderr, "  strategy=%d: block_type=%s size=%u rst=%d\n",
-			        s, block_type_name(after.block_type),
+			fprintf(stderr, "    post-inject: block_type=%s size=%u rst=%d\n",
+			        block_type_name(after.block_type),
 			        post.size_final, post.server_rst_received);
 		}
 
 		if (after.block_type == BLOCK_NONE) {
+			/* Winner found. */
 			res->apply_succeeded = true;
-			res->winner_strategy = s;
 
 			if (dry_run) {
-				state_unpin(state_path, t->profile_key, res->domain);
+				inject_revert(r->profile_key, res->domain);
 				snprintf(res->apply_note, sizeof(res->apply_note),
-				         "strategy=%d would work — state.tsv reverted (--dry-run)", s);
+				         "WINNER: family=%s — but reverted (--dry-run). "
+				         "Strategy: %s",
+				         family ? family : "?", strategy_buf);
+				res->winner_strategy = -1;  /* not persisted */
 			} else {
-				snprintf(res->apply_note, sizeof(res->apply_note),
-				         "strategy=%d pinned in state.tsv (profile=%s)",
-				         s, t->profile_key);
+				int new_id = inject_persist_winner(strategy_buf,
+				                                    r->profile_key,
+				                                    res->domain);
+				if (new_id < 0) {
+					snprintf(res->apply_note, sizeof(res->apply_note),
+					         "WINNER family=%s but persist failed; "
+					         "kept as dynamic slot 200. Strategy: %s",
+					         family ? family : "?", strategy_buf);
+					res->winner_strategy = INJECT_DYNAMIC_STRATEGY_ID;
+				} else {
+					snprintf(res->apply_note, sizeof(res->apply_note),
+					         "WINNER persisted as strategy=%d in profile=%s "
+					         "(family=%s). Future hosts get rotator coverage too.",
+					         new_id, r->profile_key,
+					         family ? family : "?");
+					res->winner_strategy = new_id;
+				}
 			}
 			return;
 		}
+
+		/* Not a winner — revert and continue. */
+		inject_revert(r->profile_key, res->domain);
 	}
 
-	/* No strategy worked — revert our probing pin, leave autocircular
-	 * to resume normal rotation on next flow. */
-	state_unpin(state_path, t->profile_key, res->domain);
 	snprintf(res->apply_note, sizeof(res->apply_note),
-	         "no template strategy worked — state.tsv unpinned, manual investigation needed");
+	         "exhausted %d candidate(s) without a winner — recipe needs widening "
+	         "OR domain is blocked at L3 (transit drop, not DPI)",
+	         res->strategies_tried);
 }
 
 static void print_text_result(const classify_result_t *r) {
@@ -314,7 +364,8 @@ int main(int argc, char **argv) {
 	if (want_apply && res.block_type != BLOCK_NONE &&
 	    res.block_type != BLOCK_TRANSIT_DROP &&
 	    res.block_type != BLOCK_MOBILE_ICMP) {
-		phase2_apply(&res, dry_run, verbose);
+		/* max_attempts=0 → unlimited (use full recipe size) */
+		phase2_generate(&res, dry_run, verbose, 0);
 	}
 
 	if (want_json) print_json_result(&res);

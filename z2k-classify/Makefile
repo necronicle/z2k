@@ -10,7 +10,7 @@
 # where glibc versions diverge) and stripped. Target size ≤ 60 KB.
 
 BIN       := z2k-classify
-SRC       := src/main.c src/probe.c src/classify.c src/templates.c src/state.c
+SRC       := src/main.c src/probe.c src/classify.c src/state.c src/recipe.c src/generator.c src/inject.c
 INCLUDES  := -Isrc
 
 CC        ?= cc
