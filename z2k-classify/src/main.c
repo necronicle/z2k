@@ -79,8 +79,28 @@ static void print_usage(FILE *f) {
  * Cost: each iteration ≈ 2 s (file write ~10 ms + 1-s TTL settle +
  * probe ~1 s). 30-combo run = ~60-90 s total. Persist adds ~5 s once.
  */
+/* Pull a short, human-readable label from a generated strategy buf —
+ * the rotation axis value (innocent SNI / blob / host), plus a short
+ * post-result tag. Used by progress lines so the user can SEE which
+ * variation is currently being tried. */
+static void short_axis_label(const char *strategy_buf, char *out, size_t outsz) {
+	out[0] = '\0';
+	const char *keys[] = {":blob=", ":seqovl_pattern=", ":host=", ":sni=", NULL};
+	for (int i = 0; keys[i]; i++) {
+		const char *p = strstr(strategy_buf, keys[i]);
+		if (!p) continue;
+		p += strlen(keys[i]);
+		size_t n = 0;
+		while (p[n] && p[n] != ':' && p[n] != ' ' && p[n] != ',' && n + 1 < outsz) {
+			out[n] = p[n]; n++;
+		}
+		out[n] = '\0';
+		if (n > 0) return;
+	}
+}
+
 static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
-                            int max_attempts) {
+                            int max_attempts, bool quiet) {
 	res->apply_attempted = true;
 	res->apply_succeeded = false;
 	res->winner_strategy = 0;
@@ -98,15 +118,20 @@ static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
 	snprintf(res->winner_profile, sizeof(res->winner_profile), "%s", r->profile_key);
 
 	int total = gen_total_count(r);
-	if (verbose) {
-		fprintf(stderr, "phase2 generator: %d candidate(s) across %d famil(ies) for block_type=%s, profile=%s\n",
-		        total, r->family_count, block_type_name(res->block_type),
-		        r->profile_key);
+	if (!quiet) {
+		fprintf(stderr,
+			"generator: block=%s profile=%s — %d candidate(s) across %d famil(ies)\n",
+			block_type_name(res->block_type), r->profile_key,
+			total, r->family_count);
+		fflush(stderr);
 	}
 
 	if (max_attempts > 0 && total > max_attempts) {
-		if (verbose) fprintf(stderr, "phase2 generator: capping attempts at %d (recipe has %d)\n",
-		                     max_attempts, total);
+		if (!quiet) {
+			fprintf(stderr, "generator: capping attempts at %d (recipe has %d)\n",
+			        max_attempts, total);
+			fflush(stderr);
+		}
 		total = max_attempts;
 	}
 
@@ -121,14 +146,24 @@ static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
 		if (gen_rc <= 0) break;
 		res->strategies_tried = i + 1;
 
+		char axis[128];
+		short_axis_label(strategy_buf, axis, sizeof(axis));
+
+		if (!quiet) {
+			fprintf(stderr, "  [%2d/%d] %-20s %-32s ... ",
+			        i + 1, total,
+			        family ? family : "?",
+			        axis[0] ? axis : "(no rotation)");
+			fflush(stderr);
+		}
 		if (verbose) {
-			fprintf(stderr, "  [%d/%d] family=%s\n    %s\n",
-			        i + 1, total, family ? family : "?", strategy_buf);
+			fprintf(stderr, "\n    strategy: %s\n    ... ",
+			        strategy_buf);
+			fflush(stderr);
 		}
 
-		/* Inject + restart cycle. */
 		if (inject_apply(strategy_buf, r->profile_key, res->domain) != 0) {
-			if (verbose) fprintf(stderr, "    inject_apply failed, skipping\n");
+			if (!quiet) { fprintf(stderr, "inject failed\n"); fflush(stderr); }
 			continue;
 		}
 
@@ -137,7 +172,7 @@ static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
 		probe_result_t post = {0};
 		struct in_addr ip;
 		if (probe_run(res->domain, 15, &post, &ip, false) != 0) {
-			if (verbose) fprintf(stderr, "    probe_run failed\n");
+			if (!quiet) { fprintf(stderr, "probe failed\n"); fflush(stderr); }
 			inject_revert(r->profile_key, res->domain);
 			continue;
 		}
@@ -148,31 +183,39 @@ static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
 		after.probe = post;
 		classify_infer(&after);
 
-		if (verbose) {
-			fprintf(stderr, "    post-inject: block_type=%s size=%u rst=%d\n",
-			        block_type_name(after.block_type),
-			        post.size_final, post.server_rst_received);
+		if (!quiet) {
+			if (after.block_type == BLOCK_NONE) {
+				fprintf(stderr, "WINNER (size=%u)\n", post.size_final);
+			} else {
+				fprintf(stderr, "%s%s (size=%u)\n",
+				        block_type_name(after.block_type),
+				        post.server_rst_received ? " rst" : "",
+				        post.size_final);
+			}
+			fflush(stderr);
 		}
 
 		if (after.block_type == BLOCK_NONE) {
-			/* Winner found. */
 			res->apply_succeeded = true;
 
 			if (dry_run) {
 				inject_revert(r->profile_key, res->domain);
 				snprintf(res->apply_note, sizeof(res->apply_note),
-				         "WINNER: family=%s — but reverted (--dry-run). "
-				         "Strategy: %s",
+				         "WINNER: family=%s — reverted (--dry-run). Strategy: %s",
 				         family ? family : "?", strategy_buf);
-				res->winner_strategy = -1;  /* not persisted */
+				res->winner_strategy = -1;
 			} else {
+				if (!quiet) {
+					fprintf(stderr, "  persisting winner (regen + restart, ~5s)...\n");
+					fflush(stderr);
+				}
 				int new_id = inject_persist_winner(strategy_buf,
 				                                    r->profile_key,
 				                                    res->domain);
 				if (new_id < 0) {
 					snprintf(res->apply_note, sizeof(res->apply_note),
-					         "WINNER family=%s but persist failed; "
-					         "kept as dynamic slot 200. Strategy: %s",
+					         "WINNER family=%s but persist failed; kept as "
+					         "dynamic slot 48. Strategy: %s",
 					         family ? family : "?", strategy_buf);
 					res->winner_strategy = INJECT_DYNAMIC_STRATEGY_ID;
 				} else {
@@ -187,7 +230,6 @@ static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
 			return;
 		}
 
-		/* Not a winner — revert and continue. */
 		inject_revert(r->profile_key, res->domain);
 	}
 
@@ -349,8 +391,13 @@ int main(int argc, char **argv) {
 	classify_result_t res = {0};
 	snprintf(res.domain, sizeof(res.domain), "%s", domain);
 
-	if (verbose && !want_json) {
-		fprintf(stderr, "probing %s (budget %d s)...\n", domain, timeout_sec);
+	/* Suppress all stderr progress when JSON is requested (script-
+	 * friendly machine output). Otherwise default to "show progress". */
+	bool quiet = want_json;
+
+	if (!quiet) {
+		fprintf(stderr, "probing %s (raw, bypassing local pipeline)... ", domain);
+		fflush(stderr);
 	}
 
 	/* Baseline probe with SO_MARK so packets bypass the nfqws2
@@ -364,11 +411,24 @@ int main(int argc, char **argv) {
 
 	classify_infer(&res);
 
+	if (!quiet) {
+		fprintf(stderr, "block=%s\n", block_type_name(res.block_type));
+		fflush(stderr);
+	}
+
 	if (want_apply && res.block_type != BLOCK_NONE &&
 	    res.block_type != BLOCK_TRANSIT_DROP &&
 	    res.block_type != BLOCK_MOBILE_ICMP) {
 		/* max_attempts=0 → unlimited (use full recipe size) */
-		phase2_generate(&res, dry_run, verbose, 0);
+		phase2_generate(&res, dry_run, verbose, 0, quiet);
+	} else if (want_apply && !quiet) {
+		fprintf(stderr,
+		        "no generator run: block_type=%s%s\n",
+		        block_type_name(res.block_type),
+		        res.block_type == BLOCK_NONE
+		            ? " (domain reachable from raw probe — already not blocked)"
+		            : "");
+		fflush(stderr);
 	}
 
 	if (want_json) print_json_result(&res);
