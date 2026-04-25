@@ -1,39 +1,43 @@
 #!/bin/sh
-# z2k-classify-inject.sh — strategy injection helper for z2k-classify.
+# z2k-classify-inject.sh — seamless strategy injection helper.
 #
-# Three operations:
+# Operations:
 #   apply <profile_key> <domain>
-#       Read $Z2K_STRATEGY (full --lua-desync=... line, no strategy=N).
-#       Append it to the autocircular block matching profile_key in
-#       /opt/zapret2/strats_new2.txt as `:strategy=200`. Regen config.
-#       Restart S99zapret2. Exit 0 on success.
+#       Read $Z2K_STRATEGY (e.g.
+#         --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6
+#       ). Decompose into family + key=value params. Write to
+#       /tmp/z2k-classify-dynparams. Pin (profile_key, domain) → 200
+#       in state.tsv so the next flow uses the dynamic slot. NO
+#       restart of nfqws2 — handler reads dynparams per-packet (1-sec
+#       TTL cache).
 #
 #   revert <profile_key> <domain>
-#       Remove the `:strategy=200` instance from strats_new2.txt for
-#       the given profile_key block. Regen + restart. Exit 0.
+#       Remove the state.tsv pin. Truncate dynparams file (handler
+#       sees empty params and becomes a silent no-op until next apply).
+#       NO restart.
 #
 #   persist <profile_key> <domain>
-#       Read $Z2K_STRATEGY. Append to autocircular block as the next
-#       available strategy=N (max existing + 1). Update state.tsv pin
-#       to that N. Regen + restart. Exit code = N (1..254).
+#       Read $Z2K_STRATEGY. Append it to the matching autocircular
+#       block in strats_new2.txt as the next available strategy=N
+#       (max existing under 200 + 1). Update state.tsv pin to that
+#       new ID. Regen config + restart S99zapret2 ONCE so the new
+#       permanent strategy gets loaded into nfqws2's strategy table.
+#       Returns N as exit code.
 #
-# strats_new2.txt format reminder:
-#   manual_autocircular_rkn ipv4 example.com : nfqws2 ... --new
-#   manual_autocircular_yt  ipv4 example.com : nfqws2 ... --new
-#   manual_autocircular_gv  ipv4 example.com : nfqws2 ... --new
-#
-# Mapping profile_key → block prefix:
-#   rkn_tcp     → manual_autocircular_rkn
-#   google_tls  → manual_autocircular_yt    (and gv via merge)
-#   cdn_tls     → no block in strats_new2 — strategies are inline in
-#                 lib/config_official.sh. Inject path different (TODO).
+# Performance vs old restart-cycle:
+#   apply/revert: ~0.5 sec (just file writes + sleep for autocircular
+#     to pick up state.tsv on next flow). NO interruption to other users.
+#   persist: ~5 sec ONE-TIME at end of probe session.
 
 set -eu
 
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
 STRATS_FILE="${ZAPRET2_DIR}/strats_new2.txt"
 INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
+DYNPARAMS_FILE="/tmp/z2k-classify-dynparams"
 DYNAMIC_SLOT=200
+STATE_DIR="/opt/zapret2/extra_strats/cache/autocircular"
+STATE_FILE="$STATE_DIR/state.tsv"
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -43,16 +47,110 @@ profile_to_block_prefix() {
     case "$1" in
         rkn_tcp)    echo "manual_autocircular_rkn" ;;
         google_tls) echo "manual_autocircular_yt" ;;
-        # cdn_tls strategies live in lib/config_official.sh inline,
-        # not in strats_new2.txt. For now we proxy via rkn_tcp block
-        # so the strategy goes into a different rotator but at least
-        # gets active (pin-based probe works regardless of block).
-        cdn_tls)    echo "manual_autocircular_rkn" ;;
+        cdn_tls)    echo "manual_autocircular_rkn" ;;  # cdn inline; route via rkn block
         *)          echo "" ;;
     esac
 }
 
-# Find max strategy=N already in the autocircular block.
+# Map an action keyword (fake/multisplit/etc.) to the family= value our
+# Lua handler expects. Keep in sync with z2k-dynamic-strategy.lua.
+action_to_family() {
+    case "$1" in
+        fake)            echo "fake" ;;
+        multisplit)      echo "multisplit" ;;
+        hostfakesplit)   echo "hostfakesplit" ;;
+        multidisorder)   echo "multidisorder" ;;
+        *)               echo "" ;;
+    esac
+}
+
+# Parse $Z2K_STRATEGY into family + key=value pairs and write them to
+# the dynparams file. Format: one key=value per line.
+write_dynparams() {
+    s="$Z2K_STRATEGY"
+
+    # Strip leading "--lua-desync="
+    s_body=$(printf '%s' "$s" | sed 's/^--lua-desync=//')
+
+    # First colon-separated chunk is the action keyword.
+    action=$(printf '%s' "$s_body" | cut -d: -f1)
+    family=$(action_to_family "$action")
+    if [ -z "$family" ]; then
+        echo "z2k-classify-inject: unknown action '$action' in Z2K_STRATEGY" >&2
+        return 1
+    fi
+
+    rest=$(printf '%s' "$s_body" | cut -d: -f2-)
+
+    # Atomic write: write to tmp, rename. Lua handler caches 1 sec so
+    # in-flight reads of the old file aren't a problem.
+    tmp="${DYNPARAMS_FILE}.tmp.$$"
+    {
+        printf '# z2k-classify dynparams (auto-generated)\n'
+        printf 'family=%s\n' "$family"
+        # Split rest on ':' and emit one key=value per line. Some
+        # tokens may be flag-only (e.g. badsum). For those we emit
+        # "key=" so the handler still sees the key as present.
+        IFS=:
+        for kv in $rest; do
+            [ -z "$kv" ] && continue
+            case "$kv" in
+                *=*) printf '%s\n' "$kv" ;;
+                *)   printf '%s=\n' "$kv" ;;  # flag-only, e.g. badsum
+            esac
+        done
+        unset IFS
+    } > "$tmp"
+    mv -f "$tmp" "$DYNPARAMS_FILE"
+    chmod 0644 "$DYNPARAMS_FILE" 2>/dev/null || true
+}
+
+clear_dynparams() {
+    # Truncate but keep the file (the handler tolerates empty/missing).
+    : > "$DYNPARAMS_FILE" 2>/dev/null || true
+}
+
+# state.tsv pin/unpin (atomic copy-modify-rename). Mirrors C state.c
+# semantics so it's safe to call from either side.
+state_pin() {
+    profile_key=$1; domain=$2; strategy_id=$3
+    [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
+    ts=$(date +%s 2>/dev/null || echo 0)
+    tmp="${STATE_FILE}.tmp.$$"
+    {
+        if [ -s "$STATE_FILE" ]; then
+            awk -v p="$profile_key" -v h="$domain" -F '\t' '
+                /^#/ { print; next }
+                $1 == p && $2 == h { next }
+                { print }
+            ' "$STATE_FILE"
+        else
+            printf '# z2k autocircular state (persisted circular nstrategy)\n'
+            printf '# key\thost\tstrategy\tts\n'
+        fi
+        printf '%s\t%s\t%s\t%s\n' "$profile_key" "$domain" "$strategy_id" "$ts"
+    } > "$tmp"
+    mv -f "$tmp" "$STATE_FILE"
+}
+
+state_unpin() {
+    profile_key=$1; domain=$2
+    [ -s "$STATE_FILE" ] || return 0
+    tmp="${STATE_FILE}.tmp.$$"
+    awk -v p="$profile_key" -v h="$domain" -F '\t' '
+        /^#/ { print; next }
+        $1 == p && $2 == h { next }
+        { print }
+    ' "$STATE_FILE" > "$tmp"
+    mv -f "$tmp" "$STATE_FILE"
+}
+
+# Strip any embedded :strategy=N from a strategy string.
+strip_strategy_tag() {
+    printf '%s' "$1" | sed 's/:strategy=[0-9]*//g'
+}
+
+# Find max strategy=N within a block, ignoring our reserved 200+ slot.
 max_strategy_in_block() {
     block_prefix=$1
     awk -v p="$block_prefix" '
@@ -60,7 +158,7 @@ max_strategy_in_block() {
             n = 0
             while (match($0, /:strategy=[0-9]+/)) {
                 v = substr($0, RSTART+10, RLENGTH-10) + 0
-                if (v > n && v < 200) n = v  # ignore reserved DYNAMIC_SLOT 200+
+                if (v > n && v < 200) n = v
                 $0 = substr($0, RSTART+RLENGTH)
             }
             print n
@@ -69,13 +167,7 @@ max_strategy_in_block() {
     ' "$STRATS_FILE"
 }
 
-# Strip any `:strategy=N` from the strategy string (caller may have
-# included one; we set our own).
-strip_strategy_tag() {
-    printf '%s' "$1" | sed 's/:strategy=[0-9]*//g'
-}
-
-# Append a strategy line to the autocircular block. Atomic write.
+# Append a strategy line to the autocircular block (atomic).
 append_to_block() {
     block_prefix=$1
     new_strategy_with_id=$2
@@ -87,58 +179,11 @@ append_to_block() {
         }
         { print }
     ' "$STRATS_FILE" > "$tmp"
-    if [ ! -s "$tmp" ]; then
-        rm -f "$tmp"
-        return 1
-    fi
+    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
     mv -f "$tmp" "$STRATS_FILE"
-    return 0
 }
 
-# Drop any strategy with the given strategy=N from the autocircular
-# block. Used for revert (N=DYNAMIC_SLOT) and clean-up.
-drop_strategy_from_block() {
-    block_prefix=$1
-    drop_id=$2
-    tmp="${STRATS_FILE}.tmp.$$"
-    awk -v p="$block_prefix" -v sid="$drop_id" '
-        $0 ~ "^"p" " {
-            # Tokenize on space, drop tokens that contain :strategy=<sid>
-            # (one --lua-desync= token == one strategy instance).
-            n = split($0, tokens, " ")
-            out = ""
-            i = 1
-            while (i <= n) {
-                t = tokens[i]
-                # Group token with the next ones that are continuation
-                # of the same --lua-desync= until we hit another --
-                while (i + 1 <= n && substr(tokens[i+1], 1, 2) != "--") {
-                    t = t " " tokens[++i]
-                }
-                # Check if this --lua-desync= group has :strategy=sid
-                pat = ":strategy=" sid "$"
-                pat2 = ":strategy=" sid ":"
-                if (t ~ pat || t ~ pat2) {
-                    # skip this token group
-                } else {
-                    out = (out == "" ? t : out " " t)
-                }
-                i++
-            }
-            print out
-            next
-        }
-        { print }
-    ' "$STRATS_FILE" > "$tmp"
-    if [ ! -s "$tmp" ]; then
-        rm -f "$tmp"
-        return 1
-    fi
-    mv -f "$tmp" "$STRATS_FILE"
-    return 0
-}
-
-# Regen config + restart nfqws2. ~3-5 sec on Keenetic.
+# Regen + restart — ONLY used by persist op.
 regen_and_restart() {
     sh -c '
         export ZAPRET2_DIR=/opt/zapret2
@@ -151,11 +196,8 @@ regen_and_restart() {
     '
     if [ -x "$INIT_SCRIPT" ]; then
         "$INIT_SCRIPT" restart >/dev/null 2>&1 || true
-        # Brief settle window — circular needs a fresh flow to pick
-        # up state.tsv pin.
         sleep 2
     fi
-    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -165,46 +207,35 @@ regen_and_restart() {
 op_apply() {
     profile_key=$1
     domain=$2
-    block_prefix=$(profile_to_block_prefix "$profile_key")
-    [ -n "$block_prefix" ] || { echo "unknown profile_key: $profile_key" >&2; return 1; }
     [ -n "${Z2K_STRATEGY:-}" ] || { echo "Z2K_STRATEGY env var not set" >&2; return 1; }
 
-    strategy=$(strip_strategy_tag "$Z2K_STRATEGY")
-    new_with_id="${strategy}:strategy=${DYNAMIC_SLOT}"
-
-    # Always remove any leftover dynamic-slot strategy first to keep
-    # idempotence when called repeatedly.
-    drop_strategy_from_block "$block_prefix" "$DYNAMIC_SLOT" >/dev/null 2>&1 || true
-
-    append_to_block "$block_prefix" "$new_with_id" || return 1
-    regen_and_restart
+    write_dynparams || return 1
+    state_pin "$profile_key" "$domain" "$DYNAMIC_SLOT"
+    # Brief settle so the cached_at timer in z2k-dynamic-strategy.lua
+    # crosses TTL on the next packet.
+    sleep 1
     return 0
 }
 
 op_revert() {
     profile_key=$1
     domain=$2
-    block_prefix=$(profile_to_block_prefix "$profile_key")
-    [ -n "$block_prefix" ] || return 1
-
-    drop_strategy_from_block "$block_prefix" "$DYNAMIC_SLOT" || return 1
-    regen_and_restart
+    state_unpin "$profile_key" "$domain"
+    clear_dynparams
     return 0
 }
 
 op_persist() {
     profile_key=$1
     domain=$2
+    [ -n "${Z2K_STRATEGY:-}" ] || return 1
+
     block_prefix=$(profile_to_block_prefix "$profile_key")
     [ -n "$block_prefix" ] || return 1
-    [ -n "${Z2K_STRATEGY:-}" ] || return 1
 
     strategy=$(strip_strategy_tag "$Z2K_STRATEGY")
 
-    # Remove the dynamic-slot version (we're promoting it).
-    drop_strategy_from_block "$block_prefix" "$DYNAMIC_SLOT" >/dev/null 2>&1 || true
-
-    # Find next available strategy=N.
+    # Find next available permanent slot.
     cur_max=$(max_strategy_in_block "$block_prefix")
     [ -z "$cur_max" ] && cur_max=0
     next_id=$((cur_max + 1))
@@ -217,34 +248,16 @@ op_persist() {
     append_to_block "$block_prefix" "$new_with_id" || return 1
 
     # Update state.tsv pin to the new permanent ID.
-    state_dir="/opt/zapret2/extra_strats/cache/autocircular"
-    state_file="$state_dir/state.tsv"
-    if [ -d "$state_dir" ] && [ -f "$state_file" ]; then
-        ts=$(date +%s)
-        tmp="$state_file.tmp.$$"
-        awk -v p="$profile_key" -v h="$domain" -v s="$next_id" -v ts="$ts" '
-            BEGIN { printed = 0 }
-            /^#/ { print; next }
-            $1 == p && $2 == h {
-                printf "%s\t%s\t%s\t%s\n", p, h, s, ts
-                printed = 1
-                next
-            }
-            { print }
-            END { if (!printed) printf "%s\t%s\t%s\t%s\n", p, h, s, ts }
-        ' "$state_file" > "$tmp" && mv -f "$tmp" "$state_file"
-    fi
+    state_pin "$profile_key" "$domain" "$next_id"
+
+    # Clear the dynparams (no longer needed for this domain).
+    clear_dynparams
 
     regen_and_restart
 
-    # Exit code carries the strategy ID (capped at 254).
     [ "$next_id" -gt 254 ] && next_id=254
     return "$next_id"
 }
-
-# -----------------------------------------------------------------------------
-# CLI
-# -----------------------------------------------------------------------------
 
 case "${1:-}" in
     apply)   op_apply "$2" "$3" ;;
@@ -253,10 +266,10 @@ case "${1:-}" in
     *)
         cat <<USAGE >&2
 Usage: $0 apply|revert|persist <profile_key> <domain>
-  apply   — env Z2K_STRATEGY=<--lua-desync=...> ; injects as strategy=$DYNAMIC_SLOT
-  revert  — removes the strategy=$DYNAMIC_SLOT entry
-  persist — env Z2K_STRATEGY=<...> ; appends as next available strategy=N,
-            updates state.tsv pin, returns N as exit code
+  apply   — env Z2K_STRATEGY=<--lua-desync=...> ; writes dynparams + pins slot 200
+  revert  — clears dynparams + unpins
+  persist — promotes Z2K_STRATEGY to next available permanent strategy=N,
+            updates pin, regen+restart. Returns N as exit code.
 USAGE
         exit 2
         ;;

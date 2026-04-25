@@ -33,9 +33,10 @@ static void print_usage(FILE *f) {
 		"\n"
 		"Options:\n"
 		"  --apply         Generator mode: synthesize fresh strategies from\n"
-		"                  per-block-type primitive recipes, inject each via\n"
-		"                  restart-cycle, find a winner, persist it as a new\n"
-		"                  strategy=N in strats_new2.txt. Takes 2-5 minutes.\n"
+		"                  per-block-type primitive recipes, inject each\n"
+		"                  seamlessly (no nfqws2 restart, only THIS domain's\n"
+		"                  flow is affected), find a winner, persist it as\n"
+		"                  a new strategy=N in strats_new2.txt.\n"
 		"  --dry-run       With --apply: synthesize and probe, but revert all\n"
 		"                  changes when done (don't persist the winner)\n"
 		"  --json          Machine-readable JSON output\n"
@@ -56,29 +57,27 @@ static void print_usage(FILE *f) {
  * recipes and probe each one until we find a winner.
  *
  * For each generated strategy:
- *   1. inject_apply() writes it into strats_new2.txt at slot 200,
- *      regenerates config, restarts nfqws2 (~3-5 s on Keenetic),
- *      and pins our domain to slot 200 in state.tsv.
- *   2. probe_run() retests the domain via the same minimal CH used
- *      in baseline.
+ *   1. inject_apply() writes the parsed family + key=value params to
+ *      /tmp/z2k-classify-dynparams and pins (profile_key, domain) →
+ *      strategy=200 in state.tsv. NO nfqws2 restart. The pre-installed
+ *      z2k_dynamic_strategy slot in the matching autocircular block
+ *      reads dynparams per-packet (1-sec TTL cache) and dispatches
+ *      to fake/multisplit/hostfakesplit/multidisorder for ONLY the
+ *      pinned domain. Other users' DPI bypass keeps running normally.
+ *   2. probe_run() retests the domain.
  *   3. classify_infer() on the post-inject result. If block_type
  *      flipped to BLOCK_NONE, this strategy is the winner.
  *   4a. Winner + !dry_run: inject_persist_winner() promotes the
- *       strategy from slot 200 to next-available permanent slot
- *       (e.g. strategy=48 in rkn_tcp). Survives nfqws2 restarts;
- *       rotator picks it up for future hosts too.
- *   4b. Winner + dry_run: inject_revert() removes the slot-200
- *       entry and the state.tsv pin so nothing persists.
+ *       strategy to next-available permanent slot (e.g. strategy=48
+ *       in rkn_tcp), updates state.tsv pin, regen+restart ONCE.
+ *       Survives reboots; rotator picks it up for future hosts too.
+ *   4b. Winner + dry_run: inject_revert() truncates dynparams +
+ *       unpins state.tsv. Nothing persists.
  *   5. No winner after exhausting recipe: inject_revert() to clean
  *      slate, report failure to caller.
  *
- * Cost: each iteration ≈ 5-7 s (regen ~1 s, restart ~3 s, probe ~2 s,
- * settle 0.4 s). For a 30-combination recipe = 2.5-3.5 minutes total.
- *
- * Side effect: every iteration restarts production nfqws2, briefly
- * interrupting other users' DPI bypass. Acceptable for one-off
- * support-tool runs. The drift cron deliberately does NOT use the
- * generator path — it only runs the classifier (read-only).
+ * Cost: each iteration ≈ 2 s (file write ~10 ms + 1-s TTL settle +
+ * probe ~1 s). 30-combo run = ~60-90 s total. Persist adds ~5 s once.
  */
 static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
                             int max_attempts) {

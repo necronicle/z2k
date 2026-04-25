@@ -482,6 +482,13 @@ LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 # cond_cdn_other for use with cond=<fn> on fake strategies.
 LUA_Z2K_CDN_DISPATCH="$ZAPRET_BASE/lua/z2k-cdn-dispatch.lua"
 [ -f "$LUA_Z2K_CDN_DISPATCH" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_CDN_DISPATCH"
+# z2k-dynamic-strategy: runtime-parameterized desync handler used by
+# z2k-classify generator. Reads /tmp/z2k-classify-dynparams per-packet
+# (1-sec TTL cache) and dispatches to fake/multisplit/hostfakesplit/
+# multidisorder based on family= field. Lets the generator probe new
+# strategies without restarting nfqws2 between candidates.
+LUA_Z2K_DYNAMIC="$ZAPRET_BASE/lua/z2k-dynamic-strategy.lua"
+[ -f "$LUA_Z2K_DYNAMIC" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DYNAMIC"
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 
 # Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+). Catches
