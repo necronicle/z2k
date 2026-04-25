@@ -56,28 +56,26 @@ static void print_usage(FILE *f) {
 /* Phase 2 generator — synthesize fresh strategies from primitive
  * recipes and probe each one until we find a winner.
  *
- * For each generated strategy:
- *   1. inject_apply() writes the parsed family + key=value params to
+ * For each generated candidate:
+ *   1. inject_apply() writes (family, params, target_host) to
  *      /tmp/z2k-classify-dynparams and pins (profile_key, domain) →
- *      strategy=200 in state.tsv. NO nfqws2 restart. The pre-installed
- *      z2k_dynamic_strategy slot in the matching autocircular block
- *      reads dynparams per-packet (1-sec TTL cache) and dispatches
- *      to fake/multisplit/hostfakesplit/multidisorder for ONLY the
- *      pinned domain. Other users' DPI bypass keeps running normally.
- *   2. probe_run() retests the domain.
- *   3. classify_infer() on the post-inject result. If block_type
- *      flipped to BLOCK_NONE, this strategy is the winner.
- *   4a. Winner + !dry_run: inject_persist_winner() promotes the
- *       strategy to next-available permanent slot (e.g. strategy=48
- *       in rkn_tcp), updates state.tsv pin, regen+restart ONCE.
- *       Survives reboots; rotator picks it up for future hosts too.
- *   4b. Winner + dry_run: inject_revert() truncates dynparams +
- *       unpins state.tsv. Nothing persists.
- *   5. No winner after exhausting recipe: inject_revert() to clean
- *      slate, report failure to caller.
+ *      handler slot in state.tsv. NO restart, NO DB write. The
+ *      handler at the dynamic slot reads dynparams per-packet (1-sec
+ *      TTL) and dispatches to fake/multisplit/hostfakesplit/
+ *      multidisorder for ONLY the pinned domain.
+ *   2. probe_run() retests the domain THROUGH the bypass pipeline.
+ *   3. classify_infer() on the post-inject result. block_type=none
+ *      means the candidate is the winner.
+ *   4a. Winner + !dry_run: inject_persist_winner() dedupe-writes the
+ *       strategy to /opt/zapret2/lists/z2k-classify-{strategies,
+ *       domains}.tsv. State.tsv pin stays. NO regen+restart.
+ *   4b. Winner + dry_run: inject_revert() truncates dynparams + unpins
+ *       state.tsv. Nothing persists.
+ *   5. No winner after exhausting recipe: inject_revert() leaves the
+ *       host in clean state, exits with code 3.
  *
- * Cost: each iteration ≈ 2 s (file write ~10 ms + 1-s TTL settle +
- * probe ~1 s). 30-combo run = ~60-90 s total. Persist adds ~5 s once.
+ * Cost: each iteration ≈ 1-2 s. 12-candidate causal run = 15-25 s.
+ * Persist is millisecond-scale (just two TSV appends).
  */
 /* Pull a short, human-readable label from a generated strategy buf —
  * the rotation axis value (innocent SNI / blob / host), plus a short
@@ -214,16 +212,18 @@ static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
 				                                    res->domain);
 				if (new_id < 0) {
 					snprintf(res->apply_note, sizeof(res->apply_note),
-					         "WINNER family=%s but persist failed; kept as "
-					         "dynamic slot 48. Strategy: %s",
+					         "WINNER family=%s but persist failed — "
+					         "transient pin only; will not survive reboot. "
+					         "Strategy: %s",
 					         family ? family : "?", strategy_buf);
 					res->winner_strategy = INJECT_DYNAMIC_STRATEGY_ID;
 				} else {
 					snprintf(res->apply_note, sizeof(res->apply_note),
-					         "WINNER persisted as strategy=%d in profile=%s "
-					         "(family=%s). Future hosts get rotator coverage too.",
-					         new_id, r->profile_key,
-					         family ? family : "?");
+					         "WINNER persisted as strategy_id=%d (family=%s). "
+					         "DB row deduped against existing strategies; "
+					         "domain mapping written to "
+					         "z2k-classify-domains.tsv.",
+					         new_id, family ? family : "?");
 					res->winner_strategy = new_id;
 				}
 			}

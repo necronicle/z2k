@@ -1,10 +1,12 @@
 #!/bin/sh
 # z2k-classify-inject.sh — seamless strategy injection helper.
 #
-# The C-level z2k-classify generator calls this script. Handler slot
-# id (e.g. strategy=48 in rkn_tcp) is emitted by config_official.sh
-# into /opt/zapret2/dynamic-slots.conf at install/regen time. We
-# look it up and pin (profile_key, host) → slot in state.tsv.
+# Backed by a content-addressed strategy DB instead of strats_new2.txt
+# regen+restart cycles. Each persisted winner becomes a row in the
+# strategies catalog (deduped by family+params); each domain points
+# at one strategy_id in the domains map. The Lua handler at slot=48
+# reads both files (5-sec TTL cache) and applies the right strategy
+# per host with no service interruption.
 #
 # Operations:
 #
@@ -13,53 +15,37 @@
 #         --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6
 #       ).  Decompose into family + key=value params, write to
 #       /tmp/z2k-classify-dynparams (atomic temp+rename) plus
-#       target_host=<domain>.  Pin (profile_key, domain) → slot in
-#       state.tsv. NO nfqws2 restart — handler reads dynparams
-#       per-packet (1-sec TTL cache).
+#       target_host=<domain>. Pin (profile_key, domain) → handler
+#       slot in state.tsv. NO restart, NO DB write.
 #
 #   revert <profile_key> <domain>
-#       Remove the state.tsv pin. Truncate dynparams file. NO restart.
+#       Truncate dynparams. Unpin state.tsv ONLY if domain is not in
+#       the persistent DB (otherwise leave the pin in place so the
+#       handler keeps applying its persisted strategy).
 #
 #   persist <profile_key> <domain>
-#       Read $Z2K_STRATEGY, append it to the matching autocircular
-#       block in strats_new2.txt as the next available strategy=N
-#       (sequential, before our handler slot). Update state.tsv pin
-#       to that new id, clear dynparams. Regen config + restart
-#       S99zapret2 ONCE so the new permanent strategy joins the
-#       rotator. Returns N (capped at 254 to fit exit code).
-#
-# Cost:
-#   apply / revert  : ~1 sec (file write + cache TTL settle).
-#                     ZERO interruption to other LAN users' bypass.
-#   persist         : ~5 sec ONE-TIME at the end of a winning run.
+#       Read $Z2K_STRATEGY. Lookup matching {family, params} in
+#       strategies.tsv → reuse id if dup, else assign next sequential
+#       id and append. Update domains.tsv with (host, id). Pin
+#       state.tsv to the handler slot. Clear dynparams. NO restart.
+#       Returns the assigned strategy_id (capped at 254).
 
 set -eu
 
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
-STRATS_FILE="${ZAPRET2_DIR}/strats_new2.txt"
-INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
+LISTS_DIR="${ZAPRET2_DIR}/lists"
 DYNPARAMS_FILE="/tmp/z2k-classify-dynparams"
 SLOTS_FILE="${ZAPRET2_DIR}/dynamic-slots.conf"
 STATE_DIR="/opt/zapret2/extra_strats/cache/autocircular"
 STATE_FILE="$STATE_DIR/state.tsv"
+DB_STRATEGIES="${LISTS_DIR}/z2k-classify-strategies.tsv"
+DB_DOMAINS="${LISTS_DIR}/z2k-classify-domains.tsv"
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
 
-profile_to_block_prefix() {
-    case "$1" in
-        rkn_tcp)        echo "manual_autocircular_rkn" ;;
-        google_tls|youtube_tcp)  echo "manual_autocircular_yt" ;;
-        youtube_gv_tcp) echo "manual_autocircular_gv" ;;
-        cdn_tls)        echo "manual_autocircular_rkn" ;;
-        *)              echo "" ;;
-    esac
-}
-
 # Resolve handler slot id from /opt/zapret2/dynamic-slots.conf.
-# That file is regenerated every time config_official runs, so the
-# slot id always matches what nfqws2 currently has loaded.
 slot_for_profile() {
     profile_key=$1
     [ -f "$SLOTS_FILE" ] || return 1
@@ -76,34 +62,43 @@ action_to_family() {
     esac
 }
 
-# Parse $Z2K_STRATEGY into family + key=value pairs and write them to
-# the dynparams file. Includes target_host=<domain> so the Lua handler
-# only fires on the connections we pinned.
-write_dynparams() {
-    target_host=$1
-    s="$Z2K_STRATEGY"
-
-    s_body=$(printf '%s' "$s" | sed 's/^--lua-desync=//')
-    action=$(printf '%s' "$s_body" | cut -d: -f1)
-    family=$(action_to_family "$action")
+# Normalize Z2K_STRATEGY into (family, params). Strips :strategy=N if
+# the generator emitted one. Used by both apply (transient dynparams)
+# and persist (DB row).
+parse_strategy() {
+    s_body=$(printf '%s' "$Z2K_STRATEGY" | sed 's/^--lua-desync=//')
+    family_action=$(printf '%s' "$s_body" | cut -d: -f1)
+    family=$(action_to_family "$family_action")
     if [ -z "$family" ]; then
-        echo "z2k-classify-inject: unknown action '$action' in Z2K_STRATEGY" >&2
+        echo "z2k-classify-inject: unknown action '$family_action'" >&2
         return 1
     fi
     rest=$(printf '%s' "$s_body" | cut -d: -f2-)
+    # Strip any :strategy=N (the slot id is owned by the helper, not
+    # the generator's recipe output).
+    params=$(printf '%s' "$rest" | sed 's/:strategy=[0-9]*//g')
+    PARSED_FAMILY=$family
+    PARSED_PARAMS=$params
+}
+
+# /tmp dynparams for transient generator runs.
+write_dynparams() {
+    target_host=$1
+    parse_strategy || return 1
 
     tmp="${DYNPARAMS_FILE}.tmp.$$"
     {
-        printf '# z2k-classify dynparams (auto-generated)\n'
-        printf 'family=%s\n' "$family"
+        printf '# z2k-classify dynparams (transient — generator test)\n'
+        printf 'family=%s\n' "$PARSED_FAMILY"
         printf 'target_host=%s\n' "$target_host"
+        # Split params on ':' and emit one key=value per line for the
+        # Lua loader's KEY=VAL grammar.
         IFS=:
-        for kv in $rest; do
+        for kv in $PARSED_PARAMS; do
             [ -z "$kv" ] && continue
             case "$kv" in
-                strategy=*) ;;
                 *=*) printf '%s\n' "$kv" ;;
-                *)   printf '%s=\n' "$kv" ;;
+                *)   printf '%s=\n' "$kv" ;;  # flag-only (e.g. badsum)
             esac
         done
         unset IFS
@@ -116,6 +111,7 @@ clear_dynparams() {
     : > "$DYNPARAMS_FILE" 2>/dev/null || true
 }
 
+# state.tsv pin (atomic).
 state_pin() {
     profile_key=$1; domain=$2; strategy_id=$3
     [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
@@ -149,59 +145,81 @@ state_unpin() {
     mv -f "$tmp" "$STATE_FILE"
 }
 
-strip_strategy_tag() {
-    printf '%s' "$1" | sed 's/:strategy=[0-9]*//g'
-}
+# -----------------------------------------------------------------------------
+# DB ops
+# -----------------------------------------------------------------------------
 
-# Find max permanent strategy=N (excluding our handler slot) within a
-# block. Used by persist op to pick the next free slot.
-max_permanent_strategy_in_block() {
-    block_prefix=$1
-    handler_slot=$2
-    awk -v p="$block_prefix" -v hs="$handler_slot" '
-        $0 ~ "^"p" " {
-            n = 0
-            line = $0
-            while (match(line, /:strategy=[0-9]+/)) {
-                v = substr(line, RSTART+10, RLENGTH-10) + 0
-                if (v > n && v != hs) n = v
-                line = substr(line, RSTART+RLENGTH)
-            }
-            print n
-            exit
-        }
-    ' "$STRATS_FILE"
-}
-
-append_to_block() {
-    block_prefix=$1
-    new_strategy_with_id=$2
-    tmp="${STRATS_FILE}.tmp.$$"
-    awk -v p="$block_prefix" -v s="$new_strategy_with_id" '
-        $0 ~ "^"p" " {
-            print $0 " " s
-            next
-        }
-        { print }
-    ' "$STRATS_FILE" > "$tmp"
-    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
-    mv -f "$tmp" "$STRATS_FILE"
-}
-
-regen_and_restart() {
-    sh -c '
-        export ZAPRET2_DIR=/opt/zapret2
-        export LISTS_DIR=/opt/zapret2/lists
-        export EXTRA_STRATS_DIR=/opt/zapret2/extra_strats
-        for m in utils system_init install strategies config config_official; do
-            . /tmp/z2k/lib/${m}.sh 2>/dev/null
-        done
-        create_official_config /opt/zapret2/config >/dev/null 2>&1
-    '
-    if [ -x "$INIT_SCRIPT" ]; then
-        "$INIT_SCRIPT" restart >/dev/null 2>&1 || true
-        sleep 2
+ensure_db_files() {
+    [ -d "$LISTS_DIR" ] || mkdir -p "$LISTS_DIR" 2>/dev/null
+    if [ ! -f "$DB_STRATEGIES" ]; then
+        {
+            printf '# z2k-classify strategy catalog (auto-managed)\n'
+            printf '# id\tfamily\tparams\n'
+        } > "$DB_STRATEGIES" 2>/dev/null || true
     fi
+    if [ ! -f "$DB_DOMAINS" ]; then
+        {
+            printf '# z2k-classify domain → strategy mapping (auto-managed)\n'
+            printf '# host\tstrategy_id\n'
+        } > "$DB_DOMAINS" 2>/dev/null || true
+    fi
+}
+
+# Find existing strategy id by exact (family, params) match. Empty if
+# no row matches.
+find_strategy_id() {
+    family=$1
+    params=$2
+    [ -s "$DB_STRATEGIES" ] || { echo ""; return 0; }
+    awk -v F="$family" -v P="$params" -F '\t' '
+        /^#/ { next }
+        $2 == F && $3 == P { print $1; exit }
+    ' "$DB_STRATEGIES"
+}
+
+# Append a new strategy row with id = max(existing) + 1. Returns id.
+append_strategy() {
+    family=$1
+    params=$2
+    next_id=$(awk -F '\t' '
+        /^#/ { next }
+        $1 ~ /^[0-9]+$/ { if ($1 + 0 > max) max = $1 + 0 }
+        END { print (max ? max : 0) + 1 }
+    ' "$DB_STRATEGIES")
+    printf '%s\t%s\t%s\n' "$next_id" "$family" "$params" >> "$DB_STRATEGIES"
+    echo "$next_id"
+}
+
+# Remove old row for host and append new (host → id) entry.
+upsert_domain() {
+    host=$1
+    strategy_id=$2
+    tmp="${DB_DOMAINS}.tmp.$$"
+    if [ -s "$DB_DOMAINS" ]; then
+        awk -v h="$host" -F '\t' '
+            /^#/ { print; next }
+            $1 == h { next }
+            { print }
+        ' "$DB_DOMAINS" > "$tmp"
+    else
+        {
+            printf '# z2k-classify domain → strategy mapping (auto-managed)\n'
+            printf '# host\tstrategy_id\n'
+        } > "$tmp"
+    fi
+    printf '%s\t%s\n' "$host" "$strategy_id" >> "$tmp"
+    mv -f "$tmp" "$DB_DOMAINS"
+}
+
+# Returns 0 if domain has an entry in the DB, 1 otherwise.
+domain_in_db() {
+    host=$1
+    [ -s "$DB_DOMAINS" ] || return 1
+    awk -v h="$host" -F '\t' '
+        /^#/ { next }
+        $1 == h { found = 1; exit }
+        END { exit found ? 0 : 1 }
+    ' "$DB_DOMAINS"
 }
 
 # -----------------------------------------------------------------------------
@@ -215,7 +233,7 @@ op_apply() {
 
     slot=$(slot_for_profile "$profile_key")
     if [ -z "$slot" ]; then
-        echo "z2k-classify-inject: no handler slot for profile=$profile_key (regen config first)" >&2
+        echo "z2k-classify-inject: no handler slot for profile=$profile_key" >&2
         return 1
     fi
 
@@ -228,8 +246,15 @@ op_apply() {
 op_revert() {
     profile_key=$1
     domain=$2
-    state_unpin "$profile_key" "$domain"
     clear_dynparams
+
+    # If the domain has a persisted DB entry, the pin must STAY so the
+    # handler keeps serving its persistent strategy. Only unpin
+    # transient (non-persisted) hosts.
+    if domain_in_db "$domain"; then
+        return 0
+    fi
+    state_unpin "$profile_key" "$domain"
     return 0
 }
 
@@ -238,32 +263,28 @@ op_persist() {
     domain=$2
     [ -n "${Z2K_STRATEGY:-}" ] || return 1
 
-    block_prefix=$(profile_to_block_prefix "$profile_key")
-    [ -n "$block_prefix" ] || return 1
-
-    handler_slot=$(slot_for_profile "$profile_key")
-    [ -n "$handler_slot" ] || handler_slot=0
-
-    strategy=$(strip_strategy_tag "$Z2K_STRATEGY")
-
-    cur_max=$(max_permanent_strategy_in_block "$block_prefix" "$handler_slot")
-    [ -z "$cur_max" ] && cur_max=0
-    next_id=$((cur_max + 1))
-    if [ "$next_id" -gt 199 ]; then
-        echo "no free permanent strategy slot below 200 for $block_prefix" >&2
+    slot=$(slot_for_profile "$profile_key")
+    if [ -z "$slot" ]; then
+        echo "z2k-classify-inject: no handler slot for profile=$profile_key" >&2
         return 1
     fi
 
-    new_with_id="${strategy}:strategy=${next_id}"
-    append_to_block "$block_prefix" "$new_with_id" || return 1
+    parse_strategy || return 1
+    ensure_db_files
 
-    state_pin "$profile_key" "$domain" "$next_id"
+    strategy_id=$(find_strategy_id "$PARSED_FAMILY" "$PARSED_PARAMS")
+    if [ -z "$strategy_id" ]; then
+        strategy_id=$(append_strategy "$PARSED_FAMILY" "$PARSED_PARAMS")
+    fi
+
+    upsert_domain "$domain" "$strategy_id"
+
+    # Pin permanently. Handler reads DB and applies the right strategy.
+    state_pin "$profile_key" "$domain" "$slot"
     clear_dynparams
 
-    regen_and_restart
-
-    [ "$next_id" -gt 254 ] && next_id=254
-    return "$next_id"
+    [ "$strategy_id" -gt 254 ] && strategy_id=254
+    return "$strategy_id"
 }
 
 case "${1:-}" in
