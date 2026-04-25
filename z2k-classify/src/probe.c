@@ -189,14 +189,37 @@ static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host)
 	return p + 5;
 }
 
-/* Connect with timeout. Returns fd on success, -1 on failure. */
+/* Connect with timeout. Returns fd on success, -1 on failure.
+ *
+ * If `raw_bypass` is true, sets SO_MARK = NFQWS2_FWMARK on the socket.
+ * The nfqws2 daemon's NFQUEUE iptables rules exclude that mark to
+ * prevent re-queue of its own decoy injections; reusing the same mark
+ * makes our probe traffic invisible to the bypass pipeline so we can
+ * measure the raw TSPU block. */
+#define NFQWS2_FWMARK 0x40000000u
+
 static int connect_tcp_timeout(struct in_addr ip, int port, int timeout_ms,
-                               bool *connected, int *last_errno) {
+                               bool *connected, int *last_errno,
+                               bool raw_bypass) {
 	*connected = false;
 	*last_errno = 0;
 
 	int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (fd < 0) { *last_errno = errno; return -1; }
+
+#ifdef SO_MARK
+	if (raw_bypass) {
+		unsigned mark = NFQWS2_FWMARK;
+		if (setsockopt(fd, SOL_SOCKET, SO_MARK, &mark, sizeof(mark)) != 0) {
+			/* Non-fatal: probe will still run, just through the
+			 * bypass pipeline (the surface area we wanted to avoid).
+			 * Caller may notice a "block disappears" pattern that
+			 * doesn't match LAN reality. */
+		}
+	}
+#else
+	(void)raw_bypass;
+#endif
 
 	int fl = fcntl(fd, F_GETFL, 0);
 	fcntl(fd, F_SETFL, fl | O_NONBLOCK);
@@ -314,7 +337,7 @@ static bool subprobe_icmp(struct in_addr ip) {
 /* ---- main entry ---- */
 
 int probe_run(const char *domain, int timeout_sec, probe_result_t *out,
-              struct in_addr *resolved_ip) {
+              struct in_addr *resolved_ip, bool raw_bypass) {
 	memset(out, 0, sizeof(*out));
 	int64_t t0 = now_ms();
 
@@ -328,7 +351,8 @@ int probe_run(const char *domain, int timeout_sec, probe_result_t *out,
 
 	/* TCP connect with 5 s timeout. */
 	bool connected; int cerr;
-	int fd = connect_tcp_timeout(*resolved_ip, 443, 5000, &connected, &cerr);
+	int fd = connect_tcp_timeout(*resolved_ip, 443, 5000, &connected, &cerr,
+	                              raw_bypass);
 	out->tcp_connect_ok = connected;
 	if (!connected) {
 		out->duration_ms = (int)(now_ms() - t0);

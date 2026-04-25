@@ -132,10 +132,11 @@ static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
 			continue;
 		}
 
-		/* Re-probe the domain. */
+		/* Re-probe THROUGH the bypass pipeline so the slot=48 handler
+		 * runs against this connection. raw_bypass=false. */
 		probe_result_t post = {0};
 		struct in_addr ip;
-		if (probe_run(res->domain, 15, &post, &ip) != 0) {
+		if (probe_run(res->domain, 15, &post, &ip, false) != 0) {
 			if (verbose) fprintf(stderr, "    probe_run failed\n");
 			inject_revert(r->profile_key, res->domain);
 			continue;
@@ -352,7 +353,10 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "probing %s (budget %d s)...\n", domain, timeout_sec);
 	}
 
-	int rc = probe_run(domain, timeout_sec, &res.probe, &res.resolved_ip);
+	/* Baseline probe with SO_MARK so packets bypass the nfqws2
+	 * pipeline and we measure the RAW TSPU block, not whatever the
+	 * existing rotator already managed to bypass. raw_bypass=true. */
+	int rc = probe_run(domain, timeout_sec, &res.probe, &res.resolved_ip, true);
 	if (rc < 0) {
 		fprintf(stderr, "probe_run: internal error\n");
 		return 2;
