@@ -549,6 +549,30 @@ download_init_script() {
     else
         die "Ошибка загрузки files/lua/z2k-modern-core.lua"
     fi
+
+    # cdn_tls per-provider SNI dispatch (cond_cdn_cf/ovh/hetzner/do/other,
+    # pick_cdn_sni). Strategies in the cdn_tls block reference these
+    # globals via cond= and luaexec=, so the file must be on disk before
+    # nfqws2 parses the strategy table.
+    url="${GITHUB_RAW}/files/lua/z2k-cdn-dispatch.lua"
+    output="${lua_dir}/z2k-cdn-dispatch.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-cdn-dispatch.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-cdn-dispatch.lua"
+    fi
+
+    # z2k-classify generator dynamic-strategy handler. Pre-installed
+    # --lua-desync=z2k_dynamic_strategy:strategy=200 in rkn_tcp / google_tls
+    # / cdn_tls blocks references this global; nfqws2 fails to parse the
+    # strategy table if the file is missing.
+    url="${GITHUB_RAW}/files/lua/z2k-dynamic-strategy.lua"
+    output="${lua_dir}/z2k-dynamic-strategy.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-dynamic-strategy.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-dynamic-strategy.lua"
+    fi
     # Snapshot domain lists used by local install flow (no external list repos)
     local list_file
     local lists_dir="${files_dir}/lists"
