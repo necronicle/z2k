@@ -109,13 +109,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG=z2k-classify-rolling
-          # Delete the old release (if any) — gh handles missing gracefully
+          SHA=$(git rev-parse --short HEAD)
+          NOTES="Automatic per-arch builds from z2k-enhanced HEAD ($SHA). Pulled by lib/install.sh:step_install_z2k_classify."
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          # Create fresh rolling release with all per-arch binaries
-          gh release create "$TAG" \
-            --title "z2k-classify rolling (auto-built from z2k-enhanced)" \
-            --notes "Automatic per-arch builds from z2k-enhanced HEAD ($(git rev-parse --short HEAD)).
-Pull the right binary for your router via lib/install.sh:step_install_z2k_classify.
-Built by .github/workflows/build-classify.yml — overwritten on every push to z2k-enhanced." \
-            --target z2k-enhanced \
-            binaries/z2k-classify-*
+          gh release create "$TAG" --title "z2k-classify rolling" --notes "$NOTES" --target z2k-enhanced binaries/z2k-classify-*
