@@ -49,7 +49,14 @@ AUSTERUS_OPT
     local Z2K_REFACTOR_PHASE1 Z2K_REFACTOR_PHASE2 Z2K_REFACTOR_PHASE3 Z2K_REFACTOR_PHASE4
     Z2K_REFACTOR_PHASE1=$(safe_config_read "Z2K_REFACTOR_PHASE1" "/opt/zapret2/config" "1")
     Z2K_REFACTOR_PHASE2=$(safe_config_read "Z2K_REFACTOR_PHASE2" "/opt/zapret2/config" "1")
-    Z2K_REFACTOR_PHASE3=$(safe_config_read "Z2K_REFACTOR_PHASE3" "/opt/zapret2/config" "1")
+    # Phase 3 (YT+GV merge into google_tls) — DEFAULT OFF as of 2026-04-26.
+    # Field reports на enhanced (Сергей #2191, others) показали падение
+    # YouTube performance после merge; раздельные yt + googlevideo
+    # профили работают надёжнее. Pre-merge legacy code path (else
+    # branch ниже) теперь default. Юзеры могут опционально включить
+    # merge через `Z2K_REFACTOR_PHASE3=1` в config — оставлено для
+    # тестирования / возможного rollforward.
+    Z2K_REFACTOR_PHASE3=$(safe_config_read "Z2K_REFACTOR_PHASE3" "/opt/zapret2/config" "0")
     Z2K_REFACTOR_PHASE4=$(safe_config_read "Z2K_REFACTOR_PHASE4" "/opt/zapret2/config" "1")
 
     # Прочитать стратегии из файлов категорий
