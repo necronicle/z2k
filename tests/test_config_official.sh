@@ -76,8 +76,8 @@ echo "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:payload=tls_client_hell
 echo "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=4" > "$MOCK_EXTRA_STRATS/TCP/YT_GV/Strategy.txt"
 echo "--filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:time=60:key=yt_quic --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:strategy=1" > "$MOCK_EXTRA_STRATS/UDP/YT/Strategy.txt"
 
-# Create mock config (empty — no flags needed for baseline circular path)
-: > "$MOCK_ZAPRET2/config"
+# Create mock config (no Austerus, no RKN_SILENT_FALLBACK)
+echo "RKN_SILENT_FALLBACK=0" > "$MOCK_ZAPRET2/config"
 
 # Source utils.sh first (provides safe_config_read, print_*, etc.)
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"

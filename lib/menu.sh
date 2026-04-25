@@ -63,13 +63,18 @@ MENU
                 fi
             fi
 
-            # Показать статус RST-фильтра
+            # Показать статус RST-фильтра и silent fallback
             local rst_config_file="${ZAPRET2_DIR}/config"
             if [ -f "$rst_config_file" ]; then
                 local DROP_DPI_RST
                 DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$rst_config_file" "0")
                 if [ "$DROP_DPI_RST" = "1" ]; then
                     printf " RST-фильтр: Включен (пассивный DPI)\n"
+                fi
+                local RKN_SILENT_FALLBACK
+                RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rst_config_file" "0")
+                if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
+                    printf " Silent fallback РКН: Включен\n"
                 fi
             fi
 
@@ -92,6 +97,7 @@ MENU
 [5] Удалить zapret2
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
+[F] Silent fallback для РКН (осторожно, возможны поломки)
 [G] Игровой режим (safe/hybrid/aggressive)
 [T] Telegram прокси
 [S] Скрипты custom.d
@@ -104,7 +110,7 @@ MENU
 
 MENU
 
-        printf "Выберите опцию [0-5,R,G,T,W,S,P,D,X,C,I]: "
+        printf "Выберите опцию [0-5,R,F,G,T,W,S,P,D,X,C,I]: "
         read_input choice
 
         case "$choice" in
@@ -125,6 +131,9 @@ MENU
                 ;;
             r|R)
                 menu_rst_filter
+                ;;
+            f|F)
+                menu_rkn_silent_fallback
                 ;;
             g|G)
                 menu_roblox_bypass
@@ -929,6 +938,112 @@ INFO
         b|B)
             return 0
             ;;
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+menu_rkn_silent_fallback() {
+    clear_screen
+    print_header "Silent fallback для РКН (осторожно!)"
+
+    local config_file="${ZAPRET2_DIR}/config"
+
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local RKN_SILENT_FALLBACK
+    RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
+
+    print_separator
+    print_info "Статус: $([ "$RKN_SILENT_FALLBACK" = "1" ] && echo 'Включен' || echo 'Выключен')"
+    print_separator
+
+    cat <<'SUBMENU'
+
+Детектор «тихих чёрных дыр» для РКН-списков.
+
+Когда DPI молча блокирует соединение (не отвечая RST/alert),
+circular не может определить, что стратегия не работает.
+Silent fallback считает повторные ClientHello без ответа
+за failure и принудительно ротирует стратегию.
+
+По умолчанию включено только для YouTube. Включение для РКН
+может вызвать ложные срабатывания на медленных сайтах — circular
+будет ротировать стратегию когда сайт просто долго отвечает.
+
+[1] Включить  (возможны поломки на медленных сайтах!)
+[2] Выключить
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            if grep -q '^RKN_SILENT_FALLBACK=' "$config_file"; then
+                sed -i 's/^RKN_SILENT_FALLBACK=.*/RKN_SILENT_FALLBACK=1/' "$config_file"
+            else
+                echo "RKN_SILENT_FALLBACK=1" >> "$config_file"
+            fi
+            print_success "Silent fallback для РКН включен"
+
+            # Создать флаг-файл для Lua
+            local flag_dir="${ZAPRET2_DIR}/extra_strats/cache/autocircular"
+            touch "${flag_dir}/rkn_silent_fallback.flag" 2>/dev/null
+
+            # Перегенерировать конфиг с новыми параметрами circular
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен с silent fallback для РКН"
+            else
+                print_warning "Сервис не запущен. Запустите через [2] Управление сервисом"
+            fi
+
+            pause
+            ;;
+
+        2)
+            if [ "$RKN_SILENT_FALLBACK" != "1" ]; then
+                print_info "Silent fallback уже выключен"
+                pause
+                return 0
+            fi
+
+            sed -i 's/^RKN_SILENT_FALLBACK=.*/RKN_SILENT_FALLBACK=0/' "$config_file"
+            # Удалить флаг-файл
+            rm -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null
+            print_success "Silent fallback для РКН выключен"
+
+            # Перегенерировать конфиг
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+
+        b|B)
+            return 0
+            ;;
+
         *)
             print_error "Неверный выбор: $sub_choice"
             pause

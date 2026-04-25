@@ -107,6 +107,21 @@ toggle_rst_filter() {
     restart_service_if_running
 }
 
+toggle_silent_fallback() {
+    local want="$1"
+    set_flag "RKN_SILENT_FALLBACK" "$want" "$CONFIG_FILE" || return 1
+    # Flag file consumed by autocircular machinery, mirrors menu_rkn_silent_fallback.
+    local flag_file="$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag"
+    if [ "$want" = "1" ]; then
+        mkdir -p "$(dirname "$flag_file")" 2>/dev/null
+        touch "$flag_file" 2>/dev/null
+    else
+        rm -f "$flag_file" 2>/dev/null
+    fi
+    regenerate_config
+    restart_service_if_running
+}
+
 toggle_game_mode() {
     local want="$1"
     set_flag "ROBLOX_UDP_BYPASS" "$want" "$CONFIG_FILE" || return 1

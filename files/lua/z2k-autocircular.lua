@@ -20,6 +20,7 @@ local DEBUG_FLAG_PRIMARY = STATE_DIR_PRIMARY .. "/debug.flag"
 local DEBUG_FLAG_FALLBACK = "/tmp/z2k-autocircular-debug.flag"
 local DEBUG_LOG_PRIMARY = STATE_DIR_PRIMARY .. "/debug.log"
 local DEBUG_LOG_FALLBACK = "/tmp/z2k-autocircular-debug.log"
+local RKN_SILENT_FLAG = STATE_DIR_PRIMARY .. "/rkn_silent_fallback.flag"
 
 local loaded = false
 local state = {} -- state[askey][host_norm] = { strategy = N, ts = unix_time }
@@ -35,6 +36,9 @@ local telemetry_write_interval = 5 -- seconds
 local debug_enabled = false
 local debug_checked_at = 0
 local debug_refresh_interval = 5 -- seconds
+
+local rkn_silent_enabled = false
+local rkn_silent_checked_at = 0
 
 -- Seed PRNG with better entropy when available
 do
@@ -815,9 +819,28 @@ local youtube_silent_retry_min_gap_sec = 2
 local youtube_silent_retry_threshold = 2
 local youtube_silent_retry = {}
 
+local function refresh_rkn_silent_enabled()
+  local now = os.time() or 0
+  if now ~= 0 and (now - rkn_silent_checked_at) < debug_refresh_interval then
+    return rkn_silent_enabled
+  end
+  rkn_silent_checked_at = now
+  local f = io.open(RKN_SILENT_FLAG, "r")
+  if f then
+    f:close()
+    rkn_silent_enabled = true
+    return true
+  end
+  rkn_silent_enabled = false
+  return false
+end
+
 local function is_youtube_tcp_key(askey)
   if not askey then return false end
-  return tostring(askey) == "yt_tcp"
+  local s = tostring(askey)
+  if s == "yt_tcp" then return true end
+  if s == "rkn_tcp" and refresh_rkn_silent_enabled() then return true end
+  return false
 end
 
 local function youtube_silent_retry_rec(askey, hostn, create)
