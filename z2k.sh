@@ -169,8 +169,14 @@ z2k_fetch() {
         *)  url="${GITHUB_RAW}/${src}" ;;
     esac
 
-    # Derive jsdelivr + gh-proxy URLs. Only raw.githubusercontent.com URLs
-    # have a jsdelivr equivalent; gh-proxy works for any raw URL.
+    # Derive jsdelivr + gh-proxy mirror URLs. Coverage:
+    #   raw.githubusercontent.com — full mirroring via jsdelivr CDN +
+    #     gh-proxy reverse proxy.
+    #   github.com/<o>/<r>/releases/download/<tag>/<asset> — gh-proxy
+    #     handles release-asset downloads too (tarballs, binaries).
+    #     jsdelivr does NOT mirror release assets, only repo files.
+    #   api.github.com/* — no public mirrors; relies on layer 4 DNS
+    #     override only.
     local jsdelivr="" gh_proxy=""
     case "$url" in
         https://raw.githubusercontent.com/*)
@@ -179,6 +185,9 @@ z2k_fetch() {
             local _repo="${_rest%%/*}";   _rest="${_rest#*/}"
             local _branch="${_rest%%/*}"; _rest="${_rest#*/}"
             jsdelivr="https://cdn.jsdelivr.net/gh/${_owner}/${_repo}@${_branch}/${_rest}"
+            gh_proxy="https://gh-proxy.com/${url}"
+            ;;
+        https://github.com/*/releases/download/*)
             gh_proxy="https://gh-proxy.com/${url}"
             ;;
     esac
@@ -505,7 +514,7 @@ download_init_script() {
     # name, and detectors live there after the Phase 4 module split.
     url="${GITHUB_RAW}/files/lua/z2k-detectors.lua"
     output="${lua_dir}/z2k-detectors.lua"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/lua/z2k-detectors.lua"
     else
         die "Ошибка загрузки files/lua/z2k-detectors.lua"
@@ -517,7 +526,7 @@ download_init_script() {
     # z2k-detectors.lua above.
     url="${GITHUB_RAW}/files/lua/z2k-fooling-ext.lua"
     output="${lua_dir}/z2k-fooling-ext.lua"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/lua/z2k-fooling-ext.lua"
     else
         die "Ошибка загрузки files/lua/z2k-fooling-ext.lua"
@@ -528,7 +537,7 @@ download_init_script() {
     # and resolves ranges like repeats=2-6 to sticky per-flow values.
     url="${GITHUB_RAW}/files/lua/z2k-range-rand.lua"
     output="${lua_dir}/z2k-range-rand.lua"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
+    if z2k_fetch "$url" "$output"; then
         print_success "Загружено: files/lua/z2k-range-rand.lua"
     else
         die "Ошибка загрузки files/lua/z2k-range-rand.lua"

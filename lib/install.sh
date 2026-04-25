@@ -600,30 +600,30 @@ step_build_zapret2() {
     # (см. z2k-enhanced PART II roadmap). Layout tarball-а идентичен upstream
     # поэтому остальная install-логика ниже работает без изменений.
     local api_url="https://api.github.com/repos/necronicle/zapret2-z2k/releases/latest"
-    local release_data
-    release_data=$(curl -fsSL --connect-timeout 10 --max-time 120 "$api_url" 2>&1)
-
     local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v0.9.5-z2k-r0/zapret2-v0.9.5-z2k-r0-openwrt-embedded.tar.gz"
+    local openwrt_url=""
 
-    local openwrt_url
-    if [ $? -ne 0 ]; then
-        print_warning "API недоступен, использую fallback версию v0.9.5-z2k-r0..."
+    # Try the API via z2k_fetch (it triggers the layer-4 ndmc DNS
+    # override on api.github.com if the host is poisoned by the user's
+    # ISP — common with mobile RU carriers blocking SNI on github).
+    local api_tmp="/tmp/z2k-release-api.$$.json"
+    if z2k_fetch "$api_url" "$api_tmp" && [ -s "$api_tmp" ]; then
+        openwrt_url=$(grep -o 'https://github.com/necronicle/zapret2-z2k/releases/download/[^"]*openwrt-embedded\.tar\.gz' "$api_tmp" | head -1)
+    fi
+    rm -f "$api_tmp"
+
+    if [ -z "$openwrt_url" ]; then
+        print_warning "API недоступен или ответ пуст — использую fallback v0.9.5-z2k-r0"
         openwrt_url="$fallback_url"
-    else
-        # Парсим URL из JSON
-        openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/necronicle/zapret2-z2k/releases/download/[^"]*openwrt-embedded\.tar\.gz' | head -1)
-
-        if [ -z "$openwrt_url" ]; then
-            print_warning "Не найден в API, использую fallback v0.9.5-z2k-r0..."
-            openwrt_url="$fallback_url"
-        fi
     fi
 
     print_info "URL релиза: $openwrt_url"
 
-    # Скачать релиз
-    if ! curl -fsSL --connect-timeout 10 --max-time 120 "$openwrt_url" -o openwrt-embedded.tar.gz; then
-        print_error "Не удалось загрузить zapret2 OpenWrt embedded"
+    # Скачать релиз через z2k_fetch — он умеет fallback'и (raw → jsdelivr →
+    # gh-proxy → ndmc DNS) для github.com/releases/download/* URL, что
+    # критично у пользователей чьи провайдеры режут SNI на github.com.
+    if ! z2k_fetch "$openwrt_url" "openwrt-embedded.tar.gz"; then
+        print_error "Не удалось загрузить zapret2 OpenWrt embedded (все зеркала)"
         return 1
     fi
 
@@ -1951,10 +1951,12 @@ step_finalize() {
     printf "  %-25s: %s\n" "Стратегии" "$STRATEGIES_CONF"
     printf "  %-25s: %s\n" "Tools" "${ZAPRET2_DIR}/ip2net, ${ZAPRET2_DIR}/mdig"
 
-    # Save local z2k entrypoint for future runs without curl.
+    # Save local z2k entrypoint for future runs without curl. Use
+    # z2k_fetch so the install final step also benefits from the
+    # raw → jsdelivr → gh-proxy → ndmc-DNS fallback chain.
     local local_z2k_script="${ZAPRET2_DIR}/z2k.sh"
     local local_z2k_url="${GITHUB_RAW}/z2k.sh"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$local_z2k_url" -o "$local_z2k_script"; then
+    if z2k_fetch "$local_z2k_url" "$local_z2k_script"; then
         chmod +x "$local_z2k_script" 2>/dev/null || true
         printf "  %-25s: %s\n" "z2k script" "$local_z2k_script"
         # Expose a short `z2k` command in /opt/bin/ so users can just type
