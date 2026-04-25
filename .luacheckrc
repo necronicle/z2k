@@ -17,7 +17,15 @@ globals = {
     "z2k_ipfrag3",
     "z2k_ipfrag3_tiny",
     "z2k_dynamic_ttl",
+    "z2k_dynamic_strategy",
+    "z2k_cdn_detect",
     "cond_tcp_has_ts",
+    "cond_cdn_cf",
+    "cond_cdn_ovh",
+    "cond_cdn_hetzner",
+    "cond_cdn_do",
+    "cond_cdn_other",
+    "pick_cdn_sni",
     "circular",
     -- nfqws2 writable state/functions (set by fallback stubs or runtime)
     "DLOG",
@@ -62,6 +70,13 @@ read_globals = {
     -- nfqws2 detectors
     "standard_failure_detector",
     "standard_success_detector",
+
+    -- zapret-antidpi.lua desync primitives (defined upstream, used by
+    -- z2k-dynamic-strategy.lua dispatch table)
+    "fake",
+    "multisplit",
+    "hostfakesplit",
+    "multidisorder",
 
     -- nfqws2 host key functions
     "standard_hostkey",
