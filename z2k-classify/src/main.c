@@ -1,13 +1,27 @@
 /* z2k-classify — entry point.
  *
- * Phase 1: argparse + orchestrate probe + classify + text/JSON output.
- * Phase 2 will add the strategy-probe step under --apply.
+ * Flow:
+ *   1. Multi-shot baseline probe (3 replicas, raw_bypass=true) →
+ *      probe_aggregate_t. Surfaces probabilistic RST patterns that
+ *      single-shot probing miscalls as block=NONE.
+ *   2. classify_aggregate + classify_infer → block_type + reason.
+ *      Identifies CDN from resolved IP via cdn_for_ip().
+ *   3. Print classification (text or JSON).
+ *   4. If --apply and the block is fixable: recipe_for(block, cdn,
+ *      has_ts) → composite recipe entry (or NULL = unmapped).
+ *      If unmapped: report "no recipe for this (block, cdn, ts) tuple
+ *        — escalate to maintainer with pcap. Honest about limits."
+ *      Otherwise: inject_apply (writes dynparams + state.tsv pin),
+ *        re-probe (raw_bypass=false → through bypass pipeline).
+ *      If post-probe is BLOCK_NONE: persist_winner (or revert if
+ *        --dry-run). Otherwise: revert + report "tried <recipe>,
+ *        didn't pass; for МГТС-style CF cases consider L3 routing
+ *        trick (hosts override to alt CF anycast)."
  */
 #include "types.h"
 #include "probe.h"
 #include "classify.h"
 #include "recipe.h"
-#include "generator.h"
 #include "inject.h"
 
 #include <stdio.h>
@@ -17,264 +31,247 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-/* Portable sub-second sleep — avoids usleep's _XOPEN_SOURCE dance. */
-static void sleep_ms(int ms) {
-	struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };
-	nanosleep(&ts, NULL);
-}
-
-static const char *VERSION = "0.3.0-generator";
+static const char *VERSION = "0.4.0-cookbook";
 
 static void print_usage(FILE *f) {
 	fprintf(f,
-		"z2k-classify %s — DPI block-type classifier + strategy generator\n"
+		"z2k-classify %s — DPI block classifier + cookbook strategy emitter\n"
 		"\n"
 		"Usage: z2k-classify <domain> [options]\n"
 		"\n"
 		"Options:\n"
-		"  --apply         Generator mode: synthesize fresh strategies from\n"
-		"                  per-block-type primitive recipes, inject each\n"
-		"                  seamlessly (no nfqws2 restart, only THIS domain's\n"
-		"                  flow is affected), find a winner, persist it as\n"
-		"                  a new strategy=N in strats_new2.txt.\n"
-		"  --dry-run       With --apply: synthesize and probe, but revert all\n"
-		"                  changes when done (don't persist the winner)\n"
-		"  --json          Machine-readable JSON output\n"
-		"  --timeout=N     Total probe budget in seconds (default 60)\n"
-		"  --verbose       Per-probe diagnostic prints\n"
-		"  --version       Show version and exit\n"
-		"  --help          Show this help and exit\n"
+		"  --apply         Look up the field-tested recipe for the detected\n"
+		"                  (block, cdn, has_ts) tuple, inject it seamlessly\n"
+		"                  (no nfqws2 restart), re-probe THROUGH the bypass\n"
+		"                  pipeline. If it passes, persist as a new strategy.\n"
+		"                  If unmapped — refuse to invent and escalate.\n"
+		"  --dry-run       With --apply: inject + re-probe but never persist.\n"
+		"  --replicas=N    Probe replica count (default 3, max 5).\n"
+		"  --json          Machine-readable JSON output.\n"
+		"  --timeout=N     Per-probe budget in seconds (default 60).\n"
+		"  --verbose       Per-probe diagnostic prints.\n"
+		"  --version       Show version and exit.\n"
+		"  --help          Show this help and exit.\n"
 		"\n"
 		"Exit codes:\n"
-		"  0  — classification completed (output may be none/unknown)\n"
-		"  1  — hard error (bad args, DNS failure to get any IP)\n"
-		"  2  — probe internal error (socket API broken etc.)\n"
-		"  3  — with --apply: no template strategy worked\n",
+		"  0  classification completed (output may be none/unknown)\n"
+		"  1  hard error (bad args, DNS broken)\n"
+		"  2  probe internal error\n"
+		"  3  with --apply: recipe was tried and didn't pass post-probe\n"
+		"  4  with --apply: (block, cdn, ts) tuple is unmapped — no recipe\n",
 		VERSION);
 }
 
-/* Phase 2 generator — synthesize fresh strategies from primitive
- * recipes and probe each one until we find a winner.
- *
- * For each generated candidate:
- *   1. inject_apply() writes (family, params, target_host) to
- *      /tmp/z2k-classify-dynparams and pins (profile_key, domain) →
- *      handler slot in state.tsv. NO restart, NO DB write. The
- *      handler at the dynamic slot reads dynparams per-packet (1-sec
- *      TTL) and dispatches to fake/multisplit/hostfakesplit/
- *      multidisorder for ONLY the pinned domain.
- *   2. probe_run() retests the domain THROUGH the bypass pipeline.
- *   3. classify_infer() on the post-inject result. block_type=none
- *      means the candidate is the winner.
- *   4a. Winner + !dry_run: inject_persist_winner() dedupe-writes the
- *       strategy to /opt/zapret2/lists/z2k-classify-{strategies,
- *       domains}.tsv. State.tsv pin stays. NO regen+restart.
- *   4b. Winner + dry_run: inject_revert() truncates dynparams + unpins
- *       state.tsv. Nothing persists.
- *   5. No winner after exhausting recipe: inject_revert() leaves the
- *       host in clean state, exits with code 3.
- *
- * Cost: each iteration ≈ 1-2 s. 12-candidate causal run = 15-25 s.
- * Persist is millisecond-scale (just two TSV appends).
- */
-/* Pull a short, human-readable label from a generated strategy buf —
- * the rotation axis value (innocent SNI / blob / host), plus a short
- * post-result tag. Used by progress lines so the user can SEE which
- * variation is currently being tried. */
-static void short_axis_label(const char *strategy_buf, char *out, size_t outsz) {
-	out[0] = '\0';
-	const char *keys[] = {":blob=", ":seqovl_pattern=", ":host=", ":sni=", NULL};
-	for (int i = 0; keys[i]; i++) {
-		const char *p = strstr(strategy_buf, keys[i]);
-		if (!p) continue;
-		p += strlen(keys[i]);
-		size_t n = 0;
-		while (p[n] && p[n] != ':' && p[n] != ' ' && p[n] != ',' && n + 1 < outsz) {
-			out[n] = p[n]; n++;
-		}
-		out[n] = '\0';
-		if (n > 0) return;
-	}
+/* Build the --lua-desync= string for inject helper from a recipe entry. */
+static int build_strategy_str(const recipe_entry_t *r, char *buf, size_t bufsz) {
+	int n = snprintf(buf, bufsz, "--lua-desync=%s:%s",
+	                 r->family ? r->family : "",
+	                 r->params ? r->params : "");
+	if (n < 0 || (size_t)n >= bufsz) return -1;
+	return n;
 }
 
-static void phase2_generate(classify_result_t *res, bool dry_run, bool verbose,
-                            int max_attempts, bool quiet) {
+/* Phase 2 — single composite recipe lookup + apply + post-probe. */
+static void apply_phase(classify_result_t *res, bool dry_run, bool quiet) {
 	res->apply_attempted = true;
 	res->apply_succeeded = false;
+	res->unmapped = false;
 	res->winner_strategy = 0;
 	res->winner_profile[0] = '\0';
-	res->strategies_tried = 0;
+	res->winner_family[0] = '\0';
+	res->winner_label[0] = '\0';
+	res->winner_cite[0] = '\0';
 
-	const recipe_t *r = recipe_for_block(res->block_type);
+	bool has_ts = res->agg.server_ts_negotiated;
+
+	const recipe_entry_t *r = recipe_for(res->block_type, res->cdn, has_ts);
 	if (!r) {
+		res->unmapped = true;
 		snprintf(res->apply_note, sizeof(res->apply_note),
-		         "no recipe for block_type=%s — generator cannot synthesize",
-		         block_type_name(res->block_type));
+		         "unmapped tuple (block=%s, cdn=%s, has_ts=%d) — registry "
+		         "has no entry. Refusing to invent. Escalate to maintainer "
+		         "with tcpdump+nfqws2 debug log.",
+		         block_type_name(res->block_type), cdn_name(res->cdn), has_ts);
 		return;
 	}
 
-	snprintf(res->winner_profile, sizeof(res->winner_profile), "%s", r->profile_key);
+	snprintf(res->winner_profile, sizeof(res->winner_profile),
+	         "%s", r->profile_key);
+	snprintf(res->winner_family, sizeof(res->winner_family),
+	         "%s", r->family);
+	snprintf(res->winner_label, sizeof(res->winner_label),
+	         "%s", r->human_label);
+	snprintf(res->winner_cite, sizeof(res->winner_cite),
+	         "%s", r->cite);
 
-	int total = gen_total_count(r);
+	char strategy_str[2048];
+	if (build_strategy_str(r, strategy_str, sizeof(strategy_str)) < 0) {
+		snprintf(res->apply_note, sizeof(res->apply_note),
+		         "internal: strategy string overflowed buffer");
+		return;
+	}
+
 	if (!quiet) {
-		fprintf(stderr,
-			"generator: block=%s profile=%s — %d candidate(s) across %d famil(ies)\n",
-			block_type_name(res->block_type), r->profile_key,
-			total, r->family_count);
+		fprintf(stderr, "selected: %s/%s → %s (%s)\n",
+		        block_type_name(res->block_type), cdn_name(res->cdn),
+		        r->family, r->human_label);
+		fprintf(stderr, "          cite: %s\n", r->cite);
+		fprintf(stderr, "applying ... ");
 		fflush(stderr);
 	}
 
-	if (max_attempts > 0 && total > max_attempts) {
-		if (!quiet) {
-			fprintf(stderr, "generator: capping attempts at %d (recipe has %d)\n",
-			        max_attempts, total);
-			fflush(stderr);
-		}
-		total = max_attempts;
+	if (inject_apply(strategy_str, r->profile_key, res->domain) != 0) {
+		snprintf(res->apply_note, sizeof(res->apply_note),
+		         "inject_apply failed (helper script error). "
+		         "Strategy: %s", strategy_str);
+		if (!quiet) { fprintf(stderr, "INJECT FAIL\n"); fflush(stderr); }
+		return;
 	}
 
-	generator_t g;
-	gen_init(&g, r);
-
-	char strategy_buf[2048];
-	const char *family = NULL;
-
-	for (int i = 0; i < total; i++) {
-		int gen_rc = gen_next(&g, strategy_buf, sizeof(strategy_buf), &family);
-		if (gen_rc <= 0) break;
-		res->strategies_tried = i + 1;
-
-		char axis[128];
-		short_axis_label(strategy_buf, axis, sizeof(axis));
-
-		if (!quiet) {
-			fprintf(stderr, "  [%2d/%d] %-20s %-32s ... ",
-			        i + 1, total,
-			        family ? family : "?",
-			        axis[0] ? axis : "(no rotation)");
-			fflush(stderr);
-		}
-		if (verbose) {
-			fprintf(stderr, "\n    strategy: %s\n    ... ",
-			        strategy_buf);
-			fflush(stderr);
-		}
-
-		if (inject_apply(strategy_buf, r->profile_key, res->domain) != 0) {
-			if (!quiet) { fprintf(stderr, "inject failed\n"); fflush(stderr); }
-			continue;
-		}
-
-		/* Re-probe THROUGH the bypass pipeline so the slot=48 handler
-		 * runs against this connection. raw_bypass=false. */
-		probe_result_t post = {0};
-		struct in_addr ip;
-		if (probe_run(res->domain, 15, &post, &ip, false) != 0) {
-			if (!quiet) { fprintf(stderr, "probe failed\n"); fflush(stderr); }
-			inject_revert(r->profile_key, res->domain);
-			continue;
-		}
-
-		classify_result_t after = {0};
-		snprintf(after.domain, sizeof(after.domain), "%s", res->domain);
-		after.resolved_ip = ip;
-		after.probe = post;
-		classify_infer(&after);
-
-		if (!quiet) {
-			if (after.block_type == BLOCK_NONE) {
-				fprintf(stderr, "WINNER (size=%u)\n", post.size_final);
-			} else {
-				fprintf(stderr, "%s%s (size=%u)\n",
-				        block_type_name(after.block_type),
-				        post.server_rst_received ? " rst" : "",
-				        post.size_final);
-			}
-			fflush(stderr);
-		}
-
-		if (after.block_type == BLOCK_NONE) {
-			res->apply_succeeded = true;
-
-			if (dry_run) {
-				inject_revert(r->profile_key, res->domain);
-				snprintf(res->apply_note, sizeof(res->apply_note),
-				         "WINNER: family=%s — reverted (--dry-run). Strategy: %s",
-				         family ? family : "?", strategy_buf);
-				res->winner_strategy = -1;
-			} else {
-				if (!quiet) {
-					fprintf(stderr, "  persisting winner (regen + restart, ~5s)...\n");
-					fflush(stderr);
-				}
-				int new_id = inject_persist_winner(strategy_buf,
-				                                    r->profile_key,
-				                                    res->domain);
-				if (new_id < 0) {
-					snprintf(res->apply_note, sizeof(res->apply_note),
-					         "WINNER family=%s but persist failed — "
-					         "transient pin only; will not survive reboot. "
-					         "Strategy: %s",
-					         family ? family : "?", strategy_buf);
-					res->winner_strategy = INJECT_DYNAMIC_STRATEGY_ID;
-				} else {
-					snprintf(res->apply_note, sizeof(res->apply_note),
-					         "WINNER persisted as strategy_id=%d (family=%s). "
-					         "DB row deduped against existing strategies; "
-					         "domain mapping written to "
-					         "z2k-classify-domains.tsv.",
-					         new_id, family ? family : "?");
-					res->winner_strategy = new_id;
-				}
-			}
-			return;
-		}
-
+	/* Post-probe through normal pipeline (raw_bypass=false). */
+	probe_aggregate_t post = {0};
+	struct in_addr ip;
+	int rc = probe_run(res->domain, 30, 3, &post, &ip, false);
+	if (rc < 0) {
 		inject_revert(r->profile_key, res->domain);
+		snprintf(res->apply_note, sizeof(res->apply_note),
+		         "post-inject probe failed (probe internals broken)");
+		if (!quiet) { fprintf(stderr, "PROBE FAIL\n"); fflush(stderr); }
+		return;
 	}
 
-	snprintf(res->apply_note, sizeof(res->apply_note),
-	         "exhausted %d candidate(s) without a winner — recipe needs widening "
-	         "OR domain is blocked at L3 (transit drop, not DPI)",
-	         res->strategies_tried);
+	classify_aggregate(&post);
+	classify_result_t after = {0};
+	snprintf(after.domain, sizeof(after.domain), "%s", res->domain);
+	after.resolved_ip = ip;
+	after.cdn = res->cdn;
+	after.agg = post;
+	classify_infer(&after);
+
+	if (after.block_type == BLOCK_NONE) {
+		res->apply_succeeded = true;
+		if (!quiet) { fprintf(stderr, "PASSED\n"); fflush(stderr); }
+
+		if (dry_run) {
+			inject_revert(r->profile_key, res->domain);
+			res->winner_strategy = -1;
+			snprintf(res->apply_note, sizeof(res->apply_note),
+			         "WINNER (dry-run, reverted): %s — %s",
+			         r->human_label, strategy_str);
+		} else {
+			int new_id = inject_persist_winner(strategy_str, r->profile_key,
+			                                   res->domain);
+			if (new_id < 0) {
+				res->winner_strategy = 0;
+				snprintf(res->apply_note, sizeof(res->apply_note),
+				         "WINNER but persist failed — strategy active "
+				         "transiently only (won't survive reboot). %s",
+				         r->human_label);
+			} else {
+				res->winner_strategy = new_id;
+				snprintf(res->apply_note, sizeof(res->apply_note),
+				         "WINNER persisted as strategy_id=%d. %s",
+				         new_id, r->human_label);
+			}
+		}
+		return;
+	}
+
+	/* Did not pass. Revert and explain. */
+	inject_revert(r->profile_key, res->domain);
+	if (!quiet) {
+		fprintf(stderr, "STILL BLOCKED (block=%s)\n",
+		        block_type_name(after.block_type));
+		fflush(stderr);
+	}
+
+	/* Special case: TSPU_16KB or RKN_RST on Cloudflare that survives our
+	 * Beeline-validated padencap → almost certainly per-CIDR whitelist
+	 * (МГТС-pattern). Recommend L3 routing trick. */
+	if (res->cdn == CDN_CLOUDFLARE &&
+	    (res->block_type == BLOCK_TSPU_16KB ||
+	     res->block_type == BLOCK_RKN_RST ||
+	     res->agg.is_probabilistic)) {
+		snprintf(res->apply_note, sizeof(res->apply_note),
+		         "Tried %s but post-probe still %s. CDN=Cloudflare on a "
+		         "stubborn ASN (МГТС-pattern per ntc.party 21161 #354-374). "
+		         "DPI bypass NOT going to help — try L3 routing trick: "
+		         "Keenetic webpanel → Static DNS → override "
+		         "%s → 2.58.104.1 (or 162.159.36.1, 162.159.200.1). "
+		         "Field-validated by jestxfot.",
+		         r->human_label, block_type_name(after.block_type),
+		         res->domain);
+	} else {
+		snprintf(res->apply_note, sizeof(res->apply_note),
+		         "Tried %s but post-probe still %s. Recipe was the best "
+		         "field-validated entry for (block=%s, cdn=%s); failure "
+		         "suggests local TSPU variant — escalate with pcap.",
+		         r->human_label, block_type_name(after.block_type),
+		         block_type_name(res->block_type), cdn_name(res->cdn));
+	}
 }
+
+/* ---------------- output formatters ---------------- */
 
 static void print_text_result(const classify_result_t *r) {
 	char ipbuf[INET_ADDRSTRLEN];
 	inet_ntop(AF_INET, &r->resolved_ip, ipbuf, sizeof(ipbuf));
+	const probe_aggregate_t *a = &r->agg;
 
 	printf("domain:           %s\n", r->domain);
-	printf("resolved_ip:      %s\n", r->probe.dns_ok ? ipbuf : "(dns failed)");
-	printf("probe:\n");
-	printf("  dns_ok:             %s\n", r->probe.dns_ok ? "yes" : "no");
-	printf("  icmp_reachable:     %s\n", r->probe.icmp_reachable ? "yes" : "no");
-	printf("  tcp_connect_ok:     %s\n", r->probe.tcp_connect_ok ? "yes" : "no");
-	printf("  tls_handshake_ok:   %s\n", r->probe.tls_handshake_ok ? "yes" : "no");
-	printf("  server_ts_negotiated: %s\n", r->probe.server_ts_negotiated ? "yes" : "no");
-	printf("  server_rst_received: %s (at byte %d)\n",
-	       r->probe.server_rst_received ? "yes" : "no", r->probe.rst_after_bytes);
-	printf("  size_before_stall:  %u\n", r->probe.size_before_stall);
-	printf("  size_final:         %u\n", r->probe.size_final);
-	printf("  duration_ms:        %d\n", r->probe.duration_ms);
+	printf("resolved_ip:      %s\n", a->dns_ok ? ipbuf : "(dns failed)");
+	printf("cdn:              %s\n", cdn_name(r->cdn));
+	printf("probe (%d replicas, %d ms total):\n",
+	       a->replica_count, a->total_duration_ms);
+	printf("  dns_ok:               %s\n", a->dns_ok ? "yes" : "no");
+	printf("  icmp_reachable:       %s\n", a->icmp_reachable ? "yes" : "no");
+	printf("  tcp_connect:          %d/%d\n",
+	       a->tcp_connect_success_count, a->replica_count);
+	printf("  rst_observed:         %d/%d%s\n",
+	       a->rst_observed_count, a->replica_count,
+	       a->is_probabilistic ? " (PROBABILISTIC)" : "");
+	if (a->rst_observed_count > 0) {
+		printf("  rst_after_bytes_med:  %d\n", a->median_rst_after_bytes);
+	}
+	printf("  size_final_max:       %u\n", a->max_size_final);
+	if (a->any_stalled_at_16kb) {
+		printf("  stalled_at_16kb:      yes (%u bytes, %s)\n",
+		       a->max_size_before_stall,
+		       a->all_stalled_at_16kb ? "all replicas" : "some replicas");
+	}
+	printf("  server_ts_negotiated: %s\n",
+	       a->server_ts_negotiated ? "yes" : "no");
+	if (a->min_server_winsize > 0) {
+		printf("  server_snd_mss:       %u\n", a->min_server_winsize);
+	}
+
 	printf("block_type:       %s\n", block_type_name(r->block_type));
 	printf("reason:           %s\n", r->reason);
 	if (r->recommended[0]) {
 		printf("recommended:      %s\n", r->recommended);
 	}
+
 	if (r->apply_attempted) {
 		printf("apply:\n");
-		printf("  strategies_tried:   %d\n", r->strategies_tried);
+		printf("  recipe:             %s\n",
+		       r->winner_label[0] ? r->winner_label : "(none)");
+		if (r->winner_cite[0]) {
+			printf("  cite:               %s\n", r->winner_cite);
+		}
+		printf("  unmapped:           %s\n", r->unmapped ? "yes" : "no");
 		printf("  succeeded:          %s\n", r->apply_succeeded ? "yes" : "no");
-		if (r->apply_succeeded) {
-			printf("  winner_strategy:    %d\n", r->winner_strategy);
-			printf("  winner_profile:     %s\n", r->winner_profile);
+		if (r->apply_succeeded && r->winner_strategy != 0) {
+			if (r->winner_strategy < 0) {
+				printf("  winner:             reverted (--dry-run)\n");
+			} else {
+				printf("  winner_strategy:    %d\n", r->winner_strategy);
+				printf("  winner_profile:     %s\n", r->winner_profile);
+			}
 		}
 		printf("  note:               %s\n", r->apply_note);
 	}
 }
 
-/* Emit JSON. Escape only quotes and backslashes — we control input
- * sources, so no full escaper needed. */
 static void json_escape(const char *in, char *out, size_t outlen) {
 	size_t j = 0;
 	for (size_t i = 0; in[i] && j + 2 < outlen; i++) {
@@ -289,62 +286,75 @@ static void json_escape(const char *in, char *out, size_t outlen) {
 
 static void print_json_result(const classify_result_t *r) {
 	char ipbuf[INET_ADDRSTRLEN] = {0};
-	if (r->probe.dns_ok)
+	if (r->agg.dns_ok)
 		inet_ntop(AF_INET, &r->resolved_ip, ipbuf, sizeof(ipbuf));
+	const probe_aggregate_t *a = &r->agg;
 	char reason_esc[1024], rec_esc[1536], domain_esc[512], note_esc[512];
+	char label_esc[256], cite_esc[256];
 	json_escape(r->reason, reason_esc, sizeof(reason_esc));
 	json_escape(r->recommended, rec_esc, sizeof(rec_esc));
 	json_escape(r->domain, domain_esc, sizeof(domain_esc));
 	json_escape(r->apply_note, note_esc, sizeof(note_esc));
+	json_escape(r->winner_label, label_esc, sizeof(label_esc));
+	json_escape(r->winner_cite, cite_esc, sizeof(cite_esc));
 
 	printf("{"
 	       "\"domain\":\"%s\","
 	       "\"resolved_ip\":\"%s\","
+	       "\"cdn\":\"%s\","
 	       "\"block_type\":\"%s\","
 	       "\"reason\":\"%s\","
 	       "\"recommended\":\"%s\","
 	       "\"probe\":{"
+	       "\"replica_count\":%d,"
 	       "\"dns_ok\":%s,"
 	       "\"icmp_reachable\":%s,"
-	       "\"tcp_connect_ok\":%s,"
-	       "\"tls_handshake_ok\":%s,"
+	       "\"tcp_connect_success\":%d,"
+	       "\"rst_observed\":%d,"
+	       "\"is_probabilistic\":%s,"
+	       "\"median_rst_after_bytes\":%d,"
+	       "\"size_final_max\":%u,"
+	       "\"size_before_stall_max\":%u,"
+	       "\"any_stalled_at_16kb\":%s,"
+	       "\"all_stalled_at_16kb\":%s,"
 	       "\"server_ts_negotiated\":%s,"
-	       "\"server_rst_received\":%s,"
-	       "\"rst_after_bytes\":%d,"
-	       "\"size_before_stall\":%u,"
-	       "\"size_final\":%u,"
-	       "\"duration_ms\":%d"
+	       "\"server_mss_proxy\":%u,"
+	       "\"total_duration_ms\":%d"
 	       "},"
 	       "\"apply\":{"
 	       "\"attempted\":%s,"
 	       "\"succeeded\":%s,"
+	       "\"unmapped\":%s,"
 	       "\"winner_strategy\":%d,"
 	       "\"winner_profile\":\"%s\","
-	       "\"strategies_tried\":%d,"
+	       "\"winner_family\":\"%s\","
+	       "\"recipe_label\":\"%s\","
+	       "\"recipe_cite\":\"%s\","
 	       "\"note\":\"%s\""
 	       "}"
 	       "}\n",
-	       domain_esc,
-	       ipbuf,
+	       domain_esc, ipbuf, cdn_name(r->cdn),
 	       block_type_name(r->block_type),
-	       reason_esc,
-	       rec_esc,
-	       r->probe.dns_ok ? "true" : "false",
-	       r->probe.icmp_reachable ? "true" : "false",
-	       r->probe.tcp_connect_ok ? "true" : "false",
-	       r->probe.tls_handshake_ok ? "true" : "false",
-	       r->probe.server_ts_negotiated ? "true" : "false",
-	       r->probe.server_rst_received ? "true" : "false",
-	       r->probe.rst_after_bytes,
-	       r->probe.size_before_stall,
-	       r->probe.size_final,
-	       r->probe.duration_ms,
+	       reason_esc, rec_esc,
+	       a->replica_count,
+	       a->dns_ok ? "true" : "false",
+	       a->icmp_reachable ? "true" : "false",
+	       a->tcp_connect_success_count,
+	       a->rst_observed_count,
+	       a->is_probabilistic ? "true" : "false",
+	       a->median_rst_after_bytes,
+	       a->max_size_final, a->max_size_before_stall,
+	       a->any_stalled_at_16kb ? "true" : "false",
+	       a->all_stalled_at_16kb ? "true" : "false",
+	       a->server_ts_negotiated ? "true" : "false",
+	       a->min_server_winsize,
+	       a->total_duration_ms,
 	       r->apply_attempted ? "true" : "false",
 	       r->apply_succeeded ? "true" : "false",
+	       r->unmapped ? "true" : "false",
 	       r->winner_strategy,
-	       r->winner_profile,
-	       r->strategies_tried,
-	       note_esc);
+	       r->winner_profile, r->winner_family,
+	       label_esc, cite_esc, note_esc);
 }
 
 int main(int argc, char **argv) {
@@ -354,6 +364,7 @@ int main(int argc, char **argv) {
 	bool want_apply = false;
 	bool dry_run = false;
 	int timeout_sec = 60;
+	int replicas = 3;
 
 	for (int i = 1; i < argc; i++) {
 		const char *a = argv[i];
@@ -374,6 +385,12 @@ int main(int argc, char **argv) {
 			if (timeout_sec < 5) timeout_sec = 5;
 			continue;
 		}
+		if (!strncmp(a, "--replicas=", 11)) {
+			replicas = atoi(a + 11);
+			if (replicas < 1) replicas = 1;
+			if (replicas > PROBE_REPLICAS_MAX) replicas = PROBE_REPLICAS_MAX;
+			continue;
+		}
 		if (a[0] == '-') {
 			fprintf(stderr, "unknown option: %s\n", a);
 			print_usage(stderr); return 1;
@@ -390,52 +407,56 @@ int main(int argc, char **argv) {
 
 	classify_result_t res = {0};
 	snprintf(res.domain, sizeof(res.domain), "%s", domain);
-
-	/* Suppress all stderr progress when JSON is requested (script-
-	 * friendly machine output). Otherwise default to "show progress". */
 	bool quiet = want_json;
 
 	if (!quiet) {
-		fprintf(stderr, "probing %s (raw, bypassing local pipeline)... ", domain);
+		fprintf(stderr, "probing %s (%d replicas, raw_bypass)... ",
+		        domain, replicas);
 		fflush(stderr);
 	}
 
-	/* Baseline probe with SO_MARK so packets bypass the nfqws2
-	 * pipeline and we measure the RAW TSPU block, not whatever the
-	 * existing rotator already managed to bypass. raw_bypass=true. */
-	int rc = probe_run(domain, timeout_sec, &res.probe, &res.resolved_ip, true);
+	struct in_addr ip = {0};
+	int rc = probe_run(domain, timeout_sec, replicas, &res.agg, &ip, true);
 	if (rc < 0) {
 		fprintf(stderr, "probe_run: internal error\n");
 		return 2;
 	}
-
+	res.resolved_ip = ip;
+	classify_aggregate(&res.agg);
+	res.cdn = res.agg.dns_ok ? cdn_for_ip(ip) : CDN_UNKNOWN;
 	classify_infer(&res);
 
 	if (!quiet) {
-		fprintf(stderr, "block=%s\n", block_type_name(res.block_type));
+		fprintf(stderr, "block=%s cdn=%s%s\n",
+		        block_type_name(res.block_type), cdn_name(res.cdn),
+		        res.agg.is_probabilistic ? " (probabilistic)" : "");
 		fflush(stderr);
 	}
 
-	if (want_apply && res.block_type != BLOCK_NONE &&
+	if (want_apply &&
+	    res.block_type != BLOCK_NONE &&
 	    res.block_type != BLOCK_TRANSIT_DROP &&
-	    res.block_type != BLOCK_MOBILE_ICMP) {
-		/* max_attempts=0 → unlimited (use full recipe size) */
-		phase2_generate(&res, dry_run, verbose, 0, quiet);
+	    res.block_type != BLOCK_MOBILE_ICMP &&
+	    res.block_type != BLOCK_ANTI_DDOS_SLOWSTART) {
+		apply_phase(&res, dry_run, quiet);
 	} else if (want_apply && !quiet) {
 		fprintf(stderr,
-		        "no generator run: block_type=%s%s\n",
+		        "no apply: block_type=%s%s\n",
 		        block_type_name(res.block_type),
 		        res.block_type == BLOCK_NONE
-		            ? " (domain reachable from raw probe — already not blocked)"
+		            ? " (already reachable from raw probe)"
 		            : "");
 		fflush(stderr);
 	}
 
+	(void)verbose;
+
 	if (want_json) print_json_result(&res);
 	else print_text_result(&res);
 
-	if (want_apply && res.apply_attempted && !res.apply_succeeded) {
-		return 3;
+	if (want_apply && res.apply_attempted) {
+		if (res.unmapped) return 4;
+		if (!res.apply_succeeded) return 3;
 	}
 	return 0;
 }

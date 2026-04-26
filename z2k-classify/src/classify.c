@@ -1,212 +1,261 @@
-/* z2k-classify — symptom to block-type decision tree.
+/* z2k-classify — symptom-to-block-type decision tree.
  *
- * Pure function: takes probe_result_t, writes block_type + reason +
- * recommended primitives. No I/O, no mallocs (fixed buffers).
+ * Pure functions: takes probe_aggregate_t + cdn tag, writes block_type
+ * + reason. No I/O, no mallocs.
  *
- * Decision logic summarizes the matrix we built from:
- *   - ntc.party 17013 (CF/OVH/Hetzner/DO 16KB throttle thread)
- *   - ntc.party 21161 (zapret2 discussion — AWS no-TS, mobile CSP)
- *   - our own field reports (Alexey on rutracker, Andrey on games)
+ * Distinguishing classes:
+ *   - DNS / transit / mobile-csp (L3-L4, not our layer)
+ *   - RKN_RST (early RST after CH inspection)
+ *   - TSPU_16KB (byte-counter gate ~15-17K)
+ *   - AWS_NO_TS (server doesn't speak TS)
+ *   - SIZE_DPI (RST at non-16K size)
+ *   - ANTI_DDOS_SLOWSTART (server initial winsize < 1500 — not DPI)
+ *   - HYBRID / NONE / UNKNOWN
+ *
+ * Multi-replica analysis: if some replicas show block, others don't,
+ * we mark `is_probabilistic` and still classify as the dominant block
+ * type. Single-shot would have miscalled this as NONE.
  */
 #include "classify.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 const char *block_type_name(block_type_t t) {
 	switch (t) {
-	case BLOCK_NONE:         return "none";
-	case BLOCK_TRANSIT_DROP: return "transit_drop";
-	case BLOCK_RKN_RST:      return "rkn_rst";
-	case BLOCK_TSPU_16KB:    return "tspu_16kb";
-	case BLOCK_AWS_NO_TS:    return "aws_no_ts";
-	case BLOCK_MOBILE_ICMP:  return "mobile_icmp";
-	case BLOCK_SIZE_DPI:     return "size_dpi";
-	case BLOCK_JA3_FILTER:   return "ja3_filter";
-	case BLOCK_HYBRID:       return "hybrid";
-	default:                 return "unknown";
+	case BLOCK_NONE:                return "none";
+	case BLOCK_TRANSIT_DROP:        return "transit_drop";
+	case BLOCK_RKN_RST:             return "rkn_rst";
+	case BLOCK_TSPU_16KB:           return "tspu_16kb";
+	case BLOCK_AWS_NO_TS:           return "aws_no_ts";
+	case BLOCK_MOBILE_ICMP:         return "mobile_icmp";
+	case BLOCK_SIZE_DPI:            return "size_dpi";
+	case BLOCK_JA3_FILTER:          return "ja3_filter";
+	case BLOCK_ANTI_DDOS_SLOWSTART: return "anti_ddos_slowstart";
+	case BLOCK_IP_LEVEL_CDN:        return "ip_level_cdn";
+	case BLOCK_HYBRID:              return "hybrid";
+	default:                        return "unknown";
 	}
 }
 
-void classify_infer(classify_result_t *out) {
-	const probe_result_t *p = &out->probe;
+static int cmp_int(const void *a, const void *b) {
+	int aa = *(const int *)a, bb = *(const int *)b;
+	return (aa > bb) - (aa < bb);
+}
 
-	/* Rule 1 — DNS fail -> blocked at DNS level (not our layer). */
-	if (!p->dns_ok) {
+void classify_aggregate(probe_aggregate_t *agg) {
+	int n = agg->replica_count;
+	if (n <= 0) return;
+
+	agg->dns_ok = false;
+	agg->icmp_reachable = false;
+	agg->server_ts_negotiated = false;
+	agg->tcp_connect_success_count = 0;
+	agg->rst_observed_count = 0;
+	agg->any_stalled_at_16kb = false;
+	agg->all_stalled_at_16kb = true;
+	agg->max_size_before_stall = 0;
+	agg->max_size_final = 0;
+	agg->min_server_winsize = 0xFFFFFFFFu;
+	agg->total_duration_ms = 0;
+
+	int rst_offsets[PROBE_REPLICAS_MAX];
+	int rst_count = 0;
+
+	for (int i = 0; i < n; i++) {
+		const probe_replica_t *r = &agg->replicas[i];
+		if (r->dns_ok)             agg->dns_ok = true;
+		if (r->icmp_reachable)     agg->icmp_reachable = true;
+		if (r->tcp_connect_ok)     agg->tcp_connect_success_count++;
+		if (r->server_ts_negotiated) agg->server_ts_negotiated = true;
+		if (r->server_rst_received) {
+			agg->rst_observed_count++;
+			rst_offsets[rst_count++] = r->rst_after_bytes;
+		}
+		if (r->size_before_stall > 0) {
+			agg->any_stalled_at_16kb = true;
+		} else {
+			agg->all_stalled_at_16kb = false;
+		}
+		if (r->size_before_stall > agg->max_size_before_stall)
+			agg->max_size_before_stall = r->size_before_stall;
+		if (r->size_final > agg->max_size_final)
+			agg->max_size_final = r->size_final;
+		if (r->server_initial_winsize > 0 &&
+		    r->server_initial_winsize < agg->min_server_winsize)
+			agg->min_server_winsize = r->server_initial_winsize;
+		agg->total_duration_ms += r->duration_ms;
+	}
+
+	if (agg->min_server_winsize == 0xFFFFFFFFu) agg->min_server_winsize = 0;
+
+	if (rst_count > 0) {
+		qsort(rst_offsets, rst_count, sizeof(int), cmp_int);
+		agg->median_rst_after_bytes = rst_offsets[rst_count / 2];
+	}
+
+	agg->is_probabilistic = (agg->rst_observed_count > 0 &&
+	                          agg->rst_observed_count < n) ||
+	                         (agg->any_stalled_at_16kb && !agg->all_stalled_at_16kb);
+
+	if (n > 0 && !agg->any_stalled_at_16kb) agg->all_stalled_at_16kb = false;
+}
+
+void classify_infer(classify_result_t *out) {
+	const probe_aggregate_t *a = &out->agg;
+
+	/* Rule 1 — DNS fail. */
+	if (!a->dns_ok) {
 		out->block_type = BLOCK_UNKNOWN;
 		snprintf(out->reason, sizeof(out->reason),
-		         "DNS resolution failed — check DNS (router DoH / Keenetic ndmc ip host)");
+		         "DNS resolution failed across all probes — check DNS "
+		         "(router DoH / Keenetic ndmc ip host)");
 		out->recommended[0] = '\0';
 		return;
 	}
 
-	/* Rule 2 — TCP connect times out AND ICMP also lost -> transit
-	 * drop. Packets never come back. No DPI strategy saves this. */
-	if (!p->tcp_connect_ok && !p->icmp_reachable) {
+	/* Rule 2 — TCP timed out everywhere AND ICMP also lost. */
+	if (a->tcp_connect_success_count == 0 && !a->icmp_reachable) {
 		out->block_type = BLOCK_TRANSIT_DROP;
 		snprintf(out->reason, sizeof(out->reason),
-		         "TCP connect timed out AND ICMP unreachable — upstream "
-		         "routing black hole or full IP-level block. Not a DPI "
-		         "problem, no strategy will help. Check traceroute.");
+		         "TCP connect timed out (%d/%d replicas) AND ICMP "
+		         "unreachable. Upstream routing black hole or full "
+		         "IP-level block. Not a DPI problem — no strategy helps. "
+		         "Check traceroute.",
+		         a->replica_count, a->replica_count);
 		out->recommended[0] = '\0';
 		return;
 	}
 
-	/* Rule 3 — ICMP works but many early packets lost / rate-limited.
-	 * Signature of mobile CSP quench. (Partial: Phase 1 doesn't yet
-	 * send enough ICMP probes to distinguish this from a one-off.) */
-	if (p->icmp_reachable && !p->tcp_connect_ok) {
+	/* Rule 3 — ICMP works but TCP fails. Mobile CSP / port block. */
+	if (a->icmp_reachable && a->tcp_connect_success_count == 0) {
 		out->block_type = BLOCK_MOBILE_ICMP;
 		snprintf(out->reason, sizeof(out->reason),
-		         "ICMP works but TCP connect fails — possible mobile "
-		         "CSP quench (Beeline/T2/MegaFon pattern) or dst-port "
-		         "block. DPI strategies don't help at L4.");
+		         "ICMP works but TCP connect fails (%d/%d) — mobile CSP "
+		         "quench (Beeline/T2/MegaFon pattern) or dst-port block. "
+		         "DPI strategies don't help at L4.",
+		         a->tcp_connect_success_count, a->replica_count);
 		snprintf(out->recommended, sizeof(out->recommended),
 		         "none (not a DPI block)");
 		return;
 	}
 
-	/* Rule 4 — TCP connect OK, then RST fires before/during TLS.
-	 * Classic RKN hostlist DPI signature: SNI inspected, RST injected. */
-	if (p->tcp_connect_ok && p->server_rst_received && p->rst_after_bytes < 500) {
+	/* Rule 4 — anti-DDoS slow-start. NOT auto-detected here: tcpi_snd_mss
+	 * is just MSS, not advertised window — can't tell from probe alone.
+	 * Real signal needs raw packet capture (winsize<256 in SYN-ACK).
+	 * Left as a manual override path; classify_infer never enters this
+	 * branch from probe data. (BLOCK_ANTI_DDOS_SLOWSTART exists in the
+	 * enum for future raw-capture upgrade.) */
+
+	/* Rule 5 — RST seen in any replica + early offset = RKN_RST.
+	 * Probabilistic RST (some replicas not all) still classifies — that's
+	 * exactly the МГТС cloudflare case. */
+	if (a->rst_observed_count > 0 && a->median_rst_after_bytes < 500) {
 		out->block_type = BLOCK_RKN_RST;
 		snprintf(out->reason, sizeof(out->reason),
-		         "TCP connect OK, RST received at byte offset %d (early) — "
-		         "RKN-style hostlist DPI injecting RST after SNI inspection.",
-		         p->rst_after_bytes);
+		         "RST observed in %d/%d replicas at byte offset ~%d — "
+		         "RKN-style hostlist DPI%s.",
+		         a->rst_observed_count, a->replica_count,
+		         a->median_rst_after_bytes,
+		         a->is_probabilistic ? " (probabilistic — sampled DPI)" : "");
 		snprintf(out->recommended, sizeof(out->recommended),
-		         "multisplit(pos=1,sniext+1,seqovl=1), "
-		         "fake(blob=tls_clienthello_www_google_com,repeats=6,tcp_ts=-1000), "
-		         "fakedsplit(pos=method+2), "
-		         "syndata(blob=syn_packet), "
-		         "hostfakesplit(host=mail.ru)");
+		         "multisplit pos=1 seqovl=681 with google/gosuslugi bin "
+		         "(RTK-universal); fallback fake+padencap (Beeline-validated)");
 		return;
 	}
 
-	/* Rule 5 — TCP connect OK, flow stalls around 15-17 KB. The
-	 * defining TSPU 16KB whitelist-SNI signature. Server's ClientHello
-	 * reply got through, but flow chokes at the byte-counter gate. */
-	if (p->tcp_connect_ok && p->size_before_stall >= 15000 &&
-	    p->size_before_stall <= 17000) {
+	/* Rule 6 — flow stalls in 15-17K window. TSPU 16KB byte-gate. */
+	if (a->any_stalled_at_16kb && a->max_size_before_stall >= 15000 &&
+	    a->max_size_before_stall <= 17000) {
 		out->block_type = BLOCK_TSPU_16KB;
 		snprintf(out->reason, sizeof(out->reason),
-		         "Flow stalled at %u bytes (within 15-17 KB window) — "
-		         "TSPU whitelist-SNI throttle. Need a fake-SNI-in-decoy "
-		         "or sniext+1 split strategy to escape the byte gate.",
-		         p->size_before_stall);
+		         "Flow stalled at %u bytes (15-17K window) in %d/%d "
+		         "replicas — TSPU byte-gate / whitelist-SNI throttle. "
+		         "Per ntc.party d/1812 + #1836: needs CDN-specific bin "
+		         "+ padencap.",
+		         a->max_size_before_stall,
+		         (a->all_stalled_at_16kb ? a->replica_count :
+		            (a->is_probabilistic ? 1 : a->replica_count)),
+		         a->replica_count);
 		snprintf(out->recommended, sizeof(out->recommended),
-		         "multisplit(pos=1,sniext+1,seqovl=1), "
-		         "fake(blob=tls_clienthello_www_google_com,badseq,tcp_ack=-66000), "
-		         "hostfakesplit(host=mail.ru,seqovl=1,badsum), "
-		         "fake(tls_mod=padencap), "
-		         "fake(tls_mod=rndsni)");
+		         "fake+padencap (CF=google bin, OVH=gosuslugi bin) "
+		         "+ wssize 1:6");
 		return;
 	}
 
-	/* Rule 6a — silent drop: TCP connect OK, but server sent NOTHING
-	 * at all (0 bytes) and no RST was injected. Common RKN DPI
-	 * pattern — ClientHello reaches DPI, DPI silently drops all
-	 * subsequent packets without injecting RST. Probe hits read
-	 * timeout with empty rx. Different from RKN_RST which injects
-	 * visible RST. */
-	if (p->tcp_connect_ok && p->size_final == 0 && !p->server_rst_received) {
-		out->block_type = BLOCK_RKN_RST;  /* reuse type; phase 2 will
-		                                     split into RKN_DROP sub-type */
+	/* Rule 7 — silent drop: connect OK, NO bytes, NO RST. RKN-style
+	 * silent ClientHello drop. */
+	if (a->tcp_connect_success_count > 0 && a->max_size_final == 0 &&
+	    a->rst_observed_count == 0) {
+		out->block_type = BLOCK_RKN_RST;
 		snprintf(out->reason, sizeof(out->reason),
-		         "TCP connect OK but server sent NO bytes (silent DPI "
-		         "drop). Classical RKN filtering — ClientHello inspected, "
-		         "flow silently dropped without RST injection. Probe "
-		         "would have timed out waiting.");
+		         "TCP connect OK but server sent NO bytes (%d/%d "
+		         "replicas) — silent DPI drop after CH inspection. "
+		         "Probe timed out waiting for ServerHello.",
+		         a->replica_count, a->replica_count);
 		snprintf(out->recommended, sizeof(out->recommended),
-		         "multisplit(pos=1,sniext+1,seqovl=1), "
-		         "fake(blob=tls_clienthello_www_google_com,repeats=6), "
-		         "fakedsplit(pos=method+2,badsum), "
-		         "syndata(blob=syn_packet), "
-		         "hostfakesplit(host=mail.ru,seqovl=1)");
+		         "multisplit seqovl=681 with cdn-matched bin");
 		return;
 	}
 
-	/* Rule 6b — AWS/CDN frontend that doesn't negotiate timestamps.
-	 * Critical: tcp_ts fooling becomes a no-op on such servers. Only
-	 * trigger when we got a response (not silent-drop case above). */
-	if (p->tcp_connect_ok && !p->server_ts_negotiated && p->size_final > 0 &&
-	    (p->server_rst_received || p->size_final < 500)) {
+	/* Rule 8 — connect OK, no TS, response truncated or RST.
+	 * AWS_NO_TS frontend pattern. */
+	if (a->tcp_connect_success_count > 0 && !a->server_ts_negotiated &&
+	    a->max_size_final > 0 &&
+	    (a->rst_observed_count > 0 || a->max_size_final < 500)) {
 		out->block_type = BLOCK_AWS_NO_TS;
 		snprintf(out->reason, sizeof(out->reason),
-		         "TCP connect OK, server did NOT negotiate timestamps "
-		         "(AWS/CDN frontend pattern). tcp_ts=-N fooling is "
-		         "wasted on this server — use TTL-based variants.");
+		         "TCP connect OK, server did NOT negotiate TS, response "
+		         "truncated (max=%u). AWS/CDN frontend pattern — tcp_ts "
+		         "fooling is wasted. Use TTL-based or hostfakesplit "
+		         "with badack-only mechanism.",
+		         a->max_size_final);
 		snprintf(out->recommended, sizeof(out->recommended),
-		         "fake(ip_ttl=7), "
-		         "fake(ip_autottl=-2,3-20), "
-		         "multisplit(pos=1,sniext+1,seqovl=1), "
-		         "fake(blob=tls_clienthello_www_google_com,ip_ttl=4)");
+		         "hostfakesplit host=vk.com tcp_ack=-66000 ip_ttl=4 "
+		         "(per bol-van #2039)");
 		return;
 	}
 
-	/* Rule 6c — server sent only a TLS alert record (~7 bytes) and
-	 * closed. Not a DPI block — the server itself rejected our probe's
-	 * ClientHello (likely TLS config mismatch: cipher-suite picky,
-	 * requires SNI-specific vhost, etc.). Report as tooling limitation
-	 * rather than misclassifying. */
-	if (p->tcp_connect_ok && p->tls_handshake_ok &&
-	    p->size_final >= 5 && p->size_final <= 50 &&
-	    !p->server_rst_received) {
-		out->block_type = BLOCK_UNKNOWN;
-		snprintf(out->reason, sizeof(out->reason),
-		         "Server replied with small (%u-byte) response — likely "
-		         "TLS alert rejecting our probe's ClientHello. This is a "
-		         "TOOLING limitation (our CH lacks TLS 1.3 key-share), "
-		         "not a DPI signature. To confirm a block, try curl or "
-		         "a browser and check what happens at network level.",
-		         p->size_final);
-		out->recommended[0] = '\0';
-		return;
-	}
-
-	/* Rule 7 — TCP connect OK, flow truncated at a specific non-16KB
-	 * offset. Catch-all for size-based DPI with different gate value. */
-	if (p->tcp_connect_ok && p->server_rst_received &&
-	    p->rst_after_bytes > 1000 &&
-	    (p->rst_after_bytes < 14000 || p->rst_after_bytes > 18000)) {
+	/* Rule 9 — RST at large offset (non-16K). Generic size-DPI. */
+	if (a->rst_observed_count > 0 && a->median_rst_after_bytes > 1000 &&
+	    (a->median_rst_after_bytes < 14000 ||
+	     a->median_rst_after_bytes > 18000)) {
 		out->block_type = BLOCK_SIZE_DPI;
 		snprintf(out->reason, sizeof(out->reason),
-		         "Flow terminated at %d bytes (outside 15-17 KB window) "
-		         "— size-gated DPI with non-standard threshold. Try "
-		         "udplen-analog for TCP via padencap or multisplit.",
-		         p->rst_after_bytes);
+		         "RST at byte offset ~%d (outside 15-17K window) — "
+		         "size-gated DPI with non-standard threshold.",
+		         a->median_rst_after_bytes);
 		snprintf(out->recommended, sizeof(out->recommended),
-		         "fake(tls_mod=padencap), "
-		         "multisplit(pos=sld+1), "
-		         "multidisorder(pos=method+2,midsld,5)");
+		         "multidisorder pos=method+2,midsld,5");
 		return;
 	}
 
-	/* Rule 8 — No obvious symptom, handshake finished, bytes read OK.
-	 * Either the domain isn't blocked or our probe's minimal CH slipped
-	 * through while Chrome's wouldn't (possible JA3 filter). Phase 1
-	 * can't distinguish; flag as candidate for JA3 check + suggest
-	 * manual browser test. */
-	if (p->tcp_connect_ok && p->tls_handshake_ok && p->size_final > 1000) {
+	/* Rule 10 — handshake OK, lots of bytes, no symptoms. Not blocked
+	 * (or our minimal CH slipped through where Chrome's wouldn't —
+	 * possible JA3 filter, undetectable here). */
+	if (a->tcp_connect_success_count > 0 && a->max_size_final > 1000 &&
+	    a->rst_observed_count == 0) {
 		out->block_type = BLOCK_NONE;
 		snprintf(out->reason, sizeof(out->reason),
-		         "Full handshake + %u bytes received with minimal "
-		         "ClientHello. Domain appears reachable. If a real "
-		         "browser fails here, suspect JA3 fingerprint filter "
-		         "(Phase 1 can't detect that — manual test needed).",
-		         p->size_final);
+		         "Full handshake + %u bytes received in all %d replicas "
+		         "with minimal ClientHello. Domain appears reachable. "
+		         "If a real browser fails here, suspect JA3 fingerprint "
+		         "filter (Phase 1 can't detect — needs manual test).",
+		         a->max_size_final, a->replica_count);
 		out->recommended[0] = '\0';
 		return;
 	}
 
-	/* Fallback — symptoms don't match any known pattern. */
+	/* Fallback. */
 	out->block_type = BLOCK_UNKNOWN;
 	snprintf(out->reason, sizeof(out->reason),
-	         "Probe produced an unusual symptom combination "
-	         "(connect=%d, tls_ok=%d, rst=%d, rst_at=%d, size=%u, "
-	         "ts=%d). Manual inspection required.",
-	         p->tcp_connect_ok, p->tls_handshake_ok,
-	         p->server_rst_received, p->rst_after_bytes,
-	         p->size_final, p->server_ts_negotiated);
+	         "Probe symptoms inconsistent: connect=%d/%d, rst=%d/%d, "
+	         "size_final_max=%u, ts_negotiated=%d, winsize_min=%u. "
+	         "Manual inspection required.",
+	         a->tcp_connect_success_count, a->replica_count,
+	         a->rst_observed_count, a->replica_count,
+	         a->max_size_final, a->server_ts_negotiated,
+	         a->min_server_winsize);
 	out->recommended[0] = '\0';
 }

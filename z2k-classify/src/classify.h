@@ -4,10 +4,12 @@
 
 #include "types.h"
 
-/* Infer block_type from probe result. Fills `out->block_type`,
- * `out->reason`, and `out->recommended`. `out->probe` must already
- * be populated by probe_run() and `out->domain` / `out->resolved_ip`
- * set by the caller. */
+/* Aggregate raw replicas into derived signals. Pure. */
+void classify_aggregate(probe_aggregate_t *agg);
+
+/* Infer block_type from `out->agg` + `out->cdn`. Fills `out->block_type`,
+ * `out->reason`, `out->recommended`. Caller must set `out->domain`,
+ * `out->resolved_ip`, `out->cdn`, and `out->agg`. */
 void classify_infer(classify_result_t *out);
 
 #endif

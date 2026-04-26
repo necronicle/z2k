@@ -54,11 +54,13 @@ slot_for_profile() {
 
 action_to_family() {
     case "$1" in
-        fake)            echo "fake" ;;
-        multisplit)      echo "multisplit" ;;
-        hostfakesplit)   echo "hostfakesplit" ;;
-        multidisorder)   echo "multidisorder" ;;
-        *)               echo "" ;;
+        fake)                     echo "fake" ;;
+        multisplit)               echo "multisplit" ;;
+        hostfakesplit)            echo "hostfakesplit" ;;
+        multidisorder)            echo "multidisorder" ;;
+        fake_then_multisplit)     echo "fake_then_multisplit" ;;
+        fake_then_multidisorder)  echo "fake_then_multidisorder" ;;
+        *)                        echo "" ;;
     esac
 }
 

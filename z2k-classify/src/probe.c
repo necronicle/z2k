@@ -1,21 +1,11 @@
-/* z2k-classify — active probe sequence.
+/* z2k-classify — active probe.
  *
- * Phase 1 implementation uses standard POSIX sockets + getsockopt
- * (TCP_INFO) + inline TLS ClientHello. No raw AF_PACKET capture yet —
- * that's a Phase 2 upgrade when we need to see DPI-injected packets
- * distinctly from server-generated ones.
+ * POSIX sockets + inline TLS ClientHello (no real key exchange).
+ * Probe captures: dns/icmp/tcp_connect/tls_response/server_ts/rst/stall.
  *
- * Symptom matrix collected:
- *   dns_ok                — getaddrinfo success
- *   icmp_reachable        — single ICMP echo to dst (best-effort,
- *                           false if non-root / ICMP filtered)
- *   tcp_connect_ok        — connect() to :443 within 5 s
- *   tls_handshake_ok      — completed ClientHello/ServerHello exchange
- *   server_ts_negotiated  — TCP TS option echoed (matters for AWS)
- *   size_before_stall     — bytes received before recv() stalls/errors
- *   size_final            — total bytes read
- *   server_rst_received   — EPIPE/ECONNRESET during read
- *   rst_after_bytes       — offset of the RST (0 if during handshake)
+ * Multi-replica wrapper runs probe_run_replica() N times with small
+ * inter-probe gap. Surfaces probabilistic RST patterns that single-shot
+ * miscalls (e.g. МГТС cloudflare).
  */
 #define _GNU_SOURCE
 #include "probe.h"
@@ -33,10 +23,10 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
+#ifdef __linux__
 #include <netinet/ip_icmp.h>
+#endif
 #include <poll.h>
-
-/* ---- helpers ---- */
 
 static int64_t now_ms(void) {
 	struct timespec ts;
@@ -44,25 +34,13 @@ static int64_t now_ms(void) {
 	return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* Build a browser-like TLS 1.2/1.3 ClientHello with SNI = sni_host.
- *
- * Structure mirrors Chrome/Firefox defaults closely enough for strict
- * servers (Cloudflare, Google frontends, AWS CloudFront) to respond
- * with a real ServerHello instead of a TLS alert. NOT a JA3 fingerprint
- * clone — we don't ship curl-impersonate. Enough for probe semantics:
- * does the DPI inject RST? does the byte-gate fire? does the server
- * negotiate TS?
- *
- * Includes:
- *   - supported_versions: TLS 1.3 + 1.2
- *   - supported_groups: x25519, secp256r1, secp384r1
- *   - ec_point_formats: uncompressed
- *   - signature_algorithms: common RSA+ECDSA+Ed25519
- *   - ALPN: h2, http/1.1
- *   - key_share: x25519 with zero pubkey (server responds with
- *     HelloRetryRequest if it cares; we only need the SNI to be seen)
- *
- * Returns bytes written to buf. buf must hold >= 1024. */
+static void sleep_ms(int ms) {
+	struct timespec ts = { .tv_sec = ms / 1000,
+	                       .tv_nsec = (ms % 1000) * 1000000L };
+	nanosleep(&ts, NULL);
+}
+
+/* Build minimal but well-formed TLS ClientHello with given SNI. */
 static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host) {
 	size_t sni_len = strlen(sni_host);
 	if (sni_len > 253 || buflen < 1024) return 0;
@@ -70,42 +48,31 @@ static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host)
 	unsigned char body[1024];
 	size_t p = 0;
 
-	/* Handshake: ClientHello */
 	body[p++] = 0x01;
 	size_t hs_len_off = p; p += 3;
-	/* Legacy version TLS 1.2 (real version in supported_versions ext) */
 	body[p++] = 0x03; body[p++] = 0x03;
-	/* 32B random — pseudo-random filler, DPI doesn't care about entropy */
 	for (int i = 0; i < 32; i++) body[p++] = (unsigned char)((i * 17 + 41) & 0xff);
-	/* Session ID — 32 bytes (Chrome-like; empty is allowed but less realistic) */
 	body[p++] = 0x20;
 	for (int i = 0; i < 32; i++) body[p++] = (unsigned char)((i * 13 + 7) & 0xff);
 
-	/* Cipher suites — TLS 1.2-only list. We intentionally do NOT offer
-	 * TLS 1.3 suites (0x1301-03) because we don't send a valid
-	 * supported_versions/key_share extension; offering 1.3 ciphers
-	 * without proper 1.3 setup causes alert from strict servers. */
 	static const unsigned char suites[] = {
-		0xc0,0x2b, 0xc0,0x2f, 0xc0,0x2c, 0xc0,0x30, /* ECDHE-ECDSA/RSA AES-GCM */
-		0xcc,0xa9, 0xcc,0xa8,                       /* ECDHE CHACHA20 */
-		0xc0,0x13, 0xc0,0x14,                       /* ECDHE-RSA CBC */
-		0xc0,0x09, 0xc0,0x0a,                       /* ECDHE-ECDSA CBC */
-		0x00,0x9c, 0x00,0x9d,                       /* RSA AES-GCM */
-		0x00,0x2f, 0x00,0x35,                       /* RSA AES CBC */
-		0x00,0x0a,                                  /* 3DES (legacy padding) */
+		0xc0,0x2b, 0xc0,0x2f, 0xc0,0x2c, 0xc0,0x30,
+		0xcc,0xa9, 0xcc,0xa8,
+		0xc0,0x13, 0xc0,0x14,
+		0xc0,0x09, 0xc0,0x0a,
+		0x00,0x9c, 0x00,0x9d,
+		0x00,0x2f, 0x00,0x35,
+		0x00,0x0a,
 	};
 	size_t sl = sizeof(suites);
 	body[p++] = (unsigned char)(sl >> 8); body[p++] = (unsigned char)(sl & 0xff);
 	memcpy(&body[p], suites, sl); p += sl;
 
-	/* Compression methods */
 	body[p++] = 0x01; body[p++] = 0x00;
 
-	/* Extensions header */
 	size_t ext_len_off = p; p += 2;
 	size_t ext_start = p;
 
-	/* ext: server_name */
 	body[p++] = 0x00; body[p++] = 0x00;
 	body[p++] = 0x00; body[p++] = (unsigned char)(sni_len + 5);
 	body[p++] = 0x00; body[p++] = (unsigned char)(sni_len + 3);
@@ -113,74 +80,53 @@ static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host)
 	body[p++] = 0x00; body[p++] = (unsigned char)sni_len;
 	memcpy(&body[p], sni_host, sni_len); p += sni_len;
 
-	/* ext: ec_point_formats (0x000b) — uncompressed */
 	body[p++] = 0x00; body[p++] = 0x0b;
 	body[p++] = 0x00; body[p++] = 0x02;
 	body[p++] = 0x01; body[p++] = 0x00;
 
-	/* ext: supported_groups (0x000a) — x25519, secp256r1, secp384r1 */
 	body[p++] = 0x00; body[p++] = 0x0a;
 	body[p++] = 0x00; body[p++] = 0x08;
 	body[p++] = 0x00; body[p++] = 0x06;
-	body[p++] = 0x00; body[p++] = 0x1d;  /* x25519 */
-	body[p++] = 0x00; body[p++] = 0x17;  /* secp256r1 */
-	body[p++] = 0x00; body[p++] = 0x18;  /* secp384r1 */
+	body[p++] = 0x00; body[p++] = 0x1d;
+	body[p++] = 0x00; body[p++] = 0x17;
+	body[p++] = 0x00; body[p++] = 0x18;
 
-	/* ext: signature_algorithms (0x000d) */
 	static const unsigned char sigalgs[] = {
-		0x04,0x03,  /* ecdsa_secp256r1_sha256 */
-		0x05,0x03,  /* ecdsa_secp384r1_sha384 */
-		0x08,0x07,  /* ed25519 */
-		0x08,0x04,  /* rsa_pss_rsae_sha256 */
-		0x08,0x05,  /* rsa_pss_rsae_sha384 */
-		0x08,0x06,  /* rsa_pss_rsae_sha512 */
-		0x04,0x01,  /* rsa_pkcs1_sha256 */
-		0x05,0x01,  /* rsa_pkcs1_sha384 */
-		0x06,0x01,  /* rsa_pkcs1_sha512 */
+		0x04,0x03, 0x05,0x03, 0x08,0x07,
+		0x08,0x04, 0x08,0x05, 0x08,0x06,
+		0x04,0x01, 0x05,0x01, 0x06,0x01,
 	};
 	size_t sa = sizeof(sigalgs);
 	body[p++] = 0x00; body[p++] = 0x0d;
-	body[p++] = (unsigned char)((sa + 2) >> 8); body[p++] = (unsigned char)((sa + 2) & 0xff);
-	body[p++] = (unsigned char)(sa >> 8); body[p++] = (unsigned char)(sa & 0xff);
+	body[p++] = (unsigned char)((sa + 2) >> 8);
+	body[p++] = (unsigned char)((sa + 2) & 0xff);
+	body[p++] = (unsigned char)(sa >> 8);
+	body[p++] = (unsigned char)(sa & 0xff);
 	memcpy(&body[p], sigalgs, sa); p += sa;
 
-	/* ext: ALPN (0x0010) — h2, http/1.1 */
 	body[p++] = 0x00; body[p++] = 0x10;
-	body[p++] = 0x00; body[p++] = 0x0e;  /* ext data len */
-	body[p++] = 0x00; body[p++] = 0x0c;  /* ALPN list len */
+	body[p++] = 0x00; body[p++] = 0x0e;
+	body[p++] = 0x00; body[p++] = 0x0c;
 	body[p++] = 0x02; body[p++] = 'h'; body[p++] = '2';
 	body[p++] = 0x08; body[p++] = 'h'; body[p++] = 't'; body[p++] = 't'; body[p++] = 'p';
 	body[p++] = '/'; body[p++] = '1'; body[p++] = '.'; body[p++] = '1';
 
-	/* ext: extended_master_secret (0x0017) — empty body */
 	body[p++] = 0x00; body[p++] = 0x17;
 	body[p++] = 0x00; body[p++] = 0x00;
 
-	/* Intentionally NO supported_versions / key_share / psk_kex.
-	 * That would force TLS 1.3 which needs real ephemeral x25519 to
-	 * pass key validation — we'd need to ship mbedtls for that. By
-	 * omitting those, the server falls back to TLS 1.2 (legacy version
-	 * 0x0303 in the CH), which only requires the CH itself to be
-	 * well-formed to trigger a ServerHello + Certificate response
-	 * (~2-8 KB) and let the byte-count stall detector work. */
-
-	/* ext: renegotiation_info (0xff01) — empty (0x00 inner) */
 	body[p++] = 0xff; body[p++] = 0x01;
 	body[p++] = 0x00; body[p++] = 0x01;
 	body[p++] = 0x00;
 
-	/* Close extensions length */
 	size_t ext_len = p - ext_start;
-	body[ext_len_off] = (unsigned char)(ext_len >> 8);
+	body[ext_len_off]     = (unsigned char)(ext_len >> 8);
 	body[ext_len_off + 1] = (unsigned char)(ext_len & 0xff);
 
-	/* Close handshake length */
 	size_t hs_len = p - hs_len_off - 3;
 	body[hs_len_off]     = 0x00;
 	body[hs_len_off + 1] = (unsigned char)(hs_len >> 8);
 	body[hs_len_off + 2] = (unsigned char)(hs_len & 0xff);
 
-	/* Wrap in TLS record */
 	buf[0] = 0x16;
 	buf[1] = 0x03; buf[2] = 0x01;
 	buf[3] = (char)(p >> 8);
@@ -189,13 +135,6 @@ static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host)
 	return p + 5;
 }
 
-/* Connect with timeout. Returns fd on success, -1 on failure.
- *
- * If `raw_bypass` is true, sets SO_MARK = NFQWS2_FWMARK on the socket.
- * The nfqws2 daemon's NFQUEUE iptables rules exclude that mark to
- * prevent re-queue of its own decoy injections; reusing the same mark
- * makes our probe traffic invisible to the bypass pipeline so we can
- * measure the raw TSPU block. */
 #define NFQWS2_FWMARK 0x40000000u
 
 static int connect_tcp_timeout(struct in_addr ip, int port, int timeout_ms,
@@ -210,12 +149,7 @@ static int connect_tcp_timeout(struct in_addr ip, int port, int timeout_ms,
 #ifdef SO_MARK
 	if (raw_bypass) {
 		unsigned mark = NFQWS2_FWMARK;
-		if (setsockopt(fd, SOL_SOCKET, SO_MARK, &mark, sizeof(mark)) != 0) {
-			/* Non-fatal: probe will still run, just through the
-			 * bypass pipeline (the surface area we wanted to avoid).
-			 * Caller may notice a "block disappears" pattern that
-			 * doesn't match LAN reality. */
-		}
+		(void)setsockopt(fd, SOL_SOCKET, SO_MARK, &mark, sizeof(mark));
 	}
 #else
 	(void)raw_bypass;
@@ -232,7 +166,7 @@ static int connect_tcp_timeout(struct in_addr ip, int port, int timeout_ms,
 	int rc = connect(fd, (struct sockaddr *)&sa, sizeof(sa));
 	if (rc == 0) {
 		*connected = true;
-		fcntl(fd, F_SETFL, fl);  /* back to blocking */
+		fcntl(fd, F_SETFL, fl);
 		return fd;
 	}
 	if (errno != EINPROGRESS) {
@@ -259,20 +193,16 @@ static int connect_tcp_timeout(struct in_addr ip, int port, int timeout_ms,
 	}
 
 	*connected = true;
-	fcntl(fd, F_SETFL, fl);  /* back to blocking */
+	fcntl(fd, F_SETFL, fl);
 	return fd;
 }
 
-/* Set SO_RCVTIMEO / SO_SNDTIMEO on fd. */
 static void set_socket_timeout(int fd, int ms) {
 	struct timeval tv = { .tv_sec = ms / 1000, .tv_usec = (ms % 1000) * 1000 };
 	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
-/* Check TCP_INFO to see if server negotiated TS option. On Linux,
- * tcpi_options & TCPI_OPT_TIMESTAMPS is set when server's SYN-ACK
- * carried the TS option. */
 static bool server_negotiated_ts(int fd) {
 #ifdef TCP_INFO
 	struct tcp_info ti;
@@ -289,7 +219,22 @@ static bool server_negotiated_ts(int fd) {
 #endif
 }
 
-/* ---- subprobes ---- */
+/* Server's MSS as reported by TCP_INFO. Phase-1 best-effort proxy for
+ * "is server in slow-start mode?" — full SYN-ACK advertised window
+ * needs raw capture to read accurately. We use snd_mss < 1200 as a
+ * heuristic (many anti-DDoS frontends advertise tiny MSS to slow the
+ * client). Real check would compare advertised cwnd. */
+static uint32_t server_initial_winsize_proxy(int fd) {
+#ifdef TCP_INFO
+	struct tcp_info ti;
+	socklen_t len = sizeof(ti);
+	if (getsockopt(fd, IPPROTO_TCP, TCP_INFO, &ti, &len) != 0) return 0;
+	return (uint32_t)ti.tcpi_snd_mss;
+#else
+	(void)fd;
+	return 0;
+#endif
+}
 
 static bool subprobe_dns(const char *domain, struct in_addr *out_ip) {
 	struct addrinfo hints = {0}, *res = NULL;
@@ -302,9 +247,7 @@ static bool subprobe_dns(const char *domain, struct in_addr *out_ip) {
 }
 
 static bool subprobe_icmp(struct in_addr ip) {
-	/* Non-root best-effort: try SOCK_DGRAM ICMP (Linux feature), fall
-	 * back to silent false. We're running on router as root so real
-	 * SOCK_RAW should also work. */
+#ifdef __linux__
 	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
 	if (fd < 0) {
 		fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -319,12 +262,10 @@ static bool subprobe_icmp(struct in_addr ip) {
 	pkt.h.type = ICMP_ECHO;
 	pkt.h.un.echo.id = htons((uint16_t)getpid());
 	pkt.h.un.echo.sequence = htons(1);
-	/* Checksum is filled by kernel for SOCK_DGRAM ICMP on Linux. For
-	 * SOCK_RAW we'd need to compute it here; Phase 1 accepts best-
-	 * effort (SOCK_DGRAM path). */
 
 	struct sockaddr_in sa = { .sin_family = AF_INET, .sin_addr = ip };
-	if (sendto(fd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+	if (sendto(fd, &pkt, sizeof(pkt), 0,
+	            (struct sockaddr *)&sa, sizeof(sa)) < 0) {
 		close(fd);
 		return false;
 	}
@@ -332,12 +273,15 @@ static bool subprobe_icmp(struct in_addr ip) {
 	ssize_t n = recv(fd, buf, sizeof(buf), 0);
 	close(fd);
 	return n > 0;
+#else
+	(void)ip;
+	return false;
+#endif
 }
 
-/* ---- main entry ---- */
-
-int probe_run(const char *domain, int timeout_sec, probe_result_t *out,
-              struct in_addr *resolved_ip, bool raw_bypass) {
+int probe_run_replica(const char *domain, int timeout_sec,
+                      probe_replica_t *out, struct in_addr *resolved_ip,
+                      bool raw_bypass) {
 	memset(out, 0, sizeof(*out));
 	int64_t t0 = now_ms();
 
@@ -349,7 +293,6 @@ int probe_run(const char *domain, int timeout_sec, probe_result_t *out,
 
 	out->icmp_reachable = subprobe_icmp(*resolved_ip);
 
-	/* TCP connect with 5 s timeout. */
 	bool connected; int cerr;
 	int fd = connect_tcp_timeout(*resolved_ip, 443, 5000, &connected, &cerr,
 	                              raw_bypass);
@@ -360,17 +303,19 @@ int probe_run(const char *domain, int timeout_sec, probe_result_t *out,
 	}
 
 	out->server_ts_negotiated = server_negotiated_ts(fd);
+	out->server_initial_winsize = server_initial_winsize_proxy(fd);
 
-	/* Send ClientHello with SNI = domain itself. */
 	char ch[1024];
 	size_t ch_len = build_client_hello(ch, sizeof(ch), domain);
-	if (ch_len == 0) { close(fd); out->duration_ms = (int)(now_ms() - t0); return -1; }
+	if (ch_len == 0) {
+		close(fd);
+		out->duration_ms = (int)(now_ms() - t0);
+		return -1;
+	}
 
 	set_socket_timeout(fd, 3000);
 	ssize_t sent = send(fd, ch, ch_len, 0);
 	if (sent < 0) {
-		/* EPIPE here = RST right after SYN-ACK before CH data. Unusual
-		 * but possible. */
 		out->server_rst_received = (errno == EPIPE || errno == ECONNRESET);
 		out->rst_after_bytes = 0;
 		close(fd);
@@ -378,14 +323,13 @@ int probe_run(const char *domain, int timeout_sec, probe_result_t *out,
 		return 0;
 	}
 
-	/* Read loop — collect up to 64 KB, note when flow stalls or RSTs. */
 	char rx[65536];
 	size_t total = 0;
 	bool stalled_at_16kb = false;
-	int64_t t_first_byte = 0;
+	int64_t t_first = 0;
 	while (total < sizeof(rx)) {
 		ssize_t n = recv(fd, rx + total, sizeof(rx) - total, 0);
-		if (n == 0) break;  /* orderly close */
+		if (n == 0) break;
 		if (n < 0) {
 			if (errno == ECONNRESET) {
 				out->server_rst_received = true;
@@ -393,28 +337,43 @@ int probe_run(const char *domain, int timeout_sec, probe_result_t *out,
 			}
 			break;
 		}
-		if (t_first_byte == 0) t_first_byte = now_ms();
+		if (t_first == 0) t_first = now_ms();
 		total += n;
 
-		/* Heuristic: if we've been at the 15-17 KB window for ≥1 s
-		 * without progress, it's the TSPU throttle signature. */
 		if (total >= 15000 && total <= 17000) {
-			int64_t t = now_ms();
-			/* peek once more with short timeout to confirm stall */
 			set_socket_timeout(fd, 1500);
 			ssize_t m = recv(fd, rx + total, sizeof(rx) - total, 0);
 			if (m <= 0) { stalled_at_16kb = true; break; }
 			total += m;
 			set_socket_timeout(fd, 3000);
-			(void)t;
 		}
 	}
 	out->size_final = (uint32_t)total;
 	out->size_before_stall = stalled_at_16kb ? (uint32_t)total : 0;
-	out->tls_handshake_ok = total > 0;  /* got at least the ServerHello */
+	out->tls_handshake_ok = total > 0;
 
 	close(fd);
-	(void)timeout_sec;  /* Phase 1: per-probe timeouts hardcoded; total budget wraps caller */
+	(void)timeout_sec;
 	out->duration_ms = (int)(now_ms() - t0);
+	return 0;
+}
+
+int probe_run(const char *domain, int timeout_sec, int replicas,
+              probe_aggregate_t *agg, struct in_addr *resolved_ip,
+              bool raw_bypass) {
+	if (replicas <= 0) replicas = 3;
+	if (replicas > PROBE_REPLICAS_MAX) replicas = PROBE_REPLICAS_MAX;
+
+	memset(agg, 0, sizeof(*agg));
+	agg->replica_count = replicas;
+
+	struct in_addr ip = {0};
+	for (int i = 0; i < replicas; i++) {
+		int rc = probe_run_replica(domain, timeout_sec, &agg->replicas[i],
+		                            &ip, raw_bypass);
+		if (rc < 0) return rc;
+		if (i + 1 < replicas) sleep_ms(400 + (i * 150));
+	}
+	*resolved_ip = ip;
 	return 0;
 }

@@ -9,7 +9,6 @@
  */
 #define _GNU_SOURCE
 #include "inject.h"
-#include "state.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,7 +39,13 @@ int inject_apply(const char *strategy_str, const char *profile_key,
 	if (!strategy_str || !profile_key || !domain) return -1;
 
 	/* Pass strategy_str via env var to avoid shell-quoting hell — the
-	 * string contains colons and equals signs, but no shell metas. */
+	 * string contains colons and equals signs, but no shell metas.
+	 *
+	 * The helper writes dynparams AND pins state.tsv to the correct
+	 * dynamic slot (read from /opt/zapret2/dynamic-slots.conf). We do
+	 * NOT call state_pin here — that would clobber the helper's pin
+	 * with a sentinel-0, which routes traffic to slot=0 instead of
+	 * the dynamic handler slot. */
 	if (setenv("Z2K_STRATEGY", strategy_str, 1) != 0) return -1;
 
 	const char *const argv[] = {
@@ -49,21 +54,14 @@ int inject_apply(const char *strategy_str, const char *profile_key,
 	int rc = run_helper(argv);
 	unsetenv("Z2K_STRATEGY");
 
-	if (rc != 0) return -1;
-
-	/* Pin our domain to the dynamic strategy slot so probe hits it. */
-	const char *path = state_path_pick();
-	return state_pin(path, profile_key, domain, INJECT_DYNAMIC_STRATEGY_ID);
+	return rc == 0 ? 0 : -1;
 }
 
 int inject_revert(const char *profile_key, const char *domain) {
 	if (!profile_key || !domain) return -1;
 
-	/* Unpin first so probe traffic resumes normal rotation if user
-	 * re-runs anything during the regen window. */
-	const char *path = state_path_pick();
-	state_unpin(path, profile_key, domain);
-
+	/* Helper handles dynparams clear + conditional state unpin
+	 * (only unpins if domain isn't in the persistent DB). */
 	const char *const argv[] = {
 		HELPER_PATH, "revert", profile_key, domain, NULL
 	};

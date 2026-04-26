@@ -1,48 +1,53 @@
-/* z2k-classify — per-block-type primitive recipe library.
+/* z2k-classify — field-tested strategy registry.
  *
- * A recipe is a set of "axes" (parameter dimensions), each with a list
- * of values to try. The generator (generator.c) takes the cartesian
- * product (or filtered subset) of axis values and produces concrete
- * nfqws2 --lua-desync= strategy strings to probe.
+ * Replaces the prior "axis-rotation" recipe model. There is NO
+ * cartesian sweep here. For each (block_type × cdn × ts-availability)
+ * tuple, the registry holds ONE composite strategy known from field
+ * reports to work, with a verbatim cite to its source.
  *
- * Each block_type has one or more *families* (e.g. "multisplit-based",
- * "fake-with-decoy-SNI"). Families are tried in priority order — the
- * first family whose enumeration yields a working strategy wins, and
- * we don't bother with the rest.
+ * Selection rule (recipe_for):
+ *   1. Exact match (block, cdn, ts_req).
+ *   2. (block, cdn, ts_req=ANY).
+ *   3. (block, CDN_UNKNOWN, ts_req).
+ *   4. (block, CDN_UNKNOWN, ts_req=ANY).
+ *   5. NULL → "unmapped, escalate to maintainer with pcap".
+ *
+ * No on-the-fly synthesis. If the registry has no entry, the tool
+ * REFUSES to invent one — see ntc.party 21161 + bol-van's stance:
+ * "Что не будет вам одной кнопки никакой и никогда" (d/1990).
  */
 #ifndef Z2K_CLASSIFY_RECIPE_H
 #define Z2K_CLASSIFY_RECIPE_H
 
 #include "types.h"
 
-/* Maximum sizes — recipe library is hand-curated and small. */
-#define RECIPE_MAX_VALUES   16
-#define RECIPE_MAX_AXES      6
-#define RECIPE_MAX_FAMILIES  4
+typedef enum {
+	RECIPE_TS_ANY = 0,
+	RECIPE_TS_REQ_YES,    /* only when probe sees server TS negotiated */
+	RECIPE_TS_REQ_NO,     /* only when probe sees TS NOT negotiated */
+} recipe_ts_req_t;
 
 typedef struct {
-	const char *name;                  /* axis name, e.g. "pos" */
-	const char *values[RECIPE_MAX_VALUES];
-	int count;
-} recipe_axis_t;
+	block_type_t   block;
+	cdn_id_t       cdn;            /* CDN_UNKNOWN = wildcard */
+	recipe_ts_req_t ts_req;
+	const char *profile_key;       /* "rkn_tcp" / "cdn_tls" / "google_tls" */
+	const char *family;            /* "multisplit" / "fake" / "hostfakesplit" / "multidisorder" / "syndata" / "fakedsplit" */
+	const char *params;            /* verbatim, written to /tmp/z2k-classify-dynparams */
+	const char *human_label;
+	const char *cite;              /* source ref (ntc.party / GH issue / discussion) */
+} recipe_entry_t;
 
-typedef struct {
-	const char *family_name;           /* e.g. "multisplit", "fake-decoy" */
-	const char *action;                /* e.g. "multisplit", "fake", "hostfakesplit" */
-	const char *fixed_args;            /* always-present args, e.g. "payload=tls_client_hello:dir=out" */
-	recipe_axis_t axes[RECIPE_MAX_AXES];
-	int axis_count;
-} recipe_family_t;
+/* Pick the most specific recipe for the (block, cdn, has_ts) tuple.
+ * Returns NULL if the tuple is unmapped — caller MUST report
+ * "unmapped, need pcap, escalate" instead of fabricating. */
+const recipe_entry_t *recipe_for(block_type_t block, cdn_id_t cdn, bool has_ts);
 
-typedef struct {
-	block_type_t block;
-	const char *profile_key;           /* matches autocircular "key=" in resulting strategy */
-	recipe_family_t families[RECIPE_MAX_FAMILIES];
-	int family_count;
-} recipe_t;
+/* Identify CDN/hosting from resolved IPv4 address. Returns CDN_UNKNOWN
+ * if address falls outside the curated CIDR table. */
+cdn_id_t cdn_for_ip(struct in_addr ip);
 
-/* Lookup recipe for a block type. Returns NULL if no recipe (caller
- * should report "no generator coverage" to user). */
-const recipe_t *recipe_for_block(block_type_t t);
+/* Human-readable CDN name. */
+const char *cdn_name(cdn_id_t c);
 
 #endif

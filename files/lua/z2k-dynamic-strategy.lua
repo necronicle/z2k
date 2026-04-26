@@ -171,7 +171,7 @@ end
 
 local FAKE_KEYS = {"blob", "repeats", "tcp_seq", "tcp_ack", "tcp_ts",
                    "tcp_md5", "ip_id", "ip_ttl", "ip_autottl",
-                   "tls_mod", "badsum", "payload"}
+                   "tls_mod", "badsum", "fool", "payload"}
 local SPLIT_KEYS = {"pos", "seqovl", "seqovl_pattern", "payload"}
 local HOSTFAKE_KEYS = {"host", "seqovl", "badsum", "tcp_seq", "tcp_ack",
                        "ip_ttl", "repeats", "payload"}
@@ -182,6 +182,32 @@ local function apply_args(desync, params, allowed)
         if params[k] ~= nil then
             desync.arg[k] = params[k]
         end
+    end
+end
+
+-- Compound dispatch: cookbook entries for stubborn hosts (linkedin etc.)
+-- need TWO desync calls in one dynamic slot — production strategy=1 in
+-- rkn_tcp does fake decoy + multisplit as TWO --lua-desync= flags at the
+-- same strategy=N. We replicate that here via prefixed params:
+--   fake_blob, fake_repeats, fake_tcp_ts, fake_tls_mod, fake_fool, ...
+--   mp_pos, mp_seqovl, mp_seqovl_pattern, ...
+-- (mp = multisplit; md = multidisorder).
+local function pick_prefix(params, prefix)
+    local sub = {}
+    local plen = #prefix
+    for k, v in pairs(params) do
+        if #k > plen and k:sub(1, plen) == prefix then
+            sub[k:sub(plen + 1)] = v
+        end
+    end
+    return sub
+end
+
+local function clear_args(desync)
+    if type(desync.arg) == "table" then
+        for k in pairs(desync.arg) do desync.arg[k] = nil end
+    else
+        desync.arg = {}
     end
 end
 
@@ -200,6 +226,36 @@ local function dispatch(ctx, desync, family, params)
         return hostfakesplit(ctx, desync)
     elseif family == "multidisorder" then
         apply_args(desync, params, DISORDER_KEYS)
+        return multidisorder(ctx, desync)
+
+    elseif family == "fake_then_multisplit" then
+        local fp = pick_prefix(params, "fake_")
+        fp.payload = fp.payload or params.payload
+        clear_args(desync); desync.arg.dir = params.dir or "out"
+        desync.arg.payload = fp.payload
+        apply_args(desync, fp, FAKE_KEYS)
+        fake(ctx, desync)
+
+        local mp = pick_prefix(params, "mp_")
+        mp.payload = mp.payload or params.payload
+        clear_args(desync); desync.arg.dir = params.dir or "out"
+        desync.arg.payload = mp.payload
+        apply_args(desync, mp, SPLIT_KEYS)
+        return multisplit(ctx, desync)
+
+    elseif family == "fake_then_multidisorder" then
+        local fp = pick_prefix(params, "fake_")
+        fp.payload = fp.payload or params.payload
+        clear_args(desync); desync.arg.dir = params.dir or "out"
+        desync.arg.payload = fp.payload
+        apply_args(desync, fp, FAKE_KEYS)
+        fake(ctx, desync)
+
+        local md = pick_prefix(params, "md_")
+        md.payload = md.payload or params.payload
+        clear_args(desync); desync.arg.dir = params.dir or "out"
+        desync.arg.payload = md.payload
+        apply_args(desync, md, DISORDER_KEYS)
         return multidisorder(ctx, desync)
     end
 end
