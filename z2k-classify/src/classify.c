@@ -34,6 +34,7 @@ const char *block_type_name(block_type_t t) {
 	case BLOCK_JA3_FILTER:          return "ja3_filter";
 	case BLOCK_ANTI_DDOS_SLOWSTART: return "anti_ddos_slowstart";
 	case BLOCK_IP_LEVEL_CDN:        return "ip_level_cdn";
+	case BLOCK_L3_ISP_DROP:         return "l3_isp_drop";
 	case BLOCK_HYBRID:              return "hybrid";
 	default:                        return "unknown";
 	}
@@ -115,7 +116,33 @@ void classify_infer(classify_result_t *out) {
 		return;
 	}
 
-	/* Rule 2 — TCP timed out everywhere AND ICMP also lost. */
+	/* Rule 2a — Path discovery says trace stops at our ISP's last-mile
+	 * router and never exits to dest. This is L3 null-route by the ISP
+	 * (МТС on Pushwoosh per Михаил's case 2026-04-26: trace died at
+	 * a197-cr07 МТС.msk; pushbr.com unreachable). DPI tactics WILL NOT
+	 * help — packets never leave the ISP AS. VPN/proxy only.
+	 *
+	 * Detected: trace_attempted AND !reaches_dest AND last_live_ttl > 0
+	 *           AND last hop's revdns matches a known ISP suffix. */
+	if (a->trace_attempted && !a->trace_reaches_dest &&
+	    a->trace_last_live_ttl > 0 && a->trace_isp_name[0]) {
+		out->block_type = BLOCK_L3_ISP_DROP;
+		snprintf(out->reason, sizeof(out->reason),
+		         "L3 null-route inside %s (last live hop %d: %s). "
+		         "Packets never exit the ISP AS toward the destination "
+		         "— not a DPI block. DPI bypass strategies will NOT help. "
+		         "Use VPN/proxy, or if the destination is on a CDN with "
+		         "alternate anycast IPs, try a hosts override.",
+		         a->trace_isp_name, a->trace_last_live_ttl,
+		         a->trace_last_revdns[0] ? a->trace_last_revdns
+		                                 : "(no rdns)");
+		snprintf(out->recommended, sizeof(out->recommended),
+		         "VPN/proxy (or hosts_override if CDN has alt anycast)");
+		return;
+	}
+
+	/* Rule 2b — TCP timed out everywhere AND ICMP also lost (no trace
+	 * data either). Generic transit drop. */
 	if (a->tcp_connect_success_count == 0 && !a->icmp_reachable) {
 		out->block_type = BLOCK_TRANSIT_DROP;
 		snprintf(out->reason, sizeof(out->reason),

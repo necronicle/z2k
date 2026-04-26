@@ -31,4 +31,10 @@ int probe_run(const char *domain, int timeout_sec, int replicas,
               probe_aggregate_t *agg, struct in_addr *resolved_ip,
               bool raw_bypass);
 
+/* Path probe — spawn `/opt/bin/traceroute` (BusyBox) against dest IP,
+ * parse hop list, populate agg->trace_*. Reverse-DNS lookup on last
+ * live hop. ISP detection by revdns suffix match. No-op (sets
+ * trace_attempted=false) if traceroute binary not available. */
+int probe_trace_path(struct in_addr dest, probe_aggregate_t *agg);
+
 #endif

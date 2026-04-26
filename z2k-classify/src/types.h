@@ -22,6 +22,7 @@ typedef enum {
 	BLOCK_JA3_FILTER,             /* response diverges for real-browser JA3 */
 	BLOCK_ANTI_DDOS_SLOWSTART,    /* server window<expected — NOT DPI, escalate */
 	BLOCK_IP_LEVEL_CDN,           /* per-CIDR whitelist — only hosts override works */
+	BLOCK_L3_ISP_DROP,            /* ISP null-routes the dest IP — VPN/proxy only */
 	BLOCK_HYBRID,                 /* multiple positive symptoms */
 	BLOCK_UNKNOWN,
 	BLOCK_COUNT_
@@ -63,7 +64,16 @@ typedef struct {
 
 #define PROBE_REPLICAS_MAX 5
 
-/* Aggregate over N probe replicas. */
+/* Traceroute hop record. */
+#define TRACE_MAX_HOPS 16
+
+typedef struct {
+	struct in_addr ip;
+	bool responded;             /* true if this TTL got an ICMP TIME_EXCEEDED */
+	char revdns[128];           /* populated only for last live hop (lazy) */
+} trace_hop_t;
+
+/* Aggregate over N probe replicas + path discovery. */
 typedef struct {
 	probe_replica_t replicas[PROBE_REPLICAS_MAX];
 	int  replica_count;
@@ -82,6 +92,19 @@ typedef struct {
 	uint32_t max_size_final;
 	uint32_t min_server_winsize;      /* lowest seen — antiddos signal if <1500 */
 	int  total_duration_ms;
+
+	/* Path probe (one-shot, not per replica). Surfaces the difference
+	 * between L3 ISP null-route (МТС on Pushwoosh) and DPI-layer block
+	 * (МГТС on Cloudflare): in the L3 case packets never exit the ISP
+	 * AS, so any DPI bypass strategy is wasted. */
+	trace_hop_t trace_hops[TRACE_MAX_HOPS];
+	int  trace_max_ttl_tried;
+	int  trace_last_live_ttl;          /* highest TTL that got an ICMP reply */
+	bool trace_reaches_dest;           /* true if any hop's IP == resolved_ip */
+	bool trace_attempted;              /* false if traceroute binary missing */
+	char trace_isp_name[64];           /* matched ISP from last-hop revdns; "" if none */
+	char trace_last_revdns[128];       /* reverse DNS of last live hop */
+	struct in_addr trace_last_live_ip;
 } probe_aggregate_t;
 
 /* Full classification output. */

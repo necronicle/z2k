@@ -347,13 +347,69 @@ static const recipe_entry_t g_recipes[] = {
 	},
 
 	/* ============================================================
-	 * BLOCK_IP_LEVEL_CDN — per-CIDR whitelist (МГТС on CF). NO DPI
-	 * strategy works — only `hosts` override to a different CF
-	 * anycast IP. Generator emits no strategy here — main.c reports
-	 * the L3-routing-trick advice instead.
+	 * BLOCK_L3_ISP_DROP — ISP null-routes the dest IP. NO DPI strategy
+	 * works (packets never exit the ISP AS). For CDNs with multiple
+	 * anycast subnets the L3 routing trick may help: override DNS to
+	 * an alternate anycast IP that the ISP doesn't block.
+	 *
+	 * Field-validated for МГТС on Cloudflare (Михаил 2026-04-26):
+	 * 2.58.104.1 worked when 104.16.x range was DPI-blocked.
+	 * Per ntc.party 21161 #354–374 (jestxfot МГТС-residential):
+	 * 2.58.104.1 was the canonical alternate that bypassed МГТС's
+	 * per-CIDR whitelist on CF.
 	 * ============================================================ */
 
-	/* No entry. Lookup returns NULL → main.c handles separately. */
+	{
+		.block = BLOCK_L3_ISP_DROP,
+		.cdn = CDN_CLOUDFLARE,
+		.ts_req = RECIPE_TS_ANY,
+		.profile_key = "rkn_tcp",
+		.family = "hosts_override",
+		.params = "alt_ips=2.58.104.1,162.159.36.1,162.159.200.1,172.67.0.1",
+		.human_label = "CF L3 bypass: hosts override → alt anycast",
+		.cite = "ntc.party 21161 #354-374 (jestxfot МГТС) + Михаил 2026-04-26",
+	},
+
+	{
+		.block = BLOCK_L3_ISP_DROP,
+		.cdn = CDN_OVH,
+		.ts_req = RECIPE_TS_ANY,
+		.profile_key = "rkn_tcp",
+		.family = "hosts_override",
+		.params = "alt_ips=51.68.0.1,51.83.0.1,54.36.0.1,188.165.0.1",
+		.human_label = "OVH L3 bypass: hosts override → alt range",
+		.cite = "OVH AS16276 alt subnets",
+	},
+
+	{
+		.block = BLOCK_L3_ISP_DROP,
+		.cdn = CDN_CLOUDFRONT,
+		.ts_req = RECIPE_TS_ANY,
+		.profile_key = "rkn_tcp",
+		.family = "hosts_override",
+		.params = "alt_ips=13.224.0.1,52.84.0.1,99.84.0.1,143.204.0.1",
+		.human_label = "CloudFront L3 bypass: hosts override → alt range",
+		.cite = "AWS CloudFront edge subnets",
+	},
+
+	/* ============================================================
+	 * BLOCK_IP_LEVEL_CDN — per-CIDR whitelist (МГТС on CF). NO DPI
+	 * strategy works — only `hosts` override to a different CF
+	 * anycast IP. Same hosts_override applies; classifier currently
+	 * doesn't auto-route into this type — kept here for future when
+	 * we distinguish from RKN_RST + probabilistic.
+	 * ============================================================ */
+
+	{
+		.block = BLOCK_IP_LEVEL_CDN,
+		.cdn = CDN_CLOUDFLARE,
+		.ts_req = RECIPE_TS_ANY,
+		.profile_key = "rkn_tcp",
+		.family = "hosts_override",
+		.params = "alt_ips=2.58.104.1,162.159.36.1,162.159.200.1,172.67.0.1",
+		.human_label = "CF per-CIDR whitelist bypass: alt anycast",
+		.cite = "ntc.party 21161 #354-374",
+	},
 
 	/* ============================================================
 	 * BLOCK_ANTI_DDOS_SLOWSTART — server window<expected. NOT DPI.

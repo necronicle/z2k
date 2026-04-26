@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
@@ -20,6 +21,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
@@ -375,5 +377,234 @@ int probe_run(const char *domain, int timeout_sec, int replicas,
 		if (i + 1 < replicas) sleep_ms(400 + (i * 150));
 	}
 	*resolved_ip = ip;
+	return 0;
+}
+
+/* ---- traceroute subprobe ---- */
+
+#define TRACEROUTE_BIN "/opt/bin/traceroute"
+
+/* ISP suffix → name. Last entry { NULL, NULL } sentinel. */
+static const struct {
+	const char *suffix;
+	const char *name;
+} g_isp_suffixes[] = {
+	{ "mts-internet.net", "МТС" },
+	{ "mgts.ru",          "МГТС" },
+	{ "umt.ru",           "МТС" },
+	{ ".rt.ru",           "Ростелеком" },
+	{ "rostelecom",       "Ростелеком" },
+	{ "tmpu",             "Ростелеком" },
+	{ "beeline.ru",       "Билайн" },
+	{ "corbina.net",      "Билайн (Corbina)" },
+	{ "comcor",           "Билайн (Corbina)" },
+	{ "domru.ru",         "Дом.ру" },
+	{ "ertelecom",        "Дом.ру (ЭР-Телеком)" },
+	{ "tele2.ru",         "T2" },
+	{ "t2ru.ru",          "T2" },
+	{ "megafon.ru",       "МегаФон" },
+	{ "metrocom",         "МегаФон" },
+	{ "intersvyaz",       "Интерсвязь" },
+	{ "novotelecom",      "Новотелеком" },
+	{ "freedom",          "Freedom" },
+	{ NULL, NULL }
+};
+
+static const char *isp_for_revdns(const char *revdns) {
+	if (!revdns || !*revdns) return "";
+	for (int i = 0; g_isp_suffixes[i].suffix; i++) {
+		if (strstr(revdns, g_isp_suffixes[i].suffix)) {
+			return g_isp_suffixes[i].name;
+		}
+	}
+	return "";
+}
+
+/* Parse one traceroute output line, e.g.:
+ *   " 6  mag9-cr03-be12.51.msk.mts-internet.net (212.188.6.44)  11.000 ms"
+ *   " 5  *"
+ *   " 4  10.109.11.125 (10.109.11.125)  8.000 ms"
+ * Output: ttl, host_or_star, ip4. Returns 1 on success, 0 if not a hop
+ * line, -1 on parse error.
+ */
+static int parse_trace_line(const char *line, int *out_ttl,
+                            char *out_host, size_t hostsz,
+                            struct in_addr *out_ip, bool *out_responded) {
+	while (*line == ' ' || *line == '\t') line++;
+	if (!isdigit((unsigned char)*line)) return 0;
+
+	int ttl = 0;
+	while (isdigit((unsigned char)*line)) {
+		ttl = ttl * 10 + (*line - '0');
+		line++;
+	}
+	*out_ttl = ttl;
+
+	while (*line == ' ' || *line == '\t') line++;
+	if (*line == '*') {
+		*out_responded = false;
+		out_host[0] = '\0';
+		out_ip->s_addr = 0;
+		return 1;
+	}
+
+	/* Could be "host (ip)" or just "ip". Find '(' for the parenthesized form. */
+	const char *paren = strchr(line, '(');
+	const char *end_paren = paren ? strchr(paren, ')') : NULL;
+
+	if (paren && end_paren && end_paren > paren + 1) {
+		size_t name_len = (size_t)(paren - line);
+		while (name_len > 0 && (line[name_len - 1] == ' ' ||
+		                        line[name_len - 1] == '\t')) name_len--;
+		if (name_len >= hostsz) name_len = hostsz - 1;
+		memcpy(out_host, line, name_len);
+		out_host[name_len] = '\0';
+
+		char ipbuf[64];
+		size_t ip_len = (size_t)(end_paren - paren - 1);
+		if (ip_len >= sizeof(ipbuf)) ip_len = sizeof(ipbuf) - 1;
+		memcpy(ipbuf, paren + 1, ip_len);
+		ipbuf[ip_len] = '\0';
+		if (inet_aton(ipbuf, out_ip) == 0) {
+			out_ip->s_addr = 0;
+			*out_responded = false;
+			return 1;
+		}
+	} else {
+		/* Bare IP form. */
+		char ipbuf[64];
+		size_t i = 0;
+		while (line[i] && line[i] != ' ' && line[i] != '\t' &&
+		       i + 1 < sizeof(ipbuf)) {
+			ipbuf[i] = line[i]; i++;
+		}
+		ipbuf[i] = '\0';
+		if (inet_aton(ipbuf, out_ip) == 0) {
+			out_ip->s_addr = 0;
+			out_host[0] = '\0';
+			*out_responded = false;
+			return 1;
+		}
+		snprintf(out_host, hostsz, "%s", ipbuf);
+	}
+	*out_responded = true;
+	return 1;
+}
+
+/* Reverse-DNS the last live hop. Tries getnameinfo first, falls back
+ * to spawning `nslookup` because static-musl resolver behavior varies
+ * and we already depend on busybox utils for traceroute. */
+static void revdns_lookup(struct in_addr ip, char *out, size_t outsz) {
+	out[0] = '\0';
+
+	struct sockaddr_in sa = {0};
+	sa.sin_family = AF_INET;
+	sa.sin_addr = ip;
+	if (getnameinfo((struct sockaddr *)&sa, sizeof(sa),
+	                out, (socklen_t)outsz, NULL, 0,
+	                NI_NAMEREQD) == 0 && out[0]) {
+		return;
+	}
+	out[0] = '\0';
+
+	/* Fallback: spawn nslookup. Output (busybox):
+	 *   Server:    127.0.0.1
+	 *   ...
+	 *   Name:      88.87.67.34
+	 *   Address 1: 88.87.67.34 lag-7-435.bbr01.voronezh.ertelecom.ru
+	 * We grep for the last "Address" line and extract the trailing host. */
+	char ipbuf[INET_ADDRSTRLEN];
+	if (!inet_ntop(AF_INET, &ip, ipbuf, sizeof(ipbuf))) return;
+	char cmd[128];
+	snprintf(cmd, sizeof(cmd), "nslookup %s 2>/dev/null", ipbuf);
+	FILE *fp = popen(cmd, "r");
+	if (!fp) return;
+	char line[512];
+	while (fgets(line, sizeof(line), fp)) {
+		/* Expected fragment: "Address[ N]:[space]IP[space]NAME" — pull
+		 * the last whitespace-separated token if it's not the IP. */
+		if (strncmp(line, "Address", 7) != 0) continue;
+		const char *colon = strchr(line, ':');
+		if (!colon) continue;
+		const char *p = colon + 1;
+		while (*p == ' ' || *p == '\t') p++;
+		/* skip the IP and following whitespace */
+		while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+		while (*p == ' ' || *p == '\t') p++;
+		if (!*p || *p == '\n') continue;
+		size_t n = 0;
+		while (p[n] && p[n] != ' ' && p[n] != '\t' &&
+		       p[n] != '\n' && n + 1 < outsz) {
+			out[n] = p[n]; n++;
+		}
+		out[n] = '\0';
+		if (n > 0) break;
+	}
+	pclose(fp);
+}
+
+int probe_trace_path(struct in_addr dest, probe_aggregate_t *agg) {
+	struct stat st;
+	if (stat(TRACEROUTE_BIN, &st) != 0) {
+		agg->trace_attempted = false;
+		return 0;
+	}
+	agg->trace_attempted = true;
+
+	char ipbuf[INET_ADDRSTRLEN];
+	if (!inet_ntop(AF_INET, &dest, ipbuf, sizeof(ipbuf))) return -1;
+
+	char cmd[256];
+	snprintf(cmd, sizeof(cmd),
+	         TRACEROUTE_BIN " -n -m %d -w 2 -q 1 %s 2>/dev/null",
+	         TRACE_MAX_HOPS, ipbuf);
+
+	FILE *fp = popen(cmd, "r");
+	if (!fp) return -1;
+
+	char line[1024];
+	int max_ttl = 0;
+	int last_live = 0;
+	struct in_addr last_live_ip = {0};
+	bool reaches_dest = false;
+	while (fgets(line, sizeof(line), fp)) {
+		int ttl = 0;
+		char host[128] = {0};
+		struct in_addr hip = {0};
+		bool responded = false;
+		int rc = parse_trace_line(line, &ttl, host, sizeof(host),
+		                           &hip, &responded);
+		if (rc != 1) continue;
+		if (ttl < 1 || ttl > TRACE_MAX_HOPS) continue;
+		max_ttl = (ttl > max_ttl) ? ttl : max_ttl;
+		trace_hop_t *h = &agg->trace_hops[ttl - 1];
+		h->ip = hip;
+		h->responded = responded;
+		if (responded) {
+			last_live = ttl;
+			last_live_ip = hip;
+			if (host[0]) snprintf(h->revdns, sizeof(h->revdns), "%s", host);
+			if (hip.s_addr == dest.s_addr) {
+				reaches_dest = true;
+			}
+		}
+	}
+	pclose(fp);
+
+	agg->trace_max_ttl_tried = max_ttl;
+	agg->trace_last_live_ttl = last_live;
+	agg->trace_reaches_dest = reaches_dest;
+	agg->trace_last_live_ip = last_live_ip;
+
+	if (last_live > 0) {
+		/* Resolve last hop's revdns properly via getnameinfo if -n
+		 * suppressed it. */
+		revdns_lookup(last_live_ip, agg->trace_last_revdns,
+		              sizeof(agg->trace_last_revdns));
+		const char *isp = isp_for_revdns(agg->trace_last_revdns);
+		snprintf(agg->trace_isp_name, sizeof(agg->trace_isp_name),
+		         "%s", isp ? isp : "");
+	}
+
 	return 0;
 }

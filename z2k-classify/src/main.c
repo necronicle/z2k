@@ -71,6 +71,69 @@ static int build_strategy_str(const recipe_entry_t *r, char *buf, size_t bufsz) 
 	return n;
 }
 
+/* hosts_override family is NOT a DPI desync — it's a DNS-resolution
+ * override (Keenetic `ip host` / static DNS records). We can't apply
+ * it from inside this binary safely (would need ndmsystem CLI access
+ * + revert logic), so we emit copy-paste commands for the user.
+ * Auto-apply is the Phase-3 task. */
+static void emit_hosts_override(classify_result_t *res,
+                                 const recipe_entry_t *r, bool quiet) {
+	const char *params = r->params ? r->params : "";
+	const char *p = strstr(params, "alt_ips=");
+	if (!p) {
+		snprintf(res->apply_note, sizeof(res->apply_note),
+		         "hosts_override recipe missing alt_ips param");
+		return;
+	}
+	p += 8;
+
+	if (!quiet) {
+		fprintf(stderr,
+		        "\nL3 routing trick — DPI bypass won't help here.\n"
+		        "%s anycasts the same SNI to many IPs; the ISP blocks\n"
+		        "some subnets but not others. Override DNS to an alt\n"
+		        "anycast that's reachable.\n\n"
+		        "On Keenetic CLI try alt IPs in order until one works:\n",
+		        cdn_name(res->cdn));
+	}
+
+	int n = 0;
+	const char *start = p;
+	char buf[3072];
+	size_t blen = 0;
+	blen += snprintf(buf + blen, sizeof(buf) - blen,
+	                 "Try each alt-IP until cloudflare opens in browser. "
+	                 "After each, run `system configuration save` to "
+	                 "persist. Alt-IPs to try: ");
+	while (*start && blen + 32 < sizeof(buf)) {
+		const char *comma = strchr(start, ',');
+		size_t len = comma ? (size_t)(comma - start) : strlen(start);
+		char ip[32];
+		if (len >= sizeof(ip)) len = sizeof(ip) - 1;
+		memcpy(ip, start, len); ip[len] = '\0';
+
+		if (!quiet) {
+			fprintf(stderr,
+			        "  ip host %s %s\n"
+			        "  ip host www.%s %s\n"
+			        "  system configuration save\n"
+			        "  (then clear browser DNS cache and retest)\n\n",
+			        res->domain, ip, res->domain, ip);
+		}
+		blen += snprintf(buf + blen, sizeof(buf) - blen,
+		                 "%s%s", n > 0 ? ", " : "", ip);
+		n++;
+		if (!comma) break;
+		start = comma + 1;
+	}
+
+	res->apply_succeeded = true;   /* recommendation emitted; user acts */
+	res->winner_strategy = -2;     /* sentinel for "manual L3 trick" */
+	snprintf(res->apply_note, sizeof(res->apply_note),
+	         "MANUAL: %s. %s",
+	         r->human_label, buf);
+}
+
 /* Phase 2 — single composite recipe lookup + apply + post-probe. */
 static void apply_phase(classify_result_t *res, bool dry_run, bool quiet) {
 	res->apply_attempted = true;
@@ -103,6 +166,14 @@ static void apply_phase(classify_result_t *res, bool dry_run, bool quiet) {
 	         "%s", r->human_label);
 	snprintf(res->winner_cite, sizeof(res->winner_cite),
 	         "%s", r->cite);
+
+	/* Special path: hosts_override is a manual L3 routing trick, not a
+	 * lua-handler family. Emit instructions, no inject/probe. */
+	if (strcmp(r->family, "hosts_override") == 0) {
+		emit_hosts_override(res, r, quiet);
+		(void)dry_run;
+		return;
+	}
 
 	char strategy_str[2048];
 	if (build_strategy_str(r, strategy_str, sizeof(strategy_str)) < 0) {
@@ -185,30 +256,33 @@ static void apply_phase(classify_result_t *res, bool dry_run, bool quiet) {
 		fflush(stderr);
 	}
 
-	/* Special case: TSPU_16KB or RKN_RST on Cloudflare that survives our
-	 * Beeline-validated padencap → almost certainly per-CIDR whitelist
-	 * (МГТС-pattern). Recommend L3 routing trick. */
-	if (res->cdn == CDN_CLOUDFLARE &&
-	    (res->block_type == BLOCK_TSPU_16KB ||
-	     res->block_type == BLOCK_RKN_RST ||
-	     res->agg.is_probabilistic)) {
-		snprintf(res->apply_note, sizeof(res->apply_note),
-		         "Tried %s but post-probe still %s. CDN=Cloudflare on a "
-		         "stubborn ASN (МГТС-pattern per ntc.party 21161 #354-374). "
-		         "DPI bypass NOT going to help — try L3 routing trick: "
-		         "Keenetic webpanel → Static DNS → override "
-		         "%s → 2.58.104.1 (or 162.159.36.1, 162.159.200.1). "
-		         "Field-validated by jestxfot.",
-		         r->human_label, block_type_name(after.block_type),
-		         res->domain);
-	} else {
-		snprintf(res->apply_note, sizeof(res->apply_note),
-		         "Tried %s but post-probe still %s. Recipe was the best "
-		         "field-validated entry for (block=%s, cdn=%s); failure "
-		         "suggests local TSPU variant — escalate with pcap.",
-		         r->human_label, block_type_name(after.block_type),
-		         block_type_name(res->block_type), cdn_name(res->cdn));
+	/* Cascade: stubborn CF/OVH/CloudFront cases (МГТС-residential
+	 * pattern, ntc.party 21161 #354-374) — DPI cookbook is exhausted,
+	 * automatically fall through to hosts_override emission. We use
+	 * BLOCK_L3_ISP_DROP × cdn lookup to fetch the curated alt-anycast
+	 * list. */
+	if (res->cdn == CDN_CLOUDFLARE || res->cdn == CDN_OVH ||
+	    res->cdn == CDN_CLOUDFRONT) {
+		const recipe_entry_t *fb = recipe_for(BLOCK_L3_ISP_DROP,
+		                                       res->cdn, has_ts);
+		if (fb && strcmp(fb->family, "hosts_override") == 0) {
+			if (!quiet) {
+				fprintf(stderr,
+				        "DPI exhausted — cascading to hosts_override "
+				        "(stubborn-CDN fallback)\n");
+				fflush(stderr);
+			}
+			emit_hosts_override(res, fb, quiet);
+			return;
+		}
 	}
+
+	snprintf(res->apply_note, sizeof(res->apply_note),
+	         "Tried %s but post-probe still %s. Recipe was the best "
+	         "field-validated entry for (block=%s, cdn=%s); failure "
+	         "suggests local TSPU variant — escalate with pcap.",
+	         r->human_label, block_type_name(after.block_type),
+	         block_type_name(res->block_type), cdn_name(res->cdn));
 }
 
 /* ---------------- output formatters ---------------- */
@@ -244,6 +318,23 @@ static void print_text_result(const classify_result_t *r) {
 	if (a->min_server_winsize > 0) {
 		printf("  server_snd_mss:       %u\n", a->min_server_winsize);
 	}
+	if (a->trace_attempted) {
+		printf("path:\n");
+		printf("  reaches_dest:         %s (last live hop %d/%d)\n",
+		       a->trace_reaches_dest ? "yes" : "no",
+		       a->trace_last_live_ttl, a->trace_max_ttl_tried);
+		if (a->trace_last_live_ttl > 0) {
+			char hopbuf[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, &a->trace_last_live_ip, hopbuf, sizeof(hopbuf));
+			printf("  last_hop_ip:          %s\n", hopbuf);
+			if (a->trace_last_revdns[0]) {
+				printf("  last_hop_revdns:      %s\n", a->trace_last_revdns);
+			}
+			if (a->trace_isp_name[0]) {
+				printf("  isp_match:            %s\n", a->trace_isp_name);
+			}
+		}
+	}
 
 	printf("block_type:       %s\n", block_type_name(r->block_type));
 	printf("reason:           %s\n", r->reason);
@@ -261,8 +352,10 @@ static void print_text_result(const classify_result_t *r) {
 		printf("  unmapped:           %s\n", r->unmapped ? "yes" : "no");
 		printf("  succeeded:          %s\n", r->apply_succeeded ? "yes" : "no");
 		if (r->apply_succeeded && r->winner_strategy != 0) {
-			if (r->winner_strategy < 0) {
+			if (r->winner_strategy == -1) {
 				printf("  winner:             reverted (--dry-run)\n");
+			} else if (r->winner_strategy == -2) {
+				printf("  winner:             MANUAL — see commands above\n");
 			} else {
 				printf("  winner_strategy:    %d\n", r->winner_strategy);
 				printf("  winner_profile:     %s\n", r->winner_profile);
@@ -424,6 +517,28 @@ int main(int argc, char **argv) {
 	res.resolved_ip = ip;
 	classify_aggregate(&res.agg);
 	res.cdn = res.agg.dns_ok ? cdn_for_ip(ip) : CDN_UNKNOWN;
+
+	/* Path discovery (one-shot). Surfaces L3 ISP null-route vs DPI block. */
+	if (res.agg.dns_ok) {
+		if (!quiet) { fprintf(stderr, "tracing path... "); fflush(stderr); }
+		probe_trace_path(ip, &res.agg);
+		if (!quiet) {
+			if (!res.agg.trace_attempted) {
+				fprintf(stderr, "(no traceroute binary)\n");
+			} else if (res.agg.trace_reaches_dest) {
+				fprintf(stderr, "reaches dest in %d hops\n",
+				        res.agg.trace_last_live_ttl);
+			} else if (res.agg.trace_isp_name[0]) {
+				fprintf(stderr, "stops at %s (hop %d)\n",
+				        res.agg.trace_isp_name, res.agg.trace_last_live_ttl);
+			} else {
+				fprintf(stderr, "stops mid-path at hop %d\n",
+				        res.agg.trace_last_live_ttl);
+			}
+			fflush(stderr);
+		}
+	}
+
 	classify_infer(&res);
 
 	if (!quiet) {
@@ -438,6 +553,9 @@ int main(int argc, char **argv) {
 	    res.block_type != BLOCK_TRANSIT_DROP &&
 	    res.block_type != BLOCK_MOBILE_ICMP &&
 	    res.block_type != BLOCK_ANTI_DDOS_SLOWSTART) {
+		/* L3_ISP_DROP gets a recipe lookup too — for CDN matches, the
+		 * cookbook returns a hosts_override entry that emits manual
+		 * `ip host` instructions instead of running DPI inject. */
 		apply_phase(&res, dry_run, quiet);
 	} else if (want_apply && !quiet) {
 		fprintf(stderr,
