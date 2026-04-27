@@ -13,3 +13,10 @@ numista.com
 rua.gr
 enimerosi.com
 katzauction.com
+
+# Tapo IoT cameras (от Vladislav Kravchenko @kvv213) — Mosline (МО) DPI режет
+# TLS handshake к их облаку. Камеры не видны наружу пока home-облако TP-Link
+# недоступно.
+security.iot.i.tplinknbu.com
+euw1-device-cloudgateway.iot.i.tplinknbu.com
+tapo.com
