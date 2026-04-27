@@ -1834,7 +1834,11 @@ step_finalize() {
             local tg_dest="/opt/sbin/tg-mtproxy-client"
             local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
             rm -f "$tg_dest"
-            curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$tg_dest" 2>/dev/null
+            # z2k_fetch — 4-layer fallback (raw → jsdelivr → gh-proxy → DoH+pin)
+            # вместо одиночного curl. Прямой curl у юзеров с TSPU-блоком github
+            # либо IPv6-issue падал в 0 байт, потому что не было ни одного
+            # резервного источника (issue #2026-04-27).
+            z2k_fetch "$tg_url" "$tg_dest" 2>/dev/null || true
             local tg_size
             tg_size=$(wc -c < "$tg_dest" 2>/dev/null || echo 0)
             # Validate: exists, >500KB, starts with ELF magic (\x7fELF), runs without crash
