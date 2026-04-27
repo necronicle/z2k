@@ -848,11 +848,37 @@ step_build_zapret2() {
     # Copy IP lists (Roblox, Telegram) + extra-domains.txt (shipped extras
     # from files/lists/ that z2k curates on top of runetfreedom RKN list).
     mkdir -p "${ZAPRET2_DIR}/lists"
-    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt extra-domains.txt; do
+    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
     done
+
+    # extra-domains.txt: preserve user-added lines across reinstall.
+    # Юзеры пишут свои домены через `echo >> extra-domains.txt`. До этой
+    # правки `cp -f` затирал их при переустановке. Сейчас diff'им против
+    # shipped версии и user-only строки append'им к новой shipped после
+    # копирования.
+    if [ -f "${WORK_DIR}/files/lists/extra-domains.txt" ]; then
+        local shipped="${WORK_DIR}/files/lists/extra-domains.txt"
+        local installed="${ZAPRET2_DIR}/lists/extra-domains.txt"
+        local user_extras=""
+        if [ -f "$installed" ]; then
+            # Строки которые есть в installed, но НЕТ в shipped — пользовательские.
+            user_extras=$(grep -vxFf "$shipped" "$installed" 2>/dev/null \
+                | grep -vE '^#|^$' \
+                | grep -vE '^# === user-added')
+        fi
+        cp -f "$shipped" "$installed" 2>/dev/null || true
+        if [ -n "$user_extras" ]; then
+            {
+                echo ""
+                echo "# === user-added (preserved across reinstall) ==="
+                printf '%s\n' "$user_extras"
+            } >> "$installed"
+            print_info "Сохранены пользовательские записи в extra-domains.txt ($(printf '%s\n' "$user_extras" | wc -l | tr -d ' ') строк)"
+        fi
+    fi
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then
