@@ -20,6 +20,47 @@ z2k_fix_cron_perms() {
 }
 
 # ==============================================================================
+# MIGRATION: cleanup legacy ip host записей от снесённых модулей 2026-04-27
+# ==============================================================================
+# Между коммитами bb3fcba..a3e9c59 (DNS→Router migration, force-push'нут revert'ом)
+# install.sh пропихнул в Keenetic running-config:
+#   - 5 github записей на 213.176.74.63 (Module 1 github bootstrap)
+#   - до 130 записей AI/media на 213.176.74.63 (Module 2 cloak_hosts.txt)
+#   - 2 cloudflare записи на 2.58.104.1 если AS25513 (Module 3 МГТС)
+#
+# Force-push снёс код, но записи в running-config persistent (system save).
+# Юзеры с этого окна страдают: github проксируется через VPS Frankfurt → 5-10x
+# медленнее, AI-домены идут через мёртвый теперь nginx-cloak-passthrough.
+#
+# Этот cleanup при каждом install убирает любые ip host записи с нашими VPS-IP
+# и MГТС CF alt-anycast. Idempotent: на чистом роутере noop.
+cleanup_legacy_ip_hosts() {
+    command -v ndmc >/dev/null 2>&1 || return 0
+    local entries
+    entries=$(ndmc -c "show running-config" 2>/dev/null \
+        | awk '/^ip host/ && ($4 == "213.176.74.63" || $4 == "79.137.196.7" || $4 == "2.58.104.1") {print}')
+    [ -z "$entries" ] && return 0
+
+    local removed=0 line
+    local IFS_orig="$IFS"
+    IFS='
+'
+    for line in $entries; do
+        IFS="$IFS_orig"
+        ndmc -c "no $line" >/dev/null 2>&1 && removed=$((removed + 1))
+        IFS='
+'
+    done
+    IFS="$IFS_orig"
+
+    if [ "$removed" -gt 0 ]; then
+        ndmc -c "system configuration save" >/dev/null 2>&1
+        print_info "Migration: очищено $removed legacy ip host записей (DNS→Router 2026-04-27)"
+    fi
+    return 0
+}
+
+# ==============================================================================
 # ШАГ 0: ПРОВЕРКА ROOT ПРАВ (КРИТИЧНО)
 # ==============================================================================
 
@@ -2032,6 +2073,13 @@ run_full_install() {
 
     # Выполнить все шаги последовательно
     step_check_root || return 1                    # ← НОВОЕ (0/12)
+
+    # Migration: вычистить legacy ip host записи от модулей DNS→Router (снесены
+    # 2026-04-27 force-push'ем). Без этого юзеры с этого окна установки имеют
+    # 130+ записей на VPS-IP в Keenetic config, github проксируется через
+    # Frankfurt → x5-10 медленнее. Idempotent — на чистом роутере ничего не делает.
+    cleanup_legacy_ip_hosts
+
     step_update_packages || return 1               # 1/12
     step_check_dns || return 1                     # ← НОВОЕ (2/12)
     step_install_dependencies || return 1          # 3/12 (расширено)
