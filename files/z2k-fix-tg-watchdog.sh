@@ -35,6 +35,11 @@ BIN=/opt/sbin/tg-mtproxy-client
 INIT=/opt/etc/init.d/S98tg-tunnel
 STATE=/tmp/tg-tunnel-watchdog.state
 PROBE_URL=https://core.telegram.org/
+# IP-пин в TG CIDR (149.154.160.0/20) — без него curl каждую минуту дёргает
+# DNS-резолв через https-dns-proxy, и если у юзера DoH с anti-bot rate-limit
+# (geohide и т.п.) — лог сыпет 403. REDIRECT отправит трафик в туннель
+# независимо от конкретного IP в --resolve.
+PROBE_RESOLVE_IP=149.154.167.99
 
 [ -x "$BIN" ] || exit 0
 
@@ -76,7 +81,9 @@ if ! pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
 fi
 
 # 2) Active end-to-end probe through the tunnel.
-if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null "$PROBE_URL" 2>/dev/null; then
+if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null \
+        --resolve "core.telegram.org:443:$PROBE_RESOLVE_IP" \
+        "$PROBE_URL" 2>/dev/null; then
     echo 0 > "$STATE"
     exit 0
 fi

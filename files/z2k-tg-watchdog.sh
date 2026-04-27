@@ -28,6 +28,12 @@ BIN=/opt/sbin/tg-mtproxy-client
 INIT=/opt/etc/init.d/S98tg-tunnel
 STATE=/tmp/tg-tunnel-watchdog.state
 PROBE_URL=https://core.telegram.org/
+# Pin IP в TG CIDR (149.154.160.0/20) — без --resolve curl каждую минуту
+# дёргает getaddrinfo() через ndnproxy → upstream DoH юзера. У части юзеров
+# DoH стоит anti-bot rate-limited (geohide и т.п.) — лог сыпет 403 на каждом
+# tick'е watchdog'а. REDIRECT всё равно отправит трафик в туннель независимо
+# от конкретного IP в --resolve.
+PROBE_RESOLVE_IP=149.154.167.99
 
 [ -x "$BIN" ] || exit 0
 
@@ -123,7 +129,9 @@ fi
 #    core.telegram.org resolves into 149.154.0.0/16, which our PREROUTING
 #    REDIRECT bounces to 127.0.0.1:1443 → tg-mtproxy-client → VPS relay →
 #    Telegram. Successful TLS + HTTP response = full path is healthy.
-if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null "$PROBE_URL" 2>/dev/null; then
+if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null \
+        --resolve "core.telegram.org:443:$PROBE_RESOLVE_IP" \
+        "$PROBE_URL" 2>/dev/null; then
     echo 0 > "$STATE"
     exit 0
 fi
