@@ -246,46 +246,12 @@ static const recipe_entry_t g_recipes[] = {
 	 * TSPU_16KB — byte-counter gate at ~16 KB.
 	 * ============================================================ */
 
-	/* Beeline / Discord-grade 16KB block — fake+padencap pattern.
-	 * Issue #1836 maxsupermanhd (after night-long blockcheck).
-	 * padencap declares (lies about) extension length so DPI thinks
-	 * the fake's padding extension swallows real CH bytes. */
-	{
-		.block = BLOCK_TSPU_16KB,
-		.cdn = CDN_CLOUDFLARE,
-		.ts_req = RECIPE_TS_ANY,
-		.profile_key = "cdn_tls",
-		.family = "fake",
-		.params = "blob=tls_clienthello_www_google_com:tls_mod=rnd,dupsid,rndsni,padencap:repeats=2:tcp_seq=-10000:tcp_ack=-66000:payload=tls_client_hello",
-		.human_label = "CF 16KB: fake padencap+badseq (Beeline-validated)",
-		.cite = "github.com/bol-van/zapret#1836 (maxsupermanhd)",
-	},
-
-	/* OVH-zone 16KB block — DEMANDS gosuslugi.ru bin specifically.
-	 * "google.com.bin не работает на OVH" — gtumanyan d/1812. */
-	{
-		.block = BLOCK_TSPU_16KB,
-		.cdn = CDN_OVH,
-		.ts_req = RECIPE_TS_ANY,
-		.profile_key = "cdn_tls",
-		.family = "multisplit",
-		.params = "pos=1:seqovl=800:seqovl_pattern=tls_clienthello_gosuslugi_ru:payload=tls_client_hello",
-		.human_label = "OVH 16KB: gosuslugi-bin seqovl=800",
-		.cite = "ntc.party 21161 d/1812 (gtumanyan)",
-	},
-
-	/* TSPU_16KB on Hetzner / DO / AWS — generic padencap from #1836.
-	 * Field-tested working pattern; CDN-agnostic. */
-	{
-		.block = BLOCK_TSPU_16KB,
-		.cdn = CDN_UNKNOWN,
-		.ts_req = RECIPE_TS_ANY,
-		.profile_key = "cdn_tls",
-		.family = "fake",
-		.params = "blob=tls_clienthello_www_google_com:tls_mod=rnd,dupsid,rndsni,padencap:repeats=3:tcp_seq=-10000:tcp_ack=-66000:payload=tls_client_hello",
-		.human_label = "Generic 16KB: fake padencap+badseq",
-		.cite = "github.com/bol-van/zapret#1836 + d/1990",
-	},
+	/* TSPU_16KB recipe entries для cdn_tls профиля удалены 2026-04-27
+	 * вместе с самим профилем. CF/OVH/Hetzner/DO теперь идут под rkn_tcp
+	 * (47-стратегий field-tested rotator из Strategy.txt пробивает их
+	 * лучше чем curated 8 cdn_tls strategies). Если classifier вернёт
+	 * unmapped для (TSPU_16KB, CF/OVH/...) — escalate с pcap, а не
+	 * подсовывать сломанный recipe. */
 
 	/* ============================================================
 	 * AWS_NO_TS — server doesn't negotiate TS (some amazonaws.com).
@@ -318,7 +284,7 @@ static const recipe_entry_t g_recipes[] = {
 		.family = "multidisorder",
 		.params = "pos=method+2,midsld,5:payload=tls_client_hello",
 		.human_label = "size-DPI: multidisorder pos=method+2,midsld,5",
-		.cite = "z2k cdn_tls strategy=4 (Phase 4a baseline)",
+		.cite = "z2k rkn_tcp baseline strategy",
 	},
 
 	/* ============================================================

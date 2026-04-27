@@ -122,7 +122,7 @@ typedef struct {
 	bool apply_succeeded;
 	bool unmapped;                    /* no recipe entry for (block, cdn, has_ts) */
 	int  winner_strategy;             /* assigned id from inject_persist; -1 dry-run; 0 transient-only */
-	char winner_profile[64];          /* "rkn_tcp" / "cdn_tls" / etc. */
+	char winner_profile[64];          /* "rkn_tcp" / "google_tls" / etc. */
 	char winner_family[32];           /* "multisplit" / "fake" / etc. */
 	char winner_label[160];           /* human label of selected recipe */
 	char winner_cite[160];            /* source cite */

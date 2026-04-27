@@ -46,7 +46,7 @@ AUSTERUS_OPT
     # the corresponding flag so individual phases can be toggled at runtime
     # via /opt/zapret2/config without a push. Default "1" (enabled).
     # Remove these flags entirely once all phases are soaked on production.
-    local Z2K_REFACTOR_PHASE1 Z2K_REFACTOR_PHASE2 Z2K_REFACTOR_PHASE3 Z2K_REFACTOR_PHASE4
+    local Z2K_REFACTOR_PHASE1 Z2K_REFACTOR_PHASE2 Z2K_REFACTOR_PHASE3
     Z2K_REFACTOR_PHASE1=$(safe_config_read "Z2K_REFACTOR_PHASE1" "/opt/zapret2/config" "1")
     Z2K_REFACTOR_PHASE2=$(safe_config_read "Z2K_REFACTOR_PHASE2" "/opt/zapret2/config" "1")
     # Phase 3 (YT+GV merge into google_tls) — DEFAULT OFF as of 2026-04-26.
@@ -57,7 +57,10 @@ AUSTERUS_OPT
     # merge через `Z2K_REFACTOR_PHASE3=1` в config — оставлено для
     # тестирования / возможного rollforward.
     Z2K_REFACTOR_PHASE3=$(safe_config_read "Z2K_REFACTOR_PHASE3" "/opt/zapret2/config" "0")
-    Z2K_REFACTOR_PHASE4=$(safe_config_read "Z2K_REFACTOR_PHASE4" "/opt/zapret2/config" "1")
+    # Phase 4 (cdn_tls) удалён 2026-04-27 — отдельный CF/OVH/Hetzner/DO
+    # профиль перехватывал non-RKN CF трафик и применял свой набор стратегий
+    # слабее проверенного 47-стратегий rkn_tcp rotator'а. CF возвращается
+    # под rkn_tcp как было до Variant A refactor'а.
 
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
@@ -440,7 +443,7 @@ AUSTERUS_OPT
     # Only rkn_tcp gets the handler for now. youtube_tcp / youtube_gv_tcp
     # are merged into google_tls in Phase 3 with strategy renumbering;
     # appending the handler before merge would create a gap after
-    # rebase. Adding handler support for google_tls / cdn_tls comes in
+    # rebase. Adding handler support for google_tls comes in
     # a follow-up that injects after the merge step.
     z2k_dynamic_max_strategy() {
         printf '%s' "$1" | grep -oE ':strategy=[0-9]+' \
@@ -827,32 +830,11 @@ AUSTERUS_OPT
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${lists_dir}/extra-domains.txt"
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt $rkn_hostlists $rkn_tcp --new"
 
-    # Phase 4: cdn_tls — targets TSPU 16KB whitelist-SNI block on CF/OVH/
-    # Hetzner/DO (ntc.party 17013). ipset=cdn_ips.txt seeded by
-    # z2k-update-lists.sh (CF+OVH+Hetzner+DO ~1662 CIDR ≈ 80 KB RAM).
-    # 5 curated strategies tuned for the TSPU whitelist-SNI bypass shape,
-    # explicit tcp_ack=-66000 on fake (badseq primitive, ntc.party 17013).
-    # Positioned AFTER rkn_tcp so RKN-listed sites on CF still go through
-    # the proven 47-strategy RKN rotator, and only non-RKN CDN traffic
-    # hits cdn_tls. Profile skipped if ipset file missing/empty.
-    if [ "$Z2K_REFACTOR_PHASE4" = "1" ] && [ -s "${lists_dir}/cdn_ips.txt" ]; then
-        # 2026-04 expansion: strategies 6-7 exercise rndsni / padencap
-        # tls_mod primitives (confirmed in protocol.c:751-960). rndsni
-        # replaces SNI with random string per-connection — useful when
-        # TSPU enforces per-AS whitelist and our hardcoded whitelist SNI
-        # doesn't match that AS's set. padencap inflates reasm_data via
-        # TLS padding extension, breaking size-hash DPI classifiers.
-        # strategy=8 — per-CDN-provider SNI dispatch via
-        # z2k-cdn-dispatch.lua (ntc.party 17013 #851: per-AS whitelist
-        # enforcement). luaexec sets desync.cdn_sni from dst-IP prefix
-        # match (CF→www.google.com, OVH→4pda.to, Hetzner→max.ru,
-        # DO→vk.com, fallback→www.google.com). fake then rewrites the
-        # ClientHello SNI via tls_mod=sni=%cdn_sni substitution (handled
-        # by tls_mod_shim in zapret-lib.lua:633). Same circular slot =
-        # one dynamically-picked SNI per connection.
-        local cdn_tls_strats="--lua-desync=circular:fails=2:time=60:key=cdn_tls:nld=2 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,sni=www.google.com:tcp_seq=-10000:tcp_ack=-66000:strategy=2 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=mail.ru:seqovl=1:badsum:strategy=3 --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5:strategy=4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:ip_autottl=-2,3-20:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,padencap,sni=www.google.com:tcp_ack=-66000:strategy=6 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rndsni,dupsid:tcp_ack=-66000:strategy=7 --lua-desync=luaexec:code=pick_cdn_sni(desync):strategy=8 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=2:tls_mod=rnd,dupsid,sni=%cdn_sni:tcp_ack=-66000:strategy=8"
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --ipset=${lists_dir}/cdn_ips.txt --hostlist-exclude=${lists_dir}/whitelist.txt --payload=tls_client_hello $cdn_tls_strats --new\\n"
-    fi
+    # cdn_tls профиль удалён 2026-04-27. Был добавлен в Variant A refactor
+    # (b7f7ae6) для перехвата non-RKN CF/OVH/Hetzner/DO трафика, но на field
+    # ломал то что и так работало через rkn_tcp (47-стратегий rotator
+    # из Strategy.txt пробивал CF лучше чем 8 curated cdn_tls strategies).
+    # CF возвращается под rkn_tcp как было до Variant A.
 
     # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls
     # profile. Hostlist triggers OR — hostlist=YT/List.txt ∪ hostlist-domains=

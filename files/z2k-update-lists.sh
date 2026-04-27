@@ -236,51 +236,7 @@ main() {
         "${ZAPRET2_DIR}/lists/game_ips.txt"
     [ $? -eq 2 ] && changes=$((changes + 1))
 
-    # CDN IPs (123jjck aggregation) — seeds the Phase 4 cdn_tls profile
-    # with CF+OVH+Hetzner+DO CIDRs. These ASNs fall under the TSPU 16KB
-    # whitelist-SNI block (autumn 2025, see ntc.party 17013). Fetched per
-    # provider and concatenated to keep one ipset file. If any provider
-    # fetch fails the rest still proceed — partial list is still useful.
-    update_cdn_ips() {
-        local dest="${ZAPRET2_DIR}/lists/cdn_ips.txt"
-        local tmp
-        tmp=$(mktemp "${dest}.XXXXXX") || return 1
-        local any_ok=0 provider url tmp_provider
-        for provider in cloudflare ovh hetzner digitalocean; do
-            url="https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/main/${provider}/${provider}_plain_ipv4.txt"
-            tmp_provider=$(mktemp) || continue
-            if z2k_fetch "$url" "$tmp_provider" && [ -s "$tmp_provider" ]; then
-                printf '# === %s ===\n' "$provider" >> "$tmp"
-                sed 's/\r$//' "$tmp_provider" >> "$tmp"
-                any_ok=1
-            else
-                log_msg "WARN: cdn_ips/$provider fetch failed"
-            fi
-            rm -f "$tmp_provider"
-        done
-        if [ "$any_ok" = "0" ]; then
-            log_msg "FAIL: all CDN providers failed"
-            rm -f "$tmp"
-            return 1
-        fi
-        local count
-        count=$(grep -c '^[0-9]' "$tmp" 2>/dev/null)
-        if [ -z "$count" ] || [ "$count" -lt 100 ]; then
-            log_msg "FAIL: CDN ipset too small ($count entries)"
-            rm -f "$tmp"
-            return 1
-        fi
-        if [ -f "$dest" ] && cmp -s "$tmp" "$dest" 2>/dev/null; then
-            rm -f "$tmp"
-            return 0
-        fi
-        mkdir -p "$(dirname "$dest")" 2>/dev/null
-        mv -f "$tmp" "$dest"
-        log_msg "OK: CDN ipset updated ($count entries)"
-        return 2
-    }
-    update_cdn_ips
-    [ $? -eq 2 ] && changes=$((changes + 1))
+    # cdn_ips fetcher удалён 2026-04-27 вместе с cdn_tls профилем.
 
     # AWS + Oracle cloud IPs — seeds Phase 5 aws_oracle_ips.txt which the
     # merged game_udp profile (Phase 2) OR's with game_ips.txt in hybrid

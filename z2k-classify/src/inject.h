@@ -49,7 +49,7 @@
  *
  * strategy_str — the --lua-desync= string emitted by the generator
  *                (with or without strategy=N tag — helper strips it).
- * profile_key  — "rkn_tcp" / "google_tls" / "cdn_tls" (matches a key
+ * profile_key  — "rkn_tcp" / "google_tls" (matches a key
  *                in /opt/zapret2/dynamic-slots.conf).
  * domain       — host to pin so only THIS domain's flow uses the
  *                strategy during the test.

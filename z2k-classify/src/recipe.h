@@ -31,7 +31,7 @@ typedef struct {
 	block_type_t   block;
 	cdn_id_t       cdn;            /* CDN_UNKNOWN = wildcard */
 	recipe_ts_req_t ts_req;
-	const char *profile_key;       /* "rkn_tcp" / "cdn_tls" / "google_tls" */
+	const char *profile_key;       /* "rkn_tcp" / "google_tls" */
 	const char *family;            /* "multisplit" / "fake" / "hostfakesplit" / "multidisorder" / "syndata" / "fakedsplit" */
 	const char *params;            /* verbatim, written to /tmp/z2k-classify-dynparams */
 	const char *human_label;
