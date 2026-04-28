@@ -601,6 +601,10 @@ step_build_zapret2() {
         [ -f "$ZAPRET2_DIR/config" ] && cp -f "$ZAPRET2_DIR/config" "$backup_tmp/config"
         # Whitelist (пользовательские исключения)
         [ -f "$ZAPRET2_DIR/lists/whitelist.txt" ] && cp -f "$ZAPRET2_DIR/lists/whitelist.txt" "$backup_tmp/whitelist.txt"
+        # extra-domains.txt — юзерские добавки (echo >> extra-domains.txt).
+        # Бекапим до rm -rf, потом diff'нем против shipped и user-only
+        # строки append'нем поверх свежей shipped версии.
+        [ -f "$ZAPRET2_DIR/lists/extra-domains.txt" ] && cp -f "$ZAPRET2_DIR/lists/extra-domains.txt" "$backup_tmp/extra-domains.txt"
         # Autocircular state (найденные рабочие стратегии)
         [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" ] && \
             cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv"
@@ -896,17 +900,19 @@ step_build_zapret2() {
     done
 
     # extra-domains.txt: preserve user-added lines across reinstall.
-    # Юзеры пишут свои домены через `echo >> extra-domains.txt`. До этой
-    # правки `cp -f` затирал их при переустановке. Сейчас diff'им против
-    # shipped версии и user-only строки append'им к новой shipped после
-    # копирования.
+    # Юзеры пишут свои домены через `echo >> extra-domains.txt`. Cтарый
+    # /opt/zapret2 уже снесён выше (rm -rf "$ZAPRET2_DIR"), поэтому
+    # diff'имся не против установленного файла, а против бекапа в
+    # $backup_tmp/extra-domains.txt — он сделан до rm. Без этого fallback
+    # на $installed логика просто не находила ничего пользовательского
+    # (файл равен shipped) и тихо теряла домены.
     if [ -f "${WORK_DIR}/files/lists/extra-domains.txt" ]; then
         local shipped="${WORK_DIR}/files/lists/extra-domains.txt"
         local installed="${ZAPRET2_DIR}/lists/extra-domains.txt"
         local user_extras=""
-        if [ -f "$installed" ]; then
-            # Строки которые есть в installed, но НЕТ в shipped — пользовательские.
-            user_extras=$(grep -vxFf "$shipped" "$installed" 2>/dev/null \
+        if [ -f "$backup_tmp/extra-domains.txt" ]; then
+            # Строки которые есть в backup'е, но НЕТ в shipped — пользовательские.
+            user_extras=$(grep -vxFf "$shipped" "$backup_tmp/extra-domains.txt" 2>/dev/null \
                 | grep -vE '^#|^$' \
                 | grep -vE '^# === user-added')
         fi
