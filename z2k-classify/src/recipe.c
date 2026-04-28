@@ -246,12 +246,54 @@ static const recipe_entry_t g_recipes[] = {
 	 * TSPU_16KB — byte-counter gate at ~16 KB.
 	 * ============================================================ */
 
-	/* TSPU_16KB recipe entries для cdn_tls профиля удалены 2026-04-27
-	 * вместе с самим профилем. CF/OVH/Hetzner/DO теперь идут под rkn_tcp
-	 * (47-стратегий field-tested rotator из Strategy.txt пробивает их
-	 * лучше чем curated 8 cdn_tls strategies). Если classifier вернёт
-	 * unmapped для (TSPU_16KB, CF/OVH/...) — escalate с pcap, а не
-	 * подсовывать сломанный recipe. */
+	/* TSPU_16KB на enhanced живёт под тем же rkn_tcp профилем, что и
+	 * RKN_RST: production rotator strategy=1 (fake_then_multisplit
+	 * compound с mp_seqovl=681) пробивает 16KB-gate так же, как и
+	 * RKN-RST после-CH inspection. Recipes для cdn_tls удалены 2026-04-27
+	 * вместе с профилем; ниже — re-mapping тех же block-кейсов на
+	 * rkn_tcp compound, иначе classifier ложно выдавал unmapped на
+	 * (TSPU_16KB, CF) при том что rkn_tcp у юзера на эту же связку
+	 * работает. */
+
+	{
+		.block = BLOCK_TSPU_16KB,
+		.cdn = CDN_UNKNOWN,
+		.ts_req = RECIPE_TS_ANY,
+		.profile_key = "rkn_tcp",
+		.family = "fake_then_multisplit",
+		.params =
+			"fake_blob=fake_default_tls"
+			":fake_repeats=8"
+			":fake_tcp_ts=-1000"
+			":fake_tls_mod=rnd,dupsid,sni=www.google.com,z2k_grease,z2k_alpn,z2k_psk,z2k_keyshare"
+			":fake_fool=z2k_dynamic_ttl"
+			":mp_pos=1"
+			":mp_seqovl=681"
+			":mp_seqovl_pattern=tls_clienthello_www_google_com"
+			":payload=tls_client_hello",
+		.human_label = "TSPU 16KB universal: fake decoy + multisplit seqovl=681",
+		.cite = "z2k production strategy=1 (rkn_tcp rotator) — пробивает CF 16KB",
+	},
+
+	{
+		.block = BLOCK_TSPU_16KB,
+		.cdn = CDN_OVH,
+		.ts_req = RECIPE_TS_ANY,
+		.profile_key = "rkn_tcp",
+		.family = "fake_then_multisplit",
+		.params =
+			"fake_blob=fake_default_tls"
+			":fake_repeats=8"
+			":fake_tcp_ts=-1000"
+			":fake_tls_mod=rnd,dupsid,sni=www.google.com,z2k_grease,z2k_alpn,z2k_psk,z2k_keyshare"
+			":fake_fool=z2k_dynamic_ttl"
+			":mp_pos=1"
+			":mp_seqovl=800"
+			":mp_seqovl_pattern=tls_clienthello_gosuslugi_ru"
+			":payload=tls_client_hello",
+		.human_label = "TSPU 16KB OVH: fake decoy + multisplit seqovl=800 gosuslugi",
+		.cite = "ntc.party 21161 d/1812 (gtumanyan) + z2k production rkn_tcp",
+	},
 
 	/* ============================================================
 	 * AWS_NO_TS — server doesn't negotiate TS (some amazonaws.com).
