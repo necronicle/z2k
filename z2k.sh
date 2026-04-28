@@ -764,12 +764,22 @@ update_z2k() {
                     sleep 1
                     cp "$tg_tmp" /opt/sbin/tg-mtproxy-client
                     chmod +x /opt/sbin/tg-mtproxy-client
-                    /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m >> /tmp/tg-tunnel.log 2>&1 &
-                    sleep 2
-                    if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
-                        print_success "Telegram tunnel обновлён и перезапущен"
+                    # Respect TG_PROXY_USER_DISABLED — if user explicitly stopped
+                    # the tunnel via menu/webpanel, don't resurrect it on update.
+                    local _tg_disabled=0
+                    if [ -f "/opt/zapret2/config" ]; then
+                        _tg_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+                    fi
+                    if [ "$_tg_disabled" = "1" ]; then
+                        print_success "Telegram tunnel обновлён (не запущен — отключён пользователем)"
                     else
-                        print_warning "Telegram tunnel обновлён, но не запустился"
+                        /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m >> /tmp/tg-tunnel.log 2>&1 &
+                        sleep 2
+                        if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+                            print_success "Telegram tunnel обновлён и перезапущен"
+                        else
+                            print_warning "Telegram tunnel обновлён, но не запустился"
+                        fi
                     fi
                 else
                     print_warning "Не удалось обновить Telegram tunnel"

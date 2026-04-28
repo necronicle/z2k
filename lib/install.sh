@@ -1697,8 +1697,13 @@ step_finalize() {
     # Cleanup legacy WS proxy init script (replaced by tunnel)
     rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
 
-    # Auto-start Telegram tunnel
-    if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
+    # Auto-start Telegram tunnel — but respect TG_PROXY_USER_DISABLED on
+    # reinstalls so we don't resurrect a tunnel the user explicitly stopped.
+    local _tg_disabled=0
+    if [ -f "/opt/zapret2/config" ]; then
+        _tg_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+    fi
+    if [ -x "/opt/sbin/tg-mtproxy-client" ] && [ "$_tg_disabled" != "1" ]; then
         killall tg-mtproxy-client 2>/dev/null || true
         sleep 1
 
@@ -1847,6 +1852,16 @@ CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/2
 
 start() {
     [ -x "$BIN" ] || exit 0
+    # Honor TG_PROXY_USER_DISABLED — if user explicitly stopped the tunnel
+    # via menu/webpanel, don't autostart on boot (or it'll come back every
+    # reboot and stay up until the watchdog cron fires ~60s later).
+    if [ -f "/opt/zapret2/config" ]; then
+        user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+        if [ "$user_disabled" = "1" ]; then
+            echo "tg-tunnel disabled by user — skipping autostart"
+            return 0
+        fi
+    fi
     if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
         echo "tg-tunnel already running"
         return 0
