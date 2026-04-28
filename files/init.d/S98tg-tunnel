@@ -1,4 +1,8 @@
 #!/bin/sh
+# Entware init.d минимальный PATH без /opt/bin — flag-check на awk молча
+# падает и daemon стартует даже на TG_PROXY_USER_DISABLED=1.
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 # /opt/etc/init.d/S98tg-tunnel — Telegram tunnel init script.
 #
 # start/stop/restart the tg-mtproxy-client daemon and manage the iptables

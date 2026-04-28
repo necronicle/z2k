@@ -22,6 +22,10 @@ say "[1/4] Writing /opt/zapret2/tg-tunnel-watchdog.sh"
 mkdir -p /opt/zapret2
 cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDSCRIPT'
 #!/bin/sh
+# Cron на Entware: PATH без /opt/bin → утилиты не находятся, flag-check тихо
+# падает, daemon воскресает каждую минуту даже на TG_PROXY_USER_DISABLED=1.
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 # tg-tunnel watchdog
 #  1. Restart on CONNECT_FAIL storm (legacy passive check)
 #  2. Restart when an end-to-end HTTPS probe through the tunnel fails 3x
@@ -125,6 +129,10 @@ say "[2a/4] Rewriting /opt/etc/init.d/S98tg-tunnel to honor TG_PROXY_USER_DISABL
 if [ -f /opt/etc/init.d/S98tg-tunnel ]; then
     cat > /opt/etc/init.d/S98tg-tunnel << 'INITEOF'
 #!/bin/sh
+# Entware init.d минимальный PATH без /opt/bin — flag-check на awk молча
+# падает и daemon стартует даже на TG_PROXY_USER_DISABLED=1.
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 BIN="/opt/sbin/tg-mtproxy-client"
 LOG="/tmp/tg-tunnel.log"
 PIDFILE="/var/run/tg-tunnel.pid"

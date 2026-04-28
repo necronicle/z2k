@@ -1,4 +1,11 @@
 #!/bin/sh
+# Cron на Entware/busybox запускается с минимальным PATH (/sbin:/usr/sbin:/bin:/usr/bin)
+# который НЕ включает /opt/bin где живут awk/pidof/pgrep/date/killall/curl/logger.
+# Без этого все утилиты "command not found", flag-check на awk молча падает,
+# user_disabled пустой, скрипт уходит в "process not running" и каждую минуту
+# воскрешает daemon — даже когда юзер явно остановил его через menu/webpanel.
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 # z2k-tg-watchdog.sh — periodic health check + auto-restart for the
 # Telegram tunnel (tg-mtproxy-client). Runs every minute via cron;
 # install.sh wires it up and adds the crontab entry.
