@@ -93,7 +93,13 @@ void classify_aggregate(probe_aggregate_t *agg) {
 
 	if (rst_count > 0) {
 		qsort(rst_offsets, rst_count, sizeof(int), cmp_int);
-		agg->median_rst_after_bytes = rst_offsets[rst_count / 2];
+		if (rst_count % 2 == 1) {
+			agg->median_rst_after_bytes = rst_offsets[rst_count / 2];
+		} else {
+			agg->median_rst_after_bytes =
+				(rst_offsets[rst_count / 2 - 1] +
+				 rst_offsets[rst_count / 2]) / 2;
+		}
 	}
 
 	agg->is_probabilistic = (agg->rst_observed_count > 0 &&
@@ -175,10 +181,12 @@ void classify_infer(classify_result_t *out) {
 	 * branch from probe data. (BLOCK_ANTI_DDOS_SLOWSTART exists in the
 	 * enum for future raw-capture upgrade.) */
 
-	/* Rule 5 — RST seen in any replica + early offset = RKN_RST.
-	 * Probabilistic RST (some replicas not all) still classifies — that's
-	 * exactly the МГТС cloudflare case. */
-	if (a->rst_observed_count > 0 && a->median_rst_after_bytes < 500) {
+	/* Rule 5 — RST seen in MAJORITY of replicas + early offset = RKN_RST.
+	 * Majority gate (rst*2 >= n) prevents single transient RSTs from
+	 * masking 16KB stalls in hybrid blocks; minority RSTs fall through
+	 * to Rule 6 (stall) first, then Rule 5b (HYBRID) below. */
+	if (a->rst_observed_count > 0 && a->median_rst_after_bytes < 500 &&
+	    a->rst_observed_count * 2 >= a->replica_count) {
 		out->block_type = BLOCK_RKN_RST;
 		snprintf(out->reason, sizeof(out->reason),
 		         "RST observed in %d/%d replicas at byte offset ~%d — "
@@ -208,6 +216,26 @@ void classify_infer(classify_result_t *out) {
 		snprintf(out->recommended, sizeof(out->recommended),
 		         "fake+padencap (CF=google bin, OVH=gosuslugi bin) "
 		         "+ wssize 1:6");
+		return;
+	}
+
+	/* Rule 5b — minority RST (<50% replicas) at early offset, but no
+	 * stall fired above. Hybrid signature: probabilistic DPI sampling
+	 * that single-shot probing miscalls. Pin block_type=HYBRID so the
+	 * apply_phase recipe lookup falls through to a defensive recipe
+	 * (currently no HYBRID-specific recipe — recipe_for() returns NULL,
+	 * apply emits "unmapped, escalate"). */
+	if (a->rst_observed_count > 0 && a->median_rst_after_bytes < 500) {
+		out->block_type = BLOCK_HYBRID;
+		snprintf(out->reason, sizeof(out->reason),
+		         "Probabilistic RST in %d/%d replicas at byte ~%d "
+		         "(below majority gate); no 16KB stall observed. Hybrid "
+		         "signature — sampled DPI or transient network event.",
+		         a->rst_observed_count, a->replica_count,
+		         a->median_rst_after_bytes);
+		snprintf(out->recommended, sizeof(out->recommended),
+		         "rerun probe with --replicas=5; if RST count climbs, "
+		         "treat as RKN_RST; if not, suspect noise");
 		return;
 	}
 

@@ -30,6 +30,29 @@
 #endif
 #include <poll.h>
 
+/* Random bytes for ClientHello randomness fields. /dev/urandom is
+ * available on every kernel we run on (Entware Linux ≥ 3.x, glibc/musl
+ * userland). On open/read failure we fall back to a deterministic
+ * pseudo-pattern so the probe still produces *some* output rather
+ * than refusing to run; the deterministic path is the legacy behavior
+ * before this fix landed. */
+static void z2k_random_bytes(unsigned char *buf, size_t n) {
+	int fd = open("/dev/urandom", O_RDONLY);
+	if (fd >= 0) {
+		ssize_t total = 0;
+		while ((size_t)total < n) {
+			ssize_t r = read(fd, buf + total, n - total);
+			if (r <= 0) break;
+			total += r;
+		}
+		close(fd);
+		if ((size_t)total == n) return;
+	}
+	static unsigned int ctr = 0;
+	for (size_t i = 0; i < n; i++)
+		buf[i] = (unsigned char)((ctr++ * 17 + 41) & 0xff);
+}
+
 static int64_t now_ms(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -53,9 +76,9 @@ static size_t build_client_hello(char *buf, size_t buflen, const char *sni_host)
 	body[p++] = 0x01;
 	size_t hs_len_off = p; p += 3;
 	body[p++] = 0x03; body[p++] = 0x03;
-	for (int i = 0; i < 32; i++) body[p++] = (unsigned char)((i * 17 + 41) & 0xff);
+	z2k_random_bytes(&body[p], 32); p += 32;
 	body[p++] = 0x20;
-	for (int i = 0; i < 32; i++) body[p++] = (unsigned char)((i * 13 + 7) & 0xff);
+	z2k_random_bytes(&body[p], 32); p += 32;
 
 	static const unsigned char suites[] = {
 		0xc0,0x2b, 0xc0,0x2f, 0xc0,0x2c, 0xc0,0x30,
@@ -328,6 +351,7 @@ int probe_run_replica(const char *domain, int timeout_sec,
 	char rx[65536];
 	size_t total = 0;
 	bool stalled_at_16kb = false;
+	bool crossed_15k = false;
 	int64_t t_first = 0;
 	while (total < sizeof(rx)) {
 		ssize_t n = recv(fd, rx + total, sizeof(rx) - total, 0);
@@ -340,9 +364,15 @@ int probe_run_replica(const char *domain, int timeout_sec,
 			break;
 		}
 		if (t_first == 0) t_first = now_ms();
+		size_t prev_total = total;
 		total += n;
 
-		if (total >= 15000 && total <= 17000) {
+		/* Trigger the 16KB-stall probe the moment cumulative size
+		 * crosses 15000, regardless of recv() chunking. A single
+		 * recv that returns 18000 bytes used to skip the old
+		 * range-membership check entirely. */
+		if (!crossed_15k && prev_total < 15000 && total >= 15000) {
+			crossed_15k = true;
 			set_socket_timeout(fd, 1500);
 			ssize_t m = recv(fd, rx + total, sizeof(rx) - total, 0);
 			if (m <= 0) { stalled_at_16kb = true; break; }

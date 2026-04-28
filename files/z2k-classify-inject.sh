@@ -113,10 +113,48 @@ clear_dynparams() {
     : > "$DYNPARAMS_FILE" 2>/dev/null || true
 }
 
+# Inter-process lock for concurrent state.tsv writers (drift cron +
+# manual classify can race). Prefer flock(1) from util-linux; fall
+# back to mkdir-polling if absent. Lock is held for the duration of
+# the rewrite + mv, released on function exit.
+_state_lock_acquire() {
+    [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null
+    _state_lockfile="$STATE_DIR/.lock"
+    if command -v flock >/dev/null 2>&1; then
+        # fd 9 stays open for the duration; flock auto-releases on close.
+        exec 9>"$_state_lockfile"
+        flock -x 9
+        _state_lock_kind="flock"
+    else
+        _state_lock_dir="${_state_lockfile}.d"
+        i=0
+        while [ "$i" -lt 50 ]; do
+            mkdir "$_state_lock_dir" 2>/dev/null && {
+                _state_lock_kind="mkdir"
+                return 0
+            }
+            i=$((i + 1))
+            sleep 0.1 2>/dev/null || sleep 1
+        done
+        # Couldn't acquire — proceed unlocked. Better than blocking forever.
+        _state_lock_kind="none"
+    fi
+}
+
+_state_lock_release() {
+    case "${_state_lock_kind:-}" in
+        flock) exec 9>&-; ;;
+        mkdir) rmdir "$_state_lock_dir" 2>/dev/null || true ;;
+        *) ;;
+    esac
+    _state_lock_kind=""
+}
+
 # state.tsv pin (atomic).
 state_pin() {
     profile_key=$1; domain=$2; strategy_id=$3
     [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
+    _state_lock_acquire
     ts=$(date +%s 2>/dev/null || echo 0)
     tmp="${STATE_FILE}.tmp.$$"
     {
@@ -133,11 +171,13 @@ state_pin() {
         printf '%s\t%s\t%s\t%s\n' "$profile_key" "$domain" "$strategy_id" "$ts"
     } > "$tmp"
     mv -f "$tmp" "$STATE_FILE"
+    _state_lock_release
 }
 
 state_unpin() {
     profile_key=$1; domain=$2
     [ -s "$STATE_FILE" ] || return 0
+    _state_lock_acquire
     tmp="${STATE_FILE}.tmp.$$"
     awk -v p="$profile_key" -v h="$domain" -F '\t' '
         /^#/ { print; next }
@@ -145,6 +185,7 @@ state_unpin() {
         { print }
     ' "$STATE_FILE" > "$tmp"
     mv -f "$tmp" "$STATE_FILE"
+    _state_lock_release
 }
 
 # -----------------------------------------------------------------------------
@@ -285,8 +326,11 @@ op_persist() {
     state_pin "$profile_key" "$domain" "$slot"
     clear_dynparams
 
-    [ "$strategy_id" -gt 254 ] && strategy_id=254
-    return "$strategy_id"
+    # Emit assigned strategy_id to stdout for the C caller (inject.c
+    # captures via pipe). Exit code is 0 = success; the integer no
+    # longer rides through exit status, so IDs > 254 are now reportable.
+    printf '%s\n' "$strategy_id"
+    return 0
 }
 
 case "${1:-}" in

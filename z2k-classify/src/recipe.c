@@ -11,6 +11,8 @@
 #include "recipe.h"
 
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
 
@@ -38,6 +40,7 @@ static const cidr_entry_t g_cidrs[] = {
 	CIDR(190, 93, 240,   0, 20, CDN_CLOUDFLARE),
 	CIDR(198, 41, 128,   0, 17, CDN_CLOUDFLARE),
 	CIDR(  1,  1,   1,   0, 24, CDN_CLOUDFLARE),  /* 1.1.1.0/24 (DNS+CDN edge) */
+	CIDR(  1,  0,   0,   0, 24, CDN_CLOUDFLARE),  /* 1.0.0.0/24 (APNIC research / CF DNS) */
 
 	/* ---- OVH (FR/CA) ---- */
 	CIDR( 51, 68,   0,   0, 14, CDN_OVH),
@@ -145,12 +148,82 @@ static const cidr_entry_t g_cidrs[] = {
 
 #undef CIDR
 
+/* ---------------- runtime-loadable CIDR overlay ----------------
+ *
+ * Embedded g_cidrs is a hand-curated snapshot from 2026-04-26 and rots
+ * as CF/Google/AWS rotate prefix announcements. install.sh fetches
+ * canonical lists into /opt/zapret2/lists/{cf,goog,aws}-cidrs-v4.txt
+ * and we lazy-load them at first lookup. Failure to load = embedded
+ * table only (graceful degrade). The dyn table extends — never replaces —
+ * the embedded one so any classifier-specific CIDR (Hetzner, OVH ranges
+ * we curate by hand) keeps working.
+ */
+static cidr_entry_t *g_dyn_cidrs = NULL;
+static size_t g_dyn_count = 0;
+static int    g_dyn_loaded = 0;
+
+static void load_dyn_cidr_file(const char *path, cdn_id_t cdn) {
+	FILE *f = fopen(path, "r");
+	if (!f) return;
+	char line[64];
+	while (fgets(line, sizeof(line), f)) {
+		unsigned a, b, c, d, p;
+		if (sscanf(line, "%u.%u.%u.%u/%u", &a, &b, &c, &d, &p) != 5) continue;
+		if (a > 255 || b > 255 || c > 255 || d > 255 || p > 32) continue;
+		cidr_entry_t *grow = realloc(g_dyn_cidrs,
+		                             (g_dyn_count + 1) * sizeof(cidr_entry_t));
+		if (!grow) break;
+		g_dyn_cidrs = grow;
+		g_dyn_cidrs[g_dyn_count].base =
+			((uint32_t)a << 24) | ((uint32_t)b << 16) |
+			((uint32_t)c << 8)  |  (uint32_t)d;
+		g_dyn_cidrs[g_dyn_count].prefix = (uint8_t)p;
+		g_dyn_cidrs[g_dyn_count].cdn = cdn;
+		g_dyn_count++;
+	}
+	fclose(f);
+}
+
+static void load_dyn_cidrs(void) {
+	if (g_dyn_loaded) return;
+	g_dyn_loaded = 1;
+	const char *base = getenv("Z2K_LISTS_DIR");
+	if (!base || !*base) base = "/opt/zapret2/lists";
+	char path[256];
+	snprintf(path, sizeof(path), "%s/cf-cidrs-v4.txt",   base);
+	load_dyn_cidr_file(path, CDN_CLOUDFLARE);
+	snprintf(path, sizeof(path), "%s/goog-cidrs-v4.txt", base);
+	load_dyn_cidr_file(path, CDN_GOOGLE);
+}
+
 cdn_id_t cdn_for_ip(struct in_addr ip) {
+	load_dyn_cidrs();
+
 	uint32_t addr = ntohl(ip.s_addr);
 	cdn_id_t best = CDN_UNKNOWN;
 	uint8_t  best_prefix = 0;
+
+	/* Embedded table first (curated, has Hetzner/OVH/etc that no
+	 * upstream publishes a canonical list for). */
 	for (size_t i = 0; i < sizeof(g_cidrs) / sizeof(g_cidrs[0]); i++) {
 		const cidr_entry_t *e = &g_cidrs[i];
+		uint32_t mask = (e->prefix == 0) ? 0u : (~0u << (32 - e->prefix));
+		if ((addr & mask) == (e->base & mask)) {
+			/* Strict > so first match wins on equal prefix; the table
+			 * is assumed non-overlapping at the same prefix length, so
+			 * this just makes order-of-entries irrelevant. */
+			if (e->prefix > best_prefix) {
+				best = e->cdn;
+				best_prefix = e->prefix;
+			}
+		}
+	}
+	/* Dynamic overlay — same longest-prefix policy. Wins on ties at
+	 * the same prefix length (`>=`) because canonical CDN lists are
+	 * the source of truth for that CDN's ranges and supersede a stale
+	 * embedded entry. */
+	for (size_t i = 0; i < g_dyn_count; i++) {
+		const cidr_entry_t *e = &g_dyn_cidrs[i];
 		uint32_t mask = (e->prefix == 0) ? 0u : (~0u << (32 - e->prefix));
 		if ((addr & mask) == (e->base & mask)) {
 			if (e->prefix >= best_prefix) {
