@@ -27,6 +27,9 @@ globals = {
     "cond_cdn_other",
     "pick_cdn_sni",
     "circular",
+    -- z2k-detectors.lua internal helper, top-level so earlier detector
+    -- functions in the same file (z2k_tls_alert_fatal) can call it
+    "z2k_detector_log_init_once",
     -- nfqws2 writable state/functions (set by fallback stubs or runtime)
     "DLOG",
     "DLOG_ERR",

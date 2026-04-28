@@ -164,7 +164,13 @@ if Z2K_DETECTOR_EVICT_INTERVAL < 16 then Z2K_DETECTOR_EVICT_INTERVAL = 16 end
 -- every passing TLS handshake, so the message lands in the log within
 -- seconds of nfqws2 startup.
 local _z2k_detector_init_logged = false
-local function z2k_detector_log_init_once()
+-- Defined as a top-level (non-local) function on purpose: its only call
+-- site is inside z2k_tls_alert_fatal, which is parsed BEFORE this block,
+-- so a `local function` here would be invisible to the call site at
+-- definition time. Globals are resolved at call time, so this works
+-- regardless of source order. Listed in .luacheckrc globals for the
+-- linter.
+function z2k_detector_log_init_once()
   if _z2k_detector_init_logged then return end
   _z2k_detector_init_logged = true
   if type(DLOG) ~= "function" then return end
