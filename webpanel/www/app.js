@@ -632,6 +632,15 @@
             VPS под Telegram-туннель и возможность развиваться дальше.
           </p>
         </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-name">Alexey</div>
+          <p class="desc">
+            Материальная поддержка проекта — спасибо за веру в z2k и
+            помощь в развитии.
+          </p>
+        </div>
       </div>
     `;
   }
