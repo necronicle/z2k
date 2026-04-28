@@ -152,6 +152,29 @@ local Z2K_DETECTOR_EVICT_BATCH = math.floor(Z2K_DETECTOR_MAP_MAX / 4)
 local Z2K_DETECTOR_EVICT_INTERVAL = math.floor(Z2K_DETECTOR_MAP_MAX / 8)
 if Z2K_DETECTOR_EVICT_INTERVAL < 16 then Z2K_DETECTOR_EVICT_INTERVAL = 16 end
 
+-- One-shot startup line so a misconfigured Z2K_DETECTOR_CAP env var
+-- (e.g. S99zapret2 PATH glitch leaving the var unset) is visible in
+-- the regular nfqws2 log. Quiet otherwise.
+if type(DLOG) == "function" then
+  DLOG(string.format(
+    "z2k-detectors: cap=%d evict_batch=%d evict_interval=%d (env=%s)",
+    Z2K_DETECTOR_MAP_MAX, Z2K_DETECTOR_EVICT_BATCH,
+    Z2K_DETECTOR_EVICT_INTERVAL,
+    tostring(os.getenv("Z2K_DETECTOR_CAP") or "<unset>")))
+end
+
+-- Flow-key helper: state maps are per-host, but parallel browser
+-- connections to the same SNI used to trample each other's last_in_ts.
+-- Keying by (host, src_port) lets each flow track its own progress;
+-- the LRU eviction policy still bounds total entries.
+local function z2k_flow_key(desync, host)
+  local sp = 0
+  if desync and desync.dis and desync.dis.tcp then
+    sp = desync.dis.tcp.th_sport or 0
+  end
+  return host .. ":" .. tostring(sp)
+end
+
 local function z2k_detector_evict_oldest(map, batch, ts_of)
   local entries = {}
   local i = 0
@@ -193,19 +216,28 @@ function z2k_tls_stalled(desync, crec)
   if not host or host == "" then return false end
   local now = os.time and os.time() or 0
   if now == 0 then return false end
+  local key = z2k_flow_key(desync, host)
 
-  -- Incoming ServerHello: handshake progressing for this host, clear tracking
+  -- Incoming ServerHello: handshake progressing for this flow, clear tracking.
+  -- Validate the record: TSPU sometimes injects a fake SH-shaped TLS alert
+  -- before silent drop. Real ServerHellos carry a TLS handshake record
+  -- (type 0x16) at byte 1 and are always >> 100 bytes (cipher suite,
+  -- session id, extensions). Sub-100-byte "ServerHellos" are spoofed
+  -- alerts; do NOT clear stall state on them.
   if not desync.outgoing and desync.l7payload == "tls_server_hello" then
-    z2k_tls_stalled_host_ts[host] = nil
+    local p = desync.dis and desync.dis.payload
+    if type(p) == "string" and #p >= 100 and p:byte(1) == 0x16 then
+      z2k_tls_stalled_host_ts[key] = nil
+    end
     return false
   end
 
-  -- Outgoing ClientHello: check previous CH timestamp for this host
+  -- Outgoing ClientHello: check previous CH timestamp for this flow
   if desync.outgoing and desync.l7payload == "tls_client_hello" then
-    local prev = z2k_tls_stalled_host_ts[host]
+    local prev = z2k_tls_stalled_host_ts[key]
     if prev then
       local elapsed = now - prev
-      z2k_tls_stalled_host_ts[host] = now
+      z2k_tls_stalled_host_ts[key] = now
       z2k_tls_stalled_maybe_evict()
       if elapsed >= Z2K_TLS_STALLED_SEC then
         if type(DLOG) == "function" then
@@ -216,8 +248,8 @@ function z2k_tls_stalled(desync, crec)
       -- Too early: timestamp already bumped above
       return false
     end
-    -- First attempt for this host: just record
-    z2k_tls_stalled_host_ts[host] = now
+    -- First attempt for this flow: just record
+    z2k_tls_stalled_host_ts[key] = now
     z2k_tls_stalled_maybe_evict()
     return false
   end
@@ -337,31 +369,35 @@ function z2k_mid_stream_stall(desync, crec)
   if not host or host == "" then return false end
   local now = os.time and os.time() or 0
   if now == 0 then return false end
+  local key = z2k_flow_key(desync, host)
 
-  -- Incoming packet with non-empty payload → this host's flow is
-  -- actively receiving data. Remember the timestamp.
+  -- Incoming packet with non-empty payload → this flow is actively
+  -- receiving data. Remember the timestamp and reset the per-flow
+  -- consecutive-fail counter (real progress = not stalled).
   if not desync.outgoing then
     local dis = desync.dis
     if dis and type(dis.payload) == "string" and #dis.payload > 0 then
-      local st = z2k_mid_stream_state[host]
+      local st = z2k_mid_stream_state[key]
       if not st then
-        st = { last_in_ts = now, last_ch_ts = 0 }
-        z2k_mid_stream_state[host] = st
+        st = { last_in_ts = now, last_ch_ts = 0, consecutive_fails = 0 }
+        z2k_mid_stream_state[key] = st
         z2k_mid_stream_maybe_evict()
       else
         st.last_in_ts = now
+        st.consecutive_fails = 0
       end
     end
     return false
   end
 
   -- Outgoing ClientHello → check whether the user is actively retrying
-  -- this host and whether the previous flow stalled mid-stream.
+  -- this flow and whether the previous flow stalled mid-stream.
   if desync.outgoing and desync.l7payload == "tls_client_hello" then
-    local st = z2k_mid_stream_state[host]
+    local st = z2k_mid_stream_state[key]
     if not st then
-      -- First CH ever for this host: just record, no signal yet.
-      z2k_mid_stream_state[host] = { last_in_ts = 0, last_ch_ts = now }
+      -- First CH ever for this flow: just record, no signal yet.
+      z2k_mid_stream_state[key] =
+        { last_in_ts = 0, last_ch_ts = now, consecutive_fails = 0 }
       z2k_mid_stream_maybe_evict()
       return false
     end
@@ -381,16 +417,20 @@ function z2k_mid_stream_stall(desync, crec)
     if st.last_in_ts and st.last_in_ts > 0 then
       local since_last_in = now - st.last_in_ts
       if since_last_in >= Z2K_MID_STREAM_STALL_SEC then
+        -- Keep the record alive so the rotator's fails=N counter
+        -- accumulates across consecutive CH retries within the same
+        -- retry window — previously we dropped state on every fire,
+        -- which meant fails=3 needed three full retry rounds with
+        -- fresh stall evidence each time. Reset last_in_ts so the
+        -- same in-data event isn't double-counted.
+        st.last_in_ts = 0
+        st.consecutive_fails = (st.consecutive_fails or 0) + 1
         if type(DLOG) == "function" then
           DLOG("z2k_mid_stream_stall: host=" .. host ..
                " active retry (ch_gap=" .. ch_gap ..
                "s) prev flow data " .. since_last_in ..
-               "s ago — counting as mid-stream stall fail")
+               "s ago — fail #" .. st.consecutive_fails)
         end
-        -- Drop the record entirely rather than keep a stale stub —
-        -- the next fresh ClientHello for this host starts clean and
-        -- the map size stays bounded between evictions.
-        z2k_mid_stream_state[host] = nil
         return true
       end
     end
