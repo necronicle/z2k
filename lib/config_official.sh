@@ -1147,12 +1147,14 @@ create_official_config() {
     local saved_ROBLOX_UDP_BYPASS="0"
     local saved_GAME_MODE_ENABLED=""
     local saved_GAME_MODE_STYLE=""
+    local saved_TG_PROXY_USER_DISABLED="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
         saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
         saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
+        saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
     fi
     # Backwards compat: if the new flag isn't set yet on this router,
     # inherit the legacy ROBLOX_UDP_BYPASS value so a single create_official_config
@@ -1342,6 +1344,11 @@ ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
 #   aggressive — UDP catchall only, no ipset. Same UDP risks as hybrid,
 #                and listed games lose their dedicated rotator.
 GAME_MODE_STYLE=${saved_GAME_MODE_STYLE}
+
+# Telegram tunnel: user-disable flag from menu/webpanel "Stop tunnel".
+# Preserved across reinstall так что step_finalize autostart не воскрешал
+# daemon, который юзер явно остановил.
+TG_PROXY_USER_DISABLED=${saved_TG_PROXY_USER_DISABLED}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can
