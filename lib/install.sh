@@ -1940,8 +1940,13 @@ step_finalize() {
     # Cleanup legacy WS proxy init script (replaced by tunnel)
     rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
 
-    # Auto-start Telegram tunnel
-    if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
+    # Auto-start Telegram tunnel — but respect TG_PROXY_USER_DISABLED on
+    # reinstalls so we don't resurrect a tunnel the user explicitly stopped.
+    local _tg_disabled=0
+    if [ -f "/opt/zapret2/config" ]; then
+        _tg_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+    fi
+    if [ -x "/opt/sbin/tg-mtproxy-client" ] && [ "$_tg_disabled" != "1" ]; then
         killall tg-mtproxy-client 2>/dev/null || true
         sleep 1
 

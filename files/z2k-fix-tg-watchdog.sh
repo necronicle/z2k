@@ -43,6 +43,21 @@ PROBE_RESOLVE_IP=149.154.167.99
 
 [ -x "$BIN" ] || exit 0
 
+# Honor explicit user disable from menu / webpanel. The "stop tunnel"
+# action there sets TG_PROXY_USER_DISABLED=1 in /opt/zapret2/config so
+# the watchdog stops resurrecting the daemon every 3 min.
+# `re-enable` from the same UI flips it back to 0.
+CONFIG_FILE="/opt/zapret2/config"
+if [ -f "$CONFIG_FILE" ]; then
+    user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
+    if [ "$user_disabled" = "1" ]; then
+        if pidof tg-mtproxy-client >/dev/null 2>&1; then
+            killall -9 tg-mtproxy-client 2>/dev/null
+        fi
+        exit 0
+    fi
+fi
+
 restart_tunnel() {
     reason="$1"
     logger -t tg-watchdog "restart: $reason"
@@ -101,6 +116,75 @@ if [ "$FAIL_CNT" -ge 3 ]; then
 fi
 WDSCRIPT
 chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
+
+say "[2a/4] Rewriting /opt/etc/init.d/S98tg-tunnel to honor TG_PROXY_USER_DISABLED"
+# Older S98tg-tunnel start() ignores the user-disable flag and resurrects
+# the tunnel on every reboot. Rewrite the init script idempotently so it
+# checks the flag before starting (matches what files/init.d/S98tg-tunnel
+# now ships from the repo).
+if [ -f /opt/etc/init.d/S98tg-tunnel ]; then
+    cat > /opt/etc/init.d/S98tg-tunnel << 'INITEOF'
+#!/bin/sh
+BIN="/opt/sbin/tg-mtproxy-client"
+LOG="/tmp/tg-tunnel.log"
+PIDFILE="/var/run/tg-tunnel.pid"
+
+CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
+
+start() {
+    [ -x "$BIN" ] || exit 0
+    if [ -f "/opt/zapret2/config" ]; then
+        user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+        if [ "$user_disabled" = "1" ]; then
+            echo "tg-tunnel disabled by user — skipping autostart"
+            return 0
+        fi
+    fi
+    if pidof tg-mtproxy-client >/dev/null 2>&1; then
+        echo "tg-tunnel already running"
+        return 0
+    fi
+    echo "Starting tg-tunnel..."
+    $BIN --listen=:1443 --timeout=15m -v >> "$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 2
+    for cidr in $CIDRS; do
+        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+    done
+    for cidr in $CIDRS; do
+        conntrack -D -d "$cidr" 2>/dev/null || true
+    done
+}
+
+stop() {
+    echo "Stopping tg-tunnel..."
+    killall tg-mtproxy-client 2>/dev/null
+    rm -f "$PIDFILE"
+    for cidr in $CIDRS; do
+        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+    done
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart}" ;;
+esac
+INITEOF
+    chmod +x /opt/etc/init.d/S98tg-tunnel
+    say "    S98tg-tunnel updated"
+else
+    say "    S98tg-tunnel not installed — skipping"
+fi
 
 say "[2/4] Adding OUTPUT REDIRECT rules for Telegram CIDRs"
 CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
