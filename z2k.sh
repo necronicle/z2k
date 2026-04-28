@@ -185,21 +185,58 @@ _z2k_doh_check() {
     fi
     return 0
 }
+# Resolve a hostname's A records via 1.1.1.1's DoH JSON API. Result
+# cached per-host in env vars Z2K_POOL_<sanitized_host> for the rest
+# of the install run, so we hit the network at most once per host.
+# Returns space-separated IPs on stdout, or non-zero (with no stdout)
+# if 1.1.1.1 was unreachable / response unparseable.
+#
+# Why this exists: hardcoded Fastly/GitHub-Pages pools used to rotate
+# every ~24h, and a stale entry caused install fails when the canonical
+# anycast IP moved. DoH-resolved pools always reflect current state.
+# `1.1.1.1` itself is on Cloudflare-owned infrastructure and its IP
+# never rotates, so this layer doesn't recurse into the same problem.
+_z2k_resolve_doh_pool() {
+    local host="$1"
+    local cache_var
+    cache_var="Z2K_POOL_$(printf '%s' "$host" | tr -c '[:alnum:]' '_')"
+    eval "local cached=\${$cache_var:-}"
+    if [ -n "$cached" ]; then printf '%s' "$cached"; return 0; fi
+    local resp
+    resp=$(curl -sS --max-time 5 \
+        "https://1.1.1.1/dns-query?name=${host}&type=A" \
+        -H 'accept: application/dns-json' 2>/dev/null) || return 1
+    local ips
+    ips=$(printf '%s' "$resp" \
+          | sed 's/[{},]/\n/g' \
+          | sed -n 's/.*"data":"\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)".*/\1/p' \
+          | tr '\n' ' ' \
+          | sed 's/ *$//')
+    [ -z "$ips" ] && return 1
+    eval "$cache_var=\"\$ips\"; export $cache_var"
+    printf '%s' "$ips"
+    return 0
+}
+
 _z2k_curl_doh() {
     local url="$1" dest="$2"
     _z2k_doh_check
     [ "$_z2k_doh_supported" = "1" ] || return 1
 
-    # GitHub anycast pool (140.82.112-121.x) — frontends for github.com,
-    # api.github.com и редиректы release-asset на objects.githubusercontent.com.
-    # В release-download flow curl делает 302 редирект github.com →
-    # objects.githubusercontent.com (S3-стиль бэкенд) — оба нужно
-    # пинить иначе на shaге redirect снова идёт через провайдерский DNS.
-    # objects.githubusercontent.com живёт на той же anycast сетке
-    # что raw.githubusercontent.com (185.199.108-111.x — GitHub Pages).
-    local gh_pool="140.82.112.3 140.82.113.3 140.82.114.3 140.82.121.3 140.82.116.3"
-    local raw_pool="185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133"
-    local jsd_pool="151.101.1.229 151.101.65.229 151.101.129.229 151.101.193.229"
+    # Anycast pools: prefer DoH-resolved (always fresh), fall through
+    # to hardcoded fallback if 1.1.1.1 itself is unreachable.
+    # Hardcoded pool is verified-working as of 2026-04-26 but rotates.
+    local gh_pool raw_pool jsd_pool obj_pool api_pool
+    gh_pool=$(_z2k_resolve_doh_pool github.com) \
+        || gh_pool="140.82.112.3 140.82.113.3 140.82.114.3 140.82.121.3 140.82.116.3"
+    raw_pool=$(_z2k_resolve_doh_pool raw.githubusercontent.com) \
+        || raw_pool="185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133"
+    jsd_pool=$(_z2k_resolve_doh_pool cdn.jsdelivr.net) \
+        || jsd_pool="151.101.1.229 151.101.65.229 151.101.129.229 151.101.193.229"
+    obj_pool=$(_z2k_resolve_doh_pool objects.githubusercontent.com) \
+        || obj_pool="$raw_pool"
+    api_pool=$(_z2k_resolve_doh_pool api.github.com) \
+        || api_pool="$gh_pool"
 
     local resolve_args=""
     add_resolve() {
@@ -217,12 +254,12 @@ _z2k_curl_doh() {
         *gh-proxy.com*)
             : ;;  # gh-proxy.com — small self-hosted, IP-пин нестабилен
         *api.github.com*)
-            add_resolve api.github.com "$gh_pool" ;;
+            add_resolve api.github.com "$api_pool" ;;
         https://github.com/*/releases/download/*)
             # Release tarballs: 302 от github.com на objects.githubusercontent.com.
             # Пиним оба домена — иначе TSPU SNI-блок на любом из них режет.
             add_resolve github.com "$gh_pool"
-            add_resolve objects.githubusercontent.com "$raw_pool" ;;
+            add_resolve objects.githubusercontent.com "$obj_pool" ;;
     esac
 
     local hdr_file="${dest}.hdr.$$"
@@ -358,12 +395,21 @@ z2k_fetch() {
             ;;
     esac
 
-    # Auto-promote DoH: после первого fail на этом конкретном run'е (или
-    # по env var Z2K_FETCH_PREFER_DOH=1) ставим DoH+pin как ПЕРВЫЙ слой.
-    # Сценарий: установка качает 30+ файлов; если первый файл прошёл по
-    # raw — все ОК; если упал на середине (TSPU stateful sliding-window
-    # после N flow), не имеет смысла каждый последующий снова пробовать
-    # все 4 заведомо-резaнных слоя, проще сразу через DoH+pin.
+    # Helper: any layer-1-4 success resets the DoH fail streak.
+    _z2k_fetch_ok() {
+        Z2K_FETCH_FAIL_STREAK=0
+        export Z2K_FETCH_FAIL_STREAK
+        return 0
+    }
+
+    # Auto-promote DoH: only when we've fallen through to layer 5
+    # at least Z2K_FETCH_DOH_THRESHOLD times in a row (default 2).
+    # A single transient layer-1 fail used to flip the install into
+    # full-DoH mode for the rest of the run, even if the next file
+    # would have come down fine on raw — costing ~10× per file. The
+    # streak counter only promotes when DoH is the consistently-needed
+    # path, not when it just happened to win once.
+    : "${Z2K_FETCH_DOH_THRESHOLD:=2}"
     if [ "${Z2K_FETCH_PREFER_DOH:-0}" = "1" ]; then
         if _z2k_curl_doh "$url" "$dest"; then return 0; fi
         [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest" && return 0
@@ -375,9 +421,9 @@ z2k_fetch() {
     # пустое body ~10× быстрее чем полный GET. Etag sidecar ключован по
     # $dest — переключение зеркала форсирует один full re-fetch
     # (у raw.github и jsdelivr разные etag-ы), это приемлемо.
-    if _z2k_curl_etag "$url" "$dest"; then return 0; fi
-    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
-    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+    if _z2k_curl_etag "$url" "$dest"; then _z2k_fetch_ok; return 0; fi
+    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && { _z2k_fetch_ok; return 0; }
+    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && { _z2k_fetch_ok; return 0; }
 
     # --- Layer 4: Keenetic DNS override via 8.8.8.8 + ndmc ip host ---
     # gh-proxy.com added 2026-04-25 after a user (Денис, MTS) hit the
@@ -395,9 +441,9 @@ z2k_fetch() {
         done
         if [ "$resolved_any" = "1" ]; then
             sleep 1
-            if _z2k_curl_etag "$url" "$dest"; then return 0; fi
-            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
-            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+            if _z2k_curl_etag "$url" "$dest"; then _z2k_fetch_ok; return 0; fi
+            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && { _z2k_fetch_ok; return 0; }
+            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && { _z2k_fetch_ok; return 0; }
         fi
     fi
 
@@ -406,22 +452,21 @@ z2k_fetch() {
     # TLS handshake по SNI + интермиттентно глушит DNS resolver.
     # DoH bypasses MTS resolver entirely; --resolve to anycast edge IP
     # pool side-steps SNI-based connect blocks. Requires curl ≥ 7.62.
-    if _z2k_curl_doh "$url" "$dest"; then
-        # DoH сработал, а layer 1-4 не сработали — значит юзер в blokированном
-        # network'e. Промоутим DoH в начало для всех следующих fetch'ей в
-        # этом run'е, чтобы каждый файл не страдал через 4 заведомо-резaнных слоя.
-        Z2K_FETCH_PREFER_DOH=1
-        export Z2K_FETCH_PREFER_DOH
-        return 0
-    fi
-    if [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest"; then
-        Z2K_FETCH_PREFER_DOH=1; export Z2K_FETCH_PREFER_DOH
-        return 0
-    fi
-    if [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest"; then
-        Z2K_FETCH_PREFER_DOH=1; export Z2K_FETCH_PREFER_DOH
-        return 0
-    fi
+    #
+    # Streak gate: bump the fail-streak counter on each DoH win, only
+    # set PREFER_DOH=1 when streak ≥ Z2K_FETCH_DOH_THRESHOLD. A one-off
+    # transient hiccup no longer pins the rest of the install to DoH.
+    _z2k_doh_won() {
+        Z2K_FETCH_FAIL_STREAK=$((${Z2K_FETCH_FAIL_STREAK:-0} + 1))
+        export Z2K_FETCH_FAIL_STREAK
+        if [ "$Z2K_FETCH_FAIL_STREAK" -ge "$Z2K_FETCH_DOH_THRESHOLD" ]; then
+            Z2K_FETCH_PREFER_DOH=1
+            export Z2K_FETCH_PREFER_DOH
+        fi
+    }
+    if _z2k_curl_doh "$url" "$dest"; then _z2k_doh_won; return 0; fi
+    if [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest"; then _z2k_doh_won; return 0; fi
+    if [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest"; then _z2k_doh_won; return 0; fi
 
     return 1
 }

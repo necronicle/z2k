@@ -330,6 +330,13 @@ AUSTERUS_OPT
                 --lua-desync=syndata:*|\
                 --lua-desync=synack:*)
                     case "$token" in
+                        # The literal `:` chars in `*:badseq:*` act as
+                        # left+right word boundaries — tokens like
+                        # `:fakebadseq:` or `:badseq_extra:` cannot match
+                        # (the second `:` would require `badseq` followed
+                        # by `:`). The other two patterns target
+                        # `:badseq_increment=<N>:` / `:badseq_ack_increment=<N>:`
+                        # explicitly, with no ambiguity.
                         *:badseq:*|*:badseq_increment=*|*:badseq_ack_increment=*)
                             token=$(printf '%s' "$token" | awk '
                                 BEGIN { FS = ":"; OFS = ":"; DEF_SEQ = -10000; DEF_ACK = -66000 }
@@ -478,9 +485,14 @@ AUSTERUS_OPT
         printf '%s' "$input" | awk -v off="$offset" '
             {
                 result = ""
-                while (match($0, /:strategy=[0-9]+/)) {
+                # Match :strategy=<int> with optional leading whitespace
+                # and optional sign so future Strategy.txt formats
+                # (negative IDs, indented keys) survive a rebase.
+                while (match($0, /:strategy=[[:space:]]*-?[0-9]+/)) {
                     result = result substr($0, 1, RSTART - 1)
-                    sid = substr($0, RSTART + 10, RLENGTH - 10) + off
+                    raw = substr($0, RSTART + 10, RLENGTH - 10)
+                    gsub(/[[:space:]]/, "", raw)
+                    sid = (raw + 0) + off
                     result = result ":strategy=" sid
                     $0 = substr($0, RSTART + RLENGTH)
                 }

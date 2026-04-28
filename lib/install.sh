@@ -36,9 +36,25 @@ z2k_fix_cron_perms() {
 # и MГТС CF alt-anycast. Idempotent: на чистом роутере noop.
 cleanup_legacy_ip_hosts() {
     command -v ndmc >/dev/null 2>&1 || return 0
+    # 213.176.74.63 / 79.137.196.7 — always-purge legacy VPS Frankfurt IPs.
+    # 2.58.104.1 — also a legitimate CF alt-anycast that z2k-classify
+    # recommends for МГТС L3 bypass (z2k-classify/src/main.c:115-122,
+    # recipe.c:376,417). DO NOT delete entries pointing CF SLDs at it —
+    # those are user-applied L3 bypasses and must survive the cleanup.
+    # Heuristic: hostname containing "cloudflare" is a classifier-emitted
+    # L3 bypass; everything else on 2.58.104.1 was the legacy Module-3
+    # МГТС catch-all and gets purged.
     local entries
     entries=$(ndmc -c "show running-config" 2>/dev/null \
-        | awk '/^ip host/ && ($4 == "213.176.74.63" || $4 == "79.137.196.7" || $4 == "2.58.104.1") {print}')
+        | awk '
+            /^ip host/ {
+                host = $3; ip = $4
+                if (ip == "213.176.74.63" || ip == "79.137.196.7") { print; next }
+                if (ip == "2.58.104.1") {
+                    if (tolower(host) ~ /cloudflare/) next
+                    print
+                }
+            }')
     [ -z "$entries" ] && return 0
 
     local removed=0 line
@@ -645,7 +661,7 @@ step_build_zapret2() {
     # (см. z2k-enhanced PART II roadmap). Layout tarball-а идентичен upstream
     # поэтому остальная install-логика ниже работает без изменений.
     local api_url="https://api.github.com/repos/necronicle/zapret2-z2k/releases/latest"
-    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v0.9.5-z2k-r0/zapret2-v0.9.5-z2k-r0-openwrt-embedded.tar.gz"
+    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v0.9.5.1-z2k-r0/zapret2-v0.9.5.1-z2k-r0-openwrt-embedded.tar.gz"
     local openwrt_url=""
 
     # Try the API via z2k_fetch (it triggers the layer-4 ndmc DNS
@@ -658,7 +674,7 @@ step_build_zapret2() {
     rm -f "$api_tmp"
 
     if [ -z "$openwrt_url" ]; then
-        print_warning "API недоступен или ответ пуст — использую fallback v0.9.5-z2k-r0"
+        print_warning "API недоступен или ответ пуст — использую fallback v0.9.5.1-z2k-r0"
         openwrt_url="$fallback_url"
     fi
 
@@ -1748,6 +1764,47 @@ step_install_z2k_classify() {
         print_warning "z2k-classify: не удалось скачать (rolling release ещё не создан?) — пропускаем"
         # Non-fatal: classify is a support tool, not core DPI bypass.
         return 0
+    fi
+
+    # Fetch canonical CDN CIDR lists. recipe.c reads these at runtime
+    # with the embedded table as fallback, so a stale embedded list
+    # (CF rotates ~quarterly) doesn't misclassify modern allocations.
+    # Failure is non-fatal — classifier still works on embedded data.
+    local lists_dir="${ZAPRET2_DIR}/lists"
+    mkdir -p "$lists_dir" 2>/dev/null
+    print_info "Загрузка актуальных CIDR-списков CDN..."
+
+    # Cloudflare AS13335 — canonical txt, one prefix per line.
+    if curl -fsSL --connect-timeout 10 --max-time 30 \
+            -o "${lists_dir}/cf-cidrs-v4.txt.new" \
+            "https://www.cloudflare.com/ips-v4" 2>/dev/null \
+        && [ -s "${lists_dir}/cf-cidrs-v4.txt.new" ]; then
+        mv -f "${lists_dir}/cf-cidrs-v4.txt.new" "${lists_dir}/cf-cidrs-v4.txt"
+        local cnt
+        cnt=$(grep -c '/' "${lists_dir}/cf-cidrs-v4.txt" 2>/dev/null || echo 0)
+        print_success "Cloudflare CIDR: $cnt prefixes"
+    else
+        rm -f "${lists_dir}/cf-cidrs-v4.txt.new" 2>/dev/null
+        print_warning "Cloudflare CIDR: fetch failed — embedded fallback used"
+    fi
+
+    # Google CIDR — gstatic txt, same format. Single source of truth
+    # for AS15169 + Google Cloud (34.x, 35.x ranges).
+    if curl -fsSL --connect-timeout 10 --max-time 30 \
+            -o "${lists_dir}/goog-cidrs-v4.txt.new" \
+            "https://www.gstatic.com/ipranges/goog.txt" 2>/dev/null \
+        && [ -s "${lists_dir}/goog-cidrs-v4.txt.new" ]; then
+        # gstatic mixes IPv4+IPv6; keep only v4.
+        grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/' \
+            "${lists_dir}/goog-cidrs-v4.txt.new" \
+            > "${lists_dir}/goog-cidrs-v4.txt" 2>/dev/null
+        rm -f "${lists_dir}/goog-cidrs-v4.txt.new"
+        local cnt
+        cnt=$(grep -c '/' "${lists_dir}/goog-cidrs-v4.txt" 2>/dev/null || echo 0)
+        print_success "Google CIDR: $cnt prefixes"
+    else
+        rm -f "${lists_dir}/goog-cidrs-v4.txt.new" 2>/dev/null
+        print_warning "Google CIDR: fetch failed — embedded fallback used"
     fi
 
     return 0
