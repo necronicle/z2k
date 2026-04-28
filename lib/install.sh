@@ -54,8 +54,10 @@ cleanup_legacy_ip_hosts() {
                     if (tolower(host) ~ /cloudflare/) next
                     print
                 }
-            }')
-    [ -z "$entries" ] && return 0
+            }' || true)
+    # Under z2k.sh `set -e`, `[ -z "$x" ] && return 0` aborts the script
+    # when $x is non-empty (the [ exits 1 because -z is false). Use if/fi.
+    if [ -z "$entries" ]; then return 0; fi
 
     local removed=0 line
     local IFS_orig="$IFS"
@@ -141,8 +143,9 @@ purge_legacy_ndmc_records() {
     local pattern="^ip host (raw\\.githubusercontent\\.com|cdn\\.jsdelivr\\.net|gh-proxy\\.com|api\\.github\\.com) "
 
     local entries
-    entries=$(ndmc -c "show running-config" 2>/dev/null | grep -E "$pattern")
-    [ -z "$entries" ] && return 0
+    # `|| true` masks grep's exit=1 on no-match (z2k.sh runs under set -e).
+    entries=$(ndmc -c "show running-config" 2>/dev/null | grep -E "$pattern" || true)
+    if [ -z "$entries" ]; then return 0; fi
 
     local removed=0 host ip line
     local IFS_orig="$IFS"
