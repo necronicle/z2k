@@ -181,16 +181,20 @@ function z2k_detector_log_init_once()
     tostring(os.getenv("Z2K_DETECTOR_CAP") or "<unset>")))
 end
 
--- Flow-key helper: state maps are per-host, but parallel browser
--- connections to the same SNI used to trample each other's last_in_ts.
--- Keying by (host, src_port) lets each flow track its own progress;
--- the LRU eviction policy still bounds total entries.
+-- Detector state is keyed by HOST only. This is intentional:
+-- the detection target is "the destination host is unreachable",
+-- so any flow's CH-without-SH or mid-stream-stall is evidence about
+-- the host, not just that flow. A short-lived B5 fix (2026-04-28)
+-- switched to host:src_port keying to avoid imagined "trampling",
+-- but that broke single-device detection: each new TCP connect has
+-- a fresh src_port, so prev_ch_ts was always nil, so the stall
+-- detector never fired. Reverted same day after Mark hit it on
+-- Android (autocircular wouldn't engage rotation; only by playing
+-- YT on a second device with RST/alert detection — host-keyed via
+-- standard_failure_detector — the rotator would learn a working
+-- strategy and pin it for everyone).
 local function z2k_flow_key(desync, host)
-  local sp = 0
-  if desync and desync.dis and desync.dis.tcp then
-    sp = desync.dis.tcp.th_sport or 0
-  end
-  return host .. ":" .. tostring(sp)
+  return host
 end
 
 local function z2k_detector_evict_oldest(map, batch, ts_of)
