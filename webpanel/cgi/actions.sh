@@ -157,8 +157,11 @@ whitelist_list() {
 whitelist_add() {
     local domain="$1"
     # Basic sanity: lowercase letters/digits/.-, no spaces, no shell metachars.
+    # Reject leading `-` defensively — no legitimate hostname starts with one
+    # and any shell-out path would treat it as an option flag.
     case "$domain" in
         ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        -*) echo "invalid domain" >&2; return 1 ;;
         *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac
     mkdir -p "$LISTS_DIR" 2>/dev/null
@@ -177,6 +180,7 @@ whitelist_delete() {
     [ -f "$WHITELIST_FILE" ] || return 0
     case "$domain" in
         ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        -*) echo "invalid domain" >&2; return 1 ;;
         *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac
     if ! grep -qxF "$domain" "$WHITELIST_FILE"; then
