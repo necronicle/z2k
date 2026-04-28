@@ -792,6 +792,10 @@ update_z2k() {
         if [ -f "/opt/zapret2/tg-tunnel-watchdog.sh" ]; then
             cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDEOF'
 #!/bin/sh
+# Cron на Entware: PATH без /opt/bin → awk/pidof/killall не находятся,
+# flag-check тихо отваливается и daemon воскресает каждую минуту.
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 LOG="/tmp/tg-tunnel.log"
 BIN="/opt/sbin/tg-mtproxy-client"
 CONFIG_FILE="/opt/zapret2/config"

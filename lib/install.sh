@@ -1742,6 +1742,13 @@ step_finalize() {
             # the init script (handles iptables + pid file properly).
             cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDSCRIPT'
 #!/bin/sh
+# Cron на Entware/busybox запускается с минимальным PATH (/sbin:/usr/sbin:/bin:/usr/bin)
+# который НЕ включает /opt/bin где живут awk/pidof/pgrep/date/killall/curl/logger.
+# Без этого все утилиты "command not found", flag-check на awk молча падает,
+# user_disabled пустой, скрипт уходит в "process not running" и каждую минуту
+# воскрешает daemon — даже когда юзер явно остановил его через menu/webpanel.
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 # tg-tunnel watchdog
 #  1. Restart on CONNECT_FAIL storm (legacy passive check)
 #  2. Restart when an end-to-end HTTPS probe through the tunnel fails 3x
@@ -1844,6 +1851,10 @@ WDSCRIPT
             # Install init script for autostart on reboot
             cat > /opt/etc/init.d/S98tg-tunnel << 'INITEOF'
 #!/bin/sh
+# Entware init.d запускается с минимальным PATH без /opt/bin — flag-check
+# на awk молча падает и daemon стартует даже на TG_PROXY_USER_DISABLED=1.
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 BIN="/opt/sbin/tg-mtproxy-client"
 LOG="/tmp/tg-tunnel.log"
 PIDFILE="/var/run/tg-tunnel.pid"
