@@ -1308,6 +1308,14 @@ SUBMENU
 
                 if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
                     print_success "Tunnel запущен"
+                    # Clear user-disabled flag so the watchdog stops
+                    # respecting an old "stop" intent and resumes
+                    # auto-restarting on real crashes.
+                    if [ -f "${ZAPRET2_DIR}/config" ]; then
+                        if grep -q '^TG_PROXY_USER_DISABLED=' "${ZAPRET2_DIR}/config"; then
+                            sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=0/' "${ZAPRET2_DIR}/config"
+                        fi
+                    fi
                     # Setup iptables
                     for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                         iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
@@ -1324,12 +1332,21 @@ SUBMENU
                 ;;
 
             2)
-                # Stop tunnel + cleanup
+                # Stop tunnel + cleanup. Set user-disabled marker BEFORE
+                # killing the process so the watchdog (cron, every minute)
+                # sees the flag and won't resurrect the daemon in 3 min.
+                if [ -f "${ZAPRET2_DIR}/config" ]; then
+                    if grep -q '^TG_PROXY_USER_DISABLED=' "${ZAPRET2_DIR}/config"; then
+                        sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=1/' "${ZAPRET2_DIR}/config"
+                    else
+                        echo "TG_PROXY_USER_DISABLED=1" >> "${ZAPRET2_DIR}/config"
+                    fi
+                fi
                 killall tg-mtproxy-client 2>/dev/null || true
                 for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                     iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || true
                 done
-                print_success "Telegram tunnel выключен"
+                print_success "Telegram tunnel выключен (watchdog не будет восстанавливать)"
                 pause
                 ;;
 

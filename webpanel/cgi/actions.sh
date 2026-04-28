@@ -197,6 +197,14 @@ whitelist_delete() {
 tunnel_pid() { pgrep -f "tg-mtproxy-client" 2>/dev/null | head -1; }
 
 tunnel_enable() {
+    # Clear user-disabled flag before starting so the watchdog resumes
+    # auto-restarting on real crashes.
+    local cfg="${ZAPRET2_DIR}/config"
+    if [ -f "$cfg" ]; then
+        if grep -q '^TG_PROXY_USER_DISABLED=' "$cfg"; then
+            sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=0/' "$cfg"
+        fi
+    fi
     if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
         /opt/etc/init.d/S98tg-tunnel start >/dev/null 2>&1
     else
@@ -206,6 +214,17 @@ tunnel_enable() {
 }
 
 tunnel_disable() {
+    # Set user-disabled marker BEFORE stopping so the watchdog (cron,
+    # every minute) sees the flag and respects the user's intent
+    # instead of resurrecting the daemon ~3 min later.
+    local cfg="${ZAPRET2_DIR}/config"
+    if [ -f "$cfg" ]; then
+        if grep -q '^TG_PROXY_USER_DISABLED=' "$cfg"; then
+            sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=1/' "$cfg"
+        else
+            echo "TG_PROXY_USER_DISABLED=1" >> "$cfg"
+        fi
+    fi
     if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
         /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
     fi

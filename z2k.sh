@@ -784,6 +784,14 @@ update_z2k() {
 #!/bin/sh
 LOG="/tmp/tg-tunnel.log"
 BIN="/opt/sbin/tg-mtproxy-client"
+CONFIG_FILE="/opt/zapret2/config"
+if [ -f "$CONFIG_FILE" ]; then
+    user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
+    if [ "$user_disabled" = "1" ]; then
+        pidof tg-mtproxy-client >/dev/null 2>&1 && killall -9 tg-mtproxy-client 2>/dev/null
+        exit 0
+    fi
+fi
 [ ! -f "$LOG" ] && exit 0
 pgrep -f "tg-mtproxy-client" >/dev/null || exit 0
 FAILS=$(tail -40 "$LOG" | grep -c "CONNECT_FAIL")

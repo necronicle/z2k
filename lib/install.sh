@@ -1753,6 +1753,21 @@ PROBE_URL=https://core.telegram.org/
 
 [ -x "$BIN" ] || exit 0
 
+# Honor explicit user disable from menu / webpanel. The "stop tunnel"
+# action there sets TG_PROXY_USER_DISABLED=1 in /opt/zapret2/config so
+# the watchdog stops resurrecting the daemon every 3 min.
+# `re-enable` from the same UI flips it back to 0.
+CONFIG_FILE="/opt/zapret2/config"
+if [ -f "$CONFIG_FILE" ]; then
+    user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
+    if [ "$user_disabled" = "1" ]; then
+        if pidof tg-mtproxy-client >/dev/null 2>&1; then
+            killall -9 tg-mtproxy-client 2>/dev/null
+        fi
+        exit 0
+    fi
+fi
+
 restart_tunnel() {
     local reason="$1"
     logger -t tg-watchdog "restart: $reason"
