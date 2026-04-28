@@ -425,18 +425,43 @@ z2k_fetch() {
     [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && { _z2k_fetch_ok; return 0; }
     [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && { _z2k_fetch_ok; return 0; }
 
+    # All three normal mirrors fell through. This is the signal the user
+    # might have a poisoned/blocked channel — but ONE failure can also be
+    # transient (api.github.com rate limit, sporadic TCP RST). Bump the
+    # streak counter; only the heavyweight fallbacks (Layer 4 ndmc DNS
+    # override, Layer 5 DoH) fire after the streak crosses a threshold.
+    Z2K_FETCH_FAIL_STREAK=$((${Z2K_FETCH_FAIL_STREAK:-0} + 1))
+    export Z2K_FETCH_FAIL_STREAK
+
     # --- Layer 4: Keenetic DNS override via 8.8.8.8 + ndmc ip host ---
-    # gh-proxy.com added 2026-04-25 after a user (Денис, MTS) hit the
-    # case where all three direct fetches failed mid-install and even
-    # the gh-proxy fallback couldn't resolve. Without it our retry loop
-    # below only reattempts raw + jsdelivr.
-    if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
+    # Originally added 2026-04-25 for users (e.g. Денис, MTS) where all
+    # three direct fetches failed mid-install due to ISP DNS poisoning
+    # of github hosts.
+    #
+    # Gated by Z2K_FETCH_NDMC_THRESHOLD (default 2): a single transient
+    # Layer 1-3 fall-through is NOT enough. Pre-gate, one rate-limit on
+    # api.github.com would silently inject a permanent `ip host` record
+    # into the user's running-config, pinning all their github traffic
+    # to a single IP forever (Mark, 2026-04-28). The threshold ensures
+    # only sustained inability to reach github triggers DNS override.
+    #
+    # Records we write are tracked in Z2K_MANAGED_NDMC so install/uninstall
+    # can clean them up later, and so a future fix can refresh them when
+    # they go stale.
+    : "${Z2K_FETCH_NDMC_THRESHOLD:=2}"
+    Z2K_MANAGED_NDMC="${Z2K_MANAGED_NDMC:-/opt/zapret2/state/ndmc-managed.txt}"
+    if [ "$Z2K_FETCH_FAIL_STREAK" -ge "$Z2K_FETCH_NDMC_THRESHOLD" ] && \
+       command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
+        mkdir -p "$(dirname "$Z2K_MANAGED_NDMC")" 2>/dev/null
         for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
-                ndmc -c "ip host $host $ip" >/dev/null 2>&1 && resolved_any=1
+                if ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
+                    resolved_any=1
+                    printf '%s %s\n' "$host" "$ip" >> "$Z2K_MANAGED_NDMC" 2>/dev/null
+                fi
             fi
         done
         if [ "$resolved_any" = "1" ]; then
@@ -453,13 +478,13 @@ z2k_fetch() {
     # DoH bypasses MTS resolver entirely; --resolve to anycast edge IP
     # pool side-steps SNI-based connect blocks. Requires curl ≥ 7.62.
     #
-    # Streak gate: bump the fail-streak counter on each DoH win, only
-    # set PREFER_DOH=1 when streak ≥ Z2K_FETCH_DOH_THRESHOLD. A one-off
-    # transient hiccup no longer pins the rest of the install to DoH.
+    # The streak counter is now bumped at the Layer 1-3 fall-through
+    # site above, so by the time DoH succeeds we already know how many
+    # files have completely fallen through. Promote PREFER_DOH only when
+    # the threshold is met — same semantics as before, just without the
+    # extra bump that double-counted DoH wins.
     _z2k_doh_won() {
-        Z2K_FETCH_FAIL_STREAK=$((${Z2K_FETCH_FAIL_STREAK:-0} + 1))
-        export Z2K_FETCH_FAIL_STREAK
-        if [ "$Z2K_FETCH_FAIL_STREAK" -ge "$Z2K_FETCH_DOH_THRESHOLD" ]; then
+        if [ "${Z2K_FETCH_FAIL_STREAK:-0}" -ge "${Z2K_FETCH_DOH_THRESHOLD:-2}" ]; then
             Z2K_FETCH_PREFER_DOH=1
             export Z2K_FETCH_PREFER_DOH
         fi
