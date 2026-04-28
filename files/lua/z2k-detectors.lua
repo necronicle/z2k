@@ -82,6 +82,7 @@ local function z2k_http_dpi_redirect(desync)
 end
 
 function z2k_tls_alert_fatal(desync, crec)
+  z2k_detector_log_init_once()
   if type(standard_failure_detector) == "function" then
     local ok, res = pcall(standard_failure_detector, desync, crec)
     if ok and res then return true end
@@ -154,8 +155,19 @@ if Z2K_DETECTOR_EVICT_INTERVAL < 16 then Z2K_DETECTOR_EVICT_INTERVAL = 16 end
 
 -- One-shot startup line so a misconfigured Z2K_DETECTOR_CAP env var
 -- (e.g. S99zapret2 PATH glitch leaving the var unset) is visible in
--- the regular nfqws2 log. Quiet otherwise.
-if type(DLOG) == "function" then
+-- the regular nfqws2 log.
+--
+-- Deferred to first packet because at module-load time DLOG is not yet
+-- defined — z2k-modern-core.lua, which sets DLOG to a real function (or
+-- the noop fallback), loads AFTER this file in the --lua-init chain.
+-- A direct call here would always hit a nil DLOG. The detectors run on
+-- every passing TLS handshake, so the message lands in the log within
+-- seconds of nfqws2 startup.
+local _z2k_detector_init_logged = false
+local function z2k_detector_log_init_once()
+  if _z2k_detector_init_logged then return end
+  _z2k_detector_init_logged = true
+  if type(DLOG) ~= "function" then return end
   DLOG(string.format(
     "z2k-detectors: cap=%d evict_batch=%d evict_interval=%d (env=%s)",
     Z2K_DETECTOR_MAP_MAX, Z2K_DETECTOR_EVICT_BATCH,
