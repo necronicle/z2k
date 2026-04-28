@@ -241,15 +241,43 @@ function z2k_tls_stalled(desync, crec)
   local key = z2k_flow_key(desync, host)
 
   -- Incoming ServerHello: handshake progressing for this flow, clear tracking.
-  -- Validate the record: TSPU sometimes injects a fake SH-shaped TLS alert
-  -- before silent drop. Real ServerHellos carry a TLS handshake record
-  -- (type 0x16) at byte 1 and are always >> 100 bytes (cipher suite,
-  -- session id, extensions). Sub-100-byte "ServerHellos" are spoofed
-  -- alerts; do NOT clear stall state on them.
+  -- Validate the record before clearing — TSPU may inject malformed
+  -- TLS-shaped records to confuse detectors. We require a structurally
+  -- plausible TLS record carrying a ServerHello handshake message:
+  --
+  --   byte 1     : TLS record content_type == 0x16 (handshake)
+  --                (RFC 5246 §6.2.1 / RFC 8446 §5.1)
+  --   bytes 2-3  : record version major=0x03, minor in {0x01..0x04}
+  --                (TLS 1.0..1.3 — TLS 1.3 ClientHello uses 0x0303
+  --                on the wire per RFC 8446 §5.1)
+  --   bytes 4-5  : record length, big-endian (must be ≥ inner length)
+  --   byte 6     : handshake_type == 0x02 (ServerHello — RFC 8446 §4)
+  --   bytes 7-9  : handshake length, big-endian
+  --
+  -- Size floor lowered from 100 → 60 bytes per RFC 8446 §4.1.3 — the
+  -- theoretical SH minimum is ~51 bytes; commonly observed in the wild
+  -- 90-130 bytes for major CDNs but smaller is RFC-legal. <60 with
+  -- correct fields is still extremely unusual and we treat it as
+  -- structurally suspicious.
+  --
+  -- We do NOT additionally require ChangeCipherSpec or specific
+  -- extensions: TLS 1.3 makes CCS optional (compatibility mode only —
+  -- RFC 8446 Appendix D.4), and embedded TLS stacks may omit it.
   if not desync.outgoing and desync.l7payload == "tls_server_hello" then
     local p = desync.dis and desync.dis.payload
-    if type(p) == "string" and #p >= 100 and p:byte(1) == 0x16 then
-      z2k_tls_stalled_host_ts[key] = nil
+    if type(p) == "string" and #p >= 60
+       and p:byte(1) == 0x16
+       and p:byte(2) == 0x03
+       and p:byte(3) >= 0x01 and p:byte(3) <= 0x04
+       and p:byte(6) == 0x02 then
+      -- record_length and handshake_length sanity: both must point
+      -- inside the captured payload; any mismatch suggests truncation
+      -- or framing fakery.
+      local rec_len = p:byte(4) * 256 + p:byte(5)
+      local hs_len  = p:byte(8) * 256 + p:byte(9)
+      if rec_len + 5 <= #p and hs_len + 4 <= rec_len then
+        z2k_tls_stalled_host_ts[key] = nil
+      end
     end
     return false
   end
