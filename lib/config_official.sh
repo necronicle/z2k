@@ -195,6 +195,67 @@ AUSTERUS_OPT
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
     game_udp=$(ensure_circular_nld2 "$game_udp")
 
+    # Override the default `inseq=4096` on TCP TLS circulars so the
+    # standard success_detector does NOT fire prematurely before the
+    # community-confirmed TSPU "16KB byte-gate" RST window
+    # (typically observed at 12-18KB into the incoming stream — see
+    # ntc.party 22516 / Habr 1009560). Source for the threshold
+    # mechanic: zapret-auto.lua:236 — incoming `seq > arg.inseq`
+    # triggers `standard_success_detector` → `crec.nocheck = true`,
+    # at which point a later RST in the same flow is invisible to
+    # any failure detector (zapret-auto.lua:261). With inseq=18000
+    # success only fires after we've cleared the realistic gate
+    # window; if the gate hits at 12-17K we still see the RST as a
+    # failure and rotate.
+    #
+    # Limitation acknowledged: gates above ~18KB are NOT closed by
+    # this. Reports of 24-32KB variants exist; those would need a
+    # higher inseq, but raising it further also delays legitimate
+    # success on small handshakes/payloads.
+    #
+    # Applied only to TCP TLS profiles (rkn_tcp, yt_tcp, gv_tcp).
+    # UDP profiles (quic_udp, game_udp) use udp_in/udp_out instead
+    # of inseq and are left untouched.
+    ensure_circular_tcp_inseq() {
+        local input="$1"
+        local target="${2:-18000}"
+        local out=""
+        local token=""
+        local opts=""
+        local part=""
+        local rest=""
+        local old_ifs="$IFS"
+
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    opts="${token#--lua-desync=circular:}"
+                    rest=""
+                    IFS=':'
+                    for part in $opts; do
+                        case "$part" in
+                            inseq=*) ;;
+                            *) rest="${rest:+$rest:}$part" ;;
+                        esac
+                    done
+                    IFS="$old_ifs"
+                    if [ -n "$rest" ]; then
+                        token="--lua-desync=circular:${rest}:inseq=${target}"
+                    else
+                        token="--lua-desync=circular:inseq=${target}"
+                    fi
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        IFS="$old_ifs"
+        printf '%s' "$out"
+    }
+
+    youtube_tcp=$(ensure_circular_tcp_inseq "$youtube_tcp" 18000)
+    youtube_gv_tcp=$(ensure_circular_tcp_inseq "$youtube_gv_tcp" 18000)
+    rkn_tcp=$(ensure_circular_tcp_inseq "$rkn_tcp" 18000)
+
     # Phase 6A: auto-inject fool=z2k_dynamic_ttl into every
     # --lua-desync=fake:*  (and fakedsplit/fakeddisorder/hostfakesplit) that
     # doesn't already pin an explicit TTL via ip_ttl=/ip6_ttl=/ip_autottl=/
