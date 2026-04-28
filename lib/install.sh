@@ -2,6 +2,49 @@
 # lib/install.sh - Полный процесс установки zapret2 для Keenetic
 # 12-шаговая установка с интеграцией списков доменов и стратегий
 
+# Refresh stale ip host records that z2k_fetch's Layer 4 wrote in past
+# install runs. These are in /opt/zapret2/state/ndmc-managed.txt — one
+# `host ip` per line. We compare each tracked record against current
+# DNS for that host: if the IP we wrote no longer matches the canonical
+# resolution, drop it (saves the user from being pinned to a stale IP
+# that GitHub/Fastly has rotated away from).
+#
+# Records the user added manually (not in our tracking file) are never
+# touched. If the tracking file is missing — nothing to do.
+refresh_stale_ndmc_records() {
+    command -v ndmc >/dev/null 2>&1 || return 0
+    local managed="${ZAPRET2_DIR:-/opt/zapret2}/state/ndmc-managed.txt"
+    [ -s "$managed" ] || return 0
+    command -v nslookup >/dev/null 2>&1 || return 0
+
+    local removed=0 host ip current
+    while IFS=' ' read -r host ip; do
+        [ -z "$host" ] || [ -z "$ip" ] && continue
+        ndmc -c "show running-config" 2>/dev/null \
+            | grep -qxE "ip host $host $ip" || continue
+        current=$(nslookup "$host" 8.8.8.8 2>/dev/null \
+            | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
+        if [ -z "$current" ] || [ "$current" != "$ip" ]; then
+            ndmc -c "no ip host $host $ip" >/dev/null 2>&1 && removed=$((removed + 1))
+        fi
+    done < "$managed"
+
+    if [ "$removed" -gt 0 ]; then
+        ndmc -c "system configuration save" >/dev/null 2>&1
+        local tmp="${managed}.new.$$"
+        : > "$tmp"
+        while IFS=' ' read -r host ip; do
+            [ -z "$host" ] || [ -z "$ip" ] && continue
+            ndmc -c "show running-config" 2>/dev/null \
+                | grep -qxE "ip host $host $ip" \
+                && printf '%s %s\n' "$host" "$ip" >> "$tmp"
+        done < "$managed"
+        mv -f "$tmp" "$managed" 2>/dev/null
+        print_info "Refresh: убрано $removed stale ip host записей (DNS-override layer)"
+    fi
+    return 0
+}
+
 # ==============================================================================
 # ШАГ 0: ПРОВЕРКА ROOT ПРАВ (КРИТИЧНО)
 # ==============================================================================
@@ -1968,6 +2011,12 @@ run_full_install() {
 
     # Выполнить все шаги последовательно
     step_check_root || return 1                    # ← НОВОЕ (0/12)
+
+    # Refresh stale records that z2k_fetch Layer 4 may have written in
+    # past installs. On a clean router or one where Layer 4 never fired
+    # (the common case post-2026-04-28 streak gate) this is a noop.
+    refresh_stale_ndmc_records
+
     step_update_packages || return 1               # 1/12
     step_check_dns || return 1                     # ← НОВОЕ (2/12)
     step_install_dependencies || return 1          # 3/12 (расширено)

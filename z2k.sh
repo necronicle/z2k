@@ -143,41 +143,67 @@ z2k_fetch() {
 
     # --- Layer 1: direct ---
     if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
+        Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
         return 0
     fi
 
     # --- Layer 2: jsdelivr CDN ---
     if [ -n "$jsdelivr" ] && \
        curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
+        Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
         return 0
     fi
 
     # --- Layer 3: gh-proxy.com reverse-proxy ---
     if [ -n "$gh_proxy" ] && \
        curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
+        Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
         return 0
     fi
+
+    # All three normal mirrors fell through. One failure can be transient
+    # (api.github.com rate limit, sporadic TCP RST). Bump the streak so
+    # Layer 4 only fires after sustained failure — a single hiccup must
+    # never inject a permanent ndmc record into running-config.
+    Z2K_FETCH_FAIL_STREAK=$((${Z2K_FETCH_FAIL_STREAK:-0} + 1))
+    export Z2K_FETCH_FAIL_STREAK
 
     # --- Layer 4: Keenetic DNS override via 8.8.8.8 + ndmc ip host ---
     # Copied-in-spirit from zapret4rocket z4r.sh:1075-1107 — same failure
     # mode (ISP DNS poisoning of github hosts), same fix.
-    if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
+    #
+    # Gated by Z2K_FETCH_NDMC_THRESHOLD (default 2): one transient
+    # Layer 1-3 fall-through is NOT enough. Pre-gate, a single rate
+    # limit on api.github.com would silently inject a permanent
+    # `ip host` record into running-config, pinning all the user's
+    # github traffic to a single IP forever. Records we write are
+    # tracked in Z2K_MANAGED_NDMC so install/uninstall can clean them.
+    : "${Z2K_FETCH_NDMC_THRESHOLD:=2}"
+    Z2K_MANAGED_NDMC="${Z2K_MANAGED_NDMC:-/opt/zapret2/state/ndmc-managed.txt}"
+    if [ "$Z2K_FETCH_FAIL_STREAK" -ge "$Z2K_FETCH_NDMC_THRESHOLD" ] && \
+       command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
+        mkdir -p "$(dirname "$Z2K_MANAGED_NDMC")" 2>/dev/null
         for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
-                ndmc -c "ip host $host $ip" >/dev/null 2>&1 && resolved_any=1
+                if ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
+                    resolved_any=1
+                    printf '%s %s\n' "$host" "$ip" >> "$Z2K_MANAGED_NDMC" 2>/dev/null
+                fi
             fi
         done
         if [ "$resolved_any" = "1" ]; then
             # Let NDM re-read DNS cache before we retry.
             sleep 1
             if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
+                Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
                 return 0
             fi
             if [ -n "$jsdelivr" ] && \
                curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
+                Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
                 return 0
             fi
         fi
