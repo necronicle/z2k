@@ -61,8 +61,11 @@ purge_legacy_ndmc_records() {
     local pattern="^ip host (raw\\.githubusercontent\\.com|cdn\\.jsdelivr\\.net|gh-proxy\\.com|api\\.github\\.com) "
 
     local entries
-    entries=$(ndmc -c "show running-config" 2>/dev/null | grep -E "$pattern")
-    [ -z "$entries" ] && return 0
+    # `|| true` masks grep's exit=1 on no-match (z2k.sh runs under set -e).
+    entries=$(ndmc -c "show running-config" 2>/dev/null | grep -E "$pattern" || true)
+    # Use if/fi instead of `[ -z ] && return 0` — under set -e the `[`
+    # exits 1 on the non-empty branch and would abort the script.
+    if [ -z "$entries" ]; then return 0; fi
 
     local removed=0 host ip line
     local IFS_orig="$IFS"
