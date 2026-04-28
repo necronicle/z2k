@@ -125,6 +125,55 @@ refresh_stale_ndmc_records() {
     return 0
 }
 
+# Purge any `ip host` record for our 4 known Layer-4 hostnames that
+# was written by a pre-2026-04-28 z2k_fetch (no tracking file existed
+# then). These are *always* records WE wrote — there's no legitimate
+# reason a user would manually add `ip host raw.githubusercontent.com X`
+# in their Keenetic config — it's solely a z2k-fetch artifact.
+#
+# Idempotent: on a clean router (or one already purged) — noop.
+purge_legacy_ndmc_records() {
+    command -v ndmc >/dev/null 2>&1 || return 0
+    local managed="${ZAPRET2_DIR:-/opt/zapret2}/state/ndmc-managed.txt"
+
+    # Hostnames z2k_fetch Layer 4 has ever written. Add new ones here
+    # when extending z2k_fetch hostlist.
+    local pattern="^ip host (raw\\.githubusercontent\\.com|cdn\\.jsdelivr\\.net|gh-proxy\\.com|api\\.github\\.com) "
+
+    local entries
+    entries=$(ndmc -c "show running-config" 2>/dev/null | grep -E "$pattern")
+    [ -z "$entries" ] && return 0
+
+    local removed=0 host ip line
+    local IFS_orig="$IFS"
+    IFS='
+'
+    for line in $entries; do
+        IFS="$IFS_orig"
+        host=$(printf '%s' "$line" | awk '{print $3}')
+        ip=$(printf '%s' "$line" | awk '{print $4}')
+        # If this exact pair is in the tracking file, skip — refresh_stale
+        # will handle it correctly (it knows how to compare with current DNS).
+        if [ -s "$managed" ] && grep -qxF "$host $ip" "$managed" 2>/dev/null; then
+            IFS='
+'
+            continue
+        fi
+        # Untracked = written by old z2k_fetch before tracking existed.
+        # Always remove. NDM falls through to normal DNS for these hosts.
+        ndmc -c "no $line" >/dev/null 2>&1 && removed=$((removed + 1))
+        IFS='
+'
+    done
+    IFS="$IFS_orig"
+
+    if [ "$removed" -gt 0 ]; then
+        ndmc -c "system configuration save" >/dev/null 2>&1
+        print_info "Purge: убрано $removed legacy ip host записей (Layer-4 наследие до streak-gate fix)"
+    fi
+    return 0
+}
+
 # ==============================================================================
 # ШАГ 0: ПРОВЕРКА ROOT ПРАВ (КРИТИЧНО)
 # ==============================================================================
@@ -2197,8 +2246,10 @@ run_full_install() {
     # Frankfurt → x5-10 медленнее. Idempotent — на чистом роутере ничего не делает.
     cleanup_legacy_ip_hosts
 
-    # Refresh stale records that z2k_fetch Layer 4 wrote in past installs.
-    # On a clean router (or one where Layer 4 never fired) — noop.
+    # Purge legacy Layer-4 records (pre-tracking-file era) — these were
+    # written by old z2k_fetch on a single transient fail and got stuck.
+    # Then refresh tracked records (post-fix era) against current DNS.
+    purge_legacy_ndmc_records
     refresh_stale_ndmc_records
 
     step_update_packages || return 1               # 1/12
