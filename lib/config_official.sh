@@ -256,11 +256,11 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(ensure_circular_tcp_inseq "$youtube_gv_tcp" 18000)
     rkn_tcp=$(ensure_circular_tcp_inseq "$rkn_tcp" 18000)
 
-    # ensure_circular_arg_set: append `<arg>=<value>` to every circular token
-    # in $input that doesn't already carry that arg. Generic helper used to
-    # wire success_detector= / no_http_redirect / etc. on TLS profiles.
-    # If the arg already has any value, the existing one is preserved
-    # (idempotent — repeated runs of create_official_config don't pile up).
+    # ensure_circular_arg_set: append `<arg>=<value>` (or bare `<arg>` flag)
+    # to every circular token in $input that doesn't already carry that arg.
+    # Generic helper used to wire success_detector= / no_http_redirect /
+    # failure_detector= etc. on TLS profiles. Idempotent for both forms:
+    # repeated runs of create_official_config don't pile up duplicates.
     ensure_circular_arg_set() {
         local input="$1"
         local arg_name="$2"
@@ -271,7 +271,12 @@ AUSTERUS_OPT
             case "$token" in
                 --lua-desync=circular:*)
                     case "$token" in
-                        *":${arg_name}="*) ;;  # already present
+                        # value-form already present
+                        *":${arg_name}="*) ;;
+                        # flag-form already present in middle (followed by another arg)
+                        *":${arg_name}:"*) ;;
+                        # flag-form already present at end of token
+                        *":${arg_name}") ;;
                         *)
                             if [ -n "$arg_value" ]; then
                                 token="${token}:${arg_name}=${arg_value}"
@@ -297,6 +302,26 @@ AUSTERUS_OPT
     # z2k_success_no_reset (now made HTTP-neutral-aware in commit 4).
     rkn_tcp=$(ensure_circular_arg_set "$rkn_tcp" "success_detector" "z2k_http_success_positive_only")
     youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "success_detector" "z2k_http_success_positive_only")
+
+    # Wire HTTP-aware failure_detector for yt_tcp / gv_tcp.
+    #
+    # CRITICAL coverage gap if missing: with no_http_redirect set below,
+    # standard_failure_detector's 302/307 cross-SLD branch is disabled
+    # (zapret-auto.lua:182). For rkn_tcp the classifier check is reachable
+    # via ensure_rkn_failure_detector below (which sets z2k_mid_stream_stall,
+    # whose chain includes z2k_http_classifier_check). yt_tcp / gv_tcp
+    # had NO custom failure_detector — without this assignment, a 302
+    # to lawfilter.* / warn.beeline.ru on yt_tcp would reach neither
+    # standard's redirect branch nor our classifier. The only signal
+    # left would be the success_detector returning false on neutral —
+    # strategy stays pinned, no rotation. Net regression.
+    #
+    # z2k_tls_alert_fatal is the minimum classifier-aware chain. yt_tcp
+    # may benefit from z2k_tls_stalled / z2k_mid_stream_stall later, but
+    # those are upgrade decisions; here we restore the redirect-coverage
+    # invariant lost when no_http_redirect was added.
+    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_tls_alert_fatal")
+    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_tls_alert_fatal")
 
     # Wire no_http_redirect on all TCP TLS profiles. This disables
     # standard_failure_detector's built-in 302/307 cross-SLD redirect
