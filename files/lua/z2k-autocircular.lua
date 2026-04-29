@@ -967,18 +967,45 @@ local function policy_seed_strategy(desync, askey, hostn, hrec)
   return pick, score
 end
 
+-- Returns 5 values: nocheck, failure, neutral_observed, reason, reason_detail.
+-- The latter three are populated by z2k-detectors.lua's classifier (will
+-- land in commit 4) and consumed below to gate successful_state /
+-- response_state and to enrich debug_log with the reason a detector
+-- decision was made.
+--
+-- Default to false/nil — pre-commit-4 detectors don't set z2k_neutral_*
+-- fields, and the gates below collapse harmlessly to current behaviour.
 local function conn_record_flags(desync)
   local tr = desync and desync.track
   local ls = tr and tr.lua_state
   local crec = ls and ls.automate
-  if not crec then return false, false end
-  return (crec.nocheck and true or false), (crec.failure and true or false)
+  if not crec then return false, false, false, nil, nil end
+  return (crec.nocheck and true or false),
+         (crec.failure and true or false),
+         (crec.z2k_neutral_observed and true or false),
+         crec.z2k_reason,
+         crec.z2k_reason_detail
 end
 
+-- True only for incoming events that count as a real-success signal.
+-- TLS ServerHello → always positive (handshake reached the server).
+-- HTTP reply → must be classified as "positive" by z2k_classify_http_reply
+-- (defined in z2k-detectors.lua, loaded earlier in the --lua-init chain).
+-- Neutral 4xx/5xx replies and cross-SLD redirects without markers must NOT
+-- pin the strategy as successful. Falls back to liberal old behaviour if
+-- the helper isn't loaded (init-order race in tests / hand-run nfqws).
 local function has_positive_incoming_response(desync)
   if not desync or desync.outgoing then return false end
   local p = desync.l7payload
-  return p == "tls_server_hello" or p == "http_reply"
+  if p == "tls_server_hello" then return true end
+  if p == "http_reply" then
+    if type(z2k_classify_http_reply) == "function" then
+      local class = z2k_classify_http_reply(desync)
+      return class == "positive"
+    end
+    return true
+  end
+  return false
 end
 
 local function should_debug_key(askey)
@@ -1075,7 +1102,7 @@ if type(circular) == "function" then
       end
       if not hrec then return end
 
-      local nocheck_after, failure_after = conn_record_flags(desync)
+      local nocheck_after, failure_after, neutral_after, reason_after, reason_detail_after = conn_record_flags(desync)
       local n_after = hrec and tonumber(hrec.nstrategy) or nil
       flow_start_if_needed(desync, n_after)
 
@@ -1090,8 +1117,15 @@ if type(circular) == "function" then
 
       -- Persist whenever circular is in a known-good state.
       -- This is intentionally broader than only first success transition to avoid missing saves.
-      local successful_state = nocheck_after and (not failure_after)
-      local response_state = has_positive_incoming_response(desync) and (not failure_after)
+      --
+      -- 3-state observability: detectors may set crec.z2k_neutral_observed
+      -- to mark a response as suspicious-but-not-confirmed (e.g. plain
+      -- 4xx without RU-DPI body markers, cross-SLD redirect without
+      -- block markers). Such flows must NOT pin the strategy as
+      -- successful — we only want positive confirmations to bake
+      -- pins into state.tsv.
+      local successful_state = nocheck_after and (not failure_after) and (not neutral_after)
+      local response_state = has_positive_incoming_response(desync) and (not failure_after) and (not neutral_after)
       -- QUIC flows may not reliably trigger success detector, but nstrategy>1 already indicates
       -- that circular has rotated this host. Persist that candidate for QUIC keys.
       local quic_candidate_state =
@@ -1132,7 +1166,11 @@ if type(circular) == "function" then
         write_state()
       end
 
-      local debug_event = persisted or failure_after or success_event or failure_event or outgoing_initial or (policy_pick_before ~= nil)
+      -- Include neutral_after / reason_after so detector-flagged neutral
+      -- events surface in debug.log even when no fail/success/persist
+      -- fires. Without this we lose visibility into the new "downgraded"
+      -- class introduced by the 3-state classifier.
+      local debug_event = persisted or failure_after or success_event or failure_event or outgoing_initial or (policy_pick_before ~= nil) or neutral_after or (reason_after ~= nil)
       if debug_event and (should_debug_key(askey_before) or should_debug_key(askey_after)) then
         local track = desync and desync.track
         local hn = track and track.hostname or ""
@@ -1158,6 +1196,9 @@ if type(circular) == "function" then
           " silent_rotate_to=" .. tostring(silent_rotate_to_before or "") ..
           " success_event=" .. tostring(success_event and 1 or 0) ..
           " failure_event=" .. tostring(failure_event and 1 or 0) ..
+          " neutral=" .. tostring(neutral_after and 1 or 0) ..
+          " reason=" .. tostring(reason_after or "") ..
+          " reason_detail=" .. tostring(reason_detail_after or "") ..
           " latency_s=" .. tostring(latency_s or "") ..
           " persisted=" .. tostring(persisted and 1 or 0)
         )

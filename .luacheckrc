@@ -30,6 +30,9 @@ globals = {
     -- z2k-detectors.lua internal helper, top-level so earlier detector
     -- functions in the same file (z2k_tls_alert_fatal) can call it
     "z2k_detector_log_init_once",
+    -- z2k-detectors.lua exported HTTP classifier; called from
+    -- z2k-autocircular.lua's has_positive_incoming_response()
+    "z2k_classify_http_reply",
     -- nfqws2 writable state/functions (set by fallback stubs or runtime)
     "DLOG",
     "DLOG_ERR",
@@ -66,6 +69,8 @@ read_globals = {
     "http_dissect_reply",
     "array_field_search",
     "is_dpi_redirect",
+    "dissect_url",
+    "dissect_nld",
     "find_tcp_option",
     "bu16",
     "bu32",

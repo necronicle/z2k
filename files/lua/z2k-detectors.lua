@@ -15,13 +15,174 @@
 --   zapret-auto.lua    — standard_failure_detector, standard_success_detector
 --
 -- Functions exported to the global namespace (called by nfqws2 via name):
---   z2k_tls_alert_fatal   — TLS fatal alert / HTTP DPI redirect / block page
---   z2k_tls_stalled       — everything above + per-host TLS handshake stall
---   z2k_success_no_reset  — success without resetting host failure counters
+--   z2k_tls_alert_fatal       — TLS fatal alert / HTTP DPI redirect / block page
+--   z2k_tls_stalled           — everything above + per-host TLS handshake stall
+--   z2k_success_no_reset      — success without resetting host failure counters
+--   z2k_classify_http_reply   — shared HTTP reply classifier (used by
+--                                z2k-autocircular.lua's positive-response
+--                                check; will be used by HTTP detectors and
+--                                a future success_detector in commit 4)
 --
 -- Functions kept file-local (used only by other functions in this file):
---   z2k_http_block_reply     — keyword-based block page detection
---   z2k_http_dpi_redirect    — SLD-based DPI redirect detection
+--   z2k_http_block_reply     — keyword-based block page detection (legacy
+--                                path; superseded by z2k_classify_http_reply
+--                                in commit 4 once the classifier rewrite lands)
+--   z2k_http_dpi_redirect    — SLD-based DPI redirect detection (legacy)
+
+-- ---------------------------------------------------------------------------
+-- Shared marker lists (single source of truth for HTTP block-page detection)
+-- ---------------------------------------------------------------------------
+--
+-- Body markers: substrings checked against lowercased response body.
+-- These are RU-DPI specific; "blackhole" is included because it appears
+-- both as a domain name (blackhole.svyaztelecom.ru) and in some block-page
+-- HTML. Generic words like "forbidden"/"warning"/"restrict" are NOT in
+-- the body list because they appear on legitimate 4xx pages too.
+local Z2K_HTTP_BLOCK_BODY_MARKERS = {
+  "rkn", "lawfilter", "zapret", "eais", "blocked-by", "vigruzki", "blackhole",
+}
+
+-- Host-prefix markers for cross-SLD redirect detection. Operator block
+-- pages commonly live on subdomains like warn.beeline.ru, deny.megafon.ru.
+-- These prefixes (with trailing dot — host-anchored) catch operator
+-- redirect targets without firing on legitimate URLs containing the
+-- bare word in path/query.
+local Z2K_HTTP_BLOCK_HOST_PREFIXES = {
+  "warn.", "deny.", "restrict.", "block.", "blocked.", "blackhole.",
+}
+
+-- Sanitize a reason_detail string for safe inclusion in debug.log lines.
+-- Keep ASCII alphanumeric + dot/dash/equals/colon/underscore; replace
+-- everything else (CRLF, spaces, tabs, non-ASCII, raw URL chars) with
+-- underscore. Cap length at 64 chars to avoid log bloat. This prevents
+-- log injection from attacker-controlled Location URLs / response bodies.
+local function z2k_sanitize_reason(s)
+  if type(s) ~= "string" then return "" end
+  if #s > 64 then s = s:sub(1, 64) end
+  return (s:gsub("[^A-Za-z0-9._:=-]", "_"))
+end
+
+local function z2k_find_body_marker(payload_lower)
+  for _, m in ipairs(Z2K_HTTP_BLOCK_BODY_MARKERS) do
+    if payload_lower:find(m, 1, true) then return m end
+  end
+  return nil
+end
+
+local function z2k_find_host_marker(host_lower)
+  -- Substring markers (e.g. "lawfilter" matches lawfilter.ertelecom.ru
+  -- AND blackhole-substring matches blackhole.svyaztelecom.ru).
+  for _, m in ipairs(Z2K_HTTP_BLOCK_BODY_MARKERS) do
+    if host_lower:find(m, 1, true) then return m end
+  end
+  -- Host-prefix markers (warn.beeline.ru, deny.megafon.ru, etc).
+  for _, p in ipairs(Z2K_HTTP_BLOCK_HOST_PREFIXES) do
+    if host_lower:sub(1, #p) == p then return "prefix:" .. p end
+  end
+  return nil
+end
+
+-- Extract host from Location header value, lowercased. Handles three
+-- forms:
+--   1. absolute URL    "https://example.com/path"  → use dissect_url
+--   2. scheme-relative "//example.com/path"        → manual parse
+--                       (dissect_url misses these — its regex is
+--                       `[a-z]+://` which doesn't match `//host`)
+--   3. path-only       "/some/path"                → returns nil
+--                       (no host change, same-origin redirect)
+local function z2k_extract_loc_host(location)
+  if type(location) ~= "string" or location == "" then return nil end
+  if location:sub(1, 2) == "//" then
+    local host = location:match("^//([^/?#]+)")
+    return host and host:lower() or nil
+  end
+  if type(dissect_url) == "function" then
+    local ds = dissect_url(location)
+    if ds and ds.domain then return ds.domain:lower() end
+  end
+  return nil
+end
+
+-- z2k_classify_http_reply(desync) — shared HTTP-reply classifier.
+--
+-- Returns:
+--   "positive", nil                  — real-success response (2xx, 304,
+--                                       same-SLD 3xx upgrade)
+--   "neutral",  reason_string        — suspicious/ambiguous response
+--                                       (4xx/5xx no marker, cross-SLD 3xx
+--                                       no marker, unparseable redirect)
+--   "hard_fail", reason_string       — confirmed block (4xx/5xx with body
+--                                       marker; cross-SLD 3xx with host
+--                                       marker or block-prefix)
+--   nil, nil                         — not applicable (not http_reply,
+--                                       no payload, no parseable code)
+--
+-- Used in commit 3 by z2k-autocircular.lua's has_positive_incoming_response()
+-- (reads only the "positive" return). Will be used in commit 4 by a
+-- rewritten z2k_http_block_reply path AND a new
+-- z2k_http_success_positive_only success_detector.
+function z2k_classify_http_reply(desync)
+  if not desync or desync.outgoing then return nil, nil end
+  if desync.l7payload ~= "http_reply" then return nil, nil end
+  local payload = desync.dis and desync.dis.payload
+  if type(payload) ~= "string" then return nil, nil end
+
+  local code_s = payload:match("^HTTP/%d%.%d%s+([0-9][0-9][0-9])")
+  local code = tonumber(code_s)
+  if not code then return nil, nil end
+
+  -- 2xx and 304 = real positive
+  if code >= 200 and code < 300 then return "positive", nil end
+  if code == 304 then return "positive", nil end
+
+  -- 4xx / 5xx — body-marker check
+  if code >= 400 and code < 600 then
+    local low = payload:lower()
+    local marker = z2k_find_body_marker(low)
+    if marker then
+      return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(marker)
+    end
+    return "neutral", "http_4xx_no_marker:code=" .. tostring(code)
+  end
+
+  -- 3xx — Location parse + cross-SLD check
+  if code == 301 or code == 302 or code == 303 or code == 307 or code == 308 then
+    if type(http_dissect_reply) ~= "function" or
+       type(array_field_search) ~= "function" then
+      return "neutral", "http_redirect_no_dissector"
+    end
+    local hdis = http_dissect_reply(payload)
+    if not hdis then return "neutral", "http_redirect_unparseable" end
+    local idx = array_field_search(hdis.headers, "header_low", "location")
+    if not idx then return "neutral", "http_redirect_no_location" end
+    local loc_host = z2k_extract_loc_host(hdis.headers[idx].value)
+    if not loc_host then
+      -- Path-only or unparseable Location — same-origin redirect, treat
+      -- as positive (the request handshake succeeded; redirect is just
+      -- application-level navigation).
+      return "positive", nil
+    end
+    local req_host = desync.track and desync.track.hostname
+    if not req_host then return "neutral", "http_redirect_no_req_host" end
+    local req_lower = req_host:lower()
+    local req_sld = type(dissect_nld) == "function" and dissect_nld(req_lower, 2) or req_lower
+    local loc_sld = type(dissect_nld) == "function" and dissect_nld(loc_host, 2) or loc_host
+    if req_sld and loc_sld and req_sld == loc_sld then
+      -- Same-SLD redirect = legit (HTTP→HTTPS upgrade, vanity URL,
+      -- internal app routing). Strategy did its job — handshake worked.
+      return "positive", nil
+    end
+    -- Cross-SLD — check if loc_host carries a block marker
+    local marker = z2k_find_host_marker(loc_host)
+    if marker then
+      return "hard_fail", "http_redirect_marker:" .. z2k_sanitize_reason(marker)
+    end
+    return "neutral", "http_redirect_cross_sld_no_marker"
+  end
+
+  -- 1xx informational, 3xx other (300/305/306/...), unknown — neutral.
+  return "neutral", "http_other_code:code=" .. tostring(code)
+end
 
 local function z2k_http_block_reply(payload)
   if type(payload) ~= "string" then return false end
