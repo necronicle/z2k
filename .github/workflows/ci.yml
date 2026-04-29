@@ -13,8 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install shellcheck and lua
+        # lua is needed because tests/run_all.sh now picks up
+        # tests/test_http_classifier.sh which invokes a lua mock-harness.
+        # Without lua here, the wrapper would skip silently (per its
+        # graceful-skip semantics for local devs without lua).
+        run: sudo apt-get update && sudo apt-get install -y shellcheck lua5.3
 
       - name: Run shellcheck
         run: |
@@ -92,11 +96,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install luarocks and luacheck
+      - name: Install luarocks, lua, luacheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y luarocks
+          sudo apt-get install -y luarocks lua5.3
           sudo luarocks install luacheck
 
       - name: Run luacheck
         run: luacheck files/lua/*.lua --codes -q
+
+      - name: Run lua unit tests
+        # Direct invocation in addition to tests/run_all.sh in the
+        # shellcheck job — defence-in-depth so a future change that
+        # breaks tests/run_all.sh's wrapper discovery doesn't silently
+        # skip the lua harness.
+        run: lua tests/test_http_classifier.lua
