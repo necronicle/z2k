@@ -158,6 +158,11 @@ assert_contains "nld2: adds nld=2 to minimal circular" "nld=2" "$RESULT4"
 # TEST: ensure_rkn_failure_detector (replicated from config_official.sh)
 # ==============================================================================
 
+# Local copy of ensure_rkn_failure_detector — kept in sync with the
+# production version in lib/config_official.sh:798. Production sets
+# z2k_mid_stream_stall (post-2026-04-18 default) — this fixture must
+# match. Drift was caught 2026-04-29 review — production had moved to
+# z2k_mid_stream_stall while tests still asserted z2k_tls_alert_fatal.
 ensure_rkn_failure_detector() {
     local input="$1"
     local out=""
@@ -168,7 +173,7 @@ ensure_rkn_failure_detector() {
             --lua-desync=circular:*)
                 case "$token" in
                     *failure_detector=*) ;;
-                    *) token="${token}:failure_detector=z2k_tls_alert_fatal" ;;
+                    *) token="${token}:failure_detector=z2k_mid_stream_stall" ;;
                 esac
                 ;;
         esac
@@ -178,15 +183,55 @@ ensure_rkn_failure_detector() {
     printf '%s' "$out"
 }
 
+# Local copy of ensure_circular_tcp_inseq — kept in sync with
+# lib/config_official.sh (added 2026-04-29 commit 4c852f5). Production
+# enforces inseq=18000 on rkn_tcp/yt_tcp/gv_tcp circular tokens to close
+# the standard_success_detector race against TSPU 12-18KB byte-gate.
+ensure_circular_tcp_inseq() {
+    local input="$1"
+    local target="${2:-18000}"
+    local out=""
+    local token=""
+    local opts=""
+    local part=""
+    local rest=""
+    local old_ifs="$IFS"
+
+    for token in $input; do
+        case "$token" in
+            --lua-desync=circular:*)
+                opts="${token#--lua-desync=circular:}"
+                rest=""
+                IFS=':'
+                for part in $opts; do
+                    case "$part" in
+                        inseq=*) ;;
+                        *) rest="${rest:+$rest:}$part" ;;
+                    esac
+                done
+                IFS="$old_ifs"
+                if [ -n "$rest" ]; then
+                    token="--lua-desync=circular:${rest}:inseq=${target}"
+                else
+                    token="--lua-desync=circular:inseq=${target}"
+                fi
+                ;;
+        esac
+        out="${out:+$out }$token"
+    done
+    IFS="$old_ifs"
+    printf '%s' "$out"
+}
+
 printf "\n--- ensure_rkn_failure_detector ---\n"
 
 # Test: adds failure_detector to circular without one
 INPUT_FD1="--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1"
 RESULT_FD1=$(ensure_rkn_failure_detector "$INPUT_FD1")
-assert_contains "failure_detector: adds to circular" "failure_detector=z2k_tls_alert_fatal" "$RESULT_FD1"
+assert_contains "failure_detector: adds to circular" "failure_detector=z2k_mid_stream_stall" "$RESULT_FD1"
 
 # Test: does not duplicate if already present
-INPUT_FD2="--lua-desync=circular:fails=3:failure_detector=z2k_tls_alert_fatal:key=test"
+INPUT_FD2="--lua-desync=circular:fails=3:failure_detector=z2k_mid_stream_stall:key=test"
 RESULT_FD2=$(ensure_rkn_failure_detector "$INPUT_FD2")
 # Count occurrences - should be exactly 1
 FD_COUNT=$(printf '%s' "$RESULT_FD2" | grep -o "failure_detector" | wc -l | tr -d ' ')
@@ -196,6 +241,32 @@ assert_eq "failure_detector: no duplication" "1" "$FD_COUNT"
 INPUT_FD3="--lua-desync=fake:payload=tls_client_hello --lua-desync=send:strategy=2"
 RESULT_FD3=$(ensure_rkn_failure_detector "$INPUT_FD3")
 assert_eq "failure_detector: non-circular unchanged" "$INPUT_FD3" "$RESULT_FD3"
+
+printf "\n--- ensure_circular_tcp_inseq ---\n"
+
+# Test: adds inseq=18000 to circular without one
+INPUT_IS1="--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1"
+RESULT_IS1=$(ensure_circular_tcp_inseq "$INPUT_IS1" 18000)
+assert_contains "inseq: adds 18000 to circular" "inseq=18000" "$RESULT_IS1"
+
+# Test: overrides existing inseq (e.g. default 4096)
+INPUT_IS2="--lua-desync=circular:fails=3:inseq=4096:key=yt_tcp:nld=2"
+RESULT_IS2=$(ensure_circular_tcp_inseq "$INPUT_IS2" 18000)
+IS_COUNT=$(printf '%s' "$RESULT_IS2" | grep -o "inseq=" | wc -l | tr -d ' ')
+assert_eq "inseq: no duplication after override" "1" "$IS_COUNT"
+assert_contains "inseq: replaced with 18000" "inseq=18000" "$RESULT_IS2"
+assert_not_contains "inseq: old 4096 removed" "inseq=4096" "$RESULT_IS2"
+
+# Test: non-circular tokens are not modified
+INPUT_IS3="--filter-tcp=443 --lua-desync=fake:payload=tls_client_hello"
+RESULT_IS3=$(ensure_circular_tcp_inseq "$INPUT_IS3" 18000)
+assert_eq "inseq: non-circular unchanged" "$INPUT_IS3" "$RESULT_IS3"
+
+# Test: handles multiple circular tokens (extra defensiveness)
+INPUT_IS4="--lua-desync=circular:fails=3:key=a --new --lua-desync=circular:fails=2:key=b"
+RESULT_IS4=$(ensure_circular_tcp_inseq "$INPUT_IS4" 18000)
+IS_COUNT4=$(printf '%s' "$RESULT_IS4" | grep -o "inseq=18000" | wc -l | tr -d ' ')
+assert_eq "inseq: applied to all circular tokens" "2" "$IS_COUNT4"
 
 # ==============================================================================
 # TEST: generate_nfqws2_opt_from_strategies (full integration)
@@ -236,11 +307,19 @@ printf "\n--- Config output structure ---\n"
 
 # Build a representative NFQWS2_OPT output manually to validate structural checks
 # This simulates what generate_nfqws2_opt_from_strategies produces in normal mode
-SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_tls_alert_fatal --lua-desync=fake:strategy=1 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=fake:repeats=4 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=fake:repeats=4 --new
+SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall:inseq=18000 --lua-desync=fake:strategy=1 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000 --lua-desync=fake:repeats=4 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000 --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
 --filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular_locked:key=6"
+
+# Production guarantees: every TCP TLS circular has inseq=18000 (commit
+# 4c852f5) and rkn_tcp has failure_detector=z2k_mid_stream_stall.
+assert_contains "structure: rkn_tcp has z2k_mid_stream_stall" "key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall" "$SAMPLE_OPT"
+assert_contains "structure: rkn_tcp has inseq=18000" "key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall:inseq=18000" "$SAMPLE_OPT"
+assert_contains "structure: yt_tcp has inseq=18000" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000" "$SAMPLE_OPT"
+assert_contains "structure: gv_tcp has inseq=18000" "key=gv_tcp:nld=2:inseq=18000" "$SAMPLE_OPT"
+assert_not_contains "structure: no stale tls_alert_fatal in TLS profiles" "rkn_tcp:nld=2:failure_detector=z2k_tls_alert_fatal" "$SAMPLE_OPT"
 
 assert_contains "structure: has --filter-tcp" "--filter-tcp" "$SAMPLE_OPT"
 assert_contains "structure: has --filter-udp" "--filter-udp" "$SAMPLE_OPT"
