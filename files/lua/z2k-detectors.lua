@@ -121,6 +121,19 @@ end
 -- Stalled TLS handshake detector — superset of z2k_tls_alert_fatal.
 -- See full rationale + design notes below next to the function body.
 local Z2K_TLS_STALLED_SEC = 10
+-- Upper bound on how long ago a previous ClientHello can have been seen
+-- and still count as evidence of stall. Beyond this we treat the new CH
+-- as a fresh visit and refresh the timestamp without firing fail.
+--
+-- Why: without an upper bound a CH from yesterday (or even hours ago)
+-- against a host that's now LRU-resident in the state map would trigger
+-- a fail signal on the next visit. That's a false positive — the user
+-- isn't "retrying after stall", they're just visiting the site again.
+--
+-- 120s chosen to align with the silent retry window used elsewhere in
+-- the rotator (z2k-autocircular's retry observation window). Anything
+-- past that, the user has clearly moved on / come back, not retrying.
+local Z2K_TLS_STALLED_MAX_SEC = 120
 local z2k_tls_stalled_host_ts = {}
 local z2k_tls_stalled_insert_counter = 0
 
@@ -282,20 +295,28 @@ function z2k_tls_stalled(desync, crec)
     return false
   end
 
-  -- Outgoing ClientHello: check previous CH timestamp for this flow
+  -- Outgoing ClientHello: check previous CH timestamp for this flow.
+  --
+  -- Fire fail only when elapsed is in the [Z2K_TLS_STALLED_SEC,
+  -- Z2K_TLS_STALLED_MAX_SEC] window. Below the lower bound the retry
+  -- is too quick to be evidence of stall. Above the upper bound the
+  -- previous CH is too stale to attribute to "active retry" — treat
+  -- as fresh visit (timestamp gets refreshed regardless via the
+  -- assignment below).
   if desync.outgoing and desync.l7payload == "tls_client_hello" then
     local prev = z2k_tls_stalled_host_ts[key]
     if prev then
       local elapsed = now - prev
       z2k_tls_stalled_host_ts[key] = now
       z2k_tls_stalled_maybe_evict()
-      if elapsed >= Z2K_TLS_STALLED_SEC then
+      if elapsed >= Z2K_TLS_STALLED_SEC and elapsed <= Z2K_TLS_STALLED_MAX_SEC then
         if type(DLOG) == "function" then
           DLOG("z2k_tls_stalled: host=" .. host .. " prev ClientHello " .. elapsed .. "s ago with no ServerHello — counting as fail")
         end
         return true
       end
-      -- Too early: timestamp already bumped above
+      -- Either too early (active retry just happened) or too late
+      -- (stale state from earlier visit). Timestamp already bumped above.
       return false
     end
     -- First attempt for this flow: just record
