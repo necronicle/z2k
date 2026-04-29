@@ -14,7 +14,19 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if ! command -v lua >/dev/null 2>&1; then
+# Pick the first available lua interpreter. On Ubuntu `apt install
+# lua5.3` usually wires up /usr/bin/lua via update-alternatives, but
+# minimal images / some distros leave only the versioned binary —
+# fall through to lua5.3 / lua5.4 explicitly.
+LUA=""
+for candidate in lua lua5.3 lua5.4 lua5.1; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        LUA="$candidate"
+        break
+    fi
+done
+
+if [ -z "$LUA" ]; then
     printf "[PASS] http_classifier: skipped (lua not installed locally)\n"
     exit 0
 fi
@@ -22,4 +34,4 @@ fi
 # The .lua harness loads files/lua/z2k-detectors.lua via dofile() with
 # a project-root-relative path, so cd there before invoking.
 cd "$PROJECT_ROOT"
-exec lua tests/test_http_classifier.lua
+exec "$LUA" tests/test_http_classifier.lua

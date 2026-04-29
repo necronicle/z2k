@@ -109,5 +109,7 @@ jobs:
         # Direct invocation in addition to tests/run_all.sh in the
         # shellcheck job — defence-in-depth so a future change that
         # breaks tests/run_all.sh's wrapper discovery doesn't silently
-        # skip the lua harness.
-        run: lua tests/test_http_classifier.lua
+        # skip the lua harness. Use the versioned binary explicitly:
+        # `lua` symlink relies on update-alternatives which is not
+        # guaranteed on minimal Ubuntu images.
+        run: lua5.3 tests/test_http_classifier.lua
