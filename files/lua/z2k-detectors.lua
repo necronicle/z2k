@@ -90,11 +90,20 @@ end
 --                       `[a-z]+://` which doesn't match `//host`)
 --   3. path-only       "/some/path"                → returns nil
 --                       (no host change, same-origin redirect)
+-- Strip `:port` suffix from a hostname (mirrors dissect_url's domain
+-- extraction at zapret-lib.lua:1816-1821). Apply before SLD comparison
+-- so example.com:443 == example.com.
+local function z2k_strip_port(host)
+  if type(host) ~= "string" then return host end
+  return (host:gsub(":%d+$", ""))
+end
+
 local function z2k_extract_loc_host(location)
   if type(location) ~= "string" or location == "" then return nil end
   if location:sub(1, 2) == "//" then
     local host = location:match("^//([^/?#]+)")
-    return host and host:lower() or nil
+    if not host then return nil end
+    return z2k_strip_port(host):lower()
   end
   if type(dissect_url) == "function" then
     local ds = dissect_url(location)
@@ -135,9 +144,31 @@ function z2k_classify_http_reply(desync)
   if code >= 200 and code < 300 then return "positive", nil end
   if code == 304 then return "positive", nil end
 
-  -- 4xx / 5xx — body-marker check
+  -- 4xx / 5xx — body-marker check.
+  --
+  -- IMPORTANT: scan the BODY only, not headers. Per RFC 7725 a legitimate
+  -- 451 from origin/CDN may carry `Link: <authority>; rel="blocked-by"`
+  -- header — that header value contains the substring "blocked-by" which
+  -- is in our body-marker list. v3.6 explicitly defers Link rel="blocked-by"
+  -- parsing as ambiguous (could be DPI or origin compliance), so scanning
+  -- headers would produce a hard-fail false positive on every RFC-compliant
+  -- region-locked 451.
   if code >= 400 and code < 600 then
-    local low = payload:lower()
+    local body = ""
+    if type(http_dissect_reply) == "function" then
+      local hdis = http_dissect_reply(payload)
+      if hdis and hdis.body then body = hdis.body end
+    end
+    -- Fallback: separate body manually at first blank-line if dissector
+    -- is unavailable / returned no body field.
+    if body == "" then
+      local sep = payload:find("\r\n\r\n", 1, true)
+      if sep then body = payload:sub(sep + 4) end
+    end
+    if body == "" then
+      return "neutral", "http_4xx_no_body:code=" .. tostring(code)
+    end
+    local low = body:lower()
     local marker = z2k_find_body_marker(low)
     if marker then
       return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(marker)
@@ -164,7 +195,10 @@ function z2k_classify_http_reply(desync)
     end
     local req_host = desync.track and desync.track.hostname
     if not req_host then return "neutral", "http_redirect_no_req_host" end
-    local req_lower = req_host:lower()
+    -- Defensive port-strip: HTTP Host header may carry port even though
+    -- nfqws2 dissector usually normalises it. Cheap to apply, prevents
+    -- a same-origin redirect to host:port being misclassified cross-SLD.
+    local req_lower = z2k_strip_port(req_host:lower())
     local req_sld = type(dissect_nld) == "function" and dissect_nld(req_lower, 2) or req_lower
     local loc_sld = type(dissect_nld) == "function" and dissect_nld(loc_host, 2) or loc_host
     if req_sld and loc_sld and req_sld == loc_sld then
