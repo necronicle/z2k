@@ -256,6 +256,59 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(ensure_circular_tcp_inseq "$youtube_gv_tcp" 18000)
     rkn_tcp=$(ensure_circular_tcp_inseq "$rkn_tcp" 18000)
 
+    # ensure_circular_arg_set: append `<arg>=<value>` to every circular token
+    # in $input that doesn't already carry that arg. Generic helper used to
+    # wire success_detector= / no_http_redirect / etc. on TLS profiles.
+    # If the arg already has any value, the existing one is preserved
+    # (idempotent — repeated runs of create_official_config don't pile up).
+    ensure_circular_arg_set() {
+        local input="$1"
+        local arg_name="$2"
+        local arg_value="$3"  # may be empty for flag-style args
+        local out=""
+        local token=""
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    case "$token" in
+                        *":${arg_name}="*) ;;  # already present
+                        *)
+                            if [ -n "$arg_value" ]; then
+                                token="${token}:${arg_name}=${arg_value}"
+                            else
+                                token="${token}:${arg_name}"
+                            fi
+                            ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        printf '%s' "$out"
+    }
+
+    # Wire HTTP-aware success_detector for profiles whose flows can carry
+    # HTTP responses subject to false-pin race (large 4xx body crossing
+    # seq>inseq=18000 → standard success → nocheck → strategy pinned).
+    # See z2k-detectors.lua: z2k_http_success_positive_only.
+    #
+    # http_rkn handled separately at line ~1100 (its profile string is
+    # built inline, not from Strategy.txt). yt_tcp keeps its existing
+    # z2k_success_no_reset (now made HTTP-neutral-aware in commit 4).
+    rkn_tcp=$(ensure_circular_arg_set "$rkn_tcp" "success_detector" "z2k_http_success_positive_only")
+    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "success_detector" "z2k_http_success_positive_only")
+
+    # Wire no_http_redirect on all TCP TLS profiles. This disables
+    # standard_failure_detector's built-in 302/307 cross-SLD redirect
+    # branch (zapret-auto.lua:182) — necessary because our v3.6
+    # classifier downgrades cross-SLD-no-marker redirects from hard
+    # fail to neutral (legit oauth/shortlink case). Without this flag,
+    # standard would still hard-fail 302/307 cross-SLD before our
+    # classifier ever runs.
+    rkn_tcp=$(ensure_circular_arg_set "$rkn_tcp" "no_http_redirect" "")
+    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "no_http_redirect" "")
+    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "no_http_redirect" "")
+
     # Phase 6A: auto-inject fool=z2k_dynamic_ttl into every
     # --lua-desync=fake:*  (and fakedsplit/fakeddisorder/hostfakesplit) that
     # doesn't already pin an explicit TTL via ip_ttl=/ip6_ttl=/ip_autottl=/
@@ -1100,7 +1153,14 @@ AUSTERUS_OPT
     # Strategy 7: fake badsum + multisplit method+2
     local rkn_http_extras=""
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_http_extras=" --hostlist=${lists_dir}/extra-domains.txt"
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_tls_alert_fatal --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
+    # http_rkn (port 80 HTTP profile). v3.6 commit 4 wiring:
+    #   - success_detector=z2k_http_success_positive_only
+    #     (default standard would fire success on seq>inseq even for
+    #     4xx replies, pinning broken strategies)
+    #   - no_http_redirect (off-loads 302/307 redirect branch from
+    #     standard_failure_detector — our z2k_tls_alert_fatal chain
+    #     drives all redirect classification through z2k_classify_http_reply)
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_tls_alert_fatal:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
 
 
     local nfqws2_opt_value

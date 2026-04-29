@@ -223,6 +223,60 @@ ensure_circular_tcp_inseq() {
     printf '%s' "$out"
 }
 
+# Local copy of ensure_circular_arg_set — kept in sync with
+# lib/config_official.sh (added 2026-04-29 commit 4 of v3.6 plan).
+# Generic helper for appending arg=value to circular tokens.
+ensure_circular_arg_set() {
+    local input="$1"
+    local arg_name="$2"
+    local arg_value="$3"
+    local out=""
+    local token=""
+    for token in $input; do
+        case "$token" in
+            --lua-desync=circular:*)
+                case "$token" in
+                    *":${arg_name}="*) ;;
+                    *)
+                        if [ -n "$arg_value" ]; then
+                            token="${token}:${arg_name}=${arg_value}"
+                        else
+                            token="${token}:${arg_name}"
+                        fi
+                        ;;
+                esac
+                ;;
+        esac
+        out="${out:+$out }$token"
+    done
+    printf '%s' "$out"
+}
+
+printf "\n--- ensure_circular_arg_set ---\n"
+
+# Test: adds key=value pair when absent
+INPUT_AS1="--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2"
+RESULT_AS1=$(ensure_circular_arg_set "$INPUT_AS1" "success_detector" "z2k_http_success_positive_only")
+assert_contains "arg_set: appends success_detector" "success_detector=z2k_http_success_positive_only" "$RESULT_AS1"
+
+# Test: idempotent if already present
+INPUT_AS2="--lua-desync=circular:fails=3:success_detector=z2k_existing:key=test"
+RESULT_AS2=$(ensure_circular_arg_set "$INPUT_AS2" "success_detector" "z2k_http_success_positive_only")
+SD_COUNT=$(printf '%s' "$RESULT_AS2" | grep -o "success_detector=" | wc -l | tr -d ' ')
+assert_eq "arg_set: no duplication when present" "1" "$SD_COUNT"
+assert_contains "arg_set: existing value preserved" "success_detector=z2k_existing" "$RESULT_AS2"
+
+# Test: flag-style arg (empty value) appends bare arg name
+INPUT_AS3="--lua-desync=circular:fails=3:key=yt_tcp"
+RESULT_AS3=$(ensure_circular_arg_set "$INPUT_AS3" "no_http_redirect" "")
+assert_contains "arg_set: flag arg appended" ":no_http_redirect" "$RESULT_AS3"
+assert_not_contains "arg_set: flag arg has no =value" "no_http_redirect=" "$RESULT_AS3"
+
+# Test: non-circular tokens unchanged
+INPUT_AS4="--lua-desync=fake:payload=tls_client_hello"
+RESULT_AS4=$(ensure_circular_arg_set "$INPUT_AS4" "success_detector" "X")
+assert_eq "arg_set: non-circular unchanged" "$INPUT_AS4" "$RESULT_AS4"
+
 printf "\n--- ensure_rkn_failure_detector ---\n"
 
 # Test: adds failure_detector to circular without one
@@ -307,18 +361,28 @@ printf "\n--- Config output structure ---\n"
 
 # Build a representative NFQWS2_OPT output manually to validate structural checks
 # This simulates what generate_nfqws2_opt_from_strategies produces in normal mode
-SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall:inseq=18000 --lua-desync=fake:strategy=1 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000 --lua-desync=fake:repeats=4 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000 --lua-desync=fake:repeats=4 --new
+SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall:inseq=18000:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=fake:strategy=1 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:no_http_redirect --lua-desync=fake:repeats=4 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
 --filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular_locked:key=6"
 
-# Production guarantees: every TCP TLS circular has inseq=18000 (commit
-# 4c852f5) and rkn_tcp has failure_detector=z2k_mid_stream_stall.
+# Production guarantees per v3.6 plan:
+#  - every TCP TLS circular has inseq=18000 (commit 4c852f5)
+#  - rkn_tcp has failure_detector=z2k_mid_stream_stall
+#  - rkn_tcp / gv_tcp have success_detector=z2k_http_success_positive_only
+#    (HTTP-aware — closes the seq>inseq false-pin race for 4xx replies)
+#  - yt_tcp keeps z2k_success_no_reset (now HTTP-neutral-aware in commit 4)
+#  - all four TLS profiles carry no_http_redirect to off-load standard's
+#    302/307 cross-SLD redirect branch onto our z2k_classify_http_reply
 assert_contains "structure: rkn_tcp has z2k_mid_stream_stall" "key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall" "$SAMPLE_OPT"
 assert_contains "structure: rkn_tcp has inseq=18000" "key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall:inseq=18000" "$SAMPLE_OPT"
-assert_contains "structure: yt_tcp has inseq=18000" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp has inseq=18000" "key=gv_tcp:nld=2:inseq=18000" "$SAMPLE_OPT"
+assert_contains "structure: rkn_tcp has positive-only success_detector" "key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall:inseq=18000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
+assert_contains "structure: rkn_tcp has no_http_redirect" "key=rkn_tcp:nld=2:failure_detector=z2k_mid_stream_stall:inseq=18000:success_detector=z2k_http_success_positive_only:no_http_redirect" "$SAMPLE_OPT"
+assert_contains "structure: yt_tcp has no_reset success_detector" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset" "$SAMPLE_OPT"
+assert_contains "structure: yt_tcp has no_http_redirect" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:no_http_redirect" "$SAMPLE_OPT"
+assert_contains "structure: gv_tcp has positive-only success_detector" "key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
+assert_contains "structure: gv_tcp has no_http_redirect" "key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:no_http_redirect" "$SAMPLE_OPT"
 assert_not_contains "structure: no stale tls_alert_fatal in TLS profiles" "rkn_tcp:nld=2:failure_detector=z2k_tls_alert_fatal" "$SAMPLE_OPT"
 
 assert_contains "structure: has --filter-tcp" "--filter-tcp" "$SAMPLE_OPT"

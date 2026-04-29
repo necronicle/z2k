@@ -15,19 +15,32 @@
 --   zapret-auto.lua    — standard_failure_detector, standard_success_detector
 --
 -- Functions exported to the global namespace (called by nfqws2 via name):
---   z2k_tls_alert_fatal       — TLS fatal alert / HTTP DPI redirect / block page
---   z2k_tls_stalled           — everything above + per-host TLS handshake stall
---   z2k_success_no_reset      — success without resetting host failure counters
---   z2k_classify_http_reply   — shared HTTP reply classifier (used by
---                                z2k-autocircular.lua's positive-response
---                                check; will be used by HTTP detectors and
---                                a future success_detector in commit 4)
+--   z2k_tls_alert_fatal              — TLS fatal alert / HTTP classifier
+--                                       (3-state) / TLS handshake stall chain
+--   z2k_tls_stalled                  — extends z2k_tls_alert_fatal with
+--                                       per-host CH-without-SH stall window
+--   z2k_mid_stream_stall             — extends z2k_tls_stalled with post-
+--                                       handshake mid-stream stall (active
+--                                       retry within 60s window)
+--   z2k_success_no_reset             — HTTP-neutral-aware success without
+--                                       resetting host failure counters
+--                                       (used by yt_tcp profile)
+--   z2k_http_success_positive_only   — HTTP-aware success_detector: only
+--                                       2xx/304/same-SLD-3xx fire success;
+--                                       neutral / hard_fail mark crec
+--                                       (rkn_tcp / gv_tcp / http_rkn)
+--   z2k_classify_http_reply          — shared HTTP reply classifier returning
+--                                       positive | neutral | hard_fail | nil
+--                                       + sanitized reason. Single source of
+--                                       truth for marker lists, used from
+--                                       autocircular's positive-response
+--                                       check, the failure_detector chain,
+--                                       and both success_detectors above.
 --
 -- Functions kept file-local (used only by other functions in this file):
---   z2k_http_block_reply     — keyword-based block page detection (legacy
---                                path; superseded by z2k_classify_http_reply
---                                in commit 4 once the classifier rewrite lands)
---   z2k_http_dpi_redirect    — SLD-based DPI redirect detection (legacy)
+--   z2k_http_classifier_check  — failure-detector wrapper around
+--                                 z2k_classify_http_reply that stamps
+--                                 crec.z2k_neutral_observed on neutral.
 
 -- ---------------------------------------------------------------------------
 -- Shared marker lists (single source of truth for HTTP block-page detection)
@@ -218,62 +231,35 @@ function z2k_classify_http_reply(desync)
   return "neutral", "http_other_code:code=" .. tostring(code)
 end
 
-local function z2k_http_block_reply(payload)
-  if type(payload) ~= "string" then return false end
-  local code_s = payload:match("^HTTP/%d%.%d%s+([0-9][0-9][0-9])")
-  local code = tonumber(code_s)
-  if not code then return false end
-
-  -- Unambiguous block status codes
-  if code == 403 or code == 451 then
+-- Single HTTP-reply check using the z2k_classify_http_reply helper.
+-- Replaces the legacy z2k_http_block_reply (unconditional 403/451 hard
+-- fail + raw-payload keyword scan) and z2k_http_dpi_redirect (raw
+-- SLD-mismatch via is_dpi_redirect with no marker filter). Both old
+-- paths produced false positives the v3.6 plan was specifically
+-- designed to fix (legit CF/WAF 403, oauth/shortlink redirects, RFC
+-- 7725 origin 451 with Link rel="blocked-by").
+--
+-- Returns true if classifier returns "hard_fail" (confirmed block).
+-- For "neutral" — returns false but stamps crec.z2k_neutral_observed
+-- and crec.z2k_reason; autocircular's commit-3 wiring sees this and
+-- blocks successful_state / response_state, preventing the strategy
+-- from being pinned. For "positive" / nil — returns false, no marks.
+local function z2k_http_classifier_check(desync, crec)
+  if type(z2k_classify_http_reply) ~= "function" then
+    return false
+  end
+  local class, reason = z2k_classify_http_reply(desync)
+  if class == "hard_fail" then
+    if crec then crec.z2k_reason = reason end
     return true
   end
-
-  -- Any redirect with block-indicating keywords in Location
-  if code == 301 or code == 302 or code == 303 or code == 307 or code == 308 then
-    local low = string.lower(payload)
-    if low:find("\r\nlocation:", 1, true) then
-      if low:find("block", 1, true) or
-         low:find("forbidden", 1, true) or
-         low:find("zapret", 1, true) or
-         low:find("rkn", 1, true) or
-         low:find("lawfilter", 1, true) or
-         low:find("restrict", 1, true) or
-         low:find("vigruzki", 1, true) or
-         low:find("eais", 1, true) or
-         low:find("warning", 1, true) or
-         low:find("blackhole", 1, true) then
-        return true
-      end
+  if class == "neutral" then
+    if crec then
+      crec.z2k_neutral_observed = true
+      crec.z2k_reason = reason
     end
   end
   return false
-end
-
--- SLD-based redirect detection: any redirect (301/302/303/307/308) to a
--- different second-level domain is a DPI redirect. This is the most universal
--- check — works for any ISP regardless of their block page URL patterns.
--- standard_failure_detector only checks 302/307; we extend to all codes.
-local function z2k_http_dpi_redirect(desync)
-  if not desync or desync.outgoing then return false end
-  if desync.l7payload ~= "http_reply" then return false end
-  if not desync.track or not desync.track.hostname then return false end
-  if type(http_dissect_reply) ~= "function" then return false end
-  if type(array_field_search) ~= "function" then return false end
-  if type(is_dpi_redirect) ~= "function" then return false end
-
-  local hdis = http_dissect_reply(desync.dis.payload)
-  if not hdis then return false end
-  local c = hdis.code
-  -- 302/307 are already caught by standard_failure_detector, but re-checking
-  -- them here is harmless (crec.nocheck prevents double-counting) and makes
-  -- this function self-contained.
-  if c ~= 301 and c ~= 302 and c ~= 303 and c ~= 307 and c ~= 308 then
-    return false
-  end
-  local idx = array_field_search(hdis.headers, "header_low", "location")
-  if not idx then return false end
-  return is_dpi_redirect(desync.track.hostname, hdis.headers[idx].value)
 end
 
 function z2k_tls_alert_fatal(desync, crec)
@@ -295,15 +281,16 @@ function z2k_tls_alert_fatal(desync, crec)
   --   failure detector runs and counts normal connection close as failure.
   --   With fails=2, two short API calls within 60s = false rotation.
 
-  -- HTTP DPI redirect: ISP redirects to block page (e.g. lawfilter.ertelecom.ru).
-  -- SLD-based check is universal for any ISP; keyword-based is a fallback.
-  if z2k_http_dpi_redirect(desync) then
+  -- HTTP reply classification: 4xx/5xx + body markers, 3xx + cross-SLD
+  -- with host-marker/prefix → hard fail. Plain 4xx without markers /
+  -- cross-SLD without markers → neutral (stamps crec.z2k_neutral_observed
+  -- so autocircular's commit-3 gates block the false-pin).
+  -- Replaces the legacy z2k_http_dpi_redirect + z2k_http_block_reply
+  -- pair with a single classifier-driven check.
+  if z2k_http_classifier_check(desync, crec) then
     return true
   end
   local payload = dis and dis.payload
-  if z2k_http_block_reply(payload) then
-    return true
-  end
 
   -- TLS fatal alert (e.g. Cloudflare ECH handshake_failure)
   if type(payload) ~= "string" then return false end
@@ -710,7 +697,27 @@ end
 -- Detects success but does NOT reset host failure counters.
 -- This is important for TV clients: successful handshakes from other devices
 -- on the same domain must not mask repeated webOS failures.
+--
+-- HTTP-neutral-aware (commit 4 of v3.6 plan): when the incoming payload
+-- is an http_reply, consult z2k_classify_http_reply BEFORE delegating to
+-- standard. If neutral or hard_fail, do NOT mark nocheck — instead
+-- stamp crec.z2k_neutral_observed so autocircular blocks the false-pin
+-- via its commit-3 gates. Without this, large 4xx replies on yt_tcp
+-- (which uses this detector) would still cross seq>inseq via standard,
+-- set nocheck=true, and pin the strategy as successful.
 function z2k_success_no_reset(desync, crec)
+  if not desync.outgoing and desync.l7payload == "http_reply" and
+     type(z2k_classify_http_reply) == "function" then
+    local class, reason = z2k_classify_http_reply(desync)
+    if class == "neutral" or class == "hard_fail" then
+      if crec then
+        crec.z2k_neutral_observed = true
+        crec.z2k_reason = reason
+      end
+      return false
+    end
+    -- "positive" or nil → fall through to standard
+  end
   if type(standard_success_detector) ~= "function" then return false end
   local ok, result = pcall(standard_success_detector, desync, crec)
   if ok and result then
@@ -720,4 +727,34 @@ function z2k_success_no_reset(desync, crec)
     return false
   end
   return false
+end
+
+-- HTTP-aware success detector for profiles that don't need the
+-- "no host failure-counter reset" semantics (rkn_tcp / gv_tcp / http_rkn).
+--
+-- For incoming http_reply: only "positive" (2xx, 304, same-SLD 3xx)
+-- counts as success. "neutral" / "hard_fail" mark crec.z2k_neutral_observed
+-- and return false — autocircular blocks the pin via the commit-3 gates.
+-- For non-HTTP traffic (TLS handshake bytes etc) — delegate to
+-- standard_success_detector, which fires on seq>inseq=18000 (set by
+-- ensure_circular_tcp_inseq).
+function z2k_http_success_positive_only(desync, crec)
+  if not desync.outgoing and desync.l7payload == "http_reply" and
+     type(z2k_classify_http_reply) == "function" then
+    local class, reason = z2k_classify_http_reply(desync)
+    if class == "positive" then
+      return true
+    end
+    if class == "neutral" or class == "hard_fail" then
+      if crec then
+        crec.z2k_neutral_observed = true
+        crec.z2k_reason = reason
+      end
+      return false
+    end
+    -- nil class — payload didn't parse as HTTP. Delegate.
+  end
+  if type(standard_success_detector) ~= "function" then return false end
+  local ok, result = pcall(standard_success_detector, desync, crec)
+  return ok and result == true
 end

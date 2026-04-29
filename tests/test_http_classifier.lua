@@ -222,6 +222,110 @@ check("outgoing direction returns nil", nil, nil,
         dis = { payload = "GET / HTTP/1.1\r\n\r\n" },
     })
 
+-- ----- z2k_http_success_positive_only / z2k_success_no_reset -----------
+--
+-- Stub standard_success_detector: returns true for tls_server_hello (so
+-- the delegate path can be exercised) and for inseq>=18000 markers in
+-- the desync object (set by tests below). Otherwise false.
+
+function standard_success_detector(desync, _)
+    if desync.outgoing then return false end
+    if desync.l7payload == "tls_server_hello" then return true end
+    if desync._test_inseq_crossed then return true end
+    return false
+end
+
+local function check_success(name, fn_name, want_ret, want_neutral, desync)
+    local crec = {}
+    local fn = _G[fn_name]
+    local ret = fn(desync, crec)
+    local got_neutral = (crec.z2k_neutral_observed == true)
+    local pass = (ret == want_ret) and (got_neutral == want_neutral)
+    if pass then
+        PASS = PASS + 1
+        print(string.format("[PASS] %s (%s)", name, fn_name))
+    else
+        FAIL = FAIL + 1
+        print(string.format("[FAIL] %s (%s) — ret=%s neutral=%s reason=%s",
+            name, fn_name, tostring(ret), tostring(got_neutral),
+            tostring(crec.z2k_reason)))
+    end
+end
+
+print("=== success detectors: z2k_http_success_positive_only ===")
+
+check_success("200 OK → success",
+    "z2k_http_success_positive_only", true, false,
+    mock_desync("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"))
+
+check_success("403 plain → no success, neutral marked",
+    "z2k_http_success_positive_only", false, true,
+    mock_desync("HTTP/1.1 403 Forbidden\r\n\r\n<html>Access Denied</html>"))
+
+check_success("403 + rkn body → no success, neutral marked (hard_fail class)",
+    "z2k_http_success_positive_only", false, true,
+    mock_desync("HTTP/1.1 403 Forbidden\r\n\r\n<html>Blocked by rkn</html>"))
+
+check_success("cross-SLD oauth 302 → no success, neutral marked",
+    "z2k_http_success_positive_only", false, true,
+    mock_desync(
+        "HTTP/1.1 302 Found\r\nLocation: https://login.microsoftonline.com/auth\r\n\r\n",
+        "myapp.com"))
+
+-- non-HTTP delegates to standard
+check_success("tls_server_hello → delegated success",
+    "z2k_http_success_positive_only", true, false,
+    {
+        outgoing = false,
+        l7payload = "tls_server_hello",
+        track = { hostname = "example.com" },
+        dis = { payload = "\x16..." },
+    })
+
+check_success("non-HTTP, no inseq cross → no success",
+    "z2k_http_success_positive_only", false, false,
+    {
+        outgoing = false,
+        l7payload = "unknown",
+        track = { hostname = "example.com" },
+        dis = { payload = "data" },
+    })
+
+print("=== success detectors: z2k_success_no_reset HTTP-aware ===")
+
+-- z2k_success_no_reset has no-reset semantics: it returns false even on
+-- success (sets crec.nocheck=true instead). We test the neutral path —
+-- it must NOT set crec.nocheck for neutral/hard_fail HTTP replies.
+
+local function check_no_reset(name, want_nocheck, want_neutral, desync)
+    local crec = {}
+    z2k_success_no_reset(desync, crec)
+    local got_nocheck = (crec.nocheck == true)
+    local got_neutral = (crec.z2k_neutral_observed == true)
+    local pass = (got_nocheck == want_nocheck) and (got_neutral == want_neutral)
+    if pass then
+        PASS = PASS + 1
+        print(string.format("[PASS] %s (no_reset)", name))
+    else
+        FAIL = FAIL + 1
+        print(string.format("[FAIL] %s (no_reset) — nocheck=%s neutral=%s",
+            name, tostring(got_nocheck), tostring(got_neutral)))
+    end
+end
+
+check_no_reset("403 plain → no nocheck, neutral marked",
+    false, true,
+    mock_desync("HTTP/1.1 403 Forbidden\r\n\r\n<html>Access Denied</html>"))
+
+check_no_reset("200 OK → nocheck via standard delegate",
+    true, false,
+    {
+        outgoing = false,
+        l7payload = "tls_server_hello",
+        track = { hostname = "example.com" },
+        dis = { payload = "\x16..." },
+    })
+
 -- ----- summary -----------------------------------------------------------
 
 print(string.format("\n%d passed, %d failed", PASS, FAIL))

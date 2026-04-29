@@ -11,6 +11,7 @@ globals = {
     "z2k_tls_stalled",
     "z2k_mid_stream_stall",
     "z2k_success_no_reset",
+    "z2k_http_success_positive_only",
     "z2k_timing_morph",
     "z2k_quic_morph_v2",
     "z2k_game_udp",
