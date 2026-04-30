@@ -419,6 +419,76 @@ NEW_COUNT=$(printf '%s' "$SAMPLE_OPT" | grep -o -- '--new' | wc -l | tr -d ' ')
 assert_eq "structure: correct --new count" "4" "$NEW_COUNT"
 
 # ==============================================================================
+# TEST: GAME_PROFILE branching (flowseal vs legacy)
+# ==============================================================================
+# Static-shape coverage of step 3 commit ace6e6e. Runtime invocation of
+# generate_nfqws2_opt_official is non-trivial because lists_dir is hardcoded
+# to /opt/zapret2/lists inside the function (would clash with the actual
+# system if tests run on a real router); we use the same SAMPLE_OPT pattern
+# the rest of this file already establishes, plus source-level grep guards
+# to catch accidental deletion of the GAME_PROFILE branch tokens.
+
+printf "\n--- GAME_PROFILE: flowseal arm shape ---\n"
+
+# What the flowseal branch should produce when GAME_MODE_ENABLED=1 and
+# flowseal_game_ips.txt exists (the only positive case).
+SAMPLE_FLOWSEAL_OPT="--filter-udp=1024-2407,2409-65535 --ipset=/opt/zapret2/lists/flowseal_game_ips.txt --ipset-exclude=/opt/zapret2/lists/ipset-exclude.txt --in-range=a --out-range=-n2 --payload=all --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud:repeats=12 --new"
+
+assert_contains "flowseal: filter-udp port range" "--filter-udp=1024-2407,2409-65535" "$SAMPLE_FLOWSEAL_OPT"
+assert_contains "flowseal: positive ipset" "--ipset=/opt/zapret2/lists/flowseal_game_ips.txt" "$SAMPLE_FLOWSEAL_OPT"
+assert_contains "flowseal: ipset-exclude scoped" "--ipset-exclude=/opt/zapret2/lists/ipset-exclude.txt" "$SAMPLE_FLOWSEAL_OPT"
+assert_contains "flowseal: dbankcloud blob" "blob=quic_dbankcloud" "$SAMPLE_FLOWSEAL_OPT"
+assert_contains "flowseal: repeats=12" "repeats=12" "$SAMPLE_FLOWSEAL_OPT"
+assert_contains "flowseal: cutoff=n2" "out-range=-n2" "$SAMPLE_FLOWSEAL_OPT"
+assert_contains "flowseal: payload=all on profile" "--payload=all" "$SAMPLE_FLOWSEAL_OPT"
+# Port-range invariant: no web/RKN ports in game arm (colleague's invariant).
+assert_not_contains "flowseal: no port 80" "filter-udp=80" "$SAMPLE_FLOWSEAL_OPT"
+assert_not_contains "flowseal: no port 443" "filter-udp=443" "$SAMPLE_FLOWSEAL_OPT"
+# No leakage of legacy 13-strat rotator tokens.
+assert_not_contains "flowseal: no game_udp circular key" "key=game_udp" "$SAMPLE_FLOWSEAL_OPT"
+assert_not_contains "flowseal: no aws_oracle_ips" "aws_oracle_ips" "$SAMPLE_FLOWSEAL_OPT"
+
+printf "\n--- GAME_PROFILE: legacy arm shape (rollback path) ---\n"
+
+# What the legacy Phase-2 branch produces (existing 13-strat rotator scoped
+# to game_ips.txt, optionally OR'd with aws_oracle_ips.txt in hybrid mode).
+# Trimmed sample — we only assert the discriminating tokens, not the full
+# 13-strategy chain (already covered by other tests).
+SAMPLE_LEGACY_OPT="--filter-udp=1024-2407,2409-65535 --ipset=/opt/zapret2/lists/game_ips.txt --ipset=/opt/zapret2/lists/aws_oracle_ips.txt --ipset-exclude=/opt/zapret2/lists/ipset-exclude.txt --in-range=a --out-range=-n4 --payload=all --lua-desync=circular:fails=2:time=60:udp_in=1:udp_out=4:key=game_udp:nld=2 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --new"
+
+assert_contains "legacy: still uses game_ips.txt" "--ipset=/opt/zapret2/lists/game_ips.txt" "$SAMPLE_LEGACY_OPT"
+assert_contains "legacy: still uses circular rotator" "key=game_udp" "$SAMPLE_LEGACY_OPT"
+assert_contains "legacy: still uses quic_google blob" "blob=quic_google" "$SAMPLE_LEGACY_OPT"
+assert_not_contains "legacy: doesn't use flowseal_game_ips" "flowseal_game_ips" "$SAMPLE_LEGACY_OPT"
+assert_not_contains "legacy: doesn't use dbankcloud" "quic_dbankcloud" "$SAMPLE_LEGACY_OPT"
+
+printf "\n--- GAME_PROFILE: source-level guards ---\n"
+
+# Source-grep guards. These are static checks that catch accidental deletion
+# of the discriminating branch tokens — a cheap regression net for the
+# critical conditionals in lib/config_official.sh.
+CONFIG_OFFICIAL_SRC="$SCRIPT_DIR/lib/config_official.sh"
+if [ -f "$CONFIG_OFFICIAL_SRC" ]; then
+    CONFIG_OFFICIAL_TEXT=$(cat "$CONFIG_OFFICIAL_SRC")
+    # Default coercion preserves flowseal as fallback for empty/garbage.
+    assert_contains "source: GAME_PROFILE default coerces to flowseal" 'GAME_PROFILE="flowseal"' "$CONFIG_OFFICIAL_TEXT"
+    # flowseal vs legacy case statement intact.
+    assert_contains "source: GAME_PROFILE has case statement" 'flowseal|legacy' "$CONFIG_OFFICIAL_TEXT"
+    # File-existence gate — without this, missing flowseal_game_ips.txt
+    # would silently emit a profile referencing a non-existent ipset.
+    assert_contains "source: flowseal arm gated on flowseal_game_ips.txt -s test" '-s "${lists_dir}/flowseal_game_ips.txt"' "$CONFIG_OFFICIAL_TEXT"
+    # Specific tokens that define the flowseal arm — catches accidental
+    # deletion of blob/repeats/cutoff/port-range arguments.
+    assert_contains "source: flowseal arm uses quic_dbankcloud" "blob=quic_dbankcloud" "$CONFIG_OFFICIAL_TEXT"
+    assert_contains "source: flowseal arm has repeats=12" "repeats=12" "$CONFIG_OFFICIAL_TEXT"
+    assert_contains "source: flowseal arm has out-range=-n2" "out-range=-n2" "$CONFIG_OFFICIAL_TEXT"
+    assert_contains "source: flowseal arm preserves Warp 2408 carve-out" "1024-2407,2409-65535" "$CONFIG_OFFICIAL_TEXT"
+    # Legacy catchall must be co-gated on GAME_PROFILE != flowseal so it
+    # doesn't double-fire alongside the new arm.
+    assert_contains "source: legacy catchall gated on GAME_PROFILE != flowseal" 'GAME_PROFILE" != "flowseal"' "$CONFIG_OFFICIAL_TEXT"
+fi
+
+# ==============================================================================
 # CLEANUP AND REPORT
 # ==============================================================================
 
