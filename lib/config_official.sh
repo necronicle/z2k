@@ -535,6 +535,214 @@ AUSTERUS_OPT
 
     rkn_tcp=$(rotate_rkn_tcp_ts_slots "$rkn_tcp")
 
+    # Phase 6D: cond_tcp_has_ts gating для всех TS-fake стратегий.
+    #
+    # Background: tcp_ts=N работает корректно ТОЛЬКО на серверах,
+    # которые сами negotiated TCP timestamps в SYN-handshake. Если
+    # сервер ts не отдал, наш fake-пакет с ts-опцией легко палится
+    # ТСПУ как "обновлённый клиент с свежими ts" — несоответствие
+    # client-server SYN'у. bol-van ntc.party #660-661 (2026-02-09)
+    # шипанул механизм: per_instance_condition + cond=cond_tcp_has_ts
+    # + cond_neg twin без ts.
+    #
+    # Дизайн (по согласованию с colleague review 2026-05-01):
+    #   1. На каждый strategy=N с K TS-токенами — добавить ОДИН
+    #      `--lua-desync=per_instance_condition:instances=$((2*K)):strategy=N`
+    #      ПЕРЕД conditional пакетом.
+    #   2. Каждый исходный TS-токен оставляем + дописываем `:cond=cond_tcp_has_ts`.
+    #   3. Рядом эмитим twin: тот же токен с удалённым `:tcp_ts=N` +
+    #      `:cond=cond_tcp_has_ts:cond_neg`.
+    #   4. instances=2*K критичен — иначе per_instance_condition попалит и
+    #      non-TS токены того же слота (fakedsplit/multidisorder), которые
+    #      без cond арга он маркирует "no cond → skipping" (zapret-auto.lua:489)
+    #      и pop'ит из плана. После N=2*K итераций оркестратор обрабатывает
+    #      "remaining instances unconditionally" (line 494-496) — туда
+    #      падают наши non-TS токены.
+    #   5. Twin наследует все non-tcp_ts арги исходника, включая уже
+    #      добавленные нашими прошлыми инжекторами (fool=z2k_dynamic_ttl,
+    #      tls_mod=...,z2k_grease,...). Новый ip_autottl/ip_ttl не добавляем —
+    #      fool=z2k_dynamic_ttl уже даёт adaptive TTL fooling.
+    #
+    # Применяется к rkn_tcp + youtube_tcp + youtube_gv_tcp — у всех трёх
+    # сравнимое количество TS-fake токенов (rkn=34, yt=17, gv=16).
+    #
+    # Идемпотентно: токены с уже присутствующим `:cond=cond_tcp_has_ts`
+    # не идут в TS-count Pass'а 1, не оборачиваются повторно в Pass'е 2.
+    #
+    # recipe.c (classify) — отдельным PR через ts_req split на TS_YES/TS_NO.
+    inject_cond_tcp_has_ts() {
+        local input="$1"
+        local out=""
+        local token=""
+        local sid=""
+        local strat_ts_map=""
+        local cur_sid=""
+        local cur_buf_ts=""
+        local cur_buf_nots=""
+        local cur_ts_count=0
+        local cur=""
+        local in_ts_map=""
+        local t=""
+        local twin=""
+        local ifs_save=""
+
+        # Pass 1: count NEW TS tokens per strategy (skip already-wrapped — idempotency)
+        for token in $input; do
+            case "$token" in
+                *:tcp_ts=*) ;;
+                *) continue ;;
+            esac
+            case "$token" in
+                *:cond=cond_tcp_has_ts*) continue ;;
+            esac
+            case "$token" in
+                *:strategy=*)
+                    sid=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
+                    ;;
+                *) continue ;;
+            esac
+            [ -z "$sid" ] && continue
+            case " $strat_ts_map " in
+                *" $sid:"*)
+                    cur=$(printf '%s' "$strat_ts_map" | sed -n "s/.* $sid:\([0-9]*\).*/\1/p")
+                    strat_ts_map=$(printf '%s' "$strat_ts_map" | sed "s/ $sid:[0-9]*/ $sid:$((cur+1))/")
+                    ;;
+                *)
+                    strat_ts_map="$strat_ts_map $sid:1"
+                    ;;
+            esac
+        done
+
+        # Pass 2: per-slot buffering. Inline flush at strategy boundary + at EOF.
+        # Buffers use newline as separator so token strings (which can't contain
+        # newlines themselves) round-trip clean through `for t in $buf` with
+        # IFS=newline.
+        for token in $input; do
+            case "$token" in
+                *:strategy=*)
+                    sid=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
+                    ;;
+                *)
+                    # No :strategy= — close any open slot, then emit unchanged.
+                    if [ -n "$cur_sid" ]; then
+                        # === inline flush (duplicated below at EOF) ===
+                        if [ "$cur_ts_count" -gt 0 ]; then
+                            out="${out:+$out }--lua-desync=per_instance_condition:instances=$((2*cur_ts_count)):strategy=$cur_sid"
+                            ifs_save="$IFS"
+                            IFS='
+'
+                            for t in $cur_buf_ts; do
+                                out="$out ${t}:cond=cond_tcp_has_ts"
+                                twin=$(printf '%s' "$t" | sed -e 's/:tcp_ts=[^:]*:/:/g' -e 's/:tcp_ts=[^:]*$//')
+                                out="$out ${twin}:cond=cond_tcp_has_ts:cond_neg"
+                            done
+                            for t in $cur_buf_nots; do out="$out $t"; done
+                            IFS="$ifs_save"
+                        else
+                            ifs_save="$IFS"
+                            IFS='
+'
+                            for t in $cur_buf_nots; do out="${out:+$out }$t"; done
+                            IFS="$ifs_save"
+                        fi
+                        cur_buf_ts=""; cur_buf_nots=""; cur_ts_count=0; cur_sid=""
+                    fi
+                    out="${out:+$out }$token"
+                    continue
+                    ;;
+            esac
+
+            # If strategy changed, flush previous slot.
+            if [ -n "$cur_sid" ] && [ "$sid" != "$cur_sid" ]; then
+                if [ "$cur_ts_count" -gt 0 ]; then
+                    out="${out:+$out }--lua-desync=per_instance_condition:instances=$((2*cur_ts_count)):strategy=$cur_sid"
+                    ifs_save="$IFS"
+                    IFS='
+'
+                    for t in $cur_buf_ts; do
+                        out="$out ${t}:cond=cond_tcp_has_ts"
+                        twin=$(printf '%s' "$t" | sed -e 's/:tcp_ts=[^:]*:/:/g' -e 's/:tcp_ts=[^:]*$//')
+                        out="$out ${twin}:cond=cond_tcp_has_ts:cond_neg"
+                    done
+                    for t in $cur_buf_nots; do out="$out $t"; done
+                    IFS="$ifs_save"
+                else
+                    ifs_save="$IFS"
+                    IFS='
+'
+                    for t in $cur_buf_nots; do out="${out:+$out }$t"; done
+                    IFS="$ifs_save"
+                fi
+                cur_buf_ts=""; cur_buf_nots=""; cur_ts_count=0
+            fi
+            cur_sid="$sid"
+
+            # Strategy in TS-map? (does it have any non-wrapped TS tokens at all)
+            in_ts_map=""
+            case " $strat_ts_map " in
+                *" $sid:"*) in_ts_map="1" ;;
+            esac
+
+            if [ -z "$in_ts_map" ]; then
+                # Slot has no TS tokens — pure passthrough as nots.
+                cur_buf_nots="${cur_buf_nots:+$cur_buf_nots
+}$token"
+                continue
+            fi
+
+            # Idempotency: already-wrapped → goes to nots (won't be re-conditioned)
+            case "$token" in
+                *:cond=cond_tcp_has_ts*)
+                    cur_buf_nots="${cur_buf_nots:+$cur_buf_nots
+}$token"
+                    continue
+                    ;;
+            esac
+
+            # Bucket: TS or non-TS within a TS-affected slot
+            case "$token" in
+                *:tcp_ts=*)
+                    cur_buf_ts="${cur_buf_ts:+$cur_buf_ts
+}$token"
+                    cur_ts_count=$((cur_ts_count + 1))
+                    ;;
+                *)
+                    cur_buf_nots="${cur_buf_nots:+$cur_buf_nots
+}$token"
+                    ;;
+            esac
+        done
+
+        # Final flush.
+        if [ -n "$cur_sid" ]; then
+            if [ "$cur_ts_count" -gt 0 ]; then
+                out="${out:+$out }--lua-desync=per_instance_condition:instances=$((2*cur_ts_count)):strategy=$cur_sid"
+                ifs_save="$IFS"
+                IFS='
+'
+                for t in $cur_buf_ts; do
+                    out="$out ${t}:cond=cond_tcp_has_ts"
+                    twin=$(printf '%s' "$t" | sed -e 's/:tcp_ts=[^:]*:/:/g' -e 's/:tcp_ts=[^:]*$//')
+                    out="$out ${twin}:cond=cond_tcp_has_ts:cond_neg"
+                done
+                for t in $cur_buf_nots; do out="$out $t"; done
+                IFS="$ifs_save"
+            else
+                ifs_save="$IFS"
+                IFS='
+'
+                for t in $cur_buf_nots; do out="${out:+$out }$t"; done
+                IFS="$ifs_save"
+            fi
+        fi
+
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(inject_cond_tcp_has_ts "$rkn_tcp")
+    youtube_tcp=$(inject_cond_tcp_has_ts "$youtube_tcp")
+    youtube_gv_tcp=$(inject_cond_tcp_has_ts "$youtube_gv_tcp")
+
     # Phase 14: bol-van badseq alias expansion.
     #
     # Upstream bol-van/zapret has `--dpi-desync-fooling=badseq` with
