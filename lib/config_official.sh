@@ -347,18 +347,16 @@ AUSTERUS_OPT
     # CRITICAL coverage gap if missing: with no_http_redirect set below,
     # standard_failure_detector's 302/307 cross-SLD branch is disabled
     # (zapret-auto.lua:182). For rkn_tcp the classifier check is reachable
-    # via ensure_rkn_failure_detector below (which sets z2k_mid_stream_stall,
-    # whose chain includes z2k_http_classifier_check). yt_tcp / gv_tcp
-    # had NO custom failure_detector — without this assignment, a 302
-    # to lawfilter.* / warn.beeline.ru on yt_tcp would reach neither
-    # standard's redirect branch nor our classifier. The only signal
-    # left would be the success_detector returning false on neutral —
-    # strategy stays pinned, no rotation. Net regression.
+    # via ensure_rkn_failure_detector below (which sets z2k_tls_stalled,
+    # whose chain inherits z2k_tls_alert_fatal → z2k_http_classifier_check).
+    # yt_tcp / gv_tcp had NO custom failure_detector — без этого assignment'а
+    # 302 на lawfilter.* / warn.beeline.ru на yt_tcp не дошёл бы ни до
+    # standard's redirect branch, ни до нашего classifier. Net regression.
     #
     # z2k_tls_alert_fatal is the minimum classifier-aware chain. yt_tcp
-    # may benefit from z2k_tls_stalled / z2k_mid_stream_stall later, but
-    # those are upgrade decisions; here we restore the redirect-coverage
-    # invariant lost when no_http_redirect was added.
+    # may benefit from z2k_tls_stalled later — это отдельное upgrade
+    # решение; здесь восстанавливаем redirect-coverage инвариант,
+    # утерянный с добавлением no_http_redirect.
     youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_tls_alert_fatal")
     youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_tls_alert_fatal")
 
@@ -789,11 +787,10 @@ AUSTERUS_OPT
     youtube_tcp=$(inject_z2k_range_rand "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_range_rand "$youtube_gv_tcp")
 
-    # NOTE: the z2k_mid_stream_stall detector replaces z2k_tls_stalled
-    # as the rkn_tcp default failure detector — that switch lives in
-    # ensure_rkn_failure_detector() below, not here, because the
-    # detector arg is added to the circular token AFTER our injectors
-    # run.
+    # NOTE: rkn_tcp default failure_detector is z2k_tls_stalled
+    # (set in ensure_rkn_failure_detector() below, applied AFTER injectors
+    # run). См. там же подробности про revert mid_stream_stall → tls_stalled
+    # 2026-04-30 после code-review.
 
     # Let YouTube TLS circular operate exactly as in the upstream manual.
     # For LG webOS the orchestrator must see incoming packets on the circular
@@ -951,23 +948,37 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
-    # RKN: всегда добавляем failure_detector=z2k_mid_stream_stall.
-    # Это superset z2k_tls_stalled, который в свою очередь superset
-    # z2k_tls_alert_fatal — наследует все его сигналы (retrans,
-    # incoming RST, HTTP DPI redirect, TLS fatal alert) плюс
-    # timeout-based детект «ClientHello ушёл, ServerHello не пришёл»
-    # плюс класс post-handshake mid-stream stall. Последний класс —
-    # это ровно то что ловит Ростелекомовский Cloudflare-кейс, где
-    # handshake проходит, сервер отдаёт ~10-14 KB, затем поток тихо
-    # виснет и стандартные детекторы его не видят.
+    # RKN: failure_detector=z2k_tls_stalled (default).
     #
-    # Note: z2k_mid_stream_stall v2 (2026-04-18) добавляет active-retry
-    # gating — срабатывает только когда пользователь настойчиво
-    # пробует один и тот же хост (второй CH в пределах 60 с от
-    # предыдущего). Без этого gating у нас был false-positive на
-    # нормальной навигации «почитал страницу 40с, кликнул дальше»,
-    # который тихо ротировал circular с рабочей стратегии. См.
-    # files/lua/z2k-detectors.lua для деталей heuristic.
+    # Дефолт ВРЕМЕННО возвращён с z2k_mid_stream_stall на z2k_tls_stalled
+    # после code-review 2026-04-30. Mid-stream детектор как написан имеет
+    # 4 архитектурные проблемы, которые в комбинации делают его поведение
+    # хуже отсутствия:
+    #
+    #   1. `--in-range=-s5556` (см. ensure_youtube_tls_circular_manual_layout
+    #      применённый к rkn_tcp на строке ниже) делает lua failure_detector
+    #      слепым для incoming seq > 5.5KB. CF stall в 10-14KB мимо.
+    #   2. inseq=18000 в circular становится недостижим — success_detector
+    #      не доезжает до 18KB при том же gate, не сбрасывает upstream
+    #      failure counter на длинных рабочих TLS-потоках.
+    #   3. State key в z2k_mid_stream_stall — голый `host`, тогда как
+    #      circular работает по nld=2 (SLD). Evidence дробится по
+    #      static.cloudflare.com / api.cloudflare.com, ротация ходит
+    #      по cloudflare.com — counters не совпадают.
+    #   4. Active-retry gate (ch_gap ≤ 60s + since_last_in ≥ 15s) шумит на
+    #      HTTP/2 connection rotation, browser preconnect, parallel asset
+    #      fetch — без FIN-проверки или byte-window отделить ретрай юзера
+    #      от нормального параллельного коннекта браузера невозможно.
+    #
+    # z2k_tls_stalled живёт в files/lua/z2k-detectors.lua, ловит "CH ушёл,
+    # SH не пришёл" — это в первые ~1KB, s5556 gate ему не мешает.
+    # Наследует z2k_tls_alert_fatal (retrans, RST, HTTP redirect, TLS
+    # fatal alert) — base coverage сохраняется.
+    #
+    # z2k_mid_stream_stall не удалён — припаркован как experimental.
+    # Возвращение в default — отдельным PR с редизайном: bump in-range
+    # до s20000+, key через nld=2, max incoming seq tracking, fail-в-окне
+    # 8K..18K, FIN-проверка, lua unit-тесты на state machine.
     ensure_rkn_failure_detector() {
         local input="$1"
         local out=""
@@ -978,7 +989,7 @@ AUSTERUS_OPT
                 --lua-desync=circular:*)
                     case "$token" in
                         *failure_detector=*) ;;
-                        *) token="${token}:failure_detector=z2k_mid_stream_stall" ;;
+                        *) token="${token}:failure_detector=z2k_tls_stalled" ;;
                     esac
                     ;;
             esac
