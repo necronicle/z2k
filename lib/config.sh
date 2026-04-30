@@ -514,13 +514,17 @@ sudrf.ru
 
 # === Российские сервисы ===
 vk.com
+vk.me
 vkcdn.net
 userapi.com
 vk.ru
 vkvideo.ru
+ok.ru
+mycdn.me
 rutube.ru
 yandex.ru
 ya.ru
+yandex.net
 yandex.cloud
 kinopoisk.ru
 okko.tv
@@ -533,6 +537,21 @@ vkusvill.ru
 ozon.ru
 ozone.ru
 ozonusercontent.com
+wildberries.ru
+wb.ru
+wbbasket.ru
+
+# === Российские банки ===
+sber.ru
+sberbank.ru
+vtb.ru
+alfabank.ru
+tbank.ru
+gazprombank.ru
+gpb.ru
+psbank.ru
+rosbank.ru
+rshb.ru
 
 # === Steam ===
 s.team
@@ -599,6 +618,7 @@ twitch-shadow.net
 # === Riot Games / Valorant ===
 riotgames.com
 riotcdn.net
+leagueoflegends.com
 valorant.com
 playvalorant.com
 pvp.net
@@ -656,6 +676,7 @@ keenetic.link
 
 # === Разработка ===
 raw.githubusercontent.com
+marketplace.visualstudio.com
 EOF
 
         # Проверить что файл действительно создался
@@ -679,6 +700,58 @@ keenetic.cloud
 keenetic.link
 KEENETIC
             print_info "Добавлены домены Keenetic в whitelist"
+        fi
+
+        # Дозаписать банки и расширения для российских сервисов (flowseal 1.9.8 sync)
+        if ! grep -q "^sber.ru$" "$whitelist" 2>/dev/null; then
+            cat >> "$whitelist" <<'BANKS'
+
+# === Российские банки ===
+sber.ru
+sberbank.ru
+vtb.ru
+alfabank.ru
+tbank.ru
+gazprombank.ru
+gpb.ru
+psbank.ru
+rosbank.ru
+rshb.ru
+BANKS
+            print_info "Добавлены домены российских банков в whitelist"
+        fi
+
+        if ! grep -q "^wildberries.ru$" "$whitelist" 2>/dev/null; then
+            cat >> "$whitelist" <<'WB'
+
+# === Wildberries ===
+wildberries.ru
+wb.ru
+wbbasket.ru
+WB
+            print_info "Добавлены домены Wildberries в whitelist"
+        fi
+
+        if ! grep -q "^ok.ru$" "$whitelist" 2>/dev/null; then
+            cat >> "$whitelist" <<'OKVK'
+
+# === Доп. российские сервисы (OK/VK/Yandex) ===
+ok.ru
+mycdn.me
+vk.me
+yandex.net
+OKVK
+            print_info "Добавлены доп. домены OK/VK/Yandex в whitelist"
+        fi
+
+        if ! grep -q "^leagueoflegends.com$" "$whitelist" 2>/dev/null; then
+            printf '\nleagueoflegends.com\n' >> "$whitelist"
+            print_info "Добавлен leagueoflegends.com в whitelist"
+        fi
+
+        if ! grep -q "^marketplace.visualstudio.com$" "$whitelist" 2>/dev/null; then
+            printf 'marketplace.visualstudio.com\n' >> "$whitelist"
+            print_info "Добавлен marketplace.visualstudio.com в whitelist"
         fi
     fi
 
