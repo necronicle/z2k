@@ -124,14 +124,27 @@ z2k_fetch() {
 #   _etag_cleanup "$tmp"              # in place of rm -f "$tmp"
 _etag_prep() {
     # Copy dest body + dest.etag into tmp so z2k_fetch can hit 304.
+    # ETag is only carried over if the body copy succeeded — otherwise
+    # we'd leave a valid ETag pointing at a torn/partial body, and a
+    # subsequent 304 would falsely validate that broken body.
     local src="$1" tmp="$2"
-    [ -f "$src" ] && [ -s "$src" ] && cp -f "$src" "$tmp" 2>/dev/null
+    [ -f "$src" ] && [ -s "$src" ] || return 0
+    cp -f "$src" "$tmp" 2>/dev/null || return 0
     [ -f "${src}.etag" ] && cp -f "${src}.etag" "${tmp}.etag" 2>/dev/null
+    return 0
 }
 _etag_finalize() {
     # Carry the freshly-fetched ETag to the final dest so next run reuses it.
+    # If the 200 response carried no ETag header, _z2k_curl_etag deletes
+    # tmp.etag — in that case we must also drop the stale dest.etag, or
+    # next cron sends a phantom If-None-Match that no longer matches the
+    # body we just installed.
     local tmp="$1" dest="$2"
-    [ -f "${tmp}.etag" ] && mv -f "${tmp}.etag" "${dest}.etag" 2>/dev/null
+    if [ -f "${tmp}.etag" ]; then
+        mv -f "${tmp}.etag" "${dest}.etag" 2>/dev/null
+    else
+        rm -f "${dest}.etag"
+    fi
 }
 _etag_cleanup() {
     rm -f "$1" "${1}.etag"
@@ -212,7 +225,11 @@ update_list() {
 
     # Обновить
     mkdir -p "$(dirname "$dest")" 2>/dev/null
-    mv -f "$tmp" "$dest"
+    if ! mv -f "$tmp" "$dest"; then
+        log_msg "FAIL: $name mv tmp → dest failed"
+        _etag_cleanup "$tmp"
+        return 1
+    fi
     _etag_finalize "$tmp" "$dest"
     log_msg "OK: $name updated ($(wc -l < "$dest") lines)"
     return 2  # Код 2 = есть изменения
@@ -434,7 +451,11 @@ main() {
         fi
 
         mkdir -p "$(dirname "$dest")" 2>/dev/null
-        mv -f "$tmp" "$dest"
+        if ! mv -f "$tmp" "$dest"; then
+            log_msg "FAIL: flowseal_game_ips mv tmp → dest failed"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
         _etag_finalize "$tmp" "$dest"
         log_msg "OK: flowseal_game_ips updated ($total_lines lines)"
         return 2
