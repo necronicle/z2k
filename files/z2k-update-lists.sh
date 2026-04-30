@@ -109,6 +109,35 @@ z2k_fetch() {
 }
 
 # ==============================================================================
+# ETag preservation across cron runs
+# ==============================================================================
+# z2k_fetch's _z2k_curl_etag reads/writes ETag at "${dest}.etag" where dest
+# is whatever path it's called with. Updaters pass a per-run mktemp path,
+# so without these helpers each cron run starts with no ETag baseline and
+# always issues a full GET (no 304 optimization), plus orphaned *.etag
+# crumbs accumulate next to the temp files.
+#
+# Pattern per updater function:
+#   _etag_prep "$dest" "$tmp"         # before z2k_fetch — primes 304 layer
+#   ... fetch + validate ...
+#   _etag_finalize "$tmp" "$dest"     # after successful mv tmp → dest
+#   _etag_cleanup "$tmp"              # in place of rm -f "$tmp"
+_etag_prep() {
+    # Copy dest body + dest.etag into tmp so z2k_fetch can hit 304.
+    local src="$1" tmp="$2"
+    [ -f "$src" ] && [ -s "$src" ] && cp -f "$src" "$tmp" 2>/dev/null
+    [ -f "${src}.etag" ] && cp -f "${src}.etag" "${tmp}.etag" 2>/dev/null
+}
+_etag_finalize() {
+    # Carry the freshly-fetched ETag to the final dest so next run reuses it.
+    local tmp="$1" dest="$2"
+    [ -f "${tmp}.etag" ] && mv -f "${tmp}.etag" "${dest}.etag" 2>/dev/null
+}
+_etag_cleanup() {
+    rm -f "$1" "${1}.etag"
+}
+
+# ==============================================================================
 # ЛОГИРОВАНИЕ
 # ==============================================================================
 
@@ -145,17 +174,18 @@ update_list() {
 
     local tmp
     tmp=$(mktemp "${dest}.XXXXXX") || return 1
+    _etag_prep "$dest" "$tmp"
 
     if ! z2k_fetch "$url" "$tmp"; then
         log_msg "FAIL: download $name from $url (all mirrors failed)"
-        rm -f "$tmp"
+        _etag_cleanup "$tmp"
         return 1
     fi
 
     # Проверить что файл не пустой
     if [ ! -s "$tmp" ]; then
         log_msg "FAIL: $name is empty"
-        rm -f "$tmp"
+        _etag_cleanup "$tmp"
         return 1
     fi
 
@@ -174,7 +204,8 @@ update_list() {
         fi
 
         if [ "$old_hash" = "$new_hash" ]; then
-            rm -f "$tmp"
+            _etag_finalize "$tmp" "$dest"
+            _etag_cleanup "$tmp"
             return 0  # Без изменений
         fi
     fi
@@ -182,6 +213,7 @@ update_list() {
     # Обновить
     mkdir -p "$(dirname "$dest")" 2>/dev/null
     mv -f "$tmp" "$dest"
+    _etag_finalize "$tmp" "$dest"
     log_msg "OK: $name updated ($(wc -l < "$dest") lines)"
     return 2  # Код 2 = есть изменения
 }
@@ -332,16 +364,17 @@ main() {
         local url="https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/.service/ipset-service.txt"
         local tmp
         tmp=$(mktemp "${dest}.XXXXXX") || return 1
+        _etag_prep "$dest" "$tmp"
 
         if ! z2k_fetch "$url" "$tmp"; then
             log_msg "FAIL: flowseal_game_ips download (all mirrors failed)"
-            rm -f "$tmp"
+            _etag_cleanup "$tmp"
             return 1
         fi
 
         if [ ! -s "$tmp" ]; then
             log_msg "FAIL: flowseal_game_ips empty"
-            rm -f "$tmp"
+            _etag_cleanup "$tmp"
             return 1
         fi
 
@@ -352,7 +385,7 @@ main() {
         # tell-tale markers of a non-text response slipping through CDN.
         if head -8 "$tmp" | grep -qiE '<!doctype|<html|<head|<body|^[[:space:]]*[{[]'; then
             log_msg "FAIL: flowseal_game_ips looks like HTML/JSON, not CIDR list"
-            rm -f "$tmp"
+            _etag_cleanup "$tmp"
             return 1
         fi
 
@@ -362,13 +395,13 @@ main() {
         cidr_lines=$(grep -cE '^[[:space:]]*([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?[[:space:]]*$|^[[:space:]]*[0-9a-fA-F:]+::?[0-9a-fA-F:]*(/[0-9]{1,3})?[[:space:]]*$' "$tmp" 2>/dev/null)
         if [ -z "$total_lines" ] || [ "$total_lines" -lt 1 ]; then
             log_msg "FAIL: flowseal_game_ips has no content lines"
-            rm -f "$tmp"
+            _etag_cleanup "$tmp"
             return 1
         fi
         # ≥ 80% of non-empty lines must look like CIDR
         if [ "$((cidr_lines * 100 / total_lines))" -lt 80 ]; then
             log_msg "FAIL: flowseal_game_ips CIDR ratio low ($cidr_lines/$total_lines)"
-            rm -f "$tmp"
+            _etag_cleanup "$tmp"
             return 1
         fi
 
@@ -376,7 +409,7 @@ main() {
         # below 10K means flowseal repo got truncated/restructured.
         if [ "$total_lines" -lt 10000 ]; then
             log_msg "FAIL: flowseal_game_ips too small ($total_lines lines, expected ≥10000)"
-            rm -f "$tmp"
+            _etag_cleanup "$tmp"
             return 1
         fi
 
@@ -387,20 +420,22 @@ main() {
             if [ -n "$old_lines" ] && [ "$old_lines" -gt 0 ]; then
                 if [ "$((total_lines * 100 / old_lines))" -lt 50 ]; then
                     log_msg "FAIL: flowseal_game_ips shrunk >50% ($old_lines → $total_lines), keeping old"
-                    rm -f "$tmp"
+                    _etag_cleanup "$tmp"
                     return 1
                 fi
             fi
         fi
 
-        # No-op if identical
+        # No-op if identical (304 hit or content-equal re-fetch)
         if [ -f "$dest" ] && cmp -s "$tmp" "$dest" 2>/dev/null; then
-            rm -f "$tmp"
+            _etag_finalize "$tmp" "$dest"
+            _etag_cleanup "$tmp"
             return 0
         fi
 
         mkdir -p "$(dirname "$dest")" 2>/dev/null
         mv -f "$tmp" "$dest"
+        _etag_finalize "$tmp" "$dest"
         log_msg "OK: flowseal_game_ips updated ($total_lines lines)"
         return 2
     }
