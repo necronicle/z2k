@@ -20,3 +20,16 @@ katzauction.com
 security.iot.i.tplinknbu.com
 euw1-device-cloudgateway.iot.i.tplinknbu.com
 tapo.com
+
+# Cloudflare-инфраструктура — официально в РФ не заблокирована, но ТСПУ
+# режет длинные TLS-потоки (16KB window_update инжект, селективный stall
+# на multiplexed HTTP/2 stream'ах). Без явного матча CF-домены падают
+# в default profile с одной слабой fake-стратегией. nfqws2 hostlist
+# хиерархический — `cloudflare.com` покрывает все *.cloudflare.com
+# (cf-assets.www, dash, workers, developers, community, support, radar,
+# blog, partnerlocator, playground.ai, status, canto, и т.д.).
+cloudflare.com
+cloudflare.net
+cloudflare.tv
+cloudflarestatus.com
+cloudflarepartners.com
