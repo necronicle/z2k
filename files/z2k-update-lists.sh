@@ -54,7 +54,13 @@ _z2k_curl_etag() {
             new_etag=$(grep -i '^etag:' "$hdr_file" 2>/dev/null | head -1 \
                        | sed 's/^[^:]*:[[:space:]]*//; s/\r$//; s/[[:space:]]*$//')
             mkdir -p "$(dirname "$dest")" 2>/dev/null
-            mv -f "$tmp_body" "$dest"
+            if ! mv -f "$tmp_body" "$dest"; then
+                # Failed mv would leave dest at old body but ETag below
+                # would still get written, producing a body/ETag mismatch
+                # next run could falsely 304 against.
+                rm -f "$hdr_file" "$tmp_body" "$etag_file"
+                return 1
+            fi
             if [ -n "$new_etag" ]; then printf '%s\n' "$new_etag" > "$etag_file"
             else rm -f "$etag_file"; fi
             rm -f "$hdr_file"; return 0 ;;
