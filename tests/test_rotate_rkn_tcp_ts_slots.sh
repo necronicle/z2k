@@ -57,11 +57,17 @@ rotate_rkn_tcp_ts_slots() {
             *:tcp_ts=-1000:*|*:tcp_ts=-1000)
                 strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
                 case "$strategy_id" in
-                    11) new_ts="-43210" ;;
-                    24) new_ts="-7777"  ;;
-                    28) new_ts="-10000" ;;
-                    35) new_ts="-43210" ;;
-                    *)  new_ts=""       ;;
+                    11) new_ts="-43210"  ;;
+                    15) new_ts="-100000" ;;
+                    18) new_ts="-500000" ;;
+                    23) new_ts="-43210"  ;;
+                    24) new_ts="-7777"   ;;
+                    28) new_ts="-10000"  ;;
+                    30) new_ts="-7777"   ;;
+                    35) new_ts="-43210"  ;;
+                    37) new_ts="-100000" ;;
+                    42) new_ts="-10000"  ;;
+                    *)  new_ts=""        ;;
                 esac
                 if [ -n "$new_ts" ]; then
                     token=$(printf '%s' "$token" | sed -e "s/:tcp_ts=-1000:/:tcp_ts=${new_ts}:/g" -e "s/:tcp_ts=-1000\$/:tcp_ts=${new_ts}/")
@@ -75,31 +81,33 @@ rotate_rkn_tcp_ts_slots() {
 
 printf "\n--- rotate_rkn_tcp_ts_slots: target slots ---\n"
 
-# Slot 11 → -43210
-T11="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=11"
-R11=$(rotate_rkn_tcp_ts_slots "$T11")
-assert_contains "slot 11: rewritten to -43210" "tcp_ts=-43210" "$R11"
-assert_not_contains "slot 11: original -1000 gone" "tcp_ts=-1000" "$R11"
+# slot → expected_value map (must match lib/config_official.sh)
+# Format: "slot:expected" pairs — drives both positive assertions and the
+# multi-token integration test below.
+TARGET_SLOTS="11:-43210 15:-100000 18:-500000 23:-43210 24:-7777 28:-10000 30:-7777 35:-43210 37:-100000 42:-10000"
 
-# Slot 24 → -7777
-T24="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=24"
-R24=$(rotate_rkn_tcp_ts_slots "$T24")
-assert_contains "slot 24: rewritten to -7777" "tcp_ts=-7777" "$R24"
+for pair in $TARGET_SLOTS; do
+    slot=$(printf '%s' "$pair" | cut -d: -f1)
+    want=$(printf '%s' "$pair" | cut -d: -f2)
+    T="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=$slot"
+    R=$(rotate_rkn_tcp_ts_slots "$T")
+    assert_contains "slot $slot: rewritten to $want" "tcp_ts=$want" "$R"
+    # Check `tcp_ts=-1000:` (with trailing colon) — needed because some
+    # rewrite values like -10000 / -100000 contain `-1000` as a prefix
+    # substring. The `:` boundary disambiguates a leftover original from
+    # a substring match inside the new value.
+    assert_not_contains "slot $slot: original -1000 gone" "tcp_ts=-1000:" "$R"
+done
 
-# Slot 28 → -10000
-T28="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=28"
-R28=$(rotate_rkn_tcp_ts_slots "$T28")
-assert_contains "slot 28: rewritten to -10000" "tcp_ts=-10000" "$R28"
-
-# Slot 35 → -43210
-T35="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=35"
-R35=$(rotate_rkn_tcp_ts_slots "$T35")
-assert_contains "slot 35: rewritten to -43210" "tcp_ts=-43210" "$R35"
+# Keep R11 alias for downstream idempotency assertion below.
+R11=$(rotate_rkn_tcp_ts_slots "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=11")
 
 printf "\n--- rotate_rkn_tcp_ts_slots: untouched slots ---\n"
 
-# Slots NOT in rotation must keep -1000
-for slot in 1 5 10 12 14 25; do
+# Slots NOT in rotation must keep -1000. Picked slots that contain
+# -1000 in production Strategy.txt but are NOT in our rotation map —
+# guards against accidental over-rotation in future expansions.
+for slot in 1 5 10 14 25 26 38 39 40 43; do
     T="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=$slot"
     R=$(rotate_rkn_tcp_ts_slots "$T")
     assert_contains "slot $slot: untouched (keeps -1000)" "tcp_ts=-1000" "$R"
@@ -133,12 +141,16 @@ assert_eq "non-(-1000) value: passthrough" "$T_ALREADY" "$R_ALREADY"
 
 printf "\n--- rotate_rkn_tcp_ts_slots: multi-token rotator ---\n"
 
-# Realistic mini-rotator: slot 1, 11, 24 in one input. Only 11+24 rotate.
-MULTI="--lua-desync=fake:payload=tls_client_hello:dir=out:tcp_ts=-1000:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=11 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=24"
+# Realistic mini-rotator covering one untouched slot + 5 rotated slots
+# (включая 37 — тот что укусил Mark'а 2026-05-01).
+MULTI="--lua-desync=fake:payload=tls_client_hello:dir=out:tcp_ts=-1000:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=11 --lua-desync=fake:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=15 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=24 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ozon.ru:tcp_ts=-1000:strategy=37 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tcp_ts=-1000:strategy=42"
 R_MULTI=$(rotate_rkn_tcp_ts_slots "$MULTI")
-assert_contains "multi: slot=1 keeps -1000" "tcp_ts=-1000:strategy=1" "$R_MULTI"
-assert_contains "multi: slot=11 has -43210" "tcp_ts=-43210:strategy=11" "$R_MULTI"
-assert_contains "multi: slot=24 has -7777" "tcp_ts=-7777:strategy=24" "$R_MULTI"
+assert_contains "multi: slot=1 keeps -1000"   "tcp_ts=-1000:strategy=1"    "$R_MULTI"
+assert_contains "multi: slot=11 has -43210"   "tcp_ts=-43210:strategy=11"  "$R_MULTI"
+assert_contains "multi: slot=15 has -100000"  "tcp_ts=-100000:strategy=15" "$R_MULTI"
+assert_contains "multi: slot=24 has -7777"    "tcp_ts=-7777:strategy=24"   "$R_MULTI"
+assert_contains "multi: slot=37 has -100000"  "tcp_ts=-100000:strategy=37" "$R_MULTI"
+assert_contains "multi: slot=42 has -10000"   "tcp_ts=-10000:strategy=42"  "$R_MULTI"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 printf "Results: %d passed, %d failed\n" "$TESTS_PASSED" "$TESTS_FAILED"

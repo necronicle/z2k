@@ -473,12 +473,27 @@ AUSTERUS_OPT
     # имел хотя бы одну живую ветвь на новом ТСПУ. Остальные слоты
     # остаются с -1000 для обратной совместимости.
     #
-    # Slot selection rationale:
-    #   slot=11 — early-mid: fake+stun / fake+tls_clienthello_www_google_com
-    #   slot=24 — mid:       fake+stun / fake+tls_clienthello_4pda_to
-    #   slot=28 — mid-late:  fake+stun / fake+tls_max_ru
-    #   slot=35 — late:      fake+tls_clienthello_4pda_to (fallback на
-    #                        случай stale circular state поверх ранних слотов)
+    # 2026-05-01 expansion (Phase 6C v2): после field-кейса где
+    # autocircular зацепился за strategy=37 (tcp_ts=-1000:hostfakesplit) и
+    # CSS-стримы дохли селективно (только HTML root пробивался) — расширили
+    # ротацию с 4 до 10 слотов. Значения взяты из реально-рабочих field-
+    # рецептов: Feanor1397 #812 (-43210), Decavoid #729 (-100000, -500000).
+    # Архитектурный фикс через `cond=cond_tcp_has_ts` (bol-van #660-661 +
+    # SeamniZ #815 `tcp_ts_up`) — отдельный PR (B-tier).
+    #
+    # Slot selection rationale (10 slots ≈ 50% от ~17 слотов с -1000):
+    #   slot=11 — early-mid: fake+stun + fake+tls_clienthello_www_google_com
+    #   slot=15 — mid:       fake+sni=ya.ru fallback
+    #   slot=18 — mid:       fake+sni=fonts.google.com
+    #   slot=23 — mid-late:  hostfakesplit:host=ozon.ru:tcp_md5
+    #   slot=24 — mid:       fake+stun + fake+tls_clienthello_4pda_to
+    #   slot=28 — mid-late:  fake+stun + fake+tls_max_ru
+    #   slot=30 — late:      fake+stun:badsum + fake+tls_max_ru:msn.com
+    #   slot=35 — late:      fake+tls_clienthello_4pda_to (fallback)
+    #   slot=37 — late:      hostfakesplit:host=ozon.ru:badsum (the one that
+    #                        bit Mark's browser today — pinned by autocircular,
+    #                        broke CSS streams; was unrotated before this commit)
+    #   slot=42 — late:      fake+fake_default_tls:badsum:tcp_seq=2
     #
     # Идемпотентно: повторный запуск над уже мутированной строкой просто
     # не находит `tcp_ts=-1000` в этих слотах и проходит no-op.
@@ -496,11 +511,17 @@ AUSTERUS_OPT
                 *:tcp_ts=-1000:*|*:tcp_ts=-1000)
                     strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
                     case "$strategy_id" in
-                        11) new_ts="-43210" ;;
-                        24) new_ts="-7777"  ;;
-                        28) new_ts="-10000" ;;
-                        35) new_ts="-43210" ;;
-                        *)  new_ts=""       ;;
+                        11) new_ts="-43210"  ;;
+                        15) new_ts="-100000" ;;
+                        18) new_ts="-500000" ;;
+                        23) new_ts="-43210"  ;;
+                        24) new_ts="-7777"   ;;
+                        28) new_ts="-10000"  ;;
+                        30) new_ts="-7777"   ;;
+                        35) new_ts="-43210"  ;;
+                        37) new_ts="-100000" ;;
+                        42) new_ts="-10000"  ;;
+                        *)  new_ts=""        ;;
                     esac
                     if [ -n "$new_ts" ]; then
                         token=$(printf '%s' "$token" | sed -e "s/:tcp_ts=-1000:/:tcp_ts=${new_ts}:/g" -e "s/:tcp_ts=-1000\$/:tcp_ts=${new_ts}/")
