@@ -630,6 +630,12 @@ assert_contains "tcp: arm has dir=out" "dir=out" "$TCP_ARM"
 assert_contains "tcp: arm has --in-range=a" "--in-range=a" "$TCP_ARM"
 assert_contains "tcp: arm has --out-range=-n3" "--out-range=-n3" "$TCP_ARM"
 assert_contains "tcp: arm has profile-level --payload=all" "--payload=all" "$TCP_ARM"
+# --filter-l7=unknown scopes this arm to traffic the nfqws2 L7 classifier
+# couldn't identify (binary game TCP). TLS gets classified L7_TLS by the
+# probe machinery before the filter check fires, so TLS flows are
+# correctly excluded — until step 5 lands the TLS rotator above.
+assert_contains "tcp: arm has --filter-l7=unknown" "--filter-l7=unknown" "$TCP_ARM"
+assert_not_contains "tcp: arm does not match TLS L7" "filter-l7=tls" "$TCP_ARM"
 # Positive ipset scope.
 assert_contains "tcp: arm has --ipset=...flowseal_game_ips.txt" "--ipset=" "$TCP_ARM"
 # Conditional --ipset-exclude= when the file exists.
