@@ -761,10 +761,18 @@ AUSTERUS_OPT
     # Midpoint matches the original value, so average behaviour is
     # unchanged and there's no performance hit.
     #
-    # Idempotent: tokens that already have a hyphen inside repeats=
-    # (user wrote the range manually, or we ran a previous pass) are
-    # left alone. Non-fake action families are untouched — only
-    # tokens starting with one of the whitelisted prefixes.
+    # Idempotency: awk регексп `^repeats=[0-9]+$` строго точечный —
+    # part'ы вида `repeats=N-M` (уже диапазон) не матчатся, проходят
+    # через awk без изменений. Этот же регексп служит фильтром на
+    # пользовательские хитрости вроде `repeats=4-8` — мы их не трогаем.
+    #
+    # 2026-05-01 fix: убран outer glob `case "$token" in *:repeats=*-*) : ;;`
+    # — он давал false-positive на любом токене где после `:repeats=N`
+    # встречался `-` (например `tcp_ts=-1000`, `tcp_seq=-66000`,
+    # `ip_autottl=-2,3-20`). Из-за этого 39 fake-токенов с tcp_ts
+    # никогда не получали randomization — TSPU видела предсказуемый
+    # repeat count для fingerprint'а. awk внутри сам корректно
+    # идемпотентен на per-part уровне, outer глоб был избыточен и багован.
     inject_z2k_range_rand() {
         local input="$1"
         local token=""
@@ -777,7 +785,6 @@ AUSTERUS_OPT
                 --lua-desync=hostfakesplit:*|\
                 --lua-desync=syndata:*)
                     case "$token" in
-                        *:repeats=*-*) : ;; # already a range
                         *:repeats=*)
                             token=$(printf '%s' "$token" | awk '
                                 {
