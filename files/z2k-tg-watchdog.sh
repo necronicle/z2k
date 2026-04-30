@@ -52,9 +52,11 @@ CONFIG_FILE="/opt/zapret2/config"
 if [ -f "$CONFIG_FILE" ]; then
     user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
     if [ "$user_disabled" = "1" ]; then
-        # If process is somehow still up after the user said stop, kill
-        # it once on the way out so the next tick has nothing to find.
-        if pidof tg-mtproxy-client >/dev/null 2>&1; then
+        # If anything survived an older autostart path, stop through the
+        # init script so REDIRECT rules are removed together with the process.
+        if [ -x "$INIT" ]; then
+            "$INIT" stop >/dev/null 2>&1
+        elif pidof tg-mtproxy-client >/dev/null 2>&1; then
             killall -9 tg-mtproxy-client 2>/dev/null
         fi
         exit 0

@@ -14,9 +14,14 @@
 #   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/files/z2k-fix-tg-watchdog.sh | sh
 
 set -e
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
 say() { printf '%s\n' "$*"; }
 die() { printf '[!] %s\n' "$*" >&2; exit 1; }
+tg_user_disabled() {
+    [ -f /opt/zapret2/config ] || return 1
+    [ "$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)" = "1" ]
+}
 
 say "[1/4] Writing /opt/zapret2/tg-tunnel-watchdog.sh"
 mkdir -p /opt/zapret2
@@ -55,7 +60,9 @@ CONFIG_FILE="/opt/zapret2/config"
 if [ -f "$CONFIG_FILE" ]; then
     user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
     if [ "$user_disabled" = "1" ]; then
-        if pidof tg-mtproxy-client >/dev/null 2>&1; then
+        if [ -x "$INIT" ]; then
+            "$INIT" stop >/dev/null 2>&1
+        elif pidof tg-mtproxy-client >/dev/null 2>&1; then
             killall -9 tg-mtproxy-client 2>/dev/null
         fi
         exit 0
@@ -194,16 +201,25 @@ else
     say "    S98tg-tunnel not installed — skipping"
 fi
 
-say "[2/4] Adding OUTPUT REDIRECT rules for Telegram CIDRs"
-CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
-for cidr in $CIDRS; do
-    iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-        iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443
-done
+if tg_user_disabled; then
+    say "[2/4] Telegram tunnel disabled by user — skipping OUTPUT REDIRECT rules"
+else
+    say "[2/4] Adding OUTPUT REDIRECT rules for Telegram CIDRs"
+    CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
+    for cidr in $CIDRS; do
+        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443
+    done
+fi
 
 say "[3/4] Ensuring watchdog cron entry exists"
+if [ -x /opt/etc/init.d/S97tg-mtproxy ]; then
+    /opt/etc/init.d/S97tg-mtproxy stop >/dev/null 2>&1 || true
+fi
+rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
+crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null || true
 if ! crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog"; then
-    ( crontab -l 2>/dev/null; echo '* * * * * /opt/zapret2/tg-tunnel-watchdog.sh' ) | crontab -
+    { crontab -l 2>/dev/null || true; echo '* * * * * /opt/zapret2/tg-tunnel-watchdog.sh'; } | crontab -
     say "    cron entry added"
 else
     say "    cron entry already present"
@@ -212,6 +228,12 @@ fi
 say "[4/4] Running probe once to verify"
 rm -f /tmp/tg-tunnel-watchdog.state
 if /opt/zapret2/tg-tunnel-watchdog.sh; then
+    if tg_user_disabled; then
+        say ""
+        say "[OK] Watchdog and S98tg-tunnel installed."
+        say "     Telegram tunnel is disabled by user and will stay stopped after reboot."
+        exit 0
+    fi
     state="$(cat /tmp/tg-tunnel-watchdog.state 2>/dev/null || echo ?)"
     if [ "$state" = "0" ]; then
         say ""

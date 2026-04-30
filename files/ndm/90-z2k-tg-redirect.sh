@@ -13,8 +13,20 @@
 #
 # We only care about iptables + nat.
 
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 [ "$type" = "ip6tables" ] && exit 0
 [ "$table" = "nat" ] || exit 0
+
+# Respect explicit user disable. This is a backstop for routers that still
+# have a stale process from an older init script during upgrade/reboot.
+CONFIG_FILE="/opt/zapret2/config"
+if [ -f "$CONFIG_FILE" ]; then
+    user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
+    if [ "$user_disabled" = "1" ]; then
+        exit 0
+    fi
+fi
 
 # Only insert rules if the tunnel process is actually running. If the user
 # stopped the tunnel (menu [T] Disable), leave iptables clean so traffic
