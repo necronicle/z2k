@@ -973,6 +973,23 @@ AUSTERUS_OPT
         *) GAME_MODE_STYLE="safe" ;;
     esac
 
+    # GAME_PROFILE — selects between flowseal-mirrored single-strategy arm
+    # (default, post-2026-04-30) and the legacy 13-strategy z2k rotator
+    # (rollback path). Default "flowseal" because the legacy path empirically
+    # only works on Roblox; flowseal 1.9.8 single-strategy is field-proven
+    # across the broader game catalog (Apex/Tarkov/Darktide/etc).
+    #   flowseal — one fake:dbankcloud:repeats=12:cutoff=n2 UDP arm scoped
+    #              by flowseal_game_ips.txt (~31K CIDR aggregate).
+    #              GAME_MODE_STYLE/Z2K_REFACTOR_PHASE2 ignored.
+    #   legacy   — preserves existing safe/hybrid/aggressive ladder with
+    #              Phase 2 merge or pre-Phase-2 two-profile layout.
+    local GAME_PROFILE
+    GAME_PROFILE=$(safe_config_read "GAME_PROFILE" "$game_conf" "")
+    case "$GAME_PROFILE" in
+        flowseal|legacy) ;;
+        *) GAME_PROFILE="flowseal" ;;
+    esac
+
     # RKN TCP (include Discord hostlist into RKN profile)
     local rkn_hostlists="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt"
     [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
@@ -1065,43 +1082,66 @@ AUSTERUS_OPT
     # is actually applied. Blob alias `quic_google` → quic_initial_www_google_com.bin.
     #
     # Gated by GAME_MODE_ENABLED (new) with backwards-compat fallback to
-    # ROBLOX_UDP_BYPASS (old) — evaluated above.
-    #
-    # Phase 2 merge: game_udp + game_catchall_udp collapsed to one profile
-    # with multi-ipset OR trigger. Safe = game_ips only, hybrid = +aws_oracle.
-    # Pre-Phase-2 path (else branch below) keeps the legacy two-profile
-    # layout for rollback.
-    if [ "$Z2K_REFACTOR_PHASE2" = "1" ]; then
-        if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
+    # ROBLOX_UDP_BYPASS (old) — evaluated above. GAME_PROFILE selects which
+    # implementation handles the gating positive.
+    if [ "$GAME_PROFILE" = "flowseal" ]; then
+        # Flowseal 1.9.8 single-strategy UDP arm:
+        #   fake + repeats=12 + cutoff=n2 + payload=all + dbankcloud blob,
+        #   scoped positive by flowseal_game_ips.txt (~31K CIDR aggregate
+        #   refreshed daily by z2k-update-lists.sh).
+        # z2k_game_udp Lua handler is used in place of built-in fake because
+        # built-in fake silently drops repeats=N for UDP payloads (would
+        # collapse to 1 fake instead of the field-validated 12).
+        # Port range 1024-2407,2409-65535 keeps Warp 2408 carve-out and
+        # excludes 80/443 (no UDP web on those — DNS/QUIC have dedicated
+        # earlier profiles). cutoff=n2 limits desync to first 2 pkts of
+        # each flow, matching flowseal exactly and keeping LAN/non-game
+        # collateral negligible.
+        if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/flowseal_game_ips.txt" ]; then
             local ipset_excl="${lists_dir}/ipset-exclude.txt"
             local game_ipset_excl_opt=""
             [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-            # In hybrid mode, broaden the trigger with AWS/Oracle ranges
-            # (populated by z2k-update-lists.sh Phase 5 fetcher). The
-            # merged rotator's strategy=7 (gentle) pins on non-game AWS
-            # flows after strategies 1-6 fail — replacing the old fixed
-            # catchall behavior without a separate profile.
-            local game_ipsets="--ipset=${lists_dir}/game_ips.txt"
-            if [ "$GAME_MODE_STYLE" != "safe" ] && [ -s "${lists_dir}/aws_oracle_ips.txt" ]; then
-                game_ipsets="$game_ipsets --ipset=${lists_dir}/aws_oracle_ips.txt"
-            fi
-            # Warp 2408 carve-out preserved (ntc.party 17013 #568).
-            # --out-range=-n4 cuts Lua pipeline after first 4 pkts.
-            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 $game_ipsets ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
+            local flowseal_game_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud:repeats=12"
+            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --ipset=${lists_dir}/flowseal_game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=-n2 --payload=all $flowseal_game_udp --new\\n"
         fi
-    elif [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "aggressive" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
-        # Pre-Phase-2 legacy path: game_udp ipset profile.
-        local ipset_excl="${lists_dir}/ipset-exclude.txt"
-        local game_ipset_excl_opt=""
-        [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-        # --out-range=-n4: apply the game_udp Lua chain only to the first
-        # 4 outgoing packets of each UDP flow. Circular needs a handful of
-        # early packets to pick + pin a strategy, z2k_game_udp's
-        # replay_first() gate fires once anyway — beyond the 4th packet
-        # the Lua layer is pure overhead, so we short-circuit in C. Was
-        # previously --out-range=a (no limit) because the per-strategy
-        # out_range=-nN tokens were silently dropped by the Lua parser.
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
+    else
+        # Legacy path (GAME_PROFILE=legacy) — preserved for rollback.
+        # Phase 2 merge: game_udp + game_catchall_udp collapsed to one profile
+        # with multi-ipset OR trigger. Safe = game_ips only, hybrid = +aws_oracle.
+        # Pre-Phase-2 path (else branch below) keeps the legacy two-profile
+        # layout for rollback.
+        if [ "$Z2K_REFACTOR_PHASE2" = "1" ]; then
+            if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
+                local ipset_excl="${lists_dir}/ipset-exclude.txt"
+                local game_ipset_excl_opt=""
+                [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
+                # In hybrid mode, broaden the trigger with AWS/Oracle ranges
+                # (populated by z2k-update-lists.sh Phase 5 fetcher). The
+                # merged rotator's strategy=7 (gentle) pins on non-game AWS
+                # flows after strategies 1-6 fail — replacing the old fixed
+                # catchall behavior without a separate profile.
+                local game_ipsets="--ipset=${lists_dir}/game_ips.txt"
+                if [ "$GAME_MODE_STYLE" != "safe" ] && [ -s "${lists_dir}/aws_oracle_ips.txt" ]; then
+                    game_ipsets="$game_ipsets --ipset=${lists_dir}/aws_oracle_ips.txt"
+                fi
+                # Warp 2408 carve-out preserved (ntc.party 17013 #568).
+                # --out-range=-n4 cuts Lua pipeline after first 4 pkts.
+                nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 $game_ipsets ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
+            fi
+        elif [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "aggressive" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
+            # Pre-Phase-2 legacy path: game_udp ipset profile.
+            local ipset_excl="${lists_dir}/ipset-exclude.txt"
+            local game_ipset_excl_opt=""
+            [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
+            # --out-range=-n4: apply the game_udp Lua chain only to the first
+            # 4 outgoing packets of each UDP flow. Circular needs a handful of
+            # early packets to pick + pin a strategy, z2k_game_udp's
+            # replay_first() gate fires once anyway — beyond the 4th packet
+            # the Lua layer is pure overhead, so we short-circuit in C. Was
+            # previously --out-range=a (no limit) because the per-strategy
+            # out_range=-nN tokens were silently dropped by the Lua parser.
+            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
+        fi
     fi
 
     # Game catchall (hybrid/aggressive) — winws-style broad-sweep.
@@ -1148,7 +1188,7 @@ AUSTERUS_OPT
     # Phase 2 merge makes this block dead — catchall behavior is absorbed
     # into the merged game_udp rotator (strategy=7) above. Block retained
     # as pre-Phase-2 rollback path, guarded by the negated flag.
-    if [ "$Z2K_REFACTOR_PHASE2" != "1" ] && [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
+    if [ "$GAME_PROFILE" != "flowseal" ] && [ "$Z2K_REFACTOR_PHASE2" != "1" ] && [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
         # out_range moved to the profile itself (--out-range=-n4 below),
         # the inline value was dead (see game_udp comment above).
         local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
