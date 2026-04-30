@@ -461,6 +461,61 @@ AUSTERUS_OPT
     youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
 
+    # Phase 6C: tcp_ts rotation across select rkn_tcp strategy slots.
+    #
+    # Background: ntc.party #826 + thread #812 (Feanor1397, 2026-04-12) и
+    # последующие field-сигналы показывают, что значение `tcp_ts=-1000` на
+    # части ТСПУ перестало проходить с ~2026-04-20 — fake packet режется,
+    # пользователь видит 16KB cap (window_update инжект до handshake clearance).
+    # На других ТСПУ -1000 продолжает работать.
+    #
+    # Стратегия: НЕ заменяем все вхождения `tcp_ts=-1000` (это поломает
+    # провайдеров где -1000 живой). Вместо этого ротируем небольшое число
+    # slot'ов на альтернативные значения, чтобы circular ротатор rkn_tcp
+    # имел хотя бы одну живую ветвь на новом ТСПУ. Остальные слоты
+    # остаются с -1000 для обратной совместимости.
+    #
+    # Slot selection rationale:
+    #   slot=11 — early-mid: fake+stun / fake+tls_clienthello_www_google_com
+    #   slot=24 — mid:       fake+stun / fake+tls_clienthello_4pda_to
+    #   slot=28 — mid-late:  fake+stun / fake+tls_max_ru
+    #   slot=35 — late:      fake+tls_clienthello_4pda_to (fallback на
+    #                        случай stale circular state поверх ранних слотов)
+    #
+    # Идемпотентно: повторный запуск над уже мутированной строкой просто
+    # не находит `tcp_ts=-1000` в этих слотах и проходит no-op.
+    #
+    # Только rkn_tcp — yt_tcp/gv_tcp используют tcp_ts реже и для разных
+    # целей; их ротация оставлена на отдельный анализ.
+    rotate_rkn_tcp_ts_slots() {
+        local input="$1"
+        local out=""
+        local token=""
+        local strategy_id=""
+        local new_ts=""
+        for token in $input; do
+            case "$token" in
+                *:tcp_ts=-1000:*|*:tcp_ts=-1000)
+                    strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
+                    case "$strategy_id" in
+                        11) new_ts="-43210" ;;
+                        24) new_ts="-7777"  ;;
+                        28) new_ts="-10000" ;;
+                        35) new_ts="-43210" ;;
+                        *)  new_ts=""       ;;
+                    esac
+                    if [ -n "$new_ts" ]; then
+                        token=$(printf '%s' "$token" | sed -e "s/:tcp_ts=-1000:/:tcp_ts=${new_ts}:/g" -e "s/:tcp_ts=-1000\$/:tcp_ts=${new_ts}/")
+                    fi
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        printf '%s' "$out"
+    }
+
+    rkn_tcp=$(rotate_rkn_tcp_ts_slots "$rkn_tcp")
+
     # Phase 14: bol-van badseq alias expansion.
     #
     # Upstream bol-van/zapret has `--dpi-desync-fooling=badseq` with

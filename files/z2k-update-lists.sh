@@ -469,6 +469,90 @@ main() {
     update_flowseal_game_ips
     [ $? -eq 2 ] && changes=$((changes + 1))
 
+    # Cloudflare canonical IPv4 CIDR list. Source: cloudflare.com/ips-v4
+    # (already used by install.sh:step_install_z2k_classify at install-time).
+    # Без cron-а файл протухает за месяцы — CF добавляет/убирает диапазоны.
+    # Пишем атомарно с базовыми guard'ами: список маленький (~25 строк),
+    # поэтому floor=10 и shrink-guard 50% от существующего.
+    update_cf_cidrs_v4() {
+        local dest="${ZAPRET2_DIR}/lists/cf-cidrs-v4.txt"
+        local url="https://www.cloudflare.com/ips-v4"
+        local tmp
+        tmp=$(mktemp "${dest}.XXXXXX") || return 1
+        _etag_prep "$dest" "$tmp"
+
+        if ! z2k_fetch "$url" "$tmp"; then
+            log_msg "FAIL: cf_cidrs_v4 download (all mirrors failed)"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+
+        if [ ! -s "$tmp" ]; then
+            log_msg "FAIL: cf_cidrs_v4 empty"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+
+        sed -i 's/\r$//' "$tmp" 2>/dev/null
+
+        # CF endpoint иногда возвращает HTML-error через CDN — отсекаем.
+        if head -8 "$tmp" | grep -qiE '<!doctype|<html|<head|<body|^[[:space:]]*[{[]'; then
+            log_msg "FAIL: cf_cidrs_v4 looks like HTML/JSON, not CIDR list"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+
+        local total_lines cidr_lines
+        total_lines=$(grep -cv '^[[:space:]]*$\|^[[:space:]]*#' "$tmp" 2>/dev/null)
+        cidr_lines=$(grep -cE '^[[:space:]]*([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?[[:space:]]*$' "$tmp" 2>/dev/null)
+        if [ -z "$total_lines" ] || [ "$total_lines" -lt 1 ]; then
+            log_msg "FAIL: cf_cidrs_v4 has no content lines"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+        if [ "$((cidr_lines * 100 / total_lines))" -lt 80 ]; then
+            log_msg "FAIL: cf_cidrs_v4 CIDR ratio low ($cidr_lines/$total_lines)"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+        # Floor: actual CF list ~17-25 entries; ниже 10 = upstream сломан.
+        if [ "$total_lines" -lt 10 ]; then
+            log_msg "FAIL: cf_cidrs_v4 too small ($total_lines lines, expected ≥10)"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+
+        if [ -f "$dest" ] && [ -s "$dest" ]; then
+            local old_lines
+            old_lines=$(grep -cv '^[[:space:]]*$\|^[[:space:]]*#' "$dest" 2>/dev/null)
+            if [ -n "$old_lines" ] && [ "$old_lines" -gt 0 ]; then
+                if [ "$((total_lines * 100 / old_lines))" -lt 50 ]; then
+                    log_msg "FAIL: cf_cidrs_v4 shrunk >50% ($old_lines → $total_lines), keeping old"
+                    _etag_cleanup "$tmp"
+                    return 1
+                fi
+            fi
+        fi
+
+        if [ -f "$dest" ] && cmp -s "$tmp" "$dest" 2>/dev/null; then
+            _etag_finalize "$tmp" "$dest"
+            _etag_cleanup "$tmp"
+            return 0
+        fi
+
+        mkdir -p "$(dirname "$dest")" 2>/dev/null
+        if ! mv -f "$tmp" "$dest"; then
+            log_msg "FAIL: cf_cidrs_v4 mv tmp → dest failed"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+        _etag_finalize "$tmp" "$dest"
+        log_msg "OK: cf_cidrs_v4 updated ($total_lines lines)"
+        return 2
+    }
+    update_cf_cidrs_v4
+    [ $? -eq 2 ] && changes=$((changes + 1))
+
     if [ "$changes" -gt 0 ]; then
         log_msg "Changes detected ($changes lists), restarting service..."
         if [ -x "$INIT_SCRIPT" ]; then
