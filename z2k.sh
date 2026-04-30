@@ -446,8 +446,8 @@ download_init_script() {
         die "Ошибка загрузки files/z2k-blocked-monitor.sh"
     fi
 
-    # z2k tools (healthcheck, config validator, list updater)
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh; do
+    # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, tg watchdog)
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-tg-watchdog.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if z2k_fetch "$url" "$output"; then
@@ -456,6 +456,17 @@ download_init_script() {
             print_warning "Не удалось загрузить files/${tool_name} (необязательный)"
         fi
     done
+
+    # init scripts extracted from install.sh heredocs — tg-tunnel S98
+    # autostart gets installed into /opt/etc/init.d/ later by lib/install.sh
+    mkdir -p "${files_dir}/init.d"
+    url="${GITHUB_RAW}/files/init.d/S98tg-tunnel"
+    output="${files_dir}/init.d/S98tg-tunnel"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/init.d/S98tg-tunnel"
+    else
+        print_warning "Не удалось загрузить files/init.d/S98tg-tunnel (TG tunnel не будет автостартовать после ребута)"
+    fi
 
     # Keenetic NDM netfilter.d hook for auto-restoring TG REDIRECT rules.
     mkdir -p "${files_dir}/ndm"
@@ -759,6 +770,60 @@ update_z2k() {
         print_success "z2k обновлен: $Z2K_VERSION → $new_version"
         print_info "Backup сохранен: ${current_script}.backup"
 
+        # Update Telegram tunnel support files even when the tunnel is
+        # currently disabled. Old installed S98tg-tunnel scripts ignored
+        # TG_PROXY_USER_DISABLED and could resurrect the tunnel on reboot.
+        mkdir -p /opt/etc/init.d /opt/etc/ndm/netfilter.d /opt/zapret2
+        local tg_support_tmp
+        tg_support_tmp=$(mktemp)
+        if z2k_fetch "${GITHUB_RAW}/files/init.d/S98tg-tunnel" "$tg_support_tmp"; then
+            cp "$tg_support_tmp" /opt/etc/init.d/S98tg-tunnel
+            chmod +x /opt/etc/init.d/S98tg-tunnel
+            print_success "S98tg-tunnel обновлён"
+        else
+            print_warning "Не удалось обновить S98tg-tunnel"
+        fi
+        rm -f "$tg_support_tmp"
+
+        tg_support_tmp=$(mktemp)
+        if z2k_fetch "${GITHUB_RAW}/files/z2k-tg-watchdog.sh" "$tg_support_tmp"; then
+            cp "$tg_support_tmp" /opt/zapret2/tg-tunnel-watchdog.sh
+            chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
+            crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
+                { crontab -l 2>/dev/null || true; echo '* * * * * /opt/zapret2/tg-tunnel-watchdog.sh'; } | crontab -
+            print_success "Watchdog обновлён"
+        else
+            print_warning "Не удалось обновить watchdog"
+        fi
+        rm -f "$tg_support_tmp"
+
+        tg_support_tmp=$(mktemp)
+        if z2k_fetch "${GITHUB_RAW}/files/ndm/90-z2k-tg-redirect.sh" "$tg_support_tmp"; then
+            cp "$tg_support_tmp" /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
+            chmod +x /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
+            print_success "NDM hook обновлён"
+        else
+            print_warning "Не удалось обновить NDM hook"
+        fi
+        rm -f "$tg_support_tmp"
+
+        local _tg_disabled_update=0
+        if [ -f "/opt/zapret2/config" ]; then
+            _tg_disabled_update=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+        fi
+        if [ "$_tg_disabled_update" = "1" ]; then
+            if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
+                /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
+            else
+                killall tg-mtproxy-client 2>/dev/null || true
+            fi
+        fi
+        if [ -x /opt/etc/init.d/S97tg-mtproxy ]; then
+            /opt/etc/init.d/S97tg-mtproxy stop >/dev/null 2>&1 || true
+        fi
+        rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
+        crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null || true
+
         # Update Telegram tunnel binary
         if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
             print_info "Обновление Telegram tunnel..."
@@ -799,7 +864,11 @@ update_z2k() {
                     if [ "$_tg_disabled" = "1" ]; then
                         print_success "Telegram tunnel обновлён (не запущен — отключён пользователем)"
                     else
-                        /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m >> /tmp/tg-tunnel.log 2>&1 &
+                        if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
+                            /opt/etc/init.d/S98tg-tunnel restart >/dev/null 2>&1
+                        else
+                            /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
+                        fi
                         sleep 2
                         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
                             print_success "Telegram tunnel обновлён и перезапущен"
@@ -812,39 +881,6 @@ update_z2k() {
                 fi
                 rm -f "$tg_tmp"
             fi
-        fi
-
-        # Update watchdog script
-        if [ -f "/opt/zapret2/tg-tunnel-watchdog.sh" ]; then
-            cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDEOF'
-#!/bin/sh
-# Cron на Entware: PATH без /opt/bin → awk/pidof/killall не находятся,
-# flag-check тихо отваливается и daemon воскресает каждую минуту.
-export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
-
-LOG="/tmp/tg-tunnel.log"
-BIN="/opt/sbin/tg-mtproxy-client"
-CONFIG_FILE="/opt/zapret2/config"
-if [ -f "$CONFIG_FILE" ]; then
-    user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
-    if [ "$user_disabled" = "1" ]; then
-        pidof tg-mtproxy-client >/dev/null 2>&1 && killall -9 tg-mtproxy-client 2>/dev/null
-        exit 0
-    fi
-fi
-[ ! -f "$LOG" ] && exit 0
-pgrep -f "tg-mtproxy-client" >/dev/null || exit 0
-FAILS=$(tail -40 "$LOG" | grep -c "CONNECT_FAIL")
-if [ "$FAILS" -ge 10 ]; then
-    logger -t tg-watchdog "Detected $FAILS CONNECT_FAILs, restarting tunnel"
-    killall -9 tg-mtproxy-client 2>/dev/null
-    sleep 2
-    $BIN --listen=:1443 >> "$LOG" 2>&1 &
-    echo "$(date) watchdog: restarted ($FAILS fails)" >> "$LOG"
-fi
-WDEOF
-            chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
-            print_success "Watchdog обновлён"
         fi
 
         print_info "Перезапустите z2k для применения изменений"

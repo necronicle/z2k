@@ -1299,29 +1299,36 @@ SUBMENU
                     fi
                 fi
 
-                # Stop any old processes
-                killall tg-mtproxy-client 2>/dev/null || true
-                sleep 1
+                # Clear user-disabled flag before calling S98tg-tunnel; its
+                # start path intentionally refuses to run while the flag is 1.
+                if [ -f "${ZAPRET2_DIR}/config" ]; then
+                    if grep -q '^TG_PROXY_USER_DISABLED=' "${ZAPRET2_DIR}/config"; then
+                        sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=0/' "${ZAPRET2_DIR}/config"
+                    fi
+                fi
 
-                # Start tunnel
-                "$MTPROXY_BIN" --listen=:1443 >> /tmp/tg-tunnel.log 2>&1 &
+                # Start through init when available so boot/runtime behavior
+                # stays identical and OUTPUT redirect rules are managed too.
+                if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
+                    /opt/etc/init.d/S98tg-tunnel restart >/dev/null 2>&1
+                else
+                    killall tg-mtproxy-client 2>/dev/null || true
+                    sleep 1
+                    "$MTPROXY_BIN" --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
+                fi
                 sleep 2
 
                 if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
                     print_success "Tunnel запущен"
-                    # Clear user-disabled flag so the watchdog stops
-                    # respecting an old "stop" intent and resumes
-                    # auto-restarting on real crashes.
-                    if [ -f "${ZAPRET2_DIR}/config" ]; then
-                        if grep -q '^TG_PROXY_USER_DISABLED=' "${ZAPRET2_DIR}/config"; then
-                            sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=0/' "${ZAPRET2_DIR}/config"
-                        fi
+                    # Fallback path for installs that do not have S98 yet.
+                    if ! [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
+                        for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+                            iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                                iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                            iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
+                                iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
+                        done
                     fi
-                    # Setup iptables
-                    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
-                        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                            iptables -t nat -A PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                    done
                     print_success "Telegram работает для всех устройств"
                 else
                     print_error "Не удалось запустить"
@@ -1343,10 +1350,19 @@ SUBMENU
                         echo "TG_PROXY_USER_DISABLED=1" >> "${ZAPRET2_DIR}/config"
                     fi
                 fi
-                killall tg-mtproxy-client 2>/dev/null || true
-                for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
-                    iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || true
-                done
+                if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
+                    /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
+                else
+                    killall tg-mtproxy-client 2>/dev/null || true
+                    for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
+                        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+                            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+                        done
+                        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+                            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+                        done
+                    done
+                fi
                 print_success "Telegram tunnel выключен (watchdog не будет восстанавливать)"
                 pause
                 ;;

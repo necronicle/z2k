@@ -1790,7 +1790,46 @@ step_finalize() {
     fi
 
     # Cleanup legacy WS proxy init script (replaced by tunnel)
+    if [ -x /opt/etc/init.d/S97tg-mtproxy ]; then
+        /opt/etc/init.d/S97tg-mtproxy stop >/dev/null 2>&1 || true
+    fi
     rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
+
+    # Install/update Telegram tunnel support files regardless of whether the
+    # tunnel is currently enabled. This is important for existing installs:
+    # an old S98tg-tunnel that ignores TG_PROXY_USER_DISABLED would otherwise
+    # remain on disk and resurrect the tunnel on the next reboot.
+    mkdir -p /opt/etc/init.d /opt/etc/ndm/netfilter.d /opt/zapret2
+    if [ -f "${WORK_DIR}/files/init.d/S98tg-tunnel" ]; then
+        cp -f "${WORK_DIR}/files/init.d/S98tg-tunnel" \
+              /opt/etc/init.d/S98tg-tunnel
+        chmod +x /opt/etc/init.d/S98tg-tunnel
+    else
+        print_warning "S98tg-tunnel init source missing from ${WORK_DIR}/files/init.d/"
+    fi
+
+    if [ -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" ]; then
+        cp -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" \
+              /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
+        chmod +x /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
+        print_success "Keenetic NDM hook установлен (auto-restore iptables)"
+    fi
+
+    if [ -f "${WORK_DIR}/files/z2k-tg-watchdog.sh" ]; then
+        cp -f "${WORK_DIR}/files/z2k-tg-watchdog.sh" \
+              /opt/zapret2/tg-tunnel-watchdog.sh
+        chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
+    else
+        print_warning "tg-tunnel-watchdog.sh source missing from ${WORK_DIR}/files/"
+    fi
+
+    if [ -x /opt/zapret2/tg-tunnel-watchdog.sh ]; then
+        local WDCRON="* * * * * /opt/zapret2/tg-tunnel-watchdog.sh"
+        crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
+            { crontab -l 2>/dev/null || true; echo "$WDCRON"; } | crontab -
+    fi
+    crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null || true
+    z2k_fix_cron_perms
 
     # Auto-start Telegram tunnel — but respect TG_PROXY_USER_DISABLED on
     # reinstalls so we don't resurrect a tunnel the user explicitly stopped.
@@ -1799,226 +1838,27 @@ step_finalize() {
         _tg_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
     fi
     if [ -x "/opt/sbin/tg-mtproxy-client" ] && [ "$_tg_disabled" != "1" ]; then
-        killall tg-mtproxy-client 2>/dev/null || true
-        sleep 1
-
-        # Start tunnel mode. -v enables stream-level logs needed by the
-        # watchdog's stale-detection mode.
-        /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
+        if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
+            /opt/etc/init.d/S98tg-tunnel restart >/dev/null 2>&1
+        else
+            killall tg-mtproxy-client 2>/dev/null || true
+            sleep 1
+            /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
+        fi
         sleep 2
 
         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
-            # Setup iptables REDIRECT for Telegram DC IPs.
-            # Use -I ... 1 (insert at top) so our rules precede Keenetic's
-            # _NDM_* chains, which intercept packets when using -A.
-            # Both PREROUTING (LAN clients) and OUTPUT (router-local
-            # processes, e.g. the watchdog probe) get the redirect.
-            for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
-                iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                    iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-                iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-                    iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-            done
-
-            # Install Keenetic netfilter.d hook so NDM re-inserts our
-            # REDIRECT rules automatically after every regen (WAN flap,
-            # tunnel up/down, reboot, etc). Without this, rules get
-            # silently wiped and Android Telegram (which doesn't use
-            # MTProxy Premium like desktop does) stops connecting.
-            mkdir -p /opt/etc/ndm/netfilter.d
-            if [ -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" ]; then
-                cp -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" \
-                      /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
-                chmod +x /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
-                print_success "Keenetic NDM hook установлен (auto-restore iptables)"
-            fi
-            # Install watchdog — active end-to-end probe + CONNECT_FAIL storm
-            # detector. Runs every minute via cron. Restarts the tunnel via
-            # the init script (handles iptables + pid file properly).
-            cat > /opt/zapret2/tg-tunnel-watchdog.sh << 'WDSCRIPT'
-#!/bin/sh
-# Cron на Entware/busybox запускается с минимальным PATH (/sbin:/usr/sbin:/bin:/usr/bin)
-# который НЕ включает /opt/bin где живут awk/pidof/pgrep/date/killall/curl/logger.
-# Без этого все утилиты "command not found", flag-check на awk молча падает,
-# user_disabled пустой, скрипт уходит в "process not running" и каждую минуту
-# воскрешает daemon — даже когда юзер явно остановил его через menu/webpanel.
-export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
-
-# tg-tunnel watchdog
-#  1. Restart on CONNECT_FAIL storm (legacy passive check)
-#  2. Restart when an end-to-end HTTPS probe through the tunnel fails 3x
-#     in a row. The probe targets a Telegram-owned IP that is REDIRECTed
-#     to local :1443, so the request transits the tunnel. Catches the
-#     "tunnel process alive but silently dead after WS reconnect" mode
-#     that the CONNECT_FAIL detector misses entirely.
-
-LOG=/tmp/tg-tunnel.log
-BIN=/opt/sbin/tg-mtproxy-client
-INIT=/opt/etc/init.d/S98tg-tunnel
-STATE=/tmp/tg-tunnel-watchdog.state
-PROBE_URL=https://core.telegram.org/
-
-[ -x "$BIN" ] || exit 0
-
-# Honor explicit user disable from menu / webpanel. The "stop tunnel"
-# action there sets TG_PROXY_USER_DISABLED=1 in /opt/zapret2/config so
-# the watchdog stops resurrecting the daemon every 3 min.
-# `re-enable` from the same UI flips it back to 0.
-CONFIG_FILE="/opt/zapret2/config"
-if [ -f "$CONFIG_FILE" ]; then
-    user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG_FILE")
-    if [ "$user_disabled" = "1" ]; then
-        if pidof tg-mtproxy-client >/dev/null 2>&1; then
-            killall -9 tg-mtproxy-client 2>/dev/null
-        fi
-        exit 0
-    fi
-fi
-
-restart_tunnel() {
-    local reason="$1"
-    logger -t tg-watchdog "restart: $reason"
-    if [ -x "$INIT" ]; then
-        "$INIT" stop  >/dev/null 2>&1
-        sleep 1
-        # belt-and-suspenders kill in case init script left a leftover
-        killall -9 tg-mtproxy-client 2>/dev/null
-        sleep 1
-        # Truncate log to exactly one marker line. Without this, the very
-        # CONNECT_FAIL storm that triggered the restart is still sitting in
-        # tail -40 when cron runs again in a minute, and the detector fires
-        # a second restart before the new session has time to stabilise —
-        # classic restart loop.
-        echo "$(date) watchdog restart: $reason" > "$LOG"
-        "$INIT" start >/dev/null 2>&1
-    else
-        killall -9 tg-mtproxy-client 2>/dev/null
-        sleep 1
-        echo "$(date) watchdog restart: $reason" > "$LOG"
-        "$BIN" --listen=:1443 -v >> "$LOG" 2>&1 &
-    fi
-    echo 0 > "$STATE"
-}
-
-# 1) CONNECT_FAIL storm (legacy)
-if [ -f "$LOG" ] && pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
-    FAILS=$(tail -40 "$LOG" 2>/dev/null | grep -c "CONNECT_FAIL")
-    if [ "$FAILS" -ge 10 ]; then
-        restart_tunnel "CONNECT_FAIL storm ($FAILS in last 40 lines)"
-        exit 0
-    fi
-fi
-
-# If the binary isn't running at all, just start it and reset state.
-if ! pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
-    restart_tunnel "tunnel process not running"
-    exit 0
-fi
-
-# 2) Active end-to-end probe through the tunnel.
-#    core.telegram.org resolves into 149.154.0.0/16, which our PREROUTING
-#    REDIRECT bounces to 127.0.0.1:1443 → tg-mtproxy-client → cf worker →
-#    Telegram. Successful TLS + HTTP response = full path is healthy.
-if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null "$PROBE_URL" 2>/dev/null; then
-    echo 0 > "$STATE"
-    exit 0
-fi
-
-# Probe failed — increment consecutive-failure counter.
-FAIL_CNT=0
-[ -f "$STATE" ] && FAIL_CNT=$(head -1 "$STATE" 2>/dev/null)
-case "$FAIL_CNT" in ''|*[!0-9]*) FAIL_CNT=0 ;; esac
-FAIL_CNT=$((FAIL_CNT + 1))
-echo "$FAIL_CNT" > "$STATE"
-
-# Restart only after 3 consecutive failures (~3 minutes) to avoid
-# flapping when Telegram itself or the upstream worker has a brief blip.
-if [ "$FAIL_CNT" -ge 3 ]; then
-    restart_tunnel "active probe failed ${FAIL_CNT}x in a row"
-fi
-WDSCRIPT
-            chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
-            # Add to cron (every minute)
-            WDCRON="* * * * * /opt/zapret2/tg-tunnel-watchdog.sh"
-            crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
-                (crontab -l 2>/dev/null; echo "$WDCRON") | crontab -
-
-            # Install init script for autostart on reboot
-            cat > /opt/etc/init.d/S98tg-tunnel << 'INITEOF'
-#!/bin/sh
-# Entware init.d запускается с минимальным PATH без /opt/bin — flag-check
-# на awk молча падает и daemon стартует даже на TG_PROXY_USER_DISABLED=1.
-export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
-
-BIN="/opt/sbin/tg-mtproxy-client"
-LOG="/tmp/tg-tunnel.log"
-PIDFILE="/var/run/tg-tunnel.pid"
-
-CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
-
-start() {
-    [ -x "$BIN" ] || exit 0
-    # Honor TG_PROXY_USER_DISABLED — if user explicitly stopped the tunnel
-    # via menu/webpanel, don't autostart on boot (or it'll come back every
-    # reboot and stay up until the watchdog cron fires ~60s later).
-    if [ -f "/opt/zapret2/config" ]; then
-        user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
-        if [ "$user_disabled" = "1" ]; then
-            echo "tg-tunnel disabled by user — skipping autostart"
-            return 0
-        fi
-    fi
-    if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
-        echo "tg-tunnel already running"
-        return 0
-    fi
-    echo "Starting tg-tunnel..."
-    $BIN --listen=:1443 --timeout=15m -v >> "$LOG" 2>&1 &
-    echo $! > "$PIDFILE"
-    sleep 2
-    # Insert REDIRECT rules at TOP of both PREROUTING and OUTPUT (-I 1) so
-    # they precede Keenetic's _NDM_* chains. PREROUTING catches forwarded
-    # traffic from LAN clients; OUTPUT catches locally-originated traffic
-    # from the router itself (e.g. the watchdog probe).
-    for cidr in $CIDRS; do
-        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-    done
-}
-
-stop() {
-    echo "Stopping tg-tunnel..."
-    killall tg-mtproxy-client 2>/dev/null
-    rm -f "$PIDFILE"
-    # Idempotent removal: drop every matching copy of the rule from both chains.
-    for cidr in $CIDRS; do
-        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
-            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
-        done
-        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
-            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
-        done
-    done
-}
-
-case "$1" in
-    start) start ;;
-    stop) stop ;;
-    restart) stop; sleep 1; start ;;
-    *) echo "Usage: $0 {start|stop|restart}" ;;
-esac
-INITEOF
-            chmod +x /opt/etc/init.d/S98tg-tunnel
-
-            # Cleanup legacy cron entry for S97tg-mtproxy
-            crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null
-
             print_success "Telegram tunnel запущен автоматически"
         else
             print_warning "Не удалось запустить Telegram tunnel (можно включить позже через меню [T])"
         fi
+    elif [ "$_tg_disabled" = "1" ]; then
+        if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
+            /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
+        else
+            killall tg-mtproxy-client 2>/dev/null || true
+        fi
+        print_info "Telegram tunnel не запущен — отключён пользователем"
     fi
 
     # Показать итоговую информацию
