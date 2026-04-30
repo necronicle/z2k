@@ -126,12 +126,12 @@
     return { active: "работает", stopped: "остановлен", not_installed: "не установлен" }[s] || s;
   }
   // Game mode is enabled/disabled via the game-mode toggle, but the
-  // strategy backend (flowseal vs legacy rotator) is selected by the
+  // strategy backend (default vs legacy rotator) is selected by the
   // GAME_PROFILE config var. Surface it in the status cell so support
   // can see at a glance which backend is active without ssh-ing in.
   function gameModeLabel(enabled, profile) {
     if (enabled !== "1") return "Выкл";
-    const prof = (profile === "legacy") ? "legacy" : "flowseal";
+    const prof = (profile === "legacy") ? "legacy" : "стандартный";
     return "Вкл (" + prof + ")";
   }
 
@@ -142,7 +142,7 @@
     { key: "silent_fallback", name: "Silent fallback РКН",
       desc: "Детект «тихих чёрных дыр» РКН. Осторожно — возможны ложные срабатывания." },
     { key: "game_mode", name: "Игровой режим",
-      desc: "TCP/UDP bypass для игровых сервисов (default: flowseal — single-strategy на flowseal_game_ips.txt). Для отката на старый ротатор: GAME_PROFILE=legacy в /opt/zapret2/config." },
+      desc: "TCP/UDP bypass для игровых сервисов (стандартный профиль — single-strategy bypass на игровом ipset). Для отката на старый ротатор: GAME_PROFILE=legacy в /opt/zapret2/config." },
     { key: "customd", name: "Скрипты custom.d",
       desc: "Дополнительные daemons из init.d/custom.d (50-stun4all, 50-discord-media)." },
   ];

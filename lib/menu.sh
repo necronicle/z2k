@@ -1096,7 +1096,7 @@ menu_roblox_bypass() {
         if [ "$GAME_PROFILE_CUR" = "legacy" ]; then
             status_line="Включен — профиль: legacy (режим: $GAME_MODE_STYLE_CUR)"
         else
-            status_line="Включен — профиль: flowseal"
+            status_line="Включен — профиль: стандартный"
         fi
     else
         status_line="Выключен"
@@ -1110,19 +1110,18 @@ menu_roblox_bypass() {
 
 Игровой bypass. Два профиля:
 
-  flowseal   — single-strategy mirror of flowseal 1.9.8:
-               TCP TLS rotator (6 стратегий) + TCP non-TLS static
-               + UDP fake (dbankcloud QUIC), всё scoped по
-               flowseal_game_ips.txt (~31K CIDR aggregate, обновляется
-               cron'ом из flowseal репо).
-               Рекомендуется всем — flowseal 1.9.8 field-проверено
-               на широком каталоге игр (Apex/Tarkov/Darktide/etc).
+  стандартный — single-strategy bypass: TCP TLS rotator (6 стратегий)
+                + TCP non-TLS static + UDP fake (dbankcloud QUIC),
+                scoped по игровому ipset (~31K CIDR aggregate,
+                обновляется cron'ом).
+                Рекомендуется всем — field-проверено на широком
+                каталоге игр (Apex/Tarkov/Darktide/etc).
 
-  legacy     — старый z2k_game_udp 13-стратный rotator + safe/hybrid/
-               aggressive ladder. Эмпирически работает только на
-               Roblox. Оставлен как rollback на случай регрессии.
+  legacy      — старый z2k_game_udp 13-стратный rotator + safe/hybrid/
+                aggressive ladder. Эмпирически работает только на
+                Roblox. Оставлен как rollback на случай регрессии.
 
-[1] Включить (flowseal — по умолчанию)
+[1] Включить (стандартный — по умолчанию)
 [2] Включить legacy (rollback)
 [0] Выключить
 [B] Назад
@@ -1175,7 +1174,7 @@ SUBMENU
     case "$sub_choice" in
         1)
             _enable_flowseal
-            print_success "Игровой режим: flowseal (default)"
+            print_success "Игровой режим: стандартный"
             need_regen=1
             ;;
         2)
