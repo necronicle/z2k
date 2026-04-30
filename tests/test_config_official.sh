@@ -430,10 +430,14 @@ assert_eq "structure: correct --new count" "4" "$NEW_COUNT"
 # Source the generator (utils.sh already sourced above).
 . "$SCRIPT_DIR/lib/config_official.sh"
 
-# Helper: extract the line containing --filter-udp=...flowseal_game_ips...
-# from generated NFQWS2_OPT. Returns empty if no flowseal arm was emitted.
+# Helper: extract the UDP line containing flowseal_game_ips from output.
 get_flowseal_arm_line() {
-    printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | head -1
+    printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | grep -F -- '--filter-udp=' | head -1
+}
+
+# Helper: extract the TCP line containing flowseal_game_ips from output.
+get_flowseal_tcp_arm_line() {
+    printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | grep -F -- '--filter-tcp=' | head -1
 }
 
 # Helper: extract the legacy game_udp line (uses key=game_udp circular).
@@ -441,15 +445,16 @@ get_legacy_arm_line() {
     printf '%s\n' "$1" | grep -F 'key=game_udp' | head -1
 }
 
-# Helper: parse comma-separated port spec from --filter-udp=<spec> and
-# verify a target port is NOT covered by any range/single in the spec.
-# Returns 0 if port is excluded (good), 1 if included (bad).
-# Handles forms: single (443), range (1024-2407), comma-list (1024-2407,2409-65535,80).
+# Helper: parse comma-separated port spec from a --filter-tcp= or --filter-udp=
+# in the supplied line and verify a target port is NOT covered by any
+# range/single in the spec. Returns 0 if excluded, 1 if included.
+# Handles: single (443), range (1024-2407), comma-list (1024-2407,2409-65535,80).
+# Caller specifies which filter token to inspect (3rd arg: "tcp" or "udp").
 port_excluded_from_filter() {
-    local arm_line="$1" target_port="$2"
+    local arm_line="$1" target_port="$2" proto="${3:-udp}"
     local spec
-    spec=$(printf '%s\n' "$arm_line" | sed -nE 's/.*--filter-udp=([^[:space:]]+).*/\1/p' | head -1)
-    [ -z "$spec" ] && return 0  # No filter-udp on the line — vacuously excluded.
+    spec=$(printf '%s\n' "$arm_line" | sed -nE "s/.*--filter-${proto}=([^[:space:]]+).*/\1/p" | head -1)
+    [ -z "$spec" ] && return 0  # No filter-${proto} on the line — vacuously excluded.
     local IFS=','
     local token start end
     for token in $spec; do
@@ -606,6 +611,79 @@ ARM_UNKNOWN=$(get_flowseal_arm_line "$OUTPUT_UNKNOWN")
 assert_contains "unknown: arm emitted (coerced to flowseal)" "blob=quic_dbankcloud" "$ARM_UNKNOWN"
 assert_contains "unknown: arm has correct port range" "--filter-udp=1024-2407,2409-65535" "$ARM_UNKNOWN"
 
+printf "\n--- GAME_PROFILE: TCP non-TLS static arm (step 4) ---\n"
+
+# Default flowseal mode + flowseal_game_ips.txt + ipset-exclude.txt — full
+# rig so we can assert on every conditional path.
+OUTPUT_TCP=$(run_generator "tcp_default" "GAME_MODE_ENABLED=1" "setup_flowseal_with_exclude")
+TCP_ARM=$(get_flowseal_tcp_arm_line "$OUTPUT_TCP")
+
+# Arm must be emitted for the default (flowseal) profile.
+assert_contains "tcp: arm emitted" "flowseal_game_ips.txt" "$TCP_ARM"
+# Recipe shape — multisplit:pos=1:seqovl=568 with 4pda seqovl pattern.
+assert_contains "tcp: arm uses multisplit" "lua-desync=multisplit" "$TCP_ARM"
+assert_contains "tcp: arm has pos=1" "pos=1" "$TCP_ARM"
+assert_contains "tcp: arm has seqovl=568" "seqovl=568" "$TCP_ARM"
+assert_contains "tcp: arm uses tls_clienthello_4pda_to seqovl pattern" "seqovl_pattern=tls_clienthello_4pda_to" "$TCP_ARM"
+assert_contains "tcp: arm has dir=out" "dir=out" "$TCP_ARM"
+# Profile-level options.
+assert_contains "tcp: arm has --in-range=a" "--in-range=a" "$TCP_ARM"
+assert_contains "tcp: arm has --out-range=-n3" "--out-range=-n3" "$TCP_ARM"
+assert_contains "tcp: arm has profile-level --payload=all" "--payload=all" "$TCP_ARM"
+# Positive ipset scope.
+assert_contains "tcp: arm has --ipset=...flowseal_game_ips.txt" "--ipset=" "$TCP_ARM"
+# Conditional --ipset-exclude= when the file exists.
+assert_contains "tcp: arm has --ipset-exclude=...ipset-exclude.txt" "--ipset-exclude=" "$TCP_ARM"
+# Hostlist-excludes — defense-in-depth for SNI-bearing flows that the
+# port-range carve-out alone wouldn't deflect (e.g., ECH on alt port).
+assert_contains "tcp: arm excludes whitelist" "whitelist.txt" "$TCP_ARM"
+assert_contains "tcp: arm excludes YT TCP list" "TCP/YT/List.txt" "$TCP_ARM"
+assert_contains "tcp: arm excludes RKN list" "TCP/RKN/List.txt" "$TCP_ARM"
+# Recipe must NOT use circular — binary game TCP has no observable
+# success/fail signal that a rotator could converge on.
+assert_not_contains "tcp: arm has no circular rotator" "lua-desync=circular" "$TCP_ARM"
+# No legacy 13-strat tokens.
+assert_not_contains "tcp: arm has no game_udp circular key" "key=game_udp" "$TCP_ARM"
+
+# Port-range carve-out invariant (colleague's: never include
+# 80/443/8443/2053/2083/2087/2096; preserve Warp 2408 carve-out).
+for excluded in 80 443 2053 2083 2087 2096 2408 8443; do
+    if port_excluded_from_filter "$TCP_ARM" "$excluded" "tcp"; then
+        TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tcp: port %s not in filter range\n" "$excluded"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tcp: port %s falls inside filter range\n" "$excluded"
+    fi
+done
+# Sanity — a real high game port MUST be in the range (otherwise the
+# carve-out is over-zealous).
+for included in 1024 12345 27015 50000 65535; do
+    if port_excluded_from_filter "$TCP_ARM" "$included" "tcp"; then
+        TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tcp: high port %s missing from filter range (over-carved)\n" "$included"
+    else
+        TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tcp: high port %s in filter range\n" "$included"
+    fi
+done
+
+# Legacy mode must NOT emit a TCP arm (step 4 only adds for flowseal).
+OUTPUT_TCP_LEGACY=$(run_generator "tcp_legacy" "GAME_MODE_ENABLED=1
+GAME_PROFILE=legacy
+GAME_MODE_STYLE=safe" "setup_flowseal_with_exclude")
+TCP_ARM_LEGACY=$(get_flowseal_tcp_arm_line "$OUTPUT_TCP_LEGACY")
+assert_eq "tcp: legacy mode does not emit TCP arm" "" "$TCP_ARM_LEGACY"
+
+# Missing flowseal_game_ips.txt must suppress the TCP arm via -s gate.
+OUTPUT_TCP_NOIPSET=$(run_generator "tcp_noipset" "GAME_MODE_ENABLED=1" "")
+TCP_ARM_NOIPSET=$(get_flowseal_tcp_arm_line "$OUTPUT_TCP_NOIPSET")
+assert_eq "tcp: missing-ipset → no TCP arm" "" "$TCP_ARM_NOIPSET"
+
+# Missing ipset-exclude.txt → arm still emitted but without --ipset-exclude=.
+OUTPUT_TCP_NOEXCL=$(run_generator "tcp_noexcl" "GAME_MODE_ENABLED=1" "setup_flowseal_ipset")
+TCP_ARM_NOEXCL=$(get_flowseal_tcp_arm_line "$OUTPUT_TCP_NOEXCL")
+assert_contains "tcp: arm emitted without ipset-exclude file" "flowseal_game_ips.txt" "$TCP_ARM_NOEXCL"
+assert_not_contains "tcp: arm omits --ipset-exclude= when file missing" "--ipset-exclude=" "$TCP_ARM_NOEXCL"
+# whitelist exclude is still present (it always exists per run_generator setup).
+assert_contains "tcp: hostlist-exclude whitelist still present" "whitelist.txt" "$TCP_ARM_NOEXCL"
+
 printf "\n--- GAME_PROFILE: port-parser sanity (negative tests) ---\n"
 
 # The port-excluded helper itself must catch cases the prior weak grep missed.
@@ -623,6 +701,12 @@ if port_excluded_from_filter "--filter-udp=1024-65535" "443"; then
     TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] port parser: 443 outside [1024-65535] correctly absent\n"
 else
     TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] port parser: false positive on 1024-65535/443\n"
+fi
+# Sanity for tcp proto override.
+if port_excluded_from_filter "--filter-tcp=1024-2052,2054-2082,2084-2086,2088-2095,2097-2407,2409-8442,8444-65535" "8443" "tcp"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] port parser: TCP carve-out correctly excludes 8443\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] port parser: TCP carve-out missed 8443\n"
 fi
 
 # ==============================================================================

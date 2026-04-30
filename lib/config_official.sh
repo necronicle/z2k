@@ -1075,6 +1075,45 @@ AUSTERUS_OPT
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --filter-l7=stun --in-range=a --out-range=-n4 --new\\n"
     fi
 
+    # === Game TCP arms (GAME_PROFILE=flowseal only) ===
+    # nfqws2 is first-match-wins per packet, so RKN/YT/GV/Discord-control
+    # TCP profiles above already catch web traffic on standard ports.
+    # The carve-out below excludes 80/443/2053/2083/2087/2096/2408/8443
+    # so even raw IP-match cannot pull web flows into game arms:
+    #   80/443    — RKN/YT/GV TLS/HTTP
+    #   2053/2083/2087/2096 — Cloudflare Spectrum alt-HTTPS
+    #   2408      — Cloudflare Warp (engage.cloudflareclient.com control)
+    #   8443      — Discord media TCP
+    # Hostlist-exclude is defense-in-depth: if a flow lands on a high
+    # port AND on flowseal_game_ips.txt AND its SNI matches an RKN/YT
+    # list domain, we bail out (rare ECH-bearing or alt-port web case).
+    #
+    # Step 4 (this commit): non-TLS static arm. payload=all + multisplit
+    # recipe mirroring flowseal 1.9.8 general.bat default game TCP arm
+    # (winws --dpi-desync=multisplit --any-protocol=1 + seqovl=568 +
+    # tls_clienthello_4pda_to pattern). No circular — binary game TCP
+    # has no observable success/fail signal that a rotator could use.
+    # Step 5 (pending): TLS rotator inserts ABOVE this static block —
+    # filter-l7=tls on the same scope, circular over flowseal-derived
+    # TCP recipes. Binary TCP falls through to this static arm.
+    if [ "$GAME_PROFILE" = "flowseal" ] && [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/flowseal_game_ips.txt" ]; then
+        # Full carve-out per "Game arms must never include 80/443/8443/
+        # 2053/2083/2087/2096" invariant; 2408 preserved from UDP arm.
+        local game_tcp_ports="1024-2052,2054-2082,2084-2086,2088-2095,2097-2407,2409-8442,8444-65535"
+        local game_tcp_ipset_excl=""
+        [ -f "${lists_dir}/ipset-exclude.txt" ] && game_tcp_ipset_excl="--ipset-exclude=${lists_dir}/ipset-exclude.txt "
+        # Hostlist excludes — whitelist always; YT/RKN lists if shipped.
+        local game_tcp_hostlist_excl="--hostlist-exclude=${lists_dir}/whitelist.txt"
+        [ -s "${extra_strats_dir}/TCP/YT/List.txt" ] && \
+            game_tcp_hostlist_excl="$game_tcp_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT/List.txt"
+        [ -s "${extra_strats_dir}/TCP/RKN/List.txt" ] && \
+            game_tcp_hostlist_excl="$game_tcp_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/RKN/List.txt"
+        # Non-TLS static — multisplit:seqovl=568:pos=1 with tls_clienthello_4pda_to
+        # seqovl pattern (blob already registered in S99zapret2.new:537).
+        local flowseal_game_tcp_static="--lua-desync=multisplit:payload=all:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}${game_tcp_hostlist_excl} --in-range=a --out-range=-n3 --payload=all $flowseal_game_tcp_static --new\\n"
+    fi
+
     # Game Filter UDP — custom protocols, unknown payloads. Uses a positive
     # --ipset=game_ips.txt match so the strategy rotator fires ONLY on
     # listed game-server IPs, not on random Discord/Steam/BitTorrent UDP
