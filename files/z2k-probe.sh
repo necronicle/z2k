@@ -295,7 +295,15 @@ probe_one() {
     # most servers honour this (CF/Google both do). Some servers return
     # the full body ignoring the range — we truncate via -o /dev/null
     # and --max-filesize as a safety cap.
+    #
+    # -L is critical: apex domains (cloudflare.com, google.com и т.д.)
+    # отдают 301/308 на www-версию, body редиректа ~150-200 байт →
+    # без -L probe мерял throughput редирект-заглушки и выдавал ~7 kbit/s
+    # независимо от стратегии. С -L curl следует за редиректом и реально
+    # тащит 100 KB с финального URL, через ту же стратегию (override
+    # матчится по nld=2 на оба leg'а).
     out=$(curl -sk --compressed \
+               -L --max-redirs 3 \
                --max-time "$PROBE_TIMEOUT" \
                --connect-timeout 4 \
                -r "0-$((PROBE_RANGE_BYTES - 1))" \
@@ -334,6 +342,21 @@ probe_one() {
 
 echo "z2k-probe: host=$host profile=$profile strategies=$strategy_count"
 echo "z2k-probe: backing up state.tsv → $state_backup"
+
+# Pre-flight redirect detection. Apex domains often 301→www, и без этой
+# заметки юзер видит знакомый host в выводе но реально замеряется
+# другой URL. Делаем один HEAD'-style fetch с -L и сравниваем
+# финальный host с входным.
+preflight=$(curl -sk -L --max-redirs 3 --max-time 5 -o /dev/null \
+                 -w '%{url_effective}' \
+                 "https://$host/" 2>/dev/null) || preflight=""
+if [ -n "$preflight" ]; then
+    effective_host=$(printf '%s' "$preflight" | sed -e 's|^https\?://||' -e 's|/.*$||')
+    if [ -n "$effective_host" ] && [ "$effective_host" != "$host" ]; then
+        echo "z2k-probe: $host redirects to $preflight — measuring final URL"
+    fi
+fi
+
 echo "z2k-probe: iterating strategies (takes ~$((strategy_count * (PROBE_TIMEOUT + 1)))s worst case)"
 echo
 echo "  strategy    ok http  bytes      time    throughput"
