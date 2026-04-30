@@ -435,9 +435,14 @@ get_flowseal_arm_line() {
     printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | grep -F -- '--filter-udp=' | head -1
 }
 
-# Helper: extract the TCP line containing flowseal_game_ips from output.
+# Helper: extract the TCP non-TLS static line (filter-l7=unknown).
 get_flowseal_tcp_arm_line() {
-    printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | grep -F -- '--filter-tcp=' | head -1
+    printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | grep -F -- '--filter-tcp=' | grep -F -- '--filter-l7=unknown' | head -1
+}
+
+# Helper: extract the TCP TLS rotator line (filter-l7=tls + circular).
+get_flowseal_tls_arm_line() {
+    printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | grep -F -- '--filter-tcp=' | grep -F -- '--filter-l7=tls' | head -1
 }
 
 # Helper: extract the legacy game_udp line (uses key=game_udp circular).
@@ -695,6 +700,96 @@ assert_contains "tcp: arm emitted without ipset-exclude file" "flowseal_game_ips
 assert_not_contains "tcp: arm omits --ipset-exclude= when file missing" "--ipset-exclude=" "$TCP_ARM_NOEXCL"
 # whitelist still must NOT appear — same hostname-blocks-binary reason.
 assert_not_contains "tcp: arm has no whitelist hostlist-exclude" "whitelist.txt" "$TCP_ARM_NOEXCL"
+
+printf "\n--- GAME_PROFILE: TCP TLS rotator (step 5) ---\n"
+
+OUTPUT_TLS=$(run_generator "tls_default" "GAME_MODE_ENABLED=1" "setup_flowseal_with_exclude")
+TLS_ARM=$(get_flowseal_tls_arm_line "$OUTPUT_TLS")
+TCP_STATIC=$(get_flowseal_tcp_arm_line "$OUTPUT_TLS")
+
+# Arm emission + profile-level shape.
+assert_contains "tls: arm emitted" "flowseal_game_ips.txt" "$TLS_ARM"
+assert_contains "tls: arm has --filter-l7=tls" "--filter-l7=tls" "$TLS_ARM"
+assert_contains "tls: arm has profile-level --payload=tls_client_hello" "--payload=tls_client_hello" "$TLS_ARM"
+assert_contains "tls: arm has --in-range=a" "--in-range=a" "$TLS_ARM"
+assert_contains "tls: arm has --out-range=-n3" "--out-range=-n3" "$TLS_ARM"
+assert_not_contains "tls: arm has NO profile-level --payload=all" "--payload=all" "$TLS_ARM"
+
+# Circular detector wiring (matches yt_tcp pattern: HTTPS-only auth/control).
+assert_contains "tls: arm has circular with key=game_tls" "key=game_tls" "$TLS_ARM"
+assert_contains "tls: circular has fails=2" "circular:fails=2" "$TLS_ARM"
+assert_contains "tls: circular has nld=2 (per-SLD pinning)" "nld=2" "$TLS_ARM"
+assert_contains "tls: circular has inseq=18000 (TSPU 16K-gate)" "inseq=18000" "$TLS_ARM"
+assert_contains "tls: circular has failure_detector=z2k_tls_alert_fatal" "failure_detector=z2k_tls_alert_fatal" "$TLS_ARM"
+assert_contains "tls: circular has success_detector=z2k_success_no_reset" "success_detector=z2k_success_no_reset" "$TLS_ARM"
+assert_contains "tls: circular has no_http_redirect" "no_http_redirect" "$TLS_ARM"
+
+# All 6 strategies present.
+for s in 1 2 3 4 5 6; do
+    assert_contains "tls: arm has strategy=$s" "strategy=$s" "$TLS_ARM"
+done
+
+# Strategy 1 — multisplit + 4pda (general default).
+assert_contains "tls: strategy=1 uses multisplit + 4pda + seqovl=568 pos=1" \
+    "multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to:strategy=1" "$TLS_ARM"
+# Strategy 2 — multisplit + google + seqovl=652 pos=2 (ALT2).
+assert_contains "tls: strategy=2 uses multisplit + google + seqovl=652 pos=2" \
+    "multisplit:payload=tls_client_hello:dir=out:pos=2:seqovl=652:seqovl_pattern=tls_clienthello_www_google_com:strategy=2" "$TLS_ARM"
+# Strategy 5 — syndata + syn_packet blob (ALT7).
+assert_contains "tls: strategy=5 uses syndata" "syndata:payload=tls_client_hello:dir=out:blob=syn_packet:strategy=5" "$TLS_ARM"
+# Strategy 6 — fake + badseq (ALT8) — :badseq:badseq_increment=2: alias must
+# have been expanded by expand_badseq_aliases() to tcp_seq + tcp_ack.
+assert_contains "tls: strategy=6 has tcp_seq=2 (badseq expansion)" "tcp_seq=2" "$TLS_ARM"
+assert_contains "tls: strategy=6 has tcp_ack=-66000 (badseq expansion)" "tcp_ack=-66000" "$TLS_ARM"
+assert_not_contains "tls: strategy=6 badseq alias was expanded (no raw :badseq:)" ":badseq:" "$TLS_ARM"
+
+# Hostlist-excludes ARE present here (vs the non-TLS static arm where
+# they would block matching). TLS flows carry SNI, so dp_match() can
+# resolve the hostlist gate at desync.c:248-251.
+assert_contains "tls: arm excludes whitelist" "whitelist.txt" "$TLS_ARM"
+assert_contains "tls: arm excludes YT TCP list" "TCP/YT/List.txt" "$TLS_ARM"
+assert_contains "tls: arm excludes RKN list" "TCP/RKN/List.txt" "$TLS_ARM"
+
+# ipset scope.
+assert_contains "tls: arm has --ipset=...flowseal_game_ips.txt" "--ipset=" "$TLS_ARM"
+assert_contains "tls: arm has --ipset-exclude=...ipset-exclude.txt" "--ipset-exclude=" "$TLS_ARM"
+
+# Port carve-out same as static arm.
+for excluded in 80 443 2053 2083 2087 2096 2408 8443; do
+    if port_excluded_from_filter "$TLS_ARM" "$excluded" "tcp"; then
+        TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tls: port %s not in filter range\n" "$excluded"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tls: port %s falls inside filter range\n" "$excluded"
+    fi
+done
+
+# CRITICAL ORDERING INVARIANT: TLS rotator MUST emit BEFORE the non-TLS
+# static arm. nfqws2 is per-line first-match-wins; if static came first
+# with payload=all, TLS would be silently swallowed before reaching the
+# rotator, and step 5 would be a dead profile.
+TLS_OFFSET=$(printf '%s' "$OUTPUT_TLS" | awk 'BEGIN{n=0} /flowseal_game_ips.txt/ && /--filter-l7=tls/ {print n; exit} {n+=length($0)+1}')
+STATIC_OFFSET=$(printf '%s' "$OUTPUT_TLS" | awk 'BEGIN{n=0} /flowseal_game_ips.txt/ && /--filter-l7=unknown/ {print n; exit} {n+=length($0)+1}')
+if [ -n "$TLS_OFFSET" ] && [ -n "$STATIC_OFFSET" ] && [ "$TLS_OFFSET" -lt "$STATIC_OFFSET" ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tls: TLS rotator precedes non-TLS static arm in emit order\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tls: emit ordering wrong (tls=%s, static=%s)\n" "$TLS_OFFSET" "$STATIC_OFFSET"
+fi
+
+# Static arm still emitted in same scenario (binary game TCP fall-through).
+assert_contains "tls: non-TLS static arm still emitted alongside" "flowseal_game_ips.txt" "$TCP_STATIC"
+assert_contains "tls: static arm has --filter-l7=unknown unchanged" "--filter-l7=unknown" "$TCP_STATIC"
+
+# Legacy mode → no TLS arm (and no static arm — both flowseal-only).
+OUTPUT_TLS_LEGACY=$(run_generator "tls_legacy" "GAME_MODE_ENABLED=1
+GAME_PROFILE=legacy
+GAME_MODE_STYLE=safe" "setup_flowseal_with_exclude")
+TLS_ARM_LEGACY=$(get_flowseal_tls_arm_line "$OUTPUT_TLS_LEGACY")
+assert_eq "tls: legacy mode emits no TLS arm" "" "$TLS_ARM_LEGACY"
+
+# Missing flowseal_game_ips → no TLS arm.
+OUTPUT_TLS_NOIPSET=$(run_generator "tls_noipset" "GAME_MODE_ENABLED=1" "")
+TLS_ARM_NOIPSET=$(get_flowseal_tls_arm_line "$OUTPUT_TLS_NOIPSET")
+assert_eq "tls: missing-ipset → no TLS arm" "" "$TLS_ARM_NOIPSET"
 
 printf "\n--- GAME_PROFILE: port-parser sanity (negative tests) ---\n"
 

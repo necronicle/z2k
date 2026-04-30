@@ -157,6 +157,33 @@ AUSTERUS_OPT
     # is preserved; gentle renumbered from 12 to 13.
     game_udp="--lua-desync=circular:fails=2:time=60:udp_in=1:udp_out=4:key=game_udp:nld=2 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=3,1-64 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=4,1-64 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=5,1-64 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_ozon_ru:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_ozon_ru:repeats=12:ip_autottl=4,1-64 --lua-desync=z2k_game_udp:strategy=7:payload=all:dir=out:blob=quic_google:repeats=10:ip_ttl=3 --lua-desync=z2k_game_udp:strategy=8:payload=all:dir=out:blob=quic_google:repeats=10:ip_ttl=4 --lua-desync=z2k_game_udp:strategy=9:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64 --lua-desync=udplen:payload=all:dir=out:increment=8:pattern=0xFEA82025:strategy=10 --lua-desync=send:payload=all:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=11 --lua-desync=z2k_game_udp:strategy=12:payload=unknown:dir=out:blob=quic_google:repeats=4:ip_autottl=-2,3-20 --lua-desync=z2k_game_udp:strategy=13:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
 
+    # Game TCP TLS rotator (GAME_PROFILE=flowseal only) — 6 representative
+    # recipes lifted from flowseal 1.9.8 .bat files, translated to nfqws2
+    # lua-desync DSL. circular/fails=2/time=60 + per-SLD pinning (nld=2)
+    # is the same observability shape as rkn_tcp/yt_tcp; on TLS flows
+    # the success/failure detectors actually have signal to converge on
+    # (vs binary game TCP, which is why the static non-TLS arm has no
+    # rotator).
+    #
+    # success_detector=z2k_success_no_reset matches yt_tcp pattern —
+    # game-TLS auth/control flows are HTTPS-only, no HTTP redirect path
+    # to police; a missing RST after handshake = success.
+    # failure_detector=z2k_tls_alert_fatal catches TLS fatal alerts
+    # which is the only clean fail signal on a TLS-only flow.
+    # inseq=18000 + reset are added by the ensure_circular_tcp_inseq /
+    # ensure_circular_*_set passes below, same as the other rotators.
+    #
+    # Recipe sources:
+    #   strategy=1 — general default (multisplit + seqovl=568 + 4pda)
+    #   strategy=2 — ALT2 (multisplit + seqovl=652 + pos=2 + google)
+    #   strategy=3 — ALT (fake,fakedsplit + ts + multi-blob)
+    #   strategy=4 — ALT3 (fake,hostfakesplit + ya.ru SNI/host + ts)
+    #   strategy=5 — ALT7 (syndata)
+    #   strategy=6 — ALT8 (fake + badseq=2)
+    # :badseq:badseq_increment=2: alias on strategy=6 is rewritten to
+    # tcp_seq=2:tcp_ack=-66000 by expand_badseq_aliases() pass below.
+    game_tls_tcp="--lua-desync=circular:fails=2:time=60:key=game_tls:nld=2:failure_detector=z2k_tls_alert_fatal:success_detector=z2k_success_no_reset:no_http_redirect --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=2:seqovl=652:seqovl_pattern=tls_clienthello_www_google_com:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=syndata:payload=tls_client_hello:dir=out:blob=syn_packet:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:badseq:badseq_increment=2:strategy=6"
+
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
     ensure_circular_nld2() {
@@ -200,6 +227,7 @@ AUSTERUS_OPT
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
     game_udp=$(ensure_circular_nld2 "$game_udp")
+    game_tls_tcp=$(ensure_circular_nld2 "$game_tls_tcp")
 
     # Override the default `inseq=4096` on TCP TLS circulars so the
     # standard success_detector does NOT fire prematurely before the
@@ -261,6 +289,7 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_circular_tcp_inseq "$youtube_tcp" 18000)
     youtube_gv_tcp=$(ensure_circular_tcp_inseq "$youtube_gv_tcp" 18000)
     rkn_tcp=$(ensure_circular_tcp_inseq "$rkn_tcp" 18000)
+    game_tls_tcp=$(ensure_circular_tcp_inseq "$game_tls_tcp" 18000)
 
     # ensure_circular_arg_set: append `<arg>=<value>` (or bare `<arg>` flag)
     # to every circular token in $input that doesn't already carry that arg.
@@ -527,6 +556,7 @@ AUSTERUS_OPT
     rkn_tcp=$(expand_badseq_aliases "$rkn_tcp")
     youtube_tcp=$(expand_badseq_aliases "$youtube_tcp")
     youtube_gv_tcp=$(expand_badseq_aliases "$youtube_gv_tcp")
+    game_tls_tcp=$(expand_badseq_aliases "$game_tls_tcp")
 
     # Phase 14b: strip dead :out_range=*: / :in_range=*: tokens from
     # inside --lua-desync=... args.
@@ -1112,6 +1142,24 @@ AUSTERUS_OPT
         local game_tcp_ports="1024-2052,2054-2082,2084-2086,2088-2095,2097-2407,2409-8442,8444-65535"
         local game_tcp_ipset_excl=""
         [ -f "${lists_dir}/ipset-exclude.txt" ] && game_tcp_ipset_excl="--ipset-exclude=${lists_dir}/ipset-exclude.txt "
+
+        # TLS rotator hostlist-excludes — SAFE here (vs the static arm
+        # below) because filter-l7=tls + payload=tls_client_hello means
+        # nfqws extracts SNI before dp_match() runs the hostlist gate at
+        # desync.c:248-251. Excludes shield Discord control / Riot login
+        # / EOS auth / etc. that resolve into RKN/YT/whitelist domains
+        # but happen to land on game-port + game-ipset by coincidence.
+        local game_tls_hostlist_excl="--hostlist-exclude=${lists_dir}/whitelist.txt"
+        [ -s "${extra_strats_dir}/TCP/YT/List.txt" ] && \
+            game_tls_hostlist_excl="$game_tls_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT/List.txt"
+        [ -s "${extra_strats_dir}/TCP/RKN/List.txt" ] && \
+            game_tls_hostlist_excl="$game_tls_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/RKN/List.txt"
+        # TLS rotator — first match for game-port TLS handshakes. nfqws2
+        # ordering is per-line first-match-wins, so this MUST emit before
+        # the non-TLS static arm below; binary game TCP cleanly falls
+        # through to that arm via filter-l7=tls miss.
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --filter-l7=tls --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}${game_tls_hostlist_excl} --in-range=a --out-range=-n3 --payload=tls_client_hello $game_tls_tcp --new\\n"
+
         # NO hostlist-exclude on this arm — see desync.c:248-251:
         #   bHostlistsEmpty = PROFILE_HOSTLISTS_EMPTY(dp);
         #   if (!dp->hostlist_auto && !hostname && !bHostlistsEmpty)
