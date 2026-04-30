@@ -711,9 +711,48 @@ TCP_STATIC=$(get_flowseal_tcp_arm_line "$OUTPUT_TLS")
 assert_contains "tls: arm emitted" "flowseal_game_ips.txt" "$TLS_ARM"
 assert_contains "tls: arm has --filter-l7=tls" "--filter-l7=tls" "$TLS_ARM"
 assert_contains "tls: arm has profile-level --payload=tls_client_hello" "--payload=tls_client_hello" "$TLS_ARM"
-assert_contains "tls: arm has --in-range=a" "--in-range=a" "$TLS_ARM"
 assert_contains "tls: arm has --out-range=-n3" "--out-range=-n3" "$TLS_ARM"
 assert_not_contains "tls: arm has NO profile-level --payload=all" "--payload=all" "$TLS_ARM"
+
+# YT/GV-style layout: circular sees incoming via --in-range=-s5556 BEFORE
+# circular, then --in-range=x + --payload=tls_client_hello AFTER, so
+# strategies are still payload-gated but the circular orchestrator is
+# not (so its failure_detector + inseq=18000 actually have signal).
+assert_contains "tls: arm has --in-range=-s5556 (circular incoming)" "--in-range=-s5556" "$TLS_ARM"
+assert_contains "tls: arm has --in-range=x (close window after circular)" "--in-range=x" "$TLS_ARM"
+# Order assertions — byte offsets within the line.
+INR_S5556_OFF=$(printf '%s' "$TLS_ARM" | awk '{print index($0,"--in-range=-s5556")}')
+CIRC_OFF=$(printf '%s' "$TLS_ARM" | awk '{print index($0,"--lua-desync=circular:")}')
+INR_X_OFF=$(printf '%s' "$TLS_ARM" | awk '{print index($0,"--in-range=x")}')
+PAYLOAD_OFF=$(printf '%s' "$TLS_ARM" | awk '{print index($0,"--payload=tls_client_hello")}')
+STRAT1_OFF=$(printf '%s' "$TLS_ARM" | awk '{print index($0,":strategy=1")}')
+if [ "$INR_S5556_OFF" -gt 0 ] && [ "$INR_S5556_OFF" -lt "$CIRC_OFF" ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tls: --in-range=-s5556 precedes circular\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tls: --in-range=-s5556 not before circular (s5556=%s circ=%s)\n" "$INR_S5556_OFF" "$CIRC_OFF"
+fi
+if [ "$CIRC_OFF" -lt "$INR_X_OFF" ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tls: circular precedes --in-range=x\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tls: circular not before --in-range=x (circ=%s inrx=%s)\n" "$CIRC_OFF" "$INR_X_OFF"
+fi
+if [ "$INR_X_OFF" -lt "$PAYLOAD_OFF" ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tls: --in-range=x precedes --payload=tls_client_hello\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tls: --in-range=x not before --payload (inrx=%s payload=%s)\n" "$INR_X_OFF" "$PAYLOAD_OFF"
+fi
+if [ "$PAYLOAD_OFF" -lt "$STRAT1_OFF" ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tls: --payload=tls_client_hello precedes strategy=1\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tls: --payload not before strategy=1 (payload=%s s1=%s)\n" "$PAYLOAD_OFF" "$STRAT1_OFF"
+fi
+# Critical regression test: circular MUST come BEFORE --payload= so the
+# orchestrator's payload_type stays unset and it sees incoming packets.
+if [ "$CIRC_OFF" -lt "$PAYLOAD_OFF" ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] tls: circular precedes --payload= (orchestrator unfiltered)\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] tls: REGRESSION — circular AFTER --payload= would blind detectors\n"
+fi
 
 # Circular detector wiring (matches yt_tcp pattern: HTTPS-only auth/control).
 assert_contains "tls: arm has circular with key=game_tls" "key=game_tls" "$TLS_ARM"

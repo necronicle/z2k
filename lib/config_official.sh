@@ -170,8 +170,8 @@ AUSTERUS_OPT
     # to police; a missing RST after handshake = success.
     # failure_detector=z2k_tls_alert_fatal catches TLS fatal alerts
     # which is the only clean fail signal on a TLS-only flow.
-    # inseq=18000 + reset are added by the ensure_circular_tcp_inseq /
-    # ensure_circular_*_set passes below, same as the other rotators.
+    # inseq=18000 is added by the ensure_circular_tcp_inseq pass below,
+    # same as rkn_tcp/yt_tcp.
     #
     # Recipe sources:
     #   strategy=1 — general default (multisplit + seqovl=568 + 4pda)
@@ -1128,14 +1128,16 @@ AUSTERUS_OPT
     #     filter-l7=unknown + ipset + port carve-out (see comment
     #     above the emission line below).
     #
-    # Step 4 (this commit): non-TLS static arm. payload=all + multisplit
-    # recipe mirroring flowseal 1.9.8 general.bat default game TCP arm
-    # (winws --dpi-desync=multisplit --any-protocol=1 + seqovl=568 +
-    # tls_clienthello_4pda_to pattern). No circular — binary game TCP
-    # has no observable success/fail signal that a rotator could use.
-    # Step 5 (pending): TLS rotator inserts ABOVE this static block —
-    # filter-l7=tls on the same scope, circular over flowseal-derived
-    # TCP recipes. Binary TCP falls through to this static arm.
+    # Two emitted arms (first-match-wins, TLS rotator before static):
+    # 1. TCP TLS rotator (step 5): filter-l7=tls + circular over 6
+    #    flowseal-derived recipes. Layout mirrors YT/GV pattern — circular
+    #    BEFORE the --payload= gate so detectors see incoming RST/alerts/
+    #    server hello/HTTP replies (--payload= is sticky and applies to
+    #    every following --lua-desync= per nfqws.c:2955; without the
+    #    split, circular's failure_detector + inseq=18000 are blind).
+    # 2. TCP non-TLS static (step 4): payload=all + multisplit recipe
+    #    mirroring flowseal 1.9.8 default. No circular — binary game TCP
+    #    has no observable success/fail signal that a rotator could use.
     if [ "$GAME_PROFILE" = "flowseal" ] && [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/flowseal_game_ips.txt" ]; then
         # Full carve-out per "Game arms must never include 80/443/8443/
         # 2053/2083/2087/2096" invariant; 2408 preserved from UDP arm.
@@ -1158,7 +1160,22 @@ AUSTERUS_OPT
         # ordering is per-line first-match-wins, so this MUST emit before
         # the non-TLS static arm below; binary game TCP cleanly falls
         # through to that arm via filter-l7=tls miss.
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --filter-l7=tls --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}${game_tls_hostlist_excl} --in-range=a --out-range=-n3 --payload=tls_client_hello $game_tls_tcp --new\\n"
+        #
+        # YT/GV-style layout — circular BEFORE --payload= gate so
+        # detectors see incoming RST/alerts/server-hello/http_reply
+        # packets (which is what failure_detector / success_detector /
+        # inseq=18000 actually need). Per nfqws.c:2955, --payload= is
+        # sticky: it applies to every following --lua-desync= until
+        # --new resets it. Putting --payload=tls_client_hello between
+        # circular and strategies leaves circular at default (all
+        # payload types) and gates only the strategies to the outgoing
+        # ClientHello. --in-range=-s5556 / --in-range=x mirrors the
+        # ensure_youtube_tls_circular_manual_layout transform applied
+        # to yt_tcp/gv_tcp at L800-815 — circular sees incoming up to
+        # ServerHello region, strategies don't.
+        local game_tls_circular="${game_tls_tcp%% *}"
+        local game_tls_strategies="${game_tls_tcp#* }"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --filter-l7=tls --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}${game_tls_hostlist_excl} --out-range=-n3 --in-range=-s5556 ${game_tls_circular} --in-range=x --payload=tls_client_hello ${game_tls_strategies} --new\\n"
 
         # NO hostlist-exclude on this arm — see desync.c:248-251:
         #   bHostlistsEmpty = PROFILE_HOSTLISTS_EMPTY(dp);
