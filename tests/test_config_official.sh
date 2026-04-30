@@ -638,7 +638,7 @@ assert_contains "tcp: arm has profile-level --payload=all" "--payload=all" "$TCP
 # --filter-l7=unknown scopes this arm to traffic the nfqws2 L7 classifier
 # couldn't identify (binary game TCP). TLS gets classified L7_TLS by the
 # probe machinery before the filter check fires, so TLS flows are
-# correctly excluded — until step 5 lands the TLS rotator above.
+# correctly excluded — they take the TLS rotator arm that emits above.
 assert_contains "tcp: arm has --filter-l7=unknown" "--filter-l7=unknown" "$TCP_ARM"
 assert_not_contains "tcp: arm does not match TLS L7" "filter-l7=tls" "$TCP_ARM"
 # Positive ipset scope.
@@ -755,13 +755,22 @@ else
 fi
 
 # Circular detector wiring (matches yt_tcp pattern: HTTPS-only auth/control).
-assert_contains "tls: arm has circular with key=game_tls" "key=game_tls" "$TLS_ARM"
-assert_contains "tls: circular has fails=2" "circular:fails=2" "$TLS_ARM"
-assert_contains "tls: circular has nld=2 (per-SLD pinning)" "nld=2" "$TLS_ARM"
-assert_contains "tls: circular has inseq=18000 (TSPU 16K-gate)" "inseq=18000" "$TLS_ARM"
-assert_contains "tls: circular has failure_detector=z2k_tls_alert_fatal" "failure_detector=z2k_tls_alert_fatal" "$TLS_ARM"
-assert_contains "tls: circular has success_detector=z2k_success_no_reset" "success_detector=z2k_success_no_reset" "$TLS_ARM"
-assert_contains "tls: circular has no_http_redirect" "no_http_redirect" "$TLS_ARM"
+# Extract just the circular token so the per-token assertions below can't
+# silently pass on substrings that live elsewhere in the line (e.g., if a
+# future regression moves nld=/inseq= out of circular onto a strategy).
+TLS_CIRC_TOKEN=$(printf '%s' "$TLS_ARM" | sed -nE 's/.*( --lua-desync=circular:[^ ]*).*/\1/p')
+assert_contains "tls: extracted circular token is non-empty" "circular:" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has key=game_tls" "key=game_tls" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has fails=2" "circular:fails=2" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has nld=2 (per-SLD pinning)" "nld=2" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has inseq=18000 (TSPU 16K-gate)" "inseq=18000" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has failure_detector=z2k_tls_alert_fatal" "failure_detector=z2k_tls_alert_fatal" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has success_detector=z2k_success_no_reset" "success_detector=z2k_success_no_reset" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has no_http_redirect" "no_http_redirect" "$TLS_CIRC_TOKEN"
+# Negative — these MUST NOT leak onto the circular token from a future
+# refactor that moves them around (e.g., onto strategy=N tokens).
+assert_not_contains "tls: circular has no payload= arg (payload-gate is profile-level, not on circular itself)" "payload=" "$TLS_CIRC_TOKEN"
+assert_not_contains "tls: circular has no strategy= arg" "strategy=" "$TLS_CIRC_TOKEN"
 
 # All 6 strategies present.
 for s in 1 2 3 4 5 6; do

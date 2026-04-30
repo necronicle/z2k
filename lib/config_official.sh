@@ -1119,14 +1119,14 @@ AUSTERUS_OPT
     # PROFILE_HOSTLISTS_EMPTY (params.h:109) tests BOTH include AND
     # exclude lists, and a non-empty hostlist with hostname=NULL causes
     # dp_match() to return false BEFORE the ipset check fires.
-    #   • TLS rotator (step 5, pending) — flows carry SNI, hostname is
-    #     resolvable, so --hostlist-exclude=whitelist/YT/RKN works as
-    #     defense-in-depth against ECH-bearing or alt-port web flows.
-    #   • non-TLS static arm (step 4, this code) — binary TCP has NO
-    #     hostname → ANY hostlist-exclude makes the arm uniformly
-    #     non-matching for its actual target. Defenses there are
-    #     filter-l7=unknown + ipset + port carve-out (see comment
-    #     above the emission line below).
+    #   • TLS rotator arm — flows carry SNI, hostname is resolvable,
+    #     so --hostlist-exclude=whitelist/YT/RKN works as defense-in-
+    #     depth against ECH-bearing or alt-port web flows.
+    #   • non-TLS static arm — binary TCP has NO hostname → ANY
+    #     hostlist-exclude makes the arm uniformly non-matching for
+    #     its actual target. Defenses there are filter-l7=unknown +
+    #     ipset + port carve-out (see comment above the emission line
+    #     below).
     #
     # Two emitted arms (first-match-wins, TLS rotator before static):
     # 1. TCP TLS rotator (step 5): filter-l7=tls + circular over 6
