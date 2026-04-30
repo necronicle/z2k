@@ -1490,6 +1490,7 @@ create_official_config() {
 
     # Сохранить пользовательские настройки из существующего конфига
     local saved_DROP_DPI_RST="0"
+    local saved_RST_FILTER="0"
     local saved_RKN_SILENT_FALLBACK="0"
     local saved_ROBLOX_UDP_BYPASS="0"
     local saved_GAME_MODE_ENABLED=""
@@ -1497,6 +1498,7 @@ create_official_config() {
     local saved_TG_PROXY_USER_DISABLED="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
+        saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
         saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
         saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
@@ -1674,6 +1676,12 @@ CONFIG
 
 # Passive DPI RST filter: drop injected TCP RST with IP ID 0x0-0xF
 DROP_DPI_RST=${saved_DROP_DPI_RST}
+
+# z2k nfqws2 C-level RST filter. Default 0 matches master behavior.
+# Enable only for ISPs where injected RSTs are confirmed and legitimate
+# pre-payload RSTs are not being dropped.
+# Values: 0, 1, aggressive, agg, aggro
+RST_FILTER=${saved_RST_FILTER}
 
 # Silent fallback for RKN
 RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}

@@ -491,15 +491,24 @@ LUA_Z2K_DYNAMIC="$ZAPRET_BASE/lua/z2k-dynamic-strategy.lua"
 [ -f "$LUA_Z2K_DYNAMIC" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DYNAMIC"
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 
-# Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+). Catches
-# DPI-injected fake RST packets using three independent heuristics:
-# TTL fingerprint mismatch, RST before any server data, multi-RST on
-# same flow. Enabled unconditionally — the 3-check design is conservative
-# enough that false positives on legitimate RSTs don't happen in
-# practice, and any DPI environment benefits from it.
+# Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+).
+# Default OFF: master does not run this filter, and field reports show
+# Cloudflare can legitimately send pre-payload RSTs that this heuristic
+# drops, turning a quick reconnect into a slow/no-load timeout.
+# Opt in through /opt/zapret2/config:
+#   RST_FILTER=1                -> --rst-filter=on
+#   RST_FILTER=aggressive|agg   -> --rst-filter=aggressive
 # The older xt_u32 IP-ID iptables rule (z2k_rst_filter_start/stop below)
-# still lives behind DROP_DPI_RST=1 and complements us at raw PREROUTING.
-NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
+# still lives behind DROP_DPI_RST=1 and complements this at raw PREROUTING.
+RST_FILTER=${RST_FILTER:-0}
+case "$RST_FILTER" in
+    1|on|true|yes)
+        NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
+        ;;
+    aggressive|agg|aggro)
+        NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=aggressive"
+        ;;
+esac
 
 # Phase 9: IP block detection + client RST (necronicle/zapret2-z2k r5+).
 # Watches outgoing ClientHello retransmits (upstream is_retransmission
