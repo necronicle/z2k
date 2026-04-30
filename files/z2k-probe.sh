@@ -12,11 +12,10 @@
 #   stop /opt/etc/init.d/S99zapret2 for the duration of the probe because
 #   they run upstream blockcheck2.sh which needs exclusive NFQUEUE. This
 #   is unacceptable for a tool intended for everyday debugging. Instead
-#   we lean on the autocircular pin mechanism already in place:
-#   writing a single row to state.tsv makes z2k-autocircular.lua use
-#   that specific strategy for the next outgoing ClientHello to the
-#   matching host, without touching the rest of the flow table. The
-#   main nfqws2 keeps handling everything else while we iterate.
+#   we write a transient live override to /tmp/z2k-probe-override.tsv:
+#   z2k-autocircular.lua polls it and forces nstrategy only for the
+#   matching host/profile while the probe is running. state.tsv is used
+#   only for the final --apply winner.
 #
 # Usage:
 #   z2k-probe <host>               # rkn_tcp profile, 45 strategies, print top 5
@@ -25,8 +24,8 @@
 #                                    permanently in state.tsv
 #
 # Limitations:
-#   1. Probe traffic uses whichever strategy is pinned, so a user on a
-#      different device hitting the same host during the probe gets the
+#   1. Probe traffic uses whichever strategy is temporarily overridden,
+#      so a user on a different device hitting the same host during the probe gets the
 #      probe strategy instead of the autocircular rotation. Duration is
 #      ~45 iterations × 3s each ≈ 2 minutes. Acceptable trade-off.
 #   2. "Throughput" is measured over a 100 KB body — CDN edge caching
@@ -48,6 +47,7 @@ PROBE_RANGE_BYTES="${PROBE_RANGE_BYTES:-102400}"      # 100 KB
 PROBE_TOP_N="${PROBE_TOP_N:-5}"
 STATE_DIR="$ZAPRET_BASE/extra_strats/cache/autocircular"
 STATE_TSV="$STATE_DIR/state.tsv"
+PROBE_OVERRIDE_TSV="${Z2K_PROBE_OVERRIDE:-/tmp/z2k-probe-override.tsv}"
 
 # -----------------------------------------------------------------------------
 # Argument parsing
@@ -58,8 +58,8 @@ usage() {
 Usage: z2k-probe <host> [--profile=KEY] [--apply]
 
 Iterates every strategy in the given autocircular profile (default:
-rkn_tcp), pins each one to <host> in state.tsv, measures download
-throughput via a 100 KB curl, ranks the results, and prints the top 5.
+rkn_tcp), applies each one via a transient live override, measures
+download throughput via a 100 KB curl, ranks the results, and prints the top 5.
 
 With --apply the best strategy is left pinned in state.tsv after the
 probe completes. Without --apply the original state.tsv is restored.
@@ -181,6 +181,7 @@ cleanup() {
         if [ -f "$state_backup" ]; then
             cp "$state_backup" "$STATE_TSV" 2>/dev/null || true
         fi
+        rm -f "$PROBE_OVERRIDE_TSV" 2>/dev/null || true
     fi
     rm -rf "$work_dir"
     # Only release the lock if WE own it (avoid a crashed-then-restarted
@@ -193,9 +194,39 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
+# Start from a clean transient override. A previous --apply may have left
+# a one-shot commit row in /tmp for the running nfqws2 to consume.
+rm -f "$PROBE_OVERRIDE_TSV" 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Runtime override consumed by z2k-autocircular.lua.
+#     <profile>\t<host>\t<strategy>\t<ts>\t<mode>
+# mode=probe suppresses state persistence and is restored after cleanup.
+# mode=commit updates the live in-memory strategy after --apply.
+# -----------------------------------------------------------------------------
+
+write_probe_override() {
+    s="$1"
+    mode="${2:-probe}"
+    ts=$(date +%s 2>/dev/null || echo 0)
+    tmp="${PROBE_OVERRIDE_TSV}.$$.tmp"
+
+    {
+        printf '# z2k active probe override\n'
+        printf '# key\thost\tstrategy\tts\tmode\n'
+        printf '%s\t%s\t%s\t%s\t%s\n' "$profile" "$host" "$s" "$ts" "$mode"
+    } > "$tmp" || {
+        echo "z2k-probe: cannot write probe override $tmp" >&2
+        return 1
+    }
+
+    mv -f "$tmp" "$PROBE_OVERRIDE_TSV"
+    chmod 0644 "$PROBE_OVERRIDE_TSV" 2>/dev/null || true
+}
+
 # -----------------------------------------------------------------------------
 # Pin one strategy for the target host. Rewrites state.tsv atomically
-# to avoid torn reads by the running autocircular Lua code.
+# to persist the final --apply winner.
 # -----------------------------------------------------------------------------
 
 pin_strategy() {
@@ -254,10 +285,10 @@ pin_strategy() {
 
 probe_one() {
     s="$1"
-    pin_strategy "$s"
+    write_probe_override "$s" probe
     # Minimal pause for the pin to land and for any cached flow to
-    # cycle out. autocircular reads state.tsv lazily on first flow for
-    # the host, so a brand-new TCP connection is enough.
+    # cycle out. z2k-autocircular.lua polls the override file with a
+    # short TTL, so a brand-new TCP connection is enough.
     sleep 0.2 2>/dev/null || sleep 1
 
     # -r 0-N-1 asks for bytes 0..(N-1) which is a 100 KB range request;
@@ -336,6 +367,7 @@ if [ "$apply_mode" = "1" ]; then
            | sort -t'	' -k6 -n -r | head -1 | cut -f1)
     if [ -n "$best" ]; then
         pin_strategy "$best"
+        write_probe_override "$best" commit
         touch "$work_dir/applied.flag"
         echo
         echo "z2k-probe: --apply: pinned strategy=$best for $host in $STATE_TSV"

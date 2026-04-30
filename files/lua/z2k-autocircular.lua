@@ -21,11 +21,18 @@ local DEBUG_FLAG_FALLBACK = "/tmp/z2k-autocircular-debug.flag"
 local DEBUG_LOG_PRIMARY = STATE_DIR_PRIMARY .. "/debug.log"
 local DEBUG_LOG_FALLBACK = "/tmp/z2k-autocircular-debug.log"
 local RKN_SILENT_FLAG = STATE_DIR_PRIMARY .. "/rkn_silent_fallback.flag"
+local PROBE_OVERRIDE_FILE = "/tmp/z2k-probe-override.tsv"
+local PROBE_OVERRIDE_TTL = 0.05
+local PROBE_OVERRIDE_MAX_AGE = 300
 
 local loaded = false
 local state = {} -- state[askey][host_norm] = { strategy = N, ts = unix_time }
 local telemetry_loaded = false
 local telemetry = {} -- telemetry[askey][hostn][strategy] = { ok, fail, lat, ts, cooldown_until }
+local probe_override_loaded_at = -1
+local probe_overrides = {}
+local probe_override_saved = {}
+local probe_commit_seen = {}
 
 local last_write = 0
 local write_interval = 2 -- seconds
@@ -93,6 +100,17 @@ local function normalize_hostkey_for_state(hostkey)
   if s == "" then return nil end
   s = s:gsub("%.$", "") -- trailing dot
   return string.lower(s)
+end
+
+local function hostkey_matches(a, b)
+  if is_blank(a) or is_blank(b) then return false end
+  a = normalize_hostkey_for_state(a)
+  b = normalize_hostkey_for_state(b)
+  if is_blank(a) or is_blank(b) then return false end
+  if a == b then return true end
+  if #a > #b and a:sub(-(#b + 1)) == ("." .. b) then return true end
+  if #b > #a and b:sub(-(#a + 1)) == ("." .. a) then return true end
+  return false
 end
 
 local function can_read_file(path)
@@ -246,6 +264,187 @@ local function merge_state_file_into(path, dest)
   end
 
   f:close()
+end
+
+local function restore_probe_saved(saved)
+  if not saved or not saved.hrec then return end
+  if saved.had_prev then
+    saved.hrec.nstrategy = saved.prev
+  else
+    saved.hrec.nstrategy = nil
+  end
+end
+
+local function clear_probe_saved(askey, hostn, restore)
+  if is_blank(askey) or is_blank(hostn) then return end
+  local hosts = probe_override_saved[askey]
+  if not hosts then return end
+  local saved = hosts[hostn]
+  if saved and restore then
+    restore_probe_saved(saved)
+  end
+  hosts[hostn] = nil
+  if next(hosts) == nil then
+    probe_override_saved[askey] = nil
+  end
+end
+
+local function restore_all_probe_saved()
+  for askey, hosts in pairs(probe_override_saved) do
+    for hostn, saved in pairs(hosts) do
+      restore_probe_saved(saved)
+      hosts[hostn] = nil
+    end
+    probe_override_saved[askey] = nil
+  end
+end
+
+local function restore_stale_probe_saved(cutoff_ts)
+  if not cutoff_ts then return end
+  for askey, hosts in pairs(probe_override_saved) do
+    for hostn, saved in pairs(hosts) do
+      local ts = tonumber(saved and saved.ts) or 0
+      if ts > 0 and ts <= cutoff_ts then
+        restore_probe_saved(saved)
+        hosts[hostn] = nil
+      end
+    end
+    if next(hosts) == nil then
+      probe_override_saved[askey] = nil
+    end
+  end
+end
+
+local function load_probe_overrides()
+  probe_overrides = {}
+  local f = io.open(PROBE_OVERRIDE_FILE, "r")
+  if not f then
+    restore_all_probe_saved()
+    probe_override_loaded_at = now_f()
+    return
+  end
+
+  local now_i = tonumber(os.time() or 0) or 0
+  for line in f:lines() do
+    if line ~= "" and not line:match("^%s*#") then
+      local askey, host, strat, ts, op =
+        line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)\t?([^\t]*)")
+      local n = tonumber(strat)
+      local tsn = tonumber(ts) or 0
+      local fresh = true
+      if now_i > 0 and tsn > 0 and (now_i - tsn) > PROBE_OVERRIDE_MAX_AGE then
+        fresh = false
+      end
+      if fresh and askey and host and n and n >= 1 then
+        local hn = normalize_hostkey_for_state(host)
+        if hn then
+          table.insert(probe_overrides, {
+            askey = tostring(askey),
+            host = hn,
+            strategy = n,
+            ts = tsn,
+            op = (op ~= "" and op) or "probe",
+          })
+        end
+      end
+    end
+  end
+  f:close()
+  if now_i > 0 then
+    restore_stale_probe_saved(now_i - PROBE_OVERRIDE_MAX_AGE)
+  end
+  probe_override_loaded_at = now_f()
+end
+
+local function get_probe_overrides()
+  local t = now_f()
+  local ttl = (type(clock_getfloattime) == "function") and PROBE_OVERRIDE_TTL or 1.0
+  if probe_override_loaded_at < 0 or (t - probe_override_loaded_at) >= ttl then
+    load_probe_overrides()
+  end
+  return probe_overrides
+end
+
+local function get_probe_override(askey, hostn)
+  if is_blank(askey) or is_blank(hostn) then return nil end
+  local best = nil
+  for _, rec in ipairs(get_probe_overrides()) do
+    if rec.askey == tostring(askey) and hostkey_matches(rec.host, hostn) then
+      if (not best) or ((tonumber(rec.ts) or 0) >= (tonumber(best.ts) or 0)) then
+        best = rec
+      end
+    end
+  end
+  return best
+end
+
+local function probe_saved_host(askey, hostn, create)
+  if is_blank(askey) or is_blank(hostn) then return nil end
+  local a = probe_override_saved[askey]
+  if not a then
+    if not create then return nil end
+    a = {}
+    probe_override_saved[askey] = a
+  end
+  local h = a[hostn]
+  if not h and create then
+    h = {}
+    a[hostn] = h
+  end
+  return h
+end
+
+local function probe_commit_key(rec)
+  if not rec then return "" end
+  return tostring(rec.askey or "") .. "\t" ..
+         tostring(rec.host or "") .. "\t" ..
+         tostring(rec.strategy or "") .. "\t" ..
+         tostring(rec.ts or "")
+end
+
+local function probe_commit_already_seen(rec)
+  local key = probe_commit_key(rec)
+  if key == "" then return true end
+  return probe_commit_seen[key] and true or false
+end
+
+local function mark_probe_commit_seen(rec)
+  local key = probe_commit_key(rec)
+  if key ~= "" then probe_commit_seen[key] = true end
+end
+
+local function apply_probe_override(askey, hostn, hrec)
+  if not askey or not hostn or not hrec then return nil end
+  local rec = get_probe_override(askey, hostn)
+  local saved = probe_saved_host(askey, hostn, false)
+
+  if rec and rec.strategy then
+    if rec.op == "commit" then
+      if not probe_commit_already_seen(rec) then
+        hrec.nstrategy = rec.strategy
+        mark_probe_commit_seen(rec)
+      end
+      clear_probe_saved(askey, hostn, false)
+      return { active = true, commit = true, strategy = rec.strategy }
+    end
+
+    if not saved then
+      saved = probe_saved_host(askey, hostn, true)
+      saved.had_prev = hrec.nstrategy ~= nil
+      saved.prev = hrec.nstrategy
+    end
+    saved.hrec = hrec
+    saved.ts = tonumber(rec.ts) or tonumber(os.time() or 0) or 0
+    hrec.nstrategy = rec.strategy
+    return { active = true, strategy = rec.strategy }
+  end
+
+  if saved then
+    clear_probe_saved(askey, hostn, true)
+    return { restored = true }
+  end
+
+  return nil
 end
 
 local function create_empty_telemetry_file(path)
@@ -1074,12 +1273,14 @@ if type(circular) == "function" then
     local askey_before, hostn_before, hrec_before
     local policy_pick_before, policy_score_before
     local silent_rotate_from_before, silent_rotate_to_before, silent_attempts_before
+    local probe_override_before
     pcall(function()
       askey_before, hostn_before, hrec_before = get_record_for_desync(desync, true)
       if hrec_before then
         silent_rotate_from_before, silent_rotate_to_before, silent_attempts_before =
           maybe_rotate_youtube_silent_retry(desync, askey_before, hostn_before, hrec_before)
         policy_pick_before, policy_score_before = policy_seed_strategy(desync, askey_before, hostn_before, hrec_before)
+        probe_override_before = apply_probe_override(askey_before, hostn_before, hrec_before)
         flow_start_if_needed(desync, hrec_before.nstrategy)
       end
     end)
@@ -1145,7 +1346,9 @@ if type(circular) == "function" then
       local success_event = successful_state or response_state or quic_candidate_state
       local failure_event = failure_after and (not success_event)
       local persisted = false
-      if success_event or outgoing_initial then
+      local probe_active = probe_override_before and probe_override_before.active and
+        (not probe_override_before.commit)
+      if (success_event or outgoing_initial) and not probe_active then
         persisted = persist_if_changed(askey, hostn, hrec)
       end
 

@@ -207,7 +207,7 @@ menu_probe() {
     fi
 
     print_info "Прогоняет все стратегии из rkn_tcp через целевой домен,"
-    print_info "пинит каждую в state.tsv и меряет throughput на 100 KB curl."
+    print_info "переключает их live-override'ом и меряет throughput на 100 KB curl."
     print_info "Основной сервис не останавливается — только один домен"
     print_info "временно использует конкретную стратегию на время итерации."
     print_separator
