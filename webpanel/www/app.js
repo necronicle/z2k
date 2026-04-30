@@ -110,7 +110,7 @@
         { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
         { label: "RST фильтр", value: bool(s.toggles.rst_filter), kind: s.toggles.rst_filter === "1" ? "good" : "" },
         { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
-        { label: "Игровой режим", value: bool(s.toggles.game_mode), kind: s.toggles.game_mode === "1" ? "good" : "" },
+        { label: "Игровой режим", value: gameModeLabel(s.toggles.game_mode, s.game_profile), kind: s.toggles.game_mode === "1" ? "good" : "" },
         { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
       ];
       grid.innerHTML = cells.map(c =>
@@ -125,6 +125,15 @@
   function fmtSvc(s) {
     return { active: "работает", stopped: "остановлен", not_installed: "не установлен" }[s] || s;
   }
+  // Game mode is enabled/disabled via the game-mode toggle, but the
+  // strategy backend (flowseal vs legacy rotator) is selected by the
+  // GAME_PROFILE config var. Surface it in the status cell so support
+  // can see at a glance which backend is active without ssh-ing in.
+  function gameModeLabel(enabled, profile) {
+    if (enabled !== "1") return "Выкл";
+    const prof = (profile === "legacy") ? "legacy" : "flowseal";
+    return "Вкл (" + prof + ")";
+  }
 
   // ---------- Toggles ----------
   const TOGGLE_DEFS = [
@@ -132,8 +141,8 @@
       desc: "Блокирует поддельные TCP RST от ТСПУ через iptables raw/PREROUTING." },
     { key: "silent_fallback", name: "Silent fallback РКН",
       desc: "Детект «тихих чёрных дыр» РКН. Осторожно — возможны ложные срабатывания." },
-    { key: "game_mode", name: "Игровой режим (Roblox и др.)",
-      desc: "UDP bypass для игровых портов 1024-65535 через z2k_game_udp." },
+    { key: "game_mode", name: "Игровой режим",
+      desc: "TCP/UDP bypass для игровых сервисов (default: flowseal — single-strategy на flowseal_game_ips.txt). Для отката на старый ротатор: GAME_PROFILE=legacy в /opt/zapret2/config." },
     { key: "customd", name: "Скрипты custom.d",
       desc: "Дополнительные daemons из init.d/custom.d (50-stun4all, 50-discord-media)." },
   ];

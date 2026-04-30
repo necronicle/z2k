@@ -159,6 +159,13 @@ case "$method $path" in
         rst_filter=$(read_flag "DROP_DPI_RST" "$CONFIG_FILE" "0")
         silent_fb=$(read_flag "RKN_SILENT_FALLBACK" "$CONFIG_FILE" "0")
         game_mode=$(read_flag "ROBLOX_UDP_BYPASS" "$CONFIG_FILE" "0")
+        # GAME_PROFILE — flowseal (default) | legacy. Coerce unknown
+        # values to flowseal, matching config_official.sh:986-991.
+        game_profile=$(read_flag "GAME_PROFILE" "$CONFIG_FILE" "flowseal")
+        case "$game_profile" in
+            flowseal|legacy) ;;
+            *) game_profile="flowseal" ;;
+        esac
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
         # UI wants positive "customd_enabled"
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
@@ -167,9 +174,10 @@ case "$method $path" in
         [ -n "$tpid" ] && tunnel_running=true
 
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s"},"tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
             "${rst_filter:-0}" "${silent_fb:-0}" "${game_mode:-0}" "${customd:-0}" \
+            "${game_profile:-flowseal}" \
             "${tunnel_running:-false}"
         exit 0
         ;;

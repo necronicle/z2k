@@ -1069,8 +1069,13 @@ menu_roblox_bypass() {
         return 1
     fi
 
-    local ROBLOX_UDP_BYPASS GAME_MODE_STYLE_CUR
+    local ROBLOX_UDP_BYPASS GAME_PROFILE_CUR GAME_MODE_STYLE_CUR
     ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
+    GAME_PROFILE_CUR=$(safe_config_read "GAME_PROFILE" "$config_file" "flowseal")
+    case "$GAME_PROFILE_CUR" in
+        flowseal|legacy) ;;
+        *) GAME_PROFILE_CUR="flowseal" ;;
+    esac
     GAME_MODE_STYLE_CUR=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "safe")
     case "$GAME_MODE_STYLE_CUR" in
         safe|hybrid|aggressive) ;;
@@ -1079,7 +1084,11 @@ menu_roblox_bypass() {
 
     local status_line
     if [ "$ROBLOX_UDP_BYPASS" = "1" ]; then
-        status_line="Включен — режим: $GAME_MODE_STYLE_CUR"
+        if [ "$GAME_PROFILE_CUR" = "legacy" ]; then
+            status_line="Включен — профиль: legacy (режим: $GAME_MODE_STYLE_CUR)"
+        else
+            status_line="Включен — профиль: flowseal"
+        fi
     else
         status_line="Выключен"
     fi
@@ -1090,87 +1099,80 @@ menu_roblox_bypass() {
 
     cat <<'SUBMENU'
 
-UDP+TCP игровой bypass. Три режима:
+Игровой bypass. Два профиля:
 
-  safe       — позитивный ipset (game_ips.txt) + автоциркуляр
-               (6 стратегий). Работает только на указанных в списке
-               IP, шум Discord/Steam ротатор не трогает.
-               Рекомендуется всем, кому нужны только игры из списка.
+  flowseal   — single-strategy mirror of flowseal 1.9.8:
+               TCP TLS rotator (6 стратегий) + TCP non-TLS static
+               + UDP fake (dbankcloud QUIC), всё scoped по
+               flowseal_game_ips.txt (~31K CIDR aggregate, обновляется
+               cron'ом из flowseal репо).
+               Рекомендуется всем — flowseal 1.9.8 field-проверено
+               на широком каталоге игр (Apex/Tarkov/Darktide/etc).
 
-  hybrid     — safe + catchall UDP 1024-65535 одной фиксированной
-               стратегией (fake + autottl=4, cutoff=n4, repeats=8).
-               Подхватывает игровые UDP-потоки на IP ВНЕ списка
-               (облачные игры без SNI, сессии на произвольных портах).
-               ⚠ Может ломать UDP-трафик на высоких портах:
-                 • Discord peer-to-peer голос/видео (в настройках
-                   Discord выключить "Use peer-to-peer" — чинит).
-                 • WebRTC-звонки в браузере (Meet/Zoom/Teams) в P2P.
-                 • BitTorrent DHT/uTP.
-               Серверный Discord voice (порты 50000-50099 и т.д.)
-               не затрагивается — его ловит отдельный профиль раньше.
-               TCP не трогается — web-морды/обычный HTTPS безопасны.
+  legacy     — старый z2k_game_udp 13-стратный rotator + safe/hybrid/
+               aggressive ladder. Эмпирически работает только на
+               Roblox. Оставлен как rollback на случай регрессии.
 
-  aggressive — только UDP catchall, без ipset-профиля. Максимум
-               покрытия, но игры из game_ips.txt теряют персональный
-               ротатор и идут по общей стратегии вместе со всем
-               остальным. Те же UDP-риски, что и у hybrid.
-
-[1] Safe (только из списка)
-[2] Hybrid (список + облачные)
-[3] Aggressive (только catchall)
+[1] Включить (flowseal — по умолчанию)
+[2] Включить legacy (rollback)
 [0] Выключить
 [B] Назад
 
 SUBMENU
 
-    printf "Выберите опцию [0-3,B]: "
+    printf "Выберите опцию [0-2,B]: "
     read_input sub_choice
 
-    _set_game_style() {
-        local new_style="$1"
-        if grep -q '^GAME_MODE_ENABLED=' "$config_file"; then
-            sed -i 's/^GAME_MODE_ENABLED=.*/GAME_MODE_ENABLED=1/' "$config_file"
+    _set_flag() {
+        # _set_flag <key> <value>
+        local key="$1" val="$2"
+        if grep -q "^${key}=" "$config_file"; then
+            sed -i "s/^${key}=.*/${key}=${val}/" "$config_file"
         else
-            echo "GAME_MODE_ENABLED=1" >> "$config_file"
+            echo "${key}=${val}" >> "$config_file"
         fi
-        if grep -q '^ROBLOX_UDP_BYPASS=' "$config_file"; then
-            sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=1/' "$config_file"
-        else
-            echo "ROBLOX_UDP_BYPASS=1" >> "$config_file"
+    }
+
+    _enable_flowseal() {
+        _set_flag GAME_MODE_ENABLED 1
+        _set_flag ROBLOX_UDP_BYPASS 1
+        _set_flag GAME_PROFILE flowseal
+        # GAME_MODE_STYLE intentionally untouched — it's only consumed by
+        # the legacy code path in config_official.sh; on flowseal it's
+        # ignored. Keeping the saved value lets a later rollback to
+        # legacy remember the user's previous safe/hybrid/aggressive.
+    }
+
+    _enable_legacy() {
+        _set_flag GAME_MODE_ENABLED 1
+        _set_flag ROBLOX_UDP_BYPASS 1
+        _set_flag GAME_PROFILE legacy
+        # If GAME_MODE_STYLE isn't set yet, default it to safe — user can
+        # tune via direct config edit; we don't expose the safe/hybrid/
+        # aggressive picker in the menu anymore (legacy is rollback-only).
+        if ! grep -q '^GAME_MODE_STYLE=' "$config_file"; then
+            echo "GAME_MODE_STYLE=safe" >> "$config_file"
         fi
-        if grep -q '^GAME_MODE_STYLE=' "$config_file"; then
-            sed -i "s/^GAME_MODE_STYLE=.*/GAME_MODE_STYLE=${new_style}/" "$config_file"
-        else
-            echo "GAME_MODE_STYLE=${new_style}" >> "$config_file"
-        fi
-        # Port lists are fully regenerated by create_official_config below
-        # (NFQWS2_PORTS_TCP/UDP include 1024-65535 automatically based on
-        # saved_GAME_MODE_STYLE), so no sed surgery on them here.
     }
 
     _disable_game_mode() {
         sed -i 's/^GAME_MODE_ENABLED=.*/GAME_MODE_ENABLED=0/' "$config_file"
         sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=0/' "$config_file"
-        # Keep GAME_MODE_STYLE as-is so re-enabling remembers last choice.
+        # Keep GAME_PROFILE / GAME_MODE_STYLE so re-enabling remembers
+        # the user's previous choice.
     }
 
     local need_regen=0
     case "$sub_choice" in
         1)
-            _set_game_style "safe"
-            print_success "Игровой режим: safe"
+            _enable_flowseal
+            print_success "Игровой режим: flowseal (default)"
             need_regen=1
             ;;
         2)
-            _set_game_style "hybrid"
-            print_success "Игровой режим: hybrid (+UDP catchall для облачных игр)"
-            print_warning "Может задеть UDP на высоких портах: Discord P2P / WebRTC / BitTorrent"
-            need_regen=1
-            ;;
-        3)
-            _set_game_style "aggressive"
-            print_warning "Игровой режим: aggressive (игры из списка теряют личный ротатор)"
-            print_warning "Те же UDP-риски, что у hybrid (Discord P2P, WebRTC, BitTorrent)"
+            _enable_legacy
+            print_warning "Игровой режим: legacy (rollback)"
+            print_info "Тонкая настройка safe/hybrid/aggressive — через GAME_MODE_STYLE в /opt/zapret2/config"
             need_regen=1
             ;;
         0)
