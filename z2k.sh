@@ -859,6 +859,7 @@ extra_strats/TCP/RKN/Discord.txt
 extra_strats/UDP/YT/List.txt
 game_ips.txt
 roblox_ips.txt
+flowseal_game_ips.txt
 extra-domains.txt
 "
 

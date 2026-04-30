@@ -316,6 +316,97 @@ main() {
     update_aws_oracle_ips
     [ $? -eq 2 ] && changes=$((changes + 1))
 
+    # Flowseal CDN/cloud/discord aggregate ipset — positive scope for
+    # game TCP/UDP arms. Source is flowseal repo .service/ipset-service.txt
+    # (the active list; lists/ipset-all.txt in the release is a stub
+    # 203.0.113.113/32). Multi-tier validation guards against a corrupted
+    # download silently replacing a working list:
+    #   1. Not empty
+    #   2. No HTML/JSON markers (CDN error pages, GitHub rate-limit JSON)
+    #   3. ≥ 80% lines look like CIDR (anti-garbage)
+    #   4. Line count ≥ 10000 (current ~31000; below 10K = upstream broke)
+    #   5. New size ≥ 50% of existing (rare massive shrink rejected)
+    # On any guard failure, the existing file is preserved.
+    update_flowseal_game_ips() {
+        local dest="${ZAPRET2_DIR}/lists/flowseal_game_ips.txt"
+        local url="https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/.service/ipset-service.txt"
+        local tmp
+        tmp=$(mktemp "${dest}.XXXXXX") || return 1
+
+        if ! z2k_fetch "$url" "$tmp"; then
+            log_msg "FAIL: flowseal_game_ips download (all mirrors failed)"
+            rm -f "$tmp"
+            return 1
+        fi
+
+        if [ ! -s "$tmp" ]; then
+            log_msg "FAIL: flowseal_game_ips empty"
+            rm -f "$tmp"
+            return 1
+        fi
+
+        # Strip CRLF for consistency with other lists
+        sed -i 's/\r$//' "$tmp" 2>/dev/null
+
+        # Guard 2: HTML/JSON detection — first 8 lines must not contain
+        # tell-tale markers of a non-text response slipping through CDN.
+        if head -8 "$tmp" | grep -qiE '<!doctype|<html|<head|<body|^[[:space:]]*[{[]'; then
+            log_msg "FAIL: flowseal_game_ips looks like HTML/JSON, not CIDR list"
+            rm -f "$tmp"
+            return 1
+        fi
+
+        local total_lines cidr_lines
+        total_lines=$(grep -cv '^[[:space:]]*$\|^[[:space:]]*#' "$tmp" 2>/dev/null)
+        # Guard 3: CIDR sanity — count lines matching v4 or v6 CIDR shape.
+        cidr_lines=$(grep -cE '^[[:space:]]*([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?[[:space:]]*$|^[[:space:]]*[0-9a-fA-F:]+::?[0-9a-fA-F:]*(/[0-9]{1,3})?[[:space:]]*$' "$tmp" 2>/dev/null)
+        if [ -z "$total_lines" ] || [ "$total_lines" -lt 1 ]; then
+            log_msg "FAIL: flowseal_game_ips has no content lines"
+            rm -f "$tmp"
+            return 1
+        fi
+        # ≥ 80% of non-empty lines must look like CIDR
+        if [ "$((cidr_lines * 100 / total_lines))" -lt 80 ]; then
+            log_msg "FAIL: flowseal_game_ips CIDR ratio low ($cidr_lines/$total_lines)"
+            rm -f "$tmp"
+            return 1
+        fi
+
+        # Guard 4: absolute floor — current upstream is ~31K, anything
+        # below 10K means flowseal repo got truncated/restructured.
+        if [ "$total_lines" -lt 10000 ]; then
+            log_msg "FAIL: flowseal_game_ips too small ($total_lines lines, expected ≥10000)"
+            rm -f "$tmp"
+            return 1
+        fi
+
+        # Guard 5: ratio vs existing — protect against sudden 90% shrink.
+        if [ -f "$dest" ] && [ -s "$dest" ]; then
+            local old_lines
+            old_lines=$(grep -cv '^[[:space:]]*$\|^[[:space:]]*#' "$dest" 2>/dev/null)
+            if [ -n "$old_lines" ] && [ "$old_lines" -gt 0 ]; then
+                if [ "$((total_lines * 100 / old_lines))" -lt 50 ]; then
+                    log_msg "FAIL: flowseal_game_ips shrunk >50% ($old_lines → $total_lines), keeping old"
+                    rm -f "$tmp"
+                    return 1
+                fi
+            fi
+        fi
+
+        # No-op if identical
+        if [ -f "$dest" ] && cmp -s "$tmp" "$dest" 2>/dev/null; then
+            rm -f "$tmp"
+            return 0
+        fi
+
+        mkdir -p "$(dirname "$dest")" 2>/dev/null
+        mv -f "$tmp" "$dest"
+        log_msg "OK: flowseal_game_ips updated ($total_lines lines)"
+        return 2
+    }
+    update_flowseal_game_ips
+    [ $? -eq 2 ] && changes=$((changes + 1))
+
     if [ "$changes" -gt 0 ]; then
         log_msg "Changes detected ($changes lists), restarting service..."
         if [ -x "$INIT_SCRIPT" ]; then
