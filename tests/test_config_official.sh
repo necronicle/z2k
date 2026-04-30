@@ -640,11 +640,17 @@ assert_not_contains "tcp: arm does not match TLS L7" "filter-l7=tls" "$TCP_ARM"
 assert_contains "tcp: arm has --ipset=...flowseal_game_ips.txt" "--ipset=" "$TCP_ARM"
 # Conditional --ipset-exclude= when the file exists.
 assert_contains "tcp: arm has --ipset-exclude=...ipset-exclude.txt" "--ipset-exclude=" "$TCP_ARM"
-# Hostlist-excludes — defense-in-depth for SNI-bearing flows that the
-# port-range carve-out alone wouldn't deflect (e.g., ECH on alt port).
-assert_contains "tcp: arm excludes whitelist" "whitelist.txt" "$TCP_ARM"
-assert_contains "tcp: arm excludes YT TCP list" "TCP/YT/List.txt" "$TCP_ARM"
-assert_contains "tcp: arm excludes RKN list" "TCP/RKN/List.txt" "$TCP_ARM"
+# NO hostlist-exclude on the static arm — nfqws2's dp_match() rejects a
+# profile when hostname=NULL AND hostlist-exclude is non-empty
+# (desync.c:248-251 + PROFILE_HOSTLISTS_EMPTY at params.h:109). Binary
+# game TCP has no SNI → with any hostlist-exclude set, the arm would
+# never match its actual target. Defenses on this arm are filter-l7=unknown
+# + ipset + port carve-out. Hostlist-exclude lives on the TLS rotator
+# (step 5) where flows carry SNI.
+assert_not_contains "tcp: arm has NO --hostlist-exclude (would kill binary)" "--hostlist-exclude=" "$TCP_ARM"
+assert_not_contains "tcp: arm does not reference whitelist.txt" "whitelist.txt" "$TCP_ARM"
+assert_not_contains "tcp: arm does not reference YT list" "TCP/YT/List.txt" "$TCP_ARM"
+assert_not_contains "tcp: arm does not reference RKN list" "TCP/RKN/List.txt" "$TCP_ARM"
 # Recipe must NOT use circular — binary game TCP has no observable
 # success/fail signal that a rotator could converge on.
 assert_not_contains "tcp: arm has no circular rotator" "lua-desync=circular" "$TCP_ARM"
@@ -687,8 +693,8 @@ OUTPUT_TCP_NOEXCL=$(run_generator "tcp_noexcl" "GAME_MODE_ENABLED=1" "setup_flow
 TCP_ARM_NOEXCL=$(get_flowseal_tcp_arm_line "$OUTPUT_TCP_NOEXCL")
 assert_contains "tcp: arm emitted without ipset-exclude file" "flowseal_game_ips.txt" "$TCP_ARM_NOEXCL"
 assert_not_contains "tcp: arm omits --ipset-exclude= when file missing" "--ipset-exclude=" "$TCP_ARM_NOEXCL"
-# whitelist exclude is still present (it always exists per run_generator setup).
-assert_contains "tcp: hostlist-exclude whitelist still present" "whitelist.txt" "$TCP_ARM_NOEXCL"
+# whitelist still must NOT appear — same hostname-blocks-binary reason.
+assert_not_contains "tcp: arm has no whitelist hostlist-exclude" "whitelist.txt" "$TCP_ARM_NOEXCL"
 
 printf "\n--- GAME_PROFILE: port-parser sanity (negative tests) ---\n"
 

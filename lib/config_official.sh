@@ -1102,26 +1102,31 @@ AUSTERUS_OPT
         local game_tcp_ports="1024-2052,2054-2082,2084-2086,2088-2095,2097-2407,2409-8442,8444-65535"
         local game_tcp_ipset_excl=""
         [ -f "${lists_dir}/ipset-exclude.txt" ] && game_tcp_ipset_excl="--ipset-exclude=${lists_dir}/ipset-exclude.txt "
-        # Hostlist excludes — whitelist always; YT/RKN lists if shipped.
-        local game_tcp_hostlist_excl="--hostlist-exclude=${lists_dir}/whitelist.txt"
-        [ -s "${extra_strats_dir}/TCP/YT/List.txt" ] && \
-            game_tcp_hostlist_excl="$game_tcp_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT/List.txt"
-        [ -s "${extra_strats_dir}/TCP/RKN/List.txt" ] && \
-            game_tcp_hostlist_excl="$game_tcp_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/RKN/List.txt"
+        # NO hostlist-exclude on this arm — see desync.c:248-251:
+        #   bHostlistsEmpty = PROFILE_HOSTLISTS_EMPTY(dp);
+        #   if (!dp->hostlist_auto && !hostname && !bHostlistsEmpty)
+        #       return false;
+        # PROFILE_HOSTLISTS_EMPTY checks BOTH include AND exclude lists
+        # (params.h:109). Binary game TCP has no hostname (no SNI to
+        # extract) → if any hostlist-exclude is set, dp_match() bails
+        # before ipset check, killing the arm for its actual target.
+        # Defense-in-depth shifts to: filter-l7=unknown (rejects TLS even
+        # with ECH — nfqws TLS probe matches handshake header, not SNI),
+        # ipset positive scope, ipset-exclude, port carve-out.
+        # The TLS rotator in step 5 CAN safely use hostlist-exclude
+        # because TLS flows carry SNI.
         # --filter-l7=unknown scopes this arm to traffic the nfqws2 L7
-        # classifier could not identify (= binary game TCP). Without this,
-        # the static arm would also fire on TLS flows on the same port
-        # range — until step 5 lands a TLS rotator above. nfqws2 sets
-        # l7proto via per-packet probes in desync.c:33 BEFORE the
+        # classifier could not identify (= binary game TCP). nfqws2
+        # sets l7proto via per-packet probes in desync.c:33 BEFORE the
         # filter-l7 check at desync.c:240, so a TLS ClientHello on
-        # packet N is correctly classified L7_TLS at the filter check
-        # and excluded from this arm. SYN/ACK (no payload) keep
-        # l7proto=L7_UNKNOWN and would notionally match, but multisplit
-        # on a payload-less segment is a no-op.
+        # the first data segment is correctly classified L7_TLS at
+        # filter check and excluded. SYN/ACK (no payload) keep
+        # l7proto=L7_UNKNOWN; multisplit on a payload-less segment
+        # is a no-op.
         # Non-TLS static — multisplit:seqovl=568:pos=1 with tls_clienthello_4pda_to
         # seqovl pattern (blob already registered in S99zapret2.new:537).
         local flowseal_game_tcp_static="--lua-desync=multisplit:payload=all:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --filter-l7=unknown --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}${game_tcp_hostlist_excl} --in-range=a --out-range=-n3 --payload=all $flowseal_game_tcp_static --new\\n"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --filter-l7=unknown --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}--in-range=a --out-range=-n3 --payload=all $flowseal_game_tcp_static --new\\n"
     fi
 
     # Game Filter UDP — custom protocols, unknown payloads. Uses a positive
