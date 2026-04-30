@@ -674,6 +674,7 @@ http_iana_org.bin
 quic_initial_www_google_com.bin
 quic_initial_google_com.bin
 quic_initial_rutracker_org.bin
+quic_initial_dbankcloud_ru.bin
 quic_1.bin
 quic_4.bin
 quic_5.bin

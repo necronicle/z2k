@@ -576,6 +576,12 @@ QUIC_RUTRACKER_BLOB="$ZAPRET_BASE/files/fake/quic_initial_rutracker_org.bin"
 QUIC_OZON_BLOB="$ZAPRET_BASE/files/fake/quic_initial_ozon_ru.bin"
 [ -s "$QUIC_OZON_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_ozon_ru:@$QUIC_OZON_BLOB"
 
+# Russian banking-cloud QUIC decoy from flowseal 1.9.8 (PR #12216).
+# Replaces quic_google for game UDP fake when TSPU blocks google-QUIC fingerprint
+# on AWS/OVH/DO routes — banking-domain QUIC passes where google-QUIC dies.
+QUIC_DBANKCLOUD_BLOB="$ZAPRET_BASE/files/fake/quic_initial_dbankcloud_ru.bin"
+[ -s "$QUIC_DBANKCLOUD_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_dbankcloud:@$QUIC_DBANKCLOUD_BLOB"
+
 TLS_ONETRUST_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_www_onetrust_com.bin"
 [ -s "$TLS_ONETRUST_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_www_onetrust_com:@$TLS_ONETRUST_BLOB"
 
