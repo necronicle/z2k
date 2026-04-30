@@ -499,6 +499,10 @@ run_generator() {
 printf "\n--- GAME_PROFILE: runtime — default → flowseal ---\n"
 
 setup_flowseal_ipset() { echo "8.8.8.0/24" > "$1/lists/flowseal_game_ips.txt"; }
+setup_flowseal_with_exclude() {
+    echo "8.8.8.0/24" > "$1/lists/flowseal_game_ips.txt"
+    echo "10.0.0.0/8" > "$1/lists/ipset-exclude.txt"
+}
 OUTPUT_DEFAULT=$(run_generator "default" "GAME_MODE_ENABLED=1" "setup_flowseal_ipset")
 ARM_DEFAULT=$(get_flowseal_arm_line "$OUTPUT_DEFAULT")
 LEGACY_DEFAULT=$(get_legacy_arm_line "$OUTPUT_DEFAULT")
@@ -507,7 +511,16 @@ assert_contains "default: emits flowseal arm" "flowseal_game_ips.txt" "$OUTPUT_D
 assert_contains "default: arm has dbankcloud blob" "blob=quic_dbankcloud" "$ARM_DEFAULT"
 assert_contains "default: arm has repeats=12" "repeats=12" "$ARM_DEFAULT"
 assert_contains "default: arm has --out-range=-n2" "--out-range=-n2" "$ARM_DEFAULT"
+assert_contains "default: arm has --in-range=a" "--in-range=a" "$ARM_DEFAULT"
+# Profile-level --payload=all (separate from the in-lua-desync payload=all
+# inside z2k_game_udp:...). Without the profile token, nfqws would not pass
+# binary game traffic through to the lua handler at all — assert it's the
+# bare token with the leading --, not just "payload=all" anywhere in the line.
+assert_contains "default: arm has profile-level --payload=all" "--payload=all" "$ARM_DEFAULT"
 assert_contains "default: arm has port range" "--filter-udp=1024-2407,2409-65535" "$ARM_DEFAULT"
+# ipset-exclude file is absent in this scenario — the gate `[ -f "$ipset_excl" ]`
+# in config_official.sh should suppress the --ipset-exclude= flag.
+assert_not_contains "default: arm omits --ipset-exclude when file missing" "--ipset-exclude=" "$ARM_DEFAULT"
 if port_excluded_from_filter "$ARM_DEFAULT" "80"; then
     TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] default: port 80 not in filter range\n"
 else
@@ -524,6 +537,29 @@ else
     TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] default: Warp 2408 falls inside filter range\n"
 fi
 assert_eq "default: legacy arm not emitted" "" "$LEGACY_DEFAULT"
+
+printf "\n--- GAME_PROFILE: runtime — flowseal + ipset-exclude.txt present ---\n"
+
+# When ipset-exclude.txt exists, the flowseal arm should append
+# --ipset-exclude=... to the profile (the optional branch in
+# config_official.sh that the previous test scenario didn't cover).
+OUTPUT_WITH_EXCLUDE=$(run_generator "with_exclude" "GAME_MODE_ENABLED=1" "setup_flowseal_with_exclude")
+ARM_WITH_EXCLUDE=$(get_flowseal_arm_line "$OUTPUT_WITH_EXCLUDE")
+
+assert_contains "with-exclude: arm emitted" "flowseal_game_ips.txt" "$OUTPUT_WITH_EXCLUDE"
+assert_contains "with-exclude: arm has --ipset-exclude=...ipset-exclude.txt" "--ipset-exclude=" "$ARM_WITH_EXCLUDE"
+assert_contains "with-exclude: --ipset-exclude points at our mock file" "ipset-exclude.txt" "$ARM_WITH_EXCLUDE"
+# Ordering invariant: positive --ipset= must appear BEFORE --ipset-exclude=
+# so nfqws constructs the trigger set first, then applies exclusions.
+# A grep-based ordering check is sufficient since both tokens are single-line.
+POS_IPSET_OFFSET=$(printf '%s' "$ARM_WITH_EXCLUDE" | awk '{i=index($0,"--ipset=")} END{print i}')
+NEG_IPSET_OFFSET=$(printf '%s' "$ARM_WITH_EXCLUDE" | awk '{i=index($0,"--ipset-exclude=")} END{print i}')
+if [ "$POS_IPSET_OFFSET" -gt 0 ] && [ "$NEG_IPSET_OFFSET" -gt 0 ] \
+   && [ "$POS_IPSET_OFFSET" -lt "$NEG_IPSET_OFFSET" ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] with-exclude: --ipset= precedes --ipset-exclude=\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] with-exclude: ipset ordering wrong (pos=%s, neg=%s)\n" "$POS_IPSET_OFFSET" "$NEG_IPSET_OFFSET"
+fi
 
 printf "\n--- GAME_PROFILE: runtime — explicit legacy → no flowseal arm ---\n"
 
