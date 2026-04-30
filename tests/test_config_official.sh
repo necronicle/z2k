@@ -589,7 +589,7 @@ LEGACY_ARM=$(get_legacy_arm_line "$OUTPUT_LEGACY")
 
 assert_eq "legacy: flowseal arm not emitted" "" "$ARM_LEGACY"
 assert_not_contains "legacy: no flowseal_game_ips reference" "flowseal_game_ips" "$OUTPUT_LEGACY"
-assert_not_contains "legacy: no quic_dbankcloud blob" "quic_dbankcloud" "$OUTPUT_LEGACY"
+assert_not_contains "legacy: no z2k_game_udp dbankcloud arm" "z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud" "$OUTPUT_LEGACY"
 # Legacy path discriminator: 13-strat rotator with key=game_udp.
 assert_contains "legacy: emits 13-strat rotator key=game_udp" "key=game_udp" "$OUTPUT_LEGACY"
 assert_contains "legacy: legacy arm uses game_ips.txt" "game_ips.txt" "$LEGACY_ARM"
@@ -605,7 +605,7 @@ ARM_NOIPSET=$(get_flowseal_arm_line "$OUTPUT_NOIPSET")
 
 assert_eq "missing-ipset: flowseal arm not emitted" "" "$ARM_NOIPSET"
 assert_not_contains "missing-ipset: no flowseal_game_ips reference" "flowseal_game_ips" "$OUTPUT_NOIPSET"
-assert_not_contains "missing-ipset: no quic_dbankcloud blob" "quic_dbankcloud" "$OUTPUT_NOIPSET"
+assert_not_contains "missing-ipset: no z2k_game_udp dbankcloud arm" "z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud" "$OUTPUT_NOIPSET"
 
 printf "\n--- GAME_PROFILE: runtime — unknown value coerced to flowseal ---\n"
 

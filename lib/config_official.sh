@@ -93,7 +93,11 @@ AUSTERUS_OPT
     local discord_tcp_block=""
 
     # Discord UDP (zapret4rocket-based + z2k autocircular on same primitive family).
-    discord_udp="--filter-udp=50000-50099,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --in-range=-d100 --out-range=-d100 --payload=quic_initial,discord_ip_discovery --lua-desync=circular_locked:key=6:allow_nohost=1 --lua-desync=fake:payload=all:blob=quic_google:repeats=6:strategy=1 --lua-desync=fake:payload=all:blob=quic_google:repeats=4:strategy=2 --lua-desync=fake:payload=all:blob=quic_google:repeats=8:strategy=3 --lua-desync=fake:payload=all:blob=quic_google:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=all:blob=fake_default_quic:repeats=6:strategy=5 --lua-desync=fake:payload=all:blob=quic5:repeats=6:strategy=6"
+    # 2026-04-30: strategies 1-4 fake-blob migrated quic_google → quic_dbankcloud.
+    # Field consensus: TSPU фингерпринтит google-QUIC clienthello, dbankcloud blob
+    # обходит надёжнее. Strategies 5-6 оставлены на fake_default_quic / quic5 для
+    # разнообразия fingerprint'ов в circular_locked rotator'е.
+    discord_udp="--filter-udp=50000-50099,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --in-range=-d100 --out-range=-d100 --payload=quic_initial,discord_ip_discovery --lua-desync=circular_locked:key=6:allow_nohost=1 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=1 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=4:strategy=2 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=8:strategy=3 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=all:blob=fake_default_quic:repeats=6:strategy=5 --lua-desync=fake:payload=all:blob=quic5:repeats=6:strategy=6"
 
     # Дефолтная стратегия если не загружена
     local default_strategy="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=6"
