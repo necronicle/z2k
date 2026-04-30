@@ -158,7 +158,19 @@ case "$method $path" in
         svc_state=$(service_status_string)
         rst_filter=$(read_flag "DROP_DPI_RST" "$CONFIG_FILE" "0")
         silent_fb=$(read_flag "RKN_SILENT_FALLBACK" "$CONFIG_FILE" "0")
-        game_mode=$(read_flag "ROBLOX_UDP_BYPASS" "$CONFIG_FILE" "0")
+        # Mirror config_official.sh:970-973 — read GAME_MODE_ENABLED first
+        # (the new primary), fall back to ROBLOX_UDP_BYPASS only if the
+        # new flag is absent from config. Without this fallback parity,
+        # /status reports "off" when a manually-edited config has
+        # GAME_MODE_ENABLED=1 but leaves the legacy ROBLOX_UDP_BYPASS at
+        # 0 — UI lies vs runtime. Explicit grep here instead of relying
+        # on read_flag's default (its `${3:-0}` syntax conflates "key
+        # missing" with "key present, value 0").
+        if grep -q '^GAME_MODE_ENABLED=' "$CONFIG_FILE" 2>/dev/null; then
+            game_mode=$(read_flag "GAME_MODE_ENABLED" "$CONFIG_FILE" "0")
+        else
+            game_mode=$(read_flag "ROBLOX_UDP_BYPASS" "$CONFIG_FILE" "0")
+        fi
         # GAME_PROFILE — flowseal (default) | legacy. Coerce unknown
         # values to flowseal, matching config_official.sh:986-991.
         game_profile=$(read_flag "GAME_PROFILE" "$CONFIG_FILE" "flowseal")

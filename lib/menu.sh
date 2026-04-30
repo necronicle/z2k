@@ -1069,8 +1069,17 @@ menu_roblox_bypass() {
         return 1
     fi
 
-    local ROBLOX_UDP_BYPASS GAME_PROFILE_CUR GAME_MODE_STYLE_CUR
-    ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
+    local GAME_ENABLED ROBLOX_UDP_BYPASS GAME_PROFILE_CUR GAME_MODE_STYLE_CUR
+    # Mirror config_official.sh:970-973 — GAME_MODE_ENABLED is the new
+    # primary, ROBLOX_UDP_BYPASS the legacy fallback. Reading only one
+    # flag drifts the menu's status from runtime when a manual config
+    # edit leaves the two desynced (e.g., GAME_MODE_ENABLED=1 +
+    # ROBLOX_UDP_BYPASS=0 → generator emits arms, UI says off).
+    GAME_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
+    if [ -z "$GAME_ENABLED" ]; then
+        GAME_ENABLED=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
+    fi
+    ROBLOX_UDP_BYPASS="$GAME_ENABLED"  # back-compat alias for code below
     GAME_PROFILE_CUR=$(safe_config_read "GAME_PROFILE" "$config_file" "flowseal")
     case "$GAME_PROFILE_CUR" in
         flowseal|legacy) ;;
