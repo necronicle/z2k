@@ -419,73 +419,174 @@ NEW_COUNT=$(printf '%s' "$SAMPLE_OPT" | grep -o -- '--new' | wc -l | tr -d ' ')
 assert_eq "structure: correct --new count" "4" "$NEW_COUNT"
 
 # ==============================================================================
-# TEST: GAME_PROFILE branching (flowseal vs legacy)
+# TEST: GAME_PROFILE branching — RUNTIME invocation
 # ==============================================================================
-# Static-shape coverage of step 3 commit ace6e6e. Runtime invocation of
-# generate_nfqws2_opt_official is non-trivial because lists_dir is hardcoded
-# to /opt/zapret2/lists inside the function (would clash with the actual
-# system if tests run on a real router); we use the same SAMPLE_OPT pattern
-# the rest of this file already establishes, plus source-level grep guards
-# to catch accidental deletion of the GAME_PROFILE branch tokens.
+# Earlier static-SAMPLE coverage was insufficient: it asserted on hand-
+# constructed strings, not on what generate_nfqws2_opt_from_strategies
+# actually emits. This block runs the real function against a mock
+# /opt/zapret2 root (via ZAPRET2_DIR override now that lists_dir derives
+# from it) and asserts on captured output.
 
-printf "\n--- GAME_PROFILE: flowseal arm shape ---\n"
+# Source the generator (utils.sh already sourced above).
+. "$SCRIPT_DIR/lib/config_official.sh"
 
-# What the flowseal branch should produce when GAME_MODE_ENABLED=1 and
-# flowseal_game_ips.txt exists (the only positive case).
-SAMPLE_FLOWSEAL_OPT="--filter-udp=1024-2407,2409-65535 --ipset=/opt/zapret2/lists/flowseal_game_ips.txt --ipset-exclude=/opt/zapret2/lists/ipset-exclude.txt --in-range=a --out-range=-n2 --payload=all --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud:repeats=12 --new"
+# Helper: extract the line containing --filter-udp=...flowseal_game_ips...
+# from generated NFQWS2_OPT. Returns empty if no flowseal arm was emitted.
+get_flowseal_arm_line() {
+    printf '%s\n' "$1" | grep -F 'flowseal_game_ips.txt' | head -1
+}
 
-assert_contains "flowseal: filter-udp port range" "--filter-udp=1024-2407,2409-65535" "$SAMPLE_FLOWSEAL_OPT"
-assert_contains "flowseal: positive ipset" "--ipset=/opt/zapret2/lists/flowseal_game_ips.txt" "$SAMPLE_FLOWSEAL_OPT"
-assert_contains "flowseal: ipset-exclude scoped" "--ipset-exclude=/opt/zapret2/lists/ipset-exclude.txt" "$SAMPLE_FLOWSEAL_OPT"
-assert_contains "flowseal: dbankcloud blob" "blob=quic_dbankcloud" "$SAMPLE_FLOWSEAL_OPT"
-assert_contains "flowseal: repeats=12" "repeats=12" "$SAMPLE_FLOWSEAL_OPT"
-assert_contains "flowseal: cutoff=n2" "out-range=-n2" "$SAMPLE_FLOWSEAL_OPT"
-assert_contains "flowseal: payload=all on profile" "--payload=all" "$SAMPLE_FLOWSEAL_OPT"
-# Port-range invariant: no web/RKN ports in game arm (colleague's invariant).
-assert_not_contains "flowseal: no port 80" "filter-udp=80" "$SAMPLE_FLOWSEAL_OPT"
-assert_not_contains "flowseal: no port 443" "filter-udp=443" "$SAMPLE_FLOWSEAL_OPT"
-# No leakage of legacy 13-strat rotator tokens.
-assert_not_contains "flowseal: no game_udp circular key" "key=game_udp" "$SAMPLE_FLOWSEAL_OPT"
-assert_not_contains "flowseal: no aws_oracle_ips" "aws_oracle_ips" "$SAMPLE_FLOWSEAL_OPT"
+# Helper: extract the legacy game_udp line (uses key=game_udp circular).
+get_legacy_arm_line() {
+    printf '%s\n' "$1" | grep -F 'key=game_udp' | head -1
+}
 
-printf "\n--- GAME_PROFILE: legacy arm shape (rollback path) ---\n"
+# Helper: parse comma-separated port spec from --filter-udp=<spec> and
+# verify a target port is NOT covered by any range/single in the spec.
+# Returns 0 if port is excluded (good), 1 if included (bad).
+# Handles forms: single (443), range (1024-2407), comma-list (1024-2407,2409-65535,80).
+port_excluded_from_filter() {
+    local arm_line="$1" target_port="$2"
+    local spec
+    spec=$(printf '%s\n' "$arm_line" | sed -nE 's/.*--filter-udp=([^[:space:]]+).*/\1/p' | head -1)
+    [ -z "$spec" ] && return 0  # No filter-udp on the line — vacuously excluded.
+    local IFS=','
+    local token start end
+    for token in $spec; do
+        case "$token" in
+            *-*)
+                start="${token%-*}"
+                end="${token#*-}"
+                if [ "$target_port" -ge "$start" ] && [ "$target_port" -le "$end" ]; then
+                    return 1
+                fi
+                ;;
+            *)
+                if [ "$token" = "$target_port" ]; then
+                    return 1
+                fi
+                ;;
+        esac
+    done
+    return 0
+}
 
-# What the legacy Phase-2 branch produces (existing 13-strat rotator scoped
-# to game_ips.txt, optionally OR'd with aws_oracle_ips.txt in hybrid mode).
-# Trimmed sample — we only assert the discriminating tokens, not the full
-# 13-strategy chain (already covered by other tests).
-SAMPLE_LEGACY_OPT="--filter-udp=1024-2407,2409-65535 --ipset=/opt/zapret2/lists/game_ips.txt --ipset=/opt/zapret2/lists/aws_oracle_ips.txt --ipset-exclude=/opt/zapret2/lists/ipset-exclude.txt --in-range=a --out-range=-n4 --payload=all --lua-desync=circular:fails=2:time=60:udp_in=1:udp_out=4:key=game_udp:nld=2 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --new"
+# Build a mock /opt-tree under MOCK_DIR/<name>/ and invoke the generator
+# with ZAPRET2_DIR pointing at it. Echoes the captured output to stdout.
+# Args: <subdir-name> <config-content> [<extra-files-callback>]
+run_generator() {
+    local subname="$1" cfg="$2" extra_cb="$3"
+    local root="${MOCK_DIR}/${subname}"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" \
+             "$root/extra_strats/TCP/YT_GV" \
+             "$root/extra_strats/TCP/RKN" \
+             "$root/extra_strats/UDP/YT" \
+             "$root/lists"
+    # Minimum hostlists so non-game profiles don't error out (they get
+    # skipped via add_hostlist_line if missing, but creating them avoids
+    # noise on stderr that could mask real test signal).
+    echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    printf '%s\n' "$cfg" > "$root/config"
+    [ -n "$extra_cb" ] && eval "$extra_cb \"$root\""
+    ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null )
+    rm -rf "$root"
+}
 
-assert_contains "legacy: still uses game_ips.txt" "--ipset=/opt/zapret2/lists/game_ips.txt" "$SAMPLE_LEGACY_OPT"
-assert_contains "legacy: still uses circular rotator" "key=game_udp" "$SAMPLE_LEGACY_OPT"
-assert_contains "legacy: still uses quic_google blob" "blob=quic_google" "$SAMPLE_LEGACY_OPT"
-assert_not_contains "legacy: doesn't use flowseal_game_ips" "flowseal_game_ips" "$SAMPLE_LEGACY_OPT"
-assert_not_contains "legacy: doesn't use dbankcloud" "quic_dbankcloud" "$SAMPLE_LEGACY_OPT"
+printf "\n--- GAME_PROFILE: runtime — default → flowseal ---\n"
 
-printf "\n--- GAME_PROFILE: source-level guards ---\n"
+setup_flowseal_ipset() { echo "8.8.8.0/24" > "$1/lists/flowseal_game_ips.txt"; }
+OUTPUT_DEFAULT=$(run_generator "default" "GAME_MODE_ENABLED=1" "setup_flowseal_ipset")
+ARM_DEFAULT=$(get_flowseal_arm_line "$OUTPUT_DEFAULT")
+LEGACY_DEFAULT=$(get_legacy_arm_line "$OUTPUT_DEFAULT")
 
-# Source-grep guards. These are static checks that catch accidental deletion
-# of the discriminating branch tokens — a cheap regression net for the
-# critical conditionals in lib/config_official.sh.
-CONFIG_OFFICIAL_SRC="$SCRIPT_DIR/lib/config_official.sh"
-if [ -f "$CONFIG_OFFICIAL_SRC" ]; then
-    CONFIG_OFFICIAL_TEXT=$(cat "$CONFIG_OFFICIAL_SRC")
-    # Default coercion preserves flowseal as fallback for empty/garbage.
-    assert_contains "source: GAME_PROFILE default coerces to flowseal" 'GAME_PROFILE="flowseal"' "$CONFIG_OFFICIAL_TEXT"
-    # flowseal vs legacy case statement intact.
-    assert_contains "source: GAME_PROFILE has case statement" 'flowseal|legacy' "$CONFIG_OFFICIAL_TEXT"
-    # File-existence gate — without this, missing flowseal_game_ips.txt
-    # would silently emit a profile referencing a non-existent ipset.
-    assert_contains "source: flowseal arm gated on flowseal_game_ips.txt -s test" '-s "${lists_dir}/flowseal_game_ips.txt"' "$CONFIG_OFFICIAL_TEXT"
-    # Specific tokens that define the flowseal arm — catches accidental
-    # deletion of blob/repeats/cutoff/port-range arguments.
-    assert_contains "source: flowseal arm uses quic_dbankcloud" "blob=quic_dbankcloud" "$CONFIG_OFFICIAL_TEXT"
-    assert_contains "source: flowseal arm has repeats=12" "repeats=12" "$CONFIG_OFFICIAL_TEXT"
-    assert_contains "source: flowseal arm has out-range=-n2" "out-range=-n2" "$CONFIG_OFFICIAL_TEXT"
-    assert_contains "source: flowseal arm preserves Warp 2408 carve-out" "1024-2407,2409-65535" "$CONFIG_OFFICIAL_TEXT"
-    # Legacy catchall must be co-gated on GAME_PROFILE != flowseal so it
-    # doesn't double-fire alongside the new arm.
-    assert_contains "source: legacy catchall gated on GAME_PROFILE != flowseal" 'GAME_PROFILE" != "flowseal"' "$CONFIG_OFFICIAL_TEXT"
+assert_contains "default: emits flowseal arm" "flowseal_game_ips.txt" "$OUTPUT_DEFAULT"
+assert_contains "default: arm has dbankcloud blob" "blob=quic_dbankcloud" "$ARM_DEFAULT"
+assert_contains "default: arm has repeats=12" "repeats=12" "$ARM_DEFAULT"
+assert_contains "default: arm has --out-range=-n2" "--out-range=-n2" "$ARM_DEFAULT"
+assert_contains "default: arm has port range" "--filter-udp=1024-2407,2409-65535" "$ARM_DEFAULT"
+if port_excluded_from_filter "$ARM_DEFAULT" "80"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] default: port 80 not in filter range\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] default: port 80 falls inside filter range\n"
+fi
+if port_excluded_from_filter "$ARM_DEFAULT" "443"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] default: port 443 not in filter range\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] default: port 443 falls inside filter range\n"
+fi
+if port_excluded_from_filter "$ARM_DEFAULT" "2408"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] default: Warp 2408 not in filter range\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] default: Warp 2408 falls inside filter range\n"
+fi
+assert_eq "default: legacy arm not emitted" "" "$LEGACY_DEFAULT"
+
+printf "\n--- GAME_PROFILE: runtime — explicit legacy → no flowseal arm ---\n"
+
+OUTPUT_LEGACY=$(run_generator "legacy" "GAME_MODE_ENABLED=1
+GAME_PROFILE=legacy
+GAME_MODE_STYLE=safe" "")
+ARM_LEGACY=$(get_flowseal_arm_line "$OUTPUT_LEGACY")
+# Legacy mode also needs game_ips.txt to emit its arm; create it.
+setup_legacy_ipset() {
+    echo "8.8.8.0/24" > "$1/lists/game_ips.txt"
+}
+OUTPUT_LEGACY=$(run_generator "legacy_with_ips" "GAME_MODE_ENABLED=1
+GAME_PROFILE=legacy
+GAME_MODE_STYLE=safe" "setup_legacy_ipset")
+ARM_LEGACY=$(get_flowseal_arm_line "$OUTPUT_LEGACY")
+LEGACY_ARM=$(get_legacy_arm_line "$OUTPUT_LEGACY")
+
+assert_eq "legacy: flowseal arm not emitted" "" "$ARM_LEGACY"
+assert_not_contains "legacy: no flowseal_game_ips reference" "flowseal_game_ips" "$OUTPUT_LEGACY"
+assert_not_contains "legacy: no quic_dbankcloud blob" "quic_dbankcloud" "$OUTPUT_LEGACY"
+# Legacy path discriminator: 13-strat rotator with key=game_udp.
+assert_contains "legacy: emits 13-strat rotator key=game_udp" "key=game_udp" "$OUTPUT_LEGACY"
+assert_contains "legacy: legacy arm uses game_ips.txt" "game_ips.txt" "$LEGACY_ARM"
+
+printf "\n--- GAME_PROFILE: runtime — missing flowseal_game_ips.txt → silent skip ---\n"
+
+# GAME_PROFILE=flowseal (default) but no flowseal_game_ips.txt file present.
+# Function MUST silently skip the flowseal arm (the -s file-existence gate);
+# generated NFQWS2_OPT contains no flowseal-related profile.
+OUTPUT_NOIPSET=$(run_generator "noipset" "GAME_MODE_ENABLED=1
+GAME_PROFILE=flowseal" "")
+ARM_NOIPSET=$(get_flowseal_arm_line "$OUTPUT_NOIPSET")
+
+assert_eq "missing-ipset: flowseal arm not emitted" "" "$ARM_NOIPSET"
+assert_not_contains "missing-ipset: no flowseal_game_ips reference" "flowseal_game_ips" "$OUTPUT_NOIPSET"
+assert_not_contains "missing-ipset: no quic_dbankcloud blob" "quic_dbankcloud" "$OUTPUT_NOIPSET"
+
+printf "\n--- GAME_PROFILE: runtime — unknown value coerced to flowseal ---\n"
+
+OUTPUT_UNKNOWN=$(run_generator "unknown" "GAME_MODE_ENABLED=1
+GAME_PROFILE=garbage_value" "setup_flowseal_ipset")
+ARM_UNKNOWN=$(get_flowseal_arm_line "$OUTPUT_UNKNOWN")
+
+assert_contains "unknown: arm emitted (coerced to flowseal)" "blob=quic_dbankcloud" "$ARM_UNKNOWN"
+assert_contains "unknown: arm has correct port range" "--filter-udp=1024-2407,2409-65535" "$ARM_UNKNOWN"
+
+printf "\n--- GAME_PROFILE: port-parser sanity (negative tests) ---\n"
+
+# The port-excluded helper itself must catch cases the prior weak grep missed.
+if port_excluded_from_filter "--filter-udp=1024-2407,2409-65535,443" "443"; then
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] port parser: 443 in comma-list went undetected\n"
+else
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] port parser: 443 in comma-list detected\n"
+fi
+if port_excluded_from_filter "--filter-udp=80-100,443-450" "443"; then
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] port parser: 443 in range 443-450 went undetected\n"
+else
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] port parser: 443 inside range 443-450 detected\n"
+fi
+if port_excluded_from_filter "--filter-udp=1024-65535" "443"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] port parser: 443 outside [1024-65535] correctly absent\n"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] port parser: false positive on 1024-65535/443\n"
 fi
 
 # ==============================================================================

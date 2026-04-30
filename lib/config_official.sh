@@ -9,12 +9,18 @@
 generate_nfqws2_opt_from_strategies() {
     # Генерирует NFQWS2_OPT для config файла на основе текущих стратегий
 
-    # Intentionally hardcoded: this function may be called before utils.sh sets
-    # the global CONFIG_DIR / ZAPRET2_DIR / LISTS_DIR variables, so we use
-    # local copies with known absolute paths.
+    # Pre-utils-safe path resolution. Original design hardcoded all three
+    # in case the function got called before utils.sh sourced; we now derive
+    # extra_strats_dir/lists_dir from ZAPRET2_DIR with the same /opt/zapret2
+    # fallback (parameter-expansion is evaluated lazily, so this stays a
+    # no-op in production where ZAPRET2_DIR is either unset or already set
+    # to /opt/zapret2 by utils.sh). Tests can mock these by exporting
+    # ZAPRET2_DIR before invocation. config_dir stays absolute because
+    # /opt/etc/zapret2 has no canonical env-var counterpart and only gates
+    # the Austerus path which is independently tested.
     local config_dir="/opt/etc/zapret2"
-    local extra_strats_dir="/opt/zapret2/extra_strats"
-    local lists_dir="/opt/zapret2/lists"
+    local extra_strats_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats"
+    local lists_dir="${ZAPRET2_DIR:-/opt/zapret2}/lists"
 
     # Режим Austerusj: простые стратегии без хостлистов, из Zapret1.
     # Если включен — генерируем минимальный конфиг и выходим.
