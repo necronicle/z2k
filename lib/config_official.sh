@@ -1084,9 +1084,19 @@ AUSTERUS_OPT
     #   2053/2083/2087/2096 — Cloudflare Spectrum alt-HTTPS
     #   2408      — Cloudflare Warp (engage.cloudflareclient.com control)
     #   8443      — Discord media TCP
-    # Hostlist-exclude is defense-in-depth: if a flow lands on a high
-    # port AND on flowseal_game_ips.txt AND its SNI matches an RKN/YT
-    # list domain, we bail out (rare ECH-bearing or alt-port web case).
+    #
+    # Hostlist-exclude placement differs per arm — see desync.c:248-251:
+    # PROFILE_HOSTLISTS_EMPTY (params.h:109) tests BOTH include AND
+    # exclude lists, and a non-empty hostlist with hostname=NULL causes
+    # dp_match() to return false BEFORE the ipset check fires.
+    #   • TLS rotator (step 5, pending) — flows carry SNI, hostname is
+    #     resolvable, so --hostlist-exclude=whitelist/YT/RKN works as
+    #     defense-in-depth against ECH-bearing or alt-port web flows.
+    #   • non-TLS static arm (step 4, this code) — binary TCP has NO
+    #     hostname → ANY hostlist-exclude makes the arm uniformly
+    #     non-matching for its actual target. Defenses there are
+    #     filter-l7=unknown + ipset + port carve-out (see comment
+    #     above the emission line below).
     #
     # Step 4 (this commit): non-TLS static arm. payload=all + multisplit
     # recipe mirroring flowseal 1.9.8 general.bat default game TCP arm
