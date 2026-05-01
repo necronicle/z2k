@@ -68,6 +68,21 @@ AUSTERUS_OPT
     # слабее проверенного 47-стратегий rkn_tcp rotator'а. CF возвращается
     # под rkn_tcp как было до Variant A refactor'а.
 
+    # Z2K_USE_MID_STREAM_DETECTOR (default 0): bundle flag for the
+    # rkn_tcp mid-stream stall detector wiring. Off: rkn_tcp keeps
+    # its master-compatible layout (--in-range=-s5556 +
+    # failure_detector=z2k_tls_stalled), which is what the field
+    # currently runs. On: bumps rkn_tcp to --in-range=-s20000 AND
+    # switches its failure_detector to z2k_mid_stream_stall (the
+    # byte-window v3 state machine landed in 14984c3). Both knobs
+    # belong to the same rotation behavior — flipping one without
+    # the other produces a half-state (lua sees more body but the
+    # active detector still ignores it, or the byte-window detector
+    # is wired but blind because its observation cap is still 5.5K).
+    # Tests assert the two move together.
+    local Z2K_USE_MID_STREAM_DETECTOR
+    Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
         youtube_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
@@ -822,15 +837,21 @@ AUSTERUS_OPT
 
     # Let YouTube TLS circular operate exactly as in the upstream manual.
     # For LG webOS the orchestrator must see incoming packets on the circular
-    # stage itself (`--in-range=-s5556`), while actual desync instances must
+    # stage itself (`--in-range=-sN`), while actual desync instances must
     # still stay limited by `--payload=tls_client_hello...`.
     #
     # This requires moving the top-level `--payload=` after circular and
     # closing the incoming window right after circular with `--in-range=x`.
     # Keeping payload before circular makes YouTube TCP/GV fail detection too
     # blind and prevents real sequential rotation on TV clients.
+    #
+    # $2 is the byte cap for the inserted `--in-range=-sN`; default 5556
+    # matches the master-compatible layout. rkn_tcp passes 20000 when the
+    # mid-stream-detector bundle flag is on, so its lua failure_detector
+    # can observe the [8K, 18K] CF stall window.
     ensure_youtube_tls_circular_manual_layout() {
         local input="$1"
+        local in_range_bytes="${2:-5556}"
         local token=""
         local has_tls="0"
         local has_circular="0"
@@ -890,8 +911,9 @@ AUSTERUS_OPT
         # Fallback for malformed legacy inputs with no payload token.
         [ -z "$saved_payload" ] && saved_payload="--payload=tls_client_hello"
 
-        printf '%s --in-range=-s5556 %s --in-range=x %s%s%s' \
+        printf '%s --in-range=-s%s %s --in-range=x %s%s%s' \
             "$before_circular" \
+            "$in_range_bytes" \
             "$circular_token" \
             "$saved_payload" \
             "${after_circular:+ }" \
@@ -902,16 +924,25 @@ AUSTERUS_OPT
     # repeated ClientHello attempts with no visible response_state/success_state.
     # Manual payload reordering alone is not sufficient in that mode.
     #
-    # Restore the older YouTube-only conservative TCP failure path:
-    # - expose incoming packets to circular via --in-range=-s5556
+    # Conservative TCP failure path:
+    # - expose incoming packets to circular via --in-range=-sN
     # - expose empty packets / retrans context via --payload=tls_client_hello,empty
     # - keep desync strategy instances restricted to the original TLS payload
     # - prevent successes from other devices on the same domain from resetting
     #   failure counters via success_detector=z2k_success_no_reset
     #
-    # Scope is intentionally limited to youtube_tcp.
+    # Used by youtube_tcp (default) and by rkn_tcp's RKN_SILENT_FALLBACK=1
+    # path. The two share the same conservative shape; the rkn_tcp silent
+    # path passes the bundle's byte cap (20000 when
+    # Z2K_USE_MID_STREAM_DETECTOR=1) instead of the youtube default so
+    # the byte-window detector isn't silently blinded past 5.5K when
+    # both flags are on.
+    #
+    # $2 is the byte cap for the inserted `--in-range=-sN`; default 5556
+    # matches the master-compatible layout that youtube_tcp keeps.
     ensure_youtube_tls_failure_detection() {
         local input="$1"
+        local in_range_bytes="${2:-5556}"
         local token=""
         local has_tls="0"
         local has_circular="0"
@@ -948,7 +979,7 @@ AUSTERUS_OPT
                     token=$(printf '%s' "$token" | sed 's/^--payload=tls_client_hello$/--payload=tls_client_hello,empty/')
                     ;;
                 --lua-desync=circular:*)
-                    out="${out:+$out }--in-range=-s5556"
+                    out="${out:+$out }--in-range=-s${in_range_bytes}"
                     case "$token" in
                         *:success_detector=*) ;;
                         *) token="${token}:success_detector=z2k_success_no_reset" ;;
@@ -976,39 +1007,33 @@ AUSTERUS_OPT
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
 
-    # RKN: failure_detector=z2k_tls_stalled (default).
+    # RKN: failure_detector — z2k_tls_stalled by default, overridable
+    # to z2k_mid_stream_stall through Z2K_USE_MID_STREAM_DETECTOR=1.
     #
-    # Дефолт ВРЕМЕННО возвращён с z2k_mid_stream_stall на z2k_tls_stalled
-    # после code-review 2026-04-30. Mid-stream детектор как написан имеет
-    # 4 архитектурные проблемы, которые в комбинации делают его поведение
-    # хуже отсутствия:
+    # 2026-04-30 the default was reverted from mid_stream_stall to
+    # tls_stalled because the original mid_stream_stall implementation
+    # had four architectural problems that combined into a worse-than-
+    # nothing detector — see commit fdc7145 for the full diagnosis.
+    # 14984c3 (2026-05-01) landed a v3 redesign of z2k_mid_stream_stall:
+    # per-flow byte tracking via desync.track.lua_state, multi-
+    # candidate map per nld=2 key, FIN/RST closure handling, active-
+    # retry gate via ch_gap. Tests in tests/test_mid_stream_stall.lua
+    # codify the contract.
     #
-    #   1. `--in-range=-s5556` (см. ensure_youtube_tls_circular_manual_layout
-    #      применённый к rkn_tcp на строке ниже) делает lua failure_detector
-    #      слепым для incoming seq > 5.5KB. CF stall в 10-14KB мимо.
-    #   2. inseq=18000 в circular становится недостижим — success_detector
-    #      не доезжает до 18KB при том же gate, не сбрасывает upstream
-    #      failure counter на длинных рабочих TLS-потоках.
-    #   3. State key в z2k_mid_stream_stall — голый `host`, тогда как
-    #      circular работает по nld=2 (SLD). Evidence дробится по
-    #      static.cloudflare.com / api.cloudflare.com, ротация ходит
-    #      по cloudflare.com — counters не совпадают.
-    #   4. Active-retry gate (ch_gap ≤ 60s + since_last_in ≥ 15s) шумит на
-    #      HTTP/2 connection rotation, browser preconnect, parallel asset
-    #      fetch — без FIN-проверки или byte-window отделить ретрай юзера
-    #      от нормального параллельного коннекта браузера невозможно.
+    # The bundle flag Z2K_USE_MID_STREAM_DETECTOR ties together the
+    # two knobs that have to move as a pair: failure_detector swap AND
+    # the --in-range=-s5556 → -s20000 widening below. Default 0 keeps
+    # the proven master-compatible runtime; set to 1 in
+    # /opt/zapret2/config to opt into the redesigned detector.
+    # Rollback is "set the flag back to 0, regenerate config, restart".
     #
-    # z2k_tls_stalled живёт в files/lua/z2k-detectors.lua, ловит "CH ушёл,
-    # SH не пришёл" — это в первые ~1KB, s5556 gate ему не мешает.
-    # Наследует z2k_tls_alert_fatal (retrans, RST, HTTP redirect, TLS
-    # fatal alert) — base coverage сохраняется.
-    #
-    # z2k_mid_stream_stall не удалён — припаркован как experimental.
-    # Возвращение в default — отдельным PR с редизайном: bump in-range
-    # до s20000+, key через nld=2, max incoming seq tracking, fail-в-окне
-    # 8K..18K, FIN-проверка, lua unit-тесты на state machine.
+    # z2k_tls_stalled (when flag=0) catches "CH sent, no SH" — visible
+    # in the first ~1KB so s5556 gate doesn't blind it. Inherits
+    # z2k_tls_alert_fatal so retrans / RST / HTTP redirect / TLS fatal
+    # alert remain covered.
     ensure_rkn_failure_detector() {
         local input="$1"
+        local detector_name="${2:-z2k_tls_stalled}"
         local out=""
         local token=""
 
@@ -1017,7 +1042,7 @@ AUSTERUS_OPT
                 --lua-desync=circular:*)
                     case "$token" in
                         *failure_detector=*) ;;
-                        *) token="${token}:failure_detector=z2k_tls_stalled" ;;
+                        *) token="${token}:failure_detector=${detector_name}" ;;
                     esac
                     ;;
             esac
@@ -1027,7 +1052,16 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp")
+    # Pick the bundle for rkn_tcp's circular based on the opt-in flag.
+    # Both knobs (failure_detector + --in-range byte cap) must move
+    # together; tests/test_config_official.sh asserts no half-state.
+    local rkn_failure_detector="z2k_tls_stalled"
+    local rkn_in_range_bytes="5556"
+    if [ "$Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
+        rkn_failure_detector="z2k_mid_stream_stall"
+        rkn_in_range_bytes="20000"
+    fi
+    rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp" "$rkn_failure_detector")
 
     # Silent fallback для RKN — включается через меню (флаг-файл).
     # failure_detection включает в себя manual_layout (--in-range + payload),
@@ -1037,10 +1071,10 @@ AUSTERUS_OPT
     RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rkn_silent_conf" "0")
     local rkn_silent_flag="${extra_strats_dir}/cache/autocircular/rkn_silent_fallback.flag"
     if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
-        rkn_tcp=$(ensure_youtube_tls_failure_detection "$rkn_tcp")
+        rkn_tcp=$(ensure_youtube_tls_failure_detection "$rkn_tcp" "$rkn_in_range_bytes")
         touch "$rkn_silent_flag" 2>/dev/null
     else
-        rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp")
+        rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp" "$rkn_in_range_bytes")
         rm -f "$rkn_silent_flag" 2>/dev/null
     fi
 

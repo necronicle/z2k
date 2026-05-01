@@ -166,6 +166,7 @@ assert_contains "nld2: adds nld=2 to minimal circular" "nld=2" "$RESULT4"
 # experimental до полного редизайна).
 ensure_rkn_failure_detector() {
     local input="$1"
+    local detector_name="${2:-z2k_tls_stalled}"
     local out=""
     local token=""
 
@@ -174,7 +175,7 @@ ensure_rkn_failure_detector() {
             --lua-desync=circular:*)
                 case "$token" in
                     *failure_detector=*) ;;
-                    *) token="${token}:failure_detector=z2k_tls_stalled" ;;
+                    *) token="${token}:failure_detector=${detector_name}" ;;
                 esac
                 ;;
         esac
@@ -310,6 +311,15 @@ assert_eq "failure_detector: no duplication" "1" "$FD_COUNT"
 INPUT_FD3="--lua-desync=fake:payload=tls_client_hello --lua-desync=send:strategy=2"
 RESULT_FD3=$(ensure_rkn_failure_detector "$INPUT_FD3")
 assert_eq "failure_detector: non-circular unchanged" "$INPUT_FD3" "$RESULT_FD3"
+
+# Test: explicit detector_name argument overrides the default
+# (used when Z2K_USE_MID_STREAM_DETECTOR=1 selects z2k_mid_stream_stall)
+INPUT_FD4="--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2"
+RESULT_FD4=$(ensure_rkn_failure_detector "$INPUT_FD4" "z2k_mid_stream_stall")
+assert_contains "failure_detector: explicit detector_name=mid_stream" \
+    "failure_detector=z2k_mid_stream_stall" "$RESULT_FD4"
+assert_not_contains "failure_detector: override doesn't leak tls_stalled" \
+    "z2k_tls_stalled" "$RESULT_FD4"
 
 printf "\n--- ensure_circular_tcp_inseq ---\n"
 
@@ -505,11 +515,98 @@ run_generator() {
     echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
     echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
     echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    # Minimum Strategy.txt for the rkn_tcp TLS arm. Without this the
+    # generator's `if [ -f ".../RKN/Strategy.txt" ]` gate keeps rkn_tcp
+    # empty and the arm isn't emitted — which masks regressions in the
+    # rkn_tcp wiring (failure_detector / --in-range / inseq).
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:strategy=1" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
     printf '%s\n' "$cfg" > "$root/config"
     [ -n "$extra_cb" ] && eval "$extra_cb \"$root\""
     ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null )
     rm -rf "$root"
 }
+
+# Helper: extract the rkn_tcp TLS arm (filter-l7=tls + key=rkn_tcp).
+# http_rkn lives on a separate line (filter-tcp=80, key=http_rkn) and
+# is filtered out by the key match.
+get_rkn_tcp_arm_line() {
+    printf '%s\n' "$1" | grep -F 'key=rkn_tcp' | head -1
+}
+
+printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: bundle flag (default 0) ---\n"
+
+# Default (flag absent ⇒ safe_config_read → "0"): rkn_tcp keeps the
+# master-compatible layout — --in-range=-s5556 and z2k_tls_stalled.
+OUT_MS_DEFAULT=$(run_generator "ms-default" "GAME_MODE_ENABLED=0" "")
+RKN_ARM_DEFAULT=$(get_rkn_tcp_arm_line "$OUT_MS_DEFAULT")
+
+assert_contains "ms flag=0: rkn_tcp arm emitted" \
+    "key=rkn_tcp" "$RKN_ARM_DEFAULT"
+assert_contains "ms flag=0: rkn_tcp keeps --in-range=-s5556" \
+    "--in-range=-s5556" "$RKN_ARM_DEFAULT"
+assert_contains "ms flag=0: rkn_tcp keeps z2k_tls_stalled" \
+    "failure_detector=z2k_tls_stalled" "$RKN_ARM_DEFAULT"
+# Half-state guards on flag=0 — neither knob may leak from the
+# bundle-on path.
+assert_not_contains "ms flag=0: no s20000 leaks into rkn_tcp" \
+    "--in-range=-s20000" "$RKN_ARM_DEFAULT"
+assert_not_contains "ms flag=0: no mid_stream_stall leak anywhere" \
+    "z2k_mid_stream_stall" "$OUT_MS_DEFAULT"
+
+printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: bundle flag (opt-in 1) ---\n"
+
+# Flag opt-in: rkn_tcp gets the bundle — --in-range=-s20000 paired
+# with failure_detector=z2k_mid_stream_stall. Both knobs MUST move
+# together; half-state assertions below catch a mistaken landing.
+OUT_MS_ON=$(run_generator "ms-on" "Z2K_USE_MID_STREAM_DETECTOR=1" "")
+RKN_ARM_ON=$(get_rkn_tcp_arm_line "$OUT_MS_ON")
+
+assert_contains "ms flag=1: rkn_tcp arm emitted" \
+    "key=rkn_tcp" "$RKN_ARM_ON"
+assert_contains "ms flag=1: rkn_tcp uses --in-range=-s20000" \
+    "--in-range=-s20000" "$RKN_ARM_ON"
+assert_contains "ms flag=1: rkn_tcp uses z2k_mid_stream_stall" \
+    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_ON"
+# Half-state guards on flag=1 — no leftover master-compatible tokens
+# on the rkn_tcp arm. Other arms (yt_tcp / yt_gv_tcp) keep their own
+# --in-range=-s5556 because the flag is rkn_tcp-scoped, so we check
+# only the rkn_tcp arm here.
+assert_not_contains "ms flag=1: no leftover s5556 on rkn_tcp arm" \
+    "--in-range=-s5556" "$RKN_ARM_ON"
+assert_not_contains "ms flag=1: no leftover tls_stalled on rkn_tcp arm" \
+    "failure_detector=z2k_tls_stalled" "$RKN_ARM_ON"
+
+printf "\n--- Z2K_USE_MID_STREAM_DETECTOR + RKN_SILENT_FALLBACK ---\n"
+
+# RKN silent fallback uses ensure_youtube_tls_failure_detection (not
+# the manual_layout helper). That path also injects --in-range=-sN,
+# so the bundle byte cap MUST flow through it too — otherwise we get
+# the exact half-state this commit guards against (byte-window
+# detector wired but blind past 5.5K). Combined-flag test exercises
+# the silent-fallback code path with the bundle on.
+OUT_MS_SILENT=$(run_generator "ms-silent" \
+    "Z2K_USE_MID_STREAM_DETECTOR=1
+RKN_SILENT_FALLBACK=1" "")
+RKN_ARM_SILENT=$(get_rkn_tcp_arm_line "$OUT_MS_SILENT")
+
+assert_contains "ms+silent: rkn_tcp arm emitted" \
+    "key=rkn_tcp" "$RKN_ARM_SILENT"
+assert_contains "ms+silent: silent path also bumps to s20000" \
+    "--in-range=-s20000" "$RKN_ARM_SILENT"
+assert_contains "ms+silent: silent path keeps mid_stream_stall" \
+    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_SILENT"
+# Silent fallback's success_detector contract: append
+# z2k_success_no_reset only when one isn't already set. rkn_tcp gets
+# z2k_http_success_positive_only earlier from ensure_circular_arg_set,
+# so it survives — assert that survival rather than the no-reset
+# variant that only fires on bare circulars.
+assert_contains "ms+silent: existing success_detector preserved" \
+    "success_detector=z2k_http_success_positive_only" "$RKN_ARM_SILENT"
+assert_not_contains "ms+silent: no s5556 leak via silent path" \
+    "--in-range=-s5556" "$RKN_ARM_SILENT"
+assert_not_contains "ms+silent: no tls_stalled leak via silent path" \
+    "failure_detector=z2k_tls_stalled" "$RKN_ARM_SILENT"
 
 printf "\n--- GAME_PROFILE: runtime — default → flowseal ---\n"
 
