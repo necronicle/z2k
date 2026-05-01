@@ -1628,6 +1628,7 @@ create_official_config() {
     local saved_GAME_MODE_ENABLED=""
     local saved_GAME_MODE_STYLE=""
     local saved_TG_PROXY_USER_DISABLED="0"
+    local saved_Z2K_USE_MID_STREAM_DETECTOR="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
@@ -1636,6 +1637,20 @@ create_official_config() {
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
         saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
+        saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "0")
+    fi
+
+    # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
+    # (handshake-only visibility for lua failure_detector); at flag=1 bump
+    # to 30 so lua can observe the [8K, 18K] CF stall window AND so
+    # success_detector=z2k_http_success_positive_only's inseq=18000 gate
+    # is reachable on long TLS flows. Below 30 the bundle is structurally
+    # half-state — failure_detector wired but blind. Above 30 the marginal
+    # gain (more byte coverage past 30KB) doesn't justify the per-flow
+    # NFQUEUE pressure on embedded routers.
+    local nfqws2_tcp_pkt_in="10"
+    if [ "$saved_Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
+        nfqws2_tcp_pkt_in="30"
     fi
     # Backwards compat: if the new flag isn't set yet on this router,
     # inherit the legacy ROBLOX_UDP_BYPASS value so a single create_official_config
@@ -1691,7 +1706,7 @@ NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_GAME_MO
 # PKT_OUT=20 means "first 20 packets" (connbytes 1:20)
 # Official zapret2 defaults: TCP_PKT_OUT=20, UDP_PKT_OUT=5
 NFQWS2_TCP_PKT_OUT="20"
-NFQWS2_TCP_PKT_IN="10"
+NFQWS2_TCP_PKT_IN="${nfqws2_tcp_pkt_in}"
 NFQWS2_UDP_PKT_OUT="5"
 NFQWS2_UDP_PKT_IN="3"
 
@@ -1836,6 +1851,12 @@ GAME_MODE_STYLE=${saved_GAME_MODE_STYLE}
 # Preserved across reinstall так что step_finalize autostart не воскрешал
 # daemon, который юзер явно остановил.
 TG_PROXY_USER_DISABLED=${saved_TG_PROXY_USER_DISABLED}
+
+# Mid-stream stall detector bundle (default 0). At 1: rkn_tcp swaps
+# failure_detector to z2k_mid_stream_stall, --in-range to -s20000, AND
+# NFQWS2_TCP_PKT_IN bumps to 30 — all three move atomically. Persisted
+# here so a user-set value survives create_official_config regen.
+Z2K_USE_MID_STREAM_DETECTOR=${saved_Z2K_USE_MID_STREAM_DETECTOR}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can

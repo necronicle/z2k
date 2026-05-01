@@ -608,6 +608,54 @@ assert_not_contains "ms+silent: no s5556 leak via silent path" \
 assert_not_contains "ms+silent: no tls_stalled leak via silent path" \
     "failure_detector=z2k_tls_stalled" "$RKN_ARM_SILENT"
 
+printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: NFQWS2_TCP_PKT_IN bundle ---\n"
+
+# Third bundle knob: NFQWS2_TCP_PKT_IN drives the iptables connbytes
+# range, which in turn caps how many incoming packets nfqws2 ever sees
+# per connection. With the master-compatible 10 (~7KB visibility), the
+# byte-window detector and the success_detector=inseq=18000 are both
+# blind past handshake. Bumping to 30 (~22-44KB) is required for the
+# bundle to do anything; testing both flag positions catches a stale
+# heredoc constant or a missed call site.
+#
+# create_official_config writes the config file AND has to see the
+# flag in the existing file to choose the bundle value, so this test
+# materializes the entire create_official_config pass via the helper.
+test_pkt_in_under_flag() {
+    local flag="$1" expected="$2" desc_suffix="$3"
+    local root="${MOCK_DIR}/pkt-in-$flag"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" \
+             "$root/extra_strats/TCP/RKN" \
+             "$root/extra_strats/UDP/YT" \
+             "$root/lists"
+    echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:strategy=1" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
+    cat > "$root/config" <<EOF
+ENABLED=1
+Z2K_USE_MID_STREAM_DETECTOR=$flag
+EOF
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
+    local emitted_pkt_in
+    emitted_pkt_in=$(grep -E '^NFQWS2_TCP_PKT_IN=' "$root/config" | head -1)
+    assert_contains "ms flag=$flag: $desc_suffix" \
+        "NFQWS2_TCP_PKT_IN=\"$expected\"" "$emitted_pkt_in"
+    # Persist round-trip: new config must carry the flag forward so a
+    # follow-up regen doesn't silently revert it.
+    local persisted_flag
+    persisted_flag=$(grep -E '^Z2K_USE_MID_STREAM_DETECTOR=' "$root/config" | head -1)
+    assert_contains "ms flag=$flag: persisted in regenerated config" \
+        "Z2K_USE_MID_STREAM_DETECTOR=$flag" "$persisted_flag"
+    rm -rf "$root"
+}
+
+test_pkt_in_under_flag "0" "10" "NFQWS2_TCP_PKT_IN stays at 10"
+test_pkt_in_under_flag "1" "30" "NFQWS2_TCP_PKT_IN bumps to 30"
+
 printf "\n--- GAME_PROFILE: runtime — default → flowseal ---\n"
 
 setup_flowseal_ipset() { echo "8.8.8.0/24" > "$1/lists/flowseal_game_ips.txt"; }
