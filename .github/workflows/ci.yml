@@ -99,8 +99,8 @@ jobs:
       - name: Install luarocks, lua, luacheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y luarocks lua5.3
-          sudo luarocks install luacheck
+          sudo apt-get install -y luarocks lua5.3 liblua5.3-dev
+          sudo luarocks --lua-version=5.3 install luacheck
 
       - name: Run luacheck
         run: luacheck files/lua/*.lua --codes -q
