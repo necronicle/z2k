@@ -113,6 +113,16 @@ read_globals = {
     "TLS_EXT_SUPPORTED_GROUPS",
     "TCP_KIND_TS",
 
+    -- TCP flag bits (zapret-lib.lua)
+    "TH_FIN",
+    "TH_SYN",
+    "TH_RST",
+    "TH_PUSH",
+    "TH_ACK",
+    "TH_URG",
+    "TH_ECE",
+    "TH_CWR",
+
     -- Lua bit library (provided by LuaJIT or nfqws2)
     "bitand",
     "bitor",

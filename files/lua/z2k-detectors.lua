@@ -392,6 +392,32 @@ local function z2k_flow_key(desync, host)
   return host
 end
 
+-- Separate key generator used by z2k_mid_stream_stall only.
+--
+-- Mid-stream byte-window detection benefits from cross-subdomain
+-- aggregation: a stall on www.cloudflare.com is evidence about the
+-- whole cloudflare.com SLD, so progress/silence observed on one
+-- subdomain should count toward retries on a sibling. We use the
+-- upstream `standard_hostkey(desync)` (zapret-auto.lua:9) which
+-- already respects the active circular's nld=2 setting, IP-fallback
+-- and reqhost — keeping z2k key semantics in sync with how the
+-- rotator buckets hosts (autostate / rotation key).
+--
+-- z2k_tls_stalled keeps using z2k_flow_key (raw host) above. The
+-- handshake-stall detector triggers off ClientHello timing on the
+-- same flow, where SLD-level aggregation would produce false
+-- positives across legitimate parallel subdomain visits and was
+-- never the design intent.
+local function z2k_mid_stream_flow_key(desync, host)
+  if type(standard_hostkey) == "function" then
+    local ok, key = pcall(standard_hostkey, desync)
+    if ok and type(key) == "string" and key ~= "" then
+      return key
+    end
+  end
+  return host
+end
+
 local function z2k_detector_evict_oldest(map, batch, ts_of)
   local entries = {}
   local i = 0
@@ -531,71 +557,135 @@ end
 -- - z2k_tls_stalled only activates when NO ServerHello has arrived
 --   yet; it exits early once SH is seen.
 --
--- Design: process-global `host → state` map, same persistence style
--- as z2k_tls_stalled. For each host we track `last_in_ts` — the
--- timestamp of the most recent incoming packet that carried a non-
--- empty payload. When we see a new outgoing ClientHello for that
--- same host, we compare `now` to the previous `last_in_ts`. If the
--- gap is ≥ Z2K_MID_STREAM_STALL_SEC, that means the previous flow
--- received some data but then went silent for long enough that the
--- user (or their browser) gave up and started a fresh connection.
--- That's our stall signature.
+-- Design (v3, 2026-05-01).
 --
--- Failure signal kicks in from the SECOND connection attempt onwards
--- for a given host — identical flavor to z2k_tls_stalled's logic,
--- since the first attempt has no prior state to compare against.
--- Combined with the rotator's fails=3 it takes ~3 reload cycles
--- (≈30-60 seconds of real-user retrying) before circular rotates.
+-- v1 (revert fdc7145) used `last_in_ts` (any incoming payload) + raw
+-- elapsed gate; false-positived heavily on legitimate browse-and-
+-- reload. v2 keyed on observed byte progress but stored seq/FIN/RST
+-- per SLD, which is wrong: TCP sequence space is per-connection and
+-- parallel flows under the same nld=2 key would corrupt each other's
+-- byte tracking and cross-clear stall candidates.
 --
--- Known limitations / false positive sources:
---   - A user who opens a page, reads it for >15s, and reloads will
---     trip this detector even if the original flow completed cleanly.
---     With fails=3 this means three such reads-and-reloads in a row
---     to the same host before rotation fires. Rare in normal use but
---     possible for "reference pages" that people read slowly.
---   - We do NOT inspect TCP FIN flags to distinguish "flow closed
---     cleanly" from "flow stalled". Pure time-based heuristic.
---   - Hosts visited only once never trigger this detector. That's
---     correct for rotation (no repeat pattern to learn from) but
---     also means one-shot failures are not caught here.
+-- v3 splits the state into two layers so each layer's lifetime
+-- matches what it is actually scoped to:
 --
--- Active-retry gating (revised 2026-04-18).
+--   Per-flow (stored in `desync.track.lua_state.mid_stream`) — TCP
+--   sequence space and FIN/RST closure are properties of one
+--   connection; nfqws2 already gives us a flow-scoped lua_state
+--   table that lives across packets of one flow:
+--       base_seq         — TCP ISN of the first incoming data packet
+--       max_seq          — largest cumulative bytes received
+--       last_progress_ts — when max_seq last advanced
+--       fin_seen         — flow closed via FIN or RST
+--       flow_id          — module-monotonic counter assigned at
+--                          flow-state creation; uniquely identifies
+--                          this flow's entry in the per-key
+--                          candidates map. Counter (not table
+--                          address) so a recycled Lua table can't
+--                          alias a still-live candidate's owner.
 --
--- The raw "previous flow got some data, then silence >= N s before the
--- next CH" heuristic false-positives heavily on normal browsing: a user
--- reads a page for 40 s and clicks a link, and the detector counts the
--- idle gap as a stall — even though the previous flow had completed
--- cleanly. Over fails=3 these innocent idle events silently rotate away
--- from a known-working strategy, which users experienced as "долго
--- подбирает стратегии / само не ротируется".
+--   Per-key (stored in module-global `z2k_mid_stream_state[key]`) —
+--   "did SOME flow under this SLD recently exhibit a stall pattern,
+--   and have we seen retry CHs":
+--       candidates       — map flow_id -> {max_seq, last_progress_ts};
+--                          one entry per flow currently in the stall
+--                          window. Bounded by MAX_CANDIDATES (oldest
+--                          last_progress_ts evicted on insert).
+--                          Multi-entry instead of a single owned
+--                          slot so parallel flows that interleave
+--                          inside the byte window don't displace
+--                          each other's evidence.
+--       last_ch_ts       — last outgoing ClientHello on this key,
+--                          for the active-retry gate
 --
--- Refinement: only fire when the user is ACTIVELY RETRYING this host.
--- Signal: the gap between consecutive ClientHellos to the same host is
--- short (≤ Z2K_MID_STREAM_RETRY_WINDOW). Pattern matches "page doesn't
--- load, user hits reload" — which is what true Rostelecom mid-stream
--- stalls produce. Pattern does NOT match "user reads page, navigates
--- somewhere else on the site an minute later" — which is the false
--- positive we were eating.
+-- The mid-stream key uses standard_hostkey() (zapret-auto.lua:9),
+-- which respects the active circular's nld=2 setting: a stall on
+-- static.cloudflare.com counts toward retries on api.cloudflare.com.
+-- z2k_tls_stalled keeps using z2k_flow_key (raw host) — handshake
+-- detection has different aggregation needs.
 --
--- Added state field `last_ch_ts`. Two numeric fields × ≤512 hosts =
--- still bounded at well under 100 KB.
+-- Per-flow updates:
+--   On every incoming packet: update flow_st seq/FIN. If the flow's
+--   max_seq is in [LO, HI], publish/refresh THIS flow's entry in the
+--   candidates map. If the flow crosses past HI, it's a success —
+--   remove THIS flow's entry. FIN/RST removes THIS flow's entry too.
+--   Parallel flows under the same key never mutate each other's
+--   entries because the map is keyed by flow_id.
 --
--- Z2K_MID_STREAM_STALL_SEC reverted to 15 s. With the active-retry
--- gate we no longer need the 30 s buffer, and 15 s catches genuine
--- CF post-handshake stalls (~10-14 KB burst → silence) within one
--- retry cycle instead of two.
-local Z2K_MID_STREAM_STALL_SEC = 15
-local Z2K_MID_STREAM_RETRY_WINDOW = 60
+-- Fail criteria on outgoing ClientHello (the four-way AND, evaluated
+-- against each candidate independently — the first that matches
+-- fires):
+--   1. candidate.max_seq is in the [LO, HI] window (CF stall byte
+--      signature: handshake completed, some data flowed, stopped
+--      before full asset transfer)
+--   2. (now - candidate.last_progress_ts) >= SILENCE_SEC (the flow
+--      really went silent — differentiates a genuine stall from a
+--      parallel preconnect / HTTP/2 connection rotation)
+--   3. (now - candidate.last_progress_ts) <= RETRY_MAX_SEC (the
+--      stall snapshot is recent enough to attribute to user retry,
+--      not stale state left from an earlier visit). Stale candidates
+--      are pruned during the iteration.
+--   4. (now - last_ch_ts) <= ACTIVE_RETRY_SEC (the user is actively
+--      retrying — this is the second CH within the active-retry
+--      window). Without this gate, a single legitimate navigation CH
+--      after a small <18KB response that the keep-alive socket
+--      didn't FIN within SILENCE_SEC would false-positive. When
+--      ch_gap exceeds the gate, ALL candidates are cleared so a
+--      rapid follow-up CH within 30s after this isolated one cannot
+--      ride on stale evidence.
+--
+-- When a flow's max_seq crosses past HI: that flow is succeeding;
+-- its entry is removed from candidates. The flow record itself
+-- stays in lua_state so a later FIN can be observed correctly.
+
+local Z2K_MID_STREAM_LO               = 8000
+local Z2K_MID_STREAM_HI               = 18000
+local Z2K_MID_STREAM_SILENCE_SEC      = 5
+local Z2K_MID_STREAM_RETRY_MAX_SEC    = 120
+local Z2K_MID_STREAM_ACTIVE_RETRY_SEC = 30
+-- Cap on simultaneous in-window candidates per key. Typical browsers
+-- open up to ~6 parallel TCP connections per host; 8 covers normal
+-- parallel + small headroom. Eviction policy on overflow: oldest
+-- last_progress_ts wins (likely already silent-stalled or replaced).
+local Z2K_MID_STREAM_MAX_CANDIDATES   = 8
 local z2k_mid_stream_state = {}
 local z2k_mid_stream_insert_counter = 0
+-- Module-monotonic counter for flow_id assignment. Lua doubles can
+-- represent integers up to 2^53 exactly — at 1k flows/sec this is
+-- ~285 millennia of unique IDs. We never reset it.
+local z2k_mid_stream_flow_seq = 0
+
+local function z2k_mid_stream_new_key_state()
+  return {
+    candidates = {},
+    last_ch_ts = 0,
+  }
+end
+
+local function z2k_mid_stream_new_flow_state()
+  z2k_mid_stream_flow_seq = z2k_mid_stream_flow_seq + 1
+  return {
+    base_seq         = nil,
+    max_seq          = 0,
+    last_progress_ts = 0,
+    fin_seen         = false,
+    flow_id          = z2k_mid_stream_flow_seq,
+  }
+end
 
 local function z2k_mid_stream_ts_of(v)
   if type(v) ~= "table" then return 0 end
   -- Evict by whichever timestamp is newer — keeps the "most recent
-  -- interaction with this host" entries alive through LRU sweeps.
-  local a = tonumber(v.last_in_ts) or 0
-  local b = tonumber(v.last_ch_ts) or 0
-  return (a > b) and a or b
+  -- interaction with this key" entries alive through LRU sweeps.
+  local newest = tonumber(v.last_ch_ts) or 0
+  local cands = v.candidates
+  if type(cands) == "table" then
+    for _, c in pairs(cands) do
+      local t = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
+      if t > newest then newest = t end
+    end
+  end
+  return newest
 end
 
 local function z2k_mid_stream_maybe_evict()
@@ -607,6 +697,52 @@ local function z2k_mid_stream_maybe_evict()
   for _ in pairs(z2k_mid_stream_state) do n = n + 1 end
   if n <= Z2K_DETECTOR_MAP_MAX then return end
   z2k_detector_evict_oldest(z2k_mid_stream_state, Z2K_DETECTOR_EVICT_BATCH, z2k_mid_stream_ts_of)
+end
+
+-- Find the flow_id of the candidate with the oldest last_progress_ts,
+-- used as the eviction victim when a new candidate would overflow
+-- Z2K_MID_STREAM_MAX_CANDIDATES.
+local function z2k_mid_stream_oldest_candidate_id(cands)
+  local oldest_id, oldest_ts
+  for fid, c in pairs(cands) do
+    local ts = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
+    if not oldest_ts or ts < oldest_ts then
+      oldest_id, oldest_ts = fid, ts
+    end
+  end
+  return oldest_id
+end
+
+-- Publish or refresh THIS flow's candidate entry. Bounded — when the
+-- map already holds MAX_CANDIDATES entries owned by other flows, the
+-- oldest one is evicted to make room.
+local function z2k_mid_stream_publish_candidate(key_st, flow_st)
+  local cands = key_st.candidates
+  local existing = cands[flow_st.flow_id]
+  if existing then
+    existing.max_seq          = flow_st.max_seq
+    existing.last_progress_ts = flow_st.last_progress_ts
+    return
+  end
+  local count = 0
+  for _ in pairs(cands) do count = count + 1 end
+  if count >= Z2K_MID_STREAM_MAX_CANDIDATES then
+    local victim = z2k_mid_stream_oldest_candidate_id(cands)
+    if victim then cands[victim] = nil end
+  end
+  cands[flow_st.flow_id] = {
+    max_seq          = flow_st.max_seq,
+    last_progress_ts = flow_st.last_progress_ts,
+  }
+end
+
+-- Clear all candidate entries for a key. Used when the active-retry
+-- gate fails — none of the recorded stalls is actionable evidence
+-- for the current CH event.
+local function z2k_mid_stream_clear_all_candidates(cands)
+  for fid in pairs(cands) do
+    cands[fid] = nil
+  end
 end
 
 function z2k_mid_stream_stall(desync, crec)
@@ -622,72 +758,128 @@ function z2k_mid_stream_stall(desync, crec)
   if not host or host == "" then return false end
   local now = os.time and os.time() or 0
   if now == 0 then return false end
-  local key = z2k_flow_key(desync, host)
 
-  -- Incoming packet with non-empty payload → this flow is actively
-  -- receiving data. Remember the timestamp and reset the per-flow
-  -- consecutive-fail counter (real progress = not stalled).
+  -- Per-flow byte tracking lives in lua_state. If nfqws2 hasn't
+  -- populated it yet for this packet, we can't track this flow
+  -- correctly — skip the byte-window logic.
+  local lua_state = desync.track.lua_state
+  if type(lua_state) ~= "table" then return false end
+
+  local flow_st = lua_state.mid_stream
+  if type(flow_st) ~= "table" then
+    flow_st = z2k_mid_stream_new_flow_state()
+    lua_state.mid_stream = flow_st
+  end
+
+  local key = z2k_mid_stream_flow_key(desync, host)
+  local key_st = z2k_mid_stream_state[key]
+  if not key_st then
+    key_st = z2k_mid_stream_new_key_state()
+    z2k_mid_stream_state[key] = key_st
+    z2k_mid_stream_maybe_evict()
+  end
+
+  -- Incoming packet — update per-flow byte progress and FIN/RST.
+  -- The candidates map is keyed by flow_id, so per-flow updates only
+  -- touch THIS flow's entry; parallel flows under the same nld=2 key
+  -- never displace each other.
   if not desync.outgoing then
     local dis = desync.dis
-    if dis and type(dis.payload) == "string" and #dis.payload > 0 then
-      local st = z2k_mid_stream_state[key]
-      if not st then
-        st = { last_in_ts = now, last_ch_ts = 0, consecutive_fails = 0 }
-        z2k_mid_stream_state[key] = st
-        z2k_mid_stream_maybe_evict()
-      else
-        st.last_in_ts = now
-        st.consecutive_fails = 0
-      end
+    if not dis or not dis.tcp then return false end
+
+    local flags = tonumber(dis.tcp.th_flags) or 0
+    local fin_bit = (TH_FIN and bitand(flags, TH_FIN)) or 0
+    local rst_bit = (TH_RST and bitand(flags, TH_RST)) or 0
+    if fin_bit ~= 0 or rst_bit ~= 0 then
+      flow_st.fin_seen = true
+      key_st.candidates[flow_st.flow_id] = nil
+      return false
+    end
+
+    if type(dis.payload) ~= "string" or #dis.payload == 0 then
+      return false
+    end
+    local seq = tonumber(dis.tcp.th_seq)
+    if not seq then return false end
+
+    if not flow_st.base_seq then flow_st.base_seq = seq end
+    local rel = (seq - flow_st.base_seq) + #dis.payload
+    if rel > flow_st.max_seq then
+      flow_st.max_seq = rel
+      flow_st.last_progress_ts = now
+    end
+
+    -- Past the stall threshold = this flow is delivering data
+    -- successfully. Drop only THIS flow's entry — parallel flows
+    -- still in the window keep their evidence.
+    if flow_st.max_seq > Z2K_MID_STREAM_HI then
+      key_st.candidates[flow_st.flow_id] = nil
+      return false
+    end
+
+    -- In the stall byte window — publish/refresh THIS flow's entry.
+    if flow_st.max_seq >= Z2K_MID_STREAM_LO then
+      z2k_mid_stream_publish_candidate(key_st, flow_st)
     end
     return false
   end
 
-  -- Outgoing ClientHello → check whether the user is actively retrying
-  -- this flow and whether the previous flow stalled mid-stream.
+  -- Outgoing ClientHello — scan candidates for a fire match. Active-
+  -- retry gate runs first so a long-gap CH cannot ride on candidates
+  -- accumulated from earlier sessions.
+  --
+  -- Candidate lifecycle on CH:
+  --   * active-retry gate fails (ch_gap > ACTIVE_RETRY_SEC): drop ALL
+  --     candidates; this CH is a fresh visit/navigation, not a retry
+  --     of any prior stall, and a rapid follow-up CH within 30s
+  --     mustn't fire on stale evidence.
+  --   * stale-by-time (since_progress > RETRY_MAX_SEC): drop only
+  --     that one candidate during the iteration.
+  --   * fire path: consume the firing candidate so the same stall
+  --     isn't double-counted on the next CH within the retry window.
+  --   * silence too short / out-of-window: keep — the flow may still
+  --     go silent and trip on the next CH inside the same window.
   if desync.outgoing and desync.l7payload == "tls_client_hello" then
-    local st = z2k_mid_stream_state[key]
-    if not st then
-      -- First CH ever for this flow: just record, no signal yet.
-      z2k_mid_stream_state[key] =
-        { last_in_ts = 0, last_ch_ts = now, consecutive_fails = 0 }
-      z2k_mid_stream_maybe_evict()
+    local prev_ch_ts = key_st.last_ch_ts
+    key_st.last_ch_ts = now
+
+    local cands = key_st.candidates
+    if next(cands) == nil then return false end
+
+    local ch_gap = (prev_ch_ts > 0) and (now - prev_ch_ts) or math.huge
+    if ch_gap > Z2K_MID_STREAM_ACTIVE_RETRY_SEC then
+      z2k_mid_stream_clear_all_candidates(cands)
       return false
     end
 
-    local prev_ch_ts = tonumber(st.last_ch_ts) or 0
-    local ch_gap = now - prev_ch_ts
-    st.last_ch_ts = now
-
-    -- Gate: only fire if user is ACTIVELY retrying (second CH within
-    -- the retry window). A CH after a long idle gap is a fresh visit,
-    -- not a retry — don't count a stale idle gap as a stall signal.
-    if prev_ch_ts == 0 or ch_gap > Z2K_MID_STREAM_RETRY_WINDOW then
-      return false
-    end
-
-    -- User is retrying. Check the mid-stream stall condition.
-    if st.last_in_ts and st.last_in_ts > 0 then
-      local since_last_in = now - st.last_in_ts
-      if since_last_in >= Z2K_MID_STREAM_STALL_SEC then
-        -- Keep the record alive so the rotator's fails=N counter
-        -- accumulates across consecutive CH retries within the same
-        -- retry window — previously we dropped state on every fire,
-        -- which meant fails=3 needed three full retry rounds with
-        -- fresh stall evidence each time. Reset last_in_ts so the
-        -- same in-data event isn't double-counted.
-        st.last_in_ts = 0
-        st.consecutive_fails = (st.consecutive_fails or 0) + 1
-        if type(DLOG) == "function" then
-          DLOG("z2k_mid_stream_stall: host=" .. host ..
-               " active retry (ch_gap=" .. ch_gap ..
-               "s) prev flow data " .. since_last_in ..
-               "s ago — fail #" .. st.consecutive_fails)
-        end
-        return true
+    local fire_fid, fire_cand, fire_silence
+    for fid, cand in pairs(cands) do
+      local since_progress = now - cand.last_progress_ts
+      if since_progress > Z2K_MID_STREAM_RETRY_MAX_SEC then
+        -- Stale: prune during iteration (Lua allows delete-during-
+        -- iterate, just not insert).
+        cands[fid] = nil
+      elseif (not fire_fid)
+             and cand.max_seq >= Z2K_MID_STREAM_LO
+             and cand.max_seq <= Z2K_MID_STREAM_HI
+             and since_progress >= Z2K_MID_STREAM_SILENCE_SEC then
+        fire_fid     = fid
+        fire_cand    = cand
+        fire_silence = since_progress
       end
     end
-    return false
+
+    if not fire_fid then return false end
+
+    if type(DLOG) == "function" then
+      DLOG("z2k_mid_stream_stall: key=" .. key
+           .. " host=" .. host
+           .. " max_seq=" .. fire_cand.max_seq
+           .. " silence=" .. fire_silence .. "s"
+           .. " ch_gap=" .. ch_gap .. "s — counting as fail")
+    end
+    cands[fire_fid] = nil
+    return true
   end
 
   return false
