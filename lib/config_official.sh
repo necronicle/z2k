@@ -1485,28 +1485,34 @@ AUSTERUS_OPT
     # Strategy 7: fake badsum + multisplit method+2
     local rkn_http_extras=""
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_http_extras=" --hostlist=${lists_dir}/extra-domains.txt"
-    # http_rkn (port 80 HTTP profile). v3.6 commit 4 wiring:
-    #   - success_detector=z2k_http_success_positive_only
-    #     (default standard would fire success on seq>inseq even for
-    #     4xx replies, pinning broken strategies)
-    #   - no_http_redirect (off-loads 302/307 redirect branch from
-    #     standard_failure_detector — our z2k_tls_alert_fatal chain
-    #     drives all redirect classification through z2k_classify_http_reply)
-    # http_rkn payload filter:
-    #   http_req  — outgoing GET/POST (что строит модифицирующая стратегия)
-    #   empty     — TCP control packets без payload (SYN/ACK сами по себе
-    #                 проходят через standard_failure_detector RST-чек)
-    #   http_reply — ИНКОМИНГ HTTP-ответ от сервера. Без этого профиль
-    #                 фильтрует replies на entry, и detector chain никогда
-    #                 не видит l7=http_reply → z2k_classify_http_reply
-    #                 (commits 3-4 v3.6) становится dead code на всех
-    #                 plain HTTP flows. Field-test 2026-04-30 показал 0
-    #                 http_reply events за весь soak — добавили http_reply
-    #                 чтобы классификатор реально видел ответы. Strategies
-    #                 (multisplit/syndata/fake/etc) внутри scope-нуты на
-    #                 payload=http_req, так что они не сработают на
-    #                 incoming replies — только detectors классифицируют.
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_tls_alert_fatal:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
+    # http_rkn (port 80) — backup-identical wrapper.
+    #
+    # Hostlist: RKN/List.txt + extra-domains.txt (cdnbase, kinotree,
+    # cf-SLDs etc). Both lists are OR'd by nfqws2's hostlist matcher.
+    #
+    # Wrapper restored to the master/backup shape (see backup
+    # 2026-04-16 zapret2-z2k-fork build): plain
+    # `failure_detector=z2k_tls_alert_fatal`, `--payload=http_req,empty`,
+    # no `success_detector=` and no `no_http_redirect`. The v3.6
+    # additions (http_reply visibility, positive_only success_detector,
+    # no_http_redirect flag) were briefly in the wrapper but introduced
+    # neutral-classification dead-zones for cross-SLD ISP redirects
+    # (e.g. lawfilter.ertelecom.ru): classifier returned `neutral`,
+    # autocircular blocked the pin, circular never rotated, strategies
+    # behaved as if they "succeeded" on the redirect target. The
+    # backup-shape wrapper lets standard_failure_detector see redirects
+    # natively and circular handle them — matching the field-known
+    # working behavior.
+    #
+    # 7 strategies from blockcheck2, ordered by simplicity:
+    # Strategy 1: http_methodeol (simplest HTTP manipulation)
+    # Strategy 2: syndata + multisplit
+    # Strategy 3: hostfakesplit with TTL=2
+    # Strategy 4: fake with badsum
+    # Strategy 5: fakedsplit at method+2 with badsum
+    # Strategy 6: z4r original (fake 0x0E + tcp_md5 + multisplit host+1)
+    # Strategy 7: fake badsum + multisplit method+2
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_tls_alert_fatal --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
 
 
     local nfqws2_opt_value
