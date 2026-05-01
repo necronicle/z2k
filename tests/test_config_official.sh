@@ -455,6 +455,10 @@ get_legacy_arm_line() {
     printf '%s\n' "$1" | grep -F 'key=game_udp' | head -1
 }
 
+get_http_rkn_arm_line() {
+    printf '%s\n' "$1" | grep -F -- '--filter-tcp=80' | grep -F 'key=http_rkn' | head -1
+}
+
 # Helper: parse comma-separated port spec from a --filter-tcp= or --filter-udp=
 # in the supplied line and verify a target port is NOT covered by any
 # range/single in the spec. Returns 0 if excluded, 1 if included.
@@ -518,6 +522,20 @@ setup_flowseal_with_exclude() {
     echo "8.8.8.0/24" > "$1/lists/flowseal_game_ips.txt"
     echo "10.0.0.0/8" > "$1/lists/ipset-exclude.txt"
 }
+setup_http_extra_domains() { echo "cdnbase.com" > "$1/lists/extra-domains.txt"; }
+
+printf "\n--- HTTP RKN: master-compatible fallback ---\n"
+
+OUTPUT_HTTP_MASTER=$(run_generator "http-master" "GAME_MODE_ENABLED=0" "setup_http_extra_domains")
+HTTP_RKN_ARM=$(get_http_rkn_arm_line "$OUTPUT_HTTP_MASTER")
+
+assert_contains "http_rkn: arm emitted" "key=http_rkn" "$HTTP_RKN_ARM"
+assert_contains "http_rkn: keeps master payload filter" "--payload=http_req,empty" "$HTTP_RKN_ARM"
+assert_not_contains "http_rkn: does not inspect http_reply" "http_reply" "$HTTP_RKN_ARM"
+assert_not_contains "http_rkn: no positive-only success detector" "success_detector=z2k_http_success_positive_only" "$HTTP_RKN_ARM"
+assert_not_contains "http_rkn: no no_http_redirect flag" "no_http_redirect" "$HTTP_RKN_ARM"
+assert_not_contains "http_rkn: does not include extra-domains" "extra-domains.txt" "$HTTP_RKN_ARM"
+
 OUTPUT_DEFAULT=$(run_generator "default" "GAME_MODE_ENABLED=1" "setup_flowseal_ipset")
 ARM_DEFAULT=$(get_flowseal_arm_line "$OUTPUT_DEFAULT")
 LEGACY_DEFAULT=$(get_legacy_arm_line "$OUTPUT_DEFAULT")
