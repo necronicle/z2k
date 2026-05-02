@@ -657,9 +657,10 @@ download_fake_blobs() {
     local fake_dir="${WORK_DIR}/files/fake"
     mkdir -p "$fake_dir" || die "Не удалось создать $fake_dir"
 
+    # Sync с фактическим files/fake/ — sberbank_ru и quic_initial_google_com
+    # удалены в audit-cleanup 2026-05-02 (commit bb80855), список выровнен.
     local files="
 tls_clienthello_max_ru.bin
-tls_clienthello_sberbank_ru.bin
 tls_clienthello_14.bin
 tls_clienthello_www_google_com.bin
 tls_clienthello_www_onetrust_com.bin
@@ -672,9 +673,9 @@ syn_packet.bin
 stun.bin
 http_iana_org.bin
 quic_initial_www_google_com.bin
-quic_initial_google_com.bin
 quic_initial_rutracker_org.bin
 quic_initial_dbankcloud_ru.bin
+quic_initial_ozon_ru.bin
 quic_1.bin
 quic_4.bin
 quic_5.bin
