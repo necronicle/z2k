@@ -555,26 +555,29 @@ AUSTERUS_OPT
                 *:tcp_ts=-1000:*|*:tcp_ts=-1000)
                     strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
                     case "$strategy_id" in
-                        # Shifted +1 после strategy=1 prepend (Phase 1.1).
-                        12) new_ts="-43210"  ;;
-                        16) new_ts="-100000" ;;
-                        19) new_ts="-500000" ;;
-                        24) new_ts="-43210"  ;;
-                        25) new_ts="-7777"   ;;
-                        29) new_ts="-10000"  ;;
-                        31) new_ts="-7777"   ;;
-                        36) new_ts="-43210"  ;;
-                        38) new_ts="-100000" ;;
-                        43) new_ts="-10000"  ;;
-                        # New rotated slots (Phase 1.3) — равномерно распределены
-                        # по pool values. tcp_ts=-1000 частично сгорел с
-                        # 2026-04-20 (memory reference_tcp_ts_watch.md), эти 4
-                        # slots переведены на нестандартные ts чтобы убрать
+                        # Original 10 slots (pre-Phase 1.3 positions) — strategy=1
+                        # (padencap+rndsni) теперь в конце (=48) после Phase 5
+                        # rollback, нумерация 2..48 откатилась на 1..47, slot IDs
+                        # вернулись к до-Phase-1.3 значениям (-1 от пост-Phase-1.1).
+                        11) new_ts="-43210"  ;;
+                        15) new_ts="-100000" ;;
+                        18) new_ts="-500000" ;;
+                        23) new_ts="-43210"  ;;
+                        24) new_ts="-7777"   ;;
+                        28) new_ts="-10000"  ;;
+                        30) new_ts="-7777"   ;;
+                        35) new_ts="-43210"  ;;
+                        37) new_ts="-100000" ;;
+                        42) new_ts="-10000"  ;;
+                        # New rotated slots (Phase 1.3, post-rollback позиции).
+                        # tcp_ts=-1000 частично сгорел с 2026-04-20
+                        # (memory reference_tcp_ts_watch.md), эти 4 slots
+                        # переведены на нестандартные ts чтобы убрать
                         # одинаковость fingerprint'а на уже-сгоревшем -1000.
-                        26) new_ts="-43210"  ;;
-                        27) new_ts="-10000"  ;;
-                        39) new_ts="-7777"   ;;
-                        41) new_ts="-100000" ;;
+                        25) new_ts="-43210"  ;;
+                        26) new_ts="-10000"  ;;
+                        38) new_ts="-7777"   ;;
+                        40) new_ts="-100000" ;;
                         *)  new_ts=""        ;;
                     esac
                     if [ -n "$new_ts" ]; then
