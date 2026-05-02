@@ -453,7 +453,12 @@ AUSTERUS_OPT
         local with_padencap="${2:-0}"
         local token=""
         local out=""
-        local extra="z2k_grease,z2k_alpn,z2k_psk,z2k_keyshare"
+        # r2 (2026-05-03): z2k_alpn / psk / keyshare после dup-skip fix'а
+        # silently skipped на современных blob'ах (где соответствующие
+        # extensions уже есть). Добавлены 4 редко-присутствующих
+        # extensions для real JA3 distortion: earlydata / pha / sct /
+        # delegcred. Требуется fork v0.9.5.2-z2k-r2+.
+        local extra="z2k_grease,z2k_alpn,z2k_psk,z2k_keyshare,z2k_earlydata,z2k_pha,z2k_sct,z2k_delegcred"
         if [ "$with_padencap" = "1" ]; then
             extra="${extra},padencap"
         fi
@@ -461,7 +466,7 @@ AUSTERUS_OPT
             case "$token" in
                 *:tls_mod=*)
                     case "$token" in
-                        *z2k_grease*|*z2k_alpn*|*z2k_psk*|*z2k_keyshare*)
+                        *z2k_grease*|*z2k_alpn*|*z2k_psk*|*z2k_keyshare*|*z2k_earlydata*|*z2k_pha*|*z2k_sct*|*z2k_delegcred*)
                             # Already extended once. If padencap requested
                             # but missing on this token, splice it in.
                             if [ "$with_padencap" = "1" ]; then
