@@ -482,6 +482,12 @@ LUA_Z2K_AUTOCIRCULAR="$ZAPRET_BASE/lua/z2k-autocircular.lua"
 [ -f "$LUA_Z2K_AUTOCIRCULAR" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_AUTOCIRCULAR"
 LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 [ -f "$LUA_Z2K_MODERN_CORE" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_MODERN_CORE"
+# z2k-http-strats: 33 HTTP-bypass функций (z2k_http_*) портированных из
+# ALFiX01/GoodbyeZapret custom_funcs.lua. Field-driven для расширения
+# http_rkn arm (был 7 стратегий → стал ~40 с этим арсеналом). Подключение
+# ПОСЛЕ z2k-modern-core.lua и перед autocircular инстансами.
+LUA_Z2K_HTTP_STRATS="$ZAPRET_BASE/lua/z2k-http-strats.lua"
+[ -f "$LUA_Z2K_HTTP_STRATS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_HTTP_STRATS"
 # z2k-cdn-dispatch: per-provider SNI dispatch for cdn_tls profile via
 # per_instance_condition (ntc.party 17013 #851 — AS-specific whitelists).
 # Exposes cond_cdn_cf / cond_cdn_ovh / cond_cdn_hetzner / cond_cdn_do /
