@@ -1525,15 +1525,16 @@ AUSTERUS_OPT
     # Strategy 7: fake badsum + multisplit method+2
     local rkn_http_extras=""
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_http_extras=" --hostlist=${lists_dir}/extra-domains.txt"
-    # http_rkn failure_detector — bundled с Z2K_USE_MID_STREAM_DETECTOR.
-    # При flag=1 (default per Mark policy) HTTP profile получает
-    # z2k_http_mid_stream_stall — байт-window detector для HTTP stall'а
-    # 14-25 KB описанного в треде ntc.party 22516. При =0 откат на
-    # master-shape z2k_tls_alert_fatal (нет HTTP byte tracking).
-    local http_rkn_failure_detector="z2k_tls_alert_fatal"
-    if [ "$Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
-        http_rkn_failure_detector="z2k_http_mid_stream_stall"
-    fi
+    # http_rkn failure_detector — chain через z2k_silent_drop_detector
+    # (default ON 2026-05-03). silent_drop проверяет packet-count: 4+
+    # outgoing data + ≤1 incoming = ТСПУ silent drop, который
+    # content-based detectors не ловят (нет TLS alert / нет mid-stream
+    # bytes — данных вообще нет). Если silent-drop не сработал, цепочка
+    # делегирует к z2k_http_mid_stream_stall (byte-window 14-25KB,
+    # ntc.party 22516) затем z2k_tls_alert_fatal (HTTP classifier +
+    # TLS handshake stall). При Z2K_USE_MID_STREAM_DETECTOR=0 chain
+    # пропускает mid_stream звено, остаётся silent_drop → tls_alert.
+    local http_rkn_failure_detector="z2k_silent_drop_detector"
     # http_rkn (port 80 HTTP profile). v3.6 commit 4 wiring:
     #   - success_detector=z2k_http_success_positive_only
     #     (default standard would fire success on seq>inseq even for

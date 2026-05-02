@@ -727,11 +727,15 @@ test_padencap_under_flag "1" "1" "rkn_tcp с padencap"
 
 printf "\n--- HTTP mid_stream_stall wiring под Z2K_USE_MID_STREAM_DETECTOR ---\n"
 
-# При Z2K_USE_MID_STREAM_DETECTOR=1 (default per policy) http_rkn arm
-# получает failure_detector=z2k_http_mid_stream_stall (новый HTTP byte-
-# window detector). При =0 откат к master-shape z2k_tls_alert_fatal.
+# http_rkn primary failure_detector — z2k_silent_drop_detector (2026-05-03,
+# AlfiX silent_drop_detector port). Chain делегирует:
+# silent_drop → http_mid_stream_stall → tls_alert_fatal — внутри lua, не
+# через config strings. Так что primary всегда z2k_silent_drop_detector
+# независимо от Z2K_USE_MID_STREAM_DETECTOR. Mid_stream remain активным
+# через chain delegation (всегда), flag регулирует только rkn_tcp / yt_tcp /
+# gv_tcp arms (там mid_stream остаётся прямым primary).
 test_http_detector_under_flag() {
-    local flag="$1" expected_detector="$2" forbidden_detector="$3"
+    local flag="$1"
     local root="${MOCK_DIR}/http-det-$flag"
     rm -rf "$root"
     mkdir -p "$root/extra_strats/TCP/YT" "$root/extra_strats/TCP/RKN" \
@@ -750,17 +754,23 @@ EOF
 
     assert_contains "ms flag=$flag: http_rkn arm emitted" \
         "key=http_rkn" "$http_arm"
-    assert_contains "ms flag=$flag: http_rkn detector=$expected_detector" \
-        "failure_detector=$expected_detector" "$http_arm"
-    assert_not_contains "ms flag=$flag: http_rkn no $forbidden_detector leak" \
-        "failure_detector=$forbidden_detector" "$http_arm"
+    # Primary всегда silent_drop_detector — chain делегирует внутри lua.
+    assert_contains "ms flag=$flag: http_rkn primary=z2k_silent_drop_detector" \
+        "failure_detector=z2k_silent_drop_detector" "$http_arm"
+    # Other detectors не должны быть primary в config-string (они только
+    # внутри chain через runtime call, не текстом в conf).
+    assert_not_contains "ms flag=$flag: http_rkn no http_mid_stream as primary" \
+        "failure_detector=z2k_http_mid_stream_stall" "$http_arm"
+    assert_not_contains "ms flag=$flag: http_rkn no tls_alert as primary" \
+        "failure_detector=z2k_tls_alert_fatal" "$http_arm"
     rm -rf "$root"
 }
 
-# flag=0 → master shape (z2k_tls_alert_fatal, no z2k_http_mid_stream_stall)
-test_http_detector_under_flag "0" "z2k_tls_alert_fatal" "z2k_http_mid_stream_stall"
-# flag=1 → bundle (z2k_http_mid_stream_stall, no z2k_tls_alert_fatal as primary)
-test_http_detector_under_flag "1" "z2k_http_mid_stream_stall" "z2k_tls_alert_fatal"
+# Both flag=0 and flag=1 should result in z2k_silent_drop_detector primary
+# для http_rkn arm. Flag effect остаётся в rkn_tcp/yt_tcp/gv_tcp armах
+# (через ensure_rkn_failure_detector / прямые detector swaps).
+test_http_detector_under_flag "0"
+test_http_detector_under_flag "1"
 
 printf "\n--- GAME_PROFILE: runtime — default → flowseal ---\n"
 

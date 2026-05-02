@@ -1189,3 +1189,67 @@ function z2k_http_success_positive_only(desync, crec)
   local ok, result = pcall(standard_success_detector, desync, crec)
   return ok and result == true
 end
+
+-- ----------------------------------------------------------------------------
+-- z2k_silent_drop_detector — packet-count-based detection of silent ТСПУ drop.
+-- Ported from github.com/ALFiX01/GoodbyeZapret/blob/main/Project/bin/lua/silent-drop-detector.lua
+--
+-- Идея: ТСПУ может silent-drop'ать pakets без отправки RST/FIN/Alert. У нас
+-- content-based детекторы (z2k_tls_alert_fatal, z2k_*_mid_stream_stall) этот
+-- кейс не ловят — они смотрят на TLS alert или byte-stream stall, а silent drop
+-- происходит на уровне «никаких данных вообще не приходит». autocircular ждёт
+-- timeout, теряет 60+ секунд на пустую попытку.
+--
+-- silent_drop_detector считает outgoing data-packets vs incoming. Если клиент
+-- отправил >= tcp_out=4 data-пакетов (после ClientHello/HTTP request), а получил
+-- только handshake responses (in_count <= tcp_in=1, что значит SYN-ACK без data) —
+-- это silent drop. Сигнал failure → autocircular ротирует на следующую strategy.
+--
+-- Для http_rkn / rkn_tcp / yt_tcp arms: подключается как failure_detector.
+-- Внутри делегирует к existing detector chain (z2k_http_mid_stream_stall или
+-- z2k_tls_alert_fatal) если silent-drop signal не сработал — чтобы оба покрытия
+-- работали одновременно.
+--
+-- Args (через :failure_detector_args=:tcp_out=N:tcp_in=M, опционально):
+--   tcp_out — outgoing data threshold (default 4)
+--   tcp_in  — incoming data threshold (default 1, только SYN-ACK)
+function z2k_silent_drop_detector(desync, crec, arg)
+  if crec and crec.nocheck then return false end
+
+  local tcp_out_thr = (arg and tonumber(arg.tcp_out)) or 4
+  local tcp_in_thr  = (arg and tonumber(arg.tcp_in))  or 1
+
+  if desync.dis and desync.dis.tcp and desync.outgoing and desync.track and
+     desync.track.pos then
+    local out_count = (desync.track.pos.direct  and (desync.track.pos.direct.dcounter  or desync.track.pos.direct.pcounter))  or 0
+    local in_count  = (desync.track.pos.reverse and (desync.track.pos.reverse.dcounter or desync.track.pos.reverse.pcounter)) or 0
+
+    if out_count >= tcp_out_thr and in_count <= tcp_in_thr then
+      -- Trigger FAILURE every tcp_out outgoing data-pakets (после первого hit'а)
+      -- — это позволяет multiple rotations в long-lived connection где
+      -- последовательные strategy ротации можно проверить за один TCP session.
+      local last_fail = (crec and crec.z2k_silent_drop_last_fail) or 0
+      if out_count >= last_fail + tcp_out_thr then
+        if crec then
+          crec.z2k_silent_drop_last_fail = out_count
+          crec.failure = nil  -- разрешаем повторную rotation
+        end
+        DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count.." (last="..last_fail..")")
+        return true
+      end
+    end
+  end
+
+  -- Не silent drop — делегируем остальной chain.
+  -- Приоритет: http_mid_stream_stall (для http_rkn flag=1) → tls_alert_fatal.
+  if type(z2k_http_mid_stream_stall) == "function" then
+    local ok, result = pcall(z2k_http_mid_stream_stall, desync, crec, arg)
+    if ok and result == true then return true end
+  end
+  if type(z2k_tls_alert_fatal) == "function" then
+    local ok, result = pcall(z2k_tls_alert_fatal, desync, crec, arg)
+    if ok and result == true then return true end
+  end
+
+  return false
+end
