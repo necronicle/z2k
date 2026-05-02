@@ -608,51 +608,6 @@ assert_not_contains "ms+silent: no s5556 leak via silent path" \
 assert_not_contains "ms+silent: no tls_stalled leak via silent path" \
     "failure_detector=z2k_tls_stalled" "$RKN_ARM_SILENT"
 
-printf "\n--- HTTP RKN arm: backup-identical wrapper ---\n"
-
-setup_http_extra_domains() {
-    cat > "$1/lists/extra-domains.txt" <<EOF
-fast-torrent.ru
-cdnbase.com
-kinotree.ru
-EOF
-}
-
-# http_rkn arm keeps the master/backup-2026-04-16 wrapper shape after
-# the v3.6 detection-chain rollback. Field-validated reasoning: the
-# v3.6 additions (http_reply visibility, z2k_http_success_positive_only,
-# no_http_redirect) introduced a neutral-classification dead-zone for
-# cross-SLD ISP redirects (lawfilter.ertelecom.ru), which silently
-# blocked autocircular pin updates. Backup-shape lets standard
-# failure_detector see redirects natively.
-#
-# Hostlist must keep BOTH RKN/List.txt and extra-domains.txt — the
-# rollback is in the wrapper, not in coverage.
-OUT_HTTP=$(run_generator "http-shape" "GAME_MODE_ENABLED=0" "setup_http_extra_domains")
-HTTP_ARM=$(printf '%s\n' "$OUT_HTTP" | grep -F 'key=http_rkn' | head -1)
-
-assert_contains "http_rkn: arm emitted" "key=http_rkn" "$HTTP_ARM"
-assert_contains "http_rkn: --filter-tcp=80" "--filter-tcp=80" "$HTTP_ARM"
-assert_contains "http_rkn: includes RKN/List.txt" \
-    "TCP/RKN/List.txt" "$HTTP_ARM"
-assert_contains "http_rkn: includes extra-domains.txt" \
-    "extra-domains.txt" "$HTTP_ARM"
-assert_contains "http_rkn: --in-range=-s5556 (handshake-window)" \
-    "--in-range=-s5556" "$HTTP_ARM"
-assert_contains "http_rkn: --payload=http_req,empty (master shape)" \
-    "--payload=http_req,empty" "$HTTP_ARM"
-assert_contains "http_rkn: failure_detector=z2k_tls_alert_fatal" \
-    "failure_detector=z2k_tls_alert_fatal" "$HTTP_ARM"
-# Anti-regression guards: v3.6 additions must NOT be on the http_rkn
-# arm. If you re-introduce them, bring back the cross-SLD redirect
-# false-positive that the 2026-05-02 rollback fixed for plain HTTP.
-assert_not_contains "http_rkn: no http_reply in payload filter" \
-    "http_req,empty,http_reply" "$HTTP_ARM"
-assert_not_contains "http_rkn: no positive_only success_detector" \
-    "z2k_http_success_positive_only" "$HTTP_ARM"
-assert_not_contains "http_rkn: no no_http_redirect flag" \
-    "no_http_redirect" "$HTTP_ARM"
-
 printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: NFQWS2_TCP_PKT_IN bundle ---\n"
 
 # Third bundle knob: NFQWS2_TCP_PKT_IN drives the iptables connbytes

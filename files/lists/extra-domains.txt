@@ -6,13 +6,6 @@
 
 # Торренты
 fast-torrent.ru
-# fast-torrent.ru ассеты (CSS/JS/images) лежат на media5.cdnbase.com,
-# Hetzner AS24940. Без матча в http_rkn ассеты идут мимо ротатора и режутся
-# ТСПУ mid-stream stall'ом ~32KB → страница без стилей. SLD-уровневая запись
-# покрывает все *.cdnbase.com (media1..N).
-cdnbase.com
-# media7.kinotree.ru — постеры/превью на fast-torrent.ru.
-kinotree.ru
 
 # Нишевые/региональные сайты от Святого отца
 bible-center.ru
