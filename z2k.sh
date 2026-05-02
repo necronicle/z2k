@@ -837,21 +837,9 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-modern-core.lua"
     fi
 
-    # z2k-white-presets.lua: pre-mutated white-SNI TLS payloads (z2k_white_*)
-    # MUST exist на диске — strategies 4/5/6/10/11/12 в rkn_tcp arm ссылаются
-    # на blob=z2k_white_max etc, и без файла lua-init guard в S99 silently
-    # пропускает, daemon не парсит config-строку и не стартует.
-    url="${GITHUB_RAW}/files/lua/z2k-white-presets.lua"
-    output="${lua_dir}/z2k-white-presets.lua"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/lua/z2k-white-presets.lua"
-    else
-        die "Ошибка загрузки files/lua/z2k-white-presets.lua"
-    fi
-
     # z2k-http-strats.lua: 33 z2k_http_* функций для http_rkn arm (strategies
     # 8..40). Без них daemon не парсит config-строку и не стартует — same
-    # как у z2k-white-presets выше.
+    # Без него daemon не парсит config-строку и не стартует.
     url="${GITHUB_RAW}/files/lua/z2k-http-strats.lua"
     output="${lua_dir}/z2k-http-strats.lua"
     if z2k_fetch "$url" "$output"; then

@@ -453,12 +453,6 @@ LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 [ -f "$LUA_AUTO" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_AUTO"
 LUA_LOCKED="$ZAPRET_BASE/lua/locked.lua"
 [ -f "$LUA_LOCKED" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_LOCKED"
-# z2k-white-presets: pre-mutated white-SNI TLS payloads (z2k_white_*) for
-# 16KB-bypass strategies (flood_white / white_sandwich / ttl_ladder).
-# Must load AFTER zapret-antidpi.lua (provides tls_mod / fake_default_tls)
-# и ДО strats где blob=z2k_white_* используется.
-LUA_Z2K_WHITE_PRESETS="$ZAPRET_BASE/lua/z2k-white-presets.lua"
-[ -f "$LUA_Z2K_WHITE_PRESETS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_WHITE_PRESETS"
 # Detectors must load BEFORE autocircular: the rotator resolves
 # failure_detector=z2k_tls_stalled by global name when parsing profiles,
 # so the functions need to exist already. Autocircular still references

@@ -1,35 +1,33 @@
-# z2k extra domains — дополнения к RKN-списку из runetfreedom.
-# Обновляется при каждой установке z2k.
+
 #
-# Критерий: домен НЕ покрыт runetfreedom ru-blocked, но пользователи
-# жалуются что сайт не открывается без z2k обработки.
-
-# Торренты
-fast-torrent.ru
-
-# Нишевые/региональные сайты от Святого отца
-bible-center.ru
-numista.com
-rua.gr
-enimerosi.com
-katzauction.com
-
-# Tapo IoT cameras (от Vladislav Kravchenko @kvv213) — Mosline (МО) DPI режет
-# TLS handshake к их облаку. Камеры не видны наружу пока home-облако TP-Link
-# недоступно.
-security.iot.i.tplinknbu.com
-euw1-device-cloudgateway.iot.i.tplinknbu.com
-tapo.com
-
-# Cloudflare-инфраструктура — официально в РФ не заблокирована, но ТСПУ
-# режет длинные TLS-потоки (16KB window_update инжект, селективный stall
-# на multiplexed HTTP/2 stream'ах). Без явного матча CF-домены падают
-# в default profile с одной слабой fake-стратегией. nfqws2 hostlist
-# хиерархический — `cloudflare.com` покрывает все *.cloudflare.com
 # (cf-assets.www, dash, workers, developers, community, support, radar,
 # blog, partnerlocator, playground.ai, status, canto, и т.д.).
+# Cloudflare-инфраструктура — официально в РФ не заблокирована, но ТСПУ
+# Tapo IoT cameras (от Vladislav Kravchenko @kvv213) — Mosline (МО) DPI режет
+# TLS handshake к их облаку. Камеры не видны наружу пока home-облако TP-Link
+# z2k extra domains — дополнения к RKN-списку из runetfreedom.
+# в default profile с одной слабой fake-стратегией. nfqws2 hostlist
+# жалуются что сайт не открывается без z2k обработки.
+# Критерий: домен НЕ покрыт runetfreedom ru-blocked, но пользователи
+# на multiplexed HTTP/2 stream'ах). Без явного матча CF-домены падают
+# недоступно.
+# Нишевые/региональные сайты от Святого отца
+# Обновляется при каждой установке z2k.
+# режет длинные TLS-потоки (16KB window_update инжект, селективный stall
+# Торренты
+# хиерархический — `cloudflare.com` покрывает все *.cloudflare.com
+bible-center.ru
+cdnbase.com
 cloudflare.com
 cloudflare.net
 cloudflare.tv
-cloudflarestatus.com
 cloudflarepartners.com
+cloudflarestatus.com
+enimerosi.com
+euw1-device-cloudgateway.iot.i.tplinknbu.com
+fast-torrent.ru
+katzauction.com
+numista.com
+rua.gr
+security.iot.i.tplinknbu.com
+tapo.com
