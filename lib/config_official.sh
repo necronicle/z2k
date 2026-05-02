@@ -377,8 +377,8 @@ AUSTERUS_OPT
     # may benefit from z2k_tls_stalled later — это отдельное upgrade
     # решение; здесь восстанавливаем redirect-coverage инвариант,
     # утерянный с добавлением no_http_redirect.
-    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_tls_alert_fatal")
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_tls_alert_fatal")
+    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_silent_drop_detector")
+    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_silent_drop_detector")
 
     # Wire no_http_redirect on all TCP TLS profiles. This disables
     # standard_failure_detector's built-in 302/307 cross-SLD redirect
@@ -1092,16 +1092,16 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    # Pick the bundle for rkn_tcp's circular based on the opt-in flag.
-    # Both knobs (failure_detector + --in-range byte cap) must move
-    # together; tests/test_config_official.sh asserts no half-state.
-    local rkn_failure_detector="z2k_tls_stalled"
+    # rkn_tcp primary failure_detector — z2k_silent_drop_detector (2026-05-03).
+    # Внутри chain делегирует ко всем TLS detectors: mid_stream_stall (TLS
+    # byte-window), tls_stalled (CH-without-SH), tls_alert_fatal (alert/HTTP
+    # classifier). Z2K_USE_MID_STREAM_DETECTOR=1 продолжает регулировать
+    # --in-range byte cap (s5556 → s20000), но primary detector один и тот же.
     local rkn_in_range_bytes="5556"
     if [ "$Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
-        rkn_failure_detector="z2k_mid_stream_stall"
         rkn_in_range_bytes="20000"
     fi
-    rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp" "$rkn_failure_detector")
+    rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp" "z2k_silent_drop_detector")
 
     # Silent fallback для RKN — включается через меню (флаг-файл).
     # failure_detection включает в себя manual_layout (--in-range + payload),

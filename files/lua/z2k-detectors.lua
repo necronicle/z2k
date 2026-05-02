@@ -1240,16 +1240,22 @@ function z2k_silent_drop_detector(desync, crec, arg)
     end
   end
 
-  -- Не silent drop — делегируем остальной chain.
-  -- Приоритет: http_mid_stream_stall (для http_rkn flag=1) → tls_alert_fatal.
-  if type(z2k_http_mid_stream_stall) == "function" then
-    local ok, result = pcall(z2k_http_mid_stream_stall, desync, crec, arg)
-    if ok and result == true then return true end
+  -- Не silent drop — делегируем chain ко всем существующим detectors.
+  -- Каждый сам быстро вернёт false если payload не его (TLS vs HTTP).
+  -- Порядок: TLS-stream → HTTP-stream → TLS-handshake-stalled → TLS-alert.
+  -- z2k_mid_stream_stall (TLS) и z2k_http_mid_stream_stall (HTTP) — byte-window
+  -- detectors. z2k_tls_stalled — CH-without-SH window (rkn_tcp default).
+  -- z2k_tls_alert_fatal — final fallback с HTTP classifier и TLS-alert chain.
+  local function try(fn)
+    if type(fn) == "function" then
+      local ok, result = pcall(fn, desync, crec, arg)
+      if ok and result == true then return true end
+    end
+    return false
   end
-  if type(z2k_tls_alert_fatal) == "function" then
-    local ok, result = pcall(z2k_tls_alert_fatal, desync, crec, arg)
-    if ok and result == true then return true end
-  end
-
+  if try(z2k_mid_stream_stall) then return true end
+  if try(z2k_http_mid_stream_stall) then return true end
+  if try(z2k_tls_stalled) then return true end
+  if try(z2k_tls_alert_fatal) then return true end
   return false
 end

@@ -549,14 +549,17 @@ assert_contains "ms flag=0: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_OFF"
 assert_contains "ms flag=0: rkn_tcp keeps --in-range=-s5556" \
     "--in-range=-s5556" "$RKN_ARM_OFF"
-assert_contains "ms flag=0: rkn_tcp keeps z2k_tls_stalled" \
-    "failure_detector=z2k_tls_stalled" "$RKN_ARM_OFF"
-# Half-state guards on flag=0 — neither knob may leak from the
-# bundle-on path.
+assert_contains "ms flag=0: rkn_tcp uses z2k_silent_drop_detector primary" \
+    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_OFF"
+# Half-state guards on flag=0 — byte-cap не должен прыгнуть на bundle.
 assert_not_contains "ms flag=0: no s20000 leaks into rkn_tcp" \
     "--in-range=-s20000" "$RKN_ARM_OFF"
-assert_not_contains "ms flag=0: no mid_stream_stall leak anywhere" \
-    "z2k_mid_stream_stall" "$OUT_MS_OFF"
+# Old detector names не должны быть primary в config-string. Они
+# доступны через chain в lua, не через config text.
+assert_not_contains "ms flag=0: no z2k_tls_stalled as primary" \
+    "failure_detector=z2k_tls_stalled" "$RKN_ARM_OFF"
+assert_not_contains "ms flag=0: no z2k_mid_stream_stall as primary" \
+    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_OFF"
 
 printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: bundle flag (default ON) ---\n"
 
@@ -570,16 +573,17 @@ assert_contains "ms flag=1: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_ON"
 assert_contains "ms flag=1: rkn_tcp uses --in-range=-s20000" \
     "--in-range=-s20000" "$RKN_ARM_ON"
-assert_contains "ms flag=1: rkn_tcp uses z2k_mid_stream_stall" \
-    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_ON"
-# Half-state guards on flag=1 — no leftover master-compatible tokens
-# on the rkn_tcp arm. Other arms (yt_tcp / yt_gv_tcp) keep their own
-# --in-range=-s5556 because the flag is rkn_tcp-scoped, so we check
-# only the rkn_tcp arm here.
+assert_contains "ms flag=1: rkn_tcp uses z2k_silent_drop_detector primary" \
+    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_ON"
+# Half-state guards on flag=1 — bundle byte-cap должен land, но primary
+# detector один и тот же независимо от flag (chain в lua делегирует к
+# mid_stream_stall когда payload TLS).
 assert_not_contains "ms flag=1: no leftover s5556 on rkn_tcp arm" \
     "--in-range=-s5556" "$RKN_ARM_ON"
-assert_not_contains "ms flag=1: no leftover tls_stalled on rkn_tcp arm" \
+assert_not_contains "ms flag=1: no z2k_tls_stalled as primary" \
     "failure_detector=z2k_tls_stalled" "$RKN_ARM_ON"
+assert_not_contains "ms flag=1: no z2k_mid_stream_stall as primary" \
+    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_ON"
 
 printf "\n--- Z2K_USE_MID_STREAM_DETECTOR + RKN_SILENT_FALLBACK ---\n"
 
@@ -598,8 +602,8 @@ assert_contains "ms+silent: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_SILENT"
 assert_contains "ms+silent: silent path also bumps to s20000" \
     "--in-range=-s20000" "$RKN_ARM_SILENT"
-assert_contains "ms+silent: silent path keeps mid_stream_stall" \
-    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_SILENT"
+assert_contains "ms+silent: silent path keeps z2k_silent_drop_detector primary" \
+    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_SILENT"
 # Silent fallback's success_detector contract: append
 # z2k_success_no_reset only when one isn't already set. rkn_tcp gets
 # z2k_http_success_positive_only earlier from ensure_circular_arg_set,
@@ -609,8 +613,10 @@ assert_contains "ms+silent: existing success_detector preserved" \
     "success_detector=z2k_http_success_positive_only" "$RKN_ARM_SILENT"
 assert_not_contains "ms+silent: no s5556 leak via silent path" \
     "--in-range=-s5556" "$RKN_ARM_SILENT"
-assert_not_contains "ms+silent: no tls_stalled leak via silent path" \
+assert_not_contains "ms+silent: no z2k_tls_stalled as primary" \
     "failure_detector=z2k_tls_stalled" "$RKN_ARM_SILENT"
+assert_not_contains "ms+silent: no z2k_mid_stream_stall as primary" \
+    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_SILENT"
 
 printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: NFQWS2_TCP_PKT_IN bundle ---\n"
 
