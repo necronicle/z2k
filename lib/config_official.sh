@@ -555,29 +555,27 @@ AUSTERUS_OPT
                 *:tcp_ts=-1000:*|*:tcp_ts=-1000)
                     strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
                     case "$strategy_id" in
-                        # Original 10 slots (pre-Phase 1.3 positions) — strategy=1
-                        # (padencap+rndsni) теперь в конце (=48) после Phase 5
-                        # rollback, нумерация 2..48 откатилась на 1..47, slot IDs
-                        # вернулись к до-Phase-1.3 значениям (-1 от пост-Phase-1.1).
-                        11) new_ts="-43210"  ;;
-                        15) new_ts="-100000" ;;
-                        18) new_ts="-500000" ;;
-                        23) new_ts="-43210"  ;;
-                        24) new_ts="-7777"   ;;
-                        28) new_ts="-10000"  ;;
+                        # Original 10 slots — sliding +6 после вставки 6 white-
+                        # rescue strategies (positions 4,5,6,10,11,12 в rkn arm).
+                        # Все исходные strategy=7..48 сдвинулись на +6, slot IDs
+                        # отслеживают физические tcp_ts=-1000 токены.
+                        17) new_ts="-43210"  ;;
+                        21) new_ts="-100000" ;;
+                        24) new_ts="-500000" ;;
+                        29) new_ts="-43210"  ;;
                         30) new_ts="-7777"   ;;
-                        35) new_ts="-43210"  ;;
-                        37) new_ts="-100000" ;;
-                        42) new_ts="-10000"  ;;
-                        # New rotated slots (Phase 1.3, post-rollback позиции).
-                        # tcp_ts=-1000 частично сгорел с 2026-04-20
-                        # (memory reference_tcp_ts_watch.md), эти 4 slots
-                        # переведены на нестандартные ts чтобы убрать
-                        # одинаковость fingerprint'а на уже-сгоревшем -1000.
-                        25) new_ts="-43210"  ;;
-                        26) new_ts="-10000"  ;;
-                        38) new_ts="-7777"   ;;
-                        40) new_ts="-100000" ;;
+                        34) new_ts="-10000"  ;;
+                        36) new_ts="-7777"   ;;
+                        41) new_ts="-43210"  ;;
+                        43) new_ts="-100000" ;;
+                        48) new_ts="-10000"  ;;
+                        # New rotated slots (Phase 1.3, теперь после +6 сдвига).
+                        # tcp_ts=-1000 частично сгорел с 2026-04-20 — нестандартные
+                        # ts для variability fingerprint'а.
+                        31) new_ts="-43210"  ;;
+                        32) new_ts="-10000"  ;;
+                        44) new_ts="-7777"   ;;
+                        46) new_ts="-100000" ;;
                         *)  new_ts=""        ;;
                     esac
                     if [ -n "$new_ts" ]; then
