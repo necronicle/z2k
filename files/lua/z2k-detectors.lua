@@ -885,6 +885,245 @@ function z2k_mid_stream_stall(desync, crec)
   return false
 end
 
+-- HTTP mid-stream stall detector (mirror z2k_mid_stream_stall на HTTP path).
+--
+-- Что ловит: handshake-фаза не релевантна для HTTP (нет TLS), но та же
+-- pattern stall'а — сервер отдал ~14-30KB body, потом стрим тихо встаёт
+-- без RST/FIN/alert. По треду ntc.party 22516 (#1, #3) реальный диапазон
+-- HTTP stall'а 24-32 KB, чуть выше TLS-варианта.
+--
+-- Differences from z2k_mid_stream_stall (TLS):
+--   * Gate signal: incoming `http_reply` (не tls_server_hello/handshake);
+--     outgoing retry — `http_req` (не tls_client_hello).
+--   * Constants: LO=14000 / HI=32000 (TLS было 8000/26000 — HTTP отдаёт
+--     больше bytes в первой инициальной burst'е до stall'а).
+--   * State scope: per-flow в `desync.track.lua_state.http_mid_stream`,
+--     per-key в module-global `z2k_http_mid_stream_state`. Отдельные
+--     карты от TLS чтобы parallel TLS+HTTP к тому же SLD не пересекались.
+--   * Inherits z2k_tls_alert_fatal (общий fail signal — RST / TLS alert /
+--     HTTP block-marker classifier).
+--
+-- Mid-stream key через standard_hostkey() (nld=2 aggregation), как у TLS.
+-- Multi-candidate map per key (8 max), ownership via flow_id.
+
+local Z2K_HTTP_MID_STREAM_LO               = 14000
+local Z2K_HTTP_MID_STREAM_HI               = 32000
+local Z2K_HTTP_MID_STREAM_SILENCE_SEC      = 5
+local Z2K_HTTP_MID_STREAM_RETRY_MAX_SEC    = 120
+local Z2K_HTTP_MID_STREAM_ACTIVE_RETRY_SEC = 30
+local Z2K_HTTP_MID_STREAM_MAX_CANDIDATES   = 8
+local z2k_http_mid_stream_state = {}
+local z2k_http_mid_stream_insert_counter = 0
+local z2k_http_mid_stream_flow_seq = 0
+
+local function z2k_http_mid_stream_new_key_state()
+  return {
+    candidates = {},
+    last_req_ts = 0,
+  }
+end
+
+local function z2k_http_mid_stream_new_flow_state()
+  z2k_http_mid_stream_flow_seq = z2k_http_mid_stream_flow_seq + 1
+  return {
+    base_seq         = nil,
+    max_seq          = 0,
+    last_progress_ts = 0,
+    fin_seen         = false,
+    flow_id          = z2k_http_mid_stream_flow_seq,
+  }
+end
+
+local function z2k_http_mid_stream_ts_of(v)
+  if type(v) ~= "table" then return 0 end
+  local newest = tonumber(v.last_req_ts) or 0
+  local cands = v.candidates
+  if type(cands) == "table" then
+    for _, c in pairs(cands) do
+      local t = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
+      if t > newest then newest = t end
+    end
+  end
+  return newest
+end
+
+local function z2k_http_mid_stream_maybe_evict()
+  z2k_http_mid_stream_insert_counter = z2k_http_mid_stream_insert_counter + 1
+  if z2k_http_mid_stream_insert_counter < Z2K_DETECTOR_EVICT_INTERVAL then return end
+  z2k_http_mid_stream_insert_counter = 0
+  local n = 0
+  for _ in pairs(z2k_http_mid_stream_state) do n = n + 1 end
+  if n <= Z2K_DETECTOR_MAP_MAX then return end
+  z2k_detector_evict_oldest(z2k_http_mid_stream_state, Z2K_DETECTOR_EVICT_BATCH, z2k_http_mid_stream_ts_of)
+end
+
+local function z2k_http_mid_stream_oldest_candidate_id(cands)
+  local oldest_id, oldest_ts
+  for fid, c in pairs(cands) do
+    local ts = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
+    if not oldest_ts or ts < oldest_ts then
+      oldest_id, oldest_ts = fid, ts
+    end
+  end
+  return oldest_id
+end
+
+local function z2k_http_mid_stream_publish_candidate(key_st, flow_st)
+  local cands = key_st.candidates
+  local existing = cands[flow_st.flow_id]
+  if existing then
+    existing.max_seq          = flow_st.max_seq
+    existing.last_progress_ts = flow_st.last_progress_ts
+    return
+  end
+  local count = 0
+  for _ in pairs(cands) do count = count + 1 end
+  if count >= Z2K_HTTP_MID_STREAM_MAX_CANDIDATES then
+    local victim = z2k_http_mid_stream_oldest_candidate_id(cands)
+    if victim then cands[victim] = nil end
+  end
+  cands[flow_st.flow_id] = {
+    max_seq          = flow_st.max_seq,
+    last_progress_ts = flow_st.last_progress_ts,
+  }
+end
+
+local function z2k_http_mid_stream_clear_all_candidates(cands)
+  for fid in pairs(cands) do
+    cands[fid] = nil
+  end
+end
+
+function z2k_http_mid_stream_stall(desync, crec)
+  -- Inherit RST / TLS alert / HTTP block-marker fail signals.
+  if type(z2k_tls_alert_fatal) == "function" then
+    local ok, res = pcall(z2k_tls_alert_fatal, desync, crec)
+    if ok and res then return true end
+  end
+
+  if not desync then return false end
+  local host = desync.track and desync.track.hostname
+  if not host or host == "" then return false end
+  local now = os.time and os.time() or 0
+  if now == 0 then return false end
+
+  local lua_state = desync.track.lua_state
+  if type(lua_state) ~= "table" then return false end
+
+  local flow_st = lua_state.http_mid_stream
+  if type(flow_st) ~= "table" then
+    flow_st = z2k_http_mid_stream_new_flow_state()
+    lua_state.http_mid_stream = flow_st
+  end
+
+  local key = z2k_mid_stream_flow_key(desync, host)
+  local key_st = z2k_http_mid_stream_state[key]
+  if not key_st then
+    key_st = z2k_http_mid_stream_new_key_state()
+    z2k_http_mid_stream_state[key] = key_st
+    z2k_http_mid_stream_maybe_evict()
+  end
+
+  -- Incoming http_reply — track byte progress and FIN/RST.
+  if not desync.outgoing and desync.l7payload == "http_reply" then
+    local dis = desync.dis
+    if not dis or not dis.tcp then return false end
+
+    local flags = tonumber(dis.tcp.th_flags) or 0
+    local fin_bit = (TH_FIN and bitand(flags, TH_FIN)) or 0
+    local rst_bit = (TH_RST and bitand(flags, TH_RST)) or 0
+    if fin_bit ~= 0 or rst_bit ~= 0 then
+      flow_st.fin_seen = true
+      key_st.candidates[flow_st.flow_id] = nil
+      return false
+    end
+
+    if type(dis.payload) ~= "string" or #dis.payload == 0 then
+      return false
+    end
+    local seq = tonumber(dis.tcp.th_seq)
+    if not seq then return false end
+
+    if not flow_st.base_seq then flow_st.base_seq = seq end
+    local rel = (seq - flow_st.base_seq) + #dis.payload
+    if rel > flow_st.max_seq then
+      flow_st.max_seq = rel
+      flow_st.last_progress_ts = now
+    end
+
+    if flow_st.max_seq > Z2K_HTTP_MID_STREAM_HI then
+      key_st.candidates[flow_st.flow_id] = nil
+      return false
+    end
+
+    if flow_st.max_seq >= Z2K_HTTP_MID_STREAM_LO then
+      z2k_http_mid_stream_publish_candidate(key_st, flow_st)
+    end
+    return false
+  end
+
+  -- Incoming non-http_reply (other payloads on same TCP — e.g. control
+  -- packets) — игнорируем для byte tracking, но FIN/RST всё равно
+  -- закроет flow.
+  if not desync.outgoing then
+    local dis = desync.dis
+    if dis and dis.tcp then
+      local flags = tonumber(dis.tcp.th_flags) or 0
+      local fin_bit = (TH_FIN and bitand(flags, TH_FIN)) or 0
+      local rst_bit = (TH_RST and bitand(flags, TH_RST)) or 0
+      if fin_bit ~= 0 or rst_bit ~= 0 then
+        flow_st.fin_seen = true
+        key_st.candidates[flow_st.flow_id] = nil
+      end
+    end
+    return false
+  end
+
+  -- Outgoing http_req — retry signal. Scan candidates for fire match.
+  if desync.outgoing and desync.l7payload == "http_req" then
+    local prev_req_ts = key_st.last_req_ts
+    key_st.last_req_ts = now
+
+    local cands = key_st.candidates
+    if next(cands) == nil then return false end
+
+    local req_gap = (prev_req_ts > 0) and (now - prev_req_ts) or math.huge
+    if req_gap > Z2K_HTTP_MID_STREAM_ACTIVE_RETRY_SEC then
+      z2k_http_mid_stream_clear_all_candidates(cands)
+      return false
+    end
+
+    local fire_fid, fire_cand, fire_silence
+    for fid, cand in pairs(cands) do
+      local since_progress = now - cand.last_progress_ts
+      if since_progress > Z2K_HTTP_MID_STREAM_RETRY_MAX_SEC then
+        cands[fid] = nil
+      elseif (not fire_fid)
+             and cand.max_seq >= Z2K_HTTP_MID_STREAM_LO
+             and cand.max_seq <= Z2K_HTTP_MID_STREAM_HI
+             and since_progress >= Z2K_HTTP_MID_STREAM_SILENCE_SEC then
+        fire_fid     = fid
+        fire_cand    = cand
+        fire_silence = since_progress
+      end
+    end
+
+    if not fire_fid then return false end
+
+    if type(DLOG) == "function" then
+      DLOG("z2k_http_mid_stream_stall: key=" .. key
+           .. " host=" .. host
+           .. " max_seq=" .. fire_cand.max_seq
+           .. " silence=" .. fire_silence .. "s"
+           .. " req_gap=" .. req_gap .. "s — counting as fail")
+    end
+    cands[fire_fid] = nil
+    return true
+  end
+
+  return false
+end
+
 -- Conservative success detector for TCP profiles.
 -- Detects success but does NOT reset host failure counters.
 -- This is important for TV clients: successful handshakes from other devices

@@ -725,6 +725,43 @@ EOF
 test_padencap_under_flag "0" "0" "rkn_tcp без padencap"
 test_padencap_under_flag "1" "1" "rkn_tcp с padencap"
 
+printf "\n--- HTTP mid_stream_stall wiring под Z2K_USE_MID_STREAM_DETECTOR ---\n"
+
+# При Z2K_USE_MID_STREAM_DETECTOR=1 (default per policy) http_rkn arm
+# получает failure_detector=z2k_http_mid_stream_stall (новый HTTP byte-
+# window detector). При =0 откат к master-shape z2k_tls_alert_fatal.
+test_http_detector_under_flag() {
+    local flag="$1" expected_detector="$2" forbidden_detector="$3"
+    local root="${MOCK_DIR}/http-det-$flag"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" "$root/extra_strats/TCP/RKN" \
+             "$root/extra_strats/UDP/YT" "$root/lists"
+    echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    cat > "$root/config" <<EOF
+ENABLED=1
+Z2K_USE_MID_STREAM_DETECTOR=$flag
+EOF
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
+    local http_arm
+    http_arm=$(grep -F 'key=http_rkn' "$root/config" | head -1)
+
+    assert_contains "ms flag=$flag: http_rkn arm emitted" \
+        "key=http_rkn" "$http_arm"
+    assert_contains "ms flag=$flag: http_rkn detector=$expected_detector" \
+        "failure_detector=$expected_detector" "$http_arm"
+    assert_not_contains "ms flag=$flag: http_rkn no $forbidden_detector leak" \
+        "failure_detector=$forbidden_detector" "$http_arm"
+    rm -rf "$root"
+}
+
+# flag=0 → master shape (z2k_tls_alert_fatal, no z2k_http_mid_stream_stall)
+test_http_detector_under_flag "0" "z2k_tls_alert_fatal" "z2k_http_mid_stream_stall"
+# flag=1 → bundle (z2k_http_mid_stream_stall, no z2k_tls_alert_fatal as primary)
+test_http_detector_under_flag "1" "z2k_http_mid_stream_stall" "z2k_tls_alert_fatal"
+
 printf "\n--- GAME_PROFILE: runtime — default → flowseal ---\n"
 
 setup_flowseal_ipset() { echo "8.8.8.0/24" > "$1/lists/flowseal_game_ips.txt"; }

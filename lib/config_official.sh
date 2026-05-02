@@ -1524,6 +1524,15 @@ AUSTERUS_OPT
     # Strategy 7: fake badsum + multisplit method+2
     local rkn_http_extras=""
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_http_extras=" --hostlist=${lists_dir}/extra-domains.txt"
+    # http_rkn failure_detector — bundled с Z2K_USE_MID_STREAM_DETECTOR.
+    # При flag=1 (default per Mark policy) HTTP profile получает
+    # z2k_http_mid_stream_stall — байт-window detector для HTTP stall'а
+    # 14-25 KB описанного в треде ntc.party 22516. При =0 откат на
+    # master-shape z2k_tls_alert_fatal (нет HTTP byte tracking).
+    local http_rkn_failure_detector="z2k_tls_alert_fatal"
+    if [ "$Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
+        http_rkn_failure_detector="z2k_http_mid_stream_stall"
+    fi
     # http_rkn (port 80 HTTP profile). v3.6 commit 4 wiring:
     #   - success_detector=z2k_http_success_positive_only
     #     (default standard would fire success on seq>inseq even for
@@ -1545,7 +1554,7 @@ AUSTERUS_OPT
     #                 (multisplit/syndata/fake/etc) внутри scope-нуты на
     #                 payload=http_req, так что они не сработают на
     #                 incoming replies — только detectors классифицируют.
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_tls_alert_fatal:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=${http_rkn_failure_detector}:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --in-range=x --new"
 
 
     local nfqws2_opt_value
