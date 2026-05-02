@@ -1174,6 +1174,32 @@ function z2k_http_success_positive_only(desync, crec)
      type(z2k_classify_http_reply) == "function" then
     local class, reason = z2k_classify_http_reply(desync)
     if class == "positive" then
+      -- Content-Length-aware: на cdnbase.com и подобных CDN-static с
+      -- ТСПУ body-cap первый http_reply packet — это headers + первая
+      -- часть body. Continuation packets идут как payload_type=unknown
+      -- и НЕ вызывают lua-callback вообще, так что мы не сможем поймать
+      -- truncation на runtime. НО мы можем проверить здесь:
+      -- если headers содержат Content-Length=X, и body в этом первом
+      -- packet'е < X — это не самодостаточный success, full body ещё
+      -- идёт continuation packets'ами, и мы НЕ ЗНАЕМ дойдёт ли он до
+      -- конца. Откладываем success-сигнал → autocircular не committed.
+      -- При retry/refresh клиента silent_drop_detector сделает свою
+      -- работу (out=4 in=0 → failure → ротация).
+      local payload = desync.dis and desync.dis.payload
+      if type(payload) == "string" and #payload > 0 then
+        local cl = string.match(payload, "[Cc]ontent%-[Ll]ength:%s*(%d+)")
+        if cl then
+          local expected = tonumber(cl) or 0
+          local body_pos = string.find(payload, "\r\n\r\n", 1, true)
+          local body_in_packet = 0
+          if body_pos then body_in_packet = #payload - (body_pos + 3) end
+          if expected > 0 and body_in_packet < expected then
+            DLOG("z2k_http_success_positive_only: defer "..(desync.track and desync.track.hostname or "?")..
+                 " — first packet body "..body_in_packet.."/"..expected.." (continuation pending)")
+            return false
+          end
+        end
+      end
       return true
     end
     if class == "neutral" or class == "hard_fail" then
@@ -1255,8 +1281,120 @@ function z2k_silent_drop_detector(desync, crec, arg)
   end
   if try(z2k_mid_stream_stall) then return true end
   if try(z2k_http_mid_stream_stall) then return true end
+  if try(z2k_http_partial_response) then return true end
   if try(z2k_tls_stalled) then return true end
   if try(z2k_tls_alert_fatal) then return true end
   return false
 end
 
+
+-- ----------------------------------------------------------------------------
+-- z2k_http_partial_response — ловит ТСПУ HTTP body cap (silent truncation):
+-- сервер обещает Content-Length=X, реально доходит ~X/3 (типичный 16-30KB cap),
+-- existing detectors пропускают потому что 200 status получен и data приходит
+-- (нет stall signal). Этот detector сравнивает advertised CL vs received bytes
+-- per-key, при partial mismatch >15% triggers failure → autocircular ротирует.
+--
+-- DEBUG: это re-port после field-fail. Все path'ы log'ируются через DLOG
+-- так что при включённом --debug=1 в /opt/zapret2/extra_strats/cache/
+-- autocircular/nfqws2.debug.log будет полная trace.
+-- ----------------------------------------------------------------------------
+
+local Z2K_PARTIAL_DEFICIT_PCT = 15
+local Z2K_PARTIAL_MIN_EXPECTED = 8000
+local Z2K_PARTIAL_STATE_CAP = 256
+local z2k_partial_resp_state = {}
+local z2k_partial_resp_state_count = 0
+
+local function z2k_partial_state_evict_one()
+  if z2k_partial_resp_state_count <= Z2K_PARTIAL_STATE_CAP then return end
+  local oldest_key, oldest_ts = nil, math.huge
+  for k, v in pairs(z2k_partial_resp_state) do
+    if (v.last_seen or 0) < oldest_ts then
+      oldest_key = k
+      oldest_ts = v.last_seen or 0
+    end
+  end
+  if oldest_key then
+    z2k_partial_resp_state[oldest_key] = nil
+    z2k_partial_resp_state_count = z2k_partial_resp_state_count - 1
+  end
+end
+
+function z2k_http_partial_response(desync, crec)
+  if not desync or not desync.dis or not desync.dis.tcp then
+    if b_debug then DLOG("partial_resp: skip — no tcp dissect") end
+    return false
+  end
+  if crec and crec.nocheck then
+    if b_debug then DLOG("partial_resp: skip — crec.nocheck") end
+    return false
+  end
+
+  local host = desync.track and desync.track.hostname
+  if not host or host == "" then
+    if b_debug then DLOG("partial_resp: skip — no hostname") end
+    return false
+  end
+
+  local now = (os and os.time and os.time()) or 0
+  local key = host
+  local st = z2k_partial_resp_state[key]
+
+  if desync.outgoing and desync.l7payload == "http_req" then
+    if b_debug then DLOG("partial_resp: outgoing http_req for "..host.." (st.expected="..tostring(st and st.expected).." st.received="..tostring(st and st.received)..")") end
+    if st and st.expected > Z2K_PARTIAL_MIN_EXPECTED and st.received > 0 then
+      local got_pct = math.floor((st.received * 100) / st.expected)
+      local deficit = 100 - got_pct
+      local prev_e = st.expected
+      local prev_r = st.received
+      st.expected = 0
+      st.received = 0
+      st.last_seen = now
+      if deficit >= Z2K_PARTIAL_DEFICIT_PCT then
+        DLOG("z2k_http_partial_response: FAIL "..host.." got "..prev_r.."/"..prev_e.." (-"..deficit.."%)")
+        return true
+      else
+        if b_debug then DLOG("partial_resp: ok "..host.." got "..prev_r.."/"..prev_e.." (-"..deficit.."%)") end
+      end
+    end
+    return false
+  end
+
+  if not desync.outgoing and desync.l7payload == "http_reply" then
+    local payload = desync.dis.payload
+    if type(payload) ~= "string" or #payload == 0 then
+      if b_debug then DLOG("partial_resp: skip — empty incoming payload "..host) end
+      return false
+    end
+    if not st then
+      st = { expected = 0, received = 0, last_seen = now }
+      z2k_partial_resp_state[key] = st
+      z2k_partial_resp_state_count = z2k_partial_resp_state_count + 1
+      z2k_partial_state_evict_one()
+    end
+    st.last_seen = now
+
+    if st.expected == 0 then
+      local cl = string.match(payload, "[Cc]ontent%-[Ll]ength:%s*(%d+)")
+      if cl then
+        st.expected = tonumber(cl) or 0
+        local body_pos = string.find(payload, "\r\n\r\n", 1, true)
+        if body_pos then
+          st.received = #payload - (body_pos + 3)
+        else
+          st.received = 0
+        end
+        DLOG("partial_resp: "..host.." Content-Length="..st.expected.." first-payload-body="..st.received)
+      else
+        if b_debug then DLOG("partial_resp: "..host.." incoming http_reply WITHOUT Content-Length header") end
+      end
+    else
+      st.received = st.received + #payload
+      if b_debug then DLOG("partial_resp: "..host.." continuation, received="..st.received.."/"..st.expected) end
+    end
+    return false
+  end
+
+  return false
+end
