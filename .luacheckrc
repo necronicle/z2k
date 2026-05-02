@@ -46,6 +46,8 @@ globals = {
     "z2k_http_ipfrag",
     "z2k_http_syndata",
     "z2k_http_aggressive",
+    "z2k_http_flood_white",
+    "z2k_http_partial_response",
     "z2k_success_no_reset",
     "z2k_http_success_positive_only",
     "z2k_timing_morph",

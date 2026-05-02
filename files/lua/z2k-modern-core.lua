@@ -1007,4 +1007,63 @@ function z2k_ttl_ladder(ctx, desync)
     return VERDICT_DROP
 end
 
-DLOG("z2k-modern-core: 16KB-bypass primitives loaded (z2k_flood_white, z2k_white_sandwich, z2k_ttl_ladder)")
+-- ----------------------------------------------------------------------------
+-- z2k_http_flood_white — HTTP-аналог z2k_flood_white для обхода body-cap
+-- (типичный 16-30KB ТСПУ silent truncation на CDN-static-доменах типа
+-- cdnbase.com). Аналогично TLS-варианту: N "белых" fake-requests с
+-- whitelist Host header перед реальным split. ТСПУ classified flow как
+-- whitelist → 16KB cap не применяется к response body.
+--
+-- args:
+--   host=<domain>      whitelist Host для fake-requests (default web.max.ru)
+--   count=<N>          количество fake-requests (default 10)
+--   pos=<positions>    multisplit позиции реального request (default method+2)
+--   плюс fooling: badsum обязателен (через autocircular conf)
+-- ----------------------------------------------------------------------------
+function z2k_http_flood_white(ctx, desync)
+    if not desync.dis.tcp then
+        instance_cutoff_shim(ctx, desync)
+        return
+    end
+    direction_cutoff_opposite(ctx, desync)
+    if not direction_check(desync) or not payload_check(desync) then
+        return
+    end
+    if not replay_first(desync) then
+        if replay_drop(desync) then return VERDICT_DROP end
+        return
+    end
+
+    local host = desync.arg.host or "web.max.ru"
+    local fake_http = "GET / HTTP/1.1\r\n" ..
+                      "Host: " .. host .. "\r\n" ..
+                      "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) " ..
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36\r\n" ..
+                      "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n" ..
+                      "Accept-Language: ru-RU,ru;q=0.9\r\n" ..
+                      "Accept-Encoding: gzip, deflate\r\n" ..
+                      "Connection: close\r\n\r\n"
+    local count = tonumber(desync.arg.count) or 10
+    if b_debug then DLOG("z2k_http_flood_white: " .. count .. " white-Host fakes (" .. host .. ")") end
+
+    for i = 1, count do
+        local dis = deepcopy(desync.dis)
+        dis.payload = fake_http
+        apply_fooling(desync, dis)
+        if b_debug then DLOG("z2k_http_flood_white: fake #" .. i) end
+        rawsend_dissect(dis, {rawsend = {repeats = 1}})
+    end
+
+    local data = desync.reasm_data or desync.dis.payload
+    local spos = desync.arg.pos or "method+2"
+    local pos = resolve_multi_pos(data, desync.l7payload, spos)
+    delete_pos_1(pos)
+
+    if not z2k_send_real_split(desync, pos) then
+        return VERDICT_PASS
+    end
+    replay_drop_set(desync)
+    return VERDICT_DROP
+end
+
+DLOG("z2k-modern-core: 16KB-bypass primitives loaded (z2k_flood_white, z2k_white_sandwich, z2k_ttl_ladder, z2k_http_flood_white)")

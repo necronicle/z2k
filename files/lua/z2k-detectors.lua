@@ -1255,7 +1255,114 @@ function z2k_silent_drop_detector(desync, crec, arg)
   end
   if try(z2k_mid_stream_stall) then return true end
   if try(z2k_http_mid_stream_stall) then return true end
+  if try(z2k_http_partial_response) then return true end
   if try(z2k_tls_stalled) then return true end
   if try(z2k_tls_alert_fatal) then return true end
+  return false
+end
+
+-- ----------------------------------------------------------------------------
+-- z2k_http_partial_response — ловит ТСПУ HTTP body cap (silent truncation):
+-- сервер обещает Content-Length=X, реально доходит ~X/3 (типичный 16-30KB cap),
+-- existing detectors пропускают потому что 200 status получен и data приходит
+-- (нет stall signal). Этот detector сравнивает advertised CL vs received bytes
+-- per-key, при partial mismatch >15% triggers failure → autocircular ротирует.
+--
+-- Per-host state с TTL eviction (cap 256). Tracking:
+--   - On incoming http_reply: парсит Content-Length из headers,
+--     ставит expected_total + начинает tracking received_total
+--   - На каждом incoming на том же flow продолжает count
+--   - На outgoing http_req (retry) — если previous expected > received*1.18
+--     fires failure для autocircular ротации
+--
+-- Подключается в chain через z2k_silent_drop_detector.
+
+local Z2K_PARTIAL_DEFICIT_PCT = 15            -- >15% deficit = fail
+local Z2K_PARTIAL_MIN_EXPECTED = 8000          -- мелкие responses не считаем (favicon etc)
+local Z2K_PARTIAL_STATE_CAP = 256
+local z2k_partial_resp_state = {}
+local z2k_partial_resp_state_count = 0
+
+local function z2k_partial_state_evict_one()
+  -- LRU-ish evict: drop oldest entry when over cap
+  if z2k_partial_resp_state_count <= Z2K_PARTIAL_STATE_CAP then return end
+  local oldest_key, oldest_ts = nil, math.huge
+  for k, v in pairs(z2k_partial_resp_state) do
+    if (v.last_seen or 0) < oldest_ts then
+      oldest_key = k
+      oldest_ts = v.last_seen or 0
+    end
+  end
+  if oldest_key then
+    z2k_partial_resp_state[oldest_key] = nil
+    z2k_partial_resp_state_count = z2k_partial_resp_state_count - 1
+  end
+end
+
+function z2k_http_partial_response(desync, crec)
+  if not desync or not desync.dis or not desync.dis.tcp then return false end
+  if crec and crec.nocheck then return false end
+
+  local host = desync.track and desync.track.hostname
+  if not host or host == "" then return false end
+
+  local now = (os and os.time and os.time()) or 0
+  local key = host
+  local st = z2k_partial_resp_state[key]
+
+  -- Outgoing http_req — retry signal, проверяем previous-flow deficit
+  if desync.outgoing and desync.l7payload == "http_req" then
+    if st and st.expected > Z2K_PARTIAL_MIN_EXPECTED and st.received > 0 then
+      local got_pct = math.floor((st.received * 100) / st.expected)
+      local deficit = 100 - got_pct
+      -- Reset для следующего request на том же hostkey
+      local prev_expected = st.expected
+      local prev_received = st.received
+      st.expected = 0
+      st.received = 0
+      st.last_seen = now
+      if deficit >= Z2K_PARTIAL_DEFICIT_PCT then
+        DLOG("z2k_http_partial_response: FAIL " .. host ..
+             " got " .. prev_received .. "/" .. prev_expected ..
+             " (-" .. deficit .. "%)")
+        return true
+      end
+    end
+    return false
+  end
+
+  -- Incoming http_reply — парсим CL + tracking
+  if not desync.outgoing and desync.l7payload == "http_reply" then
+    local payload = desync.dis.payload
+    if type(payload) ~= "string" or #payload == 0 then return false end
+
+    if not st then
+      st = { expected = 0, received = 0, last_seen = now }
+      z2k_partial_resp_state[key] = st
+      z2k_partial_resp_state_count = z2k_partial_resp_state_count + 1
+      z2k_partial_state_evict_one()
+    end
+    st.last_seen = now
+
+    -- Только при первом packet'е (с headers) парсим Content-Length
+    if st.expected == 0 then
+      local cl = string.match(payload, "[Cc]ontent%-[Ll]ength:%s*(%d+)")
+      if cl then
+        st.expected = tonumber(cl) or 0
+        -- header-block заканчивается \r\n\r\n; всё после — body
+        local body_pos = string.find(payload, "\r\n\r\n", 1, true)
+        if body_pos then
+          st.received = #payload - (body_pos + 3)
+        else
+          st.received = 0
+        end
+      end
+    else
+      -- Continuation packet — весь payload это body
+      st.received = st.received + #payload
+    end
+    return false
+  end
+
   return false
 end
