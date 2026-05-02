@@ -198,7 +198,7 @@ do
     reset_detector(); set_now(1000)
     local f = mk_flow("a.example.com")
     z2k_mid_stream_stall(f.out_ch(), {})        -- CH1 t=1000
-    deliver(f, 100, 1500, 17)                   -- ~25500 bytes > HI
+    deliver(f, 100, 1500, 20)                   -- ~30000 bytes > HI=26000
     set_now(1025)                               -- ch_gap=25s ≤ 30s
     local r = z2k_mid_stream_stall(f.out_ch(), {})
     check("progress > HI no fire (success path)", false, r)
@@ -416,8 +416,8 @@ do
     deliver(fB, 50000, 1500, 6)                 -- B: max_seq=9000 (in [LO,HI])
                                                 -- B's candidate published t=1015
                                                 -- B then stalls (no more pkts)
-    -- A continues past HI: 5 more packets, max_seq=12000+5*1500=19500 > HI
-    deliver(fA, 100 + 8 * 1500, 1500, 5)        -- A's candidate cleared at t=1020
+    -- A continues past HI=26000: 11 more packets, max_seq=12000+11*1500=28500
+    deliver(fA, 100 + 8 * 1500, 1500, 11)       -- A's candidate cleared
     set_now(1030)                               -- ch_gap from fB CH=21s ≤ 30s
     local fC = mk_flow("static.cf.com")
     local r = z2k_mid_stream_stall(fC.out_ch(), {})

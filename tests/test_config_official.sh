@@ -386,26 +386,27 @@ printf "\n--- Config output structure ---\n"
 
 # Build a representative NFQWS2_OPT output manually to validate structural checks
 # This simulates what generate_nfqws2_opt_from_strategies produces in normal mode
-SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=18000:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=fake:strategy=1 --new
+SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=fake:strategy=1 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_tls_alert_fatal:no_http_redirect --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:failure_detector=z2k_tls_alert_fatal:no_http_redirect --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
 --filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular_locked:key=6"
 
-# Production guarantees per v3.6 plan:
-#  - every TCP TLS circular has inseq=18000 (commit 4c852f5)
-#  - rkn_tcp has failure_detector=z2k_tls_stalled (revert от 2026-04-30
-#    после code-review: mid_stream_stall имел архитектурные проблемы,
-#    припаркован как experimental до редизайна)
+# Production guarantees per v3.6 plan + Phase 1.2 (2026-05-02):
+#  - rkn_tcp circular has inseq=26000 (Phase 1.2 — covers TLS stall window
+#    14-25 KB per ntc.party 22516 #1, #3)
+#  - yt_tcp / gv_tcp circular have inseq=18000 (smaller first-burst typical)
+#  - rkn_tcp has failure_detector=z2k_tls_stalled (default; v3 mid_stream_
+#    stall is opt-in via Z2K_USE_MID_STREAM_DETECTOR=1)
 #  - rkn_tcp / gv_tcp have success_detector=z2k_http_success_positive_only
 #    (HTTP-aware — closes the seq>inseq false-pin race for 4xx replies)
 #  - yt_tcp keeps z2k_success_no_reset (now HTTP-neutral-aware in commit 4)
 #  - all four TLS profiles carry no_http_redirect to off-load standard's
 #    302/307 cross-SLD redirect branch onto our z2k_classify_http_reply
 assert_contains "structure: rkn_tcp has z2k_tls_stalled" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled" "$SAMPLE_OPT"
-assert_contains "structure: rkn_tcp has inseq=18000" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=18000" "$SAMPLE_OPT"
-assert_contains "structure: rkn_tcp has positive-only success_detector" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=18000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
-assert_contains "structure: rkn_tcp has no_http_redirect" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=18000:success_detector=z2k_http_success_positive_only:no_http_redirect" "$SAMPLE_OPT"
+assert_contains "structure: rkn_tcp has inseq=26000" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000" "$SAMPLE_OPT"
+assert_contains "structure: rkn_tcp has positive-only success_detector" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
+assert_contains "structure: rkn_tcp has no_http_redirect" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only:no_http_redirect" "$SAMPLE_OPT"
 assert_contains "structure: yt_tcp has no_reset success_detector" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset" "$SAMPLE_OPT"
 # yt_tcp / gv_tcp MUST carry failure_detector=z2k_tls_alert_fatal — without
 # this, the no_http_redirect flag below leaves them with NO redirect
@@ -655,6 +656,71 @@ EOF
 
 test_pkt_in_under_flag "0" "10" "NFQWS2_TCP_PKT_IN stays at 10"
 test_pkt_in_under_flag "1" "30" "NFQWS2_TCP_PKT_IN bumps to 30"
+
+printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
+
+# Z2K_PADENCAP (default 0): when =1, inject_z2k_tls_mods добавляет
+# padencap ко всем :tls_mod= токенам в rkn_tcp. Plus persist round-trip.
+# Padencap НЕ должен попадать в yt_tcp/yt_gv_tcp/game_tls_tcp — другие
+# DPI profiles, padencap там не верифицирован.
+test_padencap_under_flag() {
+    local flag="$1" expect_padencap="$2" desc_suffix="$3"
+    # Dir name MUST NOT contain "padencap" as substring (fgrep would
+    # match it in paths and break the rkn-arm assertions below).
+    local root="${MOCK_DIR}/pe-flag-$flag"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" \
+             "$root/extra_strats/TCP/RKN" \
+             "$root/extra_strats/UDP/YT" \
+             "$root/lists"
+    echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    # Strategy.txt с :tls_mod= токеном чтобы injector имел что трогать.
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
+    cat > "$root/config" <<EOF
+ENABLED=1
+Z2K_PADENCAP=$flag
+EOF
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
+    local rkn_arm
+    rkn_arm=$(grep -F 'key=rkn_tcp' "$root/config" | head -1)
+
+    if [ "$expect_padencap" = "1" ]; then
+        assert_contains "padencap flag=$flag: rkn_tcp tls_mod has padencap" \
+            "padencap" "$rkn_arm"
+    else
+        assert_not_contains "padencap flag=$flag: rkn_tcp tls_mod без padencap" \
+            "padencap" "$rkn_arm"
+    fi
+
+    # Persist round-trip: новый config carries flag forward.
+    local persisted_flag
+    persisted_flag=$(grep -E '^Z2K_PADENCAP=' "$root/config" | head -1)
+    assert_contains "padencap flag=$flag: persisted in regenerated config" \
+        "Z2K_PADENCAP=$flag" "$persisted_flag"
+
+    # Idempotency: padencap не должен дублироваться при повторном
+    # запуске create_official_config (injector гейт *padencap* skip).
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
+    local rkn_arm_2nd
+    rkn_arm_2nd=$(grep -F 'key=rkn_tcp' "$root/config" | head -1)
+    local padencap_count
+    padencap_count=$(printf '%s' "$rkn_arm_2nd" | grep -o "padencap" | wc -l | tr -d ' ')
+    if [ "$expect_padencap" = "1" ]; then
+        # На каждом :tls_mod= токене с padencap должен быть ровно 1
+        # padencap, не два. У нас в Strategy.txt один :tls_mod= токен →
+        # ожидается ровно 1 padencap во всём rkn arm.
+        assert_eq "padencap flag=$flag: idempotent (no duplication)" "1" "$padencap_count"
+    fi
+
+    rm -rf "$root"
+}
+
+test_padencap_under_flag "0" "0" "rkn_tcp без padencap"
+test_padencap_under_flag "1" "1" "rkn_tcp с padencap"
 
 printf "\n--- GAME_PROFILE: runtime — default → flowseal ---\n"
 

@@ -307,7 +307,11 @@ AUSTERUS_OPT
 
     youtube_tcp=$(ensure_circular_tcp_inseq "$youtube_tcp" 18000)
     youtube_gv_tcp=$(ensure_circular_tcp_inseq "$youtube_gv_tcp" 18000)
-    rkn_tcp=$(ensure_circular_tcp_inseq "$rkn_tcp" 18000)
+    # rkn_tcp inseq=26000 (Phase 1.2) — покрывает верхнюю границу TLS-stall'а
+    # 14-25 KB по треду ntc.party 22516 #1, #3. yt/gv/game остаются на 18000:
+    # их типичный first-burst меньше, риск не достичь inseq на легитимных
+    # коротких потоках перевешивает.
+    rkn_tcp=$(ensure_circular_tcp_inseq "$rkn_tcp" 26000)
     game_tls_tcp=$(ensure_circular_tcp_inseq "$game_tls_tcp" 18000)
 
     # ensure_circular_arg_set: append `<arg>=<value>` (or bare `<arg>` flag)
@@ -441,26 +445,42 @@ AUSTERUS_OPT
     # introduces the z2k_tls_mod.c dispatcher and the z2k_* mode names.
     # If an older upstream binary is running, parsing these tokens will
     # fail at nfqws2 startup.
+    # $2 — `1` means also append `padencap` (Phase 1.4 Z2K_PADENCAP=1
+    # opt-in). default 0 — preserves master JA3-only injection.
     inject_z2k_tls_mods() {
         local input="$1"
+        local with_padencap="${2:-0}"
         local token=""
         local out=""
+        local extra="z2k_grease,z2k_alpn,z2k_psk,z2k_keyshare"
+        if [ "$with_padencap" = "1" ]; then
+            extra="${extra},padencap"
+        fi
         for token in $input; do
             case "$token" in
                 *:tls_mod=*)
                     case "$token" in
                         *z2k_grease*|*z2k_alpn*|*z2k_psk*|*z2k_keyshare*)
-                            : # already extended, leave as-is
+                            # Already extended once. If padencap requested
+                            # but missing on this token, splice it in.
+                            if [ "$with_padencap" = "1" ]; then
+                                case "$token" in
+                                    *padencap*) : ;;
+                                    *)
+                                        token=$(printf '%s' "$token" | sed 's|:tls_mod=\([^:]*\)|:tls_mod=\1,padencap|')
+                                        ;;
+                                esac
+                            fi
                             ;;
                         *)
-                            # Append z2k modes to the tls_mod list.
-                            # tls_mod= is comma-separated; we insert
-                            # right after the existing value by rewriting
-                            # the first `:tls_mod=VALUE` chunk so the
-                            # new modes sit adjacent to upstream modes.
+                            # Append z2k modes (and optionally padencap) to
+                            # the tls_mod list. tls_mod= is comma-separated;
+                            # we insert right after the existing value by
+                            # rewriting the first `:tls_mod=VALUE` chunk so
+                            # the new modes sit adjacent to upstream modes.
                             # Sed is enough because the value cannot
                             # contain a ':' (would terminate the token).
-                            token=$(printf '%s' "$token" | sed 's|:tls_mod=\([^:]*\)|:tls_mod=\1,z2k_grease,z2k_alpn,z2k_psk,z2k_keyshare|')
+                            token=$(printf '%s' "$token" | sed "s|:tls_mod=\([^:]*\)|:tls_mod=\1,${extra}|")
                             ;;
                     esac
                     ;;
@@ -470,7 +490,14 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    rkn_tcp=$(inject_z2k_tls_mods "$rkn_tcp")
+    # Z2K_PADENCAP (default 0): когда =1, inject_z2k_tls_mods добавляет
+    # padencap ко всем :tls_mod= токенам в rkn_tcp (но не yt/gv —
+    # padencap не верифицирован для тех профилей). Persist в config через
+    # тот же паттерн что Z2K_USE_MID_STREAM_DETECTOR.
+    local Z2K_PADENCAP
+    Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+
+    rkn_tcp=$(inject_z2k_tls_mods "$rkn_tcp" "$Z2K_PADENCAP")
     youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
 
@@ -526,16 +553,26 @@ AUSTERUS_OPT
                 *:tcp_ts=-1000:*|*:tcp_ts=-1000)
                     strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
                     case "$strategy_id" in
-                        11) new_ts="-43210"  ;;
-                        15) new_ts="-100000" ;;
-                        18) new_ts="-500000" ;;
-                        23) new_ts="-43210"  ;;
-                        24) new_ts="-7777"   ;;
-                        28) new_ts="-10000"  ;;
-                        30) new_ts="-7777"   ;;
-                        35) new_ts="-43210"  ;;
-                        37) new_ts="-100000" ;;
-                        42) new_ts="-10000"  ;;
+                        # Shifted +1 после strategy=1 prepend (Phase 1.1).
+                        12) new_ts="-43210"  ;;
+                        16) new_ts="-100000" ;;
+                        19) new_ts="-500000" ;;
+                        24) new_ts="-43210"  ;;
+                        25) new_ts="-7777"   ;;
+                        29) new_ts="-10000"  ;;
+                        31) new_ts="-7777"   ;;
+                        36) new_ts="-43210"  ;;
+                        38) new_ts="-100000" ;;
+                        43) new_ts="-10000"  ;;
+                        # New rotated slots (Phase 1.3) — равномерно распределены
+                        # по pool values. tcp_ts=-1000 частично сгорел с
+                        # 2026-04-20 (memory reference_tcp_ts_watch.md), эти 4
+                        # slots переведены на нестандартные ts чтобы убрать
+                        # одинаковость fingerprint'а на уже-сгоревшем -1000.
+                        26) new_ts="-43210"  ;;
+                        27) new_ts="-10000"  ;;
+                        39) new_ts="-7777"   ;;
+                        41) new_ts="-100000" ;;
                         *)  new_ts=""        ;;
                     esac
                     if [ -n "$new_ts" ]; then
@@ -1629,6 +1666,7 @@ create_official_config() {
     local saved_GAME_MODE_STYLE=""
     local saved_TG_PROXY_USER_DISABLED="0"
     local saved_Z2K_USE_MID_STREAM_DETECTOR="0"
+    local saved_Z2K_PADENCAP="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
@@ -1638,6 +1676,7 @@ create_official_config() {
         saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
         saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "0")
+        saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "0")
     fi
 
     # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
@@ -1857,6 +1896,12 @@ TG_PROXY_USER_DISABLED=${saved_TG_PROXY_USER_DISABLED}
 # NFQWS2_TCP_PKT_IN bumps to 30 — all three move atomically. Persisted
 # here so a user-set value survives create_official_config regen.
 Z2K_USE_MID_STREAM_DETECTOR=${saved_Z2K_USE_MID_STREAM_DETECTOR}
+
+# TLS padding extension auto-injection (default 0). At 1:
+# inject_z2k_tls_mods добавляет padencap ко всем :tls_mod= токенам в
+# rkn_tcp. Использует обход CDN-stall'ов 2026-04 описанный в
+# ntc.party 22516 (#107, #111). Применяется только к rkn_tcp.
+Z2K_PADENCAP=${saved_Z2K_PADENCAP}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can

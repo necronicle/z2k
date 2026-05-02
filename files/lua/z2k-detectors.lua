@@ -639,7 +639,7 @@ end
 -- stays in lua_state so a later FIN can be observed correctly.
 
 local Z2K_MID_STREAM_LO               = 8000
-local Z2K_MID_STREAM_HI               = 18000
+local Z2K_MID_STREAM_HI               = 26000
 local Z2K_MID_STREAM_SILENCE_SEC      = 5
 local Z2K_MID_STREAM_RETRY_MAX_SEC    = 120
 local Z2K_MID_STREAM_ACTIVE_RETRY_SEC = 30
