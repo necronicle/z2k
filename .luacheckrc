@@ -148,6 +148,20 @@ read_globals = {
 
     -- nfqws2 constants
     "VERDICT_DROP",
+    "VERDICT_PASS",
+    -- nfqws2 globals used by z2k-http-strats.lua / z2k-modern-core.lua /
+    -- z2k-white-presets.lua (provided by zapret-lib.lua / zapret-antidpi.lua /
+    -- zapret-auto.lua / nfqws2 core at runtime).
+    "tls_mod",
+    "tls_mod_shim",
+    "fake_default_tls",
+    "http_dissect_req",
+    "instance_cutoff",
+    "resolve_multi_pos",
+    "delete_pos_1",
+    "rawsend_opts",
+    "rawsend_opts_base",
+    "reconstruct_opts",
     "VERDICT_MODIFY",
     "IP_MF",
     "IP6F_MORE_FRAG",
