@@ -71,12 +71,6 @@ globals = {
     "z2k_dynamic_strategy",
     "z2k_cdn_detect",
     "cond_tcp_has_ts",
-    "cond_cdn_cf",
-    "cond_cdn_ovh",
-    "cond_cdn_hetzner",
-    "cond_cdn_do",
-    "cond_cdn_other",
-    "pick_cdn_sni",
     "circular",
     -- z2k-detectors.lua internal helper, top-level so earlier detector
     -- functions in the same file (z2k_tls_alert_fatal) can call it

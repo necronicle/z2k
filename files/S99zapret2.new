@@ -488,12 +488,6 @@ LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 # ПОСЛЕ z2k-modern-core.lua и перед autocircular инстансами.
 LUA_Z2K_HTTP_STRATS="$ZAPRET_BASE/lua/z2k-http-strats.lua"
 [ -f "$LUA_Z2K_HTTP_STRATS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_HTTP_STRATS"
-# z2k-cdn-dispatch: per-provider SNI dispatch for cdn_tls profile via
-# per_instance_condition (ntc.party 17013 #851 — AS-specific whitelists).
-# Exposes cond_cdn_cf / cond_cdn_ovh / cond_cdn_hetzner / cond_cdn_do /
-# cond_cdn_other for use with cond=<fn> on fake strategies.
-LUA_Z2K_CDN_DISPATCH="$ZAPRET_BASE/lua/z2k-cdn-dispatch.lua"
-[ -f "$LUA_Z2K_CDN_DISPATCH" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_CDN_DISPATCH"
 # z2k-dynamic-strategy: runtime-parameterized desync handler used by
 # z2k-classify generator. Reads /tmp/z2k-classify-dynparams per-packet
 # (1-sec TTL cache) and dispatches to fake/multisplit/hostfakesplit/
