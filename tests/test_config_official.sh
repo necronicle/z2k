@@ -535,27 +535,30 @@ get_rkn_tcp_arm_line() {
     printf '%s\n' "$1" | grep -F 'key=rkn_tcp' | head -1
 }
 
-printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: bundle flag (default 0) ---\n"
+printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: explicit OFF (=0) ---\n"
 
-# Default (flag absent ⇒ safe_config_read → "0"): rkn_tcp keeps the
-# master-compatible layout — --in-range=-s5556 and z2k_tls_stalled.
-OUT_MS_DEFAULT=$(run_generator "ms-default" "GAME_MODE_ENABLED=0" "")
-RKN_ARM_DEFAULT=$(get_rkn_tcp_arm_line "$OUT_MS_DEFAULT")
+# Per Mark 2026-05-02 policy "все нововведения по умолчанию включены"
+# default flipped to 1. Test explicit Z2K_USE_MID_STREAM_DETECTOR=0
+# чтобы opt-out path работал — rkn_tcp возвращается к master-compatible
+# layout (--in-range=-s5556 + z2k_tls_stalled).
+OUT_MS_OFF=$(run_generator "ms-off" "Z2K_USE_MID_STREAM_DETECTOR=0
+GAME_MODE_ENABLED=0" "")
+RKN_ARM_OFF=$(get_rkn_tcp_arm_line "$OUT_MS_OFF")
 
 assert_contains "ms flag=0: rkn_tcp arm emitted" \
-    "key=rkn_tcp" "$RKN_ARM_DEFAULT"
+    "key=rkn_tcp" "$RKN_ARM_OFF"
 assert_contains "ms flag=0: rkn_tcp keeps --in-range=-s5556" \
-    "--in-range=-s5556" "$RKN_ARM_DEFAULT"
+    "--in-range=-s5556" "$RKN_ARM_OFF"
 assert_contains "ms flag=0: rkn_tcp keeps z2k_tls_stalled" \
-    "failure_detector=z2k_tls_stalled" "$RKN_ARM_DEFAULT"
+    "failure_detector=z2k_tls_stalled" "$RKN_ARM_OFF"
 # Half-state guards on flag=0 — neither knob may leak from the
 # bundle-on path.
 assert_not_contains "ms flag=0: no s20000 leaks into rkn_tcp" \
-    "--in-range=-s20000" "$RKN_ARM_DEFAULT"
+    "--in-range=-s20000" "$RKN_ARM_OFF"
 assert_not_contains "ms flag=0: no mid_stream_stall leak anywhere" \
-    "z2k_mid_stream_stall" "$OUT_MS_DEFAULT"
+    "z2k_mid_stream_stall" "$OUT_MS_OFF"
 
-printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: bundle flag (opt-in 1) ---\n"
+printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: bundle flag (default ON) ---\n"
 
 # Flag opt-in: rkn_tcp gets the bundle — --in-range=-s20000 paired
 # with failure_detector=z2k_mid_stream_stall. Both knobs MUST move

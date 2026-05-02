@@ -68,7 +68,8 @@ AUSTERUS_OPT
     # слабее проверенного 47-стратегий rkn_tcp rotator'а. CF возвращается
     # под rkn_tcp как было до Variant A refactor'а.
 
-    # Z2K_USE_MID_STREAM_DETECTOR (default 0): bundle flag for the
+    # Z2K_USE_MID_STREAM_DETECTOR (default 1, per Mark 2026-05-02 policy):
+    # bundle flag for the
     # rkn_tcp mid-stream stall detector wiring. Off: rkn_tcp keeps
     # its master-compatible layout (--in-range=-s5556 +
     # failure_detector=z2k_tls_stalled), which is what the field
@@ -81,7 +82,7 @@ AUSTERUS_OPT
     # is wired but blind because its observation cap is still 5.5K).
     # Tests assert the two move together.
     local Z2K_USE_MID_STREAM_DETECTOR
-    Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+    Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
 
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
@@ -446,7 +447,7 @@ AUSTERUS_OPT
     # If an older upstream binary is running, parsing these tokens will
     # fail at nfqws2 startup.
     # $2 — `1` means also append `padencap` (Phase 1.4 Z2K_PADENCAP=1
-    # opt-in). default 0 — preserves master JA3-only injection.
+    # default 1 = padencap включён всегда). При =0 padencap не добавляется.
     inject_z2k_tls_mods() {
         local input="$1"
         local with_padencap="${2:-0}"
@@ -490,12 +491,13 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    # Z2K_PADENCAP (default 0): когда =1, inject_z2k_tls_mods добавляет
-    # padencap ко всем :tls_mod= токенам в rkn_tcp (но не yt/gv —
-    # padencap не верифицирован для тех профилей). Persist в config через
-    # тот же паттерн что Z2K_USE_MID_STREAM_DETECTOR.
+    # Z2K_PADENCAP (default 1, per Mark 2026-05-02 policy): когда =1,
+    # inject_z2k_tls_mods добавляет padencap ко всем :tls_mod= токенам
+    # в rkn_tcp (но не yt/gv — padencap не верифицирован для тех
+    # профилей). Persist в config через тот же паттерн что
+    # Z2K_USE_MID_STREAM_DETECTOR. =0 для отката.
     local Z2K_PADENCAP
-    Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+    Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
 
     rkn_tcp=$(inject_z2k_tls_mods "$rkn_tcp" "$Z2K_PADENCAP")
     youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
@@ -1665,8 +1667,8 @@ create_official_config() {
     local saved_GAME_MODE_ENABLED=""
     local saved_GAME_MODE_STYLE=""
     local saved_TG_PROXY_USER_DISABLED="0"
-    local saved_Z2K_USE_MID_STREAM_DETECTOR="0"
-    local saved_Z2K_PADENCAP="0"
+    local saved_Z2K_USE_MID_STREAM_DETECTOR="1"
+    local saved_Z2K_PADENCAP="1"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
@@ -1675,8 +1677,13 @@ create_official_config() {
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
         saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
-        saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "0")
-        saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "0")
+        # Z2K_USE_MID_STREAM_DETECTOR / Z2K_PADENCAP — default ON (per Mark
+        # 2026-05-02 policy: все нововведения по умолчанию включены). Если
+        # старый config не содержит ключ, считаем "1" — фичу хочется
+        # включить даже на routers где конфиг был сгенерирован до её
+        # появления. Юзер может выставить =0 explicitly чтобы откатиться.
+        saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "1")
+        saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
     fi
 
     # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
@@ -1891,16 +1898,19 @@ GAME_MODE_STYLE=${saved_GAME_MODE_STYLE}
 # daemon, который юзер явно остановил.
 TG_PROXY_USER_DISABLED=${saved_TG_PROXY_USER_DISABLED}
 
-# Mid-stream stall detector bundle (default 0). At 1: rkn_tcp swaps
+# Mid-stream stall detector bundle (default 1 per Mark 2026-05-02
+# policy: все нововведения по умолчанию включены). At 1: rkn_tcp swaps
 # failure_detector to z2k_mid_stream_stall, --in-range to -s20000, AND
-# NFQWS2_TCP_PKT_IN bumps to 30 — all three move atomically. Persisted
-# here so a user-set value survives create_official_config regen.
+# NFQWS2_TCP_PKT_IN bumps to 30 — all three move atomically. =0 для
+# отката. Persisted here so a user-set value survives
+# create_official_config regen.
 Z2K_USE_MID_STREAM_DETECTOR=${saved_Z2K_USE_MID_STREAM_DETECTOR}
 
-# TLS padding extension auto-injection (default 0). At 1:
-# inject_z2k_tls_mods добавляет padencap ко всем :tls_mod= токенам в
-# rkn_tcp. Использует обход CDN-stall'ов 2026-04 описанный в
-# ntc.party 22516 (#107, #111). Применяется только к rkn_tcp.
+# TLS padding extension auto-injection (default 1 per Mark 2026-05-02
+# policy). At 1: inject_z2k_tls_mods добавляет padencap ко всем
+# :tls_mod= токенам в rkn_tcp. Использует обход CDN-stall'ов 2026-04
+# описанный в ntc.party 22516 (#107, #111). Применяется только к
+# rkn_tcp. =0 для отката.
 Z2K_PADENCAP=${saved_Z2K_PADENCAP}
 
 # Persist the branch URL that this install was booted from, so that
