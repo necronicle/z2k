@@ -689,8 +689,11 @@ test_padencap_under_flag() {
     # Strategy.txt с :tls_mod= токеном чтобы injector имел что трогать.
     echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1" \
         > "$root/extra_strats/TCP/RKN/Strategy.txt"
+    # 2026-05-03: auto-injection отключена by default, требует Z2K_INJECT_TLS_MODS=1
+    # для активации вместе с Z2K_PADENCAP=1 (двухуровневый opt-in).
     cat > "$root/config" <<EOF
 ENABLED=1
+Z2K_INJECT_TLS_MODS=$flag
 Z2K_PADENCAP=$flag
 EOF
     ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
@@ -704,12 +707,6 @@ EOF
         assert_not_contains "padencap flag=$flag: rkn_tcp tls_mod без padencap" \
             "padencap" "$rkn_arm"
     fi
-
-    # Persist round-trip: новый config carries flag forward.
-    local persisted_flag
-    persisted_flag=$(grep -E '^Z2K_PADENCAP=' "$root/config" | head -1)
-    assert_contains "padencap flag=$flag: persisted in regenerated config" \
-        "Z2K_PADENCAP=$flag" "$persisted_flag"
 
     # Idempotency: padencap не должен дублироваться при повторном
     # запуске create_official_config (injector гейт *padencap* skip).

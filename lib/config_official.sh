@@ -496,17 +496,32 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    # Z2K_PADENCAP (default 1, per Mark 2026-05-02 policy): когда =1,
-    # inject_z2k_tls_mods добавляет padencap ко всем :tls_mod= токенам
-    # в rkn_tcp (но не yt/gv — padencap не верифицирован для тех
-    # профилей). Persist в config через тот же паттерн что
-    # Z2K_USE_MID_STREAM_DETECTOR. =0 для отката.
-    local Z2K_PADENCAP
-    Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
-
-    rkn_tcp=$(inject_z2k_tls_mods "$rkn_tcp" "$Z2K_PADENCAP")
-    youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
-    youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
+    # 2026-05-03: auto-injection z2k_grease/alpn/psk/keyshare/earlydata/
+    # pha/sct/delegcred/padencap отключена. Field-проверка показала net
+    # negative: на 7+/8 хостов наши TLS-extension'ы либо ломали handshake
+    # (r0 — duplicate ALPN/PSK/key_share без skip-check), либо после r2
+    # fix давали слабый JA3 distortion который autocircular не выбирал
+    # (простой multisplit пробивает чище). На cloudflare.com fix r2 заработал,
+    # но это починка бага r0, не реальный wins. Большинство хостов
+    # pin'ятся на не-fake strategies (multisplit/hostfakesplit) у которых
+    # tls_mod= вообще нет, инъекция к ним не применяется.
+    #
+    # Функции `inject_z2k_tls_mods` оставлены в файле и tokens z2k_*
+    # доступны через --lua-desync=fake:tls_mod=...,z2k_grease,... — если
+    # юзер хочет вручную в strats. Auto-инъекция отключена. Включить
+    # обратно: вернуть три строки `inject_z2k_tls_mods` ниже.
+    #
+    # Z2K_PADENCAP / Z2K_INJECT_TLS_MODS флаги остаются для возможного
+    # opt-in возврата, но default — НЕ инжектить ничего.
+    local Z2K_INJECT_TLS_MODS
+    Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+    if [ "$Z2K_INJECT_TLS_MODS" = "1" ]; then
+        local Z2K_PADENCAP
+        Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+        rkn_tcp=$(inject_z2k_tls_mods "$rkn_tcp" "$Z2K_PADENCAP")
+        youtube_tcp=$(inject_z2k_tls_mods "$youtube_tcp")
+        youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
+    fi
 
     # Phase 6C: tcp_ts rotation across select rkn_tcp strategy slots.
     #
@@ -1685,6 +1700,7 @@ create_official_config() {
     local saved_TG_PROXY_USER_DISABLED="0"
     local saved_Z2K_USE_MID_STREAM_DETECTOR="1"
     local saved_Z2K_PADENCAP="1"
+    local saved_Z2K_INJECT_TLS_MODS="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
@@ -1700,6 +1716,7 @@ create_official_config() {
         # появления. Юзер может выставить =0 explicitly чтобы откатиться.
         saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "1")
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
+        saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
     fi
 
     # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
@@ -1922,11 +1939,19 @@ TG_PROXY_USER_DISABLED=${saved_TG_PROXY_USER_DISABLED}
 # create_official_config regen.
 Z2K_USE_MID_STREAM_DETECTOR=${saved_Z2K_USE_MID_STREAM_DETECTOR}
 
-# TLS padding extension auto-injection (default 1 per Mark 2026-05-02
-# policy). At 1: inject_z2k_tls_mods добавляет padencap ко всем
-# :tls_mod= токенам в rkn_tcp. Использует обход CDN-stall'ов 2026-04
-# описанный в ntc.party 22516 (#107, #111). Применяется только к
-# rkn_tcp. =0 для отката.
+# TLS extension auto-injection master switch (default 0, 2026-05-03):
+# выключено по дефолту после field-проверки — auto-injection
+# z2k_grease/alpn/psk/keyshare/earlydata/pha/sct/delegcred/padencap к
+# fake-стратегиям ломала handshake на cloudflare и большинстве хостов
+# до r2 fix, после r2 даёт слабую JA3-distortion которой autocircular
+# не выбирает. =1 для opt-in возврата автоинъекции (вместе с
+# Z2K_PADENCAP=1 для управления padencap).
+Z2K_INJECT_TLS_MODS=${saved_Z2K_INJECT_TLS_MODS}
+
+# TLS padding extension flag — действует только когда
+# Z2K_INJECT_TLS_MODS=1. Управляет добавлением padencap в дополнение
+# к z2k_grease/alpn/psk/keyshare/earlydata/pha/sct/delegcred. =0 для
+# отката padencap при включённой остальной инъекции.
 Z2K_PADENCAP=${saved_Z2K_PADENCAP}
 
 # Persist the branch URL that this install was booted from, so that
