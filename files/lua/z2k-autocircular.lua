@@ -1014,7 +1014,20 @@ end
 
 local policy_explore_good = 0.03  -- exploration chance when current strategy is working (3%)
 local youtube_silent_retry_window_sec = 120
-local youtube_silent_retry_min_gap_sec = 2
+-- min_gap_sec was 2, bumped to 5 on 2026-05-03 after field-debug на тестовом
+-- роутере (master) и KeyFire (enhanced/МГТС): функция трактовала любые два
+-- tls_client_hello к одному хосту в окне 120 сек, разнесённые на >=2 сек,
+-- как silent-drop retry — но HLS-чанки YouTube/Reels идут каждые 1-2 сек,
+-- prefetch и parallel sub-connections тоже укладываются в этот gap. Итог:
+-- на каждом видео nstrategy ползёт +1..+N даже когда стратегия работает
+-- (HTTP 200 наблюдаемо), reset post-call не успевает за pre-call rotation.
+-- Реальный browser/TLS-stack retry после silent drop приходит через 3-5+
+-- секунд, поэтому 5-секундный порог отсекает легитимные fast-flow паттерны
+-- и сохраняет защиту от настоящих silent-drop'ов. Если field-сигналы
+-- покажут пропуск real-retry — нужна telemetry-aware проверка cur_rate
+-- (как в policy_seed_strategy:1131-1146), но для TCP-profile telemetry
+-- часто пустая (incoming не доходит до lua), поэтому начинаем с порога.
+local youtube_silent_retry_min_gap_sec = 5
 local youtube_silent_retry_threshold = 2
 local youtube_silent_retry = {}
 
