@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "branch": "z2k-enhanced",
+  "current": "p-0",
+  "history": [
+{"v":"p-0","type":"patch","ts":"2026-05-03T17:30:00Z","ref":"auto-update-baseline","desc":"Auto-update system rollout baseline marker","changed_files":[]}
+  ]
+}

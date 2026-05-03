@@ -96,6 +96,7 @@ MENU
 [3] Обновить списки доменов
 [4] Резервная копия/Восстановление
 [5] Удалить zapret2
+[U] Проверить обновления z2k
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
@@ -111,7 +112,7 @@ MENU
 
 MENU
 
-        printf "Выберите опцию [0-5,R,F,G,T,W,S,P,D,X,C,I]: "
+        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,X,C,I]: "
         read_input choice
 
         case "$choice" in
@@ -129,6 +130,9 @@ MENU
                 ;;
             5)
                 menu_uninstall
+                ;;
+            u|U)
+                menu_check_updates
                 ;;
             r|R)
                 menu_rst_filter
@@ -763,6 +767,80 @@ menu_uninstall() {
     uninstall_zapret2
 
     pause
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: ПРОВЕРКА ОБНОВЛЕНИЙ Z2K (АВТО-АПДЕЙТ)
+# ==============================================================================
+
+menu_check_updates() {
+    clear_screen
+    print_header "Проверка обновлений z2k"
+
+    if ! is_zapret2_installed; then
+        print_info "zapret2 не установлен"
+        pause
+        return
+    fi
+
+    # Source the auto-update module from its installed location;
+    # fall back to WORK_DIR copy during initial install.
+    if [ -f "${ZAPRET2_DIR}/lib/auto_update.sh" ]; then
+        . "${ZAPRET2_DIR}/lib/auto_update.sh"
+    elif [ -f "${WORK_DIR:-/tmp/z2k}/lib/auto_update.sh" ]; then
+        . "${WORK_DIR:-/tmp/z2k}/lib/auto_update.sh"
+    else
+        print_error "Модуль auto_update не найден"
+        pause
+        return 1
+    fi
+
+    # Branch gate — only z2k-enhanced participates
+    local branch_file="${ZAPRET2_DIR}/.z2k-branch"
+    local branch="unknown"
+    [ -f "$branch_file" ] && branch=$(cat "$branch_file" 2>/dev/null)
+    if [ "$branch" != "z2k-enhanced" ]; then
+        print_warning "Авто-обновление работает только на ветке z2k-enhanced."
+        print_info "Текущая ветка: ${branch}"
+        pause
+        return 0
+    fi
+
+    au_run_check
+    local check_rc=$?
+
+    if [ "$check_rc" -ne 0 ]; then
+        pause
+        return $check_rc
+    fi
+
+    # Decide if update is available — by re-reading manifest already cached
+    # in $Z2K_AU_TMP_DIR by au_run_check.
+    local installed=""
+    [ -f "$Z2K_AU_INSTALLED_TAG_FILE" ] && installed=$(cat "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)
+    local current=""
+    if [ -f "${Z2K_AU_TMP_DIR}/UPDATES.json" ]; then
+        current=$(au_manifest_current "${Z2K_AU_TMP_DIR}/UPDATES.json")
+    fi
+
+    if [ -n "$current" ] && [ "$current" != "$installed" ] && [ -n "$installed" ]; then
+        printf "\n"
+        if confirm "Применить обновление сейчас (без ожидания ночного запуска)?" "N"; then
+            print_info "Запуск обновления..."
+            Z2K_AU_NO_JITTER=1 au_run_apply
+            local apply_rc=$?
+            if [ "$apply_rc" -eq 0 ]; then
+                print_success "Обновление применено."
+            else
+                print_error "Обновление не удалось (rc=$apply_rc), см. /opt/var/log/z2k-auto-update.log"
+            fi
+        else
+            print_info "Хорошо, авто-обновление пройдёт ночью (~02:00 + jitter)."
+        fi
+    fi
+
+    pause
+    return 0
 }
 
 # ==============================================================================

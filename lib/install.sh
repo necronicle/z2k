@@ -725,14 +725,8 @@ step_build_zapret2() {
         # Autocircular state (найденные рабочие стратегии)
         [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" ] && \
             cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv"
-        # Strategy.txt файлы
-        for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
-            local sfile="$ZAPRET2_DIR/extra_strats/$cat_dir/Strategy.txt"
-            if [ -f "$sfile" ]; then
-                mkdir -p "$backup_tmp/strats/$cat_dir"
-                cp -f "$sfile" "$backup_tmp/strats/$cat_dir/Strategy.txt"
-            fi
-        done
+        # Strategy.txt — shipped, не user-owned. Не бэкапим: при реустановке/апдейте
+        # свежая shipped-версия из репо побеждает (см. feedback_z2k_user_overrides_policy).
         # Silent fallback flag
         [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" ] && \
             touch "$backup_tmp/rkn_silent_fallback.flag"
@@ -985,14 +979,23 @@ step_build_zapret2() {
         chmod +x "${ZAPRET2_DIR}/z2k-blocked-monitor.sh" 2>/dev/null || true
     fi
 
-    # Install z2k tools (healthcheck, config validator, list updater, diagnostics, geosite)
-    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-probe.sh z2k-classify-drift.sh z2k-classify-inject.sh; do
+    # Install z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, auto-update)
+    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-probe.sh z2k-classify-drift.sh z2k-classify-inject.sh z2k-auto-update.sh; do
         if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
             cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             print_info "Установлен: ${tool_script}"
         fi
     done
+
+    # Install lib/auto_update.sh as a runtime module — sourced by
+    # z2k-auto-update.sh (cron entry point) and by lib/menu.sh
+    # ("Проверить обновления").
+    mkdir -p "${ZAPRET2_DIR}/lib"
+    if [ -f "${WORK_DIR}/lib/auto_update.sh" ]; then
+        cp -f "${WORK_DIR}/lib/auto_update.sh" "${ZAPRET2_DIR}/lib/auto_update.sh"
+        print_info "Установлен: lib/auto_update.sh"
+    fi
 
     # Web panel is now installed on-demand via menu [P] → [1].
     # Files live in webpanel/ in the repo and are copied to /tmp/z2k/webpanel
@@ -1117,10 +1120,31 @@ step_build_zapret2() {
     if [ -d "$backup_tmp" ]; then
         print_info "Восстановление пользовательских настроек..."
 
-        # Восстановить config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK)
+        # Восстановить config.
+        # Manual reinstall: целиком restore user config (legacy поведение).
+        # Auto-update reinstall (Z2K_AUTO_UPDATE=1): shipped config побеждает,
+        # переносим только Z2K_* feature flags (см. feedback_z2k_user_overrides_policy).
         if [ -f "$backup_tmp/config" ]; then
-            cp -f "$backup_tmp/config" "$ZAPRET2_DIR/config"
-            print_success "Конфигурация восстановлена"
+            if [ "$Z2K_AUTO_UPDATE" = "1" ]; then
+                local _flag_backup="$backup_tmp/feature-flags.txt"
+                grep -E '^Z2K_[A-Z0-9_]+=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+                if [ -s "$_flag_backup" ] && [ -f "$ZAPRET2_DIR/config" ]; then
+                    local _line _flag_name _escaped _applied=0
+                    while IFS= read -r _line; do
+                        [ -z "$_line" ] && continue
+                        _flag_name="${_line%%=*}"
+                        if grep -q "^${_flag_name}=" "$ZAPRET2_DIR/config"; then
+                            _escaped=$(printf '%s\n' "$_line" | sed 's/[&/\\]/\\&/g')
+                            sed -i "s|^${_flag_name}=.*|${_escaped}|" "$ZAPRET2_DIR/config"
+                            _applied=$((_applied + 1))
+                        fi
+                    done < "$_flag_backup"
+                    print_success "Auto-update: shipped config + ${_applied} Z2K_* flag(s) перенесено"
+                fi
+            else
+                cp -f "$backup_tmp/config" "$ZAPRET2_DIR/config"
+                print_success "Конфигурация восстановлена"
+            fi
         fi
 
         # Восстановить whitelist
@@ -1137,14 +1161,8 @@ step_build_zapret2() {
             print_success "Стратегии autocircular восстановлены"
         fi
 
-        # Восстановить Strategy.txt файлы
-        for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
-            if [ -f "$backup_tmp/strats/$cat_dir/Strategy.txt" ]; then
-                mkdir -p "$ZAPRET2_DIR/extra_strats/$cat_dir"
-                cp -f "$backup_tmp/strats/$cat_dir/Strategy.txt" "$ZAPRET2_DIR/extra_strats/$cat_dir/Strategy.txt"
-            fi
-        done
-        print_success "Стратегии категорий восстановлены"
+        # Strategy.txt не восстанавливаем — shipped-версия из репо имеет
+        # приоритет (см. feedback_z2k_user_overrides_policy).
 
         # Восстановить silent fallback flag
         if [ -f "$backup_tmp/rkn_silent_fallback.flag" ]; then
@@ -1965,6 +1983,10 @@ step_finalize() {
     # newly-fetched ipsets / hostlists are reflected in the rotator
     # before we probe canary domains.
     local z2k_drift_cron="30 4 * * * ${ZAPRET2_DIR}/z2k-classify-drift.sh >/dev/null 2>&1"
+    # z2k-auto-update.sh — runs at 02:00 nightly. Internal jitter (0..90 min)
+    # spreads the fleet over 02:00–03:30 so 184 routers don't hammer GitHub
+    # in one second. Only z2k-enhanced acts; master users skip silently.
+    local z2k_auto_update_cron="0 2 * * * ${ZAPRET2_DIR}/z2k-auto-update.sh apply >/dev/null 2>&1"
     local crontab_file="/opt/etc/crontab"
     local cron_ok=0
 
@@ -1972,24 +1994,25 @@ step_finalize() {
 
     # Метод 1: /opt/etc/crontab (Entware cron)
     if [ -f "$crontab_file" ] || [ -d "/opt/etc" ]; then
-        # Удалить старые записи zapret2 (get_config / update-lists / drift)
+        # Удалить старые записи zapret2 (get_config / update-lists / drift / auto-update)
         if [ -f "$crontab_file" ]; then
-            grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh" "$crontab_file" > "${crontab_file}.tmp" 2>/dev/null
+            grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh" "$crontab_file" > "${crontab_file}.tmp" 2>/dev/null
             mv "${crontab_file}.tmp" "$crontab_file"
         fi
         echo "$cron_line" >> "$crontab_file"
         echo "$z2k_update_cron" >> "$crontab_file"
         echo "$z2k_drift_cron" >> "$crontab_file"
-        print_success "Автообновление настроено в $crontab_file (get_config 06:00, update-lists 04:00, drift 04:30)"
+        echo "$z2k_auto_update_cron" >> "$crontab_file"
+        print_success "Автообновление настроено в $crontab_file (get_config 06:00, update-lists 04:00, drift 04:30, auto-update 02:00+jitter)"
         cron_ok=1
     fi
 
     # Метод 2: crontab -l / crontab - (если Entware crontab не работает)
     if [ "$cron_ok" = "0" ] && command -v crontab >/dev/null 2>&1; then
-        (crontab -l 2>/dev/null | grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh"; echo "$cron_line"; echo "$z2k_update_cron"; echo "$z2k_drift_cron") | crontab -
+        (crontab -l 2>/dev/null | grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh"; echo "$cron_line"; echo "$z2k_update_cron"; echo "$z2k_drift_cron"; echo "$z2k_auto_update_cron") | crontab -
         if [ $? -eq 0 ]; then
             z2k_fix_cron_perms
-            print_success "Автообновление настроено через crontab (get_config 06:00, update-lists 04:00, drift 04:30)"
+            print_success "Автообновление настроено через crontab (get_config 06:00, update-lists 04:00, drift 04:30, auto-update 02:00+jitter)"
             cron_ok=1
         fi
     fi
@@ -2269,6 +2292,25 @@ run_full_install() {
     printf "\nНастройка стратегий DPI bypass:\n\n"
     print_info "Автоматически применяю autocircular стратегии (без запроса выбора)..."
     apply_autocircular_strategies --auto
+
+    # Auto-update system markers: branch + currently installed tag.
+    # Tag comes from Z2K_AU_TARGET_TAG (when triggered by auto-update path),
+    # otherwise we fetch UPDATES.json and use the manifest's current field;
+    # final fallback is "p-0" baseline.
+    local _au_tag="$Z2K_AU_TARGET_TAG"
+    if [ -z "$_au_tag" ]; then
+        local _au_manifest="/tmp/z2k_install_manifest.json"
+        rm -f "$_au_manifest"
+        if z2k_fetch "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k/UPDATES.json" "$_au_manifest" 2>/dev/null \
+            && [ -s "$_au_manifest" ]; then
+            _au_tag=$(sed -n 's/.*"current":[[:space:]]*"\([^"]*\)".*/\1/p' "$_au_manifest" | head -1)
+        fi
+        rm -f "$_au_manifest"
+        [ -z "$_au_tag" ] && _au_tag="p-0"
+    fi
+    echo "$_au_tag" > "${ZAPRET2_DIR}/.z2k-installed-tag"
+    echo "z2k-enhanced" > "${ZAPRET2_DIR}/.z2k-branch"
+    print_info "Установленная версия: $_au_tag (ветка z2k-enhanced)"
 
     return 0
 }

@@ -23,7 +23,7 @@ export LIB_DIR
 export GITHUB_RAW
 
 # Список модулей для загрузки
-MODULES="utils system_init install strategies config config_official webpanel menu"
+MODULES="utils system_init install strategies config config_official webpanel menu auto_update"
 
 # ==============================================================================
 # ВСТРОЕННЫЕ FALLBACK ФУНКЦИИ
