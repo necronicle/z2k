@@ -1247,22 +1247,35 @@ function z2k_silent_drop_detector(desync, crec, arg)
 
   if desync.dis and desync.dis.tcp and desync.outgoing and desync.track and
      desync.track.pos then
-    local out_count = (desync.track.pos.direct  and (desync.track.pos.direct.dcounter  or desync.track.pos.direct.pcounter))  or 0
-    local in_count  = (desync.track.pos.reverse and (desync.track.pos.reverse.dcounter or desync.track.pos.reverse.pcounter)) or 0
+    -- Считаем только data-packets, не total. `dcounter` в track_pos не
+    -- существует (поля: pcounter=всего, pdcounter=data, pbcounter=bytes —
+    -- см. zapret-lib.lua:285-291), поэтому исходный код fall-back'ал на
+    -- pcounter (total packets) и условие `out>=4 and in<=1` срабатывало в
+    -- обычном TLS handshake (SYN/ACK/ClientHello/ACK выдают 4 out-packets
+    -- ещё до ServerHello). Field-debug 2026-05-03: на 6 успешных GET'ах к
+    -- youtube.com nstrategy ползла 1→3 — каждый handshake давал false-
+    -- positive silent_drop. pdcounter учитывает packets с payload — 4 data-
+    -- packets без data-response это уже реальный silent drop, не handshake-
+    -- timing window.
+    local out_count = (desync.track.pos.direct  and desync.track.pos.direct.pdcounter)  or 0
+    local in_count  = (desync.track.pos.reverse and desync.track.pos.reverse.pdcounter) or 0
 
     if out_count >= tcp_out_thr and in_count <= tcp_in_thr then
-      -- Trigger FAILURE every tcp_out outgoing data-pakets (после первого hit'а)
-      -- — это позволяет multiple rotations в long-lived connection где
-      -- последовательные strategy ротации можно проверить за один TCP session.
-      local last_fail = (crec and crec.z2k_silent_drop_last_fail) or 0
-      if out_count >= last_fail + tcp_out_thr then
-        if crec then
-          crec.z2k_silent_drop_last_fail = out_count
-          crec.failure = nil  -- разрешаем повторную rotation
-        end
-        DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count.." (last="..last_fail..")")
-        return true
-      end
+      -- One fail per connection. Раньше детектор сбрасывал crec.failure=nil
+      -- чтобы fire'ить «повторную rotation» внутри одной TCP session — но в
+      -- пределах одного TCP-коннекшна нельзя сменить уже выбранную strategy
+      -- (она применяется к этому потоку), так что повторные fail-events были
+      -- пустым шумом, который бил automate_failure_counter (zapret-auto.lua:73)
+      -- мимо его anti-duplicate guard'а (crec.failure check). На handshake-
+      -- фазе с retransmit'ами это могло выжечь fails=N threshold за один
+      -- request, и в паре с z2k_success_no_reset (который не сбрасывает
+      -- counter) — приводило к churn: каждый ~2 successful GET'а двигали
+      -- nstrategy на +1 даже без реального DPI-блока. Field-debug 2026-05-03
+      -- на тестовом роутере: 6 GET'ов 200 OK к youtube.com → nstrategy 1→3.
+      -- Убираем crec.failure=nil; zapret-auto.lua сам прокинет один fail per
+      -- connection и crec.nocheck-guard'ом погасит дублей.
+      DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count)
+      return true
     end
   end
 
