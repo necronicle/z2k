@@ -667,6 +667,7 @@ tls_clienthello_www_onetrust_com.bin
 tls_clienthello_activated.bin
 tls_clienthello_4pda_to.bin
 tls_clienthello_vk_com.bin
+tls_clienthello_ucoz_ru_tls13.bin
 tls_clienthello_gosuslugi_ru.bin
 t2.bin
 syn_packet.bin
