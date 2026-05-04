@@ -744,6 +744,33 @@ OKVK
             print_info "Добавлены доп. домены OK/VK/Yandex в whitelist"
         fi
 
+        if ! grep -q "^vkuseraudio.com$" "$whitelist" 2>/dev/null; then
+            cat >> "$whitelist" <<'VKEXT'
+
+# === VK сервисные/CDN-домены (фото-комменты, видео, аудио, формы) ===
+mvk.com
+vk.cc
+vk.link
+vk-cdn.net
+vk-portal.net
+vk-apps.com
+vk-streaming.com
+vkpay.com
+vkpay.ru
+vkuser.net
+vkuseraudio.com
+vkuseraudio.net
+vkuservideo.com
+vkuservideo.net
+vkuserlive.com
+vkuserlive.net
+vkforms.com
+vkforms.ru
+vkmessenger.com
+VKEXT
+            print_info "Добавлены сервисные домены VK в whitelist"
+        fi
+
         if ! grep -q "^leagueoflegends.com$" "$whitelist" 2>/dev/null; then
             printf '\nleagueoflegends.com\n' >> "$whitelist"
             print_info "Добавлен leagueoflegends.com в whitelist"

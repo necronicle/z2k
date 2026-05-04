@@ -1,8 +1,9 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-0",
+  "current": "r-1",
   "history": [
+{"v":"r-1","type":"reinstall","ts":"2026-05-04T00:00:00Z","ref":"vk-whitelist-ext","desc":"Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains","changed_files":["lib/config.sh"]},
 {"v":"p-0","type":"patch","ts":"2026-05-03T17:30:00Z","ref":"auto-update-baseline","desc":"Auto-update system rollout baseline marker","changed_files":[]}
   ]
 }
