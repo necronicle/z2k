@@ -1319,13 +1319,19 @@ main() {
             rm -rf "$WORK_DIR"
             ;;
         *)
-            # Для интерактивных команд: кэш валиден если ключевые модули
-            # и strats в наличии. Если нет — первый run (или после reboot
-            # /tmp очищен), качаем всё.
-            if [ -f "$LIB_DIR/utils.sh" ] \
-               && [ -f "$LIB_DIR/config_official.sh" ] \
-               && [ -f "$LIB_DIR/menu.sh" ] \
-               && [ -s "$WORK_DIR/strats_new2.txt" ]; then
+            # Для интерактивных команд: кэш валиден если ВСЕ модули из
+            # $MODULES присутствуют в $LIB_DIR и strats скачаны. Любой
+            # пропущенный модуль = старый кэш от предыдущей версии (как
+            # раз случай добавления нового модуля типа auto_update) →
+            # форсируем fetch чтобы source_modules не упал.
+            local _all_modules_cached=1
+            for _check_mod in $MODULES; do
+                if [ ! -f "$LIB_DIR/${_check_mod}.sh" ]; then
+                    _all_modules_cached=0
+                    break
+                fi
+            done
+            if [ "$_all_modules_cached" = "1" ] && [ -s "$WORK_DIR/strats_new2.txt" ]; then
                 _need_fetch=0
             fi
             ;;
