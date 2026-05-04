@@ -445,7 +445,9 @@ au_apply_reinstall() {
 # ----------------------------------------------------------- health-check ---
 
 au_health_check() {
-    local timeout="${1:-$Z2K_AU_HEALTH_TIMEOUT}"
+    # Override via Z2K_AU_HEALTH_TIMEOUT env var (set before sourcing the
+    # module). Tests use Z2K_AU_HEALTH_TIMEOUT=3 to skip the 60s default.
+    local timeout="$Z2K_AU_HEALTH_TIMEOUT"
     au_log "health-check: waiting ${timeout}s for service to settle"
     sleep "$timeout"
 
