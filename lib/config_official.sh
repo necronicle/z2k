@@ -1581,6 +1581,10 @@ AUSTERUS_OPT
 
     local nfqws2_opt_value
     nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d')
+    # Each profile-line ends with --new (separator before the next profile).
+    # The very last --new has no profile after it — nfqws2 parses it as an
+    # empty trailing profile (no filter, no hostlist, no desync). Strip it.
+    nfqws2_opt_value=$(printf '%s' "$nfqws2_opt_value" | sed '$ s/[[:space:]]*--new[[:space:]]*$//')
     cat <<NFQWS2_OPT
 NFQWS2_OPT="
 $nfqws2_opt_value
