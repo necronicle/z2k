@@ -3,7 +3,7 @@
 # (cf-assets.www, dash, workers, developers, community, support, radar,
 # blog, partnerlocator, playground.ai, status, canto, и т.д.).
 # Cloudflare-инфраструктура — официально в РФ не заблокирована, но ТСПУ
-# Tapo IoT cameras (от Vladislav Kravchenko @kvv213) — Mosline (МО) DPI режет
+# Tapo IoT cameras — Mosline (МО) DPI режет
 # TLS handshake к их облаку. Камеры не видны наружу пока home-облако TP-Link
 # z2k extra domains — дополнения к RKN-списку из runetfreedom.
 # в default profile с одной слабой fake-стратегией. nfqws2 hostlist
