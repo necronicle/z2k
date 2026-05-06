@@ -111,6 +111,12 @@ _z2k_curl_etag() {
     esac
 }
 
+# Если z2k_fetch уже определён (из z2k.sh — там богатая версия с DoH layer 5
+# и chunked range-fallback), не затираем — иначе проигрываем фичи каждый раз
+# когда utils.sh sourcится после z2k.sh. Локальная версия ниже остаётся как
+# минимально-достаточный fallback для standalone-сценариев (webpanel CGI,
+# tests/test_utils.sh, z2k-diag) где z2k.sh не вызывался.
+if ! command -v z2k_fetch >/dev/null 2>&1; then
 z2k_fetch() {
     local src="$1"
     local dest="$2"
@@ -122,6 +128,10 @@ z2k_fetch() {
         *)  url="${GITHUB_RAW}/${src}" ;;
     esac
 
+    # Coverage:
+    #   raw.githubusercontent.com — jsdelivr CDN + gh-proxy reverse.
+    #   github.com/<o>/<r>/releases/download/<tag>/<asset> — gh-proxy
+    #     mirrors release tarballs (jsdelivr НЕ зеркалит releases).
     local jsdelivr="" gh_proxy=""
     case "$url" in
         https://raw.githubusercontent.com/*)
@@ -132,6 +142,9 @@ z2k_fetch() {
             jsdelivr="https://cdn.jsdelivr.net/gh/${_owner}/${_repo}@${_branch}/${_rest}"
             gh_proxy="https://gh-proxy.com/${url}"
             ;;
+        https://github.com/*/releases/download/*)
+            gh_proxy="https://gh-proxy.com/${url}"
+            ;;
     esac
 
     if _z2k_curl_etag "$url" "$dest"; then return 0; fi
@@ -140,7 +153,11 @@ z2k_fetch() {
 
     if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
-        for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
+        # github.com + objects.githubusercontent.com нужны для releases/download/*
+        # (github.com отдаёт 302 redirect на objects.* CDN — оба хоста должны
+        # резолвиться в обход ISP-яда). gh-proxy.com — для layer-2 fallback.
+        for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com \
+                    github.com objects.githubusercontent.com gh-proxy.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
@@ -151,11 +168,13 @@ z2k_fetch() {
             sleep 1
             if _z2k_curl_etag "$url" "$dest"; then return 0; fi
             [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
+            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
         fi
     fi
 
     return 1
 }
+fi  # ! command -v z2k_fetch
 
 # ==============================================================================
 # ФУНКЦИИ ВЫВОДА
