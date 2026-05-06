@@ -1,11 +1,12 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "r-2",
+  "current": "r-3",
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
 {"v": "p-0", "type": "patch", "ts": "2026-05-03T17:30:00Z", "ref": "auto-update-baseline", "desc": "Auto-update system rollout baseline marker", "changed_files": []},
 {"v": "p-1", "type": "patch", "ts": "2026-05-05T08:22:08Z", "ref": "dba2bdd", "desc": "extra-domains: добавлены 4 nnm-club CF-домена для пробоя 16K H2 multiplex stall", "changed_files": ["files/lists/extra-domains.txt"]},
-{"v": "r-2", "type": "reinstall", "ts": "2026-05-05T14:42:57Z", "ref": "d18bcf3", "desc": "config_official: убран trailing --new — лишний пустой профиль в nfqws2 cmdline", "changed_files": ["lib/config_official.sh", "UPDATES.json"]}
+{"v": "r-2", "type": "reinstall", "ts": "2026-05-05T14:42:57Z", "ref": "d18bcf3", "desc": "config_official: убран trailing --new — лишний пустой профиль в nfqws2 cmdline", "changed_files": ["lib/config_official.sh", "UPDATES.json"]},
+{"v": "r-3", "type": "reinstall", "ts": "2026-05-06T12:13:47Z", "ref": "4c7f1ac", "desc": "whitelist: добавлен customer-oci.com (Oracle Cloud)", "changed_files": ["files/lists/extra-domains.txt", "lib/config.sh", "UPDATES.json"]}
   ]
 }
