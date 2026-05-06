@@ -677,6 +677,9 @@ keenetic.link
 # === Разработка ===
 raw.githubusercontent.com
 marketplace.visualstudio.com
+
+# === Oracle Cloud Infrastructure ===
+customer-oci.com
 EOF
 
         # Проверить что файл действительно создался
@@ -779,6 +782,11 @@ VKEXT
         if ! grep -q "^marketplace.visualstudio.com$" "$whitelist" 2>/dev/null; then
             printf 'marketplace.visualstudio.com\n' >> "$whitelist"
             print_info "Добавлен marketplace.visualstudio.com в whitelist"
+        fi
+
+        if ! grep -q "^customer-oci.com$" "$whitelist" 2>/dev/null; then
+            printf '\n# === Oracle Cloud Infrastructure ===\ncustomer-oci.com\n' >> "$whitelist"
+            print_info "Добавлен customer-oci.com в whitelist"
         fi
     fi
 
