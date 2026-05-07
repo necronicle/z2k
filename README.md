@@ -110,7 +110,7 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k
 После установки доступно интерактивное меню:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+sh /opt/zapret2/z2k.sh menu
 ```
 
 | Пункт | Описание |
@@ -127,6 +127,7 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 | **[G]** | Игровой режим (Roblox и др.) |
 | **[T]** | Telegram |
 | **[S]** | Скрипты custom.d |
+| **[P]** | Веб-панель (дубль меню в браузере) |
 | **[B]** | Rollback — откат конфигурации к snapshot |
 | **[H]** | Health check — проверка доступности сервисов |
 | **[V]** | Валидация конфигурации |
@@ -279,26 +280,34 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k
 z2k/
 ├── z2k.sh                      # Bootstrap / main installer
 ├── z2k_cleanup.sh              # Complete uninstall
-├── strats_new2.txt             # TCP strategy database (45 strategies)
-├── quic_strats.ini             # UDP/QUIC strategy database
-├── lib/                        # Core modules
-│   ├── utils.sh                # Utilities, safe_config_read, checks
-│   ├── install.sh              # 12-step install + rollback
-│   ├── menu.sh                 # Interactive menu (15 options)
+├── strats_new2.txt             # TCP strategy database (RKN 45 / YT 22 / GV 22)
+├── quic_strats.ini             # UDP/QUIC strategy database (yt_quic + discord_voice)
+├── lib/                        # Core modules (загружаются z2k.sh)
+│   ├── utils.sh                # Utilities, safe_config_read, z2k_fetch с 5-layer fallback
+│   ├── system_init.sh          # System detection
+│   ├── install.sh              # 14-step install + rollback
 │   ├── strategies.sh           # Strategy parsing & management
 │   ├── config.sh               # Configuration management
 │   ├── config_official.sh      # nfqws2 config generation
-│   └── system_init.sh          # System detection
+│   ├── webpanel.sh             # CGI веб-панель installer
+│   └── menu.sh                 # Interactive menu (16 опций)
 ├── files/
 │   ├── S99zapret2.new          # Init script
-│   ├── fake/                   # Binary protocol blobs (76 files)
+│   ├── 000-zapret2.sh          # ndmc hook
+│   ├── init.d/                 # Дополнительные init-скрипты (TG watchdog и др.)
+│   ├── ndm/                    # Keenetic ndmc-интеграция
+│   ├── fake/                   # Binary protocol blobs (85 файлов)
 │   ├── lua/
 │   │   ├── z2k-autocircular.lua    # Persistent strategy memory + telemetry
 │   │   └── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH
-│   ├── lists/                  # Domain lists (RKN, YouTube, Discord)
+│   ├── lists/                  # Domain & IP lists (RKN, YouTube, Discord, AWS, Roblox, TG)
 │   ├── z2k-healthcheck.sh      # Service availability monitoring
 │   ├── z2k-config-validator.sh # Config validation
-│   └── z2k-update-lists.sh     # Auto domain list updater
+│   ├── z2k-update-lists.sh     # Auto domain list updater
+│   ├── z2k-blocked-monitor.sh  # Watch nfqws2 logs for blocked sessions
+│   ├── z2k-tg-watchdog.sh      # Telegram tunnel health watchdog
+│   ├── z2k-fix-tg-iptables.sh  # TG NAT/iptables hotfix
+│   └── z2k-fix-tg-watchdog.sh  # TG watchdog hotfix
 ├── cf-worker/                  # Cloudflare Worker relay
 │   ├── worker.js               # Telegram relay
 │   └── wrangler.toml           # Deployment config
@@ -308,11 +317,13 @@ z2k/
 │   └── listener.go             # SO_ORIGINAL_DST (IPv4 + IPv6)
 ├── tests/                      # Test framework
 │   ├── run_all.sh              # Test runner
-│   ├── test_utils.sh           # Utils tests (23 tests)
-│   ├── test_strategies.sh      # Strategy tests (21 tests)
-│   ├── test_config_official.sh # Config gen tests (24 tests)
-│   └── test_validator.sh       # Validator tests (18 tests)
-└── .github/workflows/ci.yml   # CI: shellcheck + go + luacheck
+│   ├── test_utils.sh           # Utils tests
+│   ├── test_strategies.sh      # Strategy tests
+│   ├── test_config_official.sh # Config gen tests
+│   └── test_validator.sh       # Validator tests
+└── .github/workflows/
+    ├── ci.yml                  # shellcheck + go + luacheck + cross-arch build
+    └── jsdelivr-purge.yml      # Сбросить jsdelivr CDN после релиза
 ```
 
 ---
