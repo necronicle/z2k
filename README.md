@@ -93,6 +93,16 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
 ```
 
+Если GitHub заблокирован провайдером — установка через зеркало:
+
+```bash
+# jsdelivr
+curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@master/z2k.sh | sh
+
+# gh-proxy
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+```
+
 ---
 
 ## Меню
@@ -226,6 +236,13 @@ Telegram работает для всех устройств в сети авт�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh
+```
+
+Через зеркала (если GitHub заблокирован):
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@master/z2k_cleanup.sh | sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh
 ```
 
 **ВНИМАНИЕ:** Скрипт удаляет ВСЁ связанное с zapret и zapret2:
