@@ -58,7 +58,7 @@ purge_legacy_ndmc_records() {
 
     # Hostnames z2k_fetch Layer 4 has ever written. Add new ones here
     # when extending z2k_fetch hostlist.
-    local pattern="^ip host (raw\\.githubusercontent\\.com|cdn\\.jsdelivr\\.net|gh-proxy\\.com|api\\.github\\.com) "
+    local pattern="^ip host (raw\\.githubusercontent\\.com|cdn\\.jsdelivr\\.net|gh-proxy\\.com|api\\.github\\.com|github\\.com|objects\\.githubusercontent\\.com|release-assets\\.githubusercontent\\.com) "
 
     local entries
     # `|| true` masks grep's exit=1 on no-match (z2k.sh runs under set -e).
@@ -615,6 +615,41 @@ step_load_kernel_modules() {
 # ШАГ 5: УСТАНОВКА ZAPRET2 (ИСПОЛЬЗУЯ ОФИЦИАЛЬНЫЙ install_bin.sh)
 # ==============================================================================
 
+download_openwrt_embedded_release() {
+    local url="$1"
+    local dest="$2"
+    local proxy_url=""
+
+    rm -f "$dest"
+
+    print_info "Пробую скачать релиз напрямую с GitHub..."
+    if curl -fsSL --connect-timeout 10 --max-time "${Z2K_RELEASE_DIRECT_TIMEOUT:-45}" \
+        "$url" -o "$dest"; then
+        return 0
+    fi
+    rm -f "$dest"
+
+    case "$url" in
+        https://github.com/*/releases/download/*)
+            proxy_url="https://gh-proxy.com/${url}"
+            print_warning "GitHub release недоступен — пробую зеркало gh-proxy"
+            if curl -fsSL --connect-timeout 10 --max-time "${Z2K_RELEASE_PROXY_TIMEOUT:-180}" \
+                "$proxy_url" -o "$dest"; then
+                return 0
+            fi
+            rm -f "$dest"
+            ;;
+    esac
+
+    if command -v z2k_fetch >/dev/null 2>&1; then
+        print_warning "Обычные release-зеркала не сработали — пробую NDM DNS fallback"
+        Z2K_FETCH_NDMC_THRESHOLD=1 z2k_fetch "$url" "$dest" && return 0
+        rm -f "$dest"
+    fi
+
+    return 1
+}
+
 step_build_zapret2() {
     print_header "Шаг 5/12: Установка zapret2"
 
@@ -664,28 +699,25 @@ step_build_zapret2() {
 
     # GitHub API для получения последней версии
     local api_url="https://api.github.com/repos/bol-van/zapret2/releases/latest"
-    local release_data
-    release_data=$(curl -fsSL --connect-timeout 10 --max-time 120 "$api_url" 2>&1)
+    local openwrt_url=""
+    local fallback_url="https://github.com/bol-van/zapret2/releases/download/v0.9.5.1/zapret2-v0.9.5.1-openwrt-embedded.tar.gz"
+    local api_tmp="/tmp/z2k-release-api.$$.json"
+    if z2k_fetch "$api_url" "$api_tmp" && [ -s "$api_tmp" ]; then
+        openwrt_url=$(grep -o 'https://github.com/bol-van/zapret2/releases/download/[^"]*openwrt-embedded\.tar\.gz' "$api_tmp" | head -1)
+    fi
+    rm -f "$api_tmp"
 
-    local openwrt_url
-    if [ $? -ne 0 ]; then
-        print_warning "API недоступен, использую fallback версию v0.9.5.1..."
-        openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.9.5.1/zapret2-v0.9.5.1-openwrt-embedded.tar.gz"
-    else
-        # Парсим URL из JSON
-        openwrt_url=$(echo "$release_data" | grep -o 'https://github.com/bol-van/zapret2/releases/download/[^"]*openwrt-embedded\.tar\.gz' | head -1)
-
-        if [ -z "$openwrt_url" ]; then
-            print_warning "Не найден в API, использую fallback v0.9.5.1..."
-            openwrt_url="https://github.com/bol-van/zapret2/releases/download/v0.9.5.1/zapret2-v0.9.5.1-openwrt-embedded.tar.gz"
-        fi
+    if [ -z "$openwrt_url" ]; then
+        print_warning "API недоступен или ответ пуст — использую fallback v0.9.5.1"
+        openwrt_url="$fallback_url"
     fi
 
     print_info "URL релиза: $openwrt_url"
 
-    # Скачать релиз
-    if ! curl -fsSL --connect-timeout 10 --max-time 120 "$openwrt_url" -o openwrt-embedded.tar.gz; then
-        print_error "Не удалось загрузить zapret2 OpenWrt embedded"
+    # Скачать релиз через явную цепочку зеркал. Для GitHub release assets
+    # jsdelivr не подходит, поэтому порядок: github.com → gh-proxy → NDM DNS.
+    if ! download_openwrt_embedded_release "$openwrt_url" "openwrt-embedded.tar.gz"; then
+        print_error "Не удалось загрузить zapret2 OpenWrt embedded (все зеркала)"
         return 1
     fi
 
@@ -1757,7 +1789,7 @@ step_finalize() {
             local tg_dest="/opt/sbin/tg-mtproxy-client"
             local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
             rm -f "$tg_dest"
-            curl -fsSL --connect-timeout 10 --max-time 120 "$tg_url" -o "$tg_dest" 2>/dev/null
+            z2k_fetch "$tg_url" "$tg_dest" 2>/dev/null || true
             local tg_size
             tg_size=$(wc -c < "$tg_dest" 2>/dev/null || echo 0)
             # Validate: exists, >500KB, starts with ELF magic (\x7fELF), runs without crash
@@ -1878,7 +1910,7 @@ step_finalize() {
     # Save local z2k entrypoint for future runs without curl.
     local local_z2k_script="${ZAPRET2_DIR}/z2k.sh"
     local local_z2k_url="${GITHUB_RAW}/z2k.sh"
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$local_z2k_url" -o "$local_z2k_script"; then
+    if z2k_fetch "$local_z2k_url" "$local_z2k_script"; then
         chmod +x "$local_z2k_script" 2>/dev/null || true
         printf "  %-25s: %s\n" "z2k script" "$local_z2k_script"
         print_info "Открыть меню позже: sh ${local_z2k_script} menu"
@@ -2280,7 +2312,7 @@ uninstall_zapret2() {
     done
     if [ "$_leftover" -gt 0 ]; then
         print_warning "Осталось ${_leftover} артефакт(ов). Если переустановка падает,"
-        print_warning "запусти добивающую зачистку: curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh"
+        print_warning "запусти добивающую зачистку: sh -c 'tmp=/tmp/z2k_cleanup.sh; rm -f \"\$tmp\"; for url in \"https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh\" \"https://cdn.jsdelivr.net/gh/necronicle/z2k@master/z2k_cleanup.sh\" \"https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh\"; do echo \"[i] Пробую: \$url\" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 \"\$url\" -o \"\$tmp\"; then exec sh \"\$tmp\"; fi; done; echo \"[FAIL] Не удалось скачать z2k_cleanup.sh ни с одного зеркала\" >&2; exit 1'"
     else
         print_success "zapret2 полностью удален"
     fi

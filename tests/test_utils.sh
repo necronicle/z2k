@@ -148,6 +148,49 @@ is_zapret2_installed
 assert_eq "is_zapret2_installed: returns false when not installed" "1" "$?"
 
 # ==============================================================================
+# TEST: z2k_fetch handles mid-transfer curl failures
+# ==============================================================================
+
+curl() {
+    local out="" url=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -o)
+                out="$2"
+                shift 2
+                continue
+                ;;
+            http://*|https://*)
+                url="$1"
+                ;;
+        esac
+        shift
+    done
+
+    case "$url" in
+        https://github.com/*/releases/download/*)
+            [ -n "$out" ] && printf partial > "$out"
+            return 28
+            ;;
+        https://gh-proxy.com/https://github.com/*/releases/download/*)
+            [ -n "$out" ] && printf full > "$out"
+            return 0
+            ;;
+        *)
+            return 22
+            ;;
+    esac
+}
+
+FETCH_TARGET="${WORK_DIR}/fetch_release_asset"
+z2k_fetch "https://github.com/bol-van/zapret2/releases/download/v0.9.5.1/zapret2-v0.9.5.1-openwrt-embedded.tar.gz" "$FETCH_TARGET"
+FETCH_RC=$?
+assert_eq "z2k_fetch: partial curl timeout falls through" "0" "$FETCH_RC"
+assert_eq "z2k_fetch: mirror body installed after timeout" "full" "$(cat "$FETCH_TARGET")"
+unset -f curl 2>/dev/null || true
+
+# ==============================================================================
 # CLEANUP AND REPORT
 # ==============================================================================
 

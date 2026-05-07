@@ -94,23 +94,30 @@ z2k_fetch() {
             jsdelivr="https://cdn.jsdelivr.net/gh/${_owner}/${_repo}@${_branch}/${_rest}"
             gh_proxy="https://gh-proxy.com/${url}"
             ;;
+        https://github.com/*/releases/download/*)
+            gh_proxy="https://gh-proxy.com/${url}"
+            ;;
     esac
 
     if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
         return 0
     fi
+    rm -f "$dest"
     if [ -n "$jsdelivr" ] && \
        curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
         return 0
     fi
+    rm -f "$dest"
     if [ -n "$gh_proxy" ] && \
        curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
         return 0
     fi
+    rm -f "$dest"
 
     if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
-        for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
+        for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com \
+                    github.com objects.githubusercontent.com release-assets.githubusercontent.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
@@ -122,10 +129,17 @@ z2k_fetch() {
             if curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$url" 2>/dev/null; then
                 return 0
             fi
+            rm -f "$dest"
             if [ -n "$jsdelivr" ] && \
                curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
                 return 0
             fi
+            rm -f "$dest"
+            if [ -n "$gh_proxy" ] && \
+               curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
+                return 0
+            fi
+            rm -f "$dest"
         fi
     fi
 

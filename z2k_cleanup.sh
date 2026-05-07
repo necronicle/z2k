@@ -13,7 +13,7 @@
 #     watchdog + cron-запись, iptables NAT REDIRECT на :1443, /opt/sbin бинарник
 #
 # Использование:
-#   curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh
+#   sh -c 'tmp=/tmp/z2k_cleanup.sh; rm -f "$tmp"; for url in "https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh" "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/z2k_cleanup.sh" "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh"; do echo "[i] Пробую: $url" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then exec sh "$tmp"; fi; done; echo "[FAIL] Не удалось скачать z2k_cleanup.sh ни с одного зеркала" >&2; exit 1'
 #   или
 #   sh z2k_cleanup.sh
 
@@ -320,6 +320,6 @@ echo ""
 echo "============================================"
 log_info "Зачистка завершена."
 log_info "Для переустановки z2k:"
-echo "  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh"
+echo "  sh -c 'tmp=/tmp/z2k.sh; rm -f \"\$tmp\"; for url in \"https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh\" \"https://cdn.jsdelivr.net/gh/necronicle/z2k@master/z2k.sh\" \"https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh\"; do echo \"[i] Пробую: \$url\" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 \"\$url\" -o \"\$tmp\"; then exec sh \"\$tmp\"; fi; done; echo \"[FAIL] Не удалось скачать z2k.sh ни с одного зеркала\" >&2; exit 1'"
 echo "============================================"
 echo ""

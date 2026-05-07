@@ -127,8 +127,8 @@ z2k_fetch() {
         *)  url="${GITHUB_RAW}/${src}" ;;
     esac
 
-    # Derive jsdelivr + gh-proxy URLs. Only raw.githubusercontent.com URLs
-    # have a jsdelivr equivalent; gh-proxy works for any raw URL.
+    # Derive jsdelivr + gh-proxy URLs. jsdelivr mirrors repo files only;
+    # release assets use gh-proxy as the mirror.
     local jsdelivr="" gh_proxy=""
     case "$url" in
         https://raw.githubusercontent.com/*)
@@ -139,6 +139,9 @@ z2k_fetch() {
             jsdelivr="https://cdn.jsdelivr.net/gh/${_owner}/${_repo}@${_branch}/${_rest}"
             gh_proxy="https://gh-proxy.com/${url}"
             ;;
+        https://github.com/*/releases/download/*)
+            gh_proxy="https://gh-proxy.com/${url}"
+            ;;
     esac
 
     # --- Layer 1: direct ---
@@ -146,6 +149,7 @@ z2k_fetch() {
         Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
         return 0
     fi
+    rm -f "$dest"
 
     # --- Layer 2: jsdelivr CDN ---
     if [ -n "$jsdelivr" ] && \
@@ -153,6 +157,7 @@ z2k_fetch() {
         Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
         return 0
     fi
+    rm -f "$dest"
 
     # --- Layer 3: gh-proxy.com reverse-proxy ---
     if [ -n "$gh_proxy" ] && \
@@ -160,6 +165,7 @@ z2k_fetch() {
         Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
         return 0
     fi
+    rm -f "$dest"
 
     # All three normal mirrors fell through. One failure can be transient
     # (api.github.com rate limit, sporadic TCP RST). Bump the streak so
@@ -184,7 +190,8 @@ z2k_fetch() {
        command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
         mkdir -p "$(dirname "$Z2K_MANAGED_NDMC")" 2>/dev/null
-        for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com; do
+        for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com \
+                    github.com objects.githubusercontent.com release-assets.githubusercontent.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
@@ -201,11 +208,19 @@ z2k_fetch() {
                 Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
                 return 0
             fi
+            rm -f "$dest"
             if [ -n "$jsdelivr" ] && \
                curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$jsdelivr" 2>/dev/null; then
                 Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
                 return 0
             fi
+            rm -f "$dest"
+            if [ -n "$gh_proxy" ] && \
+               curl -fsSL --connect-timeout 10 --max-time 180 -o "$dest" "$gh_proxy" 2>/dev/null; then
+                Z2K_FETCH_FAIL_STREAK=0; export Z2K_FETCH_FAIL_STREAK
+                return 0
+            fi
+            rm -f "$dest"
         fi
     fi
 
@@ -708,7 +723,7 @@ show_help() {
   - Если zapret2 установлен: откроет меню
 
 Примеры:
-  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh | sh
+  sh -c 'tmp=/tmp/z2k.sh; rm -f "$tmp"; for url in "https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh" "https://cdn.jsdelivr.net/gh/necronicle/z2k@master/z2k.sh" "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/master/z2k.sh"; do echo "[i] Пробую: $url" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then exec sh "$tmp"; fi; done; echo "[FAIL] Не удалось скачать z2k.sh ни с одного зеркала" >&2; exit 1'
   sh z2k.sh install
   sh z2k.sh menu
   sh z2k.sh check
