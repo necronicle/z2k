@@ -32,10 +32,10 @@ z2k — модульный установщик zapret2 для роутеров 
 
 - Установка zapret2 (openwrt-embedded релиз) без компиляции, с проверкой работоспособности `nfqws2`
 - Три TCP autocircular профиля с разными стратегиями:
-  - **RKN** — список ресурсов (TCP/TLS + HTTP) — 45 стратегий
+  - **RKN** — список ресурсов (TCP/TLS + HTTP) — 48 стратегий
   - **YouTube TCP** — youtube.com и связанные домены — 22 стратегии
   - **YouTube GV** — googlevideo CDN (стриминг) — 22 стратегии
-- QUIC autocircular профиль: YouTube QUIC (UDP/443) — 12 стратегий с z2k morph
+- QUIC autocircular профили: YouTube QUIC (UDP/443) и Discord voice — по 12 стратегий с z2k morph
 - Discord профили:
   - TCP: hostlist Discord включён в RKN-профиль
   - UDP voice/video: `circular_locked` (стратегия закрепляется per-domain)
@@ -47,7 +47,9 @@ z2k — модульный установщик zapret2 для роутеров 
 
 - **Telegram** — прозрачная работа для всех устройств в сети, без настройки на клиентах
 - **IPv6** — полная поддержка: dual-stack DNS, IPv6 SO_ORIGINAL_DST, Telegram DC IPv6 CIDR
-- **Игровой режим** — UDP для игр (Roblox и др.), autocircular на портах 1024-65535
+- **Игровой режим** — два профиля для UDP-игр на портах 1024-65535:
+  - `flowseal` — catchall autocircular поверх диапазона
+  - `legacy` — 13-стратный rotator с режимами `safe / hybrid / aggressive` под AWS-игры (Darktide, Outlast и др.)
 
 ### Инструменты и мониторинг
 
@@ -110,7 +112,7 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k
 После установки доступно интерактивное меню:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
+z2k menu
 ```
 
 | Пункт | Описание |
@@ -120,14 +122,18 @@ curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh 
 | **[3]** | Обновить списки доменов |
 | **[4]** | Резервная копия/восстановление |
 | **[5]** | Удалить zapret2 |
+| **[U]** | Проверить обновления z2k |
 | **[W]** | Whitelist — управление списком исключений |
 | **[R]** | RST-фильтр — фильтрация аномальных TCP RST |
-| **[G]** | Игровой режим (Roblox и др.) |
+| **[F]** | Silent fallback для РКН (осторожно — возможны поломки) |
+| **[G]** | Игровой режим (safe/hybrid/aggressive) |
 | **[T]** | Telegram прокси |
 | **[S]** | Скрипты custom.d |
 | **[P]** | Веб-панель |
 | **[D]** | Диагностика (сводка для траблшутинга) |
 | **[X]** | Active probe (подбор стратегии под домен) |
+| **[C]** | Classify — определить тип DPI-блока (5–30 с) |
+| **[I]** | Убрать статические IP Instagram (обход DNS-отравления) |
 
 ---
 
@@ -169,6 +175,7 @@ z2k <команда>
 - **UDP детектор** — соотношение отправленных/полученных пакетов (4+ out, ≤1 in = неудача)
 - **TLS alert детектор** (`z2k_tls_alert_fatal`) — анализирует TLS alert + HTTP redirect
 - **Mid-stream stall детектор** (`z2k_mid_stream_stall`) — ловит «тихие» разрывы посередине потока, когда DPI режет соединение без RST/alert
+- **3-state HTTP classifier** — отличает positive/neutral/hard_fail на HTTP-ответе (с `inseq=18000` и `no_http_redirect`), чтобы не зачитывать редирект на блок-страницу как успех
 - **IP block detector** (`--ipblock-detect=on` в nfqws2) — если 3+ ClientHello к одному IP не получают ответа, шлёт client RST чтобы приложение быстро переключилось на другой IP
 
 ### Персистентность
@@ -283,26 +290,41 @@ curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k
 z2k/
 ├── z2k.sh                      # Bootstrap / main installer
 ├── z2k_cleanup.sh              # Complete uninstall
-├── strats_new2.txt             # TCP strategy database (45 strategies)
-├── quic_strats.ini             # UDP/QUIC strategy database
-├── lib/                        # Core modules
-│   ├── utils.sh                # Utilities, safe_config_read, checks
-│   ├── install.sh              # 12-step install + rollback
-│   ├── menu.sh                 # Interactive menu (15 options)
+├── strats_new2.txt             # TCP strategy database (RKN 48 / YT 22 / GV 22)
+├── quic_strats.ini             # UDP/QUIC strategy database (yt_quic + discord_voice)
+├── lib/                        # Core modules (загружаются z2k.sh)
+│   ├── utils.sh                # Utilities, safe_config_read, z2k_fetch с 5-layer fallback
+│   ├── system_init.sh          # System detection
+│   ├── install.sh              # 16-step install + rollback
 │   ├── strategies.sh           # Strategy parsing & management
 │   ├── config.sh               # Configuration management
 │   ├── config_official.sh      # nfqws2 config generation
-│   └── system_init.sh          # System detection
+│   ├── webpanel.sh             # CGI веб-панель installer
+│   ├── menu.sh                 # Interactive menu (16 опций)
+│   └── auto_update.sh          # Self-update z2k через UPDATES.json
 ├── files/
 │   ├── S99zapret2.new          # Init script
-│   ├── fake/                   # Binary protocol blobs (76 files)
+│   ├── 000-zapret2.sh          # ndmc hook
+│   ├── init.d/                 # Дополнительные init-скрипты (TG watchdog и др.)
+│   ├── ndm/                    # Keenetic ndmc-интеграция
+│   ├── fake/                   # Binary protocol blobs (24 файла)
 │   ├── lua/
 │   │   ├── z2k-autocircular.lua    # Persistent strategy memory + telemetry
-│   │   └── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH
-│   ├── lists/                  # Domain lists (RKN, YouTube, Discord)
+│   │   └── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH, mid-stream stall
+│   ├── lists/                  # Domain & IP lists (RKN, YouTube, Discord, AWS, Roblox, TG, flowseal)
 │   ├── z2k-healthcheck.sh      # Service availability monitoring
 │   ├── z2k-config-validator.sh # Config validation
-│   └── z2k-update-lists.sh     # Auto domain list updater
+│   ├── z2k-update-lists.sh     # Auto domain list updater
+│   ├── z2k-auto-update.sh      # Self-update cron entry
+│   ├── z2k-geosite.sh          # Geosite ru-blocked import
+│   ├── z2k-classify-drift.sh   # DPI-block type classifier (drift)
+│   ├── z2k-classify-inject.sh  # DPI-block type classifier (inject)
+│   ├── z2k-probe.sh            # Active probe per-host
+│   ├── z2k-diag.sh             # Single-page troubleshooting summary
+│   ├── z2k-blocked-monitor.sh  # Watch nfqws2 logs for blocked sessions
+│   ├── z2k-tg-watchdog.sh      # Telegram tunnel health watchdog
+│   ├── z2k-fix-tg-iptables.sh  # TG NAT/iptables hotfix
+│   └── z2k-fix-tg-watchdog.sh  # TG watchdog hotfix
 ├── cf-worker/                  # Cloudflare Worker relay
 │   ├── worker.js               # Telegram relay
 │   └── wrangler.toml           # Deployment config
@@ -310,13 +332,18 @@ z2k/
 │   ├── main.go                 # Entry point
 │   ├── tunnel.go               # Tunnel client
 │   └── listener.go             # SO_ORIGINAL_DST (IPv4 + IPv6)
-├── tests/                      # Test framework
-│   ├── run_all.sh              # Test runner
-│   ├── test_utils.sh           # Utils tests (23 tests)
-│   ├── test_strategies.sh      # Strategy tests (21 tests)
-│   ├── test_config_official.sh # Config gen tests (24 tests)
-│   └── test_validator.sh       # Validator tests (18 tests)
-└── .github/workflows/ci.yml   # CI: shellcheck + go + luacheck
+├── tests/                      # Test framework (12 .sh + .lua fixtures)
+│   ├── run_all.sh
+│   ├── test_utils.sh, test_strategies.sh, test_config_official.sh, test_validator.sh
+│   ├── test_http_classifier.{sh,lua}, test_http_mid_stream_stall.{sh,lua}
+│   ├── test_mid_stream_stall.{sh,lua}, test_probe_override.{sh,lua}
+│   ├── test_init_rst_filter.sh, test_inject_z2k_range_rand.sh
+│   ├── test_install_completeness.sh
+│   └── test_rotate_rkn_tcp_ts_slots.sh
+└── .github/workflows/
+    ├── ci.yml                  # shellcheck + go + luacheck + cross-arch build
+    ├── build-classify.yml      # Build classify-* helpers
+    └── jsdelivr-purge.yml      # Сбросить jsdelivr CDN после релиза
 ```
 
 ---
