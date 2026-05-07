@@ -82,7 +82,7 @@ _z2k_curl_etag() {
     local etag_file="${dest}.etag"
     local hdr_file="${dest}.hdr.$$"
     local tmp_body="${dest}.new.$$"
-    local old_etag="" http_status
+    local old_etag="" http_status curl_rc
     if [ -f "$etag_file" ] && [ -s "$dest" ]; then
         old_etag=$(cat "$etag_file" 2>/dev/null)
     fi
@@ -90,11 +90,14 @@ _z2k_curl_etag() {
         http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
             -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
+        curl_rc=$?
     else
         http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
             -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
+        curl_rc=$?
     fi
+    [ "$curl_rc" -eq 0 ] || { rm -f "$hdr_file" "$tmp_body"; return 1; }
     case "$http_status" in
         304) rm -f "$hdr_file" "$tmp_body"; return 0 ;;
         200)
@@ -153,11 +156,12 @@ z2k_fetch() {
 
     if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
-        # github.com + objects.githubusercontent.com нужны для releases/download/*
-        # (github.com отдаёт 302 redirect на objects.* CDN — оба хоста должны
+        # github.com + release-assets/objects нужны для releases/download/*
+        # (github.com отдаёт 302 redirect на CDN-asset host — все хосты должны
         # резолвиться в обход ISP-яда). gh-proxy.com — для layer-2 fallback.
         for host in raw.githubusercontent.com cdn.jsdelivr.net api.github.com \
-                    github.com objects.githubusercontent.com gh-proxy.com; do
+                    github.com objects.githubusercontent.com release-assets.githubusercontent.com \
+                    gh-proxy.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then

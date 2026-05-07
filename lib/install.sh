@@ -705,6 +705,42 @@ step_load_kernel_modules() {
 # ШАГ 5: УСТАНОВКА ZAPRET2 (ИСПОЛЬЗУЯ ОФИЦИАЛЬНЫЙ install_bin.sh)
 # ==============================================================================
 
+download_openwrt_embedded_release() {
+    local url="$1"
+    local dest="$2"
+    local proxy_url=""
+
+    rm -f "$dest"
+
+    print_info "Пробую скачать релиз напрямую с GitHub..."
+    if curl -fsSL --connect-timeout 10 --max-time "${Z2K_RELEASE_DIRECT_TIMEOUT:-45}" \
+        "$url" -o "$dest"; then
+        return 0
+    fi
+    rm -f "$dest"
+
+    case "$url" in
+        https://github.com/*/releases/download/*)
+            proxy_url="https://gh-proxy.com/${url}"
+            print_warning "GitHub release недоступен — пробую зеркало gh-proxy"
+            if curl -fsSL --connect-timeout 10 --max-time "${Z2K_RELEASE_PROXY_TIMEOUT:-180}" \
+                "$proxy_url" -o "$dest"; then
+                return 0
+            fi
+            rm -f "$dest"
+            ;;
+    esac
+
+    if command -v z2k_fetch >/dev/null 2>&1; then
+        print_warning "Обычные release-зеркала не сработали — пробую DoH/NDM fallback"
+        Z2K_FETCH_PREFER_DOH=1 Z2K_FETCH_NDMC_THRESHOLD=1 \
+            z2k_fetch "$url" "$dest" && return 0
+        rm -f "$dest"
+    fi
+
+    return 1
+}
+
 step_build_zapret2() {
     print_header "Шаг 5/12: Установка zapret2"
 
@@ -775,15 +811,18 @@ step_build_zapret2() {
 
     print_info "URL релиза: $openwrt_url"
 
-    # Скачать релиз через z2k_fetch — он умеет fallback'и (raw → jsdelivr →
-    # gh-proxy → ndmc DNS → DoH+pin) для github.com/releases/download/* URL.
+    # Скачать релиз через явную цепочку зеркал. Для GitHub release assets
+    # jsdelivr не подходит, поэтому порядок такой:
+    #   1. github.com/releases/download
+    #   2. gh-proxy.com/github.com/releases/download
+    #   3. z2k_fetch heavy fallback (DoH + NDM DNS pinning)
     # Если tarball уже лежит в cwd (build_dir = /tmp/zapret2_build) — пропускаем
     # скачивание. Этот путь нужен пользователям с жёстким провайдер-блоком где
     # все 5 наших слоёв не пробивают, но юзер вручную скачал tarball через DoH
     # с другой машины / другим curl-вызовом и подложил сюда.
     if [ -s openwrt-embedded.tar.gz ]; then
         print_info "tarball уже в кэше build_dir — пропускаем скачивание"
-    elif ! z2k_fetch "$openwrt_url" "openwrt-embedded.tar.gz"; then
+    elif ! download_openwrt_embedded_release "$openwrt_url" "openwrt-embedded.tar.gz"; then
         print_error "Не удалось загрузить zapret2 OpenWrt embedded (все зеркала)"
         print_info "Можно скачать вручную и положить в /tmp/zapret2_build/openwrt-embedded.tar.gz, перезапустить установку"
         return 1
@@ -2301,7 +2340,7 @@ run_full_install() {
     if [ -z "$_au_tag" ]; then
         local _au_manifest="/tmp/z2k_install_manifest.json"
         rm -f "$_au_manifest"
-        if z2k_fetch "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k/UPDATES.json" "$_au_manifest" 2>/dev/null \
+        if z2k_fetch "${GITHUB_RAW}/UPDATES.json" "$_au_manifest" 2>/dev/null \
             && [ -s "$_au_manifest" ]; then
             _au_tag=$(sed -n 's/.*"current":[[:space:]]*"\([^"]*\)".*/\1/p' "$_au_manifest" | head -1)
         fi
@@ -2707,7 +2746,7 @@ uninstall_zapret2() {
     done
     if [ "$_leftover" -gt 0 ]; then
         print_warning "Осталось ${_leftover} артефакт(ов). Если переустановка падает,"
-        print_warning "запусти добивающую зачистку: curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/master/z2k_cleanup.sh | sh"
+        print_warning "запусти добивающую зачистку: sh -c 'tmp=/tmp/z2k_cleanup.sh; rm -f \"\$tmp\"; for url in \"https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh\" \"https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k_cleanup.sh\" \"https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh\"; do echo \"[i] Пробую: \$url\" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 \"\$url\" -o \"\$tmp\"; then exec sh \"\$tmp\"; fi; done; echo \"[FAIL] Не удалось скачать z2k_cleanup.sh ни с одного зеркала\" >&2; exit 1'"
     else
         print_success "zapret2 полностью удален"
     fi

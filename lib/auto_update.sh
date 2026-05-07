@@ -17,7 +17,7 @@
 
 Z2K_AU_BRANCH="${Z2K_AU_BRANCH:-z2k-enhanced}"
 Z2K_AU_REPO_RAW="${Z2K_AU_REPO_RAW:-https://raw.githubusercontent.com/necronicle/z2k/${Z2K_AU_BRANCH}}"
-Z2K_AU_MANIFEST_URL="${Z2K_AU_MANIFEST_URL:-${Z2K_AU_REPO_RAW}/z2k/UPDATES.json}"
+Z2K_AU_MANIFEST_URL="${Z2K_AU_MANIFEST_URL:-${Z2K_AU_REPO_RAW}/UPDATES.json}"
 Z2K_AU_REINSTALL_URL="${Z2K_AU_REINSTALL_URL:-${Z2K_AU_REPO_RAW}/z2k.sh}"
 
 Z2K_AU_INSTALLED_TAG_FILE="${Z2K_AU_INSTALLED_TAG_FILE:-/opt/zapret2/.z2k-installed-tag}"
@@ -295,6 +295,42 @@ au_download_repo_file() {
     return 0
 }
 
+au_download_reinstall_script() {
+    local target="$1"
+    local url="$Z2K_AU_REINSTALL_URL"
+    local jsdelivr="" gh_proxy=""
+
+    rm -f "$target"
+
+    if command -v z2k_fetch >/dev/null 2>&1; then
+        z2k_fetch "$url" "$target" && [ -s "$target" ] && return 0
+        rm -f "$target"
+    fi
+
+    case "$url" in
+        https://raw.githubusercontent.com/*)
+            local rest owner repo branch path
+            rest="${url#https://raw.githubusercontent.com/}"
+            owner="${rest%%/*}"; rest="${rest#*/}"
+            repo="${rest%%/*}"; rest="${rest#*/}"
+            branch="${rest%%/*}"; path="${rest#*/}"
+            jsdelivr="https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${path}"
+            gh_proxy="https://gh-proxy.com/${url}"
+            ;;
+    esac
+
+    for url in "$Z2K_AU_REINSTALL_URL" "$jsdelivr" "$gh_proxy"; do
+        [ -z "$url" ] && continue
+        au_log "reinstall: fetching z2k.sh from $url"
+        if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$target"; then
+            [ -s "$target" ] && return 0
+        fi
+        rm -f "$target"
+    done
+
+    return 1
+}
+
 # -------------------------------------------------- 3-way merge: extras ---
 
 # extra-domains.txt is the only file where users append their own domains.
@@ -423,12 +459,19 @@ EOF
 au_apply_reinstall() {
     local target_tag="$1"
     local saved_flags="$Z2K_AU_TMP_DIR/feature-flags.backup"
+    local reinstall_script="$Z2K_AU_TMP_DIR/z2k-reinstall.sh"
     au_save_feature_flags "$saved_flags"
 
-    au_log "reinstall: launching z2k.sh"
+    mkdir -p "$Z2K_AU_TMP_DIR"
+    if ! au_download_reinstall_script "$reinstall_script"; then
+        au_log "reinstall failed: could not fetch z2k.sh from any mirror"
+        return 1
+    fi
+
+    au_log "reinstall: launching z2k.sh install"
     Z2K_AUTO_UPDATE=1 Z2K_AU_TARGET_TAG="$target_tag" \
         Z2K_AU_FEATURE_FLAGS_BACKUP="$saved_flags" \
-        sh -c "curl -fsSL '${Z2K_AU_REINSTALL_URL}' | sh" \
+        sh "$reinstall_script" install \
         >> "$Z2K_AU_LOG_FILE" 2>&1
     local rc=$?
     if [ "$rc" -ne 0 ]; then

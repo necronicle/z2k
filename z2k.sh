@@ -129,7 +129,7 @@ _z2k_curl_etag() {
     local etag_file="${dest}.etag"
     local hdr_file="${dest}.hdr.$$"
     local tmp_body="${dest}.new.$$"
-    local old_etag="" http_status
+    local old_etag="" http_status curl_rc
     if [ -f "$etag_file" ] && [ -s "$dest" ]; then
         old_etag=$(cat "$etag_file" 2>/dev/null)
     fi
@@ -137,11 +137,14 @@ _z2k_curl_etag() {
         http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
             -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
+        curl_rc=$?
     else
         http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
             -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
+        curl_rc=$?
     fi
+    [ "$curl_rc" -eq 0 ] || { rm -f "$hdr_file" "$tmp_body"; return 1; }
     case "$http_status" in
         304) rm -f "$hdr_file" "$tmp_body"; return 0 ;;
         200)
@@ -226,7 +229,7 @@ _z2k_curl_doh() {
     # Anycast pools: prefer DoH-resolved (always fresh), fall through
     # to hardcoded fallback if 1.1.1.1 itself is unreachable.
     # Hardcoded pool is verified-working as of 2026-04-26 but rotates.
-    local gh_pool raw_pool jsd_pool obj_pool api_pool
+    local gh_pool raw_pool jsd_pool obj_pool rel_pool api_pool
     gh_pool=$(_z2k_resolve_doh_pool github.com) \
         || gh_pool="140.82.112.3 140.82.113.3 140.82.114.3 140.82.121.3 140.82.116.3"
     raw_pool=$(_z2k_resolve_doh_pool raw.githubusercontent.com) \
@@ -235,6 +238,8 @@ _z2k_curl_doh() {
         || jsd_pool="151.101.1.229 151.101.65.229 151.101.129.229 151.101.193.229"
     obj_pool=$(_z2k_resolve_doh_pool objects.githubusercontent.com) \
         || obj_pool="$raw_pool"
+    rel_pool=$(_z2k_resolve_doh_pool release-assets.githubusercontent.com) \
+        || rel_pool="$raw_pool"
     api_pool=$(_z2k_resolve_doh_pool api.github.com) \
         || api_pool="$gh_pool"
 
@@ -256,10 +261,12 @@ _z2k_curl_doh() {
         *api.github.com*)
             add_resolve api.github.com "$api_pool" ;;
         https://github.com/*/releases/download/*)
-            # Release tarballs: 302 от github.com на objects.githubusercontent.com.
-            # Пиним оба домена — иначе TSPU SNI-блок на любом из них режет.
+            # Release tarballs: 302 от github.com на release-assets.* или
+            # objects.* CDN. Пиним все домены редиректа — иначе TSPU/SNI/DNS
+            # блок на любом из них режет скачивание tarball.
             add_resolve github.com "$gh_pool"
-            add_resolve objects.githubusercontent.com "$obj_pool" ;;
+            add_resolve objects.githubusercontent.com "$obj_pool"
+            add_resolve release-assets.githubusercontent.com "$rel_pool" ;;
     esac
 
     local hdr_file="${dest}.hdr.$$"
@@ -276,6 +283,11 @@ _z2k_curl_doh() {
             --doh-url https://1.1.1.1/dns-query $resolve_args \
             -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
+        local curl_rc=$?
+        if [ "$curl_rc" -ne 0 ]; then
+            rm -f "$hdr_file" "$tmp_body" 2>/dev/null
+            continue
+        fi
         case "$http_status" in
             200)
                 [ ! -s "$tmp_body" ] && { rm -f "$hdr_file" "$tmp_body"; continue; }
@@ -322,6 +334,12 @@ _z2k_curl_doh_chunked() {
             --range "${offset}-${end}" \
             -o "${tmp_body}.chunk" \
             -w "%{http_code}" "$url" 2>/dev/null)
+        local curl_rc=$?
+        if [ "$curl_rc" -ne 0 ]; then
+            rm -f "${tmp_body}.chunk"
+            rc=1
+            break
+        fi
         case "$http_status" in
             206|200)
                 cat "${tmp_body}.chunk" >> "$tmp_body"
@@ -454,7 +472,8 @@ z2k_fetch() {
        command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
         mkdir -p "$(dirname "$Z2K_MANAGED_NDMC")" 2>/dev/null
-        for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com; do
+        for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com \
+                    github.com objects.githubusercontent.com release-assets.githubusercontent.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
@@ -1098,7 +1117,7 @@ show_help() {
   - Если zapret2 установлен: откроет меню
 
 Примеры:
-  curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
+  sh -c 'tmp=/tmp/z2k.sh; rm -f "$tmp"; for url in "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh" "https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh" "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh"; do echo "[i] Пробую: $url" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then exec sh "$tmp"; fi; done; echo "[FAIL] Не удалось скачать z2k.sh ни с одного зеркала" >&2; exit 1'
   z2k menu
   z2k diag
   z2k probe cloudflare.com
