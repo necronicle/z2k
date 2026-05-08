@@ -92,25 +92,22 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 ### 3) Установка z2k
 
 ```bash
-sh -c '
-tmp=/tmp/z2k.sh
-rm -f "$tmp"
-for url in \
-  "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh" \
-  "https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh" \
-  "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh"
-do
-  echo "[i] Пробую: $url" >&2
-  if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then
-    exec sh "$tmp"
-  fi
-done
-echo "[FAIL] Не удалось скачать z2k.sh ни с одного зеркала" >&2
-exit 1
-'
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
 ```
 
-Эта команда сначала пробует GitHub raw, затем jsdelivr, затем gh-proxy. После запуска `z2k.sh` все внутренние загрузки тоже идут через цепочку зеркал.
+Если GitHub raw не скачивается, попробуйте jsdelivr:
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh | sh
+```
+
+Если не сработал и jsdelivr, попробуйте gh-proxy:
+
+```bash
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
+```
+
+После запуска `z2k.sh` все внутренние загрузки тоже идут через цепочку зеркал.
 
 ---
 
@@ -253,22 +250,19 @@ Telegram работает для всех устройств в сети авт�
 Если zapret или zapret2 были удалены некорректно, остались зависшие процессы или мусорные правила — используйте скрипт полной зачистки:
 
 ```bash
-sh -c '
-tmp=/tmp/z2k_cleanup.sh
-rm -f "$tmp"
-for url in \
-  "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh" \
-  "https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k_cleanup.sh" \
-  "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh"
-do
-  echo "[i] Пробую: $url" >&2
-  if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then
-    exec sh "$tmp"
-  fi
-done
-echo "[FAIL] Не удалось скачать z2k_cleanup.sh ни с одного зеркала" >&2
-exit 1
-'
+curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh | sh
+```
+
+Если GitHub raw не скачивается, попробуйте jsdelivr:
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k_cleanup.sh | sh
+```
+
+Если не сработал и jsdelivr, попробуйте gh-proxy:
+
+```bash
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh | sh
 ```
 
 **ВНИМАНИЕ:** Скрипт удаляет ВСЁ связанное с zapret и zapret2:
