@@ -1052,7 +1052,7 @@ step_build_zapret2() {
     # Copy IP lists (Roblox, Telegram) + extra-domains.txt (shipped extras
     # from files/lists/ that z2k curates on top of runetfreedom RKN list).
     mkdir -p "${ZAPRET2_DIR}/lists"
-    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt; do
+    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt cf_extra_check_ips.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi

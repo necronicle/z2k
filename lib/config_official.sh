@@ -1232,6 +1232,25 @@ AUSTERUS_OPT
     # из Strategy.txt пробивал CF лучше чем 8 curated cdn_tls strategies).
     # CF возвращается под rkn_tcp как было до Variant A.
 
+    # CF extra-check fallback (104.21.0.0/17). Подтверждённый wigeance
+    # (ntc.party/t/726/9019, 2025-07): «На подсети 104.21.х.х CF у меня на
+    # ТСПУ помимо 16кб, есть доп. проверка аналогичная *.googlevideo.com,
+    # соответственно и обходится она аналогично». Профиль перехватывает
+    # ВЕСЬ TLS-трафик на эту подсеть после rkn_tcp, чтобы покрыть CF-домены
+    # которые НЕ в RKN-листе (random subdomains, обскурные сайты на CF Pro).
+    # Whitelist юзера всё равно exclude. Использует тот же arsenal что rkn_tcp,
+    # но с собственным circular key=cf_extra (отдельный nstrategy state, чтобы
+    # не размывать выбор стратегии для основного rkn_tcp по другим доменам).
+    # Live test 2026-05-08 (тестовый router): rkn_tcp probe rutracker.org →
+    # 22/48 стратегий пробивают (≥240 kbps), значит arsenal достаточен.
+    local Z2K_CF_EXTRA_CHECK
+    Z2K_CF_EXTRA_CHECK=$(safe_config_read "Z2K_CF_EXTRA_CHECK" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    if [ "$Z2K_CF_EXTRA_CHECK" = "1" ] && [ -s "${lists_dir}/cf_extra_check_ips.txt" ]; then
+        local cf_extra_strategies
+        cf_extra_strategies=$(printf '%s' "$rkn_tcp" | sed 's/key=rkn_tcp/key=cf_extra/')
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443 --filter-l7=tls --ipset=${lists_dir}/cf_extra_check_ips.txt --hostlist-exclude=${lists_dir}/whitelist.txt $cf_extra_strategies --new\\n"
+    fi
+
     # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls
     # profile. Hostlist triggers OR — hostlist=YT/List.txt ∪ hostlist-domains=
     # googlevideo.com (confirmed by hostlist.c:262-281). Circular pins per-SLD
