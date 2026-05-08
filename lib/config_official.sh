@@ -377,8 +377,8 @@ AUSTERUS_OPT
     # may benefit from z2k_tls_stalled later — это отдельное upgrade
     # решение; здесь восстанавливаем redirect-coverage инвариант,
     # утерянный с добавлением no_http_redirect.
-    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_silent_drop_detector")
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_silent_drop_detector")
+    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_tls_alert_fatal")
+    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_tls_alert_fatal")
 
     # Wire no_http_redirect on all TCP TLS profiles. This disables
     # standard_failure_detector's built-in 302/307 cross-SLD redirect
