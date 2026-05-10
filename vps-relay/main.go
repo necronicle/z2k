@@ -53,6 +53,9 @@ var (
 
 	dialLimitPerTarget  = flag.Int("dial-limit-per-target", 8, "max in-flight dials per Telegram DC IP")
 	dialThrottleTimeout = flag.Duration("dial-throttle-timeout", 3*time.Second, "max wait for dial slot before failing CONNECT")
+	dialPerAttemptTimeout = flag.Duration("dial-per-attempt-timeout", 10*time.Second, "TCP dial timeout for a single attempt")
+	dialRetryCount      = flag.Int("dial-retry-count", 1, "extra dial attempts on i/o timeout (0 disables retry)")
+	dialRetryBackoff    = flag.Duration("dial-retry-backoff", 250*time.Millisecond, "delay between dial attempts")
 	perStreamQueueBytes = flag.Int("per-stream-queue-bytes", 2*1024*1024, "max bytes queued per stream before stream-abort")
 	sessionQueueBytes   = flag.Int("session-queue-bytes", 24*1024*1024, "max bytes queued per session before session-kill")
 	sessionQueueDepth   = flag.Int("session-queue-depth", 1024, "session writeCh depth")
@@ -185,6 +188,71 @@ type dialLimiter struct {
 	stopGC chan struct{}
 }
 
+// isTimeoutErr reports whether err represents a timeout — either the dial
+// hit the per-attempt deadline (context.DeadlineExceeded) or the OS-level
+// "i/o timeout" surfaced via net.Error.Timeout().
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return ne.Timeout()
+	}
+	return false
+}
+
+type dialAttemptFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// dialWithRetry wraps dialFn with per-attempt timeout and a simple retry
+// loop on timeout-class errors. Returns the surviving conn (if any), the
+// final error, and the 0-based attempt index that produced the result —
+// caller uses this to flag retry-saved successes for stats.
+//
+// Non-timeout errors (refused/unreachable) bypass the retry loop because
+// they're deterministic.
+func dialWithRetry(
+	ctx context.Context,
+	dialFn dialAttemptFunc,
+	target string,
+	perAttemptTimeout time.Duration,
+	maxAttempts int,
+	backoff time.Duration,
+) (net.Conn, int, error) {
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		dCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		conn, err := dialFn(dCtx, "tcp", target)
+		cancel()
+
+		if err == nil {
+			return conn, attempt, nil
+		}
+		lastErr = err
+		if errors.Is(err, context.Canceled) {
+			return nil, attempt, err
+		}
+		if !isTimeoutErr(err) {
+			return nil, attempt, err
+		}
+		if attempt+1 >= maxAttempts {
+			break
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return nil, attempt, ctx.Err()
+		}
+	}
+	return nil, maxAttempts - 1, lastErr
+}
+
 func newDialLimiter(limit int, timeout time.Duration) *dialLimiter {
 	l := &dialLimiter{
 		buckets:  make(map[string]chan struct{}),
@@ -275,10 +343,11 @@ type dialStats struct {
 	ok        int
 	fail      int
 	throttle  int
+	retried   int // dials that succeeded only after a retry — visibility into how often retry saves the call
 	latencies []time.Duration
 }
 
-func (s *dialStats) record(ok, throttled bool, lat time.Duration) {
+func (s *dialStats) record(ok, throttled bool, retried bool, lat time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if throttled {
@@ -287,6 +356,9 @@ func (s *dialStats) record(ok, throttled bool, lat time.Duration) {
 	}
 	if ok {
 		s.ok++
+		if retried {
+			s.retried++
+		}
 		s.latencies = append(s.latencies, lat)
 	} else {
 		s.fail++
@@ -295,9 +367,9 @@ func (s *dialStats) record(ok, throttled bool, lat time.Duration) {
 
 func (s *dialStats) flush() {
 	s.mu.Lock()
-	ok, fail, throttle := s.ok, s.fail, s.throttle
+	ok, fail, throttle, retried := s.ok, s.fail, s.throttle, s.retried
 	lats := s.latencies
-	s.ok, s.fail, s.throttle = 0, 0, 0
+	s.ok, s.fail, s.throttle, s.retried = 0, 0, 0, 0
 	s.latencies = nil
 	s.mu.Unlock()
 
@@ -318,7 +390,7 @@ func (s *dialStats) flush() {
 		p50 = lats[p50idx]
 		p95 = lats[p95idx]
 	}
-	log.Printf("dial summary: ok=%d fail=%d throttle=%d p50=%s p95=%s", ok, fail, throttle, p50, p95)
+	log.Printf("dial summary: ok=%d fail=%d throttle=%d retried=%d p50=%s p95=%s", ok, fail, throttle, retried, p50, p95)
 }
 
 func (s *dialStats) loop(interval time.Duration, stop <-chan struct{}) {
@@ -643,10 +715,10 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 
 	target := net.JoinHostPort(addr, strconv.Itoa(port))
 
-	release, err := dialThrottle.acquire(s.dialCtx, addr)
-	if err != nil {
-		if errors.Is(err, errDialThrottle) {
-			stats.record(false, true, 0)
+	release, terr := dialThrottle.acquire(s.dialCtx, addr)
+	if terr != nil {
+		if errors.Is(terr, errDialThrottle) {
+			stats.record(false, true, false, 0)
 			if *verbose {
 				log.Printf("[%s] stream %d dial throttle %s", s.id, id, addr)
 			}
@@ -656,21 +728,19 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 	}
 
 	t0 := time.Now()
-	dCtx, cancel := context.WithTimeout(s.dialCtx, 10*time.Second)
-	conn, err := s.dialFn(dCtx, "tcp", target)
-	cancel()
+	conn, attempt, err := dialWithRetry(s.dialCtx, s.dialFn, target, *dialPerAttemptTimeout, 1+*dialRetryCount, *dialRetryBackoff)
 	release()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		stats.record(false, false, 0)
-		log.Printf("[%s] stream %d dial %s failed: %v", s.id, id, target, err)
+		stats.record(false, false, false, 0)
+		log.Printf("[%s] stream %d dial %s failed (attempts=%d): %v", s.id, id, target, attempt+1, err)
 		s.sendConnectResult(id, false)
 		return
 	}
 	lat := time.Since(t0)
-	stats.record(true, false, lat)
+	stats.record(true, false, attempt > 0, lat)
 
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
@@ -882,8 +952,8 @@ func main() {
 		serveErr <- srv.ListenAndServe()
 	}()
 
-	log.Printf("z2k vps-relay listening on %s (dial-limit-per-target=%d, dial-throttle-timeout=%s, per-stream-bytes=%d, session-bytes=%d, session-depth=%d, control-depth=%d, stats-interval=%s)",
-		*listenAddr, *dialLimitPerTarget, *dialThrottleTimeout, *perStreamQueueBytes, *sessionQueueBytes, *sessionQueueDepth, *controlQueueDepth, *dialStatsInterval)
+	log.Printf("z2k vps-relay listening on %s (dial-limit-per-target=%d, dial-throttle-timeout=%s, dial-per-attempt-timeout=%s, dial-retry-count=%d, dial-retry-backoff=%s, per-stream-bytes=%d, session-bytes=%d, session-depth=%d, control-depth=%d, stats-interval=%s)",
+		*listenAddr, *dialLimitPerTarget, *dialThrottleTimeout, *dialPerAttemptTimeout, *dialRetryCount, *dialRetryBackoff, *perStreamQueueBytes, *sessionQueueBytes, *sessionQueueDepth, *controlQueueDepth, *dialStatsInterval)
 
 	select {
 	case err := <-serveErr:
