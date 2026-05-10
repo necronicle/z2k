@@ -387,8 +387,8 @@ printf "\n--- Config output structure ---\n"
 # Build a representative NFQWS2_OPT output manually to validate structural checks
 # This simulates what generate_nfqws2_opt_from_strategies produces in normal mode
 SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=fake:strategy=1 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_tls_alert_fatal:no_http_redirect --lua-desync=fake:repeats=4 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:failure_detector=z2k_tls_alert_fatal:no_http_redirect --lua-desync=fake:repeats=4 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
 --filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular_locked:key=6"
 
@@ -408,14 +408,15 @@ assert_contains "structure: rkn_tcp has inseq=26000" "key=rkn_tcp:nld=2:failure_
 assert_contains "structure: rkn_tcp has positive-only success_detector" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
 assert_contains "structure: rkn_tcp has no_http_redirect" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only:no_http_redirect" "$SAMPLE_OPT"
 assert_contains "structure: yt_tcp has no_reset success_detector" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset" "$SAMPLE_OPT"
-# yt_tcp / gv_tcp MUST carry failure_detector=z2k_tls_alert_fatal — without
-# this, the no_http_redirect flag below leaves them with NO redirect
-# coverage at all (regression caught in v3.6 review).
-assert_contains "structure: yt_tcp has classifier-aware failure_detector" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_tls_alert_fatal" "$SAMPLE_OPT"
-assert_contains "structure: yt_tcp has no_http_redirect AFTER failure_detector" "failure_detector=z2k_tls_alert_fatal:no_http_redirect" "$SAMPLE_OPT"
+# yt_tcp / gv_tcp carry failure_detector=z2k_silent_drop_detector (post-fix
+# 34db24e: pdcounter — точный TLS handshake out>=4). Chain делегирует
+# silent_drop → mid_stream_stall → tls_alert_fatal внутри lua, поэтому
+# redirect-coverage сохраняется через success_detector=positive_only.
+assert_contains "structure: yt_tcp has classifier-aware failure_detector" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_silent_drop_detector" "$SAMPLE_OPT"
+assert_contains "structure: yt_tcp has no_http_redirect AFTER failure_detector" "failure_detector=z2k_silent_drop_detector:no_http_redirect" "$SAMPLE_OPT"
 assert_contains "structure: gv_tcp has positive-only success_detector" "key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp has classifier-aware failure_detector" "success_detector=z2k_http_success_positive_only:failure_detector=z2k_tls_alert_fatal" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp has no_http_redirect" "failure_detector=z2k_tls_alert_fatal:no_http_redirect" "$SAMPLE_OPT"
+assert_contains "structure: gv_tcp has classifier-aware failure_detector" "success_detector=z2k_http_success_positive_only:failure_detector=z2k_silent_drop_detector" "$SAMPLE_OPT"
+assert_contains "structure: gv_tcp has no_http_redirect" "failure_detector=z2k_silent_drop_detector:no_http_redirect" "$SAMPLE_OPT"
 # rkn_tcp uses z2k_tls_stalled (set by ensure_rkn_failure_detector); chain
 # inherits z2k_tls_alert_fatal → standard_failure_detector. Direct assignment
 # of z2k_tls_alert_fatal на circular здесь не должно быть — это бы означало,
