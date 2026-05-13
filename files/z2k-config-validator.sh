@@ -319,7 +319,7 @@ check_blob_references() {
 
 # Известные action names для --lua-desync=<action>:...
 # Список основан на nfqws2 + z2k Lua-плагинах
-KNOWN_LUA_DESYNC_ACTIONS="fake send drop circular circular_locked \
+KNOWN_LUA_DESYNC_ACTIONS="fake send drop circular \
 fakedsplit fakeddisorder multisplit multidisorder \
 hostfakesplit http_methodeol syndata pktmod udplen \
 z2k_quic_morph_v2 z2k_timing_morph z2k_ipfrag3 z2k_ipfrag3_tiny"

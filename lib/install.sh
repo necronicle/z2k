@@ -768,6 +768,27 @@ step_build_zapret2() {
             touch "$backup_tmp/rkn_silent_fallback.flag"
         print_success "Настройки сохранены"
 
+        # Backup legacy orchestra/ data (locked.tsv / locked.manual.tsv) на случай если
+        # у пользователя были learned/manual locks от upstream'овского orchestrator'а.
+        # Auto-migration не делаем (см. PLAN_orchestrator_replacement.md, A4 Legacy lock
+        # migration policy). Fail-closed: при failed cp прерываем install.
+        if [ -d "$ZAPRET2_DIR/extra_strats/cache/orchestra" ]; then
+            if [ -n "$(ls -A "$ZAPRET2_DIR/extra_strats/cache/orchestra/" 2>/dev/null)" ]; then
+                # SC2155 compliance: declare и assign separately, чтобы exit
+                # code `date` не маскировался успешным `local`.
+                local _orch_backup
+                _orch_backup="/tmp/z2k-legacy-orchestra-$(date +%Y%m%d-%H%M%S)"
+                if cp -a "$ZAPRET2_DIR/extra_strats/cache/orchestra" "$_orch_backup" 2>/dev/null; then
+                    print_warning "Legacy orchestra/ saved to $_orch_backup (locks НЕ мигрируются автоматически)"
+                else
+                    print_error "Failed to backup $ZAPRET2_DIR/extra_strats/cache/orchestra → $_orch_backup"
+                    print_error "Aborting cleanup чтобы не потерять legacy lock state."
+                    print_error "Освободите место в /tmp или manually переместите orchestra/ перед повторным reinstall."
+                    return 1
+                fi
+            fi
+        fi
+
         print_info "Удаление старой установки..."
         rm -rf "$ZAPRET2_DIR"
         print_success "Старая установка удалена"
@@ -1105,13 +1126,14 @@ step_build_zapret2() {
         fi
     fi
     # ===========================================================================
-    # ШАГ 4.6: Скачать locked.lua для circular_locked (Discord voice/video)
+    # ШАГ 4.6: Инициализация autocircular cache (state.tsv, telemetry.tsv)
     # ===========================================================================
-
-    print_info "Загрузка locked.lua для circular_locked..."
+    # Ранее тут качались orchestra/locked.lua + orchestra/orchestrator.sh
+    # из AloofLibra/zapret4rocket. orchestrator.sh удалён upstream'ом 2026-05-07,
+    # locked.lua осиротел. Discord UDP теперь использует наш `circular` с
+    # `allow_nohost=1` (см. PLAN_orchestrator_replacement.md, B1).
 
     mkdir -p "${ZAPRET2_DIR}/lua"
-    mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/orchestra"
     mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/autocircular"
     chmod 755 "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
     chown nobody "${ZAPRET2_DIR}/extra_strats/cache/autocircular" 2>/dev/null || true
@@ -1135,23 +1157,6 @@ step_build_zapret2() {
           /tmp/z2k-autocircular-telemetry.tsv \
           /tmp/z2k-autocircular-debug.flag \
           /tmp/z2k-autocircular-debug.log 2>/dev/null || true
-
-    if z2k_fetch "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/locked.lua" \
-        "${ZAPRET2_DIR}/lua/locked.lua"; then
-        print_success "locked.lua загружен"
-    else
-        print_warning "Не удалось загрузить locked.lua (Discord voice может не работать)"
-    fi
-
-    print_info "Загрузка orchestrator.sh для управления circular_locked..."
-
-    if z2k_fetch "https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r/orchestra/orchestrator.sh" \
-        "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"; then
-        chmod +x "${ZAPRET2_DIR}/extra_strats/cache/orchestra/orchestrator.sh"
-        print_success "orchestrator.sh загружен"
-    else
-        print_warning "Не удалось загрузить orchestrator.sh (circular_locked будет без ротации)"
-    fi
 
     # ===========================================================================
     # Восстановление пользовательских данных после переустановки

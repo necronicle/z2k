@@ -11,17 +11,23 @@
 -- - We do NOT change rotation logic; only persist/restore.
 -- - Storage key uses `desync.arg.key` when provided; otherwise falls back to `desync.func_instance`.
 
-local STATE_DIR_PRIMARY = "/opt/zapret2/extra_strats/cache/autocircular"
+-- Test isolation: env overrides позволяют redirect'ить state/cache в tmp-dir
+-- для unit-тестов. Production без env vars → старые hardcoded paths.
+local STATE_DIR_PRIMARY = os.getenv("Z2K_AUTOCIRCULAR_DIR_OVERRIDE")
+                          or "/opt/zapret2/extra_strats/cache/autocircular"
+local _fallback_base    = os.getenv("Z2K_AUTOCIRCULAR_FALLBACK_OVERRIDE")
+                          or "/tmp"
 local STATE_FILE_PRIMARY = STATE_DIR_PRIMARY .. "/state.tsv"
-local STATE_FILE_FALLBACK = "/tmp/z2k-autocircular-state.tsv"
+local STATE_FILE_FALLBACK = _fallback_base .. "/z2k-autocircular-state.tsv"
 local TELEMETRY_FILE_PRIMARY = STATE_DIR_PRIMARY .. "/telemetry.tsv"
-local TELEMETRY_FILE_FALLBACK = "/tmp/z2k-autocircular-telemetry.tsv"
+local TELEMETRY_FILE_FALLBACK = _fallback_base .. "/z2k-autocircular-telemetry.tsv"
 local DEBUG_FLAG_PRIMARY = STATE_DIR_PRIMARY .. "/debug.flag"
-local DEBUG_FLAG_FALLBACK = "/tmp/z2k-autocircular-debug.flag"
+local DEBUG_FLAG_FALLBACK = _fallback_base .. "/z2k-autocircular-debug.flag"
 local DEBUG_LOG_PRIMARY = STATE_DIR_PRIMARY .. "/debug.log"
-local DEBUG_LOG_FALLBACK = "/tmp/z2k-autocircular-debug.log"
+local DEBUG_LOG_FALLBACK = _fallback_base .. "/z2k-autocircular-debug.log"
 local RKN_SILENT_FLAG = STATE_DIR_PRIMARY .. "/rkn_silent_fallback.flag"
-local PROBE_OVERRIDE_FILE = "/tmp/z2k-probe-override.tsv"
+local PROBE_OVERRIDE_FILE = os.getenv("Z2K_PROBE_OVERRIDE")
+                            or "/tmp/z2k-probe-override.tsv"
 local PROBE_OVERRIDE_TTL = 0.05
 local PROBE_OVERRIDE_MAX_AGE = 300
 
@@ -1279,14 +1285,44 @@ end
 -- functions exist by name when the circular wrapper below resolves them
 -- via circular:failure_detector=<name>.
 
+-- allow_nohost support: при `--lua-desync=circular:...:allow_nohost=1` и
+-- отсутствии реального hostname в desync.track (nil/empty/IP literal с
+-- hostname_is_ip=true) подменяем track.hostname на стабильный sentinel
+-- "nohost" перед orig_circular, восстанавливаем после. Это даёт
+-- standard_hostkey стабильный hostkey вместо fallback'а на host_ip(desync)
+-- → shared rotation state per-askey для hostless flows (Discord UDP DTLS
+-- handshake без SNI). См. PLAN_orchestrator_replacement.md B1.
+local function nohost_setup(desync)
+  local arg = desync and desync.arg
+  local allow_nohost = arg and (arg.allow_nohost == "1" or arg.allow_nohost == 1)
+  if not (allow_nohost and desync.track) then return false, nil end
+  local h = desync.track.hostname
+  local has_real_hostname = h and #h > 0 and not desync.track.hostname_is_ip
+  if has_real_hostname then return false, nil end
+  local saved = h
+  desync.track.hostname = "nohost"
+  return true, saved
+end
+
+local function nohost_restore(desync, nohost_active, saved_hostname)
+  if nohost_active and desync.track then
+    desync.track.hostname = saved_hostname  -- nil либо original value
+  end
+end
+
 -- Wrap circular() from zapret-auto.lua.
 if type(circular) == "function" then
   local orig_circular = circular
   circular = function(ctx, desync)
+    local nohost_active, saved_hostname = nohost_setup(desync)
+
     local askey_before, hostn_before, hrec_before
     local policy_pick_before, policy_score_before
     local silent_rotate_from_before, silent_rotate_to_before, silent_attempts_before
     local probe_override_before
+    -- DO NOT remove this inner pcall: pre-block errors (telemetry/persist setup,
+    -- policy seed) must stay swallowed — existing contract. Изменение этого
+    -- сломает nfqws desync path при любой ошибке в нашей бухгалтерии.
     pcall(function()
       askey_before, hostn_before, hrec_before = get_record_for_desync(desync, true)
       if hrec_before then
@@ -1297,8 +1333,17 @@ if type(circular) == "function" then
         flow_start_if_needed(desync, hrec_before.nstrategy)
       end
     end)
-    local verdict = orig_circular(ctx, desync)
-    pcall(function()
+
+    -- Wrap orig_circular в pcall ТОЛЬКО для finally-restore hostname'а перед
+    -- propagation'ом error'а в nfqws. Pre/post-block errors остаются swallowed
+    -- их inner pcall'ами (existing contract).
+    local ok, verdict_or_err = pcall(orig_circular, ctx, desync)
+    local verdict
+    if ok then
+      verdict = verdict_or_err
+      -- DO NOT remove this inner pcall: post-block errors (telemetry record,
+      -- persist_if_changed, debug_log) must stay swallowed — existing contract.
+      pcall(function()
       local askey_after, hostn_after, hrec_after
       pcall(function()
         askey_after, hostn_after, hrec_after = get_record_for_desync(desync, false)
@@ -1420,6 +1465,17 @@ if type(circular) == "function" then
         )
       end
     end)
+    end  -- if ok then post-block
+
+    -- Finally: restore hostname ВСЕГДА (success или error path).
+    nohost_restore(desync, nohost_active, saved_hostname)
+
+    if not ok then
+      -- Re-throw сообщение orig_circular'а. level=0 значит "не добавлять
+      -- 'circular.lua:N: ' prefix" — error пойдёт с original text как если
+      -- бы pcall не было.
+      error(verdict_or_err, 0)
+    end
     return verdict
   end
 end

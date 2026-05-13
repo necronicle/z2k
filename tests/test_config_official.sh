@@ -390,7 +390,7 @@ SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
---filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular_locked:key=6"
+--filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:allow_nohost=1"
 
 # Production guarantees per v3.6 plan + Phase 1.2 (2026-05-02):
 #  - rkn_tcp circular has inseq=26000 (Phase 1.2 — covers TLS stall window

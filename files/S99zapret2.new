@@ -451,8 +451,9 @@ LUAOPT="--lua-init=@$LUA_LIB --lua-init=@$LUA_ANTIDPI"
 LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 [ -f "$LUA_AUTO" ] || LUA_AUTO="$LUA_AUTO.gz"
 [ -f "$LUA_AUTO" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_AUTO"
-LUA_LOCKED="$ZAPRET_BASE/lua/locked.lua"
-[ -f "$LUA_LOCKED" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_LOCKED"
+# locked.lua (upstream'овский circular_locked) больше не загружается:
+# orchestrator.sh удалён upstream'ом 2026-05-07, mechanism осиротел.
+# Discord UDP теперь использует наш circular с allow_nohost (B1).
 # Detectors must load BEFORE autocircular: the rotator resolves
 # failure_detector=z2k_tls_stalled by global name when parsing profiles,
 # so the functions need to exist already. Autocircular still references
@@ -613,7 +614,8 @@ LISTS_DIR="$ZAPRET_BASE/lists"
 EXTRA_STRATS_DIR="$ZAPRET_BASE/extra_strats"
 CONFIG_DIR="/opt/etc/zapret2"
 CUSTOM_DIR="${CUSTOM_DIR:-$ZAPRET_RW/init.d/keenetic}"
-ORCH_SCRIPT="$EXTRA_STRATS_DIR/cache/orchestra/orchestrator.sh"
+# ORCH_SCRIPT removed: upstream orchestrator.sh deleted 2026-05-07,
+# Discord UDP rotation handled via our circular+allow_nohost (см. B1 plan).
 IPSET_CR="$ZAPRET_BASE/ipset/create_ipset.sh"
 
 # ==============================================================================
@@ -1398,8 +1400,7 @@ start()
     # 3. ��������� daemon ��������
     start_daemons
 
-    # 4. ��������� orchestrator (circular_locked rotation)
-    [ -x "$ORCH_SCRIPT" ] && "$ORCH_SCRIPT" start
+    # Orchestrator start removed: upstream'овский daemon удалён 2026-05-07.
 
     echo "zapret2 service started"
     return 0
@@ -1410,8 +1411,7 @@ stop()
     echo "Stopping zapret2 service"
 
     traffic_debug_tcpdump_stop
-    # 0. ���������� orchestrator
-    [ -x "$ORCH_SCRIPT" ] && "$ORCH_SCRIPT" stop
+    # Orchestrator stop removed: upstream daemon удалён 2026-05-07.
 
     # 1. ���������� daemon ��������
     stop_daemons

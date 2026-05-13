@@ -6,15 +6,14 @@ name: Purge jsdelivr cache
 # no-auth purge endpoint (purge.jsdelivr.net/gh/owner/repo@branch/path) —
 # calling it evicts the branch-pinned URL from every edge in ~1 second.
 #
-# Triggered on push to master and z2k-enhanced (the two branches our
-# installers point at). Computes the set of files touched by the push
-# via the `before..after` diff supplied in the push event, and fires one
-# purge request per file in parallel.
+# Triggered on push to z2k-enhanced (the only branch our installers point
+# at since master was retired 2026-05-13). Computes the set of files
+# touched by the push via the `before..after` diff supplied in the push
+# event, and fires one purge request per file in parallel.
 
 on:
   push:
     branches:
-      - master
       - z2k-enhanced
 
 jobs:
@@ -38,12 +37,17 @@ jobs:
           BEFORE='${{ github.event.before }}'
           AFTER='${{ github.event.after }}'
           mkdir -p /tmp/purge
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-              # New branch / force-push-from-nothing: no before commit
-              # available. Fall back to purging the whole branch's top
-              # 200 files by name so at least the most common installer
-              # paths get refreshed. Full-tree purge would rate-limit.
-              echo "No before SHA — using top 200 files from HEAD tree"
+          # BEFORE может быть unreachable если push был force-push'ом amend'нутого
+          # коммита: предыдущий tip SHA orphan'нулся, actions/checkout его не
+          # fetch'нул. `git cat-file -e` проверяет наличие объекта в локальной
+          # копии — fallback на top-200 strategy если коммита нет.
+          if [ -z "$BEFORE" ] \
+             || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              # New branch / force-push'ом amend'нутого / orphan before SHA:
+              # before commit недоступен. Fall back to purging the whole
+              # branch's top 200 files by name. Full-tree purge would rate-limit.
+              echo "BEFORE='$BEFORE' unavailable or unset — using top 200 files from HEAD tree"
               git ls-tree -r --name-only HEAD | head -200 > /tmp/purge/files.txt
           else
               # `git diff --name-only before..after` covers every file

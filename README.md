@@ -38,7 +38,7 @@ z2k — модульный установщик zapret2 для роутеров 
 - QUIC autocircular профили: YouTube QUIC (UDP/443) и Discord voice — по 12 стратегий с z2k morph
 - Discord профили:
   - TCP: hostlist Discord включён в RKN-профиль
-  - UDP voice/video: `circular_locked` (стратегия закрепляется per-domain)
+  - UDP voice/video: `circular` с `allow_nohost` — стратегия закрепляется через autocircular `state.tsv` после первого успеха (рабочая стратегия удерживается между restart'ами)
 - ECH (Encrypted Client Hello) detection — автоматический пропуск desync когда SNI зашифрован
 - Hostlist режим: стратегии применяются только к доменам из списков
 - Whitelist: домены-исключения (госуслуги, Steam, VK, Яндекс и др.) не обрабатываются

@@ -70,7 +70,7 @@ LUA_DOWNLOADED=$(grep -oE '\$\{GITHUB_RAW\}/files/lua/[a-zA-Z_0-9-]+\.lua' z2k.s
 
 # 3) Whitelist of files provided by fork release tarball (extracted by
 #    z2k_fetch'нный openwrt-embedded.tar.gz, not z2k.sh download_init_script):
-TARBALL_WHITELIST="lua/zapret-lib.lua lua/zapret-antidpi.lua lua/zapret-auto.lua lua/locked.lua"
+TARBALL_WHITELIST="lua/zapret-lib.lua lua/zapret-antidpi.lua lua/zapret-auto.lua"
 
 # 4) Diff
 MISSING=""
