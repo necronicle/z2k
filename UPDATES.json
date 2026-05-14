@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-7",
+  "current": "r-6",
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
 {"v": "p-0", "type": "patch", "ts": "2026-05-03T17:30:00Z", "ref": "auto-update-baseline", "desc": "Auto-update system rollout baseline marker", "changed_files": []},
@@ -11,6 +11,7 @@
 {"v": "r-4", "type": "reinstall", "ts": "2026-05-06T16:43:16Z", "ref": "eab9d77", "desc": "utils: z2k_fetch — gh-proxy fallback для release-URL (был только github)", "changed_files": ["lib/utils.sh", "UPDATES.json"]},
 {"v": "r-5", "type": "reinstall", "ts": "2026-05-14T13:00:42Z", "ref": "47ac7aa", "desc": "webpanel: новый раздел «Доп. домены» — управление /opt/zapret2/lists/extra-domains.txt из UI (см. github commit 47ac7aa). Также README обновлён разделом «Пользовательские домены» (b895ea0).", "changed_files": [".github/workflows/jsdelivr-purge.yml", "files/lists/cf_extra_check_ips.txt", "files/lua/z2k-autocircular.lua", "files/S99zapret2.new", "files/z2k-config-validator.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/utils.sh", "PLAN_orchestrator_replacement.md", "quic_strats.ini", "README.md", "tests/test_config_official.sh", "tests/test_install_completeness.sh", "tests/test_utils.sh", "tests/test_z2k_circular_allow_nohost.lua", "tests/test_z2k_circular_allow_nohost.sh", "UPDATES.json", "vps-relay/dial_retry_test.go", "vps-relay/main.go", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/index.html", "z2k_cleanup.sh", "z2k.sh"]},
 {"v": "p-6", "type": "patch", "ts": "2026-05-14T14:57:24Z", "ref": "c88bbf4", "desc": "config_official: preserve POLICY_NAME / POLICY_EXCLUDE через reinstall (по репорту @george_saveliev — флаги без префикса Z2K_ слетали при auto-update)", "changed_files": ["lib/config_official.sh", "UPDATES.json"]},
-{"v": "p-7", "type": "patch", "ts": "2026-05-14T18:49:22Z", "ref": "3a50ce2", "desc": "z2k.sh: skip show_main_menu after install в auto-update контексте (фикс зависания auto-update'а по репорту @vai73 — install проходил, но процесс висел на интерактивном меню)", "changed_files": ["UPDATES.json", "z2k.sh"]}
+{"v": "p-7", "type": "patch", "ts": "2026-05-14T18:49:22Z", "ref": "3a50ce2", "desc": "z2k.sh: skip show_main_menu after install в auto-update контексте (фикс зависания auto-update'а по репорту @vai73 — install проходил, но процесс висел на интерактивном меню)", "changed_files": ["UPDATES.json", "z2k.sh"]},
+{"v": "r-6", "type": "reinstall", "ts": "2026-05-15T00:00:00Z", "ref": "a88e355", "desc": "silent_drop detector: handshake_seen marker + server-flight bytes bypass — устранён false-positive на HTTP/2 multiplexing'е после успешного TLS handshake (instagram/facebook карусель strategy 10→15 на полностью рабочем обходе). install.sh одноразово wipe'ает autocircular state.tsv при первом upgrade (marker .silent_drop_state_reset.done) — старые «улетевшие» strategy переподобраются с нуля. Покрыто tests/test_silent_drop_detector.lua (20 assertions, 8 кейсов).", "changed_files": ["files/lua/z2k-detectors.lua", "lib/install.sh", "tests/test_silent_drop_detector.lua", "tests/test_silent_drop_detector.sh", "UPDATES.json"]}
   ]
 }

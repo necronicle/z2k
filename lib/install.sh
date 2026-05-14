@@ -1198,11 +1198,26 @@ step_build_zapret2() {
             print_success "Whitelist восстановлен"
         fi
 
-        # Восстановить autocircular state (рабочие стратегии)
+        # Восстановить autocircular state (рабочие стратегии).
+        # Особый случай: silent_drop false-positive fix (commit a88e355,
+        # 2026-05-15). До этой правки z2k_silent_drop_detector ложно
+        # триггерил failure на HTTP/2 multiplexing — strategy «улетала»
+        # дальше рабочей и persist'илась в state.tsv. После fix'а
+        # старые «улетевшие» strategy должны переподобраться с нуля.
+        # Marker .silent_drop_state_reset.done гарантирует one-shot
+        # семантику: wipe выполняется только при первом upgrade на
+        # эту версию install.sh, последующие reinstall'ы preserve
+        # state как обычно.
         if [ -f "$backup_tmp/state.tsv" ]; then
-            cp -f "$backup_tmp/state.tsv" "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
-            chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
-            print_success "Стратегии autocircular восстановлены"
+            if [ ! -f "$ZAPRET2_DIR/.silent_drop_state_reset.done" ]; then
+                touch "$ZAPRET2_DIR/.silent_drop_state_reset.done" 2>/dev/null || true
+                chown nobody "$ZAPRET2_DIR/.silent_drop_state_reset.done" 2>/dev/null || true
+                print_info "autocircular state reset одноразово (silent_drop fix) — ротация с нуля"
+            else
+                cp -f "$backup_tmp/state.tsv" "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
+                chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
+                print_success "Стратегии autocircular восстановлены"
+            fi
         fi
 
         # Strategy.txt не восстанавливаем — shipped-версия из репо имеет
