@@ -1727,6 +1727,8 @@ create_official_config() {
     local saved_Z2K_USE_MID_STREAM_DETECTOR="1"
     local saved_Z2K_PADENCAP="1"
     local saved_Z2K_INJECT_TLS_MODS="0"
+    local saved_POLICY_NAME="nfqws"
+    local saved_POLICY_EXCLUDE="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
@@ -1743,6 +1745,12 @@ create_official_config() {
         saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "1")
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
         saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
+        # Keenetic policy integration (см. S99zapret2.new:919-1100). По умолчанию
+        # nfqws=POLICY_NAME, exclude=0 (= "process only this policy"); если юзер
+        # явно настроил bypass конкретного устройства через создание политики +
+        # POLICY_EXCLUDE=1 в config'е — preserve'им через reinstall.
+        saved_POLICY_NAME=$(safe_config_read "POLICY_NAME" "$config_file" "nfqws")
+        saved_POLICY_EXCLUDE=$(safe_config_read "POLICY_EXCLUDE" "$config_file" "0")
     fi
 
     # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
@@ -1979,6 +1987,16 @@ Z2K_INJECT_TLS_MODS=${saved_Z2K_INJECT_TLS_MODS}
 # к z2k_grease/alpn/psk/keyshare/earlydata/pha/sct/delegcred. =0 для
 # отката padencap при включённой остальной инъекции.
 Z2K_PADENCAP=${saved_Z2K_PADENCAP}
+
+# Keenetic policy integration (см. S99zapret2.new). POLICY_NAME — имя политики
+# в админке Keenetic, POLICY_EXCLUDE — режим:
+#   0 — обрабатывать ТОЛЬКО устройства из этой политики (default — политики
+#       нет, NFQUEUE-rules применяются к всему трафику фактически)
+#   1 — исключить устройства из этой политики из обработки z2k (нужно если
+#       одно устройство должно ходить direct без модификации пакетов)
+# preserve через reinstall (без префикса Z2K_, поэтому добавлены в whitelist).
+POLICY_NAME=${saved_POLICY_NAME}
+POLICY_EXCLUDE=${saved_POLICY_EXCLUDE}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can
