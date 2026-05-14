@@ -1199,20 +1199,39 @@ step_build_zapret2() {
         fi
 
         # Восстановить autocircular state (рабочие стратегии).
-        # Особый случай: silent_drop false-positive fix (commit a88e355,
-        # 2026-05-15). До этой правки z2k_silent_drop_detector ложно
-        # триггерил failure на HTTP/2 multiplexing — strategy «улетала»
-        # дальше рабочей и persist'илась в state.tsv. После fix'а
-        # старые «улетевшие» strategy должны переподобраться с нуля.
-        # Marker .silent_drop_state_reset.done гарантирует one-shot
-        # семантику: wipe выполняется только при первом upgrade на
-        # эту версию install.sh, последующие reinstall'ы preserve
-        # state как обычно.
+        #
+        # Два независимых триггера wipe'а:
+        #
+        # 1. Z2K_RESET_STATE=1 — generic per-release flag. Auto-update
+        #    устанавливает его когда любая history-entry в окне между
+        #    installed и target имеет "reset_state": true (см.
+        #    lib/auto_update.sh, au_decide / au_apply_reinstall).
+        #    Используется для релизов меняющих детекторы или стратегии,
+        #    после которых старый state.tsv может удерживать неоптимальные
+        #    выборы. Webpanel/list-only релизы omit flag — state preserved.
+        #
+        # 2. Marker .silent_drop_state_reset.done — legacy one-shot для
+        #    r-6 (silent_drop fix, commit a88e355, 2026-05-15). Старый
+        #    auto_update.sh на роутерах не знал про reset_state, поэтому
+        #    для этого конкретного релиза wipe запускается через install.sh-
+        #    side marker check. После r-6 marker остаётся, последующие
+        #    reinstall'ы preserve state как обычно — generic Z2K_RESET_STATE
+        #    flag берёт на себя per-release контроль.
         if [ -f "$backup_tmp/state.tsv" ]; then
-            if [ ! -f "$ZAPRET2_DIR/.silent_drop_state_reset.done" ]; then
+            local _do_wipe=0
+            local _wipe_reason=""
+            if [ "$Z2K_RESET_STATE" = "1" ]; then
+                _do_wipe=1
+                _wipe_reason="Z2K_RESET_STATE=1 from release flag"
+            elif [ ! -f "$ZAPRET2_DIR/.silent_drop_state_reset.done" ]; then
+                _do_wipe=1
+                _wipe_reason="silent_drop fix one-shot (legacy marker missing)"
+            fi
+            if [ "$_do_wipe" = "1" ]; then
+                # state.tsv уже truncated на шаге 4.6, просто не restore'им.
                 touch "$ZAPRET2_DIR/.silent_drop_state_reset.done" 2>/dev/null || true
                 chown nobody "$ZAPRET2_DIR/.silent_drop_state_reset.done" 2>/dev/null || true
-                print_info "autocircular state reset одноразово (silent_drop fix) — ротация с нуля"
+                print_info "autocircular state reset ($_wipe_reason) — ротация с нуля"
             else
                 cp -f "$backup_tmp/state.tsv" "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
                 chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true

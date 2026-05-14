@@ -125,6 +125,22 @@ au_entry_field() {
     echo "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
 }
 
+# au_entry_bool ENTRY_JSON FIELD -> echoes "true" or empty.
+# JSON booleans are unquoted (true/false), so au_entry_field (which matches
+# quoted string values) skips them. Used for optional release-level flags
+# like "reset_state": true that toggle install.sh behaviour without
+# changing the entry's type field.
+au_entry_bool() {
+    # Match unquoted boolean literal. JSON allows 0+ whitespace after the
+    # `:`, so accept both `"k":true` and `"k": true`. Quoted "true"
+    # string values are intentionally not matched (au_entry_field path).
+    case "$1" in
+        *"\"$2\":true"*|*"\"$2\": true"*|*"\"$2\":  true"*)
+            echo "true"
+            ;;
+    esac
+}
+
 # au_entry_changed_files ENTRY_JSON -> echoes file paths (one per line)
 au_entry_changed_files() {
     echo "$1" | sed -n 's/.*"changed_files"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
@@ -134,10 +150,16 @@ au_entry_changed_files() {
 # ------------------------------------------------------------ decide ---
 
 # au_decide INSTALLED_TAG MANIFEST_PATH
-# Echoes:
-#   none                                         (nothing to do)
-#   patch <target_tag> [files...]                (changed_files union)
-#   reinstall <target_tag> [files...]            (full reinstall)
+# Echoes (line 1 is the verdict, line 2+ are changed file paths):
+#   none                                                  (nothing to do)
+#   patch <target_tag>                                    (apply changed files)
+#   reinstall <target_tag>                                (full reinstall, preserve state)
+#   reinstall <target_tag> reset_state                    (full reinstall, wipe autocircular state)
+#
+# reset_state is set when *any* history entry in the diff window has
+# "reset_state": true. This is the per-release switch for detector or
+# strategy changes that invalidate the persisted autocircular state.
+# Webpanel / list-only releases keep state by omitting the flag.
 au_decide() {
     local installed_tag="$1"
     local manifest="$2"
@@ -165,13 +187,17 @@ au_decide() {
     entries=$(au_history_entries_after "$manifest" "$installed_tag")
 
     # any reinstall in the diff window → reinstall to current
+    # any reset_state=true in the diff window → wipe autocircular state
     local has_reinstall=0
+    local has_reset_state=0
     local files=""
-    local entry etype cf
+    local entry etype cf rs
     while IFS= read -r entry; do
         [ -z "$entry" ] && continue
         etype=$(au_entry_field "$entry" "type")
         [ "$etype" = "reinstall" ] && has_reinstall=1
+        rs=$(au_entry_bool "$entry" "reset_state")
+        [ "$rs" = "true" ] && has_reset_state=1
         cf=$(au_entry_changed_files "$entry")
         [ -n "$cf" ] && files="${files}
 ${cf}"
@@ -183,8 +209,15 @@ EOF
     files=$(echo "$files" | sort -u | grep -v '^$' || true)
 
     if [ "$has_reinstall" = "1" ]; then
-        printf 'reinstall %s\n%s\n' "$current" "$files"
+        if [ "$has_reset_state" = "1" ]; then
+            printf 'reinstall %s reset_state\n%s\n' "$current" "$files"
+        else
+            printf 'reinstall %s\n%s\n' "$current" "$files"
+        fi
     else
+        # patch path cannot wipe state — patches are surgical file
+        # replacements, not full reinstalls. If a release author needs
+        # state wiped, type must be "reinstall".
         printf 'patch %s\n%s\n' "$current" "$files"
     fi
 }
@@ -454,10 +487,17 @@ EOF
 }
 
 # Apply reinstall: rerun z2k.sh in non-interactive mode. install.sh handles
-# all the bookkeeping. Z2K_AUTO_UPDATE=1 + Z2K_AU_TARGET_TAG=<tag> are the
-# contract install.sh observes (see install.sh hooks).
+# all the bookkeeping. Contract environment install.sh observes:
+#   Z2K_AUTO_UPDATE=1            — non-interactive auto-update context
+#   Z2K_AU_TARGET_TAG=<tag>      — release tag being applied
+#   Z2K_AU_FEATURE_FLAGS_BACKUP  — path to saved Z2K_* flags
+#   Z2K_RESET_STATE=1            — (optional) wipe autocircular state.tsv
+#                                  instead of restoring from backup
+#
+# Second arg `reset_state` (literal string) toggles Z2K_RESET_STATE.
 au_apply_reinstall() {
     local target_tag="$1"
+    local reset_state="$2"
     local saved_flags="$Z2K_AU_TMP_DIR/feature-flags.backup"
     local reinstall_script="$Z2K_AU_TMP_DIR/z2k-reinstall.sh"
     au_save_feature_flags "$saved_flags"
@@ -468,9 +508,17 @@ au_apply_reinstall() {
         return 1
     fi
 
+    local reset_env=""
+    if [ "$reset_state" = "reset_state" ]; then
+        reset_env="Z2K_RESET_STATE=1"
+        au_log "reinstall: wiping autocircular state (release reset_state flag)"
+    fi
+
     au_log "reinstall: launching z2k.sh install"
-    Z2K_AUTO_UPDATE=1 Z2K_AU_TARGET_TAG="$target_tag" \
+    # shellcheck disable=SC2086
+    env Z2K_AUTO_UPDATE=1 Z2K_AU_TARGET_TAG="$target_tag" \
         Z2K_AU_FEATURE_FLAGS_BACKUP="$saved_flags" \
+        $reset_env \
         sh "$reinstall_script" install \
         >> "$Z2K_AU_LOG_FILE" 2>&1
     local rc=$?
@@ -580,9 +628,10 @@ au_run_check() {
 
     local decision
     decision=$(au_decide "$installed" "$manifest")
-    local action target_tag
+    local action target_tag reset_state
     action=$(echo "$decision" | head -1 | awk '{print $1}')
     target_tag=$(echo "$decision" | head -1 | awk '{print $2}')
+    reset_state=$(echo "$decision" | head -1 | awk '{print $3}')
 
     case "$action" in
         none)
@@ -593,7 +642,11 @@ au_run_check() {
             echo "Доступно обновление (PATCH) до $target_tag:"
             ;;
         reinstall)
-            echo "Доступно обновление (REINSTALL) до $target_tag:"
+            if [ "$reset_state" = "reset_state" ]; then
+                echo "Доступно обновление (REINSTALL + wipe autocircular state) до $target_tag:"
+            else
+                echo "Доступно обновление (REINSTALL) до $target_tag:"
+            fi
             ;;
     esac
 
@@ -644,10 +697,11 @@ au_run_apply() {
         return 0
     fi
 
-    local decision action target_tag files
+    local decision action target_tag reset_state files
     decision=$(au_decide "$installed" "$manifest")
     action=$(echo "$decision" | head -1 | awk '{print $1}')
     target_tag=$(echo "$decision" | head -1 | awk '{print $2}')
+    reset_state=$(echo "$decision" | head -1 | awk '{print $3}')
     files=$(echo "$decision" | tail -n +2)
 
     case "$action" in
@@ -676,8 +730,8 @@ au_run_apply() {
             fi
             ;;
         reinstall)
-            au_log "starting reinstall: $installed -> $target_tag"
-            if ! au_apply_reinstall "$target_tag"; then
+            au_log "starting reinstall: $installed -> $target_tag (reset_state=${reset_state:-no})"
+            if ! au_apply_reinstall "$target_tag" "$reset_state"; then
                 au_log "reinstall apply failed"
                 # install.sh's create_rollback_snapshot + auto_rollback_timer
                 # would handle in-process recovery; we just bail.
