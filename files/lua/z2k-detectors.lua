@@ -498,6 +498,14 @@ function z2k_tls_stalled(desync, crec)
       local hs_len  = p:byte(8) * 256 + p:byte(9)
       if rec_len + 5 <= #p and hs_len + 4 <= rec_len then
         z2k_tls_stalled_host_ts[key] = nil
+        -- ServerHello validated → этого flow handshake начался, но это
+        -- ещё **не** доказательство, что поток достиг application phase.
+        -- ТСПУ может пропустить SH и заглушить server flight (Cert / EE /
+        -- Finished) — z2k_silent_drop_detector должен продолжать ловить
+        -- этот scenario. Marker z2k_handshake_seen ставится только при
+        -- более сильном success-сигнале (positive HTTP reply в
+        -- z2k_http_success_positive_only); для HTTPS path silent_drop
+        -- использует bytes_in bypass (см. описание там).
       end
     end
     return false
@@ -1200,6 +1208,11 @@ function z2k_http_success_positive_only(desync, crec)
           end
         end
       end
+      -- Positive HTTP reply = flow established. Same rationale as the
+      -- validated-ServerHello marker in z2k_tls_stalled: stop
+      -- packet-count failure detectors from false-positiving on later
+      -- bursts of pipelined requests / keep-alive traffic.
+      if crec then crec.z2k_handshake_seen = true end
       return true
     end
     if class == "neutral" or class == "hard_fail" then
@@ -1236,45 +1249,70 @@ end
 -- z2k_tls_alert_fatal) если silent-drop signal не сработал — чтобы оба покрытия
 -- работали одновременно.
 --
--- Args (через :failure_detector_args=:tcp_out=N:tcp_in=M, опционально):
---   tcp_out — outgoing data threshold (default 4)
---   tcp_in  — incoming data threshold (default 1, только SYN-ACK)
+-- Args (через :failure_detector_args=:tcp_out=N:tcp_in=M:bytes_in_handshake_done=B, опц.):
+--   tcp_out                  — outgoing data packets threshold (default 4)
+--   tcp_in                   — incoming data packets threshold (default 1, только SYN-ACK)
+--   bytes_in_handshake_done  — incoming bytes порог, после которого считаем
+--                              TLS handshake достаточно завершённым, чтобы
+--                              silent-drop check пропускать (default 3072).
+--
+-- Field-debug 2026-05-14 на instagram.com (test router 192.168.1.1, rkn_tcp,
+-- HTTPS/HTTP-2 multiplexing): успешный TLS handshake (validated ServerHello,
+-- latency CH→SH ~75ms), strategy технически работает, но приложение шлёт
+-- 4+ outgoing TLS app-data packet'ов burst'ом до прихода первого application-
+-- layer response — `pdcounter direct` пересекает 4, `pdcounter reverse` всё
+-- ещё 1 (только сам SH). Detector стрелял на каждом burst'е, autocircular
+-- ротировал стратегию хотя реального silent drop'а не было. На сессии 295
+-- raise'ов: 220 строк с failure=1 nocheck=1, карусель strategy 10→15 на
+-- полностью рабочем обходе.
+--
+-- Fix — два независимых bypass'а, оба локальны к silent-drop ветке:
+--
+-- 1. crec.z2k_handshake_seen — application-layer success marker, ставится
+--    только z2k_http_success_positive_only при positive 2xx/3xx HTTP reply.
+--    Это сильный сигнал: server действительно вернул application data,
+--    дальнейшие out>>in burst'ы нормальный keep-alive / pipelined traffic.
+--    На validated ServerHello marker **не** ставится — ТСПУ может пройти
+--    SH и заглушить server flight (Cert / EE / Finished), такой scenario
+--    silent_drop должен продолжать ловить.
+--
+-- 2. in_bytes ≥ bytes_in_handshake_done (default 3072) — реверсивный
+--    bytes-counter, показывающий что server flight уже доставил Cert +
+--    EncryptedExtensions + Finished (типичный flight ≥ 2-3KB для public
+--    CA chain). При этом TLS handshake достоверно завершён, out>>in
+--    multiplexing нормален. SH-only stall (incoming ~120-200B << 3KB)
+--    через этот bypass **не** проходит — silent_drop продолжает fire'ить
+--    и закрывает gap, на который z2k_mid_stream_stall ещё не реагирует
+--    (его кандидат появляется только при in_bytes ≥ 8000).
+--
+-- Chain делегирование (z2k_mid_stream_stall, z2k_http_mid_stream_stall,
+-- z2k_http_partial_response, z2k_tls_stalled, z2k_tls_alert_fatal) ниже
+-- выполняется **всегда** независимо от silent-drop bypass'ов — post-
+-- handshake real mid-stream stall / fatal alerts остаются под покрытием.
+--
+-- Packet-count threshold contract (4+ out, <=1 in) сохранён: маленькие
+-- HTTP GET / TLS retransmits (4 packet'а по ~400B) до handshake'а
+-- продолжают fire'ить как было.
 function z2k_silent_drop_detector(desync, crec, arg)
   if crec and crec.nocheck then return false end
 
-  local tcp_out_thr = (arg and tonumber(arg.tcp_out)) or 4
-  local tcp_in_thr  = (arg and tonumber(arg.tcp_in))  or 1
+  local tcp_out_thr      = (arg and tonumber(arg.tcp_out))                 or 4
+  local tcp_in_thr       = (arg and tonumber(arg.tcp_in))                  or 1
+  local handshake_done_b = (arg and tonumber(arg.bytes_in_handshake_done)) or 3072
 
-  if desync.dis and desync.dis.tcp and desync.outgoing and desync.track and
-     desync.track.pos then
-    -- Считаем только data-packets, не total. `dcounter` в track_pos не
-    -- существует (поля: pcounter=всего, pdcounter=data, pbcounter=bytes —
-    -- см. zapret-lib.lua:285-291), поэтому исходный код fall-back'ал на
-    -- pcounter (total packets) и условие `out>=4 and in<=1` срабатывало в
-    -- обычном TLS handshake (SYN/ACK/ClientHello/ACK выдают 4 out-packets
-    -- ещё до ServerHello). Field-debug 2026-05-03: на 6 успешных GET'ах к
-    -- youtube.com nstrategy ползла 1→3 — каждый handshake давал false-
-    -- positive silent_drop. pdcounter учитывает packets с payload — 4 data-
-    -- packets без data-response это уже реальный silent drop, не handshake-
-    -- timing window.
+  if desync.dis and desync.dis.tcp and desync.outgoing
+     and desync.track and desync.track.pos then
     local out_count = (desync.track.pos.direct  and desync.track.pos.direct.pdcounter)  or 0
     local in_count  = (desync.track.pos.reverse and desync.track.pos.reverse.pdcounter) or 0
+    local in_bytes  = (desync.track.pos.reverse and desync.track.pos.reverse.pbcounter) or 0
 
-    if out_count >= tcp_out_thr and in_count <= tcp_in_thr then
-      -- One fail per connection. Раньше детектор сбрасывал crec.failure=nil
-      -- чтобы fire'ить «повторную rotation» внутри одной TCP session — но в
-      -- пределах одного TCP-коннекшна нельзя сменить уже выбранную strategy
-      -- (она применяется к этому потоку), так что повторные fail-events были
-      -- пустым шумом, который бил automate_failure_counter (zapret-auto.lua:73)
-      -- мимо его anti-duplicate guard'а (crec.failure check). На handshake-
-      -- фазе с retransmit'ами это могло выжечь fails=N threshold за один
-      -- request, и в паре с z2k_success_no_reset (который не сбрасывает
-      -- counter) — приводило к churn: каждый ~2 successful GET'а двигали
-      -- nstrategy на +1 даже без реального DPI-блока. Field-debug 2026-05-03
-      -- на тестовом роутере: 6 GET'ов 200 OK к youtube.com → nstrategy 1→3.
-      -- Убираем crec.failure=nil; zapret-auto.lua сам прокинет один fail per
-      -- connection и crec.nocheck-guard'ом погасит дублей.
-      DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count)
+    local handshake_seen_marker  = crec and crec.z2k_handshake_seen
+    local server_flight_complete = in_bytes >= handshake_done_b
+
+    if not handshake_seen_marker and not server_flight_complete
+       and out_count >= tcp_out_thr and in_count <= tcp_in_thr then
+      DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count..
+           " in_bytes="..in_bytes)
       return true
     end
   end
