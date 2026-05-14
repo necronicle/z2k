@@ -99,23 +99,38 @@ au_tag_type() {
 }
 
 # au_history_entries_after MANIFEST_PATH INSTALLED_TAG
-# Echoes JSON entry lines (one per line) for every history entry whose
-# numeric version is strictly greater than installed numeric version.
+# Echoes JSON entry lines for every history entry positioned strictly
+# AFTER the entry matching installed_tag.
+#
+# Семантика — history-order, не numeric. Раньше использовался numeric
+# compare на au_tag_num (число после префикса). Это ломалось на смешанной
+# p-/r- нумерации: например r-6 (silent_drop fix, выпущен ПОСЛЕ p-7)
+# имеет n=6 < 7, и numerically-после-p-7 фильтр его пропускал. История
+# в UPDATES.json — авторитативный лог релизов; порядок entries — порядок
+# выпуска, регardless of tag-numbering scheme.
+#
+# Если installed_tag не найден в history (свежая инсталляция / drift) —
+# возвращаются ВСЕ entries: caller (au_decide) применит обычную
+# patch/reinstall логику и догонит до current.
 au_history_entries_after() {
     local manifest="$1"
     local installed_tag="$2"
-    local installed_n
-    installed_n=$(au_tag_num "$installed_tag")
-    installed_n=${installed_n:-0}
-    awk -v inst_n="$installed_n" '
+    awk -v inst="$installed_tag" '
         /^[[:space:]]*\{[[:space:]]*"v"[[:space:]]*:[[:space:]]*"/ {
-            # extract v value
             line = $0
             sub(/.*"v"[[:space:]]*:[[:space:]]*"/, "", line)
             sub(/".*/, "", line)
             v = line
-            n = v; gsub(/[^0-9]/, "", n)
-            if (n + 0 > inst_n + 0) print $0
+            if (found) { print $0; next }
+            if (v == inst) { found = 1; next }
+            buf[++nbuf] = $0
+        }
+        END {
+            # installed_tag not found in history — emit everything we
+            # buffered (treat as fresh install).
+            if (!found) {
+                for (i = 1; i <= nbuf; i++) print buf[i]
+            }
         }
     ' "$manifest"
 }
@@ -172,19 +187,21 @@ au_decide() {
         return 0
     fi
 
-    local current_n installed_n
-    current_n=$(au_tag_num "$current")
-    installed_n=$(au_tag_num "$installed_tag")
-    : "${current_n:=0}"
-    : "${installed_n:=0}"
+    local entries
+    entries=$(au_history_entries_after "$manifest" "$installed_tag")
 
-    if [ "$current_n" -le "$installed_n" ]; then
+    # Empty diff window → installed_tag IS current (or beyond). Nothing
+    # to do. Раньше тут сидел numeric `current_n <= installed_n` shortcut,
+    # но он ломался на смешанной p-/r- нумерации (r-6 num=6 vs p-7 num=7)
+    # и на drift-сценариях (installed_tag отсутствует в history).
+    # Entries-emptiness check одинаково корректен для обоих случаев:
+    # au_history_entries_after для unknown installed возвращает всю
+    # history (treat as fresh install), для совпадения возвращает только
+    # entries после.
+    if [ -z "$(echo "$entries" | grep -v '^[[:space:]]*$' | head -1)" ]; then
         echo "none"
         return 0
     fi
-
-    local entries
-    entries=$(au_history_entries_after "$manifest" "$installed_tag")
 
     # any reinstall in the diff window → reinstall to current
     # any reset_state=true in the diff window → wipe autocircular state
@@ -306,6 +323,27 @@ au_install_paths() {
             ;;
         files/*.sh|files/*.lua)
             echo "${zd}/${repo_path#files/}"
+            ;;
+        lib/*)
+            # Library scripts (auto_update.sh, install.sh, config*.sh,
+            # utils.sh, …) live under $ZAPRET2_DIR/lib at runtime.
+            # Without this mapping patch-type releases silently skipped
+            # all lib/* changes (no install target).
+            echo "${zd}/${repo_path}"
+            ;;
+        UPDATES.json)
+            # The manifest itself ships with the install so that an
+            # offline `z2k diag` can show installed_tag context.
+            echo "${zd}/${repo_path}"
+            ;;
+        z2k.sh)
+            # Top-level entrypoint. Reinstall flow re-downloads this
+            # script separately via au_download_reinstall_script, but
+            # patch-type releases touching z2k.sh need the mapping too.
+            echo "${zd}/${repo_path}"
+            ;;
+        tests/*)
+            : # tests are dev/CI artifacts; not shipped to runtime.
             ;;
         *)
             : # no runtime target

@@ -140,6 +140,83 @@ JSON
 verdict=$(au_decide "r-99" "$AU_TMP/manifest.json" | head -1)
 check "au_decide: no-op when up to date" "none" "$verdict"
 
+# Case F: history-order matching survives mixed p-/r- numbering.
+# Regression scenario from 2026-05-15: installed=p-7 (num=7), then
+# r-6 (num=6) was released AFTER p-7, then p-8 (num=8). Old numeric-
+# compare au_history_entries_after dropped r-6 because 6 < 7. New
+# history-order matcher must include r-6 because it appears AFTER
+# the p-7 entry in the history array, regardless of its tag number.
+write_manifest <<'JSON'
+{
+  "schema": 1,
+  "branch": "z2k-enhanced",
+  "current": "p-8",
+  "history": [
+{"v": "p-6", "type": "patch",     "ts": "2026-05-14T00:00:00Z", "ref": "a", "desc": "a", "changed_files": ["x"]},
+{"v": "p-7", "type": "patch",     "ts": "2026-05-14T18:00:00Z", "ref": "b", "desc": "b", "changed_files": ["y"]},
+{"v": "r-6", "type": "reinstall", "ts": "2026-05-15T00:00:00Z", "ref": "c", "desc": "c", "reset_state": true, "changed_files": ["z"]},
+{"v": "p-8", "type": "patch",     "ts": "2026-05-15T01:00:00Z", "ref": "d", "desc": "d", "changed_files": ["w"]}
+  ]
+}
+JSON
+verdict=$(au_decide "p-7" "$AU_TMP/manifest.json" | head -1)
+check "au_decide: history-order picks r-6 even though num<installed" \
+      "reinstall p-8 reset_state" "$verdict"
+
+# Case G: installed tag absent from history (drift / fresh install) —
+# everything in history flows into the diff window.
+write_manifest <<'JSON'
+{
+  "schema": 1,
+  "branch": "z2k-enhanced",
+  "current": "r-100",
+  "history": [
+{"v": "p-50",  "type": "patch",     "ts": "2026-05-15T00:00:00Z", "ref": "a", "desc": "a", "changed_files": ["x"]},
+{"v": "r-100", "type": "reinstall", "ts": "2026-05-15T00:00:00Z", "ref": "b", "desc": "b", "changed_files": ["y"]}
+  ]
+}
+JSON
+verdict=$(au_decide "unknown-tag-999" "$AU_TMP/manifest.json" | head -1)
+check "au_decide: installed-tag-not-in-history → reinstall to current" \
+      "reinstall r-100" "$verdict"
+
+# ----- au_install_paths --------------------------------------------------
+
+check_path() {
+    name="$1"; repo="$2"; want="$3"
+    got=$(au_install_paths "$repo" | tr '\n' '|')
+    check "$name" "$want" "$got"
+}
+
+# Existing mappings still work.
+check_path "au_install_paths: files/lua/x.lua" \
+    "files/lua/foo.lua" "/opt/zapret2/lua/foo.lua|"
+
+# New mappings: lib/*, UPDATES.json, z2k.sh.
+check_path "au_install_paths: lib/auto_update.sh" \
+    "lib/auto_update.sh" "/opt/zapret2/lib/auto_update.sh|"
+
+check_path "au_install_paths: lib/install.sh" \
+    "lib/install.sh" "/opt/zapret2/lib/install.sh|"
+
+check_path "au_install_paths: lib/utils.sh (any lib/ depth)" \
+    "lib/utils.sh" "/opt/zapret2/lib/utils.sh|"
+
+check_path "au_install_paths: UPDATES.json" \
+    "UPDATES.json" "/opt/zapret2/UPDATES.json|"
+
+check_path "au_install_paths: z2k.sh" \
+    "z2k.sh" "/opt/zapret2/z2k.sh|"
+
+# tests/* остаются unmapped (dev-only artifacts), но silent — без шума
+# в логе. Просто empty output.
+check_path "au_install_paths: tests/* → empty (silent skip)" \
+    "tests/test_x.sh" ""
+
+# Unknown paths остаются empty.
+check_path "au_install_paths: unknown root file → empty" \
+    "RANDOM.txt" ""
+
 # ----- summary ------------------------------------------------------------
 
 echo "--- summary ---"
