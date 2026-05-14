@@ -984,6 +984,15 @@ handle_arguments() {
         install|i)
             print_info "Запуск установки zapret2..."
             run_full_install
+            # В auto-update контексте (Z2K_AUTO_UPDATE=1, выставляется в
+            # lib/auto_update.sh:au_apply_reinstall) или non-TTY запуске —
+            # НЕ открываем интерактивное меню после install: некому будет
+            # отвечать, процесс зависнет на read /dev/tty. См. репорт
+            # @vai73 2026-05-14 — auto-update повис именно тут.
+            if [ "$Z2K_AUTO_UPDATE" = "1" ] || [ ! -t 0 ]; then
+                print_info "Install завершён (non-interactive)."
+                return 0
+            fi
             print_info "Открываю меню управления..."
             sleep 1
             show_main_menu
