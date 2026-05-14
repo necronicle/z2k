@@ -11,6 +11,7 @@ LISTS_DIR="${LISTS_DIR:-$ZAPRET2_DIR/lists}"
 INIT_SCRIPT="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
 WHITELIST_FILE="${WHITELIST_FILE:-$LISTS_DIR/whitelist.txt}"
+EXTRA_DOMAINS_FILE="${EXTRA_DOMAINS_FILE:-$LISTS_DIR/extra-domains.txt}"
 
 # --- read helpers (POSIX sh, no sourcing of lib/utils.sh required) ---
 
@@ -188,6 +189,61 @@ whitelist_delete() {
     rm -f "$tmp"
     chmod 644 "$WHITELIST_FILE" 2>/dev/null || true
     restart_service_if_running
+}
+
+# --- extra-domains ---
+# Live hostlist для autocircular. Подхватывается сервисом без рестарта
+# (memory feedback_no_service_restart_for_hostlist). Если файл редактируют
+# вручную или через webpanel — z2k увидит изменения в течение нескольких
+# секунд через файловый poll.
+
+extra_domains_list() {
+    [ -f "$EXTRA_DOMAINS_FILE" ] || { echo ""; return 0; }
+    grep -vE '^[[:space:]]*(#|$)' "$EXTRA_DOMAINS_FILE"
+}
+
+extra_domains_add() {
+    local domain="$1"
+    case "$domain" in
+        ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        -*) echo "invalid domain" >&2; return 1 ;;
+        *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
+    esac
+    # Lowercase + strip trailing dot (как делает normalize_hostkey_for_state
+    # в lua, чтобы UI consistent).
+    domain=$(printf '%s' "$domain" | tr 'A-Z' 'a-z')
+    domain="${domain%.}"
+    [ -z "$domain" ] && { echo "invalid domain" >&2; return 1; }
+    mkdir -p "$LISTS_DIR" 2>/dev/null
+    touch "$EXTRA_DOMAINS_FILE" 2>/dev/null
+    if grep -qxF "$domain" "$EXTRA_DOMAINS_FILE"; then
+        return 0  # idempotent
+    fi
+    printf '%s\n' "$domain" >> "$EXTRA_DOMAINS_FILE"
+    chmod 644 "$EXTRA_DOMAINS_FILE" 2>/dev/null || true
+    # NB: НЕ рестартим сервис — extra-domains.txt подхватывается live.
+}
+
+extra_domains_delete() {
+    local domain="$1"
+    [ -f "$EXTRA_DOMAINS_FILE" ] || return 0
+    case "$domain" in
+        ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        -*) echo "invalid domain" >&2; return 1 ;;
+        *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
+    esac
+    domain=$(printf '%s' "$domain" | tr 'A-Z' 'a-z')
+    domain="${domain%.}"
+    [ -z "$domain" ] && { echo "invalid domain" >&2; return 1; }
+    if ! grep -qxF "$domain" "$EXTRA_DOMAINS_FILE"; then
+        return 0  # idempotent
+    fi
+    local tmp="$EXTRA_DOMAINS_FILE.z2k-new"
+    grep -vxF "$domain" "$EXTRA_DOMAINS_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$EXTRA_DOMAINS_FILE"
+    rm -f "$tmp"
+    chmod 644 "$EXTRA_DOMAINS_FILE" 2>/dev/null || true
+    # NB: НЕ рестартим сервис.
 }
 
 # --- tunnel (Telegram) ---

@@ -44,6 +44,7 @@
     dashboard: renderDashboard,
     toggles: renderToggles,
     whitelist: renderWhitelist,
+    "extra-domains": renderExtraDomains,
     logs: renderLogs,
     state: renderState,
     diag: renderDiag,
@@ -278,6 +279,75 @@
       await apiPost("/whitelist/delete", { domain });
       toast("Удалено");
       loadWhitelist();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
+  // ---------- Extra domains (live hostlist для autocircular) ----------
+  async function renderExtraDomains() {
+    $app.innerHTML = `
+      <h1 class="page-title">Дополнительные домены</h1>
+      <div class="card">
+        <h3>Live-список для autocircular</h3>
+        <p class="desc">
+          Здесь — домены, которые z2k будет обрабатывать в дополнение к стандартным RKN/YouTube/Discord-спискам.
+          Подбор рабочей стратегии происходит автоматически из существующего пула (~47 стратегий для TCP, 12+ для QUIC),
+          результат закрепляется в state.tsv после первого успеха.
+          <b>Изменения подхватываются сервисом без перезапуска</b> через несколько секунд.
+        </p>
+        <div class="wl-add">
+          <input id="ed-input" type="text" placeholder="example.com" autocomplete="off" spellcheck="false">
+          <button class="btn btn-primary" id="ed-add-btn">Добавить</button>
+        </div>
+        <ul class="wl-list" id="ed-list">Загрузка…</ul>
+      </div>
+    `;
+    document.getElementById("ed-add-btn").addEventListener("click", edAdd);
+    document.getElementById("ed-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") edAdd();
+    });
+    loadExtraDomains();
+  }
+
+  async function loadExtraDomains() {
+    const list = document.getElementById("ed-list");
+    try {
+      const d = await apiGet("/extra-domains");
+      if (!d.domains.length) {
+        list.innerHTML = `<li style="color:var(--text-muted)">(пусто)</li>`;
+        return;
+      }
+      list.innerHTML = d.domains.map(dom => `
+        <li><span>${escapeHtml(dom)}</span><button title="Удалить" data-del="${escapeHtml(dom)}">×</button></li>
+      `).join("");
+      list.querySelectorAll("button[data-del]").forEach(btn => {
+        btn.addEventListener("click", () => edDelete(btn.dataset.del));
+      });
+    } catch (e) {
+      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+    }
+  }
+
+  async function edAdd() {
+    const inp = document.getElementById("ed-input");
+    const domain = inp.value.trim();
+    if (!domain) return;
+    try {
+      await apiPost("/extra-domains/add", { domain });
+      inp.value = "";
+      toast("Добавлено");
+      loadExtraDomains();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
+  async function edDelete(domain) {
+    try {
+      await apiPost("/extra-domains/delete", { domain });
+      toast("Удалено");
+      loadExtraDomains();
     } catch (e) {
       toast("Ошибка: " + e.message, "bad");
     }

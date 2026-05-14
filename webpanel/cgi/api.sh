@@ -246,6 +246,32 @@ case "$method $path" in
         json_ok
         ;;
 
+    # ---------- EXTRA DOMAINS (live hostlist для autocircular) ----------
+    "GET /extra-domains")
+        json_header
+        printf '{"ok":true,"domains":['
+        first=1
+        extra_domains_list | while IFS= read -r d; do
+            [ -z "$d" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            json_string "$d"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+
+    "POST /extra-domains/add"|"POST /extra-domains/delete")
+        body=$(read_body)
+        domain=$(form_value "$body" "domain")
+        [ -z "$domain" ] && json_fail "400 Bad Request" "domain required"
+        if [ "$path" = "/extra-domains/add" ]; then
+            extra_domains_add "$domain" || json_fail "400 Bad Request" "invalid or add failed"
+        else
+            extra_domains_delete "$domain" || json_fail "400 Bad Request" "invalid or delete failed"
+        fi
+        json_ok
+        ;;
+
     # ---------- TUNNEL ----------
     "POST /tunnel/enable")  tunnel_enable  || json_fail "500" "tunnel enable failed"; json_ok ;;
     "POST /tunnel/disable") tunnel_disable; json_ok ;;
