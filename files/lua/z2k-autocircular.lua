@@ -1037,6 +1037,29 @@ local youtube_silent_retry_min_gap_sec = 5
 local youtube_silent_retry_threshold = 2
 local youtube_silent_retry = {}
 
+-- D.5a (2026-05-16): cross-profile success bypass для silent_retry, чтобы
+-- TCH-burst при HTTP/3 Alt-Svc negotiation не крутил страту вперёд, пока
+-- параллельный QUIC-flow по тому же hostname реально работает.
+--
+-- last_seen_success_by_hostn[hostn][source_askey] = ts.
+--   Обновляется только на real-success (successful_state OR response_state).
+--   quic_candidate_state НЕ годится — он fires на любом outgoing quic_initial с
+--   nstrategy>1, без incoming-сигнала, и марк будет вечно self-refreshing.
+--
+-- silent_retry_compat_map[target_askey] = source_askey:
+--   target — это askey у которого мы рассматриваем silent_retry для bypass'a.
+--   source — это askey, success которого мы принимаем как доказательство, что
+--   обход на хосте жив. Только совместимые пары: yt_tcp ↔ yt_quic; http_rkn
+--   ИЛИ http-success на :80 не подтверждает TLS-обход на :443.
+--
+-- silent_retry_bypass_window_sec = 30s: после окна без свежего success
+-- silent_retry оживает обратно (для случая, когда обход реально проседает).
+local last_seen_success_by_hostn = {}
+local silent_retry_bypass_window_sec = 30
+local silent_retry_compat_map = {
+  yt_tcp = "yt_quic",
+}
+
 local function refresh_rkn_silent_enabled()
   local now = os.time() or 0
   if now ~= 0 and (now - rkn_silent_checked_at) < debug_refresh_interval then
@@ -1098,6 +1121,22 @@ local function maybe_rotate_youtube_silent_retry(desync, askey, hostn, hrec)
   local now = now_f()
   local r = youtube_silent_retry_rec(askey, hostn, true)
   if not r then return nil, nil, nil end
+
+  -- D.5a: cross-profile success bypass. Если на этом hostn у совместимого
+  -- профиля недавно был real-success — обход реально жив (просто клиент ушёл
+  -- на HTTP/3 после Alt-Svc), не крутим. Чистим stale attempts/last_t, чтобы
+  -- первый TCH после истечения окна не догнал старый счётчик до threshold
+  -- мгновенно (см. review point 3).
+  local compat_src = silent_retry_compat_map[askey]
+  if compat_src and hostn then
+    local bucket = last_seen_success_by_hostn[hostn]
+    local last_ts = bucket and bucket[compat_src]
+    if last_ts and (now - last_ts) >= 0 and (now - last_ts) < silent_retry_bypass_window_sec then
+      r.attempts = 0
+      r.last_t = 0
+      return nil, nil, nil
+    end
+  end
 
   local gap = now - (tonumber(r.last_t) or 0)
   if tonumber(r.strategy) == cur and gap >= youtube_silent_retry_min_gap_sec and gap <= youtube_silent_retry_window_sec then
@@ -1414,6 +1453,33 @@ if type(circular) == "function" then
         reset_youtube_silent_retry(askey, hostn)
       end
 
+      -- D.5a: mark hostn как имеющий свежий real-success для этого askey,
+      -- чтобы силент-ретрай совместимого target-профиля мог скипнуть
+      -- ротацию. Используем только incoming-side сигналы:
+      --   - response_state: positive incoming reply (per-call, не latched);
+      --   - successful_state: nocheck-path, но ТОЛЬКО на incoming пакете.
+      --
+      -- Важно гард `not desync.outgoing` у successful_state: nocheck_after
+      -- берётся из crec.nocheck (latched после первого incoming success
+      -- в upstream zapret-auto.lua); без гарда любой последующий outgoing
+      -- callback того же flow держит маркер свежим, и контракт «через
+      -- silent_retry_bypass_window_sec без свежего success silent_retry
+      -- оживает» ломается (см. review High 2026-05-16).
+      --
+      -- quic_candidate_state не годится (out-of-band, fires на outgoing
+      -- quic_initial с nstrategy>1, ничего incoming не подтверждает).
+      local real_success_incoming =
+        response_state or
+        ((not (desync and desync.outgoing)) and successful_state)
+      if real_success_incoming and hostn and askey then
+        local bucket = last_seen_success_by_hostn[hostn]
+        if not bucket then
+          bucket = {}
+          last_seen_success_by_hostn[hostn] = bucket
+        end
+        bucket[askey] = now_f()
+      end
+
       local latency_s, flow_strategy = nil, nil
       if success_event or failure_event then
         latency_s, flow_strategy = flow_finish(desync)
@@ -1478,4 +1544,29 @@ if type(circular) == "function" then
     end
     return verdict
   end
+end
+
+-- Test hooks. Активны только под Z2K_TEST_MODE=1, в production ничего не
+-- экспортируют. Дают unit-тестам прямой доступ к module-local bookkeeping
+-- (silent_retry / cross-profile marker), чтобы проверять инварианты без
+-- "нащупывания" через full circular() pipeline.
+if os.getenv("Z2K_TEST_MODE") == "1" then
+  _G._z2k_autocircular_test = {
+    maybe_rotate_youtube_silent_retry = maybe_rotate_youtube_silent_retry,
+    last_seen_success_by_hostn = last_seen_success_by_hostn,
+    youtube_silent_retry = youtube_silent_retry,
+    silent_retry_bypass_window_sec = silent_retry_bypass_window_sec,
+    silent_retry_compat_map = silent_retry_compat_map,
+    youtube_silent_retry_window_sec = youtube_silent_retry_window_sec,
+    youtube_silent_retry_min_gap_sec = youtube_silent_retry_min_gap_sec,
+    youtube_silent_retry_threshold = youtube_silent_retry_threshold,
+    reset = function()
+      for k in pairs(last_seen_success_by_hostn) do
+        last_seen_success_by_hostn[k] = nil
+      end
+      for k in pairs(youtube_silent_retry) do
+        youtube_silent_retry[k] = nil
+      end
+    end,
+  }
 end
