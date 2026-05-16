@@ -23,6 +23,7 @@ cloudflare.net
 cloudflare.tv
 cloudflarepartners.com
 cloudflarestatus.com
+dnsleaktest.com
 enimerosi.com
 euw1-device-cloudgateway.iot.i.tplinknbu.com
 fast-torrent.ru
