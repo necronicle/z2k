@@ -720,6 +720,22 @@
             помощь в развитии.
           </p>
         </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-name">Jet_sk_ya</div>
+          <p class="desc">
+            Материальная поддержка проекта — спасибо за поддержку z2k.
+          </p>
+        </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-name">Suharik39</div>
+          <p class="desc">
+            Материальная поддержка проекта — спасибо за поддержку z2k.
+          </p>
+        </div>
       </div>
     `;
   }
