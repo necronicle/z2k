@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-13",
+  "current": "p-14",
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
 {"v": "p-0", "type": "patch", "ts": "2026-05-03T17:30:00Z", "ref": "auto-update-baseline", "desc": "Auto-update system rollout baseline marker", "changed_files": []},
@@ -21,5 +21,7 @@
 {"v": "p-12", "type": "patch", "ts": "2026-05-16T16:06:52Z", "ref": "extra-domains-dnsleaktest", "desc": "extra-domains: добавлен dnsleaktest.com (по запросу @Evenyit, сайт ранее не открывался без extra-list).", "changed_files": ["files/lists/extra-domains.txt", "UPDATES.json"]}
 ,
 {"v": "p-13", "type": "patch", "ts": "2026-05-17T00:00:00Z", "ref": "credits-jet-suharik", "desc": "Благодарности: добавлены Jet_sk_ya и Suharik39 в спонсоры (меню z2k.sh, README, webpanel /credits).", "changed_files": ["lib/menu.sh", "README.md", "webpanel/www/app.js", "UPDATES.json"]}
+,
+{"v": "p-14", "type": "patch", "ts": "2026-05-17T15:00:00Z", "ref": "extra-domains-mcpmarket", "desc": "extra-domains: добавлен mcpmarket.com (по запросу @george_saveliev). У Mark на тестовом роутере циркуляр подобрал первую же стратегию.", "changed_files": ["files/lists/extra-domains.txt", "UPDATES.json"]}
   ]
 }
