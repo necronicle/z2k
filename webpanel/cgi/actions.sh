@@ -418,38 +418,14 @@ geosite_run_async() {
     printf '%s' "$job_id"
 }
 
-# --- probe (Phase 10) ---
-#
-# Runs z2k-probe.sh against a single host in the background. Host must
-# pass a strict DNS-name whitelist (letters, digits, dot, hyphen) before
-# it's passed to the script — the script embeds the host into curl
-# command lines and state.tsv writes, so we cannot let arbitrary chars
-# through. Profile is one of rkn_tcp / yt_tcp / gv_tcp. Apply flag pins
-# the winning strategy in state.tsv after the probe completes.
+# probe_run_async removed in r-15 (Phase 1 cleanup, Ladon-inspired
+# detection stack). The active-probe path was never wired into the live
+# circular and produced non-actionable verdicts. webpanel /probe/run
+# endpoint now returns 410 Gone; Phase 3 will replace it with reactive
+# discovery via the z2k-detect daemon.
 probe_run_async() {
-    local host="$1" profile="$2" apply="$3"
-    local probe="$ZAPRET2_DIR/z2k-probe.sh"
-    [ -x "$probe" ] || { echo "z2k-probe.sh missing" >&2; return 1; }
-    case "$host" in
-        ""|*[!a-zA-Z0-9.-]*) echo "invalid host" >&2; return 1 ;;
-        -*) echo "invalid host" >&2; return 1 ;;
-    esac
-    case "$profile" in
-        rkn_tcp|yt_tcp|gv_tcp) ;;
-        "") profile="rkn_tcp" ;;
-        *) echo "invalid profile" >&2; return 1 ;;
-    esac
-    local apply_arg=""
-    [ "$apply" = "1" ] && apply_arg="--apply"
-    local job_id
-    job_id=$(date +%s)$$
-    (
-        sh "$probe" "$host" "--profile=$profile" $apply_arg \
-            > "/tmp/z2k-job-$job_id.log" 2>&1
-        echo "$?" > "/tmp/z2k-job-$job_id.exit"
-    ) &
-    echo "$!" > "/tmp/z2k-job-$job_id.pid"
-    printf '%s' "$job_id"
+    echo "active probe removed in r-15" >&2
+    return 1
 }
 
 # --- debug flag (Phase 3) ---

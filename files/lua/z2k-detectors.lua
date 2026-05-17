@@ -30,17 +30,26 @@
 --                                       neutral / hard_fail mark crec
 --                                       (rkn_tcp / gv_tcp / http_rkn)
 --   z2k_classify_http_reply          — shared HTTP reply classifier returning
---                                       positive | neutral | hard_fail | nil
+--                                       positive | neutral | hard_fail |
+--                                       server_active_reject | nil
 --                                       + sanitized reason. Single source of
 --                                       truth for marker lists, used from
 --                                       autocircular's positive-response
 --                                       check, the failure_detector chain,
 --                                       and both success_detectors above.
+--   z2k_classify_server_active       — protocol-level server-side rejection
+--                                       classifier (TCP refused on SYN /
+--                                       TLS fatal alert after ServerHello).
+--                                       Stamps crec.z2k_server_active_reject
+--                                       and bypasses standard_failure_detector
+--                                       delegation in the failure chain.
 --
 -- Functions kept file-local (used only by other functions in this file):
 --   z2k_http_classifier_check  — failure-detector wrapper around
 --                                 z2k_classify_http_reply that stamps
---                                 crec.z2k_neutral_observed on neutral.
+--                                 crec.z2k_neutral_observed on neutral
+--                                 and crec.z2k_server_active_reject on
+--                                 server_active_reject.
 
 -- ---------------------------------------------------------------------------
 -- Shared marker lists (single source of truth for HTTP block-page detection)
@@ -63,6 +72,34 @@ local Z2K_HTTP_BLOCK_BODY_MARKERS = {
 local Z2K_HTTP_BLOCK_HOST_PREFIXES = {
   "warn.", "deny.", "restrict.", "block.", "blocked.", "blackhole.",
 }
+
+-- Server-side WAF response headers — signal that the SERVER (not DPI on
+-- path) actively rejected the request. Each entry is {lowered_header,
+-- lowered_value_substring}. Match fires when the header is present AND
+-- its lowered value contains the substring.
+--
+-- Initial conservative list — only signals confirmed in the wild as
+-- pure server-side enforcement, NOT mixable with DPI imitation:
+--   x-vercel-mitigated: deny     (Vercel WAF hard block)
+--
+-- Additional headers gated behind Z2K_WAF_MARKERS_AGGRESSIVE=1 env
+-- because they can fire on legitimate per-request CF challenges or
+-- Sucuri rate-limit pages that the user is supposed to retry through;
+-- counting those as server-active would skip bypass attempts that
+-- ARE worth trying.
+local Z2K_HTTP_WAF_HEADERS_CORE = {
+  { "x-vercel-mitigated", "deny" },
+}
+local Z2K_HTTP_WAF_HEADERS_AGGRESSIVE = {
+  { "x-vercel-mitigated", "deny" },
+  { "cf-mitigated", "challenge" },
+  { "cf-mitigated", "block" },
+  { "x-sucuri-block", "" },
+}
+local Z2K_HTTP_WAF_HEADERS =
+  (os.getenv("Z2K_WAF_MARKERS_AGGRESSIVE") == "1")
+    and Z2K_HTTP_WAF_HEADERS_AGGRESSIVE
+    or  Z2K_HTTP_WAF_HEADERS_CORE
 
 -- Sanitize a reason_detail string for safe inclusion in debug.log lines.
 -- Keep ASCII alphanumeric + dot/dash/equals/colon/underscore; replace
@@ -91,6 +128,26 @@ local function z2k_find_host_marker(host_lower)
   -- Host-prefix markers (warn.beeline.ru, deny.megafon.ru, etc).
   for _, p in ipairs(Z2K_HTTP_BLOCK_HOST_PREFIXES) do
     if host_lower:sub(1, #p) == p then return "prefix:" .. p end
+  end
+  return nil
+end
+
+-- Scan dissected HTTP reply headers for server-side WAF rejection
+-- markers. `headers` is the array returned by http_dissect_reply with
+-- {header, header_low, value} items. Returns "header:value-substring"
+-- on match (used as reason suffix), nil otherwise.
+local function z2k_find_waf_header(headers)
+  if type(headers) ~= "table" then return nil end
+  for _, want in ipairs(Z2K_HTTP_WAF_HEADERS) do
+    local want_header, want_value = want[1], want[2]
+    for _, h in ipairs(headers) do
+      if type(h) == "table" and h.header_low == want_header then
+        local v = type(h.value) == "string" and h.value:lower() or ""
+        if want_value == "" or v:find(want_value, 1, true) then
+          return want_header .. ":" .. (want_value ~= "" and want_value or v:sub(1, 24))
+        end
+      end
+    end
   end
   return nil
 end
@@ -136,13 +193,15 @@ end
 --   "hard_fail", reason_string       — confirmed block (4xx/5xx with body
 --                                       marker; cross-SLD 3xx with host
 --                                       marker or block-prefix)
+--   "server_active_reject", reason   — server itself rejected (bare 451
+--                                       без RKN markers = RFC 7725 origin
+--                                       compliance; 4xx с WAF response
+--                                       header = server WAF, не DPI).
+--                                       Не fail (bypass не поможет) и не
+--                                       success (бэкап-роутинг бессмыслен) —
+--                                       autocircular skip-rotation gate.
 --   nil, nil                         — not applicable (not http_reply,
 --                                       no payload, no parseable code)
---
--- Used in commit 3 by z2k-autocircular.lua's has_positive_incoming_response()
--- (reads only the "positive" return). Will be used in commit 4 by a
--- rewritten z2k_http_block_reply path AND a new
--- z2k_http_success_positive_only success_detector.
 function z2k_classify_http_reply(desync)
   if not desync or desync.outgoing then return nil, nil end
   if desync.l7payload ~= "http_reply" then return nil, nil end
@@ -157,19 +216,19 @@ function z2k_classify_http_reply(desync)
   if code >= 200 and code < 300 then return "positive", nil end
   if code == 304 then return "positive", nil end
 
-  -- 4xx / 5xx — body-marker check.
+  -- 4xx / 5xx — dissect once for body + headers (WAF marker scan и
+  -- body marker scan делят один parse).
   --
-  -- IMPORTANT: scan the BODY only, not headers. Per RFC 7725 a legitimate
-  -- 451 from origin/CDN may carry `Link: <authority>; rel="blocked-by"`
-  -- header — that header value contains the substring "blocked-by" which
-  -- is in our body-marker list. v3.6 explicitly defers Link rel="blocked-by"
-  -- parsing as ambiguous (could be DPI or origin compliance), so scanning
-  -- headers would produce a hard-fail false positive on every RFC-compliant
-  -- region-locked 451.
+  -- IMPORTANT: body marker scan читает только BODY, не headers. Per RFC
+  -- 7725 a legitimate 451 from origin/CDN may carry `Link: <authority>;
+  -- rel="blocked-by"` header — substring "blocked-by" в нашем
+  -- body-marker списке. WAF header scan — отдельный list (X-Vercel-*,
+  -- cf-mitigated, X-Sucuri-Block), не пересекается с body markers.
   if code >= 400 and code < 600 then
     local body = ""
+    local hdis = nil
     if type(http_dissect_reply) == "function" then
-      local hdis = http_dissect_reply(payload)
+      hdis = http_dissect_reply(payload)
       if hdis and hdis.body then body = hdis.body end
     end
     -- Fallback: separate body manually at first blank-line if dissector
@@ -178,13 +237,36 @@ function z2k_classify_http_reply(desync)
       local sep = payload:find("\r\n\r\n", 1, true)
       if sep then body = payload:sub(sep + 4) end
     end
+
+    local low = body ~= "" and body:lower() or ""
+    local rkn_marker = low ~= "" and z2k_find_body_marker(low) or nil
+
+    -- 451 split: RKN body marker → hard_fail (наш RKN), иначе →
+    -- server_active_reject (RFC 7725 origin compliance, региональный
+    -- блок на стороне CDN/origin — DPI bypass не поможет, ротация
+    -- стратегии бесполезна).
+    if code == 451 then
+      if rkn_marker then
+        return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(rkn_marker)
+      end
+      return "server_active_reject", "http_451_no_marker"
+    end
+
+    -- Server-side WAF response headers (Vercel/CF/Sucuri) — server
+    -- активно отказал, не path-active DPI. Check ДО body marker scan
+    -- чтобы WAF 403 не пытались bypass'ить.
+    if hdis and hdis.headers then
+      local waf = z2k_find_waf_header(hdis.headers)
+      if waf then
+        return "server_active_reject", "waf_header:" .. z2k_sanitize_reason(waf)
+      end
+    end
+
     if body == "" then
       return "neutral", "http_4xx_no_body:code=" .. tostring(code)
     end
-    local low = body:lower()
-    local marker = z2k_find_body_marker(low)
-    if marker then
-      return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(marker)
+    if rkn_marker then
+      return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(rkn_marker)
     end
     return "neutral", "http_4xx_no_marker:code=" .. tostring(code)
   end
@@ -243,7 +325,11 @@ end
 -- For "neutral" — returns false but stamps crec.z2k_neutral_observed
 -- and crec.z2k_reason; autocircular's commit-3 wiring sees this and
 -- blocks successful_state / response_state, preventing the strategy
--- from being pinned. For "positive" / nil — returns false, no marks.
+-- from being pinned. For "server_active_reject" — stamps
+-- crec.z2k_server_active_reject + reason and returns false; the
+-- autocircular skip-rotation gate consumes the marker so rotation is
+-- not penalised on server-side refusals (Vercel WAF / RFC 7725 451 /
+-- region-locked CDN). For "positive" / nil — returns false, no marks.
 local function z2k_http_classifier_check(desync, crec)
   if type(z2k_classify_http_reply) ~= "function" then
     return false
@@ -252,6 +338,13 @@ local function z2k_http_classifier_check(desync, crec)
   if class == "hard_fail" then
     if crec then crec.z2k_reason = reason end
     return true
+  end
+  if class == "server_active_reject" then
+    if crec then
+      crec.z2k_server_active_reject = true
+      crec.z2k_reason = "server_active:" .. (reason or "")
+    end
+    return false
   end
   if class == "neutral" then
     if crec then
@@ -262,8 +355,87 @@ local function z2k_http_classifier_check(desync, crec)
   return false
 end
 
+-- z2k_classify_server_active(desync, crec) — protocol-level server-side
+-- rejection classifier. Complements z2k_classify_http_reply which only
+-- handles HTTP replies; this covers TCP/TLS layer signs that the peer
+-- itself rejected the connection (NOT path-active DPI).
+--
+-- Returns true (and stamps crec.z2k_server_active_reject + reason) when:
+--   1. TCP refused — incoming RST while pdcounter direct == 0 (we have
+--      NOT yet sent any outgoing data packet — only SYN happened, and
+--      SYN itself is not counted in pdcounter which is a data-packet
+--      counter) AND reverse pbcounter == 0 (peer sent zero bytes).
+--      Critically NOT pdcounter <= 1: that would match DPI-injected
+--      RST after ClientHello / first HTTP request, which is the
+--      bypass-target signal autocircular MUST rotate on. Test cases
+--      5b-style real-path regressions in tests/test_silent_drop_*
+--      and test_z2k_server_active_classification pin this exact gap.
+--   2. TLS fatal alert AFTER ServerHello — reverse pbcounter > 60 means
+--      the peer already sent a real ServerHello (RFC 8446 minimum frame
+--      ~51 bytes; we use 60 to match the existing z2k_tls_stalled SH
+--      threshold). Alert with no prior server bytes = path-active DPI
+--      injection (kept under z2k_tls_alert_fatal path, не сюда).
+--
+-- Returns false (no stamp) otherwise. Caller MUST short-circuit on
+-- true return — do NOT delegate to standard_failure_detector after, or
+-- the same RST/alert event will be counted as a fail.
+function z2k_classify_server_active(desync, crec)
+  if not desync or desync.outgoing then return false end
+  local dis = desync.dis
+  if not dis then return false end
+  local pos = desync.track and desync.track.pos
+  if not pos then return false end
+
+  local out_count = (pos.direct  and pos.direct.pdcounter)  or 0
+  local in_bytes  = (pos.reverse and pos.reverse.pbcounter) or 0
+
+  -- (1) TCP refused: RST before any outgoing data packet, peer never
+  -- replied with data. pdcounter == 0 = no ClientHello / HTTP req yet
+  -- (SYN doesn't carry data, isn't counted). Strict equality is the
+  -- whole point — pdcounter == 1 means a payload went out, and an
+  -- inbound RST at that point is the DPI early-reject signature that
+  -- autocircular must rotate around, not skip.
+  if dis.tcp then
+    local flags  = tonumber(dis.tcp.th_flags) or 0
+    local rst_bit = (TH_RST and bitand and bitand(flags, TH_RST)) or 0
+    if rst_bit ~= 0 and out_count == 0 and in_bytes == 0 then
+      if crec then
+        crec.z2k_server_active_reject = true
+        crec.z2k_reason = "server_active:tcp_refused"
+      end
+      return true
+    end
+  end
+
+  -- (2) TLS fatal alert after ServerHello arrived
+  local payload = dis.payload
+  if type(payload) == "string" and #payload >= 7
+     and payload:byte(1) == 0x15
+     and payload:byte(6) == 0x02
+     and in_bytes > 60 then
+    local desc = payload:byte(7) or 0
+    if crec then
+      crec.z2k_server_active_reject = true
+      crec.z2k_reason = "server_active:tls_alert_post_sh:desc=" .. tostring(desc)
+    end
+    return true
+  end
+
+  return false
+end
+
 function z2k_tls_alert_fatal(desync, crec)
   z2k_detector_log_init_once()
+
+  -- Server-active classification FIRST. If matched (TCP refused on SYN
+  -- stage, or TLS fatal alert after ServerHello), stamp crec marker and
+  -- bail without delegating — standard_failure_detector would otherwise
+  -- count the RST/alert as path-active fail and trigger rotation, but
+  -- bypass-strategy won't help against server-side refusal.
+  if z2k_classify_server_active(desync, crec) then
+    return false
+  end
+
   if type(standard_failure_detector) == "function" then
     local ok, res = pcall(standard_failure_detector, desync, crec)
     if ok and res then return true end
@@ -1148,6 +1320,13 @@ function z2k_success_no_reset(desync, crec)
   if not desync.outgoing and desync.l7payload == "http_reply" and
      type(z2k_classify_http_reply) == "function" then
     local class, reason = z2k_classify_http_reply(desync)
+    if class == "server_active_reject" then
+      if crec then
+        crec.z2k_server_active_reject = true
+        crec.z2k_reason = "server_active:" .. (reason or "")
+      end
+      return false
+    end
     if class == "neutral" or class == "hard_fail" then
       if crec then
         crec.z2k_neutral_observed = true
@@ -1181,6 +1360,13 @@ function z2k_http_success_positive_only(desync, crec)
   if not desync.outgoing and desync.l7payload == "http_reply" and
      type(z2k_classify_http_reply) == "function" then
     local class, reason = z2k_classify_http_reply(desync)
+    if class == "server_active_reject" then
+      if crec then
+        crec.z2k_server_active_reject = true
+        crec.z2k_reason = "server_active:" .. (reason or "")
+      end
+      return false
+    end
     if class == "positive" then
       -- Content-Length-aware: на cdnbase.com и подобных CDN-static с
       -- ТСПУ body-cap первый http_reply packet — это headers + первая
@@ -1294,6 +1480,30 @@ end
 -- HTTP GET / TLS retransmits (4 packet'а по ~400B) до handshake'а
 -- продолжают fire'ить как было.
 function z2k_silent_drop_detector(desync, crec, arg)
+  -- Server-active classification runs BEFORE the nocheck guard. Upstream
+  -- zapret-auto.lua latches crec.nocheck = true on the first incoming
+  -- success signal (ServerHello, inseq>4K). If the very next packet on
+  -- the same flow is a post-SH fatal TLS alert / bare-451 / WAF-marker,
+  -- short-circuiting on nocheck would prevent us from stamping
+  -- crec.z2k_server_active_reject — autocircular relies on the marker
+  -- to skip rotation. The nocheck guard is intended only for the
+  -- silent-drop heuristic (out>>in packet count), NOT for protocol /
+  -- content classification.
+  if z2k_classify_server_active(desync, crec) then
+    return false
+  end
+  if not desync.outgoing and desync.l7payload == "http_reply"
+     and type(z2k_classify_http_reply) == "function" then
+    local class, reason = z2k_classify_http_reply(desync)
+    if class == "server_active_reject" then
+      if crec then
+        crec.z2k_server_active_reject = true
+        crec.z2k_reason = "server_active:" .. (reason or "")
+      end
+      return false
+    end
+  end
+
   if crec and crec.nocheck then return false end
 
   local tcp_out_thr      = (arg and tonumber(arg.tcp_out))                 or 4

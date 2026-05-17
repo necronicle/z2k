@@ -1039,8 +1039,31 @@ step_build_zapret2() {
         chmod +x "${ZAPRET2_DIR}/z2k-blocked-monitor.sh" 2>/dev/null || true
     fi
 
+    # One-shot cleanup of r-15 Phase 1 obsolete tools. Marker-gated so it runs
+    # exactly once per box; subsequent reinstalls/auto-updates are no-ops.
+    # z2k-probe.sh / z2k-classify(.go|-drift.sh|-inject.sh|-* binary) — see
+    # the menu_probe() / menu_classify() removal in lib/menu.sh + the
+    # server_active_reject taxonomy that replaces them.
+    # z2k-dynamic-strategy.lua + dynamic-slots.conf + classify-* TSVs —
+    # producer was the classify CLI; slot in config_official.sh removed.
+    if [ ! -f "$ZAPRET2_DIR/.classify_probe_removed.done" ]; then
+        rm -f "$ZAPRET2_DIR/z2k-probe.sh" 2>/dev/null
+        rm -f "$ZAPRET2_DIR/z2k-classify" 2>/dev/null
+        rm -f "$ZAPRET2_DIR/z2k-classify-drift.sh" 2>/dev/null
+        rm -f "$ZAPRET2_DIR/z2k-classify-inject.sh" 2>/dev/null
+        rm -f "$ZAPRET2_DIR/lua/z2k-dynamic-strategy.lua" 2>/dev/null
+        rm -f "$ZAPRET2_DIR/dynamic-slots.conf" 2>/dev/null
+        rm -f "$ZAPRET2_DIR/lists/z2k-classify-strategies.tsv" 2>/dev/null
+        rm -f "$ZAPRET2_DIR/lists/z2k-classify-domains.tsv" 2>/dev/null
+        rm -f /tmp/z2k-classify-dynparams 2>/dev/null
+        touch "$ZAPRET2_DIR/.classify_probe_removed.done" 2>/dev/null || true
+        print_info "r-15 cleanup: removed legacy z2k-probe.sh / z2k-classify / dynamic-strategy"
+    fi
+
     # Install z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, auto-update)
-    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-probe.sh z2k-classify-drift.sh z2k-classify-inject.sh z2k-auto-update.sh; do
+    # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup, Ladon-inspired
+    # detection stack). Replaced by the server_active_reject taxonomy in z2k-detectors.lua.
+    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh; do
         if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
             cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
@@ -1905,107 +1928,14 @@ HOOK
 # ШАГ 12: ФИНАЛИЗАЦИЯ
 # ==============================================================================
 
-step_install_z2k_classify() {
-    print_header "Шаг 11.5/12: Установка z2k-classify (DPI block-type classifier)"
-
-    # Map host arch to release-asset suffix. Naming convention matches
-    # .github/workflows/build-classify.yml matrix names.
-    local sys_arch entware_arch arch suffix
-    sys_arch=$(uname -m)
-    entware_arch=""
-    if command -v opkg >/dev/null 2>&1; then
-        entware_arch=$(opkg print-architecture 2>/dev/null | awk '
-            $1 == "arch" && $2 != "all" {
-                prio = ($3 ~ /^[0-9]+$/) ? $3 + 0 : 0
-                if (prio >= max) { max = prio; arch = $2 }
-            }
-            END { if (arch != "") print arch }
-        ')
-    fi
-    arch="${entware_arch:-$sys_arch}"
-
-    case "$arch" in
-        aarch64|arm64|*aarch64*|*arm64*) suffix="arm64" ;;
-        armv7l|armv6l|arm|*armv7*|*armv6*|arm*) suffix="arm" ;;
-        x86_64|amd64|*x86_64*|*amd64*) suffix="x86_64" ;;
-        i386|i486|i586|i686|x86) suffix="x86" ;;
-        *mipsel*) suffix="mipsel" ;;
-        *mips64*) suffix="mips64" ;;
-        *mips*) suffix="mips" ;;
-        *ppc*) suffix="ppc" ;;
-        *riscv64*) suffix="riscv64" ;;
-        *)
-            print_warning "z2k-classify: unsupported arch '$arch' — пропускаем"
-            return 0  # non-fatal: install continues without classifier
-            ;;
-    esac
-
-    print_info "Архитектура: $arch → z2k-classify-$suffix"
-
-    # Rolling release tag is updated on every push to z2k-enhanced by
-    # .github/workflows/build-classify.yml. Single-asset download via
-    # raw releases URL — no API call, no auth, no rate limit.
-    local url="https://github.com/necronicle/z2k/releases/download/z2k-classify-rolling/z2k-classify-$suffix"
-    local dest="${ZAPRET2_DIR}/z2k-classify"
-
-    if z2k_fetch "$url" "$dest"; then
-        chmod +x "$dest"
-        if "$dest" --version >/dev/null 2>&1; then
-            local ver
-            ver=$("$dest" --version 2>&1 | head -1)
-            print_success "z2k-classify установлен: $ver"
-        else
-            print_warning "z2k-classify скачан, но --version не отрабатывает (несовместимость arch?)"
-        fi
-    else
-        print_warning "z2k-classify: не удалось скачать (rolling release ещё не создан?) — пропускаем"
-        # Non-fatal: classify is a support tool, not core DPI bypass.
-        return 0
-    fi
-
-    # Fetch canonical CDN CIDR lists. recipe.c reads these at runtime
-    # with the embedded table as fallback, so a stale embedded list
-    # (CF rotates ~quarterly) doesn't misclassify modern allocations.
-    # Failure is non-fatal — classifier still works on embedded data.
-    local lists_dir="${ZAPRET2_DIR}/lists"
-    mkdir -p "$lists_dir" 2>/dev/null
-    print_info "Загрузка актуальных CIDR-списков CDN..."
-
-    # Cloudflare AS13335 — canonical txt, one prefix per line.
-    if curl -fsSL --connect-timeout 10 --max-time 30 \
-            -o "${lists_dir}/cf-cidrs-v4.txt.new" \
-            "https://www.cloudflare.com/ips-v4" 2>/dev/null \
-        && [ -s "${lists_dir}/cf-cidrs-v4.txt.new" ]; then
-        mv -f "${lists_dir}/cf-cidrs-v4.txt.new" "${lists_dir}/cf-cidrs-v4.txt"
-        local cnt
-        cnt=$(grep -c '/' "${lists_dir}/cf-cidrs-v4.txt" 2>/dev/null || echo 0)
-        print_success "Cloudflare CIDR: $cnt prefixes"
-    else
-        rm -f "${lists_dir}/cf-cidrs-v4.txt.new" 2>/dev/null
-        print_warning "Cloudflare CIDR: fetch failed — embedded fallback used"
-    fi
-
-    # Google CIDR — gstatic txt, same format. Single source of truth
-    # for AS15169 + Google Cloud (34.x, 35.x ranges).
-    if curl -fsSL --connect-timeout 10 --max-time 30 \
-            -o "${lists_dir}/goog-cidrs-v4.txt.new" \
-            "https://www.gstatic.com/ipranges/goog.txt" 2>/dev/null \
-        && [ -s "${lists_dir}/goog-cidrs-v4.txt.new" ]; then
-        # gstatic mixes IPv4+IPv6; keep only v4.
-        grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/' \
-            "${lists_dir}/goog-cidrs-v4.txt.new" \
-            > "${lists_dir}/goog-cidrs-v4.txt" 2>/dev/null
-        rm -f "${lists_dir}/goog-cidrs-v4.txt.new"
-        local cnt
-        cnt=$(grep -c '/' "${lists_dir}/goog-cidrs-v4.txt" 2>/dev/null || echo 0)
-        print_success "Google CIDR: $cnt prefixes"
-    else
-        rm -f "${lists_dir}/goog-cidrs-v4.txt.new" 2>/dev/null
-        print_warning "Google CIDR: fetch failed — embedded fallback used"
-    fi
-
-    return 0
-}
+# step_install_z2k_classify removed in r-15 (Phase 1 cleanup of the
+# Ladon-inspired detection stack). z2k-classify was never wired into
+# the live circular pipeline — its purpose (DPI block-type guess) is
+# now covered by the server_active_reject taxonomy in z2k-detectors.lua
+# and (Phase 3) the z2k-detect daemon's path-active/server-active matrix.
+#
+# CDN CIDR list fetch (Cloudflare AS13335 + Google AS15169) moved into
+# step_install_extra_lists so the lists still refresh on install.
 
 step_finalize() {
     print_header "Шаг 12/12: Финализация установки"
@@ -2057,10 +1987,6 @@ step_finalize() {
     # Runs 2h earlier than get_config.sh so new domains land before
     # get_config.sh resolves them.
     local z2k_update_cron="0 4 * * * ${ZAPRET2_DIR}/z2k-update-lists.sh >/dev/null 2>&1"
-    # z2k-classify-drift.sh — runs 30 min after update-lists so any
-    # newly-fetched ipsets / hostlists are reflected in the rotator
-    # before we probe canary domains.
-    local z2k_drift_cron="30 4 * * * ${ZAPRET2_DIR}/z2k-classify-drift.sh >/dev/null 2>&1"
     # z2k-auto-update.sh — runs at 02:00 nightly. Internal jitter (0..90 min)
     # spreads the fleet over 02:00–03:30 so 184 routers don't hammer GitHub
     # in one second. Only z2k-enhanced acts; master users skip silently.
@@ -2072,25 +1998,26 @@ step_finalize() {
 
     # Метод 1: /opt/etc/crontab (Entware cron)
     if [ -f "$crontab_file" ] || [ -d "/opt/etc" ]; then
-        # Удалить старые записи zapret2 (get_config / update-lists / drift / auto-update)
+        # Удалить старые записи zapret2 (get_config / update-lists / drift / auto-update).
+        # z2k-classify-drift.sh оставлен в regex чтобы на upgrade'е снять старую cron-запись
+        # (drift сам удалён в r-15 Phase 1).
         if [ -f "$crontab_file" ]; then
             grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh" "$crontab_file" > "${crontab_file}.tmp" 2>/dev/null
             mv "${crontab_file}.tmp" "$crontab_file"
         fi
         echo "$cron_line" >> "$crontab_file"
         echo "$z2k_update_cron" >> "$crontab_file"
-        echo "$z2k_drift_cron" >> "$crontab_file"
         echo "$z2k_auto_update_cron" >> "$crontab_file"
-        print_success "Автообновление настроено в $crontab_file (get_config 06:00, update-lists 04:00, drift 04:30, auto-update 02:00+jitter)"
+        print_success "Автообновление настроено в $crontab_file (get_config 06:00, update-lists 04:00, auto-update 02:00+jitter)"
         cron_ok=1
     fi
 
     # Метод 2: crontab -l / crontab - (если Entware crontab не работает)
     if [ "$cron_ok" = "0" ] && command -v crontab >/dev/null 2>&1; then
-        (crontab -l 2>/dev/null | grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh"; echo "$cron_line"; echo "$z2k_update_cron"; echo "$z2k_drift_cron"; echo "$z2k_auto_update_cron") | crontab -
+        (crontab -l 2>/dev/null | grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh"; echo "$cron_line"; echo "$z2k_update_cron"; echo "$z2k_auto_update_cron") | crontab -
         if [ $? -eq 0 ]; then
             z2k_fix_cron_perms
-            print_success "Автообновление настроено через crontab (get_config 06:00, update-lists 04:00, drift 04:30, auto-update 02:00+jitter)"
+            print_success "Автообновление настроено через crontab (get_config 06:00, update-lists 04:00, auto-update 02:00+jitter)"
             cron_ok=1
         fi
     fi
@@ -2359,7 +2286,6 @@ run_full_install() {
     step_tcp_tuning || return 1                     # ← НОВОЕ (9.6/12)
     step_create_config_and_init || return 1        # 10/12
     step_install_netfilter_hook || return 1        # 11/12
-    step_install_z2k_classify || true              # 11.5/12 (non-fatal — support tool)
     step_finalize || return 1                      # 12/12
 
     # После установки - без вопросов применяем autocircular стратегии по умолчанию

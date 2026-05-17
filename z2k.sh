@@ -752,8 +752,9 @@ download_init_script() {
         die "Ошибка загрузки files/z2k-blocked-monitor.sh"
     fi
 
-    # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, tg watchdog)
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-probe.sh z2k-classify-drift.sh z2k-classify-inject.sh; do
+    # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, tg watchdog).
+    # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup).
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if z2k_fetch "$url" "$output"; then
@@ -868,17 +869,11 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-http-strats.lua"
     fi
 
-    # z2k-classify generator dynamic-strategy handler. Pre-installed
-    # --lua-desync=z2k_dynamic_strategy:strategy=200 in rkn_tcp / google_tls
-    # blocks references this global; nfqws2 fails to parse the
-    # strategy table if the file is missing.
-    url="${GITHUB_RAW}/files/lua/z2k-dynamic-strategy.lua"
-    output="${lua_dir}/z2k-dynamic-strategy.lua"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/lua/z2k-dynamic-strategy.lua"
-    else
-        die "Ошибка загрузки files/lua/z2k-dynamic-strategy.lua"
-    fi
+    # z2k-dynamic-strategy.lua removed in r-15 Phase 1 (slot in
+    # rkn_tcp removed alongside, see lib/config_official.sh).
+    # The handler depended on the dead z2k-classify producer; new
+    # discovery feedback in Phase 3 lives in discovered-domains.txt.
+
     # Snapshot domain lists used by local install flow (no external list repos)
     local list_file
     local lists_dir="${files_dir}/lists"
@@ -1053,35 +1048,12 @@ handle_arguments() {
                 print_error "Скрипт диагностики не найден"
             fi
             ;;
-        probe|p)
-            if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/z2k-probe.sh" ]; then
-                shift
-                sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-probe.sh" "$@"
-            else
-                print_error "Скрипт active probe не найден"
-            fi
-            ;;
-        classify|c)
-            # z2k classify <domain> [--apply|--dry-run|--json|--verbose]
-            # Wraps the C-based block-type classifier installed by
-            # step_install_z2k_classify. Logs invocation to /opt/var/log/
-            # for the Phase 4 nightly drift detector to consume.
-            if [ -x "${ZAPRET2_DIR:-/opt/zapret2}/z2k-classify" ]; then
-                shift
-                local _classify_log="/opt/var/log/z2k-classify.log"
-                mkdir -p "$(dirname "$_classify_log")" 2>/dev/null || true
-                printf '%s | invoke %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" \
-                    >> "$_classify_log" 2>/dev/null || true
-                "${ZAPRET2_DIR:-/opt/zapret2}/z2k-classify" "$@"
-                local _rc=$?
-                printf '%s | exit %d args=%s\n' "$(date -Iseconds 2>/dev/null || date)" "$_rc" "$*" \
-                    >> "$_classify_log" 2>/dev/null || true
-                exit $_rc
-            else
-                print_error "z2k-classify не найден (rolling release ещё не создан или install неполный)"
-                exit 1
-            fi
-            ;;
+        # probe / classify CLI handlers removed in r-15 (Phase 1 of the
+        # Ladon-inspired detection stack). Replaced by the server-active
+        # taxonomy in z2k-detectors.lua (immediate effect on rotation)
+        # and, when Phase 3 lands, by the z2k-detect daemon's reactive
+        # discovery + cross-vantage probe. See lib/menu.sh notice for
+        # rationale.
         help|h|-h|--help)
             show_help
             ;;
@@ -1114,10 +1086,6 @@ show_help() {
   healthcheck, hc  Проверить работоспособность DPI bypass
   validate         Валидация текущей конфигурации
   diag, d          Сводка для траблшутинга (скопируй вывод и пришли в чат)
-  probe, p <host>  Подбор стратегии под конкретный домен (полный rotator)
-  classify, c <host> [--apply]
-                   Определить тип DPI-блока для домена и (с --apply)
-                   найти+пинить рабочую стратегию из template'a (5-30 сек)
   version, v       Показать версию
   help, h          Показать эту справку
 
@@ -1129,8 +1097,6 @@ show_help() {
   sh -c 'tmp=/tmp/z2k.sh; rm -f "$tmp"; for url in "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh" "https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh" "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh"; do echo "[i] Пробую: $url" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then exec sh "$tmp"; fi; done; echo "[FAIL] Не удалось скачать z2k.sh ни с одного зеркала" >&2; exit 1'
   z2k menu
   z2k diag
-  z2k probe cloudflare.com
-  z2k classify linkedin.com --apply
   z2k check
 
 EOF

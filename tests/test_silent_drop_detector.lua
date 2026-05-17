@@ -185,9 +185,11 @@ do
     check("case4: chain still runs (http_partial_response)",   1,     chain_calls.http_partial)
 end
 
--- Case 5: crec.nocheck=true → early return, chain NOT called.
--- This is the canonical "this conntrack already classified as success"
--- short-circuit at the very top of the detector.
+-- Case 5: crec.nocheck=true → early return for silent-drop heuristic
+-- AND chain delegation. This is the canonical "this conntrack already
+-- classified as success" short-circuit — but the nocheck guard runs
+-- AFTER server-active classification (case 5b regression below), so
+-- protocol-level rejection signals are still observed.
 do
     reset_chain()
     local crec = { nocheck = true }
@@ -195,6 +197,70 @@ do
     local fired = z2k_silent_drop_detector(d, crec)
     check("case5: crec.nocheck short-circuits silent-drop", false, fired)
     check("case5: crec.nocheck skips chain too",            0,     chain_total())
+    check("case5: nocheck does NOT spuriously stamp server-active",
+        nil, crec.z2k_server_active_reject)
+end
+
+-- Case 5b (review-2026-05-17 RV5.1): real path ServerHello → nocheck
+-- latched → next packet is incoming post-SH TLS fatal alert. nocheck
+-- guard MUST NOT prevent z2k_classify_server_active from stamping
+-- crec.z2k_server_active_reject. Before the fix, the nocheck early-
+-- return in z2k_silent_drop_detector swallowed the alert before the
+-- classifier ran, leaving autocircular without the marker.
+do
+    reset_chain()
+    local crec = { nocheck = true }
+    -- TLS alert record: type=0x15, ver=0x0303, len=2, level=fatal(2),
+    -- desc=handshake_failure(40)=0x28.
+    local alert = "\x15\x03\x03\x00\x02\x02\x28"
+    local d = {
+        outgoing = false,
+        l7payload = "tls_alert",
+        track = {
+            hostname = "post-sh-alert.example.com",
+            pos = {
+                direct  = { pdcounter = 2, pbcounter = 200 },
+                reverse = { pdcounter = 3, pbcounter = 200 },  -- > 60 → after SH
+            },
+        },
+        dis = { payload = alert, tcp = { th_flags = 0 } },
+    }
+    local fired = z2k_silent_drop_detector(d, crec)
+    check("case5b: silent-drop returns false for server-active path",
+        false, fired)
+    check("case5b: crec.z2k_server_active_reject stamped despite nocheck",
+        true, crec.z2k_server_active_reject == true)
+    check("case5b: reason carries server_active: prefix",
+        true,
+        type(crec.z2k_reason) == "string" and
+        crec.z2k_reason:sub(1, 14) == "server_active:")
+end
+
+-- Case 5c: same regression on the HTTP-reply path — bare 451 reply
+-- arriving after nocheck latched must stamp server_active_reject.
+do
+    reset_chain()
+    local crec = { nocheck = true }
+    local d = {
+        outgoing = false,
+        l7payload = "http_reply",
+        track = {
+            hostname = "bare-451.example.com",
+            pos = {
+                direct  = { pdcounter = 1, pbcounter = 100 },
+                reverse = { pdcounter = 2, pbcounter = 100 },
+            },
+        },
+        dis = {
+            payload = "HTTP/1.1 451 Unavailable For Legal Reasons\r\n\r\n",
+            tcp = { th_flags = 0 },
+        },
+    }
+    local fired = z2k_silent_drop_detector(d, crec)
+    check("case5c: silent-drop returns false for bare-451 path",
+        false, fired)
+    check("case5c: crec.z2k_server_active_reject stamped despite nocheck",
+        true, crec.z2k_server_active_reject == true)
 end
 
 -- Case 6: boundary on bytes_in_handshake_done (default 3072).

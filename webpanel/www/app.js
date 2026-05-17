@@ -49,7 +49,6 @@
     state: renderState,
     diag: renderDiag,
     geosite: renderGeosite,
-    probe: renderProbe,
     credits: renderCredits,
   };
   function navigate() {
@@ -606,82 +605,10 @@
     setTimeout(loadGeositeStatus, 2000);
   }
 
-  // ---------- Active probe (Phase 10) ----------
-  async function renderProbe() {
-    $app.innerHTML = `
-      <h1 class="page-title">Active probe</h1>
-      <div class="card">
-        <h3>Подбор стратегии под конкретный домен</h3>
-        <p class="desc">
-          Перебирает все стратегии выбранного профиля, на каждой итерации
-          пинит стратегию на указанный хост в state.tsv и измеряет
-          throughput 100 KB загрузки. Ранжирует результаты и показывает топ-5.
-          Основной сервис не останавливается — probe использует ту же цепочку
-          autocircular. Длительность: ~2 минуты.
-        </p>
-        <p class="desc" style="color:var(--warn)">
-          Во время probe пользователи с других устройств, обращаясь к тому же
-          хосту, временно получат тестируемую стратегию вместо обычной ротации.
-        </p>
-        <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">
-          <label>Хост
-            <input id="probe-host" type="text" placeholder="cloudflare.com"
-              style="width:100%;padding:8px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px">
-          </label>
-          <label>Профиль
-            <select id="probe-profile"
-              style="width:100%;padding:8px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px">
-              <option value="rkn_tcp">rkn_tcp — общий RKN-список</option>
-              <option value="yt_tcp">yt_tcp — YouTube TLS</option>
-              <option value="gv_tcp">gv_tcp — googlevideo TLS</option>
-            </select>
-          </label>
-          <label style="display:flex;align-items:center;gap:8px">
-            <input id="probe-apply" type="checkbox">
-            Запинить победителя в state.tsv после завершения
-          </label>
-          <div class="btn-row">
-            <button class="btn btn-primary" id="probe-start">Запустить probe</button>
-          </div>
-        </div>
-      </div>
-    `;
-    document.getElementById("probe-start").addEventListener("click", probeStart);
-  }
-
-  async function probeStart() {
-    const btn = document.getElementById("probe-start");
-    // Hard gate against double-clicks: the probe takes ~2 minutes and
-    // a second concurrent run races on state.tsv pin writes, leaving
-    // autocircular in a mixed state. Disable immediately on first click.
-    if (btn.disabled) return;
-    const host = document.getElementById("probe-host").value.trim();
-    const profile = document.getElementById("probe-profile").value;
-    const apply = document.getElementById("probe-apply").checked ? "1" : "0";
-    if (!host) { toast("Укажи хост", "bad"); return; }
-    if (!/^[a-zA-Z0-9.-]+$/.test(host)) {
-      toast("Недопустимый хост: только буквы, цифры, точка, дефис", "bad");
-      return;
-    }
-    btn.disabled = true;
-    btn.textContent = "Probe запущен…";
-    let resp;
-    try {
-      resp = await apiPost("/probe/run", { host, profile, apply });
-    } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
-      btn.disabled = false;
-      btn.textContent = "Запустить probe";
-      return;
-    }
-    openJobModal("Probe: " + host + " (" + profile + ")", resp.job);
-    // Modal closes async — re-enable after a safety delay so the button
-    // doesn't stay stuck if the user dismisses the modal early.
-    setTimeout(() => {
-      btn.disabled = false;
-      btn.textContent = "Запустить probe";
-    }, 5000);
-  }
+  // renderProbe()/probeStart() removed in r-15 (Phase 1 cleanup of the
+  // Ladon-inspired detection stack). Backend route /probe/run now
+  // returns 410 Gone; nav-entry and SPA route are gone so a stale
+  // browser cache pointing at #/probe falls through to the dashboard.
 
   // ---------- Credits ----------
   function renderCredits() {

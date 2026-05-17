@@ -137,8 +137,6 @@ z2k menu
 | **[S]** | Скрипты custom.d |
 | **[P]** | Веб-панель |
 | **[D]** | Диагностика (сводка для траблшутинга) |
-| **[X]** | Active probe (подбор стратегии под домен) |
-| **[C]** | Classify — определить тип DPI-блока (5–30 с) |
 | **[I]** | Убрать статические IP Instagram (обход DNS-отравления) |
 
 ---
@@ -159,7 +157,6 @@ z2k <команда>
 | `status`, `s` | Показать статус системы |
 | `check`, `info` | Показать какие списки обрабатываются |
 | `diag`, `d` | Одностраничная сводка для траблшутинга |
-| `probe`, `p <host>` | Подбор стратегии под конкретный домен |
 | `update`, `u` | Обновить z2k до последней версии |
 | `rollback` | Откатить конфигурацию к snapshot |
 | `snapshot` | Создать snapshot конфигурации |
@@ -186,7 +183,7 @@ z2k <команда>
 
 ### Персистентность
 
-Найденные рабочие стратегии сохраняются в `state.tsv` и переживают перезапуск сервиса. Файл защищён от конкурентной записи через lock-механизм с atomic rename. Режим `z2k probe` во время перебора использует transient live-override в `/tmp`, а в `state.tsv` пишет только выбранного победителя при `--apply`.
+Найденные рабочие стратегии сохраняются в `state.tsv` и переживают перезапуск сервиса. Файл защищён от конкурентной записи через lock-механизм с atomic rename.
 
 ### Телеметрия (опционально)
 
@@ -359,9 +356,6 @@ z2k/
 │   ├── z2k-update-lists.sh     # Auto domain list updater
 │   ├── z2k-auto-update.sh      # Self-update cron entry
 │   ├── z2k-geosite.sh          # Geosite ru-blocked import
-│   ├── z2k-classify-drift.sh   # DPI-block type classifier (drift)
-│   ├── z2k-classify-inject.sh  # DPI-block type classifier (inject)
-│   ├── z2k-probe.sh            # Active probe per-host
 │   ├── z2k-diag.sh             # Single-page troubleshooting summary
 │   ├── z2k-blocked-monitor.sh  # Watch nfqws2 logs for blocked sessions
 │   ├── z2k-tg-watchdog.sh      # Telegram tunnel health watchdog
@@ -374,17 +368,9 @@ z2k/
 │   ├── main.go                 # Entry point
 │   ├── tunnel.go               # Tunnel client
 │   └── listener.go             # SO_ORIGINAL_DST (IPv4 + IPv6)
-├── tests/                      # Test framework (12 .sh + .lua fixtures)
-│   ├── run_all.sh
-│   ├── test_utils.sh, test_strategies.sh, test_config_official.sh, test_validator.sh
-│   ├── test_http_classifier.{sh,lua}, test_http_mid_stream_stall.{sh,lua}
-│   ├── test_mid_stream_stall.{sh,lua}, test_probe_override.{sh,lua}
-│   ├── test_init_rst_filter.sh, test_inject_z2k_range_rand.sh
-│   ├── test_install_completeness.sh
-│   └── test_rotate_rkn_tcp_ts_slots.sh
+├── tests/                      # Test framework (lua + shell fixtures, see tests/run_all.sh)
 └── .github/workflows/
     ├── ci.yml                  # shellcheck + go + luacheck + cross-arch build
-    ├── build-classify.yml      # Build classify-* helpers
     └── jsdelivr-purge.yml      # Сбросить jsdelivr CDN после релиза
 ```
 
@@ -394,7 +380,7 @@ z2k/
 
 - Если вы используете IPv6 в сети, убедитесь что он включён в прошивке (см. требования выше).
 - Автообновление списков доменов — через cron (`/opt/zapret2/z2k-update-lists.sh`).
-- Если конкретный сайт не открывается — подбери под него стратегию через `z2k probe <host>` (например `z2k probe cloudflare.com`).
+- Если конкретный сайт не открывается — добавь домен в `/opt/zapret2/lists/extra-domains.txt` (через webpanel «Доп. домены» или вручную); autocircular подберёт страту в течение нескольких TLS-handshake'ов.
 - `RST_FILTER` по умолчанию выключен для совместимости с Cloudflare; если у провайдера подтверждены fake-RST инжекты ТСПУ, добавь `RST_FILTER=1` в `/opt/zapret2/config` и перезапусти сервис.
 - Для траблшутинга пришли вывод `z2k diag` — это одностраничная сводка о состоянии всех компонентов.
 - Валидация конфигурации: `z2k validate`. Откат: `z2k rollback`.

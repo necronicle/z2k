@@ -483,13 +483,9 @@ LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 # ПОСЛЕ z2k-modern-core.lua и перед autocircular инстансами.
 LUA_Z2K_HTTP_STRATS="$ZAPRET_BASE/lua/z2k-http-strats.lua"
 [ -f "$LUA_Z2K_HTTP_STRATS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_HTTP_STRATS"
-# z2k-dynamic-strategy: runtime-parameterized desync handler used by
-# z2k-classify generator. Reads /tmp/z2k-classify-dynparams per-packet
-# (1-sec TTL cache) and dispatches to fake/multisplit/hostfakesplit/
-# multidisorder based on family= field. Lets the generator probe new
-# strategies without restarting nfqws2 between candidates.
-LUA_Z2K_DYNAMIC="$ZAPRET_BASE/lua/z2k-dynamic-strategy.lua"
-[ -f "$LUA_Z2K_DYNAMIC" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DYNAMIC"
+# z2k-dynamic-strategy.lua removed in r-15 Phase 1 — was a handler for
+# the z2k-classify generator which is itself gone. New per-domain
+# feedback lives in /opt/zapret2/lists/discovered-domains.txt (Phase 3).
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
 
 # Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+).

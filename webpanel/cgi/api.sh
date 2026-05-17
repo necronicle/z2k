@@ -391,21 +391,12 @@ case "$method $path" in
         exit 0
         ;;
 
-    # ---------- ACTIVE PROBE (Phase 10) ----------
+    # ---------- ACTIVE PROBE — removed in r-15 (Phase 1 cleanup) ----------
+    # /probe/run replaced by the server_active_reject taxonomy and Phase 3
+    # reactive z2k-detect daemon. Endpoint kept as 410 Gone so any cached
+    # browser UI doesn't 404 silently.
     "POST /probe/run")
-        body=$(read_body)
-        p_host=$(form_value "$body" "host")
-        p_profile=$(form_value "$body" "profile")
-        p_apply=$(form_value "$body" "apply")
-        [ -z "$p_host" ] && json_fail "400 Bad Request" "host required"
-        [ -z "$p_apply" ] && p_apply="0"
-        job_id=$(probe_run_async "$p_host" "$p_profile" "$p_apply") \
-            || json_fail "400 Bad Request" "probe rejected (invalid host/profile)"
-        json_header
-        printf '{"ok":true,"job":'
-        json_string "$job_id"
-        printf '}\n'
-        exit 0
+        json_fail "410 Gone" "active probe removed in r-15"
         ;;
 
     # ---------- DEBUG FLAG (Phase 3) ----------

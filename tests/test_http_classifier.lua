@@ -88,8 +88,13 @@ end
 
 print("=== bug 1: Link rel=\"blocked-by\" header must not be marker ===")
 
-check("451 + Link rel=blocked-by header, neutral body",
-    "neutral", "no_marker",
+-- Phase 1 (server_active_reject taxonomy): bare 451 без RKN body marker'а
+-- классифицируется как server_active_reject (RFC 7725 origin compliance),
+-- НЕ как neutral. Link rel="blocked-by" header сам по себе не маркер
+-- (header-scan защита от FP на legit региональных 451 сохраняется,
+-- проверяется body-only).
+check("451 + Link rel=blocked-by header, neutral body → server_active_reject",
+    "server_active_reject", "http_451",
     mock_desync(
         "HTTP/1.1 451 Unavailable For Legal Reasons\r\n" ..
         "Link: <https://eais.rkn.gov.ru/>; rel=\"blocked-by\"\r\n" ..

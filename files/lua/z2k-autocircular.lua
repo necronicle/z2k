@@ -1236,12 +1236,47 @@ local function conn_record_flags(desync)
   local tr = desync and desync.track
   local ls = tr and tr.lua_state
   local crec = ls and ls.automate
-  if not crec then return false, false, false, nil, nil end
+  if not crec then return false, false, false, false, nil, nil end
   return (crec.nocheck and true or false),
          (crec.failure and true or false),
          (crec.z2k_neutral_observed and true or false),
+         (crec.z2k_server_active_reject and true or false),
          crec.z2k_reason,
          crec.z2k_reason_detail
+end
+
+-- Per-host in-memory marker tracking server-side rejections (TCP refused,
+-- post-SH TLS alert, bare 451, WAF response headers). When a host fires
+-- z2k_server_active_reject we record now() here so a) silent_retry /
+-- rotation skip logic can consult it, and b) the new field surfaces in
+-- debug.log so Phase 3 discovery daemon can read it from logs without
+-- needing a separate persistence layer. Not persisted to state.tsv —
+-- rebuild on nfqws2 restart is cheap (one probe re-classifies).
+--
+-- Bounded by Z2K_DETECTOR_MAP_MAX-style policy (capped at 1024 entries
+-- with simple oldest-ts eviction).
+local server_side_marker_by_hostn = {}
+local server_side_marker_max = 1024
+local server_side_marker_ttl = 86400  -- 24h
+
+local function record_server_side_marker(hostn, reason)
+  if not hostn or hostn == "" then return end
+  server_side_marker_by_hostn[hostn] = {
+    ts = now_f(),
+    reason = reason or "",
+  }
+  -- Cheap O(n) eviction only when map exceeds cap.
+  local n = 0
+  for _ in pairs(server_side_marker_by_hostn) do n = n + 1 end
+  if n <= server_side_marker_max then return end
+  local oldest_k, oldest_ts
+  for k, v in pairs(server_side_marker_by_hostn) do
+    local t = v.ts or 0
+    if not oldest_ts or t < oldest_ts then
+      oldest_k, oldest_ts = k, t
+    end
+  end
+  if oldest_k then server_side_marker_by_hostn[oldest_k] = nil end
 end
 
 -- True only for incoming events that count as a real-success signal.
@@ -1400,7 +1435,7 @@ if type(circular) == "function" then
       end
       if not hrec then return end
 
-      local nocheck_after, failure_after, neutral_after, reason_after, reason_detail_after = conn_record_flags(desync)
+      local nocheck_after, failure_after, neutral_after, server_active_after, reason_after, reason_detail_after = conn_record_flags(desync)
       local n_after = hrec and tonumber(hrec.nstrategy) or nil
       flow_start_if_needed(desync, n_after)
 
@@ -1422,14 +1457,28 @@ if type(circular) == "function" then
       -- block markers). Such flows must NOT pin the strategy as
       -- successful — we only want positive confirmations to bake
       -- pins into state.tsv.
-      local successful_state = nocheck_after and (not failure_after) and (not neutral_after)
-      local response_state = has_positive_incoming_response(desync) and (not failure_after) and (not neutral_after)
+      --
+      -- Server-active rejection (TCP refused / TLS alert post-SH / bare
+      -- 451 / WAF response header) — peer actively refused, packet-level
+      -- bypass cannot help. Has priority over ALL success states because
+      -- nocheck может быть latched после ServerHello (raw success-signal
+      -- from earlier packet of the same flow), а потом приходит fatal
+      -- alert post-SH в текущем callback'е и стампит crec.z2k_server_active_reject.
+      -- Без приоритета successful_state=(nocheck_after and ...) пинит
+      -- страту через рукопожатие к серверу, который тут же отказал.
+      local server_active_event = server_active_after
+      if server_active_event and hostn then
+        record_server_side_marker(hostn, reason_after)
+      end
+      local successful_state = nocheck_after and (not failure_after) and (not neutral_after) and (not server_active_event)
+      local response_state = has_positive_incoming_response(desync) and (not failure_after) and (not neutral_after) and (not server_active_event)
       -- QUIC flows may not reliably trigger success detector, but nstrategy>1 already indicates
       -- that circular has rotated this host. Persist that candidate for QUIC keys.
       local quic_candidate_state =
         is_quic_key(askey) and
         (desync and desync.l7payload == "quic_initial") and
         (not failure_after) and
+        (not server_active_event) and
         n_after and n_after > 1
       -- Persist on every outgoing initial packet as a fallback. Some profiles
       -- still expose success only indirectly, and even the restored manual
@@ -1441,11 +1490,11 @@ if type(circular) == "function" then
          desync.l7payload == "quic_initial" or
          desync.l7payload == "http_req")
       local success_event = successful_state or response_state or quic_candidate_state
-      local failure_event = failure_after and (not success_event)
+      local failure_event = failure_after and (not success_event) and (not server_active_event)
       local persisted = false
       local probe_active = probe_override_before and probe_override_before.active and
         (not probe_override_before.commit)
-      if (success_event or outgoing_initial) and not probe_active then
+      if (success_event or outgoing_initial) and not probe_active and not server_active_event then
         persisted = persist_if_changed(askey, hostn, hrec)
       end
 
@@ -1471,7 +1520,7 @@ if type(circular) == "function" then
       local real_success_incoming =
         response_state or
         ((not (desync and desync.outgoing)) and successful_state)
-      if real_success_incoming and hostn and askey then
+      if real_success_incoming and hostn and askey and not server_active_event then
         local bucket = last_seen_success_by_hostn[hostn]
         if not bucket then
           bucket = {}
@@ -1481,7 +1530,7 @@ if type(circular) == "function" then
       end
 
       local latency_s, flow_strategy = nil, nil
-      if success_event or failure_event then
+      if (success_event or failure_event) and not server_active_event then
         latency_s, flow_strategy = flow_finish(desync)
         local strat_for_stat = n_after or flow_strategy
         if strat_for_stat then
@@ -1497,7 +1546,7 @@ if type(circular) == "function" then
       -- events surface in debug.log even when no fail/success/persist
       -- fires. Without this we lose visibility into the new "downgraded"
       -- class introduced by the 3-state classifier.
-      local debug_event = persisted or failure_after or success_event or failure_event or outgoing_initial or (policy_pick_before ~= nil) or neutral_after or (reason_after ~= nil)
+      local debug_event = persisted or failure_after or success_event or failure_event or outgoing_initial or (policy_pick_before ~= nil) or neutral_after or server_active_after or (reason_after ~= nil)
       if debug_event and (should_debug_key(askey_before) or should_debug_key(askey_after)) then
         local track = desync and desync.track
         local hn = track and track.hostname or ""
@@ -1523,6 +1572,7 @@ if type(circular) == "function" then
           " silent_rotate_to=" .. tostring(silent_rotate_to_before or "") ..
           " success_event=" .. tostring(success_event and 1 or 0) ..
           " failure_event=" .. tostring(failure_event and 1 or 0) ..
+          " server_active=" .. tostring(server_active_event and 1 or 0) ..
           " neutral=" .. tostring(neutral_after and 1 or 0) ..
           " reason=" .. tostring(reason_after or "") ..
           " reason_detail=" .. tostring(reason_detail_after or "") ..
@@ -1554,6 +1604,9 @@ if os.getenv("Z2K_TEST_MODE") == "1" then
   _G._z2k_autocircular_test = {
     maybe_rotate_youtube_silent_retry = maybe_rotate_youtube_silent_retry,
     last_seen_success_by_hostn = last_seen_success_by_hostn,
+    server_side_marker_by_hostn = server_side_marker_by_hostn,
+    record_server_side_marker = record_server_side_marker,
+    conn_record_flags = conn_record_flags,
     youtube_silent_retry = youtube_silent_retry,
     silent_retry_bypass_window_sec = silent_retry_bypass_window_sec,
     silent_retry_compat_map = silent_retry_compat_map,
@@ -1563,6 +1616,9 @@ if os.getenv("Z2K_TEST_MODE") == "1" then
     reset = function()
       for k in pairs(last_seen_success_by_hostn) do
         last_seen_success_by_hostn[k] = nil
+      end
+      for k in pairs(server_side_marker_by_hostn) do
+        server_side_marker_by_hostn[k] = nil
       end
       for k in pairs(youtube_silent_retry) do
         youtube_silent_retry[k] = nil
