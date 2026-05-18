@@ -65,6 +65,9 @@ globals = {
     -- z2k-detectors.lua exported HTTP classifier; called from
     -- z2k-autocircular.lua's has_positive_incoming_response()
     "z2k_classify_http_reply",
+    -- z2k-detectors.lua internal classifier; called from
+    -- z2k_silent_drop_detector and z2k_tls_alert_fatal in the same file
+    "z2k_classify_server_active",
     -- nfqws2 writable state/functions (set by fallback stubs or runtime)
     "DLOG",
     "DLOG_ERR",

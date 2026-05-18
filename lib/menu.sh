@@ -108,11 +108,12 @@ MENU
 [P] Веб-панель (дубль меню в браузере)
 [D] Диагностика (сводка для траблшутинга)
 [I] Убрать статические IP Instagram (обход DNS-отравления)
+[Y] Diagnose domain (4-стадийная проба + рекомендация)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I]: "
+        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y]: "
         read_input choice
 
         case "$choice" in
@@ -161,6 +162,9 @@ MENU
             i|I)
                 menu_instagram_dns_clear
                 ;;
+            y|Y)
+                menu_diagnose_domain
+                ;;
             0)
                 print_info "Выход из меню"
                 return 0
@@ -171,6 +175,100 @@ MENU
                 ;;
         esac
     done
+}
+
+menu_diagnose_domain() {
+    clear_screen
+    print_header "[Y] Diagnose domain / z2k-detect"
+
+    local z2k_detect="/opt/sbin/z2k-detect"
+    local cfg=/opt/zapret2/config
+    local pidfile=/var/run/z2k-detect.pid
+
+    if [ ! -x "$z2k_detect" ]; then
+        print_error "z2k-detect не установлен: $z2k_detect"
+        print_info "Переустановите z2k (опция [1])"
+        pause
+        return
+    fi
+
+    # Daemon status + Z2K_DISCOVER flag — operator's at-a-glance summary.
+    local flag="1"
+    if [ -f "$cfg" ]; then
+        local _v
+        _v=$(grep -E "^Z2K_DISCOVER=" "$cfg" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '" ')
+        [ -n "$_v" ] && flag="$_v"
+    fi
+    local running="нет"
+    if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null; then
+        running="да (PID $(cat "$pidfile"))"
+    fi
+    printf "Автодетекция:   %s\n" "$flag"
+    printf "Демон запущен:  %s\n" "$running"
+    print_separator
+    print_info "[D] Проверить домен"
+    print_info "[T] Переключить автодетекцию (текущее: $flag)"
+    print_info "[Enter] Выход"
+    printf "> "
+    local action
+    read_input action
+
+    case "$action" in
+        t|T)
+            local new_flag
+            if [ "$flag" = "1" ]; then new_flag="0"; else new_flag="1"; fi
+            touch "$cfg" 2>/dev/null
+            if grep -q "^Z2K_DISCOVER=" "$cfg" 2>/dev/null; then
+                sed -i "s/^Z2K_DISCOVER=.*/Z2K_DISCOVER=$new_flag/" "$cfg"
+            else
+                echo "Z2K_DISCOVER=$new_flag" >> "$cfg"
+            fi
+            print_success "Автодетекция: $new_flag"
+            if [ -x /opt/etc/init.d/S98z2k-detect ]; then
+                /opt/etc/init.d/S98z2k-detect restart >/dev/null 2>&1 || true
+            fi
+            pause
+            return
+            ;;
+        d|D|"")
+            ;;
+        *)
+            print_error "Неверный выбор"
+            pause
+            return
+            ;;
+    esac
+
+    if [ -z "$action" ]; then return; fi
+
+    print_info "Введите домен для проверки (например, vk.com):"
+    printf "> "
+    local domain
+    read_input domain
+    if [ -z "$domain" ]; then
+        print_info "Пусто, выход"
+        pause
+        return
+    fi
+
+    # Sanitise: only DNS-safe chars allowed; пресекаем shell-injection
+    # на случай если кто-то наберёт `; rm -rf /` в качестве домена.
+    case "$domain" in
+        *[!a-zA-Z0-9.-]*)
+            print_error "Недопустимые символы в домене"
+            pause
+            return
+            ;;
+    esac
+
+    print_separator
+    "$z2k_detect" probe "$domain"
+    print_separator
+    # No --apply prompt — CLI pinning would race with daemon's in-memory
+    # store (двойной writer на один TSV). Если по выводу видно HOT и юзер
+    # хочет добавить вручную — есть webpanel «Доп. домены» или прямое
+    # редактирование /opt/zapret2/lists/extra-domains.txt, путь без race'а.
+    pause
 }
 
 menu_diag() {
@@ -193,7 +291,7 @@ menu_diag() {
 }
 
 # menu_probe() / menu_classify() removed in r-15 (Phase 1 cleanup of the
-# Ladon-inspired detection stack). z2k-probe.sh + z2k-classify were
+# detection stack). z2k-probe.sh + z2k-classify were
 # never wired into the live circular pipeline — purely manual debug
 # tools that produced non-actionable verdicts. Replaced by the new
 # server_active_reject taxonomy in z2k-detectors.lua and (Phase 3) by

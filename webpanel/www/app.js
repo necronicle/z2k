@@ -606,7 +606,7 @@
   }
 
   // renderProbe()/probeStart() removed in r-15 (Phase 1 cleanup of the
-  // Ladon-inspired detection stack). Backend route /probe/run now
+  // detection stack). Backend route /probe/run now
   // returns 410 Gone; nav-entry and SPA route are gone so a stale
   // browser cache pointing at #/probe falls through to the dashboard.
 

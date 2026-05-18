@@ -426,7 +426,7 @@ geosite_run_async() {
     printf '%s' "$job_id"
 }
 
-# probe_run_async removed in r-15 (Phase 1 cleanup, Ladon-inspired
+# probe_run_async removed in r-15 (Phase 1 cleanup
 # detection stack). The active-probe path was never wired into the live
 # circular and produced non-actionable verdicts. webpanel /probe/run
 # endpoint now returns 410 Gone; Phase 3 will replace it with reactive

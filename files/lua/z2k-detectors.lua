@@ -241,24 +241,26 @@ function z2k_classify_http_reply(desync)
     local low = body ~= "" and body:lower() or ""
     local rkn_marker = low ~= "" and z2k_find_body_marker(low) or nil
 
-    -- 451 split: RKN body marker → hard_fail (наш RKN), иначе →
-    -- server_active_reject (RFC 7725 origin compliance, региональный
-    -- блок на стороне CDN/origin — DPI bypass не поможет, ротация
-    -- стратегии бесполезна).
+    -- 451 split: RKN body marker → hard_fail (наш RKN). Bare 451 (no
+    -- marker) was previously classified as server_active_reject, but
+    -- we treat this as Hot — origin geo-compliance MAY be
+    -- bypassable by changing egress fingerprint (different SNI / fake
+    -- TLS hello), so autocircular keeps rotating.
     if code == 451 then
       if rkn_marker then
         return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(rkn_marker)
       end
-      return "server_active_reject", "http_451_no_marker"
+      return "neutral", "http_451_no_marker"
     end
 
-    -- Server-side WAF response headers (Vercel/CF/Sucuri) — server
-    -- активно отказал, не path-active DPI. Check ДО body marker scan
-    -- чтобы WAF 403 не пытались bypass'ить.
+    -- WAF response headers (Vercel/CF/Sucuri) used to be classified as
+    -- server_active_reject. Same rationale as bare 451:
+    -- packet-level fingerprint masking can sometimes evade WAF
+    -- signature matching, so let autocircular rotate before giving up.
     if hdis and hdis.headers then
       local waf = z2k_find_waf_header(hdis.headers)
       if waf then
-        return "server_active_reject", "waf_header:" .. z2k_sanitize_reason(waf)
+        return "neutral", "waf_header:" .. z2k_sanitize_reason(waf)
       end
     end
 
@@ -386,28 +388,21 @@ function z2k_classify_server_active(desync, crec)
   local pos = desync.track and desync.track.pos
   if not pos then return false end
 
-  local out_count = (pos.direct  and pos.direct.pdcounter)  or 0
   local in_bytes  = (pos.reverse and pos.reverse.pbcounter) or 0
 
-  -- (1) TCP refused: RST before any outgoing data packet, peer never
-  -- replied with data. pdcounter == 0 = no ClientHello / HTTP req yet
-  -- (SYN doesn't carry data, isn't counted). Strict equality is the
-  -- whole point — pdcounter == 1 means a payload went out, and an
-  -- inbound RST at that point is the DPI early-reject signature that
-  -- autocircular must rotate around, not skip.
-  if dis.tcp then
-    local flags  = tonumber(dis.tcp.th_flags) or 0
-    local rst_bit = (TH_RST and bitand and bitand(flags, TH_RST)) or 0
-    if rst_bit ~= 0 and out_count == 0 and in_bytes == 0 then
-      if crec then
-        crec.z2k_server_active_reject = true
-        crec.z2k_reason = "server_active:tcp_refused"
-      end
-      return true
-    end
-  end
-
-  -- (2) TLS fatal alert after ServerHello arrived
+  -- Narrowed to keep server-reachable signals narrow: only typed TLS
+  -- alerts AFTER the peer sent ≥60 bytes (apparent ServerHello). The
+  -- post-SH gate is what makes this evidence trustworthy — DPI can't
+  -- fake a TLS alert without running TLS state machine on L6, so an
+  -- alert that arrives after the peer's first record really did come
+  -- from the origin's TLS stack. Pre-PR variants of this detector
+  -- also flagged TCP-refused / bare-HTTP-451 / WAF-response-headers as
+  -- server-active, but we treat all of those as Hot: packet-level
+  -- desync CAN change egress fingerprint enough to escape geo / WAF /
+  -- RST policies, so autocircular should keep rotating instead of
+  -- bailing out. Only the "peer's own TLS stack told us no" case
+  -- (typed alert, including mtls_required = desc 116) is genuinely
+  -- unbypass-able at our layer.
   local payload = dis.payload
   if type(payload) == "string" and #payload >= 7
      and payload:byte(1) == 0x15
@@ -416,7 +411,11 @@ function z2k_classify_server_active(desync, crec)
     local desc = payload:byte(7) or 0
     if crec then
       crec.z2k_server_active_reject = true
-      crec.z2k_reason = "server_active:tls_alert_post_sh:desc=" .. tostring(desc)
+      if desc == 116 then
+        crec.z2k_reason = "server_active:mtls_required"
+      else
+        crec.z2k_reason = "server_active:tls_alert_post_sh:desc=" .. tostring(desc)
+      end
     end
     return true
   end

@@ -1,0 +1,83 @@
+#!/bin/sh
+# S98z2k-detect — reactive DPI-detection daemon.
+#
+# Watches DNS queries (dnsmasq log tail), probes targets through the
+# 4-stage DNS/TCP/TLS/HTTP pipeline, classifies failures into 22 codes,
+# and writes hot ∪ cache domains to discovered-domains.txt — nfqws2
+# inotify picks it up and applies bypass on the next client request.
+#
+# Per [[reference_cron_path_entware]] every init.d under Entware must
+# export PATH explicitly — system PATH lacks /opt/bin where pidof/
+# awk/etc live. The probe loop relies on these.
+
+PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+
+ENABLED=0
+
+# Z2K_DISCOVER feature flag. Default OFF — автодетекция выключена пока
+# не обкатана. Юзер включает в меню [Y]. Absent value treated as off;
+# "1" runs the daemon, "0" stops it.
+Z2K_CONF=/opt/zapret2/config
+if [ -f "$Z2K_CONF" ]; then
+    _v="$(grep -E '^Z2K_DISCOVER=' "$Z2K_CONF" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '" ')"
+    [ "$_v" = "1" ] && ENABLED=1
+fi
+
+PROCS=z2k-detect
+# Stateless daemon. Auto-detects DNS observation source: AGH querylog
+# → dnsmasq.log → AF_PACKET sniff (UDP/53, universal fallback). Probes
+# domains the client just asked about, appends HOT verdicts to
+# /opt/zapret2/lists/discovered-domains.txt. Skip-lists (RKN / extra-
+# domains / whitelist) consulted directly from canonical paths;
+# reloaded every 5min internally.
+ARGS_RUN="run"
+PRECMD=
+POSTCMD=
+PREARGS=
+PIDFILE=/var/run/z2k-detect.pid
+
+start() {
+    [ "$ENABLED" = "0" ] && { echo "Автодетекция выключена (Z2K_DISCOVER=0 в /opt/zapret2/config)"; return 0; }
+    mkdir -p /opt/zapret2/lists
+    if pidof "$PROCS" >/dev/null 2>&1; then
+        echo "$PROCS already running"
+        return 0
+    fi
+    nohup /opt/sbin/$PROCS $ARGS_RUN >> /var/log/z2k-detect.log 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 1
+    if pidof "$PROCS" >/dev/null 2>&1; then
+        echo "$PROCS started"
+    else
+        echo "$PROCS failed to start — check /var/log/z2k-detect.log"
+        return 1
+    fi
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    # Belt-and-suspenders: kill any stray instance not in pidfile.
+    killall "$PROCS" 2>/dev/null
+    echo "$PROCS stopped"
+}
+
+status() {
+    if pidof "$PROCS" >/dev/null 2>&1; then
+        echo "$PROCS running (pid $(pidof $PROCS))"
+        return 0
+    fi
+    echo "$PROCS not running"
+    return 3
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)  status ;;
+    *)       echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

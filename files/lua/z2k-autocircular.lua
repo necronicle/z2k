@@ -1257,7 +1257,9 @@ end
 -- with simple oldest-ts eviction).
 local server_side_marker_by_hostn = {}
 local server_side_marker_max = 1024
-local server_side_marker_ttl = 86400  -- 24h
+-- Eviction is count-based (FIFO past server_side_marker_max), not TTL-
+-- based; a previous server_side_marker_ttl=86400 const was declared and
+-- never consumed, removed to silence luacheck W211.
 
 local function record_server_side_marker(hostn, reason)
   if not hostn or hostn == "" then return end

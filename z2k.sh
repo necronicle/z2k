@@ -1049,7 +1049,7 @@ handle_arguments() {
             fi
             ;;
         # probe / classify CLI handlers removed in r-15 (Phase 1 of the
-        # Ladon-inspired detection stack). Replaced by the server-active
+        # detection stack). Replaced by the server-active
         # taxonomy in z2k-detectors.lua (immediate effect on rotation)
         # and, when Phase 3 lands, by the z2k-detect daemon's reactive
         # discovery + cross-vantage probe. See lib/menu.sh notice for

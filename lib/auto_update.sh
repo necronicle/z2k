@@ -315,6 +315,11 @@ au_install_paths() {
         files/etc/*)
             echo "${zd}/etc/${repo_path#files/etc/}"
             ;;
+        files/init.d/S98z2k-detect)
+            # z2k-detect daemon init script — install.sh copies to
+            # /opt/etc/init.d (Entware standard), not into $ZAPRET2_DIR.
+            echo "/opt/etc/init.d/S98z2k-detect"
+            ;;
         files/init.d/*)
             echo "${zd}/init.d/${repo_path#files/init.d/}"
             ;;

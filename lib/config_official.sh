@@ -766,7 +766,7 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(strip_dead_range_args "$youtube_gv_tcp")
     quic_udp=$(strip_dead_range_args "$quic_udp")
 
-    # z2k_dynamic_strategy slot removed in r-15 Phase 1 (Ladon-inspired
+    # z2k_dynamic_strategy slot removed in r-15 Phase 1 (
     # detection stack cleanup). The slot existed only to be filled by
     # the z2k-classify generator, which produced the
     # /opt/zapret2/lists/z2k-classify-*.tsv DBs and
@@ -1204,6 +1204,13 @@ AUSTERUS_OPT
     # Shipped extras curated on top of runetfreedom RKN — domains users
     # reported missing (fast-torrent.ru etc). Refreshed on every install.
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${lists_dir}/extra-domains.txt"
+    # z2k-detect daemon-managed hostlist. Populated reactively from probe
+    # verdicts (hot ∪ cache → discovered-domains.txt). Wired unconditionally
+    # — install.sh touches the file early (step_build_zapret2) so the path
+    # is always valid by the time NFQWS2_OPT is generated. Dropping the
+    # `[ -e ]` guard makes the wiring static against static analysis and
+    # eliminates a "fresh install timing" foot-gun.
+    rkn_hostlists="$rkn_hostlists --hostlist=${lists_dir}/discovered-domains.txt"
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt $rkn_hostlists $rkn_tcp --new"
 
     # cdn_tls профиль удалён 2026-04-27. Был добавлен в Variant A refactor
@@ -1544,6 +1551,9 @@ AUSTERUS_OPT
     # Strategy 7: fake badsum + multisplit method+2
     local rkn_http_extras=""
     [ -s "${lists_dir}/extra-domains.txt" ] && rkn_http_extras=" --hostlist=${lists_dir}/extra-domains.txt"
+    # z2k-detect daemon-managed (same rationale as rkn_tcp above) — wired
+    # unconditionally, file is touched in install.sh:step_build_zapret2.
+    rkn_http_extras="$rkn_http_extras --hostlist=${lists_dir}/discovered-domains.txt"
     # http_rkn failure_detector — chain через z2k_silent_drop_detector
     # (default ON 2026-05-03). silent_drop проверяет packet-count: 4+
     # outgoing data + ≤1 incoming = ТСПУ silent drop, который

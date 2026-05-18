@@ -517,7 +517,15 @@ step_check_dns() {
 step_install_dependencies() {
     print_header "Шаг 3/12: Установка зависимостей"
 
-    # Список необходимых пакетов для Entware (только runtime)
+    # Список необходимых пакетов для Entware (только runtime).
+    # iptables / xtables-addons_legacy / kmod_ndms — без них NFQUEUE-таргет
+    # и расширенные matches (-m connbytes / -m connmark / -m multiport) тихо
+    # фейлят в нашей iptables-генерации, итог: nfqws2 крутится впустую,
+    # PREROUTING/POSTROUTING пусты, обход не работает. Уже два юзера за
+    # неделю наступили на грабли (@Wasley871 Viva 2026-05-1X + сегодняшний
+    # отчёт): встроенный Keenetic'овский iptables есть, но без xt_NFQUEUE
+    # target и xtables-addons не справляется с z2k cmdline. kmod_ndms
+    # нужен для NDM netfilter.d hook'ов.
     local packages="
 libmnl
 libnetfilter-queue
@@ -527,6 +535,9 @@ zlib
 curl
 unzip
 cron
+iptables
+xtables-addons_legacy
+kmod_ndms
 "
 
     print_info "Установка пакетов..."
@@ -1061,7 +1072,7 @@ step_build_zapret2() {
     fi
 
     # Install z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, auto-update)
-    # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup, Ladon-inspired
+    # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup
     # detection stack). Replaced by the server_active_reject taxonomy in z2k-detectors.lua.
     for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh; do
         if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
@@ -1096,6 +1107,14 @@ step_build_zapret2() {
     # Copy IP lists (Roblox, Telegram) + extra-domains.txt (shipped extras
     # from files/lists/ that z2k curates on top of runetfreedom RKN list).
     mkdir -p "${ZAPRET2_DIR}/lists"
+    # z2k-detect daemon-managed hostlist. We touch it here — BEFORE
+    # config_official.sh generates NFQWS2_OPT — so config_official's
+    # `[ -e ] && add --hostlist=` guard sees the file and wires it into
+    # nfqws2's command line. Otherwise on fresh install the daemon (which
+    # is installed later, ~line 2204) would publish to a file that nfqws2
+    # never reads, and Hot verdicts would silently fail to activate bypass.
+    [ -e "${ZAPRET2_DIR}/lists/discovered-domains.txt" ] || \
+        : > "${ZAPRET2_DIR}/lists/discovered-domains.txt"
     for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt cf_extra_check_ips.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
@@ -1929,7 +1948,7 @@ HOOK
 # ==============================================================================
 
 # step_install_z2k_classify removed in r-15 (Phase 1 cleanup of the
-# Ladon-inspired detection stack). z2k-classify was never wired into
+# detection stack). z2k-classify was never wired into
 # the live circular pipeline — its purpose (DPI block-type guess) is
 # now covered by the server_active_reject taxonomy in z2k-detectors.lua
 # and (Phase 3) the z2k-detect daemon's path-active/server-active matrix.
@@ -2199,6 +2218,79 @@ step_finalize() {
             killall tg-mtproxy-client 2>/dev/null || true
         fi
         print_info "Telegram tunnel не запущен — отключён пользователем"
+    fi
+
+    # z2k-detect — reactive DPI-discovery daemon.
+    # See z2k-detect/README. Replacement for the broken Active Probe /
+    # Classify pair that was deleted in r-15.
+    if true; then
+        print_info "Установка/обновление z2k-detect (anti-DPI engine)..."
+        local zd_arch=""
+        local zd_hw
+        zd_hw=$(get_arch 2>/dev/null || uname -m)
+        local zd_bin_arch
+        zd_bin_arch=$(map_arch_to_bin_arch "$zd_hw" 2>/dev/null || true)
+        case "$zd_bin_arch" in
+            linux-arm64)    zd_arch="arm64" ;;
+            linux-arm)      zd_arch="arm" ;;
+            linux-mipsel)   zd_arch="mipsle" ;;
+            linux-mips64el) zd_arch="mips64le" ;;
+            linux-mips64)   zd_arch="mips64le" ;;
+            linux-mips)     zd_arch="mips" ;;
+            linux-x86_64)   zd_arch="amd64" ;;
+            linux-x86)      zd_arch="386" ;;
+            linux-riscv64)  zd_arch="riscv64" ;;
+            linux-ppc)      zd_arch="ppc64" ;;
+        esac
+        if [ -n "$zd_arch" ]; then
+            local zd_bin="z2k-detect-linux-${zd_arch}"
+            local zd_dest="/opt/sbin/z2k-detect"
+            local zd_url="${GITHUB_RAW}/z2k-detect/builds/${zd_bin}"
+            rm -f "$zd_dest"
+            z2k_fetch "$zd_url" "$zd_dest" 2>/dev/null || true
+            local zd_size
+            zd_size=$(wc -c < "$zd_dest" 2>/dev/null || echo 0)
+            local zd_valid=false
+            if [ -f "$zd_dest" ] && [ "$zd_size" -gt 500000 ] 2>/dev/null; then
+                if head -c 4 "$zd_dest" 2>/dev/null | grep -q "ELF"; then
+                    chmod +x "$zd_dest"
+                    zd_valid=true
+                fi
+            fi
+            if $zd_valid; then
+                print_success "z2k-detect установлен ($zd_arch)"
+                # Демон stateless — никаких отдельных state-файлов на диске.
+                # init.d: per [[reference_cron_path_entware]] PATH must
+                # be exported inside the script — already done. Install
+                # the canonical S98z2k-detect alongside S98tg-tunnel.
+                if [ -f "${WORK_DIR}/files/init.d/S98z2k-detect" ]; then
+                    cp -f "${WORK_DIR}/files/init.d/S98z2k-detect" \
+                          /opt/etc/init.d/S98z2k-detect
+                    chmod +x /opt/etc/init.d/S98z2k-detect
+                fi
+                # Feature flag: Z2K_DISCOVER default OFF — автодетекция
+                # выключена пока не обкатана. Юзер включает руками в
+                # меню [Y] когда хочет попробовать. Config file —
+                # /opt/zapret2/config (плоский файл, не директория).
+                if ! grep -q "^Z2K_DISCOVER=" /opt/zapret2/config 2>/dev/null; then
+                    echo "Z2K_DISCOVER=0" >> /opt/zapret2/config
+                fi
+                # Stateless daemon: no init-db, no deny-list generation.
+                # Skip-list paths are baked into the binary's defaults
+                # (engine.Defaults() reads RKN/extra/whitelist on
+                # startup + every 5min). Restart picks up new binary.
+                /opt/etc/init.d/S98z2k-detect restart >/dev/null 2>&1 || true
+            else
+                rm -f "$zd_dest"
+                if [ "$zd_size" -le 500000 ] 2>/dev/null; then
+                    print_warning "z2k-detect: файл слишком маленький (${zd_size} байт)"
+                else
+                    print_warning "z2k-detect: бинарник не подходит для $zd_arch"
+                fi
+            fi
+        else
+            print_warning "Неизвестная архитектура $zd_hw, пропускаем z2k-detect"
+        fi
     fi
 
     # Показать итоговую информацию

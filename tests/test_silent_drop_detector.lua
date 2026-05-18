@@ -236,8 +236,11 @@ do
         crec.z2k_reason:sub(1, 14) == "server_active:")
 end
 
--- Case 5c: same regression on the HTTP-reply path — bare 451 reply
--- arriving after nocheck latched must stamp server_active_reject.
+-- Case 5c: bare 451 was previously stamped as server_active_reject;
+-- post-narrowing (current semantics) bare 451 → neutral, autocircular keeps
+-- rotating since fingerprint-mask strategies can still bypass origin
+-- geo-policy. nocheck-latched flow must NOT spuriously stamp the
+-- marker for bare 451.
 do
     reset_chain()
     local crec = { nocheck = true }
@@ -259,8 +262,8 @@ do
     local fired = z2k_silent_drop_detector(d, crec)
     check("case5c: silent-drop returns false for bare-451 path",
         false, fired)
-    check("case5c: crec.z2k_server_active_reject stamped despite nocheck",
-        true, crec.z2k_server_active_reject == true)
+    check("case5c: crec.z2k_server_active_reject NOT stamped on bare 451 (current semantics)",
+        true, crec.z2k_server_active_reject ~= true)
 end
 
 -- Case 6: boundary on bytes_in_handshake_done (default 3072).
