@@ -393,10 +393,18 @@ state_delete() {
     case "$key"  in *[!a-zA-Z0-9_]*) echo "bad key" >&2; return 1 ;; esac
     case "$host" in *[!a-zA-Z0-9.-]*) echo "bad host" >&2; return 1 ;; esac
     [ -f "$STATE_FILE" ] || return 0
-    # In-place rewrite preserving inode.
+    # In-place rewrite preserving inode. Use awk field-equality, NOT
+    # a regex grep -v — host literals contain "." which is the ERE
+    # wildcard, so a regex match for foo.example.com would also drop
+    # foo-example-com and friends from a neighbouring rotator key.
+    # Even though the sanitiser above rejects non-DNS chars, the
+    # wildcard semantics inside the regex itself still over-match
+    # legitimately-named hosts that differ only by punctuation.
     local tmp="$STATE_FILE.z2k-new"
-    grep -vE "^${key}[[:space:]]+${host}[[:space:]]" "$STATE_FILE" > "$tmp" \
-        || { rm -f "$tmp"; return 1; }
+    awk -F'\t' -v key="$key" -v host="$host" '
+        ($1 == key && $2 == host) { next }
+        { print }
+    ' "$STATE_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
     cat "$tmp" > "$STATE_FILE"
     rm -f "$tmp"
     chmod 644 "$STATE_FILE" 2>/dev/null || true
