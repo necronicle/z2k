@@ -173,6 +173,7 @@ func probeTCPTLS(ctx context.Context, r Result, started time.Time, timeout time.
 		conn.Close()
 		liftTLS13Verdict(&r)
 	}
+	runH2MultiplexProbe(&r, []string{reachable}, r.Domain, timeout)
 	r.LatencyMS = int(time.Since(started) / time.Millisecond)
 	return r
 }

@@ -266,9 +266,7 @@ func resolveDomain(ctx context.Context, domain string) ([]net.IPAddr, []resolver
 			resolver := &net.Resolver{
 				PreferGo: true,
 				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-					d := markedDialer(0)
-					d.Timeout = dnsTimeout
-					return d.DialContext(ctx, "udp", srv)
+					return (&net.Dialer{Timeout: dnsTimeout}).DialContext(ctx, "udp", srv)
 				},
 			}
 			subCtx, cancel := context.WithTimeout(ctx, dnsTimeout)
