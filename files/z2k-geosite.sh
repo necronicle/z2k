@@ -299,6 +299,52 @@ apply_new_list() {
     return 0
 }
 
+# --- Subtract googlevideo entries from YT list -----------------------------
+#
+# runetfreedom's youtube.txt includes `googlevideo.com` apex and various
+# `*.googlevideo.com` subdomains. We route googlevideo through its own
+# `extra_strats/TCP/YT_GV/List.txt` profile (gv_tcp) with strategies tuned
+# for bulk-video CDN traffic, NOT through yt_tcp (which is tuned for
+# youtube.com itself). nfqws2 is first-match-wins, so any googlevideo
+# entry left in YT/List sends GV traffic to yt_tcp before gv_tcp gets a
+# chance — exactly the «много ротаций на GV» bug fixed in r-17.
+# Run unconditionally after fetch (even on 304/cached) so the on-disk
+# list stays clean if upstream adds googlevideo entries later.
+subtract_googlevideo_from_yt() {
+    local yt_target="$EXTRA/TCP/YT/List.txt"
+    [ -s "$yt_target" ] || return 0
+
+    local before after removed filtered
+    before=$(wc -l < "$yt_target" 2>/dev/null || echo 0)
+    filtered="$TMP_DIR/yt.filtered"
+
+    awk '{
+        d = $0
+        sub(/\r$/, "", d)
+        if (d == "googlevideo.com") next
+        if (d ~ /\.googlevideo\.com$/) next
+        print d
+    }' "$yt_target" > "$filtered" || {
+        log "YT subtract: awk failed, keeping original list"
+        rm -f "$filtered"
+        return 1
+    }
+
+    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    removed=$((before - after))
+    if [ "$removed" -gt 0 ]; then
+        mv "$filtered" "$yt_target" || {
+            log "YT subtract: rename failed"
+            return 1
+        }
+        log "YT: removed $removed googlevideo overlap(s) ($before → $after lines) — gv_tcp profile gets these via YT_GV/List.txt"
+    else
+        rm -f "$filtered"
+        log "YT: no googlevideo overlaps in upstream youtube.txt"
+    fi
+    return 0
+}
+
 # --- Subtract YT + googlevideo from RKN list -------------------------------
 #
 # runetfreedom's ru-blocked / ru-blocked-all lists include YouTube and
@@ -398,6 +444,11 @@ fetch_all() {
     fetch_asset "discord.txt"  "$EXTRA/TCP_Discord.txt"  && ok_count=$((ok_count+1)) || fail_count=$((fail_count+1))
 
     log "fetch summary: $ok_count ok, $fail_count failed"
+
+    # Strip googlevideo entries from YT list FIRST (so RKN subtract below
+    # uses the cleaned YT list, not the upstream version that carries
+    # googlevideo entries).
+    subtract_googlevideo_from_yt || log "YT subtract: non-fatal failure, continuing"
 
     # Strip YT + googlevideo overlaps from RKN list (enhanced branch only).
     # Runs unconditionally — even on all-304 runs an older on-disk RKN list
