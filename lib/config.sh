@@ -13,11 +13,12 @@ download_domain_lists() {
 
     # Создать структуру директорий
     local yt_tcp_dir="${ZAPRET2_DIR}/extra_strats/TCP/YT"
+    local yt_gv_tcp_dir="${ZAPRET2_DIR}/extra_strats/TCP/YT_GV"
     local rkn_tcp_dir="${ZAPRET2_DIR}/extra_strats/TCP/RKN"
     local yt_udp_dir="${ZAPRET2_DIR}/extra_strats/UDP/YT"
     local snapshot_dir="${ZAPRET2_DIR}/files/lists"
 
-    mkdir -p "$yt_tcp_dir" "$rkn_tcp_dir" "$yt_udp_dir" "$LISTS_DIR" || {
+    mkdir -p "$yt_tcp_dir" "$yt_gv_tcp_dir" "$rkn_tcp_dir" "$yt_udp_dir" "$LISTS_DIR" || {
         print_error "Не удалось создать директории"
         return 1
     }
@@ -33,8 +34,19 @@ download_domain_lists() {
         print_error "Отсутствует snapshot: ${snapshot_dir}/extra_strats/TCP/YT/List.txt"
     fi
 
-    # 2. YouTube GV - использует --hostlist-domains=googlevideo.com (список не нужен)
-    print_info "YouTube GV: используется --hostlist-domains=googlevideo.com"
+    # 2. YouTube GV - dedicated hostlist (apex googlevideo.com покрывает все
+    # поддомены: rr1-rr9, manifest, *.googlevideo.com). Раньше был жёстко
+    # прибит inline через --hostlist-domains в config_official.sh — теперь
+    # выделен в файл для расширяемости и чистого разделения с yt_tcp.
+    print_info "Загрузка YouTube GV list (local snapshot)..."
+    if [ -s "${snapshot_dir}/extra_strats/TCP/YT_GV/List.txt" ]; then
+        cp -f "${snapshot_dir}/extra_strats/TCP/YT_GV/List.txt" "${yt_gv_tcp_dir}/List.txt"
+        local count
+        count=$(wc -l < "${yt_gv_tcp_dir}/List.txt" 2>/dev/null || echo "0")
+        print_success "YouTube GV: $count доменов"
+    else
+        print_error "Отсутствует snapshot: ${snapshot_dir}/extra_strats/TCP/YT_GV/List.txt"
+    fi
 
     # 3. RKN - скопировать из локального snapshot
     print_info "Загрузка RKN list (local snapshot)..."

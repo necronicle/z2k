@@ -7,7 +7,6 @@ ytimg.com
 gvt1.com
 ytimg.l.google.com
 jnn-pa.googleapis.com
-manifest.googlevideo.com
 googleadservices.com
 youtube-nocookie.com
 youtube-ui.l.google.com

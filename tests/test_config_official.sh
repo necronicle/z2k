@@ -66,6 +66,7 @@ mkdir -p "$MOCK_EXTRA_STRATS/TCP/YT" \
 
 # Create mock hostlist files (non-empty so profiles are included)
 echo "youtube.com" > "$MOCK_EXTRA_STRATS/TCP/YT/List.txt"
+echo "googlevideo.com" > "$MOCK_EXTRA_STRATS/TCP/YT_GV/List.txt"
 echo "youtube.com" > "$MOCK_EXTRA_STRATS/UDP/YT/List.txt"
 echo "rutracker.org" > "$MOCK_EXTRA_STRATS/TCP/RKN/List.txt"
 echo "whitelisted.example.com" > "$MOCK_LISTS/whitelist.txt"
@@ -388,7 +389,7 @@ printf "\n--- Config output structure ---\n"
 # This simulates what generate_nfqws2_opt_from_strategies produces in normal mode
 SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=fake:strategy=1 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist-domains=googlevideo.com --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT_GV/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
 --filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:allow_nohost=1"
 
@@ -427,7 +428,10 @@ assert_contains "structure: has --filter-tcp" "--filter-tcp" "$SAMPLE_OPT"
 assert_contains "structure: has --filter-udp" "--filter-udp" "$SAMPLE_OPT"
 assert_contains "structure: has --hostlist" "--hostlist=" "$SAMPLE_OPT"
 assert_contains "structure: has --hostlist-exclude" "--hostlist-exclude=" "$SAMPLE_OPT"
-assert_contains "structure: has --hostlist-domains" "--hostlist-domains=" "$SAMPLE_OPT"
+# r-17: gv_tcp moved off --hostlist-domains=googlevideo.com onto its own
+# YT_GV/List.txt file → no --hostlist-domains= anywhere in the output now.
+assert_not_contains "structure: gv_tcp uses YT_GV/List.txt, not inline --hostlist-domains" "--hostlist-domains=" "$SAMPLE_OPT"
+assert_contains "structure: has YT_GV hostlist file" "TCP/YT_GV/List.txt" "$SAMPLE_OPT"
 assert_contains "structure: has --new separators" "--new" "$SAMPLE_OPT"
 assert_contains "structure: has --lua-desync" "--lua-desync=" "$SAMPLE_OPT"
 
@@ -514,6 +518,7 @@ run_generator() {
     # skipped via add_hostlist_line if missing, but creating them avoids
     # noise on stderr that could mask real test signal).
     echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
     echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
     echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
     echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
@@ -641,6 +646,7 @@ test_pkt_in_under_flag() {
              "$root/extra_strats/UDP/YT" \
              "$root/lists"
     echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
     echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
     echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
     echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
@@ -684,6 +690,7 @@ test_padencap_under_flag() {
              "$root/extra_strats/UDP/YT" \
              "$root/lists"
     echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
     echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
     echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
     echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
@@ -745,6 +752,7 @@ test_http_detector_under_flag() {
     mkdir -p "$root/extra_strats/TCP/YT" "$root/extra_strats/TCP/RKN" \
              "$root/extra_strats/UDP/YT" "$root/lists"
     echo "youtube.com" > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
     echo "youtube.com" > "$root/extra_strats/UDP/YT/List.txt"
     echo "rutracker.org" > "$root/extra_strats/TCP/RKN/List.txt"
     echo "whitelisted.example.com" > "$root/lists/whitelist.txt"

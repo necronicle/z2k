@@ -881,6 +881,7 @@ download_init_script() {
 
     local list_files="
 extra_strats/TCP/YT/List.txt
+extra_strats/TCP/YT_GV/List.txt
 extra_strats/TCP/RKN/List.txt
 extra_strats/TCP/RKN/Discord.txt
 extra_strats/UDP/YT/List.txt

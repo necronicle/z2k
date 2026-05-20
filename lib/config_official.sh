@@ -1277,12 +1277,14 @@ AUSTERUS_OPT
         local merged_google_tls
         merged_google_tls=$(printf '%s' "$youtube_tcp" | sed 's/key=yt_tcp/key=google_tls/')
         merged_google_tls="$merged_google_tls $gv_strategies_only"
-        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist-domains=googlevideo.com $merged_google_tls --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
     else
         # YouTube TCP
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
-        # YouTube GV (список доменов статичен)
-        nfqws2_opt_lines="$nfqws2_opt_lines--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist-domains=googlevideo.com $youtube_gv_tcp --new\\n"
+        # YouTube GV — dedicated hostlist (extra_strats/TCP/YT_GV/List.txt,
+        # содержит apex googlevideo.com → match всех поддоменов: rr1-rr9,
+        # manifest, и т.д.). Расширяется добавлением строк в файл.
+        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
     fi
 
     # QUIC YT

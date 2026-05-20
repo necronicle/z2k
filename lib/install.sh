@@ -1057,27 +1057,51 @@ step_build_zapret2() {
     # server_active_reject taxonomy that replaces them.
     # z2k-dynamic-strategy.lua + dynamic-slots.conf + classify-* TSVs —
     # producer was the classify CLI; slot in config_official.sh removed.
-    # r-17 one-shot: apex `googlevideo.com` в extra_strats/TCP/YT/List.txt
-    # перехватывает ВЕСЬ *.googlevideo.com трафик в yt_tcp профиль ДО того,
-    # как второй nfqws2 блок с `--hostlist-domains=googlevideo.com key=gv_tcp`
-    # его увидит. В итоге gv_tcp фактически мёртв, а rotator yt_tcp крутит
-    # свои стратегии (заточенные под youtube.com) на чужом домене —
-    # отсюда «много ротаций на GV». Shipped YT/List.txt уже не содержит
-    # apex (только manifest.googlevideo.com), но у юзеров мог сохраниться
-    # из старых установок или ручных правок. Чистим один раз с маркером.
+    # r-17 one-shot: чистим раскиданные googlevideo entries из YT/List и
+    # выделяем GV в свой dedicated hostlist `extra_strats/TCP/YT_GV/List.txt`.
+    #
+    # Раньше apex `googlevideo.com` лежал в YT/List.txt и перехватывал ВЕСЬ
+    # *.googlevideo.com трафик в yt_tcp профиль ДО того, как второй nfqws2
+    # блок (inline `--hostlist-domains=googlevideo.com key=gv_tcp`) его
+    # увидит. gv_tcp фактически мёртв, rotator yt_tcp крутит свои стратегии
+    # (заточенные под youtube.com) на чужом домене — отсюда «много ротаций
+    # на GV». В r-17 переходим на схему «каждый профиль — свой hostlist
+    # файл»: убираем apex и manifest.googlevideo.com из YT/List, создаём
+    # YT_GV/List.txt с apex (suffix-match покрывает все поддомены).
     if [ ! -f "$ZAPRET2_DIR/.gv_apex_hostlist_fix.done" ]; then
         local yt_list="$ZAPRET2_DIR/extra_strats/TCP/YT/List.txt"
-        if [ -f "$yt_list" ] && grep -qE '^googlevideo\.com$' "$yt_list" 2>/dev/null; then
-            sed -i '/^googlevideo\.com$/d' "$yt_list" 2>/dev/null
-            # Сбросить stale yt_tcp записи для googlevideo.com из rotator state —
-            # in-memory state переживёт edit, но nfqws2 рестартанётся ниже в
-            # install потоке, тогда state.tsv перечитается с нуля.
-            local _state="$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
-            if [ -f "$_state" ]; then
-                awk -F'\t' '!($1=="yt_tcp" && $2 ~ /googlevideo\.com$/)' "$_state" > "$_state.gvfix" 2>/dev/null \
-                    && cat "$_state.gvfix" > "$_state" && rm -f "$_state.gvfix"
-            fi
-            print_info "r-17 cleanup: removed apex googlevideo.com from YT/List.txt (gv_tcp профиль теперь получает GV-трафик)"
+        local yt_gv_list="$ZAPRET2_DIR/extra_strats/TCP/YT_GV/List.txt"
+        local touched=""
+
+        # 1. Убрать любые googlevideo entries из YT/List (apex и manifest).
+        if [ -f "$yt_list" ] && grep -qE '^(googlevideo\.com|manifest\.googlevideo\.com)$' "$yt_list" 2>/dev/null; then
+            sed -i -E '/^(googlevideo\.com|manifest\.googlevideo\.com)$/d' "$yt_list" 2>/dev/null
+            touched="yt-list"
+        fi
+
+        # 2. Гарантировать что YT_GV/List.txt существует с apex googlevideo.com.
+        # install.sh ниже скопирует shipped версию из files/lists/, но миграция
+        # запускается рано — обеспечиваем минимальный валидный list прямо
+        # сейчас, чтобы NFQWS2_OPT generation не пропустил gv_tcp профиль
+        # из-за empty hostlist file.
+        if [ ! -s "$yt_gv_list" ]; then
+            mkdir -p "$(dirname "$yt_gv_list")" 2>/dev/null
+            echo 'googlevideo.com' > "$yt_gv_list" 2>/dev/null
+            touched="${touched:+$touched, }yt-gv-list"
+        fi
+
+        # 3. Сбросить stale yt_tcp записи для googlevideo.com (apex + manifest +
+        # любые поддомены). nfqws2 рестартанётся ниже в install потоке —
+        # in-memory state перечитается из state.tsv с нуля для этих хостов.
+        local _state="$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
+        if [ -f "$_state" ] && grep -qE '^yt_tcp\s+([a-zA-Z0-9_-]+\.)*googlevideo\.com\s' "$_state" 2>/dev/null; then
+            awk -F'\t' '!($1=="yt_tcp" && $2 ~ /googlevideo\.com$/)' "$_state" > "$_state.gvfix" 2>/dev/null \
+                && cat "$_state.gvfix" > "$_state" && rm -f "$_state.gvfix"
+            touched="${touched:+$touched, }state"
+        fi
+
+        if [ -n "$touched" ]; then
+            print_info "r-17 cleanup ($touched): YT/List очищен от googlevideo, gv_tcp получает свой dedicated hostlist"
         fi
         touch "$ZAPRET2_DIR/.gv_apex_hostlist_fix.done" 2>/dev/null || true
     fi
