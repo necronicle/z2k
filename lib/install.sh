@@ -1057,7 +1057,7 @@ step_build_zapret2() {
     # server_active_reject taxonomy that replaces them.
     # z2k-dynamic-strategy.lua + dynamic-slots.conf + classify-* TSVs —
     # producer was the classify CLI; slot in config_official.sh removed.
-    # r-16 one-shot: apex `googlevideo.com` в extra_strats/TCP/YT/List.txt
+    # r-17 one-shot: apex `googlevideo.com` в extra_strats/TCP/YT/List.txt
     # перехватывает ВЕСЬ *.googlevideo.com трафик в yt_tcp профиль ДО того,
     # как второй nfqws2 блок с `--hostlist-domains=googlevideo.com key=gv_tcp`
     # его увидит. В итоге gv_tcp фактически мёртв, а rotator yt_tcp крутит
@@ -1077,7 +1077,7 @@ step_build_zapret2() {
                 awk -F'\t' '!($1=="yt_tcp" && $2 ~ /googlevideo\.com$/)' "$_state" > "$_state.gvfix" 2>/dev/null \
                     && cat "$_state.gvfix" > "$_state" && rm -f "$_state.gvfix"
             fi
-            print_info "r-16 cleanup: removed apex googlevideo.com from YT/List.txt (gv_tcp профиль теперь получает GV-трафик)"
+            print_info "r-17 cleanup: removed apex googlevideo.com from YT/List.txt (gv_tcp профиль теперь получает GV-трафик)"
         fi
         touch "$ZAPRET2_DIR/.gv_apex_hostlist_fix.done" 2>/dev/null || true
     fi
