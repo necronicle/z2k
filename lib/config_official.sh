@@ -432,9 +432,19 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    rkn_tcp=$(inject_z2k_dynamic_ttl "$rkn_tcp")
-    youtube_tcp=$(inject_z2k_dynamic_ttl "$youtube_tcp")
-    youtube_gv_tcp=$(inject_z2k_dynamic_ttl "$youtube_gv_tcp")
+    # Z2K_DYNAMIC_TTL=0 opt-out: на сетапах с принудительным NDM-TTL-fix
+    # (`ip ttl-fix` на Keenetic, чаще всего на мобильных операторах с
+    # запретом раздачи — телефонная симка + IMEI-маскировка) NDM
+    # перебивает TTL всех исходящих на фиксированное значение независимо
+    # от того что наш hook поставил. В этой топологии inject избыточен,
+    # а в редких случаях мешает downstream примитивам — даём опт-аут.
+    local Z2K_DYNAMIC_TTL
+    Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    if [ "$Z2K_DYNAMIC_TTL" != "0" ]; then
+        rkn_tcp=$(inject_z2k_dynamic_ttl "$rkn_tcp")
+        youtube_tcp=$(inject_z2k_dynamic_ttl "$youtube_tcp")
+        youtube_gv_tcp=$(inject_z2k_dynamic_ttl "$youtube_gv_tcp")
+    fi
 
     # Phase 8: auto-inject z2k JA3 fingerprint breakers (grease, alpn,
     # psk, keyshare) into every --lua-desync=fake:... token that already
@@ -1714,6 +1724,7 @@ create_official_config() {
     local saved_Z2K_USE_MID_STREAM_DETECTOR="1"
     local saved_Z2K_PADENCAP="1"
     local saved_Z2K_INJECT_TLS_MODS="0"
+    local saved_Z2K_DYNAMIC_TTL="1"
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
     if [ -f "$config_file" ]; then
@@ -1732,6 +1743,7 @@ create_official_config() {
         saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "1")
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
         saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
+        saved_Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$config_file" "1")
         # Keenetic policy integration (см. S99zapret2.new:919-1100). По умолчанию
         # nfqws=POLICY_NAME, exclude=0 (= "process only this policy"); если юзер
         # явно настроил bypass конкретного устройства через создание политики +
@@ -1968,6 +1980,14 @@ Z2K_USE_MID_STREAM_DETECTOR=${saved_Z2K_USE_MID_STREAM_DETECTOR}
 # не выбирает. =1 для opt-in возврата автоинъекции (вместе с
 # Z2K_PADENCAP=1 для управления padencap).
 Z2K_INJECT_TLS_MODS=${saved_Z2K_INJECT_TLS_MODS}
+
+# Dynamic TTL fool hook auto-inject (default 1). =0 для опт-аута на
+# сетапах с принудительным NDM TTL-fix (`ip ttl-fix` на Keenetic при
+# модемном тарифе с запретом раздачи: телефонная симка + IMEI-
+# маскировка). В такой топологии NDM всё равно перебивает TTL всех
+# исходящих, поэтому inject избыточен; опт-аут оставляет fake'ам
+# default TTL стека и убирает per-fake lua call overhead на слабом MIPS.
+Z2K_DYNAMIC_TTL=${saved_Z2K_DYNAMIC_TTL}
 
 # TLS padding extension flag — действует только когда
 # Z2K_INJECT_TLS_MODS=1. Управляет добавлением padencap в дополнение

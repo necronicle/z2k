@@ -79,6 +79,11 @@ MENU
                 if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
                     printf " Silent fallback РКН: Включен\n"
                 fi
+                local Z2K_DYNAMIC_TTL
+                Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$rst_config_file" "1")
+                if [ "$Z2K_DYNAMIC_TTL" = "0" ]; then
+                    printf " Динамический TTL: Выключен (мобильный оператор)\n"
+                fi
             fi
 
             # Показать статус веб-панели (если функция загружена)
@@ -109,11 +114,12 @@ MENU
 [D] Диагностика (сводка для траблшутинга)
 [I] Убрать статические IP Instagram (обход DNS-отравления)
 [Y] Diagnose domain (4-стадийная проба + рекомендация)
+[M] Динамический TTL (для мобильных операторов)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y]: "
+        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M]: "
         read_input choice
 
         case "$choice" in
@@ -164,6 +170,9 @@ MENU
                 ;;
             y|Y)
                 menu_diagnose_domain
+                ;;
+            m|M)
+                menu_dynamic_ttl
                 ;;
             0)
                 print_info "Выход из меню"
@@ -1124,6 +1133,115 @@ SUBMENU
             print_success "Silent fallback для РКН выключен"
 
             # Перегенерировать конфиг
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            fi
+
+            pause
+            ;;
+
+        b|B)
+            return 0
+            ;;
+
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: ДИНАМИЧЕСКИЙ TTL ДЛЯ FAKE-ПАКЕТОВ
+# ==============================================================================
+
+menu_dynamic_ttl() {
+    clear_screen
+    print_header "Динамический TTL (для мобильных операторов)"
+
+    local config_file="${ZAPRET2_DIR}/config"
+
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local Z2K_DYNAMIC_TTL
+    Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$config_file" "1")
+
+    print_separator
+    print_info "Статус: $([ "$Z2K_DYNAMIC_TTL" = "0" ] && echo 'Выключен' || echo 'Включен (по умолчанию)')"
+    print_separator
+
+    cat <<'SUBMENU'
+
+z2k автоматически инжектит fool=z2k_dynamic_ttl в каждую
+fake-стратегию (rkn_tcp, yt_tcp, gv_tcp). Lua-hook ставит
+fake-пакету TTL = (реальный egress TTL - 1), чтобы fake
+выглядел как обычный клиентский пакет с точки зрения ТСПУ.
+
+Когда выключать:
+  Мобильные операторы с запретом раздачи (МТС, Билайн),
+  где симка от телефона и на роутере включён NDM TTL-fix
+  (`ip ttl-fix` через CLI). NDM всё равно перебивает TTL
+  всех исходящих на фиксированное значение, наш inject в
+  этой топологии избыточен и съедает CPU lua-вызовами на
+  каждый fake. Полезно если speedtest показывает дикую
+  деградацию пропускной способности при включённом z2k.
+
+[1] Включить (по умолчанию)
+[2] Выключить (для мобильных операторов / слабого CPU)
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            if grep -q '^Z2K_DYNAMIC_TTL=' "$config_file"; then
+                sed -i 's/^Z2K_DYNAMIC_TTL=.*/Z2K_DYNAMIC_TTL=1/' "$config_file"
+            else
+                echo "Z2K_DYNAMIC_TTL=1" >> "$config_file"
+            fi
+            print_success "Динамический TTL включён"
+
+            print_info "Пересоздание конфига..."
+            create_official_config "/opt/zapret2/config"
+
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+                print_success "Сервис перезапущен"
+            else
+                print_warning "Сервис не запущен. Запустите через [2] Управление сервисом"
+            fi
+
+            pause
+            ;;
+
+        2)
+            if [ "$Z2K_DYNAMIC_TTL" = "0" ]; then
+                print_info "Уже выключен"
+                pause
+                return 0
+            fi
+
+            if grep -q '^Z2K_DYNAMIC_TTL=' "$config_file"; then
+                sed -i 's/^Z2K_DYNAMIC_TTL=.*/Z2K_DYNAMIC_TTL=0/' "$config_file"
+            else
+                echo "Z2K_DYNAMIC_TTL=0" >> "$config_file"
+            fi
+            print_success "Динамический TTL выключен"
+
             print_info "Пересоздание конфига..."
             create_official_config "/opt/zapret2/config"
 
