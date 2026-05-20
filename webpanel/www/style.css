@@ -191,6 +191,13 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
+.state-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.state-table th.sortable:hover {
+  color: var(--text);
+}
 .state-table tbody tr:hover {
   background: var(--bg-card-hover);
 }

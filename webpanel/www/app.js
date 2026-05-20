@@ -434,6 +434,11 @@
   }
 
   // ---------- Rotator state (Phase 3) ----------
+  // Sort state shared across loadState() invocations so a refresh
+  // (manual button or after delete) preserves the chosen column.
+  // Defaults: profile asc — same order as the previous unsorted view.
+  let stateSort = { key: "key", dir: "asc" };
+
   async function renderState() {
     $app.innerHTML = `
       <h1 class="page-title">Rotator state</h1>
@@ -465,7 +470,26 @@
         return;
       }
       const nowSec = Math.floor(Date.now() / 1000);
-      const rows = d.entries.map(e => {
+
+      // Sort a shallow copy — never mutate the cached server response.
+      const sorted = d.entries.slice().sort((a, b) => {
+        let av, bv;
+        switch (stateSort.key) {
+          case "key":      av = String(a.key  || ""); bv = String(b.key  || ""); break;
+          case "host":     av = String(a.host || ""); bv = String(b.host || ""); break;
+          case "strategy": av = Number(a.strategy) || 0; bv = Number(b.strategy) || 0; break;
+          // 'age' sorts by age value (= now - ts). Asc → freshest first
+          // (small age), which matches what we'd want by default when
+          // a user clicks «Возраст» — "what's been moving recently".
+          case "age":      av = nowSec - (Number(a.ts) || 0); bv = nowSec - (Number(b.ts) || 0); break;
+          default:         return 0;
+        }
+        if (av < bv) return stateSort.dir === "asc" ? -1 : 1;
+        if (av > bv) return stateSort.dir === "asc" ?  1 : -1;
+        return 0;
+      });
+
+      const rows = sorted.map(e => {
         const age = nowSec - Number(e.ts || 0);
         const ageStr = age < 60 ? age + "с" :
                        age < 3600 ? Math.floor(age / 60) + "м" :
@@ -485,16 +509,32 @@
           </tr>
         `;
       }).join("");
+
+      const arrow = k => stateSort.key === k ? (stateSort.dir === "asc" ? " ↑" : " ↓") : "";
+      const th = (k, label) => `<th class="sortable" data-sort="${k}">${label}${arrow(k)}</th>`;
       body.innerHTML = `
         <table class="state-table">
           <thead>
-            <tr><th></th><th>Профиль</th><th>Домен</th><th>Стратегия</th><th>Возраст</th></tr>
+            <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}${th("age","Возраст")}</tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
       `;
       body.querySelectorAll(".state-del").forEach(btn => {
         btn.addEventListener("click", () => stateDelete(btn.dataset.key, btn.dataset.host));
+      });
+      body.querySelectorAll("th.sortable").forEach(th => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.sort;
+          if (stateSort.key === key) {
+            stateSort.dir = stateSort.dir === "asc" ? "desc" : "asc";
+          } else {
+            stateSort.key = key;
+            // Numeric columns default desc (largest first); strings asc.
+            stateSort.dir = (key === "strategy") ? "desc" : "asc";
+          }
+          loadState();
+        });
       });
     } catch (e) {
       body.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
