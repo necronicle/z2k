@@ -1128,6 +1128,23 @@ step_build_zapret2() {
             cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             print_info "Установлен: ${tool_script}"
+        elif [ "$tool_script" = "z2k-auto-update.sh" ] && [ ! -f "${ZAPRET2_DIR}/${tool_script}" ]; then
+            # До r-18 z2k-auto-update.sh не входил в bootstrap-список z2k.sh,
+            # из-за чего на чистых установках файла не было и cron-задача
+            # `0 2 * * * /opt/zapret2/z2k-auto-update.sh apply` падала молча
+            # (sh: not found). Меняется номер версии в манифесте — реальной
+            # обновы файлов нет. Fallback: пробуем дотянуть напрямую с GitHub.
+            if command -v curl >/dev/null 2>&1 && \
+               curl -fsSL --connect-timeout 10 --max-time 30 \
+                    "${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}/files/${tool_script}" \
+                    -o "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null && \
+               [ -s "${ZAPRET2_DIR}/${tool_script}" ]; then
+                chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
+                print_info "Установлен через fallback: ${tool_script} (auto-update теперь работает)"
+            else
+                rm -f "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null
+                print_warning "${tool_script} не удалось скачать — auto-update не будет работать до следующего reinstall"
+            fi
         fi
     done
 
