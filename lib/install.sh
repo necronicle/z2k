@@ -1057,6 +1057,31 @@ step_build_zapret2() {
     # server_active_reject taxonomy that replaces them.
     # z2k-dynamic-strategy.lua + dynamic-slots.conf + classify-* TSVs —
     # producer was the classify CLI; slot in config_official.sh removed.
+    # r-16 one-shot: apex `googlevideo.com` в extra_strats/TCP/YT/List.txt
+    # перехватывает ВЕСЬ *.googlevideo.com трафик в yt_tcp профиль ДО того,
+    # как второй nfqws2 блок с `--hostlist-domains=googlevideo.com key=gv_tcp`
+    # его увидит. В итоге gv_tcp фактически мёртв, а rotator yt_tcp крутит
+    # свои стратегии (заточенные под youtube.com) на чужом домене —
+    # отсюда «много ротаций на GV». Shipped YT/List.txt уже не содержит
+    # apex (только manifest.googlevideo.com), но у юзеров мог сохраниться
+    # из старых установок или ручных правок. Чистим один раз с маркером.
+    if [ ! -f "$ZAPRET2_DIR/.gv_apex_hostlist_fix.done" ]; then
+        local yt_list="$ZAPRET2_DIR/extra_strats/TCP/YT/List.txt"
+        if [ -f "$yt_list" ] && grep -qE '^googlevideo\.com$' "$yt_list" 2>/dev/null; then
+            sed -i '/^googlevideo\.com$/d' "$yt_list" 2>/dev/null
+            # Сбросить stale yt_tcp записи для googlevideo.com из rotator state —
+            # in-memory state переживёт edit, но nfqws2 рестартанётся ниже в
+            # install потоке, тогда state.tsv перечитается с нуля.
+            local _state="$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
+            if [ -f "$_state" ]; then
+                awk -F'\t' '!($1=="yt_tcp" && $2 ~ /googlevideo\.com$/)' "$_state" > "$_state.gvfix" 2>/dev/null \
+                    && cat "$_state.gvfix" > "$_state" && rm -f "$_state.gvfix"
+            fi
+            print_info "r-16 cleanup: removed apex googlevideo.com from YT/List.txt (gv_tcp профиль теперь получает GV-трафик)"
+        fi
+        touch "$ZAPRET2_DIR/.gv_apex_hostlist_fix.done" 2>/dev/null || true
+    fi
+
     if [ ! -f "$ZAPRET2_DIR/.classify_probe_removed.done" ]; then
         rm -f "$ZAPRET2_DIR/z2k-probe.sh" 2>/dev/null
         rm -f "$ZAPRET2_DIR/z2k-classify" 2>/dev/null
