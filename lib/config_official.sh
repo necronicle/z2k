@@ -381,7 +381,29 @@ AUSTERUS_OPT
     # решение; здесь восстанавливаем redirect-coverage инвариант,
     # утерянный с добавлением no_http_redirect.
     youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_silent_drop_detector")
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_silent_drop_detector")
+    #
+    # gv_tcp (googlevideo) is HTTP/2 multiplex over TLS — bulk video CDN.
+    # silent_drop_detector's packet-count heuristic (out>=4 && in<=1 &&
+    # in_bytes<3072) was designed for short HTTP/HTTPS request-response
+    # flows (rkn_tcp/yt_tcp), where one client request triggers one server
+    # response. On googlevideo the client legitimately bursts H2 frames
+    # (range requests / WINDOW_UPDATE / SETTINGS) while server flight is
+    # still chunking Cert+EE+Finished — `pdcounter direct` crosses 4 long
+    # before `in_bytes >= 3072` is satisfied → false-positive failure on
+    # working strategies (field-observed 2026-05-21: gv_tcp googlevideo
+    # rotated through strat 3→4→5→6→7→8 in 19 minutes while video played
+    # fine). z2k_classify_http_reply cannot set crec.z2k_handshake_seen
+    # on TLS-encrypted H2 (HTTP semantics invisible past ServerHello), so
+    # the existing handshake_seen / in_bytes bypasses don't engage.
+    #
+    # Switch gv_tcp to z2k_tls_alert_fatal — content-based detector that
+    # fires only on explicit fail signals (fatal TLS alert / RST / 451 /
+    # WAF marker / server_active_reject). Loses packet-count silent-drop
+    # heuristic, but on bulk-CDN that heuristic was firing wrong anyway:
+    # real TSPU drops occur at handshake time (SNI inspection), and the
+    # delegated z2k_tls_stalled chain inside z2k_tls_alert_fatal still
+    # covers CH-without-SH timeout.
+    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_tls_alert_fatal")
 
     # Wire no_http_redirect on all TCP TLS profiles. This disables
     # standard_failure_detector's built-in 302/307 cross-SLD redirect
