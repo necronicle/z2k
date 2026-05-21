@@ -1507,7 +1507,24 @@ function z2k_silent_drop_detector(desync, crec, arg)
 
   local tcp_out_thr      = (arg and tonumber(arg.tcp_out))                 or 4
   local tcp_in_thr       = (arg and tonumber(arg.tcp_in))                  or 1
-  local handshake_done_b = (arg and tonumber(arg.bytes_in_handshake_done)) or 3072
+  -- bytes_in_handshake_done: incoming-byte threshold beyond which we treat
+  -- the connection as "past TLS handshake" and pass the silent-drop check.
+  --
+  -- 2026-05-21: bumped from 3072 → 16384. The 3KB value was sized to the
+  -- modern TLS-1.3 server flight (ServerHello + EncryptedExtensions +
+  -- Certificate + CertificateVerify + Finished, typically 3-6KB for a
+  -- public CA chain) — enough to confirm a TLS handshake completed.
+  -- Problem: on HTTPS HTTP/2 the handshake completing tells us nothing
+  -- about whether HTTP/2 streams ON TOP actually work. ТСПУ can let
+  -- TLS through but inject RST_STREAM on specific endpoints inside the
+  -- encrypted multiplex (instagram comments / certain Facebook Graph
+  -- requests) — strategy "passes TLS" so silent_drop bypasses, but the
+  -- application is half-broken, autocircular never rotates.
+  -- 16KB sits above the typical server flight AND past the first
+  -- meaningful HTTP/2 app-data frames, so the bypass only kicks in when
+  -- the server is actually returning content. Strategies that pass TLS
+  -- but break HTTP/2 multiplex no longer false-pin as success.
+  local handshake_done_b = (arg and tonumber(arg.bytes_in_handshake_done)) or 16384
 
   if desync.dis and desync.dis.tcp and desync.outgoing
      and desync.track and desync.track.pos then

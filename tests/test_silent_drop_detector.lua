@@ -159,14 +159,17 @@ do
     check("case2: chain ran (tls_alert_fatal)",        1,     chain_calls.tls_alert)
 end
 
--- Case 3: marker=false, in_bytes>=3KB, out>=4, in<=1 → silent-drop
--- bypassed (server flight complete); chain still runs.
--- This is the post-handshake HTTP/2 multiplexing scenario from the
--- 2026-05-14 instagram.com regression.
+-- Case 3: marker=false, in_bytes>=16KB, out>=4, in<=1 → silent-drop
+-- bypassed (server flight + meaningful app response observed); chain
+-- still runs. 2026-05-21: bumped from 4000 → 20000 after raising the
+-- bytes_in_handshake_done default from 3072 → 16384. Old 3KB threshold
+-- bypassed too eagerly — TLS handshake done was treated as application
+-- success, masking partial HTTP/2 failures (instagram comments). New
+-- 16KB threshold requires actual app data flow before bypass kicks in.
 do
     reset_chain()
     local crec = {}
-    local d = out_packet(5, 1, 4000, 8000)
+    local d = out_packet(5, 1, 20000, 8000)
     local fired = z2k_silent_drop_detector(d, crec)
     check("case3: server-flight bypass skips silent-drop", false, fired)
     check("case3: chain still runs (mid_stream)",          1,     chain_calls.mid_stream)
@@ -266,18 +269,26 @@ do
         true, crec.z2k_server_active_reject ~= true)
 end
 
--- Case 6: boundary on bytes_in_handshake_done (default 3072).
--- in_bytes=3071 → silent-drop fires; in_bytes=3072 → bypass.
--- Asserted explicitly because the reviewer's reproducer hinges on
--- exact boundary semantics — make it visible in the test suite.
+-- Case 6: boundary on bytes_in_handshake_done (default 16384, was 3072
+-- pre-2026-05-21). in_bytes=16383 → silent-drop fires; in_bytes=16384
+-- → bypass. Asserted explicitly because the reviewer's reproducer
+-- hinges on exact boundary semantics — make it visible in the test
+-- suite. Also: case6c asserts that in_bytes=3072 (old default) STILL
+-- fires after the bump — that's exactly the instagram-comments
+-- regression scenario we wanted to undo.
 do
     reset_chain()
-    local fired_just_below = z2k_silent_drop_detector(out_packet(4, 1, 3071, 0), {})
-    check("case6a: in_bytes=3071 fires (just below threshold)", true, fired_just_below)
+    local fired_just_below = z2k_silent_drop_detector(out_packet(4, 1, 16383, 0), {})
+    check("case6a: in_bytes=16383 fires (just below threshold)", true, fired_just_below)
 
     reset_chain()
-    local fired_at_boundary = z2k_silent_drop_detector(out_packet(4, 1, 3072, 0), {})
-    check("case6b: in_bytes=3072 bypasses (at threshold)", false, fired_at_boundary)
+    local fired_at_boundary = z2k_silent_drop_detector(out_packet(4, 1, 16384, 0), {})
+    check("case6b: in_bytes=16384 bypasses (at threshold)", false, fired_at_boundary)
+
+    reset_chain()
+    local fired_old_default = z2k_silent_drop_detector(out_packet(4, 1, 3072, 0), {})
+    check("case6c: in_bytes=3072 (old threshold) now fires — instagram-comments fix",
+        true, fired_old_default)
 end
 
 -- Case 7: parametric override via arg table — operator can lower
