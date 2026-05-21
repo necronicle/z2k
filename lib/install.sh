@@ -1385,7 +1385,12 @@ step_build_zapret2() {
             chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null || true
         fi
 
-        rm -rf "$backup_tmp"
+        # NB: backup_tmp НЕ удаляем здесь — step_finalize ниже использует
+        # $backup_tmp/webpanel-port/bind для re-install'а webpanel. Удаление
+        # на этом месте делало r-20 webpanel-fix dead code: webpanel-port
+        # стирался до того как step_finalize мог его прочитать, и панель
+        # после auto-update reinstall'а оставалась мёртвой. Удалит её
+        # step_finalize после webpanel-restore блока.
         print_success "Все пользовательские настройки восстановлены"
     fi
 
@@ -2433,6 +2438,12 @@ step_finalize() {
     # rm -rf $ZAPRET2_DIR, S96 живёт в /opt/etc/init.d/ и продолжает
     # пытаться поднять lighttpd без конфига → серая страница / 502 /
     # ничего на :8088 (репортилось юзерами 2026-05-21).
+    # backup_tmp — literal path, not the local-scoped variable from
+    # download_openwrt_embedded_release (which is out of scope here).
+    # r-20 referenced $backup_tmp directly: it was empty → check became
+    # `[ -f /webpanel-port ]` and webpanel restore never fired. Fixed
+    # in r-22.
+    local backup_tmp="/tmp/z2k_upgrade_backup"
     if [ -f "$backup_tmp/webpanel-port" ]; then
         local _wp_port _wp_bind _wp_args _wp_src
         _wp_port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null | tr -dc '0-9')
@@ -2453,6 +2464,12 @@ step_finalize() {
             print_warning "$_wp_src отсутствует — webpanel надо переустановить вручную через меню [P]"
         fi
     fi
+
+    # Final cleanup of user-data backup — нужен был на протяжении всей
+    # установки (step_install_zapret2 → step_finalize) для webpanel-restore
+    # и flag-merge'а; сейчас все потребители отработали, дальше держать
+    # незачем.
+    rm -rf "$backup_tmp" 2>/dev/null || true
 
     print_separator
 

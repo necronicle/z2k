@@ -559,12 +559,29 @@ au_apply_reinstall() {
 
     au_log "reinstall: launching z2k.sh install"
     # shellcheck disable=SC2086
-    env Z2K_AUTO_UPDATE=1 Z2K_AU_TARGET_TAG="$target_tag" \
-        Z2K_AU_FEATURE_FLAGS_BACKUP="$saved_flags" \
-        $reset_env \
-        sh "$reinstall_script" install \
-        >> "$Z2K_AU_LOG_FILE" 2>&1
-    local rc=$?
+    # Pipe through `tee -a` so install output reaches BOTH:
+    #  (a) the persistent /opt/var/log/z2k-auto-update.log (auditable later)
+    #  (b) our own stdout — which the caller (z2k-auto-update.sh apply
+    #      invoked from update_apply_async / cron) redirects to either the
+    #      per-job /tmp/z2k-job-<id>.log (webpanel) or the manual user
+    #      terminal. Without the tee, install steps got swallowed by the
+    #      append-to-file redirect and the user saw only "reinstall:
+    #      launching" + 60s of silence + "reinstall applied".
+    # `pipefail` is bash-only; in BusyBox sh the pipe's exit code is the
+    # last command (tee), so we capture install.sh exit via PIPESTATUS-
+    # equivalent using a separate file.
+    local rc_file="$Z2K_AU_TMP_DIR/.install_rc"
+    rm -f "$rc_file"
+    (
+        env Z2K_AUTO_UPDATE=1 Z2K_AU_TARGET_TAG="$target_tag" \
+            Z2K_AU_FEATURE_FLAGS_BACKUP="$saved_flags" \
+            $reset_env \
+            sh "$reinstall_script" install 2>&1
+        echo "$?" > "$rc_file"
+    ) | tee -a "$Z2K_AU_LOG_FILE"
+    local rc
+    rc=$(cat "$rc_file" 2>/dev/null || echo 1)
+    rm -f "$rc_file"
     if [ "$rc" -ne 0 ]; then
         au_log "reinstall failed rc=$rc"
         return 1

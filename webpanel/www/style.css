@@ -433,6 +433,88 @@ pre.log {
 .toast.ok  { border-color: var(--good); }
 .toast.bad { border-color: var(--bad); }
 
+/* ---------- UPDATE BANNER ---------- */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: var(--bg-card);
+  border: 1px solid var(--warn);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.update-banner-ok {
+  border-color: var(--border);
+  border-left-color: var(--good);
+}
+.update-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.update-banner-text strong { color: var(--warn); }
+.update-banner-ok .update-banner-text strong { color: var(--good); }
+.update-banner-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.update-banner-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- STATUS SPINNER ---------- */
+/* Inline pill next to the "Состояние" heading while the service is mid
+   restart/stop. Uses inline-flex so the spinner icon and label share a
+   single flex axis with `gap` and `align-items: center` — no absolute
+   positioning, no margin-top hacks, no asymmetric padding. */
+.status-spinner[hidden] { display: none; }
+.status-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--warn);
+  background: rgba(210, 153, 34, 0.08);
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.status-spinner::before {
+  content: "";
+  display: block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--warn);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------- MODAL WARNING ---------- */
+.modal-warning {
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+
 /* ---------- MOBILE ---------- */
 @media (max-width: 520px) {
   .topbar { padding: 12px 14px; gap: 14px; }
@@ -440,4 +522,6 @@ pre.log {
   #nav a { padding: 6px 8px; font-size: 13px; }
   #app { padding: 16px 14px 60px; }
   .status-grid { grid-template-columns: repeat(2, 1fr); }
+  .update-banner { flex-direction: column; align-items: stretch; }
+  .update-banner-actions { justify-content: flex-end; }
 }

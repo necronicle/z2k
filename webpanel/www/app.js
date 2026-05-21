@@ -65,38 +65,224 @@
   // ---------- Dashboard ----------
   async function renderDashboard() {
     $app.innerHTML = `
+      <div id="update-banner" hidden></div>
       <h1 class="page-title">Дашборд</h1>
       <div class="card" id="status-card">
-        <h3>Состояние</h3>
+        <h3>Состояние <span class="status-spinner" id="status-spin" hidden></span></h3>
         <div class="status-grid" id="status-grid">Загрузка…</div>
       </div>
       <div class="card">
         <h3>Управление сервисом</h3>
         <p class="desc">Запуск, остановка и перезапуск nfqws2.</p>
         <div class="btn-row">
-          <button class="btn btn-primary" data-svc="start">Запустить</button>
-          <button class="btn" data-svc="restart">Перезапустить</button>
-          <button class="btn btn-danger" data-svc="stop">Остановить</button>
+          <button class="btn btn-primary" data-svc="start" data-target="active">Запустить</button>
+          <button class="btn" data-svc="restart" data-target="active">Перезапустить</button>
+          <button class="btn btn-danger" data-svc="stop" data-target="stopped">Остановить</button>
         </div>
       </div>
     `;
 
     $app.querySelectorAll("[data-svc]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        btn.disabled = true;
+        const action = btn.dataset.svc;
+        const target = btn.dataset.target;
+        const allBtns = $app.querySelectorAll("[data-svc]");
+        allBtns.forEach(b => b.disabled = true);
+        showStatusSpinner(action === "stop" ? "Останавливаем…" : "Перезапускаем…");
         try {
-          await apiPost("/service/" + btn.dataset.svc);
-          toast("Сервис: " + btn.dataset.svc);
-          setTimeout(refreshStatus, 800);
+          await apiPost("/service/" + action);
+          await pollServiceUntil(target, 10000);
+          toast(action === "stop" ? "Остановлен" : "Перезапущен");
         } catch (e) {
           toast("Ошибка: " + e.message, "bad");
+          refreshStatus();
         } finally {
-          btn.disabled = false;
+          hideStatusSpinner();
+          allBtns.forEach(b => b.disabled = false);
         }
       });
     });
 
     refreshStatus();
+    refreshUpdateBanner();
+  }
+
+  // ---------- Update banner / apply ----------
+  async function refreshUpdateBanner(opts = {}) {
+    const banner = document.getElementById("update-banner");
+    if (!banner) return;
+    let d;
+    try {
+      const path = opts.force ? "/update/check" : "/update/status";
+      d = opts.force ? await apiPost(path) : await apiGet(path);
+    } catch (e) {
+      // Silent — manifest fetch can fail (no internet, GH down). UI just
+      // doesn't show banner; user can still hit "Проверить сейчас".
+      banner.hidden = true;
+      return;
+    }
+    const installed = d.installed || "?";
+    const available = d.available || "?";
+    const behind = Number(d.behind || 0);
+    const ts = Number(d.last_check || 0);
+    const ago = ts > 0 ? humanAgo(ts) : "—";
+
+    // Resume button takes priority over Обновить when an apply is active.
+    const activeJob = await getActiveApplyJob();
+
+    if (activeJob) {
+      banner.hidden = false;
+      banner.className = "update-banner";
+      banner.innerHTML = `
+        <div class="update-banner-text">
+          <strong>Обновление до ${escapeHtml(activeJob.target)} в процессе</strong>
+          <span class="update-banner-meta">фоновый apply, клик для просмотра лога</span>
+        </div>
+        <div class="update-banner-actions">
+          <button class="btn btn-primary" id="upd-resume">Показать лог</button>
+        </div>
+      `;
+      const resumeBtn = document.getElementById("upd-resume");
+      if (resumeBtn) resumeBtn.addEventListener("click", () => openApplyModal(activeJob.id, activeJob.target));
+      return;
+    }
+
+    if (behind > 0 && available !== "?" && installed !== "?") {
+      banner.hidden = false;
+      banner.className = "update-banner";
+      banner.innerHTML = `
+        <div class="update-banner-text">
+          <strong>Доступно обновление: ${escapeHtml(available)}</strong>
+          <span class="update-banner-meta">установлена ${escapeHtml(installed)} · отстаёт на ${behind} · проверено ${ago}</span>
+        </div>
+        <div class="update-banner-actions">
+          <button class="btn btn-primary" id="upd-apply">Обновить</button>
+          <button class="btn" id="upd-recheck">Проверить ещё раз</button>
+        </div>
+      `;
+    } else {
+      banner.hidden = false;
+      banner.className = "update-banner update-banner-ok";
+      banner.innerHTML = `
+        <div class="update-banner-text">
+          <span>Установлена последняя версия (${escapeHtml(installed)})</span>
+          <span class="update-banner-meta">проверено ${ago}</span>
+        </div>
+        <div class="update-banner-actions">
+          <button class="btn" id="upd-recheck">Проверить</button>
+        </div>
+      `;
+    }
+
+    const applyBtn = document.getElementById("upd-apply");
+    if (applyBtn) applyBtn.addEventListener("click", () => applyUpdateFlow(available));
+    const recheckBtn = document.getElementById("upd-recheck");
+    if (recheckBtn) recheckBtn.addEventListener("click", async () => {
+      recheckBtn.disabled = true;
+      recheckBtn.textContent = "Проверяем…";
+      await refreshUpdateBanner({ force: true });
+    });
+  }
+
+  async function applyUpdateFlow(target) {
+    const msg = `Применить обновление до ${target}?\n\n` +
+                `Сервис nfqws2 перезапустится. Связь с веб-панелью может ` +
+                `пропасть на 5–15 секунд во время рестарта lighttpd — это нормально, ` +
+                `обнови страницу если зависнет.`;
+    if (!confirm(msg)) return;
+    let resp;
+    try {
+      resp = await apiPost("/update/apply");
+    } catch (e) {
+      toast("Ошибка запуска: " + e.message, "bad");
+      return;
+    }
+    // Persist across "Скрыть" / page reload so the user can resume the
+    // log view. sessionStorage survives tab reload but not tab-close —
+    // which matches the desired behaviour: once user closes the tab,
+    // they don't need to be nagged about an apply they explicitly walked
+    // away from. onDone clears the key.
+    sessionStorage.setItem("z2k_apply_job", JSON.stringify({ id: resp.job, target }));
+    openApplyModal(resp.job, target);
+    refreshUpdateBanner();
+  }
+
+  function openApplyModal(jobId, target) {
+    openJobModal("Обновление до " + target, jobId, {
+      warning: "Можно скрыть — обновление продолжит идти в фоне. При reinstall'е возможен короткий обрыв соединения с панелью — опрос лога продолжится автоматически.",
+      tolerateOutage: true,
+      onDone: () => {
+        sessionStorage.removeItem("z2k_apply_job");
+        setTimeout(() => refreshUpdateBanner({ force: true }), 500);
+        setTimeout(refreshStatus, 1500);
+      },
+    });
+  }
+
+  // Check if a previously-launched apply is still in progress. Returns the
+  // {id, target} object from sessionStorage if so, null otherwise. Cleans
+  // up the key on a 404/finished state so a dead job doesn't poison the
+  // banner forever.
+  async function getActiveApplyJob() {
+    const raw = sessionStorage.getItem("z2k_apply_job");
+    if (!raw) return null;
+    let job;
+    try { job = JSON.parse(raw); } catch (e) { sessionStorage.removeItem("z2k_apply_job"); return null; }
+    if (!job || !job.id) { sessionStorage.removeItem("z2k_apply_job"); return null; }
+    try {
+      const d = await apiGet("/job?id=" + encodeURIComponent(job.id));
+      if (d.done) {
+        sessionStorage.removeItem("z2k_apply_job");
+        return null;
+      }
+      return job;
+    } catch (e) {
+      // Webpanel might be temporarily down (mid-restart). Keep the key,
+      // user can manually resume later.
+      return job;
+    }
+  }
+
+  function humanAgo(tsSec) {
+    const age = Math.max(0, Math.floor(Date.now() / 1000) - tsSec);
+    if (age < 60) return age + " с назад";
+    if (age < 3600) return Math.floor(age / 60) + " мин назад";
+    if (age < 86400) return Math.floor(age / 3600) + " ч назад";
+    return Math.floor(age / 86400) + " дн назад";
+  }
+
+  // ---------- Status spinner / poll ----------
+  function showStatusSpinner(msg) {
+    const spin = document.getElementById("status-spin");
+    if (!spin) return;
+    spin.hidden = false;
+    spin.textContent = msg || "Применяем…";
+  }
+  function hideStatusSpinner() {
+    const spin = document.getElementById("status-spin");
+    if (spin) spin.hidden = true;
+  }
+
+  // Poll /status until service.service matches target, or timeout. Returns
+  // true if target reached. On the way refreshes the UI grid each tick so
+  // the user sees the transition (stopped → active or vice versa).
+  async function pollServiceUntil(target, timeoutMs) {
+    const start = Date.now();
+    const interval = 600;
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const s = await apiGet("/status");
+        renderStatusGrid(s);
+        if (s.service === target) return true;
+      } catch (e) {
+        // transient — webpanel may be in mid-restart if init scripts shake
+        // up lighttpd. Just keep polling.
+      }
+      await new Promise(r => setTimeout(r, interval));
+    }
+    // timeout — surface last-known and let the user manually inspect logs.
+    try { const s = await apiGet("/status"); renderStatusGrid(s); } catch (e) {}
+    throw new Error("сервис не перешёл в состояние «" + target + "» за " + Math.round(timeoutMs/1000) + "с");
   }
 
   async function refreshStatus() {
@@ -104,21 +290,27 @@
     if (!grid) return;
     try {
       const s = await apiGet("/status");
-      const cells = [
-        { label: "Установлен", value: s.installed ? "Да" : "Нет", kind: s.installed ? "good" : "bad" },
-        { label: "Сервис", value: fmtSvc(s.service), kind: s.service === "active" ? "good" : (s.service === "stopped" ? "warn" : "bad") },
-        { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
-        { label: "RST фильтр", value: bool(s.toggles.rst_filter), kind: s.toggles.rst_filter === "1" ? "good" : "" },
-        { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
-        { label: "Игровой режим", value: gameModeLabel(s.toggles.game_mode, s.game_profile), kind: s.toggles.game_mode === "1" ? "good" : "" },
-        { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
-      ];
-      grid.innerHTML = cells.map(c =>
-        `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
-      ).join("");
+      renderStatusGrid(s);
     } catch (e) {
       grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
     }
+  }
+
+  function renderStatusGrid(s) {
+    const grid = document.getElementById("status-grid");
+    if (!grid) return;
+    const cells = [
+      { label: "Установлен", value: s.installed ? "Да" : "Нет", kind: s.installed ? "good" : "bad" },
+      { label: "Сервис", value: fmtSvc(s.service), kind: s.service === "active" ? "good" : (s.service === "stopped" ? "warn" : "bad") },
+      { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
+      { label: "RST фильтр", value: bool(s.toggles.rst_filter), kind: s.toggles.rst_filter === "1" ? "good" : "" },
+      { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
+      { label: "Игровой режим", value: gameModeLabel(s.toggles.game_mode, s.game_profile), kind: s.toggles.game_mode === "1" ? "good" : "" },
+      { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
+    ];
+    grid.innerHTML = cells.map(c =>
+      `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
+    ).join("");
   }
 
   function bool(v) { return v === "1" ? "Вкл" : "Выкл"; }
@@ -204,19 +396,49 @@
     });
   }
 
+  // Toggles that restart nfqws2 under the hood (see actions.sh:toggle_*).
+  // After toggling we should wait for the service to come back to "active"
+  // before clearing the indicator so the user sees the restart actually
+  // completed and didn't silently die. rst-filter (raw iptables) is the
+  // only one that doesn't bounce the daemon.
+  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, game_mode: 1, customd: 1 };
+
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");
     const wanted = box.checked ? "1" : "0";
     sw.classList.add("loading");
+    const restarts = TOGGLES_RESTART_SERVICE[key] === 1;
     try {
       await apiPost("/toggle/" + TOGGLE_API_NAME[key], { value: wanted });
-      toast(wanted === "1" ? "Включено" : "Выключено");
+      if (restarts) {
+        toast((wanted === "1" ? "Включаем" : "Выключаем") + ", перезапуск сервиса…");
+        // After toggle the daemon restarts. Don't fight: pollServiceUntil
+        // is on the dashboard only — re-implement minimal version here
+        // that polls /status until svc=active (or timeout).
+        const ok = await waitForServiceActive(8000);
+        toast(ok ? (wanted === "1" ? "Включено" : "Выключено")
+                 : "Сервис не поднялся за 8с — проверь логи", ok ? "ok" : "bad");
+      } else {
+        toast(wanted === "1" ? "Включено" : "Выключено");
+      }
     } catch (e) {
       box.checked = !box.checked; // revert
       toast("Ошибка: " + e.message, "bad");
     } finally {
       sw.classList.remove("loading");
     }
+  }
+
+  async function waitForServiceActive(timeoutMs) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const s = await apiGet("/status");
+        if (s.service === "active") return true;
+      } catch (e) { /* webpanel itself may briefly hiccup; keep polling */ }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    return false;
   }
 
   // ---------- Whitelist ----------
@@ -392,43 +614,93 @@
   }
 
   // ---------- Job modal ----------
-  function openJobModal(title, jobId) {
+  function openJobModal(title, jobId, opts = {}) {
+    const warning = opts.warning ? `<div class="modal-warning">${escapeHtml(opts.warning)}</div>` : "";
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop";
     backdrop.innerHTML = `
       <div class="modal">
         <h3>${escapeHtml(title)}</h3>
+        ${warning}
         <pre class="log" id="job-log">Запуск…</pre>
         <div class="modal-footer">
-          <button class="btn" id="job-close" disabled>Закрыть</button>
+          <button class="btn" id="job-close">Скрыть</button>
         </div>
       </div>
     `;
     document.body.appendChild(backdrop);
     const logEl = backdrop.querySelector("#job-log");
     const closeBtn = backdrop.querySelector("#job-close");
-    closeBtn.addEventListener("click", () => backdrop.remove());
+    // Close button is always enabled. While the job is running, closing
+    // just dismisses the UI — the background process keeps going (detached
+    // via CGI fd-cleanup in actions.sh), and the dashboard banner will
+    // update once the job's onDone fires (state poll), even with the
+    // modal gone. After done, the button repurposes to a plain "Закрыть".
+    closeBtn.addEventListener("click", () => {
+      stopped = true;
+      backdrop.remove();
+    });
 
+    // Apply / reinstall jobs bounce nfqws2 and may briefly restart lighttpd
+    // mid-run. /job poll attempts will return network errors during that
+    // window. tolerateOutage mode gives ~5 min of retries with a longer
+    // poll interval during the outage so we survive the entire install.
     let stopped = false;
+    let consecutiveErrors = 0;
+    let lastOutageWarn = 0;
+    const MAX_ERRORS = opts.tolerateOutage ? 300 : 5;
+    const POLL_OK_MS = 1000;
+    const POLL_ERR_MS = opts.tolerateOutage ? 2000 : 1000;
     async function poll() {
       if (stopped) return;
       try {
         const d = await apiGet("/job?id=" + encodeURIComponent(jobId));
-        logEl.textContent = d.log || "(нет вывода)";
+        if (consecutiveErrors > 0) {
+          // Webpanel just recovered after an outage — show a hint.
+          logEl.textContent = (d.log || "(нет вывода)") + "\n[панель снова на связи]";
+        } else {
+          logEl.textContent = d.log || "(нет вывода)";
+        }
+        consecutiveErrors = 0;
         logEl.scrollTop = logEl.scrollHeight;
         if (d.done) {
-          closeBtn.disabled = false;
-          closeBtn.textContent = d.exit === 0 ? "Готово" : "Закрыть (exit=" + d.exit + ")";
+          // "Lock held" is not really a failure — another apply is already
+          // in progress (typically a manual click that hit the cron-driven
+          // health-check sleep window). Surface it as info, not red error.
+          const isLockHeld = (d.log || "").includes("lock held by pid=");
+          if (d.exit === 0) {
+            closeBtn.textContent = "Готово";
+          } else if (isLockHeld) {
+            closeBtn.textContent = "ОК — обновление уже идёт";
+          } else {
+            closeBtn.textContent = "Закрыть";
+          }
           stopped = true;
+          if (typeof opts.onDone === "function") {
+            try { opts.onDone(d); } catch (e) { /* swallow */ }
+          }
           return;
         }
       } catch (e) {
-        logEl.textContent = "Ошибка опроса: " + e.message;
-        closeBtn.disabled = false;
-        stopped = true;
-        return;
+        consecutiveErrors++;
+        if (consecutiveErrors >= MAX_ERRORS) {
+          logEl.textContent += "\n[опрос прерван: " + e.message + "]";
+          closeBtn.textContent = "Закрыть";
+          stopped = true;
+          return;
+        }
+        // Brief outage during restart — keep going. Refresh the hint every
+        // 30s so the user sees the modal is actively retrying, not frozen.
+        if (consecutiveErrors === 2 || (consecutiveErrors - lastOutageWarn) >= 30) {
+          const secsWaiting = Math.round(consecutiveErrors * POLL_ERR_MS / 1000);
+          logEl.textContent = logEl.textContent
+            .replace(/\n\[панель временно недоступна.*\]$/g, "")
+            + `\n[панель временно недоступна, ждём… ${secsWaiting}с]`;
+          logEl.scrollTop = logEl.scrollHeight;
+          lastOutageWarn = consecutiveErrors;
+        }
       }
-      setTimeout(poll, 1000);
+      setTimeout(poll, consecutiveErrors > 0 ? POLL_ERR_MS : POLL_OK_MS);
     }
     poll();
   }

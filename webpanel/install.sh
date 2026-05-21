@@ -212,8 +212,14 @@ ln -sf "$WEBPANEL_DIR/cgi/api.sh" "$WWW_DIR/cgi-bin/api"
 cp -f "$SRC_DIR/www/index.html"  "$WWW_DIR/index.html"
 cp -f "$SRC_DIR/www/app.js"      "$WWW_DIR/app.js"
 cp -f "$SRC_DIR/www/style.css"   "$WWW_DIR/style.css"
-cp -f "$SRC_DIR/www/favicon.svg" "$WWW_DIR/favicon.svg"
-chmod 644 "$WWW_DIR/index.html" "$WWW_DIR/app.js" "$WWW_DIR/style.css" "$WWW_DIR/favicon.svg"
+# Favicon is decorative — guard against missing file so a partial download
+# (e.g. CDN miss on the SVG) doesn't fail the entire webpanel install and
+# leave the panel dead after auto-update reinstall.
+if [ -f "$SRC_DIR/www/favicon.svg" ]; then
+    cp -f "$SRC_DIR/www/favicon.svg" "$WWW_DIR/favicon.svg"
+fi
+chmod 644 "$WWW_DIR/index.html" "$WWW_DIR/app.js" "$WWW_DIR/style.css" \
+          "$WWW_DIR/favicon.svg" 2>/dev/null || true
 
 echo "[4/6] Writing lighttpd config"
 sed \

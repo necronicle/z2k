@@ -418,6 +418,47 @@ case "$method $path" in
         json_ok
         ;;
 
+    # ---------- AUTO-UPDATE ----------
+    "GET /update/status")
+        # GET → may refresh the cache opportunistically (TTL guarded).
+        update_refresh_manifest 0 2>/dev/null || true
+        installed=$(update_installed_tag)
+        available=$(update_manifest_current)
+        behind=$(update_behind_count "$installed")
+        last_check=$(update_last_check_ts)
+        json_header
+        printf '{"ok":true,"installed":'
+        json_string "$installed"
+        printf ',"available":'
+        json_string "$available"
+        printf ',"behind":%s,"last_check":%s}\n' "${behind:-0}" "${last_check:-0}"
+        exit 0
+        ;;
+
+    "POST /update/check")
+        update_refresh_manifest 1 2>/dev/null
+        installed=$(update_installed_tag)
+        available=$(update_manifest_current)
+        behind=$(update_behind_count "$installed")
+        last_check=$(update_last_check_ts)
+        json_header
+        printf '{"ok":true,"installed":'
+        json_string "$installed"
+        printf ',"available":'
+        json_string "$available"
+        printf ',"behind":%s,"last_check":%s}\n' "${behind:-0}" "${last_check:-0}"
+        exit 0
+        ;;
+
+    "POST /update/apply")
+        job_id=$(update_apply_async) || json_fail "500" "apply launch failed"
+        json_header
+        printf '{"ok":true,"job":'
+        json_string "$job_id"
+        printf '}\n'
+        exit 0
+        ;;
+
     # ---------- DEFAULT ----------
     *)
         json_fail "404 Not Found" "no such endpoint: $method $path"

@@ -291,10 +291,11 @@ healthcheck_run_async() {
     [ -x "$hc" ] || { echo "healthcheck script missing" >&2; return 1; }
     local job_id
     job_id=$(date +%s)$$
+    # See update_apply_async for why we close inherited CGI fds.
     (
         "$hc" > "/tmp/z2k-job-$job_id.log" 2>&1
         echo "$?" > "/tmp/z2k-job-$job_id.exit"
-    ) &
+    ) </dev/null >/dev/null 2>&1 &
     echo "$!" > "/tmp/z2k-job-$job_id.pid"
     printf '%s' "$job_id"
 }
@@ -418,10 +419,11 @@ geosite_run_async() {
     [ -x "$gs" ] || { echo "z2k-geosite.sh missing" >&2; return 1; }
     local job_id
     job_id=$(date +%s)$$
+    # See update_apply_async for why we close inherited CGI fds.
     (
         sh "$gs" fetch > "/tmp/z2k-job-$job_id.log" 2>&1
         echo "$?" > "/tmp/z2k-job-$job_id.exit"
-    ) &
+    ) </dev/null >/dev/null 2>&1 &
     echo "$!" > "/tmp/z2k-job-$job_id.pid"
     printf '%s' "$job_id"
 }
@@ -467,4 +469,112 @@ debug_flag_set() {
         rm -f "$p" 2>/dev/null
         return 0
     fi
+}
+
+# --- auto-update status / apply ---
+#
+# UI surfaces the same auto-update mechanism that cron runs at 02:00 — the
+# user sees "available: <tag>" and can trigger apply manually instead of
+# waiting for the nightly window. The check path is cached on disk (5 min)
+# so dashboard refreshes don't hammer raw.githubusercontent.
+
+AU_TAG_FILE="${AU_TAG_FILE:-$ZAPRET2_DIR/.z2k-installed-tag}"
+AU_MANIFEST_CACHE="${AU_MANIFEST_CACHE:-/tmp/z2k-au-manifest.json}"
+AU_MANIFEST_CACHE_TTL="${AU_MANIFEST_CACHE_TTL:-300}"
+AU_SCRIPT="${AU_SCRIPT:-$ZAPRET2_DIR/z2k-auto-update.sh}"
+AU_LOG_FILE="${AU_LOG_FILE:-/opt/var/log/z2k-auto-update.log}"
+
+update_installed_tag() {
+    if [ -f "$AU_TAG_FILE" ]; then
+        head -1 "$AU_TAG_FILE" 2>/dev/null | tr -d ' \r\n'
+    else
+        printf 'unknown'
+    fi
+}
+
+# Get mtime of a file as a Unix timestamp. BusyBox `stat -c` doesn't exist
+# on Entware (even /opt/bin/stat is BusyBox), but `date -r FILE +%s` does.
+file_mtime() {
+    [ -f "$1" ] || { echo 0; return; }
+    date -r "$1" +%s 2>/dev/null || echo 0
+}
+
+# Refresh /tmp manifest cache when older than TTL (or force=1).
+update_refresh_manifest() {
+    local force="${1:-0}"
+    if [ "$force" != "1" ] && [ -s "$AU_MANIFEST_CACHE" ]; then
+        local age now mtime
+        now=$(date +%s 2>/dev/null || echo 0)
+        mtime=$(file_mtime "$AU_MANIFEST_CACHE")
+        age=$((now - mtime))
+        [ "$age" -lt "$AU_MANIFEST_CACHE_TTL" ] && return 0
+    fi
+    local url="https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/UPDATES.json"
+    local tmp="${AU_MANIFEST_CACHE}.new"
+    if curl -fsSL --max-time 15 "$url" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+        mv "$tmp" "$AU_MANIFEST_CACHE"
+        return 0
+    fi
+    rm -f "$tmp"
+    # Cache fallback — keep stale file if curl failed.
+    [ -s "$AU_MANIFEST_CACHE" ] && return 0
+    return 1
+}
+
+update_manifest_current() {
+    [ -s "$AU_MANIFEST_CACHE" ] || { printf ''; return; }
+    sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$AU_MANIFEST_CACHE" | head -1
+}
+
+# Count how many history entries appear AFTER installed_tag.
+# Matches au_history_entries_after semantics in lib/auto_update.sh —
+# history-order, not numeric.
+update_behind_count() {
+    local installed="$1"
+    [ -s "$AU_MANIFEST_CACHE" ] || { printf '0'; return; }
+    [ -z "$installed" ] || [ "$installed" = "unknown" ] && { printf '0'; return; }
+    awk -v inst="$installed" '
+        /"v"[[:space:]]*:[[:space:]]*"/ {
+            line = $0
+            sub(/.*"v"[[:space:]]*:[[:space:]]*"/, "", line)
+            sub(/".*/, "", line)
+            v = line
+            if (found) { count++; next }
+            if (v == inst) { found = 1 }
+        }
+        END {
+            print (found ? count : 0)
+        }
+    ' "$AU_MANIFEST_CACHE"
+}
+
+update_last_check_ts() {
+    [ -s "$AU_MANIFEST_CACHE" ] || { printf '0'; return; }
+    file_mtime "$AU_MANIFEST_CACHE"
+}
+
+# Launch auto-update apply asynchronously, return job_id for /job?id=...
+# polling. Output streams to /tmp/z2k-job-<id>.log so the UI can tail it via
+# the existing job_log path. The real auto-update log at /opt/var/log/...
+# is appended by au_log; we duplicate to the per-job temp log for the UI.
+update_apply_async() {
+    [ -x "$AU_SCRIPT" ] || { echo "auto-update script missing: $AU_SCRIPT" >&2; return 1; }
+    local job_id
+    job_id=$(date +%s)$$
+    # Daemonize: close stdin and detach stdout/stderr from the CGI pipes.
+    # Without `</dev/null >/dev/null 2>&1` on the subshell, the background
+    # apply (and every grandchild like `curl`, `sh install`, `lighttpd`
+    # restart) inherits fd 1/2 pointing at lighttpd's CGI response pipe.
+    # lighttpd won't finalize the HTTP response until EVERY fd 1 holder
+    # closes — which means apiPost hangs for the entire 1-2 min install,
+    # the browser's confirm closes, and the modal never opens because
+    # the response that carries job_id is still in flight. Innermost
+    # `> log 2>&1` then overrides /dev/null with the actual job log
+    # for the apply itself.
+    (
+        sh "$AU_SCRIPT" apply > "/tmp/z2k-job-$job_id.log" 2>&1
+        echo "$?" > "/tmp/z2k-job-$job_id.exit"
+    ) </dev/null >/dev/null 2>&1 &
+    echo "$!" > "/tmp/z2k-job-$job_id.pid"
+    printf '%s' "$job_id"
 }
