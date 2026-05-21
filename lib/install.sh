@@ -777,6 +777,23 @@ step_build_zapret2() {
         # Silent fallback flag
         [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" ] && \
             touch "$backup_tmp/rkn_silent_fallback.flag"
+        # Webpanel state — opt-in component (installed via menu [P] → 1).
+        # Сохраняем port+bind (lighttpd binding) чтобы после reinstall'а
+        # автоматически re-install'нуть webpanel на тех же значениях.
+        # Сами файлы webpanel'и (cgi/www/lighttpd.conf) пере-копируются
+        # из свежих shipped sources через webpanel/install.sh — намеренно,
+        # чтобы обновления вебпанели доезжали без участия юзера. Init-
+        # скрипт S96 живёт в /opt/etc/init.d/, не в /opt/zapret2/, поэтому
+        # rm -rf $ZAPRET2_DIR его не сносит — но он указывает на пустой
+        # после reinstall'а /opt/zapret2/webpanel и lighttpd не стартует.
+        # Без этого backup'а webpanel юзера тихо ломается на любом auto-
+        # update reinstall'е.
+        if [ -f "$ZAPRET2_DIR/webpanel/port" ]; then
+            cp -f "$ZAPRET2_DIR/webpanel/port" "$backup_tmp/webpanel-port"
+            [ -f "$ZAPRET2_DIR/webpanel/bind" ] && \
+                cp -f "$ZAPRET2_DIR/webpanel/bind" "$backup_tmp/webpanel-bind"
+            print_success "Webpanel state сохранён (port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null), bind=$(cat "$backup_tmp/webpanel-bind" 2>/dev/null || echo auto))"
+        fi
         print_success "Настройки сохранены"
 
         # Backup legacy orchestra/ data (locked.tsv / locked.manual.tsv) на случай если
@@ -1279,7 +1296,19 @@ step_build_zapret2() {
         if [ -f "$backup_tmp/config" ]; then
             if [ "$Z2K_AUTO_UPDATE" = "1" ]; then
                 local _flag_backup="$backup_tmp/feature-flags.txt"
-                grep -E '^Z2K_[A-Z0-9_]+=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+                # Preserve both Z2K_* feature flags and the non-Z2K_ user-
+                # settable knobs (game mode style, RST filter, RKN silent
+                # fallback, Keenetic policy integration, TG-tunnel disable
+                # marker). Раньше regex был только `^Z2K_[A-Z0-9_]+=`,
+                # из-за чего GAME_MODE_ENABLED/STYLE, DROP_DPI_RST,
+                # POLICY_NAME/EXCLUDE и т.д. слетали при auto-update
+                # reinstall'е (юзерский игровой режим тихо отключался,
+                # selected NDM policy сбрасывалась на дефолт «nfqws»).
+                # Список явный — shipped config_official.sh пишет эти
+                # же ключи через ${saved_*}, без них create_official_config
+                # вернётся к дефолтам. Если добавляешь новый non-Z2K_
+                # user flag в config_official.sh — добавь его и сюда.
+                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
                 if [ -s "$_flag_backup" ] && [ -f "$ZAPRET2_DIR/config" ]; then
                     local _line _flag_name _escaped _applied=0
                     while IFS= read -r _line; do
@@ -2393,6 +2422,36 @@ step_finalize() {
     else
         print_warning "Не удалось сохранить z2k.sh в ${local_z2k_script}"
         print_info "Для повторного запуска используйте curl-команду из README"
+    fi
+
+    # Webpanel re-install — opt-in component, восстанавливаем только если
+    # юзер уже имел установленную панель (есть backup port-файла). Re-run
+    # shipped webpanel/install.sh с сохранёнными port/bind — это пере-копирует
+    # cgi/www/lighttpd.conf свежие, регенерирует /opt/etc/init.d/S96 и
+    # перезапустит lighttpd. Без этого блока auto-update reinstall тихо
+    # ломает webpanel: /opt/zapret2/webpanel/ снесён вместе с
+    # rm -rf $ZAPRET2_DIR, S96 живёт в /opt/etc/init.d/ и продолжает
+    # пытаться поднять lighttpd без конфига → серая страница / 502 /
+    # ничего на :8088 (репортилось юзерами 2026-05-21).
+    if [ -f "$backup_tmp/webpanel-port" ]; then
+        local _wp_port _wp_bind _wp_args _wp_src
+        _wp_port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null | tr -dc '0-9')
+        _wp_bind=$(cat "$backup_tmp/webpanel-bind" 2>/dev/null | tr -d '\r\n ')
+        _wp_args=""
+        [ -n "$_wp_port" ] && _wp_args="--port $_wp_port"
+        [ -n "$_wp_bind" ] && _wp_args="$_wp_args --bind $_wp_bind"
+        _wp_src="${WORK_DIR}/webpanel/install.sh"
+        if [ -f "$_wp_src" ]; then
+            print_info "Восстановление веб-панели (port=${_wp_port:-default}, bind=${_wp_bind:-auto})..."
+            # shellcheck disable=SC2086
+            if sh "$_wp_src" $_wp_args >/dev/null 2>&1; then
+                print_success "Веб-панель восстановлена и запущена"
+            else
+                print_warning "Установщик webpanel вернул ошибку — установите вручную через меню [P] → 1"
+            fi
+        else
+            print_warning "$_wp_src отсутствует — webpanel надо переустановить вручную через меню [P]"
+        fi
     fi
 
     print_separator
