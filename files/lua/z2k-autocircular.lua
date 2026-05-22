@@ -1396,6 +1396,7 @@ if type(circular) == "function" then
     local policy_pick_before, policy_score_before
     local silent_rotate_from_before, silent_rotate_to_before, silent_attempts_before
     local probe_override_before
+    local nstrategy_before_circular  -- snapshot before orig_circular mutates hrec
     -- DO NOT remove this inner pcall: pre-block errors (telemetry/persist setup,
     -- policy seed) must stay swallowed — existing contract. Изменение этого
     -- сломает nfqws desync path при любой ошибке в нашей бухгалтерии.
@@ -1407,6 +1408,7 @@ if type(circular) == "function" then
         policy_pick_before, policy_score_before = policy_seed_strategy(desync, askey_before, hostn_before, hrec_before)
         probe_override_before = apply_probe_override(askey_before, hostn_before, hrec_before)
         flow_start_if_needed(desync, hrec_before.nstrategy)
+        nstrategy_before_circular = tonumber(hrec_before.nstrategy)
       end
     end)
 
@@ -1502,6 +1504,43 @@ if type(circular) == "function" then
 
       if success_event or failure_event then
         reset_youtube_silent_retry(askey, hostn)
+      end
+
+      -- =========================================================
+      -- Rotation revert on recent success.
+      --
+      -- orig_circular advances hrec.nstrategy based on TCP-level
+      -- signals (retrans, lua failures). Those signals fire on
+      -- parallel failing TCP flows even when OTHER flows on the
+      -- same host are succeeding (HTTP/2 fan-out behind one
+      -- hostname). End-of-session debug for i.instagram.com showed
+      -- strat=1 produced 17 successes / 0 failures while rotator
+      -- still drifted to strat=6 because parallel flows accumulated
+      -- 3+ failures on the global counter.
+      --
+      -- Fix: keep a per-(hostn, askey) last-success timestamp in _G.
+      -- After orig_circular, if it advanced nstrategy AND the
+      -- (hostn, askey) pair had a success within STICKY_WINDOW_SEC,
+      -- revert nstrategy back to the pre-circular value. This
+      -- effectively says "as long as ANY flow succeeds on this host
+      -- for THIS rotator profile, don't move off the strategy that
+      -- produced those successes".
+      --
+      -- Per-profile scope avoids cross-pollination: success on
+      -- gv_tcp (googlevideo.com video chunks) MUST NOT freeze
+      -- rotation on yt_tcp (googlevideo.com manifest) — those are
+      -- independent rotator profiles for the same hostname.
+      local sticky_key = hostn and askey_after and (hostn .. "|" .. askey_after) or nil
+      _G.Z2K_STICKY_SUCCESS_TS = _G.Z2K_STICKY_SUCCESS_TS or {}
+      if success_event and sticky_key then
+        _G.Z2K_STICKY_SUCCESS_TS[sticky_key] = now_f()
+      end
+      if sticky_key and nstrategy_before_circular and hrec and hrec.nstrategy
+         and (tonumber(hrec.nstrategy) or 0) > nstrategy_before_circular then
+        local last_ok = _G.Z2K_STICKY_SUCCESS_TS[sticky_key]
+        if last_ok and (now_f() - last_ok) <= 30 then
+          hrec.nstrategy = nstrategy_before_circular
+        end
       end
 
       -- D.5a: mark hostn как имеющий свежий real-success для этого askey,

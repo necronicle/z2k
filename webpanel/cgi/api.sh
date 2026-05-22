@@ -181,14 +181,16 @@ case "$method $path" in
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
         # UI wants positive "customd_enabled"
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
+        dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         tpid=$(tunnel_pid 2>/dev/null)
         tunnel_running=false
         [ -n "$tpid" ] && tunnel_running=true
 
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s","dynamic_ttl":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
             "${rst_filter:-0}" "${silent_fb:-0}" "${game_mode:-0}" "${customd:-0}" \
+            "${dynamic_ttl:-1}" \
             "${game_profile:-flowseal}" \
             "${tunnel_running:-false}"
         exit 0
@@ -203,7 +205,8 @@ case "$method $path" in
     "POST /toggle/rst-filter"|\
     "POST /toggle/silent-fallback"|\
     "POST /toggle/game-mode"|\
-    "POST /toggle/customd")
+    "POST /toggle/customd"|\
+    "POST /toggle/dynamic-ttl")
         body=$(read_body)
         val=$(form_value "$body" "value")
         [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
@@ -216,6 +219,7 @@ case "$method $path" in
             /toggle/silent-fallback) toggle_silent_fallback "$val" || json_fail "500" "toggle failed" ;;
             /toggle/game-mode)       toggle_game_mode       "$val" || json_fail "500" "toggle failed" ;;
             /toggle/customd)         toggle_customd         "$val" || json_fail "500" "toggle failed" ;;
+            /toggle/dynamic-ttl)     toggle_dynamic_ttl     "$val" || json_fail "500" "toggle failed" ;;
         esac
         json_ok
         ;;

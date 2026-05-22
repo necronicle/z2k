@@ -337,12 +337,15 @@
       desc: "TCP/UDP bypass для игровых сервисов (стандартный профиль — single-strategy bypass на игровом ipset). Для отката на старый ротатор: GAME_PROFILE=legacy в /opt/zapret2/config." },
     { key: "customd", name: "Скрипты custom.d",
       desc: "Дополнительные daemons из init.d/custom.d (50-stun4all, 50-discord-media)." },
+    { key: "dynamic_ttl", name: "Динамический TTL",
+      desc: "Инжекция фиксированного TTL в исходящий трафик — обход обнаружения tethering у мобильных операторов (МТС/Билайн с телефонной симкой). Если у роутера уже настроен NDM TTL-fix — отключи, чтобы избежать конфликта." },
   ];
   const TOGGLE_API_NAME = {
     rst_filter: "rst-filter",
     silent_fallback: "silent-fallback",
     game_mode: "game-mode",
     customd: "customd",
+    dynamic_ttl: "dynamic-ttl",
   };
 
   async function renderToggles() {
@@ -401,7 +404,7 @@
   // before clearing the indicator so the user sees the restart actually
   // completed and didn't silently die. rst-filter (raw iptables) is the
   // only one that doesn't bounce the daemon.
-  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, game_mode: 1, customd: 1 };
+  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, game_mode: 1, customd: 1, dynamic_ttl: 1 };
 
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");

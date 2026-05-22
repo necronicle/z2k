@@ -2444,6 +2444,48 @@ step_finalize() {
     # `[ -f /webpanel-port ]` and webpanel restore never fired. Fixed
     # in r-22.
     local backup_tmp="/tmp/z2k_upgrade_backup"
+
+    # =====================================================================
+    # Auto-update: re-apply preserved Z2K_* / non-Z2K_ user flags AFTER
+    # step_create_config_and_init wrote the shipped default config.
+    #
+    # The early restore in download_openwrt_embedded_release runs BEFORE
+    # step 10 creates $ZAPRET2_DIR/config, so its `[ -f $ZAPRET2_DIR/config ]`
+    # guard always failed silently and the user's Z2K_DYNAMIC_TTL=0 (and
+    # any other Z2K_* toggle) reverted to defaults on every nightly cron.
+    # Manual reinstall path was unaffected because line 1326 copies the
+    # whole backup config back, so step 10 reads user values via saved_*.
+    # Auto-update path skipped that cp and we lost the values.
+    #
+    # Fix: apply the flag-level overrides here, after step 10. Idempotent
+    # — re-running is a no-op when nothing changed.
+    if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
+        local _flag_backup="$backup_tmp/feature-flags-late.txt"
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+        if [ -s "$_flag_backup" ]; then
+            local _line _flag_name _escaped _applied=0
+            while IFS= read -r _line; do
+                [ -z "$_line" ] && continue
+                _flag_name="${_line%%=*}"
+                if grep -q "^${_flag_name}=" "$ZAPRET2_DIR/config"; then
+                    _escaped=$(printf '%s\n' "$_line" | sed 's/[&/\\]/\\&/g')
+                    sed -i "s|^${_flag_name}=.*|${_escaped}|" "$ZAPRET2_DIR/config"
+                    _applied=$((_applied + 1))
+                fi
+            done < "$_flag_backup"
+            print_success "Auto-update: ${_applied} feature flag(s) перенесено в финальный config"
+            # Re-generate NFQWS2_OPT from the restored config — config_official.sh
+            # reads saved_* from $ZAPRET2_DIR/config so the regenerate now reflects
+            # user flags (e.g. Z2K_DYNAMIC_TTL=0 means no NDM TTL injection in
+            # NFQWS2_OPT).
+            if [ -f "${ZAPRET2_DIR}/lib/config_official.sh" ]; then
+                # shellcheck disable=SC1090
+                . "${ZAPRET2_DIR}/lib/config_official.sh" 2>/dev/null
+                create_official_config "${ZAPRET2_DIR}/config" >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+
     if [ -f "$backup_tmp/webpanel-port" ]; then
         local _wp_port _wp_bind _wp_args _wp_src
         _wp_port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null | tr -dc '0-9')

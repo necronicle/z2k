@@ -142,6 +142,17 @@ toggle_customd() {
     restart_service_if_running
 }
 
+toggle_dynamic_ttl() {
+    # Z2K_DYNAMIC_TTL — feature flag for NDM TTL bypass injection in
+    # NFQWS2_OPT. Mobile operators (МТС/Билайн) detect tethering via TTL
+    # decrement; we counter-inject a fresh TTL. Some users with explicit
+    # NDM TTL-fix turn it off (Z2K_DYNAMIC_TTL=0). Default = 1.
+    local want="$1"
+    set_flag "Z2K_DYNAMIC_TTL" "$want" "$CONFIG_FILE" || return 1
+    regenerate_config
+    restart_service_if_running
+}
+
 # --- whitelist ---
 
 whitelist_list() {
