@@ -11,6 +11,7 @@
 #   - Временные файлы
 #   - Telegram-туннель: tg-mtproxy-client, S98tg-tunnel, NDM redirect hook,
 #     watchdog + cron-запись, iptables NAT REDIRECT на :1443, /opt/sbin бинарник
+#   - Вспомогательный туннель S97z2k-http-tunnel + его NDM hook
 #
 # Использование:
 #   sh -c 'tmp=/tmp/z2k_cleanup.sh; rm -f "$tmp"; for url in "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh" "https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k_cleanup.sh" "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh"; do echo "[i] Пробую: $url" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then exec sh "$tmp"; fi; done; echo "[FAIL] Не удалось скачать z2k_cleanup.sh ни с одного зеркала" >&2; exit 1'
@@ -45,6 +46,7 @@ echo ""
 log_info "Попытка мягкой остановки через init-скрипты..."
 
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
+            /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S98tg-tunnel; do
     if [ -x "$init" ]; then
         log_info "Останавливаю: $init stop"
@@ -60,6 +62,7 @@ log_info "Удаление init-скриптов..."
 
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2 \
+            /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy; do
     if [ -f "$init" ]; then
         rm -f "$init"
@@ -77,7 +80,9 @@ for hook in /opt/etc/ndm/netfilter.d/000-zapret2.sh \
             /opt/etc/ndm/netfilter.d/000-zapret.sh \
             /opt/etc/ndm/netfilter.d/*zapret* \
             /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
-            /opt/etc/ndm/netfilter.d/*z2k-tg*; do
+            /opt/etc/ndm/netfilter.d/*z2k-tg* \
+            /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh \
+            /opt/etc/ndm/netfilter.d/*z2k-http*; do
     if [ -f "$hook" ]; then
         rm -f "$hook"
         log_info "  Удалён: $hook"
@@ -207,6 +212,29 @@ else
 fi
 
 # ==========================================
+# 5a-bis. Вспомогательный HTTP-туннель: NAT REDIRECT правила (:1444)
+# ==========================================
+
+log_info "Удаление iptables NAT REDIRECT правил вспомогательного туннеля (:1444)..."
+
+HTTP_CIDRS="168.119.95.238/32"
+http_rules_removed=0
+for cidr in $HTTP_CIDRS; do
+    for chain in PREROUTING OUTPUT; do
+        while iptables -t nat -C "$chain" -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null; do
+            iptables -t nat -D "$chain" -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null || break
+            http_rules_removed=$((http_rules_removed + 1))
+        done
+    done
+    conntrack -D -d "${cidr%/*}" 2>/dev/null || true
+done
+if [ "$http_rules_removed" -gt 0 ]; then
+    log_info "  Снято NAT правил :1444: $http_rules_removed"
+else
+    log_skip "Правил REDIRECT :1444 не найдено"
+fi
+
+# ==========================================
 # 5b. Cron-записи Telegram-туннеля
 # ==========================================
 
@@ -249,6 +277,8 @@ log_info "Очистка временных файлов..."
 for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
               /tmp/tg-tunnel.log /tmp/tg-tunnel-watchdog.state \
               /var/run/tg-tunnel.pid \
+              /tmp/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
+              /tmp/z2k-insta-refresh.log /tmp/z2k-insta-refresh.log.old \
               /opt/var/log/z2k-classify.log \
               /opt/var/log/z2k-classify-drift.log \
               /opt/var/log/z2k-classify-history.tsv; do
@@ -308,6 +338,7 @@ done
 
 # Проверка init-скриптов
 for init in /opt/etc/init.d/S99zapret /opt/etc/init.d/S99zapret2 \
+            /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy; do
     if [ -f "$init" ]; then
         log_error "Init-скрипт всё ещё существует: $init"

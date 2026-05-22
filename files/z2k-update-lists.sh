@@ -575,6 +575,16 @@ main() {
         log_msg "No changes detected"
     fi
 
+    # Refresh Instagram/cdninstagram ndmc records from a live DNS lookup on
+    # the EU VPS. The script self-skips on non-Keenetic systems, when the
+    # user disabled it (Z2K_INSTA_IP_REFRESH=0), or when the user already
+    # cleared all insta records via menu [I].
+    if [ -x "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" ]; then
+        log_msg "Running insta-ip refresh..."
+        sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || \
+            log_msg "WARN: insta-ip refresh exited non-zero"
+    fi
+
     log_msg "--- Update lists finished ---"
 }
 

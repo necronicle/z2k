@@ -62,7 +62,20 @@ start() {
 
 stop() {
     echo "Stopping tg-tunnel..."
-    killall tg-mtproxy-client 2>/dev/null
+    # Kill by PID — a sibling instance (S97z2k-http-tunnel on :1444) runs
+    # the same binary, so killall would knock it out as collateral damage.
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE" 2>/dev/null)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    fi
+    # Fallback: find a tg-mtproxy-client listening on :1443 and only kill that one.
+    if pidof tg-mtproxy-client >/dev/null 2>&1; then
+        for p in $(pidof tg-mtproxy-client); do
+            if [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- "--listen=:1443"; then
+                kill "$p" 2>/dev/null
+            fi
+        done
+    fi
     rm -f "$PIDFILE"
     # Idempotent removal: drop every matching copy of the rule from both chains.
     for cidr in $CIDRS; do

@@ -2171,20 +2171,22 @@ step_finalize() {
         print_info "Установите: opkg install cron"
     fi
 
-    # Instagram DNS redirect (Keenetic static DNS)
-    # Прописывает рабочие IP для Instagram если записи ещё не заданы.
-    # Решает проблему DNS-отравления провайдером.
+    # Instagram DNS redirect (Keenetic static DNS).
+    # Fresh installs get a minimal one-IP-per-host fallback set so that
+    # the system is functional even if the VPS resolver is unreachable
+    # at install time. The actual maintenance happens via
+    # /opt/zapret2/z2k-insta-ip-refresh.sh, which runs from
+    # z2k-update-lists.sh on the daily cron and is also kicked off
+    # once at the end of this install. It rewrites these records to
+    # whatever the EU-egress VPS resolves today, deleting stale dups.
     if command -v ndmc >/dev/null 2>&1; then
         if ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host instagram.com"; then
             print_info "Настройка DNS для Instagram..."
-            ndmc -c "ip host instagram.com 157.240.251.174" 2>/dev/null
+            ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
             ndmc -c "ip host www.instagram.com 157.240.9.174" 2>/dev/null
             ndmc -c "ip host graph.instagram.com 157.240.0.63" 2>/dev/null
             ndmc -c "ip host api.instagram.com 157.240.253.63" 2>/dev/null
             ndmc -c "ip host instagram.c10r.instagram.com 157.240.214.63" 2>/dev/null
-            ndmc -c "ip host static.cdninstagram.com 163.70.147.63" 2>/dev/null
-            ndmc -c "ip host scontent.cdninstagram.com 163.70.147.63" 2>/dev/null
-            ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
             ndmc -c "ip host static.cdninstagram.com 57.144.112.192" 2>/dev/null
             ndmc -c "ip host scontent.cdninstagram.com 57.144.112.192" 2>/dev/null
             ndmc -c "system configuration save" 2>/dev/null
@@ -2192,6 +2194,15 @@ step_finalize() {
         else
             print_info "DNS записи для Instagram уже настроены"
         fi
+    fi
+
+    # Install the refresh script and run it once now to replace any
+    # stale shipped/fallback IPs with what Meta is actually serving today.
+    if [ -f "${WORK_DIR}/files/z2k-insta-ip-refresh.sh" ]; then
+        cp -f "${WORK_DIR}/files/z2k-insta-ip-refresh.sh" \
+              "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh"
+        chmod +x "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh"
+        sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || true
     fi
 
     # Telegram transparent proxy (tg-mtproxy-client)
@@ -2282,6 +2293,17 @@ step_finalize() {
         print_success "Keenetic NDM hook установлен (auto-restore iptables)"
     fi
 
+    if [ -f "${WORK_DIR}/files/init.d/S97z2k-http-tunnel" ]; then
+        cp -f "${WORK_DIR}/files/init.d/S97z2k-http-tunnel" \
+              /opt/etc/init.d/S97z2k-http-tunnel
+        chmod +x /opt/etc/init.d/S97z2k-http-tunnel
+    fi
+    if [ -f "${WORK_DIR}/files/ndm/91-z2k-http-tunnel-redirect.sh" ]; then
+        cp -f "${WORK_DIR}/files/ndm/91-z2k-http-tunnel-redirect.sh" \
+              /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh
+        chmod +x /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh
+    fi
+
     if [ -f "${WORK_DIR}/files/z2k-tg-watchdog.sh" ]; then
         cp -f "${WORK_DIR}/files/z2k-tg-watchdog.sh" \
               /opt/zapret2/tg-tunnel-watchdog.sh
@@ -2326,6 +2348,13 @@ step_finalize() {
             killall tg-mtproxy-client 2>/dev/null || true
         fi
         print_info "Telegram tunnel не запущен — отключён пользователем"
+    fi
+
+    # Aux init.d daemons that ride alongside S98tg-tunnel and share the
+    # same tg-mtproxy-client binary. Start unconditionally — no user-facing
+    # toggle. Silent on restart so it doesn't surface in install output.
+    if [ -x /opt/sbin/tg-mtproxy-client ] && [ -x /opt/etc/init.d/S97z2k-http-tunnel ]; then
+        /opt/etc/init.d/S97z2k-http-tunnel restart >/dev/null 2>&1 || true
     fi
 
     # z2k-detect — reactive DPI-discovery daemon.
@@ -2877,6 +2906,28 @@ uninstall_zapret2() {
             print_info "Удален init скрипт: $_init"
         fi
     done
+
+    # Tear down the aux HTTP-tunnel (S97) before touching the TG tunnel so
+    # that the upcoming `killall -9 tg-mtproxy-client` doesn't race with a
+    # still-listening sibling on :1444. S97's own stop kills by PID; the
+    # rule sweep below catches anything left behind.
+    if [ -x /opt/etc/init.d/S97z2k-http-tunnel ]; then
+        /opt/etc/init.d/S97z2k-http-tunnel stop >/dev/null 2>&1 || true
+    fi
+    local http_cidr
+    for http_cidr in 168.119.95.238/32; do
+        while iptables -t nat -C PREROUTING -d "$http_cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null; do
+            iptables -t nat -D PREROUTING -d "$http_cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null || break
+        done
+        while iptables -t nat -C OUTPUT -d "$http_cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null; do
+            iptables -t nat -D OUTPUT -d "$http_cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null || break
+        done
+        conntrack -D -d "${http_cidr%/*}" 2>/dev/null || true
+    done
+    rm -f /opt/etc/init.d/S97z2k-http-tunnel \
+          /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh \
+          /var/run/z2k-http-tunnel.pid \
+          /tmp/z2k-http-tunnel.log 2>/dev/null || true
 
     # Tear down the Telegram tunnel: stop the daemon, kill stragglers, drop
     # its REDIRECT rules, remove the init script and the NDM hook that

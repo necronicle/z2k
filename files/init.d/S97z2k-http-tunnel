@@ -1,0 +1,68 @@
+#!/bin/sh
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
+# /opt/etc/init.d/S97z2k-http-tunnel
+#
+# Spins up a second tg-mtproxy-client instance on :1444 and iptables-redirects
+# specific HTTP/80 destinations through it. Coexists with S98tg-tunnel
+# (which owns :1443 and the Telegram CIDRs) — different listen port, different
+# CIDR list, separate PID file.
+#
+# Installed by lib/install.sh from files/init.d/S97z2k-http-tunnel.
+# Companion NDM hook /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh
+# re-inserts these REDIRECT rules after every NDM-driven netfilter regen
+# (WAN flap, tunnel up/down, hotplug, reboot).
+
+BIN="/opt/sbin/tg-mtproxy-client"
+LOG="/tmp/z2k-http-tunnel.log"
+PIDFILE="/var/run/z2k-http-tunnel.pid"
+LISTEN_PORT="1444"
+
+CIDRS="168.119.95.238/32"
+
+start() {
+    [ -x "$BIN" ] || exit 0
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE 2>/dev/null)" 2>/dev/null; then
+        echo "z2k-http-tunnel already running (pid $(cat $PIDFILE))"
+        return 0
+    fi
+    echo "Starting z2k-http-tunnel on :$LISTEN_PORT..."
+    $BIN --listen=:$LISTEN_PORT --timeout=15m >> "$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 2
+    for cidr in $CIDRS; do
+        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
+            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
+            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+    done
+    for cidr in $CIDRS; do
+        conntrack -D -d "${cidr%/*}" 2>/dev/null || true
+    done
+}
+
+stop() {
+    echo "Stopping z2k-http-tunnel..."
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE" 2>/dev/null)
+        # Kill by pid (not killall) — S98tg-tunnel runs the same binary
+        # on :1443 and we must not knock it out.
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    for cidr in $CIDRS; do
+        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
+            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+        done
+        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
+            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+        done
+    done
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart}" ;;
+esac

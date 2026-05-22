@@ -16,9 +16,12 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -26,6 +29,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -61,11 +65,22 @@ var (
 	sessionQueueDepth     = flag.Int("session-queue-depth", 1024, "session writeCh depth")
 	controlQueueDepth     = flag.Int("control-queue-depth", 256, "session controlCh depth")
 	dialStatsInterval     = flag.Duration("dial-stats-interval", 30*time.Second, "dial stats aggregation interval (0 = disabled)")
+
+	// One-off allowlist extension (2026-05-22): permit specific non-Telegram
+	// CIDRs through the relay. Used for the cdnbase.com HTTP body-cap bypass
+	// (see feedback_no_tunnels.md "One-off exception"). NOT a general
+	// tunnel-anything mode — keep this narrow. Format:
+	// --extra-cidrs="168.119.95.0/24,1.2.3.4/32"
+	extraCIDRs = flag.String("extra-cidrs", "", "comma-separated allowlist of non-Telegram CIDRs (IPv4 only)")
 )
 
 // Telegram DC allowlist — same ranges the CF worker accepts.
 var telegramV4 []netRange
 var telegramV6Prefixes = []string{"2001:b28:f23d:", "2001:b28:f23f:", "2001:67c:4e8:"}
+
+// Optional non-Telegram allowlist, populated from --extra-cidrs at startup.
+// See "One-off exception" in feedback_no_tunnels memory.
+var extraV4 []netRange
 
 type netRange struct {
 	net  uint32
@@ -99,6 +114,33 @@ func init() {
 	}
 }
 
+// parseExtraCIDRs parses --extra-cidrs and populates extraV4. Called once at startup.
+func parseExtraCIDRs(s string) error {
+	if s == "" {
+		return nil
+	}
+	for _, c := range strings.Split(s, ",") {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, ipnet, err := net.ParseCIDR(c)
+		if err != nil {
+			return fmt.Errorf("extra-cidrs: invalid CIDR %q: %w", c, err)
+		}
+		v4 := ipnet.IP.To4()
+		if v4 == nil {
+			return fmt.Errorf("extra-cidrs: IPv4 only (got %q)", c)
+		}
+		mask := binary.BigEndian.Uint32(ipnet.Mask)
+		extraV4 = append(extraV4, netRange{
+			net:  binary.BigEndian.Uint32(v4),
+			mask: mask,
+		})
+	}
+	return nil
+}
+
 func isTelegramAddr(host string) bool {
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -107,6 +149,12 @@ func isTelegramAddr(host string) bool {
 	if v4 := ip.To4(); v4 != nil {
 		u := binary.BigEndian.Uint32(v4)
 		for _, r := range telegramV4 {
+			if u&r.mask == r.net {
+				return true
+			}
+		}
+		// Non-Telegram extras (one-off cdnbase exception, etc.)
+		for _, r := range extraV4 {
 			if u&r.mask == r.net {
 				return true
 			}
@@ -893,6 +941,106 @@ func makeSessionID() string {
 	return strconv.FormatInt(time.Now().UnixNano()%100000, 36)
 }
 
+// /resolve endpoint: returns fresh DNS A records for a whitelisted set of
+// Instagram hostnames. Used by routers to refresh their `ndmc ip host`
+// entries (which would otherwise rot — Meta rotates edge IPs faster than
+// our shipped defaults can keep up).
+//
+// Auth: X-Z2K-Auth header = hex(HMAC-SHA256(secret, body)). Body is JSON
+// {"hosts":["instagram.com",...]}; response is {"results":{"host":["1.2.3.4",...]}}.
+//
+// Defense in depth: hosts must match insta-allowlist (apex + suffixes).
+// Anything else is silently dropped from the response. Per-host LookupHost
+// timeout is short; failures are also silently dropped.
+
+var instaApex = map[string]bool{
+	"instagram.com":    true,
+	"cdninstagram.com": true,
+}
+var instaSuffixes = []string{".instagram.com", ".cdninstagram.com"}
+
+func isInstaHost(h string) bool {
+	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	if instaApex[h] {
+		return true
+	}
+	for _, suf := range instaSuffixes {
+		if strings.HasSuffix(h, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+type resolveReq struct {
+	Hosts []string `json:"hosts"`
+}
+type resolveResp struct {
+	Results map[string][]string `json:"results"`
+}
+
+func handleResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	mac := hmac.New(sha256.New, []byte(*secret))
+	mac.Write(body)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	got := r.Header.Get("X-Z2K-Auth")
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(got)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req resolveReq
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if len(req.Hosts) == 0 || len(req.Hosts) > 32 {
+		http.Error(w, "host count out of range", http.StatusBadRequest)
+		return
+	}
+	results := make(map[string][]string)
+	for _, h := range req.Hosts {
+		if !isInstaHost(h) {
+			if *verbose {
+				log.Printf("resolve: reject %q (not insta-allowlisted)", h)
+			}
+			continue
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		ips, err := net.DefaultResolver.LookupHost(ctx, h)
+		cancel()
+		if err != nil {
+			if *verbose {
+				log.Printf("resolve %q: %v", h, err)
+			}
+			continue
+		}
+		var v4 []string
+		for _, ip := range ips {
+			if strings.Contains(ip, ":") {
+				continue
+			}
+			v4 = append(v4, ip)
+			if len(v4) >= 4 {
+				break
+			}
+		}
+		if len(v4) > 0 {
+			results[h] = v4
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resolveResp{Results: results})
+}
+
 func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/ws" {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -925,6 +1073,13 @@ func main() {
 		log.Fatal("--secret is required")
 	}
 
+	if err := parseExtraCIDRs(*extraCIDRs); err != nil {
+		log.Fatal(err)
+	}
+	if len(extraV4) > 0 {
+		log.Printf("non-Telegram allowlist extras loaded: %d CIDR(s)", len(extraV4))
+	}
+
 	dialThrottle = newDialLimiter(*dialLimitPerTarget, *dialThrottleTimeout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -937,6 +1092,7 @@ func main() {
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWS(ctx, w, r)
 	})
+	mux.HandleFunc("/resolve", handleResolve)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "z2k vps-relay")
 	})
