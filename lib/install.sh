@@ -1053,12 +1053,20 @@ step_build_zapret2() {
         [ ! -e "$fakedir/quic4" ] && [ -f "$fakedir/quic_4.bin" ] && ln -sf quic_4.bin "$fakedir/quic4"
         [ ! -e "$fakedir/quic5" ] && [ -f "$fakedir/quic_5.bin" ] && ln -sf quic_5.bin "$fakedir/quic5"
         [ ! -e "$fakedir/quic6" ] && [ -f "$fakedir/quic_6.bin" ] && ln -sf quic_6.bin "$fakedir/quic6"
-        # quic_google → quic_initial_google_com.bin
-        [ ! -e "$fakedir/quic_google" ] && [ -f "$fakedir/quic_initial_google_com.bin" ] && \
-            ln -sf quic_initial_google_com.bin "$fakedir/quic_google"
+        # quic_google → quic_initial_www_google_com.bin
+        # (shipped file uses www_ prefix; earlier link target without www_
+        # never existed, so before this fix the symlink was never created and
+        # `blob=quic_google` strategies fell through with nil blob → fake
+        # desync was effectively no-op)
+        [ ! -e "$fakedir/quic_google" ] && [ -f "$fakedir/quic_initial_www_google_com.bin" ] && \
+            ln -sf quic_initial_www_google_com.bin "$fakedir/quic_google"
         # quic_rutracker → quic_initial_rutracker_org.bin
         [ ! -e "$fakedir/quic_rutracker" ] && [ -f "$fakedir/quic_initial_rutracker_org.bin" ] && \
             ln -sf quic_initial_rutracker_org.bin "$fakedir/quic_rutracker"
+        # quic_dbankcloud → quic_initial_dbankcloud_ru.bin
+        # (referenced by discord_udp strats 1-4 + game-mode default arm)
+        [ ! -e "$fakedir/quic_dbankcloud" ] && [ -f "$fakedir/quic_initial_dbankcloud_ru.bin" ] && \
+            ln -sf quic_initial_dbankcloud_ru.bin "$fakedir/quic_dbankcloud"
     fi
 
     # Install blocked-monitor helper (runtime diagnostics for blocked domains).
