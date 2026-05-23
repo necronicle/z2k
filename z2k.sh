@@ -1175,8 +1175,9 @@ update_z2k() {
         if z2k_fetch "${GITHUB_RAW}/files/z2k-tg-watchdog.sh" "$tg_support_tmp"; then
             cp "$tg_support_tmp" /opt/zapret2/tg-tunnel-watchdog.sh
             chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
-            crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
-                { crontab -l 2>/dev/null || true; echo '* * * * * /opt/zapret2/tg-tunnel-watchdog.sh'; } | crontab -
+            # Watchdog is triggered by z2k-scheduler.sh (see r-26 notes
+            # on broken Vixie cron reload). Strip any legacy cron entry.
+            crontab -l 2>/dev/null | grep -v "tg-tunnel-watchdog" | crontab - 2>/dev/null || true
             print_success "Watchdog обновлён"
         else
             print_warning "Не удалось обновить watchdog"

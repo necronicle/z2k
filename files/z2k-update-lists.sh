@@ -4,6 +4,11 @@
 #
 # При обнаружении изменений автоматически перезапускает сервис.
 
+# Cron on Entware ships PATH=/usr/bin:/bin only — awk/grep/curl/sed/etc.
+# live in /opt/bin and /opt/sbin. Without this export the entire script
+# silently dies on the first `awk` call (see reference_cron_path_entware).
+export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 ZAPRET2_DIR="/opt/zapret2"
 INIT_SCRIPT="/opt/etc/init.d/S99zapret2"
 LOG_FILE="${ZAPRET2_DIR}/update-lists.log"

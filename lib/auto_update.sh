@@ -1,8 +1,8 @@
 #!/bin/sh
 # z2k auto-update module
 #
-# Sourced from /opt/zapret2/z2k-auto-update.sh (cron entry) and from
-# lib/menu.sh (manual "Проверить обновления").
+# Sourced from /opt/zapret2/z2k-auto-update.sh (fired by z2k-scheduler
+# at 02:00) and from lib/menu.sh (manual "Проверить обновления").
 #
 # Exposes:
 #   au_run_apply   — main entry: fetch manifest, decide, apply, health-check
@@ -562,7 +562,7 @@ au_apply_reinstall() {
     # Pipe through `tee -a` so install output reaches BOTH:
     #  (a) the persistent /opt/var/log/z2k-auto-update.log (auditable later)
     #  (b) our own stdout — which the caller (z2k-auto-update.sh apply
-    #      invoked from update_apply_async / cron) redirects to either the
+    #      invoked from update_apply_async / scheduler) redirects to either the
     #      per-job /tmp/z2k-job-<id>.log (webpanel) or the manual user
     #      terminal. Without the tee, install steps got swallowed by the
     #      append-to-file redirect and the user saw only "reinstall:

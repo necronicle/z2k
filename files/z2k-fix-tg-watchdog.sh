@@ -212,18 +212,15 @@ else
     done
 fi
 
-say "[3/4] Ensuring watchdog cron entry exists"
+say "[3/4] Cleaning up legacy cron entries (watchdog now fired by z2k-scheduler)"
 if [ -x /opt/etc/init.d/S97tg-mtproxy ]; then
     /opt/etc/init.d/S97tg-mtproxy stop >/dev/null 2>&1 || true
 fi
 rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
-crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null || true
-if ! crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog"; then
-    { crontab -l 2>/dev/null || true; echo '* * * * * /opt/zapret2/tg-tunnel-watchdog.sh'; } | crontab -
-    say "    cron entry added"
-else
-    say "    cron entry already present"
-fi
+# Vixie cron on Keenetic Entware doesn't reload entries added after the
+# daemon's start (see r-26). z2k-scheduler.sh fires the watchdog ~1×/min
+# instead. Strip any legacy cron line so it doesn't mislead diagnostics.
+crontab -l 2>/dev/null | grep -vE "S97tg-mtproxy|tg-tunnel-watchdog" | crontab - 2>/dev/null || true
 
 say "[4/4] Running probe once to verify"
 rm -f /tmp/tg-tunnel-watchdog.state

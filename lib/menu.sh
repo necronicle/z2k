@@ -1326,7 +1326,7 @@ menu_roblox_bypass() {
   стандартный — single-strategy bypass: TCP TLS rotator (6 стратегий)
                 + TCP non-TLS static + UDP fake (dbankcloud QUIC),
                 scoped по игровому ipset (~31K CIDR aggregate,
-                обновляется cron'ом).
+                обновляется z2k-scheduler'ом ежедневно).
                 Рекомендуется всем — field-проверено на широком
                 каталоге игр (Apex/Tarkov/Darktide/etc).
 

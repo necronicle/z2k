@@ -27,7 +27,15 @@ start() {
         return 0
     fi
     echo "Starting z2k-http-tunnel on :$LISTEN_PORT..."
-    $BIN --listen=:$LISTEN_PORT --timeout=15m >> "$LOG" 2>&1 &
+    # Proper daemonization: subshell ignores SIGHUP, then exec replaces it
+    # with the daemon which inherits the ignored-HUP disposition; stdin
+    # is closed so daemon has no controlling tty. Without this, busybox
+    # sh on MIPS posts SIGHUP to bg children when init.d wrapper exits,
+    # and the Go runtime (terminate-on-HUP by default) kills the daemon
+    # before it even reaches "listening on :NNNN" in the log — observed
+    # field-debug 2026-05-23 on a Keenetic MIPS user where the same
+    # binary ran fine in foreground but died instantly under init.d.
+    ( trap '' HUP; exec $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 ) &
     echo $! > "$PIDFILE"
     sleep 2
     for cidr in $CIDRS; do

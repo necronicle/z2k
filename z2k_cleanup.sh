@@ -47,7 +47,8 @@ log_info "Попытка мягкой остановки через init-скр�
 
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S97z2k-http-tunnel \
-            /opt/etc/init.d/S98tg-tunnel; do
+            /opt/etc/init.d/S98tg-tunnel \
+            /opt/etc/init.d/S99z2k-scheduler; do
     if [ -x "$init" ]; then
         log_info "Останавливаю: $init stop"
         "$init" stop 2>/dev/null || log_warn "  $init stop вернул ошибку (не критично)"
@@ -63,7 +64,8 @@ log_info "Удаление init-скриптов..."
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
-            /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy; do
+            /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy \
+            /opt/etc/init.d/S99z2k-scheduler; do
     if [ -f "$init" ]; then
         rm -f "$init"
         log_info "  Удалён: $init"
@@ -235,16 +237,37 @@ else
 fi
 
 # ==========================================
-# 5b. Cron-записи Telegram-туннеля
+# 5b. Cron-записи z2k и восстановление cron-демона
 # ==========================================
 
+# Strip every cron entry z2k ever installed (current + legacy paths).
 if command -v crontab >/dev/null 2>&1; then
-    for pat in "tg-tunnel-watchdog" "S97tg-mtproxy"; do
+    for pat in "tg-tunnel-watchdog" "S97tg-mtproxy" \
+               "z2k-auto-update" "z2k-update-lists" "z2k-classify-drift" \
+               "z2k-nightly-probe" "ipset/get_config" "z2k-scheduler"; do
         if crontab -l 2>/dev/null | grep -q "$pat"; then
             crontab -l 2>/dev/null | grep -v "$pat" | crontab - 2>/dev/null \
                 && log_info "  Удалена cron-запись: $pat"
         fi
     done
+fi
+
+# Strip our entries from /opt/etc/crontab too (legacy install method).
+if [ -f /opt/etc/crontab ]; then
+    if grep -qE "get_config\.sh|z2k-update-lists\.sh|z2k-auto-update\.sh|z2k-classify-drift\.sh|z2k-nightly-probe\.sh|tg-tunnel-watchdog|z2k-scheduler" /opt/etc/crontab 2>/dev/null; then
+        grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-auto-update\.sh|z2k-classify-drift\.sh|z2k-nightly-probe\.sh|tg-tunnel-watchdog|z2k-scheduler" \
+            /opt/etc/crontab > /opt/etc/crontab.tmp 2>/dev/null \
+            && mv /opt/etc/crontab.tmp /opt/etc/crontab \
+            && log_info "  Очищены z2k записи из /opt/etc/crontab"
+    fi
+fi
+
+# Re-enable Vixie cron's init script — z2k disabled it during install
+# (chmod -x). Cron itself is not ours to remove; restore it so the user
+# has it available for unrelated needs.
+if [ -f /opt/etc/init.d/S10cron ] && [ ! -x /opt/etc/init.d/S10cron ]; then
+    chmod +x /opt/etc/init.d/S10cron 2>/dev/null \
+        && log_info "  Восстановлен autostart cron-демона (/opt/etc/init.d/S10cron +x)"
 fi
 
 # ==========================================
@@ -279,6 +302,7 @@ for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
               /var/run/tg-tunnel.pid \
               /tmp/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
               /tmp/z2k-insta-refresh.log /tmp/z2k-insta-refresh.log.old \
+              /var/run/z2k-scheduler.pid /opt/var/log/z2k-scheduler.log \
               /opt/var/log/z2k-classify.log \
               /opt/var/log/z2k-classify-drift.log \
               /opt/var/log/z2k-classify-history.tsv; do
@@ -339,7 +363,8 @@ done
 # Проверка init-скриптов
 for init in /opt/etc/init.d/S99zapret /opt/etc/init.d/S99zapret2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
-            /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy; do
+            /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy \
+            /opt/etc/init.d/S99z2k-scheduler; do
     if [ -f "$init" ]; then
         log_error "Init-скрипт всё ещё существует: $init"
     fi

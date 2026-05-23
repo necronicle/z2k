@@ -148,6 +148,7 @@
     }
 
     if (behind > 0 && available !== "?" && installed !== "?") {
+      const pending = Array.isArray(d.pending) ? d.pending : [];
       banner.hidden = false;
       banner.className = "update-banner";
       banner.innerHTML = `
@@ -157,9 +158,27 @@
         </div>
         <div class="update-banner-actions">
           <button class="btn btn-primary" id="upd-apply">Обновить</button>
+          ${pending.length > 0 ? `<button class="btn" id="upd-changelog-btn" aria-expanded="false">Что нового ▾</button>` : ""}
           <button class="btn" id="upd-recheck">Проверить ещё раз</button>
         </div>
+        ${pending.length > 0 ? `
+          <div class="update-banner-body">
+            <div class="upd-changelog" id="upd-changelog" hidden>
+              ${pending.map(renderChangelogEntry).join("")}
+            </div>
+          </div>
+        ` : ""}
       `;
+      const clBtn = document.getElementById("upd-changelog-btn");
+      const clBox = document.getElementById("upd-changelog");
+      if (clBtn && clBox) {
+        clBtn.addEventListener("click", () => {
+          const open = !clBox.hidden;
+          clBox.hidden = open;
+          clBtn.setAttribute("aria-expanded", open ? "false" : "true");
+          clBtn.textContent = open ? "Что нового ▾" : "Что нового ▴";
+        });
+      }
     } else {
       banner.hidden = false;
       banner.className = "update-banner update-banner-ok";
@@ -249,6 +268,55 @@
     if (age < 3600) return Math.floor(age / 60) + " мин назад";
     if (age < 86400) return Math.floor(age / 3600) + " ч назад";
     return Math.floor(age / 86400) + " дн назад";
+  }
+
+  function formatChangelogDate(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    try {
+      return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+    } catch (_) {
+      return iso.slice(0, 10);
+    }
+  }
+
+  function summarizeDesc(desc) {
+    if (!desc) return "";
+    const dot = desc.search(/\.\s/);
+    if (dot > 0 && dot < 160) return desc.slice(0, dot + 1);
+    if (desc.length <= 160) return desc;
+    return desc.slice(0, 160).replace(/\s+\S*$/, "") + "…";
+  }
+
+  function renderChangelogEntry(e) {
+    const v = e && e.v ? String(e.v) : "?";
+    const type = e && e.type ? String(e.type) : "patch";
+    const ts = formatChangelogDate(e && e.ts);
+    const desc = e && e.desc ? String(e.desc) : "(без описания)";
+    const summary = summarizeDesc(desc);
+    const hasMore = summary.length < desc.length;
+    const typeCls = type === "reinstall" ? "upd-type-reinstall" : "upd-type-patch";
+    const resetBadge = e && e.reset_state
+      ? `<span class="upd-reset-state" title="Сбрасывает state.tsv после применения">сброс state</span>`
+      : "";
+    return `
+      <div class="upd-entry">
+        <div class="upd-entry-head">
+          <span class="upd-tag">${escapeHtml(v)}</span>
+          <span class="upd-type ${typeCls}">${escapeHtml(type)}</span>
+          ${resetBadge}
+          <span class="upd-date">${escapeHtml(ts)}</span>
+        </div>
+        <div class="upd-desc">${escapeHtml(summary)}</div>
+        ${hasMore ? `
+          <details class="upd-details">
+            <summary>Подробнее</summary>
+            <div class="upd-desc-full">${escapeHtml(desc)}</div>
+          </details>
+        ` : ""}
+      </div>
+    `;
   }
 
   // ---------- Status spinner / poll ----------
@@ -668,8 +736,8 @@
         logEl.scrollTop = logEl.scrollHeight;
         if (d.done) {
           // "Lock held" is not really a failure — another apply is already
-          // in progress (typically a manual click that hit the cron-driven
-          // health-check sleep window). Surface it as info, not red error.
+          // in progress (typically a manual click that hit the scheduler-
+          // driven health-check sleep window). Surface it as info, not error.
           const isLockHeld = (d.log || "").includes("lock held by pid=");
           if (d.exit === 0) {
             closeBtn.textContent = "Готово";
@@ -877,8 +945,8 @@
         <h3>runetfreedom/russia-blocked-geosite</h3>
         <p class="desc">
           Production-списки для RKN / YouTube / Discord тянутся из
-          runetfreedom каждый день через cron (+ force refresh при
-          install). RAM-адаптивный выбор RKN-варианта: ≥900 MB RAM →
+          runetfreedom каждый день через z2k-scheduler (+ force refresh
+          при install). RAM-адаптивный выбор RKN-варианта: ≥900 MB RAM →
           ru-blocked-all (~700k доменов), иначе ru-blocked (~80k).
           Фича всегда включена — toggle удалён в Phase 12.
         </p>

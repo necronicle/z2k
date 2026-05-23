@@ -1,0 +1,73 @@
+#!/bin/sh
+# /opt/etc/init.d/S99z2k-scheduler — z2k internal scheduler daemon.
+# Replaces Vixie cron for z2k periodic tasks (auto-update / update-lists
+# / get_config) because the daemon's reload mechanism is broken on
+# Keenetic Entware builds (see r-26 field notes).
+
+SCRIPT="/opt/zapret2/z2k-scheduler.sh"
+PIDFILE="/var/run/z2k-scheduler.pid"
+LOG="/opt/var/log/z2k-scheduler.log"
+
+is_alive() {
+    [ -f "$PIDFILE" ] || return 1
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+start() {
+    if is_alive; then
+        echo "z2k-scheduler already running (pid $(cat "$PIDFILE"))"
+        return 0
+    fi
+    [ -x "$SCRIPT" ] || { echo "scheduler script missing or not executable: $SCRIPT" >&2; return 1; }
+    mkdir -p "$(dirname "$LOG")" 2>/dev/null
+    # Detach into background. Explicitly redirect stdin from /dev/null
+    # so the scheduler (and every task it spawns) sees no controlling
+    # tty — z2k-auto-update.sh keys its anti-thundering-herd jitter on
+    # `[ ! -t 0 ]`, which would be false under an SSH-initiated restart
+    # without this redirect.
+    "$SCRIPT" </dev/null >/dev/null 2>&1 &
+    sleep 1
+    if is_alive; then
+        echo "z2k-scheduler started (pid $(cat "$PIDFILE"))"
+    else
+        echo "z2k-scheduler failed to start" >&2
+        return 1
+    fi
+}
+
+stop() {
+    if is_alive; then
+        local pid
+        pid=$(cat "$PIDFILE")
+        kill "$pid" 2>/dev/null
+        # Give it 3s to clean up via trap, then SIGKILL.
+        for _ in 1 2 3; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+        done
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    fi
+    rm -f "$PIDFILE"
+    # Sweep stragglers matching by cmdline.
+    pkill -f "z2k-scheduler\.sh" 2>/dev/null
+    echo "z2k-scheduler stopped"
+}
+
+status() {
+    if is_alive; then
+        echo "running (pid $(cat "$PIDFILE"))"
+        return 0
+    fi
+    echo "stopped"
+    return 1
+}
+
+case "${1:-}" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)  status ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

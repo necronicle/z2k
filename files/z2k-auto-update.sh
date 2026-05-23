@@ -3,13 +3,16 @@
 #
 # Usage:
 #   z2k-auto-update.sh [apply|check]
-#     apply (default) — run from cron at 02:00 + jitter; downloads manifest,
-#                       decides patch/reinstall, applies, health-checks.
+#     apply (default) — triggered by z2k-scheduler.sh at 02:00; sleeps
+#                       a per-host deterministic jitter (0..90min) so the
+#                       184-router fleet doesn't hit GitHub in one second,
+#                       then downloads manifest, decides patch/reinstall,
+#                       applies, health-checks.
 #     check           — dry-run: print what would happen, no apply. Used by
 #                       the "Проверить обновления" menu item.
 #
-# Cron line is installed by lib/install.sh into /opt/etc/crontab:
-#   0 2 * * * /opt/zapret2/z2k-auto-update.sh apply >/dev/null 2>&1
+# Triggered by z2k-scheduler.sh at 02:00 daily (replacing cron, which
+# is broken on Keenetic Entware — see r-26 field notes).
 #
 # Mark's call: only z2k-enhanced participates; master users don't get
 # auto-updates.

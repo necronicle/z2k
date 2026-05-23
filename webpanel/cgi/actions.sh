@@ -279,9 +279,9 @@ tunnel_enable() {
 }
 
 tunnel_disable() {
-    # Set user-disabled marker BEFORE stopping so the watchdog (cron,
-    # every minute) sees the flag and respects the user's intent
-    # instead of resurrecting the daemon ~3 min later.
+    # Set user-disabled marker BEFORE stopping so the watchdog (fired
+    # by z2k-scheduler every ~minute) sees the flag and respects the
+    # user's intent instead of resurrecting the daemon ~3 min later.
     local cfg="${ZAPRET2_DIR}/config"
     if [ -f "$cfg" ]; then
         if grep -q '^TG_PROXY_USER_DISABLED=' "$cfg"; then
@@ -484,10 +484,10 @@ debug_flag_set() {
 
 # --- auto-update status / apply ---
 #
-# UI surfaces the same auto-update mechanism that cron runs at 02:00 — the
-# user sees "available: <tag>" and can trigger apply manually instead of
-# waiting for the nightly window. The check path is cached on disk (5 min)
-# so dashboard refreshes don't hammer raw.githubusercontent.
+# UI surfaces the same auto-update mechanism that z2k-scheduler runs at
+# 02:00 — the user sees "available: <tag>" and can trigger apply manually
+# instead of waiting for the nightly window. The check path is cached on
+# disk (5 min) so dashboard refreshes don't hammer raw.githubusercontent.
 
 AU_TAG_FILE="${AU_TAG_FILE:-$ZAPRET2_DIR/.z2k-installed-tag}"
 AU_MANIFEST_CACHE="${AU_MANIFEST_CACHE:-/tmp/z2k-au-manifest.json}"
@@ -562,6 +562,42 @@ update_behind_count() {
 update_last_check_ts() {
     [ -s "$AU_MANIFEST_CACHE" ] || { printf '0'; return; }
     file_mtime "$AU_MANIFEST_CACHE"
+}
+
+# Extract history entries strictly newer than installed_tag, in
+# history-file order. Output is a JSON array — entries are emitted
+# verbatim (each one is a single-line JSON object in UPDATES.json), no
+# field re-serialization. Returns "[]" when installed is unknown or
+# nothing is pending.
+update_pending_entries() {
+    local installed="$1"
+    [ -s "$AU_MANIFEST_CACHE" ] || { printf '[]'; return; }
+    if [ -z "$installed" ] || [ "$installed" = "unknown" ]; then
+        printf '[]'
+        return
+    fi
+    awk -v inst="$installed" '
+        /"v"[[:space:]]*:[[:space:]]*"/ {
+            v = $0
+            sub(/.*"v"[[:space:]]*:[[:space:]]*"/, "", v)
+            sub(/".*/, "", v)
+            if (found) {
+                line = $0
+                sub(/^[[:space:]]+/, "", line)
+                sub(/[[:space:]]+$/, "", line)
+                sub(/,$/, "", line)
+                entries[++n] = line
+                next
+            }
+            if (v == inst) { found = 1 }
+        }
+        END {
+            printf "["
+            for (i=1; i<=n; i++)
+                printf "%s%s", (i>1?",":""), entries[i]
+            printf "]"
+        }
+    ' "$AU_MANIFEST_CACHE"
 }
 
 # Launch auto-update apply asynchronously, return job_id for /job?id=...

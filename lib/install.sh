@@ -20,6 +20,38 @@ z2k_fix_cron_perms() {
 }
 
 # ==============================================================================
+# HELPER: deploy a critical file with self-healing fallback to direct GitHub fetch
+# ==============================================================================
+# Field debug 2026-05-23 found a MIPS user on r-25 whose install.sh delivered
+# the tg-mtproxy-client binary but silently skipped S97z2k-http-tunnel
+# (and several other init.d files) because their source path was missing
+# from WORK_DIR — `if [ -f ... ] cp -f` quietly turns into no-op. Result:
+# cdnbase tunnel daemon had no way to start. This helper closes that gap by
+# falling back to z2k_fetch (raw → jsdelivr → gh-proxy → ndmc-DNS chain)
+# whenever the WORK_DIR copy is absent.
+#
+# Usage: deploy_critical_file <repo-relative-path> <abs-destination> [chmod-mode]
+deploy_critical_file() {
+    local src="$1"
+    local dst="$2"
+    local mode="${3:-755}"
+    local work_src="${WORK_DIR}/${src}"
+
+    if [ -f "$work_src" ]; then
+        cp -f "$work_src" "$dst" 2>/dev/null && chmod "$mode" "$dst" 2>/dev/null && return 0
+    fi
+    if command -v z2k_fetch >/dev/null 2>&1; then
+        if z2k_fetch "/${src}" "$dst" 2>/dev/null; then
+            chmod "$mode" "$dst" 2>/dev/null
+            print_info "  ↳ ${dst##*/}: fetched from GitHub (WORK_DIR empty)" 2>/dev/null
+            return 0
+        fi
+    fi
+    print_warning "  ↳ ${dst##*/}: failed to deploy from WORK_DIR or GitHub" 2>/dev/null
+    return 1
+}
+
+# ==============================================================================
 # MIGRATION: cleanup legacy ip host записей от снесённых модулей 2026-04-27
 # ==============================================================================
 # Между коммитами bb3fcba..a3e9c59 (DNS→Router migration, force-push'нут revert'ом)
@@ -534,7 +566,6 @@ libcap
 zlib
 curl
 unzip
-cron
 iptables
 xtables-addons_legacy
 kmod_ndms
@@ -2105,71 +2136,61 @@ step_finalize() {
     # =========================================================================
 
     print_separator
-    print_info "Настройка автообновления списков доменов..."
+    print_info "Настройка планировщика z2k (auto-update / lists / get_config)..."
 
-    # На Keenetic (Entware) cron работает через /opt/etc/crontab
-    # НЕ используем installer.sh из zapret2 — он ищет /etc/init.d/cron (OpenWrt)
-    local cron_line="0 6 * * * ZAPRET_BASE=${ZAPRET2_DIR} ${ZAPRET2_DIR}/ipset/get_config.sh"
-    # z2k-update-lists.sh — own cron (RKN/YT hostlists + CDN/AWS ipsets).
-    # Runs 2h earlier than get_config.sh so new domains land before
-    # get_config.sh resolves them.
-    local z2k_update_cron="0 4 * * * ${ZAPRET2_DIR}/z2k-update-lists.sh >/dev/null 2>&1"
-    # z2k-auto-update.sh — runs at 02:00 nightly. Internal jitter (0..90 min)
-    # spreads the fleet over 02:00–03:30 so 184 routers don't hammer GitHub
-    # in one second. Only z2k-enhanced acts; master users skip silently.
-    local z2k_auto_update_cron="0 2 * * * ${ZAPRET2_DIR}/z2k-auto-update.sh apply >/dev/null 2>&1"
-    local crontab_file="/opt/etc/crontab"
-    local cron_ok=0
+    # Keenetic Entware ships Vixie cron V5.0, but its crontab-reload
+    # mechanism is broken on this build: even with mtime updates on the
+    # spool dir / /opt/etc/crontab, SIGHUP/USR1/USR2, and full daemon
+    # restart, new crontab entries silently never fire (field-debugged
+    # 2026-05-23). For ~2 weeks every router on the fleet ran with
+    # ZERO automatic list/auto-update runs — the cron lines were dead.
+    # We replace cron entirely with z2k-scheduler.sh: a long-lived
+    # while-loop daemon that owns ALL z2k periodic tasks. Trivial,
+    # auditable, and immune to whatever cron quirks the next firmware
+    # introduces.
+    deploy_critical_file "files/z2k-scheduler.sh" "${ZAPRET2_DIR}/z2k-scheduler.sh"
+    deploy_critical_file "files/init.d/S99z2k-scheduler" "/opt/etc/init.d/S99z2k-scheduler"
 
-    # cron устанавливается в step_install_dependencies
-
-    # Метод 1: /opt/etc/crontab (Entware cron)
-    if [ -f "$crontab_file" ] || [ -d "/opt/etc" ]; then
-        # Удалить старые записи zapret2 (get_config / update-lists / drift / auto-update).
-        # z2k-classify-drift.sh оставлен в regex чтобы на upgrade'е снять старую cron-запись
-        # (drift сам удалён в r-15 Phase 1).
-        if [ -f "$crontab_file" ]; then
-            grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh" "$crontab_file" > "${crontab_file}.tmp" 2>/dev/null
-            mv "${crontab_file}.tmp" "$crontab_file"
-        fi
-        echo "$cron_line" >> "$crontab_file"
-        echo "$z2k_update_cron" >> "$crontab_file"
-        echo "$z2k_auto_update_cron" >> "$crontab_file"
-        print_success "Автообновление настроено в $crontab_file (get_config 06:00, update-lists 04:00, auto-update 02:00+jitter)"
-        cron_ok=1
-    fi
-
-    # Метод 2: crontab -l / crontab - (если Entware crontab не работает)
-    if [ "$cron_ok" = "0" ] && command -v crontab >/dev/null 2>&1; then
-        (crontab -l 2>/dev/null | grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh"; echo "$cron_line"; echo "$z2k_update_cron"; echo "$z2k_auto_update_cron") | crontab -
-        if [ $? -eq 0 ]; then
-            z2k_fix_cron_perms
-            print_success "Автообновление настроено через crontab (get_config 06:00, update-lists 04:00, auto-update 02:00+jitter)"
-            cron_ok=1
-        fi
-    fi
-
-    if [ "$cron_ok" = "0" ]; then
-        print_warning "Не удалось настроить crontab"
-        print_info "Списки нужно будет обновлять вручную:"
-        print_info "  ZAPRET_BASE=${ZAPRET2_DIR} ${ZAPRET2_DIR}/ipset/get_config.sh"
-    fi
-
-    # Запустить cron демон если есть init скрипт Entware
-    local cron_init="/opt/etc/init.d/S10cron"
-    if [ -x "$cron_init" ]; then
-        "$cron_init" start >/dev/null 2>&1
-        if pgrep -f "cron" >/dev/null 2>&1; then
-            print_info "Cron демон запущен"
+    if [ -x "${ZAPRET2_DIR}/z2k-scheduler.sh" ] && [ -x /opt/etc/init.d/S99z2k-scheduler ]; then
+        /opt/etc/init.d/S99z2k-scheduler restart >/dev/null 2>&1
+        if pgrep -f "z2k-scheduler\.sh" >/dev/null 2>&1; then
+            print_success "Планировщик z2k запущен (auto-update 02:00, lists 04:00, get_config 06:00)"
         else
-            print_warning "Не удалось запустить cron демон"
+            print_warning "Планировщик z2k не запустился — проверьте /opt/var/log/z2k-scheduler.log"
         fi
-    elif pgrep -f "cron" >/dev/null 2>&1; then
-        print_info "Cron демон уже запущен"
     else
-        print_warning "Cron демон не найден"
-        print_info "Установите: opkg install cron"
+        print_warning "Не удалось установить планировщик z2k"
     fi
+
+    # One-shot purge of dead Vixie cron lines from previous installs.
+    # Both locations: user spool (which Vixie reads but doesn't reload)
+    # and /opt/etc/crontab (which Vixie ignores entirely).
+    if command -v crontab >/dev/null 2>&1; then
+        local cron_regex='get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh|z2k-nightly-probe\.sh'
+        crontab -l 2>/dev/null | grep -vE "$cron_regex" | crontab - 2>/dev/null
+        z2k_fix_cron_perms 2>/dev/null
+    fi
+    if [ -f /opt/etc/crontab ]; then
+        if grep -qE "get_config\.sh|z2k-update-lists\.sh|z2k-auto-update\.sh|z2k-classify-drift\.sh" /opt/etc/crontab 2>/dev/null; then
+            grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-auto-update\.sh|z2k-classify-drift\.sh" /opt/etc/crontab > /opt/etc/crontab.tmp 2>/dev/null
+            mv /opt/etc/crontab.tmp /opt/etc/crontab
+        fi
+    fi
+
+    # Stop and disable the Vixie cron daemon — z2k no longer uses it,
+    # everything goes through z2k-scheduler.sh. We don't `opkg remove`
+    # the package (it might be a dependency of unrelated entware
+    # software), just keep the binary present but ensure it doesn't
+    # start at boot and isn't running right now. Users can re-enable
+    # via `chmod +x /opt/etc/init.d/S10cron && S10cron start` if they
+    # install something else that needs it.
+    if [ -x /opt/etc/init.d/S10cron ]; then
+        /opt/etc/init.d/S10cron stop >/dev/null 2>&1
+        chmod -x /opt/etc/init.d/S10cron 2>/dev/null
+        print_info "Cron демон остановлен и отключён (z2k теперь использует свой scheduler)"
+    fi
+    # Belt-and-suspenders — kill any lingering cron daemon.
+    killall cron 2>/dev/null || true
 
     # Instagram DNS redirect (Keenetic static DNS).
     # Fresh installs get a minimal one-IP-per-host fallback set so that
@@ -2278,47 +2299,22 @@ step_finalize() {
     # an old S98tg-tunnel that ignores TG_PROXY_USER_DISABLED would otherwise
     # remain on disk and resurrect the tunnel on the next reboot.
     mkdir -p /opt/etc/init.d /opt/etc/ndm/netfilter.d /opt/zapret2
-    if [ -f "${WORK_DIR}/files/init.d/S98tg-tunnel" ]; then
-        cp -f "${WORK_DIR}/files/init.d/S98tg-tunnel" \
-              /opt/etc/init.d/S98tg-tunnel
-        chmod +x /opt/etc/init.d/S98tg-tunnel
-    else
-        print_warning "S98tg-tunnel init source missing from ${WORK_DIR}/files/init.d/"
-    fi
+    deploy_critical_file "files/init.d/S98tg-tunnel"             "/opt/etc/init.d/S98tg-tunnel"
+    deploy_critical_file "files/ndm/90-z2k-tg-redirect.sh"        "/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh" \
+        && print_success "Keenetic NDM hook установлен (auto-restore iptables)"
+    deploy_critical_file "files/init.d/S97z2k-http-tunnel"        "/opt/etc/init.d/S97z2k-http-tunnel"
+    deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh"
+    deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh"
 
-    if [ -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" ]; then
-        cp -f "${WORK_DIR}/files/ndm/90-z2k-tg-redirect.sh" \
-              /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
-        chmod +x /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
-        print_success "Keenetic NDM hook установлен (auto-restore iptables)"
+    # tg-tunnel-watchdog used to be triggered via `* * * * *` cron, but
+    # Vixie cron on Keenetic Entware doesn't reload added entries (see
+    # r-26 notes). z2k-scheduler.sh now fires the watchdog ~1×/min.
+    # Strip the legacy cron entry on every reinstall so it doesn't
+    # mislead diagnostics.
+    if command -v crontab >/dev/null 2>&1; then
+        crontab -l 2>/dev/null | grep -vE "tg-tunnel-watchdog|S97tg-mtproxy" | crontab - 2>/dev/null || true
+        z2k_fix_cron_perms
     fi
-
-    if [ -f "${WORK_DIR}/files/init.d/S97z2k-http-tunnel" ]; then
-        cp -f "${WORK_DIR}/files/init.d/S97z2k-http-tunnel" \
-              /opt/etc/init.d/S97z2k-http-tunnel
-        chmod +x /opt/etc/init.d/S97z2k-http-tunnel
-    fi
-    if [ -f "${WORK_DIR}/files/ndm/91-z2k-http-tunnel-redirect.sh" ]; then
-        cp -f "${WORK_DIR}/files/ndm/91-z2k-http-tunnel-redirect.sh" \
-              /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh
-        chmod +x /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh
-    fi
-
-    if [ -f "${WORK_DIR}/files/z2k-tg-watchdog.sh" ]; then
-        cp -f "${WORK_DIR}/files/z2k-tg-watchdog.sh" \
-              /opt/zapret2/tg-tunnel-watchdog.sh
-        chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
-    else
-        print_warning "tg-tunnel-watchdog.sh source missing from ${WORK_DIR}/files/"
-    fi
-
-    if [ -x /opt/zapret2/tg-tunnel-watchdog.sh ]; then
-        local WDCRON="* * * * * /opt/zapret2/tg-tunnel-watchdog.sh"
-        crontab -l 2>/dev/null | grep -q "tg-tunnel-watchdog" || \
-            { crontab -l 2>/dev/null || true; echo "$WDCRON"; } | crontab -
-    fi
-    crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null || true
-    z2k_fix_cron_perms
 
     # Auto-start Telegram tunnel — but respect TG_PROXY_USER_DISABLED on
     # reinstalls so we don't resurrect a tunnel the user explicitly stopped.

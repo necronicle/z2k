@@ -466,6 +466,111 @@ pre.log {
   display: flex;
   gap: 8px;
 }
+.update-banner-body {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 4px;
+}
+.upd-changelog-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 2px 0;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.upd-changelog-toggle:hover { color: var(--text); }
+.upd-changelog[hidden] { display: none; }
+.upd-changelog {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.upd-entry { display: flex; flex-direction: column; }
+.upd-details {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.upd-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+  display: inline-block;
+}
+.upd-details summary::-webkit-details-marker { display: none; }
+.upd-details summary::before { content: "▾ "; }
+.upd-details[open] summary::before { content: "▴ "; }
+.upd-details summary:hover { color: var(--text); }
+.upd-desc-full {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 2px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.upd-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.upd-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  color: var(--text);
+}
+.upd-type {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.upd-type-reinstall {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: rgba(210, 153, 34, 0.08);
+}
+.upd-type-patch {
+  color: var(--good);
+  border-color: var(--good);
+  background: rgba(95, 175, 95, 0.08);
+}
+.upd-reset-state {
+  font-size: 11px;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  background: rgba(200, 80, 80, 0.08);
+  padding: 1px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+.upd-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.upd-desc {
+  font-size: 13px;
+  color: var(--text);
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
 
 /* ---------- STATUS SPINNER ---------- */
 /* Inline pill next to the "Состояние" heading while the service is mid

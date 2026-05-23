@@ -430,12 +430,13 @@ case "$method $path" in
         available=$(update_manifest_current)
         behind=$(update_behind_count "$installed")
         last_check=$(update_last_check_ts)
+        pending=$(update_pending_entries "$installed")
         json_header
         printf '{"ok":true,"installed":'
         json_string "$installed"
         printf ',"available":'
         json_string "$available"
-        printf ',"behind":%s,"last_check":%s}\n' "${behind:-0}" "${last_check:-0}"
+        printf ',"behind":%s,"last_check":%s,"pending":%s}\n' "${behind:-0}" "${last_check:-0}" "${pending:-[]}"
         exit 0
         ;;
 
@@ -445,12 +446,13 @@ case "$method $path" in
         available=$(update_manifest_current)
         behind=$(update_behind_count "$installed")
         last_check=$(update_last_check_ts)
+        pending=$(update_pending_entries "$installed")
         json_header
         printf '{"ok":true,"installed":'
         json_string "$installed"
         printf ',"available":'
         json_string "$available"
-        printf ',"behind":%s,"last_check":%s}\n' "${behind:-0}" "${last_check:-0}"
+        printf ',"behind":%s,"last_check":%s,"pending":%s}\n' "${behind:-0}" "${last_check:-0}" "${pending:-[]}"
         exit 0
         ;;
 
