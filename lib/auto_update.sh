@@ -520,10 +520,37 @@ EOF
     # 4) write installed tag
     echo "$target_tag" > "$Z2K_AU_INSTALLED_TAG_FILE"
 
-    # 5) restart service so new code takes effect
-    if [ -x /opt/etc/init.d/S99zapret2 ]; then
-        /opt/etc/init.d/S99zapret2 restart >/dev/null 2>&1 || true
-    fi
+    # 5) smart restart — figure out which services actually need to be
+    # bounced based on which files changed. Without this, patches that
+    # replace init.d scripts (e.g. p-27 replaced S98tg-tunnel) leave the
+    # OLD code still running in memory until reboot — defeats the point
+    # of shipping the fix. S99zapret2 always restarts because the nfqws2
+    # input set (lua / hostlists / config / fake blobs) goes through it.
+    local restart_set="S99zapret2"
+    local f
+    while IFS= read -r f; do
+        case "$f" in
+            files/init.d/S98tg-tunnel)         restart_set="$restart_set S98tg-tunnel" ;;
+            files/init.d/S97z2k-http-tunnel)   restart_set="$restart_set S97z2k-http-tunnel" ;;
+            files/init.d/S99z2k-scheduler)     restart_set="$restart_set S99z2k-scheduler" ;;
+            files/z2k-scheduler.sh)            restart_set="$restart_set S99z2k-scheduler" ;;
+            files/init.d/S98z2k-detect)        restart_set="$restart_set S98z2k-detect" ;;
+            webpanel/*)                        restart_set="$restart_set S96z2k-webpanel" ;;
+        esac
+    done <<EOF
+$files
+EOF
+
+    # Dedup + restart each service exactly once
+    local svc
+    for svc in $(echo "$restart_set" | tr ' ' '\n' | sort -u); do
+        [ -z "$svc" ] && continue
+        if [ -x "/opt/etc/init.d/$svc" ]; then
+            au_log "patch: restart $svc"
+            "/opt/etc/init.d/$svc" restart >/dev/null 2>&1 || \
+                au_log "patch: $svc restart returned non-zero (continuing)"
+        fi
+    done
 
     au_log "patch applied: $target_tag"
     return 0
