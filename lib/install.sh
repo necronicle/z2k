@@ -2326,13 +2326,24 @@ step_finalize() {
         if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
             /opt/etc/init.d/S98tg-tunnel restart >/dev/null 2>&1
         else
-            killall tg-mtproxy-client 2>/dev/null || true
+            # Fallback only when init.d is missing — kill any :1443 sibling
+            # (not :1444 — that's S97z2k-http-tunnel, same binary), then
+            # start with proper daemonization to survive on MIPS.
+            for p in $(pidof tg-mtproxy-client 2>/dev/null); do
+                tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--listen=:1443" && kill "$p" 2>/dev/null
+            done
             sleep 1
-            /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
+            ( trap '' HUP; exec /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v </dev/null >> /tmp/tg-tunnel.log 2>&1 ) &
         fi
         sleep 2
 
-        if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+        # Check for :1443 instance specifically — not just any tg-mtproxy
+        # (S97 :1444 would give a false positive).
+        tg_1443_alive=0
+        for p in $(pidof tg-mtproxy-client 2>/dev/null); do
+            tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--listen=:1443" && { tg_1443_alive=1; break; }
+        done
+        if [ "$tg_1443_alive" = "1" ]; then
             print_success "Telegram tunnel запущен автоматически"
         else
             print_warning "Не удалось запустить Telegram tunnel (можно включить позже через меню [T])"
@@ -2341,7 +2352,9 @@ step_finalize() {
         if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
             /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
         else
-            killall tg-mtproxy-client 2>/dev/null || true
+            for p in $(pidof tg-mtproxy-client 2>/dev/null); do
+                tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--listen=:1443" && kill "$p" 2>/dev/null
+            done
         fi
         print_info "Telegram tunnel не запущен — отключён пользователем"
     fi

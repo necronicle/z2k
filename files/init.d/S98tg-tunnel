@@ -33,12 +33,21 @@ start() {
             return 0
         fi
     fi
+    # Per-instance check — match by cmdline so we don't get false-positive
+    # from the S97z2k-http-tunnel sibling (same binary, --listen=:1444).
     if pidof tg-mtproxy-client >/dev/null 2>&1; then
-        echo "tg-tunnel already running"
-        return 0
+        for p in $(pidof tg-mtproxy-client); do
+            if [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- "--listen=:1443"; then
+                echo "tg-tunnel already running (pid $p)"
+                return 0
+            fi
+        done
     fi
     echo "Starting tg-tunnel..."
-    $BIN --listen=:1443 --timeout=15m -v >> "$LOG" 2>&1 &
+    # Proper daemonization — subshell with HUP-ignore + exec so the Go
+    # binary doesn't get SIGKILL'd by busybox sh on MIPS when the init.d
+    # wrapper exits. Same fix as S97z2k-http-tunnel (see r-26 notes).
+    ( trap '' HUP; exec $BIN --listen=:1443 --timeout=15m -v </dev/null >> "$LOG" 2>&1 ) &
     echo $! > "$PIDFILE"
     sleep 2
     # Insert REDIRECT rules at TOP of both PREROUTING and OUTPUT (-I 1) so
