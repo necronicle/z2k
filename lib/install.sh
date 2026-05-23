@@ -1347,7 +1347,7 @@ step_build_zapret2() {
                 # же ключи через ${saved_*}, без них create_official_config
                 # вернётся к дефолтам. Если добавляешь новый non-Z2K_
                 # user flag в config_official.sh — добавь его и сюда.
-                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
                 if [ -s "$_flag_backup" ] && [ -f "$ZAPRET2_DIR/config" ]; then
                     local _line _flag_name _escaped _applied=0
                     while IFS= read -r _line; do
@@ -2507,7 +2507,7 @@ step_finalize() {
     # — re-running is a no-op when nothing changed.
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup="$backup_tmp/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
         if [ -s "$_flag_backup" ]; then
             local _line _flag_name _escaped _applied=0
             while IFS= read -r _line; do
