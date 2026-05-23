@@ -2924,6 +2924,7 @@ uninstall_zapret2() {
         /opt/etc/init.d/S97z2k-http-tunnel stop >/dev/null 2>&1 || true
     fi
     local http_cidr
+    # shellcheck disable=SC2043  # single-CIDR loop kept as a list for future extension (mirrors S98tg-tunnel CIDRS)
     for http_cidr in 168.119.95.238/32; do
         while iptables -t nat -C PREROUTING -d "$http_cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null; do
             iptables -t nat -D PREROUTING -d "$http_cidr" -p tcp --dport 80 -j REDIRECT --to-port 1444 2>/dev/null || break
