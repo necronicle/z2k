@@ -2219,10 +2219,10 @@ step_finalize() {
 
     # Install the refresh script and run it once now to replace any
     # stale shipped/fallback IPs with what Meta is actually serving today.
-    if [ -f "${WORK_DIR}/files/z2k-insta-ip-refresh.sh" ]; then
-        cp -f "${WORK_DIR}/files/z2k-insta-ip-refresh.sh" \
-              "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh"
-        chmod +x "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh"
+    # Goes through deploy_critical_file so even if z2k.sh bootstrap missed
+    # this file (it wasn't in the legacy tool_name loop until p-29) it gets
+    # pulled directly from GitHub.
+    if deploy_critical_file "files/z2k-insta-ip-refresh.sh" "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh"; then
         sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || true
     fi
 
