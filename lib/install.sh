@@ -43,6 +43,15 @@ deploy_critical_file() {
     if command -v z2k_fetch >/dev/null 2>&1; then
         if z2k_fetch "/${src}" "$dst" 2>/dev/null; then
             chmod "$mode" "$dst" 2>/dev/null
+            # z2k_fetch leaves a sibling <dst>.etag with the cache-validation
+            # hash. In dirs that get auto-scanned and executed by NDM (e.g.
+            # /opt/etc/ndm/netfilter.d/, /opt/etc/init.d/) ndm will try to
+            # exec the .etag as a shell script — it's just one line with the
+            # hex digest, so bash treats the digest as a command name and
+            # fails with exit 127. Field-reported 2026-05-24 on a fresh
+            # install of r-26+. Strip the .etag right after fetch to avoid
+            # the noise.
+            rm -f "${dst}.etag" 2>/dev/null
             print_info "  ↳ ${dst##*/}: fetched from GitHub (WORK_DIR empty)" 2>/dev/null
             return 0
         fi
