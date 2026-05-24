@@ -2098,6 +2098,35 @@ HOOK
 step_finalize() {
     print_header "Шаг 12/12: Финализация установки"
 
+    # =====================================================================
+    # FIRST: re-apply preserved user flags before anything else in this
+    # step reads them. Auto-start TG tunnel below queries
+    # TG_PROXY_USER_DISABLED to decide whether to start S98tg-tunnel —
+    # if late preserve runs AFTER that, the flag is still default 0,
+    # the daemon gets started, watchdog kills it ~25s later, and the
+    # cycle repeats on every nightly auto-update reinstall. Same gap
+    # would affect Z2K_DYNAMIC_TTL and other flags that gate later
+    # actions in step_finalize.
+    # =====================================================================
+    local backup_tmp_early="/tmp/z2k_upgrade_backup"
+    if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
+        local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
+        if [ -s "$_flag_backup_early" ]; then
+            local _line_early _flag_name_early _escaped_early _applied_early=0
+            while IFS= read -r _line_early; do
+                [ -z "$_line_early" ] && continue
+                _flag_name_early="${_line_early%%=*}"
+                if grep -q "^${_flag_name_early}=" "$ZAPRET2_DIR/config"; then
+                    _escaped_early=$(printf '%s\n' "$_line_early" | sed 's/[&/\\]/\\&/g')
+                    sed -i "s|^${_flag_name_early}=.*|${_escaped_early}|" "$ZAPRET2_DIR/config"
+                    _applied_early=$((_applied_early + 1))
+                fi
+            done < "$_flag_backup_early"
+            print_success "Auto-update: ${_applied_early} feature flag(s) восстановлено перед auto-start daemon'ов"
+        fi
+    fi
+
     # Проверить бинарник перед запуском
     print_info "Проверка nfqws2 перед запуском..."
 
