@@ -1334,6 +1334,29 @@ main() {
     esac
     mkdir -p "$WORK_DIR" "$LIB_DIR"
 
+    # Sync persistent /opt/zapret2/lib/ → $LIB_DIR cache. Persistent копии
+    # обновляются install.sh'ом при reinstall и au_apply_patch'ем для lib/*
+    # — то есть всегда свежее или равно cache'у. Если CDN отдал stale
+    # модуль в /tmp/z2k/lib/ (3-5 мин cache window после нашего push'а)
+    # — persistent копия от последующего apply его перетрёт, и interactive
+    # `z2k menu` получит правильную версию без необходимости делать
+    # manual reinstall. Field-2026-05-24 user-filed: «обновился, новый
+    # пункт [M] не появился в z2k menu» — ровно этот сценарий, на тот
+    # момент sync'а не было.
+    # Используем `cp -f` (не `-u`) — mtime check ненадёжен, в типичном
+    # сценарии install.sh кладёт persistent с тем же mtime что fetch
+    # положил в cache. Unconditional copy from persistent гарантирует
+    # cache идентичен persistent (который — source of truth от последнего
+    # apply/install). Стоимость +5ms на interactive run, незначительно.
+    local _persistent_lib="/opt/zapret2/lib"
+    if [ -d "$_persistent_lib" ]; then
+        for _sync_mod in $MODULES; do
+            if [ -f "${_persistent_lib}/${_sync_mod}.sh" ]; then
+                cp -f "${_persistent_lib}/${_sync_mod}.sh" "${LIB_DIR}/${_sync_mod}.sh" 2>/dev/null
+            fi
+        done
+    fi
+
     # Установить обработчики сигналов (будет переопределено после загрузки utils.sh)
     # Note: trap раньше чистил $WORK_DIR при Ctrl+C, теперь оставляем
     # кэш целым даже при прерывании — если install прервался, следующий
