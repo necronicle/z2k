@@ -34,12 +34,19 @@ auth_require() {
         # tunnel rewrites Host to the LAN backend, so HTTP_REFERER won't
         # match HTTP_HOST. Only Keenetic's own proxy can reach us with
         # these Referer hostnames, so CSRF guarantee still holds.
+        # netcraze.* — новый официальный суффикс после ребрендинга
+        # Keenetic в России (та же KeenDNS-инфраструктура, новый домен).
         case "$referer" in
             https://*.keenetic.pro/*|https://*.keenetic.pro|\
             https://*.keenetic.com/*|https://*.keenetic.com|\
             https://*.keenetic.io/*|https://*.keenetic.io|\
             https://*.keenetic.cloud/*|https://*.keenetic.cloud|\
-            https://*.keenetic.link/*|https://*.keenetic.link)
+            https://*.keenetic.link/*|https://*.keenetic.link|\
+            https://*.netcraze.pro/*|https://*.netcraze.pro|\
+            https://*.netcraze.com/*|https://*.netcraze.com|\
+            https://*.netcraze.io/*|https://*.netcraze.io|\
+            https://*.netcraze.cloud/*|https://*.netcraze.cloud|\
+            https://*.netcraze.link/*|https://*.netcraze.link)
                 return ;;
         esac
         json_error "403 Forbidden" "cross-origin request blocked"
