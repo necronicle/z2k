@@ -1526,6 +1526,18 @@ function z2k_silent_drop_detector(desync, crec, arg)
   -- but break HTTP/2 multiplex no longer false-pin as success.
   local handshake_done_b = (arg and tonumber(arg.bytes_in_handshake_done)) or 16384
 
+  -- Browser-cancel bypass (2026-05-25): на multi-connection HTTPS-сайтах
+  -- (Instagram / Facebook / etc) браузер делает десятки concurrent TCP
+  -- connections (preconnect, parallel streams) и отменяет лишние, как только
+  -- получает данные через параллельный сокет. Visible signature: client
+  -- отправил ClientHello (~4 пакета), получил `in_bytes < 500` (один tiny ack
+  -- / partial ServerHello), и flow умер за <3 секунд от первого пакета.
+  -- Это НЕ silent drop — это явный browser-cancel. Считать его failure'ом
+  -- приводит к false-rotation за секунды активного скроллинга (Instagram
+  -- example: рабочая страта 1 проскакивается до 40+).
+  local cancel_bytes_thr = (arg and tonumber(arg.cancel_bytes)) or 500
+  local cancel_age_thr   = (arg and tonumber(arg.cancel_age))   or 3
+
   if desync.dis and desync.dis.tcp and desync.outgoing
      and desync.track and desync.track.pos then
     local out_count = (desync.track.pos.direct  and desync.track.pos.direct.pdcounter)  or 0
@@ -1535,11 +1547,27 @@ function z2k_silent_drop_detector(desync, crec, arg)
     local handshake_seen_marker  = crec and crec.z2k_handshake_seen
     local server_flight_complete = in_bytes >= handshake_done_b
 
+    -- Stamp first-seen timestamp на первом invocation для этого flow
+    if crec and not crec.z2k_first_seen_t then
+      crec.z2k_first_seen_t = (os and os.time and os.time()) or 0
+    end
+    local conn_age = 999
+    if crec and crec.z2k_first_seen_t then
+      local now = (os and os.time and os.time()) or 0
+      conn_age = now - crec.z2k_first_seen_t
+    end
+    local is_browser_cancel = (in_bytes < cancel_bytes_thr) and (conn_age < cancel_age_thr)
+
     if not handshake_seen_marker and not server_flight_complete
        and out_count >= tcp_out_thr and in_count <= tcp_in_thr then
-      DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count..
-           " in_bytes="..in_bytes)
-      return true
+      if is_browser_cancel then
+        DLOG("z2k_silent_drop_detector: SKIP browser-cancel out="..out_count..
+             " in="..in_count.." in_bytes="..in_bytes.." age="..conn_age.."s")
+      else
+        DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count..
+             " in_bytes="..in_bytes.." age="..conn_age.."s")
+        return true
+      end
     end
   end
 
