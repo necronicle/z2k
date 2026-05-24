@@ -620,6 +620,99 @@ pre.log {
   color: var(--text);
 }
 
+/* ---------- CARD LOCKED STATE ---------- */
+/* Применяется к .card когда есть active background job. Карточка слегка
+   приглушается + в верхнем правом углу появляется пилюля
+   «⏳ Операция выполняется…» — immediately видно что элементы временно
+   нельзя трогать, без необходимости hover'ить каждый switch.
+   ::after pseudo на .card-locked самой (не на children) → не
+   наследует opacity от `> *` правила. */
+.card-locked {
+  position: relative;
+  transition: all 0.15s ease-out;
+}
+.card-locked > * {
+  opacity: 0.55;
+  transition: opacity 0.15s ease-out;
+  /* pointer-events НЕ блокируем — JS уже disabled'ит конкретные
+     controls, а блок всего контента сломал бы scroll/select на длинных
+     карточках (Whitelist / Extra-domains). */
+}
+.card-locked::after {
+  content: "⏳ Операция выполняется…";
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--warn);
+  background: rgba(0, 0, 0, 0.75);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--warn);
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+}
+
+/* ---------- TG TUNNEL STATE BADGE ---------- */
+.tg-state-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.tg-state-on  { color: var(--good); border: 1px solid var(--good); background: rgba(95, 175, 95, 0.08); }
+.tg-state-off { color: var(--text-muted); border: 1px solid var(--border); background: transparent; }
+
+/* ---------- JOB BADGES ---------- */
+/* Floating badges in bottom-right corner — one per active background
+   job. Click → re-opens the modal so user can check progress again. */
+.job-badges {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.job-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--warn);
+  border-left: 3px solid var(--warn);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  transition: transform 0.15s;
+}
+.job-badge:hover { transform: translateY(-1px); }
+.job-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 /* ---------- MOBILE ---------- */
 @media (max-width: 520px) {
   .topbar { padding: 12px 14px; gap: 14px; }

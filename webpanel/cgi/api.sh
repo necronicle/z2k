@@ -196,12 +196,33 @@ case "$method $path" in
         exit 0
         ;;
 
-    # ---------- SERVICE CONTROL ----------
-    "POST /service/start")   require_method POST; svc_start   && json_ok || json_fail "500" "start failed" ;;
-    "POST /service/stop")    require_method POST; svc_stop    && json_ok || json_fail "500" "stop failed"  ;;
-    "POST /service/restart") require_method POST; svc_restart && json_ok || json_fail "500" "restart failed" ;;
+    # ---------- SERVICE CONTROL (async — returns job_id) ----------
+    # Юзер получает {ok:true, job:<id>} мгновенно; UI открывает модалку
+    # с live log поллингом /job?id=<id>. Без этого browser висел до
+    # завершения restart (5-15s) и не понимал что происходит.
+    "POST /service/start")
+        require_method POST
+        job_id=$(svc_action_async "Запуск сервиса nfqws2" "${INIT_SCRIPT} start")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+    "POST /service/stop")
+        require_method POST
+        job_id=$(svc_action_async "Остановка сервиса nfqws2" "${INIT_SCRIPT} stop")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+    "POST /service/restart")
+        require_method POST
+        job_id=$(svc_action_async "Перезапуск сервиса nfqws2" "${INIT_SCRIPT} restart")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
 
-    # ---------- TOGGLES ----------
+    # ---------- TOGGLES (async — returns job_id) ----------
     "POST /toggle/rst-filter"|\
     "POST /toggle/silent-fallback"|\
     "POST /toggle/game-mode"|\
@@ -215,13 +236,17 @@ case "$method $path" in
             *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
         esac
         case "$path" in
-            /toggle/rst-filter)      toggle_rst_filter      "$val" || json_fail "500" "toggle failed" ;;
-            /toggle/silent-fallback) toggle_silent_fallback "$val" || json_fail "500" "toggle failed" ;;
-            /toggle/game-mode)       toggle_game_mode       "$val" || json_fail "500" "toggle failed" ;;
-            /toggle/customd)         toggle_customd         "$val" || json_fail "500" "toggle failed" ;;
-            /toggle/dynamic-ttl)     toggle_dynamic_ttl     "$val" || json_fail "500" "toggle failed" ;;
+            /toggle/rst-filter)      _toggle_fn=toggle_rst_filter;      _label="RST-фильтр" ;;
+            /toggle/silent-fallback) _toggle_fn=toggle_silent_fallback; _label="Silent fallback" ;;
+            /toggle/game-mode)       _toggle_fn=toggle_game_mode;       _label="Игровой режим" ;;
+            /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
+            /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
         esac
-        json_ok
+        _verb=$([ "$val" = "1" ] && echo "Включаю" || echo "Отключаю")
+        job_id=$(svc_action_async "${_verb} ${_label}" "${_toggle_fn} ${val}")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
         ;;
 
     # ---------- WHITELIST ----------
@@ -276,9 +301,19 @@ case "$method $path" in
         json_ok
         ;;
 
-    # ---------- TUNNEL ----------
-    "POST /tunnel/enable")  tunnel_enable  || json_fail "500" "tunnel enable failed"; json_ok ;;
-    "POST /tunnel/disable") tunnel_disable; json_ok ;;
+    # ---------- TUNNEL (async — returns job_id) ----------
+    "POST /tunnel/enable")
+        job_id=$(svc_action_async "Запуск Telegram туннеля" "tunnel_enable")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+    "POST /tunnel/disable")
+        job_id=$(svc_action_async "Остановка Telegram туннеля" "tunnel_disable")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
 
     # ---------- LOGS ----------
     "GET /logs/service")

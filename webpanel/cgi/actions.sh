@@ -86,15 +86,58 @@ regenerate_config() {
 
 restart_service_if_running() {
     if is_running; then
-        "$INIT_SCRIPT" restart >/dev/null 2>&1 || true
+        # Output goes to caller's stdout/stderr — svc_action_async
+        # tees those into the job log so UI shows live progress.
+        "$INIT_SCRIPT" restart 2>&1 || true
+    else
+        echo "Сервис не запущен — пропускаю restart"
     fi
 }
 
 # --- service control ---
+# Output не silenced — caller (svc_action_async) подхватывает stdout/stderr
+# и пишет в job-log для UI live-polling'а.
 
-svc_start()   { "$INIT_SCRIPT" start   >/dev/null 2>&1; }
-svc_stop()    { "$INIT_SCRIPT" stop    >/dev/null 2>&1; }
-svc_restart() { "$INIT_SCRIPT" restart >/dev/null 2>&1; }
+svc_start()   { "$INIT_SCRIPT" start   2>&1; }
+svc_stop()    { "$INIT_SCRIPT" stop    2>&1; }
+svc_restart() { "$INIT_SCRIPT" restart 2>&1; }
+
+# --- async job launcher ---
+#
+# Запускает любую shell-команду в фоне с tee всех её stdout/stderr в
+# /tmp/z2k-job-<id>.log (тот же путь который job_log endpoint раздаёт).
+# Возвращает job_id. Frontend получает id, открывает openJobModal с
+# live-polling /job?id=...
+#
+# Закрытие stdin/stdout/stderr (</dev/null >/dev/null 2>&1 на subshell)
+# критично — без этого lighttpd не финализирует HTTP-ответ пока хоть
+# один наследник держит fd 1/2. Внутреннее `>> log 2>&1` уже после
+# наследования /dev/null заменяет fd на лог.
+#
+# Использование:
+#   job_id=$(svc_action_async "Перезапуск сервиса" "/opt/etc/init.d/S99zapret2 restart")
+svc_action_async() {
+    local label="$1"; shift
+    local cmd="$*"
+    local job_id
+    job_id=$(date +%s)$$
+    local log="/tmp/z2k-job-${job_id}.log"
+    (
+        printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$label" > "$log"
+        printf '─────────────────────────────────────────\n' >> "$log"
+        eval "$cmd" >> "$log" 2>&1
+        local rc=$?
+        printf '─────────────────────────────────────────\n' >> "$log"
+        if [ "$rc" = "0" ]; then
+            printf '[%s] Готово ✓\n' "$(date '+%H:%M:%S')" >> "$log"
+        else
+            printf '[%s] Завершено с кодом %s\n' "$(date '+%H:%M:%S')" "$rc" >> "$log"
+        fi
+        echo "$rc" > "/tmp/z2k-job-${job_id}.exit"
+    ) </dev/null >/dev/null 2>&1 &
+    echo "$!" > "/tmp/z2k-job-${job_id}.pid"
+    printf '%s' "$job_id"
+}
 
 # --- toggles ---
 #
@@ -259,7 +302,15 @@ extra_domains_delete() {
 
 # --- tunnel (Telegram) ---
 
-tunnel_pid() { pgrep -f "tg-mtproxy-client" 2>/dev/null | head -1; }
+tunnel_pid() {
+    # Match by cmdline contains `--listen=:1443` — S97z2k-http-tunnel
+    # уs eventually runs the SAME tg-mtproxy-client binary but with
+    # `--listen=:1444` (cdnbase tunnel). Без фильтра `pgrep -f tg-mtproxy-client`
+    # сматчит S97 sibling и /status report'ит tg-tunnel.running=true даже
+    # когда S98 daemon реально остановлен. Field-bug 2026-05-24 (юзер
+    # отключал TG-туннель, badge показывал «ВКЛЮЧЁН»).
+    pgrep -f "tg-mtproxy-client .*--listen=:1443" 2>/dev/null | head -1
+}
 
 tunnel_enable() {
     # Clear user-disabled flag before starting so the watchdog resumes
@@ -267,32 +318,45 @@ tunnel_enable() {
     local cfg="${ZAPRET2_DIR}/config"
     if [ -f "$cfg" ]; then
         if grep -q '^TG_PROXY_USER_DISABLED=' "$cfg"; then
+            echo "Снимаю флаг TG_PROXY_USER_DISABLED → 0 в /opt/zapret2/config"
             sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=0/' "$cfg"
         fi
     fi
     if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
-        /opt/etc/init.d/S98tg-tunnel start >/dev/null 2>&1
+        echo "Запускаю S98tg-tunnel..."
+        /opt/etc/init.d/S98tg-tunnel start 2>&1
     else
         echo "tunnel init script missing" >&2
         return 1
     fi
+    echo "Туннель запущен."
 }
 
 tunnel_disable() {
     # Set user-disabled marker BEFORE stopping so the watchdog (fired
     # by z2k-scheduler every ~minute) sees the flag and respects the
     # user's intent instead of resurrecting the daemon ~3 min later.
+    # Output verbose так чтобы svc_action_async log показывал
+    # реальный прогресс, не «пустую секцию между разделителями».
     local cfg="${ZAPRET2_DIR}/config"
     if [ -f "$cfg" ]; then
         if grep -q '^TG_PROXY_USER_DISABLED=' "$cfg"; then
+            echo "Устанавливаю TG_PROXY_USER_DISABLED=1 в /opt/zapret2/config"
             sed -i 's/^TG_PROXY_USER_DISABLED=.*/TG_PROXY_USER_DISABLED=1/' "$cfg"
         else
+            echo "Добавляю TG_PROXY_USER_DISABLED=1 в /opt/zapret2/config"
             echo "TG_PROXY_USER_DISABLED=1" >> "$cfg"
         fi
+    else
+        echo "Конфиг /opt/zapret2/config не найден — флаг не записан"
     fi
     if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
-        /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
+        echo "Останавливаю S98tg-tunnel..."
+        /opt/etc/init.d/S98tg-tunnel stop 2>&1
+    else
+        echo "Init-скрипт S98tg-tunnel не найден — пропускаю"
     fi
+    echo "Туннель остановлен, watchdog респектнёт флаг и не будет его перезапускать."
 }
 
 # --- healthcheck / jobs ---

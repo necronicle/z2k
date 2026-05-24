@@ -85,26 +85,32 @@
     $app.querySelectorAll("[data-svc]").forEach(btn => {
       btn.addEventListener("click", async () => {
         const action = btn.dataset.svc;
-        const target = btn.dataset.target;
-        const allBtns = $app.querySelectorAll("[data-svc]");
-        allBtns.forEach(b => b.disabled = true);
-        showStatusSpinner(action === "stop" ? "Останавливаем…" : "Перезапускаем…");
+        const titleByAction = { start: "Запуск сервиса", stop: "Остановка сервиса", restart: "Перезапуск сервиса" };
+        const title = titleByAction[action] || ("Действие: " + action);
+        let resp;
         try {
-          await apiPost("/service/" + action);
-          await pollServiceUntil(target, 10000);
-          toast(action === "stop" ? "Остановлен" : "Перезапущен");
+          resp = await apiPost("/service/" + action);
         } catch (e) {
-          toast("Ошибка: " + e.message, "bad");
-          refreshStatus();
-        } finally {
-          hideStatusSpinner();
-          allBtns.forEach(b => b.disabled = false);
+          toast("Ошибка запуска: " + e.message, "bad");
+          return;
         }
+        // Backend теперь async — возвращает {ok, job:<id>}. Открываем
+        // модалку с live-логом точно как при auto-update apply. После
+        // завершения refreshStatus подтянет grid вверху.
+        openJobModal(title, resp.job, {
+          onDone: (d) => {
+            setTimeout(refreshStatus, 500);
+            if (d && d.exit !== 0) {
+              toast("Команда завершилась с кодом " + d.exit, "bad");
+            }
+          },
+        });
       });
     });
 
     refreshStatus();
     refreshUpdateBanner();
+    _updateGlobalUILock();
   }
 
   // ---------- Update banner / apply ----------
@@ -434,7 +440,7 @@
         `).join("")}
       </div>
       <div class="card">
-        <h3>Telegram туннель</h3>
+        <h3>Telegram туннель <span class="tg-state-badge" id="tg-state-badge" hidden></span></h3>
         <p class="desc">Прозрачный mux-прокси к Telegram DC через выделенный VPS-relay.</p>
         <div class="btn-row">
           <button class="btn btn-primary" id="tg-enable">Включить</button>
@@ -453,18 +459,74 @@
         box.disabled = false;
         box.addEventListener("change", () => toggleClick(t.key, box));
       });
+      // TG-tunnel state pill + button enable/disable matching reality.
+      const tgRunning = s.tunnel && s.tunnel.running === true;
+      const badge = $app.querySelector("#tg-state-badge");
+      badge.hidden = false;
+      badge.textContent = tgRunning ? "Включён" : "Остановлен";
+      badge.className = "tg-state-badge " + (tgRunning ? "tg-state-on" : "tg-state-off");
+      const enableBtn = $app.querySelector("#tg-enable");
+      const disableBtn = $app.querySelector("#tg-disable");
+      enableBtn.disabled = tgRunning;
+      disableBtn.disabled = !tgRunning;
+      enableBtn.title = tgRunning ? "Туннель уже запущен" : "";
+      disableBtn.title = tgRunning ? "" : "Туннель уже остановлен";
     } catch (e) {
       toast("Ошибка: " + e.message, "bad");
     }
 
-    $app.querySelector("#tg-enable").addEventListener("click", async () => {
-      try { await apiPost("/tunnel/enable"); toast("Туннель запущен"); }
-      catch (e) { toast("Ошибка: " + e.message, "bad"); }
-    });
-    $app.querySelector("#tg-disable").addEventListener("click", async () => {
-      try { await apiPost("/tunnel/disable"); toast("Туннель остановлен"); }
-      catch (e) { toast("Ошибка: " + e.message, "bad"); }
-    });
+    async function tgAction(action, title) {
+      let resp;
+      try {
+        resp = await apiPost("/tunnel/" + action);
+      } catch (e) {
+        toast("Ошибка: " + e.message, "bad");
+        return;
+      }
+      const expectRunning = (action === "enable");
+      // Wait until tunnel state actually matches what we asked for — init
+      // script может тратить 1-2 сек на cleanup iptables / conntrack
+      // после stop, и /status в это время ещё видит daemon alive. Без
+      // polling renderToggles из onDone подхватывает stale=true state,
+      // и badge показывает «ВКЛЮЧЁН» через секунду после клика
+      // «Отключить» — юзер думает что не сработало.
+      async function pollTgState() {
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+          try {
+            const s = await apiGet("/status");
+            if (s.tunnel && s.tunnel.running === expectRunning) return true;
+          } catch (e) {
+            // network blip — продолжим
+          }
+          await new Promise(r => setTimeout(r, 500));
+        }
+        return false;
+      }
+
+      // Backend returns either {ok:true,job:<id>} (async, new) or
+      // {ok:true} (sync, old). Если есть job — открываем модалку с
+      // live-логом; иначе toast + re-render toggles страницы.
+      if (resp && resp.job) {
+        openJobModal(title, resp.job, {
+          onDone: async () => {
+            await pollTgState();
+            renderToggles();
+          },
+        });
+      } else {
+        toast(title + " — готово");
+        await pollTgState();
+        renderToggles();
+      }
+    }
+    $app.querySelector("#tg-enable").addEventListener("click", () => tgAction("enable", "Запуск Telegram туннеля"));
+    $app.querySelector("#tg-disable").addEventListener("click", () => tgAction("disable", "Остановка Telegram туннеля"));
+
+    // Если уже бежит job (юзер пришёл с другой вкладки) — сразу заблочить
+    // только что отрендеренные switches/buttons. Без этого глобал-лок
+    // применился бы к старым DOM-элементам которых на этой странице нет.
+    _updateGlobalUILock();
   }
 
   // Toggles that restart nfqws2 under the hood (see actions.sh:toggle_*).
@@ -478,26 +540,46 @@
     const sw = box.closest(".switch");
     const wanted = box.checked ? "1" : "0";
     sw.classList.add("loading");
+    box.disabled = true; // блок UI до завершения, не даём кликать ещё
     const restarts = TOGGLES_RESTART_SERVICE[key] === 1;
+    const verb = wanted === "1" ? "Включаю" : "Отключаю";
+    const niceName = {
+      rst_filter: "RST-фильтр",
+      silent_fallback: "Silent fallback",
+      game_mode: "Игровой режим",
+      customd: "custom.d",
+      dynamic_ttl: "Динамический TTL",
+    }[key] || key;
+
+    let resp;
     try {
-      await apiPost("/toggle/" + TOGGLE_API_NAME[key], { value: wanted });
-      if (restarts) {
-        toast((wanted === "1" ? "Включаем" : "Выключаем") + ", перезапуск сервиса…");
-        // After toggle the daemon restarts. Don't fight: pollServiceUntil
-        // is on the dashboard only — re-implement minimal version here
-        // that polls /status until svc=active (or timeout).
-        const ok = await waitForServiceActive(8000);
-        toast(ok ? (wanted === "1" ? "Включено" : "Выключено")
-                 : "Сервис не поднялся за 8с — проверь логи", ok ? "ok" : "bad");
-      } else {
-        toast(wanted === "1" ? "Включено" : "Выключено");
-      }
+      resp = await apiPost("/toggle/" + TOGGLE_API_NAME[key], { value: wanted });
     } catch (e) {
       box.checked = !box.checked; // revert
-      toast("Ошибка: " + e.message, "bad");
-    } finally {
+      box.disabled = false;
       sw.classList.remove("loading");
+      toast("Ошибка: " + e.message, "bad");
+      return;
     }
+    // Backend async — открываем модалку с live-логом. Состояние switch'а
+    // (loading + disabled) держится до onDone — если юзер закрыл модалку
+    // раньше, badge в углу позволит снова открыть, а UI блокировка не
+    // даст думать что переключение уже применилось.
+    openJobModal(verb + " " + niceName, resp.job, {
+      onDone: (d) => {
+        sw.classList.remove("loading");
+        box.disabled = false;
+        if (d && d.exit !== 0) {
+          // Toggle failed — revert checkbox чтобы UI отражал реальное
+          // состояние (старое значение сохранилось в config).
+          box.checked = !box.checked;
+          toast("Не получилось — вернул как было", "bad");
+        } else {
+          toast(wanted === "1" ? "Включено" : "Выключено");
+        }
+        if (restarts) setTimeout(refreshStatus, 500);
+      },
+    });
   }
 
   async function waitForServiceActive(timeoutMs) {
@@ -685,15 +767,189 @@
   }
 
   // ---------- Job modal ----------
+  // Registry of currently-running jobs. Each entry survives modal close
+  // (user clicks "Скрыть") and powers the bottom-right badge — click on
+  // the badge re-opens the modal with the same jobId so user can check
+  // progress again.
+  const _activeJobs = new Map(); // jobId → { title, opts }
+  // Background pollers — независимы от модалки. Запускаются при первом
+  // openJobModal, продолжают работать даже если юзер закрыл модалку. На
+  // done централизованно дёргают onDone, чистят registry и разлочивают UI.
+  // Модалка — это просто «вью» подписанное на тик через attachers.
+  const _jobPollers = new Map(); // jobId → poller state
+
+  function _renderJobBadges() {
+    let container = document.getElementById("job-badges");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "job-badges";
+      container.className = "job-badges";
+      document.body.appendChild(container);
+    }
+    container.innerHTML = "";
+    for (const [jobId, info] of _activeJobs) {
+      const b = document.createElement("button");
+      b.className = "job-badge";
+      b.title = "Кликни чтобы открыть лог снова";
+      b.innerHTML = `<span class="job-badge-dot"></span>${escapeHtml(info.title)}`;
+      b.addEventListener("click", () => openJobModal(info.title, jobId, info.opts));
+      container.appendChild(b);
+    }
+    _updateGlobalUILock();
+  }
+
+  // Пока есть хотя бы один active job — блокируем ВСЕ toggle switches и
+  // service-кнопки. Любое новое действие порождало бы конкурентный
+  // restart сервиса с непредсказуемым итогом.
+  //
+  // Visual treatment (ui-ux рекомендация 2026-05-24): browser default
+  // disabled state слишком subtle — юзер видел просто чуть-серый
+  // элемент и думал что нажал «не туда». Применяем per-card locked
+  // treatment: каждая карточка с интерактивными элементами получает
+  // opacity-reduce + большую пилюлю «⏳ Операция выполняется…» в углу.
+  // Это immediately visible без hover. Tooltip остаётся для precision.
+  function _updateGlobalUILock() {
+    const busy = _activeJobs.size > 0;
+    const lockMsg = "Дождитесь завершения текущей операции";
+    document.querySelectorAll(".switch input[type=\"checkbox\"]").forEach(cb => {
+      if (busy) {
+        if (!cb.dataset.lockBackup) {
+          cb.dataset.lockBackup = cb.disabled ? "1" : "0";
+          cb.disabled = true;
+          cb.closest(".switch")?.setAttribute("title", lockMsg);
+        }
+      } else {
+        if (cb.dataset.lockBackup !== undefined) {
+          cb.disabled = cb.dataset.lockBackup === "1";
+          delete cb.dataset.lockBackup;
+          cb.closest(".switch")?.removeAttribute("title");
+        }
+      }
+    });
+    document.querySelectorAll("[data-svc], #tg-enable, #tg-disable").forEach(btn => {
+      if (busy) {
+        if (!btn.dataset.lockBackup) {
+          btn.dataset.lockBackup = btn.disabled ? "1" : "0";
+          btn.disabled = true;
+          btn.setAttribute("title", lockMsg);
+        }
+      } else {
+        if (btn.dataset.lockBackup !== undefined) {
+          btn.disabled = btn.dataset.lockBackup === "1";
+          delete btn.dataset.lockBackup;
+          btn.removeAttribute("title");
+        }
+      }
+    });
+    // Card-level treatment: добавим класс на карточки которые содержат
+    // блокируемые элементы (toggles или service buttons). CSS дальше
+    // дамптит opacity и рисует pill «⏳ Операция выполняется…».
+    document.querySelectorAll(".card").forEach(card => {
+      const hasLockableControl = card.querySelector(".switch input[type=\"checkbox\"], [data-svc], #tg-enable, #tg-disable");
+      if (!hasLockableControl) return;
+      if (busy) {
+        card.classList.add("card-locked");
+      } else {
+        card.classList.remove("card-locked");
+      }
+    });
+  }
+
+  // Background poller для одного jobId. Живёт независимо от модалки —
+  // поэтому даже если юзер кликнул «Скрыть», job дойдёт до done, UI
+  // разлочится, opts.onDone сработает. Модалка просто подписывается через
+  // attachers и снимает подписку на close.
+  function _startJobPoller(jobId, opts) {
+    const existing = _jobPollers.get(jobId);
+    if (existing) return existing;
+    const state = {
+      jobId,
+      opts: opts || {},
+      stopped: false,
+      lastLog: "Запуск…",
+      lastData: null,
+      consecutiveErrors: 0,
+      lastOutageWarn: 0,
+      attachers: new Set(),  // (log, done, data) callbacks
+    };
+    _jobPollers.set(jobId, state);
+
+    const MAX_ERRORS = state.opts.tolerateOutage ? 300 : 5;
+    const POLL_OK_MS = 1000;
+    const POLL_ERR_MS = state.opts.tolerateOutage ? 2000 : 1000;
+
+    const notify = (log, done, data) => {
+      state.lastLog = log;
+      if (data) state.lastData = data;
+      for (const cb of state.attachers) {
+        try { cb(log, done, data); } catch (_) {}
+      }
+    };
+
+    const finish = (d) => {
+      state.stopped = true;
+      _jobPollers.delete(jobId);
+      _activeJobs.delete(jobId);
+      _renderJobBadges();  // также дёрнет _updateGlobalUILock — кнопки разлочатся
+      if (typeof state.opts.onDone === "function") {
+        try { state.opts.onDone(d); } catch (_) {}
+      }
+    };
+
+    async function tick() {
+      if (state.stopped) return;
+      try {
+        const d = await apiGet("/job?id=" + encodeURIComponent(jobId));
+        const recovered = state.consecutiveErrors > 0;
+        state.consecutiveErrors = 0;
+        const baseLog = d.log || "(нет вывода)";
+        const log = recovered ? baseLog + "\n[панель снова на связи]" : baseLog;
+        notify(log, !!d.done, d);
+        if (d.done) { finish(d); return; }
+      } catch (e) {
+        state.consecutiveErrors++;
+        if (state.consecutiveErrors >= MAX_ERRORS) {
+          const log = state.lastLog + "\n[опрос прерван: " + e.message + "]";
+          notify(log, true, { exit: -1, log, done: true });
+          finish({ exit: -1, log, done: true });
+          return;
+        }
+        if (state.consecutiveErrors === 2 || (state.consecutiveErrors - state.lastOutageWarn) >= 30) {
+          const secsWaiting = Math.round(state.consecutiveErrors * POLL_ERR_MS / 1000);
+          const cleanLog = state.lastLog.replace(/\n\[панель временно недоступна.*\]$/g, "");
+          const log = cleanLog + `\n[панель временно недоступна, ждём… ${secsWaiting}с]`;
+          notify(log, false, null);
+          state.lastOutageWarn = state.consecutiveErrors;
+        }
+      }
+      setTimeout(tick, state.consecutiveErrors > 0 ? POLL_ERR_MS : POLL_OK_MS);
+    }
+    tick();
+    return state;
+  }
+
   function openJobModal(title, jobId, opts = {}) {
+    // Если уже есть открытая модалка для этого job — не плодить вторую.
+    if (document.querySelector(`.modal-backdrop[data-job-id="${jobId}"]`)) {
+      return;
+    }
+    // Зарегистрировать job так чтобы badge отображался даже если юзер
+    // закроет модалку. Background poller начнёт жить независимо.
+    if (!_activeJobs.has(jobId)) {
+      _activeJobs.set(jobId, { title, opts });
+      _renderJobBadges();
+    }
+    const poller = _startJobPoller(jobId, opts);
+
     const warning = opts.warning ? `<div class="modal-warning">${escapeHtml(opts.warning)}</div>` : "";
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop";
+    backdrop.dataset.jobId = jobId;
     backdrop.innerHTML = `
       <div class="modal">
         <h3>${escapeHtml(title)}</h3>
         ${warning}
-        <pre class="log" id="job-log">Запуск…</pre>
+        <pre class="log" id="job-log">${escapeHtml(poller.lastLog || "Запуск…")}</pre>
         <div class="modal-footer">
           <button class="btn" id="job-close">Скрыть</button>
         </div>
@@ -702,78 +958,37 @@
     document.body.appendChild(backdrop);
     const logEl = backdrop.querySelector("#job-log");
     const closeBtn = backdrop.querySelector("#job-close");
-    // Close button is always enabled. While the job is running, closing
-    // just dismisses the UI — the background process keeps going (detached
-    // via CGI fd-cleanup in actions.sh), and the dashboard banner will
-    // update once the job's onDone fires (state poll), even with the
-    // modal gone. After done, the button repurposes to a plain "Закрыть".
-    closeBtn.addEventListener("click", () => {
-      stopped = true;
-      backdrop.remove();
-    });
+    logEl.scrollTop = logEl.scrollHeight;
 
-    // Apply / reinstall jobs bounce nfqws2 and may briefly restart lighttpd
-    // mid-run. /job poll attempts will return network errors during that
-    // window. tolerateOutage mode gives ~5 min of retries with a longer
-    // poll interval during the outage so we survive the entire install.
-    let stopped = false;
-    let consecutiveErrors = 0;
-    let lastOutageWarn = 0;
-    const MAX_ERRORS = opts.tolerateOutage ? 300 : 5;
-    const POLL_OK_MS = 1000;
-    const POLL_ERR_MS = opts.tolerateOutage ? 2000 : 1000;
-    async function poll() {
-      if (stopped) return;
-      try {
-        const d = await apiGet("/job?id=" + encodeURIComponent(jobId));
-        if (consecutiveErrors > 0) {
-          // Webpanel just recovered after an outage — show a hint.
-          logEl.textContent = (d.log || "(нет вывода)") + "\n[панель снова на связи]";
+    // Модалка — подписчик на background poller. На done меняет текст
+    // кнопки на «Готово»/«Закрыть». Если юзер закроет до done — мы
+    // снимаем подписку, poller продолжит крутиться и сам разлочит UI.
+    const onTick = (log, done, d) => {
+      logEl.textContent = log;
+      logEl.scrollTop = logEl.scrollHeight;
+      if (done) {
+        const isLockHeld = (log || "").includes("lock held by pid=");
+        if (d && d.exit === 0) {
+          closeBtn.textContent = "Готово";
+        } else if (isLockHeld) {
+          closeBtn.textContent = "ОК — обновление уже идёт";
         } else {
-          logEl.textContent = d.log || "(нет вывода)";
-        }
-        consecutiveErrors = 0;
-        logEl.scrollTop = logEl.scrollHeight;
-        if (d.done) {
-          // "Lock held" is not really a failure — another apply is already
-          // in progress (typically a manual click that hit the scheduler-
-          // driven health-check sleep window). Surface it as info, not error.
-          const isLockHeld = (d.log || "").includes("lock held by pid=");
-          if (d.exit === 0) {
-            closeBtn.textContent = "Готово";
-          } else if (isLockHeld) {
-            closeBtn.textContent = "ОК — обновление уже идёт";
-          } else {
-            closeBtn.textContent = "Закрыть";
-          }
-          stopped = true;
-          if (typeof opts.onDone === "function") {
-            try { opts.onDone(d); } catch (e) { /* swallow */ }
-          }
-          return;
-        }
-      } catch (e) {
-        consecutiveErrors++;
-        if (consecutiveErrors >= MAX_ERRORS) {
-          logEl.textContent += "\n[опрос прерван: " + e.message + "]";
           closeBtn.textContent = "Закрыть";
-          stopped = true;
-          return;
-        }
-        // Brief outage during restart — keep going. Refresh the hint every
-        // 30s so the user sees the modal is actively retrying, not frozen.
-        if (consecutiveErrors === 2 || (consecutiveErrors - lastOutageWarn) >= 30) {
-          const secsWaiting = Math.round(consecutiveErrors * POLL_ERR_MS / 1000);
-          logEl.textContent = logEl.textContent
-            .replace(/\n\[панель временно недоступна.*\]$/g, "")
-            + `\n[панель временно недоступна, ждём… ${secsWaiting}с]`;
-          logEl.scrollTop = logEl.scrollHeight;
-          lastOutageWarn = consecutiveErrors;
         }
       }
-      setTimeout(poll, consecutiveErrors > 0 ? POLL_ERR_MS : POLL_OK_MS);
+    };
+    poller.attachers.add(onTick);
+
+    // Если poller уже завершился до того как мы повторно открыли модалку
+    // через badge — мгновенно отрисуем финальное состояние.
+    if (poller.stopped && poller.lastData) {
+      onTick(poller.lastLog, true, poller.lastData);
     }
-    poll();
+
+    closeBtn.addEventListener("click", () => {
+      poller.attachers.delete(onTick);
+      backdrop.remove();
+    });
   }
 
   // ---------- Rotator state (Phase 3) ----------
