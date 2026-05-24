@@ -347,6 +347,28 @@ au_install_paths() {
             # patch-type releases touching z2k.sh need the mapping too.
             echo "${zd}/${repo_path}"
             ;;
+        webpanel/cgi/*.sh)
+            # Webpanel CGI handlers — auth.sh / actions.sh / api.sh.
+            # webpanel/install.sh deploys to ${zd}/webpanel/cgi/.
+            echo "${zd}/webpanel/cgi/${repo_path#webpanel/cgi/}"
+            ;;
+        webpanel/www/*)
+            # Webpanel static assets — lighttpd serves from ${zd}/www
+            # (NOT ${zd}/webpanel/www — webpanel/install.sh copies to
+            # the lighttpd document-root which is a separate path).
+            echo "${zd}/www/${repo_path#webpanel/www/}"
+            ;;
+        webpanel/init.d/S96z2k-webpanel)
+            echo "/opt/etc/init.d/S96z2k-webpanel"
+            ;;
+        webpanel/install.sh|webpanel/uninstall.sh)
+            echo "${zd}/webpanel/${repo_path#webpanel/}"
+            ;;
+        webpanel/lighttpd.conf)
+            # Generated at install time from a template with @PORT@/@BIND@
+            # substitution. Patch can't easily re-template it, so skip;
+            # if lighttpd.conf actually changes, ship as reinstall.
+            : ;;
         tests/*)
             : # tests are dev/CI artifacts; not shipped to runtime.
             ;;

@@ -1213,14 +1213,34 @@ step_build_zapret2() {
         fi
     done
 
-    # Install lib/auto_update.sh as a runtime module — sourced by
-    # z2k-auto-update.sh (cron entry point) and by lib/menu.sh
-    # ("Проверить обновления").
+    # Install ALL lib/*.sh modules to persistent ${ZAPRET2_DIR}/lib/.
+    # Background: z2k.sh sources modules from $WORK_DIR/lib (tmpfs) which
+    # gets wiped on reboot or when GitHub raw CDN serves a stale copy
+    # during the post-push 3-5 min cache window. A user filed 2026-05-24
+    # complaint: «обновлялся, но новый пункт [M] в меню не появился» —
+    # auto-update reinstall finished, but the stale-cached lib/menu.sh
+    # in /tmp/z2k/lib was a copy from the GitHub-CDN-stale fetch and
+    # never refreshed for interactive `z2k menu` runs. Only manual
+    # reinstall (which wipes /tmp/z2k and re-fetches at a clean moment)
+    # fixed it.
+    # Persistent /opt/zapret2/lib/* is also the install target for the
+    # patch-path mapping (lib/* → ${zd}/${repo_path}); without copying
+    # here, the lib/auto_update.sh special-case made it look like patch
+    # works for lib/ but historically nothing else got persisted.
+    # We still source from $WORK_DIR/lib for now (separate z2k.sh
+    # fix needed to make $ZAPRET2_DIR/lib the source of truth) — at
+    # least keep the persistent copy fresh so au_apply_patch and any
+    # future restructure operate on correct data.
     mkdir -p "${ZAPRET2_DIR}/lib"
-    if [ -f "${WORK_DIR}/lib/auto_update.sh" ]; then
-        cp -f "${WORK_DIR}/lib/auto_update.sh" "${ZAPRET2_DIR}/lib/auto_update.sh"
-        print_info "Установлен: lib/auto_update.sh"
-    fi
+    local _module _src _dst _copied=0
+    for _module in utils system_init install strategies config config_official webpanel menu auto_update; do
+        _src="${WORK_DIR}/lib/${_module}.sh"
+        _dst="${ZAPRET2_DIR}/lib/${_module}.sh"
+        if [ -f "$_src" ]; then
+            cp -f "$_src" "$_dst" 2>/dev/null && _copied=$((_copied + 1))
+        fi
+    done
+    print_info "Установлено: ${_copied} lib/*.sh модулей в персистентный ${ZAPRET2_DIR}/lib/"
 
     # Web panel is now installed on-demand via menu [P] → [1].
     # Files live in webpanel/ in the repo and are copied to /tmp/z2k/webpanel
