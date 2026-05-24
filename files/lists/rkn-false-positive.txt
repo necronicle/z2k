@@ -1,0 +1,20 @@
+# RKN false-positive list
+# Домены которые попадают в upstream RKN-blocked geosite (ru-blocked /
+# ru-blocked-all), но по факту НЕ заблокированы РКН — обрабатывать их
+# nfqws2 излишне (лишний overhead + засоряет state.tsv).
+#
+# Применяется в z2k-geosite.sh → subtract_false_positive_from_rkn()
+# после каждого fetch. Match — exact line equality (NOT suffix), чтобы
+# случайно не выпилить subdomain'ы которые реально блокируются.
+#
+# Формат: один FQDN на строку, lowercase. Пустые строки и `#` коммент игнор.
+#
+# Чтобы добавить новый домен:
+#   1. Проверь что он работает у тебя без z2k bypass (открой в браузере с
+#      DNS-разрешением, отключи z2k toggle, попробуй открыть напрямую).
+#   2. Добавь его строкой ниже.
+#   3. Force refresh geosite в webpanel (или подожди ночной cron).
+
+# Google
+play.google.com
+snap-storage-cdn.l.google.com

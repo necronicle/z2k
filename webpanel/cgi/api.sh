@@ -275,6 +275,20 @@ case "$method $path" in
         json_ok
         ;;
 
+    "POST /whitelist/import")
+        # Body — raw multi-line TXT (one domain per line). Frontend sends
+        # Content-Type: text/plain. whitelist_import парсит/валидирует/
+        # дедуплицирует/append'ит и выводит counts.
+        body=$(read_body)
+        result=$(printf '%s' "$body" | whitelist_import) || json_fail "500 Server Error" "import failed"
+        added=$(printf '%s' "$result" | sed -n 's/.*added=\([0-9]*\).*/\1/p')
+        dup=$(printf '%s' "$result" | sed -n 's/.*skipped_dup=\([0-9]*\).*/\1/p')
+        inv=$(printf '%s' "$result" | sed -n 's/.*skipped_invalid=\([0-9]*\).*/\1/p')
+        json_header
+        printf '{"ok":true,"added":%d,"skipped_duplicate":%d,"skipped_invalid":%d}\n' "${added:-0}" "${dup:-0}" "${inv:-0}"
+        exit 0
+        ;;
+
     # ---------- EXTRA DOMAINS (live hostlist для autocircular) ----------
     "GET /extra-domains")
         json_header

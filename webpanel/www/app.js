@@ -6,17 +6,33 @@
 
   const API = "/cgi-bin/api";
   const $app = document.getElementById("app");
-  const $toast = document.getElementById("toast");
+  const $toastStack = document.getElementById("toast-stack");
   const $nav = document.getElementById("nav");
 
-  // ---------- Toast ----------
-  let toastTimer;
+  // ---------- Toast (stack, max 3, FIFO eviction, 3.5s auto-dismiss) ----------
+  // Skill rule toast-dismiss: 3-5s. New toasts push old ones up; if more
+  // than MAX_TOASTS are visible the oldest is evicted immediately. Each
+  // toast has its own dismiss timer so a fast burst doesn't double-fire.
+  const MAX_TOASTS = 3;
+  const TOAST_TTL_MS = 3500;
   function toast(msg, kind = "ok") {
-    $toast.textContent = msg;
-    $toast.className = "toast " + kind;
-    $toast.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { $toast.hidden = true; }, 2600);
+    if (!$toastStack) return;
+    const el = document.createElement("div");
+    el.className = "toast-item toast-" + kind;
+    el.setAttribute("role", "status");
+    el.textContent = msg;
+    $toastStack.appendChild(el);
+    // FIFO eviction: keep at most MAX_TOASTS visible.
+    while ($toastStack.children.length > MAX_TOASTS) {
+      $toastStack.firstElementChild.remove();
+    }
+    // Fade-in next frame so transition fires.
+    requestAnimationFrame(() => el.classList.add("is-visible"));
+    setTimeout(() => {
+      el.classList.remove("is-visible");
+      el.classList.add("is-leaving");
+      setTimeout(() => el.remove(), 250);
+    }, TOAST_TTL_MS);
   }
 
   // ---------- Fetch helpers ----------
@@ -51,16 +67,61 @@
     geosite: renderGeosite,
     credits: renderCredits,
   };
+  // Active route highlight для всех `<a>` в #nav (primary + overflow).
+  // Highlight «...» кнопки делается через CSS :has() — не нужен JS sync.
+  // Page title — per-route, формат "PageName · Z2K" (GitHub/Linear style).
+  const ROUTE_TITLES = {
+    dashboard:       "Дашборд",
+    toggles:         "Режимы",
+    whitelist:       "Whitelist",
+    "extra-domains": "Доп. домены",
+    state:           "Rotator",
+    logs:            "Логи",
+    diag:            "Диагностика",
+    geosite:         "Geosite",
+    credits:         "Благодарности",
+  };
   function navigate() {
     const hash = location.hash.replace(/^#\//, "") || "dashboard";
     const name = routes[hash] ? hash : "dashboard";
     for (const a of $nav.querySelectorAll("a")) {
       a.classList.toggle("active", a.dataset.route === name);
     }
+    const pageTitle = ROUTE_TITLES[name] || "antiDPI для Keenetic";
+    document.title = `${pageTitle} · Z2K`;
+    closeNavMore();
     $app.innerHTML = "";
     routes[name]();
   }
   window.addEventListener("hashchange", navigate);
+
+  // ---------- Sidebar collapse (desktop only) ----------
+  // localStorage key z2k-sidebar = "expanded" | "collapsed".
+  // Sidebar только на desktop (≥768px / >500h height); на mobile drawer
+  // показывает все items — collapse button скрыт.
+  const SIDEBAR_KEY = "z2k-sidebar";
+  function initSidebar() {
+    const btn = document.getElementById("sidebar-collapse");
+    if (!btn) return;
+    try {
+      const saved = localStorage.getItem(SIDEBAR_KEY);
+      if (saved === "collapsed") document.body.setAttribute("data-sidebar", "collapsed");
+    } catch (_) {}
+    btn.addEventListener("click", () => {
+      const isCollapsed = document.body.getAttribute("data-sidebar") === "collapsed";
+      if (isCollapsed) {
+        document.body.removeAttribute("data-sidebar");
+        try { localStorage.setItem(SIDEBAR_KEY, "expanded"); } catch (_) {}
+        btn.setAttribute("aria-label", "Свернуть боковую панель");
+      } else {
+        document.body.setAttribute("data-sidebar", "collapsed");
+        try { localStorage.setItem(SIDEBAR_KEY, "collapsed"); } catch (_) {}
+        btn.setAttribute("aria-label", "Развернуть боковую панель");
+      }
+    });
+  }
+  // No-op stub — closeNavMore вызывается в navigate(), удалили overflow concept
+  function closeNavMore() {}
 
   // ---------- Dashboard ----------
   async function renderDashboard() {
@@ -69,7 +130,7 @@
       <h1 class="page-title">Дашборд</h1>
       <div class="card" id="status-card">
         <h3>Состояние <span class="status-spinner" id="status-spin" hidden></span></h3>
-        <div class="status-grid" id="status-grid">Загрузка…</div>
+        <div class="status-grid" id="status-grid">${skeletonBlocks(7)}</div>
       </div>
       <div class="card">
         <h3>Управление сервисом</h3>
@@ -164,7 +225,7 @@
         </div>
         <div class="update-banner-actions">
           <button class="btn btn-primary" id="upd-apply">Обновить</button>
-          ${pending.length > 0 ? `<button class="btn" id="upd-changelog-btn" aria-expanded="false">Что нового ▾</button>` : ""}
+          ${pending.length > 0 ? `<button class="btn btn-disclosure" id="upd-changelog-btn" aria-expanded="false"><span>Что нового</span>${_icons.chevronDown}</button>` : ""}
           <button class="btn" id="upd-recheck">Проверить ещё раз</button>
         </div>
         ${pending.length > 0 ? `
@@ -182,7 +243,7 @@
           const open = !clBox.hidden;
           clBox.hidden = open;
           clBtn.setAttribute("aria-expanded", open ? "false" : "true");
-          clBtn.textContent = open ? "Что нового ▾" : "Что нового ▴";
+          clBtn.classList.toggle("is-open", !open);
         });
       }
     } else {
@@ -382,9 +443,40 @@
       { label: "Игровой режим", value: gameModeLabel(s.toggles.game_mode, s.game_profile), kind: s.toggles.game_mode === "1" ? "good" : "" },
       { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
     ];
-    grid.innerHTML = cells.map(c =>
-      `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
-    ).join("");
+    grid.innerHTML = cells.map(c => {
+      const icon = statusIcon(c.kind);
+      return `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${icon ? `<span class="status-ico">${icon}</span>` : ""}${c.value}</div></div>`;
+    }).join("");
+    syncServiceButtons(s.service);
+  }
+
+  // Скрываем / показываем service-кнопки по реальному состоянию:
+  // active        → «Перезапустить» + «Остановить»; «Запустить» скрыта
+  // stopped       → только «Запустить»
+  // not_installed → все три скрыты (нечего управлять)
+  //
+  // Используем style.display а не hidden attribute, потому что
+  // `.btn { display: inline-block }` переопределяет [hidden] {display:none}
+  // по специфичности (one-class > attribute).
+  function syncServiceButtons(svc) {
+    const startBtn   = $app.querySelector('[data-svc="start"]');
+    const restartBtn = $app.querySelector('[data-svc="restart"]');
+    const stopBtn    = $app.querySelector('[data-svc="stop"]');
+    if (!startBtn || !restartBtn || !stopBtn) return;
+    const show = (el, on) => { el.style.display = on ? "" : "none"; };
+    if (svc === "active") {
+      show(startBtn, false);
+      show(restartBtn, true);
+      show(stopBtn, true);
+    } else if (svc === "stopped") {
+      show(startBtn, true);
+      show(restartBtn, false);
+      show(stopBtn, false);
+    } else {
+      show(startBtn, false);
+      show(restartBtn, false);
+      show(stopBtn, false);
+    }
   }
 
   function bool(v) { return v === "1" ? "Вкл" : "Выкл"; }
@@ -600,19 +692,61 @@
       <h1 class="page-title">Whitelist</h1>
       <div class="card">
         <h3>Исключённые домены</h3>
-        <p class="desc">Эти домены не обрабатываются zapret2 (suffix-match). Изменения применяются после перезапуска сервиса.</p>
+        <p class="desc">Эти домены не обрабатываются zapret2 (suffix-match). <b>Изменения подхватываются сервисом без перезапуска</b> через несколько секунд.</p>
         <div class="wl-add">
-          <input id="wl-input" type="text" placeholder="example.com" autocomplete="off" spellcheck="false">
+          <label class="field">
+            <span class="field-label">Новый домен</span>
+            <input id="wl-input" type="text" placeholder="example.com"
+                   inputmode="url" autocomplete="off" autocapitalize="off"
+                   spellcheck="false" autocorrect="off">
+          </label>
           <button class="btn btn-primary" id="wl-add-btn">Добавить</button>
+          <button class="btn" id="wl-import-btn" title="Импорт списка из текстового файла (одна строка — один домен)">Импорт из файла</button>
+          <input type="file" id="wl-import-file" accept=".txt,text/plain" hidden>
         </div>
-        <ul class="wl-list" id="wl-list">Загрузка…</ul>
+        <ul class="wl-list" id="wl-list">${skeletonLines(5)}</ul>
       </div>
     `;
     document.getElementById("wl-add-btn").addEventListener("click", wlAdd);
     document.getElementById("wl-input").addEventListener("keydown", e => {
       if (e.key === "Enter") wlAdd();
     });
+    document.getElementById("wl-import-btn").addEventListener("click", () => {
+      document.getElementById("wl-import-file").click();
+    });
+    document.getElementById("wl-import-file").addEventListener("change", wlImport);
     loadWhitelist();
+  }
+
+  async function wlImport(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // allow re-select same file
+    if (!file) return;
+    // Safeguard: lighttpd default body limit ~ 2 MB; держим запас.
+    if (file.size > 1024 * 1024) {
+      toast("Файл слишком большой (>1 МБ)", "bad");
+      return;
+    }
+    let text;
+    try { text = await file.text(); }
+    catch (err) { toast("Не удалось прочитать файл: " + err.message, "bad"); return; }
+    try {
+      const r = await fetch(API + "/whitelist/import", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: text,
+      });
+      const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
+      if (!r.ok || !data.ok) throw new Error(data.error || `${r.status}`);
+      const parts = [`+${data.added}`];
+      if (data.skipped_duplicate > 0) parts.push(`дублей: ${data.skipped_duplicate}`);
+      if (data.skipped_invalid > 0) parts.push(`невалидных: ${data.skipped_invalid}`);
+      toast("Импорт: " + parts.join(", "));
+      loadWhitelist();
+    } catch (err) {
+      toast("Ошибка импорта: " + err.message, "bad");
+    }
   }
 
   async function loadWhitelist() {
@@ -624,7 +758,7 @@
         return;
       }
       list.innerHTML = d.domains.map(dom => `
-        <li><span>${escapeHtml(dom)}</span><button title="Удалить" data-del="${escapeHtml(dom)}">×</button></li>
+        <li><span>${escapeHtml(dom)}</span><button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(dom)}" data-del="${escapeHtml(dom)}">${_icons.close}</button></li>
       `).join("");
       list.querySelectorAll("button[data-del]").forEach(btn => {
         btn.addEventListener("click", () => wlDelete(btn.dataset.del));
@@ -671,10 +805,15 @@
           <b>Изменения подхватываются сервисом без перезапуска</b> через несколько секунд.
         </p>
         <div class="wl-add">
-          <input id="ed-input" type="text" placeholder="example.com" autocomplete="off" spellcheck="false">
+          <label class="field">
+            <span class="field-label">Новый домен</span>
+            <input id="ed-input" type="text" placeholder="example.com"
+                   inputmode="url" autocomplete="off" autocapitalize="off"
+                   spellcheck="false" autocorrect="off">
+          </label>
           <button class="btn btn-primary" id="ed-add-btn">Добавить</button>
         </div>
-        <ul class="wl-list" id="ed-list">Загрузка…</ul>
+        <ul class="wl-list" id="ed-list">${skeletonLines(5)}</ul>
       </div>
     `;
     document.getElementById("ed-add-btn").addEventListener("click", edAdd);
@@ -693,7 +832,7 @@
         return;
       }
       list.innerHTML = d.domains.map(dom => `
-        <li><span>${escapeHtml(dom)}</span><button title="Удалить" data-del="${escapeHtml(dom)}">×</button></li>
+        <li><span>${escapeHtml(dom)}</span><button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(dom)}" data-del="${escapeHtml(dom)}">${_icons.close}</button></li>
       `).join("");
       list.querySelectorAll("button[data-del]").forEach(btn => {
         btn.addEventListener("click", () => edDelete(btn.dataset.del));
@@ -737,7 +876,7 @@
           <button class="btn" id="log-refresh">Обновить</button>
           <button class="btn btn-primary" id="hc-run">Запустить healthcheck</button>
         </div>
-        <pre class="log" id="log-view">Загрузка…</pre>
+        <pre class="log" id="log-view"><span class="skel-text">${skeletonLines(8)}</span></pre>
       </div>
     `;
     document.getElementById("log-refresh").addEventListener("click", loadLog);
@@ -841,18 +980,32 @@
         }
       }
     });
-    // Card-level treatment: добавим класс на карточки которые содержат
-    // блокируемые элементы (toggles или service buttons). CSS дальше
-    // дамптит opacity и рисует pill «⏳ Операция выполняется…».
+    // Dimmed cards — signal что заблокировано на каждой карточке с
+    // контролами. Без overlay'а — content виден полностью.
     document.querySelectorAll(".card").forEach(card => {
       const hasLockableControl = card.querySelector(".switch input[type=\"checkbox\"], [data-svc], #tg-enable, #tg-disable");
       if (!hasLockableControl) return;
-      if (busy) {
-        card.classList.add("card-locked");
-      } else {
-        card.classList.remove("card-locked");
-      }
+      if (busy) card.classList.add("card-locked");
+      else card.classList.remove("card-locked");
     });
+
+    // Single page-level pill в строке h1.page-title — не дублируется на
+    // каждую карточку, не оверлайит content. Job-badge в углу показывает
+    // конкретное имя операции; этот pill — общий statement что страница
+    // в busy состоянии.
+    const pageTitle = document.querySelector(".page-title");
+    if (pageTitle) {
+      let pill = pageTitle.querySelector(":scope > .page-locked-pill");
+      if (busy && !pill) {
+        pill = document.createElement("span");
+        pill.className = "page-locked-pill";
+        pill.setAttribute("aria-hidden", "true");
+        pill.innerHTML = _icons.hourglass + "<span>Операция выполняется…</span>";
+        pageTitle.appendChild(pill);
+      } else if (!busy && pill) {
+        pill.remove();
+      }
+    }
   }
 
   // Background poller для одного jobId. Живёт независимо от модалки —
@@ -1011,7 +1164,7 @@
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn" id="state-refresh">Обновить</button>
         </div>
-        <div id="state-body">Загрузка…</div>
+        <div id="state-body">${skeletonLines(6)}</div>
       </div>
     `;
     document.getElementById("state-refresh").addEventListener("click", loadState);
@@ -1053,22 +1206,25 @@
                        age < 3600 ? Math.floor(age / 60) + "м" :
                        age < 86400 ? Math.floor(age / 3600) + "ч" :
                        Math.floor(age / 86400) + "д";
+        // data-label attrs feed the mobile card layout (CSS pseudo-elements)
         return `
           <tr>
-            <td>
-              <button class="btn btn-danger state-del"
+            <td data-label="">
+              <button class="btn btn-danger btn-icon state-del"
+                      title="Удалить запись rotator"
+                      aria-label="Удалить ${escapeHtml(e.host)}"
                       data-key="${escapeHtml(e.key)}"
-                      data-host="${escapeHtml(e.host)}">×</button>
+                      data-host="${escapeHtml(e.host)}">${_icons.close}</button>
             </td>
-            <td>${escapeHtml(e.key)}</td>
-            <td>${escapeHtml(e.host)}</td>
-            <td class="state-strategy">${escapeHtml(e.strategy)}</td>
-            <td class="state-age">${ageStr}</td>
+            <td data-label="Профиль">${escapeHtml(e.key)}</td>
+            <td data-label="Домен">${escapeHtml(e.host)}</td>
+            <td data-label="Стратегия" class="state-strategy">${escapeHtml(e.strategy)}</td>
+            <td data-label="Возраст" class="state-age">${ageStr}</td>
           </tr>
         `;
       }).join("");
 
-      const arrow = k => stateSort.key === k ? (stateSort.dir === "asc" ? " ↑" : " ↓") : "";
+      const arrow = k => stateSort.key === k ? (stateSort.dir === "asc" ? " " + _icons.arrowUp : " " + _icons.arrowDown) : "";
       const th = (k, label) => `<th class="sortable" data-sort="${k}">${label}${arrow(k)}</th>`;
       body.innerHTML = `
         <table class="state-table">
@@ -1125,7 +1281,7 @@
           <button class="btn" id="diag-refresh">Обновить</button>
           <button class="btn" id="diag-copy">Копировать</button>
         </div>
-        <pre class="log" id="diag-output">Загрузка…</pre>
+        <pre class="log" id="diag-output"><span class="skel-text">${skeletonLines(10)}</span></pre>
       </div>
     `;
     document.getElementById("diag-refresh").addEventListener("click", loadDiag);
@@ -1143,7 +1299,7 @@
   async function loadDiag() {
     const el = document.getElementById("diag-output");
     if (!el) return;
-    el.textContent = "Загрузка…";
+    el.innerHTML = `<span class="skel-text">${skeletonLines(10)}</span>`;
     try {
       const d = await apiGet("/diag");
       el.textContent = d.diag || "(пусто)";
@@ -1165,7 +1321,7 @@
           ru-blocked-all (~700k доменов), иначе ru-blocked (~80k).
           Фича всегда включена — toggle удалён в Phase 12.
         </p>
-        <div id="geosite-status">Загрузка…</div>
+        <div id="geosite-status">${skeletonLines(2)}</div>
         <div class="btn-row" style="margin-top:12px">
           <button class="btn btn-primary" id="geosite-fetch">Принудительно обновить сейчас</button>
         </div>
@@ -1218,7 +1374,7 @@
 
       <div class="credits-grid">
         <div class="card credits-card tester-card">
-          <div class="credits-badge tester-badge">★ Главный тестировщик</div>
+          <div class="credits-badge tester-badge">${_icons.star} Главный тестировщик</div>
           <div class="credits-name">AusterusJ</div>
           <p class="desc">
             Бесконечные часы живых тестов на роутерах, отлов регрессий ещё
@@ -1229,7 +1385,7 @@
         </div>
 
         <div class="card credits-card sponsor-card">
-          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
           <div class="credits-name">SupWgeneral</div>
           <p class="desc">
             Материальная поддержка, благодаря которой у z2k есть выделенный
@@ -1238,27 +1394,32 @@
         </div>
 
         <div class="card credits-card sponsor-card">
-          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
           <div class="credits-name">Alexey</div>
           <p class="desc">
-            Материальная поддержка проекта — спасибо за веру в z2k и
-            помощь в развитии.
+            За каждым стабильным релизом стоит не только код — стоят и
+            спонсоры вроде Alexey, которые держат проект на плаву между
+            апдейтами.
           </p>
         </div>
 
         <div class="card credits-card sponsor-card">
-          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
           <div class="credits-name">Jet_sk_ya</div>
           <p class="desc">
-            Материальная поддержка проекта — спасибо за поддержку z2k.
+            Без таких людей z2k оставался бы pet-проектом одного-двух
+            разработчиков. Спасибо, что вкладываешь в инструмент, которым
+            пользуются сотни.
           </p>
         </div>
 
         <div class="card credits-card sponsor-card">
-          <div class="credits-badge sponsor-badge">♥ Спонсор проекта</div>
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
           <div class="credits-name">Suharik39</div>
           <p class="desc">
-            Материальная поддержка проекта — спасибо за поддержку z2k.
+            Без таких сторонников z2k быстро остался бы без независимого
+            источника финансирования. Спасибо за вклад в свободу
+            пользователей.
           </p>
         </div>
       </div>
@@ -1272,7 +1433,146 @@
     }[c]));
   }
 
+  // Inline SVG icons — single source of truth.
+  // Skill compliance (Common Rules > Icons & Visual Elements):
+  //   - Consistent Icon Sizing: all stroke icons = 16×16 (one size token).
+  //     Filled glyphs (star, heart) also 16×16 для visual parity.
+  //   - Stroke Consistency: stroke-width=2 везде (skill: "1.5px or 2px").
+  //   - Style: outline/stroke for UI icons, fill only for award badges
+  //     (star/heart on Credits) — clear semantic separation.
+  //   - SVG vector, не emoji (no-emoji-icons rule).
+  // class="icon" + .icon-sm modifier для 12px inline-в-pill контекстов.
+  const _icons = {
+    close:        '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+    chevronDown:  '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>',
+    arrowUp:      '<svg class="icon icon-sm" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg>',
+    arrowDown:    '<svg class="icon icon-sm" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>',
+    star:         '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/></svg>',
+    heart:        '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
+    statusGood:   '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
+    statusWarn:   '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    statusBad:    '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+    hourglass:    '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 22h14M5 2h14M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22M17 2v4.172a2 2 0 0 1-.586 1.414L12 12 7.586 7.586A2 2 0 0 1 7 6.172V2"/></svg>',
+  };
+
+  // Status icon picker for the dashboard cells. "" kind = no icon (neutral).
+  function statusIcon(kind) {
+    if (kind === "good") return _icons.statusGood;
+    if (kind === "warn") return _icons.statusWarn;
+    if (kind === "bad")  return _icons.statusBad;
+    return "";
+  }
+
+  // Skeleton placeholders for >300ms fetches (Skill rule: loading-states).
+  // skeletonLines(n) — variable-width pulsing bars; skeletonBlocks(n) — taller
+  // cards for grid/table loads. Both reserve space so the page doesn't jump
+  // when real content arrives (Core Web Vitals: CLS).
+  function skeletonLines(n = 4) {
+    const widths = ["68%", "92%", "54%", "80%", "44%", "76%"];
+    let out = "";
+    for (let i = 0; i < n; i++) {
+      out += `<div class="skel-line" style="width:${widths[i % widths.length]}"></div>`;
+    }
+    return out;
+  }
+  function skeletonBlocks(n = 4) {
+    let out = "";
+    for (let i = 0; i < n; i++) out += `<div class="skel-block"></div>`;
+    return out;
+  }
+
+  // ---------- Theme switcher ----------
+  // Tri-state: "light" | "dark" | "auto" (default). "auto" слушает
+  // prefers-color-scheme и обновляется live при системном переключении.
+  // No-FOUC bootstrap (inline <script> в <head>) уже выставил
+  // data-theme до загрузки CSS — здесь только UI sync + listeners.
+  const THEME_KEY = "z2k-theme";
+  function _getThemeMode() {
+    try { return localStorage.getItem(THEME_KEY) || "auto"; }
+    catch (_) { return "auto"; }
+  }
+  function _applyTheme() {
+    const mode = _getThemeMode();
+    const resolved = mode === "auto"
+      ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+      : mode;
+    if (resolved === "light") {
+      document.documentElement.setAttribute("data-theme", "light");
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+    // Sync button aria-pressed.
+    document.querySelectorAll("[data-theme-btn]").forEach(b => {
+      b.setAttribute("aria-pressed", String(b.dataset.themeBtn === mode));
+    });
+  }
+  function _setTheme(mode) {
+    try { localStorage.setItem(THEME_KEY, mode); } catch (_) {}
+    _applyTheme();
+  }
+  function initTheme() {
+    document.querySelectorAll("[data-theme-btn]").forEach(b => {
+      b.addEventListener("click", () => _setTheme(b.dataset.themeBtn));
+    });
+    // Live-react на смену system theme когда юзер в "auto".
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    if (mq.addEventListener) {
+      mq.addEventListener("change", () => {
+        if (_getThemeMode() === "auto") _applyTheme();
+      });
+    }
+    _applyTheme();
+  }
+
+  // ---------- Hamburger drawer (mobile) ----------
+  // На мобиле topbar = [z2k] _ [☰]. Клик — open right-slide drawer.
+  // Содержит все nav links + theme-toggle. Closes на: click outside,
+  // click backdrop, click nav link, Escape.
+  function initDrawer() {
+    const btn = document.getElementById("menu-toggle");
+    const nav = document.getElementById("nav");
+    const backdrop = document.getElementById("menu-backdrop");
+    const theme = document.querySelector(".topbar > .theme-toggle");
+    if (!btn || !nav || !backdrop) return;
+
+    function openDrawer() {
+      nav.classList.add("menu-open");
+      if (theme) theme.classList.add("menu-open");
+      backdrop.hidden = false;
+      requestAnimationFrame(() => backdrop.classList.add("menu-open"));
+      btn.setAttribute("aria-expanded", "true");
+      document.body.style.overflow = "hidden";
+    }
+    function closeDrawer() {
+      nav.classList.remove("menu-open");
+      if (theme) theme.classList.remove("menu-open");
+      backdrop.classList.remove("menu-open");
+      btn.setAttribute("aria-expanded", "false");
+      document.body.style.overflow = "";
+      setTimeout(() => { backdrop.hidden = true; }, 220);
+    }
+
+    btn.addEventListener("click", () => {
+      if (nav.classList.contains("menu-open")) closeDrawer();
+      else openDrawer();
+    });
+    backdrop.addEventListener("click", closeDrawer);
+    // X-кнопка в drawer header — visible close affordance (skill: modal-escape)
+    const xBtn = document.getElementById("nav-drawer-close");
+    if (xBtn) xBtn.addEventListener("click", closeDrawer);
+    // Close on nav link click (mobile UX: kbgo куда нажал)
+    nav.addEventListener("click", (e) => {
+      if (e.target.closest("a[data-route]")) closeDrawer();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && nav.classList.contains("menu-open")) closeDrawer();
+    });
+  }
+
   // ---------- Boot ----------
+  initTheme();
+  initSidebar();
+  initDrawer();
   if (!location.hash) location.hash = "#/dashboard";
   navigate();
 })();

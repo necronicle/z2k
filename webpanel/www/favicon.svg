@@ -1,1 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#0f1419"/><text x="50%" y="58%" font-family="ui-monospace,SFMono-Regular,monospace" font-size="32" font-weight="700" text-anchor="middle" fill="#5eead4">z2k</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="z2k">
+  <title>z2k</title>
+  <rect x="0" y="0" width="96" height="96" rx="22" fill="#1AC3B4"/>
+  <rect x="26" y="26" width="44" height="12" fill="#0C1820"/>
+  <rect x="26" y="58" width="44" height="12" fill="#0C1820"/>
+  <polygon points="56,26 70,26 40,70 26,70" fill="#0C1820"/>
+</svg>

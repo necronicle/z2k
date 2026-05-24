@@ -221,7 +221,59 @@ whitelist_add() {
     printf '%s\n' "$domain" >> "$WHITELIST_FILE"
     # nfqws2 runs as nobody (uid 65534) and must be able to read the file.
     chmod 644 "$WHITELIST_FILE" 2>/dev/null || true
-    restart_service_if_running
+    # NB: НЕ рестартим сервис — whitelist подхватывается live, как и extra-domains
+    # (feedback_no_service_restart_for_hostlist).
+}
+
+whitelist_import() {
+    # Bulk merge — читает многострочный список доменов из stdin (TXT файл).
+    # Per-line: trim CR/spaces, skip empty/comments (#), lowercase, validate.
+    # Dedup vs existing whitelist через sort + comm. Append only new entries.
+    # Single service restart в конце (а не на каждый домен).
+    # Output: "added=N skipped_dup=N skipped_invalid=N" на stdout.
+    local skipped_invalid=0
+    mkdir -p "$LISTS_DIR" 2>/dev/null
+    touch "$WHITELIST_FILE" 2>/dev/null
+
+    local tmpnew tmpexisting tmpnewuniq tmpadd
+    tmpnew=$(mktemp) || { echo "added=0 skipped_dup=0 skipped_invalid=0"; return 1; }
+    tmpexisting=$(mktemp) || { rm -f "$tmpnew"; echo "added=0 skipped_dup=0 skipped_invalid=0"; return 1; }
+    tmpnewuniq=$(mktemp) || { rm -f "$tmpnew" "$tmpexisting"; echo "added=0 skipped_dup=0 skipped_invalid=0"; return 1; }
+    tmpadd=$(mktemp) || { rm -f "$tmpnew" "$tmpexisting" "$tmpnewuniq"; echo "added=0 skipped_dup=0 skipped_invalid=0"; return 1; }
+
+    local line domain
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"           # strip CRLF
+        line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        domain=$(printf '%s' "$line" | tr 'A-Z' 'a-z')
+        case "$domain" in
+            -*|*' '*|*$'\t'*) skipped_invalid=$((skipped_invalid + 1)); continue ;;
+            *[!a-z0-9.-]*)    skipped_invalid=$((skipped_invalid + 1)); continue ;;
+        esac
+        printf '%s\n' "$domain" >> "$tmpnew"
+    done
+
+    sort -u "$tmpnew" > "$tmpnewuniq"
+    grep -vE '^[[:space:]]*(#|$)' "$WHITELIST_FILE" | sort -u > "$tmpexisting"
+    # busybox `comm` ненадёжен (Input/output error на Entware) — используем awk:
+    # NR==FNR проходит первым существующий список, marks each in `e[]`;
+    # затем по новому списку печатает только те которые НЕ в `e[]`.
+    awk 'NR==FNR { e[$0]=1; next } !e[$0]' "$tmpexisting" "$tmpnewuniq" > "$tmpadd"
+    local added skipped_dup
+    added=$(wc -l < "$tmpadd" | tr -d ' ')
+    skipped_dup=$(awk 'NR==FNR { e[$0]=1; next } e[$0]' "$tmpexisting" "$tmpnewuniq" | wc -l | tr -d ' ')
+
+    if [ "$added" -gt 0 ]; then
+        cat "$tmpadd" >> "$WHITELIST_FILE"
+        chmod 644 "$WHITELIST_FILE" 2>/dev/null || true
+        # NB: НЕ рестартим — whitelist live.
+    fi
+
+    rm -f "$tmpnew" "$tmpexisting" "$tmpnewuniq" "$tmpadd"
+    printf 'added=%d skipped_dup=%d skipped_invalid=%d\n' "$added" "$skipped_dup" "$skipped_invalid"
 }
 
 whitelist_delete() {
@@ -242,7 +294,7 @@ whitelist_delete() {
     cat "$tmp" > "$WHITELIST_FILE"
     rm -f "$tmp"
     chmod 644 "$WHITELIST_FILE" 2>/dev/null || true
-    restart_service_if_running
+    # NB: НЕ рестартим — whitelist live (см. whitelist_add).
 }
 
 # --- extra-domains ---

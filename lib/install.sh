@@ -1266,7 +1266,7 @@ step_build_zapret2() {
     # never reads, and Hot verdicts would silently fail to activate bypass.
     [ -e "${ZAPRET2_DIR}/lists/discovered-domains.txt" ] || \
         : > "${ZAPRET2_DIR}/lists/discovered-domains.txt"
-    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt cf_extra_check_ips.txt; do
+    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt cf_extra_check_ips.txt rkn-false-positive.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi

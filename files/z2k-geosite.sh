@@ -415,6 +415,99 @@ subtract_yt_from_rkn() {
     return 0
 }
 
+# --- Subtract hand-curated false positives ----------------------------------
+#
+# В upstream `ru-blocked` / `ru-blocked-all` геосайт иногда попадают
+# домены которые по факту НЕ заблокированы РКН (например play.google.com —
+# free apps работают, заблокирован только paid billing со стороны Google
+# санкциями). Обрабатывать их nfqws2 — лишний CPU + засорение state.tsv.
+#
+# Список ведётся в /opt/zapret2/lists/rkn-false-positive.txt (shipped через
+# install.sh из files/lists/rkn-false-positive.txt). Match exact-line
+# (НЕ suffix) — мы не хотим случайно выпилить заблокированный subdomain.
+subtract_false_positive_from_rkn() {
+    local rkn_target="$EXTRA/TCP/RKN/List.txt"
+    local fp_list="${ZAPRET2_FALSE_POSITIVE_LIST:-/opt/zapret2/lists/rkn-false-positive.txt}"
+
+    [ -s "$rkn_target" ] || return 0
+    [ -s "$fp_list" ] || return 0
+
+    local exclude="$TMP_DIR/rkn.false-positive.exclude"
+    : > "$exclude"
+    # Strip comments / empty / CRLF, normalize lowercase.
+    awk '
+        { sub(/\r$/, ""); sub(/[[:space:]]+$/, "") }
+        /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+        { print tolower($0) }
+    ' "$fp_list" > "$exclude"
+    [ -s "$exclude" ] || { rm -f "$exclude"; return 0; }
+
+    local before after removed filtered
+    before=$(wc -l < "$rkn_target" 2>/dev/null || echo 0)
+    filtered="$TMP_DIR/rkn.false-positive.filtered"
+
+    awk -v excl="$exclude" '
+        BEGIN {
+            while ((getline line < excl) > 0) {
+                sub(/\r$/, "", line)
+                if (length(line) > 0) ex[line] = 1
+            }
+            close(excl)
+        }
+        {
+            d = $0
+            sub(/\r$/, "", d)
+            if (d in ex) next
+            print d
+        }
+    ' "$rkn_target" > "$filtered" || {
+        log "RKN false-positive subtract: awk failed, keeping original list"
+        rm -f "$filtered" "$exclude"
+        return 1
+    }
+
+    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    removed=$((before - after))
+    if [ "$removed" -gt 0 ]; then
+        mv "$filtered" "$rkn_target" || {
+            log "RKN false-positive subtract: rename failed"
+            rm -f "$exclude"
+            return 1
+        }
+        log "RKN: removed $removed hand-curated false positives ($before → $after lines)"
+    else
+        rm -f "$filtered"
+        log "RKN false-positive: no overlaps with curated list"
+    fi
+    rm -f "$exclude"
+    return 0
+}
+
+# --- One-shot state cleanup ------------------------------------------------
+#
+# 2026-05-24 false-positive subtract убрал play.google.com и
+# snap-storage-cdn.l.google.com из RKN. autocircular использует nld=2 SLD
+# ключ — оба домена раньше писались в state.tsv под ключом `google.com`.
+# Эта запись больше не валидна (заблокированные subdomains используют свои
+# ключи), но autocircular не удаляет stale entries сам. One-shot purge с
+# marker-файлом — выполнится один раз при следующем после patch refresh.
+purge_stale_google_state() {
+    local state="$EXTRA/cache/autocircular/state.tsv"
+    local marker="$EXTRA/cache/autocircular/.google_purge_2026_05_24.done"
+    [ -f "$marker" ] && return 0
+    mkdir -p "$(dirname "$marker")" 2>/dev/null
+    if [ -f "$state" ]; then
+        local tmp="$state.purge.tmp"
+        awk -F'\t' '!($1=="rkn_tcp" && $2=="google.com")' "$state" > "$tmp" || {
+            rm -f "$tmp"
+            return 1
+        }
+        cat "$tmp" > "$state" && rm -f "$tmp"
+        log "purged stale 'rkn_tcp google.com' state entry (one-shot)"
+    fi
+    touch "$marker"
+}
+
 # --- Fetch all targets ------------------------------------------------------
 
 fetch_all() {
@@ -455,6 +548,16 @@ fetch_all() {
     # may still carry overlaps from a time before this step existed, or from
     # newly-added entries in the YT list.
     subtract_yt_from_rkn || log "RKN subtract: non-fatal failure, continuing"
+
+    # Strip hand-curated false positives (domains в upstream RKN, но НЕ
+    # заблокированные по факту). Перепроверено через web search 2026-05-24.
+    subtract_false_positive_from_rkn || log "RKN false-positive subtract: non-fatal failure, continuing"
+
+    # One-shot cleanup: убрать stale `rkn_tcp google.com` запись из state.tsv.
+    # autocircular использует nld=2 SLD ключ, поэтому play.google.com / snap-
+    # storage-cdn.l.google.com (теперь убраны из RKN) ранее писались в state
+    # под ключом google.com. Marker гарантирует one-shot — повторно не запустится.
+    purge_stale_google_state || log "google state purge: non-fatal failure, continuing"
 
     if [ "$ok_count" = "0" ]; then
         log "all targets failed"

@@ -1,30 +1,121 @@
+/* DARK THEME — default. Selectors:
+   :root          = dark by default (no JS, no preference)
+   [data-theme="light"] = explicit user override OR auto-resolved light
+   Theme switcher in JS sets data-theme on <html>. "auto" mode listens to
+   matchMedia and flips data-theme between dark/light accordingly. */
 :root {
   --bg: #0f1419;
   --bg-card: #161b22;
   --bg-card-hover: #1f262e;
+  --bg-subtle: rgba(255, 255, 255, 0.02);
   --border: #30363d;
   --text: #e6edf3;
   --text-muted: #8b949e;
-  --accent: #5eead4;
-  --accent-dim: #2dd4bf;
+  /* Accent darkened from #5eead4 → #2dd4bf for better contrast on dark bg
+     (~5.3:1 vs ~7.6:1, both pass WCAG AA) and less eye fatigue on bright
+     monitors. --accent-dim is now a deeper teal for hover/active states. */
+  --accent: #2dd4bf;
+  --accent-dim: #14b8a6;
   --good: #3fb950;
   --warn: #d29922;
   --bad: #f85149;
   --radius: 8px;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Motion tokens — Apple-style snappy/smooth springs.
+     - spring-snappy: лёгкий overshoot (1.56), tactile feel (modals, drawers, button press)
+     - spring-smooth: monotonic (no bounce, no overshoot), цвет/opacity transitions
+     - ease-emphasized: Material 3 emphasized — accelerate fast then decelerate slow
+     Длительности по skill duration-timing: 150-300ms для micro-interactions,
+     250-400ms для drawer/modal slide. */
+  --spring-snappy: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --spring-smooth: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --dur-micro: 180ms;
+  --dur-base: 250ms;
+  --dur-large: 350ms;
+
+  /* Component tokens (semantic — derived from primitives above) */
+  --btn-primary-text: #0b1116;
+  --slider-thumb: #fff;
+  --log-bg: #05080c;
+  --log-text: #c9d1d9;
+
+  /* Scrim/overlay tokens */
+  --scrim-pill: rgba(0, 0, 0, 0.75);   /* card-locked pill bg */
+  --scrim-modal: rgba(0, 0, 0, 0.65);  /* modal-backdrop */
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.25);   /* job-badge */
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.32);   /* dropdown */
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);    /* toast */
+
+  /* Status / badge alphas (derived from --good/--warn/--bad RGB) */
+  --good-alpha-soft: rgba(95, 175, 95, 0.08);
+  --warn-alpha-soft: rgba(210, 153, 34, 0.08);
+  --warn-alpha-mid:  rgba(210, 153, 34, 0.12);
+  --bad-alpha-soft:  rgba(248, 81, 73, 0.08);
+  --bad-alpha-mid:   rgba(248, 81, 73, 0.10);
+  --bad-alpha-strong: rgba(248, 81, 73, 0.4);
+  --bad-alpha-reset: rgba(200, 80, 80, 0.08);
+
+  /* Tester / sponsor card accents (credits page) */
+  --tester-color: #f5b43c;
+  --tester-border: rgba(245, 180, 60, 0.45);
+  --tester-badge-bg: rgba(245, 180, 60, 0.14);
+  --tester-badge-border: rgba(245, 180, 60, 0.35);
+  --tester-grad-start: rgba(245, 180, 60, 0.08);
+  --sponsor-grad-start: rgba(46, 160, 120, 0.10);
+  --sponsor-badge-bg: rgba(46, 160, 120, 0.14);
+
+  /* Skeleton shimmer */
+  --skel-c1: rgba(255, 255, 255, 0.04);
+  --skel-c2: rgba(255, 255, 255, 0.10);
+
+  /* Fira Code (mono) + Fira Sans (body) loaded from Google Fonts in index.html.
+     System fonts fallback while web fonts swap in (font-display: swap). */
+  --font-mono: "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f8fa;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f0f3f6;
-    --border: #d0d7de;
-    --text: #1f2328;
-    --text-muted: #656d76;
-    --accent: #0d9488;
-    --accent-dim: #14b8a6;
-  }
+
+/* LIGHT THEME overrides. Applied when JS sets [data-theme="light"] on <html>. */
+:root[data-theme="light"] {
+  --bg: #f6f8fa;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f0f3f6;
+  --bg-subtle: rgba(0, 0, 0, 0.03);
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-muted: #656d76;
+  --accent: #0d9488;
+  --accent-dim: #14b8a6;
+
+  --btn-primary-text: #ffffff;
+  --slider-thumb: #ffffff;
+  --log-bg: #f0f3f6;
+  --log-text: #1f2328;
+
+  --scrim-pill: rgba(31, 35, 40, 0.88);  /* slate scrim for pill */
+  --scrim-modal: rgba(31, 35, 40, 0.45);
+  --shadow-sm: 0 2px 8px rgba(31, 35, 40, 0.08);
+  --shadow-md: 0 4px 16px rgba(31, 35, 40, 0.12);
+  --shadow-lg: 0 8px 24px rgba(31, 35, 40, 0.16);
+
+  --good-alpha-soft: rgba(46, 160, 67, 0.10);
+  --warn-alpha-soft: rgba(176, 122, 0, 0.10);
+  --warn-alpha-mid:  rgba(176, 122, 0, 0.16);
+  --bad-alpha-soft:  rgba(207, 34, 46, 0.06);
+  --bad-alpha-mid:   rgba(207, 34, 46, 0.08);
+  --bad-alpha-strong: rgba(207, 34, 46, 0.40);
+  --bad-alpha-reset: rgba(207, 34, 46, 0.06);
+
+  --tester-color: #b87800;
+  --tester-border: rgba(184, 120, 0, 0.45);
+  --tester-badge-bg: rgba(184, 120, 0, 0.10);
+  --tester-badge-border: rgba(184, 120, 0, 0.35);
+  --tester-grad-start: rgba(184, 120, 0, 0.06);
+  --sponsor-grad-start: rgba(13, 148, 136, 0.08);
+  --sponsor-badge-bg: rgba(13, 148, 136, 0.10);
+
+  --skel-c1: rgba(0, 0, 0, 0.04);
+  --skel-c2: rgba(0, 0, 0, 0.10);
 }
 
 * { box-sizing: border-box; }
@@ -39,40 +130,266 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---------- TOPBAR ---------- */
+/* ---------- LAYOUT: SIDEBAR + TOPBAR (DESKTOP) ----------
+   Desktop = left sidebar (240px / 56px collapsed) + topbar справа от него
+   + main контент справа. Industry standard для admin tools.
+   Mobile/landscape = sidebar collapse в drawer (см. media query ниже). */
+:root { --sidebar-w: 240px; --sidebar-w-collapsed: 56px; }
 .topbar {
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 14px 20px;
+  gap: 16px;
+  padding: 12px 20px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 200;
 }
 .brand {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 18px;
-  color: var(--accent);
-  letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  text-decoration: none;
+  color: var(--text);
+  transition: transform var(--dur-micro) var(--spring-snappy);
 }
+.brand:hover { transform: translateY(-1px); }
+.brand svg { display: block; }
+/* "2" glyph — accent цвет (текущий теal/любой выбранный --accent) */
+.brand-accent-glyph { fill: var(--accent); }
+/* "ANTIDPI · KEENETIC" tagline — muted, читается без давления */
+.brand-tagline { fill: var(--text-muted); }
+
+/* Default (desktop) — sidebar layout. Mobile media query overrides ниже. */
 #nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-w);
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
   display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 64px 8px 12px;  /* 64px зарезервировано под topbar (z2k brand row) */
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 195;
+  transition: width var(--dur-base) var(--ease-emphasized);
+  will-change: width;
 }
-#nav a {
+#nav a, #nav .sidebar-collapse {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   color: var(--text-muted);
   text-decoration: none;
-  padding: 6px 12px;
+  padding: 10px 12px;
   border-radius: 6px;
+  font-size: 14px;
   font-weight: 500;
-  transition: background 0.15s, color 0.15s;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--spring-smooth), color var(--dur-micro) var(--spring-smooth);
+  white-space: nowrap;
+  overflow: hidden;
+  font-family: inherit;
 }
-#nav a:hover { background: var(--bg-card-hover); color: var(--text); }
-#nav a.active { background: var(--bg-card-hover); color: var(--accent); }
+#nav a:hover, #nav .sidebar-collapse:hover {
+  background: var(--bg-card-hover);
+  color: var(--text);
+}
+#nav a.active {
+  background: var(--bg-card-hover);
+  color: var(--accent);
+}
+#nav .nav-ico { flex-shrink: 0; }
+#nav .nav-label { flex: 1; }
+#nav .sidebar-collapse { margin-top: auto; color: var(--text-muted); }
+
+/* Collapsed state — icon-only, width shrinks. */
+body[data-sidebar="collapsed"] #nav { width: var(--sidebar-w-collapsed); }
+body[data-sidebar="collapsed"] #nav .nav-label { display: none; }
+body[data-sidebar="collapsed"] #nav a,
+body[data-sidebar="collapsed"] #nav .sidebar-collapse {
+  justify-content: center;
+  padding: 10px 0;
+}
+body[data-sidebar="collapsed"] #nav .sidebar-collapse .nav-ico { transform: rotate(180deg); }
+
+/* Reserve space for sidebar — main / topbar shift right */
+body { padding-left: var(--sidebar-w); transition: padding-left var(--dur-base) var(--ease-emphasized); }
+body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
+.topbar { padding-left: 20px; }
+
+/* Highlight для важных пунктов (Благодарности — sponsor visibility). Без
+   назойливости: лёгкое подкрашивание + микро-индикатор в виде сердца уже
+   стоит inline в верстке кредитов; здесь даём только мягкий accent цвет. */
+#nav a.nav-highlight { color: var(--accent-dim); }
+#nav a.nav-highlight:hover { color: var(--accent); }
+#nav a.nav-highlight.active { color: var(--accent); }
+
+/* Overflow «Ещё» dropdown концепция удалена — sidebar показывает все 9
+   пунктов сразу, drawer на mobile тоже. */
+
+/* ---------- THEME TOGGLE ---------- */
+/* Tri-state segmented control в topbar: [☀ light][⏾ auto][🌙 dark].
+   Активная кнопка highlight'ится accent'ом. Auto уважает system theme. */
+.theme-toggle {
+  display: inline-flex;
+  margin-left: auto;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.theme-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--spring-smooth), color var(--dur-micro) var(--spring-smooth);
+  padding: 0;
+}
+.theme-toggle button:hover { color: var(--text); }
+.theme-toggle button[aria-pressed="true"] {
+  background: var(--bg-card-hover);
+  color: var(--accent);
+}
+
+/* ---------- HAMBURGER DRAWER (mobile only) ---------- */
+/* Industry-standard pattern: на мобиле topbar = [z2k] _ [☰], клик —
+   slide-in drawer справа со всеми nav пунктами и theme-toggle внутри. */
+.menu-toggle {
+  display: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  margin-left: auto;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-micro) var(--spring-smooth), color var(--dur-micro) var(--spring-smooth);
+}
+.menu-toggle:hover { color: var(--text); background: var(--bg-card-hover); }
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim-modal);
+  z-index: 105;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-base) var(--spring-smooth);
+  will-change: opacity;
+}
+.menu-backdrop.menu-open { opacity: 1; pointer-events: auto; }
+
+.nav-drawer-header { display: none; }
+
+/* Drawer pattern: на phones (max-width 767) И на любой landscape с
+   height < 500px (landscape phones / split-screen tablets), где
+   desktop sidebar занимает слишком много места. */
+@media (max-width: 767.98px), (max-height: 500px) {
+  /* Cancel desktop sidebar layout — body не reserve'ит place под sidebar */
+  body { padding-left: 0; }
+  body[data-sidebar="collapsed"] { padding-left: 0; }
+  /* Sidebar collapse button скрыт на mobile — drawer не collapse'ится */
+  #nav .sidebar-collapse { display: none; }
+
+  .menu-toggle { display: inline-flex; }
+
+  /* Drawer header: "Меню" + X (Skill rule: modal-escape / escape-routes
+     — sheets must offer visible close affordance) */
+  .topbar > #nav .nav-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px 12px 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+  .topbar > #nav .nav-drawer-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+  }
+  .topbar > #nav .nav-drawer-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: transparent;
+    border: 0;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 0;
+    transition: background var(--dur-micro) var(--spring-smooth), color var(--dur-micro) var(--spring-smooth);
+  }
+  .topbar > #nav .nav-drawer-close:hover {
+    background: var(--bg-card-hover);
+    color: var(--text);
+  }
+
+  /* Override default sidebar position → drawer справа на мобиле */
+  #nav {
+    left: auto;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    border-right: 0;
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(100%);
+    transition: transform var(--dur-large) var(--ease-emphasized);
+    will-change: transform;
+    z-index: 110;
+    padding: 0 0 90px;
+    /* Скрыть остальной body content от scroll при open — handled JS */
+  }
+  #nav.menu-open { transform: translateX(0); }
+
+  /* Drawer link styling */
+  #nav a {
+    padding: 12px 20px;
+    border-radius: 0;
+    font-size: 15px;
+    font-weight: 500;
+    white-space: normal;
+  }
+  #nav a.active { border-radius: 0; }
+
+  /* theme-toggle = footer drawer (fixed bottom-right, синхронно slide'ит) */
+  .topbar > .theme-toggle {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    margin: 0;
+    transform: translateX(calc(100% + 32px));
+    transition: transform var(--dur-large) var(--ease-emphasized);
+    will-change: transform;
+    z-index: 111;
+  }
+  .topbar > .theme-toggle.menu-open { transform: translateX(0); }
+}
 
 /* ---------- LAYOUT ---------- */
 #app {
@@ -124,25 +441,29 @@ body {
 .credits-card {
   position: relative;
   text-align: center;
-  padding: 30px 20px 22px;
+  /* Spacing scale: 24/20/24 — aligned to 4px grid (24 = 6×4, 20 = 5×4). */
+  padding: 24px 20px;
   margin: 0;
   overflow: hidden;
 }
 .credits-card .desc {
   text-align: center;
   max-width: 440px;
-  margin: 10px auto 0;
+  margin: 12px auto 0;
 }
 .credits-badge {
-  display: inline-block;
-  padding: 5px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.6px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
+.credits-badge .icon { vertical-align: baseline; }
 .credits-name {
   font-size: 24px;
   font-weight: 700;
@@ -151,22 +472,22 @@ body {
 }
 /* Tester — gold/amber "MVP" vibe */
 .tester-card {
-  border: 1px solid rgba(245, 180, 60, 0.45);
-  background: linear-gradient(160deg, rgba(245, 180, 60, 0.08) 0%, var(--bg-card) 55%);
+  border: 1px solid var(--tester-border);
+  background: linear-gradient(160deg, var(--tester-grad-start) 0%, var(--bg-card) 55%);
 }
 .tester-badge {
-  background: rgba(245, 180, 60, 0.14);
-  color: #f5b43c;
-  border: 1px solid rgba(245, 180, 60, 0.35);
+  background: var(--tester-badge-bg);
+  color: var(--tester-color);
+  border: 1px solid var(--tester-badge-border);
 }
-.tester-card .credits-name { color: #f5b43c; }
+.tester-card .credits-name { color: var(--tester-color); }
 /* Sponsor — brand-accent green */
 .sponsor-card {
   border: 1px solid var(--accent-dim);
-  background: linear-gradient(160deg, rgba(46, 160, 120, 0.10) 0%, var(--bg-card) 55%);
+  background: linear-gradient(160deg, var(--sponsor-grad-start) 0%, var(--bg-card) 55%);
 }
 .sponsor-badge {
-  background: rgba(46, 160, 120, 0.14);
+  background: var(--sponsor-badge-bg);
   color: var(--accent);
   border: 1px solid var(--accent-dim);
 }
@@ -238,10 +559,18 @@ body {
 .status-cell .value {
   font-weight: 600;
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .status-cell.good .value { color: var(--good); }
 .status-cell.warn .value { color: var(--warn); }
 .status-cell.bad  .value { color: var(--bad); }
+.status-cell .status-ico {
+  display: inline-flex;
+  flex-shrink: 0;
+  /* Icon наследует currentColor от .value — будет match цвету текста */
+}
 
 /* ---------- TOGGLE ROW ---------- */
 .toggle-row {
@@ -271,7 +600,7 @@ body {
   inset: 0;
   background: var(--border);
   border-radius: 22px;
-  transition: background 0.2s;
+  transition: background var(--dur-base) var(--spring-smooth);
 }
 .switch .slider::before {
   content: "";
@@ -280,9 +609,9 @@ body {
   width: 16px;
   left: 3px;
   top: 3px;
-  background: #fff;
+  background: var(--slider-thumb);
   border-radius: 50%;
-  transition: transform 0.2s;
+  transition: transform var(--dur-base) var(--spring-snappy);
 }
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(18px); }
@@ -300,14 +629,14 @@ body {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--dur-micro) var(--spring-smooth), border-color var(--dur-micro) var(--spring-smooth);
 }
 .btn:hover { background: var(--bg-card-hover); border-color: var(--accent-dim); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: var(--accent); color: #0b1116; border-color: var(--accent); }
+.btn-primary { background: var(--accent); color: var(--btn-primary-text); border-color: var(--accent); }
 .btn-primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
-.btn-danger { color: var(--bad); border-color: rgba(248, 81, 73, 0.4); }
-.btn-danger:hover { background: rgba(248, 81, 73, 0.1); }
+.btn-danger { color: var(--bad); border-color: var(--bad-alpha-strong); }
+.btn-danger:hover { background: var(--bad-alpha-mid); }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ---------- FORMS ---------- */
@@ -353,21 +682,70 @@ input[type=text]:focus, input[type=password]:focus {
   color: var(--text-muted);
   border: 0;
   cursor: pointer;
-  font-size: 18px;
-  padding: 0 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--dur-micro) var(--spring-smooth), background var(--dur-micro) var(--spring-smooth);
 }
-.wl-list li button:hover { color: var(--bad); }
+.wl-list li button:hover { color: var(--bad); background: var(--bad-alpha-soft); }
+
+/* Generic inline-SVG icon — inherits text color, neutral baseline alignment. */
+.icon {
+  display: inline-block;
+  vertical-align: -2px;
+  flex-shrink: 0;
+}
+
+/* Square button that holds a single icon (close/delete). Sized for 44×44 touch
+   target on mobile; padding shrinks on desktop. */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  line-height: 1;
+}
+
+/* Button with a chevron disclosure (e.g. «Что нового»). Rotates the chevron on
+   .is-open without re-rendering. */
+.btn-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-disclosure .icon {
+  transition: transform var(--dur-base) var(--spring-snappy);
+}
+.btn-disclosure.is-open .icon { transform: rotate(180deg); }
 
 .wl-add {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+  align-items: flex-end;
 }
-.wl-add input { max-width: none; flex: 1; }
+.wl-add .field { flex: 1; }
+.wl-add input { max-width: none; flex: 1; width: 100%; }
+
+/* Form field with visible label — Skill rule input-labels (HIGH severity).
+   Placeholder alone vanishes when user types — label stays. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
 
 /* ---------- LOG VIEWER ---------- */
 pre.log {
-  background: #05080c;
+  background: var(--log-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px;
@@ -379,17 +757,14 @@ pre.log {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
-  color: #c9d1d9;
-}
-@media (prefers-color-scheme: light) {
-  pre.log { background: #f6f8fa; color: #1f2328; }
+  color: var(--log-text);
 }
 
 /* ---------- MODAL (job runner) ---------- */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: var(--scrim-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -416,22 +791,40 @@ pre.log {
   gap: 8px;
 }
 
-/* ---------- TOAST ---------- */
-.toast {
+/* ---------- TOAST STACK ----------
+   Bottom-center column, новые toast'ы добавляются снизу, старые вытесняются
+   вверх. Max 3 одновременно — FIFO eviction in JS. Skill: toast-dismiss 3-5s,
+   stack instead of overwrite. aria-live="polite" on container in HTML. */
+.toast-stack {
   position: fixed;
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  z-index: 200;
+  pointer-events: none;
+}
+.toast-item {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 16px;
   font-size: 14px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 200;
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity var(--dur-base) var(--spring-smooth), transform var(--dur-base) var(--spring-snappy);
+  will-change: opacity, transform;
+  max-width: min(420px, calc(100vw - 32px));
 }
-.toast.ok  { border-color: var(--good); }
-.toast.bad { border-color: var(--bad); }
+.toast-item.is-visible { opacity: 1; transform: translateY(0); }
+.toast-item.is-leaving { opacity: 0; transform: translateY(-4px); }
+.toast-ok  { border-color: var(--good); }
+.toast-bad { border-color: var(--bad); }
 
 /* ---------- UPDATE BANNER ---------- */
 .update-banner {
@@ -502,16 +895,27 @@ pre.log {
   color: var(--text-muted);
   user-select: none;
   list-style: none;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .upd-details summary::-webkit-details-marker { display: none; }
-.upd-details summary::before { content: "▾ "; }
-.upd-details[open] summary::before { content: "▴ "; }
+.upd-details summary::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  background-color: currentColor;
+  -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat center / contain;
+  mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat center / contain;
+  transition: transform var(--dur-base) var(--spring-snappy);
+}
+.upd-details[open] summary::before { transform: rotate(180deg); }
 .upd-details summary:hover { color: var(--text); }
 .upd-desc-full {
   margin-top: 6px;
   padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-subtle);
   border-left: 2px solid var(--border);
   font-size: 12px;
   color: var(--text-muted);
@@ -544,18 +948,18 @@ pre.log {
 .upd-type-reinstall {
   color: var(--warn);
   border-color: var(--warn);
-  background: rgba(210, 153, 34, 0.08);
+  background: var(--warn-alpha-soft);
 }
 .upd-type-patch {
   color: var(--good);
   border-color: var(--good);
-  background: rgba(95, 175, 95, 0.08);
+  background: var(--good-alpha-soft);
 }
 .upd-reset-state {
   font-size: 11px;
   color: var(--bad);
   border: 1px solid var(--bad);
-  background: rgba(200, 80, 80, 0.08);
+  background: var(--bad-alpha-reset);
   padding: 1px 7px;
   border-radius: 999px;
   letter-spacing: 0.04em;
@@ -588,7 +992,7 @@ pre.log {
   font-weight: 500;
   line-height: 1;
   color: var(--warn);
-  background: rgba(210, 153, 34, 0.08);
+  background: var(--warn-alpha-soft);
   border: 1px solid var(--warn);
   border-radius: 999px;
   vertical-align: middle;
@@ -611,7 +1015,7 @@ pre.log {
 
 /* ---------- MODAL WARNING ---------- */
 .modal-warning {
-  background: rgba(210, 153, 34, 0.12);
+  background: var(--warn-alpha-mid);
   border: 1px solid var(--warn);
   border-radius: 6px;
   padding: 8px 12px;
@@ -629,32 +1033,41 @@ pre.log {
    наследует opacity от `> *` правила. */
 .card-locked {
   position: relative;
-  transition: all 0.15s ease-out;
+  transition: opacity var(--dur-micro) var(--spring-smooth);
 }
 .card-locked > * {
   opacity: 0.55;
-  transition: opacity 0.15s ease-out;
+  transition: opacity var(--dur-micro) var(--spring-smooth);
   /* pointer-events НЕ блокируем — JS уже disabled'ит конкретные
      controls, а блок всего контента сломал бы scroll/select на длинных
      карточках (Whitelist / Extra-domains). */
 }
-.card-locked::after {
-  content: "⏳ Операция выполняется…";
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  font-size: 11px;
+/* Page-level pill в строке h1.page-title — один на страницу, не
+   per-card. Не overlay'ит ни одну карточку. Skill compliance:
+   - 8dp spacing rhythm: padding 6/12, gap 8
+   - Icon Consistency: 16×16 stroke 2
+   - Inline-flex в normal flow рядом с заголовком, без absolute */
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.page-locked-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
   color: var(--warn);
-  background: rgba(0, 0, 0, 0.75);
-  padding: 4px 12px;
-  border-radius: 999px;
+  background: var(--scrim-pill);
   border: 1px solid var(--warn);
-  pointer-events: none;
-  z-index: 5;
+  border-radius: 999px;
   white-space: nowrap;
 }
+.page-locked-pill .icon { flex-shrink: 0; }
 
 /* ---------- TG TUNNEL STATE BADGE ---------- */
 .tg-state-badge {
@@ -668,7 +1081,7 @@ pre.log {
   border-radius: 999px;
   vertical-align: middle;
 }
-.tg-state-on  { color: var(--good); border: 1px solid var(--good); background: rgba(95, 175, 95, 0.08); }
+.tg-state-on  { color: var(--good); border: 1px solid var(--good); background: var(--good-alpha-soft); }
 .tg-state-off { color: var(--text-muted); border: 1px solid var(--border); background: transparent; }
 
 /* ---------- JOB BADGES ---------- */
@@ -697,10 +1110,10 @@ pre.log {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-  transition: transform 0.15s;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur-micro) var(--spring-snappy);
 }
-.job-badge:hover { transform: translateY(-1px); }
+.job-badge:hover { transform: translateY(-2px); }
 .job-badge-dot {
   width: 8px;
   height: 8px;
@@ -713,13 +1126,206 @@ pre.log {
   50% { opacity: 0.3; }
 }
 
-/* ---------- MOBILE ---------- */
-@media (max-width: 520px) {
-  .topbar { padding: 12px 14px; gap: 14px; }
-  #nav { gap: 0; }
-  #nav a { padding: 6px 8px; font-size: 13px; }
+/* ---------- RESPONSIVE BREAKPOINTS ----------
+   Skill rule: breakpoint-consistency — "Use systematic breakpoints
+   (375 / 768 / 1024 / 1440)". Также: "Test at 320 375 414 768 1024 1440".
+   Стратегия mobile-first: default = mobile, потом min-width up.
+   375px  — small phone (iPhone SE / iPhone 12 mini)
+   768px  — tablet portrait (iPad)
+   1024px — laptop / desktop
+   1440px — wide desktop
+*/
+
+/* Tablet (≥768px) — больше пространства для status grid и контента. */
+@media (min-width: 768px) {
+  #app { max-width: 920px; padding: 28px 24px 80px; }
+  .status-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Desktop (≥1024px) — поднимем max-width для рабочих столов. */
+@media (min-width: 1024px) {
+  #app { max-width: 1080px; padding: 32px 28px 80px; }
+  .status-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* Wide desktop (≥1440px) — больше воздуха, шире контент. */
+@media (min-width: 1440px) {
+  #app { max-width: 1200px; padding: 40px 32px 96px; }
+}
+
+/* Phone (≤767px) + landscape короткий — content layout consistent
+   с drawer pattern. */
+@media (max-width: 767.98px), (max-height: 500px) {
+  .topbar { padding: 12px 14px; gap: 12px; }
   #app { padding: 16px 14px 60px; }
   .status-grid { grid-template-columns: repeat(2, 1fr); }
   .update-banner { flex-direction: column; align-items: stretch; }
   .update-banner-actions { justify-content: flex-end; }
+  .wl-add { flex-direction: column; align-items: stretch; }
+
+  /* State table → card layout (Skill rule: table-handling — card layout
+     preferred over horizontal scroll on narrow screens). Each row becomes
+     a stacked card with labels rendered via data-label::before. */
+  .state-table thead { display: none; }
+  .state-table, .state-table tbody { display: block; width: 100%; }
+  .state-table tr {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: var(--bg);
+  }
+  .state-table tr:hover { background: var(--bg-card-hover); }
+  .state-table td {
+    border: 0;
+    padding: 2px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  /* Delete button — full-width row across the card top */
+  .state-table td:first-child {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+  .state-table td:not(:first-child)::before {
+    content: attr(data-label);
+    min-width: 80px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+}
+
+/* Small phone (≤374px) — ещё компактнее на старых iPhone SE.
+   Skill: 375 is the standard small-phone breakpoint; we tighten below it. */
+@media (max-width: 374.98px) {
+  #app { padding: 14px 10px 60px; }
+  .page-title { font-size: 19px; }
+  .card { padding: 14px 12px; }
+}
+
+/* ---------- SKELETON LOADERS ----------
+   Реальные пропорции UI отрисованы как пульсирующие плейсхолдеры пока
+   данные грузятся. Reserve space — нет CLS-скачка при подгрузке.
+   Skill rule: loading-states (>300ms). */
+.skel-line, .skel-block {
+  background: linear-gradient(
+    90deg,
+    var(--skel-c1) 0%,
+    var(--skel-c2) 50%,
+    var(--skel-c1) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: skel-shimmer 1.4s linear infinite;
+}
+.skel-line {
+  display: block;
+  height: 14px;
+  margin-bottom: 10px;
+  width: 80%;
+}
+.skel-line:last-child { margin-bottom: 0; }
+.skel-block {
+  height: 64px;
+  border-radius: 6px;
+}
+/* Inside <pre class="log"> the skeleton block needs to break out of the
+   pre-formatted flow — its own div container with its own layout. */
+.skel-text {
+  display: block;
+  padding: 4px 0;
+}
+@keyframes skel-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ---------- ACCESSIBILITY ---------- */
+/* Visible focus ring on all keyboard-reachable elements. Browser default
+   outline is often suppressed by user-agent stylesheets — we restore an
+   explicit, branded ring. :focus-visible (not :focus) so mouse clicks
+   don't get an outline on click-and-release. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* The native switch checkbox is visually-hidden; route focus to the slider. */
+.switch input[type="checkbox"]:focus-visible { outline: none; }
+.switch input[type="checkbox"]:focus-visible + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+/* Nav links get a slightly tighter ring (they sit inside a packed bar). */
+#nav a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* ---------- ROUTE TRANSITION ----------
+   Subtle fade-slide-up of page-title когда юзер переходит между разделами.
+   `backwards` fill-mode чтобы анимация начиналась с момента mount'a element'а
+   (innerHTML replace). Карточки ниже идут с лёгким staggered delay для
+   ощущения «волны». Skill: stagger-sequence 30-50ms per item. */
+.page-title {
+  animation: page-enter var(--dur-base) var(--spring-snappy) backwards;
+}
+.page-title + .card,
+.page-title + .dashboard-grid,
+#app > .card:nth-of-type(1) {
+  animation: page-enter var(--dur-base) var(--spring-snappy) 50ms backwards;
+}
+#app > .card:nth-of-type(2) {
+  animation: page-enter var(--dur-base) var(--spring-snappy) 100ms backwards;
+}
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- PRESS FEEDBACK ----------
+   Apple-style tactile click: subtle scale-down (96%) на :active. Чувствуется
+   как «нажали» — то самое что iOS даёт всем tappable элементам. Длительность
+   80ms — короче чем default transition, чтобы feel был instant. Skill rule
+   scale-feedback (HIG): subtle scale 0.95–1.05 на press. */
+.btn:active,
+.menu-toggle:active,
+.nav-drawer-close:active,
+.sidebar-collapse:active,
+.nav-more-btn:active,
+.theme-toggle button:active,
+.job-badge:active,
+.brand:active,
+.btn-icon:active {
+  transform: scale(0.96);
+  transition-duration: 80ms;
+}
+/* .brand уже имеет translateY(-1px) на hover — на active объединим scale + translate */
+.brand:active { transform: translateY(-1px) scale(0.96); }
+.job-badge:active { transform: translateY(-2px) scale(0.96); }
+
+/* Honor user preference for reduced motion. We don't fully disable visual
+   feedback — just shorten transitions to near-zero and stop infinite
+   animations (pulse, spin). State changes remain perceptible. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .job-badge-dot,
+  .status-spinner::before {
+    /* Static rather than pulsing — colour still signals "busy", no motion. */
+    opacity: 1;
+    animation: none !important;
+  }
 }

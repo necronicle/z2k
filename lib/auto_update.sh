@@ -549,6 +549,7 @@ EOF
     # of shipping the fix. S99zapret2 always restarts because the nfqws2
     # input set (lua / hostlists / config / fake blobs) goes through it.
     local restart_set="S99zapret2"
+    local geosite_refresh=0
     local f
     while IFS= read -r f; do
         case "$f" in
@@ -558,6 +559,11 @@ EOF
             files/z2k-scheduler.sh)            restart_set="$restart_set S99z2k-scheduler" ;;
             files/init.d/S98z2k-detect)        restart_set="$restart_set S98z2k-detect" ;;
             webpanel/*)                        restart_set="$restart_set S96z2k-webpanel" ;;
+            files/z2k-geosite.sh|files/lists/rkn-false-positive.txt)
+                # New geosite logic or false-positive list — нужен immediate
+                # refresh, иначе filter применится только при следующем
+                # scheduler tick (раз в сутки).
+                geosite_refresh=1 ;;
         esac
     done <<EOF
 $files
@@ -573,6 +579,14 @@ EOF
                 au_log "patch: $svc restart returned non-zero (continuing)"
         fi
     done
+
+    # Geosite immediate refresh: если изменился z2k-geosite.sh или
+    # rkn-false-positive.txt — apply filter без ожидания scheduler tick.
+    if [ "$geosite_refresh" = "1" ] && [ -x "${zd}/files/z2k-geosite.sh" ]; then
+        au_log "patch: triggering geosite refresh (filter applied immediately)"
+        FORCE_REFETCH=1 sh "${zd}/files/z2k-geosite.sh" fetch >/dev/null 2>&1 || \
+            au_log "patch: geosite refresh returned non-zero (continuing)"
+    fi
 
     au_log "patch applied: $target_tag"
     return 0

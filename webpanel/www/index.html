@@ -3,27 +3,128 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>z2k panel</title>
+<title>Z2K — antiDPI для Keenetic</title>
+<script>
+  /* No-FOUC theme bootstrap — runs before style.css загружается.
+     Без него юзер с сохранённой светлой темой увидит мигание тёмной
+     перед applyTheme() из app.js. */
+  (function() {
+    try {
+      var mode = localStorage.getItem('z2k-theme') || 'auto';
+      var resolved = mode === 'auto'
+        ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : mode;
+      if (resolved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    } catch (e) { /* localStorage disabled — остаёмся на dark default */ }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap">
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.svg?v=2" type="image/svg+xml" sizes="any">
+<link rel="mask-icon" href="favicon.svg?v=2" color="#1AC3B4">
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">z2k</div>
-  <nav id="nav">
-    <a href="#/dashboard" data-route="dashboard">Дашборд</a>
-    <a href="#/toggles" data-route="toggles">Режимы</a>
-    <a href="#/whitelist" data-route="whitelist">Whitelist</a>
-    <a href="#/extra-domains" data-route="extra-domains">Доп. домены</a>
-    <a href="#/logs" data-route="logs">Логи</a>
-    <a href="#/state" data-route="state">Rotator</a>
-    <a href="#/diag" data-route="diag">Диагностика</a>
-    <a href="#/geosite" data-route="geosite">Geosite</a>
-    <a href="#/credits" data-route="credits">Благодарности</a>
+  <a href="#/dashboard" class="brand" aria-label="z2k — antiDPI для Keenetic">
+    <svg viewBox="100 20 460 110" width="200" height="48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <!-- mark (фирменный квадрат с Z-маршрутом) -->
+      <g transform="translate(157, 27)">
+        <rect width="96" height="96" rx="22" fill="#1AC3B4"/>
+        <rect x="26" y="26" width="44" height="12" fill="#0C1820"/>
+        <rect x="26" y="58" width="44" height="12" fill="#0C1820"/>
+        <polygon points="56,26 70,26 40,70 26,70" fill="#0C1820"/>
+      </g>
+      <!-- Z — currentColor (наследует --text от .brand) -->
+      <g transform="translate(277, 37)" fill="currentColor">
+        <rect width="48" height="14"/>
+        <rect y="42" width="48" height="14"/>
+        <polygon points="32,0 48,0 16,56 0,56"/>
+      </g>
+      <!-- 2 — accent teal (брендовая «2k» из лого) -->
+      <g transform="translate(339, 37)" class="brand-accent-glyph">
+        <rect width="44" height="14"/>
+        <rect x="30" width="14" height="30"/>
+        <polygon points="30,28 44,28 14,56 0,56"/>
+        <rect y="42" width="44" height="14"/>
+      </g>
+      <!-- K — currentColor -->
+      <g transform="translate(397, 37)" fill="currentColor">
+        <rect width="14" height="56"/>
+        <polygon points="14,35 14,21 46,0 46,14"/>
+        <polygon points="14,21 14,35 46,56 46,42"/>
+      </g>
+      <!-- tagline — text-muted -->
+      <text x="278" y="112" class="brand-tagline" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="500" letter-spacing="2.6">ANTIDPI · KEENETIC</text>
+    </svg>
+  </a>
+  <button class="menu-toggle" id="menu-toggle" type="button" aria-label="Открыть меню" aria-expanded="false" aria-controls="nav">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <nav id="nav" aria-label="Основная навигация">
+    <div class="nav-drawer-header">
+      <span class="nav-drawer-title">Меню</span>
+      <button class="nav-drawer-close" id="nav-drawer-close" type="button" aria-label="Закрыть меню">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <a href="#/dashboard" data-route="dashboard">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+      <span class="nav-label">Дашборд</span>
+    </a>
+    <a href="#/toggles" data-route="toggles">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+      <span class="nav-label">Режимы</span>
+    </a>
+    <a href="#/whitelist" data-route="whitelist">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+      <span class="nav-label">Whitelist</span>
+    </a>
+    <a href="#/extra-domains" data-route="extra-domains">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/><circle cx="12" cy="12" r="10"/></svg>
+      <span class="nav-label">Доп. домены</span>
+    </a>
+    <a href="#/state" data-route="state">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      <span class="nav-label">Rotator</span>
+    </a>
+    <a href="#/logs" data-route="logs">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      <span class="nav-label">Логи</span>
+    </a>
+    <a href="#/diag" data-route="diag">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <span class="nav-label">Диагностика</span>
+    </a>
+    <a href="#/geosite" data-route="geosite">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      <span class="nav-label">Geosite</span>
+    </a>
+    <a href="#/credits" data-route="credits" class="nav-highlight">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      <span class="nav-label">Благодарности</span>
+    </a>
+    <button class="sidebar-collapse" id="sidebar-collapse" type="button" aria-label="Свернуть боковую панель">
+      <svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+      <span class="nav-label">Свернуть</span>
+    </button>
   </nav>
+  <div class="theme-toggle" role="group" aria-label="Тема">
+    <button data-theme-btn="light" type="button" aria-label="Светлая тема" title="Светлая">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+    </button>
+    <button data-theme-btn="auto" type="button" aria-label="Системная (auto)" title="Системная">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+    </button>
+    <button data-theme-btn="dark" type="button" aria-label="Тёмная тема" title="Тёмная">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </div>
 </header>
+<div class="menu-backdrop" id="menu-backdrop" hidden></div>
 <main id="app"></main>
-<div id="toast" class="toast" hidden></div>
+<div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 <script src="app.js"></script>
 </body>
 </html>
