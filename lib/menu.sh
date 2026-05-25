@@ -1443,8 +1443,11 @@ menu_telegram_mtproxy() {
         clear_screen
         print_header "Telegram"
 
+        # Cmdline filter '--listen=:1443' — иначе pgrep матчит S97 cdnbase
+        # daemon (тот же бинарь tg-mtproxy-client на :1444). После disable
+        # TG-туннеля S97 продолжает работать → false-positive «Включен».
         local tunnel_running=false
-        if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+        if pgrep -f "tg-mtproxy-client .*--listen=:1443" >/dev/null 2>&1; then
             tunnel_running=true
         fi
 
@@ -1537,7 +1540,7 @@ SUBMENU
                 fi
                 sleep 2
 
-                if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
+                if pgrep -f "tg-mtproxy-client .*--listen=:1443" >/dev/null 2>&1; then
                     print_success "Tunnel запущен"
                     # Fallback path for installs that do not have S98 yet.
                     if ! [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
