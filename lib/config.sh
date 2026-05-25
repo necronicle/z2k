@@ -686,6 +686,13 @@ keenetic.io
 keenetic.cloud
 keenetic.link
 
+# === Netcraze (KeenDNS под российским брендом, та же инфраструктура) ===
+netcraze.pro
+netcraze.com
+netcraze.io
+netcraze.cloud
+netcraze.link
+
 # === Разработка ===
 raw.githubusercontent.com
 marketplace.visualstudio.com
@@ -715,6 +722,20 @@ keenetic.cloud
 keenetic.link
 KEENETIC
             print_info "Добавлены домены Keenetic в whitelist"
+        fi
+
+        # Дозаписать netcraze (новый бренд KeenDNS в РФ, та же инфраструктура)
+        if ! grep -q "^netcraze\.pro$" "$whitelist" 2>/dev/null; then
+            cat >> "$whitelist" <<'NETCRAZE'
+
+# === Netcraze (KeenDNS под российским брендом, та же инфраструктура) ===
+netcraze.pro
+netcraze.com
+netcraze.io
+netcraze.cloud
+netcraze.link
+NETCRAZE
+            print_info "Добавлены домены Netcraze в whitelist"
         fi
 
         # Дозаписать банки и расширения для российских сервисов (flowseal 1.9.8 sync)

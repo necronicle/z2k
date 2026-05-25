@@ -377,9 +377,9 @@
         </div>
         <div class="upd-desc">${escapeHtml(summary)}</div>
         ${hasMore ? `
-          <details class="upd-details">
+          <details class="upd-details disclosure">
             <summary>Подробнее</summary>
-            <div class="upd-desc-full">${escapeHtml(desc)}</div>
+            <div class="disclosure-body"><div class="upd-desc-full">${escapeHtml(desc)}</div></div>
           </details>
         ` : ""}
       </div>
@@ -539,6 +539,82 @@
           <button class="btn btn-danger" id="tg-disable">Отключить</button>
         </div>
       </div>
+      <div class="card" id="policy-card">
+        <h3>Политика доступа Keenetic</h3>
+        <label class="field">
+          <span class="field-label">Имя политики</span>
+          <input id="policy-name" type="text" placeholder="nfqws"
+                 inputmode="text" autocomplete="off" autocapitalize="off"
+                 spellcheck="false" autocorrect="off" maxlength="32">
+        </label>
+        <div class="policy-status" id="policy-status">
+          <span class="policy-status-dot"></span>
+          <span class="policy-status-text">Проверка…</span>
+        </div>
+        <div class="field-label" style="margin-top:14px">Применяется к устройствам</div>
+        <div class="segmented" id="policy-mode" role="radiogroup" aria-label="Применяется к устройствам">
+          <button type="button" class="seg-btn" data-exclude="0" role="radio" aria-checked="true">Только в политике</button>
+          <button type="button" class="seg-btn" data-exclude="1" role="radio" aria-checked="false">Все, кроме политики</button>
+        </div>
+        <div class="btn-row" style="margin-top:14px;justify-content:space-between;align-items:center">
+          <details class="policy-help disclosure">
+            <summary>Как создать политику</summary>
+            <div class="disclosure-body">
+              <div class="how-to">
+                <ol class="steps">
+                  <li>
+                    <span class="step-num">1</span>
+                    <div class="step-body">
+                      <div class="step-title">Откройте раздел приоритетов</div>
+                      <div class="step-desc">В админке Keenetic: <b>Интернет → Приоритеты подключений</b>.</div>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="step-num">2</span>
+                    <div class="step-body">
+                      <div class="step-title">Создайте политику</div>
+                      <div class="step-desc">Вкладка <b>«Конфигурация политик»</b> → кнопка <b>«+ Добавить политику»</b>.</div>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="step-num">3</span>
+                    <div class="step-body">
+                      <div class="step-title">Задайте имя</div>
+                      <div class="step-desc">Имя должно <b>точно совпадать</b> с тем, что введено выше — по умолчанию <code>nfqws</code>. Регистр учитывается.</div>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="step-num">4</span>
+                    <div class="step-body">
+                      <div class="step-title">Выберите подключение</div>
+                      <div class="step-desc">В колонке «Подключение» оставьте галки на тех интерфейсах, которыми пользуются эти устройства (обычно ваше текущее подключение к интернету).</div>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="step-num">5</span>
+                    <div class="step-body">
+                      <div class="step-title">Привяжите устройства</div>
+                      <div class="step-desc">Вкладка <b>«Привязка устройств к профилям»</b> → включите <b>«Показать все объекты»</b> → перетащите нужные устройства на созданную политику.</div>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="step-num">6</span>
+                    <div class="step-body">
+                      <div class="step-title">Примените у нас</div>
+                      <div class="step-desc">Вернитесь сюда и нажмите <b>«Сохранить и применить»</b>. Статус выше должен загореться зелёным.</div>
+                    </div>
+                  </li>
+                </ol>
+                <div class="how-to-note">
+                  <b>Нет раздела «Приоритеты подключений»?</b><br>
+                  Установите компонент: <b>Управление → Общие настройки → Изменить набор компонентов</b>, найдите «Приоритеты подключений (PBR)» и установите. После перезагрузки роутера раздел появится в меню «Интернет».
+                </div>
+              </div>
+            </div>
+          </details>
+          <button class="btn btn-primary" id="policy-save-btn">Сохранить и применить</button>
+        </div>
+      </div>
     `;
 
     // Load current state and wire up switches.
@@ -614,6 +690,87 @@
     }
     $app.querySelector("#tg-enable").addEventListener("click", () => tgAction("enable", "Запуск Telegram туннеля"));
     $app.querySelector("#tg-disable").addEventListener("click", () => tgAction("disable", "Остановка Telegram туннеля"));
+
+    // ----- Policy access section -----
+    const nameInput = $app.querySelector("#policy-name");
+    const statusEl  = $app.querySelector("#policy-status");
+    const segGroup  = $app.querySelector("#policy-mode");
+    const saveBtn   = $app.querySelector("#policy-save-btn");
+    const NAME_RE   = /^[A-Za-z0-9_-]{0,32}$/;
+
+    function setPolicyStatus(state, text) {
+      // state: good | warn | muted | error
+      statusEl.dataset.state = state;
+      statusEl.querySelector(".policy-status-text").textContent = text;
+    }
+    function setPolicyMode(exclude) {
+      segGroup.querySelectorAll(".seg-btn").forEach(b => {
+        const on = b.dataset.exclude === String(exclude);
+        b.classList.toggle("seg-on", on);
+        b.setAttribute("aria-checked", String(on));
+      });
+    }
+    async function loadPolicyStatus() {
+      try {
+        const d = await apiGet("/policy/status");
+        nameInput.value = d.name || "";
+        setPolicyMode(d.exclude === "1" ? 1 : 0);
+        if (!d.name) {
+          setPolicyStatus("muted", "Поле пусто — фильтр выключен");
+        } else if (d.exists === 1 || d.exists === true) {
+          setPolicyStatus("good", `Политика «${d.name}» найдена в Keenetic`);
+        } else {
+          setPolicyStatus("warn", `Политика «${d.name}» не найдена — фильтр игнорируется, обрабатывается весь трафик`);
+        }
+      } catch (e) {
+        setPolicyStatus("error", "Ошибка: " + e.message);
+      }
+    }
+    loadPolicyStatus();
+
+    // Validate + (опционально) повторный status check на blur
+    nameInput.addEventListener("blur", () => {
+      const v = nameInput.value.trim();
+      if (!NAME_RE.test(v)) {
+        setPolicyStatus("error", "Имя: только буквы/цифры/«_»/«-», 1–32 символа");
+        return;
+      }
+      // Запрос свежего status'а с currently-saved конфигом — input не сохранит
+      // ничего пока юзер не нажмёт «Сохранить». Если хочется live-проверки
+      // existence без save — на будущее можно добавить отдельный endpoint
+      // /policy/check?name=. Сейчас: оставляем статус до Save.
+    });
+
+    segGroup.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      setPolicyMode(parseInt(btn.dataset.exclude, 10));
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      const v = nameInput.value.trim();
+      if (!NAME_RE.test(v)) {
+        toast("Имя политики: только буквы/цифры/«_»/«-», 1–32 символа", "bad");
+        nameInput.focus();
+        return;
+      }
+      const exclude = segGroup.querySelector(".seg-btn.seg-on")?.dataset.exclude || "0";
+      let resp;
+      try {
+        resp = await apiPost("/policy/save", { name: v, exclude });
+      } catch (e) {
+        toast("Ошибка: " + e.message, "bad");
+        return;
+      }
+      if (resp && resp.job) {
+        openJobModal("Применение политики доступа", resp.job, {
+          onDone: () => { setTimeout(loadPolicyStatus, 500); }
+        });
+      } else {
+        toast("Применено");
+        loadPolicyStatus();
+      }
+    });
 
     // Если уже бежит job (юзер пришёл с другой вкладки) — сразу заблочить
     // только что отрендеренные switches/buttons. Без этого глобал-лок

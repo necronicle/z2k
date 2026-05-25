@@ -617,6 +617,199 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .switch input:checked + .slider::before { transform: translateX(18px); }
 .switch.loading { opacity: 0.5; pointer-events: none; }
 
+/* ---------- POLICY ACCESS SECTION ----------
+   Card в «Режимы»: name input + segmented mode picker + status pill.
+   Segmented control follows skill rule «mutually exclusive 2-5 options
+   with immediate visual effect». Status pill — empty-states / live-feedback
+   pattern: показывает found/not-found/empty с цветовой кодировкой. */
+.policy-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+  font-weight: 500;
+}
+.policy-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+.policy-status[data-state="good"]  { border-color: var(--good); color: var(--good); background: var(--good-alpha-soft); }
+.policy-status[data-state="good"]  .policy-status-dot { background: var(--good); }
+.policy-status[data-state="warn"]  { border-color: var(--warn); color: var(--warn); background: var(--warn-alpha-soft); }
+.policy-status[data-state="warn"]  .policy-status-dot { background: var(--warn); }
+.policy-status[data-state="error"] { border-color: var(--bad);  color: var(--bad);  background: var(--bad-alpha-soft); }
+.policy-status[data-state="error"] .policy-status-dot { background: var(--bad); }
+.policy-status[data-state="muted"] { color: var(--text-muted); }
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 3px;
+  margin-top: 4px;
+  gap: 2px;
+}
+.segmented .seg-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background var(--dur-micro) var(--spring-smooth),
+              color var(--dur-micro) var(--spring-smooth),
+              box-shadow var(--dur-micro) var(--spring-smooth);
+}
+.segmented .seg-btn:hover:not(.seg-on) { color: var(--text); background: var(--bg-card-hover); }
+.segmented .seg-btn.seg-on {
+  background: var(--accent);
+  color: var(--btn-primary-text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.policy-help summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  user-select: none;
+}
+.policy-help summary:hover { color: var(--text); }
+
+/* ---------- HOW-TO STEPPER ----------
+   Bento-style step cards per ui-ux-pro-max skill design-system: каждый
+   шаг — отдельная rounded card с badge-номером в углу. Apple/Linear
+   aesthetic, no native list markers (агрессивная specificity на случай
+   override'ов). */
+.how-to {
+  margin-top: 16px;
+}
+ol.steps,
+.how-to ol.steps,
+.how-to .steps {
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+ol.steps > li,
+.how-to ol.steps > li,
+.how-to .steps > li {
+  list-style: none !important;
+  list-style-type: none !important;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 0;
+  position: relative;
+  transition: border-color var(--dur-micro) var(--spring-smooth),
+              transform var(--dur-micro) var(--spring-snappy);
+}
+ol.steps > li::marker,
+.how-to ol.steps > li::marker {
+  content: "" !important;
+  display: none !important;
+}
+.how-to ol.steps > li:hover {
+  border-color: var(--accent-dim);
+  background: var(--bg-card-hover);
+}
+.how-to .step-num {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--btn-primary-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.how-to .step-body { flex: 1; min-width: 0; }
+.how-to .step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+.how-to .step-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+.how-to .step-desc code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--accent);
+}
+.how-to .step-desc b { color: var(--text); }
+
+.how-to-note {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--warn-alpha-soft);
+  border-left: 3px solid var(--warn);
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.55;
+}
+.how-to-note b { color: var(--warn); }
+
+/* ---------- DISCLOSURE (smooth Apple-like expand/collapse) ----------
+   Native <details> snaps open instantly. Apple-style — smooth height
+   animation. Modern CSS trick: grid-template-rows 0fr → 1fr animatable
+   между keyframes без JS. Все modern браузеры supports (Chrome 117+,
+   Safari 17.4+, FF 121+). Контент должен быть в .disclosure-body
+   wrapper'е с overflow:hidden. */
+.disclosure .disclosure-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-base) var(--spring-smooth);
+  will-change: grid-template-rows;
+}
+.disclosure[open] .disclosure-body {
+  grid-template-rows: 1fr;
+}
+.disclosure .disclosure-body > * {
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--dur-base) var(--spring-smooth),
+              transform var(--dur-base) var(--spring-snappy);
+}
+.disclosure[open] .disclosure-body > * {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 /* ---------- BUTTONS ---------- */
 .btn {
   display: inline-block;

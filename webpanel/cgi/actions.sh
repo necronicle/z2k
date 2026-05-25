@@ -203,6 +203,60 @@ toggle_dynamic_ttl() {
     restart_service_if_running
 }
 
+# --- policy access (Keenetic NDM ip policy filter) ---
+
+# policy_exists <name>: returns 0 if a Keenetic IP policy с description = <name>
+# существует, иначе 1. Reuse тот же awk parser что в S99zapret2.new.
+policy_exists() {
+    local name="$1"
+    [ -z "$name" ] && return 1
+    local ndmc_bin="ndmc"
+    [ -x /bin/ndmc ] && ndmc_bin="/bin/ndmc"
+    "$ndmc_bin" -c "show ip policy" 2>/dev/null | awk -v want="$(printf '%s' "$name" | tr 'A-Z' 'a-z')" '
+        function trim(s) { sub(/^[ \t\r\n]+/, "", s); sub(/[ \t\r\n]+$/, "", s); return s }
+        function unquote(s) { s=trim(s); if (s ~ /^".*"$/) { sub(/^"/, "", s); sub(/"$/, "", s) } return s }
+        function strip_colon(s) { sub(/:+$/, "", s); return s }
+        BEGIN { want = strip_colon(want); found = 0 }
+        /description[ \t]*=/ {
+            desc = $0
+            sub(/.*description[ \t]*=[ \t]*/, "", desc)
+            desc = strip_colon(tolower(unquote(desc)))
+            if (desc == want) { found = 1; exit }
+        }
+        END { exit (found ? 0 : 1) }
+    '
+}
+
+policy_status() {
+    # Stdout-эмиссия для api.sh: "name=...|exclude=...|exists=0|1".
+    local name exclude exists
+    name=$(read_flag "POLICY_NAME" "$CONFIG_FILE" "nfqws")
+    exclude=$(read_flag "POLICY_EXCLUDE" "$CONFIG_FILE" "0")
+    if policy_exists "$name"; then exists=1; else exists=0; fi
+    printf 'name=%s|exclude=%s|exists=%s\n' "$name" "$exclude" "$exists"
+}
+
+policy_save() {
+    local name="$1" exclude="$2"
+    # Имя validation: 1-32 chars, [A-Za-z0-9_-]. Пустое разрешено = выключить
+    # фильтр (config_official.sh fallback на nfqws default).
+    case "$name" in
+        '') name="" ;;
+        *[!A-Za-z0-9_-]*) echo "invalid policy name" >&2; return 1 ;;
+    esac
+    if [ -n "$name" ] && [ ${#name} -gt 32 ]; then
+        echo "policy name too long" >&2; return 1
+    fi
+    case "$exclude" in
+        0|1) ;;
+        *) echo "invalid exclude value" >&2; return 1 ;;
+    esac
+    set_flag "POLICY_NAME" "$name" "$CONFIG_FILE" || return 1
+    set_flag "POLICY_EXCLUDE" "$exclude" "$CONFIG_FILE" || return 1
+    regenerate_config
+    restart_service_if_running
+}
+
 # --- whitelist ---
 
 whitelist_list() {

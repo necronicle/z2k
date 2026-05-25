@@ -249,6 +249,34 @@ case "$method $path" in
         exit 0
         ;;
 
+    # ---------- POLICY ACCESS (Keenetic ip policy filter) ----------
+    "GET /policy/status")
+        result=$(policy_status)
+        name=$(printf '%s' "$result" | sed -n 's/.*name=\([^|]*\).*/\1/p')
+        exclude=$(printf '%s' "$result" | sed -n 's/.*exclude=\([^|]*\).*/\1/p')
+        exists=$(printf '%s' "$result" | sed -n 's/.*exists=\([0-9]*\).*/\1/p')
+        json_header
+        printf '{"ok":true,"name":'; json_string "$name"
+        printf ',"exclude":"%s","exists":%s}\n' "${exclude:-0}" "${exists:-0}"
+        exit 0
+        ;;
+
+    "POST /policy/save")
+        body=$(read_body)
+        name=$(form_value "$body" "name")
+        exclude=$(form_value "$body" "exclude")
+        [ -z "$exclude" ] && exclude="0"
+        case "$exclude" in
+            0|1) ;;
+            *) json_fail "400 Bad Request" "exclude must be 0 or 1" ;;
+        esac
+        # Async job для visibility (есть restart сервиса под капотом).
+        job_id=$(svc_action_async "Применение политики доступа" "policy_save \"${name}\" ${exclude}")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+
     # ---------- WHITELIST ----------
     "GET /whitelist")
         json_header

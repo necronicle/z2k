@@ -116,11 +116,12 @@ MENU
 [I] Убрать статические IP Instagram (обход DNS-отравления)
 [Y] Diagnose domain (4-стадийная проба + рекомендация)
 [M] Динамический TTL (для мобильных операторов)
+[A] Политика доступа Keenetic (фильтр по NDM policy)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M]: "
+        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M,A]: "
         read_input choice
 
         case "$choice" in
@@ -174,6 +175,9 @@ MENU
                 ;;
             m|M)
                 menu_dynamic_ttl
+                ;;
+            a|A)
+                menu_policy_access
                 ;;
             0)
                 print_info "Выход из меню"
@@ -1160,6 +1164,133 @@ SUBMENU
             ;;
     esac
 }
+
+# ==============================================================================
+# ПОДМЕНЮ: ПОЛИТИКА ДОСТУПА KEENETIC (фильтр трафика по NDM ip policy)
+# ==============================================================================
+
+_policy_exists() {
+    local name="$1"
+    [ -z "$name" ] && return 1
+    local ndmc_bin="ndmc"
+    [ -x /bin/ndmc ] && ndmc_bin="/bin/ndmc"
+    "$ndmc_bin" -c "show ip policy" 2>/dev/null | awk -v want="$(printf '%s' "$name" | tr 'A-Z' 'a-z')" '
+        function trim(s) { sub(/^[ \t\r\n]+/, "", s); sub(/[ \t\r\n]+$/, "", s); return s }
+        function unquote(s) { s=trim(s); if (s ~ /^".*"$/) { sub(/^"/, "", s); sub(/"$/, "", s) } return s }
+        function strip_colon(s) { sub(/:+$/, "", s); return s }
+        BEGIN { want = strip_colon(want); found = 0 }
+        /description[ \t]*=/ {
+            desc = $0
+            sub(/.*description[ \t]*=[ \t]*/, "", desc)
+            desc = strip_colon(tolower(unquote(desc)))
+            if (desc == want) { found = 1; exit }
+        }
+        END { exit (found ? 0 : 1) }
+    '
+}
+
+menu_policy_access() {
+    clear_screen
+    print_header "Политика доступа Keenetic"
+
+    local config_file="${ZAPRET2_DIR}/config"
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local POLICY_NAME POLICY_EXCLUDE
+    POLICY_NAME=$(safe_config_read "POLICY_NAME" "$config_file" "nfqws")
+    POLICY_EXCLUDE=$(safe_config_read "POLICY_EXCLUDE" "$config_file" "0")
+
+    local status_line
+    if [ -z "$POLICY_NAME" ]; then
+        status_line="⚪ Поле пусто — фильтр выключен"
+    elif _policy_exists "$POLICY_NAME"; then
+        status_line="🟢 Политика «$POLICY_NAME» найдена в Keenetic"
+    else
+        status_line="🟡 Политика «$POLICY_NAME» не найдена — фильтр игнорируется"
+    fi
+
+    local mode_text
+    if [ "$POLICY_EXCLUDE" = "1" ]; then
+        mode_text="ВСЕ КРОМЕ устройств в политике"
+    else
+        mode_text="только устройства В политике (whitelist)"
+    fi
+
+    print_separator
+    print_info "Имя:    $POLICY_NAME"
+    print_info "Статус: $status_line"
+    print_info "Режим:  $mode_text"
+    print_separator
+
+    cat <<'SUBMENU'
+
+Политика доступа — это группа устройств в админке Keenetic NDM
+(Сетевые настройки → Политики доступа). z2k обрабатывает трафик
+только устройств из указанной политики (или, наоборот, исключает их).
+Если политика с таким именем не существует — фильтр не применяется
+и обрабатывается весь трафик.
+
+[1] Изменить имя политики
+[2] Применять только к устройствам В политике (whitelist)
+[3] Применять ко всем КРОМЕ устройств политики
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-3,B]: "
+    read_input sub_choice
+
+    _policy_set_and_restart() {
+        local key="$1" val="$2"
+        if grep -q "^${key}=" "$config_file"; then
+            sed -i "s/^${key}=.*/${key}=${val}/" "$config_file"
+        else
+            echo "${key}=${val}" >> "$config_file"
+        fi
+        if is_zapret2_running; then
+            print_info "Перезапуск сервиса..."
+            "$INIT_SCRIPT" restart
+            print_success "Сервис перезапущен"
+        fi
+    }
+
+    case "$sub_choice" in
+        1)
+            printf "Введите имя политики (буквы/цифры/_/-, 1-32 символа, пусто = выключить): "
+            read_input new_name
+            new_name=$(printf '%s' "$new_name" | tr -d '\r\n[:space:]')
+            case "$new_name" in
+                '') ;;
+                *[!A-Za-z0-9_-]*) print_error "Недопустимые символы в имени"; pause; return 1 ;;
+            esac
+            if [ -n "$new_name" ] && [ ${#new_name} -gt 32 ]; then
+                print_error "Слишком длинное имя (>32 символов)"; pause; return 1
+            fi
+            _policy_set_and_restart "POLICY_NAME" "$new_name"
+            print_success "Имя политики сохранено: ${new_name:-(пусто)}"
+            pause
+            ;;
+        2)
+            _policy_set_and_restart "POLICY_EXCLUDE" "0"
+            print_success "Режим: только устройства В политике"
+            pause
+            ;;
+        3)
+            _policy_set_and_restart "POLICY_EXCLUDE" "1"
+            print_success "Режим: все КРОМЕ устройств политики"
+            pause
+            ;;
+        b|B|*)
+            return 0
+            ;;
+    esac
+}
+
 
 # ==============================================================================
 # ПОДМЕНЮ: ДИНАМИЧЕСКИЙ TTL ДЛЯ FAKE-ПАКЕТОВ
