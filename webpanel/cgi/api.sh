@@ -156,7 +156,7 @@ case "$method $path" in
         installed=$(is_installed && echo true || echo false)
         running=$(is_running   && echo true || echo false)
         svc_state=$(service_status_string)
-        rst_filter=$(read_flag "DROP_DPI_RST" "$CONFIG_FILE" "0")
+        rst_filter=$(read_flag "RST_FILTER" "$CONFIG_FILE" "0")
         silent_fb=$(read_flag "RKN_SILENT_FALLBACK" "$CONFIG_FILE" "0")
         # Mirror config_official.sh:970-973 — read GAME_MODE_ENABLED first
         # (the new primary), fall back to ROBLOX_UDP_BYPASS only if the

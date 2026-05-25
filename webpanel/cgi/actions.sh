@@ -146,8 +146,15 @@ svc_action_async() {
 # restarts the running service. Idempotent — setting the same value twice is a no-op.
 
 toggle_rst_filter() {
+    # Переключаем nfqws C-level RST_FILTER (нашa реализация в fork'е,
+    # branch feat/rst-filter — 3 эвристики drop'a fake DPI RST'ов:
+    # pre-response RST, multi-RST burst, TTL fingerprint mismatch).
+    # Раньше тут стоял DROP_DPI_RST (iptables xt_u32) — устаревший, фейлил
+    # на Keenetic без kmod-ipt-u32. RST_FILTER не требует kmod, работает на
+    # уровне nfqws. config_official.sh подхватит RST_FILTER при regenerate.
     local want="$1"
-    set_flag "DROP_DPI_RST" "$want" "$CONFIG_FILE" || return 1
+    set_flag "RST_FILTER" "$want" "$CONFIG_FILE" || return 1
+    regenerate_config
     restart_service_if_running
 }
 

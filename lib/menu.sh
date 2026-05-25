@@ -69,11 +69,12 @@ MENU
             # Показать статус RST-фильтра и silent fallback
             local rst_config_file="${ZAPRET2_DIR}/config"
             if [ -f "$rst_config_file" ]; then
-                local DROP_DPI_RST
-                DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$rst_config_file" "0")
-                if [ "$DROP_DPI_RST" = "1" ]; then
-                    printf " RST-фильтр: Включен (пассивный DPI)\n"
-                fi
+                local RST_FILTER
+                RST_FILTER=$(safe_config_read "RST_FILTER" "$rst_config_file" "0")
+                case "$RST_FILTER" in
+                    1|on|true|yes) printf " RST-фильтр: Включен\n" ;;
+                    aggressive|agg|aggro) printf " RST-фильтр: Включен (агрессивный)\n" ;;
+                esac
                 local RKN_SILENT_FALLBACK
                 RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rst_config_file" "0")
                 if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
@@ -886,70 +887,74 @@ menu_rst_filter() {
         return 1
     fi
 
-    local DROP_DPI_RST
-    DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
+    local RST_FILTER
+    RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
+    local rst_on=0
+    case "$RST_FILTER" in 1|on|true|yes|aggressive|agg|aggro) rst_on=1 ;; esac
 
     print_separator
-    print_info "Статус: $([ "$DROP_DPI_RST" = "1" ] && echo 'Включен' || echo 'Выключен')"
+    print_info "Статус: $([ "$rst_on" = "1" ] && echo "Включен ($RST_FILTER)" || echo 'Выключен')"
     print_separator
 
     cat <<'SUBMENU'
 
 ТСПУ (DPI провайдера) отправляет поддельные TCP RST пакеты
 раньше реального ответа сервера, чтобы разорвать соединение.
-Признак: IP Identification 0x0000-0x000F (в реальных пакетах
-это поле случайное).
 
-RST-фильтр блокирует такие пакеты через iptables raw/PREROUTING.
-Это помогает если сайты разрываются сразу после TLS handshake.
+RST-фильтр работает на уровне nfqws и ловит инжекцию через
+три независимые эвристики:
+  • RST до того, как сервер вообще что-то ответил
+  • Несколько RST подряд на одном flow (реальный close = один RST)
+  • TTL не совпадает с TTL предыдущих пакетов сервера
 
-Требуется модуль xt_u32 (есть в Keenetic с Entware).
+Помогает если сайты разрываются сразу после TLS handshake.
+Не требует дополнительных kernel-модулей.
 
-[1] Включить
-[2] Выключить
+[1] Включить (нормальный режим)
+[2] Включить агрессивный (узкая TTL-толерантность, выше FP-риск)
+[3] Выключить
 [B] Назад
 
 SUBMENU
 
-    printf "Выберите опцию [1-2,B]: "
+    printf "Выберите опцию [1-3,B]: "
     read_input sub_choice
+
+    _menu_rst_set_and_restart() {
+        local val="$1"
+        if grep -q '^RST_FILTER=' "$config_file"; then
+            sed -i "s/^RST_FILTER=.*/RST_FILTER=$val/" "$config_file"
+        else
+            echo "RST_FILTER=$val" >> "$config_file"
+        fi
+        if is_zapret2_running; then
+            print_info "Перезапуск сервиса..."
+            "$INIT_SCRIPT" restart
+            print_success "Сервис перезапущен"
+        else
+            print_warning "Сервис не запущен. Запустите через [4] Управление сервисом"
+        fi
+    }
 
     case "$sub_choice" in
         1)
-            if grep -q '^DROP_DPI_RST=' "$config_file"; then
-                sed -i 's/^DROP_DPI_RST=.*/DROP_DPI_RST=1/' "$config_file"
-            else
-                echo "DROP_DPI_RST=1" >> "$config_file"
-            fi
-            print_success "RST-фильтр включен"
-
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-                print_success "Сервис перезапущен с RST-фильтром"
-            else
-                print_warning "Сервис не запущен. Запустите через [4] Управление сервисом"
-            fi
-
+            _menu_rst_set_and_restart "1"
+            print_success "RST-фильтр включен (нормальный режим)"
             pause
             ;;
-
         2)
-            if [ "$DROP_DPI_RST" != "1" ]; then
+            _menu_rst_set_and_restart "aggressive"
+            print_success "RST-фильтр включен (агрессивный режим)"
+            pause
+            ;;
+        3)
+            if [ "$rst_on" != "1" ]; then
                 print_info "Фильтр уже выключен"
                 pause
                 return 0
             fi
-
-            sed -i 's/^DROP_DPI_RST=.*/DROP_DPI_RST=0/' "$config_file"
+            _menu_rst_set_and_restart "0"
             print_success "RST-фильтр выключен"
-
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-                print_success "Сервис перезапущен"
-            fi
-
             pause
             ;;
 

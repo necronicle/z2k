@@ -495,8 +495,8 @@
 
   // ---------- Toggles ----------
   const TOGGLE_DEFS = [
-    { key: "rst_filter", name: "RST фильтр (пассивный DPI)",
-      desc: "Блокирует поддельные TCP RST от ТСПУ через iptables raw/PREROUTING." },
+    { key: "rst_filter", name: "RST-фильтр (пассивный DPI)",
+      desc: "Блокирует поддельные TCP RST от ТСПУ через nfqws — 3 эвристики (pre-response RST, multi-RST burst, TTL mismatch). Не требует kernel-модулей. Может задеть редкие edge cases у Cloudflare — отключите если заметили проблемы с reconnect'ом." },
     { key: "silent_fallback", name: "Silent fallback РКН",
       desc: "Детект «тихих чёрных дыр» РКН. Осторожно — возможны ложные срабатывания." },
     { key: "game_mode", name: "Игровой режим",
