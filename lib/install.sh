@@ -662,15 +662,44 @@ kmod_ndms
             print_error "Не удалось установить критичные пакеты"
             print_warning "zapret2 может не работать без этих пакетов!"
 
-            printf "Продолжить без них? [y/N]: "
-            read -r answer </dev/tty
-            case "$answer" in
-                [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
-                *) return 1 ;;
-            esac
+            # Без TTY (webpanel apply / auto-update / SSH без -t) read падает
+            # с can't open /dev/tty — default ветка abort'ила install и
+            # оставляла систему в broken state (полевой кейс 2026-05-26
+            # после reinstall'а через webpanel). В non-interactive
+            # контексте продолжаем по умолчанию.
+            if [ -t 0 ] && [ -r /dev/tty ]; then
+                printf "Продолжить без них? [y/N]: "
+                read -r answer </dev/tty
+                case "$answer" in
+                    [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
+                    *) return 1 ;;
+                esac
+            else
+                print_warning "Non-interactive контекст — продолжаем без критичных пакетов"
+            fi
         fi
     else
         print_success "Все критичные пакеты уже установлены"
+    fi
+
+    # openssl-util — non-critical install для VPS-refresh Instagram-IP.
+    # Скрипт z2k-insta-ip-refresh.sh использует `openssl dgst -sha256 -hmac`
+    # для подписи запросов к VPS /resolve endpoint. README отправляет
+    # ставить только libopenssl (runtime). Без CLI z2k в целом работает,
+    # только Instagram-IP не подтягиваются с VPS — юзер сидит на shipped
+    # дефолтах (деградация, не отказ). Поэтому НЕ critical: tolerant
+    # error handling, warning при ошибке, install продолжается.
+    if ! opkg list-installed | grep -q "^openssl-util "; then
+        print_info "Ставим openssl-util (для VPS-refresh Instagram-IP)..."
+        opkg update >/dev/null 2>&1
+        if opkg install openssl-util >/dev/null 2>&1; then
+            print_success "openssl-util установлен"
+        else
+            print_warning "openssl-util не установился — Instagram-IP не будет обновляться с VPS"
+            print_warning "(z2k работает, страдает только периодическое обновление инста-edges)"
+        fi
+    else
+        print_success "openssl-util уже установлен"
     fi
 
     print_separator
