@@ -508,23 +508,6 @@ purge_stale_google_state() {
     touch "$marker"
 }
 
-purge_stale_instagram_state() {
-    local state="$EXTRA/cache/autocircular/state.tsv"
-    local marker="$EXTRA/cache/autocircular/.instagram_purge_2026_05_25.done"
-    [ -f "$marker" ] && return 0
-    mkdir -p "$(dirname "$marker")" 2>/dev/null
-    if [ -f "$state" ]; then
-        local tmp="$state.purge.tmp"
-        awk -F'\t' '!($1=="rkn_tcp" && $2=="instagram.com")' "$state" > "$tmp" || {
-            rm -f "$tmp"
-            return 1
-        }
-        cat "$tmp" > "$state" && rm -f "$tmp"
-        log "purged stale 'rkn_tcp instagram.com' state entry (one-shot)"
-    fi
-    touch "$marker"
-}
-
 # --- Fetch all targets ------------------------------------------------------
 
 fetch_all() {
@@ -575,15 +558,6 @@ fetch_all() {
     # storage-cdn.l.google.com (теперь убраны из RKN) ранее писались в state
     # под ключом google.com. Marker гарантирует one-shot — повторно не запустится.
     purge_stale_google_state || log "google state purge: non-fatal failure, continuing"
-
-    # One-shot cleanup: убрать stale `rkn_tcp instagram.com` запись из state.tsv.
-    # До p-34 silent_drop_detector ложно считал browser-cancelled connections
-    # за «обрывы» — за секунды активного скроллинга страта проскакивалась
-    # с 1 до 40+, оставалась залипшей. p-34 fix (browser-cancel bypass)
-    # предотвращает повторение, но застрявшее значение нужно ресетнуть
-    # вручную — autocircular сам не возвращается обратно. Marker гарантирует
-    # one-shot per device.
-    purge_stale_instagram_state || log "instagram state purge: non-fatal failure, continuing"
 
     if [ "$ok_count" = "0" ]; then
         log "all targets failed"
