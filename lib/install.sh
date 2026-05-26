@@ -2235,20 +2235,27 @@ step_finalize() {
         fi
     fi
 
-    # Stop and disable the Vixie cron daemon — z2k no longer uses it,
-    # everything goes through z2k-scheduler.sh. We don't `opkg remove`
-    # the package (it might be a dependency of unrelated entware
-    # software), just keep the binary present but ensure it doesn't
-    # start at boot and isn't running right now. Users can re-enable
-    # via `chmod +x /opt/etc/init.d/S10cron && S10cron start` if they
-    # install something else that needs it.
-    if [ -x /opt/etc/init.d/S10cron ]; then
-        /opt/etc/init.d/S10cron stop >/dev/null 2>&1
-        chmod -x /opt/etc/init.d/S10cron 2>/dev/null
-        print_info "Cron демон остановлен и отключён (z2k теперь использует свой scheduler)"
+    # r-26 стопал+отключал Vixie cron daemon (S10cron stop + chmod -x +
+    # killall cron) на том основании что z2k полностью перешёл на свой
+    # scheduler. Это поломало юзеров с собственными crontab-задачами
+    # (Entware housekeeping, custom скрипты) — field-report @vlallax
+    # 2026-05-26. Фикс: z2k больше не трогает cron daemon, и активно
+    # ВОЗВРАЩАЕТ его в работу у тех, кому ранее отключили — chmod +x
+    # на init-скрипт и start daemon'а. Идемпотентно: если cron уже +x
+    # и/или уже запущен — no-op. Покрывает кейс auto-update apply, где
+    # install.sh запускается без участия юзера.
+    if [ -f /opt/etc/init.d/S10cron ]; then
+        if [ ! -x /opt/etc/init.d/S10cron ]; then
+            chmod +x /opt/etc/init.d/S10cron 2>/dev/null
+            print_info "Системный cron восстановлен (chmod +x S10cron)"
+        fi
+        if ! pidof cron >/dev/null 2>&1; then
+            /opt/etc/init.d/S10cron start >/dev/null 2>&1
+            if pidof cron >/dev/null 2>&1; then
+                print_info "Системный cron daemon запущен"
+            fi
+        fi
     fi
-    # Belt-and-suspenders — kill any lingering cron daemon.
-    killall cron 2>/dev/null || true
 
     # Instagram DNS redirect (Keenetic static DNS).
     # Fresh installs get a minimal one-IP-per-host fallback set so that
