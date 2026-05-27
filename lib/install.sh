@@ -662,44 +662,15 @@ kmod_ndms
             print_error "Не удалось установить критичные пакеты"
             print_warning "zapret2 может не работать без этих пакетов!"
 
-            # Без TTY (webpanel apply / auto-update / SSH без -t) read падает
-            # с can't open /dev/tty — default ветка abort'ила install и
-            # оставляла систему в broken state (полевой кейс 2026-05-26
-            # после reinstall'а через webpanel). В non-interactive
-            # контексте продолжаем по умолчанию.
-            if [ -t 0 ] && [ -r /dev/tty ]; then
-                printf "Продолжить без них? [y/N]: "
-                read -r answer </dev/tty
-                case "$answer" in
-                    [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
-                    *) return 1 ;;
-                esac
-            else
-                print_warning "Non-interactive контекст — продолжаем без критичных пакетов"
-            fi
+            printf "Продолжить без них? [y/N]: "
+            read -r answer </dev/tty
+            case "$answer" in
+                [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
+                *) return 1 ;;
+            esac
         fi
     else
         print_success "Все критичные пакеты уже установлены"
-    fi
-
-    # openssl-util — non-critical install для VPS-refresh Instagram-IP.
-    # Скрипт z2k-insta-ip-refresh.sh использует `openssl dgst -sha256 -hmac`
-    # для подписи запросов к VPS /resolve endpoint. README отправляет
-    # ставить только libopenssl (runtime). Без CLI z2k в целом работает,
-    # только Instagram-IP не подтягиваются с VPS — юзер сидит на shipped
-    # дефолтах (деградация, не отказ). Поэтому НЕ critical: tolerant
-    # error handling, warning при ошибке, install продолжается.
-    if ! opkg list-installed | grep -q "^openssl-util "; then
-        print_info "Ставим openssl-util (для VPS-refresh Instagram-IP)..."
-        opkg update >/dev/null 2>&1
-        if opkg install openssl-util >/dev/null 2>&1; then
-            print_success "openssl-util установлен"
-        else
-            print_warning "openssl-util не установился — Instagram-IP не будет обновляться с VPS"
-            print_warning "(z2k работает, страдает только периодическое обновление инста-edges)"
-        fi
-    else
-        print_success "openssl-util уже установлен"
     fi
 
     print_separator
@@ -2264,27 +2235,20 @@ step_finalize() {
         fi
     fi
 
-    # r-26 стопал+отключал Vixie cron daemon (S10cron stop + chmod -x +
-    # killall cron) на том основании что z2k полностью перешёл на свой
-    # scheduler. Это поломало юзеров с собственными crontab-задачами
-    # (Entware housekeeping, custom скрипты) — field-report @vlallax
-    # 2026-05-26. Фикс: z2k больше не трогает cron daemon, и активно
-    # ВОЗВРАЩАЕТ его в работу у тех, кому ранее отключили — chmod +x
-    # на init-скрипт и start daemon'а. Идемпотентно: если cron уже +x
-    # и/или уже запущен — no-op. Покрывает кейс auto-update apply, где
-    # install.sh запускается без участия юзера.
-    if [ -f /opt/etc/init.d/S10cron ]; then
-        if [ ! -x /opt/etc/init.d/S10cron ]; then
-            chmod +x /opt/etc/init.d/S10cron 2>/dev/null
-            print_info "Системный cron восстановлен (chmod +x S10cron)"
-        fi
-        if ! pidof cron >/dev/null 2>&1; then
-            /opt/etc/init.d/S10cron start >/dev/null 2>&1
-            if pidof cron >/dev/null 2>&1; then
-                print_info "Системный cron daemon запущен"
-            fi
-        fi
+    # Stop and disable the Vixie cron daemon — z2k no longer uses it,
+    # everything goes through z2k-scheduler.sh. We don't `opkg remove`
+    # the package (it might be a dependency of unrelated entware
+    # software), just keep the binary present but ensure it doesn't
+    # start at boot and isn't running right now. Users can re-enable
+    # via `chmod +x /opt/etc/init.d/S10cron && S10cron start` if they
+    # install something else that needs it.
+    if [ -x /opt/etc/init.d/S10cron ]; then
+        /opt/etc/init.d/S10cron stop >/dev/null 2>&1
+        chmod -x /opt/etc/init.d/S10cron 2>/dev/null
+        print_info "Cron демон остановлен и отключён (z2k теперь использует свой scheduler)"
     fi
+    # Belt-and-suspenders — kill any lingering cron daemon.
+    killall cron 2>/dev/null || true
 
     # Instagram DNS redirect (Keenetic static DNS).
     # Fresh installs get a minimal one-IP-per-host fallback set so that
