@@ -88,7 +88,7 @@ https://help.keenetic.com/hc/ru/articles/360021214160
 
 ```bash
 opkg update
-opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addons_legacy libnghttp2
+opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addons_legacy libnghttp2 openssl-util
 ```
 
 ### 3) Установка z2k

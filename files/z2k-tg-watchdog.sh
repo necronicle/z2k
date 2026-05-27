@@ -44,6 +44,33 @@ PROBE_RESOLVE_IP=149.154.167.99
 
 [ -x "$BIN" ] || exit 0
 
+# Size-cap наших /tmp логов чтобы они не забивали tmpfs (на Keenetic /tmp
+# обычно ~244M RAM). tg-tunnel.log на :1443 пишется с -v (verbose) append'ом
+# без ротации — на долгоживущем роутере растёт неделями и в итоге переполняет
+# tmpfs, после чего curl падает с error 23 на следующем install/update и z2k
+# не переустанавливается (field incident 2026-05-28). Watchdog бежит каждую
+# минуту — здесь hard-cap: при превышении лимита оставляем хвост (свежая
+# диагностика сохраняется, рост остановлен). Покрывает рост по любой причине
+# без удаления -v.
+cap_log() {
+    local f="$1" max_kb="${2:-2048}" sz_kb tmp
+    [ -f "$f" ] || return 0
+    sz_kb=$(du -k "$f" 2>/dev/null | awk '{print $1}')
+    [ -n "$sz_kb" ] && [ "$sz_kb" -gt "$max_kb" ] || return 0
+    tmp="${f}.captmp.$$"
+    if tail -n 200 "$f" > "$tmp" 2>/dev/null; then
+        cat "$tmp" > "$f" 2>/dev/null
+        rm -f "$tmp"
+        logger -t tg-watchdog "log capped: $f was ${sz_kb}KB → tail 200 lines" 2>/dev/null
+    else
+        rm -f "$tmp"
+    fi
+}
+cap_log /tmp/tg-tunnel.log 2048
+cap_log /tmp/z2k-http-tunnel.log 2048
+cap_log /tmp/z2k-webpanel-error.log 1024
+cap_log /tmp/z2k-insta-refresh.log 512
+
 # Honor explicit user disable from menu / webpanel. The "stop tunnel"
 # action there sets TG_PROXY_USER_DISABLED=1 in /opt/zapret2/config so
 # the watchdog stops resurrecting the daemon every 3 min.

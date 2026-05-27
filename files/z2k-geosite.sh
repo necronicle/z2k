@@ -510,7 +510,16 @@ purge_stale_google_state() {
 
 purge_stale_instagram_state() {
     local state="$EXTRA/cache/autocircular/state.tsv"
-    local marker="$EXTRA/cache/autocircular/.instagram_purge_2026_05_25.done"
+    # КРИТИЧНО: marker в /opt/etc (persistent Entware root), НЕ в $EXTRA/cache.
+    # Это был корень бага p-38: прежний marker жил в
+    # $EXTRA/cache/autocircular/ который сносится rm/mv "$ZAPRET2_DIR" при
+    # каждом auto-update reinstall → purge срабатывал на КАЖДОМ update,
+    # стирая рабочую instagram-страту (жалоба @jet_sk_ya). Persistent
+    # marker в /opt/etc переживает reinstall → purge действительно one-shot.
+    # Цель purge — однократно сбросить застрявшую (до p-34) instagram.com
+    # страту, залипшую на 40+ из-за browser-cancel false-positive в
+    # silent_drop_detector. После сброса autocircular переподберёт рабочую.
+    local marker="/opt/etc/.z2k-instagram-purge-2026-05-28.done"
     [ -f "$marker" ] && return 0
     mkdir -p "$(dirname "$marker")" 2>/dev/null
     if [ -f "$state" ]; then
@@ -520,7 +529,7 @@ purge_stale_instagram_state() {
             return 1
         }
         cat "$tmp" > "$state" && rm -f "$tmp"
-        log "purged stale 'rkn_tcp instagram.com' state entry (one-shot)"
+        log "purged stale 'rkn_tcp instagram.com' state entry (one-shot, persistent marker)"
     fi
     touch "$marker"
 }
@@ -576,13 +585,10 @@ fetch_all() {
     # под ключом google.com. Marker гарантирует one-shot — повторно не запустится.
     purge_stale_google_state || log "google state purge: non-fatal failure, continuing"
 
-    # One-shot cleanup: убрать stale `rkn_tcp instagram.com` запись из state.tsv.
-    # До p-34 silent_drop_detector ложно считал browser-cancelled connections
-    # за «обрывы» — за секунды активного скроллинга страта проскакивалась
-    # с 1 до 40+, оставалась залипшей. p-34 fix (browser-cancel bypass)
-    # предотвращает повторение, но застрявшее значение нужно ресетнуть
-    # вручную — autocircular сам не возвращается обратно. Marker гарантирует
-    # one-shot per device.
+    # One-shot (persistent marker в /opt/etc) сброс застрявшей до-p-34
+    # instagram.com страты. Marker переживает reinstall — в отличие от
+    # удалённого в p-38 варианта, который purg'ил каждый update. Targeted:
+    # трогает только запись rkn_tcp/instagram.com, остальной state цел.
     purge_stale_instagram_state || log "instagram state purge: non-fatal failure, continuing"
 
     if [ "$ok_count" = "0" ]; then

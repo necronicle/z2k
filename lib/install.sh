@@ -37,7 +37,21 @@ deploy_critical_file() {
     local mode="${3:-755}"
     local work_src="${WORK_DIR}/${src}"
 
-    if [ -f "$work_src" ]; then
+    # Снапшот внешнего target'а перед перезаписью (для rollback). no-op
+    # вне transactional-окна и для путей внутри ${ZAPRET2_DIR}. Если снапшот
+    # не удался В transactional-окне (disk-full) — НЕ перезаписываем external,
+    # возвращаем 1: лучше abort+rollback чем перезапись без возможности отката.
+    if ! z2k_snapshot_external "$dst"; then
+        print_error "  ↳ ${dst##*/}: снапшот для отката не удался — пропускаю перезапись"
+        return 1
+    fi
+
+    # -s (non-empty) вместо -f: torn cache from interrupted prior fetch
+    # leaves a 0-byte file in WORK_DIR which would otherwise satisfy -f
+    # and silently install an empty target — same failure mode as missing
+    # source, just harder to diagnose. Empty source → fall through to
+    # network fallback below.
+    if [ -s "$work_src" ]; then
         cp -f "$work_src" "$dst" 2>/dev/null && chmod "$mode" "$dst" 2>/dev/null && return 0
     fi
     if command -v z2k_fetch >/dev/null 2>&1; then
@@ -58,6 +72,115 @@ deploy_critical_file() {
     fi
     print_warning "  ↳ ${dst##*/}: failed to deploy from WORK_DIR or GitHub" 2>/dev/null
     return 1
+}
+
+# ==============================================================================
+# Transactional install: old-tree backup + restore
+# ==============================================================================
+# step_build_zapret2 переименовывает (mv, не rm -rf) старое ${ZAPRET2_DIR}
+# в ${ZAPRET2_DIR}.old.$$ и кладёт путь в $Z2K_OLD_TREE_BACKUP. mv мгновенен
+# и не требует доп. места (rename на том же fs). Любой пост-delete failure
+# (steps 6-12 или hostlist install внутри step 5) восстанавливает старое
+# дерево вместо того чтобы оставить router полу-установленным. На полный
+# success — z2k_commit_install удаляет backup. Codex review 2026-05-28:
+# avoid die after destructive steps; restore previous install on failure.
+# Snapshot внешнего (вне ${ZAPRET2_DIR}) файла перед его перезаписью, чтобы
+# rollback мог вернуть прежнюю версию ИЛИ удалить новый файл если его раньше
+# не было. Idempotent: первый снапшот фиксирует ИСХОДНОЕ состояние, повторные
+# вызовы no-op. Без активного transactional-окна ($Z2K_OLD_TREE_BACKUP не
+# задан) — no-op. Файлы ВНУТРИ дерева покрыты mv-бэкапом, их не дублируем.
+z2k_snapshot_external() {
+    local target="$1"
+    [ -n "${Z2K_OLD_TREE_BACKUP:-}" ] || return 0
+    case "$target" in
+        "${ZAPRET2_DIR}"/*) return 0 ;;
+    esac
+    local snap_dir="${Z2K_OLD_TREE_BACKUP}.ext"
+    # mandatory: на mkdir/cp/marker fail возвращаем non-zero, чтобы callsite
+    # прервал перезапись external-файла ДО мутации. Иначе (Codex 2026-05-28)
+    # под disk-full /opt снапшот молча не создаётся, external перезаписывается,
+    # а rollback потом восстановит дерево но оставит несовместимые новые
+    # init-скрипты — и отрапортует успех.
+    if ! mkdir -p "$snap_dir" 2>/dev/null; then
+        print_error "snapshot: не удалось создать ${snap_dir} (нет места в /opt?)"
+        return 1
+    fi
+    local flat
+    flat=$(printf '%s' "$target" | sed 's|/|__|g')
+    if [ -e "${snap_dir}/${flat}" ] || [ -e "${snap_dir}/${flat}.absent" ]; then
+        return 0
+    fi
+    if [ -e "$target" ]; then
+        if ! cp -a "$target" "${snap_dir}/${flat}" 2>/dev/null; then
+            print_error "snapshot: не удалось скопировать ${target} в backup (нет места?)"
+            return 1
+        fi
+    else
+        if ! : > "${snap_dir}/${flat}.absent" 2>/dev/null; then
+            print_error "snapshot: не удалось создать absent-marker для ${target}"
+            return 1
+        fi
+    fi
+    return 0
+}
+z2k_restore_external() {
+    local snap_dir="${Z2K_OLD_TREE_BACKUP:-}.ext"
+    [ -n "${Z2K_OLD_TREE_BACKUP:-}" ] && [ -d "$snap_dir" ] || return 0
+    local f flat target rc=0
+    for f in "$snap_dir"/*; do
+        [ -e "$f" ] || continue
+        case "$f" in
+            *.absent)
+                flat=$(basename "$f" .absent)
+                target=$(printf '%s' "$flat" | sed 's|__|/|g')
+                rm -f "$target" 2>/dev/null || { print_warning "restore: не удалось удалить новый ${target}"; rc=1; }
+                ;;
+            *)
+                flat=$(basename "$f")
+                target=$(printf '%s' "$flat" | sed 's|__|/|g')
+                cp -a "$f" "$target" 2>/dev/null || { print_warning "restore: не удалось вернуть ${target} из backup"; rc=1; }
+                ;;
+        esac
+    done
+    return $rc
+}
+z2k_restore_old_tree() {
+    [ -n "${Z2K_OLD_TREE_BACKUP:-}" ] && [ -d "$Z2K_OLD_TREE_BACKUP" ] || return 1
+    print_error "Восстановление предыдущей рабочей установки из ${Z2K_OLD_TREE_BACKUP}..."
+    local _ext_ok=1
+    # 1. Внешние файлы (init-скрипты, NDM-хуки) — вернуть к исходному
+    #    состоянию ДО возврата дерева, чтобы restored дерево и external
+    #    скрипты были консистентны.
+    z2k_restore_external || _ext_ok=0
+    # 2. Само дерево /opt/zapret2.
+    rm -rf "$ZAPRET2_DIR" 2>/dev/null
+    if mv "$Z2K_OLD_TREE_BACKUP" "$ZAPRET2_DIR" 2>/dev/null; then
+        if [ "$_ext_ok" = "1" ]; then
+            print_success "Предыдущая установка восстановлена полностью — сервис продолжит работать на ней."
+        else
+            print_error "Дерево восстановлено, но часть external-файлов (init/NDM) вернуть не удалось."
+            print_error "Проверьте /opt/etc/init.d вручную — могут остаться несовместимые новые скрипты."
+        fi
+        # 3. Рестарт ключевых daemon'ов из восстановленного дерева, чтобы
+        #    в память загрузился старый (рабочий) код, а не новый частичный.
+        local _svc
+        for _svc in S99zapret2 S99z2k-scheduler S98tg-tunnel S97z2k-http-tunnel S98z2k-detect; do
+            [ -x "/opt/etc/init.d/${_svc}" ] && /opt/etc/init.d/${_svc} restart >/dev/null 2>&1
+        done
+        rm -rf "${Z2K_OLD_TREE_BACKUP}.ext" 2>/dev/null
+        unset Z2K_OLD_TREE_BACKUP
+        [ "$_ext_ok" = "1" ]
+        return
+    fi
+    print_error "КРИТИЧНО: не удалось восстановить ${Z2K_OLD_TREE_BACKUP} → ${ZAPRET2_DIR}."
+    print_error "Старое дерево лежит в ${Z2K_OLD_TREE_BACKUP}, восстановите вручную: mv этой папки в ${ZAPRET2_DIR}."
+    return 1
+}
+z2k_commit_install() {
+    if [ -n "${Z2K_OLD_TREE_BACKUP:-}" ]; then
+        rm -rf "$Z2K_OLD_TREE_BACKUP" "${Z2K_OLD_TREE_BACKUP}.ext" 2>/dev/null
+        unset Z2K_OLD_TREE_BACKUP
+    fi
 }
 
 # ==============================================================================
@@ -483,8 +606,16 @@ EOF
 Обычно это безопасно, если пакеты уже установлены.
 EOF
         fi
+        # Non-interactive: продолжаем (opkg update не критичен — пакеты
+        # обычно уже установлены, а если нет, упадём ниже с понятной
+        # ошибкой). Auto-install policy: не зависаем на prompt.
+        if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+            print_info "Non-interactive — продолжаем без opkg update (пакеты обычно закешированы)"
+            answer="y"
+        else
         printf "\nПродолжить без opkg update? [Y/n]: "
         read -r answer </dev/tty
+        fi
 
         case "$answer" in
             [Nn]|[Nn][Oo])
@@ -531,8 +662,18 @@ step_check_dns() {
         print_warning "  3. Блокировка РКН (bin.entware.net, github.com)"
         print_separator
 
+        # Non-interactive: продолжаем — z2k_fetch имеет ndmc DNS-override
+        # fallback (резолв через 8.8.8.8 + `ndmc ip host`), поэтому даже без
+        # системного DNS скачивание может пройти. Если всё мёртво — упадём
+        # ниже на download с понятной ошибкой (для диагностики). Auto-install
+        # policy: пытаемся найти путь, а не abort'имся на prompt.
+        if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+            print_warning "Non-interactive — продолжаем без системного DNS (надежда на z2k_fetch ndmc-fallback)"
+            answer="y"
+        else
         printf "Продолжить установку без работающего DNS? [y/N]: "
         read -r answer </dev/tty
+        fi
 
         case "$answer" in
             [Yy]*)
@@ -662,15 +803,54 @@ kmod_ndms
             print_error "Не удалось установить критичные пакеты"
             print_warning "zapret2 может не работать без этих пакетов!"
 
-            printf "Продолжить без них? [y/N]: "
-            read -r answer </dev/tty
-            case "$answer" in
-                [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
-                *) return 1 ;;
-            esac
+            # Без TTY (webpanel apply / auto-update / SSH без -t) read падает
+            # с can't open /dev/tty под `set -e` — r-39 fix добавил guard
+            # чтобы install не обрывался посередине. Но "просто продолжить"
+            # в non-interactive контексте оставляет router в полу-сломанном
+            # состоянии (без ipset не работает обход, см. Codex review
+            # 2026-05-27). Fail closed: в non-interactive без override —
+            # abort до destructive step_build_zapret2. Override через env
+            # Z2K_ALLOW_INCOMPLETE_DEPS=1 для случаев когда юзер явно знает
+            # что делает (например, если ipset уже стоит из другого пакета).
+            if [ -t 0 ] && [ -r /dev/tty ]; then
+                printf "Продолжить без них? [y/N]: "
+                read -r answer </dev/tty
+                case "$answer" in
+                    [Yy]*) print_warning "Продолжаем на свой страх и риск..." ;;
+                    *) return 1 ;;
+                esac
+            elif [ "${Z2K_ALLOW_INCOMPLETE_DEPS:-0}" = "1" ]; then
+                print_warning "Z2K_ALLOW_INCOMPLETE_DEPS=1 override — продолжаем без критичных пакетов"
+            else
+                print_error "Non-interactive контекст: критичные пакеты не установлены."
+                print_error "Установка прервана до destructive шагов чтобы не сломать рабочий router."
+                print_error "Проверьте интернет/opkg feeds и запустите снова, либо exec'ните"
+                print_error "Z2K_ALLOW_INCOMPLETE_DEPS=1 sh z2k.sh install если хотите проигнорировать."
+                return 1
+            fi
         fi
     else
         print_success "Все критичные пакеты уже установлены"
+    fi
+
+    # openssl-util — non-critical install для VPS-refresh Instagram-IP.
+    # Скрипт z2k-insta-ip-refresh.sh использует `openssl dgst -sha256 -hmac`
+    # для подписи запросов к VPS /resolve endpoint. README отправляет
+    # ставить только libopenssl (runtime). Без CLI z2k в целом работает,
+    # только Instagram-IP не подтягиваются с VPS — юзер сидит на shipped
+    # дефолтах (деградация, не отказ). Поэтому НЕ critical: tolerant
+    # error handling, warning при ошибке, install продолжается.
+    if ! opkg list-installed | grep -q "^openssl-util "; then
+        print_info "Ставим openssl-util (для VPS-refresh Instagram-IP)..."
+        opkg update >/dev/null 2>&1
+        if opkg install openssl-util >/dev/null 2>&1; then
+            print_success "openssl-util установлен"
+        else
+            print_warning "openssl-util не установился — Instagram-IP не будет обновляться с VPS"
+            print_warning "(z2k работает, страдает только периодическое обновление инста-edges)"
+        fi
+    else
+        print_success "openssl-util уже установлен"
     fi
 
     print_separator
@@ -688,20 +868,28 @@ kmod_ndms
     if command -v gzip >/dev/null 2>&1; then
         if readlink "$(command -v gzip)" 2>/dev/null | grep -q busybox; then
             print_info "Обнаружен busybox gzip (медленный, ~3x медленнее GNU)"
-            printf "Установить GNU gzip для ускорения обработки списков? [y/N]: "
-            read -r answer </dev/tty
-            case "$answer" in
-                [Yy]*)
-                    if opkg install --force-overwrite gzip; then
-                        print_success "GNU gzip установлен"
-                    else
-                        print_warning "Не удалось установить GNU gzip"
-                    fi
-                    ;;
-                *)
-                    print_info "Пропускаем установку GNU gzip"
-                    ;;
-            esac
+            if [ -t 0 ] && [ -r /dev/tty ]; then
+                printf "Установить GNU gzip для ускорения обработки списков? [y/N]: "
+                read -r answer </dev/tty
+                case "$answer" in
+                    [Yy]*)
+                        if opkg install --force-overwrite gzip; then
+                            print_success "GNU gzip установлен"
+                        else
+                            print_warning "Не удалось установить GNU gzip"
+                        fi
+                        ;;
+                    *)
+                        print_info "Пропускаем установку GNU gzip"
+                        ;;
+                esac
+            else
+                # Non-interactive (webpanel apply / auto-update / SSH без -t):
+                # без TTY guard `read </dev/tty` падал с can't open под `set -e`
+                # и обрывал install посередине (см. r-39 fix для critical packages).
+                # Optional opt-in — пропускаем без вопроса.
+                print_info "Non-interactive контекст — пропускаем установку GNU gzip"
+            fi
         fi
     fi
 
@@ -709,20 +897,24 @@ kmod_ndms
     if command -v sort >/dev/null 2>&1; then
         if readlink "$(command -v sort)" 2>/dev/null | grep -q busybox; then
             print_info "Обнаружен busybox sort (медленный, использует много RAM)"
-            printf "Установить GNU sort для ускорения? [y/N]: "
-            read -r answer </dev/tty
-            case "$answer" in
-                [Yy]*)
-                    if opkg install --force-overwrite coreutils-sort; then
-                        print_success "GNU sort установлен"
-                    else
-                        print_warning "Не удалось установить GNU sort"
-                    fi
-                    ;;
-                *)
-                    print_info "Пропускаем установку GNU sort"
-                    ;;
-            esac
+            if [ -t 0 ] && [ -r /dev/tty ]; then
+                printf "Установить GNU sort для ускорения? [y/N]: "
+                read -r answer </dev/tty
+                case "$answer" in
+                    [Yy]*)
+                        if opkg install --force-overwrite coreutils-sort; then
+                            print_success "GNU sort установлен"
+                        else
+                            print_warning "Не удалось установить GNU sort"
+                        fi
+                        ;;
+                    *)
+                        print_info "Пропускаем установку GNU sort"
+                        ;;
+                esac
+            else
+                print_info "Non-interactive контекст — пропускаем установку GNU sort"
+            fi
         fi
     fi
 
@@ -795,23 +987,95 @@ download_openwrt_embedded_release() {
 step_build_zapret2() {
     print_header "Шаг 5/12: Установка zapret2"
 
+    # Pre-flight hostlist availability check. Stage critical snapshots в /tmp
+    # BEFORE мы трогаем ${ZAPRET2_DIR} — если ни WORK_DIR ни GitHub-fallback
+    # не доступны, прерываем install ДО `rm -rf` чтобы рабочая установка
+    # юзера не превратилась в полу-сломанный остаток. Codex review 2026-05-27
+    # flagged предыдущую логику: deploy_critical_file → die после rm -rf
+    # оставлял router в un-restorable состоянии. Эта стадия — read-only:
+    # на failure ничего не модифицирует, только cleanup'ит свой /tmp dir.
+    # Staging под WORK_DIR: при USB-fallback (Z2K_WORKDIR_ON_OPT=1) WORK_DIR
+    # уже на /opt, значит и prefetch уйдёт на USB, а не в переполненный /tmp
+    # (Codex 2026-05-28: иначе fallback неполный — большие списки всё равно
+    # стейджатся в tmpfs и install падает в том самом low-/tmp сценарии).
+    local _stage_base="${WORK_DIR:-/tmp/z2k}"
+    mkdir -p "$_stage_base" 2>/dev/null
+    local _prefetch_dir="${_stage_base}/prefetch-lists.$$"
+    rm -rf "$_prefetch_dir"
+    mkdir -p "$_prefetch_dir" || die "Не удалось создать staging директорию ${_prefetch_dir}"
+    local _hostlist _src_work _stage_dst
+    for _hostlist in \
+        files/lists/extra_strats/TCP/YT/List.txt \
+        files/lists/extra_strats/TCP/YT_GV/List.txt \
+        files/lists/extra_strats/TCP/RKN/List.txt \
+        files/lists/extra_strats/UDP/YT/List.txt; do
+        _src_work="${WORK_DIR}/${_hostlist}"
+        # Encode path into a flat filename: extra_strats__TCP__YT__List.txt etc.
+        # Avoids nested mkdir noise в staging dir; full path хранится в map ниже.
+        _stage_dst="${_prefetch_dir}/$(printf '%s' "${_hostlist#files/lists/}" | tr '/' '_')"
+        if [ -s "$_src_work" ]; then
+            cp -f "$_src_work" "$_stage_dst" 2>/dev/null
+        fi
+        if [ ! -s "$_stage_dst" ]; then
+            if command -v z2k_fetch >/dev/null 2>&1; then
+                z2k_fetch "/${_hostlist}" "$_stage_dst" 2>/dev/null
+                rm -f "${_stage_dst}.etag" 2>/dev/null
+            fi
+        fi
+        if [ ! -s "$_stage_dst" ]; then
+            rm -rf "$_prefetch_dir"
+            die "Pre-flight: критичный hostlist ${_hostlist} не доступен ни из WORK_DIR, ни через GitHub fallback (raw/jsdelivr/gh-proxy). Установка прервана БЕЗ удаления существующей копии — проверьте интернет/DNS/CDN и запустите снова. Текущая установка не тронута."
+        fi
+    done
+    # Same for non-critical Discord.txt — staging без fail (warning later).
+    local _src_discord="${WORK_DIR}/files/lists/extra_strats/TCP/RKN/Discord.txt"
+    local _stage_discord="${_prefetch_dir}/extra_strats_TCP_RKN_Discord.txt"
+    if [ -s "$_src_discord" ]; then
+        cp -f "$_src_discord" "$_stage_discord" 2>/dev/null
+    fi
+    if [ ! -s "$_stage_discord" ] && command -v z2k_fetch >/dev/null 2>&1; then
+        z2k_fetch "/files/lists/extra_strats/TCP/RKN/Discord.txt" "$_stage_discord" 2>/dev/null
+        rm -f "${_stage_discord}.etag" 2>/dev/null
+    fi
+    export Z2K_PREFETCH_LISTS_DIR="$_prefetch_dir"
+
     # Сохранить пользовательские данные перед удалением
-    local backup_tmp="/tmp/z2k_upgrade_backup"
+    local backup_tmp="/opt/z2k-upgrade-backup"
     rm -rf "$backup_tmp"
     if [ -d "$ZAPRET2_DIR" ]; then
         print_info "Сохранение пользовательских настроек..."
-        mkdir -p "$backup_tmp"
-        # Config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK и др.)
-        [ -f "$ZAPRET2_DIR/config" ] && cp -f "$ZAPRET2_DIR/config" "$backup_tmp/config"
-        # Whitelist (пользовательские исключения)
-        [ -f "$ZAPRET2_DIR/lists/whitelist.txt" ] && cp -f "$ZAPRET2_DIR/lists/whitelist.txt" "$backup_tmp/whitelist.txt"
+        if ! mkdir -p "$backup_tmp"; then
+            die "Не удалось создать каталог бэкапа ${backup_tmp} — установка прервана БЕЗ удаления текущей (нет места на /opt?). Ваши настройки не тронуты."
+        fi
+        # Config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK и др.) — critical
+        # user state. Backup идёт ДО mv старого дерева; если config есть, но
+        # скопировать не удалось — abort, иначе commit (delete old) безвозвратно
+        # потеряет настройки (Codex 2026-05-28). На /opt место есть почти
+        # всегда, но проверяем явно.
+        if [ -f "$ZAPRET2_DIR/config" ]; then
+            cp -f "$ZAPRET2_DIR/config" "$backup_tmp/config" || \
+                die "Не удалось сохранить config в бэкап — установка прервана до удаления текущей, чтобы не потерять ваши настройки."
+        fi
+        # Whitelist (пользовательские исключения) — невосстановимый user-data,
+        # backup обязателен. Если есть но не скопировался — abort до mv старого
+        # дерева, иначе commit его сотрёт безвозвратно (Codex 2026-05-28).
+        if [ -f "$ZAPRET2_DIR/lists/whitelist.txt" ]; then
+            cp -f "$ZAPRET2_DIR/lists/whitelist.txt" "$backup_tmp/whitelist.txt" || \
+                die "Не удалось сохранить whitelist в бэкап — установка прервана, чтобы не потерять ваши исключения."
+        fi
         # extra-domains.txt — юзерские добавки (echo >> extra-domains.txt).
-        # Бекапим до rm -rf, потом diff'нем против shipped и user-only
-        # строки append'нем поверх свежей shipped версии.
-        [ -f "$ZAPRET2_DIR/lists/extra-domains.txt" ] && cp -f "$ZAPRET2_DIR/lists/extra-domains.txt" "$backup_tmp/extra-domains.txt"
-        # Autocircular state (найденные рабочие стратегии)
-        [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" ] && \
-            cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv"
+        # Тоже невосстановимый user-data — backup обязателен.
+        if [ -f "$ZAPRET2_DIR/lists/extra-domains.txt" ]; then
+            cp -f "$ZAPRET2_DIR/lists/extra-domains.txt" "$backup_tmp/extra-domains.txt" || \
+                die "Не удалось сохранить extra-domains в бэкап — установка прервана, чтобы не потерять ваши домены."
+        fi
+        # Autocircular state (найденные рабочие стратегии) — recoverable
+        # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
+        # warn и продолжаем, не блокируя установку ради cache.
+        if [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" ]; then
+            cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv" || \
+                print_warning "Не удалось сохранить state.tsv — стратегии переподберутся автоматически после установки."
+        fi
         # Strategy.txt — shipped, не user-owned. Не бэкапим: при реустановке/апдейте
         # свежая shipped-версия из репо побеждает (см. feedback_z2k_user_overrides_policy).
         # Silent fallback flag
@@ -857,13 +1121,28 @@ step_build_zapret2() {
             fi
         fi
 
-        print_info "Удаление старой установки..."
-        rm -rf "$ZAPRET2_DIR"
-        print_success "Старая установка удалена"
+        # Transactional: переименовываем (не rm -rf) старое дерево в .old.$$
+        # чтобы можно было откатиться если любой шаг ниже провалится. mv
+        # мгновенен и не требует доп. места (rename на том же fs). На
+        # success — z2k_commit_install (в run_full_install) удалит backup.
+        print_info "Сохранение старой установки для отката (mv → .old)..."
+        local _old_tree="${ZAPRET2_DIR}.old.$$"
+        rm -rf "$_old_tree" 2>/dev/null
+        if mv "$ZAPRET2_DIR" "$_old_tree" 2>/dev/null; then
+            export Z2K_OLD_TREE_BACKUP="$_old_tree"
+            print_success "Старая установка отложена в ${_old_tree} (откат при сбое)"
+        else
+            # mv не сработал (cross-device? обычно не на Entware) — fallback
+            # на rm -rf. Тогда отката не будет, но это редчайший edge.
+            print_warning "mv старого дерева не удался — удаляю напрямую (откат будет недоступен)"
+            rm -rf "$ZAPRET2_DIR"
+            unset Z2K_OLD_TREE_BACKUP
+        fi
     fi
 
-    # Создать временную директорию
-    local build_dir="/tmp/zapret2_build"
+    # Создать временную директорию для распаковки tarball. Под staging base
+    # (= WORK_DIR): при USB-fallback уходит на /opt, не в переполненный /tmp.
+    local build_dir="${_stage_base:-/tmp}/zapret2_build"
     rm -rf "$build_dir"
     mkdir -p "$build_dir"
 
@@ -1254,6 +1533,70 @@ step_build_zapret2() {
         # Strip CRLF from list files
         find "${ZAPRET2_DIR}" -name "*.txt" -path "*/extra_strats/*" -exec sed -i 's/\r$//' {} + 2>/dev/null || true
     fi
+
+    # Hostlist install from prefetch staging. Pre-flight в начале
+    # step_build_zapret2 (до rm -rf) уже гарантировал что 4 критичных
+    # snapshot'a доступны и non-empty в ${Z2K_PREFETCH_LISTS_DIR}. Здесь
+    # разворачиваем staged copies в финальную директорию И проверяем
+    # каждую критичную после copy. Codex review 2026-05-27: pre-flight
+    # доказывает только readability ДО reinstall'а — он не гарантирует
+    # что финальный cp в /opt/zapret2 успешен (disk full, права, потеря
+    # staging). Поэтому для 4 критичных: cp → verify non-empty → если
+    # пусто, retry прямой z2k_fetch в финальный путь → если и это пусто,
+    # die. Direct-fetch retry recoverable (восстановит если staging
+    # потерялся но сеть жива); die наступает только когда staging +
+    # direct fetch ОБА провалились = реально нет ни локального источника
+    # ни сети, router всё равно нерабочий, лучше явная ошибка чем
+    # silent --hostlist=<empty>.
+    local _prefetch="${Z2K_PREFETCH_LISTS_DIR:-/tmp/z2k-prefetch-lists.$$}"
+    local _hostlist _stage_src _dst _flat
+    for _hostlist in \
+        files/lists/extra_strats/TCP/YT/List.txt \
+        files/lists/extra_strats/TCP/YT_GV/List.txt \
+        files/lists/extra_strats/TCP/RKN/List.txt \
+        files/lists/extra_strats/UDP/YT/List.txt; do
+        _dst="${ZAPRET2_DIR}/${_hostlist}"
+        if [ -s "$_dst" ]; then continue; fi
+        mkdir -p "$(dirname "$_dst")" 2>/dev/null
+        _flat=$(printf '%s' "${_hostlist#files/lists/}" | tr '/' '_')
+        _stage_src="${_prefetch}/${_flat}"
+        # 1. staging copy
+        if [ -s "$_stage_src" ]; then
+            cp -f "$_stage_src" "$_dst" 2>/dev/null && chmod 644 "$_dst" 2>/dev/null
+        fi
+        # 2. post-copy verify; на пусто — direct fetch в финальный путь
+        if [ ! -s "$_dst" ] && command -v z2k_fetch >/dev/null 2>&1; then
+            print_warning "Hostlist: ${_hostlist##*/} пуст после staging-copy — пробую прямой fetch..."
+            z2k_fetch "/${_hostlist}" "$_dst" 2>/dev/null && rm -f "${_dst}.etag" 2>/dev/null
+        fi
+        # 3. финальная проверка — если всё ещё пусто, fail closed через
+        # return 1. run_full_install ловит non-zero из step_build_zapret2
+        # и вызывает z2k_restore_old_tree — router откатится на предыдущую
+        # рабочую установку, а не останется полу-собранным.
+        if [ ! -s "$_dst" ]; then
+            print_error "Критичный hostlist ${_hostlist} не установлен: ни staging-copy, ни прямой fetch не дали непустой файл."
+            print_error "Вероятно нет места в /opt или недоступен GitHub — откат на предыдущую установку."
+            return 1
+        fi
+    done
+    # Non-critical Discord TCP RKN leg: staging copy + direct-fetch retry,
+    # но БЕЗ die — без него основной RKN-обход работает, страдает только
+    # Discord-domain ветка внутри rkn_tcp профиля.
+    _dst="${ZAPRET2_DIR}/files/lists/extra_strats/TCP/RKN/Discord.txt"
+    if [ ! -s "$_dst" ]; then
+        mkdir -p "$(dirname "$_dst")" 2>/dev/null
+        _stage_src="${_prefetch}/extra_strats_TCP_RKN_Discord.txt"
+        if [ -s "$_stage_src" ]; then
+            cp -f "$_stage_src" "$_dst" 2>/dev/null && chmod 644 "$_dst" 2>/dev/null
+        fi
+        if [ ! -s "$_dst" ] && command -v z2k_fetch >/dev/null 2>&1; then
+            z2k_fetch "/files/lists/extra_strats/TCP/RKN/Discord.txt" "$_dst" 2>/dev/null && rm -f "${_dst}.etag" 2>/dev/null
+        fi
+        [ -s "$_dst" ] || print_warning "Hostlist: Discord.txt не установлен — Discord-leg в RKN-профиле no-op (основной RKN-обход работает)."
+    fi
+    # Cleanup prefetch staging.
+    rm -rf "$_prefetch" 2>/dev/null
+    unset Z2K_PREFETCH_LISTS_DIR
 
     # Copy IP lists (Roblox, Telegram) + extra-domains.txt (shipped extras
     # from files/lists/ that z2k curates on top of runetfreedom RKN list).
@@ -1710,13 +2053,6 @@ step_download_domain_lists() {
         return 1
     }
 
-    # Доп. проверка: список QUIC YT (zapret4rocket)
-    local yt_quic_list="/opt/zapret2/extra_strats/UDP/YT/List.txt"
-    if [ ! -s "$yt_quic_list" ]; then
-        print_warning "QUIC YT list not found after local snapshot copy: $yt_quic_list"
-        print_warning "Install snapshot files first (files/lists/extra_strats/UDP/YT/List.txt)"
-    fi
-
     # Phase 12: replace shipped snapshots with fresh runetfreedom
     # geosite data. shipped 125k → runetfreedom ru-blocked.txt (or
     # ru-blocked-all on 1 GB+ routers, selected by z2k-geosite.sh
@@ -1730,6 +2066,32 @@ step_download_domain_lists() {
     else
         print_warning "z2k-geosite.sh не найден, пропускаю geosite fetch"
     fi
+
+    # Post-copy validation критичных LIVE hostlists (production-blocking).
+    # ВАЖНО: выполняется ПОСЛЕ geosite fetch — он перезаписывает те же
+    # ${ZAPRET2_DIR}/extra_strats/*/List.txt (ru-blocked в RKN, subtract
+    # googlevideo из YT). Codex review 2026-05-28: если validation до
+    # geosite, а geosite затем нормализует список в пустой (битый upstream
+    # формат / regression в subtract-логике) — nfqws2 получит пустой
+    # --hostlist уже ПОСЛЕ пройденного guard'а. Проверяя финальное
+    # состояние после всех list-writer'ов, ловим и copy-failure (snapshot→
+    # live), и geosite-corruption. fail closed через return 1 (не die):
+    # `step_download_domain_lists || return 1` → install прерывается честно,
+    # run_full_install откатит на предыдущую установку (z2k_restore_old_tree),
+    # сервис не стартует с пустыми списками.
+    local _live_hostlist
+    for _live_hostlist in \
+        "${ZAPRET2_DIR}/extra_strats/TCP/YT/List.txt" \
+        "${ZAPRET2_DIR}/extra_strats/TCP/YT_GV/List.txt" \
+        "${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt" \
+        "${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt"; do
+        if [ ! -s "$_live_hostlist" ]; then
+            print_error "Критичный live-hostlist пуст/отсутствует после geosite: ${_live_hostlist}"
+            print_error "Либо copy snapshot→live не удался (нет места/права), либо geosite перезаписал список в пустой."
+            print_error "Установка прервана — сервис НЕ будет запущен с пустыми --hostlist (откат на предыдущую версию)."
+            return 1
+        fi
+    done
 
     create_base_config || {
         print_error "Не удалось создать конфигурацию"
@@ -1913,6 +2275,7 @@ step_tcp_tuning() {
     # Персистентность между ребутами через Entware init.d.
     # S02 стартует рано — до любых сетевых демонов.
     local tune_script="/opt/etc/init.d/S02z2k-tcp-tuning"
+    z2k_snapshot_external "$tune_script" || { print_error "Снапшот ${tune_script} для отката не удался — прерываю"; return 1; }
     cat > "$tune_script" <<'EOF'
 #!/bin/sh
 # z2k TCP tuning — applied on every boot.
@@ -1991,6 +2354,7 @@ step_create_config_and_init() {
     # Скопировать init скрипт из дистрибутива
     print_info "Копирование init скрипта..."
 
+    z2k_snapshot_external "$INIT_SCRIPT" || { print_error "Снапшот init-скрипта для отката не удался — прерываю"; return 1; }
     if [ -f "${WORK_DIR}/files/S99zapret2.new" ]; then
         cp -f "${WORK_DIR}/files/S99zapret2.new" "$INIT_SCRIPT" || {
             print_error "Не удалось скопировать init скрипт"
@@ -2037,6 +2401,7 @@ step_install_netfilter_hook() {
 
     local hook_file="${hook_dir}/000-zapret2.sh"
 
+    z2k_snapshot_external "$hook_file" || { print_error "Снапшот netfilter-хука для отката не удался — прерываю"; return 1; }
     # Скопировать хук из files/
     if [ -f "${WORK_DIR}/files/000-zapret2.sh" ]; then
         cp "${WORK_DIR}/files/000-zapret2.sh" "$hook_file" || {
@@ -2137,7 +2502,7 @@ step_finalize() {
     # would affect Z2K_DYNAMIC_TTL and other flags that gate later
     # actions in step_finalize.
     # =====================================================================
-    local backup_tmp_early="/tmp/z2k_upgrade_backup"
+    local backup_tmp_early="/opt/z2k-upgrade-backup"
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
         grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
@@ -2223,32 +2588,60 @@ step_finalize() {
     # One-shot purge of dead Vixie cron lines from previous installs.
     # Both locations: user spool (which Vixie reads but doesn't reload)
     # and /opt/etc/crontab (which Vixie ignores entirely).
+    local _purged_z2k_cron=0
     if command -v crontab >/dev/null 2>&1; then
         local cron_regex='get_config\.sh|z2k-update-lists\.sh|z2k-classify-drift\.sh|z2k-auto-update\.sh|z2k-nightly-probe\.sh'
-        crontab -l 2>/dev/null | grep -vE "$cron_regex" | crontab - 2>/dev/null
+        if crontab -l 2>/dev/null | grep -qE "$cron_regex"; then
+            crontab -l 2>/dev/null | grep -vE "$cron_regex" | crontab - 2>/dev/null
+            _purged_z2k_cron=1
+        fi
         z2k_fix_cron_perms 2>/dev/null
     fi
     if [ -f /opt/etc/crontab ]; then
         if grep -qE "get_config\.sh|z2k-update-lists\.sh|z2k-auto-update\.sh|z2k-classify-drift\.sh" /opt/etc/crontab 2>/dev/null; then
             grep -vE "get_config\.sh|z2k-update-lists\.sh|z2k-auto-update\.sh|z2k-classify-drift\.sh" /opt/etc/crontab > /opt/etc/crontab.tmp 2>/dev/null
             mv /opt/etc/crontab.tmp /opt/etc/crontab
+            _purged_z2k_cron=1
         fi
     fi
-
-    # Stop and disable the Vixie cron daemon — z2k no longer uses it,
-    # everything goes through z2k-scheduler.sh. We don't `opkg remove`
-    # the package (it might be a dependency of unrelated entware
-    # software), just keep the binary present but ensure it doesn't
-    # start at boot and isn't running right now. Users can re-enable
-    # via `chmod +x /opt/etc/init.d/S10cron && S10cron start` if they
-    # install something else that needs it.
-    if [ -x /opt/etc/init.d/S10cron ]; then
-        /opt/etc/init.d/S10cron stop >/dev/null 2>&1
-        chmod -x /opt/etc/init.d/S10cron 2>/dev/null
-        print_info "Cron демон остановлен и отключён (z2k теперь использует свой scheduler)"
+    # Vixie cron на Entware (r-26 release notes) известно не reload'ит spool/
+    # crontab при touch / SIGHUP — z2k entries которые удалили выше остаются
+    # в in-memory копии cron daemon'а и продолжают стрелять параллельно
+    # с z2k-scheduler. Дубликаты auto-update/update-lists → конкурентная
+    # mutation lists/state, ровно та race-condition которую z2k-scheduler
+    # призван исключить (Codex review 2026-05-27).
+    # Fix: если мы реально очистили z2k entries И cron daemon бежит —
+    # restart'нём его. Это перечитает clean crontab. User crontab задачи
+    # сохраняются (мы не трогали non-z2k lines), executable flag тоже
+    # сохраняется (S10cron уже +x на этой точке если r-37 logic уже
+    # сработала ниже — мы её не отменяем).
+    if [ "$_purged_z2k_cron" = "1" ] && pidof cron >/dev/null 2>&1 && [ -x /opt/etc/init.d/S10cron ]; then
+        /opt/etc/init.d/S10cron restart >/dev/null 2>&1 || true
+        print_info "Системный cron перезапущен — устаревшие z2k-записи больше не дублируют z2k-scheduler"
     fi
-    # Belt-and-suspenders — kill any lingering cron daemon.
-    killall cron 2>/dev/null || true
+
+    # r-26 стопал+отключал Vixie cron daemon (S10cron stop + chmod -x +
+    # killall cron) на том основании что z2k полностью перешёл на свой
+    # scheduler. Это поломало юзеров с собственными crontab-задачами
+    # (Entware housekeeping, custom скрипты) — field-report @vlallax
+    # 2026-05-26.
+    #
+    # Codex review 2026-05-27/28: z2k НЕ должен сам chmod+x / start cron.
+    # Ни безусловно, ни по marker-absence — отсутствие marker'а доказывает
+    # лишь "r-37+ тут не запускался", НЕ "именно z2k выключил cron". На
+    # router'е где cron выключил САМ админ, любой auto-update тихо вернул
+    # бы root crontab execution — trust-boundary regression.
+    #
+    # Политика: z2k трогает ТОЛЬКО свои cron-записи (purge выше), но
+    # никогда не меняет executable-флаг S10cron и не стартует daemon.
+    # Для legacy r-26 victims (у кого cron выключен нами в прошлом и
+    # нужны свои crontab-задачи) печатаем однократную подсказку с ручной
+    # командой восстановления — решение остаётся за админом.
+    if [ -f /opt/etc/init.d/S10cron ] && { [ ! -x /opt/etc/init.d/S10cron ] || ! pidof cron >/dev/null 2>&1; }; then
+        print_info "Системный cron сейчас отключён. z2k использует собственный планировщик и его не трогает."
+        print_info "Если cron был отключён предыдущей версией z2k и вам нужны свои crontab-задачи, верните его вручную:"
+        print_info "  chmod +x /opt/etc/init.d/S10cron && /opt/etc/init.d/S10cron start"
+    fi
 
     # Instagram DNS redirect (Keenetic static DNS).
     # Fresh installs get a minimal one-IP-per-host fallback set so that
@@ -2308,33 +2701,38 @@ step_finalize() {
         if [ -n "$tg_arch" ]; then
             local tg_bin="tg-mtproxy-client-linux-${tg_arch}"
             local tg_dest="/opt/sbin/tg-mtproxy-client"
+            local tg_tmp="${tg_dest}.new.$$"
             local tg_url="${GITHUB_RAW}/mtproxy-client/builds/${tg_bin}"
-            rm -f "$tg_dest"
+            # Download-to-temp → validate → atomic mv. НЕ удаляем рабочий
+            # бинарник до того как новый скачан и проверен (Codex 2026-05-28):
+            # transient fetch-fail НЕ должен оставить router без tg-mtproxy-client.
+            rm -f "$tg_tmp"
             # z2k_fetch — 4-layer fallback (raw → jsdelivr → gh-proxy → DoH+pin)
-            # вместо одиночного curl. Прямой curl у юзеров с TSPU-блоком github
-            # либо IPv6-issue падал в 0 байт, потому что не было ни одного
-            # резервного источника (issue #2026-04-27).
-            z2k_fetch "$tg_url" "$tg_dest" 2>/dev/null || true
+            z2k_fetch "$tg_url" "$tg_tmp" 2>/dev/null || true
+            rm -f "${tg_tmp}.etag" 2>/dev/null
             local tg_size
-            tg_size=$(wc -c < "$tg_dest" 2>/dev/null || echo 0)
-            # Validate: exists, >500KB, starts with ELF magic (\x7fELF), runs without crash
+            tg_size=$(wc -c < "$tg_tmp" 2>/dev/null || echo 0)
+            # Validate: exists, >500KB, ELF magic, runs without crash
             local tg_valid=false
-            if [ -f "$tg_dest" ] && [ "$tg_size" -gt 500000 ] 2>/dev/null; then
-                # Check ELF magic (works on any busybox — no od/hexdump needed)
-                if head -c 4 "$tg_dest" 2>/dev/null | grep -q "ELF"; then
-                    chmod +x "$tg_dest"
-                    # Test run — if wrong arch, kernel will fail and exit non-zero
-                    if "$tg_dest" --help 2>/dev/null; [ $? -le 2 ]; then
+            if [ -f "$tg_tmp" ] && [ "$tg_size" -gt 500000 ] 2>/dev/null; then
+                if head -c 4 "$tg_tmp" 2>/dev/null | grep -q "ELF"; then
+                    chmod +x "$tg_tmp"
+                    if "$tg_tmp" --help 2>/dev/null; [ $? -le 2 ]; then
                         tg_valid=true
                     fi
                 fi
             fi
             if $tg_valid; then
+                z2k_snapshot_external "$tg_dest"     # для rollback
+                mv -f "$tg_tmp" "$tg_dest" && chmod +x "$tg_dest"
                 print_success "Telegram прокси установлен ($tg_arch)"
             else
-                rm -f "$tg_dest"
-                if [ "$tg_size" -le 500000 ] 2>/dev/null; then
-                    print_warning "Файл слишком маленький (${tg_size} байт) — скачивание прервалось"
+                rm -f "$tg_tmp"
+                # КРИТИЧНО: оставляем существующий рабочий бинарник, НЕ удаляем.
+                if [ -x "$tg_dest" ]; then
+                    print_warning "Не удалось обновить tg-mtproxy-client — оставлен текущий рабочий бинарник"
+                elif [ "$tg_size" -le 500000 ] 2>/dev/null; then
+                    print_warning "Файл слишком маленький (${tg_size} байт) — скачивание прервалось, рабочего бинарника нет"
                 else
                     print_warning "Бинарник не запускается на этой архитектуре ($tg_arch). Проверьте: opkg print-architecture"
                 fi
@@ -2449,28 +2847,48 @@ step_finalize() {
         if [ -n "$zd_arch" ]; then
             local zd_bin="z2k-detect-linux-${zd_arch}"
             local zd_dest="/opt/sbin/z2k-detect"
+            local zd_tmp="${zd_dest}.new.$$"
             local zd_url="${GITHUB_RAW}/z2k-detect/builds/${zd_bin}"
-            rm -f "$zd_dest"
-            z2k_fetch "$zd_url" "$zd_dest" 2>/dev/null || true
+            # Download-to-temp → validate → atomic mv. НЕ удаляем рабочий
+            # бинарник до проверки нового (Codex 2026-05-28): transient
+            # fetch-fail не должен оставить router без z2k-detect.
+            rm -f "$zd_tmp"
+            z2k_fetch "$zd_url" "$zd_tmp" 2>/dev/null || true
+            rm -f "${zd_tmp}.etag" 2>/dev/null
             local zd_size
-            zd_size=$(wc -c < "$zd_dest" 2>/dev/null || echo 0)
+            zd_size=$(wc -c < "$zd_tmp" 2>/dev/null || echo 0)
             local zd_valid=false
-            if [ -f "$zd_dest" ] && [ "$zd_size" -gt 500000 ] 2>/dev/null; then
-                if head -c 4 "$zd_dest" 2>/dev/null | grep -q "ELF"; then
-                    chmod +x "$zd_dest"
+            if [ -f "$zd_tmp" ] && [ "$zd_size" -gt 500000 ] 2>/dev/null; then
+                if head -c 4 "$zd_tmp" 2>/dev/null | grep -q "ELF"; then
+                    chmod +x "$zd_tmp"
                     zd_valid=true
                 fi
             fi
+            if ! $zd_valid; then
+                rm -f "$zd_tmp"
+                # Оставляем существующий рабочий бинарник (если был).
+                [ -x "$zd_dest" ] && print_warning "Не удалось обновить z2k-detect — оставлен текущий бинарник" \
+                    || print_warning "z2k-detect не установлен (нет рабочего бинарника, необязательный)"
+            fi
             if $zd_valid; then
+                z2k_snapshot_external "$zd_dest"     # для rollback
+                mv -f "$zd_tmp" "$zd_dest" && chmod +x "$zd_dest"
                 print_success "z2k-detect установлен ($zd_arch)"
                 # Демон stateless — никаких отдельных state-файлов на диске.
                 # init.d: per [[reference_cron_path_entware]] PATH must
                 # be exported inside the script — already done. Install
                 # the canonical S98z2k-detect alongside S98tg-tunnel.
+                # detect daemon non-critical: если снапшот для отката не
+                # удался (disk-full) — НЕ перезаписываем, warn и пропускаем
+                # (vs abort всего finalize ради необязательного демона).
                 if [ -f "${WORK_DIR}/files/init.d/S98z2k-detect" ]; then
-                    cp -f "${WORK_DIR}/files/init.d/S98z2k-detect" \
-                          /opt/etc/init.d/S98z2k-detect
-                    chmod +x /opt/etc/init.d/S98z2k-detect
+                    if z2k_snapshot_external /opt/etc/init.d/S98z2k-detect; then
+                        cp -f "${WORK_DIR}/files/init.d/S98z2k-detect" \
+                              /opt/etc/init.d/S98z2k-detect
+                        chmod +x /opt/etc/init.d/S98z2k-detect
+                    else
+                        print_warning "Снапшот S98z2k-detect не удался — пропускаю обновление detect-демона (необязательный)"
+                    fi
                 fi
                 # Feature flag: Z2K_DISCOVER default OFF — автодетекция
                 # выключена пока не обкатана. Юзер включает руками в
@@ -2547,7 +2965,7 @@ step_finalize() {
     # r-20 referenced $backup_tmp directly: it was empty → check became
     # `[ -f /webpanel-port ]` and webpanel restore never fired. Fixed
     # in r-22.
-    local backup_tmp="/tmp/z2k_upgrade_backup"
+    local backup_tmp="/opt/z2k-upgrade-backup"
 
     # =====================================================================
     # Auto-update: re-apply preserved Z2K_* / non-Z2K_ user flags AFTER
@@ -2657,16 +3075,30 @@ run_full_install() {
     step_check_dns || return 1                     # ← НОВОЕ (2/12)
     step_install_dependencies || return 1          # 3/12 (расширено)
     step_load_kernel_modules || return 1           # 4/12
-    step_build_zapret2 || return 1                 # 5/12
-    step_verify_installation || return 1           # 6/12
-    step_check_and_select_fwtype || return 1       # ← НОВОЕ (7/12)
-    step_download_domain_lists || return 1         # 8/12
-    step_disable_hwnat_and_offload || return 1     # 9/12 (расширено)
-    step_configure_tmpdir || return 1              # ← НОВОЕ (9.5/12)
-    step_tcp_tuning || return 1                     # ← НОВОЕ (9.6/12)
-    step_create_config_and_init || return 1        # 10/12
-    step_install_netfilter_hook || return 1        # 11/12
-    step_finalize || return 1                      # 12/12
+
+    # Transactional window: steps 5-12. step_build_zapret2 переименовывает
+    # старое дерево в .old.$$ (mv, не rm -rf) и ставит $Z2K_OLD_TREE_BACKUP.
+    # Любой fail в этом окне → z2k_restore_old_tree откатывает на прежнюю
+    # рабочую установку вместо того чтобы оставить router полу-собранным
+    # (Codex review 2026-05-28). На полный success — z2k_commit_install
+    # удаляет backup. Steps 0-4 (deps/modules) до mv — old tree цел,
+    # отдельный откат не нужен.
+    if ! { step_build_zapret2 && \
+           step_verify_installation && \
+           step_check_and_select_fwtype && \
+           step_download_domain_lists && \
+           step_disable_hwnat_and_offload && \
+           step_configure_tmpdir && \
+           step_tcp_tuning && \
+           step_create_config_and_init && \
+           step_install_netfilter_hook && \
+           step_finalize; }; then
+        print_error "Установка прервана на одном из шагов 5-12."
+        z2k_restore_old_tree || true
+        return 1
+    fi
+    # Все шаги прошли — commit point: удаляем backup старого дерева.
+    z2k_commit_install
 
     # После установки - без вопросов применяем autocircular стратегии по умолчанию
     print_separator

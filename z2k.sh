@@ -68,6 +68,16 @@ confirm() {
     local default=${2:-"Y"}
     local answer=""
 
+    # Non-interactive контекст (webpanel apply / auto-update / SSH без -t /
+    # pipe `curl | sh`): установка обязана идти полностью автоматически,
+    # без участия юзера (Mark policy 2026-05-28). Авто-выбираем default
+    # вместо зависания/падения на read </dev/tty. Y→0 (да), N→1 (нет).
+    if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+        printf "%s [%s] (авто: non-interactive)\n" "$prompt" "$default"
+        [ "$default" = "Y" ] && return 0
+        return 1
+    fi
+
     while true; do
         if [ "$default" = "Y" ]; then
             printf "%s [Y/n]: " "$prompt"
@@ -588,9 +598,16 @@ check_environment() {
     if [ -z "$bin_arch" ]; then
         print_info "ВНИМАНИЕ: z2k разработан для ARM64 Keenetic"
         print_info "Ваша архитектура: $arch"
-        printf "Продолжить? [y/N]: "
-        read -r answer </dev/tty
-        [ "$answer" = "y" ] || [ "$answer" = "Y" ] || die "Отменено пользователем" 0
+        # Non-interactive: пытаемся продолжить (вдруг bin совместим), при
+        # реальной несовместимости упадём ниже на запуске nfqws2 с понятной
+        # ошибкой. Auto-install policy — не abort'имся на prompt.
+        if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+            print_warning "Non-interactive — продолжаем на неизвестной арх (проверим работоспособность bin ниже)"
+        else
+            printf "Продолжить? [y/N]: "
+            read -r answer </dev/tty
+            [ "$answer" = "y" ] || [ "$answer" = "Y" ] || die "Отменено пользователем" 0
+        fi
     fi
 
     print_success "Окружение проверено"
@@ -1313,6 +1330,57 @@ main() {
         install|i|update|u|uninstall|remove)
             # Чистая установка/обновление — обязательно свежие файлы.
             rm -rf "$WORK_DIR"
+            # Defensive /tmp cleanup перед install. Field incident 2026-05-28:
+            # /tmp на Keenetic — tmpfs ~244M; если он забит (наши же stale
+            # артефакты прошлых прогонов, deleted-but-held логи, чужой софт)
+            # — curl возвращает error 23 "Failure writing output" на больших
+            # списках (RKN/List.txt = 125K строк), z2k.sh die'ит на загрузке,
+            # установка не встаёт. Чистим ТОЛЬКО известные z2k-temp артефакты
+            # — НЕ трогаем /tmp/mnt (USB), /tmp/nginx, /tmp/run и прочее
+            # системное Keenetic, чтобы не сломать роутер.
+            # ВАЖНО: НЕ трогаем /tmp/z2k_au — это рабочая директория
+            # auto-update (lib/auto_update.sh владеет ею). При reinstall'е
+            # из auto-update именно оттуда запускается скачанный installer и
+            # туда же пишется .install_rc; если снести её из дочернего
+            # z2k.sh install — родительский auto-updater потеряет rc, решит
+            # что reinstall провалился и пропустит health-check (Codex
+            # review 2026-05-28). Чистим только заведомо-stale артефакты.
+            # НЕ трогаем /tmp/z2k-job-*.log — webpanel update/apply
+            # перенаправляет вывод запущенного installer'а именно в этот
+            # job-лог и тейлит его через /job?id=. Если снести его из
+            # дочернего z2k.sh install — процесс продолжит писать в
+            # unlinked inode, а UI потеряет вывод и диагностику (Codex
+            # 2026-05-28). Их чистит webpanel по возрасту после завершения.
+            rm -rf /tmp/wpinst /tmp/nfqws2.bak /tmp/zapret2_build \
+                   /tmp/z2k-install.sh /tmp/z2k-au-manifest.json /tmp/S99_lib.sh \
+                   /tmp/cdnbase_test /tmp/config_official.sh \
+                   /tmp/z2k-detectors.lua.backup 2>/dev/null
+            # Truncate наши растущие логи. Их держат открытыми живые daemon'ы
+            # (tg-mtproxy-client, lighttpd) — поэтому `rm` НЕ вернёт место
+            # (deleted-but-held-open, как было в инциденте). `: > file`
+            # обнуляет содержимое того же inode, который держит процесс, и
+            # место возвращается немедленно, не трогая работу демона. Это
+            # главный органический источник роста tmpfs у юзеров — чистим его
+            # перед измерением свободного места.
+            for _log in /tmp/tg-tunnel.log /tmp/z2k-http-tunnel.log \
+                        /tmp/z2k-webpanel-error.log /tmp/z2k-insta-refresh.log; do
+                [ -f "$_log" ] && : > "$_log" 2>/dev/null
+            done
+            # USB-fallback WORK_DIR: если после cleanup в /tmp всё равно мало
+            # места (<50MB) — переносим рабочую папку на /opt (USB, обычно
+            # гигабайты, туда же ставится zapret2). Так install/curl не зависят
+            # от переполненного tmpfs вообще, по ЛЮБОЙ причине (deleted-held,
+            # чужой софт, наши логи). Это покрывает случаи, которые cleanup
+            # выше НЕ чинит (например процесс держит удалённый файл). После
+            # установки эта папка удаляется (см. trap EXIT ниже).
+            _tmp_free_kb=$(df /tmp 2>/dev/null | awk 'NR==2{print $4}')
+            if [ -n "$_tmp_free_kb" ] && [ "$_tmp_free_kb" -lt 51200 ]; then
+                WORK_DIR="/opt/z2k-work"
+                LIB_DIR="${WORK_DIR}/lib"
+                export WORK_DIR LIB_DIR Z2K_WORKDIR_ON_OPT=1
+                rm -rf "$WORK_DIR"
+                printf '[i] Мало места в /tmp (%s KB) — рабочая папка перенесена на /opt (USB), удалится после установки.\n' "$_tmp_free_kb" >&2
+            fi
             ;;
         *)
             # Для интерактивных команд: кэш валиден если ВСЕ модули из
@@ -1361,8 +1429,11 @@ main() {
     # Note: trap раньше чистил $WORK_DIR при Ctrl+C, теперь оставляем
     # кэш целым даже при прерывании — если install прервался, следующий
     # `z2k install` сам пересоздаст чистую директорию.
-    trap 'echo ""; print_error "Прервано пользователем"; rm -rf /tmp/zapret2_build; exit 130' INT TERM
-    trap 'rm -rf /tmp/zapret2_build' EXIT
+    # При выходе чистим build-temp, и если WORK_DIR был перенесён на /opt
+    # (USB-fallback при малом /tmp) — удаляем его за собой, чтобы не оставлять
+    # рабочую папку на USB после установки (Mark req 2026-05-28).
+    trap 'echo ""; print_error "Прервано пользователем"; rm -rf /tmp/zapret2_build; [ "${Z2K_WORKDIR_ON_OPT:-0}" = "1" ] && rm -rf "$WORK_DIR"; exit 130' INT TERM
+    trap 'rm -rf /tmp/zapret2_build; [ "${Z2K_WORKDIR_ON_OPT:-0}" = "1" ] && rm -rf "$WORK_DIR"' EXIT
 
     # Скачать модули (если нужно — иначе используем кэшированные)
     if [ "$_need_fetch" = "1" ]; then
