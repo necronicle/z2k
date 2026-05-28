@@ -1698,7 +1698,16 @@ SUBMENU
                     killall tg-mtproxy-client 2>/dev/null || true
                     sleep 1
                     # CWE-59: root-owned 0700 log dir
-                    mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
+                    # CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
+                    # не-каталог / чужой владелец = возможная подмена атакующим (с planted
+                    # symlink'ами внутри) → снести и создать заново. busybox `stat -c` нет —
+                    # владельца берём из `ls -ld`.
+                    if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+                       { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+                        rm -rf /tmp/z2k-log 2>/dev/null
+                    fi
+                    mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+                    chmod 700 /tmp/z2k-log 2>/dev/null
                     "$MTPROXY_BIN" --listen=:1443 --timeout=15m -v >> /tmp/z2k-log/tg-tunnel.log 2>&1 &
                 fi
                 sleep 2

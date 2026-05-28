@@ -143,7 +143,16 @@ export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 BIN="/opt/sbin/tg-mtproxy-client"
 LOG="/tmp/z2k-log/tg-tunnel.log"
 # CWE-59: root-owned 0700 log dir
-mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
+# CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
+# не-каталог / чужой владелец = возможная подмена атакующим (с planted
+# symlink'ами внутри) → снести и создать заново. busybox `stat -c` нет —
+# владельца берём из `ls -ld`.
+if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+   { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+    rm -rf /tmp/z2k-log 2>/dev/null
+fi
+mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+chmod 700 /tmp/z2k-log 2>/dev/null
 PIDFILE="/var/run/tg-tunnel.pid"
 
 CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"

@@ -1132,11 +1132,14 @@ step_build_zapret2() {
             export Z2K_OLD_TREE_BACKUP="$_old_tree"
             print_success "Старая установка отложена в ${_old_tree} (откат при сбое)"
         else
-            # mv не сработал (cross-device? обычно не на Entware) — fallback
-            # на rm -rf. Тогда отката не будет, но это редчайший edge.
-            print_warning "mv старого дерева не удался — удаляю напрямую (откат будет недоступен)"
-            rm -rf "$ZAPRET2_DIR"
+            # mv не удался (cross-device? на Entware крайне редко). FAIL-CLOSED
+            # (Codex 2026-05-28): НЕ удаляем рабочую установку — без неё откат
+            # невозможен, и любой сбой шагов 5-12 оставил бы router вообще без
+            # zapret2. Прерываем install, старое дерево остаётся на месте и
+            # продолжает работать; юзер просто остаётся на текущей версии.
+            print_error "Не удалось отложить старую установку (mv → .old) — прерываю установку БЕЗ удаления текущей. Ваша рабочая версия не тронута."
             unset Z2K_OLD_TREE_BACKUP
+            return 1
         fi
     fi
 
@@ -2775,7 +2778,16 @@ step_finalize() {
             done
             sleep 1
             # CWE-59: root-owned 0700 log dir
-            mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
+            # CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
+            # не-каталог / чужой владелец = возможная подмена атакующим (с planted
+            # symlink'ами внутри) → снести и создать заново. busybox `stat -c` нет —
+            # владельца берём из `ls -ld`.
+            if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+               { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+                rm -rf /tmp/z2k-log 2>/dev/null
+            fi
+            mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+            chmod 700 /tmp/z2k-log 2>/dev/null
             ( trap '' HUP; exec /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v </dev/null >> /tmp/z2k-log/tg-tunnel.log 2>&1 ) &
         fi
         sleep 2

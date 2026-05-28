@@ -27,7 +27,16 @@ export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
 LOG="/tmp/z2k-log/z2k-insta-refresh.log"
 # CWE-59: root-owned 0700 log dir
-mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
+# CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
+# не-каталог / чужой владелец = возможная подмена атакующим (с planted
+# symlink'ами внутри) → снести и создать заново. busybox `stat -c` нет —
+# владельца берём из `ls -ld`.
+if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+   { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+    rm -rf /tmp/z2k-log 2>/dev/null
+fi
+mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+chmod 700 /tmp/z2k-log 2>/dev/null
 CONFIG="/opt/zapret2/config"
 RELAY_URL="https://213.176.74.63.nip.io/resolve"
 SECRET="d01f72f9543b29da4e3724b1530c0d11cb30a6f8db15bc0adfe8f2d37b5844b2"
