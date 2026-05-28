@@ -32,6 +32,25 @@ end
 if type(DLOG) ~= "function" then DLOG = function() end end
 if type(DLOG_ERR) ~= "function" then DLOG_ERR = function() end end
 
+-- Native hostkey generator for hostname-less flows (Discord/STUN UDP have no
+-- SNI). Plug into bol-van's circular() via arg `hostkey=z2k_nohost_key`
+-- (automate_host_record extension point, см. zapret-auto.lua). Replaces the
+-- archived z2k-autocircular allow_nohost behavior natively: instead of the
+-- stock standard_hostkey host_ip fallback (which buckets state PER dest-IP →
+-- Discord voice state fragments across DC IPs, cold-start on every new IP),
+-- this returns a constant "nohost" so all hostname-less flows in the profile
+-- share one rotation bucket autostate[key]["nohost"]. Real hostnames (if any
+-- ever appear) are honored unchanged. Contract matches
+-- tests/test_z2k_circular_allow_nohost.lua cases I1-I6.
+function z2k_nohost_key(desync)
+    local t = desync and desync.track
+    local h = t and t.hostname
+    if h and #h > 0 and not (t and t.hostname_is_ip) then
+        return h
+    end
+    return "nohost"
+end
+
 local function z2k_num(v, fallback)
     local n = tonumber(v)
     if n == nil then return fallback end

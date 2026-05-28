@@ -160,29 +160,16 @@ assert_contains "nld2: adds nld=2 to minimal circular" "nld=2" "$RESULT4"
 # ==============================================================================
 
 # Local copy of ensure_rkn_failure_detector — kept in sync with the
-# production version in lib/config_official.sh:971. Production sets
-# z2k_tls_stalled (revert от 2026-04-30 после code-review:
-# z2k_mid_stream_stall имел 4 архитектурные проблемы, в т.ч. слепоту
-# к incoming seq > s5556 и key mismatch с nld=2. Припаркован как
-# experimental до полного редизайна).
+# production version in lib/config_official.sh. Native rollback 2026-05-28:
+# now a whitespace-normalizing passthrough (no failure_detector= injection);
+# rkn_tcp runs on native standard_failure_detector.
 ensure_rkn_failure_detector() {
     local input="$1"
-    local detector_name="${2:-z2k_tls_stalled}"
     local out=""
     local token=""
-
     for token in $input; do
-        case "$token" in
-            --lua-desync=circular:*)
-                case "$token" in
-                    *failure_detector=*) ;;
-                    *) token="${token}:failure_detector=${detector_name}" ;;
-                esac
-                ;;
-        esac
         out="${out:+$out }$token"
     done
-
     printf '%s' "$out"
 }
 
@@ -294,33 +281,18 @@ INPUT_AS4="--lua-desync=fake:payload=tls_client_hello"
 RESULT_AS4=$(ensure_circular_arg_set "$INPUT_AS4" "success_detector" "X")
 assert_eq "arg_set: non-circular unchanged" "$INPUT_AS4" "$RESULT_AS4"
 
-printf "\n--- ensure_rkn_failure_detector ---\n"
+printf "\n--- ensure_rkn_failure_detector (native passthrough) ---\n"
 
-# Test: adds failure_detector to circular without one
+# Native rollback: passthrough must NOT inject any failure_detector=.
 INPUT_FD1="--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1"
 RESULT_FD1=$(ensure_rkn_failure_detector "$INPUT_FD1")
-assert_contains "failure_detector: adds to circular" "failure_detector=z2k_tls_stalled" "$RESULT_FD1"
+assert_not_contains "passthrough: no failure_detector injected" "failure_detector=" "$RESULT_FD1"
+assert_contains "passthrough: circular token preserved" "circular:fails=3:key=rkn_tcp:nld=2" "$RESULT_FD1"
 
-# Test: does not duplicate if already present
-INPUT_FD2="--lua-desync=circular:fails=3:failure_detector=z2k_tls_stalled:key=test"
-RESULT_FD2=$(ensure_rkn_failure_detector "$INPUT_FD2")
-# Count occurrences - should be exactly 1
-FD_COUNT=$(printf '%s' "$RESULT_FD2" | grep -o "failure_detector" | wc -l | tr -d ' ')
-assert_eq "failure_detector: no duplication" "1" "$FD_COUNT"
-
-# Test: non-circular tokens are not modified
+# Whitespace-normalized passthrough preserves token content unchanged.
 INPUT_FD3="--lua-desync=fake:payload=tls_client_hello --lua-desync=send:strategy=2"
 RESULT_FD3=$(ensure_rkn_failure_detector "$INPUT_FD3")
-assert_eq "failure_detector: non-circular unchanged" "$INPUT_FD3" "$RESULT_FD3"
-
-# Test: explicit detector_name argument overrides the default
-# (used when Z2K_USE_MID_STREAM_DETECTOR=1 selects z2k_mid_stream_stall)
-INPUT_FD4="--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2"
-RESULT_FD4=$(ensure_rkn_failure_detector "$INPUT_FD4" "z2k_mid_stream_stall")
-assert_contains "failure_detector: explicit detector_name=mid_stream" \
-    "failure_detector=z2k_mid_stream_stall" "$RESULT_FD4"
-assert_not_contains "failure_detector: override doesn't leak tls_stalled" \
-    "z2k_tls_stalled" "$RESULT_FD4"
+assert_eq "passthrough: tokens unchanged" "$INPUT_FD3" "$RESULT_FD3"
 
 printf "\n--- ensure_circular_tcp_inseq ---\n"
 
@@ -385,51 +357,34 @@ assert_not_contains "austerus: no hostlist in simplified mode" "--hostlist" "$AU
 
 printf "\n--- Config output structure ---\n"
 
-# Build a representative NFQWS2_OPT output manually to validate structural checks
-# This simulates what generate_nfqws2_opt_from_strategies produces in normal mode
-SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=fake:strategy=1 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_silent_drop_detector:no_http_redirect --lua-desync=fake:repeats=4 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT_GV/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only:failure_detector=z2k_tls_alert_fatal:no_http_redirect --lua-desync=fake:repeats=4 --new
+# Build a representative NFQWS2_OPT output manually to validate structural checks.
+# Native rollback 2026-05-28: profiles run on native standard_failure_detector /
+# standard_success_detector — NO z2k_* failure_detector=/success_detector=
+# injections, NO no_http_redirect. inseq= (native arg) kept; Discord nohost
+# keying via hostkey=z2k_nohost_key (native arg.hostkey, replaces allow_nohost).
+SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:inseq=26000 --lua-desync=fake:strategy=1 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:inseq=18000 --lua-desync=fake:repeats=4 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT_GV/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000 --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
---filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:allow_nohost=1"
+--filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:hostkey=z2k_nohost_key"
 
-# Production guarantees per v3.6 plan + Phase 1.2 (2026-05-02):
-#  - rkn_tcp circular has inseq=26000 (Phase 1.2 — covers TLS stall window
-#    14-25 KB per ntc.party 22516 #1, #3)
+# Native rollback structure guarantees (2026-05-28):
+#  - rkn_tcp circular has inseq=26000 (native arg — TLS stall window 14-25KB)
 #  - yt_tcp / gv_tcp circular have inseq=18000 (smaller first-burst typical)
-#  - rkn_tcp has failure_detector=z2k_tls_stalled (default; v3 mid_stream_
-#    stall is opt-in via Z2K_USE_MID_STREAM_DETECTOR=1)
-#  - rkn_tcp / gv_tcp have success_detector=z2k_http_success_positive_only
-#    (HTTP-aware — closes the seq>inseq false-pin race for 4xx replies)
-#  - yt_tcp keeps z2k_success_no_reset (now HTTP-neutral-aware in commit 4)
-#  - all four TLS profiles carry no_http_redirect to off-load standard's
-#    302/307 cross-SLD redirect branch onto our z2k_classify_http_reply
-assert_contains "structure: rkn_tcp has z2k_tls_stalled" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled" "$SAMPLE_OPT"
-assert_contains "structure: rkn_tcp has inseq=26000" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000" "$SAMPLE_OPT"
-assert_contains "structure: rkn_tcp has positive-only success_detector" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
-assert_contains "structure: rkn_tcp has no_http_redirect" "key=rkn_tcp:nld=2:failure_detector=z2k_tls_stalled:inseq=26000:success_detector=z2k_http_success_positive_only:no_http_redirect" "$SAMPLE_OPT"
-assert_contains "structure: yt_tcp has no_reset success_detector" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset" "$SAMPLE_OPT"
-# yt_tcp carries failure_detector=z2k_silent_drop_detector (post-fix 34db24e:
-# pdcounter — точный TLS handshake out>=4). Chain делегирует silent_drop →
-# mid_stream_stall → tls_alert_fatal внутри lua, поэтому redirect-coverage
-# сохраняется через success_detector=positive_only.
-#
-# gv_tcp uses z2k_tls_alert_fatal (2026-05-21): silent_drop's packet-count
-# heuristic false-positives on H2-over-TLS bulk video CDN where client
-# legitimately bursts H2 frames before server flight completes. See the
-# comment block in config_official.sh around `youtube_gv_tcp =
-# ensure_circular_arg_set ... z2k_tls_alert_fatal` for full rationale.
-assert_contains "structure: yt_tcp has classifier-aware failure_detector" "key=yt_tcp:nld=2:success_detector=z2k_success_no_reset:inseq=18000:failure_detector=z2k_silent_drop_detector" "$SAMPLE_OPT"
-assert_contains "structure: yt_tcp has no_http_redirect AFTER failure_detector" "failure_detector=z2k_silent_drop_detector:no_http_redirect" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp has positive-only success_detector" "key=gv_tcp:nld=2:inseq=18000:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp has alert_fatal failure_detector (was silent_drop, swapped 2026-05-21 — H2 bulk-CDN false-positive)" "success_detector=z2k_http_success_positive_only:failure_detector=z2k_tls_alert_fatal" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp has no_http_redirect" "failure_detector=z2k_tls_alert_fatal:no_http_redirect" "$SAMPLE_OPT"
-assert_not_contains "structure: gv_tcp NOT using silent_drop_detector (H2 bulk-CDN false-positive fix)" "key=gv_tcp.*failure_detector=z2k_silent_drop_detector" "$SAMPLE_OPT"
-# rkn_tcp uses z2k_tls_stalled (set by ensure_rkn_failure_detector); chain
-# inherits z2k_tls_alert_fatal → standard_failure_detector. Direct assignment
-# of z2k_tls_alert_fatal на circular здесь не должно быть — это бы означало,
-# что ensure_rkn_failure_detector съел наш upgrade на stalled.
-assert_not_contains "structure: rkn_tcp does not double-set tls_alert_fatal" "rkn_tcp:nld=2:failure_detector=z2k_tls_alert_fatal" "$SAMPLE_OPT"
+#  - NO z2k_* failure_detector= / success_detector= injections (native
+#    standard_failure_detector / standard_success_detector by default)
+#  - NO no_http_redirect (native 302/307 cross-SLD redirect detection active)
+#  - Discord UDP keys hostname-less flows via hostkey=z2k_nohost_key (native
+#    arg.hostkey extension), replacing the archived allow_nohost wrapper
+assert_contains "structure: rkn_tcp has inseq=26000" "key=rkn_tcp:nld=2:inseq=26000" "$SAMPLE_OPT"
+assert_contains "structure: yt_tcp has inseq=18000" "key=yt_tcp:nld=2:inseq=18000" "$SAMPLE_OPT"
+assert_contains "structure: gv_tcp has inseq=18000" "key=gv_tcp:nld=2:inseq=18000" "$SAMPLE_OPT"
+assert_contains "structure: discord_udp uses native hostkey generator" "key=discord_udp:nld=2:hostkey=z2k_nohost_key" "$SAMPLE_OPT"
+# Native invariants — none of the archived detector injections may appear.
+assert_not_contains "structure: no z2k failure_detector injection (native)" "failure_detector=" "$SAMPLE_OPT"
+assert_not_contains "structure: no z2k success_detector injection (native)" "success_detector=" "$SAMPLE_OPT"
+assert_not_contains "structure: no no_http_redirect (native redirect detection)" "no_http_redirect" "$SAMPLE_OPT"
+assert_not_contains "structure: no allow_nohost (replaced by hostkey=z2k_nohost_key)" "allow_nohost" "$SAMPLE_OPT"
 
 assert_contains "structure: has --filter-tcp" "--filter-tcp" "$SAMPLE_OPT"
 assert_contains "structure: has --filter-udp" "--filter-udp" "$SAMPLE_OPT"
@@ -562,8 +517,8 @@ assert_contains "ms flag=0: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_OFF"
 assert_contains "ms flag=0: rkn_tcp keeps --in-range=-s5556" \
     "--in-range=-s5556" "$RKN_ARM_OFF"
-assert_contains "ms flag=0: rkn_tcp uses z2k_silent_drop_detector primary" \
-    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_OFF"
+assert_not_contains "ms flag=0: rkn_tcp native — no z2k failure_detector injection" \
+    "failure_detector=" "$RKN_ARM_OFF"
 # Half-state guards on flag=0 — byte-cap не должен прыгнуть на bundle.
 assert_not_contains "ms flag=0: no s20000 leaks into rkn_tcp" \
     "--in-range=-s20000" "$RKN_ARM_OFF"
@@ -586,8 +541,8 @@ assert_contains "ms flag=1: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_ON"
 assert_contains "ms flag=1: rkn_tcp uses --in-range=-s20000" \
     "--in-range=-s20000" "$RKN_ARM_ON"
-assert_contains "ms flag=1: rkn_tcp uses z2k_silent_drop_detector primary" \
-    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_ON"
+assert_not_contains "ms flag=1: rkn_tcp native — no z2k failure_detector injection" \
+    "failure_detector=" "$RKN_ARM_ON"
 # Half-state guards on flag=1 — bundle byte-cap должен land, но primary
 # detector один и тот же независимо от flag (chain в lua делегирует к
 # mid_stream_stall когда payload TLS).
@@ -615,15 +570,15 @@ assert_contains "ms+silent: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_SILENT"
 assert_contains "ms+silent: silent path also bumps to s20000" \
     "--in-range=-s20000" "$RKN_ARM_SILENT"
-assert_contains "ms+silent: silent path keeps z2k_silent_drop_detector primary" \
-    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_SILENT"
+assert_not_contains "ms+silent: rkn_tcp native — no z2k failure_detector injection" \
+    "failure_detector=" "$RKN_ARM_SILENT"
 # Silent fallback's success_detector contract: append
 # z2k_success_no_reset only when one isn't already set. rkn_tcp gets
 # z2k_http_success_positive_only earlier from ensure_circular_arg_set,
 # so it survives — assert that survival rather than the no-reset
 # variant that only fires on bare circulars.
-assert_contains "ms+silent: existing success_detector preserved" \
-    "success_detector=z2k_http_success_positive_only" "$RKN_ARM_SILENT"
+assert_not_contains "ms+silent: rkn_tcp native — no z2k success_detector injection" \
+    "success_detector=" "$RKN_ARM_SILENT"
 assert_not_contains "ms+silent: no s5556 leak via silent path" \
     "--in-range=-s5556" "$RKN_ARM_SILENT"
 assert_not_contains "ms+silent: no z2k_tls_stalled as primary" \
@@ -774,8 +729,8 @@ EOF
     assert_contains "ms flag=$flag: http_rkn arm emitted" \
         "key=http_rkn" "$http_arm"
     # Primary всегда silent_drop_detector — chain делегирует внутри lua.
-    assert_contains "ms flag=$flag: http_rkn primary=z2k_silent_drop_detector" \
-        "failure_detector=z2k_silent_drop_detector" "$http_arm"
+    assert_not_contains "ms flag=$flag: http_rkn native — no z2k failure_detector injection" \
+        "failure_detector=" "$http_arm"
     # Other detectors не должны быть primary в config-string (они только
     # внутри chain через runtime call, не текстом в conf).
     assert_not_contains "ms flag=$flag: http_rkn no http_mid_stream as primary" \
@@ -1049,9 +1004,9 @@ assert_contains "tls: circular has key=game_tls" "key=game_tls" "$TLS_CIRC_TOKEN
 assert_contains "tls: circular has fails=2" "circular:fails=2" "$TLS_CIRC_TOKEN"
 assert_contains "tls: circular has nld=2 (per-SLD pinning)" "nld=2" "$TLS_CIRC_TOKEN"
 assert_contains "tls: circular has inseq=18000 (TSPU 16K-gate)" "inseq=18000" "$TLS_CIRC_TOKEN"
-assert_contains "tls: circular has failure_detector=z2k_tls_alert_fatal" "failure_detector=z2k_tls_alert_fatal" "$TLS_CIRC_TOKEN"
-assert_contains "tls: circular has success_detector=z2k_success_no_reset" "success_detector=z2k_success_no_reset" "$TLS_CIRC_TOKEN"
-assert_contains "tls: circular has no_http_redirect" "no_http_redirect" "$TLS_CIRC_TOKEN"
+assert_not_contains "tls: circular native — no z2k failure_detector injection" "failure_detector=" "$TLS_CIRC_TOKEN"
+assert_not_contains "tls: circular native — no z2k success_detector injection" "success_detector=" "$TLS_CIRC_TOKEN"
+assert_not_contains "tls: circular native — no_http_redirect removed (native 302/307 detection)" "no_http_redirect" "$TLS_CIRC_TOKEN"
 # Negative — these MUST NOT leak onto the circular token from a future
 # refactor that moves them around (e.g., onto strategy=N tokens).
 assert_not_contains "tls: circular has no payload= arg (payload-gate is profile-level, not on circular itself)" "payload=" "$TLS_CIRC_TOKEN"

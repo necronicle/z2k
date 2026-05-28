@@ -65,7 +65,12 @@ cap_log() {
     [ -f "$f" ] || return 0
     sz_kb=$(du -k "$f" 2>/dev/null | awk '{print $1}')
     [ -n "$sz_kb" ] && [ "$sz_kb" -gt "$max_kb" ] || return 0
-    tmp="${f}.captmp.$$"
+    # CWE-59: temp тоже в world-writable /tmp под root'ом. Предсказуемое
+    # имя (${f}.captmp.$$) → атакующий мог подложить symlink и `tail > tmp`
+    # пошёл бы по нему. mktemp создаёт файл атомарно с O_EXCL и случайным
+    # именем — не подменить. Если mktemp недоступен/нет места — пропускаем
+    # cap (рост остановит install-time cleanup в z2k.sh).
+    tmp=$(mktemp "/tmp/.tgwd-cap.XXXXXX" 2>/dev/null) || return 0
     if tail -n 200 "$f" > "$tmp" 2>/dev/null; then
         cat "$tmp" > "$f" 2>/dev/null
         rm -f "$tmp"

@@ -2864,12 +2864,6 @@ step_finalize() {
                     zd_valid=true
                 fi
             fi
-            if ! $zd_valid; then
-                rm -f "$zd_tmp"
-                # Оставляем существующий рабочий бинарник (если был).
-                [ -x "$zd_dest" ] && print_warning "Не удалось обновить z2k-detect — оставлен текущий бинарник" \
-                    || print_warning "z2k-detect не установлен (нет рабочего бинарника, необязательный)"
-            fi
             if $zd_valid; then
                 z2k_snapshot_external "$zd_dest"     # для rollback
                 mv -f "$zd_tmp" "$zd_dest" && chmod +x "$zd_dest"
@@ -2903,12 +2897,18 @@ step_finalize() {
                 # startup + every 5min). Restart picks up new binary.
                 /opt/etc/init.d/S98z2k-detect restart >/dev/null 2>&1 || true
             else
-                rm -f "$zd_dest"
+                # Невалидная загрузка — удаляем ТОЛЬКО temp, рабочий бинарник
+                # НЕ трогаем (Codex 2026-05-28: transient CDN-fail удалял
+                # рабочий /opt/sbin/z2k-detect, а установка продолжалась →
+                # discovery ломался у юзеров на ровном месте).
+                rm -f "$zd_tmp"
                 if [ "$zd_size" -le 500000 ] 2>/dev/null; then
-                    print_warning "z2k-detect: файл слишком маленький (${zd_size} байт)"
+                    print_warning "z2k-detect: загрузка не удалась / файл слишком маленький (${zd_size} байт)"
                 else
                     print_warning "z2k-detect: бинарник не подходит для $zd_arch"
                 fi
+                [ -x "$zd_dest" ] && print_warning "Оставлен текущий рабочий z2k-detect" \
+                    || print_warning "z2k-detect не установлен (необязательный)"
             fi
         else
             print_warning "Неизвестная архитектура $zd_hw, пропускаем z2k-detect"
