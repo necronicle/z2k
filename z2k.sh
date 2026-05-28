@@ -1428,8 +1428,14 @@ main() {
     # При выходе чистим build-temp, и если WORK_DIR был перенесён на /opt
     # (USB-fallback при малом /tmp) — удаляем его за собой, чтобы не оставлять
     # рабочую папку на USB после установки (Mark req 2026-05-28).
-    trap 'echo ""; print_error "Прервано пользователем"; rm -rf /tmp/zapret2_build; [ "${Z2K_WORKDIR_ON_OPT:-0}" = "1" ] && rm -rf "$WORK_DIR"; exit 130' INT TERM
-    trap 'rm -rf /tmp/zapret2_build; [ "${Z2K_WORKDIR_ON_OPT:-0}" = "1" ] && rm -rf "$WORK_DIR"' EXIT
+    # build_dir теперь живёт под $WORK_DIR (=${WORK_DIR}/zapret2_build, step_
+    # build_zapret2 _stage_base). На success его чистит сам step (install.sh),
+    # но на фейле/прерывании до этого — он бы протёк в tmpfs, подрывая /tmp-
+    # устойчивость (Codex 2026-05-28). Чистим оба пути: legacy /tmp/zapret2_build
+    # и актуальный ${WORK_DIR}/zapret2_build (guard на пустой WORK_DIR чтобы не
+    # получить rm -rf /zapret2_build). Кэш $WORK_DIR в остальном сохраняем.
+    trap 'echo ""; print_error "Прервано пользователем"; rm -rf /tmp/zapret2_build ${WORK_DIR:+"$WORK_DIR/zapret2_build"}; [ "${Z2K_WORKDIR_ON_OPT:-0}" = "1" ] && rm -rf "$WORK_DIR"; exit 130' INT TERM
+    trap 'rm -rf /tmp/zapret2_build ${WORK_DIR:+"$WORK_DIR/zapret2_build"}; [ "${Z2K_WORKDIR_ON_OPT:-0}" = "1" ] && rm -rf "$WORK_DIR"' EXIT
 
     # Скачать модули (если нужно — иначе используем кэшированные)
     if [ "$_need_fetch" = "1" ]; then
