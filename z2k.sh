@@ -1352,7 +1352,15 @@ main() {
             # перед измерением свободного места.
             for _log in /tmp/tg-tunnel.log /tmp/z2k-http-tunnel.log \
                         /tmp/z2k-webpanel-error.log /tmp/z2k-insta-refresh.log; do
-                [ -f "$_log" ] && : > "$_log" 2>/dev/null
+                # CWE-59: имена фиксированные в world-writable /tmp, install
+                # бежит root'ом. symlink на чужой файл (config/state) →
+                # `: >` обнулил бы цель. Если это symlink — удаляем сам линк
+                # (rm не идёт по ссылке), демон пересоздаст обычный файл.
+                if [ -L "$_log" ]; then
+                    rm -f "$_log" 2>/dev/null
+                elif [ -f "$_log" ]; then
+                    : > "$_log" 2>/dev/null
+                fi
             done
             # USB-fallback WORK_DIR: если после cleanup в /tmp всё равно мало
             # места (<50MB) — переносим рабочую папку на /opt (USB, обычно

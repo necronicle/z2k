@@ -54,6 +54,14 @@ PROBE_RESOLVE_IP=149.154.167.99
 # без удаления -v.
 cap_log() {
     local f="$1" max_kb="${2:-2048}" sz_kb tmp
+    # CWE-59: /tmp world-writable, watchdog бежит root'ом. symlink на чужой
+    # файл здесь → `cat > "$f"` перезаписал бы цель его хвостом. Если это
+    # symlink — удаляем сам линк (rm не идёт по ссылке), демон пересоздаст
+    # обычный файл.
+    if [ -L "$f" ]; then
+        rm -f "$f" 2>/dev/null
+        return 0
+    fi
     [ -f "$f" ] || return 0
     sz_kb=$(du -k "$f" 2>/dev/null | awk '{print $1}')
     [ -n "$sz_kb" ] && [ "$sz_kb" -gt "$max_kb" ] || return 0
