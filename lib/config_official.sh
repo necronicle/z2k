@@ -205,7 +205,7 @@ AUSTERUS_OPT
     #   strategy=6 — ALT8 (fake + badseq=2)
     # :badseq:badseq_increment=2: alias on strategy=6 is rewritten to
     # tcp_seq=2:tcp_ack=-66000 by expand_badseq_aliases() pass below.
-    game_tls_tcp="--lua-desync=circular:fails=2:time=60:key=game_tls:nld=2:no_http_redirect --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=2:seqovl=652:seqovl_pattern=tls_clienthello_www_google_com:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=syndata:payload=tls_client_hello:dir=out:blob=syn_packet:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:badseq:badseq_increment=2:strategy=6"
+    game_tls_tcp="--lua-desync=circular:fails=2:time=60:key=game_tls:nld=2 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=2:seqovl=652:seqovl_pattern=tls_clienthello_www_google_com:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=syndata:payload=tls_client_hello:dir=out:blob=syn_packet:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:badseq:badseq_increment=2:strategy=6"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -354,67 +354,16 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    # Wire HTTP-aware success_detector for profiles whose flows can carry
-    # HTTP responses subject to false-pin race (large 4xx body crossing
-    # seq>inseq=18000 → standard success → nocheck → strategy pinned).
-    # See z2k-detectors.lua: z2k_http_success_positive_only.
-    #
-    # http_rkn handled separately at line ~1100 (its profile string is
-    # built inline, not from Strategy.txt). yt_tcp keeps its existing
-    # z2k_success_no_reset (now made HTTP-neutral-aware in commit 4).
-    rkn_tcp=$(ensure_circular_arg_set "$rkn_tcp" "success_detector" "z2k_http_success_positive_only")
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "success_detector" "z2k_http_success_positive_only")
-
-    # Wire HTTP-aware failure_detector for yt_tcp / gv_tcp.
-    #
-    # CRITICAL coverage gap if missing: with no_http_redirect set below,
-    # standard_failure_detector's 302/307 cross-SLD branch is disabled
-    # (zapret-auto.lua:182). For rkn_tcp the classifier check is reachable
-    # via ensure_rkn_failure_detector below (which sets z2k_tls_stalled,
-    # whose chain inherits z2k_tls_alert_fatal → z2k_http_classifier_check).
-    # yt_tcp / gv_tcp had NO custom failure_detector — без этого assignment'а
-    # 302 на lawfilter.* / warn.beeline.ru на yt_tcp не дошёл бы ни до
-    # standard's redirect branch, ни до нашего classifier. Net regression.
-    #
-    # z2k_tls_alert_fatal is the minimum classifier-aware chain. yt_tcp
-    # may benefit from z2k_tls_stalled later — это отдельное upgrade
-    # решение; здесь восстанавливаем redirect-coverage инвариант,
-    # утерянный с добавлением no_http_redirect.
-    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_silent_drop_detector")
-    #
-    # gv_tcp (googlevideo) is HTTP/2 multiplex over TLS — bulk video CDN.
-    # silent_drop_detector's packet-count heuristic (out>=4 && in<=1 &&
-    # in_bytes<3072) was designed for short HTTP/HTTPS request-response
-    # flows (rkn_tcp/yt_tcp), where one client request triggers one server
-    # response. On googlevideo the client legitimately bursts H2 frames
-    # (range requests / WINDOW_UPDATE / SETTINGS) while server flight is
-    # still chunking Cert+EE+Finished — `pdcounter direct` crosses 4 long
-    # before `in_bytes >= 3072` is satisfied → false-positive failure on
-    # working strategies (field-observed 2026-05-21: gv_tcp googlevideo
-    # rotated through strat 3→4→5→6→7→8 in 19 minutes while video played
-    # fine). z2k_classify_http_reply cannot set crec.z2k_handshake_seen
-    # on TLS-encrypted H2 (HTTP semantics invisible past ServerHello), so
-    # the existing handshake_seen / in_bytes bypasses don't engage.
-    #
-    # Switch gv_tcp to z2k_tls_alert_fatal — content-based detector that
-    # fires only on explicit fail signals (fatal TLS alert / RST / 451 /
-    # WAF marker / server_active_reject). Loses packet-count silent-drop
-    # heuristic, but on bulk-CDN that heuristic was firing wrong anyway:
-    # real TSPU drops occur at handshake time (SNI inspection), and the
-    # delegated z2k_tls_stalled chain inside z2k_tls_alert_fatal still
-    # covers CH-without-SH timeout.
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_tls_alert_fatal")
-
-    # Wire no_http_redirect on all TCP TLS profiles. This disables
-    # standard_failure_detector's built-in 302/307 cross-SLD redirect
-    # branch (zapret-auto.lua:182) — necessary because our v3.6
-    # classifier downgrades cross-SLD-no-marker redirects from hard
-    # fail to neutral (legit oauth/shortlink case). Without this flag,
-    # standard would still hard-fail 302/307 cross-SLD before our
-    # classifier ever runs.
-    rkn_tcp=$(ensure_circular_arg_set "$rkn_tcp" "no_http_redirect" "")
-    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "no_http_redirect" "")
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "no_http_redirect" "")
+    # native rollback 2026-05-28: success_detector=/failure_detector= инжекты
+    # z2k_* и no_http_redirect убраны. rkn_tcp / youtube_tcp / youtube_gv_tcp
+    # теперь идут на нативных standard_failure_detector /
+    # standard_success_detector circular()'а bol-van zapret2 (кастомные
+    # детекторы заархивированы, см. archive/custom-detectors-rotation/).
+    # Нативная 302/307 redirect-детекция снова активна: раньше её глушил
+    # no_http_redirect под наш v3.6-классификатор (z2k_classify_http_reply),
+    # теперь осиротевший — без него страта, упёршаяся в block-page redirect,
+    # не детектилась как fail и ротация «залипала». inseq=18000/26000
+    # (native arg, выставляется ensure_circular_tcp_inseq выше) оставлен.
 
     # Phase 6A: auto-inject fool=z2k_dynamic_ttl into every
     # --lua-desync=fake:*  (and fakedsplit/fakeddisorder/hostfakesplit) that
@@ -1098,37 +1047,29 @@ AUSTERUS_OPT
     # /opt/zapret2/config to opt into the redesigned detector.
     # Rollback is "set the flag back to 0, regenerate config, restart".
     #
-    # z2k_tls_stalled (when flag=0) catches "CH sent, no SH" — visible
-    # in the first ~1KB so s5556 gate doesn't blind it. Inherits
-    # z2k_tls_alert_fatal so retrans / RST / HTTP redirect / TLS fatal
-    # alert remain covered.
+    # native rollback 2026-05-28: rkn_tcp идёт на нативном
+    # standard_failure_detector bol-van zapret2 (кастомные детекторы
+    # заархивированы, см. archive/custom-detectors-rotation/). Функция
+    # оставлена как whitespace-normalizing passthrough — failure_detector=
+    # больше не инжектится.
     ensure_rkn_failure_detector() {
         local input="$1"
-        local detector_name="${2:-z2k_tls_stalled}"
         local out=""
         local token=""
-
-        # native rollback 2026-05-28: НЕ инжектим failure_detector=z2k_*
-        # (passthrough). Нативный circular использует standard_failure_detector
-        # по умолчанию. detector_name больше не применяется.
-        : "${detector_name:-}"
         for token in $input; do
             out="${out:+$out }$token"
         done
-
         printf '%s' "$out"
     }
 
-    # rkn_tcp primary failure_detector — z2k_silent_drop_detector (2026-05-03).
-    # Внутри chain делегирует ко всем TLS detectors: mid_stream_stall (TLS
-    # byte-window), tls_stalled (CH-without-SH), tls_alert_fatal (alert/HTTP
-    # classifier). Z2K_USE_MID_STREAM_DETECTOR=1 продолжает регулировать
-    # --in-range byte cap (s5556 → s20000), но primary detector один и тот же.
+    # Z2K_USE_MID_STREAM_DETECTOR=1 расширяет --in-range byte cap rkn_tcp
+    # (s5556 → s20000). failure_detector — нативный standard_failure_detector
+    # (passthrough выше, кастомных детекторов больше нет).
     local rkn_in_range_bytes="5556"
     if [ "$Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
         rkn_in_range_bytes="20000"
     fi
-    rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp" "z2k_silent_drop_detector")
+    rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp")
 
     # Silent fallback для RKN — включается через меню (флаг-файл).
     # failure_detection включает в себя manual_layout (--in-range + payload),
@@ -1583,19 +1524,11 @@ AUSTERUS_OPT
     # z2k-detect daemon-managed (same rationale as rkn_tcp above) — wired
     # unconditionally, file is touched in install.sh:step_build_zapret2.
     rkn_http_extras="$rkn_http_extras --hostlist=${lists_dir}/discovered-domains.txt"
-    # http_rkn failure_detector — chain через z2k_silent_drop_detector
-    # (default ON 2026-05-03). silent_drop проверяет packet-count: 4+
-    # outgoing data + ≤1 incoming = ТСПУ silent drop, который
-    # content-based detectors не ловят (нет TLS alert / нет mid-stream
-    # bytes — данных вообще нет). Если silent-drop не сработал, цепочка
-    # делегирует к z2k_http_mid_stream_stall (byte-window 14-25KB,
-    # ntc.party 22516) затем z2k_tls_alert_fatal (HTTP classifier +
-    # TLS handshake stall). При Z2K_USE_MID_STREAM_DETECTOR=0 chain
-    # пропускает mid_stream звено, остаётся silent_drop → tls_alert.
-    # native rollback 2026-05-28: http_rkn_failure_detector + z2k_http_success_positive_only
-    # убраны. circular использует нативный standard_failure_detector /
-    # standard_success_detector. no_http_redirect оставлен (нативный arg —
-    # отключает 302/307 redirect-триггер standard_failure_detector на HTTP).
+    # native rollback 2026-05-28: http_rkn failure_detector=/success_detector=
+    # инжекты z2k_* и no_http_redirect убраны. circular идёт на нативных
+    # standard_failure_detector / standard_success_detector bol-van zapret2
+    # (кастомные детекторы заархивированы, см. archive/). Нативная 302/307
+    # redirect-детекция активна — block-page redirect снова считается fail.
     # http_rkn payload filter:
     #   http_req  — outgoing GET/POST (что строит модифицирующая стратегия)
     #   empty     — TCP control packets без payload (SYN/ACK сами по себе
@@ -1610,7 +1543,7 @@ AUSTERUS_OPT
     #                 (multisplit/syndata/fake/etc) внутри scope-нуты на
     #                 payload=http_req, так что они не сработают на
     #                 incoming replies — только detectors классифицируют.
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=z2k_http_methodeol_safe:payload=http_req:dir=out:strategy=8 --lua-desync=z2k_http_xpadding:payload=http_req:dir=out:strategy=9 --lua-desync=z2k_http_inject_safe_header:payload=http_req:dir=out:strategy=10 --lua-desync=z2k_http_simple_bypass:payload=http_req:dir=out:strategy=11 --lua-desync=z2k_http_lf_prefix:payload=http_req:dir=out:strategy=12 --lua-desync=z2k_http_space_prefix:payload=http_req:dir=out:strategy=13 --lua-desync=z2k_http_tab_prefix:payload=http_req:dir=out:strategy=14 --lua-desync=z2k_http_multi_crlf:payload=http_req:dir=out:strategy=15 --lua-desync=z2k_http_mixed_prefix:payload=http_req:dir=out:strategy=16 --lua-desync=z2k_http_garbage_prefix:payload=http_req:dir=out:strategy=17 --lua-desync=z2k_http_hostmod:payload=http_req:dir=out:strategy=18 --lua-desync=z2k_http_method_obfuscate:payload=http_req:dir=out:strategy=19 --lua-desync=z2k_http_version_downgrade:payload=http_req:dir=out:strategy=20 --lua-desync=z2k_http_oob_prefix:payload=http_req:dir=out:strategy=21 --lua-desync=z2k_http_absolute_url:payload=http_req:dir=out:strategy=22 --lua-desync=z2k_http_absolute_uri_v2:payload=http_req:dir=out:strategy=23 --lua-desync=z2k_http_methodeol_v2:payload=http_req:dir=out:strategy=24 --lua-desync=z2k_http_methodeol_hostcase:payload=http_req:dir=out:strategy=25 --lua-desync=z2k_http_pipeline_fake:payload=http_req:dir=out:strategy=26 --lua-desync=z2k_http_pipeline_fake_v2:payload=http_req:dir=out:strategy=27 --lua-desync=z2k_http_fake_continuation:payload=http_req:dir=out:strategy=28 --lua-desync=z2k_http_fake_xhost:payload=http_req:dir=out:strategy=29 --lua-desync=z2k_http_header_shuffle:payload=http_req:dir=out:strategy=30 --lua-desync=z2k_http_host_bytesplit:payload=http_req:dir=out:strategy=31 --lua-desync=z2k_http_seqovl_host:payload=http_req:dir=out:strategy=32 --lua-desync=z2k_http_triple_seqovl:payload=http_req:dir=out:strategy=33 --lua-desync=z2k_http_mgts_combo:payload=http_req:dir=out:strategy=34 --lua-desync=z2k_http_combo_bypass:payload=http_req:dir=out:strategy=35 --lua-desync=z2k_http_super_decoy:payload=http_req:dir=out:strategy=36 --lua-desync=z2k_http_multidisorder:payload=http_req:dir=out:strategy=37 --lua-desync=z2k_http_ipfrag:payload=http_req:dir=out:strategy=38 --lua-desync=z2k_http_syndata:payload=http_req:dir=out:strategy=39 --lua-desync=z2k_http_aggressive:payload=http_req:dir=out:strategy=40 --in-range=x --new"
+    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=z2k_http_methodeol_safe:payload=http_req:dir=out:strategy=8 --lua-desync=z2k_http_xpadding:payload=http_req:dir=out:strategy=9 --lua-desync=z2k_http_inject_safe_header:payload=http_req:dir=out:strategy=10 --lua-desync=z2k_http_simple_bypass:payload=http_req:dir=out:strategy=11 --lua-desync=z2k_http_lf_prefix:payload=http_req:dir=out:strategy=12 --lua-desync=z2k_http_space_prefix:payload=http_req:dir=out:strategy=13 --lua-desync=z2k_http_tab_prefix:payload=http_req:dir=out:strategy=14 --lua-desync=z2k_http_multi_crlf:payload=http_req:dir=out:strategy=15 --lua-desync=z2k_http_mixed_prefix:payload=http_req:dir=out:strategy=16 --lua-desync=z2k_http_garbage_prefix:payload=http_req:dir=out:strategy=17 --lua-desync=z2k_http_hostmod:payload=http_req:dir=out:strategy=18 --lua-desync=z2k_http_method_obfuscate:payload=http_req:dir=out:strategy=19 --lua-desync=z2k_http_version_downgrade:payload=http_req:dir=out:strategy=20 --lua-desync=z2k_http_oob_prefix:payload=http_req:dir=out:strategy=21 --lua-desync=z2k_http_absolute_url:payload=http_req:dir=out:strategy=22 --lua-desync=z2k_http_absolute_uri_v2:payload=http_req:dir=out:strategy=23 --lua-desync=z2k_http_methodeol_v2:payload=http_req:dir=out:strategy=24 --lua-desync=z2k_http_methodeol_hostcase:payload=http_req:dir=out:strategy=25 --lua-desync=z2k_http_pipeline_fake:payload=http_req:dir=out:strategy=26 --lua-desync=z2k_http_pipeline_fake_v2:payload=http_req:dir=out:strategy=27 --lua-desync=z2k_http_fake_continuation:payload=http_req:dir=out:strategy=28 --lua-desync=z2k_http_fake_xhost:payload=http_req:dir=out:strategy=29 --lua-desync=z2k_http_header_shuffle:payload=http_req:dir=out:strategy=30 --lua-desync=z2k_http_host_bytesplit:payload=http_req:dir=out:strategy=31 --lua-desync=z2k_http_seqovl_host:payload=http_req:dir=out:strategy=32 --lua-desync=z2k_http_triple_seqovl:payload=http_req:dir=out:strategy=33 --lua-desync=z2k_http_mgts_combo:payload=http_req:dir=out:strategy=34 --lua-desync=z2k_http_combo_bypass:payload=http_req:dir=out:strategy=35 --lua-desync=z2k_http_super_decoy:payload=http_req:dir=out:strategy=36 --lua-desync=z2k_http_multidisorder:payload=http_req:dir=out:strategy=37 --lua-desync=z2k_http_ipfrag:payload=http_req:dir=out:strategy=38 --lua-desync=z2k_http_syndata:payload=http_req:dir=out:strategy=39 --lua-desync=z2k_http_aggressive:payload=http_req:dir=out:strategy=40 --in-range=x --new"
 
 
     local nfqws2_opt_value
