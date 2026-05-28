@@ -2559,8 +2559,12 @@ step_finalize() {
     # while-loop daemon that owns ALL z2k periodic tasks. Trivial,
     # auditable, and immune to whatever cron quirks the next firmware
     # introduces.
-    deploy_critical_file "files/z2k-scheduler.sh" "${ZAPRET2_DIR}/z2k-scheduler.sh"
-    deploy_critical_file "files/init.d/S99z2k-scheduler" "/opt/etc/init.d/S99z2k-scheduler"
+    # Fail-closed (Codex 2026-05-28): scheduler — критичная инфра (заменяет
+    # сломанный cron, гоняет watchdog+auto-update). Провал деплоя =
+    # incomplete WORK_DIR / disk-full → rollback на прежнюю установку, а не
+    # commit без планировщика.
+    deploy_critical_file "files/z2k-scheduler.sh" "${ZAPRET2_DIR}/z2k-scheduler.sh" || return 1
+    deploy_critical_file "files/init.d/S99z2k-scheduler" "/opt/etc/init.d/S99z2k-scheduler" || return 1
 
     if [ -x "${ZAPRET2_DIR}/z2k-scheduler.sh" ] && [ -x /opt/etc/init.d/S99z2k-scheduler ]; then
         /opt/etc/init.d/S99z2k-scheduler restart >/dev/null 2>&1
@@ -2743,12 +2747,16 @@ step_finalize() {
     # an old S98tg-tunnel that ignores TG_PROXY_USER_DISABLED would otherwise
     # remain on disk and resurrect the tunnel on the next reboot.
     mkdir -p /opt/etc/init.d /opt/etc/ndm/netfilter.d /opt/zapret2
-    deploy_critical_file "files/init.d/S98tg-tunnel"             "/opt/etc/init.d/S98tg-tunnel"
-    deploy_critical_file "files/ndm/90-z2k-tg-redirect.sh"        "/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh" \
-        && print_success "Keenetic NDM hook установлен (auto-restore iptables)"
-    deploy_critical_file "files/init.d/S97z2k-http-tunnel"        "/opt/etc/init.d/S97z2k-http-tunnel"
-    deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh"
-    deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh"
+    # Fail-closed (Codex 2026-05-28): TG/HTTP-tunnel init-скрипты, NDM-хуки и
+    # watchdog деплоятся критично. Провал (incomplete WORK_DIR / disk-full) →
+    # return 1 → z2k_restore_old_tree вернёт прежнюю рабочую установку, а не
+    # закоммитит router без tunnel-инфры.
+    deploy_critical_file "files/init.d/S98tg-tunnel"             "/opt/etc/init.d/S98tg-tunnel" || return 1
+    deploy_critical_file "files/ndm/90-z2k-tg-redirect.sh"        "/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh" || return 1
+    print_success "Keenetic NDM hook установлен (auto-restore iptables)"
+    deploy_critical_file "files/init.d/S97z2k-http-tunnel"        "/opt/etc/init.d/S97z2k-http-tunnel" || return 1
+    deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh" || return 1
+    deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh" || return 1
 
     # tg-tunnel-watchdog used to be triggered via `* * * * *` cron, but
     # Vixie cron on Keenetic Entware doesn't reload added entries (see
