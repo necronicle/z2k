@@ -25,7 +25,9 @@
 
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
-LOG="/tmp/z2k-insta-refresh.log"
+LOG="/tmp/z2k-log/z2k-insta-refresh.log"
+# CWE-59: root-owned 0700 log dir
+mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
 CONFIG="/opt/zapret2/config"
 RELAY_URL="https://213.176.74.63.nip.io/resolve"
 SECRET="d01f72f9543b29da4e3724b1530c0d11cb30a6f8db15bc0adfe8f2d37b5844b2"

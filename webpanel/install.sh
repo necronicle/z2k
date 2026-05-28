@@ -237,7 +237,7 @@ chmod 755 "$INIT_DST"
 
 echo "[6/6] Starting webpanel"
 "$INIT_DST" start || {
-    echo "Start failed. Check /tmp/z2k-webpanel-error.log and /tmp/z2k-webpanel-startcheck.log" >&2
+    echo "Start failed. Check /tmp/z2k-log/z2k-webpanel-error.log and /tmp/z2k-log/z2k-webpanel-startcheck.log" >&2
     exit 1
 }
 

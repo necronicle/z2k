@@ -14,7 +14,9 @@ export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 # (WAN flap, tunnel up/down, hotplug, reboot).
 
 BIN="/opt/sbin/tg-mtproxy-client"
-LOG="/tmp/z2k-http-tunnel.log"
+LOG="/tmp/z2k-log/z2k-http-tunnel.log"
+# CWE-59: root-owned 0700 log dir
+mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
 PIDFILE="/var/run/z2k-http-tunnel.pid"
 LISTEN_PORT="1444"
 

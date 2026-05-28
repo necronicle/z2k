@@ -30,7 +30,7 @@ export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 #     exactly one marker line on restart so the CONNECT_FAIL tail doesn't
 #     echo back and retrigger us on the next cron tick (classic flap loop).
 
-LOG=/tmp/tg-tunnel.log
+LOG=/tmp/z2k-log/tg-tunnel.log
 BIN=/opt/sbin/tg-mtproxy-client
 INIT=/opt/etc/init.d/S98tg-tunnel
 STATE=/tmp/tg-tunnel-watchdog.state
@@ -43,6 +43,10 @@ PROBE_URL=https://core.telegram.org/
 PROBE_RESOLVE_IP=149.154.167.99
 
 [ -x "$BIN" ] || exit 0
+
+# CWE-59: root-owned 0700 log dir. restart_tunnel (fallback) пишет в $LOG
+# напрямую — каталог должен существовать и быть защищён от symlink-подмены.
+mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
 
 # Size-cap наших /tmp логов чтобы они не забивали tmpfs (на Keenetic /tmp
 # обычно ~244M RAM). tg-tunnel.log на :1443 пишется с -v (verbose) append'ом
@@ -79,10 +83,10 @@ cap_log() {
         rm -f "$tmp"
     fi
 }
-cap_log /tmp/tg-tunnel.log 2048
-cap_log /tmp/z2k-http-tunnel.log 2048
-cap_log /tmp/z2k-webpanel-error.log 1024
-cap_log /tmp/z2k-insta-refresh.log 512
+cap_log /tmp/z2k-log/tg-tunnel.log 2048
+cap_log /tmp/z2k-log/z2k-http-tunnel.log 2048
+cap_log /tmp/z2k-log/z2k-webpanel-error.log 1024
+cap_log /tmp/z2k-log/z2k-insta-refresh.log 512
 
 # Honor explicit user disable from menu / webpanel. The "stop tunnel"
 # action there sets TG_PROXY_USER_DISABLED=1 in /opt/zapret2/config so

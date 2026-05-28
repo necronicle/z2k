@@ -298,10 +298,10 @@ fi
 log_info "Очистка временных файлов..."
 
 for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
-              /tmp/tg-tunnel.log /tmp/tg-tunnel-watchdog.state \
+              /tmp/z2k-log/tg-tunnel.log /tmp/tg-tunnel-watchdog.state \
               /var/run/tg-tunnel.pid \
-              /tmp/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
-              /tmp/z2k-insta-refresh.log /tmp/z2k-insta-refresh.log.old \
+              /tmp/z2k-log/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
+              /tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-insta-refresh.log.old \
               /var/run/z2k-scheduler.pid /opt/var/log/z2k-scheduler.log \
               /opt/var/log/z2k-classify.log \
               /opt/var/log/z2k-classify-drift.log \

@@ -150,8 +150,8 @@ webpanel_do_uninstall() {
         [ -x "$WEBPANEL_INIT" ] && "$WEBPANEL_INIT" stop 2>/dev/null
         pkill -f "lighttpd.*$WEBPANEL_DIR" 2>/dev/null || true
         rm -f "$WEBPANEL_INIT" "$WEBPANEL_PIDFILE" \
-              /tmp/z2k-webpanel-error.log \
-              /tmp/z2k-webpanel-startcheck.log
+              /tmp/z2k-log/z2k-webpanel-error.log \
+              /tmp/z2k-log/z2k-webpanel-startcheck.log
         rm -rf /opt/zapret2/www "$WEBPANEL_DIR"
         print_success "Веб-панель удалена"
     fi

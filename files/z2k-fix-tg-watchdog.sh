@@ -39,7 +39,7 @@ export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 #     "tunnel process alive but silently dead after WS reconnect" mode
 #     that the CONNECT_FAIL detector misses entirely.
 
-LOG=/tmp/tg-tunnel.log
+LOG=/tmp/z2k-log/tg-tunnel.log
 BIN=/opt/sbin/tg-mtproxy-client
 INIT=/opt/etc/init.d/S98tg-tunnel
 STATE=/tmp/tg-tunnel-watchdog.state
@@ -141,7 +141,9 @@ if [ -f /opt/etc/init.d/S98tg-tunnel ]; then
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
 BIN="/opt/sbin/tg-mtproxy-client"
-LOG="/tmp/tg-tunnel.log"
+LOG="/tmp/z2k-log/tg-tunnel.log"
+# CWE-59: root-owned 0700 log dir
+mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
 PIDFILE="/var/run/tg-tunnel.pid"
 
 CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"

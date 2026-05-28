@@ -1259,7 +1259,9 @@ update_z2k() {
                         if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
                             /opt/etc/init.d/S98tg-tunnel restart >/dev/null 2>&1
                         else
-                            /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
+                            # CWE-59: root-owned 0700 log dir
+                            mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
+                            /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/z2k-log/tg-tunnel.log 2>&1 &
                         fi
                         sleep 2
                         if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
@@ -1350,8 +1352,8 @@ main() {
             # место возвращается немедленно, не трогая работу демона. Это
             # главный органический источник роста tmpfs у юзеров — чистим его
             # перед измерением свободного места.
-            for _log in /tmp/tg-tunnel.log /tmp/z2k-http-tunnel.log \
-                        /tmp/z2k-webpanel-error.log /tmp/z2k-insta-refresh.log; do
+            for _log in /tmp/z2k-log/tg-tunnel.log /tmp/z2k-log/z2k-http-tunnel.log \
+                        /tmp/z2k-log/z2k-webpanel-error.log /tmp/z2k-log/z2k-insta-refresh.log; do
                 # CWE-59: имена фиксированные в world-writable /tmp, install
                 # бежит root'ом. symlink на чужой файл (config/state) →
                 # `: >` обнулил бы цель. Если это symlink — удаляем сам линк

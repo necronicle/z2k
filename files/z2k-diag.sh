@@ -277,7 +277,7 @@ print_logs() {
     short_tail /tmp/nfqws2-startup.log 15
 
     printf '\n=== tg-tunnel.log (last 10) ===\n'
-    short_tail /tmp/tg-tunnel.log 10
+    short_tail /tmp/z2k-log/tg-tunnel.log 10
 }
 
 # =============================================================================

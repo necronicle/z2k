@@ -523,7 +523,7 @@ job_exit_code() {
 tail_service_log() {
     local n="${1:-200}"
     # Prefer the journal-less log that S99zapret2 writes; fallback to dmesg.
-    for f in /tmp/zapret2.log /var/log/messages /tmp/tg-tunnel.log; do
+    for f in /tmp/zapret2.log /var/log/messages /tmp/z2k-log/tg-tunnel.log; do
         if [ -f "$f" ]; then
             tail -n "$n" "$f"
             return 0

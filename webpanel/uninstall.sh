@@ -24,8 +24,8 @@ rm -f "$INIT_DST"
 echo "[3/4] Removing www, webpanel dirs and log artifacts"
 rm -rf "$WWW_DIR"
 rm -rf "$WEBPANEL_DIR"
-rm -f /tmp/z2k-webpanel-error.log \
-      /tmp/z2k-webpanel-startcheck.log
+rm -f /tmp/z2k-log/z2k-webpanel-error.log \
+      /tmp/z2k-log/z2k-webpanel-startcheck.log
 
 echo "[4/4] Verifying"
 FAIL=0

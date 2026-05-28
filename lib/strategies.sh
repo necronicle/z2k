@@ -2255,7 +2255,10 @@ apply_autocircular_strategies() {
         print_warning "QUIC стратегия #$quic не найдена, оставляю текущую"
     fi
 
+    # Пропускаем код возврата apply_category_strategies_v2 наружу: run_full_install
+    # вызывает это ВНУТРИ транзакционного install-окна, поэтому фейл config-gen /
+    # рестарта сервиса должен всплыть как ненулевой → z2k_restore_old_tree
+    # откатит на прежнюю рабочую установку (Codex 2026-05-28). Единственный
+    # вызывающий — run_full_install (--auto); раньше return 0 глушил фейл.
     apply_category_strategies_v2 "$yt_tcp" "$yt_gv" "$rkn"
-
-    return 0
 }

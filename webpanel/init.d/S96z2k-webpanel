@@ -25,10 +25,12 @@ start() {
     fi
     [ -d "$WWW_DIR" ] || { echo "www dir missing: $WWW_DIR" >&2; return 1; }
     [ -f "$CONF" ]    || { echo "lighttpd config missing: $CONF" >&2; return 1; }
+    # CWE-59: root-owned 0700 log dir (lighttpd opens errorlog at launch)
+    mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
     # Validate config first — lighttpd -tt exits non-zero on errors.
-    if ! "$BIN" -tt -f "$CONF" >/tmp/z2k-webpanel-startcheck.log 2>&1; then
+    if ! "$BIN" -tt -f "$CONF" >/tmp/z2k-log/z2k-webpanel-startcheck.log 2>&1; then
         echo "z2k-webpanel: lighttpd config invalid" >&2
-        cat /tmp/z2k-webpanel-startcheck.log >&2 2>/dev/null
+        cat /tmp/z2k-log/z2k-webpanel-startcheck.log >&2 2>/dev/null
         return 1
     fi
     # Start daemonized (lighttpd forks itself and writes pid file from config).
@@ -38,7 +40,7 @@ start() {
         echo "z2k-webpanel started (pid $(cat "$PIDFILE"))"
     else
         echo "z2k-webpanel failed to start" >&2
-        cat /tmp/z2k-webpanel-error.log 2>/dev/null >&2
+        cat /tmp/z2k-log/z2k-webpanel-error.log 2>/dev/null >&2
         return 1
     fi
 }

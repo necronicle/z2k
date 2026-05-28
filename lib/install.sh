@@ -1748,38 +1748,23 @@ step_build_zapret2() {
 
         # Восстановить autocircular state (рабочие стратегии).
         #
-        # Два независимых триггера wipe'а:
+        # Wipe ТОЛЬКО при явном Z2K_RESET_STATE=1 (generic per-release flag:
+        # auto-update выставляет его, когда какая-то history-entry в окне
+        # installed→target имеет "reset_state": true — см. lib/auto_update.sh
+        # au_decide / au_apply_reinstall). Без флага reinstall ВСЕГДА
+        # восстанавливает state из backup.
         #
-        # 1. Z2K_RESET_STATE=1 — generic per-release flag. Auto-update
-        #    устанавливает его когда любая history-entry в окне между
-        #    installed и target имеет "reset_state": true (см.
-        #    lib/auto_update.sh, au_decide / au_apply_reinstall).
-        #    Используется для релизов меняющих детекторы или стратегии,
-        #    после которых старый state.tsv может удерживать неоптимальные
-        #    выборы. Webpanel/list-only релизы omit flag — state preserved.
-        #
-        # 2. Marker .silent_drop_state_reset.done — legacy one-shot для
-        #    r-6 (silent_drop fix, commit a88e355, 2026-05-15). Старый
-        #    auto_update.sh на роутерах не знал про reset_state, поэтому
-        #    для этого конкретного релиза wipe запускается через install.sh-
-        #    side marker check. После r-6 marker остаётся, последующие
-        #    reinstall'ы preserve state как обычно — generic Z2K_RESET_STATE
-        #    flag берёт на себя per-release контроль.
+        # БАГ-фикс 2026-05-28: раньше была вторая wipe-ветка по маркеру
+        # .silent_drop_state_reset.done (legacy one-shot для r-6). Маркер
+        # писался в $ZAPRET2_DIR — дерево, которое install ЗАМЕНЯЕТ на каждом
+        # reinstall'е — и НЕ бэкапился, поэтому при каждом reinstall'е он
+        # «отсутствовал» → one-shot срабатывал СНОВА → state затирался на
+        # КАЖДОМ обновлении, даже без reset_state. Ветка убрана (r-6 давно
+        # позади; с нативной ротацией state.tsv не runtime-критичен).
         if [ -f "$backup_tmp/state.tsv" ]; then
-            local _do_wipe=0
-            local _wipe_reason=""
             if [ "$Z2K_RESET_STATE" = "1" ]; then
-                _do_wipe=1
-                _wipe_reason="Z2K_RESET_STATE=1 from release flag"
-            elif [ ! -f "$ZAPRET2_DIR/.silent_drop_state_reset.done" ]; then
-                _do_wipe=1
-                _wipe_reason="silent_drop fix one-shot (legacy marker missing)"
-            fi
-            if [ "$_do_wipe" = "1" ]; then
-                # state.tsv уже truncated на шаге 4.6, просто не restore'им.
-                touch "$ZAPRET2_DIR/.silent_drop_state_reset.done" 2>/dev/null || true
-                chown nobody "$ZAPRET2_DIR/.silent_drop_state_reset.done" 2>/dev/null || true
-                print_info "autocircular state reset ($_wipe_reason) — ротация с нуля"
+                # state.tsv уже truncated на шаге 4.6 — просто не restore'им.
+                print_info "autocircular state reset (Z2K_RESET_STATE=1 from release flag) — ротация с нуля"
             else
                 cp -f "$backup_tmp/state.tsv" "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
                 chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
@@ -2789,7 +2774,9 @@ step_finalize() {
                 tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--listen=:1443" && kill "$p" 2>/dev/null
             done
             sleep 1
-            ( trap '' HUP; exec /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v </dev/null >> /tmp/tg-tunnel.log 2>&1 ) &
+            # CWE-59: root-owned 0700 log dir
+            mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
+            ( trap '' HUP; exec /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v </dev/null >> /tmp/z2k-log/tg-tunnel.log 2>&1 ) &
         fi
         sleep 2
 
@@ -3083,6 +3070,11 @@ run_full_install() {
     # (Codex review 2026-05-28). На полный success — z2k_commit_install
     # удаляет backup. Steps 0-4 (deps/modules) до mv — old tree цел,
     # отдельный откат не нужен.
+    # apply_autocircular_strategies --auto ВНУТРИ окна (Codex 2026-05-28): он
+    # переписывает config (NFQWS2_OPT) и рестартит S99zapret2. Если config-gen
+    # или рестарт падает, мы ещё ДО commit'а → z2k_restore_old_tree вернёт
+    # прежнюю рабочую установку, а не оставит router со сломанным config'ом и
+    # без точки отката. (apply_autocircular_strategies теперь пропускает rc.)
     if ! { step_build_zapret2 && \
            step_verify_installation && \
            step_check_and_select_fwtype && \
@@ -3092,22 +3084,19 @@ run_full_install() {
            step_tcp_tuning && \
            step_create_config_and_init && \
            step_install_netfilter_hook && \
-           step_finalize; }; then
-        print_error "Установка прервана на одном из шагов 5-12."
+           step_finalize && \
+           apply_autocircular_strategies --auto; }; then
+        print_error "Установка прервана на одном из шагов 5-12 или применении стратегий."
         z2k_restore_old_tree || true
         return 1
     fi
-    # Все шаги прошли — commit point: удаляем backup старого дерева.
+    # Все шаги + применение стратегий прошли, сервис поднялся — commit point:
+    # удаляем backup старого дерева.
     z2k_commit_install
 
-    # После установки - без вопросов применяем autocircular стратегии по умолчанию
     print_separator
     print_info "Установка завершена успешно!"
     print_separator
-
-    printf "\nНастройка стратегий DPI bypass:\n\n"
-    print_info "Автоматически применяю autocircular стратегии (без запроса выбора)..."
-    apply_autocircular_strategies --auto
 
     # Auto-update system markers: branch + currently installed tag.
     # Tag comes from Z2K_AU_TARGET_TAG (when triggered by auto-update path),
@@ -3427,7 +3416,7 @@ uninstall_zapret2() {
     rm -f /opt/etc/init.d/S97z2k-http-tunnel \
           /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh \
           /var/run/z2k-http-tunnel.pid \
-          /tmp/z2k-http-tunnel.log 2>/dev/null || true
+          /tmp/z2k-log/z2k-http-tunnel.log 2>/dev/null || true
 
     # Tear down the Telegram tunnel: stop the daemon, kill stragglers, drop
     # its REDIRECT rules, remove the init script and the NDM hook that
@@ -3465,7 +3454,7 @@ uninstall_zapret2() {
           /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
           /opt/sbin/tg-mtproxy-client \
           /var/run/tg-tunnel.pid \
-          /tmp/tg-tunnel.log \
+          /tmp/z2k-log/tg-tunnel.log \
           /tmp/tg-tunnel-watchdog.state \
           /tmp/tg-crash.log 2>/dev/null || true
     # Drop watchdog cron entry if present.

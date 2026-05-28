@@ -1697,7 +1697,9 @@ SUBMENU
                 else
                     killall tg-mtproxy-client 2>/dev/null || true
                     sleep 1
-                    "$MTPROXY_BIN" --listen=:1443 --timeout=15m -v >> /tmp/tg-tunnel.log 2>&1 &
+                    # CWE-59: root-owned 0700 log dir
+                    mkdir -p /tmp/z2k-log 2>/dev/null; chmod 700 /tmp/z2k-log 2>/dev/null
+                    "$MTPROXY_BIN" --listen=:1443 --timeout=15m -v >> /tmp/z2k-log/tg-tunnel.log 2>&1 &
                 fi
                 sleep 2
 
@@ -1715,7 +1717,7 @@ SUBMENU
                     print_success "Telegram работает для всех устройств"
                 else
                     print_error "Не удалось запустить"
-                    tail -5 /tmp/tg-tunnel.log 2>/dev/null
+                    tail -5 /tmp/z2k-log/tg-tunnel.log 2>/dev/null
                     rm -f "$MTPROXY_BIN"
                     print_info "Бинарник удалён — нажмите [1] ещё раз для перескачивания"
                 fi
