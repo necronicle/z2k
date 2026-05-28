@@ -488,6 +488,12 @@ LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 # ПОСЛЕ z2k-modern-core.lua и перед autocircular инстансами.
 LUA_Z2K_HTTP_STRATS="$ZAPRET_BASE/lua/z2k-http-strats.lua"
 [ -f "$LUA_Z2K_HTTP_STRATS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_HTTP_STRATS"
+# z2k-state-persist.lua: persist-only layer over the NATIVE circular() —
+# seeds nstrategy from state.tsv on load and saves it back when it changes
+# (rate-limited, full-file rewrite). Does NOT change rotation logic. MUST be
+# lua-init'd AFTER zapret-auto.lua (which defines circular) so it can wrap it.
+LUA_Z2K_STATE_PERSIST="$ZAPRET_BASE/lua/z2k-state-persist.lua"
+[ -f "$LUA_Z2K_STATE_PERSIST" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_STATE_PERSIST"
 # z2k-dynamic-strategy.lua removed in r-15 Phase 1 — was a handler for
 # the z2k-classify generator which is itself gone. New per-domain
 # feedback lives in /opt/zapret2/lists/discovered-domains.txt (Phase 3).

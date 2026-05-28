@@ -59,6 +59,10 @@ globals = {
     "z2k_cdn_detect",
     "cond_tcp_has_ts",
     "circular",
+    -- z2k-modern-core.lua hostkey fn (returns "nohost" for IP/no-hostname flows)
+    "z2k_nohost_key",
+    -- z2k-state-persist.lua exported API table
+    "z2k_state_persist",
     -- z2k-detectors.lua internal helper, top-level so earlier detector
     -- functions in the same file (z2k_tls_alert_fatal) can call it
     "z2k_detector_log_init_once",

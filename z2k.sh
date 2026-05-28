@@ -874,6 +874,19 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-http-strats.lua"
     fi
 
+    # z2k-state-persist.lua: persist-only долгосрочный rotator-state
+    # (autostate[key][host].nstrategy в state.tsv). НЕ load-bearing для обхода
+    # — только сохранение/восстановление выбора стратегии + видимость в
+    # вебморде. На сбое загрузки warn, не die: S99 грузит через [ -f ] guard,
+    # без файла просто нет персистентности, обход работает.
+    url="${GITHUB_RAW}/files/lua/z2k-state-persist.lua"
+    output="${lua_dir}/z2k-state-persist.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-state-persist.lua"
+    else
+        print_warning "Не удалось загрузить z2k-state-persist.lua — rotator-state не будет персиститься (не критично, обход работает)"
+    fi
+
     # z2k-dynamic-strategy.lua removed in r-15 Phase 1 (slot in
     # rkn_tcp removed alongside, see lib/config_official.sh).
     # The handler depended on the dead z2k-classify producer; new

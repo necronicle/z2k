@@ -1334,7 +1334,7 @@
     try {
       const d = await apiGet("/state");
       if (!d.entries || !d.entries.length) {
-        body.innerHTML = `<p style="color:var(--text-muted)">state.tsv пуст или отсутствует</p>`;
+        body.innerHTML = `<p style="color:var(--text-muted)">состояние ротатора пусто (стратегии ещё не закреплены)</p>`;
         return;
       }
       const nowSec = Math.floor(Date.now() / 1000);
