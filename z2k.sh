@@ -825,16 +825,9 @@ download_init_script() {
     local lua_dir="${files_dir}/lua"
     mkdir -p "$lua_dir" || die "Не удалось создать $lua_dir"
 
-    # z2k-detectors.lua must be downloaded (and later loaded by nfqws2) BEFORE
-    # z2k-autocircular.lua — the rotator resolves failure_detector= by global
-    # name, and detectors live there after the Phase 4 module split.
-    url="${GITHUB_RAW}/files/lua/z2k-detectors.lua"
-    output="${lua_dir}/z2k-detectors.lua"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/lua/z2k-detectors.lua"
-    else
-        die "Ошибка загрузки files/lua/z2k-detectors.lua"
-    fi
+    # z2k-detectors.lua АРХИВИРОВАН 2026-05-28 (archive/custom-detectors-rotation/)
+    # — откат на нативную bol-van detection. Больше НЕ качаем (был бы 404 +
+    # die на отсутствующем files/lua/z2k-detectors.lua).
 
     # Phase 6: anti-ТСПУ fool extensions (z2k_dynamic_ttl and friends).
     # Strategies reference them by name via `fool=z2k_dynamic_ttl`, so the
@@ -859,13 +852,8 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-range-rand.lua"
     fi
 
-    url="${GITHUB_RAW}/files/lua/z2k-autocircular.lua"
-    output="${lua_dir}/z2k-autocircular.lua"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/lua/z2k-autocircular.lua"
-    else
-        die "Ошибка загрузки files/lua/z2k-autocircular.lua"
-    fi
+    # z2k-autocircular.lua АРХИВИРОВАН 2026-05-28 — откат на нативный
+    # circular() bol-van. Больше НЕ качаем.
 
     url="${GITHUB_RAW}/files/lua/z2k-modern-core.lua"
     output="${lua_dir}/z2k-modern-core.lua"

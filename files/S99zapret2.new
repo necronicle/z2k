@@ -458,8 +458,11 @@ LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 # failure_detector=z2k_tls_stalled by global name when parsing profiles,
 # so the functions need to exist already. Autocircular still references
 # z2k_tls_alert_fatal via name-lookup after Phase 4 refactor.
-LUA_Z2K_DETECTORS="$ZAPRET_BASE/lua/z2k-detectors.lua"
-[ -f "$LUA_Z2K_DETECTORS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DETECTORS"
+# z2k-detectors.lua АРХИВИРОВАН 2026-05-28 (archive/custom-detectors-rotation/).
+# Откат на нативную bol-van detection: standard_failure_detector /
+# standard_success_detector из zapret-auto.lua. Кастомные детекторы
+# (TLS-alert/HTTP-classifier/server-active-reject/silent-drop) давали
+# false-positives → жалобы на ротацию. Больше НЕ загружаем.
 # Phase 6: z2k-fooling-ext.lua exports anti-ТСПУ fool functions like
 # z2k_dynamic_ttl, referenced by strategies via `fool=<name>` arg. Must
 # load after zapret-lib.lua (provides apply_fooling's extension point)
@@ -473,8 +476,10 @@ LUA_Z2K_FOOLING="$ZAPRET_BASE/lua/z2k-fooling-ext.lua"
 # functions are defined.
 LUA_Z2K_RANGE_RAND="$ZAPRET_BASE/lua/z2k-range-rand.lua"
 [ -f "$LUA_Z2K_RANGE_RAND" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_RANGE_RAND"
-LUA_Z2K_AUTOCIRCULAR="$ZAPRET_BASE/lua/z2k-autocircular.lua"
-[ -f "$LUA_Z2K_AUTOCIRCULAR" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_AUTOCIRCULAR"
+# z2k-autocircular.lua АРХИВИРОВАН 2026-05-28 (archive/custom-detectors-rotation/).
+# Это была обёртка над нативным circular() (sticky-success / nld-pinning /
+# silent-retry) — давала жалобы на «прыгающую/залипающую» ротацию. Откат на
+# чистый нативный circular() из zapret-auto.lua (простая ротация fails→next).
 LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 [ -f "$LUA_Z2K_MODERN_CORE" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_MODERN_CORE"
 # z2k-http-strats: 33 HTTP-bypass функций (z2k_http_*) портированных из
