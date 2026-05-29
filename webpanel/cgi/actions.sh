@@ -88,6 +88,7 @@ restart_service_if_running() {
     if is_running; then
         # Output goes to caller's stdout/stderr — svc_action_async
         # tees those into the job log so UI shows live progress.
+        ensure_init_exec
         "$INIT_SCRIPT" restart 2>&1 || true
     else
         echo "Сервис не запущен — пропускаю restart"
@@ -98,9 +99,14 @@ restart_service_if_running() {
 # Output не silenced — caller (svc_action_async) подхватывает stdout/stderr
 # и пишет в job-log для UI live-polling'а.
 
-svc_start()   { "$INIT_SCRIPT" start   2>&1; }
-svc_stop()    { "$INIT_SCRIPT" stop    2>&1; }
-svc_restart() { "$INIT_SCRIPT" restart 2>&1; }
+# Self-heal the init script's executable bit before invoking it. p-42 shipped
+# S99zapret2 via the patch path, which could drop +x on some BusyBox builds
+# ("/opt/etc/init.d/S99zapret2: Permission denied", rc 126) — chmod here so a
+# webpanel start/stop/restart recovers even on a router not yet reinstalled.
+ensure_init_exec() { [ -f "$INIT_SCRIPT" ] && chmod +x "$INIT_SCRIPT" 2>/dev/null; return 0; }
+svc_start()   { ensure_init_exec; "$INIT_SCRIPT" start   2>&1; }
+svc_stop()    { ensure_init_exec; "$INIT_SCRIPT" stop    2>&1; }
+svc_restart() { ensure_init_exec; "$INIT_SCRIPT" restart 2>&1; }
 
 # --- async job launcher ---
 #

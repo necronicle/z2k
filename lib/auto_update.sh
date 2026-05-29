@@ -527,6 +527,16 @@ EOF
             [ -z "$target" ] && continue
             mkdir -p "$(dirname "$target")"
             cp -f "$stage" "$target"
+            # Restore the executable bit. `cp -f` does NOT reliably preserve it
+            # across BusyBox builds (the downloaded stage file is 0644), and p-42
+            # was the first patch to ship a DIRECTLY-EXECUTED file (S99zapret2);
+            # on routers where cp dropped +x the init script became 0644 →
+            # "/opt/etc/init.d/S99zapret2: Permission denied" (rc 126) on restart
+            # and a non-bootable service. chmod the known-executable targets.
+            case "$target" in
+                */init.d/*|*.sh)
+                    chmod +x "$target" 2>/dev/null || true ;;
+            esac
             au_log "patch: installed $repo_path -> $target"
         done <<EOF_TARGETS
 $targets
