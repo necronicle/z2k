@@ -120,10 +120,17 @@ local function z2k_find_body_marker(payload_lower)
 end
 
 local function z2k_find_host_marker(host_lower)
-  -- Substring markers (e.g. "lawfilter" matches lawfilter.ertelecom.ru
-  -- AND blackhole-substring matches blackhole.svyaztelecom.ru).
+  -- Match a block marker as a COMPLETE dot-delimited domain label, NOT a bare
+  -- substring. Operator/RKN block pages carry the marker as a real label
+  -- (lawfilter.ertelecom.ru, eais.rkn.gov.ru, blackhole.svyaztelecom.ru), so
+  -- label-anchoring keeps real coverage while killing the false-positive a bare
+  -- substring scan produced: short markers matched INSIDE legitimate hostnames
+  -- ("rkn" inside spa-rkn-otes.com, "eais" inside id-eais.com), which then
+  -- counted a legit cross-SLD redirect as a DPI block and rotated the strategy
+  -- needlessly. (Stage 1 review w4h4x4bif flagged this; Этап 4 fix.)
+  local padded = "." .. host_lower .. "."
   for _, m in ipairs(Z2K_HTTP_BLOCK_BODY_MARKERS) do
-    if host_lower:find(m, 1, true) then return m end
+    if padded:find("." .. m .. ".", 1, true) then return m end
   end
   -- Host-prefix markers (warn.beeline.ru, deny.megafon.ru, etc).
   for _, p in ipairs(Z2K_HTTP_BLOCK_HOST_PREFIXES) do

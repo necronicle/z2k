@@ -198,6 +198,25 @@ check("302 absolute cross-SLD with deny. host-prefix is hard_fail",
         "\r\n",
         "rutracker.org"))
 
+-- Stage 1/4 review (w4h4x4bif): a bare-substring host scan false-fired on
+-- legit hosts that merely CONTAIN a short marker ("rkn" inside sparknotes).
+-- Now markers must match a complete dot-delimited label.
+check("302 cross-SLD to host with 'rkn' SUBSTRING (sparknotes) is neutral, not hard_fail",
+    "neutral", "cross_sld_no_marker",
+    mock_desync(
+        "HTTP/1.1 302 Found\r\n" ..
+        "Location: https://sparknotes.com/page\r\n" ..
+        "\r\n",
+        "myapp.com"))
+
+check("302 cross-SLD to a real RKN label host (eais.rkn.gov.ru) is still hard_fail",
+    "hard_fail", "rkn",
+    mock_desync(
+        "HTTP/1.1 302 Found\r\n" ..
+        "Location: https://eais.rkn.gov.ru/blocked\r\n" ..
+        "\r\n",
+        "rutracker.org"))
+
 check("302 absolute same-SLD HTTP→HTTPS upgrade is positive",
     "positive", nil,
     mock_desync(
