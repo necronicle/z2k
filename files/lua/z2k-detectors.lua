@@ -667,7 +667,15 @@ function z2k_tls_stalled(desync, crec)
       -- or framing fakery.
       local rec_len = p:byte(4) * 256 + p:byte(5)
       local hs_len  = p:byte(8) * 256 + p:byte(9)
-      if rec_len + 5 <= #p and hs_len + 4 <= rec_len then
+      -- Header self-consistency only (handshake message fits inside the
+      -- declared record). We do NOT require the whole record to be present
+      -- in THIS segment: a large/coalesced ServerHello flight (e.g. TLS 1.2
+      -- SH + Certificate in one record) is legitimately fragmented across
+      -- TCP segments, where the first segment carries rec_len > #p. The old
+      -- `rec_len + 5 <= #p` guard false-rejected those healthy handshakes,
+      -- so the stall timestamp was never cleared and the next ClientHello
+      -- false-fired a fail (see project_stage1_review_findings).
+      if hs_len > 0 and hs_len + 4 <= rec_len then
         z2k_tls_stalled_host_ts[key] = nil
         -- ServerHello validated → этого flow handshake начался, но это
         -- ещё **не** доказательство, что поток достиг application phase.
@@ -1471,14 +1479,15 @@ end
 --    (его кандидат появляется только при in_bytes ≥ 8000).
 --
 -- Chain делегирование (z2k_mid_stream_stall, z2k_http_mid_stream_stall,
--- z2k_http_partial_response, z2k_tls_stalled, z2k_tls_alert_fatal) ниже
--- выполняется **всегда** независимо от silent-drop bypass'ов — post-
--- handshake real mid-stream stall / fatal alerts остаются под покрытием.
+-- z2k_tls_stalled, z2k_tls_alert_fatal) ниже выполняется **всегда**
+-- независимо от silent-drop bypass'ов — post-handshake real mid-stream
+-- stall / fatal alerts остаются под покрытием. (z2k_http_partial_response
+-- НЕ в цепочке — см. примечание у try() ниже.)
 --
 -- Packet-count threshold contract (4+ out, <=1 in) сохранён: маленькие
 -- HTTP GET / TLS retransmits (4 packet'а по ~400B) до handshake'а
 -- продолжают fire'ить как было.
-function z2k_silent_drop_detector(desync, crec, arg)
+function z2k_silent_drop_detector(desync, crec)
   -- Server-active classification runs BEFORE the nocheck guard. Upstream
   -- zapret-auto.lua latches crec.nocheck = true on the first incoming
   -- success signal (ServerHello, inseq>4K). If the very next packet on
@@ -1504,6 +1513,12 @@ function z2k_silent_drop_detector(desync, crec, arg)
   end
 
   if crec and crec.nocheck then return false end
+
+  -- Native circular() invokes detectors as (desync, crec); per-arm config
+  -- args arrive on desync.arg, NOT as a 3rd positional param. Read them here
+  -- so the tuning surface (tcp_out / tcp_in / bytes_in_handshake_done /
+  -- cancel_*) is actually live at runtime instead of always-nil → defaults.
+  local arg = desync and desync.arg
 
   local tcp_out_thr      = (arg and tonumber(arg.tcp_out))                 or 4
   local tcp_in_thr       = (arg and tonumber(arg.tcp_in))                  or 1
@@ -1579,14 +1594,30 @@ function z2k_silent_drop_detector(desync, crec, arg)
   -- z2k_tls_alert_fatal — final fallback с HTTP classifier и TLS-alert chain.
   local function try(fn)
     if type(fn) == "function" then
-      local ok, result = pcall(fn, desync, crec, arg)
+      local ok, result = pcall(fn, desync, crec)
       if ok and result == true then return true end
     end
     return false
   end
   if try(z2k_mid_stream_stall) then return true end
   if try(z2k_http_mid_stream_stall) then return true end
-  if try(z2k_http_partial_response) then return true end
+  -- z2k_http_partial_response is intentionally NOT chained here. Its received-
+  -- byte accounting (st.received = st.received + #payload, gated on
+  -- l7payload=="http_reply") under-counts: nfqws tags only the FIRST reply
+  -- packet (the "HTTP/1." status line) as http_reply, so body continuation
+  -- segments never reach Lua; received freezes at the first packet (~1.3KB)
+  -- and it false-FAILs every multi-packet response (MIN_EXPECTED=8000
+  -- guarantees multi-packet). Unhooking it removes that false-rotation bug.
+  -- Caveat (do NOT over-claim): the body-cap / short-Content-Length class is
+  -- now ACTIVELY failed by nothing — it never was, the detector was broken —
+  -- and z2k_http_mid_stream_stall does NOT cover it (that is a silence/stall
+  -- detector, itself http_reply-gated, so it also cannot see body
+  -- continuations). The remaining guard is passive: z2k_http_success_positive_
+  -- only withholds the success-pin when the first-packet body < advertised
+  -- Content-Length, so autocircular won't false-pin a capped flow. Re-chain
+  -- ONLY after a per-flow rewrite that counts via the cumulative reverse
+  -- pbcounter (http_reply-tagged callbacks alone cannot see the body) + unit
+  -- tests. See project_stage1_review_findings (workflows w4h4x4bif/wmbv0o53i).
   if try(z2k_tls_stalled) then return true end
   if try(z2k_tls_alert_fatal) then return true end
   return false

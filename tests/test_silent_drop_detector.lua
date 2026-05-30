@@ -156,7 +156,9 @@ do
     check("case2: out<4 doesn't fire silent-drop",     false, fired)
     check("case2: chain ran (mid_stream)",             1,     chain_calls.mid_stream)
     check("case2: chain ran (http_mid_stream)",        1,     chain_calls.http_mid_stream)
-    check("case2: chain ran (http_partial_response)",  1,     chain_calls.http_partial)
+    -- z2k_http_partial_response unhooked from the chain (false-FAILs multi-
+    -- packet HTTP); it must NOT be invoked. See project_stage1_review_findings.
+    check("case2: http_partial NOT chained",           0,     chain_calls.http_partial)
     check("case2: chain ran (tls_stalled)",            1,     chain_calls.tls_stalled)
     check("case2: chain ran (tls_alert_fatal)",        1,     chain_calls.tls_alert)
 end
@@ -187,7 +189,7 @@ do
     local fired = z2k_silent_drop_detector(d, crec)
     check("case4: handshake_seen marker bypasses silent-drop", false, fired)
     check("case4: chain still runs (mid_stream)",              1,     chain_calls.mid_stream)
-    check("case4: chain still runs (http_partial_response)",   1,     chain_calls.http_partial)
+    check("case4: http_partial NOT chained",                  0,     chain_calls.http_partial)
 end
 
 -- Case 5: crec.nocheck=true → early return for silent-drop heuristic
@@ -293,14 +295,20 @@ do
         true, fired_old_default)
 end
 
--- Case 7: parametric override via arg table — operator can lower
--- bytes_in_handshake_done for known-PSK/resumption-heavy profiles
--- without losing other detectors.
+-- Case 7: parametric override via desync.arg — operator can lower
+-- bytes_in_handshake_done for known-PSK/resumption-heavy profiles without
+-- losing other detectors. Aged crec so the in_bytes=300 flow is NOT a
+-- browser-cancel: with the lowered threshold (256) server_flight_complete
+-- fires (300>=256) -> silent-drop bypassed -> no fire. If the arg were
+-- ignored (default 16384) the aged flow WOULD fire, so this genuinely
+-- exercises the desync.arg path (native contract).
 do
     reset_chain()
-    local arg = { bytes_in_handshake_done = 256 }
-    local fired = z2k_silent_drop_detector(out_packet(4, 1, 300, 0), {}, arg)
-    check("case7: lowered threshold via arg bypasses at in_bytes=300", false, fired)
+    local crec = { z2k_first_seen_t = (os.time() - 10) }
+    local d = out_packet(4, 1, 300, 0)
+    d.arg = { bytes_in_handshake_done = 256 }
+    local fired = z2k_silent_drop_detector(d, crec)
+    check("case7: lowered bytes_in_handshake_done via desync.arg bypasses", false, fired)
 end
 
 -- Case 8: parametric override of packet-count contract — tcp_out=2
@@ -309,9 +317,10 @@ end
 -- reads as a real silent drop, not a browser-cancel (case9).
 do
     reset_chain()
-    local arg = { tcp_out = 2, tcp_in = 1 }
     local crec = { z2k_first_seen_t = (os.time() - 10) }
-    local fired = z2k_silent_drop_detector(out_packet(2, 1, 200, 0), crec, arg)
+    local d = out_packet(2, 1, 200, 0)
+    d.arg = { tcp_out = 2, tcp_in = 1 }   -- native contract: args on desync.arg
+    local fired = z2k_silent_drop_detector(d, crec)
     check("case8: tcp_out=2 arg lowers fire threshold", true, fired)
 end
 
