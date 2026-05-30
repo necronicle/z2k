@@ -156,8 +156,8 @@ do
     check("case2: out<4 doesn't fire silent-drop",     false, fired)
     check("case2: chain ran (mid_stream)",             1,     chain_calls.mid_stream)
     check("case2: chain ran (http_mid_stream)",        1,     chain_calls.http_mid_stream)
-    -- z2k_http_partial_response unhooked from the chain (false-FAILs multi-
-    -- packet HTTP); it must NOT be invoked. See project_stage1_review_findings.
+    -- z2k_http_partial_response is NOT chained (cannot be safely wired; see
+    -- the silent_drop chain comment + project_stage1_review_findings).
     check("case2: http_partial NOT chained",           0,     chain_calls.http_partial)
     check("case2: chain ran (tls_stalled)",            1,     chain_calls.tls_stalled)
     check("case2: chain ran (tls_alert_fatal)",        1,     chain_calls.tls_alert)

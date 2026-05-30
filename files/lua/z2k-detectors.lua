@@ -1601,23 +1601,25 @@ function z2k_silent_drop_detector(desync, crec)
   end
   if try(z2k_mid_stream_stall) then return true end
   if try(z2k_http_mid_stream_stall) then return true end
-  -- z2k_http_partial_response is intentionally NOT chained here. Its received-
-  -- byte accounting (st.received = st.received + #payload, gated on
-  -- l7payload=="http_reply") under-counts: nfqws tags only the FIRST reply
-  -- packet (the "HTTP/1." status line) as http_reply, so body continuation
-  -- segments never reach Lua; received freezes at the first packet (~1.3KB)
-  -- and it false-FAILs every multi-packet response (MIN_EXPECTED=8000
-  -- guarantees multi-packet). Unhooking it removes that false-rotation bug.
-  -- Caveat (do NOT over-claim): the body-cap / short-Content-Length class is
-  -- now ACTIVELY failed by nothing — it never was, the detector was broken —
-  -- and z2k_http_mid_stream_stall does NOT cover it (that is a silence/stall
-  -- detector, itself http_reply-gated, so it also cannot see body
-  -- continuations). The remaining guard is passive: z2k_http_success_positive_
-  -- only withholds the success-pin when the first-packet body < advertised
-  -- Content-Length, so autocircular won't false-pin a capped flow. Re-chain
-  -- ONLY after a per-flow rewrite that counts via the cumulative reverse
-  -- pbcounter (http_reply-tagged callbacks alone cannot see the body) + unit
-  -- tests. See project_stage1_review_findings (workflows w4h4x4bif/wmbv0o53i).
+  -- z2k_http_partial_response is NOT chained. The task-#11 rewrite fixed its
+  -- byte-counting (per-flow cumulative reverse pbcounter), but adversarial
+  -- verification (workflow w02bvboy1, traced against bol-van source) proved
+  -- the detector cannot be safely wired in this architecture:
+  --   1. FALSE-POSITIVE: it settles "completeness" at the next outgoing
+  --      http_req, before the prior response has finished streaming. On
+  --      plaintext HTTP/1.1 keep-alive (the http_rkn profile) any pipelined /
+  --      eager next request yields a phantom deficit on a HEALTHY response →
+  --      false rotation / thrashing at fails=2/60s.
+  --   2. STRUCTURALLY DEAD on its target: automate_failure_check latches
+  --      crec.nocheck once success_detector fires, and standard_success_detector
+  --      fires at inseq=18000. A 16-30KB body-cap crosses 18000 BEFORE the cap,
+  --      so nocheck latches on a continuation packet and the failure path is
+  --      permanently disabled before the next http_req could settle — i.e. it
+  --      could false-fire on healthy traffic but cannot fire on real caps.
+  -- Reliable body-cap detection above inseq is fundamentally at odds with the
+  -- inseq=18000 success threshold; fixing it means changing inseq (a rotation
+  -- parameter, out of scope). Kept defined (correct mechanics, unit-tested) for
+  -- a possible future revisit. See project_stage1_review_findings.
   if try(z2k_tls_stalled) then return true end
   if try(z2k_tls_alert_fatal) then return true end
   return false
@@ -1626,108 +1628,106 @@ end
 
 -- ----------------------------------------------------------------------------
 -- z2k_http_partial_response — ловит ТСПУ HTTP body cap (silent truncation):
--- сервер обещает Content-Length=X, реально доходит ~X/3 (типичный 16-30KB cap),
--- existing detectors пропускают потому что 200 status получен и data приходит
--- (нет stall signal). Этот detector сравнивает advertised CL vs received bytes
--- per-key, при partial mismatch >15% triggers failure → autocircular ротирует.
+-- сервер обещает Content-Length=X, реально доходит ~X/3 (типичный 16-30KB cap);
+-- остальные detectors пропускают, потому что 200 status получен и data идёт
+-- (нет stall/RST signal). Сравнивает advertised Content-Length vs реально
+-- принятые байты ответа и при дефиците ≥15% возвращает failure → autocircular
+-- ротирует на страту, которую не режут.
 --
--- DEBUG: это re-port после field-fail. Все path'ы log'ируются через DLOG
--- так что при включённом --debug=1 в /opt/zapret2/extra_strats/cache/
--- autocircular/nfqws2.debug.log будет полная trace.
+-- Учёт PER-FLOW (state в desync.track.lua_state.http_partial, GC'ится движком
+-- вместе с conntrack). Принятые байты берём из КУМУЛЯТИВНОГО reverse pbcounter,
+-- заякоренного на исходящем http_req — это:
+--   (а) устойчиво к тому, что body continuation-сегменты НЕ тегаются http_reply
+--       (nfqws тегает только первый "HTTP/1." пакет), поэтому per-packet
+--       #payload-суммирование систематически недосчитывало → старая версия
+--       фолс-фейлила КАЖДЫЙ multi-packet ответ;
+--   (б) per-connection — pbcounter нельзя сравнивать между flow'ами, поэтому
+--       host-keyed состояние (старый дизайн) корраптило multi-connection сайты.
+-- Якорь на ИСХОДЯЩЕМ запросе делает замер независимым от того, когда движок
+-- инкрементит pbcounter относительно callback'а (обе точки — reverse pbcounter,
+-- разница сокращает любой постоянный сдвиг). Re-port после field-fail (task #11).
+--
+-- ⚠ СЕЙЧАС НЕ ПРОВЕДЁН В ЦЕПОЧКУ: verification (w02bvboy1) показала, что детектор
+-- нельзя безопасно проводить — он false-positive'ит на keep-alive
+-- (settle-on-next-request) И его fire-path мёртв выше inseq=18000 (success
+-- nocheck latch). Оставлен с корректной механикой + юнит-тестами на будущее. См.
+-- комментарий у silent_drop-цепочки и project_stage1_review_findings.
+-- Все path'ы логируются через DLOG при --debug=1.
 -- ----------------------------------------------------------------------------
 
 local Z2K_PARTIAL_DEFICIT_PCT = 15
 local Z2K_PARTIAL_MIN_EXPECTED = 8000
-local Z2K_PARTIAL_STATE_CAP = 256
-local z2k_partial_resp_state = {}
-local z2k_partial_resp_state_count = 0
-
-local function z2k_partial_state_evict_one()
-  if z2k_partial_resp_state_count <= Z2K_PARTIAL_STATE_CAP then return end
-  local oldest_key, oldest_ts = nil, math.huge
-  for k, v in pairs(z2k_partial_resp_state) do
-    if (v.last_seen or 0) < oldest_ts then
-      oldest_key = k
-      oldest_ts = v.last_seen or 0
-    end
-  end
-  if oldest_key then
-    z2k_partial_resp_state[oldest_key] = nil
-    z2k_partial_resp_state_count = z2k_partial_resp_state_count - 1
-  end
-end
 
 function z2k_http_partial_response(desync, crec)
-  if not desync or not desync.dis or not desync.dis.tcp then
-    if b_debug then DLOG("partial_resp: skip — no tcp dissect") end
-    return false
-  end
-  if crec and crec.nocheck then
-    if b_debug then DLOG("partial_resp: skip — crec.nocheck") end
-    return false
+  if not desync or not desync.dis or not desync.dis.tcp then return false end
+  if crec and crec.nocheck then return false end
+
+  local track = desync.track
+  if not track then return false end
+  local host = track.hostname
+  if not host or host == "" then return false end
+
+  local lua_state = track.lua_state
+  if type(lua_state) ~= "table" then return false end
+
+  -- Cumulative incoming app-data byte counter, maintained by the engine for
+  -- every reverse packet regardless of l7 tagging — robust to body
+  -- continuation segments not being tagged http_reply.
+  local rev = track.pos and track.pos.reverse
+  local rev_bytes = rev and tonumber(rev.pbcounter)
+  if not rev_bytes then return false end
+
+  local fst = lua_state.http_partial
+  if type(fst) ~= "table" then
+    fst = { req_rev = nil, expected = 0, headers_len = 0 }
+    lua_state.http_partial = fst
   end
 
-  local host = desync.track and desync.track.hostname
-  if not host or host == "" then
-    if b_debug then DLOG("partial_resp: skip — no hostname") end
-    return false
-  end
-
-  local now = (os and os.time and os.time()) or 0
-  local key = host
-  local st = z2k_partial_resp_state[key]
-
+  -- Outgoing http_req: settle the PREVIOUS response's completeness on this
+  -- flow, then re-anchor for the new request's response.
   if desync.outgoing and desync.l7payload == "http_req" then
-    if b_debug then DLOG("partial_resp: outgoing http_req for "..host.." (st.expected="..tostring(st and st.expected).." st.received="..tostring(st and st.received)..")") end
-    if st and st.expected > Z2K_PARTIAL_MIN_EXPECTED and st.received > 0 then
-      local got_pct = math.floor((st.received * 100) / st.expected)
-      local deficit = 100 - got_pct
-      local prev_e = st.expected
-      local prev_r = st.received
-      st.expected = 0
-      st.received = 0
-      st.last_seen = now
-      if deficit >= Z2K_PARTIAL_DEFICIT_PCT then
-        DLOG("z2k_http_partial_response: FAIL "..host.." got "..prev_r.."/"..prev_e.." (-"..deficit.."%)")
-        return true
-      else
-        if b_debug then DLOG("partial_resp: ok "..host.." got "..prev_r.."/"..prev_e.." (-"..deficit.."%)") end
+    local fired = false
+    if fst.expected > Z2K_PARTIAL_MIN_EXPECTED and fst.req_rev then
+      local received = rev_bytes - fst.req_rev
+      if received < 0 then received = 0 end
+      local expected_total = fst.expected + fst.headers_len
+      if expected_total > 0 then
+        local got_pct = math.floor((received * 100) / expected_total)
+        local deficit = 100 - got_pct
+        if deficit >= Z2K_PARTIAL_DEFICIT_PCT then
+          DLOG("z2k_http_partial_response: FAIL " .. host .. " got " ..
+               received .. "/" .. expected_total .. " (-" .. deficit .. "%)")
+          fired = true
+        elseif b_debug then
+          DLOG("partial_resp: ok " .. host .. " got " .. received ..
+               "/" .. expected_total .. " (-" .. deficit .. "%)")
+        end
       end
     end
-    return false
+    fst.req_rev = rev_bytes
+    fst.expected = 0
+    fst.headers_len = 0
+    return fired
   end
 
+  -- Incoming http_reply (first packet of a response): capture Content-Length
+  -- and header length. Continuation segments need not arrive here — the
+  -- reverse pbcounter already accounts for their bytes.
   if not desync.outgoing and desync.l7payload == "http_reply" then
-    local payload = desync.dis.payload
-    if type(payload) ~= "string" or #payload == 0 then
-      if b_debug then DLOG("partial_resp: skip — empty incoming payload "..host) end
-      return false
-    end
-    if not st then
-      st = { expected = 0, received = 0, last_seen = now }
-      z2k_partial_resp_state[key] = st
-      z2k_partial_resp_state_count = z2k_partial_resp_state_count + 1
-      z2k_partial_state_evict_one()
-    end
-    st.last_seen = now
-
-    if st.expected == 0 then
-      local cl = string.match(payload, "[Cc]ontent%-[Ll]ength:%s*(%d+)")
-      if cl then
-        st.expected = tonumber(cl) or 0
-        local body_pos = string.find(payload, "\r\n\r\n", 1, true)
-        if body_pos then
-          st.received = #payload - (body_pos + 3)
-        else
-          st.received = 0
+    if fst.expected == 0 then
+      local payload = desync.dis.payload
+      if type(payload) == "string" and #payload > 0 then
+        local cl = string.match(payload, "[Cc]ontent%-[Ll]ength:%s*(%d+)")
+        if cl then
+          fst.expected = tonumber(cl) or 0
+          local body_pos = string.find(payload, "\r\n\r\n", 1, true)
+          fst.headers_len = body_pos and (body_pos + 3) or 0
+          if b_debug then
+            DLOG("partial_resp: " .. host .. " Content-Length=" .. fst.expected ..
+                 " headers_len=" .. fst.headers_len)
+          end
         end
-        DLOG("partial_resp: "..host.." Content-Length="..st.expected.." first-payload-body="..st.received)
-      else
-        if b_debug then DLOG("partial_resp: "..host.." incoming http_reply WITHOUT Content-Length header") end
       end
-    else
-      st.received = st.received + #payload
-      if b_debug then DLOG("partial_resp: "..host.." continuation, received="..st.received.."/"..st.expected) end
     end
     return false
   end
