@@ -1586,7 +1586,7 @@
 
         <div class="card credits-card sponsor-card">
           <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
-          <div class="credits-name">ZyaK</div>
+          <div class="credits-name">ZyaK&lt;-</div>
           <p class="desc">
             За весомый вклад в развитие проекта и веру в свободный интернет.
             Спасибо, что держишь Z2K на плаву!

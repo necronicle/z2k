@@ -35,7 +35,7 @@ show_main_menu() {
 |  - Alexey                                         |
 |  - Jet_sk_ya                                      |
 |  - Suharik39                                      |
-|  - ZyaK                                           |
+|  - ZyaK<-                                         |
 +===================================================+
 
 MENU
