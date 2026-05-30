@@ -1,20 +1,26 @@
 -- z2k-state-persist.lua
 -- Persist zapret-auto.lua "circular" per-host strategy across nfqws2 restarts.
 --
--- Design (persist-only layer over the NATIVE circular(); ported 1:1 from the
--- proven pre-r-41 z2k-autocircular.lua persist core — we do NOT change rotation
--- logic, only restore/save):
+-- Design (state layer over the NATIVE circular(); ported from the proven
+-- pre-r-41 z2k-autocircular.lua state core — persist + a bounded sticky-success
+-- revert that keeps state.tsv on the strategy actually working):
 --   - zapret-auto.lua stores nstrategy in global autostate[askey][hostkey].
 --   - This file wraps circular() to:
---       1) seed autostate from a single TSV file on disk (best effort), and
---       2) save nstrategy back to disk when it changes (rate-limited).
+--       1) seed autostate from a single TSV file on disk (best effort),
+--       2) save nstrategy back to disk when it changes (rate-limited), and
+--       3) revert circular's nstrategy drift when the host recently succeeded.
 --   - Single state.tsv, full-file rewrite with merge (split-brain-safe across
 --     processes) + a lockfile + a debounce window. NO sharding, NO WAL.
---   - Persist fires on EVERY outgoing initial packet (TLS ClientHello / QUIC
---     initial / HTTP request) for whichever strategy circular() currently holds
---     — detector-independent, so profiles that work on the default strategy 1
---     (and QUIC profiles whose success is hard to observe) still show up in the
---     rotator. persist_if_changed() + the debounce keep redundant writes cheap.
+--   - Persist fires on confirmed-success states AND on every outgoing initial
+--     packet (TLS ClientHello / QUIC initial / HTTP request) as a fallback, so
+--     default-1 and hard-to-observe QUIC profiles still show; a server-active
+--     rejection never pins. persist_if_changed() + debounce keep writes cheap.
+--   - Sticky-success revert (THE accuracy fix): orig_circular drifts nstrategy
+--     on parallel failing flows (HTTP/2 fan-out behind one hostname) even while
+--     the host succeeds; if it advanced nstrategy within 30s of a real success
+--     on (host|key), revert to the pre-circular value so the persisted/active
+--     strategy stays the one actually working. (silent-retry / probe-override /
+--     UCB stay OUT — those are Этап 6.)
 --   - Storage key = desync.arg.key when provided, else desync.func_instance.
 
 -- Test isolation: env overrides redirect state into a tmp dir for unit tests.
@@ -332,7 +338,60 @@ local function nohost_restore(desync, nohost_active, saved_hostname)
 end
 
 -- ---------------------------------------------------------------------------
--- wrap circular() — persist-only, detector-free
+-- known-good gating helpers (ported from the legacy z2k-autocircular state core)
+-- ---------------------------------------------------------------------------
+local STICKY_WINDOW_SEC = 30
+
+local function now_f()
+  if type(clock_getfloattime) == "function" then
+    local ok, v = pcall(clock_getfloattime)
+    if ok and tonumber(v) then return tonumber(v) end
+  end
+  return tonumber(os.time() or 0) or 0
+end
+
+-- Native conntrack success/failure flags stamped on desync.track.lua_state.automate
+-- (crec) by the native success/failure detectors and z2k detectors.
+local function conn_record_flags(desync)
+  local tr = desync and desync.track
+  local ls = tr and tr.lua_state
+  local crec = ls and ls.automate
+  if not crec then return false, false, false, false end
+  return (crec.nocheck and true or false),
+         (crec.failure and true or false),
+         (crec.z2k_neutral_observed and true or false),
+         (crec.z2k_server_active_reject and true or false)
+end
+
+-- A real success signal on an INCOMING packet. TLS ServerHello = handshake
+-- reached the server. HTTP reply must be classified "positive" by
+-- z2k_classify_http_reply (z2k-detectors.lua, loaded earlier in the --lua-init
+-- chain); neutral 4xx/5xx and unmarked cross-SLD redirects must NOT pin.
+-- Liberal fallback if the classifier is not loaded (init-order race).
+local function has_positive_incoming_response(desync)
+  if not desync or desync.outgoing then return false end
+  local p = desync.l7payload
+  if p == "tls_server_hello" then return true end
+  if p == "http_reply" then
+    if type(z2k_classify_http_reply) == "function" then
+      return z2k_classify_http_reply(desync) == "positive"
+    end
+    return true
+  end
+  return false
+end
+
+local function is_quic_key(askey)
+  if not askey then return false end
+  local s = tostring(askey)
+  return s == "yt_quic" or s == "rkn_quic" or s == "custom_quic" or s == "cf_quic"
+end
+
+-- ---------------------------------------------------------------------------
+-- wrap circular() — persist + bounded sticky-success revert.
+-- Keeps state.tsv on the strategy actually working (reverts circular's
+-- parallel-flow drift within 30s of a real success). NO silent-retry / probe /
+-- UCB here — those stay at Этап 6.
 -- ---------------------------------------------------------------------------
 if type(circular) == "function" then
   local orig_circular = circular
@@ -340,9 +399,13 @@ if type(circular) == "function" then
     local nohost_active, saved_hostname = nohost_setup(desync)
 
     local askey_before, hostn_before, hrec_before
+    local nstrategy_before_circular   -- snapshot before orig_circular mutates hrec
     -- pre-block errors stay swallowed: never break the nfqws desync path.
     pcall(function()
       askey_before, hostn_before, hrec_before = get_record_for_desync(desync, true)
+      if hrec_before then
+        nstrategy_before_circular = tonumber(hrec_before.nstrategy)
+      end
     end)
 
     -- pcall ONLY to guarantee hostname restore before re-propagating errors.
@@ -368,6 +431,8 @@ if type(circular) == "function" then
         end
         if not hrec then return end
 
+        local nocheck_after, failure_after, neutral_after, server_active_after =
+          conn_record_flags(desync)
         local n_after = tonumber(hrec.nstrategy) or nil
 
         -- Config changed (fewer strategies than persisted): normalize to 1 and
@@ -379,16 +444,53 @@ if type(circular) == "function" then
           return
         end
 
-        -- Persist the current strategy on every outgoing initial packet. This
-        -- is detector-free on purpose: it captures whatever strategy circular()
-        -- currently holds (incl. the default 1) so every tracked host/profile
-        -- shows in the rotator. write_state() is debounced and persist_if_changed
-        -- skips redundant writes.
+        -- Known-good gating (legacy state core). A server-active rejection
+        -- (TCP refused / TLS alert post-SH / bare 451 / WAF) must NEVER pin —
+        -- the peer actively refused, a packet-level bypass cannot help; it has
+        -- priority over every success state (nocheck may be latched from an
+        -- earlier ServerHello, then a fatal alert arrives in this callback).
+        local server_active_event = server_active_after
+        local successful_state = nocheck_after and (not failure_after)
+          and (not neutral_after) and (not server_active_event)
+        local response_state = has_positive_incoming_response(desync)
+          and (not failure_after) and (not neutral_after) and (not server_active_event)
+        -- QUIC flows may not reliably trigger the success detector, but
+        -- nstrategy>1 already means circular rotated this host — persist that
+        -- candidate for QUIC keys.
+        local quic_candidate_state =
+          is_quic_key(askey) and (desync and desync.l7payload == "quic_initial")
+          and (not failure_after) and (not server_active_event)
+          and n_after and n_after > 1
+        -- Broad fallback so default-1 / hard-to-observe profiles still show.
         local outgoing_initial = desync and desync.outgoing and n_after and
           (desync.l7payload == "tls_client_hello" or
            desync.l7payload == "quic_initial" or
            desync.l7payload == "http_req")
-        if outgoing_initial then
+        local success_event = successful_state or response_state or quic_candidate_state
+
+        -- Sticky-success revert (THE accuracy fix). orig_circular advances
+        -- nstrategy on TCP-level signals (retrans / lua failures) that fire on
+        -- parallel failing flows even while OTHER flows on the same host succeed
+        -- (HTTP/2 fan-out behind one hostname). Without this, state.tsv records
+        -- the drifted strategy, not the working one. Per-profile scope
+        -- (hostn|askey): success on gv_tcp must NOT freeze rotation on yt_tcp.
+        local sticky_key = (hostn and askey_after)
+          and (hostn .. "|" .. tostring(askey_after)) or nil
+        _G.Z2K_STICKY_SUCCESS_TS = _G.Z2K_STICKY_SUCCESS_TS or {}
+        if success_event and sticky_key then
+          _G.Z2K_STICKY_SUCCESS_TS[sticky_key] = now_f()
+        end
+        if sticky_key and nstrategy_before_circular and hrec.nstrategy
+           and (tonumber(hrec.nstrategy) or 0) > nstrategy_before_circular then
+          local last_ok = _G.Z2K_STICKY_SUCCESS_TS[sticky_key]
+          if last_ok and (now_f() - last_ok) <= STICKY_WINDOW_SEC then
+            hrec.nstrategy = nstrategy_before_circular
+          end
+        end
+
+        -- Persist the (possibly reverted) strategy. Confirmed success OR the
+        -- outgoing-initial fallback triggers a save; server-active never pins.
+        if (success_event or outgoing_initial) and not server_active_event then
           persist_if_changed(askey, hostn, hrec)
         end
       end)
@@ -413,5 +515,5 @@ z2k_state_persist = {
   state_file = function() return STATE_FILE_PRIMARY end,
   _state = function() return state end,
   _set_interval = function(n) write_interval = tonumber(n) or write_interval end,
-  _reset = function() loaded = false; state = {}; last_write = 0 end,
+  _reset = function() loaded = false; state = {}; last_write = 0; _G.Z2K_STICKY_SUCCESS_TS = {} end,
 }

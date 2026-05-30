@@ -99,6 +99,7 @@ local function mk(key, host, opts)
   if opts.allow_nohost then d.arg.allow_nohost = "1" end
   if opts.hostname_is_ip then d.track.hostname_is_ip = true end
   if opts.sim then d._sim = opts.sim end
+  if opts.crec and d.track then d.track.lua_state = { automate = opts.crec } end
   if opts.no_track then d.track = nil end
   return d
 end
@@ -244,6 +245,70 @@ do
   circular(nil, mk("rkn_tcp", "other.com", {sim = 2}))
   check("T14: pre-existing disk row preserved through rewrite", 7, row("rkn_tcp", "merge.com"))
   check("T14: new host also written", 2, row("rkn_tcp", "other.com"))
+end
+
+-- ===========================================================================
+-- Sticky-success revert (THE accuracy fix, ported from legacy z2k-autocircular).
+-- orig_circular drifts nstrategy on parallel failing flows even while the host
+-- succeeds; if a real success happened within 30s, the drift is reverted so
+-- state.tsv stays on the working strategy.
+
+-- T15: a real success (incoming ServerHello), then circular drifts upward
+-- within the window → nstrategy reverts to the pre-circular value, and the
+-- working strategy (1) is what stays in state.tsv.
+do
+  fresh()
+  now = 1000
+  circular(nil, mk("rkn_tcp", "sticky.com", {outgoing = false, l7payload = "tls_server_hello"}))
+  now = 1010
+  circular(nil, mk("rkn_tcp", "sticky.com", {sim = 3}))   -- circular drifts 1→3
+  check("T15: drift reverted to pre-circular value (recent success)",
+        1, autostate["rkn_tcp"]["sticky.com"].nstrategy)
+  check("T15: state.tsv stays on the working strategy 1", 1, row("rkn_tcp", "sticky.com"))
+end
+
+-- T16: drift WITHOUT a recent success is NOT reverted (rotation still works).
+do
+  fresh()
+  now = 2000
+  circular(nil, mk("rkn_tcp", "drift.com"))               -- establishes nstrategy=1
+  now = 2005
+  circular(nil, mk("rkn_tcp", "drift.com", {sim = 3}))    -- drifts; no success recorded
+  check("T16: drift NOT reverted without recent success",
+        3, autostate["rkn_tcp"]["drift.com"].nstrategy)
+  check("T16: state.tsv shows the drifted strategy 3", 3, row("rkn_tcp", "drift.com"))
+end
+
+-- T17: a success older than the 30s window does NOT revert the drift.
+do
+  fresh()
+  now = 3000
+  circular(nil, mk("rkn_tcp", "old.com", {outgoing = false, l7payload = "tls_server_hello"}))
+  now = 3040                                              -- 40s later, window is 30s
+  circular(nil, mk("rkn_tcp", "old.com", {sim = 3}))
+  check("T17: stale success (>30s) does NOT revert drift",
+        3, autostate["rkn_tcp"]["old.com"].nstrategy)
+end
+
+-- T18: a server-active rejection (crec.z2k_server_active_reject) must NEVER pin
+-- to state.tsv — the peer refused, a packet-level bypass cannot help.
+do
+  fresh()
+  now = 4000
+  circular(nil, mk("rkn_tcp", "refuse.com", {sim = 2, crec = {z2k_server_active_reject = true}}))
+  check("T18: server-active rejection is NOT pinned", nil, row("rkn_tcp", "refuse.com"))
+end
+
+-- T19: sticky revert is PER-PROFILE — a success on yt_tcp must not freeze a
+-- drift on gv_tcp for the same hostname.
+do
+  fresh()
+  now = 5000
+  circular(nil, mk("yt_tcp", "googlevideo.com", {outgoing = false, l7payload = "tls_server_hello"}))
+  now = 5005
+  circular(nil, mk("gv_tcp", "googlevideo.com", {sim = 3}))   -- different profile, same host
+  check("T19: cross-profile success does NOT freeze gv_tcp drift",
+        3, autostate["gv_tcp"]["googlevideo.com"].nstrategy)
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
