@@ -1361,11 +1361,12 @@ pre.log {
      a stacked card with labels rendered via data-label::before. */
   .state-table thead { display: none; }
   .state-table, .state-table tbody { display: block; width: 100%; }
+  /* Each row is a stacked card: one field per full-width row so a long domain
+     gets the whole card width (and wraps/breaks) instead of being squeezed into
+     a narrow grid column and overflowing. */
   .state-table tr {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 4px 12px;
-    padding: 12px;
+    display: block;
+    padding: 10px 12px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     margin-bottom: 8px;
@@ -1374,24 +1375,34 @@ pre.log {
   .state-table tr:hover { background: var(--bg-card-hover); }
   .state-table td {
     border: 0;
-    padding: 2px 0;
+    padding: 3px 0;
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 2px 10px;
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
-  /* Delete button — full-width row across the card top */
-  .state-table td:first-child {
-    grid-column: 1 / -1;
-    justify-content: flex-end;
-  }
+  /* Label (left) — never shrinks; value (the text node) takes the rest and
+     wraps to a new line if it can't sit beside the label. */
   .state-table td:not(:first-child)::before {
     content: attr(data-label);
-    min-width: 80px;
+    flex: 0 0 auto;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
     font-weight: 500;
+  }
+  /* Delete button — its own row across the card top, pinned right, with a
+     light separator so it reads as the card's action, not a field. */
+  .state-table td:first-child {
+    justify-content: flex-end;
+    padding: 0 0 6px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
   }
 }
 
