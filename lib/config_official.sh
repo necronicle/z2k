@@ -208,7 +208,7 @@ AUSTERUS_OPT
     #   strategy=6 — ALT8 (fake + badseq=2)
     # :badseq:badseq_increment=2: alias on strategy=6 is rewritten to
     # tcp_seq=2:tcp_ack=-66000 by expand_badseq_aliases() pass below.
-    game_tls_tcp="--lua-desync=circular:fails=2:time=60:key=game_tls:nld=2:failure_detector=z2k_tls_alert_fatal:success_detector=z2k_success_no_reset --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=2:seqovl=652:seqovl_pattern=tls_clienthello_www_google_com:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=syndata:payload=tls_client_hello:dir=out:blob=syn_packet:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:badseq:badseq_increment=2:strategy=6"
+    game_tls_tcp="--lua-desync=circular:fails=2:time=60:key=game_tls:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_success_no_reset --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=2:seqovl=652:seqovl_pattern=tls_clienthello_www_google_com:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=syndata:payload=tls_client_hello:dir=out:blob=syn_packet:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:badseq:badseq_increment=2:strategy=6"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -313,13 +313,18 @@ AUSTERUS_OPT
     }
 
     youtube_tcp=$(ensure_circular_tcp_inseq "$youtube_tcp" 18000)
-    youtube_gv_tcp=$(ensure_circular_tcp_inseq "$youtube_gv_tcp" 18000)
+    youtube_gv_tcp=$(ensure_circular_tcp_inseq "$youtube_gv_tcp" 24000)
     # rkn_tcp inseq=26000 (Phase 1.2) — покрывает верхнюю границу TLS-stall'а
-    # 14-25 KB по треду ntc.party 22516 #1, #3. yt/gv/game остаются на 18000:
-    # их типичный first-burst меньше, риск не достичь inseq на легитимных
-    # коротких потоках перевешивает.
+    # 14-25 KB по треду ntc.party 22516 #1, #3. yt остаётся на 18000 (типичный
+    # first-burst меньше). gv=24000 (выше) и game=4000 (ниже) изменены под их
+    # режимы отказа — ревью w8b0e0mex; рационал в комментах у этих строк.
     rkn_tcp=$(ensure_circular_tcp_inseq "$rkn_tcp" 26000)
-    game_tls_tcp=$(ensure_circular_tcp_inseq "$game_tls_tcp" 18000)
+    # game_tls inseq lowered 18000 → 4000 (Mark approved 2026-05-30): game
+    # login/auth/control TLS flows are typically << 18KB, so success seq never
+    # crossed 18000 and z2k_success_no_reset never latched. 4000 (< in-range
+    # -s5556) is reachable on short flows; the silent CH-drop failure mode is
+    # caught by the silent_drop head's out>>in heuristic (zero incoming).
+    game_tls_tcp=$(ensure_circular_tcp_inseq "$game_tls_tcp" 4000)
 
     # ensure_circular_arg_set: append `<arg>=<value>` (or bare `<arg>` flag)
     # to every circular token in $input that doesn't already carry that arg.
@@ -364,12 +369,21 @@ AUSTERUS_OPT
     # (native arg, ensure_circular_tcp_inseq выше) оставлен.
     #
     # z2k_silent_drop_detector — primary chain-head: внутри делегирует
-    # mid_stream_stall → http_mid_stream → http_partial → tls_stalled →
-    # tls_alert_fatal. gv_tcp идёт напрямую на z2k_tls_alert_fatal (его профиль
-    # успеха иной — googlevideo chunks, не block-page). Детекторы определены в
+    # mid_stream_stall → http_mid_stream → http_partial(отцеплен) → tls_stalled →
+    # tls_alert_fatal. Все TLS-пулы (rkn/yt/gv) на нём — gv тоже (ревью
+    # w8b0e0mex: голый tls_alert_fatal пропускал тихий 16КБ-gate drop, к которому
+    # googlevideo максимально подвержен). Детекторы определены в
     # files/lua/z2k-detectors.lua (загружены через --lua-init на Этапе 1).
     youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_silent_drop_detector")
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_tls_alert_fatal")
+    # gv_tcp: было z2k_tls_alert_fatal — голый лист без byte-window/stall-пути.
+    # Семантическое ревью (workflow w8b0e0mex) показало: googlevideo.com —
+    # ИМЕННО тот пул, что максимально подвержен тихому 16КБ-gate mid-stream
+    # drop'у (config_official.sh цитирует это сам), а tls_alert_fatal его НЕ
+    # видит (нет RST/FIN/alert → false на всех ветках). Переведён на
+    # chain-head silent_drop (как rkn/yt) + in-range=-s26000 (ниже) кормит
+    # byte-window, inseq=24000 (выше gate, без near-miss false-pin). Mark
+    # approved отход от rotation-«не трогаем» 2026-05-30.
+    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "failure_detector" "z2k_silent_drop_detector")
 
     # Этап 3 — success-детекторы (защита от ложного pin на block-page/neutral).
     # z2k_http_success_positive_only пинит страту ТОЛЬКО на подтверждённый
@@ -1041,7 +1055,7 @@ AUSTERUS_OPT
     }
 
     youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
-    youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp")
+    youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp" "26000")
 
     # RKN: failure_detector — z2k_tls_stalled by default, overridable
     # to z2k_mid_stream_stall through Z2K_USE_MID_STREAM_DETECTOR=1.
@@ -1056,18 +1070,16 @@ AUSTERUS_OPT
     # retry gate via ch_gap. Tests in tests/test_mid_stream_stall.lua
     # codify the contract.
     #
-    # The bundle flag Z2K_USE_MID_STREAM_DETECTOR ties together the
-    # two knobs that have to move as a pair: failure_detector swap AND
-    # the --in-range=-s5556 → -s20000 widening below. Default 0 keeps
-    # the proven master-compatible runtime; set to 1 in
-    # /opt/zapret2/config to opt into the redesigned detector.
-    # Rollback is "set the flag back to 0, regenerate config, restart".
+    # Этап 2 (2026-05-30): ensure_rkn_failure_detector ВНОВЬ функционален —
+    # инжектит :failure_detector=z2k_silent_drop_detector на rkn_tcp circular
+    # (chain-head делегирует к mid_stream_stall/tls_stalled/tls_alert). Это
+    # отменяет native-rollback от 2026-05-28; кастомные детекторы вернулись из
+    # archive/custom-detectors-rotation/ и загружены через --lua-init (Этап 1).
     #
-    # native rollback 2026-05-28: rkn_tcp идёт на нативном
-    # standard_failure_detector bol-van zapret2 (кастомные детекторы
-    # заархивированы, см. archive/custom-detectors-rotation/). Функция
-    # оставлена как whitespace-normalizing passthrough — failure_detector=
-    # больше не инжектится.
+    # Флаг Z2K_USE_MID_STREAM_DETECTOR (default 1) теперь управляет ТОЛЬКО
+    # --in-range byte-cap rkn (-s5556 → -s20000) — расширяет окно, которое
+    # видит chain-head, чтобы byte-window mid_stream_stall дотягивался до
+    # 16КБ-gate. Сам выбор детектора флагом НЕ переключается (всегда silent_drop).
     ensure_rkn_failure_detector() {
         local input="$1"
         local detector_name="${2:-z2k_tls_stalled}"
