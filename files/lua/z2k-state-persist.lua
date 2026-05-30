@@ -316,26 +316,15 @@ local function persist_if_changed(askey, hostn, hrec)
   return true
 end
 
--- ---------------------------------------------------------------------------
--- allow_nohost handling (discord_udp etc. use hostkey=z2k_nohost_key)
--- ---------------------------------------------------------------------------
-local function nohost_setup(desync)
-  local arg = desync and desync.arg
-  local allow_nohost = arg and (arg.allow_nohost == "1" or arg.allow_nohost == 1)
-  if not (allow_nohost and desync.track) then return false, nil end
-  local h = desync.track.hostname
-  local has_real_hostname = h and #h > 0 and not desync.track.hostname_is_ip
-  if has_real_hostname then return false, nil end
-  local saved = h
-  desync.track.hostname = "nohost"
-  return true, saved
-end
-
-local function nohost_restore(desync, nohost_active, saved_hostname)
-  if nohost_active and desync.track then
-    desync.track.hostname = saved_hostname
-  end
-end
+-- allow_nohost handling REMOVED 2026-05-30: it mutated desync.track.hostname
+-- to "nohost" so the native standard_hostkey would give hostless flows a stable
+-- rotation key. That was a fragile cross-layer hack (a persist layer doing
+-- circular's keying). All hostless profiles now key via the native
+-- hostkey=z2k_nohost_key function instead (discord_udp already did; discord_voice
+-- migrated in quic_strats.ini), so no profile sets allow_nohost any more and this
+-- path became dead code. The native hostkey is consumed by get_hostkey_func below
+-- (z2k_nohost_key is in allowed_hostkey_funcs), so persist keying still lands on
+-- "nohost" for hostless flows — functionality preserved, the hack gone.
 
 -- ---------------------------------------------------------------------------
 -- known-good gating helpers (ported from the legacy z2k-autocircular state core)
@@ -396,8 +385,6 @@ end
 if type(circular) == "function" then
   local orig_circular = circular
   circular = function(ctx, desync)
-    local nohost_active, saved_hostname = nohost_setup(desync)
-
     local askey_before, hostn_before, hrec_before
     local nstrategy_before_circular   -- snapshot before orig_circular mutates hrec
     -- pre-block errors stay swallowed: never break the nfqws desync path.
@@ -496,8 +483,6 @@ if type(circular) == "function" then
       end)
     end
 
-    -- Finally: always restore hostname (success or error path).
-    nohost_restore(desync, nohost_active, saved_hostname)
     if not ok then error(verdict_or_err, 0) end
     return verdict
   end

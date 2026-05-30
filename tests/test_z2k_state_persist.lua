@@ -2,7 +2,8 @@
 -- Unit tests for z2k-state-persist.lua — the PERSIST-ONLY layer over the native
 -- circular(): a single state.tsv, full-file merge-rewrite, persist on every
 -- outgoing initial packet (incl. the default strategy 1, so working-on-default
--- profiles still show), allow_nohost handling, restart restore, config clamp.
+-- profiles still show), hostless keying via hostkey=z2k_nohost_key, restart
+-- restore, config clamp, and the sticky-success revert.
 --
 -- This mirrors the proven pre-r-41 z2k-autocircular persist core 1:1.
 -- The .sh wrapper points Z2K_STATE_DIR_OVERRIDE / fallback at an isolated tmp dir.
@@ -96,7 +97,6 @@ local function mk(key, host, opts)
     plan = opts.plan or DEFAULT_PLAN,
   }
   if opts.hostkey then d.arg.hostkey = opts.hostkey end
-  if opts.allow_nohost then d.arg.allow_nohost = "1" end
   if opts.hostname_is_ip then d.track.hostname_is_ip = true end
   if opts.sim then d._sim = opts.sim end
   if opts.crec and d.track then d.track.lua_state = { automate = opts.crec } end
@@ -187,11 +187,15 @@ fresh()
 circular(nil, mk("rkn_tcp", "noinit.com", {sim = 2, l7payload = "other"}))
 check("T7: non-initial payload writes no row", nil, row("rkn_tcp", "noinit.com"))
 
--- T8: allow_nohost (discord_udp) — IP/no-hostname flow persists under "nohost".
+-- T8: a hostless flow (Discord, no hostname) persists under "nohost" via the
+-- native hostkey=z2k_nohost_key function. (The allow_nohost path — which mutated
+-- track.hostname in the persist layer — was removed 2026-05-30; discord_voice
+-- migrated to hostkey=z2k_nohost_key, so both Discord profiles now key the
+-- robust native way.)
 fresh()
-circular(nil, mk("discord_udp", nil, {hostkey = "z2k_nohost_key", allow_nohost = true,
-                                      l7payload = "quic_initial", sim = 2}))
-check("T8: discord nohost persisted under 'nohost'", 2, row("discord_udp", "nohost"))
+circular(nil, mk("discord_voice", nil, {hostkey = "z2k_nohost_key",
+                                        l7payload = "quic_initial", sim = 2}))
+check("T8: hostless discord_voice persisted under 'nohost' via z2k_nohost_key", 2, row("discord_voice", "nohost"))
 
 -- T9: QUIC initial packets persist (yt_quic) — the path that was missing before.
 fresh()

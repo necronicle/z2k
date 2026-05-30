@@ -1309,7 +1309,8 @@ AUSTERUS_OPT
         add_hostlist_line "${extra_strats_dir}/TCP_Discord.txt" "$discord_tcp_block"
     fi
 
-    # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun + allow_nohost)
+    # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun
+    # + hostkey=z2k_nohost_key for stable hostless rotation keying)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
     # webrtc_bypass — passthrough for non-Discord STUN flows (WebRTC P2P in
