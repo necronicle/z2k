@@ -85,10 +85,22 @@ def aggregate(samples):
     for rec in samples:
         seen_pools = set()
         for row in rec.get("rows", []):
-            pool = row["pool"]
-            strat = row["strategy"]
-            dwell = row["dwell"]
+            # Defensive: a hand-corrupted raw.jsonl line could be schema-valid
+            # yet carry a non-dict / key-missing / unhashable row. The collector
+            # never emits such rows, but the aggregator must not crash on a
+            # tampered data file — skip anything malformed.
+            if not isinstance(row, dict):
+                continue
+            pool = row.get("pool")
+            strat = row.get("strategy")
+            dwell = row.get("dwell")
             count = row.get("count", 1)
+            if not isinstance(pool, str) or not isinstance(strat, int) or isinstance(strat, bool):
+                continue
+            if not isinstance(dwell, int) or isinstance(dwell, bool):
+                continue
+            if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                count = 1
             key = (pool, strat)
             bucket[key].append((dwell, count))
             hits[key] += 1
@@ -165,7 +177,14 @@ def main():
     if args.catalog:
         try:
             with open(args.catalog, "r", encoding="utf-8") as f:
-                catalog = json.load(f)
+                raw_cat = json.load(f)
+            # Normalize to {str pool: [int strategy, ...]}, dropping anything
+            # malformed, so a hand-edited catalog can't crash render() on a
+            # non-iterable value.
+            if isinstance(raw_cat, dict):
+                for pool, slots in raw_cat.items():
+                    if isinstance(pool, str) and isinstance(slots, list):
+                        catalog[pool] = [s for s in slots if isinstance(s, int) and not isinstance(s, bool)]
         except (OSError, ValueError):
             catalog = {}
 

@@ -9,10 +9,9 @@
 #   * NEVER records the client source IP, X-Forwarded-For, User-Agent, or any
 #     request header beyond the auth token — the only thing stored is the
 #     validated anonymized body plus a coarse server receive-DATE (no time);
-#   * the payload itself carries NO host/domain, NO provider, NO region, NO IP —
-#     only {pool, strategy, dwell, count} rows and an opaque random device nonce
-#     used solely for de-duplication (a random local UUID, not derived from any
-#     hardware/network identifier).
+#   * the payload itself carries NO host/domain, NO provider, NO region, NO IP,
+#     and NO device identifier of any kind (see the DELIBERATELY-NO-id note
+#     below) — only {pool, strategy, dwell, count} rows.
 #
 # Wire contract (POST /stats, header X-Z2K-Token: <shared secret>):
 #   {
@@ -89,6 +88,11 @@ def sanitize(payload):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "z2kstats/1"
+    # Bound every blocking socket op so a slow/stalled client (slowloris) cannot
+    # pin a worker thread indefinitely. BaseHTTPRequestHandler applies this to
+    # the request socket in setup(). Caddy in front also enforces its own
+    # timeouts; this is defence in depth for the localhost listener.
+    timeout = 15
 
     # Silence default logging entirely — we must not log client IPs.
     def log_message(self, *args):
@@ -112,10 +116,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(400)
         if length <= 0 or length > MAX_BODY:
             return self._reply(413)
-        raw = self.rfile.read(length)
         try:
+            raw = self.rfile.read(length)
+        except (OSError, TimeoutError):
+            return self._reply(408)
+        try:
+            # RecursionError (RuntimeError subclass) can be raised by json.loads
+            # on a deeply-nested body that is still under MAX_BODY — catch it so
+            # a hostile payload yields a clean 4xx instead of an uncaught
+            # traceback / dropped connection.
             payload = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return self._reply(400)
         clean = sanitize(payload)
         if clean is None:

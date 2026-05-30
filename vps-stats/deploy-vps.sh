@@ -40,9 +40,18 @@ chown z2kstats:z2kstats "$DATA_DIR"
 chmod 0750 "$DATA_DIR"
 
 # 4. env / token
+#    Default token MUST match the client's shipped public anti-abuse constant
+#    (z2k-stats-upload.sh: TOKEN="z2kstats-pub-1"), else clients get 401. Pass
+#    --new-token to rotate to a private random value (then also push the matching
+#    Z2K_STATS_TOKEN= into /opt/zapret2/config on clients).
+PUBLIC_TOKEN="z2kstats-pub-1"
 if [ ! -f "$ENV_FILE" ] || [ "${1:-}" = "--new-token" ]; then
-	TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-	log "writing $ENV_FILE (token generated)"
+	if [ "${1:-}" = "--new-token" ]; then
+		TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+	else
+		TOKEN="$PUBLIC_TOKEN"
+	fi
+	log "writing $ENV_FILE (token set)"
 	cat > "$ENV_FILE" <<EOF
 Z2K_STATS_BIND=127.0.0.1
 Z2K_STATS_PORT=9099
@@ -73,8 +82,13 @@ if ! grep -q '^:8088 {' "$CADDYFILE" 2>/dev/null; then
 	printf '\n' >> "$CADDYFILE"
 	cat "$SRC_DIR/caddy-z2k-stats.snippet" >> "$CADDYFILE"
 	if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
-		systemctl reload caddy
-		log "caddy reloaded"
+		# `admin off` in the global Caddyfile disables the admin API that
+		# `systemctl reload` drives, so reload fails — fall back to restart.
+		# Restarting caddy does NOT affect nginx:443 (the SNI relay router); it
+		# only bounces caddy's own :80/:8443 (relay :8443 is firewall-dropped
+		# externally anyway).
+		systemctl reload caddy 2>/dev/null || systemctl restart caddy
+		log "caddy reloaded/restarted"
 	else
 		log "ERROR: caddy validate failed; reverting append"
 		# remove the appended block
