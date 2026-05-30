@@ -384,9 +384,9 @@ printf "\n--- Config output structure ---\n"
 # failure_detector=z2k_silent_drop_detector, gv_tcp gets z2k_tls_alert_fatal.
 # success_detector= (Этап 3) and no_http_redirect (Этап 4) NOT yet wired here.
 # inseq= (native arg) kept; Discord nohost via hostkey=z2k_nohost_key.
-SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:inseq=26000:failure_detector=z2k_silent_drop_detector --lua-desync=fake:strategy=1 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:inseq=18000:failure_detector=z2k_silent_drop_detector --lua-desync=fake:repeats=4 --new
---hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT_GV/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:failure_detector=z2k_tls_alert_fatal --lua-desync=fake:repeats=4 --new
+SAMPLE_OPT="--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/RKN/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=rkn_tcp:nld=2:inseq=26000:failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only --lua-desync=fake:strategy=1 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp:nld=2:inseq=18000:failure_detector=z2k_silent_drop_detector:success_detector=z2k_success_no_reset --lua-desync=fake:repeats=4 --new
+--hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/TCP/YT_GV/List.txt --filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp:nld=2:inseq=18000:failure_detector=z2k_tls_alert_fatal:success_detector=z2k_http_success_positive_only --lua-desync=fake:repeats=4 --new
 --hostlist-exclude=/opt/zapret2/lists/whitelist.txt --hostlist=/opt/zapret2/extra_strats/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:key=yt_quic:nld=2 --new
 --filter-udp=50000-50099 --filter-l7=discord,stun --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:hostkey=z2k_nohost_key"
 
@@ -402,11 +402,13 @@ assert_contains "structure: rkn_tcp has inseq=26000" "key=rkn_tcp:nld=2:inseq=26
 assert_contains "structure: yt_tcp has inseq=18000" "key=yt_tcp:nld=2:inseq=18000" "$SAMPLE_OPT"
 assert_contains "structure: gv_tcp has inseq=18000" "key=gv_tcp:nld=2:inseq=18000" "$SAMPLE_OPT"
 assert_contains "structure: discord_udp uses native hostkey generator" "key=discord_udp:nld=2:hostkey=z2k_nohost_key" "$SAMPLE_OPT"
-# Этап 2: failure_detector= wired per pool; success_detector / no_http_redirect
-# stay native until Этапы 3-4.
+# Этапы 2-3: failure_detector= + success_detector= wired per pool;
+# no_http_redirect stays native until Этап 4.
 assert_contains "structure: rkn_tcp failure_detector=z2k_silent_drop_detector" "key=rkn_tcp:nld=2:inseq=26000:failure_detector=z2k_silent_drop_detector" "$SAMPLE_OPT"
 assert_contains "structure: gv_tcp failure_detector=z2k_tls_alert_fatal" "key=gv_tcp:nld=2:inseq=18000:failure_detector=z2k_tls_alert_fatal" "$SAMPLE_OPT"
-assert_not_contains "structure: no z2k success_detector injection yet (Этап 3)" "success_detector=" "$SAMPLE_OPT"
+assert_contains "structure: rkn_tcp success_detector=z2k_http_success_positive_only" "failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
+assert_contains "structure: yt_tcp success_detector=z2k_success_no_reset" "failure_detector=z2k_silent_drop_detector:success_detector=z2k_success_no_reset" "$SAMPLE_OPT"
+assert_contains "structure: gv_tcp success_detector=z2k_http_success_positive_only" "failure_detector=z2k_tls_alert_fatal:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
 assert_not_contains "structure: no no_http_redirect (native redirect detection)" "no_http_redirect" "$SAMPLE_OPT"
 assert_not_contains "structure: no allow_nohost (replaced by hostkey=z2k_nohost_key)" "allow_nohost" "$SAMPLE_OPT"
 
@@ -601,8 +603,8 @@ assert_contains "ms+silent: rkn_tcp failure_detector=z2k_silent_drop_detector" \
 # z2k_http_success_positive_only earlier from ensure_circular_arg_set,
 # so it survives — assert that survival rather than the no-reset
 # variant that only fires on bare circulars.
-assert_not_contains "ms+silent: rkn_tcp native — no z2k success_detector injection" \
-    "success_detector=" "$RKN_ARM_SILENT"
+assert_contains "ms+silent: rkn_tcp keeps z2k_http_success_positive_only (survives silent fallback)" \
+    "success_detector=z2k_http_success_positive_only" "$RKN_ARM_SILENT"
 assert_not_contains "ms+silent: no s5556 leak via silent path" \
     "--in-range=-s5556" "$RKN_ARM_SILENT"
 assert_not_contains "ms+silent: no z2k_tls_stalled as primary" \
@@ -1029,7 +1031,7 @@ assert_contains "tls: circular has fails=2" "circular:fails=2" "$TLS_CIRC_TOKEN"
 assert_contains "tls: circular has nld=2 (per-SLD pinning)" "nld=2" "$TLS_CIRC_TOKEN"
 assert_contains "tls: circular has inseq=18000 (TSPU 16K-gate)" "inseq=18000" "$TLS_CIRC_TOKEN"
 assert_contains "tls: game_tls failure_detector=z2k_tls_alert_fatal" "failure_detector=z2k_tls_alert_fatal" "$TLS_CIRC_TOKEN"
-assert_not_contains "tls: circular native — no z2k success_detector injection" "success_detector=" "$TLS_CIRC_TOKEN"
+assert_contains "tls: game_tls success_detector=z2k_success_no_reset" "success_detector=z2k_success_no_reset" "$TLS_CIRC_TOKEN"
 assert_not_contains "tls: circular native — no_http_redirect removed (native 302/307 detection)" "no_http_redirect" "$TLS_CIRC_TOKEN"
 # Negative — these MUST NOT leak onto the circular token from a future
 # refactor that moves them around (e.g., onto strategy=N tokens).
