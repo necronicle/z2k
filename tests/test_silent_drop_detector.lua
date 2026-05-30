@@ -132,12 +132,14 @@ end
 
 print("--- z2k_silent_drop_detector ---")
 
--- Case 1: marker=false, in_bytes<3KB, out>=4, in<=1 → FAIL (real silent drop)
--- Detector fires on the silent-drop signal; chain is NOT consulted
--- because the wrapper returns early after detecting drop.
+-- Case 1: marker=false, in_bytes<3KB, out>=4, in<=1, AND connection is old
+-- (age>=3s) → FAIL (real silent drop). The age qualifier distinguishes a
+-- genuine silent drop from a young browser-cancel (see case9, 2026-05-25
+-- bypass): a real drop is a flow the client kept feeding over time while the
+-- server stayed silent. Detector fires; chain is NOT consulted (early return).
 do
     reset_chain()
-    local crec = {}
+    local crec = { z2k_first_seen_t = (os.time() - 10) }
     local d = out_packet(4, 1, 200, 0)
     local fired = z2k_silent_drop_detector(d, crec)
     check("case1: real silent drop fires",            true, fired)
@@ -302,13 +304,29 @@ do
 end
 
 -- Case 8: parametric override of packet-count contract — tcp_out=2
--- shifts the silent-drop trigger left for HTTP profiles that bursts
--- fewer outgoing requests before timeout.
+-- shifts the silent-drop trigger left for HTTP profiles that burst
+-- fewer outgoing requests before timeout. Aged crec so the low-byte flow
+-- reads as a real silent drop, not a browser-cancel (case9).
 do
     reset_chain()
     local arg = { tcp_out = 2, tcp_in = 1 }
-    local fired = z2k_silent_drop_detector(out_packet(2, 1, 200, 0), {}, arg)
+    local crec = { z2k_first_seen_t = (os.time() - 10) }
+    local fired = z2k_silent_drop_detector(out_packet(2, 1, 200, 0), crec, arg)
     check("case8: tcp_out=2 arg lowers fire threshold", true, fired)
+end
+
+-- Case 9 (2026-05-25 browser-cancel bypass): same out>>in / low-in_bytes
+-- shape as case1, but a YOUNG connection (age<3s, freshly stamped crec) is a
+-- browser preconnect cancel — NOT a silent drop. Must NOT fire, else
+-- multi-connection HTTPS sites (Instagram/Facebook) false-rotate within
+-- seconds of active scrolling. Distinguishing axis from case1 is connection age.
+do
+    reset_chain()
+    local crec = {}  -- no z2k_first_seen_t → detector stamps now → age 0
+    local d = out_packet(4, 1, 200, 0)
+    local fired = z2k_silent_drop_detector(d, crec)
+    check("case9: young low-byte flow = browser-cancel, no fire", false, fired)
+    check("case9: chain still runs (mid_stream)",                 1,     chain_calls.mid_stream)
 end
 
 -- ----- summary ------------------------------------------------------------

@@ -458,11 +458,15 @@ LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 # failure_detector=z2k_tls_stalled by global name when parsing profiles,
 # so the functions need to exist already. Autocircular still references
 # z2k_tls_alert_fatal via name-lookup after Phase 4 refactor.
-# z2k-detectors.lua АРХИВИРОВАН 2026-05-28 (archive/custom-detectors-rotation/).
-# Откат на нативную bol-van detection: standard_failure_detector /
-# standard_success_detector из zapret-auto.lua. Кастомные детекторы
-# (TLS-alert/HTTP-classifier/server-active-reject/silent-drop) давали
-# false-positives → жалобы на ротацию. Больше НЕ загружаем.
+# z2k-detectors.lua ВОЗВРАЩЁН 2026-05-30 (Этап 1 ревью-восстановления архива):
+# кастомные детекторы (TLS-alert / HTTP-classifier / mid-stream-stall /
+# silent-drop / server-active-reject). Грузятся ПОСЛЕ zapret-auto.lua
+# (определяет standard_*_detector); резолвятся по имени через
+# failure_detector=/success_detector= в профилях. На Этапе 1 — ТОЛЬКО
+# загрузка (определения функций); проводка инъекций в config_official.sh
+# приходит на Этапах 2-3, поэтому сейчас поведение не меняется.
+LUA_Z2K_DETECTORS="$ZAPRET_BASE/lua/z2k-detectors.lua"
+[ -f "$LUA_Z2K_DETECTORS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DETECTORS"
 # Phase 6: z2k-fooling-ext.lua exports anti-ТСПУ fool functions like
 # z2k_dynamic_ttl, referenced by strategies via `fool=<name>` arg. Must
 # load after zapret-lib.lua (provides apply_fooling's extension point)

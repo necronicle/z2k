@@ -825,9 +825,14 @@ download_init_script() {
     local lua_dir="${files_dir}/lua"
     mkdir -p "$lua_dir" || die "Не удалось создать $lua_dir"
 
-    # z2k-detectors.lua АРХИВИРОВАН 2026-05-28 (archive/custom-detectors-rotation/)
-    # — откат на нативную bol-van detection. Больше НЕ качаем (был бы 404 +
-    # die на отсутствующем files/lua/z2k-detectors.lua).
+    # z2k-detectors.lua ВОЗВРАЩЁН 2026-05-30 (Этап 1): кастомные детекторы.
+    url="${GITHUB_RAW}/files/lua/z2k-detectors.lua"
+    output="${lua_dir}/z2k-detectors.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-detectors.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-detectors.lua"
+    fi
 
     # Phase 6: anti-ТСПУ fool extensions (z2k_dynamic_ttl and friends).
     # Strategies reference them by name via `fool=z2k_dynamic_ttl`, so the
