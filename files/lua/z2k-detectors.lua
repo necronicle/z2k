@@ -69,8 +69,16 @@ local Z2K_HTTP_BLOCK_BODY_MARKERS = {
 -- These prefixes (with trailing dot — host-anchored) catch operator
 -- redirect targets without firing on legitimate URLs containing the
 -- bare word in path/query.
+-- Leading-label-anchored (sub(1,#p)==p, every entry ends in "."). Inflected
+-- forms added 2026-05-30 (review w7kkh0yb7): "warn." alone MISSED the single
+-- most common RU stub warning.rt.ru (Ростелеком) — "warning" is one label with
+-- no dot after "warn"; same for restricted./blocking./blockpage. A host that
+-- STARTS with these is a block portal (legit sites don't), so leading-anchored
+-- prefixes are low-FP. (Bare generic words stay OUT of the body list — they
+-- appear on legit 4xx pages.)
 local Z2K_HTTP_BLOCK_HOST_PREFIXES = {
-  "warn.", "deny.", "restrict.", "block.", "blocked.", "blackhole.",
+  "warn.", "warning.", "deny.", "restrict.", "restricted.", "block.",
+  "blocked.", "blocking.", "blockpage.", "blackhole.", "forbidden.",
 }
 
 -- Server-side WAF response headers — signal that the SERVER (not DPI on
@@ -135,6 +143,16 @@ local function z2k_find_host_marker(host_lower)
   -- Host-prefix markers (warn.beeline.ru, deny.megafon.ru, etc).
   for _, p in ipairs(Z2K_HTTP_BLOCK_HOST_PREFIXES) do
     if host_lower:sub(1, #p) == p then return "prefix:" .. p end
+  end
+  -- CGNAT captive-portal redirect target (review w7kkh0yb7): an operator
+  -- DNS-poison / 302 to a literal 100.64.0.0/10 (carrier-grade NAT) address is
+  -- a block portal, never a real cross-SLD destination. Match the /10 range
+  -- exactly (2nd octet 64-127) — NOT a raw "100." prefix, which would
+  -- false-positive on public 100.x addresses.
+  local o2 = host_lower:match("^100%.(%d+)%.")
+  if o2 then
+    local n = tonumber(o2)
+    if n and n >= 64 and n <= 127 then return "cgnat:100.64/10" end
   end
   return nil
 end

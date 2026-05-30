@@ -217,6 +217,31 @@ check("302 cross-SLD to a real RKN label host (eais.rkn.gov.ru) is still hard_fa
         "\r\n",
         "rutracker.org"))
 
+-- Stage 4 coverage (review w7kkh0yb7): inflected-label prefix + CGNAT captive.
+check("302 cross-SLD to warning.rt.ru (Ростелеком stub) is hard_fail",
+    "hard_fail", "prefix:warning.",
+    mock_desync(
+        "HTTP/1.1 302 Found\r\n" ..
+        "Location: http://warning.rt.ru/\r\n" ..
+        "\r\n",
+        "rutracker.org"))
+
+check("302 cross-SLD to CGNAT 100.64.0.1 captive portal is hard_fail",
+    "hard_fail", "cgnat",
+    mock_desync(
+        "HTTP/1.1 302 Found\r\n" ..
+        "Location: http://100.64.0.1/block\r\n" ..
+        "\r\n",
+        "rutracker.org"))
+
+check("302 cross-SLD to public 100.5.6.7 (NOT CGNAT) is neutral",
+    "neutral", "cross_sld_no_marker",
+    mock_desync(
+        "HTTP/1.1 302 Found\r\n" ..
+        "Location: http://100.5.6.7/page\r\n" ..
+        "\r\n",
+        "rutracker.org"))
+
 check("302 absolute same-SLD HTTP→HTTPS upgrade is positive",
     "positive", nil,
     mock_desync(
