@@ -3360,6 +3360,21 @@ uninstall_zapret2() {
         "$INIT_SCRIPT" stop 2>/dev/null || true
     fi
 
+    # ROOT-CAUSE FIX «rm: Directory not empty»: погасить ВСЕ фоновые писатели
+    # в $ZAPRET2_DIR ДО kill nfqws2 и rm. Главный виновник — S99z2k-scheduler:
+    # его healthcheck-watchdog перезапускает nfqws2 сразу после kill ниже,
+    # перезапущенный демон пишет state.tsv в кэш → финальный rm упирается в
+    # непустую директорию. Вебпанель (lighttpd) и z2k-detect тоже пишут в
+    # $ZAPRET2_DIR на ходу. Планировщик гасим ПЕРВЫМ.
+    local _svc _spids _pat
+    for _svc in S99z2k-scheduler S96z2k-webpanel S98z2k-detect; do
+        [ -x "/opt/etc/init.d/$_svc" ] && "/opt/etc/init.d/$_svc" stop >/dev/null 2>&1 || true
+    done
+    for _pat in 'z2k-scheduler\.sh' 'z2k-detect' 'lighttpd.*zapret2'; do
+        _spids=$(ps w 2>/dev/null | grep -E "$_pat" | grep -v grep | awk '{print $1}')
+        [ -n "$_spids" ] && kill -9 $_spids 2>/dev/null || true
+    done
+
     # Принудительно убить оставшиеся процессы nfqws2 И nfqws (legacy от
     # старых установок zapret до миграции на z2k).
     local pids proc_name
@@ -3414,6 +3429,9 @@ uninstall_zapret2() {
     # zapret/nfqws (если миграция шла с предыдущих версий и они остались).
     local _init
     for _init in "$INIT_SCRIPT" \
+                 /opt/etc/init.d/S99z2k-scheduler \
+                 /opt/etc/init.d/S96z2k-webpanel \
+                 /opt/etc/init.d/S98z2k-detect \
                  /opt/etc/init.d/S99zapret \
                  /opt/etc/init.d/S99nfqws \
                  /opt/etc/init.d/S99nfqws2; do
@@ -3506,8 +3524,20 @@ uninstall_zapret2() {
     local _dir
     for _dir in "$ZAPRET2_DIR" /opt/zapret; do
         if [ -d "$_dir" ]; then
-            rm -rf "$_dir"
-            print_info "Удалена директория: $_dir"
+            rm -rf "$_dir" 2>/dev/null || true
+            # Подстраховка: если процесс держал открытый файл/CWD или успел
+            # пересоздать что-то между обходом и rmdir — добить держателей
+            # (fuser, если есть) и повторить удаление.
+            if [ -d "$_dir" ]; then
+                command -v fuser >/dev/null 2>&1 && fuser -k -m "$_dir" 2>/dev/null || true
+                sleep 1
+                rm -rf "$_dir" 2>/dev/null || true
+            fi
+            if [ -d "$_dir" ]; then
+                print_warning "Не удалось полностью удалить $_dir — остались файлы. Проверьте: ps w | grep -E 'zapret2|z2k'"
+            else
+                print_info "Удалена директория: $_dir"
+            fi
         fi
     done
 
