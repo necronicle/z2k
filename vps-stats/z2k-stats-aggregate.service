@@ -1,0 +1,13 @@
+[Unit]
+Description=z2k strategy-stats aggregation (oneshot, driven by timer)
+
+[Service]
+Type=oneshot
+User=z2kstats
+Group=z2kstats
+StateDirectory=z2k-stats
+ExecStart=/usr/local/bin/z2k-stats-aggregate.py --raw /var/lib/z2k-stats/raw.jsonl --out-json /var/lib/z2k-stats/summary.json --out-txt /var/lib/z2k-stats/summary.txt --window-days 14 --catalog /var/lib/z2k-stats/catalog.json
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/z2k-stats
+ProtectHome=true

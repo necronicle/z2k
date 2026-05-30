@@ -1470,7 +1470,7 @@ step_build_zapret2() {
     # Install z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, auto-update)
     # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup
     # detection stack). Replaced by the server_active_reject taxonomy in z2k-detectors.lua.
-    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh; do
+    for tool_script in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh; do
         if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
             cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true

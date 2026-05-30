@@ -1,0 +1,34 @@
+[Unit]
+Description=z2k anonymized strategy-stats collector
+After=network.target
+
+[Service]
+# Dedicated unprivileged user; create with: useradd --system --no-create-home --shell /usr/sbin/nologin z2kstats
+User=z2kstats
+Group=z2kstats
+EnvironmentFile=/etc/z2k-stats.env
+ExecStart=/usr/local/bin/z2k-stats-collector.py
+Restart=on-failure
+RestartSec=3
+
+# Sandbox — the collector only needs to bind localhost and append to its data dir.
+RuntimeDirectory=z2k-stats
+StateDirectory=z2k-stats
+ReadWritePaths=/var/lib/z2k-stats
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

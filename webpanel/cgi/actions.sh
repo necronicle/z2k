@@ -209,6 +209,15 @@ toggle_dynamic_ttl() {
     restart_service_if_running
 }
 
+toggle_stats() {
+    # Z2K_STATS — anonymized strategy telemetry to the project VPS (default 1).
+    # Out-of-band: it does NOT affect NFQWS2_OPT and is read fresh by
+    # z2k-stats-upload.sh each daily run, so neither a config regen nor a
+    # service restart is needed — just flip the flag.
+    local want="$1"
+    set_flag "Z2K_STATS" "$want" "$CONFIG_FILE" || return 1
+}
+
 # --- policy access (Keenetic NDM ip policy filter) ---
 
 # policy_exists <name>: returns 0 if a Keenetic IP policy с description = <name>

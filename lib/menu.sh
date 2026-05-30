@@ -117,11 +117,12 @@ MENU
 [Y] Diagnose domain (4-стадийная проба + рекомендация)
 [M] Динамический TTL (для мобильных операторов)
 [A] Политика доступа Keenetic (фильтр по NDM policy)
+[C] Сбор статистики стратегий (анонимно)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M,A]: "
+        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M,A,C]: "
         read_input choice
 
         case "$choice" in
@@ -178,6 +179,9 @@ MENU
                 ;;
             a|A)
                 menu_policy_access
+                ;;
+            c|C)
+                menu_stats
                 ;;
             0)
                 print_info "Выход из меню"
@@ -1412,6 +1416,87 @@ SUBMENU
                 print_success "Сервис перезапущен"
             fi
 
+            pause
+            ;;
+
+        b|B)
+            return 0
+            ;;
+
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: СБОР СТАТИСТИКИ СТРАТЕГИЙ (анонимно)
+# ==============================================================================
+
+menu_stats() {
+    clear_screen
+    print_header "Сбор статистики стратегий (анонимно)"
+
+    local config_file="${ZAPRET2_DIR}/config"
+
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local Z2K_STATS
+    Z2K_STATS=$(safe_config_read "Z2K_STATS" "$config_file" "1")
+
+    print_separator
+    print_info "Статус: $([ "$Z2K_STATS" = "0" ] && echo 'Выключен' || echo 'Включён (по умолчанию)')"
+    print_separator
+
+    cat <<'SUBMENU'
+
+Раз в сутки z2k отправляет на сервер проекта ОБЕЗЛИЧЕННЫЙ
+срез ротации: какая стратегия сейчас активна в каждом пуле
+(yt_quic, rkn_tcp, yt_tcp ...) и как долго держится. Сводная
+по всем согласившимся помогает понять, какие стратегии реально
+работают, и двигать лучшие в начало списка.
+
+Что НЕ уходит с устройства НИКОГДА:
+  - сайты/домены, которые вы открываете;
+  - ваш IP, провайдер, регион;
+  - любой идентификатор устройства (ни серийник, ни случайный).
+Уходят только: имя пула, номер стратегии, время удержания.
+
+[1] Включить (по умолчанию)
+[2] Выключить (отказаться от сбора)
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            if grep -q '^Z2K_STATS=' "$config_file"; then
+                sed -i 's/^Z2K_STATS=.*/Z2K_STATS=1/' "$config_file"
+            else
+                echo "Z2K_STATS=1" >> "$config_file"
+            fi
+            # Out-of-band telemetry flag: read fresh by z2k-stats-upload.sh each
+            # run, so no config regen / service restart is needed.
+            print_success "Сбор статистики включён"
+            pause
+            ;;
+
+        2)
+            if grep -q '^Z2K_STATS=' "$config_file"; then
+                sed -i 's/^Z2K_STATS=.*/Z2K_STATS=0/' "$config_file"
+            else
+                echo "Z2K_STATS=0" >> "$config_file"
+            fi
+            print_success "Сбор статистики выключен"
             pause
             ;;
 

@@ -771,7 +771,7 @@ download_init_script() {
 
     # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, tg watchdog).
     # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup).
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-auto-update.sh z2k-insta-ip-refresh.sh z2k-scheduler.sh; do
+    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-auto-update.sh z2k-insta-ip-refresh.sh z2k-scheduler.sh z2k-stats-upload.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if z2k_fetch "$url" "$output"; then

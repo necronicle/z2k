@@ -13,6 +13,7 @@
 #
 # Tasks (HH:MM <command>):
 #   02:00  z2k-auto-update.sh apply       — nightly auto-update check
+#   03:00  z2k-stats-upload.sh             — anonymized strategy stats -> VPS
 #   04:00  z2k-update-lists.sh             — RKN/YT hostlist refresh
 #   06:00  ipset/get_config.sh              — IP-set resolution
 
@@ -90,6 +91,14 @@ while true; do
             if [ "$(last_fired_for_key auto-update)" != "$today" ]; then
                 mark_fired auto-update "$today"
                 run_task auto-update "${ZAPRET2_DIR}/z2k-auto-update.sh" apply
+            fi
+            ;;
+        03:00)
+            # Anonymized strategy-stats upload (gated on Z2K_STATS inside the
+            # script; silent no-op on opt-out / network failure).
+            if [ "$(last_fired_for_key stats-upload)" != "$today" ]; then
+                mark_fired stats-upload "$today"
+                run_task stats-upload "${ZAPRET2_DIR}/z2k-stats-upload.sh"
             fi
             ;;
         04:00)
