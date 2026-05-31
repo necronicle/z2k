@@ -70,6 +70,11 @@ func Defaults() Config {
 		SkipPaths: []string{
 			"/opt/zapret2/extra_strats/TCP/RKN/List.txt",
 			"/opt/zapret2/extra_strats/TCP_Discord.txt",
+			// YouTube category hostlists — already covered by yt_tcp/gv_tcp/
+			// yt_quic profiles; skip re-probing youtube.com / googlevideo.com.
+			"/opt/zapret2/extra_strats/TCP/YT/List.txt",
+			"/opt/zapret2/extra_strats/TCP/YT_GV/List.txt",
+			"/opt/zapret2/extra_strats/UDP/YT/List.txt",
 			"/opt/zapret2/lists/extra-domains.txt",
 			"/opt/zapret2/lists/whitelist.txt",
 		},

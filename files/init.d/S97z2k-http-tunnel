@@ -37,16 +37,40 @@ start() {
         echo "z2k-http-tunnel already running (pid $(cat $PIDFILE))"
         return 0
     fi
-    echo "Starting z2k-http-tunnel on :$LISTEN_PORT..."
-    # Proper daemonization: subshell ignores SIGHUP, then exec replaces it
-    # with the daemon which inherits the ignored-HUP disposition; stdin
-    # is closed so daemon has no controlling tty. Without this, busybox
-    # sh on MIPS posts SIGHUP to bg children when init.d wrapper exits,
-    # and the Go runtime (terminate-on-HUP by default) kills the daemon
-    # before it even reaches "listening on :NNNN" in the log — observed
-    # field-debug 2026-05-23 on a Keenetic MIPS user where the same
-    # binary ran fine in foreground but died instantly under init.d.
-    ( trap '' HUP; exec $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 ) &
+    echo "Starting z2k-http-tunnel supervisor on :$LISTEN_PORT..."
+    # SUPERVISOR loop (s6/runit pattern in shell — Entware has no systemd/procd).
+    # The pidfile holds the SUPERVISOR, which is the PARENT of the daemon and
+    # respawns it on exit with capped backoff. This replaces the old
+    # fire-and-forget `exec &` that left the daemon orphaned with no respawn
+    # (field 2026-05-30: daemon died on transient relay EOF and stayed dead,
+    # blackholing the redirected destination until a manual restart).
+    #   trap '' HUP   — preserves the MIPS busybox SIGHUP fix: the daemon child
+    #                   inherits the ignored-HUP disposition (Go terminates on
+    #                   HUP by default; busybox posts HUP to bg children when the
+    #                   init.d wrapper exits). </dev/null = no controlling tty.
+    #   trap TERM/INT — `stop` kills the supervisor; the trap kills the daemon
+    #                   child so it does not outlive the supervisor.
+    #   backoff resets to 1s after a healthy run (>=60s uptime); otherwise grows
+    #                   to a 30s cap so a hard-down relay is not hammered.
+    (
+        trap '' HUP
+        trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+        backoff=1
+        while :; do
+            t0=$(date +%s 2>/dev/null || echo 0)
+            $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 &
+            child=$!
+            wait "$child"
+            t1=$(date +%s 2>/dev/null || echo 0)
+            if [ $((t1 - t0)) -ge 60 ]; then
+                backoff=1
+            else
+                backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+            fi
+            echo "$(date 2>/dev/null) [supervisor] daemon exited, respawn in ${backoff}s" >> "$LOG"
+            sleep "$backoff"
+        done
+    ) &
     echo $! > "$PIDFILE"
     sleep 2
     for cidr in $CIDRS; do

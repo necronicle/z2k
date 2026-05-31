@@ -315,5 +315,123 @@ do
         3, autostate["gv_tcp"]["googlevideo.com"].nstrategy)
 end
 
+-- T20: hostless/discord pools are EXEMPT from the sticky revert (regression fix
+-- 2026-05-30 — Discord voice). Hostkey=z2k_nohost_key collapses ALL discord
+-- flows into one shared "nohost|discord_udp" bucket; reverting would pin the
+-- whole pool on the first-working strategy and break voice to DCs that need a
+-- different desync. Must behave like r-43 (no revert at all): the drift is KEPT
+-- even though the shared nohost bucket just had a success.
+do
+  fresh()
+  now = 6000
+  -- a success stamps the shared "nohost|discord_udp" bucket...
+  circular(nil, mk("discord_udp", nil, {outgoing = false, l7payload = "tls_server_hello", hostkey = "z2k_nohost_key"}))
+  now = 6005
+  circular(nil, mk("discord_udp", nil, {hostkey = "z2k_nohost_key", sim = 3}))  -- circular drifts 1→3
+  check("T20: discord/nohost drift NOT reverted (native circular like r-43)",
+        3, autostate["discord_udp"]["nohost"].nstrategy)
+end
+
+-- ===========================================================================
+-- External-edit reconcile (option B — state.tsv authoritative for OUTSIDE writes).
+-- The webpanel × delete (and manual edits) change state.tsv directly; the
+-- circular wrapper re-reads the disk and applies genuine external changes to the
+-- live autostate so they take effect WITHOUT a service restart. It diffs disk
+-- against last_written (what WE wrote), so our own debounced writes are never
+-- mistaken for an external edit. Reconcile is debounced 2s → advance `now` ≥2
+-- between the seeding call and the call that should observe the edit.
+
+-- T21: webpanel × delete (row removed from disk) → live nstrategy reset to 1,
+-- and the deleted host re-persists at strategy 1 on the same packet.
+do
+  fresh()
+  now = 7000
+  circular(nil, mk("rkn_tcp", "ext.com", {sim = 2}))   -- live=2, disk=2, last_written=2
+  check("T21: seeded at strategy 2", 2, autostate["rkn_tcp"]["ext.com"].nstrategy)
+  write_file("# h\n# h2\n")                             -- operator × removes the row
+  now = 7005                                            -- past the 2s reconcile debounce
+  circular(nil, mk("rkn_tcp", "ext.com"))              -- reconcile fires before circular
+  check("T21: external × delete resets live nstrategy to 1",
+        1, autostate["rkn_tcp"]["ext.com"].nstrategy)
+  check("T21: deleted host re-persists at strategy 1", 1, row("rkn_tcp", "ext.com"))
+end
+
+-- T22: an external EDIT (operator sets a different strategy on disk) is adopted
+-- into the live rotator and kept.
+do
+  fresh()
+  now = 7100
+  circular(nil, mk("rkn_tcp", "edit.com", {sim = 2}))  -- live=2, disk=2, last_written=2
+  write_file("# h\n# h2\nrkn_tcp\tedit.com\t3\t7200\n")  -- operator edits to 3
+  now = 7105
+  circular(nil, mk("rkn_tcp", "edit.com"))
+  check("T22: external edit adopted into live nstrategy",
+        3, autostate["rkn_tcp"]["edit.com"].nstrategy)
+  check("T22: adopted strategy stays on disk", 3, row("rkn_tcp", "edit.com"))
+end
+
+-- T23: when the disk matches our last write (our OWN debounced write, no outside
+-- change), reconcile must NOT reset anything — this is the debounce-race guard.
+do
+  fresh()
+  now = 7200
+  circular(nil, mk("rkn_tcp", "stable.com", {sim = 2}))
+  now = 7205
+  circular(nil, mk("rkn_tcp", "stable.com"))           -- disk == last_written → no-op
+  check("T23: unchanged disk does NOT trigger a spurious reset",
+        2, autostate["rkn_tcp"]["stable.com"].nstrategy)
+end
+
+-- T24: deleting ONE host leaves a sibling host on the same key untouched.
+do
+  fresh()
+  now = 7300
+  circular(nil, mk("rkn_tcp", "keepme.com", {sim = 2}))
+  circular(nil, mk("rkn_tcp", "delme.com",  {sim = 3}))
+  write_file("# h\n# h2\nrkn_tcp\tkeepme.com\t2\t7300\n")  -- × removes only delme
+  now = 7305
+  circular(nil, mk("rkn_tcp", "keepme.com"))           -- reconcile resets the deleted one
+  check("T24: sibling delete resets only the deleted host",
+        1, autostate["rkn_tcp"]["delme.com"].nstrategy)
+  check("T24: sibling kept host untouched",
+        2, autostate["rkn_tcp"]["keepme.com"].nstrategy)
+end
+
+-- T25: an external edit that raises the strategy WHILE a success is fresh (<30s)
+-- must be adopted and NOT rolled back by the sticky-success revert. Regression
+-- guard for the ordering fix: the sticky baseline is snapshotted AFTER reconcile,
+-- so an operator edit is the starting point, not "drift" to undo.
+do
+  fresh()
+  local PLAN5 = { {arg={strategy=1}}, {arg={strategy=2}}, {arg={strategy=3}},
+                  {arg={strategy=4}}, {arg={strategy=5}} }  -- edit-to-4 must be in range
+  now = 8000
+  circular(nil, mk("rkn_tcp", "h3.com", {sim = 2, plan = PLAN5}))    -- live=2, disk=2
+  now = 8001
+  circular(nil, mk("rkn_tcp", "h3.com", {outgoing = false, l7payload = "tls_server_hello", plan = PLAN5})) -- success stamp
+  write_file("# h\n# h2\nrkn_tcp\th3.com\t4\t8002\n")   -- operator edits 2 → 4
+  now = 8003                                            -- 2s later: inside the 30s window
+  circular(nil, mk("rkn_tcp", "h3.com", {plan = PLAN5}))
+  check("T25: external edit-up NOT reverted by the sticky window",
+        4, autostate["rkn_tcp"]["h3.com"].nstrategy)
+  check("T25: edited strategy persists to disk", 4, row("rkn_tcp", "h3.com"))
+end
+
+-- T26: a host deleted externally (webpanel ×) stays deleted even when a SIBLING
+-- host's write flushes during the reconcile debounce window — write_state must
+-- not resurrect a row that's gone from a readable disk but still in our mirror.
+-- Regression guard for the debounce-race fix.
+do
+  fresh()
+  now = 9200
+  circular(nil, mk("rkn_tcp", "delh.com", {sim = 2}))  -- reconcile fires here (last_reconcile=9200)
+  circular(nil, mk("rkn_tcp", "sib2.com", {sim = 2}))  -- same second → reconcile debounced
+  write_file("# h\n# h2\nrkn_tcp\tsib2.com\t2\t9200\n")  -- × removes delh, keeps sib2
+  circular(nil, mk("rkn_tcp", "sib2.com", {sim = 3}))  -- sibling write within the window (2→3, in range)
+  check("T26: externally-deleted host NOT resurrected by a sibling write",
+        nil, row("rkn_tcp", "delh.com"))
+  check("T26: sibling host still persists its own rotation", 3, row("rkn_tcp", "sib2.com"))
+end
+
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
 os.exit(FAIL == 0 and 0 or 1)

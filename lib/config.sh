@@ -124,8 +124,25 @@ download_domain_lists() {
 update_domain_lists() {
     print_header "Обновление списков доменов"
 
-    # Скачать обновленные списки
-    download_domain_lists
+    # Fetch FRESH lists from runetfreedom geosite — the SAME network source the
+    # installer uses (lib/install.sh step_download_domain_lists) and the nightly
+    # scheduler (z2k-update-lists.sh). The previous code here called
+    # download_domain_lists, which only COPIED the stale bundled snapshot
+    # (files/lists/...) over the live network lists — reverting them to the
+    # shipped fallback on every run (RKN 74751→125451, UDP/YT 178→12 — the same
+    # delta regardless of anything). That is a downgrade, not an update, and was
+    # the cause of the "странное изменение кол-ва доменов" on menu item 3.
+    # geosite writes RKN/YT/UDP atomically and keeps the previous list if a
+    # fetch fails — no snapshot downgrade.
+    local geosite="${ZAPRET2_DIR}/z2k-geosite.sh"
+    if [ -x "$geosite" ]; then
+        print_info "Загрузка свежих списков (runetfreedom geosite)..."
+        FORCE_REFETCH=1 sh "$geosite" fetch --force 2>&1 | sed 's/^/  /' || \
+            print_warning "Часть списков не обновилась — прежние оставлены без изменений"
+    else
+        print_warning "z2k-geosite.sh не найден — копирую bundled-снапшот (fallback)"
+        download_domain_lists
+    fi
 
     # Показать статистику
     print_separator

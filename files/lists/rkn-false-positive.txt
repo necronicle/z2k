@@ -18,3 +18,15 @@
 # Google
 play.google.com
 snap-storage-cdn.l.google.com
+
+# Rutracker — handled by the dedicated z2k-rt-proxy (S96), MUST be absent from
+# the nfqws2 desync hostlist or nfqws2 would mangle the ClientHello before it
+# reaches the proxy. subtract_false_positive_from_rkn() matches the EXACT LINE,
+# so every subdomain is listed verbatim (the apex does NOT cascade).
+rutracker.org
+www.rutracker.org
+rutracker.cc
+static.rutracker.cc
+api.rutracker.cc
+rep.rutracker.cc
+rutracker.wiki

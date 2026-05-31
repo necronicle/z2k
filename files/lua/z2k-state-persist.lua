@@ -34,6 +34,11 @@ local STATE_FILE_FALLBACK = _fallback_base .. "/z2k-autocircular-state.tsv"
 
 local loaded = false
 local state = {}            -- state[askey][hostn] = { strategy = N, ts = T }
+-- last_written = snapshot of what WE last wrote to the primary state.tsv. The
+-- external-edit reconcile diffs the disk-now against THIS (not `state`, which
+-- can lead disk during the debounce window) so the rotator's own in-RAM drift
+-- is never mistaken for an outside edit. See reconcile_external_edits().
+local last_written = {}     -- last_written[askey][hostn] = { strategy = N, ts = T }
 local last_write = 0
 local write_interval = 2    -- seconds (debounce window for flash-friendly writes)
 
@@ -136,6 +141,21 @@ local function merge_state_file_into(path, dest)
   f:close()
 end
 
+-- Shallow {askey -> hostn -> {strategy,ts}} copy keeping only persisted fields.
+-- Used to snapshot disk/merged into `last_written` (the external-edit baseline).
+local function snapshot_strategies(src)
+  local out = {}
+  for askey, hosts in pairs(src) do
+    out[askey] = {}
+    for hostn, rec in pairs(hosts) do
+      if rec and rec.strategy then
+        out[askey][hostn] = { strategy = rec.strategy, ts = rec.ts }
+      end
+    end
+  end
+  return out
+end
+
 local function load_state()
   if loaded then return end
   loaded = true
@@ -144,6 +164,12 @@ local function load_state()
   if not path then return end
   merge_state_file_into(STATE_FILE_PRIMARY, state)
   merge_state_file_into(STATE_FILE_FALLBACK, state)
+  -- Prime the external-edit baseline from the disk we just loaded. Without this
+  -- `last_written` starts empty and the first reconcile would treat EVERY disk
+  -- row as an outside edit (re-adopting it / rewinding any in-RAM drift that
+  -- circular accumulated before the first debounced write). Priming makes the
+  -- first reconcile a no-op for untouched rows.
+  last_written = snapshot_strategies(state)
 end
 
 -- ---------------------------------------------------------------------------
@@ -201,11 +227,23 @@ local function write_state()
   -- Merge existing on-disk rows so a concurrent writer's entries are not lost.
   local merged = {}
   merge_state_file_into(path, merged)
+  -- A readable file whose row is gone = a real external delete; an unreadable
+  -- file = a transient I/O failure we must NOT mistake for "everything deleted".
+  local disk_readable = can_read_file(path)
   for askey, hosts in pairs(state) do
     if not merged[askey] then merged[askey] = {} end
     for hostn, rec in pairs(hosts) do
       if rec.deleted then
         merged[askey][hostn] = nil
+      elseif disk_readable and merged[askey][hostn] == nil
+             and last_written[askey] and last_written[askey][hostn] then
+        -- We wrote this host before (it's in last_written) yet it's gone from a
+        -- readable disk now → the webpanel × (or a manual edit) removed it. Do
+        -- NOT resurrect it, and drop our stale mirror so no later flush re-adds
+        -- it. This closes the reconcile-debounce race: even if reconcile hasn't
+        -- run yet, a sibling host's write can no longer revive a deleted row.
+        merged[askey][hostn] = nil
+        hosts[hostn] = nil
       else
         merged[askey][hostn] = rec
       end
@@ -228,6 +266,10 @@ local function write_state()
   f:close()
   if not os.rename(tmp, path) then
     os.remove(tmp)
+  else
+    -- Record exactly what is now on disk, so the external-edit reconcile can
+    -- tell OUR own writes apart from outside edits (webpanel × / manual edit).
+    last_written = snapshot_strategies(merged)
   end
   release_lock(lockfile)
 end
@@ -376,8 +418,107 @@ local function is_quic_key(askey)
   return s == "yt_quic" or s == "rkn_quic" or s == "custom_quic" or s == "cf_quic"
 end
 
+-- Sticky-success revert is SAFE only for real-hostname pools, where each visited
+-- host gets its own (host|key) bucket. Hostless pools (hostkey=z2k_nohost_key →
+-- hostn="nohost": discord_udp / STUN / voice DTLS to many Discord DC IPs)
+-- collapse ALL flows into ONE shared "nohost|<key>" bucket. A success on one
+-- flow would then revert (pin) every OTHER flow's circular advancement, freezing
+-- the whole pool on the first-working strategy and breaking voice to DCs that
+-- need a different desync. r-43 had no revert at all, so discord rotated freely
+-- and voice worked — keep exactly that behaviour for hostless/discord pools.
+local function is_sticky_eligible(askey, hostn)
+  if hostn == nil or hostn == "nohost" then return false end
+  local s = askey and tostring(askey) or ""
+  if s:match("^discord") then return false end
+  return true
+end
+
 -- ---------------------------------------------------------------------------
--- wrap circular() — persist + bounded sticky-success revert.
+-- External-edit reconcile — make state.tsv authoritative for OUTSIDE writes.
+--
+-- The rotator is native bol-van circular(); it keeps nstrategy in RAM
+-- (autostate) and we only SEED it from disk on a host's first packet. So an
+-- external change to an ALREADY-ACTIVE host (the webpanel × delete, or a manual
+-- edit) used to be ignored until a full service restart. This re-reads the disk
+-- and applies genuine external changes to the LIVE autostate, so they take
+-- effect without bouncing nfqws.
+--
+-- It diffs disk-now against `last_written` (what WE last wrote to disk), NOT
+-- against `state` (which leads disk during the write debounce) — so the
+-- rotator's own in-RAM drift is never mistaken for an outside edit. Debounced.
+local last_reconcile = 0
+local reconcile_interval = 2   -- seconds
+
+-- autostate is keyed by raw hostkey; disk/state by normalized hostn. Apply n to
+-- every live record whose hostkey normalizes to hostn.
+--
+-- NOTE on blast radius: hostless pools (Discord et al.) collapse ALL flows to a
+-- single hostkey=z2k_nohost_key bucket normalizing to "nohost". Deleting the
+-- "nohost" row therefore resets the WHOLE pool to strategy 1 — that's the only
+-- coherent semantic (there's one shared record), and "× = reset this bucket to
+-- 1" is exactly what the operator asked, so we accept the wide reset.
+local function set_live_nstrategy(askey, hostn, n)
+  local ah = autostate and autostate[askey]
+  if not ah then return end
+  for hostkey, arec in pairs(ah) do
+    if normalize_hostkey_for_state(hostkey) == hostn then
+      arec.nstrategy = n
+    end
+  end
+end
+
+local function reconcile_external_edits()
+  if not loaded then return end
+  local now = now_t()
+  if now ~= 0 and (now - last_reconcile) < reconcile_interval then return end
+  last_reconcile = now
+
+  -- Read the SAME view the bridge actually persists to — primary AND fallback,
+  -- newer-ts winning — exactly like load_state(). Reading only the primary would
+  -- be wrong on a read-only /opt where the bridge writes the /tmp fallback: the
+  -- primary would look empty and every host would be (mis)read as deleted,
+  -- turning reconcile into a mass-reset loop. If NEITHER file is readable we
+  -- bail — an I/O failure must never be mistaken for "the operator deleted
+  -- everything".
+  local p_ok = can_read_file(STATE_FILE_PRIMARY)
+  local f_ok = can_read_file(STATE_FILE_FALLBACK)
+  if not (p_ok or f_ok) then return end
+  local disk = {}
+  if p_ok then merge_state_file_into(STATE_FILE_PRIMARY, disk) end
+  if f_ok then merge_state_file_into(STATE_FILE_FALLBACK, disk) end
+
+  -- (1) External DELETE — present at our last write, gone from disk now → the
+  --     operator removed it (×) → reset its live rotation to strategy 1 and drop
+  --     our mirror, so the next packet re-persists it at 1 ("скинуть на 1ю").
+  for askey, hosts in pairs(last_written) do
+    for hostn in pairs(hosts) do
+      if not (disk[askey] and disk[askey][hostn]) then
+        set_live_nstrategy(askey, hostn, 1)
+        if state[askey] then state[askey][hostn] = nil end
+      end
+    end
+  end
+
+  -- (2) External EDIT/ADD — disk strategy differs from our last write → adopt it
+  --     into the live autostate and our mirror.
+  for askey, hosts in pairs(disk) do
+    for hostn, drec in pairs(hosts) do
+      local lw = last_written[askey] and last_written[askey][hostn]
+      local dn = tonumber(drec.strategy)
+      if dn and (not lw or tonumber(lw.strategy) ~= dn) then
+        set_live_nstrategy(askey, hostn, dn)
+        if not state[askey] then state[askey] = {} end
+        state[askey][hostn] = { strategy = dn, ts = drec.ts }
+      end
+    end
+  end
+
+  -- Adopt disk as the new baseline.
+  last_written = snapshot_strategies(disk)
+end
+
+-- ---------------------------------------------------------------------------
+-- wrap circular() — persist + bounded sticky-success revert + external reconcile.
 -- Keeps state.tsv on the strategy actually working (reverts circular's
 -- parallel-flow drift within 30s of a real success). NO silent-retry / probe /
 -- UCB here — those stay at Этап 6.
@@ -390,10 +531,21 @@ if type(circular) == "function" then
     -- pre-block errors stay swallowed: never break the nfqws desync path.
     pcall(function()
       askey_before, hostn_before, hrec_before = get_record_for_desync(desync, true)
-      if hrec_before then
-        nstrategy_before_circular = tonumber(hrec_before.nstrategy)
-      end
     end)
+
+    -- Apply external state.tsv edits (webpanel × / manual) to the live autostate
+    -- BEFORE the rotator runs, so an operator reset takes effect this packet
+    -- (debounced internally). Errors swallowed — must never break the desync.
+    pcall(reconcile_external_edits)
+
+    -- Snapshot the sticky-revert baseline AFTER reconcile: circular starts from
+    -- the reconciled value, so an operator edit/delete applied just now is the
+    -- legitimate starting point, NOT "drift" to be rolled back. Capturing it
+    -- before reconcile would let the 30s sticky window erase the operator's
+    -- change on the very next packet.
+    if hrec_before then
+      nstrategy_before_circular = tonumber(hrec_before.nstrategy)
+    end
 
     -- pcall ONLY to guarantee hostname restore before re-propagating errors.
     local ok, verdict_or_err = pcall(orig_circular, ctx, desync)
@@ -467,7 +619,7 @@ if type(circular) == "function" then
         if success_event and sticky_key then
           _G.Z2K_STICKY_SUCCESS_TS[sticky_key] = now_f()
         end
-        if sticky_key and nstrategy_before_circular and hrec.nstrategy
+        if sticky_key and is_sticky_eligible(askey, hostn) and nstrategy_before_circular and hrec.nstrategy
            and (tonumber(hrec.nstrategy) or 0) > nstrategy_before_circular then
           local last_ok = _G.Z2K_STICKY_SUCCESS_TS[sticky_key]
           if last_ok and (now_f() - last_ok) <= STICKY_WINDOW_SEC then
@@ -500,5 +652,5 @@ z2k_state_persist = {
   state_file = function() return STATE_FILE_PRIMARY end,
   _state = function() return state end,
   _set_interval = function(n) write_interval = tonumber(n) or write_interval end,
-  _reset = function() loaded = false; state = {}; last_write = 0; _G.Z2K_STICKY_SUCCESS_TS = {} end,
+  _reset = function() loaded = false; state = {}; last_write = 0; last_written = {}; last_reconcile = 0; _G.Z2K_STICKY_SUCCESS_TS = {} end,
 }

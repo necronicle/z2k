@@ -1,0 +1,119 @@
+#!/bin/sh
+export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
+# /opt/etc/init.d/S96z2k-rt-proxy
+#
+# RuTracker access via the official blockme.site HTTPS-CONNECT proxy pool, the
+# same mechanism the official RuTracker browser extension uses — but at the
+# router level. z2k-rt-proxy peeks the TLS SNI of redirected connections and
+# tunnels them through a health-checked, DNS-RESOLVED upstream proxy IP (the
+# operator rotates the pool via ps1.blockme.site DNS; we follow it, no hardcoded
+# IPs). RuTracker is CloudFlare-fronted on shared anycast IPs, so it cannot be
+# selected by IP — we select it by DOMAIN via an ndmc DNS-override onto a private
+# sentinel IP, then iptables-REDIRECT that sentinel to the local proxy.
+#
+# These RuTracker domains MUST be absent from the nfqws2 desync hostlist (the
+# installer drops them) — otherwise nfqws2 would mangle the client ClientHello
+# before it reaches this proxy. Companion NDM hook
+# /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh re-inserts the REDIRECT
+# after every NDM netfilter regen. Installed by lib/install.sh.
+
+BIN="/opt/sbin/z2k-rt-proxy"
+LOG="/tmp/z2k-log/z2k-rt-proxy.log"
+PIDFILE="/var/run/z2k-rt-proxy.pid"
+LISTEN_PORT="1445"
+SENTINEL="10.171.171.171"
+DOMAINS="rutracker.org www.rutracker.org rutracker.cc static.rutracker.cc api.rutracker.cc rep.rutracker.cc rutracker.wiki"
+
+# CWE-59: keep /tmp/z2k-log a clean root-owned dir (drop a planted symlink/non-dir).
+if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+   { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+    rm -rf /tmp/z2k-log 2>/dev/null
+fi
+mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+chmod 700 /tmp/z2k-log 2>/dev/null
+
+dns_override_set() {
+    for d in $DOMAINS; do
+        ndmc -c "ip host $d $SENTINEL" >/dev/null 2>&1
+    done
+    ndmc -c "system configuration save" >/dev/null 2>&1
+}
+
+dns_override_clear() {
+    for d in $DOMAINS; do
+        ndmc -c "no ip host $d $SENTINEL" >/dev/null 2>&1
+    done
+    ndmc -c "system configuration save" >/dev/null 2>&1
+}
+
+redirect_add() {
+    iptables -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
+        iptables -t nat -I PREROUTING 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+    iptables -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
+        iptables -t nat -I OUTPUT 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+}
+
+redirect_del() {
+    while iptables -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
+        iptables -t nat -D PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+    done
+    while iptables -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
+        iptables -t nat -D OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+    done
+}
+
+start() {
+    [ -x "$BIN" ] || exit 0
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE 2>/dev/null)" 2>/dev/null; then
+        echo "z2k-rt-proxy already running (pid $(cat $PIDFILE))"
+        return 0
+    fi
+    echo "Starting z2k-rt-proxy supervisor on :$LISTEN_PORT..."
+    # SUPERVISOR loop (s6/runit pattern in shell — Entware has no systemd/procd):
+    # the pidfile holds the supervisor, parent of the daemon, respawning it on
+    # exit with capped backoff. trap '' HUP preserves the MIPS busybox SIGHUP fix
+    # (the daemon child inherits the ignored-HUP disposition); trap TERM/INT makes
+    # `stop` kill the daemon child.
+    (
+        trap '' HUP
+        trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+        backoff=1
+        while :; do
+            t0=$(date +%s 2>/dev/null || echo 0)
+            $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 &
+            child=$!
+            wait "$child"
+            t1=$(date +%s 2>/dev/null || echo 0)
+            if [ $((t1 - t0)) -ge 60 ]; then
+                backoff=1
+            else
+                backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+            fi
+            echo "$(date 2>/dev/null) [supervisor] daemon exited, respawn in ${backoff}s" >> "$LOG"
+            sleep "$backoff"
+        done
+    ) &
+    echo $! > "$PIDFILE"
+    sleep 2
+    dns_override_set
+    redirect_add
+}
+
+stop() {
+    echo "Stopping z2k-rt-proxy..."
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE" 2>/dev/null)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    redirect_del
+    dns_override_clear
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    *)       echo "Usage: $0 {start|stop|restart}" ;;
+esac

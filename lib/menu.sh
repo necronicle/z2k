@@ -673,20 +673,37 @@ menu_service_control() {
 
 SUBMENU
 
+    # Persist the user's explicit on/off intent in ENABLED so a manual stop
+    # survives config regen, auto-update reinstall and reboot (the init start()
+    # gate in S99zapret2.new reads ENABLED; config_official now preserves it).
+    # ONLY the user-facing start/stop/restart below call this — internal /
+    # automatic restarts must leave ENABLED untouched so they honor it.
+    _persist_enabled() {
+        [ -f "${ZAPRET2_DIR}/config" ] || return 0
+        if grep -q '^ENABLED=' "${ZAPRET2_DIR}/config"; then
+            sed -i "s/^ENABLED=.*/ENABLED=$1/" "${ZAPRET2_DIR}/config"
+        else
+            echo "ENABLED=$1" >> "${ZAPRET2_DIR}/config"
+        fi
+    }
+
     printf "Выберите действие: "
     read_input action
 
     case "$action" in
         1)
             print_info "Запуск сервиса..."
+            _persist_enabled 1
             "$INIT_SCRIPT" start
             ;;
         2)
             print_info "Остановка сервиса..."
+            _persist_enabled 0
             "$INIT_SCRIPT" stop
             ;;
         3)
             print_info "Перезапуск сервиса..."
+            _persist_enabled 1
             "$INIT_SCRIPT" restart
             ;;
         4)
@@ -1042,12 +1059,23 @@ INFO
             pause
             ;;
         2)
+            # Stop FIRST, while DISABLE_CUSTOM is still 0, so the firewall unapply
+            # (custom_runner zapret_custom_firewall 0) removes the custom.d NFQUEUE
+            # rules (qnum 65300/65301). custom_runner early-returns once
+            # DISABLE_CUSTOM=1, so flipping the flag first would orphan those rules
+            # in POSTROUTING and keep them shadowing the main profiles (Discord
+            # voice stayed broken even after disabling). Then flip + start.
+            local _customd_was_running=0
+            is_zapret2_running && _customd_was_running=1
+            if [ "$_customd_was_running" = "1" ]; then
+                print_info "Остановка сервиса (чистый teardown custom.d)..."
+                "$INIT_SCRIPT" stop
+            fi
             sed -i 's/^DISABLE_CUSTOM=.*/DISABLE_CUSTOM=1/' "$zapret_config"
             print_success "Скрипты custom.d ОТКЛЮЧЕНЫ"
-
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
+            if [ "$_customd_was_running" = "1" ]; then
+                print_info "Запуск сервиса..."
+                "$INIT_SCRIPT" start
                 print_success "Сервис перезапущен"
             fi
 

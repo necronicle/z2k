@@ -47,6 +47,7 @@ log_info "Попытка мягкой остановки через init-скр�
 
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S97z2k-http-tunnel \
+            /opt/etc/init.d/S96z2k-rt-proxy \
             /opt/etc/init.d/S98tg-tunnel \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -x "$init" ]; then
@@ -64,6 +65,7 @@ log_info "Удаление init-скриптов..."
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
+            /opt/etc/init.d/S96z2k-rt-proxy \
             /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -f "$init" ]; then
@@ -84,7 +86,9 @@ for hook in /opt/etc/ndm/netfilter.d/000-zapret2.sh \
             /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
             /opt/etc/ndm/netfilter.d/*z2k-tg* \
             /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh \
-            /opt/etc/ndm/netfilter.d/*z2k-http*; do
+            /opt/etc/ndm/netfilter.d/*z2k-http* \
+            /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
+            /opt/etc/ndm/netfilter.d/*z2k-rt*; do
     if [ -f "$hook" ]; then
         rm -f "$hook"
         log_info "  Удалён: $hook"
@@ -98,7 +102,7 @@ done
 log_info "Поиск и завершение процессов nfqws / nfqws2..."
 
 killed=0
-for proc_name in nfqws2 nfqws tg-mtproxy-client; do
+for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy; do
     pids=$(pidof "$proc_name" 2>/dev/null || true)
     if [ -n "$pids" ]; then
         for pid in $pids; do
@@ -110,7 +114,7 @@ for proc_name in nfqws2 nfqws tg-mtproxy-client; do
 done
 
 # Дополнительный поиск через ps (на случай если pidof не нашёл)
-for proc_name in nfqws2 nfqws tg-mtproxy-client; do
+for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy; do
     ps_pids=$(ps w 2>/dev/null | awk -v name="$proc_name" '$0 ~ "/"name"( |$)" || $0 ~ " "name"( |$)" {print $1}' || true)
     if [ -n "$ps_pids" ]; then
         for pid in $ps_pids; do
@@ -301,6 +305,7 @@ for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
               /tmp/z2k-log/tg-tunnel.log /tmp/tg-tunnel-watchdog.state \
               /var/run/tg-tunnel.pid \
               /tmp/z2k-log/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
+              /tmp/z2k-log/z2k-rt-proxy.log /var/run/z2k-rt-proxy.pid \
               /tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-insta-refresh.log.old \
               /var/run/z2k-scheduler.pid /opt/var/log/z2k-scheduler.log \
               /opt/var/log/z2k-classify.log \
@@ -363,6 +368,7 @@ done
 # Проверка init-скриптов
 for init in /opt/etc/init.d/S99zapret /opt/etc/init.d/S99zapret2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
+            /opt/etc/init.d/S96z2k-rt-proxy \
             /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -f "$init" ]; then

@@ -192,10 +192,25 @@ toggle_customd() {
     # DISABLE_CUSTOM which is the INVERSE. We flip here so the web UI
     # stays consistent with "on = feature active".
     local want="$1"
-    local disable_val="1"
-    [ "$want" = "1" ] && disable_val="0"
-    set_flag "DISABLE_CUSTOM" "$disable_val" "$CONFIG_FILE" || return 1
-    restart_service_if_running
+    if [ "$want" = "0" ]; then
+        # DISABLING. The firewall unapply (S99zapret2 stop -> zapret_unapply_firewall
+        # -> custom_runner zapret_custom_firewall 0) is what removes the custom.d
+        # NFQUEUE rules (qnum 65300/65301). But custom_runner early-returns once
+        # DISABLE_CUSTOM=1, so flipping the flag FIRST (then restart) leaves those
+        # rules ORPHANED in POSTROUTING — they keep shadowing the main profiles
+        # (Discord voice stayed broken even after "disabling"). So: stop while the
+        # flag is still 0 (clean teardown of custom daemons + firewall), THEN flip,
+        # THEN start.
+        ensure_init_exec
+        local _running=0
+        is_running && _running=1
+        [ "$_running" = "1" ] && "$INIT_SCRIPT" stop 2>&1
+        set_flag "DISABLE_CUSTOM" "1" "$CONFIG_FILE" || return 1
+        [ "$_running" = "1" ] && "$INIT_SCRIPT" start 2>&1
+    else
+        set_flag "DISABLE_CUSTOM" "0" "$CONFIG_FILE" || return 1
+        restart_service_if_running
+    fi
 }
 
 toggle_dynamic_ttl() {
@@ -580,15 +595,46 @@ diag_run() {
 # Lines starting with # are comments (header). Empty lines are skipped.
 
 STATE_FILE="${STATE_FILE:-$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv}"
+# Fallback snapshot the lua also writes (RAM-disk; survives a RO/full /opt).
+# It must be cleaned in lockstep with the primary — load_state() merges both on
+# the next restart with newer-ts winning, so a stale fallback row would
+# otherwise resurrect a host the operator just deleted.
+STATE_FILE_FALLBACK="${STATE_FILE_FALLBACK:-/tmp/z2k-autocircular-state.tsv}"
 
 state_read() {
     [ -f "$STATE_FILE" ] || return 0
     grep -vE '^(#|[[:space:]]*$)' "$STATE_FILE" 2>/dev/null
 }
 
+# Remove one row by host+key from a single state file, preserving inode.
+# Caller has already validated key/host. No-op if the file is absent.
+_state_delete_one_file() {
+    local file="$1" key="$2" host="$3"
+    [ -f "$file" ] || return 0
+    # Use awk field-equality, NOT a regex grep -v — host literals contain "."
+    # which is the ERE wildcard, so a regex match for foo.example.com would
+    # also drop foo-example-com and friends from a neighbouring rotator key.
+    # Even though the caller's sanitiser rejects non-DNS chars, the wildcard
+    # semantics inside the regex itself still over-match legitimately-named
+    # hosts that differ only by punctuation.
+    local tmp="$file.z2k-new"
+    awk -F'\t' -v key="$key" -v host="$host" '
+        ($1 == key && $2 == host) { next }
+        { print }
+    ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+    chmod 644 "$file" 2>/dev/null || true
+}
+
 # Delete one row by host+key. Host and key together uniquely identify a row.
-# The service restarts so the rotator starts fresh for that host on the next
-# attempt (equivalent to the manual `sed` fix we've been using in chat).
+#
+# No service restart: z2k-state-persist.lua reconciles external edits to
+# state.tsv against the live rotator within ~2s (reconcile_external_edits) — a
+# deleted host has its in-RAM rotation reset to strategy 1 on its next packet,
+# so the "× resets to the first strategy" semantics apply live, without bouncing
+# nfqws. We clean BOTH the primary and the /tmp fallback so a later restart's
+# merge can't revive the row.
 state_delete() {
     local key="$1" host="$2"
     [ -z "$key" ] && { echo "key required" >&2; return 1; }
@@ -596,23 +642,8 @@ state_delete() {
     # Sanitize: key is [a-z0-9_], host has letters/digits/dots/dashes only.
     case "$key"  in *[!a-zA-Z0-9_]*) echo "bad key" >&2; return 1 ;; esac
     case "$host" in *[!a-zA-Z0-9.-]*) echo "bad host" >&2; return 1 ;; esac
-    [ -f "$STATE_FILE" ] || return 0
-    # In-place rewrite preserving inode. Use awk field-equality, NOT
-    # a regex grep -v — host literals contain "." which is the ERE
-    # wildcard, so a regex match for foo.example.com would also drop
-    # foo-example-com and friends from a neighbouring rotator key.
-    # Even though the sanitiser above rejects non-DNS chars, the
-    # wildcard semantics inside the regex itself still over-match
-    # legitimately-named hosts that differ only by punctuation.
-    local tmp="$STATE_FILE.z2k-new"
-    awk -F'\t' -v key="$key" -v host="$host" '
-        ($1 == key && $2 == host) { next }
-        { print }
-    ' "$STATE_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
-    cat "$tmp" > "$STATE_FILE"
-    rm -f "$tmp"
-    chmod 644 "$STATE_FILE" 2>/dev/null || true
-    restart_service_if_running
+    _state_delete_one_file "$STATE_FILE" "$key" "$host" || return 1
+    _state_delete_one_file "$STATE_FILE_FALLBACK" "$key" "$host" || return 1
 }
 
 # --- geosite (Phase 3) ---

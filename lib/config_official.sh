@@ -1728,11 +1728,13 @@ create_official_config() {
     local saved_GAME_MODE_ENABLED=""
     local saved_GAME_MODE_STYLE=""
     local saved_TG_PROXY_USER_DISABLED="0"
+    local saved_ENABLED="1"
     local saved_Z2K_USE_MID_STREAM_DETECTOR="1"
     local saved_Z2K_PADENCAP="1"
     local saved_Z2K_INJECT_TLS_MODS="0"
     local saved_Z2K_DYNAMIC_TTL="1"
     local saved_Z2K_STATS="1"
+    local saved_DISABLE_CUSTOM="1"
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
     if [ -f "$config_file" ]; then
@@ -1743,6 +1745,13 @@ create_official_config() {
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
         saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
+        # ENABLED — master service on/off gate (read by S99zapret2.new start()).
+        # Was hardcoded =1 below and NOT preserved, so a user who stopped the
+        # service (ENABLED=0) saw it resurrected by the next config regen
+        # (auto-update reinstall / any toggle / reboot). Now preserved like
+        # DISABLE_CUSTOM. Default 1: fresh install or a config missing the key
+        # comes up enabled, so users who never stopped are unaffected.
+        saved_ENABLED=$(safe_config_read "ENABLED" "$config_file" "1")
         # Z2K_USE_MID_STREAM_DETECTOR / Z2K_PADENCAP — default ON (per Mark
         # 2026-05-02 policy: все нововведения по умолчанию включены). Если
         # старый config не содержит ключ, считаем "1" — фичу хочется
@@ -1756,6 +1765,12 @@ create_official_config() {
         # 2026-05-30: Default ON как все фичи). Opt-out via menu/webpanel toggle
         # sets =0; preserved across auto-update by the Z2K_ prefix rule.
         saved_Z2K_STATS=$(safe_config_read "Z2K_STATS" "$config_file" "1")
+        # DISABLE_CUSTOM — custom.d on/off (inverse: 0 = custom.d enabled). Was
+        # hardcoded =1 in the generated config and NOT preserved, so enabling
+        # custom.d (menu [S] / webpanel) survived only until the next config
+        # regen (any other toggle / auto-update) silently re-disabled it. Now
+        # preserved like the other knobs.
+        saved_DISABLE_CUSTOM=$(safe_config_read "DISABLE_CUSTOM" "$config_file" "1")
         # Keenetic policy integration (см. S99zapret2.new:919-1100). По умолчанию
         # nfqws=POLICY_NAME, exclude=0 (= "process only this policy"); если юзер
         # явно настроил bypass конкретного устройства через создание политики +
@@ -1797,7 +1812,7 @@ create_official_config() {
 # ==============================================================================
 
 # Enable zapret2 service
-ENABLED=1
+ENABLED=${saved_ENABLED}
 
 # Mode filter: none, ipset, hostlist, autohostlist
 # z2k uses hostlist mode — domains are controlled via explicit hostlist files
@@ -1916,10 +1931,9 @@ IP2NET_OPT6="--prefix-length=56-64 --v6-threshold=5"
 
 # Directory for custom scripts
 CUSTOM_DIR="/opt/zapret2/init.d/keenetic"
-
-# Disable custom.d scripts (50-stun4all, 50-discord-media).
-# Discord voice/video is handled by nfqws2 strategies (profile 6), no extra daemons needed.
-DISABLE_CUSTOM=1
+# DISABLE_CUSTOM is emitted in the variable-expanding section below (with the
+# other saved_* flags) so the user's choice survives config regeneration —
+# do NOT hardcode it here (this heredoc is single-quoted, no expansion).
 
 # ==============================================================================
 # MISCELLANEOUS
@@ -2007,6 +2021,13 @@ Z2K_DYNAMIC_TTL=${saved_Z2K_DYNAMIC_TTL}
 # provider / region, and no device identifier. Set =0 (menu/webpanel toggle) to
 # opt out. Does not affect NFQWS2_OPT / the bypass itself.
 Z2K_STATS=${saved_Z2K_STATS}
+
+# Custom.d scripts (50-stun4all / 50-discord-media — STUN desync that fixes
+# WhatsApp/Telegram voice on some networks). Default 1 = disabled (z2k's own
+# Discord strategy covers most cases). Enable via menu [S] / webpanel toggle
+# (sets 0). Emitted here (expanding heredoc) with the preserved value so a regen
+# from another toggle or auto-update no longer silently re-disables custom.d.
+DISABLE_CUSTOM=${saved_DISABLE_CUSTOM}
 
 # TLS padding extension flag — действует только когда
 # Z2K_INJECT_TLS_MODS=1. Управляет добавлением padencap в дополнение

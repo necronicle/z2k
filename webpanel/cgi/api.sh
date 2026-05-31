@@ -119,13 +119,18 @@ form_value() {
             "$key="*)
                 IFS="$OLD_IFS"
                 local raw="${pair#$key=}"
-                # Convert + to space then decode %XX.
+                # Convert + to space then decode %XX. NB: portable hex decode via
+                # an index() lookup — busybox/mawk on the router has NO strtonum()
+                # (a gawk extension). The old strtonum() decoder silently failed on
+                # any %XX-bearing value, which surfaced once rotation host keys grew
+                # an address-family suffix ("host|6" → URLSearchParams encodes "|"
+                # as %7C) and the × delete started returning "key and host required".
                 printf '%s' "$raw" | awk '
+                    function hx(c) { return index("0123456789abcdef", tolower(c)) - 1 }
                     {
                         gsub(/\+/, " ")
                         while (match($0, /%[0-9a-fA-F][0-9a-fA-F]/)) {
-                            hex = substr($0, RSTART+1, 2)
-                            ch = sprintf("%c", strtonum("0x" hex))
+                            ch = sprintf("%c", hx(substr($0, RSTART+1, 1)) * 16 + hx(substr($0, RSTART+2, 1)))
                             $0 = substr($0, 1, RSTART-1) ch substr($0, RSTART+3)
                         }
                         print
@@ -203,21 +208,21 @@ case "$method $path" in
     # завершения restart (5-15s) и не понимал что происходит.
     "POST /service/start")
         require_method POST
-        job_id=$(svc_action_async "Запуск сервиса nfqws2" "${INIT_SCRIPT} start")
+        job_id=$(svc_action_async "Запуск сервиса nfqws2" "set_flag ENABLED 1 \"${CONFIG_FILE}\"; ${INIT_SCRIPT} start")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0
         ;;
     "POST /service/stop")
         require_method POST
-        job_id=$(svc_action_async "Остановка сервиса nfqws2" "${INIT_SCRIPT} stop")
+        job_id=$(svc_action_async "Остановка сервиса nfqws2" "set_flag ENABLED 0 \"${CONFIG_FILE}\"; ${INIT_SCRIPT} stop")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0
         ;;
     "POST /service/restart")
         require_method POST
-        job_id=$(svc_action_async "Перезапуск сервиса nfqws2" "${INIT_SCRIPT} restart")
+        job_id=$(svc_action_async "Перезапуск сервиса nfqws2" "set_flag ENABLED 1 \"${CONFIG_FILE}\"; ${INIT_SCRIPT} restart")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0

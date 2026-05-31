@@ -54,11 +54,36 @@ start() {
             fi
         done
     fi
-    echo "Starting tg-tunnel..."
-    # Proper daemonization — subshell with HUP-ignore + exec so the Go
-    # binary doesn't get SIGKILL'd by busybox sh on MIPS when the init.d
-    # wrapper exits. Same fix as S97z2k-http-tunnel (see r-26 notes).
-    ( trap '' HUP; exec $BIN --listen=:1443 --timeout=15m -v </dev/null >> "$LOG" 2>&1 ) &
+    echo "Starting tg-tunnel supervisor..."
+    # SUPERVISOR loop (s6/runit pattern in shell — Entware has no systemd/procd).
+    # The pidfile holds the SUPERVISOR (parent of the daemon); it respawns the
+    # daemon on exit with capped backoff so a transient relay drop can't leave
+    # Telegram tunneling dead until a manual restart. Same proven pattern as
+    # S97z2k-http-tunnel.
+    #   trap '' HUP   — MIPS busybox SIGHUP fix: the daemon child inherits the
+    #                   ignored-HUP disposition (Go terminates on HUP by default;
+    #                   busybox posts HUP to bg children when the wrapper exits).
+    #   trap TERM/INT — `stop` kills the supervisor; the trap kills the daemon.
+    #   backoff resets after a healthy run (>=60s), else grows to a 30s cap.
+    (
+        trap '' HUP
+        trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+        backoff=1
+        while :; do
+            t0=$(date +%s 2>/dev/null || echo 0)
+            $BIN --listen=:1443 --timeout=15m -v </dev/null >> "$LOG" 2>&1 &
+            child=$!
+            wait "$child"
+            t1=$(date +%s 2>/dev/null || echo 0)
+            if [ $((t1 - t0)) -ge 60 ]; then
+                backoff=1
+            else
+                backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+            fi
+            echo "$(date 2>/dev/null) [supervisor] daemon exited, respawn in ${backoff}s" >> "$LOG"
+            sleep "$backoff"
+        done
+    ) &
     echo $! > "$PIDFILE"
     sleep 2
     # Insert REDIRECT rules at TOP of both PREROUTING and OUTPUT (-I 1) so

@@ -24,6 +24,13 @@ var z2kHostlists = []struct {
 	// even for domains that nfqws2 already covered via RKN List.txt.
 	{"/opt/zapret2/extra_strats/TCP/RKN/List.txt", "RKN list (shipped)"},
 	{"/opt/zapret2/extra_strats/TCP_Discord.txt", "RKN Discord list (shipped)"},
+	// YouTube category hostlists — these are dedicated nfqws2 profiles
+	// (yt_tcp / gv_tcp / yt_quic), so youtube.com & googlevideo.com are
+	// covered here, NOT in the RKN list. Without them the [Y] probe wrongly
+	// reported youtube.com as "not in lists".
+	{"/opt/zapret2/extra_strats/TCP/YT/List.txt", "YouTube TCP list (shipped)"},
+	{"/opt/zapret2/extra_strats/TCP/YT_GV/List.txt", "YouTube googlevideo list (shipped)"},
+	{"/opt/zapret2/extra_strats/UDP/YT/List.txt", "YouTube QUIC list (shipped)"},
 	{"/opt/zapret2/lists/extra-domains.txt", "z2k community extras"},
 	{"/opt/zapret2/lists/discovered-domains.txt", "z2k-detect auto-discovered"},
 	{"/opt/zapret2/lists/whitelist.txt", "operator whitelist (no-bypass)"},

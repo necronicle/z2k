@@ -164,7 +164,7 @@ z2k_restore_old_tree() {
         # 3. Рестарт ключевых daemon'ов из восстановленного дерева, чтобы
         #    в память загрузился старый (рабочий) код, а не новый частичный.
         local _svc
-        for _svc in S99zapret2 S99z2k-scheduler S98tg-tunnel S97z2k-http-tunnel S98z2k-detect; do
+        for _svc in S99zapret2 S99z2k-scheduler S98tg-tunnel S97z2k-http-tunnel S96z2k-rt-proxy S98z2k-detect; do
             [ -x "/opt/etc/init.d/${_svc}" ] && /opt/etc/init.d/${_svc} restart >/dev/null 2>&1
         done
         rm -rf "${Z2K_OLD_TREE_BACKUP}.ext" 2>/dev/null
@@ -1722,7 +1722,7 @@ step_build_zapret2() {
                 # же ключи через ${saved_*}, без них create_official_config
                 # вернётся к дефолтам. Если добавляешь новый non-Z2K_
                 # user flag в config_official.sh — добавь его и сюда.
-                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
                 if [ -s "$_flag_backup" ] && [ -f "$ZAPRET2_DIR/config" ]; then
                     local _line _flag_name _escaped _applied=0
                     while IFS= read -r _line; do
@@ -2501,7 +2501,7 @@ step_finalize() {
     local backup_tmp_early="/opt/z2k-upgrade-backup"
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
         if [ -s "$_flag_backup_early" ]; then
             local _line_early _flag_name_early _escaped_early _applied_early=0
             while IFS= read -r _line_early; do
@@ -2744,6 +2744,65 @@ step_finalize() {
         print_info "Telegram прокси уже установлен"
     fi
 
+    # RuTracker rt-proxy (z2k-rt-proxy) — separate binary, hosted in the SAME
+    # place as tg-mtproxy-client (Mark's decision): ${GITHUB_RAW}/mtproxy-client/builds/.
+    # rt-proxy ships ONLY arm64/arm/mipsel/mips/amd64 (a subset of tg's archs).
+    if true; then
+        print_info "Установка/обновление RuTracker rt-proxy..."
+        local rtp_arch=""
+        local rtp_hw_arch
+        rtp_hw_arch=$(get_arch 2>/dev/null || uname -m)
+        local rtp_bin_arch
+        rtp_bin_arch=$(map_arch_to_bin_arch "$rtp_hw_arch" 2>/dev/null || true)
+        case "$rtp_bin_arch" in
+            linux-arm64)  rtp_arch="arm64" ;;
+            linux-arm)    rtp_arch="arm" ;;
+            linux-mipsel) rtp_arch="mipsel" ;;
+            linux-mips)   rtp_arch="mips" ;;
+            linux-x86_64) rtp_arch="amd64" ;;
+        esac
+        if [ -n "$rtp_arch" ]; then
+            local rtp_bin="z2k-rt-proxy-linux-${rtp_arch}"
+            local rtp_dest="/opt/sbin/z2k-rt-proxy"
+            local rtp_tmp="${rtp_dest}.new.$$"
+            local rtp_url="${GITHUB_RAW}/mtproxy-client/builds/${rtp_bin}"
+            # Download-to-temp → validate → atomic mv. НЕ удаляем рабочий
+            # бинарник до того как новый скачан и проверен: transient fetch-fail
+            # НЕ должен оставить router без z2k-rt-proxy.
+            rm -f "$rtp_tmp"
+            z2k_fetch "$rtp_url" "$rtp_tmp" 2>/dev/null || true
+            rm -f "${rtp_tmp}.etag" 2>/dev/null
+            local rtp_size
+            rtp_size=$(wc -c < "$rtp_tmp" 2>/dev/null || echo 0)
+            local rtp_valid=false
+            if [ -f "$rtp_tmp" ] && [ "$rtp_size" -gt 500000 ] 2>/dev/null; then
+                if head -c 4 "$rtp_tmp" 2>/dev/null | grep -q "ELF"; then
+                    chmod +x "$rtp_tmp"
+                    if "$rtp_tmp" --help 2>/dev/null; [ $? -le 2 ]; then
+                        rtp_valid=true
+                    fi
+                fi
+            fi
+            if $rtp_valid; then
+                z2k_snapshot_external "$rtp_dest"     # для rollback
+                mv -f "$rtp_tmp" "$rtp_dest" && chmod +x "$rtp_dest"
+                print_success "RuTracker rt-proxy установлен ($rtp_arch)"
+            else
+                rm -f "$rtp_tmp"
+                # КРИТИЧНО: оставляем существующий рабочий бинарник, НЕ удаляем.
+                if [ -x "$rtp_dest" ]; then
+                    print_warning "Не удалось обновить z2k-rt-proxy — оставлен текущий рабочий бинарник"
+                elif [ "$rtp_size" -le 500000 ] 2>/dev/null; then
+                    print_warning "Файл слишком маленький (${rtp_size} байт) — скачивание прервалось, рабочего бинарника нет"
+                else
+                    print_warning "Бинарник rt-proxy не запускается на этой архитектуре ($rtp_arch)."
+                fi
+            fi
+        else
+            print_warning "Неизвестная/неподдерживаемая rt-proxy архитектура $rtp_hw_arch, пропускаем RuTracker rt-proxy"
+        fi
+    fi
+
     # Cleanup legacy WS proxy init script (replaced by tunnel)
     if [ -x /opt/etc/init.d/S97tg-mtproxy ]; then
         /opt/etc/init.d/S97tg-mtproxy stop >/dev/null 2>&1 || true
@@ -2764,6 +2823,8 @@ step_finalize() {
     print_success "Keenetic NDM hook установлен (auto-restore iptables)"
     deploy_critical_file "files/init.d/S97z2k-http-tunnel"        "/opt/etc/init.d/S97z2k-http-tunnel" || return 1
     deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh" || return 1
+    deploy_critical_file "files/init.d/S96z2k-rt-proxy"            "/opt/etc/init.d/S96z2k-rt-proxy" || return 1
+    deploy_critical_file "files/ndm/92-z2k-rt-proxy-redirect.sh"    "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh" || return 1
     deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh" || return 1
 
     # tg-tunnel-watchdog used to be triggered via `* * * * *` cron, but
@@ -2835,6 +2896,13 @@ step_finalize() {
     # toggle. Silent on restart so it doesn't surface in install output.
     if [ -x /opt/sbin/tg-mtproxy-client ] && [ -x /opt/etc/init.d/S97z2k-http-tunnel ]; then
         /opt/etc/init.d/S97z2k-http-tunnel restart >/dev/null 2>&1 || true
+    fi
+
+    # RuTracker rt-proxy aux daemon. Start unconditionally — no user-facing
+    # toggle (same model as S97z2k-http-tunnel). Silent on restart. The init
+    # script's start() sets the ndmc DNS-override + sentinel REDIRECT itself.
+    if [ -x /opt/sbin/z2k-rt-proxy ] && [ -x /opt/etc/init.d/S96z2k-rt-proxy ]; then
+        /opt/etc/init.d/S96z2k-rt-proxy restart >/dev/null 2>&1 || true
     fi
 
     # z2k-detect — reactive DPI-discovery daemon.
@@ -2998,7 +3066,7 @@ step_finalize() {
     # — re-running is a no-op when nothing changed.
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup="$backup_tmp/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
         if [ -s "$_flag_backup" ]; then
             local _line _flag_name _escaped _applied=0
             while IFS= read -r _line; do
@@ -3463,6 +3531,36 @@ uninstall_zapret2() {
           /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh \
           /var/run/z2k-http-tunnel.pid \
           /tmp/z2k-log/z2k-http-tunnel.log 2>/dev/null || true
+
+    # Tear down the RuTracker rt-proxy (S96). Distinct binary (z2k-rt-proxy)
+    # and port (1445) — no killall race with the TG block below. Its stop()
+    # clears the ndmc DNS-override + sentinel REDIRECT, but we also sweep both
+    # explicitly in case the binary was already removed (stop() bails early at
+    # `[ -x "$BIN" ] || exit 0`, leaving rutracker pinned to 10.171.171.171).
+    if [ -x /opt/etc/init.d/S96z2k-rt-proxy ]; then
+        /opt/etc/init.d/S96z2k-rt-proxy stop >/dev/null 2>&1 || true
+    fi
+    while iptables -t nat -C PREROUTING -d 10.171.171.171 -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null; do
+        iptables -t nat -D PREROUTING -d 10.171.171.171 -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null || break
+    done
+    while iptables -t nat -C OUTPUT -d 10.171.171.171 -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null; do
+        iptables -t nat -D OUTPUT -d 10.171.171.171 -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null || break
+    done
+    conntrack -D -d 10.171.171.171 2>/dev/null || true
+    # Clear the rutracker ndmc DNS-override → sentinel even if stop() never ran
+    # (binary already gone). Mirrors S96 dns_override_clear().
+    if command -v ndmc >/dev/null 2>&1; then
+        for _rtp_dom in rutracker.org www.rutracker.org rutracker.cc static.rutracker.cc api.rutracker.cc rep.rutracker.cc rutracker.wiki; do
+            ndmc -c "no ip host $_rtp_dom 10.171.171.171" >/dev/null 2>&1 || true
+        done
+        ndmc -c "system configuration save" >/dev/null 2>&1 || true
+    fi
+    rm -f /opt/etc/init.d/S96z2k-rt-proxy \
+          /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
+          /opt/sbin/z2k-rt-proxy \
+          /var/run/z2k-rt-proxy.pid \
+          /tmp/z2k-log/z2k-rt-proxy.log 2>/dev/null || true
+    killall -9 z2k-rt-proxy 2>/dev/null || true
 
     # Tear down the Telegram tunnel: stop the daemon, kill stragglers, drop
     # its REDIRECT rules, remove the init script and the NDM hook that
