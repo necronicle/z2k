@@ -639,9 +639,10 @@ state_delete() {
     local key="$1" host="$2"
     [ -z "$key" ] && { echo "key required" >&2; return 1; }
     [ -z "$host" ] && { echo "host required" >&2; return 1; }
-    # Sanitize: key is [a-z0-9_], host has letters/digits/dots/dashes only.
+    # Sanitize: key is [a-z0-9_], host is letters/digits/dots/dashes plus "|"
+    # for the per-address-family rotation suffix (host|4 / host|6, fork r5+).
     case "$key"  in *[!a-zA-Z0-9_]*) echo "bad key" >&2; return 1 ;; esac
-    case "$host" in *[!a-zA-Z0-9.-]*) echo "bad host" >&2; return 1 ;; esac
+    case "$host" in *[!a-zA-Z0-9.|-]*) echo "bad host" >&2; return 1 ;; esac
     _state_delete_one_file "$STATE_FILE" "$key" "$host" || return 1
     _state_delete_one_file "$STATE_FILE_FALLBACK" "$key" "$host" || return 1
 }
