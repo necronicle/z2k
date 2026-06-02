@@ -1,0 +1,135 @@
+#!/bin/sh
+export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
+# /opt/etc/init.d/S95z2k-dns-filter
+#
+# Transparent DNS filter that strips AAAA + HTTPS/SVCB(65) answers for the z2k
+# bypass hostlist, pinning blocked domains to IPv4 (where the packet desync
+# works) so Happy-Eyeballs doesn't commit to a failing IPv6 path. Plain DNS from
+# LAN clients (:53) is REDIRECTed to the local filter on :15353; the filter
+# answers NODATA for blocklist AAAA/HTTPS and forwards everything else verbatim
+# to the user's existing upstream(s). Default OFF — gated on Z2K_DNS_FILTER=1.
+#
+# FAIL-OPEN is load-bearing: the :53 REDIRECT exists ONLY while the daemon is
+# listening on :15353. The supervisor adds it after the daemon comes up and
+# REMOVES it the instant the daemon exits, so a crashed/missing filter NEVER
+# blackholes DNS — queries fall straight through. The companion NDM hook
+# /opt/etc/ndm/netfilter.d/93-z2k-dns-filter-redirect.sh re-adds it after a
+# netfilter regen, but only if the daemon is actually up. Starts before
+# S96z2k-rt-proxy / S99zapret2.
+
+BIN="/opt/sbin/z2k-dns-filter"
+LOG="/tmp/z2k-log/z2k-dns-filter.log"
+PIDFILE="/var/run/z2k-dns-filter.pid"
+LISTEN_PORT="15353"
+CONFIG="/opt/zapret2/config"
+
+# CWE-59: keep /tmp/z2k-log a clean root-owned dir.
+if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+   { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+    rm -rf /tmp/z2k-log 2>/dev/null
+fi
+mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+chmod 700 /tmp/z2k-log 2>/dev/null
+
+enabled() {
+    [ "$(awk -F= '/^Z2K_DNS_FILTER=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG" 2>/dev/null)" = "1" ]
+}
+
+listening() {
+    netstat -ln 2>/dev/null | grep -q ":${LISTEN_PORT}[[:space:]]"
+}
+
+redirect_add() {
+    # LAN-client plain DNS only: PREROUTING (intercepts dst=router:53 AND
+    # forwarded dst=publicDNS:53), exclude loopback so the filter's own
+    # upstream queries (OUTPUT/lo) are never redirected -> no loop.
+    for proto in udp tcp; do
+        iptables -t nat -C PREROUTING ! -i lo -p "$proto" --dport 53 -j REDIRECT --to-port "$LISTEN_PORT" 2>/dev/null || \
+            iptables -t nat -I PREROUTING 1 ! -i lo -p "$proto" --dport 53 -j REDIRECT --to-port "$LISTEN_PORT" 2>/dev/null
+    done
+}
+
+redirect_del() {
+    for proto in udp tcp; do
+        while iptables -t nat -C PREROUTING ! -i lo -p "$proto" --dport 53 -j REDIRECT --to-port "$LISTEN_PORT" 2>/dev/null; do
+            iptables -t nat -D PREROUTING ! -i lo -p "$proto" --dport 53 -j REDIRECT --to-port "$LISTEN_PORT" 2>/dev/null || break
+        done
+    done
+}
+
+start() {
+    [ -x "$BIN" ] || exit 0
+    if ! enabled; then
+        echo "z2k-dns-filter disabled (Z2K_DNS_FILTER!=1)"
+        redirect_del   # ensure no stale redirect when toggled off
+        exit 0
+    fi
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+        echo "z2k-dns-filter already running (pid $(cat "$PIDFILE"))"
+        return 0
+    fi
+    echo "Starting z2k-dns-filter supervisor on :$LISTEN_PORT..."
+    (
+        trap '' HUP
+        trap 'kill "$child" 2>/dev/null; redirect_del; exit 0' TERM INT
+        backoff=1
+        while :; do
+            t0=$(date +%s 2>/dev/null || echo 0)
+            $BIN --listen=":$LISTEN_PORT" </dev/null >> "$LOG" 2>&1 &
+            child=$!
+            # FAIL-OPEN: add the :53 redirect ONLY after the daemon is listening.
+            i=0
+            while [ "$i" -lt 10 ]; do listening && break; sleep 1; i=$((i + 1)); done
+            if listening; then redirect_add; fi
+            wait "$child"
+            redirect_del   # daemon gone -> drop the redirect immediately (DNS direct)
+            t1=$(date +%s 2>/dev/null || echo 0)
+            if [ $((t1 - t0)) -ge 60 ]; then
+                backoff=1
+            else
+                backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+            fi
+            echo "$(date 2>/dev/null) [supervisor] daemon exited, :53 redirect removed, respawn in ${backoff}s" >> "$LOG"
+            sleep "$backoff"
+        done
+    ) &
+    echo $! > "$PIDFILE"
+}
+
+stop() {
+    echo "Stopping z2k-dns-filter..."
+    # Kill the supervisor and WAIT for it to actually die BEFORE removing the
+    # redirect — otherwise a supervisor mid-respawn re-adds the rule right after
+    # our redirect_del (observed: a stale udp REDIRECT left after stop, which
+    # would blackhole LAN DNS with the daemon gone).
+    if [ -f "$PIDFILE" ]; then
+        pid=$(cat "$PIDFILE" 2>/dev/null)
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null
+            i=0
+            while [ "$i" -lt 5 ] && kill -0 "$pid" 2>/dev/null; do sleep 1; i=$((i + 1)); done
+            kill -9 "$pid" 2>/dev/null
+        fi
+        rm -f "$PIDFILE"
+    fi
+    killall z2k-dns-filter 2>/dev/null
+    sleep 1
+    redirect_del   # supervisor is dead now — no re-add race
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)
+        if listening; then
+            r=OFF
+            iptables -t nat -C PREROUTING ! -i lo -p udp --dport 53 -j REDIRECT --to-port "$LISTEN_PORT" 2>/dev/null && r=ON
+            echo "z2k-dns-filter: running (listening :$LISTEN_PORT), :53 redirect $r"
+        else
+            echo "z2k-dns-filter: not running"
+        fi
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|status}" ;;
+esac

@@ -164,7 +164,7 @@ z2k_restore_old_tree() {
         # 3. Рестарт ключевых daemon'ов из восстановленного дерева, чтобы
         #    в память загрузился старый (рабочий) код, а не новый частичный.
         local _svc
-        for _svc in S99zapret2 S99z2k-scheduler S98tg-tunnel S97z2k-http-tunnel S96z2k-rt-proxy S98z2k-detect; do
+        for _svc in S99zapret2 S99z2k-scheduler S98tg-tunnel S97z2k-http-tunnel S96z2k-rt-proxy S95z2k-dns-filter S98z2k-detect; do
             [ -x "/opt/etc/init.d/${_svc}" ] && /opt/etc/init.d/${_svc} restart >/dev/null 2>&1
         done
         rm -rf "${Z2K_OLD_TREE_BACKUP}.ext" 2>/dev/null
@@ -2803,6 +2803,59 @@ step_finalize() {
         fi
     fi
 
+    # z2k-dns-filter — strips AAAA + HTTPS(65) DNS answers for the bypass
+    # hostlist so blocked domains pin to IPv4 (where the desync works) instead
+    # of hanging on a failing IPv6 path. Default OFF (Z2K_DNS_FILTER=1 to enable
+    # — S95 self-gates). Same per-arch hosting as rt-proxy; same keep-current-
+    # on-fail rule (a transient fetch must not leave the router binaryless).
+    if true; then
+        print_info "Установка/обновление z2k-dns-filter (IPv6 AAAA-strip для hostlist)..."
+        local df_arch=""
+        local df_bin_arch
+        df_bin_arch=$(map_arch_to_bin_arch "$(get_arch 2>/dev/null || uname -m)" 2>/dev/null || true)
+        case "$df_bin_arch" in
+            linux-arm64)  df_arch="arm64" ;;
+            linux-arm)    df_arch="arm" ;;
+            linux-mipsel) df_arch="mipsel" ;;
+            linux-mips)   df_arch="mips" ;;
+            linux-x86_64) df_arch="amd64" ;;
+        esac
+        if [ -n "$df_arch" ]; then
+            local df_bin="z2k-dns-filter-linux-${df_arch}"
+            local df_dest="/opt/sbin/z2k-dns-filter"
+            local df_tmp="${df_dest}.new.$$"
+            local df_url="${GITHUB_RAW}/mtproxy-client/builds/${df_bin}"
+            rm -f "$df_tmp"
+            z2k_fetch "$df_url" "$df_tmp" 2>/dev/null || true
+            rm -f "${df_tmp}.etag" 2>/dev/null
+            local df_size
+            df_size=$(wc -c < "$df_tmp" 2>/dev/null || echo 0)
+            local df_valid=false
+            if [ -f "$df_tmp" ] && [ "$df_size" -gt 500000 ] 2>/dev/null; then
+                if head -c 4 "$df_tmp" 2>/dev/null | grep -q "ELF"; then
+                    chmod +x "$df_tmp"
+                    if "$df_tmp" --version >/dev/null 2>&1; [ $? -le 2 ]; then
+                        df_valid=true
+                    fi
+                fi
+            fi
+            if $df_valid; then
+                z2k_snapshot_external "$df_dest"
+                mv -f "$df_tmp" "$df_dest" && chmod +x "$df_dest"
+                print_success "z2k-dns-filter установлен ($df_arch)"
+            else
+                rm -f "$df_tmp"
+                if [ -x "$df_dest" ]; then
+                    print_warning "Не удалось обновить z2k-dns-filter — оставлен текущий рабочий бинарник"
+                else
+                    print_warning "z2k-dns-filter не установлен (арх $df_arch / скачивание прервалось)"
+                fi
+            fi
+        else
+            print_warning "Неподдерживаемая dns-filter архитектура, пропускаем z2k-dns-filter"
+        fi
+    fi
+
     # Cleanup legacy WS proxy init script (replaced by tunnel)
     if [ -x /opt/etc/init.d/S97tg-mtproxy ]; then
         /opt/etc/init.d/S97tg-mtproxy stop >/dev/null 2>&1 || true
@@ -2825,6 +2878,8 @@ step_finalize() {
     deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh" || return 1
     deploy_critical_file "files/init.d/S96z2k-rt-proxy"            "/opt/etc/init.d/S96z2k-rt-proxy" || return 1
     deploy_critical_file "files/ndm/92-z2k-rt-proxy-redirect.sh"    "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh" || return 1
+    deploy_critical_file "files/init.d/S95z2k-dns-filter"          "/opt/etc/init.d/S95z2k-dns-filter" || return 1
+    deploy_critical_file "files/ndm/93-z2k-dns-filter-redirect.sh"  "/opt/etc/ndm/netfilter.d/93-z2k-dns-filter-redirect.sh" || return 1
     deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh" || return 1
 
     # tg-tunnel-watchdog used to be triggered via `* * * * *` cron, but
@@ -2903,6 +2958,13 @@ step_finalize() {
     # script's start() sets the ndmc DNS-override + sentinel REDIRECT itself.
     if [ -x /opt/sbin/z2k-rt-proxy ] && [ -x /opt/etc/init.d/S96z2k-rt-proxy ]; then
         /opt/etc/init.d/S96z2k-rt-proxy restart >/dev/null 2>&1 || true
+    fi
+
+    # z2k-dns-filter. restart is a no-op when Z2K_DNS_FILTER!=1 (S95 self-gates),
+    # so this is safe to call unconditionally — it only actually starts +
+    # installs the :53 redirect when the operator has enabled the flag.
+    if [ -x /opt/sbin/z2k-dns-filter ] && [ -x /opt/etc/init.d/S95z2k-dns-filter ]; then
+        /opt/etc/init.d/S95z2k-dns-filter restart >/dev/null 2>&1 || true
     fi
 
     # z2k-detect — reactive DPI-discovery daemon.
@@ -3561,6 +3623,24 @@ uninstall_zapret2() {
           /var/run/z2k-rt-proxy.pid \
           /tmp/z2k-log/z2k-rt-proxy.log 2>/dev/null || true
     killall -9 z2k-rt-proxy 2>/dev/null || true
+
+    # Tear down z2k-dns-filter: stop S95 (drops the :53 redirect), then sweep
+    # the redirect explicitly — a stale :53 -> :15353 REDIRECT with the daemon
+    # gone would BLACKHOLE all LAN DNS.
+    if [ -x /opt/etc/init.d/S95z2k-dns-filter ]; then
+        /opt/etc/init.d/S95z2k-dns-filter stop >/dev/null 2>&1 || true
+    fi
+    for _df_proto in udp tcp; do
+        while iptables -t nat -C PREROUTING ! -i lo -p "$_df_proto" --dport 53 -j REDIRECT --to-port 15353 2>/dev/null; do
+            iptables -t nat -D PREROUTING ! -i lo -p "$_df_proto" --dport 53 -j REDIRECT --to-port 15353 2>/dev/null || break
+        done
+    done
+    rm -f /opt/etc/init.d/S95z2k-dns-filter \
+          /opt/etc/ndm/netfilter.d/93-z2k-dns-filter-redirect.sh \
+          /opt/sbin/z2k-dns-filter \
+          /var/run/z2k-dns-filter.pid \
+          /tmp/z2k-log/z2k-dns-filter.log 2>/dev/null || true
+    killall -9 z2k-dns-filter 2>/dev/null || true
 
     # Tear down the Telegram tunnel: stop the daemon, kill stragglers, drop
     # its REDIRECT rules, remove the init script and the NDM hook that
