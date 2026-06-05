@@ -1775,3 +1775,64 @@ function z2k_http_partial_response(desync, crec)
 
   return false
 end
+
+-- ===========================================================================
+-- QUIC rotation detectors — wired ONLY on yt_quic via config_official
+-- (success_detector=z2k_quic_success / failure_detector=z2k_quic_stall).
+--
+-- WHY: the legacy standard UDP success latches when incoming packets > udp_in
+-- (=1), i.e. on the 2nd incoming datagram. Any QUIC server Initial+Handshake
+-- flight is 2+ incoming datagrams, so it pinned slot1 INSTANTLY even when the
+-- strategy never pierced to deliver video → yt_quic NEVER rotated (debug-proven
+-- 2026-06-05: 10 success / 0 fail / 0 rotate, every host stuck on slot1 600+ min).
+-- A device whose slot1 doesn't pierce had no way to reach a working slot.
+--
+-- FIX: pin only on SUSTAINED DOWNLOAD (real video flowing), and rotate off a
+-- slot that handshakes-but-stalls or doesn't pierce.
+--
+-- DIRECTION (critical — pos_get's 3rd arg `reverse`: nil=current packet
+-- direction, true=opposite):
+--   z2k_quic_success runs on an INCOMING packet → current dir = DOWNLOAD →
+--     pos_get(d,'b') [NO reverse] = download bytes. (reverse=true would read
+--     client UPLOAD — wrong: a stalled flow with client retransmits has high
+--     upload and would false-pin a dead slot.)
+--   z2k_quic_stall runs on an OUTGOING packet → current dir = UPLOAD →
+--     pos_get(d,'d',false) = client datagram count; pos_get(d,'b',true)
+--     [reverse] = download bytes received so far.
+--
+-- discord_udp / game_udp are NOT wired here (short STUN / IP-discovery / game
+-- datagrams never sustain high bytes; a 24KB floor would never fire) — they
+-- keep the standard packet-count UDP detectors.
+-- ===========================================================================
+local Z2K_QUIC_SUCCESS_BYTES  = 24576  -- 24 KiB download: above any QUIC handshake flight (~3-9KB), below the smallest real video burst (50-500KB)
+local Z2K_QUIC_STALL_OUT_PKTS = 8      -- client datagrams: healthy handshake ~3-5; persistent client sending with no data back = stall/block
+
+function z2k_quic_success(desync, crec)
+  if not desync or desync.outgoing then return false end            -- INCOMING only
+  if not desync.dis or not desync.dis.udp then return false end
+  if not (desync.track and desync.track.pos) then return false end
+  local dl_bytes = pos_get(desync, 'b')                             -- direct on incoming = DOWNLOAD bytes
+  if dl_bytes and dl_bytes > Z2K_QUIC_SUCCESS_BYTES then
+    DLOG("z2k_quic_success: download " .. dl_bytes .. " > " ..
+         Z2K_QUIC_SUCCESS_BYTES .. " — sustained QUIC data, pin")
+    return true                                                     -- framework latches crec.nocheck + resets fail counter
+  end
+  return false
+end
+
+function z2k_quic_stall(desync, crec)
+  if not desync or not desync.outgoing then return false end         -- OUTGOING only
+  if not desync.dis or not desync.dis.udp then return false end
+  if not (desync.track and desync.track.pos) then return false end
+  local out_pkts = pos_get(desync, 'd', false)                       -- direct on outgoing = client datagram count
+  local dl_bytes = pos_get(desync, 'b', true)                        -- reverse on outgoing = DOWNLOAD bytes
+  if out_pkts and dl_bytes
+     and out_pkts >= Z2K_QUIC_STALL_OUT_PKTS
+     and dl_bytes < Z2K_QUIC_SUCCESS_BYTES then
+    DLOG("z2k_quic_stall: out " .. out_pkts .. " >= " .. Z2K_QUIC_STALL_OUT_PKTS ..
+         " but download " .. dl_bytes .. " < " .. Z2K_QUIC_SUCCESS_BYTES ..
+         " — QUIC handshake-but-stall / no-pierce, fail")
+    return true
+  end
+  return false
+end

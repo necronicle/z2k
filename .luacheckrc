@@ -13,6 +13,8 @@ globals = {
     "z2k_http_mid_stream_stall",
     "z2k_silent_drop_detector",
     "z2k_http_partial_response",
+    "z2k_quic_success",
+    "z2k_quic_stall",
     -- HTTP-bypass primitives (z2k-http-strats.lua, ALFiX port)
     "z2k_http_methodeol_safe",
     "z2k_http_xpadding",
