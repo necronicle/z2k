@@ -162,27 +162,20 @@ fi
 #   Android Telegram is especially sensitive: it caches TCP connections
 #   aggressively and won't retry through the tunnel until the app is
 #   force-killed. Re-insert rules if even one is missing.
-if ! iptables -t nat -C PREROUTING -d 149.154.160.0/20 -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; then
-    logger -t tg-watchdog "REDIRECT rules missing — re-inserting + flushing conntrack"
-    CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
-    for cidr in $CIDRS; do
-        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-    done
-    # Flush stale conntrack entries for ALL Telegram DC CIDRs. Without
-    # this, Android Telegram holds onto dead direct-to-DC connections
-    # (SYN_SENT/ESTABLISHED to ISP blackhole) via the kernel conntrack
-    # table, and new packets from the app follow those stale entries
-    # BYPASSING the freshly re-inserted REDIRECT rules. The app stays
-    # dead for minutes (exponential backoff) until conntrack naturally
-    # expires. Flushing forces immediate new connections that hit the
-    # REDIRECT → tunnel path. conntrack -D is idempotent — no harm if
-    # entries already expired.
-    for cidr in $CIDRS; do
-        conntrack -D -d "$cidr" 2>/dev/null || true
-    done
+TG_REDIR_LIB="/opt/zapret2/z2k-tg-redirect.sh"
+if [ -r "$TG_REDIR_LIB" ]; then
+    . "$TG_REDIR_LIB"
+    if ! z2k_tg_rule_present PREROUTING || ! z2k_tg_rule_present OUTPUT; then
+        logger -t tg-watchdog "REDIRECT rules missing — re-inserting (ipset, -w) + flushing conntrack"
+        z2k_tg_remove_legacy_rules
+        z2k_tg_ensure_rules
+        # Flush stale conntrack for ALL Telegram DC CIDRs. Without this,
+        # Android Telegram holds dead direct-to-DC connections via the kernel
+        # conntrack table and new packets follow those stale entries BYPASSING
+        # the freshly restored REDIRECT — dead for minutes until conntrack
+        # expires. conntrack -D is idempotent.
+        z2k_tg_flush_conntrack
+    fi
 fi
 
 # 2) Active end-to-end probe through the tunnel.

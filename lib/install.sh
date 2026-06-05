@@ -2818,6 +2818,9 @@ step_finalize() {
     # watchdog деплоятся критично. Провал (incomplete WORK_DIR / disk-full) →
     # return 1 → z2k_restore_old_tree вернёт прежнюю рабочую установку, а не
     # закоммитит router без tunnel-инфры.
+    # Shared TG-redirect helper lib (ipset + -w-locked rules) — must land
+    # before the init script / NDM hook / watchdog that source it.
+    deploy_critical_file "files/z2k-tg-redirect.sh"              "/opt/zapret2/z2k-tg-redirect.sh" || return 1
     deploy_critical_file "files/init.d/S98tg-tunnel"             "/opt/etc/init.d/S98tg-tunnel" || return 1
     deploy_critical_file "files/ndm/90-z2k-tg-redirect.sh"        "/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh" || return 1
     print_success "Keenetic NDM hook установлен (auto-restore iptables)"
@@ -3573,8 +3576,17 @@ uninstall_zapret2() {
         /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1 || true
     fi
     killall -9 tg-mtproxy-client 2>/dev/null || true
-    # Drop REDIRECT rules for every TG DC CIDR in case the init script
-    # stop path missed some or was already gone.
+    # Drop the current ipset-based REDIRECT rules FIRST so the `ipset destroy`
+    # further down (it matches names containing "z2k" → catches z2k_tg_dc)
+    # doesn't fail with "set in use".
+    local tg_chain
+    for tg_chain in PREROUTING OUTPUT; do
+        while iptables -w -t nat -C "$tg_chain" -p tcp --dport 443 -m set --match-set z2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -w -t nat -D "$tg_chain" -p tcp --dport 443 -m set --match-set z2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || break
+        done
+    done
+    # Drop legacy per-CIDR REDIRECT rules (pre-ipset builds) in case the init
+    # script stop path missed some or was already gone.
     local tg_cidr
     for tg_cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
                    91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 \

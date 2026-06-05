@@ -30,7 +30,10 @@ mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
 PIDFILE="/var/run/tg-tunnel.pid"
 
-CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
+# Telegram-DC redirect helpers (ipset + -w-locked rules). Single source of
+# truth shared with the NDM hook (90-z2k-tg-redirect.sh) and the tg-watchdog.
+TG_REDIR_LIB="/opt/zapret2/z2k-tg-redirect.sh"
+[ -r "$TG_REDIR_LIB" ] && . "$TG_REDIR_LIB"
 
 start() {
     [ -x "$BIN" ] || exit 0
@@ -90,19 +93,12 @@ start() {
     # they precede Keenetic's _NDM_* chains. PREROUTING catches forwarded
     # traffic from LAN clients; OUTPUT catches locally-originated traffic
     # from the router itself (e.g. the watchdog probe).
-    for cidr in $CIDRS; do
-        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || \
-            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null
-    done
-    # Flush stale conntrack entries so Android/iOS Telegram clients
-    # immediately create new connections through the REDIRECT path
-    # instead of riding stale direct-to-DC entries from before the
-    # tunnel was (re)started.
-    for cidr in $CIDRS; do
-        conntrack -D -d "$cidr" 2>/dev/null || true
-    done
+    z2k_tg_remove_legacy_rules   # migrate off pre-ipset per-CIDR rules on (re)start
+    z2k_tg_ensure_rules          # ipset + 2 REDIRECT rules, -w-locked, verify-retry
+    # Flush stale conntrack so Android/iOS Telegram clients immediately create
+    # new connections through the REDIRECT path instead of riding stale
+    # direct-to-DC entries from before the tunnel (re)started.
+    z2k_tg_flush_conntrack
 }
 
 stop() {
@@ -123,14 +119,8 @@ stop() {
     fi
     rm -f "$PIDFILE"
     # Idempotent removal: drop every matching copy of the rule from both chains.
-    for cidr in $CIDRS; do
-        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
-            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
-        done
-        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
-            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
-        done
-    done
+    z2k_tg_remove_rules          # remove the ipset REDIRECT rules
+    z2k_tg_remove_legacy_rules   # and any stale pre-ipset per-CIDR rules
 }
 
 case "$1" in

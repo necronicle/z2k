@@ -11,6 +11,7 @@ export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/
 # 91-z2k-http-tunnel-redirect.sh.
 
 [ "$type" = "ip6tables" ] && exit 0
+[ "$table" = "nat" ] || exit 0
 
 PIDFILE="/var/run/z2k-rt-proxy.pid"
 LISTEN_PORT="1445"
@@ -20,9 +21,13 @@ SENTINEL="10.171.171.171"
 [ -f "$PIDFILE" ] || exit 0
 kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null || exit 0
 
-iptables -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-    iptables -t nat -I PREROUTING 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
-iptables -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-    iptables -t nat -I OUTPUT 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+# xtables-lock-safe iptables (-w): without it an insert racing NDM's own
+# iptables churn returns EBUSY and fails SILENTLY, dropping the redirect.
+ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
+
+ipt -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT || \
+    ipt -t nat -I PREROUTING 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT
+ipt -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT || \
+    ipt -t nat -I OUTPUT 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT
 
 exit 0

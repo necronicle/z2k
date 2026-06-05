@@ -203,14 +203,26 @@ log_info "Удаление iptables NAT REDIRECT правил Telegram-тунн�
 
 TG_CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
 tg_rules_removed=0
+# Current ipset-based rules (z2k_tg_dc match-set → :1443) — 2 rules.
+for chain in PREROUTING OUTPUT; do
+    while iptables -w -t nat -C "$chain" -p tcp --dport 443 -m set --match-set z2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null; do
+        iptables -w -t nat -D "$chain" -p tcp --dport 443 -m set --match-set z2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || break
+        tg_rules_removed=$((tg_rules_removed + 1))
+    done
+done
+# Legacy per-CIDR rules (pre-ipset builds) — keep removing for back-compat.
 for cidr in $TG_CIDRS; do
     for chain in PREROUTING OUTPUT; do
-        while iptables -t nat -C "$chain" -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
-            iptables -t nat -D "$chain" -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
+        while iptables -w -t nat -C "$chain" -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
+            iptables -w -t nat -D "$chain" -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break
             tg_rules_removed=$((tg_rules_removed + 1))
         done
     done
 done
+# Destroy the ipset itself — NDM doesn't touch ipsets, so it would linger.
+if ipset destroy z2k_tg_dc 2>/dev/null; then
+    log_info "  Удалён ipset z2k_tg_dc"
+fi
 if [ "$tg_rules_removed" -gt 0 ]; then
     log_info "  Снято NAT правил Telegram: $tg_rules_removed"
 else

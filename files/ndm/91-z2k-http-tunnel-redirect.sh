@@ -28,11 +28,16 @@ fi
 
 CIDRS="168.119.95.238/32"
 
+# xtables-lock-safe iptables (-w): without it an insert racing NDM's own
+# iptables churn returns EBUSY and fails SILENTLY, dropping the redirect
+# (mirrors S99zapret2.new; plain-iptables fallback for ancient builds).
+ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
+
 for cidr in $CIDRS; do
-    iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-        iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
-    iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-        iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+    ipt -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT || \
+        ipt -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT
+    ipt -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT || \
+        ipt -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT
 done
 
 for cidr in $CIDRS; do
