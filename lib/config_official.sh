@@ -377,15 +377,13 @@ AUSTERUS_OPT
     # googlevideo максимально подвержен). Детекторы определены в
     # files/lua/z2k-detectors.lua (загружены через --lua-init на Этапе 1).
     youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "failure_detector" "z2k_silent_drop_detector")
-    # yt_quic (UDP) ONLY: byte-based detectors so QUIC ROTATES instead of pinning
-    # slot1 on the 2nd incoming datagram (standard UDP success = never rotated,
-    # debug-proven 2026-06-05). z2k_quic_success pins only on sustained DOWNLOAD
-    # (>24KB = real video); z2k_quic_stall rotates off a slot that handshakes-but-
-    # stalls / does not pierce. MUST be after ensure_circular_arg_set's def (above)
-    # AND before quic_udp goes into NFQWS2_OPT. NOT on discord_udp/game_udp (short
-    # datagrams — 24KB floor never fires; they keep standard packet-count UDP det).
-    quic_udp=$(ensure_circular_arg_set "$quic_udp" "success_detector" "z2k_quic_success")
-    quic_udp=$(ensure_circular_arg_set "$quic_udp" "failure_detector" "z2k_quic_stall")
+    # yt_quic (UDP): NATIVE standard_success/failure_detector (UNWIRED 2026-06-05).
+    # A custom progress-based detector (z2k_quic_success/z2k_quic_stall, kept in
+    # z2k-detectors.lua) was trialed but left unwired: in the field it never fired
+    # (phone QUIC connections abandon before the stall window) and wiring its
+    # failure_detector would REPLACE native UDP rotation — which appears to work.
+    # Functions retained for a future re-trial after threshold calibration; see
+    # project_quic_rotation_fix.
     # gv_tcp: было z2k_tls_alert_fatal — голый лист без byte-window/stall-пути.
     # Семантическое ревью (workflow w8b0e0mex) показало: googlevideo.com —
     # ИМЕННО тот пул, что максимально подвержен тихому 16КБ-gate mid-stream
