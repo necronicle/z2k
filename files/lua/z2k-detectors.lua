@@ -1603,6 +1603,22 @@ function z2k_silent_drop_detector(desync, crec)
       if is_browser_cancel then
         DLOG("z2k_silent_drop_detector: SKIP browser-cancel out="..out_count..
              " in="..in_count.." in_bytes="..in_bytes.." age="..conn_age.."s")
+        -- 2026-06-05: MUST return false here. Без этого SKIP холостой: код
+        -- проваливается в delegation-цепочку ниже, чей терминальный
+        -- z2k_tls_alert_fatal зовёт standard_failure_detector, и тот считает
+        -- ретрансмит ClientHello'а browser-cancel'а фейлом (retrans=2 →
+        -- failure → rotate). Именно это гнало yt_tcp.googleapis в ротацию на
+        -- браузерных пре-коннектах (out=4 in=0 age<3s), пока succ=0 после
+        -- ротации. Реальный silent-drop живёт >3s (ядро долбит ретрансмитами
+        -- десятки секунд) → при conn_age>=cancel_age_thr перестаёт быть
+        -- browser-cancel и ловится FAILURE-веткой выше на следующем
+        -- ретрансмите (worst-case +3s к детекции, в каноне RTO-backoff ≈0).
+        -- ЧЕСТНО: блок на flow, который УМИРАЕТ <3s не дав 4-го исходящего
+        -- ретрансмита, пакетно неотличим от browser-cancel и НЕ считается
+        -- фейлом — это inherent ambiguity гевристики; такой host всё равно
+        -- ротируется через долгоживущие sibling-flow под тем же host-key.
+        -- Debug-proven (nfqdbg trace 2026-06-05).
+        return false
       else
         DLOG("z2k_silent_drop_detector: FAILURE out="..out_count.." in="..in_count..
              " in_bytes="..in_bytes.." age="..conn_age.."s")

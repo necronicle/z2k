@@ -329,13 +329,23 @@ end
 -- browser preconnect cancel — NOT a silent drop. Must NOT fire, else
 -- multi-connection HTTPS sites (Instagram/Facebook) false-rotate within
 -- seconds of active scrolling. Distinguishing axis from case1 is connection age.
+--
+-- 2026-06-05 FIX: a browser-cancel must ALSO skip the delegation chain (like
+-- crec.nocheck, case5). The chain's terminal z2k_tls_alert_fatal calls
+-- standard_failure_detector, which counts the cancel's ClientHello retransmit
+-- (retrans=2) as a failure → false rotation. Debug-proven on
+-- yt_tcp.googleapis.com (background API preconnects out=4 in=0 age<3s drove a
+-- 1→15 rotation cascade while succ=0). Real silent drops keep retransmitting
+-- past cancel_age_thr (3s) → no longer browser-cancel → caught by the FAILURE
+-- branch on the next retransmit, so genuine-failure detection is intact (just
+-- deferred to 3s). Hence: no fire AND chain skipped.
 do
     reset_chain()
     local crec = {}  -- no z2k_first_seen_t → detector stamps now → age 0
     local d = out_packet(4, 1, 200, 0)
     local fired = z2k_silent_drop_detector(d, crec)
     check("case9: young low-byte flow = browser-cancel, no fire", false, fired)
-    check("case9: chain still runs (mid_stream)",                 1,     chain_calls.mid_stream)
+    check("case9: chain SKIPPED for browser-cancel (no false standard_failure count)", 0, chain_total())
 end
 
 -- ----- summary ------------------------------------------------------------
