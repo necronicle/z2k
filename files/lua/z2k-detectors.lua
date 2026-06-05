@@ -1804,8 +1804,10 @@ end
 -- datagrams never sustain high bytes; a 24KB floor would never fire) — they
 -- keep the standard packet-count UDP detectors.
 -- ===========================================================================
-local Z2K_QUIC_SUCCESS_BYTES  = 24576  -- 24 KiB download: above any QUIC handshake flight (~3-9KB), below the smallest real video burst (50-500KB)
-local Z2K_QUIC_STALL_OUT_PKTS = 8      -- client datagrams: healthy handshake ~3-5; persistent client sending with no data back = stall/block
+local Z2K_QUIC_SUCCESS_BYTES    = 24576  -- 24 KiB download = sustained video (above any handshake flight ~3-9KB, below smallest video burst 50-500KB)
+local Z2K_QUIC_STALL_OUT_MIN    = 3      -- client must have actively retried (>=3 datagrams) — past a quick preconnect/cancel
+local Z2K_QUIC_STALL_AGE_SEC    = 2      -- connection had >=2s to deliver (a working slot crosses 24KB in ~1s → success fires first)
+local Z2K_QUIC_STALL_NOPROG_SEC = 1      -- download stopped growing for >=1s (plateau = stalled, not still ramping)
 
 function z2k_quic_success(desync, crec)
   if not desync or desync.outgoing then return false end            -- INCOMING only
@@ -1815,23 +1817,47 @@ function z2k_quic_success(desync, crec)
   if dl_bytes and dl_bytes > Z2K_QUIC_SUCCESS_BYTES then
     DLOG("z2k_quic_success: download " .. dl_bytes .. " > " ..
          Z2K_QUIC_SUCCESS_BYTES .. " — sustained QUIC data, pin")
-    return true                                                     -- framework latches crec.nocheck + resets fail counter
+    return true                                                     -- framework latches crec.nocheck + resets host fail counter
   end
   return false
 end
 
+-- Progress-based stall (mirrors z2k_mid_stream_stall): per-connection state in
+-- desync.track.lua_state.quic tracks max download + when it last grew. A failing
+-- QUIC slot produces SHORT abandoned connections (the per-packet out>=8 / 24KB
+-- thresholds never caught them). This fires when a connection actively retried
+-- (out>=OUT_MIN), lived >=AGE_SEC, still has <24KB download, AND download stopped
+-- growing for >=NOPROG_SEC (plateau). Fires at most once per conntrack
+-- (automate_failure_counter dedups via crec.failure); 3 such connections within
+-- time=60 rotate the slot. A WORKING slot crosses 24KB (→ z2k_quic_success → host
+-- counter reset + crec.nocheck) within ~1s, BEFORE the AGE_SEC window, so it never
+-- accumulates. Catches both Initial-dropped (download=0) and handshake-OK-no-video
+-- (download plateaus at the handshake ~5KB). Thresholds are field-tunable.
 function z2k_quic_stall(desync, crec)
   if not desync or not desync.outgoing then return false end         -- OUTGOING only
   if not desync.dis or not desync.dis.udp then return false end
-  if not (desync.track and desync.track.pos) then return false end
-  local out_pkts = pos_get(desync, 'd', false)                       -- direct on outgoing = client datagram count
-  local dl_bytes = pos_get(desync, 'b', true)                        -- reverse on outgoing = DOWNLOAD bytes
-  if out_pkts and dl_bytes
-     and out_pkts >= Z2K_QUIC_STALL_OUT_PKTS
-     and dl_bytes < Z2K_QUIC_SUCCESS_BYTES then
-    DLOG("z2k_quic_stall: out " .. out_pkts .. " >= " .. Z2K_QUIC_STALL_OUT_PKTS ..
-         " but download " .. dl_bytes .. " < " .. Z2K_QUIC_SUCCESS_BYTES ..
-         " — QUIC handshake-but-stall / no-pierce, fail")
+  if not (desync.track and desync.track.pos and desync.track.lua_state) then return false end
+  local dl_bytes = pos_get(desync, 'b', true) or 0                  -- reverse on outgoing = DOWNLOAD bytes
+  local out_pkts = pos_get(desync, 'd', false) or 0                 -- direct on outgoing = client datagram count
+  local now = (os and os.time and os.time()) or 0
+
+  local st = desync.track.lua_state.quic
+  if not st then
+    st = { first_ts = now, max_dl = dl_bytes, progress_ts = now }
+    desync.track.lua_state.quic = st
+  end
+  if dl_bytes > st.max_dl then                                      -- download grew → real progress
+    st.max_dl = dl_bytes
+    st.progress_ts = now
+  end
+
+  if out_pkts >= Z2K_QUIC_STALL_OUT_MIN
+     and dl_bytes < Z2K_QUIC_SUCCESS_BYTES
+     and (now - st.first_ts)    >= Z2K_QUIC_STALL_AGE_SEC
+     and (now - st.progress_ts) >= Z2K_QUIC_STALL_NOPROG_SEC then
+    DLOG("z2k_quic_stall: out=" .. out_pkts .. " download=" .. dl_bytes ..
+         " age=" .. (now - st.first_ts) .. "s no-progress=" .. (now - st.progress_ts) ..
+         "s (<" .. Z2K_QUIC_SUCCESS_BYTES .. " sustained) — QUIC stall/no-pierce, fail")
     return true
   end
   return false
