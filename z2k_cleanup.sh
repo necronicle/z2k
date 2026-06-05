@@ -48,7 +48,6 @@ log_info "Попытка мягкой остановки через init-скр�
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
-            /opt/etc/init.d/S95z2k-dns-filter \
             /opt/etc/init.d/S98tg-tunnel \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -x "$init" ]; then
@@ -67,7 +66,6 @@ for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
-            /opt/etc/init.d/S95z2k-dns-filter \
             /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -f "$init" ]; then
@@ -90,9 +88,7 @@ for hook in /opt/etc/ndm/netfilter.d/000-zapret2.sh \
             /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh \
             /opt/etc/ndm/netfilter.d/*z2k-http* \
             /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
-            /opt/etc/ndm/netfilter.d/*z2k-rt* \
-            /opt/etc/ndm/netfilter.d/93-z2k-dns-filter-redirect.sh \
-            /opt/etc/ndm/netfilter.d/*z2k-dns*; do
+            /opt/etc/ndm/netfilter.d/*z2k-rt*; do
     if [ -f "$hook" ]; then
         rm -f "$hook"
         log_info "  Удалён: $hook"
@@ -106,7 +102,7 @@ done
 log_info "Поиск и завершение процессов nfqws / nfqws2..."
 
 killed=0
-for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-dns-filter; do
+for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy; do
     pids=$(pidof "$proc_name" 2>/dev/null || true)
     if [ -n "$pids" ]; then
         for pid in $pids; do
@@ -118,7 +114,7 @@ for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-dns-filter; do
 done
 
 # Дополнительный поиск через ps (на случай если pidof не нашёл)
-for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-dns-filter; do
+for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy; do
     ps_pids=$(ps w 2>/dev/null | awk -v name="$proc_name" '$0 ~ "/"name"( |$)" || $0 ~ " "name"( |$)" {print $1}' || true)
     if [ -n "$ps_pids" ]; then
         for pid in $ps_pids; do
@@ -299,19 +295,6 @@ if [ -f /opt/sbin/tg-mtproxy-client ]; then
     log_info "  Удалён бинарник: /opt/sbin/tg-mtproxy-client"
 fi
 
-# rt-proxy / dns-filter бинари тоже вне /opt/zapret2.
-for _bin in /opt/sbin/z2k-rt-proxy /opt/sbin/z2k-dns-filter; do
-    [ -f "$_bin" ] && rm -f "$_bin" && log_info "  Удалён бинарник: $_bin"
-done
-
-# КРИТИЧНО: добить dns-filter :53 REDIRECT — стоп S95 его снимает, но если
-# init уже снесён/сломан, стейл-REDIRECT на мёртвый :15353 заблэкхолит DNS.
-for proto in udp tcp; do
-    while iptables -t nat -C PREROUTING ! -i lo -p "$proto" --dport 53 -j REDIRECT --to-port 15353 2>/dev/null; do
-        iptables -t nat -D PREROUTING ! -i lo -p "$proto" --dport 53 -j REDIRECT --to-port 15353 2>/dev/null || break
-    done
-done
-
 # ==========================================
 # 7. Очистка временных файлов
 # ==========================================
@@ -323,7 +306,6 @@ for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
               /var/run/tg-tunnel.pid \
               /tmp/z2k-log/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
               /tmp/z2k-log/z2k-rt-proxy.log /var/run/z2k-rt-proxy.pid \
-              /tmp/z2k-log/z2k-dns-filter.log /var/run/z2k-dns-filter.pid \
               /tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-insta-refresh.log.old \
               /var/run/z2k-scheduler.pid /opt/var/log/z2k-scheduler.log \
               /opt/var/log/z2k-classify.log \
@@ -387,7 +369,6 @@ done
 for init in /opt/etc/init.d/S99zapret /opt/etc/init.d/S99zapret2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
-            /opt/etc/init.d/S95z2k-dns-filter \
             /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -f "$init" ]; then

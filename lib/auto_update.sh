@@ -328,12 +328,6 @@ au_install_paths() {
         files/ndm/92-z2k-rt-proxy-redirect.sh)
             echo "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh"
             ;;
-        files/init.d/S95z2k-dns-filter)
-            echo "/opt/etc/init.d/S95z2k-dns-filter"
-            ;;
-        files/ndm/93-z2k-dns-filter-redirect.sh)
-            echo "/opt/etc/ndm/netfilter.d/93-z2k-dns-filter-redirect.sh"
-            ;;
         files/init.d/*)
             echo "${zd}/init.d/${repo_path#files/init.d/}"
             ;;
@@ -580,7 +574,6 @@ EOF
             files/init.d/S98tg-tunnel)         restart_set="$restart_set S98tg-tunnel" ;;
             files/init.d/S97z2k-http-tunnel)   restart_set="$restart_set S97z2k-http-tunnel" ;;
             files/init.d/S96z2k-rt-proxy)      restart_set="$restart_set S96z2k-rt-proxy" ;;
-            files/init.d/S95z2k-dns-filter)    restart_set="$restart_set S95z2k-dns-filter" ;;
             files/init.d/S99z2k-scheduler)     restart_set="$restart_set S99z2k-scheduler" ;;
             files/z2k-scheduler.sh)            restart_set="$restart_set S99z2k-scheduler" ;;
             files/init.d/S98z2k-detect)        restart_set="$restart_set S98z2k-detect" ;;

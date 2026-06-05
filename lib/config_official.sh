@@ -1742,7 +1742,6 @@ create_official_config() {
     local saved_Z2K_PADENCAP="1"
     local saved_Z2K_INJECT_TLS_MODS="0"
     local saved_Z2K_DYNAMIC_TTL="1"
-    local saved_Z2K_DNS_FILTER="0"
     local saved_Z2K_STATS="1"
     local saved_DISABLE_CUSTOM="1"
     local saved_POLICY_NAME="nfqws"
@@ -1771,10 +1770,6 @@ create_official_config() {
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
         saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
         saved_Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$config_file" "1")
-        # Z2K_DNS_FILTER — default OFF (load-bearing DNS feature, field-validate
-        # before flipping default-ON). Preserved so an operator who enabled it
-        # (=1) keeps it across reinstall.
-        saved_Z2K_DNS_FILTER=$(safe_config_read "Z2K_DNS_FILTER" "$config_file" "0")
         # Z2K_STATS — anonymized strategy telemetry to VPS, default ON (per Mark
         # 2026-05-30: Default ON как все фичи). Opt-out via menu/webpanel toggle
         # sets =0; preserved across auto-update by the Z2K_ prefix rule.
@@ -2028,7 +2023,6 @@ Z2K_INJECT_TLS_MODS=${saved_Z2K_INJECT_TLS_MODS}
 # исходящих, поэтому inject избыточен; опт-аут оставляет fake'ам
 # default TTL стека и убирает per-fake lua call overhead на слабом MIPS.
 Z2K_DYNAMIC_TTL=${saved_Z2K_DYNAMIC_TTL}
-Z2K_DNS_FILTER=${saved_Z2K_DNS_FILTER}
 
 # Anonymous strategy telemetry to the project VPS (default 1=ON). The uploader
 # (z2k-stats-upload.sh, daily via z2k-scheduler) sends ONLY {pool, strategy,
