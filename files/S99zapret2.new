@@ -1162,7 +1162,13 @@ _fw_nfqws_pre4()
 
         ipt_print_op $1 "$2" "nfqws input+forward (qnum $3)"
 
-        [ "$Z2K_CONNMARK_OK4" = "1" ] && connchk="-m connmark ! --mark $Z2K_CONNMARK_EXCLUDE"
+        # Do NOT connmark-exclude on the REPLY/incoming rule. Z2K_CONNMARK_EXCLUDE
+        # (0x20000000) collides with zapret2's own DESYNC_MARK_POSTNAT and the NDM
+        # mark — both set ON the bypass-target connection by reply time — so an
+        # exclude here drops the incoming DPI RST/ServerHello of the very hosts we
+        # desync, and the rotator never sees the failure (0 incoming -> never
+        # rotates). Device-policy exclusion is enforced on the OUTGOING (post)
+        # rule, which is sufficient. connchk stays "" here on purpose.
 
         rule="$connchk $2 $IPSET_EXCLUDE src -j NFQUEUE --queue-num $3 --queue-bypass"
         if [ -n "$4" ] ; then
@@ -1189,7 +1195,9 @@ _fw_nfqws_pre6()
 
         ipt_print_op $1 "$2" "nfqws input+forward (qnum $3)" 6
 
-        [ "$Z2K_CONNMARK_OK6" = "1" ] && connchk="-m connmark ! --mark $Z2K_CONNMARK_EXCLUDE"
+        # See _fw_nfqws_pre4: no connmark-exclude on the reply rule (the exclude
+        # bit collides with DESYNC_MARK_POSTNAT/NDM and would drop the incoming
+        # RST of bypass targets). connchk stays "" here on purpose.
 
         rule="$connchk $2 $IPSET_EXCLUDE6 src -j NFQUEUE --queue-num $3 --queue-bypass"
         if [ -n "$4" ] ; then
@@ -1293,6 +1301,25 @@ z2k_rst_filter_stop()
     iptables -t raw -X "$Z2K_RST_CHAIN" 2>/dev/null
 }
 
+# Conntrack tuning so nfqws SEES incoming DPI RSTs (the rotator needs them to
+# rotate off a blocked strategy). bol-van auto-sets be_liberal only in
+# autohostlist mode (common/linux_fw.sh); we run hostlist, so set it ourselves.
+#  - tcp_be_liberal=1: RU DPI sends RST,ACK with a wrong ACK; strict conntrack
+#    marks it INVALID and the connbytes rule never passes it to nfqws.
+#  - checksum=0: with HW offload the NIC computes the L4 checksum, so the kernel
+#    sees a "bad" checksum -> conntrack marks INVALID (S00fix nfqws-keenetic ships).
+z2k_conntrack_tune_start()
+{
+    [ -w /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal 2>/dev/null
+    [ -w /proc/sys/net/netfilter/nf_conntrack_checksum ] && echo 0 > /proc/sys/net/netfilter/nf_conntrack_checksum 2>/dev/null
+}
+
+z2k_conntrack_tune_stop()
+{
+    [ -w /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal ] && echo 0 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal 2>/dev/null
+    [ -w /proc/sys/net/netfilter/nf_conntrack_checksum ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_checksum 2>/dev/null
+}
+
 start_fw()
 {
     echo "Applying zapret2 firewall rules"
@@ -1310,6 +1337,7 @@ start_fw()
 
     # ������������ ����������� ������� �� common/linux_fw.sh
     z2k_connmark_init
+    z2k_conntrack_tune_start
     zapret_apply_firewall
     z2k_policy_connmark_start
     z2k_udp_masquerade_fix_start
@@ -1330,6 +1358,7 @@ stop_fw()
     z2k_connmark_init
     z2k_udp_masquerade_fix_stop
     z2k_policy_connmark_stop
+    z2k_conntrack_tune_stop
     zapret_unapply_firewall
 
     return 0
