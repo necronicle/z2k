@@ -70,6 +70,15 @@ function circular(ctx, desync)        -- luacheck: ignore
     hrec.ctstrategy = n
   end
   if not hrec.nstrategy then hrec.nstrategy = 1 end
+  -- mirror automate_content_gate (zapret-auto.lua): an incoming flow delivering
+  -- real reverse content past the handshake region stamps the per-host content
+  -- gate, which drives state-persist's content-backed sticky re-arm.
+  if not desync.outgoing then
+    local rev = desync.track.pos and desync.track.pos.reverse
+    if rev and tonumber(rev.pbcounter) and rev.pbcounter > 16384 then
+      hrec.content_seen_last = now
+    end
+  end
   if desync._sim then hrec.nstrategy = desync._sim end
   executed = nil
   for _, ins in pairs(desync.plan or {}) do
@@ -98,6 +107,7 @@ local function mk(key, host, opts)
   }
   if opts.hostkey then d.arg.hostkey = opts.hostkey end
   if opts.hostname_is_ip then d.track.hostname_is_ip = true end
+  if opts.in_bytes and d.track then d.track.pos = { reverse = { pbcounter = opts.in_bytes } } end
   if opts.sim then d._sim = opts.sim end
   if opts.crec and d.track then d.track.lua_state = { automate = opts.crec } end
   if opts.no_track then d.track = nil end
@@ -257,18 +267,36 @@ end
 -- succeeds; if a real success happened within 30s, the drift is reverted so
 -- state.tsv stays on the working strategy.
 
--- T15: a real success (incoming ServerHello), then circular drifts upward
--- within the window → nstrategy reverts to the pre-circular value, and the
--- working strategy (1) is what stays in state.tsv.
+-- T15: a CONTENT-BACKED success (incoming ServerHello + real reverse content
+-- past the gate), then circular drifts upward within the window → nstrategy
+-- reverts to the pre-circular value, and the working strategy (1) stays in
+-- state.tsv. Content-backing is required: a bare ServerHello no longer arms the
+-- sticky re-arm (see T15b — the whatsapp/Meta handshake-but-block protection).
 do
   fresh()
   now = 1000
-  circular(nil, mk("rkn_tcp", "sticky.com", {outgoing = false, l7payload = "tls_server_hello"}))
+  circular(nil, mk("rkn_tcp", "sticky.com", {outgoing = false, l7payload = "tls_server_hello", in_bytes = 20000}))
   now = 1010
   circular(nil, mk("rkn_tcp", "sticky.com", {sim = 3}))   -- circular drifts 1→3
   check("T15: drift reverted to pre-circular value (recent success)",
         1, autostate["rkn_tcp"]["sticky.com"].nstrategy)
   check("T15: state.tsv stays on the working strategy 1", 1, row("rkn_tcp", "sticky.com"))
+end
+
+-- T15b: a BARE ServerHello with NO real content (handshake-but-BLOCKED class —
+-- whatsapp/Meta ~3-5KB cert flight that never delivers content) must NOT arm the
+-- sticky re-arm. Otherwise the ServerHello flood perpetually pins a non-piercing
+-- strategy and snaps the rotator's content-gated rotation straight back within
+-- the 30s window (the Layer-2 deadlock). content_backed=false → drift is KEPT.
+do
+  fresh()
+  now = 1500
+  circular(nil, mk("rkn_tcp", "blocked.com", {outgoing = false, l7payload = "tls_server_hello", in_bytes = 4000}))
+  now = 1510
+  circular(nil, mk("rkn_tcp", "blocked.com", {sim = 3}))   -- circular drifts 1→3
+  check("T15b: bare ServerHello (no content) does NOT revert drift (whatsapp class)",
+        3, autostate["rkn_tcp"]["blocked.com"].nstrategy)
+  check("T15b: state.tsv keeps the rotated strategy 3", 3, row("rkn_tcp", "blocked.com"))
 end
 
 -- T16: drift WITHOUT a recent success is NOT reverted (rotation still works).
@@ -287,7 +315,7 @@ end
 do
   fresh()
   now = 3000
-  circular(nil, mk("rkn_tcp", "old.com", {outgoing = false, l7payload = "tls_server_hello"}))
+  circular(nil, mk("rkn_tcp", "old.com", {outgoing = false, l7payload = "tls_server_hello", in_bytes = 20000}))
   now = 3040                                              -- 40s later, window is 30s
   circular(nil, mk("rkn_tcp", "old.com", {sim = 3}))
   check("T17: stale success (>30s) does NOT revert drift",
@@ -308,7 +336,7 @@ end
 do
   fresh()
   now = 5000
-  circular(nil, mk("yt_tcp", "googlevideo.com", {outgoing = false, l7payload = "tls_server_hello"}))
+  circular(nil, mk("yt_tcp", "googlevideo.com", {outgoing = false, l7payload = "tls_server_hello", in_bytes = 20000}))
   now = 5005
   circular(nil, mk("gv_tcp", "googlevideo.com", {sim = 3}))   -- different profile, same host
   check("T19: cross-profile success does NOT freeze gv_tcp drift",
@@ -325,7 +353,7 @@ do
   fresh()
   now = 6000
   -- a success stamps the shared "nohost|discord_udp" bucket...
-  circular(nil, mk("discord_udp", nil, {outgoing = false, l7payload = "tls_server_hello", hostkey = "z2k_nohost_key"}))
+  circular(nil, mk("discord_udp", nil, {outgoing = false, l7payload = "tls_server_hello", hostkey = "z2k_nohost_key", in_bytes = 20000}))
   now = 6005
   circular(nil, mk("discord_udp", nil, {hostkey = "z2k_nohost_key", sim = 3}))  -- circular drifts 1→3
   check("T20: discord/nohost drift NOT reverted (native circular like r-43)",
@@ -408,7 +436,7 @@ do
   now = 8000
   circular(nil, mk("rkn_tcp", "h3.com", {sim = 2, plan = PLAN5}))    -- live=2, disk=2
   now = 8001
-  circular(nil, mk("rkn_tcp", "h3.com", {outgoing = false, l7payload = "tls_server_hello", plan = PLAN5})) -- success stamp
+  circular(nil, mk("rkn_tcp", "h3.com", {outgoing = false, l7payload = "tls_server_hello", plan = PLAN5, in_bytes = 20000})) -- success stamp
   write_file("# h\n# h2\nrkn_tcp\th3.com\t4\t8002\n")   -- operator edits 2 → 4
   now = 8003                                            -- 2s later: inside the 30s window
   circular(nil, mk("rkn_tcp", "h3.com", {plan = PLAN5}))
@@ -431,6 +459,52 @@ do
   check("T26: externally-deleted host NOT resurrected by a sibling write",
         nil, row("rkn_tcp", "delh.com"))
   check("T26: sibling host still persists its own rotation", 3, row("rkn_tcp", "sib2.com"))
+end
+
+-- 5-strategy plan so a pin to 4/5 is IN range (DEFAULT_PLAN has only 1-3, which
+-- the config-clamp at zapret-auto/state-persist correctly normalizes to 1).
+local PLAN5_R = { {arg={strategy=1}}, {arg={strategy=2}}, {arg={strategy=3}},
+                  {arg={strategy=4}}, {arg={strategy=5}} }
+
+-- T27: SEED-RECOVERY (display-truth invariant). An operator pins a host AFTER
+-- load_state already ran, and the first packet for it lands INSIDE the reconcile
+-- debounce window (so reconcile can't adopt it that packet). Without recovery the
+-- record is created at default 1 and that 1 persists OVER the pin → live=1 while
+-- the operator asked for 5 (the exact divergence observed on flibusta). Recovery
+-- reads disk directly and adopts 5 so live AND disk are 5.
+do
+  fresh()
+  now = 9500
+  circular(nil, mk("rkn_tcp", "warm.com"))   -- triggers load_state (empty disk); reconcile fires (last_reconcile=9500)
+  -- operator pins pinned.com=5 (older ts so a default-1 persist would otherwise win the merge)
+  write_file("# h\n# h2\nrkn_tcp\twarm.com\t1\t9500\nrkn_tcp\tpinned.com\t5\t9400\n")
+  circular(nil, mk("rkn_tcp", "pinned.com", {plan = PLAN5_R}))  -- same `now` → reconcile debounced; only seed-recovery can save it
+  check("T27: cold pin adopted into LIVE despite reconcile debounce",
+        5, autostate["rkn_tcp"]["pinned.com"].nstrategy)
+  check("T27: pin NOT clobbered by default-1 (disk == live)", 5, row("rkn_tcp", "pinned.com"))
+end
+
+-- T28: seed-recovery must NOT misfire. A genuine cold default-1 host with NO disk
+-- row stays 1 and is persisted as 1 (recovery only adopts a real disk value != 1).
+do
+  fresh()
+  now = 9600
+  circular(nil, mk("rkn_tcp", "plain.com"))
+  check("T28: genuine default-1 host stays 1 (no spurious recovery)",
+        1, autostate["rkn_tcp"]["plain.com"].nstrategy)
+  check("T28: default-1 persisted normally", 1, row("rkn_tcp", "plain.com"))
+end
+
+-- T29: a cold pin present BEFORE the first packet is seeded via the normal
+-- pre-circular path (not recovery); recovery doesn't interfere with it.
+do
+  fresh()
+  write_file("# h\n# h2\nrkn_tcp\tseeded.com\t4\t9700\n")
+  now = 9701
+  circular(nil, mk("rkn_tcp", "seeded.com", {plan = PLAN5_R}))
+  check("T29: cold pin seeded via normal pre-circular path",
+        4, autostate["rkn_tcp"]["seeded.com"].nstrategy)
+  check("T29: seeded value persisted", 4, row("rkn_tcp", "seeded.com"))
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))

@@ -570,6 +570,40 @@ if type(circular) == "function" then
         end
         if not hrec then return end
 
+        -- SEED-RECOVERY (display-truth invariant). If the pre-circular seed
+        -- missed for this host (nstrategy_before_circular == nil — e.g. the first
+        -- real packet created the record only now, or load_state lost the race)
+        -- circular fell back to its default nstrategy=1 (zapret-auto.lua) while
+        -- disk still holds the real pinned/persisted value. Without this, that
+        -- cosmetic 1 then gets persisted over the truth and the display lies.
+        -- Detect exactly that signature and ADOPT the persisted value into live so
+        -- disk and live converge on the SAME real strategy on this very packet.
+        -- STRICT exact key (state[askey][hostn], hostn carries |4/|6) — never
+        -- cross-adopt a sibling address family (would break family-split / r-49).
+        -- A webpanel × delete clears the disk row first, so there is no N!=1 row
+        -- to recover from → a genuine reset to 1 is never resurrected.
+        local seed_recovered = false
+        if nstrategy_before_circular == nil and tonumber(hrec.nstrategy) == 1
+           and askey and hostn then
+          local rec = state[askey] and state[askey][hostn]
+          -- The in-RAM `state` can lag the truth: a pin written AFTER load_state
+          -- ran, or arriving inside the reconcile debounce window, is on DISK but
+          -- not yet in `state`. Read disk DIRECTLY (only in this rare recovery
+          -- path — a fresh record that circular defaulted to 1) so the pin is
+          -- honored before the default-1 persist below can clobber it. Same
+          -- merged primary+fallback view load_state/reconcile use.
+          if not (rec and tonumber(rec.strategy)) then
+            local disk = {}
+            if can_read_file(STATE_FILE_PRIMARY) then merge_state_file_into(STATE_FILE_PRIMARY, disk) end
+            if can_read_file(STATE_FILE_FALLBACK) then merge_state_file_into(STATE_FILE_FALLBACK, disk) end
+            rec = disk[askey] and disk[askey][hostn]
+          end
+          if rec and tonumber(rec.strategy) and tonumber(rec.strategy) ~= 1 then
+            hrec.nstrategy = tonumber(rec.strategy)
+            seed_recovered = true
+          end
+        end
+
         local nocheck_after, failure_after, neutral_after, server_active_after =
           conn_record_flags(desync)
         local n_after = tonumber(hrec.nstrategy) or nil
@@ -615,8 +649,22 @@ if type(circular) == "function" then
         -- (hostn|askey): success on gv_tcp must NOT freeze rotation on yt_tcp.
         local sticky_key = (hostn and askey_after)
           and (hostn .. "|" .. tostring(askey_after)) or nil
+        -- z2k content-gated sticky re-arm. A BARE TLS ServerHello (response_state)
+        -- on a handshake-but-BLOCKED host (whatsapp/Meta) must NOT re-arm the
+        -- sticky timestamp — otherwise the ~150 ServerHellos perpetually refresh
+        -- it and the revert below snaps the rotation that the rotator's content
+        -- gate just performed straight back within STICKY_WINDOW_SEC (the second
+        -- deadlock layer). A ServerHello only counts as content-backed once SOME
+        -- flow under this host has actually delivered real reverse content (the
+        -- rotator's hrec.content_seen_last gate, fresh within STICKY_WINDOW_SEC).
+        -- A real terminal success (nocheck/inseq>26K -> successful_state) and the
+        -- QUIC candidate path are NOT gated — those are strong proofs already.
+        local content_backed = hrec.content_seen_last
+          and (now_f() - (tonumber(hrec.content_seen_last) or 0)) <= STICKY_WINDOW_SEC
+        local rearm_event = successful_state or quic_candidate_state
+          or (response_state and content_backed)
         _G.Z2K_STICKY_SUCCESS_TS = _G.Z2K_STICKY_SUCCESS_TS or {}
-        if success_event and sticky_key then
+        if rearm_event and sticky_key then
           _G.Z2K_STICKY_SUCCESS_TS[sticky_key] = now_f()
         end
         if sticky_key and is_sticky_eligible(askey, hostn) and nstrategy_before_circular and hrec.nstrategy
@@ -629,7 +677,7 @@ if type(circular) == "function" then
 
         -- Persist the (possibly reverted) strategy. Confirmed success OR the
         -- outgoing-initial fallback triggers a save; server-active never pins.
-        if (success_event or outgoing_initial) and not server_active_event then
+        if (success_event or outgoing_initial or seed_recovered) and not server_active_event then
           persist_if_changed(askey, hostn, hrec)
         end
       end)

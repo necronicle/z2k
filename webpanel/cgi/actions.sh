@@ -602,8 +602,18 @@ STATE_FILE="${STATE_FILE:-$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv
 STATE_FILE_FALLBACK="${STATE_FILE_FALLBACK:-/tmp/z2k-autocircular-state.tsv}"
 
 state_read() {
-    [ -f "$STATE_FILE" ] || return 0
-    grep -vE '^(#|[[:space:]]*$)' "$STATE_FILE" 2>/dev/null
+    # Display-truth: read the SAME merged view the persist bridge actually writes
+    # to — primary (/opt) AND the /tmp fallback, newer-ts wins per (key,host). On
+    # a read-only /opt the bridge writes ONLY the fallback, so reading just the
+    # primary would show stale/empty data while the live truth is in /tmp.
+    local pf='' ff=''
+    [ -f "$STATE_FILE" ] && pf="$STATE_FILE"
+    [ -f "$STATE_FILE_FALLBACK" ] && ff="$STATE_FILE_FALLBACK"
+    [ -z "$pf" ] && [ -z "$ff" ] && return 0
+    awk -F'\t' '!/^#/ && NF>=3 {
+        k=$1 FS $2; t=($4=="")?0:$4+0
+        if (!(k in seen) || t>=ts[k]) { ts[k]=t; seen[k]=1; row[k]=$0 }
+    } END { for (k in row) print row[k] }' $pf $ff 2>/dev/null
 }
 
 # Remove one row by host+key from a single state file, preserving inode.
