@@ -1136,27 +1136,34 @@ AUSTERUS_OPT
     fi
     rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp" "z2k_silent_drop_detector")
 
-    # ---- A/B switch: pure bol-van standard detectors ------------------------
-    # Z2K_NATIVE_DETECTORS=1 strips ALL custom failure/success detector wiring
-    # (z2k_silent_drop_detector / z2k_http_success_positive_only /
-    # z2k_success_no_reset) + the no_http_redirect override from every TCP
-    # circular pool, falling back to bol-van's standard_failure_detector /
-    # standard_success_detector. Rationale (verified vs zapret-auto.lua:213/241):
-    # standard already catches BOTH block classes with NO outgoing-packet-count
-    # heuristic, so it cannot false-rotate working HTTP/2 hosts (the r-49 class):
+    # ---- Pure bol-van standard detectors (DEFAULT) --------------------------
+    # Strips ALL custom failure/success detector wiring (z2k_silent_drop_detector
+    # / z2k_http_success_positive_only / z2k_success_no_reset) + the
+    # no_http_redirect override from every TCP circular pool, falling back to
+    # bol-van's standard_failure_detector / standard_success_detector. Rationale
+    # (verified vs zapret-auto.lua:213/241): standard already catches BOTH block
+    # classes with NO outgoing-packet-count heuristic, so it cannot false-rotate
+    # working HTTP/2 hosts (the r-49 class):
     #   - incoming RST  (seq<=inseq) — visible after the connmark-reply fix;
     #   - silent drop   (outgoing retrans>=3 default) — client's own retransmits,
     #                     always visible via the unbroken POSTROUTING rule;
     #   - DPI redirect  (302/307 -> is_dpi_redirect).
     # NON-detector args (inseq=, reset, in-range, payload) are KEPT — those are
-    # native circular tuning, not custom detectors. Default 0 = custom behaviour.
+    # native circular tuning, not custom detectors.
+    #
+    # DEFAULT = native (Z2K_NATIVE_DETECTORS unset/1). Set Z2K_NATIVE_DETECTORS=0
+    # to restore the legacy custom detectors. The engine's rotation mode is tied
+    # to this automatically: run_nfqws (S99zapret2) exports Z2K_NATIVE_ROTATION
+    # off whenever the generated profiles still carry custom detectors, so the two
+    # never disagree (custom detectors need the r-49 POL offset; native must not
+    # have it). See [project_pure_default_rotation].
     z2k_strip_custom_detectors() {
         printf '%s' "$1" | sed \
             -e 's/:failure_detector=[^: ]*//g' \
             -e 's/:success_detector=[^: ]*//g' \
             -e 's/:no_http_redirect//g'
     }
-    if [ "$Z2K_NATIVE_DETECTORS" = "1" ]; then
+    if [ "${Z2K_NATIVE_DETECTORS:-1}" != "0" ]; then
         rkn_tcp=$(z2k_strip_custom_detectors "$rkn_tcp")
         youtube_tcp=$(z2k_strip_custom_detectors "$youtube_tcp")
         youtube_gv_tcp=$(z2k_strip_custom_detectors "$youtube_gv_tcp")
@@ -1637,7 +1644,7 @@ AUSTERUS_OPT
     #                 payload=http_req, так что они не сработают на
     #                 incoming replies — только detectors классифицируют.
     http_rkn="--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=2:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
-    [ "$Z2K_NATIVE_DETECTORS" = "1" ] && http_rkn=$(z2k_strip_custom_detectors "$http_rkn")
+    [ "${Z2K_NATIVE_DETECTORS:-1}" != "0" ] && http_rkn=$(z2k_strip_custom_detectors "$http_rkn")
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$http_rkn"
 
 

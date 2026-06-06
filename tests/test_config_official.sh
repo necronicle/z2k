@@ -349,6 +349,14 @@ assert_eq "inseq: applied to all circular tokens" "2" "$IS_COUNT4"
 # if we cannot. Instead, we test the Austerus mode which is self-contained.
 # ==============================================================================
 
+# The product DEFAULT is now pure-native detectors (Z2K_NATIVE_DETECTORS unset/1
+# -> custom failure/success detectors stripped). The integration assertions below
+# validate the LEGACY custom-detector wiring (ensure_*_detector / Этапы 2-4),
+# which is now the opt-out path, so force custom mode for them. run_generator's
+# subshell inherits this exported env. The native default is asserted separately
+# at the end of this file (see "pure-native default" block).
+export Z2K_NATIVE_DETECTORS=0
+
 printf "\n--- Austerus mode (all_tcp443) ---\n"
 
 # Create Austerus config in the mock dir and source config_official.sh
@@ -1133,6 +1141,20 @@ fi
 # ==============================================================================
 # CLEANUP AND REPORT
 # ==============================================================================
+
+printf "\n--- pure-native default (Z2K_NATIVE_DETECTORS=1) ---\n"
+# The shipped DEFAULT: custom failure/success detectors + no_http_redirect are
+# STRIPPED from every TCP pool, leaving pure bol-van standard detectors. Native
+# circular tuning (inseq=/reset/in-range) is KEPT.
+export Z2K_NATIVE_DETECTORS=1
+OUT_NATIVE=$(run_generator "native-default" "GAME_MODE_ENABLED=0" "")
+export Z2K_NATIVE_DETECTORS=0
+RKN_ARM_NATIVE=$(get_rkn_tcp_arm_line "$OUT_NATIVE")
+assert_contains     "native: rkn_tcp arm emitted"               "key=rkn_tcp"          "$RKN_ARM_NATIVE"
+assert_not_contains "native: rkn_tcp has NO failure_detector"   "failure_detector="    "$RKN_ARM_NATIVE"
+assert_not_contains "native: rkn_tcp has NO success_detector"   "success_detector="    "$RKN_ARM_NATIVE"
+assert_not_contains "native: rkn_tcp has NO no_http_redirect"   "no_http_redirect"     "$RKN_ARM_NATIVE"
+assert_contains     "native: rkn_tcp keeps native inseq="       "inseq="               "$RKN_ARM_NATIVE"
 
 rm -rf "$MOCK_DIR"
 

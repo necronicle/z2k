@@ -794,6 +794,18 @@ run_nfqws()
     # No hostlist validation here — custom.d scripts (50-stun4all, 50-discord-media)
     # intentionally run without hostlists, relying on firewall rules (u32/nft @ih).
     # Hostlist checks happen at config generation time (add_hostlist_line in config_official.sh).
+    #
+    # Keep engine rotation CONSISTENT with the detector wiring actually present in
+    # these args. If the profiles still carry custom failure/success detectors
+    # (Z2K_NATIVE_DETECTORS=0 legacy mode), the engine MUST keep the r-49
+    # proof-of-life/dominance offset — else those detectors' false-failures would
+    # rotate working hosts. Pure-native profiles (the default) get pure-native
+    # rotation (POL off), so a real RST/retrans is never drowned. Deriving it from
+    # the args (not a separate flag) makes the two impossible to desync.
+    case " $NFQWS2_OPT_BASE $2 " in
+        *failure_detector=*|*success_detector=*) export Z2K_NATIVE_ROTATION=0 ;;
+        *)                                       export Z2K_NATIVE_ROTATION=1 ;;
+    esac
     run_daemon $1 "$NFQWS2" "$NFQWS2_OPT_BASE $2"
 }
 
