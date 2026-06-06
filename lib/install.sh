@@ -213,7 +213,13 @@ cleanup_legacy_ip_hosts() {
         | awk '
             /^ip host/ {
                 host = $3; ip = $4
-                if (ip == "213.176.74.63" || ip == "79.137.196.7") { print; next }
+                if (ip == "213.176.74.63" || ip == "79.137.196.7") {
+                    # z2k whatsapp/ticketmaster relay pins legitimately point at
+                    # the VPS now (default-on SNI-passthrough relay) — these are
+                    # current, not legacy DNS-project leftovers. Keep them.
+                    if (tolower(host) ~ /whatsapp\.(com|net)$|ticketmaster\.com$|ticketm\.net$/) next
+                    print; next
+                }
                 if (ip == "2.58.104.1") {
                     if (tolower(host) ~ /cloudflare/) next
                     print
@@ -2677,6 +2683,35 @@ step_finalize() {
         sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || true
     fi
 
+    # WhatsApp + Ticketmaster relay (Keenetic static DNS → EU-egress VPS).
+    # Their real backends are unreachable on RU ISPs: WhatsApp's servers are
+    # IP-blocked (SYN black-holed — never reaches a ClientHello, so NO desync/
+    # rotation can help), Ticketmaster's WAF 403s RU IPs. We pin the hostnames
+    # to the VPS, which SNI-passthrough-proxies them to the real backend from a
+    # clean EU IP (TLS end-to-end, certs stay valid; the VPS nginx SNI map is
+    # shared infra). Fixed VPS IP → NO refresh needed (unlike rotating Meta
+    # edges). cleanup_legacy_ip_hosts() exempts these hostnames so the pins
+    # survive reinstalls; this block also re-asserts them idempotently and
+    # upgrades any stale (e.g. facebook-edge) pins to the VPS.
+    if command -v ndmc >/dev/null 2>&1; then
+        local relay_vps="213.176.74.63"
+        local relay_hosts="whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net www.ticketmaster.com ticketmaster.com s1.ticketm.net media.ticketmaster.com"
+        if ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host web.whatsapp.com $relay_vps"; then
+            print_info "Настройка релея WhatsApp/Ticketmaster (домены → VPS)..."
+            local _rh _rold
+            for _rh in $relay_hosts; do
+                for _rold in $(ndmc -c "show running-config" 2>/dev/null | awk -v h="$_rh" '/^ip host/ && $3==h {print $4}'); do
+                    ndmc -c "no ip host $_rh $_rold" >/dev/null 2>&1
+                done
+                ndmc -c "ip host $_rh $relay_vps" >/dev/null 2>&1
+            done
+            ndmc -c "system configuration save" >/dev/null 2>&1
+            print_success "Релей WhatsApp/Ticketmaster настроен"
+        else
+            print_info "Релей WhatsApp/Ticketmaster уже настроен"
+        fi
+    fi
+
     # Telegram transparent proxy (tg-mtproxy-client)
     if true; then
         print_info "Установка/обновление Telegram прокси..."
@@ -3555,6 +3590,14 @@ uninstall_zapret2() {
     if command -v ndmc >/dev/null 2>&1; then
         for _rtp_dom in rutracker.org www.rutracker.org rutracker.cc static.rutracker.cc api.rutracker.cc rep.rutracker.cc rutracker.wiki; do
             ndmc -c "no ip host $_rtp_dom 10.171.171.171" >/dev/null 2>&1 || true
+        done
+        ndmc -c "system configuration save" >/dev/null 2>&1 || true
+    fi
+    # Clear the WhatsApp/Ticketmaster relay ndmc pins (→ VPS) so those domains
+    # resolve normally again after uninstall.
+    if command -v ndmc >/dev/null 2>&1; then
+        for _rel_dom in whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net www.ticketmaster.com ticketmaster.com s1.ticketm.net media.ticketmaster.com; do
+            ndmc -c "no ip host $_rel_dom 213.176.74.63" >/dev/null 2>&1 || true
         done
         ndmc -c "system configuration save" >/dev/null 2>&1 || true
     fi
