@@ -13,6 +13,9 @@ youtube-ui.l.google.com
 youtubeembeddedplayer.googleapis.com
 youtube.googleapis.com
 youtubei.googleapis.com
+accounts.google.com
+accounts.youtube.com
+oauth2.googleapis.com
 yt-video-upload.l.google.com
 wide-youtube.l.google.com
 instantmessaging-pa.googleapis.com
