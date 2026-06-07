@@ -149,6 +149,8 @@ read_globals = {
     "instance_cutoff",
     "resolve_multi_pos",
     "delete_pos_1",
+    "pos_get",       -- nfqws2 byte/datagram counter accessor: pos_get(desync, mode[, reverse]) — manual §pos_get
+    "pos_get_pos",   -- sibling: pos_get_pos(track_pos, mode)
     "rawsend_opts",
     "rawsend_opts_base",
     "reconstruct_opts",
