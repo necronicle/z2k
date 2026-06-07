@@ -2710,14 +2710,26 @@ step_finalize() {
     # upgrades any stale (e.g. facebook-edge) pins to the VPS.
     if command -v ndmc >/dev/null 2>&1; then
         local relay_vps="213.176.74.63"
-        local relay_hosts="whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
-        # Marker is a domain from the EXPANDED ticketmaster set (not web.whatsapp.com):
-        # existing r-51 installs already have web.whatsapp.com pinned, so keying on it
-        # would skip the loop and they'd never get the new ticketmaster subdomains. The
-        # loop is idempotent, so re-running it on upgrade just adds the missing pins.
-        if ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host prismic-images.tmol.io $relay_vps"; then
-            print_info "Настройка релея WhatsApp/Ticketmaster (домены → VPS)..."
-            local _rh _rold
+        # RELAY ONLY the geo-WAF'd app endpoints. The CDN/asset hosts (ticketm.net,
+        # tmol.io/.co, *.ticketmaster.com static/js/media) are Fastly and return 200
+        # DIRECT from a RU IP — they are NOT geo-blocked. r-52 wrongly pinned them
+        # through the 1-CPU VPS; an image-heavy TM page (~120 s1.ticketm.net + ~48
+        # prismic in parallel) then CHOKED the relay → ~half the images failed. They
+        # must load direct from Fastly. See project_whatsapp_ip_block (2026-06-08).
+        local relay_hosts="whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com"
+        # CDN/asset hosts r-51/r-52 wrongly pinned — un-pin so they go DIRECT (Fastly).
+        local relay_unpin="static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
+        # Run when a CDN pin still lingers (old install → migrate) OR the app isn't
+        # pinned yet (fresh install). Idempotent; skips on an already-migrated box.
+        if ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host (prismic-images.tmol.io|s1.ticketm.net) $relay_vps" \
+           || ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host www.ticketmaster.com $relay_vps"; then
+            print_info "Настройка релея WhatsApp/Ticketmaster (app → VPS, CDN-картинки напрямую)..."
+            local _u _uold _rh _rold
+            for _u in $relay_unpin; do
+                for _uold in $(ndmc -c "show running-config" 2>/dev/null | awk -v h="$_u" '/^ip host/ && $3==h {print $4}'); do
+                    ndmc -c "no ip host $_u $_uold" >/dev/null 2>&1
+                done
+            done
             for _rh in $relay_hosts; do
                 for _rold in $(ndmc -c "show running-config" 2>/dev/null | awk -v h="$_rh" '/^ip host/ && $3==h {print $4}'); do
                     ndmc -c "no ip host $_rh $_rold" >/dev/null 2>&1
