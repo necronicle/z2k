@@ -233,6 +233,22 @@ toggle_stats() {
     set_flag "Z2K_STATS" "$want" "$CONFIG_FILE" || return 1
 }
 
+toggle_tpws() {
+    # Z2K_TPWS — youtube transparent-proxy layer (default 1). Fixes the class of
+    # offload-blinded handshake-block hosts (www.youtube.com) that nfqws2 can't
+    # rotate because Keenetic's NDM fastpath hides the dropped ClientHello/RST.
+    # Out-of-band from NFQWS2_OPT: it's a separate daemon (S95z2k-tpws on :1446),
+    # so no config regen / nfqws restart — flip the flag and start/stop the
+    # daemon (which loads its own youtube ipset + REDIRECT).
+    local want="$1"
+    set_flag "Z2K_TPWS" "$want" "$CONFIG_FILE" || return 1
+    if [ "$want" = "0" ]; then
+        [ -x /opt/etc/init.d/S95z2k-tpws ] && /opt/etc/init.d/S95z2k-tpws stop 2>&1
+    else
+        [ -x /opt/etc/init.d/S95z2k-tpws ] && /opt/etc/init.d/S95z2k-tpws restart 2>&1
+    fi
+}
+
 # --- policy access (Keenetic NDM ip policy filter) ---
 
 # policy_exists <name>: returns 0 if a Keenetic IP policy с description = <name>

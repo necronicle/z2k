@@ -1,0 +1,106 @@
+#!/bin/sh
+export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
+# /opt/etc/init.d/S95z2k-tpws
+#
+# Transparent tpws layer for offload-blinded handshake-block hosts (youtube).
+# See /opt/zapret2/z2k-tpws.sh for the full why. In short: Keenetic's NDM
+# fastpath offloads the forwarded client flow after the TCP handshake, so
+# nfqws2 never sees the dropped ClientHello / RST and cannot rotate. We
+# REDIRECT youtube-CIDR :443 to a local transparent tpws (port 1446) that
+# terminates the connection locally (escaping offload) and re-emits the
+# ClientHello with the SNI split across segments (bol-van's documented fix
+# for un-removable offload).
+#
+# All rule logic lives in the shared lib so this init script, the NDM hook
+# (93-z2k-tpws-redirect.sh) and the watchdog (z2k-tpws-watchdog.sh) install
+# the identical (ipset-based, -w-locked) rule shape. Companion NDM hook
+# re-inserts the REDIRECT after every NDM netfilter regen. Installed by
+# lib/install.sh.
+
+LIB="/opt/zapret2/z2k-tpws.sh"
+[ -r "$LIB" ] && . "$LIB"
+
+# CWE-59: keep /tmp/z2k-log a clean root-owned dir (drop a planted symlink/non-dir).
+if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+   { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+    rm -rf /tmp/z2k-log 2>/dev/null
+fi
+mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+chmod 700 /tmp/z2k-log 2>/dev/null
+
+start() {
+    [ -r "$LIB" ] || { echo "z2k-tpws: shared lib missing"; exit 0; }
+    [ -x "$TPWS_BIN" ] || { echo "z2k-tpws: binary not present, skipping"; exit 0; }
+    if z2k_tpws_user_disabled; then
+        echo "z2k-tpws: disabled by config (Z2K_TPWS=0), not starting"
+        return 0
+    fi
+    [ -s "$TPWS_HOSTLIST" ] || { echo "z2k-tpws: youtube hostlist missing, skipping"; exit 0; }
+    # Without the CIDR snapshot the ipset would be empty → REDIRECT matches
+    # nothing → daemon runs for nothing. Skip cleanly (youtube stays on native).
+    [ -s "$TPWS_CIDR4" ] || { echo "z2k-tpws: youtube CIDR list missing, skipping"; exit 0; }
+    if z2k_tpws_alive; then
+        echo "z2k-tpws already running (pid $(cat $TPWS_PIDFILE))"
+        return 0
+    fi
+
+    # Assemble bind + hostlist args.
+    _bind="--bind-addr=0.0.0.0"
+    z2k_tpws_v6_ok && _bind="$_bind --bind-addr=::"
+    _hl="--hostlist=$TPWS_HOSTLIST"
+    [ -s "$TPWS_HOSTLIST_GV" ] && _hl="$_hl --hostlist=$TPWS_HOSTLIST_GV"
+
+    echo "Starting z2k-tpws supervisor on :$TPWS_PORT..."
+    # SUPERVISOR loop (s6/runit pattern in shell — Entware has no systemd/procd):
+    # the pidfile holds the supervisor, parent of the daemon, respawning it on
+    # exit with capped backoff. trap '' HUP keeps the MIPS busybox SIGHUP fix;
+    # trap TERM/INT makes `stop` kill the daemon child.
+    (
+        trap '' HUP
+        trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+        backoff=1
+        while :; do
+            t0=$(date +%s 2>/dev/null || echo 0)
+            $TPWS_BIN --user="$TPWS_USER" $_bind --port="$TPWS_PORT" \
+                --filter-tcp=443 $_hl $TPWS_SPLIT </dev/null >> "$TPWS_LOG" 2>&1 &
+            child=$!
+            wait "$child"
+            t1=$(date +%s 2>/dev/null || echo 0)
+            if [ $((t1 - t0)) -ge 60 ]; then
+                backoff=1
+            else
+                backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+            fi
+            echo "$(date 2>/dev/null) [supervisor] tpws exited, respawn in ${backoff}s" >> "$TPWS_LOG"
+            sleep "$backoff"
+        done
+    ) &
+    echo $! > "$TPWS_PIDFILE"
+    sleep 2
+    z2k_tpws_ensure_rules
+}
+
+stop() {
+    echo "Stopping z2k-tpws..."
+    if [ -f "$TPWS_PIDFILE" ]; then
+        pid=$(cat "$TPWS_PIDFILE" 2>/dev/null)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+        rm -f "$TPWS_PIDFILE"
+    fi
+    # belt-and-suspenders: kill any stray tpws bound to our port
+    if [ -r "$LIB" ]; then
+        for p in $(pidof tpws 2>/dev/null); do
+            [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null \
+                | grep -q -- "--port=$TPWS_PORT" && kill "$p" 2>/dev/null
+        done
+        z2k_tpws_remove_rules
+    fi
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    *)       echo "Usage: $0 {start|stop|restart}" ;;
+esac

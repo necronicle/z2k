@@ -2865,6 +2865,50 @@ step_finalize() {
     deploy_critical_file "files/ndm/92-z2k-rt-proxy-redirect.sh"    "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh" || return 1
     deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh" || return 1
 
+    # tpws transparent-proxy layer (youtube offload-blind fix). NOT fail-closed
+    # (|| return 1) — it's an additive feature; a deploy hiccup must not roll
+    # back the whole install. The init script self-skips if any piece is
+    # missing. Shared lib first (init/hook/watchdog source it).
+    deploy_critical_file "files/z2k-tpws.sh"                      "/opt/zapret2/z2k-tpws.sh" || print_warning "tpws: shared-lib deploy failed (youtube-tpws layer disabled)"
+    deploy_critical_file "files/init.d/S95z2k-tpws"               "/opt/etc/init.d/S95z2k-tpws" || print_warning "tpws: init-script deploy failed"
+    deploy_critical_file "files/ndm/93-z2k-tpws-redirect.sh"      "/opt/etc/ndm/netfilter.d/93-z2k-tpws-redirect.sh" || print_warning "tpws: NDM hook deploy failed"
+    deploy_critical_file "files/z2k-tpws-watchdog.sh"            "/opt/zapret2/z2k-tpws-watchdog.sh" || print_warning "tpws: watchdog deploy failed"
+    deploy_critical_file "files/lists/youtube_ips.txt"           "/opt/zapret2/lists/youtube_ips.txt" || print_warning "tpws: youtube ipv4 CIDR list deploy failed"
+    deploy_critical_file "files/lists/youtube_ips6.txt"          "/opt/zapret2/lists/youtube_ips6.txt" || print_warning "tpws: youtube ipv6 CIDR list deploy failed"
+
+    # tpws binary — bundled per-arch in the z2k repo (the zapret2 fork is
+    # nfqws2-only, so we ship the static tpws from bol-van/zapret). Detect arch
+    # the SAME way as the binary installer: opkg print-architecture distinguishes
+    # mipsel from mips, which uname -m cannot (the endianness trap).
+    _tpws_sys_arch=$(uname -m)
+    _tpws_ew_arch=""
+    _tpws_opkg="opkg"; [ -x /opt/bin/opkg ] && _tpws_opkg="/opt/bin/opkg"
+    if command -v "$_tpws_opkg" >/dev/null 2>&1; then
+        _tpws_ew_arch=$("$_tpws_opkg" print-architecture 2>/dev/null | awk '$1=="arch" && $2!="all"{prio=($3~/^[0-9]+$/)?$3+0:0; if(prio>=max){max=prio;a=$2}} END{if(a!="")print a}')
+    fi
+    _tpws_arch="${_tpws_ew_arch:-$_tpws_sys_arch}"
+    _tpws_bin_arch=""
+    case "$_tpws_arch" in
+        aarch64|arm64|*aarch64*|*arm64*) _tpws_bin_arch="linux-arm64" ;;
+        armv7l|armv6l|arm|*armv7*|*armv6*|arm*) _tpws_bin_arch="linux-arm" ;;
+        *lexra*) _tpws_bin_arch="linux-lexra" ;;
+        *mipsel64*|*mips64el*) _tpws_bin_arch="linux-mipsel" ;;
+        *mips64*) _tpws_bin_arch="linux-mips64" ;;
+        *mipsel*) _tpws_bin_arch="linux-mipsel" ;;
+        *mips*) _tpws_bin_arch="linux-mips" ;;
+    esac
+    if [ -n "$_tpws_bin_arch" ] && [ -f "${WORK_DIR}/files/bin/$_tpws_bin_arch/tpws" ]; then
+        mkdir -p /opt/zapret2/tpws
+        if cp "${WORK_DIR}/files/bin/$_tpws_bin_arch/tpws" /opt/zapret2/tpws/tpws 2>/dev/null; then
+            chmod +x /opt/zapret2/tpws/tpws
+            print_success "tpws установлен ($_tpws_bin_arch)"
+        else
+            print_warning "tpws: копирование бинаря не удалось"
+        fi
+    elif [ ! -x /opt/zapret2/tpws/tpws ]; then
+        print_info "tpws для $_tpws_arch не в комплекте — youtube-tpws слой пропущен"
+    fi
+
     # tg-tunnel-watchdog used to be triggered via `* * * * *` cron, but
     # Vixie cron on Keenetic Entware doesn't reload added entries (see
     # r-26 notes). z2k-scheduler.sh now fires the watchdog ~1×/min.
@@ -2941,6 +2985,20 @@ step_finalize() {
     # script's start() sets the ndmc DNS-override + sentinel REDIRECT itself.
     if [ -x /opt/sbin/z2k-rt-proxy ] && [ -x /opt/etc/init.d/S96z2k-rt-proxy ]; then
         /opt/etc/init.d/S96z2k-rt-proxy restart >/dev/null 2>&1 || true
+    fi
+
+    # tpws youtube layer (offload-blind handshake-block fix). Default ON; the
+    # init script's start() loads the youtube ipset + REDIRECT itself. Respect
+    # an explicit user disable (Z2K_TPWS=0) on reinstall so we don't resurrect
+    # a layer the user turned off.
+    if [ -x /opt/zapret2/tpws/tpws ] && [ -x /opt/etc/init.d/S95z2k-tpws ]; then
+        _tpws_off=$(awk -F= '/^Z2K_TPWS=/{gsub(/[" ]/,"",$2);print $2;exit}' /opt/zapret2/config 2>/dev/null)
+        if [ "$_tpws_off" = "0" ]; then
+            /opt/etc/init.d/S95z2k-tpws stop >/dev/null 2>&1 || true
+            print_info "tpws youtube слой отключён пользователем (Z2K_TPWS=0)"
+        else
+            /opt/etc/init.d/S95z2k-tpws restart >/dev/null 2>&1 || true
+        fi
     fi
 
     # z2k-detect — reactive DPI-discovery daemon.
@@ -3607,6 +3665,42 @@ uninstall_zapret2() {
           /var/run/z2k-rt-proxy.pid \
           /tmp/z2k-log/z2k-rt-proxy.log 2>/dev/null || true
     killall -9 z2k-rt-proxy 2>/dev/null || true
+
+    # Tear down the tpws youtube layer (S95). Distinct binary (tpws) + port
+    # (1446). Stop the daemon, then sweep its REDIRECT (v4+v6) + mangle mark
+    # explicitly (the lib/binary may already be gone), destroy the ipsets
+    # BEFORE the generic z2k-ipset destroy further down can hit "set in use",
+    # and remove all files.
+    if [ -x /opt/etc/init.d/S95z2k-tpws ]; then
+        /opt/etc/init.d/S95z2k-tpws stop >/dev/null 2>&1 || true
+    fi
+    if [ -r /opt/zapret2/z2k-tpws.sh ]; then
+        ( . /opt/zapret2/z2k-tpws.sh 2>/dev/null && z2k_tpws_remove_rules ) 2>/dev/null || true
+    fi
+    while iptables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws dst -j REDIRECT --to-port 1446 2>/dev/null; do
+        iptables -w -t nat -D PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws dst -j REDIRECT --to-port 1446 2>/dev/null || break
+    done
+    while iptables -w -t mangle -C OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null; do
+        iptables -w -t mangle -D OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null || break
+    done
+    if command -v ip6tables >/dev/null 2>&1; then
+        while ip6tables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws6 dst -j REDIRECT --to-port 1446 2>/dev/null; do
+            ip6tables -w -t nat -D PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws6 dst -j REDIRECT --to-port 1446 2>/dev/null || break
+        done
+        while ip6tables -w -t mangle -C OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null; do
+            ip6tables -w -t mangle -D OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null || break
+        done
+    fi
+    ipset destroy z2k_tpws 2>/dev/null || true
+    ipset destroy z2k_tpws6 2>/dev/null || true
+    rm -f /opt/etc/init.d/S95z2k-tpws \
+          /opt/etc/ndm/netfilter.d/93-z2k-tpws-redirect.sh \
+          /opt/zapret2/z2k-tpws.sh \
+          /opt/zapret2/z2k-tpws-watchdog.sh \
+          /var/run/z2k-tpws.pid \
+          /tmp/z2k-log/z2k-tpws.log 2>/dev/null || true
+    rm -rf /opt/zapret2/tpws 2>/dev/null || true
+    killall -9 tpws 2>/dev/null || true
 
     # Tear down the Telegram tunnel: stop the daemon, kill stragglers, drop
     # its REDIRECT rules, remove the init script and the NDM hook that

@@ -188,15 +188,16 @@ case "$method $path" in
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         stats=$(read_flag "Z2K_STATS" "$CONFIG_FILE" "1")
+        tpws=$(read_flag "Z2K_TPWS" "$CONFIG_FILE" "1")
         tpid=$(tunnel_pid 2>/dev/null)
         tunnel_running=false
         [ -n "$tpid" ] && tunnel_running=true
 
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","tpws":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
             "${rst_filter:-0}" "${silent_fb:-0}" "${game_mode:-0}" "${customd:-0}" \
-            "${dynamic_ttl:-1}" "${stats:-1}" \
+            "${dynamic_ttl:-1}" "${stats:-1}" "${tpws:-1}" \
             "${game_profile:-flowseal}" \
             "${tunnel_running:-false}"
         exit 0
@@ -234,7 +235,8 @@ case "$method $path" in
     "POST /toggle/game-mode"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
-    "POST /toggle/stats")
+    "POST /toggle/stats"|\
+    "POST /toggle/tpws")
         body=$(read_body)
         val=$(form_value "$body" "value")
         [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
@@ -249,6 +251,7 @@ case "$method $path" in
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
             /toggle/stats)           _toggle_fn=toggle_stats;           _label="Сбор статистики" ;;
+            /toggle/tpws)            _toggle_fn=toggle_tpws;            _label="YouTube tpws" ;;
         esac
         _verb=$([ "$val" = "1" ] && echo "Включаю" || echo "Отключаю")
         job_id=$(svc_action_async "${_verb} ${_label}" "${_toggle_fn} ${val}")

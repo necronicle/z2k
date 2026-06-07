@@ -48,6 +48,7 @@ log_info "Попытка мягкой остановки через init-скр�
 for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
+            /opt/etc/init.d/S95z2k-tpws \
             /opt/etc/init.d/S98tg-tunnel \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -x "$init" ]; then
@@ -66,6 +67,7 @@ for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
             /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
+            /opt/etc/init.d/S95z2k-tpws \
             /opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97tg-mtproxy \
             /opt/etc/init.d/S99z2k-scheduler; do
     if [ -f "$init" ]; then
@@ -88,7 +90,9 @@ for hook in /opt/etc/ndm/netfilter.d/000-zapret2.sh \
             /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh \
             /opt/etc/ndm/netfilter.d/*z2k-http* \
             /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
-            /opt/etc/ndm/netfilter.d/*z2k-rt*; do
+            /opt/etc/ndm/netfilter.d/*z2k-rt* \
+            /opt/etc/ndm/netfilter.d/93-z2k-tpws-redirect.sh \
+            /opt/etc/ndm/netfilter.d/*z2k-tpws*; do
     if [ -f "$hook" ]; then
         rm -f "$hook"
         log_info "  Удалён: $hook"
@@ -227,6 +231,43 @@ if [ "$tg_rules_removed" -gt 0 ]; then
     log_info "  Снято NAT правил Telegram: $tg_rules_removed"
 else
     log_skip "Правил REDIRECT :1443 не найдено"
+fi
+
+# ==========================================
+# 5a-tpws. tpws youtube-слой: NAT REDIRECT (:1446) + mangle mark + ipset
+# ==========================================
+
+log_info "Удаление iptables правил tpws-слоя (:1446)..."
+tpws_rules_removed=0
+while iptables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws dst -j REDIRECT --to-port 1446 2>/dev/null; do
+    iptables -w -t nat -D PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws dst -j REDIRECT --to-port 1446 2>/dev/null || break
+    tpws_rules_removed=$((tpws_rules_removed + 1))
+done
+while iptables -w -t mangle -C OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null; do
+    iptables -w -t mangle -D OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null || break
+    tpws_rules_removed=$((tpws_rules_removed + 1))
+done
+if command -v ip6tables >/dev/null 2>&1; then
+    while ip6tables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws6 dst -j REDIRECT --to-port 1446 2>/dev/null; do
+        ip6tables -w -t nat -D PREROUTING -p tcp --dport 443 -m set --match-set z2k_tpws6 dst -j REDIRECT --to-port 1446 2>/dev/null || break
+        tpws_rules_removed=$((tpws_rules_removed + 1))
+    done
+    while ip6tables -w -t mangle -C OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null; do
+        ip6tables -w -t mangle -D OUTPUT -p tcp --dport 443 -m owner --uid-owner nobody -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null || break
+        tpws_rules_removed=$((tpws_rules_removed + 1))
+    done
+fi
+# Destroy ipsets (NDM doesn't touch them; rules dropped above so not "in use").
+ipset destroy z2k_tpws 2>/dev/null && log_info "  Удалён ipset z2k_tpws"
+ipset destroy z2k_tpws6 2>/dev/null && log_info "  Удалён ipset z2k_tpws6"
+rm -rf /opt/zapret2/tpws /opt/zapret2/z2k-tpws.sh /opt/zapret2/z2k-tpws-watchdog.sh \
+       /opt/zapret2/lists/youtube_ips.txt /opt/zapret2/lists/youtube_ips6.txt \
+       /var/run/z2k-tpws.pid 2>/dev/null
+killall -9 tpws 2>/dev/null || true
+if [ "$tpws_rules_removed" -gt 0 ]; then
+    log_info "  Снято правил tpws: $tpws_rules_removed"
+else
+    log_skip "Правил tpws :1446 не найдено"
 fi
 
 # ==========================================

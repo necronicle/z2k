@@ -118,11 +118,12 @@ MENU
 [M] Динамический TTL (для мобильных операторов)
 [A] Политика доступа Keenetic (фильтр по NDM policy)
 [C] Сбор статистики стратегий (анонимно)
+[V] YouTube tpws (обход блокировки рукопожатия на ТВ/приставках)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M,A,C]: "
+        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M,A,C,V]: "
         read_input choice
 
         case "$choice" in
@@ -182,6 +183,9 @@ MENU
                 ;;
             c|C)
                 menu_stats
+                ;;
+            v|V)
+                menu_tpws
                 ;;
             0)
                 print_info "Выход из меню"
@@ -1444,6 +1448,102 @@ SUBMENU
                 print_success "Сервис перезапущен"
             fi
 
+            pause
+            ;;
+
+        b|B)
+            return 0
+            ;;
+
+        *)
+            print_error "Неверный выбор: $sub_choice"
+            pause
+            ;;
+    esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: YOUTUBE TPWS (прозрачный прокси для offload-слепых блокировок)
+# ==============================================================================
+
+menu_tpws() {
+    clear_screen
+    print_header "YouTube tpws (обход блокировки рукопожатия)"
+
+    local config_file="${ZAPRET2_DIR}/config"
+
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local Z2K_TPWS
+    Z2K_TPWS=$(safe_config_read "Z2K_TPWS" "$config_file" "1")
+
+    local _tpws_state="не запущен"
+    if [ -f /var/run/z2k-tpws.pid ] && kill -0 "$(cat /var/run/z2k-tpws.pid 2>/dev/null)" 2>/dev/null; then
+        _tpws_state="работает (:1446)"
+    fi
+
+    print_separator
+    print_info "Флаг: $([ "$Z2K_TPWS" = "0" ] && echo 'Выключен' || echo 'Включен (по умолчанию)')   Демон: $_tpws_state"
+    print_separator
+
+    cat <<'SUBMENU'
+
+Некоторые блокировки завершают TCP-рукопожатие, но рубят TLS
+ClientHello (нет ServerHello, нет видимого RST). На Keenetic
+аппаратный ускоритель (NDM fastpath) уводит клиентский поток в
+железо сразу после рукопожатия, поэтому nfqws2 НЕ видит ни
+дропнутый ClientHello, ни RST — и не может подобрать стратегию.
+Классический случай — www.youtube.com на ТВ/приставках.
+
+tpws заворачивает youtube-диапазоны (ipset) на локальный
+transparent-прокси (порт 1446): соединение терминируется на
+роутере (мимо ускорителя), и tpws сам шлёт ClientHello с
+нарезанным SNI. Видео по QUIC/UDP идёт мимо tpws.
+
+[1] Включить (по умолчанию)
+[2] Выключить (если YouTube и так работает стабильно)
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input sub_choice
+
+    case "$sub_choice" in
+        1)
+            if grep -q '^Z2K_TPWS=' "$config_file"; then
+                sed -i 's/^Z2K_TPWS=.*/Z2K_TPWS=1/' "$config_file"
+            else
+                echo "Z2K_TPWS=1" >> "$config_file"
+            fi
+            print_success "YouTube tpws включён"
+            if [ -x /opt/etc/init.d/S95z2k-tpws ]; then
+                print_info "Запуск tpws-слоя..."
+                /opt/etc/init.d/S95z2k-tpws restart
+                print_success "tpws-слой запущен"
+            else
+                print_warning "init-скрипт S95z2k-tpws не найден — переустановите z2k"
+            fi
+            pause
+            ;;
+
+        2)
+            if grep -q '^Z2K_TPWS=' "$config_file"; then
+                sed -i 's/^Z2K_TPWS=.*/Z2K_TPWS=0/' "$config_file"
+            else
+                echo "Z2K_TPWS=0" >> "$config_file"
+            fi
+            print_success "YouTube tpws выключен"
+            if [ -x /opt/etc/init.d/S95z2k-tpws ]; then
+                print_info "Остановка tpws-слоя..."
+                /opt/etc/init.d/S95z2k-tpws stop
+                print_success "tpws-слой остановлен (YouTube вернулся на нативный nfqws2)"
+            fi
             pause
             ;;
 
