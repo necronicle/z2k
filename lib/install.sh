@@ -2909,16 +2909,19 @@ step_finalize() {
         *mipsel*) _tpws_bin_arch="linux-mipsel" ;;
         *mips*) _tpws_bin_arch="linux-mips" ;;
     esac
-    if [ -n "$_tpws_bin_arch" ] && [ -f "${WORK_DIR}/files/bin/$_tpws_bin_arch/tpws" ]; then
+    if [ -n "$_tpws_bin_arch" ]; then
         mkdir -p /opt/zapret2/tpws
-        if cp "${WORK_DIR}/files/bin/$_tpws_bin_arch/tpws" /opt/zapret2/tpws/tpws 2>/dev/null; then
-            chmod +x /opt/zapret2/tpws/tpws
+        # deploy_critical_file (NOT a plain cp): copies from WORK_DIR if present,
+        # else fetches the binary from GitHub (raw→jsdelivr→gh-proxy). The old
+        # plain cp was gated on the WORK_DIR file existing — on an auto-update
+        # reinstall where WORK_DIR lacked files/bin/*/tpws the binary silently
+        # never landed, so S95 start + the watchdog (both gate on [-x TPWS_BIN])
+        # no-op'd and YouTube stayed broken. deploy_critical_file self-heals it.
+        if deploy_critical_file "files/bin/$_tpws_bin_arch/tpws" "/opt/zapret2/tpws/tpws" 755; then
             print_success "tpws установлен ($_tpws_bin_arch)"
-        else
-            print_warning "tpws: копирование бинаря не удалось"
+        elif [ ! -x /opt/zapret2/tpws/tpws ]; then
+            print_info "tpws для $_tpws_arch не в комплекте/недоступен — youtube-tpws слой пропущен"
         fi
-    elif [ ! -x /opt/zapret2/tpws/tpws ]; then
-        print_info "tpws для $_tpws_arch не в комплекте — youtube-tpws слой пропущен"
     fi
 
     # tg-tunnel-watchdog used to be triggered via `* * * * *` cron, but
@@ -3314,6 +3317,22 @@ run_full_install() {
     # Все шаги + применение стратегий прошли, сервис поднялся — commit point:
     # удаляем backup старого дерева.
     z2k_commit_install
+
+    # Final belt-and-suspenders re-assert — runs AFTER every step (config regen,
+    # S99 restart, NDM hook install, strategy apply), some of which rebuild the
+    # mangle/nat tables and can drop the tpws REDIRECT or the PPE de-offload
+    # rules added earlier in the chain. Re-apply them LAST so the box ends in the
+    # correct state immediately, without waiting for the scheduler watchdog tick.
+    if [ -x /opt/zapret2/tpws/tpws ] && [ -x /opt/etc/init.d/S95z2k-tpws ]; then
+        if [ "$(awk -F= '/^Z2K_TPWS=/{gsub(/[" ]/,"",$2);print $2;exit}' /opt/zapret2/config 2>/dev/null)" != "0" ]; then
+            /opt/etc/init.d/S95z2k-tpws restart >/dev/null 2>&1 || true
+        fi
+    fi
+    if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
+        # shellcheck disable=SC1091
+        . /opt/zapret2/z2k-ppe-deoffload.sh
+        z2k_ppe_user_disabled || z2k_ppe_ensure_rules >/dev/null 2>&1 || true
+    fi
 
     print_separator
     print_info "Установка завершена успешно!"
