@@ -367,24 +367,23 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    # retrans=1 is REQUIRED for the per-flow PPE de-offload layer
-    # (z2k-ppe-deoffload.sh) to actually rotate offload-blinded silent-drop
-    # hosts: once de-offload restores ClientHello-retransmit visibility, nfqws2
-    # still dedups identical-seq CH retransmits to a single "retransmission 1/2"
-    # event, so retrans=2 NEVER fires for that class — only retrans=1 converts
-    # the now-visible retransmit into a fail so circular advances to a working
-    # strategy. Proven on KN-1811 (mailsuite 1→2→302). Gated by
-    # Z2K_PPE_DEOFFLOAD (default on); when the de-offload layer is OFF the
-    # circulars keep the Strategy.txt default (retrans=2), because retransmits
-    # are invisible under offload anyway and retrans=1 only adds
-    # false-rotation sensitivity for working hosts. Applied to the TCP TLS
-    # pools (rkn/yt/gv); UDP circulars don't use retrans.
+    # retrans REVERTED 1→2 (2026-06-08, r-52.5). retrans=1 was set so the per-flow
+    # PPE de-offload could rotate offload-blinded silent-drop hosts — nfqws2 dedups
+    # identical-seq CH retransmits to a single "retransmission 1/2", so retrans=2
+    # never fires for that class, only retrans=1 does. BUT retrans=1 ALSO fires on a
+    # single TRANSIENT retransmit of a WORKING host → the false rotations on
+    # YouTube/Instagram HTTP/2 hosts under load came back. Mark chose fewer false
+    # rotations over auto-rotating the silent-drop class (tpws covers youtube; a
+    # manual state.tsv pin covers the rest). The de-offload layer STAYS (it still
+    # restores retransmit visibility for the native detectors); only the retrans
+    # target reverts to the Strategy.txt default 2. Flip the 2s back to 1 to
+    # re-enable silent-drop auto-rotation. TCP TLS pools only; UDP doesn't use retrans.
     local Z2K_PPE_DEOFFLOAD
     Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
     if [ "$Z2K_PPE_DEOFFLOAD" != "0" ]; then
-        youtube_tcp=$(ensure_circular_retrans "$youtube_tcp" 1)
-        youtube_gv_tcp=$(ensure_circular_retrans "$youtube_gv_tcp" 1)
-        rkn_tcp=$(ensure_circular_retrans "$rkn_tcp" 1)
+        youtube_tcp=$(ensure_circular_retrans "$youtube_tcp" 2)
+        youtube_gv_tcp=$(ensure_circular_retrans "$youtube_gv_tcp" 2)
+        rkn_tcp=$(ensure_circular_retrans "$rkn_tcp" 2)
     fi
 
     # ensure_circular_arg_set: append `<arg>=<value>` (or bare `<arg>` flag)

@@ -156,10 +156,11 @@ RESULT4=$(ensure_circular_nld2 "$INPUT4")
 assert_contains "nld2: adds nld=2 to minimal circular" "nld=2" "$RESULT4"
 
 # ==============================================================================
-# TEST: ensure_circular_retrans (replicated from config_official.sh) — the
-# per-flow PPE de-offload companion: retrans=1 when Z2K_PPE_DEOFFLOAD!=0 so
-# offload-blinded silent-drop hosts rotate (nfqws2 dedups CH retransmits to 1/2).
-# Local copy kept in sync with lib/config_official.sh:ensure_circular_retrans.
+# TEST: ensure_circular_retrans (replicated from config_official.sh). The function
+# forces retrans=N on circular tokens; tests below exercise targets 1 AND 2.
+# NOTE: the production CALL-SITE reverted target 1→2 in r-52.5 (retrans=1 caused
+# false rotations on working YouTube/Instagram hosts); the function itself is
+# unchanged and still supports any target. Kept in sync with lib/config_official.sh.
 # ==============================================================================
 
 ensure_circular_retrans() {
