@@ -1169,7 +1169,7 @@ step_build_zapret2() {
     # (см. z2k-enhanced PART II roadmap). Layout tarball-а идентичен upstream
     # поэтому остальная install-логика ниже работает без изменений.
     local api_url="https://api.github.com/repos/necronicle/zapret2-z2k/releases/latest"
-    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v0.9.5.2-z2k-r6/zapret2-v0.9.5.2-z2k-r6-openwrt-embedded.tar.gz"
+    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v0.9.5.2-z2k-r7/zapret2-v0.9.5.2-z2k-r7-openwrt-embedded.tar.gz"
     local openwrt_url=""
 
     # Try the API via z2k_fetch (it triggers the layer-4 ndmc DNS
