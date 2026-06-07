@@ -664,7 +664,8 @@ get_wan_ifaces4()
 	if [ -n "$ifaces" ] && exists ip; then
 		local i
 		for i in $ifaces; do
-			ip link show "$i" >/dev/null 2>&1 || echo "WARN: WAN iface '$i' not found"
+			# /sys (не netlink) — `ip link show` виснет в D-state на WireGuard nwg0 под штормом (issue #18)
+			[ -e "/sys/class/net/$i" ] || echo "WARN: WAN iface '$i' not found"
 		done
 	fi
 	[ -n "$ifaces" ] && unique $ifaces || true
@@ -682,7 +683,8 @@ get_wan_ifaces6()
 	if [ -n "$ifaces" ] && exists ip; then
 		local i
 		for i in $ifaces; do
-			ip link show "$i" >/dev/null 2>&1 || echo "WARN: WAN iface '$i' not found"
+			# /sys (не netlink) — `ip link show` виснет в D-state на WireGuard nwg0 под штормом (issue #18)
+			[ -e "/sys/class/net/$i" ] || echo "WARN: WAN iface '$i' not found"
 		done
 	fi
 	[ -n "$ifaces" ] && unique $ifaces || true

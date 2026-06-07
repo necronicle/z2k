@@ -2454,13 +2454,28 @@ is_nfqws2_running() {
 }
 is_nfqws2_running || exit 0
 
-# Небольшая задержка для стабильности
-sleep 2
-
-# Восстановить только firewall-правила (НЕ restart!)
-# restart убивает nfqws2, обнуляя Lua-состояние autocircular (per-domain стратегии).
-# restart_fw пересоздаёт только NFQUEUE правила в mangle, демоны продолжают работу.
-"$INIT_SCRIPT" restart_fw >/dev/null 2>&1 &
+# Storm guard: lock + debounce (issue #18) — без него `restart_fw &` плодит
+# 80+ параллельных пересборок при штормe NDM-событий → ndm 100% CPU.
+LOCK_DIR="/tmp/zapret2-restart-fw.lock"
+LAST_RUN="/tmp/zapret2-restart-fw.last"
+MIN_INTERVAL=15
+now="$(date +%s 2>/dev/null || echo 0)"
+if [ "$now" -gt 0 ] 2>/dev/null && [ -f "$LAST_RUN" ]; then
+    last="$(cat "$LAST_RUN" 2>/dev/null || echo 0)"
+    [ "$last" -gt 0 ] 2>/dev/null && [ $((now - last)) -lt "$MIN_INTERVAL" ] && exit 0
+fi
+if [ -d "$LOCK_DIR" ]; then
+    lock_ts="$(date -r "$LOCK_DIR" +%s 2>/dev/null || echo 0)"
+    [ "$now" -gt 0 ] && [ "$lock_ts" -gt 0 ] && [ $((now - lock_ts)) -gt 60 ] && rmdir "$LOCK_DIR" 2>/dev/null
+fi
+mkdir "$LOCK_DIR" 2>/dev/null || exit 0
+[ "$now" -gt 0 ] && echo "$now" > "$LAST_RUN" 2>/dev/null
+# restart_fw пересоздаёт только NFQUEUE правила в mangle, демоны (nfqws2) живут.
+{
+    sleep 2
+    "$INIT_SCRIPT" restart_fw >/dev/null 2>&1
+    rmdir "$LOCK_DIR" 2>/dev/null
+} &
 
 exit 0
 HOOK
