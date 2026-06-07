@@ -60,6 +60,16 @@ z2k_tpws_v6_ok() {
     if [ "$(awk -F= '/^DISABLE_IPV6=/{gsub(/[" ]/,"",$2);print $2;exit}' "$TPWS_CONFIG_FILE" 2>/dev/null)" = "1" ]; then
         _Z2K_TPWS_V6=0; return 1
     fi
+    # Require a REAL v6 default route (working v6 egress). Without it, redirecting
+    # v6 youtube to tpws just blackholes it: tpws terminates the client locally
+    # then can't connect out over v6 → "connect_remote: Network unreachable", and
+    # the client (e.g. an LG TV that prefers/races IPv6) hangs on youtube instead
+    # of falling back to the working v4 tpws path. On a box with no v6 uplink the
+    # v6 redirect must NOT be installed — let v6 fail fast natively so the client
+    # eyeballs to v4. (Field: KN-1811, no v6 default route, youtube down on TV.)
+    if ! ip -6 route show default 2>/dev/null | grep -q .; then
+        _Z2K_TPWS_V6=0; return 1
+    fi
     # -S (not -L): -L without -n does reverse-DNS per rule and can HANG under
     # xtables lock contention in the NDM hook; -S dumps rules with no lookups.
     if command -v ip6tables >/dev/null 2>&1 && ip6tables -t nat -S PREROUTING >/dev/null 2>&1; then
