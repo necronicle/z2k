@@ -156,6 +156,77 @@ RESULT4=$(ensure_circular_nld2 "$INPUT4")
 assert_contains "nld2: adds nld=2 to minimal circular" "nld=2" "$RESULT4"
 
 # ==============================================================================
+# TEST: ensure_circular_retrans (replicated from config_official.sh) — the
+# per-flow PPE de-offload companion: retrans=1 when Z2K_PPE_DEOFFLOAD!=0 so
+# offload-blinded silent-drop hosts rotate (nfqws2 dedups CH retransmits to 1/2).
+# Local copy kept in sync with lib/config_official.sh:ensure_circular_retrans.
+# ==============================================================================
+
+ensure_circular_retrans() {
+    local input="$1"
+    local target="${2:-1}"
+    local out=""
+    local token=""
+    local opts=""
+    local part=""
+    local rest=""
+    local old_ifs="$IFS"
+
+    for token in $input; do
+        case "$token" in
+            --lua-desync=circular:*)
+                opts="${token#--lua-desync=circular:}"
+                rest=""
+                IFS=':'
+                for part in $opts; do
+                    case "$part" in
+                        retrans=*) ;;
+                        *) rest="${rest:+$rest:}$part" ;;
+                    esac
+                done
+                IFS="$old_ifs"
+                if [ -n "$rest" ]; then
+                    token="--lua-desync=circular:${rest}:retrans=${target}"
+                else
+                    token="--lua-desync=circular:retrans=${target}"
+                fi
+                ;;
+        esac
+        out="${out:+$out }$token"
+    done
+    IFS="$old_ifs"
+    printf '%s' "$out"
+}
+
+printf "\n--- ensure_circular_retrans ---\n"
+
+# (a) existing retrans=2 becomes retrans=1
+INPUT_RT1="--lua-desync=circular:fails=3:retrans=2:time=60:key=rkn_tcp:nld=2"
+RESULT_RT1=$(ensure_circular_retrans "$INPUT_RT1" 1)
+assert_contains "retrans: 2 -> 1"                "retrans=1"  "$RESULT_RT1"
+assert_not_contains "retrans: removes old retrans=2" "retrans=2" "$RESULT_RT1"
+assert_contains "retrans: preserves fails"       "fails=3"    "$RESULT_RT1"
+assert_contains "retrans: preserves nld"         "nld=2"      "$RESULT_RT1"
+
+# (b) circular without retrans gains retrans=1
+INPUT_RT2="--lua-desync=circular:fails=3:time=60:key=yt_tcp"
+RESULT_RT2=$(ensure_circular_retrans "$INPUT_RT2" 1)
+assert_contains "retrans: adds when absent"      "retrans=1"  "$RESULT_RT2"
+
+# (c) non-circular token untouched
+INPUT_RT3="--lua-desync=fake:payload=tls_client_hello:dir=out"
+RESULT_RT3=$(ensure_circular_retrans "$INPUT_RT3" 1)
+assert_eq "retrans: non-circular unchanged"      "$INPUT_RT3" "$RESULT_RT3"
+
+# (d) UDP-style circular (no retrans in source) — when NOT applied (flag off path
+#     skips it entirely) the token is simply never passed through, so we only
+#     assert the pass itself never invents retrans on a token we DON'T feed it:
+#     i.e. the gate is the caller's job. Here verify target=2 round-trips for the
+#     flag-off regeneration case (retrans stays 2).
+RESULT_RT4=$(ensure_circular_retrans "$INPUT_RT1" 2)
+assert_contains "retrans: target=2 round-trip (flag-off keeps 2)" "retrans=2" "$RESULT_RT4"
+
+# ==============================================================================
 # TEST: ensure_rkn_failure_detector (replicated from config_official.sh)
 # ==============================================================================
 

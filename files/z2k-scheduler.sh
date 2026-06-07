@@ -143,6 +143,22 @@ while true; do
         fi
     fi
 
+    # Per-flow PPE de-offload re-assert (mangle FORWARD/PREROUTING). The NDM hook
+    # (94-z2k-ppe-deoffload.sh) handles event-driven re-apply after netfilter
+    # regen; this is the secondary net AND the boot-time apply (the rule is
+    # self-contained — no ipset/order dependency — so this lands it as soon as
+    # the scheduler ticks). No-ops cleanly where the firmware `-j PPE` target is
+    # absent or the user disabled the layer.
+    if [ -r "${ZAPRET2_DIR}/z2k-ppe-deoffload.sh" ]; then
+        last_ppe=$(last_fired_for_key ppe-deoffload-epoch)
+        case "$last_ppe" in ''|*[!0-9]*) last_ppe=0 ;; esac
+        if [ "$((now_epoch - last_ppe))" -ge 55 ]; then
+            mark_fired ppe-deoffload-epoch "$now_epoch"
+            ( . "${ZAPRET2_DIR}/z2k-ppe-deoffload.sh"
+              z2k_ppe_user_disabled || z2k_ppe_ensure_rules ) >/dev/null 2>&1 &
+        fi
+    fi
+
     # Rotate log occasionally (cheap, only every minute boundary).
     if [ "$(date +%S)" -lt 30 ]; then
         rotate_log

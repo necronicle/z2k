@@ -92,7 +92,9 @@ for hook in /opt/etc/ndm/netfilter.d/000-zapret2.sh \
             /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
             /opt/etc/ndm/netfilter.d/*z2k-rt* \
             /opt/etc/ndm/netfilter.d/93-z2k-tpws-redirect.sh \
-            /opt/etc/ndm/netfilter.d/*z2k-tpws*; do
+            /opt/etc/ndm/netfilter.d/*z2k-tpws* \
+            /opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh \
+            /opt/etc/ndm/netfilter.d/*z2k-ppe*; do
     if [ -f "$hook" ]; then
         rm -f "$hook"
         log_info "  Удалён: $hook"
@@ -268,6 +270,32 @@ if [ "$tpws_rules_removed" -gt 0 ]; then
     log_info "  Снято правил tpws: $tpws_rules_removed"
 else
     log_skip "Правил tpws :1446 не найдено"
+fi
+
+# ==========================================
+# 5b-ppe. Per-flow PPE de-offload: mangle FORWARD/PREROUTING -j PPE (connskip)
+# ==========================================
+
+log_info "Удаление iptables правил per-flow PPE de-offload..."
+ppe_rules_removed=0
+ppe_args="-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE"
+for ppe_c in FORWARD PREROUTING; do
+    while iptables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do
+        iptables -w -t mangle -D "$ppe_c" $ppe_args 2>/dev/null || break
+        ppe_rules_removed=$((ppe_rules_removed + 1))
+    done
+    if command -v ip6tables >/dev/null 2>&1; then
+        while ip6tables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do
+            ip6tables -w -t mangle -D "$ppe_c" $ppe_args 2>/dev/null || break
+            ppe_rules_removed=$((ppe_rules_removed + 1))
+        done
+    fi
+done
+rm -f /opt/zapret2/z2k-ppe-deoffload.sh 2>/dev/null
+if [ "$ppe_rules_removed" -gt 0 ]; then
+    log_info "  Снято правил PPE de-offload: $ppe_rules_removed"
+else
+    log_skip "Правил PPE de-offload не найдено"
 fi
 
 # ==========================================

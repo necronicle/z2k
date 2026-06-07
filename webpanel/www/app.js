@@ -509,6 +509,8 @@
       desc: "Раз в сутки шлёт на сервер проекта обезличенный срез: какая стратегия активна в каждом пуле и как долго держится — чтобы двигать лучшие стратегии в начало. НЕ уходит: сайты/домены, IP, провайдер, регион, любой ID устройства. Только: имя пула, номер стратегии, время удержания. Выключите, если не хотите участвовать." },
     { key: "tpws", name: "YouTube tpws (прозрачный прокси)",
       desc: "Гонит YouTube через локальный transparent-прокси tpws (порт 1446) с нарезкой SNI. Нужно для устройств, где YouTube не открывается и не подбирается стратегия из-за аппаратного ускорения Keenetic (роутер не видит блокировку рукопожатия — особенно на ТВ/приставках). Видео по QUIC идёт мимо. Выключите, если YouTube и так стабильно работает." },
+    { key: "ppe", name: "Аппаратный offload: per-flow исключение",
+      desc: "На Keenetic (MediaTek) аппаратный ускоритель уводит поток в железо после первого пакета, и роутер не видит повторные ClientHello — стратегия залипает для блокировок без RST (mailsuite и т.п.). Эта опция держит окно рукопожатия на CPU только для нужных портов (родной firmware-механизм -j PPE), поэтому подбор стратегии снова работает, а общий трафик остаётся ускоренным. Работает только на совместимых Keenetic. Выключите, чтобы вернуть прежнее поведение." },
   ];
   const TOGGLE_API_NAME = {
     rst_filter: "rst-filter",
@@ -518,6 +520,7 @@
     dynamic_ttl: "dynamic-ttl",
     stats: "stats",
     tpws: "tpws",
+    ppe: "ppe",
   };
 
   async function renderToggles() {
@@ -789,7 +792,7 @@
   // before clearing the indicator so the user sees the restart actually
   // completed and didn't silently die. rst-filter (raw iptables) is the
   // only one that doesn't bounce the daemon.
-  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, game_mode: 1, customd: 1, dynamic_ttl: 1 };
+  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, game_mode: 1, customd: 1, dynamic_ttl: 1, ppe: 1 };
 
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");
@@ -806,6 +809,7 @@
       dynamic_ttl: "Динамический TTL",
       stats: "Сбор статистики",
       tpws: "YouTube tpws",
+      ppe: "PPE de-offload",
     }[key] || key;
 
     let resp;

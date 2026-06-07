@@ -328,6 +328,65 @@ AUSTERUS_OPT
     # caught by the silent_drop head's out>>in heuristic (zero incoming).
     game_tls_tcp=$(ensure_circular_tcp_inseq "$game_tls_tcp" 4000)
 
+    # ensure_circular_retrans: force `retrans=N` on circular tokens (strip any
+    # existing retrans=, re-add). Same strip-and-re-add shape as the nld2/inseq
+    # passes above.
+    ensure_circular_retrans() {
+        local input="$1"
+        local target="${2:-1}"
+        local out=""
+        local token=""
+        local opts=""
+        local part=""
+        local rest=""
+        local old_ifs="$IFS"
+
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    opts="${token#--lua-desync=circular:}"
+                    rest=""
+                    IFS=':'
+                    for part in $opts; do
+                        case "$part" in
+                            retrans=*) ;;
+                            *) rest="${rest:+$rest:}$part" ;;
+                        esac
+                    done
+                    IFS="$old_ifs"
+                    if [ -n "$rest" ]; then
+                        token="--lua-desync=circular:${rest}:retrans=${target}"
+                    else
+                        token="--lua-desync=circular:retrans=${target}"
+                    fi
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        IFS="$old_ifs"
+        printf '%s' "$out"
+    }
+
+    # retrans=1 is REQUIRED for the per-flow PPE de-offload layer
+    # (z2k-ppe-deoffload.sh) to actually rotate offload-blinded silent-drop
+    # hosts: once de-offload restores ClientHello-retransmit visibility, nfqws2
+    # still dedups identical-seq CH retransmits to a single "retransmission 1/2"
+    # event, so retrans=2 NEVER fires for that class — only retrans=1 converts
+    # the now-visible retransmit into a fail so circular advances to a working
+    # strategy. Proven on KN-1811 (mailsuite 1→2→302). Gated by
+    # Z2K_PPE_DEOFFLOAD (default on); when the de-offload layer is OFF the
+    # circulars keep the Strategy.txt default (retrans=2), because retransmits
+    # are invisible under offload anyway and retrans=1 only adds
+    # false-rotation sensitivity for working hosts. Applied to the TCP TLS
+    # pools (rkn/yt/gv); UDP circulars don't use retrans.
+    local Z2K_PPE_DEOFFLOAD
+    Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    if [ "$Z2K_PPE_DEOFFLOAD" != "0" ]; then
+        youtube_tcp=$(ensure_circular_retrans "$youtube_tcp" 1)
+        youtube_gv_tcp=$(ensure_circular_retrans "$youtube_gv_tcp" 1)
+        rkn_tcp=$(ensure_circular_retrans "$rkn_tcp" 1)
+    fi
+
     # ensure_circular_arg_set: append `<arg>=<value>` (or bare `<arg>` flag)
     # to every circular token in $input that doesn't already carry that arg.
     # Generic helper used to wire success_detector= / no_http_redirect /

@@ -249,6 +249,35 @@ toggle_tpws() {
     fi
 }
 
+toggle_ppe() {
+    # Z2K_PPE_DEOFFLOAD — per-flow hardware-offload exclusion on Keenetic
+    # MediaTek (default 1). Hangs the firmware `-j PPE` target on the handshake
+    # window of bypass-port flows so nfqws2 sees CH retransmits and the circular
+    # rotator advances for offload-blinded silent-drop hosts. UNLIKE tpws it
+    # DOES affect NFQWS2_OPT: config_official.sh sets circular retrans=1 when on
+    # / leaves retrans=2 when off — so a config regen + service restart IS
+    # required, in addition to applying/removing the mangle rules.
+    local want="$1"
+    set_flag "Z2K_PPE_DEOFFLOAD" "$want" "$CONFIG_FILE" || return 1
+    if [ "$want" = "0" ]; then
+        [ -r /opt/zapret2/z2k-ppe-deoffload.sh ] && \
+            ( . /opt/zapret2/z2k-ppe-deoffload.sh && z2k_ppe_remove_rules ) >/dev/null 2>&1
+        regenerate_config
+        restart_service_if_running
+    else
+        regenerate_config
+        restart_service_if_running
+        # Best-effort: ensure_rules returns 1 where the firmware `-j PPE` target
+        # is absent (every non-Keenetic-MediaTek box) — that is an EXPECTED
+        # no-op, NOT a toggle failure. Swallow it so toggle_ppe returns 0 and the
+        # webpanel doesn't falsely revert the switch (the flag/config/restart all
+        # succeeded). The genuine failure (set_flag) is already gated above.
+        [ -r /opt/zapret2/z2k-ppe-deoffload.sh ] && \
+            ( . /opt/zapret2/z2k-ppe-deoffload.sh && z2k_ppe_ensure_rules ) >/dev/null 2>&1
+        return 0
+    fi
+}
+
 # --- policy access (Keenetic NDM ip policy filter) ---
 
 # policy_exists <name>: returns 0 if a Keenetic IP policy с description = <name>

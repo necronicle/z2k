@@ -2876,6 +2876,14 @@ step_finalize() {
     deploy_critical_file "files/lists/youtube_ips.txt"           "/opt/zapret2/lists/youtube_ips.txt" || print_warning "tpws: youtube ipv4 CIDR list deploy failed"
     deploy_critical_file "files/lists/youtube_ips6.txt"          "/opt/zapret2/lists/youtube_ips6.txt" || print_warning "tpws: youtube ipv6 CIDR list deploy failed"
 
+    # Per-flow PPE de-offload layer (Keenetic MediaTek): keeps the handshake
+    # window of bypass-port flows on the CPU slow-path so nfqws2 sees the CH
+    # retransmits and the circular rotator can advance (paired with retrans=1,
+    # set by config_official.sh when Z2K_PPE_DEOFFLOAD!=0). No-ops cleanly on
+    # boxes without the firmware `-j PPE` target. Soft deploy (additive).
+    deploy_critical_file "files/z2k-ppe-deoffload.sh"            "/opt/zapret2/z2k-ppe-deoffload.sh" || print_warning "ppe: shared-lib deploy failed (per-flow de-offload disabled)"
+    deploy_critical_file "files/ndm/94-z2k-ppe-deoffload.sh"     "/opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh" || print_warning "ppe: NDM hook deploy failed"
+
     # tpws binary — bundled per-arch in the z2k repo (the zapret2 fork is
     # nfqws2-only, so we ship the static tpws from bol-van/zapret). Detect arch
     # the SAME way as the binary installer: opkg print-architecture distinguishes
@@ -2998,6 +3006,23 @@ step_finalize() {
             print_info "tpws youtube слой отключён пользователем (Z2K_TPWS=0)"
         else
             /opt/etc/init.d/S95z2k-tpws restart >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Per-flow PPE de-offload: chmod the NDM hook +x and apply the rules now
+    # (the scheduler + NDM hook keep them re-asserted). Respect Z2K_PPE_DEOFFLOAD=0.
+    if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
+        chmod +x /opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh 2>/dev/null || true
+        _ppe_off=$(awk -F= '/^Z2K_PPE_DEOFFLOAD=/{gsub(/[" ]/,"",$2);print $2;exit}' /opt/zapret2/config 2>/dev/null)
+        # shellcheck disable=SC1091
+        . /opt/zapret2/z2k-ppe-deoffload.sh
+        if [ "$_ppe_off" = "0" ]; then
+            z2k_ppe_remove_rules >/dev/null 2>&1 || true
+            print_info "per-flow PPE de-offload отключён пользователем (Z2K_PPE_DEOFFLOAD=0)"
+        elif z2k_ppe_available; then
+            z2k_ppe_ensure_rules >/dev/null 2>&1 && print_success "per-flow PPE de-offload активирован (nfqws2 видит ретрансмиты → ротация)" || print_info "per-flow PPE de-offload: правила будут доставлены планировщиком"
+        else
+            print_info "per-flow PPE de-offload: firmware PPE target недоступен (не Keenetic MediaTek) — пропуск"
         fi
     fi
 
@@ -3701,6 +3726,26 @@ uninstall_zapret2() {
           /tmp/z2k-log/z2k-tpws.log 2>/dev/null || true
     rm -rf /opt/zapret2/tpws 2>/dev/null || true
     killall -9 tpws 2>/dev/null || true
+
+    # Tear down the per-flow PPE de-offload layer: remove its mangle FORWARD/
+    # PREROUTING rules (via the lib, then an explicit sweep in case the lib is
+    # already gone) and remove the files.
+    if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
+        ( . /opt/zapret2/z2k-ppe-deoffload.sh 2>/dev/null && z2k_ppe_remove_rules ) 2>/dev/null || true
+    fi
+    _ppe_args="-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE"
+    for _c in FORWARD PREROUTING; do
+        while iptables -w -t mangle -C "$_c" $_ppe_args 2>/dev/null; do
+            iptables -w -t mangle -D "$_c" $_ppe_args 2>/dev/null || break
+        done
+        if command -v ip6tables >/dev/null 2>&1; then
+            while ip6tables -w -t mangle -C "$_c" $_ppe_args 2>/dev/null; do
+                ip6tables -w -t mangle -D "$_c" $_ppe_args 2>/dev/null || break
+            done
+        fi
+    done
+    rm -f /opt/zapret2/z2k-ppe-deoffload.sh \
+          /opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh 2>/dev/null || true
 
     # Tear down the Telegram tunnel: stop the daemon, kill stragglers, drop
     # its REDIRECT rules, remove the init script and the NDM hook that
