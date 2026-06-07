@@ -217,7 +217,7 @@ cleanup_legacy_ip_hosts() {
                     # z2k whatsapp/ticketmaster relay pins legitimately point at
                     # the VPS now (default-on SNI-passthrough relay) — these are
                     # current, not legacy DNS-project leftovers. Keep them.
-                    if (tolower(host) ~ /whatsapp\.(com|net)$|ticketmaster\.com$|ticketm\.net$/) next
+                    if (tolower(host) ~ /whatsapp\.(com|net)$|ticketmaster\.(com|net)$|ticketm\.net$|tmol\.(io|co)$/) next
                     print; next
                 }
                 if (ip == "2.58.104.1") {
@@ -2695,8 +2695,12 @@ step_finalize() {
     # upgrades any stale (e.g. facebook-edge) pins to the VPS.
     if command -v ndmc >/dev/null 2>&1; then
         local relay_vps="213.176.74.63"
-        local relay_hosts="whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net www.ticketmaster.com ticketmaster.com s1.ticketm.net media.ticketmaster.com"
-        if ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host web.whatsapp.com $relay_vps"; then
+        local relay_hosts="whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
+        # Marker is a domain from the EXPANDED ticketmaster set (not web.whatsapp.com):
+        # existing r-51 installs already have web.whatsapp.com pinned, so keying on it
+        # would skip the loop and they'd never get the new ticketmaster subdomains. The
+        # loop is idempotent, so re-running it on upgrade just adds the missing pins.
+        if ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host prismic-images.tmol.io $relay_vps"; then
             print_info "Настройка релея WhatsApp/Ticketmaster (домены → VPS)..."
             local _rh _rold
             for _rh in $relay_hosts; do
@@ -3679,7 +3683,7 @@ uninstall_zapret2() {
     # Clear the WhatsApp/Ticketmaster relay ndmc pins (→ VPS) so those domains
     # resolve normally again after uninstall.
     if command -v ndmc >/dev/null 2>&1; then
-        for _rel_dom in whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net www.ticketmaster.com ticketmaster.com s1.ticketm.net media.ticketmaster.com; do
+        for _rel_dom in whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co; do
             ndmc -c "no ip host $_rel_dom 213.176.74.63" >/dev/null 2>&1 || true
         done
         ndmc -c "system configuration save" >/dev/null 2>&1 || true
