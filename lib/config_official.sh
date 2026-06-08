@@ -423,17 +423,18 @@ AUSTERUS_OPT
     # rotations over auto-rotating the silent-drop class (native bypass covers youtube; a
     # manual state.tsv pin covers the rest). The de-offload layer STAYS (it still
     # restores retransmit visibility for the native detectors).
-    # 2026-06-08: retrans set to 3 — bol-van's documented circular value (его
-    # примеры используют retrans=3; ntc.party 21161 #127/#316). retrans=3 ещё
-    # консервативнее r-52.5's 2 (нужно БОЛЬШЕ ретрансмитов до фейла → ещё меньше
-    # ложных ротаций), так что регрессию ложных ротаций это НЕ возвращает. Flip to
-    # 1 to re-enable silent-drop auto-rotation. TCP TLS pools only; UDP doesn't use retrans.
+    # 2026-06-08 (r-54.1): retrans REVERTED 3→2. The r-53 bump to 3 (mis-read as
+    # bol-van's "documented" value) made the failure counter need 3 retransmits to
+    # trip, so circular got STUCK on a non-working strategy for high-churn clients
+    # (YouTube on TV rotated past the only working strat and never settled). 2 is the
+    # r-52.5 field value. Flip to 1 to re-enable silent-drop auto-rotation.
+    # TCP TLS pools only; UDP doesn't use retrans.
     local Z2K_PPE_DEOFFLOAD
     Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
     if [ "$Z2K_PPE_DEOFFLOAD" != "0" ]; then
-        youtube_tcp=$(ensure_circular_retrans "$youtube_tcp" 3)
-        youtube_gv_tcp=$(ensure_circular_retrans "$youtube_gv_tcp" 3)
-        rkn_tcp=$(ensure_circular_retrans "$rkn_tcp" 3)
+        youtube_tcp=$(ensure_circular_retrans "$youtube_tcp" 2)
+        youtube_gv_tcp=$(ensure_circular_retrans "$youtube_gv_tcp" 2)
+        rkn_tcp=$(ensure_circular_retrans "$rkn_tcp" 2)
     fi
 
     # ensure_circular_arg_set: append `<arg>=<value>` (or bare `<arg>` flag)
@@ -472,20 +473,13 @@ AUSTERUS_OPT
         printf '%s' "$out"
     }
 
-    # --- bol-van doc-alignment (2026-06-08): reset-on-success + fails=3 default ---
-    # `reset` zeroes the fail counter on a confirmed success — bol-van's canonical
-    # circular template (ntc.party 21161 #80/#316). With Z2K_NATIVE_DETECTORS the
-    # standard success_detector already resets, so this is redundant-safe; explicit
-    # per docs. http_rkn already carries reset inline (ensure_circular_arg_set is a
-    # no-op there). z2k_strip_custom_detectors keeps reset (only strips *_detector/
-    # no_http_redirect), so reset survives the native-detector pass below.
-    youtube_tcp=$(ensure_circular_arg_set "$youtube_tcp" "reset" "")
-    youtube_gv_tcp=$(ensure_circular_arg_set "$youtube_gv_tcp" "reset" "")
-    rkn_tcp=$(ensure_circular_arg_set "$rkn_tcp" "reset" "")
-    quic_udp=$(ensure_circular_arg_set "$quic_udp" "reset" "")
-    discord_udp=$(ensure_circular_arg_set "$discord_udp" "reset" "")
-    game_udp=$(ensure_circular_arg_set "$game_udp" "reset" "")
-    game_tls_tcp=$(ensure_circular_arg_set "$game_tls_tcp" "reset" "")
+    # --- bol-van doc-alignment (2026-06-08): fails=3 default on game pools ---
+    # NOTE (r-54.1): the `reset` arg was REMOVED from every pool here. In the fork
+    # (zapret-auto.lua) `reset` does NOT zero the fail counter — it makes nfqws send
+    # a RST to the retransmitter on each failure trip. It is NOT a bol-van circular
+    # param (the doc uses time= for counter reset). Adding it in r-53 made nfqws
+    # actively RST youtube/blocked flows on transient failures → broke bypass.
+    # Inline `reset` was also dropped from the yt/gv/rkn/http_rkn circular tokens.
     # fails normalized to bol-van's documented default 3 on the game pools (they
     # were field-tuned to 2; Mark chose strict doc-alignment). http_rkn fails 2→3
     # is set inline at its definition. yt/gv/rkn/quic/discord already carry fails=3.
@@ -1771,7 +1765,7 @@ AUSTERUS_OPT
     #                 (multisplit/syndata/fake/etc) внутри scope-нуты на
     #                 payload=http_req, так что они не сработают на
     #                 incoming replies — только detectors классифицируют.
-    http_rkn="--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=3:time=60:reset:key=http_rkn:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
+    http_rkn="--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
     [ "${Z2K_NATIVE_DETECTORS:-1}" != "0" ] && http_rkn=$(z2k_strip_custom_detectors "$http_rkn")
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$http_rkn"
 
