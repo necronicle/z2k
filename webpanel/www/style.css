@@ -1474,6 +1474,37 @@ pre.log {
   border-radius: 4px;
 }
 
+/* ---------- NATIVE FORM CONTROLS ----------
+   Native <select>/<option> and raw checkboxes were browser-default (white on
+   the dark theme — see the rotator «Стратегия» column). Theme them to match.
+   appearance:none + a custom chevron so the control looks identical in every
+   browser; min-width on the rotator select so the rows don't jump in width
+   between the ones with a scroll arrow and the ones without. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 26px 3px 8px;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  background-size: 12px;
+}
+select:hover { border-color: var(--accent-dim); }
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The dropdown popup list (rendered by the OS/browser — theme what we can). */
+select option { background-color: var(--bg-card); color: var(--text); }
+/* Raw checkboxes (the .switch toggles hide their own, so this is a noop there). */
+input[type="checkbox"] { accent-color: var(--accent); }
+/* Rotator «Стратегия» select: same width on every row regardless of value. */
+.state-strat-sel { min-width: 58px; }
+
 /* ---------- ROUTE TRANSITION ----------
    Subtle fade-slide-up of page-title когда юзер переходит между разделами.
    `backwards` fill-mode чтобы анимация начиналась с момента mount'a element'а

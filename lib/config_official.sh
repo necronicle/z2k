@@ -420,7 +420,7 @@ AUSTERUS_OPT
     # never fires for that class, only retrans=1 does. BUT retrans=1 ALSO fires on a
     # single TRANSIENT retransmit of a WORKING host → the false rotations on
     # YouTube/Instagram HTTP/2 hosts under load came back. Mark chose fewer false
-    # rotations over auto-rotating the silent-drop class (tpws covers youtube; a
+    # rotations over auto-rotating the silent-drop class (native bypass covers youtube; a
     # manual state.tsv pin covers the rest). The de-offload layer STAYS (it still
     # restores retransmit visibility for the native detectors).
     # 2026-06-08: retrans set to 3 — bol-van's documented circular value (его

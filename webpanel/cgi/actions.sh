@@ -233,27 +233,11 @@ toggle_stats() {
     set_flag "Z2K_STATS" "$want" "$CONFIG_FILE" || return 1
 }
 
-toggle_tpws() {
-    # Z2K_TPWS — youtube transparent-proxy layer (default 1). Fixes the class of
-    # offload-blinded handshake-block hosts (www.youtube.com) that nfqws2 can't
-    # rotate because Keenetic's NDM fastpath hides the dropped ClientHello/RST.
-    # Out-of-band from NFQWS2_OPT: it's a separate daemon (S95z2k-tpws on :1446),
-    # so no config regen / nfqws restart — flip the flag and start/stop the
-    # daemon (which loads its own youtube ipset + REDIRECT).
-    local want="$1"
-    set_flag "Z2K_TPWS" "$want" "$CONFIG_FILE" || return 1
-    if [ "$want" = "0" ]; then
-        [ -x /opt/etc/init.d/S95z2k-tpws ] && /opt/etc/init.d/S95z2k-tpws stop 2>&1
-    else
-        [ -x /opt/etc/init.d/S95z2k-tpws ] && /opt/etc/init.d/S95z2k-tpws restart 2>&1
-    fi
-}
-
 toggle_ppe() {
     # Z2K_PPE_DEOFFLOAD — per-flow hardware-offload exclusion on Keenetic
     # MediaTek (default 1). Hangs the firmware `-j PPE` target on the handshake
     # window of bypass-port flows so nfqws2 sees CH retransmits and the circular
-    # rotator advances for offload-blinded silent-drop hosts. UNLIKE tpws it
+    # rotator advances for offload-blinded silent-drop hosts. It
     # DOES affect NFQWS2_OPT: config_official.sh sets circular retrans=1 when on
     # / leaves retrans=2 when off — so a config regen + service restart IS
     # required, in addition to applying/removing the mangle rules.
@@ -762,18 +746,28 @@ state_set() {
     return $ok
 }
 
-# Parse the LIVE nfqws2 cmdline for the per-category strategy pool size. Emits
-# TSV "key<TAB>count" (count = distinct strategy=N tags under each circular key).
-# Reading /proc keeps this in sync with what is actually running — no generated
-# file to drift. Empty output if nfqws2 isn't running / cmdline unreadable.
+# Parse the per-category strategy pool size (distinct strategy=N tags under each
+# circular key). Reads the STABLE config file ($CONFIG_FILE) — the exact args
+# nfqws2 runs — NOT the live /proc cmdline. The cmdline is briefly empty while
+# nfqws2 restarts (e.g. right after an update), which made /pools return nothing
+# → the webpanel then capped every strategy dropdown at the row's current
+# rotation position instead of the full category pool ("после обновления видно
+# только сколько настрочила ротация"). The config file survives the restart and
+# carries the identical pools. Falls back to the live cmdline only if the config
+# is unreadable. Emits TSV "key<TAB>count".
 pools_read() {
-    local pid
-    pid=$(pidof nfqws2 2>/dev/null | tr ' ' '\n' | head -1)
-    [ -z "$pid" ] && return 0
-    [ -r "/proc/$pid/cmdline" ] || return 0
-    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | awk '
-    {
-        n = split($0, toks, " ")
+    local src="" pid
+    if [ -r "$CONFIG_FILE" ]; then
+        src=$(cat "$CONFIG_FILE" 2>/dev/null)
+    else
+        pid=$(pidof nfqws2 2>/dev/null | tr ' ' '\n' | head -1)
+        [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] && src=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+    fi
+    [ -n "$src" ] || return 0
+    printf '%s\n' "$src" | awk '
+    { all = all " " $0 }                         # accumulate (config is multi-line)
+    END {
+        n = split(all, toks, " ")
         ck = ""                                  # current circular key
         for (i = 1; i <= n; i++) {
             t = toks[i]

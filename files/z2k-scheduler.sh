@@ -131,18 +131,6 @@ while true; do
         fi
     fi
 
-    # Minute-cadence task: tpws youtube-layer watchdog. The S95 supervisor
-    # already respawns a crashed daemon; this is the secondary net (supervisor
-    # itself died / rules drifted / user toggled Z2K_TPWS).
-    if [ -x "${ZAPRET2_DIR}/z2k-tpws-watchdog.sh" ]; then
-        last_tw=$(last_fired_for_key tpws-watchdog-epoch)
-        case "$last_tw" in ''|*[!0-9]*) last_tw=0 ;; esac
-        if [ "$((now_epoch - last_tw))" -ge 55 ]; then
-            mark_fired tpws-watchdog-epoch "$now_epoch"
-            "${ZAPRET2_DIR}/z2k-tpws-watchdog.sh" >/dev/null 2>&1 &
-        fi
-    fi
-
     # Per-flow PPE de-offload re-assert (mangle FORWARD/PREROUTING). The NDM hook
     # (94-z2k-ppe-deoffload.sh) handles event-driven re-apply after netfilter
     # regen; this is the secondary net AND the boot-time apply (the rule is

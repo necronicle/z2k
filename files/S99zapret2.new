@@ -1322,16 +1322,26 @@ z2k_rst_filter_stop()
 #    marks it INVALID and the connbytes rule never passes it to nfqws.
 #  - checksum=0: with HW offload the NIC computes the L4 checksum, so the kernel
 #    sees a "bad" checksum -> conntrack marks INVALID (S00fix nfqws-keenetic ships).
+#  - fastnat=0: the NDM software fastpath (RTCACHE) routes flows PAST conntrack,
+#    so on an offloaded flow nfqws gets "ctrack disabled" and SKIPS every desync
+#    ("out pos ... beyond range a0-sN") -> YouTube/RKN silently NOT bypassed on
+#    the affected device even though nfqws sees its ClientHello. fastnat=0 forces
+#    full conntrack so the range/rotator/desync work. This is the layer that
+#    `no ppe` (hardware PPE) does NOT clear (proven 2026-06-08).
 z2k_conntrack_tune_start()
 {
     [ -w /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal 2>/dev/null
     [ -w /proc/sys/net/netfilter/nf_conntrack_checksum ] && echo 0 > /proc/sys/net/netfilter/nf_conntrack_checksum 2>/dev/null
+    [ -w /proc/sys/net/netfilter/nf_conntrack_fastnat ] && echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null
+    [ -w /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm ] && echo 0 > /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm 2>/dev/null
 }
 
 z2k_conntrack_tune_stop()
 {
     [ -w /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal ] && echo 0 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal 2>/dev/null
     [ -w /proc/sys/net/netfilter/nf_conntrack_checksum ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_checksum 2>/dev/null
+    [ -w /proc/sys/net/netfilter/nf_conntrack_fastnat ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null
+    [ -w /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_fastnat_xfrm 2>/dev/null
 }
 
 start_fw()

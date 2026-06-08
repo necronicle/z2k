@@ -79,7 +79,7 @@ assert_has "v6 udp/443 rule too (best-effort)" "$CALLS" \
     'v6 .*-t mangle -I FORWARD -p udp --dport 443 -m connskip --connskip 30 -j PPE'
 # must NOT touch nat table or global ppe_enabled (per-flow only, mangle only)
 assert_hasnt "no nat-table rule"            "$CALLS" '-t nat'
-assert_hasnt "no REDIRECT (not tpws)"       "$CALLS" 'REDIRECT'
+assert_hasnt "no REDIRECT"                  "$CALLS" 'REDIRECT'
 
 # ---- remove_rules deletes both chains ----
 : > "$CALLS"; rm -rf "$DEL"; mkdir -p "$DEL"; REMOVE=1
