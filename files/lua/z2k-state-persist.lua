@@ -93,7 +93,7 @@ local function create_empty_state_file(path)
   local f = io.open(path, "w")
   if not f then return false end
   f:write("# z2k autocircular state (persisted circular nstrategy)\n")
-  f:write("# key\thost\tstrategy\tts\n")
+  f:write("# key\thost\tstrategy\tts\tmode\n")
   f:close()
   return true
 end
@@ -121,7 +121,9 @@ local function merge_state_file_into(path, dest)
   if not f then return end
   for line in f:lines() do
     if line ~= "" and not line:match("^%s*#") then
-      local askey, host, strat, ts = line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)")
+      -- 5th column = mode (auto|frozen). Optional for backward compat: a legacy
+      -- 4-column row parses mode="" → normalized to "auto" below.
+      local askey, host, strat, ts, mode = line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)\t?([a-z]*)")
       if askey and host and strat then
         local n = tonumber(strat)
         if n and n >= 1 then
@@ -129,9 +131,10 @@ local function merge_state_file_into(path, dest)
           if hn then
             if not dest[askey] then dest[askey] = {} end
             local tsn = tonumber(ts) or 0
+            local m = (mode ~= nil and mode ~= "") and mode or "auto"
             local prev = dest[askey][hn]
             if (not prev) or ((tonumber(prev.ts) or 0) <= tsn) then
-              dest[askey][hn] = { strategy = n, ts = tsn }
+              dest[askey][hn] = { strategy = n, ts = tsn, mode = m }
             end
           end
         end
@@ -149,7 +152,7 @@ local function snapshot_strategies(src)
     out[askey] = {}
     for hostn, rec in pairs(hosts) do
       if rec and rec.strategy then
-        out[askey][hostn] = { strategy = rec.strategy, ts = rec.ts }
+        out[askey][hostn] = { strategy = rec.strategy, ts = rec.ts, mode = rec.mode or "auto" }
       end
     end
   end
@@ -254,12 +257,13 @@ local function write_state()
   local f = io.open(tmp, "w")
   if not f then release_lock(lockfile); return end
   f:write("# z2k autocircular state (persisted circular nstrategy)\n")
-  f:write("# key\thost\tstrategy\tts\n")
+  f:write("# key\thost\tstrategy\tts\tmode\n")
   for askey, hosts in pairs(merged) do
     for hostn, rec in pairs(hosts) do
       if rec and rec.strategy then
         f:write(tostring(askey), "\t", tostring(hostn), "\t",
-                tostring(rec.strategy), "\t", tostring(rec.ts or 0), "\n")
+                tostring(rec.strategy), "\t", tostring(rec.ts or 0), "\t",
+                tostring(rec.mode or "auto"), "\n")
       end
     end
   end
@@ -352,8 +356,13 @@ local function persist_if_changed(askey, hostn, hrec)
   if not n or n < 1 then return false end
   local prev = state[askey] and state[askey][hostn] and state[askey][hostn].strategy or nil
   if prev == n then return false end          -- skip ONLY when unchanged
+  -- Preserve any operator-set mode (frozen) across an engine-driven save: a row
+  -- the operator froze must keep mode="frozen" on disk even if some code path
+  -- persists its strategy. (For a frozen row the freeze gate forces nstrategy back
+  -- to the pinned value, so prev==n and we return above before reaching here.)
+  local mode = (state[askey] and state[askey][hostn] and state[askey][hostn].mode) or "auto"
   if not state[askey] then state[askey] = {} end
-  state[askey][hostn] = { strategy = n, ts = now_t() }
+  state[askey][hostn] = { strategy = n, ts = now_t(), mode = mode }
   write_state()
   return true
 end
@@ -505,10 +514,15 @@ local function reconcile_external_edits()
     for hostn, drec in pairs(hosts) do
       local lw = last_written[askey] and last_written[askey][hostn]
       local dn = tonumber(drec.strategy)
-      if dn and (not lw or tonumber(lw.strategy) ~= dn) then
+      -- A mode-only flip (freeze toggled at the SAME strategy) is also an external
+      -- edit we must adopt — otherwise freezing a row already on its current
+      -- strategy would be ignored until the strategy itself changed.
+      local dmode = drec.mode or "auto"
+      local lwmode = (lw and lw.mode) or "auto"
+      if dn and (not lw or tonumber(lw.strategy) ~= dn or lwmode ~= dmode) then
         set_live_nstrategy(askey, hostn, dn)
         if not state[askey] then state[askey] = {} end
-        state[askey][hostn] = { strategy = dn, ts = drec.ts }
+        state[askey][hostn] = { strategy = dn, ts = drec.ts, mode = dmode }
       end
     end
   end
@@ -672,6 +686,22 @@ if type(circular) == "function" then
           local last_ok = _G.Z2K_STICKY_SUCCESS_TS[sticky_key]
           if last_ok and (now_f() - last_ok) <= STICKY_WINDOW_SEC then
             hrec.nstrategy = nstrategy_before_circular
+          end
+        end
+
+        -- FREEZE gate (operator pin from the webpanel Rotator). A row whose
+        -- persisted mode == "frozen" must NEVER rotate: force nstrategy back to the
+        -- pinned strategy AFTER orig_circular AND the sticky-revert have run, so
+        -- whatever they did to nstrategy this packet is overridden. persist_if_changed
+        -- below then sees no change (prev==n → no write churn), and the mode column
+        -- on disk keeps the pin across nfqws2 restarts / reboot / auto-update.
+        -- reconcile_external_edits (top of this wrapper) keeps state[askey][hostn].mode
+        -- in sync with the webpanel within ~2s. ct-clamp above already handled an
+        -- out-of-range pin (reset to 1 + unfreeze) before reaching here.
+        if askey and hostn then
+          local srec = state[askey] and state[askey][hostn]
+          if srec and srec.mode == "frozen" and tonumber(srec.strategy) then
+            hrec.nstrategy = tonumber(srec.strategy)
           end
         end
 

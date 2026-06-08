@@ -1318,18 +1318,34 @@
   // (manual button or after delete) preserves the chosen column.
   // Defaults: profile asc — same order as the previous unsorted view.
   let stateSort = { key: "key", dir: "asc" };
+  let statePools = {};   // key -> strategy-pool size, from GET /pools (live nfqws2)
 
   async function renderState() {
     $app.innerHTML = `
       <h1 class="page-title">Rotator state</h1>
       <div class="card">
+        <h3>Discord войс — выбор стратегии</h3>
+        <p class="desc">
+          Голосовой пул Discord (STUN) не привязан к домену и сам по себе в
+          таблице ниже не появляется. Здесь можно выбрать стратегию вручную или
+          заморозить рабочую, чтобы ротатор её не менял.
+        </p>
+        <div class="btn-row" id="discord-voice-controls">${skeletonLines(1)}</div>
+      </div>
+      <div class="card">
         <h3>Выбранные стратегии по доменам</h3>
         <p class="desc">
-          autocircular запоминает для каждого ключ/домен какая стратегия
-          сейчас используется. Застрял на неработающей — кнопка × слева
-          удалит запись, rotator стартанёт с первой стратегии при
-          следующей попытке.
+          autocircular запоминает для каждого ключ/домен текущую стратегию.
+          В каждой строке:
         </p>
+        <ul class="desc" style="margin:4px 0 10px 18px;padding:0">
+          <li><b>выпадающий список</b> — выбрать стратегию вручную (ротация
+              продолжится с неё, удобно проскочить нерабочую);</li>
+          <li><b>замок в столбце «Заморозка»</b> — открытый замок значит идёт
+              авторотация; нажмите, чтобы заморозить (замок закроется) и ротатор
+              перестанет менять стратегию; нажмите закрытый замок — разморозить;</li>
+          <li><b>× слева</b> — удалить запись (старт с первой стратегии).</li>
+        </ul>
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn" id="state-refresh">Обновить</button>
         </div>
@@ -1340,19 +1356,60 @@
     loadState();
   }
 
+  // Discord-voice strategy panel — works even when no discord_udp/nohost row
+  // exists yet (state_set creates it), so the pool can be chosen before any
+  // voice traffic flows.
+  function renderDiscordVoicePanel(entries) {
+    const dc = document.getElementById("discord-voice-controls");
+    if (!dc) return;
+    const dEntry = entries.find(e => e.key === "discord_udp" && e.host === "nohost");
+    const poolN = Number(statePools["discord_udp"] || 0);
+    const dCur = dEntry ? Number(dEntry.strategy) : 1;
+    const dN = Math.max(poolN, dCur, 1);
+    const dFrozen = dEntry ? dEntry.mode === "frozen" : false;
+    let opts = "";
+    for (let i = 1; i <= dN; i++) opts += `<option value="${i}"${i === dCur ? " selected" : ""}>Стратегия ${i}</option>`;
+    const status = dEntry
+      ? `сейчас: №${dCur}${dFrozen ? " 🔒 заморожено" : ""}`
+      : (poolN ? `пул из ${poolN} стратегий; запись появится после «Применить»` : `пул недоступен (nfqws2 не запущен?)`);
+    dc.innerHTML = `
+      <select id="dv-strat">${opts}</select>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin:0 6px">
+        <input type="checkbox" id="dv-freeze"${dFrozen ? " checked" : ""}> заморозить
+      </label>
+      <button class="btn" id="dv-apply">Применить</button>
+      <span class="desc" style="margin-left:8px">${escapeHtml(status)}</span>
+    `;
+    document.getElementById("dv-apply").addEventListener("click", () => {
+      const s = document.getElementById("dv-strat").value;
+      const m = document.getElementById("dv-freeze").checked ? "frozen" : "auto";
+      stateSet("discord_udp", "nohost", s, m);
+    });
+  }
+
   async function loadState() {
     const body = document.getElementById("state-body");
     if (!body) return;
     try {
-      const d = await apiGet("/state");
-      if (!d.entries || !d.entries.length) {
+      // /pools may fail if nfqws2 isn't running — tolerate it (dropdowns then
+      // fall back to the row's own strategy as the max).
+      const [d, poolsResp] = await Promise.all([
+        apiGet("/state"),
+        apiGet("/pools").catch(() => ({ pools: {} })),
+      ]);
+      statePools = (poolsResp && poolsResp.pools) || {};
+      const entries = d.entries || [];
+
+      // Discord-voice panel first — it must populate even with empty rotator state.
+      renderDiscordVoicePanel(entries);
+
+      if (!entries.length) {
         body.innerHTML = `<p style="color:var(--text-muted)">состояние ротатора пусто (стратегии ещё не закреплены)</p>`;
         return;
       }
       const nowSec = Math.floor(Date.now() / 1000);
-
       // Sort a shallow copy — never mutate the cached server response.
-      const sorted = d.entries.slice().sort((a, b) => {
+      const sorted = entries.slice().sort((a, b) => {
         let av, bv;
         switch (stateSort.key) {
           case "key":      av = String(a.key  || ""); bv = String(b.key  || ""); break;
@@ -1375,9 +1432,17 @@
                        age < 3600 ? Math.floor(age / 60) + "м" :
                        age < 86400 ? Math.floor(age / 3600) + "ч" :
                        Math.floor(age / 86400) + "д";
+        const frozen = e.mode === "frozen";
+        // Pool size from the live nfqws2 cmdline; fall back to the row's own
+        // strategy so a stale/larger pinned value still appears in the dropdown.
+        const N = Math.max(Number(statePools[e.key] || 0), Number(e.strategy) || 1);
+        let opts = "";
+        for (let i = 1; i <= N; i++) {
+          opts += `<option value="${i}"${i === Number(e.strategy) ? " selected" : ""}>${i}</option>`;
+        }
         // data-label attrs feed the mobile card layout (CSS pseudo-elements)
         return `
-          <tr>
+          <tr${frozen ? ' style="background:rgba(120,140,255,0.10)"' : ''}>
             <td data-label="">
               <button class="btn btn-danger btn-icon state-del"
                       title="Удалить запись rotator"
@@ -1387,7 +1452,21 @@
             </td>
             <td data-label="Профиль">${escapeHtml(e.key)}</td>
             <td data-label="Домен">${escapeHtml(e.host)}</td>
-            <td data-label="Стратегия" class="state-strategy">${escapeHtml(e.strategy)}</td>
+            <td data-label="Стратегия">
+              <select class="state-strat-sel"
+                      data-key="${escapeHtml(e.key)}"
+                      data-host="${escapeHtml(e.host)}"
+                      data-mode="${frozen ? "frozen" : "auto"}">${opts}</select>
+            </td>
+            <td data-label="Заморозка">
+              <button class="btn btn-icon state-freeze"
+                      data-key="${escapeHtml(e.key)}"
+                      data-host="${escapeHtml(e.host)}"
+                      data-strategy="${escapeHtml(e.strategy)}"
+                      data-frozen="${frozen ? "1" : "0"}"
+                      style="color:${frozen ? "var(--accent)" : "var(--text-muted)"}"
+                      title="${frozen ? "Заморожено — нажмите, чтобы разморозить (вернуть авторотацию)" : "Авторотация — нажмите, чтобы заморозить на текущей стратегии"}">${frozen ? _icons.lockClosed : _icons.lockOpen}</button>
+            </td>
             <td data-label="Возраст" class="state-age">${ageStr}</td>
           </tr>
         `;
@@ -1398,13 +1477,25 @@
       body.innerHTML = `
         <table class="state-table">
           <thead>
-            <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}${th("age","Возраст")}</tr>
+            <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
       `;
       body.querySelectorAll(".state-del").forEach(btn => {
         btn.addEventListener("click", () => stateDelete(btn.dataset.key, btn.dataset.host));
+      });
+      body.querySelectorAll(".state-strat-sel").forEach(sel => {
+        // Changing the strategy applies immediately; data-mode preserves the
+        // freeze state (frozen → re-pin at the new strategy; auto → rotation
+        // continues from it, e.g. to skip a broken strategy).
+        sel.addEventListener("change", () => stateSet(sel.dataset.key, sel.dataset.host, sel.value, sel.dataset.mode));
+      });
+      body.querySelectorAll(".state-freeze").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const newMode = btn.dataset.frozen === "1" ? "auto" : "frozen";
+          stateSet(btn.dataset.key, btn.dataset.host, btn.dataset.strategy, newMode);
+        });
       });
       body.querySelectorAll("th.sortable").forEach(th => {
         th.addEventListener("click", () => {
@@ -1429,6 +1520,20 @@
     try {
       await apiPost("/state/delete", { key, host });
       toast("Удалено");
+      loadState();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
+  // Pin / manually select a rotator row's strategy. mode=auto → adopt live and
+  // keep rotating; mode=frozen → adopt AND stop the rotator changing it. The
+  // engine adopts the edit within ~2s (reconcile) and persists it across
+  // reboot/auto-update.
+  async function stateSet(key, host, strategy, mode) {
+    try {
+      await apiPost("/state/set", { key, host, strategy: String(strategy), mode });
+      toast(mode === "frozen" ? `Заморожено на стратегии ${strategy}` : `Стратегия ${strategy} выбрана`);
       loadState();
     } catch (e) {
       toast("Ошибка: " + e.message, "bad");
@@ -1631,6 +1736,10 @@
     statusWarn:   '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
     statusBad:    '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
     hourglass:    '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 22h14M5 2h14M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22M17 2v4.172a2 2 0 0 1-.586 1.414L12 12 7.586 7.586A2 2 0 0 1 7 6.172V2"/></svg>',
+    // Lucide lock-keyhole / lock-keyhole-open (MIT, no attribution). Closed = frozen,
+    // open = auto-rotating. Drawn at 17px to read a touch larger than the row text.
+    lockClosed:   '<svg class="icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="10" width="18" height="12" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/><circle cx="12" cy="16" r="1"/></svg>',
+    lockOpen:     '<svg class="icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="10" width="18" height="12" rx="2"/><path d="M7 10V7a5 5 0 0 1 9.33-2.5"/><circle cx="12" cy="16" r="1"/></svg>',
   };
 
   // Status icon picker for the dashboard cells. "" kind = no icon (neutral).

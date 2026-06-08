@@ -1107,7 +1107,8 @@ fi
 TLS_CIRC_TOKEN=$(printf '%s' "$TLS_ARM" | sed -nE 's/.*( --lua-desync=circular:[^ ]*).*/\1/p')
 assert_contains "tls: extracted circular token is non-empty" "circular:" "$TLS_CIRC_TOKEN"
 assert_contains "tls: circular has key=game_tls" "key=game_tls" "$TLS_CIRC_TOKEN"
-assert_contains "tls: circular has fails=2" "circular:fails=2" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has fails=3 (bol-van doc default, 2026-06-08)" "circular:fails=3" "$TLS_CIRC_TOKEN"
+assert_contains "tls: circular has reset (bol-van doc default)" ":reset" "$TLS_CIRC_TOKEN"
 assert_contains "tls: circular has nld=2 (per-SLD pinning)" "nld=2" "$TLS_CIRC_TOKEN"
 assert_contains "tls: game_tls circular has inseq=4000 (reachable on short game flows)" "inseq=4000" "$TLS_CIRC_TOKEN"
 assert_contains "tls: game_tls failure_detector=z2k_silent_drop_detector" "failure_detector=z2k_silent_drop_detector" "$TLS_CIRC_TOKEN"
@@ -1227,6 +1228,35 @@ assert_not_contains "native: rkn_tcp has NO failure_detector"   "failure_detecto
 assert_not_contains "native: rkn_tcp has NO success_detector"   "success_detector="    "$RKN_ARM_NATIVE"
 assert_not_contains "native: rkn_tcp has NO no_http_redirect"   "no_http_redirect"     "$RKN_ARM_NATIVE"
 assert_contains     "native: rkn_tcp keeps native inseq="       "inseq="               "$RKN_ARM_NATIVE"
+
+# ==============================================================================
+# bol-van doc-alignment (2026-06-08) + Discord-voice Flowseal "5K ping" fix.
+# Strictly-per-docs: reset on every pool, retrans=3 on TCP TLS, fails=3 on the
+# game/http pools; discord voice strategy=1 == Flowseal fix (issue #12557).
+# ==============================================================================
+printf "\n--- doc-alignment: reset / retrans=3 / fails=3 / discord strategy=1 ---\n"
+OUT_DOC=$(run_generator "docalign" "")
+RKN_ARM_DOC=$(get_rkn_tcp_arm_line "$OUT_DOC")
+HTTP_ARM_DOC=$(printf '%s\n' "$OUT_DOC" | grep -F 'key=http_rkn' | head -1)
+DISCORD_ARM_DOC=$(printf '%s\n' "$OUT_DOC" | grep -F 'key=discord_udp' | head -1)
+
+# rkn_tcp (TCP TLS): retrans 2→3 + reset, --in-range floor preserved.
+assert_contains     "docalign: rkn_tcp circular retrans=3"      "retrans=3"     "$RKN_ARM_DOC"
+assert_not_contains "docalign: rkn_tcp no stale retrans=2"      "retrans=2"     "$RKN_ARM_DOC"
+assert_contains     "docalign: rkn_tcp circular reset"          ":reset"        "$RKN_ARM_DOC"
+assert_contains     "docalign: rkn_tcp --in-range>=floor"       "--in-range=-s" "$RKN_ARM_DOC"
+
+# http_rkn: fails 2→3 (reset already present inline).
+assert_contains     "docalign: http_rkn fails=3"                "circular:fails=3" "$HTTP_ARM_DOC"
+assert_not_contains "docalign: http_rkn no fails=2"             "fails=2"          "$HTTP_ARM_DOC"
+assert_contains     "docalign: http_rkn reset"                  ":reset"           "$HTTP_ARM_DOC"
+
+# discord_udp: reset added; strategy=1 == Flowseal voice fix (dbankcloud x6), no stun blob.
+assert_contains     "docalign: discord_udp circular reset"      ":reset"        "$DISCORD_ARM_DOC"
+assert_contains     "docalign: discord voice #1 = dbankcloud repeats=6" \
+                    "blob=quic_dbankcloud:repeats=6:strategy=1" "$DISCORD_ARM_DOC"
+assert_not_contains "docalign: discord voice #1 dropped stun blob" \
+                    "blob=stun:repeats=3:strategy=1"            "$DISCORD_ARM_DOC"
 
 rm -rf "$MOCK_DIR"
 

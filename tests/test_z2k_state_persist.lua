@@ -507,5 +507,118 @@ do
   check("T29: seeded value persisted", 4, row("rkn_tcp", "seeded.com"))
 end
 
+-- ===========================================================================
+-- Freeze / manual-select (5th `mode` column). The webpanel writes mode=auto|frozen
+-- to state.tsv; reconcile adopts it; the freeze gate pins a frozen row's strategy
+-- regardless of what circular does. Backward compatible (legacy 4-col → auto).
+local function row_mode(k, h)
+  local f = io.open(STATE_FILE, "r")
+  if not f then return nil end
+  local m
+  for line in f:lines() do
+    if not line:match("^%s*#") then
+      local kk, hh, _, _, mm = line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)\t?([a-z]*)")
+      if kk == k and hh == h then m = (mm ~= nil and mm ~= "") and mm or "auto" end
+    end
+  end
+  f:close()
+  return m
+end
+
+-- T30: the engine writes the 5th mode column; a fresh row defaults to "auto".
+do
+  fresh()
+  now = 10000
+  circular(nil, mk("rkn_tcp", "modecol.com"))
+  check("T30: fresh row strategy 1", 1, row("rkn_tcp", "modecol.com"))
+  check("T30: fresh row mode=auto on disk", "auto", row_mode("rkn_tcp", "modecol.com"))
+end
+
+-- T31: a legacy 4-column row loads as mode=auto and is rewritten WITH the column.
+do
+  fresh()
+  write_file("# h\n# h2\nrkn_tcp\tlegacy.com\t2\t5000\n")   -- 4 cols, no mode
+  P.load_state()
+  now = 10100
+  circular(nil, mk("rkn_tcp", "trigger.com", {sim = 2}))    -- forces a full rewrite
+  check("T31: legacy 4-col row preserved (strategy 2)", 2, row("rkn_tcp", "legacy.com"))
+  check("T31: legacy row gains mode=auto", "auto", row_mode("rkn_tcp", "legacy.com"))
+end
+
+-- T32: a frozen row is NOT rotated — the freeze gate snaps nstrategy back.
+do
+  fresh()
+  now = 10200
+  circular(nil, mk("rkn_tcp", "frz.com", {sim = 2}))             -- establish strategy 2 (auto)
+  write_file("# h\n# h2\nrkn_tcp\tfrz.com\t2\t10201\tfrozen\n")  -- operator freezes at 2
+  now = 10210                                                    -- past reconcile debounce
+  circular(nil, mk("rkn_tcp", "frz.com", {sim = 3}))            -- circular tries to drift 2→3
+  check("T32: frozen row held at pinned strategy 2 (not rotated to 3)",
+        2, autostate["rkn_tcp"]["frz.com"].nstrategy)
+  check("T32: state.tsv stays at 2", 2, row("rkn_tcp", "frz.com"))
+  check("T32: mode stays frozen on disk", "frozen", row_mode("rkn_tcp", "frz.com"))
+end
+
+-- T33: unfreezing (mode→auto) resumes rotation.
+do
+  fresh()
+  now = 10300
+  circular(nil, mk("rkn_tcp", "unf.com", {sim = 2}))
+  write_file("# h\n# h2\nrkn_tcp\tunf.com\t2\t10301\tfrozen\n")
+  now = 10310
+  circular(nil, mk("rkn_tcp", "unf.com", {sim = 3}))           -- frozen → held at 2
+  check("T33: frozen first holds at 2", 2, autostate["rkn_tcp"]["unf.com"].nstrategy)
+  write_file("# h\n# h2\nrkn_tcp\tunf.com\t2\t10320\tauto\n")  -- operator unfreezes
+  now = 10330
+  circular(nil, mk("rkn_tcp", "unf.com", {sim = 3}))          -- now free to rotate 2→3
+  check("T33: after unfreeze, rotation resumes (→3)",
+        3, autostate["rkn_tcp"]["unf.com"].nstrategy)
+  check("T33: disk mode back to auto", "auto", row_mode("rkn_tcp", "unf.com"))
+end
+
+-- T34: manual-select WITHOUT freeze (mode=auto) is adopted live AND rotation continues
+-- (skip a broken strategy / test one without locking it).
+do
+  fresh()
+  now = 10400
+  circular(nil, mk("rkn_tcp", "sel.com"))                     -- strategy 1
+  write_file("# h\n# h2\nrkn_tcp\tsel.com\t2\t10401\tauto\n") -- operator picks 2, NOT frozen
+  now = 10410
+  circular(nil, mk("rkn_tcp", "sel.com"))                     -- reconcile adopts 2 live
+  check("T34: manual strategy adopted live (→2)",
+        2, autostate["rkn_tcp"]["sel.com"].nstrategy)
+  now = 10420
+  circular(nil, mk("rkn_tcp", "sel.com", {sim = 3}))         -- still free to rotate 2→3
+  check("T34: rotation continues after manual auto-select (2→3)",
+        3, autostate["rkn_tcp"]["sel.com"].nstrategy)
+end
+
+-- T35: a frozen row's strategy AND mode survive a full-file rewrite triggered by
+-- ANOTHER host (the engine save must not unfreeze it).
+do
+  fresh()
+  now = 10500
+  circular(nil, mk("rkn_tcp", "keepfrz.com", {sim = 2}))
+  write_file("# h\n# h2\nrkn_tcp\tkeepfrz.com\t2\t10501\tfrozen\n")
+  now = 10510
+  circular(nil, mk("rkn_tcp", "keepfrz.com", {sim = 3}))     -- adopt + hold frozen
+  now = 10520
+  circular(nil, mk("rkn_tcp", "mover.com", {sim = 3}))       -- different host → full rewrite
+  check("T35: frozen strategy survives rewrite", 2, row("rkn_tcp", "keepfrz.com"))
+  check("T35: frozen mode survives rewrite", "frozen", row_mode("rkn_tcp", "keepfrz.com"))
+end
+
+-- T36: an out-of-range frozen pin (strategy > ctstrategy) is clamped to 1 and the
+-- row dropped — ct-clamp runs before the freeze gate (acceptable per design).
+do
+  fresh()
+  write_file("# h\n# h2\nrkn_tcp\tclamp.com\t5\t10600\tfrozen\n")  -- pin 5, plan has 3
+  now = 10601
+  circular(nil, mk("rkn_tcp", "clamp.com", {plan = DEFAULT_PLAN}))  -- ct=3
+  check("T36: out-of-range frozen pin clamped to 1 in live",
+        1, autostate["rkn_tcp"]["clamp.com"].nstrategy)
+  check("T36: invalid frozen row cleared from disk", nil, row("rkn_tcp", "clamp.com"))
+end
+
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
 os.exit(FAIL == 0 and 0 or 1)

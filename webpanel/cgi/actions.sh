@@ -661,6 +661,15 @@ state_read() {
     } END { for (k in row) print row[k] }' $pf $ff 2>/dev/null
 }
 
+# Return 0 if $1 contains ONLY characters from the tr-set $2, else 1.
+# Uses `tr -d`, NOT a `*[!...]*` glob: busybox ash (the router shell) mis-parses
+# a '|' inside a bracket expression (treats it as alternation), so the negated
+# glob silently ACCEPTS everything — verified on-device 2026-06-08. tr evaluates
+# the set correctly on busybox/dash/bash alike.
+_chars_ok() {
+    [ -z "$(printf '%s' "$1" | tr -d "$2" 2>/dev/null)" ]
+}
+
 # Remove one row by host+key from a single state file, preserving inode.
 # Caller has already validated key/host. No-op if the file is absent.
 _state_delete_one_file() {
@@ -696,10 +705,91 @@ state_delete() {
     [ -z "$host" ] && { echo "host required" >&2; return 1; }
     # Sanitize: key is [a-z0-9_], host is letters/digits/dots/dashes plus "|"
     # for the per-address-family rotation suffix (host|4 / host|6, fork r5+).
-    case "$key"  in *[!a-zA-Z0-9_]*) echo "bad key" >&2; return 1 ;; esac
-    case "$host" in *[!a-zA-Z0-9.|-]*) echo "bad host" >&2; return 1 ;; esac
+    _chars_ok "$key"  'a-zA-Z0-9_'   || { echo "bad key" >&2; return 1; }
+    _chars_ok "$host" 'a-zA-Z0-9.|-' || { echo "bad host" >&2; return 1; }
     _state_delete_one_file "$STATE_FILE" "$key" "$host" || return 1
     _state_delete_one_file "$STATE_FILE_FALLBACK" "$key" "$host" || return 1
+}
+
+# Upsert one row (key,host) with strategy+mode+ts into a single state file,
+# creating it (with header) if absent. Preserves all other rows; field-equality
+# replace (NOT regex — see _state_delete_one_file for why). Inode preserved.
+# Caller has validated all fields.
+_state_set_one_file() {
+    local file="$1" key="$2" host="$3" strat="$4" mode="$5" ts="$6"
+    local dir; dir=$(dirname "$file")
+    [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 1
+    if [ ! -f "$file" ]; then
+        printf '# z2k autocircular state (persisted circular nstrategy)\n# key\thost\tstrategy\tts\tmode\n' \
+            > "$file" 2>/dev/null || return 1
+    fi
+    local tmp="$file.z2k-new"
+    awk -F'\t' -v key="$key" -v host="$host" -v strat="$strat" -v mode="$mode" -v ts="$ts" '
+        BEGIN { OFS="\t" }
+        ($1 == key && $2 == host) { next }      # drop any prior row for this key+host
+        { print }
+        END { print key, host, strat, ts, mode } # append the upserted row
+    ' "$file" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
+    chmod 644 "$file" 2>/dev/null || true
+    return 0
+}
+
+# Set (pin / manually select) a rotator row's strategy + mode.
+#   mode=auto   → adopt this strategy live; rotation continues (skip a broken
+#                 strategy, or test one without locking it).
+#   mode=frozen → adopt this strategy live AND stop the rotator from changing it.
+# The lua reconcile (reconcile_external_edits, ~2s) adopts the edit into the live
+# rotator; the freeze gate then pins a frozen row every packet. Writes BOTH the
+# primary and the /tmp fallback so the merged (newer-ts wins) view the lua reads
+# picks it up regardless of which file backs the live state. Success = at least
+# one write landed (a read-only /opt still has the writable /tmp fallback).
+state_set() {
+    local key="$1" host="$2" strat="$3" mode="$4"
+    [ -z "$key" ]  && { echo "key required" >&2; return 1; }
+    [ -z "$host" ] && { echo "host required" >&2; return 1; }
+    [ -z "$mode" ] && mode="auto"
+    _chars_ok "$key"  'a-zA-Z0-9_'   || { echo "bad key" >&2; return 1; }
+    _chars_ok "$host" 'a-zA-Z0-9.|-' || { echo "bad host" >&2; return 1; }
+    case "$strat" in ''|*[!0-9]*) echo "bad strategy" >&2; return 1 ;; esac
+    [ "$strat" -ge 1 ] 2>/dev/null || { echo "strategy must be >=1" >&2; return 1; }
+    case "$mode" in auto|frozen) ;; *) echo "bad mode" >&2; return 1 ;; esac
+    local ts; ts=$(date +%s 2>/dev/null || echo 0)
+    local ok=1
+    _state_set_one_file "$STATE_FILE" "$key" "$host" "$strat" "$mode" "$ts" && ok=0
+    _state_set_one_file "$STATE_FILE_FALLBACK" "$key" "$host" "$strat" "$mode" "$ts" && ok=0
+    return $ok
+}
+
+# Parse the LIVE nfqws2 cmdline for the per-category strategy pool size. Emits
+# TSV "key<TAB>count" (count = distinct strategy=N tags under each circular key).
+# Reading /proc keeps this in sync with what is actually running — no generated
+# file to drift. Empty output if nfqws2 isn't running / cmdline unreadable.
+pools_read() {
+    local pid
+    pid=$(pidof nfqws2 2>/dev/null | tr ' ' '\n' | head -1)
+    [ -z "$pid" ] && return 0
+    [ -r "/proc/$pid/cmdline" ] || return 0
+    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | awk '
+    {
+        n = split($0, toks, " ")
+        ck = ""                                  # current circular key
+        for (i = 1; i <= n; i++) {
+            t = toks[i]
+            if (t ~ /^--lua-desync=circular:/) {
+                if (match(t, /key=[a-z0-9_]+/)) ck = substr(t, RSTART+4, RLENGTH-4); else ck = ""
+            } else if (t == "--new") {
+                ck = ""
+            }
+            if (ck != "" && match(t, /:strategy=[0-9]+/)) {
+                s = substr(t, RSTART+10, RLENGTH-10)
+                kk = ck SUBSEP s
+                if (!(kk in seen)) { seen[kk] = 1; cnt[ck]++ }
+            }
+        }
+        for (k in cnt) print k "\t" cnt[k]
+    }'
 }
 
 # --- geosite (Phase 3) ---

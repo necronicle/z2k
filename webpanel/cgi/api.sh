@@ -437,15 +437,32 @@ case "$method $path" in
         json_header
         printf '{"ok":true,"entries":['
         first=1
-        state_read | while IFS="$(printf '\t')" read -r skey shost sstrategy sts; do
+        state_read | while IFS="$(printf '\t')" read -r skey shost sstrategy sts smode; do
             [ -z "$skey" ] && continue
             if [ "$first" = "1" ]; then first=0; else printf ','; fi
             printf '{"key":'; json_string "$skey"
             printf ',"host":'; json_string "$shost"
             printf ',"strategy":'; json_string "${sstrategy:-0}"
-            printf ',"ts":%s}' "${sts:-0}"
+            printf ',"ts":%s' "${sts:-0}"
+            printf ',"mode":'; json_string "${smode:-auto}"
+            printf '}'
         done
         printf ']}\n'
+        exit 0
+        ;;
+
+    # Pool sizes (distinct strategies per category key) from the live nfqws2
+    # cmdline — drives the per-row strategy dropdown and the Discord-voice panel.
+    "GET /pools")
+        json_header
+        printf '{"ok":true,"pools":{'
+        first=1
+        pools_read | while IFS="$(printf '\t')" read -r pkey pcount; do
+            [ -z "$pkey" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            json_string "$pkey"; printf ':%s' "${pcount:-0}"
+        done
+        printf '}}\n'
         exit 0
         ;;
 
@@ -455,6 +472,22 @@ case "$method $path" in
         s_host=$(form_value "$body" "host")
         [ -z "$s_key" ] || [ -z "$s_host" ] && json_fail "400 Bad Request" "key and host required"
         state_delete "$s_key" "$s_host" || json_fail "400 Bad Request" "delete failed"
+        json_ok
+        ;;
+
+    # Pin / manually select a rotator row's strategy. mode=auto adopts it live and
+    # keeps rotating; mode=frozen adopts it AND stops the rotator from changing it.
+    "POST /state/set")
+        body=$(read_body)
+        s_key=$(form_value "$body" "key")
+        s_host=$(form_value "$body" "host")
+        s_strategy=$(form_value "$body" "strategy")
+        s_mode=$(form_value "$body" "mode")
+        [ -z "$s_mode" ] && s_mode="auto"
+        { [ -z "$s_key" ] || [ -z "$s_host" ] || [ -z "$s_strategy" ]; } && \
+            json_fail "400 Bad Request" "key, host, strategy required"
+        state_set "$s_key" "$s_host" "$s_strategy" "$s_mode" || \
+            json_fail "400 Bad Request" "set failed"
         json_ok
         ;;
 
