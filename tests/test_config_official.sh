@@ -1258,6 +1258,13 @@ assert_contains     "docalign: discord voice #1 = dbankcloud repeats=6" \
 assert_not_contains "docalign: discord voice #1 dropped stun blob" \
                     "blob=stun:repeats=3:strategy=1"            "$DISCORD_ARM_DOC"
 
+# yt_quic udp_in 1->8: QUIC blocked-but-responding rotation fix (2026-06-08).
+# At udp_in=1 the native success_detector latched the 2-3 leaked handshake packets
+# as success → stuck; udp_in=8 lets failure (pos_out>=4) drive rotation.
+YT_QUIC_DOC=$(printf '%s\n' "$OUT_DOC" | grep -F 'key=yt_quic' | head -1)
+assert_contains     "docalign: yt_quic udp_in=8"          "udp_in=8:udp_out=4:key=yt_quic" "$YT_QUIC_DOC"
+assert_not_contains "docalign: yt_quic no stale udp_in=1" "udp_in=1:udp_out=4:key=yt_quic" "$YT_QUIC_DOC"
+
 rm -rf "$MOCK_DIR"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
