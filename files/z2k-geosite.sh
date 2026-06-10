@@ -233,7 +233,21 @@ apply_new_list() {
     # Sanity: reject absurdly small new files that would be a regression.
     # Threshold is 80% of the previous size (if any). Protects against
     # upstream publishing a broken truncated asset.
-    if [ -s "$target" ]; then
+    #
+    # BUT: the shrink guard must compare against the EXPECTED asset, not the
+    # absolute previous size. pick_rkn_asset deliberately switches between the
+    # big ru-blocked-all.txt (~30 MB) and the small ru-blocked.txt (~1.7 MB) by
+    # RAM threshold, both writing this same target. A router that drops below the
+    # threshold (or a user lowering Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB) must be able
+    # to DOWNGRADE big→small — but the small list is ~5% of the big one, so the
+    # absolute-size guard would reject it forever and the safety path is dead.
+    # So: record which asset produced the current target, and only enforce the
+    # 80% guard when the incoming asset is the SAME class as what's on disk. An
+    # intentional class change bypasses the guard.
+    local asset_marker="${target}.asset"
+    local prev_asset=""
+    [ -f "$asset_marker" ] && prev_asset=$(cat "$asset_marker" 2>/dev/null)
+    if [ -s "$target" ] && { [ -z "$prev_asset" ] || [ "$prev_asset" = "$asset" ]; }; then
         local oldsz newsz
         oldsz=$(wc -c < "$target" 2>/dev/null || echo 0)
         newsz=$(wc -c < "$newf" 2>/dev/null || echo 0)
@@ -247,6 +261,8 @@ apply_new_list() {
             log "  $asset: new file ${newsz}B < 80% of existing ${oldsz}B — refusing apply"
             return 1
         fi
+    elif [ -s "$target" ] && [ "$prev_asset" != "$asset" ]; then
+        log "  $asset: asset class change ($prev_asset → $asset) — bypassing shrink guard"
     fi
 
     # Normalize + dedupe. Runetfreedom assets use v2fly domain-list
@@ -292,6 +308,11 @@ apply_new_list() {
     local target_tmp="${target}.probe"
     cp "$final" "$target_tmp" && mv "$target_tmp" "$target" \
         || { log "  $asset: failed to write $target"; return 1; }
+
+    # Record which asset produced this target so the shrink guard above can
+    # tell an intentional big↔small class switch (bypass guard) from a genuine
+    # upstream truncation regression (enforce guard).
+    printf '%s\n' "$asset" > "$asset_marker" 2>/dev/null || true
 
     local lines
     lines=$(wc -l < "$target" 2>/dev/null || echo 0)

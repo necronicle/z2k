@@ -73,6 +73,7 @@ json_string() {
     printf '"'
 }
 
+# shellcheck disable=SC2120  # optional arg: most callers pass none, some pass a JSON tail
 json_ok() {
     json_header
     printf '{"ok":true'
@@ -281,6 +282,19 @@ case "$method $path" in
             0|1) ;;
             *) json_fail "400 Bad Request" "exclude must be 0 or 1" ;;
         esac
+        # SECURITY: name is interpolated into the command string that
+        # svc_action_async runs through `eval` — so it MUST be validated HERE,
+        # before eval parses it. policy_save() validates name too, but that
+        # check runs too late: eval has already executed any $(...)/;/`` the
+        # raw value carried. Mirror policy_save's charset exactly
+        # ([A-Za-z0-9_-], ≤32, empty = disable filter) so nothing that reaches
+        # eval can contain a shell metacharacter.
+        case "$name" in
+            *[!A-Za-z0-9_-]*) json_fail "400 Bad Request" "invalid policy name" ;;
+        esac
+        if [ "${#name}" -gt 32 ]; then
+            json_fail "400 Bad Request" "policy name too long"
+        fi
         # Async job для visibility (есть restart сервиса под капотом).
         job_id=$(svc_action_async "Применение политики доступа" "policy_save \"${name}\" ${exclude}")
         json_header

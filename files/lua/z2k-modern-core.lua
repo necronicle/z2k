@@ -650,7 +650,8 @@ function z2k_quic_morph_v2(ctx, desync)
     local noise = z2k_clamp(arg.noise, 0, 3, 1)
     local pad_min = z2k_clamp(arg.pad_min, 0, 512, 8)
     local pad_max = z2k_clamp(arg.pad_max, 0, 1024, 64)
-    local live_chance = z2k_clamp(arg.live_chance, 0, 100, 0)
+    -- arg.live_chance intentionally NOT honoured anymore — see the out_dis note
+    -- below: morphing the live packet corrupts the QUIC Initial AEAD tag.
     local rs = z2k_rawsend_ctx(desync, 1)
     local base_payload = desync.dis.payload or ""
 
@@ -663,10 +664,14 @@ function z2k_quic_morph_v2(ctx, desync)
         end
     end
 
+    -- Never morph the LIVE outgoing packet. z2k_quic_morph_payload randomizes
+    -- version / DCID / SCID / token bytes — all of which are part of the QUIC
+    -- Initial AEAD associated-data / encrypted region (RFC 9001). Mutating them
+    -- on the REAL packet invalidates the integrity tag and the server drops the
+    -- user's actual handshake, so the old opt-in `live_chance` could only ever
+    -- hurt, never help. Morphing is applied to the badsum FAKES above (which are
+    -- dropped before reaching the server) — that is the only correct place.
     local out_dis = deepcopy(desync.dis)
-    if live_chance > 0 and math.random(100) <= live_chance then
-        out_dis.payload = z2k_quic_morph_payload(out_dis.payload, arg)
-    end
     local ipfrag = nil
     if profile == 1 then
         ipfrag = {
@@ -690,6 +695,12 @@ function z2k_quic_morph_v2(ctx, desync)
         }
     else
         ipfrag = {
+            -- ipfrag="" selects the engine's default 2-fragment splitter
+            -- (rawsend_dissect_ipfrag gates on options.ipfrag.ipfrag being
+            -- set: zapret-lib.lua:1197). Without this key the whole fragment
+            -- block was skipped and profile 3 sent the real QUIC Initial
+            -- UNFRAGMENTED — a silent no-op desync for ~1/3 of QUIC flows.
+            ipfrag = "",
             ipfrag_pos_udp = z2k_align8(z2k_clamp(arg.ipfrag_pos_udp, 8, 1024, 16)),
             ipfrag_disorder = true,
             ipfrag_next = tonumber(arg.ipfrag_next) or 255

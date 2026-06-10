@@ -8,7 +8,11 @@ set -u
 ZAPRET_BASE="${ZAPRET_BASE:-/opt/zapret2}"
 ZAPRET_CONFIG="${ZAPRET_CONFIG:-$ZAPRET_BASE/config}"
 CACHE_DIR="${ZAPRET_BASE}/extra_strats/cache/blocked_monitor"
-PID_FILE="${CACHE_DIR}/monitor.pid"
+# PID file lives in /tmp (tmpfs), NOT under $CACHE_DIR on flash: a flash pidfile
+# survives reboot, and after a reboot the kernel reuses PIDs, so a stale pid
+# that happens to be re-allocated to an unrelated process makes running_pid
+# report a false "already running". /tmp is wiped on reboot → no stale pid.
+PID_FILE="/tmp/z2k-blocked-monitor.pid"
 AWK_FILE="${CACHE_DIR}/monitor.awk"
 ERR_LOG="${CACHE_DIR}/tcpdump.err.log"
 PARSER_ERR_LOG="${CACHE_DIR}/parser.err.log"
@@ -439,9 +443,28 @@ running_pid() {
 	local pid
 	pid="$(cat "$PID_FILE" 2>/dev/null)"
 	[ -n "$pid" ] || return 1
+	case "$pid" in ''|*[!0-9]*) return 1 ;; esac
 	kill -0 "$pid" 2>/dev/null || return 1
-	echo "$pid"
-	return 0
+	# Validate it is actually OUR capture pipeline, not a reused PID. `kill -0`
+	# alone is not enough: even with the /tmp pidfile, a crash that leaves a
+	# stale pidfile could collide with a recycled PID. The leader either runs
+	# our `setsid sh -c '...tcpdump...'` (cmdline carries "tcpdump") or is the
+	# plain subshell whose tcpdump CHILD is alive (matched via pgrep -P). If
+	# neither holds, treat as not-running.
+	if [ -r "/proc/$pid/cmdline" ] && \
+	   tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "tcpdump"; then
+		echo "$pid"
+		return 0
+	fi
+	local cpid
+	for cpid in $(pgrep -P "$pid" 2>/dev/null); do
+		[ -r "/proc/$cpid/cmdline" ] || continue
+		if tr '\0' ' ' < "/proc/$cpid/cmdline" 2>/dev/null | grep -q "tcpdump"; then
+			echo "$pid"
+			return 0
+		fi
+	done
+	return 1
 }
 
 start_monitor() {
@@ -484,21 +507,58 @@ start_monitor() {
 	echo "# iface: $iface" >> "$ALL_TSV"
 	echo "# filter: $filter" >> "$ALL_TSV"
 
-	( "$tcpdump_bin" -i "$iface" -nn -l -tt "$filter" 2>>"$ERR_LOG" | \
-		awk \
-			-v all_out="$ALL_TSV" \
-			-v tcp_out="$TCP_TSV" \
-			-v udp_out="$UDP_TSV" \
-			-v ipmap_out="$IPMAP_TSV" \
-			-v tcp_ports="$tcp_ports" \
-			-v udp_ports="$udp_ports" \
-			-v tcp_timeout="8" \
-			-v tcp_min_syn="3" \
-			-v udp_timeout="10" \
-			-v udp_min_out="4" \
-			-v udp_max_in="1" \
-			-v dedupe_sec="60" \
-			-f "$AWK_FILE" 2>>"$PARSER_ERR_LOG" ) &
+	# Launch the capture pipeline in its OWN process group via setsid so
+	# stop_monitor's `kill -- -$pid` (process-group signal) actually reaches
+	# the orphan tcpdump. In non-interactive ash there is no job control, so a
+	# bare `( ... ) &` subshell is NOT a group leader — the negative-PID kill
+	# would hit the SCRIPT's group (or nothing) and leave tcpdump capturing
+	# forever. setsid makes the subshell a session+group leader whose PID == PGID.
+	local setsid_bin=""
+	if exists_cmd setsid; then
+		setsid_bin="$(command -v setsid)"
+	elif [ -x /opt/bin/setsid ]; then
+		setsid_bin="/opt/bin/setsid"
+	fi
+
+	if [ -n "$setsid_bin" ]; then
+		"$setsid_bin" sh -c '"$1" -i "$2" -nn -l -tt "$3" 2>>"$4" | \
+			awk \
+				-v all_out="$5" \
+				-v tcp_out="$6" \
+				-v udp_out="$7" \
+				-v ipmap_out="$8" \
+				-v tcp_ports="$9" \
+				-v udp_ports="${10}" \
+				-v tcp_timeout="8" \
+				-v tcp_min_syn="3" \
+				-v udp_timeout="10" \
+				-v udp_min_out="4" \
+				-v udp_max_in="1" \
+				-v dedupe_sec="60" \
+				-f "${11}" 2>>"${12}"' _ \
+			"$tcpdump_bin" "$iface" "$filter" "$ERR_LOG" \
+			"$ALL_TSV" "$TCP_TSV" "$UDP_TSV" "$IPMAP_TSV" \
+			"$tcp_ports" "$udp_ports" "$AWK_FILE" "$PARSER_ERR_LOG" &
+	else
+		# No setsid — fall back to the plain subshell. stop_monitor also
+		# tracks and pkills the tcpdump child directly, so the orphan is
+		# still reaped even without a leadable process group.
+		( "$tcpdump_bin" -i "$iface" -nn -l -tt "$filter" 2>>"$ERR_LOG" | \
+			awk \
+				-v all_out="$ALL_TSV" \
+				-v tcp_out="$TCP_TSV" \
+				-v udp_out="$UDP_TSV" \
+				-v ipmap_out="$IPMAP_TSV" \
+				-v tcp_ports="$tcp_ports" \
+				-v udp_ports="$udp_ports" \
+				-v tcp_timeout="8" \
+				-v tcp_min_syn="3" \
+				-v udp_timeout="10" \
+				-v udp_min_out="4" \
+				-v udp_max_in="1" \
+				-v dedupe_sec="60" \
+				-f "$AWK_FILE" 2>>"$PARSER_ERR_LOG" ) &
+	fi
 
 	echo "$!" > "$PID_FILE"
 	chmod 644 "$PID_FILE" 2>/dev/null || true
@@ -524,9 +584,23 @@ stop_monitor() {
 		return 0
 	fi
 
-	kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+	# 1) Signal the whole process group (works when start used setsid →
+	#    $pid is the group leader, so this reaches tcpdump + awk).
+	kill -- -"$pid" 2>/dev/null || true
+	# 2) Always also reap the tcpdump child of our subshell directly. On the
+	#    no-setsid fallback the subshell is NOT a group leader, so the
+	#    negative-PID kill above is a no-op and the orphan tcpdump would keep
+	#    capturing — pkill -P targets the children of our pipeline by PPID.
+	pkill -P "$pid" 2>/dev/null || true
+	# 3) Finally the subshell/leader itself.
+	kill "$pid" 2>/dev/null || true
+
 	sleep 1
-	kill -0 "$pid" 2>/dev/null && { kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true; }
+	if kill -0 "$pid" 2>/dev/null; then
+		kill -9 -- -"$pid" 2>/dev/null || true
+		pkill -9 -P "$pid" 2>/dev/null || true
+		kill -9 "$pid" 2>/dev/null || true
+	fi
 	rm -f "$PID_FILE" 2>/dev/null || true
 	echo "blocked monitor stopped"
 }

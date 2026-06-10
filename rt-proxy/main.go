@@ -48,6 +48,7 @@ func main() {
 	if *seedIPs != "" {
 		for _, ip := range strings.Split(*seedIPs, ",") {
 			if ip = strings.TrimSpace(ip); ip != "" {
+				p.seed = append(p.seed, ip)
 				p.all = append(p.all, ip)
 			}
 		}
@@ -75,7 +76,8 @@ func main() {
 // ---------------------------------------------------------------------------
 type pool struct {
 	mu   sync.RWMutex
-	all  []string // every known upstream IP (seed + resolved)
+	seed []string // immutable seed IPs from --ips; always kept as candidates
+	all  []string // current candidate set = seed ∪ latest-resolved ∪ currently-live
 	live []string // IPs that passed the latest CONNECT probe
 	rr   uint64   // round-robin cursor
 }
@@ -116,25 +118,41 @@ func (p *pool) refreshLoop() {
 // extension does — by resolving the proxy hostname (ps1.blockme.site), NOT from
 // any hardcoded address. The operator rotates the pool via DNS; we just follow
 // it. Only real IPs are kept (the RU resolver occasionally returns poisoned
-// junk hostnames). Dead IPs are filtered out later by probeAll's health check.
+// junk hostnames).
+//
+// The candidate set is REBUILT here, not just appended to: all = seed ∪
+// latest-resolved ∪ currently-live. Append-only growth meant every IP the
+// hostname ever returned stayed in p.all forever, so over a long uptime
+// probeAll fanned out a TLS dial to an ever-growing pile of long-dead IPs every
+// health interval. Rebuilding drops IPs that have both fallen out of DNS and
+// failed the latest probe, while still retaining a temporarily-unresolved IP
+// that is currently live (DNS blip) and the immutable --ips seed.
 func (p *pool) resolve() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	resolved, _ := net.DefaultResolver.LookupHost(ctx, *proxyHost)
 	cancel()
 	if len(resolved) == 0 {
-		return
+		return // keep the existing candidate set on a failed/empty resolve
 	}
 	p.mu.Lock()
 	seen := map[string]bool{}
-	for _, ip := range p.all {
-		seen[ip] = true
-	}
-	for _, ip := range resolved {
-		if net.ParseIP(ip) != nil && !seen[ip] {
-			p.all = append(p.all, ip)
+	next := make([]string, 0, len(p.seed)+len(resolved)+len(p.live))
+	add := func(ip string) {
+		if ip != "" && net.ParseIP(ip) != nil && !seen[ip] {
 			seen[ip] = true
+			next = append(next, ip)
 		}
 	}
+	for _, ip := range p.seed {
+		add(ip)
+	}
+	for _, ip := range resolved {
+		add(ip)
+	}
+	for _, ip := range p.live { // retain currently-live IPs through a DNS blip
+		add(ip)
+	}
+	p.all = next
 	p.mu.Unlock()
 }
 

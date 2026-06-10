@@ -584,7 +584,15 @@ main() {
     elif [ "$_extract_rc" -eq 1 ]; then
         report_fail "NFQWS2_OPT: незакрытая кавычка (многострочный блок не завершён)"
     else
-        report_ok "NFQWS2_OPT успешно извлечён"
+        # NFQWS2_OPT="" (или только пробелы/переводы строк) парсится успешно, но
+        # означает, что nfqws2 запустится БЕЗ единой стратегии десинка — то есть
+        # обход не работает вообще. Это критическая ошибка конфига, не OK.
+        _opt_stripped=$(printf "%s" "$NFQWS2_OPT_TEXT" | tr -d ' \t\r\n')
+        if [ -z "$_opt_stripped" ]; then
+            report_fail "NFQWS2_OPT пуст — нет ни одной стратегии десинка (обход не работает)"
+        else
+            report_ok "NFQWS2_OPT успешно извлечён"
+        fi
     fi
 
     if [ -n "$NFQWS2_OPT_TEXT" ]; then

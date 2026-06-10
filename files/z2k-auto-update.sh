@@ -33,6 +33,16 @@ if [ ! -f "$BRANCH_FILE" ] || [ "$(cat "$BRANCH_FILE" 2>/dev/null)" != "z2k-enha
     exit 0
 fi
 
+# Source utils.sh FIRST so the layered z2k_fetch() (raw → jsdelivr → gh-proxy →
+# ndmc DNS-override) is in scope. auto_update.sh's fetch helpers fall back to a
+# bare `curl raw.githubusercontent.com` whenever `command -v z2k_fetch` is false
+# — which it always was on this cron path, because only auto_update.sh was
+# sourced. Result: the nightly auto-update had NO CDN/mirror fallback and went
+# silently dead whenever GitHub raw was blocked or DNS-poisoned (the exact
+# RU-ISP scenario the fallback exists for). The menu [U] path already gets it
+# via z2k.sh → utils.sh; this makes the unattended path match.
+. "${ZAPRET2_DIR}/lib/utils.sh"
+
 # Source the auto-update module (installed at /opt/zapret2/lib/auto_update.sh)
 . "${ZAPRET2_DIR}/lib/auto_update.sh"
 

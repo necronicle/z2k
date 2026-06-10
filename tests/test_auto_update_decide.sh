@@ -163,8 +163,10 @@ verdict=$(au_decide "p-7" "$AU_TMP/manifest.json" | head -1)
 check "au_decide: history-order picks r-6 even though num<installed" \
       "reinstall p-8 reset_state" "$verdict"
 
-# Case G: installed tag absent from history (drift / fresh install) —
-# everything in history flows into the diff window.
+# Case G: installed tag absent from append-only history = drift/corruption
+# (CRLF write, truncated tag file, garbage), NOT a legitimately-behind router.
+# Must NOT blind-reinstall the whole history — that fired a full reinstall
+# (+reset_state) every night for users whose tag drifted. Verdict = none.
 write_manifest <<'JSON'
 {
   "schema": 1,
@@ -177,8 +179,16 @@ write_manifest <<'JSON'
 }
 JSON
 verdict=$(au_decide "unknown-tag-999" "$AU_TMP/manifest.json" | head -1)
-check "au_decide: installed-tag-not-in-history → reinstall to current" \
-      "reinstall r-100" "$verdict"
+check "au_decide: installed-tag-not-in-history → none (no blind reinstall)" \
+      "none" "$verdict"
+
+# Case G2: empty / whitespace / CRLF-tainted tag → none (the exact
+# false-reinstall trigger users reported).
+verdict=$(au_decide "" "$AU_TMP/manifest.json" | head -1)
+check "au_decide: empty installed tag → none" "none" "$verdict"
+verdict=$(au_decide "$(printf 'r-100\r')" "$AU_TMP/manifest.json" | head -1)
+check "au_decide: CRLF-tainted current tag → none (trimmed, up to date)" \
+      "none" "$verdict"
 
 # ----- au_install_paths --------------------------------------------------
 

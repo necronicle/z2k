@@ -57,22 +57,28 @@ fi
 
 REF=$(git -C "$REPO_DIR" rev-parse --short HEAD)
 
-# Find the last *real* ref in the manifest (skip baseline marker)
+# Find the last *real* ref in the manifest (skip baseline marker and the
+# literal "HEAD" placeholder some manually-edited entries carry).
 LAST_REF=$(python3 -c "
 import json
 m = json.load(open('$MANIFEST'))
 last = ''
 for e in reversed(m['history']):
     r = e.get('ref', '')
-    if r and r != 'auto-update-baseline':
+    if r and r not in ('auto-update-baseline', 'HEAD'):
         last = r
         break
 print(last)
 ")
 
+# Validate the ref actually resolves to a commit in this repo — a stale or
+# bogus ref (e.g. a short sha from a rebased history) would make
+# `git diff REF..HEAD` error out or, worse, silently diff nothing.
 AUTO_FILES=""
-if [ -n "$LAST_REF" ]; then
+if [ -n "$LAST_REF" ] && git -C "$REPO_DIR" cat-file -e "${LAST_REF}^{commit}" 2>/dev/null; then
     AUTO_FILES=$(git -C "$REPO_DIR" diff --name-only "${LAST_REF}..HEAD" 2>/dev/null || true)
+elif [ -n "$LAST_REF" ]; then
+    echo "WARN: last manifest ref '$LAST_REF' not found in repo — pass changed files explicitly" >&2
 fi
 
 # Combine with extra files; dedupe
@@ -84,8 +90,16 @@ import json, datetime, sys, os
 manifest_path = "$MANIFEST"
 m = json.load(open(manifest_path))
 
+import re
 last_v = m['history'][-1]['v']
-prefix_old, num_str = last_v.split('-')
+# Version is "<letter>-<int>" with an optional ".<hotfix>" suffix (e.g. r-54.1,
+# a manually-added dotted hotfix). Parse the integer core robustly so a dotted
+# last version does not crash int(); a new release bumps the whole number
+# (r-54 / r-54.1 -> r-55), hotfix dots are never auto-generated.
+mver = re.match(r'^([a-z])-(\d+)', last_v)
+if not mver:
+    sys.exit(f"ERROR: cannot parse last version {last_v!r} (expected <letter>-<int>)")
+prefix_old, num_str = mver.group(1), mver.group(2)
 n = int(num_str) + 1
 prefix = 'r' if "$TYPE" == 'reinstall' else 'p'
 new_v = f"{prefix}-{n}"

@@ -46,6 +46,14 @@ func (s *DnsmasqSource) Start(ctx context.Context) (<-chan Event, <-chan error) 
 				if !parsed || ev.Action != dnsmasq.Query {
 					continue
 				}
+				// dnsmasq logs query[A]/query[AAAA]/query[HTTPS] — for probe
+				// purposes only A matters; AAAA/HTTPS/SVCB are duplicates of
+				// the same client intent that would trigger the identical
+				// probe path. Filter at source, matching agh.go and pkt.go.
+				// Empty RecordType is tolerated (older dnsmasq formats).
+				if ev.RecordType != "" && ev.RecordType != "A" {
+					continue
+				}
 				domain := strings.TrimRight(strings.ToLower(strings.TrimSpace(ev.Domain)), ".")
 				if domain == "" {
 					continue

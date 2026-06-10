@@ -39,7 +39,6 @@ type Result struct {
 	LatencyMS     int
 }
 
-
 const (
 	DefaultTimeout = 1500 * time.Millisecond
 	MaxIPsToTry    = 3
@@ -173,7 +172,7 @@ func probeTCPTLS(ctx context.Context, r Result, started time.Time, timeout time.
 		conn.Close()
 		liftTLS13Verdict(&r)
 	}
-	runH2MultiplexProbe(&r, []string{reachable}, r.Domain, timeout)
+	runH2MultiplexProbe(ctx, &r, []string{reachable}, r.Domain, timeout)
 	r.LatencyMS = int(time.Since(started) / time.Millisecond)
 	return r
 }
@@ -350,6 +349,15 @@ func probeHTTPStaged(r *Result, conn *tls.Conn, timeout time.Duration) {
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
+		// A read TIMEOUT here is inconclusive, not a block: a slow uplink or
+		// a server that's slow to start the response trips the per-stage
+		// deadline without any DPI interference. Leave HTTPOK unset (nil) so
+		// decision.Classify falls back to the TCP+TLS verdict (reachable →
+		// Ignore) instead of auto-appending a benign host to the bypass list.
+		if isReadTimeout(err) {
+			markHTTPInconclusive(r, stageHTTP, err)
+			return
+		}
 		// Headers never completed — DPI most often cuts here, before the
 		// server even gets a chance to respond. Categorize as cutoff.
 		setHTTPFail(r, stageHTTP, err)
@@ -377,12 +385,45 @@ func probeHTTPStaged(r *Result, conn *tls.Conn, timeout time.Duration) {
 	_, copyErr := io.Copy(io.Discard, io.LimitReader(resp.Body, httpReadLimit))
 	resp.Body.Close()
 	if copyErr != nil && !errors.Is(copyErr, io.EOF) {
+		// Slow-but-working path: a large response over a slow uplink can
+		// outrun the per-stage deadline mid-body. That's a transport
+		// timeout, not a DPI cutoff — don't classify it as a block.
+		if isReadTimeout(copyErr) {
+			markHTTPInconclusive(r, stageHTTP, copyErr)
+			return
+		}
 		setHTTPFail(r, stageHTTP, copyErr)
 		return
 	}
 
 	t := true
 	r.HTTPOK = &t
+}
+
+// isReadTimeout reports whether err is a transport/read deadline timeout
+// (a net.Error with Timeout()==true, including context.DeadlineExceeded
+// wrapped through the chain). These are inconclusive — a slow uplink or a
+// slow server tripping the per-stage deadline says nothing about whether a
+// middlebox is interfering, so they must NOT be classified as a block.
+func isReadTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var nerr net.Error
+	return errors.As(err, &nerr) && nerr.Timeout()
+}
+
+// markHTTPInconclusive records the failure code/reason for observability but
+// leaves HTTPOK unset (nil), so decision.Classify falls back to the TCP+TLS
+// verdict rather than treating an inconclusive transport timeout as a block.
+func markHTTPInconclusive(r *Result, stage string, err error) {
+	code := categorize(stage, err)
+	r.FailureCode = code
+	r.FailureReason = formatReason(code, err)
+	// HTTPOK deliberately left nil.
 }
 
 func setHTTPFail(r *Result, stage string, err error) {

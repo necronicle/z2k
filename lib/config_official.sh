@@ -130,7 +130,7 @@ AUSTERUS_OPT
     # вместо per-IP фрагментации стокового host_ip fallback'а (иначе Discord
     # voice холодно стартует на каждом новом DC-IP). Нативная замена archived
     # allow_nohost (z2k-autocircular) — алгоритм ротации остаётся circular().
-    discord_udp="--filter-udp=50000-50099,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --in-range=-d100 --out-range=-d100 --payload=quic_initial,discord_ip_discovery --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=1 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=3:strategy=2 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=3 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=4:strategy=5 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=5:strategy=6"
+    discord_udp="--filter-udp=50000-50100,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --in-range=-d100 --out-range=-d100 --payload=quic_initial,discord_ip_discovery --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=1 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=3:strategy=2 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=3 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=4:strategy=5 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=5:strategy=6"
 
     # Дефолтная стратегия если не загружена
     local default_strategy="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=6"
@@ -232,6 +232,7 @@ AUSTERUS_OPT
         local rest=""
         local old_ifs="$IFS"
 
+        set -f  # no glob: $input/$opts tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --lua-desync=circular:*)
@@ -254,6 +255,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
 
         IFS="$old_ifs"
         printf '%s' "$out"
@@ -297,6 +299,7 @@ AUSTERUS_OPT
         local rest=""
         local old_ifs="$IFS"
 
+        set -f  # no glob: $input/$opts tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --lua-desync=circular:*)
@@ -319,6 +322,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
         IFS="$old_ifs"
         printf '%s' "$out"
     }
@@ -448,6 +452,7 @@ AUSTERUS_OPT
         local arg_value="$3"  # may be empty for flag-style args
         local out=""
         local token=""
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --lua-desync=circular:*)
@@ -470,6 +475,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
         printf '%s' "$out"
     }
 
@@ -560,6 +566,7 @@ AUSTERUS_OPT
         local token=""
         local out=""
         local skip=""
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --lua-desync=fake:*|\
@@ -578,6 +585,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
         printf '%s' "$out"
     }
 
@@ -624,6 +632,7 @@ AUSTERUS_OPT
         if [ "$with_padencap" = "1" ]; then
             extra="${extra},padencap"
         fi
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 *:tls_mod=*)
@@ -655,6 +664,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
         printf '%s' "$out"
     }
 
@@ -808,6 +818,7 @@ AUSTERUS_OPT
         local input="$1"
         local token=""
         local out=""
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --lua-desync=fake:*|\
@@ -865,6 +876,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
         printf '%s' "$out"
     }
 
@@ -893,6 +905,7 @@ AUSTERUS_OPT
         local input="$1"
         local token=""
         local out=""
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --lua-desync=*)
@@ -917,6 +930,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
         printf '%s' "$out"
     }
 
@@ -991,6 +1005,7 @@ AUSTERUS_OPT
         local input="$1"
         local token=""
         local out=""
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --lua-desync=fake:*|\
@@ -1022,6 +1037,7 @@ AUSTERUS_OPT
             esac
             out="${out:+$out }$token"
         done
+        set +f
         printf '%s' "$out"
     }
 
@@ -1061,6 +1077,7 @@ AUSTERUS_OPT
         local saved_payload=""
         local phase="before"
 
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
                 --filter-l7=tls) has_tls="1" ;;
@@ -1068,6 +1085,7 @@ AUSTERUS_OPT
                 --in-range=*) has_in_range="1" ;;
             esac
         done
+        set +f
 
         if [ "$has_tls" != "1" ] || [ "$has_circular" != "1" ]; then
             printf '%s' "$input"
@@ -1080,6 +1098,7 @@ AUSTERUS_OPT
             return 0
         }
 
+        set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$phase" in
                 before)
@@ -1101,6 +1120,7 @@ AUSTERUS_OPT
                     ;;
             esac
         done
+        set +f
 
         [ -z "$circular_token" ] && {
             printf '%s' "$input"
@@ -2046,7 +2066,11 @@ INIT_APPLY_FW=1
 
 # Flow offloading mode: none, software, hardware, donttouch
 # Set during installation based on system detection
-FLOWOFFLOAD=$flowoffload_value
+CONFIG
+    # FLOWOFFLOAD must carry the value computed above, not the literal text —
+    # the heredocs around it are single-quoted (literal), so emit it separately.
+    echo "FLOWOFFLOAD=$flowoffload_value" >> "$config_file"
+    cat >> "$config_file" <<'CONFIG'
 
 # WAN interface override (space/comma separated). Empty = auto-detect
 #WAN_IFACE=

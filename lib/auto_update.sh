@@ -135,6 +135,26 @@ au_history_entries_after() {
     ' "$manifest"
 }
 
+# au_tag_in_history MANIFEST_PATH TAG -> return 0 if TAG appears as a history
+# "v" entry, 1 otherwise. History is append-only and never pruned (see
+# UPDATES.json rollback policy), so any tag we ever wrote is guaranteed to be
+# present. A non-empty installed tag that is NOT found here therefore means
+# drift/corruption — never a legitimately-behind router — and must not trigger
+# the "emit entire history → reinstall" fallback in au_history_entries_after.
+au_tag_in_history() {
+    local manifest="$1"
+    local tag="$2"
+    awk -v want="$tag" '
+        /^[[:space:]]*\{[[:space:]]*"v"[[:space:]]*:[[:space:]]*"/ {
+            line = $0
+            sub(/.*"v"[[:space:]]*:[[:space:]]*"/, "", line)
+            sub(/".*/, "", line)
+            if (line == want) { found = 1; exit }
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$manifest"
+}
+
 # au_entry_field ENTRY_JSON FIELD -> echoes string value or empty
 au_entry_field() {
     echo "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
@@ -179,10 +199,35 @@ au_decide() {
     local installed_tag="$1"
     local manifest="$2"
 
+    # Normalize: strip ALL whitespace / CR. A tag stored as "r-54.1\r" (CRLF
+    # write) or " r-54.1 " would fail the exact `v == inst` match downstream
+    # and fall into au_history_entries_after's "not found → emit ALL history"
+    # path → a full reinstall (+reset_state, since the window then spans
+    # entries that carry it) fires EVERY night even though nothing changed.
+    installed_tag=$(printf '%s' "$installed_tag" | tr -d '[:space:]')
+
     local current
     current=$(au_manifest_current "$manifest")
     if [ -z "$current" ]; then
         au_log "manifest has no current field"
+        echo "none"
+        return 0
+    fi
+
+    # Empty tag is NOT a fresh install — fresh installs have no tag file and
+    # are handled by au_run_apply's first-run branch (mark current, no apply).
+    # An empty tag reaching here means a truncated/corrupt .z2k-installed-tag;
+    # refuse to interpret it as "behind by the entire history".
+    if [ -z "$installed_tag" ]; then
+        au_log "installed tag empty/corrupt — no update (refusing blind reinstall)"
+        echo "none"
+        return 0
+    fi
+
+    # Non-empty tag absent from append-only history = drift/corruption, never
+    # a legitimately-behind router. Skip rather than blind-reinstall to current.
+    if ! au_tag_in_history "$manifest" "$installed_tag"; then
+        au_log "installed tag '$installed_tag' not in history — no update (refusing blind reinstall)"
         echo "none"
         return 0
     fi
@@ -534,18 +579,35 @@ EOF
         while IFS= read -r target; do
             [ -z "$target" ] && continue
             mkdir -p "$(dirname "$target")"
-            cp -f "$stage" "$target"
-            # Restore the executable bit. `cp -f` does NOT reliably preserve it
-            # across BusyBox builds (the downloaded stage file is 0644), and p-42
-            # was the first patch to ship a DIRECTLY-EXECUTED file (S99zapret2);
-            # on routers where cp dropped +x the init script became 0644 →
-            # "/opt/etc/init.d/S99zapret2: Permission denied" (rc 126) on restart
-            # and a non-bootable service. chmod the known-executable targets.
-            case "$target" in
-                */init.d/*|*.sh)
-                    chmod +x "$target" 2>/dev/null || true ;;
-            esac
-            au_log "patch: installed $repo_path -> $target"
+            # Atomic install: write to a temp in the SAME directory, set perms,
+            # then rename over the target. A bare `cp -f` truncates+rewrites the
+            # target in place (same inode); an interruption mid-copy (power loss,
+            # OOM kill — both common on these boxes) leaves a half-written file —
+            # catastrophic for a directly-executed init script or a lib being
+            # sourced during this very update. rename() is atomic and leaves any
+            # running process's old inode intact until it exits.
+            #
+            # Restore the executable bit BEFORE the rename. `cp` does NOT reliably
+            # preserve it across BusyBox builds (the downloaded stage is 0644);
+            # p-42 first shipped a DIRECTLY-EXECUTED file (S99zapret2) and on
+            # routers where cp dropped +x the init script became 0644 →
+            # "Permission denied" (rc 126) on restart. chmod the known-exec targets.
+            _au_tmp="${target}.z2k-au.$$"
+            if cp -f "$stage" "$_au_tmp" 2>/dev/null; then
+                case "$target" in
+                    */init.d/*|*.sh)
+                        chmod +x "$_au_tmp" 2>/dev/null || true ;;
+                esac
+                if mv -f "$_au_tmp" "$target" 2>/dev/null; then
+                    au_log "patch: installed $repo_path -> $target"
+                else
+                    rm -f "$_au_tmp" 2>/dev/null
+                    au_log "patch: FAILED to install $repo_path -> $target (rename)"
+                fi
+            else
+                rm -f "$_au_tmp" 2>/dev/null
+                au_log "patch: FAILED to stage $repo_path -> $target (copy)"
+            fi
         done <<EOF_TARGETS
 $targets
 EOF_TARGETS
@@ -689,6 +751,22 @@ au_health_check() {
         return 1
     fi
 
+    # A patch can ship a shell script with a SYNTAX error that does not stop the
+    # already-running nfqws2 (so the pgrep above still passes) yet bricks the next
+    # boot, the menu, or the webpanel. Parse-check the critical installed scripts
+    # — the init script, every sourced lib, and the root-running CGI. A parse
+    # error here means the patch is broken and must roll back. These are all
+    # POSIX-sh on the router, so `sh -n` is the right check.
+    local _zd="${ZAPRET2_DIR:-/opt/zapret2}" _bad=""
+    for _s in /opt/etc/init.d/S99zapret2 "$_zd"/lib/*.sh "$_zd"/webpanel/cgi/*.sh; do
+        [ -f "$_s" ] || continue
+        sh -n "$_s" 2>/dev/null || _bad="$_bad $_s"
+    done
+    if [ -n "$_bad" ]; then
+        au_log "health-check FAILED: syntax error in installed script(s):$_bad"
+        return 1
+    fi
+
     if ! curl -fsS --max-time 10 -o /dev/null "$Z2K_AU_HEALTH_GH_URL"; then
         au_log "health-check FAILED: github unreachable"
         return 1
@@ -710,7 +788,18 @@ au_rollback_patch() {
     find . -type f | while read -r f; do
         local target="${f#./}"
         target="/$target"
-        cp -f "$f" "$target" 2>/dev/null || true
+        # Atomic restore (same rationale as au_apply_patch): temp + rename so a
+        # crash mid-rollback can't leave a half-written init script. Preserve the
+        # exec bit on scripts before the rename.
+        _au_rb="${target}.z2k-rb.$$"
+        if cp -f "$f" "$_au_rb" 2>/dev/null; then
+            case "$target" in
+                */init.d/*|*.sh) chmod +x "$_au_rb" 2>/dev/null || true ;;
+            esac
+            mv -f "$_au_rb" "$target" 2>/dev/null || rm -f "$_au_rb" 2>/dev/null
+        else
+            rm -f "$_au_rb" 2>/dev/null
+        fi
     done
     if [ -x /opt/etc/init.d/S99zapret2 ]; then
         /opt/etc/init.d/S99zapret2 restart >/dev/null 2>&1 || true
@@ -826,14 +915,21 @@ au_run_apply() {
     local installed
     if [ -f "$Z2K_AU_INSTALLED_TAG_FILE" ]; then
         installed=$(cat "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)
-    else
-        # Pre-versioning install. Don't apply anything; mark current as
-        # installed and let the next cycle work from there.
+        # Normalize for the empty-check below (au_decide trims again itself).
+        installed=$(printf '%s' "$installed" | tr -d '[:space:]')
+    fi
+    if [ -z "$installed" ]; then
+        # No tag file (pre-versioning / fresh install) OR an empty/truncated
+        # one (botched write, NDM wipe, disk-full). In BOTH cases applying
+        # nothing and resyncing the tag to current is correct: a router that
+        # has been running is at current, and treating an empty tag as
+        # "behind by the entire history" would blind-reinstall (+reset_state)
+        # every night — the exact false-reinstall users reported.
         local current
         current=$(au_manifest_current "$manifest")
         if [ -n "$current" ]; then
             echo "$current" > "$Z2K_AU_INSTALLED_TAG_FILE"
-            au_log "first run: marked installed=$current (no apply)"
+            au_log "tag missing/empty — resynced installed=$current (no apply)"
         fi
         au_lock_release
         return 0

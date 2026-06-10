@@ -22,7 +22,14 @@ export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 ZAPRET2_DIR="/opt/zapret2"
 PIDFILE="/var/run/z2k-scheduler.pid"
 LOG="/opt/var/log/z2k-scheduler.log"
+# Flash (persistent) state — daily-cadence keys only (fired ≤1×/day). Persisting
+# these across reboot is the point: it stops a same-day re-fire after a restart.
 STATE="${ZAPRET2_DIR}/.z2k-scheduler-state"
+# RAM state — minute-cadence epoch keys (tg-watchdog-epoch / ppe-deoffload-epoch).
+# These are rewritten ~2×/min; keeping them on flash burned ~2880 write+rename
+# per day (flash wear). They only gate "did we already fire this minute", which
+# is meaningless across a reboot, so /tmp (tmpfs) is the correct home.
+TMP_STATE="/tmp/.z2k-scheduler-state"
 
 # Don't double-launch.
 if [ -f "$PIDFILE" ]; then
@@ -53,21 +60,28 @@ rotate_log() {
     fi
 }
 
-last_fired_for_key() {
-    [ -f "$STATE" ] || return
-    awk -F= -v k="$1" '$1==k {print $2}' "$STATE" | tail -1
+# $1 state file, $2 key
+last_fired_in() {
+    local file="$1" key="$2"
+    [ -f "$file" ] || return
+    awk -F= -v k="$key" '$1==k {print $2}' "$file" | tail -1
 }
 
-mark_fired() {
-    local key="$1" today="$2"
-    if [ -f "$STATE" ]; then
-        awk -F= -v k="$key" '$1!=k' "$STATE" > "${STATE}.tmp"
+# $1 state file, $2 key, $3 value
+mark_fired_in() {
+    local file="$1" key="$2" val="$3"
+    if [ -f "$file" ]; then
+        awk -F= -v k="$key" '$1!=k' "$file" > "${file}.tmp"
     else
-        : > "${STATE}.tmp"
+        : > "${file}.tmp"
     fi
-    printf '%s=%s\n' "$key" "$today" >> "${STATE}.tmp"
-    mv "${STATE}.tmp" "$STATE"
+    printf '%s=%s\n' "$key" "$val" >> "${file}.tmp"
+    mv "${file}.tmp" "$file"
 }
+
+# Daily-cadence keys live on flash ($STATE) so a same-day reboot can't re-fire.
+last_fired_for_key() { last_fired_in "$STATE" "$1"; }
+mark_fired() { mark_fired_in "$STATE" "$1" "$2"; }
 
 # Run one task in background, with output captured into the scheduler log.
 run_task() {
@@ -123,10 +137,10 @@ while true; do
     # `* * * * *` cron entry. Tracked by unix timestamp so we fire it
     # ~1×/min even though our tick runs ~2×/min.
     if [ -x "${ZAPRET2_DIR}/tg-tunnel-watchdog.sh" ]; then
-        last_wd=$(last_fired_for_key tg-watchdog-epoch)
+        last_wd=$(last_fired_in "$TMP_STATE" tg-watchdog-epoch)
         case "$last_wd" in ''|*[!0-9]*) last_wd=0 ;; esac
         if [ "$((now_epoch - last_wd))" -ge 55 ]; then
-            mark_fired tg-watchdog-epoch "$now_epoch"
+            mark_fired_in "$TMP_STATE" tg-watchdog-epoch "$now_epoch"
             "${ZAPRET2_DIR}/tg-tunnel-watchdog.sh" >/dev/null 2>&1 &
         fi
     fi
@@ -138,10 +152,10 @@ while true; do
     # the scheduler ticks). No-ops cleanly where the firmware `-j PPE` target is
     # absent or the user disabled the layer.
     if [ -r "${ZAPRET2_DIR}/z2k-ppe-deoffload.sh" ]; then
-        last_ppe=$(last_fired_for_key ppe-deoffload-epoch)
+        last_ppe=$(last_fired_in "$TMP_STATE" ppe-deoffload-epoch)
         case "$last_ppe" in ''|*[!0-9]*) last_ppe=0 ;; esac
         if [ "$((now_epoch - last_ppe))" -ge 55 ]; then
-            mark_fired ppe-deoffload-epoch "$now_epoch"
+            mark_fired_in "$TMP_STATE" ppe-deoffload-epoch "$now_epoch"
             ( . "${ZAPRET2_DIR}/z2k-ppe-deoffload.sh"
               z2k_ppe_user_disabled || z2k_ppe_ensure_rules ) >/dev/null 2>&1 &
         fi

@@ -5,9 +5,11 @@
 # Keenetic Entware builds (see r-26 field notes).
 
 SCRIPT="/opt/zapret2/z2k-scheduler.sh"
-PIDFILE="/var/run/z2k-scheduler.pid"
+PIDFILE="/var/run/z2k-scheduler.pid"          # written by the scheduler itself
+SUP_PIDFILE="/var/run/z2k-scheduler-sup.pid"  # the respawn supervisor (this script)
 LOG="/opt/var/log/z2k-scheduler.log"
 
+# The scheduler process itself (it self-writes $PIDFILE on startup).
 is_alive() {
     [ -f "$PIDFILE" ] || return 1
     local pid
@@ -15,22 +17,42 @@ is_alive() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+# The respawn supervisor subshell.
+sup_alive() {
+    [ -f "$SUP_PIDFILE" ] || return 1
+    local pid
+    pid=$(cat "$SUP_PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
 start() {
-    if is_alive; then
-        echo "z2k-scheduler already running (pid $(cat "$PIDFILE"))"
+    if sup_alive; then
+        echo "z2k-scheduler supervisor already running (pid $(cat "$SUP_PIDFILE"))"
         return 0
     fi
     [ -x "$SCRIPT" ] || { echo "scheduler script missing or not executable: $SCRIPT" >&2; return 1; }
     mkdir -p "$(dirname "$LOG")" 2>/dev/null
-    # Detach into background. Explicitly redirect stdin from /dev/null
-    # so the scheduler (and every task it spawns) sees no controlling
-    # tty — z2k-auto-update.sh keys its anti-thundering-herd jitter on
-    # `[ ! -t 0 ]`, which would be false under an SSH-initiated restart
-    # without this redirect.
-    "$SCRIPT" </dev/null >/dev/null 2>&1 &
+
+    # Respawn supervisor. The scheduler is the SOLE driver of EVERY periodic z2k
+    # task (auto-update, stats upload, list/geosite refresh, get_config, plus the
+    # tg-tunnel watchdog and the PPE de-offload re-assert, both ~1/min). These
+    # boxes leak RAM and OOM-kill long-lived processes; the previous bare
+    # `"$SCRIPT" &` left ALL periodic work dead until the next reboot if the
+    # scheduler was killed. Relaunch it whenever it exits, with a short backoff so
+    # an instantly-failing script cannot spin. stdin from /dev/null keeps the
+    # anti-thundering-herd jitter gate ([ ! -t 0 ]) true under an SSH restart.
+    (
+        while true; do
+            "$SCRIPT" </dev/null >>"$LOG" 2>&1
+            _rc=$?
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [supervisor] scheduler exited (rc=$_rc) — respawning in 10s" >> "$LOG"
+            sleep 10
+        done
+    ) &
+    echo $! > "$SUP_PIDFILE"
     sleep 1
-    if is_alive; then
-        echo "z2k-scheduler started (pid $(cat "$PIDFILE"))"
+    if sup_alive && is_alive; then
+        echo "z2k-scheduler started (supervisor $(cat "$SUP_PIDFILE"), scheduler $(cat "$PIDFILE" 2>/dev/null))"
     else
         echo "z2k-scheduler failed to start" >&2
         return 1
@@ -38,11 +60,25 @@ start() {
 }
 
 stop() {
+    # Kill the supervisor FIRST so it stops respawning the scheduler.
+    if sup_alive; then
+        local spid
+        spid=$(cat "$SUP_PIDFILE")
+        kill "$spid" 2>/dev/null
+        for _ in 1 2 3; do
+            kill -0 "$spid" 2>/dev/null || break
+            sleep 1
+        done
+        kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null
+    fi
+    rm -f "$SUP_PIDFILE"
+
+    # Then the scheduler itself — it may be orphaned mid-task now the supervisor
+    # is gone. Its TERM trap removes $PIDFILE and exits cleanly.
     if is_alive; then
         local pid
         pid=$(cat "$PIDFILE")
         kill "$pid" 2>/dev/null
-        # Give it 3s to clean up via trap, then SIGKILL.
         for _ in 1 2 3; do
             kill -0 "$pid" 2>/dev/null || break
             sleep 1
@@ -50,14 +86,19 @@ stop() {
         kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
     fi
     rm -f "$PIDFILE"
-    # Sweep stragglers matching by cmdline.
+    # Sweep stragglers matching by cmdline (the init wrapper is S99z2k-scheduler,
+    # so this matches only the scheduler.sh process tree, not the supervisor).
     pkill -f "z2k-scheduler\.sh" 2>/dev/null
     echo "z2k-scheduler stopped"
 }
 
 status() {
-    if is_alive; then
-        echo "running (pid $(cat "$PIDFILE"))"
+    if sup_alive && is_alive; then
+        echo "running (supervisor $(cat "$SUP_PIDFILE"), scheduler $(cat "$PIDFILE"))"
+        return 0
+    fi
+    if sup_alive; then
+        echo "supervisor up, scheduler down (respawning)"
         return 0
     fi
     echo "stopped"

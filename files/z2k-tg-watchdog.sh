@@ -44,6 +44,21 @@ PROBE_RESOLVE_IP=149.154.167.99
 
 [ -x "$BIN" ] || exit 0
 
+# Kill ONLY the :1443 Telegram tunnel instance. The cdnbase http-tunnel
+# (S97z2k-http-tunnel on :1444) runs the SAME tg-mtproxy-client binary, so a
+# bare `killall tg-mtproxy-client` would silently take out the cdnbase tunnel
+# too → cdnbase blackhole (no watchdog on :1444 to bring it back). Match by
+# cmdline like actions.sh tunnel_pid() does.
+kill_tg_1443() {
+    if pidof tg-mtproxy-client >/dev/null 2>&1; then
+        for p in $(pidof tg-mtproxy-client); do
+            if [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- "--listen=:1443"; then
+                kill -9 "$p" 2>/dev/null
+            fi
+        done
+    fi
+}
+
 # CWE-59: restart_tunnel (fallback) и cap_log пишут в /tmp/z2k-log как root.
 # Каталог должен быть чистым root-owned: symlink / не-каталог / чужой
 # владелец = возможная подмена атакующим (с planted symlink'ами внутри) →
@@ -107,8 +122,8 @@ if [ -f "$CONFIG_FILE" ]; then
         # init script so REDIRECT rules are removed together with the process.
         if [ -x "$INIT" ]; then
             "$INIT" stop >/dev/null 2>&1
-        elif pidof tg-mtproxy-client >/dev/null 2>&1; then
-            killall -9 tg-mtproxy-client 2>/dev/null
+        else
+            kill_tg_1443
         fi
         exit 0
     fi
@@ -121,7 +136,7 @@ restart_tunnel() {
         "$INIT" stop  >/dev/null 2>&1
         sleep 1
         # belt-and-suspenders kill in case init script left a leftover
-        killall -9 tg-mtproxy-client 2>/dev/null
+        kill_tg_1443
         sleep 1
         # Truncate log to exactly one marker line. Without this, the very
         # CONNECT_FAIL storm that triggered the restart is still sitting in
@@ -131,7 +146,7 @@ restart_tunnel() {
         echo "$(date) watchdog restart: $reason" > "$LOG"
         "$INIT" start >/dev/null 2>&1
     else
-        killall -9 tg-mtproxy-client 2>/dev/null
+        kill_tg_1443
         sleep 1
         echo "$(date) watchdog restart: $reason" > "$LOG"
         "$BIN" --listen=:1443 -v >> "$LOG" 2>&1 &

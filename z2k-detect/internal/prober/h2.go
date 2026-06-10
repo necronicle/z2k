@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -37,7 +38,7 @@ import (
 // per-stream cap matching probeHTTPStaged for consistency.
 const h2ConcurrentStreams = 3
 
-func runH2MultiplexProbe(r *Result, reachableIPs []string, sni string, timeout time.Duration) {
+func runH2MultiplexProbe(ctx context.Context, r *Result, reachableIPs []string, sni string, timeout time.Duration) {
 	if r.HTTPOK == nil || !*r.HTTPOK {
 		return // HTTP/1.1 already caught a failure
 	}
@@ -53,7 +54,7 @@ func runH2MultiplexProbe(r *Result, reachableIPs []string, sni string, timeout t
 	dialer := markedDialer(0)
 	dialer.Timeout = timeout
 
-	rawConn, err := dialer.Dial("tcp", net.JoinHostPort(ip, "443"))
+	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
 	if err != nil {
 		// TCP dial failed on a path that just succeeded — flaky path.
 		// Don't pollute the verdict; leave HTTPOK=true as the
@@ -66,7 +67,7 @@ func runH2MultiplexProbe(r *Result, reachableIPs []string, sni string, timeout t
 		NextProtos:         []string{"h2"},
 	})
 	tlsConn.SetDeadline(time.Now().Add(timeout))
-	if err := tlsConn.HandshakeContext(context.Background()); err != nil {
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		tlsConn.Close()
 		return
 	}
@@ -92,24 +93,35 @@ func runH2MultiplexProbe(r *Result, reachableIPs []string, sni string, timeout t
 		wg.Add(1)
 		go func(streamIdx int) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			streamCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, "GET", "https://"+sni+"/", nil)
+			req, err := http.NewRequestWithContext(streamCtx, "GET", "https://"+sni+"/", nil)
 			if err != nil {
 				return
 			}
 			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; z2k-detect)")
 			resp, err := cc.RoundTrip(req)
 			if err != nil {
-				cutoffReason <- fmt.Sprintf("stream %d: %s",
-					streamIdx, sanitizeH2Err(err))
+				// A RoundTrip error only counts as a cutoff if it carries a
+				// DPI-interference signature (reset / mid-stream sever).
+				// Benign H2 conditions — GOAWAY, rate-limit (ENHANCE_YOUR_CALM),
+				// REFUSED_STREAM, per-stream timeout, "use HTTP/1.1" — must NOT
+				// downgrade a verdict that HTTP/1.1 already passed.
+				if h2ErrIsBlockSignal(err) {
+					cutoffReason <- fmt.Sprintf("stream %d: %s",
+						streamIdx, sanitizeH2Err(err))
+				}
 				return
 			}
 			defer resp.Body.Close()
 			n, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, httpReadLimit))
 			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				cutoffReason <- fmt.Sprintf("stream %d cut at %d bytes: %s",
-					streamIdx, n, sanitizeH2Err(readErr))
+				// Same discriminator on the body read: only a reset/sever
+				// mid-body is a cutoff; a benign GOAWAY or timeout is not.
+				if h2ErrIsBlockSignal(readErr) {
+					cutoffReason <- fmt.Sprintf("stream %d cut at %d bytes: %s",
+						streamIdx, n, sanitizeH2Err(readErr))
+				}
 				return
 			}
 			// Success: drained ≥some bytes or clean EOF.
@@ -135,6 +147,69 @@ func runH2MultiplexProbe(r *Result, reachableIPs []string, sni string, timeout t
 	r.TLSOK = true // TLS itself was fine
 	r.FailureCode = CodeHTTPCutoff
 	r.FailureReason = "http_cutoff (h2 multiplex): " + strings.Join(reasons, "; ")
+}
+
+// h2ErrIsBlockSignal reports whether an H2 RoundTrip / body-read error
+// carries a DPI-interference signature worth downgrading a *passing*
+// HTTP/1.1 verdict over. It is deliberately conservative: anything that
+// could be normal server behavior (GOAWAY, rate-limit, REFUSED_STREAM,
+// "use HTTP/1.1", per-stream timeout, h2-not-supported) returns false so
+// we leave the HTTP/1.1 verdict intact and never auto-block a working host.
+//
+// A block signal is a mid-stream sever: a TCP reset, an unexpected EOF, or
+// the TLS-garbage record-cut signatures the rest of the prober already
+// treats as path-active interference.
+func h2ErrIsBlockSignal(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Timeouts (per-stream deadline, context cancel) are inconclusive.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		return false
+	}
+
+	// GOAWAY = graceful server shutdown / rate-limit / overload. Benign.
+	var goAway http2.GoAwayError
+	if errors.As(err, &goAway) {
+		return false
+	}
+
+	// Per-stream control codes the server legitimately uses. None of these
+	// indicate a middlebox cutting the stream.
+	var streamErr http2.StreamError
+	if errors.As(err, &streamErr) {
+		switch streamErr.Code {
+		case http2.ErrCodeNo,
+			http2.ErrCodeEnhanceYourCalm, // rate limit
+			http2.ErrCodeRefusedStream,   // server declined this stream
+			http2.ErrCodeCancel,          // graceful cancel
+			http2.ErrCodeHTTP11Required:  // server wants HTTP/1.1
+			return false
+		}
+		// Other stream-error codes (PROTOCOL_ERROR, INTERNAL_ERROR,
+		// STREAM_CLOSED, etc.) arriving mid-transfer match the cutoff
+		// pattern — fall through to treat as a block signal.
+		return true
+	}
+
+	// A connection reset or an unexpected EOF mid-stream is the canonical
+	// DPI sever signature.
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	// Reuse the shared taxonomy: a TLS-garbage / reset categorization on the
+	// HTTP stage is a block signal; anything that lands as a generic/timeout
+	// bucket is not.
+	switch categorize(stageHTTP, err) {
+	case CodeHTTPReset, CodeTLSGarbage:
+		return true
+	}
+	return false
 }
 
 // sanitizeH2Err trims Go's verbose H2 error prefixes for readable

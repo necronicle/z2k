@@ -329,7 +329,7 @@ whitelist_add() {
     # Reject leading `-` defensively — no legitimate hostname starts with one
     # and any shell-out path would treat it as an option flag.
     case "$domain" in
-        ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        ''|*' '*) echo "invalid domain" >&2; return 1 ;;
         -*) echo "invalid domain" >&2; return 1 ;;
         *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac
@@ -363,15 +363,21 @@ whitelist_import() {
 
     local line domain
     while IFS= read -r line || [ -n "$line" ]; do
-        line="${line%$'\r'}"           # strip CRLF
+        # Trim leading/trailing whitespace INCLUDING the CR of a CRLF file —
+        # [[:space:]] covers \r, so this also strips the Windows line ending.
+        # (The old `${line%$'\r'}` was a no-op on busybox ash: $'...' ANSI-C
+        # quoting is not supported there, so it never matched a real CR.)
         line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
         case "$line" in
             ''|'#'*) continue ;;
         esac
         domain=$(printf '%s' "$line" | tr 'A-Z' 'a-z')
+        # A leading '-', any internal space, or any char outside [a-z0-9.-] is
+        # rejected; the charset check also covers tab/CR, so no $'\t' pattern
+        # (which is inert in busybox ash anyway) is needed.
         case "$domain" in
-            -*|*' '*|*$'\t'*) skipped_invalid=$((skipped_invalid + 1)); continue ;;
-            *[!a-z0-9.-]*)    skipped_invalid=$((skipped_invalid + 1)); continue ;;
+            -*|*' '*)      skipped_invalid=$((skipped_invalid + 1)); continue ;;
+            *[!a-z0-9.-]*) skipped_invalid=$((skipped_invalid + 1)); continue ;;
         esac
         printf '%s\n' "$domain" >> "$tmpnew"
     done
@@ -400,7 +406,7 @@ whitelist_delete() {
     local domain="$1"
     [ -f "$WHITELIST_FILE" ] || return 0
     case "$domain" in
-        ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        ''|*' '*) echo "invalid domain" >&2; return 1 ;;
         -*) echo "invalid domain" >&2; return 1 ;;
         *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac
@@ -431,7 +437,7 @@ extra_domains_list() {
 extra_domains_add() {
     local domain="$1"
     case "$domain" in
-        ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        ''|*' '*) echo "invalid domain" >&2; return 1 ;;
         -*) echo "invalid domain" >&2; return 1 ;;
         *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac
@@ -454,7 +460,7 @@ extra_domains_delete() {
     local domain="$1"
     [ -f "$EXTRA_DOMAINS_FILE" ] || return 0
     case "$domain" in
-        ''|*' '*|*$'\t'*) echo "invalid domain" >&2; return 1 ;;
+        ''|*' '*) echo "invalid domain" >&2; return 1 ;;
         -*) echo "invalid domain" >&2; return 1 ;;
         *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac

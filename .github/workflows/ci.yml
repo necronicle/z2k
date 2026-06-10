@@ -22,7 +22,7 @@ jobs:
 
       - name: Run shellcheck
         run: |
-          find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' \) \
+          find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './webpanel/cgi/*.sh' \) \
             | xargs shellcheck --severity=warning --exclude=SC1090,SC1091,SC3043,SC3040,SC2034,SC2148,SC2154
 
       - name: Run shell unit tests

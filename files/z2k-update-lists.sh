@@ -106,14 +106,29 @@ z2k_fetch() {
     [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
     [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
 
-    if command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
+    # All three normal mirrors fell through. Gate the ndmc DNS-override behind a
+    # cross-call streak counter + track the records in Z2K_MANAGED_NDMC — a single
+    # transient fall-through must NOT permanently pin github hosts to one IP in the
+    # running-config (regression 2026-04-28). Mirrors the gated z2k_fetch in z2k.sh
+    # / lib/utils.sh; this is a standalone cron copy that must not be laxer.
+    Z2K_FETCH_FAIL_STREAK=$((${Z2K_FETCH_FAIL_STREAK:-0} + 1))
+    export Z2K_FETCH_FAIL_STREAK
+    : "${Z2K_FETCH_NDMC_THRESHOLD:=2}"
+    Z2K_MANAGED_NDMC="${Z2K_MANAGED_NDMC:-/opt/zapret2/state/ndmc-managed.txt}"
+
+    if [ "$Z2K_FETCH_FAIL_STREAK" -ge "$Z2K_FETCH_NDMC_THRESHOLD" ] && \
+       command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
         local resolved_any=0 host ip
+        mkdir -p "$(dirname "$Z2K_MANAGED_NDMC")" 2>/dev/null
         for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com \
                     github.com objects.githubusercontent.com release-assets.githubusercontent.com; do
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
-                ndmc -c "ip host $host $ip" >/dev/null 2>&1 && resolved_any=1
+                if ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
+                    resolved_any=1
+                    printf '%s %s\n' "$host" "$ip" >> "$Z2K_MANAGED_NDMC" 2>/dev/null
+                fi
             fi
         done
         if [ "$resolved_any" = "1" ]; then
@@ -223,6 +238,37 @@ update_list() {
 
     # Убрать CRLF
     sed -i 's/\r$//' "$tmp" 2>/dev/null
+
+    # Content guard. A CDN/GitHub edge serving an error page returns HTTP 200
+    # with an HTML/JSON body, which passes z2k_fetch and the non-empty check.
+    # Without this, update_list would replace a live ipset source with a
+    # "<html>404</html>" blob (the dedicated updaters update_flowseal_game_ips /
+    # update_cf_cidrs_v4 already guard this; update_list did not — both its
+    # callers, Roblox IPs and Game IPs, feed --ipset matches). Reject markup/JSON,
+    # an all-comment/empty result, and a sudden massive shrink vs the live file.
+    if head -8 "$tmp" | grep -qiE '<!doctype|<html|<head|<body|^[[:space:]]*[{[]'; then
+        log_msg "FAIL: $name looks like HTML/JSON, not a list — keeping old"
+        _etag_cleanup "$tmp"
+        return 1
+    fi
+    local _new_n
+    _new_n=$(grep -cvE '^[[:space:]]*(#|$)' "$tmp" 2>/dev/null)
+    : "${_new_n:=0}"
+    if [ "$_new_n" -eq 0 ]; then
+        log_msg "FAIL: $name has no content lines — keeping old"
+        _etag_cleanup "$tmp"
+        return 1
+    fi
+    if [ -f "$dest" ]; then
+        local _old_n
+        _old_n=$(grep -cvE '^[[:space:]]*(#|$)' "$dest" 2>/dev/null)
+        : "${_old_n:=0}"
+        if [ "$_old_n" -gt 0 ] && [ "$((_new_n * 100 / _old_n))" -lt 50 ]; then
+            log_msg "FAIL: $name shrunk >50% ($_old_n → $_new_n content lines) — keeping old"
+            _etag_cleanup "$tmp"
+            return 1
+        fi
+    fi
 
     # Сравнить с текущим
     if [ -f "$dest" ]; then
