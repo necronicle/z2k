@@ -486,6 +486,13 @@ case "$method $path" in
         json_ok
         ;;
 
+    # Wipe ALL rotator rows. Every host's live rotation resets to strategy 1
+    # within ~2s (reconcile); freezes cleared; no service restart.
+    "POST /state/clear")
+        state_clear_all || json_fail "500 Internal Server Error" "clear failed"
+        json_ok
+        ;;
+
     # Pin / manually select a rotator row's strategy. mode=auto adopts it live and
     # keeps rotating; mode=frozen adopts it AND stops the rotator from changing it.
     "POST /state/set")

@@ -701,6 +701,22 @@ state_delete() {
     _state_delete_one_file "$STATE_FILE_FALLBACK" "$key" "$host" || return 1
 }
 
+# Wipe ALL rotator rows from both state files (header kept, inode preserved by
+# truncate-in-place). Same live semantics as the per-row × delete: on its next
+# packet z2k-state-persist.lua's reconcile resets every host to strategy 1 (its
+# write path won't resurrect rows gone from a readable disk), clearing any freeze
+# too — no service restart. Both primary and /tmp fallback are wiped so a later
+# restart's merge can't revive anything.
+state_clear_all() {
+    local _f
+    for _f in "$STATE_FILE" "$STATE_FILE_FALLBACK"; do
+        [ -f "$_f" ] || continue
+        printf '# z2k autocircular state (persisted circular nstrategy)\n# key\thost\tstrategy\tts\tmode\n' > "$_f" || return 1
+        chmod 644 "$_f" 2>/dev/null || true
+    done
+    return 0
+}
+
 # Upsert one row (key,host) with strategy+mode+ts into a single state file,
 # creating it (with header) if absent. Preserves all other rows; field-equality
 # replace (NOT regex — see _state_delete_one_file for why). Inode preserved.

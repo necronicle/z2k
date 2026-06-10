@@ -1344,11 +1344,13 @@
         </ul>
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn" id="state-refresh">Обновить</button>
+          <button class="btn btn-danger" id="state-clear-all">Удалить все записи</button>
         </div>
         <div id="state-body">${skeletonLines(6)}</div>
       </div>
     `;
     document.getElementById("state-refresh").addEventListener("click", loadState);
+    document.getElementById("state-clear-all").addEventListener("click", stateClearAll);
     loadState();
   }
 
@@ -1516,6 +1518,17 @@
     try {
       await apiPost("/state/delete", { key, host });
       toast("Удалено");
+      loadState();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
+  async function stateClearAll() {
+    if (!confirm("Удалить ВСЕ записи rotator?\n\nВесь сохранённый state очистится: каждый домен стартанёт с первой стратегии при следующей попытке, заморозки тоже снимутся. Сервис перезапускать не нужно.")) return;
+    try {
+      await apiPost("/state/clear", {});
+      toast("Весь state очищен");
       loadState();
     } catch (e) {
       toast("Ошибка: " + e.message, "bad");
