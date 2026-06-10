@@ -2025,6 +2025,17 @@ NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
 NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_GAME_MODE_ENABLED:+$([ "$saved_GAME_MODE_ENABLED" = "1" ] && echo ',1024-65535')}"
 
+# Discord voice/STUN ports use KEEPALIVE: the OUTGOING connbytes limit
+# (NFQWS2_UDP_PKT_OUT=5) is disabled for them, so the dbankcloud fake fires on
+# EVERY outgoing packet of the flow — not just the first 5. Discord voice needs
+# the decoy sustained across the whole call (the DPI re-checks recurring STUN),
+# matching flowseal/zapret4rocket, which put NO cutoff on the discord fake.
+# 443/QUIC stays standard (connbytes 1:5); incoming stays 1:3 for the rotator.
+# Field-confirmed 2026-06-11: keepalive makes Discord voice work markedly better
+# than the 5-packet cap. Keep this port list in sync with the discord subset of
+# NFQWS2_PORTS_UDP above (everything except 443 and the game range).
+NFQWS2_PORTS_UDP_KEEPALIVE="50000-50099,1400,3478-3481,5349,19294-19344"
+
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges
 # PKT_OUT=20 means "first 20 packets" (connbytes 1:20)
