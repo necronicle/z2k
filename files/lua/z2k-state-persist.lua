@@ -552,6 +552,28 @@ if type(circular) == "function" then
     -- (debounced internally). Errors swallowed — must never break the desync.
     pcall(reconcile_external_edits)
 
+    -- FREEZE CLAMP (webpanel freeze button) — affects ONLY this one domain. A row
+    -- the operator froze (mode="frozen") must physically stop rotating: set
+    -- hrec.final = hrec.nstrategy = the pinned strategy BEFORE orig_circular, so the
+    -- engine's OWN guard (`if hrec.final ~= hrec.nstrategy` → skip failure-check+
+    -- rotate) refuses to rotate THIS host on the wire. This replaces the old
+    -- post-hoc force-back, which let the rotated strategy execute and only masked
+    -- the display (frozen row showed strat 1 while the engine ran 2). Per-host:
+    -- every other domain keeps rotating exactly as before. Releasing the freeze
+    -- (mode back to auto, adopted by reconcile above) clears final → rotation
+    -- resumes. No shipped profile tags :final, so hrec.final is ours to drive.
+    pcall(function()
+      if hrec_before and askey_before and hostn_before then
+        local srec = state[askey_before] and state[askey_before][hostn_before]
+        if srec and srec.mode == "frozen" and tonumber(srec.strategy) then
+          hrec_before.nstrategy = tonumber(srec.strategy)
+          hrec_before.final = tonumber(srec.strategy)
+        elseif hrec_before.final then
+          hrec_before.final = nil
+        end
+      end
+    end)
+
     -- Snapshot the sticky-revert baseline AFTER reconcile: circular starts from
     -- the reconciled value, so an operator edit/delete applied just now is the
     -- legitimate starting point, NOT "drift" to be rolled back. Capturing it
@@ -689,21 +711,11 @@ if type(circular) == "function" then
           end
         end
 
-        -- FREEZE gate (operator pin from the webpanel Rotator). A row whose
-        -- persisted mode == "frozen" must NEVER rotate: force nstrategy back to the
-        -- pinned strategy AFTER orig_circular AND the sticky-revert have run, so
-        -- whatever they did to nstrategy this packet is overridden. persist_if_changed
-        -- below then sees no change (prev==n → no write churn), and the mode column
-        -- on disk keeps the pin across nfqws2 restarts / reboot / auto-update.
-        -- reconcile_external_edits (top of this wrapper) keeps state[askey][hostn].mode
-        -- in sync with the webpanel within ~2s. ct-clamp above already handled an
-        -- out-of-range pin (reset to 1 + unfreeze) before reaching here.
-        if askey and hostn then
-          local srec = state[askey] and state[askey][hostn]
-          if srec and srec.mode == "frozen" and tonumber(srec.strategy) then
-            hrec.nstrategy = tonumber(srec.strategy)
-          end
-        end
+        -- (Freeze enforcement moved to the pre-circular FREEZE CLAMP at the top of
+        -- this wrapper: hrec.final makes the engine itself refuse to rotate a frozen
+        -- host — instead of this post-hoc force-back that only masked the display
+        -- while the rotated strategy already executed on the wire. The persisted
+        -- mode="frozen" column still survives restarts/reboot/auto-update.)
 
         -- Persist the (possibly reverted) strategy. Confirmed success OR the
         -- outgoing-initial fallback triggers a save; server-active never pins.

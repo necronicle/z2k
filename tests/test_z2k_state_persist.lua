@@ -79,7 +79,10 @@ function circular(ctx, desync)        -- luacheck: ignore
       hrec.content_seen_last = now
     end
   end
-  if desync._sim then hrec.nstrategy = desync._sim end
+  -- mirror the engine guard (zapret-auto.lua: `if hrec.final ~= hrec.nstrategy`):
+  -- a frozen host has final==nstrategy (set by the pre-circular freeze clamp) and
+  -- is therefore physically unrotatable — _sim (simulated rotation) is ignored.
+  if desync._sim and hrec.final ~= hrec.nstrategy then hrec.nstrategy = desync._sim end
   executed = nil
   for _, ins in pairs(desync.plan or {}) do
     if ins.arg and tonumber(ins.arg.strategy) == hrec.nstrategy then executed = hrec.nstrategy end
