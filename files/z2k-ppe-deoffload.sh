@@ -57,6 +57,7 @@
 # handshake window, so de-offloading without the nozapret exclusion is harmless.
 PPE_PORTS="${PPE_PORTS:-80,443,2053,2083,2087,2096,8443}"
 PPE_QUIC_PORT="${PPE_QUIC_PORT:-443}"       # QUIC UDP port — de-offload its handshake window too
+PPE_GAME_PORTS="${PPE_GAME_PORTS:-1024:2407,2409:65535}"  # game UDP range — mirrors the flowseal game arm filter (Warp 2408 carved out)
 PPE_CONNSKIP="${PPE_CONNSKIP:-30}"          # first-N packets kept on CPU (handshake window)
 PPE_TARGET="${PPE_TARGET:-PPE}"             # firmware per-flow offload-skip target (ppe_tg)
 PPE_CONFIG_FILE="${PPE_CONFIG_FILE:-/opt/zapret2/config}"
@@ -79,6 +80,19 @@ z2k_ppe_quic_enabled() {
     [ -f "$PPE_CONFIG_FILE" ] || return 0
     [ "$(awk -F= '/^Z2K_PPE_DEOFFLOAD_QUIC=/{gsub(/[" ]/,"",$2);print $2;exit}' "$PPE_CONFIG_FILE" 2>/dev/null)" = "0" ] && return 1
     return 0
+}
+
+# Also de-offload the game UDP handshake window? Gated on GAME_MODE_ENABLED —
+# the flowseal game arm only emits when game mode is on, so the de-offload
+# tracks it. The config already folds the legacy ROBLOX_UDP_BYPASS into
+# GAME_MODE_ENABLED (config_official.sh), so reading the one flag is enough.
+# connskip-bounded like the rest → only flow setup leaves the fastpath; steady-
+# state game traffic keeps hardware acceleration (no added latency/jitter).
+# Default OFF unless game mode is explicitly on.
+z2k_ppe_game_enabled() {
+    [ -f "$PPE_CONFIG_FILE" ] || return 1
+    [ "$(awk -F= '/^GAME_MODE_ENABLED=/{gsub(/[" ]/,"",$2);print $2;exit}' "$PPE_CONFIG_FILE" 2>/dev/null)" = "1" ] && return 0
+    return 1
 }
 
 # Is the firmware `-j PPE` target actually present? (no-op cleanly on
@@ -121,6 +135,16 @@ z2k_ppe_udp_present_pre4() { _z2k_ppe_ipt  -t mangle -C PREROUTING $_z2k_ppe_udp
 z2k_ppe_udp_present_fwd6() { _z2k_ppe_ipt6 -t mangle -C FORWARD    $_z2k_ppe_udp_args; }
 z2k_ppe_udp_present_pre6() { _z2k_ppe_ipt6 -t mangle -C PREROUTING $_z2k_ppe_udp_args; }
 
+# Game UDP handshake de-offload — same connskip window, lets nfqws2 see the
+# first packets of each game flow (where the cutoff=n2 fake fires) on hardware-
+# offload routers. multiport carries the two sub-ranges of the game arm filter.
+_z2k_ppe_game_args="-p udp -m multiport --dports $PPE_GAME_PORTS -m connskip --connskip $PPE_CONNSKIP -j $PPE_TARGET"
+
+z2k_ppe_game_present_fwd4() { _z2k_ppe_ipt  -t mangle -C FORWARD    $_z2k_ppe_game_args; }
+z2k_ppe_game_present_pre4() { _z2k_ppe_ipt  -t mangle -C PREROUTING $_z2k_ppe_game_args; }
+z2k_ppe_game_present_fwd6() { _z2k_ppe_ipt6 -t mangle -C FORWARD    $_z2k_ppe_game_args; }
+z2k_ppe_game_present_pre6() { _z2k_ppe_ipt6 -t mangle -C PREROUTING $_z2k_ppe_game_args; }
+
 # Install the rules (idempotent, v4 is the success gate, v6 best-effort).
 z2k_ppe_ensure_rules() {
     z2k_ppe_available || return 1
@@ -140,6 +164,24 @@ z2k_ppe_ensure_rules() {
             z2k_ppe_udp_present_fwd6 || _z2k_ppe_ipt6 -t mangle -I FORWARD    $_z2k_ppe_udp_args
         fi
     fi
+    # Game UDP handshake de-offload — only while game mode is on. When it's off,
+    # strip any stale rule (user toggled game mode off between re-asserts) so we
+    # never de-offload game UDP that the engine isn't desyncing.
+    if z2k_ppe_game_enabled; then
+        z2k_ppe_game_present_pre4 || _z2k_ppe_ipt -t mangle -I PREROUTING $_z2k_ppe_game_args
+        z2k_ppe_game_present_fwd4 || _z2k_ppe_ipt -t mangle -I FORWARD    $_z2k_ppe_game_args
+        if z2k_ppe_v6_ok; then
+            z2k_ppe_game_present_pre6 || _z2k_ppe_ipt6 -t mangle -I PREROUTING $_z2k_ppe_game_args
+            z2k_ppe_game_present_fwd6 || _z2k_ppe_ipt6 -t mangle -I FORWARD    $_z2k_ppe_game_args
+        fi
+    else
+        while z2k_ppe_game_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_game_args; done
+        while z2k_ppe_game_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_game_args; done
+        if command -v ip6tables >/dev/null 2>&1; then
+            while z2k_ppe_game_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_game_args; done
+            while z2k_ppe_game_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_game_args; done
+        fi
+    fi
     z2k_ppe_rule_present_pre4 && z2k_ppe_rule_present_fwd4
 }
 
@@ -149,11 +191,15 @@ z2k_ppe_remove_rules() {
     while z2k_ppe_rule_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_args; done
     while z2k_ppe_udp_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_udp_args; done
     while z2k_ppe_udp_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_udp_args; done
+    while z2k_ppe_game_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_game_args; done
+    while z2k_ppe_game_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_game_args; done
     if command -v ip6tables >/dev/null 2>&1; then
         while z2k_ppe_rule_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_args; done
         while z2k_ppe_rule_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_args; done
         while z2k_ppe_udp_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_udp_args; done
         while z2k_ppe_udp_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_udp_args; done
+        while z2k_ppe_game_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_game_args; done
+        while z2k_ppe_game_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_game_args; done
     fi
     return 0
 }

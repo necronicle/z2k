@@ -1630,13 +1630,22 @@ AUSTERUS_OPT
     # ROBLOX_UDP_BYPASS (old) — evaluated above. GAME_PROFILE selects which
     # implementation handles the gating positive.
     if [ "$GAME_PROFILE" = "flowseal" ]; then
-        # Flowseal 1.9.8 single-strategy UDP arm:
-        #   fake + repeats=12 + cutoff=n2 + payload=all + dbankcloud blob,
-        #   scoped positive by flowseal_game_ips.txt (~31K CIDR aggregate
-        #   refreshed daily by z2k-update-lists.sh).
-        # z2k_game_udp Lua handler is used in place of built-in fake because
-        # built-in fake silently drops repeats=N for UDP payloads (would
-        # collapse to 1 fake instead of the field-validated 12).
+        # Flowseal single-strategy UDP arm — byte-for-byte 1:1 with flowseal
+        # general.bat L25:
+        #   --dpi-desync=fake --dpi-desync-repeats=12 --dpi-desync-cutoff=n2
+        #   --dpi-desync-any-protocol=1 --dpi-desync-fake-unknown-udp=dbankcloud
+        #   --ipset=ipset-all.txt
+        # IP universe is identical: flowseal builds ipset-all.txt at runtime
+        # from the same .service/ipset-service.txt we fetch into
+        # flowseal_game_ips.txt (~31K CIDR, refreshed daily).
+        # Uses the BUILT-IN fake lua-desync — the direct nfqws2 analog of winws
+        # --dpi-desync=fake, the exact primitive discord voice uses (field-
+        # proven). Engine-verified (zapret-antidpi.lua fake() ->
+        # rawsend_dissect_segmented -> C rawsend_rep): built-in fake DOES honour
+        # repeats=N for UDP, so 12 copies emit as on Windows. The previous
+        # z2k_game_udp handler forced ip_id=none (all 12 fakes carried the real
+        # packet's IP ID -> DPI dedup risk); built-in fake uses seq ip_id like
+        # winws -> 12 distinct fakes.
         # Port range 1024-2407,2409-65535 keeps Warp 2408 carve-out and
         # excludes 80/443 (no UDP web on those — DNS/QUIC have dedicated
         # earlier profiles). cutoff=n2 limits desync to first 2 pkts of
@@ -1646,8 +1655,8 @@ AUSTERUS_OPT
             local ipset_excl="${lists_dir}/ipset-exclude.txt"
             local game_ipset_excl_opt=""
             [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-            local flowseal_game_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud:repeats=12"
-            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --ipset=${lists_dir}/flowseal_game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=-n2 --payload=all $flowseal_game_udp --new\\n"
+            local flowseal_game_udp="--lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=12"
+            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --ipset=${lists_dir}/flowseal_game_ips.txt ${game_ipset_excl_opt}--out-range=-n2 --payload=all $flowseal_game_udp --new\\n"
         fi
     else
         # Legacy path (GAME_PROFILE=legacy) — preserved for rollback.

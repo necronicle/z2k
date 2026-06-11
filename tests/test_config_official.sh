@@ -867,11 +867,16 @@ assert_contains "default: emits flowseal arm" "flowseal_game_ips.txt" "$OUTPUT_D
 assert_contains "default: arm has dbankcloud blob" "blob=quic_dbankcloud" "$ARM_DEFAULT"
 assert_contains "default: arm has repeats=12" "repeats=12" "$ARM_DEFAULT"
 assert_contains "default: arm has --out-range=-n2" "--out-range=-n2" "$ARM_DEFAULT"
-assert_contains "default: arm has --in-range=a" "--in-range=a" "$ARM_DEFAULT"
+# 1:1 with flowseal general.bat L25: built-in fake desync (the direct nfqws2
+# analog of winws --dpi-desync=fake, same primitive discord voice uses), NOT
+# the legacy z2k_game_udp handler, and NO --in-range=a (flowseal has none).
+assert_contains "default: arm uses built-in fake (1:1 flowseal)" "--lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=12" "$ARM_DEFAULT"
+assert_not_contains "default: arm not on legacy z2k_game_udp handler" "z2k_game_udp" "$ARM_DEFAULT"
+assert_not_contains "default: arm has NO --in-range=a (matches flowseal)" "--in-range=a" "$ARM_DEFAULT"
 # Profile-level --payload=all (separate from the in-lua-desync payload=all
-# inside z2k_game_udp:...). Without the profile token, nfqws would not pass
-# binary game traffic through to the lua handler at all — assert it's the
-# bare token with the leading --, not just "payload=all" anywhere in the line.
+# inside fake:...). Without the profile token, nfqws would not pass binary
+# game traffic through to the lua handler at all — assert it's the bare token
+# with the leading --, not just "payload=all" anywhere in the line.
 assert_contains "default: arm has profile-level --payload=all" "--payload=all" "$ARM_DEFAULT"
 assert_contains "default: arm has port range" "--filter-udp=1024-2407,2409-65535" "$ARM_DEFAULT"
 # ipset-exclude file is absent in this scenario — the gate `[ -f "$ipset_excl" ]`
@@ -935,7 +940,7 @@ LEGACY_ARM=$(get_legacy_arm_line "$OUTPUT_LEGACY")
 
 assert_eq "legacy: flowseal arm not emitted" "" "$ARM_LEGACY"
 assert_not_contains "legacy: no flowseal_game_ips reference" "flowseal_game_ips" "$OUTPUT_LEGACY"
-assert_not_contains "legacy: no z2k_game_udp dbankcloud arm" "z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud" "$OUTPUT_LEGACY"
+assert_not_contains "legacy: no flowseal dbankcloud arm" "blob=quic_dbankcloud:repeats=12" "$OUTPUT_LEGACY"
 # Legacy path discriminator: 13-strat rotator with key=game_udp.
 assert_contains "legacy: emits 13-strat rotator key=game_udp" "key=game_udp" "$OUTPUT_LEGACY"
 assert_contains "legacy: legacy arm uses game_ips.txt" "game_ips.txt" "$LEGACY_ARM"
@@ -951,7 +956,7 @@ ARM_NOIPSET=$(get_flowseal_arm_line "$OUTPUT_NOIPSET")
 
 assert_eq "missing-ipset: flowseal arm not emitted" "" "$ARM_NOIPSET"
 assert_not_contains "missing-ipset: no flowseal_game_ips reference" "flowseal_game_ips" "$OUTPUT_NOIPSET"
-assert_not_contains "missing-ipset: no z2k_game_udp dbankcloud arm" "z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_dbankcloud" "$OUTPUT_NOIPSET"
+assert_not_contains "missing-ipset: no flowseal dbankcloud arm" "blob=quic_dbankcloud:repeats=12" "$OUTPUT_NOIPSET"
 
 printf "\n--- GAME_PROFILE: runtime — unknown value coerced to flowseal ---\n"
 
