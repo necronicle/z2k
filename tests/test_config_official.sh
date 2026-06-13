@@ -1256,12 +1256,28 @@ assert_contains     "docalign: http_rkn fails=3"                "circular:fails=
 assert_not_contains "docalign: http_rkn no fails=2"             "fails=2"          "$HTTP_ARM_DOC"
 assert_not_contains "docalign: http_rkn NO reset"               ":reset"           "$HTTP_ARM_DOC"
 
-# discord_udp: NO reset (r-54.1); strategy=1 == Flowseal voice fix (dbankcloud x6), no stun blob.
+# discord_udp: NO reset (r-54.1); strategy=1 = dbankcloud x6, no stun blob.
 assert_not_contains "docalign: discord_udp circular NO reset"   ":reset"        "$DISCORD_ARM_DOC"
-assert_contains     "docalign: discord voice #1 = dbankcloud repeats=6" \
-                    "blob=quic_dbankcloud:repeats=6:strategy=1" "$DISCORD_ARM_DOC"
+assert_contains     "docalign: discord voice #1 = dbankcloud repeats=10 (bol-van repeats lever)" \
+                    "blob=quic_dbankcloud:repeats=10:strategy=1" "$DISCORD_ARM_DOC"
 assert_not_contains "docalign: discord voice #1 dropped stun blob" \
                     "blob=stun:repeats=3:strategy=1"            "$DISCORD_ARM_DOC"
+# bol-van canon: tight start-of-flow cutoff + connbytes, NOT keepalive.
+# --out-range=-d4 = fake only on the first 4 data packets per flow (#1267
+# "n2 или d2 лучше"; tight cutoff = fewer packets faked = stream-safe). The
+# robustness lever is repeats (=10), NOT a wider cutoff. keepalive routed the
+# whole high-bitrate stream through NFQUEUE → MIPS CPU saturation → 5000-ping.
+assert_contains     "docalign: discord --out-range=-d4 (bol-van tight cutoff)" \
+                    "--out-range=-d4"                           "$DISCORD_ARM_DOC"
+assert_not_contains "docalign: discord no stale -d100 keepalive cutoff" \
+                    "-d100"                                     "$DISCORD_ARM_DOC"
+assert_not_contains "docalign: discord no --in-range (bol-van uses none)" \
+                    "--in-range"                                "$DISCORD_ARM_DOC"
+# payload gate = discovery/STUN signatures (NOT quic_initial — that's QUIC/443).
+assert_contains     "docalign: discord payload=discord_ip_discovery,stun" \
+                    "--payload=discord_ip_discovery,stun"       "$DISCORD_ARM_DOC"
+assert_not_contains "docalign: discord no stale quic_initial gate" \
+                    "--payload=quic_initial"                    "$DISCORD_ARM_DOC"
 
 # yt_quic udp_in 1->8: QUIC blocked-but-responding rotation fix (2026-06-08).
 # At udp_in=1 the native success_detector latched the 2-3 leaked handshake packets

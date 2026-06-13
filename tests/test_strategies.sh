@@ -257,6 +257,56 @@ save_strategy_to_category "" "TCP" "--params" >/dev/null 2>&1
 assert_eq "save_strategy: empty category returns error" "1" "$?"
 
 # ==============================================================================
+# TEST: purge_stale_keepalive_fw (r-56.1 — remove the stale all-packets
+# keepalive rule/ipset the engine teardown leaves behind when keepalive is
+# emptied; otherwise discord stream re-breaks with 5000ms ping after upgrade)
+# ==============================================================================
+printf "\n--- purge_stale_keepalive_fw ---\n"
+
+PK_RC="${MOCK_DIR}/pk_postrouting"
+PK_CFG="${MOCK_DIR}/pk_config"
+PK_DESTROYED="${MOCK_DIR}/pk_destroyed"
+
+# Stub iptables backed by $PK_RC (a mock POSTROUTING ruleset). ip6tables has no
+# rules here. ipset records every destroy. These shadow the real commands.
+iptables() {
+    if [ "$1 $2 $3" = "-t mangle -S" ]; then
+        cat "$PK_RC" 2>/dev/null
+    elif [ "$1 $2 $3" = "-t mangle -D" ]; then
+        shift 3
+        grep -vxF -- "-A $*" "$PK_RC" 2>/dev/null > "$PK_RC.t"; mv -f "$PK_RC.t" "$PK_RC"
+    fi
+}
+ip6tables() { :; }
+ipset() { [ "$1" = destroy ] && echo "$2" >> "$PK_DESTROYED"; return 0; }
+
+pk_seed_rules() {
+    printf '%s\n' \
+      '-A POSTROUTING -o ppp0 -p udp -m set --match-set zport_udp_k dst -j NFQUEUE --queue-num 200' \
+      '-A POSTROUTING -o br0 -p udp -m set --match-set zport_udp_k dst -j NFQUEUE --queue-num 200' \
+      '-A POSTROUTING -o ppp0 -p udp -m set --match-set zport_udp dst -m connbytes --connbytes 1:5 -j NFQUEUE --queue-num 200' > "$PK_RC"
+}
+pk_count_k()    { grep -c 'match-set zport_udp_k ' "$PK_RC" 2>/dev/null; }
+pk_count_real() { grep -c 'match-set zport_udp dst' "$PK_RC" 2>/dev/null; }
+
+# Case 1: keepalive EMPTY -> stale _k rules removed, connbytes rule kept, ipset destroyed.
+pk_seed_rules; : > "$PK_DESTROYED"
+echo 'NFQWS2_PORTS_UDP_KEEPALIVE=""' > "$PK_CFG"
+purge_stale_keepalive_fw "$PK_CFG"
+assert_eq "purge: empty keepalive removes both _k rules" "0" "$(pk_count_k)"
+assert_eq "purge: connbytes (non-_k) rule preserved" "1" "$(pk_count_real)"
+assert_contains "purge: zport_udp_k ipset destroyed" "zport_udp_k" "$(cat "$PK_DESTROYED")"
+
+# Case 2: keepalive NON-EMPTY -> no-op (engine's rules are legit, leave them).
+pk_seed_rules; : > "$PK_DESTROYED"
+echo 'NFQWS2_PORTS_UDP_KEEPALIVE="3478-3481,5349"' > "$PK_CFG"
+purge_stale_keepalive_fw "$PK_CFG"
+assert_eq "purge: non-empty keepalive leaves _k rules intact" "2" "$(pk_count_k)"
+assert_eq "purge: non-empty keepalive destroys nothing" "" "$(cat "$PK_DESTROYED")"
+
+unset -f iptables ip6tables ipset
+
+# ==============================================================================
 # CLEANUP AND REPORT
 # ==============================================================================
 

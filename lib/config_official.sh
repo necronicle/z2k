@@ -118,10 +118,20 @@ AUSTERUS_OPT
     local discord_tcp_block=""
 
     # Discord UDP (z2k autocircular on the zapret4rocket primitive family).
-    # strategy=1 = ТОЧНАЯ копия Flowseal voice "5K ping" fix (issue #12557):
-    # один fake quic_dbankcloud repeats=6 на discord+stun L7, БЕЗ any-protocol —
-    # самый надёжный пробив голоса с низким пингом; стоит первой. Strategies 2-6 —
-    # наши fallback-варианты (dbankcloud с разными repeats/ttl) для circular-перебора.
+    # ПО КАНОНУ bol-van: голос+стрим пробиваются МАЛЕНЬКИМ cutoff на старте флоу
+    # + connbytes, а НЕ непрерывным фейком. --out-range=-d4 = фейк только на
+    # первые 4 data-пакета каждого флоу (#1267: "n2 или d2 лучше всего"; тугой
+    # cutoff = меньше пакетов под фейком = безопаснее для стрима). Ключевой
+    # принцип bol-van (#4450): "на linux нас спасёт connbytes" — высокобитрейтный
+    # медиапоток НЕЛЬЗЯ гнать через NFQUEUE целиком (keepalive это и делал →
+    # MIPS-CPU захлёбывался → пинг 5000 на стриме). Просадку голоса bol-van лечит
+    # НЕ расширением cutoff'а, а repeats/dup (#6915) — рычаг надёжности в repeats.
+    # --payload=discord_ip_discovery,stun — гейтим именно discovery/STUN-сигнатуры
+    # (не quic_initial — то для QUIC/443, не для голоса). БЕЗ keepalive (см.
+    # NFQWS2_PORTS_UDP_KEEPALIVE ниже — отключён по этой же причине).
+    # strategy=1 = базовый fake quic_dbankcloud repeats=10 (рычаг bol-van против
+    # просадки голоса — "поиграться репитами" #6915; 10 = рабочий референс юзера);
+    # 2-6 — fallback'и (разные repeats/ttl) для circular-перебора, все под d4-cutoff.
     # 2026-04-30: blob мигрирован quic_google → quic_dbankcloud (TSPU
     # фингерпринтит google-QUIC clienthello, dbankcloud обходит надёжнее).
     # hostkey=z2k_nohost_key — нативный hostkey-генератор (z2k-modern-core.lua,
@@ -130,7 +140,7 @@ AUSTERUS_OPT
     # вместо per-IP фрагментации стокового host_ip fallback'а (иначе Discord
     # voice холодно стартует на каждом новом DC-IP). Нативная замена archived
     # allow_nohost (z2k-autocircular) — алгоритм ротации остаётся circular().
-    discord_udp="--filter-udp=50000-50100,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --in-range=-d100 --out-range=-d100 --payload=quic_initial,discord_ip_discovery --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=1 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=3:strategy=2 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=3 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=4:strategy=5 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=5:strategy=6"
+    discord_udp="--filter-udp=50000-50100,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --out-range=-d4 --payload=discord_ip_discovery,stun --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=10:strategy=1 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=3:strategy=2 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=3 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=4:strategy=5 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=5:strategy=6"
 
     # Дефолтная стратегия если не загружена
     local default_strategy="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=6"
@@ -2034,16 +2044,16 @@ NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
 NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_GAME_MODE_ENABLED:+$([ "$saved_GAME_MODE_ENABLED" = "1" ] && echo ',1024-65535')}"
 
-# Discord voice/STUN ports use KEEPALIVE: the OUTGOING connbytes limit
-# (NFQWS2_UDP_PKT_OUT=5) is disabled for them, so the dbankcloud fake fires on
-# EVERY outgoing packet of the flow — not just the first 5. Discord voice needs
-# the decoy sustained across the whole call (the DPI re-checks recurring STUN),
-# matching flowseal/zapret4rocket, which put NO cutoff on the discord fake.
-# 443/QUIC stays standard (connbytes 1:5); incoming stays 1:3 for the rotator.
-# Field-confirmed 2026-06-11: keepalive makes Discord voice work markedly better
-# than the 5-packet cap. Keep this port list in sync with the discord subset of
-# NFQWS2_PORTS_UDP above (everything except 443 and the game range).
-NFQWS2_PORTS_UDP_KEEPALIVE="50000-50099,1400,3478-3481,5349,19294-19344"
+# Discord voice/STUN: KEEPALIVE DISABLED (empty) — по канону bol-van.
+# Раньше (2026-06-11) на discord-портах connbytes-лимит снимался (keepalive),
+# и dbankcloud-fake летел на КАЖДЫЙ исходящий пакет флоу. Это ломало видео-стрим:
+# непрерывный decoy перед каждым медиапакетом → пинг 5000 сразу при старте стрима.
+# bol-van (#4450): "на linux нас спасёт connbytes" — медиапоток нельзя гнать
+# через NFQUEUE целиком; пробивается маленьким cutoff на старте, не keepalive'ом.
+# Теперь discord-порты идут под стандартным connbytes 1:5 (NFQWS2_PORTS_UDP) +
+# --out-range=-d4 в самой стратегии (тугой cutoff, #1267 "n2 или d2 лучше").
+# Голос пробивается на старте, стрим не страдает. Пусто = keepalive-правил нет.
+NFQWS2_PORTS_UDP_KEEPALIVE=""
 
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges

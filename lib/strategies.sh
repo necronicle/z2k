@@ -2095,6 +2095,41 @@ run_blockcheck_http() {
 
 # Применить разные стратегии для YouTube TCP, YouTube GV, RKN (Z4R метод)
 # Параметры: номера стратегий для каждой категории
+# Purge a stale keepalive NFQUEUE rule + ipset that the engine's firewall
+# teardown leaves behind. ipt.sh's ipt_do_nfqws_in_out early-returns on an
+# empty port list (`[ -n "$3" ] || return` BEFORE the ipset destroy), so when
+# we ship an empty NFQWS2_PORTS_UDP_KEEPALIVE the all-packets `zport_*_k` rule
+# from a prior version survives a reboot-less reinstall and keeps routing the
+# whole UDP flow through userspace nfqws2 (r-56.1: this re-broke Discord video
+# streams → MIPS CPU saturation → ~5000ms ping). When keepalive is empty we
+# remove the stale rule+ipset ourselves; the engine recreates them on start
+# only when keepalive is non-empty, so this is a no-op in that case.
+# iptables path (Keenetic) — nft systems use sets, not ipsets, and aren't a
+# z2k target here.
+purge_stale_keepalive_fw() {
+    local cfg="${1:-${ZAPRET2_DIR:-/opt/zapret2}/config}"
+    local ka
+    ka=$(grep -E '^NFQWS2_PORTS_UDP_KEEPALIVE=' "$cfg" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/[" ]//g')
+    [ -n "$ka" ] && return 0   # legit keepalive configured — leave engine's rules alone
+
+    local tbl ipset_k rule guard
+    for tbl in iptables ip6tables; do
+        command -v "$tbl" >/dev/null 2>&1 || continue
+        for ipset_k in zport_udp_k zport_tcp_k; do
+            guard=0
+            while "$tbl" -t mangle -S POSTROUTING 2>/dev/null | grep -q "match-set ${ipset_k} "; do
+                rule=$("$tbl" -t mangle -S POSTROUTING 2>/dev/null | grep -m1 "match-set ${ipset_k} " | sed 's/^-A /-D /')
+                [ -n "$rule" ] || break
+                # shellcheck disable=SC2086
+                "$tbl" -t mangle $rule 2>/dev/null || break
+                guard=$((guard + 1)); [ "$guard" -gt 20 ] && break
+            done
+        done
+    done
+    ipset destroy zport_udp_k 2>/dev/null || true
+    ipset destroy zport_tcp_k 2>/dev/null || true
+}
+
 apply_category_strategies_v2() {
     local yt_tcp_strategy=$1
     local yt_gv_strategy=$2
@@ -2169,6 +2204,11 @@ apply_category_strategies_v2() {
     # Перезапустить сервис
     print_info "Перезапуск сервиса..."
     "$init_script" restart >/dev/null 2>&1
+
+    # Чистим stale keepalive-правило, оставшееся от прежней версии (engine
+    # teardown не удаляет его при пустом NFQWS2_PORTS_UDP_KEEPALIVE). Иначе
+    # all-packets NFQUEUE на discord-порты переживает апгрейд → стрим 5000.
+    purge_stale_keepalive_fw "$zapret_config"
 
     sleep 2
 
