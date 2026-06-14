@@ -391,6 +391,30 @@ inject_yt_login_domains() {
     return 0
 }
 
+# Video-serving Google domains that ride the googlevideo profiles (gv_tcp over
+# TLS, QUIC YT profile over UDP) but that upstream youtube.txt omits. Paired
+# with googlevideo.com — same handling. Injected ONLY into the lists that carry
+# googlevideo (TCP/YT_GV + UDP/YT), NOT TCP/YT (yt_tcp), where googlevideo is
+# intentionally stripped (subtract_googlevideo_from_yt) — keeping these out of
+# yt_tcp so the gv_tcp profile (first-match by its own hostlist) handles them.
+# UDP/YT is overwritten by the youtube.txt fetch, so re-add post-fetch;
+# TCP/YT_GV is static but injected too for durability across list-only updates
+# (where a full reinstall hasn't redeployed the shipped file). Idempotent.
+YT_VIDEO_DOMAINS="video.google.com"
+
+inject_yt_video_domains() {
+    local list d added
+    for list in "$EXTRA/TCP/YT_GV/List.txt" "$EXTRA/UDP/YT/List.txt"; do
+        [ -f "$list" ] || continue
+        added=0
+        for d in $YT_VIDEO_DOMAINS; do
+            grep -qxF "$d" "$list" 2>/dev/null || { printf '%s\n' "$d" >> "$list"; added=$((added+1)); }
+        done
+        [ "$added" -gt 0 ] && log "YT video: injected $added video domain(s) into ${list#"$EXTRA"/}"
+    done
+    return 0
+}
+
 # --- Subtract YT + googlevideo from RKN list -------------------------------
 #
 # runetfreedom's ru-blocked / ru-blocked-all lists include YouTube and
@@ -619,6 +643,11 @@ fetch_all() {
     # over TLS + QUIC). Before the RKN subtract so they reach the YT profile,
     # not RKN. Idempotent.
     inject_yt_login_domains || log "YT login inject: non-fatal failure, continuing"
+
+    # Re-add video.google.com to the googlevideo-carrying lists (TCP/YT_GV +
+    # UDP/YT) — survives the youtube.txt overwrite. Before the RKN subtract so
+    # it lands in the YT/GV profiles, not RKN. Idempotent.
+    inject_yt_video_domains || log "YT video inject: non-fatal failure, continuing"
 
     # Strip YT + googlevideo overlaps from RKN list (enhanced branch only).
     # Runs unconditionally — even on all-304 runs an older on-disk RKN list
