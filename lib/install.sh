@@ -3251,15 +3251,24 @@ step_finalize() {
     fi
 
     if [ -f "$backup_tmp/webpanel-port" ]; then
-        local _wp_port _wp_bind _wp_args _wp_src
+        local _wp_port _wp_bind _wp_args _wp_src _wp_bind_disp
         _wp_port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null | tr -dc '0-9')
-        _wp_bind=$(cat "$backup_tmp/webpanel-bind" 2>/dev/null | tr -d '\r\n ')
+        # Only replay an EXPLICIT 0.0.0.0 choice. The bind file otherwise
+        # holds the auto-detected LAN bridge list (one IP per line) — let
+        # the fresh installer re-detect it (its detection is correct and
+        # picks up topology changes), instead of mangling the multi-line
+        # list into a broken single --bind arg.
+        _wp_bind=$(head -1 "$backup_tmp/webpanel-bind" 2>/dev/null | tr -d '\r\n ')
         _wp_args=""
+        _wp_bind_disp="auto"
         [ -n "$_wp_port" ] && _wp_args="--port $_wp_port"
-        [ -n "$_wp_bind" ] && _wp_args="$_wp_args --bind $_wp_bind"
+        if [ "$_wp_bind" = "0.0.0.0" ]; then
+            _wp_args="$_wp_args --bind 0.0.0.0"
+            _wp_bind_disp="0.0.0.0"
+        fi
         _wp_src="${WORK_DIR}/webpanel/install.sh"
         if [ -f "$_wp_src" ]; then
-            print_info "Восстановление веб-панели (port=${_wp_port:-default}, bind=${_wp_bind:-auto})..."
+            print_info "Восстановление веб-панели (port=${_wp_port:-default}, bind=${_wp_bind_disp})..."
             # shellcheck disable=SC2086
             if sh "$_wp_src" $_wp_args >/dev/null 2>&1; then
                 print_success "Веб-панель восстановлена и запущена"
