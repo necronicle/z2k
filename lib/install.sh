@@ -3251,15 +3251,18 @@ step_finalize() {
     fi
 
     if [ -f "$backup_tmp/webpanel-port" ]; then
-        local _wp_port _wp_bind _wp_args _wp_src
+        local _wp_port _wp_args _wp_src
         _wp_port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null | tr -dc '0-9')
-        _wp_bind=$(cat "$backup_tmp/webpanel-bind" 2>/dev/null | tr -d '\r\n ')
+        # Do NOT replay the saved bind: r-56.3 could have persisted the wrong
+        # LAN segment (e.g. a guest bridge) into webpanel/bind, and replaying
+        # it would keep the panel on the unreachable address. Let
+        # webpanel/install.sh auto-detect the LAN IP fresh on every restore
+        # (single-IP detect_lan_ip, 192.168 > 172.16-31 > 10 priority).
         _wp_args=""
         [ -n "$_wp_port" ] && _wp_args="--port $_wp_port"
-        [ -n "$_wp_bind" ] && _wp_args="$_wp_args --bind $_wp_bind"
         _wp_src="${WORK_DIR}/webpanel/install.sh"
         if [ -f "$_wp_src" ]; then
-            print_info "Восстановление веб-панели (port=${_wp_port:-default}, bind=${_wp_bind:-auto})..."
+            print_info "Восстановление веб-панели (port=${_wp_port:-default}, bind=auto)..."
             # shellcheck disable=SC2086
             if sh "$_wp_src" $_wp_args >/dev/null 2>&1; then
                 print_success "Веб-панель восстановлена и запущена"
