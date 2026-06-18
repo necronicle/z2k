@@ -24,46 +24,44 @@ webpanel_is_running() {
     [ -f "$WEBPANEL_PIDFILE" ] && kill -0 "$(cat "$WEBPANEL_PIDFILE" 2>/dev/null)" 2>/dev/null
 }
 
-# All LAN bridge IPs the panel listens on (mirror of webpanel/install.sh
-# detect_lan_ips): every IPv4 on a br* interface that is NOT the WAN. One
-# IP per line.
-webpanel_lan_ips() {
-    local _wan
-    _wan=" $(ip route show default 2>/dev/null \
-        | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | tr '\n' ' ') "
-    ip -4 addr show 2>/dev/null | awk -v wan="$_wan" '
-        /^[0-9]+: / {
-            match($2, /^[^:@]+/)
-            iface = substr($2, RSTART, RLENGTH)
-            ok = (index(iface, "br") == 1) && (index(wan, " " iface " ") == 0)
-            next
-        }
-        ok && $1 == "inet" {
-            split($2, a, "/")
-            if (!(a[1] in seen)) { seen[a[1]] = 1; print a[1] }
-        }
-    '
-}
-
-# Panel URL(s), space-separated. Prefers the real persisted bind list
-# (/opt/zapret2/webpanel/bind — what lighttpd actually listens on); falls
-# back to a live LAN-bridge scan. Never advertises 0.0.0.0 — resolves it
-# to the concrete LAN IPs instead, so the menu always shows an address the
-# user can actually reach.
 webpanel_url() {
     local port="8088"
     [ -r "$WEBPANEL_PORT_FILE" ] && port=$(cat "$WEBPANEL_PORT_FILE" 2>/dev/null | tr -dc '0-9')
     [ -z "$port" ] && port=8088
-    local bind_file="$WEBPANEL_DIR/bind"
-    local ips=""
-    if [ -r "$bind_file" ]; then
-        ips=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$bind_file" 2>/dev/null | grep -vxF '0.0.0.0')
+    local ip=""
+    # Pick the real LAN IP. Two-pass: bridge interfaces (br*) first,
+    # then any. Within each pass: 192.168.* → 172.16-31.* → 10.*.
+    # History: 2026-04-15 (Владислав, Rostelecom) we promoted 192.168 over
+    # 10.* to skip provider 10.4.x.x interconnect. 2026-04-18 (Эд) we added
+    # bridge-first to skip routers with eth*.* in 192.168 range too.
+    local pattern ifprefix
+    for ifprefix in 'br' ''; do
+        for pattern in \
+            '192\.168\.' \
+            '172\.(1[6-9]|2[0-9]|3[01])\.' \
+            '10\.' ; do
+            ip=$(ip -4 addr show 2>/dev/null \
+                | awk -v p="$pattern" -v ifp="$ifprefix" '
+                    /^[0-9]+: / {
+                        match($2, /^[^:@]+/)
+                        iface = substr($2, RSTART, RLENGTH)
+                        ok = (ifp == "" || index(iface, ifp) == 1)
+                        next
+                    }
+                    ok && $0 ~ ("inet " p) {
+                        split($2, a, "/")
+                        print a[1]
+                        exit
+                    }
+                ')
+            [ -n "$ip" ] && break 2
+        done
+    done
+    if [ -z "$ip" ]; then
+        ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
     fi
-    [ -z "$ips" ] && ips=$(webpanel_lan_ips)
-    [ -z "$ips" ] && ips="<router-ip>"
-    # Join the (newline-separated) IPs into space-separated URLs via awk —
-    # shell-portable, no reliance on unquoted word-splitting.
-    printf '%s\n' "$ips" | awk -v port="$port" 'NF { printf "%shttp://%s:%s/", sep, $1, port; sep=" " }'
+    [ -z "$ip" ] && ip="<router-ip>"
+    printf 'http://%s:%s/' "$ip" "$port"
 }
 
 menu_webpanel() {

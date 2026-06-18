@@ -4,9 +4,8 @@
 # Usage:
 #   sh webpanel/install.sh [--port N] [--bind IP]
 #
-# Defaults: port 8088, binds to ALL LAN bridge IPs (main + guest
-# segments), never to WAN. Idempotent — stops the panel, overwrites
-# files, regenerates config, restarts.
+# Defaults: port 8088, bind 0.0.0.0. Idempotent — stops the panel,
+# overwrites files, regenerates config, restarts.
 
 set -eu
 
@@ -56,66 +55,29 @@ detect_lan_ip() {
     printf '%s' "$_ip"
 }
 
-# Collect ALL LAN IPs to bind the panel to: every IPv4 on a bridge
-# interface (br*) that is NOT a WAN interface. On Keenetic the home LAN
-# and every guest segment are bridges (br0/br1/br2…); WAN/provider
-# interfaces (ppp0, eth*, VLAN sub-ifs, and the 10.4.x.x provider
-# interconnect that bare 0.0.0.0 once exposed — Владислав 2026-04-15) are
-# never bridges, and are additionally excluded by name via the default
-# route. Binding to exactly these means the panel is reachable on every
-# home segment but never on the WAN side, with no firewall rule needed.
-# Output: one IP per line. This replaces the old single-IP guess, which
-# with multiple same-RFC1918 bridges (e.g. a guest net) picked whichever
-# appeared first in `ip addr` — often the WRONG segment.
-detect_lan_ips() {
-    local _wan
-    _wan=" $(ip route show default 2>/dev/null \
-        | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | tr '\n' ' ') "
-    ip -4 addr show 2>/dev/null | awk -v wan="$_wan" '
-        /^[0-9]+: / {
-            match($2, /^[^:@]+/)
-            iface = substr($2, RSTART, RLENGTH)
-            ok = (index(iface, "br") == 1) && (index(wan, " " iface " ") == 0)
-            next
-        }
-        ok && $1 == "inet" {
-            split($2, a, "/")
-            if (!(a[1] in seen)) { seen[a[1]] = 1; print a[1] }
-        }
-    '
-}
-
 PORT=8088
-# Bind to all LAN bridge IPs (see detect_lan_ips). We never default to
-# 0.0.0.0: it once exposed the panel on a Rostelecom 10.4.x.x provider
-# interconnect (Владислав 2026-04-15). Pass --bind 0.0.0.0 (or a single
-# IP) to override the auto list explicitly.
-BIND_OVERRIDE=""
-LAN_IPS="$(detect_lan_ips)"
-# Fallbacks if no bridge IP found (very unusual on Keenetic): the old
-# single-best LAN guess, then 0.0.0.0 as an absolute last resort.
-[ -z "$LAN_IPS" ] && LAN_IPS="$(detect_lan_ip)"
-[ -z "$LAN_IPS" ] && LAN_IPS="0.0.0.0"
+# Default BIND is the detected LAN IP, NOT 0.0.0.0. On Rostelecom routers
+# 0.0.0.0 accidentally exposed the panel on the 10.4.x.x provider-side
+# interconnect interface (Владислав 2026-04-15). Use --bind 0.0.0.0
+# explicitly if you actually want multi-interface listening.
+BIND="$(detect_lan_ip)"
+[ -z "$BIND" ] && BIND="0.0.0.0"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --port) PORT="$2"; shift 2 ;;
-        --bind) BIND_OVERRIDE="$2"; shift 2 ;;
+        --bind) BIND="$2"; shift 2 ;;
         -h|--help)
             cat <<EOF
 z2k webpanel installer (lighttpd-based, LAN-only)
 Usage: install.sh [--port N] [--bind IP]
-Defaults: port 8088, binds to all LAN bridge IPs (main + guest segments).
+Defaults: port 8088, bind 0.0.0.0
 EOF
             exit 0
             ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
-
-# Explicit --bind overrides the auto-detected list (single IP, or 0.0.0.0
-# for all interfaces).
-[ -n "$BIND_OVERRIDE" ] && LAN_IPS="$BIND_OVERRIDE"
 
 # On Keenetic the rootfs is a read-only squashfs. If opkg runs without
 # TMPDIR pointing at a writable dir (e.g. when invoked with cwd=/), it
@@ -260,27 +222,14 @@ chmod 644 "$WWW_DIR/index.html" "$WWW_DIR/app.js" "$WWW_DIR/style.css" \
           "$WWW_DIR/favicon.svg" 2>/dev/null || true
 
 echo "[4/6] Writing lighttpd config"
-# Primary listening socket = first LAN IP; every other LAN bridge IP
-# becomes an additional $SERVER["socket"] block so lighttpd listens on
-# all home segments at once. LAN_IPS is a newline-separated list — iterate
-# with read (not unquoted word-splitting) so it's shell-portable.
-_first_ip=$(printf '%s\n' "$LAN_IPS" | head -1)
 sed \
     -e "s|@WWW_DIR@|${WWW_DIR}|g" \
     -e "s|@PORT@|${PORT}|g" \
-    -e "s|@BIND@|${_first_ip}|g" \
+    -e "s|@BIND@|${BIND}|g" \
     "$SRC_DIR/lighttpd.conf" > "$CONF_DST"
 
-printf '%s\n' "$LAN_IPS" | while IFS= read -r _ip; do
-    [ -n "$_ip" ] || continue
-    [ "$_ip" = "$_first_ip" ] && continue
-    printf '\n$SERVER["socket"] == "%s:%s" { }\n' "$_ip" "$PORT"
-done >> "$CONF_DST"
-
 printf '%s' "$PORT" > "$WEBPANEL_DIR/port"
-# Persist the full bind list (one IP per line) — the menu reads this to
-# show the real URLs, and reinstall preserves an explicit 0.0.0.0 choice.
-printf '%s\n' "$LAN_IPS" > "$WEBPANEL_DIR/bind"
+printf '%s' "$BIND" > "$WEBPANEL_DIR/bind"
 
 echo "[5/6] Installing init.d script"
 cp -f "$SRC_DIR/init.d/S96z2k-webpanel" "$INIT_DST"
@@ -292,19 +241,21 @@ echo "[6/6] Starting webpanel"
     exit 1
 }
 
+# If the user forced --bind to something other than 0.0.0.0 we print
+# that as the URL. Otherwise fall back to the detect_lan_ip helper.
+if [ "$BIND" = "0.0.0.0" ]; then
+    IP=$(detect_lan_ip)
+    [ -z "$IP" ] && IP="<router-ip>"
+else
+    IP="$BIND"
+fi
+
 cat <<EOF
 
 ===========================================================
 z2k webpanel installed
 -----------------------------------------------------------
-URL(s) — open from the LAN, not the guest network:
-EOF
-printf '%s\n' "$LAN_IPS" | while IFS= read -r _ip; do
-    [ -n "$_ip" ] || continue
-    [ "$_ip" = "0.0.0.0" ] && _ip="<router-lan-ip>"
-    echo "  http://${_ip}:${PORT}/"
-done
-cat <<EOF
+URL:     http://$IP:$PORT/
 Access:  LAN-only, no authentication
 -----------------------------------------------------------
 Control: $INIT_DST {start|stop|restart|status}
