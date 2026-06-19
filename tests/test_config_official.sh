@@ -741,6 +741,45 @@ EOF
 test_pkt_in_under_flag "0" "10" "NFQWS2_TCP_PKT_IN stays at 10"
 test_pkt_in_under_flag "1" "30" "NFQWS2_TCP_PKT_IN bumps to 30"
 
+printf "\n--- DISABLE_IPV6: preserved across config regen (user request 2026-06-19) ---\n"
+
+# Regression: DISABLE_IPV6 was the ONE knob read only from the environment,
+# so a user-set value got clobbered by the IPv6 autodetect on every config
+# regen / nightly auto-update (p-30 wrote it to the file, but this function
+# re-overwrote it). It now reads back from the existing config like every
+# other knob. Precedence: env > saved-in-file > autodetect.
+test_disable_ipv6() {
+    local tag="$1" file_line="$2" env_val="$3"
+    local root="${MOCK_DIR}/disable-ipv6-$tag"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" "$root/extra_strats/TCP/YT_GV" \
+             "$root/extra_strats/TCP/RKN" "$root/extra_strats/UDP/YT" "$root/lists"
+    echo "youtube.com"     > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
+    echo "youtube.com"     > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org"   > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:strategy=1" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
+    { echo "ENABLED=1"; if [ -n "$file_line" ]; then echo "$file_line"; fi; } > "$root/config"
+    if [ -n "$env_val" ]; then
+        ( ZAPRET2_DIR="$root" DISABLE_IPV6="$env_val" create_official_config "$root/config" >/dev/null 2>&1 )
+    else
+        ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
+    fi
+    grep -E '^DISABLE_IPV6=' "$root/config" | head -1
+    rm -rf "$root"
+}
+
+DI6_OUT=$(test_disable_ipv6 "file1" "DISABLE_IPV6=1" "")
+assert_contains "DISABLE_IPV6=1 from file survives regen, env unset (p-30 regression)" "DISABLE_IPV6=1" "$DI6_OUT"
+
+DI6_OUT=$(test_disable_ipv6 "env0" "DISABLE_IPV6=1" "0")
+assert_contains "env DISABLE_IPV6=0 overrides saved file =1" "DISABLE_IPV6=0" "$DI6_OUT"
+
+DI6_OUT=$(test_disable_ipv6 "absent" "" "")
+assert_contains "absent in file -> autodetect still emits a DISABLE_IPV6 line" "DISABLE_IPV6=" "$DI6_OUT"
+
 printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
 
 # Z2K_PADENCAP (default 0): when =1, inject_z2k_tls_mods добавляет

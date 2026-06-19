@@ -1891,6 +1891,15 @@ create_official_config() {
     #   - iptables => ip6tables must exist
     #   - nftables => nft must exist
     local disable_ipv6_value="${DISABLE_IPV6:-}"
+    # If not set in the environment, honor a value already saved in the
+    # config file — like every other knob read via safe_config_read below.
+    # Without this, the IPv6 autodetect re-clobbers a user-set DISABLE_IPV6
+    # on every config regen / nightly auto-update: p-30 preserved it INTO
+    # the file via install.sh, but this regenerate then read env (empty),
+    # autodetected, and overwrote it back. (user request 2026-06-19)
+    if [ -z "$disable_ipv6_value" ] && [ -f "$config_file" ]; then
+        disable_ipv6_value=$(safe_config_read "DISABLE_IPV6" "$config_file" "")
+    fi
     if [ -z "$disable_ipv6_value" ]; then
         disable_ipv6_value="1"
         local v6_ok="0"
@@ -1921,7 +1930,7 @@ create_official_config() {
             print_info "IPv6 не обнаружен (нет default route/global addr): оставляем IPv6 отключенным (DISABLE_IPV6=1)"
         fi
     else
-        print_info "DISABLE_IPV6 задан вручную: DISABLE_IPV6=$disable_ipv6_value"
+        print_info "DISABLE_IPV6 сохранён (env/конфиг): DISABLE_IPV6=$disable_ipv6_value"
     fi
 
     # Сохранить пользовательские настройки из существующего конфига
