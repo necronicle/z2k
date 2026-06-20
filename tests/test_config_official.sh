@@ -780,6 +780,41 @@ assert_contains "env DISABLE_IPV6=0 overrides saved file =1" "DISABLE_IPV6=0" "$
 DI6_OUT=$(test_disable_ipv6 "absent" "" "")
 assert_contains "absent in file -> autodetect still emits a DISABLE_IPV6 line" "DISABLE_IPV6=" "$DI6_OUT"
 
+# Auto-update reinstall: config_file is built FRESH (step_build_zapret2 moved
+# the old tree to .old.$$ BEFORE config gen), so config_file carries no
+# DISABLE_IPV6 on the first pass. The prior value must be recovered from the
+# .old.$$ backup, NOT autodetected — otherwise a hand-disabled v6 gets
+# re-enabled mid-reinstall (Mark 2026-06-20: на апдейте IPv6 не трогаем).
+test_disable_ipv6_reinstall() {
+    local tag="$1" old_val="$2"
+    local root="${MOCK_DIR}/disable-ipv6-ri-$tag"
+    rm -rf "$root" "${root}".old.* 2>/dev/null
+    mkdir -p "$root/extra_strats/TCP/YT" "$root/extra_strats/TCP/YT_GV" \
+             "$root/extra_strats/TCP/RKN" "$root/extra_strats/UDP/YT" "$root/lists"
+    echo "youtube.com"     > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
+    echo "youtube.com"     > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org"   > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:strategy=1" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
+    # fresh config (no DISABLE_IPV6) + prior value lives ONLY in the .old.$$ backup
+    echo "ENABLED=1" > "$root/config"
+    mkdir -p "${root}.old.999"
+    { echo "ENABLED=1"; echo "DISABLE_IPV6=${old_val}"; } > "${root}.old.999/config"
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
+    grep -E '^DISABLE_IPV6=' "$root/config" | head -1
+    rm -rf "$root" "${root}".old.* 2>/dev/null
+}
+
+# Test BOTH values: on a given box autodetect resolves to ONE fixed value, so
+# the opposite-value case proves we PRESERVED rather than re-autodetected.
+DI6_OUT=$(test_disable_ipv6_reinstall "old1" "1")
+assert_contains "reinstall: DISABLE_IPV6=1 recovered from .old backup (hand-disabled v6 preserved)" "DISABLE_IPV6=1" "$DI6_OUT"
+
+DI6_OUT=$(test_disable_ipv6_reinstall "old0" "0")
+assert_contains "reinstall: DISABLE_IPV6=0 recovered from .old backup (not re-autodetected)" "DISABLE_IPV6=0" "$DI6_OUT"
+
 printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
 
 # Z2K_PADENCAP (default 0): when =1, inject_z2k_tls_mods добавляет

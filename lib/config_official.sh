@@ -1891,14 +1891,31 @@ create_official_config() {
     #   - iptables => ip6tables must exist
     #   - nftables => nft must exist
     local disable_ipv6_value="${DISABLE_IPV6:-}"
-    # If not set in the environment, honor a value already saved in the
-    # config file — like every other knob read via safe_config_read below.
-    # Without this, the IPv6 autodetect re-clobbers a user-set DISABLE_IPV6
-    # on every config regen / nightly auto-update: p-30 preserved it INTO
-    # the file via install.sh, but this regenerate then read env (empty),
-    # autodetected, and overwrote it back. (user request 2026-06-19)
+    # PRESERVE policy (Mark 2026-06-20): на апдейте НИКОГДА не включаем и не
+    # выключаем IPv6 — берём значение как есть. Часть юзеров правит DISABLE_IPV6
+    # руками; автодетект имеет право решать ТОЛЬКО на чистой установке, где
+    # прежнего значения нет нигде. Источник по приоритету:
+    #   env override > config_file, который сейчас пишем > config прежней
+    #   установки (живой ИЛИ его .old.$$ бэкап от текущей переустановки).
     if [ -z "$disable_ipv6_value" ] && [ -f "$config_file" ]; then
         disable_ipv6_value=$(safe_config_read "DISABLE_IPV6" "$config_file" "")
+    fi
+    # Auto-update reinstall строит config_file с нуля (step_build_zapret2
+    # переносит старое дерево в .old.$$ ДО генерации конфига), поэтому чтение
+    # выше на первом проходе пустое и старый код тут сваливался в автодетект —
+    # т.е. сам включал/выключал v6 вместо сохранения. Достаём прежнее значение
+    # из живого конфига или самого свежего .old.$$ бэкапа, чтобы автодетект
+    # ниже не перетёр пользовательскую настройку посреди переустановки.
+    if [ -z "$disable_ipv6_value" ]; then
+        local _zd_ipv6="${ZAPRET2_DIR:-/opt/zapret2}"
+        local _prior_cfg
+        # shellcheck disable=SC2045,SC2046
+        for _prior_cfg in "${_zd_ipv6}/config" $(ls -dt "${_zd_ipv6}".old.*/config 2>/dev/null); do
+            [ -f "$_prior_cfg" ] || continue
+            [ "$_prior_cfg" = "$config_file" ] && continue
+            disable_ipv6_value=$(safe_config_read "DISABLE_IPV6" "$_prior_cfg" "")
+            [ -n "$disable_ipv6_value" ] && break
+        done
     fi
     if [ -z "$disable_ipv6_value" ]; then
         disable_ipv6_value="1"
@@ -1930,7 +1947,7 @@ create_official_config() {
             print_info "IPv6 не обнаружен (нет default route/global addr): оставляем IPv6 отключенным (DISABLE_IPV6=1)"
         fi
     else
-        print_info "DISABLE_IPV6 сохранён (env/конфиг): DISABLE_IPV6=$disable_ipv6_value"
+        print_info "DISABLE_IPV6 сохранён как есть (апдейт IPv6 не трогает): DISABLE_IPV6=$disable_ipv6_value"
     fi
 
     # Сохранить пользовательские настройки из существующего конфига
