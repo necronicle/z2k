@@ -1121,6 +1121,15 @@ step_build_zapret2() {
             cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv" || \
                 print_warning "Не удалось сохранить state.tsv — стратегии переподберутся автоматически после установки."
         fi
+        # Per-install relay identity (Stage B): the Ed25519 keypair + install_id the
+        # tunnel client minted once. Preserve across reinstall so the device keeps the
+        # SAME registered identity (re-minting orphans the old registry entry and
+        # forces a re-register). Recoverable (client re-mints+registers if lost) — so
+        # warn, not fatal.
+        if [ -f "$ZAPRET2_DIR/.z2k-relay-id" ]; then
+            cp -f "$ZAPRET2_DIR/.z2k-relay-id" "$backup_tmp/z2k-relay-id" || \
+                print_warning "Не удалось сохранить relay-id — будет переминчен (новая регистрация)."
+        fi
         # Strategy.txt — shipped, не user-owned. Не бэкапим: при реустановке/апдейте
         # свежая shipped-версия из репо побеждает (см. feedback_z2k_user_overrides_policy).
         # Silent fallback flag
@@ -1818,6 +1827,13 @@ step_build_zapret2() {
                 chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
                 print_success "Стратегии autocircular восстановлены"
             fi
+        fi
+
+        # Per-install relay identity (Stage B) — restore the device's minted keypair
+        # so it keeps its registered identity (no re-mint / re-register) across reinstall.
+        if [ -f "$backup_tmp/z2k-relay-id" ]; then
+            cp -f "$backup_tmp/z2k-relay-id" "$ZAPRET2_DIR/.z2k-relay-id"
+            chmod 600 "$ZAPRET2_DIR/.z2k-relay-id" 2>/dev/null || true
         fi
 
         # Strategy.txt не восстанавливаем — shipped-версия из репо имеет

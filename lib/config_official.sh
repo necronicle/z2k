@@ -1967,6 +1967,8 @@ create_official_config() {
     local saved_DISABLE_CUSTOM="1"
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
+    local saved_Z2K_PPE_DEOFFLOAD="1"
+    local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
@@ -2007,6 +2009,14 @@ create_official_config() {
         # POLICY_EXCLUDE=1 в config'е — preserve'им через reinstall.
         saved_POLICY_NAME=$(safe_config_read "POLICY_NAME" "$config_file" "nfqws")
         saved_POLICY_EXCLUDE=$(safe_config_read "POLICY_EXCLUDE" "$config_file" "0")
+        # Z2K_PPE_DEOFFLOAD(_QUIC) — Keenetic per-flow hardware-offload exclusion
+        # toggles (webpanel toggle_ppe). Default 1=ON. Were NOT preserved, so the
+        # toggle's own regenerate_config wiped the key → NDM hook 94 re-added the
+        # de-offload rules → the webpanel switch silently reverted after a regen /
+        # reboot. Now preserved like the other knobs (same class as DISABLE_CUSTOM
+        # and the r-56.6 DISABLE_IPV6 fix).
+        saved_Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "$config_file" "1")
+        saved_Z2K_PPE_DEOFFLOAD_QUIC=$(safe_config_read "Z2K_PPE_DEOFFLOAD_QUIC" "$config_file" "1")
     fi
 
     # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
@@ -2289,6 +2299,14 @@ Z2K_PADENCAP=${saved_Z2K_PADENCAP}
 # preserve через reinstall (без префикса Z2K_, поэтому добавлены в whitelist).
 POLICY_NAME=${saved_POLICY_NAME}
 POLICY_EXCLUDE=${saved_POLICY_EXCLUDE}
+
+# Keenetic per-flow hardware-offload exclusion (PPE de-offload). Default 1=ON.
+# Webpanel toggle (toggle_ppe) sets Z2K_PPE_DEOFFLOAD=0; emitted here with the
+# preserved value so a regen (the toggle's own regenerate_config, another toggle,
+# or an auto-update reinstall) no longer wipes the key and lets the NDM hook
+# silently re-enable de-offload after the user turned it off.
+Z2K_PPE_DEOFFLOAD=${saved_Z2K_PPE_DEOFFLOAD}
+Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can

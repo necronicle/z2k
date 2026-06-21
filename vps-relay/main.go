@@ -53,6 +53,8 @@ const (
 var (
 	listenAddr = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
 	secret     = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
+	secretPrev = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
+	resolveSecret = flag.String("resolve-secret", "", "dedicated HMAC secret for /resolve (decoupled from the tunnel secret); falls back to --secret when empty")
 	verbose    = flag.Bool("v", false, "verbose logging")
 
 	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 8, "max in-flight dials per Telegram DC IP")
@@ -477,8 +479,9 @@ type queuedFrame struct {
 }
 
 type session struct {
-	id string
-	ws *websocket.Conn
+	id      string
+	relayID string // per-install identity (Stage B); "" for shared-secret auth
+	ws      *websocket.Conn
 
 	writeCh   chan queuedFrame // DATA + ordered-CLOSE; FIFO
 	controlCh chan []byte      // CONNECT_OK/FAIL + abort-CLOSE; priority
@@ -874,16 +877,39 @@ func (s *session) readPump() {
 		return
 	}
 	sid, mt, p, err := decodeFrame(msg)
-	if err != nil || sid != 0 || mt != muxAUTH {
+	if err != nil || sid != 0 || (mt != muxAUTH && mt != muxAUTHID) {
 		log.Printf("[%s] first message not auth (sid=%d type=0x%02x)", s.id, sid, mt)
 		return
 	}
-	expected := computeAuthHMAC(*secret)
-	if subtle.ConstantTimeCompare(p, expected) != 1 {
-		log.Printf("[%s] auth HMAC mismatch", s.id)
+	// Dual-accept (NO flip): a registered per-install Ed25519 signature (Stage B,
+	// muxAUTHID) is always honored; the shared-secret HMAC (Stage A, muxAUTH) is
+	// honored too — with the current AND previous secret — UNLESS the flip
+	// (--require-per-install) is enabled. Nothing here blocks a current client.
+	var relayID, scheme string
+	authedOK := false
+	if mt == muxAUTHID {
+		relayID, authedOK = verifyPerInstallAuth(p)
+		scheme = "per-install"
+	} else if !*requirePerInstall {
+		authedOK = subtle.ConstantTimeCompare(p, computeAuthHMAC(*secret)) == 1
+		if !authedOK && *secretPrev != "" {
+			authedOK = subtle.ConstantTimeCompare(p, computeAuthHMAC(*secretPrev)) == 1
+		}
+		scheme = "shared-secret"
+	}
+	if !authedOK {
+		log.Printf("[%s] auth rejected (type=0x%02x scheme=%s id=%s)", s.id, mt, scheme, relayID)
 		return
 	}
-	log.Printf("[%s] authenticated", s.id)
+	if relayID != "" {
+		if !acquireInstallSession(relayID) {
+			log.Printf("[%s] per-install session cap hit for %s", s.id, relayID)
+			return
+		}
+		s.relayID = relayID
+		defer releaseInstallSession(relayID)
+	}
+	log.Printf("[%s] authenticated (scheme=%s id=%s)", s.id, scheme, relayID)
 
 	for {
 		_, msg, err := s.ws.ReadMessage()
@@ -989,11 +1015,27 @@ func handleResolve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}
-	mac := hmac.New(sha256.New, []byte(*secret))
-	mac.Write(body)
-	expected := hex.EncodeToString(mac.Sum(nil))
+	// /resolve has its OWN secret, decoupled from the tunnel secret: rotating the
+	// tunnel credential must not break Instagram IP refresh, and the low-value
+	// resolve secret (which lives in the shell client, i.e. public) must NOT grant
+	// tunnel access. Falls back to --secret when --resolve-secret is unset.
+	resolveHMAC := func(key string) string {
+		m := hmac.New(sha256.New, []byte(key))
+		m.Write(body)
+		return hex.EncodeToString(m.Sum(nil))
+	}
+	rk := *resolveSecret
+	if rk == "" {
+		rk = *secret
+	}
 	got := r.Header.Get("X-Z2K-Auth")
-	if subtle.ConstantTimeCompare([]byte(expected), []byte(got)) != 1 {
+	okResolve := subtle.ConstantTimeCompare([]byte(resolveHMAC(rk)), []byte(got)) == 1
+	// Migration window: a not-yet-updated insta-refresh still signs with the old
+	// shared secret (now passed as --secret-prev), so accept it too.
+	if !okResolve && *secretPrev != "" {
+		okResolve = subtle.ConstantTimeCompare([]byte(resolveHMAC(*secretPrev)), []byte(got)) == 1
+	}
+	if !okResolve {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1076,6 +1118,11 @@ func main() {
 	if err := parseExtraCIDRs(*extraCIDRs); err != nil {
 		log.Fatal(err)
 	}
+
+	initRegistry(*registryPath)
+	if *requirePerInstall {
+		log.Printf("FLIP ACTIVE: --require-per-install — only registered per-install signatures accepted")
+	}
 	if len(extraV4) > 0 {
 		log.Printf("non-Telegram allowlist extras loaded: %d CIDR(s)", len(extraV4))
 	}
@@ -1093,6 +1140,7 @@ func main() {
 		handleWS(ctx, w, r)
 	})
 	mux.HandleFunc("/resolve", handleResolve)
+	mux.HandleFunc("/register", handleRegister)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "z2k vps-relay")
 	})

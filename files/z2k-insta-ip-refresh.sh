@@ -39,7 +39,14 @@ mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
 CONFIG="/opt/zapret2/config"
 RELAY_URL="https://213.176.74.63.nip.io/resolve"
-SECRET="d01f72f9543b29da4e3724b1530c0d11cb30a6f8db15bc0adfe8f2d37b5844b2"
+# Dedicated /resolve secret, DECOUPLED from the tunnel secret (Mark 2026-06-20).
+# Rotating the tunnel credential must not break Instagram IP refresh, and this
+# low-value secret — it only gates a public DNS A-record lookup, not the Telegram
+# relay — living here in a public shell file must NOT grant tunnel access. The VPS
+# validates it via the relay's --resolve-secret. Override via Z2K_RESOLVE_SECRET
+# in /opt/zapret2/config to rotate without editing this file.
+SECRET=$(awk -F= '/^Z2K_RESOLVE_SECRET=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG" 2>/dev/null)
+[ -z "$SECRET" ] && SECRET="57745177a4b883471a4ddc6124a1df6fec77e790729e074ed34dc434f7cdb6f2"
 
 # Hosts we manage. Must match the VPS-side whitelist (insta apex +
 # *.instagram.com / *.cdninstagram.com suffixes).

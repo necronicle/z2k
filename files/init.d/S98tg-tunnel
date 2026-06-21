@@ -68,13 +68,25 @@ start() {
     #                   busybox posts HUP to bg children when the wrapper exits).
     #   trap TERM/INT — `stop` kills the supervisor; the trap kills the daemon.
     #   backoff resets after a healthy run (>=60s), else grows to a 30s cap.
+    # Optional per-install overrides from /opt/zapret2/config: a relay secret/URL
+    # set there takes precedence over the binary's build-injected defaults — lets
+    # us rotate the tunnel secret or repoint the relay without rebuilding the
+    # client. Absent (the normal case) => the compiled-in default is used.
+    TUNNEL_FLAGS=""
+    if [ -f "/opt/zapret2/config" ]; then
+        _rs=$(awk -F= '/^Z2K_RELAY_SECRET=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+        _ru=$(awk -F= '/^Z2K_RELAY_URL=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+        [ -n "$_rs" ] && TUNNEL_FLAGS="$TUNNEL_FLAGS --tunnel-secret=$_rs"
+        [ -n "$_ru" ] && TUNNEL_FLAGS="$TUNNEL_FLAGS --tunnel-url=$_ru"
+    fi
     (
         trap '' HUP
         trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
         backoff=1
         while :; do
             t0=$(date +%s 2>/dev/null || echo 0)
-            $BIN --listen=:1443 --timeout=15m -v </dev/null >> "$LOG" 2>&1 &
+            # shellcheck disable=SC2086  # TUNNEL_FLAGS is intentionally word-split
+            $BIN --listen=:1443 --timeout=15m $TUNNEL_FLAGS -v </dev/null >> "$LOG" 2>&1 &
             child=$!
             wait "$child"
             t1=$(date +%s 2>/dev/null || echo 0)

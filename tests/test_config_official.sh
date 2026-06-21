@@ -815,6 +815,37 @@ assert_contains "reinstall: DISABLE_IPV6=1 recovered from .old backup (hand-disa
 DI6_OUT=$(test_disable_ipv6_reinstall "old0" "0")
 assert_contains "reinstall: DISABLE_IPV6=0 recovered from .old backup (not re-autodetected)" "DISABLE_IPV6=0" "$DI6_OUT"
 
+printf "\n--- Z2K_PPE_DEOFFLOAD: webpanel offload toggle persists across regen ---\n"
+
+# Regression: the Keenetic per-flow hardware-offload exclusion toggle
+# (Z2K_PPE_DEOFFLOAD) was NOT in the config-preserve pattern, so toggle_ppe's own
+# regenerate_config wiped the key -> the NDM hook re-added the de-offload rules ->
+# the webpanel switch silently reverted after a regen/reboot. Must survive now.
+test_ppe_deoffload() {
+    local tag="$1" file_line="$2"
+    local root="${MOCK_DIR}/ppe-$tag"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" "$root/extra_strats/TCP/YT_GV" \
+             "$root/extra_strats/TCP/RKN" "$root/extra_strats/UDP/YT" "$root/lists"
+    echo "youtube.com"     > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
+    echo "youtube.com"     > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org"   > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "whitelisted.example.com" > "$root/lists/whitelist.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:strategy=1" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
+    { echo "ENABLED=1"; if [ -n "$file_line" ]; then echo "$file_line"; fi; } > "$root/config"
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
+    grep -E '^Z2K_PPE_DEOFFLOAD=' "$root/config" | head -1
+    rm -rf "$root"
+}
+
+PPE_OUT=$(test_ppe_deoffload "off" "Z2K_PPE_DEOFFLOAD=0")
+assert_contains "Z2K_PPE_DEOFFLOAD=0 survives regen (webpanel toggle no longer reverts)" "Z2K_PPE_DEOFFLOAD=0" "$PPE_OUT"
+
+PPE_OUT=$(test_ppe_deoffload "absent" "")
+assert_contains "Z2K_PPE_DEOFFLOAD absent -> emits default =1" "Z2K_PPE_DEOFFLOAD=1" "$PPE_OUT"
+
 printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
 
 # Z2K_PADENCAP (default 0): when =1, inject_z2k_tls_mods добавляет

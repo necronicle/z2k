@@ -1,0 +1,336 @@
+package main
+
+// registry.go — Stage B per-install identity gating (Mark 2026-06-21).
+//
+// Each genuine z2k install mints an Ed25519 keypair on-device (private key never
+// leaves the router, never in the repo/binary) and registers its public key here
+// via POST /register. On tunnel connect it presents a per-install AUTH frame
+// (mux type 0x06) carrying install_id + a fresh timestamp + an Ed25519 signature.
+//
+// This is DUAL-ACCEPT and NOT a flip: the relay still accepts the shared-secret
+// HMAC (muxAUTH 0x00) as long as --require-per-install is false (the default).
+// The flip — refusing static auth so only registered installs get through — is a
+// separate, deliberate decision flipped via --require-per-install once adoption
+// is high. Nothing here blocks any current client.
+
+import (
+	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"flag"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const muxAUTHID byte = 0x06 // per-install AUTH frame: [id:16][ts:8][sig:64]
+
+var (
+	registryPath          = flag.String("registry-path", "/var/lib/z2k-relay/registry.json", "per-install identity registry file")
+	requirePerInstall     = flag.Bool("require-per-install", false, "FLIP: reject static-secret auth, require a registered per-install signature. DO NOT enable until adoption is high — it black-holes every non-migrated install.")
+	perInstallMaxSessions = flag.Int("per-install-max-sessions", 64, "max concurrent tunnel sessions per install_id (0 = unlimited)")
+	registerRatePerMin    = flag.Int("register-rate-per-min", 30, "max /register POSTs accepted per source IP per minute (mass-mint speed-bump)")
+	authSkewSeconds       = flag.Int64("auth-skew-seconds", 120, "max accepted clock skew (seconds) on the per-install AUTH timestamp")
+)
+
+// ----------------------------------------------------------------- registry ---
+
+type regEntry struct {
+	Pubkey    string `json:"pubkey"`     // base64(std) Ed25519 public key
+	Revoked   bool   `json:"revoked"`    // surgical kill-switch (checked on the auth hot path)
+	CreatedAt int64  `json:"created_at"` // unix seconds
+}
+
+type registry struct {
+	mu   sync.RWMutex
+	m    map[string]*regEntry
+	path string
+}
+
+var reg *registry
+
+func initRegistry(path string) {
+	reg = &registry{m: make(map[string]*regEntry), path: path}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("registry: read %s: %v (starting empty)", path, err)
+		}
+		return
+	}
+	var m map[string]*regEntry
+	if err := json.Unmarshal(data, &m); err != nil {
+		log.Printf("registry: parse %s: %v (starting empty)", path, err)
+		return
+	}
+	reg.m = m
+	log.Printf("registry: loaded %d install identities from %s", len(m), path)
+}
+
+func (rg *registry) get(id string) *regEntry {
+	rg.mu.RLock()
+	defer rg.mu.RUnlock()
+	return rg.m[id]
+}
+
+// upsert records a new identity. Mint-once: an existing id with a DIFFERENT
+// pubkey is rejected (prevents a thief re-binding someone else's install_id).
+// Returns (created bool, ok bool).
+func (rg *registry) upsert(id, pubkey string) (bool, bool) {
+	rg.mu.Lock()
+	defer rg.mu.Unlock()
+	if e, exists := rg.m[id]; exists {
+		if e.Pubkey != pubkey {
+			return false, false // id taken by a different key — reject
+		}
+		return false, true // idempotent re-register
+	}
+	rg.m[id] = &regEntry{Pubkey: pubkey, CreatedAt: time.Now().Unix()}
+	rg.persistLocked()
+	return true, true
+}
+
+// persistLocked writes the registry atomically (temp + rename). Caller holds mu.
+func (rg *registry) persistLocked() {
+	if rg.path == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(rg.path), 0o700)
+	tmp := rg.path + ".tmp"
+	data, err := json.Marshal(rg.m)
+	if err != nil {
+		log.Printf("registry: marshal: %v", err)
+		return
+	}
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("registry: write %s: %v", tmp, err)
+		return
+	}
+	if err := os.Rename(tmp, rg.path); err != nil {
+		log.Printf("registry: rename %s: %v", rg.path, err)
+	}
+}
+
+// ------------------------------------------------------- /register rate-limit ---
+
+type ipBucket struct {
+	count       int
+	windowStart time.Time
+}
+
+var (
+	regRateMu sync.Mutex
+	regRate   = map[string]*ipBucket{}
+)
+
+func registerRateOK(ip string) bool {
+	if *registerRatePerMin <= 0 {
+		return true
+	}
+	regRateMu.Lock()
+	defer regRateMu.Unlock()
+	now := time.Now()
+	b := regRate[ip]
+	if b == nil || now.Sub(b.windowStart) >= time.Minute {
+		regRate[ip] = &ipBucket{count: 1, windowStart: now}
+		// opportunistic GC of stale buckets
+		if len(regRate) > 4096 {
+			for k, v := range regRate {
+				if now.Sub(v.windowStart) >= 2*time.Minute {
+					delete(regRate, k)
+				}
+			}
+		}
+		return true
+	}
+	if b.count >= *registerRatePerMin {
+		return false
+	}
+	b.count++
+	return true
+}
+
+// -------------------------------------------------------- /register handler ---
+
+type registerReq struct {
+	InstallID string `json:"install_id"`
+	Pubkey    string `json:"pubkey"` // base64(std) Ed25519 public key
+}
+
+// resolveRemoteIP extracts the client IP: X-Forwarded-For (set by Caddy/nginx)
+// first hop, else RemoteAddr.
+func resolveRemoteIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := indexByte(xff, ','); i >= 0 {
+			return trimSpace(xff[:i])
+		}
+		return trimSpace(xff)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ip := resolveRemoteIP(r)
+	if !registerRateOK(ip) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	// Auth: X-Z2K-Auth = hex(HMAC-SHA256(tunnelSecret, body)). Gated by the same
+	// shared secret as the tunnel (dual-accept with --secret-prev). This is a
+	// speed-bump, not the real gate — the rate-limit above bounds mass-minting.
+	hsig := func(key string) string {
+		m := hmac.New(sha256.New, []byte(key))
+		m.Write(body)
+		return hex.EncodeToString(m.Sum(nil))
+	}
+	got := r.Header.Get("X-Z2K-Auth")
+	okAuth := subtle.ConstantTimeCompare([]byte(hsig(*secret)), []byte(got)) == 1
+	if !okAuth && *secretPrev != "" {
+		okAuth = subtle.ConstantTimeCompare([]byte(hsig(*secretPrev)), []byte(got)) == 1
+	}
+	if !okAuth {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req registerReq
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if !validInstallID(req.InstallID) {
+		http.Error(w, "bad install_id", http.StatusBadRequest)
+		return
+	}
+	pub, err := base64.StdEncoding.DecodeString(req.Pubkey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		http.Error(w, "bad pubkey", http.StatusBadRequest)
+		return
+	}
+	created, ok := reg.upsert(req.InstallID, req.Pubkey)
+	if !ok {
+		http.Error(w, "install_id taken", http.StatusConflict)
+		return
+	}
+	if created {
+		log.Printf("register: new install %s from %s", req.InstallID, ip)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+// validInstallID: 16 bytes hex (32 chars), lowercase hex only.
+func validInstallID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// ------------------------------------------------ per-install AUTH verify ---
+
+// verifyPerInstallAuth parses+verifies a muxAUTHID payload:
+//
+//	[install_id:16][timestamp:8 BE unix][ed25519 sig:64]   (88 bytes)
+//
+// signed message = install_id(16) || timestamp(8). Returns the install_id (for
+// logging/quota) and whether auth succeeded.
+func verifyPerInstallAuth(payload []byte) (string, bool) {
+	if len(payload) != 88 {
+		return "", false
+	}
+	id := hex.EncodeToString(payload[0:16])
+	ts := int64(binary.BigEndian.Uint64(payload[16:24]))
+	sig := payload[24:88]
+	now := time.Now().Unix()
+	if ts < now-*authSkewSeconds || ts > now+*authSkewSeconds {
+		return id, false
+	}
+	e := reg.get(id)
+	if e == nil || e.Revoked {
+		return id, false
+	}
+	pub, err := base64.StdEncoding.DecodeString(e.Pubkey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return id, false
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), payload[0:24], sig) {
+		return id, false
+	}
+	return id, true
+}
+
+// ------------------------------------------------ per-install session quota ---
+
+var installSessions sync.Map // install_id -> *atomic.Int64
+
+func acquireInstallSession(id string) bool {
+	if *perInstallMaxSessions <= 0 {
+		return true
+	}
+	v, _ := installSessions.LoadOrStore(id, new(atomic.Int64))
+	c := v.(*atomic.Int64)
+	if c.Add(1) > int64(*perInstallMaxSessions) {
+		c.Add(-1)
+		return false
+	}
+	return true
+}
+
+func releaseInstallSession(id string) {
+	if *perInstallMaxSessions <= 0 || id == "" {
+		return
+	}
+	if v, ok := installSessions.Load(id); ok {
+		v.(*atomic.Int64).Add(-1)
+	}
+}
+
+// tiny helpers (avoid importing strings just for these)
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+func trimSpace(s string) string {
+	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t') {
+		s = s[1:]
+	}
+	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
+		s = s[:len(s)-1]
+	}
+	return s
+}

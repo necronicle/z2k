@@ -1,5 +1,12 @@
 BINARY=tg-mtproxy-client
-GOFLAGS=-ldflags="-s -w"
+
+# Tunnel secret is injected at BUILD time and is NOT committed to source.
+# Provide it on the command line for production builds:
+#   make all Z2K_TUNNEL_SECRET=<hex>
+# An empty value builds a binary that REQUIRES --tunnel-secret at runtime (the
+# router supplies it from /opt/zapret2/config Z2K_RELAY_SECRET when set).
+Z2K_TUNNEL_SECRET ?=
+GOFLAGS=-ldflags="-s -w -X main.defaultTunnelSecret=$(Z2K_TUNNEL_SECRET)"
 
 .PHONY: all arm64 clean
 

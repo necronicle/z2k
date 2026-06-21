@@ -112,6 +112,11 @@ type tunnelClient struct {
 	tunnelURL    string
 	tunnelSecret string
 
+	identity     *relayIdentity // per-install identity (Stage B); nil if unavailable
+	registerURL  string
+	useID        atomic.Bool  // send per-install auth (set true after a successful register)
+	idFailStreak atomic.Int32 // consecutive fast deaths while on per-install auth
+
 	ws         *websocket.Conn
 	writer     *wsWriter
 	streams    sync.Map // uint16 → *tunnelStream
@@ -179,9 +184,15 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 	}
 	configureWSKeepalive(ws)
 
-	// Send auth message: [0x00 0x00][0x00][hmac_32_bytes]
-	authMAC := computeAuthHMAC(tc.tunnelSecret)
-	authFrame := encodeMuxFrame(0x0000, 0x00, authMAC)
+	// Auth frame. Per-install (muxAUTHID 0x06: [id:16][ts:8][ed25519 sig:64]) when
+	// we hold a registered identity; otherwise the shared-secret HMAC (type 0x00).
+	// The relay dual-accepts both — this is not a flip.
+	var authFrame []byte
+	if tc.identity != nil && tc.useID.Load() {
+		authFrame = encodeMuxFrame(0x0000, 0x06, tc.identity.authPayload())
+	} else {
+		authFrame = encodeMuxFrame(0x0000, 0x00, computeAuthHMAC(tc.tunnelSecret))
+	}
 	ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := ws.WriteMessage(websocket.BinaryMessage, authFrame); err != nil {
 		ws.Close()
@@ -400,6 +411,21 @@ func (tc *tunnelClient) run() {
 		case <-time.After(2 * time.Second):
 		}
 
+		// Per-install auth safety fallback: if a per-install connection keeps dying
+		// fast (relay hasn't got our registration yet, or a per-install bug), drop
+		// back to shared-secret auth so Telegram never breaks. The relay dual-accepts
+		// both; this backstops the register-gated switch.
+		if tc.useID.Load() {
+			if time.Since(connectedAt) < 8*time.Second {
+				if tc.idFailStreak.Add(1) >= 3 {
+					tc.useID.Store(false)
+					log.Printf("[tunnel] per-install auth unstable — falling back to shared-secret auth")
+				}
+			} else {
+				tc.idFailStreak.Store(0)
+			}
+		}
+
 		// If WS lived < 5 seconds, it's a rapid death — increase backoff
 		if time.Since(connectedAt) < 5*time.Second {
 			consecutiveFails++
@@ -537,6 +563,37 @@ func runTunnel() error {
 		connectSem:   make(chan struct{}, 6),
 	}
 	tc.ctx, tc.cancel = context.WithCancel(ctx)
+
+	// Stage B: load/mint the per-install identity and register it in the
+	// background. Until registration succeeds the client authenticates with the
+	// shared secret (dual-accepted by the relay), so a relay without /register or
+	// a transient registration failure never blocks the tunnel.
+	if id, err := loadOrMintIdentity(*relayIDFile); err != nil {
+		log.Printf("[tunnel] per-install identity unavailable (%v) — using shared-secret auth", err)
+	} else {
+		tc.identity = id
+		tc.registerURL = deriveRegisterURL(*tunnelURL)
+		go func() {
+			for attempt := 0; ; attempt++ {
+				if err := id.register(tc.registerURL, *tunnelSecret); err == nil {
+					tc.useID.Store(true)
+					log.Printf("[tunnel] registered identity %s — using per-install auth", id.InstallID)
+					return
+				} else if *verbose {
+					log.Printf("[tunnel] register attempt %d failed: %v", attempt+1, err)
+				}
+				wait := 30 * time.Second
+				if attempt >= 20 {
+					wait = 30 * time.Minute // long tail: a relay without /register yet
+				}
+				select {
+				case <-time.After(wait):
+				case <-tc.ctx.Done():
+					return
+				}
+			}
+		}()
+	}
 
 	go tc.run()
 
