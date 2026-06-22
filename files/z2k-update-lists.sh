@@ -125,7 +125,7 @@ z2k_fetch() {
             ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
                  | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
             if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
-                if ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
+                if LD_LIBRARY_PATH= ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
                     resolved_any=1
                     printf '%s %s\n' "$host" "$ip" >> "$Z2K_MANAGED_NDMC" 2>/dev/null
                 fi

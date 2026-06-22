@@ -237,6 +237,14 @@ z2k_remove_tpws() {
 #
 # Этот cleanup при каждом install убирает любые ip host записи с нашими VPS-IP
 # и MГТС CF alt-anycast. Idempotent: на чистом роутере noop.
+#
+# NB: каждый вызов ndmc в z2k префиксован `LD_LIBRARY_PATH=`. На KeenOS 4.3+/5.x,
+# когда LD_LIBRARY_PATH содержит Entware-пути (/opt/lib), ndmc грузит несовместимый
+# OpenSSL и падает `system failed [0xcffd0060]` / `Cli::Main: failed to initialize`
+# на КАЖДОМ вызове (установка идёт через `curl|sh` в этом замусоренном окружении →
+# отсюда «портянка» и не ставится). Очистка переменной для конкретного вызова
+# заставляет ndmc взять системный OpenSSL. (root cause подтверждён 2026-06-22,
+# forum.keenetic.ru/topic/20203)
 cleanup_legacy_ip_hosts() {
     command -v ndmc >/dev/null 2>&1 || return 0
     # 213.176.74.63 / 79.137.196.7 — always-purge legacy VPS Frankfurt IPs.
@@ -248,7 +256,7 @@ cleanup_legacy_ip_hosts() {
     # L3 bypass; everything else on 2.58.104.1 was the legacy Module-3
     # МГТС catch-all and gets purged.
     local entries
-    entries=$(ndmc -c "show running-config" 2>/dev/null \
+    entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
         | awk '
             /^ip host/ {
                 host = $3; ip = $4
@@ -274,14 +282,14 @@ cleanup_legacy_ip_hosts() {
 '
     for line in $entries; do
         IFS="$IFS_orig"
-        ndmc -c "no $line" >/dev/null 2>&1 && removed=$((removed + 1))
+        LD_LIBRARY_PATH= ndmc -c "no $line" >/dev/null 2>&1 && removed=$((removed + 1))
         IFS='
 '
     done
     IFS="$IFS_orig"
 
     if [ "$removed" -gt 0 ]; then
-        ndmc -c "system configuration save" >/dev/null 2>&1
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
         print_info "Migration: очищено $removed legacy ip host записей (DNS→Router 2026-04-27)"
     fi
     return 0
@@ -306,7 +314,7 @@ refresh_stale_ndmc_records() {
     while IFS=' ' read -r host ip; do
         [ -z "$host" ] || [ -z "$ip" ] && continue
         # Is this exact host=ip pair still present in running-config?
-        ndmc -c "show running-config" 2>/dev/null \
+        LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
             | grep -qxE "ip host $host $ip" || continue
         # Resolve current canonical IP via 8.8.8.8.
         current=$(nslookup "$host" 8.8.8.8 2>/dev/null \
@@ -314,19 +322,19 @@ refresh_stale_ndmc_records() {
         # If we couldn't resolve OR canonical IP differs, drop the stale
         # record. NDM will fall through to normal DNS for that host.
         if [ -z "$current" ] || [ "$current" != "$ip" ]; then
-            ndmc -c "no ip host $host $ip" >/dev/null 2>&1 && removed=$((removed + 1))
+            LD_LIBRARY_PATH= ndmc -c "no ip host $host $ip" >/dev/null 2>&1 && removed=$((removed + 1))
         fi
     done < "$managed"
 
     if [ "$removed" -gt 0 ]; then
-        ndmc -c "system configuration save" >/dev/null 2>&1
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
         # Rebuild the tracking file so we don't keep retrying records that
         # we already removed.
         local tmp="${managed}.new.$$"
         : > "$tmp"
         while IFS=' ' read -r host ip; do
             [ -z "$host" ] || [ -z "$ip" ] && continue
-            ndmc -c "show running-config" 2>/dev/null \
+            LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
                 | grep -qxE "ip host $host $ip" \
                 && printf '%s %s\n' "$host" "$ip" >> "$tmp"
         done < "$managed"
@@ -353,7 +361,7 @@ purge_legacy_ndmc_records() {
 
     local entries
     # `|| true` masks grep's exit=1 on no-match (z2k.sh runs under set -e).
-    entries=$(ndmc -c "show running-config" 2>/dev/null | grep -E "$pattern" || true)
+    entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -E "$pattern" || true)
     if [ -z "$entries" ]; then return 0; fi
 
     local removed=0 host ip line
@@ -373,14 +381,14 @@ purge_legacy_ndmc_records() {
         fi
         # Untracked = written by old z2k_fetch before tracking existed.
         # Always remove. NDM falls through to normal DNS for these hosts.
-        ndmc -c "no $line" >/dev/null 2>&1 && removed=$((removed + 1))
+        LD_LIBRARY_PATH= ndmc -c "no $line" >/dev/null 2>&1 && removed=$((removed + 1))
         IFS='
 '
     done
     IFS="$IFS_orig"
 
     if [ "$removed" -gt 0 ]; then
-        ndmc -c "system configuration save" >/dev/null 2>&1
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
         print_info "Purge: убрано $removed legacy ip host записей (Layer-4 наследие до streak-gate fix)"
     fi
     return 0
@@ -2728,16 +2736,16 @@ step_finalize() {
     # once at the end of this install. It rewrites these records to
     # whatever the EU-egress VPS resolves today, deleting stale dups.
     if command -v ndmc >/dev/null 2>&1; then
-        if ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host instagram.com"; then
+        if ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host instagram.com"; then
             print_info "Настройка DNS для Instagram..."
-            ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
-            ndmc -c "ip host www.instagram.com 157.240.9.174" 2>/dev/null
-            ndmc -c "ip host graph.instagram.com 157.240.0.63" 2>/dev/null
-            ndmc -c "ip host api.instagram.com 157.240.253.63" 2>/dev/null
-            ndmc -c "ip host instagram.c10r.instagram.com 157.240.214.63" 2>/dev/null
-            ndmc -c "ip host static.cdninstagram.com 57.144.112.192" 2>/dev/null
-            ndmc -c "ip host scontent.cdninstagram.com 57.144.112.192" 2>/dev/null
-            ndmc -c "system configuration save" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "ip host www.instagram.com 157.240.9.174" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "ip host graph.instagram.com 157.240.0.63" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "ip host api.instagram.com 157.240.253.63" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "ip host instagram.c10r.instagram.com 157.240.214.63" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "ip host static.cdninstagram.com 57.144.112.192" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "ip host scontent.cdninstagram.com 57.144.112.192" 2>/dev/null
+            LD_LIBRARY_PATH= ndmc -c "system configuration save" 2>/dev/null
             print_success "DNS записи для Instagram добавлены"
         else
             print_info "DNS записи для Instagram уже настроены"
@@ -2797,22 +2805,22 @@ step_finalize() {
         local relay_unpin="static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
         # Run when a CDN pin still lingers (old install → migrate) OR the app isn't
         # pinned yet (fresh install). Idempotent; skips on an already-migrated box.
-        if ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host (prismic-images.tmol.io|s1.ticketm.net) $relay_vps" \
-           || ! ndmc -c "show running-config" 2>/dev/null | grep -q "ip host www.ticketmaster.com $relay_vps"; then
+        if LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host (prismic-images.tmol.io|s1.ticketm.net) $relay_vps" \
+           || ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host www.ticketmaster.com $relay_vps"; then
             print_info "Настройка релея WhatsApp/Ticketmaster (app → VPS, CDN-картинки напрямую)..."
             local _u _uold _rh _rold
             for _u in $relay_unpin; do
-                for _uold in $(ndmc -c "show running-config" 2>/dev/null | awk -v h="$_u" '/^ip host/ && $3==h {print $4}'); do
-                    ndmc -c "no ip host $_u $_uold" >/dev/null 2>&1
+                for _uold in $(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | awk -v h="$_u" '/^ip host/ && $3==h {print $4}'); do
+                    LD_LIBRARY_PATH= ndmc -c "no ip host $_u $_uold" >/dev/null 2>&1
                 done
             done
             for _rh in $relay_hosts; do
-                for _rold in $(ndmc -c "show running-config" 2>/dev/null | awk -v h="$_rh" '/^ip host/ && $3==h {print $4}'); do
-                    ndmc -c "no ip host $_rh $_rold" >/dev/null 2>&1
+                for _rold in $(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | awk -v h="$_rh" '/^ip host/ && $3==h {print $4}'); do
+                    LD_LIBRARY_PATH= ndmc -c "no ip host $_rh $_rold" >/dev/null 2>&1
                 done
-                ndmc -c "ip host $_rh $relay_vps" >/dev/null 2>&1
+                LD_LIBRARY_PATH= ndmc -c "ip host $_rh $relay_vps" >/dev/null 2>&1
             done
-            ndmc -c "system configuration save" >/dev/null 2>&1
+            LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
             print_success "Релей WhatsApp/Ticketmaster настроен"
         else
             print_info "Релей WhatsApp/Ticketmaster уже настроен"
@@ -3740,27 +3748,27 @@ uninstall_zapret2() {
     # (binary already gone). Mirrors S96 dns_override_clear().
     if command -v ndmc >/dev/null 2>&1; then
         for _rtp_dom in rutracker.org www.rutracker.org rutracker.cc static.rutracker.cc api.rutracker.cc rep.rutracker.cc rutracker.wiki; do
-            ndmc -c "no ip host $_rtp_dom 10.171.171.171" >/dev/null 2>&1 || true
+            LD_LIBRARY_PATH= ndmc -c "no ip host $_rtp_dom 10.171.171.171" >/dev/null 2>&1 || true
         done
-        ndmc -c "system configuration save" >/dev/null 2>&1 || true
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
     fi
     # Clear the WhatsApp/Ticketmaster relay ndmc pins (→ VPS) so those domains
     # resolve normally again after uninstall.
     if command -v ndmc >/dev/null 2>&1; then
         for _rel_dom in whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co; do
-            ndmc -c "no ip host $_rel_dom 213.176.74.63" >/dev/null 2>&1 || true
+            LD_LIBRARY_PATH= ndmc -c "no ip host $_rel_dom 213.176.74.63" >/dev/null 2>&1 || true
         done
-        ndmc -c "system configuration save" >/dev/null 2>&1 || true
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
     fi
     # Clear the Discord-voice pins (finland*.discord.media → CF edge) so those
     # hostnames resolve normally again after uninstall.
     if command -v ndmc >/dev/null 2>&1; then
-        ndmc -c "show running-config" 2>/dev/null \
+        LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
             | awk '/^ip host/ && $3 ~ /^finland[0-9]+\.discord\.media$/ {print $3" "$4}' \
             | while read -r _dv_h _dv_ip; do
-                [ -n "$_dv_h" ] && [ -n "$_dv_ip" ] && ndmc -c "no ip host $_dv_h $_dv_ip" >/dev/null 2>&1
+                [ -n "$_dv_h" ] && [ -n "$_dv_ip" ] && LD_LIBRARY_PATH= ndmc -c "no ip host $_dv_h $_dv_ip" >/dev/null 2>&1
             done
-        ndmc -c "system configuration save" >/dev/null 2>&1 || true
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
     fi
     rm -f "${ZAPRET2_DIR:-/opt/zapret2}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null || true
     rm -f /opt/etc/init.d/S96z2k-rt-proxy \

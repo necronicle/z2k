@@ -54,7 +54,7 @@ fi
 # Remove every finland*.discord.media ip host record we manage, then persist.
 remove_all_pins() {
     local present
-    present=$(ndmc -c "show running-config" 2>/dev/null \
+    present=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
         | awk '/^ip host/ && $3 ~ /^finland[0-9]+\.discord\.media$/ {print $3" "$4}')
     [ -z "$present" ] && { log "no finland pins to remove"; return 0; }
     local IFS_orig="$IFS" line
@@ -62,12 +62,12 @@ remove_all_pins() {
 '
     for line in $present; do
         IFS="$IFS_orig"
-        ndmc -c "no ip host $line" >/dev/null 2>&1 && log "  - $line"
+        LD_LIBRARY_PATH= ndmc -c "no ip host $line" >/dev/null 2>&1 && log "  - $line"
         IFS='
 '
     done
     IFS="$IFS_orig"
-    ndmc -c "system configuration save" >/dev/null 2>&1
+    LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
     return 0
 }
 
@@ -121,9 +121,9 @@ fi
 log "health-check OK: $target_ip reachable (code=$code)"
 
 # 5. Already in the desired state? (same IP + same count -> no-op)
-cur_ip=$(ndmc -c "show running-config" 2>/dev/null \
+cur_ip=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
     | awk '/^ip host/ && $3 ~ /^finland[0-9]+\.discord\.media$/ {print $4; exit}')
-cur_count=$(ndmc -c "show running-config" 2>/dev/null \
+cur_count=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
     | awk '/^ip host/ && $3 ~ /^finland[0-9]+\.discord\.media$/' | wc -l | tr -d ' ')
 if [ "$cur_ip" = "$target_ip" ] && [ "$cur_count" = "$want_count" ]; then
     log "unchanged: $cur_count pins already -> $target_ip"
@@ -139,7 +139,7 @@ tmp_apply="/tmp/z2k-log/.dvp-apply.$$"
 printf '%s\n' "$desired" > "$tmp_apply"
 while read -r h ip; do
     [ -n "$h" ] && [ -n "$ip" ] || continue
-    if ndmc -c "ip host $h $ip" >/dev/null 2>&1; then
+    if LD_LIBRARY_PATH= ndmc -c "ip host $h $ip" >/dev/null 2>&1; then
         added=$((added + 1))
     else
         failed=$((failed + 1))
@@ -147,7 +147,7 @@ while read -r h ip; do
     fi
 done < "$tmp_apply"
 rm -f "$tmp_apply"
-ndmc -c "system configuration save" >/dev/null 2>&1
+LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
 if [ -n "$cur_ip" ] && [ "$cur_ip" != "$target_ip" ]; then
     conntrack -D -d "$cur_ip" >/dev/null 2>&1 || true
     log "conntrack flushed for old edge $cur_ip"

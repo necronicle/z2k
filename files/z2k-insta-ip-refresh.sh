@@ -80,7 +80,7 @@ fi
 
 # 3. If the user has zero ip host records for insta, they cleared them
 #    via menu [I] — respect that, do not resurrect.
-existing=$(ndmc -c "show running-config" 2>/dev/null \
+existing=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
     | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
 if [ -z "$existing" ]; then
     log "no existing ip host insta records (cleared by user via [I]?) — exit"
@@ -157,7 +157,7 @@ for h in $HOSTS; do
         log "skip $h (VPS returned no IPs)"
         continue
     fi
-    old_ips=$(ndmc -c "show running-config" 2>/dev/null \
+    old_ips=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
         | awk -v host="$h" '/^ip host/ && $3==host {print $4}')
 
     # Set equality?  Sort both and compare.
@@ -170,7 +170,7 @@ for h in $HOSTS; do
 
     # Remove ALL old entries for this host.
     for ip in $old_ips; do
-        if ndmc -c "no ip host $h $ip" >/dev/null 2>&1; then
+        if LD_LIBRARY_PATH= ndmc -c "no ip host $h $ip" >/dev/null 2>&1; then
             log "  - $h $ip"
             touched_ips="$touched_ips $ip"
         else
@@ -179,7 +179,7 @@ for h in $HOSTS; do
     done
     # Add fresh entries.
     for ip in $new_ips; do
-        if ndmc -c "ip host $h $ip" >/dev/null 2>&1; then
+        if LD_LIBRARY_PATH= ndmc -c "ip host $h $ip" >/dev/null 2>&1; then
             log "  + $h $ip"
         else
             log "  FAIL add $h $ip"
@@ -190,7 +190,7 @@ done
 
 # 9. Persist & flush conntrack on dropped IPs so apps don't ride dead paths.
 if [ "$changes" -gt 0 ]; then
-    if ndmc -c "system configuration save" >/dev/null 2>&1; then
+    if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
         log "ndmc config saved"
     else
         log "WARN: ndmc config save failed"

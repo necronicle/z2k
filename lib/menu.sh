@@ -341,7 +341,7 @@ menu_instagram_dns_clear() {
     # Собрать текущие записи. Формат вывода show running-config:
     #   ip host <domain> <ipv4>
     local ig_entries
-    ig_entries=$(ndmc -c "show running-config" 2>/dev/null \
+    ig_entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
         | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
 
     if [ -z "$ig_entries" ]; then
@@ -380,7 +380,7 @@ menu_instagram_dns_clear() {
 '
     for line in $ig_entries; do
         IFS="$IFS_orig"
-        if ndmc -c "no $line" >/dev/null 2>&1; then
+        if LD_LIBRARY_PATH= ndmc -c "no $line" >/dev/null 2>&1; then
             removed=$((removed + 1))
             print_info "  removed: $line"
         else
@@ -393,11 +393,11 @@ menu_instagram_dns_clear() {
     IFS="$IFS_orig"
 
     if [ "$removed" -gt 0 ]; then
-        if ndmc -c "system configuration save" >/dev/null 2>&1; then
+        if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
             print_success "Удалено: $removed (конфиг сохранён)"
         else
             print_warning "Удалено: $removed, но save конфига не прошёл"
-            print_warning "Запусти вручную: ndmc -c \"system configuration save\""
+            print_warning "Запусти вручную: LD_LIBRARY_PATH= ndmc -c \"system configuration save\""
         fi
     fi
     if [ "$failed" -gt 0 ]; then
