@@ -3340,6 +3340,21 @@ run_full_install() {
     purge_legacy_ndmc_records
     refresh_stale_ndmc_records
 
+    # Pin raw.githubusercontent.com to a GitHub Fastly anycast IP so this and
+    # future installs/updates survive ISP DNS-poisoning of githubusercontent —
+    # independent of 8.8.8.8 (which the Layer-4 fallback relies on and which is
+    # itself often blocked). The README has a standalone one-liner for a router
+    # that can't install yet. Idempotent; LD_LIBRARY_PATH= per the ndmc 0xcffd0060 fix.
+    # ONE IP only: 185.199.108-111.133 are equivalent anycast, and Keenetic caps
+    # static DNS at 256 records — a loaded router (insta/discord pins) hits
+    # "server list limit exceeded" on extras. One record does the job (verified
+    # on KeenOS 5.0.12: 1 pin → raw resolves to Fastly, real fetch succeeds).
+    if command -v ndmc >/dev/null 2>&1 \
+       && ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host raw.githubusercontent.com"; then
+        LD_LIBRARY_PATH= ndmc -c "ip host raw.githubusercontent.com 185.199.108.133" >/dev/null 2>&1
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
+    fi
+
     step_update_packages || return 1               # 1/12
     step_check_dns || return 1                     # ← НОВОЕ (2/12)
     step_install_dependencies || return 1          # 3/12 (расширено)

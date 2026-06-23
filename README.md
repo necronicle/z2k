@@ -111,6 +111,14 @@ curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh | sh
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
 ```
 
+Если **ни одно зеркало не открывается** (провайдер подменяет DNS у `githubusercontent.com`) — пропишите адрес GitHub прямо в роутер (на Keenetic это аналог файла `hosts`). Выполните по SSH **одной командой**, затем повторите установку:
+
+```bash
+LD_LIBRARY_PATH= ndmc -c "ip host raw.githubusercontent.com 185.199.108.133"; LD_LIBRARY_PATH= ndmc -c "system configuration save"
+```
+
+После этого `raw.githubusercontent.com` резолвится напрямую в адрес GitHub (Fastly), и установка/обновление проходят. z2k закрепляет этот адрес и сам при установке — команда нужна только когда поставить ещё не удалось. (`LD_LIBRARY_PATH=` обязателен: без него на новых прошивках Keenetic команда `ndmc` падает с ошибкой `system failed`.)
+
 После запуска `z2k.sh` все внутренние загрузки тоже идут через цепочку зеркал.
 
 > **Обновление ≠ переустановка.** Команда `curl … | sh` выше — это **установка**. Чтобы **обновить** уже установленный z2k, используйте пункт меню `[U]` или кнопку «Обновить» в шапке веб-панели — не запускайте install-curl повторно. z2k также обновляется сам по расписанию.
