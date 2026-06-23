@@ -2761,26 +2761,24 @@ step_finalize() {
         sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || true
     fi
 
-    # Discord-voice pin (finland*.discord.media → one CF edge), ONE-TO-ONE with
-    # Flowseal's .service/hosts. The packet desync alone can't help on ISPs that
-    # block the voice edge IPs / poison discord.media DNS; pinning the 200
-    # finland voice nodes to a working CF edge (mirrored from Flowseal) does, and
-    # composes with the nfqws2 keepalive desync on the voice ports. The list is
-    # refreshed daily by z2k-update-lists.sh; seed it now so a fresh install gets
-    # the pins immediately. Default-on (Z2K_DISCORD_VOICE_PIN=0 in config off).
-    if deploy_critical_file "files/z2k-discord-voice-pin.sh" "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh"; then
-        local _dvp_tmp
-        chmod +x "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" 2>/dev/null || true
-        _dvp_tmp=$(mktemp 2>/dev/null)
-        if [ -n "$_dvp_tmp" ] \
-           && z2k_fetch "https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/.service/hosts" "$_dvp_tmp" 2>/dev/null \
-           && [ "$(grep -icE 'finland[0-9]+\.discord\.media' "$_dvp_tmp" 2>/dev/null)" -ge 50 ]; then
-            grep -iE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+finland[0-9]+\.discord\.media[[:space:]]*$' \
-                "$_dvp_tmp" > "${ZAPRET2_DIR}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null
-        fi
-        rm -f "$_dvp_tmp" 2>/dev/null
-        sh "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" >/dev/null 2>&1 || true
+    # Discord-voice DNS pinning REMOVED (p-57.3). It used to pin ~200
+    # finland*.discord.media records to one CF edge — 78% of Keenetic's 256
+    # static-DNS ceiling — for marginal gain (the packet-level desync already
+    # carries Discord voice), starving every other pin (fresh Instagram IPs, the
+    # github-raw self-heal) into silent "limit exceeded". Strip any leftover pins
+    # from a router that had the old feature; drop the orphaned script + list.
+    # Idempotent: a no-op on a fresh/clean router.
+    if command -v ndmc >/dev/null 2>&1; then
+        LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+            | awk '/^ip host/ && $3 ~ /^finland[0-9]+\.discord\.media$/ {print $3" "$4}' \
+            | while read -r _dv_h _dv_ip; do
+                [ -n "$_dv_h" ] && [ -n "$_dv_ip" ] && \
+                    LD_LIBRARY_PATH= ndmc -c "no ip host $_dv_h $_dv_ip" >/dev/null 2>&1
+            done
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
     fi
+    rm -f "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" \
+          "${ZAPRET2_DIR}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null || true
 
     # WhatsApp + Ticketmaster relay (Keenetic static DNS → EU-egress VPS).
     # Their real backends are unreachable on RU ISPs: WhatsApp's servers are

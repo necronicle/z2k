@@ -528,47 +528,28 @@ main() {
     update_flowseal_game_ips
     [ $? -eq 2 ] && changes=$((changes + 1))
 
-    # Flowseal Discord-voice host pins — mirror their .service/hosts
-    # (finland*.discord.media -> one CF edge) ONE-TO-ONE: same domains, same
-    # IP, auto-tracks their CF-edge rotations. We keep ONLY the finland voice
-    # lines (telegram/github in their hosts are handled by our own layers).
-    # The list is then applied to the NDM resolver by z2k-discord-voice-pin.sh.
-    update_flowseal_discord_hosts() {
-        local dest="${ZAPRET2_DIR}/lists/flowseal_discord_voice_hosts.txt"
-        local url="https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/.service/hosts"
-        local tmp filtered n
-        tmp=$(mktemp "${dest}.XXXXXX") || return 1
-        if ! z2k_fetch "$url" "$tmp"; then
-            log_msg "FAIL: flowseal_discord_hosts download (all mirrors failed)"
-            rm -f "$tmp"; return 1
+    # Discord-voice DNS pinning REMOVED (p-57.3). The old feature wrote ~200
+    # finland*.discord.media `ip host` records — 78% of Keenetic's 256 static-DNS
+    # ceiling — all pointing at one CF edge, for marginal gain (the packet-level
+    # desync already carries Discord voice). That bloat starved every other pin
+    # (fresh Instagram IPs, the github-raw self-heal) into silent "limit exceeded".
+    # One-time cleanup: strip any leftover finland pins, drop the orphaned script +
+    # list. Idempotent — a no-op once a router is clean, so it's safe every run.
+    if command -v ndmc >/dev/null 2>&1; then
+        _dvp_old=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+            | awk '/^ip host/ && $3 ~ /^finland[0-9]+\.discord\.media$/ {print $3" "$4}')
+        if [ -n "$_dvp_old" ]; then
+            printf '%s\n' "$_dvp_old" | while read -r _dv_h _dv_ip; do
+                [ -n "$_dv_h" ] && [ -n "$_dv_ip" ] && \
+                    LD_LIBRARY_PATH= ndmc -c "no ip host $_dv_h $_dv_ip" >/dev/null 2>&1
+            done
+            LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
+            log_msg "OK: removed $(printf '%s\n' "$_dvp_old" | grep -c .) legacy Discord-voice DNS pins (feature removed)"
+            changes=$((changes + 1))
         fi
-        [ -s "$tmp" ] || { log_msg "FAIL: flowseal_discord_hosts empty"; rm -f "$tmp"; return 1; }
-        sed -i 's/\r$//' "$tmp" 2>/dev/null
-        filtered=$(mktemp "${dest}.f.XXXXXX") || { rm -f "$tmp"; return 1; }
-        grep -iE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[[:space:]]+finland[0-9]+\.discord\.media[[:space:]]*$' \
-            "$tmp" > "$filtered" 2>/dev/null
-        rm -f "$tmp"
-        n=$(grep -c . "$filtered" 2>/dev/null)
-        # Floor: Flowseal ships ~200 finland nodes; <50 means their hosts file
-        # got restructured/truncated — keep the old list, don't wipe.
-        if [ -z "$n" ] || [ "$n" -lt 50 ]; then
-            log_msg "FAIL: flowseal_discord_hosts too few finland lines ($n, expected ~200) — keeping old"
-            rm -f "$filtered"; return 1
-        fi
-        if [ -f "$dest" ] && cmp -s "$filtered" "$dest" 2>/dev/null; then
-            rm -f "$filtered"; return 0
-        fi
-        mkdir -p "$(dirname "$dest")" 2>/dev/null
-        mv -f "$filtered" "$dest" || { log_msg "FAIL: flowseal_discord_hosts mv failed"; rm -f "$filtered"; return 1; }
-        log_msg "OK: flowseal_discord_hosts updated ($n finland voice pins)"
-        return 2
-    }
-    update_flowseal_discord_hosts
-    [ $? -eq 2 ] && changes=$((changes + 1))
-    # Apply the pins (cheap no-op when already in desired state; also re-asserts
-    # after an NDM reconfig and seeds them on first install).
-    [ -x "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" ] && \
-        sh "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" >/dev/null 2>&1
+    fi
+    rm -f "${ZAPRET2_DIR}/lists/flowseal_discord_voice_hosts.txt" \
+          "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" 2>/dev/null
 
     # Cloudflare canonical IPv4 CIDR list. Source: cloudflare.com/ips-v4
     # (already used by install.sh:step_install_z2k_classify at install-time).
