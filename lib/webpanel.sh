@@ -98,11 +98,16 @@ SUBMENU
     printf "Выберите опцию [1-4,B]: "
     read_input wp_choice
 
+    # Обработчики могут вернуть ненулевой код (например «веб-панель не
+    # установлена» при [3]/[4], или ошибка установки). Под глобальным `set -e`
+    # (z2k.sh) этот код всплыл бы вверх и молча закрыл всё меню — это и был баг:
+    # [P]→[4] «Показать URL» без установленной вебморды роняло меню. `|| true`
+    # гасит код возврата обработчика, меню остаётся живым.
     case "$wp_choice" in
-        1) webpanel_do_install  ;;
-        2) webpanel_do_uninstall ;;
-        3) webpanel_do_restart   ;;
-        4) webpanel_show_credentials ;;
+        1) webpanel_do_install       || true ;;
+        2) webpanel_do_uninstall     || true ;;
+        3) webpanel_do_restart       || true ;;
+        4) webpanel_show_credentials || true ;;
         b|B) return 0 ;;
         *) print_error "Неверный выбор: $wp_choice"; pause ;;
     esac
