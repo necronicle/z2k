@@ -501,7 +501,16 @@ LUA_Z2K_STATE_PERSIST="$ZAPRET_BASE/lua/z2k-state-persist.lua"
 # z2k-dynamic-strategy.lua removed in r-15 Phase 1 — was a handler for
 # the z2k-classify generator which is itself gone. New per-domain
 # feedback lives in /opt/zapret2/lists/discovered-domains.txt (Phase 3).
-NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK $LUAOPT"
+#
+# --bind-fix4/6: bind each raw-socket fake to the NFQUEUE-reported outgoing
+# interface. Without it, on Keenetic with policy-based routing (NDM
+# "маршрутизация по доменам" sending a domain into a WireGuard/VPN tunnel)
+# the generated desync packets leak out the wrong interface (default-gw WAN)
+# or get blocked in OUTPUT — corrupting the handshake, so a domain the user
+# routes through a tunnel won't open while z2k is on (ntc.party #4181). For
+# single-WAN / no-PBR setups it's a no-op: the fake already exits the default
+# interface. The shipped nfqws2 supports both flags on every arch (verified).
+NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK --bind-fix4 --bind-fix6 $LUAOPT"
 
 # Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+).
 # Default OFF: master does not run this filter, and field reports show

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-57.4",
+  "current": "p-58",
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
 {"v": "p-0", "type": "patch", "ts": "2026-05-03T17:30:00Z", "ref": "auto-update-baseline", "desc": "Auto-update system rollout baseline marker", "changed_files": []},
@@ -80,6 +80,7 @@
 {"v": "p-57.1", "type": "patch", "ts": "2026-06-22T11:37:32Z", "ref": "HEAD", "desc": "Исправлена установка на роутерах с новой прошивкой Keenetic (5.x и часть 4.x): из-за конфликта системных библиотек команды настройки роутера падали с ошибкой «system failed / failed to initialize», шёл поток таких сообщений и не записывались DNS-адреса Instagram. Теперь команды выполняются корректно — установка проходит чисто и настройки применяются. Применяется автоматически, переустановка не требуется.", "changed_files": ["lib/install.sh", "lib/menu.sh", "z2k.sh", "files/z2k-insta-ip-refresh.sh", "files/z2k-discord-voice-pin.sh", "files/z2k-update-lists.sh", "webpanel/cgi/actions.sh", "UPDATES.json"]},
 {"v": "p-57.2", "type": "patch", "ts": "2026-06-23T09:28:13Z", "ref": "HEAD", "desc": "Доступ к GitHub стал устойчивее на провайдерах, которые подменяют DNS: z2k закрепляет адрес raw.githubusercontent.com на постоянные адреса GitHub, поэтому установка и обновление проходят даже там, где раньше «не качалось». В README добавлена команда для роутера на случай, если установить ещё не удалось из-за блокировки GitHub. Применяется автоматически.", "changed_files": ["lib/install.sh", "README.md", "UPDATES.json"]},
 {"v": "p-57.3", "type": "patch", "ts": "2026-06-23T10:01:06Z", "ref": "HEAD", "desc": "Убрана старая функция закрепления Discord-голоса через DNS роутера: она занимала почти всю таблицу статических DNS-записей Keenetic (лимит 256 — около 200 уходило только на неё), из-за чего могли молча не применяться другие настройки — свежие адреса Instagram, восстановление доступа к GitHub. Discord-голос продолжает работать через обычный обход. Лишние записи удаляются автоматически, освобождая место.", "changed_files": ["lib/install.sh", "files/z2k-update-lists.sh", "UPDATES.json"]},
-{"v": "p-57.4", "type": "patch", "ts": "2026-06-23T14:49:59Z", "ref": "HEAD", "desc": "Обновлён раздел «Благодарности»: добавлен новый спонсор проекта. Спасибо всем, кто поддерживает z2k — благодаря им Telegram-туннель остаётся бесплатным для всех, а проект развивается.", "changed_files": ["lib/menu.sh", "webpanel/www/app.js", "README.md", "UPDATES.json"]}
+{"v": "p-57.4", "type": "patch", "ts": "2026-06-23T14:49:59Z", "ref": "HEAD", "desc": "Обновлён раздел «Благодарности»: добавлен новый спонсор проекта. Спасибо всем, кто поддерживает z2k — благодаря им Telegram-туннель остаётся бесплатным для всех, а проект развивается.", "changed_files": ["lib/menu.sh", "webpanel/www/app.js", "README.md", "UPDATES.json"]},
+{"v": "p-58", "type": "patch", "ts": "2026-06-27T08:32:10Z", "ref": "HEAD", "desc": "Исправлена совместная работа z2k с маршрутизацией по доменам через VPN-туннель на Keenetic. Раньше при включённом z2k сайты, которые вы направляете в WireGuard/VPN-туннель по списку доменов, могли не открываться — приходилось выключать z2k. Теперь они работают и с включённым z2k.", "changed_files": ["files/S99zapret2.new", "UPDATES.json"]}
   ]
 }
