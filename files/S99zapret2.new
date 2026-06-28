@@ -1010,7 +1010,12 @@ z2k_detect_policy_mark()
 
     # Extract policy mark by description (handle quotes and "mark:" vs "mark =").
     local mark
-    mark="$("$ndmc_bin" -c "show ip policy" 2>/dev/null | awk -v name="$POLICY_NAME" '
+    # LD_LIBRARY_PATH= обязателен: на KeenOS 4.3+/5.x в окружении сервиса
+    # LD_LIBRARY_PATH содержит Entware /opt/lib, ndmc грузит чужой OpenSSL и
+    # падает 0xcffd0060 -> пустой вывод -> mark пустой -> return 1 -> правило
+    # исключения не ставится МОЛЧА (webpanel actions.sh при этом показывает
+    # «политика найдена», т.к. ТАМ сброс есть). См. install.sh:241.
+    mark="$(LD_LIBRARY_PATH= "$ndmc_bin" -c "show ip policy" 2>/dev/null | awk -v name="$POLICY_NAME" '
         function trim(s) { sub(/^[ \t\r\n]+/, "", s); sub(/[ \t\r\n]+$/, "", s); return s }
         function unquote(s) {
             s=trim(s)

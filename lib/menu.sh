@@ -1211,7 +1211,7 @@ _policy_exists() {
     [ -z "$name" ] && return 1
     local ndmc_bin="ndmc"
     [ -x /bin/ndmc ] && ndmc_bin="/bin/ndmc"
-    "$ndmc_bin" -c "show ip policy" 2>/dev/null | awk -v want="$(printf '%s' "$name" | tr 'A-Z' 'a-z')" '
+    LD_LIBRARY_PATH= "$ndmc_bin" -c "show ip policy" 2>/dev/null | awk -v want="$(printf '%s' "$name" | tr 'A-Z' 'a-z')" '
         function trim(s) { sub(/^[ \t\r\n]+/, "", s); sub(/[ \t\r\n]+$/, "", s); return s }
         function unquote(s) { s=trim(s); if (s ~ /^".*"$/) { sub(/^"/, "", s); sub(/"$/, "", s) } return s }
         function strip_colon(s) { sub(/:+$/, "", s); return s }
