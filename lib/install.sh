@@ -2569,6 +2569,25 @@ HOOK
 # CDN CIDR list fetch (Cloudflare AS13335 + Google AS15169) moved into
 # step_install_extra_lists so the lists still refresh on install.
 
+# Instagram/cdninstagram static `ip host` fallback set — one edge IP per host.
+# Seeds the Keenetic DNS overrides so Instagram works even if the VPS resolver
+# is unreachable; z2k-insta-ip-refresh.sh layers live IPs on top afterwards.
+# SINGLE source of truth for these 7 records — shared by step_finalize (fresh
+# install) and the [I] menu restore path (lib/menu.sh menu_instagram_dns).
+# Pure add (no presence guard) — callers gate on whether records already exist.
+z2k_instagram_dns_add_fallback() {
+    command -v ndmc >/dev/null 2>&1 || return 1
+    LD_LIBRARY_PATH= ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host www.instagram.com 157.240.9.174" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host graph.instagram.com 157.240.0.63" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host api.instagram.com 157.240.253.63" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host instagram.c10r.instagram.com 157.240.214.63" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host static.cdninstagram.com 57.144.112.192" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host scontent.cdninstagram.com 57.144.112.192" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "system configuration save" 2>/dev/null
+    return 0
+}
+
 step_finalize() {
     print_header "Шаг 12/12: Финализация установки"
 
@@ -2738,14 +2757,7 @@ step_finalize() {
     if command -v ndmc >/dev/null 2>&1; then
         if ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host instagram.com"; then
             print_info "Настройка DNS для Instagram..."
-            LD_LIBRARY_PATH= ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
-            LD_LIBRARY_PATH= ndmc -c "ip host www.instagram.com 157.240.9.174" 2>/dev/null
-            LD_LIBRARY_PATH= ndmc -c "ip host graph.instagram.com 157.240.0.63" 2>/dev/null
-            LD_LIBRARY_PATH= ndmc -c "ip host api.instagram.com 157.240.253.63" 2>/dev/null
-            LD_LIBRARY_PATH= ndmc -c "ip host instagram.c10r.instagram.com 157.240.214.63" 2>/dev/null
-            LD_LIBRARY_PATH= ndmc -c "ip host static.cdninstagram.com 57.144.112.192" 2>/dev/null
-            LD_LIBRARY_PATH= ndmc -c "ip host scontent.cdninstagram.com 57.144.112.192" 2>/dev/null
-            LD_LIBRARY_PATH= ndmc -c "system configuration save" 2>/dev/null
+            z2k_instagram_dns_add_fallback
             print_success "DNS записи для Instagram добавлены"
         else
             print_info "DNS записи для Instagram уже настроены"

@@ -114,7 +114,7 @@ MENU
 [S] Скрипты custom.d
 [P] Веб-панель (дубль меню в браузере)
 [D] Диагностика (сводка для траблшутинга)
-[I] Убрать статические IP Instagram (обход DNS-отравления)
+[I] Статические IP Instagram — убрать / вернуть (обход DNS-отравления)
 [Y] Diagnose domain (4-стадийная проба + рекомендация)
 [M] Динамический TTL (для мобильных операторов)
 [A] Политика доступа Keenetic (фильтр по NDM policy)
@@ -171,7 +171,7 @@ MENU
                 menu_diag
                 ;;
             i|I)
-                menu_instagram_dns_clear
+                menu_instagram_dns
                 ;;
             y|Y)
                 menu_diagnose_domain
@@ -321,17 +321,22 @@ menu_diag() {
 # the z2k-detect daemon doing live reactive discovery.
 
 # ==============================================================================
-# ПОДМЕНЮ: INSTAGRAM DNS CLEAR
+# ПОДМЕНЮ: INSTAGRAM DNS (убрать / вернуть)
 # ==============================================================================
 #
-# Снять статические записи `ip host` для Instagram / cdninstagram, которые
-# install.sh прошивает в Keenetic как быстрый обход провайдерского DNS-
-# отравления. Записи через месяц-другой протухают (Meta ротирует IP), и
-# тогда ручная очистка — единственный простой способ снять костыль,
-# чтобы трафик пошёл по обычному DNS + z2k DPI-bypass.
-menu_instagram_dns_clear() {
+# Статические записи `ip host` для Instagram / cdninstagram, которые install.sh
+# прошивает в Keenetic как быстрый обход провайдерского DNS-отравления.
+# Пункт двусторонний:
+#   - записи ЕСТЬ  → предложить УБРАТЬ (Meta ротирует IP, костыль протухает —
+#                    снять, чтобы трафик пошёл по обычному DNS + z2k DPI-bypass);
+#   - записей НЕТ → предложить ВЕРНУТЬ (прошить базовый набор через общую
+#                    z2k_instagram_dns_add_fallback из install.sh + подтянуть
+#                    свежие IP через z2k-insta-ip-refresh.sh, если резолвер
+#                    доступен). Возврат нужен, если убрали зря и инсту опять
+#                    режет на DNS-уровне.
+menu_instagram_dns() {
     clear_screen
-    print_header "[I] Убрать статические IP Instagram"
+    print_header "[I] Статические IP Instagram"
 
     if ! command -v ndmc >/dev/null 2>&1; then
         print_error "ndmc не найден — это не Keenetic, функция не применима"
@@ -345,64 +350,101 @@ menu_instagram_dns_clear() {
     ig_entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
         | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
 
-    if [ -z "$ig_entries" ]; then
-        print_info "Записей ip host для instagram / cdninstagram нет."
-        print_info "Чистить нечего."
-        pause
-        return
-    fi
+    if [ -n "$ig_entries" ]; then
+        # ---------- Записи ЕСТЬ → УБРАТЬ ----------
+        local count
+        count=$(printf '%s\n' "$ig_entries" | wc -l | tr -d ' ')
 
-    local count
-    count=$(printf '%s\n' "$ig_entries" | wc -l | tr -d ' ')
+        print_separator
+        print_info "Статические IP прошиты. Записей: $count"
+        print_separator
+        printf '%s\n' "$ig_entries"
+        print_separator
+        print_warning "Эти записи были прошиты как обход DNS-отравления."
+        print_warning "После удаления резолв пойдёт через провайдерский DNS"
+        print_warning "(или через DoH, если настроен). Если у провайдера активный"
+        print_warning "DNS-блок Instagram — без этих записей и без DoH инста не откроется."
+        echo
 
-    print_separator
-    print_info "Найдено записей: $count"
-    print_separator
-    printf '%s\n' "$ig_entries"
-    print_separator
-    print_warning "Эти записи были прошиты при установке z2k как обход"
-    print_warning "DNS-отравления. После удаления резолв пойдёт через"
-    print_warning "провайдерский DNS (или через DoH, если настроен)."
-    print_warning "Если у провайдера активный DNS-блок Instagram — без"
-    print_warning "этих записей и без DoH инста открываться не будет."
-    echo
-
-    if ! confirm "Удалить все $count записей?" "N"; then
-        print_info "Отмена"
-        pause
-        return
-    fi
-
-    local removed=0 failed=0
-    # Пройти построчно. Каждая строка = "ip host <domain> <ip>".
-    # В ndmc удаление — "no ip host <domain> <ip>" с теми же аргументами.
-    local IFS_orig="$IFS"
-    IFS='
-'
-    for line in $ig_entries; do
-        IFS="$IFS_orig"
-        if LD_LIBRARY_PATH= ndmc -c "no $line" >/dev/null 2>&1; then
-            removed=$((removed + 1))
-            print_info "  removed: $line"
-        else
-            failed=$((failed + 1))
-            print_warning "  FAIL:    $line"
+        if ! confirm "Убрать все $count записей?" "N"; then
+            print_info "Отмена"
+            pause
+            return
         fi
+
+        local removed=0 failed=0
+        # Пройти построчно. Каждая строка = "ip host <domain> <ip>".
+        # В ndmc удаление — "no ip host <domain> <ip>" с теми же аргументами.
+        local IFS_orig="$IFS"
         IFS='
 '
-    done
-    IFS="$IFS_orig"
+        for line in $ig_entries; do
+            IFS="$IFS_orig"
+            if LD_LIBRARY_PATH= ndmc -c "no $line" >/dev/null 2>&1; then
+                removed=$((removed + 1))
+                print_info "  removed: $line"
+            else
+                failed=$((failed + 1))
+                print_warning "  FAIL:    $line"
+            fi
+            IFS='
+'
+        done
+        IFS="$IFS_orig"
 
-    if [ "$removed" -gt 0 ]; then
-        if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
-            print_success "Удалено: $removed (конфиг сохранён)"
-        else
-            print_warning "Удалено: $removed, но save конфига не прошёл"
-            print_warning "Запусти вручную: LD_LIBRARY_PATH= ndmc -c \"system configuration save\""
+        if [ "$removed" -gt 0 ]; then
+            if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
+                print_success "Убрано: $removed (конфиг сохранён)"
+            else
+                print_warning "Убрано: $removed, но save конфига не прошёл"
+                print_warning "Запусти вручную: LD_LIBRARY_PATH= ndmc -c \"system configuration save\""
+            fi
         fi
-    fi
-    if [ "$failed" -gt 0 ]; then
-        print_warning "Не удалось удалить: $failed"
+        if [ "$failed" -gt 0 ]; then
+            print_warning "Не удалось убрать: $failed"
+        fi
+    else
+        # ---------- Записей НЕТ → ВЕРНУТЬ ----------
+        print_info "Статических записей Instagram сейчас нет."
+        print_warning "Если у провайдера активный DNS-блок Instagram и нет DoH —"
+        print_warning "инста может не открываться. Возврат прошьёт базовый набор"
+        print_warning "и подтянет свежие IP с резолвера (если доступен)."
+        echo
+
+        if ! confirm "Вернуть статические IP Instagram?" "N"; then
+            print_info "Отмена"
+            pause
+            return
+        fi
+
+        print_info "Прошиваю базовый набор записей..."
+        # Общая функция из install.sh (один источник истины для 7 записей).
+        if ! z2k_instagram_dns_add_fallback; then
+            print_error "Не удалось прошить записи (ndmc недоступен)"
+            pause
+            return
+        fi
+
+        # Подтянуть свежие IP через live-резолв (best-effort; нужен доступ к VPS).
+        # После прошивки записи есть → refresh-скрипт не сработает на «юзер очистил».
+        if [ -f "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" ]; then
+            print_info "Обновляю на свежие IP (live-резолв)..."
+            sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || true
+        fi
+
+        # Перечитать и показать итог.
+        local now_entries now_count
+        now_entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+            | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
+        if [ -n "$now_entries" ]; then
+            now_count=$(printf '%s\n' "$now_entries" | wc -l | tr -d ' ')
+            print_separator
+            printf '%s\n' "$now_entries"
+            print_separator
+            print_success "Возвращено записей: $now_count (конфиг сохранён)"
+        else
+            print_warning "Записи не появились — проверь, что ndmc работает."
+        fi
     fi
 
     pause
