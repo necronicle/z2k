@@ -12,6 +12,16 @@ set -e
 Z2K_VERSION="2.0.1"
 WORK_DIR="/tmp/z2k"
 LIB_DIR="${WORK_DIR}/lib"
+
+# Display version = the installed RELEASE TAG (e.g. p-59.1) — the SAME source the
+# webpanel and diag show, so every surface reports one consistent version. Falls
+# back to the product constant only if the tag file isn't present yet (fresh
+# install before the tag is written / pre-versioning install).
+z2k_display_version() {
+    local t
+    t=$(head -1 "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-installed-tag" 2>/dev/null | tr -d ' \r\n')
+    [ -n "$t" ] && printf '%s' "$t" || printf '%s' "$Z2K_VERSION"
+}
 # Default branch URL — matches the branch this z2k.sh was fetched from.
 # On merge to master this line is updated to master. Overridable via
 # GITHUB_RAW env var for cross-branch testing.
@@ -961,10 +971,23 @@ generate_strategies_database() {
 show_welcome() {
     clear_screen
 
+    # Center "Версия <tag>" inside the 51-col box. "Версия " is 7 display cols;
+    # the tag is ASCII so byte length == display width — pad numerically so the
+    # right border stays aligned regardless of tag length (2.0.1 vs p-59.1 etc).
+    local _ver _label _len _lpad _rpad
+    _ver="$(z2k_display_version)"
+    _label="Версия ${_ver}"
+    _len=$((7 + ${#_ver}))
+    [ "$_len" -gt 51 ] && _len=51
+    _lpad=$(( (51 - _len) / 2 ))
+    _rpad=$(( 51 - _len - _lpad ))
+    local _ver_line
+    _ver_line="$(printf '%*s%s%*s' "$_lpad" "" "$_label" "$_rpad" "")"
+
     cat <<EOF
 +===================================================+
 |          z2k - Zapret2 для Keenetic               |
-|                   Версия $Z2K_VERSION                    |
+|${_ver_line}|
 +===================================================+
 
   GitHub: https://github.com/necronicle/z2k
@@ -1032,7 +1055,7 @@ handle_arguments() {
             update_z2k
             ;;
         version|v)
-            echo "z2k v${Z2K_VERSION}"
+            echo "z2k $(z2k_display_version)"
             echo "zapret2: $(get_nfqws2_version)"
             ;;
         cleanup)
@@ -1325,7 +1348,7 @@ main() {
             exit 0
             ;;
         version|v|--version)
-            echo "z2k v${Z2K_VERSION}"
+            echo "z2k $(z2k_display_version)"
             exit 0
             ;;
     esac

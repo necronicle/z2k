@@ -60,6 +60,19 @@ safe_read() {
     printf '%s' "$val"
 }
 
+# z2k version — read the installed RELEASE TAG (e.g. p-59.1), the SAME source
+# the webpanel shows, so every surface (menu / diag / webpanel) reports one
+# consistent version. Falls back to the product constant in the persistent lib
+# only if the tag file isn't present yet (very old / pre-versioning install).
+# The install-time /tmp/z2k dir is wiped on every reboot, so it is NOT a source
+# here — reading it used to show "unknown" after every restart (pure cosmetic).
+z2k_version_read() {
+    local v
+    v=$(head -1 "${ZAPRET2_DIR}/.z2k-installed-tag" 2>/dev/null | tr -d ' \r\n')
+    [ -z "$v" ] && v=$(safe_read "Z2K_VERSION" "${ZAPRET2_DIR}/lib/utils.sh" "")
+    printf '%s' "${v:-unknown}"
+}
+
 # Resolve the Entware arch (e.g. mipsel-3.4_kn) via opkg, quiet fallback to uname -m.
 get_entware_arch() {
     local opkg_bin="opkg"
@@ -121,9 +134,7 @@ short_tail() {
 print_version_host() {
     printf '=== z2k diag / %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo now)"
     local version
-    version=$(safe_read "Z2K_VERSION" "/tmp/z2k/lib/utils.sh" "unknown")
-    [ "$version" = "unknown" ] && [ -r "/opt/zapret2/z2k-version" ] && \
-        version=$(cat /opt/zapret2/z2k-version 2>/dev/null)
+    version=$(z2k_version_read)
     printf 'z2k version       : %s\n' "$version"
 
     local kernel
@@ -292,7 +303,7 @@ print_logs() {
 # =============================================================================
 print_short() {
     local version entw nfqws_pids lan_ip svc
-    version=$(safe_read "Z2K_VERSION" "/tmp/z2k/lib/utils.sh" "unknown")
+    version=$(z2k_version_read)
     entw=$(get_entware_arch)
     nfqws_pids=$(pgrep -f 'nfq2/nfqws2' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
     lan_ip=$(get_lan_ip)
@@ -312,7 +323,7 @@ print_json() {
     # Intentionally minimal — webpanel will use sh-based sections in Phase 3.
     # This is a placeholder so the CLI --json flag doesn't 404 from the start.
     local version nfqws_pids svc
-    version=$(safe_read "Z2K_VERSION" "/tmp/z2k/lib/utils.sh" "unknown")
+    version=$(z2k_version_read)
     nfqws_pids=$(pgrep -f 'nfq2/nfqws2' 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
     if [ -n "$nfqws_pids" ]; then
         svc="running"

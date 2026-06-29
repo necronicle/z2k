@@ -767,9 +767,16 @@ au_health_check() {
         return 1
     fi
 
+    # GitHub reachability is an ADVISORY signal — NOT a health gate. The probe
+    # hits a bare hostname (DNS-dependent) and github.com is not bypassed, so on
+    # a router whose provider blocks GitHub or whose DoH resolver is broken it
+    # fails even when the update is perfectly sound. Rolling back on this alone
+    # churned good updates every night (revert tag → re-apply → fail → revert…),
+    # which is exactly what users with a broken upstream DNS reported. nfqws2 is
+    # alive and every installed script parses clean (the two checks above) — that
+    # already proves the update is healthy. A failed probe only logs a warning.
     if ! curl -fsS --max-time 10 -o /dev/null "$Z2K_AU_HEALTH_GH_URL"; then
-        au_log "health-check FAILED: github unreachable"
-        return 1
+        au_log "health-check: github unreachable (advisory only — update kept; nfqws2 alive + scripts parse clean)"
     fi
 
     au_log "health-check OK"
