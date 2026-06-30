@@ -438,12 +438,21 @@ au_download_repo_file() {
     local url="${Z2K_AU_REPO_RAW}/${repo_path}"
     mkdir -p "$(dirname "$target")"
     if command -v z2k_fetch >/dev/null 2>&1; then
-        z2k_fetch "$url" "$target" || return 1
+        z2k_fetch "$url" "$target" && { [ -s "$target" ] || [ -f "$target" ]; } && return 0
     else
-        curl -fsSL --max-time 30 "$url" -o "$target" || return 1
+        curl -fsSL --max-time 30 "$url" -o "$target" && { [ -s "$target" ] || [ -f "$target" ]; } && return 0
     fi
-    [ -s "$target" ] || [ -f "$target" ] || return 1
-    return 0
+    # Download failed. Distinguish a file DELETED upstream (a later release in
+    # the patch window removed it — e.g. a dropped feature) from a transient
+    # network failure. A 404 must NOT abort the whole patch (that permanently
+    # strands every router crossing that version window — the z2k-discord-voice-
+    # pin.sh / r-57 incident); a transient error SHOULD abort so we retry rather
+    # than apply a half-patch. No -f here so curl reports the real 4xx status.
+    # rc: 0=ok, 2=deleted(404), 1=transient/other.
+    local code
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" 2>/dev/null)
+    [ "$code" = "404" ] && return 2
+    return 1
 }
 
 au_download_reinstall_script() {
@@ -547,11 +556,19 @@ au_apply_patch() {
 
     # 1) download all files first to staging — atomic-ish: if any download
     # fails, we abort before touching live files.
-    local repo_path stage
+    local repo_path stage _dl_rc deleted_paths=""
     while IFS= read -r repo_path; do
         [ -z "$repo_path" ] && continue
         stage="$Z2K_AU_TMP_DIR/dl/$(echo "$repo_path" | tr '/' '_')"
-        if ! au_download_repo_file "$repo_path" "$stage"; then
+        au_download_repo_file "$repo_path" "$stage"
+        _dl_rc=$?
+        if [ "$_dl_rc" = "2" ]; then
+            # Deleted upstream (404) — a later release in this window removed it.
+            # Do NOT abort; record it so step 2 deletes the stale local copy.
+            au_log "patch: $repo_path removed upstream (404) — skipping, will delete local copy"
+            deleted_paths="$deleted_paths $repo_path"
+            continue
+        elif [ "$_dl_rc" != "0" ]; then
             au_log "patch: failed to download $repo_path — aborting"
             return 1
         fi
@@ -560,9 +577,22 @@ $files
 EOF
 
     # 2) install each file
-    local targets target
+    local targets target _del_targets _dt
     while IFS= read -r repo_path; do
         [ -z "$repo_path" ] && continue
+        # Deleted upstream (404 in step 1) → remove the stale local target(s), skip.
+        case " $deleted_paths " in
+            *" $repo_path "*)
+                _del_targets=$(au_install_paths "$repo_path")
+                while IFS= read -r _dt; do
+                    [ -z "$_dt" ] && continue
+                    [ -e "$_dt" ] && rm -f "$_dt" 2>/dev/null && \
+                        au_log "patch: removed $_dt (deleted upstream)"
+                done <<EOF_DEL
+$_del_targets
+EOF_DEL
+                continue ;;
+        esac
         stage="$Z2K_AU_TMP_DIR/dl/$(echo "$repo_path" | tr '/' '_')"
         targets=$(au_install_paths "$repo_path")
         if [ -z "$targets" ]; then
