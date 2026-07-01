@@ -1761,6 +1761,16 @@
             интернет.
           </p>
         </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+          <div class="credits-name">Diman86RUS</div>
+          <p class="desc">
+            Новый спонсор проекта. Благодаря таким людям, как Diman86RUS, z2k
+            продолжает развиваться, а Telegram-туннель остаётся бесплатным для
+            всех. Спасибо, что вкладываешься в свободный интернет!
+          </p>
+        </div>
       </div>
     `;
   }
