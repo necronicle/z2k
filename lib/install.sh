@@ -2990,6 +2990,11 @@ step_finalize() {
     deploy_critical_file "files/ndm/92-z2k-rt-proxy-redirect.sh"    "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh" || return 1
     deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh" || return 1
 
+    # NFQUEUE self-heal: scheduler fires it ~1×/min to re-apply the firewall when
+    # nfqws2 is up but its NFQUEUE rules are gone (boot-race WAN-skip / NDM wipe).
+    # Soft deploy — a missing self-heal only loses the safety net, not core bypass.
+    deploy_critical_file "files/z2k-nfqueue-selfheal.sh"          "/opt/zapret2/z2k-nfqueue-selfheal.sh" || print_warning "nfq-selfheal: deploy failed (NFQUEUE auto-recovery disabled)"
+
     # tpws youtube layer REMOVED as a feature (2026-06-08): with fastnat=0 the
     # native nfqws2 bypass works on offloaded flows. Sweep any tpws left over
     # from a previous version so an update leaves no zombie (rules/files/binary).

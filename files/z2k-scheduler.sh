@@ -161,6 +161,23 @@ while true; do
         fi
     fi
 
+    # NFQUEUE self-heal (minute-cadence). Standalone script (mirrors the
+    # tg-watchdog / ppe-deoffload pattern) re-applies the firewall when nfqws2 is
+    # running and the WAN is up but its NFQUEUE rules are GONE — the boot-race
+    # (fw_nfqws_post4/pre4 SKIP rule insertion when the WAN iface isn't detected
+    # yet at start_fw and never retry -> NFQUEUE=0 with a live nfqws2, incl.
+    # CGNAT/late-WAN topologies) and the secondary net for NDM wiping our rules
+    # (the netfilter.d hook is the event-driven primary). Idempotent + coalesced
+    # with the hook via the shared restart-fw mutex.
+    if [ -x "${ZAPRET2_DIR}/z2k-nfqueue-selfheal.sh" ]; then
+        last_sh=$(last_fired_in "$TMP_STATE" nfq-selfheal-epoch)
+        case "$last_sh" in ''|*[!0-9]*) last_sh=0 ;; esac
+        if [ "$((now_epoch - last_sh))" -ge 55 ]; then
+            mark_fired_in "$TMP_STATE" nfq-selfheal-epoch "$now_epoch"
+            "${ZAPRET2_DIR}/z2k-nfqueue-selfheal.sh" >/dev/null 2>&1 &
+        fi
+    fi
+
     # Rotate log occasionally (cheap, only every minute boundary).
     if [ "$(date +%S)" -lt 30 ]; then
         rotate_log
