@@ -34,6 +34,12 @@ const (
 	wsReadTimeout  = 90 * time.Second
 )
 
+// idFallbackCooldownSec is how long the client stays on shared-secret after a
+// per-install fallback before retrying per-install. Short enough that a flapped
+// install re-migrates well within a day (before the relay flip), long enough to
+// ride out a transient relay/registration hiccup.
+const idFallbackCooldownSec = 300
+
 // Address types for CONNECT payload
 const (
 	addrIPv4 = 1
@@ -116,6 +122,7 @@ type tunnelClient struct {
 	registerURL  string
 	useID        atomic.Bool  // send per-install auth (set true after a successful register)
 	idFailStreak atomic.Int32 // consecutive fast deaths while on per-install auth
+	idFallbackAt atomic.Int64 // unix sec when we last fell back to shared-secret (0 = not fallen back)
 
 	ws         *websocket.Conn
 	writer     *wsWriter
@@ -325,6 +332,19 @@ func (tc *tunnelClient) run() {
 		default:
 		}
 
+		// Per-install re-attempt: the fallback to shared-secret (below) is TEMPORARY,
+		// not a permanent latch. After idFallbackCooldown we retry per-install so a
+		// transient flap doesn't strand a registered install on shared-secret — which
+		// would black-hole it once the relay flips to --require-per-install.
+		if tc.identity != nil && !tc.useID.Load() {
+			if fb := tc.idFallbackAt.Load(); fb > 0 && time.Now().Unix()-fb >= idFallbackCooldownSec {
+				tc.idFailStreak.Store(0)
+				tc.idFallbackAt.Store(0)
+				tc.useID.Store(true)
+				log.Printf("[tunnel] retrying per-install auth after fallback cooldown")
+			}
+		}
+
 		ws, err := tc.connectTunnelWS()
 		if err != nil {
 			consecutiveFails++
@@ -414,12 +434,15 @@ func (tc *tunnelClient) run() {
 		// Per-install auth safety fallback: if a per-install connection keeps dying
 		// fast (relay hasn't got our registration yet, or a per-install bug), drop
 		// back to shared-secret auth so Telegram never breaks. The relay dual-accepts
-		// both; this backstops the register-gated switch.
+		// both; this backstops the register-gated switch. The fallback is TEMPORARY —
+		// idFallbackAt arms the cooldown re-attempt at the top of the loop, so the
+		// client converges back to per-install rather than latching forever.
 		if tc.useID.Load() {
 			if time.Since(connectedAt) < 8*time.Second {
 				if tc.idFailStreak.Add(1) >= 3 {
 					tc.useID.Store(false)
-					log.Printf("[tunnel] per-install auth unstable — falling back to shared-secret auth")
+					tc.idFallbackAt.Store(time.Now().Unix())
+					log.Printf("[tunnel] per-install auth unstable — falling back to shared-secret auth (will retry in %ds)", idFallbackCooldownSec)
 				}
 			} else {
 				tc.idFailStreak.Store(0)

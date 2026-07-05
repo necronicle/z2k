@@ -32,6 +32,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"filippo.io/edwards25519"
 )
 
 const muxAUTHID byte = 0x06 // per-install AUTH frame: [id:16][ts:8][sig:64]
@@ -226,7 +228,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pub, err := base64.StdEncoding.DecodeString(req.Pubkey)
-	if err != nil || len(pub) != ed25519.PublicKeySize {
+	if err != nil || !validEd25519Pubkey(pub) {
 		http.Error(w, "bad pubkey", http.StatusBadRequest)
 		return
 	}
@@ -240,6 +242,29 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+// validEd25519Pubkey reports whether pub is a safe Ed25519 public key: a
+// canonical encoding of a point of full prime order. It rejects
+//   - the wrong length,
+//   - non-canonical encodings (SetBytes fails), and
+//   - small-order points ([8]P == identity): all-zero, the neutral element,
+//     order-2/4/8 points. A low-order key lets an attacker forge AUTH frames
+//     without a private key (cofactor forgery) — the reason a zero-pubkey
+//     `00112233…` must never have been accepted into the registry.
+func validEd25519Pubkey(pub []byte) bool {
+	if len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	p, err := new(edwards25519.Point).SetBytes(pub)
+	if err != nil {
+		return false // non-canonical / not on curve
+	}
+	// Point has small order iff cofactor multiplication lands on the identity.
+	if new(edwards25519.Point).MultByCofactor(p).Equal(edwards25519.NewIdentityPoint()) == 1 {
+		return false
+	}
+	return true
 }
 
 // validInstallID: 16 bytes hex (32 chars), lowercase hex only.
@@ -280,7 +305,9 @@ func verifyPerInstallAuth(payload []byte) (string, bool) {
 		return id, false
 	}
 	pub, err := base64.StdEncoding.DecodeString(e.Pubkey)
-	if err != nil || len(pub) != ed25519.PublicKeySize {
+	if err != nil || !validEd25519Pubkey(pub) {
+		// Defense in depth: a low-order key must never authenticate even if it
+		// slipped into the registry before validEd25519Pubkey gated /register.
 		return id, false
 	}
 	if !ed25519.Verify(ed25519.PublicKey(pub), payload[0:24], sig) {
