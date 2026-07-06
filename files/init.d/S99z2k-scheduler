@@ -49,7 +49,16 @@ start() {
             sleep 10
         done
     ) &
-    echo $! > "$SUP_PIDFILE"
+    _sup_pid=$!
+    echo "$_sup_pid" > "$SUP_PIDFILE"
+    # OOM-protect the supervisor. It is the SOLE recovery path for every periodic
+    # z2k task; if it dies nothing respawns it until reboot. These boxes run with
+    # swap=0 (no OOM cushion) and have killed supervisor+scheduler together, leaving
+    # auto-update dead for days (field 2026-07-06). The supervisor is a tiny shell
+    # loop, so making it OOM-immune costs nothing and guarantees it survives to
+    # respawn the scheduler. The scheduler resets its own score on startup (it would
+    # otherwise inherit -1000), keeping the heavy tasks it fires normal OOM targets.
+    echo -1000 > "/proc/$_sup_pid/oom_score_adj" 2>/dev/null || true
     sleep 1
     if sup_alive && is_alive; then
         echo "z2k-scheduler started (supervisor $(cat "$SUP_PIDFILE"), scheduler $(cat "$PIDFILE" 2>/dev/null))"

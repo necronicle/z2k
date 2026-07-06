@@ -42,6 +42,14 @@ fi
 echo $$ > "$PIDFILE"
 trap 'rm -f "$PIDFILE"; exit 0' INT TERM HUP
 
+# We were forked by the OOM-protected supervisor (S99z2k-scheduler sets its
+# oom_score_adj to -1000) and inherit that immunity. Reset ours to normal so the
+# scheduler AND every heavy task it fires (auto-update reinstall, list refresh)
+# stay ordinary OOM candidates — only the tiny supervisor stays protected, and it
+# respawns us if we are ever killed. Without this, a leaking task would be immune
+# and the OOM killer would take an innocent bystander (nfqws2, dropbear) instead.
+echo 0 > "/proc/$$/oom_score_adj" 2>/dev/null || true
+
 # Ensure log dir exists.
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
 

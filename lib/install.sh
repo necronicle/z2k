@@ -3008,6 +3008,13 @@ step_finalize() {
     deploy_critical_file "files/z2k-ppe-deoffload.sh"            "/opt/zapret2/z2k-ppe-deoffload.sh" || print_warning "ppe: shared-lib deploy failed (per-flow de-offload disabled)"
     deploy_critical_file "files/ndm/94-z2k-ppe-deoffload.sh"     "/opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh" || print_warning "ppe: NDM hook deploy failed"
 
+    # Reboot-independent watchdog for the scheduler stack. NDM re-runs netfilter.d
+    # hooks on boot/WAN/hotplug; this one resurrects the scheduler supervisor if it
+    # ever dies (field 2026-07-06: OOM-killed supervisor left auto-update dead for
+    # days with no recovery until reboot). Soft deploy — a missing watchdog must not
+    # fail the install; the init-level OOM protection is the primary guard.
+    deploy_critical_file "files/ndm/95-z2k-scheduler-watchdog.sh" "/opt/etc/ndm/netfilter.d/95-z2k-scheduler-watchdog.sh" || print_warning "scheduler-watchdog: NDM hook deploy failed"
+
     # tg-tunnel-watchdog used to be triggered via `* * * * *` cron, but
     # Vixie cron on Keenetic Entware doesn't reload added entries (see
     # r-26 notes). z2k-scheduler.sh now fires the watchdog ~1×/min.
