@@ -1037,6 +1037,42 @@ download_openwrt_embedded_release() {
     return 1
 }
 
+# Slim binaries/ to the single arch this box actually runs (issue #19).
+# The upstream install_bin.sh symlinks nfq2/nfqws2 -> ../binaries/<arch>/nfqws2
+# (same for ip2net/mdig) yet leaves ALL ~11 arch subdirs on disk (~5 MB). Only
+# the linked arch is ever used; the rest are dead weight that also doubles the
+# reinstall backup (mv → .old + fresh cp -a). Run this on the staged release
+# tree BEFORE the final copy so both the installed size AND the copy peak drop.
+#   • symlink path (install_bin.sh): keep exactly the arch the link resolves
+#     to, drop the sibling arch dirs, symlink stays valid.
+#   • real-file path (manual fallback copied into nfq2/): binaries/ is
+#     unreferenced → drop it whole.
+z2k_slim_release_binaries() {
+    local rel="$1"
+    local bdir="$rel/binaries"
+    [ -d "$bdir" ] || return 0
+
+    local link keep=""
+    link=$(readlink "$rel/nfq2/nfqws2" 2>/dev/null || true)
+    case "$link" in
+        */binaries/*) keep=$(printf '%s' "$link" | sed -n 's#.*/binaries/\([^/]*\)/.*#\1#p') ;;
+    esac
+
+    if [ -n "$keep" ] && [ -d "$bdir/$keep" ]; then
+        local d base
+        for d in "$bdir"/*/; do
+            [ -d "$d" ] || continue
+            base=$(basename "$d")
+            [ "$base" = "$keep" ] || rm -rf "$d"
+        done
+        print_info "binaries/ слим: оставлен только $keep (остальные арки удалены)"
+    elif [ -f "$rel/nfq2/nfqws2" ] && [ ! -h "$rel/nfq2/nfqws2" ]; then
+        # nfq2/nfqws2 is a real file — binaries/ tree is not referenced.
+        rm -rf "$bdir"
+        print_info "binaries/ удалён (бинарники — реальные файлы в nfq2/)"
+    fi
+}
+
 step_build_zapret2() {
     print_header "Шаг 5/12: Установка zapret2"
 
@@ -1391,6 +1427,9 @@ step_build_zapret2() {
     print_info "Установка в $ZAPRET2_DIR..."
 
     cd "$build_dir" || return 1
+    # Drop the ~11 unused arch dirs from binaries/ before copying into place
+    # (issue #19: keep only the arch this box runs — the symlinked/real one).
+    z2k_slim_release_binaries "$release_dir"
     cp -a "$release_dir" "$ZAPRET2_DIR" && rm -rf "$release_dir" || return 1
 
     # ВАЖНО: Обновить ZAPRET_BASE на финальный путь (был /tmp/zapret2_build/...)
@@ -1931,7 +1970,6 @@ ${ZAPRET2_DIR}/mdig
 ${ZAPRET2_DIR}/lua
 ${ZAPRET2_DIR}/files
 ${ZAPRET2_DIR}/common
-${ZAPRET2_DIR}/binaries
 "
 
     print_info "Проверка структуры директорий..."
