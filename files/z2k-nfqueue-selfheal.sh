@@ -126,8 +126,18 @@ fi
 mkdir "$RESTART_FW_LOCK" 2>/dev/null || exit 0
 [ "$now" -gt 0 ] && echo "$now" > "$RESTART_FW_LAST" 2>/dev/null
 
-log "nfqws2 up, WAN present, 0 NFQUEUE rules -> restart_fw"
-"$INIT_SCRIPT" restart_fw >/dev/null 2>&1
+# Recover with the ADD-ONLY start_fw, NOT the heavyweight restart_fw.
+# restart_fw = stop_fw; sleep 1; start_fw — a full teardown that (a) opens a
+# >=1s zero-NFQUEUE window (bypass dead) and (b) flips the GLOBAL conntrack
+# sysctls (nf_conntrack_fastnat 0->1->0, be_liberal, checksum) on every fire.
+# NDM wipes our mangle-NFQUEUE rules on hook-less regen paths ~280x/day, so this
+# poller fired restart_fw ~280x/day, churning conntrack/the RTCACHE fastpath and
+# dropping long-lived router-terminated sessions (SSH :222) + flapping bypass.
+# start_fw is idempotent (ipt() -C||-I, private chains -N/-F+-C||-A) and re-adds
+# ONLY the missing rules with NO teardown, NO conntrack-sysctl flip, NO gap —
+# and still WAN-gated per-family via fw_nfqws_post4/6 (no silent bypass death).
+log "nfqws2 up, WAN present, 0 NFQUEUE rules -> start_fw (re-apply)"
+"$INIT_SCRIPT" start_fw >/dev/null 2>&1
 rmdir "$RESTART_FW_LOCK" 2>/dev/null
 
 exit 0

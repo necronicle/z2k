@@ -373,6 +373,13 @@ au_install_paths() {
         files/ndm/92-z2k-rt-proxy-redirect.sh)
             echo "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh"
             ;;
+        files/000-zapret2.sh)
+            # Primary NDM netfilter.d recovery hook — install.sh copies it to
+            # /opt/etc/ndm/netfilter.d/, NOT into $ZAPRET2_DIR. Without this case
+            # it fell into files/*.sh below and a patch misplaced it to
+            # ${zd}/000-zapret2.sh, silently skipping the real hook (r-59.9).
+            echo "/opt/etc/ndm/netfilter.d/000-zapret2.sh"
+            ;;
         files/init.d/*)
             echo "${zd}/init.d/${repo_path#files/init.d/}"
             ;;

@@ -78,12 +78,18 @@ fi
 mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 [ "$now" -gt 0 ] && echo "$now" > "$LAST_RUN" 2>/dev/null   # пометить сразу → всплеск debounce'ится
 
-# Тяжёлую пересборку — в фон (hook у NDM синхронный, должен вернуться быстро);
-# lock гарантирует ровно одну за раз. sleep — дать NDM достроить таблицы.
-# restart_fw пересоздаёт только NFQUEUE правила в mangle, демоны (nfqws2) живут.
+# Пере-применение — в фон (hook у NDM синхронный, должен вернуться быстро);
+# lock гарантирует ровно одно за раз. sleep — дать NDM достроить таблицы.
+# ВАЖНО: используем ADD-ONLY start_fw, а НЕ restart_fw. restart_fw = stop_fw;
+# sleep 1; start_fw — полный teardown, который на КАЖДЫЙ вызов (а NDM дёргает
+# regen ~280x/сут) открывает >=1s окно без NFQUEUE (обход мёртв) и флипает
+# ГЛОБАЛЬНЫЕ conntrack-sysctl (nf_conntrack_fastnat 0->1->0, be_liberal,
+# checksum), что рвёт долгоживущие сессии на роутере (SSH :222) и флапает обход.
+# start_fw идемпотентен (ipt() -C||-I) и до-создаёт ТОЛЬКО пропавшие правила —
+# без teardown, без флипа sysctl, без окна; демоны (nfqws2) живут.
 {
     sleep "$HOOK_SETTLE"
-    "$INIT_SCRIPT" restart_fw >/dev/null 2>&1
+    "$INIT_SCRIPT" start_fw >/dev/null 2>&1
     rmdir "$LOCK_DIR" 2>/dev/null
 } &
 

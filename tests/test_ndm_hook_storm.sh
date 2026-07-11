@@ -19,7 +19,7 @@ CNT="$TMP/count"; : > "$CNT"
 INIT="$TMP/S99zapret2"
 cat > "$INIT" <<EOF
 #!/bin/sh
-[ "\$1" = restart_fw ] && echo x >> "$CNT"
+[ "\$1" = start_fw ] && echo x >> "$CNT"
 exit 0
 EOF
 chmod +x "$INIT"
