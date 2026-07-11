@@ -537,21 +537,7 @@ tunnel_disable() {
     echo "Туннель остановлен, watchdog респектнёт флаг и не будет его перезапускать."
 }
 
-# --- healthcheck / jobs ---
-
-healthcheck_run_async() {
-    local hc="$ZAPRET2_DIR/z2k-healthcheck.sh"
-    [ -x "$hc" ] || { echo "healthcheck script missing" >&2; return 1; }
-    local job_id
-    job_id=$(date +%s)$$
-    # See update_apply_async for why we close inherited CGI fds.
-    (
-        "$hc" > "/tmp/z2k-job-$job_id.log" 2>&1
-        echo "$?" > "/tmp/z2k-job-$job_id.exit"
-    ) </dev/null >/dev/null 2>&1 &
-    echo "$!" > "/tmp/z2k-job-$job_id.pid"
-    printf '%s' "$job_id"
-}
+# --- async jobs ---
 
 job_status() {
     local id="$1"
@@ -595,16 +581,6 @@ tail_service_log() {
         fi
     done
     echo "(no service log found)"
-}
-
-tail_healthcheck_log() {
-    local n="${1:-200}"
-    local f="$ZAPRET2_DIR/healthcheck.log"
-    if [ -f "$f" ]; then
-        tail -n "$n" "$f"
-    else
-        echo "(no healthcheck log)"
-    fi
 }
 
 # --- diag (Phase 3) ---

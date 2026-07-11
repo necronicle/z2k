@@ -778,9 +778,11 @@ download_init_script() {
         die "Ошибка загрузки files/z2k-blocked-monitor.sh"
     fi
 
-    # z2k tools (healthcheck, config validator, list updater, diagnostics, geosite, tg watchdog).
-    # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup).
-    for tool_name in z2k-healthcheck.sh z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-tg-redirect.sh z2k-auto-update.sh z2k-insta-ip-refresh.sh z2k-scheduler.sh z2k-stats-upload.sh; do
+    # z2k tools (config validator, list updater, diagnostics, geosite, tg watchdog).
+    # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup);
+    # z2k-healthcheck.sh removed in r-60 (per-strategy pass/fail false-negatives
+    # during rotation — use z2k-diag.sh instead).
+    for tool_name in z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-tg-redirect.sh z2k-auto-update.sh z2k-insta-ip-refresh.sh z2k-scheduler.sh z2k-stats-upload.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if z2k_fetch "$url" "$output"; then
@@ -1074,13 +1076,6 @@ handle_arguments() {
             print_info "Создание snapshot конфигурации..."
             create_rollback_snapshot "cli"
             ;;
-        healthcheck|hc)
-            if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/z2k-healthcheck.sh" ]; then
-                sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-healthcheck.sh" --status
-            else
-                print_error "Скрипт healthcheck не найден"
-            fi
-            ;;
         validate)
             if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/z2k-config-validator.sh" ]; then
                 sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-config-validator.sh"
@@ -1130,7 +1125,6 @@ show_help() {
   cleanup          Очистить старые бэкапы (оставить 5 последних)
   rollback         Откатить конфигурацию к последнему snapshot
   snapshot         Создать snapshot текущей конфигурации
-  healthcheck, hc  Проверить работоспособность DPI bypass
   validate         Валидация текущей конфигурации
   diag, d          Сводка для траблшутинга (скопируй вывод и пришли в чат)
   version, v       Показать версию

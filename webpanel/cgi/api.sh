@@ -394,25 +394,6 @@ case "$method $path" in
         exit 0
         ;;
 
-    # ---------- HEALTHCHECK ----------
-    "POST /healthcheck/run")
-        job_id=$(healthcheck_run_async) || json_fail "500" "failed to start"
-        json_header
-        printf '{"ok":true,"job":'
-        json_string "$job_id"
-        printf '}\n'
-        exit 0
-        ;;
-
-    "GET /healthcheck/log")
-        json_header
-        printf '{"ok":true,"log":'
-        log_content=$(tail_healthcheck_log 200)
-        json_string "$log_content"
-        printf '}\n'
-        exit 0
-        ;;
-
     "GET /job")
         id=$(form_value "${QUERY_STRING:-}" "id")
         [ -z "$id" ] && json_fail "400 Bad Request" "id required"

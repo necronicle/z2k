@@ -29,7 +29,9 @@ chmod +x "$INIT"
 BIN="$TMP/bin"; mkdir -p "$BIN"
 cat > "$BIN/iptables" <<'EOF'
 #!/bin/sh
-# only care about `-t mangle -S`
+# only care about `-t mangle -S`. IPT_FAIL=1 simulates an xtables-lock race
+# (dump exits non-zero) so we can assert the false-drop guard.
+[ "${IPT_FAIL:-0}" = 1 ] && exit 1
 n="${NFQ:-0}"; i=0
 while [ "$i" -lt "$n" ]; do echo "-A POSTROUTING -j NFQUEUE --queue-num 200 --queue-bypass"; i=$((i+1)); done
 exit 0
@@ -64,11 +66,12 @@ LOCK="$TMP/lock"; LAST="$TMP/last"; LOG="$TMP/log"
 # mocks win over any real iptables/ip on the CI host.
 run() {  # env: NFQ, NFQ6 (def NFQ), PIDOF_OK, ROUTE_OK (v4 def 1), ROUTE6_OK (v6 def 0)
     env NFQ="${NFQ:-0}" NFQ6="${NFQ6:-${NFQ:-0}}" PIDOF_OK="${PIDOF_OK:-1}" \
-        ROUTE_OK="${ROUTE_OK:-1}" ROUTE6_OK="${ROUTE6_OK:-0}" \
+        ROUTE_OK="${ROUTE_OK:-1}" ROUTE6_OK="${ROUTE6_OK:-0}" IPT_FAIL="${IPT_FAIL:-0}" \
         PATH="$BIN:/opt/sbin:/opt/bin:$PATH" \
         INIT_SCRIPT="$INIT" ZAPRET_CONFIG="$CFG" \
         RESTART_FW_LOCK="$LOCK" RESTART_FW_LAST="$LAST" \
         MIN_INTERVAL="${MI:-15}" LOCK_STALE="${LS:-60}" SELFHEAL_LOG="$LOG" \
+        CONFIRM_SETTLE="${CS:-0}" \
         sh "$SH"
 }
 count() { wc -l < "$CNT" | tr -d ' '; }
@@ -138,6 +141,14 @@ printf 'ENABLED=1\n' > "$CFG"
 #    live-router false-positive the first v6 patch would have caused.)
 reset; NFQ=6 NFQ6=0 PIDOF_OK=1 ROUTE_OK=1 ROUTE6_OK=0 run
 n=$(count); [ "$n" = "0" ] && ok "v6 enabled but no v6 WAN -> no restart_fw" || no "v6 no-WAN noop" "0" "$n"
+
+# --- 14) FALSE-DROP guard: iptables -S fails on an xtables-lock race with NDM.
+#   A failed dump must NOT read as "0 NFQUEUE rules" (that was the phantom
+#   ~280x/day storm: -w-less dump + `|| true` swallowed the lock error). With the
+#   guard, dump-fail -> state unknown -> NOT missing -> no re-apply. On the old
+#   code this fired (count=1); the fix makes it a no-op.
+reset; NFQ=0 IPT_FAIL=1 PIDOF_OK=1 ROUTE_OK=1 ROUTE6_OK=0 run
+n=$(count); [ "$n" = "0" ] && ok "dump-fail (lock race) -> no false restart_fw" || no "false-drop guard" "0" "$n"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -1080,13 +1080,11 @@
         <h3>Сервисный лог</h3>
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn" id="log-refresh">Обновить</button>
-          <button class="btn btn-primary" id="hc-run">Запустить healthcheck</button>
         </div>
         <pre class="log" id="log-view"><span class="skel-text">${skeletonLines(8)}</span></pre>
       </div>
     `;
     document.getElementById("log-refresh").addEventListener("click", loadLog);
-    document.getElementById("hc-run").addEventListener("click", runHealthcheck);
     loadLog();
   }
 
@@ -1098,17 +1096,6 @@
     } catch (e) {
       el.textContent = "Ошибка: " + e.message;
     }
-  }
-
-  async function runHealthcheck() {
-    let resp;
-    try {
-      resp = await apiPost("/healthcheck/run");
-    } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
-      return;
-    }
-    openJobModal("Healthcheck", resp.job);
   }
 
   // ---------- Job modal ----------

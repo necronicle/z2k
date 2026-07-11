@@ -40,6 +40,7 @@ RESTART_FW_LOCK="${RESTART_FW_LOCK:-/tmp/zapret2-restart-fw.lock}"
 RESTART_FW_LAST="${RESTART_FW_LAST:-/tmp/zapret2-restart-fw.last}"
 MIN_INTERVAL="${MIN_INTERVAL:-15}"     # с — не топтать свежий restart_fw хука
 LOCK_STALE="${LOCK_STALE:-60}"         # с — снять зависший mutex упавшего restart_fw
+CONFIRM_SETTLE="${CONFIRM_SETTLE:-2}"  # с — settle+re-verify перед fire (гасит ложные падения)
 SELFHEAL_LOG="${SELFHEAL_LOG:-/opt/var/log/z2k-scheduler.log}"
 
 log() {
@@ -85,24 +86,54 @@ wan_iface="$(sed -n 's/^WAN_IFACE=//p' "$ZAPRET_CONFIG" 2>/dev/null | tr -d '"' 
 # minute forever. Mirrors get_wan_ifaces4/6: WAN_IFACE wins, else the family's
 # own default route. Count via -S (rule dump); on Keenetic -L can trip on NDM's
 # ndmmark rules, -S does not.
+#
+# FALSE-DROP guard: the dump MUST use -w and its exit code MUST be honoured.
+# NDM churns iptables constantly; a bare `iptables -t mangle -S` racing an NDM op
+# fails on the xtables lock, and the old `2>/dev/null || true` swallowed that
+# error → empty output → grep -c NFQUEUE = 0 → we "detected" 0 rules and fired a
+# re-apply while the rules were actually present. That is the phantom ~280x/day
+# storm. Now: -w waits for the lock instead of failing; if the dump STILL errors,
+# the table state is UNKNOWN → treat as NOT missing (return 1) rather than firing.
 nfq_missing() {   # $1 = iptables|ip6tables ; $2 = -4|-6
     if [ -z "$wan_iface" ]; then
         ip "$2" route show default 2>/dev/null | grep -q ' dev ' || return 1  # no WAN -> not broken
     fi
-    _n="$( ("$1" -t mangle -S 2>/dev/null || true) | grep -c NFQUEUE )"
+    # A dump that fails even WITH -w is not lock contention (that -w waits out) —
+    # it's structural (broken iptables / -w unsupported / missing kmod). Treat as
+    # UNKNOWN (skip, NOT "0 rules"), but LOG it: otherwise a permanently-broken
+    # read makes the poller silently stop healing with no triage trail. Only
+    # broken boxes ever hit this — a healthy box's -w never errors, so no spam.
+    _dump="$("$1" -w -t mangle -S 2>/dev/null)" || {
+        log "WARN: $1 -w -t mangle -S failed — can't verify NFQUEUE this tick (broken iptables / -w unsupported?), skipping"
+        return 1
+    }
+    _n="$(printf '%s\n' "$_dump" | grep -c NFQUEUE)"
     case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
     [ "$_n" -eq 0 ]
 }
 
-# nfqws2 alive but a WAN-up family's NFQUEUE rules absent == the bug. restart_fw
+# True iff any WAN-up family is genuinely missing its NFQUEUE rules.
+any_family_missing() {
+    nfq_missing iptables -4 && return 0
+    if ! grep -q '^DISABLE_IPV6=1' "$ZAPRET_CONFIG" 2>/dev/null \
+       && command -v ip6tables >/dev/null 2>&1; then
+        nfq_missing ip6tables -6 && return 0
+    fi
+    return 1
+}
+
+# nfqws2 alive but a WAN-up family's NFQUEUE rules absent == the bug. start_fw
 # rebuilds BOTH families, so one broken family is enough to trigger.
-need_reapply=0
-nfq_missing iptables -4 && need_reapply=1
-if [ "$need_reapply" -eq 0 ] && ! grep -q '^DISABLE_IPV6=1' "$ZAPRET_CONFIG" 2>/dev/null \
-   && command -v ip6tables >/dev/null 2>&1; then
-    nfq_missing ip6tables -6 && need_reapply=1
-fi
-[ "$need_reapply" -eq 1 ] || exit 0
+any_family_missing || exit 0
+
+# CONFIRM: settle briefly and re-verify before committing to a re-apply. A single
+# 0-read can be a transient — an NDM regen mid-flight, or a wipe the event-driven
+# netfilter.d hook (000-zapret2.sh) is about to repair within a second or two.
+# Firing on that transient is a phantom re-apply. After the settle, if the rules
+# are back, it was a false drop → do nothing. Only a drop that PERSISTS past the
+# settle is a genuine wipe worth re-applying.
+sleep "$CONFIRM_SETTLE"
+any_family_missing || exit 0
 
 # --- Re-apply, coalesced with the netfilter.d hook ---------------------------
 
