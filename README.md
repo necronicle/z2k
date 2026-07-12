@@ -102,8 +102,6 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 { curl --resolve raw.githubusercontent.com:443:213.176.74.63 -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh || curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh; } | sh
 ```
 
-Установщик скачивается **через наш VPS** (`213.176.74.63`): он прозрачно проксирует запрос к настоящему GitHub через зарубежный канал, сертификат GitHub остаётся валидным — поэтому установка проходит, даже когда провайдер режет сами IP GitHub (в РФ сейчас блокируют именно адреса Fastly, а не только DNS). Если VPS недоступен, команда автоматически пробует прямой GitHub. Дальше `z2k.sh` все свои загрузки тоже гонит через VPS с тихим откатом на прямой GitHub — **никаких ручных команд с `ip host` больше не нужно.**
-
 ---
 
 ## Меню
