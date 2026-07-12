@@ -99,32 +99,10 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 ### 3) Установка z2k
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
+{ curl --resolve raw.githubusercontent.com:443:213.176.74.63 -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh || curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh; } | sh
 ```
 
-Если GitHub raw не скачивается, попробуйте jsdelivr:
-
-```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh | sh
-```
-
-Если не сработал и jsdelivr, попробуйте gh-proxy:
-
-```bash
-curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
-```
-
-Если **ни одно зеркало не открывается** (провайдер блокирует GitHub — сейчас в РФ режут сами IP GitHub, а не только DNS, поэтому прямой адрес Fastly уже не помогает) — направьте GitHub через наш VPS. Он прозрачно проксирует запросы к настоящему GitHub через зарубежный канал, сертификат остаётся валидным. Выполните по SSH **одной командой**, затем повторите установку:
-
-```bash
-for h in raw.githubusercontent.com objects.githubusercontent.com release-assets.githubusercontent.com api.github.com github.com codeload.github.com; do LD_LIBRARY_PATH= ndmc -c "no ip host $h"; LD_LIBRARY_PATH= ndmc -c "ip host $h 213.176.74.63"; done; LD_LIBRARY_PATH= ndmc -c "system configuration save"
-```
-
-После этого все github-хосты резолвятся в наш VPS (`213.176.74.63`), а он проксирует к настоящему GitHub — установка и обновление проходят даже при блокировке IP GitHub. Команда сначала снимает `no ip host` (иначе `ndmc` **добавляет** второй адрес, а не заменяет — и роутер мог бы иногда ходить на старый заблоканный `185.199.x.x`), затем ставит наш, поэтому корректно **заменяет** ранее прописанный пин. (`LD_LIBRARY_PATH=` обязателен: без него на новых прошивках Keenetic `ndmc` падает с ошибкой `system failed`.)
-
-Откатить (вернуть прямой GitHub, когда разблокируют): `for h in raw.githubusercontent.com objects.githubusercontent.com release-assets.githubusercontent.com api.github.com github.com codeload.github.com; do LD_LIBRARY_PATH= ndmc -c "no ip host $h"; done; LD_LIBRARY_PATH= ndmc -c "system configuration save"`
-
-После запуска `z2k.sh` все внутренние загрузки тоже идут через цепочку зеркал.
+Установщик скачивается **через наш VPS** (`213.176.74.63`): он прозрачно проксирует запрос к настоящему GitHub через зарубежный канал, сертификат GitHub остаётся валидным — поэтому установка проходит, даже когда провайдер режет сами IP GitHub (в РФ сейчас блокируют именно адреса Fastly, а не только DNS). Если VPS недоступен, команда автоматически пробует прямой GitHub. Дальше `z2k.sh` все свои загрузки тоже гонит через VPS с тихим откатом на прямой GitHub — **никаких ручных команд с `ip host` больше не нужно.**
 
 ---
 
@@ -133,10 +111,8 @@ for h in raw.githubusercontent.com objects.githubusercontent.com release-assets.
 Меню открывается **той же командой, что и установка** — если z2k уже установлен, она просто открывает меню (а если ещё нет — ставит и открывает):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
+{ curl --resolve raw.githubusercontent.com:443:213.176.74.63 -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh || curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh; } | sh
 ```
-
-(Зеркала на случай блокировки GitHub — см. раздел «Установка» выше.)
 
 | Пункт | Описание |
 |---|---|
@@ -347,19 +323,7 @@ some-blocked-site.org
 Если zapret или zapret2 были удалены некорректно, остались зависшие процессы или мусорные правила — используйте скрипт полной зачистки:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh | sh
-```
-
-Если GitHub raw не скачивается, попробуйте jsdelivr:
-
-```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k_cleanup.sh | sh
-```
-
-Если не сработал и jsdelivr, попробуйте gh-proxy:
-
-```bash
-curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh | sh
+{ curl --resolve raw.githubusercontent.com:443:213.176.74.63 -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh || curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh; } | sh
 ```
 
 **ВНИМАНИЕ:** Скрипт удаляет ВСЁ связанное с zapret и zapret2:

@@ -32,6 +32,40 @@ export WORK_DIR
 export LIB_DIR
 export GITHUB_RAW
 
+# VPS SNI-passthrough egress для GitHub. RU IP-блокирует Fastly anycast
+# (185.199.108-111.133) за raw/objects/release-assets.githubusercontent.com,
+# поэтому прямые github-IP (и DoH-пины на них) перестали доходить по стране.
+# Наш VPS (nginx ssl_preread) форвардит SNI-совпавшие github(usercontent)
+# хосты на реальный backend через EU-egress, отдавая СОБСТВЕННЫЙ сертификат
+# GitHub — значит обычный `--resolve <githubhost>:443:<VPS>` качает по TLS с
+# валидным сертом, без pin/конфига. Транзиентно per-request (в отличие от
+# постоянной ndmc `ip host` записи в Layer 4). Overridable через env.
+Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
+export Z2K_VPS_GH_IP
+
+# Echo `--resolve h:443:<VPS> ...` для КАЖДОГО github-хоста в цепочке
+# редиректов (release-download: github.com → 302 → objects/release-assets),
+# но ТОЛЬКО для URL'ов, чей origin-хост VPS реально passthrough-роутит
+# (*.githubusercontent.com и github.com/*.github.com). Пусто для
+# jsdelivr/gh-proxy/прочих — они доходят на своих хостах и пинить их к VPS
+# нельзя. Пустой Z2K_VPS_GH_IP (=явно отключён) → пусто, Layer 0 пропускается.
+_z2k_vps_gh_resolve() {
+    [ -n "${Z2K_VPS_GH_IP:-}" ] || return 0
+    # Извлечь реальный host (между :// и первым /), чтобы жадный glob не
+    # матчил github-хост В ПУТИ (напр. gh-proxy.com/https://raw.github...).
+    local _h="${1#*://}"; _h="${_h%%/*}"; _h="${_h%%:*}"
+    case "$_h" in
+        *.githubusercontent.com|github.com|*.github.com) ;;
+        *) return 0 ;;
+    esac
+    local h
+    for h in raw.githubusercontent.com objects.githubusercontent.com \
+             release-assets.githubusercontent.com gist.githubusercontent.com \
+             github.com codeload.github.com api.github.com; do
+        printf ' --resolve %s:443:%s' "$h" "$Z2K_VPS_GH_IP"
+    done
+}
+
 # Список модулей для загрузки
 MODULES="utils system_init install strategies config config_official webpanel menu auto_update"
 
@@ -145,7 +179,7 @@ confirm() {
 # есть cached etag в `${dest}.etag`. На 304 тело не качается, файл
 # остаётся как был — типично ~500ms вместо ~5s на unchanged контент.
 _z2k_curl_etag() {
-    local url="$1" dest="$2"
+    local url="$1" dest="$2" resolve_args="$3"
     local etag_file="${dest}.etag"
     local hdr_file="${dest}.hdr.$$"
     local tmp_body="${dest}.new.$$"
@@ -153,13 +187,15 @@ _z2k_curl_etag() {
     if [ -f "$etag_file" ] && [ -s "$dest" ]; then
         old_etag=$(cat "$etag_file" 2>/dev/null)
     fi
+    # $resolve_args (unquoted, намеренный word-split — как в _z2k_curl_doh):
+    # пусто в обычных вызовах, `--resolve h:443:ip ...` в Layer 0 VPS-хопе.
     if [ -n "$old_etag" ]; then
-        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 $resolve_args \
             -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
         curl_rc=$?
     else
-        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 $resolve_args \
             -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
         curl_rc=$?
@@ -439,6 +475,19 @@ z2k_fetch() {
         export Z2K_FETCH_FAIL_STREAK
         return 0
     }
+
+    # --- Layer 0: VPS SNI-passthrough egress (ПЕРВИЧНЫЙ путь для github) ---
+    # RU блокирует github Fastly anycast по IP → и прямой fetch, и DoH-пины на
+    # реальные github-IP валятся по всей стране. Наш VPS форвардит реальный
+    # github-хост через EU-egress с СЕРТификатом самого github (валидный TLS).
+    # Пробуем ПЕРВЫМ для github-URL; на ЛЮБОЙ сбой — ТИХО проваливаемся в
+    # цепочку direct→jsdelivr→gh-proxy→ndmc→DoH ниже (значит отказ VPS
+    # деградирует до сегодняшнего поведения, а не в жёсткий фейл). Транзиентно:
+    # per-request --resolve, никаких постоянных записей в конфиг.
+    local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
+    if [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve"; then
+        _z2k_fetch_ok; return 0
+    fi
 
     # Auto-promote DoH: only when we've fallen through to layer 5
     # at least Z2K_FETCH_DOH_THRESHOLD times in a row (default 2).

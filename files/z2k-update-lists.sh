@@ -27,6 +27,28 @@ if [ -z "${GITHUB_RAW:-}" ] && [ -r "${ZAPRET2_DIR}/config" ]; then
 fi
 GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 
+# VPS SNI-passthrough egress для GitHub — см. z2k.sh для полного docstring.
+# RU блокирует Fastly anycast github; VPS форвардит github-хосты на реальный
+# backend с сертом github → `--resolve <host>:443:<VPS>` качает по валидному TLS.
+Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
+
+_z2k_vps_gh_resolve() {
+    [ -n "${Z2K_VPS_GH_IP:-}" ] || return 0
+    # Извлечь реальный host (между :// и первым /), чтобы жадный glob не
+    # матчил github-хост В ПУТИ (напр. gh-proxy.com/https://raw.github...).
+    local _h="${1#*://}"; _h="${_h%%/*}"; _h="${_h%%:*}"
+    case "$_h" in
+        *.githubusercontent.com|github.com|*.github.com) ;;
+        *) return 0 ;;
+    esac
+    local h
+    for h in raw.githubusercontent.com objects.githubusercontent.com \
+             release-assets.githubusercontent.com gist.githubusercontent.com \
+             github.com codeload.github.com api.github.com; do
+        printf ' --resolve %s:443:%s' "$h" "$Z2K_VPS_GH_IP"
+    done
+}
+
 # ==============================================================================
 # z2k_fetch — загрузка файла с GitHub через цепочку зеркал.
 # ==============================================================================
@@ -34,7 +56,7 @@ GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-e
 # скрипт не source'ит utils.sh). Слои: raw.github → jsdelivr → gh-proxy →
 # Keenetic DNS override через 8.8.8.8 + ndmc.
 _z2k_curl_etag() {
-    local url="$1" dest="$2"
+    local url="$1" dest="$2" resolve_args="$3"
     local etag_file="${dest}.etag"
     local hdr_file="${dest}.hdr.$$"
     local tmp_body="${dest}.new.$$"
@@ -42,13 +64,14 @@ _z2k_curl_etag() {
     if [ -f "$etag_file" ] && [ -s "$dest" ]; then
         old_etag=$(cat "$etag_file" 2>/dev/null)
     fi
+    # $resolve_args (unquoted word-split): пусто обычно, `--resolve ...` в Layer 0.
     if [ -n "$old_etag" ]; then
-        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 $resolve_args \
             -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
         curl_rc=$?
     else
-        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 \
+        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 $resolve_args \
             -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
         curl_rc=$?
@@ -101,6 +124,11 @@ z2k_fetch() {
             gh_proxy="https://gh-proxy.com/${url}"
             ;;
     esac
+
+    # Layer 0: VPS SNI-passthrough egress — первичный путь для github (RU
+    # блокирует прямые github-IP). На сбой тихо валимся в цепочку ниже.
+    local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
+    [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && return 0
 
     if _z2k_curl_etag "$url" "$dest"; then return 0; fi
     [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
