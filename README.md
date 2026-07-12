@@ -114,13 +114,15 @@ curl -fsSL https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh | sh
 curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh | sh
 ```
 
-Если **ни одно зеркало не открывается** (провайдер подменяет DNS у `githubusercontent.com`) — пропишите адрес GitHub прямо в роутер (на Keenetic это аналог файла `hosts`). Выполните по SSH **одной командой**, затем повторите установку:
+Если **ни одно зеркало не открывается** (провайдер блокирует GitHub — сейчас в РФ режут сами IP GitHub, а не только DNS, поэтому прямой адрес Fastly уже не помогает) — направьте GitHub через наш VPS. Он прозрачно проксирует запросы к настоящему GitHub через зарубежный канал, сертификат остаётся валидным. Выполните по SSH **одной командой**, затем повторите установку:
 
 ```bash
-LD_LIBRARY_PATH= ndmc -c "ip host raw.githubusercontent.com 185.199.108.133"; LD_LIBRARY_PATH= ndmc -c "system configuration save"
+for h in raw.githubusercontent.com objects.githubusercontent.com release-assets.githubusercontent.com api.github.com github.com codeload.github.com; do LD_LIBRARY_PATH= ndmc -c "ip host $h 213.176.74.63"; done; LD_LIBRARY_PATH= ndmc -c "system configuration save"
 ```
 
-После этого `raw.githubusercontent.com` резолвится напрямую в адрес GitHub (Fastly), и установка/обновление проходят. z2k закрепляет этот адрес и сам при установке — команда нужна только когда поставить ещё не удалось. (`LD_LIBRARY_PATH=` обязателен: без него на новых прошивках Keenetic команда `ndmc` падает с ошибкой `system failed`.)
+После этого все github-хосты резолвятся в наш VPS (`213.176.74.63`), а он проксирует к настоящему GitHub — установка и обновление проходят даже при блокировке IP GitHub. Команда заодно **заменяет старый пин** (если раньше прописывали `185.199.x.x`) — `ndmc ip host` перезаписывает адрес. (`LD_LIBRARY_PATH=` обязателен: без него на новых прошивках Keenetic `ndmc` падает с ошибкой `system failed`.)
+
+Откатить (вернуть прямой GitHub, когда разблокируют): `for h in raw.githubusercontent.com objects.githubusercontent.com release-assets.githubusercontent.com api.github.com github.com codeload.github.com; do LD_LIBRARY_PATH= ndmc -c "no ip host $h"; done; LD_LIBRARY_PATH= ndmc -c "system configuration save"`
 
 После запуска `z2k.sh` все внутренние загрузки тоже идут через цепочку зеркал.
 
