@@ -85,8 +85,16 @@ start() {
         backoff=1
         while :; do
             t0=$(date +%s 2>/dev/null || echo 0)
+            # GODEBUG=asyncpreemptoff=1: disable Go's SIGURG-based async goroutine
+            # preemption. On MIPS (softfloat Keenetics) it crashes the client with
+            # `fatal error: index out of range` in runtime.isAsyncSafePoint ->
+            # funcName (a bad preempted PC indexes the functab out of bounds); the
+            # supervisor respawns it and it crash-loops, so the bypass "stops by
+            # itself". Disabling async preempt removes that code path; for an I/O
+            # client (constant safe points) it has no functional cost. Harmless on
+            # non-MIPS arches, so set unconditionally.
             # shellcheck disable=SC2086  # TUNNEL_FLAGS is intentionally word-split
-            $BIN --listen=:1443 --timeout=15m $TUNNEL_FLAGS -v </dev/null >> "$LOG" 2>&1 &
+            GODEBUG=asyncpreemptoff=1 $BIN --listen=:1443 --timeout=15m $TUNNEL_FLAGS -v </dev/null >> "$LOG" 2>&1 &
             child=$!
             wait "$child"
             t1=$(date +%s 2>/dev/null || echo 0)

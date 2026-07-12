@@ -370,6 +370,16 @@ au_install_paths() {
             # /opt/etc/init.d (Entware standard), not into $ZAPRET2_DIR.
             echo "/opt/etc/init.d/S96z2k-rt-proxy"
             ;;
+        files/init.d/S98tg-tunnel)
+            # TG-tunnel supervisor — install.sh copies to /opt/etc/init.d,
+            # NOT into $ZAPRET2_DIR. Without this case a patch misplaced it to
+            # ${zd}/init.d/ (via files/init.d/* below), missing the live script.
+            echo "/opt/etc/init.d/S98tg-tunnel"
+            ;;
+        files/init.d/S97z2k-http-tunnel)
+            # http-tunnel supervisor — same /opt/etc/init.d placement as above.
+            echo "/opt/etc/init.d/S97z2k-http-tunnel"
+            ;;
         files/ndm/92-z2k-rt-proxy-redirect.sh)
             echo "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh"
             ;;

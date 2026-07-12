@@ -58,7 +58,9 @@ start() {
         backoff=1
         while :; do
             t0=$(date +%s 2>/dev/null || echo 0)
-            $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 &
+            # GODEBUG=asyncpreemptoff=1: same MIPS async-preempt crash guard as
+            # S98tg-tunnel (identical Go binary). See that script for the rationale.
+            GODEBUG=asyncpreemptoff=1 $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 &
             child=$!
             wait "$child"
             t1=$(date +%s 2>/dev/null || echo 0)
