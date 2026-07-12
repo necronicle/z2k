@@ -79,6 +79,45 @@ func TestVerifyPerInstallAuth(t *testing.T) {
 	}
 }
 
+func TestAuthReplay(t *testing.T) {
+	skew := int64(120)
+	authSkewSeconds = &skew
+	reg = &registry{m: map[string]*regEntry{}}
+	authNonceSeen = map[string]time.Time{} // isolate from other tests
+
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	var idb [16]byte
+	if _, err := rand.Read(idb[:]); err != nil {
+		t.Fatal(err)
+	}
+	id := hex.EncodeToString(idb[:])
+	reg.m[id] = &regEntry{Pubkey: base64.StdEncoding.EncodeToString(pub)}
+
+	now := time.Now().Unix()
+	frame := mkFrame(idb, now, priv)
+
+	// first sighting of a valid frame is accepted
+	if _, ok := verifyPerInstallAuth(frame); !ok {
+		t.Fatal("first valid auth rejected")
+	}
+	// an exact replay of the same frame is rejected
+	if _, ok := verifyPerInstallAuth(frame); ok {
+		t.Fatal("replayed auth frame accepted")
+	}
+	// a fresh frame (different ts -> different signature) is still accepted
+	if _, ok := verifyPerInstallAuth(mkFrame(idb, now+1, priv)); !ok {
+		t.Fatal("distinct-ts frame wrongly rejected as replay")
+	}
+	// once the replay window has passed, the same signature is accepted again
+	sig := frame[24:88]
+	authNonceMu.Lock()
+	authNonceSeen[string(sig)] = time.Now().Add(-time.Duration(2*skew+10) * time.Second)
+	authNonceMu.Unlock()
+	if _, ok := verifyPerInstallAuth(frame); !ok {
+		t.Fatal("frame rejected after replay window expired")
+	}
+}
+
 func TestRegistryUpsert(t *testing.T) {
 	reg = &registry{m: map[string]*regEntry{}, path: ""} // empty path = no persist
 

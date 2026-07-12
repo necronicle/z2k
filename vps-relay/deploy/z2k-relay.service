@@ -1,0 +1,44 @@
+# /etc/systemd/system/z2k-relay.service  —  REFERENCE / source-of-truth.
+#
+# The live unit on the VPS is the authority; this file documents its shape so
+# the relay deploy stops being an undocumented, VPS-only artifact. The secret
+# flags below are PLACEHOLDERS — the real values live only on the VPS, never in
+# this repo. When editing the live unit, keep it in sync with this file.
+#
+# require-per-install (the anti-theft flip) is folded in here; on the live box it
+# currently arrives via the drop-in 10-require-per-install.conf — either is fine.
+# GOMEMLIMIT is provided by the drop-in 20-gomemlimit.conf (see this dir).
+
+[Unit]
+Description=z2k tunnel relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# TLS is terminated upstream by caddy; the relay listens plaintext on loopback.
+ExecStart=/usr/local/bin/z2k-vps-relay \
+    --listen=127.0.0.1:8080 \
+    --secret=__FILL_ON_VPS__ \
+    --secret-prev=__FILL_ON_VPS__ \
+    --resolve-secret=__FILL_ON_VPS__ \
+    --registry-path=/var/lib/z2k-relay/registry.json \
+    --dial-limit-per-target=8 \
+    --dial-throttle-timeout=3s \
+    --per-stream-queue-bytes=2097152 \
+    --session-queue-bytes=25165824 \
+    --session-queue-depth=1024 \
+    --control-queue-depth=256 \
+    --dial-stats-interval=30s \
+    --extra-cidrs=168.119.95.238/32 \
+    --require-per-install
+# Soft heap ceiling — see 20-gomemlimit.conf (kept as a drop-in on the live box).
+Environment=GOMEMLIMIT=1500MiB
+User=nobody
+Group=nogroup
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

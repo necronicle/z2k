@@ -956,9 +956,18 @@ func (s *session) readPump() {
 var dialThrottle *dialLimiter
 var stats = &dialStats{}
 
+// WS buffers are per-connection and held for the connection's lifetime. With
+// ~1600 concurrent tunnels the old 256KB read + 256KB write (512KB/conn, no
+// pool) was ~840MB — ~85% of relay RSS, not workload. Read is small (upstream is
+// read in 64KB chunks at pumpReadFromTCP and copied out, so the WS read buffer
+// only needs to hold framing); write buffers are shared via a sync.Pool
+// (gorilla's documented fix for "many conns, intermittent writes" — exactly us).
+var wsWriteBufPool = &sync.Pool{}
+
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:    256 * 1024,
-	WriteBufferSize:   256 * 1024,
+	ReadBufferSize:    32 * 1024,
+	WriteBufferSize:   16 * 1024,
+	WriteBufferPool:   wsWriteBufPool,
 	CheckOrigin:       func(r *http.Request) bool { return true },
 	EnableCompression: false,
 }

@@ -283,6 +283,41 @@ func validInstallID(s string) bool {
 
 // ------------------------------------------------ per-install AUTH verify ---
 
+// Anti-replay: the signed AUTH message is only install_id||timestamp, so a
+// captured 88-byte frame is replayable for the whole ±authSkewSeconds window.
+// We cache the signature of every ACCEPTED frame and reject a second sighting.
+// A legitimate client re-signs with a fresh timestamp on each reconnect (backoff
+// ≥3s), producing a new signature, so this never rejects a real reconnect. The
+// TTL only needs to span the accept window (2*authSkewSeconds) — anything older
+// is already rejected by the skew gate. Mirrors the regRate map+mutex+inline-GC.
+var (
+	authNonceMu   sync.Mutex
+	authNonceSeen = map[string]time.Time{} // key: the 64-byte signature
+)
+
+// authReplaySeen records sig and reports whether it was already accepted within
+// the replay window. Call ONLY for cryptographically-valid frames.
+func authReplaySeen(sig []byte) bool {
+	ttl := time.Duration(2**authSkewSeconds) * time.Second
+	authNonceMu.Lock()
+	defer authNonceMu.Unlock()
+	now := time.Now()
+	key := string(sig)
+	if t, ok := authNonceSeen[key]; ok && now.Sub(t) < ttl {
+		return true // replay within window
+	}
+	authNonceSeen[key] = now
+	// opportunistic GC of expired entries (bounded memory, no goroutine)
+	if len(authNonceSeen) > 8192 {
+		for k, t := range authNonceSeen {
+			if now.Sub(t) >= ttl {
+				delete(authNonceSeen, k)
+			}
+		}
+	}
+	return false
+}
+
 // verifyPerInstallAuth parses+verifies a muxAUTHID payload:
 //
 //	[install_id:16][timestamp:8 BE unix][ed25519 sig:64]   (88 bytes)
@@ -311,6 +346,10 @@ func verifyPerInstallAuth(payload []byte) (string, bool) {
 		return id, false
 	}
 	if !ed25519.Verify(ed25519.PublicKey(pub), payload[0:24], sig) {
+		return id, false
+	}
+	if authReplaySeen(sig) {
+		log.Printf("auth rejected (replay) id=%s", id)
 		return id, false
 	}
 	return id, true
