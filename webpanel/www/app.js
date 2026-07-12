@@ -479,7 +479,7 @@
       { label: "Установлен", value: s.installed ? "Да" : "Нет", kind: s.installed ? "good" : "bad" },
       { label: "Сервис", value: fmtSvc(s.service), kind: s.service === "active" ? "good" : (s.service === "stopped" ? "warn" : "bad") },
       { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
-      { label: "RST фильтр", value: bool(s.toggles.rst_filter), kind: s.toggles.rst_filter === "1" ? "good" : "" },
+      { label: "RST фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
       { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
       { label: "Игровой режим", value: gameModeLabel(s.toggles.game_mode, s.game_profile), kind: s.toggles.game_mode === "1" ? "good" : "" },
       { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
@@ -521,6 +521,12 @@
   }
 
   function bool(v) { return v === "1" ? "Вкл" : "Выкл"; }
+  // RST filter is a plain on/off switch in the panel, but the CLI menu can also
+  // set "aggressive" (a narrow-TTL ON mode). Both values mean ENABLED — the panel
+  // must not render "Выкл" for aggressive. Mirrors lib/menu.sh RST_FILTER matching
+  // (1|on|true|yes|aggressive|agg|aggro).
+  function rstIsOn(v) { v = String(v || "").toLowerCase(); return v === "1" || v === "on" || v === "true" || v === "yes" || v === "aggressive" || v === "agg" || v === "aggro"; }
+  function rstIsAggressive(v) { v = String(v || "").toLowerCase(); return v === "aggressive" || v === "agg" || v === "aggro"; }
   function fmtSvc(s) {
     return { active: "работает", stopped: "остановлен", not_installed: "не установлен" }[s] || s;
   }
@@ -670,7 +676,7 @@
       TOGGLE_DEFS.forEach(t => {
         const row = $app.querySelector(`[data-key="${t.key}"]`);
         const box = row.querySelector("input");
-        box.checked = s.toggles[t.key] === "1";
+        box.checked = t.key === "rst_filter" ? rstIsOn(s.toggles[t.key]) : s.toggles[t.key] === "1";
         box.disabled = false;
         box.addEventListener("change", () => toggleClick(t.key, box));
       });
