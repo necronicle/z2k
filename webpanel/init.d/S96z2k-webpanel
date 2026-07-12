@@ -4,6 +4,16 @@
 # config at /opt/zapret2/webpanel/lighttpd.conf. Independent of any system
 # lighttpd that may also be installed.
 
+# At boot the rc runner executes this WITHOUT sourcing /opt/etc/profile, so the
+# dynamic linker has no /opt/lib on its path. lighttpd pulls libnettle.so.8 (via
+# gnutls) from /opt/lib, so without this it dies at boot with "libnettle.so.8:
+# cannot open shared object file" — yet starts fine from an interactive SSH
+# shell (profile already sourced). Users saw the panel "turn off after reboot"
+# (issue #21). Mirror the cron/init.d PATH fix, for libraries too. NB: no ndmc
+# is launched here, so a populated LD_LIBRARY_PATH is safe (ndmc needs it empty).
+export PATH="/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin"
+export LD_LIBRARY_PATH="/opt/lib:/opt/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 CONF="/opt/zapret2/webpanel/lighttpd.conf"
 PIDFILE="/var/run/z2k-webpanel.pid"
 WWW_DIR="/opt/zapret2/www"
