@@ -4,15 +4,34 @@
 # config at /opt/zapret2/webpanel/lighttpd.conf. Independent of any system
 # lighttpd that may also be installed.
 
-# At boot the rc runner executes this WITHOUT sourcing /opt/etc/profile, so the
-# dynamic linker has no /opt/lib on its path. lighttpd pulls libnettle.so.8 (via
-# gnutls) from /opt/lib, so without this it dies at boot with "libnettle.so.8:
-# cannot open shared object file" — yet starts fine from an interactive SSH
-# shell (profile already sourced). Users saw the panel "turn off after reboot"
-# (issue #21). Mirror the cron/init.d PATH fix, for libraries too. NB: no ndmc
-# is launched here, so a populated LD_LIBRARY_PATH is safe (ndmc needs it empty).
+# At boot the rc runner runs this WITHOUT sourcing /opt/etc/profile, so the
+# dynamic linker has no Entware lib dir on its path and lighttpd dies on
+# libnettle.so.8 ("cannot open shared object") — while an interactive SSH start
+# works (profile already set LD_LIBRARY_PATH). And a split-opkg setup installs
+# libs under a SECONDARY dest (e.g. a USB volume: `dest ext /tmp/mnt/<uuid>`), so
+# the lib may not even be in /opt/lib. Derive the search path from EVERY opkg
+# destination. NB: no ndmc runs here, so a populated LD_LIBRARY_PATH is safe
+# (ndmc wants it empty). issue #21.
 export PATH="/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin"
-export LD_LIBRARY_PATH="/opt/lib:/opt/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Echo a ':'-joined lib search path: /opt/lib + every `dest <name> <path>` from
+# opkg.conf as <path>/opt/lib. Existing dirs only — a not-yet-mounted volume is
+# skipped and picked up on retry once mounted.
+_z2k_libpath() {
+    local dirs="/opt/lib:/opt/usr/lib" kw dn dp rest
+    if [ -r /opt/etc/opkg.conf ]; then
+        while read -r kw dn dp rest; do
+            [ "$kw" = dest ] || continue
+            case "$dp" in /*) ;; *) continue ;; esac
+            dp="${dp%/}/opt/lib"
+            [ -d "$dp" ] || continue
+            case ":${dirs}:" in *":${dp}:"*) ;; *) dirs="${dirs}:${dp}" ;; esac
+        done < /opt/etc/opkg.conf
+    fi
+    printf '%s' "$dirs"
+}
+LD_LIBRARY_PATH="$(_z2k_libpath)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
 
 CONF="/opt/zapret2/webpanel/lighttpd.conf"
 PIDFILE="/var/run/z2k-webpanel.pid"
@@ -26,6 +45,31 @@ is_alive() {
     local pid
     pid=$(cat "$PIDFILE" 2>/dev/null)
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# A missing shared lib at boot usually means a secondary opkg dest (a USB volume
+# holding the lib) isn't mounted yet — recent Keenetic firmware can delay it a
+# minute+ via fsck. Poll (re-deriving the lib path, since the dir appears once
+# mounted) until lighttpd can load, then start it. Bounded so a genuinely-broken
+# box doesn't spin forever. Runs backgrounded — boot is not blocked. issue #21.
+_z2k_webpanel_wait_start() {
+    local n=0 ld
+    while [ "$n" -lt 60 ]; do
+        sleep 5
+        n=$((n + 1))
+        is_alive && return 0
+        ld="$(_z2k_libpath)"
+        if LD_LIBRARY_PATH="$ld" "$BIN" -tt -f "$CONF" >/tmp/z2k-log/z2k-webpanel-startcheck.log 2>&1; then
+            LD_LIBRARY_PATH="$ld" "$BIN" -f "$CONF"
+            sleep 1
+            if is_alive; then
+                echo "z2k-webpanel started after $((n * 5))s wait (pid $(cat "$PIDFILE"))"
+                return 0
+            fi
+        fi
+    done
+    echo "z2k-webpanel: libs still unavailable after wait — giving up" >&2
+    return 1
 }
 
 start() {
@@ -46,14 +90,26 @@ start() {
     fi
     mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
     chmod 700 /tmp/z2k-log 2>/dev/null
-    # Validate config first — lighttpd -tt exits non-zero on errors.
-    if ! "$BIN" -tt -f "$CONF" >/tmp/z2k-log/z2k-webpanel-startcheck.log 2>&1; then
+    # Validate config first — lighttpd -tt exits non-zero on errors (incl. a
+    # missing shared library). Re-derive the lib path here in case a dest volume
+    # mounted after this script was sourced.
+    local ld
+    ld="$(_z2k_libpath)"
+    if ! LD_LIBRARY_PATH="$ld" "$BIN" -tt -f "$CONF" >/tmp/z2k-log/z2k-webpanel-startcheck.log 2>&1; then
+        # Missing shared lib at boot = a secondary opkg volume isn't mounted yet
+        # (fsck can delay it). Don't give up: wait for it in the background so the
+        # panel comes up once the volume appears, without blocking boot.
+        if grep -qiE 'shared object|shared librar' /tmp/z2k-log/z2k-webpanel-startcheck.log 2>/dev/null; then
+            echo "z2k-webpanel: libs not ready — waiting for opkg volume in background"
+            _z2k_webpanel_wait_start </dev/null >>/tmp/z2k-log/z2k-webpanel-wait.log 2>&1 &
+            return 0
+        fi
         echo "z2k-webpanel: lighttpd config invalid" >&2
         cat /tmp/z2k-log/z2k-webpanel-startcheck.log >&2 2>/dev/null
         return 1
     fi
     # Start daemonized (lighttpd forks itself and writes pid file from config).
-    "$BIN" -f "$CONF"
+    LD_LIBRARY_PATH="$ld" "$BIN" -f "$CONF"
     sleep 1
     if is_alive; then
         echo "z2k-webpanel started (pid $(cat "$PIDFILE"))"
