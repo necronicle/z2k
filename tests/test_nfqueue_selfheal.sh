@@ -75,7 +75,10 @@ run() {  # env: NFQ, NFQ6 (def NFQ), PIDOF_OK, ROUTE_OK (v4 def 1), ROUTE6_OK (v
         sh "$SH"
 }
 count() { wc -l < "$CNT" | tr -d ' '; }
-reset() { : > "$CNT"; rm -rf "$LOCK"; rm -f "$LAST"; }
+# Hermetic: a var-assignment PREFIX on a function call persists in the shell
+# (POSIX behaviour) — e.g. `IPT_FAIL=1 run` would leak into the next test. Clear
+# every toggle so each case starts from run()'s documented defaults.
+reset() { : > "$CNT"; rm -rf "$LOCK"; rm -f "$LAST"; unset NFQ NFQ6 PIDOF_OK ROUTE_OK ROUTE6_OK IPT_FAIL MI LS CS; }
 
 # --- 1) the bug condition: nfqws2 up, WAN up, enabled, 0 NFQUEUE -> restart_fw
 reset; NFQ=0 PIDOF_OK=1 ROUTE_OK=1 run
@@ -149,6 +152,31 @@ n=$(count); [ "$n" = "0" ] && ok "v6 enabled but no v6 WAN -> no restart_fw" || 
 #   code this fired (count=1); the fix makes it a no-op.
 reset; NFQ=0 IPT_FAIL=1 PIDOF_OK=1 ROUTE_OK=1 ROUTE6_OK=0 run
 n=$(count); [ "$n" = "0" ] && ok "dump-fail (lock race) -> no false restart_fw" || no "false-drop guard" "0" "$n"
+
+# --- 15) PARTIAL wipe (issue #23): a sustained ~5s NDM regen collapses NFQUEUE
+#   to 1 (below the active-family floor of 3). The old `-eq 0` gate was blind to
+#   this and left YouTube dead until a manual S99zapret2 restart. NFQ_FLOOR=2 now
+#   treats a stuck count of 1 as missing and heals it.
+reset; NFQ=1 PIDOF_OK=1 ROUTE_OK=1 run
+n=$(count); [ "$n" = "1" ] && ok "partial wipe v4 (count==1 < floor) -> heal fires (#23)" || no "v4 partial heals" "1" "$n"
+
+# --- 16) FIX #1: DISABLE_IPV4=1 must NOT fire on a below-floor v4 count. start_fw
+#   builds NO v4 NFQUEUE when v4 is disabled, so 0 v4 rules is NORMAL, not a wipe.
+#   Without the DISABLE_IPV4 gate this re-applies EVERY tick forever (v4 route up +
+#   0 rules < floor). Both families disabled here -> isolates the guard.
+reset; printf 'ENABLED=1\nDISABLE_IPV4=1\nDISABLE_IPV6=1\n' > "$CFG"
+NFQ=0 NFQ6=0 PIDOF_OK=1 ROUTE_OK=1 ROUTE6_OK=1 run
+n=$(count); [ "$n" = "0" ] && ok "DISABLE_IPV4=1 + 0 v4 rules -> no re-apply (fix #1)" || no "DISABLE_IPV4 guard" "0" "$n"
+printf 'ENABLED=1\n' > "$CFG"
+
+# --- 17) floor boundary: count == NFQ_FLOOR is HEALTHY (not < floor) -> no-op.
+#   Guards an off-by-one that would heal a legit minimal box forever.
+reset; NFQ=2 PIDOF_OK=1 ROUTE_OK=1 run
+n=$(count); [ "$n" = "0" ] && ok "count == floor (2) -> no re-apply" || no "floor boundary noop" "0" "$n"
+
+# --- 18) PARTIAL wipe on v6 (v6 active): v4 full, v6 stuck at 1 -> heal (per-family floor)
+reset; NFQ=6 NFQ6=1 PIDOF_OK=1 ROUTE_OK=1 ROUTE6_OK=1 run
+n=$(count); [ "$n" = "1" ] && ok "partial wipe v6 (count==1 < floor) -> heal fires" || no "v6 partial heals" "1" "$n"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

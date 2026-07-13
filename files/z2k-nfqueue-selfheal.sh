@@ -41,6 +41,15 @@ RESTART_FW_LAST="${RESTART_FW_LAST:-/tmp/zapret2-restart-fw.last}"
 MIN_INTERVAL="${MIN_INTERVAL:-15}"     # с — не топтать свежий restart_fw хука
 LOCK_STALE="${LOCK_STALE:-60}"         # с — снять зависший mutex упавшего restart_fw
 CONFIRM_SETTLE="${CONFIRM_SETTLE:-2}"  # с — settle+re-verify перед fire (гасит ложные падения)
+# Порог ЧАСТИЧНОГО вайпа (issue #23). NDM при устойчивом реген-флапе (напр. мёртвый
+# IKEv2-пир: DPD ~5с гоняет пересборку фаервола) сносит наш набор NFQUEUE не в ноль,
+# а ДО 1 — и старый gate `-eq 0` этого НЕ видел, обход застревал мёртвым до ручного
+# `S99zapret2 restart`. Теперь этот поллер (1/мин) лечит любой WAN-up family ниже
+# порога. Активный family несёт >=3 NFQUEUE-правила (один профиль = post+input+forward),
+# поэтому NFQ_FLOOR=2 стоит НИЖЕ активного минимума (не фолсит на легитимном
+# минимальном одно-профильном боксе) и ВЫШЕ полевого stuck-счётчика 1 (ловит частичный
+# вайп). Полное «0 правил» тоже покрыто (0 < 2), так что это надмножество старого gate.
+NFQ_FLOOR="${NFQ_FLOOR:-2}"
 SELFHEAL_LOG="${SELFHEAL_LOG:-/opt/var/log/z2k-scheduler.log}"
 
 log() {
@@ -109,12 +118,23 @@ nfq_missing() {   # $1 = iptables|ip6tables ; $2 = -4|-6
     }
     _n="$(printf '%s\n' "$_dump" | grep -c NFQUEUE)"
     case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
-    [ "$_n" -eq 0 ]
+    # Пропало == НИЖЕ порога активного family. Было `-eq 0`, что было слепо к
+    # ЧАСТИЧНОМУ вайпу (issue #23: счётчик залипает на 1) — то самое stuck-состояние,
+    # которое чинилось только ручным `S99zapret2 restart`. Теперь любой WAN-up family
+    # ниже NFQ_FLOOR лечится. Storm-safe: start_fw кладёт полный набор (>=3) → на
+    # следующем тике условие снято, а легитимная смена топологии (v6 down / WAN
+    # failover) либо роняет WAN family (гейт выше), либо удовлетворяется одним re-apply.
+    [ "$_n" -lt "$NFQ_FLOOR" ]
 }
 
 # True iff any WAN-up family is genuinely missing its NFQUEUE rules.
+# Симметричный DISABLE_IPV4/IPV6-гейт: start_fw НЕ кладёт правила отключённого
+# family, поэтому опрашивать его нельзя — иначе 0 правил < FLOOR = вечная «поломка»
+# → бесконечный re-apply на DISABLE_IPV4=1-боксе с живым v4-роутом (fix #1).
 any_family_missing() {
-    nfq_missing iptables -4 && return 0
+    if ! grep -q '^DISABLE_IPV4=1' "$ZAPRET_CONFIG" 2>/dev/null; then
+        nfq_missing iptables -4 && return 0
+    fi
     if ! grep -q '^DISABLE_IPV6=1' "$ZAPRET_CONFIG" 2>/dev/null \
        && command -v ip6tables >/dev/null 2>&1; then
         nfq_missing ip6tables -6 && return 0
