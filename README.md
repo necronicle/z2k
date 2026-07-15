@@ -262,6 +262,30 @@ Telegram работает для всех устройств в сети авт�
 
 ---
 
+## Discord — голосовые каналы (фикс на ПК)
+
+Веб и текст Discord z2k тянет на роутере сам. А вот **голос** иногда виснет на «Connecting» — провайдер душит финские голосовые серверы Discord. На уровне роутера это не лечится (нужно было бы ~200 DNS-записей — почти весь лимит Keenetic), поэтому фикс делается **на самом ПК**: пином финского диапазона в hosts-файл на рабочий Cloudflare-адрес.
+
+**Готовый список** (200 строк `finlandNNNNN.discord.media` → `104.25.158.178`):
+
+- скачать: `https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/extras/discord-voice-hosts.txt`
+- зеркало: `https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/extras/discord-voice-hosts.txt`
+
+**Куда добавить** (строки из файла — в конец системного hosts):
+
+- **Windows:** `C:\Windows\System32\drivers\etc\hosts` — открыть Блокнотом **от имени администратора**.
+- **Linux / macOS:** `/etc/hosts` — через `sudo`.
+
+**После правки** — сбросить DNS-кэш и перезапустить Discord:
+
+- Windows: `ipconfig /flushdns`
+- Linux: `sudo resolvectl flush-caches`
+- macOS: `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`
+
+Адрес `104.25.158.178` со временем может смениться. Если голос снова отвалился — скачайте список заново (свежий держит проект `Flowseal/zapret-discord-youtube`, кнопка «Update hosts file»).
+
+---
+
 ## Пользовательские домены
 
 В большинстве случаев чтобы заблокированный сайт начал обходиться через z2k — достаточно добавить его в **extra-список**, без всяких кастомных стратегий. autocircular сам подберёт рабочую стратегию из существующего пула (~47 вариантов для TCP, 12+ для QUIC) и закрепит её в `state.tsv` после первого успеха.
