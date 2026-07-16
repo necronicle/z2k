@@ -224,11 +224,23 @@ print_iptables() {
     local tg_ipset_n
     tg_ipset_n=$( (ipset list z2k_tg_dc 2>/dev/null || true) | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
     : "${tg_ipset_n:=0}"
+    # v6 fast-reject: skips dead Telegram IPv6 DCs so mobile clients don't stall
+    # ~8s/attempt before falling back to the v4 tunnel (see z2k-tg-redirect.sh).
+    local tg_reject6_fwd tg_reject6_out tg_ipset6_n
+    tg_reject6_fwd=$( (ip6tables -S FORWARD 2>/dev/null || true) | grep -c 'match-set z2k_tg_dc6 dst' || true)
+    tg_reject6_out=$( (ip6tables -S OUTPUT 2>/dev/null || true) | grep -c 'match-set z2k_tg_dc6 dst' || true)
+    tg_ipset6_n=$( (ipset list z2k_tg_dc6 2>/dev/null || true) | grep -cE '^[0-9a-fA-F:]+/[0-9]+' || true)
+    : "${tg_reject6_fwd:=0}"
+    : "${tg_reject6_out:=0}"
+    : "${tg_ipset6_n:=0}"
     printf 'NFQUEUE postroute : %s\n' "$nfq_mangle"
     printf 'NFQUEUE prerouting: %s\n' "$nfq_prerouting"
     printf 'TG REDIR PREROUT  : %s  (expected 1 — ipset match-set, r-50+)\n' "$tg_redirect_pre"
     printf 'TG REDIR OUTPUT   : %s  (expected 1 — ipset match-set, r-50+)\n' "$tg_redirect_out"
     printf 'TG ipset z2k_tg_dc: %s DC subnets (expected 10)\n' "$tg_ipset_n"
+    printf 'TG v6 REJECT FWD  : %s  (expected 1 — fast-reject dead v6 DCs)\n' "$tg_reject6_fwd"
+    printf 'TG v6 REJECT OUT  : %s  (expected 1)\n' "$tg_reject6_out"
+    printf 'TG ipset z2k_tg_dc6: %s DC subnets (expected 4)\n' "$tg_ipset6_n"
     if [ -e /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh ]; then
         printf 'NDM hook          : installed\n'
     else

@@ -23,9 +23,30 @@ Z2K_TG_SET="z2k_tg_dc"
 Z2K_TG_PORT=1443
 Z2K_TG_CIDRS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
 
+# Telegram IPv6 DC ranges — from Telegram's OWN announced AS prefixes
+# (AS62041/62014/44907/59930/211157, via RIPEstat/BGP), collapsed. These are
+# the authoritative v6 DC blocks, not a guess from one client's log.
+#
+# WHY fast-REJECT (root fix for "mobile TG connects 10-60s, PC is instant"):
+#   The MTProto tunnel is IPv4-only (redirect below → :1443 → v4 relay → DC).
+#   Telegram's IPv6 DCs are RU-blocked, but a mobile client on a cold connect
+#   races v4 AND v6 DC endpoints in parallel. The v6 SYN leaves via FORWARD
+#   (policy DROP has an ACCEPT path for LAN→WAN) and dies SILENTLY upstream at
+#   the ТСПУ → the client waits its full 8s connect timeout, retries v6, and
+#   only then falls back to v4 — stacking ~40s of dead-v6 stalls (proven in the
+#   client's net.txt: repeated "connecting (2001:067c:04e8:f004::a:443)" →
+#   "timeout = 8" → "disconnected reason 2"). PC/warm reuses a known-good v4 DC
+#   so it never pays this. We insert an ip6tables REJECT --reject-with
+#   tcp-reset so the phone's v6 DC SYN gets an INSTANT RST at the router and
+#   immediately uses the working v4 tunnel. (We reject rather than tunnel v6
+#   because the relay path is v4 and the v6 DCs are dead anyway.)
+Z2K_TG_SET6="z2k_tg_dc6"
+Z2K_TG_CIDRS6="2001:67c:4e8::/48 2001:b28:f23c::/47 2001:b28:f23f::/48 2a0a:f280:203::/48"
+
 # xtables-lock-safe iptables: wait for the lock, fall back to plain on
 # ancient iptables without -w (mirrors S99zapret2.new:937).
 _z2k_tg_ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
+_z2k_tg_ipt6() { ip6tables -w "$@" 2>/dev/null || ip6tables "$@" 2>/dev/null; }
 
 # Ensure the ipset exists and holds the current DC CIDR list (idempotent;
 # ipset survives NDM wipes so this is usually a no-op after first run).
@@ -42,10 +63,56 @@ z2k_tg_rule_present() {
     _z2k_tg_ipt -t nat -C "$1" -p tcp --dport 443 -m set --match-set "$Z2K_TG_SET" dst -j REDIRECT --to-port "$Z2K_TG_PORT"
 }
 
+# --- IPv6 fast-reject of Telegram DC ranges (see Z2K_TG_CIDRS6 rationale) ---
+
+# Ensure the v6 ipset exists and holds the current v6 DC CIDR list. Survives
+# NDM ip6tables wipes just like the v4 set, so this is a no-op after first run.
+z2k_tg_ensure_ipset6() {
+    ipset create "$Z2K_TG_SET6" hash:net family inet6 -exist 2>/dev/null || return 1
+    for _c in $Z2K_TG_CIDRS6; do
+        ipset add "$Z2K_TG_SET6" "$_c" -exist 2>/dev/null
+    done
+    return 0
+}
+
+# Is the v6 REJECT rule present in filter chain $1 (FORWARD|OUTPUT)?
+z2k_tg_rule6_present() {
+    _z2k_tg_ipt6 -C "$1" -p tcp -m set --match-set "$Z2K_TG_SET6" dst -j REJECT --reject-with tcp-reset
+}
+
+# Install both v6 REJECT rules (FORWARD for LAN clients, OUTPUT for the router
+# itself). Best-effort: never blocks the v4 redirect contract. Returns 0 only
+# when both are confirmed, but callers ignore the return.
+z2k_tg_ensure_rules6() {
+    z2k_tg_ensure_ipset6 || return 1
+    _retry6=0
+    while [ "$_retry6" -lt 3 ]; do
+        z2k_tg_rule6_present FORWARD || _z2k_tg_ipt6 -I FORWARD 1 -p tcp -m set --match-set "$Z2K_TG_SET6" dst -j REJECT --reject-with tcp-reset
+        z2k_tg_rule6_present OUTPUT  || _z2k_tg_ipt6 -I OUTPUT 1 -p tcp -m set --match-set "$Z2K_TG_SET6" dst -j REJECT --reject-with tcp-reset
+        if z2k_tg_rule6_present FORWARD && z2k_tg_rule6_present OUTPUT; then
+            return 0
+        fi
+        _retry6=$((_retry6 + 1))
+        [ "$_retry6" -lt 3 ] && sleep 1
+    done
+    return 1
+}
+
+# Remove both v6 REJECT rules (tunnel stop). Loops in case of duplicates.
+z2k_tg_remove_rules6() {
+    while z2k_tg_rule6_present FORWARD; do
+        _z2k_tg_ipt6 -D FORWARD -p tcp -m set --match-set "$Z2K_TG_SET6" dst -j REJECT --reject-with tcp-reset
+    done
+    while z2k_tg_rule6_present OUTPUT; do
+        _z2k_tg_ipt6 -D OUTPUT -p tcp -m set --match-set "$Z2K_TG_SET6" dst -j REJECT --reject-with tcp-reset
+    done
+}
+
 # Install both REDIRECT rules with verify-retry. Returns 0 only when both
 # rules are confirmed present.
 z2k_tg_ensure_rules() {
     z2k_tg_ensure_ipset || return 1
+    z2k_tg_ensure_rules6   # best-effort v6 fast-reject; does not gate v4 success
     _retry=0
     while [ "$_retry" -lt 3 ]; do
         z2k_tg_rule_present PREROUTING || _z2k_tg_ipt -t nat -I PREROUTING 1 -p tcp --dport 443 -m set --match-set "$Z2K_TG_SET" dst -j REDIRECT --to-port "$Z2K_TG_PORT"
@@ -62,6 +129,7 @@ z2k_tg_ensure_rules() {
 # Remove both REDIRECT rules (tunnel stop). Loops in case duplicates exist.
 # Leaves the ipset in place (cheap, reused on next start).
 z2k_tg_remove_rules() {
+    z2k_tg_remove_rules6
     while z2k_tg_rule_present PREROUTING; do
         _z2k_tg_ipt -t nat -D PREROUTING -p tcp --dport 443 -m set --match-set "$Z2K_TG_SET" dst -j REDIRECT --to-port "$Z2K_TG_PORT"
     done

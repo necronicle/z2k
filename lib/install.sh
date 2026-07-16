@@ -3900,6 +3900,17 @@ uninstall_zapret2() {
             iptables -w -t nat -D "$tg_chain" -p tcp --dport 443 -m set --match-set z2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || break
         done
     done
+    # Symmetric v6 fast-reject cleanup: drop the ip6tables REJECT rules that
+    # reference z2k_tg_dc6, otherwise the generic z2k ipset destroy below fails
+    # with "set in use" and leaves a stale set + rules behind after uninstall.
+    if command -v ip6tables >/dev/null 2>&1; then
+        local tg_chain6
+        for tg_chain6 in FORWARD OUTPUT; do
+            while ip6tables -w -C "$tg_chain6" -p tcp -m set --match-set z2k_tg_dc6 dst -j REJECT --reject-with tcp-reset 2>/dev/null; do
+                ip6tables -w -D "$tg_chain6" -p tcp -m set --match-set z2k_tg_dc6 dst -j REJECT --reject-with tcp-reset 2>/dev/null || break
+            done
+        done
+    fi
     # Drop legacy per-CIDR REDIRECT rules (pre-ipset builds) in case the init
     # script stop path missed some or was already gone.
     local tg_cidr
