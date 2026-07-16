@@ -263,7 +263,7 @@ _z2k_resolve_doh_pool() {
     local host="$1"
     local cache_var
     cache_var="Z2K_POOL_$(printf '%s' "$host" | tr -c '[:alnum:]' '_')"
-    local cached="${!cache_var:-}"
+    eval "local cached=\${$cache_var:-}"
     if [ -n "$cached" ]; then printf '%s' "$cached"; return 0; fi
     local resp
     resp=$(curl -sS --max-time 5 \
@@ -276,8 +276,7 @@ _z2k_resolve_doh_pool() {
           | tr '\n' ' ' \
           | sed 's/ *$//')
     [ -z "$ips" ] && return 1
-    printf -v "$cache_var" '%s' "$ips"
-    export "$cache_var"
+    eval "$cache_var=\"\$ips\"; export $cache_var"
     printf '%s' "$ips"
     return 0
 }
