@@ -82,6 +82,10 @@ print_success() {
     printf "[[OK]] %s\n" "$1"
 }
 
+print_warning() {
+    printf "[[WARN]] %s\n" "$1"
+}
+
 print_error() {
     printf "[[FAIL]] %s\n" "$1" >&2
 }
@@ -259,7 +263,7 @@ _z2k_resolve_doh_pool() {
     local host="$1"
     local cache_var
     cache_var="Z2K_POOL_$(printf '%s' "$host" | tr -c '[:alnum:]' '_')"
-    eval "local cached=\${$cache_var:-}"
+    local cached="${!cache_var:-}"
     if [ -n "$cached" ]; then printf '%s' "$cached"; return 0; fi
     local resp
     resp=$(curl -sS --max-time 5 \
@@ -272,7 +276,8 @@ _z2k_resolve_doh_pool() {
           | tr '\n' ' ' \
           | sed 's/ *$//')
     [ -z "$ips" ] && return 1
-    eval "$cache_var=\"\$ips\"; export $cache_var"
+    printf -v "$cache_var" '%s' "$ips"
+    export "$cache_var"
     printf '%s' "$ips"
     return 0
 }
@@ -652,6 +657,8 @@ check_environment() {
         fi
     fi
     bin_arch=$(z2k_map_arch_to_bin_arch "$arch" 2>/dev/null || true)
+    # Сохранить для переиспользования (избегает повторного определения в update_z2k)
+    Z2K_DETECTED_BIN_ARCH="$bin_arch"
     [ -n "$bin_arch" ] && print_info "Detected architecture: $arch -> $bin_arch"
 
     if [ -z "$bin_arch" ]; then
@@ -973,6 +980,7 @@ roblox_ips.txt
 flowseal_game_ips.txt
 extra-domains.txt
 rkn-false-positive.txt
+whitelist-default.txt
 "
 
     while read -r list_file; do
@@ -1199,6 +1207,12 @@ EOF
 update_z2k() {
     print_header "Обновление z2k"
 
+    # Вычислить TG_PROXY_USER_DISABLED один раз для всего update_z2k
+    local _tg_user_disabled=0
+    if [ -f "/opt/zapret2/config" ]; then
+        _tg_user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+    fi
+
     local latest_url="${GITHUB_RAW}/z2k.sh"
     local current_script
     current_script=$(readlink -f "$0")
@@ -1283,11 +1297,7 @@ update_z2k() {
         fi
         rm -f "$tg_support_tmp"
 
-        local _tg_disabled_update=0
-        if [ -f "/opt/zapret2/config" ]; then
-            _tg_disabled_update=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
-        fi
-        if [ "$_tg_disabled_update" = "1" ]; then
+        if [ "$_tg_user_disabled" = "1" ]; then
             if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
                 /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
             else
@@ -1304,10 +1314,13 @@ update_z2k() {
         if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
             print_info "Обновление Telegram tunnel..."
             local tg_arch=""
-            local _arch _earch _barch
-            _earch=$(z2k_detect_entware_arch)
-            _arch="${_earch:-$(uname -m)}"
-            _barch=$(z2k_map_arch_to_bin_arch "$_arch" 2>/dev/null || true)
+            local _barch="${Z2K_DETECTED_BIN_ARCH:-}"
+            if [ -z "$_barch" ]; then
+                local _earch _arch
+                _earch=$(z2k_detect_entware_arch)
+                _arch="${_earch:-$(uname -m)}"
+                _barch=$(z2k_map_arch_to_bin_arch "$_arch" 2>/dev/null || true)
+            fi
             case "$_barch" in
                 linux-arm64)    tg_arch="arm64" ;;
                 linux-arm)      tg_arch="arm" ;;
@@ -1325,7 +1338,7 @@ update_z2k() {
                 local tg_tmp
                 tg_tmp=$(mktemp)
                 if z2k_fetch "$tg_url" "$tg_tmp" && \
-                   [ "$(wc -c < "$tg_tmp")" -gt 500000 ] && \
+                   [ "$(wc -c < "$tg_tmp" | tr -d ' ')" -gt 500000 ] && \
                    head -c 4 "$tg_tmp" 2>/dev/null | grep -q "ELF"; then
                     killall tg-mtproxy-client 2>/dev/null || true
                     sleep 1
@@ -1333,11 +1346,7 @@ update_z2k() {
                     chmod +x /opt/sbin/tg-mtproxy-client
                     # Respect TG_PROXY_USER_DISABLED — if user explicitly stopped
                     # the tunnel via menu/webpanel, don't resurrect it on update.
-                    local _tg_disabled=0
-                    if [ -f "/opt/zapret2/config" ]; then
-                        _tg_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
-                    fi
-                    if [ "$_tg_disabled" = "1" ]; then
+                    if [ "$_tg_user_disabled" = "1" ]; then
                         print_success "Telegram tunnel обновлён (не запущен — отключён пользователем)"
                     else
                         if [ -x /opt/etc/init.d/S98tg-tunnel ]; then

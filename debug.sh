@@ -1,6 +1,9 @@
 #!/bin/sh
 # debug.sh - Диагностика модулей ядра для z2k на Keenetic
 
+# Вычислить версию ядра один раз
+kernel_ver=$(uname -r)
+
 echo "+==================================================+"
 echo "|  z2k - Диагностика модулей ядра                 |"
 echo "+==================================================+"
@@ -54,13 +57,25 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "5. ВЕРСИИ MODPROBE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Системный modprobe:"
-which /sbin/modprobe && /sbin/modprobe --version 2>&1 | head -3
+if which /sbin/modprobe >/dev/null 2>&1; then
+    /sbin/modprobe --version 2>&1 | head -3
+else
+    echo "  [FAIL] /sbin/modprobe не найден"
+fi
 echo ""
 echo "Entware modprobe:"
-which /opt/sbin/modprobe && /opt/sbin/modprobe --version 2>&1 | head -3
+if which /opt/sbin/modprobe >/dev/null 2>&1; then
+    /opt/sbin/modprobe --version 2>&1 | head -3
+else
+    echo "  [FAIL] /opt/sbin/modprobe не найден"
+fi
 echo ""
 echo "Дефолтный modprobe:"
-which modprobe && modprobe --version 2>&1 | head -3
+if which modprobe >/dev/null 2>&1; then
+    modprobe --version 2>&1 | head -3
+else
+    echo "  [FAIL] modprobe не найден"
+fi
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -116,7 +131,6 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "10. ПОПЫТКА ЗАГРУЗКИ ЧЕРЕЗ /opt/sbin/insmod (с полным путём)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-kernel_ver=$(uname -r)
 for mod in xt_NFQUEUE xt_multiport xt_connbytes; do
     mod_file="/lib/modules/${kernel_ver}/${mod}.ko"
     echo "Попытка: /opt/sbin/insmod $mod_file"
@@ -139,7 +153,6 @@ done
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "11. ПОПЫТКА ЗАГРУЗКИ ЧЕРЕЗ /opt/sbin/modprobe -d"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-kernel_ver=$(uname -r)
 mod_dir="/lib/modules/${kernel_ver}"
 echo "Директория модулей: $mod_dir"
 echo ""
@@ -174,12 +187,6 @@ for mod in xt_NFQUEUE xt_multiport xt_connbytes nfnetlink_queue; do
         echo "  [FAIL] $mod НЕ загружен"
     fi
 done
-echo ""
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "13. ПОСЛЕДНИЕ СООБЩЕНИЯ DMESG"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-dmesg | tail -20
 echo ""
 
 echo "+==================================================+"

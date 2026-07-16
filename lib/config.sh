@@ -523,200 +523,22 @@ EOF
     # Создать whitelist для исключения критичных сервисов
     local whitelist="${LISTS_DIR}/whitelist.txt"
     if [ ! -f "$whitelist" ]; then
-        cat > "$whitelist" <<'EOF'
+        # Копировать базовый whitelist из дистрибутива
+        local default_whitelist="${ZAPRET2_DIR}/lists/whitelist-default.txt"
+        if [ -f "$default_whitelist" ]; then
+            cp "$default_whitelist" "$whitelist"
+        else
+            # Fallback: создать минимальный whitelist если файл не найден
+            cat > "$whitelist" <<'EOF'
 # Whitelist - домены исключенные из обработки zapret2
-# Сервисы, которые могут работать некорректно с DPI bypass
-
-# === Госуслуги РФ ===
+# Базовый список не найден, создан минимальный набор
 gosuslugi.ru
-esia.gosuslugi.ru
-lk.gosuslugi.ru
-nalog.ru
-nalog.gov.ru
-lkfl2.nalog.ru
-pfr.gov.ru
-es.pfr.gov.ru
-mos.ru
-mos-gorsud.ru
-gov.ru
-sudrf.ru
-
-# === Российские сервисы ===
 vk.com
-vk.me
-vkcdn.net
-userapi.com
-vk.ru
-vkvideo.ru
-ok.ru
-mycdn.me
-rutube.ru
 yandex.ru
-ya.ru
-yandex.net
-yandex.cloud
-kinopoisk.ru
-okko.tv
-avito.ru
-beeline.ru
-beeline.tv
-ottai.com
-ipstream.one
-vkusvill.ru
-ozon.ru
-ozone.ru
-ozonusercontent.com
-wildberries.ru
-wb.ru
-wbbasket.ru
-
-# === Российские банки ===
-sber.ru
-sberbank.ru
-vtb.ru
-alfabank.ru
-tbank.ru
-gazprombank.ru
-gpb.ru
-psbank.ru
-rosbank.ru
-rshb.ru
-
-# === Steam ===
-s.team
-steam.tv
-steamcdn.com
-steamchat.com
-steam-chat.com
-steamgames.com
-steamserver.net
-steamstatic.com
-steampowered.com
-steamcontent.com
-steamcommunity.com
-steambroadcast.com
-steamdeckcdn.com
-steamdeckusercontent.com
-steamuserimages-a.akamaihd.net
-steamcdn-a.akamaihd.net
-steampipe.akamaized.net
-steamcdn-a.akamaized.net
-steamstatic.akamaized.net
-steamcommunity.akamaized.net
-steamcommunity-a.akamaihd.net
-steamcloudsweden.blob.core.windows.net
-valve.net
-valvecdn.com
-valvecontent.com
-valvesoftware.com
-
-# === Epic Games ===
-epicgames.com
-epicgames.dev
-epicgamescdn.com
-unrealengine.com
-easyanticheat.net
-eac-cdn.com
-fortnite.com
-fab.com
-artstation.com
-
-# === Ubisoft ===
-ubi.com
-ubisoft.com
-ubisoftconnect.com
-
-# === PlayStation / Sony ===
-playstation.net
-playstation.com
-account.sony.com
-psremoteplay.com
-playstationcloud.com
-sonyentertainmentnetwork.com
-
-# === Twitch ===
-twitch.tv
-ttvnw.net
-jtvnw.net
-twitchcdn.net
-ext-twitch.tv
-twitchsvc.net
-live-video.net
-twitch-shadow.net
-
-# === Riot Games / Valorant ===
-riotgames.com
-riotcdn.net
-leagueoflegends.com
-valorant.com
-playvalorant.com
-pvp.net
-vivox.com
-sd-rtn.com
-
-# === HoYoverse (Genshin, HSR) ===
-hoyoverse.com
-hoyolab.com
-hoyo.link
-yuanshen.com
-genshinimpact.com
-zenlesszonezero.com
-
-# === AliExpress ===
-aliexpress.com
-aliexpress.ru
-aliexpress.us
-alicdn.com
-ae.com
-
-# === TikTok ===
-tiktok.com
-tiktokcdn.com
-tiktokv.com
-muscdn.com
-byteoversea.com
-ibytedtos.com
-ttwstatic.com
-
-# === Samsung ===
-samsungosp.com
-samsungqbe.com
-samsungcloudsolution.com
-
-# === Стриминг ===
-netflix.com
-vsetop.org
-
-# === Google API (не ломать поиск) ===
-ogs.google.com
-gstatic.com
-
-# === Мониторинг и CDN ===
-datadoghq.com
-okcdn.ru
-api.mycdn.me
-
-# === Keenetic (KeenDNS, облако, обновления) ===
+steam.com
 keenetic.pro
-keenetic.com
-keenetic.io
-keenetic.cloud
-keenetic.link
-
-# === Netcraze (KeenDNS под российским брендом, та же инфраструктура) ===
-netcraze.pro
-netcraze.com
-netcraze.io
-netcraze.cloud
-netcraze.link
-
-# === Разработка ===
-raw.githubusercontent.com
-marketplace.visualstudio.com
-
-# === Oracle Cloud Infrastructure ===
-customer-oci.com
 EOF
+        fi
 
         # Проверить что файл действительно создался
         if [ ! -f "$whitelist" ]; then
@@ -1041,8 +863,18 @@ restore_config() {
             tar -xzf "$latest_backup" -C "$tmpdir" 2>/dev/null
 
             if [ $? -eq 0 ]; then
-                # Архив содержит абсолютные пути — извлекаем поверх /
-                tar -xzf "$latest_backup" -C / 2>/dev/null
+                # Валидация: проверить что все пути в архиве внутри ожидаемых директорий
+                local _bad_paths
+                _bad_paths=$(tar -tzf "$latest_backup" 2>/dev/null | grep -v '^\.' | grep -v "^${CONFIG_DIR}/" | grep -v "^${LISTS_DIR}/" | grep -v "^${ZAPRET2_DIR}/" | head -5)
+                if [ -n "$_bad_paths" ]; then
+                    print_error "Архив содержит пути вне ожидаемых директорий:"
+                    echo "$_bad_paths"
+                    rm -rf "$tmpdir"
+                    return 1
+                fi
+                # Безопасное извлечение: копируем из tmpdir вместо прямого -C /
+                cp -a "$tmpdir/${CONFIG_DIR}/." "${CONFIG_DIR}/" 2>/dev/null
+                [ -d "$tmpdir/${LISTS_DIR}" ] && cp -a "$tmpdir/${LISTS_DIR}/." "${LISTS_DIR}/" 2>/dev/null
                 rm -rf "$tmpdir"
                 print_success "Конфигурация восстановлена"
 

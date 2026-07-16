@@ -71,7 +71,7 @@ while [ $# -gt 0 ]; do
             cat <<EOF
 z2k webpanel installer (lighttpd-based, LAN-only)
 Usage: install.sh [--port N] [--bind IP]
-Defaults: port 8088, bind 0.0.0.0
+Defaults: port 8088, bind (detected LAN IP, fallback 0.0.0.0)
 EOF
             exit 0
             ;;

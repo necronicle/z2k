@@ -1977,44 +1977,15 @@ create_official_config() {
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
         saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
-        # ENABLED — master service on/off gate (read by S99zapret2.new start()).
-        # Was hardcoded =1 below and NOT preserved, so a user who stopped the
-        # service (ENABLED=0) saw it resurrected by the next config regen
-        # (auto-update reinstall / any toggle / reboot). Now preserved like
-        # DISABLE_CUSTOM. Default 1: fresh install or a config missing the key
-        # comes up enabled, so users who never stopped are unaffected.
         saved_ENABLED=$(safe_config_read "ENABLED" "$config_file" "1")
-        # Z2K_USE_MID_STREAM_DETECTOR / Z2K_PADENCAP — default ON (per Mark
-        # 2026-05-02 policy: все нововведения по умолчанию включены). Если
-        # старый config не содержит ключ, считаем "1" — фичу хочется
-        # включить даже на routers где конфиг был сгенерирован до её
-        # появления. Юзер может выставить =0 explicitly чтобы откатиться.
         saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "1")
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
         saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
         saved_Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$config_file" "1")
-        # Z2K_STATS — anonymized strategy telemetry to VPS, default ON (per Mark
-        # 2026-05-30: Default ON как все фичи). Opt-out via menu/webpanel toggle
-        # sets =0; preserved across auto-update by the Z2K_ prefix rule.
         saved_Z2K_STATS=$(safe_config_read "Z2K_STATS" "$config_file" "1")
-        # DISABLE_CUSTOM — custom.d on/off (inverse: 0 = custom.d enabled). Was
-        # hardcoded =1 in the generated config and NOT preserved, so enabling
-        # custom.d (menu [S] / webpanel) survived only until the next config
-        # regen (any other toggle / auto-update) silently re-disabled it. Now
-        # preserved like the other knobs.
         saved_DISABLE_CUSTOM=$(safe_config_read "DISABLE_CUSTOM" "$config_file" "1")
-        # Keenetic policy integration (см. S99zapret2.new:919-1100). По умолчанию
-        # nfqws=POLICY_NAME, exclude=0 (= "process only this policy"); если юзер
-        # явно настроил bypass конкретного устройства через создание политики +
-        # POLICY_EXCLUDE=1 в config'е — preserve'им через reinstall.
         saved_POLICY_NAME=$(safe_config_read "POLICY_NAME" "$config_file" "nfqws")
         saved_POLICY_EXCLUDE=$(safe_config_read "POLICY_EXCLUDE" "$config_file" "0")
-        # Z2K_PPE_DEOFFLOAD(_QUIC) — Keenetic per-flow hardware-offload exclusion
-        # toggles (webpanel toggle_ppe). Default 1=ON. Were NOT preserved, so the
-        # toggle's own regenerate_config wiped the key → NDM hook 94 re-added the
-        # de-offload rules → the webpanel switch silently reverted after a regen /
-        # reboot. Now preserved like the other knobs (same class as DISABLE_CUSTOM
-        # and the r-56.6 DISABLE_IPV6 fix).
         saved_Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "$config_file" "1")
         saved_Z2K_PPE_DEOFFLOAD_QUIC=$(safe_config_read "Z2K_PPE_DEOFFLOAD_QUIC" "$config_file" "1")
     fi
@@ -2313,6 +2284,8 @@ Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
 # continue pulling from the SAME branch instead of defaulting back to
 # master. Set automatically from \$GITHUB_RAW at install time; edit by
 # hand only if you know what you are doing.
+Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
+
 Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 EOF
 

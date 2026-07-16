@@ -60,15 +60,9 @@ kill_tg_1443() {
 }
 
 # CWE-59: restart_tunnel (fallback) и cap_log пишут в /tmp/z2k-log как root.
-# Каталог должен быть чистым root-owned: symlink / не-каталог / чужой
-# владелец = возможная подмена атакующим (с planted symlink'ами внутри) →
-# снести и создать заново. busybox `stat -c` нет — владельца берём из `ls -ld`.
-if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
-   { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
-    rm -rf /tmp/z2k-log 2>/dev/null
-fi
-mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
-chmod 700 /tmp/z2k-log 2>/dev/null
+# CWE-59: Безопасная проверка каталога /tmp/z2k-log (shared with z2k-insta-ip-refresh.sh)
+. "${ZAPRET2_DIR}/z2k-tg-redirect.sh"
+safe_tmp_log_dir
 
 # Size-cap наших /tmp логов чтобы они не забивали tmpfs (на Keenetic /tmp
 # обычно ~244M RAM). tg-tunnel.log на :1443 пишется с -v (verbose) append'ом

@@ -298,7 +298,7 @@ var (
 // authReplaySeen records sig and reports whether it was already accepted within
 // the replay window. Call ONLY for cryptographically-valid frames.
 func authReplaySeen(sig []byte) bool {
-	ttl := time.Duration(2**authSkewSeconds) * time.Second
+	ttl := time.Duration(2*(*authSkewSeconds)) * time.Second
 	authNonceMu.Lock()
 	defer authNonceMu.Unlock()
 	now := time.Now()

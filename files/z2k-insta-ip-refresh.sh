@@ -27,16 +27,9 @@ export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
 LOG="/tmp/z2k-log/z2k-insta-refresh.log"
 # CWE-59: root-owned 0700 log dir
-# CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
-# не-каталог / чужой владелец = возможная подмена атакующим (с planted
-# symlink'ами внутри) → снести и создать заново. busybox `stat -c` нет —
-# владельца берём из `ls -ld`.
-if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
-   { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
-    rm -rf /tmp/z2k-log 2>/dev/null
-fi
-mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
-chmod 700 /tmp/z2k-log 2>/dev/null
+# CWE-59: Безопасная проверка каталога /tmp/z2k-log (shared with z2k-tg-watchdog.sh)
+[ -r "${ZAPRET2_DIR}/z2k-tg-redirect.sh" ] && . "${ZAPRET2_DIR}/z2k-tg-redirect.sh"
+safe_tmp_log_dir
 CONFIG="/opt/zapret2/config"
 RELAY_URL="https://213.176.74.63.nip.io/resolve"
 # Dedicated /resolve secret, DECOUPLED from the tunnel secret (Mark 2026-06-20).
@@ -46,6 +39,8 @@ RELAY_URL="https://213.176.74.63.nip.io/resolve"
 # validates it via the relay's --resolve-secret. Override via Z2K_RESOLVE_SECRET
 # in /opt/zapret2/config to rotate without editing this file.
 SECRET=$(awk -F= '/^Z2K_RESOLVE_SECRET=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG" 2>/dev/null)
+# Fallback:使用 публичный секрет если не задан в конфиге
+# Секрет гейтит только DNS lookup, не туннель — безопасно хранить в открытом коде
 [ -z "$SECRET" ] && SECRET="57745177a4b883471a4ddc6124a1df6fec77e790729e074ed34dc434f7cdb6f2"
 
 # Hosts we manage. Must match the VPS-side whitelist (insta apex +

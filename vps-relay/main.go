@@ -973,7 +973,7 @@ var upgrader = websocket.Upgrader{
 }
 
 func makeSessionID() string {
-	return strconv.FormatInt(time.Now().UnixNano()%100000, 36)
+	return strconv.FormatInt(time.Now().UnixNano()%1000000, 36)
 }
 
 // /resolve endpoint: returns fresh DNS A records for a whitelisted set of

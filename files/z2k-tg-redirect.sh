@@ -91,3 +91,16 @@ z2k_tg_flush_conntrack() {
         conntrack -D -d "$_c" 2>/dev/null || true
     done
 }
+
+# CWE-59: Безопасная проверка и создание каталога /tmp/z2k-log.
+# Должен быть чистым root-owned каталогом. symlink / не-каталог /
+# чужой владелец = возможная подмена атакующим → снести и создать заново.
+# busybox `stat -c` нет — владельца берём из `ls -ld`.
+safe_tmp_log_dir() {
+    if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
+       { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
+        rm -rf /tmp/z2k-log 2>/dev/null
+    fi
+    mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
+    chmod 700 /tmp/z2k-log 2>/dev/null
+}

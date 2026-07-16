@@ -495,6 +495,22 @@ safe_config_read() {
     echo "$val"
 }
 
+# Установить значение ключа в конфиг-файле (grep/sed/echo паттерн)
+config_set_key() {
+    local key=$1
+    local value=$2
+    local file=${3:-/opt/zapret2/config}
+
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        # Экранировать спецсимволы для sed: | & \
+        local escaped_value
+        escaped_value=$(printf '%s' "$value" | sed 's/[&/\]/\\&/g')
+        sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$file"
+    else
+        echo "${key}=${value}" >> "$file"
+    fi
+}
+
 # Скачать файл с проверкой
 download_file() {
     local url=$1
@@ -616,9 +632,12 @@ cleanup_backups() {
         return 0
     fi
 
-    # Удалить старые бэкапы напрямую (xargs — без subshell mutation)
+    # Удалить старые бэкапы
+    local to_delete
+    to_delete=$(echo "$all_backups" | tail -n +$((keep + 1)))
     local deleted
-    deleted=$(echo "$all_backups" | tail -n +$((keep + 1)) | xargs rm -f 2>/dev/null; echo "$all_backups" | tail -n +$((keep + 1)) | wc -l | tr -d ' ')
+    deleted=$(echo "$to_delete" | wc -l | tr -d ' ')
+    echo "$to_delete" | xargs rm -f 2>/dev/null
 
     print_success "Очищено бэкапов: ${deleted}, осталось: ${keep}"
     return 0
@@ -647,7 +666,7 @@ verify_binary() {
     fi
 
     print_warning "Не удалось проверить бинарник: $binary"
-    return 0
+    return 1
 }
 
 # Проверка загрузки модуля ядра
@@ -692,17 +711,6 @@ load_kernel_module() {
     fi
 }
 
-# Проверить доступность URL
-check_url_accessible() {
-    local url=$1
-    local timeout=${2:-5}
-
-    if curl -s -m "$timeout" -I "$url" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
-}
 
 # Получить версию nfqws2
 get_nfqws2_version() {

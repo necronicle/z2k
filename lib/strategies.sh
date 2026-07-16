@@ -326,12 +326,6 @@ set_current_quic_strategy() {
     echo "QUIC_STRATEGY=$num" > "$conf"
 }
 
-# Построить параметры QUIC профиля из стратегии
-build_quic_profile_params() {
-    local params=$1
-    echo "--filter-udp=443 --filter-l7=quic ${params}"
-}
-
 # Получить параметры текущей QUIC стратегии
 get_current_quic_profile_params() {
     local quic_strategy
@@ -343,7 +337,7 @@ get_current_quic_profile_params() {
         quic_params="--payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
     fi
 
-    build_quic_profile_params "$quic_params"
+    echo "--filter-udp=443 --filter-l7=quic ${quic_params}"
 }
 
 # Проверить поддержку HTTP/3 (QUIC) в curl
@@ -405,16 +399,6 @@ strategy_exists() {
 }
 
 # Список стратегий по типу
-list_strategies_by_type() {
-    local type=$1
-    local conf="${STRATEGIES_CONF:-${CONFIG_DIR}/strategies.conf}"
-
-    if [ ! -f "$conf" ]; then
-        return 1
-    fi
-
-    grep "|${type}|" "$conf"
-}
 
 # Проверки наличия параметров в стратегии
 params_has_filter_tcp() {
@@ -804,11 +788,15 @@ EOF
 # АВТОТЕСТ ПО КАТЕГОРИЯМ (Z4R МЕТОД)
 # ==============================================================================
 
-# Автотест YouTube TCP (youtube.com)
-# Тестирует все стратегии и возвращает номер первой работающей
-auto_test_youtube_tcp() {
-    local strategies_list="${1:-$(get_all_strategies_list)}"
-    local domain="www.youtube.com"
+# Универсальная функция автотеста стратегий для категории.
+# $1 - домен для тестирования
+# $2 - метка категории (для вывода)
+# $3 - список стратегий (опционально, по умолчанию все)
+# Возвращает номер первой работающей стратегии или 1 (по умолчанию).
+auto_test_category() {
+    local domain="$1"
+    local label="$2"
+    local strategies_list="${3:-$(get_all_strategies_list)}"
     local tested=0
     local total=0
 
@@ -822,27 +810,23 @@ auto_test_youtube_tcp() {
         return 1
     fi
 
-    print_info "Тестирование YouTube TCP (youtube.com)..." >&2
+    print_info "Тестирование $label ($domain)..." >&2
 
     for num in $strategies_list; do
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        # Применить стратегию (подавляем вывод для чистоты)
         apply_strategy "$num" >/dev/null 2>&1
-        local apply_result=$?
-        if [ "$apply_result" -ne 0 ]; then
+        if [ $? -ne 0 ]; then
             printf "ОШИБКА\n" >&2
             continue
         fi
 
-        # Подождать 2 секунды для применения
         sleep 2
 
-        # Протестировать через TLS
         if test_strategy_tls "$domain" 3; then
             printf "РАБОТАЕТ\n" >&2
-            print_success "Найдена работающая стратегия для YouTube TCP: #$num" >&2
+            print_success "Найдена работающая стратегия для $label: #$num" >&2
             echo "$num"
             return 0
         else
@@ -850,126 +834,27 @@ auto_test_youtube_tcp() {
         fi
     done
 
-    # Если ничего не работает, вернуть стратегию по умолчанию
-    print_warning "Не найдено работающих стратегий для YouTube TCP, используется #1" >&2
+    print_warning "Не найдено работающих стратегий для $label, используется #1" >&2
     echo "1"
     return 1
+}
+
+# Автотест YouTube TCP (youtube.com)
+auto_test_youtube_tcp() {
+    auto_test_category "www.youtube.com" "YouTube TCP" "$1"
 }
 
 # Автотест YouTube GV (googlevideo CDN)
-# Тестирует все стратегии для Google Video и возвращает номер первой работающей
 auto_test_youtube_gv() {
-    local strategies_list="${1:-$(get_all_strategies_list)}"
-    local tested=0
-    local total=0
-
-    for _ in $strategies_list; do
-        total=$((total + 1))
-    done
-
-    if [ "$total" -eq 0 ]; then
-        print_warning "Список стратегий пуст"
-        echo "1"
-        return 1
-    fi
-
-    print_info "Генерация тестового домена Google Video..." >&2
     local domain
     domain=$(generate_gv_domain)
-    print_info "Тестовый домен: $domain" >&2
-
-    print_info "Тестирование YouTube GV (Google Video)..." >&2
-
-    for num in $strategies_list; do
-        tested=$((tested + 1))
-        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
-
-        # Применить стратегию (подавляем вывод для чистоты)
-        apply_strategy "$num" >/dev/null 2>&1
-        local apply_result=$?
-        if [ "$apply_result" -ne 0 ]; then
-            printf "ОШИБКА\n" >&2
-            continue
-        fi
-
-        # Подождать 2 секунды для применения
-        sleep 2
-
-        # Протестировать через TLS
-        if test_strategy_tls "$domain" 3; then
-            printf "РАБОТАЕТ\n" >&2
-            print_success "Найдена работающая стратегия для YouTube GV: #$num" >&2
-            echo "$num"
-            return 0
-        else
-            printf "НЕ РАБОТАЕТ\n" >&2
-        fi
-    done
-
-    # Если ничего не работает, вернуть стратегию по умолчанию
-    print_warning "Не найдено работающих стратегий для YouTube GV, используется #1" >&2
-    echo "1"
-    return 1
+    print_info "Генерация тестового домена Google Video: $domain" >&2
+    auto_test_category "$domain" "YouTube GV" "$1"
 }
 
 # Автотест RKN (rutracker.org)
-# Тестирует все стратегии для RKN доменов и возвращает номер первой работающей
 auto_test_rkn() {
-    local strategies_list="${1:-$(get_all_strategies_list)}"
-    local test_domains="rutracker.org"
-    local tested=0
-    local total=0
-
-    for _ in $strategies_list; do
-        total=$((total + 1))
-    done
-
-    if [ "$total" -eq 0 ]; then
-        print_warning "Список стратегий пуст"
-        echo "1"
-        return 1
-    fi
-
-    print_info "Тестирование RKN (rutracker.org)..." >&2
-
-    for num in $strategies_list; do
-        tested=$((tested + 1))
-        printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
-
-        # Применить стратегию (подавляем вывод для чистоты)
-        apply_strategy "$num" >/dev/null 2>&1
-        local apply_result=$?
-        if [ "$apply_result" -ne 0 ]; then
-            printf "ОШИБКА\n" >&2
-            continue
-        fi
-
-        # Подождать 2 секунды для применения
-        sleep 2
-
-        # Протестировать на всех трех доменах
-        local success_count=0
-        for domain in $test_domains; do
-            if test_strategy_tls "$domain" 3; then
-                success_count=$((success_count + 1))
-            fi
-        done
-
-        # Успех если домен работает
-        if [ "$success_count" -ge 1 ]; then
-            printf "РАБОТАЕТ\n" >&2
-            print_success "Найдена работающая стратегия для RKN: #$num" >&2
-            echo "$num"
-            return 0
-        else
-            printf "НЕ РАБОТАЕТ (%d/3)\n" "$success_count" >&2
-        fi
-    done
-
-    # Если ничего не работает, вернуть стратегию по умолчанию
-    print_warning "Не найдено работающих стратегий для RKN, используется #1" >&2
-    echo "1"
-    return 1
+    auto_test_category "rutracker.org" "RKN" "$1"
 }
 
 # ==============================================================================

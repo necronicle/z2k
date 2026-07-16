@@ -336,7 +336,9 @@ function z2k_http_methodeol_v2(ctx, desync)
         if ua then
             -- Добавляем несколько пустых строк и пробелы
             local garbage = "\r\n \r\n\t\r\n"
-            desync.dis.payload = garbage .. string.sub(desync.dis.payload,1,ua.pos_end-2) .. (string.sub(desync.dis.payload,ua.pos_end+1) or "")
+            local new_payload = garbage .. string.sub(desync.dis.payload,1,ua.pos_end-2) .. (string.sub(desync.dis.payload,ua.pos_end+1) or "")
+            desync.dis = deepcopy(desync.dis)
+            desync.dis.payload = new_payload
             DLOG("http_methodeol_v2: applied with extra garbage")
             return VERDICT_MODIFY
         end

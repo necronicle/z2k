@@ -175,11 +175,13 @@ z2k_ppe_ensure_rules() {
             z2k_ppe_game_present_fwd6 || _z2k_ppe_ipt6 -t mangle -I FORWARD    $_z2k_ppe_game_args
         fi
     else
-        while z2k_ppe_game_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_game_args; done
-        while z2k_ppe_game_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_game_args; done
+        local _ppe_max_iter=20
+        local _ppe_iter
+        _ppe_iter=0; while z2k_ppe_game_present_pre4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
+        _ppe_iter=0; while z2k_ppe_game_present_fwd4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
         if command -v ip6tables >/dev/null 2>&1; then
-            while z2k_ppe_game_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_game_args; done
-            while z2k_ppe_game_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_game_args; done
+            _ppe_iter=0; while z2k_ppe_game_present_pre6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
+            _ppe_iter=0; while z2k_ppe_game_present_fwd6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
         fi
     fi
     z2k_ppe_rule_present_pre4 && z2k_ppe_rule_present_fwd4
@@ -187,19 +189,20 @@ z2k_ppe_ensure_rules() {
 
 # Remove the rules (loops in case of duplicates). v4 + v6.
 z2k_ppe_remove_rules() {
-    while z2k_ppe_rule_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_args; done
-    while z2k_ppe_rule_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_args; done
-    while z2k_ppe_udp_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_udp_args; done
-    while z2k_ppe_udp_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_udp_args; done
-    while z2k_ppe_game_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_game_args; done
-    while z2k_ppe_game_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_game_args; done
+    local _ppe_max_iter=20 _ppe_iter
+    _ppe_iter=0; while z2k_ppe_rule_present_pre4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_args; _ppe_iter=$((_ppe_iter+1)); done
+    _ppe_iter=0; while z2k_ppe_rule_present_fwd4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_args; _ppe_iter=$((_ppe_iter+1)); done
+    _ppe_iter=0; while z2k_ppe_udp_present_pre4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_udp_args; _ppe_iter=$((_ppe_iter+1)); done
+    _ppe_iter=0; while z2k_ppe_udp_present_fwd4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_udp_args; _ppe_iter=$((_ppe_iter+1)); done
+    _ppe_iter=0; while z2k_ppe_game_present_pre4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
+    _ppe_iter=0; while z2k_ppe_game_present_fwd4 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
     if command -v ip6tables >/dev/null 2>&1; then
-        while z2k_ppe_rule_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_args; done
-        while z2k_ppe_rule_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_args; done
-        while z2k_ppe_udp_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_udp_args; done
-        while z2k_ppe_udp_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_udp_args; done
-        while z2k_ppe_game_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_game_args; done
-        while z2k_ppe_game_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_game_args; done
+        _ppe_iter=0; while z2k_ppe_rule_present_pre6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_args; _ppe_iter=$((_ppe_iter+1)); done
+        _ppe_iter=0; while z2k_ppe_rule_present_fwd6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_args; _ppe_iter=$((_ppe_iter+1)); done
+        _ppe_iter=0; while z2k_ppe_udp_present_pre6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_udp_args; _ppe_iter=$((_ppe_iter+1)); done
+        _ppe_iter=0; while z2k_ppe_udp_present_fwd6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_udp_args; _ppe_iter=$((_ppe_iter+1)); done
+        _ppe_iter=0; while z2k_ppe_game_present_pre6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
+        _ppe_iter=0; while z2k_ppe_game_present_fwd6 && [ "$_ppe_iter" -lt "$_ppe_max_iter" ]; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_game_args; _ppe_iter=$((_ppe_iter+1)); done
     fi
     return 0
 }

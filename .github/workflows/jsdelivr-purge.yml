@@ -68,21 +68,21 @@ jobs:
           BRANCH: ${{ github.ref_name }}
         run: |
           set -u
-          ok=0
-          fail=0
-          while IFS= read -r f; do
-              [ -z "$f" ] && continue
+          # Parallel purge: 5 concurrent requests to avoid rate-limiting
+          purge_one() {
+              local f="$1"
+              [ -z "$f" ] && return 0
               url="https://purge.jsdelivr.net/gh/${REPO}@${BRANCH}/${f}"
               code=$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 15 "$url" 2>/dev/null) || code="ERR"
               case "$code" in
-                  2*) ok=$((ok + 1));  printf '  [%s] %s\n' "$code" "$f" ;;
-                  *)  fail=$((fail + 1)); printf '  [%s] %s\n' "$code" "$f" ;;
+                  2*) printf '  [%s] %s\n' "$code" "$f" ;;
+                  *)  printf '  [%s] %s\n' "$code" "$f" ;;
               esac
-          done < /tmp/purge/files.txt
+          }
+          export -f purge_one REPO BRANCH
+          total=$(wc -l < /tmp/purge/files.txt | tr -d ' ')
+          echo "Purging $total files (5 concurrent)..."
+          cat /tmp/purge/files.txt | xargs -P 5 -I {} bash -c 'purge_one "$@"' _ {}
           echo
-          echo "purge summary: ok=$ok fail=$fail"
-          # Even if every single URL returned 4xx/5xx (e.g. jsdelivr
-          # rate-limit during a big push), the workflow itself should
-          # not turn the commit red — `continue-on-error: true` above
-          # already ensures that, this `exit 0` is just belt-and-braces.
+          echo "purge complete ($total files)"
           exit 0

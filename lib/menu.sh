@@ -15,7 +15,23 @@ read_input() {
     read -r _z2k_raw </dev/tty
     # Удалить \r, backspace (\b), DEL (\177), а также любые не-ASCII байты (мусор от раскладки)
     _z2k_raw=$(printf '%s' "$_z2k_raw" | tr -d "$(printf '\r\b\177')" | LC_ALL=C sed 's/[^[:print:]]//g; s/^[[:space:]]*//; s/[[:space:]]*$//')
-    eval "${_z2k_var}=\${_z2k_raw}"
+    # Валидация имени переменной — только [a-zA-Z_][a-zA-Z0-9_]* (защита от injection)
+    case "$_z2k_var" in
+        [a-zA-Z_][a-zA-Z0-9_]*) eval "${_z2k_var}=\${_z2k_raw}" ;;
+        *) print_error "read_input: невалидное имя переменной: $_z2k_var" ;;
+    esac
+}
+
+# Проверить что zapret2 установлен. Если нет — показать ошибку и вернуть 1.
+# Использование: menu_require_installed || return
+menu_require_installed() {
+    if ! is_zapret2_installed; then
+        print_error "zapret2 не установлен"
+        print_info "Сначала выполните установку (опция 1)"
+        pause
+        return 1
+    fi
+    return 0
 }
 
 # ==============================================================================
@@ -493,12 +509,7 @@ menu_select_strategy() {
     clear_screen
     print_header "[2] Выбор стратегии по категориям"
 
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        print_info "Сначала выполните установку (опция 1)"
-        pause
-        return
-    fi
+    menu_require_installed || return
 
     local total_count
     total_count=$(get_strategies_count)
@@ -683,11 +694,7 @@ menu_rutracker_blockcheck() {
     clear_screen
     print_header "[3] HTTP blockcheck (fast-torrent.ru)"
 
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
+    menu_require_installed || return
 
     print_info "Запуск blockcheck для fast-torrent.ru (HTTP, порт 80)"
     print_info "Поиск рабочей стратегии для HTTP DPI redirect"
@@ -706,11 +713,7 @@ menu_service_control() {
     clear_screen
     print_header "[4] Управление сервисом"
 
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
+    menu_require_installed || return
 
     cat <<'SUBMENU'
 [1] Запустить сервис
@@ -776,11 +779,7 @@ menu_update_lists() {
     clear_screen
     print_header "[6] Обновление списков доменов"
 
-    if ! is_zapret2_installed; then
-        print_error "zapret2 не установлен"
-        pause
-        return
-    fi
+    menu_require_installed || return
 
     # Показать текущие списки
     show_domain_lists_stats
@@ -809,11 +808,7 @@ menu_backup_restore() {
         clear_screen
         print_header "[4] Резервная копия/Восстановление"
 
-        if ! is_zapret2_installed; then
-            print_error "zapret2 не установлен"
-            pause
-            return
-        fi
+        menu_require_installed || return
 
         cat <<'SUBMENU'
 [1] Создать резервную копию
@@ -858,11 +853,7 @@ menu_uninstall() {
     clear_screen
     print_header "[9] Удаление zapret2"
 
-    if ! is_zapret2_installed; then
-        print_info "zapret2 не установлен"
-        pause
-        return
-    fi
+    menu_require_installed || return
 
     uninstall_zapret2
 
@@ -877,11 +868,7 @@ menu_check_updates() {
     clear_screen
     print_header "Проверка обновлений z2k"
 
-    if ! is_zapret2_installed; then
-        print_info "zapret2 не установлен"
-        pause
-        return
-    fi
+    menu_require_installed || return
 
     # Source the auto-update module from its installed location;
     # fall back to WORK_DIR copy during initial install.
@@ -995,11 +982,7 @@ SUBMENU
 
     _menu_rst_set_and_restart() {
         local val="$1"
-        if grep -q '^RST_FILTER=' "$config_file"; then
-            sed -i "s/^RST_FILTER=.*/RST_FILTER=$val/" "$config_file"
-        else
-            echo "RST_FILTER=$val" >> "$config_file"
-        fi
+        config_set_key "RST_FILTER" "$val" "$config_file"
         if is_zapret2_running; then
             print_info "Перезапуск сервиса..."
             "$INIT_SCRIPT" restart
@@ -1183,11 +1166,7 @@ SUBMENU
 
     case "$sub_choice" in
         1)
-            if grep -q '^RKN_SILENT_FALLBACK=' "$config_file"; then
-                sed -i 's/^RKN_SILENT_FALLBACK=.*/RKN_SILENT_FALLBACK=1/' "$config_file"
-            else
-                echo "RKN_SILENT_FALLBACK=1" >> "$config_file"
-            fi
+            config_set_key "RKN_SILENT_FALLBACK" "1" "$config_file"
             print_success "Silent fallback для РКН включен"
 
             # Создать флаг-файл для Lua
@@ -1448,11 +1427,7 @@ SUBMENU
 
     case "$sub_choice" in
         1)
-            if grep -q '^Z2K_DYNAMIC_TTL=' "$config_file"; then
-                sed -i 's/^Z2K_DYNAMIC_TTL=.*/Z2K_DYNAMIC_TTL=1/' "$config_file"
-            else
-                echo "Z2K_DYNAMIC_TTL=1" >> "$config_file"
-            fi
+            config_set_key "Z2K_DYNAMIC_TTL" "1" "$config_file"
             print_success "Динамический TTL включён"
 
             print_info "Пересоздание конфига..."
@@ -1476,11 +1451,7 @@ SUBMENU
                 return 0
             fi
 
-            if grep -q '^Z2K_DYNAMIC_TTL=' "$config_file"; then
-                sed -i 's/^Z2K_DYNAMIC_TTL=.*/Z2K_DYNAMIC_TTL=0/' "$config_file"
-            else
-                echo "Z2K_DYNAMIC_TTL=0" >> "$config_file"
-            fi
+            config_set_key "Z2K_DYNAMIC_TTL" "0" "$config_file"
             print_success "Динамический TTL выключен"
 
             print_info "Пересоздание конфига..."
@@ -1557,11 +1528,7 @@ SUBMENU
 
     case "$sub_choice" in
         1)
-            if grep -q '^Z2K_PPE_DEOFFLOAD=' "$config_file"; then
-                sed -i 's/^Z2K_PPE_DEOFFLOAD=.*/Z2K_PPE_DEOFFLOAD=1/' "$config_file"
-            else
-                echo "Z2K_PPE_DEOFFLOAD=1" >> "$config_file"
-            fi
+            config_set_key "Z2K_PPE_DEOFFLOAD" "1" "$config_file"
             print_success "Per-flow PPE de-offload включён"
             print_info "Пересоздание конфига (circular -> retrans=1)..."
             create_official_config "/opt/zapret2/config"
@@ -1578,11 +1545,7 @@ SUBMENU
             ;;
 
         2)
-            if grep -q '^Z2K_PPE_DEOFFLOAD=' "$config_file"; then
-                sed -i 's/^Z2K_PPE_DEOFFLOAD=.*/Z2K_PPE_DEOFFLOAD=0/' "$config_file"
-            else
-                echo "Z2K_PPE_DEOFFLOAD=0" >> "$config_file"
-            fi
+            config_set_key "Z2K_PPE_DEOFFLOAD" "0" "$config_file"
             print_success "Per-flow PPE de-offload выключен"
             if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
                 ( . /opt/zapret2/z2k-ppe-deoffload.sh && z2k_ppe_remove_rules ) >/dev/null 2>&1 || true
@@ -1656,11 +1619,7 @@ SUBMENU
 
     case "$sub_choice" in
         1)
-            if grep -q '^Z2K_STATS=' "$config_file"; then
-                sed -i 's/^Z2K_STATS=.*/Z2K_STATS=1/' "$config_file"
-            else
-                echo "Z2K_STATS=1" >> "$config_file"
-            fi
+            config_set_key "Z2K_STATS" "1" "$config_file"
             # Out-of-band telemetry flag: read fresh by z2k-stats-upload.sh each
             # run, so no config regen / service restart is needed.
             print_success "Сбор статистики включён"
@@ -1668,11 +1627,7 @@ SUBMENU
             ;;
 
         2)
-            if grep -q '^Z2K_STATS=' "$config_file"; then
-                sed -i 's/^Z2K_STATS=.*/Z2K_STATS=0/' "$config_file"
-            else
-                echo "Z2K_STATS=0" >> "$config_file"
-            fi
+            config_set_key "Z2K_STATS" "0" "$config_file"
             print_success "Сбор статистики выключен"
             pause
             ;;
@@ -2058,67 +2013,22 @@ menu_whitelist() {
             return 1
         fi
 
-        # Создать базовый whitelist
-        cat > "$whitelist_file" <<'EOF'
+        # Копировать базовый whitelist из дистрибутива
+        local default_whitelist="${ZAPRET2_DIR}/lists/whitelist-default.txt"
+        if [ -f "$default_whitelist" ]; then
+            cp "$default_whitelist" "$whitelist_file"
+        else
+            # Fallback: создать минимальный whitelist
+            cat > "$whitelist_file" <<'EOF'
 # Whitelist - домены исключенные из обработки zapret2
-# Сервисы, которые могут работать некорректно с DPI bypass
-
-# === Госуслуги РФ ===
+# Базовый список не найден, создан минимальный набор
 gosuslugi.ru
-esia.gosuslugi.ru
-lk.gosuslugi.ru
-nalog.ru
-nalog.gov.ru
-lkfl2.nalog.ru
-pfr.gov.ru
-es.pfr.gov.ru
-mos.ru
-mos-gorsud.ru
-gov.ru
-sudrf.ru
-
-# === Российские сервисы ===
 vk.com
-vkcdn.net
-userapi.com
-vk.ru
-vkvideo.ru
-rutube.ru
 yandex.ru
-ya.ru
-kinopoisk.ru
-okko.tv
-avito.ru
-beeline.ru
-beeline.tv
-ottai.com
-ipstream.one
-vkusvill.ru
-
-# === Steam ===
-s.team
-steam.tv
-steamcdn.com
-steamchat.com
-steam-chat.com
-steamgames.com
-steamserver.net
-steamstatic.com
-steampowered.com
-steamcontent.com
-steamcommunity.com
-steambroadcast.com
-steamdeckcdn.com
-steamdeckusercontent.com
-steamuserimages-a.akamaihd.net
-steamcdn-a.akamaihd.net
-steampipe.akamaized.net
-steamcdn-a.akamaized.net
-steamstatic.akamaized.net
-steamcommunity.akamaized.net
-steamcommunity-a.akamaihd.net
-steamcloudsweden.blob.core.windows.net
-valve.net
+steam.com
+keenetic.pro
+EOF
+        fi
 valvecdn.com
 valvecontent.com
 valvesoftware.com
