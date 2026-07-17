@@ -19,7 +19,8 @@
 
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
-ZAPRET2_DIR="/opt/zapret2"
+ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
+export ZAPRET2_DIR
 PIDFILE="/var/run/z2k-scheduler.pid"
 LOG="/opt/var/log/z2k-scheduler.log"
 # Flash (persistent) state — daily-cadence keys only (fired ≤1×/day). Persisting

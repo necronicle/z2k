@@ -665,6 +665,13 @@ verify_binary() {
         return 0
     fi
 
+    # Бинарник запустился и вывел что-то — версия есть, просто формат
+    # баннера изменился. Не валим установку из-за дрейфа строки версии.
+    if [ -n "$version_output" ]; then
+        print_info "Бинарник работает (версия: $version_output)"
+        return 0
+    fi
+
     print_warning "Не удалось проверить бинарник: $binary"
     return 1
 }

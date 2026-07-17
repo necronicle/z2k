@@ -79,7 +79,8 @@ jobs:
                   *)  printf '  [%s] %s\n' "$code" "$f" ;;
               esac
           }
-          export -f purge_one REPO BRANCH
+          export -f purge_one
+          export REPO BRANCH
           total=$(wc -l < /tmp/purge/files.txt | tr -d ' ')
           echo "Purging $total files (5 concurrent)..."
           cat /tmp/purge/files.txt | xargs -P 5 -I {} bash -c 'purge_one "$@"' _ {}

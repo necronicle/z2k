@@ -2285,8 +2285,6 @@ Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
 # master. Set automatically from \$GITHUB_RAW at install time; edit by
 # hand only if you know what you are doing.
 Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
-
-Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 EOF
 
     print_success "Config файл создан: $config_file"

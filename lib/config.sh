@@ -860,21 +860,23 @@ restore_config() {
             local tmpdir="${CONFIG_DIR}/backups/.restore_tmp"
             rm -rf "$tmpdir"
             mkdir -p "$tmpdir"
-            tar -xzf "$latest_backup" -C "$tmpdir" 2>/dev/null
 
-            if [ $? -eq 0 ]; then
-                # Валидация: проверить что все пути в архиве внутри ожидаемых директорий
-                local _bad_paths
-                _bad_paths=$(tar -tzf "$latest_backup" 2>/dev/null | grep -v '^\.' | grep -v "^${CONFIG_DIR}/" | grep -v "^${LISTS_DIR}/" | grep -v "^${ZAPRET2_DIR}/" | head -5)
-                if [ -n "$_bad_paths" ]; then
-                    print_error "Архив содержит пути вне ожидаемых директорий:"
-                    echo "$_bad_paths"
-                    rm -rf "$tmpdir"
-                    return 1
-                fi
-                # Безопасное извлечение: копируем из tmpdir вместо прямого -C /
-                cp -a "$tmpdir/${CONFIG_DIR}/." "${CONFIG_DIR}/" 2>/dev/null
-                [ -d "$tmpdir/${LISTS_DIR}" ] && cp -a "$tmpdir/${LISTS_DIR}/." "${LISTS_DIR}/" 2>/dev/null
+            # Валидация: проверить что все пути в архиве внутри ожидаемых директорий
+            local _bad_paths
+            _bad_paths=$(tar -tzf "$latest_backup" 2>/dev/null | grep -v '^\.' | grep -v "^${CONFIG_DIR}/" | grep -v "^${LISTS_DIR}/" | grep -v "^${ZAPRET2_DIR}/" | head -5)
+            if [ -n "$_bad_paths" ]; then
+                print_error "Архив содержит пути вне ожидаемых директорий:"
+                echo "$_bad_paths"
+                rm -rf "$tmpdir"
+                return 1
+            fi
+
+            # Извлечение с --strip-components=2: убирает /opt/zapret2/ префикс,
+            # чтобы файлы легли плоско в tmpdir (а не в tmpdir/opt/zapret2/...)
+            if tar -xzf "$latest_backup" -C "$tmpdir" --strip-components=2 2>/dev/null; then
+                cp -a "$tmpdir/config" "${CONFIG_DIR}/config" 2>/dev/null
+                [ -d "$tmpdir/lists" ] && cp -a "$tmpdir/lists/." "${LISTS_DIR}/" 2>/dev/null
+                [ -d "$tmpdir/extra_strats" ] && cp -a "$tmpdir/extra_strats/." "${ZAPRET2_DIR}/extra_strats/" 2>/dev/null
                 rm -rf "$tmpdir"
                 print_success "Конфигурация восстановлена"
 

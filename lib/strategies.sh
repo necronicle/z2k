@@ -816,8 +816,7 @@ auto_test_category() {
         tested=$((tested + 1))
         printf "  [%d/%d] Стратегия #%s... " "$tested" "$total" "$num" >&2
 
-        apply_strategy "$num" >/dev/null 2>&1
-        if [ $? -ne 0 ]; then
+        if ! apply_strategy "$num" >/dev/null 2>&1; then
             printf "ОШИБКА\n" >&2
             continue
         fi
