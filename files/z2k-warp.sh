@@ -86,20 +86,52 @@ warp_ensure_usque() {
 
 warp_usque_running() { ps w 2>/dev/null | grep -q '[u]sque nativetun'; }
 
-warp_up() {
-    warp_ensure_usque || return 1
-    warp_usque_running || "$USQUE_INIT" start >/dev/null 2>&1
-    # wait for the tun interface to carry an address (usque registers on first start)
+# poll up to $1 seconds for the WARP interface to carry an IPv4 address
+warp_wait_addr() {
     local i=0
-    while [ $i -lt 15 ]; do
-        ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' && break
+    while [ "$i" -lt "$1" ]; do
+        ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' && return 0
         i=$((i+1)); sleep 1
     done
-    ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' || { _wlog "warp iface $WARP_IFACE has no address"; return 1; }
+    ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet '
+}
+
+# Serialize usque (re)starts: a boot-time enable and the scheduler's first selfheal can
+# otherwise drive two concurrent S51usque restarts on the same daemon (fn_stop+fn_start
+# racing → double-spawn / mutual-kill → wedged tunnel). mkdir is the atomic lock.
+warp_usque_restart() {
+    if mkdir /tmp/z2k-warp-up.lock 2>/dev/null; then
+        "$USQUE_INIT" restart >/dev/null 2>&1
+        rmdir /tmp/z2k-warp-up.lock 2>/dev/null
+    else
+        local w=0
+        while [ -d /tmp/z2k-warp-up.lock ] && [ "$w" -lt 20 ]; do w=$((w+1)); sleep 1; done
+    fi
+}
+
+warp_up() {
+    warp_ensure_usque || return 1
+    # Already running with an interface address → leave the tunnel alone. We do NOT
+    # health-check here: warp_healthy's probe to cloudflare.com only crosses the tun
+    # AFTER warp_pbr_up (cloudflare.com is in the routed ipset), so a check here would
+    # always false-fail and trigger needless restarts that destabilise the bring-up
+    # (the "won't turn on" bug). Tunnel health is verified in warp_enable, after the
+    # route is up, by warp_verify_tunnel.
+    if warp_usque_running && ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet '; then
+        return 0
+    fi
+    warp_usque_restart
+    warp_wait_addr 20 || { _wlog "warp iface $WARP_IFACE has no address"; return 1; }
     return 0
 }
 
-warp_down_usque() { [ -x "$USQUE_INIT" ] && "$USQUE_INIT" stop >/dev/null 2>&1; }
+# Hard-stop usque (used only on a real teardown; the toggle-off path leaves usque
+# running and just drops the route). S51usque's pidfile-based stop can miss orphans.
+warp_down_usque() {
+    [ -x "$USQUE_INIT" ] && "$USQUE_INIT" stop >/dev/null 2>&1
+    local p
+    for p in $(ps w 2>/dev/null | grep '[u]sque nativetun' | awk '{print $1}'); do kill "$p" 2>/dev/null; done
+}
 
 # ---- game ipset --------------------------------------------------------------
 warp_ipset_load() {
@@ -162,14 +194,25 @@ warp_enable() {
     warp_up          || { _wlog "warp_up failed"; return 1; }
     warp_ipset_load  || return 1
     warp_pbr_up
-    _wlog "game WARP mode ON (iface=$WARP_IFACE ipset=$WARP_IPSET)"
+    # Verify the tunnel actually forwards NOW that the route is up. If it genuinely
+    # won't come up (e.g. CF throttle), fail + tear the route back down so the caller
+    # reverts the flag — the UI must never claim ON over a dead/blackholing tunnel.
+    if warp_verify_tunnel; then
+        _wlog "game WARP mode ON (iface=$WARP_IFACE ipset=$WARP_IPSET)"
+        return 0
+    fi
+    _wlog "tunnel would not come up (warp!=on) — enable failed"
+    warp_pbr_down
+    return 1
 }
 
 warp_disable() {
     _wlog "disable"
+    # Drop ONLY the split-tunnel route; leave usque running (idle). Re-enable then just
+    # re-adds the route — no usque restart, so it's instant and reliable. usque
+    # nativetun idles with no traffic routed to it, so it costs ~nothing.
     warp_pbr_down
-    warp_down_usque
-    # keep the ipset + usque account cached for instant re-enable
+    rm -f /tmp/z2k-warp-lastrestart 2>/dev/null
     _wlog "game WARP mode OFF"
 }
 
@@ -181,41 +224,48 @@ warp_healthy() {
     curl -sS --max-time 8 --interface "$WARP_IFACE" https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q '^warp=on'
 }
 
+# Confirm the tunnel forwards — VALID ONLY after warp_pbr_up (the probe crosses the tun
+# only once cloudflare.com's ipset route is up). usque nativetun idles until traffic, so
+# the first probes prime the reconnect; poll a few times, then one clean restart.
+warp_verify_tunnel() {
+    local i=0
+    while [ "$i" -lt 6 ]; do warp_healthy && return 0; i=$((i+1)); sleep 2; done
+    _wlog "tunnel not warp=on after route up — one clean usque restart + re-prime"
+    warp_usque_restart; warp_wait_addr 15
+    i=0
+    while [ "$i" -lt 6 ]; do warp_healthy && return 0; i=$((i+1)); sleep 2; done
+    return 1
+}
+
 # Re-apply after NDM firewall reload / WAN flap (scheduler + netfilter.d call this).
 warp_selfheal() {
     [ "$(warp_flag)" = "1" ] || return 0
-    if warp_usque_running; then
-        # Process alive but tunnel possibly wedged (no traffic) → restart, else
-        # broad-routed CF/AWS traffic blackholes. Two strikes to ride out a blip.
-        # Cooldown guard: a persistent NON-tunnel probe failure (e.g. the health
-        # curl's DNS breaks when bound to the tun) must NOT thrash-restart a working
-        # tunnel every tick — cap restarts to once per 5 min.
-        if ! warp_healthy; then
-            sleep 3
-            if ! warp_healthy; then
-                local now last stamp=/tmp/z2k-warp-lastrestart
-                now=$(date +%s 2>/dev/null || echo 0)
-                last=$(cat "$stamp" 2>/dev/null || echo 0)
-                if [ "$now" = "0" ] || [ $((now - last)) -ge 300 ]; then
-                    _wlog "tunnel wedged (warp!=on) — restarting usque"
-                    echo "$now" > "$stamp"
-                    "$USQUE_INIT" restart >/dev/null 2>&1; sleep 6
-                else
-                    _wlog "tunnel unhealthy but restarted <5min ago — not thrashing (likely non-tunnel cause)"
-                fi
-            fi
-        fi
-    else
-        warp_up || return 1
-    fi
+    warp_usque_running || warp_up || return 1
     ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' || return 0
     ipset list "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_load
-    # Unconditionally re-assert the split-tunnel (route + ip-rule + PREROUTING mark +
-    # MASQUERADE + MSS). warp_pbr_up is fully idempotent, so re-running it every tick
-    # heals the case an NDM reload OR a usque restart dropped the table-989 default
-    # route while the mangle mark survived — the old "only if the mark is missing"
-    # probe never repaired that and the feature silently died routing-DIRECT.
+    # Re-assert the split-tunnel BEFORE probing. warp_pbr_up is idempotent; running it
+    # every tick heals an NDM reload / usque-restart that dropped the table-989 route.
+    # It MUST come before warp_healthy — the probe only crosses the tun when the route
+    # is up, so probing first would read a route-drop as a wedged tunnel and needlessly
+    # restart usque.
     warp_pbr_up
+    if ! warp_healthy; then
+        sleep 3
+        warp_healthy && return 0
+        # Genuinely wedged (route is up, tunnel still dead). Restart once per 5 min so a
+        # persistent non-tunnel probe failure can't thrash-restart a working tunnel.
+        local now last stamp=/tmp/z2k-warp-lastrestart
+        now=$(date +%s 2>/dev/null || echo 0)
+        last=$(cat "$stamp" 2>/dev/null || echo 0)
+        if [ "$now" = "0" ] || [ $((now - last)) -ge 300 ]; then
+            _wlog "tunnel wedged (warp!=on) — restarting usque"
+            echo "$now" > "$stamp"
+            warp_usque_restart; sleep 6
+            warp_pbr_up   # a usque restart drops the table-989 route
+        else
+            _wlog "tunnel unhealthy but restarted <5min ago — not thrashing"
+        fi
+    fi
 }
 
 case "$1" in

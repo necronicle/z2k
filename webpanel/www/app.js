@@ -481,7 +481,7 @@
       { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
       { label: "RST фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
       { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
-      { label: "Игровой режим", value: gameModeLabel(s.toggles.game_mode, s.game_profile), kind: s.toggles.game_mode === "1" ? "good" : "" },
+      { label: "Игровой режим (WARP)", value: bool(s.toggles.game_warp), kind: s.toggles.game_warp === "1" ? "good" : "" },
       { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
     ];
     grid.innerHTML = cells.map(c => {
@@ -530,15 +530,6 @@
   function fmtSvc(s) {
     return { active: "работает", stopped: "остановлен", not_installed: "не установлен" }[s] || s;
   }
-  // Game mode is enabled/disabled via the game-mode toggle, but the
-  // strategy backend (default vs legacy rotator) is selected by the
-  // GAME_PROFILE config var. Surface it in the status cell so support
-  // can see at a glance which backend is active without ssh-ing in.
-  function gameModeLabel(enabled, profile) {
-    if (enabled !== "1") return "Выкл";
-    const prof = (profile === "legacy") ? "legacy" : "стандартный";
-    return "Вкл (" + prof + ")";
-  }
 
   // ---------- Toggles ----------
   const TOGGLE_DEFS = [
@@ -546,8 +537,6 @@
       desc: "Блокирует поддельные TCP RST от ТСПУ через nfqws — 3 эвристики (pre-response RST, multi-RST burst, TTL mismatch). Не требует kernel-модулей. Может задеть редкие edge cases у Cloudflare — отключите если заметили проблемы с reconnect'ом." },
     { key: "silent_fallback", name: "Silent fallback РКН",
       desc: "Детект «тихих чёрных дыр» РКН. Осторожно — возможны ложные срабатывания." },
-    { key: "game_mode", name: "Игровой режим",
-      desc: "TCP/UDP bypass для игровых сервисов (стандартный профиль — single-strategy bypass на игровом ipset). Для отката на старый ротатор: GAME_PROFILE=legacy в /opt/zapret2/config." },
     { key: "game_warp", name: "Игровой режим (WARP)",
       desc: "Заворачивает заблокированные по IP хостинги — игровые серверы, а также диапазоны Cloudflare/AWS из списка РКН — в туннель Cloudflare WARP (usque/MASQUE по TCP: работает из РФ, где нативный WG-WARP по UDP режут). Внимание: пока режим включён, часть сайтов на этих хостингах тоже идёт через туннель и может быть медленнее. Не десинк, а туннель: включает игры, чьи сервера заблокированы по IP. Держи выключенным вне игры." },
     { key: "customd", name: "Скрипты custom.d",
@@ -562,7 +551,6 @@
   const TOGGLE_API_NAME = {
     rst_filter: "rst-filter",
     silent_fallback: "silent-fallback",
-    game_mode: "game-mode",
     game_warp: "game-warp",
     customd: "customd",
     dynamic_ttl: "dynamic-ttl",
@@ -839,7 +827,7 @@
   // before clearing the indicator so the user sees the restart actually
   // completed and didn't silently die. rst-filter (raw iptables) is the
   // only one that doesn't bounce the daemon.
-  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, game_mode: 1, customd: 1, dynamic_ttl: 1, ppe: 1 };
+  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1 };
 
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");
@@ -851,7 +839,6 @@
     const niceName = {
       rst_filter: "RST-фильтр",
       silent_fallback: "Silent fallback",
-      game_mode: "Игровой режим",
       game_warp: "Игровой режим (WARP)",
       customd: "custom.d",
       dynamic_ttl: "Динамический TTL",

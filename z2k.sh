@@ -968,9 +968,6 @@ extra_strats/TCP/YT_GV/List.txt
 extra_strats/TCP/RKN/List.txt
 extra_strats/TCP/RKN/Discord.txt
 extra_strats/UDP/YT/List.txt
-game_ips.txt
-roblox_ips.txt
-flowseal_game_ips.txt
 game-warp-ips.txt
 extra-domains.txt
 rkn-false-positive.txt

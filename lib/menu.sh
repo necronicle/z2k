@@ -110,7 +110,6 @@ MENU
 [W] Whitelist (исключения)
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
-[G] Игровой режим (safe/hybrid/aggressive)
 [E] Игровой режим WARP (Cloudflare-туннель для игр, заблоченных по IP)
 [T] Telegram прокси
 [S] Скрипты custom.d
@@ -126,7 +125,7 @@ MENU
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,G,E,T,W,S,P,D,I,Y,M,A,C,H]: "
+        printf "Выберите опцию [0-5,U,R,F,E,T,W,S,P,D,I,Y,M,A,C,H]: "
         read_input choice
 
         case "$choice" in
@@ -153,9 +152,6 @@ MENU
                 ;;
             f|F)
                 menu_rkn_silent_fallback
-                ;;
-            g|G)
-                menu_roblox_bypass
                 ;;
             e|E)
                 menu_game_warp
@@ -1702,9 +1698,7 @@ menu_game_warp() {
     clear_screen
     print_header "Игровой режим (WARP)"
     local config_file="${ZAPRET2_DIR}/config"
-    # self-contained flag writer — menu_roblox_bypass ([G]) defines its own nested
-    # _set_flag; do NOT depend on it, since [E] may be the first submenu entered in
-    # a session (otherwise _set_flag is undefined and the toggle silently no-ops).
+    # self-contained flag writer (KEY=value setter into the config)
     _set_flag() {
         local key="$1" val="$2"
         if grep -q "^${key}=" "$config_file"; then
@@ -1747,172 +1741,6 @@ menu_game_warp() {
     pause
 }
 
-# ==============================================================================
-# ПОДМЕНЮ: ИГРОВОЙ РЕЖИМ
-# ==============================================================================
-
-menu_roblox_bypass() {
-    clear_screen
-    print_header "Игровой режим"
-
-    local config_file="${ZAPRET2_DIR}/config"
-
-    if [ ! -f "$config_file" ]; then
-        print_error "Конфиг не найден: $config_file"
-        print_info "Запустите установку сначала"
-        pause
-        return 1
-    fi
-
-    local GAME_ENABLED ROBLOX_UDP_BYPASS GAME_PROFILE_CUR GAME_MODE_STYLE_CUR
-    # Mirror config_official.sh:970-973 — GAME_MODE_ENABLED is the new
-    # primary, ROBLOX_UDP_BYPASS the legacy fallback. Reading only one
-    # flag drifts the menu's status from runtime when a manual config
-    # edit leaves the two desynced (e.g., GAME_MODE_ENABLED=1 +
-    # ROBLOX_UDP_BYPASS=0 → generator emits arms, UI says off).
-    GAME_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
-    if [ -z "$GAME_ENABLED" ]; then
-        GAME_ENABLED=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
-    fi
-    ROBLOX_UDP_BYPASS="$GAME_ENABLED"  # back-compat alias for code below
-    GAME_PROFILE_CUR=$(safe_config_read "GAME_PROFILE" "$config_file" "flowseal")
-    case "$GAME_PROFILE_CUR" in
-        flowseal|legacy) ;;
-        *) GAME_PROFILE_CUR="flowseal" ;;
-    esac
-    GAME_MODE_STYLE_CUR=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "safe")
-    case "$GAME_MODE_STYLE_CUR" in
-        safe|hybrid|aggressive) ;;
-        *) GAME_MODE_STYLE_CUR="safe" ;;
-    esac
-
-    local status_line
-    if [ "$ROBLOX_UDP_BYPASS" = "1" ]; then
-        if [ "$GAME_PROFILE_CUR" = "legacy" ]; then
-            status_line="Включен — профиль: legacy (режим: $GAME_MODE_STYLE_CUR)"
-        else
-            status_line="Включен — профиль: стандартный"
-        fi
-    else
-        status_line="Выключен"
-    fi
-
-    print_separator
-    print_info "Статус: $status_line"
-    print_separator
-
-    cat <<'SUBMENU'
-
-Игровой bypass. Два профиля:
-
-  стандартный — single-strategy bypass: TCP TLS rotator (6 стратегий)
-                + TCP non-TLS static + UDP fake (dbankcloud QUIC),
-                scoped по игровому ipset (~31K CIDR aggregate,
-                обновляется z2k-scheduler'ом ежедневно).
-                Рекомендуется всем — field-проверено на широком
-                каталоге игр (Apex/Tarkov/Darktide/etc).
-
-  legacy      — старый z2k_game_udp 13-стратный rotator + safe/hybrid/
-                aggressive ladder. Эмпирически работает только на
-                Roblox. Оставлен как rollback на случай регрессии.
-
-[1] Включить (стандартный — по умолчанию)
-[2] Включить legacy (rollback)
-[0] Выключить
-[B] Назад
-
-SUBMENU
-
-    printf "Выберите опцию [0-2,B]: "
-    read_input sub_choice
-
-    _set_flag() {
-        # _set_flag <key> <value>
-        local key="$1" val="$2"
-        if grep -q "^${key}=" "$config_file"; then
-            sed -i "s/^${key}=.*/${key}=${val}/" "$config_file"
-        else
-            echo "${key}=${val}" >> "$config_file"
-        fi
-    }
-
-    _enable_flowseal() {
-        _set_flag GAME_MODE_ENABLED 1
-        _set_flag ROBLOX_UDP_BYPASS 1
-        _set_flag GAME_PROFILE flowseal
-        # GAME_MODE_STYLE intentionally untouched — it's only consumed by
-        # the legacy code path in config_official.sh; on flowseal it's
-        # ignored. Keeping the saved value lets a later rollback to
-        # legacy remember the user's previous safe/hybrid/aggressive.
-    }
-
-    _enable_legacy() {
-        _set_flag GAME_MODE_ENABLED 1
-        _set_flag ROBLOX_UDP_BYPASS 1
-        _set_flag GAME_PROFILE legacy
-        # If GAME_MODE_STYLE isn't set yet, default it to safe — user can
-        # tune via direct config edit; we don't expose the safe/hybrid/
-        # aggressive picker in the menu anymore (legacy is rollback-only).
-        if ! grep -q '^GAME_MODE_STYLE=' "$config_file"; then
-            echo "GAME_MODE_STYLE=safe" >> "$config_file"
-        fi
-    }
-
-    _disable_game_mode() {
-        sed -i 's/^GAME_MODE_ENABLED=.*/GAME_MODE_ENABLED=0/' "$config_file"
-        sed -i 's/^ROBLOX_UDP_BYPASS=.*/ROBLOX_UDP_BYPASS=0/' "$config_file"
-        # Keep GAME_PROFILE / GAME_MODE_STYLE so re-enabling remembers
-        # the user's previous choice.
-    }
-
-    local need_regen=0
-    case "$sub_choice" in
-        1)
-            _enable_flowseal
-            print_success "Игровой режим: стандартный"
-            need_regen=1
-            ;;
-        2)
-            _enable_legacy
-            print_warning "Игровой режим: legacy (rollback)"
-            print_info "Тонкая настройка safe/hybrid/aggressive — через GAME_MODE_STYLE в /opt/zapret2/config"
-            need_regen=1
-            ;;
-        0)
-            if [ "$ROBLOX_UDP_BYPASS" != "1" ]; then
-                print_info "Игровой режим уже выключен"
-                pause
-                return 0
-            fi
-            _disable_game_mode
-            print_success "Игровой режим выключен"
-            need_regen=1
-            ;;
-        [Bb])
-            return 0
-            ;;
-
-        *)
-            print_error "Неверный выбор"
-            pause
-            return 0
-            ;;
-    esac
-
-    if [ "$need_regen" = "1" ]; then
-        print_info "Пересоздание конфига..."
-        create_official_config "/opt/zapret2/config"
-
-        if is_zapret2_running; then
-            print_info "Перезапуск сервиса..."
-            "$INIT_SCRIPT" restart
-            print_success "Сервис перезапущен"
-        else
-            print_warning "Сервис не запущен. Запустите через [2] Управление сервисом"
-        fi
-        pause
-    fi
-}
 
 # ==============================================================================
 # ПОДМЕНЮ: TELEGRAM MTPROXY

@@ -179,13 +179,6 @@ toggle_silent_fallback() {
     restart_service_if_running
 }
 
-toggle_game_mode() {
-    local want="$1"
-    set_flag "ROBLOX_UDP_BYPASS" "$want" "$CONFIG_FILE" || return 1
-    set_flag "GAME_MODE_ENABLED" "$want" "$CONFIG_FILE" || return 1
-    regenerate_config
-    restart_service_if_running
-}
 
 # WARP game mode — route only the game-server ipset through a Cloudflare WARP
 # (usque/MASQUE) tunnel; everything else stays direct. Independent of nfqws2:

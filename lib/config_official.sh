@@ -46,7 +46,6 @@ AUSTERUS_OPT
     local rkn_tcp=""
     local quic_udp=""
     local discord_udp=""
-    local game_udp=""
 
     # Variant-A refactor feature flags. Each phase's emit block is guarded by
     # the corresponding flag so individual phases can be toggled at runtime
@@ -150,86 +149,6 @@ AUSTERUS_OPT
     [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp="$default_strategy"
     [ -z "$rkn_tcp" ] && rkn_tcp="$default_strategy"
 
-    # Game UDP strategy: custom z2k_game_udp Lua handler (rather than built-in
-    # fake, which drops repeats=N for UDP payloads). 6 variants rotated by
-    # circular with fails=1 and a 60s observation window. Positive
-    # --ipset=game_ips.txt on the profile constrains the rotator to the
-    # listed game-server IPs so Discord/Steam noise does not burn the fails
-    # counter. Hardcoded inline — no external Strategy.txt to sync.
-    #
-    # NOTE: a flowseal-style udplen+fake chain with narrower port range was
-    # tested 2026-04-16 and broke a Dom.ru user's connection to the listed
-    # game servers (client-side error code 2). Reverted to the proven master
-    # profile. The flowseal variant may help Rostelecom PC users specifically —
-    # revisit as opt-in when Evgeniy can test.
-    # out_range was previously set per-strategy here (-n2/-n3/-n4) but that
-    # key is not part of any Lua function's arg vocabulary — it's only a
-    # C-side in-profile filter (--out-range). Those inline values were
-    # dead ever since the profile's --out-range=a was applied. Moved to
-    # --out-range=-n4 on the profile itself (below) — real cutoff at last.
-    # Extended 2026-04 rotator for the merged game_udp profile. Axes of
-    # variation (inspiration from Smart-Zapret-Launcher gaming_1..gaming_8
-    # + our existing quic_udp rotator primitives):
-    #
-    # - blob: quic_google (default Google QUIC ClientHello decoy) and
-    #   quic_ozon_ru (secondary decoy, SZL gaming_8 trick — if DPI
-    #   fingerprints per-SNI on fake QUIC, having two SNIs forces it
-    #   to allow both or block both known-good services).
-    # - ip_autottl=N,1-64: values 2,3,4,5 (previously only 2,4). Adaptive
-    #   TTL — delta from measured egress. SZL uses all four.
-    # - ip_ttl=N (hard TTL): new primitive, not auto. Packet dies at
-    #   hop N regardless of actual path. Values 3,4 from SZL gaming_7.
-    # - repeats: 8 (gentle), 10/12 (aggressive), 14 (max) kept from
-    #   original rotator.
-    # - Cross-family: udplen (payload size tamper) and send+ipfrag
-    #   (IP fragmentation) — same primitives already in production
-    #   inside quic_udp rotator. Circular supports mixed actions per
-    #   zapret-auto.lua:312-385 verification.
-    #
-    # Strategy ordering: aggressive first (1-11), gentle last (12) so
-    # non-game AWS flows caught by aws_oracle ipset in hybrid mode
-    # cycle through aggressive, fail, advance, and finally pin on the
-    # gentle strategy=12 — preserving the pre-Phase-2 catchall
-    # behavior for non-game traffic without a separate profile.
-    #
-    # fails=2 + nld=2: per-SLD pinning with 1 retry window, same as
-    # Phase 2 merge.
-    # strategy=12 — denisv7 Roblox recipe (ntc.party 21161 #159): negative
-    # autottl (-2, range 3-20) makes fakes die BEFORE reaching destination
-    # but AFTER the DPI has latched — useful when DPI sits on a transit
-    # router rather than at ISP edge. payload=unknown instead of =all is
-    # more precise for binary game protocols (excludes categorized known
-    # types that are already handled by dedicated handlers).
-    # Inserted before the gentle fallback so aggressive-first ordering
-    # is preserved; gentle renumbered from 12 to 13.
-    game_udp="--lua-desync=circular:fails=2:time=60:udp_in=1:udp_out=4:key=game_udp:nld=2 --lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=2,1-64 --lua-desync=z2k_game_udp:strategy=2:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=3,1-64 --lua-desync=z2k_game_udp:strategy=3:payload=all:dir=out:blob=quic_google:repeats=12:ip_autottl=4,1-64 --lua-desync=z2k_game_udp:strategy=4:payload=all:dir=out:blob=quic_google:repeats=10:ip_autottl=5,1-64 --lua-desync=z2k_game_udp:strategy=5:payload=all:dir=out:blob=quic_google:repeats=10:ip_ttl=3 --lua-desync=z2k_game_udp:strategy=6:payload=all:dir=out:blob=quic_google:repeats=10:ip_ttl=4 --lua-desync=z2k_game_udp:strategy=7:payload=all:dir=out:blob=quic_google:repeats=14:ip_autottl=2,1-64 --lua-desync=udplen:payload=all:dir=out:increment=8:pattern=0xFEA82025:strategy=8 --lua-desync=send:payload=all:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=9 --lua-desync=z2k_game_udp:strategy=10:payload=unknown:dir=out:blob=quic_google:repeats=4:ip_autottl=-2,3-20 --lua-desync=z2k_game_udp:strategy=11:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
-
-    # Game TCP TLS rotator (GAME_PROFILE=flowseal only) — 6 representative
-    # recipes lifted from flowseal 1.9.8 .bat files, translated to nfqws2
-    # lua-desync DSL. circular/fails=2/time=60 + per-SLD pinning (nld=2)
-    # is the same observability shape as rkn_tcp/yt_tcp; on TLS flows
-    # the success/failure detectors actually have signal to converge on
-    # (vs binary game TCP, which is why the static non-TLS arm has no
-    # rotator).
-    #
-    # success_detector=z2k_success_no_reset matches yt_tcp pattern —
-    # game-TLS auth/control flows are HTTPS-only, no HTTP redirect path
-    # to police; a missing RST after handshake = success.
-    # failure_detector=z2k_tls_alert_fatal catches TLS fatal alerts
-    # which is the only clean fail signal on a TLS-only flow.
-    # inseq=18000 is added by the ensure_circular_tcp_inseq pass below,
-    # same as rkn_tcp/yt_tcp.
-    #
-    # Recipe sources:
-    #   strategy=1 — general default (multisplit + seqovl=568 + 4pda)
-    #   strategy=2 — ALT2 (multisplit + seqovl=652 + pos=2 + google)
-    #   strategy=3 — ALT (fake,fakedsplit + ts + multi-blob)
-    #   strategy=4 — ALT3 (fake,hostfakesplit + ya.ru SNI/host + ts)
-    #   strategy=5 — ALT7 (syndata)
-    #   strategy=6 — ALT8 (fake + badseq=2)
-    # :badseq:badseq_increment=2: alias on strategy=6 is rewritten to
-    # tcp_seq=2:tcp_ack=-66000 by expand_badseq_aliases() pass below.
-    game_tls_tcp="--lua-desync=circular:fails=2:time=60:key=game_tls:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_success_no_reset:no_http_redirect --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=2:seqovl=652:seqovl_pattern=tls_clienthello_www_google_com:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-1000:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=4 --lua-desync=syndata:payload=tls_client_hello:dir=out:blob=syn_packet:strategy=5 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:badseq:badseq_increment=2:strategy=6"
 
     # Force domain-level memory for all autocircular profiles.
     # This prevents churn on frequently changing subdomains.
@@ -275,8 +194,6 @@ AUSTERUS_OPT
     youtube_gv_tcp=$(ensure_circular_nld2 "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
-    game_udp=$(ensure_circular_nld2 "$game_udp")
-    game_tls_tcp=$(ensure_circular_nld2 "$game_tls_tcp")
 
     # Override the default `inseq=4096` on TCP TLS circulars so the
     # standard success_detector does NOT fire prematurely before the
@@ -297,7 +214,7 @@ AUSTERUS_OPT
     # success on small handshakes/payloads.
     #
     # Applied only to TCP TLS profiles (rkn_tcp, yt_tcp, gv_tcp).
-    # UDP profiles (quic_udp, game_udp) use udp_in/udp_out instead
+    # UDP profiles (quic_udp) use udp_in/udp_out instead
     # of inseq and are left untouched.
     ensure_circular_tcp_inseq() {
         local input="$1"
@@ -349,7 +266,6 @@ AUSTERUS_OPT
     # crossed 18000 and z2k_success_no_reset never latched. 4000 (< in-range
     # -s5556) is reachable on short flows; the silent CH-drop failure mode is
     # caught by the silent_drop head's out>>in heuristic (zero incoming).
-    game_tls_tcp=$(ensure_circular_tcp_inseq "$game_tls_tcp" 4000)
 
     # ensure_circular_retrans: force `retrans=N` on circular tokens (strip any
     # existing retrans=, re-add). Same strip-and-re-add shape as the nld2/inseq
@@ -499,8 +415,6 @@ AUSTERUS_OPT
     # fails normalized to bol-van's documented default 3 on the game pools (they
     # were field-tuned to 2; Mark chose strict doc-alignment). http_rkn fails 2→3
     # is set inline at its definition. yt/gv/rkn/quic/discord already carry fails=3.
-    game_udp=$(ensure_circular_fails "$game_udp" 3)
-    game_tls_tcp=$(ensure_circular_fails "$game_tls_tcp" 3)
 
     # Этап 2 — проводка failure-детекторов (восстановление из архива, источник
     # a12da74~1). Возвращаем кастомные failure_detector= на TLS-пулы; rkn_tcp
@@ -893,7 +807,6 @@ AUSTERUS_OPT
     rkn_tcp=$(expand_badseq_aliases "$rkn_tcp")
     youtube_tcp=$(expand_badseq_aliases "$youtube_tcp")
     youtube_gv_tcp=$(expand_badseq_aliases "$youtube_gv_tcp")
-    game_tls_tcp=$(expand_badseq_aliases "$game_tls_tcp")
 
     # Phase 14b: strip dead :out_range=*: / :in_range=*: tokens from
     # inside --lua-desync=... args.
@@ -960,7 +873,6 @@ AUSTERUS_OPT
     # per-domain mechanism, not a per-flow dynamic-params one.
 
     discord_udp=$(strip_dead_range_args "$discord_udp")
-    game_udp=$(strip_dead_range_args "$game_udp")
 
     # Phase 3 helper: rebase every `:strategy=N` inside a strategy string
     # by a fixed offset. Used to shift GV strategies (1..22) to (23..44)
@@ -1319,7 +1231,6 @@ AUSTERUS_OPT
         rkn_tcp=$(z2k_strip_custom_detectors "$rkn_tcp")
         youtube_tcp=$(z2k_strip_custom_detectors "$youtube_tcp")
         youtube_gv_tcp=$(z2k_strip_custom_detectors "$youtube_gv_tcp")
-        [ -n "$game_tls_tcp" ] && game_tls_tcp=$(z2k_strip_custom_detectors "$game_tls_tcp")
     fi
 
     # Silent fallback для RKN — включается через меню (флаг-файл).
@@ -1352,70 +1263,6 @@ AUSTERUS_OPT
         fi
     }
 
-    # Game mode flag — evaluated once, used by game UDP profile below.
-    # New flag GAME_MODE_ENABLED with backwards-compat fallback to the
-    # legacy ROBLOX_UDP_BYPASS so routers running older z2k (that wrote
-    # only the legacy name) continue to flip correctly after update.
-    local game_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local GAME_MODE_ENABLED
-    GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$game_conf" "")
-    if [ -z "$GAME_MODE_ENABLED" ]; then
-        GAME_MODE_ENABLED=$(safe_config_read "ROBLOX_UDP_BYPASS" "$game_conf" "0")
-    fi
-    # GAME_MODE_STYLE — safe|hybrid|aggressive. Default "safe" for backwards
-    # compatibility (pre-hybrid routers keep their existing ipset +
-    # circular-rotator behavior when this flag isn't in config yet).
-    #   safe       — positive --ipset=game_ips.txt + 6-strategy rotator.
-    #                Only IPs listed in game_ips.txt pass the profile, so
-    #                the rotator never burns fails on Discord/Steam noise.
-    #   hybrid     — same ipset profile first, PLUS a UDP catchall on
-    #                1024-65535 (no ipset). Picks up cloud-hosted game
-    #                flows on IPs NOT in game_ips.txt (no-SNI sessions
-    #                on arbitrary high UDP ports).
-    #                Caveat: the UDP catchall perturbs the first 4
-    #                packets of unrelated UDP flows on 1024-65535 —
-    #                risks: Discord P2P voice/video, WebRTC calls
-    #                (Meet/Zoom/Teams peer mode), BitTorrent DHT.
-    #                Discord server-routed voice (ports 50000-50099,
-    #                3478-3481, 5349, 19294-19344) is caught by the
-    #                earlier Discord UDP profile and is unaffected.
-    #                TCP is NOT touched by the catchall — see note in
-    #                the profile block below (2026-04-24 regression fix).
-    #   aggressive — only the UDP catchall, no ipset profile at all.
-    #                Same UDP caveats as hybrid, and game_ips.txt-listed
-    #                titles also lose their dedicated rotator.
-    local GAME_MODE_STYLE
-    GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$game_conf" "")
-    case "$GAME_MODE_STYLE" in
-        safe|hybrid) ;;
-        aggressive)
-            # Phase 2 merge: aggressive deprecated — aliased to hybrid when
-            # Phase 2 is active. aggressive was "catchall-only without
-            # positive ipset", which the merge collapses: the hybrid ipset
-            # now includes aws_oracle, and the gentle catchall strategy
-            # is just strategy=7 in the merged rotator. Pre-Phase-2 rollback
-            # path still honors legacy aggressive semantics.
-            [ "$Z2K_REFACTOR_PHASE2" = "1" ] && GAME_MODE_STYLE="hybrid"
-            ;;
-        *) GAME_MODE_STYLE="safe" ;;
-    esac
-
-    # GAME_PROFILE — selects between flowseal-mirrored single-strategy arm
-    # (default, post-2026-04-30) and the legacy 13-strategy z2k rotator
-    # (rollback path). Default "flowseal" because the legacy path empirically
-    # only works on Roblox; flowseal 1.9.8 single-strategy is field-proven
-    # across the broader game catalog (Apex/Tarkov/Darktide/etc).
-    #   flowseal — one fake:dbankcloud:repeats=12:cutoff=n2 UDP arm scoped
-    #              by flowseal_game_ips.txt (~31K CIDR aggregate).
-    #              GAME_MODE_STYLE/Z2K_REFACTOR_PHASE2 ignored.
-    #   legacy   — preserves existing safe/hybrid/aggressive ladder with
-    #              Phase 2 merge or pre-Phase-2 two-profile layout.
-    local GAME_PROFILE
-    GAME_PROFILE=$(safe_config_read "GAME_PROFILE" "$game_conf" "")
-    case "$GAME_PROFILE" in
-        flowseal|legacy) ;;
-        *) GAME_PROFILE="flowseal" ;;
-    esac
 
     # RKN TCP (include Discord hostlist into RKN profile)
     local rkn_hostlists="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt"
@@ -1514,260 +1361,15 @@ AUSTERUS_OPT
     # desync.c:900 (VERDICT_PASS), so matched packets exit unmodified.
     #
     # Ordering: AFTER discord_udp (so Discord's server-routed STUN on the
-    # official port ranges still goes through Discord's dedicated rotator),
-    # BEFORE game_udp (so P2P STUN on arbitrary high ports isn't perturbed
-    # by the game ipset's fake shot).
+    # official port ranges still goes through Discord's dedicated rotator).
     #
-    # --out-range=-n4 keeps Lua short-circuit consistent with game_udp even
-    # though this profile has no Lua strategies — marginal safety against a
-    # future edit accidentally adding one.
+    # --out-range=-n4 keeps the Lua short-circuit consistent even though this
+    # profile has no Lua strategies — marginal safety against a future edit
+    # accidentally adding one.
     if [ "$Z2K_REFACTOR_PHASE1" = "1" ]; then
         nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --filter-l7=stun --in-range=a --out-range=-n4 --new\\n"
     fi
 
-    # === Game TCP arms (GAME_PROFILE=flowseal only) ===
-    # nfqws2 is first-match-wins per packet, so RKN/YT/GV/Discord-control
-    # TCP profiles above already catch web traffic on standard ports.
-    # The carve-out below excludes 80/443/2053/2083/2087/2096/2408/8443
-    # so even raw IP-match cannot pull web flows into game arms:
-    #   80/443    — RKN/YT/GV TLS/HTTP
-    #   2053/2083/2087/2096 — Cloudflare Spectrum alt-HTTPS
-    #   2408      — Cloudflare Warp (engage.cloudflareclient.com control)
-    #   8443      — Discord media TCP
-    #
-    # Hostlist-exclude placement differs per arm — see desync.c:248-251:
-    # PROFILE_HOSTLISTS_EMPTY (params.h:109) tests BOTH include AND
-    # exclude lists, and a non-empty hostlist with hostname=NULL causes
-    # dp_match() to return false BEFORE the ipset check fires.
-    #   • TLS rotator arm — flows carry SNI, hostname is resolvable,
-    #     so --hostlist-exclude=whitelist/YT/RKN works as defense-in-
-    #     depth against ECH-bearing or alt-port web flows.
-    #   • non-TLS static arm — binary TCP has NO hostname → ANY
-    #     hostlist-exclude makes the arm uniformly non-matching for
-    #     its actual target. Defenses there are filter-l7=unknown +
-    #     ipset + port carve-out (see comment above the emission line
-    #     below).
-    #
-    # Two emitted arms (first-match-wins, TLS rotator before static):
-    # 1. TCP TLS rotator (step 5): filter-l7=tls + circular over 6
-    #    flowseal-derived recipes. Layout mirrors YT/GV pattern — circular
-    #    BEFORE the --payload= gate so detectors see incoming RST/alerts/
-    #    server hello/HTTP replies (--payload= is sticky and applies to
-    #    every following --lua-desync= per nfqws.c:2955; without the
-    #    split, circular's failure_detector + inseq=18000 are blind).
-    # 2. TCP non-TLS static (step 4): payload=all + multisplit recipe
-    #    mirroring flowseal 1.9.8 default. No circular — binary game TCP
-    #    has no observable success/fail signal that a rotator could use.
-    if [ "$GAME_PROFILE" = "flowseal" ] && [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/flowseal_game_ips.txt" ]; then
-        # Full carve-out per "Game arms must never include 80/443/8443/
-        # 2053/2083/2087/2096" invariant; 2408 preserved from UDP arm.
-        local game_tcp_ports="1024-2052,2054-2082,2084-2086,2088-2095,2097-2407,2409-8442,8444-65535"
-        local game_tcp_ipset_excl=""
-        [ -f "${lists_dir}/ipset-exclude.txt" ] && game_tcp_ipset_excl="--ipset-exclude=${lists_dir}/ipset-exclude.txt "
-
-        # TLS rotator hostlist-excludes — SAFE here (vs the static arm
-        # below) because filter-l7=tls + payload=tls_client_hello means
-        # nfqws extracts SNI before dp_match() runs the hostlist gate at
-        # desync.c:248-251. Excludes shield Discord control / Riot login
-        # / EOS auth / etc. that resolve into RKN/YT/whitelist domains
-        # but happen to land on game-port + game-ipset by coincidence.
-        local game_tls_hostlist_excl="--hostlist-exclude=${lists_dir}/whitelist.txt"
-        [ -s "${extra_strats_dir}/TCP/YT/List.txt" ] && \
-            game_tls_hostlist_excl="$game_tls_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT/List.txt"
-        [ -s "${extra_strats_dir}/TCP/RKN/List.txt" ] && \
-            game_tls_hostlist_excl="$game_tls_hostlist_excl --hostlist-exclude=${extra_strats_dir}/TCP/RKN/List.txt"
-        # TLS rotator — first match for game-port TLS handshakes. nfqws2
-        # ordering is per-line first-match-wins, so this MUST emit before
-        # the non-TLS static arm below; binary game TCP cleanly falls
-        # through to that arm via filter-l7=tls miss.
-        #
-        # YT/GV-style layout — circular BEFORE --payload= gate so
-        # detectors see incoming RST/alerts/server-hello/http_reply
-        # packets (which is what failure_detector / success_detector /
-        # inseq=18000 actually need). Per nfqws.c:2955, --payload= is
-        # sticky: it applies to every following --lua-desync= until
-        # --new resets it. Putting --payload=tls_client_hello between
-        # circular and strategies leaves circular at default (all
-        # payload types) and gates only the strategies to the outgoing
-        # ClientHello. --in-range=-s5556 / --in-range=x mirrors the
-        # ensure_youtube_tls_circular_manual_layout transform applied
-        # to yt_tcp/gv_tcp at L800-815 — circular sees incoming up to
-        # ServerHello region, strategies don't.
-        local game_tls_circular="${game_tls_tcp%% *}"
-        local game_tls_strategies="${game_tls_tcp#* }"
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --filter-l7=tls --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}${game_tls_hostlist_excl} --out-range=-n3 --in-range=-s5556 ${game_tls_circular} --in-range=x --payload=tls_client_hello ${game_tls_strategies} --new\\n"
-
-        # NO hostlist-exclude on this arm — see desync.c:248-251:
-        #   bHostlistsEmpty = PROFILE_HOSTLISTS_EMPTY(dp);
-        #   if (!dp->hostlist_auto && !hostname && !bHostlistsEmpty)
-        #       return false;
-        # PROFILE_HOSTLISTS_EMPTY checks BOTH include AND exclude lists
-        # (params.h:109). Binary game TCP has no hostname (no SNI to
-        # extract) → if any hostlist-exclude is set, dp_match() bails
-        # before ipset check, killing the arm for its actual target.
-        # Defense-in-depth shifts to: filter-l7=unknown (rejects TLS even
-        # with ECH — nfqws TLS probe matches handshake header, not SNI),
-        # ipset positive scope, ipset-exclude, port carve-out.
-        # The TLS rotator in step 5 CAN safely use hostlist-exclude
-        # because TLS flows carry SNI.
-        # --filter-l7=unknown scopes this arm to traffic the nfqws2 L7
-        # classifier could not identify (= binary game TCP). nfqws2
-        # sets l7proto via per-packet probes in desync.c:33 BEFORE the
-        # filter-l7 check at desync.c:240, so a TLS ClientHello on
-        # the first data segment is correctly classified L7_TLS at
-        # filter check and excluded. SYN/ACK (no payload) keep
-        # l7proto=L7_UNKNOWN; multisplit on a payload-less segment
-        # is a no-op.
-        # Non-TLS static — multisplit:seqovl=568:pos=1 with tls_clienthello_4pda_to
-        # seqovl pattern (blob already registered in S99zapret2.new:537).
-        local flowseal_game_tcp_static="--lua-desync=multisplit:payload=all:dir=out:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${game_tcp_ports} --filter-l7=unknown --ipset=${lists_dir}/flowseal_game_ips.txt ${game_tcp_ipset_excl}--in-range=a --out-range=-n3 --payload=all $flowseal_game_tcp_static --new\\n"
-    fi
-
-    # Game Filter UDP — custom protocols, unknown payloads. Uses a positive
-    # --ipset=game_ips.txt match so the strategy rotator fires ONLY on
-    # listed game-server IPs, not on random Discord/Steam/BitTorrent UDP
-    # that would otherwise exhaust the circular rotator's fails counter.
-    #
-    # Strategies live in extra_strats/UDP/GAMES/Strategy.txt (built-in fallback
-    # is hardcoded above in case the file is missing). The z2k_game_udp Lua
-    # handler (files/lua/z2k-modern-core.lua) is used instead of built-in
-    # `fake` because upstream fake() drops `repeats=N` for UDP payloads; our
-    # handler threads desync_opts through rawsend_dissect_ipfrag so repeats
-    # is actually applied. Blob alias `quic_google` → quic_initial_www_google_com.bin.
-    #
-    # Gated by GAME_MODE_ENABLED (new) with backwards-compat fallback to
-    # ROBLOX_UDP_BYPASS (old) — evaluated above. GAME_PROFILE selects which
-    # implementation handles the gating positive.
-    if [ "$GAME_PROFILE" = "flowseal" ]; then
-        # Flowseal single-strategy UDP arm — byte-for-byte 1:1 with flowseal
-        # general.bat L25:
-        #   --dpi-desync=fake --dpi-desync-repeats=12 --dpi-desync-cutoff=n2
-        #   --dpi-desync-any-protocol=1 --dpi-desync-fake-unknown-udp=dbankcloud
-        #   --ipset=ipset-all.txt
-        # IP universe is identical: flowseal builds ipset-all.txt at runtime
-        # from the same .service/ipset-service.txt we fetch into
-        # flowseal_game_ips.txt (~31K CIDR, refreshed daily).
-        # Uses the BUILT-IN fake lua-desync — the direct nfqws2 analog of winws
-        # --dpi-desync=fake, the exact primitive discord voice uses (field-
-        # proven). Engine-verified (zapret-antidpi.lua fake() ->
-        # rawsend_dissect_segmented -> C rawsend_rep): built-in fake DOES honour
-        # repeats=N for UDP, so 12 copies emit as on Windows. The previous
-        # z2k_game_udp handler forced ip_id=none (all 12 fakes carried the real
-        # packet's IP ID -> DPI dedup risk); built-in fake uses seq ip_id like
-        # winws -> 12 distinct fakes.
-        # Port range 1024-2407,2409-65535 keeps Warp 2408 carve-out and
-        # excludes 80/443 (no UDP web on those — DNS/QUIC have dedicated
-        # earlier profiles). cutoff=n2 limits desync to first 2 pkts of
-        # each flow, matching flowseal exactly and keeping LAN/non-game
-        # collateral negligible.
-        if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/flowseal_game_ips.txt" ]; then
-            local ipset_excl="${lists_dir}/ipset-exclude.txt"
-            local game_ipset_excl_opt=""
-            [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-            local flowseal_game_udp="--lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=12"
-            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --ipset=${lists_dir}/flowseal_game_ips.txt ${game_ipset_excl_opt}--out-range=-n2 --payload=all $flowseal_game_udp --new\\n"
-        fi
-    else
-        # Legacy path (GAME_PROFILE=legacy) — preserved for rollback.
-        # Phase 2 merge: game_udp + game_catchall_udp collapsed to one profile
-        # with multi-ipset OR trigger. Safe = game_ips only, hybrid = +aws_oracle.
-        # Pre-Phase-2 path (else branch below) keeps the legacy two-profile
-        # layout for rollback.
-        if [ "$Z2K_REFACTOR_PHASE2" = "1" ]; then
-            if [ "$GAME_MODE_ENABLED" = "1" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
-                local ipset_excl="${lists_dir}/ipset-exclude.txt"
-                local game_ipset_excl_opt=""
-                [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-                # In hybrid mode, broaden the trigger with AWS/Oracle ranges
-                # (populated by z2k-update-lists.sh Phase 5 fetcher). The
-                # merged rotator's strategy=7 (gentle) pins on non-game AWS
-                # flows after strategies 1-6 fail — replacing the old fixed
-                # catchall behavior without a separate profile.
-                local game_ipsets="--ipset=${lists_dir}/game_ips.txt"
-                if [ "$GAME_MODE_STYLE" != "safe" ] && [ -s "${lists_dir}/aws_oracle_ips.txt" ]; then
-                    game_ipsets="$game_ipsets --ipset=${lists_dir}/aws_oracle_ips.txt"
-                fi
-                # Warp 2408 carve-out preserved (ntc.party 17013 #568).
-                # --out-range=-n4 cuts Lua pipeline after first 4 pkts.
-                nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 $game_ipsets ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
-            fi
-        elif [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "aggressive" ] && [ -s "${lists_dir}/game_ips.txt" ]; then
-            # Pre-Phase-2 legacy path: game_udp ipset profile.
-            local ipset_excl="${lists_dir}/ipset-exclude.txt"
-            local game_ipset_excl_opt=""
-            [ -f "$ipset_excl" ] && game_ipset_excl_opt="--ipset-exclude=${ipset_excl} "
-            # --out-range=-n4: apply the game_udp Lua chain only to the first
-            # 4 outgoing packets of each UDP flow. Circular needs a handful of
-            # early packets to pick + pin a strategy, z2k_game_udp's
-            # replay_first() gate fires once anyway — beyond the 4th packet
-            # the Lua layer is pure overhead, so we short-circuit in C. Was
-            # previously --out-range=a (no limit) because the per-strategy
-            # out_range=-nN tokens were silently dropped by the Lua parser.
-            nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --ipset=${lists_dir}/game_ips.txt ${game_ipset_excl_opt}--in-range=a --out-range=-n4 --payload=all $game_udp --new\\n"
-        fi
-    fi
-
-    # Game catchall (hybrid/aggressive) — winws-style broad-sweep.
-    # One fixed strategy per protocol (no rotator with fails=1; the rotator
-    # would be exhausted within seconds by Discord/Steam/BitTorrent UDP
-    # noise, which is exactly why the ipset profile above has to be
-    # positive-filtered). The catchall targets cloud-hosted game flows
-    # that land on arbitrary high ports with no usable hostname — and
-    # relies on cutoff=n4 to only perturb the first 4 packets of each
-    # flow so legitimate non-game traffic is barely affected.
-    #
-    # Known collateral risks (watch these when triaging new reports):
-    #   • Discord peer-to-peer voice/video (Settings → Voice & Video →
-    #     "Use peer-to-peer") — P2P mode opens UDP on random high ports
-    #     outside the Discord profile's 50000-50099/3478-3481/5349/
-    #     19294-19344 whitelist, so those flows do hit the catchall and
-    #     the first-4-packet fake can break ICE handshake. Server-routed
-    #     Discord voice is unaffected.
-    #   • WebRTC in browsers (Google Meet / Zoom / Teams) when doing
-    #     direct peer calls — same class of issue.
-    #   • BitTorrent DHT / uTP traffic on 1024-65535.
-    #
-    # UDP-only design (2026-04-24 regression fix after Andrey report):
-    # a TCP catchall on 1024-65535 also fires on the router's OUTPUT
-    # chain, where LAN-bound responses from the router itself go — so
-    # the router's own web UI and the z2k webpanel became unreachable
-    # for any LAN client that ended up with an ephemeral source port in
-    # 1024-65535 (most Linux clients). Removed TCP catchall entirely.
-    # UDP catchall still covers the winws.exe gaming_N.conf (non-
-    # _ultimate) layout, which is what Andrey's working Windows config
-    # actually uses — the _ultimate TCP arm was our over-reach.
-    #
-    # Flags chosen to match winws.exe gaming_5 (non-ultimate):
-    #   --lua-desync=fake   = --dpi-desync=fake
-    #   payload=all         ≈ --dpi-desync-any-protocol=1 (process all L7)
-    #   blob=quic_google    = --dpi-desync-fake-unknown-udp=<quic init>
-    #   ip_autottl=4,1-64   = --dpi-desync-autottl=4
-    #   out_range=-n4       = --dpi-desync-cutoff=n4
-    #   repeats=8           = --dpi-desync-repeats=8
-    #
-    # UDP uses the z2k_game_udp Lua handler (not built-in fake) because
-    # built-in fake still drops repeats=N on UDP payloads.
-    #
-    # Phase 2 merge makes this block dead — catchall behavior is absorbed
-    # into the merged game_udp rotator (strategy=7) above. Block retained
-    # as pre-Phase-2 rollback path, guarded by the negated flag.
-    if [ "$GAME_PROFILE" != "flowseal" ] && [ "$Z2K_REFACTOR_PHASE2" != "1" ] && [ "$GAME_MODE_ENABLED" = "1" ] && [ "$GAME_MODE_STYLE" != "safe" ]; then
-        # out_range moved to the profile itself (--out-range=-n4 below),
-        # the inline value was dead (see game_udp comment above).
-        local game_catchall_udp="--lua-desync=z2k_game_udp:strategy=1:payload=all:dir=out:blob=quic_google:repeats=8:ip_autottl=4,1-64"
-        # Port 2408 excluded — Cloudflare Warp (AmneziaWG) control-plane endpoint
-        # engage.cloudflareclient.com:2408 is the only port that still works for
-        # Warp from RU (ntc.party 17013 #560), and any QUIC/fake shot at its
-        # handshake packets kills the tunnel (ntc.party 17013 #568). Warp does
-        # not use 2408 for anything else, so losing catchall coverage on that
-        # single port is a safe tradeoff.
-        # --out-range=-n4: same first-4-packets cutoff as the ipset
-        # profile above. For the catchall this matters more — we're
-        # looking at every UDP flow on 1024-65535, so limiting Lua
-        # evaluation to the opening handshake is a big CPU win.
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-2407,2409-65535 --in-range=a --out-range=-n4 --payload=all $game_catchall_udp --new\\n"
-    fi
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
     # 7 strategies from blockcheck2 results, ordered by simplicity.
@@ -1954,9 +1556,6 @@ create_official_config() {
     local saved_DROP_DPI_RST="0"
     local saved_RST_FILTER="0"
     local saved_RKN_SILENT_FALLBACK="0"
-    local saved_ROBLOX_UDP_BYPASS="0"
-    local saved_GAME_MODE_ENABLED=""
-    local saved_GAME_MODE_STYLE=""
     local saved_GAME_WARP_ENABLED="0"
     local saved_TG_PROXY_USER_DISABLED="0"
     local saved_ENABLED="1"
@@ -1974,9 +1573,6 @@ create_official_config() {
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
         saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
-        saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
-        saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
-        saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
         saved_GAME_WARP_ENABLED=$(safe_config_read "GAME_WARP_ENABLED" "$config_file" "0")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
         # ENABLED — master service on/off gate (read by S99zapret2.new start()).
@@ -2033,15 +1629,6 @@ create_official_config() {
     if [ "$saved_Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
         nfqws2_tcp_pkt_in="30"
     fi
-    # Backwards compat: if the new flag isn't set yet on this router,
-    # inherit the legacy ROBLOX_UDP_BYPASS value so a single create_official_config
-    # pass transparently migrates old configs to the new variable.
-    [ -z "$saved_GAME_MODE_ENABLED" ] && saved_GAME_MODE_ENABLED="$saved_ROBLOX_UDP_BYPASS"
-    # GAME_MODE_STYLE default = safe (= pre-hybrid behavior) when missing.
-    case "$saved_GAME_MODE_STYLE" in
-        safe|hybrid|aggressive) ;;
-        *) saved_GAME_MODE_STYLE="safe" ;;
-    esac
 
     # Создать полный config файл
     cat > "$config_file" <<CONFIG
@@ -2080,7 +1667,7 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344${saved_GAME_MODE_ENABLED:+$([ "$saved_GAME_MODE_ENABLED" = "1" ] && echo ',1024-65535')}"
+NFQWS2_PORTS_UDP="443,50000-50099,1400,3478-3481,5349,19294-19344"
 
 # Discord voice/STUN: KEEPALIVE DISABLED (empty) — по канону bol-van.
 # Раньше (2026-06-11) на discord-портах connbytes-лимит снимался (keepalive),
@@ -2228,22 +1815,9 @@ RST_FILTER=${saved_RST_FILTER}
 # Silent fallback for RKN
 RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 
-# Game bypass (one toggle = two flags; legacy name kept for rollback safety)
-GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}
-ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
-# Game WARP mode — route game-server ipset through Cloudflare WARP (usque/MASQUE),
-# orthogonal to the desync game mode above; engine is z2k-warp.sh.
+# Game WARP mode — route game-server ipset through Cloudflare WARP (usque/MASQUE);
+# engine is z2k-warp.sh. Toggled from the webpanel / menu [E].
 GAME_WARP_ENABLED=${saved_GAME_WARP_ENABLED}
-# Game mode topology:
-#   safe       — positive game_ips.txt ipset + circular rotator (default).
-#   hybrid     — ipset profile first, plus UDP catchall on 1024-65535
-#                (one fixed strategy). Picks up cloud-hosted games with
-#                no usable SNI. May disturb Discord P2P / WebRTC /
-#                BitTorrent on high UDP ports — first 4 packets per flow.
-#                TCP is not touched by the catchall.
-#   aggressive — UDP catchall only, no ipset. Same UDP risks as hybrid,
-#                and listed games lose their dedicated rotator.
-GAME_MODE_STYLE=${saved_GAME_MODE_STYLE}
 
 # Telegram tunnel: user-disable flag from menu/webpanel "Stop tunnel".
 # Preserved across reinstall так что step_finalize autostart не воскрешал

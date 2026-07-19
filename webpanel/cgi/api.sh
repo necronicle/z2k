@@ -164,26 +164,6 @@ case "$method $path" in
         svc_state=$(service_status_string)
         rst_filter=$(read_flag "RST_FILTER" "$CONFIG_FILE" "0")
         silent_fb=$(read_flag "RKN_SILENT_FALLBACK" "$CONFIG_FILE" "0")
-        # Mirror config_official.sh:970-973 — read GAME_MODE_ENABLED first
-        # (the new primary), fall back to ROBLOX_UDP_BYPASS only if the
-        # new flag is absent from config. Without this fallback parity,
-        # /status reports "off" when a manually-edited config has
-        # GAME_MODE_ENABLED=1 but leaves the legacy ROBLOX_UDP_BYPASS at
-        # 0 — UI lies vs runtime. Explicit grep here instead of relying
-        # on read_flag's default (its `${3:-0}` syntax conflates "key
-        # missing" with "key present, value 0").
-        if grep -q '^GAME_MODE_ENABLED=' "$CONFIG_FILE" 2>/dev/null; then
-            game_mode=$(read_flag "GAME_MODE_ENABLED" "$CONFIG_FILE" "0")
-        else
-            game_mode=$(read_flag "ROBLOX_UDP_BYPASS" "$CONFIG_FILE" "0")
-        fi
-        # GAME_PROFILE — flowseal (default) | legacy. Coerce unknown
-        # values to flowseal, matching config_official.sh:986-991.
-        game_profile=$(read_flag "GAME_PROFILE" "$CONFIG_FILE" "flowseal")
-        case "$game_profile" in
-            flowseal|legacy) ;;
-            *) game_profile="flowseal" ;;
-        esac
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
         # UI wants positive "customd_enabled"
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
@@ -196,11 +176,10 @@ case "$method $path" in
 
         game_warp=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s"},"tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
-            "${rst_filter:-0}" "${silent_fb:-0}" "${game_mode:-0}" "${game_warp:-0}" "${customd:-0}" \
+            "${rst_filter:-0}" "${silent_fb:-0}" "${game_warp:-0}" "${customd:-0}" \
             "${dynamic_ttl:-1}" "${stats:-1}" "${ppe:-1}" \
-            "${game_profile:-flowseal}" \
             "${tunnel_running:-false}"
         exit 0
         ;;
@@ -234,7 +213,6 @@ case "$method $path" in
     # ---------- TOGGLES (async — returns job_id) ----------
     "POST /toggle/rst-filter"|\
     "POST /toggle/silent-fallback"|\
-    "POST /toggle/game-mode"|\
     "POST /toggle/game-warp"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
@@ -250,7 +228,6 @@ case "$method $path" in
         case "$path" in
             /toggle/rst-filter)      _toggle_fn=toggle_rst_filter;      _label="RST-фильтр" ;;
             /toggle/silent-fallback) _toggle_fn=toggle_silent_fallback; _label="Silent fallback" ;;
-            /toggle/game-mode)       _toggle_fn=toggle_game_mode;       _label="Игровой режим" ;;
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="Игровой режим (WARP)" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;

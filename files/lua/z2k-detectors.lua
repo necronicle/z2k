@@ -1800,9 +1800,9 @@ end
 --     pos_get(d,'d',false) = client datagram count; pos_get(d,'b',true)
 --     [reverse] = download bytes received so far.
 --
--- discord_udp / game_udp are NOT wired here (short STUN / IP-discovery / game
--- datagrams never sustain high bytes; a 24KB floor would never fire) — they
--- keep the standard packet-count UDP detectors.
+-- discord_udp is NOT wired here (short STUN / IP-discovery datagrams never
+-- sustain high bytes; a 24KB floor would never fire) — it keeps the standard
+-- packet-count UDP detectors.
 -- ===========================================================================
 local Z2K_QUIC_SUCCESS_BYTES    = 24576  -- 24 KiB download = sustained video (above any handshake flight ~3-9KB, below smallest video burst 50-500KB)
 local Z2K_QUIC_STALL_OUT_MIN    = 3      -- client must have actively retried (>=3 datagrams) — past a quick preconnect/cancel
