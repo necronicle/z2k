@@ -187,6 +187,27 @@ toggle_game_mode() {
     restart_service_if_running
 }
 
+# WARP game mode — route only the game-server ipset through a Cloudflare WARP
+# (usque/MASQUE) tunnel; everything else stays direct. Independent of nfqws2:
+# NO regenerate_config / service restart (it's routing, not desync). z2k-warp.sh
+# is the engine. On enable-failure (e.g. usque registration timed out under RU
+# CF throttle) we revert the flag so the UI never lies about being on.
+toggle_game_warp() {
+    local want="$1"
+    set_flag "GAME_WARP_ENABLED" "$want" "$CONFIG_FILE" || return 1
+    if [ "$want" = "1" ]; then
+        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable || {
+            set_flag "GAME_WARP_ENABLED" "0" "$CONFIG_FILE"
+            # tear down any half-started tunnel so a failed enable doesn't orphan usque
+            sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable >/dev/null 2>&1
+            echo "WARP не поднялся (регистрация/сеть) — режим оставлен выключенным" >&2
+            return 1
+        }
+    else
+        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable
+    fi
+}
+
 toggle_customd() {
     # Note: 1 = ENABLED, 0 = DISABLED in our API; the config flag is
     # DISABLE_CUSTOM which is the INVERSE. We flip here so the web UI

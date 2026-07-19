@@ -1381,6 +1381,13 @@ start_fw()
     z2k_udp_masquerade_fix_start
     z2k_rst_filter_start
 
+    # Game WARP mode — bring up the usque (MASQUE) tunnel + game-ipset split-tunnel
+    # when enabled. Backgrounded so a slow usque registration never stalls the
+    # firewall apply; z2k-warp.sh selfheal (scheduler, minute-cadence) is the net.
+    if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] && [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" ]; then
+        ( sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable >/dev/null 2>&1 ) &
+    fi
+
     return 0
 }
 

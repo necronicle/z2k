@@ -186,6 +186,19 @@ while true; do
         fi
     fi
 
+    # Game WARP mode self-heal (minute-cadence). z2k-warp.sh selfheal is a no-op
+    # unless GAME_WARP_ENABLED=1; when on it re-brings-up the usque tunnel if NDM
+    # dropped it and re-applies the ipset MARK / route / MSS clamp lost to an NDM
+    # firewall reload or WAN flap. Mirrors the ppe/nfqueue self-heal pattern.
+    if [ -r "${ZAPRET2_DIR}/z2k-warp.sh" ]; then
+        last_warp=$(last_fired_in "$TMP_STATE" warp-selfheal-epoch)
+        case "$last_warp" in ''|*[!0-9]*) last_warp=0 ;; esac
+        if [ "$((now_epoch - last_warp))" -ge 55 ]; then
+            mark_fired_in "$TMP_STATE" warp-selfheal-epoch "$now_epoch"
+            sh "${ZAPRET2_DIR}/z2k-warp.sh" selfheal >/dev/null 2>&1 &
+        fi
+    fi
+
     # Rotate log occasionally (cheap, only every minute boundary).
     if [ "$(date +%S)" -lt 30 ]; then
         rotate_log

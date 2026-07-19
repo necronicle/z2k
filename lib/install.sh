@@ -1573,7 +1573,7 @@ step_build_zapret2() {
     # detection stack). Replaced by the server_active_reject taxonomy in z2k-detectors.lua.
     # z2k-healthcheck.sh removed in r-60 — its per-strategy pass/fail check
     # false-negatives mid-rotation; z2k-diag.sh is the supported diagnostic.
-    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh; do
+    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh z2k-warp.sh; do
         if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
             cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
@@ -1715,7 +1715,7 @@ step_build_zapret2() {
     # never reads, and Hot verdicts would silently fail to activate bypass.
     [ -e "${ZAPRET2_DIR}/lists/discovered-domains.txt" ] || \
         : > "${ZAPRET2_DIR}/lists/discovered-domains.txt"
-    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt cf_extra_check_ips.txt rkn-false-positive.txt; do
+    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt game-warp-ips.txt cf_extra_check_ips.txt rkn-false-positive.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
@@ -1825,7 +1825,7 @@ step_build_zapret2() {
                 # же ключи через ${saved_*}, без них create_official_config
                 # вернётся к дефолтам. Если добавляешь новый non-Z2K_
                 # user flag в config_official.sh — добавь его и сюда.
-                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
                 if [ -s "$_flag_backup" ] && [ -f "$ZAPRET2_DIR/config" ]; then
                     local _line _flag_name _escaped _applied=0
                     while IFS= read -r _line; do
@@ -2644,7 +2644,7 @@ step_finalize() {
     local backup_tmp_early="/opt/z2k-upgrade-backup"
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
         if [ -s "$_flag_backup_early" ]; then
             local _line_early _flag_name_early _escaped_early _applied_early=0
             while IFS= read -r _line_early; do
@@ -3311,7 +3311,7 @@ step_finalize() {
     # — re-running is a no-op when nothing changed.
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup="$backup_tmp/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
         if [ -s "$_flag_backup" ]; then
             local _line _flag_name _escaped _applied=0
             while IFS= read -r _line; do

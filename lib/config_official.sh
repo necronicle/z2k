@@ -1957,6 +1957,7 @@ create_official_config() {
     local saved_ROBLOX_UDP_BYPASS="0"
     local saved_GAME_MODE_ENABLED=""
     local saved_GAME_MODE_STYLE=""
+    local saved_GAME_WARP_ENABLED="0"
     local saved_TG_PROXY_USER_DISABLED="0"
     local saved_ENABLED="1"
     local saved_Z2K_USE_MID_STREAM_DETECTOR="1"
@@ -1976,6 +1977,7 @@ create_official_config() {
         saved_ROBLOX_UDP_BYPASS=$(safe_config_read "ROBLOX_UDP_BYPASS" "$config_file" "0")
         saved_GAME_MODE_ENABLED=$(safe_config_read "GAME_MODE_ENABLED" "$config_file" "")
         saved_GAME_MODE_STYLE=$(safe_config_read "GAME_MODE_STYLE" "$config_file" "")
+        saved_GAME_WARP_ENABLED=$(safe_config_read "GAME_WARP_ENABLED" "$config_file" "0")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
         # ENABLED — master service on/off gate (read by S99zapret2.new start()).
         # Was hardcoded =1 below and NOT preserved, so a user who stopped the
@@ -2229,6 +2231,9 @@ RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 # Game bypass (one toggle = two flags; legacy name kept for rollback safety)
 GAME_MODE_ENABLED=${saved_GAME_MODE_ENABLED}
 ROBLOX_UDP_BYPASS=${saved_ROBLOX_UDP_BYPASS}
+# Game WARP mode — route game-server ipset through Cloudflare WARP (usque/MASQUE),
+# orthogonal to the desync game mode above; engine is z2k-warp.sh.
+GAME_WARP_ENABLED=${saved_GAME_WARP_ENABLED}
 # Game mode topology:
 #   safe       — positive game_ips.txt ipset + circular rotator (default).
 #   hybrid     — ipset profile first, plus UDP catchall on 1024-65535

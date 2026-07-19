@@ -111,6 +111,7 @@ MENU
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
 [G] Игровой режим (safe/hybrid/aggressive)
+[E] Игровой режим WARP (Cloudflare-туннель для игр, заблоченных по IP)
 [T] Telegram прокси
 [S] Скрипты custom.d
 [P] Веб-панель (дубль меню в браузере)
@@ -125,7 +126,7 @@ MENU
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,G,T,W,S,P,D,I,Y,M,A,C,H]: "
+        printf "Выберите опцию [0-5,U,R,F,G,E,T,W,S,P,D,I,Y,M,A,C,H]: "
         read_input choice
 
         case "$choice" in
@@ -155,6 +156,9 @@ MENU
                 ;;
             g|G)
                 menu_roblox_bypass
+                ;;
+            e|E)
+                menu_game_warp
                 ;;
             t|T)
                 menu_telegram_mtproxy
@@ -1686,6 +1690,61 @@ SUBMENU
             pause
             ;;
     esac
+}
+
+# ==============================================================================
+# ПОДМЕНЮ: ИГРОВОЙ РЕЖИМ WARP
+# ==============================================================================
+# Заворачивает только игровой ipset в туннель Cloudflare WARP (usque/MASQUE по
+# TCP — единственный рабочий транспорт из РФ). Ортогонально десинк-режиму;
+# движок — z2k-warp.sh; флаг GAME_WARP_ENABLED. Без рестарта nfqws2.
+menu_game_warp() {
+    clear_screen
+    print_header "Игровой режим (WARP)"
+    local config_file="${ZAPRET2_DIR}/config"
+    # self-contained flag writer — menu_roblox_bypass ([G]) defines its own nested
+    # _set_flag; do NOT depend on it, since [E] may be the first submenu entered in
+    # a session (otherwise _set_flag is undefined and the toggle silently no-ops).
+    _set_flag() {
+        local key="$1" val="$2"
+        if grep -q "^${key}=" "$config_file"; then
+            sed -i "s/^${key}=.*/${key}=${val}/" "$config_file"
+        else
+            echo "${key}=${val}" >> "$config_file"
+        fi
+    }
+    local cur; cur=$(safe_config_read "GAME_WARP_ENABLED" "$config_file" "0")
+    echo "Заворачивает заблокированные по IP хостинги (игровые серверы + диапазоны"
+    echo "Cloudflare/AWS из списка РКН) в туннель Cloudflare WARP. Внимание: пока"
+    echo "режим включён, часть сайтов на этих хостингах тоже идёт через туннель и"
+    echo "может быть медленнее. Держи выключенным вне игры."
+    echo
+    echo "Текущее состояние: $([ "$cur" = "1" ] && echo "ВКЛючён" || echo "выключен")"
+    [ -r "${ZAPRET2_DIR}/z2k-warp.sh" ] && { printf '  '; sh "${ZAPRET2_DIR}/z2k-warp.sh" status 2>/dev/null; }
+    echo
+    echo "[1] Включить   [0] Выключить   [B] Назад"
+    printf "Выбор: "; read_input sub_choice
+    case "$sub_choice" in
+        1)
+            _set_flag GAME_WARP_ENABLED 1
+            print_info "Поднимаю WARP (регистрация + туннель, ~10с)..."
+            if sh "${ZAPRET2_DIR}/z2k-warp.sh" enable; then
+                print_success "Игровой WARP-режим включён"
+            else
+                _set_flag GAME_WARP_ENABLED 0
+                sh "${ZAPRET2_DIR}/z2k-warp.sh" disable >/dev/null 2>&1
+                print_error "WARP не поднялся (сеть/регистрация) — режим оставлен выключенным"
+            fi
+            ;;
+        0)
+            _set_flag GAME_WARP_ENABLED 0
+            sh "${ZAPRET2_DIR}/z2k-warp.sh" disable >/dev/null 2>&1
+            print_success "Игровой WARP-режим выключен"
+            ;;
+        [Bb]) return 0 ;;
+        *) print_error "Неверный выбор" ;;
+    esac
+    pause
 }
 
 # ==============================================================================

@@ -194,10 +194,11 @@ case "$method $path" in
         tunnel_running=false
         [ -n "$tpid" ] && tunnel_running=true
 
+        game_warp=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_mode":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s"},"game_profile":"%s","tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
-            "${rst_filter:-0}" "${silent_fb:-0}" "${game_mode:-0}" "${customd:-0}" \
+            "${rst_filter:-0}" "${silent_fb:-0}" "${game_mode:-0}" "${game_warp:-0}" "${customd:-0}" \
             "${dynamic_ttl:-1}" "${stats:-1}" "${ppe:-1}" \
             "${game_profile:-flowseal}" \
             "${tunnel_running:-false}"
@@ -234,6 +235,7 @@ case "$method $path" in
     "POST /toggle/rst-filter"|\
     "POST /toggle/silent-fallback"|\
     "POST /toggle/game-mode"|\
+    "POST /toggle/game-warp"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
     "POST /toggle/stats"|\
@@ -249,6 +251,7 @@ case "$method $path" in
             /toggle/rst-filter)      _toggle_fn=toggle_rst_filter;      _label="RST-фильтр" ;;
             /toggle/silent-fallback) _toggle_fn=toggle_silent_fallback; _label="Silent fallback" ;;
             /toggle/game-mode)       _toggle_fn=toggle_game_mode;       _label="Игровой режим" ;;
+            /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="Игровой режим (WARP)" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
             /toggle/stats)           _toggle_fn=toggle_stats;           _label="Сбор статистики" ;;
