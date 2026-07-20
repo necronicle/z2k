@@ -3364,6 +3364,28 @@ step_finalize() {
         fi
     fi
 
+    # WARP game mode: pre-install the usque tunnel engine HERE, during setup, instead of
+    # lazily on the first webpanel/menu toggle. The usque-keenetic package's own postinst
+    # does the whole bring-up (register → NDM OpkgTun interface → opkgtun0 up) in one
+    # uninterrupted pass; running it here — not racing a live toggle plus the minute-
+    # cadence selfheal — is what makes it reliable (the "first enable needs a reboot"
+    # failure was that race). Only for users who have the mode enabled; a brand-new
+    # activation still installs cleanly on first enable (selfheal is route-only now, so
+    # nothing races it). Idempotent — skipped when usque is already installed.
+    if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$ZAPRET2_DIR/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] \
+       && [ -x "$ZAPRET2_DIR/z2k-warp.sh" ]; then
+        if [ -x /opt/etc/init.d/S51usque ]; then
+            print_info "WARP: движок usque уже установлен"
+        else
+            print_info "WARP: устанавливаю движок usque (один раз, при установке)..."
+            if sh "$ZAPRET2_DIR/z2k-warp.sh" ensure >/dev/null 2>&1; then
+                print_success "WARP: движок usque установлен и поднят"
+            else
+                print_warning "WARP: usque не установился сейчас — режим поднимется при первом включении"
+            fi
+        fi
+    fi
+
     # Final cleanup of user-data backup — нужен был на протяжении всей
     # установки (step_install_zapret2 → step_finalize) для webpanel-restore
     # и flag-merge'а; сейчас все потребители отработали, дальше держать

@@ -275,20 +275,31 @@ warp_verify_tunnel() {
 # Re-apply after NDM firewall reload / WAN flap (scheduler + netfilter.d call this).
 warp_selfheal() {
     [ "$(warp_flag)" = "1" ] || return 0
-    warp_usque_running || warp_up || return 1
+    # This minute-cadence tick does NOT perform the FIRST install / first bring-up of the
+    # tunnel — that was the root of the "first enable needs a reboot" failure: the old
+    # opener `warp_usque_running || warp_up` ran warp_up (install + `usque register`)
+    # concurrently with the enable/boot bring-up in the ~60s first-registration window →
+    # two S51usque starts race → interface drift opkgtun0→opkgtun1 + NDM "state: error" →
+    # no address until a reboot. First bring-up is the enable/boot/package's job; that
+    # opener is removed. Everything below runs only AFTER the inet gate (opkgtun0 already
+    # has an address) and only once registered (session.conf), so it can never touch the
+    # first-registration window — it just re-asserts the route and recovers a WEDGE.
     ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' || return 0
     ipset list "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_load
     # Re-assert the split-tunnel BEFORE probing. warp_pbr_up is idempotent; running it
-    # every tick heals an NDM reload / usque-restart that dropped the table-989 route.
-    # It MUST come before warp_healthy — the probe only crosses the tun when the route
-    # is up, so probing first would read a route-drop as a wedged tunnel and needlessly
-    # restart usque.
+    # every tick heals an NDM firewall reload that dropped the table-989 route. It MUST
+    # come before warp_healthy — the probe only crosses the tun when the route is up.
     warp_pbr_up
+    # WEDGE recovery: usque can wedge (process up, opkgtun0 keeps its address, but the
+    # MASQUE session is dead → warp!=on), which blackholes everything routed through the
+    # tun — load-bearing to heal. Gated on session.conf (already registered) so it never
+    # fires in the first-registration window; warp_usque_restart is mkdir-lock serialized
+    # and rate-limited to once / 5 min so a persistent probe failure can't thrash a live
+    # tunnel.
+    [ -s "$USQUE_SESSION" ] || return 0
     if ! warp_healthy; then
         sleep 3
         warp_healthy && return 0
-        # Genuinely wedged (route is up, tunnel still dead). Restart once per 5 min so a
-        # persistent non-tunnel probe failure can't thrash-restart a working tunnel.
         local now last stamp=/tmp/z2k-warp-lastrestart
         now=$(date +%s 2>/dev/null || echo 0)
         last=$(cat "$stamp" 2>/dev/null || echo 0)
@@ -307,9 +318,10 @@ case "$1" in
     enable)   warp_enable ;;
     disable)  warp_disable ;;
     selfheal) warp_selfheal ;;
+    ensure)   warp_up ;;   # install + bring the usque tunnel up (NO route) — used by install.sh to pre-install at z2k setup so the toggle stays route-only
     ipset)    warp_ipset_load ;;
     status)
         echo "flag=$(warp_flag) usque=$(warp_usque_running && echo up || echo down) iface=$WARP_IFACE addr=$(ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1) ipset=$(ipset list "$WARP_IPSET" 2>/dev/null | grep -c '/')"
         ;;
-    *) echo "usage: $0 {enable|disable|selfheal|ipset|status}" >&2; exit 1 ;;
+    *) echo "usage: $0 {enable|disable|selfheal|ensure|ipset|status}" >&2; exit 1 ;;
 esac
