@@ -30,6 +30,7 @@ WARP_IPSET="${WARP_IPSET:-z2k_warp}"            # game-server ipset routed via W
 WARP_LIST="${WARP_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"  # sanitized game CIDRs (shipped + refreshed)
 USQUE_INIT="/opt/etc/init.d/S51usque"
 USQUE_CONF="/opt/etc/usque/usque.conf"
+USQUE_SESSION="/opt/etc/usque/session.conf"   # CF device key; absent = first registration pending
 USQUE_IPK_URL="https://side-effect-tm.github.io/usque-keenetic/all/usque-keenetic_0.3.0_all_entware.ipk"
 
 _wlog() { echo "[z2k-warp] $*" >&2; }
@@ -84,7 +85,11 @@ warp_ensure_usque() {
     return 0
 }
 
-warp_usque_running() { ps w 2>/dev/null | grep -q '[u]sque nativetun'; }
+# "usque busy" — true while the tunnel daemon runs OR a first-time `usque register` is
+# in flight (register carries no inet address, so warp_up's fast path — which also needs
+# an address — is unaffected). selfheal relies on this to NOT spawn a second register
+# during the first-enable window, where the live process is `usque register`, not nativetun.
+warp_usque_running() { ps w 2>/dev/null | grep -qE '[u]sque (nativetun|register)'; }
 
 # poll up to $1 seconds for the WARP interface to carry an IPv4 address
 warp_wait_addr() {
@@ -111,7 +116,7 @@ warp_usque_restart() {
 
 warp_up() {
     warp_ensure_usque || return 1
-    # Already running with an interface address → leave the tunnel alone. We do NOT
+    # Fast path: already up with an interface address → leave it alone. We do NOT
     # health-check here: warp_healthy's probe to cloudflare.com only crosses the tun
     # AFTER warp_pbr_up (cloudflare.com is in the routed ipset), so a check here would
     # always false-fail and trigger needless restarts that destabilise the bring-up
@@ -120,8 +125,38 @@ warp_up() {
     if warp_usque_running && ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet '; then
         return 0
     fi
+    # BRING-UP — mirror the boot path; do NOT stomp usque's own start. At boot S51usque
+    # (S51 < S99zapret2) brings the tunnel up UNDISTURBED, then the boot-time enable just
+    # adds the route via the fast path above — which is exactly why a reboot always fixed
+    # a stuck first enable. The old code instead ran `warp_usque_restart` here on every
+    # attempt, which on a first enable KILLED usque's Cloudflare registration mid-flight
+    # (S51usque runs `usque register` before the daemon, only when session.conf is absent)
+    # → registration never completed except at boot, where nothing interrupts it. So:
+    if [ ! -s "$USQUE_SESSION" ]; then
+        # First-ever registration. NEVER restart (that resets the register from scratch).
+        # Serialize the start under the SAME lock warp_usque_restart uses, so a concurrent
+        # scheduler selfheal (minute cadence, backgrounded) can't fire a SECOND `usque
+        # register` during the wait — the lock-loser just waits for the address. Background
+        # the start so a hung register can't block warp_up (and the synchronous webpanel /
+        # menu caller) past the window, nor leak the lock; an orphaned register still writes
+        # session.conf for the next enable's fast path. Cold MASQUE registration on a
+        # throttled RU line needs far more than 20s, and happens exactly once.
+        if mkdir /tmp/z2k-warp-up.lock 2>/dev/null; then
+            warp_usque_running || "$USQUE_INIT" start >/dev/null 2>&1 &
+            warp_wait_addr 90
+            rmdir /tmp/z2k-warp-up.lock 2>/dev/null
+        else
+            warp_wait_addr 90
+        fi
+        ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' && return 0
+        _wlog "first WARP registration did not finish in 90s (network / Cloudflare)"
+        return 1
+    fi
+    # Already registered (session.conf present) but not up-with-address (usque stopped, or
+    # the NDM interface didn't attach). A clean restart re-attaches the interface fast
+    # (~2s, verified on-router) and is SAFE here — there is no registration to reset.
     warp_usque_restart
-    warp_wait_addr 20 || { _wlog "warp iface $WARP_IFACE has no address"; return 1; }
+    warp_wait_addr 25 || { _wlog "warp iface $WARP_IFACE has no address"; return 1; }
     return 0
 }
 
