@@ -3378,7 +3378,7 @@ step_finalize() {
             print_info "WARP: движок usque уже установлен"
         else
             print_info "WARP: устанавливаю движок usque (один раз, при установке)..."
-            if sh "$ZAPRET2_DIR/z2k-warp.sh" ensure >/dev/null 2>&1; then
+            if sh "$ZAPRET2_DIR/z2k-warp.sh" install >/dev/null 2>&1; then
                 print_success "WARP: движок usque установлен и поднят"
             else
                 print_warning "WARP: usque не установился сейчас — режим поднимется при первом включении"
