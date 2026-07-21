@@ -12,6 +12,13 @@ INIT_SCRIPT="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
 WHITELIST_FILE="${WHITELIST_FILE:-$LISTS_DIR/whitelist.txt}"
 EXTRA_DOMAINS_FILE="${EXTRA_DOMAINS_FILE:-$LISTS_DIR/extra-domains.txt}"
+WARP_SCRIPT="${WARP_SCRIPT:-$ZAPRET2_DIR/z2k-warp.sh}"
+WARP_LISTS_DIR="${WARP_LISTS_DIR:-$LISTS_DIR/warp}"
+# The one auto-managed WARP list: z2k-update-lists.sh refreshes it from the
+# community ru-gaming-blocklist and 3-way-merges user edits against a baseline
+# (.<name>.base). Deleting it drops a tombstone (.<name>.removed) so the
+# refresh won't resurrect it; a fresh save/create clears the tombstone.
+WARP_MANAGED_LIST="${WARP_MANAGED_LIST:-game-warp-ips}"
 
 # --- read helpers (POSIX sh, no sourcing of lib/utils.sh required) ---
 
@@ -490,6 +497,176 @@ extra_domains_delete() {
     rm -f "$tmp"
     chmod 644 "$EXTRA_DOMAINS_FILE" 2>/dev/null || true
     # NB: НЕ рестартим сервис.
+}
+
+# --- WARP lists (webpanel «WARP» section) ---
+# User-owned IPv4/CIDR lists in $WARP_LISTS_DIR — z2k-warp.sh loads ALL *.txt
+# there into the z2k_warp ipset. Same file-writing conventions as whitelist:
+# temp-rewrite preserving the inode, chmod 644, no service restart. After any
+# mutation, if WARP is enabled we rebuild the live ipset (`z2k-warp.sh ipset`,
+# an ipset-restore bulk load — subsecond even for the 18k-entry game list).
+
+warp_name_ok() {
+    # List name (WITHOUT .txt): 1-64 chars of [A-Za-z0-9._-]. The charset
+    # excludes '/', so no path can escape $WARP_LISTS_DIR; leading '.' (hidden
+    # files / "..") and leading '-' (option injection) rejected explicitly.
+    case "$1" in
+        ''|.*|-*) return 1 ;;
+        *[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 64 ]
+}
+
+warp_lists_ensure_dir() {
+    # One-time seed migration lives in z2k-warp.sh (single source of the
+    # "dir existence = migrated" invariant). The fallback must REPLICATE the
+    # seed copy, not just mkdir: an older z2k-warp.sh without the `migrate`
+    # verb exits 1 without creating the dir, and a bare mkdir here would set
+    # the "migrated" marker with the seed list silently lost.
+    [ -d "$WARP_LISTS_DIR" ] && return 0
+    if [ -f "$WARP_SCRIPT" ]; then
+        sh "$WARP_SCRIPT" migrate >/dev/null 2>&1
+        [ -d "$WARP_LISTS_DIR" ] && return 0
+    fi
+    mkdir -p "$WARP_LISTS_DIR" 2>/dev/null || return 1
+    if [ -s "$LISTS_DIR/game-warp-ips.txt" ]; then
+        cp "$LISTS_DIR/game-warp-ips.txt" "$WARP_LISTS_DIR/game-warp-ips.txt" 2>/dev/null
+        # Seed the merge baseline too (mirrors z2k-warp.sh warp_lists_migrate).
+        cp "$LISTS_DIR/game-warp-ips.txt" "$WARP_LISTS_DIR/.game-warp-ips.base" 2>/dev/null
+        chmod 644 "$WARP_LISTS_DIR"/*.txt 2>/dev/null
+    fi
+    return 0
+}
+
+warp_ipset_reload_if_enabled() {
+    # Live-apply list edits: rebuild the ipset only while the feature is ON.
+    # While OFF the set is left alone — enable does a full load anyway.
+    [ "$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")" = "1" ] || return 0
+    [ -f "$WARP_SCRIPT" ] || return 0
+    sh "$WARP_SCRIPT" ipset >/dev/null 2>&1 || true
+}
+
+warp_status_info() {
+    # Stdout-эмиссия для api.sh: "enabled=X|installed=X|tunnel_up=X|addr=X|entries=N"
+    # WARP_IFACE/WARP_IPSET are ENV tunables of z2k-warp.sh (it does not read
+    # the config file) — mirror that here, do not invent a config override.
+    local enabled installed tunnel_up addr entries iface ipset_name
+    enabled=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
+    iface="${WARP_IFACE:-opkgtun0}"
+    ipset_name="${WARP_IPSET:-z2k_warp}"
+    installed=0
+    [ -x /opt/etc/init.d/S51usque ] && installed=1
+    addr=$(ip -o addr show "$iface" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | cut -d' ' -f2)
+    tunnel_up=0
+    [ -n "$addr" ] && tunnel_up=1
+    entries=$(ipset list "$ipset_name" 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')
+    printf 'enabled=%s|installed=%s|tunnel_up=%s|addr=%s|entries=%s\n' \
+        "$enabled" "$installed" "$tunnel_up" "${addr:-}" "${entries:-0}"
+}
+
+warp_lists() {
+    # TSV на stdout: name<TAB>entries<TAB>size<TAB>mtime (name без .txt).
+    warp_lists_ensure_dir
+    local f name entries size mtime
+    for f in "$WARP_LISTS_DIR"/*.txt; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .txt)
+        entries=$(awk '{sub(/\r$/,""); gsub(/^[ \t]+|[ \t]+$/,"")} /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/{n++} END{print n+0}' "$f")
+        size=$(wc -c < "$f" | tr -d ' ')
+        # busybox: date -r (no stat -c), see update_status_string
+        mtime=$(date -r "$f" +%s 2>/dev/null)
+        printf '%s\t%s\t%s\t%s\n' "$name" "${entries:-0}" "${size:-0}" "${mtime:-0}"
+    done
+}
+
+warp_list_save() {
+    # stdin: raw list text (textarea save or .txt import).
+    # $1=name (без .txt), $2=mode replace|append|create (create = replace, но
+    # отказывается затирать существующий файл — защита «нового списка» в UI
+    # от гонки со stale-кэшем имён).
+    # Per-line: trim + strip CR, keep comments (#...) as the user's annotations,
+    # drop empty lines, validate address lines STRICTLY (mirrors the loader in
+    # z2k-warp.sh warp_ipset_load — keep in sync): IPv4/CIDR, octets 0-255
+    # WITHOUT leading zeros (ipset parses 010.1.2.3 as octal 8.1.2.3 and
+    # doesn't parse 08.8.8.8 at all), first octet >= 1, prefix 1-32 (hash:net
+    # rejects /0). One unparseable line aborts a whole `ipset restore` stream,
+    # and v6 entries would silently do nothing (WARP routing has no v6 leg).
+    # Output: "saved=N skipped_invalid=M" (N = valid address lines written).
+    local name="$1" mode="${2:-replace}"
+    warp_name_ok "$name" || { echo "invalid list name" >&2; return 1; }
+    case "$mode" in replace|append|create) ;; *) echo "invalid mode" >&2; return 1 ;; esac
+    warp_lists_ensure_dir
+    [ -d "$WARP_LISTS_DIR" ] || { echo "lists dir unavailable" >&2; return 1; }
+    local file="$WARP_LISTS_DIR/$name.txt"
+    if [ "$mode" = "create" ] && [ -f "$file" ]; then
+        echo "list already exists" >&2; return 1
+    fi
+    # $$-suffixed temps: concurrent CGI saves of the same list must not share
+    # scratch files (lighttpd mod_cgi runs requests in parallel).
+    local raw="$file.z2k-raw.$$" tmp="$file.z2k-new.$$"
+
+    cat > "$raw" || { rm -f "$raw"; echo "read body failed" >&2; return 1; }
+    awk '
+        {
+            sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
+            if ($0 == "") next
+            if ($0 ~ /^#/) { print; next }
+            ok = 0
+            if ($0 ~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) {
+                ip = $0
+                if (split($0, halves, "/") == 2) ip = halves[1]
+                split(ip, o, ".")
+                if (o[1] <= 255 && o[2] <= 255 && o[3] <= 255 && o[4] <= 255) ok = 1
+            }
+            if (ok) print
+        }' "$raw" > "$tmp" || { rm -f "$raw" "$tmp"; echo "sanitize failed" >&2; return 1; }
+
+    local total saved skipped
+    total=$(awk '{sub(/\r$/,""); gsub(/^[ \t]+|[ \t]+$/,"")} $0 != "" && $0 !~ /^#/ {n++} END{print n+0}' "$raw")
+    saved=$(awk '$0 !~ /^#/ && $0 != "" {n++} END{print n+0}' "$tmp")
+    skipped=$((total - saved))
+    rm -f "$raw"
+
+    if [ "$mode" = "append" ]; then
+        touch "$file" 2>/dev/null
+        cat "$tmp" >> "$file" || { rm -f "$tmp"; echo "write failed" >&2; return 1; }
+    else
+        # Rewrite preserving the inode/permissions (never mv a 600-mode temp
+        # over the file — same rule as whitelist_delete).
+        cat "$tmp" > "$file" || { rm -f "$tmp"; echo "write failed" >&2; return 1; }
+    fi
+    rm -f "$tmp"
+    chmod 644 "$file" 2>/dev/null || true
+    # Clear the removal tombstone only AFTER the write succeeded. Doing it
+    # earlier (before the body was even written) meant a save that then failed
+    # — e.g. ENOSPC on /opt — left no list but a cleared tombstone, so the next
+    # refresh resurrected the whole list the user had deleted.
+    [ "$name" = "$WARP_MANAGED_LIST" ] && rm -f "$WARP_LISTS_DIR/.$WARP_MANAGED_LIST.removed" 2>/dev/null
+    warp_ipset_reload_if_enabled
+    printf 'saved=%d skipped_invalid=%d\n' "${saved:-0}" "${skipped:-0}"
+}
+
+warp_list_read_path() {
+    # Валидация имени + печать пути файла (для raw-отдачи в api.sh).
+    local name="$1"
+    warp_name_ok "$name" || { echo "invalid list name" >&2; return 1; }
+    local file="$WARP_LISTS_DIR/$name.txt"
+    [ -f "$file" ] || return 2
+    printf '%s' "$file"
+}
+
+warp_list_delete() {
+    local name="$1"
+    warp_name_ok "$name" || { echo "invalid list name" >&2; return 1; }
+    rm -f "$WARP_LISTS_DIR/$name.txt" || { echo "delete failed" >&2; return 1; }
+    # Deleting the auto-managed game list is a deliberate opt-out: drop the
+    # merge baseline and leave a tombstone so z2k-update-lists.sh does NOT
+    # resurrect it on the next refresh.
+    if [ "$name" = "$WARP_MANAGED_LIST" ]; then
+        rm -f "$WARP_LISTS_DIR/.$WARP_MANAGED_LIST.base" 2>/dev/null
+        : > "$WARP_LISTS_DIR/.$WARP_MANAGED_LIST.removed" 2>/dev/null
+    fi
+    warp_ipset_reload_if_enabled
 }
 
 # --- tunnel (Telegram) ---

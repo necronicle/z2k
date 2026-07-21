@@ -1158,6 +1158,29 @@ step_build_zapret2() {
             cp -f "$ZAPRET2_DIR/lists/extra-domains.txt" "$backup_tmp/extra-domains.txt" || \
                 die "Не удалось сохранить extra-domains в бэкап — установка прервана, чтобы не потерять ваши домены."
         fi
+        # WARP-списки (webpanel раздел «WARP», lists/warp/*.txt) — user-owned
+        # каталог, ничего shipped туда не пишется. Невосстановимый user-data —
+        # backup обязателен. Бэкапим и ПУСТОЙ каталог: его существование —
+        # маркер «миграция выполнена» для z2k-warp.sh (иначе после reinstall'а
+        # пересеется shipped game-список, который юзер намеренно удалил).
+        if [ -d "$ZAPRET2_DIR/lists/warp" ]; then
+            mkdir -p "$backup_tmp/warp-lists" || \
+                die "Не удалось сохранить списки WARP в бэкап — установка прервана, чтобы не потерять ваши списки."
+            for _wl in "$ZAPRET2_DIR/lists/warp/"*.txt; do
+                [ -f "$_wl" ] || continue
+                cp -f "$_wl" "$backup_tmp/warp-lists/" || \
+                    die "Не удалось сохранить списки WARP в бэкап — установка прервана, чтобы не потерять ваши списки."
+            done
+            # Merge baseline + removal tombstone of the auto-managed game list —
+            # preserving them keeps the user's edits/deletion decision across
+            # reinstall (без baseline первый post-reinstall refresh не смог бы
+            # отличить юзерские правки от апстрима). Метаданные, не user-data →
+            # best-effort, не fatal.
+            for _wm in .game-warp-ips.base .game-warp-ips.removed; do
+                [ -f "$ZAPRET2_DIR/lists/warp/$_wm" ] && \
+                    cp -f "$ZAPRET2_DIR/lists/warp/$_wm" "$backup_tmp/warp-lists/$_wm" 2>/dev/null
+            done
+        fi
         # Autocircular state (найденные рабочие стратегии) — recoverable
         # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
         # warn и продолжаем, не блокируя установку ради cache.
@@ -1748,6 +1771,36 @@ step_build_zapret2() {
             print_info "Сохранены пользовательские записи в extra-domains.txt ($(printf '%s\n' "$user_extras" | wc -l | tr -d ' ') строк)"
         fi
     fi
+
+    # WARP-списки (lists/warp/) — восстановление user-owned каталога из бэкапа.
+    # Восстанавливаем сам каталог даже без файлов внутри: его существование —
+    # маркер «миграция выполнена» для z2k-warp.sh (см. warp_lists_migrate),
+    # иначе пересеялся бы shipped game-список, удалённый юзером.
+    if [ -d "$backup_tmp/warp-lists" ]; then
+        mkdir -p "${ZAPRET2_DIR}/lists/warp"
+        local _wl_restored=0
+        for _wl in "$backup_tmp/warp-lists/"*.txt; do
+            [ -f "$_wl" ] || continue
+            # Бэкап был fail-closed (die) — restore не должен терять молча:
+            # неудачный cp здесь означает, что юзерский список НЕ доехал.
+            if cp -f "$_wl" "${ZAPRET2_DIR}/lists/warp/" 2>/dev/null; then
+                _wl_restored=$((_wl_restored + 1))
+            else
+                print_warning "Не удалось восстановить список WARP $(basename "$_wl") — копия осталась в $backup_tmp/warp-lists/"
+            fi
+        done
+        chmod 644 "${ZAPRET2_DIR}/lists/warp/"*.txt 2>/dev/null || true
+        # Restore the merge baseline + tombstone (see backup block above).
+        for _wm in .game-warp-ips.base .game-warp-ips.removed; do
+            [ -f "$backup_tmp/warp-lists/$_wm" ] && \
+                cp -f "$backup_tmp/warp-lists/$_wm" "${ZAPRET2_DIR}/lists/warp/$_wm" 2>/dev/null
+        done
+        [ "$_wl_restored" -gt 0 ] && print_info "Восстановлены списки WARP ($_wl_restored файл(ов))"
+    fi
+    # NB: game-warp-ips.txt (кураторский игровой список) обновлять здесь не
+    # нужно — z2k-update-lists.sh тянет его свежим из medvedeff-true/
+    # ru-gaming-blocklist по расписанию. shipped-снимок в files/lists/ служит
+    # только offline-фолбэком для первого seed'а (warp_lists_migrate).
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then

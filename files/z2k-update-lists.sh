@@ -327,6 +327,113 @@ update_list() {
     return 2  # Код 2 = есть изменения
 }
 
+# WARP game-server list — pulled live from the community-maintained
+# medvedeff-true/ru-gaming-blocklist (upstream auto-refreshes ~every 3h), NOT a
+# frozen shipped snapshot. Fetch the raw combined ipset (ETag-tracked via
+# update_list's HTML/shrink guards), sanitize to strict IPv4/CIDR (WARP routing
+# has no IPv6 leg; one line ipset can't parse aborts the restore — the loader in
+# z2k-warp.sh + the webpanel save use the SAME regex), then 3-WAY-MERGE so the
+# user's own removals AND additions (via the webpanel WARP editor) survive every
+# refresh:
+#     user_removed = base − dest      (upstream lines the user deleted)
+#     user_added   = dest − upstream  (lines the user has that upstream lacks)
+#     new dest     = (upstream − user_removed) ++ user_added   (dedup)
+# Removals are diffed against the .base ANCESTOR (so a brand-new upstream line
+# the user never saw isn't mistaken for a deletion). Additions are diffed
+# against the CURRENT upstream, NOT the baseline — that way a user addition the
+# community list later adopts and then drops is still seen as the user's and
+# doesn't silently vanish. A user who deletes the whole
+# list leaves a tombstone (.removed) so we don't resurrect it. WARP is
+# routing-only, so a change reloads the z2k_warp ipset directly rather than
+# bumping the nfqws2 restart counter. Top-level (not nested in main) so the
+# unit tests can drive it against a stubbed update_list.
+update_warp_game_list() {
+    local url="${Z2K_WARP_LIST_URL:-https://raw.githubusercontent.com/medvedeff-true/ru-gaming-blocklist/main/medvedeff-game-ipset.txt}"
+    local wdir="${ZAPRET2_DIR}/lists/warp"
+    local raw="$wdir/.game-warp-ips.upstream"   # raw upstream (update_list-managed, ETag)
+    local base="$wdir/.game-warp-ips.base"       # last sanitized upstream snapshot (merge baseline)
+    local tomb="$wdir/.game-warp-ips.removed"    # tombstone: user deleted the managed list
+    local dest="$wdir/game-warp-ips.txt"         # live merged list (user-editable)
+    mkdir -p "$wdir" 2>/dev/null
+
+    update_list "warp-game-ips" "$url" "$raw"
+    local rc=$?
+    [ "$rc" = "1" ] && return 1     # fetch failed → touch nothing
+
+    # User deleted the managed list on purpose → do not resurrect it.
+    if [ -f "$tomb" ] && [ ! -f "$dest" ]; then
+        log_msg "warp-game-ips: removed by user (tombstone) — not recreating"
+        return 0
+    fi
+    [ -f "$tomb" ] && rm -f "$tomb"   # list is back → clear stale tombstone
+
+    # Fast path: upstream unchanged AND we already have both files. A live user
+    # edit (dest≠base) needs no merge here — it's already applied and
+    # ipset-reloaded by the webpanel; the merge only matters when upstream
+    # actually changes.
+    [ "$rc" = "0" ] && [ -f "$dest" ] && [ -f "$base" ] && return 0
+
+    local san="$wdir/.game-warp-ips.san"
+    if ! awk '
+            { sub(/\r$/,""); gsub(/^[ \t]+|[ \t]+$/,"") }
+            $0=="" || $0 ~ /^#/ { next }
+            $0 !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/ { next }
+            { ip=$0; if (split($0,h,"/")==2) ip=h[1]; split(ip,o,".")
+              if (o[1]>255||o[2]>255||o[3]>255||o[4]>255) next; print }
+        ' "$raw" > "$san" 2>/dev/null; then
+        rm -f "$san"; log_msg "FAIL: warp-game-ips sanitize error — keeping old"; return 1
+    fi
+    # A sane upstream is thousands of lines. Near-empty = upstream served junk
+    # that slipped past update_list's HTML guard → keep the old list. Override
+    # the floor via Z2K_WARP_MIN (tests use a small upstream).
+    if [ "$(grep -c . "$san" 2>/dev/null)" -lt "${Z2K_WARP_MIN:-100}" ]; then
+        log_msg "FAIL: warp-game-ips sanitized too small — keeping old"
+        rm -f "$san"; return 1
+    fi
+
+    # Establish the baseline if missing (first run, or base lost on a reinstall
+    # that didn't restore it). Using the CURRENT upstream as the baseline makes
+    # the merge a no-op on the existing dest (result==dest) — it preserves
+    # whatever the user has and starts tracking deltas from here. NEVER seed
+    # base from dest: that erases the record of prior upstream lines the user
+    # removed, which the next refresh would re-add.
+    [ -f "$base" ] || cp -f "$san" "$base"
+
+    if [ -f "$dest" ]; then
+        # Set algebra via `grep -vxF -f` — robust to EMPTY operands. (awk's
+        # NR==FNR idiom silently mis-fires when the first file is empty: the
+        # first line of the second file gets NR==FNR true and is mistaken for
+        # the set. That empty-operand case is the COMMON one here — a user who
+        # removed nothing → empty user_removed → the whole upstream would be
+        # eaten, collapsing the list to just the user's additions.)
+        local rmv="$wdir/.game-warp-ips.rm"     # user_removed = base − dest
+        local keep="$wdir/.game-warp-ips.keep"  # upstream − user_removed
+        local add="$wdir/.game-warp-ips.add"    # user_added   = dest − upstream
+        if [ -s "$dest" ]; then grep -vxF -f "$dest" "$base" > "$rmv"  2>/dev/null; else cp -f "$base" "$rmv"; fi
+        if [ -s "$rmv"  ]; then grep -vxF -f "$rmv"  "$san"  > "$keep" 2>/dev/null; else cp -f "$san"  "$keep"; fi
+        # user_added vs the CURRENT upstream ($san), not the baseline — so an
+        # addition upstream later adopts-then-drops still counts as the user's.
+        # $san is always non-empty here (floor guard passed), so no empty-pattern
+        # pitfall; grep prints nothing (rc 1) when the user added nothing.
+        grep -vxF -f "$san" "$dest" > "$add" 2>/dev/null || : > "$add"
+        cat "$keep" "$add" | awk '!seen[$0]++' > "$dest.new"      # dedup, order-stable
+        rm -f "$rmv" "$keep" "$add"
+    else
+        cp -f "$san" "$dest.new"     # first seed (no prior list)
+    fi
+
+    mv -f "$dest.new" "$dest" && cp -f "$san" "$base"
+    chmod 644 "$dest" 2>/dev/null
+    rm -f "$san"
+    log_msg "OK: warp-game-ips merged ($(grep -c . "$dest" 2>/dev/null) entries)"
+    # WARP is routing-only — reload the ipset live if the mode is on.
+    if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] \
+       && [ -x "${ZAPRET2_DIR}/z2k-warp.sh" ]; then
+        sh "${ZAPRET2_DIR}/z2k-warp.sh" ipset >>"$LOG_FILE" 2>&1
+    fi
+    return 0
+}
+
 # ==============================================================================
 # ОСНОВНОЙ ПРОЦЕСС
 # ==============================================================================
@@ -476,6 +583,8 @@ main() {
     update_cf_cidrs_v4
     [ $? -eq 2 ] && changes=$((changes + 1))
 
+    update_warp_game_list
+
     if [ "$changes" -gt 0 ]; then
         log_msg "Changes detected ($changes lists), restarting service..."
         if [ -x "$INIT_SCRIPT" ]; then
@@ -503,4 +612,6 @@ main() {
     log_msg "--- Update lists finished ---"
 }
 
-main "$@"
+# Source-guard: tests set Z2K_UL_SOURCE_ONLY=1 to load the functions
+# (update_warp_game_list etc.) without running the full cron cycle.
+[ -n "${Z2K_UL_SOURCE_ONLY:-}" ] || main "$@"

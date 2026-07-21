@@ -20,12 +20,14 @@
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
 CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
 
-# ---- tunables (config overrides win) -----------------------------------------
+# ---- tunables (environment overrides win; the config file is NOT read here,
+# only GAME_WARP_ENABLED is grepped from it) -----------------------------------
 WARP_IFACE="${WARP_IFACE:-opkgtun0}"            # usque tun interface (package-owned)
 WARP_TABLE="${WARP_TABLE:-989}"                 # dedicated route table
 WARP_MARK="${WARP_MARK:-0x989}"                 # fwmark for the ip rule
 WARP_IPSET="${WARP_IPSET:-z2k_warp}"            # game-server ipset routed via WARP
-WARP_LIST="${WARP_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"
+WARP_LIST="${WARP_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"   # legacy shipped list — now only the migration seed
+WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"      # user-owned lists (webpanel «WARP» section), ALL *.txt loaded
 USQUE_INIT="/opt/etc/init.d/S51usque"
 USQUE_CONF="/opt/etc/usque/usque.conf"
 USQUE_IPK_URL="https://side-effect-tm.github.io/usque-keenetic/all/usque-keenetic_0.3.0_all_entware.ipk"
@@ -80,15 +82,72 @@ warp_install() {
     return 0
 }
 
-# ---- game ipset --------------------------------------------------------------
+# ---- WARP lists (user-owned) -------------------------------------------------
+# All $WARP_LISTS_DIR/*.txt are loaded into the ipset. The dir is user-owned:
+# the webpanel «WARP» section CRUDs files here, install/auto-update never write
+# into it (install.sh backs it up / restores it across reinstall). One-time
+# migration seeds it with a copy of the legacy shipped game list. The EXISTENCE
+# of the dir is the "migrated" marker — do NOT re-seed an existing (even empty)
+# dir, that would resurrect a list the user deliberately deleted.
+warp_lists_migrate() {
+    [ -d "$WARP_LISTS_DIR" ] && return 0
+    mkdir -p "$WARP_LISTS_DIR" || { _wlog "cannot create $WARP_LISTS_DIR"; return 1; }
+    if [ -s "$WARP_LIST" ]; then
+        if cp "$WARP_LIST" "$WARP_LISTS_DIR/game-warp-ips.txt" 2>/dev/null; then
+            # Seed the 3-way-merge baseline too (see z2k-update-lists.sh
+            # update_warp_game_list): the baseline records the last upstream
+            # snapshot, so a user edit made BEFORE the first list refresh is
+            # correctly preserved instead of being wiped by that refresh.
+            cp "$WARP_LIST" "$WARP_LISTS_DIR/.game-warp-ips.base" 2>/dev/null
+            _wlog "migrated $WARP_LIST -> $WARP_LISTS_DIR/game-warp-ips.txt"
+        fi
+    fi
+    chmod 644 "$WARP_LISTS_DIR"/*.txt 2>/dev/null
+    return 0
+}
+
+warp_ipset_count() {
+    ipset list "$WARP_IPSET" 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}'
+}
+
 warp_ipset_load() {
+    warp_lists_migrate
     ipset create "$WARP_IPSET" hash:net family inet 2>/dev/null
-    [ -s "$WARP_LIST" ] || { _wlog "game list $WARP_LIST missing/empty"; return 1; }
-    # restore stream (fast bulk load); list is pre-sanitized at build time
-    { echo "flush $WARP_IPSET"
-      awk '/^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/{print "add '"$WARP_IPSET"' "$0" -exist"}' "$WARP_LIST"
-    } | ipset restore -exist 2>/dev/null
-    _wlog "game ipset loaded: $(ipset list "$WARP_IPSET" 2>/dev/null | grep -c '/') entries"
+    ipset list "$WARP_IPSET" >/dev/null 2>&1 || { _wlog "cannot create ipset $WARP_IPSET"; return 1; }
+    # Lists are user-edited now, so validate STRICTLY (mirrors the webpanel
+    # save-time filter in actions.sh warp_list_save — keep in sync):
+    #   - octets 0-255 with NO leading zeros (ipset parses 010.1.2.3 as OCTAL
+    #     8.1.2.3 — silently wrong address; 08.8.8.8 doesn't parse at all),
+    #   - first octet >= 1, prefix 1-32 (hash:net rejects cidr 0),
+    # because ONE line ipset can't parse aborts the whole restore stream.
+    # Defence in depth for that abort: load into a TEMP set and atomically
+    # `ipset swap` it in — a failed restore then leaves the LIVE set intact
+    # instead of the old flush-first stream that left it empty.
+    # An empty/absent set of lists is a VALID state (user deleted everything):
+    # the set just becomes empty and the PBR marks match nothing.
+    local tmpset="${WARP_IPSET}_new"
+    ipset destroy "$tmpset" 2>/dev/null
+    ipset create "$tmpset" hash:net family inet 2>/dev/null
+    ipset list "$tmpset" >/dev/null 2>&1 || { _wlog "cannot create temp ipset $tmpset"; return 1; }
+    if cat "$WARP_LISTS_DIR"/*.txt 2>/dev/null | awk -v set="$tmpset" '
+        {
+            sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
+            if ($0 !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) next
+            ip = $0
+            if (split($0, halves, "/") == 2) ip = halves[1]
+            split(ip, o, ".")
+            if (o[1] > 255 || o[2] > 255 || o[3] > 255 || o[4] > 255) next
+            print "add " set " " $0 " -exist"
+        }' | ipset restore -exist 2>/dev/null; then
+        ipset swap "$tmpset" "$WARP_IPSET" 2>/dev/null \
+            || { _wlog "ipset swap failed — keeping previous set"; ipset destroy "$tmpset" 2>/dev/null; return 1; }
+        ipset destroy "$tmpset" 2>/dev/null
+        _wlog "warp ipset loaded: $(warp_ipset_count) entries"
+    else
+        _wlog "ipset restore failed — keeping previous set ($(warp_ipset_count) entries)"
+        ipset destroy "$tmpset" 2>/dev/null
+        return 1
+    fi
 }
 
 # ---- policy routing (split-tunnel) — this is the ONLY thing the toggle does --
@@ -162,8 +221,9 @@ case "$1" in
     disable)  warp_disable ;;
     selfheal) warp_selfheal ;;
     ipset)    warp_ipset_load ;;
+    migrate)  warp_lists_migrate ;;
     status)
-        echo "flag=$(warp_flag) iface=$WARP_IFACE addr=$(ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1) ipset=$(ipset list "$WARP_IPSET" 2>/dev/null | grep -c '/')"
+        echo "flag=$(warp_flag) iface=$WARP_IFACE addr=$(ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1) ipset=$(warp_ipset_count)"
         ;;
-    *) echo "usage: $0 {install|enable|disable|selfheal|ipset|status}" >&2; exit 1 ;;
+    *) echo "usage: $0 {install|enable|disable|selfheal|ipset|migrate|status}" >&2; exit 1 ;;
 esac

@@ -108,6 +108,15 @@ read_body() {
     dd bs=1 count="$len" 2>/dev/null
 }
 
+# Like read_body but for BIG raw bodies (list uploads, hundreds of KB):
+# `dd bs=1` is one syscall per byte — seconds on a MIPS router — while
+# `head -c` reads in blocks. Both busybox and coreutils head support -c.
+read_body_raw() {
+    local len="${CONTENT_LENGTH:-0}"
+    [ "$len" -gt 0 ] 2>/dev/null || { echo ""; return 0; }
+    head -c "$len" 2>/dev/null
+}
+
 # Decode x-www-form-urlencoded body or query string into a specific key.
 # Returns the decoded value on stdout. Minimal decoder — only handles %XX.
 form_value() {
@@ -228,7 +237,7 @@ case "$method $path" in
         case "$path" in
             /toggle/rst-filter)      _toggle_fn=toggle_rst_filter;      _label="RST-фильтр" ;;
             /toggle/silent-fallback) _toggle_fn=toggle_silent_fallback; _label="Silent fallback" ;;
-            /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="Игровой режим (WARP)" ;;
+            /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
             /toggle/stats)           _toggle_fn=toggle_stats;           _label="Сбор статистики" ;;
@@ -345,6 +354,96 @@ case "$method $path" in
         else
             extra_domains_delete "$domain" || json_fail "400 Bad Request" "invalid or delete failed"
         fi
+        json_ok
+        ;;
+
+    # ---------- WARP (webpanel «WARP» section) ----------
+    "GET /warp/status")
+        result=$(warp_status_info)
+        w_enabled=$(printf '%s' "$result" | sed -n 's/.*enabled=\([^|]*\).*/\1/p')
+        w_installed=$(printf '%s' "$result" | sed -n 's/.*installed=\([0-9]*\).*/\1/p')
+        w_up=$(printf '%s' "$result" | sed -n 's/.*tunnel_up=\([0-9]*\).*/\1/p')
+        w_addr=$(printf '%s' "$result" | sed -n 's/.*addr=\([^|]*\).*/\1/p')
+        w_entries=$(printf '%s' "$result" | sed -n 's/.*entries=\([0-9]*\).*/\1/p')
+        json_header
+        printf '{"ok":true,"enabled":"%s","installed":%s,"tunnel_up":%s,"addr":' \
+            "${w_enabled:-0}" \
+            "$([ "${w_installed:-0}" = "1" ] && echo true || echo false)" \
+            "$([ "${w_up:-0}" = "1" ] && echo true || echo false)"
+        json_string "${w_addr:-}"
+        printf ',"entries":%s}\n' "${w_entries:-0}"
+        exit 0
+        ;;
+
+    "GET /warp/lists")
+        json_header
+        printf '{"ok":true,"lists":['
+        first=1
+        warp_lists | while IFS="$(printf '\t')" read -r wname wentries wsize wmtime; do
+            [ -z "$wname" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            printf '{"name":'; json_string "$wname"
+            printf ',"entries":%s,"size":%s,"mtime":%s}' \
+                "${wentries:-0}" "${wsize:-0}" "${wmtime:-0}"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+
+    # Raw list content (text/plain, NOT JSON) — feeds both the editor
+    # textarea and the «скачать .txt» export, so no JSON-escape roundtrip
+    # of a 300 KB body on a MIPS CPU.
+    "GET /warp/list")
+        w_name=$(form_value "${QUERY_STRING:-}" "name")
+        [ -z "$w_name" ] && json_fail "400 Bad Request" "name required"
+        w_file=$(warp_list_read_path "$w_name")
+        case $? in
+            0) ;;
+            2) json_fail "404 Not Found" "no such list" ;;
+            *) json_fail "400 Bad Request" "invalid list name" ;;
+        esac
+        printf 'Status: 200 OK\r\n'
+        printf 'Content-Type: text/plain; charset=utf-8\r\n'
+        printf 'Cache-Control: no-store\r\n\r\n'
+        cat "$w_file"
+        exit 0
+        ;;
+
+    # Body — raw list text (textarea save / .txt import), как /whitelist/import.
+    # name & mode идут в QUERY_STRING чтобы не кодировать сотни КБ в urlencoded.
+    "POST /warp/list/save")
+        w_name=$(form_value "${QUERY_STRING:-}" "name")
+        w_mode=$(form_value "${QUERY_STRING:-}" "mode")
+        [ -z "$w_mode" ] && w_mode="replace"
+        [ -z "$w_name" ] && json_fail "400 Bad Request" "name required"
+        # Mirror warp_name_ok: the handler validates too, but fail fast with a
+        # clear 400 before touching the body.
+        case "$w_name" in
+            .*|-*|*[!A-Za-z0-9._-]*) json_fail "400 Bad Request" "invalid list name" ;;
+        esac
+        case "$w_mode" in
+            replace|append|create) ;;
+            *) json_fail "400 Bad Request" "mode must be replace, append or create" ;;
+        esac
+        # lighttpd's own limit is higher; keep a sane cap so a runaway upload
+        # can't fill /opt. 2 MB ≈ 6× the shipped 18k-entry game list.
+        if [ "${CONTENT_LENGTH:-0}" -gt 2097152 ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "list too large (max 2 MB)"
+        fi
+        result=$(read_body_raw | warp_list_save "$w_name" "$w_mode") || \
+            json_fail "400 Bad Request" "save failed"
+        w_saved=$(printf '%s' "$result" | sed -n 's/.*saved=\([0-9]*\).*/\1/p')
+        w_inv=$(printf '%s' "$result" | sed -n 's/.*skipped_invalid=\([0-9]*\).*/\1/p')
+        json_header
+        printf '{"ok":true,"saved":%d,"skipped_invalid":%d}\n' "${w_saved:-0}" "${w_inv:-0}"
+        exit 0
+        ;;
+
+    "POST /warp/list/delete")
+        body=$(read_body)
+        w_name=$(form_value "$body" "name")
+        [ -z "$w_name" ] && json_fail "400 Bad Request" "name required"
+        warp_list_delete "$w_name" || json_fail "400 Bad Request" "invalid or delete failed"
         json_ok
         ;;
 
