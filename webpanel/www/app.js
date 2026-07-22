@@ -95,11 +95,35 @@
     if (!r.ok || !data.ok) throw new Error(data.error || `${r.status}`);
     return data;
   }
+  // GET, отдающий сырой текст (не JSON) — /warp/list. Ошибки бекенд шлёт
+  // JSON'ом с не-200 статусом, поэтому на !ok пробуем вытащить .error.
+  async function apiGetText(path) {
+    const r = await fetch(API + path, { credentials: "same-origin" });
+    if (!r.ok) {
+      let msg = `${r.status} ${r.statusText}`;
+      try { const d = await r.json(); if (d && d.error) msg = d.error; } catch (_) {}
+      throw new Error(msg);
+    }
+    return r.text();
+  }
+  // POST с сырым текстовым телом (как /whitelist/import) — /warp/list/save.
+  async function apiPostText(path, text) {
+    const r = await fetch(API + path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: text,
+    });
+    const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
+    if (!r.ok || !data.ok) throw new Error(data.error || `${r.status}`);
+    return data;
+  }
 
   // ---------- Router ----------
   const routes = {
     dashboard: renderDashboard,
     toggles: renderToggles,
+    warp: renderWarp,
     whitelist: renderWhitelist,
     "extra-domains": renderExtraDomains,
     logs: renderLogs,
@@ -114,6 +138,7 @@
   const ROUTE_TITLES = {
     dashboard:       "Дашборд",
     toggles:         "Режимы",
+    warp:            "WARP",
     whitelist:       "Whitelist",
     "extra-domains": "Доп. домены",
     state:           "Rotator",
@@ -481,7 +506,7 @@
       { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
       { label: "RST фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
       { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
-      { label: "Игровой режим", value: gameModeLabel(s.toggles.game_mode, s.game_profile), kind: s.toggles.game_mode === "1" ? "good" : "" },
+      { label: "WARP", value: bool(s.toggles.game_warp), kind: s.toggles.game_warp === "1" ? "good" : "" },
       { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
     ];
     grid.innerHTML = cells.map(c => {
@@ -530,15 +555,6 @@
   function fmtSvc(s) {
     return { active: "работает", stopped: "остановлен", not_installed: "не установлен" }[s] || s;
   }
-  // Game mode is enabled/disabled via the game-mode toggle, but the
-  // strategy backend (default vs legacy rotator) is selected by the
-  // GAME_PROFILE config var. Surface it in the status cell so support
-  // can see at a glance which backend is active without ssh-ing in.
-  function gameModeLabel(enabled, profile) {
-    if (enabled !== "1") return "Выкл";
-    const prof = (profile === "legacy") ? "legacy" : "стандартный";
-    return "Вкл (" + prof + ")";
-  }
 
   // ---------- Toggles ----------
   const TOGGLE_DEFS = [
@@ -546,8 +562,8 @@
       desc: "Блокирует поддельные TCP RST от ТСПУ через nfqws — 3 эвристики (pre-response RST, multi-RST burst, TTL mismatch). Не требует kernel-модулей. Может задеть редкие edge cases у Cloudflare — отключите если заметили проблемы с reconnect'ом." },
     { key: "silent_fallback", name: "Silent fallback РКН",
       desc: "Детект «тихих чёрных дыр» РКН. Осторожно — возможны ложные срабатывания." },
-    { key: "game_mode", name: "Игровой режим",
-      desc: "TCP/UDP bypass для игровых сервисов (стандартный профиль — single-strategy bypass на игровом ipset). Для отката на старый ротатор: GAME_PROFILE=legacy в /opt/zapret2/config." },
+    // game_warp переехал в собственный раздел «WARP» (renderWarp) вместе с
+    // управлением списками адресов — здесь его больше нет.
     { key: "customd", name: "Скрипты custom.d",
       desc: "Дополнительные daemons из init.d/custom.d (50-stun4all, 50-discord-media)." },
     { key: "dynamic_ttl", name: "Динамический TTL",
@@ -560,7 +576,6 @@
   const TOGGLE_API_NAME = {
     rst_filter: "rst-filter",
     silent_fallback: "silent-fallback",
-    game_mode: "game-mode",
     customd: "customd",
     dynamic_ttl: "dynamic-ttl",
     stats: "stats",
@@ -836,7 +851,7 @@
   // before clearing the indicator so the user sees the restart actually
   // completed and didn't silently die. rst-filter (raw iptables) is the
   // only one that doesn't bounce the daemon.
-  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, game_mode: 1, customd: 1, dynamic_ttl: 1, ppe: 1 };
+  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1 };
 
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");
@@ -848,7 +863,6 @@
     const niceName = {
       rst_filter: "RST-фильтр",
       silent_fallback: "Silent fallback",
-      game_mode: "Игровой режим",
       customd: "custom.d",
       dynamic_ttl: "Динамический TTL",
       stats: "Сбор статистики",
@@ -896,6 +910,363 @@
       await new Promise(r => setTimeout(r, 500));
     }
     return false;
+  }
+
+  // ---------- WARP ----------
+  // Раздел «WARP»: тумблер включения (бывший «Игровой режим (WARP)» со
+  // страницы «Режимы») + пользовательские списки IPv4/CIDR, которые целиком
+  // грузятся в ipset z2k_warp и маршрутизируются через туннель Cloudflare
+  // WARP (usque/MASQUE). Списки — файлы /opt/zapret2/lists/warp/*.txt,
+  // редактируются здесь же (textarea), экспорт/импорт — обычный .txt.
+  let _warpLists = [];  // кэш последнего GET /warp/lists — для проверок имени при создании/импорте
+
+  function warpNameValid(n) {
+    return /^[A-Za-z0-9._-]{1,64}$/.test(n) && !/^[.-]/.test(n);
+  }
+
+  function fmtSize(b) {
+    b = Number(b) || 0;
+    if (b < 1024) return b + " Б";
+    if (b < 1048576) return Math.round(b / 1024) + " КБ";
+    return (b / 1048576).toFixed(1) + " МБ";
+  }
+
+  async function renderWarp() {
+    $app.innerHTML = `
+      <h1 class="page-title">WARP</h1>
+      <div class="card">
+        <div class="toggle-row" data-key="game_warp">
+          <div class="t-text">
+            <div class="t-name">WARP-туннель</div>
+            <div class="t-desc">Заворачивает трафик к адресам из списков ниже в туннель
+              Cloudflare WARP (usque/MASQUE по TCP 443 — работает из РФ, где нативный
+              WireGuard-WARP по UDP режут). Помогает сервисам, заблокированным по IP:
+              игровым серверам, хостингам, диапазонам Cloudflare/AWS из списка РКН.
+              Это не десинк, а туннель — трафик к этим адресам идёт через Cloudflare
+              и может быть медленнее прямого.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" disabled>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="status-grid" id="warp-status-grid">${skeletonBlocks(3)}</div>
+      </div>
+      <div class="card">
+        <h3>Списки адресов</h3>
+        <p class="desc">
+          Каждый список — текстовый файл: один IPv4-адрес или CIDR-подсеть на строку
+          (<code>203.0.113.7</code> или <code>203.0.113.0/24</code>; строки с <code>#</code> —
+          комментарии). Через WARP идёт трафик ко всем адресам из всех списков.
+          <b>Изменения применяются сразу</b>, без перезапуска, и переживают
+          переустановку z2k. Список <code>game-warp-ips</code> автоматически
+          обновляется из общего списка заблокированных игр (ru-gaming-blocklist),
+          но <b>ваши правки в нём сохраняются</b>: удалённые вами адреса не
+          вернутся, добавленные — не пропадут. Не нужен целиком — удалите его,
+          обновление не восстановит.
+        </p>
+        <div class="btn-row" style="margin-bottom:10px">
+          <button class="btn btn-primary" id="warp-new-btn">Новый список</button>
+          <button class="btn" id="warp-import-btn" title="Загрузить список из текстового файла (одна строка — один адрес/CIDR)">Импорт из txt</button>
+          <input type="file" id="warp-import-file" accept=".txt,text/plain" hidden>
+        </div>
+        <ul class="wl-list" id="warp-lists">${skeletonLines(3)}</ul>
+      </div>
+      <div class="card" id="warp-editor-card" hidden>
+        <h3 id="warp-editor-title"></h3>
+        <p class="desc">Один адрес или подсеть на строку. Невалидные строки (в т.ч. IPv6 —
+          туннель ходит только по IPv4) при сохранении отбрасываются, счётчик покажет сколько.</p>
+        <textarea id="warp-editor" class="warp-editor" spellcheck="false"
+                  autocomplete="off" autocapitalize="off" autocorrect="off"
+                  placeholder="203.0.113.0/24"></textarea>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-primary" id="warp-editor-save">Сохранить</button>
+          <button class="btn" id="warp-editor-cancel">Отмена</button>
+        </div>
+      </div>
+    `;
+    const box = $app.querySelector('[data-key="game_warp"] input');
+    box.addEventListener("change", () => warpToggle(box));
+    document.getElementById("warp-new-btn").addEventListener("click", warpNewList);
+    document.getElementById("warp-import-btn").addEventListener("click", () => {
+      document.getElementById("warp-import-file").click();
+    });
+    document.getElementById("warp-import-file").addEventListener("change", warpImport);
+    document.getElementById("warp-editor-save").addEventListener("click", warpEditorSave);
+    document.getElementById("warp-editor-cancel").addEventListener("click", () => {
+      document.getElementById("warp-editor-card").hidden = true;
+    });
+    loadWarpStatus();
+    loadWarpLists();
+    _updateGlobalUILock();
+  }
+
+  async function loadWarpStatus() {
+    const grid = document.getElementById("warp-status-grid");
+    if (!grid) return;
+    let d;
+    try {
+      d = await apiGet("/warp/status");
+    } catch (e) {
+      grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
+      return;
+    }
+    const enabled = d.enabled === "1";
+    const box = $app.querySelector('[data-key="game_warp"] input');
+    if (box) {
+      // Checked-состояние синкаем ВСЕГДА. С disabled аккуратнее: если сейчас
+      // идёт job, свитч залочен _updateGlobalUILock'ом — не раслочиваем его в
+      // обход лока, а поправляем lockBackup, чтобы разлочка после job'а
+      // вернула enabled (шаблон рендерит <input disabled>, и лок иначе
+      // запоминает это исходное disabled как «правильное» состояние).
+      box.checked = enabled;
+      if (_activeJobs.size) {
+        if (box.dataset.lockBackup !== undefined) box.dataset.lockBackup = "0";
+      } else {
+        box.disabled = false;
+      }
+    }
+    const cells = [
+      { label: "Туннель", value: d.tunnel_up ? "работает" + (d.addr ? " · " + d.addr : "") : "не запущен",
+        kind: d.tunnel_up ? "good" : (enabled ? "bad" : "") },
+      { label: "Клиент usque", value: d.installed ? "установлен" : "ставится при первом включении",
+        kind: d.installed ? "good" : "" },
+      { label: "Адресов в маршрутизации", value: enabled ? String(d.entries) : "—",
+        kind: enabled && Number(d.entries) > 0 ? "good" : "" },
+    ];
+    grid.innerHTML = cells.map(c => {
+      const icon = statusIcon(c.kind);
+      return `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${icon ? `<span class="status-ico">${icon}</span>` : ""}${escapeHtml(c.value)}</div></div>`;
+    }).join("");
+  }
+
+  // Аналог toggleClick, но со своим onDone: после переключения обновляем
+  // статус-грид раздела (туннель/ipset), а не дашборд.
+  async function warpToggle(box) {
+    const sw = box.closest(".switch");
+    const wanted = box.checked ? "1" : "0";
+    sw.classList.add("loading");
+    box.disabled = true;
+    let resp;
+    try {
+      resp = await apiPost("/toggle/game-warp", { value: wanted });
+    } catch (e) {
+      box.checked = !box.checked;
+      box.disabled = false;
+      sw.classList.remove("loading");
+      toast("Ошибка: " + e.message, "bad");
+      return;
+    }
+    openJobModal((wanted === "1" ? "Включаю" : "Отключаю") + " WARP-туннель", resp.job, {
+      onDone: (d) => {
+        sw.classList.remove("loading");
+        box.disabled = false;
+        if (d && d.exit !== 0) {
+          box.checked = !box.checked;
+          toast("Не получилось — вернул как было", "bad");
+        } else {
+          toast(wanted === "1" ? "Включено" : "Выключено");
+        }
+        loadWarpStatus();
+      },
+    });
+  }
+
+  async function loadWarpLists() {
+    const list = document.getElementById("warp-lists");
+    if (!list) return;
+    try {
+      const d = await apiGet("/warp/lists");
+      _warpLists = d.lists || [];
+      if (!_warpLists.length) {
+        list.innerHTML = `<li style="color:var(--text-muted)">(нет списков — создайте новый или импортируйте .txt)</li>`;
+        return;
+      }
+      list.innerHTML = _warpLists.map(l => `
+        <li>
+          <span class="warp-item">
+            <span class="warp-item-name">${escapeHtml(l.name)}.txt</span>
+            <span class="warp-item-meta">адресов: ${Number(l.entries) || 0} · ${fmtSize(l.size)}${Number(l.mtime) > 0 ? " · изменён " + humanAgo(Number(l.mtime)) : ""}</span>
+          </span>
+          <span class="warp-item-actions">
+            <button class="btn-icon" title="Редактировать" aria-label="Редактировать ${escapeHtml(l.name)}" data-edit="${escapeHtml(l.name)}">${_icons.edit}</button>
+            <button class="btn-icon" title="Скачать .txt" aria-label="Скачать ${escapeHtml(l.name)}" data-export="${escapeHtml(l.name)}">${_icons.download}</button>
+            <button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(l.name)}" data-del="${escapeHtml(l.name)}">${_icons.close}</button>
+          </span>
+        </li>
+      `).join("");
+      list.querySelectorAll("button[data-edit]").forEach(b => {
+        b.addEventListener("click", () => warpEditOpen(b.dataset.edit));
+      });
+      list.querySelectorAll("button[data-export]").forEach(b => {
+        b.addEventListener("click", () => warpExport(b.dataset.export));
+      });
+      list.querySelectorAll("button[data-del]").forEach(b => {
+        b.addEventListener("click", () => warpDelete(b.dataset.del));
+      });
+    } catch (e) {
+      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+    }
+  }
+
+  async function warpEditOpen(name, prefill) {
+    const card = document.getElementById("warp-editor-card");
+    const ta = document.getElementById("warp-editor");
+    const title = document.getElementById("warp-editor-title");
+    card.dataset.name = name;
+    // «Новый список» сохраняется с mode=create: сервер откажется затирать
+    // существующий файл, даже если локальный кэш имён был неполным.
+    card.dataset.mode = prefill !== undefined ? "create" : "replace";
+    if (prefill !== undefined) {
+      title.textContent = "Новый список: " + name + ".txt";
+      ta.value = prefill;
+    } else {
+      title.textContent = "Редактирование: " + name + ".txt";
+      ta.value = "";
+      card.hidden = false;
+      let text;
+      try {
+        text = await apiGetText("/warp/list?name=" + encodeURIComponent(name));
+      } catch (e) {
+        toast("Не удалось загрузить список: " + e.message, "bad");
+        if (card.dataset.name === name) card.hidden = true;
+        return;
+      }
+      // Пока грузили, юзер мог открыть другой список — не подкладываем
+      // чужой контент в его редактор (сохранение перезаписало бы список).
+      if (card.dataset.name !== name) return;
+      ta.value = text;
+    }
+    card.hidden = false;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    ta.focus();
+  }
+
+  async function warpEditorSave() {
+    const card = document.getElementById("warp-editor-card");
+    const name = card.dataset.name;
+    const mode = card.dataset.mode === "create" ? "create" : "replace";
+    if (!warpNameValid(name)) { toast("Некорректное имя списка", "bad"); return; }
+    const btn = document.getElementById("warp-editor-save");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const d = await apiPostText("/warp/list/save?name=" + encodeURIComponent(name) + "&mode=" + mode,
+        document.getElementById("warp-editor").value);
+      let msg = "Сохранено, адресов: " + d.saved;
+      if (d.skipped_invalid > 0) msg += " (отброшено невалидных строк: " + d.skipped_invalid + ")";
+      toast(msg);
+      card.hidden = true;
+      loadWarpLists();
+      loadWarpStatus();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Освежить кэш имён перед проверкой на дубликат: со stale/пустым кэшем
+  // (например, первый GET /warp/lists упал) «новый список» мог бы молча
+  // открыть пустой редактор поверх существующего файла. Сервер всё равно
+  // подстрахует (mode=create), но лучше поймать до открытия редактора.
+  async function warpRefreshNames() {
+    try {
+      const d = await apiGet("/warp/lists");
+      _warpLists = d.lists || [];
+    } catch (_) { /* сеть лежит — доверимся серверному mode=create */ }
+  }
+
+  async function warpNewList() {
+    let name = prompt("Имя нового списка (латиница/цифры/точка/дефис/подчёркивание):", "");
+    if (name === null) return;
+    name = name.trim().replace(/\.txt$/i, "");
+    if (!warpNameValid(name)) {
+      toast("Имя: 1–64 символа [A-Za-z0-9._-], не с точки/дефиса", "bad");
+      return;
+    }
+    await warpRefreshNames();
+    if (_warpLists.some(l => l.name === name)) {
+      toast("Список уже существует — открываю его");
+      warpEditOpen(name);
+      return;
+    }
+    warpEditOpen(name, "");
+  }
+
+  async function warpImport(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // allow re-select same file
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast("Файл слишком большой (>2 МБ)", "bad");
+      return;
+    }
+    let text;
+    try { text = await file.text(); }
+    catch (err) { toast("Не удалось прочитать файл: " + err.message, "bad"); return; }
+    const suggested = (file.name.replace(/\.txt$/i, "").replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[.-]+/, "") || "list").slice(0, 64);
+    let name = prompt("Имя списка для импорта:", suggested);
+    if (name === null) return;
+    name = name.trim().replace(/\.txt$/i, "");
+    if (!warpNameValid(name)) {
+      toast("Имя: 1–64 символа [A-Za-z0-9._-], не с точки/дефиса", "bad");
+      return;
+    }
+    await warpRefreshNames();
+    const exists = _warpLists.some(l => l.name === name);
+    if (exists &&
+        !confirm(`Список «${name}.txt» уже существует.\n\nЗаменить его содержимое импортируемым файлом?`)) {
+      return;
+    }
+    const btn = document.getElementById("warp-import-btn");
+    if (btn) btn.disabled = true;
+    try {
+      // Незатронутое существование подтверждено свежим списком: replace только
+      // после явного confirm, иначе create (сервер откажет, если имя заняли).
+      const mode = exists ? "replace" : "create";
+      const d = await apiPostText("/warp/list/save?name=" + encodeURIComponent(name) + "&mode=" + mode, text);
+      let msg = "Импортировано адресов: " + d.saved;
+      if (d.skipped_invalid > 0) msg += " (невалидных строк: " + d.skipped_invalid + ")";
+      toast(msg);
+      loadWarpLists();
+      loadWarpStatus();
+    } catch (err) {
+      toast("Ошибка импорта: " + err.message, "bad");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function warpExport(name) {
+    try {
+      const text = await apiGetText("/warp/list?name=" + encodeURIComponent(name));
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name + ".txt";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      toast("Ошибка экспорта: " + e.message, "bad");
+    }
+  }
+
+  async function warpDelete(name) {
+    if (!confirm(`Удалить список «${name}.txt»?\n\nАдреса из него сразу перестанут ходить через WARP.`)) return;
+    try {
+      await apiPost("/warp/list/delete", { name });
+      toast("Удалено");
+      const card = document.getElementById("warp-editor-card");
+      if (card && card.dataset.name === name) card.hidden = true;
+      loadWarpLists();
+      loadWarpStatus();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
   }
 
   // ---------- Whitelist ----------
@@ -1786,6 +2157,9 @@
   // class="icon" + .icon-sm modifier для 12px inline-в-pill контекстов.
   const _icons = {
     close:        '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+    // Lucide pencil / download (MIT) — WARP list row actions.
+    edit:         '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
+    download:     '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
     chevronDown:  '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>',
     arrowUp:      '<svg class="icon icon-sm" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg>',
     arrowDown:    '<svg class="icon icon-sm" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>',

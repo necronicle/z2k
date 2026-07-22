@@ -936,6 +936,59 @@ input[type=text]:focus, input[type=password]:focus {
   letter-spacing: 0.02em;
 }
 
+/* ---------- WARP SECTION ---------- */
+/* The status grid sits under the toggle-row's border-bottom (the toggle→status
+   divider). The shared .toggle-row has padding:12px 0 above that border but the
+   grid has no margin below it → cramped. Add breathing room, scoped so the
+   dashboard/toggles grids are untouched. Also override the shared .status-grid
+   column rule (repeat(4,1fr) at ≥1024px) — this card has exactly 3 cells, so a
+   4-col track left an empty slot. auto-fit spreads the 3 cells edge-to-edge on
+   wide screens and wraps cleanly on narrow ones. */
+#warp-status-grid {
+  margin-top: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+/* ---------- WARP LISTS ---------- */
+/* Row content in the lists <ul>: name on top, muted meta underneath. Action
+   buttons reuse the .wl-list li button treatment. */
+.warp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.warp-item-name { word-break: break-all; }
+.warp-item-meta {
+  font-family: var(--font-sans, inherit);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.warp-item-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+textarea.warp-editor {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  white-space: pre;
+}
+textarea.warp-editor:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
 /* ---------- LOG VIEWER ---------- */
 pre.log {
   background: var(--log-bg);

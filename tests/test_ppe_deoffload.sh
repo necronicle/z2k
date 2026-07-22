@@ -117,35 +117,6 @@ assert_hasnt  "no udp rules when QUIC disabled"             "$CALLS" 'udp --dpor
 if z2k_ppe_quic_enabled; then TESTS_PASSED=$((TESTS_PASSED+1)); printf "[PASS] quic default enabled when flag absent\n"
 else TESTS_FAILED=$((TESTS_FAILED+1)); printf "[FAIL] quic should default enabled\n"; fi
 
-# ---- game sub-gate: GAME_MODE_ENABLED=1 -> adds game UDP de-offload ----
-printf 'GAME_MODE_ENABLED=1\n' > "$PPE_CONFIG_FILE"
-if z2k_ppe_game_enabled; then TESTS_PASSED=$((TESTS_PASSED+1)); printf "[PASS] game_enabled true on GAME_MODE_ENABLED=1\n"
-else TESTS_FAILED=$((TESTS_FAILED+1)); printf "[FAIL] game_enabled should be true on GAME_MODE_ENABLED=1\n"; fi
-: > "$CALLS"
-z2k_ppe_ensure_rules >/dev/null 2>&1
-assert_has  "game v4 FORWARD multiport game-ports connskip -j PPE"    "$CALLS" \
-    'v4 .*-t mangle -I FORWARD -p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j PPE'
-assert_has  "game v4 PREROUTING game-ports connskip -j PPE"           "$CALLS" \
-    'v4 .*-t mangle -I PREROUTING -p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j PPE'
-assert_has  "game v6 rule too (best-effort)"                          "$CALLS" \
-    'v6 .*-t mangle -I FORWARD -p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j PPE'
-assert_has  "baseline tcp still inserted with game on"                "$CALLS" 'mangle -I FORWARD -p tcp -m multiport'
-
-# game OFF (flag absent) -> no game INSERT, baseline intact (else-branch only -C/-D probes)
-: > "$PPE_CONFIG_FILE"
-if z2k_ppe_game_enabled; then TESTS_FAILED=$((TESTS_FAILED+1)); printf "[FAIL] game_enabled should be false when flag absent\n"
-else TESTS_PASSED=$((TESTS_PASSED+1)); printf "[PASS] game_enabled false when flag absent\n"; fi
-: > "$CALLS"
-z2k_ppe_ensure_rules >/dev/null 2>&1
-assert_hasnt "no game-port INSERT when game mode off"                 "$CALLS" '-I .*--dports 1024:2407,2409:65535'
-assert_has   "baseline tcp still inserted with game off"              "$CALLS" 'mangle -I FORWARD -p tcp -m multiport'
-
-# remove_rules also drops the game rules
-: > "$CALLS"; rm -rf "$DEL"; mkdir -p "$DEL"; REMOVE=1
-z2k_ppe_remove_rules >/dev/null 2>&1
-assert_has "remove drops v4 game FORWARD"    "$CALLS" 'v4 .*-t mangle -D FORWARD -p udp -m multiport --dports 1024:2407,2409:65535 .* -j PPE'
-assert_has "remove drops v4 game PREROUTING" "$CALLS" 'v4 .*-t mangle -D PREROUTING -p udp -m multiport --dports 1024:2407,2409:65535 .* -j PPE'
-unset REMOVE
 
 # target unavailable -> ensure no-ops
 z2k_ppe_available() { return 1; }

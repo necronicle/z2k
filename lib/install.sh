@@ -1158,6 +1158,29 @@ step_build_zapret2() {
             cp -f "$ZAPRET2_DIR/lists/extra-domains.txt" "$backup_tmp/extra-domains.txt" || \
                 die "Не удалось сохранить extra-domains в бэкап — установка прервана, чтобы не потерять ваши домены."
         fi
+        # WARP-списки (webpanel раздел «WARP», lists/warp/*.txt) — user-owned
+        # каталог, ничего shipped туда не пишется. Невосстановимый user-data —
+        # backup обязателен. Бэкапим и ПУСТОЙ каталог: его существование —
+        # маркер «миграция выполнена» для z2k-warp.sh (иначе после reinstall'а
+        # пересеется shipped game-список, который юзер намеренно удалил).
+        if [ -d "$ZAPRET2_DIR/lists/warp" ]; then
+            mkdir -p "$backup_tmp/warp-lists" || \
+                die "Не удалось сохранить списки WARP в бэкап — установка прервана, чтобы не потерять ваши списки."
+            for _wl in "$ZAPRET2_DIR/lists/warp/"*.txt; do
+                [ -f "$_wl" ] || continue
+                cp -f "$_wl" "$backup_tmp/warp-lists/" || \
+                    die "Не удалось сохранить списки WARP в бэкап — установка прервана, чтобы не потерять ваши списки."
+            done
+            # Merge baseline + removal tombstone of the auto-managed game list —
+            # preserving them keeps the user's edits/deletion decision across
+            # reinstall (без baseline первый post-reinstall refresh не смог бы
+            # отличить юзерские правки от апстрима). Метаданные, не user-data →
+            # best-effort, не fatal.
+            for _wm in .game-warp-ips.base .game-warp-ips.removed; do
+                [ -f "$ZAPRET2_DIR/lists/warp/$_wm" ] && \
+                    cp -f "$ZAPRET2_DIR/lists/warp/$_wm" "$backup_tmp/warp-lists/$_wm" 2>/dev/null
+            done
+        fi
         # Autocircular state (найденные рабочие стратегии) — recoverable
         # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
         # warn и продолжаем, не блокируя установку ради cache.
@@ -1573,7 +1596,7 @@ step_build_zapret2() {
     # detection stack). Replaced by the server_active_reject taxonomy in z2k-detectors.lua.
     # z2k-healthcheck.sh removed in r-60 — its per-strategy pass/fail check
     # false-negatives mid-rotation; z2k-diag.sh is the supported diagnostic.
-    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh; do
+    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh z2k-warp.sh; do
         if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
             cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
             chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
@@ -1715,7 +1738,7 @@ step_build_zapret2() {
     # never reads, and Hot verdicts would silently fail to activate bypass.
     [ -e "${ZAPRET2_DIR}/lists/discovered-domains.txt" ] || \
         : > "${ZAPRET2_DIR}/lists/discovered-domains.txt"
-    for iplist in game_ips.txt roblox_ips.txt telegram_ips.txt ipset-exclude.txt flowseal_game_ips.txt cf_extra_check_ips.txt rkn-false-positive.txt; do
+    for iplist in telegram_ips.txt ipset-exclude.txt game-warp-ips.txt cf_extra_check_ips.txt rkn-false-positive.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
@@ -1748,6 +1771,36 @@ step_build_zapret2() {
             print_info "Сохранены пользовательские записи в extra-domains.txt ($(printf '%s\n' "$user_extras" | wc -l | tr -d ' ') строк)"
         fi
     fi
+
+    # WARP-списки (lists/warp/) — восстановление user-owned каталога из бэкапа.
+    # Восстанавливаем сам каталог даже без файлов внутри: его существование —
+    # маркер «миграция выполнена» для z2k-warp.sh (см. warp_lists_migrate),
+    # иначе пересеялся бы shipped game-список, удалённый юзером.
+    if [ -d "$backup_tmp/warp-lists" ]; then
+        mkdir -p "${ZAPRET2_DIR}/lists/warp"
+        local _wl_restored=0
+        for _wl in "$backup_tmp/warp-lists/"*.txt; do
+            [ -f "$_wl" ] || continue
+            # Бэкап был fail-closed (die) — restore не должен терять молча:
+            # неудачный cp здесь означает, что юзерский список НЕ доехал.
+            if cp -f "$_wl" "${ZAPRET2_DIR}/lists/warp/" 2>/dev/null; then
+                _wl_restored=$((_wl_restored + 1))
+            else
+                print_warning "Не удалось восстановить список WARP $(basename "$_wl") — копия осталась в $backup_tmp/warp-lists/"
+            fi
+        done
+        chmod 644 "${ZAPRET2_DIR}/lists/warp/"*.txt 2>/dev/null || true
+        # Restore the merge baseline + tombstone (see backup block above).
+        for _wm in .game-warp-ips.base .game-warp-ips.removed; do
+            [ -f "$backup_tmp/warp-lists/$_wm" ] && \
+                cp -f "$backup_tmp/warp-lists/$_wm" "${ZAPRET2_DIR}/lists/warp/$_wm" 2>/dev/null
+        done
+        [ "$_wl_restored" -gt 0 ] && print_info "Восстановлены списки WARP ($_wl_restored файл(ов))"
+    fi
+    # NB: game-warp-ips.txt (кураторский игровой список) обновлять здесь не
+    # нужно — z2k-update-lists.sh тянет его свежим из medvedeff-true/
+    # ru-gaming-blocklist по расписанию. shipped-снимок в files/lists/ служит
+    # только offline-фолбэком для первого seed'а (warp_lists_migrate).
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then
@@ -1814,18 +1867,17 @@ step_build_zapret2() {
             if [ "$Z2K_AUTO_UPDATE" = "1" ]; then
                 local _flag_backup="$backup_tmp/feature-flags.txt"
                 # Preserve both Z2K_* feature flags and the non-Z2K_ user-
-                # settable knobs (game mode style, RST filter, RKN silent
-                # fallback, Keenetic policy integration, TG-tunnel disable
-                # marker). Раньше regex был только `^Z2K_[A-Z0-9_]+=`,
-                # из-за чего GAME_MODE_ENABLED/STYLE, DROP_DPI_RST,
-                # POLICY_NAME/EXCLUDE и т.д. слетали при auto-update
-                # reinstall'е (юзерский игровой режим тихо отключался,
-                # selected NDM policy сбрасывалась на дефолт «nfqws»).
+                # settable knobs (RST filter, RKN silent fallback, WARP game
+                # mode, Keenetic policy integration, TG-tunnel disable marker).
+                # Раньше regex был только `^Z2K_[A-Z0-9_]+=`, из-за чего
+                # DROP_DPI_RST, POLICY_NAME/EXCLUDE и т.д. слетали при
+                # auto-update reinstall'е (selected NDM policy сбрасывалась
+                # на дефолт «nfqws»).
                 # Список явный — shipped config_official.sh пишет эти
                 # же ключи через ${saved_*}, без них create_official_config
                 # вернётся к дефолтам. Если добавляешь новый non-Z2K_
                 # user flag в config_official.sh — добавь его и сюда.
-                grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+                grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
                 if [ -s "$_flag_backup" ] && [ -f "$ZAPRET2_DIR/config" ]; then
                     local _line _flag_name _escaped _applied=0
                     while IFS= read -r _line; do
@@ -2644,7 +2696,7 @@ step_finalize() {
     local backup_tmp_early="/opt/z2k-upgrade-backup"
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
         if [ -s "$_flag_backup_early" ]; then
             local _line_early _flag_name_early _escaped_early _applied_early=0
             while IFS= read -r _line_early; do
@@ -2850,12 +2902,17 @@ step_finalize() {
         # through the 1-CPU VPS; an image-heavy TM page (~120 s1.ticketm.net + ~48
         # prismic in parallel) then CHOKED the relay → ~half the images failed. They
         # must load direct from Fastly. See project_whatsapp_ip_block (2026-06-08).
-        local relay_hosts="whatsapp.com www.whatsapp.com web.whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com"
+        local relay_hosts="whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com"
         # CDN/asset hosts r-51/r-52 wrongly pinned — un-pin so they go DIRECT (Fastly).
-        local relay_unpin="static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
+        # Un-pin (→ go DIRECT): TM CDN/asset hosts (Fastly, not geo-blocked) + the
+        # WhatsApp WEB client (web/www.whatsapp.com). Web dropped: RU now SNI-blocks
+        # web.whatsapp.com, so the VPS SNI-passthrough can't carry it (and the web
+        # client also needs unpinnable dynamic subdomains). Mobile app endpoints
+        # (g/mmg/static/…whatsapp.net) below stay relayed and keep working.
+        local relay_unpin="web.whatsapp.com www.whatsapp.com static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
         # Run when a CDN pin still lingers (old install → migrate) OR the app isn't
         # pinned yet (fresh install). Idempotent; skips on an already-migrated box.
-        if LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host (prismic-images.tmol.io|s1.ticketm.net) $relay_vps" \
+        if LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host (prismic-images.tmol.io|s1.ticketm.net|web.whatsapp.com|www.whatsapp.com) $relay_vps" \
            || ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host www.ticketmaster.com $relay_vps"; then
             print_info "Настройка релея WhatsApp/Ticketmaster (app → VPS, CDN-картинки напрямую)..."
             local _u _uold _rh _rold
@@ -3311,7 +3368,7 @@ step_finalize() {
     # — re-running is a no-op when nothing changed.
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup="$backup_tmp/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_MODE_ENABLED|GAME_MODE_STYLE|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|ROBLOX_UDP_BYPASS|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
         if [ -s "$_flag_backup" ]; then
             local _line _flag_name _escaped _applied=0
             while IFS= read -r _line; do
@@ -3357,6 +3414,28 @@ step_finalize() {
             fi
         else
             print_warning "$_wp_src отсутствует — webpanel надо переустановить вручную через меню [P]"
+        fi
+    fi
+
+    # WARP game mode: pre-install the usque tunnel engine HERE, during setup, instead of
+    # lazily on the first webpanel/menu toggle. The usque-keenetic package's own postinst
+    # does the whole bring-up (register → NDM OpkgTun interface → opkgtun0 up) in one
+    # uninterrupted pass; running it here — not racing a live toggle plus the minute-
+    # cadence selfheal — is what makes it reliable (the "first enable needs a reboot"
+    # failure was that race). Only for users who have the mode enabled; a brand-new
+    # activation still installs cleanly on first enable (selfheal is route-only now, so
+    # nothing races it). Idempotent — skipped when usque is already installed.
+    if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$ZAPRET2_DIR/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] \
+       && [ -x "$ZAPRET2_DIR/z2k-warp.sh" ]; then
+        if [ -x /opt/etc/init.d/S51usque ]; then
+            print_info "WARP: движок usque уже установлен"
+        else
+            print_info "WARP: устанавливаю движок usque (один раз, при установке)..."
+            if sh "$ZAPRET2_DIR/z2k-warp.sh" install >/dev/null 2>&1; then
+                print_success "WARP: движок usque установлен и поднят"
+            else
+                print_warning "WARP: usque не установился сейчас — режим поднимется при первом включении"
+            fi
         fi
     fi
 
@@ -3900,6 +3979,17 @@ uninstall_zapret2() {
             iptables -w -t nat -D "$tg_chain" -p tcp --dport 443 -m set --match-set z2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || break
         done
     done
+    # Symmetric v6 fast-reject cleanup: drop the ip6tables REJECT rules that
+    # reference z2k_tg_dc6, otherwise the generic z2k ipset destroy below fails
+    # with "set in use" and leaves a stale set + rules behind after uninstall.
+    if command -v ip6tables >/dev/null 2>&1; then
+        local tg_chain6
+        for tg_chain6 in FORWARD OUTPUT; do
+            while ip6tables -w -C "$tg_chain6" -p tcp -m set --match-set z2k_tg_dc6 dst -j REJECT --reject-with tcp-reset 2>/dev/null; do
+                ip6tables -w -D "$tg_chain6" -p tcp -m set --match-set z2k_tg_dc6 dst -j REJECT --reject-with tcp-reset 2>/dev/null || break
+            done
+        done
+    fi
     # Drop legacy per-CIDR REDIRECT rules (pre-ipset builds) in case the init
     # script stop path missed some or was already gone.
     local tg_cidr

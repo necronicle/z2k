@@ -21,6 +21,10 @@ cdnbase.com
 cloudflare.com
 cloudflare.net
 cloudflare.tv
+# usque/WARP: регистрация клиента идёт на api.cloudflareclient.com; РКН душит этот
+# TLS-хендшейк → usque не создаёт session.conf → "туннель не запущен". Десинкаем,
+# чтобы enroll прошёл (router-origin трафик z2k покрывает POSTROUTING + bind-fix).
+cloudflareclient.com
 cloudflarepartners.com
 cloudflarestatus.com
 dnsleaktest.com
