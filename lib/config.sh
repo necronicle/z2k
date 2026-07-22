@@ -634,6 +634,13 @@ psremoteplay.com
 playstationcloud.com
 sonyentertainmentnetwork.com
 
+# === Nintendo (Switch: обновления, eShop-коннект, проверка сети) ===
+# В списке РКН, но десинк ломает соединение — исключаем как остальные консоли.
+nintendo.net
+nintendowifi.net
+nintendo.com
+nintendo.co.jp
+
 # === Twitch ===
 twitch.tv
 ttvnw.net
@@ -753,6 +760,20 @@ netcraze.cloud
 netcraze.link
 NETCRAZE
             print_info "Добавлены домены Netcraze в whitelist"
+        fi
+
+        # Дозаписать Nintendo (в списке РКН, но десинк ломает соединение Switch —
+        # обновления/eShop/проверку сети; исключаем как Steam/PS/Epic).
+        if ! grep -q "^nintendo\.net$" "$whitelist" 2>/dev/null; then
+            cat >> "$whitelist" <<'NINTENDO'
+
+# === Nintendo (Switch: обновления, eShop-коннект, проверка сети) ===
+nintendo.net
+nintendowifi.net
+nintendo.com
+nintendo.co.jp
+NINTENDO
+            print_info "Добавлены домены Nintendo в whitelist"
         fi
 
         # Дозаписать банки и расширения для российских сервисов (flowseal 1.9.8 sync)
