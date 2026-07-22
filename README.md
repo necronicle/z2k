@@ -1,4 +1,4 @@
-# z2k v2.0.1 — Zapret2 для Keenetic
+# z2k — Zapret2 для Keenetic
 
 **Telegram-группа: [@zapret2keenetic](https://t.me/zapret2keenetic)** — вопросы, помощь с настройкой, обсуждение
 
@@ -46,20 +46,17 @@ z2k — модульный установщик zapret2 для роутеров 
   - UDP voice/video: `circular` с `allow_nohost` — стратегия закрепляется через autocircular `state.tsv` после первого успеха (рабочая стратегия удерживается между restart'ами)
 - ECH (Encrypted Client Hello) detection — автоматический пропуск desync когда SNI зашифрован
 - Hostlist режим: стратегии применяются только к доменам из списков
-- Whitelist: домены-исключения (госуслуги, Steam, VK, Яндекс и др.) не обрабатываются
+- Whitelist: домены-исключения (госуслуги, банки, Steam / PlayStation / Nintendo / Epic, VK, Яндекс и др.) не обрабатываются — к ним desync не применяется
 
 ### Сеть и прокси
 
 - **Telegram** — прозрачная работа для всех устройств в сети, без настройки на клиентах
 - **IPv6** — полная поддержка: dual-stack DNS, IPv6 SO_ORIGINAL_DST, Telegram DC IPv6 CIDR
-- **Игровой режим** — обход игрового трафика, scoped по игровому ipset (~31K CIDR, обновляется ежедневно). Два профиля:
-  - `стандартный` (по умолчанию) — TCP TLS rotator (6 стратегий) + TCP non-TLS + UDP fake (dbankcloud QUIC); проверено на широком каталоге игр (Apex/Tarkov/Darktide и др.)
-  - `legacy` — старый 13-стратный UDP-rotator с режимами `safe / hybrid / aggressive`; эмпирически работает только на Roblox, оставлен как rollback
+- **Игровой режим (WARP)** — игры, заблокированные по IP (не по домену), обходятся через split-туннель Cloudflare WARP; списки игровых IP/CIDR редактируются в вебморде. Подробнее — раздел [«Игровой режим (WARP)»](#игровой-режим-warp) ниже.
 
 ### Инструменты и мониторинг
 
 - **Веб-панель** — мониторинг через браузер (CGI): статус сервиса, стратегии, логи
-- **Health check** — автоматическая проверка доступности сервисов (YouTube, Discord, RKN)
 - **Config validator** — валидация конфигурации перед применением (порты, hostlist-файлы, blob-файлы, lua-desync)
 - **Rollback** — откат конфигурации к предыдущему snapshot с авто-таймером
 - **Auto updater** — автоматическое обновление списков доменов по cron
@@ -123,7 +120,7 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 | **[W]** | Whitelist — управление списком исключений |
 | **[R]** | RST-фильтр — фильтрация аномальных TCP RST |
 | **[F]** | Silent fallback для РКН (осторожно — возможны поломки) |
-| **[G]** | Игровой режим (стандартный / legacy для Roblox) |
+| **[E]** | Игровой режим WARP (Cloudflare-туннель для игр, заблоченных по IP) |
 | **[T]** | Telegram прокси |
 | **[S]** | Скрипты custom.d |
 | **[P]** | Веб-панель |
@@ -133,6 +130,7 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 | **[M]** | Динамический TTL для fake-пакетов — выключить для мобильных операторов |
 | **[A]** | Политика доступа Keenetic — фильтр устройств по NDM-политике (PBR) |
 | **[C]** | Сбор статистики стратегий (анонимно) |
+| **[H]** | Аппаратный offload — per-flow исключение (нативная ротация на Keenetic) |
 
 ---
 
@@ -188,7 +186,6 @@ z2k <команда>
 | `update`, `u` | Обновить z2k до последней версии |
 | `rollback` | Откатить конфигурацию к snapshot |
 | `snapshot` | Создать snapshot конфигурации |
-| `healthcheck`, `hc` | Проверить доступность сервисов |
 | `validate` | Валидация текущей конфигурации |
 | `cleanup` | Очистить старые бэкапы (оставить 5) |
 | `version`, `v` | Показать версию |
@@ -235,13 +232,7 @@ z2k <команда>
 
 После установки панель доступна в локальной сети по адресу `http://ROUTER_IP:8088/` (порт 8088, без авторизации).
 
-Панель показывает:
-- Статус сервиса (PID, uptime)
-- Текущие стратегии по категориям
-- Состояние autocircular (домены, стратегии)
-- Логи healthcheck и debug
-- Системную информацию (память, диск, нагрузка)
-- Статус rollback-snapshot
+Разделы панели: **Дашборд** (статус сервиса, текущие стратегии, системная информация, rollback-snapshot), **Режимы** (переключатели функций), **WARP** (списки игровых IP — см. ниже), **Whitelist** (домены-исключения), **Доп. домены** (свой список доменов для обхода), **Rotator** (состояние автоподбора и ручное управление), **Логи**, **Диагностика**, **Geosite** (импорт ru-blocked), **Благодарности**.
 
 ### Управление ротацией («Состояние ротатора»)
 
@@ -254,11 +245,29 @@ z2k <команда>
 
 Ручной выбор и заморозка сохраняются и переживают перезагрузку роутера и обновление z2k. Выпадающий список всегда показывает **полный набор** стратегий категории.
 
+### WARP — списки игровых IP
+
+Раздел «WARP» управляет ipset'ом игрового трафика (см. [«Игровой режим (WARP)»](#игровой-режим-warp)):
+
+- **Тумблер WARP** — включает/выключает split-туннель (переехал сюда из «Режимов»).
+- **Списки** — просмотр и правка пользовательских списков IP/CIDR: дописать строки, удалить, отредактировать целиком, выгрузить список в `.txt` и загрузить свой.
+- Изменения применяются на лету; ваши правки не затираются автообновлением базового списка.
+
 ---
 
 ## Telegram
 
 Telegram работает для всех устройств в сети автоматически, без настройки на клиентах. Включается при установке или через меню `[T]`.
+
+---
+
+## Игровой режим (WARP)
+
+Часть игр блокируется по **IP-адресам серверов** (а не по домену/SNI) — пакетный обход (desync) тут бессилен. Для таких игр z2k поднимает **split-туннель через Cloudflare WARP**: трафик к игровым серверам из списка заворачивается в MASQUE-туннель (пакет `usque`, интерфейс `opkgtun0`), а весь остальной трафик роутера идёт напрямую. Десинка и ротатора здесь нет — только маршрутизация нужных подсетей в туннель.
+
+- **Базовый список** — ipset `z2k_warp`, ~14 тыс. CIDR. Берётся из открытого проекта [`medvedeff-true/ru-gaming-blocklist`](https://github.com/medvedeff-true/ru-gaming-blocklist) и обновляется автоматически (upstream освежается примерно каждые 3 часа).
+- **Свои списки** — в разделе вебморды «WARP» можно вести собственные IP/CIDR: добавлять, удалять, редактировать, выгружать и загружать `.txt`. Ваши правки к базовому списку сохраняются при его обновлении (3-way merge — ни удаления, ни добавления не затираются).
+- **Включение** — тумблером в разделе «WARP» вебморды либо пунктом меню `[E]`. Пакет `usque` z2k ставит сам при первом включении.
 
 ---
 
@@ -288,7 +297,7 @@ Telegram работает для всех устройств в сети авт�
 
 ## Пользовательские домены
 
-В большинстве случаев чтобы заблокированный сайт начал обходиться через z2k — достаточно добавить его в **extra-список**, без всяких кастомных стратегий. autocircular сам подберёт рабочую стратегию из существующего пула (~47 вариантов для TCP, 12+ для QUIC) и закрепит её в `state.tsv` после первого успеха.
+В большинстве случаев чтобы заблокированный сайт начал обходиться через z2k — достаточно добавить его в **extra-список**, без всяких кастомных стратегий. autocircular сам подберёт рабочую стратегию из существующего пула (~50 вариантов для TCP, ~9 для QUIC) и закрепит её в `state.tsv` после первого успеха.
 
 Файл со списком:
 ```
@@ -382,7 +391,7 @@ some-blocked-site.org
 z2k/
 ├── z2k.sh                      # Bootstrap / main installer
 ├── z2k_cleanup.sh              # Complete uninstall
-├── strats_new2.txt             # TCP strategy database (RKN 48 / YT 22 / GV 22)
+├── strats_new2.txt             # TCP strategy database (RKN 50 / YT 22 / GV 22)
 ├── quic_strats.ini             # UDP/QUIC strategy database (yt_quic + discord_voice)
 ├── lib/                        # Core modules (загружаются z2k.sh)
 │   ├── utils.sh                # Utilities, safe_config_read, z2k_fetch с 5-layer fallback
@@ -392,19 +401,24 @@ z2k/
 │   ├── config.sh               # Configuration management
 │   ├── config_official.sh      # nfqws2 config generation
 │   ├── webpanel.sh             # CGI веб-панель installer
-│   ├── menu.sh                 # Interactive menu (16 опций)
+│   ├── menu.sh                 # Interactive menu (20 опций)
 │   └── auto_update.sh          # Self-update z2k через UPDATES.json
 ├── files/
 │   ├── S99zapret2.new          # Init script
 │   ├── 000-zapret2.sh          # ndmc hook
 │   ├── init.d/                 # Дополнительные init-скрипты (TG watchdog и др.)
 │   ├── ndm/                    # Keenetic ndmc-интеграция
-│   ├── fake/                   # Binary protocol blobs (24 файла)
+│   ├── fake/                   # Binary protocol blobs
 │   ├── lua/
-│   │   ├── z2k-autocircular.lua    # Persistent strategy memory + telemetry
-│   │   └── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH, mid-stream stall
-│   ├── lists/                  # Domain & IP lists (RKN, YouTube, Discord, AWS, Roblox, TG, flowseal)
-│   ├── z2k-healthcheck.sh      # Service availability monitoring
+│   │   ├── z2k-state-persist.lua   # Persistent strategy memory (state.tsv)
+│   │   ├── z2k-detectors.lua       # Failure detectors (TLS alert, mid-stream stall, ...)
+│   │   ├── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH
+│   │   ├── z2k-fooling-ext.lua     # Dynamic-TTL fooling hook
+│   │   ├── z2k-http-strats.lua     # HTTP-layer strategy helpers
+│   │   └── z2k-range-rand.lua      # Randomised range injection
+│   ├── lists/                  # Domain & IP lists (RKN, YouTube, Telegram, WARP game IPs, extra-domains)
+│   ├── z2k-warp.sh             # Game-mode WARP split-tunnel (routing)
+│   ├── z2k-scheduler.sh        # Periodic tasks (list update, self-heal) — replaces cron
 │   ├── z2k-config-validator.sh # Config validation
 │   ├── z2k-update-lists.sh     # Auto domain list updater
 │   ├── z2k-auto-update.sh      # Self-update cron entry
