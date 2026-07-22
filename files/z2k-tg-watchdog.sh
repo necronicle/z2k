@@ -5,6 +5,7 @@
 # user_disabled пустой, скрипт уходит в "process not running" и каждую минуту
 # воскрешает daemon — даже когда юзер явно остановил его через menu/webpanel.
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
 
 # z2k-tg-watchdog.sh — periodic health check + auto-restart for the
 # Telegram tunnel (tg-mtproxy-client). Runs every minute via cron;

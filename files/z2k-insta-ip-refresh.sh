@@ -24,6 +24,7 @@
 # defaults with live edges).
 
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
 
 LOG="/tmp/z2k-log/z2k-insta-refresh.log"
 # CWE-59: root-owned 0700 log dir
