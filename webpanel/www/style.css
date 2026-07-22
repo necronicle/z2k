@@ -936,6 +936,19 @@ input[type=text]:focus, input[type=password]:focus {
   letter-spacing: 0.02em;
 }
 
+/* ---------- WARP SECTION ---------- */
+/* The status grid sits under the toggle-row's border-bottom (the toggle→status
+   divider). The shared .toggle-row has padding:12px 0 above that border but the
+   grid has no margin below it → cramped. Add breathing room, scoped so the
+   dashboard/toggles grids are untouched. Also override the shared .status-grid
+   column rule (repeat(4,1fr) at ≥1024px) — this card has exactly 3 cells, so a
+   4-col track left an empty slot. auto-fit spreads the 3 cells edge-to-edge on
+   wide screens and wraps cleanly on narrow ones. */
+#warp-status-grid {
+  margin-top: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 /* ---------- WARP LISTS ---------- */
 /* Row content in the lists <ul>: name on top, muted meta underneath. Action
    buttons reuse the .wl-list li button treatment. */
