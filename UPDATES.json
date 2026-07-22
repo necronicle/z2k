@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "r-64",
+  "current": "p-64.1",
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
 {"v": "p-0", "type": "patch", "ts": "2026-05-03T17:30:00Z", "ref": "auto-update-baseline", "desc": "Auto-update system rollout baseline marker", "changed_files": []},
@@ -109,6 +109,7 @@
 {"v": "r-62", "type": "reinstall", "ts": "2026-07-21T19:29:11Z", "ref": "c30591e", "desc": "Новый раздел «WARP» в веб-панели: теперь можно вести свои списки адресов для туннеля — смотреть, править, добавлять и удалять записи, выгружать и загружать список текстовым файлом. Переключатель WARP переехал сюда же. Игровой список обновляется автоматически из общего списка заблокированных игр, при этом ваши правки в нём сохраняются.", "changed_files": ["files/lists/game-warp-ips.txt", "files/z2k-update-lists.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/install.sh", "tests/test_warp_lists.sh", "tests/test_warp_merge.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css"]},
 {"v": "p-63", "type": "patch", "ts": "2026-07-22T06:13:23Z", "ref": "9b844e9", "desc": "Доработка нового раздела WARP: игровой список теперь корректно синхронизируется с общим списком заблокированных игр при обновлениях — без накопления лишних адресов, при этом ваши правки в списке сохраняются.", "changed_files": ["files/z2k-update-lists.sh", "tests/test_warp_merge.sh", "UPDATES.json"]},
 {"v": "p-63.1", "type": "patch", "ts": "2026-07-22T07:02:26Z", "ref": "414a4d7", "desc": "Небольшая доработка вида раздела WARP: плитки состояния теперь отделены отступом от переключателя и равномерно занимают всю ширину карточки.", "changed_files": ["UPDATES.json", "webpanel/www/index.html", "webpanel/www/style.css"]},
-{"v": "r-64", "type": "reinstall", "ts": "2026-07-22T08:30:57Z", "ref": "577cee5", "desc": "Движок обхода обновлён до актуальной версии (zapret2 v1.0.3): защита от перегрузки очереди пакетов и мелкие исправления. Nintendo Switch (обновления, подключение к eShop, проверка сети) добавлен в исключения — раньше обход мог мешать соединению консоли (покупки в eShop за рубли всё равно недоступны — это ограничение самого Nintendo).", "changed_files": ["lib/config.sh", "UPDATES.json"]}
+{"v": "r-64", "type": "reinstall", "ts": "2026-07-22T08:30:57Z", "ref": "577cee5", "desc": "Движок обхода обновлён до актуальной версии (zapret2 v1.0.3): защита от перегрузки очереди пакетов и мелкие исправления. Nintendo Switch (обновления, подключение к eShop, проверка сети) добавлен в исключения — раньше обход мог мешать соединению консоли (покупки в eShop за рубли всё равно недоступны — это ограничение самого Nintendo).", "changed_files": ["lib/config.sh", "UPDATES.json"]},
+{"v": "p-64.1", "type": "patch", "ts": "2026-07-22T10:36:43Z", "ref": "d6bc05f", "desc": "Исправлено подключение WARP-туннеля (игровой режим): у части пользователей он конфликтовал по сетевым адресам со встроенным VPN-сервером роутера (например, SSTP) и не поднимался — теперь туннель использует отдельную подсеть. Также, если туннель отвалился, z2k поднимает его заново автоматически, без ручного выключения и включения.", "changed_files": ["files/z2k-warp.sh", "UPDATES.json"]}
   ]
 }
