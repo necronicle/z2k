@@ -44,6 +44,19 @@ USQUE_IPK_URL="https://side-effect-tm.github.io/usque-keenetic/all/usque-keeneti
 WARP_IFACE_IP="${WARP_IFACE_IP:-172.16.240.1}"
 WARP_KICK_COOLDOWN="${WARP_KICK_COOLDOWN:-300}"     # min seconds between down-tunnel usque restarts
 WARP_KICK_STAMP="${WARP_KICK_STAMP:-/tmp/z2k-warp-kick.stamp}"
+USQUE_BIN="${USQUE_BIN:-/opt/usr/bin/usque}"
+USQUE_SESSION="${USQUE_SESSION:-/opt/etc/usque/session.conf}"
+# WARP enrollment fallback. usque enrolls a device by POSTing to api.cloudflareclient.com;
+# some ISPs DPI-block that endpoint (TLS handshake timeout) → no session.conf → no tunnel.
+# The direct enroll IS desynced (cloudflareclient.com is in the bypass hostlist); if it still
+# can't punch through after WARP_REG_DIRECT_TRIES attempts, enroll THROUGH the VPS relay — a
+# restricted CONNECT proxy (only api.cloudflareclient.com:443) that reaches the CF reg API.
+# Fallback-only: most routers enroll directly (correct region) and never touch the VPS.
+WARP_VPS_PROXY="${WARP_VPS_PROXY:-http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119}"
+WARP_REG_DIRECT_TRIES="${WARP_REG_DIRECT_TRIES:-3}"
+WARP_REG_COUNT="${WARP_REG_COUNT:-/tmp/z2k-warp-regcount}"
+WARP_REG_STAMP="${WARP_REG_STAMP:-/tmp/z2k-warp-reg.stamp}"
+WARP_REG_COOLDOWN="${WARP_REG_COOLDOWN:-600}"       # min seconds between VPS-relay enroll attempts
 
 _wlog() { echo "[z2k-warp] $*" >&2; }
 
@@ -259,6 +272,57 @@ warp_usque_kick() {
     "$USQUE_INIT" restart >/dev/null 2>&1
 }
 
+# Enrollment fallback: enroll a device THROUGH the VPS relay when the direct (desynced) enroll
+# can't reach api.cloudflareclient.com. usque honours HTTPS_PROXY, so we just point it at the
+# restricted CONNECT proxy. COOLDOWN-guarded. On success writes session.conf and restarts usque.
+warp_vps_register() {
+    [ -x "$USQUE_BIN" ] || return 1
+    [ -n "$WARP_VPS_PROXY" ] || return 1
+    local now last
+    now=$(date +%s 2>/dev/null) || return 1
+    case "$now" in ''|*[!0-9]*) return 1 ;; esac
+    if [ -f "$WARP_REG_STAMP" ]; then
+        last=$(cat "$WARP_REG_STAMP" 2>/dev/null)
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        [ "$last" -gt "$now" ] && last=0
+        [ $((now - last)) -lt "$WARP_REG_COOLDOWN" ] && return 1
+    fi
+    { echo "$now" > "$WARP_REG_STAMP"; } 2>/dev/null || return 1
+    _wlog "direct enroll blocked — enrolling via VPS relay"
+    HTTPS_PROXY="$WARP_VPS_PROXY" https_proxy="$WARP_VPS_PROXY" \
+        "$USQUE_BIN" register --accept-tos --config "$USQUE_SESSION" >/dev/null 2>&1
+    if [ -s "$USQUE_SESSION" ]; then
+        _wlog "VPS enrollment OK — restarting usque"
+        "$USQUE_INIT" restart >/dev/null 2>&1
+        return 0
+    fi
+    _wlog "VPS enrollment failed"
+    return 1
+}
+
+# Enrollment gate. No session.conf means the device was never enrolled, so the tunnel can't
+# exist. Give the DIRECT enroll (desynced, region-correct) a few tries first — each S51usque
+# restart re-runs `usque register` and lets autocircular rotate the strategy on
+# cloudflareclient.com — then fall back to the VPS relay only for routers whose ISP blocks the
+# reg API outright. Returns 0 when it handled enrollment this tick (selfheal should stop),
+# 1 when already enrolled (selfheal proceeds to route).
+warp_enroll_or_fallback() {
+    if [ -s "$USQUE_SESSION" ]; then
+        [ -f "$WARP_REG_COUNT" ] && rm -f "$WARP_REG_COUNT" 2>/dev/null
+        return 1
+    fi
+    local n
+    n=$(cat "$WARP_REG_COUNT" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    if [ "$n" -lt "$WARP_REG_DIRECT_TRIES" ]; then
+        { echo $((n + 1)) > "$WARP_REG_COUNT"; } 2>/dev/null
+        _wlog "no session.conf — direct enroll retry $((n + 1))/$WARP_REG_DIRECT_TRIES (desync)"
+        "$USQUE_INIT" restart >/dev/null 2>&1
+    else
+        warp_vps_register
+    fi
+    return 0
+}
+
 # Re-assert the split-tunnel route an NDM firewall reload / WAN flap wiped, and — unlike the
 # old route-only version — recover a down tunnel (cases 2/3 in the header) that the package
 # left dead, which is what forced users to toggle usque by hand. Called ~every minute by the
@@ -270,6 +334,10 @@ warp_selfheal() {
         "$USQUE_INIT" restart >/dev/null 2>&1
         return 0    # tunnel is restarting on the new address; next tick asserts the route
     fi
+    # Enrollment: if there's no session.conf the device was never enrolled (reg API blocked) —
+    # retry the direct desynced enroll a few times, then fall back to the VPS relay. Nothing to
+    # route/kick until a device key exists, so stop here when this handled it.
+    warp_enroll_or_fallback && return 0
     # Case 3: tunnel down → nudge usque (cooldown-guarded). Without an address there is
     # nothing to route into, so stop here; the next tick re-checks once it's up.
     if ! ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet '; then

@@ -45,6 +45,31 @@ chmod 755 "$USQUE_INIT"
 kicks() { wc -l < "$RESTARTS" | tr -d ' '; }
 ifip_lines() { c=$(grep -cE '^IFACE_IP=' "$USQUE_CONF" 2>/dev/null); echo "${c:-0}"; }
 
+# Stub usque binary for enrollment tests: count `register` calls; create the session file
+# (arg after --config) iff the success flag is present, to simulate reg success/failure.
+USQUE_BIN="$SB/usque-stub"
+USQUE_SESSION="$SB/session.conf"
+WARP_REG_COUNT="$SB/regcount"
+WARP_REG_STAMP="$SB/reg.stamp"
+WARP_REG_COOLDOWN=600
+WARP_REG_DIRECT_TRIES=3
+WARP_VPS_PROXY="http://z2kwarp:pw@vps.example:8119"
+REG_CALLS="$SB/reg_calls"; : > "$REG_CALLS"
+REG_SUCCEED_FLAG="$SB/reg_succeed"
+export REG_CALLS REG_SUCCEED_FLAG
+cat > "$USQUE_BIN" <<'EOF'
+#!/bin/sh
+[ "$1" = register ] && echo x >> "$REG_CALLS"
+if [ -f "$REG_SUCCEED_FLAG" ]; then
+    cfg=""; p=""
+    for a in "$@"; do [ "$p" = --config ] && cfg="$a"; p="$a"; done
+    [ -n "$cfg" ] && echo "stub-session-key" > "$cfg"
+fi
+exit 0
+EOF
+chmod 755 "$USQUE_BIN"
+regcalls() { wc -l < "$REG_CALLS" | tr -d ' '; }
+
 # ---- warp_write_iface_ip -----------------------------------------------------
 printf "\n--- W1: fresh conf (only commented default) -> writes our IFACE_IP, rc=0 ---\n"
 printf '%s\n' '# usque config' '# IFACE_IP="172.16.0.1"' 'HTTP2_ENABLE=1' > "$USQUE_CONF"
@@ -127,6 +152,42 @@ _savedstamp="$WARP_KICK_STAMP"; WARP_KICK_STAMP="$SB/no-such-dir/kick.stamp"
 warp_usque_kick
 WARP_KICK_STAMP="$_savedstamp"
 assert_eq "K8 zero restarts (stamp write failed)" "0" "$(kicks)"
+
+# ---- warp_enroll_or_fallback / warp_vps_register (date still mocked -> FAKE_NOW) ----
+printf "\n--- R1: session.conf exists -> already enrolled (rc=1), counter reset ---\n"
+echo "existing-key" > "$USQUE_SESSION"; echo "2" > "$WARP_REG_COUNT"; : > "$RESTARTS"; : > "$REG_CALLS"
+warp_enroll_or_fallback; rc=$?
+assert_eq "R1 rc=1 (already enrolled)"      "1" "$rc"
+assert_eq "R1 counter file removed"         "0" "$( [ -f "$WARP_REG_COUNT" ] && echo 1 || echo 0 )"
+assert_eq "R1 no restart + no register"     "0-0" "$(kicks)-$(regcalls)"
+
+printf "\n--- R2: no session, under direct tries -> direct retry (restart), counter++ ---\n"
+rm -f "$USQUE_SESSION" "$WARP_REG_COUNT" "$WARP_REG_STAMP"; : > "$RESTARTS"; : > "$REG_CALLS"
+warp_enroll_or_fallback; rc=$?
+assert_eq "R2 rc=0 (handled)"               "0" "$rc"
+assert_eq "R2 one direct restart"           "1" "$(kicks)"
+assert_eq "R2 zero VPS register calls"      "0" "$(regcalls)"
+assert_eq "R2 counter now 1"                "1" "$(cat "$WARP_REG_COUNT" 2>/dev/null)"
+
+printf "\n--- R3: no session, direct tries exhausted -> VPS register attempted ---\n"
+rm -f "$USQUE_SESSION" "$WARP_REG_STAMP" "$REG_SUCCEED_FLAG"; echo "3" > "$WARP_REG_COUNT"; : > "$RESTARTS"; : > "$REG_CALLS"
+warp_enroll_or_fallback; rc=$?
+assert_eq "R3 rc=0 (handled)"               "0" "$rc"
+assert_eq "R3 one VPS register call"        "1" "$(regcalls)"
+
+printf "\n--- R4: VPS register cooldown -> no register within window ---\n"
+rm -f "$USQUE_SESSION"; : > "$REG_CALLS"; echo "$NOW" > "$WARP_REG_STAMP"
+warp_vps_register; rc=$?
+assert_eq "R4 rc=1 (cooldown)"              "1" "$rc"
+assert_eq "R4 zero register calls"          "0" "$(regcalls)"
+
+printf "\n--- R5: VPS register success -> session written, usque restarted, rc=0 ---\n"
+rm -f "$USQUE_SESSION" "$WARP_REG_STAMP"; : > "$RESTARTS"; : > "$REG_CALLS"; touch "$REG_SUCCEED_FLAG"
+warp_vps_register; rc=$?
+assert_eq "R5 rc=0 (enrolled via VPS)"      "0" "$rc"
+assert_eq "R5 session.conf created"         "1" "$( [ -s "$USQUE_SESSION" ] && echo 1 || echo 0 )"
+assert_eq "R5 usque restarted"              "1" "$(kicks)"
+rm -f "$REG_SUCCEED_FLAG"
 
 printf "\n=== warp selfheal tests: %d passed, %d failed ===\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]
