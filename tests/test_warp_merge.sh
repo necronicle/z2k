@@ -170,10 +170,14 @@ assert_eq "S13 upstream C flows in" "1" "$(has "$DEST" "$C")"
 assert_eq "S13 user X survives"     "1" "$(has "$DEST" "$X")"
 assert_eq "S13 A,B intact"          "$A,$B,$C,$X," "$(setof "$DEST")"
 
-printf "\n--- S14: adopt-then-drop — user addition survives upstream adopting then dropping it ---\n"
-# Regression for the review finding: user_added computed vs CURRENT upstream
-# (dest - san), not the baseline, so a line the community list adopts then
-# removes stays because it is still the user's.
+printf "\n--- S14: adopt-then-drop is a KNOWN, accepted limitation (user_added = dest-base) ---\n"
+# user_added is diffed against the ANCESTOR (.base), not current upstream — the
+# only correct choice that stops the list ballooning (see S15). The tradeoff:
+# once upstream ADOPTS a line the user added, it enters base; if upstream later
+# DROPS it, it's no longer distinguishable as the user's and is lost. Rare
+# (needs upstream to add then remove the exact line); user re-adds. Documented,
+# not a bug — assert the limitation so a future "fix" that reintroduces the
+# ballooning (S15) trips this.
 rm -rf "$WDIR"; mkdir -p "$WDIR"
 refresh "$A
 $B" 2                            # seed {A,B}
@@ -182,12 +186,41 @@ $B
 $X"                                # user adds custom X
 refresh "$A
 $B
-$X" 2                            # upstream ADOPTS X
-assert_eq "S14 X present after adopt" "1" "$(has "$DEST" "$X")"
+$X" 2                            # upstream ADOPTS X  → X enters base
+assert_eq "S14 X present while upstream has it" "1" "$(has "$DEST" "$X")"
 refresh "$A
-$B" 2                            # upstream DROPS X again
-assert_eq "S14 X SURVIVES upstream drop" "1" "$(has "$DEST" "$X")"
-assert_eq "S14 dest = {A,B,X}" "$A,$B,$X," "$(setof "$DEST")"
+$B" 2                            # upstream DROPS X
+assert_eq "S14 X dropped with upstream (known gap)" "0" "$(has "$DEST" "$X")"
+
+printf "\n--- S15: REGRESSION — stale/drifted seed must NOT balloon the list to a union ---\n"
+# The reinstall-E2E bug: warp_lists_migrate seeds dest AND base to the shipped
+# snapshot (SEED), which has drifted from live upstream. With no user edits,
+# the first refresh MUST yield the pure fresh upstream, NOT seed ∪ upstream.
+rm -rf "$WDIR"; mkdir -p "$WDIR"
+SEED="$A
+$B
+$C
+$D"                              # frozen shipped snapshot (4 entries)
+printf '%s\n' "$SEED" > "$DEST"           # migrate: dest = seed
+printf '%s\n' "$SEED" > "$BASE"           # migrate: base = seed (identical)
+refresh "$A
+$E" 2                            # live upstream has drifted: {A,E} only
+assert_eq "S15 result = pure upstream (no union)" "$A,$E," "$(setof "$DEST")"
+assert_eq "S15 dropped seed entry B gone"  "0" "$(has "$DEST" "$B")"
+assert_eq "S15 new upstream entry E present" "1" "$(has "$DEST" "$E")"
+
+printf "\n--- S16: drifted seed + a real user edit still preserved ---\n"
+rm -rf "$WDIR"; mkdir -p "$WDIR"
+printf '%s\n' "$SEED" > "$DEST"; printf '%s\n' "$SEED" > "$BASE"   # seed dest=base
+user_set "$A
+$B
+$C
+$D
+$X"                              # user adds custom X on top of the seed
+refresh "$A
+$E" 2                            # upstream drifted to {A,E}
+assert_eq "S16 user X preserved" "1" "$(has "$DEST" "$X")"
+assert_eq "S16 result = upstream + X only" "$A,$E,$X," "$(setof "$DEST")"
 
 printf "\nPASSED: %d\nFAILED: %d\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ] || exit 1

@@ -334,15 +334,21 @@ update_list() {
 # has no IPv6 leg; one line ipset can't parse aborts the restore — the loader in
 # z2k-warp.sh + the webpanel save use the SAME regex), then 3-WAY-MERGE so the
 # user's own removals AND additions (via the webpanel WARP editor) survive every
-# refresh:
+# refresh. Both deltas are diffed against the .base ANCESTOR (the last upstream
+# snapshot), which is the key to NOT bloating the list:
 #     user_removed = base − dest      (upstream lines the user deleted)
-#     user_added   = dest − upstream  (lines the user has that upstream lacks)
+#     user_added   = dest − base      (lines the user has that the ancestor lacked)
 #     new dest     = (upstream − user_removed) ++ user_added   (dedup)
-# Removals are diffed against the .base ANCESTOR (so a brand-new upstream line
-# the user never saw isn't mistaken for a deletion). Additions are diffed
-# against the CURRENT upstream, NOT the baseline — that way a user addition the
-# community list later adopts and then drops is still seen as the user's and
-# doesn't silently vanish. A user who deletes the whole
+# Because the seed migration (z2k-warp.sh warp_lists_migrate) writes dest AND
+# base to the SAME shipped snapshot, on the first refresh both deltas are empty
+# and the result is the pure fresh upstream — even when the shipped snapshot has
+# drifted from live upstream (it always has: upstream refreshes every ~3h, the
+# snapshot is frozen at release). Diffing additions against `base` (not the
+# current upstream) is likewise what lets upstream-dropped lines the user never
+# touched flow OUT instead of sticking forever. Known minor gap: a line the user
+# added that upstream then adopts-then-drops is lost (rare; user can re-add) —
+# a full ledger would fix it but is not worth the machinery here.
+# A user who deletes the whole
 # list leaves a tombstone (.removed) so we don't resurrect it. WARP is
 # routing-only, so a change reloads the z2k_warp ipset directly rather than
 # bumping the nfqws2 restart counter. Top-level (not nested in main) so the
@@ -408,14 +414,14 @@ update_warp_game_list() {
         # eaten, collapsing the list to just the user's additions.)
         local rmv="$wdir/.game-warp-ips.rm"     # user_removed = base − dest
         local keep="$wdir/.game-warp-ips.keep"  # upstream − user_removed
-        local add="$wdir/.game-warp-ips.add"    # user_added   = dest − upstream
+        local add="$wdir/.game-warp-ips.add"    # user_added   = dest − base
         if [ -s "$dest" ]; then grep -vxF -f "$dest" "$base" > "$rmv"  2>/dev/null; else cp -f "$base" "$rmv"; fi
         if [ -s "$rmv"  ]; then grep -vxF -f "$rmv"  "$san"  > "$keep" 2>/dev/null; else cp -f "$san"  "$keep"; fi
-        # user_added vs the CURRENT upstream ($san), not the baseline — so an
-        # addition upstream later adopts-then-drops still counts as the user's.
-        # $san is always non-empty here (floor guard passed), so no empty-pattern
-        # pitfall; grep prints nothing (rc 1) when the user added nothing.
-        grep -vxF -f "$san" "$dest" > "$add" 2>/dev/null || : > "$add"
+        # user_added = dest − base (against the ANCESTOR, not current upstream):
+        # when dest==base (fresh seed, or steady state with no edits) this is
+        # empty, so the result is pure upstream and the list never balloons to a
+        # union of the frozen shipped snapshot and live upstream.
+        if [ -s "$base" ]; then grep -vxF -f "$base" "$dest" > "$add" 2>/dev/null; else cp -f "$dest" "$add"; fi
         cat "$keep" "$add" | awk '!seen[$0]++' > "$dest.new"      # dedup, order-stable
         rm -f "$rmv" "$keep" "$add"
     else
