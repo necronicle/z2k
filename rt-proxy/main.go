@@ -30,16 +30,17 @@ import (
 )
 
 var (
-	listenAddr  = flag.String("listen", ":1445", "local listen address")
-	proxyHost   = flag.String("proxy-host", "ps1.blockme.site", "upstream HTTPS proxy hostname (TLS SNI to the proxy)")
-	proxyPort   = flag.String("proxy-port", "443", "upstream proxy port")
-	seedIPs     = flag.String("ips", "", "comma-separated upstream proxy IPs (seed pool; re-resolved from proxy-host too)")
-	healthEvery = flag.Duration("health-interval", 60*time.Second, "health-check interval for the IP pool")
-	healthHost  = flag.String("health-target", "rutracker.org:443", "CONNECT target used to probe a proxy IP")
-	dialTO      = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
-	probeTO     = flag.Duration("probe-timeout", 4*time.Second, "dial/handshake timeout for health probes")
-	idleTO      = flag.Duration("timeout", 15*time.Minute, "per-connection idle timeout")
-	verbose     = flag.Bool("v", false, "verbose logging")
+	listenAddr   = flag.String("listen", ":1445", "local listen address")
+	proxyHost    = flag.String("proxy-host", "ps1.blockme.site", "upstream HTTPS proxy hostname (TLS SNI to the proxy)")
+	proxyPort    = flag.String("proxy-port", "443", "upstream proxy port")
+	seedIPs      = flag.String("ips", "", "comma-separated upstream proxy IPs (seed pool; re-resolved from proxy-host too)")
+	healthEvery  = flag.Duration("health-interval", 60*time.Second, "health-check interval for the IP pool")
+	healthHost   = flag.String("health-target", "rutracker.org:443", "CONNECT target used to probe a proxy IP")
+	dialTO       = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
+	probeTO      = flag.Duration("probe-timeout", 8*time.Second, "dial/handshake timeout for health probes")
+	recoverEvery = flag.Duration("recover-interval", 10*time.Second, "faster re-probe interval while the pool has 0 live IPs")
+	idleTO       = flag.Duration("timeout", 15*time.Minute, "per-connection idle timeout")
+	verbose      = flag.Bool("v", false, "verbose logging")
 )
 
 func main() {
@@ -92,14 +93,28 @@ func (p *pool) pick() string {
 	return p.live[p.rr%uint64(len(p.live))]
 }
 
+func (p *pool) liveCount() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.live)
+}
+
 func (p *pool) healthLoop() {
 	p.resolve()        // populate the pool from DNS BEFORE the first probe
 	go p.refreshLoop() // and keep re-resolving in the background
-	p.probeAll()
-	t := time.NewTicker(*healthEvery)
-	defer t.Stop()
-	for range t.C {
+	for {
 		p.probeAll()
+		// RU blocks a rotating subset of the blockme pool, so there are windows where
+		// every currently-known IP is dead at once (health: 0/N live). While the pool
+		// is empty, re-resolve + re-probe every recoverEvery (~10s) instead of waiting
+		// a full healthEvery — otherwise the proxy starves a whole minute (or longer)
+		// after an upstream comes back, and rutracker stays dead the entire time.
+		d := *healthEvery
+		if p.liveCount() == 0 {
+			d = *recoverEvery
+			p.resolve()
+		}
+		time.Sleep(d)
 	}
 }
 
