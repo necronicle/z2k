@@ -180,8 +180,21 @@ warp_ipset_load() {
     fi
 }
 
+# The usque-keenetic package assigns opkgtun0 an address but does NOT reliably bring the
+# link UP — it flaps up/down across (re)starts. A down link WITH an address routes nothing
+# and makes `ip route ... dev opkgtun0` fail ("Network is down"), so the tunnel reads as
+# "не запущен" in the panel even though usque is running. Bring the link up if the device
+# exists but isn't UP. Routing-layer only — does not touch usque's tunnel or lifecycle.
+warp_link_up() {
+    ip link show "$WARP_IFACE" >/dev/null 2>&1 || return 1           # device not created yet
+    ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP && return 0 # already UP (word match, not LOWER_UP)
+    _wlog "$WARP_IFACE link is down — bringing it up"
+    ip link set "$WARP_IFACE" up 2>/dev/null
+}
+
 # ---- policy routing (split-tunnel) — this is the ONLY thing the toggle does --
 warp_pbr_up() {
+    warp_link_up   # the package often leaves opkgtun0's link DOWN; route add needs it UP
     # Steer ONLY the marked game traffic out the WARP tun. We do NOT MASQUERADE or MSS-clamp:
     # `usque`/opkgtun0 is a Keenetic GLOBAL interface, so NDM NATs it and clamps its MSS
     # (`ip tcp adjust-mss pmtu`) NATIVELY. Verified on-router: forwarded traffic egressing
@@ -225,6 +238,16 @@ warp_enable() {
     _wlog "enable"
     warp_install || { _wlog "usque not available — режим не включён"; return 1; }
     warp_ipset_load || return 1
+    # warp_install may have restarted usque (IFACE_IP migration). Give opkgtun0 a moment to
+    # come up (address + link UP) so the route lands on a live interface instead of racing a
+    # not-yet-ready one — otherwise the panel shows "не запущен" until the next selfheal tick.
+    local _wait=0
+    while [ "$_wait" -lt 25 ]; do
+        warp_link_up
+        ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' \
+            && ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP && break
+        _wait=$((_wait + 1)); sleep 1
+    done
     warp_pbr_up
     _wlog "game WARP mode ON (route → $WARP_IFACE, ipset=$WARP_IPSET)"
 }
@@ -338,9 +361,13 @@ warp_selfheal() {
     # retry the direct desynced enroll a few times, then fall back to the VPS relay. Nothing to
     # route/kick until a device key exists, so stop here when this handled it.
     warp_enroll_or_fallback && return 0
-    # Case 3: tunnel down → nudge usque (cooldown-guarded). Without an address there is
-    # nothing to route into, so stop here; the next tick re-checks once it's up.
-    if ! ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet '; then
+    # The package often leaves opkgtun0 with an address but the link DOWN — bring it up so a
+    # down-but-present interface is recovered here instead of being read as "up" and left dead.
+    warp_link_up
+    # Case 3: tunnel not routable — no address, OR the link is still down after the nudge above
+    # (device gone / usque wedged). Restart usque (cooldown-guarded); can't route a dead iface.
+    if ! ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' \
+       || ! ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP; then
         warp_usque_kick
         return 0
     fi

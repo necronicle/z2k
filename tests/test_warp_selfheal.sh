@@ -70,6 +70,24 @@ EOF
 chmod 755 "$USQUE_BIN"
 regcalls() { wc -l < "$REG_CALLS" | tr -d ' '; }
 
+# Controllable `ip` stub for warp_link_up link-state tests. State file holds up|down|gone.
+IP_LINK_STATE="$SB/ip_link_state"
+IP_LINK_SET="$SB/ip_link_set_calls"; : > "$IP_LINK_SET"
+ip() {
+    if [ "$1" = link ] && [ "$2" = show ] && [ "$3" = "$WARP_IFACE" ]; then
+        case "$(cat "$IP_LINK_STATE" 2>/dev/null)" in
+            gone) return 1 ;;
+            up)   echo "96: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1280"; return 0 ;;
+            *)    echo "96: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP> mtu 1280"; return 0 ;;
+        esac
+    fi
+    if [ "$1" = link ] && [ "$2" = set ] && [ "$3" = "$WARP_IFACE" ]; then
+        echo x >> "$IP_LINK_SET"; echo up > "$IP_LINK_STATE"; return 0
+    fi
+    return 0
+}
+linksets() { wc -l < "$IP_LINK_SET" | tr -d ' '; }
+
 # ---- warp_write_iface_ip -----------------------------------------------------
 printf "\n--- W1: fresh conf (only commented default) -> writes our IFACE_IP, rc=0 ---\n"
 printf '%s\n' '# usque config' '# IFACE_IP="172.16.0.1"' 'HTTP2_ENABLE=1' > "$USQUE_CONF"
@@ -188,6 +206,26 @@ assert_eq "R5 rc=0 (enrolled via VPS)"      "0" "$rc"
 assert_eq "R5 session.conf created"         "1" "$( [ -s "$USQUE_SESSION" ] && echo 1 || echo 0 )"
 assert_eq "R5 usque restarted"              "1" "$(kicks)"
 rm -f "$REG_SUCCEED_FLAG"
+
+# ---- warp_link_up (opkgtun0 link flakiness) ----
+printf "\n--- L1: link down + device present -> brought up (1 set call) ---\n"
+echo down > "$IP_LINK_STATE"; : > "$IP_LINK_SET"
+warp_link_up; rc=$?
+assert_eq "L1 rc=0"                          "0" "$rc"
+assert_eq "L1 ip link set up called once"    "1" "$(linksets)"
+assert_eq "L1 link now up"                   "up" "$(cat "$IP_LINK_STATE")"
+
+printf "\n--- L2: link already up -> no-op (0 set calls) ---\n"
+echo up > "$IP_LINK_STATE"; : > "$IP_LINK_SET"
+warp_link_up; rc=$?
+assert_eq "L2 rc=0"                          "0" "$rc"
+assert_eq "L2 no set call (already up)"      "0" "$(linksets)"
+
+printf "\n--- L3: device gone -> rc=1, no set call ---\n"
+echo gone > "$IP_LINK_STATE"; : > "$IP_LINK_SET"
+warp_link_up; rc=$?
+assert_eq "L3 rc=1 (no device)"              "1" "$rc"
+assert_eq "L3 no set call"                   "0" "$(linksets)"
 
 printf "\n=== warp selfheal tests: %d passed, %d failed ===\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]
