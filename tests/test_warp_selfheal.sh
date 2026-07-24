@@ -376,5 +376,41 @@ warp_write_iface_ip; rc=$?
 assert_eq "N5 rc=1 (left alone)"             "1" "$rc"
 assert_eq "N5 user value intact"             "10.9.9.9" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
 
+# ---- FAIL OPEN: routing must never point into a tunnel that is not carrying traffic ----
+# Field failure, r-65: the tunnel died, routing stayed applied, and every destination in the
+# ipset (tens of thousands of Cloudflare/AWS/Sony/Epic networks) was blackholed instead of
+# merely going untunnelled. Going direct is the pre-WARP status quo; blackholing is an outage.
+PBR_UP_CALLS="$SB/pbr_up"; PBR_DOWN_CALLS="$SB/pbr_down"
+: > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"
+warp_pbr_up()   { echo x >> "$PBR_UP_CALLS"; }
+warp_pbr_down() { echo x >> "$PBR_DOWN_CALLS"; }
+warp_ipset_load() { :; }
+ipset() { return 0; }
+warp_flag() { echo 1; }
+warp_write_iface_ip() { return 1; }
+warp_enroll_or_fallback() { return 1; }
+warp_link_up() { return 0; }
+ip() {   # interface present, addressed and UP — the "looks perfectly healthy" case
+    if [ "$1" = "-o" ]; then echo "44: $WARP_IFACE    inet 172.16.240.2/32 scope global $WARP_IFACE"; return 0; fi
+    if [ "$1" = link ]; then echo "44: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1280"; return 0; fi
+    return 0
+}
+
+printf "\n--- F1: probe says DEAD -> routing torn down, usque kicked ---\n"
+: > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"; : > "$RESTARTS"; rm -f "$WARP_KICK_STAMP"
+warp_tunnel_live() { return 1; }
+warp_selfheal
+assert_eq "F1 routing NOT applied"           "0" "$(wc -l < "$PBR_UP_CALLS" | tr -d ' ')"
+assert_eq "F1 routing torn down"             "1" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
+assert_eq "F1 usque kicked"                  "1" "$(kicks)"
+
+printf "\n--- F2: probe says LIVE -> routing applied, no kick ---\n"
+: > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"; : > "$RESTARTS"; rm -f "$WARP_KICK_STAMP"
+warp_tunnel_live() { return 0; }
+warp_selfheal
+assert_eq "F2 routing applied"               "1" "$(wc -l < "$PBR_UP_CALLS" | tr -d ' ')"
+assert_eq "F2 routing NOT torn down"         "0" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
+assert_eq "F2 no kick on a healthy tunnel"   "0" "$(kicks)"
+
 printf "\n=== warp selfheal tests: %d passed, %d failed ===\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]

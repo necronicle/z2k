@@ -399,9 +399,6 @@ warp_pbr_down() {
     warp_purge_legacy_nat   # no-op once the r-62 drain has run
     ip rule del fwmark "$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
     ip route flush table "$WARP_TABLE" 2>/dev/null
-    # Drop the cached verdict rather than writing "dead": with the mode off nothing probes
-    # any more, and a stale "dead" would outlive its truth. Absent == unknown.
-    rm -f "$WARP_LIVE_STAMP" 2>/dev/null
 }
 
 # ---- toggle (routing only) ---------------------------------------------------
@@ -426,8 +423,17 @@ warp_enable() {
     fi
     warp_ipset_load || return 1
     warp_purge_legacy_nat
-    # warp_install may have restarted usque (IFACE_IP migration). Wait — briefly — for the
-    # interface to exist so the route lands on a real device, then apply the routing and
+    # Make sure the daemon is actually RUNNING. warp_install is a no-op once the package is
+    # installed and configured, and nothing else here starts usque — the package starts it at
+    # boot and that was the only path. So enabling the mode on a router whose daemon is
+    # stopped (manual stop, a crash, an earlier disable) sat waiting for an interface that was
+    # never going to appear, then reported "not up yet" forever while self-heal's kick sat
+    # behind its cooldown. The user just asked for the tunnel: start it, now, unconditionally.
+    if ! ip link show "$WARP_IFACE" >/dev/null 2>&1; then
+        _wlog "usque is not running — starting it"
+        warp_usque_restart
+    fi
+    # Wait — briefly — for the interface to exist so the route lands on a real device, then
     # verify for real. Bounded tight: a webpanel request is blocking on this, and anything
     # slower than the interface appearing is selfheal's job, not the toggle's.
     local _wait=0
@@ -437,18 +443,27 @@ warp_enable() {
             && ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP && break
         _wait=$((_wait + 1)); sleep 1
     done
-    warp_pbr_up
+    # Verify BEFORE steering anything into the tunnel — see the fail-open note in
+    # warp_selfheal. A dead tunnel with routing applied blackholes every network in the
+    # list instead of merely leaving them un-tunnelled.
     if warp_tunnel_live; then
+        warp_pbr_up
         _wlog "game WARP mode ON (warp=on via $WARP_IFACE, ipset=$WARP_IPSET)"
         return 0
     fi
-    _wlog "game WARP mode ON, but the tunnel is not carrying traffic yet — selfheal will keep working on it"
+    warp_pbr_down
+    _wlog "game WARP mode ON, but the tunnel is not carrying traffic yet — routing stays OFF (traffic direct); selfheal will keep working on it"
     return 2
 }
 
 warp_disable() {
     _wlog "disable"
     warp_pbr_down          # tunnel keeps running idle; re-enable just re-adds the route
+    # Drop the cached verdict rather than leaving a stale one: with the mode off nothing
+    # probes any more. Absent == unknown, which is the truth. (Deliberately NOT inside
+    # warp_pbr_down — the fail-open path tears routing down while KEEPING the "dead"
+    # verdict, which is exactly what the panel must show.)
+    rm -f "$WARP_LIVE_STAMP" 2>/dev/null
     _wlog "game WARP mode OFF"
 }
 
@@ -630,16 +645,27 @@ warp_selfheal() {
         warp_usque_kick
         return 0
     fi
-    ipset list "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_load
-    warp_pbr_up
     # Case 4 — the one nothing used to catch. Address + link UP proves only that NDM
     # configured the interface, not that the MASQUE session to Cloudflare exists. usque
     # running-but-never-connected (blocked endpoint, expired device key, wedged after a WAN
     # flap) looked healthy to every check above, so the tunnel stayed dead indefinitely while
-    # the panel showed "работает". Probe it for real and kick on a genuine failure; the kick
-    # is cooldown-guarded, so a WAN outage costs one restart per WARP_KICK_COOLDOWN, not one
-    # per tick.
-    warp_tunnel_live || warp_usque_kick
+    # the panel showed "работает".
+    #
+    # FAIL OPEN. Routing is asserted ONLY while the tunnel is proven to carry traffic, and
+    # torn down the moment it is not. Steering the game ipset into a tun whose session is
+    # dead does not degrade those destinations — it BLACKHOLES them, and the list is tens of
+    # thousands of networks (Cloudflare, AWS, Sony, Epic). Going direct means a game server
+    # blocked by IP stays blocked, which is the pre-WARP status quo; blackholing takes out
+    # half the internet for every device behind the router. The kick stays cooldown-guarded,
+    # so recovery keeps being attempted without a restart storm.
+    if warp_tunnel_live; then
+        ipset list "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_load
+        warp_pbr_up
+        return 0
+    fi
+    _wlog "tunnel not carrying traffic — routing torn down (traffic goes direct) while we reconnect"
+    warp_pbr_down
+    warp_usque_kick
 }
 
 # Sourced by tests/test_warp_selfheal.sh to exercise the functions with stubs — skip the
