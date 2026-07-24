@@ -2,7 +2,7 @@
 # Builds stripped, trimpath'd binaries for every OpenWrt arch we ship.
 
 GO         ?= $(HOME)/go/bin/go1.22.12
-BUILDFLAGS = -ldflags="-s -w" -trimpath
+BUILDFLAGS = -ldflags="-s -w" -trimpath -buildvcs=false   # see rt-proxy/Makefile: VCS stamping breaks md5 verification
 PKG        = ./cmd/z2k-detect
 OUTDIR     = builds
 
