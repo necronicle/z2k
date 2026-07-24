@@ -34,15 +34,18 @@ var (
 	proxyHost    = flag.String("proxy-host", "ps1.blockme.site", "upstream HTTPS proxy hostname (TLS SNI to the proxy)")
 	proxyPort    = flag.String("proxy-port", "443", "upstream proxy port")
 	seedIPs      = flag.String("ips", "", "comma-separated upstream proxy IPs (seed pool; re-resolved from proxy-host too)")
-	healthEvery  = flag.Duration("health-interval", 60*time.Second, "health-check interval for the IP pool")
+	healthEvery  = flag.Duration("health-interval", 180*time.Second, "health-check interval for the IP pool")
 	healthHost   = flag.String("health-target", "rutracker.org:443", "CONNECT target used to probe a proxy IP")
 	dialTO       = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
-	probeTO      = flag.Duration("probe-timeout", 10*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
+	probeTO      = flag.Duration("probe-timeout", 12*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
 	recoverEvery = flag.Duration("recover-interval", 10*time.Second, "faster re-probe interval while the pool has 0 live IPs")
 	idleTO       = flag.Duration("timeout", 15*time.Minute, "per-connection idle timeout")
 	pickWaitTO   = flag.Duration("pick-wait", 15*time.Second, "max wait for a live upstream before dropping (cold-start / transient-empty smoothing)")
-	maxTries     = flag.Int("max-tries", 3, "max upstream IPs to try per connection before dropping")
+	maxTries     = flag.Int("max-tries", 4, "max upstream IPs to try per connection before dropping")
+	firstByteTO  = flag.Duration("first-byte-timeout", 4*time.Second, "how long an upstream has to deliver the server's first TLS handshake record after the replayed ClientHello before it is demoted and another one is tried")
 	resolverAddr = flag.String("resolver", "1.1.1.1:53", "DNS server queried DIRECTLY for the upstream pool, to bypass the router's ndnproxy whose cache goes stale and strands the pool on dead IPs (system resolver is still used as a fallback/union)")
+	probePath    = flag.String("probe-path", "/forum/index.php", "path fetched THROUGH each upstream when probing — must return a sizeable body, not a redirect")
+	probeBytes   = flag.Int("probe-bytes", 8192, "body bytes an upstream must actually deliver to count as live")
 	verbose      = flag.Bool("v", false, "verbose logging")
 )
 
@@ -94,6 +97,25 @@ func (p *pool) pick() string {
 	}
 	p.rr++
 	return p.live[p.rr%uint64(len(p.live))]
+}
+
+// demote drops ip from the live set the moment it fails on REAL traffic, without
+// waiting for the next health cycle. The health probe is a snapshot up to
+// health-interval old, and a node can pass it and stall a minute later — that gap is
+// what made RuTracker "work, then not work, then work again": pick() round-robins, so
+// whether a page loaded depended purely on which node the cursor handed you. A node
+// that just proved itself dead must leave the ring immediately; probeAll will let it
+// back in when it genuinely recovers.
+func (p *pool) demote(ip string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := p.live[:0]
+	for _, x := range p.live {
+		if x != ip {
+			out = append(out, x)
+		}
+	}
+	p.live = out
 }
 
 func (p *pool) liveCount() int {
@@ -217,19 +239,35 @@ func (p *pool) probeAll() {
 	p.mu.RUnlock()
 	var wg sync.WaitGroup
 	var lmu sync.Mutex
-	var live []string
+	var live, degraded []string
 	for _, ip := range all {
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()
-			if probeProxy(ip) {
-				lmu.Lock()
+			full, hs := probeProxy(ip)
+			lmu.Lock()
+			if full {
 				live = append(live, ip)
-				lmu.Unlock()
 			}
+			if hs {
+				degraded = append(degraded, ip)
+			}
+			lmu.Unlock()
 		}(ip)
 	}
 	wg.Wait()
+	// SAFETY VALVE. The strict bar is "delivers real body bytes of probe-path", which is
+	// what finally excluded the nodes that relay small answers and stall on a real page.
+	// But it now depends on a URL we do not own: if RuTracker renames or redirects that
+	// path, EVERY node fails the body stage at once and the pool would go empty — the
+	// tool would take itself offline over a cosmetic upstream change. So when nothing
+	// clears the strict bar, fall back to the nodes that at least completed the tunnel,
+	// and say so loudly.
+	if len(live) == 0 && len(degraded) > 0 {
+		log.Printf("[rt-proxy] no upstream delivered body bytes of %s — falling back to %d handshake-only node(s); check probe-path",
+			*probePath, len(degraded))
+		live = degraded
+	}
 	p.mu.Lock()
 	p.live = live
 	p.mu.Unlock()
@@ -245,14 +283,14 @@ func (p *pool) probeAll() {
 // produced the client-visible 000s (this is what the official RuTracker client
 // does: it validates a proxy by fetching THROUGH it, not just connecting).
 // Bounded by a single probeTO budget (dial + CONNECT + inner TLS).
-func probeProxy(ip string) bool {
+func probeProxy(ip string) (full bool, handshake bool) {
 	deadline := time.Now().Add(*probeTO)
 	up, err := dialProxy(ip, time.Until(deadline))
 	if err != nil {
 		if *verbose {
 			log.Printf("[rt-proxy] probe %s: dial/tls failed: %v", ip, err)
 		}
-		return false
+		return false, false
 	}
 	defer up.Close()
 	up.SetDeadline(deadline)
@@ -264,12 +302,12 @@ func probeProxy(ip string) bool {
 		if *verbose {
 			log.Printf("[rt-proxy] probe %s: CONNECT reply %q err=%v", ip, strings.TrimSpace(status), err)
 		}
-		return false
+		return false, false
 	}
 	for { // drain the rest of the CONNECT response headers
 		line, e := br.ReadString('\n')
 		if e != nil {
-			return false
+			return false, false
 		}
 		if line == "\r\n" || line == "\n" {
 			break
@@ -287,9 +325,47 @@ func probeProxy(ip string) bool {
 		if *verbose {
 			log.Printf("[rt-proxy] probe %s: inner TLS to %s failed: %v", ip, host, err)
 		}
-		return false
+		return false, false
 	}
-	return true
+	// A completed handshake is STILL not proof. Measured on-router: two pool nodes passed
+	// this exact check every cycle (health said 7/17 live) yet could not deliver a single
+	// byte of a real page — curl through them stalled right after the certificate flight,
+	// 0 bytes downloaded, 2 out of 2 attempts, reproducibly. They were ~28% of the live
+	// ring, which is precisely the share of RuTracker page loads that hung. So finish the
+	// job the official client does and FETCH through the tunnel: require a real HTTP
+	// response line over the session we just established.
+	// ...and a RESPONSE LINE is not proof either. Measured on-router against the two bad
+	// nodes: HEAD returned a clean 301 through both, while a GET of a real page returned
+	// 0 bytes and hung, reproducibly. They relay small answers and stall on the first real
+	// transfer — which is why CONNECT, the TLS handshake and a HEAD probe all waved them
+	// through while ~28% of page loads (their share of the ring) hung. So pull actual BODY
+	// BYTES, the way the official client validates a proxy by fetching through it.
+	fmt.Fprintf(inner, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+		*probePath, host)
+	rd := bufio.NewReader(inner)
+	line, err := rd.ReadString('\n')
+	if err != nil || !strings.Contains(line, " 200") {
+		if *verbose {
+			log.Printf("[rt-proxy] probe %s: no 200 for %s from %s (%q, %v)", ip, *probePath, host, strings.TrimSpace(line), err)
+		}
+		return false, true
+	}
+	for { // drain response headers
+		l, e := rd.ReadString('\n')
+		if e != nil {
+			return false, true
+		}
+		if l == "\r\n" || l == "\n" {
+			break
+		}
+	}
+	if n, err := io.CopyN(io.Discard, rd, int64(*probeBytes)); err != nil || n < int64(*probeBytes) {
+		if *verbose {
+			log.Printf("[rt-proxy] probe %s: stalled after %d/%d body bytes (%v)", ip, n, *probeBytes, err)
+		}
+		return false, true
+	}
+	return true, true
 }
 
 // bufConn lets crypto/tls read through a bufio.Reader that may still hold bytes
@@ -337,7 +413,7 @@ func dialProxy(ip string, timeout time.Duration) (net.Conn, error) {
 // windows where the recover-loop is re-probing. Once a live IP exists it tries
 // up to maxTries of them so one flaky upstream does not kill the connection.
 // Returns (nil, nil) if nothing works within the budget (genuine all-dead pool).
-func dialUpstream(p *pool, sni string) (net.Conn, *bufio.Reader) {
+func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 	target := sni + ":443"
 	deadline := time.Now().Add(*pickWaitTO)
 	tries := 0
@@ -352,17 +428,77 @@ func dialUpstream(p *pool, sni string) (net.Conn, *bufio.Reader) {
 		}
 		up, br, ok := openTunnel(ip, target)
 		if ok {
-			if *verbose {
-				log.Printf("[rt-proxy] tunnel %s via %s", target, ip)
+			// Do not hand the client a tunnel that has not proven it carries data.
+			if verifyFirstByte(ip, up, br, hello) {
+				if *verbose {
+					log.Printf("[rt-proxy] tunnel %s via %s", target, ip)
+				}
+				return up, br
 			}
-			return up, br
+			up.Close()
+			p.demote(ip)
 		}
 		tries++
 		if tries >= *maxTries {
 			return nil, nil
 		}
-		// live IP but this one failed — round-robin to another and retry
+		// this upstream failed — round-robin to another and retry
 	}
+}
+
+// verifyFirstByte replays the client's ClientHello into the tunnel and requires the
+// upstream to deliver the server's ENTIRE first TLS handshake record within firstByteTO.
+//
+// One byte is not enough — measured on-router, that was the difference between a fix and
+// a placebo. The bad nodes DO emit a byte or two and then stall forever: with a one-byte
+// check they sailed through, the splice started, and the browser hung exactly as before
+// (verbose log: `tunnel via <ip>` … `c->u copied=437` twenty seconds later, and no `u->c`
+// line at all — the upstream never sent the server's flight). Demanding a complete,
+// well-formed record proves the node is actually relaying the far end.
+//
+// THIS IS THE FIX for "RuTracker works, then hangs, then works again if you touch
+// anything". A pool node can accept the CONNECT and then never deliver a single byte
+// of the real conversation. Nothing here noticed: the ClientHello was written, both
+// splice directions were started, and the only bound was the 15-MINUTE idle timeout —
+// so the browser sat on a dead tunnel until IT gave up, and not one line was logged
+// (the splice logs only under -v). Whether a page loaded was decided by which node
+// pick()'s round-robin cursor happened to hand you; retrying — reloading the page,
+// or any other new connection — advanced the cursor to a working node, which is
+// exactly why "any sneeze" appeared to fix it.
+//
+// Peek, don't Read: the byte stays in br, and the up->client splice reads from br, so
+// nothing is consumed or lost. A failure here is invisible to the client — we have not
+// sent it anything yet, so the caller can simply replay the same ClientHello into a
+// different upstream.
+func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) bool {
+	if _, err := up.Write(hello); err != nil {
+		log.Printf("[rt-proxy] upstream %s: ClientHello write failed: %v — trying another", ip, err)
+		return false
+	}
+	up.SetReadDeadline(time.Now().Add(*firstByteTO))
+	defer up.SetReadDeadline(time.Time{})
+	// TLS record header: type(1) version(2) length(2).
+	hdr, err := br.Peek(5)
+	if err != nil {
+		log.Printf("[rt-proxy] upstream %s accepted CONNECT but sent no server flight within %s (%v) — demoting, trying another",
+			ip, *firstByteTO, err)
+		return false
+	}
+	if hdr[0] != 0x16 { // handshake
+		log.Printf("[rt-proxy] upstream %s answered with a non-handshake record (type 0x%02x) — demoting, trying another", ip, hdr[0])
+		return false
+	}
+	n := int(hdr[3])<<8 | int(hdr[4])
+	if n <= 0 || n > 16384 { // RFC 8446 max TLSPlaintext fragment
+		log.Printf("[rt-proxy] upstream %s answered with an implausible record length %d — demoting, trying another", ip, n)
+		return false
+	}
+	if _, err := br.Peek(5 + n); err != nil {
+		log.Printf("[rt-proxy] upstream %s stalled mid-record (%d of %d bytes) within %s (%v) — demoting, trying another",
+			ip, br.Buffered(), 5+n, *firstByteTO, err)
+		return false
+	}
+	return true
 }
 
 // openTunnel dials the upstream proxy IP over TLS and issues CONNECT target,
@@ -378,7 +514,10 @@ func openTunnel(ip, target string) (net.Conn, *bufio.Reader, bool) {
 	}
 	up.SetDeadline(time.Now().Add(*dialTO))
 	fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", target, target)
-	br := bufio.NewReader(up)
+	// 32 KiB, not bufio's 4 KiB default: verifyFirstByte Peeks a WHOLE TLS record, and
+	// Peek cannot return more than the buffer holds — a 16 KiB record would fail with
+	// ErrBufferFull and we would demote a perfectly good upstream.
+	br := bufio.NewReaderSize(up, 32*1024)
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, " 200") {
 		if *verbose {
@@ -410,9 +549,12 @@ func handle(client net.Conn, p *pool) {
 		return
 	}
 
-	up, br := dialUpstream(p, sni)
+	// dialUpstream replays the ClientHello itself and only returns a tunnel that has
+	// already answered with real bytes, retrying other nodes as needed — so by here the
+	// upstream is proven, not merely connected.
+	up, br := dialUpstream(p, sni, hello)
 	if up == nil {
-		log.Printf("[rt-proxy] no live upstream proxy IP, dropping %s", sni)
+		log.Printf("[rt-proxy] no usable upstream proxy IP, dropping %s", sni)
 		return
 	}
 	defer up.Close()
@@ -420,14 +562,11 @@ func handle(client net.Conn, p *pool) {
 		log.Printf("[rt-proxy] %s -> %s:443", client.RemoteAddr(), sni)
 	}
 
-	// Replay the peeked ClientHello into the tunnel, then splice. CRITICAL: the
-	// up->client direction reads via `br` (the bufio.Reader that consumed the
-	// CONNECT response), NOT the raw `up` — otherwise any bytes bufio buffered
-	// past the "200" response (the start of the server's reply) are stranded in
-	// br and never reach the client, hanging the handshake. client->up writes raw.
-	if _, err := up.Write(hello); err != nil {
-		return
-	}
+	// Splice. CRITICAL: the up->client direction reads via `br` (the bufio.Reader that
+	// consumed the CONNECT response and peeked the first response byte), NOT the raw
+	// `up` — otherwise any bytes bufio buffered past the "200" response (the start of
+	// the server's reply) are stranded in br and never reach the client, hanging the
+	// handshake. client->up writes raw.
 	// Proper bidirectional splice with HALF-CLOSE: when one direction ends, only
 	// the write side of the peer is closed (CloseWrite / close_notify), NOT the
 	// whole connection — so the other direction can still finish (e.g. the
