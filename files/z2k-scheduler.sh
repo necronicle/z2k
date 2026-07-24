@@ -192,10 +192,16 @@ while true; do
     # already-registered) tunnel. It does NOT do the first install / first bring-up of
     # the tunnel — that is the enable/boot/package's job (doing it here raced the
     # first-enable → opkgtun0 drift). Mirrors the ppe/nfqueue self-heal pattern.
+    # CADENCE IS LOAD-BEARING, not a polling preference. Cloudflare drops an IDLE MASQUE
+    # session (usque logs H3_NO_ERROR / "Tunnel connection lost"), and usque's author states
+    # plainly that keeping light traffic on it prevents the drop entirely — upstream issue
+    # Diniboy1123/usque#49, where users otherwise ended up cron-restarting the daemon. The
+    # self-heal probe IS that light traffic, so running it every ~25s is the keepalive: it
+    # costs one tiny request and removes the failure instead of reacting to it.
     if [ -r "${ZAPRET2_DIR}/z2k-warp.sh" ]; then
         last_warp=$(last_fired_in "$TMP_STATE" warp-selfheal-epoch)
         case "$last_warp" in ''|*[!0-9]*) last_warp=0 ;; esac
-        if [ "$((now_epoch - last_warp))" -ge 55 ]; then
+        if [ "$((now_epoch - last_warp))" -ge 25 ]; then
             mark_fired_in "$TMP_STATE" warp-selfheal-epoch "$now_epoch"
             sh "${ZAPRET2_DIR}/z2k-warp.sh" selfheal >/dev/null 2>&1 &
         fi

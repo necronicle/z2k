@@ -97,36 +97,6 @@ ip() {
 }
 linksets() { wc -l < "$IP_LINK_SET" | tr -d ' '; }
 
-# ---- warp_write_iface_ip -----------------------------------------------------
-printf "\n--- W1: fresh conf (only commented default) -> writes our IFACE_IP, rc=0 ---\n"
-printf '%s\n' '# usque config' '# IFACE_IP="172.16.0.1"' 'HTTP2_ENABLE=1' > "$USQUE_CONF"
-warp_write_iface_ip; rc=$?
-assert_eq "W1 rc=0 (wrote)"                 "0" "$rc"
-assert_eq "W1 exactly one IFACE_IP= line"   "1" "$(ifip_lines)"
-assert_eq "W1 value is our pin"             "172.16.240.1" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
-
-printf "\n--- W2: run again -> idempotent (rc=1, no second line) ---\n"
-warp_write_iface_ip; rc=$?
-assert_eq "W2 rc=1 (nothing to do)"         "1" "$rc"
-assert_eq "W2 still exactly one line"       "1" "$(ifip_lines)"
-
-printf "\n--- W3: user already set their own IFACE_IP -> never clobbered ---\n"
-printf '%s\n' 'HTTP2_ENABLE=1' 'IFACE_IP="10.9.9.9"' > "$USQUE_CONF"
-warp_write_iface_ip; rc=$?
-assert_eq "W3 rc=1 (respects user)"         "1" "$rc"
-assert_eq "W3 user value untouched"         "10.9.9.9" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
-
-printf "\n--- W4: commented-out IFACE_IP is NOT a match -> writes ---\n"
-printf '%s\n' '#IFACE_IP="1.2.3.4"' '  # IFACE_IP="5.6.7.8"' > "$USQUE_CONF"
-warp_write_iface_ip; rc=$?
-assert_eq "W4 rc=0 (commented ignored)"     "0" "$rc"
-assert_eq "W4 our pin appended"             "172.16.240.1" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
-
-printf "\n--- W5: missing conf -> rc=1, no crash ---\n"
-rm -f "$USQUE_CONF"
-warp_write_iface_ip; rc=$?
-assert_eq "W5 rc=1 (no conf)"               "1" "$rc"
-
 # ---- warp_usque_kick (cooldown) ----------------------------------------------
 # Deterministic clock: shadow `date` so warp_usque_kick's `date +%s` returns a fixed
 # value. With the real clock, the 299s-vs-300s boundary (K3) flaked on wall-clock drift
@@ -256,31 +226,21 @@ warp_link_up; rc=$?
 assert_eq "L3 rc=1 (no device)"              "1" "$rc"
 assert_eq "L3 no set call"                   "0" "$(linksets)"
 
-# ---- warp_usque_restart (stale running-config trap) ----
-# S51usque sources usque.conf THEN usque.conf.run, and .run wins. It is removed only by
-# fn_stop_internal, which `fn_stop` skips when the daemon is already dead — so a crashed
-# daemon leaves a .run pinning the OLD address and our IFACE_IP pin never applies. Every
-# restart we issue must drop it first.
-USQUE_RUNCONF="$SB/usque.conf.run"
-printf "\n--- U1: stale .run is removed before the restart ---\n"
-: > "$RESTARTS"; echo 'IFACE_IP="172.16.1.100"' > "$USQUE_RUNCONF"
+# ---- warp_usque_restart ----
+# Our own init owns stop/start, so this is now a plain restart. The package's usque.conf.run
+# trap it used to work around is gone with the package itself.
+printf "\n--- U1: restarts the engine through our init ---\n"
+: > "$RESTARTS"
 warp_usque_restart; rc=$?
 assert_eq "U1 rc=0"                          "0" "$rc"
-assert_eq "U1 stale .run gone"               "0" "$( [ -f "$USQUE_RUNCONF" ] && echo 1 || echo 0 )"
-assert_eq "U1 usque restarted once"          "1" "$(kicks)"
+assert_eq "U1 engine restarted once"         "1" "$(kicks)"
 
-printf "\n--- U2: no .run present -> still restarts, no crash ---\n"
-: > "$RESTARTS"; rm -f "$USQUE_RUNCONF"
-warp_usque_restart; rc=$?
-assert_eq "U2 rc=0"                          "0" "$rc"
-assert_eq "U2 usque restarted once"          "1" "$(kicks)"
-
-printf "\n--- U3: no S51usque -> rc=1, no restart ---\n"
+printf "\n--- U2: init missing -> rc=1, nothing attempted ---\n"
 : > "$RESTARTS"; _saved="$USQUE_INIT"; USQUE_INIT="$SB/nope"
 warp_usque_restart; rc=$?
 USQUE_INIT="$_saved"
-assert_eq "U3 rc=1 (nothing to restart)"     "1" "$rc"
-assert_eq "U3 zero restarts"                 "0" "$(kicks)"
+assert_eq "U2 rc=1 (nothing to restart)"     "1" "$rc"
+assert_eq "U2 zero restarts"                 "0" "$(kicks)"
 
 # ---- warp_tunnel_live / warp_live_cached (end-to-end liveness) ----
 # The whole point: "opkgtun0 has an address" is not proof the tunnel carries traffic.
@@ -325,65 +285,16 @@ assert_eq "C2 missing -> empty"              "" "$(warp_live_cached)"
 # ---- interface name is package-owned (found by the on-router E2E) ----
 # The package's postinst takes the first FREE opkgtunN, so a router carrying a leftover
 # opkgtun0 gets the real tunnel on opkgtun1. Hard-coding opkgtun0 routed and probed an orphan.
-printf "\n--- I1: IFACE from usque.conf wins over the opkgtun0 default ---\n"
-printf '%s\n' 'IFACE="opkgtun1"' 'HTTP2_ENABLE=1' > "$USQUE_CONF"
+WARP_DIR="$SB/warpdir"; mkdir -p "$WARP_DIR"
+printf "\n--- I1: interface name comes from the state our own init records ---\n"
+echo "opkgtun1" > "$WARP_DIR/iface"
 assert_eq "I1 resolves opkgtun1"             "opkgtun1" "$(warp_resolve_iface)"
 
-printf "\n--- I2: missing / junk IFACE falls back to the default ---\n"
-printf '%s\n' 'HTTP2_ENABLE=1' > "$USQUE_CONF"
-assert_eq "I2 no IFACE -> default"           "opkgtun0" "$(warp_resolve_iface)"
-printf '%s\n' 'IFACE="../etc/passwd"' > "$USQUE_CONF"
-assert_eq "I2 junk IFACE -> default"         "opkgtun0" "$(warp_resolve_iface)"
-
-# ---- IFACE_IP conflict healing (the failure NDM reported verbatim on the E2E) ----
-#   Network::Interface::Ip error: "OpkgTun1": network 172.16.240.1/32 conflicts with
-#   interface "OpkgTun0"
-# A leftover interface holding the pinned address makes `interface up` fail, so the tunnel
-# can never come up. The pin has to step aside.
-ip_addr_show_out="$SB/ipaddr"
-ip() {
-    if [ "$1" = "-o" ]; then cat "$ip_addr_show_out" 2>/dev/null; return 0; fi
-    if [ "$1" = link ] && [ "$2" = show ] && [ "$3" = "$WARP_IFACE" ]; then
-        case "$(cat "$IP_LINK_STATE" 2>/dev/null)" in
-            gone) return 1 ;;
-            up)   echo "96: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1280"; return 0 ;;
-            *)    echo "96: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP> mtu 1280"; return 0 ;;
-        esac
-    fi
-    if [ "$1" = link ] && [ "$2" = set ] && [ "$3" = "$WARP_IFACE" ]; then
-        echo x >> "$IP_LINK_SET"; echo up > "$IP_LINK_STATE"; return 0
-    fi
-    return 0
-}
-WARP_IFACE=opkgtun1
-WARP_IFACE_IP=172.16.240.1
-WARP_IFACE_IP_NET=172.16.240
-
-printf "\n--- N1: pinned address free -> used as-is ---\n"
-: > "$ip_addr_show_out"
-assert_eq "N1 no conflict"                   "172.16.240.1" "$(warp_free_iface_ip)"
-
-printf "\n--- N2: leftover interface holds the pin -> next free host chosen ---\n"
-printf '40: opkgtun0    inet 172.16.240.1/32 scope global opkgtun0\n' > "$ip_addr_show_out"
-assert_eq "N2 steps aside to .2"             "172.16.240.2" "$(warp_free_iface_ip)"
-
-printf "\n--- N3: OUR OWN interface holding it is NOT a conflict ---\n"
-printf '41: opkgtun1    inet 172.16.240.1/32 scope global opkgtun1\n' > "$ip_addr_show_out"
-assert_eq "N3 keeps .1"                      "172.16.240.1" "$(warp_free_iface_ip)"
-
-printf "\n--- N4: conflicting IFACE_IP already in usque.conf gets HEALED ---\n"
-printf '40: opkgtun0    inet 172.16.240.1/32 scope global opkgtun0\n' > "$ip_addr_show_out"
-printf '%s\n' 'IFACE="opkgtun1"' 'IFACE_IP="172.16.240.1"' > "$USQUE_CONF"
-warp_write_iface_ip; rc=$?
-assert_eq "N4 rc=0 (rewrote)"                "0" "$rc"
-assert_eq "N4 moved off the conflict"        "172.16.240.2" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
-assert_eq "N4 still exactly one line"        "1" "$(ifip_lines)"
-
-printf "\n--- N5: a NON-conflicting value (incl. the user's own) is never touched ---\n"
-printf '%s\n' 'IFACE="opkgtun1"' 'IFACE_IP="10.9.9.9"' > "$USQUE_CONF"
-warp_write_iface_ip; rc=$?
-assert_eq "N5 rc=1 (left alone)"             "1" "$rc"
-assert_eq "N5 user value intact"             "10.9.9.9" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
+printf "\n--- I2: missing / junk state falls back to the default ---\n"
+rm -f "$WARP_DIR/iface"
+assert_eq "I2 no state -> default"           "opkgtun0" "$(warp_resolve_iface)"
+echo "../etc/passwd" > "$WARP_DIR/iface"
+assert_eq "I2 junk state -> default"         "opkgtun0" "$(warp_resolve_iface)"
 
 # ---- FAIL OPEN: routing must never point into a tunnel that is not carrying traffic ----
 # Field failure, r-65: the tunnel died, routing stayed applied, and every destination in the
@@ -405,13 +316,29 @@ ip() {   # interface present, addressed and UP — the "looks perfectly healthy"
     return 0
 }
 
-printf "\n--- F1: probe says DEAD -> routing torn down, usque kicked ---\n"
-: > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"; : > "$RESTARTS"; rm -f "$WARP_KICK_STAMP"
+WARP_FAIL_STREAK="$SB/failstreak"
+WARP_FAIL_THRESHOLD=3
+WARP_PROBE_RETRY_WAIT=0
+warp_tunnel_live_retry() { warp_tunnel_live; }
+
+printf "\n--- F1: FIRST failure -> recovery attempted, routing left UP ---\n"
+# Tearing the route down on the first miss is counter-productive: usque rebuilds its session
+# when outgoing traffic appears, and the route is what carries that traffic.
+: > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"; : > "$RESTARTS"; rm -f "$WARP_KICK_STAMP" "$WARP_FAIL_STREAK"
 warp_tunnel_live() { return 1; }
 warp_selfheal
 assert_eq "F1 routing NOT applied"           "0" "$(wc -l < "$PBR_UP_CALLS" | tr -d ' ')"
-assert_eq "F1 routing torn down"             "1" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
-assert_eq "F1 usque kicked"                  "1" "$(kicks)"
+assert_eq "F1 routing NOT torn down yet"     "0" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
+assert_eq "F1 recovery attempted"            "1" "$(kicks)"
+assert_eq "F1 streak recorded"               "1" "$(cat "$WARP_FAIL_STREAK")"
+
+printf "\n--- F1b: SUSTAINED failure -> fail open, routing torn down ---\n"
+: > "$PBR_DOWN_CALLS"
+warp_selfheal    # 2nd
+assert_eq "F1b still up after 2 failures"    "0" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
+warp_selfheal    # 3rd == threshold
+assert_eq "F1b torn down at the threshold"   "1" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
+assert_eq "F1b streak now 3"                 "3" "$(cat "$WARP_FAIL_STREAK")"
 
 printf "\n--- F2: probe says LIVE -> routing applied, no kick ---\n"
 : > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"; : > "$RESTARTS"; rm -f "$WARP_KICK_STAMP"

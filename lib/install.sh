@@ -3085,6 +3085,11 @@ step_finalize() {
     deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh" || return 1
     deploy_critical_file "files/init.d/S96z2k-rt-proxy"            "/opt/etc/init.d/S96z2k-rt-proxy" || return 1
     deploy_critical_file "files/ndm/92-z2k-rt-proxy-redirect.sh"    "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh" || return 1
+    # WARP tunnel lifecycle — OUR init, replacing the usque-keenetic package's S51usque
+    # (see files/init.d/S51z2k-warp for the list of package behaviours that forced this).
+    # Soft: the mode is optional and off by default, so a deploy failure must not sink the
+    # whole install — WARP simply stays unavailable until the next update.
+    deploy_critical_file "files/init.d/S51z2k-warp"                 "/opt/etc/init.d/S51z2k-warp" || print_warning "warp: init deploy failed (режим WARP будет недоступен)"
     # WARP: re-assert the game-ipset MARK rule after an NDM mangle regen (soft — the mode
     # is optional and off by default, a missing hook must not fail the whole install).
     deploy_critical_file "files/ndm/93-z2k-warp.sh"                 "/opt/etc/ndm/netfilter.d/93-z2k-warp.sh" || print_warning "warp: NDM hook deploy failed (маршрут WARP восстановится самолечением в течение минуты)"
@@ -3961,7 +3966,17 @@ uninstall_zapret2() {
     ip route flush table 989 2>/dev/null || true
     ipset destroy z2k_warp 2>/dev/null || true
     ipset destroy z2k_warp_new 2>/dev/null || true
-    rm -f /opt/etc/ndm/netfilter.d/93-z2k-warp.sh \
+    # Stop and remove OUR tunnel service. The usque-keenetic package (if the user still has
+    # it) is deliberately left alone — it is a separate opkg package they may have installed
+    # themselves, and removing it would tear down their NDM interface.
+    if [ -x /opt/etc/init.d/S51z2k-warp ]; then
+        /opt/etc/init.d/S51z2k-warp stop >/dev/null 2>&1 || true
+    fi
+    killall z2k-usque 2>/dev/null || true
+    rm -f /opt/etc/init.d/S51z2k-warp \
+          /opt/sbin/z2k-usque \
+          /var/run/z2k-warp.pid \
+          /opt/etc/ndm/netfilter.d/93-z2k-warp.sh \
           "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-kick" \
           "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-reg" \
           "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-install" \

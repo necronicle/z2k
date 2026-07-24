@@ -1,0 +1,233 @@
+#!/bin/sh
+# /opt/etc/init.d/S51z2k-warp — z2k's OWN lifecycle for the Cloudflare WARP (MASQUE) tunnel.
+#
+# Replaces the usque-keenetic package's S51usque entirely. The ENGINE stays upstream's
+# `usque` binary — that part is healthy and actively developed. What we take over is the
+# lifecycle, because every WARP failure we chased lived there, not in the engine:
+#
+#   * usque.conf.run overrode usque.conf and was only cleared while the daemon was alive,
+#     so a crashed daemon pinned the old address forever and config edits never applied;
+#   * fn_stop returned early when the daemon was already dead, leaving that file behind;
+#   * fn_is_running compared a pidfile against pgrep and lost track of its own daemon;
+#   * the interface name was "first free opkgtunN", so a leftover interface silently moved
+#     the real tunnel to opkgtun1 while everything else still pointed at opkgtun0;
+#   * fn_setup_tun_interface configured the NDM interface before usque had created the tun
+#     netdev — a race we were patching in THEIR script with sed on every single install.
+#
+# Design here, deliberately boring and matching S96z2k-rt-proxy:
+#   * one supervisor subshell owns the daemon and respawns it with capped backoff;
+#   * the pidfile holds the SUPERVISOR, and liveness is `kill -0`, not name matching;
+#   * NDM configuration happens only AFTER the tun netdev exists — no race, no sed;
+#   * the interface name and address are chosen once, recorded, and reused — no lottery;
+#   * an address already owned by another interface is stepped over, because NDM refuses
+#     to raise an interface onto a conflicting network and the tunnel then never comes up.
+
+PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+
+NAME="z2k-warp"
+BIN="${BIN:-/opt/sbin/z2k-usque}"
+WARP_DIR="${WARP_DIR:-/opt/zapret2/warp}"
+SESSION="${SESSION:-$WARP_DIR/session.conf}"
+STATE_IFACE="${STATE_IFACE:-$WARP_DIR/iface}"      # remembered netdev name (opkgtunN)
+STATE_ADDR="${STATE_ADDR:-$WARP_DIR/addr}"         # remembered local address
+PIDFILE="${PIDFILE:-/var/run/z2k-warp.pid}"
+LOG="${LOG:-/tmp/z2k-log/z2k-warp.log}"
+SNI="${SNI:-ozon.ru}"                              # outer TLS SNI (domain fronting)
+MTU="${MTU:-1280}"
+ADDR_NET="${ADDR_NET:-172.16.240}"                 # off Keenetic's SSTP/L2TP 172.16.1.x pool
+KEEPALIVE="${KEEPALIVE:-25s}"                      # usque -k; CF drops an idle MASQUE session
+
+# Legacy package paths — read ONLY to migrate away from them.
+PKG_INIT="/opt/etc/init.d/S51usque"
+PKG_SESSION="/opt/etc/usque/session.conf"
+
+mkdir -p "$WARP_DIR" "$(dirname "$LOG")" 2>/dev/null
+
+log() { echo "$(date 2>/dev/null) [$NAME] $*" >> "$LOG"; }
+
+ndm() { LD_LIBRARY_PATH= ndmc -c "$1" >/dev/null 2>&1; }
+
+# netdev name -> NDM interface name (opkgtun1 -> OpkgTun1), mirroring Keenetic's convention.
+ndm_name() { echo "$1" | sed 's/^opkg/Opkg/; s/tun/Tun/'; }
+
+# ---- interface identity (chosen ONCE, then reused) ---------------------------
+# The package re-derived "first free opkgtunN" on every install, which is how a leftover
+# interface silently relocated the tunnel. We pick once, record it, and keep using it.
+pick_iface() {
+    local n=0 name
+    while [ "$n" -lt 16 ]; do
+        name="opkgtun$n"
+        ip link show "$name" >/dev/null 2>&1 || { echo "$name"; return 0; }
+        n=$((n + 1))
+    done
+    echo "opkgtun0"
+}
+
+iface_name() {
+    local i
+    i=$(cat "$STATE_IFACE" 2>/dev/null)
+    case "$i" in opkgtun[0-9]*) echo "$i"; return 0 ;; esac
+    # First run: adopt an interface the package already created for us (so an upgrade keeps
+    # the user's existing NDM object) rather than creating yet another one.
+    for i in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^opkgtun[0-9]*$'); do
+        echo "$i" > "$STATE_IFACE" 2>/dev/null
+        echo "$i"; return 0
+    done
+    i=$(pick_iface); echo "$i" > "$STATE_IFACE" 2>/dev/null; echo "$i"
+}
+
+# Is $1 held by an interface OTHER than ours? NDM refuses to raise an interface onto an
+# address another one already owns ("network X conflicts with interface Y"), and the tunnel
+# then never comes up — silently.
+addr_taken_by_other() {
+    ip -o -4 addr show 2>/dev/null | awk -v ifc="$2" -v want="$1" '
+        $2 != ifc { sub(/\/.*/, "", $4); if ($4 == want) found = 1 }
+        END { exit !found }'
+}
+
+iface_addr() {
+    local ifc="$1" a n
+    a=$(cat "$STATE_ADDR" 2>/dev/null)
+    case "$a" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+            addr_taken_by_other "$a" "$ifc" || { echo "$a"; return 0; } ;;
+    esac
+    n=1
+    while [ "$n" -lt 250 ]; do
+        a="$ADDR_NET.$n"
+        if ! addr_taken_by_other "$a" "$ifc"; then
+            echo "$a" > "$STATE_ADDR" 2>/dev/null
+            echo "$a"; return 0
+        fi
+        n=$((n + 1))
+    done
+    return 1
+}
+
+# ---- enrollment --------------------------------------------------------------
+ensure_session() {
+    [ -s "$SESSION" ] && return 0
+    # Adopt the package's device key instead of enrolling again: re-registering burns a new
+    # WARP device for no reason and can fail where the existing one already works.
+    if [ -s "$PKG_SESSION" ]; then
+        cp -f "$PKG_SESSION" "$SESSION" 2>/dev/null && { log "adopted existing device key from the usque package"; return 0; }
+    fi
+    log "no device key — registering with Cloudflare"
+    "$BIN" register --accept-tos --config "$SESSION" >> "$LOG" 2>&1
+    [ -s "$SESSION" ]
+}
+
+# ---- NDM interface -----------------------------------------------------------
+# Called ONLY after the tun netdev exists. That ordering is the whole point: the package
+# configured NDM first and raced its own daemon, which is why first-enable needed a reboot.
+setup_ndm_iface() {
+    local ifc="$1" addr="$2" nd
+    nd=$(ndm_name "$ifc")
+    ndm "interface $nd"
+    ndm "interface $nd description z2k-warp"
+    ndm "interface $nd ip global auto"
+    ndm "interface $nd ip tcp adjust-mss pmtu"
+    ndm "interface $nd ip address $addr 255.255.255.255"
+    ndm "interface $nd ip mtu $MTU"
+    ndm "interface $nd up"
+    ndm "system configuration save"
+    # NDM sometimes leaves the link administratively down; a down link routes nothing.
+    ip link show "$ifc" 2>/dev/null | grep -qw UP || ip link set "$ifc" up 2>/dev/null
+}
+
+release_ndm_iface() {
+    local ifc nd
+    ifc=$(cat "$STATE_IFACE" 2>/dev/null) || return 0
+    [ -n "$ifc" ] || return 0
+    nd=$(ndm_name "$ifc")
+    ndm "interface $nd down"
+}
+
+# ---- supervisor --------------------------------------------------------------
+is_running() {
+    [ -f "$PIDFILE" ] || return 1
+    kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+start() {
+    [ -x "$BIN" ] || { log "engine missing: $BIN"; exit 0; }
+    if is_running; then
+        echo "$NAME already running (pid $(cat "$PIDFILE"))"
+        return 0
+    fi
+    # The package's own service must not fight us over the same device key and interface.
+    [ -x "$PKG_INIT" ] && "$PKG_INIT" stop >/dev/null 2>&1
+    ensure_session || { log "registration failed — cannot start"; echo "$NAME: registration failed"; return 1; }
+
+    local ifc addr
+    ifc=$(iface_name)
+    addr=$(iface_addr "$ifc") || { log "no free address in $ADDR_NET.0/24"; return 1; }
+    log "starting on $ifc ($addr)"
+    echo "Starting $NAME on $ifc ($addr)..."
+
+    # SUPERVISOR (s6/runit pattern in shell — Entware has no systemd/procd). The pidfile
+    # holds the supervisor, parent of the daemon, respawning it with capped backoff.
+    # `trap '' HUP` keeps the MIPS busybox SIGHUP fix; no `nohup` — busybox does not ship it.
+    (
+        trap '' HUP
+        trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+        backoff=1
+        while :; do
+            t0=$(date +%s 2>/dev/null || echo 0)
+            GODEBUG=asyncpreemptoff=1 "$BIN" nativetun \
+                --config "$SESSION" --interface-name "$ifc" --no-iproute2 \
+                -s "$SNI" --http2 -k "$KEEPALIVE" </dev/null >> "$LOG" 2>&1 &
+            child=$!
+            # Configure NDM once the tun netdev actually exists — never before.
+            (
+                w=0
+                while [ "$w" -lt 30 ] && ! ip link show "$ifc" >/dev/null 2>&1; do
+                    w=$((w + 1)); sleep 1
+                done
+                ip link show "$ifc" >/dev/null 2>&1 && setup_ndm_iface "$ifc" "$addr"
+            ) &
+            wait "$child"
+            t1=$(date +%s 2>/dev/null || echo 0)
+            if [ $((t1 - t0)) -ge 60 ]; then backoff=1; else
+                backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30
+            fi
+            echo "$(date 2>/dev/null) [$NAME] engine exited, respawn in ${backoff}s" >> "$LOG"
+            sleep "$backoff"
+        done
+    ) &
+    echo $! > "$PIDFILE"
+    return 0
+}
+
+stop() {
+    echo "Stopping $NAME..."
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    # The supervisor kills its child on TERM, but a stray engine from an earlier run (or a
+    # supervisor that died without cleaning up) must not survive and hold the tun device.
+    killall z2k-usque 2>/dev/null
+    release_ndm_iface
+    log "stopped"
+}
+
+status() {
+    local ifc
+    ifc=$(cat "$STATE_IFACE" 2>/dev/null)
+    if is_running; then
+        echo "$NAME is running (supervisor $(cat "$PIDFILE"), iface ${ifc:-?})"
+    else
+        echo "$NAME is stopped"
+        return 1
+    fi
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)  status ;;
+    *)       echo "Usage: $0 {start|stop|restart|status}" ;;
+esac
