@@ -269,9 +269,14 @@ func (p *pool) probeAll() {
 		live = degraded
 	}
 	p.mu.Lock()
+	prev := len(p.live)
 	p.live = live
 	p.mu.Unlock()
-	if *verbose || len(live) == 0 {
+	// Log on every CHANGE, not only when the pool empties. Field triage needs to see "3/17
+	// live" — a user whose ISP blocks most of the pool looks identical, from the outside, to
+	// a user hitting a bug in our code, and without this line the only observable state was
+	// silence. Steady state stays quiet: no line while the count is unchanged.
+	if *verbose || len(live) != prev {
 		log.Printf("[rt-proxy] health: %d/%d upstream IPs live", len(live), len(all))
 	}
 }
