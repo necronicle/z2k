@@ -568,7 +568,11 @@ warp_status_info() {
     enabled=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
     ipset_name="${WARP_IPSET:-z2k_warp}"
     installed=0
-    [ -x /opt/etc/init.d/S51usque ] && installed=1
+    # The ENGINE binary is the thing that has to exist — not the old package's init script.
+    # This still pointed at /opt/etc/init.d/S51usque after z2k took the tunnel lifecycle over,
+    # and since we now deliberately disable that script, the panel reported "ставится при
+    # первом включении" on a router where the engine was installed and the tunnel was up.
+    [ -x /opt/sbin/z2k-usque ] && installed=1
     # Ask the engine — ONE status call gives both the cached liveness verdict and the
     # interface name. Do NOT hard-code opkgtun0 here: the usque package picks the first free
     # opkgtunN at install time, so on a router with a leftover interface the real tunnel is

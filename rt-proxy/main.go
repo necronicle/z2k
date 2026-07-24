@@ -34,7 +34,7 @@ var (
 	proxyHost    = flag.String("proxy-host", "ps1.blockme.site", "upstream HTTPS proxy hostname (TLS SNI to the proxy)")
 	proxyPort    = flag.String("proxy-port", "443", "upstream proxy port")
 	seedIPs      = flag.String("ips", "", "comma-separated upstream proxy IPs (seed pool; re-resolved from proxy-host too)")
-	healthEvery  = flag.Duration("health-interval", 180*time.Second, "health-check interval for the IP pool")
+	healthEvery  = flag.Duration("health-interval", 90*time.Second, "health-check interval for the IP pool")
 	healthHost   = flag.String("health-target", "rutracker.org:443", "CONNECT target used to probe a proxy IP")
 	dialTO       = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
 	probeTO      = flag.Duration("probe-timeout", 12*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
@@ -45,6 +45,7 @@ var (
 	firstByteTO  = flag.Duration("first-byte-timeout", 4*time.Second, "how long an upstream has to deliver the server's first TLS handshake record after the replayed ClientHello before it is demoted and another one is tried")
 	resolverAddr = flag.String("resolver", "1.1.1.1:53", "DNS server queried DIRECTLY for the upstream pool, to bypass the router's ndnproxy whose cache goes stale and strands the pool on dead IPs (system resolver is still used as a fallback/union)")
 	probePath    = flag.String("probe-path", "/forum/index.php", "path fetched THROUGH each upstream when probing — must return a sizeable body, not a redirect")
+	flightBytes  = flag.Int("flight-bytes", 2048, "bytes of the server's TLS flight an upstream must deliver before we hand the tunnel to the client")
 	probeBytes   = flag.Int("probe-bytes", 8192, "body bytes an upstream must actually deliver to count as live")
 	verbose      = flag.Bool("v", false, "verbose logging")
 )
@@ -501,6 +502,20 @@ func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) boo
 	if _, err := br.Peek(5 + n); err != nil {
 		log.Printf("[rt-proxy] upstream %s stalled mid-record (%d of %d bytes) within %s (%v) — demoting, trying another",
 			ip, br.Buffered(), 5+n, *firstByteTO, err)
+		return false
+	}
+	// ONE record is not enough either, and this is the hole that survived the last fix.
+	// A ServerHello is ~a hundred bytes and the bad nodes deliver it happily; they stall on
+	// the NEXT record — the certificate flight. Measured with curl through such a node:
+	// "TLS handshake, Server hello (2)" then "Certificate (11)" and then nothing, 0 bytes
+	// downloaded, until the client gave up. Gating on the first record let exactly those
+	// nodes through, so the browser hung on them — reproducibly on a fresh browser start,
+	// where a burst of new connections spreads across the whole ring at once.
+	// Require a real slice of the server's flight instead. A certificate-bearing handshake
+	// is several KB, so this costs a healthy node nothing and costs a stalling one its slot.
+	if _, err := br.Peek(*flightBytes); err != nil {
+		log.Printf("[rt-proxy] upstream %s delivered only %d of %d flight bytes within %s (%v) — demoting, trying another",
+			ip, br.Buffered(), *flightBytes, *firstByteTO, err)
 		return false
 	}
 	return true
