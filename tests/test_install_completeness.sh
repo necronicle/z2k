@@ -133,6 +133,38 @@ assert_eq "every blob= reference is registered or lua-defined" "" "$GHOST"
 rm -f /tmp/test_install_inits.txt
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+MAP_RC=0
+# ==============================================================================
+# INIT-SCRIPT PATH MAPPING (regression: r-59.9, p-27, and again with S51z2k-warp)
+# ==============================================================================
+# Every init script we ship is installed to /opt/etc/init.d/. If au_install_paths does not
+# know that, a patch-type release writes it into $ZAPRET2_DIR/init.d/ instead — the file
+# silently never reaches the running system while installed_tag advances, so there is no
+# retry and no error. This has now cost three releases; assert it for ALL of them at once.
+printf "\n--- init.d path mapping is complete ---\n"
+(
+    ZAPRET2_DIR=/opt/zapret2
+    # shellcheck disable=SC1091
+    . "$(dirname "$0")/../lib/auto_update.sh" 2>/dev/null
+    for f in "$(dirname "$0")/../files/init.d/"S*; do
+        [ -f "$f" ] || continue
+        base=$(basename "$f")
+        got=$(au_install_paths "files/init.d/$base" | head -1)
+        want="/opt/etc/init.d/$base"
+        if [ "$got" = "$want" ]; then
+            printf "[PASS] %s -> %s\n" "$base" "$got"
+        else
+            printf "[FAIL] %s maps to %s, expected %s\n" "$base" "$got" "$want"
+            exit 1
+        fi
+    done
+) || MAP_RC=1
+if [ "$MAP_RC" -eq 0 ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 printf "Results: %d passed, %d failed\n" "$TESTS_PASSED" "$TESTS_FAILED"
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 

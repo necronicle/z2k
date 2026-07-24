@@ -319,7 +319,30 @@ ip() {   # interface present, addressed and UP — the "looks perfectly healthy"
 WARP_FAIL_STREAK="$SB/failstreak"
 WARP_FAIL_THRESHOLD=3
 WARP_PROBE_RETRY_WAIT=0
-warp_tunnel_live_retry() { warp_tunnel_live; }
+# Do NOT stub warp_tunnel_live_retry: it IS the release's headline mechanism (probe, wake,
+# probe again). Stubbing it meant a mutant that made it always succeed survived the suite.
+PROBE_CALLS="$SB/probe_calls"; : > "$PROBE_CALLS"
+_probe_count() { wc -l < "$PROBE_CALLS" | tr -d ' '; }
+
+printf "\n--- P-retry: a first-probe miss is retried before any verdict (wake-on-traffic) ---\n"
+# usque rebuilds its session when outgoing traffic appears, so the FIRST probe after an idle
+# drop legitimately fails while doing its job. One probe would call a healthy tunnel dead.
+: > "$PROBE_CALLS"
+warp_tunnel_live() { echo x >> "$PROBE_CALLS"; [ "$(_probe_count)" -ge 2 ]; }
+warp_tunnel_live_retry; rc=$?
+assert_eq "retry probes twice"               "2" "$(_probe_count)"
+assert_eq "second probe decides"             "0" "$rc"
+
+: > "$PROBE_CALLS"
+warp_tunnel_live() { echo x >> "$PROBE_CALLS"; return 1; }
+warp_tunnel_live_retry; rc=$?
+assert_eq "both miss -> dead"                "1" "$rc"
+assert_eq "and it stops at two probes"       "2" "$(_probe_count)"
+
+: > "$PROBE_CALLS"
+warp_tunnel_live() { echo x >> "$PROBE_CALLS"; return 0; }
+warp_tunnel_live_retry >/dev/null 2>&1
+assert_eq "healthy tunnel costs ONE probe"   "1" "$(_probe_count)"
 
 printf "\n--- F1: FIRST failure -> recovery attempted, routing left UP ---\n"
 # Tearing the route down on the first miss is counter-productive: usque rebuilds its session
@@ -347,6 +370,43 @@ warp_selfheal
 assert_eq "F2 routing applied"               "1" "$(wc -l < "$PBR_UP_CALLS" | tr -d ' ')"
 assert_eq "F2 routing NOT torn down"         "0" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
 assert_eq "F2 no kick on a healthy tunnel"   "0" "$(kicks)"
+
+# ---- warp_enable contract (mutation-driven: this path had NO test, so a mutant that
+# routed regardless of the liveness verdict survived here silently) ----
+# Exit codes are the contract with the panel and the menu:
+#   0 = on AND verified carrying traffic, 2 = on but not up yet (flag stays, self-heal owns
+#   it), 1 = hard failure (caller reverts the flag).
+warp_install() { return 0; }
+warp_usque_running() { return 0; }
+warp_ipset_load() { return 0; }
+warp_purge_legacy_nat() { return 0; }
+warp_link_up() { return 0; }
+
+printf "\n--- E1: tunnel verified live -> rc=0 and routing applied ---\n"
+: > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"; : > "$RESTARTS"
+warp_tunnel_live_retry() { return 0; }
+warp_enable >/dev/null 2>&1; rc=$?
+assert_eq "E1 rc=0 (verified)"               "0" "$rc"
+assert_eq "E1 routing applied"               "1" "$(wc -l < "$PBR_UP_CALLS" | tr -d ' ')"
+assert_eq "E1 routing not torn down"         "0" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
+
+printf "\n--- E2: tunnel NOT live -> rc=2, routing must NOT be applied ---\n"
+# The blackhole guard at enable time: steering ~14k networks into a tunnel that is not
+# carrying traffic takes them out entirely instead of leaving them un-tunnelled.
+: > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"
+warp_tunnel_live_retry() { return 1; }
+warp_enable >/dev/null 2>&1; rc=$?
+assert_eq "E2 rc=2 (on, not up yet)"         "2" "$rc"
+assert_eq "E2 routing NOT applied"           "0" "$(wc -l < "$PBR_UP_CALLS" | tr -d ' ')"
+assert_eq "E2 routing torn down"             "1" "$(wc -l < "$PBR_DOWN_CALLS" | tr -d ' ')"
+
+printf "\n--- E3: engine unavailable -> rc=1 so the caller reverts the flag ---\n"
+: > "$PBR_UP_CALLS"
+warp_install() { return 1; }
+warp_enable >/dev/null 2>&1; rc=$?
+warp_install() { return 0; }
+assert_eq "E3 rc=1 (hard failure)"           "1" "$rc"
+assert_eq "E3 routing NOT applied"           "0" "$(wc -l < "$PBR_UP_CALLS" | tr -d ' ')"
 
 printf "\n=== warp selfheal tests: %d passed, %d failed ===\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]

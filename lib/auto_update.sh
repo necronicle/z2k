@@ -376,6 +376,18 @@ au_install_paths() {
             # ${zd}/init.d/ (via files/init.d/* below), missing the live script.
             echo "/opt/etc/init.d/S98tg-tunnel"
             ;;
+        files/init.d/S99z2k-scheduler)
+            # Same trap, found by the completeness test rather than by another field failure:
+            # install.sh:2770 deploys it to /opt/etc/init.d, so a patch touching the scheduler
+            # was landing in ${zd}/init.d/ and never reaching the running system.
+            echo "/opt/etc/init.d/S99z2k-scheduler"
+            ;;
+        files/init.d/S51z2k-warp)
+            # WARP tunnel supervisor — install.sh copies it to /opt/etc/init.d, NOT into
+            # $ZAPRET2_DIR. Without this case a patch touching it lands in ${zd}/init.d/ and is
+            # silently lost while installed_tag advances — the r-59.9 failure, again.
+            echo "/opt/etc/init.d/S51z2k-warp"
+            ;;
         files/init.d/S97z2k-http-tunnel)
             # http-tunnel supervisor — same /opt/etc/init.d placement as above.
             echo "/opt/etc/init.d/S97z2k-http-tunnel"
@@ -690,6 +702,7 @@ EOF
             files/init.d/S98tg-tunnel)         restart_set="$restart_set S98tg-tunnel" ;;
             files/init.d/S97z2k-http-tunnel)   restart_set="$restart_set S97z2k-http-tunnel" ;;
             files/init.d/S96z2k-rt-proxy)      restart_set="$restart_set S96z2k-rt-proxy" ;;
+            files/init.d/S51z2k-warp)          restart_set="$restart_set S51z2k-warp" ;;
             files/init.d/S99z2k-scheduler)     restart_set="$restart_set S99z2k-scheduler" ;;
             files/z2k-scheduler.sh)            restart_set="$restart_set S99z2k-scheduler" ;;
             files/init.d/S98z2k-detect)        restart_set="$restart_set S98z2k-detect" ;;

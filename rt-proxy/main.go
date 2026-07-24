@@ -45,7 +45,6 @@ var (
 	firstByteTO  = flag.Duration("first-byte-timeout", 4*time.Second, "how long an upstream has to deliver the server's first TLS handshake record after the replayed ClientHello before it is demoted and another one is tried")
 	resolverAddr = flag.String("resolver", "1.1.1.1:53", "DNS server queried DIRECTLY for the upstream pool, to bypass the router's ndnproxy whose cache goes stale and strands the pool on dead IPs (system resolver is still used as a fallback/union)")
 	probePath    = flag.String("probe-path", "/forum/index.php", "path fetched THROUGH each upstream when probing — must return a sizeable body, not a redirect")
-	flightBytes  = flag.Int("flight-bytes", 2048, "bytes of the server's TLS flight an upstream must deliver before we hand the tunnel to the client")
 	probeBytes   = flag.Int("probe-bytes", 8192, "body bytes an upstream must actually deliver to count as live")
 	verbose      = flag.Bool("v", false, "verbose logging")
 )
@@ -277,7 +276,10 @@ func (p *pool) probeAll() {
 	// live" — a user whose ISP blocks most of the pool looks identical, from the outside, to
 	// a user hitting a bug in our code, and without this line the only observable state was
 	// silence. Steady state stays quiet: no line while the count is unchanged.
-	if *verbose || len(live) != prev {
+	// len(live) == 0 is included on purpose: a pool that has been empty since start never
+	// "changes", so logging only on change silently removed the one case that was previously
+	// always reported — the case a user actually needs to see.
+	if *verbose || len(live) != prev || len(live) == 0 {
 		log.Printf("[rt-proxy] health: %d/%d upstream IPs live", len(live), len(all))
 	}
 }
@@ -504,18 +506,42 @@ func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) boo
 			ip, br.Buffered(), 5+n, *firstByteTO, err)
 		return false
 	}
-	// ONE record is not enough either, and this is the hole that survived the last fix.
-	// A ServerHello is ~a hundred bytes and the bad nodes deliver it happily; they stall on
-	// the NEXT record — the certificate flight. Measured with curl through such a node:
-	// "TLS handshake, Server hello (2)" then "Certificate (11)" and then nothing, 0 bytes
-	// downloaded, until the client gave up. Gating on the first record let exactly those
-	// nodes through, so the browser hung on them — reproducibly on a fresh browser start,
-	// where a burst of new connections spreads across the whole ring at once.
-	// Require a real slice of the server's flight instead. A certificate-bearing handshake
-	// is several KB, so this costs a healthy node nothing and costs a stalling one its slot.
-	if _, err := br.Peek(*flightBytes); err != nil {
-		log.Printf("[rt-proxy] upstream %s delivered only %d of %d flight bytes within %s (%v) — demoting, trying another",
-			ip, br.Buffered(), *flightBytes, *firstByteTO, err)
+	// ONE record is not enough — the bad nodes deliver a ServerHello happily and stall on what
+	// follows. But a BYTE COUNT is the wrong bar, and shipping one broke RuTracker worse than
+	// the bug it replaced: a RESUMED TLS 1.2 handshake is ServerHello + ChangeCipherSpec +
+	// Finished — 137 bytes in total. Demanding 2 KB demoted every healthy node in turn until
+	// the pool was empty. Measured on-router, 28 times: "delivered only 137 of 2048 flight
+	// bytes ... demoting" across all six live nodes, then "no usable upstream". curl never
+	// showed it because separate curl processes do not share a TLS session cache, so every
+	// probe was a full 4.6 KB handshake — a browser resumes, and broke instantly.
+	//
+	// The right bar is COMPLETENESS, not size: require a well-formed SECOND record. A server
+	// flight always spans at least two records (ChangeCipherSpec cannot share a record with
+	// handshake data, and TLS 1.3 follows ServerHello with CCS then application_data), while
+	// a node that stalls after the ServerHello never produces one. Short-but-complete passes;
+	// long-but-truncated does not.
+	off := 5 + n
+	hdr2, err := br.Peek(off + 5)
+	if err != nil {
+		log.Printf("[rt-proxy] upstream %s sent only the first record and stalled within %s (%v) — demoting, trying another",
+			ip, *firstByteTO, err)
+		return false
+	}
+	switch hdr2[off] {
+	case 0x14, 0x16, 0x17: // ChangeCipherSpec, handshake, application_data — a flight continuing
+	default:
+		log.Printf("[rt-proxy] upstream %s followed the ServerHello with record type 0x%02x — demoting, trying another",
+			ip, hdr2[off])
+		return false
+	}
+	n2 := int(hdr2[off+3])<<8 | int(hdr2[off+4])
+	if n2 < 0 || n2 > 16384 {
+		log.Printf("[rt-proxy] upstream %s second record has an implausible length %d — demoting, trying another", ip, n2)
+		return false
+	}
+	if _, err := br.Peek(off + 5 + n2); err != nil {
+		log.Printf("[rt-proxy] upstream %s stalled inside its second record within %s (%v) — demoting, trying another",
+			ip, *firstByteTO, err)
 		return false
 	}
 	return true

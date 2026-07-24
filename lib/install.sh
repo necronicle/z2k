@@ -3435,7 +3435,10 @@ step_finalize() {
     # nothing races it). Idempotent — skipped when usque is already installed.
     if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$ZAPRET2_DIR/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] \
        && [ -x "$ZAPRET2_DIR/z2k-warp.sh" ]; then
-        if [ -x /opt/etc/init.d/S51usque ]; then
+        # Test the ENGINE we actually ship, not the old package's init: gating on S51usque
+        # skipped provisioning for exactly the cohort this migration exists for, leaving
+        # /opt/sbin/z2k-usque absent and the mode permanently dead.
+        if [ -x /opt/sbin/z2k-usque ]; then
             print_info "WARP: движок usque уже установлен"
         else
             print_info "WARP: устанавливаю движок usque (один раз, при установке)..."
@@ -3973,6 +3976,11 @@ uninstall_zapret2() {
         /opt/etc/init.d/S51z2k-warp stop >/dev/null 2>&1 || true
     fi
     killall z2k-usque 2>/dev/null || true
+    # Give the package's service its executable bit back. We took it so it could not race us
+    # at boot; leaving it disabled after WE are gone would silently break a package the user
+    # installed themselves and may still want.
+    [ -f /opt/etc/init.d/S51usque ] && chmod +x /opt/etc/init.d/S51usque 2>/dev/null
+    rm -rf /opt/etc/z2k-warp /var/run/z2k-warp.lock 2>/dev/null || true
     rm -f /opt/etc/init.d/S51z2k-warp \
           /opt/sbin/z2k-usque \
           /var/run/z2k-warp.pid \

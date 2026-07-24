@@ -49,7 +49,12 @@ WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"      # user-owned li
 # see files/init.d/S51z2k-warp for why each of those was taken over.
 USQUE_INIT="${USQUE_INIT:-/opt/etc/init.d/S51z2k-warp}"
 PKG_INIT="/opt/etc/init.d/S51usque"          # legacy usque-keenetic service, migrated away from
-WARP_DIR="${WARP_DIR:-$ZAPRET2_DIR/warp}"
+# OUTSIDE $ZAPRET2_DIR on purpose. A reinstall renames the whole tree away and deletes it, so
+# state kept there is destroyed on every update: the WARP device key would be burned and
+# re-registered each time, dropping a working tunnel. The package kept its key in /opt/etc for
+# the same reason. z2k_warp_adopt_legacy_state() migrates anything left in the old location.
+WARP_DIR="${WARP_DIR:-/opt/etc/z2k-warp}"
+WARP_DIR_LEGACY="${WARP_DIR_LEGACY:-$ZAPRET2_DIR/warp}"
 USQUE_VERSION="${USQUE_VERSION:-4.2.1}"
 # An explicit WARP_IFACE from the environment is a deliberate override and is never
 # auto-resolved over (tests and manual overrides depend on that).
@@ -241,7 +246,22 @@ warp_arch() {
     esac
 }
 
+# One-time migration of state written by the first version of this wrapper, which kept it
+# inside $ZAPRET2_DIR and therefore lost it on the next reinstall.
+warp_adopt_legacy_state() {
+    [ -d "$WARP_DIR_LEGACY" ] || return 0
+    mkdir -p "$WARP_DIR" 2>/dev/null || return 0
+    for f in session.conf iface addr; do
+        [ -s "$WARP_DIR_LEGACY/$f" ] || continue
+        [ -s "$WARP_DIR/$f" ] && continue
+        cp -f "$WARP_DIR_LEGACY/$f" "$WARP_DIR/$f" 2>/dev/null && _wlog "migrated warp state: $f"
+    done
+    chmod 600 "$WARP_DIR/session.conf" 2>/dev/null
+    return 0
+}
+
 warp_install() {
+    warp_adopt_legacy_state
     [ -x "$USQUE_BIN" ] && return 0
     mkdir -p "$WARP_DIR" 2>/dev/null
     # A user upgrading from the package already has the engine on disk — adopt it instead of
@@ -265,9 +285,19 @@ warp_install() {
     [ -s "$zip" ] || { _wlog "engine download failed"; return 1; }
     command -v unzip >/dev/null 2>&1 || { _wlog "unzip missing — cannot unpack the engine"; rm -f "$zip"; return 1; }
     rm -f /tmp/usque
-    unzip -o -q "$zip" usque -d /tmp 2>/dev/null
+    if ! unzip -o -q "$zip" usque -d /tmp 2>/dev/null; then
+        _wlog "engine archive is corrupt (unzip failed)"; rm -f "$zip" /tmp/usque; return 1
+    fi
     rm -f "$zip"
     [ -s /tmp/usque ] || { _wlog "engine archive did not contain the binary"; return 1; }
+    chmod 755 /tmp/usque 2>/dev/null
+    # SMOKE-TEST before installing. A truncated download (ENOSPC in tmpfs is routine on these
+    # routers) yields a non-empty file that passes every other check — and once it is in place
+    # warp_install short-circuits on its existence FOREVER, so the mode never recovers.
+    if ! /tmp/usque --help >/dev/null 2>&1; then
+        _wlog "downloaded engine does not run (truncated or wrong architecture) — discarding"
+        rm -f /tmp/usque; return 1
+    fi
     mv -f /tmp/usque "$USQUE_BIN" 2>/dev/null || { _wlog "cannot install the engine to $USQUE_BIN"; return 1; }
     chmod 755 "$USQUE_BIN" 2>/dev/null
     _wlog "WARP engine installed: $USQUE_BIN"
@@ -528,6 +558,15 @@ warp_register_direct() {
 # reg API outright. Returns 0 when it handled enrollment this tick (selfheal should stop),
 # 1 when already enrolled (selfheal proceeds to route).
 warp_enroll_or_fallback() {
+    # Adopt any key we already own before burning a new Cloudflare device. Adoption used to
+    # live only in the init's start path, which self-heal never reaches — so a router whose
+    # state was wiped kept registering fresh devices every tick.
+    warp_adopt_legacy_state
+    if [ ! -s "$USQUE_SESSION" ] && [ -s /opt/etc/usque/session.conf ]; then
+        mkdir -p "$WARP_DIR" 2>/dev/null
+        cp -f /opt/etc/usque/session.conf "$USQUE_SESSION" 2>/dev/null && \
+            { chmod 600 "$USQUE_SESSION" 2>/dev/null; _wlog "adopted the usque package device key"; }
+    fi
     if [ -s "$USQUE_SESSION" ]; then
         [ -f "$WARP_REG_COUNT" ] && rm -f "$WARP_REG_COUNT" 2>/dev/null
         return 1
@@ -566,7 +605,10 @@ warp_selfheal() {
     # nothing ever retried. The mode then stayed flagged ON and stone dead until somebody
     # toggled it by hand — which is precisely why "в консоли включил и заработало". Retry here,
     # cooldown-guarded because the package is ~14 MB.
-    if [ ! -x "$USQUE_INIT" ]; then
+    # Gate on the ENGINE, not on our init: install.sh deploys S51z2k-warp unconditionally, so
+    # testing the init made this branch permanently unreachable and self-heal could never
+    # provision a missing engine — the mode would sit flagged ON and dead forever.
+    if [ ! -x "$USQUE_BIN" ]; then
         _warp_cooldown_ok "$WARP_INSTALL_STAMP" "$WARP_INSTALL_COOLDOWN" || return 0
         _wlog "usque missing while WARP is enabled — installing"
         warp_install || return 0

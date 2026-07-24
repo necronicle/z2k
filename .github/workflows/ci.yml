@@ -25,7 +25,10 @@ jobs:
           # SC1007: `LD_LIBRARY_PATH= ndmc ...` is an INTENTIONAL env-prefix (clear
           # Entware's OpenSSL path so ndmc works on KeenOS 4.3+/5.x — see p-57.1);
           # shellcheck false-flags it as an accidental assignment. Excluded.
-          find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './webpanel/cgi/*.sh' \) \
+          # files/init.d/S* have NO .sh extension, so the -name '*.sh' mask never saw them —
+          # 240 lines of tunnel-lifecycle shell were shipping unlinted. Check them explicitly.
+          { find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './webpanel/cgi/*.sh' \); \
+            find ./files/init.d -type f -name 'S*'; } \
             | xargs shellcheck --severity=warning --exclude=SC1007,SC1090,SC1091,SC3043,SC3040,SC2034,SC2148,SC2154
 
       - name: Run shell unit tests
@@ -81,6 +84,35 @@ jobs:
               go build -ldflags="-s -w" -o /dev/null .
           done
 
+      # rt-proxy is the RuTracker path — the code that broke in the field three times in one
+      # week. It was NEVER built, vetted or tested here: the job only knew mtproxy-client and
+      # vps-relay, which is exactly how it shipped for months with zero tests.
+      - name: Go vet (rt-proxy)
+        working-directory: rt-proxy
+        run: go vet ./...
+
+      - name: Go test (rt-proxy)
+        working-directory: rt-proxy
+        run: go test -count=1 -cover ./...
+
+      - name: Cross-compile (rt-proxy, softfloat MIPS)
+        working-directory: rt-proxy
+        run: |
+          for t in linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle; do
+            GOOS="${t%%/*}"; GOARCH="${t##*/}"; EXTRA=""
+            case "$GOARCH" in mips|mipsle) EXTRA="GOMIPS=softfloat" ;; arm) EXTRA="GOARM=7" ;; esac
+            echo "Building rt-proxy for $GOOS/$GOARCH $EXTRA..."
+            env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA go build -trimpath -ldflags="-s -w" -o /dev/null .
+          done
+
+      - name: Go vet (z2k-detect)
+        working-directory: z2k-detect
+        run: go vet ./...
+
+      - name: Go test (z2k-detect)
+        working-directory: z2k-detect
+        run: go test -count=1 ./...
+
       - name: Go vet (vps-relay)
         working-directory: vps-relay
         run: go vet ./...
@@ -116,3 +148,21 @@ jobs:
         # `lua` symlink relies on update-alternatives which is not
         # guaranteed on minimal Ubuntu images.
         run: lua5.3 tests/test_http_classifier.lua
+
+  mutation:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      # A green suite proves nothing by itself: it may assert on stubs, or guard behaviour
+      # nobody depends on. This applies known real regressions to the code and requires the
+      # suite to go RED for each. A surviving mutant is an unguarded behaviour — it failed
+      # this repo three times already, so it is a build failure, not a warning.
+      - name: Run mutants
+        run: GO=go sh tests/mutation.sh

@@ -27,7 +27,10 @@ export PATH
 
 NAME="z2k-warp"
 BIN="${BIN:-/opt/sbin/z2k-usque}"
-WARP_DIR="${WARP_DIR:-/opt/zapret2/warp}"
+# OUTSIDE /opt/zapret2 on purpose: a reinstall replaces that tree wholesale, which would burn
+# the WARP device key on every update and drop a working tunnel.
+WARP_DIR="${WARP_DIR:-/opt/etc/z2k-warp}"
+WARP_DIR_LEGACY="${WARP_DIR_LEGACY:-/opt/zapret2/warp}"
 SESSION="${SESSION:-$WARP_DIR/session.conf}"
 STATE_IFACE="${STATE_IFACE:-$WARP_DIR/iface}"      # remembered netdev name (opkgtunN)
 STATE_ADDR="${STATE_ADDR:-$WARP_DIR/addr}"         # remembered local address
@@ -68,12 +71,19 @@ iface_name() {
     local i
     i=$(cat "$STATE_IFACE" 2>/dev/null)
     case "$i" in opkgtun[0-9]*) echo "$i"; return 0 ;; esac
-    # First run: adopt an interface the package already created for us (so an upgrade keeps
-    # the user's existing NDM object) rather than creating yet another one.
-    for i in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^opkgtun[0-9]*$'); do
-        echo "$i" > "$STATE_IFACE" 2>/dev/null
-        echo "$i"; return 0
-    done
+    # First run: adopt the interface the usque PACKAGE created for us, so an upgrade keeps the
+    # user's existing NDM object instead of piling up another one. Adopt ONLY that one: other
+    # opkgtunN devices belong to other Entware tunnels (sing-box, xray, AmneziaWG), and taking
+    # one over would reconfigure a stranger's tunnel, save it into startup-config, and drop it
+    # on our stop(). An unproven interface is not ours.
+    i=$(grep -m1 '^IFACE=' /opt/etc/usque/usque.conf 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')
+    case "$i" in
+        opkgtun[0-9]*)
+            if ip link show "$i" >/dev/null 2>&1; then
+                echo "$i" > "$STATE_IFACE" 2>/dev/null
+                echo "$i"; return 0
+            fi ;;
+    esac
     i=$(pick_iface); echo "$i" > "$STATE_IFACE" 2>/dev/null; echo "$i"
 }
 
@@ -108,6 +118,12 @@ iface_addr() {
 # ---- enrollment --------------------------------------------------------------
 ensure_session() {
     [ -s "$SESSION" ] && return 0
+    # State written by the first version of this wrapper lived inside the z2k tree and is
+    # destroyed by a reinstall. Adopt it before deciding to register a brand-new device.
+    for f in session.conf iface addr; do
+        [ -s "$WARP_DIR_LEGACY/$f" ] && [ ! -s "$WARP_DIR/$f" ] && cp -f "$WARP_DIR_LEGACY/$f" "$WARP_DIR/$f" 2>/dev/null
+    done
+    [ -s "$SESSION" ] && { chmod 600 "$SESSION" 2>/dev/null; log "adopted warp state from the pre-migration location"; return 0; }
     # Adopt the package's device key instead of enrolling again: re-registering burns a new
     # WARP device for no reason and can fail where the existing one already works.
     if [ -s "$PKG_SESSION" ]; then
@@ -131,7 +147,13 @@ setup_ndm_iface() {
     ndm "interface $nd ip address $addr 255.255.255.255"
     ndm "interface $nd ip mtu $MTU"
     ndm "interface $nd up"
-    ndm "system configuration save"
+    # `system configuration save` writes FLASH. It must never sit on the respawn path: a
+    # degraded tunnel respawns for hours and would grind the router's flash down. Save once,
+    # when the interface object is actually new, and never again.
+    if [ ! -f "$WARP_DIR/.ndm-saved" ]; then
+        ndm "system configuration save"
+        touch "$WARP_DIR/.ndm-saved" 2>/dev/null
+    fi
     # NDM sometimes leaves the link administratively down; a down link routes nothing.
     ip link show "$ifc" 2>/dev/null | grep -qw UP || ip link set "$ifc" up 2>/dev/null
 }
@@ -152,6 +174,24 @@ is_running() {
 
 start() {
     [ -x "$BIN" ] || { log "engine missing: $BIN"; exit 0; }
+    # MUTUAL EXCLUSION around the whole check-and-spawn. ensure_session below can block for
+    # tens of seconds on a DPI-blocked registration endpoint, and self-heal fires every 25s —
+    # without this, a second supervisor spawns, only one pid lands in the pidfile, and the
+    # orphan is unreachable by stop() and by uninstall: it resurrects the engine after every
+    # stop and keeps running a deleted binary. mkdir is the atomic primitive available here.
+    LOCKDIR="${LOCKDIR:-/var/run/z2k-warp.lock}"
+    if ! mkdir "$LOCKDIR" 2>/dev/null; then
+        # Stale lock from a killed start: adopt it only when its owner is gone.
+        _owner=$(cat "$LOCKDIR/pid" 2>/dev/null)
+        if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+            echo "$NAME: start already in progress (pid $_owner)"
+            return 0
+        fi
+        rm -rf "$LOCKDIR" 2>/dev/null
+        mkdir "$LOCKDIR" 2>/dev/null || { echo "$NAME: cannot take the start lock"; return 1; }
+    fi
+    echo $$ > "$LOCKDIR/pid" 2>/dev/null
+    trap 'rm -rf "$LOCKDIR" 2>/dev/null' EXIT INT TERM
     if is_running; then
         echo "$NAME already running (pid $(cat "$PIDFILE"))"
         return 0
@@ -205,6 +245,7 @@ start() {
         done
     ) &
     echo $! > "$PIDFILE"
+    rm -rf "$LOCKDIR" 2>/dev/null
     return 0
 }
 
@@ -231,6 +272,11 @@ status() {
         return 1
     fi
 }
+
+# Sourced by tests/test_warp_init.sh to exercise the decision functions (interface identity,
+# address selection) without spawning anything — mirrors z2k-warp.sh's guard. 241 lines of
+# tunnel lifecycle shipped with zero coverage until this existed.
+[ -n "$Z2K_WARP_INIT_SOURCE_ONLY" ] && return 0
 
 case "$1" in
     start)   start ;;
