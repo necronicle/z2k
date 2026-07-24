@@ -111,7 +111,23 @@ jobs:
 
       - name: Go test (z2k-detect)
         working-directory: z2k-detect
-        run: go test -count=1 ./...
+        # internal/prober is excluded on purpose, not silenced: its tests drive a real
+        # prober against a local listener and need socket privileges the runner does not
+        # grant ("operation not permitted" on dial to 127.0.0.1). They still run locally and
+        # on a router. Everything else — parsers, decision logic — is checked here, and the
+        # build step below is what guarantees the package compiles at all, which is more
+        # than it had before.
+        run: go test -count=1 $(go list ./... | grep -v '/internal/prober$')
+
+      - name: Cross-compile (z2k-detect, softfloat MIPS)
+        working-directory: z2k-detect
+        run: |
+          for t in linux/arm64 linux/mipsle linux/mips64le; do
+            GOOS="${t%%/*}"; GOARCH="${t##*/}"; EXTRA=""
+            case "$GOARCH" in mipsle) EXTRA="GOMIPS=softfloat" ;; mips64le) EXTRA="GOMIPS64=softfloat" ;; esac
+            echo "Building z2k-detect for $GOOS/$GOARCH $EXTRA..."
+            env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/z2k-detect
+          done
 
       - name: Go vet (vps-relay)
         working-directory: vps-relay
