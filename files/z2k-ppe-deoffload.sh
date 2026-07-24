@@ -65,16 +65,23 @@ PPE_CONFIG_FILE="${PPE_CONFIG_FILE:-/opt/zapret2/config}"
 _z2k_ppe_ipt()  { iptables  -w "$@" 2>/dev/null || iptables  "$@" 2>/dev/null; }
 _z2k_ppe_ipt6() { ip6tables -w "$@" 2>/dev/null || ip6tables "$@" 2>/dev/null; }
 
-# r-62 migration: the legacy game-mode UDP de-offload was removed. Strip any orphaned
-# game-port -j PPE rule left in mangle on a router that had game mode ON, so it doesn't
-# linger forever. Idempotent — safe to run on every assert/remove.
+# r-62 migration, ONE-SHOT: the legacy game-mode UDP de-offload was removed. Strip any
+# orphaned game-port -j PPE rule left in mangle on a router that had game mode ON, so it
+# doesn't linger forever. Nothing recreates that rule, so once drained the work is done —
+# hence the marker. Without it this ran on EVERY assert, i.e. four iptables/ip6tables
+# round-trips every ~55s from the scheduler plus one per NDM regen, forever, on every
+# router in the fleet, for a rule that has not been created since r-62.
+PPE_LEGACY_MARK="${PPE_LEGACY_MARK:-/opt/zapret2/.z2k-ppe-legacy-purged}"
 _z2k_ppe_purge_legacy_game() {
+    [ -f "$PPE_LEGACY_MARK" ] && return 0
     local a="-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip $PPE_CONNSKIP -j $PPE_TARGET"
     local ch
     for ch in PREROUTING FORWARD; do
         while _z2k_ppe_ipt  -t mangle -C "$ch" $a; do _z2k_ppe_ipt  -t mangle -D "$ch" $a || break; done
         while _z2k_ppe_ipt6 -t mangle -C "$ch" $a; do _z2k_ppe_ipt6 -t mangle -D "$ch" $a || break; done
     done
+    { : > "$PPE_LEGACY_MARK"; } 2>/dev/null || true
+    return 0
 }
 
 # Has the user explicitly disabled the layer? (default ON)
@@ -136,8 +143,10 @@ z2k_ppe_udp_present_pre6() { _z2k_ppe_ipt6 -t mangle -C PREROUTING $_z2k_ppe_udp
 
 # Install the rules (idempotent, v4 is the success gate, v6 best-effort).
 z2k_ppe_ensure_rules() {
-    _z2k_ppe_purge_legacy_game
+    # Availability first: where the firmware has no `-j PPE` target the legacy rule cannot
+    # exist either, so the purge has nothing to do and shouldn't burn syscalls looking.
     z2k_ppe_available || return 1
+    _z2k_ppe_purge_legacy_game
     z2k_ppe_user_disabled && return 1
     z2k_ppe_rule_present_pre4 || _z2k_ppe_ipt -t mangle -I PREROUTING $_z2k_ppe_args
     z2k_ppe_rule_present_fwd4 || _z2k_ppe_ipt -t mangle -I FORWARD    $_z2k_ppe_args

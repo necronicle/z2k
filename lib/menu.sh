@@ -1722,12 +1722,18 @@ menu_game_warp() {
         1)
             _set_flag GAME_WARP_ENABLED 1
             print_info "Поднимаю WARP (регистрация + туннель, ~10с)..."
-            if sh "${ZAPRET2_DIR}/z2k-warp.sh" enable; then
-                print_success "Игровой WARP-режим включён"
+            sh "${ZAPRET2_DIR}/z2k-warp.sh" enable; _warp_rc=$?
+            # Same three-way contract as the webpanel toggle (see warp_enable): 0 = verified
+            # carrying traffic, 2 = on but not up yet (keep the flag — only self-heal can
+            # finish it), anything else = hard failure, revert.
+            if [ "$_warp_rc" = "0" ]; then
+                print_success "Игровой WARP-режим включён, туннель проверен (warp=on)"
+            elif [ "$_warp_rc" = "2" ]; then
+                print_warning "Режим включён, но туннель пока не поднялся — z2k продолжит поднимать его в фоне (проверьте через минуту)"
             else
                 _set_flag GAME_WARP_ENABLED 0
                 sh "${ZAPRET2_DIR}/z2k-warp.sh" disable >/dev/null 2>&1
-                print_error "WARP не поднялся (сеть/регистрация) — режим оставлен выключенным"
+                print_error "WARP не поднялся (клиент usque недоступен) — режим оставлен выключенным"
             fi
             ;;
         0)

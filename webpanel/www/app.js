@@ -1026,9 +1026,27 @@
         box.disabled = false;
       }
     }
+    // Туннель — три состояния, не два. d.live это результат сквозной проверки (запрос к
+    // Cloudflare ЧЕРЕЗ интерфейс): true = трафик реально ходит, false = интерфейс поднят,
+    // но туннель мёртв, null = ещё не проверялось. Раньше здесь было только «есть адрес»,
+    // а адрес роутер выдаёт интерфейсу независимо от того, установилось ли соединение с
+    // Cloudflare — поэтому панель показывала «работает» на полностью мёртвом туннеле.
+    let tunnelValue, tunnelKind;
+    if (!d.tunnel_up) {
+      tunnelValue = "не запущен";
+      tunnelKind = enabled ? "bad" : "";
+    } else if (d.live === false) {
+      tunnelValue = "поднят, но трафик не идёт";
+      tunnelKind = "bad";
+    } else if (d.live === true) {
+      tunnelValue = "работает" + (d.addr ? " · " + d.addr : "");
+      tunnelKind = "good";
+    } else {
+      tunnelValue = "поднят, проверяется" + (d.addr ? " · " + d.addr : "");
+      tunnelKind = "";
+    }
     const cells = [
-      { label: "Туннель", value: d.tunnel_up ? "работает" + (d.addr ? " · " + d.addr : "") : "не запущен",
-        kind: d.tunnel_up ? "good" : (enabled ? "bad" : "") },
+      { label: "Туннель", value: tunnelValue, kind: tunnelKind },
       { label: "Клиент usque", value: d.installed ? "установлен" : "ставится при первом включении",
         kind: d.installed ? "good" : "" },
       { label: "Адресов в маршрутизации", value: enabled ? String(d.entries) : "—",

@@ -65,17 +65,25 @@ for badname in "" ".hidden" "-flag" "a/b" "a b" "й" "a;b" "../x"; do
     assert_eq "rejects '$badname'" "1" "$r"
 done
 
-printf "\n--- migration fallback: old z2k-warp.sh without 'migrate' verb ---\n"
-# Старый z2k-warp.sh на `migrate` печатает usage и выходит 1, каталога не
-# создаёт. Fallback в warp_lists_ensure_dir обязан сам засеять seed-список,
-# а не ставить «мигрировано»-маркер пустым mkdir'ом.
+printf "\n--- migration: engine is the SOLE creator of the lists dir ---\n"
+# Каталог lists/warp — это и есть маркер «миграция выполнена». Если движок
+# (z2k-warp.sh) не смог его создать, панель НЕ должна создавать его сама:
+# пустой mkdir навсегда подавил бы засев shipped-списка (в т.ч. позже, когда
+# рабочий движок вернётся). Ожидаем честный отказ, а не тихую потерю seed'а.
 rm -rf "$WARP_LISTS_DIR"
 OLD_SCRIPT="$SB/old-z2k-warp.sh"
 printf '#!/bin/sh\nexit 1\n' > "$OLD_SCRIPT"
 WARP_SCRIPT_SAVED="$WARP_SCRIPT"; WARP_SCRIPT="$OLD_SCRIPT"
-warp_lists_ensure_dir
+warp_lists_ensure_dir && r=0 || r=1
 WARP_SCRIPT="$WARP_SCRIPT_SAVED"
-assert_eq "fallback seeded the game list" "1" "$([ -s "$WARP_LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
+assert_eq "broken engine -> ensure_dir fails" "1" "$r"
+assert_eq "no marker dir left behind"         "0" "$([ -d "$WARP_LISTS_DIR" ] && echo 1 || echo 0)"
+
+printf "\n--- migration: working engine seeds the shipped list ---\n"
+rm -rf "$WARP_LISTS_DIR"
+warp_lists_ensure_dir && r=0 || r=1
+assert_eq "engine present -> ensure_dir ok"   "0" "$r"
+assert_eq "engine seeded the game list"       "1" "$([ -s "$WARP_LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
 rm -rf "$WARP_LISTS_DIR"
 warp_lists_ensure_dir
 

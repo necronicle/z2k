@@ -37,9 +37,12 @@ var (
 	healthEvery  = flag.Duration("health-interval", 60*time.Second, "health-check interval for the IP pool")
 	healthHost   = flag.String("health-target", "rutracker.org:443", "CONNECT target used to probe a proxy IP")
 	dialTO       = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
-	probeTO      = flag.Duration("probe-timeout", 8*time.Second, "dial/handshake timeout for health probes")
+	probeTO      = flag.Duration("probe-timeout", 10*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
 	recoverEvery = flag.Duration("recover-interval", 10*time.Second, "faster re-probe interval while the pool has 0 live IPs")
 	idleTO       = flag.Duration("timeout", 15*time.Minute, "per-connection idle timeout")
+	pickWaitTO   = flag.Duration("pick-wait", 15*time.Second, "max wait for a live upstream before dropping (cold-start / transient-empty smoothing)")
+	maxTries     = flag.Int("max-tries", 3, "max upstream IPs to try per connection before dropping")
+	resolverAddr = flag.String("resolver", "1.1.1.1:53", "DNS server queried DIRECTLY for the upstream pool, to bypass the router's ndnproxy whose cache goes stale and strands the pool on dead IPs (system resolver is still used as a fallback/union)")
 	verbose      = flag.Bool("v", false, "verbose logging")
 )
 
@@ -142,10 +145,45 @@ func (p *pool) refreshLoop() {
 // health interval. Rebuilding drops IPs that have both fallen out of DNS and
 // failed the latest probe, while still retaining a temporarily-unresolved IP
 // that is currently live (DNS blip) and the immutable --ips seed.
+// directResolver queries *resolverAddr directly (Go's own resolver, no OS /
+// ndnproxy cache in the path). The router's ndnproxy caches ps1.blockme.site
+// and can serve a stale/poisoned set for a long time, stranding the pool on
+// dead IPs — the "hangs for minutes until a DNS nudge" symptom (a browser using
+// the official extension re-resolves fresh; we do the same here).
+func directResolver() *net.Resolver {
+	return &net.Resolver{
+		PreferGo: true,
+		// Honour the network the resolver asks for. It starts on UDP and RETRIES
+		// OVER TCP when the answer comes back truncated (TC=1) — the pool is a
+		// dozen-plus A records, so it is one growth spurt away from crossing 512
+		// bytes. Hard-coding "udp" would hand the TCP retry a UDP socket, the
+		// direct lookup would fail, and we would silently fall back to exactly the
+		// stale ndnproxy answer this resolver exists to bypass.
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 4 * time.Second}
+			return d.DialContext(ctx, network, *resolverAddr)
+		},
+	}
+}
+
 func (p *pool) resolve() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	resolved, _ := net.DefaultResolver.LookupHost(ctx, *proxyHost)
-	cancel()
+	defer cancel()
+	// Union of a DIRECT resolver (fresh rotation, bypasses the stale ndnproxy
+	// cache) and the system resolver (fallback if the direct one is blocked /
+	// hijacked). The end-to-end probe filters whatever these return down to
+	// genuinely-live IPs, so a few stale entries in the union are harmless.
+	seenR := map[string]bool{}
+	var resolved []string
+	for _, r := range []*net.Resolver{directResolver(), net.DefaultResolver} {
+		hosts, _ := r.LookupHost(ctx, *proxyHost)
+		for _, ip := range hosts {
+			if net.ParseIP(ip) != nil && !seenR[ip] {
+				seenR[ip] = true
+				resolved = append(resolved, ip)
+			}
+		}
+	}
 	if len(resolved) == 0 {
 		return // keep the existing candidate set on a failed/empty resolve
 	}
@@ -200,10 +238,16 @@ func (p *pool) probeAll() {
 	}
 }
 
-// probeProxy returns true if the IP, contacted over TLS with the proxy SNI,
-// accepts a CONNECT to the health target.
+// probeProxy returns true only if the IP relays traffic to the health target
+// END-TO-END: it must accept the CONNECT *and* carry a real TLS handshake
+// through to the target. The old CONNECT-200-only check passed nodes that
+// accept the CONNECT but then stall on real data — exactly the ones that
+// produced the client-visible 000s (this is what the official RuTracker client
+// does: it validates a proxy by fetching THROUGH it, not just connecting).
+// Bounded by a single probeTO budget (dial + CONNECT + inner TLS).
 func probeProxy(ip string) bool {
-	up, err := dialProxy(ip, *probeTO)
+	deadline := time.Now().Add(*probeTO)
+	up, err := dialProxy(ip, time.Until(deadline))
 	if err != nil {
 		if *verbose {
 			log.Printf("[rt-proxy] probe %s: dial/tls failed: %v", ip, err)
@@ -211,16 +255,52 @@ func probeProxy(ip string) bool {
 		return false
 	}
 	defer up.Close()
-	up.SetDeadline(time.Now().Add(*probeTO))
+	up.SetDeadline(deadline)
+
 	fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", *healthHost, *healthHost)
 	br := bufio.NewReader(up)
 	status, err := br.ReadString('\n')
-	ok := err == nil && strings.Contains(status, " 200")
-	if *verbose && !ok {
-		log.Printf("[rt-proxy] probe %s: CONNECT reply %q err=%v", ip, strings.TrimSpace(status), err)
+	if err != nil || !strings.Contains(status, " 200") {
+		if *verbose {
+			log.Printf("[rt-proxy] probe %s: CONNECT reply %q err=%v", ip, strings.TrimSpace(status), err)
+		}
+		return false
 	}
-	return ok
+	for { // drain the rest of the CONNECT response headers
+		line, e := br.ReadString('\n')
+		if e != nil {
+			return false
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	// End-to-end proof: a real TLS handshake to the health target THROUGH the
+	// tunnel. A node that accepts CONNECT but cannot actually reach rutracker
+	// fails here (RST / EOF / timeout) and is correctly marked dead.
+	host := *healthHost
+	if h, _, e := net.SplitHostPort(host); e == nil {
+		host = h
+	}
+	inner := tls.Client(&bufConn{br: br, Conn: up}, &tls.Config{ServerName: host, InsecureSkipVerify: true})
+	if err := inner.Handshake(); err != nil {
+		if *verbose {
+			log.Printf("[rt-proxy] probe %s: inner TLS to %s failed: %v", ip, host, err)
+		}
+		return false
+	}
+	return true
 }
+
+// bufConn lets crypto/tls read through a bufio.Reader that may still hold bytes
+// buffered while reading the CONNECT response, then fall through to the raw
+// conn. Writes and deadlines go straight to the embedded conn.
+type bufConn struct {
+	br *bufio.Reader
+	net.Conn
+}
+
+func (b *bufConn) Read(p []byte) (int, error) { return b.br.Read(p) }
 
 // ---------------------------------------------------------------------------
 // per-connection handling
@@ -249,6 +329,75 @@ func dialProxy(ip string, timeout time.Duration) (net.Conn, error) {
 	return tc, nil
 }
 
+// dialUpstream returns a live upstream tunnel (CONNECT to sni:443) plus the
+// bufio.Reader that consumed the CONNECT response. It WAITS up to pickWaitTO for
+// the pool to become non-empty instead of dropping the client instantly — this
+// smooths the COLD-START window (right after a restart/reinstall the first
+// health probe has not populated p.live yet, ~5-13s) and transient all-dead
+// windows where the recover-loop is re-probing. Once a live IP exists it tries
+// up to maxTries of them so one flaky upstream does not kill the connection.
+// Returns (nil, nil) if nothing works within the budget (genuine all-dead pool).
+func dialUpstream(p *pool, sni string) (net.Conn, *bufio.Reader) {
+	target := sni + ":443"
+	deadline := time.Now().Add(*pickWaitTO)
+	tries := 0
+	for {
+		ip := p.pick()
+		if ip == "" {
+			if !time.Now().Before(deadline) {
+				return nil, nil // pool stayed empty the whole budget
+			}
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		up, br, ok := openTunnel(ip, target)
+		if ok {
+			if *verbose {
+				log.Printf("[rt-proxy] tunnel %s via %s", target, ip)
+			}
+			return up, br
+		}
+		tries++
+		if tries >= *maxTries {
+			return nil, nil
+		}
+		// live IP but this one failed — round-robin to another and retry
+	}
+}
+
+// openTunnel dials the upstream proxy IP over TLS and issues CONNECT target,
+// returning the tunnel and the bufio.Reader that consumed the CONNECT reply
+// (its buffered bytes are load-bearing for the up->client splice).
+func openTunnel(ip, target string) (net.Conn, *bufio.Reader, bool) {
+	up, err := dialProxy(ip, *dialTO)
+	if err != nil {
+		if *verbose {
+			log.Printf("[rt-proxy] dial upstream %s failed: %v", ip, err)
+		}
+		return nil, nil, false
+	}
+	up.SetDeadline(time.Now().Add(*dialTO))
+	fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", target, target)
+	br := bufio.NewReader(up)
+	status, err := br.ReadString('\n')
+	if err != nil || !strings.Contains(status, " 200") {
+		if *verbose {
+			log.Printf("[rt-proxy] CONNECT %s via %s rejected: %q", target, ip, strings.TrimSpace(status))
+		}
+		up.Close()
+		return nil, nil, false
+	}
+	// drain the rest of the CONNECT response headers (up to blank line)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil || line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	up.SetDeadline(time.Time{})
+	return up, br, true
+}
+
 func handle(client net.Conn, p *pool) {
 	defer client.Close()
 	client.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -261,41 +410,14 @@ func handle(client net.Conn, p *pool) {
 		return
 	}
 
-	ip := p.pick()
-	if ip == "" {
+	up, br := dialUpstream(p, sni)
+	if up == nil {
 		log.Printf("[rt-proxy] no live upstream proxy IP, dropping %s", sni)
 		return
 	}
-	up, err := dialProxy(ip, *dialTO)
-	if err != nil {
-		if *verbose {
-			log.Printf("[rt-proxy] dial upstream %s failed: %v", ip, err)
-		}
-		return
-	}
 	defer up.Close()
-
-	up.SetDeadline(time.Now().Add(*dialTO))
-	target := sni + ":443"
-	fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", target, target)
-	br := bufio.NewReader(up)
-	status, err := br.ReadString('\n')
-	if err != nil || !strings.Contains(status, " 200") {
-		if *verbose {
-			log.Printf("[rt-proxy] CONNECT %s via %s rejected: %q", target, ip, strings.TrimSpace(status))
-		}
-		return
-	}
-	// drain the rest of the CONNECT response headers (up to blank line)
-	for {
-		line, err := br.ReadString('\n')
-		if err != nil || line == "\r\n" || line == "\n" {
-			break
-		}
-	}
-	up.SetDeadline(time.Time{})
 	if *verbose {
-		log.Printf("[rt-proxy] %s -> %s via %s", client.RemoteAddr(), target, ip)
+		log.Printf("[rt-proxy] %s -> %s:443", client.RemoteAddr(), sni)
 	}
 
 	// Replay the peeked ClientHello into the tunnel, then splice. CRITICAL: the

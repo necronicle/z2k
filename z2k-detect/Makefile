@@ -31,7 +31,7 @@ linux-mips: | $(OUTDIR)
 	GOOS=linux GOARCH=mips GOMIPS=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-mips64le: | $(OUTDIR)
-	GOOS=linux GOARCH=mips64le $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	GOOS=linux GOARCH=mips64le GOMIPS64=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-ppc64: | $(OUTDIR)
 	GOOS=linux GOARCH=ppc64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)

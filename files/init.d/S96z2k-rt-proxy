@@ -47,20 +47,57 @@ dns_override_clear() {
     ndmc -c "system configuration save" >/dev/null 2>&1
 }
 
+# xtables-lock-safe iptables, same wrapper as the NDM hooks. WHY IT MATTERS HERE:
+# start() runs at boot alongside NDM's own netfilter regen and z2k's firewall apply, so
+# the lock is genuinely contended. Without -w a losing insert returns EBUSY, and since
+# the result is not checked and stderr is discarded it fails SILENTLY — the sentinel
+# REDIRECT is simply absent and RuTracker is dead. There is no periodic self-heal for
+# this rule (unlike nfqueue/ppe/warp, which the scheduler re-asserts every ~55s); only
+# an NDM netfilter regen would restore it, which on a stable router can be hours away.
+# Keenetic ships iptables 1.4.21, where -w takes NO timeout argument (-w 5 is a parse
+# error), so the wait is unbounded — acceptable: it is a kernel flock released on
+# process death, and the identical bare -w is already on this same start path
+# (deoffload_add), in the NDM hooks and in the ppe layer that fires every 55s. The
+# fallback keeps the old behaviour verbatim on any build without -w.
+ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
+
 redirect_add() {
-    iptables -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-        iptables -t nat -I PREROUTING 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
-    iptables -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-        iptables -t nat -I OUTPUT 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+    ipt -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT || \
+        ipt -t nat -I PREROUTING 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT
+    ipt -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT || \
+        ipt -t nat -I OUTPUT 1 -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT
+    deoffload_add
+}
+
+# CRITICAL (Keenetic MediaTek HNAT/PPE): keep the ENTIRE sentinel flow OFF the
+# hardware flow-offload engine. The engine mis-handles DNAT to a fake IP / local
+# port and silently breaks the redirect once the flow accelerates into hardware —
+# RuTracker then hangs for minutes until ANY CPU activity (even an SSH login /
+# reading logs) de-offloads the flow and revives it (documented MT762x HNAT/DNAT
+# bug; whatsapp/ticketmaster use a real VPS IP with no local DNAT so they are
+# unaffected). Unlike the nfqws2 de-offload (`connskip N`, handshake-window only),
+# the rt-proxy DNAT must stay in software for the WHOLE connection — so NO
+# connskip. `-j PPE` (firmware ppe_tg) is silently absent / a no-op on non-PPE
+# routers, so this is harmless everywhere.
+deoffload_add() {
+    ipt -t mangle -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j PPE || \
+        ipt -t mangle -I PREROUTING 1 -d "$SENTINEL" -p tcp --dport 443 -j PPE
+}
+
+deoffload_del() {
+    while ipt -t mangle -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j PPE; do
+        ipt -t mangle -D PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j PPE || break
+    done
 }
 
 redirect_del() {
-    while iptables -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
-        iptables -t nat -D PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+    while ipt -t nat -C PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT; do
+        ipt -t nat -D PREROUTING -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT || break
     done
-    while iptables -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
-        iptables -t nat -D OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+    while ipt -t nat -C OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT; do
+        ipt -t nat -D OUTPUT -d "$SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port $LISTEN_PORT || break
     done
+    deoffload_del
 }
 
 start() {
@@ -81,7 +118,10 @@ start() {
         backoff=1
         while :; do
             t0=$(date +%s 2>/dev/null || echo 0)
-            $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 &
+            # GODEBUG=asyncpreemptoff=1: disable Go's SIGURG-based async goroutine
+            # preemption — it crashes the runtime on MIPS/mipsel (soft-float
+            # Keenetics), the same guard S97z2k-http-tunnel / S98tg-tunnel use.
+            GODEBUG=asyncpreemptoff=1 $BIN --listen=:$LISTEN_PORT --timeout=15m </dev/null >> "$LOG" 2>&1 &
             child=$!
             wait "$child"
             t1=$(date +%s 2>/dev/null || echo 0)
@@ -100,13 +140,25 @@ start() {
     redirect_add
 }
 
-stop() {
-    echo "Stopping z2k-rt-proxy..."
+stop_proxy() {
+    # Kill ONLY the supervisor/daemon. Deliberately leaves the DNS override and
+    # the REDIRECT in place: a restart must NOT drop the sentinel. If it does,
+    # any client that resolves a rutracker domain during the gap gets the REAL
+    # (CloudFlare) IP and caches it, then bypasses this proxy until that client
+    # cache expires — the "restart breaks RuTracker" bug. The override is
+    # idempotent, so start() re-asserting it over a still-present record opens
+    # no window.
     if [ -f "$PIDFILE" ]; then
         pid=$(cat "$PIDFILE" 2>/dev/null)
         [ -n "$pid" ] && kill "$pid" 2>/dev/null
         rm -f "$PIDFILE"
     fi
+}
+
+stop() {
+    # Full teardown — only for real service stop / disable / uninstall.
+    echo "Stopping z2k-rt-proxy..."
+    stop_proxy
     redirect_del
     dns_override_clear
 }
@@ -114,6 +166,8 @@ stop() {
 case "$1" in
     start)   start ;;
     stop)    stop ;;
-    restart) stop; sleep 1; start ;;
+    # restart bounces the daemon ONLY; the DNS override + REDIRECT stay up the
+    # whole time, so no window opens for clients to cache the real rutracker IP.
+    restart) stop_proxy; sleep 1; start ;;
     *)       echo "Usage: $0 {start|stop|restart}" ;;
 esac

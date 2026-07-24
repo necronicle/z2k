@@ -3085,6 +3085,9 @@ step_finalize() {
     deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh" || return 1
     deploy_critical_file "files/init.d/S96z2k-rt-proxy"            "/opt/etc/init.d/S96z2k-rt-proxy" || return 1
     deploy_critical_file "files/ndm/92-z2k-rt-proxy-redirect.sh"    "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh" || return 1
+    # WARP: re-assert the game-ipset MARK rule after an NDM mangle regen (soft — the mode
+    # is optional and off by default, a missing hook must not fail the whole install).
+    deploy_critical_file "files/ndm/93-z2k-warp.sh"                 "/opt/etc/ndm/netfilter.d/93-z2k-warp.sh" || print_warning "warp: NDM hook deploy failed (маршрут WARP восстановится самолечением в течение минуты)"
     deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh" || return 1
 
     # NFQUEUE self-heal: scheduler fires it ~1×/min to re-apply the firewall when
@@ -3899,6 +3902,11 @@ uninstall_zapret2() {
     while iptables -t nat -C OUTPUT -d 10.171.171.171 -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null; do
         iptables -t nat -D OUTPUT -d 10.171.171.171 -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null || break
     done
+    # Sweep the sentinel hardware-offload exclusion (mangle -j PPE) too — mirrors
+    # S96 deoffload_del(), in case stop() bailed early with the binary gone.
+    while iptables -w -t mangle -C PREROUTING -d 10.171.171.171 -p tcp --dport 443 -j PPE 2>/dev/null; do
+        iptables -w -t mangle -D PREROUTING -d 10.171.171.171 -p tcp --dport 443 -j PPE 2>/dev/null || break
+    done
     conntrack -D -d 10.171.171.171 2>/dev/null || true
     # Clear the rutracker ndmc DNS-override → sentinel even if stop() never ran
     # (binary already gone). Mirrors S96 dns_override_clear().
@@ -3933,6 +3941,32 @@ uninstall_zapret2() {
           /var/run/z2k-rt-proxy.pid \
           /tmp/z2k-log/z2k-rt-proxy.log 2>/dev/null || true
     killall -9 z2k-rt-proxy 2>/dev/null || true
+
+    # Tear down the WARP split-tunnel. The usque package itself is NOT removed — it is a
+    # separate opkg package the user may have installed for other reasons, and removing it
+    # would tear down their NDM OpkgTun interface. We only drop what z2k added: the mangle
+    # MARK rule, the policy-routing rule/table, the NDM hook and our state stamps. The
+    # z2k_warp ipset is destroyed here, BEFORE the generic z2k-ipset sweep further down,
+    # so that sweep cannot trip over "set in use" while the MARK rule still references it.
+    if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" ]; then
+        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable >/dev/null 2>&1 || true
+    fi
+    _warp_mark_args="-m set --match-set z2k_warp dst -j MARK --set-mark 0x989"
+    for _c in PREROUTING OUTPUT; do
+        while iptables -w -t mangle -C "$_c" $_warp_mark_args 2>/dev/null; do
+            iptables -w -t mangle -D "$_c" $_warp_mark_args 2>/dev/null || break
+        done
+    done
+    ip rule del fwmark 0x989 table 989 2>/dev/null || true
+    ip route flush table 989 2>/dev/null || true
+    ipset destroy z2k_warp 2>/dev/null || true
+    ipset destroy z2k_warp_new 2>/dev/null || true
+    rm -f /opt/etc/ndm/netfilter.d/93-z2k-warp.sh \
+          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-kick" \
+          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-reg" \
+          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-install" \
+          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-legacy-purged" \
+          /tmp/z2k-warp-live /tmp/z2k-warp-regcount 2>/dev/null || true
 
     # Tear down the tpws youtube layer (removed as a feature). Same sweep as
     # install/update — destroys the ipsets BEFORE the generic z2k-ipset destroy

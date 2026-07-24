@@ -179,19 +179,39 @@ assert_eq "R1 rc=1 (already enrolled)"      "1" "$rc"
 assert_eq "R1 counter file removed"         "0" "$( [ -f "$WARP_REG_COUNT" ] && echo 1 || echo 0 )"
 assert_eq "R1 no restart + no register"     "0-0" "$(kicks)-$(regcalls)"
 
-printf "\n--- R2: no session, under direct tries -> direct retry (restart), counter++ ---\n"
-rm -f "$USQUE_SESSION" "$WARP_REG_COUNT" "$WARP_REG_STAMP"; : > "$RESTARTS"; : > "$REG_CALLS"
+printf "\n--- R2: no session, under direct tries -> direct `usque register`, NO restart, counter++ ---\n"
+# The direct retry runs `usque register` itself instead of restarting S51usque: same HTTPS
+# attempt against the reg API (so autocircular still gets to rotate), none of the NDM
+# interface churn a restart-per-tick caused while enrollment kept failing.
+rm -f "$USQUE_SESSION" "$WARP_REG_COUNT" "$WARP_REG_STAMP" "$REG_SUCCEED_FLAG"; : > "$RESTARTS"; : > "$REG_CALLS"
 warp_enroll_or_fallback; rc=$?
 assert_eq "R2 rc=0 (handled)"               "0" "$rc"
-assert_eq "R2 one direct restart"           "1" "$(kicks)"
-assert_eq "R2 zero VPS register calls"      "0" "$(regcalls)"
+assert_eq "R2 one direct register call"     "1" "$(regcalls)"
+assert_eq "R2 no usque restart on failure"  "0" "$(kicks)"
 assert_eq "R2 counter now 1"                "1" "$(cat "$WARP_REG_COUNT" 2>/dev/null)"
+
+printf "\n--- R2b: direct enroll SUCCEEDS -> session written + exactly one usque restart ---\n"
+rm -f "$USQUE_SESSION" "$WARP_REG_COUNT"; : > "$RESTARTS"; : > "$REG_CALLS"; touch "$REG_SUCCEED_FLAG"
+warp_enroll_or_fallback; rc=$?
+assert_eq "R2b rc=0 (handled)"              "0" "$rc"
+assert_eq "R2b session.conf created"        "1" "$( [ -s "$USQUE_SESSION" ] && echo 1 || echo 0 )"
+assert_eq "R2b exactly one restart"         "1" "$(kicks)"
+rm -f "$REG_SUCCEED_FLAG"
 
 printf "\n--- R3: no session, direct tries exhausted -> VPS register attempted ---\n"
 rm -f "$USQUE_SESSION" "$WARP_REG_STAMP" "$REG_SUCCEED_FLAG"; echo "3" > "$WARP_REG_COUNT"; : > "$RESTARTS"; : > "$REG_CALLS"
 warp_enroll_or_fallback; rc=$?
 assert_eq "R3 rc=0 (handled)"               "0" "$rc"
 assert_eq "R3 one VPS register call"        "1" "$(regcalls)"
+
+printf "\n--- R3b: after the VPS round the counter RESETS -> direct is tried again ---\n"
+# Never defect to the relay for good: a dead/rotated relay must not leave the router
+# permanently unenrollable once the ISP stops blocking the reg API.
+assert_eq "R3b counter reset to 0"          "0" "$(cat "$WARP_REG_COUNT" 2>/dev/null)"
+rm -f "$USQUE_SESSION"; : > "$REG_CALLS"; : > "$RESTARTS"
+warp_enroll_or_fallback >/dev/null 2>&1
+assert_eq "R3b next round goes direct"      "1" "$(regcalls)"
+assert_eq "R3b counter back to 1"           "1" "$(cat "$WARP_REG_COUNT" 2>/dev/null)"
 
 printf "\n--- R4: VPS register cooldown -> no register within window ---\n"
 rm -f "$USQUE_SESSION"; : > "$REG_CALLS"; echo "$NOW" > "$WARP_REG_STAMP"
@@ -226,6 +246,135 @@ echo gone > "$IP_LINK_STATE"; : > "$IP_LINK_SET"
 warp_link_up; rc=$?
 assert_eq "L3 rc=1 (no device)"              "1" "$rc"
 assert_eq "L3 no set call"                   "0" "$(linksets)"
+
+# ---- warp_usque_restart (stale running-config trap) ----
+# S51usque sources usque.conf THEN usque.conf.run, and .run wins. It is removed only by
+# fn_stop_internal, which `fn_stop` skips when the daemon is already dead — so a crashed
+# daemon leaves a .run pinning the OLD address and our IFACE_IP pin never applies. Every
+# restart we issue must drop it first.
+USQUE_RUNCONF="$SB/usque.conf.run"
+printf "\n--- U1: stale .run is removed before the restart ---\n"
+: > "$RESTARTS"; echo 'IFACE_IP="172.16.1.100"' > "$USQUE_RUNCONF"
+warp_usque_restart; rc=$?
+assert_eq "U1 rc=0"                          "0" "$rc"
+assert_eq "U1 stale .run gone"               "0" "$( [ -f "$USQUE_RUNCONF" ] && echo 1 || echo 0 )"
+assert_eq "U1 usque restarted once"          "1" "$(kicks)"
+
+printf "\n--- U2: no .run present -> still restarts, no crash ---\n"
+: > "$RESTARTS"; rm -f "$USQUE_RUNCONF"
+warp_usque_restart; rc=$?
+assert_eq "U2 rc=0"                          "0" "$rc"
+assert_eq "U2 usque restarted once"          "1" "$(kicks)"
+
+printf "\n--- U3: no S51usque -> rc=1, no restart ---\n"
+: > "$RESTARTS"; _saved="$USQUE_INIT"; USQUE_INIT="$SB/nope"
+warp_usque_restart; rc=$?
+USQUE_INIT="$_saved"
+assert_eq "U3 rc=1 (nothing to restart)"     "1" "$rc"
+assert_eq "U3 zero restarts"                 "0" "$(kicks)"
+
+# ---- warp_tunnel_live / warp_live_cached (end-to-end liveness) ----
+# The whole point: "opkgtun0 has an address" is not proof the tunnel carries traffic.
+WARP_LIVE_STAMP="$SB/live.stamp"
+WARP_LIVE_MAXAGE=180
+CURL_OUT="$SB/curl_out"
+curl() { cat "$CURL_OUT" 2>/dev/null; }   # shadows the real binary for the probe only
+
+printf "\n--- P1: probe sees warp=on -> live, verdict cached as 1 ---\n"
+echo up > "$IP_LINK_STATE"; printf 'colo=DME\nwarp=on\n' > "$CURL_OUT"; rm -f "$WARP_LIVE_STAMP"
+warp_tunnel_live; rc=$?
+assert_eq "P1 rc=0 (live)"                   "0" "$rc"
+assert_eq "P1 cached verdict is 1"           "1" "$(warp_live_cached)"
+
+printf "\n--- P2: interface up but warp=off -> DEAD (this is the case nothing caught) ---\n"
+printf 'colo=DME\nwarp=off\n' > "$CURL_OUT"
+warp_tunnel_live; rc=$?
+assert_eq "P2 rc=1 (dead despite live iface)" "1" "$rc"
+assert_eq "P2 cached verdict is 0"           "0" "$(warp_live_cached)"
+
+printf "\n--- P3: probe returns nothing (tunnel black-holes) -> dead ---\n"
+: > "$CURL_OUT"
+warp_tunnel_live; rc=$?
+assert_eq "P3 rc=1 (no answer = dead)"       "1" "$rc"
+
+printf "\n--- P4: device gone -> dead without probing ---\n"
+echo gone > "$IP_LINK_STATE"; printf 'warp=on\n' > "$CURL_OUT"
+warp_tunnel_live; rc=$?
+assert_eq "P4 rc=1 (no device)"              "1" "$rc"
+echo up > "$IP_LINK_STATE"
+
+printf "\n--- C1: stale verdict reads as UNKNOWN, never as dead ---\n"
+echo "$((FAKE_NOW - 1000)) 1" > "$WARP_LIVE_STAMP"
+assert_eq "C1 too old -> empty (unknown)"    "" "$(warp_live_cached)"
+
+printf "\n--- C2: corrupt / missing stamp -> unknown ---\n"
+echo "garbage" > "$WARP_LIVE_STAMP"
+assert_eq "C2 corrupt -> empty"              "" "$(warp_live_cached)"
+rm -f "$WARP_LIVE_STAMP"
+assert_eq "C2 missing -> empty"              "" "$(warp_live_cached)"
+
+# ---- interface name is package-owned (found by the on-router E2E) ----
+# The package's postinst takes the first FREE opkgtunN, so a router carrying a leftover
+# opkgtun0 gets the real tunnel on opkgtun1. Hard-coding opkgtun0 routed and probed an orphan.
+printf "\n--- I1: IFACE from usque.conf wins over the opkgtun0 default ---\n"
+printf '%s\n' 'IFACE="opkgtun1"' 'HTTP2_ENABLE=1' > "$USQUE_CONF"
+assert_eq "I1 resolves opkgtun1"             "opkgtun1" "$(warp_resolve_iface)"
+
+printf "\n--- I2: missing / junk IFACE falls back to the default ---\n"
+printf '%s\n' 'HTTP2_ENABLE=1' > "$USQUE_CONF"
+assert_eq "I2 no IFACE -> default"           "opkgtun0" "$(warp_resolve_iface)"
+printf '%s\n' 'IFACE="../etc/passwd"' > "$USQUE_CONF"
+assert_eq "I2 junk IFACE -> default"         "opkgtun0" "$(warp_resolve_iface)"
+
+# ---- IFACE_IP conflict healing (the failure NDM reported verbatim on the E2E) ----
+#   Network::Interface::Ip error: "OpkgTun1": network 172.16.240.1/32 conflicts with
+#   interface "OpkgTun0"
+# A leftover interface holding the pinned address makes `interface up` fail, so the tunnel
+# can never come up. The pin has to step aside.
+ip_addr_show_out="$SB/ipaddr"
+ip() {
+    if [ "$1" = "-o" ]; then cat "$ip_addr_show_out" 2>/dev/null; return 0; fi
+    if [ "$1" = link ] && [ "$2" = show ] && [ "$3" = "$WARP_IFACE" ]; then
+        case "$(cat "$IP_LINK_STATE" 2>/dev/null)" in
+            gone) return 1 ;;
+            up)   echo "96: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1280"; return 0 ;;
+            *)    echo "96: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP> mtu 1280"; return 0 ;;
+        esac
+    fi
+    if [ "$1" = link ] && [ "$2" = set ] && [ "$3" = "$WARP_IFACE" ]; then
+        echo x >> "$IP_LINK_SET"; echo up > "$IP_LINK_STATE"; return 0
+    fi
+    return 0
+}
+WARP_IFACE=opkgtun1
+WARP_IFACE_IP=172.16.240.1
+WARP_IFACE_IP_NET=172.16.240
+
+printf "\n--- N1: pinned address free -> used as-is ---\n"
+: > "$ip_addr_show_out"
+assert_eq "N1 no conflict"                   "172.16.240.1" "$(warp_free_iface_ip)"
+
+printf "\n--- N2: leftover interface holds the pin -> next free host chosen ---\n"
+printf '40: opkgtun0    inet 172.16.240.1/32 scope global opkgtun0\n' > "$ip_addr_show_out"
+assert_eq "N2 steps aside to .2"             "172.16.240.2" "$(warp_free_iface_ip)"
+
+printf "\n--- N3: OUR OWN interface holding it is NOT a conflict ---\n"
+printf '41: opkgtun1    inet 172.16.240.1/32 scope global opkgtun1\n' > "$ip_addr_show_out"
+assert_eq "N3 keeps .1"                      "172.16.240.1" "$(warp_free_iface_ip)"
+
+printf "\n--- N4: conflicting IFACE_IP already in usque.conf gets HEALED ---\n"
+printf '40: opkgtun0    inet 172.16.240.1/32 scope global opkgtun0\n' > "$ip_addr_show_out"
+printf '%s\n' 'IFACE="opkgtun1"' 'IFACE_IP="172.16.240.1"' > "$USQUE_CONF"
+warp_write_iface_ip; rc=$?
+assert_eq "N4 rc=0 (rewrote)"                "0" "$rc"
+assert_eq "N4 moved off the conflict"        "172.16.240.2" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
+assert_eq "N4 still exactly one line"        "1" "$(ifip_lines)"
+
+printf "\n--- N5: a NON-conflicting value (incl. the user's own) is never touched ---\n"
+printf '%s\n' 'IFACE="opkgtun1"' 'IFACE_IP="10.9.9.9"' > "$USQUE_CONF"
+warp_write_iface_ip; rc=$?
+assert_eq "N5 rc=1 (left alone)"             "1" "$rc"
+assert_eq "N5 user value intact"             "10.9.9.9" "$(grep -E '^IFACE_IP=' "$USQUE_CONF" | sed 's/^IFACE_IP="\([^"]*\)".*/\1/')"
 
 printf "\n=== warp selfheal tests: %d passed, %d failed ===\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]

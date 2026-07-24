@@ -363,13 +363,17 @@ case "$method $path" in
         w_enabled=$(printf '%s' "$result" | sed -n 's/.*enabled=\([^|]*\).*/\1/p')
         w_installed=$(printf '%s' "$result" | sed -n 's/.*installed=\([0-9]*\).*/\1/p')
         w_up=$(printf '%s' "$result" | sed -n 's/.*tunnel_up=\([0-9]*\).*/\1/p')
+        w_live=$(printf '%s' "$result" | sed -n 's/.*live=\([^|]*\).*/\1/p')
         w_addr=$(printf '%s' "$result" | sed -n 's/.*addr=\([^|]*\).*/\1/p')
         w_entries=$(printf '%s' "$result" | sed -n 's/.*entries=\([0-9]*\).*/\1/p')
         json_header
-        printf '{"ok":true,"enabled":"%s","installed":%s,"tunnel_up":%s,"addr":' \
+        # "live" is deliberately TRI-state: true / false / null. null = не проверялось или
+        # проверка устарела — the UI must not paint that as a failure.
+        printf '{"ok":true,"enabled":"%s","installed":%s,"tunnel_up":%s,"live":%s,"addr":' \
             "${w_enabled:-0}" \
             "$([ "${w_installed:-0}" = "1" ] && echo true || echo false)" \
-            "$([ "${w_up:-0}" = "1" ] && echo true || echo false)"
+            "$([ "${w_up:-0}" = "1" ] && echo true || echo false)" \
+            "$(case "${w_live:-}" in 1) echo true ;; 0) echo false ;; *) echo null ;; esac)"
         json_string "${w_addr:-}"
         printf ',"entries":%s}\n' "${w_entries:-0}"
         exit 0

@@ -12,14 +12,22 @@
 #      172.16.1.100-200, which COLLIDES with Keenetic's built-in VPN servers (SSTP/L2TP
 #      default to the same 172.16.1.x pool) → NDM address collision, the tunnel won't come
 #      up cleanly. Pin it to a subnet nothing on Keenetic defaults to (guarded: writes once).
-#   3. down-tunnel recovery — if WARP is on but opkgtun0 has no address, nudge usque the way
-#      a manual "usque off/on" does (the package does NOT self-retry a failed/raced start,
-#      which is why the manual toggle heals it). COOLDOWN-guarded so a genuinely-blocked
+#   3. down-tunnel recovery — if WARP is on but the tunnel does not carry traffic, nudge usque
+#      the way a manual "usque off/on" does (the package does NOT self-retry a failed/raced
+#      start, which is why the manual toggle heals it). COOLDOWN-guarded so a genuinely-blocked
 #      endpoint isn't hammered — no restart storm.
 # Everything else is pure routing:
-#   enable)   ensure installed, policy-route the curated game ipset (z2k_warp) via the tun.
+#   enable)   ensure installed, policy-route the curated game ipset (z2k_warp) via the tun,
+#             then VERIFY end-to-end and report honestly (rc 0 live / 2 up-but-dead / 1 hard fail).
 #   disable)  drop the route; the tunnel keeps running idle.
-#   selfheal) re-assert a route an NDM firewall reload wiped, plus cases 2/3 above.
+#   selfheal) install usque if it is missing, re-assert a route an NDM firewall reload wiped,
+#             plus cases 2/3 above.
+#
+# LIVENESS IS PROVEN, NOT ASSUMED. Every "is the tunnel up?" question here is answered by an
+# end-to-end probe through opkgtun0 (warp_tunnel_live), never by the presence of an address:
+# NDM assigns that address at start time regardless of whether the MASQUE session to Cloudflare
+# ever established, so "has an address" was reporting dead tunnels as healthy — the panel said
+# "работает", nothing ever self-healed, and users were told to reboot.
 #
 # WHY MASQUE-over-HTTP/2: RU 5-tuple-blocks WARP WireGuard (UDP 2408) and throttles QUIC;
 # only usque MASQUE over TCP 443 connects (proven warp=on, colo=Moscow).
@@ -29,7 +37,21 @@ CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
 
 # ---- tunables (environment overrides win; the config file is NOT read here,
 # only GAME_WARP_ENABLED is grepped from it) -----------------------------------
-WARP_IFACE="${WARP_IFACE:-opkgtun0}"            # usque tun interface (package-owned)
+# usque tun interface. The NAME IS OWNED BY THE PACKAGE, not by us: its postinst calls
+# fn_get_available_tun_interface, which takes the first FREE opkgtunN — so on a router that
+# already carries a leftover opkgtun0 (an earlier usque removed without its NDM interface,
+# which is exactly what the r-61/p-64 saga left behind) the package installs onto opkgtun1
+# and z2k, hard-coded to opkgtun0, would route and probe a dead orphan forever. Read the
+# real name out of usque.conf; an explicit WARP_IFACE from the environment still wins.
+WARP_IFACE_DEFAULT="${WARP_IFACE_DEFAULT:-opkgtun0}"
+warp_resolve_iface() {
+    local i
+    i=$(grep -m1 '^IFACE=' "$USQUE_CONF" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')
+    case "$i" in
+        opkgtun[0-9]*) printf '%s' "$i" ;;
+        *)             printf '%s' "$WARP_IFACE_DEFAULT" ;;
+    esac
+}
 WARP_TABLE="${WARP_TABLE:-989}"                 # dedicated route table
 WARP_MARK="${WARP_MARK:-0x989}"                 # fwmark for the ip rule
 WARP_IPSET="${WARP_IPSET:-z2k_warp}"            # game-server ipset routed via WARP
@@ -37,13 +59,70 @@ WARP_LIST="${WARP_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"   # legacy shippe
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"      # user-owned lists (webpanel «WARP» section), ALL *.txt loaded
 USQUE_INIT="/opt/etc/init.d/S51usque"
 USQUE_CONF="/opt/etc/usque/usque.conf"
+# The package's RUNNING config, and a trap. S51usque sources usque.conf and THEN
+# usque.conf.run — and .run WINS. It is written on every successful start
+# (fn_create_running_config) and removed only inside fn_stop_internal, which `fn_stop`
+# SKIPS when the daemon is already dead (it early-returns "not running"), while
+# `restart` ignores that failure and starts anyway. So a crashed/raced daemon leaves a
+# stale .run pinning the address it first started with — the 172.16.1.x the package
+# auto-picks, which collides with Keenetic's SSTP/L2TP pool — and every restart from
+# then on re-uses it. Our IFACE_IP pin lands in usque.conf and is never applied, and
+# warp_write_iface_ip won't fire again because usque.conf already has the line.
+# warp_usque_restart() drops this file before every restart we issue.
+USQUE_RUNCONF="${USQUE_RUNCONF:-/opt/etc/usque/usque.conf.run}"
 USQUE_IPK_URL="https://side-effect-tm.github.io/usque-keenetic/all/usque-keenetic_0.3.0_all_entware.ipk"
+# Resolve the package-owned interface name now that USQUE_CONF is known. Re-resolved after
+# warp_install, because a first-time install is what creates usque.conf in the first place.
+# An explicit WARP_IFACE from the environment is a deliberate override and is never
+# auto-resolved over (tests and manual overrides depend on that).
+if [ -n "$WARP_IFACE" ]; then
+    _WARP_IFACE_FIXED=1
+else
+    WARP_IFACE=$(warp_resolve_iface)
+fi
 # opkgtun0 local address. The package auto-picks the first free host in 172.16.1.100-200,
 # which collides with Keenetic's built-in VPN servers (SSTP/L2TP default to 172.16.1.x).
 # Pin it out of that pool. A user-set IFACE_IP in usque.conf always wins (we never clobber it).
 WARP_IFACE_IP="${WARP_IFACE_IP:-172.16.240.1}"
+# ...but the pin itself can collide, and NDM says so in as many words:
+#   Network::Interface::Ip error: "OpkgTun1": network 172.16.240.1/32 conflicts with
+#   interface "OpkgTun0"
+# A leftover OpkgTun0 from an earlier usque still holds 172.16.240.1, so pinning the new
+# interface to the same address makes `interface up` fail outright and the tunnel can NEVER
+# come up — dead forever, silently. So the pin is a PREFERENCE, not a constant: if something
+# else already holds it, take the next free host in the same /24.
+WARP_IFACE_IP_NET="${WARP_IFACE_IP_NET:-172.16.240}"
 WARP_KICK_COOLDOWN="${WARP_KICK_COOLDOWN:-300}"     # min seconds between down-tunnel usque restarts
-WARP_KICK_STAMP="${WARP_KICK_STAMP:-/tmp/z2k-warp-kick.stamp}"
+# Cooldown stamps live under $ZAPRET2_DIR, NOT /tmp: a reboot must not reset a guard whose
+# entire job is to stop us hammering a blocked endpoint (a boot loop would otherwise get a
+# free restart on every pass). They are written at most once per cooldown — and not at all
+# while things are healthy — so the flash-write cost is ~1 per 5 min in the worst case.
+WARP_KICK_STAMP="${WARP_KICK_STAMP:-$ZAPRET2_DIR/.z2k-warp-kick}"
+
+# ---- liveness ----------------------------------------------------------------
+# "opkgtun0 has an address" is NOT proof the tunnel works. That address is assigned by NDM
+# (S51usque fn_setup_tun_interface) at start time, whether or not the MASQUE session to
+# Cloudflare ever established. A usque that runs but never connected therefore reads as
+# perfectly healthy: the panel says "работает", selfheal sees address+link and never kicks
+# it, and the user stares at a dead WARP forever with every log claiming success. So prove
+# it END-TO-END — fetch Cloudflare's own trace endpoint THROUGH the interface and require
+# warp=on. `curl --interface` is SO_BINDTODEVICE, so the probe cannot silently leak out the
+# WAN and report a false positive. Addressed by IP, never by name: a DNS hiccup must not be
+# mistaken for a dead tunnel (1.1.1.1's certificate carries the IP in its SANs, so TLS still
+# verifies). Same lesson as the rt-proxy probe — a handshake that completes is not a path
+# that carries data.
+WARP_PROBE_URL="${WARP_PROBE_URL:-https://1.1.1.1/cdn-cgi/trace}"
+WARP_PROBE_TIMEOUT="${WARP_PROBE_TIMEOUT:-8}"
+# Volatile on purpose: it is a freshness cache for the webpanel (which must never block on a
+# probe of its own), rewritten every selfheal tick. Persisting it would be pure flash wear.
+WARP_LIVE_STAMP="${WARP_LIVE_STAMP:-/tmp/z2k-warp-live}"        # "<epoch> <0|1>"
+WARP_LIVE_MAXAGE="${WARP_LIVE_MAXAGE:-180}"                     # older than this = "unknown", not "dead"
+# Self-heal may install usque (see warp_selfheal) — cooldown-guarded, because the .ipk is
+# ~14 MB and a router that cannot fetch it must not re-try every minute.
+WARP_INSTALL_STAMP="${WARP_INSTALL_STAMP:-$ZAPRET2_DIR/.z2k-warp-install}"
+WARP_INSTALL_COOLDOWN="${WARP_INSTALL_COOLDOWN:-600}"
+# One-shot marker for the r-62 legacy-NAT purge (see warp_purge_legacy_nat).
+WARP_LEGACY_MARK="${WARP_LEGACY_MARK:-$ZAPRET2_DIR/.z2k-warp-legacy-purged}"
 USQUE_BIN="${USQUE_BIN:-/opt/usr/bin/usque}"
 USQUE_SESSION="${USQUE_SESSION:-/opt/etc/usque/session.conf}"
 # WARP enrollment fallback. usque enrolls a device by POSTing to api.cloudflareclient.com;
@@ -54,13 +133,89 @@ USQUE_SESSION="${USQUE_SESSION:-/opt/etc/usque/session.conf}"
 # Fallback-only: most routers enroll directly (correct region) and never touch the VPS.
 WARP_VPS_PROXY="${WARP_VPS_PROXY:-http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119}"
 WARP_REG_DIRECT_TRIES="${WARP_REG_DIRECT_TRIES:-3}"
-WARP_REG_COUNT="${WARP_REG_COUNT:-/tmp/z2k-warp-regcount}"
-WARP_REG_STAMP="${WARP_REG_STAMP:-/tmp/z2k-warp-reg.stamp}"
+WARP_REG_COUNT="${WARP_REG_COUNT:-/tmp/z2k-warp-regcount}"   # in-progress counter, volatile by design
+WARP_REG_STAMP="${WARP_REG_STAMP:-$ZAPRET2_DIR/.z2k-warp-reg}"
 WARP_REG_COOLDOWN="${WARP_REG_COOLDOWN:-600}"       # min seconds between VPS-relay enroll attempts
 
 _wlog() { echo "[z2k-warp] $*" >&2; }
 
 warp_flag() { grep -m1 '^GAME_WARP_ENABLED=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' '; }
+
+# Monotonic-ish "now", or empty when the clock is unreadable. Callers that guard a
+# destructive action must treat empty as "do nothing" rather than "cooldown elapsed".
+_warp_now() {
+    local n; n=$(date +%s 2>/dev/null) || return 1
+    case "$n" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$n"
+}
+
+# Shared cooldown gate: returns 0 (proceed) only when $1's stamp is older than $2 seconds,
+# and stamps it BEFORE returning. A stamp we cannot write means "do not proceed" — otherwise
+# a read-only / full filesystem would silently turn every guarded action into a per-tick storm.
+_warp_cooldown_ok() {
+    local stamp="$1" cool="$2" now last
+    now=$(_warp_now) || return 1
+    if [ -f "$stamp" ]; then
+        last=$(cat "$stamp" 2>/dev/null)
+        case "$last" in ''|*[!0-9]*) last=0 ;; esac
+        # A future stamp (router clock skewed ahead at boot, before NTP pulls it back) would
+        # keep now-last negative forever and wedge recovery — treat it as no stamp at all.
+        [ "$last" -gt "$now" ] && last=0
+        [ $((now - last)) -lt "$cool" ] && return 1
+    fi
+    { echo "$now" > "$stamp"; } 2>/dev/null || return 1
+    return 0
+}
+
+# EVERY usque restart goes through here. Dropping the stale running-config first is what
+# makes our IFACE_IP pin actually apply (see USQUE_RUNCONF above): when the daemon is dead
+# the package never clears that file itself, and the file wins over usque.conf. Harmless
+# when the daemon IS alive — the package rewrites it on the next successful start, and its
+# own stop path removes it anyway.
+warp_usque_restart() {
+    [ -x "$USQUE_INIT" ] || return 1
+    rm -f "$USQUE_RUNCONF" 2>/dev/null
+    "$USQUE_INIT" restart >/dev/null 2>&1
+    return 0
+}
+
+# ---- liveness probe ----------------------------------------------------------
+warp_live_record() {
+    local now; now=$(_warp_now) || return 0
+    { echo "$now $1" > "$WARP_LIVE_STAMP"; } 2>/dev/null || true
+}
+
+# Read the cached verdict: prints "1" (live), "0" (dead) or "" (unknown / too old to trust).
+# The webpanel uses this — a status call must never block on an 8-second probe.
+warp_live_cached() {
+    local now line ts val
+    [ -f "$WARP_LIVE_STAMP" ] || return 0
+    line=$(cat "$WARP_LIVE_STAMP" 2>/dev/null) || return 0
+    ts=${line%% *}; val=${line##* }
+    case "$ts" in ''|*[!0-9]*) return 0 ;; esac
+    case "$val" in 0|1) ;; *) return 0 ;; esac
+    now=$(_warp_now) || return 0
+    [ "$ts" -gt "$now" ] && return 0
+    [ $((now - ts)) -gt "$WARP_LIVE_MAXAGE" ] && return 0
+    printf '%s' "$val"
+}
+
+# The real thing: does traffic actually reach Cloudflare THROUGH the tunnel? Records the
+# verdict for the panel. Returns 0 = live, 1 = dead.
+warp_tunnel_live() {
+    if ! ip link show "$WARP_IFACE" >/dev/null 2>&1; then
+        warp_live_record 0; return 1
+    fi
+    # No curl means we cannot prove anything. Never report "dead" on missing tooling — that
+    # would turn a probe failure into a restart storm against a perfectly good tunnel.
+    command -v curl >/dev/null 2>&1 || return 0
+    if curl -4 --interface "$WARP_IFACE" -s --max-time "$WARP_PROBE_TIMEOUT" \
+            "$WARP_PROBE_URL" 2>/dev/null | grep -q '^warp=on'; then
+        warp_live_record 1; return 0
+    fi
+    warp_live_record 0
+    return 1
+}
 
 # ---- one-time install (NOT lifecycle management) -----------------------------
 # Fetch + opkg-install the usque package, force HTTP/2, and fix a race in its own
@@ -88,6 +243,11 @@ warp_install() {
         fi
         [ -s "$ipk" ] && opkg install "$ipk" >/tmp/z2k-warp-install.log 2>&1
         [ -x "$USQUE_INIT" ] || { _wlog "usque install failed (see /tmp/z2k-warp-install.log)"; return 1; }
+        # The install is what CREATES usque.conf, and its postinst is what chooses the
+        # interface name — which is not necessarily opkgtun0. Re-resolve before anything
+        # below uses it (the IFACE_IP conflict check is per-interface).
+        [ -n "$_WARP_IFACE_FIXED" ] || WARP_IFACE=$(warp_resolve_iface)
+        _wlog "usque interface: $WARP_IFACE"
     fi
     # Fix the package's tun-device race (idempotent; re-applied because a package upgrade
     # overwrites S51usque). busybox `sleep` is integer-only.
@@ -107,7 +267,7 @@ warp_install() {
     # ONE restart so the package brings the tunnel up on HTTP/2 (+ pinned address) with the
     # race patch. A one-off at install/setup, never per toggle; the package's S51usque owns
     # the tunnel from here on, including every boot.
-    "$USQUE_INIT" restart >/dev/null 2>&1
+    warp_usque_restart
     _wlog "usque installed + HTTP/2 forced"
     return 0
 }
@@ -192,21 +352,30 @@ warp_link_up() {
     ip link set "$WARP_IFACE" up 2>/dev/null
 }
 
-# ---- policy routing (split-tunnel) — this is the ONLY thing the toggle does --
-warp_pbr_up() {
-    warp_link_up   # the package often leaves opkgtun0's link DOWN; route add needs it UP
-    # Steer ONLY the marked game traffic out the WARP tun. We do NOT MASQUERADE or MSS-clamp:
-    # `usque`/opkgtun0 is a Keenetic GLOBAL interface, so NDM NATs it and clamps its MSS
-    # (`ip tcp adjust-mss pmtu`) NATIVELY. Verified on-router: forwarded traffic egressing
-    # opkgtun0 gets warp=on with ZERO z2k NAT — a z2k MASQUERADE would just be a redundant
-    # double-SNAT (that was our mistake). Drain any legacy z2k MASQUERADE/MSS first so a
-    # router upgraded from the old code stops double-NATing.
+# r-62 migration, ONE-SHOT. We used to MASQUERADE and MSS-clamp opkgtun0 ourselves; that
+# was a mistake — opkgtun0 is a Keenetic GLOBAL interface, so NDM already NATs it and
+# clamps its MSS (`ip tcp adjust-mss pmtu`, S51usque fn_setup_tun_interface), and ours was
+# a redundant double-SNAT. The rules are gone; this only drains them off routers upgraded
+# from the old code. Nothing recreates them, so once drained it never needs running again
+# — hence the marker. It used to sit inside warp_pbr_up, i.e. two iptables round-trips
+# every selfheal tick, forever, for a migration that is finished after one.
+warp_purge_legacy_nat() {
+    [ -f "$WARP_LEGACY_MARK" ] && return 0
     while iptables -w -t nat -C POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null; do
         iptables -w -t nat -D POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null || break
     done
     while iptables -w -t mangle -C FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do
         iptables -w -t mangle -D FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || break
     done
+    { : > "$WARP_LEGACY_MARK"; } 2>/dev/null || true
+    return 0
+}
+
+# ---- policy routing (split-tunnel) — this is the ONLY thing the toggle does --
+warp_pbr_up() {
+    warp_link_up   # the package often leaves opkgtun0's link DOWN; route add needs it UP
+    # Steer ONLY the marked game traffic out the WARP tun. No NAT, no MSS clamp — NDM does
+    # both natively for a global interface (see warp_purge_legacy_nat).
     # split-tunnel: fwmark → table → opkgtun0
     ip route replace default dev "$WARP_IFACE" table "$WARP_TABLE" 2>/dev/null
     ip rule show 2>/dev/null | grep -q "fwmark $WARP_MARK " || ip rule add fwmark "$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
@@ -223,33 +392,54 @@ warp_pbr_down() {
             iptables -w -t mangle -D "$ch" -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK" 2>/dev/null || break
         done
     done
-    while iptables -w -t mangle -C FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do
-        iptables -w -t mangle -D FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || break
-    done
-    while iptables -w -t nat -C POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null; do
-        iptables -w -t nat -D POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null || break
-    done
+    warp_purge_legacy_nat   # no-op once the r-62 drain has run
     ip rule del fwmark "$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
     ip route flush table "$WARP_TABLE" 2>/dev/null
+    # Drop the cached verdict rather than writing "dead": with the mode off nothing probes
+    # any more, and a stale "dead" would outlive its truth. Absent == unknown.
+    rm -f "$WARP_LIVE_STAMP" 2>/dev/null
 }
 
 # ---- toggle (routing only) ---------------------------------------------------
+# Exit codes are the contract with the webpanel/menu toggles:
+#   0 — mode on AND the tunnel is verified carrying traffic,
+#   1 — HARD failure, nothing to recover from (no usque, ipset unusable): caller reverts the flag,
+#   2 — mode on, routing applied, but the tunnel is not up YET. The flag stays ON on purpose:
+#       enrollment/reconnect is exactly what selfheal exists for, and reverting the flag would
+#       switch off the only thing that can still fix it. The caller must SAY SO instead of
+#       reporting success — the old code returned 0 here unconditionally, which is why the UI
+#       cheerfully claimed "включено" over a stone-dead tunnel and the revert branches in
+#       actions.sh / menu.sh were unreachable code.
 warp_enable() {
     _wlog "enable"
     warp_install || { _wlog "usque not available — режим не включён"; return 1; }
+    # Heal a conflicting IFACE_IP here too, not only on the next selfheal tick: the user is
+    # standing in front of the toggle waiting for an answer, and without this the tunnel
+    # cannot come up at all (NDM refuses the address), so `enable` would honestly but
+    # uselessly report "not up yet" every single time.
+    if warp_write_iface_ip; then
+        warp_usque_restart
+    fi
     warp_ipset_load || return 1
-    # warp_install may have restarted usque (IFACE_IP migration). Give opkgtun0 a moment to
-    # come up (address + link UP) so the route lands on a live interface instead of racing a
-    # not-yet-ready one — otherwise the panel shows "не запущен" until the next selfheal tick.
+    warp_purge_legacy_nat
+    # warp_install may have restarted usque (IFACE_IP migration). Wait — briefly — for the
+    # interface to exist so the route lands on a real device, then apply the routing and
+    # verify for real. Bounded tight: a webpanel request is blocking on this, and anything
+    # slower than the interface appearing is selfheal's job, not the toggle's.
     local _wait=0
-    while [ "$_wait" -lt 25 ]; do
+    while [ "$_wait" -lt 6 ]; do
         warp_link_up
         ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' \
             && ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP && break
         _wait=$((_wait + 1)); sleep 1
     done
     warp_pbr_up
-    _wlog "game WARP mode ON (route → $WARP_IFACE, ipset=$WARP_IPSET)"
+    if warp_tunnel_live; then
+        _wlog "game WARP mode ON (warp=on via $WARP_IFACE, ipset=$WARP_IPSET)"
+        return 0
+    fi
+    _wlog "game WARP mode ON, but the tunnel is not carrying traffic yet — selfheal will keep working on it"
+    return 2
 }
 
 warp_disable() {
@@ -262,12 +452,58 @@ warp_disable() {
 # collides with Keenetic's SSTP/L2TP VPN servers. Appends IFACE_IP to usque.conf ONLY if
 # neither the user nor a prior run already set one — so it's one-time and never clobbers a
 # user's own choice. Returns 0 iff it wrote (the caller must then restart usque to apply it).
+# Is $1 held by an interface OTHER than ours? (Our own interface holding it is the healthy
+# steady state, not a conflict.) NDM refuses to bring an interface up on an address another
+# interface already owns, so this is the exact condition that bricks the tunnel.
+warp_ip_conflicts() {
+    ip -o -4 addr show 2>/dev/null | awk -v ifc="$WARP_IFACE" -v want="$1" '
+        $2 != ifc { sub(/\/.*/, "", $4); if ($4 == want) { found = 1 } }
+        END { exit !found }'
+}
+
+# First address in the pinned /24 that no OTHER interface holds. Prefers WARP_IFACE_IP.
+warp_free_iface_ip() {
+    local n cand
+    warp_ip_conflicts "$WARP_IFACE_IP" || { printf '%s' "$WARP_IFACE_IP"; return 0; }
+    n=1
+    while [ "$n" -lt 250 ]; do
+        cand="$WARP_IFACE_IP_NET.$n"
+        if ! warp_ip_conflicts "$cand"; then
+            printf '%s' "$cand"; return 0
+        fi
+        n=$((n + 1))
+    done
+    return 1
+}
+
 warp_write_iface_ip() {
+    local cur free
     [ -f "$USQUE_CONF" ] || return 1
-    grep -q '^IFACE_IP=' "$USQUE_CONF" 2>/dev/null && return 1
-    printf '%s\n' "IFACE_IP=\"$WARP_IFACE_IP\"  # z2k: off Keenetic SSTP/VPN 172.16.1.x" >> "$USQUE_CONF" \
+    cur=$(grep -m1 '^IFACE_IP=' "$USQUE_CONF" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ' | sed 's/#.*//')
+    if [ -n "$cur" ]; then
+        # A value is already set (ours or the user's) — leave it alone UNLESS it is provably
+        # unusable because another interface owns that address. In that case it cannot ever
+        # work, so healing it beats honouring it; say so loudly.
+        warp_ip_conflicts "$cur" || return 1
+        free=$(warp_free_iface_ip) || return 1
+        # Rewrite through a temp file and CAT IT BACK rather than `sed -i`: usque.conf is an
+        # opkg conffile, so copying the content back preserves its inode/owner/mode instead of
+        # replacing the file, and the -s guard means a failed awk can never truncate the
+        # package's config. (It also keeps this path identical across the seds we test on.)
+        awk -v v="$free" -v old="$cur" '
+            /^IFACE_IP=/ { printf "IFACE_IP=\"%s\"  # z2k: was %s, taken by another interface\n", v, old; next }
+            { print }
+        ' "$USQUE_CONF" > "$USQUE_CONF.z2ktmp" 2>/dev/null || { rm -f "$USQUE_CONF.z2ktmp"; return 1; }
+        [ -s "$USQUE_CONF.z2ktmp" ] || { rm -f "$USQUE_CONF.z2ktmp"; return 1; }
+        cat "$USQUE_CONF.z2ktmp" > "$USQUE_CONF" 2>/dev/null || { rm -f "$USQUE_CONF.z2ktmp"; return 1; }
+        rm -f "$USQUE_CONF.z2ktmp"
+        _wlog "IFACE_IP $cur conflicts with another interface (NDM refuses to bring the tunnel up) — moved to $free"
+        return 0
+    fi
+    free=$(warp_free_iface_ip) || return 1
+    printf '%s\n' "IFACE_IP=\"$free\"  # z2k: off Keenetic SSTP/VPN 172.16.1.x" >> "$USQUE_CONF" \
         || return 1
-    _wlog "pinned opkgtun0 IFACE_IP=$WARP_IFACE_IP (package auto-picks SSTP-colliding 172.16.1.x)"
+    _wlog "pinned $WARP_IFACE IFACE_IP=$free (package auto-picks SSTP-colliding 172.16.1.x)"
     return 0
 }
 
@@ -276,23 +512,13 @@ warp_write_iface_ip() {
 # blocked endpoint gets at most one restart per WARP_KICK_COOLDOWN, never a storm.
 warp_usque_kick() {
     [ -x "$USQUE_INIT" ] || return 0
-    local now last
-    now=$(date +%s 2>/dev/null) || return 0
-    case "$now" in ''|*[!0-9]*) return 0 ;; esac
-    if [ -f "$WARP_KICK_STAMP" ]; then
-        last=$(cat "$WARP_KICK_STAMP" 2>/dev/null)
-        case "$last" in ''|*[!0-9]*) last=0 ;; esac
-        # A future stamp (router clock skewed ahead at boot, before NTP corrects it back)
-        # would keep now-last negative forever and wedge recovery — treat it as no stamp.
-        [ "$last" -gt "$now" ] && last=0
-        [ $((now - last)) -lt "$WARP_KICK_COOLDOWN" ] && return 0
-    fi
-    # Persist the stamp BEFORE restarting; if it can't be written (read-only / full /tmp under
-    # OOM pressure) do NOT restart — otherwise a down tunnel would restart usque every tick, the
-    # exact storm the cooldown exists to prevent.
-    { echo "$now" > "$WARP_KICK_STAMP"; } 2>/dev/null || return 0
-    _wlog "opkgtun0 down — restarting usque to reconnect (cooldown ${WARP_KICK_COOLDOWN}s)"
-    "$USQUE_INIT" restart >/dev/null 2>&1
+    # The stamp is written BEFORE the restart, and an unwritable stamp means "don't restart":
+    # otherwise a dead tunnel plus a full/read-only filesystem would restart usque every tick,
+    # the exact storm the cooldown exists to prevent.
+    _warp_cooldown_ok "$WARP_KICK_STAMP" "$WARP_KICK_COOLDOWN" || return 0
+    _wlog "tunnel dead — restarting usque to reconnect (cooldown ${WARP_KICK_COOLDOWN}s)"
+    warp_usque_restart
+    return 0
 }
 
 # Enrollment fallback: enroll a device THROUGH the VPS relay when the direct (desynced) enroll
@@ -301,26 +527,32 @@ warp_usque_kick() {
 warp_vps_register() {
     [ -x "$USQUE_BIN" ] || return 1
     [ -n "$WARP_VPS_PROXY" ] || return 1
-    local now last
-    now=$(date +%s 2>/dev/null) || return 1
-    case "$now" in ''|*[!0-9]*) return 1 ;; esac
-    if [ -f "$WARP_REG_STAMP" ]; then
-        last=$(cat "$WARP_REG_STAMP" 2>/dev/null)
-        case "$last" in ''|*[!0-9]*) last=0 ;; esac
-        [ "$last" -gt "$now" ] && last=0
-        [ $((now - last)) -lt "$WARP_REG_COOLDOWN" ] && return 1
-    fi
-    { echo "$now" > "$WARP_REG_STAMP"; } 2>/dev/null || return 1
+    _warp_cooldown_ok "$WARP_REG_STAMP" "$WARP_REG_COOLDOWN" || return 1
     _wlog "direct enroll blocked — enrolling via VPS relay"
     HTTPS_PROXY="$WARP_VPS_PROXY" https_proxy="$WARP_VPS_PROXY" \
         "$USQUE_BIN" register --accept-tos --config "$USQUE_SESSION" >/dev/null 2>&1
     if [ -s "$USQUE_SESSION" ]; then
         _wlog "VPS enrollment OK — restarting usque"
-        "$USQUE_INIT" restart >/dev/null 2>&1
+        warp_usque_restart
         return 0
     fi
     _wlog "VPS enrollment failed"
     return 1
+}
+
+# Direct (desynced, region-correct) enrollment. We run `usque register` OURSELVES instead of
+# restarting S51usque and letting its fn_create_session_if_required do it: the restart cost a
+# full NDM interface teardown/bring-up on EVERY retry — one per selfheal tick for as long as
+# enrollment kept failing — while producing exactly the same HTTPS attempt against
+# api.cloudflareclient.com that lets autocircular rotate a strategy on it. Same signal, none
+# of the churn; only a SUCCESSFUL enrollment restarts usque, once.
+warp_register_direct() {
+    [ -x "$USQUE_BIN" ] || return 1
+    "$USQUE_BIN" register --accept-tos --config "$USQUE_SESSION" >/dev/null 2>&1
+    [ -s "$USQUE_SESSION" ] || return 1
+    _wlog "direct enrollment OK — restarting usque"
+    warp_usque_restart
+    return 0
 }
 
 # Enrollment gate. No session.conf means the device was never enrolled, so the tunnel can't
@@ -339,22 +571,44 @@ warp_enroll_or_fallback() {
     if [ "$n" -lt "$WARP_REG_DIRECT_TRIES" ]; then
         { echo $((n + 1)) > "$WARP_REG_COUNT"; } 2>/dev/null
         _wlog "no session.conf — direct enroll retry $((n + 1))/$WARP_REG_DIRECT_TRIES (desync)"
-        "$USQUE_INIT" restart >/dev/null 2>&1
+        warp_register_direct
     else
         warp_vps_register
+        # ALTERNATE, don't defect for good: reset the counter so the direct path gets another
+        # round. The old code walked one way — after three direct failures it never tried
+        # direct again and pinned all hope on the relay, so a relay that is down, rate-limited
+        # or whose credentials rotated left the router permanently unenrollable, even after the
+        # ISP stopped blocking the reg API.
+        { echo 0 > "$WARP_REG_COUNT"; } 2>/dev/null
     fi
     return 0
 }
 
 # Re-assert the split-tunnel route an NDM firewall reload / WAN flap wiped, and — unlike the
-# old route-only version — recover a down tunnel (cases 2/3 in the header) that the package
-# left dead, which is what forced users to toggle usque by hand. Called ~every minute by the
-# scheduler.
+# old route-only version — recover a tunnel the package left dead (missing install, wrong
+# subnet, unenrolled, or up-but-not-carrying-traffic), which is what forced users to toggle
+# usque by hand. Called ~every minute by the scheduler.
 warp_selfheal() {
     [ "$(warp_flag)" = "1" ] || return 0
+    # One-shot r-62 drain, marker-guarded (one file test per tick once done). It has to be
+    # reachable from here, not only from the toggle: a router upgraded with the mode already
+    # ON would otherwise keep double-NATing until somebody happened to toggle it off and on.
+    warp_purge_legacy_nat
+    # Case 0: usque is not installed at all. This used to be unreachable here — warp_install
+    # was only ever called from `enable`, and the boot path (S99zapret2 backgrounds
+    # `z2k-warp.sh enable`) runs when the WAN is often not up yet, so its .ipk fetch fails and
+    # nothing ever retried. The mode then stayed flagged ON and stone dead until somebody
+    # toggled it by hand — which is precisely why "в консоли включил и заработало". Retry here,
+    # cooldown-guarded because the package is ~14 MB.
+    if [ ! -x "$USQUE_INIT" ]; then
+        _warp_cooldown_ok "$WARP_INSTALL_STAMP" "$WARP_INSTALL_COOLDOWN" || return 0
+        _wlog "usque missing while WARP is enabled — installing"
+        warp_install || return 0
+        return 0    # the install path already restarted usque; assert routing next tick
+    fi
     # Case 2: one-time migration off the SSTP-colliding subnet (restart once to apply).
     if warp_write_iface_ip; then
-        "$USQUE_INIT" restart >/dev/null 2>&1
+        warp_usque_restart
         return 0    # tunnel is restarting on the new address; next tick asserts the route
     fi
     # Enrollment: if there's no session.conf the device was never enrolled (reg API blocked) —
@@ -368,11 +622,20 @@ warp_selfheal() {
     # (device gone / usque wedged). Restart usque (cooldown-guarded); can't route a dead iface.
     if ! ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' \
        || ! ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP; then
+        warp_live_record 0
         warp_usque_kick
         return 0
     fi
     ipset list "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_load
     warp_pbr_up
+    # Case 4 — the one nothing used to catch. Address + link UP proves only that NDM
+    # configured the interface, not that the MASQUE session to Cloudflare exists. usque
+    # running-but-never-connected (blocked endpoint, expired device key, wedged after a WAN
+    # flap) looked healthy to every check above, so the tunnel stayed dead indefinitely while
+    # the panel showed "работает". Probe it for real and kick on a genuine failure; the kick
+    # is cooldown-guarded, so a WAN outage costs one restart per WARP_KICK_COOLDOWN, not one
+    # per tick.
+    warp_tunnel_live || warp_usque_kick
 }
 
 # Sourced by tests/test_warp_selfheal.sh to exercise the functions with stubs — skip the
@@ -387,7 +650,12 @@ case "$1" in
     ipset)    warp_ipset_load ;;
     migrate)  warp_lists_migrate ;;
     status)
-        echo "flag=$(warp_flag) iface=$WARP_IFACE addr=$(ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1) ipset=$(warp_ipset_count)"
+        echo "flag=$(warp_flag) iface=$WARP_IFACE addr=$(ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1) ipset=$(warp_ipset_count) live=$(warp_live_cached)"
         ;;
-    *) echo "usage: $0 {install|enable|disable|selfheal|ipset|migrate|status}" >&2; exit 1 ;;
+    # Force a fresh end-to-end probe (menu / support diagnostics). Prints on/off and sets the
+    # exit code, so it is usable both by a human and by `if sh z2k-warp.sh probe; then`.
+    probe)
+        if warp_tunnel_live; then echo "warp=on"; else echo "warp=off"; exit 1; fi
+        ;;
+    *) echo "usage: $0 {install|enable|disable|selfheal|ipset|migrate|status|probe}" >&2; exit 1 ;;
 esac

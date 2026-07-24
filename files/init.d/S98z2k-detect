@@ -44,7 +44,15 @@ start() {
         echo "$PROCS already running"
         return 0
     fi
-    nohup /opt/sbin/$PROCS $ARGS_RUN >> /var/log/z2k-detect.log 2>&1 &
+    # NO `nohup` here: Keenetic's busybox does not ship it ("sh: nohup: not found"),
+    # so this line failed outright and the daemon never started for anyone who turned
+    # autodetection on. Detach the way every other z2k daemon does — redirect all three
+    # fds and background it; with stdin/stdout/stderr off the terminal there is no HUP
+    # to ignore. (S96z2k-rt-proxy / S97z2k-http-tunnel / S98tg-tunnel use this pattern.)
+    #
+    # GODEBUG=asyncpreemptoff=1: disable Go's SIGURG-based async goroutine preemption —
+    # it crashes the runtime on MIPS/mipsel (soft-float Keenetics), same guard as above.
+    GODEBUG=asyncpreemptoff=1 /opt/sbin/$PROCS $ARGS_RUN </dev/null >> /var/log/z2k-detect.log 2>&1 &
     echo $! > "$PIDFILE"
     sleep 1
     if pidof "$PROCS" >/dev/null 2>&1; then

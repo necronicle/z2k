@@ -193,16 +193,26 @@ toggle_silent_fallback() {
 # is the engine. On enable-failure (e.g. usque registration timed out under RU
 # CF throttle) we revert the flag so the UI never lies about being on.
 toggle_game_warp() {
-    local want="$1"
+    local want="$1" rc
     set_flag "GAME_WARP_ENABLED" "$want" "$CONFIG_FILE" || return 1
     if [ "$want" = "1" ]; then
-        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable || {
+        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable; rc=$?
+        # rc=2: routing is applied but the end-to-end probe says the tunnel is not carrying
+        # traffic yet (enrollment blocked, usque still reconnecting). Do NOT revert the flag —
+        # self-heal is the only thing that can finish the job and it only runs while the mode
+        # is on. Report it honestly instead; the old code returned success here regardless,
+        # which is exactly why the panel claimed "включено" over a dead tunnel.
+        if [ "$rc" = "2" ]; then
+            echo "Режим включён, но туннель ещё не поднялся (регистрация/сеть). z2k продолжит поднимать его в фоне — проверьте статус через минуту." >&2
+            return 0
+        fi
+        if [ "$rc" != "0" ]; then
             set_flag "GAME_WARP_ENABLED" "0" "$CONFIG_FILE"
             # tear down any half-started tunnel so a failed enable doesn't orphan usque
             sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable >/dev/null 2>&1
-            echo "WARP не поднялся (регистрация/сеть) — режим оставлен выключенным" >&2
+            echo "WARP не поднялся (клиент usque недоступен) — режим оставлен выключенным" >&2
             return 1
-        }
+        fi
     else
         sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable
     fi
@@ -518,24 +528,20 @@ warp_name_ok() {
 }
 
 warp_lists_ensure_dir() {
-    # One-time seed migration lives in z2k-warp.sh (single source of the
-    # "dir existence = migrated" invariant). The fallback must REPLICATE the
-    # seed copy, not just mkdir: an older z2k-warp.sh without the `migrate`
-    # verb exits 1 without creating the dir, and a bare mkdir here would set
-    # the "migrated" marker with the seed list silently lost.
+    # The seed migration has EXACTLY one implementation — z2k-warp.sh warp_lists_migrate —
+    # which also owns the "dir existence = already migrated" invariant and the 3-way-merge
+    # baseline. This used to carry a second copy of that logic as a fallback, and two copies
+    # of a migration is how they drift apart.
+    #
+    # Note what we must NOT do: create the directory ourselves when the engine failed. The
+    # directory IS the "already migrated" marker, so a bare mkdir here permanently suppresses
+    # the seed — the shipped game list would be silently lost, including later, once a working
+    # engine is back. Creating it is the engine's privilege alone; if it cannot, we fail and
+    # the callers report an honest "lists dir unavailable" instead of quietly eating the seed.
     [ -d "$WARP_LISTS_DIR" ] && return 0
-    if [ -f "$WARP_SCRIPT" ]; then
-        sh "$WARP_SCRIPT" migrate >/dev/null 2>&1
-        [ -d "$WARP_LISTS_DIR" ] && return 0
-    fi
-    mkdir -p "$WARP_LISTS_DIR" 2>/dev/null || return 1
-    if [ -s "$LISTS_DIR/game-warp-ips.txt" ]; then
-        cp "$LISTS_DIR/game-warp-ips.txt" "$WARP_LISTS_DIR/game-warp-ips.txt" 2>/dev/null
-        # Seed the merge baseline too (mirrors z2k-warp.sh warp_lists_migrate).
-        cp "$LISTS_DIR/game-warp-ips.txt" "$WARP_LISTS_DIR/.game-warp-ips.base" 2>/dev/null
-        chmod 644 "$WARP_LISTS_DIR"/*.txt 2>/dev/null
-    fi
-    return 0
+    [ -f "$WARP_SCRIPT" ] || return 1
+    sh "$WARP_SCRIPT" migrate >/dev/null 2>&1
+    [ -d "$WARP_LISTS_DIR" ]
 }
 
 warp_ipset_reload_if_enabled() {
@@ -547,21 +553,37 @@ warp_ipset_reload_if_enabled() {
 }
 
 warp_status_info() {
-    # Stdout-эмиссия для api.sh: "enabled=X|installed=X|tunnel_up=X|addr=X|entries=N"
+    # Stdout-эмиссия для api.sh: "enabled=X|installed=X|tunnel_up=X|live=X|addr=X|entries=N"
     # WARP_IFACE/WARP_IPSET are ENV tunables of z2k-warp.sh (it does not read
     # the config file) — mirror that here, do not invent a config override.
-    local enabled installed tunnel_up addr entries iface ipset_name
+    #
+    # tunnel_up ("интерфейс настроен") and live ("трафик реально ходит") are DIFFERENT
+    # questions and the difference is the whole bug this replaces: the address is assigned
+    # by NDM at usque start time whether or not the MASQUE session to Cloudflare ever came
+    # up, so tunnel_up alone reported stone-dead tunnels as working. `live` is the cached
+    # verdict of z2k-warp.sh's end-to-end probe — read from a stamp, never probed here: a
+    # status call is on the panel's polling path and must not block for seconds. Empty
+    # means "не проверялось / устарело", which the UI must render as unknown, not as dead.
+    local enabled installed tunnel_up live addr entries iface ipset_name st
     enabled=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
-    iface="${WARP_IFACE:-opkgtun0}"
     ipset_name="${WARP_IPSET:-z2k_warp}"
     installed=0
     [ -x /opt/etc/init.d/S51usque ] && installed=1
+    # Ask the engine — ONE status call gives both the cached liveness verdict and the
+    # interface name. Do NOT hard-code opkgtun0 here: the usque package picks the first free
+    # opkgtunN at install time, so on a router with a leftover interface the real tunnel is
+    # opkgtun1 and this panel would have reported on an orphan.
+    st=""
+    [ -f "$WARP_SCRIPT" ] && st=$(sh "$WARP_SCRIPT" status 2>/dev/null)
+    live=$(printf '%s' "$st" | sed -n 's/.*live=\([01]*\).*/\1/p')
+    iface=$(printf '%s' "$st" | sed -n 's/.*iface=\([^ ]*\).*/\1/p')
+    [ -n "$iface" ] || iface="${WARP_IFACE:-opkgtun0}"
     addr=$(ip -o addr show "$iface" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | cut -d' ' -f2)
     tunnel_up=0
     [ -n "$addr" ] && tunnel_up=1
     entries=$(ipset list "$ipset_name" 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')
-    printf 'enabled=%s|installed=%s|tunnel_up=%s|addr=%s|entries=%s\n' \
-        "$enabled" "$installed" "$tunnel_up" "${addr:-}" "${entries:-0}"
+    printf 'enabled=%s|installed=%s|tunnel_up=%s|live=%s|addr=%s|entries=%s\n' \
+        "$enabled" "$installed" "$tunnel_up" "${live:-}" "${addr:-}" "${entries:-0}"
 }
 
 warp_lists() {
