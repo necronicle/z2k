@@ -157,7 +157,15 @@ start() {
         return 0
     fi
     # The package's own service must not fight us over the same device key and interface.
-    [ -x "$PKG_INIT" ] && "$PKG_INIT" stop >/dev/null 2>&1
+    # Stopping it is not enough: Entware runs every executable /opt/etc/init.d/S* at boot,
+    # and "S51usque" sorts BEFORE "S51z2k-warp", so on every reboot it would start first,
+    # grab the interface and the key, and we would then have to tear it back down. Take its
+    # executable bit instead — the standard Entware way to disable a service, reversible with
+    # a chmod, and it leaves the package itself installed and untouched.
+    if [ -x "$PKG_INIT" ]; then
+        "$PKG_INIT" stop >/dev/null 2>&1
+        chmod -x "$PKG_INIT" 2>/dev/null && log "disabled the usque-keenetic service (z2k owns the tunnel now)"
+    fi
     ensure_session || { log "registration failed — cannot start"; echo "$NAME: registration failed"; return 1; }
 
     local ifc addr
