@@ -367,7 +367,11 @@ warp_purge_legacy_nat() {
     while iptables -w -t mangle -C FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do
         iptables -w -t mangle -D FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || break
     done
-    { : > "$WARP_LEGACY_MARK"; } 2>/dev/null || true
+    # `touch`, NOT `: > file` — see the identical note in z2k-ppe-deoffload.sh: `:` is a POSIX
+    # special built-in, so a failed redirection on it EXITS the shell (dash / busybox ash),
+    # and no `2>/dev/null || true` can save you. An unwritable marker must degrade to
+    # "purge runs again next time", never to "the script dies here".
+    touch "$WARP_LEGACY_MARK" 2>/dev/null || true
     return 0
 }
 

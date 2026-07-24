@@ -80,7 +80,12 @@ _z2k_ppe_purge_legacy_game() {
         while _z2k_ppe_ipt  -t mangle -C "$ch" $a; do _z2k_ppe_ipt  -t mangle -D "$ch" $a || break; done
         while _z2k_ppe_ipt6 -t mangle -C "$ch" $a; do _z2k_ppe_ipt6 -t mangle -D "$ch" $a || break; done
     done
-    { : > "$PPE_LEGACY_MARK"; } 2>/dev/null || true
+    # `touch`, NOT `: > file`: `:` is a POSIX SPECIAL built-in, and a redirection error on a
+    # special built-in makes the shell EXIT outright — dash and busybox ash both do it, so a
+    # marker path that is not writable (read-only /opt after an unclean shutdown is a real
+    # failure mode here) would kill the whole script mid-run, and neither `2>/dev/null` nor
+    # `|| true` can catch it because the shell is already gone. touch is an ordinary command.
+    touch "$PPE_LEGACY_MARK" 2>/dev/null || true
     return 0
 }
 
