@@ -1,4 +1,13 @@
 #!/bin/sh
+# shellcheck disable=SC2218
+# SC2218 ("function is only defined later") is expected here BY DESIGN and cannot be
+# satisfied by moving anything: this harness runs the REAL functions first (sourced from
+# z2k-warp.sh), then deliberately re-stubs several of them further down to drive the
+# fail-open paths in isolation. shellcheck sees those later stubs and flags every earlier
+# call to the real function. Whether it fires at all depends on the shellcheck version —
+# 0.11 stays quiet, the CI's does not — so disable it explicitly rather than leave the
+# build's colour depending on which binary the runner happens to ship.
+#
 # tests/test_warp_selfheal.sh — HARD test of the two usque-restarting paths added
 # to z2k-warp.sh (p-64.1): the one-time IFACE_IP subnet migration (warp_write_iface_ip)
 # and the cooldown-guarded down-tunnel kick (warp_usque_kick). Both restart usque, so
