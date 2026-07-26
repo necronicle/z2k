@@ -29,9 +29,19 @@ BUILT="$HERE/rt-proxy"
 SHIPPED="$HERE/mtproxy-client/builds"
 INSTALL="$HERE/lib/install.sh"
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
+skip() { SKIP=$((SKIP+1)); printf '[SKIP] %s (%s)\n' "$1" "$2"; }
+
+# Only the SHIPPED copies are committed; rt-proxy/z2k-rt-proxy-linux-* are build
+# output and are not in git. So a fresh CI checkout legitimately has nothing to
+# compare against, and the drift comparison is SKIPPED there rather than failed —
+# it is a dev-machine guard by nature, since drift can only be introduced by a
+# local rebuild. What CI can still check, it does: the shipped binaries must be
+# present, be ELF, and pass the installer's size gate.
+BUILT_PRESENT=0
+ls "$BUILT"/z2k-rt-proxy-linux-* >/dev/null 2>&1 && BUILT_PRESENT=1
 
 md5of() {
     if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -d' ' -f1
@@ -64,12 +74,17 @@ fi
 for a in $ARCHES; do
     b="$BUILT/z2k-rt-proxy-linux-$a"
     s="$SHIPPED/z2k-rt-proxy-linux-$a"
-    if [ ! -f "$b" ]; then
-        no "$a: built binary present" "a file" "missing $b"
-        continue
-    fi
     if [ ! -f "$s" ]; then
         no "$a: SHIPPED binary present" "a file" "missing $s — install.sh would 404"
+        continue
+    fi
+    if [ ! -f "$b" ]; then
+        if [ "$BUILT_PRESENT" = 0 ]; then
+            skip "$a: shipped binary matches the built one" "no build output in this checkout"
+        else
+            # Some arches built, this one not: that IS drift, not a clean checkout.
+            no "$a: built binary present" "a file" "missing $b while other arches built"
+        fi
         continue
     fi
     mb=$(md5of "$b"); ms=$(md5of "$s")
@@ -96,5 +111,5 @@ for a in $ARCHES; do
                               || no "$a: shipped binary passes install.sh's size gate" ">500000" "$sz"
 done
 
-printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
+printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" = 0 ]

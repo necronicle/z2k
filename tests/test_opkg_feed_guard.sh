@@ -186,7 +186,27 @@ fi
 # wanting a suffix). Without a check the function ran a second pointless `opkg update`
 # against the same dead mirror and said nothing actionable.
 mk_env
-rm -f "$BIN/sed"   # no shim: on BSD sed the in-place edit silently does nothing
+# A sed whose in-place edit silently does NOTHING. The first version of this case
+# achieved that by deleting the shim and relying on BSD sed rejecting
+# `-i EXPR FILE` — which is true on a dev Mac and FALSE on the Linux CI runner,
+# where GNU sed happily performs the edit, the rewrite succeeds, and the case
+# tested nothing (it failed there while passing locally). Simulate the no-op
+# explicitly instead, so the branch under test is reached on every host.
+cat > "$BIN/sed" <<'NOOP'
+#!/bin/sh
+[ "$1" = "-i" ] && exit 0     # pretend the in-place edit happened; change nothing
+exec /usr/bin/sed "$@"
+NOOP
+chmod +x "$BIN/sed"
+# ...and prove the stub really is a no-op, or this case would be green for the
+# wrong reason on a host where $BIN is not first in PATH.
+printf 'src/gz entware http://entware.diversion.ch/x\n' > "$TMP/noop.probe"
+PATH="$BIN:$PATH" sed -i 's|diversion\.ch|bin.entware.net|' "$TMP/noop.probe"
+if grep -q 'diversion\.ch' "$TMP/noop.probe"; then
+    ok "harness: the no-op sed stub is in effect"
+else
+    no "harness: the no-op sed stub is in effect" "file unchanged" "$(cat "$TMP/noop.probe")"
+fi
 cat > "$TMP/nf.sh" <<EOF
 $(extract_fn refresh_opkg_lists "$WP")
 refresh_opkg_lists

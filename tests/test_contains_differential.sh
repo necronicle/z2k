@@ -33,7 +33,7 @@
 #       # write the shipped contains() to /tmp/impl.sh renamed contains_new
 #       ssh root@router 'Z2K_ROLE=driver Z2K_IMPL=/tmp/impl.sh \
 #           Z2K_SECTIONS="corpus fuzz perf" Z2K_PERF_OLD=1 /bin/sh /tmp/tcd.sh'
-#     Expect: no BAD/LITDIV/NEWBAD lines, "CASES 64", "FUZZ * 7128 * 0".
+#     Expect: no BAD/LITDIV/NEWBAD lines, "CASES 63", "FUZZ * 7128 * 0".
 #   - The absolute 25.1s -> 1.73s restart figure. That is wall-clock on a live
 #     aarch64 Keenetic and cannot be reproduced off-box.
 #
@@ -43,7 +43,7 @@
 # empty-needle            1   1    NO                            NO DIVERGENCE (guard added)
 # bs-needle-escape        0   1    NO                            FIX (old matched a phantom)
 # bs-needle-literal       1   0    NO                            FIX (old missed a real hit)
-# bs-needle-alone         1   0    NO                            FIX (old missed a real hit)
+# bs-needle-alone         -   0    NO   NOT PINNED: old is shell-dependent (see corpus)
 # glob-star-needle        0   1    NO                            FIX (old expanded the needle)
 # glob-star-only-hit      1   0    NO                            FIX (old missed a literal '*')
 # glob-question-needle    0   1    NO                            FIX
@@ -78,8 +78,17 @@
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 INIT="${Z2K_INIT:-${Z2K_INIT_UNDER_TEST:-$HERE/files/S99zapret2.new}}"
-FORK="$HERE/../zapret2-z2k-fork"
+# Overridable so the CI condition (engine repo absent) is reproducible locally:
+#     Z2K_FORK_DIR=/nonexistent sh tests/test_contains_differential.sh
+FORK="${Z2K_FORK_DIR:-$HERE/../zapret2-z2k-fork}"
 BASE="$FORK/common/base.sh"
+
+# The ENGINE lives in a separate repository (necronicle/zapret2-z2k), checked out
+# next to this one on a dev box and simply absent in CI. Its assertions are then
+# SKIPPED, never failed — but counted and printed, because a silent skip is how a
+# suite quietly stops testing anything. Everything about OUR files stays hard.
+FORK_PRESENT=0
+[ -f "$BASE" ] && FORK_PRESENT=1
 
 # =============================================================================
 # DRIVER MODE
@@ -202,7 +211,13 @@ c glob-class-neg-needle  0 1 "abc"     "[!x]"    # phantom hit under OLD
 c glob-rbracket-plain    0 0 "a]b"     "]b"      # ']' alone is literal in glob
 c bs-needle-escape       0 1 "ab"      "a${BS}b" # OLD read '\b' as literal 'b'
 c bs-needle-literal      1 0 "a${BS}b" "a${BS}b" # OLD could not see a real '\'
-c bs-needle-alone        1 0 "a${BS}b" "${BS}"
+# NOT pinned: a needle that is a LONE backslash ("a\b" / "\"). old's verdict is
+# shell-dependent — every shell on the dev host (dash, bash, /bin/sh) answers "not
+# found", Ubuntu's dash answers "found", because a trailing backslash in the
+# unquoted ${1#*$2} pattern is an incomplete escape and what that means is left to
+# the implementation. That platform-dependence IS the indictment of the old form,
+# but it cannot be pinned as a value. new answers "found" everywhere, which the
+# metacharacter bucket of the fuzz below still exercises as a property.
 # NOT pinned: an UNTERMINATED '[' in the needle ("a[b" / "[b"). dash treats the
 # whole pattern as a failed match, bash treats '[' literally, so old's verdict
 # is shell-dependent. It stays inside the metacharacter bucket of the fuzz
@@ -387,10 +402,11 @@ trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
+SKIP=0
+skip() { SKIP=$((SKIP+1)); printf '[SKIP] %s (%s)\n' "$1" "$2"; }
 
 # The exact set of labels allowed to disagree. Sorted, newline separated.
-EXPECTED_DIV='bs-needle-alone
-bs-needle-escape
+EXPECTED_DIV='bs-needle-escape
 bs-needle-literal
 glob-class-needle
 glob-class-neg-needle
@@ -415,7 +431,11 @@ IMPLS=""
 for src in "$BASE" "$INIT"; do
     label=$(basename "$src")
     if [ ! -f "$src" ]; then
-        no "$label: present" "a file" "missing"
+        if [ "$src" = "$BASE" ] && [ "$FORK_PRESENT" = 0 ]; then
+            skip "$label: contains() source integrity" "engine repo not checked out"
+        else
+            no "$label: present" "a file" "missing"
+        fi
         continue
     fi
     fn=$(extract_fn contains "$src")
@@ -485,7 +505,9 @@ done
 [ "$redef" = 0 ] && ok "S99: no later-sourced engine file re-defines contains()" \
                  || no "S99: no later-sourced engine file re-defines contains()" 0 "$redef"
 
-if grep -q 'quadratic' "$BASE"; then
+if [ "$FORK_PRESENT" = 0 ]; then
+    skip "base.sh: rationale for the rewrite is recorded in the source" "engine repo not checked out"
+elif grep -q 'quadratic' "$BASE"; then
     ok "base.sh: rationale for the rewrite is recorded in the source"
 else
     no "base.sh: rationale for the rewrite is recorded in the source" "comment" "none"
@@ -527,10 +549,10 @@ for impl in $IMPLS; do
         # corpus being silently emptied or truncated, so it must track the real
         # count: set too high it fails on a healthy run, set to 0 it guards
         # nothing. Raise it when you add cases.
-        if [ -z "$bad" ] && [ "${ncases:-0}" -ge 64 ]; then
+        if [ -z "$bad" ] && [ "${ncases:-0}" -ge 63 ]; then
             ok "$tag: all $ncases pinned old/new verdicts hold"
         else
-            no "$tag: all pinned old/new verdicts hold" "0 BAD, >=64 cases" "$(printf '%s' "$bad" | tr '\n' ';') cases=$ncases"
+            no "$tag: all pinned old/new verdicts hold" "0 BAD, >=63 cases" "$(printf '%s' "$bad" | tr '\n' ';') cases=$ncases"
         fi
 
         # --- the divergence set is exactly the documented one
@@ -697,8 +719,8 @@ tcp_md5'
     # prefix makes it non-empty no matter what ZAPRET_BASE holds.
     ok "path needles keep a literal prefix, so they are non-empty for any ZAPRET_BASE"
 else
-    no "engine tree available for call-site enumeration" "$FORK/common" "missing"
+    skip "engine call-site enumeration" "engine repo not checked out"
 fi
 
-printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
+printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" = 0 ]
