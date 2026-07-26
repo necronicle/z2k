@@ -26,6 +26,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,13 +40,23 @@ var (
 	dialTO       = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
 	probeTO      = flag.Duration("probe-timeout", 12*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
 	recoverEvery = flag.Duration("recover-interval", 10*time.Second, "faster re-probe interval while the pool has 0 live IPs")
-	idleTO       = flag.Duration("timeout", 15*time.Minute, "per-connection idle timeout")
+	// NOT an idle timeout, despite the flag name kept for compatibility: the timer in
+	// handle() is created once and never Reset, so this is an ABSOLUTE cap on the
+	// lifetime of a spliced connection. Documented honestly rather than silently
+	// renamed — the flag is in shipped init scripts. Making it genuinely idle means
+	// refreshing a deadline inside the splice, which is the load-bearing path; that
+	// change needs on-router validation, not a drive-by edit.
+	idleTO       = flag.Duration("timeout", 15*time.Minute, "per-connection IDLE timeout: closed after this long with no bytes moving in either direction")
 	pickWaitTO   = flag.Duration("pick-wait", 15*time.Second, "max wait for a live upstream before dropping (cold-start / transient-empty smoothing)")
 	maxTries     = flag.Int("max-tries", 4, "max upstream IPs to try per connection before dropping")
 	firstByteTO  = flag.Duration("first-byte-timeout", 4*time.Second, "how long an upstream has to deliver the server's first TLS handshake record after the replayed ClientHello before it is demoted and another one is tried")
 	resolverAddr = flag.String("resolver", "1.1.1.1:53", "DNS server queried DIRECTLY for the upstream pool, to bypass the router's ndnproxy whose cache goes stale and strands the pool on dead IPs (system resolver is still used as a fallback/union)")
 	probePath    = flag.String("probe-path", "/forum/index.php", "path fetched THROUGH each upstream when probing — must return a sizeable body, not a redirect")
 	probeBytes   = flag.Int("probe-bytes", 8192, "body bytes an upstream must actually deliver to count as live")
+	maxClients     = flag.Int("max-clients", 128, "ceiling on concurrent client connections; further connections are refused immediately rather than queued")
+	directFallback = flag.Bool("direct-fallback", true, "when no upstream can serve the target, resolve it ourselves and connect DIRECTLY instead of dropping the client")
+	directHosts    = flag.String("direct-fallback-hosts", "rutracker.org,rutracker.wiki,rutracker.cc,t-ru.org", "comma-separated suffixes eligible for the direct fallback — NOT a general escape hatch, see dialDirect")
+	resolveTO    = flag.Duration("resolve-timeout", 5*time.Second, "DNS budget PER RESOLVER (not shared: a blocked direct resolver must not starve the system-resolver fallback)")
 	verbose      = flag.Bool("v", false, "verbose logging")
 )
 
@@ -67,14 +78,67 @@ func main() {
 		log.Fatalf("[rt-proxy] listen %s: %v", *listenAddr, err)
 	}
 	log.Printf("[rt-proxy] listening on %s, upstream %s:%s", *listenAddr, *proxyHost, *proxyPort)
+	serve(ln, p, *maxClients)
+}
+
+// tryAcquire takes a slot without blocking. Split out so the ceiling decision is
+// unit-testable: the only other way to exercise it was to start serve() and hold
+// real connections, and those handlers outlive the test by up to --pick-wait while
+// still reading flag globals that LATER tests write — a genuine -race failure, and
+// a goroutine leak, in a test whose whole point was resource discipline.
+func tryAcquire(sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// serve is the accept loop, split out of main() so the connection ceiling is
+// testable. It was inline, which is why "no cap on concurrent clients" sat in the
+// open column: nothing could assert the behaviour.
+func serve(ln net.Listener, p *pool, maxClients int) {
+	// Ceiling on concurrent clients. Each one costs a 33 KiB tunnel reader, two
+	// io.Copy buffers, a watchdog and three goroutines, and there was NO limit at
+	// all: on a 500 MB router with a documented history of the OOM killer taking
+	// daemons out, "unbounded" is a real hazard even if a LAN is unlikely to reach
+	// it. Refuse immediately rather than queue — a queued client just hangs, which
+	// is the failure mode this whole file exists to avoid.
+	sem := make(chan struct{}, maxClients)
+	var refused uint64
 	for {
 		c, err := ln.Accept()
 		if err != nil {
+			// A permanently closed listener is terminal: the old loop logged and
+			// slept 200 ms forever, spinning a dead goroutine and a log line five
+			// times a second. Benign in production (the listener never closes) but
+			// it also made serve() impossible to stop, which leaked goroutines
+			// across tests and produced a real -race failure.
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			log.Printf("[rt-proxy] accept: %v", err)
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		go handle(c, p)
+		if !tryAcquire(sem) {
+			refused++
+			c.Close()
+			// Log the first refusal and then every 100th, so a flood cannot itself
+			// become the resource problem.
+			if refused == 1 || refused%100 == 0 {
+				log.Printf("[rt-proxy] at the %d-connection ceiling — refused %d so far (--max-clients)",
+					maxClients, refused)
+			}
+			continue
+		}
+		{
+			go func(c net.Conn) {
+				defer func() { <-sem }()
+				handle(c, p)
+			}(c)
+		}
 	}
 }
 
@@ -188,17 +252,40 @@ func directResolver() *net.Resolver {
 	}
 }
 
+// hostLookuper is the slice of *net.Resolver that resolve() consults, behind an
+// interface so a test can substitute stubs. resolve() used to construct both
+// resolvers inline, which made it unreachable from a test - and it is where the
+// shared-deadline bug below lived, untested, for its whole life.
+type hostLookuper interface {
+	LookupHost(ctx context.Context, host string) ([]string, error)
+}
+
+var resolversFor = func() []hostLookuper {
+	return []hostLookuper{directResolver(), net.DefaultResolver}
+}
+
 func (p *pool) resolve() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	// Union of a DIRECT resolver (fresh rotation, bypasses the stale ndnproxy
 	// cache) and the system resolver (fallback if the direct one is blocked /
 	// hijacked). The end-to-end probe filters whatever these return down to
 	// genuinely-live IPs, so a few stale entries in the union are harmless.
 	seenR := map[string]bool{}
 	var resolved []string
-	for _, r := range []*net.Resolver{directResolver(), net.DefaultResolver} {
-		hosts, _ := r.LookupHost(ctx, *proxyHost)
+	for _, r := range resolversFor() {
+		// EACH resolver gets its own budget. A single shared deadline meant a
+		// blocked direct resolver consumed all of it and handed the system
+		// resolver an already-expired context, so the fallback documented on the
+		// --resolver flag could never run in the one situation it exists for:
+		// an ISP filtering 1.1.1.1:53. resolved then came back empty, resolve()
+		// took the early return below, and the candidate pool was never
+		// populated at all - the daemon stayed dead with a healthy-looking log.
+		// Covered by TestResolve_BlockedDirectResolverStillLetsTheFallbackAnswer.
+		ctx, cancel := context.WithTimeout(context.Background(), *resolveTO)
+		hosts, err := r.LookupHost(ctx, *proxyHost)
+		cancel()
+		if err != nil && *verbose {
+			log.Printf("[rt-proxy] resolve %s: %v", *proxyHost, err)
+		}
 		for _, ip := range hosts {
 			if net.ParseIP(ip) != nil && !seenR[ip] {
 				seenR[ip] = true
@@ -244,6 +331,13 @@ func (p *pool) probeAll() {
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()
+			// Same reasoning as handle(): probeProxy parses bytes from an untrusted
+			// upstream, and a panic here would kill the daemon rather than one probe.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[rt-proxy] panic probing %s: %v — treated as dead", ip, r)
+				}
+			}()
 			full, hs := probeProxy(ip)
 			lmu.Lock()
 			if full {
@@ -293,7 +387,7 @@ func (p *pool) probeAll() {
 // Bounded by a single probeTO budget (dial + CONNECT + inner TLS).
 func probeProxy(ip string) (full bool, handshake bool) {
 	deadline := time.Now().Add(*probeTO)
-	up, err := dialProxy(ip, time.Until(deadline))
+	up, err := dialProxyDeadline(ip, deadline)
 	if err != nil {
 		if *verbose {
 			log.Printf("[rt-proxy] probe %s: dial/tls failed: %v", ip, err)
@@ -376,6 +470,10 @@ func probeProxy(ip string) (full bool, handshake bool) {
 	return true, true
 }
 
+// bufSize is the tunnel reader's size. Single source of truth: the test asserts
+// against THIS constant, so the buffer and the assertion cannot drift apart.
+const bufSize = 33 * 1024
+
 // bufConn lets crypto/tls read through a bufio.Reader that may still hold bytes
 // buffered while reading the CONNECT response, then fall through to the raw
 // conn. Writes and deadlines go straight to the embedded conn.
@@ -389,8 +487,16 @@ func (b *bufConn) Read(p []byte) (int, error) { return b.br.Read(p) }
 // ---------------------------------------------------------------------------
 // per-connection handling
 // ---------------------------------------------------------------------------
-func dialProxy(ip string, timeout time.Duration) (net.Conn, error) {
-	d := net.Dialer{Timeout: timeout}
+// Takes an ABSOLUTE deadline, not a duration. With a duration the dial got the
+// whole budget and then the TLS handshake got a FRESH one of the same length, so a
+// node that completed a slow TCP handshake and then stalled in TLS cost 2x what
+// the caller asked for. probeProxy documents "bounded by a single probeTO", and
+// with probeTO=12s a blackholed node could burn ~24s; since probeAll waits on all
+// probes, that stretched the whole health cycle and, when the pool was empty, made
+// the 10s recover cadence effectively ~34s — in exactly the window users are
+// waiting. openTunnel had the same doubling at 8s per try.
+func dialProxyDeadline(ip string, deadline time.Time) (net.Conn, error) {
+	d := net.Dialer{Deadline: deadline}
 	raw, err := d.Dial("tcp", net.JoinHostPort(ip, *proxyPort))
 	if err != nil {
 		return nil, err
@@ -404,7 +510,7 @@ func dialProxy(ip string, timeout time.Duration) (net.Conn, error) {
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"http/1.1"}, // curl negotiates ALPN to the proxy; some proxies close without it
 	})
-	tc.SetDeadline(time.Now().Add(timeout))
+	tc.SetDeadline(deadline)
 	if err := tc.Handshake(); err != nil {
 		raw.Close()
 		return nil, err
@@ -421,30 +527,70 @@ func dialProxy(ip string, timeout time.Duration) (net.Conn, error) {
 // windows where the recover-loop is re-probing. Once a live IP exists it tries
 // up to maxTries of them so one flaky upstream does not kill the connection.
 // Returns (nil, nil) if nothing works within the budget (genuine all-dead pool).
+// Seams: dialUpstream is otherwise untestable because both helpers do real I/O.
+// It had no tests at all, which is where both defects below survived.
+var openTunnelFn = openTunnel
+var verifyFirstByteFn = verifyFirstByte
+
 func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 	target := sni + ":443"
 	deadline := time.Now().Add(*pickWaitTO)
 	tries := 0
+	// Blast-radius cap on demotion: AT MOST ONE node may leave the ring per client
+	// request. Observed on the owner's router (2026-07-26): a single request for a
+	// dead hostname demoted four healthy upstreams in a row -
+	//   "accepted CONNECT but sent no server flight (EOF) - demoting" x4
+	//   "no usable upstream proxy IP, dropping rutracker.cc"
+	// - because neither failure mode can tell "this NODE is broken" from "this
+	// TARGET is dead": the EOF arrives from the far end and the middleman is
+	// punished for it. Half the pool then disappears until the next 90 s probe and
+	// rutracker.org degrades FOR EVERYONE because one client asked for a dead host.
+	// Capping at one keeps the original guarantee (a genuinely dead node still
+	// leaves the ring on the first request that touches it, and the next request
+	// removes the next one) while making a dead target cost one node instead of
+	// maxTries.
+	demotedHere := false
+	demoteOnce := func(ip, why string) {
+		if demotedHere {
+			log.Printf("[rt-proxy] %s also failed via %s (%s) — NOT demoting further this request; "+
+				"looks like the target, not the pool", target, ip, why)
+			return
+		}
+		p.demote(ip)
+		demotedHere = true
+	}
 	for {
+		// The budget is checked on EVERY iteration, not only while the pool is
+		// empty. It used to gate just the empty-pool branch, so with a live-looking
+		// but broken pool the retry loop was bounded by nothing but max-tries x the
+		// per-try dial budget - the client could be held far past pick-wait with its
+		// read deadline already cleared.
+		if !time.Now().Before(deadline) {
+			return nil, nil
+		}
 		ip := p.pick()
 		if ip == "" {
-			if !time.Now().Before(deadline) {
-				return nil, nil // pool stayed empty the whole budget
-			}
 			time.Sleep(250 * time.Millisecond)
 			continue
 		}
-		up, br, ok := openTunnel(ip, target)
+		up, br, ok, reachable := openTunnelFn(ip, target)
+		if !reachable {
+			// Could not reach it at all. Do not leave it in the ring for the rest of
+			// the health interval: round-robin would keep handing it out, burning the
+			// dial budget every time. probeAll re-admits it when it recovers, exactly
+			// as it does for a verifyFirstByte demotion.
+			demoteOnce(ip, "unreachable")
+		}
 		if ok {
 			// Do not hand the client a tunnel that has not proven it carries data.
-			if verifyFirstByte(ip, up, br, hello) {
+			if verifyFirstByteFn(ip, up, br, hello) {
 				if *verbose {
 					log.Printf("[rt-proxy] tunnel %s via %s", target, ip)
 				}
 				return up, br
 			}
 			up.Close()
-			p.demote(ip)
+			demoteOnce(ip, "no server flight")
 		}
 		tries++
 		if tries >= *maxTries {
@@ -480,7 +626,7 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 // different upstream.
 func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) bool {
 	if _, err := up.Write(hello); err != nil {
-		log.Printf("[rt-proxy] upstream %s: ClientHello write failed: %v — trying another", ip, err)
+		log.Printf("[rt-proxy] %s: ClientHello write failed: %v — trying another", ip, err)
 		return false
 	}
 	up.SetReadDeadline(time.Now().Add(*firstByteTO))
@@ -488,21 +634,24 @@ func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) boo
 	// TLS record header: type(1) version(2) length(2).
 	hdr, err := br.Peek(5)
 	if err != nil {
-		log.Printf("[rt-proxy] upstream %s accepted CONNECT but sent no server flight within %s (%v) — demoting, trying another",
+		// Neutral wording on purpose: this function now also guards the DIRECT
+		// path, where no CONNECT ever happens. Saying "accepted CONNECT" there
+		// sent field triage looking for a tunnel that was never opened.
+		log.Printf("[rt-proxy] %s sent no server flight within %s (%v) — demoting, trying another",
 			ip, *firstByteTO, err)
 		return false
 	}
 	if hdr[0] != 0x16 { // handshake
-		log.Printf("[rt-proxy] upstream %s answered with a non-handshake record (type 0x%02x) — demoting, trying another", ip, hdr[0])
+		log.Printf("[rt-proxy] %s answered with a non-handshake record (type 0x%02x) — demoting, trying another", ip, hdr[0])
 		return false
 	}
 	n := int(hdr[3])<<8 | int(hdr[4])
 	if n <= 0 || n > 16384 { // RFC 8446 max TLSPlaintext fragment
-		log.Printf("[rt-proxy] upstream %s answered with an implausible record length %d — demoting, trying another", ip, n)
+		log.Printf("[rt-proxy] %s answered with an implausible record length %d — demoting, trying another", ip, n)
 		return false
 	}
 	if _, err := br.Peek(5 + n); err != nil {
-		log.Printf("[rt-proxy] upstream %s stalled mid-record (%d of %d bytes) within %s (%v) — demoting, trying another",
+		log.Printf("[rt-proxy] %s stalled mid-record (%d of %d bytes) within %s (%v) — demoting, trying another",
 			ip, br.Buffered(), 5+n, *firstByteTO, err)
 		return false
 	}
@@ -523,54 +672,145 @@ func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) boo
 	off := 5 + n
 	hdr2, err := br.Peek(off + 5)
 	if err != nil {
-		log.Printf("[rt-proxy] upstream %s sent only the first record and stalled within %s (%v) — demoting, trying another",
+		log.Printf("[rt-proxy] %s sent only the first record and stalled within %s (%v) — demoting, trying another",
 			ip, *firstByteTO, err)
 		return false
 	}
 	switch hdr2[off] {
 	case 0x14, 0x16, 0x17: // ChangeCipherSpec, handshake, application_data — a flight continuing
 	default:
-		log.Printf("[rt-proxy] upstream %s followed the ServerHello with record type 0x%02x — demoting, trying another",
+		log.Printf("[rt-proxy] %s followed the ServerHello with record type 0x%02x — demoting, trying another",
 			ip, hdr2[off])
 		return false
 	}
 	n2 := int(hdr2[off+3])<<8 | int(hdr2[off+4])
 	if n2 < 0 || n2 > 16384 {
-		log.Printf("[rt-proxy] upstream %s second record has an implausible length %d — demoting, trying another", ip, n2)
+		log.Printf("[rt-proxy] %s second record has an implausible length %d — demoting, trying another", ip, n2)
 		return false
 	}
 	if _, err := br.Peek(off + 5 + n2); err != nil {
-		log.Printf("[rt-proxy] upstream %s stalled inside its second record within %s (%v) — demoting, trying another",
+		log.Printf("[rt-proxy] %s stalled inside its second record within %s (%v) — demoting, trying another",
 			ip, *firstByteTO, err)
 		return false
 	}
 	return true
 }
 
+// dialDirect is the last resort: resolve the SNI ourselves and go straight to the
+// origin. Two guards make this safe, and neither is optional.
+//
+// LOOP GUARD. The whole design hijacks these names to a sentinel, so resolving
+// through the SYSTEM resolver would hand us our own sentinel address and we would
+// connect to ourselves, recursively, until the box runs out of descriptors. Only
+// the direct resolver is used, and any answer that is loopback, private,
+// link-local, multicast or unspecified is refused — that covers the sentinel
+// (10.171.171.171) and every other way this can point back inside.
+//
+// REACH GUARD. Without an allowlist this would turn a LAN-reachable listener into
+// a general-purpose relay: today a client's SNI can only reach hosts the upstream
+// proxy agrees to serve, whereas a direct dial reaches anything the ROUTER can,
+// including its own services. The fallback is therefore limited to the domains we
+// pin in the first place — which is exactly the population that can end up in the
+// dead end this function exists to fix.
+func dialDirect(sni string, hello []byte) (net.Conn, *bufio.Reader) {
+	if !directHostAllowed(sni) {
+		log.Printf("[rt-proxy] %s is not in --direct-fallback-hosts — dropping rather than relaying", sni)
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *resolveTO)
+	ips, err := directLookup(ctx, sni)
+	cancel()
+	if err != nil || len(ips) == 0 {
+		if *verbose {
+			log.Printf("[rt-proxy] direct fallback: cannot resolve %s: %v", sni, err)
+		}
+		return nil, nil
+	}
+	for _, ips := range ips {
+		ip := net.ParseIP(ips)
+		if ip == nil || !routableUnicast(ip) {
+			continue // sentinel / loopback / RFC1918 / link-local — would loop back inside
+		}
+		d := net.Dialer{Timeout: *dialTO}
+		c, err := d.Dial("tcp", net.JoinHostPort(ips, "443"))
+		if err != nil {
+			continue
+		}
+		br := bufio.NewReaderSize(c, bufSize)
+		if !verifyFirstByte("direct:"+ips, c, br, hello) {
+			c.Close()
+			continue
+		}
+		log.Printf("[rt-proxy] %s served DIRECTLY via %s (no upstream could carry it)", sni, ips)
+		return c, br
+	}
+	return nil, nil
+}
+
+// Seam so a test can prove the allowlist is consulted BEFORE any lookup happens —
+// asserting the pure function alone left the call site unguarded, and a mutation
+// that deleted the check went undetected.
+var directLookup = func(ctx context.Context, host string) ([]string, error) {
+	return directResolver().LookupHost(ctx, host)
+}
+
+// directHostAllowed matches the SNI against --direct-fallback-hosts, exactly or as
+// a dot-anchored suffix, so "cc.rutracker.org.evil.tld" cannot slip through.
+func directHostAllowed(sni string) bool {
+	sni = strings.ToLower(strings.TrimSuffix(sni, "."))
+	for _, sfx := range strings.Split(*directHosts, ",") {
+		sfx = strings.ToLower(strings.TrimSpace(sfx))
+		if sfx == "" {
+			continue
+		}
+		if sni == sfx || strings.HasSuffix(sni, "."+sfx) {
+			return true
+		}
+	}
+	return false
+}
+
+// routableUnicast rejects everything that could point back at this router.
+func routableUnicast(ip net.IP) bool {
+	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() ||
+		ip.IsInterfaceLocalMulticast())
+}
+
 // openTunnel dials the upstream proxy IP over TLS and issues CONNECT target,
 // returning the tunnel and the bufio.Reader that consumed the CONNECT reply
 // (its buffered bytes are load-bearing for the up->client splice).
-func openTunnel(ip, target string) (net.Conn, *bufio.Reader, bool) {
-	up, err := dialProxy(ip, *dialTO)
+// The `reachable` return separates two very different failures. reachable=false
+// means we could not reach the proxy at all (TCP refused, SYN dropped, TLS
+// failed) - a conclusive death, and the dominant signature of an RU-blocked node,
+// so it is worth evicting from the ring immediately. reachable=true with ok=false
+// means the node ANSWERED and refused the CONNECT (502/503 from a healthy but
+// overloaded proxy); evicting on that would throw away good nodes under load.
+func openTunnel(ip, target string) (conn net.Conn, rd *bufio.Reader, ok bool, reachable bool) {
+	up, err := dialProxyDeadline(ip, time.Now().Add(*dialTO))
 	if err != nil {
 		if *verbose {
 			log.Printf("[rt-proxy] dial upstream %s failed: %v", ip, err)
 		}
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	up.SetDeadline(time.Now().Add(*dialTO))
 	fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", target, target)
-	// 32 KiB, not bufio's 4 KiB default: verifyFirstByte Peeks a WHOLE TLS record, and
-	// Peek cannot return more than the buffer holds — a 16 KiB record would fail with
-	// ErrBufferFull and we would demote a perfectly good upstream.
-	br := bufio.NewReaderSize(up, 32*1024)
+	// Sized for the LARGEST Peek verifyFirstByte can ask for, which is two
+	// maximum-size TLS records plus both 5-byte headers:
+	//     5 + 16384 + 5 + 16384 = 32778 bytes
+	// 32*1024 = 32768 was 10 bytes short, so an upstream that legitimately sent two
+	// full-size records was demoted with bufio.ErrBufferFull — punished for being
+	// healthy. Peek cannot return more than the buffer holds, so this must stay >=
+	// 32778; 33 KiB gives it room without another allocation class.
+	br := bufio.NewReaderSize(up, bufSize)
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, " 200") {
 		if *verbose {
 			log.Printf("[rt-proxy] CONNECT %s via %s rejected: %q", target, ip, strings.TrimSpace(status))
 		}
 		up.Close()
-		return nil, nil, false
+		return nil, nil, false, true // it answered; not a reachability failure
 	}
 	// drain the rest of the CONNECT response headers (up to blank line)
 	for {
@@ -580,10 +820,22 @@ func openTunnel(ip, target string) (net.Conn, *bufio.Reader, bool) {
 		}
 	}
 	up.SetDeadline(time.Time{})
-	return up, br, true
+	return up, br, true, true
 }
 
 func handle(client net.Conn, p *pool) {
+	// One malformed peer must not take the daemon down. Every connection runs in its
+	// own goroutine (`go handle` in main), and an unrecovered panic in ANY goroutine
+	// kills the whole process — which here means the supervisor restarts us and every
+	// OTHER client's tunnel is cut with it. parseSNI is bounds-checked and no panic
+	// path is known today, but this runs unattended on other people's routers and the
+	// insurance costs one deferred call per connection.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[rt-proxy] panic serving %s: %v — connection dropped, daemon continues",
+				client.RemoteAddr(), r)
+		}
+	}()
 	defer client.Close()
 	client.SetReadDeadline(time.Now().Add(10 * time.Second))
 	sni, hello, err := peekSNI(client)
@@ -599,6 +851,17 @@ func handle(client net.Conn, p *pool) {
 	// already answered with real bytes, retrying other nodes as needed — so by here the
 	// upstream is proven, not merely connected.
 	up, br := dialUpstream(p, sni, hello)
+	if up == nil && *directFallback {
+		// FAIL OPEN, the one thing the official RuTracker extension gets better
+		// than we did. Its PAC returns DIRECT for anything it cannot proxy; our
+		// DNS pin turns the same situation into a dead end, because the name is
+		// hijacked to a sentinel and the only route out was the upstream. Measured:
+		// rutracker.cc (no upstream A record at all) and www.rutracker.org (blockme
+		// serves the apex but not www) were hard 000s purely because they were
+		// pinned. main.go used to claim a direct fallback was "not constructible
+		// because the destination is a fake sentinel" — untrue: we hold the SNI.
+		up, br = dialDirect(sni, hello)
+	}
 	if up == nil {
 		log.Printf("[rt-proxy] no usable upstream proxy IP, dropping %s", sni)
 		return
@@ -619,9 +882,13 @@ func handle(client net.Conn, p *pool) {
 	// upstream may close-write after its handshake flight while the client still
 	// has bytes to send). Wait for BOTH directions before tearing down.
 	type halfCloser interface{ CloseWrite() error }
+	// Written by whichever direction moves bytes, read only by the watchdog below.
+	var lastActivity atomic.Int64
+	lastActivity.Store(time.Now().UnixNano())
+	touch := func() { lastActivity.Store(time.Now().UnixNano()) }
 	done := make(chan struct{}, 2)
 	go func() {
-		n, e := io.Copy(up, client)
+		n, e := io.Copy(up, &activityReader{r: client, touch: touch})
 		if hc, ok := up.(halfCloser); ok {
 			hc.CloseWrite()
 		}
@@ -631,7 +898,7 @@ func handle(client net.Conn, p *pool) {
 		done <- struct{}{}
 	}()
 	go func() {
-		n, e := io.Copy(client, br)
+		n, e := io.Copy(client, &activityReader{r: br, touch: touch})
 		if hc, ok := client.(halfCloser); ok {
 			hc.CloseWrite()
 		}
@@ -640,15 +907,81 @@ func handle(client net.Conn, p *pool) {
 		}
 		done <- struct{}{}
 	}()
-	timer := time.NewTimer(*idleTO)
-	defer timer.Stop()
+	// A REAL idle timeout. This used to be a single time.NewTimer that was never
+	// Reset, i.e. an absolute cap on the connection's lifetime: an active transfer
+	// was cut at 15 minutes, while a genuinely idle tunnel was still held for the
+	// full 15 minutes. Both are wrong, in opposite directions.
+	//
+	// Deliberately NOT done with timer.Reset: resetting a timer from the copy
+	// goroutines while this one selects on timer.C is the classic
+	// stop/drain/reset race, on the hot path, in the one function whose comments
+	// record that a hang here is invisible to the client. An atomic
+	// last-activity stamp plus a watchdog has no such race: the stamp is written
+	// by whoever reads bytes, and only the watchdog reads it.
+	watchdogDone := make(chan struct{})
+	defer close(watchdogDone)
+	hardStop := make(chan struct{})
+	go func() {
+		tick := *idleTO / 4
+		if tick > 30*time.Second {
+			tick = 30 * time.Second
+		}
+		if tick <= 0 {
+			tick = time.Second
+		}
+		t := time.NewTicker(tick)
+		defer t.Stop()
+		for {
+			select {
+			case <-watchdogDone:
+				return
+			case <-t.C:
+				if time.Since(time.Unix(0, lastActivity.Load())) < *idleTO {
+					continue
+				}
+				if *verbose {
+					log.Printf("[rt-proxy] idle %s with no bytes either way — closing %s",
+						*idleTO, client.RemoteAddr())
+				}
+				// Closing both ends unblocks the two io.Copy goroutines; the
+				// deferred Closes below are then no-ops.
+				client.Close()
+				up.Close()
+				// ...and if a copy goroutine somehow does NOT unblock, release
+				// handle() anyway. The old code returned from a select on the
+				// timer, so it could never be pinned by a stuck copy; waiting
+				// unconditionally on `done` would have quietly traded a 15-minute
+				// hang for a permanent one. The grace period is generous because
+				// the normal path unblocks in microseconds.
+				time.Sleep(2 * time.Second)
+				close(hardStop)
+				return
+			}
+		}
+	}()
 	for i := 0; i < 2; i++ {
 		select {
 		case <-done:
-		case <-timer.C:
+		case <-hardStop:
 			return
 		}
 	}
+}
+
+// activityReader stamps the connection as alive on every read that actually moved
+// bytes. A read returning (0, err) is not activity - counting it would keep a dead
+// tunnel alive forever, which is the exact hang this whole file exists to prevent.
+type activityReader struct {
+	r     io.Reader
+	touch func()
+}
+
+func (a *activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.touch()
+	}
+	return n, err
 }
 
 // ---------------------------------------------------------------------------

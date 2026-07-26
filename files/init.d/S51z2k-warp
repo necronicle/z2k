@@ -38,7 +38,19 @@ PIDFILE="${PIDFILE:-/var/run/z2k-warp.pid}"
 LOG="${LOG:-/tmp/z2k-log/z2k-warp.log}"
 SNI="${SNI:-ozon.ru}"                              # outer TLS SNI (domain fronting)
 MTU="${MTU:-1280}"
-ADDR_NET="${ADDR_NET:-172.16.240}"                 # off Keenetic's SSTP/L2TP 172.16.1.x pool
+# EMERGENCY FALLBACK POOL ONLY — not the address we normally use. iface_addr takes the
+# address WARP itself assigned (session.conf "ipv4") and only scans this pool when that
+# one is genuinely held by another interface.
+#
+# History, because the old comment here outlived its reason and reads like a live
+# requirement: 172.16.240 was chosen when the usque-keenetic PACKAGE owned the tunnel and
+# auto-picked its IFACE_IP from 172.16.1.100-200, colliding with Keenetic's built-in
+# SSTP/L2TP servers on 172.16.1.x (d6bc05f). Commit b5cf5af dropped that package and moved
+# the tunnel here, so nothing auto-picks from 172.16.1.x any more — the collision that
+# justified the pin no longer exists, and WARP's own address (172.16.0.2 on both routers
+# checked) is not in that pool anyway. Addresses are applied as /32, so only an exact
+# match can clash, never an overlapping range.
+ADDR_NET="${ADDR_NET:-172.16.240}"
 KEEPALIVE="${KEEPALIVE:-25s}"                      # usque -k; CF drops an idle MASQUE session
 
 # Legacy package paths — read ONLY to migrate away from them.
@@ -96,8 +108,35 @@ addr_taken_by_other() {
         END { exit !found }'
 }
 
+# The address WARP itself handed this device, read out of the device config. usque
+# proxies IP PACKETS: Cloudflare sees the inner source address, and one it never
+# assigned is not guaranteed to be carried. We used to invent an address from
+# $ADDR_NET instead — measured on two routers, session.conf said 172.16.0.2 while
+# the interface carried 172.16.240.1 on both. The 172.16.240.x pin exists to dodge
+# Keenetic's SSTP/L2TP 172.16.1.x pool that the OLD usque package auto-picked from — a
+# collision that died with the package (see ADDR_NET above) — and dodging it by using a
+# DIFFERENT address than the tunnel was given traded one breakage for another.
+session_addr() {
+    [ -s "$SESSION" ] || return 1
+    sed -n 's/.*"ipv4"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$SESSION" 2>/dev/null | head -1
+}
+
 iface_addr() {
     local ifc="$1" a n
+    # WARP's own address first.
+    a=$(session_addr)
+    case "$a" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+            if addr_taken_by_other "$a" "$ifc"; then
+                # Genuinely collides with another interface. Do NOT silently substitute —
+                # say so, because the tunnel will source from an address CF did not assign
+                # and the failure looks like "tunnel up but carries nothing".
+                log "WARNING: WARP assigned $a but another interface already holds it — falling back to $ADDR_NET.x; traffic may not be carried"
+            else
+                echo "$a" > "$STATE_ADDR" 2>/dev/null
+                echo "$a"; return 0
+            fi ;;
+    esac
     a=$(cat "$STATE_ADDR" 2>/dev/null)
     case "$a" in
         [0-9]*.[0-9]*.[0-9]*.[0-9]*)
@@ -147,15 +186,48 @@ setup_ndm_iface() {
     ndm "interface $nd ip address $addr 255.255.255.255"
     ndm "interface $nd ip mtu $MTU"
     ndm "interface $nd up"
+    # NDM sometimes leaves the link administratively down; a down link routes nothing.
+    ip link show "$ifc" 2>/dev/null | grep -qw UP || ip link set "$ifc" up 2>/dev/null
+
+    # VERIFY. Every ndm call above is `ndmc ... >/dev/null 2>&1`, so a refusal is
+    # invisible: this function used to report success unconditionally, and the caller
+    # runs it from a background subshell that discards the status anyway. Field case
+    # (r-66): .ndm-saved present, link UP, and NO IPv4 on the interface at all — the
+    # function had "worked" and lied, so the tunnel was up and carried nothing while
+    # every log line looked healthy.
+    # Match with `case`, not sed: `\b` is unsupported in BusyBox and BSD sed (it matched
+    # nothing, so the first version of this check declared a correctly-applied address
+    # missing), and the dots in an address are regex wildcards. A glob on the captured
+    # line needs no escaping and no external tool.
+    _addr_present() {
+        local have
+        have=" $(ip -o addr show "$1" 2>/dev/null | tr '\n' ' ') "
+        case "$have" in
+            *" inet $2/"*|*" inet $2 "*) return 0 ;;
+        esac
+        return 1
+    }
+    local w=0
+    while [ "$w" -lt 10 ] && ! _addr_present "$ifc" "$addr"; do
+        w=$((w + 1)); sleep 1
+    done
+    if ! _addr_present "$ifc" "$addr"; then
+        log "NDM did not apply $addr to $nd — tunnel will carry nothing. Have: [$(ip -o addr show "$ifc" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | tr '\n' ' ')]"
+        return 1
+    fi
+
     # `system configuration save` writes FLASH. It must never sit on the respawn path: a
     # degraded tunnel respawns for hours and would grind the router's flash down. Save once,
     # when the interface object is actually new, and never again.
+    #
+    # Deliberately AFTER the verification: creating the marker on a failed apply meant the
+    # next start skipped the save entirely, so a router that failed once could never
+    # persist a correct config afterwards.
     if [ ! -f "$WARP_DIR/.ndm-saved" ]; then
         ndm "system configuration save"
         touch "$WARP_DIR/.ndm-saved" 2>/dev/null
     fi
-    # NDM sometimes leaves the link administratively down; a down link routes nothing.
-    ip link show "$ifc" 2>/dev/null | grep -qw UP || ip link set "$ifc" up 2>/dev/null
+    return 0
 }
 
 release_ndm_iface() {
@@ -164,6 +236,73 @@ release_ndm_iface() {
     [ -n "$ifc" ] || return 0
     nd=$(ndm_name "$ifc")
     ndm "interface $nd down"
+}
+
+# NDM interface name -> netdev name (OpkgTun1 -> opkgtun1), the inverse of ndm_name.
+dev_name() { echo "$1" | sed 's/^Opkg/opkg/; s/Tun/tun/'; }
+
+# Is an NDM interface object registered? ndmc EXITS 0 EVEN WHEN IT REFUSES a command
+# (verified on the box: `no interface OpkgTun9` for a nonexistent object prints
+# "Command::Base error[7405602]: argument parse error." and still returns 0), so a
+# status check cannot tell success from failure and the state has to be re-read. A
+# registered interface answers with its own `id:`; a missing one answers with that
+# error and no id line.
+ndm_iface_exists() {
+    LD_LIBRARY_PATH= ndmc -c "show interface $1" 2>/dev/null \
+        | grep -qE "^[[:space:]]*id:[[:space:]]*$1[[:space:]]*$"
+}
+
+# ---- stale package interfaces ------------------------------------------------
+# The usque-keenetic package used to own the tunnel and registered its OWN NDM object,
+# named after "first free opkgtunN". Once z2k occupied opkgtun0 the package's next start
+# picked opkgtun1 and created OpkgTun1 - with the address p-64.1 had written into the
+# package's config. Handing the tunnel to us left that object behind in startup-config
+# for good: NDM restores it on every boot, so it survives even though the package
+# service is disabled. Observed on the owner's router: OpkgTun1, description "usque",
+# no netdev, state error, holding 172.16.240.2.
+#
+# It is not merely untidy. It still HOLDS an address out of our own fallback range, and
+# NDM refuses to raise an interface onto a network another interface already owns - the
+# failure mode documented at addr_taken_by_other(). The comment p-64.1 left in that
+# router's package config ("was 172.16.240.1, taken by another interface") is that
+# collision having already happened once.
+#
+# Reap it, but only when all three hold - an OpkgTun object can equally belong to a
+# tunnel the user runs themselves (sing-box, xray, AmneziaWG), and deleting one of those
+# would tear down a stranger's interface and save that into startup-config:
+#   * it is NOT the interface we chose;
+#   * its description is exactly "usque" - the package's signature, never ours (we write
+#     "z2k-warp"), and never a user-typed description, which NDM stores quoted;
+#   * no kernel netdev of that name exists, so nothing is running on it.
+reap_pkg_ifaces() {
+    local ours nd dev desc reaped=0
+    ours=$(ndm_name "$1")
+    # One `show running-config` for the whole list, not 16 probes: this sits on the
+    # start path and every ndmc call is a round trip.
+    for nd in $(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+                | sed -n 's/^interface \(OpkgTun[0-9]*\)[[:space:]]*$/\1/p'); do
+        [ "$nd" = "$ours" ] && continue
+        dev=$(dev_name "$nd")
+        ip link show "$dev" >/dev/null 2>&1 && continue
+        desc=$(LD_LIBRARY_PATH= ndmc -c "show interface $nd" 2>/dev/null \
+               | sed -n 's/^[[:space:]]*description:[[:space:]]*\(.*\)$/\1/p' | head -1)
+        [ "$desc" = usque ] || continue
+        ndm "no interface $nd"
+        # VERIFY, for the same reason setup_ndm_iface does: ndmc reports success it did
+        # not achieve. Claiming a removal that did not happen would also spend a flash
+        # write on nothing.
+        if ndm_iface_exists "$nd"; then
+            log "could NOT remove stale NDM interface $nd — still registered"
+            continue
+        fi
+        log "removed stale NDM interface $nd (usque-package leftover: no netdev, description usque)"
+        reaped=1
+    done
+    # Persist ONLY when something was actually removed - otherwise NDM restores the
+    # object on the next boot and the reap is pointless. Guarded because
+    # `system configuration save` writes flash and this runs on every start.
+    [ "$reaped" = 1 ] && ndm "system configuration save"
+    return 0
 }
 
 # ---- supervisor --------------------------------------------------------------
@@ -210,6 +349,9 @@ start() {
 
     local ifc addr
     ifc=$(iface_name)
+    # Before choosing an address: a leftover object can be holding the very address we
+    # are about to ask for, and NDM would then refuse to raise our interface.
+    reap_pkg_ifaces "$ifc"
     addr=$(iface_addr "$ifc") || { log "no free address in $ADDR_NET.0/24"; return 1; }
     log "starting on $ifc ($addr)"
     echo "Starting $NAME on $ifc ($addr)..."
@@ -233,7 +375,12 @@ start() {
                 while [ "$w" -lt 30 ] && ! ip link show "$ifc" >/dev/null 2>&1; do
                     w=$((w + 1)); sleep 1
                 done
-                ip link show "$ifc" >/dev/null 2>&1 && setup_ndm_iface "$ifc" "$addr"
+                if ip link show "$ifc" >/dev/null 2>&1; then
+                    setup_ndm_iface "$ifc" "$addr" \
+                        || log "interface setup FAILED for $ifc ($addr) — selfheal will retry"
+                else
+                    log "$ifc never appeared within 30s — usque did not create the tun"
+                fi
             ) &
             wait "$child"
             t1=$(date +%s 2>/dev/null || echo 0)

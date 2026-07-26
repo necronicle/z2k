@@ -59,13 +59,30 @@ log() {
     printf '[%s] %s\n' "$ts" "$1" >> "$LOG"
 }
 
+# $1 - log path (defaults to the scheduler's own $LOG)
 rotate_log() {
-    [ -f "$LOG" ] || return
+    local f="${1:-$LOG}"
+    [ -f "$f" ] || return
     local lines
-    lines=$(wc -l < "$LOG" 2>/dev/null)
+    lines=$(wc -l < "$f" 2>/dev/null)
     if [ "${lines:-0}" -gt 1000 ]; then
-        tail -800 "$LOG" > "${LOG}.tmp" && mv "${LOG}.tmp" "$LOG"
+        tail -800 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
     fi
+}
+
+# Every z2k log lives in tmpfs, i.e. in RAM on a 500 MB box, and NOTHING capped
+# any of them except the scheduler's own. Measured on the owner's router before
+# adding this: rt-proxy 18 KB / 185 lines, all z2k logs together 592 KB, tmpfs at
+# 21% - so this is insurance against a chatty failure mode (a flapping pool logs
+# per demotion), not a fix for observed growth. Reuses rotate_log rather than
+# introducing a second rotation mechanism.
+rotate_all_logs() {
+    local d="${Z2K_LOG_DIR:-/tmp/z2k-log}"
+    [ -d "$d" ] || return
+    for f in "$d"/*.log; do
+        [ -f "$f" ] || continue
+        rotate_log "$f"
+    done
 }
 
 # $1 state file, $2 key
@@ -207,9 +224,10 @@ while true; do
         fi
     fi
 
-    # Rotate log occasionally (cheap, only every minute boundary).
+    # Rotate logs occasionally (cheap, only every minute boundary).
     if [ "$(date +%S)" -lt 30 ]; then
         rotate_log
+        rotate_all_logs
     fi
 
     sleep 30

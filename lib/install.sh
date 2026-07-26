@@ -465,13 +465,24 @@ step_update_packages() {
             local current_mirror
             current_mirror=$(grep -m1 "^src" /opt/etc/opkg.conf | awk '{print $3}' | grep -o 'bin.entware.net')
 
+            # entware.diversion.ch отвечает 301 http->https на КАЖДЫЙ файл, а
+            # opkg качает внешним wget. На Keenetic это обычно busybox wget
+            # без SSL: он идёт по редиректу и умирает с "not an http or ftp
+            # url" -> "wget returned 1". Роутер с таким wget на этом зеркале
+            # не сможет ни update, ни install — переключать его туда нельзя.
+            if ! wget -q -O /dev/null https://entware.diversion.ch/ 2>/dev/null; then
+                print_warning "wget на роутере не умеет https — зеркало entware.diversion.ch недоступно"
+                print_info "Оно отдаёт 301 на https для каждого файла, opkg этого не переживёт"
+                print_info "Оставляю http://bin.entware.net (plain HTTP, без редиректов)"
+                current_mirror=""
+            fi
+
             if [ -n "$current_mirror" ]; then
                 print_info "Меняю bin.entware.net → entware.diversion.ch"
 
                 # Создать backup конфига
                 cp /opt/etc/opkg.conf /opt/etc/opkg.conf.backup
 
-                # Заменить зеркало
                 sed -i 's|bin.entware.net|entware.diversion.ch|g' /opt/etc/opkg.conf
 
                 print_info "Повторная попытка обновления с новым зеркалом..."
@@ -1284,7 +1295,12 @@ step_build_zapret2() {
     # (см. z2k-enhanced PART II roadmap). Layout tarball-а идентичен upstream
     # поэтому остальная install-логика ниже работает без изменений.
     local api_url="https://api.github.com/repos/necronicle/zapret2-z2k/releases/latest"
-    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v1.0-z2k-r0/zapret2-v1.0-z2k-r0-openwrt-embedded.tar.gz"
+    # Kept in step with the current release on purpose. This is the engine a router
+    # gets when the GitHub API is unreachable — routine for RU mobile carriers — and
+    # it was still pinned to v1.0-z2k-r0 from May, i.e. those users would have installed
+    # an engine WITHOUT the contains() fix and kept paying ~17 s of every restart while
+    # everyone else got 1.5 s. Bump this together with the fork release.
+    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v1.0.3-z2k-r1/zapret2-v1.0.3-z2k-r1-openwrt-embedded.tar.gz"
     local openwrt_url=""
 
     # Try the API via z2k_fetch (it triggers the layer-4 ndmc DNS
@@ -1297,7 +1313,10 @@ step_build_zapret2() {
     rm -f "$api_tmp"
 
     if [ -z "$openwrt_url" ]; then
-        print_warning "API недоступен или ответ пуст — использую fallback v1.0-z2k-r0"
+        # Derived from the URL, never spelled out again: the literal here said
+        # v1.0-z2k-r0 long after the pin had moved, so the log named a version the
+        # installer was not installing.
+        print_warning "API недоступен или ответ пуст — использую fallback $(basename "$(dirname "$fallback_url")")"
         openwrt_url="$fallback_url"
     fi
 
@@ -2625,10 +2644,15 @@ if [ -d "$LOCK_DIR" ]; then
 fi
 mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 [ "$now" -gt 0 ] && echo "$now" > "$LAST_RUN" 2>/dev/null
-# restart_fw пересоздаёт только NFQUEUE правила в mangle, демоны (nfqws2) живут.
+# ADD-ONLY start_fw, НЕ restart_fw. restart_fw = stop_fw; sleep 1; start_fw,
+# то есть полный teardown — а NDM дёргает этот хук ~280 раз в сутки, и каждый
+# раз обход выключался бы на время сноса и пересборки. start_fw идемпотентен
+# (ipt() = -C || -I) и до-создаёт только пропавшие правила, без окна.
+# Штатный files/000-zapret2.sh:83-92 давно исправлен; этот запасной heredoc
+# отстал и продолжал звать restart_fw у всех, кому он достался.
 {
     sleep 2
-    "$INIT_SCRIPT" restart_fw >/dev/null 2>&1
+    "$INIT_SCRIPT" start_fw >/dev/null 2>&1
     rmdir "$LOCK_DIR" 2>/dev/null
 } &
 

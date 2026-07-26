@@ -39,4 +39,3 @@ ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
 ipt -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK" || \
     ipt -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK"
 
-exit 0

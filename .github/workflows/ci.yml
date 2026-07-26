@@ -27,9 +27,26 @@ jobs:
           # shellcheck false-flags it as an accidental assignment. Excluded.
           # files/init.d/S* have NO .sh extension, so the -name '*.sh' mask never saw them —
           # 240 lines of tunnel-lifecycle shell were shipping unlinted. Check them explicitly.
+          # Same trap, one directory up: files/S99zapret2.new is the MAIN service script
+          # (1600+ lines, the whole start/stop/firewall path) and matched neither mask —
+          # a hard syntax error in it survived the entire 32-suite run and this job.
           { find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './webpanel/cgi/*.sh' \); \
-            find ./files/init.d -type f -name 'S*'; } \
+            find ./files/init.d -type f -name 'S*'; \
+            find ./files -maxdepth 1 -type f -name 'S*'; } \
             | xargs shellcheck --severity=warning --exclude=SC1007,SC1090,SC1091,SC3043,SC3040,SC2034,SC2148,SC2154
+
+      - name: Syntax-check every shipped shell script
+        run: |
+          # shellcheck parses, but it does not guarantee the target shell accepts
+          # the file. dash is the closest CI proxy for the router's BusyBox ash.
+          rc=0
+          for f in $(find ./files ./lib ./webpanel/cgi -type f \( -name '*.sh' -o -name 'S*' \) 2>/dev/null) ./z2k.sh ./z2k_cleanup.sh; do
+            [ -f "$f" ] || continue
+            if ! dash -n "$f" 2>/tmp/synerr; then
+              echo "SYNTAX ERROR in $f:"; cat /tmp/synerr; rc=1
+            fi
+          done
+          exit $rc
 
       - name: Run shell unit tests
         run: sh tests/run_all.sh

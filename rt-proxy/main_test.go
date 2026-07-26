@@ -579,9 +579,12 @@ func TestOpenTunnel_Accepts200AndDrainsHeaders(t *testing.T) {
 	*proxyPort, *dialTO = port, 3*time.Second
 	t.Cleanup(func() { *proxyPort, *dialTO = oldPort, oldTO })
 
-	up, br, ok := openTunnel("127.0.0.1", "rutracker.org:443")
+	up, br, ok, reachable := openTunnel("127.0.0.1", "rutracker.org:443")
 	if !ok {
 		t.Fatal("openTunnel rejected a proxy that answered 200")
+	}
+	if !reachable {
+		t.Error("a proxy that answered 200 must be reported reachable")
 	}
 	t.Cleanup(func() { up.Close() })
 	if br == nil {
@@ -595,13 +598,19 @@ func TestOpenTunnel_RejectsNon200(t *testing.T) {
 	*proxyPort, *dialTO = port, 3*time.Second
 	t.Cleanup(func() { *proxyPort, *dialTO = oldPort, oldTO })
 
-	up, _, ok := openTunnel("127.0.0.1", "rutracker.org:443")
+	up, _, ok, reachable := openTunnel("127.0.0.1", "rutracker.org:443")
 	if ok {
 		up.Close()
 		t.Fatal("openTunnel accepted a proxy that refused the CONNECT")
 	}
 	if up != nil {
 		t.Fatal("openTunnel leaked a connection on the failure path")
+	}
+	// A node that ANSWERS and refuses (502/503 from a healthy but overloaded
+	// proxy) is still reachable. dialUpstream demotes on !reachable, so getting
+	// this wrong would evict good nodes from the ring under load.
+	if !reachable {
+		t.Error("a proxy that answered a non-200 must still count as reachable")
 	}
 }
 
@@ -610,9 +619,13 @@ func TestOpenTunnel_UnreachableUpstreamFailsCleanly(t *testing.T) {
 	*proxyPort, *dialTO = "1", 300*time.Millisecond // port 1: nothing listens
 	t.Cleanup(func() { *proxyPort, *dialTO = oldPort, oldTO })
 
-	up, br, ok := openTunnel("127.0.0.1", "rutracker.org:443")
+	up, br, ok, reachable := openTunnel("127.0.0.1", "rutracker.org:443")
 	if ok || up != nil || br != nil {
 		t.Fatal("openTunnel claimed success against an unreachable upstream")
+	}
+	// This is the signal dialUpstream demotes on — the RU-block signature.
+	if reachable {
+		t.Error("an upstream we could not dial at all must be reported unreachable")
 	}
 }
 

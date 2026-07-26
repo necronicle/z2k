@@ -24,6 +24,135 @@ ZAPRET_CONFIG=${ZAPRET_CONFIG:-"$ZAPRET_RW/config"}
 # ������� �������
 . "$ZAPRET_BASE/common/base.sh"
 
+# ------------------------------------------------------------------------------
+# Z2K: fast substring test + bounded condition waits
+# ------------------------------------------------------------------------------
+# Shadow of common/base.sh's contains(). THIS is what delivers the restart win:
+# the engine's own copy is still the quadratic `${1#*$2}` form on every router in
+# the field (verified 2026-07-26 on the owner's box), because the engine arrives as
+# a GitHub release tarball of the fork, on its own schedule, and the fix there is
+# not released yet. Sourced right after base.sh, so it overrides the slow version
+# for this whole process no matter which engine build is installed.
+# Drop this shadow only once the fixed engine is the FLOOR version, not merely
+# released. Rationale and measurements in the fork's common/base.sh.
+contains()
+{
+	# Empty-needle guard mirrors the old form exactly; see common/base.sh.
+	[ -n "$2" ] || return 1
+	case "$1" in *"$2"*) return 0 ;; esac
+	return 1
+}
+
+# Sub-second sleep, probed once. BusyBox `sleep` here is built without fractional
+# support ("sleep: invalid number '0.1'") and `read -t` rejects fractions, so
+# usleep (a BusyBox applet on Entware) is the portable path. Where it is absent
+# callers MUST fall back to whole seconds and shrink their poll count to match -
+# never keep the poll count and let the deadline stretch.
+Z2K_FRACSLEEP=
+z2k_fracsleep_avail()
+{
+    # Probe by EXECUTING, not by `command -v`. A PATH entry proves a file
+    # exists, not that it runs: a BusyBox build without the usleep applet still
+    # answers `command -v usleep` through the multi-call symlink and then fails
+    # at every call. That combination is exactly the deadline-stretch this
+    # design exists to prevent - the frac branch would be selected (n = max*20)
+    # while each usleep fell through to a whole second, turning a 3 s SIGKILL
+    # deadline into 60 s and stalling every restart behind a wedged daemon.
+    [ -n "$Z2K_FRACSLEEP" ] || {
+        if usleep 1 >/dev/null 2>&1; then Z2K_FRACSLEEP=1; else Z2K_FRACSLEEP=0; fi
+    }
+    [ "$Z2K_FRACSLEEP" = 1 ]
+}
+
+# Is pid $1 a RUNNING process — not merely a pid that kill -0 accepts?
+#
+# kill -0 succeeds for a ZOMBIE, so "the daemon is alive" was really "the daemon
+# has not been reaped yet". The old flat `sleep 1` hid that: a foreground external
+# command gave the shell time to reap the corpse, so the following kill -0 saw
+# ESRCH. Any replacement that polls faster than the reap inherits a false
+# "started" — stale pidfile, lying `status`, and a broken option string that looks
+# fine. Reading the state field out of /proc removes the timing dependency
+# entirely: a zombie is 'Z' no matter how fast we look.
+#
+# /proc/<pid>/stat field 3 is the state. The comm field (2) can contain spaces and
+# parentheses, so parse after the LAST ')'.
+z2k_pid_running()
+{
+    kill -0 "$1" 2>/dev/null || return 1
+    [ -r "/proc/$1/stat" ] || return 0   # no procfs: fall back to kill -0
+    local st
+    st=$(awk '{ n=match($0, /\)[^)]*$/); if (n) print substr($0, n+2, 1) }' "/proc/$1/stat" 2>/dev/null)
+    case "$st" in
+        Z|X|x) return 1 ;;               # zombie / dead
+    esac
+    return 0
+}
+
+# Wait for pid $1 to exit, at most $2 whole seconds. The ceiling is in TIME, not
+# in iterations: without fractional sleep a 3 s deadline must stay 3 s, not
+# become 3 s x N polls - a wedged daemon (OOM, MIPS async-preempt) would
+# otherwise stall every restart and self-heal. Returns 0 once it is gone.
+z2k_wait_gone()
+{
+    local pid="$1" max="${2:-3}" i=0 n
+    if z2k_fracsleep_avail; then
+        n=$(( max * 20 ))
+        while [ "$i" -lt "$n" ]; do
+            kill -0 "$pid" 2>/dev/null || return 0
+            # Deliberately NO `|| sleep 1` here. z2k_fracsleep_avail already
+            # proved usleep runs; a failure now is anomalous, and falling back
+            # to a whole second would multiply the remaining 60 polls into a
+            # 60 s deadline - the precise bug the probe above guards. Spinning
+            # out the remaining iterations instead exits EARLY, which is bounded
+            # and safe; the caller re-checks liveness either way.
+            usleep 50000 2>/dev/null
+            i=$((i+1))
+        done
+    else
+        while [ "$i" -lt "$max" ]; do
+            z2k_pid_running "$pid" || return 0
+            sleep 1
+            i=$((i+1))
+        done
+    fi
+    kill -0 "$pid" 2>/dev/null || return 0
+    return 1
+}
+
+# Positive readiness for nfqws2: its NFQUEUE is bound. One line per bound queue
+# in /proc/net/netfilter/nfnetlink_queue, first field = queue number. Replaces a
+# flat `sleep 1` that verified nothing and outlasted the daemon's entire init
+# (measured 0.27 s). A timeout is deliberately NOT an error - on a cold USB the
+# daemon may still be loading 80k hostlines; the caller re-checks liveness.
+z2k_wait_queue_bound()
+{
+    local pid="$1" qnum="$2" max="${3:-3}" i=0 n q owner rest
+    if z2k_fracsleep_avail; then n=$(( max * 20 )); else n="$max"; fi
+    while [ "$i" -lt "$n" ]; do
+        z2k_pid_running "$pid" || return 1
+        while read -r q owner rest; do
+            # Match the queue number AND its owner. Column 2 is the netlink peer
+            # portid = the binding process's pid (verified on the box: pidfile
+            # 384 <-> portid 384; nfqws2 is never started with --daemon here, so
+            # $! is the real daemon). Matching qnum alone returns instantly off a
+            # queue ANOTHER instance already owns - which both skips waiting for
+            # THIS daemon and destroys the window in which an instantly-dying
+            # daemon is reported as a failed start.
+            [ "$q" = "$qnum" ] && [ "$owner" = "$pid" ] && return 0
+        # 2>/dev/null MUST precede the input redirect. Redirections are applied
+        # left to right, so `< file 2>/dev/null` still reports "can't open" on
+        # the un-redirected fd 2 - verified on BusyBox ash 1.37.0, dash and bash.
+        # Without nfnetlink_queue procfs (module not loaded, netns) that is 60
+        # identical error lines per daemon start on the console/webpanel.
+        done 2>/dev/null < /proc/net/netfilter/nfnetlink_queue
+        # See z2k_wait_gone: no `|| sleep 1` on the frac path - it would turn
+        # the remaining polls into whole seconds and stretch the deadline.
+        if z2k_fracsleep_avail; then usleep 50000 2>/dev/null; else sleep 1; fi
+        i=$((i+1))
+    done
+    return 0
+}
+
 # ����������� ���� firewall (iptables/nftables)
 . "$ZAPRET_BASE/common/fwtype.sh"
 
@@ -222,8 +351,11 @@ repair_autocircular_files_after_daemon_start()
 	# nfqws2 can touch autocircular files very early during boot/restart.
 	# Re-apply ownership after daemon spawn so runtime keeps using primary cache.
 	ensure_autocircular_files
-	sleep 1
-	ensure_autocircular_files
+	# The t+1s re-apply stays (it covers nfqws2 touching these files just after
+	# exec/lua init - commit 49991d0 guards both sides of that race), but it no
+	# longer blocks the restart: it only re-applies ownership, and nothing
+	# downstream in start() reads these files.
+	( sleep 1; ensure_autocircular_files ) >/dev/null 2>&1 &
 }
 
 # ------------------------------------------------------------------------------
@@ -645,13 +777,28 @@ create_ipset()
 get_default_ifaces4()
 {
 	exists ip || return 0
-	ip route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | xargs
+	# BusyBox `ip` IGNORES the `default` selector and prints the WHOLE routing
+	# table, so the filtering has to happen HERE. Without it every LAN subnet
+	# route contributed its device: on a live Keenetic this returned
+	# "br0 br1 ppp0" instead of "ppp0", which put NFQUEUE rules on both LAN
+	# bridges (3x the rules) and queued LAN-to-LAN traffic into nfqws2 for
+	# nothing. Verified on the box: `ip route show default` printed
+	# "192.168.1.0/24 dev br0" and "10.1.30.0/24 dev br1" alongside the real
+	# default. iproute2 honours the selector, so this is a no-op there.
+	ip route show default 2>/dev/null | awk '
+		$1!="default" && $1!="0.0.0.0/0" { next }
+		{ for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1) }
+	' | xargs
 }
 
 get_default_ifaces6()
 {
 	exists ip || return 0
-	ip -6 route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' | xargs
+	# Same BusyBox selector bug as get_default_ifaces4 - filter here.
+	ip -6 route show default 2>/dev/null | awk '
+		$1!="default" && $1!="::/0" { next }
+		{ for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1) }
+	' | xargs
 }
 
 get_wan_ifaces4()
@@ -767,7 +914,8 @@ run_daemon()
     # $1 - daemon ID
     # $2 - daemon binary
     # $3 - daemon args
-    local DAEMONBASE="$(basename "$2")"
+    local DAEMONBASE
+    DAEMONBASE="$(basename "$2")"
     local PIDFILE="$PIDDIR/${DAEMONBASE}_$1.pid"
 
     echo "Starting daemon $1: $2 $3"
@@ -780,8 +928,28 @@ run_daemon()
     echo $PID > "$PIDFILE"
 
     # ��������� ��� ������� ����������
-    sleep 1
-    if kill -0 $PID 2>/dev/null; then
+    # Which queue THIS daemon was told to bind. custom.d instances
+    # (50-stun4all, 50-discord-media) pass their own --qnum, so the global
+    # $QNUM is simply wrong for them - we would wait on the main daemon's
+    # queue, find it already bound, and return without ever checking this one.
+    local _qn="$QNUM"
+    case " $3 " in
+        *" --qnum="*) _qn=${3#*--qnum=}; _qn=${_qn%% *} ;;
+    esac
+    case "$DAEMONBASE" in
+        nfqws2) z2k_wait_queue_bound "$PID" "${_qn:-200}" 3 ;;
+        *)      sleep 1 ;;
+    esac
+    # No extra settle here on purpose. A successful z2k_wait_queue_bound already
+    # proves this pid got through option parsing, lua init, blob loading AND bound
+    # its own queue - a strictly stronger start check than the old flat `sleep 1`,
+    # which verified nothing. It also returns 1 the moment the pid dies mid-wait,
+    # so a failed start is still caught below. The only case a settle would add is
+    # "bound the queue, then crashed milliseconds later", which is a runtime crash
+    # for the watchdog, not a startup failure - and paying 200 ms (a full second
+    # where usleep is absent) on every daemon start to maybe notice it is a bad
+    # trade in the path this whole change exists to shorten.
+    if z2k_pid_running "$PID"; then
         echo "Daemon $1 started with PID $PID"
         return 0
     else
@@ -825,11 +993,15 @@ stop_daemon_by_pidfile()
 {
     # $1 - pidfile path
     if [ -f "$1" ]; then
-        local PID=$(cat "$1")
+        local PID
+        PID=$(cat "$1")
         if [ -n "$PID" ] && kill -0 $PID 2>/dev/null; then
             echo "Stopping daemon with PID $PID"
             kill $PID 2>/dev/null
-            sleep 3
+            # Poll instead of a flat 3 s: nfqws2 exits on SIGTERM in ~0.05 s
+            # (measured) because nfqws.c checks bQuit right after select().
+            # Same 3 s SIGKILL deadline, just not paid when it is not needed.
+            z2k_wait_gone "$PID" 3
             # Force kill ���� �� �����������
             kill -0 $PID 2>/dev/null && kill -9 $PID 2>/dev/null
         fi
@@ -920,7 +1092,7 @@ load_modules()
 
     # Load ip_set_bitmap_port from system modules (Entware modprobe cannot find it)
     if ! lsmod | grep -q "ip_set_bitmap_port"; then
-        insmod /lib/modules/$(uname -r)/ip_set_bitmap_port.ko 2>/dev/null || true
+        insmod "/lib/modules/$(uname -r)/ip_set_bitmap_port.ko" 2>/dev/null || true
     fi
 
     # ��������� ��������� ������ nfnetlink_queue
@@ -1130,7 +1302,7 @@ _fw_nfqws_post4()
     # $2 - iptable filter for ipv4
     # $3 - queue number
     # $4 - wan interface names space separated
-    [ "$DISABLE_IPV4" = "1" -o -z "$2" ] || {
+    [ "$DISABLE_IPV4" = "1" ] || [ -z "$2" ] || {
         local i rule connchk=""
 
         ipt_print_op $1 "$2" "nfqws postrouting (qnum $3)"
@@ -1154,7 +1326,7 @@ _fw_nfqws_post6()
     # $2 - iptable filter for ipv6
     # $3 - queue number
     # $4 - wan interface names space separated
-    [ "$DISABLE_IPV6" = "1" -o -z "$2" ] || {
+    [ "$DISABLE_IPV6" = "1" ] || [ -z "$2" ] || {
         local i rule connchk=""
 
         ipt_print_op $1 "$2" "nfqws postrouting (qnum $3)" 6
@@ -1178,7 +1350,7 @@ _fw_nfqws_pre4()
     # $2 - iptable filter for ipv4
     # $3 - queue number
     # $4 - wan interface names space separated
-    [ "$DISABLE_IPV4" = "1" -o -z "$2" ] || {
+    [ "$DISABLE_IPV4" = "1" ] || [ -z "$2" ] || {
         local i rule connchk=""
 
         ipt_print_op $1 "$2" "nfqws input+forward (qnum $3)"
@@ -1211,7 +1383,7 @@ _fw_nfqws_pre6()
     # $2 - iptable filter for ipv6
     # $3 - queue number
     # $4 - wan interface names space separated
-    [ "$DISABLE_IPV6" = "1" -o -z "$2" ] || {
+    [ "$DISABLE_IPV6" = "1" ] || [ -z "$2" ] || {
         local i rule connchk=""
 
         ipt_print_op $1 "$2" "nfqws input+forward (qnum $3)" 6
@@ -1398,7 +1570,40 @@ stop_fw()
     z2k_policy_connmark_stop
     z2k_conntrack_tune_stop
     zapret_unapply_firewall
+    z2k_sweep_orphan_nfqueue
 
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Orphaned NFQUEUE rules
+# ------------------------------------------------------------------------------
+# zapret_unapply_firewall deletes by REBUILDING the rule text from the CURRENT
+# WAN interface list, so a rule installed under a different interface set is
+# never matched and stays forever. That is not hypothetical: until the
+# get_default_ifaces4 fix below, BusyBox `ip route show default` returned every
+# LAN bridge as a WAN, so live routers carry NFQUEUE rules on br0/br1. After the
+# fix stop_fw only knows about ppp0, so those 12 rules would be stranded - still
+# queueing LAN-to-LAN traffic into nfqws2 forever.
+#
+# Sweep them by OUR queue number only. --queue-num $QNUM is z2k's own; other
+# software's NFQUEUE rules use different numbers and are left alone. Rules are
+# turned from `-A` into `-D` and fed back, which is exact - no pattern guessing.
+z2k_sweep_orphan_nfqueue()
+{
+    local qn="${QNUM:-200}" save restore fam
+    for fam in 4 6; do
+        if [ "$fam" = 4 ]; then save=iptables-save; restore=iptables; else save=ip6tables-save; restore=ip6tables; fi
+        command -v "$save" >/dev/null 2>&1 || continue
+        "$save" -t mangle 2>/dev/null | grep -- "--queue-num $qn" | while IFS= read -r rule; do
+            case "$rule" in
+                -A*) ;;
+                *)   continue ;;
+            esac
+            # shellcheck disable=SC2086
+            $restore -w -t mangle -D ${rule#-A } 2>/dev/null ||                 $restore -t mangle -D ${rule#-A } 2>/dev/null || true
+        done
+    done
     return 0
 }
 
@@ -1463,8 +1668,11 @@ start()
     ensure_autohostlist_files
     sync_autohostlist_to_rkn
 
-    # 2.2. ����������� autocircular cache/debug files (writable by runtime user)
-    ensure_autocircular_files
+    # 2.2. autocircular cache/debug files: start_daemons() re-runs
+    # ensure_autocircular_files immediately before spawning the daemon, and
+    # nothing between here and there touches that directory - so this pass was
+    # pure duplication. The start_daemons/restart_daemons CLI verbs stay covered
+    # by the call inside start_daemons.
 
     # traffic debug (optional): nfqws2 debug log + tcpdump pcap capture
     ensure_traffic_debug_files
@@ -1504,7 +1712,9 @@ stop()
 restart()
 {
     stop
-    sleep 2
+    # stop() now waits for the daemon to actually exit, so this is a short settle
+    # for the netfilter teardown rather than a blind guess at death latency.
+    if z2k_fracsleep_avail; then usleep 200000 2>/dev/null || sleep 1; else sleep 1; fi
     start
 }
 
@@ -1516,7 +1726,8 @@ status()
     local running=0
     for pidfile in $PIDDIR/nfqws2_*.pid; do
         if [ -f "$pidfile" ]; then
-            local PID=$(cat "$pidfile")
+            local PID
+            PID=$(cat "$pidfile")
             if kill -0 $PID 2>/dev/null; then
                 echo "nfqws2 daemon running (PID $PID)"
                 running=$((running + 1))

@@ -23,7 +23,26 @@ LOG="/tmp/z2k-log/z2k-rt-proxy.log"
 PIDFILE="/var/run/z2k-rt-proxy.pid"
 LISTEN_PORT="1445"
 SENTINEL="10.171.171.171"
-DOMAINS="rutracker.org www.rutracker.org rutracker.cc static.rutracker.cc api.rutracker.cc rep.rutracker.cc rutracker.wiki"
+# Exactly the set the OFFICIAL RuTracker extension proxies. Taken from the shipped
+# artifact, not from anyone's description of it: addons.mozilla.org add-on
+# "rutracker-add-on" v0.9.32 (publisher RuTracker), file bundle/background.js:
+#     proxies        = ['HTTPS ps1.blockme.site:443']     <- same upstream as ours
+#     proxiedDomains = [ 'rutracker.org', 'rutracker.wiki',
+#                        'api.rutracker.cc', 'rep.rutracker.cc', 'static.rutracker.cc' ]
+# and its proxyScript.js matches with proxiedDomains.includes(domain) — EXACT, not
+# suffix — so www.* is deliberately not proxied there either.
+#
+# We used to pin two extras, www.rutracker.org and rutracker.cc, and both were
+# measured dead through the proxy (000, four upstreams answering EOF in a row):
+# rutracker.cc has no A record AT ALL upstream, and blockme serves the apex but not
+# www. Pinning a host the upstream cannot serve is strictly worse than not pinning
+# it — the name is hijacked to a sentinel and the request can only fail.
+DOMAINS="rutracker.org rutracker.wiki api.rutracker.cc rep.rutracker.cc static.rutracker.cc"
+
+# Superset for CLEANUP only: every domain z2k has EVER pinned. The clear path must
+# outlive changes to the set above, or the two dropped pins would survive on every
+# already-installed router forever (S96 only unpins what it currently knows).
+DOMAINS_LEGACY="www.rutracker.org rutracker.cc"
 
 # CWE-59: keep /tmp/z2k-log a clean root-owned dir (drop a planted symlink/non-dir).
 if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
@@ -33,18 +52,35 @@ fi
 mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
 
+# EVERY ndmc call MUST be prefixed with `LD_LIBRARY_PATH=`. Measured on the owner's
+# router (KeenOS 5.01.C.1.0-0, 2026-07-26), not taken on faith from a comment:
+#
+#   LD_LIBRARY_PATH=/opt/lib:/opt/usr/lib  ndmc -c "ip host ..."  -> rc=1, NO record
+#   (unset)                                ndmc -c "ip host ..."  -> rc=0, record created
+#
+# ndmc loads Entware's incompatible OpenSSL and dies with
+# "system failed [0xcffd0062] / Cli::Main: failed to initialize". The live rt-proxy
+# supervisor DOES carry LD_LIBRARY_PATH=/opt/lib:/opt/usr/lib in its environment
+# (checked via /proc/<pid>/environ), so these calls ran in exactly that state.
+#
+# It failed SILENTLY because of the `>/dev/null 2>&1`, and it failed only on SOME
+# invocation paths: at boot rc.unslung sets LD_LIBRARY_PATH="" so the pins got
+# written, while a restart from the scheduler, install.sh, auto-update or an ssh
+# shell inherited /opt/lib and did nothing. The damaging half is the CLEAR path -
+# a failed clear leaves rutracker pinned to the sentinel with no daemon listening,
+# so the site stays dead until someone reboots.
 dns_override_set() {
     for d in $DOMAINS; do
-        ndmc -c "ip host $d $SENTINEL" >/dev/null 2>&1
+        LD_LIBRARY_PATH= ndmc -c "ip host $d $SENTINEL" >/dev/null 2>&1
     done
-    ndmc -c "system configuration save" >/dev/null 2>&1
+    LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
 }
 
 dns_override_clear() {
-    for d in $DOMAINS; do
-        ndmc -c "no ip host $d $SENTINEL" >/dev/null 2>&1
+    for d in $DOMAINS $DOMAINS_LEGACY; do
+        LD_LIBRARY_PATH= ndmc -c "no ip host $d $SENTINEL" >/dev/null 2>&1
     done
-    ndmc -c "system configuration save" >/dev/null 2>&1
+    LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
 }
 
 # xtables-lock-safe iptables, same wrapper as the NDM hooks. WHY IT MATTERS HERE:

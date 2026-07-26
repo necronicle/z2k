@@ -324,6 +324,61 @@ else
 fi
 
 # ==========================================
+# 5a-rt. RuTracker-прокси (:1445) — правила, DNS-пины, бинарь
+# ==========================================
+# Этой секции не было вовсе, хотя соседние (:1443, :1444, :1446) есть. Последствие
+# хуже, чем просто мусор: DOMAINS рутрекера прибиты в конфиге роутера к sentinel
+# 10.171.171.171, а слушателя на :1445 после зачистки нет — рутрекер остаётся
+# мёртвым НАВСЕГДА, и по коробке не видно почему. Скрипт запускают именно тогда,
+# когда что-то сломалось, так что он обязан не добавлять поломку.
+
+log_info "Удаление правил и DNS-пинов RuTracker-прокси (:1445)..."
+
+RTP_SENTINEL="10.171.171.171"
+rtp_rules_removed=0
+for chain in PREROUTING OUTPUT; do
+    while iptables -w -t nat -C "$chain" -d "$RTP_SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null; do
+        iptables -w -t nat -D "$chain" -d "$RTP_SENTINEL" -p tcp --dport 443 -j REDIRECT --to-port 1445 2>/dev/null || break
+        rtp_rules_removed=$((rtp_rules_removed + 1))
+    done
+done
+# PPE de-offload на sentinel ставится отдельно от REDIRECT — снимаем и его.
+while iptables -w -t mangle -C PREROUTING -d "$RTP_SENTINEL" -p tcp --dport 443 -j PPE 2>/dev/null; do
+    iptables -w -t mangle -D PREROUTING -d "$RTP_SENTINEL" -p tcp --dport 443 -j PPE 2>/dev/null || break
+    rtp_rules_removed=$((rtp_rules_removed + 1))
+done
+conntrack -D -d "$RTP_SENTINEL" 2>/dev/null || true
+if [ "$rtp_rules_removed" -gt 0 ]; then
+    log_info "  Снято правил :1445/sentinel: $rtp_rules_removed"
+else
+    log_skip "Правил RuTracker-прокси не найдено"
+fi
+
+# DNS-пины. LD_LIBRARY_PATH= обязателен: с Entware-путями ndmc грузит несовместимый
+# OpenSSL и падает `Cli::Main: failed to initialize` — проверено на KeenOS 5.01.C.1.0-0,
+# и именно так этот класс отказа однажды уже оставил пины висеть.
+if command -v ndmc >/dev/null 2>&1; then
+    rtp_pins_removed=0
+    for _d in rutracker.org www.rutracker.org rutracker.cc static.rutracker.cc \
+              api.rutracker.cc rep.rutracker.cc rutracker.wiki; do
+        if LD_LIBRARY_PATH= ndmc -c "no ip host $_d $RTP_SENTINEL" >/dev/null 2>&1; then
+            rtp_pins_removed=$((rtp_pins_removed + 1))
+        fi
+    done
+    LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
+    if [ "$rtp_pins_removed" -gt 0 ]; then
+        log_info "  Снято DNS-пинов rutracker: $rtp_pins_removed"
+    else
+        log_skip "DNS-пинов rutracker не найдено"
+    fi
+fi
+
+# Бинарь и его init-скрипт (директории /opt/zapret2 сносятся ниже, но /opt/sbin — нет).
+for _f in /opt/sbin/z2k-rt-proxy /opt/sbin/z2k-rt-proxy.z2kbak; do
+    [ -f "$_f" ] && rm -f "$_f" && log_info "  Удалён $_f"
+done
+
+# ==========================================
 # 5b. Cron-записи z2k и восстановление cron-демона
 # ==========================================
 

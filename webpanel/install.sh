@@ -96,11 +96,70 @@ mkdir -p /opt/tmp 2>/dev/null || true
 # missing module. Also surface the "Read-only file system" error with a
 # concrete hint, because that specific failure mode is the one users
 # hit and can't decode.
+# Stale package list: opkg builds the .ipk URL from /opt/var/opkg-lists,
+# and Entware keeps only the CURRENT version of each package in the feed
+# root. A router that hasn't run `opkg update` in months asks for e.g.
+# lighttpd_1.4.79-1 while the feed has 1.4.82-2 -> plain 404, surfaced as
+# "wget returned 1 / Perhaps you need to run 'opkg update'". Refresh the
+# list once and retry the same command instead of dead-ending the install.
+opkg_list_refreshed=0
+refresh_opkg_lists() {
+    [ "$opkg_list_refreshed" = 1 ] && return 1
+    opkg_list_refreshed=1
+    echo "  package list looks stale — running opkg update..."
+    local ulog=/tmp/z2k-webpanel-opkg-update.log
+    opkg update >"$ulog" 2>&1 && return 0
+
+    # entware.diversion.ch redirects 301 http->https on every file. opkg
+    # shells out to wget, and on Keenetic that is usually busybox wget with
+    # no SSL: it follows the redirect and dies with "not an http or ftp
+    # url" -> wget returned 1. Such a router can never use that mirror.
+    # bin.entware.net serves plain HTTP 200 with no redirect, so put the
+    # feed back there. (Our own installer used to make this swap when
+    # `opkg update` hit "Illegal instruction" — this undoes it when the
+    # mirror turns out to be unusable.)
+    if grep -q 'not an http or ftp url' "$ulog" &&
+       grep -q 'entware\.diversion\.ch' /opt/etc/opkg.conf 2>/dev/null; then
+        echo "  mirror entware.diversion.ch needs https, this wget cannot —"
+        echo "  switching feed back to http://bin.entware.net"
+        cp /opt/etc/opkg.conf /opt/etc/opkg.conf.z2k-bak 2>/dev/null || true
+        sed -i 's|https\{0,1\}://entware\.diversion\.ch|http://bin.entware.net|g' /opt/etc/opkg.conf
+        # VERIFY the rewrite. `sed -i` can no-op silently — a read-only /opt, an
+        # unexpected spelling of the mirror, or a sed that wants a suffix for -i all
+        # leave the file untouched while every command here still "succeeds". Without
+        # this check the function went on to run a second pointless `opkg update`
+        # against the same dead mirror and reported nothing useful.
+        if grep -q 'entware\.diversion\.ch' /opt/etc/opkg.conf 2>/dev/null; then
+            echo "  could not rewrite /opt/etc/opkg.conf — fix it by hand:"
+            echo "    sed -i 's|entware.diversion.ch|bin.entware.net|g' /opt/etc/opkg.conf && opkg update"
+            return 0
+        fi
+        opkg update >"$ulog" 2>&1 && return 0
+    fi
+    tail -6 "$ulog" | sed 's/^/    /'
+    return 0
+}
+
 run_opkg() {
     local log=/tmp/z2k-webpanel-opkg.log
     if opkg "$@" >"$log" 2>&1; then
         tail -3 "$log"
         return 0
+    fi
+    # Every way an unusable package list surfaces, not just the one the first report
+    # showed. A STALE list gives "Failed to download / wget returned 1" (opkg builds a
+    # URL for a version the feed no longer carries). An EMPTY one — the state after a
+    # failed `opkg update`, reproduced on the owner's router — gives "Unknown package"
+    # / "Cannot install package" instead, and the narrower match missed it entirely:
+    # the E2E run went rc=255 with no refresh attempted. Same root cause, so same
+    # recovery. A false positive costs at most ONE extra `opkg update` per install,
+    # because refresh_opkg_lists refuses its second call.
+    if grep -qiE "Failed to download|need to run 'opkg update'|Unknown package|Cannot install package|Cannot find package" "$log" \
+       && refresh_opkg_lists; then
+        if opkg "$@" >"$log" 2>&1; then
+            tail -3 "$log"
+            return 0
+        fi
     fi
     echo "  opkg $1 failed. Last lines:"
     tail -10 "$log" | sed 's/^/    /'
