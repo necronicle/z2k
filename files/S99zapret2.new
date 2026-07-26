@@ -1140,8 +1140,23 @@ load_modules()
     echo "Loading required kernel modules"
 
     # ������ ����������� ������� ��� ������ zapret2
-    # Add connmark modules for Keenetic policy integration (nfqws2-keenetic style).
-    local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue xt_CONNMARK xt_connmark"
+    #
+    # xt_CONNMARK/xt_connmark are DELIBERATELY NOT loaded here. They are used by one
+    # feature only — Keenetic policy exclusion — and that feature is currently broken
+    # on this platform: the policy mark is a ROUTING fwmark consumed by `ip rule`
+    # before FIB, it does not survive to mangle POSTROUTING where the rule matches
+    # `-m mark`, so in the default include mode `! --mark` is true for every flow,
+    # every connection gets the exclude bit and NFQUEUE processes nobody — the bypass
+    # dies. Field-confirmed 2026-07-04.
+    #
+    # It stays harmless only while connmark is UNAVAILABLE, because the setter then
+    # never installs (fail-open). Loading the module by path would flip that to
+    # available on firmware where the .ko exists but was not loaded, and resurrect the
+    # broken rule for anyone who has a policy named nfqws — exactly the p-59 accident,
+    # where reviving the detect installed the broken rule and killed the bypass.
+    # Re-add them together with the rewrite onto NDM's own connndmmark (present on
+    # every Keenetic — NDM's own firewall uses it), not before.
+    local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue"
 
     for module in $modules; do
         # Built in, or already loaded: nothing to do and nothing to say.

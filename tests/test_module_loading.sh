@@ -132,7 +132,7 @@ exec /usr/bin/find "\$@"
 EOF
 chmod +x "$BIN/modprobe" "$BIN/insmod" "$BIN/lsmod" "$BIN/uname" "$BIN/find"
 
-# run LAYOUT  -> LAYOUT is the firmware module directory to populate ("" = none)
+# run LAYOUT [nobytes] -> LAYOUT is the firmware module directory to populate ("" = none)
 run_load() {
     rm -rf "${TMP:?}/lib" "$TMP/proc/net"; mkdir -p "$TMP/proc/net/netfilter"
     : > "$TMP/modprobe.calls"; : > "$TMP/insmod.calls"; : > "$TMP/lsmod.out"
@@ -144,6 +144,9 @@ run_load() {
     if [ -n "$1" ]; then
         mkdir -p "$1"
         for m in xt_multiport xt_connbytes ip_set_bitmap_port; do : > "$1/$m.ko"; done
+        # $2 = "nobytes": leave xt_connbytes with no .ko anywhere, so it is genuinely
+        # unavailable — the shape the reported firmware has for connmark.
+        [ "$2" = nobytes ] && rm -f "$1/xt_connbytes.ko"
     fi
     ( . "$TMP/lib2.sh"; PATH="$BIN:$PATH"; load_modules ) 2>&1
 }
@@ -202,11 +205,10 @@ grep -q "$TMP/lib/weird-modules/4.9-ndm-5/xt_multiport.ko" "$TMP/insmod.calls" \
 # =============================================================================
 # 3. genuinely absent -> warn, and say it will not be installed
 # =============================================================================
-# xt_CONNMARK/xt_connmark exist in NO layout here, mirroring the reported firmware
-# where only act_connmark.ko is present.
-out=$(run_load "$TMP/lib/modules/4.9-ndm-5")
-warned_for "$out" xt_CONNMARK && ok "a genuinely absent module IS warned about" \
-                              || no "a genuinely absent module IS warned about" "a warning" "$out"
+# Nothing to load it from and nothing in the registry: the reported firmware's case.
+out=$(run_load "$TMP/lib/modules/4.9-ndm-5" nobytes)
+warned_for "$out" xt_connbytes && ok "a genuinely absent module IS warned about" \
+                               || no "a genuinely absent module IS warned about" "a warning" "$out"
 case "$out" in
     *"rules that need it will not be installed"*)
         ok "the warning states the consequence, not 'may be built-in'" ;;
@@ -216,6 +218,37 @@ case "$out" in
     *"may be built-in"*) no "the misleading 'may be built-in' wording is gone" "absent" "present" ;;
     *)                   ok "the misleading 'may be built-in' wording is gone" ;;
 esac
+
+# =============================================================================
+# 3b. connmark modules must NOT be in the load list
+# =============================================================================
+# They serve exactly one feature — Keenetic policy exclusion — and that feature is
+# broken on this platform: the policy mark is a routing fwmark that does not reach
+# mangle POSTROUTING, so in the default include mode every connection gets the
+# exclude bit and NFQUEUE processes nobody. It is harmless ONLY while connmark is
+# unavailable, because the setter then never installs. Loading the module by path
+# would flip that to available and resurrect the broken rule — that is the p-59
+# accident verbatim, where reviving the detect killed the bypass. This assertion is
+# the tripwire: re-adding them without the connndmmark rewrite turns it red.
+list_line=$(grep -m1 'local modules=' "$INIT")
+case "$list_line" in
+    *CONNMARK*|*connmark*)
+        no "connmark modules are not in the load list (would revive the broken policy rule)" \
+           "no connmark" "$list_line" ;;
+    *)  ok "connmark modules are not in the load list (would revive the broken policy rule)" ;;
+esac
+# ...while the ones the bypass actually needs are still there.
+for m in xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue; do
+    case "$list_line" in
+        *"$m"*) ok "$m is still loaded" ;;
+        *)      no "$m is still loaded" "in the list" "$list_line" ;;
+    esac
+done
+# And the old modprobe-based init for connmark must stay as it was: it uses plain
+# modprobe, which cannot find firmware modules on Keenetic, so it stays fail-open.
+grep -q 'modprobe xt_CONNMARK' "$INIT" \
+    && ok "z2k_connmark_init still probes with plain modprobe (stays fail-open)" \
+    || no "z2k_connmark_init still probes with plain modprobe (stays fail-open)" "modprobe xt_CONNMARK" "changed"
 
 # =============================================================================
 # 4. built-in modules produce NO output and NO load attempt
