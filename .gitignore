@@ -25,3 +25,8 @@ mtproxy-client/mtproxy-client
 *~
 *.bak
 cf-worker/.wrangler/
+
+# Планы и черновики — локальные, на GitHub не выкладываются
+PLAN_*.md
+*_PLAN.md
+/plans/
