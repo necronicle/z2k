@@ -1071,6 +1071,70 @@ restart_daemons()
 # ������� START/STOP FIREWALL
 # ==============================================================================
 
+# Where the FIRMWARE keeps its modules.
+#
+# `modprobe` here is Entware's (/opt/sbin/modprobe) and it searches
+# /opt/lib/modules/<kver> — a directory Keenetic does not have at all. Verified on
+# a live 4.9-ndm-5 box:
+#     modprobe: FATAL: Module xt_multiport not found in directory /opt/lib/modules/4.9-ndm-5
+# so this step never actually loaded anything on any router. It only LOOKED fine
+# where NDM had already loaded the module for its own rules.
+#
+# The kernel cannot cover for us either: /proc/sys/kernel/modprobe is EMPTY and
+# /sbin/modprobe does not exist, so there is no on-demand autoload. Verified live:
+# inserting a rule whose match is not loaded fails with "No chain/target/match by
+# that name" and the module does NOT appear. A missing module therefore means the
+# RULE IS NEVER INSTALLED — for connbytes that is the packet-direction filter on
+# the NFQUEUE rules, for multiport the PPE de-offload — so the bypass degrades in
+# silence while the log says only "may be built-in".
+#
+# Two layouts are in the field: /lib/modules/<kver> (4.9-ndm-5) and
+# /lib/system-modules/<kver> (NDMS 5.1.2, reported on an NC1812). Check both, then
+# fall back to a search bounded to /lib — never /opt, where a stale copy from a
+# different kernel would be the wrong ABI.
+Z2K_MODDIRS=
+z2k_module_dirs()
+{
+    local kv d
+    if [ -z "$Z2K_MODDIRS" ]; then
+        kv=$(uname -r 2>/dev/null)
+        for d in "/lib/modules/$kv" "/lib/system-modules/$kv" /lib/modules /lib/system-modules; do
+            [ -d "$d" ] && Z2K_MODDIRS="$Z2K_MODDIRS $d"
+        done
+    fi
+    echo "$Z2K_MODDIRS"
+}
+
+# insmod $1 from the firmware tree. 0 only if a .ko was found AND accepted.
+z2k_insmod_fw()
+{
+    local m="$1" d f
+    for d in $(z2k_module_dirs); do
+        f="$d/$m.ko"
+        [ -f "$f" ] && insmod "$f" 2>/dev/null && return 0
+    done
+    f=$(find /lib -name "$m.ko" -type f 2>/dev/null | head -1)
+    [ -n "$f" ] && insmod "$f" 2>/dev/null && return 0
+    return 1
+}
+
+# Does the capability this module provides actually exist? Asked of the kernel's
+# own registry, NOT of lsmod: on stock firmware most of these are built in, where
+# lsmod never lists them and "failed to load" is pure noise — which is exactly the
+# wall of warnings that buried the one real failure in a field report.
+z2k_module_present()
+{
+    case "$1" in
+        xt_multiport)    grep -qw multiport /proc/net/ip_tables_matches 2>/dev/null ;;
+        xt_connbytes)    grep -qw connbytes /proc/net/ip_tables_matches 2>/dev/null ;;
+        xt_connmark)     grep -qw connmark  /proc/net/ip_tables_matches 2>/dev/null ;;
+        xt_CONNMARK)     grep -qw CONNMARK  /proc/net/ip_tables_targets 2>/dev/null ;;
+        xt_NFQUEUE)      grep -qw NFQUEUE   /proc/net/ip_tables_targets 2>/dev/null ;;
+        nfnetlink_queue) [ -e /proc/net/netfilter/nfnetlink_queue ] ;;
+        *)               lsmod 2>/dev/null | grep -q "^$1 " ;;
+    esac
+}
+
 load_modules()
 {
     echo "Loading required kernel modules"
@@ -1080,23 +1144,35 @@ load_modules()
     local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue xt_CONNMARK xt_connmark"
 
     for module in $modules; do
-        if ! lsmod | grep -q "^$module"; then
-            [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Loading module: $module"
-            modprobe "$module" 2>/dev/null || {
-                echo "Warning: Failed to load module $module (may be built-in)"
-            }
-        else
-            [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Module already loaded: $module"
+        # Built in, or already loaded: nothing to do and nothing to say.
+        if z2k_module_present "$module"; then
+            [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Module already available: $module"
+            continue
         fi
+        [ -n "$Z2K_DEBUG" ] && echo "DEBUG: Loading module: $module"
+        modprobe "$module" 2>/dev/null
+        z2k_module_present "$module" && continue
+        z2k_insmod_fw "$module"
+        # Warn ONLY when the capability is still missing after both attempts —
+        # then it is a real absence, not a modprobe that looked in the wrong place.
+        z2k_module_present "$module" || \
+            echo "Warning: $module is not available in this firmware — rules that need it will not be installed"
     done
 
-    # Load ip_set_bitmap_port from system modules (Entware modprobe cannot find it)
-    if ! lsmod | grep -q "ip_set_bitmap_port"; then
-        insmod "/lib/modules/$(uname -r)/ip_set_bitmap_port.ko" 2>/dev/null || true
+    # Same treatment for the ipset bitmap:port module. This used to be the only
+    # place that knew Entware's modprobe cannot find firmware modules, and it
+    # hardcoded /lib/modules/<kver> — which is the path that does NOT exist on the
+    # firmware where this problem was actually reported.
+    if ! lsmod 2>/dev/null | grep -q "^ip_set_bitmap_port "; then
+        z2k_insmod_fw ip_set_bitmap_port || true
     fi
 
-    # ��������� ��������� ������ nfnetlink_queue
-    if ! lsmod | grep -q "nfnetlink_queue" && ! modinfo nfnetlink_queue >/dev/null 2>&1; then
+    # nfnetlink_queue is the one that must genuinely be there — without it nfqws2
+    # cannot bind a queue at all. Ask the kernel, not `modinfo`: modinfo is the same
+    # Entware tool as modprobe and searches the same nonexistent /opt/lib/modules,
+    # so on a firmware where this module is BUILT IN it answers "no" and this gate
+    # would abort a perfectly working router.
+    if ! z2k_module_present nfnetlink_queue; then
         echo "WARNING: nfnetlink_queue module not available!"
         echo "nfqws2 may fail with 'Operation not permitted'"
         return 1
