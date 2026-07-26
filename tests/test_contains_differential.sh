@@ -499,9 +499,13 @@ SHELLS=""
 for s in /bin/dash /bin/sh /bin/bash /bin/ash /usr/bin/dash; do
     [ -x "$s" ] || continue
     case " $SHELLS " in *" $s "*) continue ;; esac
-    # de-dup by inode: /bin/sh is often a link to one of the others
+    # De-dup: /bin/sh is usually a link to one of the others, and running the same
+    # binary twice adds nothing to a differential.
+    # NOT `-ef` — it is undefined in POSIX sh (SC3013) and this file is #!/bin/sh.
+    # `cmp` is POSIX and answers the question we actually care about: identical
+    # bytes means the same shell, whether the duplicate is a symlink or a copy.
     dup=0
-    for t in $SHELLS; do [ "$s" -ef "$t" ] && dup=1; done
+    for t in $SHELLS; do cmp -s "$s" "$t" && dup=1; done
     [ "$dup" = 0 ] && SHELLS="$SHELLS $s"
 done
 [ -n "$SHELLS" ] || SHELLS=/bin/sh

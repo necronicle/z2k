@@ -22,6 +22,11 @@ jobs:
 
       - name: Run shellcheck
         run: |
+          # Print the version: this runner's shellcheck is NOT the one a developer
+          # has locally, and the codes differ between them. SC3013 (`-ef` is not
+          # POSIX) failed this job while a newer local 0.11.0 stayed silent about
+          # it at every severity, so "clean on my machine" proved nothing.
+          shellcheck --version | sed -n 's/^version:/shellcheck /p'
           # SC1007: `LD_LIBRARY_PATH= ndmc ...` is an INTENTIONAL env-prefix (clear
           # Entware's OpenSSL path so ndmc works on KeenOS 4.3+/5.x — see p-57.1);
           # shellcheck false-flags it as an accidental assignment. Excluded.
