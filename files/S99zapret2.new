@@ -1141,22 +1141,15 @@ load_modules()
 
     # ������ ����������� ������� ��� ������ zapret2
     #
-    # xt_CONNMARK/xt_connmark are DELIBERATELY NOT loaded here. They are used by one
-    # feature only — Keenetic policy exclusion — and that feature is currently broken
-    # on this platform: the policy mark is a ROUTING fwmark consumed by `ip rule`
-    # before FIB, it does not survive to mangle POSTROUTING where the rule matches
-    # `-m mark`, so in the default include mode `! --mark` is true for every flow,
-    # every connection gets the exclude bit and NFQUEUE processes nobody — the bypass
-    # dies. Field-confirmed 2026-07-04.
-    #
-    # It stays harmless only while connmark is UNAVAILABLE, because the setter then
-    # never installs (fail-open). Loading the module by path would flip that to
-    # available on firmware where the .ko exists but was not loaded, and resurrect the
-    # broken rule for anyone who has a policy named nfqws — exactly the p-59 accident,
-    # where reviving the detect installed the broken rule and killed the bypass.
-    # Re-add them together with the rewrite onto NDM's own connndmmark (present on
-    # every Keenetic — NDM's own firewall uses it), not before.
-    local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue"
+    # xt_CONNMARK/xt_connmark serve one feature — Keenetic policy exclusion — and it
+    # is safe to enable only because z2k_policy_connmark_start now refuses to install
+    # its rule for a policy with no member hosts. Without that guard, making these
+    # modules loadable would resurrect the rule on firmware where the .ko exists but
+    # was not loaded, and in the default "only policy traffic" mode a memberless
+    # policy puts the exclude bit on EVERY connection — bypass gone. That is the p-59
+    # accident, and it is what the member guard exists to prevent. Do not load these
+    # without it.
+    local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue xt_CONNMARK xt_connmark"
 
     for module in $modules; do
         # Built in, or already loaded: nothing to do and nothing to say.
@@ -1285,7 +1278,11 @@ z2k_detect_policy_mark()
             if (line ~ /description[ \t]*=/) {
                 desc=$0
                 sub(/.*description[ \t]*=[ \t]*/, "", desc)
-                desc=rm_trailing_colon(tolower(unquote(desc)))
+                # Same ordering trap as z2k_policy_id: strip the trailing colon FIRST,
+                # or a QUOTED description never matches and the policy is not found at all.
+                # trim FIRST: the line ends "X: " with a trailing space, so stripping
+                # the colon before trimming does nothing. See z2k_policy_id.
+                desc=tolower(unquote(rm_trailing_colon(trim(desc))))
                 found = (desc == want) ? 1 : 0
                 next
             }
@@ -1314,12 +1311,96 @@ z2k_detect_policy_mark()
     return 0
 }
 
+# Which ndmc to run. Firmware ndmc lives outside Entware; LD_LIBRARY_PATH= is
+# mandatory at every call site (Entware's OpenSSL makes it die 0xcffd0060).
+z2k_ndmc_bin()
+{
+    if [ -x /bin/ndmc ]; then echo /bin/ndmc
+    elif command -v ndmc >/dev/null 2>&1; then echo ndmc
+    else return 1; fi
+}
+
+# The NDM policy NAME (Policy0, z2ktest, ...). POLICY_NAME is matched against the
+# DESCRIPTION, but `show ip hotspot` reports membership by NAME, so both are needed:
+# the description to find the policy the user configured, the name to count who is
+# actually in it. Both live on the same line of `show ip policy`:
+#     policy, name = z2ktest, description = z2k-test-temp:
+z2k_policy_id()
+{
+    local nb="$1"
+    LD_LIBRARY_PATH= "$nb" -c "show ip policy" 2>/dev/null | awk -v want="$2" '
+        function trim(s) { sub(/^[ \t\r\n]+/, "", s); sub(/[ \t\r\n]+$/, "", s); return s }
+        function unq(s)  { s=trim(s); if (s ~ /^".*"$/) { sub(/^"/, "", s); sub(/"$/, "", s) } return s }
+        function rmc(s)  { sub(/:+$/, "", s); return s }
+        BEGIN { w = rmc(tolower(want)) }
+        /description[ \t]*=/ {
+            # rmc BEFORE unq: the box prints `description = "x":`, so the trailing
+            # colon sits OUTSIDE the closing quote and unquoting first matches nothing.
+            # trim -> rmc -> unq, in that order. The box prints `description = X: `
+            # WITH A TRAILING SPACE, so stripping the colon before trimming is a no-op
+            # and nothing ever matches; and the colon sits outside the closing quote,
+            # so unquoting before stripping it is a no-op too. Both were live bugs.
+            d=$0; sub(/.*description[ \t]*=[ \t]*/, "", d); d=tolower(unq(rmc(trim(d))))
+            if (d != w) next
+            n=$0; sub(/.*name[ \t]*=[ \t]*/, "", n); split(n, p, ","); print trim(p[1]); exit
+        }'
+}
+
+# How many hosts are bound to that policy. `show ip hotspot` prints one
+# "policy: <name>" per host, empty for hosts in no policy.
+z2k_policy_members()
+{
+    local nb="$1"
+    LD_LIBRARY_PATH= "$nb" -c "show ip hotspot" 2>/dev/null | awk -v id="$2" '
+        /^[ \t]*policy[ \t]*:/ {
+            v=$0; sub(/.*policy[ \t]*:[ \t]*/, "", v); gsub(/[ \t\r]/, "", v)
+            if (v != "" && v == id) c++
+        }
+        END { print c+0 }'
+}
+
 z2k_policy_connmark_start()
 {
     [ "$FWTYPE" = "iptables" ] || return 0
     [ "$Z2K_CONNMARK_OK4" = "1" ] || return 0
 
     z2k_detect_policy_mark || return 0
+
+    # THE MEMBER GUARD, and the reason this feature killed bypasses in the field.
+    #
+    # Measured on a live router (2026-07-26, policy z2ktest, one member): traffic
+    # from a policy member carries the policy mark at mangle POSTROUTING on EVERY
+    # packet (1013/1013 matched mark ffffaab/0x0fffffff), while traffic outside any
+    # policy carries mark 0. So the mechanism and the hook are right — the earlier
+    # conclusion that the mark "does not survive to POSTROUTING" was measured
+    # without a member in the policy and was wrong.
+    #
+    # What is NOT right is the default. POLICY_NAME defaults to "nfqws" and
+    # POLICY_EXCLUDE defaults to 0, i.e. "process ONLY policy traffic", which is
+    # implemented as "put the exclude bit on everything that is NOT in the policy".
+    # If such a policy exists but has NO member hosts, that is every connection on
+    # the router: NFQUEUE then processes nobody and the bypass dies completely,
+    # silently. That is the reported failure — the user's bypass came back the
+    # moment they deleted the policy.
+    #
+    # A policy with no members cannot express an intent either way, so install
+    # nothing and say so.
+    local nb pid members
+    nb=$(z2k_ndmc_bin) || return 0
+    pid=$(z2k_policy_id "$nb" "$POLICY_NAME")
+    if [ -z "$pid" ]; then
+        echo "Policy '$POLICY_NAME': cannot read its NDM name — not installing the exclusion rule"
+        return 0
+    fi
+    members=$(z2k_policy_members "$nb" "$pid")
+    case "$members" in ''|*[!0-9]*) members=0 ;; esac
+    if [ "$members" -lt 1 ]; then
+        echo "Policy '$POLICY_NAME' ($pid) has no member hosts — not installing the exclusion rule."
+        echo "  Assign devices to that policy in the Keenetic web UI, or the rule would"
+        echo "  exclude ALL traffic from processing and the bypass would stop working."
+        return 0
+    fi
+    echo "Policy '$POLICY_NAME' ($pid): $members member host(s)."
 
     local pol_rule=""
     if [ "$POLICY_EXCLUDE" = "1" ]; then

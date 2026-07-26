@@ -220,35 +220,40 @@ case "$out" in
 esac
 
 # =============================================================================
-# 3b. connmark modules must NOT be in the load list
+# 3b. connmark modules are loaded, and ONLY because the member guard exists
 # =============================================================================
-# They serve exactly one feature — Keenetic policy exclusion — and that feature is
-# broken on this platform: the policy mark is a routing fwmark that does not reach
-# mangle POSTROUTING, so in the default include mode every connection gets the
-# exclude bit and NFQUEUE processes nobody. It is harmless ONLY while connmark is
-# unavailable, because the setter then never installs. Loading the module by path
-# would flip that to available and resurrect the broken rule — that is the p-59
-# accident verbatim, where reviving the detect killed the bypass. This assertion is
-# the tripwire: re-adding them without the connndmmark rewrite turns it red.
+# They serve one feature — Keenetic policy exclusion. Measured on a live router:
+# traffic from a policy member carries the policy mark at mangle POSTROUTING on every
+# packet, traffic outside any policy carries mark 0, so the mechanism works. What
+# does not work is a MEMBERLESS policy in the default "only policy traffic" mode:
+# the rule then puts the exclude bit on every connection and NFQUEUE processes
+# nobody — the reported field failure. Making these modules loadable is therefore
+# only safe while z2k_policy_connmark_start refuses to install for 0 members. Both
+# halves are asserted here so neither can be removed alone.
 list_line=$(grep -m1 'local modules=' "$INIT")
-case "$list_line" in
-    *CONNMARK*|*connmark*)
-        no "connmark modules are not in the load list (would revive the broken policy rule)" \
-           "no connmark" "$list_line" ;;
-    *)  ok "connmark modules are not in the load list (would revive the broken policy rule)" ;;
-esac
-# ...while the ones the bypass actually needs are still there.
-for m in xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue; do
+for m in xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue xt_CONNMARK xt_connmark; do
     case "$list_line" in
-        *"$m"*) ok "$m is still loaded" ;;
-        *)      no "$m is still loaded" "in the list" "$list_line" ;;
+        *"$m"*) ok "$m is in the load list" ;;
+        *)      no "$m is in the load list" "in the list" "$list_line" ;;
     esac
 done
-# And the old modprobe-based init for connmark must stay as it was: it uses plain
-# modprobe, which cannot find firmware modules on Keenetic, so it stays fail-open.
-grep -q 'modprobe xt_CONNMARK' "$INIT" \
-    && ok "z2k_connmark_init still probes with plain modprobe (stays fail-open)" \
-    || no "z2k_connmark_init still probes with plain modprobe (stays fail-open)" "modprobe xt_CONNMARK" "changed"
+guard=$(awk '/^z2k_policy_connmark_start\(\)/{f=1} f{print} f&&/^}/{exit}' "$INIT")
+case "$guard" in
+    *z2k_policy_members*) ok "the exclusion rule consults the member count" ;;
+    *)                    no "the exclusion rule consults the member count" "z2k_policy_members" "absent" ;;
+esac
+case "$guard" in
+    *'has no member hosts'*) ok "a memberless policy is reported and skipped" ;;
+    *)                       no "a memberless policy is reported and skipped" "the skip" "absent" ;;
+esac
+# The skip must come BEFORE any rule is inserted, or it protects nothing.
+skip_ln=$(printf '%s\n' "$guard" | grep -n 'has no member hosts' | head -1 | cut -d: -f1)
+ins_ln=$(printf '%s\n' "$guard" | grep -n 'iptablesw -t mangle' | head -1 | cut -d: -f1)
+if [ -n "$skip_ln" ] && [ -n "$ins_ln" ] && [ "$skip_ln" -lt "$ins_ln" ]; then
+    ok "the member check runs before the rule is inserted ($skip_ln < $ins_ln)"
+else
+    no "the member check runs before the rule is inserted" "skip<insert" "$skip_ln/$ins_ln"
+fi
 
 # =============================================================================
 # 4. built-in modules produce NO output and NO load attempt
