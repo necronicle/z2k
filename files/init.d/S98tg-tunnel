@@ -3,6 +3,20 @@
 # падает и daemon стартует даже на TG_PROXY_USER_DISABLED=1.
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
+# TLS trust for the relay. The client is Go and Go uses the SYSTEM store, which on a
+# Keenetic is whatever the firmware happens to ship plus whatever opkg's ca-certificates
+# left behind. On routers where neither carries ISRG Root X1 the tunnel dies forever with
+#     tls: failed to verify certificate: x509: certificate signed by unknown authority
+# and the standing advice — `opkg install ca-certificates` — stops working the moment opkg
+# itself is broken, which is exactly the state those routers tend to be in.
+#
+# So point Go at anchors we ship (SSL_CERT_FILE) AND at the firmware's directory
+# (SSL_CERT_DIR) — Go merges both, so this adds trust without taking any away. Each is set
+# only if it actually exists: an SSL_CERT_FILE pointing at a missing file would empty the
+# pool and break TLS on a router where it currently works.
+[ -f /opt/zapret2/etc/z2k-roots.pem ] && export SSL_CERT_FILE=/opt/zapret2/etc/z2k-roots.pem
+[ -d /etc/ssl/certs ] && export SSL_CERT_DIR=/etc/ssl/certs
+
 # /opt/etc/init.d/S98tg-tunnel — Telegram tunnel init script.
 #
 # start/stop/restart the tg-mtproxy-client daemon and manage the iptables

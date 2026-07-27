@@ -48,7 +48,7 @@ extract_fn() {
 }
 
 FN="$TMP/fn.sh"
-{ extract_fn warp_explain_dead "$WARPSH"; echo; extract_fn warp_tunnel_live "$WARPSH"; } > "$FN"
+{ grep -m1 "^WARP_ENGINE_LOG=" "$WARPSH"; extract_fn warp_engine_tail "$WARPSH"; echo; extract_fn warp_explain_dead "$WARPSH"; echo; extract_fn warp_tunnel_live "$WARPSH"; } > "$FN"
 grep -q '^warp_tunnel_live()' "$FN" && ok "extracted warp_tunnel_live()" \
                                    || no "extracted warp_tunnel_live()" "a definition" "none"
 
@@ -81,6 +81,7 @@ run() {
 WARP_IFACE=opkgtun0
 WARP_PROBE_URL="https://1.1.1.1/cdn-cgi/trace"
 WARP_PROBE_TIMEOUT=8
+WARP_ENGINE_LOG="${WARP_ENGINE_LOG:-/nonexistent}"
 WARP_LIVE_STAMP="$TMP/live.stamp"
 warp_live_record() { echo "\$1" > "$TMP/recorded"; }
 warp_usque_running() { [ -f "$TMP/engine" ]; }
@@ -91,7 +92,7 @@ printf 'rc=%s\n' "\$rc"
 printf 'why=%s\n' "\$WARP_LIVE_WHY"
 EOF
     rm -f "$TMP/recorded"
-    PATH="$BIN:$PATH" sh "$TMP/r.sh" 2>&1
+    WARP_ENGINE_LOG="$WARP_ENGINE_LOG" PATH="$BIN:$PATH" sh "$TMP/r.sh" 2>&1
 }
 rcof()  { printf '%s\n' "$1" | sed -n 's/^rc=//p'; }
 whyof() { printf '%s\n' "$1" | sed -n 's/^why=//p'; }
@@ -181,6 +182,109 @@ warp_usque_running() { true; }
 warp_tunnel_live; echo "rc=$?"' 2>&1)
 case "$out" in *"rc=0"*) ok "no curl -> never reported dead (INVARIANT)" ;;
     *) no "no curl -> never reported dead (INVARIANT)" "rc=0" "$out" ;; esac
+
+# --- 9b. the engine's own last line is surfaced -----------------------------
+# Our checks stop at "device is fine, data does not flow". WHY is known only to usque,
+# which says so plainly in the log we already capture. Not printing it meant this class
+# of report still needed one more round trip to the user — the exact thing this whole
+# change exists to remove.
+mk_log() { printf '%s\n' "$@" > "$TMP/engine.log"; }
+tail_of() { PATH="$BIN:$PATH" sh -c "WARP_ENGINE_LOG='$TMP/engine.log'; . '$FN'; warp_engine_tail"; }
+
+mk_log '[z2k-warp] enable' \
+       '2026/07/27 06:36:52 UTC Connected to MASQUE server' \
+       '[z2k-warp] попытка 1 не удалась: что-то'
+[ "$(tail_of)" = "2026/07/27 06:36:52 UTC Connected to MASQUE server" ] \
+    && ok "engine tail skips our own [z2k-warp] lines" \
+    || no "engine tail skips our own [z2k-warp] lines" "the engine line" "$(tail_of)"
+
+# The multicast noise repeats constantly and would bury every useful line.
+mk_log '2026/07/27 06:47:30 UTC Tunnel idle. Waiting for outbound activity before reconnecting...' \
+       '2026/07/27 06:47:31 UTC dropping proxied packet (76 bytes) that cannot be proxied: connect-ip: datagram Hop Limit too small: 1' \
+       '2026/07/27 06:47:32 UTC dropping proxied packet (76 bytes) that cannot be proxied: connect-ip: datagram Hop Limit too small: 1'
+case "$(tail_of)" in
+    *"Tunnel idle"*) ok "engine tail skips the Hop Limit noise" ;;
+    *) no "engine tail skips the Hop Limit noise" "Tunnel idle" "$(tail_of)" ;;
+esac
+
+rm -f "$TMP/engine.log"
+[ -z "$(tail_of)" ] && ok "no log -> empty tail, not an error" \
+                    || no "no log -> empty tail, not an error" "" "$(tail_of)"
+
+# ...and it reaches the reason the user reads.
+reset_all; : > "$TMP/dev"; : > "$TMP/addr"; : > "$TMP/up"; : > "$TMP/engine"
+echo 28 > "$TMP/curl_rc"; : > "$TMP/curl_body"
+mk_log '2026/07/27 06:36:52 UTC Establishing MASQUE connection to 162.159.198.2:443'
+out=$(WARP_ENGINE_LOG="$TMP/engine.log" run)
+case "$(whyof "$out")" in
+    *"движок: "*"Establishing MASQUE"*) ok "the reason carries the engine's last line" ;;
+    *) no "the reason carries the engine's last line" "движок: ...Establishing MASQUE" "$(whyof "$out")" ;;
+esac
+rm -f "$TMP/engine.log"
+out=$(WARP_ENGINE_LOG="$TMP/engine.log" run)
+case "$(whyof "$out")" in
+    *"движок:"*) no "no engine log -> no dangling 'движок:'" "no suffix" "$(whyof "$out")" ;;
+    *) ok "no engine log -> no dangling 'движок:'" ;;
+esac
+
+# --- 9c. endpoint variants: only on failure, never on the original config ---
+# The constraint that shaped this: it must be impossible for a router whose tunnel works
+# to be affected. Nothing here runs unless the tunnel has already failed, no state file
+# exists by default, and the ORIGINAL session.conf is only ever read — it holds the device
+# key, and rewriting it would cost the registration rather than merely a session.
+apply_fn=$(extract_fn warp_variant_apply "$WARPSH")
+case "$apply_fn" in
+    *'> "$WARP_ALT_CONF.tmp"'*) ok "the variant is written to a COPY, not to session.conf" ;;
+    *) no "the variant is written to a COPY, not to session.conf" "a .tmp copy" "absent" ;;
+esac
+# grep, not a case list: the first glob swallowed the others (SC2221/2222), so the
+# sed -i check never actually ran — a dead assertion pretending to guard the one file
+# whose corruption costs a user their registration.
+if printf '%s\n' "$apply_fn" | grep -qE '>>?[[:space:]]*"\$USQUE_SESSION"|sed +-i[^&|]*\$USQUE_SESSION|tee[^&|]*\$USQUE_SESSION'; then
+    no "the original session.conf is never written" "read-only" "written"
+else
+    ok "the original session.conf is never written"
+fi
+# A mangled copy must be discarded, not handed to usque.
+case "$apply_fn" in
+    *'private_key'*) ok "the copy is validated before use (key still present)" ;;
+    *) no "the copy is validated before use (key still present)" "a validation" "absent" ;;
+esac
+# Rotation is gated on the reason: with "no address" the endpoint is not the suspect.
+enable_fn2=$(extract_fn warp_enable "$WARPSH")
+case "$enable_fn2" in
+    *'*"проба через"*|*"WARP не активен"*'*) ok "variants are tried only for a dead data path" ;;
+    *) no "variants are tried only for a dead data path" "the reason gate" "absent" ;;
+esac
+# ...and only after the engine restart has already been spent.
+k_ln=$(printf '%s\n' "$enable_fn2" | grep -n 'kicked=1' | head -1 | cut -d: -f1)
+v_ln=$(printf '%s\n' "$enable_fn2" | grep -n 'warp_variant_apply' | head -1 | cut -d: -f1)
+if [ -n "$k_ln" ] && [ -n "$v_ln" ] && [ "$k_ln" -lt "$v_ln" ]; then
+    ok "the engine restart is tried before any variant ($k_ln < $v_ln)"
+else
+    no "the engine restart is tried before any variant" "restart first" "$k_ln/$v_ln"
+fi
+# A failed run must not leave the router pinned to a variant that did not work either.
+case "$enable_fn2" in
+    *warp_variant_clear*) ok "a final failure restores the stock endpoint" ;;
+    *) no "a final failure restores the stock endpoint" "warp_variant_clear" "absent" ;;
+esac
+# The init must fall back to the stock config when no variant file exists — that is what
+# keeps every working router byte-identical.
+init_launch=$(grep -A3 'nativetun \\' "$HERE/files/init.d/S51z2k-warp" | head -6)
+case "$init_launch" in
+    *'--config "$_cfg"'*) ok "the init launches with the selected config" ;;
+    *) no "the init launches with the selected config" '--config "$_cfg"' "$init_launch" ;;
+esac
+grep -q '_cfg="$SESSION"' "$HERE/files/init.d/S51z2k-warp" \
+    && ok "the init defaults to the original session.conf" \
+    || no "the init defaults to the original session.conf" 'default to $SESSION' "absent"
+# A non-numeric port file must never reach the command line.
+pline=$(grep -A4 '_p=$(cat "$WARP_DIR/port"' "$HERE/files/init.d/S51z2k-warp")
+case "$pline" in
+    *'*[!0-9]*'*) ok "a non-numeric port is rejected" ;;
+    *) no "a non-numeric port is rejected" "a digit guard" "$pline" ;;
+esac
 
 # --- 10. the caller actually prints the reason ------------------------------
 enable_fn=$(extract_fn warp_enable "$WARPSH")

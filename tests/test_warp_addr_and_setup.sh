@@ -159,6 +159,39 @@ grep -q 'ip address 172.16.0.2' "$TMP/ndm.log" 2>/dev/null \
     && ok "the assigned address is what gets handed to NDM" \
     || no "the assigned address is what gets handed to NDM" "ip address 172.16.0.2" "$(tr '\n' ';' < "$TMP/ndm.log")"
 
+# --- NDM refuses -> we set the address ourselves ----------------------------
+# Field reports (2026-07-27) showed "на opkgtun0 нет IPv4-адреса" on every attempt until
+# the budget ran out: the old code detected the refusal, reported it, and waited. Waiting
+# has never made NDM change its mind, and without an address the tunnel cannot carry one
+# packet. usque runs with --no-iproute2 precisely because something else must configure
+# the device — when NDM will not, iproute2 still does (verified on a live router).
+setup_fn=$(extract_fn setup_ndm_iface "$S51")
+case "$setup_fn" in
+    *'ip addr add "$addr/32" dev "$ifc"'*) ok "a refused address is applied via iproute2" ;;
+    *) no "a refused address is applied via iproute2" "ip addr add" "absent" ;;
+esac
+# The fallback must come AFTER the NDM attempt, not instead of it: NDM also persists the
+# config and clamps MSS, so it stays the preferred path.
+ndm_ln=$(printf '%s\n' "$setup_fn" | grep -n 'ip address \$addr' | head -1 | cut -d: -f1)
+fb_ln=$(printf '%s\n' "$setup_fn" | grep -n 'ip addr add' | head -1 | cut -d: -f1)
+if [ -n "$ndm_ln" ] && [ -n "$fb_ln" ] && [ "$ndm_ln" -lt "$fb_ln" ]; then
+    ok "NDM is still tried first ($ndm_ln < $fb_ln)"
+else
+    no "NDM is still tried first" "ndm before fallback" "$ndm_ln/$fb_ln"
+fi
+# Saving the NDM config after an iproute2 fallback would persist a configuration NDM does
+# not have AND set the marker, so no later start would ever save the real one.
+case "$setup_fn" in
+    *'[ "$ndm_took" = 1 ] && [ ! -f "$WARP_DIR/.ndm-saved" ]'*)
+        ok "the config is saved only when NDM actually took it" ;;
+    *)  no "the config is saved only when NDM actually took it" "ndm_took guard" "absent" ;;
+esac
+# And the fallback being used must be said out loud — it does not survive a reboot.
+case "$setup_fn" in
+    *"via iproute2"*) ok "using the fallback is logged, with its caveat" ;;
+    *) no "using the fallback is logged, with its caveat" "a log line" "absent" ;;
+esac
+
 out=$(run_setup "")   # NDM silently refused: no address on the interface
 case "$out" in
     *"rc=0"*) no "FAILS when the address never landed" "non-zero rc" "$out" ;;

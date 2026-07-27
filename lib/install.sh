@@ -3102,6 +3102,13 @@ step_finalize() {
     # Shared TG-redirect helper lib (ipset + -w-locked rules) — must land
     # before the init script / NDM hook / watchdog that source it.
     deploy_critical_file "files/z2k-tg-redirect.sh"              "/opt/zapret2/z2k-tg-redirect.sh" || return 1
+    # TLS anchors for the relay, deployed BEFORE the init that exports SSL_CERT_FILE.
+    # Go uses the system trust store and some Keenetic firmwares carry no ISRG root at
+    # all, which kills the tunnel with "certificate signed by unknown authority" until
+    # someone runs `opkg install ca-certificates` — impossible on a router whose opkg is
+    # broken. Carrying the roots removes that dependency entirely.
+    mkdir -p "${ZAPRET2_DIR}/etc" 2>/dev/null
+    deploy_critical_file "files/etc/z2k-roots.pem"               "${ZAPRET2_DIR}/etc/z2k-roots.pem" || return 1
     deploy_critical_file "files/init.d/S98tg-tunnel"             "/opt/etc/init.d/S98tg-tunnel" || return 1
     deploy_critical_file "files/ndm/90-z2k-tg-redirect.sh"        "/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh" || return 1
     print_success "Keenetic NDM hook установлен (auto-restore iptables)"

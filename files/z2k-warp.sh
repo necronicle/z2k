@@ -103,6 +103,17 @@ WARP_PROBE_RETRY_WAIT="${WARP_PROBE_RETRY_WAIT:-3}"             # seconds betwee
 WARP_ENABLE_BUDGET="${WARP_ENABLE_BUDGET:-120}"
 # Hard iteration cap, independent of the clock — see the note in warp_enable.
 WARP_ENABLE_ATTEMPTS="${WARP_ENABLE_ATTEMPTS:-4}"
+# Endpoint variants, tried ONLY after a healthy device still carries no traffic — i.e.
+# the ISP is blocking Cloudflare's MASQUE endpoint, which no amount of restarting fixes.
+# Empty by default in every sense: nothing here runs, and no file is created, unless the
+# tunnel has already failed. A router whose tunnel comes up never touches this.
+#
+# Each entry is IP[:PORT]. Both were verified to reach "Tunnel established" from a real
+# Keenetic; 2408 and 4500 do not accept TCP at all (they are the WireGuard ports) and are
+# deliberately not listed — guessing candidates would waste the budget.
+WARP_ENDPOINTS="${WARP_ENDPOINTS:-188.114.98.1:443 188.114.96.1:443 162.159.198.2:8443}"
+WARP_ALT_CONF="${WARP_ALT_CONF:-$WARP_DIR/session.alt.conf}"
+WARP_ALT_PORT="${WARP_ALT_PORT:-$WARP_DIR/port}"
 WARP_FAIL_THRESHOLD="${WARP_FAIL_THRESHOLD:-3}"                 # consecutive failed ticks before failing open
 WARP_FAIL_STREAK="${WARP_FAIL_STREAK:-/tmp/z2k-warp-failstreak}"
 # Self-heal may install usque (see warp_selfheal) — cooldown-guarded, because the .ipk is
@@ -158,6 +169,38 @@ _warp_cooldown_ok() {
 # EVERY engine restart goes through here, so the reasons live in one place. Our init owns
 # stop/start cleanly, so this is now a plain restart — no more clearing the package's
 # usque.conf.run behind its back.
+# Build an endpoint variant and restart onto it. The ORIGINAL session.conf is only ever
+# READ — it holds the device key, and rewriting it is the one mistake here that would cost
+# a user their registration rather than merely a session. usque takes the variant with -c.
+warp_variant_apply() {
+    local spec="$1" ip port cur
+    ip=${spec%%:*}
+    port=${spec#*:}; [ "$port" = "$spec" ] && port=443
+    [ -s "$USQUE_SESSION" ] || return 1
+    cur=$(sed -n 's/.*"endpoint_h2_v4"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$USQUE_SESSION" | head -1)
+    [ -n "$cur" ] || return 1
+    # Substitute the ADDRESS ONLY, and verify the copy still looks like the original
+    # config: a mangled variant would take the tunnel down for a reason nobody could see.
+    sed "s/$cur/$ip/g" "$USQUE_SESSION" > "$WARP_ALT_CONF.tmp" 2>/dev/null || return 1
+    if ! grep -q "\"endpoint_h2_v4\"[[:space:]]*:[[:space:]]*\"$ip\"" "$WARP_ALT_CONF.tmp" \
+       || ! grep -q '"private_key"' "$WARP_ALT_CONF.tmp"; then
+        rm -f "$WARP_ALT_CONF.tmp"; return 1
+    fi
+    mv "$WARP_ALT_CONF.tmp" "$WARP_ALT_CONF" 2>/dev/null || return 1
+    printf '%s' "$port" > "$WARP_ALT_PORT" 2>/dev/null
+    _wlog "пробую другой адрес Cloudflare: $ip:$port"
+    warp_usque_restart
+}
+
+# Back to stock. Called when no variant helped, so a router is never left pinned to an
+# endpoint that did not work either.
+warp_variant_clear() {
+    [ -f "$WARP_ALT_CONF" ] || [ -f "$WARP_ALT_PORT" ] || return 0
+    rm -f "$WARP_ALT_CONF" "$WARP_ALT_PORT" 2>/dev/null
+    _wlog "ни один запасной адрес не помог — возвращаю штатный"
+    warp_usque_restart
+}
+
 warp_usque_restart() {
     [ -x "$USQUE_INIT" ] || return 1
     "$USQUE_INIT" restart >/dev/null 2>&1
@@ -206,8 +249,30 @@ WARP_LIVE_WHY=""
 # meaning of a function selfheal calls on every tick: a momentarily missing pidof would
 # have read as "dead" and could have torn routing down. The verdict stays exactly what it
 # always was (the probe), and the explanation is separate.
+# The ENGINE's own last words. Our checks can only get as far as "the device is fine and
+# data still does not flow" — why is known only to usque, and it says so plainly:
+#     Establishing MASQUE connection to 162.159.198.2:443
+#     Connected to MASQUE server
+#     Tunnel connection lost: ... EOF. Reconnecting...
+#     Tunnel idle. Waiting for outbound activity before reconnecting...
+# We already capture that output (the supervisor appends it to this log). Not showing it
+# meant every "device is up, traffic does not flow" report still needed one more round
+# trip to the user, which is the whole problem this diagnostics work exists to remove.
+#
+# "Hop Limit too small" is filtered: it is multicast (mDNS/SSDP, TTL=1 by standard)
+# hitting a MULTICAST-flagged tun, it appears on perfectly healthy tunnels, and it repeats
+# often enough to bury the one line that matters.
+WARP_ENGINE_LOG="${WARP_ENGINE_LOG:-/tmp/z2k-log/z2k-warp.log}"
+warp_engine_tail() {
+    [ -f "$WARP_ENGINE_LOG" ] || return 0
+    grep -v '^\[z2k-warp\]' "$WARP_ENGINE_LOG" 2>/dev/null \
+        | grep -v 'Hop Limit too small' \
+        | sed -n 's/[[:space:]]*$//; /./p' \
+        | tail -1
+}
+
 warp_explain_dead() {
-    local rc="$1" body="$2"
+    local rc="$1" body="$2" eng
     if ! ip link show "$WARP_IFACE" >/dev/null 2>&1; then
         printf 'интерфейс %s не существует — usque не создал устройство' "$WARP_IFACE"; return 0
     fi
@@ -220,14 +285,21 @@ warp_explain_dead() {
     if ! warp_usque_running; then
         printf 'движок usque не запущен'; return 0
     fi
+    # From here the device, the address, the link and the engine process are all fine, so
+    # the answer is in what the engine is doing — append its last line.
+    eng=$(warp_engine_tail)
     if [ "$rc" != 0 ]; then
         # 28 = timed out, 6/7 = could not resolve/connect. Naming the code is what turns
         # "not carrying traffic" into something answerable without asking for a log.
         printf 'проба через %s не прошла: curl rc=%s (28=таймаут %sс, 6/7=не достучался) — устройство есть, трафик через него не идёт' \
-               "$WARP_IFACE" "$rc" "$WARP_PROBE_TIMEOUT"; return 0
+               "$WARP_IFACE" "$rc" "$WARP_PROBE_TIMEOUT"
+        [ -n "$eng" ] && printf '; движок: %s' "$eng"
+        return 0
     fi
     if [ -z "$body" ]; then
-        printf 'проба через %s вернула пустой ответ — соединение есть, данных нет' "$WARP_IFACE"; return 0
+        printf 'проба через %s вернула пустой ответ — соединение есть, данных нет' "$WARP_IFACE"
+        [ -n "$eng" ] && printf '; движок: %s' "$eng"
+        return 0
     fi
     # We reached Cloudflare THROUGH the tunnel and it says the traffic is not WARP: the
     # interface works, the MASQUE session does not. Usually a dead registration.
@@ -541,7 +613,7 @@ warp_enable() {
     # to 0 when `date` is unavailable, so on such a box the deadline would never arrive and
     # enable would loop forever holding the webpanel request open. Caught by the test suite
     # hanging, which is exactly the failure a user would have seen.
-    local deadline now attempt=0 kicked=0
+    local deadline now attempt=0 kicked=0 vidx=0 cand=
     now=$(_warp_now 2>/dev/null || echo 0)
     deadline=$(( now + WARP_ENABLE_BUDGET ))
     while [ "$attempt" -lt "$WARP_ENABLE_ATTEMPTS" ]; do
@@ -583,12 +655,31 @@ warp_enable() {
             kicked=1
             _wlog "перезапускаю движок и пробую снова"
             warp_usque_restart
+        else
+            # The restart did not help. If the DEVICE is healthy and it is the data path
+            # that is dead, the endpoint itself is the suspect — that is the ISP blocking
+            # Cloudflare, and no further restarting will change it. Gated on the reason:
+            # rotating the endpoint when the problem is "no address" would waste the
+            # budget on the wrong layer.
+            case "$WARP_LIVE_WHY" in
+                *"проба через"*|*"WARP не активен"*)
+                    vidx=$((vidx + 1))
+                    # shellcheck disable=SC2086  # candidate list is deliberately split
+                    set -- $WARP_ENDPOINTS
+                    if [ "$vidx" -le "$#" ]; then
+                        eval "cand=\${$vidx}"
+                        warp_variant_apply "$cand" || _wlog "вариант $cand применить не удалось"
+                    fi
+                    ;;
+            esac
         fi
         sleep 3
     done
     # FINAL, and it is a no: routing stays off, traffic goes direct, and the reason is the
     # last thing the user reads.
     warp_pbr_down
+    # Never leave the router pinned to a variant that did not work either.
+    warp_variant_clear
     _wlog "туннель НЕ поднялся за ${WARP_ENABLE_BUDGET}с — режим включён, но трафик идёт напрямую"
     _wlog "причина: ${WARP_LIVE_WHY:-неизвестна}"
     return 2

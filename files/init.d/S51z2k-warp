@@ -211,10 +211,31 @@ setup_ndm_iface() {
     while [ "$w" -lt 10 ] && ! _addr_present "$ifc" "$addr"; do
         w=$((w + 1)); sleep 1
     done
+    local ndm_took=1
     if ! _addr_present "$ifc" "$addr"; then
-        log "NDM did not apply $addr to $nd — tunnel will carry nothing. Have: [$(ip -o addr show "$ifc" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | tr '\n' ' ')]"
+        # NDM refused or ignored it. Reporting and waiting is useless — the tunnel cannot
+        # carry a single packet without an address, waiting has never made NDM change its
+        # mind, and the field reports show it retrying to no effect until the budget runs
+        # out ("на opkgtun0 нет IPv4-адреса" on every attempt).
+        #
+        # usque runs with --no-iproute2 precisely because SOMETHING ELSE has to configure
+        # the device. NDM is the nice version of that — it also persists the config and
+        # clamps MSS. When it will not, iproute2 still will: verified on a live router that
+        # `ip addr add <addr>/32 dev opkgtunN` is accepted on the very device NDM manages.
+        ndm_took=0
+        log "NDM did not apply $addr to $nd — setting it directly. Have: [$(ip -o addr show "$ifc" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | tr '\n' ' ')]"
+        ip addr add "$addr/32" dev "$ifc" 2>/dev/null
+        ip link show "$ifc" 2>/dev/null | grep -qw UP || ip link set "$ifc" up 2>/dev/null
+        w=0
+        while [ "$w" -lt 5 ] && ! _addr_present "$ifc" "$addr"; do
+            w=$((w + 1)); sleep 1
+        done
+    fi
+    if ! _addr_present "$ifc" "$addr"; then
+        log "could not put $addr on $ifc at all — NDM refused and iproute2 failed too; tunnel will carry nothing. Have: [$(ip -o addr show "$ifc" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | tr '\n' ' ')]"
         return 1
     fi
+    [ "$ndm_took" = 0 ] && log "$addr is on $ifc via iproute2 (NDM does not hold it, so it will not survive a reboot — selfheal re-applies)"
 
     # `system configuration save` writes FLASH. It must never sit on the respawn path: a
     # degraded tunnel respawns for hours and would grind the router's flash down. Save once,
@@ -223,7 +244,10 @@ setup_ndm_iface() {
     # Deliberately AFTER the verification: creating the marker on a failed apply meant the
     # next start skipped the save entirely, so a router that failed once could never
     # persist a correct config afterwards.
-    if [ ! -f "$WARP_DIR/.ndm-saved" ]; then
+    # Only when NDM actually holds the config. Saving after an iproute2 fallback would
+    # write flash to persist a configuration NDM does not have, and worse, set the marker
+    # so no later start ever tries to save the real thing once NDM starts cooperating.
+    if [ "$ndm_took" = 1 ] && [ ! -f "$WARP_DIR/.ndm-saved" ]; then
         ndm "system configuration save"
         touch "$WARP_DIR/.ndm-saved" 2>/dev/null
     fi
@@ -365,9 +389,29 @@ start() {
         backoff=1
         while :; do
             t0=$(date +%s 2>/dev/null || echo 0)
+            # ENDPOINT VARIANT, if one was chosen. Both files are ABSENT by default, so a
+            # router whose tunnel works never takes this path and its behaviour is byte for
+            # byte what it was.
+            #
+            # usque has no flag for the endpoint IP — only -P for the port — and the IP
+            # comes from the config file. We therefore never touch $SESSION, which holds
+            # the device key and whose corruption would cost the registration: the variant
+            # is a COPY, selected with -c. Verified on a live router that both a different
+            # endpoint (188.114.98.1) and a different port (8443) reach
+            # "Tunnel established".
+            _cfg="$SESSION"
+            [ -s "$WARP_DIR/session.alt.conf" ] && _cfg="$WARP_DIR/session.alt.conf"
+            _pflag=""
+            _p=$(cat "$WARP_DIR/port" 2>/dev/null)
+            case "$_p" in
+                ''|*[!0-9]*) ;;
+                *) _pflag="-P $_p" ;;
+            esac
+            [ "$_cfg" = "$SESSION" ] || log "using endpoint variant config $(basename "$_cfg")${_pflag:+ $_pflag}"
+            # shellcheck disable=SC2086  # _pflag is deliberately word-split: empty = no flag
             GODEBUG=asyncpreemptoff=1 "$BIN" nativetun \
-                --config "$SESSION" --interface-name "$ifc" --no-iproute2 \
-                -s "$SNI" --http2 -k "$KEEPALIVE" </dev/null >> "$LOG" 2>&1 &
+                --config "$_cfg" --interface-name "$ifc" --no-iproute2 \
+                -s "$SNI" --http2 -k "$KEEPALIVE" $_pflag </dev/null >> "$LOG" 2>&1 &
             child=$!
             # Configure NDM once the tun netdev actually exists — never before.
             (
