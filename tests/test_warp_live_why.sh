@@ -48,7 +48,7 @@ extract_fn() {
 }
 
 FN="$TMP/fn.sh"
-{ grep -m1 "^WARP_ENGINE_LOG=" "$WARPSH"; extract_fn warp_engine_tail "$WARPSH"; echo; extract_fn warp_explain_dead "$WARPSH"; echo; extract_fn warp_tunnel_live "$WARPSH"; } > "$FN"
+{ grep -m1 "^WARP_ENGINE_LOG=" "$WARPSH"; extract_fn warp_engine_tail "$WARPSH"; echo; extract_fn warp_engine_connected "$WARPSH"; echo; extract_fn warp_explain_dead "$WARPSH"; echo; extract_fn warp_tunnel_live "$WARPSH"; } > "$FN"
 grep -q '^warp_tunnel_live()' "$FN" && ok "extracted warp_tunnel_live()" \
                                    || no "extracted warp_tunnel_live()" "a definition" "none"
 
@@ -285,6 +285,166 @@ case "$pline" in
     *'*[!0-9]*'*) ok "a non-numeric port is rejected" ;;
     *) no "a non-numeric port is rejected" "a digit guard" "$pline" ;;
 esac
+
+# --- 9d. our own log lines are not attributed to the engine -----------------
+# The init prefixes its lines with a DATE and then [z2k-warp], so anchoring the filter at
+# the start of the line let them through — a field log reported OUR "address applied via
+# iproute2" line as if the engine had said it.
+mk_log '2026/07/27 10:46:28 UTC Connected to MASQUE server' \
+       'Mon Jul 27 13:41:33 MSK 2026 [z2k-warp] 172.16.0.2 is on opkgtun0 via iproute2'
+case "$(tail_of)" in
+    *"[z2k-warp]"*) no "our own dated log lines are not shown as the engine's" "engine only" "$(tail_of)" ;;
+    *"Connected to MASQUE server"*) ok "our own dated log lines are not shown as the engine's" ;;
+    *) no "our own dated log lines are not shown as the engine's" "the engine line" "$(tail_of)" ;;
+esac
+
+# --- 9e. session state decides whether rotating the endpoint makes sense ----
+conn() { PATH="$BIN:$PATH" sh -c "WARP_ENGINE_LOG='$TMP/engine.log'; . '$FN'; warp_engine_connected; echo rc=\$?"; }
+mk_log '2026/07/27 10:46:28 UTC Connected to MASQUE server'
+case "$(conn)" in *rc=0*) ok "a connected session is recognised" ;;
+    *) no "a connected session is recognised" "rc=0" "$(conn)" ;; esac
+mk_log '2026/07/27 10:47:20 UTC Failed to connect tunnel: connect-ip: failed to send request'
+case "$(conn)" in *rc=1*) ok "a failed connect is recognised" ;;
+    *) no "a failed connect is recognised" "rc=1" "$(conn)" ;; esac
+# The LAST marker wins: a success from an hour ago must not mask a current failure.
+mk_log '2026/07/27 10:46:28 UTC Connected to MASQUE server' \
+       '2026/07/27 10:47:20 UTC Failed to connect tunnel: connect-ip: failed to send request'
+case "$(conn)" in *rc=1*) ok "a stale success does not mask a later failure" ;;
+    *) no "a stale success does not mask a later failure" "rc=1" "$(conn)" ;; esac
+mk_log '2026/07/27 10:47:20 UTC Failed to connect tunnel: x' \
+       '2026/07/27 10:48:00 UTC Connected to MASQUE server'
+case "$(conn)" in *rc=0*) ok "a later success wins over an earlier failure" ;;
+    *) no "a later success wins over an earlier failure" "rc=0" "$(conn)" ;; esac
+rm -f "$TMP/engine.log"
+case "$(conn)" in *rc=1*) ok "no log -> not considered connected" ;;
+    *) no "no log -> not considered connected" "rc=1" "$(conn)" ;; esac
+
+# ...and the enable path uses it, both to skip pointless rotation and to say what is
+# actually wrong. Rotating away from a working handshake produced "tls: handshake failure"
+# on the alternatives in the field — strictly worse than doing nothing.
+enable_fn3=$(extract_fn warp_enable "$WARPSH")
+case "$enable_fn3" in
+    *'if warp_engine_connected; then'*) ok "rotation is skipped when the session does establish" ;;
+    *) no "rotation is skipped when the session does establish" "the guard" "absent" ;;
+esac
+case "$enable_fn3" in
+    *"УСТАНАВЛИВАЕТСЯ, но трафик внутри него не проходит"*)
+        ok "the verdict distinguishes 'filtered inside' from 'never came up'" ;;
+    *)  no "the verdict distinguishes 'filtered inside' from 'never came up'" "the wording" "absent" ;;
+esac
+gc_ln=$(printf '%s\n' "$enable_fn3" | grep -n 'warp_engine_connected' | head -1 | cut -d: -f1)
+rot_ln=$(printf '%s\n' "$enable_fn3" | grep -n 'vidx=\$((vidx + 1))' | head -1 | cut -d: -f1)
+if [ -n "$gc_ln" ] && [ -n "$rot_ln" ] && [ "$gc_ln" -lt "$rot_ln" ]; then
+    ok "the session check runs before any rotation ($gc_ln < $rot_ln)"
+else
+    no "the session check runs before any rotation" "check first" "$gc_ln/$rot_ln"
+fi
+
+# --- 9f. re-registration: fenced, and never loses the old key ---------------
+# Upstream #73 (the same "tls: handshake failure" we saw) says a NEWLY GENERATED config
+# works, so this is worth trying — but it burns the device key, and losing a registration
+# to a guess is worse than the problem. Hence: keep the old one aside first, restore it if
+# the new one changes nothing, and only run at all when the session DOES establish and
+# still carries nothing (upstream #31 shows rotating addresses in that state does nothing).
+rr=$(extract_fn warp_reregister_guarded "$WARPSH")
+case "$rr" in
+    *'cp -f "$USQUE_SESSION" "$USQUE_SESSION.prev"'*) ok "the old registration is copied aside first" ;;
+    *) no "the old registration is copied aside first" "a backup" "absent" ;;
+esac
+# The backup must be taken BEFORE register runs, or there is nothing to go back to.
+bk=$(printf '%s\n' "$rr" | grep -n 'session.conf.prev\|USQUE_SESSION.prev' | head -1 | cut -d: -f1)
+rg=$(printf '%s\n' "$rr" | grep -n 'register --accept-tos' | head -1 | cut -d: -f1)
+if [ -n "$bk" ] && [ -n "$rg" ] && [ "$bk" -lt "$rg" ]; then
+    ok "the backup is taken before registering ($bk < $rg)"
+else
+    no "the backup is taken before registering" "backup first" "$bk/$rg"
+fi
+case "$rr" in
+    *'private_key'*) ok "a truncated or key-less new config is rejected" ;;
+    *) no "a truncated or key-less new config is rejected" "a validation" "absent" ;;
+esac
+case "$rr" in
+    *_warp_cooldown_ok*) ok "re-registration respects the enrollment cooldown" ;;
+    *) no "re-registration respects the enrollment cooldown" "the cooldown" "absent" ;;
+esac
+rb=$(extract_fn warp_reregister_rollback "$WARPSH")
+case "$rb" in
+    *'cp -f "$USQUE_SESSION.prev" "$USQUE_SESSION"'*) ok "a rollback restores the previous registration" ;;
+    *) no "a rollback restores the previous registration" "the restore" "absent" ;;
+esac
+enable_fn4=$(extract_fn warp_enable "$WARPSH")
+case "$enable_fn4" in
+    *'reregged=1'*) ok "re-registration is attempted at most once per enable" ;;
+    *) no "re-registration is attempted at most once per enable" "the once-guard" "absent" ;;
+esac
+case "$enable_fn4" in
+    *warp_reregister_rollback*) ok "a final failure rolls the registration back" ;;
+    *) no "a final failure rolls the registration back" "the rollback call" "absent" ;;
+esac
+# It must be reached ONLY through the connected branch: re-registering a tunnel that never
+# connects burns a key for nothing.
+conn_ln=$(printf '%s\n' "$enable_fn4" | grep -n 'if warp_engine_connected; then' | head -1 | cut -d: -f1)
+rr_ln=$(printf '%s\n' "$enable_fn4" | grep -n 'warp_reregister_guarded' | head -1 | cut -d: -f1)
+if [ -n "$conn_ln" ] && [ -n "$rr_ln" ] && [ "$conn_ln" -lt "$rr_ln" ]; then
+    ok "re-registration only runs when the session establishes ($conn_ln < $rr_ln)"
+else
+    no "re-registration only runs when the session establishes" "gated" "$conn_ln/$rr_ln"
+fi
+# A success must drop the kept-aside copy, or it would be restored on some later run.
+case "$enable_fn4" in
+    *'rm -f "$USQUE_SESSION.prev"'*) ok "success discards the kept-aside registration" ;;
+    *) no "success discards the kept-aside registration" "the cleanup" "absent" ;;
+esac
+
+# --- 9g. re-registration, BEHAVIOURALLY: the old key always comes back ------
+# The checks above are structural. This one runs the function against a real file with a
+# stubbed `usque register`, because "the backup is restored" is the property that decides
+# whether a guess costs a user their registration. The first version of this check stubbed
+# the wrong argument ($3 is "--config", the path is $4), so nothing was ever written and
+# all of it passed while testing nothing.
+RRW="$TMP/rr"; mkdir -p "$RRW/bin"
+printf '{\n  "private_key": "ORIGINAL-KEY",\n  "endpoint_h2_v4": "162.159.198.2"\n}\n' > "$RRW/session.conf"
+rr_orig=$(md5of() { :; }; cksum < "$RRW/session.conf")
+{
+    echo '_wlog() { :; }'
+    echo 'warp_usque_restart() { return 0; }'
+    echo '_warp_cooldown_ok() { [ -z "$RR_COOLDOWN_BLOCK" ]; }'
+    extract_fn warp_reregister_guarded  "$WARPSH"
+    extract_fn warp_reregister_rollback "$WARPSH"
+} > "$RRW/fns.sh"
+rr_drive() { sh -c ". '$RRW/fns.sh'; USQUE_BIN='$RRW/bin/usque'; USQUE_SESSION='$RRW/session.conf'; WARP_REG_STAMP='$RRW/st'; WARP_REG_COOLDOWN=0; $1" 2>&1; }
+rr_same() { [ "$rr_orig" = "$(cksum < "$RRW/session.conf")" ]; }
+
+# A new config with no key must be rejected and the old one put back.
+printf '#!/bin/sh\n[ "$1" = register ] && { printf broken > "$4"; exit 0; }\nexit 1\n' > "$RRW/bin/usque"
+chmod +x "$RRW/bin/usque"
+out=$(rr_drive 'warp_reregister_guarded; echo "rc=$?"')
+case "$out" in *rc=1*) ok "a key-less new registration is refused" ;;
+    *) no "a key-less new registration is refused" "rc=1" "$out" ;; esac
+rr_same && ok "...and the original registration is untouched" \
+         || no "...and the original registration is untouched" "unchanged" "changed"
+[ -f "$RRW/session.conf.prev" ] && no "...and no backup is left behind" "removed" "present" \
+                                || ok "...and no backup is left behind"
+
+# A valid new config is applied — and rolled back byte for byte when it does not help.
+printf '#!/bin/sh\n[ "$1" = register ] && { printf "{\\"private_key\\": \\"NEW-KEY\\"}" > "$4"; exit 0; }\nexit 1\n' > "$RRW/bin/usque"
+out=$(rr_drive 'warp_reregister_guarded; echo "rc=$?"')
+case "$out" in *rc=0*) ok "a valid new registration is accepted" ;;
+    *) no "a valid new registration is accepted" "rc=0" "$out" ;; esac
+grep -q NEW-KEY "$RRW/session.conf" && ok "...and actually replaces the config" \
+                                    || no "...and actually replaces the config" "NEW-KEY" "$(cat "$RRW/session.conf")"
+rr_drive 'warp_reregister_rollback' >/dev/null
+rr_same && ok "rollback restores the previous registration byte for byte" \
+         || no "rollback restores the previous registration byte for byte" "the original" "$(cat "$RRW/session.conf")"
+[ -f "$RRW/session.conf.prev" ] && no "rollback clears the backup" "removed" "present" \
+                                || ok "rollback clears the backup"
+
+# Under cooldown nothing may be touched at all — that guard is what stops a blocked
+# router burning a device key on every attempt.
+out=$(sh -c ". '$RRW/fns.sh'; RR_COOLDOWN_BLOCK=1; USQUE_BIN='$RRW/bin/usque'; USQUE_SESSION='$RRW/session.conf'; warp_reregister_guarded; echo rc=\$?" 2>&1)
+case "$out" in *rc=1*) ok "the cooldown blocks re-registration" ;;
+    *) no "the cooldown blocks re-registration" "rc=1" "$out" ;; esac
+rr_same && ok "...without touching the config" || no "...without touching the config" "unchanged" "changed"
 
 # --- 10. the caller actually prints the reason ------------------------------
 enable_fn=$(extract_fn warp_enable "$WARPSH")

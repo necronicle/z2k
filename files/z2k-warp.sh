@@ -265,10 +265,34 @@ WARP_LIVE_WHY=""
 WARP_ENGINE_LOG="${WARP_ENGINE_LOG:-/tmp/z2k-log/z2k-warp.log}"
 warp_engine_tail() {
     [ -f "$WARP_ENGINE_LOG" ] || return 0
-    grep -v '^\[z2k-warp\]' "$WARP_ENGINE_LOG" 2>/dev/null \
+    # Anywhere on the line, not just at the start: our init prefixes its own log with a
+    # date, so "^\[z2k-warp\]" let those through and a field log ended up reporting OUR
+    # line as if the engine had said it.
+    grep -v '\[z2k-warp\]' "$WARP_ENGINE_LOG" 2>/dev/null \
         | grep -v 'Hop Limit too small' \
         | sed -n 's/[[:space:]]*$//; /./p' \
         | tail -1
+}
+
+# Did the engine actually establish a MASQUE session? Decided by the LAST of the
+# success/failure markers, so a stale success from an hour ago cannot mask a current
+# failure.
+#
+# This matters because rotating the endpoint is only sensible when the endpoint is the
+# problem. A field log showed the stock endpoint reporting "Connected to MASQUE server"
+# while the probe still timed out — the session was up and the traffic inside it was being
+# filtered — and rotating away from it produced "tls: handshake failure" on the
+# alternatives, i.e. we made a working handshake worse for no reason.
+warp_engine_connected() {
+    local last
+    [ -f "$WARP_ENGINE_LOG" ] || return 1
+    last=$(grep -v '\[z2k-warp\]' "$WARP_ENGINE_LOG" 2>/dev/null \
+           | grep -E 'Connected to MASQUE server|Tunnel established|Failed to connect tunnel|Tunnel connection lost' \
+           | tail -1)
+    case "$last" in
+        *"Connected to MASQUE server"*|*"Tunnel established"*) return 0 ;;
+    esac
+    return 1
 }
 
 warp_explain_dead() {
@@ -613,7 +637,7 @@ warp_enable() {
     # to 0 when `date` is unavailable, so on such a box the deadline would never arrive and
     # enable would loop forever holding the webpanel request open. Caught by the test suite
     # hanging, which is exactly the failure a user would have seen.
-    local deadline now attempt=0 kicked=0 vidx=0 cand=
+    local deadline now attempt=0 kicked=0 vidx=0 cand= reregged=0
     now=$(_warp_now 2>/dev/null || echo 0)
     deadline=$(( now + WARP_ENABLE_BUDGET ))
     while [ "$attempt" -lt "$WARP_ENABLE_ATTEMPTS" ]; do
@@ -642,6 +666,9 @@ warp_enable() {
         if warp_tunnel_live_retry; then
             _warp_streak_set 0
             warp_pbr_up
+            # Whatever got us here is now the working configuration; the kept-aside
+            # registration is no longer needed.
+            rm -f "$USQUE_SESSION.prev" 2>/dev/null
             _wlog "готово: туннель работает (warp=on через $WARP_IFACE, ipset=$WARP_IPSET)"
             return 0
         fi
@@ -663,6 +690,24 @@ warp_enable() {
             # budget on the wrong layer.
             case "$WARP_LIVE_WHY" in
                 *"проба через"*|*"WARP не активен"*)
+                    # Only when the ENDPOINT is the suspect. If the engine reports a
+                    # established MASQUE session and the probe still fails, the endpoint
+                    # is reachable and the traffic inside the tunnel is what is being
+                    # filtered — rotating then swapped a working handshake for
+                    # "tls: handshake failure" on the alternatives, observed in the field.
+                    if warp_engine_connected; then
+                        # The endpoint is reachable and the tunnel still carries nothing.
+                        # Rotating addresses here made things worse in the field; the one
+                        # thing upstream reports as helping is a fresh registration, so
+                        # try that instead — once, with the old one kept aside.
+                        _wlog "сессия к Cloudflare устанавливается, значит адрес ни при чём — запасные не пробую"
+                        if [ "$reregged" = 0 ]; then
+                            reregged=1
+                            warp_reregister_guarded || true
+                        fi
+                        sleep 3
+                        continue
+                    fi
                     vidx=$((vidx + 1))
                     # shellcheck disable=SC2086  # candidate list is deliberately split
                     set -- $WARP_ENDPOINTS
@@ -680,7 +725,18 @@ warp_enable() {
     warp_pbr_down
     # Never leave the router pinned to a variant that did not work either.
     warp_variant_clear
-    _wlog "туннель НЕ поднялся за ${WARP_ENABLE_BUDGET}с — режим включён, но трафик идёт напрямую"
+    # The fresh registration did not help either — leave the user with the one they had.
+    warp_reregister_rollback
+    if warp_engine_connected; then
+        # The distinction that decides what the user should DO: the tunnel builds fine and
+        # the traffic inside it does not pass. That is the provider filtering WARP itself,
+        # and nothing on this router changes it — saying "не поднялся" would send them
+        # chasing a local fault that does not exist.
+        _wlog "туннель к Cloudflare УСТАНАВЛИВАЕТСЯ, но трафик внутри него не проходит — его режет провайдер"
+        _wlog "менять адреса и перезапускать бесполезно; режим включён, трафик идёт напрямую"
+    else
+        _wlog "туннель НЕ поднялся за ${WARP_ENABLE_BUDGET}с — режим включён, но трафик идёт напрямую"
+    fi
     _wlog "причина: ${WARP_LIVE_WHY:-неизвестна}"
     return 2
 }
@@ -743,6 +799,45 @@ warp_register_direct() {
     _wlog "direct enrollment OK — restarting usque"
     warp_usque_restart
     return 0
+}
+
+# LAST-RESORT re-enrollment, for the one shape where upstream says it helps: the session
+# establishes ("Connected to MASQUE server") and nothing passes through it. usque's author
+# on issue #73 — same "tls: handshake failure" we saw — reports it works with a NEWLY
+# GENERATED config, and notes Cloudflare rolled out PQC crypto that older registrations
+# predate.
+#
+# This burns the device key, so it is fenced hard: the previous registration is copied
+# aside FIRST and put back if the new one does not fix anything, the existing enrollment
+# cooldown applies, and the caller runs it at most once. Losing a registration to a guess
+# would be a worse outcome than the problem.
+warp_reregister_guarded() {
+    [ -x "$USQUE_BIN" ] || return 1
+    [ -s "$USQUE_SESSION" ] || return 1
+    _warp_cooldown_ok "$WARP_REG_STAMP" "$WARP_REG_COOLDOWN" || {
+        _wlog "перерегистрация под кулдауном — пропускаю"; return 1; }
+    cp -f "$USQUE_SESSION" "$USQUE_SESSION.prev" 2>/dev/null || return 1
+    _wlog "сессия встаёт, но трафика нет — пробую свежую регистрацию (прежняя сохранена)"
+    "$USQUE_BIN" register --accept-tos --config "$USQUE_SESSION" >/dev/null 2>&1
+    # A truncated or key-less config is worse than the old one: put it back at once.
+    if [ ! -s "$USQUE_SESSION" ] || ! grep -q '"private_key"' "$USQUE_SESSION" 2>/dev/null; then
+        _wlog "регистрация не удалась — возвращаю прежнюю"
+        cp -f "$USQUE_SESSION.prev" "$USQUE_SESSION" 2>/dev/null
+        rm -f "$USQUE_SESSION.prev"
+        return 1
+    fi
+    warp_usque_restart
+    return 0
+}
+
+# Put the previous registration back when the fresh one did not help either — the user is
+# then exactly where they started rather than one device key poorer.
+warp_reregister_rollback() {
+    [ -s "$USQUE_SESSION.prev" ] || return 0
+    cp -f "$USQUE_SESSION.prev" "$USQUE_SESSION" 2>/dev/null
+    rm -f "$USQUE_SESSION.prev"
+    _wlog "свежая регистрация не помогла — вернул прежнюю"
+    warp_usque_restart
 }
 
 # Enrollment gate. No session.conf means the device was never enrolled, so the tunnel can't
