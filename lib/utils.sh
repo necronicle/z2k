@@ -142,6 +142,52 @@ _z2k_curl_etag() {
     esac
 }
 
+# z2k_sha256_file FILE -> hex digest on stdout, empty if it cannot be computed.
+# busybox ships sha256sum on Entware and openssl-util is a declared dependency,
+# so in practice one of these always exists.
+z2k_sha256_file() {
+    [ -f "$1" ] || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
+    else
+        return 1
+    fi
+}
+
+# _z2k_verify_fetched DEST — gate a just-fetched file against the digest the caller
+# expects, passed in $Z2K_FETCH_SHA256. Unset (the common case) = accept.
+#
+# Why this exists: every hop below terminates TLS somewhere we do not control
+# (jsdelivr, gh-proxy) or answers from a cache (a 304 leaves whatever is already
+# on disk). Without this the transport decides what gets installed, and a mirror
+# that is merely STALE is indistinguishable from one that is fresh — the router
+# silently keeps an old file while the version tag moves forward. That is not
+# hypothetical: it stranded a user on a revision from two days earlier across
+# five consecutive releases (issue #26), and no log anywhere showed a failure.
+#
+# On mismatch the local copy AND its etag are destroyed. Dropping the etag is
+# the load-bearing half: leaving it would let the next hop send If-None-Match,
+# collect a 304, and re-accept the very bytes we just rejected.
+#
+# If no digest tool exists we accept and warn rather than fail: refusing every
+# update on such a router is a worse outcome than the status quo it inherits.
+_z2k_verify_fetched() {
+    local dest="$1" want="${Z2K_FETCH_SHA256:-}" got
+    [ -n "$want" ] || return 0
+    got=$(z2k_sha256_file "$dest" 2>/dev/null)
+    if [ -z "$got" ]; then
+        printf '[z2k_fetch] нечем посчитать sha256 — проверка содержимого пропущена\n' >&2
+        return 0
+    fi
+    [ "$got" = "$want" ] && return 0
+    printf '[z2k_fetch] содержимое не совпало с ожидаемым (ждали %.12s…, получили %.12s…) — источник отклонён\n' \
+        "$want" "$got" >&2
+    rm -f "$dest" "${dest}.etag" 2>/dev/null
+    return 1
+}
+
 # Если z2k_fetch уже определён (из z2k.sh — там богатая версия с DoH layer 5
 # и chunked range-fallback), не затираем — иначе проигрываем фичи каждый раз
 # когда utils.sh sourcится после z2k.sh. Локальная версия ниже остаётся как
@@ -180,12 +226,15 @@ z2k_fetch() {
 
     # Layer 0: VPS SNI-passthrough egress — первичный путь для github (RU
     # блокирует прямые github-IP). На сбой тихо валимся в цепочку ниже.
+    # Each hop is gated by _z2k_verify_fetched: a mirror that answers with the wrong
+    # bytes (stale cache, truncated body) is treated exactly like one that did
+    # not answer at all, and we move to the next.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
-    [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && return 0
+    [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && _z2k_verify_fetched "$dest" && return 0
 
-    if _z2k_curl_etag "$url" "$dest"; then return 0; fi
-    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
-    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+    if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest"; then return 0; fi
+    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && return 0
+    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" && return 0
 
     # All three normal mirrors fell through. Bump a cross-call streak counter:
     # a SINGLE transient fall-through must NOT trigger the ndmc DNS override,
@@ -220,9 +269,9 @@ z2k_fetch() {
         done
         if [ "$resolved_any" = "1" ]; then
             sleep 1
-            if _z2k_curl_etag "$url" "$dest"; then return 0; fi
-            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
-            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+            if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest"; then return 0; fi
+            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && return 0
+            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" && return 0
         fi
     fi
 

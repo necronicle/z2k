@@ -435,6 +435,45 @@ _z2k_curl_doh_chunked() {
     return 1
 }
 
+# _z2k_manifest_sha REPO_PATH -> expected sha256 at HEAD, empty if unknown.
+#
+# Reads the files_sha256 map published in UPDATES.json (see
+# scripts/gen_file_hashes.sh). Empty answer = nothing to check against, which is
+# also what every manifest published before this existed will give.
+_z2k_manifest_sha() {
+    local _ms_path="$1" _ms_esc
+    [ -n "${Z2K_HASH_MANIFEST:-}" ] && [ -f "$Z2K_HASH_MANIFEST" ] || return 0
+    _ms_esc=$(printf '%s' "$_ms_path" | sed 's/[][\.*^$/]/\\&/g')
+    tr -d '\n' < "$Z2K_HASH_MANIFEST" 2>/dev/null \
+        | sed -n 's/.*"files_sha256"[[:space:]]*:[[:space:]]*{\([^}]*\)}.*/\1/p' \
+        | tr ',' '\n' \
+        | sed -n "s/^[[:space:]]*\"${_ms_esc}\"[[:space:]]*:[[:space:]]*\"\([0-9a-fA-F]\{64\}\)\".*/\1/p" \
+        | head -1
+}
+
+# Pull the manifest that every later download is checked against. It is the one
+# thing we cannot verify against anything else, so it is always fetched fresh:
+# its etag sidecar is dropped first, because a stale manifest would happily
+# vouch for stale files and put us right back where issue #26 started.
+#
+# Failure is not fatal — we simply install without content verification, exactly
+# as every release before this one did.
+z2k_fetch_manifest_hashes() {
+    local _hm_dest="${WORK_DIR}/UPDATES.json"
+    Z2K_HASH_MANIFEST=""
+    export Z2K_HASH_MANIFEST
+    mkdir -p "$WORK_DIR" 2>/dev/null || return 0
+    rm -f "$_hm_dest" "${_hm_dest}.etag" 2>/dev/null
+    if z2k_fetch "${GITHUB_RAW}/UPDATES.json" "$_hm_dest" 2>/dev/null && [ -s "$_hm_dest" ]; then
+        Z2K_HASH_MANIFEST="$_hm_dest"
+        export Z2K_HASH_MANIFEST
+        print_info "Манифест хешей загружен — содержимое файлов будет проверено" 2>/dev/null || true
+    else
+        print_warning "Манифест хешей недоступен — установка пойдёт без проверки содержимого" 2>/dev/null || true
+    fi
+    return 0
+}
+
 z2k_fetch() {
     local src="$1"
     local dest="$2"
@@ -445,6 +484,20 @@ z2k_fetch() {
         /*) url="${GITHUB_RAW}${src}" ;;
         *)  url="${GITHUB_RAW}/${src}" ;;
     esac
+
+    # Content gate. `local` so the lookup below cannot leak into the next call:
+    # a digest left set would be checked against a different file and reject it.
+    # An explicit Z2K_FETCH_SHA256 from the caller always wins; otherwise, for
+    # URLs inside our own repo, take the expected digest from the manifest. URLs
+    # pointing anywhere else (release assets, foreign list repos) get no digest
+    # and are fetched exactly as before. UPDATES.json itself is absent from the
+    # map by construction, so the trust root never tries to verify itself.
+    local Z2K_FETCH_SHA256="${Z2K_FETCH_SHA256:-}"
+    if [ -z "$Z2K_FETCH_SHA256" ] && [ -n "${Z2K_HASH_MANIFEST:-}" ]; then
+        case "$url" in
+            "${GITHUB_RAW}/"*) Z2K_FETCH_SHA256=$(_z2k_manifest_sha "${url#"${GITHUB_RAW}/"}") ;;
+        esac
+    fi
 
     # Derive jsdelivr + gh-proxy mirror URLs. Coverage:
     #   raw.githubusercontent.com — full mirroring via jsdelivr CDN +
@@ -476,6 +529,40 @@ z2k_fetch() {
         return 0
     }
 
+    # Helper: a layer only counts as successful if it delivered the bytes the
+    # caller asked for. $Z2K_FETCH_SHA256 unset (the common case) = accept.
+    #
+    # Every layer below either terminates TLS somewhere we do not control
+    # (jsdelivr, gh-proxy) or can answer 304 from a cache, leaving whatever is
+    # already on disk. Without this check the transport decides what gets
+    # installed and a merely STALE mirror is indistinguishable from a fresh one:
+    # the file silently stays old while the version tag moves forward. That is
+    # what pinned a user to a two-day-old revision across five releases with no
+    # error anywhere (issue #26).
+    #
+    # On mismatch the copy AND its etag are dropped — keeping the etag would let
+    # the next layer send If-None-Match, take a 304, and re-accept the bytes we
+    # just rejected. No digest tool => accept with a warning, because refusing
+    # every update on such a router is worse than the state it is already in.
+    _z2k_verify_fetched() {
+        local _vf_dest="$1" _vf_want="${Z2K_FETCH_SHA256:-}" _vf_got=""
+        [ -n "$_vf_want" ] || return 0
+        if command -v sha256sum >/dev/null 2>&1; then
+            _vf_got=$(sha256sum "$_vf_dest" 2>/dev/null | awk '{print $1}')
+        elif command -v openssl >/dev/null 2>&1; then
+            _vf_got=$(openssl dgst -sha256 "$_vf_dest" 2>/dev/null | awk '{print $NF}')
+        fi
+        if [ -z "$_vf_got" ]; then
+            printf '[z2k_fetch] нечем посчитать sha256 — проверка содержимого пропущена\n' >&2
+            return 0
+        fi
+        [ "$_vf_got" = "$_vf_want" ] && return 0
+        printf '[z2k_fetch] %s: содержимое не то (ждали %.12s…, получили %.12s…) — источник отклонён\n' \
+            "${_vf_dest##*/}" "$_vf_want" "$_vf_got" >&2
+        rm -f "$_vf_dest" "${_vf_dest}.etag" 2>/dev/null
+        return 1
+    }
+
     # --- Layer 0: VPS SNI-passthrough egress (ПЕРВИЧНЫЙ путь для github) ---
     # RU блокирует github Fastly anycast по IP → и прямой fetch, и DoH-пины на
     # реальные github-IP валятся по всей стране. Наш VPS форвардит реальный
@@ -485,7 +572,8 @@ z2k_fetch() {
     # деградирует до сегодняшнего поведения, а не в жёсткий фейл). Транзиентно:
     # per-request --resolve, никаких постоянных записей в конфиг.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
-    if [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve"; then
+    if [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve" \
+       && _z2k_verify_fetched "$dest"; then
         _z2k_fetch_ok; return 0
     fi
 
@@ -498,9 +586,9 @@ z2k_fetch() {
     # path, not when it just happened to win once.
     : "${Z2K_FETCH_DOH_THRESHOLD:=2}"
     if [ "${Z2K_FETCH_PREFER_DOH:-0}" = "1" ]; then
-        if _z2k_curl_doh "$url" "$dest"; then return 0; fi
-        [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest" && return 0
-        [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest" && return 0
+        if _z2k_curl_doh "$url" "$dest" && _z2k_verify_fetched "$dest"; then return 0; fi
+        [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && return 0
+        [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" && return 0
         # DoH тоже не сработал — на всякий case ещё попробуем normal layers
     fi
 
@@ -508,9 +596,9 @@ z2k_fetch() {
     # пустое body ~10× быстрее чем полный GET. Etag sidecar ключован по
     # $dest — переключение зеркала форсирует один full re-fetch
     # (у raw.github и jsdelivr разные etag-ы), это приемлемо.
-    if _z2k_curl_etag "$url" "$dest"; then _z2k_fetch_ok; return 0; fi
-    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && { _z2k_fetch_ok; return 0; }
-    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && { _z2k_fetch_ok; return 0; }
+    if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest"; then _z2k_fetch_ok; return 0; fi
+    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && { _z2k_fetch_ok; return 0; }
+    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" && { _z2k_fetch_ok; return 0; }
 
     # All three normal mirrors fell through. This is the signal the user
     # might have a poisoned/blocked channel — but ONE failure can also be
@@ -554,9 +642,9 @@ z2k_fetch() {
         done
         if [ "$resolved_any" = "1" ]; then
             sleep 1
-            if _z2k_curl_etag "$url" "$dest"; then _z2k_fetch_ok; return 0; fi
-            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && { _z2k_fetch_ok; return 0; }
-            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && { _z2k_fetch_ok; return 0; }
+            if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest"; then _z2k_fetch_ok; return 0; fi
+            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && { _z2k_fetch_ok; return 0; }
+            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" && { _z2k_fetch_ok; return 0; }
         fi
     fi
 
@@ -577,9 +665,9 @@ z2k_fetch() {
             export Z2K_FETCH_PREFER_DOH
         fi
     }
-    if _z2k_curl_doh "$url" "$dest"; then _z2k_doh_won; return 0; fi
-    if [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest"; then _z2k_doh_won; return 0; fi
-    if [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest"; then _z2k_doh_won; return 0; fi
+    if _z2k_curl_doh "$url" "$dest" && _z2k_verify_fetched "$dest"; then _z2k_doh_won; return 0; fi
+    if [ -n "$jsdelivr" ] && _z2k_curl_doh "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest"; then _z2k_doh_won; return 0; fi
+    if [ -n "$gh_proxy" ] && _z2k_curl_doh "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest"; then _z2k_doh_won; return 0; fi
 
     return 1
 }
@@ -1532,6 +1620,9 @@ main() {
 
     # Скачать модули (если нужно — иначе используем кэшированные)
     if [ "$_need_fetch" = "1" ]; then
+        # Manifest first: it is the trust root every download below is checked
+        # against, so it has to be on disk before the first of them.
+        z2k_fetch_manifest_hashes
         download_modules
     fi
 

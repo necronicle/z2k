@@ -182,6 +182,30 @@ au_entry_changed_files() {
         | tr ',' '\n' | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | grep -v '^$' || true
 }
 
+# au_manifest_file_sha MANIFEST REPO_PATH -> expected sha256 of that file at
+# HEAD, empty when the manifest carries no digest for it.
+#
+# The map lives at the top level of UPDATES.json (see scripts/gen_file_hashes.sh)
+# rather than per-history-entry because we always download from branch HEAD:
+# the right expectation is "what HEAD holds", not "what some entry in the window
+# shipped". Manifests published before this existed simply have no map, and
+# every lookup returns empty — verification is skipped, behaviour unchanged.
+#
+# `tr -d '\n'` first: the map is pretty-printed one pair per line, and folding
+# it to a single line lets [^}] stop exactly at the end of the (flat, no nested
+# objects) map.
+au_manifest_file_sha() {
+    local manifest="$1" path="$2" esc
+    [ -f "$manifest" ] || return 0
+    # Escape the path for use inside a sed regex — paths carry dots and slashes.
+    esc=$(printf '%s' "$path" | sed 's/[][\.*^$/]/\\&/g')
+    tr -d '\n' < "$manifest" 2>/dev/null \
+        | sed -n 's/.*"files_sha256"[[:space:]]*:[[:space:]]*{\([^}]*\)}.*/\1/p' \
+        | tr ',' '\n' \
+        | sed -n "s/^[[:space:]]*\"${esc}\"[[:space:]]*:[[:space:]]*\"\([0-9a-fA-F]\{64\}\)\".*/\1/p" \
+        | head -1
+}
+
 # ------------------------------------------------------------ decide ---
 
 # au_decide INSTALLED_TAG MANIFEST_PATH
@@ -586,18 +610,37 @@ au_apply_patch() {
         return 0
     fi
 
+    # Start from an EMPTY staging dir. It used to be mkdir -p only, never
+    # cleaned, so a file staged by an earlier run survived here alongside its
+    # .etag sidecar — and the next run could present that stale pair to a
+    # mirror, take the 304, count it a successful download, and install the old
+    # file while the version tag moved forward. Only our subdir: the parent also
+    # holds .install_rc and the fetched installer, which the reinstall path is
+    # in the middle of using.
+    rm -rf "$Z2K_AU_TMP_DIR/dl"
     mkdir -p "$Z2K_AU_TMP_DIR/dl"
     local saved_flags="$Z2K_AU_TMP_DIR/feature-flags.backup"
     au_save_feature_flags "$saved_flags"
 
     # 1) download all files first to staging — atomic-ish: if any download
     # fails, we abort before touching live files.
-    local repo_path stage _dl_rc deleted_paths=""
+    local repo_path stage _dl_rc deleted_paths="" _want_sha
     while IFS= read -r repo_path; do
         [ -z "$repo_path" ] && continue
         stage="$Z2K_AU_TMP_DIR/dl/$(echo "$repo_path" | tr '/' '_')"
+        # Hand the expected digest to z2k_fetch: a mirror answering with the
+        # wrong bytes is then skipped exactly like one that did not answer, and
+        # if every mirror is stale the download fails outright instead of
+        # installing old content under a new version number.
+        _want_sha=$(au_manifest_file_sha "$Z2K_AU_TMP_DIR/UPDATES.json" "$repo_path")
+        if [ -n "$_want_sha" ]; then
+            Z2K_FETCH_SHA256="$_want_sha"; export Z2K_FETCH_SHA256
+        else
+            au_log "patch: $repo_path — в манифесте нет sha256, содержимое не проверяется"
+        fi
         au_download_repo_file "$repo_path" "$stage"
         _dl_rc=$?
+        unset Z2K_FETCH_SHA256
         if [ "$_dl_rc" = "2" ]; then
             # Deleted upstream (404) — a later release in this window removed it.
             # Do NOT abort; record it so step 2 deletes the stale local copy.

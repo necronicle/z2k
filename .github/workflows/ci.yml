@@ -35,7 +35,10 @@ jobs:
           # Same trap, one directory up: files/S99zapret2.new is the MAIN service script
           # (1600+ lines, the whole start/stop/firewall path) and matched neither mask —
           # a hard syntax error in it survived the entire 32-suite run and this job.
-          { find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './webpanel/cgi/*.sh' \); \
+          # scripts/*.sh is release tooling, never shipped to a router — but it is what
+          # generates the digests routers verify against, so a bug there fails every
+          # update closed. Linted with everything else.
+          { find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './scripts/*.sh' -o -path './webpanel/cgi/*.sh' \); \
             find ./files/init.d -type f -name 'S*'; \
             find ./files -maxdepth 1 -type f -name 'S*'; } \
             | xargs shellcheck --severity=warning --exclude=SC1007,SC1090,SC1091,SC3043,SC3040,SC2034,SC2148,SC2154
@@ -52,6 +55,21 @@ jobs:
             fi
           done
           exit $rc
+
+      - name: UPDATES.json file digests are in sync with the tree
+        run: |
+          # Routers verify every downloaded file against the files_sha256 map in
+          # UPDATES.json. A map that lags the tree does not fail quietly like the
+          # bug it replaces — it fails CLOSED: good files get rejected and the
+          # update aborts for everyone. So drift has to die here, not in the field.
+          sh scripts/gen_file_hashes.sh
+          if ! git diff --quiet -- UPDATES.json; then
+            echo "::error::files_sha256 в UPDATES.json не соответствует дереву."
+            echo "Запусти локально: sh scripts/gen_file_hashes.sh — и закоммить результат."
+            git --no-pager diff --stat -- UPDATES.json
+            exit 1
+          fi
+          echo "манифест синхронен"
 
       - name: Run shell unit tests
         run: sh tests/run_all.sh

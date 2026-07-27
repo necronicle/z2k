@@ -1615,28 +1615,19 @@ step_build_zapret2() {
     # detection stack). Replaced by the server_active_reject taxonomy in z2k-detectors.lua.
     # z2k-healthcheck.sh removed in r-60 — its per-strategy pass/fail check
     # false-negatives mid-rotation; z2k-diag.sh is the supported diagnostic.
+    # deploy_critical_file, NOT a bare cp from WORK_DIR. The old loop copied the
+    # WORK_DIR staging copy and, when it was absent, did nothing at all — no
+    # fetch, no warning — silently leaving whatever was already installed while
+    # the version tag moved forward. Only z2k-auto-update.sh had a network
+    # fallback, bolted on after the same failure mode stranded it on clean
+    # installs (r-18). Every tool here is load-bearing, so every tool gets the
+    # same treatment: WORK_DIR if present, network if not, and a loud line if
+    # neither worked instead of a silent stale file.
     for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh z2k-warp.sh; do
-        if [ -f "${WORK_DIR}/files/${tool_script}" ]; then
-            cp -f "${WORK_DIR}/files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
-            chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
+        if deploy_critical_file "files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 755; then
             print_info "Установлен: ${tool_script}"
-        elif [ "$tool_script" = "z2k-auto-update.sh" ] && [ ! -f "${ZAPRET2_DIR}/${tool_script}" ]; then
-            # До r-18 z2k-auto-update.sh не входил в bootstrap-список z2k.sh,
-            # из-за чего на чистых установках файла не было и cron-задача
-            # `0 2 * * * /opt/zapret2/z2k-auto-update.sh apply` падала молча
-            # (sh: not found). Меняется номер версии в манифесте — реальной
-            # обновы файлов нет. Fallback: пробуем дотянуть напрямую с GitHub.
-            if command -v curl >/dev/null 2>&1 && \
-               curl -fsSL --connect-timeout 10 --max-time 30 \
-                    "${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}/files/${tool_script}" \
-                    -o "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null && \
-               [ -s "${ZAPRET2_DIR}/${tool_script}" ]; then
-                chmod +x "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null || true
-                print_info "Установлен через fallback: ${tool_script} (auto-update теперь работает)"
-            else
-                rm -f "${ZAPRET2_DIR}/${tool_script}" 2>/dev/null
-                print_warning "${tool_script} не удалось скачать — auto-update не будет работать до следующего reinstall"
-            fi
+        else
+            print_warning "${tool_script}: не удалось развернуть ни из кэша, ни с GitHub — установленная копия могла остаться старой"
         fi
     done
 
