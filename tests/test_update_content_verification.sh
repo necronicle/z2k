@@ -166,6 +166,30 @@ done
     && ok "манифест синхронен с деревом ($checked файлов проверено)" \
     || no "манифест синхронен с деревом" "0 расхождений" "$drift"
 
+# --- 6b. the map must be ordered deterministically ---------------------------
+# The generator runs on a developer's machine AND on the CI runner, and CI
+# compares the result byte-for-byte. Ordered by the ambient locale, macOS and
+# Linux disagree about where "extra-domains.txt" sits relative to "extra_strats/"
+# — identical digests, different line order, read as drift, and the gate fails on
+# a tree that is perfectly in sync. So collation is pinned, and asserted here.
+# Pairs only — the `"files_sha256": {` header line would otherwise be harvested
+# as a key of its own and land out of order, failing the check on a good file.
+keys=$(sed -n '/"files_sha256"/,/^  },$/p' "$MAN" \
+       | grep -v '"files_sha256"' \
+       | sed -n 's/^  "\([^"]*\)"[[:space:]]*:[[:space:]]*"[0-9a-f]\{64\}".*/\1/p')
+if [ -n "$keys" ]; then
+    if [ "$keys" = "$(printf '%s\n' "$keys" | LC_ALL=C sort)" ]; then
+        ok "карта хешей отсортирована в C-локали (одинаково на macOS и на Linux)"
+    else
+        no "карта хешей отсортирована в C-локали" "C-порядок" "порядок ambient-локали"
+    fi
+else
+    no "карта хешей читается" "непустой список ключей" "пусто"
+fi
+grep -q '^LC_ALL=C' "$HERE/scripts/gen_file_hashes.sh" \
+    && ok "генератор пинит локаль явно" \
+    || no "генератор пинит локаль явно" "LC_ALL=C" "отсутствует"
+
 # --- 7. staging is emptied before a patch run -------------------------------
 # A file left from a previous run, plus its etag, is exactly how a 304 turned
 # into "download succeeded" while the old bytes got installed.

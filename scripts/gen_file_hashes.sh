@@ -29,6 +29,15 @@
 
 set -e
 
+# Pin collation. Without this the map is ordered by the AMBIENT locale, and
+# macOS (UTF-8, punctuation-insensitive) disagrees with a Linux CI runner about
+# where "files/lists/extra-domains.txt" sits relative to "extra_strats/". Same
+# digests, different line order — which reads as drift and fails the CI gate on
+# a tree that is perfectly in sync. Deterministic output is the whole point of a
+# file whose job is to be compared byte-for-byte.
+LC_ALL=C
+export LC_ALL
+
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
@@ -51,7 +60,7 @@ OUT=$(mktemp) || exit 1
 trap 'rm -f "$BLOCK" "$OUT"' EXIT
 
 n=0
-for f in $(git ls-files | sort); do
+for f in $(git ls-files | LC_ALL=C sort); do
     [ -f "$f" ] || continue
     [ "$f" = "$MANIFEST" ] && continue          # cannot contain its own digest
     [ -n "$(au_install_paths "$f" 2>/dev/null)" ] || continue
