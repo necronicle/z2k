@@ -96,6 +96,13 @@ WARP_LIVE_MAXAGE="${WARP_LIVE_MAXAGE:-180}"                     # older than thi
 # would have woken the tunnel, and restarting the daemon costs ~30s of downtime to fix a
 # condition that resolves itself on the next packet.
 WARP_PROBE_RETRY_WAIT="${WARP_PROBE_RETRY_WAIT:-3}"             # seconds between the wake attempt and the verdict
+# How long `enable` may spend BRINGING THE TUNNEL UP before it returns a final no.
+# It is a budget for fixing, not for waiting: each round restarts what is dead, waits
+# for the device, and probes. The old behaviour spent 35 s and then told the user to
+# come back later, which is the one outcome that helps nobody.
+WARP_ENABLE_BUDGET="${WARP_ENABLE_BUDGET:-120}"
+# Hard iteration cap, independent of the clock — see the note in warp_enable.
+WARP_ENABLE_ATTEMPTS="${WARP_ENABLE_ATTEMPTS:-4}"
 WARP_FAIL_THRESHOLD="${WARP_FAIL_THRESHOLD:-3}"                 # consecutive failed ticks before failing open
 WARP_FAIL_STREAK="${WARP_FAIL_STREAK:-/tmp/z2k-warp-failstreak}"
 # Self-heal may install usque (see warp_selfheal) — cooldown-guarded, because the .ipk is
@@ -180,17 +187,70 @@ warp_live_cached() {
 
 # The real thing: does traffic actually reach Cloudflare THROUGH the tunnel? Records the
 # verdict for the panel. Returns 0 = live, 1 = dead.
-warp_tunnel_live() {
+# WHY the tunnel is not carrying traffic. Set on every failing path below, and printed
+# by the caller.
+#
+# This exists because "the tunnel is not carrying traffic yet" was printed for FIVE
+# different causes — no interface, no address, link down, engine not running, no
+# registration, and a probe that simply failed — and they were indistinguishable to
+# the user and to us. Four separate root causes have been fixed under that one
+# sentence (subnet collision, blocked registration, link never raised, overridden
+# address) and every report still arrived looking identical, so each one restarted
+# from "send me the log". The verdict knows all of this at the moment it decides;
+# it just used to throw it away.
+WARP_LIVE_WHY=""
+
+# Explain a failed verdict. DIAGNOSIS ONLY — it never decides anything.
+#
+# The first version of this put these checks INSIDE warp_tunnel_live, which changed the
+# meaning of a function selfheal calls on every tick: a momentarily missing pidof would
+# have read as "dead" and could have torn routing down. The verdict stays exactly what it
+# always was (the probe), and the explanation is separate.
+warp_explain_dead() {
+    local rc="$1" body="$2"
     if ! ip link show "$WARP_IFACE" >/dev/null 2>&1; then
+        printf 'интерфейс %s не существует — usque не создал устройство' "$WARP_IFACE"; return 0
+    fi
+    if ! ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet '; then
+        printf 'на %s нет IPv4-адреса — NDM не применил конфигурацию интерфейса' "$WARP_IFACE"; return 0
+    fi
+    if ! ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP; then
+        printf 'линк %s не поднят (нет UP)' "$WARP_IFACE"; return 0
+    fi
+    if ! warp_usque_running; then
+        printf 'движок usque не запущен'; return 0
+    fi
+    if [ "$rc" != 0 ]; then
+        # 28 = timed out, 6/7 = could not resolve/connect. Naming the code is what turns
+        # "not carrying traffic" into something answerable without asking for a log.
+        printf 'проба через %s не прошла: curl rc=%s (28=таймаут %sс, 6/7=не достучался) — устройство есть, трафик через него не идёт' \
+               "$WARP_IFACE" "$rc" "$WARP_PROBE_TIMEOUT"; return 0
+    fi
+    if [ -z "$body" ]; then
+        printf 'проба через %s вернула пустой ответ — соединение есть, данных нет' "$WARP_IFACE"; return 0
+    fi
+    # We reached Cloudflare THROUGH the tunnel and it says the traffic is not WARP: the
+    # interface works, the MASQUE session does not. Usually a dead registration.
+    printf 'Cloudflare отвечает через %s, но WARP не активен (%s) — вероятно нерабочая регистрация' \
+           "$WARP_IFACE" "$(printf '%s' "$body" | grep -m1 '^warp=' || echo 'строки warp= нет')"
+}
+
+warp_tunnel_live() {
+    WARP_LIVE_WHY=""
+    if ! ip link show "$WARP_IFACE" >/dev/null 2>&1; then
+        WARP_LIVE_WHY=$(warp_explain_dead 0 "")
         warp_live_record 0; return 1
     fi
     # No curl means we cannot prove anything. Never report "dead" on missing tooling — that
     # would turn a probe failure into a restart storm against a perfectly good tunnel.
     command -v curl >/dev/null 2>&1 || return 0
-    if curl -4 --interface "$WARP_IFACE" -s --max-time "$WARP_PROBE_TIMEOUT" \
-            "$WARP_PROBE_URL" 2>/dev/null | grep -q '^warp=on'; then
-        warp_live_record 1; return 0
-    fi
+    local body rc
+    body=$(curl -4 --interface "$WARP_IFACE" -s --max-time "$WARP_PROBE_TIMEOUT" \
+                "$WARP_PROBE_URL" 2>/dev/null); rc=$?
+    case "$body" in
+        *warp=on*) warp_live_record 1; return 0 ;;
+    esac
+    WARP_LIVE_WHY=$(warp_explain_dead "$rc" "$body")
     warp_live_record 0
     return 1
 }
@@ -463,31 +523,74 @@ warp_enable() {
     fi
     # Our init records the interface it chose; adopt it now that it has started.
     [ -n "$_WARP_IFACE_FIXED" ] || WARP_IFACE=$(warp_resolve_iface)
-    # Wait — briefly — for the interface to exist so the route lands on a real device, then
-    # verify for real. Bounded tight: a webpanel request is blocking on this, and anything
-    # slower than the interface appearing is selfheal's job, not the toggle's.
-    # A COLD start genuinely takes ~30s: usque has to build the MASQUE session and NDM has to
-    # configure and raise the interface. The previous 6s budget meant the toggle delivered its
-    # verdict before the tunnel had any chance to exist, so a perfectly healthy enable always
-    # reported "not up yet" — which is exactly what the user saw. Wait for the real thing.
-    local _wait=0
-    while [ "$_wait" -lt 35 ]; do
-        warp_link_up
-        ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' \
-            && ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP && break
-        _wait=$((_wait + 1)); sleep 1
+    # DRIVE TO A VERDICT. Either the tunnel carries traffic when this returns, or it does
+    # not and we say why — never "проверьте статус через минуту". That sentence handed the
+    # user back a problem we had just detected and that they cannot act on, and they do not
+    # come back to look; they file a report that looks exactly like the previous five.
+    #
+    # For contrast: the upstream package (usque-keenetic 0.3.0, fn_start) starts the daemon,
+    # configures the NDM interface and reports success WITHOUT EVER CHECKING that anything
+    # flows — no wait, no link-up, no probe. That is why it looks problem-free: a dead
+    # tunnel there is silent. Checking is right. Ending the check with "try again later" was
+    # not.
+    #
+    # Every iteration does the recovery itself and escalates, so the budget is spent fixing
+    # rather than waiting. Progress is printed as it goes: the webpanel is blocking on this
+    # request and lighttpd only drops a CGI that goes quiet, not one that takes a while.
+    # BOUNDED TWICE, on purpose. The time budget alone is not enough: _warp_now falls back
+    # to 0 when `date` is unavailable, so on such a box the deadline would never arrive and
+    # enable would loop forever holding the webpanel request open. Caught by the test suite
+    # hanging, which is exactly the failure a user would have seen.
+    local deadline now attempt=0 kicked=0
+    now=$(_warp_now 2>/dev/null || echo 0)
+    deadline=$(( now + WARP_ENABLE_BUDGET ))
+    while [ "$attempt" -lt "$WARP_ENABLE_ATTEMPTS" ]; do
+        attempt=$((attempt + 1))
+        # The engine must be running before anything can appear. Re-checked every round:
+        # it may have died between rounds, and a wedged one is what the kick below fixes.
+        if ! warp_usque_running; then
+            _wlog "движок usque не запущен — запускаю (попытка $attempt)"
+            warp_usque_restart
+        fi
+        # Device, link, address — what usque and NDM must produce. A cold start genuinely
+        # takes ~30 s, so this is patient, but it is not the whole budget.
+        local w=0
+        while [ "$w" -lt 25 ]; do
+            warp_link_up
+            ip -o addr show "$WARP_IFACE" 2>/dev/null | grep -q 'inet ' \
+                && ip link show "$WARP_IFACE" 2>/dev/null | grep -qw UP && break
+            w=$((w + 1)); sleep 1
+        done
+        # Verify BEFORE steering anything into the tunnel — see the fail-open note in
+        # warp_selfheal. A dead tunnel with routing applied blackholes every network in
+        # the list instead of merely leaving them un-tunnelled.
+        # _retry, not a bare probe: Cloudflare drops the MASQUE session on idle and usque
+        # re-establishes it when traffic appears, so the FIRST probe is the wake-up and the
+        # second is the verdict. Skipping that reported a sleeping tunnel as broken.
+        if warp_tunnel_live_retry; then
+            _warp_streak_set 0
+            warp_pbr_up
+            _wlog "готово: туннель работает (warp=on через $WARP_IFACE, ipset=$WARP_IPSET)"
+            return 0
+        fi
+        _wlog "попытка $attempt не удалась: $WARP_LIVE_WHY"
+        now=$(_warp_now 2>/dev/null || echo 0)
+        [ "$now" -lt "$deadline" ] || break
+        # ESCALATE. Restarting the engine is what fixes a wedged MASQUE session — it is
+        # exactly what a user does by toggling usque off and on — and it is done ONCE, so a
+        # genuinely broken registration is not hammered for the whole budget.
+        if [ "$kicked" = 0 ]; then
+            kicked=1
+            _wlog "перезапускаю движок и пробую снова"
+            warp_usque_restart
+        fi
+        sleep 3
     done
-    # Verify BEFORE steering anything into the tunnel — see the fail-open note in
-    # warp_selfheal. A dead tunnel with routing applied blackholes every network in the
-    # list instead of merely leaving them un-tunnelled.
-    if warp_tunnel_live_retry; then
-        _warp_streak_set 0
-        warp_pbr_up
-        _wlog "game WARP mode ON (warp=on via $WARP_IFACE, ipset=$WARP_IPSET)"
-        return 0
-    fi
+    # FINAL, and it is a no: routing stays off, traffic goes direct, and the reason is the
+    # last thing the user reads.
     warp_pbr_down
-    _wlog "game WARP mode ON, but the tunnel is not carrying traffic yet — routing stays OFF (traffic direct); selfheal will keep working on it"
+    _wlog "туннель НЕ поднялся за ${WARP_ENABLE_BUDGET}с — режим включён, но трафик идёт напрямую"
+    _wlog "причина: ${WARP_LIVE_WHY:-неизвестна}"
     return 2
 }
 

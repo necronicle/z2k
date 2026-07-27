@@ -382,6 +382,12 @@ warp_ipset_load() { return 0; }
 warp_purge_legacy_nat() { return 0; }
 warp_link_up() { return 0; }
 
+# One attempt per enable: these cases are about the VERDICT, not about the retry budget.
+# Left at the default (4 attempts x up to 25 s device wait) this section took ~100 s, and
+# before the iteration cap existed it hung forever on a mocked clock.
+WARP_ENABLE_ATTEMPTS=1
+WARP_ENABLE_BUDGET=0
+
 printf "\n--- E1: tunnel verified live -> rc=0 and routing applied ---\n"
 : > "$PBR_UP_CALLS"; : > "$PBR_DOWN_CALLS"; : > "$RESTARTS"
 warp_tunnel_live_retry() { return 0; }

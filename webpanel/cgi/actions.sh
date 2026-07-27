@@ -203,7 +203,11 @@ toggle_game_warp() {
         # is on. Report it honestly instead; the old code returned success here regardless,
         # which is exactly why the panel claimed "включено" over a dead tunnel.
         if [ "$rc" = "2" ]; then
-            echo "Режим включён, но туннель ещё не поднялся (регистрация/сеть). z2k продолжит поднимать его в фоне — проверьте статус через минуту." >&2
+            # A FINAL answer, not a homework assignment. z2k-warp.sh has already spent its
+            # budget starting, restarting and probing, and prints a "причина: ..." line right
+            # above this one. Telling the user to come back and look again is the one outcome
+            # that helps nobody — they do not come back, they file another identical report.
+            echo "Туннель поднять не удалось — причина указана строкой выше. Режим оставлен включённым, трафик идёт напрямую; z2k продолжит попытки в фоне, повторное включение ничего не изменит." >&2
             return 0
         fi
         if [ "$rc" != "0" ]; then
