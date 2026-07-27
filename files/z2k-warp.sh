@@ -103,6 +103,20 @@ WARP_PROBE_RETRY_WAIT="${WARP_PROBE_RETRY_WAIT:-3}"             # seconds betwee
 WARP_ENABLE_BUDGET="${WARP_ENABLE_BUDGET:-120}"
 # Hard iteration cap, independent of the clock — see the note in warp_enable.
 WARP_ENABLE_ATTEMPTS="${WARP_ENABLE_ATTEMPTS:-4}"
+# Probe timeout for the ENABLE path only. The global one (8 s) stays as it is: selfheal
+# runs it on every tick and must not block the scheduler.
+#
+# Upstream's author, issue #49: after an idle period Cloudflare's limiting kicks in and
+# "new requests start to work after like 10-20s of waiting". Our 8 s ceiling cannot span
+# that window, so a tunnel that is merely waking up is declared dead — which matches every
+# field log: session "Connected", probe times out, restarts make it worse because each one
+# puts the tunnel back into idle. NOT reproducible on a healthy router (the probe answers
+# in 0 s there), so this is upstream's documented behaviour rather than our measurement.
+#
+# 20 s x2 with a 2 s gap fits ~3 attempts into the 120 s budget, so the escalation ladder
+# still runs.
+WARP_ENABLE_PROBE_TIMEOUT="${WARP_ENABLE_PROBE_TIMEOUT:-20}"
+WARP_ENABLE_RETRY_WAIT="${WARP_ENABLE_RETRY_WAIT:-2}"
 # Endpoint variants, tried ONLY after a healthy device still carries no traffic — i.e.
 # the ISP is blocking Cloudflare's MASQUE endpoint, which no amount of restarting fixes.
 # Empty by default in every sense: nothing here runs, and no file is created, unless the
@@ -637,6 +651,9 @@ warp_enable() {
     # to 0 when `date` is unavailable, so on such a box the deadline would never arrive and
     # enable would loop forever holding the webpanel request open. Caught by the test suite
     # hanging, which is exactly the failure a user would have seen.
+    # Widen the probe for this path only — see WARP_ENABLE_PROBE_TIMEOUT.
+    WARP_PROBE_TIMEOUT="$WARP_ENABLE_PROBE_TIMEOUT"
+    WARP_PROBE_RETRY_WAIT="$WARP_ENABLE_RETRY_WAIT"
     local deadline now attempt=0 kicked=0 vidx=0 cand= reregged=0
     now=$(_warp_now 2>/dev/null || echo 0)
     deadline=$(( now + WARP_ENABLE_BUDGET ))

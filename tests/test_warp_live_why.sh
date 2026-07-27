@@ -446,6 +446,55 @@ case "$out" in *rc=1*) ok "the cooldown blocks re-registration" ;;
     *) no "the cooldown blocks re-registration" "rc=1" "$out" ;; esac
 rr_same && ok "...without touching the config" || no "...without touching the config" "unchanged" "changed"
 
+# --- 9h. the enable probe is patient; selfheal's is not ---------------------
+# Upstream #49: after idle, Cloudflare makes new requests take 10-20 s. An 8 s ceiling
+# cannot span that, so a waking tunnel reads as dead — the shape of every field log
+# (session "Connected", probe times out, restarts make it worse by re-idling it).
+# The widening must apply to ENABLE ONLY: selfheal runs the same probe every tick and
+# blocking the scheduler for 20 s a time would be a new fault.
+grep -q '^WARP_ENABLE_PROBE_TIMEOUT=' "$WARPSH" \
+    && ok "the enable path has its own probe timeout" \
+    || no "the enable path has its own probe timeout" "WARP_ENABLE_PROBE_TIMEOUT" "absent"
+gt=$(sed -n 's/^WARP_PROBE_TIMEOUT="${WARP_PROBE_TIMEOUT:-\([0-9]*\)}".*/\1/p' "$WARPSH" | head -1)
+et=$(sed -n 's/^WARP_ENABLE_PROBE_TIMEOUT="${WARP_ENABLE_PROBE_TIMEOUT:-\([0-9]*\)}".*/\1/p' "$WARPSH" | head -1)
+[ -n "$gt" ] && [ -n "$et" ] && [ "$et" -gt "$gt" ] \
+    && ok "enable waits longer than the per-tick probe ($et > $gt)" \
+    || no "enable waits longer than the per-tick probe" "enable > global" "$et/$gt"
+[ "$gt" = 8 ] && ok "the per-tick probe timeout is unchanged ($gt s)" \
+              || no "the per-tick probe timeout is unchanged" 8 "$gt"
+[ "$et" -ge 15 ] && ok "the enable probe spans the documented 10-20 s wake window ($et s)" \
+                 || no "the enable probe spans the documented 10-20 s wake window" ">=15" "$et"
+enable_fn5=$(extract_fn warp_enable "$WARPSH")
+case "$enable_fn5" in
+    *'WARP_PROBE_TIMEOUT="$WARP_ENABLE_PROBE_TIMEOUT"'*) ok "enable actually applies its own timeout" ;;
+    *) no "enable actually applies its own timeout" "the assignment" "absent" ;;
+esac
+# Two probes at the widened timeout plus the gaps must still leave room for the
+# escalation ladder inside the budget.
+bud=$(sed -n 's/^WARP_ENABLE_BUDGET="${WARP_ENABLE_BUDGET:-\([0-9]*\)}".*/\1/p' "$WARPSH" | head -1)
+rw=$(sed -n 's/^WARP_ENABLE_RETRY_WAIT="${WARP_ENABLE_RETRY_WAIT:-\([0-9]*\)}".*/\1/p' "$WARPSH" | head -1)
+per=$(( et * 2 + rw + 3 ))
+if [ "$bud" -ge $(( per * 2 )) ]; then
+    ok "the budget still fits at least two full attempts (${per}s each of ${bud}s)"
+else
+    no "the budget still fits at least two full attempts" ">=$(( per * 2 ))" "$bud"
+fi
+
+# --- 9i. the engine is told to reconnect on its own -------------------------
+# Parking in "Tunnel idle. Waiting for outbound activity" is the state Cloudflare
+# penalises on wake, so do not park there.
+S51W="$HERE/files/init.d/S51z2k-warp"
+grep -q -- '--always-reconnect' "$S51W" \
+    && ok "the engine is launched with --always-reconnect" \
+    || no "the engine is launched with --always-reconnect" "the flag" "absent"
+grep -q -- '-r "$RECONNECT_DELAY"' "$S51W" \
+    && ok "the reconnect delay is passed explicitly" \
+    || no "the reconnect delay is passed explicitly" "-r" "absent"
+rd=$(sed -n 's/^RECONNECT_DELAY="${RECONNECT_DELAY:-\([0-9]*\)s}".*/\1/p' "$S51W" | head -1)
+[ -n "$rd" ] && [ "$rd" -ge 5 ] \
+    && ok "the reconnect delay is not the 1 s default (${rd}s) — no storm on a blocked ISP" \
+    || no "the reconnect delay is not the 1 s default" ">=5s" "${rd:-unset}"
+
 # --- 10. the caller actually prints the reason ------------------------------
 enable_fn=$(extract_fn warp_enable "$WARPSH")
 case "$enable_fn" in *'причина:'*) ok "warp_enable prints the reason line" ;;

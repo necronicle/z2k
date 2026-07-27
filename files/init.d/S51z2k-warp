@@ -52,6 +52,13 @@ MTU="${MTU:-1280}"
 # match can clash, never an overlapping range.
 ADDR_NET="${ADDR_NET:-172.16.240}"
 KEEPALIVE="${KEEPALIVE:-25s}"                      # usque -k; CF drops an idle MASQUE session
+# --always-reconnect (below): without it usque parks in "Tunnel idle. Waiting for outbound
+# activity before reconnecting..." — and waking from THAT state is what Cloudflare
+# penalises (upstream issue #49: new requests then take 10-20 s), which is exactly what the
+# field logs show as "Connected, but no traffic". -r is not optional next to it: the
+# default reconnect delay is 1 s, and on a router whose ISP blocks the endpoint that is a
+# reconnect storm.
+RECONNECT_DELAY="${RECONNECT_DELAY:-5s}"
 
 # Legacy package paths — read ONLY to migrate away from them.
 PKG_INIT="/opt/etc/init.d/S51usque"
@@ -411,7 +418,8 @@ start() {
             # shellcheck disable=SC2086  # _pflag is deliberately word-split: empty = no flag
             GODEBUG=asyncpreemptoff=1 "$BIN" nativetun \
                 --config "$_cfg" --interface-name "$ifc" --no-iproute2 \
-                -s "$SNI" --http2 -k "$KEEPALIVE" $_pflag </dev/null >> "$LOG" 2>&1 &
+                -s "$SNI" --http2 -k "$KEEPALIVE" \
+                --always-reconnect -r "$RECONNECT_DELAY" $_pflag </dev/null >> "$LOG" 2>&1 &
             child=$!
             # Configure NDM once the tun netdev actually exists — never before.
             (
