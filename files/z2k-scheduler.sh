@@ -66,7 +66,13 @@ rotate_log() {
     local lines
     lines=$(wc -l < "$f" 2>/dev/null)
     if [ "${lines:-0}" -gt 1000 ]; then
-        tail -800 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
+        # TRUNCATE IN PLACE, never mv. `mv` replaces the inode, and a daemon holding the
+        # file open with >> keeps writing into the unlinked one — its log then freezes
+        # forever while the file on disk looks fine. That is exactly what happened to the
+        # usque engine log: field reports were read from a file the engine had stopped
+        # writing to days earlier, and every conclusion drawn from them was unsound.
+        tail -800 "$f" > "${f}.tmp" 2>/dev/null && cat "${f}.tmp" > "$f" 2>/dev/null
+        rm -f "${f}.tmp" 2>/dev/null
     fi
 }
 

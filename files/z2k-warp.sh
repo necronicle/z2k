@@ -40,7 +40,11 @@ warp_resolve_iface() {
     esac
 }
 WARP_TABLE="${WARP_TABLE:-989}"                 # dedicated route table
-WARP_MARK="${WARP_MARK:-0x989}"                 # fwmark for the ip rule
+WARP_MARK="${WARP_MARK:-0x989}"
+# Explicit ip-rule preference — see warp_pbr_up.
+WARP_RULE_PREF="${WARP_RULE_PREF:-90}"
+# Must match the init's MTU. 1280 is the only value upstream supports in h2 mode.
+WARP_MTU="${WARP_MTU:-1280}"                 # fwmark for the ip rule
 WARP_IPSET="${WARP_IPSET:-z2k_warp}"            # game-server ipset routed via WARP
 WARP_LIST="${WARP_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"   # legacy shipped list — now only the migration seed
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"      # user-owned lists (webpanel «WARP» section), ALL *.txt loaded
@@ -95,7 +99,11 @@ WARP_LIVE_MAXAGE="${WARP_LIVE_MAXAGE:-180}"                     # older than thi
 # consecutive failures: pulling the route on the first miss removes the very traffic that
 # would have woken the tunnel, and restarting the daemon costs ~30s of downtime to fix a
 # condition that resolves itself on the next packet.
-WARP_PROBE_RETRY_WAIT="${WARP_PROBE_RETRY_WAIT:-3}"             # seconds between the wake attempt and the verdict
+WARP_PROBE_RETRY_WAIT="${WARP_PROBE_RETRY_WAIT:-3}"
+# Ceiling for the FINAL probe only — see warp_tunnel_live_retry.
+WARP_PROBE_SLOW_TIMEOUT="${WARP_PROBE_SLOW_TIMEOUT:-20}"
+# Off by default: selfheal must stay cheap. `enable` turns it on for its own run.
+WARP_PROBE_ESCALATE="${WARP_PROBE_ESCALATE:-0}"             # seconds between the wake attempt and the verdict
 # How long `enable` may spend BRINGING THE TUNNEL UP before it returns a final no.
 # It is a budget for fixing, not for waiting: each round restarts what is dead, waits
 # for the device, and probes. The old behaviour spent 35 s and then told the user to
@@ -125,9 +133,20 @@ WARP_ENABLE_RETRY_WAIT="${WARP_ENABLE_RETRY_WAIT:-2}"
 # Each entry is IP[:PORT]. Both were verified to reach "Tunnel established" from a real
 # Keenetic; 2408 and 4500 do not accept TCP at all (they are the WireGuard ports) and are
 # deliberately not listed — guessing candidates would waste the budget.
-WARP_ENDPOINTS="${WARP_ENDPOINTS:-188.114.98.1:443 188.114.96.1:443 162.159.198.2:8443}"
+# ONLY the documented endpoint, on alternative PORTS. 188.114.98.1/96.1 were mine and they
+# were wrong: measured, they answer our SNI with "alert 40 handshake failure" and no
+# certificate, and with the correct SNI they present a DIFFERENT public key which usque's
+# pinning rejects. They are WireGuard-range addresses, not HTTP/2 MASQUE endpoints — the
+# upstream wiki says h2 endpoints must be read off the official client, and the maintainer
+# declines to support arbitrary Cloudflare addresses. A router that got pinned to one of
+# them produced exactly the field symptom.
+WARP_ENDPOINTS="${WARP_ENDPOINTS:-162.159.198.2:8443}"
 WARP_ALT_CONF="${WARP_ALT_CONF:-$WARP_DIR/session.alt.conf}"
 WARP_ALT_PORT="${WARP_ALT_PORT:-$WARP_DIR/port}"
+# How long a pinned endpoint variant may keep failing before selfheal drops it. Not zero:
+# `enable` sets a variant and then probes for up to two minutes, and selfheal runs every
+# minute — expiring it instantly would have the two fighting over the same file.
+WARP_VARIANT_TTL="${WARP_VARIANT_TTL:-600}"
 WARP_FAIL_THRESHOLD="${WARP_FAIL_THRESHOLD:-3}"                 # consecutive failed ticks before failing open
 WARP_FAIL_STREAK="${WARP_FAIL_STREAK:-/tmp/z2k-warp-failstreak}"
 # Self-heal may install usque (see warp_selfheal) — cooldown-guarded, because the .ipk is
@@ -165,6 +184,16 @@ _warp_now() {
 # Shared cooldown gate: returns 0 (proceed) only when $1's stamp is older than $2 seconds,
 # and stamps it BEFORE returning. A stamp we cannot write means "do not proceed" — otherwise
 # a read-only / full filesystem would silently turn every guarded action into a per-tick storm.
+# File mtime in epoch seconds. BusyBox `stat -c` is not guaranteed on Entware, so fall
+# back to a find-based comparison rather than assuming a tool that may be absent.
+_warp_mtime() {
+    local f="$1" v
+    v=$(stat -c %Y "$f" 2>/dev/null)
+    case "$v" in ''|*[!0-9]*) ;; *) printf '%s' "$v"; return 0 ;; esac
+    v=$(date -r "$f" +%s 2>/dev/null)
+    case "$v" in ''|*[!0-9]*) return 1 ;; *) printf '%s' "$v"; return 0 ;; esac
+}
+
 _warp_cooldown_ok() {
     local stamp="$1" cool="$2" now last
     now=$(_warp_now) || return 1
@@ -195,7 +224,13 @@ warp_variant_apply() {
     [ -n "$cur" ] || return 1
     # Substitute the ADDRESS ONLY, and verify the copy still looks like the original
     # config: a mangled variant would take the tunnel down for a reason nobody could see.
-    sed "s/$cur/$ip/g" "$USQUE_SESSION" > "$WARP_ALT_CONF.tmp" 2>/dev/null || return 1
+    # Anchored on the endpoint_h2_v4 line, dots escaped, one substitution. The old form
+    # was `s/$cur/$ip/g` — unanchored, dots as wildcards, global: it would happily rewrite
+    # any other field that happened to contain the same digits.
+    local esc
+    esc=$(printf '%s' "$cur" | sed 's/\./\\./g')
+    sed "s#\(\"endpoint_h2_v4\"[[:space:]]*:[[:space:]]*\"\)$esc\(\"\)#\1$ip\2#" \
+        "$USQUE_SESSION" > "$WARP_ALT_CONF.tmp" 2>/dev/null || return 1
     if ! grep -q "\"endpoint_h2_v4\"[[:space:]]*:[[:space:]]*\"$ip\"" "$WARP_ALT_CONF.tmp" \
        || ! grep -q '"private_key"' "$WARP_ALT_CONF.tmp"; then
         rm -f "$WARP_ALT_CONF.tmp"; return 1
@@ -208,6 +243,29 @@ warp_variant_apply() {
 
 # Back to stock. Called when no variant helped, so a router is never left pinned to an
 # endpoint that did not work either.
+# Drop a pinned variant that has had its chance and is not delivering.
+#
+# THE BUG THIS EXISTS FOR: the init prefers session.alt.conf unconditionally and forever
+# (S51z2k-warp), while warp_variant_clear used to be reachable only from the final failure
+# branch of `enable`. Any other exit — budget spent elsewhere, process killed, reboot, boot
+# time enable — left the pin in place permanently, and every later start went to an
+# endpoint we now know answers "tls: handshake failure". Reproduced on a live router: the
+# engine came up with --config .../session.alt.conf against 188.114.98.1 and stayed there
+# across restarts. That is the field report "restarting does not help" in one line.
+warp_variant_expire() {
+    local age now mt
+    [ -f "$WARP_ALT_CONF" ] || return 0
+    # Still delivering? Leave it alone — a variant that works is the point.
+    [ "$(warp_live_cached)" = 1 ] && return 0
+    now=$(_warp_now) || return 0
+    mt=$(_warp_mtime "$WARP_ALT_CONF") || return 0
+    age=$((now - mt))
+    [ "$age" -ge 0 ] || { warp_variant_clear; return 0; }   # clock skew: do not keep it
+    [ "$age" -lt "$WARP_VARIANT_TTL" ] && return 0
+    _wlog "запасной адрес не помогает уже ${age}с — снимаю пин"
+    warp_variant_clear
+}
+
 warp_variant_clear() {
     [ -f "$WARP_ALT_CONF" ] || [ -f "$WARP_ALT_PORT" ] || return 0
     rm -f "$WARP_ALT_CONF" "$WARP_ALT_PORT" 2>/dev/null
@@ -301,10 +359,16 @@ warp_engine_connected() {
     local last
     [ -f "$WARP_ENGINE_LOG" ] || return 1
     last=$(grep -v '\[z2k-warp\]' "$WARP_ENGINE_LOG" 2>/dev/null \
-           | grep -E 'Connected to MASQUE server|Tunnel established|Failed to connect tunnel|Tunnel connection lost' \
+           | grep -E 'Connected to MASQUE server|Failed to connect tunnel|Tunnel connection failed|Tunnel connection lost' \
            | tail -1)
+    # "Tunnel established" is NOT a success marker: usque prints it unconditionally BEFORE
+    # it dials anything (cmd/nativetun.go). Treating it as proof of a live session is what
+    # made us skip endpoint variants, burn a re-registration and tell users "your provider
+    # is filtering it" — all off a line that means nothing. Only the HTTP 200 on CONNECT-IP
+    # counts, and "Tunnel connection failed" (a non-200 from Cloudflare) is a failure we
+    # were not detecting at all.
     case "$last" in
-        *"Connected to MASQUE server"*|*"Tunnel established"*) return 0 ;;
+        *"Connected to MASQUE server"*) return 0 ;;
     esac
     return 1
 }
@@ -372,7 +436,23 @@ warp_tunnel_live() {
 warp_tunnel_live_retry() {
     warp_tunnel_live && return 0
     sleep "$WARP_PROBE_RETRY_WAIT"
-    warp_tunnel_live
+    warp_tunnel_live && return 0
+    # A third, SLOWER probe — but only where someone is waiting for a verdict.
+    [ "$WARP_PROBE_ESCALATE" = 1 ] || return 1
+    # LAST attempt gets a longer ceiling. Cloudflare penalises the wake-up after an idle
+    # period — upstream #49 measures 10-20 s before new requests start working — and the
+    # per-tick 8 s probe cannot span that, so a merely sleeping tunnel is recorded dead and
+    # "repaired" by a restart that idles it again. Raising the ceiling for EVERY probe would
+    # block the scheduler for 20 s a tick — a down tunnel would eat 36 s of every 60 s tick,
+    # and selfheal already tolerates a false "dead" (it needs WARP_FAIL_THRESHOLD in a row
+    # before it tears routing down). So the escalation is opt-in and only `enable` asks for
+    # it: there a user is sitting in front of a blocking request waiting for an answer, and
+    # spending 20 s to avoid a wrong one is the right trade.
+    local _saved="$WARP_PROBE_TIMEOUT"
+    WARP_PROBE_TIMEOUT="$WARP_PROBE_SLOW_TIMEOUT"
+    warp_tunnel_live; local _rc=$?
+    WARP_PROBE_TIMEOUT="$_saved"
+    return "$_rc"
 }
 
 # Is the usque DAEMON running? Not "does the interface exist" — the package leaves its NDM
@@ -561,8 +641,38 @@ warp_link_up() {
 # from the old code. Nothing recreates them, so once drained it never needs running again
 # — hence the marker. It used to sit inside warp_pbr_up, i.e. two iptables round-trips
 # every selfheal tick, forever, for a migration that is finished after one.
+# Does NDM actually NAT this interface? The r-62 decision to drop our own MASQUERADE rests
+# entirely on "opkgtun0 is a GLOBAL interface, so NDM already NATs it" — never checked at
+# runtime. It stops being true the moment `ip global` is not applied, which is exactly the
+# state the iproute2 fallback leaves the interface in when NDM refuses. Forwarded LAN
+# traffic then enters the tunnel with a 192.168.x.x source and dies, while our probe —
+# bound to the device and sourced from the tunnel address — still reports warp=on. That gap
+# is how "the panel says it works" and "the internet is down" can both be true.
+warp_nat_present() {
+    iptables -w -t nat -S POSTROUTING 2>/dev/null | grep -q -- "-o $WARP_IFACE .*MASQUERADE"
+}
+
+warp_nat_install() {
+    iptables -w -t nat -C POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null \
+        || iptables -w -t nat -A POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null
+    iptables -w -t mangle -C FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
+        || iptables -w -t mangle -A FORWARD -o "$WARP_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
+    _wlog "NDM не NAT-ит $WARP_IFACE — поставил свой MASQUERADE и MSS-клэмп"
+}
+
+# Keep NAT present whoever provides it.
+warp_nat_ensure() {
+    warp_nat_present && return 0
+    warp_nat_install
+}
+
 warp_purge_legacy_nat() {
     [ -f "$WARP_LEGACY_MARK" ] && return 0
+    # Only drop ours when NDM's is actually there to take over.
+    if ! warp_nat_present; then
+        _wlog "пропускаю чистку старого NAT: у NDM своего нет, наш нужен"
+        return 0
+    fi
     while iptables -w -t nat -C POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null; do
         iptables -w -t nat -D POSTROUTING -o "$WARP_IFACE" -j MASQUERADE 2>/dev/null || break
     done
@@ -578,18 +688,66 @@ warp_purge_legacy_nat() {
 }
 
 # ---- policy routing (split-tunnel) — this is the ONLY thing the toggle does --
+# The device MTU must never exceed what the engine can read. usque truncates anything
+# larger than its own MTU without a word, and h2 mode has no PMTU discovery to notice.
+# NDM re-creates the interface on its own schedule and does not always carry the MTU with
+# it, so this is re-asserted rather than set once.
+# Keep OUR OWN tunnel handshake out of the bypass.
+#
+# The MASQUE session is plain TLS to a Cloudflare address, and z2k desyncs TLS. Today it
+# survives only because the SNI we front with (ozon.ru) happens to sit in the shipped
+# whitelist — an undocumented coupling: a user editing the whitelist in the web panel would
+# start desyncing our own tunnel and have no way to know why.
+#
+# The engine already ships the mechanism for this: every NFQUEUE rule carries
+# `-m set ! --match-set nozapret dst`, so putting the endpoint address in that set excludes
+# it from all of them at once, without adding a rule or touching the bypass chain. Re-added
+# on every tick because the set is the engine's and does not survive its restarts.
+warp_endpoint_nozapret() {
+    local cfg="$USQUE_SESSION" ip
+    [ -s "$WARP_ALT_CONF" ] && cfg="$WARP_ALT_CONF"
+    [ -s "$cfg" ] || return 0
+    ip=$(sed -n 's/.*"endpoint_h2_v4"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$cfg" 2>/dev/null | head -1)
+    case "$ip" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;;
+        *) return 0 ;;
+    esac
+    ipset list -n nozapret >/dev/null 2>&1 || return 0
+    ipset test nozapret "$ip" >/dev/null 2>&1 && return 0
+    ipset add nozapret "$ip" 2>/dev/null && _wlog "адрес туннеля $ip исключён из обхода (nozapret)"
+}
+
+warp_mtu_ensure() {
+    local cur
+    cur=$(ip -o link show "$WARP_IFACE" 2>/dev/null | sed -n 's/.*mtu \([0-9]*\).*/\1/p')
+    case "$cur" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$cur" -le "$WARP_MTU" ] && return 0
+    _wlog "MTU $WARP_IFACE = $cur больше $WARP_MTU — движок будет резать пакеты, исправляю"
+    ip link set dev "$WARP_IFACE" mtu "$WARP_MTU" 2>/dev/null
+}
+
 warp_pbr_up() {
+    warp_endpoint_nozapret
+    warp_mtu_ensure
     warp_link_up   # the package often leaves opkgtun0's link DOWN; route add needs it UP
     # Steer ONLY the marked game traffic out the WARP tun. No NAT, no MSS clamp — NDM does
     # both natively for a global interface (see warp_purge_legacy_nat).
     # split-tunnel: fwmark → table → opkgtun0
     ip route replace default dev "$WARP_IFACE" table "$WARP_TABLE" 2>/dev/null
-    ip rule show 2>/dev/null | grep -q "fwmark $WARP_MARK " || ip rule add fwmark "$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
+    # Explicit pref: Keenetic's own policy rules live at 100-4096, and an unspecified
+    # preference leaves it to chance whether ours is consulted before them. Explicit mask:
+    # `fwmark VAL` alone demands the rest of the mark word be zero.
+    ip rule show 2>/dev/null | grep -q "fwmark $WARP_MARK" \
+        || ip rule add pref "$WARP_RULE_PREF" fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
     # Mark game-ipset dst ONLY in PREROUTING (forwarded LAN-client traffic — PS5/phones).
     # NOT OUTPUT (router-origin) — routing a locally-generated packet into the TUN breaks
     # its reply path and blackholes the router's own CF/AWS access (github / VPS fetches).
-    iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK" 2>/dev/null \
-        || iptables -w -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK" 2>/dev/null
+    # --set-xmark with a mask: --set-mark CLOBBERS the whole mark word, wiping any other
+    # mark already on the packet (Keenetic sets its own).
+    iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null \
+        || iptables -w -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null
+    # Forwarded traffic needs NAT, whoever owns it.
+    warp_nat_ensure
 }
 
 warp_pbr_down() {
@@ -654,6 +812,7 @@ warp_enable() {
     # Widen the probe for this path only — see WARP_ENABLE_PROBE_TIMEOUT.
     WARP_PROBE_TIMEOUT="$WARP_ENABLE_PROBE_TIMEOUT"
     WARP_PROBE_RETRY_WAIT="$WARP_ENABLE_RETRY_WAIT"
+    WARP_PROBE_ESCALATE=1
     local deadline now attempt=0 kicked=0 vidx=0 cand= reregged=0
     now=$(_warp_now 2>/dev/null || echo 0)
     deadline=$(( now + WARP_ENABLE_BUDGET ))
@@ -745,12 +904,13 @@ warp_enable() {
     # The fresh registration did not help either — leave the user with the one they had.
     warp_reregister_rollback
     if warp_engine_connected; then
-        # The distinction that decides what the user should DO: the tunnel builds fine and
-        # the traffic inside it does not pass. That is the provider filtering WARP itself,
-        # and nothing on this router changes it — saying "не поднялся" would send them
-        # chasing a local fault that does not exist.
-        _wlog "туннель к Cloudflare УСТАНАВЛИВАЕТСЯ, но трафик внутри него не проходит — его режет провайдер"
-        _wlog "менять адреса и перезапускать бесполезно; режим включён, трафик идёт напрямую"
+        # Cloudflare accepted the CONNECT-IP request and traffic still does not pass. State
+        # what is observed, and stop short of naming a culprit: the previous wording blamed
+        # the provider, and it was derived from a marker that turned out to mean nothing
+        # ("Tunnel established" is printed before any dialling). MTU, a pinned endpoint and
+        # a filtered path all look identical from here.
+        _wlog "сессия к Cloudflare установлена, но трафик внутри туннеля не проходит"
+        _wlog "режим включён, трафик идёт напрямую; z2k продолжит попытки в фоне"
     else
         _wlog "туннель НЕ поднялся за ${WARP_ENABLE_BUDGET}с — режим включён, но трафик идёт напрямую"
     fi
@@ -834,6 +994,11 @@ warp_reregister_guarded() {
     _warp_cooldown_ok "$WARP_REG_STAMP" "$WARP_REG_COOLDOWN" || {
         _wlog "перерегистрация под кулдауном — пропускаю"; return 1; }
     cp -f "$USQUE_SESSION" "$USQUE_SESSION.prev" 2>/dev/null || return 1
+    # Drop any endpoint variant FIRST. A fresh registration writes session.conf, but the
+    # init prefers session.alt.conf when it exists — so without this the engine would keep
+    # starting on the old pinned config with the OLD key, and "re-registration did not
+    # help" would be structurally guaranteed. That is the field report, exactly.
+    warp_variant_clear
     _wlog "сессия встаёт, но трафика нет — пробую свежую регистрацию (прежняя сохранена)"
     "$USQUE_BIN" register --accept-tos --config "$USQUE_SESSION" >/dev/null 2>&1
     # A truncated or key-less config is worse than the old one: put it back at once.
@@ -901,6 +1066,12 @@ warp_enroll_or_fallback() {
 # usque by hand. Called ~every minute by the scheduler.
 warp_selfheal() {
     [ "$(warp_flag)" = "1" ] || return 0
+    # A pinned endpoint variant that is not delivering must not survive here forever.
+    warp_variant_expire
+    # And the device MTU must not drift above what the engine can read.
+    warp_mtu_ensure
+    # Our own handshake must stay out of the bypass, whatever the whitelist says.
+    warp_endpoint_nozapret
     # One-shot r-62 drain, marker-guarded (one file test per tick once done). It has to be
     # reachable from here, not only from the toggle: a router upgraded with the mode already
     # ON would otherwise keep double-NATing until somebody happened to toggle it off and on.

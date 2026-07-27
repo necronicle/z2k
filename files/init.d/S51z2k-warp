@@ -59,6 +59,11 @@ KEEPALIVE="${KEEPALIVE:-25s}"                      # usque -k; CF drops an idle 
 # default reconnect delay is 1 s, and on a router whose ISP blocks the endpoint that is a
 # reconnect storm.
 RECONNECT_DELAY="${RECONNECT_DELAY:-5s}"
+# Our own keepalive: interval and target. 120 s sits comfortably inside Cloudflare's ~5 min
+# idle drop while costing a fraction of the traffic a 25 s poll would. Addressed by IP for
+# the same reason as the liveness probe — a DNS hiccup must not look like a dead tunnel.
+KEEPALIVE_SECS="${KEEPALIVE_SECS:-120}"
+KEEPALIVE_URL="${KEEPALIVE_URL:-https://1.1.1.1/cdn-cgi/trace}"
 
 # Legacy package paths — read ONLY to migrate away from them.
 PKG_INIT="/opt/etc/init.d/S51usque"
@@ -232,6 +237,7 @@ setup_ndm_iface() {
         ndm_took=0
         log "NDM did not apply $addr to $nd — setting it directly. Have: [$(ip -o addr show "$ifc" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | tr '\n' ' ')]"
         ip addr add "$addr/32" dev "$ifc" 2>/dev/null
+        ip link set dev "$ifc" mtu "$MTU" 2>/dev/null
         ip link show "$ifc" 2>/dev/null | grep -qw UP || ip link set "$ifc" up 2>/dev/null
         w=0
         while [ "$w" -lt 5 ] && ! _addr_present "$ifc" "$addr"; do
@@ -392,8 +398,13 @@ start() {
     # `trap '' HUP` keeps the MIPS busybox SIGHUP fix; no `nohup` — busybox does not ship it.
     (
         trap '' HUP
-        trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+        # Kill EVERYTHING this loop spawned, not just the daemon. The NDM-configuration
+        # subshell waits up to 30 s for the device and then brings the interface UP — after
+        # a `stop` that means it quietly undoes the stop up to ~45 s later. The keepalive
+        # loop would likewise keep poking a tunnel being torn down.
+        trap 'kill "$child" "$keeper" "$ndmjob" 2>/dev/null; exit 0' TERM INT
         backoff=1
+        keeper=''; ndmjob=''
         while :; do
             t0=$(date +%s 2>/dev/null || echo 0)
             # ENDPOINT VARIANT, if one was chosen. Both files are ABSENT by default, so a
@@ -415,12 +426,50 @@ start() {
                 *) _pflag="-P $_p" ;;
             esac
             [ "$_cfg" = "$SESSION" ] || log "using endpoint variant config $(basename "$_cfg")${_pflag:+ $_pflag}"
+            # -k is a NO-OP in --http2 mode: usque only feeds it into the QUIC config, and
+            # the h2 transport is built without ReadIdleTimeout/PingTimeout. It is kept so
+            # the flag is right if we ever leave h2, but nothing keeps this session alive
+            # except the keepalive loop below — the comment at $KEEPALIVE used to claim
+            # otherwise and that claim shaped several wrong diagnoses.
+            # -S: no IPv6 inside the tunnel. We route an IPv4 ipset and nothing else, while
+            # the IPv6 side only pulled link-local multicast into the session — the source
+            # of the "Hop Limit too small" spam that buried the useful lines in this log.
             # shellcheck disable=SC2086  # _pflag is deliberately word-split: empty = no flag
-            GODEBUG=asyncpreemptoff=1 "$BIN" nativetun \
+            # http_proxy/https_proxy CLEARED for the daemon: usque's h2 path honours them
+            # (api/masque.go), so a proxy variable inherited from the environment would
+            # silently route the MASQUE session through it — invisible in our logs and
+            # indistinguishable from a broken tunnel. We only ever want a proxy for the
+            # enrolment path, where it is passed explicitly.
+            GODEBUG=asyncpreemptoff=1 http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= \
+                "$BIN" nativetun \
                 --config "$_cfg" --interface-name "$ifc" --no-iproute2 \
-                -s "$SNI" --http2 -k "$KEEPALIVE" \
+                -s "$SNI" --http2 -k "$KEEPALIVE" -S \
                 --always-reconnect -r "$RECONNECT_DELAY" $_pflag </dev/null >> "$LOG" 2>&1 &
             child=$!
+            # KEEPALIVE, ours, because the engine's does not exist in h2 mode. Cloudflare
+            # drops an idle MASQUE session (~5 min, documented upstream) and penalises the
+            # wake-up: new requests then take 10-20 s, which is longer than any probe we run,
+            # so an idle tunnel reads as broken and gets "repaired" by a restart that idles
+            # it again. One tiny request well inside the idle window breaks that loop.
+            # curl, not ping: ICMP through the tunnel is dropped (measured on the router,
+            # 100% loss), so a ping-based keepalive would keep nothing alive.
+            # Sleeps in SHORT steps rather than one long one, for two reasons: the loop
+            # notices the daemon dying within seconds instead of up to a full interval, and
+            # `sleep` is a separate child — killing the subshell leaves a long sleep orphaned
+            # (measured: after `stop` a `sleep 120` was still around). With 5 s steps the
+            # loop ends itself and no orphan outlives it meaningfully.
+            (
+                _acc=0
+                while kill -0 "$child" 2>/dev/null; do
+                    sleep 5
+                    _acc=$((_acc + 5))
+                    [ "$_acc" -lt "$KEEPALIVE_SECS" ] && continue
+                    _acc=0
+                    kill -0 "$child" 2>/dev/null || break
+                    curl -4 --interface "$ifc" -s -m 5 -o /dev/null "$KEEPALIVE_URL" 2>/dev/null
+                done
+            ) >/dev/null 2>&1 &
+            keeper=$!
             # Configure NDM once the tun netdev actually exists — never before.
             (
                 w=0
@@ -428,13 +477,26 @@ start() {
                     w=$((w + 1)); sleep 1
                 done
                 if ip link show "$ifc" >/dev/null 2>&1; then
+                    # MTU FIRST, before NDM is even asked. usque reads the TUN with a buffer
+                    # of exactly its own MTU (1280 by default) and SILENTLY TRUNCATES
+                    # anything larger — and in HTTP/2 mode there is no PMTU discovery and no
+                    # ICMP Packet-Too-Big to correct it. A device left at the kernel default
+                    # 1500 therefore drops large packets into a black hole: measured on a
+                    # live router, MTU 1500 makes the probe time out while 1280/1200/1000
+                    # all return warp=on. Waiting for NDM to set it leaves that window open
+                    # for up to 40 s, and the iproute2 fallback never set it at all.
+                    ip link set dev "$ifc" mtu "$MTU" 2>/dev/null
                     setup_ndm_iface "$ifc" "$addr" \
                         || log "interface setup FAILED for $ifc ($addr) — selfheal will retry"
                 else
                     log "$ifc never appeared within 30s — usque did not create the tun"
                 fi
             ) &
+            ndmjob=$!
             wait "$child"
+            # The keepalive loop outlives its daemon otherwise, and on `stop` it would keep
+            # poking a tunnel we are tearing down.
+            kill "$keeper" "$ndmjob" 2>/dev/null
             t1=$(date +%s 2>/dev/null || echo 0)
             if [ $((t1 - t0)) -ge 60 ]; then backoff=1; else
                 backoff=$((backoff * 2)); [ "$backoff" -gt 30 ] && backoff=30

@@ -30,6 +30,9 @@ WARPSH="${Z2K_WARPSH_UNDER_TEST:-$HERE/files/z2k-warp.sh}"
 ACTIONS="$HERE/webpanel/cgi/actions.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/wwhy.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
+# Exported once: the probe-behaviour cases below run in a child shell that writes its
+# trace under $TMP. Passing it as a command prefix instead trips SC2097/2098 in CI.
+export TMP
 
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
@@ -328,9 +331,15 @@ case "$enable_fn3" in
     *) no "rotation is skipped when the session does establish" "the guard" "absent" ;;
 esac
 case "$enable_fn3" in
-    *"УСТАНАВЛИВАЕТСЯ, но трафик внутри него не проходит"*)
-        ok "the verdict distinguishes 'filtered inside' from 'never came up'" ;;
-    *)  no "the verdict distinguishes 'filtered inside' from 'never came up'" "the wording" "absent" ;;
+    *"сессия к Cloudflare установлена, но трафик внутри туннеля не проходит"*)
+        ok "the verdict distinguishes 'session up, no traffic' from 'never came up'" ;;
+    *)  no "the verdict distinguishes 'session up, no traffic' from 'never came up'" "the wording" "absent" ;;
+esac
+# ...and it must NOT name a culprit. The old wording blamed the provider, derived from a
+# marker that means nothing, and that verdict was sent to a user.
+case "$enable_fn3" in
+    *"режет провайдер"*) no "the verdict does not blame the provider" "no blame" "still blames" ;;
+    *) ok "the verdict does not blame the provider" ;;
 esac
 gc_ln=$(printf '%s\n' "$enable_fn3" | grep -n 'warp_engine_connected' | head -1 | cut -d: -f1)
 rot_ln=$(printf '%s\n' "$enable_fn3" | grep -n 'vidx=\$((vidx + 1))' | head -1 | cut -d: -f1)
@@ -494,6 +503,269 @@ rd=$(sed -n 's/^RECONNECT_DELAY="${RECONNECT_DELAY:-\([0-9]*\)s}".*/\1/p' "$S51W
 [ -n "$rd" ] && [ "$rd" -ge 5 ] \
     && ok "the reconnect delay is not the 1 s default (${rd}s) — no storm on a blocked ISP" \
     || no "the reconnect delay is not the 1 s default" ">=5s" "${rd:-unset}"
+
+# --- 9j. "Tunnel established" is not evidence of anything --------------------
+# usque prints it unconditionally BEFORE it dials (cmd/nativetun.go). Treating it as a live
+# session is what made enable skip endpoint variants, burn a re-registration and blame the
+# provider. Only the HTTP 200 on CONNECT-IP counts.
+mk_log '2026/07/27 10:00:00 UTC Tunnel established, you may now set up routing and DNS'
+case "$(conn)" in *rc=1*) ok "'Tunnel established' alone is NOT treated as connected" ;;
+    *) no "'Tunnel established' alone is NOT treated as connected" "rc=1" "$(conn)" ;; esac
+# A non-200 from Cloudflare is a failure we were not detecting at all.
+mk_log '2026/07/27 10:00:00 UTC Connected to MASQUE server' \
+       '2026/07/27 10:01:00 UTC Tunnel connection failed: 403'
+case "$(conn)" in *rc=1*) ok "'Tunnel connection failed' is recognised as a failure" ;;
+    *) no "'Tunnel connection failed' is recognised as a failure" "rc=1" "$(conn)" ;; esac
+rm -f "$TMP/engine.log"
+
+# --- 9k. a pinned endpoint variant cannot become permanent ------------------
+# THE field bug: the init prefers session.alt.conf forever, and clearing it used to be
+# reachable only from the final failure branch of enable. Reproduced on a live router — the
+# engine kept starting against 188.114.98.1 across restarts, which is "restarting does not
+# help" exactly.
+exp=$(extract_fn warp_variant_expire "$WARPSH")
+[ -n "$exp" ] && ok "there is a variant-expiry path at all" \
+              || no "there is a variant-expiry path at all" "warp_variant_expire" "absent"
+case "$exp" in
+    *'warp_live_cached'*) ok "a variant that IS delivering is kept" ;;
+    *) no "a variant that IS delivering is kept" "the liveness check" "absent" ;;
+esac
+case "$exp" in
+    *WARP_VARIANT_TTL*) ok "expiry is time-bounded, not immediate (no race with enable)" ;;
+    *) no "expiry is time-bounded, not immediate" "a TTL" "absent" ;;
+esac
+sh_fn=$(extract_fn warp_selfheal "$WARPSH")
+case "$sh_fn" in
+    *warp_variant_expire*) ok "selfheal runs the expiry (the toggle is not the only path)" ;;
+    *) no "selfheal runs the expiry" "the call" "absent" ;;
+esac
+rr2=$(extract_fn warp_reregister_guarded "$WARPSH")
+case "$rr2" in
+    *warp_variant_clear*) ok "re-registration drops the pin first" ;;
+    *) no "re-registration drops the pin first" "warp_variant_clear" "absent" ;;
+esac
+# Order matters: clearing after registering would leave the engine on the old key.
+c_ln=$(printf '%s\n' "$rr2" | grep -n 'warp_variant_clear' | head -1 | cut -d: -f1)
+g_ln=$(printf '%s\n' "$rr2" | grep -n 'register --accept-tos' | head -1 | cut -d: -f1)
+if [ -n "$c_ln" ] && [ -n "$g_ln" ] && [ "$c_ln" -lt "$g_ln" ]; then
+    ok "the pin is dropped BEFORE registering ($c_ln < $g_ln)"
+else
+    no "the pin is dropped BEFORE registering" "clear first" "$c_ln/$g_ln"
+fi
+
+# --- 9l. the guessed endpoints are gone -------------------------------------
+# Measured: 188.114.x answer our SNI with alert 40 and no certificate, and with the correct
+# SNI present a different public key that usque's pinning rejects. They are WireGuard-range
+# addresses; upstream says h2 endpoints must be read off the official client.
+eps=$(grep -m1 '^WARP_ENDPOINTS=' "$WARPSH")
+case "$eps" in
+    *188.114.*) no "no guessed WireGuard-range addresses among the candidates" "none" "$eps" ;;
+    *) ok "no guessed WireGuard-range addresses among the candidates" ;;
+esac
+case "$eps" in
+    *162.159.198.2*) ok "the documented endpoint is what remains" ;;
+    *) no "the documented endpoint is what remains" "162.159.198.2" "$eps" ;;
+esac
+# The rewrite must be anchored on the endpoint line, or it can corrupt unrelated fields.
+ap2=$(extract_fn warp_variant_apply "$WARPSH")
+case "$ap2" in
+    *'endpoint_h2_v4'*) ok "the endpoint rewrite is anchored on its own key" ;;
+    *) no "the endpoint rewrite is anchored on its own key" "the anchor" "absent" ;;
+esac
+
+# --- 9m. the data path: MTU, NAT, PBR ---------------------------------------
+# Everything here protects the FORWARDED path — the one users actually use, and the one our
+# probe has never tested. The probe binds to the device and sources from the tunnel address;
+# a LAN client's packet is forwarded, needs NAT and needs to be marked. All three could be
+# broken while the probe stayed green, which is how "the panel says it works" and "the whole
+# internet is down" were both true for the same router.
+
+# MTU: usque reads the TUN with a buffer of exactly its own MTU and truncates silently;
+# h2 mode has no PMTU discovery. Measured live: 1500 -> probe times out, 1280 -> warp=on.
+mtu_fn=$(extract_fn warp_mtu_ensure "$WARPSH")
+[ -n "$mtu_fn" ] && ok "there is an MTU invariant at all" \
+                 || no "there is an MTU invariant at all" "warp_mtu_ensure" "absent"
+case "$mtu_fn" in
+    *'-le "$WARP_MTU"'*) ok "the invariant is an upper bound, not an equality" ;;
+    *) no "the invariant is an upper bound, not an equality" "a <= check" "$mtu_fn" ;;
+esac
+case "$(extract_fn warp_pbr_up "$WARPSH")" in
+    *warp_mtu_ensure*) ok "MTU is asserted before routing is applied" ;;
+    *) no "MTU is asserted before routing is applied" "the call" "absent" ;;
+esac
+case "$(extract_fn warp_selfheal "$WARPSH")" in
+    *warp_mtu_ensure*) ok "MTU is re-asserted on every selfheal tick" ;;
+    *) no "MTU is re-asserted on every selfheal tick" "the call" "absent" ;;
+esac
+# The init must set it the moment the device appears, not wait for NDM (a 40 s window), and
+# the iproute2 fallback must set it too — it used to set only the address.
+S51M="$HERE/files/init.d/S51z2k-warp"
+n=$(grep -c 'ip link set dev "$ifc" mtu "$MTU"' "$S51M")
+[ "${n:-0}" -ge 2 ] && ok "the init sets MTU both on device appearance and in the fallback ($n)" \
+                    || no "the init sets MTU in both places" ">=2" "$n"
+
+# NAT: verified, not assumed. Dropping our MASQUERADE because "NDM does it" is only safe
+# when NDM's rule actually exists — and it does not when `ip global` was never applied,
+# which is precisely the state the fallback leaves behind.
+np=$(extract_fn warp_nat_present "$WARPSH")
+[ -n "$np" ] && ok "NDM's NAT is checked at runtime" || no "NDM's NAT is checked at runtime" "warp_nat_present" "absent"
+purge=$(extract_fn warp_purge_legacy_nat "$WARPSH")
+case "$purge" in
+    *'! warp_nat_present'*) ok "the legacy purge refuses to run when NDM has no NAT" ;;
+    *) no "the legacy purge refuses to run when NDM has no NAT" "the guard" "absent" ;;
+esac
+case "$(extract_fn warp_pbr_up "$WARPSH")" in
+    *warp_nat_ensure*) ok "bringing routing up guarantees NAT exists" ;;
+    *) no "bringing routing up guarantees NAT exists" "warp_nat_ensure" "absent" ;;
+esac
+
+# PBR: explicit pref (Keenetic's own rules sit at 100-4096) and an explicit mask
+# (--set-mark clobbers the whole word, wiping Keenetic's own marks).
+pbr=$(extract_fn warp_pbr_up "$WARPSH")
+case "$pbr" in
+    *'pref "$WARP_RULE_PREF"'*) ok "the ip rule has an explicit preference" ;;
+    *) no "the ip rule has an explicit preference" "pref" "absent" ;;
+esac
+case "$pbr" in
+    *'--set-xmark'*) ok "the mark is set with a mask (--set-xmark)" ;;
+    *) no "the mark is set with a mask (--set-xmark)" "--set-xmark" "absent" ;;
+esac
+# Non-comment lines only — the comment explaining WHY --set-mark is wrong contains it.
+# (Third time today that a grep matched my own explanation; the pattern is the lesson.)
+pbr_code=$(printf '%s\n' "$pbr" | grep -v '^[[:space:]]*#')
+case "$pbr_code" in
+    *'--set-mark '*) no "the clobbering --set-mark form is gone from the add path" "absent" "still there" ;;
+    *) ok "the clobbering --set-mark form is gone from the add path" ;;
+esac
+# ...but the DOWN path must still know the old form, or legacy rules become unremovable.
+down=$(extract_fn warp_pbr_down "$WARPSH")
+case "$down" in
+    *'--set-mark '*) ok "the teardown still removes legacy --set-mark rules" ;;
+    *) no "the teardown still removes legacy --set-mark rules" "the legacy form" "absent" ;;
+esac
+pref=$(sed -n 's/^WARP_RULE_PREF="${WARP_RULE_PREF:-\([0-9]*\)}".*/\1/p' "$WARPSH" | head -1)
+[ -n "$pref" ] && [ "$pref" -lt 100 ] \
+    && ok "our rule is consulted before Keenetic's policy rules (pref $pref < 100)" \
+    || no "our rule is consulted before Keenetic's policy rules" "<100" "${pref:-unset}"
+
+# --- 9n. engine hygiene: keepalive, -S, and a stop that stops ---------------
+# `-k` is a NO-OP in --http2 (it only reaches the QUIC config), so nothing kept the session
+# alive. Cloudflare drops an idle MASQUE session and then makes the wake-up take 10-20 s —
+# longer than any probe we run, so an idle tunnel reads as broken and gets "repaired" by a
+# restart that idles it again.
+S51H="$HERE/files/init.d/S51z2k-warp"
+grep -q 'KEEPALIVE_SECS' "$S51H" && ok "there is a keepalive of our own" \
+                                 || no "there is a keepalive of our own" "KEEPALIVE_SECS" "absent"
+ks=$(sed -n 's/^KEEPALIVE_SECS="${KEEPALIVE_SECS:-\([0-9]*\)}".*/\1/p' "$S51H" | head -1)
+[ -n "$ks" ] && [ "$ks" -lt 300 ] \
+    && ok "the keepalive fits inside Cloudflare's ~5 min idle drop (${ks}s)" \
+    || no "the keepalive fits inside the idle window" "<300" "${ks:-unset}"
+# curl, not ping: ICMP through the tunnel is dropped (measured on the router, 100% loss).
+grep -q 'curl -4 --interface "$ifc" -s -m 5 -o /dev/null "$KEEPALIVE_URL"' "$S51H" \
+    && ok "the keepalive uses a path that actually works through the tunnel" \
+    || no "the keepalive uses a path that actually works" "curl through the interface" "absent"
+# Short sleep steps: a long `sleep` is a separate child and survives its parent.
+grep -q 'sleep 5' "$S51H" && ok "the keepalive sleeps in short steps (no orphaned sleep)" \
+                          || no "the keepalive sleeps in short steps" "sleep 5" "absent"
+grep -q -- '-S \\' "$S51H" && ok "IPv6 inside the tunnel is disabled (-S)" \
+                          || no "IPv6 inside the tunnel is disabled (-S)" "-S" "absent"
+# The launch must appear exactly once — an earlier edit of mine left a truncated copy of the
+# command whose trailing backslash swallowed the following comment, so the engine started
+# WITHOUT --http2 and in the foreground. dash -n was perfectly happy with it.
+n=$(grep -c '"\$BIN" nativetun' "$S51H")
+[ "$n" = 1 ] && ok "the engine is launched exactly once ($n)" \
+             || no "the engine is launched exactly once" 1 "$n"
+# A stop must take everything the supervisor spawned with it.
+grep -q 'kill "$child" "$keeper" "$ndmjob"' "$S51H" \
+    && ok "the TERM trap kills the daemon, the keepalive and the NDM job" \
+    || no "the TERM trap kills all spawned jobs" "all three" "absent"
+
+# --- 9o. our own handshake is excluded from the bypass ----------------------
+# The MASQUE session is plain TLS to a Cloudflare address and z2k desyncs TLS. It survived
+# only because our fronting SNI happens to be in the shipped whitelist — so a user editing
+# that whitelist would start desyncing our own tunnel with no way to know why. The engine's
+# NFQUEUE rules all carry `! --match-set nozapret dst`, so the address belongs in that set.
+noz=$(extract_fn warp_endpoint_nozapret "$WARPSH")
+[ -n "$noz" ] && ok "there is an endpoint exclusion at all" \
+              || no "there is an endpoint exclusion at all" "warp_endpoint_nozapret" "absent"
+case "$noz" in
+    *nozapret*) ok "it uses the engine's own exclusion set, not a new rule" ;;
+    *) no "it uses the engine's own exclusion set" "nozapret" "absent" ;;
+esac
+case "$noz" in
+    *'ipset test nozapret'*) ok "it is idempotent (tests before adding)" ;;
+    *) no "it is idempotent" "an ipset test" "absent" ;;
+esac
+# The address must come from the config actually in use, or we would exclude the wrong one.
+case "$noz" in
+    *'[ -s "$WARP_ALT_CONF" ] && cfg="$WARP_ALT_CONF"'*) ok "it reads the config the engine is really using" ;;
+    *) no "it reads the config the engine is really using" "the alt-config check" "absent" ;;
+esac
+case "$(extract_fn warp_pbr_up "$WARPSH")" in
+    *warp_endpoint_nozapret*) ok "the exclusion is applied when routing comes up" ;;
+    *) no "the exclusion is applied when routing comes up" "the call" "absent" ;;
+esac
+case "$(extract_fn warp_selfheal "$WARPSH")" in
+    *warp_endpoint_nozapret*) ok "the exclusion is re-applied every tick (the set is the engine's)" ;;
+    *) no "the exclusion is re-applied every tick" "the call" "absent" ;;
+esac
+
+# --- 9p. the probe escalates instead of being uniformly slow ----------------
+# Upstream #49: after idle, Cloudflare makes new requests take 10-20 s. An 8 s ceiling
+# cannot span that. Raising it for EVERY probe would block the scheduler 20 s a tick, so the
+# longer ceiling is paid only after two ordinary failures — never on a healthy router.
+cat > "$TMP/retry.sh" <<'EOF'
+WARP_PROBE_RETRY_WAIT=0
+WARP_PROBE_TIMEOUT=8
+WARP_PROBE_SLOW_TIMEOUT=20
+WARP_PROBE_ESCALATE=1
+warp_tunnel_live() { echo "$WARP_PROBE_TIMEOUT" >> "$TMP/probes"; return 1; }
+EOF
+extract_fn warp_tunnel_live_retry "$WARPSH" >> "$TMP/retry.sh"
+echo 'warp_tunnel_live_retry; echo "rc=$?"; echo "after=$WARP_PROBE_TIMEOUT"' >> "$TMP/retry.sh"
+: > "$TMP/probes"
+out=$(sh "$TMP/retry.sh" 2>&1)
+seq=$(tr '\n' ' ' < "$TMP/probes")
+[ "$seq" = "8 8 20 " ] && ok "probes escalate 8 -> 8 -> 20 ($seq)" \
+                       || no "probes escalate 8 -> 8 -> 20" "8 8 20" "$seq"
+case "$out" in *"after=8"*) ok "the widened timeout is restored afterwards" ;;
+    *) no "the widened timeout is restored afterwards" "after=8" "$out" ;; esac
+case "$out" in *rc=1*) ok "all three failing means not live" ;;
+    *) no "all three failing means not live" "rc=1" "$out" ;; esac
+# A tunnel that answers on the first probe must cost exactly one probe.
+cat > "$TMP/retry1.sh" <<'EOF'
+WARP_PROBE_RETRY_WAIT=0
+WARP_PROBE_TIMEOUT=8
+WARP_PROBE_SLOW_TIMEOUT=20
+warp_tunnel_live() { echo "$WARP_PROBE_TIMEOUT" >> "$TMP/probes1"; return 0; }
+EOF
+extract_fn warp_tunnel_live_retry "$WARPSH" >> "$TMP/retry1.sh"
+echo 'warp_tunnel_live_retry; echo "rc=$?"' >> "$TMP/retry1.sh"
+: > "$TMP/probes1"
+out=$(sh "$TMP/retry1.sh" 2>&1)
+n=$(grep -c . "$TMP/probes1")
+[ "$n" = 1 ] && ok "a healthy tunnel still costs exactly one probe ($n)" \
+             || no "a healthy tunnel still costs exactly one probe" 1 "$n"
+# And WITHOUT the opt-in the retry must stop at two — selfheal runs this every tick and a
+# down tunnel would otherwise eat 36 s of every 60 s.
+cat > "$TMP/retry2.sh" <<'EOF'
+WARP_PROBE_RETRY_WAIT=0
+WARP_PROBE_TIMEOUT=8
+WARP_PROBE_SLOW_TIMEOUT=20
+WARP_PROBE_ESCALATE=0
+warp_tunnel_live() { echo x >> "$TMP/probes2"; return 1; }
+EOF
+extract_fn warp_tunnel_live_retry "$WARPSH" >> "$TMP/retry2.sh"
+echo 'warp_tunnel_live_retry' >> "$TMP/retry2.sh"
+: > "$TMP/probes2"
+sh "$TMP/retry2.sh" >/dev/null 2>&1
+n2=$(grep -c . "$TMP/probes2")
+[ "$n2" = 2 ] && ok "without the opt-in it still stops at two probes ($n2)" \
+              || no "without the opt-in it still stops at two probes" 2 "$n2"
+case "$(extract_fn warp_enable "$WARPSH")" in
+    *'WARP_PROBE_ESCALATE=1'*) ok "only enable opts into the slow third probe" ;;
+    *) no "only enable opts into the slow third probe" "the opt-in" "absent" ;;
+esac
 
 # --- 10. the caller actually prints the reason ------------------------------
 enable_fn=$(extract_fn warp_enable "$WARPSH")
