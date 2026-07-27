@@ -646,11 +646,17 @@ if [ -n "$BIGSHELL" ] && [ -n "$bimpl" ]; then
         # visibly worse. If it is not, the ceiling asserted above is decoration
         # and every perf PASS in this file is meaningless - so this is a
         # failure, not a skip.
-        if [ "$oms" -ge 250 ] && [ "$oms" -ge $(( (nms + 1) * 20 )) ]; then
+        #
+        # The discriminator is the RATIO, not an absolute millisecond count. A
+        # 250 ms floor was machine-speed dependent and went red on a fast CI
+        # runner that did the quadratic form in 202 ms — while still being 200x
+        # slower than the new one, i.e. maximally discriminating and reported as
+        # a failure. The absolute part now only has to clear timer noise.
+        if [ "$oms" -ge 50 ] && [ "$oms" -ge $(( (nms + 1) * 20 )) ]; then
             ok "timing harness is discriminating: 32KB old=${oms}ms vs new=${nms}ms"
         else
             no "timing harness is discriminating: pre-fix form must be visibly slower" \
-               ">=250ms and >=20x new" "old=${oms}ms new=${nms}ms"
+               ">=50ms and >=20x new" "old=${oms}ms new=${nms}ms"
         fi
     else
         no "timing harness self-check ran" "PERFOLD line" "none"
