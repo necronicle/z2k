@@ -1114,6 +1114,28 @@ au_run_apply() {
             ;;
     esac
 
+    # Pull the per-game WARP lists when there are none, so the router that first
+    # receives this feature does not sit on an empty WARP page until the nightly
+    # refresh — up to a day of "the feature does nothing", which is a poor first
+    # screen for what is now the only way WARP gets any addresses at all.
+    #
+    # Gated on the directory being EMPTY rather than on a one-shot marker. That
+    # makes it a single fetch in practice (once lists exist, every later update
+    # skips it — the nightly refresh owns them from then on) and it still
+    # self-heals the one case a marker would strand: games/ is deliberately not
+    # preserved across a reinstall, so a marker set today would leave a
+    # reinstalled router with no lists and no way to get them until tomorrow.
+    #
+    # Backgrounded and non-fatal: the update is already finished and healthy
+    # here, so an unreachable list mirror must not stretch it, fail it, or roll
+    # back a perfectly good update.
+    _au_zd="${ZAPRET2_DIR:-/opt/zapret2}"
+    if [ -x "$_au_zd/z2k-update-lists.sh" ] && \
+       [ -z "$(ls "$_au_zd/lists/warp/games/"*.txt 2>/dev/null)" ]; then
+        au_log "no WARP game lists yet — fetching them in the background"
+        ( sh "$_au_zd/z2k-update-lists.sh" warp-games >/dev/null 2>&1 || true ) &
+    fi
+
     au_log "update OK: now at $target_tag"
     au_lock_release
     trap - EXIT INT TERM HUP

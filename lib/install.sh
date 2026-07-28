@@ -2883,6 +2883,18 @@ step_finalize() {
         sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || true
     fi
 
+    # Same idea for the WARP game lists: a fresh install goes nowhere near the
+    # auto-updater, so without this the first thing a new user sees on the WARP
+    # page is "no lists" — for up to a day, until the nightly refresh. Gated on
+    # the directory being empty, so a reinstall that already has them does not
+    # go out to the network at all.
+    if [ -x "${ZAPRET2_DIR}/z2k-update-lists.sh" ] && \
+       [ -z "$(ls "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null)" ]; then
+        print_info "Загрузка игровых списков WARP..."
+        sh "${ZAPRET2_DIR}/z2k-update-lists.sh" warp-games >/dev/null 2>&1 || \
+            print_warning "Игровые списки WARP не загрузились — подтянутся при следующем обновлении списков"
+    fi
+
     # Discord-voice DNS pinning REMOVED (p-57.3). It used to pin ~200
     # finland*.discord.media records to one CF edge — 78% of Keenetic's 256
     # static-DNS ceiling — for marginal gain (the packet-level desync already

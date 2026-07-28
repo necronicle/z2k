@@ -632,4 +632,26 @@ main() {
 
 # Source-guard: tests set Z2K_UL_SOURCE_ONLY=1 to load the functions
 # (update_warp_game_list etc.) without running the full cron cycle.
-[ -n "${Z2K_UL_SOURCE_ONLY:-}" ] || main "$@"
+#
+# With no argument this is the nightly cycle, as before. `warp-games` refreshes
+# ONLY the per-game WARP lists, and exists so an update can pull them straight
+# away: without it a freshly updated router shows an empty WARP page until the
+# next nightly run, which is up to a day of "the feature does nothing". Running
+# the whole cycle there instead is not an option — it fetches the geosite and
+# RKN lists and would stretch every update by minutes for the sake of a couple
+# of dozen small files.
+if [ -z "${Z2K_UL_SOURCE_ONLY:-}" ]; then
+    case "${1:-}" in
+        warp-games)
+            mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
+            update_warp_game_list
+            ;;
+        ''|all)
+            main "$@"
+            ;;
+        *)
+            echo "usage: z2k-update-lists.sh [all|warp-games]" >&2
+            exit 1
+            ;;
+    esac
+fi

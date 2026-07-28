@@ -1412,6 +1412,7 @@ pre.log {
   /* State table → card layout (Skill rule: table-handling — card layout
      preferred over horizontal scroll on narrow screens). Each row becomes
      a stacked card with labels rendered via data-label::before. */
+  .sort-trigger { display: inline-flex; }
   .state-table thead { display: none; }
   .state-table, .state-table tbody { display: block; width: 100%; }
   /* Each row is a stacked card: one field per full-width row so a long domain
@@ -1458,6 +1459,96 @@ pre.log {
     border-bottom: 1px solid var(--border);
   }
 }
+
+/* ---------- SORT SHEET (mobile) ----------
+   Sorting lives in the table headers, and the mobile breakpoint hides thead
+   entirely (see .state-table thead below) — so on a phone there was no sort
+   control at all. The trigger + bottom sheet below are that control; both are
+   invisible on desktop, where the headers still do the job. */
+.sort-trigger {
+  display: none;                     /* desktop: headers are the control */
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 9px 14px;
+  min-height: 44px;                  /* finger-sized target */
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+.sort-trigger:hover { background: var(--bg-card-hover); }
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim-modal);
+  z-index: 120;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-base) var(--spring-smooth);
+}
+.sheet-backdrop.sheet-open { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 121;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  /* Partial overlay: the list stays visible behind it, which is the whole
+     reason for a sheet rather than a full-screen dialog. */
+  max-height: 70vh;
+  overflow-y: auto;
+  transform: translateY(100%);
+  transition: transform var(--dur-base) var(--spring-smooth);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.sheet.sheet-open { transform: translateY(0); }
+
+.sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+/* Visible close affordance — NN/g: never rely on the swipe gesture alone. */
+.sheet-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px; height: 36px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.sheet-close:hover { background: var(--bg-card-hover); color: var(--text); }
+
+.sheet-body { padding: 6px 0 10px; }
+.sheet-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 16px;
+  min-height: 48px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.sheet-option:hover { background: var(--bg-card-hover); }
+.sheet-option.active { color: var(--accent); font-weight: 600; }
+.sheet-option-arrow { display: inline-flex; align-items: center; }
 
 /* Small phone (≤374px) — ещё компактнее на старых iPhone SE.
    Skill: 375 is the standard small-phone breakpoint; we tighten below it. */

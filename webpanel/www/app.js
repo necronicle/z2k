@@ -1027,10 +1027,11 @@
     }
     const games = (d && d.games) || [];
     if (!games.length) {
-      // Not an error state: lists arrive with the nightly refresh, and on a
-      // fresh install that has not run yet there is simply nothing to show.
-      host.innerHTML = `<p class="desc">Списки ещё не загружены — они приезжают с обновлением
-        списков (раз в сутки). Свои адреса можно добавить ниже уже сейчас.</p>`;
+      // Lists are pulled during the update itself, so being here means that
+      // fetch did not get through — not that the user has to wait a day.
+      host.innerHTML = `<p class="desc">Списки не загрузились — источник был недоступен.
+        Они подтянутся при следующем обновлении списков; свои адреса можно добавить
+        ниже уже сейчас.</p>`;
       return;
     }
     const on = games.filter(g => g.enabled === 1 || g.enabled === "1").length;
@@ -1807,7 +1808,35 @@
   // Sort state shared across loadState() invocations so a refresh
   // (manual button or after delete) preserves the chosen column.
   // Defaults: profile asc — same order as the previous unsorted view.
-  let stateSort = { key: "key", dir: "asc" };
+  //
+  // Persisted per browser under z2k-state-sort, next to z2k-sidebar and the
+  // theme key: it is a display preference, not router configuration, and one
+  // value is shared by the desktop headers and the mobile sheet — two different
+  // orders on the same screen surprise more than they help.
+  const STATE_SORT_KEY = "z2k-state-sort";
+  // The labels double as the mobile sheet's option list, so the set of sortable
+  // keys is declared once and cannot drift between the two controls.
+  const STATE_SORT_LABELS = { key: "Профиль", host: "Домен", strategy: "Стратегия", age: "Возраст" };
+
+  function loadStateSort() {
+    // Anything unrecognised falls back to the default. A stale value (a column
+    // renamed in a later release) would otherwise leave the table sorted by
+    // nothing at all, which reads as a broken load rather than a stale setting.
+    const fallback = { key: "key", dir: "asc" };
+    try {
+      const raw = localStorage.getItem(STATE_SORT_KEY);
+      if (!raw) return fallback;
+      const v = JSON.parse(raw);
+      if (!v || !STATE_SORT_LABELS[v.key]) return fallback;
+      if (v.dir !== "asc" && v.dir !== "desc") return fallback;
+      return { key: v.key, dir: v.dir };
+    } catch (_) { return fallback; }
+  }
+  function saveStateSort() {
+    try { localStorage.setItem(STATE_SORT_KEY, JSON.stringify(stateSort)); } catch (_) {}
+  }
+
+  let stateSort = loadStateSort();
   let statePools = {};   // key -> strategy-pool size, from GET /pools (live nfqws2)
 
   async function renderState() {
@@ -1966,7 +1995,13 @@
 
       const arrow = k => stateSort.key === k ? (stateSort.dir === "asc" ? " " + _icons.arrowUp : " " + _icons.arrowDown) : "";
       const th = (k, label) => `<th class="sortable" data-sort="${k}">${label}${arrow(k)}</th>`;
+      const sortLabel = STATE_SORT_LABELS[stateSort.key] || "Профиль";
+      const sortArrow = stateSort.dir === "asc" ? _icons.arrowUp : _icons.arrowDown;
       body.innerHTML = `
+        <button type="button" class="sort-trigger" id="state-sort-btn"
+                aria-haspopup="dialog" aria-expanded="false">
+          Сортировка: ${sortLabel} ${sortArrow}
+        </button>
         <table class="state-table">
           <thead>
             <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
@@ -1989,6 +2024,8 @@
           stateSet(btn.dataset.key, btn.dataset.host, btn.dataset.strategy, newMode);
         });
       });
+      const sortBtn = document.getElementById("state-sort-btn");
+      if (sortBtn) sortBtn.addEventListener("click", openSortSheet);
       body.querySelectorAll("th.sortable").forEach(th => {
         th.addEventListener("click", () => {
           const key = th.dataset.sort;
@@ -1999,6 +2036,7 @@
             // Numeric columns default desc (largest first); strings asc.
             stateSort.dir = (key === "strategy") ? "desc" : "asc";
           }
+          saveStateSort();
           loadState();
         });
       });
@@ -2376,6 +2414,104 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && nav.classList.contains("menu-open")) closeDrawer();
     });
+  }
+
+  // ---------- Sort sheet (mobile) ----------
+  // The mobile breakpoint hides the table head (style.css: .state-table thead
+  // { display: none }) and turns rows into cards — which removed the ONLY sort
+  // control there was, since sorting lives in the column headers. This is the
+  // mobile equivalent.
+  //
+  // A bottom sheet rather than a <select>: it keeps the list visible behind it,
+  // gives finger-sized targets, and avoids what native selects do to long option
+  // lists on a phone. NN/g's rules for sheets are followed — a visible close
+  // button, dismissal by Escape/Back and by tapping the scrim, and never
+  // stacked on top of another sheet.
+  //
+  // Direction is a SECOND tap on the already-selected option, mirroring the
+  // second click on a desktop header. One control instead of two, same mental
+  // model, and the arrow on the row says which way it currently goes.
+  function ensureSortSheet() {
+    let sheet = document.getElementById("sort-sheet");
+    if (sheet) return sheet;
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <div class="sheet-backdrop" id="sort-sheet-backdrop" hidden></div>
+      <div class="sheet" id="sort-sheet" role="dialog" aria-modal="true"
+           aria-labelledby="sort-sheet-title" hidden>
+        <div class="sheet-header">
+          <span id="sort-sheet-title">Сортировка</span>
+          <button type="button" class="sheet-close" id="sort-sheet-close" aria-label="Закрыть">${_icons.close || "\u2715"}</button>
+        </div>
+        <div class="sheet-body" id="sort-sheet-options"></div>
+      </div>`;
+    while (wrap.firstElementChild) document.body.appendChild(wrap.firstElementChild);
+    sheet = document.getElementById("sort-sheet");
+    document.getElementById("sort-sheet-backdrop").addEventListener("click", closeSortSheet);
+    document.getElementById("sort-sheet-close").addEventListener("click", closeSortSheet);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !sheet.hidden) closeSortSheet();
+    });
+    return sheet;
+  }
+
+  function renderSortOptions() {
+    const box = document.getElementById("sort-sheet-options");
+    if (!box) return;
+    box.innerHTML = Object.keys(STATE_SORT_LABELS).map(k => {
+      const active = stateSort.key === k;
+      const arrow = active ? (stateSort.dir === "asc" ? _icons.arrowUp : _icons.arrowDown) : "";
+      return `<button type="button" class="sheet-option${active ? " active" : ""}"
+                      data-sort="${k}" aria-pressed="${active}">
+                <span>${STATE_SORT_LABELS[k]}</span><span class="sheet-option-arrow">${arrow}</span>
+              </button>`;
+    }).join("");
+    box.querySelectorAll("[data-sort]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.sort;
+        if (stateSort.key === key) {
+          stateSort.dir = stateSort.dir === "asc" ? "desc" : "asc";
+        } else {
+          stateSort.key = key;
+          // Same default as the desktop header: numeric column starts largest-first.
+          stateSort.dir = (key === "strategy") ? "desc" : "asc";
+        }
+        saveStateSort();
+        renderSortOptions();   // reflect the new arrow before closing
+        closeSortSheet();
+        loadState();
+      });
+    });
+  }
+
+  function openSortSheet() {
+    const sheet = ensureSortSheet();
+    const backdrop = document.getElementById("sort-sheet-backdrop");
+    renderSortOptions();
+    sheet.hidden = false;
+    backdrop.hidden = false;
+    requestAnimationFrame(() => {
+      sheet.classList.add("sheet-open");
+      backdrop.classList.add("sheet-open");
+    });
+    const trigger = document.getElementById("state-sort-btn");
+    if (trigger) trigger.setAttribute("aria-expanded", "true");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeSortSheet() {
+    const sheet = document.getElementById("sort-sheet");
+    const backdrop = document.getElementById("sort-sheet-backdrop");
+    if (!sheet) return;
+    sheet.classList.remove("sheet-open");
+    if (backdrop) backdrop.classList.remove("sheet-open");
+    const trigger = document.getElementById("state-sort-btn");
+    if (trigger) trigger.setAttribute("aria-expanded", "false");
+    document.body.style.overflow = "";
+    setTimeout(() => {
+      sheet.hidden = true;
+      if (backdrop) backdrop.hidden = true;
+    }, 220);
   }
 
   // ---------- Boot ----------
