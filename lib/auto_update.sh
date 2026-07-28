@@ -24,7 +24,16 @@ Z2K_AU_INSTALLED_TAG_FILE="${Z2K_AU_INSTALLED_TAG_FILE:-/opt/zapret2/.z2k-instal
 Z2K_AU_LOCK_FILE="${Z2K_AU_LOCK_FILE:-/opt/zapret2/.update.lock}"
 Z2K_AU_LOG_FILE="${Z2K_AU_LOG_FILE:-/opt/var/log/z2k-auto-update.log}"
 Z2K_AU_TMP_DIR="${Z2K_AU_TMP_DIR:-/tmp/z2k_au}"
-Z2K_AU_HEALTH_TIMEOUT="${Z2K_AU_HEALTH_TIMEOUT:-60}"     # seconds to wait before health-check
+# Seconds to let the restarted service prove it STAYS up. Not a wait for it to
+# come up: au_apply_patch runs `/opt/etc/init.d/S99zapret2 restart` synchronously
+# and run_daemon() blocks on z2k_wait_queue_bound until nfqws2 has bound its
+# NFQUEUE, so by the time we get here the very thing the first check asks about
+# is already guaranteed. This window exists only to catch a daemon that starts,
+# binds, and then dies seconds later (the MIPS async-preempt crash loop).
+# It was 60s, described as "waiting for the service to settle" — a minute of
+# dead time on every update, and a description that made the number look
+# load-bearing when it was not.
+Z2K_AU_HEALTH_TIMEOUT="${Z2K_AU_HEALTH_TIMEOUT:-5}"
 Z2K_AU_HEALTH_GH_URL="${Z2K_AU_HEALTH_GH_URL:-https://github.com}"
 
 # ----------------------------------------------------------- logger / lock ---
@@ -850,14 +859,16 @@ au_apply_reinstall() {
 # ----------------------------------------------------------- health-check ---
 
 au_health_check() {
-    # Override via Z2K_AU_HEALTH_TIMEOUT env var (set before sourcing the
-    # module). Tests use Z2K_AU_HEALTH_TIMEOUT=3 to skip the 60s default.
+    # Override via Z2K_AU_HEALTH_TIMEOUT env var (set before sourcing the module).
     local timeout="$Z2K_AU_HEALTH_TIMEOUT"
-    au_log "health-check: waiting ${timeout}s for service to settle"
+    au_log "health-check: ${timeout}s stability window, then checking"
     sleep "$timeout"
 
+    # nfqws2 was already confirmed up and queue-bound by the restart itself.
+    # Failing here therefore does not mean "too slow to start" — it means the
+    # daemon came up and then died, which is a genuine reason to roll back.
     if ! pgrep -f nfqws2 >/dev/null 2>&1; then
-        au_log "health-check FAILED: nfqws2 not running"
+        au_log "health-check FAILED: nfqws2 died after start"
         return 1
     fi
 
