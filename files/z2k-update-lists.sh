@@ -327,111 +327,123 @@ update_list() {
     return 2  # Код 2 = есть изменения
 }
 
-# WARP game-server list — pulled live from the community-maintained
-# medvedeff-true/ru-gaming-blocklist (upstream auto-refreshes ~every 3h), NOT a
-# frozen shipped snapshot. Fetch the raw combined ipset (ETag-tracked via
-# update_list's HTML/shrink guards), sanitize to strict IPv4/CIDR (WARP routing
-# has no IPv6 leg; one line ipset can't parse aborts the restore — the loader in
-# z2k-warp.sh + the webpanel save use the SAME regex), then 3-WAY-MERGE so the
-# user's own removals AND additions (via the webpanel WARP editor) survive every
-# refresh. Both deltas are diffed against the .base ANCESTOR (the last upstream
-# snapshot), which is the key to NOT bloating the list:
-#     user_removed = base − dest      (upstream lines the user deleted)
-#     user_added   = dest − base      (lines the user has that the ancestor lacked)
-#     new dest     = (upstream − user_removed) ++ user_added   (dedup)
-# Because the seed migration (z2k-warp.sh warp_lists_migrate) writes dest AND
-# base to the SAME shipped snapshot, on the first refresh both deltas are empty
-# and the result is the pure fresh upstream — even when the shipped snapshot has
-# drifted from live upstream (it always has: upstream refreshes every ~3h, the
-# snapshot is frozen at release). Diffing additions against `base` (not the
-# current upstream) is likewise what lets upstream-dropped lines the user never
-# touched flow OUT instead of sticking forever. Known minor gap: a line the user
-# added that upstream then adopts-then-drops is lost (rare; user can re-add) —
-# a full ledger would fix it but is not worth the machinery here.
-# A user who deletes the whole
-# list leaves a tombstone (.removed) so we don't resurrect it. WARP is
-# routing-only, so a change reloads the z2k_warp ipset directly rather than
-# bumping the nfqws2 restart counter. Top-level (not nested in main) so the
-# unit tests can drive it against a stubbed update_list.
+# WARP game lists — ONE FILE PER GAME, pulled from the community-maintained
+# medvedeff-true/ru-gaming-blocklist.
+#
+# We used to pull that repo's combined `medvedeff-game-ipset.txt` and load it
+# whole. Measured on the shipped snapshot: 14297 entries covering 643 million
+# addresses — 15% of all IPv4 — including 10.0.0.0/8, 127.0.0.0/8 and
+# 192.168.0.0/16, i.e. private space and the user's own LAN routed into a
+# Cloudflare tunnel. Switching WARP on therefore took down far more than the
+# games it was meant to help, and every tunnel hiccup read as "the internet is
+# down" (issue #26).
+#
+# The same repo already publishes per-game lists under games/, so someone who
+# wants Steam gets Steam's 59 entries instead of fourteen thousand. Which ones
+# are loaded is the user's choice (see .enabled in z2k-warp.sh); on a fresh
+# install, none.
+#
+# These files are UPSTREAM data, not user data: overwritten wholesale on every
+# refresh, no 3-way merge. That machinery (.base/.removed ancestor tracking)
+# existed because the aggregate doubled as the user's own editable list. Per-game
+# lists are read-only in the panel, and users keep their own entries in their own
+# lists beside games/, which this function never touches.
+#
+# Top-level (not nested in main) so the unit tests can drive it against a
+# stubbed update_list.
 update_warp_game_list() {
-    local url="${Z2K_WARP_LIST_URL:-https://raw.githubusercontent.com/medvedeff-true/ru-gaming-blocklist/main/medvedeff-game-ipset.txt}"
+    local base_url="${Z2K_WARP_BASE_URL:-https://raw.githubusercontent.com/medvedeff-true/ru-gaming-blocklist/main}"
     local wdir="${ZAPRET2_DIR}/lists/warp"
-    local raw="$wdir/.game-warp-ips.upstream"   # raw upstream (update_list-managed, ETag)
-    local base="$wdir/.game-warp-ips.base"       # last sanitized upstream snapshot (merge baseline)
-    local tomb="$wdir/.game-warp-ips.removed"    # tombstone: user deleted the managed list
-    local dest="$wdir/game-warp-ips.txt"         # live merged list (user-editable)
-    mkdir -p "$wdir" 2>/dev/null
+    local gdir="$wdir/games"
+    local idx="$wdir/.games-index.json"
+    mkdir -p "$gdir" 2>/dev/null || return 1
 
-    update_list "warp-game-ips" "$url" "$raw"
-    local rc=$?
-    [ "$rc" = "1" ] && return 1     # fetch failed → touch nothing
-
-    # User deleted the managed list on purpose → do not resurrect it.
-    if [ -f "$tomb" ] && [ ! -f "$dest" ]; then
-        log_msg "warp-game-ips: removed by user (tombstone) — not recreating"
-        return 0
+    # The index goes through z2k_fetch and NOT update_list: the latter rejects
+    # anything starting with `{` as "HTML/JSON, not a list", which is precisely
+    # what sources.json is.
+    if ! z2k_fetch "$base_url/sources.json" "$idx" 2>/dev/null || [ ! -s "$idx" ]; then
+        log_msg "FAIL: warp games index unavailable — keeping current lists"
+        return 1
     fi
-    [ -f "$tomb" ] && rm -f "$tomb"   # list is back → clear stale tombstone
 
-    # Fast path: upstream unchanged AND we already have both files. A live user
-    # edit (dest≠base) needs no merge here — it's already applied and
-    # ipset-reloaded by the webpanel; the merge only matters when upstream
-    # actually changes.
-    [ "$rc" = "0" ] && [ -f "$dest" ] && [ -f "$base" ] && return 0
+    # Names come from the index rather than a hardcoded list, so a game added
+    # upstream shows up without a z2k release. game_map's values are arrays and
+    # never objects, so [^}] stops exactly at the end of that map. Upstream keeps
+    # spaces in some keys but underscores in the filenames.
+    local names
+    names=$(tr -d '\n' < "$idx" \
+        | sed -n 's/.*"game_map"[[:space:]]*:[[:space:]]*{\([^}]*\)}.*/\1/p' \
+        | grep -oE '"[^"]+"[[:space:]]*:' \
+        | sed 's/^"//; s/"[[:space:]]*:$//' \
+        | tr ' ' '_')
+    if [ -z "$names" ]; then
+        log_msg "FAIL: warp games index has no game_map — keeping current lists"
+        return 1
+    fi
 
-    local san="$wdir/.game-warp-ips.san"
-    if ! awk '
+    local n rc raw san ok=0 skipped=0
+    for n in $names; do
+        # Deliberately not shipped: a catch-all bucket nobody asked for.
+        [ "$n" = "Other_Games" ] && continue
+        # Same charset the panel enforces — the name becomes a filename.
+        case "$n" in
+            ''|.*|-*) continue ;;
+            *[!A-Za-z0-9._-]*) continue ;;
+        esac
+
+        raw="$gdir/.$n.raw"
+        update_list "warp-game-$n" "$base_url/games/$n.txt" "$raw"
+        rc=$?
+        # 0 = unchanged, 2 = updated, 1 = failed. A game named in the index but
+        # not yet published as a file 404s here — normal (upstream has three such
+        # today) and must not abort the rest.
+        if [ "$rc" = "1" ]; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        # Sanitize even when unchanged: games/ is not preserved across a
+        # reinstall, so the .txt can be missing while the raw is still cached.
+        san="$gdir/.$n.san"
+        if ! awk '
+# --- z2k warp address filter (canonical; keep byte-identical in all 3 copies) ---
+function z2k_warp_addr_ok(s,   ip, m, h, o) {
+    if (s !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) return 0
+    ip = s; m = 32
+    if (split(s, h, "/") == 2) { ip = h[1]; m = h[2] + 0 }
+    if (m < 10) return 0
+    split(ip, o, ".")
+    if (o[1] > 255 || o[2] > 255 || o[3] > 255 || o[4] > 255) return 0
+    if (o[1] == 10 || o[1] == 127 || o[1] >= 224) return 0
+    if (o[1] == 100 && o[2] >= 64 && o[2] <= 127) return 0
+    if (o[1] == 169 && o[2] == 254) return 0
+    if (o[1] == 172 && o[2] >= 16 && o[2] <= 31) return 0
+    if (o[1] == 192 && o[2] == 168) return 0
+    if (o[1] == 192 && o[2] == 0 && (o[3] == 0 || o[3] == 2)) return 0
+    if (o[1] == 198 && (o[2] == 18 || o[2] == 19)) return 0
+    if (o[1] == 198 && o[2] == 51 && o[3] == 100) return 0
+    if (o[1] == 203 && o[2] == 0 && o[3] == 113) return 0
+    return 1
+}
+# --- end z2k warp address filter ---
             { sub(/\r$/,""); gsub(/^[ \t]+|[ \t]+$/,"") }
             $0=="" || $0 ~ /^#/ { next }
-            $0 !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/ { next }
-            { ip=$0; if (split($0,h,"/")==2) ip=h[1]; split(ip,o,".")
-              if (o[1]>255||o[2]>255||o[3]>255||o[4]>255) next; print }
+            z2k_warp_addr_ok($0) { print }
         ' "$raw" > "$san" 2>/dev/null; then
-        rm -f "$san"; log_msg "FAIL: warp-game-ips sanitize error — keeping old"; return 1
-    fi
-    # A sane upstream is thousands of lines. Near-empty = upstream served junk
-    # that slipped past update_list's HTML guard → keep the old list. Override
-    # the floor via Z2K_WARP_MIN (tests use a small upstream).
-    if [ "$(grep -c . "$san" 2>/dev/null)" -lt "${Z2K_WARP_MIN:-100}" ]; then
-        log_msg "FAIL: warp-game-ips sanitized too small — keeping old"
-        rm -f "$san"; return 1
-    fi
+            rm -f "$san"; skipped=$((skipped + 1)); continue
+        fi
+        if [ -s "$san" ]; then
+            mv -f "$san" "$gdir/$n.txt" && chmod 644 "$gdir/$n.txt" 2>/dev/null
+            ok=$((ok + 1))
+        else
+            # Everything filtered out, or upstream published an empty file: leave
+            # no list rather than an empty one for the panel to show.
+            rm -f "$san" "$gdir/$n.txt"
+        fi
+    done
 
-    # Establish the baseline if missing (first run, or base lost on a reinstall
-    # that didn't restore it). Using the CURRENT upstream as the baseline makes
-    # the merge a no-op on the existing dest (result==dest) — it preserves
-    # whatever the user has and starts tracking deltas from here. NEVER seed
-    # base from dest: that erases the record of prior upstream lines the user
-    # removed, which the next refresh would re-add.
-    [ -f "$base" ] || cp -f "$san" "$base"
+    log_msg "OK: warp game lists refreshed ($ok lists, $skipped unavailable)"
 
-    if [ -f "$dest" ]; then
-        # Set algebra via `grep -vxF -f` — robust to EMPTY operands. (awk's
-        # NR==FNR idiom silently mis-fires when the first file is empty: the
-        # first line of the second file gets NR==FNR true and is mistaken for
-        # the set. That empty-operand case is the COMMON one here — a user who
-        # removed nothing → empty user_removed → the whole upstream would be
-        # eaten, collapsing the list to just the user's additions.)
-        local rmv="$wdir/.game-warp-ips.rm"     # user_removed = base − dest
-        local keep="$wdir/.game-warp-ips.keep"  # upstream − user_removed
-        local add="$wdir/.game-warp-ips.add"    # user_added   = dest − base
-        if [ -s "$dest" ]; then grep -vxF -f "$dest" "$base" > "$rmv"  2>/dev/null; else cp -f "$base" "$rmv"; fi
-        if [ -s "$rmv"  ]; then grep -vxF -f "$rmv"  "$san"  > "$keep" 2>/dev/null; else cp -f "$san"  "$keep"; fi
-        # user_added = dest − base (against the ANCESTOR, not current upstream):
-        # when dest==base (fresh seed, or steady state with no edits) this is
-        # empty, so the result is pure upstream and the list never balloons to a
-        # union of the frozen shipped snapshot and live upstream.
-        if [ -s "$base" ]; then grep -vxF -f "$base" "$dest" > "$add" 2>/dev/null; else cp -f "$dest" "$add"; fi
-        cat "$keep" "$add" | awk '!seen[$0]++' > "$dest.new"      # dedup, order-stable
-        rm -f "$rmv" "$keep" "$add"
-    else
-        cp -f "$san" "$dest.new"     # first seed (no prior list)
-    fi
-
-    mv -f "$dest.new" "$dest" && cp -f "$san" "$base"
-    chmod 644 "$dest" 2>/dev/null
-    rm -f "$san"
-    log_msg "OK: warp-game-ips merged ($(grep -c . "$dest" 2>/dev/null) entries)"
     # WARP is routing-only — reload the ipset live if the mode is on.
     if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] \
        && [ -x "${ZAPRET2_DIR}/z2k-warp.sh" ]; then

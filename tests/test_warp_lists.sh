@@ -46,14 +46,25 @@ printf '1.2.3.0/24\n5.6.7.8\n9.9.0.0/16\n' > "$LISTS_DIR/game-warp-ips.txt"
 # Source the function library (defines warp_lists/warp_list_save/etc).
 . "$SCRIPT_DIR/webpanel/cgi/actions.sh" 2>/dev/null
 
-printf "\n--- migration: dir existence = migrated marker ---\n"
+printf "\n--- migration: the legacy aggregate is purged, not seeded ---\n"
+# It used to be copied in as a starter list. It was 14297 entries covering 15%
+# of IPv4 — private space and the user's own LAN included — which is what made
+# "switch WARP on" mean "lose the internet". It is now deleted outright, and a
+# marker keeps the purge one-shot so a user who later creates a list with that
+# name is not fighting us for it.
+printf '1.2.3.0/24\n' > "$WARP_LISTS_DIR/game-warp-ips.txt" 2>/dev/null || {
+    mkdir -p "$WARP_LISTS_DIR"; printf '1.2.3.0/24\n' > "$WARP_LISTS_DIR/game-warp-ips.txt"; }
+rm -f "$WARP_LISTS_DIR/.legacy-aggregate-purged"
 warp_lists_ensure_dir
-assert_eq "seed migrated into warp dir" "1" "$([ -f "$WARP_LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
+assert_eq "legacy aggregate deleted"  "0" "$([ -f "$WARP_LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
+assert_eq "shipped seed deleted too"  "0" "$([ -f "$LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
+assert_eq "purge marker written"      "1" "$([ -f "$WARP_LISTS_DIR/.legacy-aggregate-purged" ] && echo 1 || echo 0)"
+assert_eq "games dir created"         "1" "$([ -d "$WARP_LISTS_DIR/games" ] && echo 1 || echo 0)"
+# Second run must not delete a user list that merely shares the name.
+printf '4.4.4.4\n' > "$WARP_LISTS_DIR/game-warp-ips.txt"
+warp_lists_ensure_dir
+assert_eq "purge is one-shot (marker respected)" "1" "$([ -f "$WARP_LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
 rm -f "$WARP_LISTS_DIR/game-warp-ips.txt"
-warp_lists_ensure_dir
-assert_eq "deleted seed NOT re-seeded (dir exists)" "0" "$([ -f "$WARP_LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
-rm -rf "$WARP_LISTS_DIR"
-warp_lists_ensure_dir
 
 printf "\n--- warp_name_ok ---\n"
 for good in games my.list a_b-c A1; do
@@ -79,20 +90,21 @@ WARP_SCRIPT="$WARP_SCRIPT_SAVED"
 assert_eq "broken engine -> ensure_dir fails" "1" "$r"
 assert_eq "no marker dir left behind"         "0" "$([ -d "$WARP_LISTS_DIR" ] && echo 1 || echo 0)"
 
-printf "\n--- migration: working engine seeds the shipped list ---\n"
+printf "\n--- migration: a working engine creates the dirs and seeds nothing ---\n"
 rm -rf "$WARP_LISTS_DIR"
 warp_lists_ensure_dir && r=0 || r=1
-assert_eq "engine present -> ensure_dir ok"   "0" "$r"
-assert_eq "engine seeded the game list"       "1" "$([ -s "$WARP_LISTS_DIR/game-warp-ips.txt" ] && echo 1 || echo 0)"
+assert_eq "engine present -> ensure_dir ok"     "0" "$r"
+assert_eq "no list is seeded any more"          "0" "$(ls "$WARP_LISTS_DIR"/*.txt 2>/dev/null | wc -l | tr -d " ")"
+assert_eq "games dir exists for the refresh"    "1" "$([ -d "$WARP_LISTS_DIR/games" ] && echo 1 || echo 0)"
 rm -rf "$WARP_LISTS_DIR"
 warp_lists_ensure_dir
 
 printf "\n--- warp_list_save: sanitize + counts ---\n"
-OUT=$(printf '10.0.0.1\r\n172.16.0.0/12\n# note\n\n999.1.1.1\n2a00:1450::1\n1.2.3.4/33\ngarbage\n8.8.8.8\n' | warp_list_save test replace)
-assert_contains "3 valid lines saved"      "saved=3"           "$OUT"
-assert_contains "4 junk lines skipped"     "skipped_invalid=4" "$OUT"
+OUT=$(printf '9.9.9.9\r\n172.16.0.0/12\n# note\n\n999.1.1.1\n2a00:1450::1\n1.2.3.4/33\ngarbage\n8.8.8.8\n' | warp_list_save test replace)
+assert_contains "2 routable lines saved"   "saved=2"           "$OUT"
+assert_contains "5 junk lines skipped"     "skipped_invalid=5" "$OUT"
 CONTENT=$(cat "$WARP_LISTS_DIR/test.txt")
-assert_contains     "CRLF entry kept (CR stripped)" "10.0.0.1"  "$CONTENT"
+assert_contains     "CRLF entry kept (CR stripped)" "9.9.9.9"   "$CONTENT"
 assert_contains     "comment preserved"             "# note"    "$CONTENT"
 assert_not_contains "bad octet filtered"            "999"       "$CONTENT"
 assert_not_contains "IPv6 filtered"                 "2a00"      "$CONTENT"
@@ -104,15 +116,15 @@ printf "\n--- warp_list_save: ipset-грамматика (то, что restore �
 # /0 и ведущие нули ipset либо не парсит (08.8.8.8, /08 → abort всего restore-
 # стрима), либо парсит ОКТАЛЬНО (010.1.2.3 → 8.1.2.3). Фильтр обязан резать.
 OUT=$(printf '0.0.0.0/0\n8.8.8.8/0\n08.8.8.8\n010.1.2.3\n1.2.3.4/08\n0.1.2.3\n1.2.3.4/32\n5.5.5.5/1\n7.7.7.7\n' | warp_list_save strict replace)
-assert_contains "only 3 grammar-valid lines saved" "saved=3"           "$OUT"
-assert_contains "6 ipset-hostile lines skipped"    "skipped_invalid=6" "$OUT"
+assert_contains "only 2 routable lines saved"      "saved=2"           "$OUT"
+assert_contains "7 ipset-hostile lines skipped"    "skipped_invalid=7" "$OUT"
 CONTENT=$(cat "$WARP_LISTS_DIR/strict.txt")
 assert_not_contains "prefix /0 filtered"           "/0"       "$CONTENT"
 assert_not_contains "leading-zero octet filtered"  "08."      "$CONTENT"
 assert_not_contains "octal-octet filtered"         "010."     "$CONTENT"
 assert_not_contains "zero first octet filtered"    "0.1.2.3"  "$CONTENT"
 assert_contains     "/32 kept"                     "1.2.3.4/32" "$CONTENT"
-assert_contains     "/1 kept"                      "5.5.5.5/1"  "$CONTENT"
+assert_not_contains "/1 dropped (шире порога /10)" "5.5.5.5"    "$CONTENT"
 warp_list_delete strict
 
 printf "\n--- warp_list_save: mode=create ---\n"
@@ -181,9 +193,46 @@ printf "\n--- filter parity: loader (z2k-warp.sh) vs save (actions.sh) ---\n"
 # Оба фильтра обязаны использовать ОДИН регэксп — рассинхрон означает, что
 # сохранённая строка может убить restore-поток. Ищем literal-вхождение
 # канонического регэкспа в обоих файлах (fixed-string grep).
-RE_LITERAL='/^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/'
-assert_eq "loader has canonical regex" "1" "$(grep -cF "$RE_LITERAL" "$SCRIPT_DIR/files/z2k-warp.sh")"
-assert_eq "save has canonical regex"   "1" "$(grep -cF "$RE_LITERAL" "$SCRIPT_DIR/webpanel/cgi/actions.sh")"
+# The rule is now a whole awk function, not one regex: shape AND routability.
+# Comparing the function body byte-for-byte across all THREE copies is what
+# keeps them from drifting — a rule that rejects a range in the loader but
+# accepts it on save would let the panel write a line the ipset then refuses.
+_filter_of() { awk '/^# --- z2k warp address filter/,/^# --- end z2k warp address filter/' "$1" | sed 's/^[[:space:]]*//'; }
+_f_loader=$(_filter_of "$SCRIPT_DIR/files/z2k-warp.sh")
+_f_save=$(_filter_of "$SCRIPT_DIR/webpanel/cgi/actions.sh")
+_f_upd=$(_filter_of "$SCRIPT_DIR/files/z2k-update-lists.sh")
+assert_eq "loader carries the canonical filter" "1" "$([ -n "$_f_loader" ] && echo 1 || echo 0)"
+assert_eq "save filter identical to loader"     "1" "$([ "$_f_save" = "$_f_loader" ] && echo 1 || echo 0)"
+assert_eq "refresh filter identical to loader"  "1" "$([ "$_f_upd"  = "$_f_loader" ] && echo 1 || echo 0)"
+
+printf "\n--- filter: routability, not just shape ---\n"
+# Every one of these was present in the shipped 14k list and routed into the
+# tunnel: private ranges, loopback, and the user's own LAN. 3.0.0.0/8 is a real
+# Amazon block but no game lives on a /8 — the width cap is what stops those.
+_reject() {
+    # NEWLINE before the rule: the extracted block ends with a COMMENT line, so
+    # concatenating directly would make the rule part of that comment and the
+    # program would emit nothing — every assertion then "fails" identically.
+    _v=$(printf '%s\n' "$1" | awk "$_f_loader
+{ print (z2k_warp_addr_ok(\$0) ? \"pass\" : \"drop\") }")
+    assert_eq "rejected: $1" "drop" "$_v"
+}
+_accept() {
+    # NEWLINE before the rule: the extracted block ends with a COMMENT line, so
+    # concatenating directly would make the rule part of that comment and the
+    # program would emit nothing — every assertion then "fails" identically.
+    _v=$(printf '%s\n' "$1" | awk "$_f_loader
+{ print (z2k_warp_addr_ok(\$0) ? \"pass\" : \"drop\") }")
+    assert_eq "accepted: $1" "pass" "$_v"
+}
+for _bad in 0.0.0.0/0 10.0.0.0/8 127.0.0.0/8 192.168.0.0/16 192.168.1.1 172.16.5.0/24 \
+            169.254.1.1 100.64.0.1 224.0.0.1 240.0.0.1 255.255.255.255 3.0.0.0/8 \
+            198.18.0.1 198.51.100.7 203.0.113.9 192.0.2.5 018.1.1.1 2001:db8::1; do
+    _reject "$_bad"
+done
+for _good in 1.2.3.4 34.192.0.0/10 52.0.0.0/10 108.157.8.0/23 143.244.56.0/23; do
+    _accept "$_good"
+done
 
 printf "\n--- api.sh: /warp/* routing (full CGI invocation) ---\n"
 API="$SCRIPT_DIR/webpanel/cgi/api.sh"
@@ -202,7 +251,7 @@ cgi() { # cgi <METHOD> <PATH_INFO> <QUERY> [bodyfile]
 cgi_body() { awk 'blank{print} /^\r?$/{blank=1}'; }
 
 BODYF="$SB/body.txt"
-printf '10.1.1.1\nмусор\n' > "$BODYF"
+printf '9.9.9.9\nмусор\n' > "$BODYF"
 OUT=$(cgi POST /warp/list/save "name=cgi-test&mode=replace" "$BODYF" | cgi_body)
 assert_contains "save via CGI: ok"              '"ok":true'           "$OUT"
 assert_contains "save via CGI: saved=1"         '"saved":1'           "$OUT"
@@ -212,7 +261,7 @@ OUT=$(cgi GET /warp/lists "" | cgi_body)
 assert_contains "lists via CGI: has cgi-test"   '"name":"cgi-test"'   "$OUT"
 
 OUT=$(cgi GET /warp/list "name=cgi-test" | cgi_body)
-assert_eq "raw read via CGI" "10.1.1.1" "$OUT"
+assert_eq "raw read via CGI" "9.9.9.9" "$OUT"
 
 OUT=$(cgi GET /warp/list "name=nope" | cgi_body)
 assert_contains "missing list -> 404 json"      "no such list"        "$OUT"

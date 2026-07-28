@@ -958,17 +958,23 @@
         <div class="status-grid" id="warp-status-grid">${skeletonBlocks(3)}</div>
       </div>
       <div class="card">
+        <h3>Игровые списки</h3>
+        <p class="desc">
+          Готовые списки адресов по играм и сервисам, обновляются автоматически.
+          <b>По умолчанию не включён ни один</b> — включайте только то, что вам нужно:
+          чем меньше адресов в туннеле, тем меньше на него завязано. Списки только для
+          чтения; свои адреса добавляйте ниже, отдельным списком.
+        </p>
+        <div id="warp-games">${skeletonBlocks(3)}</div>
+      </div>
+      <div class="card">
         <h3>Списки адресов</h3>
         <p class="desc">
           Каждый список — текстовый файл: один IPv4-адрес или CIDR-подсеть на строку
           (<code>203.0.113.7</code> или <code>203.0.113.0/24</code>; строки с <code>#</code> —
           комментарии). Через WARP идёт трафик ко всем адресам из всех списков.
           <b>Изменения применяются сразу</b>, без перезапуска, и переживают
-          переустановку z2k. Список <code>game-warp-ips</code> автоматически
-          обновляется из общего списка заблокированных игр (ru-gaming-blocklist),
-          но <b>ваши правки в нём сохраняются</b>: удалённые вами адреса не
-          вернутся, добавленные — не пропадут. Не нужен целиком — удалите его,
-          обновление не восстановит.
+          переустановку z2k.
         </p>
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn btn-primary" id="warp-new-btn">Новый список</button>
@@ -1002,8 +1008,68 @@
       document.getElementById("warp-editor-card").hidden = true;
     });
     loadWarpStatus();
+    loadWarpGames();
     loadWarpLists();
     _updateGlobalUILock();
+  }
+
+  // Upstream per-game lists: switches only. They are refreshed wholesale from
+  // upstream, so editing them here would be undone by the next refresh.
+  async function loadWarpGames() {
+    const host = document.getElementById("warp-games");
+    if (!host) return;
+    let d;
+    try {
+      d = await apiGet("/warp/games");
+    } catch (e) {
+      host.innerHTML = `<p class="desc">Не удалось загрузить: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    const games = (d && d.games) || [];
+    if (!games.length) {
+      // Not an error state: lists arrive with the nightly refresh, and on a
+      // fresh install that has not run yet there is simply nothing to show.
+      host.innerHTML = `<p class="desc">Списки ещё не загружены — они приезжают с обновлением
+        списков (раз в сутки). Свои адреса можно добавить ниже уже сейчас.</p>`;
+      return;
+    }
+    const on = games.filter(g => g.enabled === 1 || g.enabled === "1").length;
+    host.innerHTML = `
+      <p class="desc" id="warp-games-summary">${on === 0
+        ? "Сейчас не включён ни один список — через туннель не идёт ничего."
+        : `Включено списков: ${on} из ${games.length}.`}</p>
+      ${games.map(g => `
+        <div class="toggle-row" data-game="${escapeHtml(g.name)}">
+          <div class="t-text">
+            <div class="t-name">${escapeHtml(g.name)}</div>
+            <div class="t-desc">${g.entries} адрес(ов)</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" ${(g.enabled === 1 || g.enabled === "1") ? "checked" : ""}>
+            <span class="slider"></span>
+          </label>
+        </div>`).join("")}`;
+    host.querySelectorAll("[data-game] input").forEach(box => {
+      box.addEventListener("change", () => warpGameToggle(box));
+    });
+  }
+
+  async function warpGameToggle(box) {
+    const row = box.closest("[data-game]");
+    const name = row.getAttribute("data-game");
+    const wanted = box.checked ? "1" : "0";
+    box.disabled = true;
+    try {
+      await apiPost("/warp/games/toggle", { name: name, value: wanted });
+    } catch (e) {
+      box.checked = !box.checked;   // revert: the server did not accept it
+      toast("Ошибка: " + e.message, "bad");
+      box.disabled = false;
+      return;
+    }
+    box.disabled = false;
+    toast(wanted === "1" ? `${name} включён` : `${name} выключен`, "good");
+    loadWarpGames();
   }
 
   async function loadWarpStatus() {

@@ -46,7 +46,7 @@ WARP_RULE_PREF="${WARP_RULE_PREF:-90}"
 # Must match the init's MTU. 1280 is the only value upstream supports in h2 mode.
 WARP_MTU="${WARP_MTU:-1280}"                 # fwmark for the ip rule
 WARP_IPSET="${WARP_IPSET:-z2k_warp}"            # game-server ipset routed via WARP
-WARP_LIST="${WARP_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"   # legacy shipped list — now only the migration seed
+WARP_LEGACY_LIST="${WARP_LEGACY_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"  # retired aggregate, purged on sight
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"      # user-owned lists (webpanel «WARP» section), ALL *.txt loaded
 # OUR init, not the package's. The engine binary stays upstream's usque; everything about
 # starting it, naming the interface, configuring NDM and stopping cleanly is ours now —
@@ -554,27 +554,68 @@ warp_install() {
     return 0
 }
 
-# ---- WARP lists (user-owned) -------------------------------------------------
-# All $WARP_LISTS_DIR/*.txt are loaded into the ipset. The dir is user-owned:
-# the webpanel «WARP» section CRUDs files here, install/auto-update never write
-# into it (install.sh backs it up / restores it across reinstall). One-time
-# migration seeds it with a copy of the legacy shipped game list. The EXISTENCE
-# of the dir is the "migrated" marker — do NOT re-seed an existing (even empty)
-# dir, that would resurrect a list the user deliberately deleted.
+# ---- WARP lists --------------------------------------------------------------
+# Two kinds of list live here, and the difference matters:
+#
+#   $WARP_LISTS_DIR/*.txt        — the user's own. Created and edited from the
+#                                  panel, preserved across reinstall, ALWAYS
+#                                  loaded. Nothing but the user writes here.
+#   $WARP_LISTS_DIR/games/*.txt  — upstream per-game lists, refreshed wholesale
+#                                  by z2k-update-lists.sh. Read-only in the
+#                                  panel, and loaded ONLY when switched on.
+#
+# Which game lists are on is recorded in $WARP_ENABLED_FILE, one name per line.
+# Absent or empty means none — and that is the state of a fresh install. Storing
+# it in a file rather than by renaming .txt out of the way is deliberate: the
+# upstream refresh recreates those files, and would silently switch back on
+# whatever the user had switched off.
+WARP_GAMES_DIR="${WARP_GAMES_DIR:-$WARP_LISTS_DIR/games}"
+WARP_ENABLED_FILE="${WARP_ENABLED_FILE:-$WARP_LISTS_DIR/.enabled}"
+
 warp_lists_migrate() {
-    [ -d "$WARP_LISTS_DIR" ] && return 0
-    mkdir -p "$WARP_LISTS_DIR" || { _wlog "cannot create $WARP_LISTS_DIR"; return 1; }
-    if [ -s "$WARP_LIST" ]; then
-        if cp "$WARP_LIST" "$WARP_LISTS_DIR/game-warp-ips.txt" 2>/dev/null; then
-            # Seed the 3-way-merge baseline too (see z2k-update-lists.sh
-            # update_warp_game_list): the baseline records the last upstream
-            # snapshot, so a user edit made BEFORE the first list refresh is
-            # correctly preserved instead of being wiped by that refresh.
-            cp "$WARP_LIST" "$WARP_LISTS_DIR/.game-warp-ips.base" 2>/dev/null
-            _wlog "migrated $WARP_LIST -> $WARP_LISTS_DIR/game-warp-ips.txt"
-        fi
+    [ -d "$WARP_LISTS_DIR" ] || mkdir -p "$WARP_LISTS_DIR" || {
+        _wlog "cannot create $WARP_LISTS_DIR"; return 1; }
+    mkdir -p "$WARP_GAMES_DIR" 2>/dev/null
+
+    # One-shot purge of the legacy aggregate. It was 14297 entries covering 15%
+    # of IPv4 — private space and the user's own LAN included — and it is what
+    # made "switch WARP on" mean "lose the internet". It is deleted outright
+    # rather than left switched off: a list that is visible but does nothing
+    # generates more confusion than its absence. Its 3-way-merge companions go
+    # with it; nothing merges any more.
+    if [ ! -f "$WARP_LISTS_DIR/.legacy-aggregate-purged" ]; then
+        rm -f "$WARP_LISTS_DIR/game-warp-ips.txt" \
+              "$WARP_LISTS_DIR/.game-warp-ips.base" \
+              "$WARP_LISTS_DIR/.game-warp-ips.upstream" \
+              "$WARP_LISTS_DIR/.game-warp-ips.removed" \
+              "$WARP_LISTS_DIR/.game-warp-ips.san" 2>/dev/null
+        rm -f "$WARP_LEGACY_LIST" 2>/dev/null
+        touch "$WARP_LISTS_DIR/.legacy-aggregate-purged" 2>/dev/null || true
+        _wlog "legacy aggregate list removed — pick per-game lists in the panel"
     fi
+
     chmod 644 "$WARP_LISTS_DIR"/*.txt 2>/dev/null
+    return 0
+}
+
+# Echo the files to load: every user list, plus each enabled game list that
+# actually exists. A name in .enabled with no file behind it (upstream dropped
+# it, or the refresh has not run yet) is simply skipped.
+warp_active_lists() {
+    local f n
+    for f in "$WARP_LISTS_DIR"/*.txt; do
+        [ -f "$f" ] && printf '%s\n' "$f"
+    done
+    [ -f "$WARP_ENABLED_FILE" ] || return 0
+    while IFS= read -r n; do
+        n=$(printf '%s' "$n" | tr -d ' \t\r')
+        [ -n "$n" ] || continue
+        case "$n" in
+            '#'*|.*|-*) continue ;;
+            *[!A-Za-z0-9._-]*) continue ;;
+        esac
+        [ -f "$WARP_GAMES_DIR/$n.txt" ] && printf '%s\n' "$WARP_GAMES_DIR/$n.txt"
+    done < "$WARP_ENABLED_FILE"
     return 0
 }
 
@@ -601,14 +642,30 @@ warp_ipset_load() {
     ipset destroy "$tmpset" 2>/dev/null
     ipset create "$tmpset" hash:net family inet 2>/dev/null
     ipset list "$tmpset" >/dev/null 2>&1 || { _wlog "cannot create temp ipset $tmpset"; return 1; }
-    if cat "$WARP_LISTS_DIR"/*.txt 2>/dev/null | awk -v set="$tmpset" '
+    if warp_active_lists | while IFS= read -r _wl; do cat "$_wl" 2>/dev/null; done | awk -v set="$tmpset" '
+# --- z2k warp address filter (canonical; keep byte-identical in all 3 copies) ---
+function z2k_warp_addr_ok(s,   ip, m, h, o) {
+    if (s !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) return 0
+    ip = s; m = 32
+    if (split(s, h, "/") == 2) { ip = h[1]; m = h[2] + 0 }
+    if (m < 10) return 0
+    split(ip, o, ".")
+    if (o[1] > 255 || o[2] > 255 || o[3] > 255 || o[4] > 255) return 0
+    if (o[1] == 10 || o[1] == 127 || o[1] >= 224) return 0
+    if (o[1] == 100 && o[2] >= 64 && o[2] <= 127) return 0
+    if (o[1] == 169 && o[2] == 254) return 0
+    if (o[1] == 172 && o[2] >= 16 && o[2] <= 31) return 0
+    if (o[1] == 192 && o[2] == 168) return 0
+    if (o[1] == 192 && o[2] == 0 && (o[3] == 0 || o[3] == 2)) return 0
+    if (o[1] == 198 && (o[2] == 18 || o[2] == 19)) return 0
+    if (o[1] == 198 && o[2] == 51 && o[3] == 100) return 0
+    if (o[1] == 203 && o[2] == 0 && o[3] == 113) return 0
+    return 1
+}
+# --- end z2k warp address filter ---
         {
             sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
-            if ($0 !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) next
-            ip = $0
-            if (split($0, halves, "/") == 2) ip = halves[1]
-            split(ip, o, ".")
-            if (o[1] > 255 || o[2] > 255 || o[3] > 255 || o[4] > 255) next
+            if (!z2k_warp_addr_ok($0)) next
             print "add " set " " $0 " -exist"
         }' | ipset restore -exist 2>/dev/null; then
         ipset swap "$tmpset" "$WARP_IPSET" 2>/dev/null \

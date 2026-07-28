@@ -18,7 +18,6 @@ WARP_LISTS_DIR="${WARP_LISTS_DIR:-$LISTS_DIR/warp}"
 # community ru-gaming-blocklist and 3-way-merges user edits against a baseline
 # (.<name>.base). Deleting it drops a tombstone (.<name>.removed) so the
 # refresh won't resurrect it; a fresh save/create clears the tombstone.
-WARP_MANAGED_LIST="${WARP_MANAGED_LIST:-game-warp-ips}"
 
 # --- read helpers (POSIX sh, no sourcing of lib/utils.sh required) ---
 
@@ -543,17 +542,18 @@ warp_name_ok() {
 }
 
 warp_lists_ensure_dir() {
-    # The seed migration has EXACTLY one implementation — z2k-warp.sh warp_lists_migrate —
-    # which also owns the "dir existence = already migrated" invariant and the 3-way-merge
-    # baseline. This used to carry a second copy of that logic as a fallback, and two copies
-    # of a migration is how they drift apart.
+    # Directory layout and the one-shot purge of the legacy aggregate have EXACTLY one
+    # implementation — z2k-warp.sh warp_lists_migrate. Keeping a second copy here as a
+    # fallback is how two migrations drift apart, so the panel only ever delegates.
     #
-    # Note what we must NOT do: create the directory ourselves when the engine failed. The
-    # directory IS the "already migrated" marker, so a bare mkdir here permanently suppresses
-    # the seed — the shipped game list would be silently lost, including later, once a working
-    # engine is back. Creating it is the engine's privilege alone; if it cannot, we fail and
-    # the callers report an honest "lists dir unavailable" instead of quietly eating the seed.
-    [ -d "$WARP_LISTS_DIR" ] && return 0
+    # What we must NOT do is create the directory ourselves when the engine is unavailable:
+    # the callers would then report success while games/ is missing and the purge never ran.
+    # Better an honest "lists dir unavailable".
+    #
+    # The cheap guard is the purge marker, not the directory. The directory alone used to
+    # mean "already migrated" back when migration meant seeding a starter list; now the
+    # engine is idempotent and the marker is what says the one-time work is done.
+    [ -d "$WARP_LISTS_DIR" ] && [ -f "$WARP_LISTS_DIR/.legacy-aggregate-purged" ] && return 0
     [ -f "$WARP_SCRIPT" ] || return 1
     sh "$WARP_SCRIPT" migrate >/dev/null 2>&1
     [ -d "$WARP_LISTS_DIR" ]
@@ -620,6 +620,56 @@ warp_lists() {
     done
 }
 
+# ---- upstream per-game lists (read-only) -------------------------------------
+# These come from medvedeff-true/ru-gaming-blocklist, one file per game, and are
+# refreshed wholesale by z2k-update-lists.sh. The panel may switch them on and
+# off but must never edit them: the next refresh would overwrite the edit, and a
+# setting that silently reverts is worse than no setting.
+#
+# The choice lives in lists/warp/.enabled (one name per line) rather than in
+# file naming, for the same reason — a refresh recreates the files.
+WARP_GAMES_DIR="${WARP_GAMES_DIR:-$WARP_LISTS_DIR/games}"
+WARP_ENABLED_FILE="${WARP_ENABLED_FILE:-$WARP_LISTS_DIR/.enabled}"
+
+warp_game_enabled() {
+    [ -f "$WARP_ENABLED_FILE" ] || return 1
+    grep -qxF "$1" "$WARP_ENABLED_FILE" 2>/dev/null
+}
+
+warp_games() {
+    # TSV: name<TAB>entries<TAB>enabled(0|1)
+    warp_lists_ensure_dir
+    local f name entries
+    for f in "$WARP_GAMES_DIR"/*.txt; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .txt)
+        entries=$(awk '{sub(/\r$/,""); gsub(/^[ \t]+|[ \t]+$/,"")} /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/{n++} END{print n+0}' "$f")
+        printf '%s\t%s\t%s\n' "$name" "${entries:-0}" "$(warp_game_enabled "$name" && echo 1 || echo 0)"
+    done
+}
+
+warp_game_toggle() {
+    # warp_game_toggle <name> <0|1>
+    local name="$1" want="$2" tmp
+    warp_name_ok "$name" || { echo "invalid list name" >&2; return 1; }
+    case "$want" in 0|1) ;; *) echo "value must be 0 or 1" >&2; return 1 ;; esac
+    [ -f "$WARP_GAMES_DIR/$name.txt" ] || { echo "no such game list" >&2; return 1; }
+    warp_lists_ensure_dir
+    tmp="${WARP_ENABLED_FILE}.$$"
+    # Rewrite without the name, then re-add it when switching on. Doing it in
+    # that order makes a double-on idempotent instead of writing the name twice,
+    # which would survive one toggle-off and look like a stuck switch.
+    if [ -f "$WARP_ENABLED_FILE" ]; then
+        grep -vxF "$name" "$WARP_ENABLED_FILE" > "$tmp" 2>/dev/null || : > "$tmp"
+    else
+        : > "$tmp"
+    fi
+    [ "$want" = "1" ] && printf '%s\n' "$name" >> "$tmp"
+    mv -f "$tmp" "$WARP_ENABLED_FILE" || { rm -f "$tmp"; echo "save failed" >&2; return 1; }
+    chmod 644 "$WARP_ENABLED_FILE" 2>/dev/null
+    return 0
+}
+
 warp_list_save() {
     # stdin: raw list text (textarea save or .txt import).
     # $1=name (без .txt), $2=mode replace|append|create (create = replace, но
@@ -648,18 +698,31 @@ warp_list_save() {
 
     cat > "$raw" || { rm -f "$raw"; echo "read body failed" >&2; return 1; }
     awk '
+# --- z2k warp address filter (canonical; keep byte-identical in all 3 copies) ---
+function z2k_warp_addr_ok(s,   ip, m, h, o) {
+    if (s !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) return 0
+    ip = s; m = 32
+    if (split(s, h, "/") == 2) { ip = h[1]; m = h[2] + 0 }
+    if (m < 10) return 0
+    split(ip, o, ".")
+    if (o[1] > 255 || o[2] > 255 || o[3] > 255 || o[4] > 255) return 0
+    if (o[1] == 10 || o[1] == 127 || o[1] >= 224) return 0
+    if (o[1] == 100 && o[2] >= 64 && o[2] <= 127) return 0
+    if (o[1] == 169 && o[2] == 254) return 0
+    if (o[1] == 172 && o[2] >= 16 && o[2] <= 31) return 0
+    if (o[1] == 192 && o[2] == 168) return 0
+    if (o[1] == 192 && o[2] == 0 && (o[3] == 0 || o[3] == 2)) return 0
+    if (o[1] == 198 && (o[2] == 18 || o[2] == 19)) return 0
+    if (o[1] == 198 && o[2] == 51 && o[3] == 100) return 0
+    if (o[1] == 203 && o[2] == 0 && o[3] == 113) return 0
+    return 1
+}
+# --- end z2k warp address filter ---
         {
             sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
             if ($0 == "") next
             if ($0 ~ /^#/) { print; next }
-            ok = 0
-            if ($0 ~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) {
-                ip = $0
-                if (split($0, halves, "/") == 2) ip = halves[1]
-                split(ip, o, ".")
-                if (o[1] <= 255 && o[2] <= 255 && o[3] <= 255 && o[4] <= 255) ok = 1
-            }
-            if (ok) print
+            if (z2k_warp_addr_ok($0)) print
         }' "$raw" > "$tmp" || { rm -f "$raw" "$tmp"; echo "sanitize failed" >&2; return 1; }
 
     local total saved skipped
@@ -682,7 +745,6 @@ warp_list_save() {
     # earlier (before the body was even written) meant a save that then failed
     # — e.g. ENOSPC on /opt — left no list but a cleared tombstone, so the next
     # refresh resurrected the whole list the user had deleted.
-    [ "$name" = "$WARP_MANAGED_LIST" ] && rm -f "$WARP_LISTS_DIR/.$WARP_MANAGED_LIST.removed" 2>/dev/null
     warp_ipset_reload_if_enabled
     printf 'saved=%d skipped_invalid=%d\n' "${saved:-0}" "${skipped:-0}"
 }
@@ -703,10 +765,6 @@ warp_list_delete() {
     # Deleting the auto-managed game list is a deliberate opt-out: drop the
     # merge baseline and leave a tombstone so z2k-update-lists.sh does NOT
     # resurrect it on the next refresh.
-    if [ "$name" = "$WARP_MANAGED_LIST" ]; then
-        rm -f "$WARP_LISTS_DIR/.$WARP_MANAGED_LIST.base" 2>/dev/null
-        : > "$WARP_LISTS_DIR/.$WARP_MANAGED_LIST.removed" 2>/dev/null
-    fi
     warp_ipset_reload_if_enabled
 }
 

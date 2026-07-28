@@ -598,12 +598,10 @@ au_merge_extra_domains() {
     return 0
 }
 
-# NB: game-warp-ips.txt is NOT merged here. The WARP game list is now pulled
-# live from the community medvedeff-true/ru-gaming-blocklist by
-# z2k-update-lists.sh (update_warp_game_list) into lists/warp/game-warp-ips.txt,
-# so shipped-snapshot patch updates to it are irrelevant — the daily refresh
-# owns the file. It falls through to the straight-replace path below (updates
-# the shipped fallback copy), which is harmless.
+# NB: WARP lists are not merged here. The per-game lists are pulled live from
+# medvedeff-true/ru-gaming-blocklist by z2k-update-lists.sh
+# (update_warp_game_list) into lists/warp/games/, which the daily refresh owns
+# outright; the user's own lists next to it are never touched by an update.
 
 # ----------------------------------------------------------- apply paths ---
 

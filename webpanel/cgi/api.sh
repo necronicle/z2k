@@ -382,6 +382,43 @@ case "$method $path" in
         exit 0
         ;;
 
+    # Upstream per-game lists: name, entry count, and whether they are switched
+    # on. Read-only by design — editing them is meaningless, the next refresh
+    # overwrites the file.
+    "GET /warp/games")
+        json_header
+        printf '{"ok":true,"games":['
+        first=1
+        warp_games | while IFS="$(printf '\t')" read -r gname gentries gon; do
+            [ -z "$gname" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            printf '{"name":'; json_string "$gname"
+            printf ',"entries":%s,"enabled":%s}' "${gentries:-0}" "${gon:-0}"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+
+    "POST /warp/games/toggle")
+        body=$(read_body)
+        g_name=$(form_value "$body" "name")
+        [ -z "$g_name" ] && g_name=$(form_value "${QUERY_STRING:-}" "name")
+        g_val=$(form_value "$body" "value")
+        [ -z "$g_val" ] && g_val=$(form_value "${QUERY_STRING:-}" "value")
+        case "$g_val" in
+            0|1) ;;
+            *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
+        esac
+        warp_game_toggle "$g_name" "$g_val" || json_fail "400 Bad Request" "toggle failed"
+        # Same live-apply path the list editor uses: the set is rebuilt on the
+        # spot, so a switch takes effect without a restart.
+        warp_ipset_reload_if_enabled
+        json_header
+        printf '{"ok":true,"name":'; json_string "$g_name"
+        printf ',"enabled":%s}\n' "$g_val"
+        exit 0
+        ;;
+
     "GET /warp/lists")
         json_header
         printf '{"ok":true,"lists":['

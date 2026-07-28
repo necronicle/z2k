@@ -1187,10 +1187,12 @@ step_build_zapret2() {
             # reinstall (без baseline первый post-reinstall refresh не смог бы
             # отличить юзерские правки от апстрима). Метаданные, не user-data →
             # best-effort, не fatal.
-            for _wm in .game-warp-ips.base .game-warp-ips.removed; do
-                [ -f "$ZAPRET2_DIR/lists/warp/$_wm" ] && \
-                    cp -f "$ZAPRET2_DIR/lists/warp/$_wm" "$backup_tmp/warp-lists/$_wm" 2>/dev/null
-            done
+            # .enabled — ВЫБОР пользователя, какие игровые списки включены.
+            # Это единственное, что здесь надо сохранить: сами games/*.txt —
+            # апстрим-данные и пере-скачиваются, а .base/.removed от снятого
+            # с вооружения 3-way merge больше не существуют.
+            [ -f "$ZAPRET2_DIR/lists/warp/.enabled" ] && \
+                cp -f "$ZAPRET2_DIR/lists/warp/.enabled" "$backup_tmp/warp-lists/.enabled" 2>/dev/null
         fi
         # Autocircular state (найденные рабочие стратегии) — recoverable
         # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
@@ -1748,7 +1750,10 @@ step_build_zapret2() {
     # never reads, and Hot verdicts would silently fail to activate bypass.
     [ -e "${ZAPRET2_DIR}/lists/discovered-domains.txt" ] || \
         : > "${ZAPRET2_DIR}/lists/discovered-domains.txt"
-    for iplist in telegram_ips.txt ipset-exclude.txt game-warp-ips.txt cf_extra_check_ips.txt rkn-false-positive.txt; do
+    # game-warp-ips.txt намеренно отсутствует: legacy-агрегат на 14297 записей
+    # (15% IPv4, включая приватные сети и LAN пользователя) удалён из проекта.
+    # WARP теперь работает на пер-игровых списках, выбираемых в панели.
+    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
@@ -1800,17 +1805,15 @@ step_build_zapret2() {
             fi
         done
         chmod 644 "${ZAPRET2_DIR}/lists/warp/"*.txt 2>/dev/null || true
-        # Restore the merge baseline + tombstone (see backup block above).
-        for _wm in .game-warp-ips.base .game-warp-ips.removed; do
-            [ -f "$backup_tmp/warp-lists/$_wm" ] && \
-                cp -f "$backup_tmp/warp-lists/$_wm" "${ZAPRET2_DIR}/lists/warp/$_wm" 2>/dev/null
-        done
+        # Restore the user's choice of enabled game lists (see backup block).
+        [ -f "$backup_tmp/warp-lists/.enabled" ] && \
+            cp -f "$backup_tmp/warp-lists/.enabled" "${ZAPRET2_DIR}/lists/warp/.enabled" 2>/dev/null
         [ "$_wl_restored" -gt 0 ] && print_info "Восстановлены списки WARP ($_wl_restored файл(ов))"
     fi
-    # NB: game-warp-ips.txt (кураторский игровой список) обновлять здесь не
-    # нужно — z2k-update-lists.sh тянет его свежим из medvedeff-true/
-    # ru-gaming-blocklist по расписанию. shipped-снимок в files/lists/ служит
-    # только offline-фолбэком для первого seed'а (warp_lists_migrate).
+    # NB: игровые списки WARP здесь не разворачиваются вовсе. z2k-update-lists.sh
+    # тянет их пер-игровыми файлами в lists/warp/games/ и владеет ими целиком;
+    # shipped-снимка больше нет. Восстанавливается только выбор пользователя
+    # (.enabled) и его собственные списки.
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then
