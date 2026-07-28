@@ -12,6 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: tests/test_release_manifest_complete.sh diffs the last
+          # two release commits to prove every changed deliverable is declared in
+          # changed_files. With the default shallow clone those commits are absent
+          # and the check degrades to a skip — i.e. exactly no protection.
+          fetch-depth: 0
 
       - name: Install shellcheck and lua
         # lua is needed because tests/run_all.sh now picks up
