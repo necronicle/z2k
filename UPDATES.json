@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-67.6",
+  "current": "p-67.7",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "a2e84b9f38d3dbd639b94378f2ff8243767d4843143e2a9cf58603f41d646b0d",
@@ -61,7 +61,7 @@
   "files/ndm/93-z2k-warp.sh": "63a1108a07734dd2296ffff4d751ea72d5596e18bab2abdfe91481a9aa11695a",
   "files/ndm/94-z2k-ppe-deoffload.sh": "476b7d1047f860ee41a80cfc0c8381178a6e89ed5fb65c480731b5ad25e1c1c6",
   "files/ndm/95-z2k-scheduler-watchdog.sh": "d73955d742263bda01ecca1be4b04deb7bba61164a5da2609f3e9977f443ad63",
-  "files/z2k-auto-update.sh": "8661be438dc1ef2aa08ef871a985c502c23a4e5963f3691e5d45ee092193ae4f",
+  "files/z2k-auto-update.sh": "cef055be2ef47df6934405602ebbfcc1a36c6ef8e0dfd31c6fcc457791cefc0f",
   "files/z2k-blocked-monitor.sh": "d2221cab05461c6f44042464bd3c6979c7303f787460b8b5989f91bf4ebf9a99",
   "files/z2k-config-validator.sh": "31b8e39341f75efb130500ad473cabd90677d814be259bc110429fbc3e4c01d4",
   "files/z2k-diag.sh": "7a525af334c5190397d50a81cdec30be092738f086d79d290a6554c4c26864f1",
@@ -86,13 +86,13 @@
   "lib/system_init.sh": "5884cce213e66f459fa0a2232dfebf8ff2e29418bae75efd67555c5405eb3461",
   "lib/utils.sh": "6a2f7f1f80e071176fae9c9721239c5e2f6430adaeb5dd181a937477414434f6",
   "lib/webpanel.sh": "b5a673e0f2037188d68064e086ef693e65d797e750c3a56a32b0aeaa442373bd",
-  "webpanel/cgi/actions.sh": "78d580eb1ed2c0022f756d4bc609d22a2bb29abb4c9a6f59810fec3c7325f274",
-  "webpanel/cgi/api.sh": "4b6244117dae094bd879c21c9428d8a3abeb66040f07799df64f871169bda651",
+  "webpanel/cgi/actions.sh": "0ac432350a702c588f7654c0f9071c3304b4a03f176bcebee124575353b4402e",
+  "webpanel/cgi/api.sh": "238a747fa2ad069adb93880c24ba1e23dfd4a166dc73a1d48f45c961b186b57d",
   "webpanel/cgi/auth.sh": "75cfaf0f99a7f13b2b61414463d08e13b27ab08bb5355420d9a52608123eecef",
   "webpanel/init.d/S96z2k-webpanel": "6d86392f3583dd81643460402c9eb8d6cc0aaaaf85eb39d270277765d4d5f2af",
   "webpanel/install.sh": "c20c1e44dcbc48782de70e211e04073bcc578bce64aa516b0fdcc8f3f964379f",
   "webpanel/uninstall.sh": "1fe2374c8d6497c60bc831578ccd3176202a67de33f7a4ddc48d2fcb83137b36",
-  "webpanel/www/app.js": "71fb24d518142251ced4ab1648f24a5c2606fc2d9180fb3877bc63fd511dd65b",
+  "webpanel/www/app.js": "83f1041bca50bd8ddcb52141d874062eefb51cb0b6e423bb36fe550838c41e6a",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/index.html": "97881f7d4f0d285988130d23d078ea9d0c9eb4d5e7a1b88370bebc44be2d8890",
   "webpanel/www/style.css": "b6b652d416f699c19b2eaf0a6ab786ddfd6034e932ec58bc7c70ec57ac9b32eb",
@@ -220,6 +220,7 @@
 {"v": "p-67.3", "type": "patch", "ts": "2026-07-27T13:10:00Z", "ref": "e53ba6d", "desc": "Игровой режим WARP точнее сообщает, что мешает туннелю. Если туннель до Cloudflare устанавливается, но трафик через него не проходит, z2k больше не перебирает адреса впустую, а пробует обновить регистрацию — прежняя при этом сохраняется и возвращается, если не помогло. Когда мешает провайдер, об этом сказано прямо, чтобы не тратить время на бесполезные перезапуски.", "changed_files": ["--config", "UPDATES.json", "files/z2k-warp.sh", "tests/test_warp_live_why.sh"]},
 {"v": "p-67.4", "type": "patch", "ts": "2026-07-27T13:55:00Z", "ref": "d0bb176", "desc": "Игровой режим WARP больше не сдаётся раньше времени: после простоя Cloudflare отвечает с задержкой, и туннель, который просто просыпался, раньше считался нерабочим. Теперь при включении ждём дольше, а сам туннель поддерживает соединение и не уходит в спячку.", "changed_files": ["UPDATES.json", "files/init.d/S51z2k-warp", "files/z2k-warp.sh", "tests/test_warp_live_why.sh"]},
 {"v": "p-67.5", "type": "patch", "ts": "2026-07-27T20:30:00Z", "ref": "9e58f4f", "desc": "Игровой режим WARP: устранена причина, из-за которой у части роутеров туннель не поднимался ни после перезапуска, ни после обновления регистрации — роутер мог намертво закрепиться за нерабочим адресом Cloudflare. Также восстановлен журнал туннеля, который переставал обновляться, исправлено определение того, что туннель действительно установлен, и добавлено поддержание соединения, чтобы оно не засыпало. Сообщение о неудаче больше не обвиняет провайдера без оснований.", "changed_files": ["UPDATES.json", "files/init.d/S51z2k-warp", "files/z2k-scheduler.sh", "files/z2k-warp.sh", "tests/test_log_rotation_inode.sh", "tests/test_warp_live_why.sh"]},
-{"v": "p-67.6", "type": "patch", "ts": "2026-07-28T00:20:00Z", "ref": "9a0e496", "desc": "Обновление больше не может тихо оставить старую версию файла. Теперь z2k сверяет каждый скачанный файл с эталоном и, если зеркало отдало устаревшую копию, берёт файл из другого источника. Раньше такое обновление сообщало об успехе и меняло номер версии, ничего при этом не изменив на роутере — из-за этого часть роутеров несколько релизов подряд оставалась без исправлений.", "changed_files": ["UPDATES.json", "lib/utils.sh", "lib/auto_update.sh", "lib/install.sh", "z2k.sh", "scripts/gen_file_hashes.sh", "tests/test_update_content_verification.sh", ".github/workflows/ci.yml"]}
+{"v": "p-67.6", "type": "patch", "ts": "2026-07-28T00:20:00Z", "ref": "9a0e496", "desc": "Обновление больше не может тихо оставить старую версию файла. Теперь z2k сверяет каждый скачанный файл с эталоном и, если зеркало отдало устаревшую копию, берёт файл из другого источника. Раньше такое обновление сообщало об успехе и меняло номер версии, ничего при этом не изменив на роутере — из-за этого часть роутеров несколько релизов подряд оставалась без исправлений.", "changed_files": ["UPDATES.json", "lib/utils.sh", "lib/auto_update.sh", "lib/install.sh", "z2k.sh", "scripts/gen_file_hashes.sh", "tests/test_update_content_verification.sh", ".github/workflows/ci.yml"]},
+{"v": "p-67.7", "type": "patch", "ts": "2026-07-28T09:40:00Z", "ref": "PENDING", "desc": "В веб-панели появился переключатель автообновления. Если выключить, роутер перестанет обновляться сам по ночам, но кнопка «Обновить» продолжит работать, и панель по-прежнему покажет, что доступна новая версия. Заодно исправлено: обновление, запущенное кнопкой, больше не выжидает случайную задержку до полутора часов перед началом.", "changed_files": ["UPDATES.json", "files/z2k-auto-update.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "tests/test_auto_update_toggle.sh"]}
   ]
 }

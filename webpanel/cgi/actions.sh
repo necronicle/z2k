@@ -268,6 +268,17 @@ toggle_stats() {
     set_flag "Z2K_STATS" "$want" "$CONFIG_FILE" || return 1
 }
 
+toggle_auto_update() {
+    # Z2K_AUTO_UPDATE_ENABLED — nightly unattended update (default 1).
+    # Out-of-band like toggle_stats: it does not touch NFQWS2_OPT and is read
+    # fresh by z2k-auto-update.sh on each run, so no config regen and no service
+    # restart. Turning it off does NOT block the "Обновить" button — that path
+    # marks itself manual, so a user who opts out of automatic updates can still
+    # update deliberately.
+    local want="$1"
+    set_flag "Z2K_AUTO_UPDATE_ENABLED" "$want" "$CONFIG_FILE" || return 1
+}
+
 toggle_ppe() {
     # Z2K_PPE_DEOFFLOAD — per-flow hardware-offload exclusion on Keenetic
     # MediaTek (default 1). Hangs the firmware `-j PPE` target on the handshake
@@ -1200,8 +1211,18 @@ update_apply_async() {
     # the response that carries job_id is still in flight. Innermost
     # `> log 2>&1` then overrides /dev/null with the actual job log
     # for the apply itself.
+    # Z2K_AU_MANUAL=1 — a human pressed the button, so this apply runs even when
+    # nightly auto-update is switched off.
+    #
+    # Z2K_AU_NO_JITTER=1 — the updater sleeps a deterministic 0..90min per-host
+    # jitter to spread the fleet's nightly GitHub hits, and it decides "this is
+    # the nightly run" from stdin not being a tty. This subshell closes stdin
+    # (it has to — see the note above), so a button press was indistinguishable
+    # from cron and could sit there sleeping for up to an hour and a half with an
+    # empty job log. The menu path already passed this flag; the panel did not.
     (
-        sh "$AU_SCRIPT" apply > "/tmp/z2k-job-$job_id.log" 2>&1
+        env Z2K_AU_MANUAL=1 Z2K_AU_NO_JITTER=1 \
+            sh "$AU_SCRIPT" apply > "/tmp/z2k-job-$job_id.log" 2>&1
         echo "$?" > "/tmp/z2k-job-$job_id.exit"
     ) </dev/null >/dev/null 2>&1 &
     echo "$!" > "/tmp/z2k-job-$job_id.pid"

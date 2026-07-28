@@ -507,6 +507,7 @@
       { label: "RST фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
       { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
       { label: "WARP", value: bool(s.toggles.game_warp), kind: s.toggles.game_warp === "1" ? "good" : "" },
+      { label: "Автообновление", value: bool(s.toggles.auto_update), kind: s.toggles.auto_update === "1" ? "good" : "warn" },
       { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
     ];
     grid.innerHTML = cells.map(c => {
@@ -572,6 +573,8 @@
       desc: "Раз в сутки шлёт на сервер проекта обезличенный срез: какая стратегия активна в каждом пуле и как долго держится — чтобы двигать лучшие стратегии в начало. НЕ уходит: сайты/домены, IP, провайдер, регион, любой ID устройства. Только: имя пула, номер стратегии, время удержания. Выключите, если не хотите участвовать." },
     { key: "ppe", name: "Аппаратный offload: per-flow исключение",
       desc: "На Keenetic (MediaTek) аппаратный ускоритель уводит поток в железо после первого пакета, и роутер не видит повторные ClientHello — стратегия залипает для блокировок без RST (mailsuite и т.п.). Эта опция держит окно рукопожатия на CPU только для нужных портов (родной firmware-механизм -j PPE), поэтому подбор стратегии снова работает, а общий трафик остаётся ускоренным. Работает только на совместимых Keenetic. Выключите, чтобы вернуть прежнее поведение." },
+    { key: "auto_update", name: "Автообновление",
+      desc: "Ночью в 02:00 роутер сам проверяет обновления и устанавливает их. Выключите, если хотите обновляться только вручную — кнопка «Обновить» продолжит работать, и панель по-прежнему покажет, что доступна новая версия." },
   ];
   const TOGGLE_API_NAME = {
     rst_filter: "rst-filter",
@@ -580,6 +583,7 @@
     dynamic_ttl: "dynamic-ttl",
     stats: "stats",
     ppe: "ppe",
+    auto_update: "auto-update",
   };
 
   async function renderToggles() {
@@ -867,6 +871,7 @@
       dynamic_ttl: "Динамический TTL",
       stats: "Сбор статистики",
       ppe: "PPE de-offload",
+      auto_update: "Автообновление",
     }[key] || key;
 
     let resp;

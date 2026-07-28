@@ -33,6 +33,27 @@ if [ ! -f "$BRANCH_FILE" ] || [ "$(cat "$BRANCH_FILE" 2>/dev/null)" != "z2k-enha
     exit 0
 fi
 
+# User gate — Z2K_AUTO_UPDATE_ENABLED (default 1, i.e. unchanged behaviour).
+#
+# Stops the UNATTENDED nightly apply only. `check` stays allowed so the dashboard
+# can still say "доступна p-67.9" to someone who updates by hand, and a manual
+# apply stays allowed too (Z2K_AU_MANUAL=1, set by the panel and the menu) —
+# otherwise flipping this off would leave a user with no way to ever update
+# again, which is not what "отключить автообновление" means.
+#
+# NOT named Z2K_AUTO_UPDATE: that name is already an ENV marker meaning "this
+# reinstall was started by the updater", read by lib/install.sh and z2k.sh to
+# decide config-merge and non-interactive behaviour. A config key of the same
+# name set to 0 could reach those checks and silently change how a reinstall
+# merges the user's config.
+AU_ENABLED=$(awk -F= '/^Z2K_AUTO_UPDATE_ENABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' \
+             "${ZAPRET2_DIR}/config" 2>/dev/null)
+[ -z "$AU_ENABLED" ] && AU_ENABLED=1
+if [ "$AU_ENABLED" = "0" ] && [ "$ACTION" = "apply" ] && [ "${Z2K_AU_MANUAL:-0}" != "1" ]; then
+    echo "Автообновление отключено в настройках — плановое обновление пропущено."
+    exit 0
+fi
+
 # Source utils.sh FIRST so the layered z2k_fetch() (raw → jsdelivr → gh-proxy →
 # ndmc DNS-override) is in scope. auto_update.sh's fetch helpers fall back to a
 # bare `curl raw.githubusercontent.com` whenever `command -v z2k_fetch` is false

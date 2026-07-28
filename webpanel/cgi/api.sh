@@ -179,16 +179,17 @@ case "$method $path" in
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         stats=$(read_flag "Z2K_STATS" "$CONFIG_FILE" "1")
         ppe=$(read_flag "Z2K_PPE_DEOFFLOAD" "$CONFIG_FILE" "1")
+        auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
         tpid=$(tunnel_pid 2>/dev/null)
         tunnel_running=false
         [ -n "$tpid" ] && tunnel_running=true
 
         game_warp=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s"},"tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s","auto_update":"%s"},"tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
             "${rst_filter:-0}" "${silent_fb:-0}" "${game_warp:-0}" "${customd:-0}" \
-            "${dynamic_ttl:-1}" "${stats:-1}" "${ppe:-1}" \
+            "${dynamic_ttl:-1}" "${stats:-1}" "${ppe:-1}" "${auto_update:-1}" \
             "${tunnel_running:-false}"
         exit 0
         ;;
@@ -226,7 +227,8 @@ case "$method $path" in
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
     "POST /toggle/stats"|\
-    "POST /toggle/ppe")
+    "POST /toggle/ppe"|\
+    "POST /toggle/auto-update")
         body=$(read_body)
         val=$(form_value "$body" "value")
         [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
@@ -242,6 +244,7 @@ case "$method $path" in
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
             /toggle/stats)           _toggle_fn=toggle_stats;           _label="Сбор статистики" ;;
             /toggle/ppe)             _toggle_fn=toggle_ppe;             _label="PPE de-offload" ;;
+            /toggle/auto-update)     _toggle_fn=toggle_auto_update;     _label="Автообновление" ;;
         esac
         _verb=$([ "$val" = "1" ] && echo "Включаю" || echo "Отключаю")
         job_id=$(svc_action_async "${_verb} ${_label}" "${_toggle_fn} ${val}")
