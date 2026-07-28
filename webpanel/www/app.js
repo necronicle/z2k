@@ -1872,7 +1872,10 @@
         <div id="state-body">${skeletonLines(6)}</div>
       </div>
     `;
-    document.getElementById("state-refresh").addEventListener("click", loadState);
+    // Wrapped, NOT passed directly: an event handler receives the Event object as
+    // its first argument, which would land in useCache — truthy — and turn the
+    // «Обновить» button into a no-op that re-renders stale rows.
+    document.getElementById("state-refresh").addEventListener("click", () => loadState());
     document.getElementById("state-clear-all").addEventListener("click", stateClearAll);
     loadState();
   }
@@ -1908,18 +1911,37 @@
     });
   }
 
-  async function loadState() {
+  // Last server response, kept so that re-SORTING does not have to re-FETCH.
+  // Sorting is a view operation: the whole set is already in the browser, and
+  // /state costs ~2.4s on a Keenetic (123 rows, shell CGI parsing state.tsv).
+  // Refetching for it meant every tap on a column — and every pick in the mobile
+  // sheet — sat there for those 2.4 seconds with nothing to show for it.
+  // The network trip stays where it means something: entering the page, the
+  // explicit «Обновить» button, and after an edit or delete.
+  let stateCache = null;
+
+  // Re-render with the rows already in hand. Falls back to a real load if the
+  // cache is empty (first paint, or an error cleared it).
+  function resortState() { return loadState(true); }
+
+  async function loadState(useCache) {
     const body = document.getElementById("state-body");
     if (!body) return;
     try {
-      // /pools may fail if nfqws2 isn't running — tolerate it (dropdowns then
-      // fall back to the row's own strategy as the max).
-      const [d, poolsResp] = await Promise.all([
-        apiGet("/state"),
-        apiGet("/pools").catch(() => ({ pools: {} })),
-      ]);
-      statePools = (poolsResp && poolsResp.pools) || {};
-      const entries = d.entries || [];
+      let entries;
+      if (useCache && stateCache) {
+        entries = stateCache;
+      } else {
+        // /pools may fail if nfqws2 isn't running — tolerate it (dropdowns then
+        // fall back to the row's own strategy as the max).
+        const [d, poolsResp] = await Promise.all([
+          apiGet("/state"),
+          apiGet("/pools").catch(() => ({ pools: {} })),
+        ]);
+        statePools = (poolsResp && poolsResp.pools) || {};
+        entries = d.entries || [];
+        stateCache = entries;
+      }
 
       // Discord-voice panel first — it must populate even with empty rotator state.
       renderDiscordVoicePanel(entries);
@@ -2037,7 +2059,7 @@
             stateSort.dir = (key === "strategy") ? "desc" : "asc";
           }
           saveStateSort();
-          loadState();
+          resortState();
         });
       });
     } catch (e) {
@@ -2479,7 +2501,7 @@
         saveStateSort();
         renderSortOptions();   // reflect the new arrow before closing
         closeSortSheet();
-        loadState();
+        resortState();
       });
     });
   }

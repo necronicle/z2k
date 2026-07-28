@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-67.9.1",
+  "current": "p-67.9.2",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "a2e84b9f38d3dbd639b94378f2ff8243767d4843143e2a9cf58603f41d646b0d",
@@ -91,10 +91,10 @@
   "webpanel/init.d/S96z2k-webpanel": "6d86392f3583dd81643460402c9eb8d6cc0aaaaf85eb39d270277765d4d5f2af",
   "webpanel/install.sh": "c20c1e44dcbc48782de70e211e04073bcc578bce64aa516b0fdcc8f3f964379f",
   "webpanel/uninstall.sh": "1fe2374c8d6497c60bc831578ccd3176202a67de33f7a4ddc48d2fcb83137b36",
-  "webpanel/www/app.js": "bc14600e61b92a67eb7e6831ddb95244e3a01e63c0fd34b189ebd0f6f603cd67",
+  "webpanel/www/app.js": "fe0310d944fdad6f671e3ee94d12ee1cfee40bd54ad3d350783d1590e08905db",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/index.html": "f7c6a927d1973df9cded0d367bce21ac1140af544dd4fa06e2aac4044933642e",
-  "webpanel/www/style.css": "956ce306012edf032564f0c452a65b0e72c1fc4fdc785ba277d9744758d2a04e",
+  "webpanel/www/style.css": "31c7876815edeeb5020a3236669f7377dfec5350ea74ccbb5c781c602e7192bc",
   "z2k.sh": "b43cbc34bca05b2afe81bdcbed5edf0d190cd8aa15d8437cedf2e8e2ab82e100"
   },
   "history": [
@@ -223,6 +223,7 @@
 {"v": "p-67.7", "type": "patch", "ts": "2026-07-28T09:40:00Z", "ref": "f0db5f1", "desc": "В веб-панели появился переключатель автообновления. Если выключить, роутер перестанет обновляться сам по ночам, но кнопка «Обновить» продолжит работать, и панель по-прежнему покажет, что доступна новая версия. Заодно исправлено: обновление, запущенное кнопкой, больше не выжидает случайную задержку до полутора часов перед началом.", "changed_files": ["UPDATES.json", "files/z2k-auto-update.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "tests/test_auto_update_toggle.sh"]},
 {"v": "p-67.8", "type": "patch", "ts": "2026-07-28T12:10:00Z", "ref": "2d6d236", "desc": "Игровой режим WARP теперь работает по отдельным спискам: Steam, Roblox, Valorant и другие включаются по одному в веб-панели, раздел WARP. ВАЖНО: после обновления не включён ни один список, и до вашего выбора через туннель не идёт ничего — это сделано намеренно. Раньше загружался один общий список на 14 тысяч адресов, который заворачивал в туннель почти весь трафик, включая домашнюю сеть, из-за чего при любом сбое туннеля пропадал интернет целиком. Заодно адреса теперь проверяются: служебные и частные диапазоны в туннель больше не попадают. И проверка после обновления перестала ждать лишнюю минуту.", "changed_files": ["UPDATES.json", "files/z2k-warp.sh", "files/z2k-update-lists.sh", "files/lists/game-warp-ips.txt", "lib/install.sh", "lib/auto_update.sh", "z2k.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "tests/test_warp_games.sh", "tests/test_warp_lists.sh", "tests/test_auto_update_health.sh"]},
 {"v": "p-67.9", "type": "patch", "ts": "2026-07-28T15:30:00Z", "ref": "c824342", "desc": "Игровые списки WARP теперь подтягиваются сразу вместе с обновлением, а не ждут ночного обновления списков — после установки они уже на месте. В веб-панели на телефоне появилась сортировка таблицы состояния: раньше сортировать можно было только на компьютере, нажимая на заголовки столбцов, которые на узком экране не показываются. И выбранный порядок сортировки теперь запоминается — и на телефоне, и на компьютере.", "changed_files": ["UPDATES.json", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "webpanel/www/app.js", "webpanel/www/style.css", "tests/test_panel_sort.sh", "tests/test_warp_games_seed.sh"]},
-{"v": "p-67.9.1", "type": "patch", "ts": "2026-07-28T17:20:00Z", "ref": "2e12f82", "desc": "Исправление к предыдущему обновлению: у части роутеров игровые списки WARP так и не появились, а в веб-панели на телефоне не появилась сортировка. Списки теперь подтягивает служба расписания сразу после обновления. Панель после обновления перестанет отдавать браузеру устаревшую версию — раньше браузер мог показывать старую страницу, даже когда на роутере уже лежала новая. Если сортировка всё ещё не видна, обновите страницу с очисткой кэша один раз.", "changed_files": ["UPDATES.json", "files/z2k-scheduler.sh", "webpanel/www/index.html", "scripts/gen_file_hashes.sh", "tests/test_release_reaches_users.sh"]}
+{"v": "p-67.9.1", "type": "patch", "ts": "2026-07-28T17:20:00Z", "ref": "2e12f82", "desc": "Исправление к предыдущему обновлению: у части роутеров игровые списки WARP так и не появились, а в веб-панели на телефоне не появилась сортировка. Списки теперь подтягивает служба расписания сразу после обновления. Панель после обновления перестанет отдавать браузеру устаревшую версию — раньше браузер мог показывать старую страницу, даже когда на роутере уже лежала новая. Если сортировка всё ещё не видна, обновите страницу с очисткой кэша один раз.", "changed_files": ["UPDATES.json", "files/z2k-scheduler.sh", "webpanel/www/index.html", "scripts/gen_file_hashes.sh", "tests/test_release_reaches_users.sh"]},
+{"v": "p-67.9.2", "type": "patch", "ts": "2026-07-28T18:40:00Z", "ref": "PENDING", "desc": "Сортировка таблицы состояния на телефоне наконец видна — из-за ошибки в стилях кнопка сортировки была скрыта на всех экранах. И сортировка теперь применяется мгновенно, а не за пару секунд: раньше при каждом выборе страница заново запрашивала данные у роутера, хотя они уже были загружены. Это касается и телефона, и компьютера.", "changed_files": ["UPDATES.json", "webpanel/www/app.js", "webpanel/www/style.css", "tests/test_panel_sort.sh"]}
   ]
 }

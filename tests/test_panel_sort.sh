@@ -57,6 +57,20 @@ if [ -n "$mob_line" ]; then
 else
     no "правило показа кнопки существует" "display: inline-flex" "нет"
 fi
+# CASCADE ORDER, not just presence. Both rules are plain `.sort-trigger`, so
+# specificity is equal and the LAST one in the file wins — a media query does
+# not beat a later top-level rule. Shipped once with the base block below the
+# breakpoint: display:none won at every width and the button was invisible on
+# the phone it was written for, while every other assertion here passed.
+base_ln=$(grep -n '^\.sort-trigger {' "$CSS" | head -1 | cut -d: -f1)
+if [ -n "$base_ln" ] && [ -n "$mob_line" ]; then
+    [ "$base_ln" -lt "$mob_line" ] \
+        && ok "базовое правило раньше мобильного — переопределение побеждает ($base_ln < $mob_line)" \
+        || no "базовое правило раньше мобильного" "base < media" "$base_ln/$mob_line"
+else
+    no "оба правила .sort-trigger найдены" "две строки" "$base_ln/$mob_line"
+fi
+
 # And it must be shown by the SAME breakpoint that hides the headers, or there
 # is a width where neither control is available.
 hide_line=$(grep -n '\.state-table thead { display: none' "$CSS" | head -1 | cut -d: -f1)
@@ -139,6 +153,24 @@ case "$(awk '/function loadStateSort/,/^  \}/' "$JS")" in
     *'catch (_)'*) ok "недоступное хранилище не роняет панель" ;;
     *) no "недоступное хранилище не роняет панель" "try/catch" "нет" ;;
 esac
+
+# --- sorting must not go back to the network ---------------------------------
+# /state costs ~2.4s on a Keenetic (123 rows through a shell CGI). The rows are
+# already in the browser, so re-sorting them is a render, not a fetch — the
+# first version refetched on every column tap and every pick in the sheet.
+case "$sheet" in
+    *resortState*) ok "шторка пересортировывает без запроса к роутеру" ;;
+    *) no "шторка пересортировывает без запроса" "resortState()" "loadState()" ;;
+esac
+case "$hdr" in
+    *resortState*) ok "клик по заголовку тоже без запроса" ;;
+    *) no "клик по заголовку без запроса" "resortState()" "loadState()" ;;
+esac
+# The refresh button must still really refresh.
+grep -q 'addEventListener("click", () => loadState())' "$JS"     && ok "кнопка «Обновить» ходит в сеть (обработчик обёрнут)"     || no "кнопка «Обновить» ходит в сеть" "() => loadState()" "loadState передан напрямую"
+# Passing loadState as the handler directly would hand it the Event object as
+# useCache — truthy — and silently turn refresh into a re-render of stale rows.
+grep -q 'addEventListener("click", loadState)' "$JS"     && no "loadState не передаётся в обработчик напрямую" "обёртка" "передан напрямую"     || ok "loadState не передаётся в обработчик напрямую"
 
 # --- validation on read, behaviourally ---------------------------------------
 if command -v node >/dev/null 2>&1; then
