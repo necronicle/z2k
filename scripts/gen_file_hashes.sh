@@ -72,6 +72,21 @@ done
 # Strip the trailing comma of the last pair (JSON has no trailing commas).
 sed -i.bak '$ s/,$//' "$BLOCK" && rm -f "${BLOCK}.bak"
 
+# Keep the panel's cache-buster pinned to the release BEFORE hashing, or the
+# digest we publish for index.html is the one from before the rewrite.
+#
+# index.html loads its assets as `app.js?v=<tag>`. The browser caches by URL, so
+# that suffix is the only thing that makes a browser pick up a new panel. It was
+# a hand-written literal and sat at `p39` for twenty-eight releases: the panel
+# changed, the URL did not, and anyone whose browser caches got the old script
+# after every update. It is derived from "current" now, so it cannot drift again.
+_cur=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
+if [ -n "$_cur" ] && [ -f webpanel/www/index.html ]; then
+    sed "s/?v=[A-Za-z0-9._-]*\"/?v=${_cur}\"/g" webpanel/www/index.html > "$OUT" \
+        && cat "$OUT" > webpanel/www/index.html
+    printf 'кеш-бастер панели: ?v=%s\n' "$_cur"
+fi
+
 # Rebuild: everything as-is, minus any previous block of ours, plus a fresh one
 # straight after "current". awk state machine, so no dependence on where the old
 # block happened to sit.

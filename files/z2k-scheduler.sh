@@ -124,6 +124,23 @@ run_task() {
 
 log "scheduler started (pid $$, $(uname -srm))"
 
+# Seed the per-game WARP lists if there are none.
+#
+# This lives HERE, and not only in the updater, for a reason worth remembering:
+# an update is applied by the updater ALREADY on the router, i.e. the previous
+# release. So a hook added to lib/auto_update.sh cannot run during the very
+# update that ships it — p-67.9 shipped exactly such a hook and it did nothing,
+# because p-67.8's updater executed that update. The scheduler, by contrast, is
+# RESTARTED by any patch carrying files/z2k-scheduler.sh, so this runs the new
+# code on the update that introduces it.
+#
+# Same empty-directory gate as the updater's: once lists exist this costs one
+# `ls` per service start and never touches the network.
+if [ -x "${ZAPRET2_DIR}/z2k-update-lists.sh" ] && \
+   [ -z "$(ls "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null)" ]; then
+    run_task warp-games-seed sh "${ZAPRET2_DIR}/z2k-update-lists.sh" warp-games
+fi
+
 while true; do
     hhmm=$(date +%H:%M)
     today=$(date +%Y-%m-%d)
