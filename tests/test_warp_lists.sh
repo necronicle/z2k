@@ -116,15 +116,15 @@ printf "\n--- warp_list_save: ipset-грамматика (то, что restore �
 # /0 и ведущие нули ipset либо не парсит (08.8.8.8, /08 → abort всего restore-
 # стрима), либо парсит ОКТАЛЬНО (010.1.2.3 → 8.1.2.3). Фильтр обязан резать.
 OUT=$(printf '0.0.0.0/0\n8.8.8.8/0\n08.8.8.8\n010.1.2.3\n1.2.3.4/08\n0.1.2.3\n1.2.3.4/32\n5.5.5.5/1\n7.7.7.7\n' | warp_list_save strict replace)
-assert_contains "only 2 routable lines saved"      "saved=2"           "$OUT"
-assert_contains "7 ipset-hostile lines skipped"    "skipped_invalid=7" "$OUT"
+assert_contains "only 3 routable lines saved"      "saved=3"           "$OUT"
+assert_contains "6 ipset-hostile lines skipped"    "skipped_invalid=6" "$OUT"
 CONTENT=$(cat "$WARP_LISTS_DIR/strict.txt")
 assert_not_contains "prefix /0 filtered"           "/0"       "$CONTENT"
 assert_not_contains "leading-zero octet filtered"  "08."      "$CONTENT"
 assert_not_contains "octal-octet filtered"         "010."     "$CONTENT"
 assert_not_contains "zero first octet filtered"    "0.1.2.3"  "$CONTENT"
 assert_contains     "/32 kept"                     "1.2.3.4/32" "$CONTENT"
-assert_not_contains "/1 dropped (шире порога /10)" "5.5.5.5"    "$CONTENT"
+assert_contains     "/1 сохраняется (потолка ширины нет)" "5.5.5.5/1" "$CONTENT"
 warp_list_delete strict
 
 printf "\n--- warp_list_save: mode=create ---\n"
@@ -226,11 +226,14 @@ _accept() {
     assert_eq "accepted: $1" "pass" "$_v"
 }
 for _bad in 0.0.0.0/0 10.0.0.0/8 127.0.0.0/8 192.168.0.0/16 192.168.1.1 172.16.5.0/24 \
-            169.254.1.1 100.64.0.1 224.0.0.1 240.0.0.1 255.255.255.255 3.0.0.0/8 \
+            169.254.1.1 100.64.0.1 224.0.0.1 240.0.0.1 255.255.255.255 \
             198.18.0.1 198.51.100.7 203.0.113.9 192.0.2.5 018.1.1.1 2001:db8::1; do
     _reject "$_bad"
 done
-for _good in 1.2.3.4 34.192.0.0/10 52.0.0.0/10 108.157.8.0/23 143.244.56.0/23; do
+# Широкие блоки провайдеров пропускаем осознанно: 3.0.0.0/8 и 15.0.0.0/8 —
+# это Amazon, ровно то, ради чего WARP и включают. Потолка ширины больше нет.
+for _good in 1.2.3.4 34.192.0.0/10 52.0.0.0/10 108.157.8.0/23 143.244.56.0/23 \
+             3.0.0.0/8 15.0.0.0/8 3.128.0.0/9 5.5.5.5/1; do
     _accept "$_good"
 done
 

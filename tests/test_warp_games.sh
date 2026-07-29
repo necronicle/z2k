@@ -102,7 +102,9 @@ printf "\n--- refresh: the address filter applies to upstream data too ---\n"
 printf '10.0.0.1\n127.0.0.1\n192.168.1.1\n172.16.0.5\n0.0.0.0/0\n3.0.0.0/8\n8.8.8.8\n2a00:1450::1\n' > "$SB/up/Steam.txt"
 write_index Steam
 update_warp_game_list >/dev/null 2>&1
-assert_eq "only the routable address survives" "8.8.8.8," "$(setof "$GDIR/Steam.txt")"
+# 3.0.0.0/8 остаётся: это Amazon, а не мусор. Отсеиваются только
+# нероутируемые и служебные.
+assert_eq "остаются только маршрутизируемые" "3.0.0.0/8,8.8.8.8," "$(setof "$GDIR/Steam.txt")"
 
 printf "\n--- refresh: an all-junk list leaves no file ---\n"
 # Better no list than an empty one the panel would offer as a switch.

@@ -644,11 +644,14 @@ warp_ipset_load() {
     ipset list "$tmpset" >/dev/null 2>&1 || { _wlog "cannot create temp ipset $tmpset"; return 1; }
     if warp_active_lists | while IFS= read -r _wl; do cat "$_wl" 2>/dev/null; done | awk -v set="$tmpset" '
 # --- z2k warp address filter (canonical; keep byte-identical in all 3 copies) ---
-function z2k_warp_addr_ok(s,   ip, m, h, o) {
+function z2k_warp_addr_ok(s,   ip, h, o) {
     if (s !~ /^[1-9][0-9]{0,2}(\.(0|[1-9][0-9]{0,2})){3}(\/([1-9]|[12][0-9]|3[0-2]))?$/) return 0
-    ip = s; m = 32
-    if (split(s, h, "/") == 2) { ip = h[1]; m = h[2] + 0 }
-    if (m < 10) return 0
+    ip = s
+    if (split(s, h, "/") == 2) ip = h[1]
+    # No width cap. There was one at /10, on the reasoning that no game lives on
+    # a /8 — but the blocks it cut are 3.0.0.0/8 and 15.0.0.0/8, i.e. Amazon,
+    # which is exactly what people switch WARP on for. /0 is still impossible:
+    # the grammar above only accepts prefixes 1-32.
     split(ip, o, ".")
     if (o[1] > 255 || o[2] > 255 || o[3] > 255 || o[4] > 255) return 0
     if (o[1] == 10 || o[1] == 127 || o[1] >= 224) return 0
