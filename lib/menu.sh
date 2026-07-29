@@ -123,11 +123,12 @@ MENU
 [A] Политика доступа Keenetic (фильтр по NDM policy)
 [C] Сбор статистики стратегий (анонимно)
 [H] Аппаратный offload: per-flow исключение (нативная ротация на Keenetic)
+[L] Автохостлист (движок сам находит заблокированные домены)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,E,T,W,S,P,D,I,Y,M,A,C,H]: "
+        printf "Выберите опцию [0-5,U,R,F,E,T,W,S,P,D,I,Y,M,A,C,H,L]: "
         read_input choice
 
         case "$choice" in
@@ -190,6 +191,10 @@ MENU
                 ;;
             h|H)
                 menu_ppe
+                ;;
+
+            l|L)
+                menu_autohostlist
                 ;;
             0)
                 print_info "Выход из меню"
@@ -1511,6 +1516,94 @@ SUBMENU
 # ==============================================================================
 # ПОДМЕНЮ: АППАРАТНЫЙ OFFLOAD — per-flow исключение (Keenetic MediaTek PPE)
 # ==============================================================================
+menu_autohostlist() {
+    clear_screen
+    print_header "Автохостлист"
+
+    local config_file="${ZAPRET2_DIR}/config"
+
+    if [ ! -f "$config_file" ]; then
+        print_error "Конфиг не найден: $config_file"
+        print_info "Запустите установку сначала"
+        pause
+        return 1
+    fi
+
+    local Z2K_AUTOHOSTLIST _auto_file _auto_count
+    Z2K_AUTOHOSTLIST=$(safe_config_read "Z2K_AUTOHOSTLIST" "$config_file" "0")
+    _auto_file="${ZAPRET2_DIR}/ipset/zapret-hosts-auto.txt"
+    _auto_count=$(grep -cvE '^[[:space:]]*(#|$)' "$_auto_file" 2>/dev/null || echo 0)
+
+    print_separator
+    print_info "Флаг: $([ "$Z2K_AUTOHOSTLIST" = "1" ] && echo 'Включён' || echo 'Выключен (по умолчанию)')   Найдено доменов: ${_auto_count:-0}"
+    print_separator
+
+    cat <<'SUBMENU'
+
+Обычно z2k работает по спискам доменов: обходятся только те, что
+в списках. Автохостлист меняет принцип — движок сам замечает, что
+домен не открывается, и добавляет его в список. Найденное
+переливается в RKN-список, так что подхватывается штатно.
+
+Плюс: сайты, которых нет в списках, начинают работать без ручных
+добавлений. Минус: движок судит по поведению соединения и иногда
+ошибается — в список может попасть домен, который просто лежал
+сам по себе.
+
+Это смена режима фильтрации для ВСЕГО трафика, а не добавка,
+поэтому по умолчанию выключено.
+
+[1] Включить
+[2] Выключить (по умолчанию)
+[B] Назад
+
+SUBMENU
+
+    printf "Выберите опцию [1-2,B]: "
+    read_input _ahl_choice
+
+    case "$_ahl_choice" in
+        1)
+            if grep -q '^Z2K_AUTOHOSTLIST=' "$config_file"; then
+                sed -i 's/^Z2K_AUTOHOSTLIST=.*/Z2K_AUTOHOSTLIST=1/' "$config_file"
+            else
+                echo "Z2K_AUTOHOSTLIST=1" >> "$config_file"
+            fi
+            print_success "Автохостлист включён"
+            print_info "Пересоздание конфига (MODE_FILTER -> autohostlist)..."
+            create_official_config "/opt/zapret2/config"
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+            fi
+            pause
+            ;;
+        2)
+            if grep -q '^Z2K_AUTOHOSTLIST=' "$config_file"; then
+                sed -i 's/^Z2K_AUTOHOSTLIST=.*/Z2K_AUTOHOSTLIST=0/' "$config_file"
+            else
+                echo "Z2K_AUTOHOSTLIST=0" >> "$config_file"
+            fi
+            print_success "Автохостлист выключен"
+            print_info "Пересоздание конфига (MODE_FILTER -> hostlist)..."
+            create_official_config "/opt/zapret2/config"
+            if is_zapret2_running; then
+                print_info "Перезапуск сервиса..."
+                "$INIT_SCRIPT" restart
+            fi
+            pause
+            ;;
+        b|B)
+            return 0
+            ;;
+        *)
+            print_error "Неверный выбор"
+            pause
+            ;;
+    esac
+    return 0
+}
+
 menu_ppe() {
     clear_screen
     print_header "Аппаратный offload: per-flow исключение"

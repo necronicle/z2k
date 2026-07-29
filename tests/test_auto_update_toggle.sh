@@ -180,7 +180,11 @@ case "$apply_fn" in *'Z2K_AU_NO_JITTER=1'*) ok "ручной запуск не �
                     *) no "ручной запуск не уходит в ночной jitter" "Z2K_AU_NO_JITTER=1" "нет" ;; esac
 
 # --- HTTP surface ----------------------------------------------------------
-grep -q '"POST /toggle/auto-update")' "$API" \
+# Матчим маршрут, а не его написание: он может стоять в case-списке как
+# отдельная ветка или в цепочке через `|` с соседними тумблерами — для
+# поведения это одно и то же, а тест на точную строку ломается от добавления
+# соседа и говорит «маршрута нет», когда он есть.
+grep -qE '"POST /toggle/auto-update"[)|]' "$API" \
     && ok "маршрут POST /toggle/auto-update объявлен" \
     || no "маршрут POST /toggle/auto-update объявлен" "маршрут" "отсутствует"
 grep -q '_toggle_fn=toggle_auto_update' "$API" \
@@ -217,9 +221,15 @@ grep -q '\.status-cell\.warn' "$HERE/webpanel/www/style.css" \
     || no "класс .status-cell.warn существует" "css-класс" "отсутствует"
 # A toggle that is not in TOGGLES_RESTART_SERVICE must not restart the service —
 # switching off updates has nothing to do with the bypass.
-grep -q 'TOGGLES_RESTART_SERVICE = { silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1 }' "$APPJS" \
-    && ok "переключение не перезапускает сервис" \
-    || no "переключение не перезапускает сервис" "auto_update вне списка рестарта" "изменилось"
+# Свойство, а не литерал: важно ровно то, что auto_update НЕ в списке
+# перезапускающих сервис — переключение автообновления к обходу отношения не
+# имеет. Пиннинг всей строки ломался от появления любого нового тумблера.
+_restart_map=$(sed -n 's/.*TOGGLES_RESTART_SERVICE = {\(.*\)};.*/\1/p' "$APPJS")
+case "$_restart_map" in
+    *auto_update*) no "переключение не перезапускает сервис" "auto_update вне списка" "в списке" ;;
+    "")            no "список рестартующих тумблеров найден" "TOGGLES_RESTART_SERVICE" "нет" ;;
+    *)             ok "переключение не перезапускает сервис" ;;
+esac
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

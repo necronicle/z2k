@@ -90,6 +90,119 @@ regenerate_config() {
     return $?
 }
 
+# ---- custom per-pool strategies -------------------------------------------
+# User-owned, unlike shipped Strategy.txt (whose edits an update wipes by
+# design). Read by the generator on EVERY regeneration, so they survive toggles,
+# reinstalls and auto-updates.
+STRATEGY_POOLS="rkn_tcp yt_tcp gv_tcp yt_quic"
+CUSTOM_STRAT_DIR="${CUSTOM_STRAT_DIR:-$ZAPRET2_DIR/lists/custom-strategies}"
+
+strategy_pool_ok() {
+    for _p in $STRATEGY_POOLS; do [ "$1" = "$_p" ] && return 0; done
+    return 1
+}
+
+# strategy_validate — the load-bearing part of this feature.
+#
+# One typo takes down nfqws2 ENTIRELY, not just the pool it was written for:
+# the daemon parses all profiles as one option string and refuses to start if
+# any of it is wrong. So a candidate is never applied on trust.
+#
+# Validation runs against the WHOLE generated option string with the candidate
+# in place, not against the fragment alone — a line can be fine by itself and
+# still break the result (duplicate separators, a filter that swallows the next
+# profile). The engine's own --dry-run is the oracle: rc 0 = parses, rc 1 = does
+# not. Verified on hardware, including that a bad --lua-desync name fails it.
+#
+# stdin: candidate text. $1: pool. Echoes the engine's complaint on failure.
+strategy_validate() {
+    local pool="$1"
+    strategy_pool_ok "$pool" || { echo "unknown pool"; return 1; }
+
+    local engine="$ZAPRET2_DIR/nfq2/nfqws2"
+    [ -x "$engine" ] || { echo "движок не найден: $engine"; return 1; }
+
+    local dir="$CUSTOM_STRAT_DIR" live="$CUSTOM_STRAT_DIR/$pool.txt"
+    local saved="" had=0
+    mkdir -p "$dir" 2>/dev/null || { echo "нет каталога $dir"; return 1; }
+    if [ -f "$live" ]; then saved=$(cat "$live"); had=1; fi
+
+    # Put the candidate in place, build a config in a THROWAWAY path, and put
+    # the previous state back before deciding anything. The live config is never
+    # touched here — a failed check must leave a working router working.
+    cat > "$live" || { echo "не удалось записать $live"; return 1; }
+
+    local tmpcfg="/tmp/z2k-strategy-check.$$"
+    local rc=0 opt="" err=""
+    if regenerate_config_to "$tmpcfg"; then
+        opt=$(sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }' "$tmpcfg")
+    else
+        rc=1; err="не удалось собрать конфиг с этой строкой"
+    fi
+
+    if [ "$rc" = 0 ]; then
+        if [ -z "$opt" ]; then
+            rc=1; err="в собранном конфиге пустые опции nfqws2"
+        else
+            # shellcheck disable=SC2086
+            err=$("$engine" --dry-run $opt 2>&1) || rc=1
+        fi
+    fi
+
+    rm -f "$tmpcfg"
+    # Restore whatever was there before the check.
+    if [ "$had" = 1 ]; then printf '%s\n' "$saved" > "$live"; else rm -f "$live"; fi
+
+    [ "$rc" = 0 ] || { printf '%s\n' "$err" | tail -3; return 1; }
+    return 0
+}
+
+# Same as regenerate_config but writes somewhere else — used by the check above
+# so a candidate is never able to overwrite the config the router is running on.
+regenerate_config_to() {
+    local dest="$1" utils="" lib=""
+    for d in "$ZAPRET2_DIR/lib" /tmp/z2k/lib; do
+        [ -f "$d/utils.sh" ] && [ -z "$utils" ] && utils="$d/utils.sh"
+        [ -f "$d/config_official.sh" ] && [ -z "$lib" ] && lib="$d/config_official.sh"
+    done
+    [ -z "$lib" ] && return 1
+    # shellcheck disable=SC1090
+    [ -n "$utils" ] && . "$utils"
+    # shellcheck disable=SC1090
+    . "$lib"
+    create_official_config "$dest" >/dev/null 2>&1
+}
+
+strategy_pool_read() {
+    strategy_pool_ok "$1" || return 1
+    [ -f "$CUSTOM_STRAT_DIR/$1.txt" ] || return 2
+    cat "$CUSTOM_STRAT_DIR/$1.txt"
+}
+
+# Save only what validates. A rejected line leaves the previous state exactly as
+# it was — silently falling back to the shipped strategy would leave the user
+# convinced their own is running.
+strategy_pool_save() {
+    local pool="$1" body
+    strategy_pool_ok "$pool" || { echo "unknown pool" >&2; return 1; }
+    body=$(cat)
+    printf '%s\n' "$body" | strategy_validate "$pool" >"/tmp/z2k-strategy-err.$$" 2>&1 || {
+        cat "/tmp/z2k-strategy-err.$$" >&2; rm -f "/tmp/z2k-strategy-err.$$"; return 1; }
+    rm -f "/tmp/z2k-strategy-err.$$"
+    mkdir -p "$CUSTOM_STRAT_DIR" 2>/dev/null || return 1
+    printf '%s\n' "$body" > "$CUSTOM_STRAT_DIR/$pool.txt" || return 1
+    chmod 644 "$CUSTOM_STRAT_DIR/$pool.txt" 2>/dev/null
+    regenerate_config || return 1
+    return 0
+}
+
+strategy_pool_reset() {
+    strategy_pool_ok "$1" || { echo "unknown pool" >&2; return 1; }
+    rm -f "$CUSTOM_STRAT_DIR/$1.txt" || return 1
+    regenerate_config || return 1
+    return 0
+}
+
 restart_service_if_running() {
     if is_running; then
         # Output goes to caller's stdout/stderr — svc_action_async
@@ -276,6 +389,16 @@ toggle_auto_update() {
     # update deliberately.
     local want="$1"
     set_flag "Z2K_AUTO_UPDATE_ENABLED" "$want" "$CONFIG_FILE" || return 1
+}
+
+toggle_autohostlist() {
+    # Z2K_AUTOHOSTLIST — switches MODE_FILTER between hostlist and autohostlist
+    # (see lib/config_official.sh). Unlike toggle_stats this is NOT out-of-band:
+    # the mode is baked into the generated config, so the config must be
+    # regenerated and the service restarted for it to mean anything.
+    local want="$1"
+    set_flag "Z2K_AUTOHOSTLIST" "$want" "$CONFIG_FILE" || return 1
+    regenerate_config || return 1
 }
 
 toggle_ppe() {

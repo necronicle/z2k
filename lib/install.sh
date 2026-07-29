@@ -1194,6 +1194,14 @@ step_build_zapret2() {
             [ -f "$ZAPRET2_DIR/lists/warp/.enabled" ] && \
                 cp -f "$ZAPRET2_DIR/lists/warp/.enabled" "$backup_tmp/warp-lists/.enabled" 2>/dev/null
         fi
+        # Пользовательские стратегии на пул — user-owned, как whitelist. Правки
+        # shipped Strategy.txt мы намеренно затираем, а ЭТИ обязаны пережить
+        # переустановку: иначе человек после реинстала молча вернётся на
+        # автоподбор, будучи уверен, что работает его строка.
+        if [ -d "$ZAPRET2_DIR/lists/custom-strategies" ]; then
+            mkdir -p "$backup_tmp/custom-strategies" 2>/dev/null
+            cp -f "$ZAPRET2_DIR/lists/custom-strategies/"*.txt "$backup_tmp/custom-strategies/" 2>/dev/null
+        fi
         # Autocircular state (найденные рабочие стратегии) — recoverable
         # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
         # warn и продолжаем, не блокируя установку ради cache.
@@ -1808,6 +1816,11 @@ step_build_zapret2() {
         # Restore the user's choice of enabled game lists (see backup block).
         [ -f "$backup_tmp/warp-lists/.enabled" ] && \
             cp -f "$backup_tmp/warp-lists/.enabled" "${ZAPRET2_DIR}/lists/warp/.enabled" 2>/dev/null
+    fi
+    if [ -d "$backup_tmp/custom-strategies" ]; then
+        mkdir -p "${ZAPRET2_DIR}/lists/custom-strategies" 2>/dev/null
+        cp -f "$backup_tmp/custom-strategies/"*.txt "${ZAPRET2_DIR}/lists/custom-strategies/" 2>/dev/null
+        print_info "Восстановлены пользовательские стратегии"
         [ "$_wl_restored" -gt 0 ] && print_info "Восстановлены списки WARP ($_wl_restored файл(ов))"
     fi
     # NB: игровые списки WARP здесь не разворачиваются вовсе. z2k-update-lists.sh

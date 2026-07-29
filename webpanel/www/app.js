@@ -128,6 +128,7 @@
     "extra-domains": renderExtraDomains,
     logs: renderLogs,
     state: renderState,
+    strategies: renderStrategies,
     diag: renderDiag,
     geosite: renderGeosite,
     credits: renderCredits,
@@ -142,6 +143,7 @@
     whitelist:       "Whitelist",
     "extra-domains": "Доп. домены",
     state:           "Rotator",
+    strategies:      "Стратегии",
     logs:            "Логи",
     diag:            "Диагностика",
     geosite:         "Geosite",
@@ -573,6 +575,8 @@
       desc: "Раз в сутки шлёт на сервер проекта обезличенный срез: какая стратегия активна в каждом пуле и как долго держится — чтобы двигать лучшие стратегии в начало. НЕ уходит: сайты/домены, IP, провайдер, регион, любой ID устройства. Только: имя пула, номер стратегии, время удержания. Выключите, если не хотите участвовать." },
     { key: "ppe", name: "Аппаратный offload: per-flow исключение",
       desc: "На Keenetic (MediaTek) аппаратный ускоритель уводит поток в железо после первого пакета, и роутер не видит повторные ClientHello — стратегия залипает для блокировок без RST (mailsuite и т.п.). Эта опция держит окно рукопожатия на CPU только для нужных портов (родной firmware-механизм -j PPE), поэтому подбор стратегии снова работает, а общий трафик остаётся ускоренным. Работает только на совместимых Keenetic. Выключите, чтобы вернуть прежнее поведение." },
+    { key: "autohostlist", name: "Автохостлист",
+      desc: "Обычно обходятся только домены из списков. С этой опцией движок сам замечает, что домен не открывается, и добавляет его — найденное попадает в основной список и подхватывается штатно. Плюс: сайты вне списков начинают работать без ручных добавлений. Минус: движок судит по поведению соединения и иногда ошибается, в список может попасть домен, который просто лежал сам по себе. Это смена принципа отбора трафика целиком, поэтому по умолчанию выключено." },
     { key: "auto_update", name: "Автообновление",
       desc: "Ночью в 02:00 роутер сам проверяет обновления и устанавливает их. Выключите, если хотите обновляться только вручную — кнопка «Обновить» продолжит работать, и панель по-прежнему покажет, что доступна новая версия." },
   ];
@@ -584,6 +588,7 @@
     stats: "stats",
     ppe: "ppe",
     auto_update: "auto-update",
+    autohostlist: "autohostlist",
   };
 
   async function renderToggles() {
@@ -855,7 +860,7 @@
   // before clearing the indicator so the user sees the restart actually
   // completed and didn't silently die. rst-filter (raw iptables) is the
   // only one that doesn't bounce the daemon.
-  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1 };
+  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1, autohostlist: 1 };
 
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");
@@ -872,6 +877,7 @@
       stats: "Сбор статистики",
       ppe: "PPE de-offload",
       auto_update: "Автообновление",
+      autohostlist: "Автохостлист",
     }[key] || key;
 
     let resp;
@@ -2309,6 +2315,141 @@
         </div>
       </div>
     `;
+  }
+
+  // ---------- Strategies (per-pool custom lines) ----------
+  // Progressive disclosure: the default view is one line per pool saying it is
+  // on auto. The editor only appears for a pool the user deliberately switched
+  // to «Своя», and going back is a single click that just deletes the file.
+  //
+  // «Проверить» is separate from «Сохранить» on purpose. A bad option string
+  // does not break the pool it was written for — it stops nfqws2 starting at
+  // all — so the mistake has to be findable before it is applied, not after.
+  const STRATEGY_POOL_NAMES = {
+    rkn_tcp: "Заблокированные сайты (TCP)",
+    yt_tcp:  "YouTube (TCP)",
+    gv_tcp:  "YouTube видео (TCP)",
+    yt_quic: "YouTube (QUIC/UDP)",
+  };
+
+  async function renderStrategies() {
+    $app.innerHTML = `
+      <h1 class="page-title">Стратегии</h1>
+      <div class="card">
+        <p class="desc">
+          Обычно z2k подбирает стратегию сам: пробует варианты по очереди и
+          закрепляет ту, что заработала. Здесь можно взять любой пул под себя и
+          задать свою строку параметров — тогда для него подбор выключается и
+          работает ровно то, что вы написали. Остальные пулы продолжат
+          подбираться автоматически.
+        </p>
+        <p class="desc">
+          <b>Свои строки переживают обновления и переустановку.</b> Перед
+          сохранением строка проверяется движком: непрошедшая проверку не
+          применяется, потому что одна ошибка в ней останавливает обход целиком,
+          а не только этот пул.
+        </p>
+      </div>
+      <div id="strategy-pools">${skeletonBlocks(4)}</div>
+    `;
+    loadStrategyPools();
+    _updateGlobalUILock();
+  }
+
+  async function loadStrategyPools() {
+    const host = document.getElementById("strategy-pools");
+    if (!host) return;
+    let d;
+    try {
+      d = await apiGet("/strategy/pools");
+    } catch (e) {
+      host.innerHTML = `<p class="desc">Не удалось загрузить: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    const pools = (d && d.pools) || [];
+    host.innerHTML = pools.map(p => {
+      const custom = p.custom === 1 || p.custom === "1";
+      const title = STRATEGY_POOL_NAMES[p.pool] || p.pool;
+      return `
+        <div class="card" data-pool="${escapeHtml(p.pool)}">
+          <div class="toggle-row">
+            <div class="t-text">
+              <div class="t-name">${escapeHtml(title)}</div>
+              <div class="t-desc">${custom
+                ? "Своя стратегия — автоподбор для этого пула выключен"
+                : "Автоподбор: стратегия выбирается и меняется автоматически"}</div>
+            </div>
+            <button type="button" class="btn ${custom ? "" : "btn-primary"}" data-act="mode">
+              ${custom ? "Вернуть авто" : "Своя стратегия"}
+            </button>
+          </div>
+          <div class="strategy-editor" hidden>
+            <textarea class="strategy-text" rows="6" spellcheck="false"
+              placeholder="--lua-desync=fake:dir=out:repeats=2 …"></textarea>
+            <div class="btn-row" style="margin-top:10px">
+              <button type="button" class="btn" data-act="check">Проверить</button>
+              <button type="button" class="btn btn-primary" data-act="save">Сохранить и применить</button>
+            </div>
+            <p class="desc strategy-msg" hidden></p>
+          </div>
+        </div>`;
+    }).join("");
+
+    host.querySelectorAll("[data-pool]").forEach(card => {
+      const pool = card.getAttribute("data-pool");
+      const ed   = card.querySelector(".strategy-editor");
+      const ta   = card.querySelector(".strategy-text");
+      const msg  = card.querySelector(".strategy-msg");
+      const isCustom = card.querySelector('[data-act="mode"]').textContent.trim() === "Вернуть авто";
+      if (isCustom) { ed.hidden = false; loadStrategyText(pool, ta); }
+
+      card.querySelector('[data-act="mode"]').addEventListener("click", async () => {
+        if (isCustom) {
+          if (!confirm(`Вернуть «${STRATEGY_POOL_NAMES[pool] || pool}» на автоподбор?\n\nВаша строка будет удалена.`)) return;
+          try { await apiPost("/strategy/pool/reset", { pool }); }
+          catch (e) { toast("Ошибка: " + e.message, "bad"); return; }
+          toast("Пул вернулся на автоподбор", "good");
+          loadStrategyPools();
+        } else {
+          ed.hidden = !ed.hidden;
+          if (!ed.hidden && !ta.value) loadStrategyText(pool, ta);
+        }
+      });
+
+      const say = (text, good) => {
+        msg.hidden = false;
+        msg.textContent = text;
+        msg.style.color = good ? "var(--good)" : "var(--bad)";
+      };
+
+      card.querySelector('[data-act="check"]').addEventListener("click", async () => {
+        say("Проверяю…", true);
+        try {
+          const r = await apiPostText("/strategy/pool/validate?pool=" + encodeURIComponent(pool), ta.value);
+          if (r && r.valid) say("Строка корректна — можно сохранять", true);
+          else say("Не принято движком: " + (r && r.error ? r.error : "неизвестная ошибка"), false);
+        } catch (e) { say("Ошибка проверки: " + e.message, false); }
+      });
+
+      card.querySelector('[data-act="save"]').addEventListener("click", async () => {
+        say("Проверяю и применяю…", true);
+        try {
+          await apiPostText("/strategy/pool/save?pool=" + encodeURIComponent(pool), ta.value);
+        } catch (e) {
+          // The line was rejected — nothing was applied and the previous state
+          // is untouched, which is exactly what the message must convey.
+          say("Не сохранено: " + e.message, false);
+          return;
+        }
+        toast("Стратегия применена, автоподбор для пула выключен", "good");
+        loadStrategyPools();
+      });
+    });
+  }
+
+  async function loadStrategyText(pool, ta) {
+    try { ta.value = await apiGetText("/strategy/pool?pool=" + encodeURIComponent(pool)); }
+    catch (_) { ta.value = ""; }
   }
 
   // ---------- Utils ----------

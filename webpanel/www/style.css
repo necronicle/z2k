@@ -302,6 +302,26 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 /* Drawer pattern: на phones (max-width 767) И на любой landscape с
    height < 500px (landscape phones / split-screen tablets), где
    desktop sidebar занимает слишком много места. */
+/* ---------- STRATEGIES ----------
+   Editor is revealed only for a pool switched to a custom line (progressive
+   disclosure), so it is hidden by default and shown by removing [hidden]. */
+.strategy-editor { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.strategy-text {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.strategy-text:focus { outline: none; border-color: var(--accent); }
+.strategy-msg { margin-top: 10px; font-size: 13px; }
+
 /* ---------- SORT SHEET (mobile) ----------
    Sorting lives in the table headers, and the mobile breakpoint hides thead
    entirely (see .state-table thead below) — so on a phone there was no sort

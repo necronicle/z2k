@@ -180,16 +180,17 @@ case "$method $path" in
         stats=$(read_flag "Z2K_STATS" "$CONFIG_FILE" "1")
         ppe=$(read_flag "Z2K_PPE_DEOFFLOAD" "$CONFIG_FILE" "1")
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
+        autohostlist=$(read_flag "Z2K_AUTOHOSTLIST" "$CONFIG_FILE" "0")
         tpid=$(tunnel_pid 2>/dev/null)
         tunnel_running=false
         [ -n "$tpid" ] && tunnel_running=true
 
         game_warp=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s","auto_update":"%s"},"tunnel":{"running":%s}}\n' \
+        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s","auto_update":"%s","autohostlist":"%s"},"tunnel":{"running":%s}}\n' \
             "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
             "${rst_filter:-0}" "${silent_fb:-0}" "${game_warp:-0}" "${customd:-0}" \
-            "${dynamic_ttl:-1}" "${stats:-1}" "${ppe:-1}" "${auto_update:-1}" \
+            "${dynamic_ttl:-1}" "${stats:-1}" "${ppe:-1}" "${auto_update:-1}" "${autohostlist:-0}" \
             "${tunnel_running:-false}"
         exit 0
         ;;
@@ -228,7 +229,8 @@ case "$method $path" in
     "POST /toggle/dynamic-ttl"|\
     "POST /toggle/stats"|\
     "POST /toggle/ppe"|\
-    "POST /toggle/auto-update")
+    "POST /toggle/auto-update"|\
+    "POST /toggle/autohostlist")
         body=$(read_body)
         val=$(form_value "$body" "value")
         [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
@@ -245,6 +247,7 @@ case "$method $path" in
             /toggle/stats)           _toggle_fn=toggle_stats;           _label="Сбор статистики" ;;
             /toggle/ppe)             _toggle_fn=toggle_ppe;             _label="PPE de-offload" ;;
             /toggle/auto-update)     _toggle_fn=toggle_auto_update;     _label="Автообновление" ;;
+            /toggle/autohostlist)    _toggle_fn=toggle_autohostlist;    _label="Автохостлист" ;;
         esac
         _verb=$([ "$val" = "1" ] && echo "Включаю" || echo "Отключаю")
         job_id=$(svc_action_async "${_verb} ${_label}" "${_toggle_fn} ${val}")
@@ -385,6 +388,66 @@ case "$method $path" in
     # Upstream per-game lists: name, entry count, and whether they are switched
     # on. Read-only by design — editing them is meaningless, the next refresh
     # overwrites the file.
+    # Per-pool strategies: which pools have a user line, and what it is.
+    "GET /strategy/pools")
+        json_header
+        printf '{"ok":true,"pools":['
+        first=1
+        for _sp in $STRATEGY_POOLS; do
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            _sp_custom=0
+            [ -s "$CUSTOM_STRAT_DIR/$_sp.txt" ] && _sp_custom=1
+            printf '{"pool":'; json_string "$_sp"
+            printf ',"custom":%s}' "$_sp_custom"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+
+    # Raw text of one pool's line (text/plain, like /warp/list — no JSON
+    # round-trip of a long option string).
+    "GET /strategy/pool")
+        s_name=$(form_value "${QUERY_STRING:-}" "pool")
+        s_body=$(strategy_pool_read "$s_name") || {
+            [ "$?" = 2 ] && { printf 'Content-Type: text/plain; charset=utf-8\r\n\r\n'; exit 0; }
+            json_fail "400 Bad Request" "invalid pool"; }
+        printf 'Content-Type: text/plain; charset=utf-8\r\n\r\n%s' "$s_body"
+        exit 0
+        ;;
+
+    # Dry-run only: tells the user whether the line parses WITHOUT applying it.
+    # Deliberately separate from save, so a mistake is found before it can take
+    # the daemon down rather than after.
+    "POST /strategy/pool/validate")
+        s_name=$(form_value "${QUERY_STRING:-}" "pool")
+        s_err=$(read_body_raw | strategy_validate "$s_name" 2>&1) && {
+            json_header; printf '{"ok":true,"valid":true}\n'; exit 0; }
+        json_header
+        printf '{"ok":true,"valid":false,"error":'; json_string "$s_err"
+        printf '}\n'
+        exit 0
+        ;;
+
+    "POST /strategy/pool/save")
+        s_name=$(form_value "${QUERY_STRING:-}" "pool")
+        s_err=$(read_body_raw | strategy_pool_save "$s_name" 2>&1) || \
+            json_fail "400 Bad Request" "$s_err"
+        json_header
+        printf '{"ok":true,"pool":'; json_string "$s_name"
+        printf '}\n'
+        exit 0
+        ;;
+
+    "POST /strategy/pool/reset")
+        s_name=$(form_value "$(read_body)" "pool")
+        [ -z "$s_name" ] && s_name=$(form_value "${QUERY_STRING:-}" "pool")
+        strategy_pool_reset "$s_name" || json_fail "400 Bad Request" "reset failed"
+        json_header
+        printf '{"ok":true,"pool":'; json_string "$s_name"
+        printf '}\n'
+        exit 0
+        ;;
+
     "GET /warp/games")
         json_header
         printf '{"ok":true,"games":['

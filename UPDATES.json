@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-68",
+  "current": "p-69",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "a2e84b9f38d3dbd639b94378f2ff8243767d4843143e2a9cf58603f41d646b0d",
@@ -78,23 +78,23 @@
   "files/z2k-warp.sh": "15bc955e60ff2e8e53e1dbb50170137220146ecc7382e7a7a8f2ba8c2a6ab5c8",
   "lib/auto_update.sh": "1b9b929a0b9c907457e5377d5a219e1658ef8bb91313a9365db884c6f0a6a0d4",
   "lib/config.sh": "015861af9c05ab7791c9ad322a03f0cd40baa2140692ce8de9eb31bb41e3f890",
-  "lib/config_official.sh": "b6e829dbe3e4b64a73c96c396f47834c7fc608b690b1294189e52f6948596a66",
-  "lib/install.sh": "008994ac039fdc2acadd1a47dfa0b52b53c60a8b4ea99281164c18bd526faffa",
-  "lib/menu.sh": "ca1d414bb038d083bc865b47e56680d739b3d3e62b6653d763ee322f15ae85bc",
+  "lib/config_official.sh": "f1e11e4cd0f397d53a886bc302f3a138c0dd3a5c8e0a48d1ed2300105754fbda",
+  "lib/install.sh": "48a6dbfe249ab38655a26435da403f1730259b9330c86f7eec2ae9427f769af6",
+  "lib/menu.sh": "b63903a847ca6c75ae4ec3778589da91002ad9e7f57b203b0a59383aa93dbd07",
   "lib/strategies.sh": "904cc2f958edbd9137480220ed2064507b34c3d6c2a66be79cae239a8eb14ee0",
   "lib/system_init.sh": "5884cce213e66f459fa0a2232dfebf8ff2e29418bae75efd67555c5405eb3461",
   "lib/utils.sh": "6a2f7f1f80e071176fae9c9721239c5e2f6430adaeb5dd181a937477414434f6",
   "lib/webpanel.sh": "b5a673e0f2037188d68064e086ef693e65d797e750c3a56a32b0aeaa442373bd",
-  "webpanel/cgi/actions.sh": "dff6328b2d67509ff91baf1df14b9e938f1f06da33a53915a31fcf2d118cee19",
-  "webpanel/cgi/api.sh": "68984eec4968938b08cf062ff9d3791a088bfcaa3056fa13b5b9a366cd4e678e",
+  "webpanel/cgi/actions.sh": "59d104af2fb90ac5071f81367e843f94322d1669ff873fda97897e5711485af3",
+  "webpanel/cgi/api.sh": "281e3f2e00c02926c50aa9f4b907c720ddea6302beb34b9f96340d5b7ba154d3",
   "webpanel/cgi/auth.sh": "75cfaf0f99a7f13b2b61414463d08e13b27ab08bb5355420d9a52608123eecef",
   "webpanel/init.d/S96z2k-webpanel": "6d86392f3583dd81643460402c9eb8d6cc0aaaaf85eb39d270277765d4d5f2af",
   "webpanel/install.sh": "c20c1e44dcbc48782de70e211e04073bcc578bce64aa516b0fdcc8f3f964379f",
   "webpanel/uninstall.sh": "1fe2374c8d6497c60bc831578ccd3176202a67de33f7a4ddc48d2fcb83137b36",
-  "webpanel/www/app.js": "7cf3cd8dee38d1c02657530cc891de9cc2910689706cb0f9e7303836e6d20a7d",
+  "webpanel/www/app.js": "ea84289e9bc38ab1b397ed56a7f6b89ef00f271abf651e8a7a1ebfd352beb9fb",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "226daf5ae0f6e04e92a48f31806b469824c10a374297991701ccfa53a4dce06a",
-  "webpanel/www/style.css": "31c7876815edeeb5020a3236669f7377dfec5350ea74ccbb5c781c602e7192bc",
+  "webpanel/www/index.html": "a5da7c12c3bcbd404370846a555b853609305038592783770dfb69c682614256",
+  "webpanel/www/style.css": "74d4e820fca57892990718649193f2da191a8a61c1c2abc182f6dc5f93c42f3a",
   "z2k.sh": "b43cbc34bca05b2afe81bdcbed5edf0d190cd8aa15d8437cedf2e8e2ab82e100"
   },
   "history": [
@@ -226,6 +226,7 @@
 {"v": "p-67.9.1", "type": "patch", "ts": "2026-07-28T17:20:00Z", "ref": "2e12f82", "desc": "Исправление к предыдущему обновлению: у части роутеров игровые списки WARP так и не появились, а в веб-панели на телефоне не появилась сортировка. Списки теперь подтягивает служба расписания сразу после обновления. Панель после обновления перестанет отдавать браузеру устаревшую версию — раньше браузер мог показывать старую страницу, даже когда на роутере уже лежала новая. Если сортировка всё ещё не видна, обновите страницу с очисткой кэша один раз.", "changed_files": ["UPDATES.json", "files/z2k-scheduler.sh", "webpanel/www/index.html", "scripts/gen_file_hashes.sh", "tests/test_release_reaches_users.sh"]},
 {"v": "p-67.9.2", "type": "patch", "ts": "2026-07-28T18:40:00Z", "ref": "0afc2df", "desc": "Сортировка таблицы состояния на телефоне наконец видна — из-за ошибки в стилях кнопка сортировки была скрыта на всех экранах. И сортировка теперь применяется мгновенно, а не за пару секунд: раньше при каждом выборе страница заново запрашивала данные у роутера, хотя они уже были загружены. Это касается и телефона, и компьютера.", "changed_files": ["UPDATES.json", "webpanel/www/app.js", "webpanel/www/style.css", "tests/test_panel_sort.sh"]},
 {"v": "p-67.9.3", "type": "patch", "ts": "2026-07-28T19:10:00Z", "ref": "e4c9654", "desc": "Технический выпуск: в предыдущее обновление не попал один файл веб-панели, из-за чего браузер мог продолжать показывать её старую версию. Теперь доезжает целиком.", "changed_files": ["UPDATES.json", "webpanel/www/index.html", "tests/test_release_manifest_complete.sh", ".github/workflows/ci.yml"]},
-{"v": "p-68", "type": "patch", "ts": "2026-07-29T10:30:00Z", "ref": "85ae72b", "desc": "В списке спонсоров проекта появились Alex и GRM — в меню установщика и на странице «Благодарности» в веб-панели. Спасибо им: именно на такие взносы живёт сервер, через который работает Telegram-туннель и зеркала обновлений.", "changed_files": ["UPDATES.json", "lib/menu.sh", "webpanel/www/app.js", "webpanel/www/index.html", "README.md"]}
+{"v": "p-68", "type": "patch", "ts": "2026-07-29T10:30:00Z", "ref": "85ae72b", "desc": "В списке спонсоров проекта появились Alex и GRM — в меню установщика и на странице «Благодарности» в веб-панели. Спасибо им: именно на такие взносы живёт сервер, через который работает Telegram-туннель и зеркала обновлений.", "changed_files": ["UPDATES.json", "lib/menu.sh", "webpanel/www/app.js", "webpanel/www/index.html", "README.md"]},
+{"v": "p-69", "type": "patch", "ts": "2026-07-29T14:00:00Z", "ref": "PENDING", "desc": "Две вещи по просьбам. Появился переключатель автохостлиста: в этом режиме движок сам замечает недоступные домены и добавляет их, не дожидаясь, пока их внесут в списки — по умолчанию выключен, включается в меню и в веб-панели. И теперь можно задать свою строку параметров для любого набора сайтов вместо автоподбора: раздел «Стратегии» в панели. Строка проверяется перед применением и переживает обновления и переустановку.", "changed_files": ["UPDATES.json", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "tests/test_custom_strategies.sh", "tests/test_auto_update_toggle.sh"]}
   ]
 }

@@ -83,18 +83,48 @@ AUSTERUS_OPT
     local Z2K_USE_MID_STREAM_DETECTOR
     Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
 
+    # Пользовательские стратегии на пул — user-owned, переживают всё.
+    #
+    # Читается ПРИ КАЖДОЙ перегенерации конфига, а не запекается один раз: иначе
+    # первый же toggle в панели или auto-update молча вернул бы shipped-строку, и
+    # человек остался бы с чужой стратегией, думая, что работает его.
+    #
+    # Живёт отдельно от shipped Strategy.txt намеренно. Правки shipped-файлов у
+    # нас затираются обновлением by design («проект автоматизации»), поэтому
+    # редактор, пишущий туда, отдавал бы результат, исчезающий через релиз.
+    # Здесь же — тот же класс, что whitelist и extra-domains: install.sh
+    # сохраняет каталог при переустановке.
+    #
+    # Ротация для такого пула выключается сама собой: директива circular входит в
+    # саму строку стратегии, и строка пользователя заменяет её целиком. Не написал
+    # circular — не будет ротации, ровно как он и просил.
+    z2k_custom_strategy() {
+        # z2k_custom_strategy <pool> -> печатает строку пользователя, если она есть
+        local _cs_dir="${ZAPRET2_DIR:-/opt/zapret2}/lists/custom-strategies"
+        local _cs_file="$_cs_dir/$1.txt"
+        [ -s "$_cs_file" ] || return 1
+        # Комментарии и пустые строки выкинуть, остальное склеить в одну строку:
+        # nfqws2 принимает опции одной строкой, а человек может разложить их
+        # построчно для читаемости.
+        awk '{ sub(/\r$/,""); sub(/^[[:space:]]*#.*$/,"") } NF { printf "%s ", $0 }' "$_cs_file" \
+            | sed 's/[[:space:]]*$//'
+    }
+
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
         youtube_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
     fi
+    _cs=$(z2k_custom_strategy yt_tcp) && [ -n "$_cs" ] && youtube_tcp="$_cs"
 
     if [ -f "${extra_strats_dir}/TCP/YT_GV/Strategy.txt" ]; then
         youtube_gv_tcp=$(cat "${extra_strats_dir}/TCP/YT_GV/Strategy.txt")
     fi
+    _cs=$(z2k_custom_strategy gv_tcp) && [ -n "$_cs" ] && youtube_gv_tcp="$_cs"
 
     if [ -f "${extra_strats_dir}/TCP/RKN/Strategy.txt" ]; then
         rkn_tcp=$(cat "${extra_strats_dir}/TCP/RKN/Strategy.txt")
     fi
+    _cs=$(z2k_custom_strategy rkn_tcp) && [ -n "$_cs" ] && rkn_tcp="$_cs"
 
     # YouTube QUIC autocircular fallback (13 strategies). Proven fake-blob escalation
     # first; experimental z2k morphs demoted to the tail (slots 11-13). This inline is
@@ -110,7 +140,8 @@ AUSTERUS_OPT
     quic_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=8:udp_out=4:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=1 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=1 --lua-desync=drop:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=2 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=2 --lua-desync=drop:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=6 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=8 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=8 --lua-desync=drop:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=9 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=9 --lua-desync=drop:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=10 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=11 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=12 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=13"
 
     # If category strategy files exist, prefer them over hardcoded QUIC defaults.
-    if [ -f "${extra_strats_dir}/UDP/YT/Strategy.txt" ]; then
+    _cs=$(z2k_custom_strategy yt_quic) && [ -n "$_cs" ] && quic_udp="$_cs"
+    if [ -z "$_cs" ] && [ -f "${extra_strats_dir}/UDP/YT/Strategy.txt" ]; then
         quic_udp=$(cat "${extra_strats_dir}/UDP/YT/Strategy.txt")
     fi
     # Discord TCP profiles from zapret4rocket are absent; disable dedicated TCP Discord profile.
@@ -1590,6 +1621,12 @@ create_official_config() {
         saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "1")
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
         saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
+        # Z2K_AUTOHOSTLIST — default 0, deliberately against the "new flags come
+        # on" rule. It does not improve behaviour, it swaps the filtering mode
+        # for ALL traffic: nfqws2 starts deciding for itself which hosts are
+        # blocked and appends them to the RKN list. That was asked for as an
+        # option, not as a change for everyone.
+        saved_Z2K_AUTOHOSTLIST=$(safe_config_read "Z2K_AUTOHOSTLIST" "$config_file" "0")
         saved_Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$config_file" "1")
         # Z2K_STATS — anonymized strategy telemetry to VPS, default ON (per Mark
         # 2026-05-30: Default ON как все фичи). Opt-out via menu/webpanel toggle
@@ -1631,6 +1668,9 @@ create_official_config() {
     fi
 
     # Создать полный config файл
+    local z2k_mode_filter=hostlist
+    [ "${saved_Z2K_AUTOHOSTLIST:-0}" = "1" ] && z2k_mode_filter=autohostlist
+
     cat > "$config_file" <<CONFIG
 # zapret2 configuration for Keenetic
 # Generated by z2k installer
@@ -1644,8 +1684,12 @@ create_official_config() {
 ENABLED=${saved_ENABLED}
 
 # Mode filter: none, ipset, hostlist, autohostlist
-# z2k uses hostlist mode — domains are controlled via explicit hostlist files
-MODE_FILTER=hostlist
+# Default is hostlist — domains come from explicit hostlist files. With
+# Z2K_AUTOHOSTLIST=1 the engine switches to autohostlist and works out the
+# blocked hosts itself (see ensure_autohostlist_files / sync_autohostlist_to_rkn
+# in S99zapret2), appending what it finds to the RKN list.
+MODE_FILTER=${z2k_mode_filter}
+Z2K_AUTOHOSTLIST=${saved_Z2K_AUTOHOSTLIST}
 
 # Firewall type - AUTO-DETECTED by init script, DO NOT set manually
 # Init script calls linux_fwtype() which detects iptables/nftables automatically
