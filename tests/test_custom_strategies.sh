@@ -208,5 +208,33 @@ _rs=$(sed -n 's/.*TOGGLES_RESTART_SERVICE = {\(.*\)};.*/\1/p' "$APPJS")
 case "$_rs" in *autohostlist*) ok "и перезапускает сервис" ;;
                *) no "перезапускает сервис" "autohostlist в списке" "$_rs" ;; esac
 
+# --- the panel must not lie about restarts -------------------------------------
+# Found the hard way: toggle_autohostlist regenerated the config but never
+# restarted, while the UI showed a restart. The config then said one thing and
+# the running daemon did another — the user's «переключил, а не применилось».
+# The mirror case existed too: rst_filter restarted silently, so the bypass
+# blipped with nothing on screen to explain it.
+#
+# So the invariant, for every toggle: the handler calling restart_service_if_running
+# and the UI listing it must agree. Checked for all of them, not just the two
+# that were wrong, because the next one will be a different one.
+_ui_list=$(sed -n 's/.*TOGGLES_RESTART_SERVICE = {\(.*\)};.*/\1/p' "$APPJS")
+_mismatch=""
+for _fn in $(grep -oE '^toggle_[a-z_]+\(\)' "$ACTIONS" | sed 's/()//'); do
+    _key=${_fn#toggle_}
+    _body=$(awk "/^${_fn}\(\)/,/^}/" "$ACTIONS")
+    _code=нет; printf '%s' "$_body" | grep -q 'restart_service_if_running' && _code=да
+    _ui=нет; case "$_ui_list" in *"$_key"*) _ui=да ;; esac
+    [ "$_code" = "$_ui" ] || _mismatch="$_mismatch $_key(код:$_code/UI:$_ui)"
+done
+[ -z "$_mismatch" ] && ok "код и интерфейс согласны по рестарту для всех тумблеров" \
+                    || no "код и интерфейс согласны по рестарту" "нет расхождений" "$_mismatch"
+
+# And specifically: switching the filtering mode without a restart writes a
+# config the daemon is not running.
+awk '/^toggle_autohostlist\(\)/,/^}/' "$ACTIONS" | grep -q 'restart_service_if_running' \
+    && ok "переключение автохостлиста перезапускает сервис" \
+    || no "переключение автохостлиста перезапускает сервис" "restart" "нет"
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

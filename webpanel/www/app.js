@@ -860,7 +860,10 @@
   // before clearing the indicator so the user sees the restart actually
   // completed and didn't silently die. rst-filter (raw iptables) is the
   // only one that doesn't bounce the daemon.
-  const TOGGLES_RESTART_SERVICE = { silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1, autohostlist: 1 };
+  // Must mirror what the backend actually does: a toggle whose handler calls
+// restart_service_if_running has to be listed here, or the user gets a silent
+// blip in the bypass with no indication it happened. Asserted in the suite.
+  const TOGGLES_RESTART_SERVICE = { rst_filter: 1, silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1, autohostlist: 1 };
 
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");

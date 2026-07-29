@@ -399,6 +399,12 @@ toggle_autohostlist() {
     local want="$1"
     set_flag "Z2K_AUTOHOSTLIST" "$want" "$CONFIG_FILE" || return 1
     regenerate_config || return 1
+    # The comment above says "and the service restarted" — and for a release the
+    # code did not do it. Regenerating alone writes MODE_FILTER into the config
+    # while the daemon keeps running with the old one, which is exactly the
+    # "flipped it and nothing happened" the user reports, made worse by the UI
+    # showing a restart that never occurred.
+    restart_service_if_running
 }
 
 toggle_ppe() {
