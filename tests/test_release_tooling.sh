@@ -1,0 +1,204 @@
+#!/bin/sh
+# tests/test_release_tooling.sh
+#
+# The two scripts that cut a release — release.sh and scripts/gen_file_hashes.sh —
+# are the only code in the tree whose bugs land on every router simultaneously.
+# The digest map they produce is checked fail-closed: a map that does not describe
+# the committed tree does not degrade the update, it aborts it for everyone at once.
+#
+# Three properties, all learned from cutting r-70 by hand:
+#
+#   1. The generator is a FIXED POINT after one run. It rewrites the panel's
+#      cache-buster in index.html and hashes the tree; doing those in the wrong
+#      order publishes the pre-rewrite digest of index.html, which no router can
+#      ever match. That ordering was wrong, and the script's own comment claimed
+#      otherwise, so only a mechanical check keeps it honest.
+#
+#   2. release.sh PRESERVES files_sha256. Its serialiser knew four keys and
+#      dropped the map; anything failing between it and the generator left a
+#      manifest with no digests at all — the unverified-download hole the map
+#      exists to close.
+#
+#   3. release.sh REFUSES a dirty tree. The map is computed from files on disk
+#      while routers fetch the committed revision, so one unrelated edit in the
+#      working tree publishes an unobtainable digest.
+#
+# Runs against a throwaway clone, never the real tree. POSIX sh.
+
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+cd "$HERE" || exit 1
+
+PASS=0; FAIL=0; SKIP=0
+ok()   { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
+no()   { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
+skip() { SKIP=$((SKIP+1)); printf '[SKIP] %s (%s)\n' "$1" "$2"; }
+
+done_report() {
+    printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"
+    [ "$FAIL" -eq 0 ]
+}
+
+for t in git python3; do
+    command -v "$t" >/dev/null 2>&1 || {
+        skip "релизный тулинг" "нет $t"
+        done_report; exit $?
+    }
+done
+git rev-parse --git-dir >/dev/null 2>&1 || {
+    skip "релизный тулинг" "нет git-репозитория"
+    done_report; exit $?
+}
+
+# ---------------------------------------------------------------- property 1 --
+TMP=$(mktemp -d) || { skip "релизный тулинг" "нет mktemp"; done_report; exit $?; }
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+# ВСЁ ниже работает только в одноразовом клоне, никогда в рабочем дереве.
+# Первая версия этого теста гоняла генератор прямо в репозитории и вписала в
+# закоммиченный UPDATES.json дайджесты незавершённой правки — ровно та авария,
+# от которой мы этим же коммитом ставим гейт в release.sh. Тест, который ломает
+# манифест, опаснее бага, который он ищет.
+#
+# ------------------------------------------------------------ all properties --
+if ! git clone -q --no-hardlinks --local . "$TMP/clone" 2>/dev/null; then
+    skip "release.sh: карта и гейт на грязное дерево" "клонирование недоступно"
+    done_report; exit $?
+fi
+
+# Клон несёт ЗАКОММИЧЕННОЕ состояние, а проверять надо тулинг из текущего дерева —
+# иначе тест зелёный на старом release.sh и молчит про правку, которую как раз и
+# принесли. Накладываем поверх все изменённые отслеживаемые файлы и коммитим,
+# чтобы клон стартовал с чистым деревом.
+for f in $(git -C "$HERE" diff --name-only HEAD 2>/dev/null); do
+    [ -f "$HERE/$f" ] || continue
+    mkdir -p "$TMP/clone/$(dirname "$f")"
+    cp -f "$HERE/$f" "$TMP/clone/$f"
+done
+
+cd "$TMP/clone" || { skip "release.sh" "клон недоступен"; done_report; exit $?; }
+git checkout -q -B z2k-enhanced 2>/dev/null
+git config user.email t@t; git config user.name t
+git add -A >/dev/null 2>&1
+git diff --cached --quiet || git commit -q -m "overlay working tree" >/dev/null 2>&1
+
+# --- property 1, с зубами: порядок проверяется только при СМЕНЕ версии ---------
+# На сошедшемся дереве правка кеш-бастера — no-op, и неверный порядок внутри
+# генератора не проявляется вообще. Ловится он лишь тогда, когда "current"
+# меняется: тогда index.html переписывается, и при обратном порядке в карту
+# уезжает дайджест ДО правки. Бампаем версию руками и требуем совпадения за
+# ОДИН прогон.
+sed -i.bak 's/"current": "[^"]*"/"current": "zz-999"/' UPDATES.json && rm -f UPDATES.json.bak
+sh scripts/gen_file_hashes.sh >/dev/null 2>&1
+if command -v sha256sum >/dev/null 2>&1; then
+    _real=$(sha256sum webpanel/www/index.html | awk '{print $1}')
+else
+    _real=$(shasum -a 256 webpanel/www/index.html | awk '{print $1}')
+fi
+_mapped=$(sed -n 's/.*"webpanel\/www\/index\.html"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' UPDATES.json | head -1)
+if [ "$_real" = "$_mapped" ]; then
+    ok "смена версии: дайджест index.html верен за один прогон"
+else
+    no "смена версии: дайджест index.html верен за один прогон" "$_real" "${_mapped:-нет записи}"
+fi
+case "$(grep -o '?v=[A-Za-z0-9._-]*' webpanel/www/index.html | head -1)" in
+    '?v=zz-999') ok "смена версии: кеш-бастер панели переписан под новый тег" ;;
+    *) no "смена версии: кеш-бастер панели переписан под новый тег" "?v=zz-999" \
+          "$(grep -o '?v=[A-Za-z0-9._-]*' webpanel/www/index.html | head -1)" ;;
+esac
+
+# Второй прогон уже ничего не меняет — генератор является фиксированной точкой.
+cp UPDATES.json "$TMP/pass1.json"
+cp webpanel/www/index.html "$TMP/pass1.html"
+sh scripts/gen_file_hashes.sh >/dev/null 2>&1
+if cmp -s "$TMP/pass1.json" UPDATES.json && cmp -s "$TMP/pass1.html" webpanel/www/index.html; then
+    ok "генератор — фиксированная точка: второй прогон ничего не меняет"
+else
+    no "генератор — фиксированная точка: второй прогон ничего не меняет" "без изменений" "второй прогон переписал"
+fi
+
+git checkout -q -- . 2>/dev/null
+
+# --- property 3: грязное дерево отбивается ------------------------------------
+echo "# dirty" >> lib/install.sh
+out=$(sh release.sh patch "тест: грязное дерево" 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "release.sh отказывается работать на грязном дереве"
+else
+    no "release.sh отказывается работать на грязном дереве" "ненулевой код" "0"
+fi
+case "$out" in
+    *"не чистое"*|*"dirty"*) ok "отказ объясняет причину" ;;
+    *) no "отказ объясняет причину" "упоминание грязного дерева" "$(printf '%s' "$out" | head -1)" ;;
+esac
+# Манифест не должен быть тронут отклонённым запуском.
+if git diff --quiet -- UPDATES.json; then
+    ok "отклонённый релиз не трогает манифест"
+else
+    no "отклонённый релиз не трогает манифест" "без изменений" "манифест переписан"
+fi
+git checkout -q -- lib/install.sh
+
+# Незакоммиченные НЕотслеживаемые файлы не должны блокировать релиз: в карту они
+# не попадают (git ls-files их не видит), значит и опасности не создают.
+echo x > untracked_probe.tmp
+out=$(sh release.sh patch "тест: только untracked" 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "untracked-файлы не блокируют релиз"
+else
+    no "untracked-файлы не блокируют релиз" "0" "$rc: $(printf '%s' "$out" | head -1)"
+fi
+rm -f untracked_probe.tmp
+
+# --- property 2: карта пережила перезапись манифеста --------------------------
+if python3 -c "
+import json,sys
+m=json.load(open('UPDATES.json'))
+sys.exit(0 if m.get('files_sha256') else 1)
+" 2>/dev/null; then
+    ok "release.sh сохраняет files_sha256 в манифесте"
+else
+    no "release.sh сохраняет files_sha256 в манифесте" "карта на месте" "карта потеряна"
+fi
+
+# Порядок ключей важен: генератор вставляет блок сразу после "current", и
+# построчный awk-парсер апдейтера рассчитывает на записи истории по одной в строке.
+if python3 -c "
+import json,sys
+m=json.load(open('UPDATES.json'))
+sys.exit(0 if list(m.keys())==['schema','branch','current','files_sha256','history'] else 1)
+" 2>/dev/null; then
+    ok "порядок ключей манифеста сохранён"
+else
+    no "порядок ключей манифеста сохранён" "schema,branch,current,files_sha256,history" "другой"
+fi
+
+if [ "$(grep -c '^{"v":' UPDATES.json)" -gt 1 ]; then
+    ok "история осталась по одной записи на строку"
+else
+    no "история осталась по одной записи на строку" ">1 строки с записями" "$(grep -c '^{"v":' UPDATES.json)"
+fi
+
+# index.html попал в changed_files свежей записи автоматически.
+if python3 -c "
+import json,sys
+m=json.load(open('UPDATES.json'))
+sys.exit(0 if 'webpanel/www/index.html' in m['history'][-1]['changed_files'] else 1)
+" 2>/dev/null; then
+    ok "index.html объявлен в changed_files нового релиза"
+else
+    no "index.html объявлен в changed_files нового релиза" "объявлен" "отсутствует"
+fi
+
+# И карта после релиза уже описывает дерево: лишний прогон генератора ничего не
+# меняет. Это ровно то, что проверяет CI — сравнивать с HEAD здесь нельзя, там
+# релиза ещё нет и расхождение законно.
+cp UPDATES.json "$TMP/after_release.json"
+sh scripts/gen_file_hashes.sh >/dev/null 2>&1
+if cmp -s "$TMP/after_release.json" UPDATES.json; then
+    ok "после release.sh карта уже синхронна (CI-гейт зелёный)"
+else
+    no "после release.sh карта уже синхронна (CI-гейт зелёный)" "без расхождений" "генератор переписал манифест"
+fi
+
+cd "$HERE" || true
+done_report

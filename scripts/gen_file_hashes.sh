@@ -59,21 +59,10 @@ BLOCK=$(mktemp) || exit 1
 OUT=$(mktemp) || exit 1
 trap 'rm -f "$BLOCK" "$OUT"' EXIT
 
-n=0
-for f in $(git ls-files | LC_ALL=C sort); do
-    [ -f "$f" ] || continue
-    [ "$f" = "$MANIFEST" ] && continue          # cannot contain its own digest
-    [ -n "$(au_install_paths "$f" 2>/dev/null)" ] || continue
-    printf '  "%s": "%s",\n' "$f" "$(_sha "$f")" >> "$BLOCK"
-    n=$((n + 1))
-done
-[ "$n" -gt 0 ] || { echo "не найдено ни одного доставляемого файла — генерация прервана" >&2; exit 1; }
-
-# Strip the trailing comma of the last pair (JSON has no trailing commas).
-sed -i.bak '$ s/,$//' "$BLOCK" && rm -f "${BLOCK}.bak"
-
-# Keep the panel's cache-buster pinned to the release BEFORE hashing, or the
-# digest we publish for index.html is the one from before the rewrite.
+# Pin the panel's cache-buster to the release BEFORE hashing, or the digest we
+# publish for index.html is the one from before the rewrite — the map then needs
+# a SECOND run to converge, and a release cut after a single run ships a digest
+# no router can ever match (fail-closed for everyone).
 #
 # index.html loads its assets as `app.js?v=<tag>`. The browser caches by URL, so
 # that suffix is the only thing that makes a browser pick up a new panel. It was
@@ -86,6 +75,19 @@ if [ -n "$_cur" ] && [ -f webpanel/www/index.html ]; then
         && cat "$OUT" > webpanel/www/index.html
     printf 'кеш-бастер панели: ?v=%s\n' "$_cur"
 fi
+
+n=0
+for f in $(git ls-files | LC_ALL=C sort); do
+    [ -f "$f" ] || continue
+    [ "$f" = "$MANIFEST" ] && continue          # cannot contain its own digest
+    [ -n "$(au_install_paths "$f" 2>/dev/null)" ] || continue
+    printf '  "%s": "%s",\n' "$f" "$(_sha "$f")" >> "$BLOCK"
+    n=$((n + 1))
+done
+[ "$n" -gt 0 ] || { echo "не найдено ни одного доставляемого файла — генерация прервана" >&2; exit 1; }
+
+# Strip the trailing comma of the last pair (JSON has no trailing commas).
+sed -i.bak '$ s/,$//' "$BLOCK" && rm -f "${BLOCK}.bak"
 
 # Rebuild: everything as-is, minus any previous block of ours, plus a fresh one
 # straight after "current". awk state machine, so no dependence on where the old
