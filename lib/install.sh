@@ -1310,7 +1310,7 @@ step_build_zapret2() {
     # it was still pinned to v1.0-z2k-r0 from May, i.e. those users would have installed
     # an engine WITHOUT the contains() fix and kept paying ~17 s of every restart while
     # everyone else got 1.5 s. Bump this together with the fork release.
-    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v1.0.3-z2k-r1/zapret2-v1.0.3-z2k-r1-openwrt-embedded.tar.gz"
+    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v1.0.4-z2k-r0/zapret2-v1.0.4-z2k-r0-openwrt-embedded.tar.gz"
     local openwrt_url=""
 
     # Try the API via z2k_fetch (it triggers the layer-4 ndmc DNS
