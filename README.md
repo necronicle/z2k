@@ -431,7 +431,6 @@ z2k/
 ├── quic_strats.ini             # UDP/QUIC strategy database (yt_quic + discord_voice)
 ├── lib/                        # Core modules (загружаются z2k.sh)
 │   ├── utils.sh                # Utilities, safe_config_read, z2k_fetch с 5-layer fallback
-│   ├── system_init.sh          # System detection
 │   ├── install.sh              # 16-step install + rollback
 │   ├── strategies.sh           # Strategy parsing & management
 │   ├── config.sh               # Configuration management

@@ -67,7 +67,7 @@ _z2k_vps_gh_resolve() {
 }
 
 # Список модулей для загрузки
-MODULES="utils system_init install strategies config config_official webpanel menu auto_update"
+MODULES="utils install strategies config config_official webpanel menu auto_update"
 
 # ==============================================================================
 # ВСТРОЕННЫЕ FALLBACK ФУНКЦИИ
@@ -1449,9 +1449,6 @@ main() {
     # Теперь доступны все функции из модулей
     # Переустановить обработчики сигналов с правильными функциями
     setup_signal_handlers
-
-    # Инициализировать системные переменные (SYSTEM, UNAME, INIT)
-    init_system_vars || die "Ошибка определения типа системы"
 
     # Инициализация (создание рабочей директории с проверками из utils.sh)
     init_work_dir || die "Ошибка инициализации"
