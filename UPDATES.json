@@ -77,7 +77,7 @@
   "lib/auto_update.sh": "a3877a3235a8387ba4deabba43d37e4617524be58ac1b612fb0f6db9f401a389",
   "lib/config.sh": "7cde5472072c8ef7eb7e232a73ec196c15b3fe08db1b91d361c82cf0478267cc",
   "lib/config_official.sh": "55f3a74afa1b5093a74f5a43b9f90e3c5a7103a198fc6abf1963c8e15f36bbea",
-  "lib/install.sh": "619315ce240c27b9c87852b14688496845dde2b653d0cefe1051e0da0d7fba7f",
+  "lib/install.sh": "58d0be2441daec47e156a854a85d306cf038e365ab662bc1bf0e088cbefbe01f",
   "lib/menu.sh": "a348ab7c67ac10c85844b326d8961753e218f9f12977cee8495031da9a7b90be",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
   "lib/utils.sh": "31b370718c1aeb6dcf325d72f5121f4eff7cb309a9ce31be243575f412ede7b0",
