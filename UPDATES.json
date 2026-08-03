@@ -75,15 +75,15 @@
   "files/z2k-update-lists.sh": "987fc96ce7808f4710fb5ce0c25ae693ce9e34fe43e6282350c1f175b3e2be27",
   "files/z2k-warp.sh": "bccaa2434f55cfaf501d0b6a7be2bf1934e8ad26ffe6450baf7aa7d7b61c012a",
   "lib/auto_update.sh": "a3877a3235a8387ba4deabba43d37e4617524be58ac1b612fb0f6db9f401a389",
-  "lib/config.sh": "cf59718ad94f969b54b2a0532bb31b8701c18bc4747761ad0dca5f220f21e84e",
+  "lib/config.sh": "7cde5472072c8ef7eb7e232a73ec196c15b3fe08db1b91d361c82cf0478267cc",
   "lib/config_official.sh": "55f3a74afa1b5093a74f5a43b9f90e3c5a7103a198fc6abf1963c8e15f36bbea",
   "lib/install.sh": "764f73382747ff129d43652ba172dd4fbb5e2be1077f233640b022e5837b6e00",
   "lib/menu.sh": "a348ab7c67ac10c85844b326d8961753e218f9f12977cee8495031da9a7b90be",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
   "lib/system_init.sh": "5884cce213e66f459fa0a2232dfebf8ff2e29418bae75efd67555c5405eb3461",
-  "lib/utils.sh": "fca9d2ea409aa66b4c639fd3ffa84c85b23f0130a04a8bf8ee82405e54321443",
+  "lib/utils.sh": "c68f2ff10a01ed62fd202110dda318f23c7d544d92b7aa38551e01ab4d009575",
   "lib/webpanel.sh": "b5a673e0f2037188d68064e086ef693e65d797e750c3a56a32b0aeaa442373bd",
-  "webpanel/cgi/actions.sh": "f3812b072f2a7f4c43006d29403a143fd8efde56ac48aa4d60cf1bdd98750f80",
+  "webpanel/cgi/actions.sh": "1ebb299437bbcb4d829b7efdabb531f0125518911cc193ace4e0098334bf7741",
   "webpanel/cgi/api.sh": "b3d37f4d8f7422031ec19edfa3cab8a3a5a9d55c6ee1804c55e3b3b4902ca88a",
   "webpanel/cgi/auth.sh": "75cfaf0f99a7f13b2b61414463d08e13b27ab08bb5355420d9a52608123eecef",
   "webpanel/init.d/S96z2k-webpanel": "6d86392f3583dd81643460402c9eb8d6cc0aaaaf85eb39d270277765d4d5f2af",
@@ -93,7 +93,7 @@
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/index.html": "6cc6dd5e4c0683e288e7d366ee7e34e0ace77fae2313d25927bd3aec7d6bd976",
   "webpanel/www/style.css": "74d4e820fca57892990718649193f2da191a8a61c1c2abc182f6dc5f93c42f3a",
-  "z2k.sh": "7c892ca915d845b1ca496e5823310ae11dfce538e5ee9d9e037674830fd4f803"
+  "z2k.sh": "f77b19038dbc99f54807d6b545231223e0df42aa6ffee558d9aefa216da85b74"
   },
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
