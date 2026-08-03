@@ -517,8 +517,22 @@ warp_install() {
     # A user upgrading from the package already has the engine on disk — adopt it instead of
     # re-downloading 5 MB over a link that may be exactly what is broken.
     if [ -x /opt/usr/bin/usque ]; then
-        cp -f /opt/usr/bin/usque "$USQUE_BIN" 2>/dev/null && chmod 755 "$USQUE_BIN" 2>/dev/null \
-            && { _wlog "adopted the existing usque engine"; return 0; }
+        if cp -f /opt/usr/bin/usque "$USQUE_BIN" 2>/dev/null && chmod 755 "$USQUE_BIN" 2>/dev/null; then
+            # Усыновление было КОПИРОВАНИЕМ, а оригинал оставался лежать — то есть
+            # у всех, кто переехал с пакета usque-keenetic, движок хранился в двух
+            # экземплярах по 5 МБ (issue #29). Копия нужна ровно до этого момента,
+            # дальше живёт только наша.
+            if opkg list-installed 2>/dev/null | grep -q '^usque'; then
+                # Файл принадлежит пакету — снимаем пакетом, иначе opkg будет
+                # считать его установленным, а файла не будет.
+                opkg remove usque-keenetic >/dev/null 2>&1 || opkg remove usque >/dev/null 2>&1
+                _wlog "adopted the existing usque engine, legacy package removed"
+            else
+                rm -f /opt/usr/bin/usque 2>/dev/null
+                _wlog "adopted the existing usque engine, legacy copy removed"
+            fi
+            return 0
+        fi
     fi
     local arch url zip
     arch=$(warp_arch)
