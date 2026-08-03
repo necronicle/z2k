@@ -230,6 +230,26 @@ done
 [ -z "$_mismatch" ] && ok "код и интерфейс согласны по рестарту для всех тумблеров" \
                     || no "код и интерфейс согласны по рестарту" "нет расхождений" "$_mismatch"
 
+# The same invariant, but NOT keyed on the `toggle_` prefix — which is exactly how
+# it was escaped. strategy_pool_save/reset regenerated the config and never
+# restarted, so the panel reported «Стратегия применена» while nfqws2 kept running
+# the previous one: it receives NFQWS2_OPT as argv at start and never re-reads it.
+# Rule: anything that regenerates the LIVE config must restart the service.
+# Exempt are only the primitive itself and the two validation helpers, which write
+# to a throwaway path precisely so a candidate cannot touch a working router.
+_exempt=" regenerate_config regenerate_config_to strategy_validate "
+_noresta=""
+for _fn in $(grep -oE '^[a-z_]+\(\)' "$ACTIONS" | sed 's/()//'); do
+    case "$_exempt" in *" $_fn "*) continue ;; esac
+    _body=$(awk "/^${_fn}\(\)/,/^}/" "$ACTIONS")
+    printf '%s' "$_body" | grep -q 'regenerate_config' || continue
+    printf '%s' "$_body" | grep -q 'restart_service_if_running' \
+        || _noresta="$_noresta $_fn"
+done
+[ -z "$_noresta" ] && ok "любой обработчик, пересобирающий живой конфиг, перезапускает сервис" \
+                   || no "любой обработчик, пересобирающий живой конфиг, перезапускает сервис" \
+                         "нет таких" "$_noresta"
+
 # And specifically: switching the filtering mode without a restart writes a
 # config the daemon is not running.
 awk '/^toggle_autohostlist\(\)/,/^}/' "$ACTIONS" | grep -q 'restart_service_if_running' \

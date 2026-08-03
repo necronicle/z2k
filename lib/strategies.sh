@@ -69,54 +69,19 @@ create_default_strategy_files() {
     echo "$default_tcp" > "$extra_strats_dir/TCP/RKN/Strategy.txt"
     echo "$default_udp" > "$extra_strats_dir/UDP/YT/Strategy.txt"
 
-    # Создать директорию для пользовательских стратегий
-    mkdir -p "$extra_strats_dir/custom_strategies.d"
-
     print_success "Дефолтные файлы стратегий созданы"
     return 0
 }
 
-# Загрузить пользовательские стратегии из drop-in директории
-# Файлы формата: CATEGORY_PROTOCOL.conf (например: CUSTOM1_TCP.conf)
-# Содержимое: параметры nfqws2 стратегии
-load_custom_strategies() {
-    local custom_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats/custom_strategies.d"
-
-    if [ ! -d "$custom_dir" ]; then
-        return 0
-    fi
-
-    local loaded=0
-    for conf_file in "$custom_dir"/*.conf; do
-        [ -f "$conf_file" ] || continue
-        local basename
-        basename=$(basename "$conf_file" .conf)
-        local category protocol params
-
-        # Формат имени: CATEGORY_PROTOCOL.conf
-        category=$(echo "$basename" | rev | cut -d'_' -f2- | rev)
-        protocol=$(echo "$basename" | rev | cut -d'_' -f1 | rev)
-
-        [ -z "$category" ] || [ -z "$protocol" ] && continue
-
-        params=$(cat "$conf_file" 2>/dev/null)
-        [ -z "$params" ] && continue
-
-        protocol=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
-
-        # Создать директорию и сохранить
-        local strat_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats/${protocol}/${category}"
-        mkdir -p "$strat_dir" 2>/dev/null
-        echo "$params" > "${strat_dir}/Strategy.txt"
-        loaded=$((loaded + 1))
-    done
-
-    if [ "$loaded" -gt 0 ]; then
-        print_info "Загружено пользовательских стратегий: $loaded"
-    fi
-
-    return 0
-}
+# custom_strategies.d удалён. Дроп-ин никогда не работал: функция
+# загрузки не вызывалась ниоткуда, каталог только создавался при установке и не
+# читался ни разу, а генератор конфига берёт четыре захардкоженных пути
+# (config_official.sh: TCP/YT, TCP/YT_GV, TCP/RKN, UDP/YT) — произвольная
+# категория из .conf в NFQWS2_OPT попасть не могла в принципе. README при этом
+# пять месяцев учил класть туда файлы и перезапускать сервис, так что человек
+# оставался уверен, что его стратегия работает. Живой механизм — свои строки на
+# пул в lists/custom-strategies/<pool>.txt, они читаются при каждой пересборке
+# конфига и проверяются движком перед применением (webpanel/cgi/actions.sh).
 
 # ==============================================================================
 # ПАРСИНГ STRATS.TXT → STRATEGIES.CONF

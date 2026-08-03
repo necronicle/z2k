@@ -193,6 +193,11 @@ strategy_pool_save() {
     printf '%s\n' "$body" > "$CUSTOM_STRAT_DIR/$pool.txt" || return 1
     chmod 644 "$CUSTOM_STRAT_DIR/$pool.txt" 2>/dev/null
     regenerate_config || return 1
+    # nfqws2 gets NFQWS2_OPT as argv at startup and never re-reads it, so a
+    # regenerated config alone changes nothing that is running. Without this the
+    # panel says «применена» while the daemon keeps the previous strategy — the
+    # exact «переключил, а не применилось» the toggle handlers were fixed for.
+    restart_service_if_running
     return 0
 }
 
@@ -200,6 +205,7 @@ strategy_pool_reset() {
     strategy_pool_ok "$1" || { echo "unknown pool" >&2; return 1; }
     rm -f "$CUSTOM_STRAT_DIR/$1.txt" || return 1
     regenerate_config || return 1
+    restart_service_if_running
     return 0
 }
 
