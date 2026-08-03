@@ -155,16 +155,30 @@ fi
 # --- 6. the map must match the tree -----------------------------------------
 # Otherwise verification rejects good files and every update fails closed —
 # a far louder failure than the one being fixed, so CI must catch drift.
-drift=0; checked=0
-for f in files/z2k-warp.sh files/init.d/S51z2k-warp lib/auto_update.sh lib/install.sh z2k.sh files/z2k-scheduler.sh; do
-    [ -f "$HERE/$f" ] || continue
+# Проверяются ВСЕ записи карты, а не выборка. Раньше здесь был жёстко зашитый
+# список из шести файлов, и правка любого из остальных восьмидесяти пяти
+# проходила локально зелёной — расхождение всплывало только в CI. Полный гейт
+# и так живёт в .github/workflows/ci.yml (прогон gen_file_hashes.sh + git diff),
+# но узнавать о нём после пуша — это ровно тот цикл, который тест обязан
+# закрывать локально. Хеширование 91 файла занимает доли секунды.
+drift=0; checked=0; gone=0
+for f in $(sed -n 's/^[[:space:]]*"\([^"]*\)":[[:space:]]*"[0-9a-f]\{64\}",\{0,1\}$/\1/p' "$MAN"); do
     checked=$((checked+1))
+    if [ ! -f "$HERE/$f" ]; then
+        # Запись на удалённый файл так же ядовита: роутер пойдёт его качать,
+        # получит 404 и упрётся в проверку содержимого.
+        gone=$((gone+1)); printf '       в карте есть, на диске нет: %s\n' "$f"
+        continue
+    fi
     m=$(lookup "$MAN" "$f"); r=$(sha_of "$HERE/$f")
     [ "$m" = "$r" ] || { drift=$((drift+1)); printf '       рассинхрон: %s\n' "$f"; }
 done
-[ "$checked" -gt 0 ] && [ "$drift" = 0 ] \
+[ "$checked" -gt 50 ] \
+    && ok "проверена вся карта, а не выборка ($checked записей)" \
+    || no "проверена вся карта" ">50 записей" "$checked"
+[ "$checked" -gt 0 ] && [ "$drift" = 0 ] && [ "$gone" = 0 ] \
     && ok "манифест синхронен с деревом ($checked файлов проверено)" \
-    || no "манифест синхронен с деревом" "0 расхождений" "$drift"
+    || no "манифест синхронен с деревом" "0 расхождений" "drift=$drift gone=$gone"
 
 # --- 6b. the map must be ordered deterministically ---------------------------
 # The generator runs on a developer's machine AND on the CI runner, and CI
