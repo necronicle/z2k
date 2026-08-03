@@ -1016,16 +1016,12 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-modern-core.lua"
     fi
 
-    # z2k-http-strats.lua: 33 z2k_http_* функций для http_rkn arm (strategies
-    # 8..40). Без них daemon не парсит config-строку и не стартует — same
-    # Без него daemon не парсит config-строку и не стартует.
-    url="${GITHUB_RAW}/files/lua/z2k-http-strats.lua"
-    output="${lua_dir}/z2k-http-strats.lua"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/lua/z2k-http-strats.lua"
-    else
-        die "Ошибка загрузки files/lua/z2k-http-strats.lua"
-    fi
+    # z2k-http-strats.lua здесь больше не качается — файл удалён из проекта.
+    # Комментарий на этом месте утверждал «без них daemon не парсит config и не
+    # стартует», и на этом основании стоял die. Верно это было до 2026-06-04:
+    # тогда 9f63a39 снял страты 8..40 из http_rkn, и с тех пор на функции файла
+    # не ссылалась ни одна стратегия. Но die остался, и установка могла упасть
+    # насмерть из-за недокачки файла, который никому не нужен.
 
     # z2k-state-persist.lua: persist-only долгосрочный rotator-state
     # (autostate[key][host].nstrategy в state.tsv). НЕ load-bearing для обхода

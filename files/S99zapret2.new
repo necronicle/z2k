@@ -618,12 +618,12 @@ LUA_Z2K_RANGE_RAND="$ZAPRET_BASE/lua/z2k-range-rand.lua"
 # чистый нативный circular() из zapret-auto.lua (простая ротация fails→next).
 LUA_Z2K_MODERN_CORE="$ZAPRET_BASE/lua/z2k-modern-core.lua"
 [ -f "$LUA_Z2K_MODERN_CORE" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_MODERN_CORE"
-# z2k-http-strats: 33 HTTP-bypass функций (z2k_http_*) портированных из
-# ALFiX01/GoodbyeZapret custom_funcs.lua. Field-driven для расширения
-# http_rkn arm (был 7 стратегий → стал ~40 с этим арсеналом). Подключение
-# ПОСЛЕ z2k-modern-core.lua и перед autocircular инстансами.
-LUA_Z2K_HTTP_STRATS="$ZAPRET_BASE/lua/z2k-http-strats.lua"
-[ -f "$LUA_Z2K_HTTP_STRATS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_HTTP_STRATS"
+# z2k-http-strats.lua больше не грузится и удалён из проекта. 33 функции
+# z2k_http_* держали страты 8..40 профиля http_rkn, пока их не сняли осознанно
+# 2026-06-04 (9f63a39, сверка пулов с z4r/Flowseal/remittor): пул сжат до
+# стандартных примитивов 1..8. Файл после этого продолжал качаться и грузиться
+# в движок при каждом старте, не будучи упомянут ни одной стратегией.
+# Сами примитивы никуда не делись — они в истории, коммит c7530ba.
 # z2k-state-persist.lua: persist-only layer over the NATIVE circular() —
 # seeds nstrategy from state.tsv on load and saves it back when it changes
 # (rate-limited, full-file rewrite). Does NOT change rotation logic. MUST be

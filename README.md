@@ -450,7 +450,6 @@ z2k/
 │   │   ├── z2k-detectors.lua       # Failure detectors (TLS alert, mid-stream stall, ...)
 │   │   ├── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH
 │   │   ├── z2k-fooling-ext.lua     # Dynamic-TTL fooling hook
-│   │   ├── z2k-http-strats.lua     # HTTP-layer strategy helpers
 │   │   └── z2k-range-rand.lua      # Randomised range injection
 │   ├── lists/                  # Domain & IP lists (RKN, YouTube, Telegram, WARP game IPs, extra-domains)
 │   ├── z2k-warp.sh             # Game-mode WARP split-tunnel (routing)

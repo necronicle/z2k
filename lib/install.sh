@@ -1616,6 +1616,16 @@ step_build_zapret2() {
         print_info "r-15 cleanup: removed legacy z2k-probe.sh / z2k-classify / dynamic-strategy"
     fi
 
+    # Роутер, установленный до этого релиза, держит на диске z2k-http-strats.lua.
+    # Сам по себе он безвреден (S99 больше не подаёт его в --lua-init), но без
+    # явного удаления так и останется лежать вечно: переустановка копирует
+    # files/lua/*.lua поверх, не подчищая то, чего в источнике уже нет.
+    if [ ! -f "$ZAPRET2_DIR/.http_strats_removed.done" ]; then
+        rm -f "$ZAPRET2_DIR/lua/z2k-http-strats.lua" 2>/dev/null
+        touch "$ZAPRET2_DIR/.http_strats_removed.done" 2>/dev/null || true
+        print_info "cleanup: удалён неиспользуемый z2k-http-strats.lua"
+    fi
+
     # Install z2k tools (config validator, list updater, diagnostics, geosite, auto-update)
     # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup
     # detection stack). Replaced by the server_active_reject taxonomy in z2k-detectors.lua.
