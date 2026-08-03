@@ -60,11 +60,6 @@ TMP_DIR="/tmp/z2k-geosite.$$"
 # Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB=500 or similar.
 RAM_THRESHOLD_MB="${Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB:-900}"
 
-# Hostlist in nfqws2 loads faster if entries are unique & sorted;
-# runetfreedom already guarantees this for YT/Discord but ru-blocked
-# has ~0.3% duplicates from source merge. We re-dedupe on write.
-DEDUPE_ON_WRITE=1
-
 cleanup() {
     [ -n "${TMP_DIR:-}" ] && [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
 }
@@ -273,6 +268,9 @@ apply_new_list() {
     # trailing `@attr`, then sort -u. Without this the daemon parses
     # literal "domain:youtube" strings and matches nothing — which is
     # how the Phase 2 prototype failed live on the test router.
+    # sort -u здесь ещё и дедуплицирует: у ru-blocked ~0.3% дублей после
+    # слияния источников, а nfqws2 грузит hostlist быстрее на уникальном
+    # отсортированном списке. Делается всегда, переключателя нет.
     local final="$TMP_DIR/$asset.normalized"
     awk '
         /^[[:space:]]*#/ { next }
