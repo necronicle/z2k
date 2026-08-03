@@ -1183,8 +1183,13 @@ handle_arguments() {
             show_system_info
             ;;
         update|u)
-            print_info "Обновление z2k..."
-            update_z2k
+            # update_z2k() удалён. Он самоперезаписывал сам z2k.sh, сверяя
+            # захардкоженный Z2K_VERSION со строкой в скачанной копии — то есть
+            # всегда с самим собой, и потому неизменно отвечал «у вас последняя
+            # версия». Человек, отставший на десяток релизов, получал ровно этот
+            # ответ. К релизам из UPDATES.json механизм отношения не имел вовсе.
+            print_info "Обновление ставится из меню: пункт [U], либо кнопкой в веб-панели."
+            print_info "Открыть меню: z2k menu"
             ;;
         version|v)
             echo "z2k $(z2k_display_version)"
@@ -1251,7 +1256,7 @@ show_help() {
   uninstall        Удалить zapret2
   status, s        Показать статус системы
   check, info      Показать какие списки обрабатываются
-  update, u        Обновить z2k до последней версии
+  update, u        Подсказка, где ставится обновление (меню [U] / веб-панель)
   cleanup          Очистить старые бэкапы (оставить 5 последних)
   rollback         Откатить конфигурацию к последнему snapshot
   snapshot         Создать snapshot текущей конфигурации
@@ -1276,189 +1281,6 @@ EOF
 # ==============================================================================
 # ФУНКЦИЯ ОБНОВЛЕНИЯ Z2K
 # ==============================================================================
-
-update_z2k() {
-    print_header "Обновление z2k"
-
-    local latest_url="${GITHUB_RAW}/z2k.sh"
-    local current_script
-    current_script=$(readlink -f "$0")
-
-    case "$current_script" in
-        */sh|*/bash|*/ash|*/dash)
-            print_error "Cannot self-update: script was run via pipe. Please download and run directly."
-            return 1
-            ;;
-    esac
-
-    print_info "Текущая версия: $Z2K_VERSION"
-    print_info "Загрузка последней версии..."
-
-    # Скачать новую версию во временный файл
-    local temp_file
-    temp_file=$(mktemp)
-
-    if z2k_fetch "$latest_url" "$temp_file"; then
-        # Получить версию из нового файла
-        local new_version
-        new_version=$(grep '^Z2K_VERSION=' "$temp_file" | cut -d'"' -f2)
-
-        if [ "$new_version" = "$Z2K_VERSION" ]; then
-            print_success "У вас уже последняя версия: $Z2K_VERSION"
-            rm -f "$temp_file"
-            return 0
-        fi
-
-        print_info "Новая версия: $new_version"
-
-        # Создать backup текущего скрипта
-        if [ -f "$current_script" ]; then
-            cp "$current_script" "${current_script}.backup" || {
-                print_error "Не удалось создать backup"
-                rm -f "$temp_file"
-                return 1
-            }
-        fi
-
-        # Заменить скрипт
-        mv "$temp_file" "$current_script" && chmod +x "$current_script"
-
-        print_success "z2k обновлен: $Z2K_VERSION → $new_version"
-        print_info "Backup сохранен: ${current_script}.backup"
-
-        # Update Telegram tunnel support files even when the tunnel is
-        # currently disabled. Old installed S98tg-tunnel scripts ignored
-        # TG_PROXY_USER_DISABLED and could resurrect the tunnel on reboot.
-        mkdir -p /opt/etc/init.d /opt/etc/ndm/netfilter.d /opt/zapret2
-        local tg_support_tmp
-        tg_support_tmp=$(mktemp)
-        if z2k_fetch "${GITHUB_RAW}/files/init.d/S98tg-tunnel" "$tg_support_tmp"; then
-            cp "$tg_support_tmp" /opt/etc/init.d/S98tg-tunnel
-            chmod +x /opt/etc/init.d/S98tg-tunnel
-            print_success "S98tg-tunnel обновлён"
-        else
-            print_warning "Не удалось обновить S98tg-tunnel"
-        fi
-        rm -f "$tg_support_tmp"
-
-        tg_support_tmp=$(mktemp)
-        if z2k_fetch "${GITHUB_RAW}/files/z2k-tg-watchdog.sh" "$tg_support_tmp"; then
-            cp "$tg_support_tmp" /opt/zapret2/tg-tunnel-watchdog.sh
-            chmod +x /opt/zapret2/tg-tunnel-watchdog.sh
-            # Watchdog is triggered by z2k-scheduler.sh (see r-26 notes
-            # on broken Vixie cron reload). Strip any legacy cron entry.
-            crontab -l 2>/dev/null | grep -v "tg-tunnel-watchdog" | crontab - 2>/dev/null || true
-            print_success "Watchdog обновлён"
-        else
-            print_warning "Не удалось обновить watchdog"
-        fi
-        rm -f "$tg_support_tmp"
-
-        tg_support_tmp=$(mktemp)
-        if z2k_fetch "${GITHUB_RAW}/files/ndm/90-z2k-tg-redirect.sh" "$tg_support_tmp"; then
-            cp "$tg_support_tmp" /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
-            chmod +x /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
-            print_success "NDM hook обновлён"
-        else
-            print_warning "Не удалось обновить NDM hook"
-        fi
-        rm -f "$tg_support_tmp"
-
-        local _tg_disabled_update=0
-        if [ -f "/opt/zapret2/config" ]; then
-            _tg_disabled_update=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
-        fi
-        if [ "$_tg_disabled_update" = "1" ]; then
-            if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
-                /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
-            else
-                killall tg-mtproxy-client 2>/dev/null || true
-            fi
-        fi
-        if [ -x /opt/etc/init.d/S97tg-mtproxy ]; then
-            /opt/etc/init.d/S97tg-mtproxy stop >/dev/null 2>&1 || true
-        fi
-        rm -f /opt/etc/init.d/S97tg-mtproxy 2>/dev/null
-        crontab -l 2>/dev/null | grep -v "S97tg-mtproxy" | crontab - 2>/dev/null || true
-
-        # Update Telegram tunnel binary
-        if [ -x "/opt/sbin/tg-mtproxy-client" ]; then
-            print_info "Обновление Telegram tunnel..."
-            local tg_arch=""
-            local _arch _earch _barch
-            _earch=$(z2k_detect_entware_arch)
-            _arch="${_earch:-$(uname -m)}"
-            _barch=$(z2k_map_arch_to_bin_arch "$_arch" 2>/dev/null || true)
-            case "$_barch" in
-                linux-arm64)    tg_arch="arm64" ;;
-                linux-arm)      tg_arch="arm" ;;
-                linux-mipsel)   tg_arch="mipsel" ;;
-                linux-mips64el) tg_arch="mips64el" ;;
-                linux-mips64)   tg_arch="mips" ;;
-                linux-mips)     tg_arch="mips" ;;
-                linux-x86_64)   tg_arch="amd64" ;;
-                linux-x86)      tg_arch="x86" ;;
-                linux-riscv64)  tg_arch="riscv64" ;;
-                linux-ppc)      tg_arch="ppc64" ;;
-            esac
-            if [ -n "$tg_arch" ]; then
-                local tg_url="${GITHUB_RAW}/mtproxy-client/builds/tg-mtproxy-client-linux-${tg_arch}"
-                local tg_tmp
-                tg_tmp=$(mktemp)
-                if z2k_fetch "$tg_url" "$tg_tmp" && \
-                   [ "$(wc -c < "$tg_tmp")" -gt 500000 ] && \
-                   head -c 4 "$tg_tmp" 2>/dev/null | grep -q "ELF"; then
-                    killall tg-mtproxy-client 2>/dev/null || true
-                    sleep 1
-                    cp "$tg_tmp" /opt/sbin/tg-mtproxy-client
-                    chmod +x /opt/sbin/tg-mtproxy-client
-                    # Respect TG_PROXY_USER_DISABLED — if user explicitly stopped
-                    # the tunnel via menu/webpanel, don't resurrect it on update.
-                    local _tg_disabled=0
-                    if [ -f "/opt/zapret2/config" ]; then
-                        _tg_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
-                    fi
-                    if [ "$_tg_disabled" = "1" ]; then
-                        print_success "Telegram tunnel обновлён (не запущен — отключён пользователем)"
-                    else
-                        if [ -x /opt/etc/init.d/S98tg-tunnel ]; then
-                            /opt/etc/init.d/S98tg-tunnel restart >/dev/null 2>&1
-                        else
-                            # CWE-59: root-owned 0700 log dir
-                            # CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
-                            # не-каталог / чужой владелец = возможная подмена атакующим (с planted
-                            # symlink'ами внутри) → снести и создать заново. busybox `stat -c` нет —
-                            # владельца берём из `ls -ld`.
-                            if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
-                               { [ -d /tmp/z2k-log ] && [ "$(ls -ld /tmp/z2k-log 2>/dev/null | awk '{print $3}')" != root ]; }; then
-                                rm -rf /tmp/z2k-log 2>/dev/null
-                            fi
-                            mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
-                            chmod 700 /tmp/z2k-log 2>/dev/null
-                            /opt/sbin/tg-mtproxy-client --listen=:1443 --timeout=15m -v >> /tmp/z2k-log/tg-tunnel.log 2>&1 &
-                        fi
-                        sleep 2
-                        if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
-                            print_success "Telegram tunnel обновлён и перезапущен"
-                        else
-                            print_warning "Telegram tunnel обновлён, но не запустился"
-                        fi
-                    fi
-                else
-                    print_warning "Не удалось обновить Telegram tunnel"
-                fi
-                rm -f "$tg_tmp"
-            fi
-        fi
-
-        print_info "Перезапустите z2k для применения изменений"
-
-    else
-        print_error "Не удалось загрузить обновление"
-        rm -f "$temp_file"
-        return 1
-    fi
-}
 
 # ==============================================================================
 # ГЛАВНАЯ ФУНКЦИЯ

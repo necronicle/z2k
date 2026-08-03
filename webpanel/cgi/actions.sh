@@ -1232,16 +1232,6 @@ geosite_run_async() {
     printf '%s' "$job_id"
 }
 
-# probe_run_async removed in r-15 (Phase 1 cleanup
-# detection stack). The active-probe path was never wired into the live
-# circular and produced non-actionable verdicts. webpanel /probe/run
-# endpoint now returns 410 Gone; Phase 3 will replace it with reactive
-# discovery via the z2k-detect daemon.
-probe_run_async() {
-    echo "active probe removed in r-15" >&2
-    return 1
-}
-
 # --- debug flag (Phase 3) ---
 #
 # Touch/rm /opt/zapret2/extra_strats/cache/autocircular/debug.flag. When

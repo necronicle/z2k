@@ -313,17 +313,6 @@ print_separator() {
 # ПРОВЕРКИ СИСТЕМЫ
 # ==============================================================================
 
-# Проверка наличия Entware
-check_entware() {
-    if [ ! -d "/opt" ] || [ ! -x "/opt/bin/opkg" ]; then
-        print_error "Entware не установлен!"
-        print_info "Установите Entware перед запуском z2k"
-        print_info "Инструкция: https://help.keenetic.com/hc/ru/articles/360021888880"
-        return 1
-    fi
-    return 0
-}
-
 # Проверка прав root
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -409,72 +398,6 @@ get_arch() {
     echo "$arch"
 }
 
-# Проверка архитектуры
-check_arch() {
-    local arch
-    arch=$(get_arch)
-
-    if map_arch_to_bin_arch "$arch" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    print_warning "Архитектура $arch не поддерживается автоопределением"
-    printf "Продолжить? [y/N]: "
-    read -r answer </dev/tty
-    [ "$answer" = "y" ] || return 1
-    return 0
-}
-
-# Проверка свободного места на диске
-check_disk_space() {
-    local required_mb=50
-    local available_mb
-
-    # Получить свободное место в /opt (в MB)
-    available_mb=$(df -m /opt 2>/dev/null | awk 'NR==2 {print $4}')
-
-    if [ -z "$available_mb" ]; then
-        print_warning "Не удалось определить свободное место"
-        return 0
-    fi
-
-    if [ "$available_mb" -lt "$required_mb" ]; then
-        print_error "Недостаточно места в /opt"
-        print_info "Требуется: ${required_mb}MB, доступно: ${available_mb}MB"
-        return 1
-    fi
-
-    return 0
-}
-
-# Проверка наличия curl
-check_curl() {
-    if ! command -v curl >/dev/null 2>&1; then
-        print_error "curl не установлен"
-        print_info "Установка curl..."
-        opkg update && opkg install curl || return 1
-    fi
-    return 0
-}
-
-# Проверка наличия необходимых утилит
-check_required_tools() {
-    local missing_tools=""
-
-    for tool in awk sed grep; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            missing_tools="$missing_tools $tool"
-        fi
-    done
-
-    if [ -n "$missing_tools" ]; then
-        print_error "Отсутствуют утилиты:$missing_tools"
-        return 1
-    fi
-
-    return 0
-}
-
 # Проверка, установлен ли zapret2
 is_zapret2_installed() {
     [ -d "$ZAPRET2_DIR" ] && [ -x "${ZAPRET2_DIR}/nfq2/nfqws2" ]
@@ -542,68 +465,6 @@ safe_config_read() {
     # reads empty again: infinite empty-value cycle.
     [ -z "$val" ] && val="$default"
     echo "$val"
-}
-
-# Скачать файл с проверкой
-download_file() {
-    local url=$1
-    local output=$2
-    local description=${3:-"Загрузка файла"}
-
-    print_info "$description..."
-
-    if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
-        print_success "Загружено: $output"
-        return 0
-    else
-        print_error "Ошибка загрузки: $url"
-        return 1
-    fi
-}
-
-# Скачать файл с проверкой контрольной суммы (SHA256)
-# Использование: download_file_verified URL OUTPUT EXPECTED_SHA256 [DESCRIPTION]
-download_file_verified() {
-    local url=$1
-    local output=$2
-    local expected_sha256=$3
-    local description=${4:-"Загрузка файла"}
-
-    print_info "$description..."
-
-    if ! curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$output"; then
-        print_error "Ошибка загрузки: $url"
-        return 1
-    fi
-
-    # Если SHA256 не указан, пропустить проверку
-    if [ -z "$expected_sha256" ] || [ "$expected_sha256" = "-" ]; then
-        print_success "Загружено (без верификации): $output"
-        return 0
-    fi
-
-    # Проверить контрольную сумму
-    local actual_sha256
-    if command -v sha256sum >/dev/null 2>&1; then
-        actual_sha256=$(sha256sum "$output" | awk '{print $1}')
-    elif command -v openssl >/dev/null 2>&1; then
-        actual_sha256=$(openssl dgst -sha256 "$output" | awk '{print $NF}')
-    else
-        print_warning "sha256sum/openssl не найден, проверка пропущена"
-        return 0
-    fi
-
-    if [ "$actual_sha256" != "$expected_sha256" ]; then
-        print_error "ВНИМАНИЕ: контрольная сумма не совпадает!"
-        print_error "  Ожидалось: $expected_sha256"
-        print_error "  Получено:  $actual_sha256"
-        print_error "Файл мог быть подменён (MITM-атака)!"
-        rm -f "$output"
-        return 1
-    fi
-
-    print_success "Загружено и верифицировано: $output"
-    return 0
 }
 
 # Создать резервную копию файла
@@ -813,18 +674,6 @@ z2k_bitmap_port_available() {
     return 1
 }
 
-# Проверить доступность URL
-check_url_accessible() {
-    local url=$1
-    local timeout=${2:-5}
-
-    if curl -s -m "$timeout" -I "$url" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 # Получить версию nfqws2
 get_nfqws2_version() {
     local nfqws2="${ZAPRET2_DIR}/nfq2/nfqws2"
@@ -921,16 +770,6 @@ cleanup_work_dir() {
         rm -rf "$WORK_DIR"
         print_info "Рабочая директория очищена"
     fi
-}
-
-# Обработчик ошибок
-error_handler() {
-    local exit_code=$1
-    local line_no=$2
-
-    print_error "Ошибка в строке $line_no (код: $exit_code)"
-    cleanup_work_dir
-    exit "$exit_code"
 }
 
 # Обработчик прерывания (Ctrl+C)
