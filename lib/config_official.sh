@@ -47,13 +47,13 @@ AUSTERUS_OPT
     local quic_udp=""
     local discord_udp=""
 
-    # Variant-A refactor feature flags. Each phase's emit block is guarded by
-    # the corresponding flag so individual phases can be toggled at runtime
-    # via /opt/zapret2/config without a push. Default "1" (enabled).
-    # Remove these flags entirely once all phases are soaked on production.
-    local Z2K_REFACTOR_PHASE1 Z2K_REFACTOR_PHASE2 Z2K_REFACTOR_PHASE3
-    Z2K_REFACTOR_PHASE1=$(safe_config_read "Z2K_REFACTOR_PHASE1" "/opt/zapret2/config" "1")
-    Z2K_REFACTOR_PHASE2=$(safe_config_read "Z2K_REFACTOR_PHASE2" "/opt/zapret2/config" "1")
+    # Variant-A refactor feature flags. Осталась одна фаза — остальные снялись
+    # вместе с профилями, которые они гейтили:
+    #   PHASE1 (webrtc_bypass) — профиль удалён, см. комментарий ниже по файлу;
+    #   PHASE2 (слияние game_udp + game_catchall) — игровой режим переехал на
+    #           WARP в r-61.1, профилей больше нет;
+    #   PHASE4 (cdn_tls) — снят 2026-04-27, см. ниже.
+    local Z2K_REFACTOR_PHASE3
     # Phase 3 (YT+GV merge into google_tls) — DEFAULT OFF as of 2026-04-26.
     # Field reports на enhanced (Сергей #2191, others) показали падение
     # YouTube performance после merge; раздельные yt + googlevideo
@@ -1386,21 +1386,22 @@ AUSTERUS_OPT
     # + hostkey=z2k_nohost_key for stable hostless rotation keying)
     nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
-    # webrtc_bypass — passthrough for non-Discord STUN flows (WebRTC P2P in
-    # browsers, Discord peer-to-peer voice/video, BitTorrent DHT-adjacent).
-    # A profile with --filter-l7=stun and no --lua-desync= short-circuits at
-    # desync.c:900 (VERDICT_PASS), so matched packets exit unmodified.
+    # Здесь стоял webrtc_bypass — пустой профиль udp/1024-65535 × l7=stun,
+    # который ничего не десинкал и служил щитом: он ловил P2P-STUN (WebRTC в
+    # браузере, peer-to-peer голос Discord) РАНЬШЕ широкого профиля game_udp,
+    # чтобы тот не выстрелил по нему фейками. Тот же класс проблемы, из-за
+    # которого до него откатывали TCP-catchall игрового режима (2203de2:
+    # фейки прилетали ответам LAN-клиентам и ядро рвало соединение RST'ом).
     #
-    # Ordering: AFTER discord_udp (so Discord's server-routed STUN on the
-    # official port ranges still goes through Discord's dedicated rotator).
+    # Удалён: game_udp больше нет — игровой режим переехал на туннель WARP в
+    # r-61.1 (d078a60), игры с IP-блоком маршрутизируются через Cloudflare, а
+    # не десинкаются. Щит пережил то, от чего защищал: после discord_udp не
+    # осталось ни одного широкого UDP-профиля, а в очередь и так заворачиваются
+    # только порты из NFQWS2_PORTS_UDP (443 + диапазоны Discord).
     #
-    # --out-range=-n4 keeps the Lua short-circuit consistent even though this
-    # profile has no Lua strategies — marginal safety against a future edit
-    # accidentally adding one.
-    if [ "$Z2K_REFACTOR_PHASE1" = "1" ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1024-65535 --filter-l7=stun --in-range=a --out-range=-n4 --new\\n"
-    fi
-
+    # ЕСЛИ когда-нибудь снова появится широкий UDP-профиль после discord_udp
+    # или NFQWS2_PORTS_UDP расширят на большой диапазон — щит нужно вернуть,
+    # иначе P2P-голос и WebRTC поймают чужие фейки.
 
     # HTTP RKN (port 80): autocircular bypass of ISP DPI redirect (302 → block page).
     # 7 strategies from blockcheck2 results, ordered by simplicity.
