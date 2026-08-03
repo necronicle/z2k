@@ -1054,6 +1054,7 @@ extra_strats/TCP/RKN/Discord.txt
 extra_strats/UDP/YT/List.txt
 extra-domains.txt
 rkn-false-positive.txt
+meta-ranges.txt
 "
 
     while read -r list_file; do

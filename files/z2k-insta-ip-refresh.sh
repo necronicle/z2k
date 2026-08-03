@@ -148,6 +148,50 @@ if [ -z "$parsed" ]; then
     exit 1
 fi
 
+# 7b. Отсеять адреса вне диапазонов Meta.
+#
+# До этого единственной проверкой ответа было «строка похожа на IPv4» — то есть
+# кто владеет VPS, тот и решал, куда резолвится instagram.com у всех, кто включил
+# эту функцию (issue #28). Теперь адрес обязан лежать внутри блока, выделенного
+# Meta; иначе он просто не применяется, а прежняя запись остаётся нетронутой.
+#
+# Список — выделения RIR (AS32934), а не отдельные анонсы: они меняются годами,
+# поэтому список не протухает между релизами. Сравнение без побитовых операций —
+# busybox awk их не гарантирует, поэтому делим на 2^(32-len).
+META_RANGES="${ZAPRET2_DIR:-/opt/zapret2}/lists/meta-ranges.txt"
+if [ -s "$META_RANGES" ]; then
+    filtered=$(printf '%s\n' "$parsed" | awk -v rf="$META_RANGES" '
+        function ip2n(s,  a) { split(s, a, "."); return ((a[1]*256+a[2])*256+a[3])*256+a[4] }
+        BEGIN {
+            n = 0
+            while ((getline line < rf) > 0) {
+                if (line ~ /^[[:space:]]*#/ || line ~ /^[[:space:]]*$/) continue
+                split(line, p, "/")
+                n++; net[n] = ip2n(p[1]); len[n] = p[2] + 0
+            }
+            close(rf)
+        }
+        {
+            v = ip2n($2); ok = 0
+            for (i = 1; i <= n; i++) {
+                d = 2 ^ (32 - len[i])
+                if (int(v / d) == int(net[i] / d)) { ok = 1; break }
+            }
+            if (ok) print
+            else print "REJECT\t" $1 "\t" $2 > "/dev/stderr"
+        }' 2>>"$LOG")
+    rejected=$(printf '%s\n' "$parsed" | wc -l)
+    kept=$(printf '%s\n' "$filtered" | grep -c . 2>/dev/null || echo 0)
+    if [ "$kept" = 0 ]; then
+        log "FAIL: ни один адрес не попал в диапазоны Meta — ответ подозрительный, записи не трогаем"
+        exit 1
+    fi
+    [ "$kept" -lt "$rejected" ] && log "часть адресов вне диапазонов Meta отброшена ($kept из $rejected принято)"
+    parsed="$filtered"
+else
+    log "WARN: $META_RANGES отсутствует — адреса применяются без проверки принадлежности Meta"
+fi
+
 # 8. Diff & apply per host.
 changes=0
 touched_ips=""
