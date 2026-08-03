@@ -54,7 +54,11 @@ MENU
             # Проверить режим стратегий
             if [ -f "$CATEGORY_STRATEGIES_CONF" ]; then
                 local count
-                count=$(grep -c ":" "$CATEGORY_STRATEGIES_CONF" 2>/dev/null || echo 0)
+                # Без отсечения комментариев счётчик всегда врал: шапка файла
+                # содержит "# Format: CATEGORY:STRATEGY_NUM" и "# Updated: <дата>",
+                # обе с двоеточием, поэтому к трём реальным категориям молча
+                # прибавлялось 2 и в меню светилось «5 категорий».
+                count=$(grep -cE "^[^#]+:" "$CATEGORY_STRATEGIES_CONF" 2>/dev/null || echo 0)
                 printf " Стратегии: %s категорий\n" "$count"
             else
                 printf " Текущая стратегия: #%s\n" "$(get_current_strategy)"

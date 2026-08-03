@@ -228,6 +228,10 @@ restart_service_if_running() {
 # S99zapret2 via the patch path, which could drop +x on some BusyBox builds
 # ("/opt/etc/init.d/S99zapret2: Permission denied", rc 126) — chmod here so a
 # webpanel start/stop/restart recovers even on a router not yet reinstalled.
+# Эти три обёртки были мертвы, а /service/start|stop|restart в api.sh дёргал
+# "$INIT_SCRIPT" напрямую — то есть ровно на том пути, ради которого писался
+# self-heal, chmod не выполнялся, и обещание r-43 не работало. Эндпоинты
+# переведены на обёртки; вызывать init-скрипт напрямую отсюда больше не нужно.
 ensure_init_exec() { [ -f "$INIT_SCRIPT" ] && chmod +x "$INIT_SCRIPT" 2>/dev/null; return 0; }
 svc_start()   { ensure_init_exec; "$INIT_SCRIPT" start   2>&1; }
 svc_stop()    { ensure_init_exec; "$INIT_SCRIPT" stop    2>&1; }
@@ -1343,7 +1347,11 @@ update_behind_count() {
             if (v == inst) { found = 1 }
         }
         END {
-            print (found ? count : 0)
+            # count+0, не count: когда installed == current, ветка count++ ни разу
+            # не выполняется, count остаётся неинициализированной и awk печатает
+            # ПУСТУЮ строку. Сейчас это спасает только "${behind:-0}" у
+            # вызывающего (api.sh) — без него в JSON уходит "behind":, .
+            print (found ? count+0 : 0)
         }
     ' "$AU_MANIFEST_CACHE"
 }

@@ -93,19 +93,11 @@ au_manifest_current() {
     sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -1
 }
 
-# au_tag_num TAG -> echoes numeric part (p-23 -> 23, r-2 -> 2)
-au_tag_num() {
-    echo "$1" | sed 's/[^0-9]//g'
-}
-
-# au_tag_type TAG -> echoes p|r|unknown
-au_tag_type() {
-    case "$1" in
-        p-*) echo p ;;
-        r-*) echo r ;;
-        *)   echo unknown ;;
-    esac
-}
+# au_tag_num и au_tag_type удалены — обе были мертвы. Сравнение версий переехало
+# с числового на порядок записей в history (см. ниже), а patch/reinstall берётся
+# из поля "type" записи манифеста, а не из префикса тега. Держать их дальше было
+# опасно: au_tag_num на дотнутом теге даёт мусор (p-70.1 -> "701"), и первый же
+# случайный вызов вернул бы неверный порядок релизов.
 
 # au_history_entries_after MANIFEST_PATH INSTALLED_TAG
 # Echoes JSON entry lines for every history entry positioned strictly
@@ -1097,8 +1089,10 @@ au_run_apply() {
             au_log "starting reinstall: $installed -> $target_tag (reset_state=${reset_state:-no})"
             if ! au_apply_reinstall "$target_tag" "$reset_state"; then
                 au_log "reinstall apply failed"
-                # install.sh's create_rollback_snapshot + auto_rollback_timer
-                # would handle in-process recovery; we just bail.
+                # install.sh took a rollback snapshot before it started, but
+                # nothing rolls it back on its own — the auto-timer that used to
+                # promise that never ran and is gone. Recovery is the operator's
+                # `z2k rollback`. We just bail and leave the breadcrumb.
                 au_lock_release
                 return 1
             fi

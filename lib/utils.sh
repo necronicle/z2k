@@ -37,9 +37,9 @@ LIB_DIR="${LIB_DIR:-${WORK_DIR}/lib}"
 # override cross-branch test installs. Default only kicks in when
 # utils.sh is sourced from outside the z2k.sh bootstrap (rare path).
 GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
-Z4R_BASE_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master"
-Z4R_LISTS_URL="${Z4R_BASE_URL}/lists"
-Z2R_BASE_URL="https://raw.githubusercontent.com/AloofLibra/zapret4rocket/z2r"
+# Z4R_BASE_URL / Z4R_LISTS_URL / Z2R_BASE_URL удалены: константы указывали на
+# сторонние репозитории zapret4rocket и не читались ничем — всё качается через
+# GITHUB_RAW + z2k_fetch. Оставлять их значило заявлять зависимость, которой нет.
 
 # VPS SNI-passthrough egress для GitHub — см. z2k.sh для полного docstring.
 # RU блокирует Fastly anycast github; наш VPS форвардит SNI-совпавшие

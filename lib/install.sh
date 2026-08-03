@@ -3741,71 +3741,15 @@ rollback_to_snapshot() {
     return 0
 }
 
-# Автоматический rollback по таймеру
-# Вызывается после применения новой конфигурации
-auto_rollback_timer() {
-    local timeout=${1:-300}  # 5 минут по умолчанию
-
-    if [ ! -d "$ROLLBACK_DIR" ]; then
-        return 0
-    fi
-
-    print_warning "Авто-rollback активен: $timeout секунд"
-    print_info "Если сервис работает — подтвердите в меню"
-    print_info "Иначе конфигурация будет автоматически восстановлена"
-
-    # Создать таймер-файл
-    local timer_file="${ROLLBACK_DIR}/auto_timer"
-    echo "$(($(date +%s) + timeout))" > "$timer_file"
-
-    return 0
-}
-
-# Проверить истёк ли таймер авто-rollback (вызывается из cron)
-check_auto_rollback() {
-    local timer_file="${ROLLBACK_DIR}/auto_timer"
-    [ -f "$timer_file" ] || return 0
-
-    local deadline
-    deadline=$(cat "$timer_file" 2>/dev/null)
-    [ -z "$deadline" ] && return 0
-
-    local now
-    now=$(date +%s)
-
-    if [ "$now" -ge "$deadline" ]; then
-        print_warning "Авто-rollback: таймер истёк, восстанавливаю конфигурацию..."
-        rm -f "$timer_file"
-        # Не-интерактивный rollback
-        if [ -x "$INIT_SCRIPT" ]; then
-            "$INIT_SCRIPT" stop 2>/dev/null || true
-        fi
-        [ -f "$ROLLBACK_DIR/config" ] && cp -f "$ROLLBACK_DIR/config" "${ZAPRET2_DIR}/config"
-        [ -f "$ROLLBACK_DIR/S99zapret2" ] && cp -f "$ROLLBACK_DIR/S99zapret2" "$INIT_SCRIPT"
-        for cat_dir in TCP/YT TCP/YT_GV TCP/RKN UDP/YT; do
-            local sfile="$ROLLBACK_DIR/strats/$cat_dir/Strategy.txt"
-            [ -f "$sfile" ] && cp -f "$sfile" "${ZAPRET2_DIR}/extra_strats/$cat_dir/Strategy.txt"
-        done
-        if [ -x "$INIT_SCRIPT" ]; then
-            "$INIT_SCRIPT" start 2>/dev/null || true
-        fi
-        logger -t z2k "Auto-rollback executed: timer expired"
-    fi
-
-    return 0
-}
-
-# Подтвердить новую конфигурацию (отменяет авто-rollback)
-confirm_config() {
-    local timer_file="${ROLLBACK_DIR}/auto_timer"
-    if [ -f "$timer_file" ]; then
-        rm -f "$timer_file"
-        print_success "Конфигурация подтверждена, авто-rollback отключён"
-    else
-        print_info "Авто-rollback не активен"
-    fi
-    return 0
-}
+# Здесь жил авто-rollback по таймеру: auto_rollback_timer ставил дедлайн в
+# .rollback/auto_timer, check_auto_rollback раскатывал снапшот обратно по его
+# истечении, confirm_config таймер снимал. Ни одна из трёх не вызывалась ниоткуда
+# — ни из меню, ни из z2k.sh, ни из планировщика, — то есть таймер не заводился
+# никогда и восстанавливать по нему было нечего. Удалены, чтобы не создавать
+# впечатление, что после неудачного применения конфиг откатится сам.
+#
+# Снапшоты и ручной откат живые и остаются: create_rollback_snapshot выше,
+# команды `z2k snapshot` и `z2k rollback`.
 
 # ==============================================================================
 # УДАЛЕНИЕ ZAPRET2

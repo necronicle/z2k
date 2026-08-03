@@ -201,21 +201,21 @@ case "$method $path" in
     # завершения restart (5-15s) и не понимал что происходит.
     "POST /service/start")
         require_method POST
-        job_id=$(svc_action_async "Запуск сервиса nfqws2" "set_flag ENABLED 1 \"${CONFIG_FILE}\"; ${INIT_SCRIPT} start")
+        job_id=$(svc_action_async "Запуск сервиса nfqws2" "set_flag ENABLED 1 \"${CONFIG_FILE}\"; svc_start")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0
         ;;
     "POST /service/stop")
         require_method POST
-        job_id=$(svc_action_async "Остановка сервиса nfqws2" "set_flag ENABLED 0 \"${CONFIG_FILE}\"; ${INIT_SCRIPT} stop")
+        job_id=$(svc_action_async "Остановка сервиса nfqws2" "set_flag ENABLED 0 \"${CONFIG_FILE}\"; svc_stop")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0
         ;;
     "POST /service/restart")
         require_method POST
-        job_id=$(svc_action_async "Перезапуск сервиса nfqws2" "set_flag ENABLED 1 \"${CONFIG_FILE}\"; ${INIT_SCRIPT} restart")
+        job_id=$(svc_action_async "Перезапуск сервиса nfqws2" "set_flag ENABLED 1 \"${CONFIG_FILE}\"; svc_restart")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0

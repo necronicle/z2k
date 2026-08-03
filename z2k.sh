@@ -919,7 +919,7 @@ download_init_script() {
     # NOTE: z2k-probe.sh / z2k-classify-* removed in r-15 (Phase 1 cleanup);
     # z2k-healthcheck.sh removed in r-60 (per-strategy pass/fail false-negatives
     # during rotation — use z2k-diag.sh instead).
-    for tool_name in z2k-config-validator.sh z2k-update-lists.sh z2k-fix-tg-iptables.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-tg-redirect.sh z2k-auto-update.sh z2k-insta-ip-refresh.sh z2k-scheduler.sh z2k-stats-upload.sh z2k-warp.sh; do
+    for tool_name in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-tg-watchdog.sh z2k-tg-redirect.sh z2k-auto-update.sh z2k-insta-ip-refresh.sh z2k-scheduler.sh z2k-stats-upload.sh z2k-warp.sh; do
         url="${GITHUB_RAW}/files/${tool_name}"
         output="${files_dir}/${tool_name}"
         if z2k_fetch "$url" "$output"; then
