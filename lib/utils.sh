@@ -699,46 +699,118 @@ verify_binary() {
     return 0
 }
 
+# Каталоги с модулями прошивки. В поле встречаются обе раскладки:
+# /lib/modules/<kver> (4.9-ndm-5) и /lib/system-modules/<kver> (NDMS 5.1.2, issue
+# #27) — на второй первый каталог существует, но содержит только метаданные, без
+# единого .ko. Ищем в обоих. /opt сюда не входит: лежащая там копия от другого
+# ядра — это неверный ABI.
+Z2K_MODDIRS=
+z2k_module_dirs() {
+    local kv d
+    if [ -z "$Z2K_MODDIRS" ]; then
+        kv=$(uname -r 2>/dev/null)
+        for d in "/lib/modules/$kv" "/lib/system-modules/$kv" /lib/modules /lib/system-modules; do
+            [ -d "$d" ] && Z2K_MODDIRS="$Z2K_MODDIRS $d"
+        done
+    fi
+    echo "$Z2K_MODDIRS"
+}
+
+# Есть ли возможность, которую даёт модуль? Спрашиваем реестр ядра, а не lsmod:
+# на стоковой прошивке почти всё это встроено, lsmod не показывает ничего, и
+# "модуль не загружен" — ложь. Именно из-за lsmod установщик ругался на модули,
+# которые на самом деле на месте.
+z2k_module_present() {
+    case "$1" in
+        xt_multiport)    grep -qw multiport /proc/net/ip_tables_matches 2>/dev/null ;;
+        xt_connbytes)    grep -qw connbytes /proc/net/ip_tables_matches 2>/dev/null ;;
+        xt_connmark)     grep -qw connmark  /proc/net/ip_tables_matches 2>/dev/null ;;
+        xt_CONNMARK)     grep -qw CONNMARK  /proc/net/ip_tables_targets 2>/dev/null ;;
+        xt_NFQUEUE)      grep -qw NFQUEUE   /proc/net/ip_tables_targets 2>/dev/null ;;
+        nfnetlink_queue) [ -e /proc/net/netfilter/nfnetlink_queue ] ;;
+        *)               lsmod 2>/dev/null | grep -q "^$1 " ;;
+    esac
+}
+
+# Путь к .ko модуля $1 в дереве прошивки, если он там есть.
+z2k_module_ko() {
+    local m="$1" d f
+    for d in $(z2k_module_dirs); do
+        f="$d/$m.ko"
+        [ -f "$f" ] && { echo "$f"; return 0; }
+    done
+    f=$(find /lib -name "$m.ko" -type f 2>/dev/null | head -1)
+    [ -n "$f" ] && { echo "$f"; return 0; }
+    return 1
+}
+
+# insmod $1 из дерева прошивки. 0 только если .ko найден И принят ядром.
+z2k_insmod_fw() {
+    local f
+    f=$(z2k_module_ko "$1") || return 1
+    insmod "$f" 2>/dev/null
+}
+
+# Будет ли модуль доступен к моменту старта сервиса: либо возможность уже в ядре,
+# либо есть .ko, который загрузчик подтянет. Нужно для предполётной проверки,
+# которая бежит ДО загрузки модулей и иначе ругалась бы на всё подряд.
+z2k_module_obtainable() {
+    z2k_module_present "$1" || z2k_module_ko "$1" >/dev/null
+}
+
 # Проверка загрузки модуля ядра
 check_kernel_module() {
-    local module=$1
-
-    if lsmod | grep -q "^${module} "; then
-        return 0
-    else
-        return 1
-    fi
+    z2k_module_present "$1"
 }
 
 # Загрузка модуля ядра
 load_kernel_module() {
     local module=$1
 
-    if check_kernel_module "$module"; then
-        print_info "Модуль $module уже загружен"
+    # Встроен в ядро или уже загружен — делать и говорить нечего.
+    if z2k_module_present "$module"; then
         return 0
     fi
 
     print_info "Загрузка модуля: $module"
 
-    # На Keenetic нет системного modprobe, только Entware
-    # Используем /opt/sbin/insmod с полным путём к .ko файлу
-    local kernel_ver
-    kernel_ver=$(uname -r)
-    local module_path="/lib/modules/${kernel_ver}/${module}.ko"
+    # modprobe в PATH — из Entware, он ищет в /opt/lib/modules/<kver>, которого на
+    # Keenetic нет. Поэтому после него грузим .ko по абсолютному пути сами.
+    modprobe "$module" 2>/dev/null
+    z2k_module_present "$module" && { print_success "Модуль $module загружен"; return 0; }
 
-    if [ ! -f "$module_path" ]; then
-        print_error "Файл модуля не найден: $module_path"
-        return 1
-    fi
-
-    if /opt/sbin/insmod "$module_path" 2>/dev/null; then
+    z2k_insmod_fw "$module"
+    if z2k_module_present "$module"; then
         print_success "Модуль $module загружен"
         return 0
-    else
-        print_error "Ошибка загрузки модуля: $module"
-        return 1
     fi
+
+    print_error "Модуль $module недоступен в этой прошивке — правила, которым он нужен, установлены не будут"
+    return 1
+}
+
+# Умеет ли ядро делать ipset типа bitmap:port. Проверяем не наличием .ko, а
+# попыткой создать сет: тип может быть вкомпилен в ядро (тогда файла нет вовсе),
+# а может отсутствовать в прошивке целиком — и различить это можно только так.
+# Важно, потому что на bitmap:port висят zport_tcp/zport_udp, а на них — ВСЕ
+# правила nfqws; запасного пути через --dport в движке нет, так что недоступный
+# тип означает полностью нерабочий пакетный обход (issue #27).
+z2k_bitmap_port_available() {
+    # Без ipset проверить нечем. Отвечаем "доступен", чтобы не пугать ложной
+    # тревогой: ipset ставится шагом раньше, и его собственное отсутствие — это
+    # отдельная ошибка, о которой сообщает тот шаг.
+    command -v ipset >/dev/null 2>&1 || return 0
+
+    if ! z2k_module_present ip_set_bitmap_port; then
+        z2k_insmod_fw ip_set_bitmap_port || true
+    fi
+
+    ipset destroy z2k_probe_bitmap 2>/dev/null
+    if ipset create z2k_probe_bitmap bitmap:port range 0-65535 2>/dev/null; then
+        ipset destroy z2k_probe_bitmap 2>/dev/null
+        return 0
+    fi
+    return 1
 }
 
 # Проверить доступность URL

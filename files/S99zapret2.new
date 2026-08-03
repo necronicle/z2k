@@ -1171,8 +1171,26 @@ load_modules()
     # place that knew Entware's modprobe cannot find firmware modules, and it
     # hardcoded /lib/modules/<kver> — which is the path that does NOT exist on the
     # firmware where this problem was actually reported.
+    #
+    # Then ask whether the TYPE actually works, which is not the same question as
+    # whether the module loaded: bitmap:port can be built into the kernel with no
+    # .ko to find, and it can equally be absent from the firmware altogether. Only
+    # creating a set tells them apart. Worth the two ipset calls once per start,
+    # because zport_tcp/zport_udp gate EVERY nfqws rule and the engine has no
+    # --dport fallback — an unavailable type means no bypass at all, and it used to
+    # surface only as a wall of raw "Set zport_tcp doesn't exist" from iptables
+    # with nothing pointing at the cause (issue #27, NDMS 5.1.2).
     if ! lsmod 2>/dev/null | grep -q "^ip_set_bitmap_port "; then
         z2k_insmod_fw ip_set_bitmap_port || true
+    fi
+    if command -v ipset >/dev/null 2>&1; then
+        ipset destroy z2k_probe_bitmap 2>/dev/null
+        if ipset create z2k_probe_bitmap bitmap:port range 0-65535 2>/dev/null; then
+            ipset destroy z2k_probe_bitmap 2>/dev/null
+        else
+            echo "WARNING: ipset type bitmap:port is not available in this firmware"
+            echo "zport_tcp/zport_udp cannot be created, so NO nfqws rules will be installed and the packet-level bypass will not work"
+        fi
     fi
 
     # nfnetlink_queue is the one that must genuinely be there — without it nfqws2

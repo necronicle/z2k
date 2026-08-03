@@ -130,12 +130,32 @@ cat > "$BIN/find" <<EOF
 [ -f "$TMP/nofind" ] && exit 0
 exec /usr/bin/find "\$@"
 EOF
-chmod +x "$BIN/modprobe" "$BIN/insmod" "$BIN/lsmod" "$BIN/uname" "$BIN/find"
+# ipset: the bitmap:port capability probe. Stubbed rather than left to the host —
+# without this the suite would call the REAL ipset wherever one is installed, which
+# both makes the result depend on the machine and tries to create a set for real.
+# $TMP/nobitmap = the firmware that has no bitmap:port type.
+cat > "$BIN/ipset" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$TMP/ipset.calls"
+case "\$1" in
+    create)
+        case "\$3" in
+            bitmap:port) [ -f "$TMP/nobitmap" ] && {
+                             echo "ipset v7.24: Kernel error received: set type not supported" >&2
+                             exit 1
+                         } ;;
+        esac
+        ;;
+esac
+exit 0
+EOF
+chmod +x "$BIN/modprobe" "$BIN/insmod" "$BIN/lsmod" "$BIN/uname" "$BIN/find" "$BIN/ipset"
 
 # run LAYOUT [nobytes] -> LAYOUT is the firmware module directory to populate ("" = none)
 run_load() {
     rm -rf "${TMP:?}/lib" "$TMP/proc/net"; mkdir -p "$TMP/proc/net/netfilter"
     : > "$TMP/modprobe.calls"; : > "$TMP/insmod.calls"; : > "$TMP/lsmod.out"
+    : > "$TMP/ipset.calls"
     : > "$TMP/proc/net/ip_tables_matches"; : > "$TMP/proc/net/ip_tables_targets"
     # nfnetlink_queue and the NFQUEUE target are always there: this suite is about
     # the OTHER modules, and load_modules returns early without them.
@@ -341,6 +361,164 @@ case "$body" in
     *"find /lib "*) ok "the fallback search is bounded to /lib" ;;
     *)              no "the fallback search is bounded to /lib" "find /lib" "$body" ;;
 esac
+
+# =============================================================================
+# 9. bitmap:port is checked as a CAPABILITY, not as a loaded module
+# =============================================================================
+# Loading the module and having the type are different questions: bitmap:port can
+# be compiled into the kernel with no .ko anywhere, and it can be absent from the
+# firmware entirely. Only creating a set separates the two. It matters because
+# zport_tcp/zport_udp gate every nfqws rule and the engine has no --dport
+# fallback, so an unavailable type means no bypass at all — and it used to appear
+# only as a wall of raw "Set zport_tcp doesn't exist" from iptables (issue #27).
+rm -f "$TMP/nobitmap"
+out=$(run_load "$TMP/lib/system-modules/4.9-ndm-5")
+case "$out" in
+    *bitmap:port*) no "a working bitmap:port says nothing" "silence" "$out" ;;
+    *)             ok "a working bitmap:port says nothing" ;;
+esac
+grep -q 'create z2k_probe_bitmap bitmap:port' "$TMP/ipset.calls" \
+    && ok "the type is probed by actually creating a set" \
+    || no "the type is probed by actually creating a set" "a create" "$(tr '\n' ';' < "$TMP/ipset.calls")"
+grep -q 'destroy z2k_probe_bitmap' "$TMP/ipset.calls" \
+    && ok "the probe set is cleaned up again" \
+    || no "the probe set is cleaned up again" "a destroy" "$(tr '\n' ';' < "$TMP/ipset.calls")"
+
+: > "$TMP/nobitmap"
+out=$(run_load "$TMP/lib/system-modules/4.9-ndm-5")
+case "$out" in
+    *"bitmap:port is not available"*) ok "an unavailable type IS reported" ;;
+    *) no "an unavailable type IS reported" "a warning" "$out" ;;
+esac
+case "$out" in
+    *zport_tcp*|*zport_udp*) ok "the report names the sets that cannot be created" ;;
+    *) no "the report names the sets that cannot be created" "zport_*" "$out" ;;
+esac
+case "$out" in
+    *"bypass will not work"*) ok "the report states the consequence, not just the symptom" ;;
+    *) no "the report states the consequence, not just the symptom" "consequence" "$out" ;;
+esac
+rm -f "$TMP/nobitmap"
+
+# =============================================================================
+# 10. the INSTALL-TIME loader has the same properties as the runtime one
+# =============================================================================
+# lib/utils.sh had the original form of this bug and kept it after the runtime was
+# fixed: lsmod decided availability and the .ko path was hardcoded to
+# /lib/modules/<kver>. On the reported firmware that made the installer print a
+# red "Файл модуля не найден" for modules that are present, which reads as "your
+# fix did not work" to anyone who just reinstalled to get the fix.
+UTILS="$HERE/lib/utils.sh"
+if [ ! -f "$UTILS" ]; then
+    no "lib/utils.sh found" "a file" "missing"
+else
+    sed -e "s#/proc/net/#$TMP/proc/net/#g" \
+        -e "s#/lib/modules#$TMP/lib/modules#g" \
+        -e "s#/lib/system-modules#$TMP/lib/system-modules#g" \
+        -e "s#find /lib #find $TMP/lib #" "$UTILS" > "$TMP/utils2.sh"
+    grep -q "find $TMP/lib " "$TMP/utils2.sh" \
+        && ok "install-time: the bounded find is repointed at the fixture" \
+        || no "install-time: the bounded find is repointed at the fixture" "fixture path" "still /lib"
+
+    # the NDMS 5.1.2 layout, with the fallback walk switched off so the directory
+    # list is what has to resolve it
+    run_load "" >/dev/null
+    mkdir -p "$TMP/lib/system-modules/4.9-ndm-5"
+    : > "$TMP/lib/system-modules/4.9-ndm-5/xt_multiport.ko"
+    : > "$TMP/insmod.calls"; : > "$TMP/nofind"
+    out=$( . "$TMP/utils2.sh"; PATH="$BIN:$PATH"; load_kernel_module xt_multiport 2>&1; echo "rc=$?" )
+    rm -f "$TMP/nofind"
+    grep -q "$TMP/lib/system-modules/4.9-ndm-5/xt_multiport.ko" "$TMP/insmod.calls" \
+        && ok "install-time: the /lib/system-modules layout is searched (NDMS 5.1.2)" \
+        || no "install-time: the /lib/system-modules layout is searched" \
+              "system-modules path" "$(tr '\n' ';' < "$TMP/insmod.calls")"
+    case "$out" in
+        *rc=0*) ok "install-time: loading from system-modules succeeds" ;;
+        *)      no "install-time: loading from system-modules succeeds" "rc=0" "$out" ;;
+    esac
+
+    # built in: no complaint and no load attempt, the wall-of-red case
+    rm -rf "${TMP:?}/lib"; mkdir -p "$TMP/proc/net"
+    printf 'multiport\nconnbytes\n' > "$TMP/proc/net/ip_tables_matches"
+    printf 'NFQUEUE\n'              > "$TMP/proc/net/ip_tables_targets"
+    : > "$TMP/insmod.calls"; : > "$TMP/lsmod.out"
+    out=$( . "$TMP/utils2.sh"; PATH="$BIN:$PATH"; load_kernel_module xt_multiport 2>&1; echo "rc=$?" )
+    case "$out" in
+        *"не найден"*|*"Ошибка загрузки"*) no "install-time: a built-in module is not reported missing" "silence" "$out" ;;
+        *) ok "install-time: a built-in module is not reported missing" ;;
+    esac
+    case "$out" in
+        *rc=0*) ok "install-time: a built-in module succeeds" ;;
+        *)      no "install-time: a built-in module succeeds" "rc=0" "$out" ;;
+    esac
+    n=$(grep -c . "$TMP/insmod.calls" 2>/dev/null); n=${n:-0}
+    [ "$n" = 0 ] && ok "install-time: a built-in module triggers no insmod ($n)" \
+                 || no "install-time: a built-in module triggers no insmod" 0 "$n"
+
+    # genuinely absent -> a failure that names the consequence
+    rm -rf "${TMP:?}/lib"; : > "$TMP/proc/net/ip_tables_matches"
+    out=$( . "$TMP/utils2.sh"; PATH="$BIN:$PATH"; load_kernel_module xt_connbytes 2>&1; echo "rc=$?" )
+    case "$out" in
+        *rc=1*) ok "install-time: a genuinely absent module fails" ;;
+        *)      no "install-time: a genuinely absent module fails" "rc=1" "$out" ;;
+    esac
+    case "$out" in
+        *"установлены не будут"*) ok "install-time: the message states the consequence" ;;
+        *) no "install-time: the message states the consequence" "consequence" "$out" ;;
+    esac
+
+    # the preflight question: not "is it loaded" but "will it be loadable". It runs
+    # BEFORE the load step, so a .ko on disk must already count as available.
+    mkdir -p "$TMP/lib/system-modules/4.9-ndm-5"
+    : > "$TMP/lib/system-modules/4.9-ndm-5/xt_connbytes.ko"
+    : > "$TMP/proc/net/ip_tables_matches"
+    out=$( . "$TMP/utils2.sh"; PATH="$BIN:$PATH"; z2k_module_obtainable xt_connbytes; echo "rc=$?" )
+    case "$out" in
+        *rc=0*) ok "install-time: an unloaded .ko on disk counts as obtainable" ;;
+        *)      no "install-time: an unloaded .ko on disk counts as obtainable" "rc=0" "$out" ;;
+    esac
+    rm -rf "${TMP:?}/lib"
+    out=$( . "$TMP/utils2.sh"; PATH="$BIN:$PATH"; z2k_module_obtainable xt_connbytes; echo "rc=$?" )
+    case "$out" in
+        *rc=1*) ok "install-time: nothing on disk and nothing in the kernel is NOT obtainable" ;;
+        *)      no "install-time: nothing on disk and nothing in the kernel is NOT obtainable" "rc=1" "$out" ;;
+    esac
+
+    # and the capability probe, both ways
+    out=$( . "$TMP/utils2.sh"; PATH="$BIN:$PATH"; z2k_bitmap_port_available; echo "rc=$?" )
+    case "$out" in
+        *rc=0*) ok "install-time: a working bitmap:port probes available" ;;
+        *)      no "install-time: a working bitmap:port probes available" "rc=0" "$out" ;;
+    esac
+    : > "$TMP/nobitmap"
+    out=$( . "$TMP/utils2.sh"; PATH="$BIN:$PATH"; z2k_bitmap_port_available; echo "rc=$?" )
+    case "$out" in
+        *rc=1*) ok "install-time: a missing bitmap:port probes unavailable" ;;
+        *)      no "install-time: a missing bitmap:port probes unavailable" "rc=1" "$out" ;;
+    esac
+    rm -f "$TMP/nobitmap"
+fi
+
+# the two hardcoded assumptions must be gone from the installer as well
+INST="$HERE/lib/install.sh"
+if [ -f "$INST" ]; then
+    grep -q '/lib/modules/\$(uname -r)/ip_set_bitmap_port\.ko' "$INST" \
+        && no "installer: the hardcoded ip_set_bitmap_port path is gone" "absent" "still there" \
+        || ok "installer: the hardcoded ip_set_bitmap_port path is gone"
+    grep -q 'modinfo xt_' "$INST" \
+        && no "installer: the module preflight no longer trusts Entware's modinfo" "absent" "still there" \
+        || ok "installer: the module preflight no longer trusts Entware's modinfo"
+fi
+# lsmod may survive in exactly one place: the default branch of z2k_module_present,
+# for modules with no entry in the netfilter registries. Anywhere else it is the old
+# bug returning — a built-in module is never listed there.
+lsmod_code=$(grep -n 'lsmod' "$UTILS" | grep -vc '^[0-9]*:[[:space:]]*#')
+[ "$lsmod_code" -le 1 ] \
+    && ok "install-time: lsmod decides nothing but the fallback case ($lsmod_code use)" \
+    || no "install-time: lsmod decides nothing but the fallback case" "<=1 use" "$lsmod_code"
+grep -A3 '^check_kernel_module()' "$UTILS" | grep -q 'lsmod' \
+    && no "install-time: check_kernel_module no longer keys off lsmod" "absent" "still there" \
+    || ok "install-time: check_kernel_module no longer keys off lsmod"
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

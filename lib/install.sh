@@ -837,26 +837,18 @@ kmod_ndms
         print_success "ipset уже установлен"
     fi
 
-    # Проверка kernel модулей (на Keenetic встроены в ядро, не требуют установки)
-    # xt_NFQUEUE - КРИТИЧНО для перенаправления в NFQUEUE
-    if [ -f "/lib/modules/$(uname -r)/xt_NFQUEUE.ko" ] || lsmod | grep -q "xt_NFQUEUE" || modinfo xt_NFQUEUE >/dev/null 2>&1; then
-        print_success "Модуль xt_NFQUEUE доступен"
-    else
-        print_warning "Модуль xt_NFQUEUE не найден (может быть встроен в ядро)"
-    fi
-
-    # xt_connbytes, xt_multiport - для фильтрации пакетов
-    if modinfo xt_connbytes >/dev/null 2>&1 || grep -q "xt_connbytes" /proc/modules 2>/dev/null; then
-        print_success "Модуль xt_connbytes доступен"
-    else
-        print_warning "Модуль xt_connbytes не найден (может быть встроен в ядро)"
-    fi
-
-    if modinfo xt_multiport >/dev/null 2>&1 || grep -q "xt_multiport" /proc/modules 2>/dev/null; then
-        print_success "Модуль xt_multiport доступен"
-    else
-        print_warning "Модуль xt_multiport не найден (может быть встроен в ядро)"
-    fi
+    # Проверка kernel-модулей. Спрашиваем реестр ядра и дерево прошивки, а НЕ
+    # modinfo/lsmod: modinfo — это тот же Entware-инструмент, что и modprobe, он
+    # ищет в несуществующем /opt/lib/modules и на встроенном в ядро модуле честно
+    # отвечает "нет". Из-за этого шаг ругался на модули, которые на месте.
+    local module
+    for module in xt_NFQUEUE xt_connbytes xt_multiport; do
+        if z2k_module_obtainable "$module"; then
+            print_success "Модуль $module доступен"
+        else
+            print_warning "Модуль $module не найден в этой прошивке"
+        fi
+    done
 
     # Установить критичные пакеты если нужно (только ipset для Keenetic)
     if [ -n "$critical_packages" ]; then
@@ -996,12 +988,16 @@ step_load_kernel_modules() {
     local modules="xt_multiport xt_connbytes xt_NFQUEUE nfnetlink_queue"
 
     for module in $modules; do
-        load_kernel_module "$module" || print_warning "Модуль $module не загружен"
+        load_kernel_module "$module"
     done
 
-    # Load ip_set_bitmap_port from system modules (Entware modprobe cannot find it)
-    if ! lsmod | grep -q "ip_set_bitmap_port"; then
-        insmod "/lib/modules/$(uname -r)/ip_set_bitmap_port.ko" 2>/dev/null || true
+    # bitmap:port — отдельно и с настоящей проверкой. Раньше здесь был insmod по
+    # одному жёстко прошитому пути с проглоченным результатом, и случай "типа в
+    # прошивке нет" всплывал уже на старте сервиса стеной сырых
+    # "Set zport_tcp doesn't exist" от iptables, без единого намёка на причину.
+    if ! z2k_bitmap_port_available; then
+        print_error "ipset не умеет bitmap:port в этой прошивке"
+        print_warning "Наборы портов zport_tcp/zport_udp создать нельзя, значит правила nfqws не встанут и пакетный обход работать не будет"
     fi
 
     print_success "Модули ядра загружены"
