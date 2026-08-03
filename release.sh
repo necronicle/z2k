@@ -204,8 +204,51 @@ if ! cmp -s "$_probe" "$MANIFEST"; then
 fi
 rm -f "$_probe"
 
+# Подписать манифест (issue #28). Делается ПОСЛЕ gen_file_hashes: подпись берётся
+# с финального байта, иначе она не сойдётся на роутере.
+#
+# Приватный ключ в репозитории отсутствует намеренно — он и есть то, чего нет у
+# того, кто скомпрометирует GitHub. Ищем его вне дерева; путь переопределяется
+# через Z2K_SIGNING_KEY.
+#
+# macOS отдаёт LibreSSL, который Ed25519 не умеет, поэтому берём настоящий
+# OpenSSL, если он есть.
+SIGN_KEY="${Z2K_SIGNING_KEY:-$HOME/.z2k-signing/z2k-update-priv.pem}"
+OSSL=openssl
+for _o in /opt/homebrew/bin/openssl /usr/local/bin/openssl; do
+    [ -x "$_o" ] && { OSSL="$_o"; break; }
+done
+
+if [ ! -s "$SIGN_KEY" ]; then
+    echo >&2
+    echo "ERROR: приватный ключ подписи не найден: $SIGN_KEY" >&2
+    echo "Манифест без подписи роутеры с установленным публичным ключом ОТВЕРГНУТ." >&2
+    echo "Укажи путь через Z2K_SIGNING_KEY, либо создай ключ:" >&2
+    echo "  mkdir -p ~/.z2k-signing && chmod 700 ~/.z2k-signing" >&2
+    echo "  openssl genpkey -algorithm ed25519 -out ~/.z2k-signing/z2k-update-priv.pem" >&2
+    echo "  chmod 600 ~/.z2k-signing/z2k-update-priv.pem" >&2
+    exit 1
+fi
+
+if ! "$OSSL" pkeyutl -sign -inkey "$SIGN_KEY" -rawin \
+        -in "$MANIFEST" -out "${MANIFEST}.sig" 2>/dev/null; then
+    echo "ERROR: не удалось подписать манифест ($OSSL)" >&2
+    exit 1
+fi
+
+# Немедленно проверяем своей же публичной половиной — подпись, которая не
+# сходится, хуже отсутствующей: роутеры отвергнут обновление все разом.
+if ! "$OSSL" pkeyutl -verify -pubin -inkey "$REPO_DIR/files/etc/z2k-update-pub.pem" \
+        -rawin -in "$MANIFEST" -sigfile "${MANIFEST}.sig" >/dev/null 2>&1; then
+    echo "ERROR: подпись не сходится с публичным ключом из files/etc/ — релиз остановлен." >&2
+    echo "Похоже, приватный ключ не соответствует опубликованному публичному." >&2
+    rm -f "${MANIFEST}.sig"
+    exit 1
+fi
+echo "манифест подписан и проверен: UPDATES.json.sig ($(wc -c < "${MANIFEST}.sig" | tr -d ' ') байт)"
+
 echo
 echo "Next:"
-echo "  git -C $REPO_DIR add UPDATES.json webpanel/www/index.html"
+echo "  git -C $REPO_DIR add UPDATES.json UPDATES.json.sig webpanel/www/index.html"
 echo "  git -C $REPO_DIR commit -m 'release: $TYPE — $DESC'"
 echo "  git -C $REPO_DIR push origin z2k-enhanced"

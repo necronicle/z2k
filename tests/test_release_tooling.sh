@@ -142,7 +142,12 @@ git checkout -q -- lib/install.sh
 # не попадают (git ls-files их не видит), значит и опасности не создают.
 echo x > untracked_probe.tmp
 out=$(sh release.sh patch "тест: только untracked" 2>&1); rc=$?
-if [ "$rc" -eq 0 ]; then
+# release.sh подписывает манифест и без приватного ключа отказывается работать —
+# это намеренно, неподписанный манифест отвергнет весь парк. Но ключ есть только
+# у мейнтейнера, поэтому у остальных этот случай не провал, а пропуск.
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ключ подписи не найден'; then
+    printf '[SKIP] untracked-файлы не блокируют релиз (нет приватного ключа подписи)\n'
+elif [ "$rc" -eq 0 ]; then
     ok "untracked-файлы не блокируют релиз"
 else
     no "untracked-файлы не блокируют релиз" "0" "$rc: $(printf '%s' "$out" | head -1)"
