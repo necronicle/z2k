@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-70.1",
+  "current": "p-70.2",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "c8b2b619831886a10aa080fb2b90843de8002112b52e1a676da4251eb6aabd43",
@@ -81,19 +81,19 @@
   "lib/config_official.sh": "f1e11e4cd0f397d53a886bc302f3a138c0dd3a5c8e0a48d1ed2300105754fbda",
   "lib/install.sh": "c2ecceb6595384d7616088cf4d86e77ab0fbffa9385861acbed547e6f5dff696",
   "lib/menu.sh": "b63903a847ca6c75ae4ec3778589da91002ad9e7f57b203b0a59383aa93dbd07",
-  "lib/strategies.sh": "904cc2f958edbd9137480220ed2064507b34c3d6c2a66be79cae239a8eb14ee0",
+  "lib/strategies.sh": "79a63e14e15446263fcea76090920eaeaecb4aa18fa523c46f31af583ff6bf51",
   "lib/system_init.sh": "5884cce213e66f459fa0a2232dfebf8ff2e29418bae75efd67555c5405eb3461",
   "lib/utils.sh": "1440077fab71b7adaddc44e2d14df1c11395009123726d975d8a890143bfc6f6",
   "lib/webpanel.sh": "b5a673e0f2037188d68064e086ef693e65d797e750c3a56a32b0aeaa442373bd",
-  "webpanel/cgi/actions.sh": "65af1d3ac73d5ceeb6ca12de85143f6ba5991002d8bdfd3f7a45c9cef68585c1",
+  "webpanel/cgi/actions.sh": "67cd549aa0d79f36e9493412e4a3fc6e764bb7b06ad17fe1ca65d32607ea12f3",
   "webpanel/cgi/api.sh": "281e3f2e00c02926c50aa9f4b907c720ddea6302beb34b9f96340d5b7ba154d3",
   "webpanel/cgi/auth.sh": "75cfaf0f99a7f13b2b61414463d08e13b27ab08bb5355420d9a52608123eecef",
   "webpanel/init.d/S96z2k-webpanel": "6d86392f3583dd81643460402c9eb8d6cc0aaaaf85eb39d270277765d4d5f2af",
   "webpanel/install.sh": "c20c1e44dcbc48782de70e211e04073bcc578bce64aa516b0fdcc8f3f964379f",
   "webpanel/uninstall.sh": "1fe2374c8d6497c60bc831578ccd3176202a67de33f7a4ddc48d2fcb83137b36",
-  "webpanel/www/app.js": "b93a4b26020f7ce33ec6e9a02b2bdc0f4d20a60fe67cd74cda3e916504d65d72",
+  "webpanel/www/app.js": "189e3f606a4792668d96d4fbbe6126c3de10bf45057988819be710a6543f10bf",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "de47edb71c1173e3777d3e3ea59ecc5eb6ef8eb3daee39bdea448a008606d35c",
+  "webpanel/www/index.html": "6cc6dd5e4c0683e288e7d366ee7e34e0ace77fae2313d25927bd3aec7d6bd976",
   "webpanel/www/style.css": "74d4e820fca57892990718649193f2da191a8a61c1c2abc182f6dc5f93c42f3a",
   "z2k.sh": "b43cbc34bca05b2afe81bdcbed5edf0d190cd8aa15d8437cedf2e8e2ab82e100"
   },
@@ -230,6 +230,7 @@
 {"v": "p-69", "type": "patch", "ts": "2026-07-29T14:00:00Z", "ref": "6ed24c9", "desc": "Две вещи по просьбам. Появился переключатель автохостлиста: в этом режиме движок сам замечает недоступные домены и добавляет их, не дожидаясь, пока их внесут в списки — по умолчанию выключен, включается в меню и в веб-панели. И теперь можно задать свою строку параметров для любого набора сайтов вместо автоподбора: раздел «Стратегии» в панели. Строка проверяется перед применением и переживает обновления и переустановку.", "changed_files": ["UPDATES.json", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "tests/test_custom_strategies.sh", "tests/test_auto_update_toggle.sh"]},
 {"v": "p-69.1", "type": "patch", "ts": "2026-07-29T17:30:00Z", "ref": "c1d0093", "desc": "Исправление к предыдущему обновлению: переключатель автохостлиста менял настройку, но не перезапускал обход, из-за чего режим не вступал в силу до следующего перезапуска. Также в WARP вернулись крупные диапазоны Amazon — раньше они ошибочно отбрасывались, хотя именно на них стоит часть заблокированных по IP сервисов.", "changed_files": ["UPDATES.json", "files/z2k-warp.sh", "files/z2k-update-lists.sh", "webpanel/cgi/actions.sh", "webpanel/www/app.js", "webpanel/www/index.html", "tests/test_warp_lists.sh", "tests/test_warp_games.sh", "tests/test_custom_strategies.sh"]},
 {"v": "r-70", "type": "reinstall", "ts": "2026-08-01T15:37:27Z", "ref": "160f92d", "desc": "Обновлён движок обхода до свежей версии от автора проекта: списки сайтов теперь загружаются и на роутерах со сбитыми часами, устранено редкое падение при загрузке фейковых пакетов, добавлены проверки, не дающие движку отправить испорченный пакет. Обновление ставится полной переустановкой — около трёх минут, ваши настройки, списки и стратегии сохраняются.", "changed_files": ["UPDATES.json", "lib/install.sh", "webpanel/www/index.html"]},
-{"v": "p-70.1", "type": "patch", "ts": "2026-08-03T05:50:07Z", "ref": "b32ced8", "desc": "Установщик больше не сообщает об отсутствии системных компонентов, которые на самом деле есть в прошивке роутера. Добавлена понятная диагностика для редкого случая, когда прошивка не поддерживает нужный тип списков: раньше в этой ситуации обход просто не работал, не объясняя причину.", "changed_files": ["files/S99zapret2.new", "lib/install.sh", "lib/utils.sh", "UPDATES.json", "webpanel/www/index.html"]}
+{"v": "p-70.1", "type": "patch", "ts": "2026-08-03T05:50:07Z", "ref": "b32ced8", "desc": "Установщик больше не сообщает об отсутствии системных компонентов, которые на самом деле есть в прошивке роутера. Добавлена понятная диагностика для редкого случая, когда прошивка не поддерживает нужный тип списков: раньше в этой ситуации обход просто не работал, не объясняя причину.", "changed_files": ["files/S99zapret2.new", "lib/install.sh", "lib/utils.sh", "UPDATES.json", "webpanel/www/index.html"]},
+{"v": "p-70.2", "type": "patch", "ts": "2026-08-03T07:04:15Z", "ref": "31be8da", "desc": "Своя стратегия, заданная в разделе «Стратегии» веб-панели, теперь действительно применяется: раньше настройка сохранялась, но роутер до перезапуска вручную продолжал работать с прежней. Также приведено в порядок описание проекта — раздел про свои стратегии рассказывал про способ, который давно не работал.", "changed_files": ["lib/strategies.sh", "UPDATES.json", "webpanel/cgi/actions.sh", "webpanel/www/app.js", "webpanel/www/index.html"]}
   ]
 }
