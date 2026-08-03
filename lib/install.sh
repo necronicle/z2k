@@ -1008,6 +1008,72 @@ step_load_kernel_modules() {
 # ШАГ 5: УСТАНОВКА ZAPRET2 (ИСПОЛЬЗУЯ ОФИЦИАЛЬНЫЙ install_bin.sh)
 # ==============================================================================
 
+# Сверить распакованные бинарники движка с sha256sum.txt из того же релиза.
+#
+# До этого тарбол не проверялся ничем: ни хешем, ни подписью, ни на одном из трёх
+# хопов. При этом второй хоп — сторонний gh-proxy.com, который терминирует TLS,
+# то есть отдаёт то, что захочет, под нашим же именем. А внутри архива лежит
+# nfqws2, который потом крутится под root и прописывается в автозагрузку.
+#
+# Почему сверяем распакованные файлы, а не сам тарбол: апстрим публикует
+# sha256sum.txt с хешами ОТДЕЛЬНЫХ бинарников внутри архива, а не архива целиком.
+# Нам это и нужно — проверяется ровно то, что реально пойдёт исполняться.
+#
+# Список хешей тянем через z2k_fetch, а не тем же curl'ом, что и тарбол: z2k_fetch
+# ходит первым хопом через наш VPS с SNI-passthrough, где сертификат остаётся
+# githubовским. Поэтому подменённый на gh-proxy архив ловится, даже если сам
+# тарбол пришёл именно оттуда.
+verify_release_binaries() {
+    local release_dir="$1" release_url="$2"
+    local sums_url sums_file="${PWD}/sha256sum.txt"
+
+    case "$release_url" in
+        */releases/download/*/*)
+            sums_url="${release_url%/*}/sha256sum.txt" ;;
+        *)
+            print_warning "Проверка хешей пропущена: нестандартный URL релиза"
+            return 0 ;;
+    esac
+
+    rm -f "$sums_file"
+    if ! z2k_fetch "$sums_url" "$sums_file" 2>/dev/null || [ ! -s "$sums_file" ]; then
+        # Сеть может не дать файл, а рушить установку из-за недоступности зеркала
+        # нельзя — но и молчать об этом тоже: юзер должен знать, что движок встал
+        # непроверенным.
+        print_warning "Не удалось получить sha256sum.txt — бинарники движка ставятся БЕЗ проверки целостности"
+        rm -f "$sums_file"
+        return 0
+    fi
+
+    local checked=0 bad=0 f rel want have
+    for f in "$release_dir"/binaries/*/nfqws2 "$release_dir"/binaries/*/ip2net "$release_dir"/binaries/*/mdig; do
+        [ -f "$f" ] || continue
+        rel=${f#./}
+        want=$(awk -v p="$rel" '$2 == p { print $1; exit }' "$sums_file")
+        [ -n "$want" ] || continue
+        have=$(z2k_sha256_file "$f")
+        checked=$((checked + 1))
+        if [ "$want" != "$have" ]; then
+            bad=$((bad + 1))
+            print_error "Хеш не совпал: $rel"
+        fi
+    done
+    rm -f "$sums_file"
+
+    if [ "$bad" -gt 0 ]; then
+        print_error "Бинарники движка не прошли проверку целостности ($bad из $checked)"
+        print_info "Архив мог быть подменён на зеркале. Установка прервана."
+        return 1
+    fi
+    if [ "$checked" = 0 ]; then
+        print_warning "В sha256sum.txt не нашлось ни одной записи для распакованных бинарников"
+        return 0
+    fi
+
+    print_success "Целостность бинарников движка проверена ($checked файлов)"
+    return 0
+}
+
 download_openwrt_embedded_release() {
     local url="$1"
     local dest="$2"
@@ -1369,6 +1435,8 @@ step_build_zapret2() {
     fi
 
     print_success "Релиз распакован: $release_dir"
+
+    verify_release_binaries "$release_dir" "$openwrt_url" || return 1
 
     # ===========================================================================
     # ШАГ 4.3: Использовать install_bin.sh для установки бинарников
@@ -3310,7 +3378,13 @@ step_finalize() {
             if [ -f "$zd_tmp" ] && [ "$zd_size" -gt 500000 ] 2>/dev/null; then
                 if head -c 4 "$zd_tmp" 2>/dev/null | grep -q "ELF"; then
                     chmod +x "$zd_tmp"
-                    zd_valid=true
+                    # Размер и сигнатура ELF есть и у сборки под ЧУЖУЮ арку —
+                    # обе проверки её пропускают, дальше печатается «установлен»,
+                    # а демон просто никогда не стартует. Гоняем бинарник, как это
+                    # давно делают tg-mtproxy и rt-proxy рядом.
+                    if "$zd_tmp" --help >/dev/null 2>&1; [ $? -le 2 ]; then
+                        zd_valid=true
+                    fi
                 fi
             fi
             if $zd_valid; then
