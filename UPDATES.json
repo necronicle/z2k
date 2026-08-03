@@ -77,10 +77,9 @@
   "lib/auto_update.sh": "a3877a3235a8387ba4deabba43d37e4617524be58ac1b612fb0f6db9f401a389",
   "lib/config.sh": "7cde5472072c8ef7eb7e232a73ec196c15b3fe08db1b91d361c82cf0478267cc",
   "lib/config_official.sh": "55f3a74afa1b5093a74f5a43b9f90e3c5a7103a198fc6abf1963c8e15f36bbea",
-  "lib/install.sh": "764f73382747ff129d43652ba172dd4fbb5e2be1077f233640b022e5837b6e00",
+  "lib/install.sh": "619315ce240c27b9c87852b14688496845dde2b653d0cefe1051e0da0d7fba7f",
   "lib/menu.sh": "a348ab7c67ac10c85844b326d8961753e218f9f12977cee8495031da9a7b90be",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
-  "lib/system_init.sh": "5884cce213e66f459fa0a2232dfebf8ff2e29418bae75efd67555c5405eb3461",
   "lib/utils.sh": "c68f2ff10a01ed62fd202110dda318f23c7d544d92b7aa38551e01ab4d009575",
   "lib/webpanel.sh": "b5a673e0f2037188d68064e086ef693e65d797e750c3a56a32b0aeaa442373bd",
   "webpanel/cgi/actions.sh": "1ebb299437bbcb4d829b7efdabb531f0125518911cc193ace4e0098334bf7741",
@@ -93,7 +92,7 @@
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/index.html": "6cc6dd5e4c0683e288e7d366ee7e34e0ace77fae2313d25927bd3aec7d6bd976",
   "webpanel/www/style.css": "74d4e820fca57892990718649193f2da191a8a61c1c2abc182f6dc5f93c42f3a",
-  "z2k.sh": "f77b19038dbc99f54807d6b545231223e0df42aa6ffee558d9aefa216da85b74"
+  "z2k.sh": "82080fdf96da34cbb5b0b16bcd3c016b9e2dd6ce0d1cd09636864c281b061e4b"
   },
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
