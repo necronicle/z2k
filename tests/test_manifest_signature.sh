@@ -119,14 +119,42 @@ else
     ok "приватного ключа нет в репозитории"
 fi
 
-# Релизный скрипт обязан подписывать и падать без ключа — иначе однажды уедет
-# неподписанный манифест, и весь парк с ключом его отвергнет.
+# Подпись обязана ставиться ТАМ ЖЕ, где меняется манифест.
+#
+# Роутер тянет UPDATES.json с головы ветки, а не с релизного тега, поэтому любой
+# коммит, пересобирающий files_sha256, меняет байты манифеста. Подписывай мы его
+# в release.sh — первый же обычный пуш оставил бы подпись от прошлого релиза и
+# молча остановил обновления у всего парка с ключом. Отсюда три требования.
+grep -q 'pkeyutl -sign' "$HERE/scripts/gen_file_hashes.sh" \
+    && ok "подпись ставится в генераторе манифеста, а не в релизе" \
+    || no "подпись ставится в генераторе" "pkeyutl -sign" "нет"
+grep -q 'pkeyutl -verify' "$HERE/scripts/gen_file_hashes.sh" \
+    && ok "генератор сам проверяет получившуюся подпись" \
+    || no "генератор проверяет подпись" "pkeyutl -verify" "нет"
 grep -q 'pkeyutl -sign' "$HERE/release.sh" \
-    && ok "release.sh подписывает манифест" \
-    || no "release.sh подписывает манифест" "pkeyutl -sign" "нет"
-grep -q 'pkeyutl -verify' "$HERE/release.sh" \
-    && ok "release.sh сам проверяет получившуюся подпись" \
-    || no "release.sh проверяет подпись" "pkeyutl -verify" "нет"
+    && no "release.sh больше не подписывает сам" "нет подписывания" "pkeyutl -sign" \
+    || ok "release.sh больше не подписывает сам"
+grep -q 'UPDATES.json.sig отсутствует' "$HERE/release.sh" \
+    && ok "release.sh не выпускает релиз без подписи" \
+    || no "release.sh не выпускает релиз без подписи" "гейт" "нет"
+
+# И CI обязан сверять пару на ЗАКОММИЧЕННОМ дереве: локальный запуск генератора
+# можно забыть, а рассинхрон пары в ветке = остановленные обновления у всех.
+grep -q 'pkeyutl -verify' "$HERE/.github/workflows/ci.yml" \
+    && ok "CI сверяет подпись с закоммиченным манифестом" \
+    || no "CI сверяет подпись" "pkeyutl -verify" "нет"
+
+# Пара в репозитории должна реально сходиться — это то, что увидит роутер.
+if [ -s "$HERE/UPDATES.json.sig" ]; then
+    if "$OSSL" pkeyutl -verify -pubin -inkey "$HERE/files/etc/z2k-update-pub.pem" \
+            -rawin -in "$HERE/UPDATES.json" -sigfile "$HERE/UPDATES.json.sig" >/dev/null 2>&1; then
+        ok "закоммиченная пара UPDATES.json/.sig сходится"
+    else
+        no "закоммиченная пара сходится" "верная подпись" "не сошлась"
+    fi
+else
+    no "UPDATES.json.sig есть в дереве" "файл" "нет"
+fi
 
 printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" = 0 ]

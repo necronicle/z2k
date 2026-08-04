@@ -77,6 +77,25 @@ jobs:
           fi
           echo "манифест синхронен"
 
+      - name: UPDATES.json signature matches the committed manifest
+        run: |
+          # Роутер тянет манифест с головы ветки и, имея публичный ключ, отвергает
+          # любой манифест без сходящейся подписи. Значит несоответствие пары
+          # UPDATES.json / UPDATES.json.sig в ветке = молча остановленные
+          # обновления у всего парка: вебморда продолжает показывать «доступно»,
+          # а применение падает со строкой в логе, которую никто не читает.
+          # Поэтому пара сверяется здесь, на ЗАКОММИЧЕННОМ дереве.
+          if [ ! -s UPDATES.json.sig ]; then
+            echo "::error::UPDATES.json.sig отсутствует. Запусти sh scripts/gen_file_hashes.sh с приватным ключом и закоммить обе половины."
+            exit 1
+          fi
+          if ! openssl pkeyutl -verify -pubin -inkey files/etc/z2k-update-pub.pem \
+                 -rawin -in UPDATES.json -sigfile UPDATES.json.sig >/dev/null 2>&1; then
+            echo "::error::Подпись не сходится с UPDATES.json. Манифест меняли без переподписи — роутеры с ключом отвергнут обновление."
+            exit 1
+          fi
+          echo "подпись манифеста сходится"
+
       - name: Run shell unit tests
         run: sh tests/run_all.sh
 

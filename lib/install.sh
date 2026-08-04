@@ -1201,6 +1201,35 @@ step_build_zapret2() {
     fi
     export Z2K_PREFETCH_LISTS_DIR="$_prefetch_dir"
 
+    # Спасти настройки из недостроенной прошлой установки.
+    #
+    # Бэкап ниже собирается из ЖИВОГО /opt/zapret2. Если прошлый прогон оборвался
+    # после mv (питание, OOM, обрыв SSH) — живое дерево недостроено и config'а в
+    # нём нет, а настоящий лежит в сироте .old. Собрать бэкап из пустышки, а
+    # потом снести сироту уборкой ниже — значит уничтожить обе копии за проход.
+    # Поэтому недостающее переносим из сироты сюда ДО бэкапа: дальше всё
+    # работает как обычно, потому что читает уже полное дерево.
+    if [ -d "$ZAPRET2_DIR" ] && [ ! -f "$ZAPRET2_DIR/config" ]; then
+        local _rescue _rescued=""
+        for _rescue in "${ZAPRET2_DIR}".old.*; do
+            [ -d "$_rescue" ] && [ -f "$_rescue/config" ] || continue
+            _rescued="$_rescue"
+        done
+        if [ -n "$_rescued" ]; then
+            print_warning "Прошлая установка не завершилась — восстанавливаю настройки из ${_rescued##*/}"
+            local _item
+            for _item in config lists/whitelist.txt lists/extra-domains.txt \
+                         lists/custom-strategies lists/warp \
+                         extra_strats/cache/autocircular/state.tsv .z2k-relay-id; do
+                [ -e "$_rescued/$_item" ] || continue
+                [ -e "$ZAPRET2_DIR/$_item" ] && continue
+                mkdir -p "$(dirname "$ZAPRET2_DIR/$_item")" 2>/dev/null
+                cp -a "$_rescued/$_item" "$ZAPRET2_DIR/$_item" 2>/dev/null \
+                    && print_info "  восстановлено: $_item"
+            done
+        fi
+    fi
+
     # Сохранить пользовательские данные перед удалением
     local backup_tmp="/opt/z2k-upgrade-backup"
     rm -rf "$backup_tmp"
@@ -1342,6 +1371,13 @@ step_build_zapret2() {
         for _orphan in "${ZAPRET2_DIR}".old.*; do
             [ -d "$_orphan" ] || continue
             [ "$_orphan" = "${Z2K_OLD_TREE_BACKUP:-}" ] && continue
+            # Подстраховка к спасению выше: сироту с config'ом не трогаем, пока
+            # в бэкапе config'а нет. Иначе единственная целая копия настроек
+            # уедет в rm -rf, а восстанавливать станет неоткуда.
+            if [ -f "$_orphan/config" ] && [ ! -f "$backup_tmp/config" ]; then
+                print_warning "Оставляю ${_orphan##*/}: там есть config, а в бэкапе его нет"
+                continue
+            fi
             rm -rf "$_orphan" 2>/dev/null && _freed=$((_freed + 1))
         done
         [ "$_freed" -gt 0 ] && print_info "Убрано незавершённых копий от прошлых установок: ${_freed}"
