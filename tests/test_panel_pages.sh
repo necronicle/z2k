@@ -35,18 +35,43 @@ for r in $ROUTES; do
     else no "страница #/$r НЕ отрисовалась"; fi
 done
 
-# Мета-проверка: тест обязан ЛОВИТЬ поломку, иначе он декорация. Собираем копию
-# без STRATEGY_POOL_NAMES — ровно тот дефект, что уехал в r-71.1, — и требуем,
-# чтобы прогон на ней провалился.
-tmp=$(mktemp "${TMPDIR:-/tmp}/z2k_panel.XXXXXX") || exit 1
-awk '/^  const STRATEGY_POOL_NAMES = \{/{skip=1} skip && /^  \};$/{skip=0; next} !skip' \
-    "$ROOT/webpanel/www/app.js" > "$tmp"
-if node "$ROOT/tests/panel_harness.js" "$tmp" strategies 2>&1 | grep -q "ПАДАЕТ"; then
-    ok "тест ловит реальную поломку (удалённая константа)"
-else
-    no "тест НЕ ловит удалённую константу — проверка бесполезна"
-fi
-rm -f "$tmp"
+# Мета-проверки: тест обязан ЛОВИТЬ поломку, иначе он декорация. Случаев ДВА, и
+# это принципиально — они ловятся разными механизмами.
+#
+#   STRATEGY_POOL_NAMES используется ВНЕ try/catch: исключение вылетает наружу,
+#   его видит обработчик unhandledRejection.
+#   STATE_SORT_LABELS используется ВНУТРИ try/catch: код ловит исключение сам и
+#   пишет текст ошибки в DOM, наружу не выходит НИЧЕГО. До r-72.1 харнесс такое
+#   не видел вовсе и отвечал «ok» — то есть защищал один маршрут из девяти.
+#
+# Если оставить только первый случай, проверка самоподтверждающаяся: она
+# доказывает лишь то, что уже умеет.
+meta_case() {
+    local label="$1" pattern="$2" route="$3" tmp
+    tmp=$(mktemp "${TMPDIR:-/tmp}/z2k_panel.XXXXXX") || return 1
+    # Вырезаем от строки объявления до первой строки, ЗАКАНЧИВАЮЩЕЙСЯ на };
+    # включительно. Обе формы объявления живут в файле рядом: многострочная
+    # (STRATEGY_POOL_NAMES) и однострочная (STATE_SORT_LABELS). Прежний вариант
+    # ждал закрывающую скобку ОТДЕЛЬНОЙ строкой и на однострочной вырезал файл
+    # до конца — мета-случай тогда не собирался, а выглядело это как «тест не
+    # ловит поломку».
+    awk -v pat="$pattern" '
+        $0 ~ pat { skip=1 }
+        skip { if (/\};[[:space:]]*$/) skip=0; next }
+        { print }' "$ROOT/webpanel/www/app.js" > "$tmp"
+    if ! grep -q "$pattern" "$tmp"; then
+        if node "$ROOT/tests/panel_harness.js" "$tmp" "$route" 2>&1 | grep -q "ПАДАЕТ"; then
+            ok "тест ловит поломку: $label"
+        else
+            no "тест НЕ ловит поломку: $label — проверка бесполезна"
+        fi
+    else
+        no "мета-случай не собрался: $label (константа не вырезалась)"
+    fi
+    rm -f "$tmp"
+}
+meta_case "константа вне try/catch (регрессия r-71.1)" "const STRATEGY_POOL_NAMES = " strategies
+meta_case "константа ВНУТРИ try/catch (ошибка отрисована, не брошена)" "const STATE_SORT_LABELS = " state
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" = "0" ]

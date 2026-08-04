@@ -6,12 +6,30 @@ const path = process.argv[2];
 const routes = process.argv.slice(3);
 
 const errors = [];
+
+// Ловим ошибки, которые код ПОЙМАЛ и отрисовал вместо того, чтобы бросить.
+// Без этого харнесс защищал ровно один маршрут из девяти: почти каждый
+// загрузчик обёрнут в try/catch и на исключении пишет текст в DOM, а наружу
+// ничего не выходит — прогон отвечает «ok». Именно так выглядела бы регрессия
+// r-71.1, случись она в любой странице кроме «Свои стратегии».
+//
+// Список шаблонов узкий намеренно. Ловим ТОЛЬКО признаки поломки кода —
+// обращение к несуществующему имени или вызов не-функции. Общие маркеры вроде
+// «Ошибка» или класса var(--bad) брать нельзя: ими штатно сообщают «сервис не
+// запущен» и «не удалось загрузить», и тест краснел бы на здоровой панели.
+const RENDERED_BUG = /(is not defined|is not a function|undefined is not|Cannot read propert|of undefined|of null)/;
+function noteRendered(html) {
+  const m = String(html).match(RENDERED_BUG);
+  if (m) errors.push("отрисована ошибка: " + m[0]);
+}
 const mkEl = () => {
   const el = {
     _h: "", style: {}, dataset: {}, classList: { add(){}, remove(){}, toggle(){}, contains(){return false} },
     children: [], attributes: {},
-    set innerHTML(v){ this._h = String(v); }, get innerHTML(){ return this._h; },
-    set textContent(v){ this._h = String(v); }, get textContent(){ return this._h; },
+    set innerHTML(v){ this._h = String(v); noteRendered(this._h); },
+    get innerHTML(){ return this._h; },
+    set textContent(v){ this._h = String(v); noteRendered(this._h); },
+    get textContent(){ return this._h; },
     addEventListener(){}, removeEventListener(){}, appendChild(){}, removeChild(){},
     setAttribute(k,v){ this.attributes[k]=v; }, getAttribute(k){ return this.attributes[k]; },
     removeAttribute(){}, querySelector(){ return mkEl(); }, querySelectorAll(){ return []; },
@@ -28,11 +46,36 @@ global.document = {
 };
 global.location = { hash: "#/dashboard", href: "http://r/", reload(){} };
 global.history = { replaceState(){}, pushState(){} };
-global.localStorage = { getItem(){ return null; }, setItem(){}, removeItem(){} };
+// Заглушки задаются ЯВНО и перекрывают хостовые, даже если node их предоставляет.
+// Иначе тест зависит от версии node: локальный v25 отдаёт настоящий
+// sessionStorage, и падение «sessionStorage is not defined» вылезло только на
+// CI, где node старее. Тест, который проходит из-за окружения, а не из-за кода,
+// хуже отсутствующего — он даёт ложную уверенность.
+const mkStorage = () => {
+  const m = new Map();
+  return {
+    getItem(k){ return m.has(String(k)) ? m.get(String(k)) : null; },
+    setItem(k, v){ m.set(String(k), String(v)); },
+    removeItem(k){ m.delete(String(k)); },
+    clear(){ m.clear(); },
+    key(i){ return Array.from(m.keys())[i] ?? null; },
+    get length(){ return m.size; },
+  };
+};
+global.localStorage = mkStorage();
+global.sessionStorage = mkStorage();
+// URL.createObjectURL/revokeObjectURL в node отсутствуют — их зовёт выгрузка
+// диагностики в файл (app.js:1348).
+if (typeof global.URL.createObjectURL !== "function") {
+  global.URL.createObjectURL = () => "blob:stub";
+  global.URL.revokeObjectURL = () => {};
+}
+if (typeof global.Blob !== "function") { global.Blob = class { constructor(){} }; }
 global.window = {
   addEventListener(t, fn){ if (t === "hashchange") global.__nav = fn; },
   removeEventListener(){}, matchMedia(){ return { matches:false, addEventListener(){}, addListener(){} }; },
-  location: global.location, localStorage: global.localStorage, document: global.document,
+  location: global.location, localStorage: global.localStorage,
+  sessionStorage: global.sessionStorage, document: global.document,
 };
 global.requestAnimationFrame = fn => setTimeout(fn, 0);
 global.cancelAnimationFrame = id => clearTimeout(id);
