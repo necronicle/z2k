@@ -204,23 +204,8 @@ if ! cmp -s "$_probe" "$MANIFEST"; then
 fi
 rm -f "$_probe"
 
-# Подпись теперь ставится внутри scripts/gen_file_hashes.sh — там же, где
-# меняется сам манифест. Здесь остаётся только гейт: без .sig релиз не выпускаем.
-# Причина переноса: роутер тянет манифест с ГОЛОВЫ ВЕТКИ, а не с релизного тега,
-# поэтому любой обычный пуш, пересобирающий files_sha256, менял бы байты
-# манифеста и оставлял подпись от релиза — то есть останавливал обновления у
-# всего парка с ключом.
-if [ ! -s "${MANIFEST}.sig" ]; then
-    echo >&2
-    echo "ERROR: UPDATES.json.sig отсутствует — манифест не подписан." >&2
-    echo "Приватный ключ ищется в \$Z2K_SIGNING_KEY или ~/.z2k-signing/z2k-update-priv.pem." >&2
-    echo "Неподписанный манифест отвергнут каждым роутером, у которого есть публичный ключ." >&2
-    exit 1
-fi
-echo "подпись на месте: UPDATES.json.sig ($(wc -c < "${MANIFEST}.sig" | tr -d ' ') байт)"
-
 echo
 echo "Next:"
-echo "  git -C $REPO_DIR add UPDATES.json UPDATES.json.sig webpanel/www/index.html"
+echo "  git -C $REPO_DIR add UPDATES.json webpanel/www/index.html"
 echo "  git -C $REPO_DIR commit -m 'release: $TYPE — $DESC'"
 echo "  git -C $REPO_DIR push origin z2k-enhanced"

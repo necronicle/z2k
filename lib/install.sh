@@ -3269,10 +3269,6 @@ step_finalize() {
     # broken. Carrying the roots removes that dependency entirely.
     mkdir -p "${ZAPRET2_DIR}/etc" 2>/dev/null
     deploy_critical_file "files/etc/z2k-roots.pem"               "${ZAPRET2_DIR}/etc/z2k-roots.pem" || return 1
-    # Публичный ключ проверки подписи манифеста (issue #28). Без него роутер
-    # обновления не отвергает, а принимает без проверки — поэтому ставится как
-    # критичный файл, наравне с корнями TLS.
-    deploy_critical_file "files/etc/z2k-update-pub.pem"          "${ZAPRET2_DIR}/etc/z2k-update-pub.pem" || return 1
     deploy_critical_file "files/init.d/S98tg-tunnel"             "/opt/etc/init.d/S98tg-tunnel" || return 1
     deploy_critical_file "files/ndm/90-z2k-tg-redirect.sh"        "/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh" || return 1
     print_success "Keenetic NDM hook установлен (auto-restore iptables)"
