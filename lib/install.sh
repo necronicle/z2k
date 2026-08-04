@@ -348,7 +348,16 @@ refresh_stale_ndmc_records() {
     # чтение одного и того же. Плюс сам nslookup ждёт 2 с, когда 8.8.8.8
     # недоступен (а его часто режут), и всё это происходило молча.
     local removed=0 line host ip current cfg
-    cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
+    # `|| true` обязателен. Голое `cfg=$(...)` возвращает код ndmc, а в z2k.sh
+    # стоит set -e и вся цепочка вызова голая — то есть любой сбой ndmc убивал
+    # бы УСТАНОВКУ ЦЕЛИКОМ. Старый код был к этому иммунен случайно: там стоял
+    # пайплайн `ndmc | grep`, и код брался от grep. Вынося дамп из цикла, я
+    # снял эту защиту, не заметив (найдено ревью r-72).
+    cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null) || true
+    # sort -u: файл отслеживания дописывается тремя местами без дедупликации,
+    # и точные дубли в нём есть. По слепку дубль выглядит живым и после
+    # удаления первой копии — вторая итерация зря идёт в nslookup (а он ждёт
+    # 2 с при зарезанном 8.8.8.8) и зря повторяет `no ip host`.
     while IFS=' ' read -r host ip; do
         [ -z "$host" ] || [ -z "$ip" ] && continue
         # Is this exact host=ip pair still present in running-config?
@@ -361,7 +370,9 @@ refresh_stale_ndmc_records() {
         if [ -z "$current" ] || [ "$current" != "$ip" ]; then
             LD_LIBRARY_PATH= ndmc -c "no ip host $host $ip" >/dev/null 2>&1 && removed=$((removed + 1))
         fi
-    done < "$managed"
+    done <<EOF
+$(sort -u "$managed" 2>/dev/null)
+EOF
 
     if [ "$removed" -gt 0 ]; then
         LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
@@ -371,12 +382,25 @@ refresh_stale_ndmc_records() {
         : > "$tmp"
         # Свежий дамп нужен: выше мы только что удаляли записи, и старый слепок
         # уже не отражает конфиг. Но снова ОДИН раз, а не на каждой строке.
-        cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
+        cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null) || true
+        # Пустой дамп здесь опаснее, чем в первом цикле: файл перестраивается
+        # ТОЛЬКО по нему, ни одна строка не пройдёт grep, и mv положил бы поверх
+        # пустышку — записи остались бы в конфиге навсегда без отслеживания.
+        # Гейт стоит на ДАМПЕ, а не на результате: пустой $tmp сам по себе
+        # законен, когда выше удалили все записи (так бывает при недоступном
+        # 8.8.8.8), и гейт на нём отравил бы файл фантомами навсегда.
+        if [ -z "$cfg" ]; then
+            rm -f "$tmp" 2>/dev/null
+            print_warning "Не удалось прочитать конфигурацию роутера — список отслеживания оставлен как был"
+            return 0
+        fi
         while IFS=' ' read -r host ip; do
             [ -z "$host" ] || [ -z "$ip" ] && continue
             printf '%s\n' "$cfg" | grep -qxE "ip host $host $ip" \
                 && printf '%s %s\n' "$host" "$ip" >> "$tmp"
-        done < "$managed"
+        done <<EOF
+$(sort -u "$managed" 2>/dev/null)
+EOF
         mv -f "$tmp" "$managed" 2>/dev/null
         print_info "Refresh: убрано $removed stale ip host записей (DNS-override layer)"
     fi
