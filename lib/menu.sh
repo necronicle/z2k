@@ -40,6 +40,7 @@ show_main_menu() {
 |  - Diman86RUS                                     |
 |  - Alex                                           |
 |  - GRM                                            |
+|  - Dez                                            |
 +===================================================+
 
 MENU
@@ -62,16 +63,6 @@ MENU
                 printf " Стратегии: %s категорий\n" "$count"
             else
                 printf " Текущая стратегия: #%s\n" "$(get_current_strategy)"
-            fi
-
-            # Проверить режим ALL TCP-443
-            local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
-            if [ -f "$all_tcp443_conf" ]; then
-                local ENABLED
-                ENABLED=$(safe_config_read "ENABLED" "$all_tcp443_conf" "0")
-                if [ "$ENABLED" = "1" ]; then
-                    printf " Режим Austerusj: Включен (без хостлистов)\n"
-                fi
             fi
 
             # Показать статус RST-фильтра и silent fallback

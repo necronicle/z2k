@@ -429,29 +429,34 @@ assert_eq "inseq: applied to all circular tokens" "2" "$IS_COUNT4"
 # at the end of this file (see "pure-native default" block).
 export Z2K_NATIVE_DETECTORS=0
 
-printf "\n--- Austerus mode (all_tcp443) ---\n"
+printf "\n--- Austerus mode removed (all_tcp443) ---\n"
 
-# Create Austerus config in the mock dir and source config_official.sh
-# The function uses hardcoded /opt/etc/zapret2/all_tcp443.conf, so we test
-# the output shape by calling the function only if /opt is writable, or
-# by testing its Austerus branch in isolation.
+# Режим Austerusj снят 2026-08-04. Раньше здесь лежал тест, который ничего не
+# проверял: он ассертил строковый литерал, объявленный двумя строками выше, и
+# ни разу не вызывал генератор. Поэтому он и не заметил бы ни поломки ветки, ни
+# её удаления.
+#
+# Что проверяем теперь — ровно то, из-за чего режим был опасен: ветка
+# закорачивала ВСЮ генерацию конфига через `return 0`, выдавая три строки из
+# Zapret1 без хостлистов и без --hostlist-exclude=whitelist.txt. Гард держит
+# генератор от повторного знакомства с этим файлом: пока в нём нет ни чтения
+# all_tcp443.conf, ни ранней ветки, режим воскреснуть не может.
+GENERATOR_SRC=$(cat "${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/lib/config_official.sh" 2>/dev/null)
 
-# Simulate Austerus: create flag file and call the function
-# Since generate_nfqws2_opt_from_strategies reads /opt/etc/zapret2/all_tcp443.conf
-# directly, we test the Austerus output format independently.
+assert_not_contains "austerus: генератор больше не читает all_tcp443.conf" \
+    'safe_config_read "ENABLED" "$austerus_conf"' "$GENERATOR_SRC"
+assert_not_contains "austerus: закоротка AUSTERUS_OPT удалена" \
+    "AUSTERUS_OPT" "$GENERATOR_SRC"
+assert_not_contains "austerus: стратегии Zapret1 больше не эмитятся" \
+    "tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid" \
+    "$GENERATOR_SRC"
 
-AUSTERUS_OUTPUT='NFQWS2_OPT="
---filter-tcp=80 --lua-desync=fake:payload=http_req:dir=out:blob=zero_256:badsum:badseq --lua-desync=multisplit:payload=http_req:dir=out --new
---filter-tcp=443 --out-range=-d4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=zero_256:badsum:badseq --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5 --new
---filter-udp=443 --out-range=-d4 --lua-desync=fake:payload=quic_initial:dir=out:blob=zero_256:badsum:repeats=1
-"'
-
-assert_contains "austerus: contains --filter-tcp=80" "--filter-tcp=80" "$AUSTERUS_OUTPUT"
-assert_contains "austerus: contains --filter-tcp=443" "--filter-tcp=443" "$AUSTERUS_OUTPUT"
-assert_contains "austerus: contains --filter-udp=443" "--filter-udp=443" "$AUSTERUS_OUTPUT"
-assert_contains "austerus: contains --new separators" "--new" "$AUSTERUS_OUTPUT"
-assert_contains "austerus: starts with NFQWS2_OPT" 'NFQWS2_OPT="' "$AUSTERUS_OUTPUT"
-assert_not_contains "austerus: no hostlist in simplified mode" "--hostlist" "$AUSTERUS_OUTPUT"
+# Миграция, снимающая режим у затронутых, обязана существовать и сносить файл
+# безусловно — иначе откат на старую версию подхватит его снова.
+INSTALL_SRC=$(cat "${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/lib/install.sh" 2>/dev/null)
+assert_contains "austerus: миграция объявлена" "migrate_drop_austerus_mode()" "$INSTALL_SRC"
+assert_contains "austerus: миграция вызывается на установке" \
+    "$(printf '\n    migrate_drop_austerus_mode\n')" "$INSTALL_SRC"
 
 # ==============================================================================
 # TEST: Output format of generated config contains expected tokens

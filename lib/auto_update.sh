@@ -1007,7 +1007,11 @@ au_run_check() {
         v=$(au_entry_field "$entry" "v")
         desc=$(au_entry_field "$entry" "desc")
         etype=$(au_entry_field "$entry" "type")
-        echo "  [$v $etype] $desc"
+        # %b, а не echo: в манифесте переводы строк лежат как литеральные \n,
+        # и echo печатал бы их как есть. Описание r-72 — 2430 символов и 14
+        # переводов, то есть в меню по SSH человек получил бы одну строку на
+        # 2.4 КБ. Вебпанель не затронута, там JSON.parse.
+        printf '  [%s %s] %b\n' "$v" "$etype" "$desc"
     done <<EOF
 $entries
 EOF

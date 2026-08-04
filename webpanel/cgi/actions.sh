@@ -237,6 +237,47 @@ svc_start()   { ensure_init_exec; "$INIT_SCRIPT" start   2>&1; }
 svc_stop()    { ensure_init_exec; "$INIT_SCRIPT" stop    2>&1; }
 svc_restart() { ensure_init_exec; "$INIT_SCRIPT" restart 2>&1; }
 
+# Убрать файлы прошлых задач. Каждый запуск задачи из панели оставляет в /tmp
+# три файла (.log, .pid, .exit), и до 2026-08-04 их не удалял никто: на роутере
+# владельца накопилось 11 штук от четырёх запусков, два лога по 30 КБ. Само по
+# себе немного, но /tmp это tmpfs, то есть ОПЕРАТИВКА, и растёт этот мусор
+# только вверх до перезагрузки.
+#
+# Час, а не «всё кроме текущей»: панель после перезагрузки страницы теряет
+# job_id и может запросить лог недавней задачи по прямой ссылке, а обновление
+# идёт минуты. Час покрывает это с запасом и при этом не копит.
+#
+# -mmin и -delete у busybox find на роутере есть (проверено), но на всякий
+# случай без -delete есть запасной путь: отсутствие find не должно ронять
+# запуск задачи.
+job_reap() {
+    # Сносим только ЗАВЕРШЁННЫЕ задачи. Прежняя версия удаляла всё старше часа
+    # без разбора, включая .pid работающей задачи: job_status тогда отвечает
+    # "unknown", поллер панели крутится вечно, глобальный UI-лок не снимается, а
+    # модалка «Обновление идёт» всплывает при каждой перезагрузке вкладки —
+    # то есть уборка мусора ломала живое обновление. Установка на медленном
+    # роутере через час не укладывается запросто.
+    #
+    # Признак завершения — файл .exit (его пишут оба создателя задач по выходу).
+    # Если его нет, проверяем, жив ли процесс: не жив — задача умерла и её тоже
+    # можно убрать.
+    local f id pid
+    for f in /tmp/z2k-job-*.log; do
+        [ -f "$f" ] || continue
+        id=${f#/tmp/z2k-job-}; id=${id%.log}
+        # моложе часа — не трогаем в любом случае
+        find "$f" -maxdepth 0 -mmin +60 >/dev/null 2>&1 || continue
+        if [ ! -f "/tmp/z2k-job-${id}.exit" ]; then
+            pid=$(cat "/tmp/z2k-job-${id}.pid" 2>/dev/null)
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                continue    # задача ещё идёт — не трогаем
+            fi
+        fi
+        rm -f "/tmp/z2k-job-${id}.log" "/tmp/z2k-job-${id}.pid" "/tmp/z2k-job-${id}.exit" 2>/dev/null
+    done
+    return 0
+}
+
 # --- async job launcher ---
 #
 # Запускает любую shell-команду в фоне с tee всех её stdout/stderr в
@@ -252,6 +293,7 @@ svc_restart() { ensure_init_exec; "$INIT_SCRIPT" restart 2>&1; }
 # Использование:
 #   job_id=$(svc_action_async "Перезапуск сервиса" "/opt/etc/init.d/S99zapret2 restart")
 svc_action_async() {
+    job_reap
     local label="$1"; shift
     local cmd="$*"
     local job_id
@@ -1001,20 +1043,6 @@ job_exit_code() {
     cat "/tmp/z2k-job-$id.exit" 2>/dev/null || echo ""
 }
 
-# --- log tails (read-only) ---
-
-tail_service_log() {
-    local n="${1:-200}"
-    # Prefer the journal-less log that S99zapret2 writes; fallback to dmesg.
-    for f in /tmp/zapret2.log /var/log/messages /tmp/z2k-log/tg-tunnel.log; do
-        if [ -f "$f" ]; then
-            tail -n "$n" "$f"
-            return 0
-        fi
-    done
-    echo "(no service log found)"
-}
-
 # --- diag (Phase 3) ---
 #
 # Runs z2k-diag.sh in full mode. The raw output is a plain-text multi-section
@@ -1027,7 +1055,13 @@ diag_run() {
         echo "(z2k-diag.sh not installed — reinstall z2k to get it)"
         return 0
     fi
-    sh "$diag" 2>&1
+    # $1 = "report" → полные хвосты логов, для отдачи файлом. Без аргумента —
+    # компактная сводка, которую вставляют в сообщение целиком.
+    if [ "${1:-}" = "report" ]; then
+        sh "$diag" --report 2>&1
+    else
+        sh "$diag" 2>&1
+    fi
 }
 
 # --- rotator state (Phase 3) ---
@@ -1216,21 +1250,6 @@ pools_read() {
     }'
 }
 
-# --- geosite (Phase 3) ---
-
-geosite_run_async() {
-    local gs="$ZAPRET2_DIR/z2k-geosite.sh"
-    [ -x "$gs" ] || { echo "z2k-geosite.sh missing" >&2; return 1; }
-    local job_id
-    job_id=$(date +%s)$$
-    # See update_apply_async for why we close inherited CGI fds.
-    (
-        sh "$gs" fetch > "/tmp/z2k-job-$job_id.log" 2>&1
-        echo "$?" > "/tmp/z2k-job-$job_id.exit"
-    ) </dev/null >/dev/null 2>&1 &
-    echo "$!" > "/tmp/z2k-job-$job_id.pid"
-    printf '%s' "$job_id"
-}
 
 # --- debug flag (Phase 3) ---
 #
@@ -1393,6 +1412,7 @@ update_pending_entries() {
 # is appended by au_log; we duplicate to the per-job temp log for the UI.
 update_apply_async() {
     [ -x "$AU_SCRIPT" ] || { echo "auto-update script missing: $AU_SCRIPT" >&2; return 1; }
+    job_reap
     local job_id
     job_id=$(date +%s)$$
     # Daemonize: close stdin and detach stdout/stderr from the CGI pipes.

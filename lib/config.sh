@@ -223,29 +223,11 @@ show_domain_lists_stats() {
 show_active_processing() {
     print_header "Активная обработка трафика"
 
-    # Проверить режим ALL_TCP443
-    local all_tcp443_enabled=0
-    local all_tcp443_strategy=""
-    local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
-
-    if [ -f "$all_tcp443_conf" ]; then
-        all_tcp443_enabled=$(safe_config_read "ENABLED" "$all_tcp443_conf" "0")
-        all_tcp443_strategy=$(safe_config_read "STRATEGY" "$all_tcp443_conf" "")
-    fi
-
     # Показать режим работы
     print_info "Режим обработки трафика:"
     printf "\n"
-
-    if [ "$all_tcp443_enabled" = "1" ]; then
-        print_warning "[WARN]  РЕЖИМ AUSTERUSJ ВКЛЮЧЕН (без хостлистов)"
-        printf "    Обрабатывается ВЕСЬ трафик (TCP 80/443, UDP 443)\n"
-        printf "    Хостлисты и автоциркуляры НЕ используются!\n"
-        print_separator
-    else
-        print_success "[OK] Режим по спискам доменов (нормальный)"
-        printf "\n"
-    fi
+    print_success "[OK] Режим по спискам доменов (нормальный)"
+    printf "\n"
 
     # Показать активные списки
     print_info "Обрабатываемые списки доменов:"
@@ -317,15 +299,7 @@ show_active_processing() {
     print_separator
 
     # Итого
-    if [ "$all_tcp443_enabled" = "1" ]; then
-        print_warning "ВНИМАНИЕ: Весь HTTPS трафик обрабатывается!"
-        # Пункта меню под этот режим больше нет, а буква [A] с тех пор занята
-        # совсем другим — политикой доступа Keenetic. Старая подсказка вела
-        # человека настраивать фильтр устройств вместо того, что он искал.
-        print_info "Чтобы выключить: ENABLED=0 в ${CONFIG_DIR}/all_tcp443.conf, затем перезапустить сервис"
-    else
-        print_success "Режим работы: только списки доменов (рекомендуется)"
-    fi
+    print_success "Режим работы: только списки доменов"
 }
 
 # ==============================================================================
@@ -383,23 +357,6 @@ create_base_config() {
     local quic_category_conf="${CONFIG_DIR}/quic_category_strategies.conf"
     if [ -f "$quic_category_conf" ]; then
         rm -f "$quic_category_conf"
-    fi
-
-    # Создать конфиг для режима ALL_TCP443 (без хостлистов)
-    local all_tcp443_conf="${CONFIG_DIR}/all_tcp443.conf"
-    if [ ! -f "$all_tcp443_conf" ]; then
-        cat > "$all_tcp443_conf" <<'EOF'
-# Режим работы по ВСЕМ доменам TCP-443 без хостлистов
-# ВНИМАНИЕ: Этот режим применяет стратегию ко всему трафику HTTPS
-# Может замедлить соединения, но обходит любые блокировки
-
-# Включить режим: 1 = включен, 0 = выключен
-ENABLED=0
-
-# Номер стратегии для применения (1-199)
-STRATEGY=1
-EOF
-        print_success "Создан конфиг режима ALL_TCP443"
     fi
 
     # Создать директорию для списков если не существует

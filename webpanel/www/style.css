@@ -790,6 +790,44 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
+/* Вкладки уровня страницы («Стратегии»: Настройка / Сейчас работает).
+   Не .segmented: тот — переключатель режима внутри карточки, а здесь смена
+   вида целой страницы, и стандарт для неё — подчёркивание (GitHub, Linear,
+   AdGuard Home). Это ссылки, а не кнопки, потому что у каждой вкладки свой
+   маршрут: работают средний клик, «открыть в новой вкладке» и закладки. */
+.strat-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.strat-tabs::-webkit-scrollbar { display: none; }
+.strat-tab {
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--dur-micro) var(--spring-smooth),
+              border-color var(--dur-micro) var(--spring-smooth);
+}
+.strat-tab:hover { color: var(--text); }
+.strat-tab.active {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+.strat-tabhint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 .policy-help summary {
   cursor: pointer;
   color: var(--text-muted);

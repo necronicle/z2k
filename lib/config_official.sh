@@ -15,30 +15,23 @@ generate_nfqws2_opt_from_strategies() {
     # fallback (parameter-expansion is evaluated lazily, so this stays a
     # no-op in production where ZAPRET2_DIR is either unset or already set
     # to /opt/zapret2 by utils.sh). Tests can mock these by exporting
-    # ZAPRET2_DIR before invocation. config_dir stays absolute because
-    # /opt/etc/zapret2 has no canonical env-var counterpart and only gates
-    # the Austerus path which is independently tested.
-    local config_dir="/opt/etc/zapret2"
+    # ZAPRET2_DIR before invocation. Третьей переменной, config_dir, здесь больше
+    # нет: /opt/etc/zapret2 нужен был только ветке Austerus, снятой 2026-08-04.
     local extra_strats_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats"
     local lists_dir="${ZAPRET2_DIR:-/opt/zapret2}/lists"
 
-    # Режим Austerusj: простые стратегии без хостлистов, из Zapret1.
-    # Если включен — генерируем минимальный конфиг и выходим.
-    local austerus_conf="${config_dir}/all_tcp443.conf"
-    if [ -f "$austerus_conf" ]; then
-        local ENABLED
-        ENABLED=$(safe_config_read "ENABLED" "$austerus_conf" "0")
-        if [ "$ENABLED" = "1" ]; then
-            cat <<'AUSTERUS_OPT'
-NFQWS2_OPT="
---filter-tcp=80 --lua-desync=fake:payload=http_req:dir=out:blob=zero_256:badsum:badseq --lua-desync=multisplit:payload=http_req:dir=out --new
---filter-tcp=443 --out-range=-d4 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=zero_256:badsum:badseq --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:badsum:badseq:repeats=1:tls_mod=sni=www.google.com,rnd,dupsid --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=method+2,midsld,5 --new
---filter-udp=443 --out-range=-d4 --lua-desync=fake:payload=quic_initial:dir=out:blob=zero_256:badsum:repeats=1
-"
-AUSTERUS_OPT
-            return 0
-        fi
-    fi
+    # Режим Austerusj (all_tcp443.conf) СНЯТ 2026-08-04. Пункт меню, которым его
+    # включали, убрали ещё 2026-04-15 (96c24a9), а ветку в генераторе оставили —
+    # получился режим, который нельзя включить, но который продолжал работать у
+    # всех, кто успел его включить до апреля. И работал он разрушительно: ветка
+    # закорачивала ВСЮ генерацию конфига через `return 0`, так что роутер получал
+    # три строки стратегий из Zapret1 вместо хостлистов, whitelist'а и circular —
+    # то есть единственное место в z2k, где --hostlist-exclude=whitelist.txt не
+    # действовал вообще (сюда же упирался вопрос «почему keenetic-домены не
+    # исключаются»). Выйти из режима было нельзя ничем: файл лежит в
+    # /opt/etc/zapret2, а reinstall меняет /opt/zapret2, и пересоздавался он
+    # только при отсутствии. Миграция, снимающая режим у затронутых, —
+    # migrate_drop_austerus_mode() в lib/install.sh.
 
     # Загрузить текущие стратегии из категорий
     local youtube_tcp=""

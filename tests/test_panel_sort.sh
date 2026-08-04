@@ -113,7 +113,11 @@ case "$sheet" in
 esac
 # Every key the comparator understands must be offered by the sheet, or a phone
 # cannot reach a column the desktop can.
-cmp_keys=$(awk '/const sorted = entries.slice\(\).sort/,/^      \}\);/' "$JS" \
+# Якорь по ИМЕНИ переменной ломался: источник строк переименовали entries →
+# visible (из таблицы убрали записи host="nohost", это Discord-войс, у него своя
+# карточка), и awk молча вернул пустоту — тест падал с want= вместо настоящего
+# расхождения. Совпадение по любому идентификатору переживёт следующий рефактор.
+cmp_keys=$(awk '/const sorted = [A-Za-z_$][A-Za-z0-9_$]*\.slice\(\)\.sort/,/^      \}\);/' "$JS" \
            | sed -n 's/.*case "\([a-z]*\)":.*/\1/p' | LC_ALL=C sort | tr '\n' ',')
 lbl_keys=$(sed -n 's/.*const STATE_SORT_LABELS = { \(.*\) };/\1/p' "$JS" \
            | tr ',' '\n' | sed -n 's/^[[:space:]]*\([a-z]*\):.*/\1/p' | LC_ALL=C sort | tr '\n' ',')

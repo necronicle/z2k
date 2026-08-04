@@ -295,6 +295,38 @@ cleanup_legacy_ip_hosts() {
     return 0
 }
 
+# MIGRATION 2026-08-04: снять режим Austerusj (all_tcp443.conf).
+#
+# Пункт меню, которым режим включали, убрали 2026-04-15 (96c24a9), а ветку в
+# generate_nfqws2_opt_from_strategies() оставили. Получился режим, который никто
+# не мог ни включить, ни выключить: файл живёт в /opt/etc/zapret2, reinstall
+# меняет /opt/zapret2, пересоздавался он только при отсутствии — то есть у всех,
+# кто включил его до апреля, он молча пережил каждое обновление с тех пор.
+#
+# Работал он разрушительно: ветка закорачивала ВСЮ генерацию конфига через
+# `return 0`, и роутер получал три строки стратегий из Zapret1 — без хостлистов,
+# без circular-ротации и без --hostlist-exclude=whitelist.txt (единственное место
+# в z2k, где whitelist не действовал вообще).
+#
+# Поэтому файл сносим безусловно, а не просто гасим ENABLED: пока он лежит,
+# любой откат на старую версию снова его подхватит. Про смену поведения говорим
+# вслух ТОЛЬКО тем, у кого режим был активен — у остальных это мёртвый файл с
+# ENABLED=0, который мы же и создавали при каждой установке.
+migrate_drop_austerus_mode() {
+    local austerus_conf="${CONFIG_DIR:-/opt/etc/zapret2}/all_tcp443.conf"
+    [ -f "$austerus_conf" ] || return 0
+
+    local was_enabled
+    was_enabled=$(safe_config_read "ENABLED" "$austerus_conf" "0")
+    rm -f "$austerus_conf" 2>/dev/null
+
+    if [ "$was_enabled" = "1" ]; then
+        print_warning "Режим Austerusj (весь HTTPS без хостлистов) снят — он не поддерживается с апреля"
+        print_info "Включилась обычная конфигурация: хостлисты, ротация стратегий и whitelist"
+    fi
+    return 0
+}
+
 # Refresh stale ip host records that z2k_fetch's Layer 4 wrote in past
 # install runs. These are in /opt/zapret2/state/ndmc-managed.txt — one
 # `host ip` per line. We compare each tracked record against current
@@ -310,12 +342,17 @@ refresh_stale_ndmc_records() {
     [ -s "$managed" ] || return 0
     command -v nslookup >/dev/null 2>&1 || return 0
 
-    local removed=0 line host ip current
+    # Дамп running-config берётся ОДИН раз, а не на каждой итерации. Раньше он
+    # звался внутри обоих циклов: при 14 отслеживаемых записях это до 28 полных
+    # выгрузок конфига по 0.29 с — около 8 секунд, потраченных на повторное
+    # чтение одного и того же. Плюс сам nslookup ждёт 2 с, когда 8.8.8.8
+    # недоступен (а его часто режут), и всё это происходило молча.
+    local removed=0 line host ip current cfg
+    cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
     while IFS=' ' read -r host ip; do
         [ -z "$host" ] || [ -z "$ip" ] && continue
         # Is this exact host=ip pair still present in running-config?
-        LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-            | grep -qxE "ip host $host $ip" || continue
+        printf '%s\n' "$cfg" | grep -qxE "ip host $host $ip" || continue
         # Resolve current canonical IP via 8.8.8.8.
         current=$(nslookup "$host" 8.8.8.8 2>/dev/null \
             | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
@@ -332,10 +369,12 @@ refresh_stale_ndmc_records() {
         # we already removed.
         local tmp="${managed}.new.$$"
         : > "$tmp"
+        # Свежий дамп нужен: выше мы только что удаляли записи, и старый слепок
+        # уже не отражает конфиг. Но снова ОДИН раз, а не на каждой строке.
+        cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
         while IFS=' ' read -r host ip; do
             [ -z "$host" ] || [ -z "$ip" ] && continue
-            LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-                | grep -qxE "ip host $host $ip" \
+            printf '%s\n' "$cfg" | grep -qxE "ip host $host $ip" \
                 && printf '%s %s\n' "$host" "$ip" >> "$tmp"
         done < "$managed"
         mv -f "$tmp" "$managed" 2>/dev/null
@@ -3677,11 +3716,28 @@ run_full_install() {
     # Выполнить все шаги последовательно
     step_check_root || return 1                    # ← НОВОЕ (0/12)
 
+    # Эти четыре миграции работают МОЛЧА и могут занять до полуминуты: каждая
+    # ходит в ndmc за полной выгрузкой конфига, а refresh_stale_ndmc_records ещё
+    # и резолвит каждую отслеживаемую запись через 8.8.8.8 — где он заблокирован
+    # (а режут его часто), это по 2 секунды на запись.
+    #
+    # Полевой симптом: человек видит последней строкой «Проверка root прав...» и
+    # решает, что установка повисла именно на ней, хотя root-проверка это `id -u`
+    # и висеть там физически не на чем. Особенно заметно в терминалах, которые
+    # буферизуют вывод блоками (жалоба через терминал AWG-менеджера по порту).
+    # Поэтому говорим, что происходит, ДО начала, а не после.
+    print_info "Проверка ранее сохранённых записей DNS (может занять до минуты)..."
+
     # Migration: вычистить legacy ip host записи от модулей DNS→Router (снесены
     # 2026-04-27 force-push'ем). Без этого юзеры с этого окна установки имеют
     # 130+ записей на VPS-IP в Keenetic config, github проксируется через
     # Frankfurt → x5-10 медленнее. Idempotent — на чистом роутере ничего не делает.
     cleanup_legacy_ip_hosts
+
+    # Migration: снять режим Austerusj — его нельзя было ни включить, ни выключить
+    # с 2026-04-15, но у включивших до этой даты он пережил каждое обновление и
+    # подменял всю конфигурацию тремя строками из Zapret1.
+    migrate_drop_austerus_mode
 
     # Purge legacy Layer-4 records (pre-tracking-file era) — these were
     # written by old z2k_fetch on a single transient fail and got stuck.

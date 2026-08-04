@@ -126,11 +126,9 @@
     warp: renderWarp,
     whitelist: renderWhitelist,
     "extra-domains": renderExtraDomains,
-    logs: renderLogs,
     state: renderState,
     strategies: renderStrategies,
     diag: renderDiag,
-    geosite: renderGeosite,
     credits: renderCredits,
   };
   // Active route highlight для всех `<a>` в #nav (primary + overflow).
@@ -142,18 +140,24 @@
     warp:            "WARP",
     whitelist:       "Whitelist",
     "extra-domains": "Доп. домены",
-    state:           "Rotator",
+    // «Стратегии» — одна дверь, два вида внутри. Маршрут `state` остался жив
+    // ради старых ссылок и закладок: он открывает ту же страницу на вкладке
+    // «Автоподбор». Поэтому и заголовок у него тот же — раньше здесь
+    // стояло «Rotator», из-за чего один раздел назывался четырьмя разными
+    // именами (меню, маршрут, заголовок страницы, README).
+    state:           "Стратегии",
     strategies:      "Стратегии",
-    logs:            "Логи",
     diag:            "Диагностика",
-    geosite:         "Geosite",
     credits:         "Благодарности",
   };
   function navigate() {
     const hash = location.hash.replace(/^#\//, "") || "dashboard";
     const name = routes[hash] ? hash : "dashboard";
+    // `state` больше не имеет своего пункта меню — он вкладка внутри «Стратегий».
+    // Без этой подмены переход по старой ссылке #/state не подсвечивал бы ничего.
+    const navName = name === "state" ? "strategies" : name;
     for (const a of $nav.querySelectorAll("a")) {
-      a.classList.toggle("active", a.dataset.route === name);
+      a.classList.toggle("active", a.dataset.route === navName);
     }
     const pageTitle = ROUTE_TITLES[name] || "antiDPI для Keenetic";
     document.title = `${pageTitle} · Z2K`;
@@ -1479,7 +1483,7 @@
     $app.innerHTML = `
       <h1 class="page-title">Дополнительные домены</h1>
       <div class="card">
-        <h3>Live-список для autocircular</h3>
+        <h3>Живой список доменов</h3>
         <p class="desc">
           Здесь — домены, которые z2k будет обрабатывать в дополнение к стандартным RKN/YouTube/Discord-спискам.
           Подбор рабочей стратегии происходит автоматически из существующего пула (~47 стратегий для TCP, 12+ для QUIC),
@@ -1545,32 +1549,6 @@
       loadExtraDomains();
     } catch (e) {
       toast("Ошибка: " + e.message, "bad");
-    }
-  }
-
-  // ---------- Logs ----------
-  async function renderLogs() {
-    $app.innerHTML = `
-      <h1 class="page-title">Логи</h1>
-      <div class="card">
-        <h3>Сервисный лог</h3>
-        <div class="btn-row" style="margin-bottom:10px">
-          <button class="btn" id="log-refresh">Обновить</button>
-        </div>
-        <pre class="log" id="log-view"><span class="skel-text">${skeletonLines(8)}</span></pre>
-      </div>
-    `;
-    document.getElementById("log-refresh").addEventListener("click", loadLog);
-    loadLog();
-  }
-
-  async function loadLog() {
-    const el = document.getElementById("log-view");
-    try {
-      const d = await apiGet("/logs/service?n=200");
-      el.textContent = d.log || "(лог пуст)";
-    } catch (e) {
-      el.textContent = "Ошибка: " + e.message;
     }
   }
 
@@ -1848,39 +1826,98 @@
   let stateSort = loadStateSort();
   let statePools = {};   // key -> strategy-pool size, from GET /pools (live nfqws2)
 
+  // ---------- «Стратегии»: одна дверь, два вида ----------
+  //
+  // Раньше это были два соседних пункта меню — «Стратегии» и «Rotator» — и люди
+  // не понимали, где заводить свою стратегию. По делу это одна сущность на двух
+  // уровнях: политика по пулу (что подбирать) и живой выбор по домену (что
+  // выбрано прямо сейчас). Две категории верхнего уровня, которые обе про
+  // «стратегию», — ровно тот перекрывающийся ярлык, который NN/g называет
+  // главной причиной промахов по навигации.
+  //
+  // Ось «настройка против наблюдения» взята не с потолка: так устроен сам
+  // веб-конфигуратор Keenetic, который наши люди видят каждый день (весь
+  // мониторинг собран в «Статусе», настройки разложены по доменам), и так же
+  // сделан AdGuard Home — «Фильтры» одна дверь с подвкладками, «Журнал
+  // запросов» отдельно.
+  //
+  // Маршрут `state` намеренно оставлен рабочим: старые ссылки, закладки и
+  // текст README ведут на него, и он открывает ту же страницу на вкладке
+  // «Автоподбор».
+  // Порядок намеренный: «Автоподбор» первой и по умолчанию. Сюда приходят
+  // разбираться, почему конкретный сайт не открылся, — это частый сценарий.
+  // Своя строка параметров нужна редко и целиком меняет поведение пула, так что
+  // она вторым шагом, а не тем, что встречает на входе.
+  // Названия — по тому, что вкладка РЕАЛЬНО содержит, а не по намерению.
+  // «Сейчас работает» было неправдой: пул, которому задали свою строку, работает,
+  // но в таблице не появляется никогда. Причина в движке — circular входит в саму
+  // строку стратегии, и пользовательская строка заменяет её целиком, так что
+  // подбор для этого пула выключается и записей он не создаёт
+  // (lib/config_official.sh, z2k_custom_strategy). Обещать «сейчас работает» и
+  // показывать только половину — хуже, чем назвать честно.
+  //
+  // «Свои стратегии» — дословно тот вопрос, с которого всё началось («где их
+  // вести»), и тот же термин, что в README. Совпадение слов в интерфейсе и
+  // документации важнее красоты.
+  const STRATEGY_TABS = [
+    { id: "live",   route: "state",      label: "Автоподбор",
+      hint: "Что подбор выбрал по каждому домену; здесь же ручной выбор и заморозка" },
+    { id: "config", route: "strategies", label: "Свои стратегии",
+      hint: "Задать свою строку параметров вместо подбора — для целого пула" },
+  ];
+
+  function strategiesShell(activeId, bodyHtml) {
+    const tabs = STRATEGY_TABS.map(t => `
+      <a href="#/${t.route}" class="strat-tab${t.id === activeId ? " active" : ""}"
+         role="tab" aria-selected="${t.id === activeId}" title="${escapeHtml(t.hint)}">
+        ${escapeHtml(t.label)}
+      </a>`).join("");
+    const active = STRATEGY_TABS.find(t => t.id === activeId) || STRATEGY_TABS[0];
+    return `
+      <h1 class="page-title">Стратегии</h1>
+      <div class="strat-tabs" role="tablist" aria-label="Виды раздела «Стратегии»">${tabs}</div>
+      <p class="desc strat-tabhint">${escapeHtml(active.hint)}</p>
+      ${bodyHtml}
+    `;
+  }
+
   async function renderState() {
-    $app.innerHTML = `
-      <h1 class="page-title">Rotator state</h1>
+    $app.innerHTML = strategiesShell("live", `
       <div class="card">
-        <h3>Discord войс — выбор стратегии</h3>
+        <h3>Discord, голосовые каналы</h3>
         <p class="desc">
-          Голосовой пул Discord (STUN) не привязан к домену и сам по себе в
-          таблице ниже не появляется. Здесь можно выбрать стратегию вручную или
-          заморозить рабочую, чтобы ротатор её не менял.
+          Голосовой пул Discord не привязан к домену, поэтому в таблице ниже его
+          нет: там показано то, что уже происходило, а здесь стратегию можно
+          выбрать заранее — до первого звонка. Её так же можно заморозить, чтобы
+          не менялась.
         </p>
         <div class="btn-row" id="discord-voice-controls">${skeletonLines(1)}</div>
       </div>
       <div class="card">
         <h3>Выбранные стратегии по доменам</h3>
         <p class="desc">
-          autocircular запоминает для каждого ключ/домен текущую стратегию.
+          Для каждого домена z2k запоминает стратегию, которая на нём заработала.
           В каждой строке:
         </p>
         <ul class="desc" style="margin:4px 0 10px 18px;padding:0">
-          <li><b>выпадающий список</b> — выбрать стратегию вручную (ротация
+          <li><b>выпадающий список</b> — выбрать стратегию вручную (подбор
               продолжится с неё, удобно проскочить нерабочую);</li>
           <li><b>замок в столбце «Заморозка»</b> — открытый замок значит идёт
-              авторотация; нажмите, чтобы заморозить (замок закроется) и ротатор
-              перестанет менять стратегию; нажмите закрытый замок — разморозить;</li>
+              автоподбор; нажмите, чтобы заморозить (замок закроется) и стратегия
+              перестанет меняться; нажмите закрытый замок — разморозить;</li>
           <li><b>× слева</b> — удалить запись (старт с первой стратегии).</li>
         </ul>
+        <p class="desc">
+          Пул, которому вы задали <a href="#/strategies">свою стратегию</a>, здесь
+          не появится: подбор для него выключен, а работает ровно ваша строка.
+        </p>
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn" id="state-refresh">Обновить</button>
           <button class="btn btn-danger" id="state-clear-all">Удалить все записи</button>
         </div>
         <div id="state-body">${skeletonLines(6)}</div>
       </div>
-    `;
+    `);
     // Wrapped, NOT passed directly: an event handler receives the Event object as
     // its first argument, which would land in useCache — truthy — and turn the
     // «Обновить» button into a no-op that re-renders stale rows.
@@ -1955,13 +1992,21 @@
       // Discord-voice panel first — it must populate even with empty rotator state.
       renderDiscordVoicePanel(entries);
 
-      if (!entries.length) {
-        body.innerHTML = `<p style="color:var(--text-muted)">состояние ротатора пусто (стратегии ещё не закреплены)</p>`;
+      // Записи с host="nohost" — это пулы без домена, и единственный такой пул,
+      // discord_udp, уже показан карточкой выше со своим селектором и заморозкой.
+      // Без этого фильтра он появлялся в таблице ВТОРЫМ экземпляром, но только
+      // после первого «Применить» (до него записи не существует) — поэтому на
+      // свежем роутере дубля не видно и баг доживал до первого звонка.
+      // Колонка «Домен» показывала бы у него буквальное «nohost».
+      const visible = entries.filter(e => e.host !== "nohost");
+
+      if (!visible.length) {
+        body.innerHTML = `<p style="color:var(--text-muted)">пока пусто — ни одна стратегия ещё не закреплена</p>`;
         return;
       }
       const nowSec = Math.floor(Date.now() / 1000);
       // Sort a shallow copy — never mutate the cached server response.
-      const sorted = entries.slice().sort((a, b) => {
+      const sorted = visible.slice().sort((a, b) => {
         let av, bv;
         switch (stateSort.key) {
           case "key":      av = String(a.key  || ""); bv = String(b.key  || ""); break;
@@ -1997,7 +2042,7 @@
           <tr${frozen ? ' style="background:rgba(120,140,255,0.10)"' : ''}>
             <td data-label="">
               <button class="btn btn-danger btn-icon state-del"
-                      title="Удалить запись rotator"
+                      title="Удалить запись"
                       aria-label="Удалить ${escapeHtml(e.host)}"
                       data-key="${escapeHtml(e.key)}"
                       data-host="${escapeHtml(e.host)}">${_icons.close}</button>
@@ -2077,7 +2122,7 @@
   }
 
   async function stateDelete(key, host) {
-    if (!confirm(`Удалить запись rotator для ${host} (${key})?\n\nrotator стартанёт с первой стратегии при следующей попытке.`)) return;
+    if (!confirm(`Удалить запись для ${host} (${key})?\n\nПодбор начнётся с первой стратегии при следующей попытке.`)) return;
     try {
       await apiPost("/state/delete", { key, host });
       toast("Удалено");
@@ -2088,7 +2133,7 @@
   }
 
   async function stateClearAll() {
-    if (!confirm("Удалить ВСЕ записи rotator?\n\nВесь сохранённый state очистится: каждый домен стартанёт с первой стратегии при следующей попытке, заморозки тоже снимутся. Сервис перезапускать не нужно.")) return;
+    if (!confirm("Удалить все записи?\n\nКаждый домен начнёт подбор с первой стратегии при следующей попытке, заморозки тоже снимутся. Сервис перезапускать не нужно.")) return;
     try {
       await apiPost("/state/clear", {});
       toast("Весь state очищен");
@@ -2119,13 +2164,17 @@
       <div class="card">
         <h3>Сводка z2k-diag</h3>
         <p class="desc">
-          Снимок всего, что мы обычно спрашиваем при траблшутинге: версия,
-          архитектура, сервис, iptables, tunnel, rotator state, последние
-          логи. Скопируй и пришли в чат проекта когда что-то не работает.
+          Снимок всего, что мы обычно спрашиваем при траблшутинге: что именно не
+          так, версия, архитектура, сервис, iptables, состояние диска и памяти,
+          модули прошивки, резолв, туннель, выбранные стратегии и ошибки из всех
+          логов. Когда что-то не работает — пришли это в чат проекта.
+          <b>«Скачать файл»</b> даёт полный отчёт с логами: его отправляют
+          вложением, потому что в одно сообщение он не помещается.
         </p>
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn" id="diag-refresh">Обновить</button>
           <button class="btn" id="diag-copy">Копировать</button>
+          <a class="btn btn-primary" id="diag-download" href="${API}/diag/download" download>Скачать файл</a>
         </div>
         <pre class="log" id="diag-output"><span class="skel-text">${skeletonLines(10)}</span></pre>
       </div>
@@ -2148,62 +2197,6 @@
       el.textContent = "Ошибка: " + e.message;
     }
   }
-
-  // ---------- Geosite (Phase 3) ----------
-  async function renderGeosite() {
-    $app.innerHTML = `
-      <h1 class="page-title">Geosite</h1>
-      <div class="card">
-        <h3>runetfreedom/russia-blocked-geosite</h3>
-        <p class="desc">
-          Production-списки для RKN / YouTube / Discord тянутся из
-          runetfreedom каждый день через z2k-scheduler (+ force refresh
-          при install). RAM-адаптивный выбор RKN-варианта: ≥900 MB RAM →
-          ru-blocked-all (~700k доменов), иначе ru-blocked (~80k).
-          Фича всегда включена — toggle удалён в Phase 12.
-        </p>
-        <div id="geosite-status">${skeletonLines(2)}</div>
-        <div class="btn-row" style="margin-top:12px">
-          <button class="btn btn-primary" id="geosite-fetch">Принудительно обновить сейчас</button>
-        </div>
-      </div>
-    `;
-    document.getElementById("geosite-fetch").addEventListener("click", geositeFetch);
-    loadGeositeStatus();
-  }
-
-  async function loadGeositeStatus() {
-    const st = document.getElementById("geosite-status");
-    if (!st) return;
-    try {
-      const d = await apiGet("/geosite/status");
-      st.innerHTML = `
-        <p>
-          Статус: <strong>всегда включено</strong><br>
-          Production-списков в /opt/zapret2/extra_strats/: <strong>${d.staging_count}</strong>
-        </p>
-      `;
-    } catch (e) {
-      st.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
-    }
-  }
-
-  async function geositeFetch() {
-    let resp;
-    try {
-      resp = await apiPost("/geosite/update");
-    } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
-      return;
-    }
-    openJobModal("Geosite fetch", resp.job);
-    setTimeout(loadGeositeStatus, 2000);
-  }
-
-  // renderProbe()/probeStart() removed in r-15 (Phase 1 cleanup of the
-  // detection stack). Backend route /probe/run now
-  // returns 410 Gone; nav-entry and SPA route are gone so a stale
-  // browser cache pointing at #/probe falls through to the dashboard.
 
   // ---------- Credits ----------
   function renderCredits() {
@@ -2316,18 +2309,19 @@
             ты закрыл ту часть, которую временем не закроешь.
           </p>
         </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+          <div class="credits-name">Dez</div>
+          <p class="desc">
+            Спасибо, Dez. Поддержать проект никто не обязан, и каждый раз, когда
+            это всё же происходит, работать дальше становится легче.
+          </p>
+        </div>
       </div>
     `;
   }
 
-  // ---------- Strategies (per-pool custom lines) ----------
-  // Progressive disclosure: the default view is one line per pool saying it is
-  // on auto. The editor only appears for a pool the user deliberately switched
-  // to «Своя», and going back is a single click that just deletes the file.
-  //
-  // «Проверить» is separate from «Сохранить» on purpose. A bad option string
-  // does not break the pool it was written for — it stops nfqws2 starting at
-  // all — so the mistake has to be findable before it is applied, not after.
   const STRATEGY_POOL_NAMES = {
     rkn_tcp: "Заблокированные сайты (TCP)",
     yt_tcp:  "YouTube (TCP)",
@@ -2336,8 +2330,7 @@
   };
 
   async function renderStrategies() {
-    $app.innerHTML = `
-      <h1 class="page-title">Стратегии</h1>
+    $app.innerHTML = strategiesShell("config", `
       <div class="card">
         <p class="desc">
           Обычно z2k подбирает стратегию сам: пробует варианты по очереди и
@@ -2352,9 +2345,13 @@
           применяется, потому что одна ошибка в ней останавливает обход целиком,
           а не только этот пул.
         </p>
+        <p class="desc">
+          Нужно не на весь пул, а разово поправить один домен — это на вкладке
+          <a href="#/state">«Автоподбор»</a>.
+        </p>
       </div>
       <div id="strategy-pools">${skeletonBlocks(4)}</div>
-    `;
+    `);
     loadStrategyPools();
     _updateGlobalUILock();
   }

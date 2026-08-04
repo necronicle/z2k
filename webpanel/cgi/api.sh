@@ -68,9 +68,26 @@ json_escape() {
 
 json_string() {
     # Emit a JSON string literal including surrounding quotes.
-    printf '"'
-    printf '%s' "$1" | json_escape
-    printf '"'
+    #
+    # Быстрый путь без форка. json_escape — это запуск awk, а json_string зовут
+    # в цикле по каждой строке списка: на 173 доменах whitelist это 173 процесса
+    # и почти секунда на роутере. При этом экранировать в подавляющем
+    # большинстве значений нечего — это хостнеймы.
+    #
+    # Условие проверяет РОВНО тот набор, который умеет менять json_escape:
+    # обратный слэш, кавычка и любой управляющий символ (сюда же попадают \n,
+    # \r и \t). Всё остальное awk вернул бы байт в байт, включая кириллицу и
+    # прочие байты >127 — они не управляющие, и класс [[:cntrl:]] их не ловит
+    # (проверено на busybox ash роутера). Если условие сработало — идём прежним
+    # путём, поведение не меняется ни на символ.
+    case "$1" in
+        *\\*|*\"*|*[[:cntrl:]]*)
+            printf '"'
+            printf '%s' "$1" | json_escape
+            printf '"'
+            ;;
+        *) printf '"%s"' "$1" ;;
+    esac
 }
 
 # shellcheck disable=SC2120  # optional arg: most callers pass none, some pass a JSON tail
@@ -568,18 +585,6 @@ case "$method $path" in
         exit 0
         ;;
 
-    # ---------- LOGS ----------
-    "GET /logs/service")
-        n=$(form_value "${QUERY_STRING:-}" "n")
-        [ -z "$n" ] && n=200
-        log_content=$(tail_service_log "$n")
-        json_header
-        printf '{"ok":true,"log":'
-        json_string "$log_content"
-        printf '}\n'
-        exit 0
-        ;;
-
     "GET /job")
         id=$(form_value "${QUERY_STRING:-}" "id")
         [ -z "$id" ] && json_fail "400 Bad Request" "id required"
@@ -610,21 +615,59 @@ case "$method $path" in
         exit 0
         ;;
 
+    # Отдаём отчёт файлом, а не в сообщении. Полная сводка с логами в лимит
+    # телеграма (~4000 символов) не влезает, и резать её ради этого — терять
+    # ровно то, ради чего её и читают. Файл прикладывают вложением.
+    #
+    # Content-Type text/plain, а не application/octet-stream: так вложение
+    # можно открыть просмотром прямо в клиенте, не скачивая.
+    "GET /diag/download")
+        diag_content=$(diag_run report)
+        printf 'Status: 200 OK\r\n'
+        printf 'Content-Type: text/plain; charset=utf-8\r\n'
+        printf 'Content-Disposition: attachment; filename="z2k-diag-%s.txt"\r\n' \
+            "$(date '+%Y%m%d-%H%M' 2>/dev/null || echo report)"
+        printf 'Cache-Control: no-store\r\n\r\n'
+        printf '%s\n' "$diag_content"
+        exit 0
+        ;;
+
     # ---------- ROTATOR STATE (Phase 3) ----------
     "GET /state")
+        # Одна awk-программа на весь ответ вместо цикла с json_string.
+        #
+        # Было: shell читает state.tsv построчно и на КАЖДОЕ поле зовёт
+        # json_string -> json_escape, а тот запускает отдельный awk. На 131
+        # строке это 524 запуска процесса, и вкладка открывалась 2.98 с при
+        # 0.11 с у соседних эндпоинтов. Замерено на роутере владельца.
+        #
+        # Экранирование повторяет json_escape ОДИН В ОДИН, включая \u00XX для
+        # управляющих символов: ослаблять его нельзя, даже если в state.tsv
+        # лежат одни хостнеймы — файл переживает ручные правки и сбои записи.
         json_header
         printf '{"ok":true,"entries":['
-        first=1
-        state_read | while IFS="$(printf '\t')" read -r skey shost sstrategy sts smode; do
-            [ -z "$skey" ] && continue
-            if [ "$first" = "1" ]; then first=0; else printf ','; fi
-            printf '{"key":'; json_string "$skey"
-            printf ',"host":'; json_string "$shost"
-            printf ',"strategy":'; json_string "${sstrategy:-0}"
-            printf ',"ts":%s' "${sts:-0}"
-            printf ',"mode":'; json_string "${smode:-auto}"
-            printf '}'
-        done
+        state_read | awk -F'\t' '
+            BEGIN { for (i = 0; i < 256; i++) ord[sprintf("%c", i)] = i }
+            function esc(s,   i, c, out) {
+                out = ""
+                for (i = 1; i <= length(s); i++) {
+                    c = substr(s, i, 1)
+                    if      (c == "\\") out = out "\\\\"
+                    else if (c == "\"")  out = out "\\\""
+                    else if (c == "\n")  out = out "\\n"
+                    else if (c == "\r")  out = out "\\r"
+                    else if (c == "\t")  out = out "\\t"
+                    else if (ord[c] < 32) out = out sprintf("\\u%04x", ord[c])
+                    else                  out = out c
+                }
+                return out
+            }
+            $1 != "" {
+                if (n++) printf ","
+                ts = ($4 == "" ? 0 : $4)
+                printf "{\"key\":\"%s\",\"host\":\"%s\",\"strategy\":\"%s\",\"ts\":%s,\"mode\":\"%s\"}", \
+                    esc($1), esc($2), esc($3 == "" ? "0" : $3), ts, esc($5 == "" ? "auto" : $5)
+            }'
         printf ']}\n'
         exit 0
         ;;
@@ -674,34 +717,6 @@ case "$method $path" in
         state_set "$s_key" "$s_host" "$s_strategy" "$s_mode" || \
             json_fail "400 Bad Request" "set failed"
         json_ok
-        ;;
-
-    # ---------- GEOSITE (Phase 12: always-on) ----------
-    "POST /geosite/update")
-        job_id=$(geosite_run_async) || json_fail "500" "failed to start"
-        json_header
-        printf '{"ok":true,"job":'
-        json_string "$job_id"
-        printf '}\n'
-        exit 0
-        ;;
-
-    "GET /geosite/status")
-        # Phase 12: geosite is always-on — no user toggle. Report
-        # enabled:"1" unconditionally. Staging dir is legacy (Phase 2
-        # v2fly prototype path); we now count production List.txt
-        # files after geosite replacement.
-        extra_dir="$ZAPRET2_DIR/extra_strats"
-        lists_present=0
-        for f in "$extra_dir/TCP/RKN/List.txt" \
-                 "$extra_dir/TCP/YT/List.txt" \
-                 "$extra_dir/UDP/YT/List.txt" \
-                 "$extra_dir/TCP/RKN/Discord.txt"; do
-            [ -s "$f" ] && lists_present=$((lists_present + 1))
-        done
-        json_header
-        printf '{"ok":true,"enabled":"1","staging_count":%s}\n' "$lists_present"
-        exit 0
         ;;
 
     # ---------- ACTIVE PROBE — removed in r-15 (Phase 1 cleanup) ----------
