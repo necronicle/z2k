@@ -46,8 +46,10 @@ MANIFEST=UPDATES.json
 
 if command -v sha256sum >/dev/null 2>&1; then
     _sha() { sha256sum "$1" | awk '{print $1}'; }
+    _sha_stdin() { sha256sum | awk '{print $1}'; }
 elif command -v shasum >/dev/null 2>&1; then
     _sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+    _sha_stdin() { shasum -a 256 | awk '{print $1}'; }
 else
     echo "нужен sha256sum или shasum" >&2; exit 1
 fi
@@ -89,16 +91,41 @@ if [ -n "$_cur" ] && [ -f webpanel/www/index.html ]; then
     #
     # Объявляет тот, кто изменил. Правка строго текстовая: история парсится на
     # роутерах awk'ом по одной записи в строке, пересериализация сломала бы её.
+    # Сравниваем с ЗАКОММИЧЕННЫМ файлом, а не с состоянием до этого прогона.
+    # Разница принципиальная: генератор запускают по нескольку раз за релиз, и
+    # начиная со второго раза кеш-бастер уже правильный — «до» и «после»
+    # совпадают, блок не срабатывает, а файл при этом изменён относительно
+    # коммита и объявить его всё равно надо. Ровно на этом объявление и терялось.
     _idx_after=$(_sha webpanel/www/index.html)
+    _idx_head=""
+    if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+        _idx_head=$(git show HEAD:webpanel/www/index.html 2>/dev/null | _sha_stdin)
+    fi
+    [ -n "$_idx_head" ] && _idx_before="$_idx_head"
     if [ "$_idx_before" != "$_idx_after" ]; then
         if awk '/^\{"v":/ {last=$0} END {exit (last ~ /"webpanel\/www\/index\.html"/) ? 0 : 1}' "$MANIFEST"; then
             :   # уже объявлен — ничего не делаем
         else
             _last_line=$(grep -n '^{"v":' "$MANIFEST" | tail -1 | cut -d: -f1)
             if [ -n "$_last_line" ]; then
+                # Пробуем оба написания: запись могли сериализовать и компактно,
+                # без пробела после двоеточия.
                 sed -i.bak "${_last_line}s|\"changed_files\": \[|\"changed_files\": [\"webpanel/www/index.html\", |" "$MANIFEST"
-                rm -f "${MANIFEST}.bak"
+                sed -i.bak2 "${_last_line}s|\"changed_files\":\[|\"changed_files\":[\"webpanel/www/index.html\",|" "$MANIFEST"
+                rm -f "${MANIFEST}.bak" "${MANIFEST}.bak2"
+            fi
+            # ПРОВЕРЯЕМ, а не рапортуем. Раньше здесь печаталось «добавлен» сразу
+            # после sed, не глядя на результат: sed искал только написание с
+            # пробелом, на компактной записи молча не срабатывал, и человек читал
+            # сообщение об успехе при неизменённом файле. Тихий отказ в этом месте
+            # стоит ровно того, ради чего весь блок и написан, — панель уедет
+            # людям со старым кешем.
+            if awk '/^\{"v":/ {last=$0} END {exit (last ~ /"webpanel\/www\/index\.html"/) ? 0 : 1}' "$MANIFEST"; then
                 printf 'в changed_files добавлен webpanel/www/index.html (его изменил кеш-бастер)\n'
+            else
+                printf 'ОШИБКА: index.html изменён кеш-бастером, но объявить его в changed_files не удалось.\n' >&2
+                printf '        Впишите "webpanel/www/index.html" в changed_files последней записи вручную.\n' >&2
+                exit 1
             fi
         fi
     fi
