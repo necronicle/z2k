@@ -41,6 +41,8 @@ show_main_menu() {
 |  - Alex                                           |
 |  - GRM                                            |
 |  - Dez                                            |
+|  - hoaxx                                          |
+|  - Mansurchick                                    |
 +===================================================+
 
 MENU
