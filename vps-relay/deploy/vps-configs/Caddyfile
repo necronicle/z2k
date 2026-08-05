@@ -1,0 +1,46 @@
+{
+	admin off
+
+	# proxy_protocol на 8443: nginx отдаёт сюда уже разобранный по SNI поток и
+	# сообщает настоящий адрес клиента. Без этого caddy видит соединение от
+	# самого nginx, штампует в X-Forwarded-For 127.0.0.1, и релей не может
+	# отличить полторы тысячи разных людей друг от друга.
+	#
+	# allow ограничивает доверие петлёй: заголовок принимается только от nginx
+	# на этой же машине, снаружи подсунуть его нельзя.
+	#
+	# tls ОБЯЗАН идти после proxy_protocol — обёртки применяются по порядку, и
+	# без явного tls терминация TLS просто не выполнится.
+	servers :8443 {
+		listener_wrappers {
+			proxy_protocol {
+				allow 127.0.0.1/32
+			}
+			tls
+		}
+	}
+}
+
+213.176.74.63.nip.io:8443 {
+	encode gzip
+	reverse_proxy localhost:8080
+}
+
+
+# Append this block to /etc/caddy/Caddyfile. It is ADDITIVE and isolated:
+# it does NOT touch the existing `213.176.74.63.nip.io:8443 -> localhost:8080`
+# relay block, nor nginx:443 (the SNI stream router for the relay).
+#
+# A bare `:8088` site serves plain HTTP (no auto-TLS, no cert) on a dedicated
+# port, so the router's curl needs no certificate handling. Only the /stats
+# path is proxied to the localhost collector; everything else 404s.
+
+:8088 {
+	@stats path /stats /stats/
+	handle @stats {
+		reverse_proxy 127.0.0.1:9099
+	}
+	handle {
+		respond "z2k" 404
+	}
+}
