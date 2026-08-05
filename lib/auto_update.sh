@@ -631,14 +631,31 @@ au_apply_patch() {
         # wrong bytes is then skipped exactly like one that did not answer, and
         # if every mirror is stale the download fails outright instead of
         # installing old content under a new version number.
-        _want_sha=$(au_manifest_file_sha "$Z2K_AU_TMP_DIR/UPDATES.json" "$repo_path")
-        if [ -n "$_want_sha" ]; then
-            Z2K_FETCH_SHA256="$_want_sha"; export Z2K_FETCH_SHA256
+        # Манифест — корень доверия, он по построению отсутствует в собственной
+        # карте сумм: проверять себя самим собой бессмысленно. Раньше это
+        # выглядело как дефект — в лог обновления шла строка «в манифесте нет
+        # sha256, содержимое не проверяется», и человек читал её как поломку.
+        #
+        # Заодно он качался ВТОРОЙ раз: обновление уже скачало его в начале,
+        # чтобы вообще решить, что ставить. Берём тот файл, а не тянем заново.
+        if [ "$repo_path" = "UPDATES.json" ]; then
+            if cp -f "$Z2K_AU_TMP_DIR/UPDATES.json" "$stage" 2>/dev/null; then
+                au_log "patch: UPDATES.json — беру уже скачанный манифест (он и есть корень доверия)"
+                _dl_rc=0
+            else
+                au_log "patch: UPDATES.json — не удалось взять скачанный манифест"
+                _dl_rc=1
+            fi
         else
-            au_log "patch: $repo_path — в манифесте нет sha256, содержимое не проверяется"
+            _want_sha=$(au_manifest_file_sha "$Z2K_AU_TMP_DIR/UPDATES.json" "$repo_path")
+            if [ -n "$_want_sha" ]; then
+                Z2K_FETCH_SHA256="$_want_sha"; export Z2K_FETCH_SHA256
+            else
+                au_log "patch: $repo_path — в манифесте нет sha256, содержимое не проверяется"
+            fi
+            au_download_repo_file "$repo_path" "$stage"
+            _dl_rc=$?
         fi
-        au_download_repo_file "$repo_path" "$stage"
-        _dl_rc=$?
         unset Z2K_FETCH_SHA256
         if [ "$_dl_rc" = "2" ]; then
             # Deleted upstream (404) — a later release in this window removed it.

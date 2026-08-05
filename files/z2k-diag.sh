@@ -324,39 +324,16 @@ print_tunnel() {
     # выглядит как «телеграм не работает» — без единого намёка на причину.
     # Сверяемся с заголовком Date самого релея: он и есть та шкала, по которой
     # нас проверяют.
-    local srv_date srv_epoch now_epoch skew
-    srv_date=$(curl -s -m 8 -D - -o /dev/null "https://${VPS_IP}.nip.io/" 2>/dev/null \
-               | awk 'tolower($1)=="date:"{sub(/^[Dd]ate: */,""); sub(/\r$/,""); print; exit}')
-    if [ -n "$srv_date" ]; then
-        # Считаем сами: date -d не разбирает RFC-формат ни в busybox, ни в BSD.
-        srv_epoch=$(printf '%s\n' "$srv_date" | awk '
-            function days_from_civil(y, m, d,   era, yoe, doy, doe) {
-                if (m <= 2) y--
-                era = int((y >= 0 ? y : y - 399) / 400)
-                yoe = y - era * 400
-                doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
-                doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
-                return era * 146097 + doe - 719468
-            }
-            BEGIN { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", mn, " ")
-                    for (i = 1; i <= 12; i++) mon[mn[i]] = i }
-            { gsub(/,/, ""); d = $2 + 0; m = mon[$3]; y = $4 + 0; split($5, t, ":")
-              if (m == 0 || y == 0) { print ""; exit }
-              print days_from_civil(y, m, d) * 86400 + t[1] * 3600 + t[2] * 60 + t[3] }')
-        now_epoch=$(date +%s 2>/dev/null)
-        if [ -n "$srv_epoch" ] && [ -n "$now_epoch" ] 2>/dev/null; then
-            skew=$((now_epoch - srv_epoch))
-            if [ "$skew" -gt 120 ] || [ "$skew" -lt -120 ]; then
+    local skew
+    skew=$(clock_skew_vs_relay 2>/dev/null)
+    case "$skew" in
+        ''|*[!0-9-]*) printf 'clock vs relay    : не удалось выяснить\n' ;;
+        *)  if [ "$skew" -gt 120 ] || [ "$skew" -lt -120 ]; then
                 printf 'clock vs relay    : %+d s — ВНЕ ДОПУСКА (±120), туннель не поднимется\n' "$skew"
             else
                 printf 'clock vs relay    : %+d s (ок)\n' "$skew"
-            fi
-        else
-            printf 'clock vs relay    : не удалось разобрать время релея\n'
-        fi
-    else
-        printf 'clock vs relay    : релей не ответил\n'
-    fi
+            fi ;;
+    esac
 
     # Строки про личность и регистрацию — то, на чём туннель спотыкается чаще
     # всего. Раньше их приходилось просить у человека отдельной командой, хотя
@@ -429,6 +406,39 @@ bitmap_port_ok() {
 # сломано», надо было пролистать её целиком и знать, на что смотреть. Теперь
 # сверху лежат явные вердикты, и только по проблемам: если всё в порядке —
 # одна строка. Детали остаются ниже, они никуда не делись.
+# clock_skew_vs_relay -> расхождение часов роутера с релеем в секундах (со
+# знаком), пусто если не удалось выяснить.
+#
+# Вынесено в функцию, потому что нужно в двух местах: в сводке «что не так»
+# (расхождение больше допуска = телеграм не поднимется) и в разделе туннеля.
+# Дублировать разбор нельзя — разойдётся.
+#
+# Считаем сами: date -d не понимает RFC-формат ни в busybox, ни в BSD, то есть
+# очевидный способ здесь просто не работает.
+clock_skew_vs_relay() {
+    local srv_date srv_epoch now_epoch
+    srv_date=$(curl -s -m 8 -D - -o /dev/null "https://${VPS_IP}.nip.io/" 2>/dev/null \
+               | awk 'tolower($1)=="date:"{sub(/^[Dd]ate: */,""); sub(/\r$/,""); print; exit}')
+    [ -n "$srv_date" ] || return 1
+    srv_epoch=$(printf '%s\n' "$srv_date" | awk '
+        function days_from_civil(y, m, d,   era, yoe, doy, doe) {
+            if (m <= 2) y--
+            era = int((y >= 0 ? y : y - 399) / 400)
+            yoe = y - era * 400
+            doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+            doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+            return era * 146097 + doe - 719468
+        }
+        BEGIN { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", mn, " ")
+                for (i = 1; i <= 12; i++) mon[mn[i]] = i }
+        { gsub(/,/, ""); d = $2 + 0; m = mon[$3]; y = $4 + 0; split($5, t, ":")
+          if (m == 0 || y == 0) { print ""; exit }
+          print days_from_civil(y, m, d) * 86400 + t[1] * 3600 + t[2] * 60 + t[3] }')
+    now_epoch=$(date +%s 2>/dev/null)
+    [ -n "$srv_epoch" ] && [ -n "$now_epoch" ] || return 1
+    printf '%s' "$((now_epoch - srv_epoch))"
+}
+
 print_health() {
     local issues=""
     _add() { issues="${issues}  [!] $1
@@ -458,6 +468,53 @@ print_health() {
         freek=$(df -k /opt 2>/dev/null | awk 'NR==2 {print $4}')
         [ -n "$freek" ] && [ "$freek" -lt 20480 ] 2>/dev/null && \
             _add "на /opt меньше 20 МБ свободно — обновление не встанет"
+    fi
+
+    # Дальше — поломки, которые сводка НЕ ловила, хотя детали ниже их показывают.
+    # Все четыре стоили нам по кругу переписки за один день 2026-08-05: человек
+    # читал «явных проблем не найдено» ровно в тот момент, когда у него не
+    # работал обход или молчал телеграм, и шёл в поддержку с этой строкой.
+    # Заголовок, который врёт умолчанием, хуже отсутствующего.
+
+    # Список РКН. Обнулялся сам собой по ночам (чинилось в r-72.2), и в этом
+    # состоянии обход блокировок мёртв целиком, а снаружи это выглядит как
+    # «сайты не открываются» без единой зацепки.
+    local _rkn="${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt"
+    if [ ! -s "$_rkn" ]; then
+        _add "список заблокированных сайтов пуст — обход не сработает ни на одном сайте, обновите списки"
+    else
+        local _rn
+        _rn=$(grep -cvE '^[[:space:]]*(#|$)' "$_rkn" 2>/dev/null)
+        [ -n "$_rn" ] && [ "$_rn" -lt 1000 ] 2>/dev/null && \
+            _add "в списке заблокированных сайтов всего $_rn строк — похоже на обрыв загрузки, обновите списки"
+    fi
+
+    # Часы. Туннель подписывает каждое подключение меткой времени, релей
+    # отвергает её при расхождении больше ±120 с. Роутер без батарейки уезжает
+    # легко, а снаружи это выглядит как «телеграм не работает» — и причину не
+    # видно нигде, кроме этой проверки.
+    local _skew
+    _skew=$(clock_skew_vs_relay 2>/dev/null)
+    case "$_skew" in
+        ''|*[!0-9-]*) ;;
+        *)  if [ "$_skew" -gt 120 ] 2>/dev/null || [ "$_skew" -lt -120 ] 2>/dev/null; then
+                _add "часы роутера разошлись на ${_skew} с — телеграм-туннель не поднимется, пока время не поправить"
+            fi ;;
+    esac
+
+    # Туннель телеграма: бинарник на месте, а процесса нет. Это не «медленно»,
+    # это телеграм не работает вообще.
+    if [ -x /opt/sbin/tg-mtproxy-client ]; then
+        pgrep -f 'tg-mtproxy-client' >/dev/null 2>&1 || \
+            _add "телеграм-туннель установлен, но не запущен — телеграм работать не будет"
+    fi
+
+    # WARP включён, но туннеля нет. Игровые адреса при этом уедут в никуда.
+    local _warp_on
+    _warp_on=$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null | cut -d= -f2 | tr -d '" ')
+    if [ "$_warp_on" = "1" ]; then
+        pgrep -f 'usque' >/dev/null 2>&1 || \
+            _add "WARP включён, но туннель не поднят — игровой трафик пойдёт мимо него"
     fi
 
     printf '=== что не так ===\n'
