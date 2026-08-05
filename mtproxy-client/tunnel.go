@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -34,11 +35,11 @@ const (
 	wsReadTimeout  = 90 * time.Second
 )
 
-// idFallbackCooldownSec is how long the client stays on shared-secret after a
-// per-install fallback before retrying per-install. Short enough that a flapped
-// install re-migrates well within a day (before the relay flip), long enough to
-// ride out a transient relay/registration hiccup.
-const idFallbackCooldownSec = 300
+// Минимальный интервал между повторными регистрациями. Прежняя константа
+// idFallbackCooldownSec (300 с) описывала, сколько клиент СИДИТ на общем
+// секрете; теперь он туда не уходит вовсе, и смысл интервала другой — не чаще
+// какого срока мы дёргаем /register, у которого своё ограничение частоты.
+const reRegMinIntervalSec = 120
 
 // Address types for CONNECT payload
 const (
@@ -122,7 +123,8 @@ type tunnelClient struct {
 	registerURL  string
 	useID        atomic.Bool  // send per-install auth (set true after a successful register)
 	idFailStreak atomic.Int32 // consecutive fast deaths while on per-install auth
-	idFallbackAt atomic.Int64 // unix sec when we last fell back to shared-secret (0 = not fallen back)
+	reRegAt      atomic.Int64 // unix sec последней повторной регистрации (защита от долбёжки)
+	reRegBusy    atomic.Bool  // повторная регистрация уже идёт
 
 	ws         *websocket.Conn
 	writer     *wsWriter
@@ -162,6 +164,56 @@ func (s *tunnelStream) close() {
 }
 
 // connectTunnelWS establishes a WebSocket connection to the tunnel relay.
+// triggerReRegister перерегистрирует установку, когда персональная
+// аутентификация раз за разом обрывается. Это замена прежнему откату на общий
+// секрет: откат релей всё равно отвергает, а перерегистрация чинит настоящую
+// причину — отсутствие нашего публичного ключа у релея.
+//
+// Не блокирует цикл переподключения: попытка уходит в фон. Не чаще раза в
+// reRegMinIntervalSec — иначе клиент в петле быстрых обрывов превратился бы в
+// генератор запросов к /register, а он ограничен по частоте на стороне релея и
+// начал бы отвечать отказом уже законно.
+func (tc *tunnelClient) triggerReRegister() {
+	if tc.identity == nil || tc.registerURL == "" {
+		return
+	}
+	now := time.Now().Unix()
+	if last := tc.reRegAt.Load(); last > 0 && now-last < reRegMinIntervalSec {
+		return
+	}
+	if !tc.reRegBusy.CompareAndSwap(false, true) {
+		return
+	}
+	tc.reRegAt.Store(now)
+	go func() {
+		defer tc.reRegBusy.Store(false)
+		err := tc.identity.register(tc.registerURL, *tunnelSecret)
+		if err == nil {
+			log.Printf("[tunnel] установка перерегистрирована (%s)", tc.identity.InstallID)
+			return
+		}
+		// Идентификатор занят другим ключом — повторять с тем же бесполезно,
+		// ответ не изменится никогда. Перевыпускаем личность целиком и
+		// регистрируем заново, иначе установка заперта навсегда.
+		if errors.Is(err, errIdentityTaken) {
+			log.Printf("[tunnel] идентификатор %s занят другим ключом — перевыпускаю личность", tc.identity.InstallID)
+			fresh, mErr := reMintIdentity(*relayIDFile)
+			if mErr != nil {
+				log.Printf("[tunnel] перевыпуск личности не удался: %v", mErr)
+				return
+			}
+			tc.identity = fresh
+			if rErr := fresh.register(tc.registerURL, *tunnelSecret); rErr != nil {
+				log.Printf("[tunnel] регистрация новой личности не удалась: %v", rErr)
+				return
+			}
+			log.Printf("[tunnel] новая личность зарегистрирована (%s)", fresh.InstallID)
+			return
+		}
+		log.Printf("[tunnel] перерегистрация не удалась: %v", err)
+	}()
+}
+
 func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
@@ -332,19 +384,6 @@ func (tc *tunnelClient) run() {
 		default:
 		}
 
-		// Per-install re-attempt: the fallback to shared-secret (below) is TEMPORARY,
-		// not a permanent latch. After idFallbackCooldown we retry per-install so a
-		// transient flap doesn't strand a registered install on shared-secret — which
-		// would black-hole it once the relay flips to --require-per-install.
-		if tc.identity != nil && !tc.useID.Load() {
-			if fb := tc.idFallbackAt.Load(); fb > 0 && time.Now().Unix()-fb >= idFallbackCooldownSec {
-				tc.idFailStreak.Store(0)
-				tc.idFallbackAt.Store(0)
-				tc.useID.Store(true)
-				log.Printf("[tunnel] retrying per-install auth after fallback cooldown")
-			}
-		}
-
 		ws, err := tc.connectTunnelWS()
 		if err != nil {
 			consecutiveFails++
@@ -431,18 +470,24 @@ func (tc *tunnelClient) run() {
 		case <-time.After(2 * time.Second):
 		}
 
-		// Per-install auth safety fallback: if a per-install connection keeps dying
-		// fast (relay hasn't got our registration yet, or a per-install bug), drop
-		// back to shared-secret auth so Telegram never breaks. The relay dual-accepts
-		// both; this backstops the register-gated switch. The fallback is TEMPORARY —
-		// idFallbackAt arms the cooldown re-attempt at the top of the loop, so the
-		// client converges back to per-install rather than latching forever.
+		// Per-install auth keeps dying fast → RE-REGISTER, never fall back.
+		//
+		// Раньше здесь стоял откат на общий секрет с расчётом, что релей принимает
+		// оба способа. С включением --require-per-install это перестало быть правдой:
+		// релей общий секрет отвергает молча, и откат превращал поправимую заминку в
+		// гарантированные 300 секунд мёртвого туннеля — после которых всё
+		// повторялось. Полевой симптом: «WS died too fast (5 in a row)» без конца.
+		//
+		// Причина быстрых обрывов на персональной аутентификации почти всегда одна:
+		// у релея нет нашего публичного ключа (регистрация не доехала, реестр
+		// потерян, ключ перевыпущен). Это лечится повторной регистрацией, а не
+		// сменой способа входа. Поэтому мы остаёмся на персональной аутентификации
+		// и заново регистрируемся в фоне.
 		if tc.useID.Load() {
 			if time.Since(connectedAt) < 8*time.Second {
 				if tc.idFailStreak.Add(1) >= 3 {
-					tc.useID.Store(false)
-					tc.idFallbackAt.Store(time.Now().Unix())
-					log.Printf("[tunnel] per-install auth unstable — falling back to shared-secret auth (will retry in %ds)", idFallbackCooldownSec)
+					tc.idFailStreak.Store(0)
+					tc.triggerReRegister()
 				}
 			} else {
 				tc.idFailStreak.Store(0)
@@ -605,9 +650,16 @@ func runTunnel() error {
 				} else if *verbose {
 					log.Printf("[tunnel] register attempt %d failed: %v", attempt+1, err)
 				}
+				// Пауза растёт, но потолок — 5 минут, а не 30.
+				//
+				// Прежние полчаса опирались на то, что до успешной регистрации
+				// туннель всё равно работает по общему секрету. С включением
+				// --require-per-install это неверно: пока регистрация не прошла,
+				// туннель НЕ работает вообще. Значит длинная пауза — это прямое
+				// время простоя телеграма у человека, а не экономия запросов.
 				wait := 30 * time.Second
 				if attempt >= 20 {
-					wait = 30 * time.Minute // long tail: a relay without /register yet
+					wait = 5 * time.Minute
 				}
 				select {
 				case <-time.After(wait):

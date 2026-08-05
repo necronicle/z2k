@@ -71,16 +71,64 @@ trap 'rm -f "$BLOCK" "$OUT"' EXIT
 # after every update. It is derived from "current" now, so it cannot drift again.
 _cur=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
 if [ -n "$_cur" ] && [ -f webpanel/www/index.html ]; then
+    _idx_before=$(_sha webpanel/www/index.html)
     sed "s/?v=[A-Za-z0-9._-]*\"/?v=${_cur}\"/g" webpanel/www/index.html > "$OUT" \
         && cat "$OUT" > webpanel/www/index.html
     printf 'кеш-бастер панели: ?v=%s\n' "$_cur"
+
+    # Если кеш-бастер реально сдвинулся — объявить index.html в changed_files
+    # последней записи истории САМИ.
+    #
+    # Это чинит грабли, на которые наступали трижды. Порядок работы такой: список
+    # файлов релиза пишется руками, ПОТОМ запускается этот скрипт — и он же
+    # правит index.html. То есть на момент составления списка файл ещё не изменён,
+    # и объявить его человек физически не может, а гейт полноты
+    # (tests/test_release_manifest_complete.sh) при ref=PENDING пропускает
+    # проверку и молчит. Ловилось каждый раз вручную и когда-нибудь не поймалось
+    # бы: панель у людей осталась бы со старым кешем при новой версии.
+    #
+    # Объявляет тот, кто изменил. Правка строго текстовая: история парсится на
+    # роутерах awk'ом по одной записи в строке, пересериализация сломала бы её.
+    _idx_after=$(_sha webpanel/www/index.html)
+    if [ "$_idx_before" != "$_idx_after" ]; then
+        if awk '/^\{"v":/ {last=$0} END {exit (last ~ /"webpanel\/www\/index\.html"/) ? 0 : 1}' "$MANIFEST"; then
+            :   # уже объявлен — ничего не делаем
+        else
+            _last_line=$(grep -n '^{"v":' "$MANIFEST" | tail -1 | cut -d: -f1)
+            if [ -n "$_last_line" ]; then
+                sed -i.bak "${_last_line}s|\"changed_files\": \[|\"changed_files\": [\"webpanel/www/index.html\", |" "$MANIFEST"
+                rm -f "${MANIFEST}.bak"
+                printf 'в changed_files добавлен webpanel/www/index.html (его изменил кеш-бастер)\n'
+            fi
+        fi
+    fi
 fi
+
+# Файлы, которые НЕ доставляются патчем, но всё равно должны иметь контрольную
+# сумму. Пример и причина — бинарники: install.sh качает их напрямую с зеркал
+# ("${GITHUB_RAW}/mtproxy-client/builds/..."), а проверял до сих пор эвристиками
+# «ELF, больше 500 КБ, --help не падает». Это ловит обрыв закачки и чужую арку,
+# но НЕ ловит протухший ответ зеркала — ровно тот отказ, ради которого карта сумм
+# и заводилась (issue #26).
+#
+# Целью установки их делать нельзя: цель зависит от архитектуры роутера, и патч
+# начал бы раскладывать arm64-бинарник на mipsel. Поэтому они попадают в карту,
+# но au_install_paths для них по-прежнему пуст — доставка остаётся за reinstall,
+# а z2k_fetch получает по ним sha и сверяет (см. _z2k_manifest_sha в z2k.sh).
+_verify_only() {
+    case "$1" in
+        mtproxy-client/builds/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 n=0
 for f in $(git ls-files | LC_ALL=C sort); do
     [ -f "$f" ] || continue
     [ "$f" = "$MANIFEST" ] && continue          # cannot contain its own digest
-    [ -n "$(au_install_paths "$f" 2>/dev/null)" ] || continue
+    if ! _verify_only "$f"; then
+        [ -n "$(au_install_paths "$f" 2>/dev/null)" ] || continue
+    fi
     printf '  "%s": "%s",\n' "$f" "$(_sha "$f")" >> "$BLOCK"
     n=$((n + 1))
 done

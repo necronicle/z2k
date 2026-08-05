@@ -13,6 +13,7 @@ package main
 // client stays on shared-secret).
 
 import (
+	"errors"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -122,10 +123,35 @@ func (id *relayIdentity) register(registerURL, secret string) error {
 		return err
 	}
 	defer resp.Body.Close()
+	// 409 — релей уже знает этот install_id, но под ДРУГИМ ключом (mint-once,
+	// vps-relay/registry.go). Такое бывает, когда файл личности пересоздали, а
+	// идентификатор остался прежним. Повторять бесполезно: ответ не изменится
+	// никогда, и установка запирается навсегда — туннель не поднимется, потому
+	// что релей требует персональную аутентификацию. Отдаём отдельную ошибку,
+	// чтобы вызывающий перевыпустил личность целиком.
+	if resp.StatusCode == http.StatusConflict {
+		return errIdentityTaken
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("register status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// errIdentityTaken — идентификатор занят другим ключом; лечится только
+// перевыпуском личности, повторные попытки с тем же ключом бессмысленны.
+var errIdentityTaken = errors.New("install_id taken by another key")
+
+// reMintIdentity удаляет файл личности и создаёт новую пару.
+//
+// Нужно ровно для одного случая: релей ответил 409. loadOrMintIdentity сам
+// перевыпускает личность, только если файл ИСПОРЧЕН, а исправный файл с
+// занятым идентификатором для него выглядит нормальным — и клиент застревает.
+func reMintIdentity(path string) (*relayIdentity, error) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return loadOrMintIdentity(path)
 }
 
 // deriveRegisterURL maps the tunnel WS URL to the register HTTPS URL:
