@@ -1914,8 +1914,14 @@ Z2K_PADENCAP=${saved_Z2K_PADENCAP}
 #   1 — исключить устройства из этой политики из обработки z2k (нужно если
 #       одно устройство должно ходить direct без модификации пакетов)
 # preserve через reinstall (без префикса Z2K_, поэтому добавлены в whitelist).
-POLICY_NAME=${saved_POLICY_NAME}
-POLICY_EXCLUDE=${saved_POLICY_EXCLUDE}
+# В КАВЫЧКАХ. Конфиг исполняется как скрипт (files/S99zapret2.new:197 делает
+# `. "$ZAPRET_CONFIG"`), а имя политики Keenetic человек задаёт сам и по-русски:
+# «Через ВПН», «Прямой канал». Без кавычек такое присваивание разваливается на
+# POLICY_NAME=Через и попытку выполнить ВПН как команду — то есть сервис
+# ломается на ровном месте. Отчёт 2026-08-05: «нельзя прописать политику
+# кириллицей и с пробелом».
+POLICY_NAME="${saved_POLICY_NAME}"
+POLICY_EXCLUDE="${saved_POLICY_EXCLUDE}"
 
 # Keenetic per-flow hardware-offload exclusion (PPE de-offload). Default 1=ON.
 # Webpanel toggle (toggle_ppe) sets Z2K_PPE_DEOFFLOAD=0; emitted here with the

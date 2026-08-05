@@ -491,7 +491,10 @@ start() {
                 else
                     log "$ifc never appeared within 30s — usque did not create the tun"
                 fi
-            ) &
+            # Отвязываем и внутреннюю, хотя внешняя уже отвязана: правило
+            # «в init.d не бывает голого ) &» проверяется тестом и должно быть
+            # безусловным, иначе исключение однажды окажется не исключением.
+            ) >/dev/null 2>&1 </dev/null &
             ndmjob=$!
             wait "$child"
             # The keepalive loop outlives its daemon otherwise, and on `stop` it would keep
@@ -504,7 +507,12 @@ start() {
             echo "$(date 2>/dev/null) [$NAME] engine exited, respawn in ${backoff}s" >> "$LOG"
             sleep "$backoff"
         done
-    ) &
+    # Отвязка от потоков init-скрипта обязательна: NDM читает вывод каждого
+    # скрипта до конца потока, а фоновый надзиратель наследует этот поток и
+    # держит его открытым всё время жизни — очередь загрузки встаёт здесь и
+    # дальше не идёт. Внутренняя подоболочка ниже наследует уже отвязанные
+    # потоки, поэтому её трогать не нужно.
+    ) >/dev/null 2>&1 </dev/null &
     echo $! > "$PIDFILE"
     rm -rf "$LOCKDIR" 2>/dev/null
     return 0

@@ -45,8 +45,12 @@ set_flag() {
     # set_flag <key> <value> <file>
     local key="$1" val="$2" file="$3"
     [ -f "$file" ] || { echo "file not found: $file" >&2; return 1; }
+    # Значение экранируется: разделитель sed — слэш, и & в замене означает
+    # «весь совпавший текст». Имя политики задаёт человек, там бывает что угодно.
+    local _esc
+    _esc=$(printf '%s' "$val" | sed 's/[&/\\]/\\&/g')
     if grep -q "^${key}=" "$file"; then
-        sed -i "s/^${key}=.*/${key}=${val}/" "$file"
+        sed -i "s/^${key}=.*/${key}=${_esc}/" "$file"
     else
         echo "${key}=${val}" >> "$file"
     fi
@@ -525,9 +529,17 @@ policy_save() {
     local name="$1" exclude="$2"
     # Имя validation: 1-32 chars, [A-Za-z0-9_-]. Пустое разрешено = выключить
     # фильтр (config_official.sh fallback на nfqws default).
+    # Проверка от ОБРАТНОГО: запрещаем то, что ломает, а не разрешаем только
+    # латиницу. Прежний список [A-Za-z0-9_-] отбивал и пробел, и кириллицу —
+    # а имена политик в Keenetic человек пишет по-русски и с пробелами.
+    #
+    # Запрещено ровно то, что опасно при `. config`: кавычка рвёт строку,
+    # доллар и обратная кавычка подставляют/выполняют, обратный слэш экранирует.
+    # Перевод строки и точка с запятой позволили бы дописать команду.
     case "$name" in
         '') name="" ;;
-        *[!A-Za-z0-9_-]*) echo "invalid policy name" >&2; return 1 ;;
+        *[\"\$\`\\]*|*';'*|*'
+'*) echo "invalid policy name" >&2; return 1 ;;
     esac
     if [ -n "$name" ] && [ ${#name} -gt 32 ]; then
         echo "policy name too long" >&2; return 1

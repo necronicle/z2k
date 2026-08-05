@@ -1522,7 +1522,12 @@ step_build_zapret2() {
     if z2k_fetch "$api_url" "$api_tmp" && [ -s "$api_tmp" ]; then
         openwrt_url=$(grep -o 'https://github.com/necronicle/zapret2-z2k/releases/download/[^"]*openwrt-embedded\.tar\.gz' "$api_tmp" | head -1)
     fi
-    rm -f "$api_tmp"
+    # Убираем и файл-спутник .etag: z2k_fetch кладёт его рядом с целью
+    # ("${dest}.etag"), а имя цели содержит номер процесса — то есть каждый
+    # прогон оставлял в /tmp по одному файлу навсегда. На живом роутере их
+    # накопилось шесть за неделю. Само по себе это байты, но /tmp там tmpfs,
+    # то есть оперативка, а роутеры месяцами не перезагружают.
+    rm -f "$api_tmp" "${api_tmp}.etag"
 
     if [ -z "$openwrt_url" ]; then
         # Derived from the URL, never spelled out again: the literal here said
@@ -2126,6 +2131,19 @@ step_build_zapret2() {
                         if grep -q "^${_flag_name}=" "$ZAPRET2_DIR/config"; then
                             _escaped=$(printf '%s\n' "$_line" | sed 's/[&/\\]/\\&/g')
                             sed -i "s|^${_flag_name}=.*|${_escaped}|" "$ZAPRET2_DIR/config"
+                            _applied=$((_applied + 1))
+                        else
+                            # Ключа нет в свежем конфиге — ДОПИСЫВАЕМ, а не пропускаем.
+                            #
+                            # Раньше здесь было «нет ключа — значит не наш», и это тихо
+                            # съедало настройки, которые генератор конфига не пишет вовсе:
+                            # их дописывает панель при переключении. Таких два —
+                            # Z2K_AUTO_UPDATE_ENABLED и Z2K_PPE.
+                            #
+                            # Для человека это выглядело так: выключил автообновление,
+                            # нажал «Обновить» руками — и после обновления оно включилось
+                            # обратно само. То есть «автообновления не выключаются».
+                            printf '%s\n' "$_line" >> "$ZAPRET2_DIR/config"
                             _applied=$((_applied + 1))
                         fi
                     done < "$_flag_backup"
@@ -3674,6 +3692,19 @@ step_finalize() {
                 if grep -q "^${_flag_name}=" "$ZAPRET2_DIR/config"; then
                     _escaped=$(printf '%s\n' "$_line" | sed 's/[&/\\]/\\&/g')
                     sed -i "s|^${_flag_name}=.*|${_escaped}|" "$ZAPRET2_DIR/config"
+                    _applied=$((_applied + 1))
+                else
+                    # Ключа нет в свежем конфиге — ДОПИСЫВАЕМ, а не пропускаем.
+                    #
+                    # Раньше здесь было «нет ключа — значит не наш», и это тихо
+                    # съедало настройки, которые генератор конфига не пишет вовсе:
+                    # их дописывает панель при переключении. Таких два —
+                    # Z2K_AUTO_UPDATE_ENABLED и Z2K_PPE.
+                    #
+                    # Для человека это выглядело так: выключил автообновление,
+                    # нажал «Обновить» руками — и после обновления оно включилось
+                    # обратно само. То есть «автообновления не выключаются».
+                    printf '%s\n' "$_line" >> "$ZAPRET2_DIR/config"
                     _applied=$((_applied + 1))
                 fi
             done < "$_flag_backup"

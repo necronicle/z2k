@@ -782,8 +782,18 @@ EOF
         [ -z "$svc" ] && continue
         if [ -x "/opt/etc/init.d/$svc" ]; then
             au_log "patch: restart $svc"
-            "/opt/etc/init.d/$svc" restart >/dev/null 2>&1 || \
-                au_log "patch: $svc restart returned non-zero (continuing)"
+            # Вывод перезапуска СОХРАНЯЕМ. Раньше он уходил в /dev/null, и при
+            # отказе в журнале оставалось только «returned non-zero» — то есть
+            # ровно ничего. Дальше health-check видел мёртвый nfqws2, откатывал
+            # исправный патч, и человек читал «непонятно что не так».
+            _rst_out=$(mktemp 2>/dev/null || echo /tmp/z2k-au-restart.$$)
+            if ! "/opt/etc/init.d/$svc" restart > "$_rst_out" 2>&1; then
+                au_log "patch: $svc restart returned non-zero — вот что он сказал:"
+                tail -12 "$_rst_out" 2>/dev/null | while IFS= read -r _l; do
+                    [ -n "$_l" ] && au_log "patch:   $_l"
+                done
+            fi
+            rm -f "$_rst_out" 2>/dev/null
         fi
     done
 
@@ -875,8 +885,19 @@ au_health_check() {
     # Failing here therefore does not mean "too slow to start" — it means the
     # daemon came up and then died, which is a genuine reason to roll back.
     if ! pgrep -f nfqws2 >/dev/null 2>&1; then
-        au_log "health-check FAILED: nfqws2 died after start"
-        return 1
+        # Сравниваем с тем, что было ДО обновления. Если nfqws2 не работал и
+        # раньше, патч ни при чём: откатывать его бессмысленно, а главное —
+        # вредно. Раньше этой проверки не было, и на роутере, где сервис не
+        # поднимается по своей причине (нет модулей ядра, нет ipset bitmap:port),
+        # КАЖДОЕ обновление откатывалось само. Человек не мог обновиться никогда
+        # и не понимал почему.
+        if [ "${Z2K_AU_NFQWS_WAS_ALIVE:-1}" = "0" ]; then
+            au_log "health-check: nfqws2 не работает, но он и ДО обновления не работал — патч ни при чём, оставляем"
+            au_log "health-check: разберитесь, почему не стартует сервис (диагностика: раздел «что не так»)"
+        else
+            au_log "health-check FAILED: nfqws2 died after start"
+            return 1
+        fi
     fi
 
     # A patch can ship a shell script with a SYNTAX error that does not stop the
@@ -1089,6 +1110,15 @@ au_run_apply() {
             ;;
         patch)
             au_log "starting patch: $installed -> $target_tag"
+            # Состояние сервиса ДО патча — чтобы health-check не назначал
+            # виноватым обновление за то, что было сломано и без него.
+            if pgrep -f nfqws2 >/dev/null 2>&1; then
+                Z2K_AU_NFQWS_WAS_ALIVE=1
+            else
+                Z2K_AU_NFQWS_WAS_ALIVE=0
+                au_log "внимание: nfqws2 не работает ЕЩЁ ДО обновления"
+            fi
+            export Z2K_AU_NFQWS_WAS_ALIVE
             au_snapshot_for_patch "$files"
             if ! au_apply_patch "$target_tag" "$files"; then
                 au_log "patch apply failed, rolling back"
@@ -1108,6 +1138,15 @@ au_run_apply() {
             ;;
         reinstall)
             au_log "starting reinstall: $installed -> $target_tag (reset_state=${reset_state:-no})"
+            # То же, что и для патча: health-check не должен винить обновление
+            # за сервис, который не работал и до него.
+            if pgrep -f nfqws2 >/dev/null 2>&1; then
+                Z2K_AU_NFQWS_WAS_ALIVE=1
+            else
+                Z2K_AU_NFQWS_WAS_ALIVE=0
+                au_log "внимание: nfqws2 не работает ЕЩЁ ДО обновления"
+            fi
+            export Z2K_AU_NFQWS_WAS_ALIVE
             if ! au_apply_reinstall "$target_tag" "$reset_state"; then
                 au_log "reinstall apply failed"
                 # install.sh took a rollback snapshot before it started, but
