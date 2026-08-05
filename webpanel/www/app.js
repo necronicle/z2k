@@ -2318,6 +2318,25 @@
             это всё же происходит, работать дальше становится легче.
           </p>
         </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+          <div class="credits-name">hoaxx</div>
+          <p class="desc">
+            Спасибо, hoaxx. Такая поддержка делает проект устойчивее, а работу
+            над ним — спокойнее.
+          </p>
+        </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+          <div class="credits-name">Mansurchick</div>
+          <p class="desc">
+            Спасибо, Mansurchick. Часть обхода живёт не на роутере: чтобы найти
+            рабочий адрес заблокированного сайта, нужен взгляд из-за границы —
+            и сервер, который этим занят, держится в том числе на таких взносах.
+          </p>
+        </div>
       </div>
     `;
   }
