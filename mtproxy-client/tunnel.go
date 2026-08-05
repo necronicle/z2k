@@ -1,12 +1,12 @@
 package main
 
 import (
-	"errors"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -119,7 +119,10 @@ type tunnelClient struct {
 	tunnelURL    string
 	tunnelSecret string
 
-	identity     *relayIdentity // per-install identity (Stage B); nil if unavailable
+	// Атомарный, а не голый указатель: фоновая перерегистрация ПЕРЕПИСЫВАЕТ
+	// личность (перевыпуск после 409), а читают её горутины подключений на
+	// каждой аутентификации. Голое поле здесь — гонка данных.
+	identity     atomic.Pointer[relayIdentity]
 	registerURL  string
 	useID        atomic.Bool  // send per-install auth (set true after a successful register)
 	idFailStreak atomic.Int32 // consecutive fast deaths while on per-install auth
@@ -173,8 +176,94 @@ func (s *tunnelStream) close() {
 // reRegMinIntervalSec — иначе клиент в петле быстрых обрывов превратился бы в
 // генератор запросов к /register, а он ограничен по частоте на стороне релея и
 // начал бы отвечать отказом уже законно.
+// registerOnce регистрирует текущую личность и САМА разбирает случай, когда
+// идентификатор уже занят другим ключом.
+//
+// Раньше этот разбор жил только в фоновой перерегистрации, а она вызывается
+// исключительно из ветки для уже зарегистрированных (useID). То есть установка,
+// у которой ключ разошёлся с реестром ДО первой удачной регистрации, получала
+// 409 в стартовом цикле, повторяла с тем же ключом бесконечно и не могла выйти
+// из этого никогда: перевыпуск был написан, но недостижим. Туннель при этом не
+// поднимался вовсе — релей требует персональную аутентификацию.
+//
+// Возвращает true, если после вызова личность зарегистрирована.
+// identityLoop добывает личность и регистрирует её, не сдаваясь.
+//
+// Два отказа раньше были окончательными и лечились только перезапуском
+// процесса. Первый: если loadOrMintIdentity не смогла записать файл (диск
+// переполнен, /opt в режиме только чтения), клиент писал строку в лог и не
+// пробовал больше НИКОГДА — а значит навсегда оставался на общем секрете,
+// который релей с включённым требованием персональной аутентификации не
+// принимает. Второй: 409 в стартовом цикле повторялся с тем же ключом до
+// бесконечности, потому что перевыпуск был доступен только уже
+// зарегистрировавшимся (см. registerOnce).
+//
+// Пауза растёт до 5 минут, а не до получаса: пока регистрация не прошла,
+// туннель не работает вообще, и длинная пауза — это прямое время простоя
+// телеграма у человека, а не экономия запросов к релею.
+func (tc *tunnelClient) identityLoop() {
+	for attempt := 0; ; attempt++ {
+		if tc.identity.Load() == nil {
+			if id, err := loadOrMintIdentity(*relayIDFile); err != nil {
+				log.Printf("[tunnel] личность недоступна (%v) — повторю попытку", err)
+			} else {
+				tc.identity.Store(id)
+			}
+		}
+		if tc.identity.Load() != nil && tc.registerOnce() {
+			tc.useID.Store(true)
+			if id := tc.identity.Load(); id != nil {
+				log.Printf("[tunnel] registered identity %s — using per-install auth", id.InstallID)
+			}
+			return
+		}
+		wait := 30 * time.Second
+		if attempt >= 20 {
+			wait = 5 * time.Minute
+		}
+		select {
+		case <-time.After(wait):
+		case <-tc.ctx.Done():
+			return
+		}
+	}
+}
+
+func (tc *tunnelClient) registerOnce() bool {
+	id := tc.identity.Load()
+	if id == nil || tc.registerURL == "" {
+		return false
+	}
+	err := id.register(tc.registerURL, *tunnelSecret)
+	if err == nil {
+		return true
+	}
+	// Идентификатор занят другим ключом — повторять с тем же бесполезно, ответ
+	// не изменится никогда. Перевыпускаем личность целиком.
+	if errors.Is(err, errIdentityTaken) {
+		log.Printf("[tunnel] идентификатор %s занят другим ключом — перевыпускаю личность", id.InstallID)
+		fresh, mErr := reMintIdentity(*relayIDFile)
+		if mErr != nil {
+			log.Printf("[tunnel] перевыпуск личности не удался: %v", mErr)
+			return false
+		}
+		tc.identity.Store(fresh)
+		if rErr := fresh.register(tc.registerURL, *tunnelSecret); rErr != nil {
+			log.Printf("[tunnel] регистрация новой личности не удалась: %v", rErr)
+			return false
+		}
+		log.Printf("[tunnel] новая личность зарегистрирована (%s)", fresh.InstallID)
+		return true
+	}
+	// Пишем ВСЕГДА, а не только под -v. Это единственная строка, отличающая
+	// «нас не пускают» от «сети нет», и без неё второй экземпляр туннеля
+	// (S97z2k-http-tunnel, запускается без -v) молчал о своих отказах вовсе.
+	log.Printf("[tunnel] регистрация не удалась: %v", err)
+	return false
+}
+
 func (tc *tunnelClient) triggerReRegister() {
-	if tc.identity == nil || tc.registerURL == "" {
+	if tc.identity.Load() == nil || tc.registerURL == "" {
 		return
 	}
 	now := time.Now().Unix()
@@ -187,30 +276,11 @@ func (tc *tunnelClient) triggerReRegister() {
 	tc.reRegAt.Store(now)
 	go func() {
 		defer tc.reRegBusy.Store(false)
-		err := tc.identity.register(tc.registerURL, *tunnelSecret)
-		if err == nil {
-			log.Printf("[tunnel] установка перерегистрирована (%s)", tc.identity.InstallID)
-			return
-		}
-		// Идентификатор занят другим ключом — повторять с тем же бесполезно,
-		// ответ не изменится никогда. Перевыпускаем личность целиком и
-		// регистрируем заново, иначе установка заперта навсегда.
-		if errors.Is(err, errIdentityTaken) {
-			log.Printf("[tunnel] идентификатор %s занят другим ключом — перевыпускаю личность", tc.identity.InstallID)
-			fresh, mErr := reMintIdentity(*relayIDFile)
-			if mErr != nil {
-				log.Printf("[tunnel] перевыпуск личности не удался: %v", mErr)
-				return
+		if tc.registerOnce() {
+			if id := tc.identity.Load(); id != nil {
+				log.Printf("[tunnel] установка перерегистрирована (%s)", id.InstallID)
 			}
-			tc.identity = fresh
-			if rErr := fresh.register(tc.registerURL, *tunnelSecret); rErr != nil {
-				log.Printf("[tunnel] регистрация новой личности не удалась: %v", rErr)
-				return
-			}
-			log.Printf("[tunnel] новая личность зарегистрирована (%s)", fresh.InstallID)
-			return
 		}
-		log.Printf("[tunnel] перерегистрация не удалась: %v", err)
 	}()
 }
 
@@ -247,8 +317,8 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 	// we hold a registered identity; otherwise the shared-secret HMAC (type 0x00).
 	// The relay dual-accepts both — this is not a flip.
 	var authFrame []byte
-	if tc.identity != nil && tc.useID.Load() {
-		authFrame = encodeMuxFrame(0x0000, 0x06, tc.identity.authPayload())
+	if id := tc.identity.Load(); id != nil && tc.useID.Load() {
+		authFrame = encodeMuxFrame(0x0000, 0x06, id.authPayload())
 	} else {
 		authFrame = encodeMuxFrame(0x0000, 0x00, computeAuthHMAC(tc.tunnelSecret))
 	}
@@ -636,39 +706,8 @@ func runTunnel() error {
 	// background. Until registration succeeds the client authenticates with the
 	// shared secret (dual-accepted by the relay), so a relay without /register or
 	// a transient registration failure never blocks the tunnel.
-	if id, err := loadOrMintIdentity(*relayIDFile); err != nil {
-		log.Printf("[tunnel] per-install identity unavailable (%v) — using shared-secret auth", err)
-	} else {
-		tc.identity = id
-		tc.registerURL = deriveRegisterURL(*tunnelURL)
-		go func() {
-			for attempt := 0; ; attempt++ {
-				if err := id.register(tc.registerURL, *tunnelSecret); err == nil {
-					tc.useID.Store(true)
-					log.Printf("[tunnel] registered identity %s — using per-install auth", id.InstallID)
-					return
-				} else if *verbose {
-					log.Printf("[tunnel] register attempt %d failed: %v", attempt+1, err)
-				}
-				// Пауза растёт, но потолок — 5 минут, а не 30.
-				//
-				// Прежние полчаса опирались на то, что до успешной регистрации
-				// туннель всё равно работает по общему секрету. С включением
-				// --require-per-install это неверно: пока регистрация не прошла,
-				// туннель НЕ работает вообще. Значит длинная пауза — это прямое
-				// время простоя телеграма у человека, а не экономия запросов.
-				wait := 30 * time.Second
-				if attempt >= 20 {
-					wait = 5 * time.Minute
-				}
-				select {
-				case <-time.After(wait):
-				case <-tc.ctx.Done():
-					return
-				}
-			}
-		}()
-	}
+	tc.registerURL = deriveRegisterURL(*tunnelURL)
+	go tc.identityLoop()
 
 	go tc.run()
 
