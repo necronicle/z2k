@@ -317,6 +317,59 @@ print_tunnel() {
     vps_rtt=$(echo "$rtt_and_loss" | awk '{print $1}')
     vps_loss=$(echo "$rtt_and_loss" | awk '{print $2}')
     printf 'VPS ping %s     : avg %s ms, loss %s%%\n' "$VPS_IP" "$vps_rtt" "$vps_loss"
+
+    # Часы. Туннель подписывает каждое подключение меткой времени, и релей
+    # отвергает её при расхождении больше ±120 с. Роутер без батарейки после
+    # перезагрузки или с заблокированным NTP уезжает легко, а снаружи это
+    # выглядит как «телеграм не работает» — без единого намёка на причину.
+    # Сверяемся с заголовком Date самого релея: он и есть та шкала, по которой
+    # нас проверяют.
+    local srv_date srv_epoch now_epoch skew
+    srv_date=$(curl -s -m 8 -D - -o /dev/null "https://${VPS_IP}.nip.io/" 2>/dev/null \
+               | awk 'tolower($1)=="date:"{sub(/^[Dd]ate: */,""); sub(/\r$/,""); print; exit}')
+    if [ -n "$srv_date" ]; then
+        # Считаем сами: date -d не разбирает RFC-формат ни в busybox, ни в BSD.
+        srv_epoch=$(printf '%s\n' "$srv_date" | awk '
+            function days_from_civil(y, m, d,   era, yoe, doy, doe) {
+                if (m <= 2) y--
+                era = int((y >= 0 ? y : y - 399) / 400)
+                yoe = y - era * 400
+                doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+                doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+                return era * 146097 + doe - 719468
+            }
+            BEGIN { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", mn, " ")
+                    for (i = 1; i <= 12; i++) mon[mn[i]] = i }
+            { gsub(/,/, ""); d = $2 + 0; m = mon[$3]; y = $4 + 0; split($5, t, ":")
+              if (m == 0 || y == 0) { print ""; exit }
+              print days_from_civil(y, m, d) * 86400 + t[1] * 3600 + t[2] * 60 + t[3] }')
+        now_epoch=$(date +%s 2>/dev/null)
+        if [ -n "$srv_epoch" ] && [ -n "$now_epoch" ] 2>/dev/null; then
+            skew=$((now_epoch - srv_epoch))
+            if [ "$skew" -gt 120 ] || [ "$skew" -lt -120 ]; then
+                printf 'clock vs relay    : %+d s — ВНЕ ДОПУСКА (±120), туннель не поднимется\n' "$skew"
+            else
+                printf 'clock vs relay    : %+d s (ок)\n' "$skew"
+            fi
+        else
+            printf 'clock vs relay    : не удалось разобрать время релея\n'
+        fi
+    else
+        printf 'clock vs relay    : релей не ответил\n'
+    fi
+
+    # Строки про личность и регистрацию — то, на чём туннель спотыкается чаще
+    # всего. Раньше их приходилось просить у человека отдельной командой, хотя
+    # диагностика для того и нужна, чтобы он ничего не набирал руками.
+    local tg_log="/tmp/z2k-log/tg-tunnel.log"
+    if [ -r "$tg_log" ]; then
+        printf 'tunnel log        : %s\n' "$tg_log"
+        grep -aE 'identity|registered|register attempt|занят другим|перерегистр|перевыпуск' "$tg_log" 2>/dev/null \
+            | tail -8 | sed 's/^/  /'
+        tail -4 "$tg_log" 2>/dev/null | sed 's/^/  /'
+    else
+        printf 'tunnel log        : нет (%s)\n' "$tg_log"
+    fi
 }
 
 # =============================================================================

@@ -63,7 +63,7 @@
   "files/z2k-auto-update.sh": "cef055be2ef47df6934405602ebbfcc1a36c6ef8e0dfd31c6fcc457791cefc0f",
   "files/z2k-blocked-monitor.sh": "d2221cab05461c6f44042464bd3c6979c7303f787460b8b5989f91bf4ebf9a99",
   "files/z2k-config-validator.sh": "31b8e39341f75efb130500ad473cabd90677d814be259bc110429fbc3e4c01d4",
-  "files/z2k-diag.sh": "64fa9a3a6c5dad4b24cd752111f96042e1f09ea1e6fe40015d7bf63344d81c51",
+  "files/z2k-diag.sh": "498ecc274c52731ec9941fc2b4261cc2a9170430c78fb8280e322b1663e241bc",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "cf1ea5bc9d52cef212bfc16dc5d3fe91bf64aa4561c1e0e4684891b8b8cd86ae",
   "files/z2k-insta-ip-refresh.sh": "bc57959705f8df2d3ee555aff871f8310877ff56a73db0f8bf63c8ce851376d1",
