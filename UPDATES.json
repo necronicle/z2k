@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-72.4",
+  "current": "p-72.5",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "6fb2c77122a8f2b82cb3d276794b247448fcb24448611673ca84c44275c618b8",
@@ -78,7 +78,7 @@
   "lib/auto_update.sh": "6012e9a3aca7dc57c6f2e4a02ac38149a7313a9e6b3c5d844b99ee9833269bf8",
   "lib/config.sh": "07ffc9865ecb882708824fd9bd90ea0b6d8226ec172b96332f0cb3d1d2882907",
   "lib/config_official.sh": "83d843c32af267882856b4402609614dba5f0c0e6b8cc001a284a8749f8d9c3b",
-  "lib/install.sh": "6f33be8810614e170c6d97ed0b7737089600bd2689ec26bd2cff6a99879a89de",
+  "lib/install.sh": "ba766162165192363de8354d6590bbd51d8b78055723fe4df1e1811e88678063",
   "lib/menu.sh": "80a8f799c86f99fbe701d2c03eead6b2810b83f6d4b32a92d60fde494a059e47",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
   "lib/utils.sh": "31b370718c1aeb6dcf325d72f5121f4eff7cb309a9ce31be243575f412ede7b0",
@@ -105,7 +105,7 @@
   "webpanel/uninstall.sh": "1fe2374c8d6497c60bc831578ccd3176202a67de33f7a4ddc48d2fcb83137b36",
   "webpanel/www/app.js": "f9974544d9223c82bff9db8a2c3f2bc97237f9f9bb33eeb66502c1a95566b9b3",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "fda4766618b6b48fc854ec3b9e2ebdf0a981baa5cf5f23e540d83824971732ee",
+  "webpanel/www/index.html": "2c57b1494e114dbef27d907feddf210739e18b0671ee9176096b8c313f56009a",
   "webpanel/www/style.css": "e5f6c260d5a5942c9911597ae1a002f690561d9dcbe1176d6a24b4b79c0f654e",
   "z2k.sh": "2f52d6ba20f46617e85c34bbf5ba1da7d957eee50e16665da7f4c14fe0bcfaea"
   },
@@ -249,6 +249,7 @@
 {"v": "r-72.1", "type": "reinstall", "ts": "2026-08-05T06:18:38Z", "ref": "079afee", "desc": "Телеграм-туннель у части людей поднимался и тут же обрывался, раз за разом. Виноват был сам клиент: при первой же заминке он переключался на старый способ входа, который сервер больше не принимает, и запирал себя на пять минут — после чего всё повторялось. Теперь вместо этого он просто заново представляется серверу и продолжает работать. Отдельно исправлен случай, когда установка была заперта навсегда и лечилась только переустановкой. Также бинарник туннеля теперь проверяется контрольной суммой при скачивании и собирается закреплённой версией компилятора — прежняя сборка на новых машинах портила версии для части роутеров.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"]},
 {"v": "r-72.2", "type": "reinstall", "ts": "2026-08-05T09:19:30Z", "ref": "f35b017", "desc": "Телеграм-туннель у части людей запирался наглухо: если ключ установки расходился с тем, что записан на сервере, клиент повторял его без конца и подключиться не мог никогда — теперь он сам заводит новую личность и восстанавливается за секунду. Список заблокированных сайтов больше не обнуляется по ночам: он не заменяется, пока новый не проверен целиком. Веб-версия WhatsApp снова открывается — адрес подбирается автоматически и проверяется живым запросом. В диагностику добавлены часы роутера и записи туннеля: по ним сразу видно причину, если он не поднимается.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-geosite.sh", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "webpanel/www/app.js", "UPDATES.json"]},
 {"v": "r-72.3", "type": "patch", "ts": "2026-08-05T10:06:09Z", "ref": "ef63436", "desc": "Двое новых спонсоров проекта в списке благодарностей — hoaxx и Mansurchick. Список показывается в меню z2k и на странице «Благодарности» в веб-панели.", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "UPDATES.json"]},
-{"v": "p-72.4", "type": "patch", "ts": "2026-08-05T10:20:10Z", "ref": "d5d0a1d", "desc": "Три игры из списка WARP отдавались как ошибка загрузки, хотя на самом деле их файлов у источника просто нет. В диагностике это выглядело как поломка — теперь такие случаи отмечаются как пропуск, а настоящие сбои по-прежнему видны.", "changed_files": ["webpanel/www/index.html", "files/z2k-update-lists.sh", "UPDATES.json"]}
+{"v": "p-72.4", "type": "patch", "ts": "2026-08-05T10:20:10Z", "ref": "d5d0a1d", "desc": "Три игры из списка WARP отдавались как ошибка загрузки, хотя на самом деле их файлов у источника просто нет. В диагностике это выглядело как поломка — теперь такие случаи отмечаются как пропуск, а настоящие сбои по-прежнему видны.", "changed_files": ["webpanel/www/index.html", "files/z2k-update-lists.sh", "UPDATES.json"]},
+{"v": "p-72.5", "type": "patch", "ts": "2026-08-05T10:45:07Z", "ref": "PENDING", "desc": "Прерванная установка оставляла на диске недокачанные копии программ — до 14 МБ за раз, и никто их не убирал. Получался замкнутый круг: установка падала из-за нехватки места, оставляла мусор и падала в следующий раз вернее. Теперь такие хвосты убираются до начала установки.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "UPDATES.json"]}
   ]
 }
