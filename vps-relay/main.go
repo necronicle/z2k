@@ -1041,11 +1041,25 @@ func makeSessionID() string {
 // Anything else is silently dropped from the response. Per-host LookupHost
 // timeout is short; failures are also silently dropped.
 
+// Аллоулист /resolve. Имя isInstaHost историческое: сюда добавился WhatsApp.
+//
+// WhatsApp попал по той же причине, что и Instagram, — блокировка идёт по
+// диапазону адресов, а не по имени. Замер 2026-08-05: всё, что резолвится в
+// 157.240.x, из РФ глухо, а 57.144/57.145/3.33/15.197 отвечают. Мета отдаёт то
+// один диапазон, то другой, поэтому роутеру нужен зарубежный резолв, чтобы
+// вообще увидеть живые варианты.
+//
+// wa.me и остальные витринные домены (whatsapp.cc/.info/.org/.tv,
+// whatsappbrand.com из списка v2fly) сюда НЕ входят: они не участвуют в работе
+// клиента, а каждый лишний домен — это лишняя статическая запись DNS на
+// роутере, где потолок 256 и его уже однажды съели пинами Discord.
 var instaApex = map[string]bool{
 	"instagram.com":    true,
 	"cdninstagram.com": true,
+	"whatsapp.com":     true,
+	"whatsapp.net":     true,
 }
-var instaSuffixes = []string{".instagram.com", ".cdninstagram.com"}
+var instaSuffixes = []string{".instagram.com", ".cdninstagram.com", ".whatsapp.com", ".whatsapp.net"}
 
 func isInstaHost(h string) bool {
 	h = strings.ToLower(strings.TrimSuffix(h, "."))
@@ -1058,6 +1072,61 @@ func isInstaHost(h string) bool {
 		}
 	}
 	return false
+}
+
+// publicResolvers — у кого спрашиваем адреса в дополнение к системному.
+//
+// Ответ зависит от резолвера, и это не мелочь: замер 2026-08-05 по
+// web.whatsapp.com с этой машины — 8.8.8.8 отдаёт 57.144.245.32 (из РФ
+// работает), а 1.1.1.1 и 9.9.9.9 отдают 157.240.x (из РФ глухо). Спросив
+// одного, можно не увидеть ни одного живого варианта вовсе.
+var publicResolvers = []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"}
+
+// resolveV4Union собирает IPv4-адреса хоста у системного резолвера и у
+// нескольких публичных, объединяя ответы.
+//
+// Объединение, а не «первый непустой», намеренно: роутер потом сам проверяет
+// каждый адрес живым запросом и берёт тот, что ответил. Наша задача — дать ему
+// выбор, а не выбрать за него: отсюда, из Европы, «живой» и «живой из РФ» это
+// разные вещи, и решить это здесь нельзя в принципе.
+func resolveV4Union(parent context.Context, host string) []string {
+	ctx, cancel := context.WithTimeout(parent, 6*time.Second)
+	defer cancel()
+
+	seen := map[string]bool{}
+	out := make([]string, 0, 8)
+	add := func(ips []string) {
+		for _, ip := range ips {
+			if strings.Contains(ip, ":") || seen[ip] {
+				continue
+			}
+			seen[ip] = true
+			out = append(out, ip)
+		}
+	}
+
+	if ips, err := net.DefaultResolver.LookupHost(ctx, host); err == nil {
+		add(ips)
+	}
+	for _, rs := range publicResolvers {
+		addr := rs
+		res := &net.Resolver{
+			PreferGo: true,
+			Dial: func(c context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(c, network, addr)
+			},
+		}
+		if ips, err := res.LookupHost(ctx, host); err == nil {
+			add(ips)
+		}
+		if len(out) >= 8 {
+			break
+		}
+	}
+	if len(out) > 8 {
+		out = out[:8]
+	}
+	return out
 }
 
 type resolveReq struct {
@@ -1118,24 +1187,12 @@ func handleResolve(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		ips, err := net.DefaultResolver.LookupHost(ctx, h)
-		cancel()
-		if err != nil {
+		v4 := resolveV4Union(r.Context(), h)
+		if len(v4) == 0 {
 			if *verbose {
-				log.Printf("resolve %q: %v", h, err)
+				log.Printf("resolve %q: пусто", h)
 			}
 			continue
-		}
-		var v4 []string
-		for _, ip := range ips {
-			if strings.Contains(ip, ":") {
-				continue
-			}
-			v4 = append(v4, ip)
-			if len(v4) >= 4 {
-				break
-			}
 		}
 		if len(v4) > 0 {
 			results[h] = v4

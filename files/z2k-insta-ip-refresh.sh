@@ -50,7 +50,22 @@ SECRET=$(awk -F= '/^Z2K_RESOLVE_SECRET=/ {gsub(/[" ]/,"",$2); print $2; exit}' "
 
 # Hosts we manage. Must match the VPS-side whitelist (insta apex +
 # *.instagram.com / *.cdninstagram.com suffixes).
-HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com"
+# WhatsApp здесь по той же причине, что и Instagram: блокировка идёт по
+# диапазону адресов, а не по имени. Замер 2026-08-05: всё, что резолвится в
+# 157.240.x, из РФ глухо, а 57.144/57.145/3.33/15.197 отвечают, и Мета отдаёт
+# то один диапазон, то другой. Чинится этим ВЕБ-клиент: мобильное приложение
+# SNI не использует и ходит по голым адресам, ему такой пин не поможет.
+#
+# Витринные домены (wa.me, whatsapp.cc/.info/.org/.tv, whatsappbrand.com из
+# списка v2fly) намеренно не берём: в работе клиента они не участвуют, а каждая
+# запись — это статический DNS на роутере, где потолок 256 и его уже однажды
+# съели пинами Discord.
+#
+# Здесь НЕТ хостов, которые install.sh уводит на наш VPS (whatsapp.com,
+# whatsapp.net, g/static/mmg/pps/dit/v.whatsapp.net, crashlogs). Иначе два
+# механизма перепишут записи друг друга по кругу: обновление адресов снимет пин
+# на релей, а следующая переустановка вернёт его обратно.
+HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com"
 
 log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$LOG"
@@ -192,13 +207,59 @@ else
     log "WARN: $META_RANGES отсутствует — адреса применяются без проверки принадлежности Meta"
 fi
 
+# --- Живая проба адреса ------------------------------------------------------
+#
+# Резолвер отдаёт и рабочие адреса, и заблокированные, вперемешку. Больше того,
+# даже внутри рабочего диапазона не каждый адрес обслуживает нужный SNI: из
+# шести проверенных 2026-08-05 ответили два. Значит прописывать то, что вернул
+# DNS, нельзя — пин мёртвого адреса ХУЖЕ отсутствия пина, потому что своим
+# резолвом человек мог бы получить рабочий.
+#
+# Проба идёт с самого роутера, мимо обхода. Это проверено: вердикт совпал с тем,
+# что видит клиент (57.144.245.32 и 57.145.5.32 — ответ, 57.144.249.32 и
+# 157.240.253.60 — тишина), то есть проба не врёт в ту сторону, где мы отбросили
+# бы годный адрес.
+PROBE_TIMEOUT="${Z2K_IP_PROBE_TIMEOUT:-6}"
+PROBE_MAX_TRY="${Z2K_IP_PROBE_MAX_TRY:-4}"
+PROBE_KEEP="${Z2K_IP_PROBE_KEEP:-2}"
+
+probe_ip_alive() {   # host ip -> 0 если реально ответил
+    [ "${Z2K_IP_PROBE:-1}" = "1" ] || return 0
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m "$PROBE_TIMEOUT" \
+           --resolve "$1:443:$2" "https://$1/" 2>/dev/null)
+    [ -n "$code" ] && [ "$code" != "000" ]
+}
+
+# Оставляет только те адреса, что ответили. Пусто на выходе — значит НЕ трогаем
+# то, что уже прописано: лучше прежний пин, чем заведомо мёртвый.
+filter_alive() {     # host, адреса на stdin
+    _h="$1"; _kept=0; _tried=0
+    while read -r _ip; do
+        [ -n "$_ip" ] || continue
+        [ "$_tried" -ge "$PROBE_MAX_TRY" ] && break
+        _tried=$((_tried + 1))
+        if probe_ip_alive "$_h" "$_ip"; then
+            printf '%s\n' "$_ip"
+            _kept=$((_kept + 1))
+            [ "$_kept" -ge "$PROBE_KEEP" ] && break
+        else
+            log "  проба не прошла: $_h $_ip"
+        fi
+    done
+}
+
 # 8. Diff & apply per host.
 changes=0
 touched_ips=""
 for h in $HOSTS; do
-    new_ips=$(printf '%s\n' "$parsed" | awk -v host="$h" '$1==host {print $2}' | head -3)
-    if [ -z "$new_ips" ]; then
+    cand_ips=$(printf '%s\n' "$parsed" | awk -v host="$h" '$1==host {print $2}' | head -8)
+    if [ -z "$cand_ips" ]; then
         log "skip $h (VPS returned no IPs)"
+        continue
+    fi
+    new_ips=$(printf '%s\n' "$cand_ips" | filter_alive "$h")
+    if [ -z "$new_ips" ]; then
+        log "skip $h: ни один из адресов не ответил — прежние записи оставлены"
         continue
     fi
     old_ips=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \

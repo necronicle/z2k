@@ -3151,12 +3151,17 @@ step_finalize() {
         # must load direct from Fastly. See project_whatsapp_ip_block (2026-06-08).
         local relay_hosts="whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com"
         # CDN/asset hosts r-51/r-52 wrongly pinned — un-pin so they go DIRECT (Fastly).
-        # Un-pin (→ go DIRECT): TM CDN/asset hosts (Fastly, not geo-blocked) + the
-        # WhatsApp WEB client (web/www.whatsapp.com). Web dropped: RU now SNI-blocks
-        # web.whatsapp.com, so the VPS SNI-passthrough can't carry it (and the web
-        # client also needs unpinnable dynamic subdomains). Mobile app endpoints
-        # (g/mmg/static/…whatsapp.net) below stay relayed and keep working.
-        local relay_unpin="web.whatsapp.com www.whatsapp.com static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
+        # Un-pin (→ go DIRECT): TM CDN/asset hosts (Fastly, not geo-blocked).
+        #
+        # web/www.whatsapp.com отсюда УБРАНЫ 2026-08-05. Прежнее обоснование
+        # («РФ блокирует web.whatsapp.com по SNI, проброс его не тащит») замером
+        # не подтвердилось: блокировка идёт по диапазону адресов, а не по имени.
+        # Всё, что резолвится в 157.240.x, из РФ глухо, а 57.144/57.145 отвечают,
+        # и Мета отдаёт то один диапазон, то другой. Эти два хоста теперь ведёт
+        # z2k-insta-ip-refresh.sh: он берёт зарубежный резолв, пробует каждый
+        # адрес живым запросом и прописывает тот, что ответил.
+        # Мобильные точки (g/mmg/static/…whatsapp.net) как шли через релей, так и идут.
+        local relay_unpin="static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
         # Run when a CDN pin still lingers (old install → migrate) OR the app isn't
         # pinned yet (fresh install). Idempotent; skips on an already-migrated box.
         if LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host (prismic-images.tmol.io|s1.ticketm.net|web.whatsapp.com|www.whatsapp.com) $relay_vps" \
