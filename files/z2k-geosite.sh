@@ -225,41 +225,6 @@ apply_new_list() {
     local target="$2"
     local asset="$3"
 
-    # Sanity: reject absurdly small new files that would be a regression.
-    # Threshold is 80% of the previous size (if any). Protects against
-    # upstream publishing a broken truncated asset.
-    #
-    # BUT: the shrink guard must compare against the EXPECTED asset, not the
-    # absolute previous size. pick_rkn_asset deliberately switches between the
-    # big ru-blocked-all.txt (~30 MB) and the small ru-blocked.txt (~1.7 MB) by
-    # RAM threshold, both writing this same target. A router that drops below the
-    # threshold (or a user lowering Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB) must be able
-    # to DOWNGRADE big→small — but the small list is ~5% of the big one, so the
-    # absolute-size guard would reject it forever and the safety path is dead.
-    # So: record which asset produced the current target, and only enforce the
-    # 80% guard when the incoming asset is the SAME class as what's on disk. An
-    # intentional class change bypasses the guard.
-    local asset_marker="${target}.asset"
-    local prev_asset=""
-    [ -f "$asset_marker" ] && prev_asset=$(cat "$asset_marker" 2>/dev/null)
-    if [ -s "$target" ] && { [ -z "$prev_asset" ] || [ "$prev_asset" = "$asset" ]; }; then
-        local oldsz newsz
-        oldsz=$(wc -c < "$target" 2>/dev/null || echo 0)
-        newsz=$(wc -c < "$newf" 2>/dev/null || echo 0)
-        # Use awk for float math (busybox lacks bc)
-        local too_small
-        too_small=$(awk -v o="$oldsz" -v n="$newsz" 'BEGIN {
-            if (o == 0) { print 0; exit }
-            print (n * 100 < o * 80) ? 1 : 0
-        }')
-        if [ "$too_small" = "1" ]; then
-            log "  $asset: new file ${newsz}B < 80% of existing ${oldsz}B — refusing apply"
-            return 1
-        fi
-    elif [ -s "$target" ] && [ "$prev_asset" != "$asset" ]; then
-        log "  $asset: asset class change ($prev_asset → $asset) — bypassing shrink guard"
-    fi
-
     # Normalize + dedupe. Runetfreedom assets use v2fly domain-list
     # prefix format (`domain:`, `full:`, `regexp:`, `keyword:`, optional
     # trailing `@attr` tags). nfqws2 hostlist only understands plain
@@ -291,6 +256,73 @@ apply_new_list() {
         }
     ' "$newf" | sort -u > "$final"
 
+    # --- Проверка того, что нормализация вообще отработала --------------------
+    #
+    # До 2026-08-05 результат этой пары НЕ проверялся ничем. Если awk или sort
+    # обрывались на полпути — а список у ru-blocked-all это 1.37 млн строк,
+    # 33 МБ на входе и 24 МБ на выходе, и всё это через /tmp, который на
+    # Keenetic лежит в оперативке, — в $final оставался обрубок или ноль байт.
+    # Дальше cp и mv отрабатывали успешно (пустой файл копируется прекрасно), и
+    # рабочий список молча заменялся пустым. В журнал при этом писалось
+    # «applied, 0 lines», то есть отчёт об успехе.
+    #
+    # Проверять статус конвейера бесполезно: `awk | sort` возвращает статус
+    # ПОСЛЕДНЕЙ команды, и убитый по памяти awk оставляет sort с усечённым
+    # входом, который тот успешно сортирует и выходит нулём. Поэтому смотрим на
+    # содержимое: сколько строк пришло и сколько вышло.
+    #
+    # Замер на живом ru-blocked-all: 1374049 → 1369027, то есть 99.6%. Отбрасывать
+    # тут почти нечего (regexp:/keyword: в этом ассете нет вовсе), так что порог
+    # 50% — это не тонкая настройка, а грубая отсечка обрубков.
+    # `wc -l` дополняет число пробелами слева, поэтому счётчики прогоняются
+    # через tr ДО проверки «только цифры» — иначе проверка отбрасывает нормальный
+    # ответ как мусор и обнуляет его, и страж срабатывает на здоровом списке.
+    local in_n out_n
+    in_n=$(grep -cvE '^[[:space:]]*(#|$)' "$newf" 2>/dev/null | tr -d ' \t')
+    out_n=$(wc -l < "$final" 2>/dev/null | tr -d ' \t')
+    case "$in_n" in ''|*[!0-9]*) in_n=0 ;; esac
+    case "$out_n" in ''|*[!0-9]*) out_n=0 ;; esac
+
+    if [ "$out_n" -eq 0 ]; then
+        log "  $asset: нормализация дала пустой результат из $in_n строк — список НЕ трогаем"
+        rm -f "$final"
+        return 1
+    fi
+    if [ "$in_n" -gt 0 ] && [ "$((out_n * 100 / in_n))" -lt 50 ]; then
+        log "  $asset: нормализация потеряла больше половины ($in_n → $out_n строк) — список НЕ трогаем"
+        rm -f "$final"
+        return 1
+    fi
+
+    # --- Страж усадки: сравниваем то, что ЛЯЖЕТ, с тем, что лежит --------------
+    #
+    # Раньше страж сравнивал СКАЧАННЫЙ файл с тем, что на диске. Это разные
+    # вещи: скачанный в формате v2fly (`domain:example.com`), а на диске уже
+    # голые домены. Замер: 33.4 МБ против 24.1 МБ — сырой на 39% толще просто
+    # из-за приставок. Значит у стража был дутый запас: апстрим мог обрезать
+    # список на 40%, и проверка «не меньше 80% от старого» всё равно проходила.
+    # Теперь сравниваются два файла одного формата, в строках.
+    #
+    # pick_rkn_asset намеренно переключается между большим ru-blocked-all и
+    # маленьким ru-blocked по объёму памяти, и оба пишут в эту же цель. Маленький
+    # это ~5% от большого, поэтому при смене класса страж обязан пропустить —
+    # иначе путь на понижение мёртв. Класс запоминается в .asset рядом с целью.
+    local asset_marker="${target}.asset"
+    local prev_asset=""
+    [ -f "$asset_marker" ] && prev_asset=$(cat "$asset_marker" 2>/dev/null)
+    if [ -s "$target" ] && { [ -z "$prev_asset" ] || [ "$prev_asset" = "$asset" ]; }; then
+        local old_n
+        old_n=$(wc -l < "$target" 2>/dev/null | tr -d ' \t')
+        case "$old_n" in ''|*[!0-9]*) old_n=0 ;; esac
+        if [ "$old_n" -gt 0 ] && [ "$((out_n * 100 / old_n))" -lt 80 ]; then
+            log "  $asset: новый список $out_n строк < 80% от нынешних $old_n — список НЕ трогаем"
+            rm -f "$final"
+            return 1
+        fi
+    elif [ -s "$target" ] && [ "$prev_asset" != "$asset" ]; then
+        log "  $asset: смена класса списка ($prev_asset → $asset) — страж усадки пропущен"
+    fi
+
     # First-run backup: save the shipped snapshot next to the target so
     # manual rollback is a one-command cp. Only do this if we don't
     # already have a .shipped backup.
@@ -309,7 +341,7 @@ apply_new_list() {
 
     # Record which asset produced this target so the shrink guard above can
     # tell an intentional big↔small class switch (bypass guard) from a genuine
-    # upstream truncation regression (enforce guard).
+    # truncation regression (enforce guard).
     printf '%s\n' "$asset" > "$asset_marker" 2>/dev/null || true
 
     local lines
@@ -468,7 +500,22 @@ subtract_yt_from_rkn() {
         return 1
     }
 
-    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    after=$(wc -l < "$filtered" 2>/dev/null | tr -d ' \t')
+    case "$after" in ''|*[!0-9]*) after=0 ;; esac
+    case "$before" in ''|*[!0-9]*) before=0 ;; esac
+
+    # Тот же случай, что и в apply_new_list: awk может отдать нулевой статус,
+    # а файл оставить обрубком (не заметил ошибку записи, кончилось место в
+    # /tmp — а он на Keenetic в оперативке). Тогда `removed` выходит огромным,
+    # и обрубок уезжает поверх рабочего списка. Вычитать тут положено доли
+    # процента (YouTube это ~180 доменов из 1.37 млн), поэтому порог в половину
+    # — грубая отсечка, а не тонкая настройка.
+    if [ "$after" -eq 0 ] || { [ "$before" -gt 0 ] && [ "$((after * 100 / before))" -lt 50 ]; }; then
+        log "RKN subtract: результат обрублен ($before → $after строк) — список НЕ трогаем"
+        rm -f "$filtered"
+        return 1
+    fi
+
     removed=$((before - after))
     if [ "$removed" -gt 0 ]; then
         mv "$filtered" "$rkn_target" || {
