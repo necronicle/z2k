@@ -1,12 +1,12 @@
 package main
 
 import (
-	"net/http"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"net/http"
 	"testing"
 	"time"
 )

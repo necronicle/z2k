@@ -52,11 +52,11 @@ const (
 )
 
 var (
-	listenAddr = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
-	secret     = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
-	secretPrev = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
+	listenAddr    = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
+	secret        = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
+	secretPrev    = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
 	resolveSecret = flag.String("resolve-secret", "", "dedicated HMAC secret for /resolve (decoupled from the tunnel secret); falls back to --secret when empty")
-	verbose    = flag.Bool("v", false, "verbose logging")
+	verbose       = flag.Bool("v", false, "verbose logging")
 
 	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 8, "max in-flight dials per Telegram DC IP")
 	dialThrottleTimeout   = flag.Duration("dial-throttle-timeout", 3*time.Second, "max wait for dial slot before failing CONNECT")
@@ -482,7 +482,11 @@ type queuedFrame struct {
 type session struct {
 	id      string
 	relayID string // per-install identity (Stage B); "" for shared-secret auth
-	ws      *websocket.Conn
+	// Настоящий адрес клиента — известен уже при принятии соединения, а нужен
+	// глубже, в аутентификации, где становится известна установка. Связать одно
+	// с другим сшивкой строк лога нельзя надёжно, поэтому адрес едет в сессии.
+	clientIP string
+	ws       *websocket.Conn
 
 	// Кумулятивный объём за сессию. Раньше в релее не было НИ ОДНОГО счётчика
 	// трафика: queuedBytes ниже — это датчик подпора очереди, он уменьшается
@@ -911,12 +915,15 @@ func (s *session) readPump() {
 		return
 	}
 	if relayID != "" {
-		if !acquireInstallSession(relayID) {
-			log.Printf("[%s] per-install session cap hit for %s", s.id, relayID)
+		if ok, why := acquireInstallSession(relayID, s.clientIP, s); !ok {
+			log.Printf("[%s] отказ установке %s: %s", s.id, relayID, why)
 			return
 		}
 		s.relayID = relayID
-		defer releaseInstallSession(relayID)
+		defer func() {
+			rx, tx := s.bytes()
+			releaseInstallSession(relayID, s, rx, tx)
+		}()
 	}
 	log.Printf("[%s] authenticated (scheme=%s id=%s)", s.id, scheme, relayID)
 
@@ -1147,6 +1154,7 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	ip := resolveRemoteIP(r)
 	log.Printf("[%s] WS accepted from %s", sid, ip)
 	s := newSession(ws, sid, parentCtx)
+	s.clientIP = ip
 	started := time.Now()
 	go s.writePump()
 	s.readPump()
@@ -1190,6 +1198,10 @@ func main() {
 
 	statsStop := make(chan struct{})
 	go stats.loop(*dialStatsInterval, statsStop)
+	go installs.snapshotLoop(*installSnapshotInterval, statsStop)
+
+	stopAdmin := startAdmin(*adminAddr)
+	defer stopAdmin()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {

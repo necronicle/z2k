@@ -30,7 +30,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"filippo.io/edwards25519"
@@ -101,6 +100,62 @@ func (rg *registry) upsert(id, pubkey string) (bool, bool) {
 	rg.m[id] = &regEntry{Pubkey: pubkey, CreatedAt: time.Now().Unix()}
 	rg.persistLocked()
 	return true, true
+}
+
+// setRevoked поднимает или снимает флаг отзыва и сразу сохраняет файл.
+//
+// До этого способа выставить флаг не существовало вовсе: поле Revoked читалось
+// на горячем пути аутентификации, но записать его было нечем. Оставалось
+// править registry.json руками — а это не работало дважды: до перезапуска
+// правка не читалась, и первая же успешная регистрация переписывала файл из
+// памяти и молча её стирала.
+func (rg *registry) setRevoked(id string, v bool) bool {
+	rg.mu.Lock()
+	defer rg.mu.Unlock()
+	e := rg.m[id]
+	if e == nil {
+		return false
+	}
+	if e.Revoked != v {
+		e.Revoked = v
+		rg.persistLocked()
+	}
+	return true
+}
+
+// reload перечитывает реестр с диска, не перезапуская релей. Перезапуск рвёт
+// все живые туннели разом, поэтому ради правки одной записи он неприемлем.
+//
+// Записи, добавленные в памяти, но ещё не попавшие в файл, потеряться не могут:
+// upsert сохраняет файл сразу же.
+func (rg *registry) reload() (int, error) {
+	data, err := os.ReadFile(rg.path)
+	if err != nil {
+		return 0, err
+	}
+	var m map[string]*regEntry
+	if err := json.Unmarshal(data, &m); err != nil {
+		return 0, err
+	}
+	rg.mu.Lock()
+	rg.m = m
+	n := len(m)
+	rg.mu.Unlock()
+	return n, nil
+}
+
+// revokedIDs перечисляет отозванные установки — чтобы после перечитывания файла
+// оборвать их живые туннели.
+func (rg *registry) revokedIDs() []string {
+	rg.mu.RLock()
+	defer rg.mu.RUnlock()
+	out := make([]string, 0, 8)
+	for id, e := range rg.m {
+		if e.Revoked {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // persistLocked writes the registry atomically (temp + rename). Caller holds mu.
@@ -379,28 +434,17 @@ func verifyPerInstallAuth(payload []byte) (string, bool) {
 
 // ------------------------------------------------ per-install session quota ---
 
-var installSessions sync.Map // install_id -> *atomic.Int64
+// Квота живёт в общем учёте по установкам (installstats.go). Раньше здесь была
+// отдельная sync.Map со счётчиком: она ничего не знала ни об адресах, ни о
+// трафике, ни о самих соединениях (то есть отозвать по ней было нечего) и
+// НИКОГДА не вычищалась — запись оставалась навсегда после первой же сессии.
 
-func acquireInstallSession(id string) bool {
-	if *perInstallMaxSessions <= 0 {
-		return true
-	}
-	v, _ := installSessions.LoadOrStore(id, new(atomic.Int64))
-	c := v.(*atomic.Int64)
-	if c.Add(1) > int64(*perInstallMaxSessions) {
-		c.Add(-1)
-		return false
-	}
-	return true
+func acquireInstallSession(id, ip string, s *session) (bool, string) {
+	return installs.begin(id, ip, s)
 }
 
-func releaseInstallSession(id string) {
-	if *perInstallMaxSessions <= 0 || id == "" {
-		return
-	}
-	if v, ok := installSessions.Load(id); ok {
-		v.(*atomic.Int64).Add(-1)
-	}
+func releaseInstallSession(id string, s *session, rx, tx int64) {
+	installs.end(id, s, rx, tx)
 }
 
 // tiny helpers (avoid importing strings just for these)
