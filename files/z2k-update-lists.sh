@@ -76,7 +76,10 @@ _z2k_curl_etag() {
             -w "%{http_code}" "$url" 2>/dev/null)
         curl_rc=$?
     fi
-    [ "$curl_rc" -eq 0 ] || { rm -f "$hdr_file" "$tmp_body"; return 1; }
+    # Статус нужен вызывающему: «файла нет у апстрима» и «зеркала не отвечают» —
+    # это разные события, а по коду возврата они неразличимы.
+    Z2K_LAST_HTTP="$http_status"
+    [ "$curl_rc" -eq 0 ] || { Z2K_LAST_HTTP="000"; rm -f "$hdr_file" "$tmp_body"; return 1; }
     case "$http_status" in
         304) rm -f "$hdr_file" "$tmp_body"; return 0 ;;
         200)
@@ -99,10 +102,13 @@ _z2k_curl_etag() {
     esac
 }
 
+# Z2K_FETCH_ALL_404=1 после неудачи означает, что КАЖДОЕ зеркало ответило 404,
+# то есть файла у апстрима нет. Это не сбой доставки и не должно выглядеть как он.
 z2k_fetch() {
     local src="$1"
     local dest="$2"
     local url
+    Z2K_FETCH_ALL_404=1
 
     case "$src" in
         http://*|https://*) url="$src" ;;
@@ -128,11 +134,21 @@ z2k_fetch() {
     # Layer 0: VPS SNI-passthrough egress — первичный путь для github (RU
     # блокирует прямые github-IP). На сбой тихо валимся в цепочку ниже.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
-    [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && return 0
+    if [ -n "$_vps_resolve" ]; then
+        _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && return 0
+        [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
+    fi
 
     if _z2k_curl_etag "$url" "$dest"; then return 0; fi
-    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
-    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+    [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
+    if [ -n "$jsdelivr" ]; then
+        _z2k_curl_etag "$jsdelivr" "$dest" && return 0
+        [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
+    fi
+    if [ -n "$gh_proxy" ]; then
+        _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+        [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
+    fi
 
     # All three normal mirrors fell through. Gate the ndmc DNS-override behind a
     # cross-call streak counter + track the records in Z2K_MANAGED_NDMC — a single
@@ -252,7 +268,16 @@ update_list() {
     _etag_prep "$dest" "$tmp"
 
     if ! z2k_fetch "$url" "$tmp"; then
-        log_msg "FAIL: download $name from $url (all mirrors failed)"
+        # Апстрим ru-gaming-blocklist перечисляет в индексе игры, для которых
+        # файла ещё нет: на 2026-08-05 таких три (Fallout76_AWS, GearsOfWar,
+        # MagicTheGathering). Раньше это писалось как «all mirrors failed» и
+        # всплывало в диагностике под «errors across all logs» — то есть человек
+        # видел поломку там, где её нет, и шёл с ней в поддержку.
+        if [ "${Z2K_FETCH_ALL_404:-0}" = "1" ]; then
+            log_msg "$name: у апстрима такого файла нет (404), пропускаю"
+        else
+            log_msg "FAIL: download $name from $url (all mirrors failed)"
+        fi
         _etag_cleanup "$tmp"
         return 1
     fi
