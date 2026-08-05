@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -189,10 +190,47 @@ type ipBucket struct {
 var (
 	regRateMu sync.Mutex
 	regRate   = map[string]*ipBucket{}
+
+	rateBlindMu   sync.Mutex
+	rateBlindLast time.Time
+	rateBlindN    int64
 )
+
+// rateBlindWarn жалуется, что настоящий адрес клиента до нас не доходит, но не
+// чаще раза в минуту — иначе на потоке в тысячу туннелей журнал захлебнётся.
+func rateBlindWarn() {
+	rateBlindMu.Lock()
+	rateBlindN++
+	n := rateBlindN
+	now := time.Now()
+	shout := now.Sub(rateBlindLast) >= time.Minute
+	if shout {
+		rateBlindLast = now
+		rateBlindN = 0
+	}
+	rateBlindMu.Unlock()
+	if shout {
+		log.Printf("ВНИМАНИЕ: /register видит петлевой адрес (%d запросов) — прокси не передаёт настоящий адрес клиента, ограничитель частоты отключён, иначе он запер бы весь парк", n)
+	}
+}
 
 func registerRateOK(ip string) bool {
 	if *registerRatePerMin <= 0 {
+		return true
+	}
+	// Петлевой адрес здесь означает не «клиент с этой машины», а что наш
+	// собственный прокси не сообщил настоящий адрес. Тогда ВЕСЬ парк ключуется
+	// одной строкой, и ограничитель из «30 регистраций в минуту с адреса»
+	// превращается в «30 в минуту на всех» — то есть сам запирает установки,
+	// которые пытается защищать. Ровно так и было до 2026-08-05, пока caddy
+	// штамповал всем X-Forwarded-For: 127.0.0.1 (замер: 1120 соединений из
+	// 1120 с локальным адресом).
+	//
+	// Ограничитель нужен против массовой чеканки личностей с одного адреса.
+	// Если адреса нет, он этой задачи не решает и решать не может, поэтому не
+	// душим, а ГРОМКО жалуемся: тихий отказ здесь уже стоил месяца простоя.
+	if ip == "" || ip == "127.0.0.1" || ip == "::1" {
+		rateBlindWarn()
 		return true
 	}
 	regRateMu.Lock()
@@ -399,37 +437,53 @@ func authReplaySeen(sig []byte) bool {
 //
 //	[install_id:16][timestamp:8 BE unix][ed25519 sig:64]   (88 bytes)
 //
-// signed message = install_id(16) || timestamp(8). Returns the install_id (for
-// logging/quota) and whether auth succeeded.
-func verifyPerInstallAuth(payload []byte) (string, bool) {
+// signed message = install_id(16) || timestamp(8). Возвращает install_id (для
+// лога и квоты), прошла ли проверка, и ПРИЧИНУ отказа.
+//
+// Причина возвращается не для красоты. До 2026-08-05 все отказы выглядели в
+// логе одинаково, и разобрать конкретный случай было нечем: у одной установки
+// (зарегистрированной, не отозванной) 212 отказов подряд и ни одного успеха, а
+// чем именно её отшивают — часами, подписью или чем-то ещё — приходилось
+// выводить исключением по косвенным признакам. Причин ровно пять, они
+// различаются одной строкой, и без неё диагностика превращается в гадание.
+//
+// Для расхождения часов пишется САМА величина: «на сколько ушли» — это ответ,
+// а «часы не те» — только гипотеза, которую всё равно придётся проверять.
+func verifyPerInstallAuth(payload []byte) (string, bool, string) {
 	if len(payload) != 88 {
-		return "", false
+		return "", false, "кадр не 88 байт"
 	}
 	id := hex.EncodeToString(payload[0:16])
 	ts := int64(binary.BigEndian.Uint64(payload[16:24]))
 	sig := payload[24:88]
 	now := time.Now().Unix()
 	if ts < now-*authSkewSeconds || ts > now+*authSkewSeconds {
-		return id, false
+		skew := ts - now
+		return id, false, fmt.Sprintf("часы разошлись на %+ds (допуск ±%ds)", skew, *authSkewSeconds)
 	}
 	e := reg.get(id)
-	if e == nil || e.Revoked {
-		return id, false
+	if e == nil {
+		return id, false, "установка не зарегистрирована"
+	}
+	if e.Revoked {
+		return id, false, "установка отозвана"
 	}
 	pub, err := base64.StdEncoding.DecodeString(e.Pubkey)
 	if err != nil || !validEd25519Pubkey(pub) {
 		// Defense in depth: a low-order key must never authenticate even if it
 		// slipped into the registry before validEd25519Pubkey gated /register.
-		return id, false
+		return id, false, "в реестре негодный публичный ключ"
 	}
 	if !ed25519.Verify(ed25519.PublicKey(pub), payload[0:24], sig) {
-		return id, false
+		// Ключ на устройстве разошёлся с тем, что записан у нас. Лечится только
+		// перевыпуском личности: клиент получает 409 на регистрации и заводит
+		// новую. Если этого не происходит — регистрация до нас не доходит.
+		return id, false, "подпись не сходится с ключом в реестре"
 	}
 	if authReplaySeen(sig) {
-		log.Printf("auth rejected (replay) id=%s", id)
-		return id, false
+		return id, false, "повтор подписи"
 	}
-	return id, true
+	return id, true, ""
 }
 
 // ------------------------------------------------ per-install session quota ---

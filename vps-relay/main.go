@@ -898,10 +898,10 @@ func (s *session) readPump() {
 	// muxAUTHID) is always honored; the shared-secret HMAC (Stage A, muxAUTH) is
 	// honored too — with the current AND previous secret — UNLESS the flip
 	// (--require-per-install) is enabled. Nothing here blocks a current client.
-	var relayID, scheme string
+	var relayID, scheme, why string
 	authedOK := false
 	if mt == muxAUTHID {
-		relayID, authedOK = verifyPerInstallAuth(p)
+		relayID, authedOK, why = verifyPerInstallAuth(p)
 		scheme = "per-install"
 	} else if !*requirePerInstall {
 		authedOK = subtle.ConstantTimeCompare(p, computeAuthHMAC(*secret)) == 1
@@ -909,9 +909,20 @@ func (s *session) readPump() {
 			authedOK = subtle.ConstantTimeCompare(p, computeAuthHMAC(*secretPrev)) == 1
 		}
 		scheme = "shared-secret"
+		if !authedOK {
+			// Флаг --require-per-install выключен, а общий секрет не сошёлся.
+			why = "общий секрет не совпал"
+		}
+	}
+	if mt != muxAUTHID && mt != muxAUTH {
+		why = "неизвестный тип кадра"
+	} else if why == "" && !authedOK {
+		// Сюда попадает кадр 0x00 при включённом флаге: ветку общего секрета
+		// пропустили целиком, поэтому причина не выставлена ни одной проверкой.
+		why = "старая схема (общий секрет) при включённом требовании персональной"
 	}
 	if !authedOK {
-		log.Printf("[%s] auth rejected (type=0x%02x scheme=%s id=%s)", s.id, mt, scheme, relayID)
+		log.Printf("[%s] auth rejected (type=0x%02x scheme=%s id=%s): %s", s.id, mt, scheme, relayID, why)
 		return
 	}
 	if relayID != "" {

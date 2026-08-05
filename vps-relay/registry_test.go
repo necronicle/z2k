@@ -34,48 +34,48 @@ func TestVerifyPerInstallAuth(t *testing.T) {
 	now := time.Now().Unix()
 	frame := mkFrame(idb, now, priv)
 
-	if gotID, ok := verifyPerInstallAuth(frame); !ok || gotID != id {
+	if gotID, ok, _ := verifyPerInstallAuth(frame); !ok || gotID != id {
 		t.Fatalf("valid auth rejected: ok=%v id=%s want=%s", ok, gotID, id)
 	}
 
 	// tampered signature
 	bad := append([]byte(nil), frame...)
 	bad[30] ^= 0xff
-	if _, ok := verifyPerInstallAuth(bad); ok {
+	if _, ok, _ := verifyPerInstallAuth(bad); ok {
 		t.Fatal("tampered signature accepted")
 	}
 
 	// wrong length
-	if _, ok := verifyPerInstallAuth(frame[:87]); ok {
+	if _, ok, _ := verifyPerInstallAuth(frame[:87]); ok {
 		t.Fatal("short frame accepted")
 	}
 
 	// stale timestamp (signed correctly but too old)
-	if _, ok := verifyPerInstallAuth(mkFrame(idb, now-9999, priv)); ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now-9999, priv)); ok {
 		t.Fatal("stale timestamp accepted")
 	}
 	// future timestamp beyond skew
-	if _, ok := verifyPerInstallAuth(mkFrame(idb, now+9999, priv)); ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now+9999, priv)); ok {
 		t.Fatal("future timestamp accepted")
 	}
 
 	// revoked
 	reg.m[id].Revoked = true
-	if _, ok := verifyPerInstallAuth(frame); ok {
+	if _, ok, _ := verifyPerInstallAuth(frame); ok {
 		t.Fatal("revoked identity accepted")
 	}
 	reg.m[id].Revoked = false
 
 	// unknown id
 	reg.m = map[string]*regEntry{}
-	if _, ok := verifyPerInstallAuth(frame); ok {
+	if _, ok, _ := verifyPerInstallAuth(frame); ok {
 		t.Fatal("unknown identity accepted")
 	}
 
 	// signature by a different key (key substitution) must fail
 	reg.m[id] = &regEntry{Pubkey: base64.StdEncoding.EncodeToString(pub)}
 	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
-	if _, ok := verifyPerInstallAuth(mkFrame(idb, now, otherPriv)); ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now, otherPriv)); ok {
 		t.Fatal("signature from a non-registered key accepted")
 	}
 }
@@ -98,15 +98,15 @@ func TestAuthReplay(t *testing.T) {
 	frame := mkFrame(idb, now, priv)
 
 	// first sighting of a valid frame is accepted
-	if _, ok := verifyPerInstallAuth(frame); !ok {
+	if _, ok, _ := verifyPerInstallAuth(frame); !ok {
 		t.Fatal("first valid auth rejected")
 	}
 	// an exact replay of the same frame is rejected
-	if _, ok := verifyPerInstallAuth(frame); ok {
+	if _, ok, _ := verifyPerInstallAuth(frame); ok {
 		t.Fatal("replayed auth frame accepted")
 	}
 	// a fresh frame (different ts -> different signature) is still accepted
-	if _, ok := verifyPerInstallAuth(mkFrame(idb, now+1, priv)); !ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now+1, priv)); !ok {
 		t.Fatal("distinct-ts frame wrongly rejected as replay")
 	}
 	// once the replay window has passed, the same signature is accepted again
@@ -114,7 +114,7 @@ func TestAuthReplay(t *testing.T) {
 	authNonceMu.Lock()
 	authNonceSeen[string(sig)] = time.Now().Add(-time.Duration(2*skew+10) * time.Second)
 	authNonceMu.Unlock()
-	if _, ok := verifyPerInstallAuth(frame); !ok {
+	if _, ok, _ := verifyPerInstallAuth(frame); !ok {
 		t.Fatal("frame rejected after replay window expired")
 	}
 }
