@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
@@ -483,6 +484,13 @@ type session struct {
 	relayID string // per-install identity (Stage B); "" for shared-secret auth
 	ws      *websocket.Conn
 
+	// Кумулятивный объём за сессию. Раньше в релее не было НИ ОДНОГО счётчика
+	// трафика: queuedBytes ниже — это датчик подпора очереди, он уменьшается
+	// при отправке и накопленного не показывает. Без объёма нельзя отличить
+	// домашний роутер от того, кто раздаёт наш туннель дальше.
+	rxBytes atomic.Int64 // от Telegram к клиенту
+	txBytes atomic.Int64 // от клиента к Telegram
+
 	writeCh   chan queuedFrame // DATA + ordered-CLOSE; FIFO
 	controlCh chan []byte      // CONNECT_OK/FAIL + abort-CLOSE; priority
 	done      chan struct{}
@@ -559,6 +567,7 @@ func (s *session) sendData(st *stream, payload []byte) {
 	if st.aborted.Load() {
 		return
 	}
+	s.rxBytes.Add(int64(len(payload)))
 	s.mu.Lock()
 	cur := s.streams[st.id]
 	s.mu.Unlock()
@@ -937,6 +946,7 @@ func (s *session) readPump() {
 			if !ok || st.conn == nil {
 				continue
 			}
+			s.txBytes.Add(int64(len(payload)))
 			if _, err := st.conn.Write(payload); err != nil {
 				if *verbose {
 					log.Printf("[%s] stream %d tcp write err: %v", s.id, sid, err)
@@ -972,8 +982,33 @@ var upgrader = websocket.Upgrader{
 	EnableCompression: false,
 }
 
+// makeSessionID — случайный идентификатор сессии для сшивки строк лога.
+//
+// Раньше это было UnixNano()%100000 в base36: пять символов, полностью
+// определяемые временем. Две сессии, начавшиеся в одну и ту же стотысячную
+// долю секунды, получали ОДИН идентификатор, а при полутора тысячах туннелей и
+// переподключении всего парка после рестарта это не редкость. Строки «адрес» и
+// «установка» пишутся раздельно и сшиваются по нему — на коллизии сшивка
+// приписывает чужой адрес чужой установке, то есть врёт ровно там, где мы
+// собираемся искать злоупотребление.
+// bytes возвращает накопленный объём за сессию (принято, отправлено).
+func (s *session) bytes() (int64, int64) {
+	return s.rxBytes.Load(), s.txBytes.Load()
+}
+
 func makeSessionID() string {
-	return strconv.FormatInt(time.Now().UnixNano()%100000, 36)
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Источник случайности недоступен — не выдумываем, а честно падаем на
+		// прежнюю схему: плохой идентификатор лучше пустого.
+		return strconv.FormatInt(time.Now().UnixNano()%100000, 36)
+	}
+	const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+	out := make([]byte, len(b))
+	for i, v := range b {
+		out[i] = alphabet[int(v)%len(alphabet)]
+	}
+	return string(out)
 }
 
 // /resolve endpoint: returns fresh DNS A records for a whitelisted set of
@@ -1107,15 +1142,27 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 		return
 	}
 	sid := makeSessionID()
-	ip := r.Header.Get("X-Forwarded-For")
-	if ip == "" {
-		ip = r.RemoteAddr
-	}
+	// Тот же разбор, что и у /register: последний элемент цепочки — тот, что
+	// проставил наш прокси. Всё левее прислал клиент и подделать может любой.
+	ip := resolveRemoteIP(r)
 	log.Printf("[%s] WS accepted from %s", sid, ip)
 	s := newSession(ws, sid, parentCtx)
+	started := time.Now()
 	go s.writePump()
 	s.readPump()
-	log.Printf("[%s] WS closed", sid)
+
+	// Строка закрытия несёт всё, что нужно для разбора, СРАЗУ — установку,
+	// адрес, длительность и объём. Раньше здесь было только «WS closed», и
+	// чтобы понять, кто это был, приходилось сшивать три разные строки по
+	// идентификатору сессии. Для поиска того, кто раздаёт наш туннель дальше,
+	// нужен ровно этот набор в одном месте: одна установка, много адресов.
+	rx, tx := s.bytes()
+	who := s.relayID
+	if who == "" {
+		who = "-"
+	}
+	log.Printf("[%s] WS closed install=%s ip=%s dur=%s rx=%d tx=%d",
+		sid, who, ip, time.Since(started).Truncate(time.Second), rx, tx)
 }
 
 func main() {

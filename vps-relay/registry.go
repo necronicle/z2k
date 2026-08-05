@@ -170,12 +170,25 @@ type registerReq struct {
 	Pubkey    string `json:"pubkey"` // base64(std) Ed25519 public key
 }
 
-// resolveRemoteIP extracts the client IP: X-Forwarded-For (set by Caddy/nginx)
-// first hop, else RemoteAddr.
+// resolveRemoteIP извлекает адрес клиента из X-Forwarded-For.
+//
+// Берётся ПОСЛЕДНИЙ элемент, а не первый. Разница принципиальная: заголовок
+// дописывает наш собственный прокси, добавляя то, что видит сам, в конец. Всё,
+// что левее, прислал клиент — и подделать это может кто угодно одной строкой
+// запроса.
+//
+// До 2026-08-05 брался первый элемент, то есть значение, выбранное клиентом.
+// Последствия были не косметические: этим адресом ключуется ограничитель
+// частоты регистраций (registerRateOK ниже), и обойти его можно было,
+// подставляя случайный X-Forwarded-For на каждый запрос. Плюс в лог
+// «register: new install ... from ...» писался выдуманный адрес.
+//
+// Последний элемент подделать нельзя: его ставит прокси поверх того, что
+// пришло, уже после клиента.
 func resolveRemoteIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := indexByte(xff, ','); i >= 0 {
-			return trimSpace(xff[:i])
+		if i := lastIndexByte(xff, ','); i >= 0 {
+			return trimSpace(xff[i+1:])
 		}
 		return trimSpace(xff)
 	}
@@ -184,6 +197,15 @@ func resolveRemoteIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+func lastIndexByte(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {

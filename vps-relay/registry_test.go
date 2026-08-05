@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -179,5 +180,34 @@ func TestValidInstallID(t *testing.T) {
 		if validInstallID(bad) {
 			t.Fatalf("invalid id accepted: %q", bad)
 		}
+	}
+}
+
+// Адрес клиента должен браться с ДОВЕРЕННОГО конца цепочки X-Forwarded-For.
+//
+// До 2026-08-05 брался первый элемент — то есть тот, что прислал сам клиент.
+// Этим адресом ключуется ограничитель частоты регистраций, поэтому обойти его
+// можно было, подставляя случайный заголовок на каждый запрос. Заголовок
+// дописывает наш прокси В КОНЕЦ, значит доверять можно только последнему.
+func TestResolveRemoteIPUsesTrustedHop(t *testing.T) {
+	cases := []struct {
+		xff, want, why string
+	}{
+		{"203.0.113.7", "203.0.113.7", "один элемент — он от прокси"},
+		{"1.2.3.4, 203.0.113.7", "203.0.113.7", "подставленный клиентом адрес игнорируется"},
+		{"9.9.9.9, 8.8.8.8, 203.0.113.7", "203.0.113.7", "длинная цепочка — берём конец"},
+		{"  1.2.3.4 ,  203.0.113.7  ", "203.0.113.7", "пробелы не мешают"},
+	}
+	for _, c := range cases {
+		r := &http.Request{Header: http.Header{}, RemoteAddr: "127.0.0.1:1234"}
+		r.Header.Set("X-Forwarded-For", c.xff)
+		if got := resolveRemoteIP(r); got != c.want {
+			t.Fatalf("%s: xff=%q дал %q, ожидалось %q", c.why, c.xff, got, c.want)
+		}
+	}
+	// Без заголовка — адрес соединения, без порта.
+	r := &http.Request{Header: http.Header{}, RemoteAddr: "198.51.100.9:5555"}
+	if got := resolveRemoteIP(r); got != "198.51.100.9" {
+		t.Fatalf("без XFF дал %q, ожидалось 198.51.100.9", got)
 	}
 }
