@@ -799,9 +799,17 @@ EOF
 
     # Geosite immediate refresh: если изменился z2k-geosite.sh или
     # rkn-false-positive.txt — apply filter без ожидания scheduler tick.
-    if [ "$geosite_refresh" = "1" ] && [ -x "${zd}/files/z2k-geosite.sh" ]; then
+    #
+    # ПУТЬ: скрипт живёт в ${zd}/z2k-geosite.sh, а НЕ в ${zd}/files/. Здесь
+    # стояло `${zd}/files/z2k-geosite.sh` — такого файла на роутере нет вообще
+    # (au_install_paths для `files/*.sh` кладёт в ${zd}/), поэтому guard всегда
+    # был ложным и ветка молча не выполнялась НИ РАЗУ: логика приезжала, а
+    # обещанный немедленный refresh не запускался. Найдено проверкой на живом
+    # роутере 2026-08-06. Проверяем -r, а не -x: запускаем через `sh`, бит
+    # исполнения не нужен и на части установок не выставлен.
+    if [ "$geosite_refresh" = "1" ] && [ -r "${zd}/z2k-geosite.sh" ]; then
         au_log "patch: triggering geosite refresh (filter applied immediately)"
-        FORCE_REFETCH=1 sh "${zd}/files/z2k-geosite.sh" fetch >/dev/null 2>&1 || \
+        FORCE_REFETCH=1 sh "${zd}/z2k-geosite.sh" fetch >/dev/null 2>&1 || \
             au_log "patch: geosite refresh returned non-zero (continuing)"
     fi
 

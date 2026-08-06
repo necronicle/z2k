@@ -909,6 +909,28 @@ fw_nfqws_pre6()
 # ������� ���������� DAEMON (������������ ��� KEENETIC ��� PROCD)
 # ==============================================================================
 
+# Учёт демонов, не сумевших стартовать.
+#
+# До 2026-08-06 провал терялся полностью: run_daemon честно возвращал 1, но
+# start_daemons и start() имели ЗАХАРДКОЖЕННЫЙ `return 0`, поэтому init печатал
+# «zapret2 service started» сразу после «ERROR: Daemon 1 failed to start», а
+# веб-панель показывала зелёное «работает» при мёртвом обходе. Полевой случай:
+# юзер видит в консоли отказ, в панели — успех, кнопка «Остановить» рапортует
+# ОК и ничего не делает.
+#
+# Счётчик в ФАЙЛЕ, а не в переменной: путь start → start_daemons →
+# standard_mode_daemons → ... → run_daemon проходит через функции форка, и если
+# любое звено однажды окажется в subshell, переменная потеряется молча, а файл —
+# нет. /tmp = tmpfs, между перезапусками состояние не нужно.
+Z2K_DAEMON_FAIL_FILE="${Z2K_DAEMON_FAIL_FILE:-/tmp/.z2k-daemon-failures}"
+
+z2k_daemon_fail_reset() { : > "$Z2K_DAEMON_FAIL_FILE" 2>/dev/null || true; }
+z2k_daemon_fail_note()  { echo "$1" >> "$Z2K_DAEMON_FAIL_FILE" 2>/dev/null || true; }
+z2k_daemon_fail_count() {
+    [ -f "$Z2K_DAEMON_FAIL_FILE" ] || { echo 0; return 0; }
+    wc -l < "$Z2K_DAEMON_FAIL_FILE" 2>/dev/null | tr -d ' \t' || echo 0
+}
+
 run_daemon()
 {
     # $1 - daemon ID
@@ -954,6 +976,7 @@ run_daemon()
         return 0
     else
         echo "ERROR: Daemon $1 failed to start"
+        z2k_daemon_fail_note "$1"
         rm -f "$PIDFILE"
         return 1
     fi
@@ -1033,6 +1056,7 @@ start_daemons()
 {
     echo "Starting zapret2 daemons"
 
+    z2k_daemon_fail_reset
     ensure_autocircular_files
 
     # ������������ ������� �� common/linux_daemons.sh
@@ -1044,7 +1068,14 @@ start_daemons()
 
     repair_autocircular_files_after_daemon_start
 
-    return 0
+    # Отдать НАСТОЯЩИЙ результат, а не безусловный 0: иначе провал старта
+    # демона не виден никому выше по стеку (см. коммент у z2k_daemon_fail_*).
+    _sd_failed=$(z2k_daemon_fail_count)
+    case "${_sd_failed:-0}" in
+        ''|0) return 0 ;;
+    esac
+    echo "ERROR: $_sd_failed daemon(s) failed to start"
+    return 1
 }
 
 stop_daemons()
@@ -1871,7 +1902,14 @@ start()
     traffic_debug_tcpdump_start
 
     # 3. ��������� daemon ��������
-    start_daemons
+    # Результат больше НЕ игнорируется: раньше здесь стоял голый вызов, и ниже
+    # безусловно печаталось «service started» + return 0 — отсюда зелёная панель
+    # при мёртвом обходе.
+    if ! start_daemons; then
+        echo "ERROR: zapret2 service NOT started — обход не работает"
+        echo "Проверьте конфигурацию: sh /opt/zapret2/z2k-config-validator.sh"
+        return 1
+    fi
 
     # Orchestrator start removed: upstream'овский daemon удалён 2026-05-07.
 
