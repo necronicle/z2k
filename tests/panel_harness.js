@@ -99,6 +99,7 @@ const FIXTURES = {
     {key:"discord_udp",host:"nohost",strategy:"2",ts:1785830200,mode:"auto"}] },
   "/pools": { ok:true, pools:{rkn_tcp:50,yt_tcp:22,gv_tcp:22,yt_quic:13,discord_udp:9} },
   "/whitelist": { ok:true, domains:["gosuslugi.ru","sberbank.ru","keenetic.link"] },
+  "/exclude": { ok:true, entries:["tiandycloud.com","203.0.113.0/24","2001:db8::1"] },
   "/extra-domains": { ok:true, domains:["example.org","cdnbase.com"] },
   "/warp/status": { ok:true, enabled:false, running:false, iface:"", ip:"" },
   "/warp/games": { ok:true, games:[{name:"ApexLegends",entries:42,on:1},{name:"Valorant",entries:13,on:0}] },

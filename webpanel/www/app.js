@@ -125,6 +125,7 @@
     toggles: renderToggles,
     warp: renderWarp,
     whitelist: renderWhitelist,
+    exclude: renderExclude,
     "extra-domains": renderExtraDomains,
     state: renderState,
     strategies: renderStrategies,
@@ -139,6 +140,7 @@
     toggles:         "Режимы",
     warp:            "WARP",
     whitelist:       "Whitelist",
+    exclude:         "Исключения",
     "extra-domains": "Доп. домены",
     // «Стратегии» — одна дверь, два вида внутри. Маршрут `state` остался жив
     // ради старых ссылок и закладок: он открывает ту же страницу на вкладке
@@ -1373,6 +1375,91 @@
   }
 
   // ---------- Whitelist ----------
+  // Исключения по адресату. В отличие от whitelist (тот работает по имени
+  // домена и только там, где имя видно), это исключение на уровне файрвола:
+  // адрес попадает в сет nozapret, который проверяется в каждом NFQUEUE-правиле.
+  // Поэтому помогает и там, где имени нет вообще — UDP/STUN/P2P: камеры,
+  // домофоны, WebRTC.
+  async function renderExclude() {
+    $app.innerHTML = `
+      <h1 class="page-title">Исключения</h1>
+      <div class="card">
+        <h3>Не обрабатывать эти адреса</h3>
+        <p class="desc">
+          Всё, что здесь перечислено, z2k не трогает вообще — как будто обход
+          выключен именно для этих адресов. Помогает, когда приложение ломается
+          от вмешательства в его трафик: камеры и домофоны с P2P, часть VoIP и
+          видеозвонков. Можно вписывать <b>домен</b>, <b>адрес</b> или
+          <b>подсеть</b> (например <code>203.0.113.0/24</code>). Адреса
+          начинают действовать сразу, домены — после ближайшего обновления
+          списков.
+        </p>
+        <p class="desc">
+          Локальная сеть (192.168.x, 10.x, 172.16–31.x и подобные) исключена
+          всегда и без этого списка — добавлять её сюда не нужно.
+        </p>
+        <div class="wl-add">
+          <label class="field">
+            <span class="field-label">Домен, адрес или подсеть</span>
+            <input id="ex-input" type="text" placeholder="example.com или 203.0.113.0/24"
+                   inputmode="url" autocomplete="off" autocapitalize="off"
+                   spellcheck="false" autocorrect="off">
+          </label>
+          <button class="btn btn-primary" id="ex-add-btn">Добавить</button>
+        </div>
+        <ul class="wl-list" id="ex-list">${skeletonLines(5)}</ul>
+      </div>
+    `;
+    document.getElementById("ex-add-btn").addEventListener("click", exAdd);
+    document.getElementById("ex-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") exAdd();
+    });
+    loadExclude();
+  }
+
+  async function loadExclude() {
+    const list = document.getElementById("ex-list");
+    try {
+      const d = await apiGet("/exclude");
+      if (!d.entries.length) {
+        list.innerHTML = `<li style="color:var(--text-muted)">(пусто)</li>`;
+        return;
+      }
+      list.innerHTML = d.entries.map(en => `
+        <li><span>${escapeHtml(en)}</span><button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(en)}" data-del="${escapeHtml(en)}">${_icons.close}</button></li>
+      `).join("");
+      list.querySelectorAll("button[data-del]").forEach(btn => {
+        btn.addEventListener("click", () => exDelete(btn.dataset.del));
+      });
+    } catch (e) {
+      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+    }
+  }
+
+  async function exAdd() {
+    const inp = document.getElementById("ex-input");
+    const entry = inp.value.trim();
+    if (!entry) return;
+    try {
+      await apiPost("/exclude/add", { entry });
+      inp.value = "";
+      toast("Добавлено");
+      loadExclude();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
+  async function exDelete(entry) {
+    try {
+      await apiPost("/exclude/delete", { entry });
+      toast("Удалено");
+      loadExclude();
+    } catch (e) {
+      toast("Ошибка: " + e.message, "bad");
+    }
+  }
+
   async function renderWhitelist() {
     $app.innerHTML = `
       <h1 class="page-title">Whitelist</h1>

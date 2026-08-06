@@ -24,7 +24,7 @@ if ! command -v node >/dev/null 2>&1; then
     exit 0
 fi
 
-ROUTES="dashboard toggles strategies state warp whitelist extra-domains diag credits"
+ROUTES="dashboard toggles strategies state warp whitelist exclude extra-domains diag credits"
 
 # shellcheck disable=SC2086
 out=$(node "$ROOT/tests/panel_harness.js" "$ROOT/webpanel/www/app.js" $ROUTES 2>&1)

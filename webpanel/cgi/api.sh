@@ -315,6 +315,31 @@ case "$method $path" in
         ;;
 
     # ---------- WHITELIST ----------
+    "GET /exclude")
+        json_header
+        printf '{"ok":true,"entries":['
+        first=1
+        exclude_list | while IFS= read -r e; do
+            [ -z "$e" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            json_string "$e"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+
+    "POST /exclude/add"|"POST /exclude/delete")
+        body=$(read_body)
+        entry=$(form_value "$body" "entry")
+        [ -z "$entry" ] && json_fail "400 Bad Request" "entry required"
+        if [ "$path" = "/exclude/add" ]; then
+            exclude_add "$entry" || json_fail "400 Bad Request" "invalid or add failed"
+        else
+            exclude_delete "$entry" || json_fail "400 Bad Request" "invalid or delete failed"
+        fi
+        json_ok
+        ;;
+
     "GET /whitelist")
         json_header
         printf '{"ok":true,"domains":['

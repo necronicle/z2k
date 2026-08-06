@@ -554,6 +554,92 @@ policy_save() {
     restart_service_if_running
 }
 
+# --- исключения по адресату (nozapret) ---
+#
+# Отличие от whitelist: тот исключает ДОМЕН из десинка на TCP-профилях
+# (--hostlist-exclude, матч по SNI). Здесь исключение по АДРЕСАТУ, на уровне
+# файрвола: адрес в сете nozapret проверяется в КАЖДОМ NFQUEUE-правиле
+# (`$IPSET_EXCLUDE dst`), поэтому работает и там, где имени нет вообще — UDP,
+# STUN, P2P-камеры, домофоны, WebRTC. Именно этого не хватало юзеру с камерами
+# EasyLive: у профиля Discord/STUN хостлиста нет, и whitelist там бессилен.
+#
+# Файл читает апстрим (ipset/def.sh: ZUSERLIST_EXCLUDE -> filedigger -> nozapret),
+# принимает и домены, и IP/CIDR. Домены резолвятся при обновлении списков,
+# поэтому голые адреса мы дополнительно кладём в живой сет сразу — чтобы
+# исключение начинало действовать без ожидания ночной задачи.
+EXCLUDE_FILE="${EXCLUDE_FILE:-$ZAPRET2_DIR/ipset/zapret-hosts-user-exclude.txt}"
+
+exclude_list() {
+    [ -f "$EXCLUDE_FILE" ] || { echo ""; return 0; }
+    grep -vE '^[[:space:]]*(#|$)' "$EXCLUDE_FILE"
+}
+
+# Запись похожа на адрес/подсеть (а не на домен)? Тогда её можно применить живьём.
+_exclude_looks_like_ip() {
+    case "$1" in
+        *:*) return 0 ;;                 # IPv6 (в т.ч. с /len)
+        *[!0-9./]*) return 1 ;;          # есть буквы — домен
+        *[0-9]*) return 0 ;;             # только цифры/точки/слеш — IPv4/CIDR
+        *) return 1 ;;
+    esac
+}
+
+# Применить/снять запись в живом сете. Тихо: сет может отсутствовать (сервис
+# остановлен) — это не ошибка, файл всё равно подхватится при следующем старте.
+_exclude_ipset_apply() {
+    local op="$1" entry="$2" set4="nozapret" set6="nozapret6"
+    command -v ipset >/dev/null 2>&1 || return 0
+    case "$entry" in
+        *:*) ipset "$op" "$set6" "$entry" -exist 2>/dev/null || true ;;
+        *)   ipset "$op" "$set4" "$entry" -exist 2>/dev/null || true ;;
+    esac
+    return 0
+}
+
+_exclude_validate() {
+    # Домены, IPv4/CIDR и IPv6/CIDR. Ведущий `-` отвергаем — легитимной записи
+    # с него не начинается, а в shell-путях он превратился бы во флаг.
+    case "$1" in
+        ''|*' '*) return 1 ;;
+        -*) return 1 ;;
+        *[!a-zA-Z0-9.:/-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+exclude_add() {
+    local entry="$1"
+    _exclude_validate "$entry" || { echo "invalid entry" >&2; return 1; }
+    mkdir -p "$(dirname "$EXCLUDE_FILE")" 2>/dev/null
+    touch "$EXCLUDE_FILE" 2>/dev/null
+    if ! grep -qxF "$entry" "$EXCLUDE_FILE"; then
+        printf '%s\n' "$entry" >> "$EXCLUDE_FILE"
+        chmod 644 "$EXCLUDE_FILE" 2>/dev/null || true
+    fi
+    # Адрес — применяем сразу; домен — подхватится обновлением списков.
+    if _exclude_looks_like_ip "$entry"; then
+        _exclude_ipset_apply add "$entry"
+    fi
+    return 0
+}
+
+exclude_delete() {
+    local entry="$1"
+    _exclude_validate "$entry" || { echo "invalid entry" >&2; return 1; }
+    if _exclude_looks_like_ip "$entry"; then
+        _exclude_ipset_apply del "$entry"
+    fi
+    [ -f "$EXCLUDE_FILE" ] || return 0
+    grep -qxF "$entry" "$EXCLUDE_FILE" || return 0
+    # Переписываем через temp, не подменяя inode (сохранить права/владельца).
+    local tmp="$EXCLUDE_FILE.z2k-new"
+    grep -vxF "$entry" "$EXCLUDE_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$EXCLUDE_FILE"
+    rm -f "$tmp"
+    chmod 644 "$EXCLUDE_FILE" 2>/dev/null || true
+    return 0
+}
+
 # --- whitelist ---
 
 whitelist_list() {
