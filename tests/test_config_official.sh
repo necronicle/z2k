@@ -1021,6 +1021,55 @@ test_corrupt_pool_fails_closed() {
 }
 test_corrupt_pool_fails_closed
 
+# Same dead-NAND exposure applies to the USER-owned custom-strategies files:
+# they live on the same flash AND override the pool value, so guarding only the
+# pool files left the identical hang reachable through the back door.
+# Healthy custom file must still be honoured — that is the other half of the test.
+test_corrupt_custom_strategy() {
+    local variant="$1" body="$2" want_rc="$3" desc="$4"
+    local root="${MOCK_DIR}/custom-$variant"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" \
+             "$root/extra_strats/TCP/YT_GV" \
+             "$root/extra_strats/TCP/RKN" \
+             "$root/extra_strats/UDP/YT" \
+             "$root/lists/custom-strategies"
+    echo "youtube.com"     > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com" > "$root/extra_strats/TCP/YT_GV/List.txt"
+    echo "youtube.com"     > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org"   > "$root/extra_strats/TCP/RKN/List.txt"
+    for f in TCP/YT TCP/YT_GV TCP/RKN; do
+        echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=x --lua-desync=fake:strategy=1" \
+            > "$root/extra_strats/$f/Strategy.txt"
+    done
+    echo "--filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:time=60:key=yt_quic --lua-desync=fake:strategy=1" \
+        > "$root/extra_strats/UDP/YT/Strategy.txt"
+
+    # The custom override under test.
+    if [ "$variant" = "corrupt" ]; then
+        awk 'BEGIN{for(i=0;i<64;i++)printf "%c",255}' > "$root/lists/custom-strategies/rkn_tcp.txt"
+    else
+        printf '%s\n' "$body" > "$root/lists/custom-strategies/rkn_tcp.txt"
+    fi
+
+    printf 'ENABLED=1\nCUSTOM_SENTINEL=1\n' > "$root/config"
+    local rc
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 ); rc=$?
+    assert_eq "custom-$variant: rc — $desc" "$want_rc" "$rc"
+    if [ "$want_rc" = "1" ]; then
+        assert_contains     "custom-$variant: original config preserved" "CUSTOM_SENTINEL" "$(cat "$root/config")"
+        assert_not_contains "custom-$variant: no NFQWS2_OPT from garbage" "NFQWS2_OPT=" "$(cat "$root/config")"
+    else
+        # Healthy override must actually reach the generated options.
+        assert_contains "custom-$variant: override applied" "z2k_custom_marker" "$(cat "$root/config")"
+    fi
+    rm -rf "$root"
+}
+test_corrupt_custom_strategy corrupt "" "1" "порченый пользовательский файл роняет генерацию"
+test_corrupt_custom_strategy healthy \
+    "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:blob=z2k_custom_marker:strategy=1" \
+    "0" "исправный пользовательский файл принимается"
+
 rm -rf "$MOCK_DIR"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

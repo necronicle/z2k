@@ -164,19 +164,30 @@ fetch_to_tmp() {
     local http _vps_resolve
     # Layer 0: VPS SNI-passthrough первым хопом. $_vps_resolve — unquoted,
     # намеренный word-split в `--resolve host:443:ip ...` (пусто → обычный curl).
+    #
+    # --speed-limit/--speed-time: VPS-попытка обрывается, если скорость упала
+    # ниже 1 КБ/с на 30 с. Без этого зависший (принявший TCP, но молчащий) VPS
+    # выбирал бы весь --max-time 600, и только потом начинался прямой запрос со
+    # своими 600 — до 20 минут на ассет, а их четыре, и всё это на пути установки.
     _vps_resolve=$(_z2k_vps_gh_resolve "$url")
     # shellcheck disable=SC2086
     http=$(curl -sSL --connect-timeout 15 --max-time 600 $_vps_resolve \
+                --speed-limit 1024 --speed-time 30 \
                 --etag-compare "$etag_file" \
                 --etag-save "$etag_file" \
                 -o "$tmp" \
                 -D "$hdr" \
                 -w '%{http_code}' \
                 "$url" 2>/dev/null) || http="000"
-    # Транспортный сбой VPS-хопа (000) → тихо валимся в прямой запрос
-    # (сегодняшнее поведение), чтобы отказ VPS не был жёстче, чем его отсутствие.
-    if [ -n "$_vps_resolve" ] && { [ "$http" = "000" ] || [ -z "$http" ]; }; then
-        log "  $asset: VPS-хоп не прошёл, пробую напрямую"
+    # ЛЮБОЙ неуспех VPS-хопа → прямой запрос, как в каноне z2k_fetch (там слой
+    # считается пройденным только на 200 с непустым телом или 304, всё остальное
+    # валится на следующий слой). Раньше здесь стояло только `http = 000`, и живой,
+    # но отвечающий ошибкой VPS (502 от промаха nginx-мапы, 403, 404) убивал fetch
+    # насмерть — geosite уходил в shipped-fallback ДАЖЕ там, где github был доступен
+    # напрямую. То есть отказ VPS был жёстче, чем его отсутствие: ровно то, что этот
+    # слой обещал не делать.
+    if [ -n "$_vps_resolve" ] && ! { [ "$http" = "304" ] || { [ "$http" = "200" ] && [ -s "$tmp" ]; }; }; then
+        log "  $asset: VPS-хоп не прошёл (HTTP $http), пробую напрямую"
         http=$(curl -sSL --connect-timeout 15 --max-time 600 \
                     --etag-compare "$etag_file" \
                     --etag-save "$etag_file" \
