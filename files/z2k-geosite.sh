@@ -47,6 +47,32 @@ set -u
 RELEASE_BASE="${Z2K_GEOSITE_RELEASE_BASE:-https://github.com/runetfreedom/russia-blocked-geosite/releases/latest/download}"
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
 EXTRA="${ZAPRET2_DIR}/extra_strats"
+
+# VPS SNI-passthrough egress для GitHub — канон из z2k.sh / z2k-update-lists.sh.
+# RU блокирует Fastly/anycast github по IP → прямой fetch с роутера рвётся, и
+# именно geosite был ЕДИНСТВЕННЫМ github-загрузчиком z2k без этого хопа: на
+# свежей установке в цензурируемой сети его прямой curl падал, geosite
+# «using shipped fallback», и юзер оставался на неполном shipped-списке. VPS
+# форвардит github-хосты (включая releases-редиректы objects/release-assets/
+# codeload) на реальный backend с валидным сертом github. `--resolve` —
+# транзиентный, per-request, без записей в конфиг.
+Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
+
+_z2k_vps_gh_resolve() {
+    [ -n "${Z2K_VPS_GH_IP:-}" ] || return 0
+    # Реальный host между :// и первым / (чтобы glob не поймал github В ПУТИ).
+    local _h="${1#*://}"; _h="${_h%%/*}"; _h="${_h%%:*}"
+    case "$_h" in
+        *.githubusercontent.com|github.com|*.github.com) ;;
+        *) return 0 ;;
+    esac
+    local h
+    for h in raw.githubusercontent.com objects.githubusercontent.com \
+             release-assets.githubusercontent.com gist.githubusercontent.com \
+             github.com codeload.github.com api.github.com; do
+        printf ' --resolve %s:443:%s' "$h" "$Z2K_VPS_GH_IP"
+    done
+}
 ETAG_DIR="${ZAPRET2_DIR}/extra_strats/cache/geosite-etag"
 TMP_DIR="/tmp/z2k-geosite.$$"
 
@@ -135,14 +161,30 @@ fetch_to_tmp() {
 
     log "fetch $asset"
 
-    local http
-    http=$(curl -sSL --connect-timeout 15 --max-time 600 \
+    local http _vps_resolve
+    # Layer 0: VPS SNI-passthrough первым хопом. $_vps_resolve — unquoted,
+    # намеренный word-split в `--resolve host:443:ip ...` (пусто → обычный curl).
+    _vps_resolve=$(_z2k_vps_gh_resolve "$url")
+    # shellcheck disable=SC2086
+    http=$(curl -sSL --connect-timeout 15 --max-time 600 $_vps_resolve \
                 --etag-compare "$etag_file" \
                 --etag-save "$etag_file" \
                 -o "$tmp" \
                 -D "$hdr" \
                 -w '%{http_code}' \
                 "$url" 2>/dev/null) || http="000"
+    # Транспортный сбой VPS-хопа (000) → тихо валимся в прямой запрос
+    # (сегодняшнее поведение), чтобы отказ VPS не был жёстче, чем его отсутствие.
+    if [ -n "$_vps_resolve" ] && { [ "$http" = "000" ] || [ -z "$http" ]; }; then
+        log "  $asset: VPS-хоп не прошёл, пробую напрямую"
+        http=$(curl -sSL --connect-timeout 15 --max-time 600 \
+                    --etag-compare "$etag_file" \
+                    --etag-save "$etag_file" \
+                    -o "$tmp" \
+                    -D "$hdr" \
+                    -w '%{http_code}' \
+                    "$url" 2>/dev/null) || http="000"
+    fi
 
     case "$http" in
         200)
