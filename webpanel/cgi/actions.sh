@@ -993,6 +993,12 @@ tunnel_enable() {
         echo "tunnel init script missing" >&2
         return 1
     fi
+    # cdnbase-туннель (:1444) — тот же бинарник и та же пользовательская
+    # сущность, поэтому включается и выключается вместе с телеграмным.
+    if [ -x "/opt/etc/init.d/S97z2k-http-tunnel" ]; then
+        echo "Запускаю S97z2k-http-tunnel (cdnbase)..."
+        /opt/etc/init.d/S97z2k-http-tunnel start 2>&1
+    fi
     echo "Туннель запущен."
 }
 
@@ -1019,6 +1025,13 @@ tunnel_disable() {
         /opt/etc/init.d/S98tg-tunnel stop 2>&1
     else
         echo "Init-скрипт S98tg-tunnel не найден — пропускаю"
+    fi
+    # И cdnbase-туннель (:1444): один бинарник, одна сущность для человека.
+    # Раньше он оставался жить (~8 МБ) — со стороны это выглядело как «выключил
+    # туннель, а процесс tg-mtproxy-client всё равно висит в памяти».
+    if [ -x "/opt/etc/init.d/S97z2k-http-tunnel" ]; then
+        echo "Останавливаю S97z2k-http-tunnel (cdnbase)..."
+        /opt/etc/init.d/S97z2k-http-tunnel stop 2>&1
     fi
     echo "Туннель остановлен, watchdog респектнёт флаг и не будет его перезапускать."
 }

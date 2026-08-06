@@ -125,6 +125,12 @@ if [ -f "$CONFIG_FILE" ]; then
         else
             kill_tg_1443
         fi
+        # Флаг выключает ОБА туннеля: cdnbase (:1444) — тот же бинарник и та же
+        # сущность для человека. Раз в минуту это ещё и подчищает случай, когда
+        # cdnbase поднялся мимо флага (старый пакет, ручной запуск).
+        if [ -x "/opt/etc/init.d/S97z2k-http-tunnel" ]; then
+            "/opt/etc/init.d/S97z2k-http-tunnel" stop >/dev/null 2>&1
+        fi
         exit 0
     fi
 fi

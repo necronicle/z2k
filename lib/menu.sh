@@ -1737,6 +1737,9 @@ SUBMENU
                 # stays identical and OUTPUT redirect rules are managed too.
                 if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
                     /opt/etc/init.d/S98tg-tunnel restart >/dev/null 2>&1
+                    # cdnbase (:1444) — тот же бинарник, включается вместе.
+                    [ -x "/opt/etc/init.d/S97z2k-http-tunnel" ] && \
+                        /opt/etc/init.d/S97z2k-http-tunnel restart >/dev/null 2>&1
                 else
                     killall tg-mtproxy-client 2>/dev/null || true
                     sleep 1
@@ -1789,6 +1792,9 @@ SUBMENU
                 fi
                 if [ -x "/opt/etc/init.d/S98tg-tunnel" ]; then
                     /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1
+                    # И cdnbase (:1444), иначе процесс остаётся в памяти.
+                    [ -x "/opt/etc/init.d/S97z2k-http-tunnel" ] && \
+                        /opt/etc/init.d/S97z2k-http-tunnel stop >/dev/null 2>&1
                 else
                     killall tg-mtproxy-client 2>/dev/null || true
                     for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do

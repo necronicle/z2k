@@ -33,6 +33,18 @@ CIDRS="168.119.95.238/32"
 
 start() {
     [ -x "$BIN" ] || exit 0
+    # Уважать TG_PROXY_USER_DISABLED так же, как S98tg-tunnel. Оба туннеля —
+    # один бинарник и одна пользовательская сущность («туннель»), поэтому
+    # выключатель Telegram гасит и cdnbase: держать один без другого незачем
+    # (решение владельца 2026-08-06). Без этой проверки cdnbase воскресал бы
+    # на каждом ребуте вопреки явно выключенному туннелю.
+    if [ -f "/opt/zapret2/config" ]; then
+        user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+        if [ "$user_disabled" = "1" ]; then
+            echo "z2k-http-tunnel disabled by user — skipping autostart"
+            return 0
+        fi
+    fi
     if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE 2>/dev/null)" 2>/dev/null; then
         echo "z2k-http-tunnel already running (pid $(cat $PIDFILE))"
         return 0
@@ -109,6 +121,22 @@ stop() {
         # on :1443 and we must not knock it out.
         [ -n "$pid" ] && kill "$pid" 2>/dev/null
         rm -f "$PIDFILE"
+    fi
+    # ОБЯЗАТЕЛЬНО добить сам демон, а не только супервизора. В pidfile лежит
+    # PID СУПЕРВИЗОРА (подоболочка с respawn-циклом), и его смерть НЕ убивает
+    # ребёнка — тот осиротевает и живёт дальше, держа ~8 МБ и порт :1444.
+    # Именно это наблюдали как «выключил туннель, а он остался в памяти и жрёт
+    # оперативку» (полевой отчёт 2026-08-06); воспроизведено в песочнице на
+    # роутере до правки и проверено после. У S98tg-tunnel такой добой был с
+    # самого начала, у S97 — нет.
+    # Матчим по cmdline, а не killall: тот же бинарник обслуживает :1443.
+    if pidof tg-mtproxy-client >/dev/null 2>&1; then
+        for p in $(pidof tg-mtproxy-client); do
+            if [ -r "/proc/$p/cmdline" ] && \
+               tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- "--listen=:$LISTEN_PORT"; then
+                kill "$p" 2>/dev/null
+            fi
+        done
     fi
     for cidr in $CIDRS; do
         while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
