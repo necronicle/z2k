@@ -982,6 +982,45 @@ YT_QUIC_DOC=$(printf '%s\n' "$OUT_DOC" | grep -F 'key=yt_quic' | head -1)
 assert_contains     "docalign: yt_quic udp_in=8"          "udp_in=8:udp_out=4:key=yt_quic" "$YT_QUIC_DOC"
 assert_not_contains "docalign: yt_quic no stale udp_in=1" "udp_in=1:udp_out=4:key=yt_quic" "$YT_QUIC_DOC"
 
+printf "\n--- corrupt pool Strategy.txt: fail closed, keep old config (field 2026-08-06) ---\n"
+
+# A USB flash can hand back an all-0xFF file for a strategy pool (dead NAND
+# block: size and mtime intact, bytes gone). Feeding that garbage into
+# NFQWS2_OPT poisons the on-disk config and the next nfqws2 restart dies
+# wholesale. The generator must instead fail closed and leave the existing
+# config untouched — never half-write it.
+test_corrupt_pool_fails_closed() {
+    local root="${MOCK_DIR}/corrupt-pool"
+    rm -rf "$root"
+    mkdir -p "$root/extra_strats/TCP/YT" \
+             "$root/extra_strats/TCP/YT_GV" \
+             "$root/extra_strats/TCP/RKN" \
+             "$root/extra_strats/UDP/YT" \
+             "$root/lists"
+    echo "youtube.com"    > "$root/extra_strats/TCP/YT/List.txt"
+    echo "googlevideo.com"> "$root/extra_strats/TCP/YT_GV/List.txt"
+    echo "youtube.com"    > "$root/extra_strats/UDP/YT/List.txt"
+    echo "rutracker.org"  > "$root/extra_strats/TCP/RKN/List.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=yt_tcp --lua-desync=fake:strategy=1" > "$root/extra_strats/TCP/YT/Strategy.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=gv_tcp --lua-desync=fake:strategy=1" > "$root/extra_strats/TCP/YT_GV/Strategy.txt"
+    echo "--filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:time=60:key=yt_quic --lua-desync=fake:strategy=1" > "$root/extra_strats/UDP/YT/Strategy.txt"
+    # RKN pool: all-0xFF garbage, exactly the dead-block failure mode.
+    awk 'BEGIN{for(i=0;i<64;i++)printf "%c",255}' > "$root/extra_strats/TCP/RKN/Strategy.txt"
+
+    local sentinel="ORIGINAL_UNTOUCHED_SENTINEL"
+    printf 'ENABLED=1\n%s=1\n' "$sentinel" > "$root/config"
+
+    local rc
+    ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 ); rc=$?
+
+    assert_eq         "corrupt-pool: create_official_config returns non-zero" "1" "$rc"
+    # The old config must survive byte-for-byte: no NFQWS2_OPT written, sentinel intact.
+    assert_contains   "corrupt-pool: original config preserved" "$sentinel" "$(cat "$root/config")"
+    assert_not_contains "corrupt-pool: no NFQWS2_OPT written from garbage" "NFQWS2_OPT=" "$(cat "$root/config")"
+    rm -rf "$root"
+}
+test_corrupt_pool_fails_closed
+
 rm -rf "$MOCK_DIR"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

@@ -2337,6 +2337,16 @@
             и сервер, который этим занят, держится в том числе на таких взносах.
           </p>
         </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+          <div class="credits-name">Dkarloff - SEO отец</div>
+          <p class="desc">
+            Спасибо за поддержку проекта. Такие взносы держат на плаву всё, что
+            вокруг обхода — туннель, зеркала обновлений и служебные сервисы, —
+            и позволяют развивать z2k дальше.
+          </p>
+        </div>
       </div>
     `;
   }

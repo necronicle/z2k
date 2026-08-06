@@ -103,19 +103,43 @@ generate_nfqws2_opt_from_strategies() {
             | sed 's/[[:space:]]*$//'
     }
 
+    # Чтение пулового Strategy.txt с проверкой содержимого. USB-флешка умеет
+    # тихо отдавать вместо файла сплошные 0xFF (мёртвый NAND-блок: размер и
+    # mtime целы, данных нет — полевой случай 2026-08-06, роутер владельца,
+    # два файла из трёх). Без проверки этот мусор вшивается в NFQWS2_OPT,
+    # конфиг на диске становится миной, и следующий рестарт кладёт nfqws2
+    # целиком — «одна опечатка роняет всё» в худшей форме. Порченый файл =
+    # генерация честно падает, старый конфиг и работающий сервис не тронуты.
+    z2k_read_pool_strategy() {
+        # z2k_read_pool_strategy <file> — содержимое в stdout, либо rc=1
+        local _f="$1" _junk
+        # Число NUL/0xFF-байт. Арифметическое сравнение, а не строковое: `wc -c`
+        # на части платформ (BSD/busybox-вариантах) паддит вывод пробелами, и
+        # `[ "  0" != "0" ]` дало бы ложный REJECT на исправном файле; в `-gt`
+        # ведущие пробелы съедаются числовым контекстом.
+        _junk=$(tr -cd '\000\377' < "$_f" | wc -c)
+        if [ "${_junk:-0}" -gt 0 ] 2>/dev/null \
+           || ! grep -q -- "--lua-desync" "$_f"; then
+            print_error "Файл стратегий повреждён (бинарный мусор вместо опций): $_f"
+            print_error "Генерация конфига остановлена, старый конфиг сохранён. Лечится обновлением/переустановкой z2k."
+            return 1
+        fi
+        cat "$_f"
+    }
+
     # Прочитать стратегии из файлов категорий
     if [ -f "${extra_strats_dir}/TCP/YT/Strategy.txt" ]; then
-        youtube_tcp=$(cat "${extra_strats_dir}/TCP/YT/Strategy.txt")
+        youtube_tcp=$(z2k_read_pool_strategy "${extra_strats_dir}/TCP/YT/Strategy.txt") || return 1
     fi
     _cs=$(z2k_custom_strategy yt_tcp) && [ -n "$_cs" ] && youtube_tcp="$_cs"
 
     if [ -f "${extra_strats_dir}/TCP/YT_GV/Strategy.txt" ]; then
-        youtube_gv_tcp=$(cat "${extra_strats_dir}/TCP/YT_GV/Strategy.txt")
+        youtube_gv_tcp=$(z2k_read_pool_strategy "${extra_strats_dir}/TCP/YT_GV/Strategy.txt") || return 1
     fi
     _cs=$(z2k_custom_strategy gv_tcp) && [ -n "$_cs" ] && youtube_gv_tcp="$_cs"
 
     if [ -f "${extra_strats_dir}/TCP/RKN/Strategy.txt" ]; then
-        rkn_tcp=$(cat "${extra_strats_dir}/TCP/RKN/Strategy.txt")
+        rkn_tcp=$(z2k_read_pool_strategy "${extra_strats_dir}/TCP/RKN/Strategy.txt") || return 1
     fi
     _cs=$(z2k_custom_strategy rkn_tcp) && [ -n "$_cs" ] && rkn_tcp="$_cs"
 
@@ -135,7 +159,7 @@ generate_nfqws2_opt_from_strategies() {
     # If category strategy files exist, prefer them over hardcoded QUIC defaults.
     _cs=$(z2k_custom_strategy yt_quic) && [ -n "$_cs" ] && quic_udp="$_cs"
     if [ -z "$_cs" ] && [ -f "${extra_strats_dir}/UDP/YT/Strategy.txt" ]; then
-        quic_udp=$(cat "${extra_strats_dir}/UDP/YT/Strategy.txt")
+        quic_udp=$(z2k_read_pool_strategy "${extra_strats_dir}/UDP/YT/Strategy.txt") || return 1
     fi
     # Discord TCP profiles from zapret4rocket are absent; disable dedicated TCP Discord profile.
     local discord_tcp_block=""
@@ -1463,9 +1487,12 @@ create_official_config() {
     # Создать директорию если не существует
     mkdir -p "$(dirname "$config_file")"
 
-    # Генерировать NFQWS2_OPT
+    # Генерировать NFQWS2_OPT. `$(...)` съедает return-код функции, поэтому
+    # проверяем его отдельно: порченый Strategy.txt (0xFF-мусор с мёртвого
+    # NAND-блока) роняет генерацию здесь, ДО записи в конфиг — так живой
+    # config_file и работающий сервис остаются нетронутыми.
     local nfqws2_opt_section
-    nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies)
+    nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies) || return 1
 
     # =========================================================================
     # ВАЛИДАЦИЯ NFQWS2 ОПЦИЙ (ВАЖНО)
@@ -1880,7 +1907,7 @@ Z2K_USE_MID_STREAM_DETECTOR=${saved_Z2K_USE_MID_STREAM_DETECTOR}
 Z2K_INJECT_TLS_MODS=${saved_Z2K_INJECT_TLS_MODS}
 
 # Dynamic TTL fool hook auto-inject (default 1). =0 для опт-аута на
-# сетапах с принудительным NDM TTL-fix (`ip ttl-fix` на Keenetic при
+# сетапах с принудительным NDM TTL-fix (команда "ip ttl-fix" на Keenetic при
 # модемном тарифе с запретом раздачи: телефонная симка + IMEI-
 # маскировка). В такой топологии NDM всё равно перебивает TTL всех
 # исходящих, поэтому inject избыточен; опт-аут оставляет fake'ам
@@ -1914,8 +1941,8 @@ Z2K_PADENCAP=${saved_Z2K_PADENCAP}
 #   1 — исключить устройства из этой политики из обработки z2k (нужно если
 #       одно устройство должно ходить direct без модификации пакетов)
 # preserve через reinstall (без префикса Z2K_, поэтому добавлены в whitelist).
-# В КАВЫЧКАХ. Конфиг исполняется как скрипт (files/S99zapret2.new:197 делает
-# `. "$ZAPRET_CONFIG"`), а имя политики Keenetic человек задаёт сам и по-русски:
+# В КАВЫЧКАХ. Конфиг исполняется как скрипт (files/S99zapret2.new:197 сорсит
+# его через точку), а имя политики Keenetic человек задаёт сам и по-русски:
 # «Через ВПН», «Прямой канал». Без кавычек такое присваивание разваливается на
 # POLICY_NAME=Через и попытку выполнить ВПН как команду — то есть сервис
 # ломается на ровном месте. Отчёт 2026-08-05: «нельзя прописать политику
@@ -1963,9 +1990,10 @@ update_nfqws2_opt_in_config() {
     # Создать backup
     cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
 
-    # Генерировать новый NFQWS2_OPT
+    # Генерировать новый NFQWS2_OPT (см. коммент в create_official_config:
+    # порченый Strategy.txt роняет генерацию, старый конфиг не переписываем).
     local nfqws2_opt_section
-    nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies)
+    nfqws2_opt_section=$(generate_nfqws2_opt_from_strategies) || return 1
 
     # Создать временный файл
     local temp_file="${config_file}.tmp"

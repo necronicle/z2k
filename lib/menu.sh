@@ -43,6 +43,7 @@ show_main_menu() {
 |  - Dez                                            |
 |  - hoaxx                                          |
 |  - Mansurchick                                    |
+|  - Dkarloff - SEO отец                            |
 +===================================================+
 
 MENU
