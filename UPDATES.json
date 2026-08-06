@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "r-72.9",
+  "current": "p-72.10",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "6fb2c77122a8f2b82cb3d276794b247448fcb24448611673ca84c44275c618b8",
@@ -65,7 +65,7 @@
   "files/z2k-config-validator.sh": "31b8e39341f75efb130500ad473cabd90677d814be259bc110429fbc3e4c01d4",
   "files/z2k-diag.sh": "3af37178f9e2c76e211a60b514445dccef3628a05c57b8101155b19630f46836",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
-  "files/z2k-geosite.sh": "09863fdd3816396aa30b0111460f9cc121f0abaaa4cd69d539432e7bc26dc2c4",
+  "files/z2k-geosite.sh": "bf6d68b43c19fa426d06b82215eab754b4359f4e1b4dc9ec8cebbaf114ed537c",
   "files/z2k-insta-ip-refresh.sh": "5503589976353df4d1c69dbf193997a6de48df1dd2af970f91265c83cc8890e0",
   "files/z2k-nfqueue-selfheal.sh": "f170f69077da716473ef2a8ec63381bd6eb4e55316104924a36e784dcfb2a63c",
   "files/z2k-ppe-deoffload.sh": "2e17688dc5de388fe95fbfc36b49b0c71485537faac7de639e17560006b43ced",
@@ -77,7 +77,7 @@
   "files/z2k-warp.sh": "ce516ded028bf3dae52c1d2f4d9cc72aeba4823e3fe72c41d3099d515ecb6a8d",
   "lib/auto_update.sh": "79c12dd80f7395d611815c7123e2bc96a09f34fa9504825258a29fb3755d342f",
   "lib/config.sh": "07ffc9865ecb882708824fd9bd90ea0b6d8226ec172b96332f0cb3d1d2882907",
-  "lib/config_official.sh": "a3c3f9b78e2ce8732ec65351bb2f0267945616d773bccd8a3d84704d2ec12160",
+  "lib/config_official.sh": "848f18f2107d86f3927fcf59ec368d8e7bffe56804c3d80c68784ac6113e05e6",
   "lib/install.sh": "6b1f0bdea680ce219c18f53a2b11e9874adc68bc8f4109cabe2549c25151cdc6",
   "lib/menu.sh": "ec14466f704a17641d26e33afbb81891cc7cca2bbef45ccb5fd9dc29f3ace797",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
@@ -105,7 +105,7 @@
   "webpanel/uninstall.sh": "1fe2374c8d6497c60bc831578ccd3176202a67de33f7a4ddc48d2fcb83137b36",
   "webpanel/www/app.js": "a9a606955c205d75a8f5c4038271f51c75ebc794b271a53ebe300d97cab7916a",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "b3b49ace0ec9da1c6bc1118559267bee186c3192357baf90ee6f7f7ab5876163",
+  "webpanel/www/index.html": "28857e2f4f4349ee31e9d2744e9df28742640eded6b60c81fbca2ebff8287109",
   "webpanel/www/style.css": "e5f6c260d5a5942c9911597ae1a002f690561d9dcbe1176d6a24b4b79c0f654e",
   "z2k.sh": "2f52d6ba20f46617e85c34bbf5ba1da7d957eee50e16665da7f4c14fe0bcfaea"
   },
@@ -254,6 +254,7 @@
 {"v": "p-72.6", "type": "patch", "ts": "2026-08-05T13:09:39Z", "ref": "84bab86", "desc": "Диагностика теперь сразу называет причину, если обход не работает: пустой список заблокированных сайтов, сбитые часы роутера, незапущенный телеграм-туннель или включённый WARP без соединения. Раньше в таких случаях наверху писалось «явных проблем не найдено».", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/auto_update.sh", "UPDATES.json"]},
 {"v": "p-72.7", "type": "patch", "ts": "2026-08-05T19:54:41Z", "ref": "e1748f9", "desc": "После перезагрузки роутера сервисы z2k не поднимались сами — приходилось запускать вручную. Отключение автообновлений сбрасывалось при каждом обновлении. Имя политики Keenetic теперь можно задать по-русски и с пробелом. В диагностику добавлена причина, если обновление откатилось.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/init.d/S96z2k-rt-proxy", "files/init.d/S97z2k-http-tunnel", "files/init.d/S98tg-tunnel", "files/init.d/S99z2k-scheduler", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"]},
 {"v": "r-72.8", "type": "reinstall", "ts": "2026-08-06T12:56:57Z", "ref": "ef00d33", "desc": "Исправлено зависание роутера при переключении режимов в панели, если служебный файл со стратегиями на накопителе повредился. Обновление также восстанавливает такие повреждённые файлы, чтобы обход снова работал полностью.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "webpanel/www/app.js", "UPDATES.json"]},
-{"v": "r-72.9", "type": "reinstall", "ts": "2026-08-06T15:17:39Z", "ref": "6c9c93f", "desc": "Списки доменов для обхода теперь загружаются через наш сервер — это надёжнее в сетях, где GitHub недоступен напрямую, поэтому после установки списки реже остаются неполными. Также в список YouTube для QUIC добавлен адрес детского YouTube.", "changed_files": ["webpanel/www/index.html", "files/lists/extra_strats/UDP/YT/List.txt", "files/z2k-geosite.sh", "UPDATES.json"]}
+{"v": "r-72.9", "type": "reinstall", "ts": "2026-08-06T15:17:39Z", "ref": "6c9c93f", "desc": "Списки доменов для обхода теперь загружаются через наш сервер — это надёжнее в сетях, где GitHub недоступен напрямую, поэтому после установки списки реже остаются неполными. Также в список YouTube для QUIC добавлен адрес детского YouTube.", "changed_files": ["webpanel/www/index.html", "files/lists/extra_strats/UDP/YT/List.txt", "files/z2k-geosite.sh", "UPDATES.json"]},
+{"v": "p-72.10", "type": "patch", "ts": "2026-08-06T16:02:30Z", "ref": "PENDING", "desc": "Загрузка списков доменов стала устойчивее: если наш сервер отвечает ошибкой, z2k теперь сразу пробует прямой путь, а не остаётся с неполными списками. Также обновление больше не может зависнуть из-за повреждённого файла стратегий на накопителе.", "changed_files": ["webpanel/www/index.html", "files/z2k-geosite.sh", "lib/config_official.sh", "UPDATES.json"]}
   ]
 }
