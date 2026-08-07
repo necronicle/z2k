@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-73",
+  "current": "r-73.1",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "a807213858f9633607b2b18698570adc9e4fd614ce53f58bf003b25377c34230",
+  "files/S99zapret2.new": "f425a1c15258c6fef68996feed98e4f3059d627d609f13606a6a9e358f745a0b",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/fake/4pda.bin": "eefeaf09dde8d69b1f176212541f63c68b314a33a335eced99a8a29f17254da8",
   "files/fake/http_iana_org.bin": "f77d1cdaff02b6311d4276eeb8479830ab777d8fce4a4b116135c7768f3a284a",
@@ -78,11 +78,11 @@
   "lib/auto_update.sh": "87b895d121c4f041b8962d49e5b4e20d4a6a9d74d6faaba01fe4a35b5db19bb8",
   "lib/config.sh": "07ffc9865ecb882708824fd9bd90ea0b6d8226ec172b96332f0cb3d1d2882907",
   "lib/config_official.sh": "848f18f2107d86f3927fcf59ec368d8e7bffe56804c3d80c68784ac6113e05e6",
-  "lib/install.sh": "6b1f0bdea680ce219c18f53a2b11e9874adc68bc8f4109cabe2549c25151cdc6",
-  "lib/menu.sh": "a28ac07d21c48422b2b86f3c4de00030e45286e9f751d125e5402e79b8d3b361",
+  "lib/install.sh": "e0b628bfd6ca5190a9c680e44165600972c6649900d42833b2ad318a17a1a8d3",
+  "lib/menu.sh": "686d5fb48aabb3146707c8e17b475028c039c675a7d8dd3fa77b72872adf7c3b",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
   "lib/utils.sh": "31b370718c1aeb6dcf325d72f5121f4eff7cb309a9ce31be243575f412ede7b0",
-  "lib/webpanel.sh": "b5a673e0f2037188d68064e086ef693e65d797e750c3a56a32b0aeaa442373bd",
+  "lib/webpanel.sh": "6eebe0d1eab0965992136d7bd580780fbedbd1b6aaf3c6344eab9c83b5236f1b",
   "mtproxy-client/builds/tg-mtproxy-client-linux-amd64": "51798089ba5ee2e09d461e405ae33f5aa446c839758010ff48e32faa9307e30c",
   "mtproxy-client/builds/tg-mtproxy-client-linux-arm": "2960de03d967fca2098ec3b45f7b06f94fd245bbaed11fd2e5039abbc5b7e667",
   "mtproxy-client/builds/tg-mtproxy-client-linux-arm64": "fa2459d1edc05ede0dfc09eee9a9215ea4505b66559197699dc340a989c86ca0",
@@ -97,16 +97,16 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "5fad5bf686ec163db078b9da0c6fda0171bf8fca88166d11ac8d8783bf14bf82",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "129b5117b374fc50eef66b3f02a5ae335a16cf4ab04560825f7aa9432c56b245",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "a49012dd5ffd82479b1f550f3fd1d7f2838b9d84625c607e5f49bc102bd8c2bb",
-  "webpanel/cgi/actions.sh": "efc46e2fb2a0cdcbfeb77b7c4932b7210b2fa504a1fae9bfb557afd5102fcf0e",
-  "webpanel/cgi/api.sh": "d10cbdffea8dba868a461d25807215e5182e2518828ea5a980ad3f333a5430ca",
-  "webpanel/cgi/auth.sh": "75cfaf0f99a7f13b2b61414463d08e13b27ab08bb5355420d9a52608123eecef",
-  "webpanel/init.d/S96z2k-webpanel": "6d86392f3583dd81643460402c9eb8d6cc0aaaaf85eb39d270277765d4d5f2af",
-  "webpanel/install.sh": "c20c1e44dcbc48782de70e211e04073bcc578bce64aa516b0fdcc8f3f964379f",
-  "webpanel/uninstall.sh": "1fe2374c8d6497c60bc831578ccd3176202a67de33f7a4ddc48d2fcb83137b36",
-  "webpanel/www/app.js": "d74d818e6d3de311aa268b598cc9a98b56d541af9aed922cf45f3d57e8bb8225",
+  "webpanel/cgi/actions.sh": "9a5af8c9e93c33b5ead393ad5954d1511df29787303193c72b362fe47a27fd1e",
+  "webpanel/cgi/api.sh": "d37493b75f648c43aadc44990e422241c1611c5ec972a846675bb14bc6d8fa9d",
+  "webpanel/cgi/auth.sh": "9b6368dca02e895763fd99f6095b0b58db610495b126f8315bbe51b11ba03897",
+  "webpanel/init.d/S96z2k-webpanel": "aa31c58ade729e880d15b31afbef29bea1ee269220a140411311d1b6a4c36377",
+  "webpanel/install.sh": "30bb065f9be76eadd0e712bbe98a6a45212ad53b78b038d60f8a7d8e506c7e42",
+  "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
+  "webpanel/www/app.js": "2b0caa0f44167ace0f4416888ecf30b2be630e92707db73dd8a5d13d061af67e",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "0c2169929104c06c543efe9f9a0f2b8425b9d68831c37818d26f626472f38fd7",
-  "webpanel/www/style.css": "e5f6c260d5a5942c9911597ae1a002f690561d9dcbe1176d6a24b4b79c0f654e",
+  "webpanel/www/index.html": "7aa7aa5feca9737b4f88cc4421d05068e43012b147862b47816cc1aa16cd64c5",
+  "webpanel/www/style.css": "912fef03b336963e4654e7d5fcc6f1e6bfcdee40bdfdf8db2293d461f25a1734",
   "z2k.sh": "2f52d6ba20f46617e85c34bbf5ba1da7d957eee50e16665da7f4c14fe0bcfaea"
   },
   "history": [
@@ -256,6 +256,7 @@
 {"v": "r-72.8", "type": "reinstall", "ts": "2026-08-06T12:56:57Z", "ref": "ef00d33", "desc": "Исправлено зависание роутера при переключении режимов в панели, если служебный файл со стратегиями на накопителе повредился. Обновление также восстанавливает такие повреждённые файлы, чтобы обход снова работал полностью.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "webpanel/www/app.js", "UPDATES.json"]},
 {"v": "r-72.9", "type": "reinstall", "ts": "2026-08-06T15:17:39Z", "ref": "6c9c93f", "desc": "Списки доменов для обхода теперь загружаются через наш сервер — это надёжнее в сетях, где GitHub недоступен напрямую, поэтому после установки списки реже остаются неполными. Также в список YouTube для QUIC добавлен адрес детского YouTube.", "changed_files": ["webpanel/www/index.html", "files/lists/extra_strats/UDP/YT/List.txt", "files/z2k-geosite.sh", "UPDATES.json"]},
 {"v": "p-72.10", "type": "patch", "ts": "2026-08-06T16:02:30Z", "ref": "fdae5d3", "desc": "Загрузка списков доменов стала устойчивее: если наш сервер отвечает ошибкой, z2k теперь сразу пробует прямой путь, а не остаётся с неполными списками. Также обновление больше не может зависнуть из-за повреждённого файла стратегий на накопителе.", "changed_files": ["webpanel/www/index.html", "files/z2k-geosite.sh", "lib/config_official.sh", "UPDATES.json"]},
-{"v": "p-73", "type": "patch", "ts": "2026-08-06T18:08:22Z", "ref": "1d22b79", "desc": "Добавлен раздел «Исключения»: если какое-то приложение ломается при включённом обходе (например камеры или домофоны с P2P), впишите его адрес или домен — и z2k перестанет трогать этот трафик. Локальная сеть теперь исключена всегда. Кнопка выключения туннеля действительно освобождает память. Панель и меню больше не показывают «сервис работает», если обход не запустился.", "changed_files": ["files/S99zapret2.new", "files/init.d/S97z2k-http-tunnel", "files/z2k-tg-watchdog.sh", "lib/auto_update.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/index.html", "UPDATES.json"]}
+{"v": "p-73", "type": "patch", "ts": "2026-08-06T18:08:22Z", "ref": "1d22b79", "desc": "Добавлен раздел «Исключения»: если какое-то приложение ломается при включённом обходе (например камеры или домофоны с P2P), впишите его адрес или домен — и z2k перестанет трогать этот трафик. Локальная сеть теперь исключена всегда. Кнопка выключения туннеля действительно освобождает память. Панель и меню больше не показывают «сервис работает», если обход не запустился.", "changed_files": ["files/S99zapret2.new", "files/init.d/S97z2k-http-tunnel", "files/z2k-tg-watchdog.sh", "lib/auto_update.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/index.html", "UPDATES.json"]},
+{"v": "r-73.1", "type": "reinstall", "ts": "2026-08-07T11:50:14Z", "ref": "PENDING", "desc": "Разделы «Whitelist» и «Исключения» объединены в один: домены и адреса теперь на соседних вкладках, а адресные исключения перестали пропадать после перезагрузки роутера. При включении автоподбора заблокированных доменов панель предупреждает о рисках. Панель больше не выполняет запросы, пришедшие со страниц сторонних сайтов.", "changed_files": ["files/S99zapret2.new", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/uninstall.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"]}
   ]
 }
