@@ -191,14 +191,15 @@ INIT="$R/src/init.d/S96z2k-webpanel"
 mkdir -p "$R/opt/zapret2/webpanel" "$R/opt/zapret2/www"
 echo x > "$R/opt/zapret2/www/index.html"
 cp "$ROOT/webpanel/lighttpd.conf" "$R/opt/zapret2/webpanel/lighttpd.conf"
-# Шаг ожидания задираем: при боевых пяти секундах waiter успевал пройти
-# цикл и прибрать свой pidfile раньше, чем до него добиралась проверка —
-# на CI-раннере это воспроизводилось стабильно, на macOS нет. Здесь важно
-# наблюдать waiter'а живым, а не мерить его терпение. 30, а не больше:
-# убитый waiter оставляет за собой осиротевший sleep, и жить ему ровно
-# столько же — на общем раннере это чужое время.
-Z2K_WAIT_INTERVAL=30
-export Z2K_WAIT_INTERVAL
+# Ожидание waiter'а — по одной секунде, но много раз. Тонкость в том, что
+# убить шелл, стоящий в sleep, можно только когда sleep вернётся: с длинным
+# шагом stop ждал его целиком, а сам waiter жил до конца цикла. На раннере
+# этот набор из-за такого ожидания занимал 609 секунд — 85% всего прогона CI
+# при 10 секундах локально. Короткий шаг даёт и живого waiter'а во время
+# проверок, и мгновенную реакцию на stop.
+Z2K_WAIT_INTERVAL=1
+Z2K_WAIT_TRIES=600
+export Z2K_WAIT_INTERVAL Z2K_WAIT_TRIES
 FAKE_TT_FAIL_MSG="error while loading shared libraries: libnettle.so.8: cannot open shared object file: No such file or directory"
 export FAKE_TT_FAIL_MSG
 out=$(sh "$INIT" start 2>&1); rc=$?
@@ -244,7 +245,7 @@ done
 kill -0 "$WPID" 2>/dev/null
 assert_rc_fail "waiter убит stop'ом" "$?"
 assert_no_file "waiter pidfile убран" "$R/var/run/z2k-webpanel-wait.pid"
-unset FAKE_TT_FAIL_MSG Z2K_WAIT_INTERVAL
+unset FAKE_TT_FAIL_MSG Z2K_WAIT_INTERVAL Z2K_WAIT_TRIES
 
 # ===========================================================================
 printf -- "\n--- (д) uninstall.sh возвращает отключённый штатный lighttpd init ---\n"
