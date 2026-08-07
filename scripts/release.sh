@@ -13,9 +13,12 @@
 # изменилось с предыдущего релиза, то и заявлено. Человек не может забыть то,
 # чего не набирает.
 #
-# Использование:
-#   sh scripts/release.sh <версия> <тип> <описание>
-#   sh scripts/release.sh r-72.3 patch "Описание для человека, 1-3 предложения."
+# Использование (двухфазный релиз, см. CD-гейт ниже):
+#   1. push кода в z2k-enhanced (current не двигается — флот обновы не видит)
+#   2. дождаться зелёного CI (release.sh сам ждёт и сверяет)
+#   3. sh scripts/release.sh <версия> <тип> <описание>
+#      sh scripts/release.sh r-72.3 patch "Описание для человека, 1-3 предложения."
+#   4. push объявления — это и есть релиз для флота
 #
 # Тип: patch — файлы раскладываются по местам; reinstall — прогоняется установка
 # целиком. Reinstall нужен, когда меняются вещи, которые install.sh ГЕНЕРИРУЕТ
@@ -81,6 +84,73 @@ fi
 CUR=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
 [ -n "$CUR" ] || die "не читается current из $MANIFEST"
 [ "$CUR" != "$VER" ] || die "версия $VER уже текущая"
+
+# --- CD-гейт: объявлять можно только то, что прошло CI ------------------------
+#
+# push в z2k-enhanced делает байты видимыми роутерам мгновенно (канал доставки —
+# сама ветка), но ОБНОВЛЕНИЕ у флота триггерит только сдвиг "current". На этом
+# и стоит деплой-гейт: релиз идёт двумя пушами.
+#
+#   1. push кода. current стоит на месте — флот обновы не видит. Карта
+#      files_sha256 должна быть перегенерирована в этом же пуше (CI-гейт
+#      дайджестов это проверяет). Хук попросит слово со СТАРОЙ версией —
+#      манифест ещё на ней.
+#   2. Зелёные CI и CDN-verify на этом коммите.
+#   3. Снова release.sh — этот блок сверяет (а) что HEAD запушен и (б) что оба
+#      workflow на нём зелёные, и только тогда собирает объявление. Его push
+#      (слово с НОВОЙ версией) — и есть релиз для флота.
+#
+# До 2026-08-07 обновление предлагалось роутерам сразу после пуша, пока CI ещё
+# бежал: окно, в котором флот получает код, не прошедший даже собственных
+# проверок. Это окно закрывается здесь.
+#
+# Z2K_RELEASE_SKIP_CI_GATE=1 — аварийный обход на случай лежащего GitHub
+# Actions (прецедент 2026-08-06: p-73 ушёл в окно сбоя, раны не создались
+# вовсе). Обход осознанный и громкий, как и всё в этом процессе.
+if [ "${Z2K_RELEASE_SKIP_CI_GATE:-0}" = "1" ]; then
+    printf 'ВНИМАНИЕ: CD-гейт пропущен вручную (Z2K_RELEASE_SKIP_CI_GATE=1) — объявляем без вердикта CI\n'
+else
+    command -v gh >/dev/null 2>&1 || die "нужен gh для сверки CI (аварийный обход: Z2K_RELEASE_SKIP_CI_GATE=1)"
+    HEAD_SHA=$(git rev-parse HEAD)
+    git fetch -q origin z2k-enhanced 2>/dev/null || true
+    REMOTE_SHA=$(git rev-parse origin/z2k-enhanced 2>/dev/null || printf '')
+    if [ "$HEAD_SHA" != "$REMOTE_SHA" ]; then
+        die "код ещё не запушен (HEAD != origin/z2k-enhanced).
+         Порядок: 1) push кода — флот его не увидит, current не сдвинут
+                  2) зелёный CI на нём
+                  3) снова release.sh"
+    fi
+    printf 'CD-гейт: жду вердикта CI для %s ' "$(git rev-parse --short HEAD)"
+    _deadline=$(( $(date +%s) + 1500 ))
+    while :; do
+        _runs=$(gh run list --commit "$HEAD_SHA" --json name,status,conclusion,event 2>/dev/null) \
+            || die "gh run list не отвечает — сеть/авторизация? (аварийный обход: Z2K_RELEASE_SKIP_CI_GATE=1)"
+        _verdict=$(printf '%s' "$_runs" | python3 -c '
+import json, sys
+runs = [r for r in json.load(sys.stdin)
+        if r["event"] in ("push", "workflow_dispatch")
+        and r["name"] in ("CI", "Release CDN (purge + verify)")]
+names = {r["name"] for r in runs}
+if len(names) < 2:
+    print("waiting")           # раны ещё не создались (или сбой Actions)
+elif any(r["status"] != "completed" for r in runs):
+    print("running")
+elif all(r["conclusion"] == "success" for r in runs):
+    print("green")
+else:
+    print("red")')
+        case "$_verdict" in
+            green) printf 'зелёный\n'; break ;;
+            red)   printf '\n'
+                   die "CI на запушенном коде КРАСНЫЙ — чинить код, а не объявлять релиз (gh run list --commit $HEAD_SHA)" ;;
+            *)     if [ "$(date +%s)" -ge "$_deadline" ]; then
+                       printf '\n'
+                       die "CI не дал вердикта за 25 минут. Если Actions лежит (как 2026-08-06) — Z2K_RELEASE_SKIP_CI_GATE=1, иначе gh run watch и снова release.sh"
+                   fi
+                   printf '.'; sleep 30 ;;
+        esac
+    done
+fi
 
 PREV_REF=$(grep '^[[:space:]]*{"v":' "$MANIFEST" | tail -1 \
     | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().strip().rstrip(","))["ref"])')

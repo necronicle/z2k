@@ -1,8 +1,10 @@
 name: Release CDN (purge + verify)
 
-# push в z2k-enhanced — это и есть деплой: роутеры тянут файлы прямо с
-# raw.githubusercontent.com (и зеркал) по имени ветки. Этот workflow — вторая
-# половина деплоя:
+# push в z2k-enhanced — это выкладка байтов: роутеры тянут файлы прямо с
+# raw.githubusercontent.com (и зеркал) по имени ветки. ОБЪЯВЛЕНИЕ версии флоту
+# (сдвиг "current" в UPDATES.json) идёт отдельным пушем и только после зелёного
+# CI на коде — этот порядок держит CD-гейт в scripts/release.sh. Здесь — вторая
+# половина деплоя, пост-выкладочная:
 #
 #   1) purge  — сбросить edge-кэш jsdelivr (иначе фоллбэк-зеркало z2k_fetch
 #      отдаёт до 12 часов старья; purge.jsdelivr.net выселяет за ~1 сек);
