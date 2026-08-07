@@ -156,7 +156,9 @@ jobs:
           grep -vx 'UPDATES.json' /tmp/verify/changed.txt | LC_ALL=C sort -u \
             | while IFS= read -r f; do
                 [ -n "$f" ] || continue
-                git cat-file -e "HEAD:$f" 2>/dev/null && echo "$f" || true
+                # if, а не `&& echo || true`: под set -e поведение то же, но
+                # A && B || C — это не if-then-else (SC2015).
+                if git cat-file -e "HEAD:$f" 2>/dev/null; then echo "$f"; fi
               done >> /tmp/verify/files.txt
           # Кап, и кап ГРОМКИЙ: молчаливое усечение читается как «проверили всё».
           total=$(wc -l < /tmp/verify/files.txt | tr -d ' ')

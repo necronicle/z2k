@@ -55,6 +55,12 @@ jobs:
         # Сам линтует .github/workflows/*.yml; run-блоки дополнительно гоняет
         # через shellcheck раннера. Битый workflow — это CI, который молча не
         # прогнался: ровно тот отказ, который нельзя увидеть из зелёной галочки.
+        env:
+          # Тот же порог, что у репозиторного shellcheck-гейта. Без него
+          # actionlint гоняет shellcheck на info-уровне, и вердикт зависит от
+          # ВЕРСИИ shellcheck на раннере: первый же прогон покраснел на SC2015
+          # (info), которое локальный 0.11 вообще не выдаёт.
+          SHELLCHECK_OPTS: --severity=warning
         run: actionlint -color
 
   shellcheck:
