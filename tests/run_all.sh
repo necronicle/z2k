@@ -8,6 +8,18 @@ TOTAL_FAILED=0
 TOTAL_SUITES=0
 FAILED_SUITES=""
 
+# Длительность КАЖДОГО набора. Сегодня один набор съедал 85% времени прогона, и
+# чтобы это увидеть, пришлось руками разбирать лог CI по временным меткам —
+# сам раннер показывает только общее время джоба. Теперь цена каждого набора
+# видна сразу, а самые дорогие печатаются отдельным списком.
+TIMINGS="${TMPDIR:-/tmp}/z2k-suite-timings.$$"
+: > "$TIMINGS"
+trap 'rm -f "$TIMINGS"' EXIT INT TERM
+# Бюджет на набор. Не гейт (падать из-за медленной машины — ложная тревога),
+# но громкая отметка: набор дороже минуты почти всегда ждёт по часам вместо
+# того, чтобы что-то проверять.
+SUITE_BUDGET="${Z2K_SUITE_BUDGET:-60}"
+
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -23,8 +35,11 @@ for test_file in "$TESTS_DIR"/test_*.sh; do
     printf ">>> Running %s ...\n" "$suite_name"
     printf '%s\n' "----------------------------------------------------"
 
+    _t0=$(date +%s)
     output=$(sh "$test_file" 2>&1)
     rc=$?
+    _elapsed=$(( $(date +%s) - _t0 ))
+    printf '%s\t%s\n' "$_elapsed" "$suite_name" >> "$TIMINGS"
 
     # Use heredoc to safely print output that may start with dashes
     if [ -n "$output" ]; then
@@ -78,6 +93,12 @@ printf "━━━━━━━━━━━━━━━━━━━━━━━━
 printf "  SUMMARY\n"
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 printf "Test suites run: %d\n" "$TOTAL_SUITES"
+_total_time=$(awk -F'\t' '{s+=$1} END{print s+0}' "$TIMINGS" 2>/dev/null)
+printf "Общее время:     %d c\n" "${_total_time:-0}"
+_slow=$(sort -rn "$TIMINGS" 2>/dev/null | awk -F'\t' -v b="$SUITE_BUDGET" '$1 >= b {printf "  %4d c  %s\n", $1, $2}')
+if [ -n "$_slow" ]; then
+    printf "\nНаборы дороже %s c (проверьте, не ждут ли они по часам):\n%s\n" "$SUITE_BUDGET" "$_slow"
+fi
 printf "Total passed:    %d\n" "$TOTAL_PASSED"
 printf "Total failed:    %d\n" "$TOTAL_FAILED"
 
