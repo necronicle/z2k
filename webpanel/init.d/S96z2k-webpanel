@@ -164,9 +164,15 @@ _launch_supervised() {
 # панель «сама» поднималась через минуты после явного stop, а повторный start
 # плодил второго waiter'а.
 _z2k_webpanel_wait_start() {
+    # Шаг и число попыток вынесены в переменные: пять минут ожидания невозможно
+    # наблюдать в тесте иначе, чем гонкой — waiter успевал отработать цикл и
+    # прибрать свой pidfile раньше, чем проверка до него добиралась (на
+    # CI-раннере это воспроизводилось стабильно, на macOS нет). В бою значения
+    # прежние, менять их незачем.
     local n=0 ld
-    while [ "$n" -lt 60 ]; do
-        sleep 5
+    local step="${Z2K_WAIT_INTERVAL:-5}" tries="${Z2K_WAIT_TRIES:-60}"
+    while [ "$n" -lt "$tries" ]; do
+        sleep "$step"
         n=$((n + 1))
         is_alive && { rm -f "$WAIT_PIDFILE"; return 0; }
         ld="$(_z2k_libpath)"
@@ -175,15 +181,15 @@ _z2k_webpanel_wait_start() {
             _launch_supervised
             sleep 1
             if is_alive; then
-                echo "z2k-webpanel started after $((n * 5))s wait (pid $(cat "$PIDFILE"))"
+                echo "z2k-webpanel started after $((n * step))s wait (pid $(cat "$PIDFILE"))"
             else
-                echo "z2k-webpanel: supervisor launched after $((n * 5))s wait; lighttpd still coming up"
+                echo "z2k-webpanel: supervisor launched after $((n * step))s wait; lighttpd still coming up"
             fi
             rm -f "$WAIT_PIDFILE"
             return 0
         fi
     done
-    echo "z2k-webpanel: start precondition still failing after 5 min wait — giving up" >&2
+    echo "z2k-webpanel: start precondition still failing after $((tries * step))s wait — giving up" >&2
     rm -f "$WAIT_PIDFILE"
     return 1
 }

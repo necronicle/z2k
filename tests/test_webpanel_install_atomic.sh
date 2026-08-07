@@ -191,11 +191,41 @@ INIT="$R/src/init.d/S96z2k-webpanel"
 mkdir -p "$R/opt/zapret2/webpanel" "$R/opt/zapret2/www"
 echo x > "$R/opt/zapret2/www/index.html"
 cp "$ROOT/webpanel/lighttpd.conf" "$R/opt/zapret2/webpanel/lighttpd.conf"
+# Шаг ожидания задираем: при боевых пяти секундах waiter успевал пройти
+# цикл и прибрать свой pidfile раньше, чем до него добиралась проверка —
+# на CI-раннере это воспроизводилось стабильно, на macOS нет. Здесь важно
+# наблюдать waiter'а живым, а не мерить его терпение. 30, а не больше:
+# убитый waiter оставляет за собой осиротевший sleep, и жить ему ровно
+# столько же — на общем раннере это чужое время.
+Z2K_WAIT_INTERVAL=30
+export Z2K_WAIT_INTERVAL
 FAKE_TT_FAIL_MSG="error while loading shared libraries: libnettle.so.8: cannot open shared object file: No such file or directory"
 export FAKE_TT_FAIL_MSG
 out=$(sh "$INIT" start 2>&1); rc=$?
 assert_rc0 "start уходит в фоновое ожидание (rc=0)" "$rc"
 assert_contains "start сообщает об ожидании" "background" "$out"
+if [ ! -f "$R/var/run/z2k-webpanel-wait.pid" ]; then
+    # Голое «missing» здесь бесполезно: расхождение платформенное (на CI-Linux
+    # падало, на macOS зелено), а Linux под рукой нет ни у кого. Печатаем ровно
+    # то, чего не хватило, чтобы следующий прогон дал факты, а не догадки.
+    printf '       диагностика:\n'
+    printf '         вывод start: %s\n' "$(printf '%s' "$out" | tr '\n' '|')"
+    printf '         строка WAIT_PIDFILE в переписанном init: %s\n' \
+        "$(grep -n '^WAIT_PIDFILE=' "$INIT" 2>/dev/null || echo '<нет>')"
+    printf '         содержимое %s: %s\n' "$R/var/run" "$(ls -a "$R/var/run" 2>&1 | tr '\n' ' ')"
+    printf '         каталог логов: %s\n' "$(ls -ld "$R/tmp/z2k-log" 2>&1)"
+    # Лог waiter'а отвечает на главный вопрос: он ещё крутится (тогда pidfile
+    # должен быть на месте) или уже вышел, сам за собой прибрав. Второе значит,
+    # что цикл прошёл все 60 итераций мгновенно — то есть sleep или проверка
+    # внутри отработали не так, как на macOS.
+    printf '         лог waiter: %s\n' \
+        "$(tail -5 "$R/tmp/z2k-log/z2k-webpanel-wait.log" 2>&1 | tr '\n' '|')"
+    printf '         живые sh с нашим init: %s\n' \
+        "$(pgrep -f "S96z2k-webpanel" 2>/dev/null | tr '\n' ' ')"
+    _t0=$(date +%s); sleep 2; _t1=$(date +%s)
+    printf '         sleep: %s, две секунды заняли %s с\n' \
+        "$(command -v sleep 2>&1)" "$((_t1 - _t0))"
+fi
 assert_file "waiter pidfile создан" "$R/var/run/z2k-webpanel-wait.pid"
 WPID=$(cat "$R/var/run/z2k-webpanel-wait.pid" 2>/dev/null)
 kill -0 "$WPID" 2>/dev/null
@@ -214,7 +244,7 @@ done
 kill -0 "$WPID" 2>/dev/null
 assert_rc_fail "waiter убит stop'ом" "$?"
 assert_no_file "waiter pidfile убран" "$R/var/run/z2k-webpanel-wait.pid"
-unset FAKE_TT_FAIL_MSG
+unset FAKE_TT_FAIL_MSG Z2K_WAIT_INTERVAL
 
 # ===========================================================================
 printf -- "\n--- (д) uninstall.sh возвращает отключённый штатный lighttpd init ---\n"
