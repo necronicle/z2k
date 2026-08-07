@@ -161,7 +161,7 @@ func TestVerifyFirstByte_ImplausibleRecordLength_IsRejected(t *testing.T) {
 		}
 		up.Close()
 		up.Close()
-		}
+	}
 }
 
 func TestVerifyFirstByte_WriteFailure_IsRejected(t *testing.T) {

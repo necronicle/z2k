@@ -46,18 +46,18 @@ var (
 	// renamed — the flag is in shipped init scripts. Making it genuinely idle means
 	// refreshing a deadline inside the splice, which is the load-bearing path; that
 	// change needs on-router validation, not a drive-by edit.
-	idleTO       = flag.Duration("timeout", 15*time.Minute, "per-connection IDLE timeout: closed after this long with no bytes moving in either direction")
-	pickWaitTO   = flag.Duration("pick-wait", 15*time.Second, "max wait for a live upstream before dropping (cold-start / transient-empty smoothing)")
-	maxTries     = flag.Int("max-tries", 4, "max upstream IPs to try per connection before dropping")
-	firstByteTO  = flag.Duration("first-byte-timeout", 4*time.Second, "how long an upstream has to deliver the server's first TLS handshake record after the replayed ClientHello before it is demoted and another one is tried")
-	resolverAddr = flag.String("resolver", "1.1.1.1:53", "DNS server queried DIRECTLY for the upstream pool, to bypass the router's ndnproxy whose cache goes stale and strands the pool on dead IPs (system resolver is still used as a fallback/union)")
-	probePath    = flag.String("probe-path", "/forum/index.php", "path fetched THROUGH each upstream when probing — must return a sizeable body, not a redirect")
-	probeBytes   = flag.Int("probe-bytes", 8192, "body bytes an upstream must actually deliver to count as live")
+	idleTO         = flag.Duration("timeout", 15*time.Minute, "per-connection IDLE timeout: closed after this long with no bytes moving in either direction")
+	pickWaitTO     = flag.Duration("pick-wait", 15*time.Second, "max wait for a live upstream before dropping (cold-start / transient-empty smoothing)")
+	maxTries       = flag.Int("max-tries", 4, "max upstream IPs to try per connection before dropping")
+	firstByteTO    = flag.Duration("first-byte-timeout", 4*time.Second, "how long an upstream has to deliver the server's first TLS handshake record after the replayed ClientHello before it is demoted and another one is tried")
+	resolverAddr   = flag.String("resolver", "1.1.1.1:53", "DNS server queried DIRECTLY for the upstream pool, to bypass the router's ndnproxy whose cache goes stale and strands the pool on dead IPs (system resolver is still used as a fallback/union)")
+	probePath      = flag.String("probe-path", "/forum/index.php", "path fetched THROUGH each upstream when probing — must return a sizeable body, not a redirect")
+	probeBytes     = flag.Int("probe-bytes", 8192, "body bytes an upstream must actually deliver to count as live")
 	maxClients     = flag.Int("max-clients", 128, "ceiling on concurrent client connections; further connections are refused immediately rather than queued")
 	directFallback = flag.Bool("direct-fallback", true, "when no upstream can serve the target, resolve it ourselves and connect DIRECTLY instead of dropping the client")
 	directHosts    = flag.String("direct-fallback-hosts", "rutracker.org,rutracker.wiki,rutracker.cc,t-ru.org", "comma-separated suffixes eligible for the direct fallback — NOT a general escape hatch, see dialDirect")
-	resolveTO    = flag.Duration("resolve-timeout", 5*time.Second, "DNS budget PER RESOLVER (not shared: a blocked direct resolver must not starve the system-resolver fallback)")
-	verbose      = flag.Bool("v", false, "verbose logging")
+	resolveTO      = flag.Duration("resolve-timeout", 5*time.Second, "DNS budget PER RESOLVER (not shared: a blocked direct resolver must not starve the system-resolver fallback)")
+	verbose        = flag.Bool("v", false, "verbose logging")
 )
 
 func main() {

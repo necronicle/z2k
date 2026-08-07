@@ -13,7 +13,6 @@ package main
 // client stays on shared-secret).
 
 import (
-	"errors"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -24,6 +23,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"

@@ -254,9 +254,9 @@ type recordingConn struct {
 	r *bytes.Reader
 }
 
-func (c *recordingConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
-func (c *recordingConn) Write(p []byte) (int, error) { return len(p), nil }
-func (c *recordingConn) Close() error                { return nil }
+func (c *recordingConn) Read(p []byte) (int, error)      { return c.r.Read(p) }
+func (c *recordingConn) Write(p []byte) (int, error)     { return len(p), nil }
+func (c *recordingConn) Close() error                    { return nil }
 func (c *recordingConn) SetReadDeadline(time.Time) error { return nil }
 func (c *recordingConn) SetDeadline(time.Time) error     { return nil }
 
