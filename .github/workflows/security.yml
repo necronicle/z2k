@@ -1,0 +1,122 @@
+name: Security
+
+# Еженедельный секьюрити-скан + ручной запуск. Отдельно от CI намеренно:
+# CI обязан быть детерминированным (тот же коммит — тот же вердикт), а эти
+# проверки зависят от внешнего мира (базы уязвимостей, свежие правила) и
+# могут покраснеть на коммите, который вчера был зелёным. Красный здесь —
+# не «сломали сборку», а «появилась новая информация, посмотри».
+#
+# Контекст: репозиторий публичный, роутеры тянут с него обновления напрямую,
+# а issue #28 содержит публичные обещания по безопасности канала доставки.
+
+on:
+  schedule:
+    # Понедельник 06:17 UTC — вне пиков, минута не :00 чтобы не толкаться
+    # в общеGitHub'овской толпе cron'ов.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: govulncheck (Go deps)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Инструменту нужен свежий go; анализирует он при этом модули
+          # с go 1.22 директивой — это корректно, уязвимости привязаны к
+          # версиям зависимостей и стдлибы, не к тулчейну раннера.
+          go-version: stable
+          cache: false
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Scan all Go modules
+        run: |
+          # Все четыре модуля, а не «те, что вспомнили»: rt-proxy месяцами жил
+          # вне CI ровно потому, что списки перечислялись руками.
+          rc=0
+          for m in mtproxy-client rt-proxy vps-relay z2k-detect; do
+            echo "=== govulncheck: $m ==="
+            (cd "$m" && govulncheck ./...) || rc=1
+          done
+          exit $rc
+
+  zizmor:
+    name: zizmor (workflow security)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # SARIF в Code scanning
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Аудит самих workflows: незапиненные экшены, инжекции через ${{ }},
+      # утечки credentials из checkout, избыточные permissions. Workflows —
+      # код с доступом к каналу доставки на роутеры, ревьюится как код.
+      - uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Полная история: секрет, закоммиченный и «удалённый» следующим
+          # коммитом, в публичном репо всё равно утёк — и должен быть найден.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            # build-mode none: сканирует исходники без сборки — 4 независимых
+            # модуля в одном репо иначе требуют ручной оркестровки autobuild.
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          category: "/language:${{ matrix.language }}"

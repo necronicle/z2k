@@ -1,0 +1,32 @@
+# Автоматические PR на обновление зависимостей. Без этого SHA-пиннинг экшенов
+# в workflows превратился бы в вечную заморозку: пин фиксирует supply chain,
+# dependabot двигает его вперёд осознанными PR (и в комменте к пину держит
+# человекочитаемую версию). go-модули — то, из чего собираются бинарники для
+# роутеров: их бампы тем более должны проходить через PR + CI, а не через
+# случайный `go get -u` перед релизом.
+#
+# PR — это ПРЕДЛОЖЕНИЕ: мерджится руками после зелёного CI, в релизы попадает
+# по обычному релизному циклу.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directories:
+      - /mtproxy-client
+      - /rt-proxy
+      - /vps-relay
+      - /z2k-detect
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]

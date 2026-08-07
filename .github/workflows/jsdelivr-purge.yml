@@ -1,30 +1,50 @@
-name: Purge jsdelivr cache
+name: Release CDN (purge + verify)
 
-# After each push, installers that fall back to cdn.jsdelivr.net/gh/... will
-# otherwise serve up to 12h of stale content from the CDN edge (see the
-# z2k_fetch 4-layer fallback in z2k.sh / lib/utils.sh). jsdelivr exposes a
-# no-auth purge endpoint (purge.jsdelivr.net/gh/owner/repo@branch/path) —
-# calling it evicts the branch-pinned URL from every edge in ~1 second.
+# push в z2k-enhanced — это и есть деплой: роутеры тянут файлы прямо с
+# raw.githubusercontent.com (и зеркал) по имени ветки. Этот workflow — вторая
+# половина деплоя:
 #
-# Triggered on push to z2k-enhanced (the only branch our installers point
-# at since master was retired 2026-05-13). Computes the set of files
-# touched by the push via the `before..after` diff supplied in the push
-# event, and fires one purge request per file in parallel.
+#   1) purge  — сбросить edge-кэш jsdelivr (иначе фоллбэк-зеркало z2k_fetch
+#      отдаёт до 12 часов старья; purge.jsdelivr.net выселяет за ~1 сек);
+#   2) verify — дождаться, пока КАЖДЫЙ изменённый файл, который юзер может
+#      фетчить, реально отдаётся с raw и jsdelivr с правильным sha256.
+#
+# Второй пункт — пост-деплойная верификация: класс отказа «версия сдвинулась,
+# а зеркало отдало старьё» уже пинил юзера к ревизии двухдневной давности пять
+# релизов подряд (issue #26). Красный ран здесь = юзеры прямо сейчас могут
+# получать не те байты, это не «annoying», это инцидент.
+#
+# workflow_dispatch: 2026-08-06 p-73 ушёл в пуш в окно сбоя GitHub Actions —
+# раны не создались вовсе, purge никто не сделал, и дёрнуть его вручную было
+# нечем. Ручной запуск проходит по фоллбэк-пути (top-200 + полная карта).
 
 on:
   push:
     branches:
       - z2k-enhanced
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Два пуша подряд: старый ран НЕ гасим (его verify всё ещё осмыслен — файлы,
+# не тронутые вторым пушем, обязаны сойтись), но и параллельно не поллим CDN
+# двумя ранами — последовательно.
+concurrency:
+  group: cdn-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   purge:
     name: Evict jsdelivr edge cache
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Don't block CI; cache-purge failure is annoying, not fatal.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # Need enough history to diff `before..after`. 0 = full history.
           # Repo is small, extra checkout time is negligible vs. the
           # robustness payoff when the push spans several commits.
@@ -32,22 +52,24 @@ jobs:
 
       - name: Compute changed files
         id: files
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
         run: |
           set -eu
-          BEFORE='${{ github.event.before }}'
-          AFTER='${{ github.event.after }}'
           mkdir -p /tmp/purge
           # BEFORE может быть unreachable если push был force-push'ом amend'нутого
           # коммита: предыдущий tip SHA orphan'нулся, actions/checkout его не
           # fetch'нул. `git cat-file -e` проверяет наличие объекта в локальной
           # копии — fallback на top-200 strategy если коммита нет.
-          if [ -z "$BEFORE" ] \
+          # На workflow_dispatch BEFORE/AFTER пусты — тот же фоллбэк.
+          if [ -z "${BEFORE:-}" ] \
              || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               # New branch / force-push'ом amend'нутого / orphan before SHA:
               # before commit недоступен. Fall back to purging the whole
               # branch's top 200 files by name. Full-tree purge would rate-limit.
-              echo "BEFORE='$BEFORE' unavailable or unset — using top 200 files from HEAD tree"
+              echo "BEFORE='${BEFORE:-}' unavailable or unset — using top 200 files from HEAD tree"
               git ls-tree -r --name-only HEAD | head -200 > /tmp/purge/files.txt
           else
               # `git diff --name-only before..after` covers every file
@@ -86,3 +108,120 @@ jobs:
           # not turn the commit red — `continue-on-error: true` above
           # already ensures that, this `exit 0` is just belt-and-braces.
           exit 0
+
+  verify:
+    name: Verify CDN serves this release
+    runs-on: ubuntu-latest
+    # Ждём purge (иначе меряем кэш, который сами же собирались сбросить), но
+    # его провал нас не останавливает: verify тогда просто честно покажет,
+    # сколько старья видят юзеры. continue-on-error у purge это уже допускает.
+    needs: purge
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Compute files users can fetch
+        id: files
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -eu
+          mkdir -p /tmp/verify
+          # Что проверяем:
+          #   push     — всё изменённое пушем, что существует в HEAD дерева
+          #              (роутеры фетчат не только карту files_sha256: инсталлер
+          #              тянет lib/*, webpanel/* и прочее прямо из ветки);
+          #   dispatch — контракт целиком: UPDATES.json + вся карта files_sha256
+          #              (ровно то, что сверяет z2k_fetch на роутерах).
+          if [ -n "${AFTER:-}" ] && [ "$AFTER" != "0000000000000000000000000000000000000000" ] \
+             && [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              git diff --name-only "$BEFORE" "$AFTER" > /tmp/verify/changed.txt
+          else
+              # dispatch или недоступный BEFORE: полная карта манифеста.
+              sed -n '/"files_sha256"[[:space:]]*:[[:space:]]*{/,/^[[:space:]]*}/p' UPDATES.json \
+                | sed -n 's/^[[:space:]]*"\([^"]*\)":.*/\1/p' > /tmp/verify/changed.txt
+              echo "UPDATES.json" >> /tmp/verify/changed.txt
+          fi
+          # Существующие в HEAD файлы; UPDATES.json — всегда первым (это trust
+          # root, который апдейтер фетчит раньше всего остального).
+          : > /tmp/verify/files.txt
+          if grep -qx 'UPDATES.json' /tmp/verify/changed.txt; then
+              echo "UPDATES.json" >> /tmp/verify/files.txt
+          fi
+          grep -vx 'UPDATES.json' /tmp/verify/changed.txt | LC_ALL=C sort -u \
+            | while IFS= read -r f; do
+                [ -n "$f" ] || continue
+                git cat-file -e "HEAD:$f" 2>/dev/null && echo "$f" || true
+              done >> /tmp/verify/files.txt
+          # Кап, и кап ГРОМКИЙ: молчаливое усечение читается как «проверили всё».
+          total=$(wc -l < /tmp/verify/files.txt | tr -d ' ')
+          if [ "$total" -gt 120 ]; then
+              echo "::warning::verify capped at 120 of $total files — остальные не проверены"
+              head -120 /tmp/verify/files.txt > /tmp/verify/capped.txt
+              mv /tmp/verify/capped.txt /tmp/verify/files.txt
+          fi
+          count=$(wc -l < /tmp/verify/files.txt | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "---Files to verify ($count)---"
+          cat /tmp/verify/files.txt
+
+      - name: Poll CDNs until every file matches the pushed bytes
+        if: steps.files.outputs.count != '0'
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -u
+          # Дедлайн 18 мин: raw.githubusercontent исторически догоняет ветку
+          # за ~5 мин, jsdelivr после purge — секунды. Не сошлось за 18 —
+          # это уже не пропагация, это инцидент, и он должен быть красным.
+          started=$(date +%s)
+          deadline=$((started + 1080))
+          cp /tmp/verify/files.txt /tmp/verify/pending.txt
+          round=0
+          while [ -s /tmp/verify/pending.txt ]; do
+              round=$((round + 1))
+              # Два релиза подряд: raw/jsdelivr отдают уже СЛЕДУЮЩИЙ tip, и наш
+              # хеш не сойдётся никогда — это не «старьё у юзеров», это нас
+              # перекрыл более новый push, у которого будет свой verify-ран
+              # (concurrency их сериализует). Файл, чьё содержимое на живом tip
+              # ветки отличается от нашего HEAD, помечается superseded и из
+              # проверки выбывает.
+              git fetch -q origin "$BRANCH" 2>/dev/null || true
+              TIP=$(git rev-parse FETCH_HEAD 2>/dev/null || git rev-parse HEAD)
+              : > /tmp/verify/next.txt
+              while IFS= read -r f; do
+                  want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
+                  if [ "$TIP" != "$(git rev-parse HEAD)" ]; then
+                      tipw=$(git show "$TIP:$f" 2>/dev/null | sha256sum | cut -d' ' -f1)
+                      if [ "$tipw" != "$want" ]; then
+                          printf '  [superseded] %s — перекрыт более новым пушем, проверит его ран\n' "$f"
+                          continue
+                      fi
+                  fi
+                  raw=$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/${REPO}/${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || raw="FETCH-ERR"
+                  cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
+                  if [ "$raw" = "$want" ] && [ "$cdn" = "$want" ]; then
+                      printf '  [ok +%ss] %s\n' "$(( $(date +%s) - started ))" "$f"
+                  else
+                      [ "$raw" != "$want" ] && printf '  [stale raw] %s\n' "$f"
+                      [ "$cdn" != "$want" ] && printf '  [stale cdn] %s\n' "$f"
+                      echo "$f" >> /tmp/verify/next.txt
+                  fi
+              done < /tmp/verify/pending.txt
+              mv /tmp/verify/next.txt /tmp/verify/pending.txt
+              [ -s /tmp/verify/pending.txt ] || break
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "::error::CDN не сошёлся за 18 минут — юзеры могут получать старые байты:"
+                  sed 's/^/  STALE: /' /tmp/verify/pending.txt
+                  exit 1
+              fi
+              echo "--- round $round: $(wc -l < /tmp/verify/pending.txt | tr -d ' ') файлов ещё не сошлись, повтор через 30с ---"
+              sleep 30
+          done
+          echo "CDN сошёлся: все проверенные файлы отдаются с правильным sha256 (+$(( $(date +%s) - started ))s)"

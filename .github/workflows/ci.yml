@@ -5,14 +5,66 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  # Ручной запуск. 2026-08-06 релиз p-73 был запушен ровно в окно сбоя GitHub
+  # Actions: ни одного рана не создалось вовсе — и перезапустить было НЕЧЕГО,
+  # у workflow не было ручки. Релиз уехал юзерам без единого прогона CI и
+  # валидировался вручную постфактум. workflow_dispatch — та самая ручка.
+  workflow_dispatch:
+
+# GITHUB_TOKEN по умолчанию умеет писать в репозиторий. Ни одной джобе здесь
+# запись не нужна, а z2k-enhanced — это ветка, с которой роутеры тянут
+# обновления напрямую: скомпрометированный шаг с пишущим токеном равен захвату
+# канала доставки. Least privilege, расширять точечно на уровне джобы.
+permissions:
+  contents: read
+
+# Наслоившиеся раны на одной ветке гасятся новыми — КРОМЕ z2k-enhanced: там
+# каждый push уже является релизом, уехавшим юзерам, и каждый обязан получить
+# свой полный вердикт CI. Запись «этот релиз был провален» ценнее минут раннера.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/z2k-enhanced' }}
+
+env:
+  # Продовый тулчейн. Бинарники для роутеров собираются ИМЕННО go1.22.12:
+  # 1.26.x ломает MIPS soft-float (см. память проекта / реальные краши).
+  # Раньше тут стоял "stable" — CI годами доказывал, что код компилируется
+  # тулчейном, которым никто ничего не шипит. Проверять надо то, что едет юзерам.
+  GO_VERSION: "1.22.12"
 
 jobs:
+  actionlint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable # инструменту прод-паритет не нужен
+          cache: false
+
+      - name: Install actionlint
+        # go install проверяет модуль по sum DB — пиннинг и верификация даром.
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Lint workflows
+        # Сам линтует .github/workflows/*.yml; run-блоки дополнительно гоняет
+        # через shellcheck раннера. Битый workflow — это CI, который молча не
+        # прогнался: ровно тот отказ, который нельзя увидеть из зелёной галочки.
+        run: actionlint -color
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # Full history: tests/test_release_manifest_complete.sh diffs the last
           # two release commits to prove every changed deliverable is declared in
           # changed_files. With the default shallow clone those commits are absent
@@ -35,7 +87,10 @@ jobs:
           shellcheck --version | sed -n 's/^version:/shellcheck /p'
           # SC1007: `LD_LIBRARY_PATH= ndmc ...` is an INTENTIONAL env-prefix (clear
           # Entware's OpenSSL path so ndmc works on KeenOS 4.3+/5.x — see p-57.1);
-          # shellcheck false-flags it as an accidental assignment. Excluded.
+          # ShellCheck false-flags it as an accidental assignment. Excluded.
+          # (Капитализация «ShellCheck» в этих комментариях не косметика: строка
+          # комментария, начинающаяся с «# shellcheck», парсится как директива
+          # и роняет actionlint ошибкой SC1072.)
           # files/init.d/S* have NO .sh extension, so the -name '*.sh' mask never saw them —
           # 240 lines of tunnel-lifecycle shell were shipping unlinted. Check them explicitly.
           # Same trap, one directory up: files/S99zapret2.new is the MAIN service script
@@ -51,7 +106,7 @@ jobs:
 
       - name: Syntax-check every shipped shell script
         run: |
-          # shellcheck parses, but it does not guarantee the target shell accepts
+          # ShellCheck parses, but it does not guarantee the target shell accepts
           # the file. dash is the closest CI proxy for the router's BusyBox ash.
           rc=0
           for f in $(find ./files ./lib ./webpanel/cgi -type f \( -name '*.sh' -o -name 'S*' \) 2>/dev/null) ./z2k.sh ./z2k_cleanup.sh; do
@@ -80,118 +135,112 @@ jobs:
       - name: Run shell unit tests
         run: sh tests/run_all.sh
 
-  go-build:
-    name: Go Build & Test
+  go:
+    name: Go ${{ matrix.module }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # Падение одного модуля не должно прятать вердикт по остальным: при
+      # релизе важно видеть ПОЛНУЮ картину, а не первую красную джобу.
+      fail-fast: false
+      matrix:
+        module: [mtproxy-client, rt-proxy, vps-relay, z2k-detect]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "stable"
-          cache-dependency-path: |
-            mtproxy-client/go.sum
-            vps-relay/go.sum
+          go-version: ${{ env.GO_VERSION }}
+          # go.* а не go.sum: rt-proxy обходится stdlib и go.sum не имеет,
+          # setup-go на несуществующий путь падает. go.mod как ключ кэша валиден.
+          # (Раньше здесь были перечислены только mtproxy-client и vps-relay —
+          # кэш для z2k-detect молча не работал.)
+          cache-dependency-path: ${{ matrix.module }}/go.*
 
-      - name: Go vet
-        working-directory: mtproxy-client
+      - name: gofmt
+        working-directory: ${{ matrix.module }}
+        run: |
+          # Не стиль ради стиля: неотформатированный файл — это диффы, в которых
+          # правка логики тонет в правках пробелов, и ровно так пропускаются баги.
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::не отформатировано gofmt:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        working-directory: ${{ matrix.module }}
         run: go vet ./...
 
-      - name: Go test
-        working-directory: mtproxy-client
-        run: go test ./...
+      - name: go test (race)
+        working-directory: ${{ matrix.module }}
+        env:
+          # В run-скрипты значения матрицы попадают через env, а не через
+          # ${{ }}-интерполяцию в тело скрипта: интерполяция в script body —
+          # канонический вектор template injection (здесь значения свои и
+          # статические, но привычка должна быть одна на все workflows).
+          MODULE: ${{ matrix.module }}
+        run: |
+          # -race: все четыре модуля — конкурентные сетевые демоны (туннели,
+          # пулы апстримов, вотчеры). Раннер amd64, но логика синхронизации,
+          # которую он проверяет, та же, что поедет на MIPS.
+          case "$MODULE" in
+            z2k-detect)
+              # internal/prober is excluded on purpose, not silenced: its tests drive a real
+              # prober against a local listener and need socket privileges the runner does not
+              # grant ("operation not permitted" on dial to 127.0.0.1). They still run locally and
+              # on a router. Everything else — parsers, decision logic — is checked here, and the
+              # build step below is what guarantees the package compiles at all.
+              # shellcheck disable=SC2046 # словоразбиение списка пакетов — намеренное
+              go test -race -count=1 -cover $(go list ./... | grep -v '/internal/prober$') ;;
+            *)
+              go test -race -count=1 -cover ./... ;;
+          esac
 
       - name: Cross-compile
-        working-directory: mtproxy-client
+        working-directory: ${{ matrix.module }}
+        env:
+          MODULE: ${{ matrix.module }}
         run: |
-          # All targets with arch-specific flags for max compatibility
-          # MIPS: softfloat (Keenetic MT7621, KN-3610 etc.)
-          # MIPS64: softfloat
-          # ARM: GOARM=5 (ARMv5, no VFP — max compat)
-          # All: CGO_ENABLED=0 (static), -ldflags="-s -w" (strip)
-          declare -A flags=(
-            ["linux/arm64"]=""
-            ["linux/arm"]="GOARM=5"
-            ["linux/amd64"]=""
-            ["linux/mips"]="GOMIPS=softfloat"
-            ["linux/mipsle"]="GOMIPS=softfloat"
-            ["linux/mips64le"]="GOMIPS64=softfloat"
-            ["linux/ppc64"]=""
-            ["linux/riscv64"]=""
-            ["linux/386"]=""
-          )
-          for target in "${!flags[@]}"; do
-            GOOS="${target%%/*}"
-            GOARCH="${target##*/}"
-            EXTRA="${flags[$target]}"
-            echo "Building for ${GOOS}/${GOARCH} ${EXTRA}..."
+          # Каждый модуль собирается под все арки, на которые он реально
+          # ставится (списки и флаги — исторические, подобраны эмпирически):
+          #   MIPS/MIPSLE: softfloat (Keenetic MT7621, KN-3610 etc.)
+          #   mtproxy-client ARM: GOARM=5 (ARMv5, no VFP — max compat)
+          #   rt-proxy ARM: GOARM=7
+          #   vps-relay работает только на VPS (amd64) — кросс-матрица не нужна.
+          # CGO_ENABLED=0 (static), -trimpath -ldflags="-s -w" (reproducible, strip).
+          case "$MODULE" in
+            mtproxy-client) TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="." ;;
+            rt-proxy)       TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle"; PKG="." ;;
+            z2k-detect)     TARGETS="linux/arm64 linux/mipsle linux/mips64le"; PKG="./cmd/z2k-detect" ;;
+            vps-relay)      TARGETS="linux/amd64"; PKG="./..." ;;
+          esac
+          for t in $TARGETS; do
+            GOOS="${t%%/*}"; GOARCH="${t##*/}"; EXTRA=""
+            case "$MODULE/$GOARCH" in
+              mtproxy-client/arm) EXTRA="GOARM=5" ;;
+              rt-proxy/arm)       EXTRA="GOARM=7" ;;
+              */mips|*/mipsle)    EXTRA="GOMIPS=softfloat" ;;
+              */mips64le)         EXTRA="GOMIPS64=softfloat" ;;
+            esac
+            echo "Building $GOOS/$GOARCH $EXTRA..."
             env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA \
-              go build -ldflags="-s -w" -o /dev/null .
+              go build -trimpath -ldflags="-s -w" -o /dev/null "$PKG"
           done
-
-      # rt-proxy is the RuTracker path — the code that broke in the field three times in one
-      # week. It was NEVER built, vetted or tested here: the job only knew mtproxy-client and
-      # vps-relay, which is exactly how it shipped for months with zero tests.
-      - name: Go vet (rt-proxy)
-        working-directory: rt-proxy
-        run: go vet ./...
-
-      - name: Go test (rt-proxy)
-        working-directory: rt-proxy
-        run: go test -count=1 -cover ./...
-
-      - name: Cross-compile (rt-proxy, softfloat MIPS)
-        working-directory: rt-proxy
-        run: |
-          for t in linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle; do
-            GOOS="${t%%/*}"; GOARCH="${t##*/}"; EXTRA=""
-            case "$GOARCH" in mips|mipsle) EXTRA="GOMIPS=softfloat" ;; arm) EXTRA="GOARM=7" ;; esac
-            echo "Building rt-proxy for $GOOS/$GOARCH $EXTRA..."
-            env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA go build -trimpath -ldflags="-s -w" -o /dev/null .
-          done
-
-      - name: Go vet (z2k-detect)
-        working-directory: z2k-detect
-        run: go vet ./...
-
-      - name: Go test (z2k-detect)
-        working-directory: z2k-detect
-        # internal/prober is excluded on purpose, not silenced: its tests drive a real
-        # prober against a local listener and need socket privileges the runner does not
-        # grant ("operation not permitted" on dial to 127.0.0.1). They still run locally and
-        # on a router. Everything else — parsers, decision logic — is checked here, and the
-        # build step below is what guarantees the package compiles at all, which is more
-        # than it had before.
-        run: go test -count=1 $(go list ./... | grep -v '/internal/prober$')
-
-      - name: Cross-compile (z2k-detect, softfloat MIPS)
-        working-directory: z2k-detect
-        run: |
-          for t in linux/arm64 linux/mipsle linux/mips64le; do
-            GOOS="${t%%/*}"; GOARCH="${t##*/}"; EXTRA=""
-            case "$GOARCH" in mipsle) EXTRA="GOMIPS=softfloat" ;; mips64le) EXTRA="GOMIPS64=softfloat" ;; esac
-            echo "Building z2k-detect for $GOOS/$GOARCH $EXTRA..."
-            env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/z2k-detect
-          done
-
-      - name: Go vet (vps-relay)
-        working-directory: vps-relay
-        run: go vet ./...
-
-      - name: Go test (vps-relay)
-        working-directory: vps-relay
-        run: go test ./...
-
-      - name: Go build (vps-relay)
-        working-directory: vps-relay
-        run: go build ./...
 
   lua-check:
     name: Luacheck
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install luarocks, lua, luacheck
         run: |
@@ -214,13 +263,17 @@ jobs:
   mutation:
     name: Mutation Testing
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "stable"
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
 
       # A green suite proves nothing by itself: it may assert on stubs, or guard behaviour
       # nobody depends on. This applies known real regressions to the code and requires the
