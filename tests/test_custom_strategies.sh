@@ -61,14 +61,18 @@ STUB
 
 cgi() {
     _m="$1"; _p="$2"; _q="$3"; _b="$4"
+    # HTTP_X_Z2K_PANEL — то же, что app.js шлёт на каждом fetch. Без него
+    # origin-страж в cgi/auth.sh отвечает 403 и до роутинга дело не доходит.
     if [ -n "$_b" ]; then
         printf '%s' "$_b" | env -i PATH="$PATH" ZAPRET2_DIR="$ZD" CONFIG_FILE="$ZD/config" \
             LISTS_DIR="$ZD/lists" REQUEST_METHOD="$_m" PATH_INFO="$_p" QUERY_STRING="$_q" \
-            HTTP_HOST="192.168.1.1" CONTENT_LENGTH="${#_b}" sh "$API" 2>&1 | tail -1
+            HTTP_HOST="192.168.1.1" HTTP_X_Z2K_PANEL="1" \
+            CONTENT_LENGTH="${#_b}" sh "$API" 2>&1 | tail -1
     else
         env -i PATH="$PATH" ZAPRET2_DIR="$ZD" CONFIG_FILE="$ZD/config" \
             LISTS_DIR="$ZD/lists" REQUEST_METHOD="$_m" PATH_INFO="$_p" QUERY_STRING="$_q" \
-            HTTP_HOST="192.168.1.1" CONTENT_LENGTH=0 sh "$API" 2>&1 | tail -1
+            HTTP_HOST="192.168.1.1" HTTP_X_Z2K_PANEL="1" \
+            CONTENT_LENGTH=0 sh "$API" 2>&1 | tail -1
     fi
 }
 LIVE="$ZD/lists/custom-strategies/rkn_tcp.txt"

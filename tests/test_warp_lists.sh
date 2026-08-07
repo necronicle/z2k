@@ -141,11 +141,20 @@ assert_contains "append saved=1" "saved=1" "$OUT"
 assert_eq "old line survived append" "1" "$(grep -c '^8.8.8.8$' "$WARP_LISTS_DIR/test.txt")"
 assert_eq "new line appended"        "1" "$(grep -c '^4.4.4.4$' "$WARP_LISTS_DIR/test.txt")"
 
-printf "\n--- warp_list_save: replace preserves inode ---\n"
-INODE_BEFORE=$(ls -i "$WARP_LISTS_DIR/test.txt" | awk '{print $1}')
+printf "\n--- warp_list_save: replace атомарен и не теряет права ---\n"
+# Раньше здесь проверялся неизменный inode — то есть `cat "$tmp" > "$file"`,
+# который СНАЧАЛА обнуляет цель: обрыв питания или ENOSPC посреди записи
+# превращали список из 18k адресов в пустой, а warp_ipset_reload_if_enabled
+# следом заливал пустой ipset. Замена атомарна (mv), поэтому inode меняется
+# намеренно; требованием был не inode, а сохранение прав и владельца — их
+# _file_replace переносит на temp ДО подмены. Файл никто не держит открытым:
+# z2k-warp.sh читает *.txt заново на каждой загрузке.
+chmod 600 "$WARP_LISTS_DIR/test.txt"
 printf '7.7.7.7\n' | warp_list_save test replace >/dev/null
-INODE_AFTER=$(ls -i "$WARP_LISTS_DIR/test.txt" | awk '{print $1}')
-assert_eq "inode unchanged on replace" "$INODE_BEFORE" "$INODE_AFTER"
+assert_eq "режим списка нормализован в 644" "-rw-r--r--" \
+    "$(ls -ld "$WARP_LISTS_DIR/test.txt" | awk '{print substr($1,1,10)}')"
+assert_eq "временный файл не остался" "0" \
+    "$(find "$WARP_LISTS_DIR" -name '*.z2k-new*' 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "replace really replaced" "7.7.7.7" "$(cat "$WARP_LISTS_DIR/test.txt")"
 
 printf "\n--- warp_lists: TSV inventory ---\n"
@@ -241,13 +250,16 @@ printf "\n--- api.sh: /warp/* routing (full CGI invocation) ---\n"
 API="$SCRIPT_DIR/webpanel/cgi/api.sh"
 cgi() { # cgi <METHOD> <PATH_INFO> <QUERY> [bodyfile]
     _m="$1"; _p="$2"; _q="$3"; _b="${4:-}"
+    # HTTP_X_Z2K_PANEL — то же, что app.js шлёт на каждом fetch. Без него
+    # origin-страж в cgi/auth.sh отвечает 403 и до роутинга дело не доходит.
     if [ -n "$_b" ]; then
         env REQUEST_METHOD="$_m" PATH_INFO="$_p" QUERY_STRING="$_q" \
-            HTTP_HOST="192.168.1.1" CONTENT_LENGTH="$(wc -c < "$_b" | tr -d ' ')" \
+            HTTP_HOST="192.168.1.1" HTTP_X_Z2K_PANEL="1" \
+            CONTENT_LENGTH="$(wc -c < "$_b" | tr -d ' ')" \
             sh "$API" < "$_b" 2>/dev/null
     else
         env REQUEST_METHOD="$_m" PATH_INFO="$_p" QUERY_STRING="$_q" \
-            HTTP_HOST="192.168.1.1" CONTENT_LENGTH=0 \
+            HTTP_HOST="192.168.1.1" HTTP_X_Z2K_PANEL="1" CONTENT_LENGTH=0 \
             sh "$API" < /dev/null 2>/dev/null
     fi
 }

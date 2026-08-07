@@ -37,11 +37,12 @@
   /* Component tokens (semantic — derived from primitives above) */
   --btn-primary-text: #0b1116;
   --slider-thumb: #fff;
+  --switch-track: #30363d;
   --log-bg: #05080c;
   --log-text: #c9d1d9;
 
   /* Scrim/overlay tokens */
-  --scrim-pill: rgba(0, 0, 0, 0.75);   /* card-locked pill bg */
+  --scrim-pill: rgba(0, 0, 0, 0.75);   /* page-locked-pill bg */
   --scrim-modal: rgba(0, 0, 0, 0.65);  /* modal-backdrop */
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.25);   /* job-badge */
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.32);   /* dropdown */
@@ -84,11 +85,25 @@
   --border: #d0d7de;
   --text: #1f2328;
   --text-muted: #656d76;
-  --accent: #0d9488;
-  --accent-dim: #14b8a6;
+  /* Тёмные значения --good/--warn/--bad на светлом фоне дают 2.3-3.1:1 —
+     дашборд, баннер обновления и красные ошибки читались бледными, а панель
+     открывают стоя у роутера, часто на солнце. Значения подобраны под порог
+     4.5:1 на обоих светлых фонах (#ffffff карточка и #f6f8fa страница);
+     светлые альфы ниже по файлу уже были выведены из этих же оттенков. */
+  --good: #1a7f37;
+  --warn: #8a5b00;
+  --bad:  #cf222e;
+
+  /* Белый текст на #0d9488 = 3.74:1, а на hover-цвете #14b8a6 и вовсе 2.49:1,
+     то есть наведение делало надпись НЕчитаемее, чем в покое. Тот же токен
+     служит и цветом текста (#nav a.nav-highlight), и цветом рамок, поэтому
+     затемнение улучшает все три роли сразу. */
+  --accent: #0f766e;
+  --accent-dim: #115e59;
 
   --btn-primary-text: #ffffff;
   --slider-thumb: #ffffff;
+  --switch-track: #7d8590;
   --log-bg: #f0f3f6;
   --log-text: #1f2328;
 
@@ -128,7 +143,25 @@ body {
   line-height: 1.5;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  /* Место под фиксированный sidebar (см. секцию ниже). Ширина зависит от
+     body[data-sidebar="collapsed"], а на мобиле обнуляется в media query. */
+  padding-left: var(--sidebar-w);
+  transition: padding-left var(--dur-base) var(--ease-emphasized);
 }
+
+/* ---------- ШКАЛА Z-INDEX (единая на файл) ----------
+   100      .job-badges          плавающие бейджи фоновых задач
+   150      .menu-backdrop       скрим drawer'а — ниже .topbar, см. там почему
+   195      #nav                 боковая панель на десктопе
+   200      .topbar              шапка; создаёт стековый контекст (sticky +
+                                 z-index), поэтому 110 у #nav-drawer и 111 у
+                                 .theme-toggle внутри неё — локальные значения
+                                 и наружу не сравниваются
+   200      .toast-stack         снизу по центру, с шапкой не пересекается
+   210/211  .sheet-backdrop/.sheet   лист сортировки (aria-modal) — выше шапки
+   300      .modal-backdrop      модалка фоновой задачи — поверх всего
+   Правило: у любого нового слоя значение выбирается из этой шкалы. Всё, что
+   лежит внутри .topbar, сравнивается только с соседями по .topbar. */
 
 /* ---------- LAYOUT: SIDEBAR + TOPBAR (DESKTOP) ----------
    Desktop = left sidebar (240px / 56px collapsed) + topbar справа от него
@@ -221,10 +254,9 @@ body[data-sidebar="collapsed"] #nav .sidebar-collapse {
 }
 body[data-sidebar="collapsed"] #nav .sidebar-collapse .nav-ico { transform: rotate(180deg); }
 
-/* Reserve space for sidebar — main / topbar shift right */
-body { padding-left: var(--sidebar-w); transition: padding-left var(--dur-base) var(--ease-emphasized); }
+/* Reserve space for sidebar — main / topbar shift right. Базовый
+   body{padding-left} задан в блоке body выше. */
 body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
-.topbar { padding-left: 20px; }
 
 /* Highlight для важных пунктов (Благодарности — sponsor visibility). Без
    назойливости: лёгкое подкрашивание + микро-индикатор в виде сердца уже
@@ -289,7 +321,12 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   position: fixed;
   inset: 0;
   background: var(--scrim-modal);
-  z-index: 105;
+  /* Выше плавающих бейджей задач (100), но НИЖЕ .topbar (200) — и это не
+     недосмотр: сам drawer #nav лежит внутри .topbar, а та sticky+z-index,
+     то есть стековый контекст. Скрим выше 200 накрыл бы вместе с шапкой и
+     само меню. Шапка при открытом drawer остаётся кликабельной осознанно:
+     на ней только логотип и та же кнопка-гамбургер, что закрывает меню. */
+  z-index: 150;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-base) var(--spring-smooth);
@@ -319,7 +356,12 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   line-height: 1.5;
   resize: vertical;
 }
-.strategy-text:focus { outline: none; border-color: var(--accent); }
+/* :focus, а не :focus-visible, специфичность (0,2,0) — это правило глушило
+   единственное кольцо фокуса у редактора своей стратегии, оставляя от него
+   лишь смену цвета рамки в 1px. Клавиатурному фокусу кольцо возвращаем,
+   мышиному клику по-прежнему не рисуем. */
+.strategy-text:focus { border-color: var(--accent); }
+.strategy-text:focus:not(:focus-visible) { outline: none; }
 .strategy-msg { margin-top: 10px; font-size: 13px; }
 
 /* ---------- SORT SHEET (mobile) ----------
@@ -347,7 +389,10 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   position: fixed;
   inset: 0;
   background: var(--scrim-modal);
-  z-index: 120;
+  /* Выше .topbar (200): лист объявлен aria-modal, а при 120 шапка не
+     затемнялась и её ссылки оставались кликабельными сквозь «модальный» слой.
+     Оба элемента лежат в <body> (app.js), поэтому контекст шапки им не мешает. */
+  z-index: 210;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-base) var(--spring-smooth);
@@ -357,7 +402,7 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .sheet {
   position: fixed;
   left: 0; right: 0; bottom: 0;
-  z-index: 121;
+  z-index: 211;
   background: var(--bg-card);
   border-top: 1px solid var(--border);
   border-radius: 14px 14px 0 0;
@@ -499,6 +544,12 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
     z-index: 111;
   }
   .topbar > .theme-toggle.menu-open { transform: translateX(0); }
+
+  /* Кнопка темы выезжает ровно в тот угол, где висят бейджи фоновых задач, и
+     всегда оказывается поверх них: она внутри .topbar, а та — стековый
+     контекст на 200. Пока меню открыто, поднимаем бейджи над кнопкой; в
+     закрытом состоянии .theme-toggle угнана за правый край и угол свободен. */
+  body:has(#nav.menu-open) .job-badges { bottom: 60px; }
 }
 
 /* ---------- LAYOUT ---------- */
@@ -508,10 +559,18 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   padding: 24px 20px 80px;
 }
 
+/* Flex-строка, а не просто заголовок: рядом с текстом в том же ряду стоит
+   пилюля «Операция выполняется…» (.page-locked-pill — одна на страницу, в
+   нормальном потоке, без absolute). Анимация появления объявлена отдельно, в
+   секции ROUTE TRANSITION, рядом со своими @keyframes и правилами карточек. */
 .page-title {
   font-size: 22px;
   font-weight: 600;
   margin: 0 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 /* ---------- CARDS ---------- */
@@ -632,10 +691,6 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .state-table tbody tr:hover {
   background: var(--bg-card-hover);
 }
-.state-table .state-strategy {
-  font-family: ui-monospace, monospace;
-  color: var(--accent);
-}
 .state-table .state-age {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -704,11 +759,28 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   flex-shrink: 0;
   cursor: pointer;
 }
-.switch input { display: none; }
+/* Не display:none. Скрытый так чекбокс выпадает из tab-order и из дерева
+   доступности целиком: ни один тумблер панели нельзя было переключить с
+   клавиатуры, скринридер видел строку как обычный текст, а правило фокуса
+   ниже по файлу не могло совпасть в принципе. Оставляем элемент на месте и
+   прозрачным — он же принимает клик по всей площади переключателя. */
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
 .switch .slider {
   position: absolute;
   inset: 0;
-  background: var(--border);
+  /* Отдельный токен, а не --border: в светлой теме дорожка #d0d7de под белой
+     ручкой давала 1.45:1 при требуемых 3:1 для элементов управления —
+     выключенный тумблер выглядел ровной серой пилюлей без ручки, и понять,
+     выключен он или просто «пустой», было нельзя. */
+  background: var(--switch-track);
   border-radius: 22px;
   transition: background var(--dur-base) var(--spring-smooth);
 }
@@ -726,6 +798,14 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(18px); }
 .switch.loading { opacity: 0.5; pointer-events: none; }
+/* У выключенного тумблера не было НИКАКОГО отличия от рабочего: страница
+   «Режимы» рендерит все переключатели disabled и включает их только после
+   ответа /status, а при неудачном ответе они остаются заблокированными
+   навсегда — выглядя при этом живыми, с курсором-указателем и молча
+   проглатывая нажатия. */
+.switch input:disabled { cursor: not-allowed; }
+.switch input:disabled + .slider { opacity: 0.45; }
+.switch:has(input:disabled) { cursor: not-allowed; }
 
 /* ---------- POLICY ACCESS SECTION ----------
    Card в «Режимы»: name input + segmented mode picker + status pill.
@@ -787,7 +867,7 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   background: var(--accent);
   color: var(--btn-primary-text);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Вкладки уровня страницы («Стратегии»: Настройка / Сейчас работает).
@@ -839,17 +919,16 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 /* ---------- HOW-TO STEPPER ----------
    Bento-style step cards per ui-ux-pro-max skill design-system: каждый
    шаг — отдельная rounded card с badge-номером в углу. Apple/Linear
-   aesthetic, no native list markers (агрессивная specificity на случай
-   override'ов). */
+   aesthetic, no native list markers. */
 .how-to {
   margin-top: 16px;
 }
 ol.steps,
 .how-to ol.steps,
 .how-to .steps {
-  list-style: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -857,8 +936,7 @@ ol.steps,
 ol.steps > li,
 .how-to ol.steps > li,
 .how-to .steps > li {
-  list-style: none !important;
-  list-style-type: none !important;
+  list-style: none;
   display: flex;
   align-items: flex-start;
   gap: 14px;
@@ -873,8 +951,7 @@ ol.steps > li,
 }
 ol.steps > li::marker,
 .how-to ol.steps > li::marker {
-  content: "" !important;
-  display: none !important;
+  content: "";
 }
 .how-to ol.steps > li:hover {
   border-color: var(--accent-dim);
@@ -970,7 +1047,12 @@ ol.steps > li::marker,
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: background var(--dur-micro) var(--spring-smooth), border-color var(--dur-micro) var(--spring-smooth);
+  /* transform в списке обязателен: press-feedback ниже по файлу даёт
+     scale(.96) и переопределяет только transition-duration — без своего
+     transition-property масштаб срабатывал бы мгновенно. */
+  transition: background var(--dur-micro) var(--spring-smooth),
+              border-color var(--dur-micro) var(--spring-smooth),
+              transform var(--dur-micro) var(--spring-snappy);
 }
 .btn:hover { background: var(--bg-card-hover); border-color: var(--accent-dim); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1012,10 +1094,21 @@ input[type=text]:focus, input[type=password]:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: 13px;
+}
+/* У флекс-элемента min-width по умолчанию auto, поэтому домен как ЕДИНОЕ слово
+   не переносится и не сжимается: на 375px под текст остаётся ~32 моноширинных
+   символа, и rr1---sn-4g5e6nzz.googlevideo.com выдавливает крестик удаления за
+   пределы видимой области (у .wl-list есть overflow-y, из-за чего overflow-x
+   становится auto и появляется внутренний горизонтальный скролл). Списки WARP
+   это уже лечат — .warp-item/.warp-item-name; здесь тот же приём. */
+.wl-list li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .wl-list li:last-child { border-bottom: 0; }
 .wl-list li button {
@@ -1037,6 +1130,13 @@ input[type=text]:focus, input[type=password]:focus {
   display: inline-block;
   vertical-align: -2px;
   flex-shrink: 0;
+}
+/* Модификатор для 12px контекстов (стрелки сортировки внутри заголовка/пилюли).
+   Размер задан здесь, а не только атрибутами width/height у <svg>, иначе класс
+   ничего не значит и правится в двух местах. */
+.icon-sm {
+  width: 12px;
+  height: 12px;
 }
 
 /* Square button that holds a single icon (close/delete). Sized for 44×44 touch
@@ -1150,7 +1250,11 @@ pre.log {
   overflow: auto;
   margin: 0;
   white-space: pre-wrap;
-  word-break: break-all;
+  /* Не break-all: тот рвёт слово посреди даже когда оно влезает, и вывод
+     диагностики (хостнеймы, пути, версии) читался разорванным по буквам.
+     anywhere так же не даёт длинной строке распереть блок, но переносит
+     внутри слова только когда иначе не помещается. */
+  overflow-wrap: anywhere;
   color: var(--log-text);
 }
 
@@ -1163,7 +1267,14 @@ pre.log {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  z-index: 100;
+  /* Выше .topbar (200), внутри которой лежит и сайдбар. При 100 модалка
+     уезжала ПОД них: backdrop position:fixed игнорирует body{padding-left},
+     центрируется по всему вьюпорту, и на ширине 768-1199px левый край
+     модалки физически закрыт непрозрачным сайдбаром — на iPad в портрете
+     это 216px, треть ширины, то есть начало каждой строки лога прочитать
+     нельзя. Заодно скрим наконец затемняет шапку, и ссылки навигации
+     перестают быть кликабельными посреди блокирующей операции. */
+  z-index: 300;
 }
 .modal {
   background: var(--bg-card);
@@ -1258,16 +1369,6 @@ pre.log {
   width: 100%;
   margin-top: 4px;
 }
-.upd-changelog-toggle {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 13px;
-  padding: 2px 0;
-  cursor: pointer;
-  text-decoration: underline dotted;
-}
-.upd-changelog-toggle:hover { color: var(--text); }
 .upd-changelog[hidden] { display: none; }
 .upd-changelog {
   margin-top: 10px;
@@ -1370,43 +1471,6 @@ pre.log {
   line-height: 1.45;
 }
 
-/* ---------- STATUS SPINNER ---------- */
-/* Inline pill next to the "Состояние" heading while the service is mid
-   restart/stop. Uses inline-flex so the spinner icon and label share a
-   single flex axis with `gap` and `align-items: center` — no absolute
-   positioning, no margin-top hacks, no asymmetric padding. */
-.status-spinner[hidden] { display: none; }
-.status-spinner {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: 12px;
-  padding: 4px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  color: var(--warn);
-  background: var(--warn-alpha-soft);
-  border: 1px solid var(--warn);
-  border-radius: 999px;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-.status-spinner::before {
-  content: "";
-  display: block;
-  width: 11px;
-  height: 11px;
-  border: 2px solid var(--warn);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 /* ---------- MODAL WARNING ---------- */
 .modal-warning {
   background: var(--warn-alpha-mid);
@@ -1420,13 +1484,10 @@ pre.log {
 
 /* ---------- CARD LOCKED STATE ---------- */
 /* Применяется к .card когда есть active background job. Карточка слегка
-   приглушается + в верхнем правом углу появляется пилюля
-   «⏳ Операция выполняется…» — immediately видно что элементы временно
-   нельзя трогать, без необходимости hover'ить каждый switch.
-   ::after pseudo на .card-locked самой (не на children) → не
-   наследует opacity от `> *` правила. */
+   приглушается — immediately видно что элементы временно нельзя трогать, без
+   необходимости hover'ить каждый switch. Пилюля «Операция выполняется…» одна
+   на страницу, в строке заголовка (.page-locked-pill ниже). */
 .card-locked {
-  position: relative;
   transition: opacity var(--dur-micro) var(--spring-smooth);
 }
 .card-locked > * {
@@ -1437,16 +1498,8 @@ pre.log {
      карточках (Whitelist / Extra-domains). */
 }
 /* Page-level pill в строке h1.page-title — один на страницу, не
-   per-card. Не overlay'ит ни одну карточку. Skill compliance:
-   - 8dp spacing rhythm: padding 6/12, gap 8
-   - Icon Consistency: 16×16 stroke 2
-   - Inline-flex в normal flow рядом с заголовком, без absolute */
-.page-title {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
+   per-card. Не overlay'ит ни одну карточку. Раскладку самой строки задаёт
+   .page-title в секции LAYOUT. */
 .page-locked-pill {
   display: inline-flex;
   align-items: center;
@@ -1464,6 +1517,11 @@ pre.log {
 .page-locked-pill .icon { flex-shrink: 0; }
 
 /* ---------- TG TUNNEL STATE BADGE ---------- */
+/* Плашка рендерится с атрибутом hidden и наполняется только после ответа
+   /status. Авторское display перебивает UA-правило [hidden]{display:none},
+   поэтому без этой строки до ответа (и навсегда, если он не пришёл) висит
+   пустая пилюля с паддингами. */
+.tg-state-badge[hidden] { display: none; }
 .tg-state-badge {
   display: inline-block;
   margin-left: 8px;
@@ -1485,7 +1543,9 @@ pre.log {
   position: fixed;
   bottom: 16px;
   right: 16px;
-  z-index: 150;
+  /* Нижний слой плавающих элементов: бейджи должны уходить под любой скрим —
+     drawer'а (150), листа сортировки (210) и модалки (300). */
+  z-index: 100;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1658,10 +1718,14 @@ pre.log {
    outline is often suppressed by user-agent stylesheets — we restore an
    explicit, branded ring. :focus-visible (not :focus) so mouse clicks
    don't get an outline on click-and-release. */
+/* Без border-radius. Специфичность (0,1,0) здесь та же, что у .btn и
+   .job-badge, а правило стоит позже в файле и потому выигрывало: при переходе
+   табом круглая пилюля фоновой задачи (radius 999px) превращалась в
+   прямоугольник, а кнопки прыгали с 6px на 4px. Кольцу фокуса скругление
+   элемента задавать не нужно — outline и так повторяет его форму. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 /* The native switch checkbox is visually-hidden; route focus to the slider. */
 .switch input[type="checkbox"]:focus-visible { outline: none; }
@@ -1698,6 +1762,13 @@ select {
   background-position: right 7px center;
   background-size: 12px;
 }
+/* var() внутри url() не подставляется — цвет стрелки приходится вшивать в
+   data-URI, поэтому светлой теме нужен свой. Значения = --text-muted обеих
+   тем: %238b949e (тёмная) в правиле выше и %23656d76 (светлая) здесь. Без
+   этого правила на белом фоне оставался светло-серый чеврон тёмной темы. */
+:root[data-theme="light"] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23656d76' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
 select:hover { border-color: var(--accent-dim); }
 select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The dropdown popup list (rendered by the OS/browser — theme what we can). */
@@ -1715,14 +1786,20 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .page-title {
   animation: page-enter var(--dur-base) var(--spring-snappy) backwards;
 }
-.page-title + .card,
-.page-title + .dashboard-grid,
-#app > .card:nth-of-type(1) {
+/* Задержка считается по КАРТОЧКАМ. :nth-of-type здесь не годится: он считает
+   элементы одного тега, а первым <div> в #app лежит не карточка (баннер
+   обновления на дашборде, .strat-tabs на «Стратегиях» и «Исключениях») — из-за
+   чего первая карточка получала чужую задержку, а вторая не попадала ни под
+   одно правило и появлялась рывком. Цепочка ~ отсчитывает предшествующие
+   карточки: каждое следующее правило длиннее и специфичнее предыдущего,
+   поэтому побеждает для своей позиции. Глубже четвёртой не наращиваем — низ
+   длинной страницы не должен ждать полсекунды. */
+#app > .card {
   animation: page-enter var(--dur-base) var(--spring-snappy) 50ms backwards;
 }
-#app > .card:nth-of-type(2) {
-  animation: page-enter var(--dur-base) var(--spring-snappy) 100ms backwards;
-}
+#app > .card ~ .card { animation-delay: 100ms; }
+#app > .card ~ .card ~ .card { animation-delay: 150ms; }
+#app > .card ~ .card ~ .card ~ .card { animation-delay: 200ms; }
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -1737,7 +1814,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .menu-toggle:active,
 .nav-drawer-close:active,
 .sidebar-collapse:active,
-.nav-more-btn:active,
 .theme-toggle button:active,
 .job-badge:active,
 .brand:active,
@@ -1751,18 +1827,86 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* Honor user preference for reduced motion. We don't fully disable visual
    feedback — just shorten transitions to near-zero and stop infinite
-   animations (pulse, spin). State changes remain perceptible. */
+   animations (pulse). State changes remain perceptible. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
+    /* Без обнуления задержки stagger карточек остаётся: анимация мгновенная,
+       но элемент с fill-mode backwards всё ещё ждёт своей очереди невидимым и
+       затем возникает скачком — ровно то, от чего режим и спасает. */
+    animation-delay: 0s !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-  .job-badge-dot,
-  .status-spinner::before {
+  .job-badge-dot {
     /* Static rather than pulsing — colour still signals "busy", no motion. */
     opacity: 1;
     animation: none !important;
   }
+}
+
+/* ---------- ТАЧ-УСТРОЙСТВА ----------
+   Отделено от ширины экрана намеренно: планшет в ландшафте шире 768px, но палец
+   у него ровно такой же. Всё ниже применяется по типу указателя, а не по
+   вьюпорту, и десктопную плотность не трогает. */
+@media (pointer: coarse) {
+  /* Цели меньше ~40px. Требование в файле уже было известно (.sort-trigger
+     min-height:44px, .sheet-option 48px, .nav-drawer-close 40×40), но до этих
+     мест не дошло — а специфичность .wl-list li button (0,1,2) и
+     .state-table .btn-danger (0,2,0) перебивала .btn-icon, из-за чего
+     фактические размеры были 28×24 и 34×22. Это ОСНОВНОЕ деструктивное
+     действие в списках и единственное действие карточки ротатора. */
+  .wl-list li button,
+  .state-table .btn-danger,
+  .btn-icon {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .theme-toggle button { width: 40px; height: 40px; }
+  .sheet-close { width: 44px; height: 44px; }
+  /* Сам переключатель остаётся 40×22 (это его вид), но кликабельная область
+     строки дотягивается до 44px по вертикали. */
+  .switch { min-height: 44px; }
+  .switch .slider { top: 50%; bottom: auto; height: 22px; transform: translateY(-50%); }
+
+  /* iOS Safari увеличивает страницу при фокусе в поле со шрифтом мельче 16px и
+     обратно НЕ отматывает — пользователь остаётся на горизонтально
+     проскроленной панели. Затрагивало добавление домена, имя политики,
+     редакторы списка и своей стратегии, выпадашку стратегии в таблице. */
+  input[type="text"],
+  input[type="search"],
+  textarea,
+  select,
+  .strategy-text,
+  textarea.warp-editor {
+    font-size: 16px;
+  }
+}
+
+/* ---------- УСТРОЙСТВА БЕЗ НАВЕДЕНИЯ ----------
+   :hover на тач-экране «залипает» после тапа. Заметнее всего в списках: удалил
+   домен — следующая строка подъезжает под палец, и её крестик остаётся
+   подсвеченным красным, будто он взведён. */
+@media (hover: none) {
+  .wl-list li button:hover { color: var(--text-muted); background: transparent; }
+  .state-table tbody tr:hover { background: transparent; }
+  .how-to ol.steps > li:hover { background: var(--bg-card); border-color: var(--border); }
+  .brand:hover { transform: none; }
+}
+
+/* Заблокированная на время задачи кнопка подсвечивалась под курсором, но не
+   нажималась, при том что cursor уже говорил not-allowed — сигналы прямо
+   противоречили друг другу. */
+.btn:disabled:hover { background: var(--bg-card); border-color: var(--border); }
+.btn-primary:disabled:hover { background: var(--accent); border-color: var(--accent); }
+
+/* Короткий экран (телефон в ландшафте): у .modal max-height 80vh, а у лога
+   min-height 240px, который не давал ему сжаться. Модалка обновления вместе с
+   блоком предупреждения не влезала, срезалась сверху и снизу, и до кнопки
+   «Скрыть» нельзя было даже доскроллить — у backdrop нет прокрутки. */
+@media (max-height: 500px) {
+  .modal-backdrop { align-items: flex-start; overflow: auto; }
+  .modal { max-height: none; }
+  .modal pre.log { min-height: 120px; }
 }

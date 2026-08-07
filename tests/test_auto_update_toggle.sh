@@ -29,7 +29,14 @@ ACTIONS="$HERE/webpanel/cgi/actions.sh"
 API="$HERE/webpanel/cgi/api.sh"
 APPJS="$HERE/webpanel/www/app.js"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/autoupd.XXXXXX") || exit 1
-trap 'rm -rf "$TMP"' EXIT
+API_JOBS=""
+cleanup() {
+    for _j in $API_JOBS; do
+        rm -f "/tmp/z2k-job-$_j.log" "/tmp/z2k-job-$_j.pid" "/tmp/z2k-job-$_j.exit"
+    done
+    rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
@@ -180,30 +187,88 @@ case "$apply_fn" in *'Z2K_AU_NO_JITTER=1'*) ok "ручной запуск не �
                     *) no "ручной запуск не уходит в ночной jitter" "Z2K_AU_NO_JITTER=1" "нет" ;; esac
 
 # --- HTTP surface ----------------------------------------------------------
-# Матчим маршрут, а не его написание: он может стоять в case-списке как
-# отдельная ветка или в цепочке через `|` с соседними тумблерами — для
-# поведения это одно и то же, а тест на точную строку ломается от добавления
-# соседа и говорит «маршрута нет», когда он есть.
-grep -qE '"POST /toggle/auto-update"[)|]' "$API" \
-    && ok "маршрут POST /toggle/auto-update объявлен" \
-    || no "маршрут POST /toggle/auto-update объявлен" "маршрут" "отсутствует"
-grep -q '_toggle_fn=toggle_auto_update' "$API" \
-    && ok "маршрут связан с toggle_auto_update" \
-    || no "маршрут связан с toggle_auto_update" "связка" "отсутствует"
-grep -q 'read_flag "Z2K_AUTO_UPDATE_ENABLED" "\$CONFIG_FILE" "1"' "$API" \
-    && ok "GET /status читает флаг с дефолтом 1" \
-    || no "GET /status читает флаг с дефолтом 1" "read_flag с 1" "иное"
-grep -q '"auto_update":"%s"' "$API" \
-    && ok "GET /status отдаёт auto_update" \
-    || no "GET /status отдаёт auto_update" "поле в JSON" "отсутствует"
-# The printf placeholders and arguments must stay balanced, or every dashboard
-# field after this one shifts by one.
-line=$(grep -n '"auto_update":"%s"' "$API" | head -1 | cut -d: -f1)
-ph=$(sed -n "${line}p" "$API" | grep -o '%s' | grep -c .)
-args=$(sed -n "$((line+1)),$((line+4))p" "$API" | grep -o '"\${[a-z_]*:-[^}]*}"' | grep -c .)
-[ "$ph" -gt 0 ] && [ "$args" -ge 8 ] \
-    && ok "плейсхолдеры и аргументы printf сбалансированы ($ph %s, $args аргументов)" \
-    || no "плейсхолдеры и аргументы printf сбалансированы" ">=8 аргументов" "$ph/$args"
+# Проверяется ОТВЕТ api.sh, а не его исходник. Прежние утверждения грепали
+# написание printf ('"auto_update":"%s"' и «сбалансированность» плейсхолдеров с
+# аргументами): разбиение одной строки формата на цепочку json_string не меняет
+# в ответе ни байта, но грепу видится пропажей поля. Такой тест охраняет форму
+# кода, а не контракт с фронтом — и краснеет на правках, которые контракт как
+# раз чинят.
+API_SB="$TMP/apiroot"
+API_CFG="$API_SB/config"
+mkdir -p "$API_SB/lists" "$API_SB/lib"
+printf '#!/bin/sh\ncreate_official_config() { return 0; }\n' > "$API_SB/lib/config_official.sh"
+printf '#!/bin/sh\nsafe_config_read() { return 0; }\n'       > "$API_SB/lib/utils.sh"
+printf '#!/bin/sh\nexit 0\n' > "$API_SB/S99-stub"
+chmod +x "$API_SB/S99-stub"
+
+# HTTP_X_Z2K_PANEL — то же, что app.js шлёт на каждом fetch; без него
+# origin-страж в cgi/auth.sh отвечает 403 и до роутинга дело не доходит.
+api_cgi() { # api_cgi <METHOD> <PATH_INFO> <QUERY> [файл-тела] -> тело ответа
+    _m="$1"; _p="$2"; _q="$3"; _b="${4:-/dev/null}"
+    _cl=0; [ "$_b" = /dev/null ] || _cl=$(wc -c < "$_b" | tr -d ' ')
+    env REQUEST_METHOD="$_m" PATH_INFO="$_p" QUERY_STRING="$_q" \
+        HTTP_HOST=192.168.1.1 HTTP_X_Z2K_PANEL=1 CONTENT_LENGTH="$_cl" \
+        ZAPRET2_DIR="$API_SB" CONFIG_FILE="$API_CFG" LISTS_DIR="$API_SB/lists" \
+        STATE_FILE="$API_SB/state.tsv" INIT_SCRIPT="$API_SB/S99-stub" \
+        sh "$API" < "$_b" 2>/dev/null | awk 'b{print} /^\r?$/{b=1}'
+}
+tgl() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'; }
+
+printf 'ENABLED=1\n' > "$API_CFG"
+body=$(api_cgi GET /status "")
+got=$(tgl "$body" auto_update)
+[ -n "$got" ] && ok "GET /status отдаёт поле auto_update" \
+              || no "GET /status отдаёт поле auto_update" "поле в JSON" "отсутствует"
+[ "$got" = 1 ] && ok "без флага в конфиге поле равно 1 (дефолт)" \
+               || no "без флага в конфиге поле равно 1" "1" "$got"
+
+# Маршрут POST /toggle/auto-update — сквозняком: тумблер обязан дописать флаг в
+# конфиг и после этого измениться в /status. Раньше существование маршрута и
+# его связка с toggle_auto_update проверялись двумя грепами по api.sh.
+printf 'value=0' > "$TMP/toggle-body"
+body=$(api_cgi POST /toggle/auto-update "" "$TMP/toggle-body")
+job=$(printf '%s' "$body" | sed -n 's/.*"job":"\([0-9]*\)".*/\1/p')
+API_JOBS="$API_JOBS $job"
+[ -n "$job" ] && ok "POST /toggle/auto-update завёл задачу" \
+              || no "POST /toggle/auto-update завёл задачу" "job id" "$body"
+_w=0
+while [ "$_w" -lt 10 ]; do
+    [ -f "/tmp/z2k-job-$job.exit" ] && break
+    _w=$((_w + 1)); sleep 1
+done
+[ "$(grep -c '^Z2K_AUTO_UPDATE_ENABLED=0$' "$API_CFG")" = 1 ] \
+    && ok "маршрут действительно выключил автообновление в конфиге" \
+    || no "маршрут выключил автообновление в конфиге" "строка =0" \
+          "$(grep 'Z2K_AUTO_UPDATE_ENABLED' "$API_CFG" | tr '\n' ' ')"
+got=$(tgl "$(api_cgi GET /status "")" auto_update)
+[ "$got" = 0 ] && ok "выключенное состояние видно в GET /status" \
+               || no "выключенное состояние видно в GET /status" "0" "$got"
+
+# Соседние поля не должны разъезжаться: раньше это стерегла проверка на
+# «сбалансированность» плейсхолдеров, теперь — четыре различимых значения,
+# каждое на своём месте.
+printf 'ENABLED=1\nRST_FILTER=1\nZ2K_STATS=0\nZ2K_AUTO_UPDATE_ENABLED=0\nZ2K_AUTOHOSTLIST=1\n' > "$API_CFG"
+body=$(api_cgi GET /status "")
+got="$(tgl "$body" rst_filter)|$(tgl "$body" stats)|$(tgl "$body" auto_update)|$(tgl "$body" autohostlist)"
+[ "$got" = "1|0|0|1" ] && ok "тумблеры в JSON не съехали друг относительно друга" \
+                       || no "тумблеры в JSON не съехали" "1|0|0|1" "$got"
+
+# Значение-ловушка: read_flag снимает только ОКРУЖАЮЩИЕ кавычки, так что
+# правленный руками конфиг отдаёт значение с кавычкой внутри. Если оно уедет в
+# "%s" как есть — невалидным станет ВЕСЬ ответ, и дашборд покажет «Ошибка»
+# целиком, а не один тумблер.
+printf 'ENABLED=1\nZ2K_AUTO_UPDATE_ENABLED=0"x\n' > "$API_CFG"
+body=$(api_cgi GET /status "")
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$body" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1 \
+        && ok "значение с кавычкой не рвёт JSON ответа" \
+        || no "значение с кавычкой не рвёт JSON ответа" "валидный JSON" "$body"
+    got=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin)["toggles"]["auto_update"])' 2>/dev/null)
+    [ "$got" = '0"x' ] && ok "значение доехало экранированным, без потерь" \
+                       || no "значение доехало экранированным" '0"x' "$got"
+else
+    printf '[SKIP] значение с кавычкой не рвёт JSON ответа (нет python3; в CI проверяется)\n'
+fi
 
 # --- UI --------------------------------------------------------------------
 grep -q 'key: "auto_update"' "$APPJS" \

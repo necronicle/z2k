@@ -1283,6 +1283,7 @@ step_build_zapret2() {
             local _item
             for _item in config lists/whitelist.txt lists/extra-domains.txt \
                          lists/custom-strategies lists/warp \
+                         ipset/zapret-hosts-user-exclude.txt \
                          extra_strats/cache/autocircular/state.tsv .z2k-relay-id; do
                 [ -e "$_rescued/$_item" ] || continue
                 [ -e "$ZAPRET2_DIR/$_item" ] && continue
@@ -1322,6 +1323,15 @@ step_build_zapret2() {
         if [ -f "$ZAPRET2_DIR/lists/extra-domains.txt" ]; then
             cp -f "$ZAPRET2_DIR/lists/extra-domains.txt" "$backup_tmp/extra-domains.txt" || \
                 die "Не удалось сохранить extra-domains в бэкап — установка прервана, чтобы не потерять ваши домены."
+        fi
+        # Адресные исключения (вкладка «Исключения» -> «Адреса»). Лежат ВНУТРИ
+        # дерева, которое reinstall уносит в .old и удаляет, поэтому без явного
+        # бэкапа переустановка стирала их безвозвратно. Коварство в том, что
+        # пропажу не видно сразу: сет nozapret живёт в ядре и держит адреса до
+        # первой перезагрузки — панель уже пуста, а трафик ещё исключён.
+        if [ -f "$ZAPRET2_DIR/ipset/zapret-hosts-user-exclude.txt" ]; then
+            cp -f "$ZAPRET2_DIR/ipset/zapret-hosts-user-exclude.txt" "$backup_tmp/zapret-hosts-user-exclude.txt" || \
+                die "Не удалось сохранить адресные исключения в бэкап — установка прервана, чтобы не потерять ваши адреса."
         fi
         # WARP-списки (webpanel раздел «WARP», lists/warp/*.txt) — user-owned
         # каталог, ничего shipped туда не пишется. Невосстановимый user-data —
@@ -2155,11 +2165,20 @@ step_build_zapret2() {
             fi
         fi
 
-        # Восстановить whitelist
+        # Восстановить доменные исключения
         if [ -f "$backup_tmp/whitelist.txt" ]; then
             mkdir -p "$ZAPRET2_DIR/lists"
             cp -f "$backup_tmp/whitelist.txt" "$ZAPRET2_DIR/lists/whitelist.txt"
-            print_success "Whitelist восстановлен"
+            print_success "Доменные исключения восстановлены"
+        fi
+
+        # Восстановить адресные исключения. Пишем ДО первого старта сервиса:
+        # z2k_seed_user_exclusions читает этот файл при запуске и засевает
+        # адреса в nozapret — иначе исключения не действовали бы до ребута.
+        if [ -f "$backup_tmp/zapret-hosts-user-exclude.txt" ]; then
+            mkdir -p "$ZAPRET2_DIR/ipset"
+            cp -f "$backup_tmp/zapret-hosts-user-exclude.txt" "$ZAPRET2_DIR/ipset/zapret-hosts-user-exclude.txt"
+            print_success "Адресные исключения восстановлены"
         fi
 
         # Восстановить autocircular state (рабочие стратегии).

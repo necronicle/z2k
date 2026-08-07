@@ -5,6 +5,7 @@
 WEBPANEL_DIR="/opt/zapret2/webpanel"
 WEBPANEL_INIT="/opt/etc/init.d/S96z2k-webpanel"
 WEBPANEL_PORT_FILE="$WEBPANEL_DIR/port"
+WEBPANEL_BIND_FILE="$WEBPANEL_DIR/bind"
 WEBPANEL_PIDFILE="/var/run/z2k-webpanel.pid"
 
 # Source dir for webpanel assets — depends on where z2k.sh placed them.
@@ -20,6 +21,14 @@ webpanel_is_installed() {
     [ -x "$WEBPANEL_INIT" ] && [ -d "$WEBPANEL_DIR" ]
 }
 
+# Хоть какой-то след установки, в т.ч. частичной. Оборванный install мог
+# оставить init без каталога (или наоборот): webpanel_is_installed для
+# такого состояния false, и меню отказывалось удалять осиротевший init,
+# который падает на каждом буте. Путь удаления гейтится этой проверкой.
+webpanel_any_installed() {
+    [ -e "$WEBPANEL_INIT" ] || [ -d "$WEBPANEL_DIR" ] || [ -d /opt/zapret2/www ]
+}
+
 webpanel_is_running() {
     [ -f "$WEBPANEL_PIDFILE" ] && kill -0 "$(cat "$WEBPANEL_PIDFILE" 2>/dev/null)" 2>/dev/null
 }
@@ -29,34 +38,45 @@ webpanel_url() {
     [ -r "$WEBPANEL_PORT_FILE" ] && port=$(cat "$WEBPANEL_PORT_FILE" 2>/dev/null | tr -dc '0-9')
     [ -z "$port" ] && port=8088
     local ip=""
+    # Записанный install.sh bind — единственный адрес, где панель реально
+    # слушает. Повторная автодетекция здесь выдавала другой сегмент:
+    # установка с --bind 192.168.5.1 (второй бридж) → меню печатало
+    # http://192.168.1.1:8088/, где никто не слушает. 0.0.0.0 = слушаем
+    # всюду, для URL детектим LAN IP как раньше.
+    if [ -r "$WEBPANEL_BIND_FILE" ]; then
+        ip=$(cat "$WEBPANEL_BIND_FILE" 2>/dev/null | tr -dc '0-9.')
+        [ "$ip" = "0.0.0.0" ] && ip=""
+    fi
     # Pick the real LAN IP. Two-pass: bridge interfaces (br*) first,
     # then any. Within each pass: 192.168.* → 172.16-31.* → 10.*.
     # History: 2026-04-15 (Владислав, Rostelecom) we promoted 192.168 over
     # 10.* to skip provider 10.4.x.x interconnect. 2026-04-18 (Эд) we added
     # bridge-first to skip routers with eth*.* in 192.168 range too.
     local pattern ifprefix
-    for ifprefix in 'br' ''; do
-        for pattern in \
-            '192\.168\.' \
-            '172\.(1[6-9]|2[0-9]|3[01])\.' \
-            '10\.' ; do
-            ip=$(ip -4 addr show 2>/dev/null \
-                | awk -v p="$pattern" -v ifp="$ifprefix" '
-                    /^[0-9]+: / {
-                        match($2, /^[^:@]+/)
-                        iface = substr($2, RSTART, RLENGTH)
-                        ok = (ifp == "" || index(iface, ifp) == 1)
-                        next
-                    }
-                    ok && $0 ~ ("inet " p) {
-                        split($2, a, "/")
-                        print a[1]
-                        exit
-                    }
-                ')
-            [ -n "$ip" ] && break 2
+    if [ -z "$ip" ]; then
+        for ifprefix in 'br' ''; do
+            for pattern in \
+                '192\.168\.' \
+                '172\.(1[6-9]|2[0-9]|3[01])\.' \
+                '10\.' ; do
+                ip=$(ip -4 addr show 2>/dev/null \
+                    | awk -v p="$pattern" -v ifp="$ifprefix" '
+                        /^[0-9]+: / {
+                            match($2, /^[^:@]+/)
+                            iface = substr($2, RSTART, RLENGTH)
+                            ok = (ifp == "" || index(iface, ifp) == 1)
+                            next
+                        }
+                        ok && $0 ~ ("inet " p) {
+                            split($2, a, "/")
+                            print a[1]
+                            exit
+                        }
+                    ')
+                [ -n "$ip" ] && break 2
+            done
         done
-    done
+    fi
     if [ -z "$ip" ]; then
         ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
     fi
@@ -131,7 +151,10 @@ webpanel_do_install() {
 }
 
 webpanel_do_uninstall() {
-    if ! webpanel_is_installed; then
+    # Гейт по «любому следу», а не по полной установке — иначе осиротевший
+    # init от оборванной установки не убрать через меню (см.
+    # webpanel_any_installed).
+    if ! webpanel_any_installed; then
         print_info "Веб-панель не установлена"
         pause
         return 0
@@ -152,12 +175,28 @@ webpanel_do_uninstall() {
         }
     else
         # Fallback: inline uninstall
+        local d b
         [ -x "$WEBPANEL_INIT" ] && "$WEBPANEL_INIT" stop 2>/dev/null
+        # init мог быть снесён оборванной установкой — supervisor/waiter
+        # добиваем по cmdline, иначе они поднимут lighttpd после удаления.
+        pkill -f "$WEBPANEL_INIT" 2>/dev/null || true
         pkill -f "lighttpd.*$WEBPANEL_DIR" 2>/dev/null || true
         rm -f "$WEBPANEL_INIT" "$WEBPANEL_PIDFILE" \
+              /var/run/z2k-webpanel-sup.pid \
+              /var/run/z2k-webpanel-wait.pid \
               /tmp/z2k-log/z2k-webpanel-error.log \
               /tmp/z2k-log/z2k-webpanel-startcheck.log
         rm -rf /opt/zapret2/www "$WEBPANEL_DIR"
+        # Штатный S*lighttpd, отключённый нашим install.sh, возвращаем на
+        # место — иначе он остаётся выключенным навсегда (uninstall.sh в
+        # штатном пути удаления делает то же самое).
+        for d in /opt/etc/init.d/.S*lighttpd.disabled-by-z2k; do
+            [ -e "$d" ] || continue
+            b="${d##*/}"
+            b="${b#.}"
+            b="${b%.disabled-by-z2k}"
+            [ -e "${d%/*}/$b" ] || mv "$d" "${d%/*}/$b" 2>/dev/null || true
+        done
         print_success "Веб-панель удалена"
     fi
     pause

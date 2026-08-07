@@ -107,7 +107,7 @@ MENU
 [4] Резервная копия/Восстановление
 [5] Удалить zapret2
 [U] Проверить обновления z2k
-[W] Whitelist (исключения)
+[W] Исключения — домены
 [R] RST-фильтр (пассивный DPI)
 [F] Silent fallback для РКН (осторожно, возможны поломки)
 [E] Игровой режим WARP (Cloudflare-туннель для игр, заблоченных по IP)
@@ -1828,7 +1828,7 @@ SUBMENU
 
 menu_whitelist() {
     clear_screen
-    print_header "Whitelist - Исключения из обработки"
+    print_header "Исключения по домену"
 
     local whitelist_file="${LISTS_DIR}/whitelist.txt"
 

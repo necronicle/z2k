@@ -43,6 +43,11 @@ json_header() {
 }
 
 # Minimal JSON string escape: backslash, quote, control chars.
+#
+# Управляющие символы ищутся через `c in ord`, а не просто по ord[c] < 32:
+# промах по таблице — это не управляющий символ, а символ, которого в ней нет.
+# На multibyte-aware awk кириллица приходит одним символом, ord[c] возвращает
+# пустую строку, а она численно равна нулю — и байт уезжал в \u0000.
 json_escape() {
     # shellcheck disable=SC2016
     awk 'BEGIN {
@@ -58,7 +63,7 @@ json_escape() {
             else if (c == "\n") out = out "\\n"
             else if (c == "\r") out = out "\\r"
             else if (c == "\t") out = out "\\t"
-            else if (ord[c] < 32) out = out sprintf("\\u%04x", ord[c])
+            else if ((c in ord) && ord[c] < 32) out = out sprintf("\\u%04x", ord[c])
             else out = out c
         }
         if (NR > 1) printf "\\n"
@@ -138,36 +143,45 @@ read_body_raw() {
 # Returns the decoded value on stdout. Minimal decoder — only handles %XX.
 form_value() {
     local haystack="$1" key="$2"
-    local pair
+    local pair raw=""
     local OLD_IFS="$IFS"
+    # Разбиение на пары — это word splitting по &, а вместе с ним работает и
+    # pathname expansion: без set -f значение с *, ? или [ раскрылось бы по
+    # содержимому рабочего каталога CGI. Снимаем сразу за циклом — дальше по
+    # файлу подстановки должны вести себя как обычно.
     IFS='&'
+    set -f
     for pair in $haystack; do
         case "$pair" in
-            "$key="*)
-                IFS="$OLD_IFS"
-                local raw="${pair#$key=}"
-                # Convert + to space then decode %XX. NB: portable hex decode via
-                # an index() lookup — busybox/mawk on the router has NO strtonum()
-                # (a gawk extension). The old strtonum() decoder silently failed on
-                # any %XX-bearing value, which surfaced once rotation host keys grew
-                # an address-family suffix ("host|6" → URLSearchParams encodes "|"
-                # as %7C) and the × delete started returning "key and host required".
-                printf '%s' "$raw" | awk '
-                    function hx(c) { return index("0123456789abcdef", tolower(c)) - 1 }
-                    {
-                        gsub(/\+/, " ")
-                        while (match($0, /%[0-9a-fA-F][0-9a-fA-F]/)) {
-                            ch = sprintf("%c", hx(substr($0, RSTART+1, 1)) * 16 + hx(substr($0, RSTART+2, 1)))
-                            $0 = substr($0, 1, RSTART-1) ch substr($0, RSTART+3)
-                        }
-                        print
-                    }'
-                return 0
-                ;;
+            "$key="*) raw="${pair#$key=}"; break ;;
         esac
     done
+    set +f
     IFS="$OLD_IFS"
-    echo ""
+    [ -n "$raw" ] || { echo ""; return 0; }
+    # Convert + to space then decode %XX. NB: portable hex decode via
+    # an index() lookup — busybox/mawk on the router has NO strtonum()
+    # (a gawk extension). The old strtonum() decoder silently failed on
+    # any %XX-bearing value, which surfaced once rotation host keys grew
+    # an address-family suffix ("host|6" → URLSearchParams encodes "|"
+    # as %7C) and the × delete started returning "key and host required".
+    #
+    # Разбор идёт слева направо с накоплением в out, а не заменой внутри $0:
+    # замена на месте перезапускала match() с начала строки, то есть
+    # декодировала уже раскодированное (%2541 -> %41 -> A).
+    printf '%s' "$raw" | awk '
+        function hx(c) { return index("0123456789abcdef", tolower(c)) - 1 }
+        {
+            gsub(/\+/, " ")
+            out = ""
+            rest = $0
+            while (match(rest, /%[0-9a-fA-F][0-9a-fA-F]/)) {
+                ch = sprintf("%c", hx(substr(rest, RSTART+1, 1)) * 16 + hx(substr(rest, RSTART+2, 1)))
+                out = out substr(rest, 1, RSTART-1) ch
+                rest = substr(rest, RSTART+3)
+            }
+            print out rest
+        }'
 }
 
 # --- route dispatch ---
@@ -204,11 +218,24 @@ case "$method $path" in
 
         game_warp=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
         json_header
-        printf '{"ok":true,"installed":%s,"running":%s,"service":"%s","toggles":{"rst_filter":"%s","silent_fallback":"%s","game_warp":"%s","customd":"%s","dynamic_ttl":"%s","stats":"%s","ppe":"%s","auto_update":"%s","autohostlist":"%s"},"tunnel":{"running":%s}}\n' \
-            "${installed:-false}" "${running:-false}" "${svc_state:-unknown}" \
-            "${rst_filter:-0}" "${silent_fb:-0}" "${game_warp:-0}" "${customd:-0}" \
-            "${dynamic_ttl:-1}" "${stats:-1}" "${ppe:-1}" "${auto_update:-1}" "${autohostlist:-0}" \
-            "${tunnel_running:-false}"
+        # Каждое значение флага — через json_string, а не прямым %s. read_flag
+        # снимает только ОКРУЖАЮЩИЕ кавычки, поэтому правленный руками конфиг
+        # (RST_FILTER=0") отдаёт значение, которое рвёт строку JSON. Ломается при
+        # этом не один тумблер: фронт не разбирает ответ целиком и весь дашборд
+        # уходит в «Ошибка». Быстрый путь json_string на "0"/"1" не форкает.
+        printf '{"ok":true,"installed":%s,"running":%s,"service":' \
+            "${installed:-false}" "${running:-false}"
+        json_string "${svc_state:-unknown}"
+        printf ',"toggles":{"rst_filter":';  json_string "${rst_filter:-0}"
+        printf ',"silent_fallback":';        json_string "${silent_fb:-0}"
+        printf ',"game_warp":';              json_string "${game_warp:-0}"
+        printf ',"customd":';                json_string "${customd:-0}"
+        printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
+        printf ',"stats":';                  json_string "${stats:-1}"
+        printf ',"ppe":';                    json_string "${ppe:-1}"
+        printf ',"auto_update":';            json_string "${auto_update:-1}"
+        printf ',"autohostlist":';           json_string "${autohostlist:-0}"
+        printf '},"tunnel":{"running":%s}}\n' "${tunnel_running:-false}"
         exit 0
         ;;
 
@@ -281,7 +308,8 @@ case "$method $path" in
         exists=$(printf '%s' "$result" | sed -n 's/.*exists=\([0-9]*\).*/\1/p')
         json_header
         printf '{"ok":true,"name":'; json_string "$name"
-        printf ',"exclude":"%s","exists":%s}\n' "${exclude:-0}" "${exists:-0}"
+        printf ',"exclude":';        json_string "${exclude:-0}"
+        printf ',"exists":%s}\n' "${exists:-0}"
         exit 0
         ;;
 
@@ -294,21 +322,57 @@ case "$method $path" in
             0|1) ;;
             *) json_fail "400 Bad Request" "exclude must be 0 or 1" ;;
         esac
-        # SECURITY: name is interpolated into the command string that
-        # svc_action_async runs through `eval` — so it MUST be validated HERE,
-        # before eval parses it. policy_save() validates name too, but that
-        # check runs too late: eval has already executed any $(...)/;/`` the
-        # raw value carried. Mirror policy_save's charset exactly
-        # ([A-Za-z0-9_-], ≤32, empty = disable filter) so nothing that reaches
-        # eval can contain a shell metacharacter.
+        # SECURITY: имя уходит в eval внутри svc_action_async, но НЕ как часть
+        # eval-строки — там остаётся литеральный токен $Z2K_POLICY_NAME, а
+        # раскрывает его сам eval, то есть уже как ЗНАЧЕНИЕ переменной: результат
+        # подстановки заново кодом не разбирается. Именно поэтому чарсет здесь
+        # может быть тем же денилистом, что и в policy_save: имена политик
+        # Keenetic человек пишет по-русски и с пробелами («Через ВПН»), а прежний
+        # [A-Za-z0-9_-] отбивал их ЗДЕСЬ, до обработчика — фикс в policy_save при
+        # этом выглядел рабочим. Запрещено ровно то, что ломает `. config`.
+        #
+        # Апостроф — там же: set_flag пишет значение в одинарных кавычках и
+        # экранирует апостроф как '\'', а safe_config_read обратно это не
+        # разворачивает, так что имя портится НАВСЕГДА при первой же
+        # перегенерации конфига. Вертикальная черта — потому что policy_status
+        # отдаёт name=%s|exclude=%s|exists=%s, и на чтении назад имя режется по
+        # разделителю: панель показала бы «a» вместо «a|b», а пользователь
+        # сохранил бы предзаполненное поле и потерял политику.
         case "$name" in
-            *[!A-Za-z0-9_-]*) json_fail "400 Bad Request" "invalid policy name" ;;
+            *[\"\$\`\\]*|*';'*|*"'"*|*'|'*|*'
+'*) json_fail "400 Bad Request" "invalid policy name" ;;
         esac
-        if [ "${#name}" -gt 32 ]; then
+        # Длина — в СИМВОЛАХ, а не в байтах: ${#name} на ash/dash считает байты,
+        # и кириллическое имя из 17 символов уже «длиннее 32», хотя форма в
+        # панели ограничивает поле ровно 32 символами (maxlength="32"). awk на
+        # роутере тоже байто-ориентированный (length("привет")==12), а на машине
+        # разработчика — символьный, поэтому режим определяется на месте. wc -m
+        # тут не помощник: CGI стартует вообще без LC_*, а в C-локали он считает
+        # те же байты. Если awk почему-то не отработал — падаем на ${#name}:
+        # строгий байтовый счёт хуже, но безопаснее пропуска проверки.
+        name_len=$(printf '%s' "$name" | awk '
+            BEGIN {
+                mb = (length("привет") == 6)
+                for (i = 128; i < 192; i++) cont[sprintf("%c", i)] = 1
+                n = 0
+            }
+            {
+                if (mb) { n += length($0); next }
+                # 10xxxxxx — продолжение UTF-8, отдельным символом не считается.
+                for (i = 1; i <= length($0); i++)
+                    if (!(substr($0, i, 1) in cont)) n++
+            }
+            END { print n + 0 }')
+        case "$name_len" in
+            ''|*[!0-9]*) name_len=${#name} ;;
+        esac
+        if [ "$name_len" -gt 32 ]; then
             json_fail "400 Bad Request" "policy name too long"
         fi
         # Async job для visibility (есть restart сервиса под капотом).
-        job_id=$(svc_action_async "Применение политики доступа" "policy_save \"${name}\" ${exclude}")
+        Z2K_POLICY_NAME="$name"
+        export Z2K_POLICY_NAME
+        job_id=$(svc_action_async "Применение политики доступа" "policy_save \"\$Z2K_POLICY_NAME\" ${exclude}")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0
@@ -316,10 +380,21 @@ case "$method $path" in
 
     # ---------- WHITELIST ----------
     "GET /exclude")
+        # entries — только адреса и подсети, то есть то, что здесь реально
+        # действует. legacy_domains — домены, осевшие в файле, пока панель их
+        # сюда принимала: они не работали никогда, но выкидывать их молча
+        # нельзя, человек вписывал их осознанно.
         json_header
         printf '{"ok":true,"entries":['
         first=1
-        exclude_list | while IFS= read -r e; do
+        exclude_list_addresses | while IFS= read -r e; do
+            [ -z "$e" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            json_string "$e"
+        done
+        printf '],"legacy_domains":['
+        first=1
+        exclude_list_legacy_domains | while IFS= read -r e; do
             [ -z "$e" ] && continue
             if [ "$first" = "1" ]; then first=0; else printf ','; fi
             json_string "$e"
@@ -332,10 +407,16 @@ case "$method $path" in
         body=$(read_body)
         entry=$(form_value "$body" "entry")
         [ -z "$entry" ] && json_fail "400 Bad Request" "entry required"
+        # Причина отказа идёт человеку как есть: «это домен — добавьте его во
+        # вкладке Домены» объясняет, что делать, а «invalid or add failed» —
+        # нет. Захват в $(...) обязателен ещё и потому, что stdout обработчика
+        # иначе ушёл бы в блок HTTP-заголовков.
         if [ "$path" = "/exclude/add" ]; then
-            exclude_add "$entry" || json_fail "400 Bad Request" "invalid or add failed"
+            ex_err=$(exclude_add "$entry" 2>&1 >/dev/null) \
+                || json_fail "400 Bad Request" "${ex_err:-не удалось добавить}"
         else
-            exclude_delete "$entry" || json_fail "400 Bad Request" "invalid or delete failed"
+            ex_err=$(exclude_delete "$entry" 2>&1 >/dev/null) \
+                || json_fail "400 Bad Request" "${ex_err:-не удалось удалить}"
         fi
         json_ok
         ;;
@@ -357,10 +438,14 @@ case "$method $path" in
         body=$(read_body)
         domain=$(form_value "$body" "domain")
         [ -z "$domain" ] && json_fail "400 Bad Request" "domain required"
+        # Причину отказа отдаём как есть: «это адрес — добавьте его во вкладке
+        # Адреса» говорит человеку, что делать, а «invalid or add failed» — нет.
         if [ "$path" = "/whitelist/add" ]; then
-            whitelist_add "$domain" || json_fail "400 Bad Request" "invalid or add failed"
+            wl_err=$(whitelist_add "$domain" 2>&1 >/dev/null) \
+                || json_fail "400 Bad Request" "${wl_err:-не удалось добавить}"
         else
-            whitelist_delete "$domain" || json_fail "400 Bad Request" "invalid or delete failed"
+            wl_err=$(whitelist_delete "$domain" 2>&1 >/dev/null) \
+                || json_fail "400 Bad Request" "${wl_err:-не удалось удалить}"
         fi
         json_ok
         ;;
@@ -369,8 +454,15 @@ case "$method $path" in
         # Body — raw multi-line TXT (one domain per line). Frontend sends
         # Content-Type: text/plain. whitelist_import парсит/валидирует/
         # дедуплицирует/append'ит и выводит counts.
-        body=$(read_body)
-        result=$(printf '%s' "$body" | whitelist_import) || json_fail "500 Server Error" "import failed"
+        #
+        # Потолок и read_body_raw — как у /warp/list/save: это ровно тот
+        # эндпоинт, куда пользователь грузит файл целиком, а read_body (dd bs=1)
+        # тратит сисколл на байт и держит слот CGI секундами, попутно занося всё
+        # тело в переменную шелла. 2 МБ — тот же предел, что и у списков WARP.
+        if [ "${CONTENT_LENGTH:-0}" -gt 2097152 ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "list too large (max 2 MB)"
+        fi
+        result=$(read_body_raw | whitelist_import) || json_fail "500 Internal Server Error" "import failed"
         added=$(printf '%s' "$result" | sed -n 's/.*added=\([0-9]*\).*/\1/p')
         dup=$(printf '%s' "$result" | sed -n 's/.*skipped_dup=\([0-9]*\).*/\1/p')
         inv=$(printf '%s' "$result" | sed -n 's/.*skipped_invalid=\([0-9]*\).*/\1/p')
@@ -414,14 +506,24 @@ case "$method $path" in
         w_live=$(printf '%s' "$result" | sed -n 's/.*live=\([^|]*\).*/\1/p')
         w_addr=$(printf '%s' "$result" | sed -n 's/.*addr=\([^|]*\).*/\1/p')
         w_entries=$(printf '%s' "$result" | sed -n 's/.*entries=\([0-9]*\).*/\1/p')
-        json_header
+        w_inst_j=false; [ "${w_installed:-0}" = "1" ] && w_inst_j=true
+        w_up_j=false;   [ "${w_up:-0}" = "1" ] && w_up_j=true
         # "live" is deliberately TRI-state: true / false / null. null = не проверялось или
         # проверка устарела — the UI must not paint that as a failure.
-        printf '{"ok":true,"enabled":"%s","installed":%s,"tunnel_up":%s,"live":%s,"addr":' \
-            "${w_enabled:-0}" \
-            "$([ "${w_installed:-0}" = "1" ] && echo true || echo false)" \
-            "$([ "${w_up:-0}" = "1" ] && echo true || echo false)" \
-            "$(case "${w_live:-}" in 1) echo true ;; 0) echo false ;; *) echo null ;; esac)"
+        #
+        # Ветвление вынесено ИЗ printf: `$(case ... )` разбирают не все оболочки
+        # (bash 3.2 печатает синтаксическую ошибку прямо в тело ответа, и JSON
+        # разваливается), а /warp/status лежит на пути опроса панели.
+        case "${w_live:-}" in
+            1) w_live_j=true ;;
+            0) w_live_j=false ;;
+            *) w_live_j=null ;;
+        esac
+        json_header
+        printf '{"ok":true,"enabled":'
+        json_string "${w_enabled:-0}"
+        printf ',"installed":%s,"tunnel_up":%s,"live":%s,"addr":' \
+            "$w_inst_j" "$w_up_j" "$w_live_j"
         json_string "${w_addr:-}"
         printf ',"entries":%s}\n' "${w_entries:-0}"
         exit 0
@@ -483,7 +585,14 @@ case "$method $path" in
     "POST /strategy/pool/reset")
         s_name=$(form_value "$(read_body)" "pool")
         [ -z "$s_name" ] && s_name=$(form_value "${QUERY_STRING:-}" "pool")
-        strategy_pool_reset "$s_name" || json_fail "400 Bad Request" "reset failed"
+        # Захват ОБЯЗАТЕЛЕН: strategy_pool_reset зовёт restart_service_if_running,
+        # а та печатает в stdout — либо весь вывод init-скрипта, либо «сервис не
+        # запущен». Контракт функции менять нельзя, на её stdout рассчитывает
+        # svc_action_async (job-лог). Здесь же stdout — это тело HTTP-ответа, и
+        # эти строки уезжали ПЕРЕД заголовками: lighttpd разбирает первые байты
+        # как заголовок, двоеточия в них нет — 500 либо мусор до JSON.
+        s_err=$(strategy_pool_reset "$s_name" 2>&1) || \
+            json_fail "400 Bad Request" "${s_err:-reset failed}"
         json_header
         printf '{"ok":true,"pool":'; json_string "$s_name"
         printf '}\n'
@@ -620,11 +729,23 @@ case "$method $path" in
         st=$(job_status "$id")
         log_content=$(job_log "$id")
         exit_code=$(job_exit_code "$id")
+        # unknown — состояние ТЕРМИНАЛЬНОЕ, а не «ещё идёт»: файлов задачи нет
+        # (job_reap подчистил либо роутер перезагрузился), и появиться они уже
+        # не могут. С done:false поллер панели считает такой ответ успешным,
+        # сбрасывает счётчик ошибок и крутится вечно, не отпуская глобальный
+        # UI-lock.
         done_flag=false
-        [ "$st" = "done" ] && done_flag=true
+        case "$st" in
+            done|unknown) done_flag=true ;;
+        esac
+        # exit печатается ЧИСЛОМ, без кавычек: файл лежит в /tmp и переживает
+        # обрывы записи, а нечисло сделало бы невалидным весь ответ.
+        case "$exit_code" in
+            ''|*[!0-9]*) exit_code="null" ;;
+        esac
         json_header
-        printf '{"ok":true,"status":"%s","done":%s,"exit":%s,"log":' \
-            "$st" "$done_flag" "${exit_code:-null}"
+        printf '{"ok":true,"status":'; json_string "$st"
+        printf ',"done":%s,"exit":%s,"log":' "$done_flag" "$exit_code"
         json_string "$log_content"
         printf '}\n'
         exit 0
@@ -682,14 +803,22 @@ case "$method $path" in
                     else if (c == "\n")  out = out "\\n"
                     else if (c == "\r")  out = out "\\r"
                     else if (c == "\t")  out = out "\\t"
-                    else if (ord[c] < 32) out = out sprintf("\\u%04x", ord[c])
+                    else if ((c in ord) && ord[c] < 32) out = out sprintf("\\u%04x", ord[c])
                     else                  out = out c
                 }
                 return out
             }
             $1 != "" {
                 if (n++) printf ","
-                ts = ($4 == "" ? 0 : $4)
+                # ts — единственное поле, которое уходит ЧИСЛОМ, мимо esc().
+                # Оборванная запись оставляет там что угодно, и это делает
+                # невалидным ВЕСЬ ответ, а не одну строку: таблица стейта
+                # пустеет целиком. Значение вида ,"x":1 дописало бы структуру.
+                #
+                # +0 обязательно: одной проверки на цифры мало, JSON запрещает
+                # ведущий ноль, и «0123456789» из битой записи снова уронил бы
+                # разбор всего ответа. Так же это делает state_read в actions.sh.
+                ts = ($4 ~ /^[0-9]+$/) ? $4 + 0 : 0
                 printf "{\"key\":\"%s\",\"host\":\"%s\",\"strategy\":\"%s\",\"ts\":%s,\"mode\":\"%s\"}", \
                     esc($1), esc($2), esc($3 == "" ? "0" : $3), ts, esc($5 == "" ? "auto" : $5)
             }'
@@ -755,7 +884,9 @@ case "$method $path" in
     # ---------- DEBUG FLAG (Phase 3) ----------
     "GET /debug")
         json_header
-        printf '{"ok":true,"enabled":"%s"}\n' "$(debug_flag_state)"
+        printf '{"ok":true,"enabled":'
+        json_string "$(debug_flag_state)"
+        printf '}\n'
         exit 0
         ;;
 
@@ -767,7 +898,7 @@ case "$method $path" in
             0|1) ;;
             *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
         esac
-        debug_flag_set "$val" || json_fail "500" "debug set failed"
+        debug_flag_set "$val" || json_fail "500 Internal Server Error" "debug set failed"
         json_ok
         ;;
 
@@ -806,7 +937,7 @@ case "$method $path" in
         ;;
 
     "POST /update/apply")
-        job_id=$(update_apply_async) || json_fail "500" "apply launch failed"
+        job_id=$(update_apply_async) || json_fail "500 Internal Server Error" "apply launch failed"
         json_header
         printf '{"ok":true,"job":'
         json_string "$job_id"

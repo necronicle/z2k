@@ -14,10 +14,13 @@ WHITELIST_FILE="${WHITELIST_FILE:-$LISTS_DIR/whitelist.txt}"
 EXTRA_DOMAINS_FILE="${EXTRA_DOMAINS_FILE:-$LISTS_DIR/extra-domains.txt}"
 WARP_SCRIPT="${WARP_SCRIPT:-$ZAPRET2_DIR/z2k-warp.sh}"
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$LISTS_DIR/warp}"
-# The one auto-managed WARP list: z2k-update-lists.sh refreshes it from the
-# community ru-gaming-blocklist and 3-way-merges user edits against a baseline
-# (.<name>.base). Deleting it drops a tombstone (.<name>.removed) so the
-# refresh won't resurrect it; a fresh save/create clears the tombstone.
+# Списки в $WARP_LISTS_DIR — целиком пользовательские, их не трогает никто, кроме
+# панели. Автоматически обновляются только per-game списки в подкаталоге games/
+# (z2k-update-lists.sh перезаписывает их целиком), и панель в них не пишет вовсе —
+# выбор хранится именами в .enabled. Никакого 3-way-merge, baseline'ов (.<name>.base)
+# и tombstone'ов (.<name>.removed) в дереве нет: они существовали для сводного
+# game-warp-ips.txt, который снят, а его остатки разово подчищает
+# files/z2k-warp.sh (warp_lists_migrate).
 
 # --- read helpers (POSIX sh, no sourcing of lib/utils.sh required) ---
 
@@ -31,7 +34,12 @@ read_flag() {
         printf '%s' "$def"
         return 0
     fi
-    val=$(printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')
+    # Кавычки снимаем оба вида: генератор пишет значение в двойных
+    # (config_official.sh), set_flag — в одинарных. Разворачивать shell-эскейп
+    # апострофа ('\'') здесь НЕЛЬЗЯ: safe_config_read из lib/utils.sh его тоже не
+    # разворачивает, и панель показывала бы не то имя политики, с которым реально
+    # работает сервис.
+    val=$(printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//')
     # An empty value (e.g. `DROP_DPI_RST=` with nothing after the equals)
     # must fall back to the default, not propagate as "" — otherwise the
     # caller's printf emits `"key":,` which breaks JSON. Caught in the wild
@@ -45,15 +53,153 @@ set_flag() {
     # set_flag <key> <value> <file>
     local key="$1" val="$2" file="$3"
     [ -f "$file" ] || { echo "file not found: $file" >&2; return 1; }
-    # Значение экранируется: разделитель sed — слэш, и & в замене означает
-    # «весь совпавший текст». Имя политики задаёт человек, там бывает что угодно.
-    local _esc
-    _esc=$(printf '%s' "$val" | sed 's/[&/\\]/\\&/g')
+    # Конфиг ИСПОЛНЯЕТСЯ как скрипт (files/S99zapret2.new: `. "$ZAPRET_CONFIG"`),
+    # поэтому голое POLICY_NAME=Через ВПН уводит второе слово на исполнение как
+    # команду. Всё, что не является голым безопасным словом, пишем в ОДИНАРНЫХ
+    # кавычках: двойные оставили бы работающими $ и обратную кавычку. Внутренний
+    # апостроф закрывается и вставляется отдельно ('\''), как это делает shell.
+    #
+    # Значения из [A-Za-z0-9_.-] (то есть все флаги 0/1) остаются голыми
+    # намеренно: ровно так их пишет генератор (lib/config_official.sh), и на этот
+    # вид завязаны проверки вида `grep -q "^ENABLED=1"` в files/000-zapret2.sh и
+    # z2k-nfqueue-selfheal.sh. Один ключ не должен выглядеть в конфиге
+    # по-разному в зависимости от того, кто его последним трогал.
+    local _val _esc
+    case "$val" in
+        ''|*[!A-Za-z0-9_.-]*) _val="'$(printf '%s' "$val" | sed "s/'/'\\\\''/g")'" ;;
+        *) _val="$val" ;;
+    esac
+    # Второй слой — для sed: разделитель здесь слэш, & в замене означает «весь
+    # совпавший текст», а обратный слэш мог прийти из экранирования апострофа.
+    _esc=$(printf '%s' "$_val" | sed 's/[&/\\]/\\&/g')
     if grep -q "^${key}=" "$file"; then
         sed -i "s/^${key}=.*/${key}=${_esc}/" "$file"
     else
-        echo "${key}=${val}" >> "$file"
+        printf '%s=%s\n' "$key" "$_val" >> "$file"
     fi
+}
+
+# --- запись в файлы-списки -------------------------------------------------
+#
+# Общая часть для whitelist / extra-domains / nozapret / state.tsv. mod_cgi
+# выполняет запросы ПАРАЛЛЕЛЬНО, поэтому имя временного файла обязано быть
+# уникальным: две вкладки панели делили один "$file.z2k-new", и запись одной
+# уезжала в файл другой.
+
+# Сериализация правок одного списка.
+#
+# Это не про «много пользователей» — пользователь один. Кнопки удаления в панели
+# не блокируются на время запроса, поэтому два быстрых клика подряд (обычная
+# чистка списка) уходят двумя запросами, а lighttpd выполняет CGI ПАРАЛЛЕЛЬНО.
+# Оба процесса читают файл целиком, и второй mv затирает результат первого:
+# запись показывает «Удалено», а после перезагрузки страницы возвращается.
+# Проверено на роутере — теряется 5 раз из 5, то есть это не редкая гонка.
+#
+# flock на Entware нет, дробного sleep в busybox тоже. Каталог — атомарный
+# примитив на любой ФС, паузы даёт usleep (он есть); без него деградируем на
+# посекундный sleep.
+_list_lock() {
+    local d="$1.z2k-lock" n=0
+    while ! mkdir "$d" 2>/dev/null; do
+        # Держатель мог уйти вместе с убитым CGI. Лок старше минуты — битый:
+        # любая наша критическая секция это единицы миллисекунд.
+        if [ -n "$(find "$d" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+            rmdir "$d" 2>/dev/null
+            continue
+        fi
+        n=$((n + 1))
+        [ "$n" -gt 100 ] && return 1
+        usleep 20000 2>/dev/null || sleep 1
+    done
+    return 0
+}
+
+_list_unlock() { rmdir "$1.z2k-lock" 2>/dev/null; return 0; }
+
+_file_replace() {
+    # _file_replace <dest> <tmp> — подменить содержимое уже заполненным temp'ом.
+    # Прежний `cat "$tmp" > "$dest"` СНАЧАЛА обнуляет цель: обрыв питания, ENOSPC
+    # или гонка на середине оставляли пустой список (для state.tsv — стёртый
+    # стейт ротатора вместе с заморозками). mv в пределах одной ФС атомарен, но
+    # уносит inode ВМЕСТЕ с правами и владельцем, поэтому и то и другое снимаем
+    # с цели и переносим на temp ДО подмены.
+    #
+    # Владелец здесь не формальность: state.tsv принадлежит nobody:nobody
+    # (S99zapret2 делает chown, потому что lua внутри nfqws2 работает под
+    # --user=nobody). Одна правка из панели, выполняемой от root, — и файл
+    # становится root-owned, а демон теряет право записи в собственный стейт.
+    local dest="$1" tmp="$2" meta mode owner
+    # busybox: ни stat -c, ни chmod --reference; режим восстанавливаем из
+    # символьного вида ls, владельца берём в числовом (-n) — на роутере у uid
+    # 65534 имени может не быть вовсе.
+    meta=$(ls -ldn "$dest" 2>/dev/null | awk '
+        {
+            p = substr($1, 2, 9); m = 0; c = ""
+            if (substr(p, 1, 1) == "r") m += 400
+            if (substr(p, 2, 1) == "w") m += 200
+            c = substr(p, 3, 1)
+            if (c == "x" || c == "s") m += 100
+            if (c == "s" || c == "S") m += 4000
+            if (substr(p, 4, 1) == "r") m += 40
+            if (substr(p, 5, 1) == "w") m += 20
+            c = substr(p, 6, 1)
+            if (c == "x" || c == "s") m += 10
+            if (c == "s" || c == "S") m += 2000
+            if (substr(p, 7, 1) == "r") m += 4
+            if (substr(p, 8, 1) == "w") m += 2
+            c = substr(p, 9, 1)
+            if (c == "x" || c == "t") m += 1
+            if (c == "t" || c == "T") m += 1000
+            printf "%d %s:%s\n", m, $3, $4
+            exit
+        }')
+    if [ -n "$meta" ]; then
+        mode=${meta%% *}; owner=${meta#* }
+        # chown ДО chmod: смена владельца сбрасывает setuid/setgid.
+        chown "$owner" "$tmp" 2>/dev/null
+        chmod "$mode" "$tmp" 2>/dev/null
+    else
+        chmod 644 "$tmp" 2>/dev/null
+    fi
+    mv -f "$tmp" "$dest" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    return 0
+}
+
+_list_remove_line() {
+    # _list_remove_line <file> <entry> — выкинуть строку целиком.
+    # grep возвращает 1, когда не осталось НИ ОДНОЙ строки — это пустой
+    # результат, а не ошибка: на списке из одной записи прежний код уходил в
+    # return 1, и удалить её было нельзя вообще. Настоящая ошибка чтения — это
+    # код >1, её по-прежнему не глотаем.
+    local file="$1" entry="$2" tmp="$1.z2k-new.$$" rc
+    grep -vxF "$entry" "$file" > "$tmp"; rc=$?
+    [ "$rc" -le 1 ] || { rm -f "$tmp"; return 1; }
+    _file_replace "$file" "$tmp"
+}
+
+_list_end_nl() {
+    # _list_end_nl <file> — дописать перевод строки, если файл им не кончается.
+    # Файл могли править руками или подложить снаружи; без этого новая запись
+    # приклеивается к последней (old.combar.com), и обе перестают находиться
+    # и дедупом grep -qxF, и удалением.
+    [ -s "$1" ] || return 0
+    [ -n "$(tail -c 1 "$1" 2>/dev/null)" ] && printf '\n' >> "$1"
+    return 0
+}
+
+_str_len_chars() {
+    # _str_len_chars <строка> — длина в СИМВОЛАХ, а не в байтах.
+    # ${#var} на ash считает байты, awk на роутере тоже байто-ориентированный
+    # (length("привет") == 12), поэтому считаем сами: выбрасываем продолжающие
+    # байты UTF-8 (10xxxxxx) — остаётся ровно по одному байту на символ.
+    # LC_ALL=C обязателен: в UTF-8-локали диапазон \200-\277 у GNU tr означает
+    # символы, а не байты, и не совпадёт ни с чем.
+    local s
+    s=$(printf '%s' "$1" | LC_ALL=C tr -d '\200-\277' 2>/dev/null)
+    # tr нет или он поперхнулся — считаем байты, как раньше: лучше более строгий
+    # лимит, чем пропуск строки любой длины.
+    [ -z "$s" ] && [ -n "$1" ] && s="$1"
+    printf '%s' "${#s}"
 }
 
 is_installed() {
@@ -61,7 +207,14 @@ is_installed() {
 }
 
 is_running() {
-    pgrep -f "nfqws2" >/dev/null 2>&1
+    # Матчим по отличительной части cmdline демона, как tunnel_pid: голое
+    # `pgrep -f nfqws2` ловит и процесс проверки стратегии ("$engine" --dry-run),
+    # который панель порождает сама в strategy_validate, — и параллельный опрос
+    # /status во время проверки рапортовал running:true на остановленном роутере,
+    # а restart_service_if_running в этом окне уходил в ветку рестарта.
+    # --fwmark добавляет только init-скрипт (NFQWS2_OPT_BASE в S99zapret2.new),
+    # в NFQWS2_OPT из конфига его нет, поэтому под dry-run он не попадает.
+    pgrep -f "nfqws2 .*--fwmark=" >/dev/null 2>&1
 }
 
 service_status_string() {
@@ -74,22 +227,36 @@ service_status_string() {
     fi
 }
 
-regenerate_config() {
-    # Source BOTH utils.sh (for safe_config_read and helpers) and
-    # config_official.sh (for create_official_config). Without utils.sh,
-    # safe_config_read is undefined → every saved_* variable becomes "" →
-    # the heredoc emits empty-value flags → toggle never sticks. This was
-    # the root cause of the game-mode toggle bug (2026-04-16).
+# Source BOTH utils.sh (for safe_config_read and helpers) and
+# config_official.sh (for create_official_config). Without utils.sh,
+# safe_config_read is undefined → every saved_* variable becomes "" →
+# the heredoc emits empty-value flags → toggle never sticks. This was
+# the root cause of the game-mode toggle bug (2026-04-16).
+#
+# Пути вокруг подключения сохраняются и возвращаются на место: lib/utils.sh
+# присваивает ZAPRET2_DIR/CONFIG_DIR/LISTS_DIR/INIT_SCRIPT БЕЗУСЛОВНО (без
+# ${VAR:-}), так что env-override, честно принятый в шапке этого файла, после
+# первой же перегенерации молча терялся, а CONFIG_FILE/WHITELIST_FILE/STATE_FILE
+# оставались от прежних значений — внутри одного запроса набор путей оказывался
+# наполовину переключённым.
+_gen_libs_source() {
     local utils="" lib=""
     for d in "$ZAPRET2_DIR/lib" /tmp/z2k/lib; do
         [ -f "$d/utils.sh" ] && [ -z "$utils" ] && utils="$d/utils.sh"
         [ -f "$d/config_official.sh" ] && [ -z "$lib" ] && lib="$d/config_official.sh"
     done
-    [ -z "$lib" ] && { echo "config_official.sh not found" >&2; return 1; }
+    [ -z "$lib" ] && return 1
+    local _z="$ZAPRET2_DIR" _c="$CONFIG_DIR" _l="$LISTS_DIR" _i="$INIT_SCRIPT"
     # shellcheck disable=SC1090
     [ -n "$utils" ] && . "$utils"
     # shellcheck disable=SC1090
     . "$lib"
+    ZAPRET2_DIR="$_z"; CONFIG_DIR="$_c"; LISTS_DIR="$_l"; INIT_SCRIPT="$_i"
+    return 0
+}
+
+regenerate_config() {
+    _gen_libs_source || { echo "config_official.sh not found" >&2; return 1; }
     create_official_config "$CONFIG_FILE" >/dev/null 2>&1
     return $?
 }
@@ -118,6 +285,13 @@ strategy_pool_ok() {
 # profile). The engine's own --dry-run is the oracle: rc 0 = parses, rc 1 = does
 # not. Verified on hardware, including that a bad --lua-desync name fails it.
 #
+# Живой $CUSTOM_STRAT_DIR/<pool>.txt не пишется НИ РАЗУ: генерация идёт в
+# теневом дереве (_strategy_shadow_build). Класть кандидата в боевой файл «на
+# время проверки» нельзя — убитый между записью и откатом CGI оставлял битую
+# строку живой, параллельный toggle успевал запечь её в NFQWS2_OPT, а два
+# одновременных validate одного пула снимали кандидата друг друга как «прежнее
+# состояние», и откат уезжал навсегда.
+#
 # stdin: candidate text. $1: pool. Echoes the engine's complaint on failure.
 strategy_validate() {
     local pool="$1"
@@ -126,19 +300,38 @@ strategy_validate() {
     local engine="$ZAPRET2_DIR/nfq2/nfqws2"
     [ -x "$engine" ] || { echo "движок не найден: $engine"; return 1; }
 
-    local dir="$CUSTOM_STRAT_DIR" live="$CUSTOM_STRAT_DIR/$pool.txt"
-    local saved="" had=0
-    mkdir -p "$dir" 2>/dev/null || { echo "нет каталога $dir"; return 1; }
-    if [ -f "$live" ]; then saved=$(cat "$live"); had=1; fi
+    local shadow="/tmp/z2k-strat-shadow.$$"
+    # Своя тень (PID мог быть переиспользован) — и заодно чужие, брошенные
+    # убитым CGI: проверка стратегии задачу не заводит, и без этого вызова
+    # осиротевшие тени не подчистил бы никто.
+    rm -rf "$shadow" 2>/dev/null
+    _tmp_reap_orphans
+    _strategy_shadow_build "$shadow" "$pool" || {
+        rm -rf "$shadow" 2>/dev/null
+        echo "не удалось подготовить каталог для проверки"
+        return 1
+    }
 
-    # Put the candidate in place, build a config in a THROWAWAY path, and put
-    # the previous state back before deciding anything. The live config is never
-    # touched here — a failed check must leave a working router working.
-    cat > "$live" || { echo "не удалось записать $live"; return 1; }
+    local cand="$shadow/lists/custom-strategies/$pool.txt"
+    cat > "$cand" || {
+        rm -rf "$shadow" 2>/dev/null
+        echo "не удалось записать кандидата"
+        return 1
+    }
+
+    # Строка без единой опции (пусто или одни комментарии) — не «прошедшая
+    # проверку стратегия»: генератор такой файл пропускает и собирает конфиг из
+    # штатной Strategy.txt, dry-run одобряет ЕЁ, а человек получает карточку
+    # «своя стратегия» поверх работающей штатной с ротацией.
+    if ! _strategy_body_has_options "$cand"; then
+        rm -rf "$shadow" 2>/dev/null
+        echo "пустая стратегия: нет ни одной строки с опциями (комментарии не в счёт)"
+        return 1
+    fi
 
     local tmpcfg="/tmp/z2k-strategy-check.$$"
     local rc=0 opt="" err=""
-    if regenerate_config_to "$tmpcfg"; then
+    if ( ZAPRET2_DIR="$shadow"; export ZAPRET2_DIR; regenerate_config_to "$tmpcfg" ); then
         opt=$(sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }' "$tmpcfg")
     else
         rc=1; err="не удалось собрать конфиг с этой строкой"
@@ -154,26 +347,59 @@ strategy_validate() {
     fi
 
     rm -f "$tmpcfg"
-    # Restore whatever was there before the check.
-    if [ "$had" = 1 ]; then printf '%s\n' "$saved" > "$live"; else rm -f "$live"; fi
+    rm -rf "$shadow" 2>/dev/null
 
     [ "$rc" = 0 ] || { printf '%s\n' "$err" | tail -3; return 1; }
     return 0
 }
 
+# Теневая копия $ZAPRET2_DIR для проверки кандидата: верхний уровень —
+# симлинки на всё, кроме lists; вместо lists настоящий каталог с симлинками на
+# всё, кроме custom-strategies; вместо custom-strategies настоящий каталог с
+# симлинками на чужие пулы. Проверяемый пул кладёт уже вызывающий — реальным
+# файлом, поверх которого ничего не симлинчено.
+#
+# Подсунуть генератору пустой каталог НЕЛЬЗЯ: lib/config_official.sh берёт из
+# ZAPRET2_DIR не только custom-strategies, но и config (флаги), extra_strats и
+# lists — на пустом дереве проверялась бы не та строка опций, что соберётся в бою.
+# Симлинк не создался — честный отказ; тихо вернуться к записи в живой файл
+# значит вернуть ровно тот баг, ради которого всё это и сделано.
+_strategy_shadow_build() {
+    local root="$1" pool="$2" f base
+    mkdir -p "$root/lists/custom-strategies" 2>/dev/null || return 1
+    for f in "$ZAPRET2_DIR"/* "$ZAPRET2_DIR"/.[!.]*; do
+        [ -e "$f" ] || continue
+        base=${f##*/}
+        [ "$base" = "lists" ] && continue
+        ln -s "$f" "$root/$base" 2>/dev/null || return 1
+    done
+    for f in "$ZAPRET2_DIR/lists"/* "$ZAPRET2_DIR/lists"/.[!.]*; do
+        [ -e "$f" ] || continue
+        base=${f##*/}
+        [ "$base" = "custom-strategies" ] && continue
+        ln -s "$f" "$root/lists/$base" 2>/dev/null || return 1
+    done
+    for f in "$CUSTOM_STRAT_DIR"/*.txt; do
+        [ -f "$f" ] || continue
+        base=${f##*/}
+        [ "$base" = "$pool.txt" ] && continue
+        ln -s "$f" "$root/lists/custom-strategies/$base" 2>/dev/null || return 1
+    done
+    return 0
+}
+
+# Есть ли в файле хоть одна строка с опциями. Отбрасываем ровно то же, что
+# отбрасывает z2k_custom_strategy в lib/config_official.sh (комментарии и пустые
+# строки), иначе «проверка прошла» и «генератор это увидит» разъедутся.
+_strategy_body_has_options() {
+    awk '{ sub(/\r$/, ""); sub(/^[[:space:]]*#.*$/, "") } NF { found = 1; exit } END { exit (found ? 0 : 1) }' "$1"
+}
+
 # Same as regenerate_config but writes somewhere else — used by the check above
 # so a candidate is never able to overwrite the config the router is running on.
 regenerate_config_to() {
-    local dest="$1" utils="" lib=""
-    for d in "$ZAPRET2_DIR/lib" /tmp/z2k/lib; do
-        [ -f "$d/utils.sh" ] && [ -z "$utils" ] && utils="$d/utils.sh"
-        [ -f "$d/config_official.sh" ] && [ -z "$lib" ] && lib="$d/config_official.sh"
-    done
-    [ -z "$lib" ] && return 1
-    # shellcheck disable=SC1090
-    [ -n "$utils" ] && . "$utils"
-    # shellcheck disable=SC1090
-    . "$lib"
+    local dest="$1"
+    _gen_libs_source || return 1
     create_official_config "$dest" >/dev/null 2>&1
 }
 
@@ -278,6 +504,30 @@ job_reap() {
             fi
         fi
         rm -f "/tmp/z2k-job-${id}.log" "/tmp/z2k-job-${id}.pid" "/tmp/z2k-job-${id}.exit" 2>/dev/null
+    done
+    _tmp_reap_orphans
+    return 0
+}
+
+# Осиротевший скретч в /tmp. Свой каталог/файл каждый обработчик сносит сам, но
+# CGI, убитый lighttpd'ом на таймауте или ушедший вместе с перезапуском сервера,
+# уносит уборку с собой, а очистка «по своему $$» в начале обработчика спасает
+# только при совпадении PID. /tmp на роутере — tmpfs, то есть ОПЕРАТИВКА, и
+# растёт этот мусор только вверх до перезагрузки (ради этого писался job_reap).
+#
+# Час — та же мера, что и для задач: заведомо дольше любой проверки стратегии и
+# любой проверки обновлений, то есть живое не задеваем.
+_tmp_reap_orphans() {
+    local f
+    for f in /tmp/z2k-strat-shadow.* /tmp/z2k-strategy-check.* /tmp/z2k-strategy-err.* \
+             "${AU_MANIFEST_CACHE:-/tmp/z2k-au-manifest.json}".new.*; do
+        [ -e "$f" ] || continue
+        # Проверять надо ВЫВОД find, а не его код возврата: несовпадение по
+        # -mmin это не ошибка, find печатает пустоту и выходит с нулём. На коде
+        # возврата уборщик сносил свежие скретчи — в том числе файл, в который
+        # соседний обработчик прямо сейчас пишет сообщение об ошибке.
+        [ -n "$(find "$f" -maxdepth 0 -mmin +60 2>/dev/null)" ] || continue
+        rm -rf "$f" 2>/dev/null
     done
     return 0
 }
@@ -410,6 +660,13 @@ toggle_customd() {
         [ "$_running" = "1" ] && "$INIT_SCRIPT" stop 2>&1
         set_flag "DISABLE_CUSTOM" "1" "$CONFIG_FILE" || return 1
         [ "$_running" = "1" ] && "$INIT_SCRIPT" start 2>&1
+        # Итог тумблера — записанный флаг, а не код init-скрипта. Без этого
+        # return на остановленном сервисе AND-list отдавал 1 при УСПЕШНОМ
+        # выключении, код уезжал в .exit джоба, и панель откатывала галочку с
+        # «Не получилось» поверх записанного DISABLE_CUSTOM=1. Ветка включения
+        # ниже тоже не смотрит на код рестарта (restart_service_if_running
+        # глушит его сама).
+        return 0
     else
         set_flag "DISABLE_CUSTOM" "0" "$CONFIG_FILE" || return 1
         restart_service_if_running
@@ -536,12 +793,22 @@ policy_save() {
     # Запрещено ровно то, что опасно при `. config`: кавычка рвёт строку,
     # доллар и обратная кавычка подставляют/выполняют, обратный слэш экранирует.
     # Перевод строки и точка с запятой позволили бы дописать команду.
+    #
+    # Апостроф запрещён не из-за исполнения (set_flag его экранирует как '\'' и
+    # `. config` читает имя верно), а потому что обратно его не разворачивает
+    # никто: safe_config_read из lib/utils.sh отдаёт O'\''Brien, и следующая же
+    # перегенерация — её вызывает сам policy_save — записывает испорченное имя в
+    # конфиг навсегда.
+    # Вертикальная черта — разделитель полей в выдаче policy_status
+    # (name=%s|exclude=%s|exists=%s), имя с ней приезжает в панель обрезанным.
     case "$name" in
         '') name="" ;;
-        *[\"\$\`\\]*|*';'*|*'
+        *[\"\$\`\\\']*|*'|'*|*';'*|*'
 '*) echo "invalid policy name" >&2; return 1 ;;
     esac
-    if [ -n "$name" ] && [ ${#name} -gt 32 ]; then
+    # Длина — в СИМВОЛАХ: ${#name} на ash считает БАЙТЫ, и кириллическое имя
+    # длиннее ~16 символов отвергалось при лимите формы в 32.
+    if [ -n "$name" ] && [ "$(_str_len_chars "$name")" -gt 32 ]; then
         echo "policy name too long" >&2; return 1
     fi
     case "$exclude" in
@@ -569,18 +836,110 @@ policy_save() {
 # исключение начинало действовать без ожидания ночной задачи.
 EXCLUDE_FILE="${EXCLUDE_FILE:-$ZAPRET2_DIR/ipset/zapret-hosts-user-exclude.txt}"
 
+# Одна строка файла -> значение записи. Разбор ОБЯЗАН совпадать с тем, что
+# делает z2k_seed_user_exclusions в S99zapret2: он режет хвостовой комментарий
+# и пробелы, а панель раньше отдавала строку как есть. Из-за расхождения
+# «203.0.113.5 # камера» реально работал (сеялся в nozapret), но в панели висел
+# в блоке «эти записи ничего не делают», и кнопка удаления отвечала 400 —
+# убрать запись было нельзя вообще. То же с ведущим пробелом и с CRLF.
+_exclude_norm() {
+    local v="${1%%#*}"
+    v="${v%"${v##*[![:space:]]}"}"
+    v="${v#"${v%%[![:space:]]*}"}"
+    printf '%s' "$v"
+}
+
 exclude_list() {
     [ -f "$EXCLUDE_FILE" ] || { echo ""; return 0; }
     grep -vE '^[[:space:]]*(#|$)' "$EXCLUDE_FILE"
 }
 
-# Запись похожа на адрес/подсеть (а не на домен)? Тогда её можно применить живьём.
+# Домены, осевшие в адресном файле, пока панель их сюда принимала. Они не
+# действовали никогда, и вычищать их молча нельзя — человек их вписывал
+# осознанно. Показываем отдельно, чтобы он сам решил перенести или удалить.
+exclude_list_legacy_domains() {
+    [ -f "$EXCLUDE_FILE" ] || return 0
+    grep -vE '^[[:space:]]*(#|$)' "$EXCLUDE_FILE" | while IFS= read -r _e; do
+        _e=$(_exclude_norm "$_e")
+        [ -n "$_e" ] || continue
+        _exclude_looks_like_ip "$_e" || printf '%s\n' "$_e"
+    done
+}
+
+exclude_list_addresses() {
+    [ -f "$EXCLUDE_FILE" ] || return 0
+    grep -vE '^[[:space:]]*(#|$)' "$EXCLUDE_FILE" | while IFS= read -r _e; do
+        _e=$(_exclude_norm "$_e")
+        [ -n "$_e" ] || continue
+        _exclude_looks_like_ip "$_e" && printf '%s\n' "$_e"
+    done
+}
+
+# Настоящая проверка адреса, а не «похоже на адрес». Прежняя эвристика пускала
+# в ipset всё, что состоит из цифр, точек и слеша, плюс ЛЮБУЮ строку с
+# двоеточием — то есть example.com:443 и https://example.com проезжали как IPv6
+# ровно через тот гейт, который заводился, чтобы домены сюда не попадали.
+# А ошибку ipset глушил `2>/dev/null`, поэтому панель рапортовала «Добавлено» и
+# показывала запись как действующую, хотя исключения не появлялось.
+#
+# Ведущие нули запрещены отдельно: ipset читает 010.1.2.3 как восьмеричное.
+# Ровно четыре октета — тоже: 1.2.3 он дополняет нулём В СЕРЕДИНЕ и заводит
+# 1.2.0.3, то есть исключает адрес, которого человек не называл. Проверено на
+# роутере.
+_octet_ok() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+        0) return 0 ;;
+        0*) return 1 ;;
+    esac
+    [ "$1" -le 255 ]
+}
+
+_prefix_ok() {  # $1=длина, $2=потолок
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+        0) return 0 ;;
+        0*) return 1 ;;
+    esac
+    [ "$1" -le "$2" ]
+}
+
+_exclude_is_ipv4() {
+    local a="$1" pfx="" o1 o2 o3 o4 rest o
+    case "$a" in
+        */*) pfx="${a#*/}"; a="${a%%/*}"
+             case "$pfx" in *[/]*) return 1 ;; esac
+             _prefix_ok "$pfx" 32 || return 1 ;;
+    esac
+    IFS=. read -r o1 o2 o3 o4 rest <<EOF
+$a
+EOF
+    [ -z "$rest" ] || return 1
+    for o in "$o1" "$o2" "$o3" "$o4"; do _octet_ok "$o" || return 1; done
+    return 0
+}
+
+_exclude_is_ipv6() {
+    local a="$1" pfx="" dd
+    case "$a" in
+        */*) pfx="${a#*/}"; a="${a%%/*}"
+             case "$pfx" in *[/]*) return 1 ;; esac
+             _prefix_ok "$pfx" 128 || return 1 ;;
+    esac
+    case "$a" in
+        *:*) ;;
+        *) return 1 ;;
+    esac
+    case "$a" in *[!0-9A-Fa-f:]*) return 1 ;; esac
+    case "$a" in *:::*) return 1 ;; esac
+    dd=$(printf '%s' "$a" | awk '{print gsub(/::/,"::")}')
+    [ "${dd:-0}" -le 1 ]
+}
+
 _exclude_looks_like_ip() {
     case "$1" in
-        *:*) return 0 ;;                 # IPv6 (в т.ч. с /len)
-        *[!0-9./]*) return 1 ;;          # есть буквы — домен
-        *[0-9]*) return 0 ;;             # только цифры/точки/слеш — IPv4/CIDR
-        *) return 1 ;;
+        *:*) _exclude_is_ipv6 "$1" ;;
+        *)   _exclude_is_ipv4 "$1" ;;
     esac
 }
 
@@ -608,11 +967,36 @@ _exclude_validate() {
 }
 
 exclude_add() {
+    _list_lock "$EXCLUDE_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _exclude_add_locked "$@"; _rc=$?
+    _list_unlock "$EXCLUDE_FILE"
+    return $_rc
+}
+
+_exclude_add_locked() {
     local entry="$1"
     _exclude_validate "$entry" || { echo "invalid entry" >&2; return 1; }
+    # Домен сюда больше не принимаем. Раньше принимали — и он молча оседал в
+    # файле навсегда: в ipset имя выразить нельзя, а цепочка, которая по замыслу
+    # апстрима резолвила бы его в адреса, в z2k не выполняется. Исключение по
+    # имени работает в другом месте (--hostlist-exclude, lists/whitelist.txt) и
+    # применяется живьём.
+    # Домен и опечатка в адресе — разные ошибки, и советовать по ним надо разное.
+    # Раньше 999.1.2.3 получал «это домен, идите во вкладку Домены», что для
+    # человека выглядит как издевательство.
+    if ! _exclude_looks_like_ip "$entry"; then
+        case "$entry" in
+            *[a-zA-Z]*)
+                echo "это домен — добавьте его во вкладке «Домены», здесь только адреса и подсети" >&2 ;;
+            *)
+                echo "не похоже на адрес или подсеть: проверьте запись (пример: 203.0.113.7 или 203.0.113.0/24)" >&2 ;;
+        esac
+        return 1
+    fi
     mkdir -p "$(dirname "$EXCLUDE_FILE")" 2>/dev/null
     touch "$EXCLUDE_FILE" 2>/dev/null
     if ! grep -qxF "$entry" "$EXCLUDE_FILE"; then
+        _list_end_nl "$EXCLUDE_FILE"
         printf '%s\n' "$entry" >> "$EXCLUDE_FILE"
         chmod 644 "$EXCLUDE_FILE" 2>/dev/null || true
     fi
@@ -624,19 +1008,41 @@ exclude_add() {
 }
 
 exclude_delete() {
+    _list_lock "$EXCLUDE_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _exclude_delete_locked "$@"; _rc=$?
+    _list_unlock "$EXCLUDE_FILE"
+    return $_rc
+}
+
+_exclude_delete_locked() {
     local entry="$1"
-    _exclude_validate "$entry" || { echo "invalid entry" >&2; return 1; }
+    # Проверка мягче, чем при добавлении, и намеренно. Удалять приходится и то,
+    # что добавлением сегодня уже не пропустить: легаси-домены с подчёркиванием
+    # или звёздочкой панель показывает с кнопкой «удалить», а строгий чарсет
+    # отвечал на неё 400 — то есть блок «уберите это отсюда» не работал ровно
+    # на своём содержимом. Значение приходит из нашего же листинга; опасен тут
+    # только перевод строки, он бы разъехался на две записи.
+    # Перевод строки задаётся литералом: $(printf '\n') не годится — подстановка
+    # срезает хвостовые переводы строк, шаблон вырождается в пустой и матчит всё.
+    case "$entry" in
+        ''|*'
+'*) echo "invalid entry" >&2; return 1 ;;
+    esac
     if _exclude_looks_like_ip "$entry"; then
         _exclude_ipset_apply del "$entry"
     fi
     [ -f "$EXCLUDE_FILE" ] || return 0
-    grep -qxF "$entry" "$EXCLUDE_FILE" || return 0
-    # Переписываем через temp, не подменяя inode (сохранить права/владельца).
-    local tmp="$EXCLUDE_FILE.z2k-new"
-    grep -vxF "$entry" "$EXCLUDE_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
-    cat "$tmp" > "$EXCLUDE_FILE"
-    rm -f "$tmp"
-    chmod 644 "$EXCLUDE_FILE" 2>/dev/null || true
+    # Удаляем по ЗНАЧЕНИЮ, а не по точному совпадению строки: панель показывает
+    # запись уже нормализованной, и «203.0.113.5» обязан убирать строку
+    # «203.0.113.5 # камера», иначе кнопка удаления не работает ровно на тех
+    # записях, которые человек правил руками.
+    local tmp="$EXCLUDE_FILE.z2k-new.$$" found=0
+    while IFS= read -r _l || [ -n "$_l" ]; do
+        if [ "$(_exclude_norm "$_l")" = "$entry" ]; then found=1; continue; fi
+        printf '%s\n' "$_l"
+    done < "$EXCLUDE_FILE" > "$tmp" || { rm -f "$tmp"; echo "не удалось сохранить список" >&2; return 1; }
+    [ "$found" = "1" ] || { rm -f "$tmp"; return 0; }
+    _file_replace "$EXCLUDE_FILE" "$tmp" || { echo "не удалось сохранить список" >&2; return 1; }
     return 0
 }
 
@@ -648,6 +1054,13 @@ whitelist_list() {
 }
 
 whitelist_add() {
+    _list_lock "$WHITELIST_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _whitelist_add_locked "$@"; _rc=$?
+    _list_unlock "$WHITELIST_FILE"
+    return $_rc
+}
+
+_whitelist_add_locked() {
     local domain="$1"
     # Basic sanity: lowercase letters/digits/.-, no spaces, no shell metachars.
     # Reject leading `-` defensively — no legitimate hostname starts with one
@@ -657,11 +1070,20 @@ whitelist_add() {
         -*) echo "invalid domain" >&2; return 1 ;;
         *[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac
+    # Симметрично адресной вкладке. Этот список уходит движку как
+    # --hostlist-exclude, то есть сверяется с ИМЕНЕМ хоста; вписанный сюда адрес
+    # не совпадёт ни с чем никогда, а панель отвечала «Добавлено» и показывала
+    # его в списке — то же тихое ничегонеделание, что было с доменами в адресах.
+    if _exclude_is_ipv4 "$domain"; then
+        echo "это адрес — добавьте его во вкладке «Адреса», здесь только домены" >&2
+        return 1
+    fi
     mkdir -p "$LISTS_DIR" 2>/dev/null
     touch "$WHITELIST_FILE" 2>/dev/null
     if grep -qxF "$domain" "$WHITELIST_FILE"; then
         return 0  # idempotent
     fi
+    _list_end_nl "$WHITELIST_FILE"
     printf '%s\n' "$domain" >> "$WHITELIST_FILE"
     # nfqws2 runs as nobody (uid 65534) and must be able to read the file.
     chmod 644 "$WHITELIST_FILE" 2>/dev/null || true
@@ -709,14 +1131,23 @@ whitelist_import() {
     sort -u "$tmpnew" > "$tmpnewuniq"
     grep -vE '^[[:space:]]*(#|$)' "$WHITELIST_FILE" | sort -u > "$tmpexisting"
     # busybox `comm` ненадёжен (Input/output error на Entware) — используем awk:
-    # NR==FNR проходит первым существующий список, marks each in `e[]`;
+    # первым файлом проходит существующий список, marks each in `e[]`;
     # затем по новому списку печатает только те которые НЕ в `e[]`.
-    awk 'NR==FNR { e[$0]=1; next } !e[$0]' "$tmpexisting" "$tmpnewuniq" > "$tmpadd"
+    #
+    # Разделяем файлы по FILENAME, а не по NR==FNR: на ПУСТОМ существующем
+    # списке awk не читает из него ни одной записи, NR==FNR остаётся истинным
+    # для всего второго файла — и весь импорт уезжает в e[], не печатая ничего.
+    # Это путь первого импорта у каждого нового пользователя: whitelist.txt ещё
+    # пуст, и панель отвечала added=0 на любой файл.
+    awk -v ex="$tmpexisting" 'FILENAME == ex { e[$0]=1; next } !e[$0]' \
+        "$tmpexisting" "$tmpnewuniq" > "$tmpadd"
     local added skipped_dup
     added=$(wc -l < "$tmpadd" | tr -d ' ')
-    skipped_dup=$(awk 'NR==FNR { e[$0]=1; next } e[$0]' "$tmpexisting" "$tmpnewuniq" | wc -l | tr -d ' ')
+    skipped_dup=$(awk -v ex="$tmpexisting" 'FILENAME == ex { e[$0]=1; next } e[$0]' \
+        "$tmpexisting" "$tmpnewuniq" | wc -l | tr -d ' ')
 
     if [ "$added" -gt 0 ]; then
+        _list_end_nl "$WHITELIST_FILE"
         cat "$tmpadd" >> "$WHITELIST_FILE"
         chmod 644 "$WHITELIST_FILE" 2>/dev/null || true
         # NB: НЕ рестартим — whitelist live.
@@ -727,6 +1158,13 @@ whitelist_import() {
 }
 
 whitelist_delete() {
+    _list_lock "$WHITELIST_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _whitelist_delete_locked "$@"; _rc=$?
+    _list_unlock "$WHITELIST_FILE"
+    return $_rc
+}
+
+_whitelist_delete_locked() {
     local domain="$1"
     [ -f "$WHITELIST_FILE" ] || return 0
     case "$domain" in
@@ -737,14 +1175,9 @@ whitelist_delete() {
     if ! grep -qxF "$domain" "$WHITELIST_FILE"; then
         return 0  # idempotent
     fi
-    # In-place rewrite via temp file — preserve original permissions/owner
-    # by never replacing the inode with mktemp's default 600-mode file.
-    local tmp="$WHITELIST_FILE.z2k-new"
-    grep -vxF "$domain" "$WHITELIST_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
-    cat "$tmp" > "$WHITELIST_FILE"
-    rm -f "$tmp"
-    chmod 644 "$WHITELIST_FILE" 2>/dev/null || true
+    _list_remove_line "$WHITELIST_FILE" "$domain" || { echo "не удалось сохранить список" >&2; return 1; }
     # NB: НЕ рестартим — whitelist live (см. whitelist_add).
+    return 0
 }
 
 # --- extra-domains ---
@@ -759,6 +1192,13 @@ extra_domains_list() {
 }
 
 extra_domains_add() {
+    _list_lock "$EXTRA_DOMAINS_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _extra_domains_add_locked "$@"; _rc=$?
+    _list_unlock "$EXTRA_DOMAINS_FILE"
+    return $_rc
+}
+
+_extra_domains_add_locked() {
     local domain="$1"
     case "$domain" in
         ''|*' '*) echo "invalid domain" >&2; return 1 ;;
@@ -775,12 +1215,20 @@ extra_domains_add() {
     if grep -qxF "$domain" "$EXTRA_DOMAINS_FILE"; then
         return 0  # idempotent
     fi
+    _list_end_nl "$EXTRA_DOMAINS_FILE"
     printf '%s\n' "$domain" >> "$EXTRA_DOMAINS_FILE"
     chmod 644 "$EXTRA_DOMAINS_FILE" 2>/dev/null || true
     # NB: НЕ рестартим сервис — extra-domains.txt подхватывается live.
 }
 
 extra_domains_delete() {
+    _list_lock "$EXTRA_DOMAINS_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _extra_domains_delete_locked "$@"; _rc=$?
+    _list_unlock "$EXTRA_DOMAINS_FILE"
+    return $_rc
+}
+
+_extra_domains_delete_locked() {
     local domain="$1"
     [ -f "$EXTRA_DOMAINS_FILE" ] || return 0
     case "$domain" in
@@ -794,20 +1242,19 @@ extra_domains_delete() {
     if ! grep -qxF "$domain" "$EXTRA_DOMAINS_FILE"; then
         return 0  # idempotent
     fi
-    local tmp="$EXTRA_DOMAINS_FILE.z2k-new"
-    grep -vxF "$domain" "$EXTRA_DOMAINS_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
-    cat "$tmp" > "$EXTRA_DOMAINS_FILE"
-    rm -f "$tmp"
-    chmod 644 "$EXTRA_DOMAINS_FILE" 2>/dev/null || true
+    _list_remove_line "$EXTRA_DOMAINS_FILE" "$domain" || { echo "не удалось сохранить список" >&2; return 1; }
     # NB: НЕ рестартим сервис.
+    return 0
 }
 
 # --- WARP lists (webpanel «WARP» section) ---
 # User-owned IPv4/CIDR lists in $WARP_LISTS_DIR — z2k-warp.sh loads ALL *.txt
-# there into the z2k_warp ipset. Same file-writing conventions as whitelist:
-# temp-rewrite preserving the inode, chmod 644, no service restart. After any
-# mutation, if WARP is enabled we rebuild the live ipset (`z2k-warp.sh ipset`,
-# an ipset-restore bulk load — subsecond even for the 18k-entry game list).
+# there into the z2k_warp ipset. Те же правила записи, что и у whitelist:
+# наполненный temp подменяет файл целиком через _file_replace (rename, а не
+# «обнулить и залить»), режим и владелец переносятся на новый inode, сервис не
+# перезапускается. After any mutation, if WARP is enabled we rebuild the live
+# ipset (`z2k-warp.sh ipset`, an ipset-restore bulk load — subsecond even for
+# the 18k-entry game list).
 
 warp_name_ok() {
     # List name (WITHOUT .txt): 1-64 chars of [A-Za-z0-9._-]. The charset
@@ -968,14 +1415,32 @@ warp_list_save() {
     warp_lists_ensure_dir
     [ -d "$WARP_LISTS_DIR" ] || { echo "lists dir unavailable" >&2; return 1; }
     local file="$WARP_LISTS_DIR/$name.txt"
-    if [ "$mode" = "create" ] && [ -f "$file" ]; then
-        echo "list already exists" >&2; return 1
+    if [ "$mode" = "create" ]; then
+        # Заявка на имя атомарна. Проверка [ -f ] и запись ниже разнесены во
+        # времени на всё чтение тела, и два одновременных «создать» с одним
+        # именем проходили её оба — второй молча затирал первый.
+        # noclobber-перенаправление либо создаёт файл, либо падает; -C ставим в
+        # подоболочке, иначе опция осталась бы висеть на всём запросе.
+        #
+        # Причину отказа различаем по факту: «имя занято» — это когда файл после
+        # неудачи есть. Иначе создать не дали (RO-раздел, нет места, права), и
+        # сообщать про занятое имя тут — врать; человек ищет чужой список, а
+        # чинить надо раздел.
+        local _mkerr
+        _mkerr=$( ( set -C; : > "$file" ) 2>&1 ) || {
+            if [ -e "$file" ]; then
+                echo "list already exists" >&2
+            else
+                echo "не удалось создать список: ${_mkerr:-нет доступа к $WARP_LISTS_DIR}" >&2
+            fi
+            return 1
+        }
     fi
     # $$-suffixed temps: concurrent CGI saves of the same list must not share
     # scratch files (lighttpd mod_cgi runs requests in parallel).
     local raw="$file.z2k-raw.$$" tmp="$file.z2k-new.$$"
 
-    cat > "$raw" || { rm -f "$raw"; echo "read body failed" >&2; return 1; }
+    cat > "$raw" || { rm -f "$raw"; _warp_create_abort "$mode" "$file"; echo "read body failed" >&2; return 1; }
     awk '
 # --- z2k warp address filter (canonical; keep byte-identical in all 3 copies) ---
 function z2k_warp_addr_ok(s,   ip, h, o) {
@@ -1005,7 +1470,7 @@ function z2k_warp_addr_ok(s,   ip, h, o) {
             if ($0 == "") next
             if ($0 ~ /^#/) { print; next }
             if (z2k_warp_addr_ok($0)) print
-        }' "$raw" > "$tmp" || { rm -f "$raw" "$tmp"; echo "sanitize failed" >&2; return 1; }
+        }' "$raw" > "$tmp" || { rm -f "$raw" "$tmp"; _warp_create_abort "$mode" "$file"; echo "sanitize failed" >&2; return 1; }
 
     local total saved skipped
     total=$(awk '{sub(/\r$/,""); gsub(/^[ \t]+|[ \t]+$/,"")} $0 != "" && $0 !~ /^#/ {n++} END{print n+0}' "$raw")
@@ -1015,20 +1480,33 @@ function z2k_warp_addr_ok(s,   ip, h, o) {
 
     if [ "$mode" = "append" ]; then
         touch "$file" 2>/dev/null
+        # Файл мог остаться без завершающего перевода строки (правка руками,
+        # импорт со стороны): без этого 1.2.3.4 и дописанный 5.6.7.8 склеиваются
+        # в 1.2.3.45.6.7.8 — панель рапортует saved=1, а загрузчик ipset и
+        # счётчик записей видят НОЛЬ валидных адресов, пропадают оба.
+        _list_end_nl "$file"
         cat "$tmp" >> "$file" || { rm -f "$tmp"; echo "write failed" >&2; return 1; }
     else
-        # Rewrite preserving the inode/permissions (never mv a 600-mode temp
-        # over the file — same rule as whitelist_delete).
-        cat "$tmp" > "$file" || { rm -f "$tmp"; echo "write failed" >&2; return 1; }
+        # Подмена целиком, а не `cat "$tmp" > "$file"`: cat СНАЧАЛА обнуляет
+        # цель, и обрыв питания или ENOSPC на середине превращал список из 18k
+        # адресов в пустой, после чего warp_ipset_reload_if_enabled заливал
+        # пустой ipset. Заявку create (noclobber выше) rename не снимает: имя не
+        # освобождается ни на мгновение, оно лишь начинает указывать на новый
+        # inode, и параллельный create по-прежнему упирается в занятое имя.
+        _file_replace "$file" "$tmp" || { _warp_create_abort "$mode" "$file"; echo "write failed" >&2; return 1; }
     fi
     rm -f "$tmp"
     chmod 644 "$file" 2>/dev/null || true
-    # Clear the removal tombstone only AFTER the write succeeded. Doing it
-    # earlier (before the body was even written) meant a save that then failed
-    # — e.g. ENOSPC on /opt — left no list but a cleared tombstone, so the next
-    # refresh resurrected the whole list the user had deleted.
     warp_ipset_reload_if_enabled
     printf 'saved=%d skipped_invalid=%d\n' "${saved:-0}" "${skipped:-0}"
+}
+
+_warp_create_abort() {
+    # Освободить заявленное create-именем пустое место, если тело так и не
+    # записалось: иначе повторная попытка упрётся в «список уже существует»
+    # на файле, которого пользователь никогда не видел.
+    [ "$1" = "create" ] && rm -f "$2"
+    return 0
 }
 
 warp_list_read_path() {
@@ -1043,11 +1521,15 @@ warp_list_read_path() {
 warp_list_delete() {
     local name="$1"
     warp_name_ok "$name" || { echo "invalid list name" >&2; return 1; }
-    rm -f "$WARP_LISTS_DIR/$name.txt" || { echo "delete failed" >&2; return 1; }
-    # Deleting the auto-managed game list is a deliberate opt-out: drop the
-    # merge baseline and leave a tombstone so z2k-update-lists.sh does NOT
-    # resurrect it on the next refresh.
+    local file="$WARP_LISTS_DIR/$name.txt"
+    # Удаление ИДЕМПОТЕНТНО: несуществующий список — это уже требуемый
+    # результат, а не ошибка. Повторный клик по «удалить» (панель успевает
+    # отправить два запроса) не должен показывать «не получилось» на списке,
+    # которого и так больше нет.
+    [ -f "$file" ] || return 0
+    rm -f "$file" || { echo "delete failed" >&2; return 1; }
     warp_ipset_reload_if_enabled
+    return 0
 }
 
 # --- tunnel (Telegram) ---
@@ -1146,7 +1628,35 @@ job_status() {
 job_log() {
     local id="$1"
     local log_file="/tmp/z2k-job-$id.log"
-    [ -f "$log_file" ] && tail -c 16384 "$log_file" || true
+    [ -f "$log_file" ] || return 0
+    local size body
+    size=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ')
+    if [ "${size:-0}" -le 16384 ] 2>/dev/null; then
+        cat "$log_file"
+        return 0
+    fi
+    # Резать по границе БАЙТА нельзя: логи русские, и разрез посреди UTF-8
+    # последовательности даёт битый байт в ответе с charset=utf-8 — response.json()
+    # во фронте бросает исключение, и модалка живого лога виснет намертво на любой
+    # задаче длиннее лимита (переустановка — всегда длиннее). Первую строку среза
+    # выбрасываем целиком: только она может быть обрезана.
+    body=$(tail -c 16384 "$log_file" | tail -n +2)
+    if [ -n "$body" ]; then
+        printf '%s\n' "$body"
+        return 0
+    fi
+    # Вырожденный случай: в последних 16 КБ нет ни одного перевода строки —
+    # прогресс идёт через \r (curl, opkg), и вся отдача это одна строка.
+    # Выбрасывать нечего, поэтому сдвигаем сам срез вправо до начала символа:
+    # считаем, сколько продолжающих байт UTF-8 (10xxxxxx) стоит в его начале, и
+    # берём на столько байт меньше. Иначе в ответ снова уезжает обрубок
+    # последовательности и модалка виснет ровно так же.
+    local skip
+    skip=$(tail -c 16384 "$log_file" | od -An -N3 -tu1 2>/dev/null | awk '
+        { for (i = 1; i <= NF; i++) { if ($i >= 128 && $i <= 191) c++; else break } }
+        END { print c + 0 }')
+    case "$skip" in ''|*[!0-9]*) skip=0 ;; esac
+    tail -c $((16384 - skip)) "$log_file"
 }
 
 job_exit_code() {
@@ -1213,7 +1723,7 @@ _chars_ok() {
     [ -z "$(printf '%s' "$1" | tr -d "$2" 2>/dev/null)" ]
 }
 
-# Remove one row by host+key from a single state file, preserving inode.
+# Remove one row by host+key from a single state file.
 # Caller has already validated key/host. No-op if the file is absent.
 _state_delete_one_file() {
     local file="$1" key="$2" host="$3"
@@ -1224,14 +1734,12 @@ _state_delete_one_file() {
     # Even though the caller's sanitiser rejects non-DNS chars, the wildcard
     # semantics inside the regex itself still over-match legitimately-named
     # hosts that differ only by punctuation.
-    local tmp="$file.z2k-new"
+    local tmp="$file.z2k-new.$$"
     awk -F'\t' -v key="$key" -v host="$host" '
         ($1 == key && $2 == host) { next }
         { print }
     ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
-    cat "$tmp" > "$file"
-    rm -f "$tmp"
-    chmod 644 "$file" 2>/dev/null || true
+    _file_replace "$file" "$tmp"
 }
 
 # Delete one row by host+key. Host and key together uniquely identify a row.
@@ -1272,7 +1780,7 @@ state_clear_all() {
 
 # Upsert one row (key,host) with strategy+mode+ts into a single state file,
 # creating it (with header) if absent. Preserves all other rows; field-equality
-# replace (NOT regex — see _state_delete_one_file for why). Inode preserved.
+# replace (NOT regex — see _state_delete_one_file for why).
 # Caller has validated all fields.
 _state_set_one_file() {
     local file="$1" key="$2" host="$3" strat="$4" mode="$5" ts="$6"
@@ -1281,17 +1789,19 @@ _state_set_one_file() {
     if [ ! -f "$file" ]; then
         printf '# z2k autocircular state (persisted circular nstrategy)\n# key\thost\tstrategy\tts\tmode\n' \
             > "$file" 2>/dev/null || return 1
+        # Файл создали мы — задаём права явно. Дальше _file_replace переносит на
+        # новый inode права и владельца ЦЕЛИ, то есть режим от umask lighttpd
+        # закрепился бы навсегда, а читать этот файл nfqws2 должен от nobody.
+        chmod 644 "$file" 2>/dev/null
     fi
-    local tmp="$file.z2k-new"
+    local tmp="$file.z2k-new.$$"
     awk -F'\t' -v key="$key" -v host="$host" -v strat="$strat" -v mode="$mode" -v ts="$ts" '
         BEGIN { OFS="\t" }
         ($1 == key && $2 == host) { next }      # drop any prior row for this key+host
         { print }
         END { print key, host, strat, ts, mode } # append the upserted row
     ' "$file" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
-    cat "$tmp" > "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
-    rm -f "$tmp"
-    chmod 644 "$file" 2>/dev/null || true
+    _file_replace "$file" "$tmp" || return 1
     return 0
 }
 
@@ -1405,6 +1915,21 @@ debug_flag_set() {
 AU_TAG_FILE="${AU_TAG_FILE:-$ZAPRET2_DIR/.z2k-installed-tag}"
 AU_MANIFEST_CACHE="${AU_MANIFEST_CACHE:-/tmp/z2k-au-manifest.json}"
 AU_MANIFEST_CACHE_TTL="${AU_MANIFEST_CACHE_TTL:-300}"
+# Негативный кэш. Неудача не оставляла на диске ничего, TTL-гейт выше не
+# срабатывал, и КАЖДАЯ загрузка дашборда заново гоняла весь забег по зеркалам —
+# ровно на тех сетях, ради которых зеркала и появились.
+AU_MANIFEST_FAIL_STAMP="${AU_MANIFEST_FAIL_STAMP:-${AU_MANIFEST_CACHE}.fail}"
+AU_MANIFEST_FAIL_TTL="${AU_MANIFEST_FAIL_TTL:-300}"
+# Потолок на ВСЮ попытку. z2k_fetch — это до четырёх хопов, каждый со своими
+# --connect-timeout 10 --max-time 180 (lib/utils.sh), то есть до ~12 минут
+# синхронного CGI на GET /update/status, который фронт дёргает при каждой
+# инициализации дашборда.
+AU_MANIFEST_FETCH_TIMEOUT="${AU_MANIFEST_FETCH_TIMEOUT:-20}"
+# Чем тянули манифест в последний раз: mirrors (z2k_fetch со всеми зеркалами)
+# или curl (деградация — lib/utils.sh не нашлась). api.sh читает это через
+# update_manifest_source и показывает человеку: stderr отсюда он глушит, и
+# «деградация не молча» иначе остаётся обещанием.
+AU_MANIFEST_SOURCE_FILE="${AU_MANIFEST_SOURCE_FILE:-${AU_MANIFEST_CACHE}.source}"
 AU_SCRIPT="${AU_SCRIPT:-$ZAPRET2_DIR/z2k-auto-update.sh}"
 AU_LOG_FILE="${AU_LOG_FILE:-/opt/var/log/z2k-auto-update.log}"
 
@@ -1425,24 +1950,126 @@ file_mtime() {
 
 # Refresh /tmp manifest cache when older than TTL (or force=1).
 update_refresh_manifest() {
-    local force="${1:-0}"
-    if [ "$force" != "1" ] && [ -s "$AU_MANIFEST_CACHE" ]; then
-        local age now mtime
-        now=$(date +%s 2>/dev/null || echo 0)
-        mtime=$(file_mtime "$AU_MANIFEST_CACHE")
-        age=$((now - mtime))
-        [ "$age" -lt "$AU_MANIFEST_CACHE_TTL" ] && return 0
+    local force="${1:-0}" age now mtime url tmp
+    now=$(date +%s 2>/dev/null || echo 0)
+    if [ "$force" != "1" ]; then
+        if [ -s "$AU_MANIFEST_CACHE" ]; then
+            mtime=$(file_mtime "$AU_MANIFEST_CACHE")
+            age=$((now - mtime))
+            [ "$age" -lt "$AU_MANIFEST_CACHE_TTL" ] && return 0
+        fi
+        # Недавняя неудача — в сеть не идём вовсе. Ручная кнопка «проверить»
+        # (force=1) этот гейт минует: человек ждёт результата и знает, чего ждёт.
+        if [ -f "$AU_MANIFEST_FAIL_STAMP" ]; then
+            mtime=$(file_mtime "$AU_MANIFEST_FAIL_STAMP")
+            age=$((now - mtime))
+            if [ "$age" -lt "$AU_MANIFEST_FAIL_TTL" ]; then
+                [ -s "$AU_MANIFEST_CACHE" ] && return 0
+                return 1
+            fi
+        fi
     fi
-    local url="https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/UPDATES.json"
-    local tmp="${AU_MANIFEST_CACHE}.new"
-    if curl -fsSL --max-time 15 "$url" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-        mv "$tmp" "$AU_MANIFEST_CACHE"
+    url="https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/UPDATES.json"
+    # $$ в имени: mod_cgi выполняет запросы параллельно, общий temp двух
+    # одновременных проверок — это подмена тела на полпути.
+    tmp="${AU_MANIFEST_CACHE}.new.$$"
+    if _update_fetch_manifest "$url" "$tmp" && _update_manifest_sane "$tmp"; then
+        mv -f "$tmp" "$AU_MANIFEST_CACHE"
+        rm -f "$tmp.etag" "$AU_MANIFEST_FAIL_STAMP"
         return 0
     fi
-    rm -f "$tmp"
-    # Cache fallback — keep stale file if curl failed.
+    rm -f "$tmp" "$tmp.etag"
+    : > "$AU_MANIFEST_FAIL_STAMP" 2>/dev/null
+    # Cache fallback — keep stale file if the fetch failed.
     [ -s "$AU_MANIFEST_CACHE" ] && return 0
     return 1
+}
+
+# Чем тянули манифест в последний раз: mirrors | curl | пусто (не пробовали).
+# Для api.sh — единственный способ показать деградацию: stderr обработчиков он
+# уводит в /dev/null.
+update_manifest_source() {
+    [ -f "$AU_MANIFEST_SOURCE_FILE" ] || { printf ''; return 0; }
+    head -1 "$AU_MANIFEST_SOURCE_FILE" 2>/dev/null | tr -d ' \r\n'
+}
+
+# Манифест тянем той же z2k_fetch, что и весь проект (VPS-хоп -> raw -> jsdelivr
+# -> gh-proxy -> ndmc-DNS), а не голым curl'ом на raw.githubusercontent: у
+# ЦЕЛЕВОЙ аудитории проекта raw заблокирован, и панель показывала «обновлений
+# нет» ровно там, где ночной апдейтер их прекрасно видит.
+#
+# utils.sh подключаем в ПОДоболочке: он безусловно переприсваивает
+# ZAPRET2_DIR и соседей, а stdout здесь — тело HTTP-ответа CGI, туда не должно
+# попасть ни байта постороннего.
+_update_fetch_manifest() {
+    local url="$1" dest="$2" utils="" d pid rc flag waited=0
+    for d in "$ZAPRET2_DIR/lib" /tmp/z2k/lib; do
+        [ -f "$d/utils.sh" ] && [ -z "$utils" ] && utils="$d/utils.sh"
+    done
+    if [ -z "$utils" ]; then
+        printf 'curl\n' > "$AU_MANIFEST_SOURCE_FILE" 2>/dev/null
+        echo "lib/utils.sh не найден: проверка обновлений идёт голым curl'ом мимо зеркал — на сети, где raw.githubusercontent заблокирован, панель будет уверять, что обновлений нет" >&2
+        curl -fsSL --max-time 15 "$url" -o "$dest" 2>/dev/null
+        return $?
+    fi
+    printf 'mirrors\n' > "$AU_MANIFEST_SOURCE_FILE" 2>/dev/null
+    # Забег по зеркалам сам себя по времени не ограничивает, а мы синхронный CGI,
+    # поэтому держим его на своём поводке: фоновый процесс + опрос маркера.
+    # Маркер, а не `kill -0`: завершившийся, но ещё не собранный wait'ом ребёнок
+    # остаётся зомби, и kill -0 по нему успешен — ждали бы полный таймаут даже
+    # после мгновенной удачи. Код возврата кладём в маркер целиком собранным
+    # (mv), чтобы не прочитать пустой файл на полпути.
+    flag="${dest}.done.$$"
+    rm -f "$flag" "$flag.part"
+    # shellcheck disable=SC1090
+    ( . "$utils"; z2k_fetch "$url" "$dest"; printf '%s' "$?" > "$flag.part"; mv -f "$flag.part" "$flag" ) \
+        </dev/null >/dev/null 2>&1 &
+    pid=$!
+    while [ ! -f "$flag" ] && [ "$waited" -lt "$AU_MANIFEST_FETCH_TIMEOUT" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -f "$flag" ]; then
+        rc=$(cat "$flag" 2>/dev/null)
+        case "$rc" in ''|*[!0-9]*) rc=1 ;; esac
+    else
+        _kill_tree "$pid"
+        rc=1
+    fi
+    wait "$pid" 2>/dev/null
+    rm -f "$flag" "$flag.part"
+    return "$rc"
+}
+
+_kill_tree() {
+    # Убить процесс вместе с прямыми потомками. Одного kill по $! мало: curl —
+    # отдельный процесс, он переживает смерть подоболочки, ещё до трёх минут
+    # держит соединение и в конце кладёт скачанное в наш temp, когда отказ уже
+    # засчитан. PPID читаем из /proc: у busybox ps нет -o ppid, а pkill -P нет
+    # вовсе. `read` — встроенная команда, обхода /proc она не удорожает.
+    local pid="$1" p line rest kid
+    for p in /proc/[0-9]*; do
+        [ -r "$p/stat" ] || continue
+        kid=${p#/proc/}
+        read -r line < "$p/stat" 2>/dev/null || continue
+        rest=${line#*") "}      # после имени процесса в скобках идут state ppid ...
+        rest=${rest#* }
+        [ "${rest%% *}" = "$pid" ] && kill -TERM "$kid" 2>/dev/null
+    done
+    kill -TERM "$pid" 2>/dev/null
+    return 0
+}
+
+# Похоже ли скачанное на UPDATES.json. Прежняя проверка [ -s ] принимала любое
+# непустое тело — HTML-заглушку провайдера, страницу ошибки зеркала — и дальше
+# это кэшировалось на 5 минут и разбиралось как манифест.
+_update_manifest_sane() {
+    local f="$1"
+    [ -s "$f" ] || return 1
+    head -c 1 "$f" 2>/dev/null | grep -q '{' || return 1
+    grep -q '"current"[[:space:]]*:[[:space:]]*"' "$f" 2>/dev/null || return 1
+    grep -q '"history"[[:space:]]*:' "$f" 2>/dev/null || return 1
+    return 0
 }
 
 update_manifest_current() {

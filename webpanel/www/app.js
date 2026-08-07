@@ -77,9 +77,27 @@
   }
 
   // ---------- Fetch helpers ----------
-  async function apiGet(path) {
-    const r = await fetch(API + path, { credentials: "same-origin" });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  // Every API call carries X-Z2K-Panel. The backend (cgi/auth.sh) treats it as
+  // proof the request came from this page: a cross-origin form cannot set a
+  // header, and a cross-origin fetch that sets one is held back by a CORS
+  // preflight the panel never answers. Do not drop it from any call site.
+  const PANEL_HDR = { "X-Z2K-Panel": "1" };
+
+  // «Панель не ответила» и «панель ответила отказом» — разные события, и
+  // путать их дорого: обрыв связи поллер задачи обязан терпеть минутами
+  // (рестарт трясёт тот же канал, через который открыта панель), а 403/400/500
+  // — это определённый ответ, ждать после него нечего. Признак второго —
+  // поле httpStatus у ошибки; текст сообщения при этом не меняется.
+  function httpError(status, statusText, message) {
+    const e = new Error(message || `${status} ${statusText}`);
+    e.httpStatus = status;
+    return e;
+  }
+  function isHttpError(e) { return !!e && typeof e.httpStatus === "number"; }
+
+  async function apiGet(path, opts = {}) {
+    const r = await fetch(API + path, { credentials: "same-origin", headers: PANEL_HDR, signal: opts.signal });
+    if (!r.ok) throw httpError(r.status, r.statusText);
     return r.json();
   }
   async function apiPost(path, params = {}) {
@@ -88,21 +106,22 @@
     const r = await fetch(API + path, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: { ...PANEL_HDR, "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
     });
     const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
-    if (!r.ok || !data.ok) throw new Error(data.error || `${r.status}`);
+    if (!r.ok) throw httpError(r.status, r.statusText, data.error || `${r.status}`);
+    if (!data.ok) throw new Error(data.error || `${r.status}`);
     return data;
   }
   // GET, отдающий сырой текст (не JSON) — /warp/list. Ошибки бекенд шлёт
   // JSON'ом с не-200 статусом, поэтому на !ok пробуем вытащить .error.
   async function apiGetText(path) {
-    const r = await fetch(API + path, { credentials: "same-origin" });
+    const r = await fetch(API + path, { credentials: "same-origin", headers: PANEL_HDR });
     if (!r.ok) {
       let msg = `${r.status} ${r.statusText}`;
       try { const d = await r.json(); if (d && d.error) msg = d.error; } catch (_) {}
-      throw new Error(msg);
+      throw httpError(r.status, r.statusText, msg);
     }
     return r.text();
   }
@@ -111,11 +130,12 @@
     const r = await fetch(API + path, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      headers: { ...PANEL_HDR, "Content-Type": "text/plain;charset=utf-8" },
       body: text,
     });
     const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
-    if (!r.ok || !data.ok) throw new Error(data.error || `${r.status}`);
+    if (!r.ok) throw httpError(r.status, r.statusText, data.error || `${r.status}`);
+    if (!data.ok) throw new Error(data.error || `${r.status}`);
     return data;
   }
 
@@ -124,8 +144,13 @@
     dashboard: renderDashboard,
     toggles: renderToggles,
     warp: renderWarp,
-    whitelist: renderWhitelist,
-    exclude: renderExclude,
+    // «Исключения» — одна страница с двумя подвкладками. Два маршрута, потому
+    // что подвкладка обязана быть адресом: её можно дать ссылкой и она
+    // переживает перезагрузку страницы. Имена маршрутов оставлены прежними,
+    // чтобы старая закладка открывала ровно то, что на ней лежало: #/whitelist
+    // — «Домены», #/exclude — «Адреса».
+    whitelist: renderExcludeDomains,
+    exclude: renderExcludeAddresses,
     "extra-domains": renderExtraDomains,
     state: renderState,
     strategies: renderStrategies,
@@ -139,7 +164,8 @@
     dashboard:       "Дашборд",
     toggles:         "Режимы",
     warp:            "WARP",
-    whitelist:       "Whitelist",
+    // Обе подвкладки «Исключений» — один раздел, значит и один заголовок.
+    whitelist:       "Исключения",
     exclude:         "Исключения",
     "extra-domains": "Доп. домены",
     // «Стратегии» — одна дверь, два вида внутри. Маршрут `state` остался жив
@@ -152,12 +178,19 @@
     diag:            "Диагностика",
     credits:         "Благодарности",
   };
+  // Маршрут → пункт меню, который он подсвечивает. Только для маршрутов,
+  // которые являются подвкладками чужого раздела.
+  const NAV_OF_ROUTE = {
+    state: "strategies",
+    whitelist: "exclude",
+  };
   function navigate() {
     const hash = location.hash.replace(/^#\//, "") || "dashboard";
     const name = routes[hash] ? hash : "dashboard";
-    // `state` больше не имеет своего пункта меню — он вкладка внутри «Стратегий».
-    // Без этой подмены переход по старой ссылке #/state не подсвечивал бы ничего.
-    const navName = name === "state" ? "strategies" : name;
+    // Маршрутов больше, чем пунктов меню: подвкладка — тоже адрес, но своего
+    // пункта у неё нет. Без подмены переход на такой адрес не подсвечивал бы
+    // в меню ничего.
+    const navName = NAV_OF_ROUTE[name] || name;
     for (const a of $nav.querySelectorAll("a")) {
       a.classList.toggle("active", a.dataset.route === navName);
     }
@@ -203,7 +236,7 @@
       <div id="update-banner" hidden></div>
       <h1 class="page-title">Дашборд</h1>
       <div class="card" id="status-card">
-        <h3>Состояние <span class="status-spinner" id="status-spin" hidden></span></h3>
+        <h3>Состояние</h3>
         <div class="status-grid" id="status-grid">${skeletonBlocks(7)}</div>
       </div>
       <div class="card">
@@ -219,25 +252,43 @@
 
     $app.querySelectorAll("[data-svc]").forEach(btn => {
       btn.addEventListener("click", async () => {
+        if (btn.disabled) return;
         const action = btn.dataset.svc;
         const titleByAction = { start: "Запуск сервиса", stop: "Остановка сервиса", restart: "Перезапуск сервиса" };
         const title = titleByAction[action] || ("Действие: " + action);
+        // Глобальный лок включается только когда придёт id задачи, а до тех
+        // пор кнопка кликабельна: второй клик по «Перезапустить» запускал
+        // второй конкурентный S99zapret2 restart.
+        btn.disabled = true;
         let resp;
         try {
           resp = await apiPost("/service/" + action);
         } catch (e) {
+          btn.disabled = false;
           toast("Ошибка запуска: " + e.message, "bad");
           return;
         }
+        // Кнопку возвращаем в исходное состояние ДО openJobModal: лок
+        // запоминает текущее disabled как «правильное» и после задачи вернул
+        // бы её навсегда выключенной.
+        btn.disabled = false;
         // Backend теперь async — возвращает {ok, job:<id>}. Открываем
         // модалку с live-логом точно как при auto-update apply. После
         // завершения refreshStatus подтянет grid вверху.
         openJobModal(title, resp.job, {
+          // Старт/стоп/рестарт бьют по тому же iptables, через который открыта
+          // панель — короткий обрыв здесь штатный, а не отказ команды.
+          tolerateOutage: true,
           onDone: (d) => {
-            setTimeout(refreshStatus, 500);
-            if (d && d.exit !== 0) {
+            const outcome = jobOutcome(d);
+            if (outcome === JOB_FAIL) {
               toast("Команда завершилась с кодом " + d.exit, "bad");
+            } else {
+              const m = unresolvedMsg(outcome);
+              if (m) toast(m, "bad");
             }
+            if (jobUnresolved(outcome)) awaitPanelBack().then(() => refreshStatus());
+            else setTimeout(refreshStatus, 500);
           },
         });
       });
@@ -252,21 +303,25 @@
   async function refreshUpdateBanner(opts = {}) {
     const banner = document.getElementById("update-banner");
     if (!banner) return;
-    let d;
+    let d = null;
+    let err = null;
     try {
       const path = opts.force ? "/update/check" : "/update/status";
       d = opts.force ? await apiPost(path) : await apiGet(path);
     } catch (e) {
-      // Silent — manifest fetch can fail (no internet, GH down). UI just
-      // doesn't show banner; user can still hit "Проверить сейчас".
-      banner.hidden = true;
-      return;
+      // Прятать весь блок нельзя: кнопку «Проверить ещё раз» жмут именно
+      // отсюда, и вместе с баннером она пропадала до перезагрузки страницы.
+      err = e;
     }
-    const installed = d.installed || "?";
-    const available = d.available || "?";
-    const behind = Number(d.behind || 0);
-    const ts = Number(d.last_check || 0);
+    const installed = (d && d.installed) || "?";
+    const available = (d && d.available) || "?";
+    const behind = Number((d && d.behind) || 0);
+    const ts = Number((d && d.last_check) || 0);
     const ago = ts > 0 ? humanAgo(ts) : "—";
+    // Манифест мог не скачаться (нет интернета, GH лежит) — тогда бекенд
+    // отдаёт пустое available. Неизвестно ≠ «последняя версия»: утверждать
+    // второе на основании отсутствия данных нельзя.
+    const unknown = err !== null || available === "?" || installed === "?";
 
     // Resume button takes priority over Обновить when an apply is active.
     const activeJob = await getActiveApplyJob();
@@ -288,7 +343,7 @@
       return;
     }
 
-    if (behind > 0 && available !== "?" && installed !== "?") {
+    if (!unknown && behind > 0) {
       const pending = Array.isArray(d.pending) ? d.pending : [];
       banner.hidden = false;
       banner.className = "update-banner";
@@ -320,6 +375,20 @@
           clBtn.classList.toggle("is-open", !open);
         });
       }
+    } else if (unknown) {
+      const why = err ? escapeHtml(err.message) : "список версий не скачался";
+      const known = installed !== "?" ? `установлена ${escapeHtml(installed)} · ` : "";
+      banner.hidden = false;
+      banner.className = "update-banner";
+      banner.innerHTML = `
+        <div class="update-banner-text">
+          <strong>Не удалось проверить обновления</strong>
+          <span class="update-banner-meta">${known}${why} · последняя удачная проверка ${ago}</span>
+        </div>
+        <div class="update-banner-actions">
+          <button class="btn" id="upd-recheck">Проверить ещё раз</button>
+        </div>
+      `;
     } else {
       banner.hidden = false;
       banner.className = "update-banner update-banner-ok";
@@ -338,9 +407,20 @@
     if (applyBtn) applyBtn.addEventListener("click", () => applyUpdateFlow(available));
     const recheckBtn = document.getElementById("upd-recheck");
     if (recheckBtn) recheckBtn.addEventListener("click", async () => {
+      const label = recheckBtn.textContent;
       recheckBtn.disabled = true;
       recheckBtn.textContent = "Проверяем…";
-      await refreshUpdateBanner({ force: true });
+      try {
+        await refreshUpdateBanner({ force: true });
+      } finally {
+        // Обычно баннер перерисован целиком и этой кнопки уже нет в DOM. Если
+        // же перерисовки не случилось (ушли со страницы), она иначе осталась
+        // бы навсегда выключенной с текстом «Проверяем…».
+        if (recheckBtn.isConnected) {
+          recheckBtn.disabled = false;
+          recheckBtn.textContent = label;
+        }
+      }
     });
   }
 
@@ -380,9 +460,11 @@
   }
 
   // Check if a previously-launched apply is still in progress. Returns the
-  // {id, target} object from sessionStorage if so, null otherwise. Cleans
-  // up the key on a 404/finished state so a dead job doesn't poison the
-  // banner forever.
+  // {id, target} object from sessionStorage if so, null otherwise.
+  // Ключ снимаем и когда задача завершилась, и когда её больше НЕТ
+  // (status unknown: файлы подчистил job_reap или роутер перезагрузился).
+  // Без второго случая баннер навечно показывал «обновление в процессе» с
+  // единственной кнопкой «Показать лог».
   async function getActiveApplyJob() {
     const raw = sessionStorage.getItem("z2k_apply_job");
     if (!raw) return null;
@@ -391,7 +473,7 @@
     if (!job || !job.id) { sessionStorage.removeItem("z2k_apply_job"); return null; }
     try {
       const d = await apiGet("/job?id=" + encodeURIComponent(job.id));
-      if (d.done) {
+      if (d.done || d.status === "unknown") {
         sessionStorage.removeItem("z2k_apply_job");
         return null;
       }
@@ -460,47 +542,27 @@
     `;
   }
 
-  // ---------- Status spinner / poll ----------
-  function showStatusSpinner(msg) {
-    const spin = document.getElementById("status-spin");
-    if (!spin) return;
-    spin.hidden = false;
-    spin.textContent = msg || "Применяем…";
-  }
-  function hideStatusSpinner() {
-    const spin = document.getElementById("status-spin");
-    if (spin) spin.hidden = true;
-  }
-
-  // Poll /status until service.service matches target, or timeout. Returns
-  // true if target reached. On the way refreshes the UI grid each tick so
-  // the user sees the transition (stopped → active or vice versa).
-  async function pollServiceUntil(target, timeoutMs) {
-    const start = Date.now();
-    const interval = 600;
-    while (Date.now() - start < timeoutMs) {
-      try {
-        const s = await apiGet("/status");
-        renderStatusGrid(s);
-        if (s.service === target) return true;
-      } catch (e) {
-        // transient — webpanel may be in mid-restart if init scripts shake
-        // up lighttpd. Just keep polling.
-      }
-      await new Promise(r => setTimeout(r, interval));
-    }
-    // timeout — surface last-known and let the user manually inspect logs.
-    try { const s = await apiGet("/status"); renderStatusGrid(s); } catch (e) {}
-    throw new Error("сервис не перешёл в состояние «" + target + "» за " + Math.round(timeoutMs/1000) + "с");
-  }
+  // ---------- Load ordering ----------
+  // mod_cgi обслуживает запросы ПАРАЛЛЕЛЬНО, и ответы приходят не в том
+  // порядке, в каком уходили: /state на роутере занимает ~2.4 с, и ответ,
+  // ушедший первым, приходит последним. Без этого счётчика более старый
+  // снимок дорисовывался поверх свежего — удалённая строка «воскресала»
+  // сразу после тоста «Удалено», а кэш оставался отравленным. Рисует только
+  // тот вызов загрузчика, который стартовал последним.
+  const _loadSeq = {};
+  function _newLoad(name) { _loadSeq[name] = (_loadSeq[name] || 0) + 1; return _loadSeq[name]; }
+  function _stale(name, seq) { return _loadSeq[name] !== seq; }
 
   async function refreshStatus() {
     const grid = document.getElementById("status-grid");
     if (!grid) return;
+    const seq = _newLoad("status");
     try {
       const s = await apiGet("/status");
+      if (_stale("status", seq)) return;
       renderStatusGrid(s);
     } catch (e) {
+      if (_stale("status", seq)) return;
       grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
     }
   }
@@ -520,7 +582,7 @@
     ];
     grid.innerHTML = cells.map(c => {
       const icon = statusIcon(c.kind);
-      return `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${icon ? `<span class="status-ico">${icon}</span>` : ""}${c.value}</div></div>`;
+      return `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${icon ? `<span class="status-ico">${icon}</span>` : ""}${escapeHtml(c.value)}</div></div>`;
     }).join("");
     syncServiceButtons(s.service);
   }
@@ -601,6 +663,7 @@
     $app.innerHTML = `
       <h1 class="page-title">Режимы</h1>
       <div class="card">
+        <div id="toggles-error" hidden></div>
         ${TOGGLE_DEFS.map(t => `
           <div class="toggle-row" data-key="${t.key}">
             <div class="t-text">
@@ -700,37 +763,102 @@
       </div>
     `;
 
-    // Load current state and wire up switches.
-    try {
-      const s = await apiGet("/status");
+    // Load current state and wire up switches. Шаблон рендерит все свитчи
+    // disabled, включаются они только здесь — поэтому упавший /status обязан
+    // сказать об этом и дать повтор: иначе страница выглядит нормальной, но
+    // не кликается ни один тумблер, и понять это можно только методом тыка.
+    const errBox = $app.querySelector("#toggles-error");
+    // Джоб завершается через 10-20 секунд, юзер за это время успевает уйти на
+    // другую страницу. renderToggles() без проверки молча подменял бы $app
+    // содержимым «Режимов», оставив адрес и подсветку меню от чужой страницы.
+    // Она же отвечает на вопрос «мы ещё здесь?» для ответов, пришедших после
+    // ухода: _stale ловит только более свежую загрузку, но не смену маршрута.
+    const onTogglesPage = () => !!document.getElementById("tg-state-badge");
+
+    async function loadTogglesState() {
+      const seq = _newLoad("toggles");
+      let s;
+      try {
+        s = await apiGet("/status");
+      } catch (e) {
+        if (_stale("toggles", seq) || !onTogglesPage()) return;
+        if (!errBox) return;
+        // Сообщение обещает, что переключатели заблокированы — значит и кнопки
+        // туннеля тоже: под ними реальные запуск и останов, а панель сейчас не
+        // знает даже, что включено. Свитчи глушим тем же проходом — после
+        // удачной загрузки они уже разлочены, и повторный провал оставил бы их
+        // живыми под текстом «заблокированы».
+        TOGGLE_DEFS.forEach(t => {
+          const row = $app.querySelector(`[data-key="${t.key}"]`);
+          if (row) setLockAware(row.querySelector("input"), true);
+        });
+        setLockAware($app.querySelector("#tg-enable"), true);
+        setLockAware($app.querySelector("#tg-disable"), true);
+        errBox.hidden = false;
+        errBox.innerHTML = `
+          <p class="desc" style="color:var(--bad)">Не удалось прочитать состояние: ${escapeHtml(e.message)}.
+             Переключатели заблокированы — панель не знает, что сейчас включено.</p>
+          <div class="btn-row" style="margin-bottom:10px">
+            <button class="btn btn-primary" id="toggles-retry">Повторить</button>
+          </div>`;
+        const retry = $app.querySelector("#toggles-retry");
+        if (retry) retry.addEventListener("click", () => {
+          retry.disabled = true;
+          retry.textContent = "Читаю…";
+          loadTogglesState();
+        });
+        return;
+      }
+      if (_stale("toggles", seq)) return;
+      // /status мог вернуться уже после ухода со страницы: $app очищен, ни
+      // одного из этих элементов больше нет, и обращение к badge.hidden роняло
+      // весь остаток renderToggles — вместе с привязкой кнопок туннеля,
+      // секцией политики и глобальным локом.
+      const badge = $app.querySelector("#tg-state-badge");
+      if (!badge) return;
+      if (errBox) { errBox.hidden = true; errBox.innerHTML = ""; }
       TOGGLE_DEFS.forEach(t => {
         const row = $app.querySelector(`[data-key="${t.key}"]`);
+        if (!row) return;
         const box = row.querySelector("input");
         box.checked = t.key === "rst_filter" ? rstIsOn(s.toggles[t.key]) : s.toggles[t.key] === "1";
-        box.disabled = false;
-        box.addEventListener("change", () => toggleClick(t.key, box));
+        setLockAware(box, false);
+        // Повторная загрузка не должна вешать второй обработчик: два POST'а
+        // на один клик — два конкурентных рестарта сервиса.
+        if (!box.dataset.wired) {
+          box.dataset.wired = "1";
+          box.addEventListener("change", () => toggleClick(t.key, box));
+        }
       });
       // TG-tunnel state pill + button enable/disable matching reality.
       const tgRunning = s.tunnel && s.tunnel.running === true;
-      const badge = $app.querySelector("#tg-state-badge");
       badge.hidden = false;
       badge.textContent = tgRunning ? "Включён" : "Остановлен";
       badge.className = "tg-state-badge " + (tgRunning ? "tg-state-on" : "tg-state-off");
       const enableBtn = $app.querySelector("#tg-enable");
       const disableBtn = $app.querySelector("#tg-disable");
-      enableBtn.disabled = tgRunning;
-      disableBtn.disabled = !tgRunning;
-      enableBtn.title = tgRunning ? "Туннель уже запущен" : "";
-      disableBtn.title = tgRunning ? "" : "Туннель уже остановлен";
-    } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      setLockAware(enableBtn, tgRunning);
+      setLockAware(disableBtn, !tgRunning);
+      if (enableBtn) enableBtn.title = tgRunning ? "Туннель уже запущен" : "";
+      if (disableBtn) disableBtn.title = tgRunning ? "" : "Туннель уже остановлен";
     }
+    await loadTogglesState();
+    // Пока читался /status, юзер мог уйти — вешать обработчики уже некуда, а
+    // querySelector вернёт null и уронит остаток функции.
+    if (!onTogglesPage()) return;
 
     async function tgAction(action, title) {
+      const btns = [$app.querySelector("#tg-enable"), $app.querySelector("#tg-disable")];
+      const wasDisabled = btns.map(b => b && b.disabled);
+      const restoreBtns = () => btns.forEach((b, i) => { if (b) b.disabled = wasDisabled[i]; });
+      // Глобальный лок включится только с приходом id задачи; до тех пор обе
+      // кнопки кликабельны, и второй клик поднимал второй tunnel_enable.
+      btns.forEach(b => { if (b) b.disabled = true; });
       let resp;
       try {
         resp = await apiPost("/tunnel/" + action);
       } catch (e) {
+        restoreBtns();
         toast("Ошибка: " + e.message, "bad");
         return;
       }
@@ -759,16 +887,20 @@
       // {ok:true} (sync, old). Если есть job — открываем модалку с
       // live-логом; иначе toast + re-render toggles страницы.
       if (resp && resp.job) {
+        // Исходное состояние возвращаем ДО openJobModal: лок запоминает
+        // текущее disabled как «правильное» и вернул бы кнопку выключенной.
+        restoreBtns();
         openJobModal(title, resp.job, {
           onDone: async () => {
             await pollTgState();
-            renderToggles();
+            if (onTogglesPage()) renderToggles();
           },
         });
       } else {
         toast(title + " — готово");
         await pollTgState();
-        renderToggles();
+        if (onTogglesPage()) renderToggles();
+        else restoreBtns();
       }
     }
     $app.querySelector("#tg-enable").addEventListener("click", () => tgAction("enable", "Запуск Telegram туннеля"));
@@ -794,8 +926,10 @@
       });
     }
     async function loadPolicyStatus() {
+      const seq = _newLoad("policy");
       try {
         const d = await apiGet("/policy/status");
+        if (_stale("policy", seq)) return;
         nameInput.value = d.name || "";
         setPolicyMode(d.exclude === "1" ? 1 : 0);
         if (!d.name) {
@@ -806,6 +940,7 @@
           setPolicyStatus("warn", `Политика «${d.name}» не найдена — фильтр игнорируется, обрабатывается весь трафик`);
         }
       } catch (e) {
+        if (_stale("policy", seq)) return;
         setPolicyStatus("error", "Ошибка: " + e.message);
       }
     }
@@ -831,6 +966,7 @@
     });
 
     saveBtn.addEventListener("click", async () => {
+      if (saveBtn.disabled) return;
       const v = nameInput.value.trim();
       if (!NAME_RE.test(v)) {
         toast("Имя политики: только буквы/цифры/«_»/«-», 1–32 символа", "bad");
@@ -838,18 +974,23 @@
         return;
       }
       const exclude = segGroup.querySelector(".seg-btn.seg-on")?.dataset.exclude || "0";
+      // Кнопка не входит в глобальный лок, а под ней рестарт сервиса: без
+      // этого второй клик в окне ожидания ответа запускал вторую задачу.
+      saveBtn.disabled = true;
       let resp;
       try {
         resp = await apiPost("/policy/save", { name: v, exclude });
       } catch (e) {
+        saveBtn.disabled = false;
         toast("Ошибка: " + e.message, "bad");
         return;
       }
       if (resp && resp.job) {
         openJobModal("Применение политики доступа", resp.job, {
-          onDone: () => { setTimeout(loadPolicyStatus, 500); }
+          onDone: () => { saveBtn.disabled = false; setTimeout(loadPolicyStatus, 500); }
         });
       } else {
+        saveBtn.disabled = false;
         toast("Применено");
         loadPolicyStatus();
       }
@@ -871,9 +1012,36 @@
 // blip in the bypass with no indication it happened. Asserted in the suite.
   const TOGGLES_RESTART_SERVICE = { rst_filter: 1, silent_fallback: 1, customd: 1, dynamic_ttl: 1, ppe: 1, autohostlist: 1 };
 
+  // Автохостлист меняет принцип отбора трафика целиком, и промах движка
+  // выглядит для юзера как «сайт сломался после обновления». Формулировка
+  // согласована — правке не подлежит.
+  const AUTOHOSTLIST_WARNING =
+    "Включая автохостлист вы рискуете что будут попадать левые адреса и что-то перестанет работать. " +
+    "Жалобы на прекративший работу сайт после включения автохостлиста не принимаются.";
+
   async function toggleClick(key, box) {
     const sw = box.closest(".switch");
     const wanted = box.checked ? "1" : "0";
+    if (key === "autohostlist" && wanted === "1") {
+      // Тумблер блокируем на время вопроса. Подложка модалки перехватывает
+      // мышь, но не клавиатуру: без этого Tab уводил фокус из модалки обратно
+      // на чекбокс, пробел давал второй change, и запрос уходил на бэкенд мимо
+      // подтверждения — в итоге в конфиге было включено, а галочка снята.
+      box.disabled = true;
+      const go = await confirmModal("Включить автохостлист?", AUTOHOSTLIST_WARNING,
+                                    "Включать", "Не включать");
+      // Пока висел вопрос, страницу могла перерисовать чужая фоновая задача
+      // (например завершившийся туннель зовёт renderToggles): тогда наш box
+      // уже отцеплен от документа, и запись в него ничего не покажет. Ответ
+      // при этом остаётся в силе — состояние подтянет следующий /status.
+      if (typeof document.body.contains === "function" && !document.body.contains(box)) return;
+      box.disabled = false;
+      if (!go) {
+        // Событие change уже переставило чекбокс — возвращаем его сами.
+        box.checked = false;
+        return;
+      }
+    }
     sw.classList.add("loading");
     box.disabled = true; // блок UI до завершения, не даём кликать ещё
     const restarts = TOGGLES_RESTART_SERVICE[key] === 1;
@@ -904,32 +1072,44 @@
     // раньше, badge в углу позволит снова открыть, а UI блокировка не
     // даст думать что переключение уже применилось.
     openJobModal(verb + " " + niceName, resp.job, {
+      // Рестарт nfqws2 перетряхивает iptables на канале, по которому открыта
+      // сама панель: обрыв на десятки секунд здесь норма, и обрывать опрос
+      // через пять секунд значит объявить провалом штатный ход операции.
+      tolerateOutage: restarts,
       onDone: (d) => {
         sw.classList.remove("loading");
         box.disabled = false;
-        if (d && d.exit !== 0) {
+        const outcome = jobOutcome(d);
+        if (outcome === JOB_FAIL) {
           // Toggle failed — revert checkbox чтобы UI отражал реальное
           // состояние (старое значение сохранилось в config).
           box.checked = !box.checked;
           toast("Не получилось — вернул как было", "bad");
+        } else if (jobUnresolved(outcome)) {
+          // Итог неизвестен: в конфиге ничего не откатывалось, поэтому не
+          // трогаем чекбокс и не обещаем, что вернули как было.
+          const m = unresolvedMsg(outcome);
+          if (m) toast(m, "bad");
+          resyncToggle(key, box);
         } else {
           toast(wanted === "1" ? "Включено" : "Выключено");
         }
-        if (restarts) setTimeout(refreshStatus, 500);
+        if (restarts && !jobUnresolved(outcome)) setTimeout(refreshStatus, 500);
       },
     });
   }
 
-  async function waitForServiceActive(timeoutMs) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      try {
-        const s = await apiGet("/status");
-        if (s.service === "active") return true;
-      } catch (e) { /* webpanel itself may briefly hiccup; keep polling */ }
-      await new Promise(r => setTimeout(r, 500));
-    }
-    return false;
+  // Дождаться панели и взять фактическое значение из конфига, а не гадать.
+  async function resyncToggle(key, box) {
+    const s = await awaitPanelBack();
+    if (!s || !s.toggles) return;
+    // За время ожидания юзер мог запустить новую задачу — её результат
+    // свежее нашего чтения, не затираем.
+    if (_activeJobs.size) return;
+    const on = key === "rst_filter" ? rstIsOn(s.toggles[key]) : s.toggles[key] === "1";
+    box.checked = on;
+    toast("Связь есть — фактически " + (on ? "включено" : "выключено"));
+    refreshStatus();
   }
 
   // ---------- WARP ----------
@@ -1033,13 +1213,16 @@
   async function loadWarpGames() {
     const host = document.getElementById("warp-games");
     if (!host) return;
+    const seq = _newLoad("warpGames");
     let d;
     try {
       d = await apiGet("/warp/games");
     } catch (e) {
+      if (_stale("warpGames", seq)) return;
       host.innerHTML = `<p class="desc">Не удалось загрузить: ${escapeHtml(e.message)}</p>`;
       return;
     }
+    if (_stale("warpGames", seq)) return;
     const games = (d && d.games) || [];
     if (!games.length) {
       // Lists are pulled during the update itself, so being here means that
@@ -1058,7 +1241,7 @@
         <div class="toggle-row" data-game="${escapeHtml(g.name)}">
           <div class="t-text">
             <div class="t-name">${escapeHtml(g.name)}</div>
-            <div class="t-desc">${g.entries} адрес(ов)</div>
+            <div class="t-desc">${Number(g.entries) || 0} адрес(ов)</div>
           </div>
           <label class="switch">
             <input type="checkbox" ${(g.enabled === 1 || g.enabled === "1") ? "checked" : ""}>
@@ -1084,20 +1267,23 @@
       return;
     }
     box.disabled = false;
-    toast(wanted === "1" ? `${name} включён` : `${name} выключен`, "good");
+    toast(wanted === "1" ? `${name} включён` : `${name} выключен`);
     loadWarpGames();
   }
 
   async function loadWarpStatus() {
     const grid = document.getElementById("warp-status-grid");
     if (!grid) return;
+    const seq = _newLoad("warpStatus");
     let d;
     try {
       d = await apiGet("/warp/status");
     } catch (e) {
+      if (_stale("warpStatus", seq)) return;
       grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
       return;
     }
+    if (_stale("warpStatus", seq)) return;
     const enabled = d.enabled === "1";
     const box = $app.querySelector('[data-key="game_warp"] input');
     if (box) {
@@ -1166,9 +1352,18 @@
       onDone: (d) => {
         sw.classList.remove("loading");
         box.disabled = false;
-        if (d && d.exit !== 0) {
+        const outcome = jobOutcome(d);
+        if (outcome === JOB_FAIL) {
           box.checked = !box.checked;
           toast("Не получилось — вернул как было", "bad");
+        } else if (jobUnresolved(outcome)) {
+          // Не знаем, чем кончилось — не откатываем чекбокс и не врём.
+          // loadWarpStatus сам вернёт фактическое состояние, когда панель
+          // снова ответит.
+          const m = unresolvedMsg(outcome);
+          if (m) toast(m, "bad");
+          awaitPanelBack().then(() => loadWarpStatus());
+          return;
         } else {
           toast(wanted === "1" ? "Включено" : "Выключено");
         }
@@ -1180,8 +1375,10 @@
   async function loadWarpLists() {
     const list = document.getElementById("warp-lists");
     if (!list) return;
+    const seq = _newLoad("warpLists");
     try {
       const d = await apiGet("/warp/lists");
+      if (_stale("warpLists", seq)) return;
       _warpLists = d.lists || [];
       if (!_warpLists.length) {
         list.innerHTML = `<li style="color:var(--text-muted)">(нет списков — создайте новый или импортируйте .txt)</li>`;
@@ -1210,6 +1407,7 @@
         b.addEventListener("click", () => warpDelete(b.dataset.del));
       });
     } catch (e) {
+      if (_stale("warpLists", seq)) return;
       list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
     }
   }
@@ -1374,25 +1572,55 @@
     }
   }
 
-  // ---------- Whitelist ----------
-  // Исключения по адресату. В отличие от whitelist (тот работает по имени
-  // домена и только там, где имя видно), это исключение на уровне файрвола:
-  // адрес попадает в сет nozapret, который проверяется в каждом NFQUEUE-правиле.
-  // Поэтому помогает и там, где имени нет вообще — UDP/STUN/P2P: камеры,
-  // домофоны, WebRTC.
-  async function renderExclude() {
-    $app.innerHTML = `
+  // ---------- Исключения: «Домены» + «Адреса» ----------
+  //
+  // Два способа сказать «сюда не лезь», и они разные по существу, а не по
+  // удобству. Домен исключается по имени и только там, где имя вообще видно в
+  // запросе. Адрес исключается по получателю пакета — поэтому работает и там,
+  // где имени нет: камеры, домофоны, звонки, игры.
+  //
+  // Одна страница, две подвкладки — тем же приёмом, что «Стратегии»: подвкладка
+  // это адрес, значит на неё можно сослаться и она переживает перезагрузку
+  // страницы. Маршруты остались историческими (#/whitelist — «Домены»,
+  // #/exclude — «Адреса»), чтобы старые закладки открывали то же содержимое.
+  const EXCLUDE_TABS = [
+    { id: "domains", route: "whitelist", label: "Домены",
+      hint: "Исключить сайт по его имени — сразу со всеми поддоменами" },
+    { id: "addresses", route: "exclude", label: "Адреса",
+      hint: "Исключить по адресу получателя — там, где имени в запросе нет: камеры, домофоны, звонки" },
+  ];
+
+  function excludeShell(activeId, bodyHtml) {
+    const tabs = EXCLUDE_TABS.map(t => `
+      <a href="#/${t.route}" class="strat-tab${t.id === activeId ? " active" : ""}"
+         role="tab" aria-selected="${t.id === activeId}" title="${escapeHtml(t.hint)}">
+        ${escapeHtml(t.label)}
+      </a>`).join("");
+    const active = EXCLUDE_TABS.find(t => t.id === activeId) || EXCLUDE_TABS[0];
+    return `
       <h1 class="page-title">Исключения</h1>
+      <div class="strat-tabs" role="tablist" aria-label="Виды исключений">${tabs}</div>
+      <p class="desc strat-tabhint">${escapeHtml(active.hint)}</p>
+      ${bodyHtml}
+    `;
+  }
+
+  async function renderExcludeAddresses() {
+    $app.innerHTML = excludeShell("addresses", `
       <div class="card">
-        <h3>Не обрабатывать эти адреса</h3>
+        <h3>Не трогать эти адреса</h3>
         <p class="desc">
-          Всё, что здесь перечислено, z2k не трогает вообще — как будто обход
-          выключен именно для этих адресов. Помогает, когда приложение ломается
-          от вмешательства в его трафик: камеры и домофоны с P2P, часть VoIP и
-          видеозвонков. Можно вписывать <b>домен</b>, <b>адрес</b> или
-          <b>подсеть</b> (например <code>203.0.113.0/24</code>). Адреса
-          начинают действовать сразу, домены — после ближайшего обновления
-          списков.
+          Всё, что идёт на перечисленные здесь адреса, z2k пропускает как есть —
+          как будто обход для них выключен. Исключение работает по адресу
+          получателя, поэтому помогает и там, где имени сайта в запросе нет
+          вообще: камеры и домофоны, звонки и видеосвязь, игры и обмен данными
+          между устройствами напрямую.
+        </p>
+        <p class="desc">
+          Вписывать нужно <b>адрес</b> (например <code>203.0.113.7</code>) или
+          <b>подсеть</b> (например <code>203.0.113.0/24</code>). Работает сразу
+          и остаётся в силе после перезагрузки роутера. Имя сайта здесь не
+          сработает — для него вкладка <a href="#/whitelist">«Домены»</a>.
         </p>
         <p class="desc">
           Локальная сеть (192.168.x, 10.x, 172.16–31.x и подобные) исключена
@@ -1400,8 +1628,8 @@
         </p>
         <div class="wl-add">
           <label class="field">
-            <span class="field-label">Домен, адрес или подсеть</span>
-            <input id="ex-input" type="text" placeholder="example.com или 203.0.113.0/24"
+            <span class="field-label">Адрес или подсеть</span>
+            <input id="ex-input" type="text" placeholder="203.0.113.7 или 203.0.113.0/24"
                    inputmode="url" autocomplete="off" autocapitalize="off"
                    spellcheck="false" autocorrect="off">
           </label>
@@ -1409,7 +1637,8 @@
         </div>
         <ul class="wl-list" id="ex-list">${skeletonLines(5)}</ul>
       </div>
-    `;
+      <div id="ex-legacy"></div>
+    `);
     document.getElementById("ex-add-btn").addEventListener("click", exAdd);
     document.getElementById("ex-input").addEventListener("keydown", e => {
       if (e.key === "Enter") exAdd();
@@ -1419,21 +1648,53 @@
 
   async function loadExclude() {
     const list = document.getElementById("ex-list");
+    const seq = _newLoad("exclude");
     try {
       const d = await apiGet("/exclude");
-      if (!d.entries.length) {
+      if (_stale("exclude", seq)) return;
+      const entries = d.entries || [];
+      if (!entries.length) {
         list.innerHTML = `<li style="color:var(--text-muted)">(пусто)</li>`;
-        return;
+      } else {
+        list.innerHTML = entries.map(en => `
+          <li><span>${escapeHtml(en)}</span><button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(en)}" data-del="${escapeHtml(en)}">${_icons.close}</button></li>
+        `).join("");
+        list.querySelectorAll("button[data-del]").forEach(btn => {
+          btn.addEventListener("click", () => exDelete(btn.dataset.del));
+        });
       }
-      list.innerHTML = d.entries.map(en => `
-        <li><span>${escapeHtml(en)}</span><button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(en)}" data-del="${escapeHtml(en)}">${_icons.close}</button></li>
-      `).join("");
-      list.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.addEventListener("click", () => exDelete(btn.dataset.del));
-      });
+      renderExcludeLegacy(d.legacy_domains || []);
     } catch (e) {
+      if (_stale("exclude", seq)) return;
       list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
     }
+  }
+
+  // Имена сайтов, осевшие в адресном списке, пока панель их сюда принимала.
+  // Они не действовали ни дня, но и молча прятать их нельзя — человек вписывал
+  // их осознанно и считает, что они работают. Блок появляется только когда
+  // такие записи есть.
+  function renderExcludeLegacy(domains) {
+    const box = document.getElementById("ex-legacy");
+    if (!box) return;
+    if (!domains.length) { box.innerHTML = ""; return; }
+    box.innerHTML = `
+      <div class="card">
+        <h3>Эти записи ничего не делают</h3>
+        <p class="desc">
+          Раньше сюда можно было вписать и имя сайта. По имени здесь ничего не
+          исключается, поэтому такие записи просто лежат в списке и ни на что
+          не влияют. Чтобы они заработали, добавьте их на вкладке
+          <a href="#/whitelist">«Домены»</a>, а отсюда удалите.
+        </p>
+        <ul class="wl-list" id="ex-legacy-list">${domains.map(dom => `
+          <li><span>${escapeHtml(dom)}</span><button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(dom)}" data-del="${escapeHtml(dom)}">${_icons.close}</button></li>
+        `).join("")}</ul>
+      </div>
+    `;
+    box.querySelectorAll("button[data-del]").forEach(btn => {
+      btn.addEventListener("click", () => exDelete(btn.dataset.del));
+    });
   }
 
   async function exAdd() {
@@ -1460,15 +1721,25 @@
     }
   }
 
-  async function renderWhitelist() {
-    $app.innerHTML = `
-      <h1 class="page-title">Whitelist</h1>
+  async function renderExcludeDomains() {
+    $app.innerHTML = excludeShell("domains", `
       <div class="card">
-        <h3>Исключённые домены</h3>
-        <p class="desc">Эти домены не обрабатываются zapret2 (suffix-match). <b>Изменения подхватываются сервисом без перезапуска</b> через несколько секунд.</p>
+        <h3>Не трогать эти сайты</h3>
+        <p class="desc">
+          Всё, что идёт на перечисленные здесь сайты, z2k пропускает как есть.
+          Так исключают то, что ломается от вмешательства в трафик: банки и
+          госуслуги, рабочие сервисы, магазины игр. Достаточно одного имени —
+          <code>example.com</code> закрывает и все его поддомены.
+        </p>
+        <p class="desc">
+          <b>Изменения вступают в силу за несколько секунд, перезапускать
+          сервис не нужно.</b> Имя работает там, где оно видно в запросе; если
+          приложение ходит без имени — камеры, домофоны, звонки — исключать его
+          нужно на вкладке <a href="#/exclude">«Адреса»</a>.
+        </p>
         <div class="wl-add">
           <label class="field">
-            <span class="field-label">Новый домен</span>
+            <span class="field-label">Новый сайт</span>
             <input id="wl-input" type="text" placeholder="example.com"
                    inputmode="url" autocomplete="off" autocapitalize="off"
                    spellcheck="false" autocorrect="off">
@@ -1479,7 +1750,7 @@
         </div>
         <ul class="wl-list" id="wl-list">${skeletonLines(5)}</ul>
       </div>
-    `;
+    `);
     document.getElementById("wl-add-btn").addEventListener("click", wlAdd);
     document.getElementById("wl-input").addEventListener("keydown", e => {
       if (e.key === "Enter") wlAdd();
@@ -1507,7 +1778,7 @@
       const r = await fetch(API + "/whitelist/import", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        headers: { ...PANEL_HDR, "Content-Type": "text/plain;charset=utf-8" },
         body: text,
       });
       const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
@@ -1524,8 +1795,10 @@
 
   async function loadWhitelist() {
     const list = document.getElementById("wl-list");
+    const seq = _newLoad("whitelist");
     try {
       const d = await apiGet("/whitelist");
+      if (_stale("whitelist", seq)) return;
       if (!d.domains.length) {
         list.innerHTML = `<li style="color:var(--text-muted)">(пусто)</li>`;
         return;
@@ -1537,6 +1810,7 @@
         btn.addEventListener("click", () => wlDelete(btn.dataset.del));
       });
     } catch (e) {
+      if (_stale("whitelist", seq)) return;
       list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
     }
   }
@@ -1598,8 +1872,10 @@
 
   async function loadExtraDomains() {
     const list = document.getElementById("ed-list");
+    const seq = _newLoad("extraDomains");
     try {
       const d = await apiGet("/extra-domains");
+      if (_stale("extraDomains", seq)) return;
       if (!d.domains.length) {
         list.innerHTML = `<li style="color:var(--text-muted)">(пусто)</li>`;
         return;
@@ -1611,6 +1887,7 @@
         btn.addEventListener("click", () => edDelete(btn.dataset.del));
       });
     } catch (e) {
+      if (_stale("extraDomains", seq)) return;
       list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
     }
   }
@@ -1645,6 +1922,51 @@
   // the badge re-opens the modal with the same jobId so user can check
   // progress again.
   const _activeJobs = new Map(); // jobId → { title, opts }
+
+  // Чем кончилась фоновая задача. Провал и «мы не знаем, чем кончилось» —
+  // разные вещи: во втором случае в конфиге ничего не откатывалось, и
+  // говорить «вернул как было» нельзя, это прямая ложь.
+  const JOB_OK = "ok";
+  const JOB_FAIL = "fail";
+  const JOB_GONE = "gone";        // записи о задаче больше нет (job_reap / ребут)
+  const JOB_OFFLINE = "offline";  // панель перестала отвечать, итог не узнали
+  const JOB_REFUSED = "refused";  // панель на связи, но ответила отказом (403/500)
+  function jobOutcome(d) {
+    if (!d) return JOB_GONE;
+    if (d.outcome) return d.outcome;
+    // status==="unknown" трактуем терминально САМИ, не полагаясь на done в
+    // ответе: роутер мог не обновиться, и старый бекенд на неизвестный id
+    // отдаёт HTTP 200 с done:false — поллер тогда крутится вечно.
+    if (d.status === "unknown") return JOB_GONE;
+    return d.exit === 0 ? JOB_OK : JOB_FAIL;
+  }
+  // Итог не получен: откатывать UI нельзя, надо перечитать состояние.
+  function jobUnresolved(o) { return o === JOB_GONE || o === JOB_OFFLINE || o === JOB_REFUSED; }
+  // Один текст на все места, где обрабатывается неопределённый исход. Про
+  // JOB_GONE молчим — о нём поллер уже сказал своим тостом.
+  function unresolvedMsg(o) {
+    if (o === JOB_OFFLINE) return "Связь с панелью пропала — чем кончилось, пока неизвестно";
+    if (o === JOB_REFUSED) return "Панель ответила ошибкой — чем кончилось, пока неизвестно";
+    return "";
+  }
+
+  // Ждём, пока панель снова начнёт отвечать. Рестарт nfqws2 перетряхивает
+  // iptables на том же канале, через который открыта панель, — обрыв на
+  // десятки секунд здесь штатный, поэтому ждём долго и молча.
+  async function awaitPanelBack(timeoutMs = 120000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try { return await apiGet("/status"); }
+      catch (e) {
+        // Панель ответила отказом — она на связи, ждать её «возвращения»
+        // бессмысленно: так можно простоять все две минуты на ровном месте.
+        if (isHttpError(e)) return null;
+        if (Date.now() >= deadline) return null;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+
   // Background pollers — независимы от модалки. Запускаются при первом
   // openJobModal, продолжают работать даже если юзер закрыл модалку. На
   // done централизованно дёргают onDone, чистят registry и разлочивают UI.
@@ -1681,12 +2003,26 @@
   // treatment: каждая карточка с интерактивными элементами получает
   // opacity-reduce + большую пилюлю «⏳ Операция выполняется…» в углу.
   // Это immediately visible без hover. Tooltip остаётся для precision.
+  // Пока лок держит элемент, его настоящее состояние лежит в lockBackup, а
+  // .disabled принудительно true. Прямая запись в .disabled в это время
+  // теряется: снятие лока вернёт значение, снятое ДО перечитывания статуса.
+  // Поэтому загрузчики состояния пишут через эту обёртку.
+  function setLockAware(el, disabled) {
+    if (!el) return;
+    if (el.dataset.lockBackup !== undefined) el.dataset.lockBackup = disabled ? "1" : "0";
+    else el.disabled = disabled;
+  }
+
   function _updateGlobalUILock() {
     const busy = _activeJobs.size > 0;
     const lockMsg = "Дождитесь завершения текущей операции";
+    // Сравнение именно с undefined: lockBackup === "0" — валидный бэкап
+    // («был включён»), но строка "0" ложна, и на !dataset.lockBackup вторая
+    // задача перезаписывала бэкап уже залоченным значением "1". После неё
+    // элемент оставался выключенным навсегда — до перезагрузки страницы.
     document.querySelectorAll(".switch input[type=\"checkbox\"]").forEach(cb => {
       if (busy) {
-        if (!cb.dataset.lockBackup) {
+        if (cb.dataset.lockBackup === undefined) {
           cb.dataset.lockBackup = cb.disabled ? "1" : "0";
           cb.disabled = true;
           cb.closest(".switch")?.setAttribute("title", lockMsg);
@@ -1701,7 +2037,7 @@
     });
     document.querySelectorAll("[data-svc], #tg-enable, #tg-disable").forEach(btn => {
       if (busy) {
-        if (!btn.dataset.lockBackup) {
+        if (btn.dataset.lockBackup === undefined) {
           btn.dataset.lockBackup = btn.disabled ? "1" : "0";
           btn.disabled = true;
           btn.setAttribute("title", lockMsg);
@@ -1756,12 +2092,18 @@
       lastLog: "Запуск…",
       lastData: null,
       consecutiveErrors: 0,
+      httpErrors: 0,
       lastOutageWarn: 0,
       attachers: new Set(),  // (log, done, data) callbacks
     };
     _jobPollers.set(jobId, state);
 
     const MAX_ERRORS = state.opts.tolerateOutage ? 300 : 5;
+    // Определённый отказ панели терпеть столько нельзя: с tolerateOutage это
+    // 300 × 2 с ≈ десять минут глобального лока из-за одного 403 на /job.
+    // Три попытки — запас на разовый промах CGI, который на роутере под
+    // памятью может не форкнуться.
+    const MAX_HTTP_ERRORS = 3;
     const POLL_OK_MS = 1000;
     const POLL_ERR_MS = state.opts.tolerateOutage ? 2000 : 1000;
 
@@ -1789,16 +2131,38 @@
         const d = await apiGet("/job?id=" + encodeURIComponent(jobId));
         const recovered = state.consecutiveErrors > 0;
         state.consecutiveErrors = 0;
+        // Задачи нет: файлы подчистил job_reap или роутер перезагрузился
+        // посреди операции. Ответ при этом успешный (HTTP 200), счётчик
+        // сетевых ошибок его не поймает — терминальность решается здесь.
+        if (jobOutcome(d) === JOB_GONE) {
+          const log = (d.log || state.lastLog || "") +
+            "\n[задача не найдена — роутер перезагрузился или запись о ней уже удалена]";
+          const fin = { done: true, exit: null, status: "unknown", outcome: JOB_GONE, log };
+          notify(log, true, fin);
+          toast("Фоновая задача не найдена — проверьте состояние сервиса", "bad");
+          finish(fin);
+          return;
+        }
         const baseLog = d.log || "(нет вывода)";
         const log = recovered ? baseLog + "\n[панель снова на связи]" : baseLog;
         notify(log, !!d.done, d);
         if (d.done) { finish(d); return; }
       } catch (e) {
         state.consecutiveErrors++;
-        if (state.consecutiveErrors >= MAX_ERRORS) {
-          const log = state.lastLog + "\n[опрос прерван: " + e.message + "]";
-          notify(log, true, { exit: -1, log, done: true });
-          finish({ exit: -1, log, done: true });
+        // Ответ с кодом ошибки — это ответ: панель на связи и отказала. Копить
+        // такие до MAX_ERRORS значит держать весь UI залоченным минутами из-за
+        // события, которое само не рассосётся.
+        if (isHttpError(e)) state.httpErrors++; else state.httpErrors = 0;
+        const refused = state.httpErrors >= MAX_HTTP_ERRORS;
+        if (refused || state.consecutiveErrors >= MAX_ERRORS) {
+          // Не «операция провалилась», а «мы не узнали, чем она кончилась».
+          // Фоновая задача обычно доходит до конца сама.
+          const why = refused ? "панель ответила ошибкой: " : "связь с панелью потеряна: ";
+          const log = state.lastLog + "\n[" + why + e.message +
+            " — чем кончилась задача, неизвестно]";
+          const fin = { done: true, exit: null, outcome: refused ? JOB_REFUSED : JOB_OFFLINE, log };
+          notify(log, true, fin);
+          finish(fin);
           return;
         }
         if (state.consecutiveErrors === 2 || (state.consecutiveErrors - state.lastOutageWarn) >= 30) {
@@ -1875,6 +2239,76 @@
     closeBtn.addEventListener("click", () => {
       poller.attachers.delete(onTick);
       backdrop.remove();
+    });
+  }
+
+  // Подтверждение со своими подписями кнопок. Нативный confirm() тут не
+  // годится: его кнопки всегда OK/Отмена, а вопрос вида «Включать /
+  // Не включать» ответом «ОК» не описывается.
+  // Разметка — те же классы, что у openJobModal: своих в style.css нет.
+  function confirmModal(title, text, okLabel, cancelLabel) {
+    return new Promise(resolve => {
+      const prevFocus = document.activeElement;
+      const backdrop = document.createElement("div");
+      backdrop.className = "modal-backdrop";
+      // role/aria — по образцу sort-sheet ниже по файлу. Без них скринридер не
+      // объявляет ни факт открытия диалога, ни сам текст предупреждения, ради
+      // которого диалог и существует: озвучивалось только «кнопка».
+      // Акцентной покрашена БЕЗОПАСНАЯ кнопка, а не «Включать»: визуальный
+      // дефолт обязан совпадать с клавиатурным, иначе диалог подталкивает
+      // ровно к тому действию, от которого предостерегает.
+      backdrop.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true"
+             aria-labelledby="confirm-title" aria-describedby="confirm-text">
+          <h3 id="confirm-title">${escapeHtml(title)}</h3>
+          <div class="modal-warning" id="confirm-text">${escapeHtml(text)}</div>
+          <div class="modal-footer">
+            <button class="btn" id="confirm-ok">${escapeHtml(okLabel)}</button>
+            <button class="btn btn-primary" id="confirm-cancel">${escapeHtml(cancelLabel)}</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(backdrop);
+      const okBtn = backdrop.querySelector("#confirm-ok");
+      const cancelBtn = backdrop.querySelector("#confirm-cancel");
+
+      let answered = false;
+      function finish(answer) {
+        // Escape и клик по кнопке могут прийти в одном кадре — промис резолвим
+        // ровно один раз, второй ответ молча отбрасываем.
+        if (answered) return;
+        answered = true;
+        document.removeEventListener("keydown", onKey);
+        backdrop.remove();
+        if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
+        resolve(answer);
+      }
+      // Ловушка фокуса. Подложка position:fixed останавливает мышь, но Tab
+      // из неё выходит на страницу — оттуда можно было повторно дёрнуть тот же
+      // контрол и получить ВТОРУЮ модалку поверх первой, с теми же id.
+      function onKey(e) {
+        if (e.key === "Escape") { finish(false); return; }
+        if (e.key !== "Tab") return;
+        // Строго в порядке DOM: список задом наперёд ломает ровно то, ради чего
+        // ловушка сделана — с изначально сфокусированной кнопки первый же Tab
+        // не считался «последним» и уходил на страницу под диалогом.
+        const stops = [okBtn, cancelBtn];
+        const first = e.shiftKey ? stops[stops.length - 1] : stops[0];
+        const last = e.shiftKey ? stops[0] : stops[stops.length - 1];
+        if (document.activeElement === last || !backdrop.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+
+      okBtn.addEventListener("click", () => finish(true));
+      cancelBtn.addEventListener("click", () => finish(false));
+      // Клик мимо окна = отказ; клик внутри окна не закрывает ничего.
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) finish(false); });
+      document.addEventListener("keydown", onKey);
+      // Фокус на ОТКАЗЕ: это предупреждение, и случайный Enter обязан не
+      // включить ничего.
+      cancelBtn.focus();
     });
   }
 
@@ -2052,6 +2486,10 @@
   // The network trip stays where it means something: entering the page, the
   // explicit «Обновить» button, and after an edit or delete.
   let stateCache = null;
+  // Запрос, который ещё в полёте. Новый вызов его отменяет: /state стоит
+  // ~2.4 с шелл-CGI на роутере, и два параллельных прогона соревнуются за
+  // тот же CPU ради ответа, который всё равно будет отброшен.
+  let _stateAbort = null;
 
   // Re-render with the rows already in hand. Falls back to a real load if the
   // cache is empty (first paint, or an error cleared it).
@@ -2060,17 +2498,33 @@
   async function loadState(useCache) {
     const body = document.getElementById("state-body");
     if (!body) return;
+    // Поколение поднимает ТОЛЬКО сетевой путь. Пересортировка — операция вида:
+    // строки уже в браузере, в сеть она не идёт. Считая её новой загрузкой, мы
+    // отменяли летящий /state и выбрасывали его ответ вместе с обновлением
+    // кэша — то есть возвращали ровно тот баг, ради которого гейт вводился:
+    // удалил строку, кликнул по заголовку колонки — строка снова на экране.
+    // seq === 0 значит «к этой перерисовке гейт не применяется».
+    let seq = 0;
     try {
       let entries;
       if (useCache && stateCache) {
         entries = stateCache;
       } else {
+        seq = _newLoad("state");
+        if (_stateAbort) _stateAbort.abort();
+        _stateAbort = typeof AbortController === "function" ? new AbortController() : null;
+        const signal = _stateAbort ? _stateAbort.signal : undefined;
         // /pools may fail if nfqws2 isn't running — tolerate it (dropdowns then
         // fall back to the row's own strategy as the max).
         const [d, poolsResp] = await Promise.all([
-          apiGet("/state"),
-          apiGet("/pools").catch(() => ({ pools: {} })),
+          apiGet("/state", { signal }),
+          apiGet("/pools", { signal }).catch(() => ({ pools: {} })),
         ]);
+        // Ответ более старого вызова, обогнавший свежий, не должен ни
+        // рисовать таблицу, ни отравлять stateCache: иначе только что
+        // удалённая строка «воскресала» сразу после тоста «Удалено», а
+        // последующие пересортировки шли уже по мусорному кэшу.
+        if (_stale("state", seq)) return;
         statePools = (poolsResp && poolsResp.pools) || {};
         entries = d.entries || [];
         stateCache = entries;
@@ -2204,6 +2658,7 @@
         });
       });
     } catch (e) {
+      if (seq && _stale("state", seq)) return;
       body.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
     }
   }
@@ -2261,7 +2716,7 @@
         <div class="btn-row" style="margin-bottom:10px">
           <button class="btn" id="diag-refresh">Обновить</button>
           <button class="btn" id="diag-copy">Копировать</button>
-          <a class="btn btn-primary" id="diag-download" href="${API}/diag/download" download>Скачать файл</a>
+          <button class="btn btn-primary" id="diag-download">Скачать файл</button>
         </div>
         <pre class="log" id="diag-output"><span class="skel-text">${skeletonLines(10)}</span></pre>
       </div>
@@ -2270,17 +2725,49 @@
     document.getElementById("diag-copy").addEventListener("click", () => {
       copyToClipboard(document.getElementById("diag-output").textContent);
     });
+    document.getElementById("diag-download").addEventListener("click", diagDownload);
     loadDiag();
+  }
+
+  // Fetched rather than linked: a plain <a href> is a navigation and cannot
+  // carry X-Z2K-Panel, so on a browser too old for Sec-Fetch-Site the download
+  // would come back 403. Same blob trick as warpExport.
+  async function diagDownload(ev) {
+    const btn = ev.currentTarget;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Готовим…";
+    try {
+      const text = await apiGetText("/diag/download");
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `z2k-diag-${stamp}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      toast("Не удалось скачать отчёт: " + e.message, "bad");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
   }
 
   async function loadDiag() {
     const el = document.getElementById("diag-output");
     if (!el) return;
+    const seq = _newLoad("diag");
     el.innerHTML = `<span class="skel-text">${skeletonLines(10)}</span>`;
     try {
       const d = await apiGet("/diag");
+      if (_stale("diag", seq)) return;
       el.textContent = d.diag || "(пусто)";
     } catch (e) {
+      if (_stale("diag", seq)) return;
       el.textContent = "Ошибка: " + e.message;
     }
   }
@@ -2475,13 +2962,16 @@
   async function loadStrategyPools() {
     const host = document.getElementById("strategy-pools");
     if (!host) return;
+    const seq = _newLoad("strategyPools");
     let d;
     try {
       d = await apiGet("/strategy/pools");
     } catch (e) {
+      if (_stale("strategyPools", seq)) return;
       host.innerHTML = `<p class="desc">Не удалось загрузить: ${escapeHtml(e.message)}</p>`;
       return;
     }
+    if (_stale("strategyPools", seq)) return;
     const pools = (d && d.pools) || [];
     host.innerHTML = pools.map(p => {
       const custom = p.custom === 1 || p.custom === "1";
@@ -2516,27 +3006,27 @@
       const ed   = card.querySelector(".strategy-editor");
       const ta   = card.querySelector(".strategy-text");
       const msg  = card.querySelector(".strategy-msg");
+      const say = (text, good) => {
+        msg.hidden = false;
+        msg.textContent = text;
+        msg.style.color = good ? "var(--good)" : "var(--bad)";
+      };
+
       const isCustom = card.querySelector('[data-act="mode"]').textContent.trim() === "Вернуть авто";
-      if (isCustom) { ed.hidden = false; loadStrategyText(pool, ta); }
+      if (isCustom) { ed.hidden = false; loadStrategyText(pool, ta, say); }
 
       card.querySelector('[data-act="mode"]').addEventListener("click", async () => {
         if (isCustom) {
           if (!confirm(`Вернуть «${STRATEGY_POOL_NAMES[pool] || pool}» на автоподбор?\n\nВаша строка будет удалена.`)) return;
           try { await apiPost("/strategy/pool/reset", { pool }); }
           catch (e) { toast("Ошибка: " + e.message, "bad"); return; }
-          toast("Пул вернулся на автоподбор", "good");
+          toast("Пул вернулся на автоподбор");
           loadStrategyPools();
         } else {
           ed.hidden = !ed.hidden;
-          if (!ed.hidden && !ta.value) loadStrategyText(pool, ta);
+          if (!ed.hidden && !ta.value) loadStrategyText(pool, ta, say);
         }
       });
-
-      const say = (text, good) => {
-        msg.hidden = false;
-        msg.textContent = text;
-        msg.style.color = good ? "var(--good)" : "var(--bad)";
-      };
 
       card.querySelector('[data-act="check"]').addEventListener("click", async () => {
         say("Проверяю…", true);
@@ -2548,6 +3038,12 @@
       });
 
       card.querySelector('[data-act="save"]').addEventListener("click", async () => {
+        // Пустое поле — это либо неудавшееся чтение, либо ничего не введено.
+        // И то и другое ушло бы на бекенд пустым телом поверх рабочей строки.
+        if (!ta.value.trim()) {
+          say("Строка пустая — сохранять нечего. Чтобы отключить свою строку, вернитесь на автоподбор.", false);
+          return;
+        }
         say("Проверяю и применяю…", true);
         try {
           await apiPostText("/strategy/pool/save?pool=" + encodeURIComponent(pool), ta.value);
@@ -2557,15 +3053,23 @@
           say("Не сохранено: " + e.message, false);
           return;
         }
-        toast("Стратегия применена, сервис перезапущен — автоподбор для пула выключен", "good");
+        toast("Стратегия применена, сервис перезапущен — автоподбор для пула выключен");
         loadStrategyPools();
       });
     });
   }
 
-  async function loadStrategyText(pool, ta) {
-    try { ta.value = await apiGetText("/strategy/pool?pool=" + encodeURIComponent(pool)); }
-    catch (_) { ta.value = ""; }
+  async function loadStrategyText(pool, ta, say) {
+    try {
+      ta.value = await apiGetText("/strategy/pool?pool=" + encodeURIComponent(pool));
+    } catch (e) {
+      // Молчаливая пустая textarea читается как «строка пропала»: юзер жмёт
+      // «Сохранить и применить», и на бекенд уходит пустое тело поверх
+      // работающей строки. Поэтому — сказать вслух и не подсовывать пустоту.
+      ta.value = "";
+      if (say) say("Не удалось прочитать текущую строку: " + e.message +
+                   ". Не сохраняйте, пока она не загрузится — отправится пустая.", false);
+    }
   }
 
   // ---------- Utils ----------

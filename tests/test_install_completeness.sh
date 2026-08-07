@@ -145,8 +145,14 @@ printf "\n--- init.d path mapping is complete ---\n"
 (
     ZAPRET2_DIR=/opt/zapret2
     # shellcheck disable=SC1091
-    . "$(dirname "$0")/../lib/auto_update.sh" 2>/dev/null
-    for f in "$(dirname "$0")/../files/init.d/"S*; do
+    # Пути от корня репозитория: строка 18 уже сделала туда cd. Повторный
+    # "$(dirname "$0")/.." отсчитывался от НОВОГО cwd и уводил на уровень выше
+    # репозитория — sourcing молча падал, подоболочка выходила до первой
+    # проверки, и весь блок «3 passed, 1 failed» получал любой, кто запускал
+    # тест по имени файла из tests/. Через run_all с абсолютным путём тот же
+    # тест проходил, поэтому расхождение годами выглядело как «у меня не так».
+    . lib/auto_update.sh 2>/dev/null
+    for f in files/init.d/S*; do
         [ -f "$f" ] || continue
         base=$(basename "$f")
         got=$(au_install_paths "files/init.d/$base" | head -1)
