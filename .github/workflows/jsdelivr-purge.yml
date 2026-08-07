@@ -9,7 +9,10 @@ name: Release CDN (purge + verify)
 #   1) purge  — сбросить edge-кэш jsdelivr (иначе фоллбэк-зеркало z2k_fetch
 #      отдаёт до 12 часов старья; purge.jsdelivr.net выселяет за ~1 сек);
 #   2) verify — дождаться, пока КАЖДЫЙ изменённый файл, который юзер может
-#      фетчить, реально отдаётся с raw и jsdelivr с правильным sha256.
+#      фетчить, реально отдаётся с правильным sha256. Гейт держит
+#      raw.githubusercontent (штатный источник); отставание jsdelivr —
+#      фоллбэка — только громкое предупреждение: блокировать выпуск причиной,
+#      которая на доставку не влияет, дороже, чем её пережить.
 #
 # Второй пункт — пост-деплойная верификация: класс отказа «версия сдвинулась,
 # а зеркало отдало старьё» уже пинил юзера к ревизии двухдневной давности пять
@@ -181,12 +184,23 @@ jobs:
           BRANCH: ${{ github.ref_name }}
         run: |
           set -u
-          # Дедлайн 18 мин: raw.githubusercontent исторически догоняет ветку
-          # за ~5 мин, jsdelivr после purge — секунды. Не сошлось за 18 —
-          # это уже не пропагация, это инцидент, и он должен быть красным.
+          # Зеркала неравноценны, и гейт обязан это отражать.
+          #
+          # raw.githubusercontent — то, откуда роутеры берут байты штатно
+          # (z2k_fetch: VPS-хоп, затем raw). Он не догнал ветку — это инцидент,
+          # и релиз объявлять нельзя: люди получат старый код под новым номером.
+          #
+          # jsdelivr — ФОЛЛБЭК на случай, когда raw недоступен. Его edge-кэш
+          # после purge обычно сходится за секунды, но иногда залипает на
+          # десятки минут, и это его нормальное поведение, а не наша поломка.
+          # Раньше цикл ждал ОБА зеркала и валил сборку из-за отставшего
+          # фоллбэка — то есть блокировал выпуск по причине, которая на
+          # доставку не влияет, пока жив первичный источник. Теперь отставание
+          # jsdelivr — громкое предупреждение, а красным job делает только raw.
           started=$(date +%s)
           deadline=$((started + 1080))
           cp /tmp/verify/files.txt /tmp/verify/pending.txt
+          : > /tmp/verify/cdnlag.txt
           round=0
           while [ -s /tmp/verify/pending.txt ]; do
               round=$((round + 1))
@@ -210,22 +224,54 @@ jobs:
                   fi
                   raw=$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/${REPO}/${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || raw="FETCH-ERR"
                   cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
-                  if [ "$raw" = "$want" ] && [ "$cdn" = "$want" ]; then
-                      printf '  [ok +%ss] %s\n' "$(( $(date +%s) - started ))" "$f"
+                  # В pending остаётся только то, что не сошлось на raw: гейт
+                  # держит он один. Отставание jsdelivr запоминаем отдельно.
+                  if [ "$raw" = "$want" ]; then
+                      if [ "$cdn" = "$want" ]; then
+                          printf '  [ok +%ss] %s\n' "$(( $(date +%s) - started ))" "$f"
+                      else
+                          printf '  [raw ok, cdn отстал] %s\n' "$f"
+                          grep -qxF "$f" /tmp/verify/cdnlag.txt || echo "$f" >> /tmp/verify/cdnlag.txt
+                      fi
                   else
-                      [ "$raw" != "$want" ] && printf '  [stale raw] %s\n' "$f"
-                      [ "$cdn" != "$want" ] && printf '  [stale cdn] %s\n' "$f"
+                      printf '  [stale raw] %s\n' "$f"
                       echo "$f" >> /tmp/verify/next.txt
                   fi
               done < /tmp/verify/pending.txt
               mv /tmp/verify/next.txt /tmp/verify/pending.txt
               [ -s /tmp/verify/pending.txt ] || break
               if [ "$(date +%s)" -ge "$deadline" ]; then
-                  echo "::error::CDN не сошёлся за 18 минут — юзеры могут получать старые байты:"
-                  sed 's/^/  STALE: /' /tmp/verify/pending.txt
+                  echo "::error::raw.githubusercontent не сошёлся за 18 минут — юзеры получат старые байты:"
+                  sed 's/^/  STALE RAW: /' /tmp/verify/pending.txt
                   exit 1
               fi
-              echo "--- round $round: $(wc -l < /tmp/verify/pending.txt | tr -d ' ') файлов ещё не сошлись, повтор через 30с ---"
+              echo "--- round $round: $(wc -l < /tmp/verify/pending.txt | tr -d ' ') файлов ещё не сошлись на raw, повтор через 30с ---"
               sleep 30
           done
-          echo "CDN сошёлся: все проверенные файлы отдаются с правильным sha256 (+$(( $(date +%s) - started ))s)"
+
+          # Первичный источник сошёлся. Даём фоллбэку короткую фору и, если он
+          # так и не догнал, говорим об этом громко — но не блокируем выпуск.
+          if [ -s /tmp/verify/cdnlag.txt ]; then
+              echo "--- raw сошёлся; жду jsdelivr ещё до 3 минут ---"
+              cdn_deadline=$(( $(date +%s) + 180 ))
+              while [ -s /tmp/verify/cdnlag.txt ] && [ "$(date +%s)" -lt "$cdn_deadline" ]; do
+                  : > /tmp/verify/next.txt
+                  while IFS= read -r f; do
+                      want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
+                      cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
+                      if [ "$cdn" = "$want" ]; then
+                          printf '  [cdn догнал] %s\n' "$f"
+                      else
+                          echo "$f" >> /tmp/verify/next.txt
+                      fi
+                  done < /tmp/verify/cdnlag.txt
+                  mv /tmp/verify/next.txt /tmp/verify/cdnlag.txt
+                  [ -s /tmp/verify/cdnlag.txt ] || break
+                  sleep 30
+              done
+          fi
+          if [ -s /tmp/verify/cdnlag.txt ]; then
+              echo "::warning::jsdelivr всё ещё отдаёт старые байты для $(wc -l < /tmp/verify/cdnlag.txt | tr -d ' ') файлов. Это ФОЛЛБЭК-зеркало: пока raw жив, доставка не страдает, но у тех, у кого raw заблокирован, обновление может отстать до суток."
+              sed 's/^/  CDN LAG: /' /tmp/verify/cdnlag.txt
+          fi
+          echo "raw сошёлся: все проверенные файлы отдаются с правильным sha256 (+$(( $(date +%s) - started ))s)"
