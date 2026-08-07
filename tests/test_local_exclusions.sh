@@ -372,5 +372,49 @@ for ep in "GET /exclude" "POST /exclude/add" "POST /exclude/delete"; do
     fi
 done
 
+# --- 13. Файл переживает переустановку ---------------------------------------
+# Он лежит ВНУТРИ дерева, которое reinstall уносит в .old и удаляет. Пока
+# инсталлятор про него не знал, переустановка стирала адреса безвозвратно —
+# причём незаметно: сет живёт в ядре и держит их до первой перезагрузки.
+# Проверяем поведением: гоняем сами блоки бэкапа и восстановления из install.sh
+# на песочном дереве, а не грепом по тексту.
+INST_SH="$HERE/lib/install.sh"
+SBOX="$TMP/reinstall"
+mkdir -p "$SBOX/tree/ipset" "$SBOX/backup"
+printf '203.0.113.7\n198.51.100.0/24\n' > "$SBOX/tree/ipset/zapret-hosts-user-exclude.txt"
+
+# Блок бэкапа и блок восстановления вырезаем по якорям и исполняем как есть.
+_bk=$(awk '/Адресные исключения \(вкладка/,/^        fi$/' "$INST_SH")
+_rs=$(awk '/Восстановить адресные исключения/,/^        fi$/' "$INST_SH")
+if [ -n "$_bk" ] && [ -n "$_rs" ]; then
+    (
+        ZAPRET2_DIR="$SBOX/tree"; backup_tmp="$SBOX/backup"
+        die() { exit 1; }; print_success() { :; }
+        eval "$_bk"
+        rm -rf "$ZAPRET2_DIR"          # ровно то, что делает reinstall
+        mkdir -p "$ZAPRET2_DIR"
+        eval "$_rs"
+    ) 2>/dev/null
+    if [ "$(cat "$SBOX/tree/ipset/zapret-hosts-user-exclude.txt" 2>/dev/null)" = "$(printf '203.0.113.7\n198.51.100.0/24')" ]; then
+        ok "адресные исключения переживают переустановку"
+    else
+        bad "адресные исключения переживают переустановку" \
+            "после reinstall осталось: [$(cat "$SBOX/tree/ipset/zapret-hosts-user-exclude.txt" 2>/dev/null)]"
+    fi
+else
+    bad "адресные исключения переживают переустановку" \
+        "в install.sh не найден блок бэкапа или восстановления"
+fi
+
+# Путь обязан совпадать у всех троих: панель пишет, сид читает, инсталлятор
+# сохраняет. Расхождение здесь и было корнем — инсталлятор про файл не знал.
+_p='ipset/zapret-hosts-user-exclude.txt'
+if grep -qF "$_p" "$ACTIONS" && grep -qF "$_p" "$HERE/files/S99zapret2.new" && grep -qF "$_p" "$INST_SH"; then
+    ok "путь к файлу одинаков у панели, сида и инсталлятора"
+else
+    bad "путь к файлу одинаков у панели, сида и инсталлятора" \
+        "actions=$(grep -cF "$_p" "$ACTIONS") seed=$(grep -cF "$_p" "$HERE/files/S99zapret2.new") install=$(grep -cF "$_p" "$INST_SH")"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
