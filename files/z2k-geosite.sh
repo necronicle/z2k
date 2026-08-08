@@ -240,19 +240,31 @@ fetch_asset() {
         return $?
     fi
     if [ "$rc" = "3" ]; then
-        # Upstream unchanged. But our target might not yet be populated
-        # (first install after cold ETag cache; or upstream ETag matches
-        # but our target file was just created/copied from shipped). Two
-        # sub-cases:
-        #   a) target exists and non-empty → 304 is accurate for this
-        #      flow, leave as-is, return 0
-        #   b) target missing or empty → we have no local copy, need to
-        #      force a re-download. Delete ETag + retry once.
-        if [ -s "$target" ]; then
+        # Upstream unchanged. But 304 говорит только о том, что НЕ поменялся
+        # источник — про содержимое цели он не говорит ничего. Раньше здесь
+        # стояла проверка «цель непустая», и этого было мало:
+        #
+        # curl сохраняет ETag во время скачивания, независимо от того, легло
+        # ли содержимое в цель. Если apply_new_list потом отказал (например,
+        # сработал страж усадки), ETag всё равно записан — и на следующем
+        # прогоне мы получаем 304, видим непустую цель и рапортуем «unchanged,
+        # keep existing» с кодом 0. Цель при этом так и держит шипнутый бандл,
+        # а отказ ещё и исчезает из вида: счётчик failed обнуляется.
+        #
+        # Поэтому сверяем происхождение: цель считается актуальной, только если
+        # маркер говорит, что её собрал ИМЕННО ЭТОТ источник. Иначе 304 к нашей
+        # цели не относится — сносим ETag и качаем заново.
+        local prev_asset_304=""
+        [ -f "${target}.asset" ] && prev_asset_304=$(cat "${target}.asset" 2>/dev/null)
+        if [ -s "$target" ] && [ "$prev_asset_304" = "$asset" ]; then
             log "  $asset → $target: unchanged, keep existing"
             return 0
         fi
-        log "  $asset → $target: 304 but target empty, forcing re-download"
+        if [ -s "$target" ]; then
+            log "  $asset → $target: 304, но в цели другой источник (${prev_asset_304:-неизвестен}) — качаю заново"
+        else
+            log "  $asset → $target: 304 but target empty, forcing re-download"
+        fi
         rm -f "$ETAG_DIR/${asset}.etag" "$TMP_DIR/$asset.304"
         fetch_to_tmp "$asset"
         rc=$?

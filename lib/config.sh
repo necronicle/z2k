@@ -6,6 +6,33 @@
 # УПРАВЛЕНИЕ СПИСКАМИ ДОМЕНОВ
 # ==============================================================================
 
+# Пометить только что уложенный шипнутый список как ФОЛЛБЕК.
+#
+# z2k-geosite.sh перед заменой списка проверяет, не усох ли новый более чем на
+# 20%, и класс сравниваемого хранит в файле-маркере `<цель>.asset` рядом с целью.
+# Маркер он пишет ТОЛЬКО после успешного применения, а при его отсутствии
+# включает сторож (условие `[ -z "$prev_asset" ]` стоит в enforce-ветке, не в
+# пропускающей). Установка клала бандл без маркера — и дальше:
+#
+#   апстримный ru-blocked.txt (74739 строк) против бандла (125451) = 59% < 80%
+#   -> «список НЕ трогаем», return 1, маркер не пишется, состояние не меняется
+#
+# То есть замок захлопывался навсегда: свежий список не вставал НИ РАЗУ ни на
+# одном роутере с памятью меньше 900 МБ (там выбирается малый ru-blocked.txt), и
+# весь парк сидел на снимке из бандла. Снаружи это выглядело как безобидная
+# строка «[geosite] fetch summary: 4 ok, 1 failed» — единственный след.
+#
+# Сравнение бандла с апстримом некорректно по своей природе: это разные
+# источники, а не усадка одного и того же. Помечаем происхождение явно, и
+# geosite видит смену источника, пропускает сторож один раз и кладёт апстрим.
+# После этого маркер становится апстримным, и сторож работает как задуман —
+# защищая от настоящей усадки внутри одного источника.
+z2k_mark_shipped_fallback() {
+    [ -s "$1" ] || return 0
+    printf '%s\n' "shipped-fallback" > "${1}.asset" 2>/dev/null || true
+    return 0
+}
+
 # Скачать списки доменов из zapret4rocket
 download_domain_lists() {
     print_header "Загрузка списков доменов"
@@ -27,6 +54,7 @@ download_domain_lists() {
     print_info "Загрузка YouTube TCP list (local snapshot)..."
     if [ -s "${snapshot_dir}/extra_strats/TCP/YT/List.txt" ]; then
         cp -f "${snapshot_dir}/extra_strats/TCP/YT/List.txt" "${yt_tcp_dir}/List.txt"
+        z2k_mark_shipped_fallback "${yt_tcp_dir}/List.txt"
         local count
         count=$(wc -l < "${yt_tcp_dir}/List.txt" 2>/dev/null || echo "0")
         print_success "YouTube TCP: $count доменов"
@@ -52,6 +80,7 @@ download_domain_lists() {
     print_info "Загрузка RKN list (local snapshot)..."
     if [ -s "${snapshot_dir}/extra_strats/TCP/RKN/List.txt" ]; then
         cp -f "${snapshot_dir}/extra_strats/TCP/RKN/List.txt" "${rkn_tcp_dir}/List.txt"
+        z2k_mark_shipped_fallback "${rkn_tcp_dir}/List.txt"
         local count
         count=$(wc -l < "${rkn_tcp_dir}/List.txt" 2>/dev/null || echo "0")
         print_success "RKN: $count доменов"
@@ -63,6 +92,7 @@ download_domain_lists() {
     print_info "Загрузка QUIC YouTube list (local snapshot)..."
     if [ -s "${snapshot_dir}/extra_strats/UDP/YT/List.txt" ]; then
         cp -f "${snapshot_dir}/extra_strats/UDP/YT/List.txt" "${yt_udp_dir}/List.txt"
+        z2k_mark_shipped_fallback "${yt_udp_dir}/List.txt"
         local count
         count=$(wc -l < "${yt_udp_dir}/List.txt" 2>/dev/null || echo "0")
         print_success "QUIC YouTube: $count доменов"
@@ -76,6 +106,7 @@ download_domain_lists() {
     mkdir -p "$discord_tcp_dir"
     if [ -s "${snapshot_dir}/extra_strats/TCP/RKN/Discord.txt" ]; then
         cp -f "${snapshot_dir}/extra_strats/TCP/RKN/Discord.txt" "${discord_tcp_dir}/TCP_Discord.txt"
+        z2k_mark_shipped_fallback "${discord_tcp_dir}/TCP_Discord.txt"
         local count
         count=$(wc -l < "${discord_tcp_dir}/TCP_Discord.txt" 2>/dev/null || echo "0")
         print_success "Discord TCP hostlist: $count доменов"
