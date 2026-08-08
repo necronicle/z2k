@@ -3182,9 +3182,23 @@ step_finalize() {
     # go out to the network at all.
     if [ -x "${ZAPRET2_DIR}/z2k-update-lists.sh" ] && \
        [ -z "$(ls "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null)" ]; then
-        print_info "Загрузка игровых списков WARP..."
-        sh "${ZAPRET2_DIR}/z2k-update-lists.sh" warp-games >/dev/null 2>&1 || \
+        # Вывод НЕ гасим.
+        #
+        # Здесь стояло `>/dev/null 2>&1`, и это последний шаг установки: два
+        # десятка закачек, у каждой свой таймаут, и всё это в полной тишине.
+        # Человек видел замерший экран после строки про Instagram и решал, что
+        # установка повисла, — трое пришли с этим за один день, хотя установка
+        # у них доходила до конца. Немой длинный шаг неотличим от сломанного.
+        #
+        # Печатаем результат по каждому списку с отступом: видно, что процесс
+        # идёт и на чём именно он сейчас стоит.
+        print_info "Загрузка игровых списков WARP (это самый долгий шаг установки)..."
+        if sh "${ZAPRET2_DIR}/z2k-update-lists.sh" warp-games 2>&1 | sed 's/^/    /'; then
+            :
+        fi
+        if [ -z "$(ls "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null)" ]; then
             print_warning "Игровые списки WARP не загрузились — подтянутся при следующем обновлении списков"
+        fi
     fi
 
     # Discord-voice DNS pinning REMOVED (p-57.3). It used to pin ~200
