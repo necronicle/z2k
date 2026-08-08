@@ -278,8 +278,19 @@ sync_autohostlist_to_rkn()
 	local auto="${AUTOHOSTLIST_FILE:-$base/zapret-hosts-auto.txt}"
 	local rkn_list="${AUTOHOSTLIST_RKN_LIST:-$ZAPRET_BASE/extra_strats/TCP/RKN/List.txt}"
 	local whitelist="${AUTOHOSTLIST_WHITELIST:-$ZAPRET_BASE/lists/whitelist.txt}"
+	# Постоянный след того, что автохостлист нашёл сам.
+	#
+	# Раньше его не было вообще: найденные домены вливались в РКН-список, а
+	# исходный файл очищался — и отличить их от 75 тысяч апстримных записей
+	# становилось нечем. Показать человеку «вот что подобралось само» было
+	# неоткуда, а главное — обновление РКН-списка с апстрима перезаписывает
+	# файл целиком и уносит их с собой. Пока страж усадки держал апстрим
+	# заблокированным, это не проявлялось; после его размыкания проявится.
+	local keep="${AUTOHOSTLIST_KEEP_FILE:-$ZAPRET_BASE/lists/autohostlist-domains.txt}"
 
-	[ -s "$auto" ] || return 0
+	# Работаем, если есть что переносить ЛИБО что восстанавливать: второе нужно
+	# как раз после замены РКН-списка апстримом.
+	[ -s "$auto" ] || [ -s "$keep" ] || return 0
 	mkdir -p "$(dirname "$rkn_list")" 2>/dev/null || true
 	[ -f "$rkn_list" ] || : > "$rkn_list"
 
@@ -289,11 +300,23 @@ sync_autohostlist_to_rkn()
 	tmp_add="$(mktemp /tmp/z2k_ah_add.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_add.$$")"
 	tmp_final="$(mktemp /tmp/z2k_ah_final.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_final.$$")"
 
-	normalize_autohost_domains < "$auto" | sort -u > "$tmp_auto" 2>/dev/null || true
+	# Источник = свежая находка ∪ уже накопленное. Второе слагаемое и есть
+	# восстановление после того, как апстримный список затёр цель.
+	{
+		[ -f "$auto" ] && cat "$auto"
+		[ -f "$keep" ] && cat "$keep"
+	} | normalize_autohost_domains | sort -u > "$tmp_auto" 2>/dev/null || true
 	[ -s "$tmp_auto" ] || {
 		rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" 2>/dev/null || true
 		return 0
 	}
+
+	# Накопленное сохраняем ДО слияния: если ниже что-то оборвётся, находки уже
+	# не потеряются. Пишем через temp + mv, чтобы не оставить обрубок.
+	mkdir -p "$(dirname "$keep")" 2>/dev/null || true
+	if cp -f "$tmp_auto" "${keep}.tmp.$$" 2>/dev/null; then
+		mv -f "${keep}.tmp.$$" "$keep" 2>/dev/null || rm -f "${keep}.tmp.$$" 2>/dev/null
+	fi
 
 	{
 		[ -f "$rkn_list" ] && cat "$rkn_list"
@@ -910,6 +933,72 @@ z2k_strip_user_exclude_comments()
 	else
 		rm -f "$tmp" 2>/dev/null
 	fi
+	return 0
+}
+
+# Список файлов, покрытие которыми делает запись в extra-domains бессмысленной.
+# Тот же набор, что у панели (webpanel/cgi/actions.sh, _domain_lists_catalog) —
+# расхождение здесь означало бы, что панель запрещает добавить домен, а чистка
+# его не трогает, или наоборот. Тест сверяет оба списка.
+z2k_covering_lists()
+{
+	printf '%s\n' \
+		"${ZAPRET_BASE}/lists/whitelist.txt" \
+		"${ZAPRET_BASE}/extra_strats/TCP/RKN/List.txt" \
+		"${ZAPRET_BASE}/extra_strats/TCP/YT/List.txt" \
+		"${ZAPRET_BASE}/extra_strats/TCP/YT_GV/List.txt" \
+		"${ZAPRET_BASE}/extra_strats/UDP/YT/List.txt" \
+		"${ZAPRET_BASE}/extra_strats/TCP_Discord.txt" \
+		"${ZAPRET_BASE}/lists/autohostlist-domains.txt" \
+		"${ZAPRET_BASE}/lists/discovered-domains.txt"
+}
+
+# Убрать из «доп доменов» то, что уже покрыто другими списками.
+#
+# Панель такие записи больше не принимает, но у людей они уже лежат: до этой
+# правки добавить можно было что угодно, и в extra-domains оседали домены,
+# которые и так в РКН-списке. Толку от них ноль, а человек уверен, что настроил.
+#
+# Покрытием считается сам домен ИЛИ любой его родитель — хостлисты матчат
+# поддомены, поэтому при наличии example.com запись www.example.com избыточна.
+z2k_prune_extra_domains()
+{
+	local f="${ZAPRET_BASE}/lists/extra-domains.txt"
+	local have tmp removed list
+	[ -s "$f" ] || return 0
+
+	have="/tmp/z2k_cov.$$"
+	: > "$have"
+	while IFS= read -r list; do
+		[ -n "$list" ] && [ -s "$list" ] || continue
+		grep -vE '^[[:space:]]*(#|$)' "$list" 2>/dev/null >> "$have"
+	done <<COVER
+$(z2k_covering_lists)
+COVER
+	if [ ! -s "$have" ]; then
+		rm -f "$have" 2>/dev/null
+		return 0
+	fi
+
+	tmp="/tmp/z2k_extra.$$"
+	# Первый файл — множество покрытых имён; для каждой строки extra-domains
+	# проверяем её саму и всех родителей.
+	awk 'NR==FNR { c[$0]=1; next }
+	     { s=$0; sub(/#.*/,"",s); gsub(/[ \t\r]/,"",s)
+	       if (s == "") next
+	       keep=1; n=split(s,a,".")
+	       for (i=1; i<=n-1; i++) { p=a[i]; for (j=i+1;j<=n;j++) p=p "." a[j]; if (p in c) { keep=0; break } }
+	       if (keep) print s }' "$have" "$f" > "$tmp" 2>/dev/null
+
+	# Считаем ДО подмены и только по непустым записям, иначе «удалено 0»
+	# печаталось бы на каждом старте у всех.
+	removed=$(( $(grep -vcE '^[[:space:]]*(#|$)' "$f" 2>/dev/null || echo 0) - $(grep -cvE '^$' "$tmp" 2>/dev/null || echo 0) ))
+	if [ "${removed:-0}" -gt 0 ] && mv -f "$tmp" "$f" 2>/dev/null; then
+		echo "extra-domains: removed $removed domain(s) already covered by other lists"
+	else
+		rm -f "$tmp" 2>/dev/null
+	fi
+	rm -f "$have" 2>/dev/null
 	return 0
 }
 
@@ -1949,6 +2038,7 @@ start_fw()
     # делает вызов безопасным и когда их ещё нет.
     z2k_ensure_user_exclude_file
     z2k_strip_user_exclude_comments
+    z2k_prune_extra_domains
     z2k_seed_local_exclusions
     z2k_seed_user_exclusions
     z2k_policy_connmark_start

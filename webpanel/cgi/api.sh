@@ -484,12 +484,37 @@ case "$method $path" in
         exit 0
         ;;
 
+    "GET /autohostlist-domains")
+        json_header
+        printf '{"ok":true,"domains":['
+        first=1
+        autohostlist_domains_list | while IFS= read -r d; do
+            [ -z "$d" ] && continue
+            if [ "$first" = "1" ]; then first=0; else printf ','; fi
+            json_string "$d"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+
+    "POST /autohostlist-domains/delete")
+        body=$(read_body)
+        domain=$(form_value "$body" "domain")
+        [ -z "$domain" ] && json_fail "400 Bad Request" "domain required"
+        autohostlist_domains_delete "$domain" || json_fail "400 Bad Request" "invalid or delete failed"
+        json_ok
+        ;;
+
     "POST /extra-domains/add"|"POST /extra-domains/delete")
         body=$(read_body)
         domain=$(form_value "$body" "domain")
         [ -z "$domain" ] && json_fail "400 Bad Request" "domain required"
         if [ "$path" = "/extra-domains/add" ]; then
-            extra_domains_add "$domain" || json_fail "400 Bad Request" "invalid or add failed"
+            # Причину отказа показываем как есть: бэкенд объясняет, в каком
+            # именно списке домен уже лежит, а generic «invalid or add failed»
+            # это объяснение съедал — человек видел отказ без причины.
+            _add_err=$(extra_domains_add "$domain" 2>&1 >/dev/null) || \
+                json_fail "400 Bad Request" "${_add_err:-invalid or add failed}"
         else
             extra_domains_delete "$domain" || json_fail "400 Bad Request" "invalid or delete failed"
         fi

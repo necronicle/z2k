@@ -1180,6 +1180,73 @@ _whitelist_delete_locked() {
     return 0
 }
 
+# --- где ещё встречается домен -------------------------------------------------
+#
+# Вписывать в «Доп домены» то, что уже лежит в РКН, YouTube или Discord, — чистая
+# самообманка: обход для такого домена и так работает, запись ничего не меняет, а
+# человек уверен, что что-то настроил. Хуже, когда домен лежит в исключениях: там
+# он намеренно выключен, и добавление в доп домены выглядит как «включил», хотя
+# исключение всё равно победит.
+#
+# Совпадением считается сам домен ИЛИ любой его родитель: хостлисты матчат
+# поддомены, поэтому при наличии example.com запись www.example.com избыточна.
+# Обратное неверно — example.com при наличии www.example.com добавлять можно, он
+# шире.
+_domain_lists_catalog() {
+    # <метка>|<путь>. Порядок = порядок проверки; первым идёт то, что человеку
+    # понятнее увидеть в ответе.
+    cat <<CATALOG
+исключения|${LISTS_DIR}/whitelist.txt
+РКН|${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt
+YouTube|${ZAPRET2_DIR}/extra_strats/TCP/YT/List.txt
+YouTube (видео)|${ZAPRET2_DIR}/extra_strats/TCP/YT_GV/List.txt
+YouTube (QUIC)|${ZAPRET2_DIR}/extra_strats/UDP/YT/List.txt
+Discord|${ZAPRET2_DIR}/extra_strats/TCP_Discord.txt
+автохостлист|${LISTS_DIR}/autohostlist-domains.txt
+найденные автоматически|${LISTS_DIR}/discovered-domains.txt
+CATALOG
+}
+
+# Домен и все его родители, по одному на строку: для www.a.example.com это
+# www.a.example.com, a.example.com, example.com. Односегментные хвосты (com)
+# отбрасываем — они в списках не встречаются, а искать их дорого и опасно.
+_domain_suffixes() {
+    printf '%s' "$1" | awk '
+    {
+        n = split($0, a, ".")
+        for (i = 1; i <= n - 1; i++) {
+            s = a[i]
+            for (j = i + 1; j <= n; j++) s = s "." a[j]
+            print s
+        }
+    }'
+}
+
+# Печатает «метка|совпавшая запись», если домен уже покрыт каким-то списком.
+# Пусто — значит нигде не встречается.
+#
+# Один grep на список, а не на каждый суффикс: в РКН-списке 75 тысяч строк, и
+# перебор по домену превратил бы добавление одной записи в несколько секунд.
+# Цикл читает каталог через here-doc, а НЕ из конвейера: за конвейером тело
+# while уезжает в подоболочку, и выход из него по первому совпадению перестаёт
+# работать — проверялись бы все списки до последнего.
+_domain_in_lists() {
+    local domain="$1" pats label path hit
+    pats=$(_domain_suffixes "$domain")
+    [ -n "$pats" ] || return 0
+    while IFS='|' read -r label path; do
+        [ -n "$path" ] && [ -s "$path" ] || continue
+        hit=$(printf '%s\n' "$pats" | grep -m1 -xF -f - "$path" 2>/dev/null)
+        if [ -n "$hit" ]; then
+            printf '%s|%s\n' "$label" "$hit"
+            return 0
+        fi
+    done <<CATALOG
+$(_domain_lists_catalog)
+CATALOG
+    return 0
+}
+
 # --- extra-domains ---
 # Live hostlist для autocircular. Подхватывается сервисом без рестарта
 # (memory feedback_no_service_restart_for_hostlist). Если файл редактируют
@@ -1189,6 +1256,39 @@ _whitelist_delete_locked() {
 extra_domains_list() {
     [ -f "$EXTRA_DOMAINS_FILE" ] || { echo ""; return 0; }
     grep -vE '^[[:space:]]*(#|$)' "$EXTRA_DOMAINS_FILE"
+}
+
+# Домены, которые автохостлист подобрал сам. Файл ведёт сервис
+# (sync_autohostlist_to_rkn): туда попадает всё найденное, и оттуда же оно
+# восстанавливается после обновления РКН-списка с апстрима.
+AUTOHOSTLIST_DOMAINS_FILE="${AUTOHOSTLIST_DOMAINS_FILE:-$LISTS_DIR/autohostlist-domains.txt}"
+
+autohostlist_domains_list() {
+    [ -f "$AUTOHOSTLIST_DOMAINS_FILE" ] || { echo ""; return 0; }
+    grep -vE '^[[:space:]]*(#|$)' "$AUTOHOSTLIST_DOMAINS_FILE"
+}
+
+# Удаление — это «автохостлист ошибся, домен сюда не относится». Убираем и из
+# накопленного, и из РКН-списка, иначе следующий старт вернёт его обратно.
+autohostlist_domains_delete() {
+    local domain="$1" rkn tmp
+    case "$domain" in
+        ''|*' '*|-*|*[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
+    esac
+    domain=$(printf '%s' "$domain" | tr 'A-Z' 'a-z'); domain="${domain%.}"
+    [ -n "$domain" ] || { echo "invalid domain" >&2; return 1; }
+    rkn="${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt"
+    for f in "$AUTOHOSTLIST_DOMAINS_FILE" "$rkn"; do
+        [ -f "$f" ] || continue
+        tmp="${f}.z2k.$$"
+        grep -vxF "$domain" "$f" > "$tmp" 2>/dev/null
+        # grep -v выходит с единицей, когда не осталось ни строки, — на статус
+        # тут смотреть нельзя, иначе удаление последней записи молча отменится.
+        if [ -f "$tmp" ]; then
+            mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+        fi
+    done
+    return 0
 }
 
 extra_domains_add() {
@@ -1214,6 +1314,22 @@ _extra_domains_add_locked() {
     touch "$EXTRA_DOMAINS_FILE" 2>/dev/null
     if grep -qxF "$domain" "$EXTRA_DOMAINS_FILE"; then
         return 0  # idempotent
+    fi
+    # Уже покрыт другим списком — добавлять нечего. Сообщение уходит в stderr,
+    # оттуда его подхватывает api.sh и показывает человеку целиком: без имени
+    # списка ответ «уже есть» бесполезен, искать домен по восьми файлам он не
+    # пойдёт.
+    local _found _flabel _fentry
+    _found=$(_domain_in_lists "$domain")
+    if [ -n "$_found" ]; then
+        _flabel="${_found%%|*}"
+        _fentry="${_found#*|}"
+        if [ "$_fentry" = "$domain" ]; then
+            echo "домен уже есть в списке «${_flabel}»" >&2
+        else
+            echo "домен уже покрыт записью ${_fentry} в списке «${_flabel}»" >&2
+        fi
+        return 1
     fi
     _list_end_nl "$EXTRA_DOMAINS_FILE"
     printf '%s\n' "$domain" >> "$EXTRA_DOMAINS_FILE"
