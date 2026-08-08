@@ -3,7 +3,7 @@ BINARY=z2k-rt-proxy
 # paths, so `make` produced binaries that differed from the shipped ones and the
 # release could not be reproduced/verified. Toolchain is pinned for the same reason —
 # Go 1.26+ miscompiles MIPS soft-float on these routers.
-GO ?= $(HOME)/go/bin/go1.22.12
+GO ?= $(HOME)/go/bin/go1.25.12
 # -buildvcs=false: without it Go stamps the git revision and dirty-flag INTO the binary,
 # so the same source produces different bytes depending on whether it was built before or
 # after the commit — which silently defeats "rebuild and compare md5" release verification.

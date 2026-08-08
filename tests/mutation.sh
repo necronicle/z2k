@@ -13,7 +13,7 @@
 
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GO="${GO:-$HOME/go/bin/go1.22.12}"
+GO="${GO:-$HOME/go/bin/go1.25.12}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

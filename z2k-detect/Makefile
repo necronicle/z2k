@@ -1,7 +1,7 @@
 # z2k-detect cross-compile Makefile.
 # Builds stripped, trimpath'd binaries for every OpenWrt arch we ship.
 
-GO         ?= $(HOME)/go/bin/go1.22.12
+GO         ?= $(HOME)/go/bin/go1.25.12
 BUILDFLAGS = -ldflags="-s -w" -trimpath -buildvcs=false   # see rt-proxy/Makefile: VCS stamping breaks md5 verification
 PKG        = ./cmd/z2k-detect
 OUTDIR     = builds
