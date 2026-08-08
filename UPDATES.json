@@ -65,7 +65,7 @@
   "files/z2k-config-validator.sh": "31b8e39341f75efb130500ad473cabd90677d814be259bc110429fbc3e4c01d4",
   "files/z2k-diag.sh": "91a963a866358b81816da1d5d7f6af9f6bc663c65600e56b7d6b69e58d4025da",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
-  "files/z2k-geosite.sh": "dc08f7501b4bac8cefccf489764fa96b7491e3e226e1366c43bf44e1d5a09a1e",
+  "files/z2k-geosite.sh": "95c79e4a84637a22ea80cfda9417b18a640de8afeee676fa0be49631fdedbf73",
   "files/z2k-insta-ip-refresh.sh": "5503589976353df4d1c69dbf193997a6de48df1dd2af970f91265c83cc8890e0",
   "files/z2k-nfqueue-selfheal.sh": "f170f69077da716473ef2a8ec63381bd6eb4e55316104924a36e784dcfb2a63c",
   "files/z2k-ppe-deoffload.sh": "2e17688dc5de388fe95fbfc36b49b0c71485537faac7de639e17560006b43ced",
