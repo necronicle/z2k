@@ -1294,6 +1294,20 @@ step_build_zapret2() {
         fi
     fi
 
+    # Снять снапшот для отката — ДО того, как что-либо будет тронуто.
+    #
+    # Раньше его не снимал никто: единственным вызовом create_rollback_snapshot
+    # была ручная команда `z2k snapshot`, которую не запускает ни установка, ни
+    # авто-обновление, ни планировщик. Комментарий в auto_update.sh при этом
+    # обещал, что «install.sh took a rollback snapshot before it started», и на
+    # него же ссылался обработчик неудачного обновления. На роутерах каталога
+    # .rollback не было вовсе — то есть `z2k rollback` после плохой обновы
+    # честно отвечал «snapshot не найден», и восстанавливать было нечего.
+    if [ -d "$ZAPRET2_DIR" ] && [ -f "$ZAPRET2_DIR/config" ]; then
+        create_rollback_snapshot "pre-reinstall" || \
+            print_warning "Снапшот не снят — откат к текущей версии будет недоступен"
+    fi
+
     # Сохранить пользовательские данные перед удалением
     local backup_tmp="/opt/z2k-upgrade-backup"
     rm -rf "$backup_tmp"
@@ -3940,13 +3954,66 @@ run_full_install() {
 # ROLLBACK МЕХАНИЗМ
 # ==============================================================================
 
-ROLLBACK_DIR="/opt/zapret2/.rollback"
+# Снапшот живёт РЯДОМ с деревом, а не внутри него. Внутри (/opt/zapret2/.rollback)
+# он был бесполезен: переустановка переименовывает всё дерево в .old.$$ и удаляет
+# его на успехе, унося снапшот с собой — то есть откатываться было нечем ровно
+# после той операции, ради которой снапшот и снимают.
+ROLLBACK_DIR="/opt/z2k-rollback"
+ROLLBACK_DIR_LEGACY="/opt/zapret2/.rollback"
+
+# Бинарники, которые переустановка заменяет. Лежат вне ZAPRET2_DIR, поэтому
+# транзакционный .old.$$ их не покрывает — без явного сохранения регрессия в
+# любом из них необратима на месте.
+ROLLBACK_SBIN_BINS="tg-mtproxy-client z2k-rt-proxy z2k-detect z2k-usque"
+
+# Сколько килобайт держать свободными на /opt после сохранения бинарников.
+# Снапшот не должен становиться причиной того, что установке не хватит места
+# (issue #29: обрыв от нехватки места оставляет хвост, хвост делает следующий
+# обрыв вероятнее). Не влезаем — сохраняем только конфиг, это лучше, чем ничего.
+ROLLBACK_KEEP_FREE_KB=32768
+
+# Хватит ли места на /opt, чтобы положить в снапшот копию бинарников.
+# Available в выводе df — третья колонка с конца (Available, Use%, Mounted on);
+# считаем от конца, потому что длинное имя устройства сдвигает колонки слева.
+_rollback_have_room_for_bins() {
+    local need=0 avail _b
+    for _b in $ROLLBACK_SBIN_BINS; do
+        [ -f "/opt/sbin/$_b" ] || continue
+        need=$((need + $(du -sk "/opt/sbin/$_b" 2>/dev/null | awk '{print $1}' || echo 0)))
+    done
+    if [ -d "${ZAPRET2_DIR}/binaries" ]; then
+        need=$((need + $(du -sk "${ZAPRET2_DIR}/binaries" 2>/dev/null | awk '{print $1}' || echo 0)))
+    fi
+    [ "$need" -gt 0 ] || return 1
+    avail=$(df -k /opt 2>/dev/null | awk 'END{print $(NF-2)}')
+    case "$avail" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$avail" -ge "$((need + ROLLBACK_KEEP_FREE_KB))" ]
+}
 
 # Создать snapshot перед изменениями
 create_rollback_snapshot() {
     local reason=${1:-"manual"}
 
+    # Свежий снапшот автоматикой не перетираем.
+    #
+    # Хранится только последний, а человек со сломавшимся роутером первым делом
+    # переустанавливается. Второй прогон снял бы снапшот с УЖЕ сломанного
+    # состояния поверх последнего рабочего — и откатываться стало бы некуда
+    # ровно в том сценарии, ради которого всё и делается. Сутки — потому что
+    # откат это аварийное действие вскоре после плохой обновы; дальше снапшот
+    # уместнее обновить, чем хранить вечно. Ручной `z2k snapshot` не ограничен.
+    if [ "$reason" = "pre-reinstall" ] && [ -f "$ROLLBACK_DIR/metadata" ]; then
+        if [ -n "$(find "$ROLLBACK_DIR/metadata" -maxdepth 0 -mmin -1440 2>/dev/null)" ]; then
+            print_info "Снапшот уже есть (моложе суток) — сохраняю его, чтобы откат вёл к последней рабочей версии"
+            return 0
+        fi
+    fi
+
     print_info "Создание rollback-snapshot..."
+
+    # Снапшот из старых версий лежал внутри дерева и переустановку не переживал.
+    # Убираем, чтобы `z2k rollback` не нашёл там протухшую копию без бинарников.
+    rm -rf "$ROLLBACK_DIR_LEGACY" 2>/dev/null
 
     # Очистить предыдущий snapshot (хранится только последний)
     rm -rf "$ROLLBACK_DIR"
@@ -3978,12 +4045,41 @@ create_rollback_snapshot() {
     [ -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" ] && \
         cp -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv" "$ROLLBACK_DIR/state.tsv"
 
+    # Сохранить бинарники. Это единственная часть снапшота, которая может не
+    # поместиться (около 14 МБ против килобайт у всего остального), поэтому
+    # место проверяем заранее и при нехватке молча деградируем до конфига.
+    local bins_saved=0
+    if _rollback_have_room_for_bins; then
+        mkdir -p "$ROLLBACK_DIR/sbin" 2>/dev/null
+        local _b
+        for _b in $ROLLBACK_SBIN_BINS; do
+            [ -f "/opt/sbin/$_b" ] || continue
+            if cp -f "/opt/sbin/$_b" "$ROLLBACK_DIR/sbin/$_b"; then
+                bins_saved=$((bins_saved + 1))
+            else
+                print_warning "Не удалось сохранить /opt/sbin/$_b в снапшот"
+            fi
+        done
+        # Дерево binaries/<arch> — nfqws2, ip2net, mdig. nfq2/nfqws2 у нас
+        # симлинк в него, так что восстановления дерева достаточно.
+        if [ -d "${ZAPRET2_DIR}/binaries" ]; then
+            if cp -a "${ZAPRET2_DIR}/binaries" "$ROLLBACK_DIR/binaries" 2>/dev/null; then
+                bins_saved=$((bins_saved + 1))
+            else
+                print_warning "Не удалось сохранить binaries/ в снапшот"
+            fi
+        fi
+    else
+        print_warning "Мало места на /opt — бинарники в снапшот не сохранены (откат вернёт только конфигурацию)"
+    fi
+
     # Записать метаданные
     cat > "$ROLLBACK_DIR/metadata" <<ROLLBACK_META
 SNAPSHOT_TIME=$(date +%Y%m%d_%H%M%S)
 REASON=$reason
 Z2K_VERSION=${Z2K_VERSION:-unknown}
 NFQWS2_VERSION=$(get_nfqws2_version 2>/dev/null || echo unknown)
+BINARIES=$bins_saved
 ROLLBACK_META
 
     print_success "Rollback snapshot создан: $ROLLBACK_DIR"
@@ -4042,12 +4138,167 @@ rollback_to_snapshot() {
     [ -f "$ROLLBACK_DIR/state.tsv" ] && \
         cp -f "$ROLLBACK_DIR/state.tsv" "${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv"
 
+    # Восстановить бинарники. Пишем через temp + mv: работающий бинарник нельзя
+    # перезаписать на месте (ETXTBSY), а оборванный cp оставил бы огрызок —
+    # то есть неудачный откат сломал бы сервис вернее, чем то, от чего откатывались.
+    local restored_bins=0 _b _tmp
+    for _b in $ROLLBACK_SBIN_BINS; do
+        [ -f "$ROLLBACK_DIR/sbin/$_b" ] || continue
+        _rollback_stop_binary_service "$_b"
+        _tmp="/opt/sbin/${_b}.rb.$$"
+        if cp -f "$ROLLBACK_DIR/sbin/$_b" "$_tmp" 2>/dev/null && chmod +x "$_tmp" 2>/dev/null; then
+            if mv -f "$_tmp" "/opt/sbin/$_b" 2>/dev/null; then
+                restored_bins=$((restored_bins + 1))
+            else
+                rm -f "$_tmp" 2>/dev/null
+                print_warning "Не удалось заменить /opt/sbin/$_b"
+            fi
+        else
+            rm -f "$_tmp" 2>/dev/null
+            print_warning "Не удалось восстановить /opt/sbin/$_b из снапшота"
+        fi
+    done
+
+    # Дерево binaries/<arch>. nfq2/nfqws2 — симлинк в него, чинить его отдельно
+    # не нужно, но если он потерялся (или стал обычным файлом) — пересоздаём.
+    if [ -d "$ROLLBACK_DIR/binaries" ]; then
+        if cp -a "$ROLLBACK_DIR/binaries/." "${ZAPRET2_DIR}/binaries/" 2>/dev/null; then
+            restored_bins=$((restored_bins + 1))
+            local _arch_dir
+            _arch_dir=$(readlink "${ZAPRET2_DIR}/nfq2/nfqws2" 2>/dev/null)
+            if [ -z "$_arch_dir" ] && [ ! -f "${ZAPRET2_DIR}/nfq2/nfqws2" ]; then
+                print_warning "nfq2/nfqws2 отсутствует — переустановите z2k, откат его не восстановит"
+            fi
+        else
+            print_warning "Не удалось восстановить binaries/ из снапшота"
+        fi
+    fi
+
+    if [ "$restored_bins" -gt 0 ]; then
+        print_success "Восстановлено бинарников: $restored_bins"
+    else
+        print_warning "В снапшоте нет бинарников — восстановлена только конфигурация"
+    fi
+
     # Перезапустить сервис
     if [ -x "$INIT_SCRIPT" ]; then
         "$INIT_SCRIPT" start 2>/dev/null || true
     fi
+    _rollback_restart_binary_services
+    if [ "$restored_bins" -gt 0 ]; then
+        _rollback_verify_daemons || true
+    fi
 
     print_success "Конфигурация восстановлена из rollback snapshot"
+    return 0
+}
+
+# Init-скрипты, владеющие бинарником. У tg-mtproxy-client их два: S98tg-tunnel
+# держит :1443 (Telegram), S97z2k-http-tunnel — :1444 (cdnbase). Оба гоняют один
+# и тот же файл, поэтому подменять его можно только остановив оба.
+_rollback_service_for_binary() {
+    case "$1" in
+        z2k-rt-proxy)      echo "/opt/etc/init.d/S96z2k-rt-proxy" ;;
+        z2k-detect)        echo "/opt/etc/init.d/S98z2k-detect" ;;
+        tg-mtproxy-client) echo "/opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97z2k-http-tunnel" ;;
+        *)                 echo "" ;;
+    esac
+}
+
+# Остановить владельца перед подменой файла. Сам mv атомарен и ETXTBSY не даёт,
+# но оставленный работать старый процесс продолжил бы крутить откаченный код.
+_rollback_stop_binary_service() {
+    local bin="$1" svc pids p waited
+
+    for svc in $(_rollback_service_for_binary "$bin"); do
+        [ -x "$svc" ] || continue
+        "$svc" stop >/dev/null 2>&1
+        # Супервизор init-скрипта штатным stop'ом снимается не всегда.
+        #
+        # Он ловит TERM трапом, но трап в sh отрабатывает только когда закончится
+        # ТЕКУЩАЯ команда, а команда эта — sleep из backoff'а, разрастающегося до
+        # 30 секунд после серии падений. То есть ровно в нашем сценарии (бинарник
+        # не стартует → супервизор крутится в цикле → backoff на максимуме) stop
+        # возвращается сразу, а супервизор живёт ещё полминуты и всё это время
+        # перезапускает сломанный файл. Снимаем его явно, по cmdline: в ps он
+        # выглядит как `sh <путь к init-скрипту>`, и pidof его не находит.
+        for p in $(_rollback_pids_matching "$svc"); do
+            kill "$p" 2>/dev/null
+        done
+    done
+
+    # Дождаться, пока демон действительно исчезнет. Копировать поверх работающего
+    # процесса технически можно (мы пишем через temp + mv), но оставленный жить
+    # старый процесс продолжит крутить тот самый код, от которого откатываются.
+    waited=0
+    while [ "$waited" -lt 8 ]; do
+        pidof "$bin" >/dev/null 2>&1 || break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if pidof "$bin" >/dev/null 2>&1; then
+        pids=$(pidof "$bin" 2>/dev/null)
+        for p in $pids; do
+            kill -9 "$p" 2>/dev/null
+        done
+        sleep 1
+    fi
+    return 0
+}
+
+# PID'ы процессов, в cmdline которых встречается подстрока. Нужно для
+# супервизоров: они запускаются как форк init-скрипта, поэтому pidof по имени
+# демона их не видит, а имя в ps — путь скрипта, а не бинарника.
+_rollback_pids_matching() {
+    local pat="$1" p cmd
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        [ "${p#/proc/}" = "$$" ] && continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+            *"$pat"*) echo "${p#/proc/}" ;;
+        esac
+    done
+}
+
+# Стартуем через init-скрипты, а не напрямую: они сами решают, поднимать ли
+# демон (TG_PROXY_USER_DISABLED) и ставят сопутствующие правила iptables.
+#
+# Вывод каждого старта показываем. Откат — аварийное действие, и «сервис молча
+# не поднялся» тут дороже лишних строк на экране: человек, который откатывается
+# ночью из-за сломавшегося обхода, должен увидеть отказ сразу, а не выяснять
+# наутро, что Telegram лежит уже с ночи.
+_rollback_restart_binary_services() {
+    local svc
+    for svc in /opt/etc/init.d/S96z2k-rt-proxy /opt/etc/init.d/S98tg-tunnel \
+               /opt/etc/init.d/S97z2k-http-tunnel /opt/etc/init.d/S98z2k-detect; do
+        [ -x "$svc" ] || continue
+        "$svc" start 2>&1 | sed "s|^|  ${svc##*/}: |"
+    done
+    return 0
+}
+
+# Проверить, что восстановленные бинарники реально работают. Без этого откат
+# сообщает об успехе по факту копирования файлов — то есть ровно так же, как
+# при откате на бинарник, который на этой железке не запускается.
+_rollback_verify_daemons() {
+    local failed="" _b
+    sleep 3
+    for _b in $ROLLBACK_SBIN_BINS; do
+        [ -f "$ROLLBACK_DIR/sbin/$_b" ] || continue
+        # z2k-detect запускается по расписанию, а не постоянно — его отсутствие
+        # в ps ничего не значит, поэтому проверяем только резидентные демоны.
+        [ "$_b" = "z2k-detect" ] && continue
+        if ! pidof "$_b" >/dev/null 2>&1; then
+            failed="$failed $_b"
+        fi
+    done
+    if [ -n "$failed" ]; then
+        print_warning "После отката не работают:${failed}"
+        print_warning "Запустите вручную: /opt/etc/init.d/S98tg-tunnel start ; /opt/etc/init.d/S96z2k-rt-proxy start"
+        return 1
+    fi
+    print_success "Восстановленные демоны работают"
     return 0
 }
 
@@ -4392,9 +4643,11 @@ uninstall_zapret2() {
         fi
     done
 
-    # Удалить zapret2 и legacy zapret (от старых установок)
+    # Удалить zapret2, legacy zapret и снапшот отката. Снапшот лежит рядом с
+    # деревом, а не внутри, поэтому сам он с деревом не уходит — без явного
+    # удаления после деинсталляции остались бы висеть 14 МБ бинарников.
     local _dir
-    for _dir in "$ZAPRET2_DIR" /opt/zapret; do
+    for _dir in "$ZAPRET2_DIR" /opt/zapret "${ROLLBACK_DIR:-/opt/z2k-rollback}"; do
         if [ -d "$_dir" ]; then
             rm -rf "$_dir" 2>/dev/null || true
             # Подстраховка: если процесс держал открытый файл/CWD или успел

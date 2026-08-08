@@ -940,10 +940,11 @@ au_health_check() {
     return 0
 }
 
-# Re-applied when health-check fails. We use the existing rollback infra
-# from install.sh (create_rollback_snapshot creates ROLLBACK_DIR). For
-# auto-update path the snapshot is created by install.sh in reinstall
-# mode; for patch we make a focused snapshot of just the changed files.
+# Re-applied when health-check fails. Two different snapshots are in play:
+# the reinstall path is covered by install.sh, which calls
+# create_rollback_snapshot("pre-reinstall") before it touches anything and
+# saves binaries alongside the config; the patch path is covered here, by a
+# focused snapshot of just the files this patch replaces.
 au_rollback_patch() {
     local pre_dir="$Z2K_AU_TMP_DIR/pre-apply"
     [ -d "$pre_dir" ] || return 1
@@ -1157,10 +1158,11 @@ au_run_apply() {
             export Z2K_AU_NFQWS_WAS_ALIVE
             if ! au_apply_reinstall "$target_tag" "$reset_state"; then
                 au_log "reinstall apply failed"
-                # install.sh took a rollback snapshot before it started, but
-                # nothing rolls it back on its own — the auto-timer that used to
-                # promise that never ran and is gone. Recovery is the operator's
-                # `z2k rollback`. We just bail and leave the breadcrumb.
+                # install.sh took a rollback snapshot before it started (config
+                # + binaries), but nothing rolls it back on its own — the
+                # auto-timer that used to promise that never ran and is gone.
+                # Recovery is the operator's `z2k rollback`. We just bail and
+                # leave the breadcrumb.
                 au_lock_release
                 return 1
             fi
