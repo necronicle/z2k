@@ -4,7 +4,7 @@
   "current": "r-74",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "f425a1c15258c6fef68996feed98e4f3059d627d609f13606a6a9e358f745a0b",
+  "files/S99zapret2.new": "b2105189ea17157b9b05b5cf408c7011599f67bc16620d1d5b27c649ebde4f8d",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/fake/4pda.bin": "eefeaf09dde8d69b1f176212541f63c68b314a33a335eced99a8a29f17254da8",
   "files/fake/http_iana_org.bin": "f77d1cdaff02b6311d4276eeb8479830ab777d8fce4a4b116135c7768f3a284a",

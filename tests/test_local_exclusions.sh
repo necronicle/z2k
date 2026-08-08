@@ -416,5 +416,81 @@ else
         "actions=$(grep -cF "$_p" "$ACTIONS") seed=$(grep -cF "$_p" "$HERE/files/S99zapret2.new") install=$(grep -cF "$_p" "$INST_SH")"
 fi
 
+# --- Файл обязан быть машинно-чистым -----------------------------------------
+#
+# Апстримный filedigger (ipset/def.sh) отдаёт этот файл в mdig ЦЕЛИКОМ,
+# построчно и без фильтрации. Любая строка, которая не разрешается в адрес,
+# становится ошибкой в логе. Шапка из шестнадцати строк комментария давала
+# «mdig stats : domains=16 success=0 error=16» на каждом роутере при каждом
+# обновлении списков, попадала в раздел errors диагностики и приходила к нам
+# как жалоба на сбой (2026-08-08). Пустые строки считаются так же.
+ENSURE=$(awk '/^z2k_ensure_user_exclude_file\(\)/{i=1} i{print} i&&/^\}/{exit}' "$INIT")
+STRIP=$(awk '/^z2k_strip_user_exclude_comments\(\)/{i=1} i{print} i&&/^\}/{exit}' "$INIT")
+
+if [ -n "$STRIP" ] && printf '%s' "$start_fw_body" | grep -q 'z2k_strip_user_exclude_comments'; then
+    ok "z2k_strip_user_exclude_comments определена и вызывается из start_fw"
+else
+    bad "z2k_strip_user_exclude_comments определена и вызывается из start_fw" \
+        "без вызова шапка останется у всех, кто ставил z2k раньше"
+fi
+
+CLEAN_BASE="$TMP/cleanroom"
+mkdir -p "$CLEAN_BASE/ipset"
+CLEAN_F="$CLEAN_BASE/ipset/zapret-hosts-user-exclude.txt"
+{
+    printf '#!/bin/sh\n'
+    printf 'ZAPRET_BASE=%s\n' "$CLEAN_BASE"
+    printf '%s\n' "$ENSURE"
+    printf '%s\n' "$STRIP"
+    printf '"$@"\n'
+} > "$TMP/clean_driver.sh"
+_clean() { sh "$TMP/clean_driver.sh" "$1" >/dev/null 2>&1; }
+
+# 1. Свежесозданный файл — ровно ноль строк. Одна лишняя = одна ошибка mdig.
+rm -f "$CLEAN_F"
+_clean z2k_ensure_user_exclude_file
+n=$(wc -l < "$CLEAN_F" 2>/dev/null | tr -d ' ')
+if [ "${n:-1}" = "0" ]; then
+    ok "новый файл исключений пустой (mdig не получит ни одной строки)"
+else
+    bad "новый файл исключений пустой" "в нём $n строк — столько же будет ошибок в логе"
+fi
+
+# 2. Подсказка не пропала, а уехала в спутник: апстрим открывает строго одно
+#    имя, поэтому соседний файл ему не виден, а человеку по SSH виден.
+if [ -s "$CLEAN_BASE/ipset/zapret-hosts-user-exclude.README.txt" ]; then
+    ok "подсказка лежит в файле-спутнике README"
+else
+    bad "подсказка лежит в файле-спутнике README" "документация потерялась совсем"
+fi
+
+# 3. Миграция: старая шапка уходит, записи остаются дословно и в том же порядке.
+printf '# шапка\n# ещё строка\n\n203.0.113.7\n198.51.100.0/24\n\n# хвост\n' > "$CLEAN_F"
+_clean z2k_strip_user_exclude_comments
+if [ "$(cat "$CLEAN_F")" = "$(printf '203.0.113.7\n198.51.100.0/24')" ]; then
+    ok "миграция убрала комментарии и пустые строки, записи сохранены"
+else
+    bad "миграция убрала комментарии и пустые строки, записи сохранены" \
+        "получилось: [$(tr '\n' '|' < "$CLEAN_F")]"
+fi
+
+# 4. Идемпотентность: повторный проход по чистому файлу ничего не меняет.
+before=$(cat "$CLEAN_F")
+_clean z2k_strip_user_exclude_comments
+if [ "$(cat "$CLEAN_F")" = "$before" ]; then
+    ok "повторный проход по чистому файлу ничего не меняет"
+else
+    bad "повторный проход по чистому файлу ничего не меняет" "файл поехал при втором вызове"
+fi
+
+# 5. Файл из одних комментариев схлопывается в пустой, а не остаётся как был.
+printf '# только шапка\n#\n' > "$CLEAN_F"
+_clean z2k_strip_user_exclude_comments
+if [ ! -s "$CLEAN_F" ]; then
+    ok "файл из одних комментариев схлопывается в пустой"
+else
+    bad "файл из одних комментариев схлопывается в пустой" "осталось: [$(tr '\n' '|' < "$CLEAN_F")]"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
