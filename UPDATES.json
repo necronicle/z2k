@@ -107,7 +107,7 @@
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/index.html": "f798f99d78e930a5cf4cbca3bf66dc034aff72962ddda657cddaaf535ad0f71b",
   "webpanel/www/style.css": "912fef03b336963e4654e7d5fcc6f1e6bfcdee40bdfdf8db2293d461f25a1734",
-  "z2k.sh": "2f52d6ba20f46617e85c34bbf5ba1da7d957eee50e16665da7f4c14fe0bcfaea"
+  "z2k.sh": "3da6b1cf81de11f839523a2f5ffd34e1b5bf2d93b86d5080fcc396b6c4b8da4e"
   },
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
