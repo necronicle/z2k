@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "r-74.1",
+  "current": "p-74.2",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -105,7 +105,7 @@
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
   "webpanel/www/app.js": "217910d98f2d702127631ea0147aa8d4e018ac6de5d66cec2c632a90d5d5cd58",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "64d1d7b830e61fc504d1bb279d7734beb8e80646f0cca322a3e159b091d3cafb",
+  "webpanel/www/index.html": "3c6b16af755847539bc2c6606abb54a92baa70db376f2f8b3236451e22bb29e8",
   "webpanel/www/style.css": "912fef03b336963e4654e7d5fcc6f1e6bfcdee40bdfdf8db2293d461f25a1734",
   "z2k.sh": "3da6b1cf81de11f839523a2f5ffd34e1b5bf2d93b86d5080fcc396b6c4b8da4e"
   },
@@ -260,6 +260,7 @@
 {"v": "r-73.1", "type": "reinstall", "ts": "2026-08-07T11:50:14Z", "ref": "c732c42", "desc": "Разделы «Whitelist» и «Исключения» объединены в один: домены и адреса теперь на соседних вкладках, а адресные исключения перестали пропадать после перезагрузки роутера. При включении автоподбора заблокированных доменов панель предупреждает о рисках. Панель больше не выполняет запросы, пришедшие со страниц сторонних сайтов.", "changed_files": ["files/S99zapret2.new", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/uninstall.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"]},
 {"v": "p-73.2", "type": "patch", "ts": "2026-08-07T17:28:47Z", "ref": "65d4e71", "desc": "Исправлена обработка кириллицы в панели: имя политики доступа с русскими буквами снова принимается. Тем, кто обновился в первые полчаса после выхода прошлой версии, обновление доедет само.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "UPDATES.json"]},
 {"v": "r-74", "type": "reinstall", "ts": "2026-08-08T07:23:09Z", "ref": "91850e6", "desc": "Служебные программы пересобраны на свежих инструментах — в них вошли накопившиеся исправления безопасности. Заодно починен откат: раньше он обещал вернуть предыдущую версию, но возвращать на деле было нечего. Теперь снимок делается автоматически перед каждым обновлением и включает сами программы, так что если после обновления что-то перестанет работать — откат вернёт всё как было.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"]},
-{"v": "r-74.1", "type": "reinstall", "ts": "2026-08-08T10:22:03Z", "ref": "1436ca5", "desc": "Исправлено обновление через веб-панель: раньше оно могло оборваться на середине и оставить роутер без обхода. Список заблокированных сайтов снова обновляется — он был заморожен на апрельском варианте. В разделе «Доп. домены» появилась вкладка с тем, что автохостлист нашёл сам, а домен, который уже есть в других списках, туда больше не добавить.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-geosite.sh", "lib/config.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "z2k.sh", "UPDATES.json"]}
+{"v": "r-74.1", "type": "reinstall", "ts": "2026-08-08T10:22:03Z", "ref": "1436ca5", "desc": "Исправлено обновление через веб-панель: раньше оно могло оборваться на середине и оставить роутер без обхода. Список заблокированных сайтов снова обновляется — он был заморожен на апрельском варианте. В разделе «Доп. домены» появилась вкладка с тем, что автохостлист нашёл сам, а домен, который уже есть в других списках, туда больше не добавить.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-geosite.sh", "lib/config.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "z2k.sh", "UPDATES.json"]},
+{"v": "p-74.2", "type": "patch", "ts": "2026-08-08T11:51:42Z", "ref": "PENDING", "desc": "Обновление через веб-панель больше не показывает ложную ошибку: раньше панель на несколько секунд теряла связь с собой во время установки и объявляла, что всё сорвалось, хотя обновление шло и доходило до конца. Последний шаг установки перестал молчать — теперь видно, что он делает, а не замерший экран.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "webpanel/www/app.js", "UPDATES.json"]}
   ]
 }
