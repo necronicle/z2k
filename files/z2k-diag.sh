@@ -680,6 +680,82 @@ print_netpath() {
                       END {if (!found) print (any != "" ? any " (только IPv6)" \
                                  : "НЕ РЕЗОЛВИТСЯ — проблема в DNS, а не в обходе")}')"
     fi
+
+    print_agh
+}
+
+# AdGuard Home. Если он стоит, 53-й порт держит он, а встроенный dns-proxy
+# прошивки штатно отключается — и записи `ip host`, на которых держится обход
+# Instagram и веб-WhatsApp, не спрашивает НИКТО: они целы и бесполезны, клиент
+# получает подменённый провайдером адрес. Снаружи это неотличимо от «обход не
+# работает», в логах z2k при этом ровно ничего. Разбор такого случая у живого
+# пользователя занял час именно потому, что в сводке не было видно ни AGH, ни
+# того, что наши пины перекрыты.
+print_agh() {
+    local y c hosts pinned inagh cmp n_pin n_hit state
+    y=""
+    for c in "${Z2K_AGH_YAML:-}" /opt/etc/AdGuardHome/AdGuardHome.yaml \
+             /opt/AdGuardHome/AdGuardHome.yaml /opt/var/AdGuardHome/AdGuardHome.yaml \
+             /opt/share/AdGuardHome/AdGuardHome.yaml; do
+        [ -n "$c" ] && [ -f "$c" ] && { y="$c"; break; }
+    done
+    if [ -z "$y" ]; then
+        printf 'AdGuardHome       : не найден (клиентам отвечает dns-proxy прошивки)\n'
+        return 0
+    fi
+    state="не запущен"
+    if pidof AdGuardHome >/dev/null 2>&1 || ps w 2>/dev/null | grep -qi '[A]dGuardHome'; then
+        state="работает"
+    fi
+    printf 'AGH config        : %s\n' "$y"
+
+    # Список доменов берём из самого рефрешера, а не дублируем здесь: иначе две
+    # копии списка разъедутся, и сводка начнёт врать про рассинхрон.
+    hosts=$(awk -F'"' '/^HOSTS=/ {print $2; exit}' "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" 2>/dev/null)
+    if [ -z "$hosts" ] || ! command -v ndmc >/dev/null 2>&1; then
+        printf 'AdGuardHome       : %s (сверить записи не с чем)\n' "$state"
+        return 0
+    fi
+    pinned=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+        | awk -v hosts="$hosts" '
+            BEGIN { n = split(hosts, h, " "); for (i = 1; i <= n; i++) own[h[i]] = 1 }
+            /^ip host/ && ($3 in own) && $4 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $3 "\t" $4 }')
+    inagh=$(awk -v hosts="$hosts" '
+        function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+        function unq(s) { gsub(/"/, "", s); gsub(Q, "", s); return s }
+        BEGIN { Q = sprintf("%c", 39); n = split(hosts, h, " ")
+                for (i = 1; i <= n; i++) own[tolower(h[i])] = 1
+                KRX = "^[ \t]*[\"" Q "]?rewrites[\"" Q "]?[ \t]*:" }
+        !inb && $0 ~ KRX { inb = 1; kin = match($0, /[^ \t]/) - 1; next }
+        inb {
+            t = trim($0)
+            if (t == "" || substr(t, 1, 1) == "#") next
+            cur = match($0, /[^ \t]/) - 1
+            if (cur < kin || (cur == kin && substr(t, 1, 1) != "-")) { inb = 0; next }
+            if (substr(t, 1, 1) == "-") { d = ""; a = ""; t = trim(substr(t, 2)) }
+            if (t == "") next
+            p = index(t, ":")
+            if (p == 0) next
+            k = unq(trim(substr(t, 1, p - 1))); v = unq(trim(substr(t, p + 1)))
+            if (k == "domain") d = tolower(v)
+            else if (k == "answer") a = v
+            if (d != "" && a != "" && (d in own)) { print d "\t" a; d = "" }
+        }' "$y" 2>/dev/null)
+    cmp=$( { printf '%s\n' "$pinned" | sed 's/^/P /'
+             printf '%s\n' "$inagh"  | sed 's/^/A /'; } \
+           | awk '$1 == "P" && NF == 3 { p[$2 " " $3] = 1; np++ }
+                  $1 == "A" && NF == 3 { a[$2 " " $3] = 1 }
+                  END { for (k in p) if (k in a) h++; printf "%d %d", np + 0, h + 0 }')
+    n_pin=${cmp%% *}; n_hit=${cmp##* }
+    if [ "$n_pin" = 0 ]; then
+        printf 'AdGuardHome       : %s, наших ip host нет — сверять нечего\n' "$state"
+    elif [ "$n_hit" = "$n_pin" ]; then
+        printf 'AdGuardHome       : %s, наши записи в rewrites: %s/%s — синхронизированы\n' \
+            "$state" "$n_hit" "$n_pin"
+    else
+        printf 'AdGuardHome       : %s, наши записи в rewrites: %s/%s — НЕ синхронизированы: AGH отвечает клиентам мимо ip host, обход Instagram/WhatsApp работать не будет\n' \
+            "$state" "$n_hit" "$n_pin"
+    fi
 }
 
 # =============================================================================
