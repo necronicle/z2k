@@ -95,6 +95,28 @@
   }
   function isHttpError(e) { return !!e && typeof e.httpStatus === "number"; }
 
+  // Отказ ли это на самом деле.
+  //
+  // Раньше отказом считался ЛЮБОЙ числовой статус, и это было ошибкой: при
+  // переустановке lighttpd не останавливается, а корень и CGI лежат внутри
+  // /opt/zapret2, которое на пятом шаге переезжает. Живой сервер без файлов
+  // отвечает 404 — и опрос, вместо того чтобы переждать переезд, объявлял
+  // «панель ответила ошибкой, чем кончилась задача, неизвестно» через ТРИ
+  // попытки, то есть через четыре секунды. При этом обрыв связи терпелся
+  // десять минут: мягкая ветка была ровно для этого случая, но он в неё не
+  // попадал.
+  //
+  // 404 — «этого сейчас нет», 502/503 — «сервер поднимается». Всё это
+  // временное и обязано пережидаться. Настоящий отказ — 403 (origin-гейт
+  // отверг) и 5xx кроме перечисленных.
+  function isRefusal(e) {
+    if (!isHttpError(e)) return false;
+    switch (e.httpStatus) {
+      case 404: case 502: case 503: case 504: return false;
+      default: return true;
+    }
+  }
+
   async function apiGet(path, opts = {}) {
     const r = await fetch(API + path, { credentials: "same-origin", headers: PANEL_HDR, signal: opts.signal });
     if (!r.ok) throw httpError(r.status, r.statusText);
@@ -2047,7 +2069,10 @@
       catch (e) {
         // Панель ответила отказом — она на связи, ждать её «возвращения»
         // бессмысленно: так можно простоять все две минуты на ровном месте.
-        if (isHttpError(e)) return null;
+        // Но 404 и 5xx-«поднимаюсь» отказом НЕ считаются: при переустановке
+        // корень и CGI переезжают вместе с /opt/zapret2, и живой lighttpd без
+        // файлов отвечает именно 404. Ждать тут как раз и надо.
+        if (isRefusal(e)) return null;
         if (Date.now() >= deadline) return null;
         await new Promise(r => setTimeout(r, 2000));
       }
@@ -2239,7 +2264,7 @@
         // Ответ с кодом ошибки — это ответ: панель на связи и отказала. Копить
         // такие до MAX_ERRORS значит держать весь UI залоченным минутами из-за
         // события, которое само не рассосётся.
-        if (isHttpError(e)) state.httpErrors++; else state.httpErrors = 0;
+        if (isRefusal(e)) state.httpErrors++; else state.httpErrors = 0;
         const refused = state.httpErrors >= MAX_HTTP_ERRORS;
         if (refused || state.consecutiveErrors >= MAX_ERRORS) {
           // Не «операция провалилась», а «мы не узнали, чем она кончилась».
