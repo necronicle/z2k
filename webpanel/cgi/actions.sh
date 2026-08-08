@@ -2288,7 +2288,22 @@ update_apply_async() {
     # (it has to — see the note above), so a button press was indistinguishable
     # from cron and could sit there sleeping for up to an hour and a half with an
     # empty job log. The menu path already passed this flag; the panel did not.
+    # trap '' HUP — БЕЗ него обновление через панель обрывается на середине.
+    #
+    # busybox ash шлёт SIGHUP фоновым детям, когда обёртка завершается, а
+    # CGI-обёртка обязана завершиться немедленно: она возвращает браузеру
+    # job_id. Плюс сама установка перезапускает панель, под которой и живёт эта
+    # задача. По умолчанию Go- и sh-процессы от HUP умирают, поэтому установка
+    # падала где-то на пятом шаге из двенадцати — ровно там, где переезжает
+    # дерево /opt/zapret2, — и роутер оставался с переименованным деревом и без
+    # панели. Снаружи это выглядело как «панель ответила 404, чем кончилась
+    # задача неизвестно»: сообщать о провале было уже некому и нечем.
+    #
+    # Приём тот же, что у S98tg-tunnel и S97z2k-http-tunnel (там он появился
+    # из-за MIPS): ребёнок наследует игнорирование HUP. Замерено на роутере —
+    # без строки задача умирает на HUP, с ней доживает до конца.
     (
+        trap '' HUP
         env Z2K_AU_MANUAL=1 Z2K_AU_NO_JITTER=1 \
             sh "$AU_SCRIPT" apply > "/tmp/z2k-job-$job_id.log" 2>&1
         echo "$?" > "/tmp/z2k-job-$job_id.exit"

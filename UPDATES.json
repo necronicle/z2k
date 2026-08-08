@@ -97,7 +97,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "00d45670f5f66eeefc03642b3724898e82a85fe879b84f54dabc92e4434d283d",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "b4b7601ef1202b7a8d5fc34e89a0277eddcde16057ea7fedd18e54387fb6b86e",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "e6f2c80fb8389944e7ad1b22abc17af6b74160e47ee73e912563be2b81bce9ee",
-  "webpanel/cgi/actions.sh": "9a7a53212a36854e12d4612784ff62b3e9cfe35e5720957e62f0eb054de04a88",
+  "webpanel/cgi/actions.sh": "36aadd7970e0baf0945a4481586313ee8a09ca306eb5cacd4a1f5b862baa967d",
   "webpanel/cgi/api.sh": "f07c7ff4662e517f259179c72ff10caa3d633bb0adf398d993ea7afa64053536",
   "webpanel/cgi/auth.sh": "9b6368dca02e895763fd99f6095b0b58db610495b126f8315bbe51b11ba03897",
   "webpanel/init.d/S96z2k-webpanel": "d064a61c1845e2a4ade4ed90cb3b6a82f3705fc6784f90f925d27c5bd7bcedbe",
