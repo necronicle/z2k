@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "current": "p-73.2",
+  "current": "r-74",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "f425a1c15258c6fef68996feed98e4f3059d627d609f13606a6a9e358f745a0b",
@@ -105,7 +105,7 @@
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
   "webpanel/www/app.js": "2b0caa0f44167ace0f4416888ecf30b2be630e92707db73dd8a5d13d061af67e",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "a8444ce524bf0b09cf4fb85e18d0a13309a6227ef6efae4684ee7acff847fecd",
+  "webpanel/www/index.html": "f798f99d78e930a5cf4cbca3bf66dc034aff72962ddda657cddaaf535ad0f71b",
   "webpanel/www/style.css": "912fef03b336963e4654e7d5fcc6f1e6bfcdee40bdfdf8db2293d461f25a1734",
   "z2k.sh": "2f52d6ba20f46617e85c34bbf5ba1da7d957eee50e16665da7f4c14fe0bcfaea"
   },
@@ -258,6 +258,7 @@
 {"v": "p-72.10", "type": "patch", "ts": "2026-08-06T16:02:30Z", "ref": "fdae5d3", "desc": "Загрузка списков доменов стала устойчивее: если наш сервер отвечает ошибкой, z2k теперь сразу пробует прямой путь, а не остаётся с неполными списками. Также обновление больше не может зависнуть из-за повреждённого файла стратегий на накопителе.", "changed_files": ["webpanel/www/index.html", "files/z2k-geosite.sh", "lib/config_official.sh", "UPDATES.json"]},
 {"v": "p-73", "type": "patch", "ts": "2026-08-06T18:08:22Z", "ref": "1d22b79", "desc": "Добавлен раздел «Исключения»: если какое-то приложение ломается при включённом обходе (например камеры или домофоны с P2P), впишите его адрес или домен — и z2k перестанет трогать этот трафик. Локальная сеть теперь исключена всегда. Кнопка выключения туннеля действительно освобождает память. Панель и меню больше не показывают «сервис работает», если обход не запустился.", "changed_files": ["files/S99zapret2.new", "files/init.d/S97z2k-http-tunnel", "files/z2k-tg-watchdog.sh", "lib/auto_update.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/index.html", "UPDATES.json"]},
 {"v": "r-73.1", "type": "reinstall", "ts": "2026-08-07T11:50:14Z", "ref": "c732c42", "desc": "Разделы «Whitelist» и «Исключения» объединены в один: домены и адреса теперь на соседних вкладках, а адресные исключения перестали пропадать после перезагрузки роутера. При включении автоподбора заблокированных доменов панель предупреждает о рисках. Панель больше не выполняет запросы, пришедшие со страниц сторонних сайтов.", "changed_files": ["files/S99zapret2.new", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/uninstall.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"]},
-{"v": "p-73.2", "type": "patch", "ts": "2026-08-07T17:28:47Z", "ref": "65d4e71", "desc": "Исправлена обработка кириллицы в панели: имя политики доступа с русскими буквами снова принимается. Тем, кто обновился в первые полчаса после выхода прошлой версии, обновление доедет само.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "UPDATES.json"]}
+{"v": "p-73.2", "type": "patch", "ts": "2026-08-07T17:28:47Z", "ref": "65d4e71", "desc": "Исправлена обработка кириллицы в панели: имя политики доступа с русскими буквами снова принимается. Тем, кто обновился в первые полчаса после выхода прошлой версии, обновление доедет само.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "UPDATES.json"]},
+{"v": "r-74", "type": "reinstall", "ts": "2026-08-08T07:23:09Z", "ref": "PENDING", "desc": "Служебные программы пересобраны на свежих инструментах — в них вошли накопившиеся исправления безопасности. Заодно починен откат: раньше он обещал вернуть предыдущую версию, но возвращать на деле было нечего. Теперь снимок делается автоматически перед каждым обновлением и включает сами программы, так что если после обновления что-то перестанет работать — откат вернёт всё как было.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"]}
   ]
 }
