@@ -24,6 +24,7 @@ updates:
       - /rt-proxy
       - /vps-relay
       - /z2k-detect
+      - /z2k-verify
     schedule:
       interval: weekly
       day: monday

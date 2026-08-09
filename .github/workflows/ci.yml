@@ -211,7 +211,7 @@ jobs:
       # релизе важно видеть ПОЛНУЮ картину, а не первую красную джобу.
       fail-fast: false
       matrix:
-        module: [mtproxy-client, rt-proxy, vps-relay, z2k-detect]
+        module: [mtproxy-client, rt-proxy, vps-relay, z2k-detect, z2k-verify]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -296,6 +296,12 @@ jobs:
             # сборки под них обнаружилась бы от пользователя. Цена полного
             # списка — секунды раннера.
             z2k-detect)     TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="./cmd/z2k-detect" ;;
+            # z2k-verify — те же девять арок. Он вообще не собирался в CI до
+            # 2026-08-09, а цена его поломки максимальная в проекте: sha256
+            # проверяльщика запинен в z2k.sh, и роутер с защёлкнутым храповиком
+            # без него отвергает манифест. Одна несобравшаяся арка = обновления
+            # встали у всей этой части парка одновременно.
+            z2k-verify)     TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="./cmd/z2k-verify" ;;
             vps-relay)      TARGETS="linux/amd64"; PKG="./..." ;;
           esac
           for t in $TARGETS; do
@@ -306,6 +312,7 @@ jobs:
               # оставить умолчание (GOARM=7), CI проверял бы не тот бинарник,
               # который реально уезжает на роутеры.
               z2k-detect/arm)     EXTRA="GOARM=5" ;;
+              z2k-verify/arm)     EXTRA="GOARM=5" ;;
               rt-proxy/arm)       EXTRA="GOARM=7" ;;
               */mips|*/mipsle)    EXTRA="GOMIPS=softfloat" ;;
               */mips64le)         EXTRA="GOMIPS64=softfloat" ;;

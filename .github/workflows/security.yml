@@ -46,10 +46,13 @@ jobs:
 
       - name: Scan all Go modules
         run: |
-          # Все четыре модуля, а не «те, что вспомнили»: rt-proxy месяцами жил
-          # вне CI ровно потому, что списки перечислялись руками.
+          # Список перечисляется руками, и это подводило уже дважды: rt-proxy
+          # месяцами жил вне CI, а z2k-verify не попал сюда при появлении —
+          # прямо под комментарием «все четыре модуля, а не те, что вспомнили».
+          # Пока источник матрицы не един, здесь обязаны быть ВСЕ модули с go.mod
+          # (сторожит tests/test_module_matrix.sh).
           rc=0
-          for m in mtproxy-client rt-proxy vps-relay z2k-detect; do
+          for m in mtproxy-client rt-proxy vps-relay z2k-detect z2k-verify; do
             echo "=== govulncheck: $m ==="
             (cd "$m" && govulncheck ./...) || rc=1
           done
