@@ -377,6 +377,75 @@ jobs:
               go build -trimpath -ldflags="-s -w" -o /dev/null "$PKG"
           done
 
+  binaries:
+    name: Отгружаемые бинарники собираются из этого исходника
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Пересобрать и сверить байт-в-байт
+        run: |
+          set -eu
+          # ЗАЧЕМ. Бинарники лежат в репозитории готовыми блобами, и ничто не
+          # связывало их с исходником: правка main.go без пересборки проходила
+          # молча. Это не гипотеза — так уже уезжал rt-proxy с непересобранным
+          # SPKI-пином.
+          #
+          # Сборка воспроизводима: -trimpath -buildvcs=false -ldflags="-s -w" на
+          # том же тулчейне дают байт в байт тот же файл. Тулчейн пиннится и
+          # здесь, и в Makefile'ах (go1.25.12): на 1.26.x ловили _ENOSYS на MIPS,
+          # и разъехавшийся тулчейн сам по себе даст расхождение байтов.
+          #
+          # mtproxy-client здесь НЕ проверяется: в его бинарник на сборке
+          # вшивается Z2K_TUNNEL_SECRET через -X, и без секрета байты не
+          # воспроизвести. Это осознанный пробел, а не забывчивость — решение,
+          # класть ли секрет в Actions, за владельцем.
+          fail=0
+          check() {
+            _mod="$1"; _pkg="$2"; _prefix="$3"; _arch="$4"; _goarch="$5"; _extra="$6"
+            _want="$_mod/builds/$_prefix-$_arch"
+            [ -f "$_want" ] || { echo "::error::нет отгружаемого $_want"; fail=1; return; }
+            # shellcheck disable=SC2086 # $_extra — это ИМЕННО набор присваиваний
+            # окружения (GOARM=5, GOMIPS=softfloat), его разбиение на слова
+            # здесь и нужно; в кавычках env получил бы одно слово с пробелом.
+            ( cd "$_mod" && env CGO_ENABLED=0 GOOS=linux GOARCH="$_goarch" $_extra \
+                go build -ldflags="-s -w" -trimpath -buildvcs=false -o /tmp/rebuilt "$_pkg" )
+            _a=$(sha256sum /tmp/rebuilt | cut -d" " -f1)
+            _b=$(sha256sum "$_want" | cut -d" " -f1)
+            if [ "$_a" = "$_b" ]; then
+              echo "  ok      $_want"
+            else
+              echo "::error::$_want не собирается из этого исходника (сборка $_a, в репо $_b)"
+              fail=1
+            fi
+          }
+
+          for a in amd64 arm64 arm mips mipsle mips64le ppc64 riscv64 386; do
+            extra=""
+            case "$a" in
+              arm)      extra="GOARM=5" ;;
+              mips|mipsle) extra="GOMIPS=softfloat" ;;
+              mips64le) extra="GOMIPS64=softfloat" ;;
+            esac
+            check z2k-detect ./cmd/z2k-detect z2k-detect "linux-$a" "$a" "$extra"
+            check z2k-verify ./cmd/z2k-verify z2k-verify "linux-$a" "$a" "$extra"
+          done
+
+          if [ "$fail" != "0" ]; then
+            echo "::error::пересоберите: cd <модуль> && make all — и закоммитьте builds/"
+            exit 1
+          fi
+          echo "все проверенные бинарники собираются из этого исходника"
+
   lua-check:
     name: Luacheck
     runs-on: ubuntu-latest
