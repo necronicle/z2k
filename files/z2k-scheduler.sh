@@ -20,7 +20,7 @@
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
 ZAPRET2_DIR="/opt/zapret2"
-PIDFILE="/var/run/z2k-scheduler.pid"
+PIDFILE="${Z2K_SCHED_PIDFILE:-/var/run/z2k-scheduler.pid}"
 LOG="/opt/var/log/z2k-scheduler.log"
 # Flash (persistent) state — daily-cadence keys only (fired ≤1×/day). Persisting
 # these across reboot is the point: it stops a same-day re-fire after a restart.
@@ -32,11 +32,26 @@ STATE="${ZAPRET2_DIR}/.z2k-scheduler-state"
 TMP_STATE="/tmp/.z2k-scheduler-state"
 
 # Don't double-launch.
+#
+# КОД ВОЗВРАТА ЗДЕСЬ — 3, А НЕ 0, И ЭТО НЕСУЩАЯ ДЕТАЛЬ.
+#
+# Надзиратель (S99z2k-scheduler) крутит `запустить; sleep 10` вечно. Пока эта
+# ветка отдавала 0, «работу уже делает кто-то другой» было для него неотличимо
+# от «мой планировщик отработал и завершился» — и он респавнил каждые 10 секунд
+# впустую. В поле (роутер Keenetic, 2026-08-09 12:56–12:58) это выглядело как
+# чередование «scheduler exited (rc=0) — respawning in 10s» и «already running
+# pid 2983» до тех пор, пока чужой процесс не умер сам.
+#
+# Как в это состояние попадают: OOM убивает надзирателя, а планировщик остаётся
+# сиротой; NDM-хук 95-z2k-scheduler-watchdog видит мёртвого надзирателя и
+# поднимает стек заново; новый надзиратель запускает планировщик, тот видит
+# живой pid сироты — и цикл замыкается. Работа при этом идёт (сирота исправно
+# тикает), поэтому снаружи виден только форк-шторм и залитый лог.
 if [ -f "$PIDFILE" ]; then
     old_pid=$(cat "$PIDFILE" 2>/dev/null)
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
         echo "z2k-scheduler already running pid $old_pid" >&2
-        exit 0
+        exit 3
     fi
 fi
 echo $$ > "$PIDFILE"

@@ -4,10 +4,14 @@
 # / get_config) because the daemon's reload mechanism is broken on
 # Keenetic Entware builds (see r-26 field notes).
 
-SCRIPT="/opt/zapret2/z2k-scheduler.sh"
-PIDFILE="/var/run/z2k-scheduler.pid"          # written by the scheduler itself
-SUP_PIDFILE="/var/run/z2k-scheduler-sup.pid"  # the respawn supervisor (this script)
-LOG="/opt/var/log/z2k-scheduler.log"
+# Пути переопределяемы из окружения ТОЛЬКО ради тестируемости: надзиратель —
+# вечный цикл с форками, и проверить его поведение можно лишь запустив его с
+# подставным планировщиком. На роутере переменные никто не задаёт, и значения
+# остаются ровно теми же.
+SCRIPT="${Z2K_SCHED_SCRIPT:-/opt/zapret2/z2k-scheduler.sh}"
+PIDFILE="${Z2K_SCHED_PIDFILE:-/var/run/z2k-scheduler.pid}"          # written by the scheduler itself
+SUP_PIDFILE="${Z2K_SCHED_SUP_PIDFILE:-/var/run/z2k-scheduler-sup.pid}"  # the respawn supervisor (this script)
+LOG="${Z2K_SCHED_LOG:-/opt/var/log/z2k-scheduler.log}"
 
 # The scheduler process itself (it self-writes $PIDFILE on startup).
 is_alive() {
@@ -42,9 +46,45 @@ start() {
     # an instantly-failing script cannot spin. stdin from /dev/null keeps the
     # anti-thundering-herd jitter gate ([ ! -t 0 ]) true under an SSH restart.
     (
+        _waiting=0
         while true; do
             "$SCRIPT" </dev/null >>"$LOG" 2>&1
             _rc=$?
+
+            # rc=3 — «планировщик уже работает, и запустил его НЕ я».
+            #
+            # Респавнить в этом случае нечего: работа идёт, просто у чужого
+            # родителя. Пока эта ветка была неотличима от обычного завершения
+            # (оба отдавали 0), надзиратель форкал планировщик каждые 10 секунд
+            # и тут же получал «already running» — форк-шторм на весь срок жизни
+            # сироты. Замечено в поле 2026-08-09.
+            #
+            # Правильное поведение — не уйти совсем (тогда после смерти сироты
+            # периодические задачи встанут до следующего регена NDM), а ДОЖДАТЬСЯ
+            # его и подхватить. Ждём проверкой pid, без запуска скрипта: сообщаем
+            # об этом один раз, а не в каждом цикле.
+            if [ "$_rc" = "3" ]; then
+                if [ "$_waiting" = "0" ]; then
+                    echo "$(date '+%Y-%m-%d %H:%M:%S') [supervisor] планировщик уже запущен другим родителем — жду его завершения" >> "$LOG"
+                    _waiting=1
+                fi
+                # Пауза стоит ПЕРЕД проверкой, и это не косметика. Планировщик
+                # может отдать 3 и при этом не оставить читаемого pidfile
+                # (гонка: чужой процесс умер между его проверкой и нашей). Тогда
+                # цикл с паузой в конце не спит ни разу и превращается в
+                # busy-loop без задержки — то есть в дефект хуже исходного.
+                # Замерено этим тестом: 1431 запуск за четыре секунды.
+                while true; do
+                    sleep "${Z2K_SCHED_ADOPT_POLL:-30}"
+                    _op=""
+                    [ -f "$PIDFILE" ] && read -r _op < "$PIDFILE" 2>/dev/null
+                    if [ -z "$_op" ]; then break; fi
+                    if ! kill -0 "$_op" 2>/dev/null; then break; fi
+                done
+                continue
+            fi
+
+            _waiting=0
             echo "$(date '+%Y-%m-%d %H:%M:%S') [supervisor] scheduler exited (rc=$_rc) — respawning in 10s" >> "$LOG"
             sleep 10
         done
