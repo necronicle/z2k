@@ -2360,6 +2360,7 @@
       lastLog: "Запуск…",
       lastData: null,
       consecutiveErrors: 0,
+      httpErrors: 0,
       attachers: new Set(),  // (log, done, data) callbacks
     };
     _jobPollers.set(jobId, state);
@@ -2368,6 +2369,9 @@
     // которого «всё пропало». С tolerateOutage это 300 × 2 с ≈ десять минут:
     // с запасом перекрывает трёхминутную переустановку.
     const MAX_ERRORS = state.opts.tolerateOutage ? 300 : 5;
+    // Три попытки — запас на разовый промах CGI, который на роутере под
+    // памятью может не форкнуться. Больше держать определённый отказ незачем.
+    const MAX_HTTP_ERRORS = 3;
     const POLL_OK_MS = 1000;
     const POLL_ERR_MS = state.opts.tolerateOutage ? 2000 : 1000;
 
@@ -2428,9 +2432,15 @@
         // всплывают там, где их обрабатывают. Здесь они не превращают идущую
         // задачу в проваленную.
         state.consecutiveErrors++;
-        if (state.consecutiveErrors >= MAX_ERRORS) {
-          // Предохранитель от вечного опроса, а не сообщение об ошибке: в лог
-          // не дописываем ничего, состояние UI перечитает jobUnresolved.
+        // Определённый отказ (403, 5xx кроме «поднимаюсь») — это ОТВЕТ, а не
+        // переезд: ждать его «возвращения» бессмысленно, и держать из-за него
+        // весь UI залоченным десять минут нельзя. Такой опрос прекращаем
+        // быстро — но так же молча: что произошло на самом деле, человеку
+        // покажет перечитанное с роутера состояние, а не наша догадка.
+        if (isRefusal(e)) state.httpErrors++; else state.httpErrors = 0;
+        if (state.httpErrors >= MAX_HTTP_ERRORS || state.consecutiveErrors >= MAX_ERRORS) {
+          // В лог не дописываем ничего: jobUnresolved заставит UI перечитать
+          // состояние, и человек увидит факт вместо жалобы.
           finish({ done: true, exit: null, outcome: JOB_OFFLINE, log: state.lastLog });
           return;
         }
