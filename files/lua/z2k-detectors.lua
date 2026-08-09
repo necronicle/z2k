@@ -9,6 +9,10 @@
 -- the z2k-enhanced roadmap so detector logic can be iterated on without
 -- touching the much larger rotator/state-persistence file.
 --
+-- Unit tests: tests/test_http_classifier.lua (mock harness, no live nfqws2
+-- needed) — run via `lua5.3 tests/test_http_classifier.lua` or as part of
+-- tests/run_all.sh.
+--
 -- Dependencies (must be loaded earlier in the --lua-init chain):
 --   zapret-lib.lua     — basic types, deepcopy, etc.
 --   zapret-antidpi.lua — http_dissect_reply, array_field_search, is_dpi_redirect
