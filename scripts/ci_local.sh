@@ -178,7 +178,16 @@ fi
 # ---------------------------------------------------------------------------
 step "go-модули (gofmt, vet, test, кросс-компиляция)"
 if [ -n "$GO" ]; then
-    for m in mtproxy-client rt-proxy vps-relay z2k-detect; do
+    # Модули и цели — ИЗ build-matrix.tsv, единственного источника правды (см.
+    # шапку самого файла). Раньше список модулей и целей для каждого был
+    # продублирован здесь руками и разошёлся с ci.yml в двух местах разом:
+    # z2k-verify не проверялся ЛОКАЛЬНО НИ РАЗУ с момента появления (цикл
+    # `for m in mtproxy-client rt-proxy vps-relay z2k-detect` о нём не знал),
+    # а arm-цели mtproxy-client/rt-proxy держали свой GOARM отдельной case-веткой,
+    # которая могла разойтись с Makefile'ами ровно так же, как уже расходилась
+    # в CI (см. комментарий build-matrix.tsv про GOARM=5 vs GOARM=7).
+    _modules=$(awk -F'\t' '!/^#/ && NF>1 {print $1}' build-matrix.tsv | sort -u)
+    for m in $_modules; do
         printf -- '--- %s ---\n' "$m"
         unfmt=$(cd "$m" && gofmt -l .)
         if [ -n "$unfmt" ]; then
@@ -189,32 +198,19 @@ if [ -n "$GO" ]; then
         fi
         if (cd "$m" && "$GO" vet ./...); then passed "$m vet"; else failed "$m vet"; fi
         # Без -race и тулчейном GO_TEST: см. шапку. В CI (linux) race включён.
-        case "$m" in
-            z2k-detect) tst='$GO_TEST test -count=1 ./...' ;;
-            *)          tst='$GO_TEST test -count=1 ./...' ;;
-        esac
-        if (cd "$m" && eval "$tst"); then passed "$m test"; else failed "$m test"; fi
-        # Те же цели, что в ci.yml (списки исторические, менять синхронно).
-        case "$m" in
-            mtproxy-client) targets="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; pkg="." ;;
-            rt-proxy)       targets="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle"; pkg="." ;;
-            z2k-detect)     targets="linux/arm64 linux/mipsle linux/mips64le"; pkg="./cmd/z2k-detect" ;;
-            vps-relay)      targets="linux/amd64"; pkg="./..." ;;
-        esac
+        if (cd "$m" && "$GO_TEST" test -count=1 ./...); then passed "$m test"; else failed "$m test"; fi
+
         xrc=0
-        for t in $targets; do
-            goos=${t%%/*}; goarch=${t##*/}; extra=""
-            case "$m/$goarch" in
-                mtproxy-client/arm) extra="GOARM=5" ;;
-                rt-proxy/arm)       extra="GOARM=7" ;;
-                */mips|*/mipsle)    extra="GOMIPS=softfloat" ;;
-                */mips64le)         extra="GOMIPS64=softfloat" ;;
-            esac
-            if ! (cd "$m" && env CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" $extra \
+        while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+            case "$mod" in ''|\#*) continue ;; esac
+            [ "$mod" = "$m" ] || continue
+            [ "$extra" = "-" ] && extra=""
+            # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+            if ! (cd "$m" && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
                     "$GO" build -trimpath -ldflags="-s -w" -o /dev/null "$pkg"); then
-                printf 'сломана сборка %s/%s\n' "$goos" "$goarch"; xrc=1
+                printf 'сломана сборка linux/%s%s\n' "$goarch" "${extra:+ ($extra)}"; xrc=1
             fi
-        done
+        done < build-matrix.tsv
         [ "$xrc" -eq 0 ] && passed "$m кросс-компиляция" || failed "$m кросс-компиляция"
     done
 else

@@ -140,6 +140,10 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
+          # Явно, а не понадеявшись на fetch-depth:0: следующему шагу нужен
+          # локальный refs/tags/$TAG, чтобы свериться с ним по имени тега
+          # (см. шаг "Тот же контент отдаётся и по тегу" ниже).
+          fetch-tags: true
 
       - name: Compute files users can fetch
         id: files
@@ -346,3 +350,74 @@ jobs:
               sed 's/^/  CDN LAG: /' /tmp/verify/cdnlag.txt
           fi
           echo "raw сошёлся: все проверенные файлы отдаются с правильным sha256 (+$(( $(date +%s) - started ))s)"
+
+      - name: Тот же контент отдаётся и по тегу — именно так патч тянет роутер
+        if: steps.files.outputs.count != '0'
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          # ВСЁ ВЫШЕ ПРОВЕРЯЛО ВЕТКУ. Роутер, скачивающий содержимое релиза
+          # (patch changed_files), фетчит НЕ по ветке — по имени тега:
+          # lib/auto_update.sh подставляет Z2K_AU_TARGET_REF (= current из
+          # манифеста = имя тега, см. scripts/release.sh) в ТОТ ЖЕ URL-шаблон
+          # raw.githubusercontent.com/OWNER/REPO/<ref>/path и cdn.jsdelivr.net/
+          # gh/OWNER/REPO@<ref>/path, где <ref> для установщика — ветка, а для
+          # патча — тег. Это РАЗНЫЕ ключи кэша на обоих CDN: тёплый кэш на
+          # ветке ничего не говорит про кэш на теге. До сих пор здесь
+          # проверялась только ветка — то есть ровно та половина пути, которую
+          # тег-доставка (r-75) не использует.
+          TAG=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' UPDATES.json | head -1)
+          if [ -z "$TAG" ]; then
+              echo "::error::не читается current из UPDATES.json — не по чему проверять тег-путь"
+              exit 1
+          fi
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::error::локально нет тега $TAG — checkout сделан без fetch-tags или тег не запушен"
+              exit 1
+          fi
+          echo "тег релиза: $TAG"
+
+          # Тег неизменяем по построению (release.sh отказывается переиспользовать
+          # имя, см. tests/test_release_script.sh) — в отличие от ветки, «более
+          # свежий пуш перекрыл файл» здесь структурно невозможно, всей логики
+          # superseded из шага выше тут не нужно.
+          started=$(date +%s)
+          deadline=$((started + 600))
+          cp /tmp/verify/files.txt /tmp/verify/tag_pending.txt
+          : > /tmp/verify/tag_cdnlag.txt
+          round=0
+          while [ -s /tmp/verify/tag_pending.txt ]; do
+              round=$((round + 1))
+              : > /tmp/verify/tag_next.txt
+              while IFS= read -r f; do
+                  want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
+                  raw=$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/${REPO}/${TAG}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || raw="FETCH-ERR"
+                  cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${TAG}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
+                  if [ "$raw" = "$want" ]; then
+                      if [ "$cdn" = "$want" ]; then
+                          printf '  [тег ok +%ss] %s\n' "$(( $(date +%s) - started ))" "$f"
+                      else
+                          printf '  [тег: raw ok, cdn отстал] %s\n' "$f"
+                          grep -qxF "$f" /tmp/verify/tag_cdnlag.txt || echo "$f" >> /tmp/verify/tag_cdnlag.txt
+                      fi
+                  else
+                      printf '  [тег: stale raw] %s\n' "$f"
+                      echo "$f" >> /tmp/verify/tag_next.txt
+                  fi
+              done < /tmp/verify/tag_pending.txt
+              mv /tmp/verify/tag_next.txt /tmp/verify/tag_pending.txt
+              [ -s /tmp/verify/tag_pending.txt ] || break
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "::error::raw по тегу $TAG не сошёлся за 10 минут — обновление патчем получит старые байты:"
+                  sed 's/^/  STALE RAW (tag): /' /tmp/verify/tag_pending.txt
+                  exit 1
+              fi
+              echo "--- тег, раунд $round: $(wc -l < /tmp/verify/tag_pending.txt | tr -d ' ') файлов ещё не сошлись, повтор через 30с ---"
+              sleep 30
+          done
+          if [ -s /tmp/verify/tag_cdnlag.txt ]; then
+              echo "::warning::jsdelivr по тегу $TAG отстаёт для $(wc -l < /tmp/verify/tag_cdnlag.txt | tr -d ' ') файлов — тот же фоллбэк-статус, что и у ветки."
+              sed 's/^/  CDN LAG (tag): /' /tmp/verify/tag_cdnlag.txt
+          fi
+          echo "тег $TAG: raw отдаёт правильные байты — патч-доставка (Z2K_AU_TARGET_REF) получит именно этот релиз"

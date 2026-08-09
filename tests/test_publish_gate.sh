@@ -76,7 +76,17 @@ fi
 
 # И она не должна оказаться у джобы, которая что-то проверяет: гейт с правом
 # записи — это уже не гейт.
-if awk '/^  gate:/,/^  [a-z]/' "$PUB" | grep -q 'contents: write'; then
+#
+# `/re/,/re/` в awk сверяет ОБА паттерна с одной и той же строкой: строка
+# "  gate:" сама подходит и под конец диапазона (2 пробела + буква), так что
+# наивный `/^  gate:/,/^  [a-z]/` печатает ровно одну строку и молчит про всё
+# тело job'ы — проверка была бы зелёной, даже принеси кто-то `contents: write`
+# прямо туда. Явный флаг вместо диапазона: включаем на "  gate:", выключаем на
+# СЛЕДУЮЩЕЙ job-строке (не на ней самой).
+_gate_block() {
+    awk '/^  gate:/{p=1} p && /^  [a-z]/ && $0 !~ /^  gate:/{p=0} p' "$PUB"
+}
+if _gate_block | grep -q 'contents: write'; then
     no "у проверяющей джобы нет права записи" "нет" "gate умеет писать"
 else
     ok "у проверяющей джобы нет права записи"
@@ -181,6 +191,32 @@ else
     no "обе checkout-джобы берут переданный коммит" "2" "$_ck"
 fi
 
+# --- 6а. CDN проверяется и по тегу, не только по ветке -------------------------
+#
+# Патч-доставка (lib/auto_update.sh, Z2K_AU_TARGET_REF) фетчит файлы по имени
+# ТЕГА — это отдельный ключ кэша на raw.githubusercontent.com и jsdelivr,
+# независимый от ключа по имени ветки. Проверка только ветки давала зелёный
+# verify, даже если кэш по тегу (то, чем реально патчатся роутеры) всё ещё
+# отдаёт старьё.
+if grep -q 'raw.githubusercontent.com/\${REPO}/\${TAG}/' "$CDN" \
+    && grep -q 'cdn.jsdelivr.net/gh/\${REPO}@\${TAG}/' "$CDN"; then
+    ok "CDN проверяется по URL с именем тега, не только ветки"
+else
+    no "CDN проверяется по тегу" 'raw.../${TAG}/... и jsdelivr.../@${TAG}/...' "не найдено"
+fi
+
+if grep -q '"current"' "$CDN" && grep -q 'refs/tags/\$TAG' "$CDN"; then
+    ok "тег для проверки берётся из current манифеста, локальный тег подтверждается"
+else
+    no "тег берётся из current и подтверждается локально" 'current -> refs/tags/$TAG' "не найдено"
+fi
+
+if grep -q 'fetch-tags: true' "$CDN"; then
+    ok "checkout явно тянет теги (не понадеялись на побочный эффект fetch-depth:0)"
+else
+    no "checkout явно тянет теги" "fetch-tags: true" "не найдено"
+fi
+
 # --- 7. В release.sh не осталось обходимого гейта ------------------------------
 #
 # Старый гейт жил в скрипте и умел пропускаться переменной. Гейт, который можно
@@ -211,6 +247,60 @@ if awk '/^permissions:/{getline; print; exit}' "$CI" | grep -q 'contents: read';
     ok "у CI только чтение"
 else
     no "у CI только чтение" "contents: read" "иначе"
+fi
+
+# --- 9. Ручной запуск (workflow_dispatch) не публикует непроверенный коммит ---
+#
+# Условие job'ы наверху пропускает workflow_dispatch БЕЗ проверки
+# github.event.workflow_run.conclusion — этому полю у ручного запуска попросту
+# неоткуда взяться. Значит без отдельной проверки кто угодно с правом ручного
+# запуска мог опубликовать SHA, для которого CI провалился или не бежал вовсе.
+if grep -q 'EVENT_NAME" = "workflow_dispatch"' "$PUB" \
+    && grep -q 'actions/runs?head_sha=' "$PUB"; then
+    ok "ручной запуск сверяется с реальным CI по head_sha, а не доверяет факту ручного вызова"
+else
+    no "ручной запуск проверяет CI по SHA" "gh api actions/runs?head_sha= внутри ветки workflow_dispatch" "не найдено"
+fi
+
+if grep -q 'select(.name=="CI" and .conclusion=="success")' "$PUB"; then
+    ok "проверяется именно CI и именно success, а не любой прогон"
+else
+    no "проверяется CI+success" "select по name==CI и conclusion==success" "не найдено"
+fi
+
+# gh api ходит в Actions REST — джобе нужно чтение actions, отдельно от
+# contents. Без него шаг выше молча получил бы 403 и после `|| _ci_ok=0`
+# ушёл бы в отказ по НЕПРАВИЛЬНОЙ причине (выглядело бы как «нет зелёного CI»,
+# хотя на деле «нет прав спросить»), и это не поймать снаружи по логам одной строкой.
+if _gate_block | grep -q 'actions: read'; then
+    ok "у gate есть право читать Actions API (нужно для проверки CI по SHA)"
+else
+    no "у gate есть actions: read" "actions: read внутри job gate" "не найдено"
+fi
+
+# --- 10. Целостность history манифеста проверяется независимо от release.sh ---
+#
+# release.sh и так гарантирует это по построению (дописывает одну строку текстом,
+# не трогая остальные), но gate — это защита от чужого процесса: ручной правки,
+# кривого мерджа, скомпрометированного release.sh на чьей-то машине. seq и
+# подпись сами по себе порчу history не ловят: seq может честно вырасти на
+# переписанной истории, а подпись накроет что угодно, что ей дали подписать.
+if grep -q 'nh\[:len(oh)\] != oh' "$PUB"; then
+    ok "gate требует, чтобы старая history осталась неизменным префиксом"
+else
+    no "gate требует неизменный префикс history" "nh[:len(oh)] != oh" "не найдено"
+fi
+
+if grep -q 'len(nh) != len(oh) + 1' "$PUB"; then
+    ok "gate требует ровно одну новую запись history у кандидата"
+else
+    no "gate требует ровно одну новую запись" "len(nh) != len(oh) + 1" "не найдено"
+fi
+
+if grep -q 'new\["current"\] != nh\[-1\]\["v"\]' "$PUB"; then
+    ok "gate требует current == history[-1].v"
+else
+    no "gate требует current == history[-1].v" 'new["current"] != nh[-1]["v"]' "не найдено"
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"

@@ -67,6 +67,13 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # actions:read — только для workflow_dispatch-ветки: gh api спрашивает
+    # список ранов CI по head_sha, чтобы не публиковать вручную коммит без
+    # зелёного прогона. contents:read (уровень workflow) уже есть, этого
+    # достаточно для checkout; write нигде в этой job не нужен.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       publish: ${{ steps.decide.outputs.publish }}
       sha: ${{ steps.decide.outputs.sha }}
@@ -84,6 +91,9 @@ jobs:
           INPUT_SHA: ${{ github.event.inputs.sha }}
           STAGING: z2k-staging
           RELEASE: z2k-enhanced
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -eu
           git fetch -q origin "$STAGING" "$RELEASE"
@@ -92,6 +102,26 @@ jobs:
           [ -n "${INPUT_SHA:-}" ] && CAND="$INPUT_SHA"
           [ -n "$CAND" ] || CAND=$(git rev-parse "origin/$STAGING")
           CAND=$(git rev-parse "$CAND")
+
+          # 0. workflow_dispatch — ручка на случай, если ран CI не создался
+          #    вовсе (см. шапку файла). Условие job'ы наверху пускает
+          #    workflow_dispatch БЕЗ проверки вердикта — github.event.workflow_run
+          #    у ручного запуска попросту не приходит, взять его неоткуда. Значит
+          #    без явной проверки здесь кто угодно с правом ручного запуска мог
+          #    опубликовать SHA, для которого CI провалился или не бежал вообще.
+          #    Спрашиваем Actions API про ИМЕННО этот коммит, а не доверяем факту,
+          #    что нас вызвали руками.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            _ci_ok=$(gh api "repos/${REPO}/actions/runs?head_sha=${CAND}&status=completed&per_page=50" \
+                       --jq '[.workflow_runs[] | select(.name=="CI" and .conclusion=="success")] | length' \
+                       2>/dev/null) || _ci_ok=0
+            case "$_ci_ok" in ''|*[!0-9]*) _ci_ok=0 ;; esac
+            if [ "$_ci_ok" -lt 1 ]; then
+              echo "::error::ручной запуск, но у коммита $CAND нет ни одного зелёного прогона CI — проверять нечего"
+              exit 1
+            fi
+            echo "ручной запуск: у $CAND есть зелёный CI ($_ci_ok шт.)"
+          fi
 
           # 1. Публикуем только верхушку. Если пока CI бежал прилетел новый
           #    коммит — публиковать промежуточный нельзя: у него свой вердикт,
@@ -131,6 +161,41 @@ jobs:
             echo "::error::seq не вырос: опубликовано $OLD_SEQ, у кандидата $NEW_SEQ"
             exit 1
           fi
+
+          # 4а. Целостность history независимо от того, кто и как собрал
+          #     манифест. release.sh и так гарантирует это по построению
+          #     (дописывает одну строку текстом, не трогая остальные — см.
+          #     scripts/release.sh), но gate не должен верить чужому процессу:
+          #     ручная правка, кривой мердж или скомпрометированный release.sh
+          #     на чьей-то машине способны нарушить ровно это, а seq/подпись/тег
+          #     сами по себе такую порчу не ловят (seq может честно вырасти на
+          #     переписанной истории, подпись накроет что угодно, что ей дали
+          #     подписать). Проверяем: старые записи — неизменный префикс, у
+          #     кандидата ровно одна новая запись сверх них, current — это её "v".
+          python3 - "$CAND" "$RELEASE" <<'PYEOF'
+          import json, subprocess, sys
+          cand, release = sys.argv[1], sys.argv[2]
+
+          def read(ref):
+              raw = subprocess.run(["git", "show", f"{ref}:UPDATES.json"],
+                                    capture_output=True, text=True, check=True).stdout
+              return json.loads(raw)
+
+          old = read(f"origin/{release}")
+          new = read(cand)
+          oh, nh = old["history"], new["history"]
+
+          if nh[:len(oh)] != oh:
+              print("::error::history не является продолжением опубликованной — префикс изменён или переставлен")
+              sys.exit(1)
+          if len(nh) != len(oh) + 1:
+              print(f"::error::кандидат добавляет {len(nh) - len(oh)} записей в history вместо ровно одной")
+              sys.exit(1)
+          if new["current"] != nh[-1]["v"]:
+              print(f"::error::current='{new['current']}' не совпадает с последней записью history ('{nh[-1]['v']}')")
+              sys.exit(1)
+          print(f"history цела: {len(oh)} -> {len(nh)} записей, current == history[-1].v")
+          PYEOF
 
           # 5. Подпись. Проверяем ИМЕННО ТЕМ ключом, который лежит у людей
           #    сейчас (в опубликованной ветке), а не тем, что приехал вместе с

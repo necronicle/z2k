@@ -418,6 +418,54 @@ jobs:
           fi
           echo "все проверенные бинарники собираются из этого исходника"
 
+      - name: mtproxy-client — хотя бы сама сборка воспроизводима
+        run: |
+          set -eu
+          # Шаг выше сознательно пропускает mtproxy-client: в бинарник на сборке
+          # вшивается Z2K_TUNNEL_SECRET через -X main.defaultTunnelSecret, и без
+          # РЕАЛЬНОГО секрета байты отгруженного файла не воспроизвести. Класть
+          # прод-секрет в Actions secrets или нет — решение владельца (утечка
+          # секретов из Actions кладёт Telegram-туннель молча для всех, см.
+          # project_tg_tunnel_secret_build_flag), не тестовой инфраструктуры.
+          #
+          # Но кое-что проверить можно и без секрета: сам ПРОЦЕСС сборки обязан
+          # быть детерминирован. Собираем дважды с ОДНИМ тестовым (заведомо
+          # нерабочим) секретом и сравниваем результаты МЕЖДУ СОБОЙ, не с
+          # builds/. Это не доказывает, что отгруженный файл собран из этого
+          # исходника — только байт-в-байт с настоящим секретом доказывает это —
+          # но ловит другой реальный класс регрессии: недетерминированную
+          # сборку (time.Now()/math/rand без сида в init, потерянный -trimpath
+          # и т.п.), из-за которой сверка с настоящим секретом была бы обречена
+          # на "не сходится" даже при абсолютно правильном коде.
+          TESTSECRET="0000000000000000000000000000000000000000000000000000000000000000"
+          fail=0
+          # shellcheck disable=SC2034 # bdir/prefix/sfx — поля общей схемы TSV, здесь не нужны
+          while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+            case "$mod" in ''|\#*) continue ;; esac
+            [ "$mod" = "mtproxy-client" ] || continue
+            [ "$extra" = "-" ] && extra=""
+            # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+            ( cd "$mod" && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+                go build -ldflags="-s -w -X main.defaultTunnelSecret=$TESTSECRET" \
+                -trimpath -buildvcs=false -o /tmp/mt_a "$pkg" ) || {
+              echo "::error::mtproxy-client/$goarch (сборка 1) не собирается"; fail=1; continue; }
+            # shellcheck disable=SC2086
+            ( cd "$mod" && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+                go build -ldflags="-s -w -X main.defaultTunnelSecret=$TESTSECRET" \
+                -trimpath -buildvcs=false -o /tmp/mt_b "$pkg" ) || {
+              echo "::error::mtproxy-client/$goarch (сборка 2) не собирается"; fail=1; continue; }
+            a=$(sha256sum /tmp/mt_a | cut -d" " -f1)
+            b=$(sha256sum /tmp/mt_b | cut -d" " -f1)
+            if [ "$a" = "$b" ]; then
+              echo "  ok      mtproxy-client/$goarch (два независимых прогона совпали байт-в-байт)"
+            else
+              echo "::error::mtproxy-client/$goarch НЕ детерминирован: два прогона с тем же секретом дали разные байты"
+              fail=1
+            fi
+          done < build-matrix.tsv
+          [ "$fail" = "0" ] || exit 1
+          echo "mtproxy-client: сборка детерминирована (сверка с реальным отгруженным секретом всё ещё не идёт — решение об Actions secret за владельцем)"
+
   lua-check:
     name: Luacheck
     runs-on: ubuntu-latest

@@ -142,6 +142,48 @@ else
 fi
 git checkout -q -- lib/install.sh
 
+# --- property 4: install-time генератор требует reinstall, а не patch ---------
+#
+# lib/config_official.sh материализуется в $ZAPRET2_DIR/config РОВНО ОДИН РАЗ,
+# при установке (step_create_config_and_init). Патч кладёт новый файл на диск,
+# но не перезапускает генерацию — уже установленный роутер живёт со старым
+# config. Изменение здесь ДОЛЖНО коммититься (в отличие от property 3 — тут
+# проверяем не грязное дерево, а содержательный гейт по конкретному пути).
+#
+# И, в отличие от property 3, дерево здесь чистое — die на грязном дереве
+# больше не отвлекает более раннюю проверку ветки ("релиз собирается на
+# staging, а не в релизной ветке"), поэтому нужна настоящая staging-ветка.
+git checkout -q -B z2k-staging
+echo "# generator touch" >> lib/config_official.sh
+git add lib/config_official.sh
+git commit -q -m "тест: правка генератора конфига"
+out=$(sh scripts/release.sh p-9999.2 patch "тест: генератор требует reinstall" 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "release.sh отвергает patch при изменении install-time генератора"
+else
+    no "release.sh отвергает patch при изменении генератора" "ненулевой код" "0"
+fi
+case "$out" in
+    *"config_official.sh"*|*"генератор"*) ok "отказ называет генератор причиной" ;;
+    *) no "отказ называет генератор причиной" "упоминание config_official.sh/генератора" "$(printf '%s' "$out" | head -1)" ;;
+esac
+if git diff --quiet -- UPDATES.json; then
+    ok "отклонённый релиз (генератор) не трогает манифест"
+else
+    no "отклонённый релиз (генератор) не трогает манифест" "без изменений" "манифест переписан"
+fi
+# TYPE=reinstall для того же диффа гейт снимает — проверяем СТАТИЧЕСКИ (что он
+# написан как `[ "$TYPE" != "reinstall" ]`, тот же вид, что и у гейта на
+# builds/), а не живым прогоном: живой прогон ушёл бы дальше, к шагу подписи,
+# который на этой машине может найти настоящий ключ владельца — тестам сюда
+# лезть незачем.
+if grep -B2 "config_official.*strategies" scripts/release.sh | grep -q 'TYPE.*!=.*reinstall' \
+    || awk '/_gen_changed=/,/^fi$/' scripts/release.sh | grep -q '"\$TYPE" != "reinstall"'; then
+    ok "гейт на генераторы условен на TYPE=reinstall (снимается, не абсолютный запрет)"
+else
+    no "гейт на генераторы условен на TYPE=reinstall" '"$TYPE" != "reinstall"' "не найдено"
+fi
+
 # Незакоммиченные НЕотслеживаемые файлы не должны блокировать релиз: в карту они
 # не попадают (git ls-files их не видит), значит и опасности не создают.
 echo x > untracked_probe.tmp
