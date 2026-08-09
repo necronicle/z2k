@@ -19,10 +19,25 @@ trap 'rm -rf "$WORK"' EXIT
 
 KILLED=0
 SURVIVED=0
+STALE=0
 SURVIVORS=""
+STALES=""
 
 pass() { printf '  [KILLED]   %s\n' "$1"; KILLED=$((KILLED + 1)); }
 fail() { printf '  [SURVIVED] %s\n' "$1"; SURVIVED=$((SURVIVED + 1)); SURVIVORS="$SURVIVORS\n    - $1"; }
+
+# Протухший мутант — это НЕ убитый мутант.
+#
+# Якорь (строка, которую мутант портит) уезжает при обычном рефакторинге. Раньше
+# такой случай печатался как [SKIP] и не попадал никуда: ни в KILLED, ни в
+# SURVIVED. Счёт при этом честно показывал «18 killed, 0 survived», хотя часть
+# мутантов не запускалась вовсе — то есть проверка молча исчезала ровно тогда,
+# когда её код правили, а это единственный момент, когда она нужна.
+#
+# Теперь протухшие считаются отдельно и роняют прогон: чинится это правкой
+# якоря на одну строку, а цена необнаружения — вся защита соответствующего
+# поведения.
+stale() { printf '  [STALE]    %s\n' "$1"; STALE=$((STALE + 1)); STALES="$STALES\n    - $1"; }
 
 # ---------------------------------------------------------------------------
 # Go mutants — rt-proxy/main.go
@@ -32,7 +47,7 @@ go_mutant() {
     rm -rf "$WORK/go"; mkdir -p "$WORK/go"
     cp "$ROOT/rt-proxy/"*.go "$ROOT/rt-proxy/go.mod" "$WORK/go/"
     if ! grep -qF "$from" "$WORK/go/main.go"; then
-        printf '  [SKIP]     %s (anchor not found — mutant is stale)\n' "$desc"
+        stale "$desc (якорь не найден — мутант протух)"
         return
     fi
     python3 - "$WORK/go/main.go" "$from" "$to" <<'PY'
@@ -99,7 +114,7 @@ sh_mutant() {
     cp "$ROOT/files/z2k-warp.sh" "$WORK/sh/files/"
     cp "$ROOT/tests/test_warp_selfheal.sh" "$WORK/sh/tests/"
     if ! grep -qF "$from" "$WORK/sh/files/z2k-warp.sh"; then
-        printf '  [SKIP]     %s (anchor not found — mutant is stale)\n' "$desc"
+        stale "$desc (якорь не найден — мутант протух)"
         return
     fi
     python3 - "$WORK/sh/files/z2k-warp.sh" "$from" "$to" <<'PY'
@@ -161,7 +176,7 @@ init_mutant() {
     cp "$ROOT/files/init.d/S51z2k-warp" "$WORK/init/files/init.d/"
     cp "$ROOT/tests/test_warp_init.sh" "$WORK/init/tests/"
     if ! grep -qF "$from" "$WORK/init/files/init.d/S51z2k-warp"; then
-        printf '  [SKIP]     %s (anchor not found — mutant is stale)\n' "$desc"
+        stale "$desc (якорь не найден — мутант протух)"
         return
     fi
     python3 - "$WORK/init/files/init.d/S51z2k-warp" "$from" "$to" <<'PY2'
@@ -194,9 +209,14 @@ init_mutant "address conflict ignored (pin unconditionally)" \
     '        if ! addr_taken_by_other "$a" "$ifc"; then' \
     '        if true; then'
 
-printf '\n=== mutation score: %d killed, %d survived ===\n' "$KILLED" "$SURVIVED"
+printf '\n=== mutation score: %d killed, %d survived, %d stale ===\n' "$KILLED" "$SURVIVED" "$STALE"
 if [ "$SURVIVED" -ne 0 ]; then
     printf 'SURVIVING MUTANTS (unguarded behaviour):%b\n' "$SURVIVORS"
+    exit 1
+fi
+if [ "$STALE" -ne 0 ]; then
+    printf 'ПРОТУХШИЕ МУТАНТЫ (не запускались — поведение НЕ проверено):%b\n' "$STALES"
+    printf 'Якорь уехал при правке кода. Обновите строку-якорь, иначе счёт врёт.\n'
     exit 1
 fi
 printf 'every mutant was killed by the suite\n'

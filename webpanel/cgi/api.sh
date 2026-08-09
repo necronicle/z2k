@@ -215,6 +215,10 @@ case "$method $path" in
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         stats=$(read_flag "Z2K_STATS" "$CONFIG_FILE" "1")
+        # Признак «человек ещё не видел, что уходит». Панель по нему покажет
+        # карточку с полями и адресом, и снимет гейт первой отправки —
+        # до этого аплоадер молчит (files/z2k-stats-upload.sh).
+        stats_ack=$(read_flag "Z2K_STATS_ACK" "$CONFIG_FILE" "1")
         ppe=$(read_flag "Z2K_PPE_DEOFFLOAD" "$CONFIG_FILE" "1")
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
         autohostlist=$(read_flag "Z2K_AUTOHOSTLIST" "$CONFIG_FILE" "0")
@@ -238,6 +242,7 @@ case "$method $path" in
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
         printf ',"stats":';                  json_string "${stats:-1}"
+        printf ',"stats_ack":';              json_string "${stats_ack:-1}"
         printf ',"ppe":';                    json_string "${ppe:-1}"
         printf ',"auto_update":';            json_string "${auto_update:-1}"
         printf ',"autohostlist":';           json_string "${autohostlist:-0}"
@@ -268,6 +273,17 @@ case "$method $path" in
         job_id=$(svc_action_async "Перезапуск сервиса nfqws2" "set_flag ENABLED 1 \"${CONFIG_FILE}\"; svc_restart")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+
+    # Человек увидел карточку с составом телеметрии. Снимаем гейт первой
+    # отправки — синхронно, без задачи: правка одного ключа в конфиге, ждать
+    # тут нечего, а показывать модалку прогресса ради этого было бы издевательством.
+    "POST /stats/ack")
+        set_flag Z2K_STATS_ACK 1 "$CONFIG_FILE" \
+            || json_fail "500 Internal Server Error" "не удалось записать признак"
+        json_header
+        printf '{"ok":true}\n'
         exit 0
         ;;
 
@@ -934,13 +950,16 @@ case "$method $path" in
         available=$(update_manifest_current)
         behind=$(update_behind_count "$installed")
         last_check=$(update_last_check_ts)
+        fetch_failed=$(update_last_fetch_failed)
+        check_age=$(update_last_check_age)
         pending=$(update_pending_entries "$installed")
         json_header
         printf '{"ok":true,"installed":'
         json_string "$installed"
         printf ',"available":'
         json_string "$available"
-        printf ',"behind":%s,"last_check":%s,"pending":%s}\n' "${behind:-0}" "${last_check:-0}" "${pending:-[]}"
+        printf ',"behind":%s,"last_check":%s,"fetch_failed":%s,"check_age":%s,"pending":%s}\n' \
+            "${behind:-0}" "${last_check:-0}" "${fetch_failed:-false}" "${check_age:--1}" "${pending:-[]}"
         exit 0
         ;;
 
@@ -950,13 +969,16 @@ case "$method $path" in
         available=$(update_manifest_current)
         behind=$(update_behind_count "$installed")
         last_check=$(update_last_check_ts)
+        fetch_failed=$(update_last_fetch_failed)
+        check_age=$(update_last_check_age)
         pending=$(update_pending_entries "$installed")
         json_header
         printf '{"ok":true,"installed":'
         json_string "$installed"
         printf ',"available":'
         json_string "$available"
-        printf ',"behind":%s,"last_check":%s,"pending":%s}\n' "${behind:-0}" "${last_check:-0}" "${pending:-[]}"
+        printf ',"behind":%s,"last_check":%s,"fetch_failed":%s,"check_age":%s,"pending":%s}\n' \
+            "${behind:-0}" "${last_check:-0}" "${fetch_failed:-false}" "${check_age:--1}" "${pending:-[]}"
         exit 0
         ;;
 

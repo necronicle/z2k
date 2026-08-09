@@ -62,6 +62,17 @@ fi
 # silently dead whenever GitHub raw was blocked or DNS-poisoned (the exact
 # RU-ISP scenario the fallback exists for). The menu [U] path already gets it
 # via z2k.sh → utils.sh; this makes the unattended path match.
+#
+# РАЗРЫВ, О КОТОРОМ НАДО ЗНАТЬ. «Match» здесь неточно: интерактивный путь идёт
+# через z2k.sh, где z2k_fetch определён БОГАЧЕ — там есть пятый слой (DoH через
+# 1.1.1.1 с пинами edge-IP), написанный под сценарий, когда ТСПУ глушит и SNI,
+# и рекурсивный резолвер. Здесь z2k.sh не вызывается, поэтому в области
+# видимости остаётся версия из utils.sh: четыре слоя, без DoH.
+#
+# Это осознанно (тянуть сюда весь z2k.sh ради одного слоя дороже, чем польза),
+# но помнить надо вот что: без человека работает ИМЕННО этот путь, и отказ на
+# нём некому заметить. Если появится отчёт «обновления не приходят у тех, у
+# кого ручное обновление работает» — смотреть сюда первым делом.
 . "${ZAPRET2_DIR}/lib/utils.sh"
 
 # Source the auto-update module (installed at /opt/zapret2/lib/auto_update.sh)

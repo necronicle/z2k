@@ -69,6 +69,22 @@ var (
 	controlQueueDepth     = flag.Int("control-queue-depth", 256, "session controlCh depth")
 	dialStatsInterval     = flag.Duration("dial-stats-interval", 30*time.Second, "dial stats aggregation interval (0 = disabled)")
 
+	// Потолки на неоплаченную работу, которую может заказать один клиент.
+	//
+	// Их не было вовсе: на каждый входящий кадр CONNECT поднималась горутина
+	// без счётчика, а число стримов в сессии ограничивалось только разрядностью
+	// uint16. Кадр CONNECT — десять байт, горутина живёт до трёх секунд ожидания
+	// слота плюс два диала по десять секунд. То есть один аутентифицированный
+	// клиент, льющий CONNECT со скоростью линка, покупает себе десятки тысяч
+	// горутин по ≥8 КБ стека, а 65536 стримов с буферами дают гигабайты — при
+	// том что вся машина это 2 ГБ.
+	//
+	// Значения с большим запасом над реальным профилем (замер installstats:
+	// в потолок perInstallMaxSessions=64 не упирался никто ни разу), чтобы
+	// живой человек их не почувствовал: это защита от флуда, а не квота.
+	maxPendingConnects = flag.Int("max-pending-connects", 64, "max in-flight CONNECT handlers per session (0 = unlimited)")
+	maxStreamsPerSess  = flag.Int("max-streams-per-session", 512, "max concurrent streams per session (0 = unlimited)")
+
 	// One-off allowlist extension (2026-05-22): permit specific non-Telegram
 	// CIDRs through the relay. Used for the cdnbase.com HTTP body-cap bypass
 	// (see feedback_no_tunnels.md "One-off exception"). NOT a general
@@ -177,6 +193,48 @@ func computeAuthHMAC(secret string) []byte {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte(secret))
 	return m.Sum(nil)
+}
+
+// Пул буферов чтения. Раньше каждый стрим держал собственные 64 КБ всю свою
+// жизнь; у Telegram стримы живут часами, поэтому на ~1300 туннелях это и был
+// основной вклад в RSS. Пул отдаёт буфер только на время активного чтения.
+var readBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 64*1024)
+		return &b
+	},
+}
+
+// newConnectSlots — буфер под потолок одновременных CONNECT (nil = без лимита).
+func newConnectSlots() chan struct{} {
+	if *maxPendingConnects <= 0 {
+		return nil
+	}
+	return make(chan struct{}, *maxPendingConnects)
+}
+
+// acquireConnectSlot берёт слот НЕ блокируясь: ждать здесь нельзя, читатель
+// кадров один на сессию, и заснув в нём мы остановили бы и DATA тоже.
+func (s *session) acquireConnectSlot() bool {
+	if s.connectSlots == nil {
+		return true
+	}
+	select {
+	case s.connectSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) releaseConnectSlot() {
+	if s.connectSlots == nil {
+		return
+	}
+	select {
+	case <-s.connectSlots:
+	default:
+	}
 }
 
 func encodeFrame(streamID uint16, msgType byte, payload []byte) []byte {
@@ -500,6 +558,11 @@ type session struct {
 	done      chan struct{}
 	once      sync.Once
 
+	// Потолок одновременных обработчиков CONNECT. Буферизованный канал, а не
+	// счётчик: слот занимается ДО запуска горутины, поэтому переполнение видно
+	// сразу и отвечается отказом, а не копится в памяти.
+	connectSlots chan struct{}
+
 	mu          sync.Mutex
 	queueMu     sync.Mutex
 	queuedBytes int
@@ -513,15 +576,16 @@ type session struct {
 func newSession(ws *websocket.Conn, id string, parentCtx context.Context) *session {
 	dialCtx, dialCancel := context.WithCancel(parentCtx)
 	return &session{
-		id:         id,
-		ws:         ws,
-		writeCh:    make(chan queuedFrame, *sessionQueueDepth),
-		controlCh:  make(chan []byte, *controlQueueDepth),
-		done:       make(chan struct{}),
-		streams:    make(map[uint16]*stream),
-		dialCtx:    dialCtx,
-		dialCancel: dialCancel,
-		dialFn:     (&net.Dialer{}).DialContext,
+		id:           id,
+		ws:           ws,
+		writeCh:      make(chan queuedFrame, *sessionQueueDepth),
+		controlCh:    make(chan []byte, *controlQueueDepth),
+		connectSlots: newConnectSlots(),
+		done:         make(chan struct{}),
+		streams:      make(map[uint16]*stream),
+		dialCtx:      dialCtx,
+		dialCancel:   dialCancel,
+		dialFn:       (&net.Dialer{}).DialContext,
 	}
 }
 
@@ -568,19 +632,29 @@ func (s *session) releaseSession(n int) {
 // Session cap exceeded → kill session (true session-wide abuse).
 // writeCh full → call sendAbort.
 func (s *session) sendData(st *stream, payload []byte) {
+	s.sendDataFrame(st, encodeFrame(st.id, muxDATA, payload))
+}
+
+// sendDataFrame — то же самое, но кадр уже собран вызывающим.
+//
+// Разделено, чтобы горячий путь (pumpReadFromTCP) мог собрать кадр прямо из
+// буфера чтения: там иначе получалось два выделения и два копирования на
+// каждый прочитанный блок, причём первая копия становилась мусором сразу же.
+// sendData оставлена для вызовов, у которых на руках именно payload.
+func (s *session) sendDataFrame(st *stream, frame []byte) {
 	if st.aborted.Load() {
 		return
 	}
-	s.rxBytes.Add(int64(len(payload)))
+	n := int64(len(frame))
+	// Учёт трафика — по полезной нагрузке, без трёх байт заголовка: цифра
+	// должна означать то же, что и раньше.
+	s.rxBytes.Add(n - 3)
 	s.mu.Lock()
 	cur := s.streams[st.id]
 	s.mu.Unlock()
 	if cur != st {
 		return
 	}
-
-	frame := encodeFrame(st.id, muxDATA, payload)
-	n := int64(len(frame))
 
 	if st.queuedBytes.Add(n) > int64(*perStreamQueueBytes) {
 		st.queuedBytes.Add(-n)
@@ -820,7 +894,23 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 		_ = conn.Close()
 		return
 	}
-	if old, exists := s.streams[id]; exists {
+	_, replacing := s.streams[id]
+	// Потолок стримов. Переиспользование существующего id пропускаем всегда:
+	// это не рост, а замена, и отказ там оборвал бы живой стрим.
+	//
+	// Без потолка предел задавала только разрядность uint16 — 65536 стримов в
+	// одной сессии, каждый со своим соединением и очередью. На машине с 2 ГБ
+	// это чужая память, купленная десятибайтовыми кадрами.
+	if !replacing && *maxStreamsPerSess > 0 && len(s.streams) >= *maxStreamsPerSess {
+		s.mu.Unlock()
+		log.Printf("[%s] stream %d: превышен потолок стримов на сессию (%d) — отказ",
+			s.id, id, *maxStreamsPerSess)
+		_ = conn.Close()
+		s.sendConnectResult(id, false)
+		return
+	}
+	if replacing {
+		old := s.streams[id]
 		old.aborted.Store(true)
 		if old.conn != nil {
 			_ = old.conn.Close()
@@ -843,13 +933,26 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 // and emits an ordered CLOSE — but only if the stream wasn't aborted in
 // parallel.
 func (s *session) pumpReadFromTCP(st *stream) {
-	buf := make([]byte, 64*1024)
+	// Буфер чтения — из пула, а не свой на каждый стрим.
+	//
+	// Раньше здесь стоял make([]byte, 64*1024) на КАЖДЫЙ стрим, и он жил всю
+	// жизнь стрима, а стримы у Telegram живут часами. При наблюдаемых ~1300
+	// туннелях это доминирующий член в RSS релея: около 400 КБ на туннель, из
+	// которых основная часть — вот эти буферы. Потолок здесь не OOM: GOMEMLIMIT
+	// мягкий, поэтому раньше него придёт непрерывный GC на двух ядрах, то есть
+	// вязкий Telegram у всех и ни строчки в логах.
+	bufp := readBufPool.Get().(*[]byte)
+	buf := *bufp
+	defer readBufPool.Put(bufp)
 	for {
 		n, err := st.conn.Read(buf)
 		if n > 0 {
-			payload := make([]byte, n)
-			copy(payload, buf[:n])
-			s.sendData(st, payload)
+			// Кадр собираем СРАЗУ из буфера чтения: одно выделение и одно
+			// копирование вместо двух. Раньше был payload := make(); copy(),
+			// а потом encodeFrame выделял ещё раз и копировал повторно —
+			// первая копия становилась мусором немедленно, то есть мы кормили
+			// сборщик ровно объёмом трафика.
+			s.sendDataFrame(st, encodeFrame(st.id, muxDATA, buf[:n]))
 		}
 		if err != nil {
 			break
@@ -956,7 +1059,19 @@ func (s *session) readPump() {
 
 		switch mt {
 		case muxCONNECT:
-			go s.handleConnect(sid, payload)
+			// Слот берём ЗДЕСЬ, до запуска горутины. Без слота — честный
+			// CONNECT_FAIL: клиент попробует ещё раз, а мы не копим работу,
+			// за которую никто не платил.
+			if !s.acquireConnectSlot() {
+				log.Printf("[%s] stream %d: превышен потолок одновременных CONNECT (%d) — отказ",
+					s.id, sid, *maxPendingConnects)
+				s.sendConnectResult(sid, false)
+				continue
+			}
+			go func(id uint16, pl []byte) {
+				defer s.releaseConnectSlot()
+				s.handleConnect(id, pl)
+			}(sid, payload)
 		case muxDATA:
 			s.mu.Lock()
 			st, ok := s.streams[sid]

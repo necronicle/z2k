@@ -193,6 +193,20 @@ while true; do
         fi
     fi
 
+    # Minute-cadence task: сторож детектора блокировок. Тем же способом, что и
+    # tg-tunnel-watchdog выше. Отдельная задача, а не проверка внутри той:
+    # у detect другой признак отказа — он может быть ЖИВ и при этом жечь ядро
+    # (спин-горутина при asyncpreemptoff=1 не вытесняется), и «поднять, если
+    # упал» такого не ловит.
+    if [ -x "${ZAPRET2_DIR}/z2k-detect-watchdog.sh" ]; then
+        last_dwd=$(last_fired_in "$TMP_STATE" detect-watchdog-epoch)
+        case "$last_dwd" in ''|*[!0-9]*) last_dwd=0 ;; esac
+        if [ "$((now_epoch - last_dwd))" -ge 55 ]; then
+            mark_fired_in "$TMP_STATE" detect-watchdog-epoch "$now_epoch"
+            "${ZAPRET2_DIR}/z2k-detect-watchdog.sh" >/dev/null 2>&1 &
+        fi
+    fi
+
     # Per-flow PPE de-offload re-assert (mangle FORWARD/PREROUTING). The NDM hook
     # (94-z2k-ppe-deoffload.sh) handles event-driven re-apply after netfilter
     # regen; this is the secondary net AND the boot-time apply (the rule is

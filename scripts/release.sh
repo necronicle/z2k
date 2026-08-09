@@ -217,13 +217,49 @@ entry = {"v": ver, "type": typ, "ts": ts, "ref": "PENDING",
          "desc": desc, "changed_files": files}
 
 lines = open(path, encoding='utf-8').read().split('\n')
-out = []
+
+# Монотонный счётчик релизов. Он НЕ дублирует номер версии: номера дотнутые
+# (p-74.2 после r-74.1), сравнивать их числом нельзя, а роутеру нужно ровно одно
+# — «этот манифест новее того, что я уже видел». Без такого признака подписанный,
+# но СТАРЫЙ манифест остаётся валидным вечно: подпись не устаревает сама по себе,
+# и понижение версии подсовыванием вчерашнего файла подписью не ловится.
+cur_seq = 0
 for ln in lines:
-    if ln.strip().startswith('"current"'):
+    st = ln.strip()
+    if st.startswith('"seq"'):
+        try:
+            cur_seq = int(st.split(':', 1)[1].strip().rstrip(','))
+        except ValueError:
+            cur_seq = 0
+        break
+new_seq = cur_seq + 1
+
+out = []
+seen_seq = False
+for ln in lines:
+    st = ln.strip()
+    if st.startswith('"current"'):
         indent = ln[:len(ln) - len(ln.lstrip())]
         out.append('%s"current": "%s",' % (indent, ver))
+    elif st.startswith('"seq"'):
+        indent = ln[:len(ln) - len(ln.lstrip())]
+        out.append('%s"seq": %d,' % (indent, new_seq))
+        seen_seq = True
     else:
         out.append(ln)
+
+# Манифест до появления счётчика — дописываем строку следом за branch.
+#
+# Именно за branch, а НЕ за current: gen_file_hashes вставляет блок files_sha256
+# сразу после "current", и строка, поставленная туда же, оказывается вытеснена
+# под карту сумм. Порядок ключей у нас несущий — роутеры разбирают манифест
+# построчно, — и тест на него не зря стоит.
+if not seen_seq:
+    for i, ln in enumerate(out):
+        if ln.strip().startswith('"branch"'):
+            indent = ln[:len(ln) - len(ln.lstrip())]
+            out.insert(i + 1, '%s"seq": %d,' % (indent, new_seq))
+            break
 
 last = max(i for i, ln in enumerate(out) if ln.strip().startswith('{"v":'))
 indent = out[last][:len(out[last]) - len(out[last].lstrip())]
@@ -240,12 +276,67 @@ sh scripts/gen_file_hashes.sh
 
 python3 -c "import json; json.load(open('$MANIFEST'))" || die "после правки $MANIFEST перестал быть валидным JSON"
 
+# --- Подпись манифеста --------------------------------------------------------
+#
+# ПОРЯДОК ВАЖЕН: подписываем ПОСЛЕ gen_file_hashes. Подпись обязана покрывать те
+# самые байты, которые уедут на роутеры; подписать до перегенерации карты сумм
+# значит подписать файл, которого никто не увидит, и получить отказ у всего
+# парка сразу.
+#
+# ГДЕ КЛЮЧ. Только на машине владельца, вне репозитория. Вариант «ключ в GitHub
+# Actions secrets» отвергнут осознанно: модель угроз здесь — «захватили
+# репозиторий», а такой ключ захватывается вместе с ним. Подпись, которая не
+# защищает от единственной угрозы, ради которой заводится, — это подпись-театр,
+# и она хуже отсутствия, потому что закрывает вопрос, не решая его.
+#
+# CI имеет право только ПРОВЕРЯТЬ.
+#
+# macOS отдаёт LibreSSL, который Ed25519 не умеет вовсе, поэтому ищем настоящий
+# OpenSSL, а не первый попавшийся в PATH.
+Z2K_SIGNING_KEY="${Z2K_SIGNING_KEY:-$HOME/.z2k-signing/z2k-update.key}"
+
+_find_openssl() {
+    for _c in /opt/homebrew/bin/openssl /usr/local/opt/openssl@3/bin/openssl \
+              /usr/local/bin/openssl "$(command -v openssl 2>/dev/null)"; do
+        [ -x "$_c" ] || continue
+        "$_c" genpkey -algorithm ed25519 -out /dev/null >/dev/null 2>&1 || continue
+        printf '%s' "$_c"
+        return 0
+    done
+    return 1
+}
+
+if [ -f "$Z2K_SIGNING_KEY" ]; then
+    OSSL=$(_find_openssl) || die "не нашёл OpenSSL с поддержкой Ed25519 (у macOS системный — LibreSSL, он не умеет; поставьте: brew install openssl)"
+    "$OSSL" pkeyutl -sign -rawin -inkey "$Z2K_SIGNING_KEY" \
+        -in "$MANIFEST" -out "${MANIFEST}.sig" \
+        || die "подписать $MANIFEST не удалось"
+
+    # Проверяем СВОЙ результат опубликованным публичным ключом. Подпись, не
+    # сходящаяся с тем ключом, который лежит у людей, хуже отсутствия подписи:
+    # каждый роутер, уже видевший валидную, отвергнет релиз целиком.
+    "$OSSL" pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
+        -in "$MANIFEST" -sigfile "${MANIFEST}.sig" >/dev/null 2>&1 \
+        || die "подпись не проверяется публичным ключом из files/etc/z2k-update-pub.pem — релиз остановлен"
+
+    printf 'манифест подписан (seq=%s), подпись сверена с опубликованным ключом\n' \
+        "$(sed -n 's/.*"seq"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$MANIFEST" | head -1)"
+else
+    # Без ключа релиз собрать МОЖНО — иначе выпустить не смог бы никто, кроме
+    # владельца, а это отдельное решение, которое здесь не принимается. Но
+    # молчать нельзя: неподписанный релиз отвергнут каждым роутером, который уже
+    # видел валидную подпись хоть раз.
+    printf 'ВНИМАНИЕ: ключ подписи не найден (%s) — манифест уйдёт БЕЗ подписи.\n' "$Z2K_SIGNING_KEY" >&2
+    printf 'Роутеры, уже принимавшие подписанные манифесты, этот релиз ОТВЕРГНУТ.\n' >&2
+    rm -f "${MANIFEST}.sig"
+fi
+
 # --- Коммиты ------------------------------------------------------------------
 #
 # Ссылка на несущий коммит проставляется ВТОРЫМ коммитом, и иначе не выйдет:
 # хеш известен только после того, как коммит создан, а поправить его через amend
 # нельзя — amend меняет хеш, и ссылка снова указывает в никуда.
-git add "$MANIFEST" webpanel/www/index.html 2>/dev/null || true
+git add "$MANIFEST" "${MANIFEST}.sig" webpanel/www/index.html 2>/dev/null || true
 git commit -q -m "release: $VER ($TYPE)
 
 $DESC"

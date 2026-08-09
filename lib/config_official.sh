@@ -1643,6 +1643,7 @@ create_official_config() {
     local saved_Z2K_INJECT_TLS_MODS="0"
     local saved_Z2K_DYNAMIC_TTL="1"
     local saved_Z2K_STATS="1"
+    local saved_Z2K_STATS_ACK="0"
     local saved_DISABLE_CUSTOM="1"
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
@@ -1680,6 +1681,11 @@ create_official_config() {
         # 2026-05-30: Default ON как все фичи). Opt-out via menu/webpanel toggle
         # sets =0; preserved across auto-update by the Z2K_ prefix rule.
         saved_Z2K_STATS=$(safe_config_read "Z2K_STATS" "$config_file" "1")
+        # Признак «человек видел, что именно уходит». Ноль означает «ещё не
+        # показывали»: первая отправка подождёт (см. files/z2k-stats-upload.sh).
+        # У уже работающей установки ключа нет — тогда единица, заново
+        # спрашивать того, кто давно живёт с телеметрией, незачем.
+        saved_Z2K_STATS_ACK=$(safe_config_read "Z2K_STATS_ACK" "$config_file" "1")
         # DISABLE_CUSTOM — custom.d on/off (inverse: 0 = custom.d enabled). Was
         # hardcoded =1 in the generated config and NOT preserved, so enabling
         # custom.d (menu [S] / webpanel) survived only until the next config
@@ -1718,6 +1724,20 @@ create_official_config() {
     # Создать полный config файл
     local z2k_mode_filter=hostlist
     [ "${saved_Z2K_AUTOHOSTLIST:-0}" = "1" ] && z2k_mode_filter=autohostlist
+
+    # Пишем во ВРЕМЕННЫЙ файл, а боевой подменяем одним rename в самом конце.
+    #
+    # Ниже конфиг собирается десятком отдельных `>>`. Раньше они шли прямо в
+    # боевой файл, и любой обрыв в середине (полный /opt, умирающий NAND —
+    # прецедент с 0xFF-мусором в Strategy.txt был) оставлял ПОЛУКОНФИГ, который
+    # S99zapret2 сорсит на следующем бутe от root. Функция при этом печатала
+    # «Config файл создан» и возвращала 0.
+    #
+    # Все чтения саженных значений (safe_config_read выше) уже отработали по
+    # боевому файлу, так что подмена цели здесь безопасна.
+    local _cfg_target="$config_file"
+    config_file="${_cfg_target}.new.$$"
+    rm -f "$config_file"
 
     cat > "$config_file" <<CONFIG
 # zapret2 configuration for Keenetic
@@ -1948,6 +1968,10 @@ Z2K_DYNAMIC_TTL=${saved_Z2K_DYNAMIC_TTL}
 # opt out. Does not affect NFQWS2_OPT / the bypass itself.
 Z2K_STATS=${saved_Z2K_STATS}
 
+# Видел ли человек, какие поля уходят. 0 = ещё нет, первая отправка ждёт;
+# 1 = экран показан (меню [C] или карточка в вебпанели) либо установка старая.
+Z2K_STATS_ACK=${saved_Z2K_STATS_ACK}
+
 # Custom.d scripts (50-stun4all / 50-discord-media — STUN desync that fixes
 # WhatsApp/Telegram voice on some networks). Default 1 = disabled (z2k's own
 # Discord strategy covers most cases). Enable via menu [S] / webpanel toggle
@@ -1993,6 +2017,25 @@ Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
 Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
 EOF
 
+    # Записалось ли всё до конца. Хвост heredoc'а — последнее, что попадает в
+    # файл, поэтому его наличие и есть признак «конфиг не обрезан».
+    if [ ! -s "$config_file" ] || ! grep -q '^Z2K_GITHUB_RAW=' "$config_file"; then
+        print_error "Конфиг записан не полностью — боевой файл оставлен прежним"
+        rm -f "$config_file"
+        config_file="$_cfg_target"
+        return 1
+    fi
+
+    # Подмена одним rename: на той же ФС это атомарно, и сорсящий init-скрипт
+    # видит либо старый конфиг целиком, либо новый целиком, но не половину.
+    if ! mv -f "$config_file" "$_cfg_target"; then
+        print_error "Не удалось заменить конфиг — боевой файл оставлен прежним"
+        rm -f "$config_file"
+        config_file="$_cfg_target"
+        return 1
+    fi
+    config_file="$_cfg_target"
+
     print_success "Config файл создан: $config_file"
     return 0
 }
@@ -2014,8 +2057,12 @@ update_nfqws2_opt_in_config() {
 
     print_info "Обновление NFQWS2_OPT в: $config_file"
 
-    # Создать backup
-    cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    # Создать backup. Проверяем: страховка, которая молча не создалась, хуже
+    # отсутствия страховки — на неё рассчитывают дальше по цепочке.
+    if ! cp "$config_file" "${config_file}.backup.$(date +%Y%m%d_%H%M%S)"; then
+        print_error "Не удалось создать резервную копию конфига — правку не делаем"
+        return 1
+    fi
 
     # Генерировать новый NFQWS2_OPT (см. коммент в create_official_config:
     # порченый Strategy.txt роняет генерацию, старый конфиг не переписываем).
@@ -2036,28 +2083,53 @@ update_nfqws2_opt_in_config() {
         next
     }
     !in_nfqws_opt { print }
-    ' "$config_file" > "$temp_file"
+    ' "$config_file" > "$temp_file" || {
+        print_error "Не удалось подготовить новый конфиг (обрыв записи)"
+        rm -f "$temp_file"
+        return 1
+    }
 
     # Добавить новый NFQWS2_OPT в конец файла (перед последней секцией)
     # Найти позицию для вставки (перед FIREWALL SETTINGS или в конец)
+    #
+    # Каждый шаг проверяется. Раньше ни awk, ни оба mv статус не отдавали, и
+    # обрыв записи (полный или умирающий NAND — прецедент с 0xFF-мусором в
+    # Strategy.txt был) укладывал усечённый конфиг поверх рабочего, а функция
+    # печатала «NFQWS2_OPT обновлён» и возвращала 0. Конфиг сорсится root-овым
+    # init-скриптом, так что полуфайл — это не косметика.
     if grep -q "# FIREWALL SETTINGS" "$temp_file"; then
         # Вставить перед FIREWALL SETTINGS
-        awk -v opt="$nfqws2_opt_section" '
+        if ! awk -v opt="$nfqws2_opt_section" '
         /# FIREWALL SETTINGS/ {
             print opt
             print ""
         }
         { print }
-        ' "$temp_file" > "${temp_file}.2"
-        mv "${temp_file}.2" "$temp_file"
+        ' "$temp_file" > "${temp_file}.2"; then
+            print_error "Не удалось вставить NFQWS2_OPT (обрыв записи)"
+            rm -f "$temp_file" "${temp_file}.2"
+            return 1
+        fi
+        if ! mv "${temp_file}.2" "$temp_file"; then
+            print_error "Не удалось подготовить конфиг к замене"
+            rm -f "$temp_file" "${temp_file}.2"
+            return 1
+        fi
     else
         # Добавить в конец
-        echo "" >> "$temp_file"
-        echo "$nfqws2_opt_section" >> "$temp_file"
+        if ! { echo "" >> "$temp_file" && echo "$nfqws2_opt_section" >> "$temp_file"; }; then
+            print_error "Не удалось дописать NFQWS2_OPT (обрыв записи)"
+            rm -f "$temp_file"
+            return 1
+        fi
     fi
 
     # Заменить оригинальный файл
-    mv "$temp_file" "$config_file"
+    if ! mv "$temp_file" "$config_file"; then
+        print_error "Не удалось заменить конфиг — оставлен прежний, рабочий"
+        rm -f "$temp_file"
+        return 1
+    fi
 
     print_success "NFQWS2_OPT обновлён в config файле"
     return 0

@@ -161,7 +161,7 @@ if [ -n "$GO" ]; then
         if (cd "$m" && "$GO" vet ./...); then passed "$m vet"; else failed "$m vet"; fi
         # Без -race и тулчейном GO_TEST: см. шапку. В CI (linux) race включён.
         case "$m" in
-            z2k-detect) tst='$GO_TEST test -count=1 $($GO_TEST list ./... | grep -v /internal/prober$)' ;;
+            z2k-detect) tst='$GO_TEST test -count=1 ./...' ;;
             *)          tst='$GO_TEST test -count=1 ./...' ;;
         esac
         if (cd "$m" && eval "$tst"); then passed "$m test"; else failed "$m test"; fi

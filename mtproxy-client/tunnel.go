@@ -730,6 +730,15 @@ func runTunnel() error {
 		ln.Close()
 	}()
 
+	// Бэкофф для временных ошибок Accept. Голый `continue` здесь означал
+	// 100% CPU навсегда: при EMFILE (кончились дескрипторы) или после того,
+	// как слушатель закрыт не через ctx (net.ErrClosed), ошибка постоянна, и
+	// цикл крутится вхолостую на роутере, где это единственное ядро. Своего
+	// watchdog'а у клиента нет, в логе тоже ничего — ровно тот класс, что уже
+	// проживал 141 час CPU незамеченным у осиротевшего спиннера.
+	var acceptDelay time.Duration
+	const acceptDelayMax = 1 * time.Second
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -738,9 +747,33 @@ func runTunnel() error {
 				log.Println("[tunnel] stopped")
 				return nil
 			default:
-				continue
 			}
+			// Закрытый слушатель — состояние необратимое: повторять Accept
+			// бессмысленно, супервизор поднимет процесс заново.
+			if errors.Is(err, net.ErrClosed) {
+				log.Printf("[tunnel] listener closed: %v — stopping accept loop", err)
+				return err
+			}
+			// Временное (EMFILE/ENFILE/ECONNABORTED) — отступаем с удвоением,
+			// давая дескрипторам освободиться, и обязательно пишем в лог.
+			if acceptDelay == 0 {
+				acceptDelay = 5 * time.Millisecond
+			} else {
+				acceptDelay *= 2
+			}
+			if acceptDelay > acceptDelayMax {
+				acceptDelay = acceptDelayMax
+			}
+			log.Printf("[tunnel] accept error: %v — retrying in %v", err, acceptDelay)
+			select {
+			case <-time.After(acceptDelay):
+			case <-ctx.Done():
+				log.Println("[tunnel] stopped")
+				return nil
+			}
+			continue
 		}
+		acceptDelay = 0
 		tcpConn, ok := conn.(*net.TCPConn)
 		if !ok {
 			conn.Close()

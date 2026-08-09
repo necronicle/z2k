@@ -71,19 +71,132 @@ au_lock_release() {
 
 # -------------------------------------------------------- manifest fetch ---
 
+# --------------------------------------------------- подпись манифеста ---
+#
+# Манифест — корень доверия: из него берутся и решение «что ставить», и хеши,
+# которыми проверяется каждый скачанный файл. Кто подменил манифест, тот
+# подменил и эталоны, и дальнейшая сверка подтверждает подмену вместо того,
+# чтобы её ловить. Поэтому проверка подписи стоит ДО первого разбора файла.
+#
+# Пути к ключу и верификатору — переменными, чтобы тест мог подставить свои.
+Z2K_AU_PUBKEY="${Z2K_AU_PUBKEY:-${ZAPRET2_DIR:-/opt/zapret2}/etc/z2k-update-pub.pem}"
+Z2K_AU_SIG_URL="${Z2K_AU_SIG_URL:-${Z2K_AU_MANIFEST_URL}.sig}"
+Z2K_AU_TRUST_PIN="${Z2K_AU_TRUST_PIN:-/opt/etc/z2k/.trust/pinned}"
+
+# au_manifest_verify MANIFEST SIG -> 0 если подпись сошлась.
+#
+# Единственный поддерживаемый способ — Ed25519. openssl на роутере это умеет
+# (проверено на 3.5.5), но `pkeyutl -rawin` появился только в 3.0: на 1.1.1
+# такой проверки нет вовсе, и там мы честно возвращаем «нечем проверить».
+au_manifest_verify() {
+    local m="$1" sig="$2"
+    [ -s "$m" ] && [ -s "$sig" ] || return 1
+    [ -s "$Z2K_AU_PUBKEY" ] || return 2   # ключа нет — решает вызывающий
+
+    # Свой проверяльщик — ПЕРВЫМ.
+    #
+    # Он адресуется содержимым: sha256 вшит в z2k.sh, поэтому подменить его на
+    # зеркале нельзя. openssl такого свойства не имеет вовсе — он приезжает
+    # пакетом из opkg-фида, который на Entware ходит по открытому HTTP, то есть
+    # корень доверия зависел бы от канала, ничем не защищённого.
+    #
+    # openssl остаётся ВТОРЫМ путём, а не фоллбэком-на-пропуск: обе реализации
+    # проверяют одну и ту же подпись, поэтому принять результат любой из них
+    # безопасно. Дырой было бы «нет проверяльщика — пропустить», а не «есть два».
+    local _vbin="${Z2K_AU_VERIFY_BIN:-${ZAPRET2_DIR:-/opt/zapret2}/bin/z2k-verify}"
+    if [ -x "$_vbin" ]; then
+        "$_vbin" "$Z2K_AU_PUBKEY" "$sig" "$m" >/dev/null 2>&1
+        case "$?" in
+            0) return 0 ;;
+            1) return 1 ;;
+            # 2 = позвали неправильно. Это наша ошибка, а не подделка:
+            # проваливаемся на openssl, а не объявляем манифест плохим.
+        esac
+    fi
+
+    local _ossl="${Z2K_AU_OPENSSL:-openssl}"
+    command -v "$_ossl" >/dev/null 2>&1 || return 2
+
+    # «Не умею проверять» и «подпись не сошлась» — РАЗНЫЕ состояния, и путать их
+    # нельзя. Ed25519 через pkeyutl -rawin появился в OpenSSL 3.0; на 1.1.1
+    # такого режима нет вовсе, и голый вызов вернул бы ненулевой код, то есть
+    # выглядел бы как ПОДДЕЛКА. С защёлкнутым храповиком это означало бы жёсткий
+    # отказ обновляться на ровном месте — у всех, кто не обновлял openssl.
+    #
+    # Поэтому сначала спрашиваем, поддерживается ли режим вообще.
+    if ! "$_ossl" pkeyutl -help 2>&1 | grep -q -- '-rawin'; then
+        return 2
+    fi
+
+    "$_ossl" pkeyutl -verify -rawin -pubin -inkey "$Z2K_AU_PUBKEY" \
+        -in "$m" -sigfile "$sig" >/dev/null 2>&1
+}
+
+# Видела ли ЭТА коробка хоть раз валидную подпись.
+#
+# Храповик вместо флаг-дня: критерий не «через два релиза», а «здесь подпись
+# уже работала». До первой валидной подписи неподписанный манифест принимается
+# (иначе роутер, установленный до появления подписи, не обновится никогда и
+# ключа не получит). После — обязателен навсегда, отката к неподписанному нет.
+au_trust_pinned() { [ -f "$Z2K_AU_TRUST_PIN" ]; }
+au_trust_pin() {
+    mkdir -p "$(dirname "$Z2K_AU_TRUST_PIN")" 2>/dev/null
+    : > "$Z2K_AU_TRUST_PIN" 2>/dev/null
+}
+
 # Fetch UPDATES.json into $Z2K_AU_TMP_DIR/UPDATES.json. Uses z2k_fetch
 # for layered CDN/DoH fallback if available; raw curl otherwise.
 au_fetch_manifest() {
     mkdir -p "$Z2K_AU_TMP_DIR"
     local out="$Z2K_AU_TMP_DIR/UPDATES.json"
-    rm -f "$out"
+    local sig="${out}.sig"
+    rm -f "$out" "$sig"
     if command -v z2k_fetch >/dev/null 2>&1; then
         z2k_fetch "$Z2K_AU_MANIFEST_URL" "$out" || return 1
     else
         curl -fsSL --max-time 30 "$Z2K_AU_MANIFEST_URL" -o "$out" || return 1
     fi
     [ -s "$out" ] || return 1
-    return 0
+
+    # Подпись тянем рядом, тем же транспортом. Её отсутствие — не сетевой сбой,
+    # а состояние, которое разбирается ниже вместе с храповиком.
+    if command -v z2k_fetch >/dev/null 2>&1; then
+        z2k_fetch "$Z2K_AU_SIG_URL" "$sig" >/dev/null 2>&1 || true
+    else
+        curl -fsSL --max-time 30 "$Z2K_AU_SIG_URL" -o "$sig" >/dev/null 2>&1 || true
+    fi
+
+    au_manifest_verify "$out" "$sig"
+    case "$?" in
+        0)
+            # Первая валидная подпись защёлкивает храповик.
+            au_trust_pinned || { au_trust_pin; au_log "подпись манифеста принята впервые — дальше она обязательна"; }
+            return 0
+            ;;
+        2)
+            # Проверить нечем: нет ключа (установка старше подписи) или нет
+            # подходящего openssl. Пропускаем — но только пока храповик не
+            # защёлкнут, иначе это была бы дыра «отними ключ и проверка исчезнет».
+            if au_trust_pinned; then
+                au_log "ОТКАЗ: подпись уже принималась на этой установке, а проверить её сейчас нечем"
+                rm -f "$out" "$sig"
+                return 1
+            fi
+            au_log "подпись не проверяется (нет ключа или openssl без Ed25519) — принимаю, храповик не защёлкнут"
+            return 0
+            ;;
+        *)
+            if au_trust_pinned; then
+                au_log "ОТКАЗ: манифест без валидной подписи, а эта установка её уже принимала"
+                rm -f "$out" "$sig"
+                return 1
+            fi
+            # До первой валидной подписи неподписанный манифест — норма: именно
+            # им приедет сам публичный ключ.
+            au_log "манифест без валидной подписи — принимаю (подпись здесь ещё ни разу не работала)"
+            return 0
+            ;;
+    esac
 }
 
 # ------------------------------------------------- manifest parsing ---
@@ -273,9 +386,17 @@ au_decide() {
         return 0
     fi
 
+    # Смешанное дерево после неполного отката патчем не лечится: патч кладёт
+    # только изменённые файлы и достроит один гибрид до другого. Любой вердикт
+    # здесь становится reinstall, пока маркер не снят успешной переустановкой.
+    local has_reinstall=0
+    if au_tree_is_dirty; then
+        au_log "дерево помечено как смешанное — вердикт принудительно reinstall"
+        has_reinstall=1
+    fi
+
     # any reinstall in the diff window → reinstall to current
     # any reset_state=true in the diff window → wipe autocircular state
-    local has_reinstall=0
     local has_reset_state=0
     local files=""
     local entry etype cf rs
@@ -509,15 +630,46 @@ au_download_repo_file() {
     return 1
 }
 
+# Скачать z2k.sh, которым потом ПЕРЕУСТАНАВЛИВАЕТСЯ всё дерево от root.
+#
+# Этот путь срабатывает сам, по расписанию, без человека — поэтому он опаснее
+# ручной установки: там команду набирает пользователь, здесь не набирает никто.
+# До 2026-08-08 он тянул скрипт вообще без сверки, хотя эталон для z2k.sh уже
+# лежал в карте files_sha256 и патч-путь рядом (au_apply_patch) им пользовался.
+# То есть механизм проверки доставлялся непроверенным.
+#
+# Теперь дайджест обязателен, когда манифест его знает: не совпало — зеркало
+# пропускается как не ответившее, а если не совпало нигде, обновление не
+# применяется. Это ровно тот fail-closed, который здесь дёшев: отказ оставляет
+# человека на работающей старой версии, а не без обхода.
+#
+# Манифесты, выпущенные до появления карты сумм, дайджеста не несут. Тогда
+# поведение прежнее (иначе такие роутеры больше никогда не обновятся), но
+# gh-proxy из списка зеркал выпадает: это анонимный сторонний реверс-прокси,
+# он терминирует TLS на своём сертификате и может отдать что угодно — пускать
+# его туда, где сверять не с чем, значит отдавать ему root на роутере.
 au_download_reinstall_script() {
     local target="$1"
     local url="$Z2K_AU_REINSTALL_URL"
     local jsdelivr="" gh_proxy=""
+    local want_sha got_sha rc
 
     rm -f "$target"
 
+    want_sha=$(au_manifest_file_sha "$Z2K_AU_TMP_DIR/UPDATES.json" "z2k.sh")
+    if [ -n "$want_sha" ]; then
+        au_log "reinstall: z2k.sh ожидается с sha256 ${want_sha}"
+    else
+        au_log "reinstall: в манифесте нет sha256 для z2k.sh — ставим без проверки содержимого, gh-proxy исключён"
+    fi
+
     if command -v z2k_fetch >/dev/null 2>&1; then
-        z2k_fetch "$url" "$target" && [ -s "$target" ] && return 0
+        # z2k_fetch сверяет каждый хоп сам, если ему передан ожидаемый дайджест.
+        [ -n "$want_sha" ] && { Z2K_FETCH_SHA256="$want_sha"; export Z2K_FETCH_SHA256; }
+        z2k_fetch "$url" "$target"
+        rc=$?
+        unset Z2K_FETCH_SHA256
+        [ "$rc" = "0" ] && [ -s "$target" ] && return 0
         rm -f "$target"
     fi
 
@@ -529,15 +681,30 @@ au_download_reinstall_script() {
             repo="${rest%%/*}"; rest="${rest#*/}"
             branch="${rest%%/*}"; path="${rest#*/}"
             jsdelivr="https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${path}"
-            gh_proxy="https://gh-proxy.com/${url}"
+            [ -n "$want_sha" ] && gh_proxy="https://gh-proxy.com/${url}"
             ;;
     esac
 
     for url in "$Z2K_AU_REINSTALL_URL" "$jsdelivr" "$gh_proxy"; do
         [ -z "$url" ] && continue
         au_log "reinstall: fetching z2k.sh from $url"
-        if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$target"; then
-            [ -s "$target" ] && return 0
+        if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$target" \
+           && [ -s "$target" ]; then
+            if [ -z "$want_sha" ]; then
+                return 0
+            fi
+            got_sha=$(z2k_sha256_file "$target" 2>/dev/null)
+            if [ -z "$got_sha" ]; then
+                # Считать нечем — а раз дайджест известен, «не проверили» здесь
+                # значит «не знаем, что запускаем от root». Это отказ.
+                au_log "reinstall: нечем посчитать sha256 — отказ (эталон известен, проверка обязательна)"
+                rm -f "$target"
+                return 1
+            fi
+            if [ "$got_sha" = "$want_sha" ]; then
+                return 0
+            fi
+            au_log "reinstall: sha256 не сошёлся у $url (получено ${got_sha}) — зеркало пропущено"
         fi
         rm -f "$target"
     done
@@ -745,7 +912,16 @@ EOF
     au_reapply_feature_flags "$saved_flags"
 
     # 4) write installed tag
-    echo "$target_tag" > "$Z2K_AU_INSTALLED_TAG_FILE"
+    #
+    # Проверяем запись: пустой или ненаписанный тег уводит следующий прогон в
+    # ветку «installed tag empty/corrupt → no update», и обновлений не будет
+    # больше НИКОГДА — молча, до ручного вмешательства. Файлы при этом уже
+    # разложены, так что откатывать нечего; сообщаем и возвращаем ошибку, чтобы
+    # это попало в лог и в статус, а не растворилось.
+    if ! au_write_installed_tag "$target_tag"; then
+        au_log "patch: НЕ удалось записать installed-tag — следующий прогон не увидит обновлений"
+        return 1
+    fi
 
     # 5) smart restart — figure out which services actually need to be
     # bounced based on which files changed. Without this, patches that
@@ -876,7 +1052,10 @@ au_apply_reinstall() {
     fi
 
     # install.sh may have already written the tag, but enforce it here too.
-    echo "$target_tag" > "$Z2K_AU_INSTALLED_TAG_FILE"
+    if ! au_write_installed_tag "$target_tag"; then
+        au_log "reinstall: НЕ удалось записать installed-tag — следующий прогон не увидит обновлений"
+        return 1
+    fi
     au_log "reinstall applied: $target_tag"
     return 0
 }
@@ -924,6 +1103,33 @@ au_health_check() {
         return 1
     fi
 
+    # Остальные сервисы z2k. Гейтом их НЕ делаем — обход держит nfqws2, и ронять
+    # из-за упавшей вебпанели исправное обновление хуже, чем жить без панели.
+    # Но и молчать нельзя: раньше health-check смотрел исключительно на nfqws2,
+    # поэтому отказ tg-туннеля, rt-proxy, планировщика или панели засчитывался
+    # как «обновление прошло успешно», и человек узнавал об этом от Telegram,
+    # который перестал работать. Теперь это видно в логе обновления.
+    #
+    # Проверяем только те, что реально установлены: набор сервисов зависит от
+    # включённых фич, и отсутствующий init-скрипт — не отказ.
+    local _svc _svc_pat _down=""
+    for _svc in S98tg-tunnel S96z2k-rt-proxy S99z2k-scheduler S98z2k-detect S96z2k-webpanel; do
+        [ -x "/opt/etc/init.d/$_svc" ] || continue
+        case "$_svc" in
+            S98tg-tunnel)      _svc_pat="tg-mtproxy-client" ;;
+            S96z2k-rt-proxy)   _svc_pat="rt-proxy" ;;
+            S99z2k-scheduler)  _svc_pat="z2k-scheduler" ;;
+            S98z2k-detect)     _svc_pat="z2k-detect" ;;
+            S96z2k-webpanel)   _svc_pat="lighttpd" ;;
+            *)                 continue ;;
+        esac
+        pgrep -f "$_svc_pat" >/dev/null 2>&1 || _down="$_down $_svc"
+    done
+    if [ -n "$_down" ]; then
+        au_log "health-check: ВНИМАНИЕ, после обновления не работают:$_down"
+        au_log "health-check: обход (nfqws2) жив, откат не делаем — но эти сервисы нужно поднять"
+    fi
+
     # GitHub reachability is an ADVISORY signal — NOT a health gate. The probe
     # hits a bare hostname (DNS-dependent) and github.com is not bypassed, so on
     # a router whose provider blocks GitHub or whose DoH resolver is broken it
@@ -945,11 +1151,76 @@ au_health_check() {
 # create_rollback_snapshot("pre-reinstall") before it touches anything and
 # saves binaries alongside the config; the patch path is covered here, by a
 # focused snapshot of just the files this patch replaces.
+# Пометить дерево как смешанное: патч лёг частично, откат тоже лёг частично.
+#
+# Это состояние нельзя лечить ещё одним патчем — патч кладёт только изменённые
+# файлы и достроит гибрид до другого гибрида. Лечит только полная переустановка,
+# поэтому маркер читается в au_decide и превращает любой следующий вердикт
+# в reinstall. Файл лежит рядом с тегом, то есть переживает перезагрузку.
+Z2K_AU_DIRTY_TREE_FILE="${Z2K_AU_DIRTY_TREE_FILE:-/opt/zapret2/.z2k-tree-dirty}"
+
+# Записать installed-tag и убедиться, что записалось именно то.
+#
+# Пустой или обрезанный тег — это не «обновление не применилось», это «обновлений
+# не будет больше никогда»: au_decide на пустом теге уходит в ветку
+# «empty/corrupt → no update (refusing blind reinstall)» и остаётся там навсегда.
+# Поэтому пишем через временный файл и перечитываем результат.
+au_write_installed_tag() {
+    local tag="$1"
+    local tmp="${Z2K_AU_INSTALLED_TAG_FILE}.new.$$"
+    [ -n "$tag" ] || { au_log "отказ: попытка записать ПУСТОЙ installed-tag"; return 1; }
+    mkdir -p "$(dirname "$Z2K_AU_INSTALLED_TAG_FILE")" 2>/dev/null
+    if ! printf '%s\n' "$tag" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null
+        return 1
+    fi
+    if ! mv -f "$tmp" "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null
+        return 1
+    fi
+    # Перечитать: на умирающем NAND запись «проходит», а файл потом пустой.
+    local back
+    back=$(tr -d '[:space:]' < "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)
+    [ "$back" = "$(printf '%s' "$tag" | tr -d '[:space:]')" ] || return 1
+    return 0
+}
+
+au_mark_dirty_tree() {
+    local from="$1" to="$2"
+    mkdir -p "$(dirname "$Z2K_AU_DIRTY_TREE_FILE")" 2>/dev/null
+    printf 'partial-patch from=%s to=%s\n' "${from:-?}" "${to:-?}" \
+        > "$Z2K_AU_DIRTY_TREE_FILE" 2>/dev/null || return 1
+    au_log "дерево помечено как смешанное — следующее обновление пойдёт только через reinstall"
+    return 0
+}
+
+au_tree_is_dirty() {
+    [ -s "$Z2K_AU_DIRTY_TREE_FILE" ]
+}
+
+au_clear_dirty_tree() {
+    rm -f "$Z2K_AU_DIRTY_TREE_FILE" 2>/dev/null
+}
+
+# Возвращает 0 ТОЛЬКО если восстановлено всё до последнего файла.
+#
+# До 2026-08-08 функция возвращала 0 безусловно: восстановление идёт в
+# `find | while` (подоболочка), каждый cp/mv заглушён 2>/dev/null, коды возврата
+# никуда не собирались. Оба вызова результат игнорировали, и следом писался
+# старый тег. Итог частичного отката: дерево наполовину новое, тег старый —
+# и следующей ночью тот же патч льётся на гибрид, которого никто не тестировал.
+#
+# Счётчик неудач ведём в файле, а не в переменной: тело `find | while` выполняется
+# в подоболочке (POSIX sh, не bash), и присваивание оттуда до нас не доходит.
 au_rollback_patch() {
     local pre_dir="$Z2K_AU_TMP_DIR/pre-apply"
     [ -d "$pre_dir" ] || return 1
     au_log "rollback: restoring pre-apply files"
     cd "$pre_dir" || return 1
+
+    local fail_file="$Z2K_AU_TMP_DIR/.rollback_failed"
+    rm -f "$fail_file"
+
     find . -type f | while read -r f; do
         local target="${f#./}"
         target="/$target"
@@ -961,14 +1232,32 @@ au_rollback_patch() {
             case "$target" in
                 */init.d/*|*.sh) chmod +x "$_au_rb" 2>/dev/null || true ;;
             esac
-            mv -f "$_au_rb" "$target" 2>/dev/null || rm -f "$_au_rb" 2>/dev/null
+            if ! mv -f "$_au_rb" "$target" 2>/dev/null; then
+                rm -f "$_au_rb" 2>/dev/null
+                printf '%s\n' "$target" >> "$fail_file"
+            fi
         else
             rm -f "$_au_rb" 2>/dev/null
+            printf '%s\n' "$target" >> "$fail_file"
         fi
     done
+
     if [ -x /opt/etc/init.d/S99zapret2 ]; then
         /opt/etc/init.d/S99zapret2 restart >/dev/null 2>&1 || true
     fi
+
+    if [ -s "$fail_file" ]; then
+        local n
+        n=$(wc -l < "$fail_file" 2>/dev/null | tr -d ' ')
+        au_log "rollback: НЕ восстановлено файлов: ${n:-?}"
+        while IFS= read -r _fp; do
+            [ -n "$_fp" ] && au_log "rollback:   не восстановлен $_fp"
+        done < "$fail_file"
+        rm -f "$fail_file"
+        return 1
+    fi
+    rm -f "$fail_file"
+    au_log "rollback: восстановлены все файлы"
     return 0
 }
 
@@ -1097,8 +1386,11 @@ au_run_apply() {
         local current
         current=$(au_manifest_current "$manifest")
         if [ -n "$current" ]; then
-            echo "$current" > "$Z2K_AU_INSTALLED_TAG_FILE"
-            au_log "tag missing/empty — resynced installed=$current (no apply)"
+            if au_write_installed_tag "$current"; then
+                au_log "tag missing/empty — resynced installed=$current (no apply)"
+            else
+                au_log "tag missing/empty — resync НЕ удался, следующий прогон снова упрётся в пустой тег"
+            fi
         fi
         au_lock_release
         return 0
@@ -1131,16 +1423,28 @@ au_run_apply() {
             au_snapshot_for_patch "$files"
             if ! au_apply_patch "$target_tag" "$files"; then
                 au_log "patch apply failed, rolling back"
-                au_rollback_patch
+                if ! au_rollback_patch; then
+                    # Дерево осталось смешанным. Тег НЕ трогаем: пусть он
+                    # указывает на то, что реально лежит хотя бы частично, —
+                    # иначе следующей ночью тот же патч поедет на гибрид.
+                    au_log "ВНИМАНИЕ: откат неполный — дерево в смешанном состоянии, нужен reinstall"
+                    au_mark_dirty_tree "$installed" "$target_tag"
+                fi
                 au_lock_release
                 return 1
             fi
             if ! au_health_check; then
                 au_log "post-patch health-check failed, rolling back"
-                au_rollback_patch
-                # restore the previous tag
-                # shellcheck disable=SC2154
-                echo "$installed" > "$Z2K_AU_INSTALLED_TAG_FILE"
+                if au_rollback_patch; then
+                    # restore the previous tag — только если откат ПОЛНЫЙ,
+                    # иначе тег соврёт про содержимое дерева.
+                    # shellcheck disable=SC2154
+                    au_write_installed_tag "$installed" \
+                        || au_log "ВНИМАНИЕ: откат полный, но тег не вернулся — обновления могут встать"
+                else
+                    au_log "ВНИМАНИЕ: откат неполный — тег не возвращаем, нужен reinstall"
+                    au_mark_dirty_tree "$installed" "$target_tag"
+                fi
                 au_lock_release
                 return 1
             fi
@@ -1175,6 +1479,10 @@ au_run_apply() {
                 au_lock_release
                 return 1
             fi
+            # Переустановка разложила дерево целиком — смешанного состояния
+            # больше нет, снимаем маркер. Только здесь: патч его снять не может
+            # по построению, он кладёт лишь часть файлов.
+            au_clear_dirty_tree
             ;;
     esac
 

@@ -16,7 +16,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -31,15 +34,26 @@ import (
 )
 
 var (
-	listenAddr   = flag.String("listen", ":1445", "local listen address")
-	proxyHost    = flag.String("proxy-host", "ps1.blockme.site", "upstream HTTPS proxy hostname (TLS SNI to the proxy)")
-	proxyPort    = flag.String("proxy-port", "443", "upstream proxy port")
-	seedIPs      = flag.String("ips", "", "comma-separated upstream proxy IPs (seed pool; re-resolved from proxy-host too)")
-	healthEvery  = flag.Duration("health-interval", 90*time.Second, "health-check interval for the IP pool")
-	healthHost   = flag.String("health-target", "rutracker.org:443", "CONNECT target used to probe a proxy IP")
-	dialTO       = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
-	probeTO      = flag.Duration("probe-timeout", 12*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
-	recoverEvery = flag.Duration("recover-interval", 10*time.Second, "faster re-probe interval while the pool has 0 live IPs")
+	listenAddr  = flag.String("listen", ":1445", "local listen address")
+	proxyHost   = flag.String("proxy-host", "ps1.blockme.site", "upstream HTTPS proxy hostname (TLS SNI to the proxy)")
+	proxyPort   = flag.String("proxy-port", "443", "upstream proxy port")
+	seedIPs     = flag.String("ips", "", "comma-separated upstream proxy IPs (seed pool; re-resolved from proxy-host too)")
+	healthEvery = flag.Duration("health-interval", 90*time.Second, "health-check interval for the IP pool")
+	healthHost  = flag.String("health-target", "rutracker.org:443", "CONNECT target used to probe a proxy IP")
+
+	// Пин SPKI цели health-проверки. Пусто = проверка выключена.
+	//
+	// Апстрим-узлы берутся из чужого публичного списка, их сертификат мы не
+	// проверяем и проверить не можем. В probeProxy по внутреннему рукопожатию
+	// принимается решение «узел живой», и без пина подставной узел завершает
+	// TLS своим ключом, отдаёт правдоподобный мусор и остаётся в кольце —
+	// health-poisoning. Значение подставляется при первом успешном замере
+	// (см. verifyHealthSPKI): держать чужой отпечаток захардкоженным в коде
+	// нельзя, его перевыпустят без нас.
+	healthSPKIPin = flag.String("health-spki-pin", "", "base64 SHA-256 of the health target's SubjectPublicKeyInfo (empty = no check, fingerprint is logged once)")
+	dialTO        = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
+	probeTO       = flag.Duration("probe-timeout", 12*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
+	recoverEvery  = flag.Duration("recover-interval", 10*time.Second, "faster re-probe interval while the pool has 0 live IPs")
 	// NOT an idle timeout, despite the flag name kept for compatibility: the timer in
 	// handle() is created once and never Reset, so this is an ABSOLUTE cap on the
 	// lifetime of a spliced connection. Documented honestly rather than silently
@@ -378,6 +392,55 @@ func (p *pool) probeAll() {
 	}
 }
 
+// verifyHealthSPKI сверяет открытый ключ листового сертификата с пином.
+//
+// Пин — SHA-256 от SubjectPublicKeyInfo, а не от сертификата целиком: у цели
+// health-проверки сертификат перевыпускается, а ключ при перевыпуске обычно
+// сохраняют, поэтому пин листа превращался бы в кирпич при каждом обновлении.
+//
+// БЕЗ ЗАДАННОГО ПИНА ПРОВЕРКИ НЕТ — поведение ровно такое же, как до появления
+// этого кода. Так сделано намеренно, и вот почему отвергнут вариант с TOFU
+// (запомнить ключ при первом замере): цель нам не принадлежит. Легальная смена
+// ключа на её стороне при TOFU уронила бы проверку у ВСЕХ узлов разом, пул
+// опустел бы, и rt-proxy перестал бы работать целиком — авария, устроенная нам
+// третьей стороной без нашего участия. Отпечаток печатается в лог один раз,
+// чтобы оператор мог закрепить его осознанно:
+//
+//	--health-spki-pin=<то, что напечатано>
+//
+// Тогда подставной узел, завершающий внутреннее рукопожатие своим ключом
+// (health-poisoning: узел проходит проверку и остаётся в кольце, не отдавая
+// реальных данных), отсекается.
+var healthSPKILogged sync.Once
+
+func spkiFingerprint(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func verifyHealthSPKI(rawCerts [][]byte) error {
+	if len(rawCerts) == 0 {
+		return errors.New("health target presented no certificate")
+	}
+	leaf, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return fmt.Errorf("health target certificate unparsable: %w", err)
+	}
+	got := spkiFingerprint(leaf)
+
+	if *healthSPKIPin == "" {
+		healthSPKILogged.Do(func() {
+			log.Printf("[rt-proxy] отпечаток ключа цели health-проверки: %s "+
+				"(закрепить: --health-spki-pin=%s)", got, got)
+		})
+		return nil
+	}
+	if got != *healthSPKIPin {
+		return fmt.Errorf("health target SPKI mismatch: got %s, pinned %s", got, *healthSPKIPin)
+	}
+	return nil
+}
+
 // probeProxy returns true only if the IP relays traffic to the health target
 // END-TO-END: it must accept the CONNECT *and* carry a real TLS handshake
 // through to the target. The old CONNECT-200-only check passed nodes that
@@ -422,7 +485,24 @@ func probeProxy(ip string) (full bool, handshake bool) {
 	if h, _, e := net.SplitHostPort(host); e == nil {
 		host = h
 	}
-	inner := tls.Client(&bufConn{br: br, Conn: up}, &tls.Config{ServerName: host, InsecureSkipVerify: true})
+	// InsecureSkipVerify здесь остаётся — на Entware/musl нет системного
+	// CA-бандла, и обычная проверка цепочки просто не с чем сверяться. Но в
+	// ОТЛИЧИЕ от dialProxyDeadline, где сквозной TLS проверяет настоящий клиент
+	// (браузер, curl), здесь клиент — мы сами, и по этому рукопожатию мы
+	// принимаем решение «узел живой». Обоснование «MITM невозможен, потому что
+	// внутри сквозной TLS» для этой точки ЛОЖНО.
+	//
+	// Поэтому сверяем отпечаток открытого ключа (SPKI) листового сертификата.
+	// Пин именно SPKI, а не сертификата: у rutracker он самоподписанный и
+	// перевыпускается, а ключ при перевыпуске обычно сохраняют. Пустой пин =
+	// проверка выключена (путь отката, если ключ всё же сменят).
+	inner := tls.Client(&bufConn{br: br, Conn: up}, &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			return verifyHealthSPKI(rawCerts)
+		},
+	})
 	if err := inner.Handshake(); err != nil {
 		if *verbose {
 			log.Printf("[rt-proxy] probe %s: inner TLS to %s failed: %v", ip, host, err)

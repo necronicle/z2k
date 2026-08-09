@@ -150,6 +150,28 @@ check DENY "имя не из webpanel/hosts" \
     REQUEST_METHOD=POST HTTP_HOST=other.mydomain.ru HTTP_X_Z2K_PANEL=1
 rm -f "$TMP/webpanel/hosts"
 
+echo "--- файл bind не должен сам себя вносить в allowlist ---"
+#
+# Круг, который здесь размыкается: detect_lan_ip при неудаче брал src маршрута
+# по умолчанию (адрес WAN) и писал его в webpanel/bind, а auth.sh разрешал
+# Host, равный содержимому этого файла. Публичный адрес сам себя объявлял
+# доверенным и заодно снимал с себя защиту от DNS-rebinding.
+#
+# Детект починен, но это второй, независимый замок: bind можно задать руками
+# через --bind, и промах там не должен превращаться в доверие.
+printf '203.0.113.7' > "$TMP/webpanel/bind"
+check DENY "публичный адрес в bind НЕ доверяется как Host" \
+    REQUEST_METHOD=POST HTTP_HOST=203.0.113.7 HTTP_X_Z2K_PANEL=1
+check DENY "публичный адрес в bind не доверяется и с портом" \
+    REQUEST_METHOD=POST HTTP_HOST=203.0.113.7:8088 HTTP_X_Z2K_PANEL=1
+
+# Приватный bind по-прежнему работает — иначе мы сломали бы обычный доступ.
+printf '10.77.0.1' > "$TMP/webpanel/bind"
+check ALLOW "приватный адрес в bind доверяется (обычный случай)" \
+    REQUEST_METHOD=POST HTTP_HOST=10.77.0.1 HTTP_X_Z2K_PANEL=1
+
+printf '192.168.1.1' > "$TMP/webpanel/bind"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" = "0" ] || exit 1

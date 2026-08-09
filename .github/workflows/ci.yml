@@ -179,7 +179,27 @@ jobs:
         # есть в CI проверка тихо исчезает.
         run: sudo apt-get update && sudo apt-get install -y lua5.3
 
+      # Форк движка нужен test_contains_differential.sh: он сверяет НАШУ
+      # реализацию contains() с апстримной из common/base.sh. Без этого
+      # каталога тест штатно уходит в skip — и до 2026-08-08 в CI он уходил
+      # туда ВСЕГДА, потому что чекаутился только основной репозиторий.
+      # То есть защита той самой зоны, где жил апстримный `${1#*$2}` на
+      # 29-килобайтной строке (рестарт 25 c против 1.66 c), в автоматическом
+      # прогоне не работала ни разу.
+      - name: Checkout engine fork (for contains() differential)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: necronicle/zapret2-z2k
+          ref: z2k-master
+          path: zapret2-z2k-fork
+          persist-credentials: false
+
       - name: Run shell unit tests
+        # Z2K_FORK_DIR указывает на чекаут выше: тесты по умолчанию ищут форк
+        # рядом с репозиторием ($HERE/../zapret2-z2k-fork), а на раннере он
+        # лежит внутри рабочего каталога.
+        env:
+          Z2K_FORK_DIR: ${{ github.workspace }}/zapret2-z2k-fork
         run: sh tests/run_all.sh
 
   go:
@@ -240,9 +260,14 @@ jobs:
             z2k-detect)
               # internal/prober is excluded on purpose, not silenced: its tests drive a real
               # prober against a local listener and need socket privileges the runner does not
-              # grant ("operation not permitted" on dial to 127.0.0.1). They still run locally and
-              # on a router. Everything else — parsers, decision logic — is checked here, and the
-              # build step below is what guarantees the package compiles at all.
+              # grant ("operation not permitted" on dial to 127.0.0.1). Everything else —
+              # parsers, decision logic — is checked here, and the build step below is what
+              # guarantees the package compiles at all.
+              #
+              # "They still run locally" was NOT true until 2026-08-08: scripts/ci_local.sh
+              # carried the very same grep, so the package ran in no automated path at all —
+              # the exclusion here quietly justified itself with a promise nothing kept.
+              # ci_local.sh now runs ./... in full; this exclusion is the runner's limit only.
               # shellcheck disable=SC2046 # словоразбиение списка пакетов — намеренное
               go test -race -count=1 -cover $(go list ./... | grep -v '/internal/prober$') ;;
             *)
@@ -264,13 +289,23 @@ jobs:
           case "$MODULE" in
             mtproxy-client) TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="." ;;
             rt-proxy)       TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle"; PKG="." ;;
-            z2k-detect)     TARGETS="linux/arm64 linux/mipsle linux/mips64le"; PKG="./cmd/z2k-detect" ;;
+            # Все девять — ровно те, что лежат в z2k-detect/builds/ и уезжают
+            # пользователям. Раньше собирались только три (arm64, mipsle,
+            # mips64le), а шесть остальных — включая big-endian linux/mips и
+            # linux/arm с GOARM=5 — не компилировались в CI вообще: поломка
+            # сборки под них обнаружилась бы от пользователя. Цена полного
+            # списка — секунды раннера.
+            z2k-detect)     TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="./cmd/z2k-detect" ;;
             vps-relay)      TARGETS="linux/amd64"; PKG="./..." ;;
           esac
           for t in $TARGETS; do
             GOOS="${t%%/*}"; GOARCH="${t##*/}"; EXTRA=""
             case "$MODULE/$GOARCH" in
               mtproxy-client/arm) EXTRA="GOARM=5" ;;
+              # z2k-detect/Makefile тоже собирает ARM с GOARM=5 — если здесь
+              # оставить умолчание (GOARM=7), CI проверял бы не тот бинарник,
+              # который реально уезжает на роутеры.
+              z2k-detect/arm)     EXTRA="GOARM=5" ;;
               rt-proxy/arm)       EXTRA="GOARM=7" ;;
               */mips|*/mipsle)    EXTRA="GOMIPS=softfloat" ;;
               */mips64le)         EXTRA="GOMIPS64=softfloat" ;;

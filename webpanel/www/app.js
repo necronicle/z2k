@@ -13,10 +13,26 @@
   // Skill rule toast-dismiss: 3-5s. New toasts push old ones up; if more
   // than MAX_TOASTS are visible the oldest is evicted immediately. Each
   // toast has its own dismiss timer so a fast burst doesn't double-fire.
+  // Адрес приёмника статистики. Продублирован из files/z2k-stats-upload.sh
+  // намеренно: карточка обязана называть адрес, а тянуть его с бекенда ради
+  // одной строки — лишняя ручка. Расходятся они только если кто-то поменяет
+  // ENDPOINT и забудет здесь; это ловит tests/test_stats_ack.sh.
+  const STATS_ENDPOINT = "http://213.176.74.63:8088/stats";
   const MAX_TOASTS = 3;
   const TOAST_TTL_MS = 3500;
+  let _lastRestartToastAt = 0;
   function toast(msg, kind = "ok") {
     if (!$toastStack) return;
+    // Во время переустановки каждый фоновый загрузчик спотыкается о переехавшее
+    // дерево, и без этого фильтра человек получает очередь одинаковых красных
+    // плашек про то, что и так видно в баннере обновления. Сообщение про
+    // перезапуск показываем не чаще раза в 15 секунд — не глушим совсем, чтобы
+    // не спрятать случай, когда панель действительно не вернулась.
+    if (kind === "bad" && msg.indexOf("панель перезапускается") !== -1) {
+      const now = Date.now();
+      if (now - _lastRestartToastAt < 15000) return;
+      _lastRestartToastAt = now;
+    }
     const el = document.createElement("div");
     el.className = "toast-item toast-" + kind;
     el.setAttribute("role", "status");
@@ -88,9 +104,35 @@
   // (рестарт трясёт тот же канал, через который открыта панель), а 403/400/500
   // — это определённый ответ, ждать после него нечего. Признак второго —
   // поле httpStatus у ошибки; текст сообщения при этом не меняется.
+  // Временные статусы, означающие «панель сейчас переезжает или поднимается».
+  // Держим ОДНИМ списком: isRefusal ниже и текст сообщения обязаны совпадать,
+  // иначе получится ровно то, что и получилось — опрос ждёт, а страница
+  // одновременно кричит про ошибку.
+  const TRANSIENT_HTTP = { 404: 1, 502: 1, 503: 1, 504: 1 };
+
   function httpError(status, statusText, message) {
-    const e = new Error(message || `${status} ${statusText}`);
+    // Текст для ЧЕЛОВЕКА, а не код протокола.
+    //
+    // Исходная беда была не в том, что панель показывает ошибки, а в том, что
+    // она показывает их словами «404 Not Found» там, где на самом деле идёт
+    // штатная переустановка: lighttpd жив, но корень и CGI лежат внутри
+    // /opt/zapret2, которое на время переезжает. Классификацию я починил
+    // (90823e8), но только в опросе задачи и awaitPanelBack — а сырой текст
+    // ошибки печатает 41 место в этом файле, и все они продолжали пугать людей
+    // кодом 404 весь день.
+    //
+    // Чинить 41 обработчик по одному незачем: сообщение рождается здесь, и
+    // достаточно, чтобы оно рождалось человеческим. Настоящие отказы (403, 500)
+    // текст сохраняют — их прятать нельзя.
+    let msg = message;
+    if (!msg) {
+      msg = TRANSIENT_HTTP[status]
+        ? "панель перезапускается, подождите"
+        : `${status} ${statusText}`;
+    }
+    const e = new Error(msg);
     e.httpStatus = status;
+    e.transient = !!TRANSIENT_HTTP[status];
     return e;
   }
   function isHttpError(e) { return !!e && typeof e.httpStatus === "number"; }
@@ -111,15 +153,21 @@
   // отверг) и 5xx кроме перечисленных.
   function isRefusal(e) {
     if (!isHttpError(e)) return false;
-    switch (e.httpStatus) {
-      case 404: case 502: case 503: case 504: return false;
-      default: return true;
-    }
+    return !TRANSIENT_HTTP[e.httpStatus];
   }
 
   async function apiGet(path, opts = {}) {
     const r = await fetch(API + path, { credentials: "same-origin", headers: PANEL_HDR, signal: opts.signal });
-    if (!r.ok) throw httpError(r.status, r.statusText);
+    if (!r.ok) {
+      // Тело ошибки РАЗБИРАЕМ, как это давно делает apiPost. Раньше здесь
+      // стоял голый httpError(status, statusText), то есть ответ выбрасывался
+      // целиком — а бекенд кладёт в него внятную русскую причину («панель не
+      // отвечает на этот адрес», «обращение с другого сайта»). Человеку
+      // доставалось «403 Forbidden» без единой подсказки, и это на 22 из 48
+      // вызовов, то есть на загрузке всех страниц.
+      const data = await r.json().catch(() => null);
+      throw httpError(r.status, r.statusText, (data && data.error) || undefined);
+    }
     return r.json();
   }
   async function apiPost(path, params = {}) {
@@ -259,6 +307,7 @@
   async function renderDashboard() {
     $app.innerHTML = `
       <div id="update-banner" hidden></div>
+      <div id="stats-notice" hidden></div>
       <h1 class="page-title">Дашборд</h1>
       <div class="card" id="status-card">
         <h3>Состояние</h3>
@@ -321,7 +370,63 @@
 
     refreshStatus();
     refreshUpdateBanner();
+    renderStatsNotice();
     _updateGlobalUILock();
+  }
+
+  // ---------- Уведомление о телеметрии ----------
+  //
+  // Телеметрия включена по умолчанию — это решение владельца. Но «включено по
+  // умолчанию» и «ушло раньше, чем человек успел узнать» — разные вещи.
+  // Аплоадер молчит, пока Z2K_STATS_ACK=0 (не дольше трёх суток), а эта
+  // карточка снимает гейт, показав, ЧТО именно уходит и куда.
+  //
+  // Согласия не спрашиваем — спрашивать было бы враньём, раз выключить можно
+  // и после. Показываем состав и даём выключить в один шаг прямо отсюда.
+  async function renderStatsNotice() {
+    const host = document.getElementById("stats-notice");
+    if (!host) return;
+    let t;
+    try {
+      t = await apiGet("/toggles");
+    } catch (_) {
+      return; // не смогли — не мешаем дашборду
+    }
+    if (!t || t.stats_ack !== "0") return;
+
+    host.hidden = false;
+    host.className = "card";
+    host.innerHTML = `
+      <h3>z2k отправляет обезличенную статистику</h3>
+      <p class="desc">
+        Раз в сутки уходит срез ротации: <strong>имя пула</strong>
+        (yt_quic, rkn_tcp…), <strong>номер стратегии</strong> и
+        <strong>как долго она держится</strong> — округлённо.
+        Доменов, посещённых адресов и идентификатора роутера в посылке нет.
+      </p>
+      <p class="desc">
+        Адрес: <code>${escapeHtml(STATS_ENDPOINT)}</code>. Сейчас без TLS —
+        содержимое видно вашему провайдеру. Подробности в README.
+      </p>
+      <div class="row">
+        <button class="btn" id="stats-ack-ok">Понятно</button>
+        <button class="btn" id="stats-ack-off">Выключить сбор</button>
+      </div>
+    `;
+    const done = () => { host.hidden = true; host.innerHTML = ""; };
+    document.getElementById("stats-ack-ok").addEventListener("click", async () => {
+      try { await apiPost("/stats/ack"); toast("Понятно, больше не показываем"); }
+      catch (e) { toast("Ошибка: " + e.message, "bad"); }
+      done();
+    });
+    document.getElementById("stats-ack-off").addEventListener("click", async () => {
+      try {
+        await apiPost("/toggle/stats", { value: "0" });
+        await apiPost("/stats/ack");
+        toast("Сбор статистики выключен");
+      } catch (e) { toast("Ошибка: " + e.message, "bad"); }
+      done();
+    });
   }
 
   // ---------- Update banner / apply ----------
@@ -347,6 +452,19 @@
     // отдаёт пустое available. Неизвестно ≠ «последняя версия»: утверждать
     // второе на основании отсутствия данных нельзя.
     const unknown = err !== null || available === "?" || installed === "?";
+
+    // Случай, который до 2026-08-08 был неотличим от нормы: манифест НЕ
+    // скачался, но на диске лежит протухший кэш, поэтому available непустой,
+    // unknown=false, и панель уверенно писала «установлена актуальная версия»
+    // при полностью мёртвом канале обновлений. Возраст показывался мелким
+    // текстом рядом и ничего не сигналил.
+    //
+    // Порог 72 часа: планировщик ходит за манифестом ежедневно, так что трое
+    // суток без единой удачной проверки — это уже не «связь моргнула».
+    const STALE_AFTER = 72 * 3600;
+    const fetchFailed = !!(d && d.fetch_failed);
+    const checkAge = Number((d && d.check_age) != null ? d.check_age : -1);
+    const channelDead = !unknown && fetchFailed && (checkAge < 0 || checkAge > STALE_AFTER);
 
     // Resume button takes priority over Обновить when an apply is active.
     const activeJob = await getActiveApplyJob();
@@ -409,6 +527,23 @@
         <div class="update-banner-text">
           <strong>Не удалось проверить обновления</strong>
           <span class="update-banner-meta">${known}${why} · последняя удачная проверка ${ago}</span>
+        </div>
+        <div class="update-banner-actions">
+          <button class="btn" id="upd-recheck">Проверить ещё раз</button>
+        </div>
+      `;
+    } else if (channelDead) {
+      // Версии сравнились, но сравнились с ПРОТУХШИМ списком: последняя
+      // попытка скачать его провалилась, и удачной не было трое суток.
+      // Говорить «установлена последняя версия» здесь нельзя — мы не знаем,
+      // последняя ли она, мы знаем только, что новее в старом списке нет.
+      const staleFor = checkAge > 0 ? humanDuration(checkAge) : "неизвестно сколько";
+      banner.hidden = false;
+      banner.className = "update-banner";
+      banner.innerHTML = `
+        <div class="update-banner-text">
+          <strong>Обновления не проверяются</strong>
+          <span class="update-banner-meta">установлена ${escapeHtml(installed)} · список версий не удаётся скачать уже ${escapeHtml(staleFor)} · показано по устаревшим данным</span>
         </div>
         <div class="update-banner-actions">
           <button class="btn" id="upd-recheck">Проверить ещё раз</button>
@@ -516,6 +651,15 @@
     if (age < 3600) return Math.floor(age / 60) + " мин назад";
     if (age < 86400) return Math.floor(age / 3600) + " ч назад";
     return Math.floor(age / 86400) + " дн назад";
+  }
+
+  // Длительность как таковая («уже 4 дн»), в отличие от humanAgo, который
+  // говорит про момент в прошлом («4 дн назад»).
+  function humanDuration(sec) {
+    const s = Math.max(0, Math.floor(sec));
+    if (s < 3600) return Math.max(1, Math.floor(s / 60)) + " мин";
+    if (s < 86400) return Math.floor(s / 3600) + " ч";
+    return Math.floor(s / 86400) + " дн";
   }
 
   function formatChangelogDate(iso) {
@@ -2269,9 +2413,19 @@
         if (refused || state.consecutiveErrors >= MAX_ERRORS) {
           // Не «операция провалилась», а «мы не узнали, чем она кончилась».
           // Фоновая задача обычно доходит до конца сама.
-          const why = refused ? "панель ответила ошибкой: " : "связь с панелью потеряна: ";
-          const log = state.lastLog + "\n[" + why + e.message +
-            " — чем кончилась задача, неизвестно]";
+          //
+          // 403 отдельной строкой: это не «задача потерялась», это «панель
+          // перестала нас узнавать» — сменился Host в закладке, отвалился
+          // заголовок через прокси, и т.п. Обновление при этом идёт своим
+          // чередом, а формулировка «чем кончилась задача, неизвестно» звучит
+          // как «всё сломалось» ровно посреди установки.
+          const why = e.httpStatus === 403
+            ? "панель перестала принимать запросы (обновление при этом продолжается): "
+            : refused ? "панель ответила ошибкой: " : "связь с панелью потеряна: ";
+          const tailNote = e.httpStatus === 403
+            ? " — откройте панель заново, задача идёт в фоне]"
+            : " — чем кончилась задача, неизвестно]";
+          const log = state.lastLog + "\n[" + why + e.message + tailNote;
           const fin = { done: true, exit: null, outcome: refused ? JOB_REFUSED : JOB_OFFLINE, log };
           notify(log, true, fin);
           finish(fin);

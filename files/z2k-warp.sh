@@ -163,7 +163,23 @@ USQUE_SESSION="${USQUE_SESSION:-$WARP_DIR/session.conf}"
 # can't punch through after WARP_REG_DIRECT_TRIES attempts, enroll THROUGH the VPS relay — a
 # restricted CONNECT proxy (only api.cloudflareclient.com:443) that reaches the CF reg API.
 # Fallback-only: most routers enroll directly (correct region) and never touch the VPS.
-WARP_VPS_PROXY="${WARP_VPS_PROXY:-http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119}"
+#
+# УЧЁТНЫЕ ДАННЫЕ НИЖЕ — НЕ СЕКРЕТ, и относиться к ним как к секрету нельзя.
+# Они лежат в публичном репозитории, значит доступны каждому, и уходят по
+# открытому HTTP в CONNECT-запросе, то есть видны и на пути. Единственная
+# реальная защита этого прокси — не пароль, а его область: он пускает CONNECT
+# только на api.cloudflareclient.com:443, куда любой желающий и так ходит
+# напрямую. Пароль здесь — заградитель от случайных сканеров, ничего больше.
+#
+# Порядок разрешения: env → ключ Z2K_WARP_VPS_PROXY в конфиге → значение ниже.
+# Ключ в конфиге нужен, чтобы владелец мог сменить адрес и пару БЕЗ выпуска
+# релиза: до 2026-08-08 переопределить можно было только переменной окружения,
+# то есть ротация требовала кода, и поэтому не делалась.
+_warp_cfg_proxy=""
+[ -f "$CONFIG_FILE" ] && _warp_cfg_proxy=$(grep -m1 '^Z2K_WARP_VPS_PROXY=' "$CONFIG_FILE" 2>/dev/null \
+    | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+WARP_VPS_PROXY="${WARP_VPS_PROXY:-${_warp_cfg_proxy:-http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119}}"
+unset _warp_cfg_proxy
 WARP_REG_DIRECT_TRIES="${WARP_REG_DIRECT_TRIES:-3}"
 WARP_REG_COUNT="${WARP_REG_COUNT:-/tmp/z2k-warp-regcount}"   # in-progress counter, volatile by design
 WARP_REG_STAMP="${WARP_REG_STAMP:-$ZAPRET2_DIR/.z2k-warp-reg}"

@@ -104,6 +104,35 @@ _z2k_curl_etag() {
 
 # Z2K_FETCH_ALL_404=1 после неудачи означает, что КАЖДОЕ зеркало ответило 404,
 # то есть файла у апстрима нет. Это не сбой доставки и не должно выглядеть как он.
+# _z2k_ul_verify DEST — сверить только что скачанный файл с дайджестом, если
+# вызывающий его знает ($Z2K_FETCH_SHA256).
+#
+# Эта копия фетчера была ЕДИНСТВЕННОЙ без sha-гейта. В z2k.sh и lib/utils.sh
+# каждый хоп закрыт _z2k_verify_fetched, и протухший ответ зеркала там сносится
+# вместе с etag — идём на следующий источник. Здесь такой защиты не было вовсе,
+# то есть ровно тот отказ, ради которого заводилась карта сумм (issue #26:
+# человека держало на ревизии двухдневной давности пять релизов подряд),
+# на списках не ловился.
+#
+# Дайджест есть не у всего: чужие списки в карту сумм не попадают по построению.
+# Пусто — ведём себя как раньше.
+_z2k_ul_verify() {
+    local dest="$1" want="${Z2K_FETCH_SHA256:-}" got
+    [ -n "$want" ] || return 0
+    if command -v sha256sum >/dev/null 2>&1; then
+        got=$(sha256sum "$dest" 2>/dev/null | cut -d' ' -f1)
+    elif command -v openssl >/dev/null 2>&1; then
+        got=$(openssl dgst -sha256 "$dest" 2>/dev/null | sed 's/.*= *//')
+    fi
+    # Считать нечем — принимаем и предупреждаем: отказывать в обновлении списков
+    # на роутере без дайджест-тула хуже, чем принять непроверенное.
+    [ -n "$got" ] || return 0
+    [ "$got" = "$want" ] && return 0
+    printf '[lists] содержимое не совпало с ожидаемым — источник отклонён\n' >&2
+    rm -f "$dest" "${dest}.etag" 2>/dev/null
+    return 1
+}
+
 z2k_fetch() {
     local src="$1"
     local dest="$2"
@@ -135,18 +164,18 @@ z2k_fetch() {
     # блокирует прямые github-IP). На сбой тихо валимся в цепочку ниже.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
     if [ -n "$_vps_resolve" ]; then
-        _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && return 0
+        _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && _z2k_ul_verify "$dest" && return 0
         [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
     fi
 
-    if _z2k_curl_etag "$url" "$dest"; then return 0; fi
+    if _z2k_curl_etag "$url" "$dest" && _z2k_ul_verify "$dest"; then return 0; fi
     [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
     if [ -n "$jsdelivr" ]; then
-        _z2k_curl_etag "$jsdelivr" "$dest" && return 0
+        _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_ul_verify "$dest" && return 0
         [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
     fi
     if [ -n "$gh_proxy" ]; then
-        _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+        _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_ul_verify "$dest" && return 0
         [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
     fi
 
@@ -177,9 +206,9 @@ z2k_fetch() {
         done
         if [ "$resolved_any" = "1" ]; then
             sleep 1
-            if _z2k_curl_etag "$url" "$dest"; then return 0; fi
-            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && return 0
-            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && return 0
+            if _z2k_curl_etag "$url" "$dest" && _z2k_ul_verify "$dest"; then return 0; fi
+            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_ul_verify "$dest" && return 0
+            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_ul_verify "$dest" && return 0
         fi
     fi
 

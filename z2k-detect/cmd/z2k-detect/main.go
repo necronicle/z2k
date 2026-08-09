@@ -16,6 +16,51 @@
 //
 //	probe <domain>   — one-shot diagnostic (no state touched)
 //	run <logfile>    — daemon mode (tail + probe + append)
+//
+// # Почему ниже прибит GODEBUG
+//
+// Модуль долго стоял на директиве `go 1.22`, хотя собирается тулчейном
+// go1.25.12. Из-за этого в бинарник вшивался совместимостный набор умолчаний
+// go1.22 — и держался там незаметно. Бамп x/net до 0.57 (он закрывает
+// GO-2026-4918, бесконечный цикл записи CONTINUATION в HTTP/2) требует
+// директиву `go 1.25.0`, а её подъём сносит весь этот набор разом.
+//
+// Для обычной программы это ничего не значит. Для нас значит: мы ОПОЗНАЁМ DPI
+// по тому, как провайдер отвечает на наш ClientHello, — то есть форма
+// хендшейка это измерительный инструмент, а не деталь реализации. tlsmlkem=1
+// добавил бы в ClientHello X25519MLKEM768 и заметно изменил его размер;
+// tls3des/tlssha1 убрали бы из предложения легаси-наборы. Вердикты пробера
+// поехали бы, и списали бы это на что угодно, кроме бампа библиотеки.
+// Отдельно asynctimerchan: на MIPS у нас уже была история с async-preempt, и
+// менять реализацию таймеров тем же коммитом — значит потерять возможность
+// расследовать регресс.
+//
+// Поэтому прежний набор зафиксирован здесь ЯВНО. Бамп меняет только код
+// библиотек, то есть ровно то, ради чего делается. Снимать эти строки можно
+// только осознанно и по одной, с прогоном пробера на роутере до и после.
+//
+// Не прибиты сознательно: decoratemappings и gotestjsonbuildtext (только
+// отладка и формат вывода тестов), winreadlinkvolume и winsymlink (Windows —
+// на роутере не существуют).
+//
+//go:debug asynctimerchan=1
+//go:debug containermaxprocs=0
+//go:debug gotypesalias=0
+//go:debug httpcookiemaxnum=0
+//go:debug httpservecontentkeepheaders=1
+//go:debug multipathtcp=0
+//go:debug randseednop=0
+//go:debug rsa1024min=0
+//go:debug updatemaxprocs=0
+//go:debug urlmaxqueryparams=0
+//go:debug tls3des=1
+//go:debug tlsmlkem=0
+//go:debug tlssha1=1
+//go:debug x509keypairleaf=0
+//go:debug x509negativeserial=1
+//go:debug x509rsacrt=0
+//go:debug x509sha256skid=0
+//go:debug x509usepolicies=0
 package main
 
 import (

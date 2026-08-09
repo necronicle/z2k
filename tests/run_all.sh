@@ -5,8 +5,19 @@
 
 TOTAL_PASSED=0
 TOTAL_FAILED=0
+TOTAL_SKIPPED=0
 TOTAL_SUITES=0
 FAILED_SUITES=""
+SKIPPED_SUITES=""
+
+# Z2K_STRICT_SKIP=1 — пропуск считается провалом.
+#
+# Обычный прогон на ноутбуке разработчика законно пропускает часть проверок
+# (нет node, нет python3, нет соседнего репозитория с движком), и падать на
+# этом было бы ложной тревогой. А вот в CI, где окружение мы задаём сами,
+# пропуск означает, что проверка не выполнялась НИ РАЗУ ни у кого. Гейт
+# включается там, а не здесь: строгость по месту, а не по умолчанию.
+Z2K_STRICT_SKIP="${Z2K_STRICT_SKIP:-0}"
 
 # Длительность КАЖДОГО набора. Сегодня один набор съедал 85% времени прогона, и
 # чтобы это увидеть, пришлось руками разбирать лог CI по временным меткам —
@@ -14,7 +25,9 @@ FAILED_SUITES=""
 # видна сразу, а самые дорогие печатаются отдельным списком.
 TIMINGS="${TMPDIR:-/tmp}/z2k-suite-timings.$$"
 : > "$TIMINGS"
-trap 'rm -f "$TIMINGS"' EXIT INT TERM
+SKIPLOG="${TMPDIR:-/tmp}/z2k-suite-skips.$$"
+: > "$SKIPLOG"
+trap 'rm -f "$TIMINGS" "$SKIPLOG"' EXIT INT TERM
 # Бюджет на набор. Не гейт (падать из-за медленной машины — ложная тревога),
 # но громкая отметка: набор дороже минуты почти всегда ждёт по часам вместо
 # того, чтобы что-то проверять.
@@ -51,6 +64,20 @@ Z2KOUT
     # Extract passed/failed counts from the output
     suite_passed=$(printf '%s' "$output" | grep -c '^\[PASS\]')
     suite_failed=$(printf '%s' "$output" | grep -c '^\[FAIL\]')
+
+    # Пропуски СЧИТАЕМ. Раньше грепались только PASS и FAIL, а [SKIP] не
+    # попадал ни в счётчик, ни в SUMMARY, ни в код возврата — то есть зелёный
+    # прогон одинаково выглядел и когда всё проверено, и когда половина
+    # проверок не выполнялась. Набор пропусков при этом РАЗНЫЙ в каждой среде
+    # (нет node, нет python3, нет соседнего репозитория с движком), так что
+    # никто не мог назвать, что именно проверено в CI. Пропуск — это не
+    # «прошло», и теперь он виден.
+    suite_skipped=$(printf '%s' "$output" | grep -c '^\[SKIP\]')
+    TOTAL_SKIPPED=$((TOTAL_SKIPPED + suite_skipped))
+    if [ "$suite_skipped" -gt 0 ]; then
+        SKIPPED_SUITES="$SKIPPED_SUITES $suite_name:$suite_skipped"
+        printf '%s\n' "$output" | grep '^\[SKIP\]' >> "$SKIPLOG"
+    fi
 
     TOTAL_PASSED=$((TOTAL_PASSED + suite_passed))
     TOTAL_FAILED=$((TOTAL_FAILED + suite_failed))
@@ -101,14 +128,29 @@ if [ -n "$_slow" ]; then
 fi
 printf "Total passed:    %d\n" "$TOTAL_PASSED"
 printf "Total failed:    %d\n" "$TOTAL_FAILED"
+printf "Total skipped:   %d\n" "$TOTAL_SKIPPED"
 
 if [ -n "$FAILED_SUITES" ]; then
     printf "Failed suites:  %s\n" "$FAILED_SUITES"
 fi
 
+# Пропуски печатаем поимённо: «сколько» без «чего именно» ничего не говорит,
+# а решение «это законный пропуск или дыра в покрытии» принимается по причине.
+if [ "$TOTAL_SKIPPED" -gt 0 ]; then
+    printf "\nПропущенные проверки (НЕ засчитаны как пройденные):\n"
+    sed 's/^/  /' "$SKIPLOG" 2>/dev/null
+    printf "  наборы: %s\n" "$SKIPPED_SUITES"
+fi
+
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
-if [ "$TOTAL_FAILED" -eq 0 ] && [ -z "$FAILED_SUITES" ]; then
+_skip_gate=0
+if [ "$Z2K_STRICT_SKIP" = "1" ] && [ "$TOTAL_SKIPPED" -gt 0 ]; then
+    _skip_gate=1
+    printf "STRICT: пропуски запрещены в этом окружении (Z2K_STRICT_SKIP=1)\n"
+fi
+
+if [ "$TOTAL_FAILED" -eq 0 ] && [ -z "$FAILED_SUITES" ] && [ "$_skip_gate" -eq 0 ]; then
     printf "RESULT: ALL TESTS PASSED\n"
     exit 0
 else

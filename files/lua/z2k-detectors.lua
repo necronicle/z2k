@@ -861,7 +861,104 @@ local Z2K_MID_STREAM_ACTIVE_RETRY_SEC = 30
 -- last_progress_ts wins (likely already silent-stalled or replaced).
 local Z2K_MID_STREAM_MAX_CANDIDATES   = 8
 local z2k_mid_stream_state = {}
-local z2k_mid_stream_insert_counter = 0
+-- Счётчик вставок переехал внутрь z2k_mk_mid_stream_helpers: держать его
+-- модульной переменной значило бы разрешить двум детекторам делить один.
+
+-- ---------------------------------------------------------------------------
+-- Общие помощники mid-stream-детекторов (TLS и HTTP)
+-- ---------------------------------------------------------------------------
+--
+-- Оба детектора — TLS (z2k_mid_stream_stall) и HTTP (z2k_http_mid_stream_stall)
+-- — держат одинаковую бухгалтерию: LRU-карта состояний по ключу, ограниченный
+-- набор кандидатов внутри ключа, вытеснение самого старого. Тела самих
+-- детекторов различаются законно (разная семантика прогресса), а вот эти пять
+-- помощников были скопированы дословно и уже начали расходиться: у одного
+-- лишняя пустая строка, у другого своя константа.
+--
+-- Отличий между копиями ровно два, и оба параметризуются:
+--   * имя поля с меткой времени ключа (last_ch_ts против last_req_ts);
+--   * потолок числа кандидатов.
+--
+-- Фабрика возвращает набор замыканий, привязанных к своему состоянию. Счётчик
+-- вставок живёт внутри замыкания, а не в модульной переменной — так его нельзя
+-- случайно разделить между детекторами.
+local function z2k_mk_mid_stream_helpers(state, key_ts_field, max_candidates)
+  local insert_counter = 0
+  local H = {}
+
+  -- Вытеснять по САМОЙ СВЕЖЕЙ метке: и по последнему обращению к ключу, и по
+  -- прогрессу любого его кандидата. Иначе живой ключ вымело бы LRU-проходом
+  -- только потому, что запись создавали давно.
+  function H.ts_of(v)
+    if type(v) ~= "table" then return 0 end
+    local newest = tonumber(v[key_ts_field]) or 0
+    local cands = v.candidates
+    if type(cands) == "table" then
+      for _, c in pairs(cands) do
+        local t = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
+        if t > newest then newest = t end
+      end
+    end
+    return newest
+  end
+
+  function H.maybe_evict()
+    insert_counter = insert_counter + 1
+    if insert_counter < Z2K_DETECTOR_EVICT_INTERVAL then return end
+    insert_counter = 0
+
+    local n = 0
+    for _ in pairs(state) do n = n + 1 end
+    if n <= Z2K_DETECTOR_MAP_MAX then return end
+    z2k_detector_evict_oldest(state, Z2K_DETECTOR_EVICT_BATCH, H.ts_of)
+  end
+
+  function H.oldest_candidate_id(cands)
+    local oldest_id, oldest_ts
+    for fid, c in pairs(cands) do
+      local ts = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
+      if not oldest_ts or ts < oldest_ts then
+        oldest_id, oldest_ts = fid, ts
+      end
+    end
+    return oldest_id
+  end
+
+  -- Записать или обновить кандидата ЭТОГО потока. Набор ограничен: когда в нём
+  -- уже max_candidates записей от других потоков, самая старая вытесняется.
+  function H.publish_candidate(key_st, flow_st)
+    local cands = key_st.candidates
+    local existing = cands[flow_st.flow_id]
+    if existing then
+      existing.max_seq          = flow_st.max_seq
+      existing.last_progress_ts = flow_st.last_progress_ts
+      return
+    end
+    local count = 0
+    for _ in pairs(cands) do count = count + 1 end
+    if count >= max_candidates then
+      local victim = H.oldest_candidate_id(cands)
+      if victim then cands[victim] = nil end
+    end
+    cands[flow_st.flow_id] = {
+      max_seq          = flow_st.max_seq,
+      last_progress_ts = flow_st.last_progress_ts,
+    }
+  end
+
+  function H.clear_all_candidates(cands)
+    for fid in pairs(cands) do cands[fid] = nil end
+  end
+
+  return H
+end
+
+local z2k_mid_stream_H = z2k_mk_mid_stream_helpers(
+  z2k_mid_stream_state, "last_ch_ts", Z2K_MID_STREAM_MAX_CANDIDATES)
+local z2k_mid_stream_maybe_evict          = z2k_mid_stream_H.maybe_evict
+local z2k_mid_stream_publish_candidate    = z2k_mid_stream_H.publish_candidate
+local z2k_mid_stream_clear_all_candidates = z2k_mid_stream_H.clear_all_candidates
+
 -- Module-monotonic counter for flow_id assignment. Lua doubles can
 -- represent integers up to 2^53 exactly — at 1k flows/sec this is
 -- ~285 millennia of unique IDs. We never reset it.
@@ -885,77 +982,19 @@ local function z2k_mid_stream_new_flow_state()
   }
 end
 
-local function z2k_mid_stream_ts_of(v)
-  if type(v) ~= "table" then return 0 end
-  -- Evict by whichever timestamp is newer — keeps the "most recent
-  -- interaction with this key" entries alive through LRU sweeps.
-  local newest = tonumber(v.last_ch_ts) or 0
-  local cands = v.candidates
-  if type(cands) == "table" then
-    for _, c in pairs(cands) do
-      local t = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
-      if t > newest then newest = t end
-    end
-  end
-  return newest
-end
 
-local function z2k_mid_stream_maybe_evict()
-  z2k_mid_stream_insert_counter = z2k_mid_stream_insert_counter + 1
-  if z2k_mid_stream_insert_counter < Z2K_DETECTOR_EVICT_INTERVAL then return end
-  z2k_mid_stream_insert_counter = 0
-
-  local n = 0
-  for _ in pairs(z2k_mid_stream_state) do n = n + 1 end
-  if n <= Z2K_DETECTOR_MAP_MAX then return end
-  z2k_detector_evict_oldest(z2k_mid_stream_state, Z2K_DETECTOR_EVICT_BATCH, z2k_mid_stream_ts_of)
-end
 
 -- Find the flow_id of the candidate with the oldest last_progress_ts,
 -- used as the eviction victim when a new candidate would overflow
 -- Z2K_MID_STREAM_MAX_CANDIDATES.
-local function z2k_mid_stream_oldest_candidate_id(cands)
-  local oldest_id, oldest_ts
-  for fid, c in pairs(cands) do
-    local ts = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
-    if not oldest_ts or ts < oldest_ts then
-      oldest_id, oldest_ts = fid, ts
-    end
-  end
-  return oldest_id
-end
 
 -- Publish or refresh THIS flow's candidate entry. Bounded — when the
 -- map already holds MAX_CANDIDATES entries owned by other flows, the
 -- oldest one is evicted to make room.
-local function z2k_mid_stream_publish_candidate(key_st, flow_st)
-  local cands = key_st.candidates
-  local existing = cands[flow_st.flow_id]
-  if existing then
-    existing.max_seq          = flow_st.max_seq
-    existing.last_progress_ts = flow_st.last_progress_ts
-    return
-  end
-  local count = 0
-  for _ in pairs(cands) do count = count + 1 end
-  if count >= Z2K_MID_STREAM_MAX_CANDIDATES then
-    local victim = z2k_mid_stream_oldest_candidate_id(cands)
-    if victim then cands[victim] = nil end
-  end
-  cands[flow_st.flow_id] = {
-    max_seq          = flow_st.max_seq,
-    last_progress_ts = flow_st.last_progress_ts,
-  }
-end
 
 -- Clear all candidate entries for a key. Used when the active-retry
 -- gate fails — none of the recorded stalls is actionable evidence
 -- for the current CH event.
-local function z2k_mid_stream_clear_all_candidates(cands)
-  for fid in pairs(cands) do
-    cands[fid] = nil
-  end
-end
 
 function z2k_mid_stream_stall(desync, crec)
   -- Inherit everything z2k_tls_stalled catches (which in turn inherits
@@ -1125,7 +1164,13 @@ local Z2K_HTTP_MID_STREAM_RETRY_MAX_SEC    = 120
 local Z2K_HTTP_MID_STREAM_ACTIVE_RETRY_SEC = 30
 local Z2K_HTTP_MID_STREAM_MAX_CANDIDATES   = 8
 local z2k_http_mid_stream_state = {}
-local z2k_http_mid_stream_insert_counter = 0
+
+local z2k_http_mid_stream_H = z2k_mk_mid_stream_helpers(
+  z2k_http_mid_stream_state, "last_req_ts", Z2K_HTTP_MID_STREAM_MAX_CANDIDATES)
+local z2k_http_mid_stream_maybe_evict          = z2k_http_mid_stream_H.maybe_evict
+local z2k_http_mid_stream_publish_candidate    = z2k_http_mid_stream_H.publish_candidate
+local z2k_http_mid_stream_clear_all_candidates = z2k_http_mid_stream_H.clear_all_candidates
+
 local z2k_http_mid_stream_flow_seq = 0
 
 local function z2k_http_mid_stream_new_key_state()
@@ -1146,65 +1191,10 @@ local function z2k_http_mid_stream_new_flow_state()
   }
 end
 
-local function z2k_http_mid_stream_ts_of(v)
-  if type(v) ~= "table" then return 0 end
-  local newest = tonumber(v.last_req_ts) or 0
-  local cands = v.candidates
-  if type(cands) == "table" then
-    for _, c in pairs(cands) do
-      local t = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
-      if t > newest then newest = t end
-    end
-  end
-  return newest
-end
 
-local function z2k_http_mid_stream_maybe_evict()
-  z2k_http_mid_stream_insert_counter = z2k_http_mid_stream_insert_counter + 1
-  if z2k_http_mid_stream_insert_counter < Z2K_DETECTOR_EVICT_INTERVAL then return end
-  z2k_http_mid_stream_insert_counter = 0
-  local n = 0
-  for _ in pairs(z2k_http_mid_stream_state) do n = n + 1 end
-  if n <= Z2K_DETECTOR_MAP_MAX then return end
-  z2k_detector_evict_oldest(z2k_http_mid_stream_state, Z2K_DETECTOR_EVICT_BATCH, z2k_http_mid_stream_ts_of)
-end
 
-local function z2k_http_mid_stream_oldest_candidate_id(cands)
-  local oldest_id, oldest_ts
-  for fid, c in pairs(cands) do
-    local ts = (type(c) == "table" and tonumber(c.last_progress_ts)) or 0
-    if not oldest_ts or ts < oldest_ts then
-      oldest_id, oldest_ts = fid, ts
-    end
-  end
-  return oldest_id
-end
 
-local function z2k_http_mid_stream_publish_candidate(key_st, flow_st)
-  local cands = key_st.candidates
-  local existing = cands[flow_st.flow_id]
-  if existing then
-    existing.max_seq          = flow_st.max_seq
-    existing.last_progress_ts = flow_st.last_progress_ts
-    return
-  end
-  local count = 0
-  for _ in pairs(cands) do count = count + 1 end
-  if count >= Z2K_HTTP_MID_STREAM_MAX_CANDIDATES then
-    local victim = z2k_http_mid_stream_oldest_candidate_id(cands)
-    if victim then cands[victim] = nil end
-  end
-  cands[flow_st.flow_id] = {
-    max_seq          = flow_st.max_seq,
-    last_progress_ts = flow_st.last_progress_ts,
-  }
-end
 
-local function z2k_http_mid_stream_clear_all_candidates(cands)
-  for fid in pairs(cands) do
-    cands[fid] = nil
-  end
-end
 
 function z2k_http_mid_stream_stall(desync, crec)
   -- Inherit RST / TLS alert / HTTP block-marker fail signals.

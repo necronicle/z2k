@@ -49,6 +49,11 @@ read_flag() {
     printf '%s' "$val"
 }
 
+# set_flag живёт в lib/utils.sh — там же, где его видит и меню.
+# Здесь оставлен только запасной вариант на случай, когда utils.sh не
+# подгрузился (_gen_libs_source ищет его в двух местах и может не найти):
+# CGI не должен падать целиком из-за отсутствия одной библиотеки.
+if ! command -v set_flag >/dev/null 2>&1; then
 set_flag() {
     # set_flag <key> <value> <file>
     local key="$1" val="$2" file="$3"
@@ -78,6 +83,7 @@ set_flag() {
         printf '%s=%s\n' "$key" "$_val" >> "$file"
     fi
 }
+fi
 
 # --- запись в файлы-списки -------------------------------------------------
 #
@@ -115,6 +121,51 @@ _list_lock() {
 }
 
 _list_unlock() { rmdir "$1.z2k-lock" 2>/dev/null; return 0; }
+
+# --- замок state.tsv, общий с Lua ------------------------------------------
+#
+# У state.tsv ДВА писателя: демон (files/lua/z2k-state-persist.lua) и вот эта
+# панель. Замок был только у демона, и панель его не брала вовсе — то есть он
+# охранял писателя, которого не существует (демон один и сам с собой не
+# гоняется), и не охранял реального.
+#
+# Цена проигранной гонки — не порча файла (обе стороны пишут через атомарную
+# подмену), а ПОТЕРЯ НАМЕРЕНИЯ оператора: заморозка, пин или удаление строки,
+# сделанные из панели между «демон прочитал диск» и «демон переименовал свой
+# временный файл», затираются его снимком из памяти. Человек видит, что кнопка
+# сработала, а через секунду всё как было.
+#
+# Протокол ровно тот же, что в Lua, иначе взаимного исключения не выйдет:
+#   • файл "<path>.lock", содержимое — unix-время захвата;
+#   • пустой или нечисловой = ничей (процесс умер между созданием и записью);
+#   • старше 10 секунд = протухший, забираем;
+#   • метка из будущего = часы уехали, забираем.
+# `set -C` даёт атомарное создание (O_EXCL) без flock, которого на Entware нет.
+_state_lock() {
+    local f="$1.lock" n=0 now content lt
+    while :; do
+        now=$(date +%s 2>/dev/null || echo 0)
+        if [ -f "$f" ]; then
+            content=$(cat "$f" 2>/dev/null | tr -d ' \t\r\n')
+            lt=$(printf '%s' "$content" | grep -E '^[0-9]+$' || true)
+            if [ -z "$lt" ]; then
+                rm -f "$f" 2>/dev/null            # ничей
+            elif [ "$lt" -gt "$((now + 10))" ] 2>/dev/null; then
+                rm -f "$f" 2>/dev/null            # из будущего
+            elif [ "$((now - lt))" -gt 10 ] 2>/dev/null; then
+                rm -f "$f" 2>/dev/null            # протух
+            fi
+        fi
+        if ( set -C; printf '%s' "$now" > "$f" ) 2>/dev/null; then
+            return 0
+        fi
+        n=$((n + 1))
+        [ "$n" -gt 100 ] && return 1
+        usleep 20000 2>/dev/null || sleep 1
+    done
+}
+
+_state_unlock() { rm -f "$1.lock" 2>/dev/null; return 0; }
 
 _file_replace() {
     # _file_replace <dest> <tmp> — подменить содержимое уже заполненным temp'ом.
@@ -233,12 +284,13 @@ service_status_string() {
 # the heredoc emits empty-value flags → toggle never sticks. This was
 # the root cause of the game-mode toggle bug (2026-04-16).
 #
-# Пути вокруг подключения сохраняются и возвращаются на место: lib/utils.sh
-# присваивает ZAPRET2_DIR/CONFIG_DIR/LISTS_DIR/INIT_SCRIPT БЕЗУСЛОВНО (без
-# ${VAR:-}), так что env-override, честно принятый в шапке этого файла, после
-# первой же перегенерации молча терялся, а CONFIG_FILE/WHITELIST_FILE/STATE_FILE
-# оставались от прежних значений — внутри одного запроса набор путей оказывался
-# наполовину переключённым.
+# Ручного спасения путей вокруг сорсинга здесь БОЛЬШЕ НЕТ. Оно было нужно, пока
+# lib/utils.sh присваивал ZAPRET2_DIR/CONFIG_DIR/LISTS_DIR/INIT_SCRIPT
+# безусловно: env-override, честно принятый в шапке этого файла, терялся при
+# первой же перегенерации, а CONFIG_FILE/WHITELIST_FILE/STATE_FILE оставались
+# от прежних значений — внутри одного запроса набор путей оказывался наполовину
+# переключённым. Причина устранена в самом utils.sh (присваивание стало
+# условным, ${VAR:-умолчание}), и лечить симптом здесь больше незачем.
 _gen_libs_source() {
     local utils="" lib=""
     for d in "$ZAPRET2_DIR/lib" /tmp/z2k/lib; do
@@ -246,12 +298,10 @@ _gen_libs_source() {
         [ -f "$d/config_official.sh" ] && [ -z "$lib" ] && lib="$d/config_official.sh"
     done
     [ -z "$lib" ] && return 1
-    local _z="$ZAPRET2_DIR" _c="$CONFIG_DIR" _l="$LISTS_DIR" _i="$INIT_SCRIPT"
     # shellcheck disable=SC1090
     [ -n "$utils" ] && . "$utils"
     # shellcheck disable=SC1090
     . "$lib"
-    ZAPRET2_DIR="$_z"; CONFIG_DIR="$_c"; LISTS_DIR="$_l"; INIT_SCRIPT="$_i"
     return 0
 }
 
@@ -293,6 +343,39 @@ strategy_pool_ok() {
 # состояние», и откат уезжал навсегда.
 #
 # stdin: candidate text. $1: pool. Echoes the engine's complaint on failure.
+# Символы, которые превращают строку стратегии в команду.
+#
+# ПРОВЕРЕНО ЭКСПЕРИМЕНТОМ 2026-08-08, это не теория. Тело пула попадает в конфиг
+# как  NFQWS2_OPT="<тело>"  (config_official.sh), а конфиг сорсится root-овым
+# init-скриптом. Одна кавычка внутри тела закрывает присваивание, и всё, что за
+# ней, исполняется:
+#
+#     --dpi-desync=fake " ; touch /tmp/PWNED ; : "
+#
+# даёт в конфиге строку, после сорсинга которой файл /tmp/PWNED создан. Обратите
+# внимание: отдельная строка из кавычки не нужна — z2k_custom_strategy склеивает
+# тело в ОДНУ строку, и кавычка работает из середины.
+#
+# Внутри двойных кавычек шелл раскрывает ещё обратные кавычки и $(...), поэтому
+# запрещены и они. Отказ, а не экранирование: у этих символов нет законного
+# применения в опциях nfqws2, а экранирование пришлось бы держать в согласии с
+# генератором конфига вечно.
+#
+# Полагаться на строгость `nfqws2 --dry-run` здесь нельзя: чужой парсер не может
+# быть границей безопасности, и достаточно одной опции, принимающей произвольную
+# строку, чтобы проверка перестала ловить.
+_strategy_body_is_safe() {
+    # LC_ALL=C — иначе классы символов зависят от локали.
+    if LC_ALL=C grep -q '["`$]' "$1" 2>/dev/null; then
+        return 1
+    fi
+    # Управляющие байты (в т.ч. \0 и перевод строки в неожиданных местах)
+    if LC_ALL=C grep -q '[[:cntrl:]]' "$1" 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
 strategy_validate() {
     local pool="$1"
     strategy_pool_ok "$pool" || { echo "unknown pool"; return 1; }
@@ -318,6 +401,15 @@ strategy_validate() {
         echo "не удалось записать кандидата"
         return 1
     }
+
+    # Опасные символы отсекаем ПЕРВЫМИ — до генерации конфига и до dry-run.
+    # Дальше по цепочке тело попадает в NFQWS2_OPT="…", который сорсится root'ом,
+    # и там кавычка уже не текст, а конец присваивания.
+    if ! _strategy_body_is_safe "$cand"; then
+        rm -rf "$shadow" 2>/dev/null
+        echo 'в строке стратегии недопустимы символы " ` $ и управляющие: они превращают её в команду'
+        return 1
+    fi
 
     # Строка без единой опции (пусто или одни комментарии) — не «прошедшая
     # проверку стратегия»: генератор такой файл пропускает и собирает конфиг из
@@ -1874,8 +1966,12 @@ state_delete() {
     # for the per-address-family rotation suffix (host|4 / host|6, fork r5+).
     _chars_ok "$key"  'a-zA-Z0-9_'   || { echo "bad key" >&2; return 1; }
     _chars_ok "$host" 'a-zA-Z0-9.|-' || { echo "bad host" >&2; return 1; }
-    _state_delete_one_file "$STATE_FILE" "$key" "$host" || return 1
-    _state_delete_one_file "$STATE_FILE_FALLBACK" "$key" "$host" || return 1
+    # Замок на первичный файл: демон пишет оба, и одного общего рубежа хватает,
+    # чтобы наша правка не разошлась с его снимком.
+    _state_lock "$STATE_FILE" || { echo "state busy" >&2; return 1; }
+    _state_delete_one_file "$STATE_FILE" "$key" "$host" || { _state_unlock "$STATE_FILE"; return 1; }
+    _state_delete_one_file "$STATE_FILE_FALLBACK" "$key" "$host" || { _state_unlock "$STATE_FILE"; return 1; }
+    _state_unlock "$STATE_FILE"
 }
 
 # Wipe ALL rotator rows from both state files (header kept, inode preserved by
@@ -1885,13 +1981,17 @@ state_delete() {
 # too — no service restart. Both primary and /tmp fallback are wiped so a later
 # restart's merge can't revive anything.
 state_clear_all() {
-    local _f
+    local _f _rc=0
+    _state_lock "$STATE_FILE" || { echo "state busy" >&2; return 1; }
     for _f in "$STATE_FILE" "$STATE_FILE_FALLBACK"; do
         [ -f "$_f" ] || continue
-        printf '# z2k autocircular state (persisted circular nstrategy)\n# key\thost\tstrategy\tts\tmode\n' > "$_f" || return 1
+        if ! printf '# z2k autocircular state (persisted circular nstrategy)\n# key\thost\tstrategy\tts\tmode\n' > "$_f"; then
+            _rc=1; break
+        fi
         chmod 644 "$_f" 2>/dev/null || true
     done
-    return 0
+    _state_unlock "$STATE_FILE"
+    return $_rc
 }
 
 # Upsert one row (key,host) with strategy+mode+ts into a single state file,
@@ -1942,8 +2042,12 @@ state_set() {
     case "$mode" in auto|frozen) ;; *) echo "bad mode" >&2; return 1 ;; esac
     local ts; ts=$(date +%s 2>/dev/null || echo 0)
     local ok=1
+    # Тот же общий с Lua замок: пин и заморозка — это как раз то намерение
+    # оператора, которое проигранная гонка стирает молча.
+    _state_lock "$STATE_FILE" || { echo "state busy" >&2; return 1; }
     _state_set_one_file "$STATE_FILE" "$key" "$host" "$strat" "$mode" "$ts" && ok=0
     _state_set_one_file "$STATE_FILE_FALLBACK" "$key" "$host" "$strat" "$mode" "$ts" && ok=0
+    _state_unlock "$STATE_FILE"
     return $ok
 }
 
@@ -2222,6 +2326,28 @@ update_behind_count() {
 update_last_check_ts() {
     [ -s "$AU_MANIFEST_CACHE" ] || { printf '0'; return; }
     file_mtime "$AU_MANIFEST_CACHE"
+}
+
+# Провалилась ли ПОСЛЕДНЯЯ попытка сходить за манифестом.
+#
+# Это единственное, что отличает «вы на актуальной версии» от «канал обновлений
+# мёртв, а мы показываем позавчерашний кэш». update_refresh_manifest при отказе
+# сети возвращает 0 и оставляет протухший кэш (иначе панель мигала бы ошибкой
+# на каждом чихе связи) — то есть по её коду возврата отличить нельзя. Зато она
+# оставляет метку неудачи; до 2026-08-08 эту метку не читал никто, и наружу
+# не уходило ни одного признака. Человек видел «установлена актуальная версия»
+# при полностью нерабочем обновлении.
+update_last_fetch_failed() {
+    [ -f "$AU_MANIFEST_FAIL_STAMP" ] && printf 'true' || printf 'false'
+}
+
+# Возраст последней УДАЧНОЙ проверки в секундах; -1 если удачных не было.
+update_last_check_age() {
+    local ts now
+    ts=$(update_last_check_ts)
+    [ "${ts:-0}" -gt 0 ] 2>/dev/null || { printf '%s' "-1"; return; }
+    now=$(date +%s 2>/dev/null || echo 0)
+    [ "$now" -gt "$ts" ] 2>/dev/null && printf '%s' "$((now - ts))" || printf '0'
 }
 
 # Extract history entries strictly newer than installed_tag, in

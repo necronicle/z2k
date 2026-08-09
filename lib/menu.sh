@@ -247,11 +247,7 @@ menu_diagnose_domain() {
             local new_flag
             if [ "$flag" = "1" ]; then new_flag="0"; else new_flag="1"; fi
             touch "$cfg" 2>/dev/null
-            if grep -q "^Z2K_DISCOVER=" "$cfg" 2>/dev/null; then
-                sed -i "s/^Z2K_DISCOVER=.*/Z2K_DISCOVER=$new_flag/" "$cfg"
-            else
-                echo "Z2K_DISCOVER=$new_flag" >> "$cfg"
-            fi
+            set_flag Z2K_DISCOVER "$new_flag" "$cfg"
             print_success "Автодетекция: $new_flag"
             if [ -x /opt/etc/init.d/S98z2k-detect ]; then
                 /opt/etc/init.d/S98z2k-detect restart >/dev/null 2>&1 || true
@@ -528,11 +524,7 @@ SUBMENU
     # automatic restarts must leave ENABLED untouched so they honor it.
     _persist_enabled() {
         [ -f "${ZAPRET2_DIR}/config" ] || return 0
-        if grep -q '^ENABLED=' "${ZAPRET2_DIR}/config"; then
-            sed -i "s/^ENABLED=.*/ENABLED=$1/" "${ZAPRET2_DIR}/config"
-        else
-            echo "ENABLED=$1" >> "${ZAPRET2_DIR}/config"
-        fi
+        set_flag ENABLED "$1" "${ZAPRET2_DIR}/config"
     }
 
     printf "Выберите действие: "
@@ -795,11 +787,7 @@ SUBMENU
 
     _menu_rst_set_and_restart() {
         local val="$1"
-        if grep -q '^RST_FILTER=' "$config_file"; then
-            sed -i "s/^RST_FILTER=.*/RST_FILTER=$val/" "$config_file"
-        else
-            echo "RST_FILTER=$val" >> "$config_file"
-        fi
+        set_flag RST_FILTER "$val" "$config_file"
         if is_zapret2_running; then
             print_info "Перезапуск сервиса..."
             "$INIT_SCRIPT" restart
@@ -1152,11 +1140,7 @@ SUBMENU
 
     _policy_set_and_restart() {
         local key="$1" val="$2"
-        if grep -q "^${key}=" "$config_file"; then
-            sed -i "s/^${key}=.*/${key}=${val}/" "$config_file"
-        else
-            echo "${key}=${val}" >> "$config_file"
-        fi
+        set_flag "$key" "$val" "$config_file"
         if is_zapret2_running; then
             print_info "Перезапуск сервиса..."
             "$INIT_SCRIPT" restart
@@ -1166,15 +1150,39 @@ SUBMENU
 
     case "$sub_choice" in
         1)
-            printf "Введите имя политики (буквы/цифры/_/-, 1-32 символа, пусто = выключить): "
+            printf "Введите имя политики (1-32 символа, пусто = выключить): "
             read_input new_name
-            new_name=$(printf '%s' "$new_name" | tr -d '\r\n[:space:]')
+            # Убираем только перевод строки и CR. Пробелы ВНУТРИ имени оставляем:
+            # политика в Keenetic вполне может называться «Домашние устройства».
+            new_name=$(printf '%s' "$new_name" | tr -d '\r\n')
+            # Ведущие/замыкающие пробелы срезаем — они невидимы и ломают сверку.
+            new_name=$(printf '%s' "$new_name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            # Фильтра [A-Za-z0-9_-] здесь больше НЕТ.
+            #
+            # Он отвергал кириллицу и пробел, тогда как вебпанель те же имена
+            # принимает — там для этого сделан аккуратный подсчёт символов UTF-8.
+            # Один и тот же параметр вёл себя по-разному в зависимости от того,
+            # откуда его правят, и это ровно та цена, которую платят за две
+            # реализации одной операции. Записывает теперь общая set_flag: она
+            # кладёт небезопасное значение в одинарные кавычки, поэтому пробел и
+            # кириллица больше не превращают конфиг в команду.
+            #
+            # Управляющие байты — единственное, что отвергаем: в имени политики
+            # им делать нечего, а в конфиге они ломают построчный разбор.
             case "$new_name" in
                 '') ;;
-                *[!A-Za-z0-9_-]*) print_error "Недопустимые символы в имени"; pause; return 1 ;;
+                *[[:cntrl:]]*) print_error "В имени недопустимы управляющие символы"; pause; return 1 ;;
             esac
-            if [ -n "$new_name" ] && [ ${#new_name} -gt 32 ]; then
-                print_error "Слишком длинное имя (>32 символов)"; pause; return 1
+            # Длина в СИМВОЛАХ, а не в байтах: ${#var} на ash/dash считает байты,
+            # и кириллическое имя из 17 символов иначе объявляется длиннее 32.
+            # Тот же расчёт, что в webpanel/cgi/api.sh — байты минус продолжения
+            # UTF-8 (они имеют вид 10xxxxxx).
+            if [ -n "$new_name" ]; then
+                _nm_bytes=${#new_name}
+                _nm_cont=$(printf '%s' "$new_name" | LC_ALL=C tr -dc '\200-\277' | wc -c | tr -d ' ')
+                if [ "$((_nm_bytes - _nm_cont))" -gt 32 ]; then
+                    print_error "Слишком длинное имя (>32 символов)"; pause; return 1
+                fi
             fi
             _policy_set_and_restart "POLICY_NAME" "$new_name"
             print_success "Имя политики сохранено: ${new_name:-(пусто)}"
@@ -1515,6 +1523,15 @@ menu_stats() {
     local Z2K_STATS
     Z2K_STATS=$(safe_config_read "Z2K_STATS" "$config_file" "1")
 
+    # Экран открыт — значит человек видит, что именно уходит. Снимаем гейт
+    # первой отправки: до этого момента аплоадер молчит (см.
+    # files/z2k-stats-upload.sh). Ставим ДО показа текста, а не после выбора:
+    # согласия мы не спрашиваем, телеметрия включена по умолчанию — мы лишь
+    # обязаны показать, что она есть, прежде чем что-то уйдёт.
+    if [ "$(safe_config_read "Z2K_STATS_ACK" "$config_file" "1")" = "0" ]; then
+        set_flag Z2K_STATS_ACK 1 "$config_file" 2>/dev/null || true
+    fi
+
     print_separator
     print_info "Статус: $([ "$Z2K_STATS" = "0" ] && echo 'Выключен' || echo 'Включён (по умолчанию)')"
     print_separator
@@ -1587,14 +1604,9 @@ menu_game_warp() {
     print_header "Игровой режим (WARP)"
     local config_file="${ZAPRET2_DIR}/config"
     # self-contained flag writer (KEY=value setter into the config)
-    _set_flag() {
-        local key="$1" val="$2"
-        if grep -q "^${key}=" "$config_file"; then
-            sed -i "s/^${key}=.*/${key}=${val}/" "$config_file"
-        else
-            echo "${key}=${val}" >> "$config_file"
-        fi
-    }
+    # Тонкая обёртка над общей set_flag: local $config_file уже в области
+    # видимости, а вызовы ниже писались под два аргумента.
+    _set_flag() { set_flag "$1" "$2" "$config_file"; }
     local cur; cur=$(safe_config_read "GAME_WARP_ENABLED" "$config_file" "0")
     echo "Заворачивает заблокированные по IP хостинги (игровые серверы + диапазоны"
     echo "Cloudflare/AWS из списка РКН) в туннель Cloudflare WARP. Внимание: пока"

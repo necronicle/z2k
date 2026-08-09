@@ -1086,6 +1086,65 @@ step_load_kernel_modules() {
 # ходит первым хопом через наш VPS с SNI-passthrough, где сертификат остаётся
 # githubовским. Поэтому подменённый на gh-proxy архив ловится, даже если сам
 # тарбол пришёл именно оттуда.
+# z2k_guard_key_swap — не дать ручной переустановке МОЛЧА подменить ключ,
+# которому эта коробка уже доверяет.
+#
+# ЗАЧЕМ. Подпись манифеста гейтит авто-канал, а ручная переустановка не
+# гейтится — это и есть дверь восстановления: мёртвый ключ означает «встали
+# автообновления», а не «флот заморожен навсегда». Ровно из-за отсутствия такой
+# двери подпись однажды уже откатывали.
+#
+# Но дверь, открытая настежь, — это вход. Атакующий, контролирующий транспорт,
+# не трогает репозиторий: он устойчиво роняет авто-канал и ждёт, пока человек
+# сам запустит переустановку. Если та молча положит новый ключ, атака на
+# транспорт превращается в полноценную подмену доверия без компрометации GitHub.
+#
+# Поэтому: коробка, уже принимавшая подписи, не меняет ключ без явного согласия.
+# Отпечаток нового ключа публикуется в README рядом с командой установки, и
+# человек подтверждает его переменной:
+#
+#     Z2K_TRUST_NEW_KEY=<отпечаток> sh z2k.sh install
+#
+# Неинтерактивность `curl | sh` при этом сохраняется — ничего не спрашивается,
+# просто без подтверждения установка останавливается и объясняет, что делать.
+z2k_guard_key_swap() {
+    local _new="${WORK_DIR}/files/etc/z2k-update-pub.pem"
+    local _cur="${ZAPRET2_DIR}/etc/z2k-update-pub.pem"
+    local _pin="${Z2K_AU_TRUST_PIN:-/opt/etc/z2k/.trust/pinned}"
+
+    # Храповик не защёлкнут — подпись здесь ещё ни разу не работала, менять
+    # нечего и спрашивать не о чем.
+    [ -f "$_pin" ] || return 0
+    # Нового ключа нет (сборка без него) или старого нет — не наш случай.
+    [ -s "$_new" ] && [ -s "$_cur" ] || return 0
+
+    local _h_new _h_cur
+    _h_new=$(z2k_sha256_file "$_new" 2>/dev/null)
+    _h_cur=$(z2k_sha256_file "$_cur" 2>/dev/null)
+    # Посчитать нечем — не выдумываем отказ на пустом месте.
+    [ -n "$_h_new" ] && [ -n "$_h_cur" ] || return 0
+    [ "$_h_new" = "$_h_cur" ] && return 0   # ключ тот же
+
+    if [ "${Z2K_TRUST_NEW_KEY:-}" = "$_h_new" ]; then
+        print_warning "Ключ подписи обновлений заменён по вашему подтверждению"
+        print_info "Прежний: ${_h_cur}"
+        print_info "Новый:   ${_h_new}"
+        # Храповик сбрасываем: доверие начинается заново с этого ключа.
+        rm -f "$_pin" 2>/dev/null
+        return 0
+    fi
+
+    print_error "Установка принесла ДРУГОЙ ключ подписи обновлений."
+    print_info "На этом роутере подпись уже работала, поэтому молча менять ключ мы не будем."
+    print_info ""
+    print_info "Отпечаток нового ключа: ${_h_new}"
+    print_info "Сверьте его с тем, что опубликован в README, и если совпадает — повторите:"
+    print_info "    Z2K_TRUST_NEW_KEY=${_h_new} sh z2k.sh install"
+    print_info ""
+    print_info "Если не совпадает — не подтверждайте: значит установщик пришёл не от нас."
+    return 1
+}
+
 verify_release_binaries() {
     local release_dir="$1" release_url="$2"
     local sums_url sums_file="${PWD}/sha256sum.txt"
@@ -1108,11 +1167,31 @@ verify_release_binaries() {
         return 0
     fi
 
-    local checked=0 bad=0 f rel want have
+    # Сопоставление по ХВОСТУ пути, а не по точной строке.
+    #
+    # Раньше сравнивалось `$2 == "$release_dir/binaries/<arch>/nfqws2"`, то есть
+    # предполагалось, что апстрим перечисляет файлы ровно с тем же префиксом
+    # каталога, который получился у нас после распаковки. Достаточно апстриму
+    # писать "./binaries/..." вместо "zapret2-vX.Y.Z/binaries/..." — и не
+    # совпадает НИ ОДНА запись, checked остаётся 0, функция печатает warning
+    # (который тонет в шумном логе установки) и возвращает 0. То есть проверка,
+    # скорее всего, не проверяла ещё ни разу.
+    #
+    # Хвост `binaries/<arch>/<имя>` уникален внутри релиза, поэтому по нему
+    # можно матчить независимо от префикса.
+    local checked=0 bad=0 f rel tail want have
     for f in "$release_dir"/binaries/*/nfqws2 "$release_dir"/binaries/*/ip2net "$release_dir"/binaries/*/mdig; do
         [ -f "$f" ] || continue
         rel=${f#./}
-        want=$(awk -v p="$rel" '$2 == p { print $1; exit }' "$sums_file")
+        # binaries/<arch>/<name> — последние три компонента пути
+        tail=$(printf '%s' "$rel" | awk -F/ '{ if (NF>=3) printf "%s/%s/%s", $(NF-2), $(NF-1), $NF; else print $0 }')
+        want=$(awk -v t="$tail" '
+            { p = $2
+              sub(/^\.\//, "", p)
+              n = split(p, a, "/")
+              if (n >= 3) p = a[n-2] "/" a[n-1] "/" a[n]
+              if (p == t) { print $1; exit } }
+        ' "$sums_file")
         [ -n "$want" ] || continue
         have=$(z2k_sha256_file "$f")
         checked=$((checked + 1))
@@ -1129,8 +1208,14 @@ verify_release_binaries() {
         return 1
     fi
     if [ "$checked" = 0 ]; then
-        print_warning "В sha256sum.txt не нашлось ни одной записи для распакованных бинарников"
-        return 0
+        # sha256sum.txt скачался и непустой (иначе мы вышли бы выше), но ни одна
+        # запись не описывает распакованные бинарники. Это не «нечего
+        # проверять» — это «файл сумм не про этот архив», то есть ровно тот
+        # случай, ради которого проверка и заводилась. Fail-closed: цена отказа
+        # здесь — установка не прошла, а не «встал непроверенный движок».
+        print_error "В sha256sum.txt нет ни одной записи для распакованных бинарников"
+        print_info "Файл сумм не описывает этот архив — установка прервана."
+        return 1
     fi
 
     print_success "Целостность бинарников движка проверена ($checked файлов)"
@@ -1209,60 +1294,80 @@ z2k_slim_release_binaries() {
     fi
 }
 
+# step_prefetch_hostlists — сложить критичные хостлисты в staging ДО того,
+# как что-либо будет тронуто в ${ZAPRET2_DIR}.
+#
+# Вынесено из step_build_zapret2 (та была 1093 строки). Шов здесь честный:
+# наружу уходит РОВНО одна вещь — путь к staging в Z2K_PREFETCH_LISTS_DIR,
+# все прочие переменные фазы локальны и за её границу не выходят. Именно
+# поэтому вынесена она, а не «первые двести строк».
+#
+# Фаза read-only по построению: при неудаче она чистит только свой каталог
+# и прерывает установку, не тронув рабочую копию. Это не стилистика —
+# ревью 2026-05-27 поймало обратный порядок (deploy → die ПОСЛЕ rm -rf),
+# который оставлял роутер в невосстановимом состоянии.
+step_prefetch_hostlists() {
+# Pre-flight hostlist availability check. Stage critical snapshots в /tmp
+# BEFORE мы трогаем ${ZAPRET2_DIR} — если ни WORK_DIR ни GitHub-fallback
+# не доступны, прерываем install ДО `rm -rf` чтобы рабочая установка
+# юзера не превратилась в полу-сломанный остаток. Codex review 2026-05-27
+# flagged предыдущую логику: deploy_critical_file → die после rm -rf
+# оставлял router в un-restorable состоянии. Эта стадия — read-only:
+# на failure ничего не модифицирует, только cleanup'ит свой /tmp dir.
+# Staging под WORK_DIR: при USB-fallback (Z2K_WORKDIR_ON_OPT=1) WORK_DIR
+# уже на /opt, значит и prefetch уйдёт на USB, а не в переполненный /tmp
+# (Codex 2026-05-28: иначе fallback неполный — большие списки всё равно
+# стейджатся в tmpfs и install падает в том самом low-/tmp сценарии).
+local _stage_base="${WORK_DIR:-/tmp/z2k}"
+mkdir -p "$_stage_base" 2>/dev/null
+local _prefetch_dir="${_stage_base}/prefetch-lists.$$"
+rm -rf "$_prefetch_dir"
+mkdir -p "$_prefetch_dir" || die "Не удалось создать staging директорию ${_prefetch_dir}"
+local _hostlist _src_work _stage_dst
+for _hostlist in \
+    files/lists/extra_strats/TCP/YT/List.txt \
+    files/lists/extra_strats/TCP/YT_GV/List.txt \
+    files/lists/extra_strats/TCP/RKN/List.txt \
+    files/lists/extra_strats/UDP/YT/List.txt; do
+    _src_work="${WORK_DIR}/${_hostlist}"
+    # Encode path into a flat filename: extra_strats__TCP__YT__List.txt etc.
+    # Avoids nested mkdir noise в staging dir; full path хранится в map ниже.
+    _stage_dst="${_prefetch_dir}/$(printf '%s' "${_hostlist#files/lists/}" | tr '/' '_')"
+    if [ -s "$_src_work" ]; then
+        cp -f "$_src_work" "$_stage_dst" 2>/dev/null
+    fi
+    if [ ! -s "$_stage_dst" ]; then
+        if command -v z2k_fetch >/dev/null 2>&1; then
+            z2k_fetch "/${_hostlist}" "$_stage_dst" 2>/dev/null
+            rm -f "${_stage_dst}.etag" 2>/dev/null
+        fi
+    fi
+    if [ ! -s "$_stage_dst" ]; then
+        rm -rf "$_prefetch_dir"
+        die "Pre-flight: критичный hostlist ${_hostlist} не доступен ни из WORK_DIR, ни через GitHub fallback (raw/jsdelivr/gh-proxy). Установка прервана БЕЗ удаления существующей копии — проверьте интернет/DNS/CDN и запустите снова. Текущая установка не тронута."
+    fi
+done
+# Same for non-critical Discord.txt — staging без fail (warning later).
+local _src_discord="${WORK_DIR}/files/lists/extra_strats/TCP/RKN/Discord.txt"
+local _stage_discord="${_prefetch_dir}/extra_strats_TCP_RKN_Discord.txt"
+if [ -s "$_src_discord" ]; then
+    cp -f "$_src_discord" "$_stage_discord" 2>/dev/null
+fi
+if [ ! -s "$_stage_discord" ] && command -v z2k_fetch >/dev/null 2>&1; then
+    z2k_fetch "/files/lists/extra_strats/TCP/RKN/Discord.txt" "$_stage_discord" 2>/dev/null
+    rm -f "${_stage_discord}.etag" 2>/dev/null
+fi
+export Z2K_PREFETCH_LISTS_DIR="$_prefetch_dir"
+}
+
 step_build_zapret2() {
     print_header "Шаг 5/12: Установка zapret2"
 
-    # Pre-flight hostlist availability check. Stage critical snapshots в /tmp
-    # BEFORE мы трогаем ${ZAPRET2_DIR} — если ни WORK_DIR ни GitHub-fallback
-    # не доступны, прерываем install ДО `rm -rf` чтобы рабочая установка
-    # юзера не превратилась в полу-сломанный остаток. Codex review 2026-05-27
-    # flagged предыдущую логику: deploy_critical_file → die после rm -rf
-    # оставлял router в un-restorable состоянии. Эта стадия — read-only:
-    # на failure ничего не модифицирует, только cleanup'ит свой /tmp dir.
-    # Staging под WORK_DIR: при USB-fallback (Z2K_WORKDIR_ON_OPT=1) WORK_DIR
-    # уже на /opt, значит и prefetch уйдёт на USB, а не в переполненный /tmp
-    # (Codex 2026-05-28: иначе fallback неполный — большие списки всё равно
-    # стейджатся в tmpfs и install падает в том самом low-/tmp сценарии).
-    local _stage_base="${WORK_DIR:-/tmp/z2k}"
-    mkdir -p "$_stage_base" 2>/dev/null
-    local _prefetch_dir="${_stage_base}/prefetch-lists.$$"
-    rm -rf "$_prefetch_dir"
-    mkdir -p "$_prefetch_dir" || die "Не удалось создать staging директорию ${_prefetch_dir}"
-    local _hostlist _src_work _stage_dst
-    for _hostlist in \
-        files/lists/extra_strats/TCP/YT/List.txt \
-        files/lists/extra_strats/TCP/YT_GV/List.txt \
-        files/lists/extra_strats/TCP/RKN/List.txt \
-        files/lists/extra_strats/UDP/YT/List.txt; do
-        _src_work="${WORK_DIR}/${_hostlist}"
-        # Encode path into a flat filename: extra_strats__TCP__YT__List.txt etc.
-        # Avoids nested mkdir noise в staging dir; full path хранится в map ниже.
-        _stage_dst="${_prefetch_dir}/$(printf '%s' "${_hostlist#files/lists/}" | tr '/' '_')"
-        if [ -s "$_src_work" ]; then
-            cp -f "$_src_work" "$_stage_dst" 2>/dev/null
-        fi
-        if [ ! -s "$_stage_dst" ]; then
-            if command -v z2k_fetch >/dev/null 2>&1; then
-                z2k_fetch "/${_hostlist}" "$_stage_dst" 2>/dev/null
-                rm -f "${_stage_dst}.etag" 2>/dev/null
-            fi
-        fi
-        if [ ! -s "$_stage_dst" ]; then
-            rm -rf "$_prefetch_dir"
-            die "Pre-flight: критичный hostlist ${_hostlist} не доступен ни из WORK_DIR, ни через GitHub fallback (raw/jsdelivr/gh-proxy). Установка прервана БЕЗ удаления существующей копии — проверьте интернет/DNS/CDN и запустите снова. Текущая установка не тронута."
-        fi
-    done
-    # Same for non-critical Discord.txt — staging без fail (warning later).
-    local _src_discord="${WORK_DIR}/files/lists/extra_strats/TCP/RKN/Discord.txt"
-    local _stage_discord="${_prefetch_dir}/extra_strats_TCP_RKN_Discord.txt"
-    if [ -s "$_src_discord" ]; then
-        cp -f "$_src_discord" "$_stage_discord" 2>/dev/null
-    fi
-    if [ ! -s "$_stage_discord" ] && command -v z2k_fetch >/dev/null 2>&1; then
-        z2k_fetch "/files/lists/extra_strats/TCP/RKN/Discord.txt" "$_stage_discord" 2>/dev/null
-        rm -f "${_stage_discord}.etag" 2>/dev/null
-    fi
-    export Z2K_PREFETCH_LISTS_DIR="$_prefetch_dir"
+    # Хостлисты в staging ДО первого изменения дерева. Отдельной функцией:
+    # см. step_prefetch_hostlists — там же объяснено, почему шов проходит
+    # именно здесь.
+    step_prefetch_hostlists || return 1
+
 
     # Спасти настройки из недостроенной прошлой установки.
     #
@@ -1513,7 +1618,18 @@ step_build_zapret2() {
 
     # Создать временную директорию для распаковки tarball. Под staging base
     # (= WORK_DIR): при USB-fallback уходит на /opt, не в переполненный /tmp.
-    local build_dir="${_stage_base:-/tmp}/zapret2_build"
+    # Staging base считаем ЗДЕСЬ, а не полагаемся на переменную соседней фазы.
+    #
+    # До выноса step_prefetch_hostlists `_stage_base` была local этой функции, и
+    # обе фазы видели одно значение. После выноса она стала local вынесенной —
+    # а здесь остался `${_stage_base:-/tmp}`, то есть тихий откат на /tmp. Это
+    # ровно тот сценарий, ради которого USB-фоллбэк и делался: на роутере с
+    # забитым tmpfs распаковка ушла бы в /tmp и упала бы по месту.
+    #
+    # Ловушка общая для любого выноса в shell: значение молча подменяется
+    # дефолтом вместо того, чтобы отсутствовать заметно.
+    local _stage_base="${WORK_DIR:-/tmp/z2k}"
+    local build_dir="${_stage_base}/zapret2_build"
     rm -rf "$build_dir"
     mkdir -p "$build_dir"
 
@@ -1538,6 +1654,19 @@ step_build_zapret2() {
     # everyone else got 1.5 s. Bump this together with the fork release.
     local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v1.0.4-z2k-r0/zapret2-v1.0.4-z2k-r0-openwrt-embedded.tar.gz"
     local openwrt_url=""
+
+    # Эталон install_bin.sh из ПРИКРЕПЛЁННОГО релиза (v1.0.4-z2k-r0).
+    #
+    # Этот скрипт исполняется от root сразу после распаковки, а апстримный
+    # sha256sum.txt его НЕ покрывает: там 46 записей, и все — на бинарники
+    # (binaries/<арка>/{ip2net,mdig,nfqws2}). То есть проверка целостности,
+    # которая у нас есть, обходит стороной единственный файл релиза, который мы
+    # запускаем как код.
+    #
+    # Пин обновляется ВМЕСТЕ с fallback_url выше — они меняются одним бампом.
+    # Пусто = проверка не применяется (путь отката, если апстрим начнёт
+    # публиковать сумму сам).
+    local install_bin_sha="524321c662d5f77feae034208e52a404bdc4286d2b779616e60f420b3b0d93f6"
 
     # Try the API via z2k_fetch (it triggers the layer-4 ndmc DNS
     # override on api.github.com if the host is poisoned by the user's
@@ -1627,7 +1756,25 @@ step_build_zapret2() {
     # Вызвать install_bin.sh для автоматической установки бинарников
     print_info "Запуск официального install_bin.sh..."
 
-    if sh install_bin.sh; then
+    # Сверяем ПЕРЕД запуском. Не совпало — не запускаем: ниже есть ручная
+    # раскладка бинарников, она делает то же самое нашими руками. Отказ здесь
+    # означает «релиз не тот, что мы прикрепили», и запускать его от root
+    # на основании того, что архив как-то распаковался, нельзя.
+    _ib_ok=1
+    if [ -n "$install_bin_sha" ]; then
+        _ib_got=$(z2k_sha256_file install_bin.sh 2>/dev/null)
+        if [ -z "$_ib_got" ]; then
+            print_warning "Нечем посчитать sha256 — install_bin.sh запускается без проверки"
+        elif [ "$_ib_got" != "$install_bin_sha" ]; then
+            print_error "install_bin.sh не совпал с эталоном прикреплённого релиза"
+            print_info "Ожидали ${install_bin_sha}"
+            print_info "Получили ${_ib_got}"
+            print_info "Запускать его от root не будем — раскладываю бинарники вручную."
+            _ib_ok=0
+        fi
+    fi
+
+    if [ "$_ib_ok" = "1" ] && sh install_bin.sh; then
         print_success "Бинарники установлены через install_bin.sh"
     else
         print_error "install_bin.sh завершился с ошибкой"
@@ -3426,6 +3573,16 @@ step_finalize() {
     # broken. Carrying the roots removes that dependency entirely.
     mkdir -p "${ZAPRET2_DIR}/etc" 2>/dev/null
     deploy_critical_file "files/etc/z2k-roots.pem"               "${ZAPRET2_DIR}/etc/z2k-roots.pem" || return 1
+
+    # Публичный ключ, которым проверяется подпись манифеста обновлений.
+    #
+    # critical, а не best-effort: без него автообновление на коробке с уже
+    # защёлкнутым храповиком встанет наглухо (см. au_fetch_manifest — «подпись
+    # уже принималась, а проверить нечем» это отказ, и правильно). Ключ
+    # публичный, секрета в нём нет — секретна только приватная половина, и она
+    # в репозиторий не попадает никогда.
+    z2k_guard_key_swap || return 1
+    deploy_critical_file "files/etc/z2k-update-pub.pem"          "${ZAPRET2_DIR}/etc/z2k-update-pub.pem" || return 1
     deploy_critical_file "files/init.d/S98tg-tunnel"             "/opt/etc/init.d/S98tg-tunnel" || return 1
     deploy_critical_file "files/ndm/90-z2k-tg-redirect.sh"        "/opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh" || return 1
     print_success "Keenetic NDM hook установлен (auto-restore iptables)"
@@ -3447,6 +3604,10 @@ step_finalize() {
     # nfqws2 is up but its NFQUEUE rules are gone (boot-race WAN-skip / NDM wipe).
     # Soft deploy — a missing self-heal only loses the safety net, not core bypass.
     deploy_critical_file "files/z2k-nfqueue-selfheal.sh"          "/opt/zapret2/z2k-nfqueue-selfheal.sh" || print_warning "nfq-selfheal: deploy failed (NFQUEUE auto-recovery disabled)"
+
+    # Сторож детектора блокировок. Планировщик дёргает его раз в минуту. Мягкий
+    # деплой: без сторожа теряется только страховка, обход от detect не зависит.
+    deploy_critical_file "files/z2k-detect-watchdog.sh"           "/opt/zapret2/z2k-detect-watchdog.sh" || print_warning "detect-watchdog: deploy failed (автоподъём детектора отключён)"
 
     # tpws youtube layer REMOVED as a feature (2026-06-08): with fastnat=0 the
     # native nfqws2 bypass works on offloaded flows. Sweep any tpws left over

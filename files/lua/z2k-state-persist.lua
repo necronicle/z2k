@@ -185,7 +185,23 @@ local function acquire_lock(path)
     local content = lf_ts:read("*a")
     lf_ts:close()
     local lock_time = tonumber(content)
-    if lock_time and (now_t() - lock_time) > 10 then
+    local now = now_t()
+    if not lock_time then
+      -- Пустой или нечисловой lockfile. Замок создаётся и заполняется ДВУМЯ
+      -- операциями (io.open ниже, затем lf:write), и процесс, убитый между
+      -- ними — а OOM здесь штатное явление — оставляет файл нулевой длины.
+      -- Раньше tonumber("") давал nil, условие протухания было ложным, и мы
+      -- уходили в "держит другой писатель". Навсегда: файл лежит на /opt и
+      -- переживает перезагрузку, то есть персист умирал молча и необратимо.
+      -- Незаполненный замок владельца не имеет — забираем.
+      os.remove(lockfile)
+    elseif lock_time > now + 10 then
+      -- Метка из будущего: часы уехали вперёд и потом вернулись (на Keenetic
+      -- после power-loss это обычное дело — NTP подтягивает время уже после
+      -- старта). По разнице такой замок не протухнет никогда, поэтому судим
+      -- по несуразности самой метки, а не по возрасту.
+      os.remove(lockfile)
+    elseif (now - lock_time) > 10 then
       os.remove(lockfile)        -- stale (>10s) → steal
     else
       return nil, lockfile       -- fresh → another writer holds it

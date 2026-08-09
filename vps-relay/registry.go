@@ -55,9 +55,14 @@ type regEntry struct {
 }
 
 type registry struct {
-	mu   sync.RWMutex
-	m    map[string]*regEntry
-	path string
+	mu sync.RWMutex
+	m  map[string]*regEntry
+	// writeMu сериализует записи на диск между собой. Берётся ещё под rg.mu
+	// и отпускается после записи, поэтому порядок «сначала смаршалили —
+	// потом записали» сохраняется: снимок, сделанный раньше, и ляжет раньше.
+	// Порядок захвата всегда rg.mu → writeMu, инверсии быть не может.
+	writeMu sync.Mutex
+	path    string
 }
 
 var reg *registry
@@ -80,27 +85,53 @@ func initRegistry(path string) {
 	log.Printf("registry: loaded %d install identities from %s", len(m), path)
 }
 
+// get returns a COPY of the entry, never the pointer the map holds.
+//
+// Returning the pointer was a data race on the one field that matters:
+// setRevoked mutates e.Revoked under the write lock, while the auth hot path
+// read e.Revoked and e.Pubkey after get() had already released the read lock.
+// -race flags it, and in production it means a revocation may simply not be
+// seen by a connection authenticating at that moment — the kill-switch failing
+// exactly when it is being used. reload() has the same shape: it swaps the map
+// under the lock, leaving any escaped pointer aliasing a discarded entry.
+//
+// The struct is three small fields, so copying costs nothing measurable on a
+// path that is already doing Ed25519 verification.
 func (rg *registry) get(id string) *regEntry {
 	rg.mu.RLock()
 	defer rg.mu.RUnlock()
-	return rg.m[id]
+	e := rg.m[id]
+	if e == nil {
+		return nil
+	}
+	cp := *e
+	return &cp
 }
 
 // upsert records a new identity. Mint-once: an existing id with a DIFFERENT
 // pubkey is rejected (prevents a thief re-binding someone else's install_id).
 // Returns (created bool, ok bool).
 func (rg *registry) upsert(id, pubkey string) (bool, bool) {
-	rg.mu.Lock()
-	defer rg.mu.Unlock()
-	if e, exists := rg.m[id]; exists {
-		if e.Pubkey != pubkey {
-			return false, false // id taken by a different key — reject
+	var flush func()
+	created, ok := func() (bool, bool) {
+		rg.mu.Lock()
+		defer rg.mu.Unlock()
+		if e, exists := rg.m[id]; exists {
+			if e.Pubkey != pubkey {
+				return false, false // id taken by a different key — reject
+			}
+			return false, true // idempotent re-register
 		}
-		return false, true // idempotent re-register
+		rg.m[id] = &regEntry{Pubkey: pubkey, CreatedAt: time.Now().Unix()}
+		flush = rg.persistLocked()
+		return true, true
+	}()
+	// Запись на диск — уже без rg.mu, чтобы аутентификация живых туннелей
+	// не ждала ввода-вывода.
+	if flush != nil {
+		flush()
 	}
-	rg.m[id] = &regEntry{Pubkey: pubkey, CreatedAt: time.Now().Unix()}
-	rg.persistLocked()
-	return true, true
+	return created, ok
 }
 
 // setRevoked поднимает или снимает флаг отзыва и сразу сохраняет файл.
@@ -111,17 +142,24 @@ func (rg *registry) upsert(id, pubkey string) (bool, bool) {
 // правка не читалась, и первая же успешная регистрация переписывала файл из
 // памяти и молча её стирала.
 func (rg *registry) setRevoked(id string, v bool) bool {
-	rg.mu.Lock()
-	defer rg.mu.Unlock()
-	e := rg.m[id]
-	if e == nil {
-		return false
+	var flush func()
+	found := func() bool {
+		rg.mu.Lock()
+		defer rg.mu.Unlock()
+		e := rg.m[id]
+		if e == nil {
+			return false
+		}
+		if e.Revoked != v {
+			e.Revoked = v
+			flush = rg.persistLocked()
+		}
+		return true
+	}()
+	if flush != nil {
+		flush()
 	}
-	if e.Revoked != v {
-		e.Revoked = v
-		rg.persistLocked()
-	}
-	return true
+	return found
 }
 
 // reload перечитывает реестр с диска, не перезапуская релей. Перезапуск рвёт
@@ -159,24 +197,42 @@ func (rg *registry) revokedIDs() []string {
 	return out
 }
 
-// persistLocked writes the registry atomically (temp + rename). Caller holds mu.
-func (rg *registry) persistLocked() {
+// persistLocked маршалит реестр ПОД замком (иначе гонка на карте), а вот
+// саму запись на диск отдаёт наружу — уже без замка.
+//
+// Раньше здесь под эксклюзивным rg.mu делалось всё: marshal, WriteFile, Rename.
+// А на том же мьютексе сидит горячий путь аутентификации (get берёт RLock).
+// То есть каждая регистрация придерживала аутентификацию ВСЕХ живых туннелей
+// на время синхронной записи файла целиком. При 1551 записи это доли
+// миллисекунды и никого не задевает — но общий секрет публичен, а значит
+// чеканка личностей доступна кому угодно: реестр растёт, запись замедляется,
+// и дешёвый флуд по /register превращается в остановку аутентификации всему
+// парку. Ротация секрета этого не лечит, лечит вот это разделение.
+//
+// Вызывающий обязан держать rg.mu. Возвращённая функция вызывается ПОСЛЕ
+// снятия замка; nil означает «писать нечего».
+func (rg *registry) persistLocked() func() {
 	if rg.path == "" {
-		return
+		return nil
 	}
-	_ = os.MkdirAll(filepath.Dir(rg.path), 0o700)
-	tmp := rg.path + ".tmp"
 	data, err := json.Marshal(rg.m)
 	if err != nil {
 		log.Printf("registry: marshal: %v", err)
-		return
+		return nil
 	}
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		log.Printf("registry: write %s: %v", tmp, err)
-		return
-	}
-	if err := os.Rename(tmp, rg.path); err != nil {
-		log.Printf("registry: rename %s: %v", rg.path, err)
+	path := rg.path
+	rg.writeMu.Lock()
+	return func() {
+		defer rg.writeMu.Unlock()
+		_ = os.MkdirAll(filepath.Dir(path), 0o700)
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			log.Printf("registry: write %s: %v", tmp, err)
+			return
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			log.Printf("registry: rename %s: %v", path, err)
+		}
 	}
 }
 
@@ -301,6 +357,47 @@ func lastIndexByte(s string, b byte) int {
 	return -1
 }
 
+// --------------------------------------------- бюджет чеканки личностей ---
+//
+// Ограничитель частоты выше считает по АДРЕСУ: 30 регистраций в минуту с одного.
+// Против ботнета это ничего не значит — тысяча адресов даёт тысячу бюджетов, а
+// каждая чеканка раздувает реестр, который переписывается целиком при каждой
+// записи. То есть дешёвый распределённый флуд превращается в остановку
+// аутентификации всему парку.
+//
+// Здесь считается ГЛОБАЛЬНОЕ число новых установок в скользящем часе. Это не
+// отсечка: молча отказывать в регистрации нельзя — так мы обрежем настоящий
+// наплыв после публикации релиза. Это АЛАРМ: превышение попадает в лог один раз
+// за окно, чтобы владелец увидел происходящее и решил сам.
+//
+// Порог с запасом над реальностью: за сутки наблюдения новых установок было 4.
+var (
+	mintMu       sync.Mutex
+	mintWindow   time.Time
+	mintCount    int
+	mintAlarmed  bool
+	mintAlarmPer = flag.Int("mint-alarm-per-hour", 200,
+		"сколько новых установок в час считать аномалией (только запись в лог)")
+)
+
+// noteMint учитывает одну ЧЕКАНКУ (создание новой личности, не повторную
+// регистрацию той же) и сообщает, надо ли поднять тревогу.
+func noteMint(now time.Time) (count int, alarm bool) {
+	mintMu.Lock()
+	defer mintMu.Unlock()
+	if now.Sub(mintWindow) >= time.Hour {
+		mintWindow = now
+		mintCount = 0
+		mintAlarmed = false
+	}
+	mintCount++
+	if *mintAlarmPer > 0 && mintCount >= *mintAlarmPer && !mintAlarmed {
+		mintAlarmed = true
+		return mintCount, true
+	}
+	return mintCount, false
+}
+
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -329,31 +426,62 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !okAuth && *secretPrev != "" {
 		okAuth = subtle.ConstantTimeCompare([]byte(hsig(*secretPrev)), []byte(got)) == 1
 	}
+	// Отказы регистрации ЛОГИРУЕМ. Раньше здесь стоял молчаливый 401, и это
+	// стоило дорого: когда включили --require-per-install, старые установки
+	// начали отваливаться, а понять, кто именно долбится в релей — наши
+	// пользователи с протухшим секретом или чужой проект, взявший наш публичный
+	// бинарник, — было НЕЧЕМ. В журнале за сутки не нашлось ни одной строки об
+	// отказах регистрации при десятках тысяч отвергнутых туннелей.
+	//
+	// install_id вытаскиваем даже из неавторизованного тела: сам по себе он не
+	// секрет, а именно он отвечает на вопрос «свой или чужой» — знакомый
+	// идентификатор из реестра значит наш, незнакомый значит чужой.
 	if !okAuth {
+		idHint := "-"
+		var peek registerReq
+		if json.Unmarshal(body, &peek) == nil && validInstallID(peek.InstallID) {
+			if reg.get(peek.InstallID) != nil {
+				idHint = peek.InstallID + " (ЗНАКОМЫЙ — есть в реестре)"
+			} else {
+				idHint = peek.InstallID + " (неизвестный)"
+			}
+		}
+		log.Printf("register REJECTED: bad secret from %s install=%s", ip, idHint)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	var req registerReq
 	if err := json.Unmarshal(body, &req); err != nil {
+		log.Printf("register REJECTED: bad json from %s", ip)
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
 	if !validInstallID(req.InstallID) {
+		log.Printf("register REJECTED: bad install_id from %s", ip)
 		http.Error(w, "bad install_id", http.StatusBadRequest)
 		return
 	}
 	pub, err := base64.StdEncoding.DecodeString(req.Pubkey)
 	if err != nil || !validEd25519Pubkey(pub) {
+		log.Printf("register REJECTED: bad pubkey from %s install=%s", ip, req.InstallID)
 		http.Error(w, "bad pubkey", http.StatusBadRequest)
 		return
 	}
 	created, ok := reg.upsert(req.InstallID, req.Pubkey)
 	if !ok {
+		// Ключ разошёлся с тем, что в реестре: у клиента перевыпустилась
+		// личность (снесли /opt, сбросили состояние), а install_id прежний.
+		log.Printf("register REJECTED: install_id taken (pubkey mismatch) from %s install=%s", ip, req.InstallID)
 		http.Error(w, "install_id taken", http.StatusConflict)
 		return
 	}
 	if created {
 		log.Printf("register: new install %s from %s", req.InstallID, ip)
+		if n, alarm := noteMint(time.Now()); alarm {
+			log.Printf("ВНИМАНИЕ: %d новых установок за час — похоже на массовую чеканку личностей. "+
+				"Реестр растёт, а он переписывается целиком при каждой записи; "+
+				"смотрите распределение адресов в сводке install-snapshot.", n)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true}`))

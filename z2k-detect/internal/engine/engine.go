@@ -144,6 +144,15 @@ func Run(ctx context.Context, cfg Config) error {
 	// daemon restart.
 	go st.skipReloadLoop(ctx, cfg)
 
+	// Evict expired cooldown entries. Everything older than ProbeCooldown
+	// is dead weight by definition — the useful working set is whatever
+	// was probed in the last few minutes, i.e. tens of entries. Without
+	// this the map only grew: a household resolving 30-100k unique names a
+	// month keeps every one of them forever, and a Go map never shrinks
+	// even after delete, so the high-water mark is permanent. On a 64 MB
+	// router that is not academic.
+	go st.cooldownEvictLoop(ctx, cfg.ProbeCooldown)
+
 	events, srcErrs := cfg.DNSSource.Start(ctx)
 
 	for {
@@ -168,7 +177,15 @@ func Run(ctx context.Context, cfg Config) error {
 			if ev.Domain == "" {
 				continue
 			}
-			if !st.shouldProbe(ev.Domain, cfg.ProbeCooldown) {
+			// Validate BEFORE the cooldown map is touched. In pkt mode we
+			// see the DNS traffic of the whole LAN, so a DGA-infected
+			// device feeds us unbounded garbage; letting invalid names
+			// take cooldown slots means the map grows on input we were
+			// never going to probe anyway.
+			if err := prober.Validate(ev.Domain); err != nil {
+				continue
+			}
+			if !st.eligible(ev.Domain, cfg.ProbeCooldown) {
 				continue
 			}
 			// Fire-and-forget probe. Semaphore caps concurrency; if
@@ -176,36 +193,84 @@ func Run(ctx context.Context, cfg Config) error {
 			// over completeness.
 			select {
 			case sem <- struct{}{}:
+				// Commit the cooldown slot only once the probe is
+				// actually going to run. Recording it before the
+				// semaphore meant a dropped observation still burned
+				// the full ProbeCooldown: the comment below promised
+				// the domain "will be picked up on the next request",
+				// but the next request hit the cooldown and was
+				// dropped too. The semaphore saturates on every first
+				// load of an unfamiliar site (20-40 names in ~2s
+				// against ~1.3-2.7 probes/s), so this was the common
+				// path, not the corner case — a blocked site took up
+				// to ProbeCooldown to be noticed instead of one reload.
+				st.markProbed(ev.Domain)
 				go func(d string) {
 					defer func() { <-sem }()
 					st.probeAndPublish(ctx, d, cfg)
 				}(ev.Domain)
 			default:
-				// Semaphore full — drop this observation, the same
-				// domain will reappear on the next client request and
-				// be picked up then.
+				// Semaphore full — drop this observation without
+				// burning the cooldown, so the same domain is retried
+				// on the next client request.
 			}
 		}
 	}
 }
 
-// shouldProbe returns false when the domain is already bypassed, covered
-// by a skip-list, or in cooldown. Mutates cooldown[domain] on return-true
-// to commit the slot before we release the lock.
-func (s *state) shouldProbe(domain string, cooldown time.Duration) bool {
+// eligible reports whether the domain is worth probing: not already
+// bypassed, not covered by the skip-list, not in cooldown. It does NOT
+// mutate state — the caller commits the slot with markProbed once it has
+// a semaphore slot, so an observation we drop does not silence the domain
+// for a full ProbeCooldown.
+func (s *state) eligible(domain string, cooldown time.Duration) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.bypassed[domain]; ok {
 		return false
 	}
-	if _, ok := s.skipSet[domain]; ok {
+	if s.skippedLocked(domain) {
 		return false
 	}
 	if last, ok := s.cooldown[domain]; ok && time.Since(last) < cooldown {
 		return false
 	}
-	s.cooldown[domain] = time.Now()
 	return true
+}
+
+// markProbed commits the cooldown slot. Separate from eligible so the
+// window between "decided to probe" and "actually probing" cannot leave a
+// domain marked-but-never-probed.
+func (s *state) markProbed(domain string) {
+	s.mu.Lock()
+	s.cooldown[domain] = time.Now()
+	s.mu.Unlock()
+}
+
+// skippedLocked reports whether the domain is covered by the skip-list.
+// Caller must hold s.mu.
+//
+// Matching is by SUFFIX, not by exact string. nfqws2 hostlists are suffix
+// lists — an entry "googlevideo.com" is understood by the engine to cover
+// "rr3---sn-4g5e6nez.googlevideo.com". Exact matching meant every unique
+// subdomain of an explicitly-excluded domain was still probed and still
+// took a cooldown slot; on a video-heavy household that is the bulk of
+// both the probe traffic and the map growth, all of it against names the
+// operator had already said to leave alone.
+func (s *state) skippedLocked(domain string) bool {
+	if _, ok := s.skipSet[domain]; ok {
+		return true
+	}
+	// Walk the parent labels: a.b.example.com -> b.example.com -> example.com
+	for i := 0; i < len(domain); i++ {
+		if domain[i] != '.' {
+			continue
+		}
+		if _, ok := s.skipSet[domain[i+1:]]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // probeAndPublish runs one probe and appends to PublishPath iff the
@@ -328,6 +393,44 @@ func (s *state) skipReloadLoop(ctx context.Context, cfg Config) {
 			s.reloadSkipSet(cfg.SkipPaths)
 		}
 	}
+}
+
+// cooldownEvictLoop drops cooldown entries older than the cooldown window.
+//
+// Sweep cadence is the cooldown itself (floored at a minute so a
+// pathological config cannot spin): every entry is then at most one extra
+// window old before it goes, which bounds the map at "domains seen in the
+// last two windows" instead of "every domain ever seen".
+func (s *state) cooldownEvictLoop(ctx context.Context, cooldown time.Duration) {
+	every := cooldown
+	if every < time.Minute {
+		every = time.Minute
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.evictCooldown(cooldown)
+		}
+	}
+}
+
+// evictCooldown removes entries whose cooldown has expired. Split out from
+// the loop so it is testable without a clock.
+func (s *state) evictCooldown(cooldown time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for d, last := range s.cooldown {
+		if time.Since(last) >= cooldown {
+			delete(s.cooldown, d)
+			n++
+		}
+	}
+	return n
 }
 
 func readHostlist(path string, out map[string]struct{}) {
