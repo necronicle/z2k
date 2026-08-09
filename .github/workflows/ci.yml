@@ -348,7 +348,9 @@ jobs:
             # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
             env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
               go build -trimpath -ldflags="-s -w" -o /dev/null "$pkg" || rc=1
-          done < build-matrix.tsv
+          # Шаг выполняется внутри каталога модуля (working-directory), а
+          # матрица лежит в корне — путь абсолютный, иначе «No such file».
+          done < "$GITHUB_WORKSPACE/build-matrix.tsv"
           exit $rc
 
   binaries:
