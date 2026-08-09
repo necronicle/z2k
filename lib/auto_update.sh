@@ -624,8 +624,9 @@ au_install_paths() {
             ;;
         webpanel/lighttpd.conf)
             # Generated at install time from a template with @PORT@/@BIND@
-            # substitution. Patch can't easily re-template it, so skip;
-            # if lighttpd.conf actually changes, ship as reinstall.
+            # substitution — see au_reinstall_required() below for the other
+            # half of this: patch can't re-template it, so a plain "no target
+            # here" is not enough, changing it must force a reinstall release.
             : ;;
         tests/*)
             : # tests are dev/CI artifacts; not shipped to runtime.
@@ -633,6 +634,47 @@ au_install_paths() {
         *)
             : # no runtime target
             ;;
+    esac
+}
+
+# repo path -> "1" if a patch release cannot deliver a change to it at all,
+# and reinstall is the ONLY route. Empty otherwise (includes paths with no
+# runtime target whatsoever, e.g. tests/, scripts/ — those are not "needs
+# reinstall", they're "never shipped").
+#
+# WHY THIS IS SEPARATE FROM au_install_paths(). An empty au_install_paths()
+# result is ambiguous on its own: it means either "this repo path has no
+# runtime existence at all" (tests/, scripts/, docs — safe to ignore) or "this
+# DOES reach the router, but only via a step that a patch cannot repeat"
+# (an install-time generator, an arch-specific binary, a build-time template).
+# scripts/release.sh used to special-case each of the second kind by hand as
+# they were found (mtproxy-client, then z2k-detect/z2k-verify, then
+# lib/config_official.sh/strategies.sh) — and exactly that pattern is how
+# webpanel/lighttpd.conf slipped through: it carries a comment right above,
+# "if lighttpd.conf actually changes, ship as reinstall", and nothing ever
+# read that comment. A single table that release.sh actually consults closes
+# the whole class at once instead of one more special case at a time.
+au_reinstall_required() {
+    local repo_path="$1"
+    case "$repo_path" in
+        */builds/*)
+            # Arch-specific binaries. au_install_paths() has no target for
+            # them at all (the target depends on the router's architecture),
+            # so a patch would not deliver them — it would silently drop them
+            # from changed_files while the version number moves forward.
+            echo 1 ;;
+        lib/config_official.sh|lib/strategies.sh)
+            # Install-time generators: their code runs exactly once, during
+            # step_create_config_and_init, and the result (config,
+            # extra_strats/*/Strategy.txt) is written to disk as plain files.
+            # A patch overwrites the .sh source but does not re-run it — an
+            # already-installed router keeps the old generated output.
+            echo 1 ;;
+        webpanel/lighttpd.conf)
+            # Templated with @PORT@/@BIND@ substitution at install time
+            # (webpanel/install.sh). A patch has no re-templating step, so it
+            # would overwrite nothing and the router keeps the stale config.
+            echo 1 ;;
     esac
 }
 

@@ -51,45 +51,52 @@ else
     no "доставляемость проверяется через au_install_paths" "проверки нет"
 fi
 
-# 3) ЛЮБОЙ бинарник доставляется только реинсталлом.
-#
-#    Цели в au_install_paths у бинарников нет, поэтому патч не доставит их
-#    вовсе: файл выпадет из changed_files, а версия уедет вперёд — «старый код
-#    под новым номером», которое снаружи не опознать.
-#
-#    Гейт обязан быть ПРАВИЛОМ, а не списком: раньше проверялся один
-#    mtproxy-client, и появившиеся позже z2k-detect с z2k-verify остались без
-#    него. Требуем, чтобы каталоги вычислялись из дерева.
-if grep -qE "grep -E .\^\[\^/\]\+/builds/" "$REL"; then
-    ok "гейт на бинарники вычисляет модули из дерева, а не перечисляет"
+# 3) ЛЮБОЙ путь, который патч доставить не может (арх-бинарники, install-time
+#    генераторы, install-time шаблоны), гейтится ОДНОЙ политикой —
+#    au_reinstall_required() в lib/auto_update.sh — а не разрозненными
+#    regex-ами прямо в release.sh, которые заводились по одному на находку
+#    (сперва только mtproxy-client, потом отдельно z2k-detect/z2k-verify,
+#    потом отдельно config_official.sh/strategies.sh — а webpanel/lighttpd.conf
+#    так и не попал ни в один из них, хотя комментарий рядом с ним прямо
+#    гласил "ship as reinstall"). Проверяем ПОВЕДЕНИЕ функции, а не текст
+#    скрипта — иначе тест сторожит формулировку, а не факт.
+if grep -q 'au_reinstall_required' "$REL"; then
+    ok "release.sh гейтит через единую au_reinstall_required(), а не свои regex-ы"
 else
-    no "гейт на бинарники вычисляет модули из дерева" "шаблон ^[^/]+/builds/" \
-       "перечисление — следующий модуль опять выпадет"
+    no "release.sh использует единую au_reinstall_required()" "вызов функции" "не найден"
 fi
 
-#    И каждый модуль с builds/ обязан этим гейтом накрываться. Шаблон берём ИЗ
-#    СКРИПТА, а не пишем копию: копия разошлась бы с оригиналом ровно так же,
-#    как разошлись списки модулей в трёх файлах CI.
-_pat=$(sed -n "s/.*grep -E '\\(\^[^']*\\)'.*builds.*/\\1/p" "$REL" | head -1)
-[ -n "$_pat" ] || _pat=$(grep -oE "\^\[\^/\]\+/builds/" "$REL" | head -1)
-if [ -z "$_pat" ]; then
-    no "шаблон гейта бинарников извлекаем из скрипта" "regex" "не найден"
-else
-    _uncovered=0
-    for _d in "$ROOT"/*/builds; do
-        [ -d "$_d" ] || continue
-        _mod=$(basename "$(dirname "$_d")")
-        if ! printf '%s/builds/z2k-x-linux-arm64\n' "$_mod" | grep -qE "$_pat"; then
-            printf '[FAIL] модуль %s не накрыт шаблоном гейта (%s)\n' "$_mod" "$_pat"
-            _uncovered=$((_uncovered + 1))
-        fi
-    done
-    if [ "$_uncovered" = "0" ]; then
-        ok "шаблон из скрипта накрывает все модули с builds/ ($_pat)"
+AU="$ROOT/lib/auto_update.sh"
+eval "$(awk '/^au_reinstall_required\(\) \{/,/^\}/' "$AU")"
+
+_covered=0; _total=0
+for _p in "mtproxy-client/builds/tg-mtproxy-client-linux-arm64" \
+          "z2k-detect/builds/z2k-detect-linux-mips" \
+          "lib/config_official.sh" \
+          "lib/strategies.sh" \
+          "webpanel/lighttpd.conf"; do
+    _total=$((_total + 1))
+    if [ -n "$(au_reinstall_required "$_p")" ]; then
+        _covered=$((_covered + 1))
     else
-        FAIL=$((FAIL + _uncovered))
+        printf '[FAIL] au_reinstall_required не накрывает %s\n' "$_p"
     fi
+done
+if [ "$_covered" = "$_total" ]; then
+    ok "au_reinstall_required накрывает бинарники ЛЮБОГО модуля, генераторы конфига/стратегий и шаблон lighttpd.conf ($_covered/$_total)"
+else
+    FAIL=$((FAIL + (_total - _covered)))
 fi
+
+# И не перехватывает то, что патчу доставлять положено штатно — иначе гейт
+# заставлял бы делать reinstall на каждую мелкую правку.
+for _p in "lib/auto_update.sh" "files/lua/z2k-detectors.lua" "webpanel/cgi/api.sh"; do
+    if [ -n "$(au_reinstall_required "$_p")" ]; then
+        no "au_reinstall_required не перехватывает штатно патчуемые пути" "пусто для $_p" "непусто"
+    else
+        ok "au_reinstall_required не трогает штатно патчуемый путь ($_p)"
+    fi
+done
 
 # 4) ref = уже существующий несущий коммит (HEAD), одним коммитом.
 #
@@ -139,16 +146,14 @@ else
     no "отсутствие/сбой ключа останавливает релиз" "die в обеих ветках" "не найдено"
 fi
 
-# 4б) Install-time генераторы (lib/config_official.sh, lib/strategies.sh)
-#     материализуются в config/Strategy.txt ОДИН РАЗ, при установке. Патч кладёт
-#     новый lib/*.sh на диск, но не перезапускает генерацию — уже установленный
-#     роутер живёт со старым результатом. Тот же класс бага, что и с builds/,
-#     только без diff в имени файла.
-if grep -qE "grep -E .\^lib/\(config_official\|strategies\)\\\\\.sh\\\$." "$REL"; then
-    ok "install-time генераторы (config_official.sh, strategies.sh) форсируют reinstall"
+# 4б) Покрытие каждого класса (генераторы, шаблон, бинарники) проверено выше
+#     поведенчески через au_reinstall_required(). Здесь — что сам гейт в
+#     release.sh условен на TYPE, а не абсолютный запрет менять эти пути.
+if grep -q '_reinstall_changed' "$REL" && grep -q '"\$TYPE" != "reinstall"' "$REL"; then
+    ok "гейт единой политики условен на TYPE=reinstall (снимается, не абсолютный запрет)"
 else
-    no "install-time генераторы форсируют reinstall" \
-       "гейт на lib/config_official.sh и lib/strategies.sh" "не найден"
+    no "гейт единой политики условен на TYPE=reinstall" \
+       "_reinstall_changed + проверка \$TYPE != reinstall" "не найдено"
 fi
 
 # 4в) Push — одной атомарной операцией. Два отдельных push оставляли окно, где

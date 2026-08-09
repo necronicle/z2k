@@ -194,7 +194,32 @@ jobs:
           if new["current"] != nh[-1]["v"]:
               print(f"::error::current='{new['current']}' не совпадает с последней записью history ('{nh[-1]['v']}')")
               sys.exit(1)
-          print(f"history цела: {len(oh)} -> {len(nh)} записей, current == history[-1].v")
+
+          # Форма проверена (префикс/count/current==v), теперь СОДЕРЖАНИЕ новой
+          # записи. Без этого версия могла бы повториться (роутер с
+          # installed_tag==current трактует это как "уже стоит" и не обновится
+          # — см. lib/auto_update.sh), а неполная запись (например, без
+          # changed_files) доехала бы до истории без единого доставляемого файла.
+          entry = nh[-1]
+          required = {"v": str, "type": str, "ts": str, "ref": str, "desc": str, "changed_files": list}
+          for key, typ in required.items():
+              if key not in entry:
+                  print(f"::error::новая запись history без обязательного поля '{key}'")
+                  sys.exit(1)
+              if not isinstance(entry[key], typ):
+                  print(f"::error::поле '{key}' новой записи history не {typ.__name__}")
+                  sys.exit(1)
+          if entry["type"] not in ("patch", "reinstall"):
+              print(f"::error::type='{entry['type']}' — должен быть patch или reinstall")
+              sys.exit(1)
+          if not entry["changed_files"]:
+              print("::error::changed_files пуст — релиз без единого доставляемого файла")
+              sys.exit(1)
+          versions_seen = [h["v"] for h in oh]
+          if entry["v"] in versions_seen:
+              print(f"::error::версия '{entry['v']}' уже встречалась в history — номер релиза нельзя переиспользовать")
+              sys.exit(1)
+          print(f"history цела: {len(oh)} -> {len(nh)} записей, current == history[-1].v, схема и уникальность версии в порядке")
           PYEOF
 
           # 5. Подпись. Проверяем ИМЕННО ТЕМ ключом, который лежит у людей

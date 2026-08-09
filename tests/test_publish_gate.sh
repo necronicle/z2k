@@ -217,6 +217,32 @@ else
     no "checkout явно тянет теги" "fetch-tags: true" "не найдено"
 fi
 
+# --- 6б. timeout-minutes у verify реально покрывает сумму внутренних дедлайнов -
+#
+# Поллинг по ветке и по тегу идут ПОСЛЕДОВАТЕЛЬНО в одной job. Каждый шаг сам
+# по себе укладывается в свой дедлайн, но GitHub убивает job по СУММЕ, а не по
+# отдельному шагу — job, добравшаяся до тег-проверки только к 24-й минуте при
+# лимите 25, будет убита посреди содержательной работы, и это будет выглядеть
+# как "job cancelled" безо всякой диагностики. Сверяем таймаут job с суммой
+# ВСЕХ дедлайнов, которые эта job проходит одну за другой, а не гоняем реальный
+# workflow_run (нельзя, см. шапку файла).
+_deadlines=$(grep -oE '\(started \+ [0-9]+\)|cdn_deadline=\$\(\( \$\(date \+%s\) \+ [0-9]+ \)\)' "$CDN" \
+             | grep -oE '[0-9]+' )
+_sig_retries=$(awk '/for i in 1 2 3 4 5 6 7 8 9 10;/{print}' "$CDN" | grep -oE '1 2 3 4 5 6 7 8 9 10' | wc -w)
+_sig_sleep=$(grep -A3 'sleep 20' "$CDN" | grep -oE 'sleep [0-9]+' | head -1 | grep -oE '[0-9]+')
+_sum=0
+for d in $_deadlines; do _sum=$((_sum + d)); done
+if [ -n "$_sig_retries" ] && [ -n "$_sig_sleep" ]; then
+    _sum=$((_sum + _sig_retries * _sig_sleep))
+fi
+_timeout_min=$(awk '/^  verify:/{f=1} f && /timeout-minutes:/{print $2; exit}' "$CDN")
+if [ -n "$_timeout_min" ] && [ -n "$_sum" ] && [ "$_sum" -gt "0" ] && [ $((_timeout_min * 60)) -gt "$_sum" ]; then
+    ok "timeout-minutes у verify ($_timeout_min мин) покрывает сумму внутренних дедлайнов (${_sum}с = $((_sum / 60))мин)"
+else
+    no "timeout-minutes покрывает сумму дедлайнов" \
+       "timeout*60 > сумма($_sum с)" "timeout=${_timeout_min:-?}мин, сумма=${_sum:-?}с"
+fi
+
 # --- 7. В release.sh не осталось обходимого гейта ------------------------------
 #
 # Старый гейт жил в скрипте и умел пропускаться переменной. Гейт, который можно
@@ -302,6 +328,56 @@ if grep -q 'new\["current"\] != nh\[-1\]\["v"\]' "$PUB"; then
 else
     no "gate требует current == history[-1].v" 'new["current"] != nh[-1]["v"]' "не найдено"
 fi
+
+# --- 11. Тот же преflight дублируется на staging, до publish.yml -------------
+#
+# workflow_run в publish.yml берёт САМ ФАЙЛ publish.yml с ветки по умолчанию,
+# не со staging (см. комментарий в самом publish.yml). Проверки тега и history
+# появились позже схемы публикации — первый релиз, которому они реально нужны,
+# попадёт под СТАРЫЙ publish.yml, где их ещё нет. До тех пор, пока кто-то не
+# проведёт хотя бы один релиз через обновлённый publish.yml, единственная
+# защита — копия этих же проверок на staging.
+if grep -q "refs/tags/\$NEW_CUR" "$CI" && grep -q 'git rev-list -n 1 "refs/tags/\$NEW_CUR"' "$CI"; then
+    ok "CI на staging проверяет существование и цель тега (не только publish.yml)"
+else
+    no "CI на staging проверяет тег" 'refs/tags/$NEW_CUR + rev-list' "не найдено"
+fi
+
+if grep -q "BEGIN SSH SIGNATURE" "$CI"; then
+    ok "CI на staging проверяет, что тег вообще подписан"
+else
+    no "CI на staging проверяет подпись тега" "BEGIN SSH SIGNATURE" "не найдено"
+fi
+
+if grep -q 'nh\[:len(oh)\] != oh' "$CI" && grep -q 'len(nh) != len(oh) + 1' "$CI"; then
+    ok "CI на staging дублирует семантический gate history (префикс + ровно одна запись)"
+else
+    no "CI на staging дублирует gate history" "та же логика, что в publish.yml" "не найдено"
+fi
+
+# --- 12. Версия не переиспользуется, новая запись полна по схеме -------------
+#
+# Семантический gate раньше проверял только форму (префикс/count/current==v),
+# но не содержание: номер версии мог повториться (роутер, уже видевший этот
+# номер, не обновится — installed_tag==current трактуется как "уже стоит"), а
+# запись могла не хватать поля вроде changed_files и патч разъехался бы молча.
+# Проверяем И publish.yml (настоящий гейт, решает он), И ci.yml (preflight на
+# staging) — слабее настоящего гейта preflight быть не должен.
+for _f_name in "publish.yml:$PUB" "ci.yml (preflight):$CI"; do
+    _label="${_f_name%%:*}"
+    _f="${_f_name#*:}"
+    if grep -q "entry\['v'\] in versions_seen" "$_f" || grep -q 'entry\["v"\] in versions_seen' "$_f"; then
+        ok "$_label: версия проверяется на переиспользование по всей history"
+    else
+        no "$_label: версия проверяется на переиспользование" "entry[\"v\"] in versions_seen" "не найдено"
+    fi
+
+    if grep -q 'required = {"v": str, "type": str, "ts": str, "ref": str, "desc": str, "changed_files": list}' "$_f"; then
+        ok "$_label: схема новой записи history проверяется по всем обязательным полям и типам"
+    else
+        no "$_label: схема новой записи проверяется полностью" "required = {v,type,ts,ref,desc,changed_files}" "не найдено"
+    fi
+done
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

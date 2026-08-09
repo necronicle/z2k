@@ -93,6 +93,10 @@ jobs:
           # changed_files. With the default shallow clone those commits are absent
           # and the check degrades to a skip — i.e. exactly no protection.
           fetch-depth: 0
+          # Тег-преflight ниже читает refs/tags/$NEW_CUR — без явного fetch-tags
+          # надежды на побочный эффект fetch-depth:0 не проверялись (см. тот же
+          # урок в jsdelivr-purge.yml).
+          fetch-tags: true
 
       - name: Install shellcheck and lua
         # lua is needed because tests/run_all.sh now picks up
@@ -210,6 +214,89 @@ jobs:
           fi
           echo "карта описывает дерево, подпись сходится"
 
+          # ПРЕФЛАЙТ ТЕГА И ИСТОРИИ — то же самое, что позже спросит publish.yml,
+          # но здесь, на staging, а не только на верхушке публикации.
+          #
+          # ЗАЧЕМ ДУБЛИРОВАТЬ. workflow_run в publish.yml берёт САМ ФАЙЛ
+          # publish.yml с ВЕТКИ ПО УМОЛЧАНИЮ (z2k-enhanced), а не со staging (см.
+          # комментарий в самом publish.yml). Проверки тега и целостности history
+          # там появились позже, чем сама схема публикации — значит первый же
+          # релиз, который их реально требует, ещё попадёт под СТАРЫЙ
+          # publish.yml, где этих проверок нет вовсе, пока кто-то не проведёт их
+          # через публикацию хотя бы раз (см. RELEASING.md про самый первый
+          # переход). До этого момента единственное место, где ошибка тега или
+          # порченной history вообще будет видна ДО публикации — вот этот шаг.
+          NEW_CUR="$_cur"
+          if ! git rev-parse -q --verify "refs/tags/$NEW_CUR" >/dev/null; then
+            echo "::error::нет тега $NEW_CUR — release.sh обязан был его поставить, а push --atomic — доставить"
+            exit 1
+          fi
+          _tgt=$(git rev-list -n 1 "refs/tags/$NEW_CUR")
+          if [ "$_tgt" != "$(git rev-parse HEAD)" ]; then
+            echo "::error::тег $NEW_CUR указывает на $_tgt, а не на этот коммит ($(git rev-parse HEAD))"
+            exit 1
+          fi
+          _ref=$(grep '^[[:space:]]*{"v":' UPDATES.json \
+                 | sed -n "s/.*\"v\"[[:space:]]*:[[:space:]]*\"${NEW_CUR}\".*\"ref\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1)
+          if [ "$_ref" != "$NEW_CUR" ]; then
+            echo "::error::ref в манифесте = '$_ref', а тег — '$NEW_CUR'"
+            exit 1
+          fi
+          # Сверка с КОНКРЕТНЫМ ключом (allowed-signers из опубликованного pub.pem)
+          # — работа publish.yml, не этого преflight'а: там это уже покрыто.
+          # Здесь достаточно факта, что тег вообще подписан — голый lightweight
+          # тег или битый annotated объект publish.yml отвергнет так же, только
+          # позже.
+          if ! git cat-file tag "$NEW_CUR" 2>/dev/null | grep -q 'BEGIN SSH SIGNATURE'; then
+            echo "::error::тег $NEW_CUR не подписан (или не annotated) — publish.yml его отвергнет"
+            exit 1
+          fi
+
+          python3 - "$_pub" <<'PYEOF'
+          import json, subprocess, sys
+          pub_ver = sys.argv[1]
+
+          def read(ref):
+              raw = subprocess.run(["git", "show", f"{ref}:UPDATES.json"],
+                                    capture_output=True, text=True, check=True).stdout
+              return json.loads(raw)
+
+          old = read("origin/z2k-enhanced")
+          new = read("HEAD")
+          oh, nh = old["history"], new["history"]
+
+          if nh[:len(oh)] != oh:
+              print("::error::history не является продолжением опубликованной — префикс изменён или переставлен")
+              sys.exit(1)
+          if len(nh) != len(oh) + 1:
+              print(f"::error::в history {len(nh) - len(oh)} новых записей вместо ровно одной")
+              sys.exit(1)
+          if new["current"] != nh[-1]["v"]:
+              print(f"::error::current='{new['current']}' не совпадает с последней записью history ('{nh[-1]['v']}')")
+              sys.exit(1)
+          entry = nh[-1]
+          required = {"v": str, "type": str, "ts": str, "ref": str, "desc": str, "changed_files": list}
+          for key, typ in required.items():
+              if key not in entry:
+                  print(f"::error::новая запись history без обязательного поля '{key}'")
+                  sys.exit(1)
+              if not isinstance(entry[key], typ):
+                  print(f"::error::поле '{key}' новой записи history не {typ.__name__}")
+                  sys.exit(1)
+          if entry["type"] not in ("patch", "reinstall"):
+              print(f"::error::type='{entry['type']}' — должен быть patch или reinstall")
+              sys.exit(1)
+          if not entry["changed_files"]:
+              print("::error::changed_files пуст — релиз без единого доставляемого файла")
+              sys.exit(1)
+          versions_seen = [h["v"] for h in oh]
+          if entry["v"] in versions_seen:
+              print(f"::error::версия '{entry['v']}' уже встречалась в history — номер релиза нельзя переиспользовать")
+              sys.exit(1)
+          print(f"тег/подпись/history: всё сходится, схема новой записи '{entry['v']}' полна")
+          PYEOF
+          echo "preflight тега и истории пройден (окончательное решение всё равно за publish.yml)"
+
   tests:
     name: Shell tests
     runs-on: ubuntu-latest
@@ -248,6 +335,32 @@ jobs:
           ref: z2k-master
           path: zapret2-z2k-fork
           persist-credentials: false
+
+      - name: Set up Go (for rt-proxy build-drift check below)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Build rt-proxy (so test_rt_proxy_binary_drift.sh has something to compare)
+        # rt-proxy/z2k-rt-proxy-linux-* — build output, не в git (см. заголовок
+        # test_rt_proxy_binary_drift.sh). На свежем checkout сравнивать было не с
+        # чем, и тест штатно уходил в SKIP на каждой из 5 архитектур — не баг, но
+        # и не проверка: тот же байт-в-байт уже честно идёт в job "binaries", а
+        # здесь только собираем ЛОКАЛЬНО ТЕ ЖЕ архитектуры, что перечисляет сам
+        # install.sh, чтобы drift-сравнение в тест-сьюте тоже реально выполнялось,
+        # а не молчаливо пропускалось при каждом прогоне CI.
+        run: |
+          set -eu
+          # shellcheck disable=SC2034 # bdir/prefix — поля общей схемы TSV, здесь не нужны
+          while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+            case "$mod" in ''|\#*) continue ;; esac
+            [ "$mod" = "rt-proxy" ] || continue
+            [ "$extra" = "-" ] && extra=""
+            # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+            ( cd rt-proxy && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+                go build -trimpath -buildvcs=false -ldflags="-s -w" -o "z2k-rt-proxy-linux-$sfx" "$pkg" )
+          done < build-matrix.tsv
 
       - name: Run shell unit tests
         # Z2K_FORK_DIR указывает на чекаут выше: тесты по умолчанию ищут форк

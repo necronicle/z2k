@@ -173,15 +173,41 @@ else
     no "отклонённый релиз (генератор) не трогает манифест" "без изменений" "манифест переписан"
 fi
 # TYPE=reinstall для того же диффа гейт снимает — проверяем СТАТИЧЕСКИ (что он
-# написан как `[ "$TYPE" != "reinstall" ]`, тот же вид, что и у гейта на
-# builds/), а не живым прогоном: живой прогон ушёл бы дальше, к шагу подписи,
-# который на этой машине может найти настоящий ключ владельца — тестам сюда
-# лезть незачем.
-if grep -B2 "config_official.*strategies" scripts/release.sh | grep -q 'TYPE.*!=.*reinstall' \
-    || awk '/_gen_changed=/,/^fi$/' scripts/release.sh | grep -q '"\$TYPE" != "reinstall"'; then
-    ok "гейт на генераторы условен на TYPE=reinstall (снимается, не абсолютный запрет)"
+# написан как `[ "$TYPE" != "reinstall" ]`), а не живым прогоном: живой прогон
+# ушёл бы дальше, к шагу подписи, который на этой машине может найти настоящий
+# ключ владельца — тестам сюда лезть незачем. Гейт теперь общий для всего
+# класса путей (au_reinstall_required), не только для генераторов — детальное
+# поведенческое покрытие каждого пути живёт в tests/test_release_script.sh.
+if awk '/_reinstall_changed=/,/^fi$/' scripts/release.sh | grep -q '"\$TYPE" != "reinstall"'; then
+    ok "единый гейт условен на TYPE=reinstall (снимается, не абсолютный запрет)"
 else
-    no "гейт на генераторы условен на TYPE=reinstall" '"$TYPE" != "reinstall"' "не найдено"
+    no "единый гейт условен на TYPE=reinstall" '"$TYPE" != "reinstall"' "не найдено"
+fi
+
+# --- property 5: mtproxy-client без Z2K_TUNNEL_SECRET не пересобрать и не свериться
+#
+# builds/mtproxy-client/* нельзя пересобрать байт-в-байт без настоящего
+# Z2K_TUNNEL_SECRET (см. -X main.defaultTunnelSecret в Makefile). Меняем файл
+# под mtproxy-client/builds/, ставим TYPE=reinstall (снимает builds/-гейт из
+# property "любой бинарник — reinstall") и явно НЕ задаём Z2K_TUNNEL_SECRET —
+# ожидаем отказ ИМЕННО про секрет, а не про тип релиза.
+printf 'junk-for-test\n' >> mtproxy-client/builds/tg-mtproxy-client-linux-amd64
+git add mtproxy-client/builds/tg-mtproxy-client-linux-amd64
+git commit -q -m "тест: правка mtproxy-бинарника"
+out=$(env -u Z2K_TUNNEL_SECRET sh scripts/release.sh r-9999.3 reinstall "тест: mtproxy без секрета" 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "release.sh отказывается собирать релиз с изменённым mtproxy-client без секрета"
+else
+    no "release.sh отказывается без секрета" "ненулевой код" "0"
+fi
+case "$out" in
+    *"Z2K_TUNNEL_SECRET"*) ok "отказ называет Z2K_TUNNEL_SECRET причиной, а не что-то другое" ;;
+    *) no "отказ называет Z2K_TUNNEL_SECRET причиной" "упоминание Z2K_TUNNEL_SECRET" "$(printf '%s' "$out" | head -1)" ;;
+esac
+if git diff --quiet -- UPDATES.json; then
+    ok "отклонённый релиз (mtproxy без секрета) не трогает манифест"
+else
+    no "отклонённый релиз (mtproxy без секрета) не трогает манифест" "без изменений" "манифест переписан"
 fi
 
 # Незакоммиченные НЕотслеживаемые файлы не должны блокировать релиз: в карту они

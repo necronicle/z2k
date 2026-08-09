@@ -174,48 +174,81 @@ if [ -n "$SKIPPED" ]; then
     for f in $SKIPPED; do printf '  %s\n' "$f"; done
 fi
 
-# ЛЮБОЙ бинарник доставляется ТОЛЬКО реинсталлом.
-#
-# Цель зависит от архитектуры роутера, и цели в au_install_paths у бинарников
-# нет вовсе — значит патч не разложит чужую арку, он не доставит НИЧЕГО: файл
-# молча выпадет из changed_files, а номер версии уедет вперёд. Это ровно то
-# состояние «старый код под новым номером», которое снаружи не опознать.
-#
-# Раньше здесь проверялся один mtproxy-client, и это было не правило, а частный
-# случай: z2k-detect и z2k-verify появились позже и остались без гейта. Список
-# каталогов вычисляется из дерева, а не перечисляется, — иначе следующий модуль
-# опять придётся вспоминать (та же болезнь, что и с матрицами CI).
-_bin_changed=$(git diff --name-only "$PREV_REF"..HEAD | grep -E '^[^/]+/builds/' | sed 's|/builds/.*||' | sort -u)
-if [ -n "$_bin_changed" ]; then
-    if [ "$TYPE" != "reinstall" ]; then
-        die "изменились бинарники ($(printf '%s' "$_bin_changed" | tr '\n' ' ')) — тип обязан быть reinstall, а не patch:
-         патчем они не доставляются вовсе, и версия уехала бы вперёд со старым бинарником на роутере"
+# ЕДИНАЯ политика path -> patch/reinstall/ignore живёт в одном месте:
+# au_reinstall_required() (lib/auto_update.sh, рядом с au_install_paths, тем
+# же case-статементом). Раньше каждый такой путь получал свой отдельный гейт
+# по мере обнаружения — сперва только mtproxy-client, потом отдельно
+# z2k-detect/z2k-verify (общий regex по builds/), потом отдельно
+# lib/config_official.sh и lib/strategies.sh. Ровно так в дыру провалился
+# webpanel/lighttpd.conf: рядом с ним лежал комментарий "if it actually
+# changes, ship as reinstall", который никто и ничто не читало — очередной
+# частный случай, до которого просто не дошла очередь. Список путей теперь
+# один, живёт в au_reinstall_required(), и покрывает всё сразу: любой бинарник
+# (au_install_paths для */builds/* цели не знает — патч не разложит чужую
+# арку, файл молча выпадет из changed_files, а версия уедет вперёд), генераторы
+# конфига/стратегий и шаблон lighttpd.conf.
+_reinstall_changed=$(git diff --name-only "$PREV_REF"..HEAD | while IFS= read -r f; do
+    if [ -n "$(au_reinstall_required "$f")" ]; then
+        printf '%s\n' "$f"
     fi
+done; true)
+if [ -n "$_reinstall_changed" ] && [ "$TYPE" != "reinstall" ]; then
+    die "изменились файлы, которые патч доставить не может ($(printf '%s' "$_reinstall_changed" | tr '\n' ' ')) —
+     тип обязан быть reinstall: их эффект применяется либо на архитектуру роутера,
+     либо один раз при установке, а патч тут кладёт файл, который никто заново не перечитает"
 fi
 
-# То же самое для install-time генераторов. lib/config_official.sh и
-# lib/strategies.sh не читаются на каждом старте — их код исполняется РОВНО
-# ОДИН РАЗ, во время install/reinstall (step_create_config_and_init), и
-# результат (config, extra_strats/*/Strategy.txt) записывается на диск как
-# обычные файлы. Патч кладёт новый lib/*.sh поверх старого, но НЕ перезапускает
-# генерацию — уже установленный роутер продолжает жить со старым config и
-# старыми Strategy.txt, пока их кто-нибудь не пересоздаст. Новый код в lib/
-# при этом есть, а следа от него на диске нет — то же расхождение «код приехал,
-# файл — нет», что и с бинарниками, просто без diff в имени файла.
+# Отдельно — модули с изменившимися builds/, для сверки mtproxy-client с
+# реальным секретом ниже (там нужны ИМЕНА МОДУЛЕЙ, а не список файлов).
+_bin_changed=$(printf '%s\n' "$_reinstall_changed" | grep -E '/builds/' | sed 's|/builds/.*||' | sort -u)
+
+# --- mtproxy-client: сверка с РЕАЛЬНЫМ секретом ------------------------------
 #
-# Не весь lib/* — большинство файлов там читается заново при каждом старте
-# демонов (auto_update.sh, install.sh как библиотека функций для CLI, utils.sh,
-# menu.sh), патч их доставляет корректно. Список ниже — только то, что
-# материализуется в другие файлы разово при установке; расширять его нужно
-# фактом («это пишет файл при установке и не переписывает при патче»), а не
-# по ощущению, что «в lib/ всё важное».
-_gen_changed=$(git diff --name-only "$PREV_REF"..HEAD | grep -E '^lib/(config_official|strategies)\.sh$' | sort -u)
-if [ -n "$_gen_changed" ]; then
-    if [ "$TYPE" != "reinstall" ]; then
-        die "изменились install-time генераторы ($(printf '%s' "$_gen_changed" | tr '\n' ' ')) — тип обязан быть reinstall:
-         их код выполняется только при установке; патчем новый lib/*.sh ляжет на диск,
-         но уже сгенерированные config/Strategy.txt останутся старыми на каждом установленном роутере"
-    fi
+# .github/workflows/ci.yml проверяет байт-в-байт все бинарники из build-matrix.tsv
+# КРОМЕ mtproxy-client: в него на сборке вшивается Z2K_TUNNEL_SECRET через -X, и
+# без настоящего секрета CI не может пересобрать то же самое (там же есть
+# отдельная проверка, что сборка хотя бы детерминирована — с тестовым секретом).
+# Настоящий секрет есть только здесь, на машине владельца. Значит именно тут —
+# единственное место во всей цепочке, где можно закрыть тот же класс аварии,
+# что уже случался с rt-proxy: полностью пересобранный, задеплоенный и
+# провалидированный на роутере бинарник тихо не попадает в builds/, потому что
+# кто-то забыл его туда скопировать после `make all`.
+if [ -n "$_bin_changed" ] && printf '%s\n' "$_bin_changed" | grep -qx 'mtproxy-client'; then
+    [ -n "${Z2K_TUNNEL_SECRET:-}" ] || die "mtproxy-client/builds изменился, но Z2K_TUNNEL_SECRET не задан —
+     нечем пересобрать и свериться с тем, что реально лежит в builds/.
+     Запустите: Z2K_TUNNEL_SECRET=<hex> sh scripts/release.sh ... (тот же секрет, что в make all)"
+    command -v go >/dev/null 2>&1 || die "mtproxy-client изменился, но go не найден — нечем свериться с builds/"
+    _mt_rc=0
+    _mt_tmp=$(mktemp -d) || die "mktemp для сверки mtproxy-client"
+    while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+        case "$mod" in ''|\#*) continue ;; esac
+        [ "$mod" = "mtproxy-client" ] || continue
+        [ "$extra" = "-" ] && extra=""
+        want="$bdir/$prefix-linux-$sfx"
+        [ -f "$want" ] || { printf 'release: нет отгружаемого %s\n' "$want" >&2; _mt_rc=1; continue; }
+        # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+        if ! ( cd mtproxy-client && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+                 go build -trimpath -buildvcs=false \
+                 -ldflags="-s -w -X main.defaultTunnelSecret=$Z2K_TUNNEL_SECRET" \
+                 -o "$_mt_tmp/rebuilt" "$pkg" ); then
+            printf 'release: mtproxy-client/%s не собирается\n' "$goarch" >&2; _mt_rc=1; continue
+        fi
+        _a=$(shasum -a 256 "$_mt_tmp/rebuilt" 2>/dev/null | cut -d' ' -f1)
+        [ -n "$_a" ] || _a=$(sha256sum "$_mt_tmp/rebuilt" | cut -d' ' -f1)
+        _b=$(shasum -a 256 "$want" 2>/dev/null | cut -d' ' -f1)
+        [ -n "$_b" ] || _b=$(sha256sum "$want" | cut -d' ' -f1)
+        if [ "$_a" = "$_b" ]; then
+            printf '  ok      %s (реальный секрет, байт-в-байт)\n' "$want"
+        else
+            printf 'release: %s НЕ собирается из этого исходника этим секретом (пересборка %s, в репо %s)\n' \
+                "$want" "$_a" "$_b" >&2
+            _mt_rc=1
+        fi
+    done < build-matrix.tsv
+    rm -rf "$_mt_tmp"
+    [ "$_mt_rc" = "0" ] || die "mtproxy-client в builds/ не совпадает с пересборкой из этого исходника (реальный секрет) —
+     пересоберите: cd mtproxy-client && make all Z2K_TUNNEL_SECRET=... — и закоммитьте builds/"
+    printf 'mtproxy-client: все изменённые архитектуры совпадают с пересборкой (реальный секрет)\n'
 fi
 
 # --- Несущий коммит: ref = уже существующий HEAD ------------------------------

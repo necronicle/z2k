@@ -16,7 +16,13 @@
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 INIT="${Z2K_INIT:-${Z2K_INIT_UNDER_TEST:-$HERE/files/S99zapret2.new}}"
-BASE="$HERE/../zapret2-z2k-fork/common/base.sh"
+# Захардкоженный "../zapret2-z2k-fork" был верен только для дев-машины, где форк
+# лежит РЯДОМ с этим репо. ci.yml чекаутит форк ВНУТРЬ рабочего каталога
+# (path: zapret2-z2k-fork) и передаёт путь через Z2K_FORK_DIR — этот тест его
+# игнорировал, поэтому "фикс от 2026-08-08" (см. ci.yml) реально работал только
+# для test_contains_differential.sh, а этот файл в CI молча скипал base.sh
+# каждый прогон, что и подтвердил живой ран ("Total skipped: 6").
+BASE="${Z2K_FORK_DIR:-$HERE/../zapret2-z2k-fork}/common/base.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/rlat.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
