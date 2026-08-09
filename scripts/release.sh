@@ -202,18 +202,35 @@ if git diff --name-only "$PREV_REF"..HEAD | grep -q '^mtproxy-client/builds/'; t
     [ "$TYPE" = "reinstall" ] || die "изменился бинарник туннеля — тип обязан быть reinstall, а не patch"
 fi
 
+# --- Несущий коммит: ref = уже существующий HEAD ------------------------------
+#
+# ref в записи релиза — это дифф-база для СЛЕДУЮЩЕГО релиза (роутер это поле не
+# читает вовсе, проверено). Значит он должен указывать на коммит, чьё дерево =
+# «что этот релиз доставил», и такой коммит УЖЕ есть: код закоммичен до запуска
+# release.sh (см. RELEASING.md). Его хеш известен прямо сейчас.
+#
+# Отсюда — один коммит и одна подпись. Прежняя схема писала ref="PENDING",
+# коммитила, потом ВТОРЫМ коммитом проставляла хеш этого же коммита в манифест —
+# самоссылка, которую нельзя знать до коммита. Она и тянула за собой второй
+# коммит, и ломала подпись (второй коммит правил уже подписанный файл). На
+# выпуске r-75 это поймали пост-проверкой до пуша. Самоссылки больше нет:
+# ref указывает на код, а не на сам себя.
+REF=$(git rev-parse --short HEAD) || die "не читается HEAD"
+git diff --quiet && git diff --cached --quiet \
+    || die "дерево не чистое — сначала закоммитьте код, потом release.sh (см. RELEASING.md)"
+
 # --- Запись в историю ---------------------------------------------------------
 #
 # Правка строго текстовая, по одной записи в строке: история парсится на
 # роутерах awk'ом (au_history_entries_after), и пересериализация всего файла
 # сломала бы обновление на каждом уже отгруженном роутере.
 TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-python3 - "$VER" "$TYPE" "$TS" "$DESC" "$DELIVERABLE" "$MANIFEST" <<'PY'
+python3 - "$VER" "$TYPE" "$TS" "$DESC" "$DELIVERABLE" "$MANIFEST" "$REF" <<'PY'
 import json, sys
-ver, typ, ts, desc, deliverable, path = sys.argv[1:7]
+ver, typ, ts, desc, deliverable, path, ref = sys.argv[1:8]
 files = deliverable.split() + [path]
 
-entry = {"v": ver, "type": typ, "ts": ts, "ref": "PENDING",
+entry = {"v": ver, "type": typ, "ts": ts, "ref": ref,
          "desc": desc, "changed_files": files}
 
 lines = open(path, encoding='utf-8').read().split('\n')
@@ -276,20 +293,15 @@ sh scripts/gen_file_hashes.sh
 
 python3 -c "import json; json.load(open('$MANIFEST'))" || die "после правки $MANIFEST перестал быть валидным JSON"
 
-# --- Подпись манифеста --------------------------------------------------------
+# --- Подпись ------------------------------------------------------------------
 #
-# ПОРЯДОК ВАЖЕН: подписываем ПОСЛЕ gen_file_hashes. Подпись обязана покрывать те
-# самые байты, которые уедут на роутеры; подписать до перегенерации карты сумм
-# значит подписать файл, которого никто не увидит, и получить отказ у всего
-# парка сразу.
+# ПОСЛЕДНИМ шагом, когда манифест окончателен: ref проставлен, карта сумм
+# пересобрана. Ровно эти байты уедут на роутеры и ровно их покрывает подпись.
 #
 # ГДЕ КЛЮЧ. Только на машине владельца, вне репозитория. Вариант «ключ в GitHub
 # Actions secrets» отвергнут осознанно: модель угроз здесь — «захватили
-# репозиторий», а такой ключ захватывается вместе с ним. Подпись, которая не
-# защищает от единственной угрозы, ради которой заводится, — это подпись-театр,
-# и она хуже отсутствия, потому что закрывает вопрос, не решая его.
-#
-# CI имеет право только ПРОВЕРЯТЬ.
+# репозиторий», а такой ключ захватывается вместе с ним. CI имеет право лишь
+# ПРОВЕРЯТЬ.
 #
 # macOS отдаёт LibreSSL, который Ed25519 не умеет вовсе, поэтому ищем настоящий
 # OpenSSL, а не первый попавшийся в PATH.
@@ -307,13 +319,13 @@ _find_openssl() {
 }
 
 if [ -f "$Z2K_SIGNING_KEY" ]; then
-    OSSL=$(_find_openssl) || die "не нашёл OpenSSL с поддержкой Ed25519 (у macOS системный — LibreSSL, он не умеет; поставьте: brew install openssl)"
+    OSSL=$(_find_openssl) || die "не нашёл OpenSSL с поддержкой Ed25519 (у macOS системный — LibreSSL; поставьте: brew install openssl)"
     "$OSSL" pkeyutl -sign -rawin -inkey "$Z2K_SIGNING_KEY" \
         -in "$MANIFEST" -out "${MANIFEST}.sig" \
         || die "подписать $MANIFEST не удалось"
 
     # Проверяем СВОЙ результат опубликованным публичным ключом. Подпись, не
-    # сходящаяся с тем ключом, который лежит у людей, хуже отсутствия подписи:
+    # сходящаяся с тем ключом, что лежит у людей, хуже отсутствия подписи:
     # каждый роутер, уже видевший валидную, отвергнет релиз целиком.
     "$OSSL" pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
         -in "$MANIFEST" -sigfile "${MANIFEST}.sig" >/dev/null 2>&1 \
@@ -323,46 +335,22 @@ if [ -f "$Z2K_SIGNING_KEY" ]; then
         "$(sed -n 's/.*"seq"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$MANIFEST" | head -1)"
 else
     # Без ключа релиз собрать МОЖНО — иначе выпустить не смог бы никто, кроме
-    # владельца, а это отдельное решение, которое здесь не принимается. Но
-    # молчать нельзя: неподписанный релиз отвергнут каждым роутером, который уже
-    # видел валидную подпись хоть раз.
+    # владельца. Но молчать нельзя: неподписанный релиз отвергнет каждый роутер,
+    # который уже принимал подписанные.
     printf 'ВНИМАНИЕ: ключ подписи не найден (%s) — манифест уйдёт БЕЗ подписи.\n' "$Z2K_SIGNING_KEY" >&2
     printf 'Роутеры, уже принимавшие подписанные манифесты, этот релиз ОТВЕРГНУТ.\n' >&2
     rm -f "${MANIFEST}.sig"
 fi
 
-# --- Коммиты ------------------------------------------------------------------
+# --- Один коммит --------------------------------------------------------------
 #
-# Ссылка на несущий коммит проставляется ВТОРЫМ коммитом, и иначе не выйдет:
-# хеш известен только после того, как коммит создан, а поправить его через amend
-# нельзя — amend меняет хеш, и ссылка снова указывает в никуда.
-git add "$MANIFEST" "${MANIFEST}.sig" webpanel/www/index.html 2>/dev/null || true
-git commit -q -m "release: $VER ($TYPE)
+# Всё окончательно: history-запись с настоящим ref, карта сумм, подпись. Второго
+# коммита нет по построению — ref уже указывает на код, а не на этот коммит.
+git add "$MANIFEST" "${MANIFEST}.sig" webpanel/www/index.html 2>/dev/null || git add "$MANIFEST"
+git commit -q -m "release: $VER ($TYPE) — $DESC"
 
-$DESC"
-
-REL=$(git rev-parse --short HEAD)
-python3 - "$REL" "$VER" "$MANIFEST" <<'PY'
-import json, sys
-ref, ver, path = sys.argv[1:4]
-lines = open(path, encoding='utf-8').read().split('\n')
-for i, ln in enumerate(lines):
-    s = ln.strip().rstrip(',')
-    if s.startswith('{"v":') and ('"%s"' % ver) in s:
-        d = json.loads(s); d['ref'] = ref
-        indent = ln[:len(ln) - len(ln.lstrip())]
-        tail = ',' if ln.rstrip().endswith(',') else ''
-        lines[i] = indent + json.dumps(d, ensure_ascii=False) + tail
-        break
-else:
-    raise SystemExit('не нашёл запись %s' % ver)
-open(path, 'w', encoding='utf-8').write('\n'.join(lines))
-PY
-sh scripts/gen_file_hashes.sh >/dev/null
-git add "$MANIFEST"
-git commit -q -m "chore(manifest): указать ref $VER на несущий коммит"
-
-printf '\nсобрано: %s (%s), несущий коммит %s\n' "$VER" "$TYPE" "$REL"
+printf '\nсобрано: %s (%s), несущий коммит %s, релизный коммит %s\n' \
+    "$VER" "$TYPE" "$REF" "$(git rev-parse --short HEAD)"
 printf 'проверяю...\n'
 if sh tests/run_all.sh >/dev/null 2>&1; then
     printf 'тесты зелёные\n'
