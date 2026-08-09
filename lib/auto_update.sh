@@ -296,6 +296,36 @@ au_entry_changed_files() {
         | tr ',' '\n' | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | grep -v '^$' || true
 }
 
+# au_manifest_ref MANIFEST TAG -> ref (имя тега) для этой версии из history.
+#
+# ЗАЧЕМ. Раньше файлы качались с верхушки ветки. Ветка движется: обновление,
+# начатое до её движения, доскачивало бы часть файлов уже от СЛЕДУЮЩЕГО релиза,
+# и суммы бы не сошлись — обновление отваливалось на ровном месте. Теперь тянем
+# по неизменяемому тегу, и «что объявили, то и скачали» держится по построению.
+#
+# Пустой ответ — легальное состояние: манифесты, выпущенные до этого механизма,
+# несут в ref хеш коммита. Он тоже неизменяем и годится как ссылка.
+au_manifest_ref() {
+    local manifest="$1" tag="$2"
+    [ -f "$manifest" ] || return 0
+    grep '^[[:space:]]*{"v":' "$manifest" 2>/dev/null \
+        | sed -n "s/.*\"v\"[[:space:]]*:[[:space:]]*\"${tag}\".*\"ref\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" \
+        | head -1
+}
+
+# База скачивания: неизменяемая ссылка, если она объявлена, иначе ветка.
+#
+# Z2K_AU_TARGET_REF выставляется перед раскладкой из записи истории целевой
+# версии. Пусто — манифест старый и ссылки не знает: ведём себя как раньше,
+# иначе обновление встало бы у тех, кто пропустил внедряющий релиз.
+au_repo_base() {
+    if [ -n "${Z2K_AU_TARGET_REF:-}" ]; then
+        printf 'https://raw.githubusercontent.com/necronicle/z2k/%s' "$Z2K_AU_TARGET_REF"
+    else
+        printf '%s' "$Z2K_AU_REPO_RAW"
+    fi
+}
+
 # au_manifest_file_sha MANIFEST REPO_PATH -> expected sha256 of that file at
 # HEAD, empty when the manifest carries no digest for it.
 #
@@ -610,7 +640,8 @@ au_install_paths() {
 au_download_repo_file() {
     local repo_path="$1"
     local target="$2"
-    local url="${Z2K_AU_REPO_RAW}/${repo_path}"
+    local url
+    url="$(au_repo_base)/${repo_path}"
     mkdir -p "$(dirname "$target")"
     if command -v z2k_fetch >/dev/null 2>&1; then
         z2k_fetch "$url" "$target" && { [ -s "$target" ] || [ -f "$target" ]; } && return 0
@@ -650,7 +681,10 @@ au_download_repo_file() {
 # его туда, где сверять не с чем, значит отдавать ему root на роутере.
 au_download_reinstall_script() {
     local target="$1"
-    local url="$Z2K_AU_REINSTALL_URL"
+    # По неизменяемой ссылке: переустановка тянет z2k.sh, а он тянет lib/* —
+    # с верхушки ветки человек поставил бы не ту версию, которую ему объявили.
+    local url
+    url="$(au_repo_base)/z2k.sh"
     local jsdelivr="" gh_proxy=""
     local want_sha got_sha rc
 
@@ -685,7 +719,7 @@ au_download_reinstall_script() {
             ;;
     esac
 
-    for url in "$Z2K_AU_REINSTALL_URL" "$jsdelivr" "$gh_proxy"; do
+    for url in "$(au_repo_base)/z2k.sh" "$jsdelivr" "$gh_proxy"; do
         [ -z "$url" ] && continue
         au_log "reinstall: fetching z2k.sh from $url"
         if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$target" \
@@ -770,6 +804,14 @@ au_apply_patch() {
     local target_tag="$1"
     shift
     local files="$*"
+
+    # Пин на неизменяемую ссылку целевой версии: всё, что скачает эта раскладка,
+    # приедет из ОДНОГО объявленного среза.
+    Z2K_AU_TARGET_REF=$(au_manifest_ref "$Z2K_AU_TMP_DIR/UPDATES.json" "$target_tag")
+    export Z2K_AU_TARGET_REF
+    [ -n "$Z2K_AU_TARGET_REF" ] \
+        && au_log "файлы тянем по неизменяемой ссылке $Z2K_AU_TARGET_REF" \
+        || au_log "в манифесте нет ref для $target_tag — тянем с ветки (старый манифест)"
 
     if [ -z "$files" ]; then
         au_log "patch with no files — nothing to do"
@@ -1005,6 +1047,13 @@ EOF
 au_apply_reinstall() {
     local target_tag="$1"
     local reset_state="$2"
+
+    # Тот же пин: z2k.sh и всё, что он тянет, приезжают из объявленного среза.
+    Z2K_AU_TARGET_REF=$(au_manifest_ref "$Z2K_AU_TMP_DIR/UPDATES.json" "$target_tag")
+    export Z2K_AU_TARGET_REF
+    [ -n "$Z2K_AU_TARGET_REF" ] \
+        && au_log "переустановка по неизменяемой ссылке $Z2K_AU_TARGET_REF" \
+        || au_log "в манифесте нет ref для $target_tag — переустановка с ветки"
     local saved_flags="$Z2K_AU_TMP_DIR/feature-flags.backup"
     local reinstall_script="$Z2K_AU_TMP_DIR/z2k-reinstall.sh"
     au_save_feature_flags "$saved_flags"
@@ -1037,8 +1086,12 @@ au_apply_reinstall() {
     local rc_file="$Z2K_AU_TMP_DIR/.install_rc"
     rm -f "$rc_file"
     (
+        # GITHUB_RAW передаём явно: z2k.sh тянет lib/*, списки и бинарники сам,
+        # и без пина взял бы их с верхушки ветки — то есть человек получил бы не
+        # ту версию, которую ему объявили.
         env Z2K_AUTO_UPDATE=1 Z2K_AU_TARGET_TAG="$target_tag" \
             Z2K_AU_FEATURE_FLAGS_BACKUP="$saved_flags" \
+            ${Z2K_AU_TARGET_REF:+GITHUB_RAW="https://raw.githubusercontent.com/necronicle/z2k/$Z2K_AU_TARGET_REF"} \
             $reset_env \
             sh "$reinstall_script" install 2>&1
         echo "$?" > "$rc_file"

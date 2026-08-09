@@ -162,6 +162,55 @@ jobs:
             exit 1
           fi
 
+          # 6. Тег: неизменяемое имя релиза И адрес, по которому роутер качает
+          #    файлы (ref в манифесте равен имени тега). Инварианты: имя ==
+          #    current == ref, цель == этот коммит, подпись тем же ключом.
+          git fetch -q --tags origin || true
+          if ! git rev-parse -q --verify "refs/tags/$NEW_CUR" >/dev/null; then
+            echo "::error::нет тега $NEW_CUR — релиз без неизменяемой ссылки публиковать нельзя"
+            exit 1
+          fi
+          _tgt=$(git rev-list -n 1 "refs/tags/$NEW_CUR")
+          if [ "$_tgt" != "$CAND" ]; then
+            echo "::error::тег $NEW_CUR указывает на $_tgt, а публикуется $CAND"
+            exit 1
+          fi
+          _ref=$(grep '^[[:space:]]*{"v":' /tmp/pub/m.json \
+                 | sed -n "s/.*\"v\"[[:space:]]*:[[:space:]]*\"${NEW_CUR}\".*\"ref\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1)
+          if [ "$_ref" != "$NEW_CUR" ]; then
+            echo "::error::ref в манифесте = '$_ref', а тег '$NEW_CUR' — роутер пошёл бы не туда"
+            exit 1
+          fi
+
+          # Строку allowed-signers собираем из опубликованного PEM честно:
+          # длины полей в формате явные, и «почти правильная» строка молча не
+          # подошла бы к подписи.
+          python3 - <<'PYEOF' > /tmp/pub/allowed
+          import base64, struct, subprocess
+          der = subprocess.run(["openssl", "pkey", "-pubin", "-in", "/tmp/pub/pub.pem",
+                                "-outform", "DER"], capture_output=True, check=True).stdout
+          def s(b):
+              return struct.pack(">I", len(b)) + b
+          blob = s(b"ssh-ed25519") + s(der[-32:])
+          print("z2k-release ssh-ed25519 " + base64.b64encode(blob).decode())
+          PYEOF
+          # Судим ПО КОДУ ВОЗВРАТА, а не по тексту.
+          #
+          # `git verify-tag` печатает «Good "git" signature with ED25519 key ...»
+          # для ЛЮБОЙ математически корректной подписи, и лишь отдельной строкой
+          # «No principal matched.» сообщает, что ключ не наш. Проверка текстом
+          # по слову «Good» пропускает тег, подписанный чужим ключом — измерено:
+          # чужой ключ даёт код 1, но строку «Good» печатает.
+          if git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=/tmp/pub/allowed \
+               verify-tag "$NEW_CUR" >/dev/null 2>&1; then
+            echo "подпись тега $NEW_CUR сходится с опубликованным ключом"
+          else
+            echo "::error::подпись тега $NEW_CUR не сходится с опубликованным ключом"
+            git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=/tmp/pub/allowed \
+                verify-tag "$NEW_CUR" 2>&1 | head -5
+            exit 1
+          fi
+
           echo "публикуем $NEW_CUR ($CAND), seq $OLD_SEQ -> $NEW_SEQ, подпись сошлась"
           {
             echo "publish=yes"

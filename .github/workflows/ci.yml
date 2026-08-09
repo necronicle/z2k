@@ -334,48 +334,22 @@ jobs:
         env:
           MODULE: ${{ matrix.module }}
         run: |
-          # Каждый модуль собирается под все арки, на которые он реально
-          # ставится (списки и флаги — исторические, подобраны эмпирически):
-          #   MIPS/MIPSLE: softfloat (Keenetic MT7621, KN-3610 etc.)
-          #   mtproxy-client ARM: GOARM=5 (ARMv5, no VFP — max compat)
-          #   rt-proxy ARM: GOARM=7
-          #   vps-relay работает только на VPS (amd64) — кросс-матрица не нужна.
-          # CGO_ENABLED=0 (static), -trimpath -ldflags="-s -w" (reproducible, strip).
-          case "$MODULE" in
-            mtproxy-client) TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="." ;;
-            rt-proxy)       TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle"; PKG="." ;;
-            # Все девять — ровно те, что лежат в z2k-detect/builds/ и уезжают
-            # пользователям. Раньше собирались только три (arm64, mipsle,
-            # mips64le), а шесть остальных — включая big-endian linux/mips и
-            # linux/arm с GOARM=5 — не компилировались в CI вообще: поломка
-            # сборки под них обнаружилась бы от пользователя. Цена полного
-            # списка — секунды раннера.
-            z2k-detect)     TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="./cmd/z2k-detect" ;;
-            # z2k-verify — те же девять арок. Он вообще не собирался в CI до
-            # 2026-08-09, а цена его поломки максимальная в проекте: sha256
-            # проверяльщика запинен в z2k.sh, и роутер с защёлкнутым храповиком
-            # без него отвергает манифест. Одна несобравшаяся арка = обновления
-            # встали у всей этой части парка одновременно.
-            z2k-verify)     TARGETS="linux/arm64 linux/arm linux/amd64 linux/mips linux/mipsle linux/mips64le linux/ppc64 linux/riscv64 linux/386"; PKG="./cmd/z2k-verify" ;;
-            vps-relay)      TARGETS="linux/amd64"; PKG="./..." ;;
-          esac
-          for t in $TARGETS; do
-            GOOS="${t%%/*}"; GOARCH="${t##*/}"; EXTRA=""
-            case "$MODULE/$GOARCH" in
-              mtproxy-client/arm) EXTRA="GOARM=5" ;;
-              # z2k-detect/Makefile тоже собирает ARM с GOARM=5 — если здесь
-              # оставить умолчание (GOARM=7), CI проверял бы не тот бинарник,
-              # который реально уезжает на роутеры.
-              z2k-detect/arm)     EXTRA="GOARM=5" ;;
-              z2k-verify/arm)     EXTRA="GOARM=5" ;;
-              rt-proxy/arm)       EXTRA="GOARM=7" ;;
-              */mips|*/mipsle)    EXTRA="GOMIPS=softfloat" ;;
-              */mips64le)         EXTRA="GOMIPS64=softfloat" ;;
-            esac
-            echo "Building $GOOS/$GOARCH $EXTRA..."
-            env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" $EXTRA \
-              go build -trimpath -ldflags="-s -w" -o /dev/null "$PKG"
-          done
+          # Арки и флаги берутся из build-matrix.tsv — единственного места, где
+          # они объявлены. Раньше список жил здесь своей жизнью и разошёлся с
+          # Makefile'ами: mtproxy-client/arm собирался тут с GOARM=5, а
+          # выпускался с GOARM=7, то есть проверялся не тот бинарник.
+          rc=0
+          # shellcheck disable=SC2034 # bdir/prefix/sfx нужны сверке байтов ниже
+          while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+            case "$mod" in ''|\#*) continue ;; esac
+            [ "$mod" = "$MODULE" ] || continue
+            [ "$extra" = "-" ] && extra=""
+            echo "Building linux/$goarch $extra..."
+            # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+            env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+              go build -trimpath -ldflags="-s -w" -o /dev/null "$pkg" || rc=1
+          done < build-matrix.tsv
+          exit $rc
 
   binaries:
     name: Отгружаемые бинарники собираются из этого исходника
@@ -410,35 +384,31 @@ jobs:
           # воспроизвести. Это осознанный пробел, а не забывчивость — решение,
           # класть ли секрет в Actions, за владельцем.
           fail=0
-          check() {
-            _mod="$1"; _pkg="$2"; _prefix="$3"; _arch="$4"; _goarch="$5"; _extra="$6"
-            _want="$_mod/builds/$_prefix-$_arch"
-            [ -f "$_want" ] || { echo "::error::нет отгружаемого $_want"; fail=1; return; }
-            # shellcheck disable=SC2086 # $_extra — это ИМЕННО набор присваиваний
-            # окружения (GOARM=5, GOMIPS=softfloat), его разбиение на слова
-            # здесь и нужно; в кавычках env получил бы одно слово с пробелом.
-            ( cd "$_mod" && env CGO_ENABLED=0 GOOS=linux GOARCH="$_goarch" $_extra \
-                go build -ldflags="-s -w" -trimpath -buildvcs=false -o /tmp/rebuilt "$_pkg" )
-            _a=$(sha256sum /tmp/rebuilt | cut -d" " -f1)
-            _b=$(sha256sum "$_want" | cut -d" " -f1)
-            if [ "$_a" = "$_b" ]; then
-              echo "  ok      $_want"
+          while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+            case "$mod" in ''|\#*) continue ;; esac
+            [ "$bdir" = "-" ] && continue          # vps-relay на роутеры не едет
+            # mtproxy-client пропускаем: в его бинарник на сборке вшивается
+            # Z2K_TUNNEL_SECRET через -X, и без секрета байты не воспроизвести.
+            # Пробел осознанный и назван вслух, а не забыт.
+            [ "$mod" = "mtproxy-client" ] && continue
+            want="$bdir/$prefix-linux-$sfx"
+            if [ ! -f "$want" ]; then
+              echo "::error::нет отгружаемого $want"; fail=1; continue
+            fi
+            [ "$extra" = "-" ] && extra=""
+            # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+            ( cd "$mod" && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+                go build -ldflags="-s -w" -trimpath -buildvcs=false -o /tmp/rebuilt "$pkg" ) || {
+              echo "::error::$mod/$goarch не собирается"; fail=1; continue; }
+            a=$(sha256sum /tmp/rebuilt | cut -d" " -f1)
+            b=$(sha256sum "$want" | cut -d" " -f1)
+            if [ "$a" = "$b" ]; then
+              echo "  ok      $want"
             else
-              echo "::error::$_want не собирается из этого исходника (сборка $_a, в репо $_b)"
+              echo "::error::$want не собирается из этого исходника (сборка $a, в репо $b)"
               fail=1
             fi
-          }
-
-          for a in amd64 arm64 arm mips mipsle mips64le ppc64 riscv64 386; do
-            extra=""
-            case "$a" in
-              arm)      extra="GOARM=5" ;;
-              mips|mipsle) extra="GOMIPS=softfloat" ;;
-              mips64le) extra="GOMIPS64=softfloat" ;;
-            esac
-            check z2k-detect ./cmd/z2k-detect z2k-detect "linux-$a" "$a" "$extra"
-            check z2k-verify ./cmd/z2k-verify z2k-verify "linux-$a" "$a" "$extra"
-          done
+          done < build-matrix.tsv
 
           if [ "$fail" != "0" ]; then
             echo "::error::пересоберите: cd <модуль> && make all — и закоммитьте builds/"

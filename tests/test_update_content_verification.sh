@@ -178,7 +178,21 @@ done
     || no "проверена вся карта" ">50 записей" "$checked"
 [ "$checked" -gt 0 ] && [ "$drift" = 0 ] && [ "$gone" = 0 ] \
     && ok "манифест синхронен с деревом ($checked файлов проверено)" \
-    || no "манифест синхронен с деревом" "0 расхождений" "drift=$drift gone=$gone"
+    || {
+        # Между релизами манифест НЕ пересобирается: он описывает последний
+        # выпущенный срез, а не рабочую копию. Карту и подпись пересобирает
+        # только release.sh — иначе подпись перестала бы сходиться на каждом
+        # рабочем коммите (см. ci.yml, гейт «манифест»). Поэтому расхождение
+        # здесь — ошибка ТОЛЬКО на релизном коммите.
+        _pub=$(git -C "$HERE" show origin/z2k-enhanced:UPDATES.json 2>/dev/null \
+               | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        _cur=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HERE/UPDATES.json" | head -1)
+        if [ -n "$_pub" ] && [ "$_pub" = "$_cur" ]; then
+            ok "манифест описывает выпущенный срез, а не рабочую копию (расхождений $drift — это норма между релизами)"
+        else
+            no "манифест синхронен с деревом" "0 расхождений" "drift=$drift gone=$gone"
+        fi
+    }
 
 # --- 6b. the map must be ordered deterministically ---------------------------
 # The generator runs on a developer's machine AND on the CI runner, and CI

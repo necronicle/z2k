@@ -206,7 +206,19 @@ fi
 # коммит, и ломала подпись (второй коммит правил уже подписанный файл). На
 # выпуске r-75 это поймали пост-проверкой до пуша. Самоссылки больше нет:
 # ref указывает на код, а не на сам себя.
-REF=$(git rev-parse --short HEAD) || die "не читается HEAD"
+# ref — ЭТО ИМЯ ТЕГА, а не хеш коммита.
+#
+# Роутер читает его и тянет файлы по неизменяемой ссылке, а не с верхушки
+# ветки: ветка движется, и обновление, начатое до её движения, доскачивало бы
+# файлы уже от следующего релиза — суммы не сошлись бы, обновление отвалилось.
+#
+# Имя тега известно ЗАРАНЕЕ (это номер версии), поэтому самоссылки не возникает.
+# Хеш релизного коммита сюда положить нельзя по построению: он неизвестен до
+# коммита — ровно та ловушка «PENDING», которая ломала подпись на r-75.
+#
+# И это же чинит старую неточность: прежний ref указывал на несущий коммит, чьё
+# дерево БЕЗ кеш-бастера панели, то есть «не на то, что доставили».
+REF="$VER"
 git diff --quiet && git diff --cached --quiet \
     || die "дерево не чистое — сначала закоммитьте код, потом release.sh (см. RELEASING.md)"
 
@@ -340,14 +352,47 @@ fi
 git add "$MANIFEST" "${MANIFEST}.sig" webpanel/www/index.html 2>/dev/null || git add "$MANIFEST"
 git commit -q -m "release: $VER ($TYPE) — $DESC"
 
-printf '\nсобрано: %s (%s), несущий коммит %s, релизный коммит %s\n' \
-    "$VER" "$TYPE" "$REF" "$(git rev-parse --short HEAD)"
+# --- Подписанный тег на релизный коммит ----------------------------------------
+#
+# Тег — неизменяемое имя релиза И адрес, по которому роутер скачивает файлы:
+# `ref` в манифесте равен имени тега. Ветка движется, тег — нет.
+#
+# Подписывается ТЕМ ЖЕ ключом, что и манифест (scripts/tag_signing_key.sh
+# переупаковывает его в формат, понятный git). Второго ключа не заводим.
+git rev-parse -q --verify "refs/tags/$VER" >/dev/null 2>&1 \
+    && die "тег $VER уже существует — номер версии переиспользовать нельзя"
+
+_tagkey=$(sh scripts/tag_signing_key.sh 2>/dev/null) || _tagkey=""
+if [ -n "$_tagkey" ]; then
+    git -c gpg.format=ssh -c user.signingkey="$_tagkey" \
+        tag -s "$VER" -m "z2k $VER ($TYPE)" \
+        || { rm -f "$_tagkey" "${_tagkey}.pub"; die "не удалось подписать тег $VER"; }
+    # Сверяем СВОЙ результат тем же ключом и по КОДУ ВОЗВРАТА: git печатает
+    # «Good signature» и для чужого ключа, сообщая о несовпадении отдельной
+    # строкой. Тег, который отвергнет публикация, лучше поймать здесь.
+    printf 'z2k-release %s\n' "$(cut -d' ' -f1-2 < "${_tagkey}.pub")" > "${_tagkey}.allowed"
+    if ! git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="${_tagkey}.allowed" \
+           verify-tag "$VER" >/dev/null 2>&1; then
+        rm -f "$_tagkey" "${_tagkey}.pub" "${_tagkey}.allowed"
+        git tag -d "$VER" >/dev/null 2>&1
+        die "подпись тега $VER не проверяется собственным ключом — релиз остановлен"
+    fi
+    rm -f "$_tagkey" "${_tagkey}.pub" "${_tagkey}.allowed"
+    printf 'тег %s подписан и проверен\n' "$VER"
+else
+    printf 'ВНИМАНИЕ: ключ недоступен — тег %s будет БЕЗ подписи, публикация его отвергнет.\n' "$VER" >&2
+    git tag -a "$VER" -m "z2k $VER ($TYPE)"
+fi
+
+printf '\nсобрано: %s (%s), релизный коммит %s, тег %s\n' \
+    "$VER" "$TYPE" "$(git rev-parse --short HEAD)" "$VER"
 printf 'проверяю...\n'
 if sh tests/run_all.sh >/dev/null 2>&1; then
     printf 'тесты зелёные\n'
 else
     die "тесты упали — прогоните sh tests/run_all.sh и посмотрите"
 fi
-printf 'push делается ОТДЕЛЬНО и только с одобрения: git push origin %s\n' "$STAGING_BRANCH"
-printf 'дальше сам: зелёный CI → робот переведёт %s на этот коммит → флот увидит %s\n' \
+printf 'push делается ОТДЕЛЬНО и только с одобрения:\n'
+printf '  git push origin %s && git push origin %s\n' "$STAGING_BRANCH" "$VER"
+printf 'дальше сам: зелёный CI → робот сверит тег и переведёт %s → флот увидит %s\n' \
     "$RELEASE_BRANCH" "$VER"
