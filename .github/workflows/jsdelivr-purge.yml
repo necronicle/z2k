@@ -190,6 +190,64 @@ jobs:
           echo "---Files to verify ($count)---"
           cat /tmp/verify/files.txt
 
+      - name: Подпись опубликованного манифеста сходится на самом зеркале
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -eu
+          # ПРОВЕРЯЕМ ТО, ЧТО ОТДАЁТ ЗЕРКАЛО, А НЕ ТО, ЧТО ЛЕЖИТ В РЕПОЗИТОРИИ.
+          #
+          # Суммы файлов сверяются ниже, но сама карта берётся из манифеста, а
+          # манифест — из подписи. Если зеркало отдаёт манифест и подпись из
+          # РАЗНЫХ моментов (частичный purge, разошедшийся кэш), роутер с
+          # защёлкнутым храповиком отвергнет релиз — и мы об этом не узнаем:
+          # весь остальной verify при этом зелёный, потому что файлы сходятся
+          # с той картой, которую он же и скачал.
+          #
+          # Тянем манифест и подпись как пара, проверяем подпись ключом ИЗ
+          # ДЕРЕВА (тем, что уехал людям) и сверяем байты с репозиторием.
+          RAW="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+          mkdir -p /tmp/sigchk
+          rc=0
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            rc=0
+            curl -fsS --max-time 20 "$RAW/UPDATES.json"     -o /tmp/sigchk/m.json || rc=1
+            curl -fsS --max-time 20 "$RAW/UPDATES.json.sig" -o /tmp/sigchk/m.sig  || rc=1
+            if [ "$rc" = "0" ] && cmp -s /tmp/sigchk/m.json UPDATES.json \
+               && cmp -s /tmp/sigchk/m.sig UPDATES.json.sig; then
+              break
+            fi
+            rc=1
+            echo "raw ещё не догнал (попытка $i) — жду"
+            sleep 20
+          done
+          if [ "$rc" != "0" ]; then
+            echo "::error::raw отдаёт не те байты манифеста/подписи, что в релизе"
+            exit 1
+          fi
+          if ! openssl pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
+                 -in /tmp/sigchk/m.json -sigfile /tmp/sigchk/m.sig >/dev/null 2>&1; then
+            echo "::error::подпись манифеста, отдаваемого зеркалом, не сходится — роутеры отвергнут релиз"
+            exit 1
+          fi
+          echo "raw: манифест и подпись совпадают с релизом, подпись сходится"
+
+          # jsdelivr — фоллбэк: его отставание громко предупреждает, но не валит
+          # (та же политика, что и у файлов ниже).
+          JSD="https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}"
+          if curl -fsS --max-time 20 "$JSD/UPDATES.json" -o /tmp/sigchk/j.json \
+             && curl -fsS --max-time 20 "$JSD/UPDATES.json.sig" -o /tmp/sigchk/j.sig; then
+            if openssl pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
+                 -in /tmp/sigchk/j.json -sigfile /tmp/sigchk/j.sig >/dev/null 2>&1; then
+              echo "jsdelivr: подпись сходится"
+            else
+              echo "::warning::jsdelivr отдаёт манифест и подпись из разных моментов — фоллбэк временно негоден"
+            fi
+          else
+            echo "::warning::jsdelivr не отдал манифест или подпись"
+          fi
+
       - name: Poll CDNs until every file matches the pushed bytes
         if: steps.files.outputs.count != '0'
         env:
