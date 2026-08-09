@@ -1,10 +1,10 @@
 name: Release CDN (purge + verify)
 
-# push в z2k-enhanced — это выкладка байтов: роутеры тянут файлы прямо с
-# raw.githubusercontent.com (и зеркал) по имени ветки. ОБЪЯВЛЕНИЕ версии флоту
-# (сдвиг "current" в UPDATES.json) идёт отдельным пушем и только после зелёного
-# CI на коде — этот порядок держит CD-гейт в scripts/release.sh. Здесь — вторая
-# половина деплоя, пост-выкладочная:
+# z2k-enhanced — канал доставки: роутеры тянут файлы прямо с
+# raw.githubusercontent.com (и зеркал) по имени ветки. Двигать эту ветку умеет
+# только publish.yml и только после зелёного CI — то есть к моменту, когда
+# отрабатывает этот workflow, релиз УЖЕ у людей. Здесь — вторая половина
+# деплоя, пост-выкладочная:
 #
 #   1) purge  — сбросить edge-кэш jsdelivr (иначе фоллбэк-зеркало z2k_fetch
 #      отдаёт до 12 часов старья; purge.jsdelivr.net выселяет за ~1 сек);
@@ -28,6 +28,17 @@ on:
     branches:
       - z2k-enhanced
   workflow_dispatch:
+  # Вызывается из publish.yml сразу после того, как релизная ветка переведена.
+  # Своим ходом он бы там не завёлся: пуш, сделанный GITHUB_TOKEN, чужие
+  # workflow не запускает. `ref` обязателен именно поэтому — на workflow_run
+  # контекст указывает на ветку по умолчанию в состоянии ДО публикации, и без
+  # явного коммита мы проверяли бы предыдущий релиз, отчитываясь за новый.
+  workflow_call:
+    inputs:
+      ref:
+        description: "Коммит, состояние которого проверяем на зеркалах"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -50,6 +61,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
           # Need enough history to diff `before..after`. 0 = full history.
           # Repo is small, extra checkout time is negligible vs. the
           # robustness payoff when the push spans several commits.
@@ -126,6 +138,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
       - name: Compute files users can fetch

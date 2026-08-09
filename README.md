@@ -586,7 +586,7 @@ Z2K_TRUST_NEW_KEY=<отпечаток> sh z2k.sh install
 | Документ | О чём |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Из чего состоит, граф подключения модулей, что переживает обновление |
-| [RELEASING.md](RELEASING.md) | Как выпустить релиз: двухфазный порядок, patch против reinstall, откат |
+| [RELEASING.md](RELEASING.md) | Как выпустить релиз: рабочая ветка против канала доставки, patch против reinstall, откат |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Правила правок: где допустим fail-open, особенности BusyBox ash и MIPS |
 | [SECURITY.md](SECURITY.md) | Модель угроз честно: что защищено, что нет и почему |
 

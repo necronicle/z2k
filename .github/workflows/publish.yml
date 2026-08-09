@@ -1,0 +1,205 @@
+name: Publish (move release branch)
+
+# ЧТО ЭТО ТАКОЕ.
+#
+# Единственное место, которое имеет право двигать `z2k-enhanced` — ветку, с
+# которой роутеры тянут всё: манифест, файлы патча, `z2k.sh` для переустановки,
+# и с которой ставится однострочник из README. Что попало в эту ветку — то у
+# людей, немедленно, независимо от `current`.
+#
+# ЗАЧЕМ. До 2026-08-09 в релизную ветку пушил человек, а CI прогонялся уже
+# после — то есть код доезжал до людей раньше собственных тестов. Гейт был, но
+# жил внутри `scripts/release.sh`: скрипт сам ждал `gh run` и умел пропускать
+# ожидание переменной. Гейт, который можно переждать или обойти, при одном
+# разработчике рано или поздно обходится.
+#
+# Теперь порядок обратный и обойти его нечем: человек пушит только в
+# `z2k-staging`, а верхушку релизной ветки переставляет этот workflow — и только
+# после зелёного CI ровно на этом коммите. Не прошло — ветка не сдвинулась, и
+# люди ничего не увидели. Так публикуют MikroTik (строка в `NEWESTa7.stable`),
+# OpenWrt (`stable_version` в `.versions.json`), Home Assistant (`stable.json`):
+# код лежит доступным заранее, публикация — это движение указателя. У нас роль
+# указателя играет сама ссылка ветки.
+#
+# ЧЕГО ЗДЕСЬ НЕТ И НЕ БУДЕТ. Ключа подписи. Робот переносит ссылку на уже
+# подписанный коммит и обязан ПРОВЕРИТЬ подпись, но собрать релиз он не может.
+# Модель угроз — «захватили репозиторий»: ключ, лежащий в secrets, захватывается
+# вместе с ним. Компрометация Actions даёт отказ в публикации, но не подделку.
+#
+# ГРАБЛИ, КОТОРЫЕ УЧТЕНЫ.
+#   * `workflow_run` берёт этот файл С ВЕТКИ ПО УМОЛЧАНИЮ, а не со staging.
+#     Это и хорошо (правка публикатора в staging не может сама себя выпустить),
+#     и требует помнить: изменения здесь вступают в силу со следующего релиза.
+#     Поэтому же самый первый переход на эту схему делается руками — иначе
+#     публиковать пока некому.
+#   * Пуш, сделанный GITHUB_TOKEN, НЕ запускает другие workflow. Значит
+#     `jsdelivr-purge.yml` после нашего пуша сам не заведётся, и сброс кэша
+#     пришлось бы потерять. Поэтому он вызывается отсюда явно, как переиспользуемый.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [z2k-staging]
+  # Ручка на случай, если ран CI не создался вовсе (прецедент 2026-08-06: сбой
+  # Actions, раны не появились, дёрнуть было нечего).
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Коммит z2k-staging для публикации (пусто = верхушка)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Публикация — это движение одной ссылки. Две одновременно не нужны никогда.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Проверить, можно ли это публиковать
+    # Красный CI до решения не доходит вовсе.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      sha: ${{ steps.decide.outputs.sha }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Решить
+        id: decide
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ github.event.inputs.sha }}
+          STAGING: z2k-staging
+          RELEASE: z2k-enhanced
+        run: |
+          set -eu
+          git fetch -q origin "$STAGING" "$RELEASE"
+
+          CAND="${RUN_SHA:-}"
+          [ -n "${INPUT_SHA:-}" ] && CAND="$INPUT_SHA"
+          [ -n "$CAND" ] || CAND=$(git rev-parse "origin/$STAGING")
+          CAND=$(git rev-parse "$CAND")
+
+          # 1. Публикуем только верхушку. Если пока CI бежал прилетел новый
+          #    коммит — публиковать промежуточный нельзя: у него свой вердикт,
+          #    а у людей окажется состояние, которого нет ни у кого в работе.
+          #    Новый коммит приедет сюда со своим раном.
+          TIP=$(git rev-parse "origin/$STAGING")
+          if [ "$CAND" != "$TIP" ]; then
+            echo "::notice::$CAND уже не верхушка $STAGING ($TIP) — публикацию делает более свежий ран"
+            echo "publish=no" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # 2. Только вперёд. Отказ здесь означает, что релизная ветка ушла
+          #    куда-то помимо staging — это авария, а не штатный путь.
+          if ! git merge-base --is-ancestor "origin/$RELEASE" "$CAND"; then
+            echo "::error::$RELEASE не является предком кандидата — расхождение веток, публикация невозможна"
+            exit 1
+          fi
+
+          # 3. Сдвинулся ли `current`. Не сдвинулся — это был пуш кода, и он
+          #    людям не предназначен. Молча выходим: это штатное большинство
+          #    пушей, а не ошибка.
+          _cur() { git show "$1:UPDATES.json" | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
+          _seq() { git show "$1:UPDATES.json" | sed -n 's/.*"seq"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1; }
+          NEW_CUR=$(_cur "$CAND"); OLD_CUR=$(_cur "origin/$RELEASE")
+          [ -n "$NEW_CUR" ] || { echo "::error::не читается current у кандидата"; exit 1; }
+          if [ "$NEW_CUR" = "$OLD_CUR" ]; then
+            echo "::notice::current не сдвинут ($OLD_CUR) — это пуш кода, публиковать нечего"
+            echo "publish=no" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # 4. seq строго растёт. Роутер использует его как антидаунгрейд;
+          #    объявление с непродвинутым seq будет отвергнуто у людей — то
+          #    есть «выпустили и не доехало», худший из отказов.
+          NEW_SEQ=$(_seq "$CAND"); OLD_SEQ=$(_seq "origin/$RELEASE")
+          [ -n "$NEW_SEQ" ] || { echo "::error::не читается seq у кандидата"; exit 1; }
+          if [ -n "$OLD_SEQ" ] && [ "$NEW_SEQ" -le "$OLD_SEQ" ]; then
+            echo "::error::seq не вырос: опубликовано $OLD_SEQ, у кандидата $NEW_SEQ"
+            exit 1
+          fi
+
+          # 5. Подпись. Проверяем ИМЕННО ТЕМ ключом, который лежит у людей
+          #    сейчас (в опубликованной ветке), а не тем, что приехал вместе с
+          #    кандидатом: иначе кандидат мог бы принести свой ключ и сам себя
+          #    заверить. Замена ключа — отдельный ручной путь с подтверждением
+          #    отпечатка (см. z2k_guard_key_swap в lib/install.sh).
+          mkdir -p /tmp/pub
+          git show "$CAND:UPDATES.json"     > /tmp/pub/m.json
+          if ! git cat-file -e "$CAND:UPDATES.json.sig" 2>/dev/null; then
+            echo "::error::у кандидата нет UPDATES.json.sig — неподписанный релиз отвергнет каждый роутер, уже принимавший подписанные"
+            exit 1
+          fi
+          git show "$CAND:UPDATES.json.sig" > /tmp/pub/m.sig
+          git show "origin/$RELEASE:files/etc/z2k-update-pub.pem" > /tmp/pub/pub.pem
+
+          # «Подпись не сходится» и «проверить нечем» — разные диагнозы, а
+          # выглядят одинаково: оба останавливают релиз. Ed25519 требует
+          # `-rawin`, которого нет в LibreSSL и в OpenSSL 1.1.1. На раннере
+          # стоит OpenSSL 3, но если это когда-нибудь изменится, отказ должен
+          # называть настоящую причину, а не обвинять подпись.
+          if ! openssl pkeyutl -help 2>&1 | grep -q -- '-rawin'; then
+            echo "::error::$(openssl version) не умеет Ed25519 (-rawin) — проверить подпись нечем, публикация остановлена"
+            exit 1
+          fi
+
+          if ! openssl pkeyutl -verify -rawin -pubin -inkey /tmp/pub/pub.pem \
+                 -in /tmp/pub/m.json -sigfile /tmp/pub/m.sig >/dev/null 2>&1; then
+            echo "::error::подпись манифеста не сходится с опубликованным ключом — публикация остановлена"
+            exit 1
+          fi
+
+          echo "публикуем $NEW_CUR ($CAND), seq $OLD_SEQ -> $NEW_SEQ, подпись сошлась"
+          {
+            echo "publish=yes"
+            echo "sha=$CAND"
+            echo "version=$NEW_CUR"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Перевести релизную ветку
+    needs: gate
+    if: needs.gate.outputs.publish == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Единственное место во всём репозитории, которому нужна запись.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Push fast-forward
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+          VER: ${{ needs.gate.outputs.version }}
+        run: |
+          set -eu
+          # Без --force: git сам откажет, если это не перемотка вперёд. Это
+          # последняя защита от публикации расходящейся истории.
+          git push origin "$SHA:refs/heads/z2k-enhanced"
+          echo "::notice::опубликовано: $VER ($SHA)"
+
+  cdn:
+    name: CDN
+    needs: [gate, publish]
+    if: needs.gate.outputs.publish == 'yes'
+    # Вызываем явно: пуш, сделанный GITHUB_TOKEN, чужие workflow не запускает,
+    # поэтому сам по себе jsdelivr-purge.yml после публикации не заведётся.
+    uses: ./.github/workflows/jsdelivr-purge.yml
+    with:
+      ref: ${{ needs.gate.outputs.sha }}
