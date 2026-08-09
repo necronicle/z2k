@@ -140,20 +140,75 @@ jobs:
           done
           exit $rc
 
-      - name: UPDATES.json file digests are in sync with the tree
+      - name: Манифест — либо ровно опубликованный, либо новый и подписанный
         run: |
-          # Routers verify every downloaded file against the files_sha256 map in
-          # UPDATES.json. A map that lags the tree does not fail quietly like the
-          # bug it replaces — it fails CLOSED: good files get rejected and the
-          # update aborts for everyone. So drift has to die here, not in the field.
+          # ДВА СОСТОЯНИЯ, И ТРЕТЬЕГО БЫТЬ НЕ ДОЛЖНО.
+          #
+          # Манифест подписан офлайн-ключом, и подпись покрывает ВЕСЬ файл,
+          # включая карту сумм. Значит любая правка манифеста без переподписи
+          # делает подпись невалидной, а роутер с защёлкнутым храповиком такой
+          # релиз отвергает — отказ одновременный и у всех.
+          #
+          # Раньше здесь требовалось «карта сходится с деревом» на КАЖДОМ
+          # коммите. Из-за этого карту приходилось регенерировать при каждой
+          # правке доставляемого файла, подпись после этого не сходилась, и её
+          # проверку пришлось сделать пропускаемой. Пропуск и заметил ревьюер —
+          # справедливо: гейт, который сам себя выключает, не гейт.
+          #
+          # Правильное состояние проще: между релизами манифест НЕ МЕНЯЕТСЯ
+          # ВООБЩЕ. Он и так описывает последний выпущенный срез, а рабочая
+          # ветка людям не видна. Карту пересобирает release.sh — там же, где
+          # накладывает подпись, одним шагом.
+          git fetch -q origin z2k-enhanced 2>/dev/null || true
+          _pub=$(git show origin/z2k-enhanced:UPDATES.json 2>/dev/null \
+                 | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+          _cur=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' UPDATES.json | head -1)
+
+          if [ -z "$_pub" ]; then
+            # Нет опубликованного состояния (форк, первый прогон) — сверяем то,
+            # что можем: карту с деревом.
+            echo "опубликованный манифест недоступен — сверяю карту с деревом"
+            sh scripts/gen_file_hashes.sh
+            git diff --quiet -- UPDATES.json || {
+              echo "::error::files_sha256 не соответствует дереву"
+              git --no-pager diff --stat -- UPDATES.json; exit 1; }
+            exit 0
+          fi
+
+          if [ "$_pub" = "$_cur" ]; then
+            # Рабочий коммит. Манифест и подпись обязаны быть байт-в-байт теми,
+            # что уже опубликованы: трогать их здесь нечем и незачем.
+            if ! git diff --quiet "origin/z2k-enhanced" HEAD -- UPDATES.json UPDATES.json.sig; then
+              echo "::error::манифест правлен вне релиза (current остался $_cur)."
+              echo "Карту и подпись пересобирает только scripts/release.sh — верните файлы как есть."
+              git --no-pager diff --stat "origin/z2k-enhanced" HEAD -- UPDATES.json UPDATES.json.sig
+              exit 1
+            fi
+            echo "рабочий коммит: манифест не тронут (current=$_cur)"
+            exit 0
+          fi
+
+          # Релизный коммит. Здесь карта обязана описывать ЭТО дерево, а подпись
+          # — сходиться с опубликованным ключом. Ровно те байты, что уедут людям.
+          echo "релизный коммит: $_pub -> $_cur"
           sh scripts/gen_file_hashes.sh
           if ! git diff --quiet -- UPDATES.json; then
             echo "::error::files_sha256 в UPDATES.json не соответствует дереву."
-            echo "Запусти локально: sh scripts/gen_file_hashes.sh — и закоммить результат."
+            echo "Запусти локально: sh scripts/gen_file_hashes.sh — и пересобери релиз."
             git --no-pager diff --stat -- UPDATES.json
             exit 1
           fi
-          echo "манифест синхронен"
+          git checkout -- UPDATES.json 2>/dev/null || true
+          if [ ! -s UPDATES.json.sig ]; then
+            echo "::error::релиз без подписи — его отвергнет каждый роутер, уже принимавший подписанные"
+            exit 1
+          fi
+          if ! openssl pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
+                 -in UPDATES.json -sigfile UPDATES.json.sig >/dev/null 2>&1; then
+            echo "::error::подпись манифеста не сходится с опубликованным ключом"
+            exit 1
+          fi
+          echo "карта описывает дерево, подпись сходится"
 
   tests:
     name: Shell tests

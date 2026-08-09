@@ -97,18 +97,47 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "дайджест-гейт (files_sha256 в UPDATES.json)"
-if git diff --quiet -- UPDATES.json webpanel/www/index.html 2>/dev/null; then
-    if sh scripts/gen_file_hashes.sh >/dev/null 2>&1 && git diff --quiet -- UPDATES.json; then
-        passed "files_sha256 синхронен с деревом"
+step "манифест (не тронут между релизами / подписан на релизе)"
+# Зеркалит гейт из ci.yml. Между релизами манифест не меняется вообще: карту и
+# подпись пересобирает только release.sh. Разойдись эти два места — локальный
+# прогон говорил бы «зелено» там, где CI краснеет, и наоборот.
+_pub=$(git show origin/z2k-enhanced:UPDATES.json 2>/dev/null \
+       | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+_cur=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' UPDATES.json | head -1)
+if [ -z "$_pub" ]; then
+    skipped "манифест" "нет origin/z2k-enhanced — сверять не с чем (git fetch origin)"
+elif [ "$_pub" = "$_cur" ]; then
+    if git diff --quiet origin/z2k-enhanced HEAD -- UPDATES.json UPDATES.json.sig 2>/dev/null \
+       && git diff --quiet -- UPDATES.json UPDATES.json.sig 2>/dev/null; then
+        passed "манифест не тронут (рабочий коммит, current=$_cur)"
     else
-        printf 'files_sha256 отстал от дерева. Перегенерированная карта уже в UPDATES.json —\n'
-        printf 'посмотри diff и закоммить (или git checkout -- UPDATES.json webpanel/www/index.html).\n'
-        failed "files_sha256"
+        printf 'Манифест правлен вне релиза. Карту и подпись пересобирает только\n'
+        printf 'scripts/release.sh — верните файлы: git checkout -- UPDATES.json UPDATES.json.sig\n'
+        failed "манифест"
     fi
 else
-    # Прогон поверх незакоммиченного UPDATES.json затёр бы рабочие правки.
-    skipped "files_sha256" "UPDATES.json/index.html изменены в рабочем дереве — гейт отработает в CI"
+    _ok=1
+    if sh scripts/gen_file_hashes.sh >/dev/null 2>&1 && git diff --quiet -- UPDATES.json; then :; else
+        printf 'files_sha256 не описывает дерево — пересоберите релиз.\n'; _ok=0
+    fi
+    if [ -s UPDATES.json.sig ] && command -v openssl >/dev/null 2>&1; then
+        _o=$(for c in /opt/homebrew/bin/openssl /usr/local/bin/openssl openssl; do
+                 command -v "$c" >/dev/null 2>&1 || continue
+                 "$c" pkeyutl -help 2>&1 | grep -q -- '-rawin' && { printf '%s' "$c"; break; }
+             done)
+        if [ -n "$_o" ]; then
+            "$_o" pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
+                -in UPDATES.json -sigfile UPDATES.json.sig >/dev/null 2>&1 \
+                || { printf 'Подпись манифеста не сходится с опубликованным ключом.\n'; _ok=0; }
+        fi
+    else
+        printf 'Релиз без подписи — его отвергнет каждый роутер с защёлкнутым храповиком.\n'; _ok=0
+    fi
+    if [ "$_ok" = "1" ]; then
+        passed "релизный коммит: карта описывает дерево, подпись сходится ($_pub -> $_cur)"
+    else
+        failed "манифест"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
