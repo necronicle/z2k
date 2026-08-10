@@ -113,6 +113,22 @@ jobs:
               # contains.
               git diff --name-only "$BEFORE" "$AFTER" > /tmp/purge/files.txt
           fi
+          # Корень доверия выселяем ВСЕГДА и целиком — обе половины.
+          #
+          # Манифест и его подпись это одна неделимая единица: пара, собранная
+          # из свежей и протухшей половины, у роутера с защёлкнутым храповиком
+          # означает не «подожду», а жёсткий отказ обновляться (инцидент
+          # r-75.4, 2026-08-10). Подписи при этом не было ни в files_sha256, ни
+          # в top-200-фоллбэке гарантированно, так что выселялась она только
+          # если случайно попала в срез по имени. Ставим обе явно и первыми.
+          for _tr in UPDATES.json UPDATES.json.sig; do
+              if git cat-file -e "HEAD:$_tr" 2>/dev/null; then
+                  printf '%s\n' "$_tr"
+              fi
+          done > /tmp/purge/trust.txt
+          grep -vxE 'UPDATES\.json|UPDATES\.json\.sig' /tmp/purge/files.txt \
+            >> /tmp/purge/trust.txt || true
+          mv /tmp/purge/trust.txt /tmp/purge/files.txt
           count=$(wc -l < /tmp/purge/files.txt | tr -d ' ')
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "---Files to purge ($count)---"
@@ -207,13 +223,33 @@ jobs:
                 | sed -n 's/^[[:space:]]*"\([^"]*\)":.*/\1/p' > /tmp/verify/changed.txt
               echo "UPDATES.json" >> /tmp/verify/changed.txt
           fi
+          # Подпись манифеста — ВСЕГДА в списке, наравне с самим манифестом.
+          #
+          # Её нет ни в files_sha256, ни (на пути dispatch/workflow_call) в
+          # changed_files, поэтому раньше она не попадала сюда вовсе: манифест
+          # прогревался и проверялся, а его подпись оставалась ждать, пока
+          # протухнет чужой кэш (raw — минуты, jsdelivr — до 12 часов). В этом
+          # окне роутер получал свежий манифест со старой подписью, пара не
+          # сходилась, и с защёлкнутым храповиком это жёсткий отказ обновляться
+          # — то есть массовый локаут. Ровно это и случилось на r-75.4
+          # (2026-08-10). Клиент теперь умеет пересобрать пару по неизменяемому
+          # пути тега (lib/auto_update.sh: au_reverify_immutable), но окно
+          # правильнее не создавать: манифест и подпись — одна неделимая
+          # единица доставки, и прогревать их надо вместе.
+          if ! grep -qx 'UPDATES.json.sig' /tmp/verify/changed.txt; then
+              echo "UPDATES.json.sig" >> /tmp/verify/changed.txt
+          fi
           # Существующие в HEAD файлы; UPDATES.json — всегда первым (это trust
-          # root, который апдейтер фетчит раньше всего остального).
+          # root, который апдейтер фетчит раньше всего остального), сразу за ним
+          # его подпись.
           : > /tmp/verify/files.txt
           if grep -qx 'UPDATES.json' /tmp/verify/changed.txt; then
               echo "UPDATES.json" >> /tmp/verify/files.txt
           fi
-          grep -vx 'UPDATES.json' /tmp/verify/changed.txt | LC_ALL=C sort -u \
+          if git cat-file -e 'HEAD:UPDATES.json.sig' 2>/dev/null; then
+              echo "UPDATES.json.sig" >> /tmp/verify/files.txt
+          fi
+          grep -vxE 'UPDATES\.json|UPDATES\.json\.sig' /tmp/verify/changed.txt | LC_ALL=C sort -u \
             | while IFS= read -r f; do
                 [ -n "$f" ] || continue
                 # if, а не `&& echo || true`: под set -e поведение то же, но

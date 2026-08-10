@@ -170,5 +170,72 @@ else
        "сходится" "НЕ сходится — роутеры отвергнут релиз"
 fi
 
+# --- 5. Рваная пара «манифест+подпись» — не подделка ---------------------------
+#
+# ИНЦИДЕНТ r-75.4 (2026-08-10). Манифест и подпись — два независимых объекта и
+# тянутся двумя независимыми запросами. По имени ВЕТКИ у каждого свой ключ кэша
+# и свой TTL (raw — минуты, jsdelivr — до 12 часов), поэтому сразу после сдвига
+# ветки штатно бывает окно, где свежий манифест приезжает со старой подписью.
+# Пара не сходится — и раньше это трактовалось как подделка, то есть с
+# защёлкнутым храповиком означало жёсткий отказ обновляться У ВСЕХ, пока не
+# протухнет чужой кэш. Лечилось ожиданием, что для пользователя неотличимо от
+# «обновление сломалось».
+#
+# Требуемое поведение: сначала исключить рассогласование доставки (пересобрать
+# пару по неизменяемому пути тега), и только если и там не сошлось — отказ.
+eval "$(awk '/^au_fetch_pair\(\) \{/,/^\}/' "$AU")"
+eval "$(awk '/^au_reverify_immutable\(\) \{/,/^\}/' "$AU")"
+eval "$(awk '/^au_fetch_manifest\(\) \{/,/^\}/' "$AU")"
+eval "$(awk '/^au_manifest_current\(\) \{/,/^\}/' "$AU")"
+
+SRV="$TMP/srv"; mkdir -p "$SRV"
+Z2K_AU_TMP_DIR="$TMP/au"
+Z2K_AU_REPO_RAW="https://example.invalid/o/r/z2k-enhanced"
+Z2K_AU_MANIFEST_URL="${Z2K_AU_REPO_RAW}/UPDATES.json"
+Z2K_AU_SIG_URL="${Z2K_AU_MANIFEST_URL}.sig"
+
+# Зеркало: путь по ветке отдаёт СВЕЖИЙ манифест и ПРОТУХШУЮ подпись,
+# путь по тегу — когерентную пару.
+z2k_fetch() {
+    case "$1" in
+        */z2k-enhanced/UPDATES.json)     cp "$SRV/branch.json" "$2" 2>/dev/null || return 1 ;;
+        */z2k-enhanced/UPDATES.json.sig) cp "$SRV/branch.sig"  "$2" 2>/dev/null || return 1 ;;
+        */r-75.4/UPDATES.json)           cp "$SRV/tag.json"    "$2" 2>/dev/null || return 1 ;;
+        */r-75.4/UPDATES.json.sig)       cp "$SRV/tag.sig"     "$2" 2>/dev/null || return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
+printf '{"schema":1,"seq":9,"current":"r-75.4"}\n' > "$SRV/branch.json"
+cp "$SRV/branch.json" "$SRV/tag.json"
+cp "$TMP/m.sig" "$SRV/branch.sig"     # подпись от ПРОШЛОГО манифеста — протухла
+"$OSSL" pkeyutl -sign -rawin -inkey "$TMP/k" -in "$SRV/tag.json" -out "$SRV/tag.sig" 2>/dev/null
+
+au_trust_pinned || au_trust_pin       # храповик защёлкнут — это и есть худший случай
+if au_fetch_manifest && grep -q '"current": *"r-75.4"' "$Z2K_AU_TMP_DIR/UPDATES.json" 2>/dev/null; then
+    ok "рваная пара (свежий манифест + протухшая подпись) чинится пересборкой по тегу, а не отказом"
+else
+    no "рваная пара чинится пересборкой по неизменяемому пути тега" \
+       "манифест принят" "отказ — это локаут всего флота на время чужого кэша"
+fi
+
+# И обратное: пересборка НЕ должна становиться дырой. Если пара не сходится и
+# по тегу — это уже не рассогласование доставки, а подделка, и отказ обязателен.
+"$OSSL" pkeyutl -sign -rawin -inkey "$TMP/other" -in "$SRV/tag.json" -out "$SRV/tag.sig" 2>/dev/null
+if au_fetch_manifest; then
+    no "подделка не спасается пересборкой по тегу" "отказ" "ПРИНЯТА — дыра в проверке подписи"
+else
+    ok "подпись чужим ключом отвергается и после пересборки по тегу"
+fi
+
+# Тег берётся из ещё не проверенного манифеста, поэтому в URL он не должен
+# попадать как попало: инъекция пути обязана просто не сработать.
+printf '{"schema":1,"seq":9,"current":"../../evil"}\n' > "$SRV/branch.json"
+if au_reverify_immutable "$SRV/branch.json" "$SRV/branch.sig"; then
+    no "мусорный current не идёт в URL пересборки" "отказ" "принят — путь собран из непроверенных данных"
+else
+    ok "мусорный current не идёт в URL пересборки"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

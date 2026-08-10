@@ -144,30 +144,82 @@ au_trust_pin() {
     : > "$Z2K_AU_TRUST_PIN" 2>/dev/null
 }
 
+# Тянет ПАРУ (манифест, подпись). 0 — манифест непустой; отсутствие подписи
+# здесь не ошибка, её разбирает вызывающий.
+au_fetch_pair() {
+    local murl="$1" surl="$2" out="$3" sig="$4"
+    rm -f "$out" "$sig"
+    if command -v z2k_fetch >/dev/null 2>&1; then
+        z2k_fetch "$murl" "$out" || return 1
+        z2k_fetch "$surl" "$sig" >/dev/null 2>&1 || true
+    else
+        curl -fsSL --max-time 30 "$murl" -o "$out" || return 1
+        curl -fsSL --max-time 30 "$surl" -o "$sig" >/dev/null 2>&1 || true
+    fi
+    [ -s "$out" ] || return 1
+}
+
+# Пересобрать пару по НЕИЗМЕНЯЕМОМУ пути (по имени тега) и перепроверить.
+#
+# Зачем. Манифест и его подпись — два независимых объекта, и тянутся они двумя
+# независимыми запросами. По имени ВЕТКИ у каждого свой ключ кэша и свой TTL
+# (raw — минуты, jsdelivr — до 12 часов), поэтому сразу после сдвига ветки
+# штатно бывает окно, где свежий манифест приезжает со старой подписью. Пара
+# не сходится — но это РАССОГЛАСОВАНИЕ ДОСТАВКИ, а не подделка, и разница
+# принципиальная: с защёлкнутым храповиком второе означает жёсткий отказ
+# обновляться, то есть массовый локаут до истечения чужого кэша. Ровно это и
+# случилось на r-75.4 (2026-08-10) и «лечилось» ожиданием.
+#
+# Путь по тегу неизменяем: под этим URL никогда не лежало ничего другого, так
+# что рвать нечего — обе половины приезжают из одной ревизии.
+#
+# Безопасность не слабеет. Тег читается из ЕЩЁ НЕ ПРОВЕРЕННОГО манифеста, но
+# решает всё равно подпись: пара обязана сойтись с нашим пинованным ключом,
+# иначе отказ остаётся. Худшее, что даёт враждебное зеркало, — увести нас на
+# другой ПОДПИСАННЫЙ НАМИ же релиз; понижение версии отдельно отсекается seq
+# (антидаунгрейд), а подписать чужое всё равно нечем.
+au_reverify_immutable() {
+    local out="$1" sig="$2"
+    # Только штатная раскладка URL: если манифест переопределён вручную
+    # (тесты, зеркало), собирать тег-путь не из чего.
+    [ "$Z2K_AU_MANIFEST_URL" = "${Z2K_AU_REPO_RAW}/UPDATES.json" ] || return 1
+    local _root="${Z2K_AU_REPO_RAW%/*}"
+    [ "$_root" != "$Z2K_AU_REPO_RAW" ] || return 1
+    local _tag; _tag=$(au_manifest_current "$out")
+    # В URL пойдёт как есть — пускаем только безопасный набор.
+    case "$_tag" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+
+    local _o="${Z2K_AU_TMP_DIR}/UPDATES.tag.json"
+    local _s="${_o}.sig"
+    if au_fetch_pair "${_root}/${_tag}/UPDATES.json" "${_root}/${_tag}/UPDATES.json.sig" \
+                     "$_o" "$_s" && au_manifest_verify "$_o" "$_s"; then
+        mv -f "$_o" "$out"
+        mv -f "$_s" "$sig"
+        au_log "пара манифест+подпись пересобрана по неизменяемому пути тега $_tag — подпись сошлась"
+        return 0
+    fi
+    rm -f "$_o" "$_s"
+    return 1
+}
+
 # Fetch UPDATES.json into $Z2K_AU_TMP_DIR/UPDATES.json. Uses z2k_fetch
 # for layered CDN/DoH fallback if available; raw curl otherwise.
 au_fetch_manifest() {
     mkdir -p "$Z2K_AU_TMP_DIR"
     local out="$Z2K_AU_TMP_DIR/UPDATES.json"
     local sig="${out}.sig"
-    rm -f "$out" "$sig"
-    if command -v z2k_fetch >/dev/null 2>&1; then
-        z2k_fetch "$Z2K_AU_MANIFEST_URL" "$out" || return 1
-    else
-        curl -fsSL --max-time 30 "$Z2K_AU_MANIFEST_URL" -o "$out" || return 1
-    fi
-    [ -s "$out" ] || return 1
-
-    # Подпись тянем рядом, тем же транспортом. Её отсутствие — не сетевой сбой,
-    # а состояние, которое разбирается ниже вместе с храповиком.
-    if command -v z2k_fetch >/dev/null 2>&1; then
-        z2k_fetch "$Z2K_AU_SIG_URL" "$sig" >/dev/null 2>&1 || true
-    else
-        curl -fsSL --max-time 30 "$Z2K_AU_SIG_URL" -o "$sig" >/dev/null 2>&1 || true
-    fi
+    # Подпись тянется рядом, тем же транспортом. Её отсутствие — не сетевой
+    # сбой, а состояние, которое разбирается ниже вместе с храповиком.
+    au_fetch_pair "$Z2K_AU_MANIFEST_URL" "$Z2K_AU_SIG_URL" "$out" "$sig" || return 1
 
     au_manifest_verify "$out" "$sig"
-    case "$?" in
+    local _rc=$?
+    # Пара не сошлась — прежде чем звать это подделкой, исключаем рваное
+    # чтение по ветке: пересобираем пару по неизменяемому пути тега.
+    if [ "$_rc" != "0" ] && [ "$_rc" != "2" ] && au_reverify_immutable "$out" "$sig"; then
+        _rc=0
+    fi
+    case "$_rc" in
         0)
             # Первая валидная подпись защёлкивает храповик.
             au_trust_pinned || { au_trust_pin; au_log "подпись манифеста принята впервые — дальше она обязательна"; }
