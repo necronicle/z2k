@@ -370,6 +370,15 @@ jobs:
               while [ -s /tmp/verify/cdnlag.txt ] && [ "$(date +%s)" -lt "$cdn_deadline" ]; do
                   : > /tmp/verify/next.txt
                   while IFS= read -r f; do
+                      # Не гейт (jsdelivr — фоллбэк, только warning), но всё
+                      # равно последовательные curl --max-time 30 — без
+                      # проверки внутри цикла зависшая сеть съела бы весь
+                      # 45-минутный бюджет job на некритичный догон фоллбэка,
+                      # а не на то, что реально решает исход публикации.
+                      # Точный список "кто именно остался" здесь не критичен
+                      # (это не гейт) — просто обрываем проход, внешний while
+                      # всё равно завершится по тому же cdn_deadline.
+                      [ "$(date +%s)" -ge "$cdn_deadline" ] && break
                       want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
                       cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
                       if [ "$cdn" = "$want" ]; then
@@ -428,7 +437,20 @@ jobs:
           while [ -s /tmp/verify/tag_pending.txt ]; do
               round=$((round + 1))
               : > /tmp/verify/tag_next.txt
+              _round_total=$(wc -l < /tmp/verify/tag_pending.txt | tr -d ' ')
+              _round_i=0
               while IFS= read -r f; do
+                  # Тот же класс проблемы, что и в branch-цикле выше, и здесь
+                  # он даже острее: дедлайн 10 минут, а раунд всё так же
+                  # последовательный (curl --max-time 30 на файл на зеркало).
+                  # 107 файлов в один зависший раунд — потенциально ~107
+                  # минут, а не 10, если бы проверка стояла только между
+                  # раундами. Проверяем перед КАЖДЫМ файлом.
+                  _round_i=$((_round_i + 1))
+                  if [ "$(date +%s)" -ge "$deadline" ]; then
+                      echo "::error::raw по тегу $TAG не сошёлся за отведённое время — превышение ВНУТРИ раунда $round, проверено $((_round_i - 1))/$_round_total файлов этого прохода"
+                      exit 1
+                  fi
                   want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
                   raw=$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/${REPO}/${TAG}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || raw="FETCH-ERR"
                   cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${TAG}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
