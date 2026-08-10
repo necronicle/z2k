@@ -101,20 +101,29 @@ step "манифест (не тронут между релизами / подп
 # Зеркалит гейт из ci.yml. Между релизами манифест не меняется вообще: карту и
 # подпись пересобирает только release.sh. Разойдись эти два места — локальный
 # прогон говорил бы «зелено» там, где CI краснеет, и наоборот.
-# Ссылку освежаем сами. Настоящий CI всегда видит актуальный
-# origin/z2k-enhanced, а локально он ровно настолько свеж, насколько давно
-# делали fetch — и на устаревшем прогон уходит в ветку «это релизный коммит»
-# и краснеет там, где всё в порядке (сразу двумя проверками: картой сумм и
-# тест-сьютом). Красное по причине «давно не фетчил» хуже бесполезного: оно
-# учит не верить прогону. Best-effort: офлайн просто оставит что было.
-git fetch -q origin z2k-enhanced 2>/dev/null || true
-_pub=$(git show origin/z2k-enhanced:UPDATES.json 2>/dev/null \
+# Ссылку освежаем сами и читаем ИМЕННО принесённое.
+#
+# Настоящий CI всегда видит актуальный z2k-enhanced, а локально remote-tracking
+# ссылка свежа ровно настолько, насколько давно делали fetch — на устаревшей
+# прогон уходит в ветку «это релизный коммит» и краснеет там, где всё в
+# порядке (сразу двумя проверками: картой сумм и тест-сьютом). Красное по
+# причине «давно не фетчил» хуже бесполезного: оно учит не верить прогону.
+#
+# Читаем FETCH_HEAD, а не refs/remotes/origin/...: `git fetch origin <branch>`
+# обновляет remote-tracking ссылку не во всякой конфигурации, а FETCH_HEAD
+# пишется всегда. Best-effort: офлайн — откат на remote-tracking, что было.
+if git fetch -q origin z2k-enhanced 2>/dev/null; then
+    _pubref=FETCH_HEAD
+else
+    _pubref=origin/z2k-enhanced
+fi
+_pub=$(git show "$_pubref:UPDATES.json" 2>/dev/null \
        | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
 _cur=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' UPDATES.json | head -1)
 if [ -z "$_pub" ]; then
     skipped "манифест" "нет origin/z2k-enhanced — сверять не с чем (git fetch origin)"
 elif [ "$_pub" = "$_cur" ]; then
-    if git diff --quiet origin/z2k-enhanced HEAD -- UPDATES.json UPDATES.json.sig 2>/dev/null \
+    if git diff --quiet "$_pubref" HEAD -- UPDATES.json UPDATES.json.sig 2>/dev/null \
        && git diff --quiet -- UPDATES.json UPDATES.json.sig 2>/dev/null; then
         passed "манифест не тронут (рабочий коммит, current=$_cur)"
     else

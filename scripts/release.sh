@@ -152,16 +152,25 @@ printf 'предыдущий релиз: %s (%s)\n' "$CUR" "$PREV_REF"
 # — застрявший релиз и ручной разбор.
 #
 # Дешевле не пустить второй релиз в полёт, чем разбирать заклинивший.
+# Читаем то, что ТОЛЬКО ЧТО принесли, а не remote-tracking ссылку.
+#
+# `git fetch origin <branch>` обновляет refs/remotes/origin/<branch> не во всех
+# конфигурациях (зависит от версии git и от remote.origin.fetch), а гейт,
+# который иногда сверяется с недельной давности ссылкой, — это гейт, который
+# иногда пропускает второй релиз в полёте и иногда блокирует законный.
+# FETCH_HEAD пишется этим самым fetch'ем всегда и однозначно.
 git fetch -q origin "$RELEASE_BRANCH" 2>/dev/null \
-    || die "не удалось получить origin/$RELEASE_BRANCH — не с чем сверить, опубликован ли предыдущий релиз"
-PUBLISHED=$(git show "origin/${RELEASE_BRANCH}:UPDATES.json" 2>/dev/null \
+    || die "не удалось получить $RELEASE_BRANCH с origin — не с чем сверить, опубликован ли предыдущий релиз"
+PUBLISHED=$(git show FETCH_HEAD:UPDATES.json 2>/dev/null \
     | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-[ -n "$PUBLISHED" ] || die "не читается current из origin/$RELEASE_BRANCH:UPDATES.json"
+[ -n "$PUBLISHED" ] || die "не читается current из только что полученного $RELEASE_BRANCH (FETCH_HEAD)"
 if [ "$PUBLISHED" != "$CUR" ]; then
     die "предыдущий релиз $CUR ещё НЕ опубликован (в $RELEASE_BRANCH сейчас $PUBLISHED).
          Второй релиз в этом состоянии заклинит публикацию: gate увидит две новые
          записи history разом, честно ответит красным и сам не повторится.
-         Дождитесь, пока publish.yml переведёт $RELEASE_BRANCH на $CUR."
+         Дождитесь, пока publish.yml переведёт $RELEASE_BRANCH на $CUR.
+         Если $CUR опубликован НЕ БУДЕТ (CI красный по существу) — отзовите его:
+         раздел «Отмена окончательно красного кандидата» в RELEASING.md."
 fi
 
 # --- Список файлов: из git, а не из головы -----------------------------------
