@@ -242,15 +242,52 @@ jobs:
             echo "::error::ref в манифесте = '$_ref', а тег — '$NEW_CUR'"
             exit 1
           fi
-          # Сверка с КОНКРЕТНЫМ ключом (allowed-signers из опубликованного pub.pem)
-          # — работа publish.yml, не этого преflight'а: там это уже покрыто.
-          # Здесь достаточно факта, что тег вообще подписан — голый lightweight
-          # тег или битый annotated объект publish.yml отвергнет так же, только
-          # позже.
-          if ! git cat-file tag "$NEW_CUR" 2>/dev/null | grep -q 'BEGIN SSH SIGNATURE'; then
-            echo "::error::тег $NEW_CUR не подписан (или не annotated) — publish.yml его отвергнет"
-            exit 1
-          fi
+          # Сверка КОНКРЕТНЫМ ключом, не просто фактом наличия SSH-маркера.
+          # Голый grep на "BEGIN SSH SIGNATURE" пропустил бы тег, подписанный
+          # ЧУЖИМ (или старым, после ротации) ключом — валидная с виду
+          # SSH-подпись, просто не тем секретом. Пока bootstrap-разрыв жив
+          # (см. выше) и publish.yml может оказаться в СТАРОЙ версии без
+          # проверки тега вообще — это единственное место, которое вообще
+          # смотрит на тег до публикации, и оно обязано сверять именно то,
+          # чем действительно подписано, а не факт формы.
+          #
+          # Ключ берём из РАБОЧЕГО ДЕРЕВА (files/etc/z2k-update-pub.pem), тем
+          # же, которым выше уже проверялась подпись манифеста в этом шаге —
+          # не из origin/z2k-enhanced, как делает publish.yml. Разница
+          # осознанная: publish.yml — последняя инстанция и обязан защититься
+          # от кандидата, который принёс СВОЙ ключ и сам себя заверил; этот
+          # preflight — просто более раннее эхо того же гейта, ему достаточно
+          # той же модели доверия, что и остальным проверкам этого шага.
+          python3 - "$NEW_CUR" <<'PYEOF'
+          import base64, struct, subprocess, sys, tempfile, os
+
+          tag = sys.argv[1]
+          der = subprocess.run(["openssl", "pkey", "-pubin", "-in", "files/etc/z2k-update-pub.pem",
+                                "-outform", "DER"], capture_output=True, check=True).stdout
+
+          def s(b):
+              return struct.pack(">I", len(b)) + b
+
+          blob = s(b"ssh-ed25519") + s(der[-32:])
+          line = "z2k-release ssh-ed25519 " + base64.b64encode(blob).decode() + "\n"
+
+          fd, path = tempfile.mkstemp()
+          with os.fdopen(fd, "w") as fh:
+              fh.write(line)
+
+          rc = subprocess.run(
+              ["git", "-c", "gpg.format=ssh", "-c", f"gpg.ssh.allowedSignersFile={path}",
+               "verify-tag", tag],
+              capture_output=True, text=True,
+          )
+          os.unlink(path)
+          if rc.returncode != 0:
+              print(f"::error::подпись тега {tag} не сходится с опубликованным ключом")
+              print(rc.stdout)
+              print(rc.stderr)
+              sys.exit(1)
+          print(f"подпись тега {tag} сходится с опубликованным ключом")
+          PYEOF
 
           python3 - "$_pub" <<'PYEOF'
           import json, subprocess, sys

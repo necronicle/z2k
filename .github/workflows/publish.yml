@@ -112,8 +112,14 @@ jobs:
           #    Спрашиваем Actions API про ИМЕННО этот коммит, а не доверяем факту,
           #    что нас вызвали руками.
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # По `path`, не по `name`: display name ("CI") — вольный текст из
+            # `name:` в самом workflow-файле, кто угодно с правом править
+            # .github/workflows/*.yml может его переименовать (случайно или
+            # нет), и матч по имени тогда перестанет находить что-либо вообще.
+            # `path` — файл в дереве репозитория, тот самый идентификатор,
+            # который отличает CI от любого другого workflow с тем же именем.
             _ci_ok=$(gh api "repos/${REPO}/actions/runs?head_sha=${CAND}&status=completed&per_page=50" \
-                       --jq '[.workflow_runs[] | select(.name=="CI" and .conclusion=="success")] | length' \
+                       --jq '[.workflow_runs[] | select(.path==".github/workflows/ci.yml" and .conclusion=="success")] | length' \
                        2>/dev/null) || _ci_ok=0
             case "$_ci_ok" in ''|*[!0-9]*) _ci_ok=0 ;; esac
             if [ "$_ci_ok" -lt 1 ]; then
@@ -328,8 +334,25 @@ jobs:
           VER: ${{ needs.gate.outputs.version }}
         run: |
           set -eu
+          # ПОВТОРНАЯ проверка верхушки staging, здесь и сейчас. `gate` решил
+          # publish=yes по состоянию НА МОМЕНТ своего запуска — это отдельная
+          # job, и между её решением и этим шагом реально проходит время
+          # (очередь раннера, отдельный checkout). Если за это время на
+          # staging прилетел новый коммит, "$SHA" из gate — уже не верхушка:
+          # публиковать его так же неверно, как публиковать промежуточный
+          # коммит внутри самого gate (см. проверку #1 там же), просто окно
+          # шире. Устаревшую верхушку не публикуем — её возьмёт свой ран,
+          # триггернутый чужим workflow_run на СВЕЖЕМ коммите.
+          git fetch -q origin z2k-staging
+          _tip_now=$(git rev-parse origin/z2k-staging)
+          if [ "$_tip_now" != "$SHA" ]; then
+            echo "::notice::$SHA больше не верхушка z2k-staging ($_tip_now) — публикацию сделает более свежий ран, пропускаю"
+            exit 0
+          fi
           # Без --force: git сам откажет, если это не перемотка вперёд. Это
-          # последняя защита от публикации расходящейся истории.
+          # последняя защита от публикации расходящейся истории — саму гонку
+          # (тег/подпись пошли раньше публикации) она не ловит, только не даёт
+          # УЖЕ идущей публикации перезаписать чужую историю силой.
           git push origin "$SHA:refs/heads/z2k-enhanced"
           echo "::notice::опубликовано: $VER ($SHA)"
 

@@ -288,10 +288,19 @@ else
     no "ручной запуск проверяет CI по SHA" "gh api actions/runs?head_sha= внутри ветки workflow_dispatch" "не найдено"
 fi
 
-if grep -q 'select(.name=="CI" and .conclusion=="success")' "$PUB"; then
+if grep -q 'select(.path==".github/workflows/ci.yml" and .conclusion=="success")' "$PUB"; then
     ok "проверяется именно CI и именно success, а не любой прогон"
 else
-    no "проверяется CI+success" "select по name==CI и conclusion==success" "не найдено"
+    no "проверяется CI+success" "select по path==.github/workflows/ci.yml и conclusion==success" "не найдено"
+fi
+
+# path, а не name: display name ("CI") — вольный текст из name: в самом
+# workflow-файле, переименование сломало бы матч по имени незаметно. path —
+# файл в дереве, стабильный идентификатор.
+if grep -q '\.name=="CI"' "$PUB"; then
+    no "матч по CI не завязан на изменяемое display name" "только path" "остался матч по .name"
+else
+    ok "матч по CI завязан на path (стабильный идентификатор), не на переименовываемое display name"
 fi
 
 # gh api ходит в Actions REST — джобе нужно чтение actions, отдельно от
@@ -343,10 +352,19 @@ else
     no "CI на staging проверяет тег" 'refs/tags/$NEW_CUR + rev-list' "не найдено"
 fi
 
-if grep -q "BEGIN SSH SIGNATURE" "$CI"; then
-    ok "CI на staging проверяет, что тег вообще подписан"
+if grep -qE "grep -q ['\"]BEGIN SSH SIGNATURE" "$CI"; then
+    no "CI на staging проверяет КОНКРЕТНОГО подписанта, не просто маркер" \
+       "нет живого grep -q BEGIN SSH SIGNATURE" "остался — пропускает тег с чужим ключом"
 else
-    no "CI на staging проверяет подпись тега" "BEGIN SSH SIGNATURE" "не найдено"
+    ok "CI на staging не довольствуется голым SSH-маркером подписи (только упоминание в комментарии-обосновании)"
+fi
+
+if grep -q "gpg.ssh.allowedSignersFile" "$CI" && grep -q "verify-tag" "$CI" \
+    && grep -q "z2k-update-pub.pem" "$CI"; then
+    ok "CI на staging сверяет тег с ОПУБЛИКОВАННЫМ ключом (allowed-signers), не просто фактом подписи"
+else
+    no "CI на staging сверяет тег с конкретным ключом" \
+       "allowedSignersFile + verify-tag + z2k-update-pub.pem" "не найдено"
 fi
 
 if grep -q 'nh\[:len(oh)\] != oh' "$CI" && grep -q 'len(nh) != len(oh) + 1' "$CI"; then
@@ -378,6 +396,60 @@ for _f_name in "publish.yml:$PUB" "ci.yml (preflight):$CI"; do
         no "$_label: схема новой записи проверяется полностью" "required = {v,type,ts,ref,desc,changed_files}" "не найдено"
     fi
 done
+
+# --- 13. Окно между решением gate и реальным push -----------------------------
+#
+# gate и publish — РАЗНЫЕ job'ы: между вердиктом "publish=yes" (по состоянию
+# staging НА МОМЕНТ gate) и фактическим push проходит реальное время
+# (раннер для publish ещё нужно поднять, смонтировать checkout). Если за это
+# время на staging прилетел новый коммит, "$SHA" из gate — уже не верхушка.
+if awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q 'git fetch -q origin z2k-staging'; then
+    ok "push повторно fetch'ит staging непосредственно перед публикацией"
+else
+    no "push повторно fetch'ит staging перед публикацией" "git fetch -q origin z2k-staging в шаге Push fast-forward" "не найдено"
+fi
+
+if awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q '"\$_tip_now" != "\$SHA"'; then
+    ok "push сверяет точное равенство верхушки перед публикацией, не публикует устаревший SHA"
+else
+    no "push сверяет верхушку перед публикацией" '"$_tip_now" != "$SHA"' "не найдено"
+fi
+
+# --- 14. CDN verify не режет список файлов молча ------------------------------
+#
+# Раньше при превышении лимита (120, а манифест уже нёс 107) job резала
+# список, печатала ::warning:: и шла дальше ЗЕЛЁНОЙ — "проверено" и "проверены
+# первые N" неотличимы по цвету. ::warning:: — не то же самое, что job status:
+# он не красит job красным и легко пролистывается в логе.
+if grep -qE 'if \[ "\$total" -gt 300 \]' "$CDN"; then
+    ok "CDN verify поднял лимит с 120 (почти исчерпан) на 300 (реальный запас)"
+else
+    no "CDN verify поднял лимит" '$total" -gt 300' "не найдено — лимит остался прежним или исчез вовсе"
+fi
+
+if awk '/if \[ "\$total" -gt 300 \]/,/^          fi$/' "$CDN" | grep -q 'exit 1'; then
+    ok "CDN verify фейлится КРАСНЫМ при превышении лимита, а не режет список молча"
+else
+    no "CDN verify фейлится при превышении лимита" "exit 1 внутри if total -gt 300" "не найдено"
+fi
+
+if grep -qE '::warning::verify capped' "$CDN"; then
+    no "нет старого молчаливого усечения с warning" "нет" "старая ветка ::warning::verify capped осталась"
+else
+    ok "старая ветка молчаливого усечения (warning + head -120) убрана"
+fi
+
+# --- 15. Manual-gate CI-check по стабильному идентификатору workflow ----------
+#
+# .name — вольный текст из name: в самом workflow-файле; переименование
+# ci.yml (или его name:) молча ломает матч. .path — файл в дереве, тот же
+# всегда, пока файл не переехал (а переезд — это явная, видимая правка, а не
+# косметика).
+if grep -q '\.name=="CI"' "$PUB"; then
+    no "manual-gate матчит CI по стабильному path, не по name" "нет .name==\"CI\"" "остался"
+else
+    ok "manual-gate матчит CI по стабильному path (.github/workflows/ci.yml), не по переименовываемому name"
+fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

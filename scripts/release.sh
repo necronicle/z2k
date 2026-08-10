@@ -198,10 +198,6 @@ if [ -n "$_reinstall_changed" ] && [ "$TYPE" != "reinstall" ]; then
      либо один раз при установке, а патч тут кладёт файл, который никто заново не перечитает"
 fi
 
-# Отдельно — модули с изменившимися builds/, для сверки mtproxy-client с
-# реальным секретом ниже (там нужны ИМЕНА МОДУЛЕЙ, а не список файлов).
-_bin_changed=$(printf '%s\n' "$_reinstall_changed" | grep -E '/builds/' | sed 's|/builds/.*||' | sort -u)
-
 # --- mtproxy-client: сверка с РЕАЛЬНЫМ секретом ------------------------------
 #
 # .github/workflows/ci.yml проверяет байт-в-байт все бинарники из build-matrix.tsv
@@ -213,8 +209,28 @@ _bin_changed=$(printf '%s\n' "$_reinstall_changed" | grep -E '/builds/' | sed 's
 # что уже случался с rt-proxy: полностью пересобранный, задеплоенный и
 # провалидированный на роутере бинарник тихо не попадает в builds/, потому что
 # кто-то забыл его туда скопировать после `make all`.
-if [ -n "$_bin_changed" ] && printf '%s\n' "$_bin_changed" | grep -qx 'mtproxy-client'; then
-    [ -n "${Z2K_TUNNEL_SECRET:-}" ] || die "mtproxy-client/builds изменился, но Z2K_TUNNEL_SECRET не задан —
+#
+# ТРИГГЕР — НЕ только builds/. Правка mtproxy-client/main.go (или go.mod,
+# go.sum, Makefile), после которой забыли прогнать `make all`, оставляет
+# builds/ БЕЗ единого изменения в git diff — и гейт, завязанный только на
+# "/builds/ поменялся", такую правку не увидел бы вообще: source разошёлся с
+# уже отгруженным бинарником, а release.sh молча решил бы, что сверять нечего.
+# Сверяем при ЛЮБОМ изменении внутри mtproxy-client/ (исходники, builds/,
+# go.mod/go.sum, Makefile) и при правке build-matrix.tsv (могла поменяться
+# цель сборки для модуля). Пересборка с тем же исходником и тем же секретом
+# либо совпадёт с builds/ (ничего по сути не изменилось — например, правка
+# только комментария), либо разойдётся — и это ровно тот «забыли пересобрать»
+# случай, который и нужно ловить.
+# || true: grep как ПОСЛЕДНЯЯ команда пайпа внутри $(...) — её код возврата
+# становится кодом возврата присваивания. "Нет совпадений" (обычный случай,
+# когда mtproxy-client никто не трогал) — это exit 1 у grep, и под set -e
+# такое присваивание молча валит весь скрипт без единого сообщения die. Тот
+# же класс бага, что уже ловился на _reinstall_changed чуть выше — там
+# ловушка была в while-цикле, здесь — в голом grep на конце пайпа.
+_mtproxy_changed=$(git diff --name-only "$PREV_REF"..HEAD \
+    | grep -E '^mtproxy-client/|^build-matrix\.tsv$' || true)
+if [ -n "$_mtproxy_changed" ]; then
+    [ -n "${Z2K_TUNNEL_SECRET:-}" ] || die "mtproxy-client ($(printf '%s' "$_mtproxy_changed" | tr '\n' ' ')) изменился, но Z2K_TUNNEL_SECRET не задан —
      нечем пересобрать и свериться с тем, что реально лежит в builds/.
      Запустите: Z2K_TUNNEL_SECRET=<hex> sh scripts/release.sh ... (тот же секрет, что в make all)"
     command -v go >/dev/null 2>&1 || die "mtproxy-client изменился, но go не найден — нечем свериться с builds/"
