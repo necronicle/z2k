@@ -178,7 +178,8 @@ jobs:
     #   поллинг по ВЕТКЕ (raw)                            =    18 мин
     #   грация jsdelivr по ветке                          =     3 мин
     #   поллинг по ТЕГУ (raw)                             =    10 мин
-    # итого worst case ~41 мин — GitHub убил бы job таймаутом ДО того, как
+    #   ожидание сошедшейся пары на jsdelivr (10 × 20 с)  =  ~3.3 мин
+    # итого worst case ~44 мин — GitHub убил бы job таймаутом ДО того, как
     # тег-проверка вообще успела бы начаться, и это выглядело бы как "job
     # cancelled", а не как содержательный отказ. Таймаут — не источник
     # стоимости (раннер платится по факту, не по лимиту), поэтому берём с
@@ -187,7 +188,7 @@ jobs:
     # ниже требует не просто "больше", а разумный процент запаса сверху.
     # Любая новая последовательная проверка обязана попасть в эту сумму,
     # иначе грабли повторятся тем же способом.
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -321,20 +322,40 @@ jobs:
           fi
           echo "raw: манифест и подпись совпадают с релизом, подпись сходится"
 
-          # jsdelivr — фоллбэк: его отставание громко предупреждает, но не валит
-          # (та же политика, что и у файлов ниже).
+          # jsdelivr: для КОРНЯ ДОВЕРИЯ отставание — это отказ, а не деградация.
+          #
+          # Политика «jsdelivr фоллбэк, его лаг только предупреждает» была верна
+          # ДО подписи: отстающее зеркало отдавало чуть более старые файлы, и
+          # это переживалось. С подписью и храповиком это больше не так.
+          # Манифест и подпись — две независимые записи кэша, и стоит им
+          # разъехаться, роутер, попавший на это зеркало, получает не «файлы
+          # постарее», а ЖЁСТКИЙ ОТКАЗ обновляться: пара не сходится, храповик
+          # защёлкнут. Предупреждение в такой ситуации бесполезно — оно тонет в
+          # зелёном ране, а люди в это время не могут обновиться.
+          #
+          # Именно так и вышло с r-75.5 (2026-08-10): ран отчитался зелёным,
+          # purge отчитался успехом, а jsdelivr ещё долго отдавал манифест
+          # r-75.4 вместе со свежей подписью. Успех purge-запроса не равен
+          # выселению, поэтому единственный честный гейт — дождаться, что
+          # зеркало реально отдаёт сошедшуюся пару.
           JSD="https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}"
-          if curl -fsS --max-time 20 "$JSD/UPDATES.json" -o /tmp/sigchk/j.json \
-             && curl -fsS --max-time 20 "$JSD/UPDATES.json.sig" -o /tmp/sigchk/j.sig; then
-            if openssl pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
-                 -in /tmp/sigchk/j.json -sigfile /tmp/sigchk/j.sig >/dev/null 2>&1; then
-              echo "jsdelivr: подпись сходится"
-            else
-              echo "::warning::jsdelivr отдаёт манифест и подпись из разных моментов — фоллбэк временно негоден"
+          jrc=1
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            jrc=1
+            if curl -fsS --max-time 20 "$JSD/UPDATES.json" -o /tmp/sigchk/j.json \
+               && curl -fsS --max-time 20 "$JSD/UPDATES.json.sig" -o /tmp/sigchk/j.sig \
+               && openssl pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
+                    -in /tmp/sigchk/j.json -sigfile /tmp/sigchk/j.sig >/dev/null 2>&1; then
+              jrc=0; break
             fi
-          else
-            echo "::warning::jsdelivr не отдал манифест или подпись"
+            echo "jsdelivr ещё отдаёт несошедшуюся пару (попытка $i) — жду"
+            sleep 20
+          done
+          if [ "$jrc" != "0" ]; then
+            echo "::error::jsdelivr отдаёт манифест и подпись из разных моментов — попавшие на это зеркало не смогут обновиться"
+            exit 1
           fi
+          echo "jsdelivr: подпись сходится"
 
       - name: Poll CDNs until every file matches the pushed bytes
         if: steps.files.outputs.count != '0'
