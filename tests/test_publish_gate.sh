@@ -609,5 +609,69 @@ else
        "ref != z2k-enhanced && ref != z2k-staging" "не найдено"
 fi
 
+# --- 22. группа CI на релизных ветках уникальна по SHA, не по ref -----------
+#
+# cancel-in-progress: false защищает только УЖЕ ИДУЩИЙ ран. У GitHub в каждой
+# concurrency-группе по умолчанию держится ровно один pending (ожидающий)
+# ран — следующий триггер молча отменяет и заменяет его, cancel-in-progress
+# на это вообще не влияет (см. коммент над блоком concurrency в ci.yml и
+# https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+# Живой сценарий: коммит X идёт, релизный A встаёт за ним в очередь, потом
+# пушится обычный B — его pending отменяет ожидающий A. Эмпирически
+# воспроизведено и проверено 2026-08-10 на отдельной ветке-пробнике: с
+# группой по ref pending-ран стабильно отменялся; с группой по SHA — нет
+# (коллизии группы физически не с кем разделить, если каждый коммит один).
+if grep -qE "group:.*z2k-enhanced.*z2k-staging.*&&.*github\.sha|group:.*\(.*z2k-enhanced.*\|\|.*z2k-staging.*\).*&&.*github\.sha" "$CI"; then
+    ok "группа CI на z2k-enhanced/z2k-staging уникальна по SHA — не делится в очереди ни с кем"
+else
+    no "concurrency.group на релизных ветках включает github.sha, а не только ref" \
+       "group содержит (z2k-enhanced || z2k-staging) && github.sha" "не найдено"
+fi
+
+# --- 23. очередь publish не теряет ожидающие релизы -------------------------
+#
+# Тот же класс бага, что и в 22, но в publish.yml: группа там СТАТИЧЕСКАЯ
+# ("publish", намеренно — публикация должна сериализоваться), поэтому лечить
+# уникальностью группы нельзя, и это ровно случай, для которого GitHub
+# документирует queue: max — расширить очередь pending-ранов с 1 до 100
+# вместо замены новым. cancel-in-progress: true с queue: max несовместимы
+# (ошибка валидации воркфлоу), но здесь cancel-in-progress статически false,
+# конфликта нет. Без queue: max ожидающий publish кандидата A, пока идёт
+# более ранний ран той же группы, отменяется публикацией следующего
+# успешного CI на staging (даже если тот publish=no) — тег A остаётся
+# неопубликованным. Эмпирически воспроизведено 2026-08-10.
+if grep -qE '^\s*queue:\s*max\s*$' "$PUB"; then
+    ok "publish.yml: очередь publish расширена (queue: max) — ожидающий релиз не теряется"
+else
+    no "publish.yml имеет queue: max в блоке concurrency" "queue: max" "не найдено"
+fi
+
+# --- 24. actionlint-исключение под queue не расширено дальше нужного -------
+#
+# actionlint@v1.7.12 (версия, зафиксированная и в ci.yml, и в ci_local.sh) не
+# знает про ключ queue (rhysd/actionlint#657, ещё не выпущено) и без
+# .github/actionlint.yaml ЛОЖНО красит publish.yml. Исключение обязано быть
+# точечным: только для publish.yml и только для сообщения про queue — иначе
+# оно тихо проглотит и настоящие будущие ошибки actionlint в этом файле.
+ACTIONLINT_CFG="$ROOT/.github/actionlint.yaml"
+# Смотрим только на реальные ключи под "paths:" (без ведущего "#" — то есть
+# не в комментариях), а не на весь текст файла: комментарий-обоснование сам
+# упоминает "ci.yml" по имени, и это не должно считаться "исключение задевает
+# ci.yml".
+_al_path_keys=$(awk '
+    /^paths:/ { inpaths=1; next }
+    inpaths && /^  [^ #]/ { print; next }
+    inpaths && /^[^ ]/ { inpaths=0 }
+' "$ACTIONLINT_CFG" 2>/dev/null)
+if [ -f "$ACTIONLINT_CFG" ] \
+   && printf '%s\n' "$_al_path_keys" | grep -q 'publish\.yml' \
+   && grep -q 'queue' "$ACTIONLINT_CFG" \
+   && [ "$(printf '%s\n' "$_al_path_keys" | grep -c ':')" = "1" ]; then
+    ok "actionlint.yaml: исключение под неизвестный actionlint'у queue точечное — только publish.yml"
+else
+    no "actionlint.yaml существует, содержит РОВНО один path-ключ (publish.yml) и упоминает queue" \
+       "точечный ignore для publish.yml/queue" "не найдено, широкое, либо несколько path-ключей"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
