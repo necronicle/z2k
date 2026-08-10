@@ -357,6 +357,37 @@ echo "  lighttpd: $LIGHTTPD_BIN"
 # на :80/:81 и панели никак не мешать — такой не трогаем. И НИКОГДА не
 # удаляем чужой init-скрипт: не переименовался — это ошибка установки,
 # а не повод для rm.
+# КТО ДЕРЖИТ ПОРТ — СПРАШИВАЕМ У СИСТЕМЫ, А НЕ У КОНФИГА.
+#
+# Раньше конфликт определялся разбором `server.port` из
+# /opt/etc/lighttpd/*.conf. Инструмент неверный: порт можно задать и блоком
+# $SERVER["socket"] == "0.0.0.0:8088", и через include, и парсер его не видит —
+# он молча подставляет умолчание 80 и объявляет «конфликта нет».
+#
+# Поле 2026-08-10: штатный lighttpd Entware слушал 0.0.0.0:8088, установщик
+# напечатал «keeping stock lighttpd init (its port 80 does not conflict with
+# 8088)», оставил его жить — и запуск панели падал на bind. Причём падал уже
+# ПОСЛЕ раскладки файлов, поэтому снаружи это выглядело как «панель
+# установлена, но не запускается», и переустановка ничего не меняла.
+#
+# Слушающий сокет — единственный источник правды, не зависящий ни от версии
+# lighttpd, ни от синтаксиса его конфига.
+_port_holder_pid() {
+    netstat -ltnp 2>/dev/null \
+        | awk -v p=":$1\$" '$4 ~ p { n = split($NF, a, "/"); if (a[1] ~ /^[0-9]+$/) { print a[1]; exit } }'
+}
+_pid_cmdline() {
+    tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null
+}
+
+_holder=$(_port_holder_pid "$PORT")
+_holder_cmd=""
+[ -n "$_holder" ] && _holder_cmd=$(_pid_cmdline "$_holder")
+# Наша же панель на этом порту — не конфликт: её штатно останавливает шаг [3/7].
+case "$_holder_cmd" in
+    *"$CONF_DST"*) _holder=""; _holder_cmd="" ;;
+esac
+
 _stock_lighttpd_port() {
     local f p
     for f in /opt/etc/lighttpd/lighttpd.conf /opt/etc/lighttpd/conf.d/*.conf; do
@@ -366,14 +397,30 @@ _stock_lighttpd_port() {
     done
     return 1
 }
+
+# Порт занят кем-то, кто вообще не lighttpd — трогать чужой сервис молча нельзя,
+# но и делать вид, что всё хорошо, тоже: панель на этом порту не поднимется.
+case "$_holder_cmd" in
+    ''|*lighttpd*) ;;
+    *)
+        echo "  порт $PORT занят посторонним процессом (pid $_holder): $_holder_cmd" >&2
+        echo "  освободите порт или поставьте панель на другой: --port N" >&2
+        exit 1 ;;
+esac
+
 for _init in /opt/etc/init.d/S*lighttpd; do
     [ -e "$_init" ] || continue
     _sport=$(_stock_lighttpd_port) || _sport=""
     # Без server.port в конфиге lighttpd слушает 80.
     [ -n "$_sport" ] || _sport=80
-    if [ "$_sport" != "$PORT" ]; then
+    # Конфликт — это либо совпадение объявленного порта, либо ФАКТ: чужой
+    # lighttpd уже держит наш порт прямо сейчас.
+    if [ "$_sport" != "$PORT" ] && [ -z "$_holder_cmd" ]; then
         echo "  keeping stock lighttpd init $_init (its port $_sport does not conflict with $PORT)"
         continue
+    fi
+    if [ -n "$_holder_cmd" ] && [ "$_sport" != "$PORT" ]; then
+        echo "  штатный lighttpd объявляет порт $_sport, но реально держит $PORT (pid $_holder) — отключаю"
     fi
     echo "  disabling conflicting lighttpd init (port $_sport): $_init"
     "$_init" stop 2>/dev/null || true
