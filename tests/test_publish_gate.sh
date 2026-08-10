@@ -640,10 +640,25 @@ fi
 # более ранний ран той же группы, отменяется публикацией следующего
 # успешного CI на staging (даже если тот publish=no) — тег A остаётся
 # неопубликованным. Эмпирически воспроизведено 2026-08-10.
-if grep -qE '^\s*queue:\s*max\s*$' "$PUB"; then
+if grep -qE '^[[:space:]]*queue:[[:space:]]*max[[:space:]]*$' "$PUB"; then
     ok "publish.yml: очередь publish расширена (queue: max) — ожидающий релиз не теряется"
 else
     no "publish.yml имеет queue: max в блоке concurrency" "queue: max" "не найдено"
+fi
+
+# То же самое в jsdelivr-purge.yml. Группа там ОДНА на все три триггера
+# фактически, а не по недосмотру: ветка по умолчанию репозитория —
+# z2k-enhanced, поэтому push в неё, workflow_dispatch и вызов из publish.yml
+# дают один и тот же `cdn-refs/heads/z2k-enhanced`. Уникализировать по SHA,
+# как в ci.yml, нельзя — последовательность в одной группе здесь и есть цель.
+# Файл сам декларирует намерение "старый ран НЕ гасим", но одного
+# cancel-in-progress: false для него не хватает: он держит только идущий ран,
+# а pending всё равно вытесняется третьим триггером. Теряется при этом именно
+# ПРОВЕРКА уже выложенного релиза (issue #26): ран не красный, его просто нет.
+if grep -qE '^[[:space:]]*queue:[[:space:]]*max[[:space:]]*$' "$CDN"; then
+    ok "jsdelivr-purge.yml: очередь CDN-проверки расширена (queue: max) — verify релиза не вытесняется"
+else
+    no "jsdelivr-purge.yml имеет queue: max в блоке concurrency" "queue: max" "не найдено"
 fi
 
 # --- 24. actionlint-исключение под queue не расширено дальше нужного -------
@@ -654,23 +669,42 @@ fi
 # точечным: только для publish.yml и только для сообщения про queue — иначе
 # оно тихо проглотит и настоящие будущие ошибки actionlint в этом файле.
 ACTIONLINT_CFG="$ROOT/.github/actionlint.yaml"
-# Смотрим только на реальные ключи под "paths:" (без ведущего "#" — то есть
-# не в комментариях), а не на весь текст файла: комментарий-обоснование сам
-# упоминает "ci.yml" по имени, и это не должно считаться "исключение задевает
-# ci.yml".
+# Инвариант, а не список файлов: исключение не должно быть шире самой дыры в
+# actionlint. Значит (а) каждый путь под `paths:` — это файл, который РЕАЛЬНО
+# использует queue (иначе исключение нечем оправдать и оно тихо проглотит
+# будущие настоящие ошибки в этом файле), и (б) каждый ignore-шаблон говорит
+# именно про queue. Список файлов сознательно не хардкожу: он будет расти по
+# мере надобности, а инвариант — нет.
+#
+# Разбираем только реальные ключи (без ведущего "#"): комментарий-обоснование
+# в самом конфиге упоминает "ci.yml" по имени, и это не исключение.
 _al_path_keys=$(awk '
     /^paths:/ { inpaths=1; next }
-    inpaths && /^  [^ #]/ { print; next }
+    inpaths && /^  [^ #]/ { sub(/:[[:space:]]*$/, ""); sub(/^  /, ""); print; next }
     inpaths && /^[^ ]/ { inpaths=0 }
 ' "$ACTIONLINT_CFG" 2>/dev/null)
-if [ -f "$ACTIONLINT_CFG" ] \
-   && printf '%s\n' "$_al_path_keys" | grep -q 'publish\.yml' \
-   && grep -q 'queue' "$ACTIONLINT_CFG" \
-   && [ "$(printf '%s\n' "$_al_path_keys" | grep -c ':')" = "1" ]; then
-    ok "actionlint.yaml: исключение под неизвестный actionlint'у queue точечное — только publish.yml"
+_al_ignores=$(awk '
+    /^paths:/ { inpaths=1 }
+    inpaths && /^      - / { print }
+' "$ACTIONLINT_CFG" 2>/dev/null)
+_al_bad=""
+[ -n "$_al_path_keys" ] || _al_bad="нет ни одного path-ключа"
+# (а) каждый файл под исключением действительно использует queue
+for _p in $_al_path_keys; do
+    if ! grep -qE '^[[:space:]]*queue:' "$ROOT/$_p" 2>/dev/null; then
+        _al_bad="исключение на $_p, который queue не использует"
+    fi
+done
+# (б) каждый ignore-шаблон — именно про queue
+printf '%s\n' "$_al_ignores" | while IFS= read -r _line; do
+    [ -n "$_line" ] || continue
+    case "$_line" in *queue*) ;; *) exit 7 ;; esac
+done || _al_bad="есть ignore-шаблон не про queue"
+if [ -f "$ACTIONLINT_CFG" ] && [ -z "$_al_bad" ]; then
+    ok "actionlint.yaml: исключения под неизвестный actionlint'у queue не шире самой дыры (только queue, только файлы с queue)"
 else
-    no "actionlint.yaml существует, содержит РОВНО один path-ключ (publish.yml) и упоминает queue" \
-       "точечный ignore для publish.yml/queue" "не найдено, широкое, либо несколько path-ключей"
+    no "actionlint.yaml: каждый path-ключ реально использует queue и каждый ignore — про queue" \
+       "исключение ровно под дыру actionlint" "${_al_bad:-конфига нет}"
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
