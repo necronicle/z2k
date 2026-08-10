@@ -2361,7 +2361,9 @@
       lastData: null,
       consecutiveErrors: 0,
       httpErrors: 0,
-      attachers: new Set(),  // (log, done, data) callbacks
+      online: true,
+      attachers: new Set(),      // (log, done, data) callbacks
+      linkAttachers: new Set(),  // (online) callbacks — только состояние связи
     };
     _jobPollers.set(jobId, state);
 
@@ -2383,6 +2385,28 @@
       }
     };
 
+    // Состояние СВЯЗИ, а не задачи.
+    //
+    // Зачем отдельно от лога. Пока опрос не проходит, лог замирает на
+    // последней полученной строке — и «идёт долгий шаг» становится
+    // неотличимо от «всё повисло». Человек видел замерший «Шаг 4/12» и
+    // закономерно считал, что установка встала.
+    //
+    // В ЛОГ ЭТО НЕ ПИШЕТСЯ. Лог — вывод роутера, и дописывать туда свои
+    // догадки уже пробовали: во время переустановки дерево переезжает,
+    // lighttpd отвечает 404, и панель печатала сообщение о поломке, которой
+    // нет. Правильный уровень — отдельный индикатор рядом с логом, который
+    // говорит ровно то, что мы знаем: сейчас не дозваниваемся, продолжаем
+    // пробовать. Никакой классификации кодов ответа: она здесь трижды
+    // оказывалась неверной, а факт «опрос не прошёл» верен всегда.
+    const setOnline = (v) => {
+      if (state.online === v) return;
+      state.online = v;
+      for (const cb of state.linkAttachers) {
+        try { cb(v); } catch (_) {}
+      }
+    };
+
     const finish = (d) => {
       state.stopped = true;
       _jobPollers.delete(jobId);
@@ -2398,6 +2422,7 @@
       try {
         const d = await apiGet("/job?id=" + encodeURIComponent(jobId));
         state.consecutiveErrors = 0;
+        setOnline(true);
         // Задачи нет: файлы подчистил job_reap или роутер перезагрузился
         // посреди операции. Ответ при этом успешный (HTTP 200), счётчик
         // сетевых ошибок его не поймает — терминальность решается здесь.
@@ -2432,6 +2457,7 @@
         // всплывают там, где их обрабатывают. Здесь они не превращают идущую
         // задачу в проваленную.
         state.consecutiveErrors++;
+        setOnline(false);
         // Определённый отказ (403, 5xx кроме «поднимаюсь») — это ОТВЕТ, а не
         // переезд: ждать его «возвращения» бессмысленно, и держать из-за него
         // весь UI залоченным десять минут нельзя. Такой опрос прекращаем
@@ -2473,6 +2499,10 @@
         <h3>${escapeHtml(title)}</h3>
         ${warning}
         <pre class="log" id="job-log">${escapeHtml(poller.lastLog || "Запуск…")}</pre>
+        <div class="job-link" id="job-link" hidden aria-live="polite">
+          Панель сейчас недоступна — переподключаюсь. Задача идёт на роутере,
+          лог догонит сам.
+        </div>
         <div class="modal-footer">
           <button class="btn" id="job-close">Скрыть</button>
         </div>
@@ -2480,8 +2510,15 @@
     `;
     document.body.appendChild(backdrop);
     const logEl = backdrop.querySelector("#job-log");
+    const linkEl = backdrop.querySelector("#job-link");
     const closeBtn = backdrop.querySelector("#job-close");
     logEl.scrollTop = logEl.scrollHeight;
+
+    // Индикатор связи. Держим его в актуальном состоянии и при повторном
+    // открытии модалки через badge: poller живёт дольше окна.
+    const onLink = (online) => { linkEl.hidden = !!online; };
+    onLink(poller.online);
+    poller.linkAttachers.add(onLink);
 
     // Модалка — подписчик на background poller. На done меняет текст
     // кнопки на «Готово»/«Закрыть». Если юзер закроет до done — мы
@@ -2489,6 +2526,9 @@
     const onTick = (log, done, d) => {
       logEl.textContent = log;
       logEl.scrollTop = logEl.scrollHeight;
+      // Задача кончилась — индикатору связи больше нечего сообщать: он
+      // говорит об опросе, которого уже нет.
+      if (done) linkEl.hidden = true;
       if (done) {
         const isLockHeld = (log || "").includes("lock held by pid=");
         if (d && d.exit === 0) {
@@ -2510,6 +2550,7 @@
 
     closeBtn.addEventListener("click", () => {
       poller.attachers.delete(onTick);
+      poller.linkAttachers.delete(onLink);
       backdrop.remove();
     });
   }

@@ -1482,6 +1482,20 @@ pre.log {
   color: var(--text);
 }
 
+/* Индикатор связи под логом задачи. Показывается, только пока опрос не
+   проходит: лог в это время замирает, и без него «идёт долгий шаг» выглядит
+   ровно как «повисло». Намеренно НЕ красный — это не отказ, а переезд
+   (при reinstall'е дерево панели уезжает из-под lighttpd). */
+.job-link {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--muted);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.job-link[hidden] { display: none; }
+
 /* ---------- CARD LOCKED STATE ---------- */
 /* Применяется к .card когда есть active background job. Карточка слегка
    приглушается — immediately видно что элементы временно нельзя трогать, без

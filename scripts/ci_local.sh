@@ -117,8 +117,27 @@ elif [ "$_pub" = "$_cur" ]; then
     fi
 else
     _ok=1
-    if sh scripts/gen_file_hashes.sh >/dev/null 2>&1 && git diff --quiet -- UPDATES.json; then :; else
-        printf 'files_sha256 не описывает дерево — пересоберите релиз.\n'; _ok=0
+    # ПРОВЕРКА НЕ ИМЕЕТ ПРАВА ПОРТИТЬ ТО, ЧТО ПРОВЕРЯЕТ.
+    #
+    # gen_file_hashes.sh переписывает UPDATES.json на месте, и раньше он
+    # вызывался прямо так. Достаточно было иметь незакоммиченную правку
+    # доставляемого файла на релизном коммите — и прогон, сообщив «files_sha256
+    # не описывает дерево», сам вписывал в манифест новые суммы и оставлял его
+    # изменённым. Дальше по цепочке ломалась подпись (она считалась от прежних
+    # байт), и следующий же прогон краснел ещё и на ней — уже по своей вине.
+    # Ровно та авария, о которой предупреждает шапка tests/test_release_tooling.sh.
+    #
+    # Снимок до, сверка после, безусловное восстановление.
+    _snap=$(mktemp) || _snap=""
+    if [ -n "$_snap" ]; then
+        cp UPDATES.json "$_snap"
+        if sh scripts/gen_file_hashes.sh >/dev/null 2>&1 && cmp -s UPDATES.json "$_snap"; then :; else
+            printf 'files_sha256 не описывает дерево — пересоберите релиз.\n'; _ok=0
+        fi
+        cp "$_snap" UPDATES.json
+        rm -f "$_snap"
+    else
+        printf 'не создать временный файл — карту не сверить.\n'; _ok=0
     fi
     if [ -s UPDATES.json.sig ] && command -v openssl >/dev/null 2>&1; then
         _o=$(for c in /opt/homebrew/bin/openssl /usr/local/bin/openssl openssl; do
