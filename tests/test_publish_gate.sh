@@ -591,5 +591,23 @@ if [ -f "$CILOCAL" ]; then
     fi
 fi
 
+# --- 21. cancel-in-progress не может отменить CI релизного кандидата --------
+#
+# Живой сценарий: пуш обычного коммита B в staging, пока ещё бежит CI
+# релизного коммита A, отменял CI(A) по cancel-in-progress — "наслоившийся"
+# ран гасился новым, не разбирая, что A нёс невыпущенный подписанный тег.
+# Результат — тупик с обеих сторон: workflow_run для A никогда не выстрелит
+# (conclusion=cancelled, не success), а CI(B), даже отработав, не может
+# опубликовать ничего под именем релиза A — тег указывает на A, gate это
+# отдельно сверяет и откажет "тег указывает не на этот коммит". Раньше
+# исключение из cancel-in-progress было только для z2k-enhanced — верно ДО
+# перехода на публикацию через workflow_run с staging, устарело после.
+if grep -qE "cancel-in-progress:.*z2k-enhanced.*&&.*z2k-staging|cancel-in-progress:.*z2k-staging.*&&.*z2k-enhanced" "$CI"; then
+    ok "CI не отменяется cancel-in-progress ни на z2k-enhanced, ни на z2k-staging — оба гейтят публикацию"
+else
+    no "cancel-in-progress отключён и на staging, не только на enhanced" \
+       "ref != z2k-enhanced && ref != z2k-staging" "не найдено"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
