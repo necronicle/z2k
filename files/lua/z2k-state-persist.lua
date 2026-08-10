@@ -22,6 +22,10 @@
 --     strategy stays the one actually working. (silent-retry / probe-override /
 --     UCB stay OUT — those are Этап 6.)
 --   - Storage key = desync.arg.key when provided, else desync.func_instance.
+--
+-- Unit tests: tests/test_z2k_state_persist.lua (Lua harness) and
+-- tests/test_z2k_state_persist.sh (shell wrapper) — run via
+-- tests/run_all.sh, or directly with `lua5.3 tests/test_z2k_state_persist.lua`.
 
 -- Test isolation: env overrides redirect state into a tmp dir for unit tests.
 local STATE_DIR_PRIMARY = os.getenv("Z2K_STATE_DIR_OVERRIDE")
