@@ -310,7 +310,23 @@ jobs:
               git fetch -q origin "$BRANCH" 2>/dev/null || true
               TIP=$(git rev-parse FETCH_HEAD 2>/dev/null || git rev-parse HEAD)
               : > /tmp/verify/next.txt
+              _round_total=$(wc -l < /tmp/verify/pending.txt | tr -d ' ')
+              _round_i=0
               while IFS= read -r f; do
+                  # Дедлайн проверяем ПЕРЕД каждым файлом, а не только между
+                  # раундами. Раунд — это ПОСЛЕДОВАТЕЛЬНЫЙ проход по pending с
+                  # curl --max-time 30 на файл на каждое зеркало; при большом
+                  # количестве файлов и реально зависшей сети (не быстрый отказ,
+                  # а именно зависание на все 30с) один раунд сам по себе может
+                  # пересидеть весь бюджет job — до сюда проверка между раундами
+                  # просто не доедет. 300 файлов × 2 curl × 30с = 5 часов
+                  # худшего случая на ОДИН раунд, а job живёт 45 минут всего.
+                  _round_i=$((_round_i + 1))
+                  if [ "$(date +%s)" -ge "$deadline" ]; then
+                      echo "::error::raw.githubusercontent не сошёлся за отведённое время — превышение ВНУТРИ раунда $round, проверено $((_round_i - 1))/$_round_total файлов этого прохода, юзеры получат старые байты"
+                      echo "  оставшиеся в этом раунде и всё, что уже в pending на следующий — не проверены"
+                      exit 1
+                  fi
                   want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
                   if [ "$TIP" != "$(git rev-parse HEAD)" ]; then
                       tipw=$(git show "$TIP:$f" 2>/dev/null | sha256sum | cut -d' ' -f1)

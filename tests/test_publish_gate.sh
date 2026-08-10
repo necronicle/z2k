@@ -451,5 +451,60 @@ else
     ok "manual-gate матчит CI по стабильному path (.github/workflows/ci.yml), не по переименовываемому name"
 fi
 
+# --- 16. mtproxy-сверка пинует ТОЧНУЮ прод-версию Go, не первый попавшийся ---
+#
+# Живьём воспроизведено: `command -v go` на машине с несколькими тулчейнами
+# нашёл go1.26.1, хотя прод собирается go1.25.12 — сверка байт-в-байт с таким
+# несовпадением либо ложно падает на валидном релизе, либо (хуже) случайно
+# совпадает и ничего не доказывает.
+if grep -q 'GO_VERSION:' "$CI" && grep -qE 'sed -n .s/\^\[\[:space:\]\]\*GO_VERSION' "$REL"; then
+    ok "версия Go для сверки mtproxy читается из GO_VERSION в ci.yml, а не второй раз хардкодится"
+else
+    no "версия Go читается из единого источника (ci.yml GO_VERSION)" "sed по GO_VERSION в release.sh" "не найдено"
+fi
+
+if grep -q '\$HOME/go/bin/go\$_go_ver' "$REL"; then
+    ok "release.sh требует ИМЕННО этот бинарник (\$HOME/go/bin/goX.Y.Z), не bare go из PATH"
+else
+    no "release.sh требует конкретный бинарник, не PATH" '$HOME/go/bin/go$_go_ver' "не найдено"
+fi
+
+if grep -q '"\$_go_actual" = "go\$_go_ver"' "$REL"; then
+    ok "release.sh перепроверяет, что найденный бинарник ДЕЙСТВИТЕЛЬНО сообщает нужную версию (не просто верит имени файла)"
+else
+    no "release.sh перепроверяет версию через go version" '"$_go_actual" = "go$_go_ver"' "не найдено"
+fi
+
+# --- 17. CDN не гоняется, если публикация фактически не сдвинула ветку -------
+#
+# publish, встретив устаревшего кандидата, раньше делал `exit 0` (успех) без
+# сигнала об этом наружу — cdn job смотрел только на `gate.outputs.publish`,
+# который не в курсе, что публикация сама себя пропустила, и честно пытался
+# проверить релиз, которого на ветке физически нет.
+if grep -q 'moved: \${{ steps.push.outputs.moved }}' "$PUB"; then
+    ok "publish job отдаёт наружу, реально ли сдвинул ветку (moved), а не только свой exit code"
+else
+    no "publish job отдаёт moved output" 'moved: ${{ steps.push.outputs.moved }}' "не найдено"
+fi
+
+if grep -q "needs.gate.outputs.publish == 'yes' && needs.publish.outputs.moved == 'yes'" "$PUB"; then
+    ok "cdn job запускается только когда публикация РЕАЛЬНО произошла (gate=yes И moved=yes)"
+else
+    no "cdn job учитывает moved, не только gate.publish" "publish=='yes' && moved=='yes'" "не найдено"
+fi
+
+# --- 18. CDN-verify проверяет дедлайн ВНУТРИ раунда, не только между ними ----
+#
+# Раунд — последовательный проход по pending с curl --max-time 30 на файл на
+# каждое зеркало. При большом числе файлов и реально зависшей (не быстро
+# отказавшей) сети один раунд сам по себе может уйти далеко за общий бюджет
+# job, а проверка "между раундами" до этого момента просто не доедет.
+if grep -q '_round_i=\$((_round_i + 1))' "$CDN" \
+    && grep -q '"\$(date +%s)" -ge "\$deadline"' "$CDN"; then
+    ok "CDN-verify проверяет дедлайн перед КАЖДЫМ файлом внутри раунда, не только между раундами"
+else
+    no "CDN-verify проверяет дедлайн внутри раунда" '_round_i счётчик + date +%s -ge $deadline перед файлом' "не найдено"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

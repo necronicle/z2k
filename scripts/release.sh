@@ -233,7 +233,23 @@ if [ -n "$_mtproxy_changed" ]; then
     [ -n "${Z2K_TUNNEL_SECRET:-}" ] || die "mtproxy-client ($(printf '%s' "$_mtproxy_changed" | tr '\n' ' ')) изменился, но Z2K_TUNNEL_SECRET не задан —
      нечем пересобрать и свериться с тем, что реально лежит в builds/.
      Запустите: Z2K_TUNNEL_SECRET=<hex> sh scripts/release.sh ... (тот же секрет, что в make all)"
-    command -v go >/dev/null 2>&1 || die "mtproxy-client изменился, но go не найден — нечем свериться с builds/"
+    # НЕ произвольный `go` из PATH. Смысл всей сверки — доказать, что builds/
+    # получается из ЭТОГО исходника, а прод (ci.yml, Makefile) собирается
+    # СТРОГО go1.25.12 (golang/go#77730 на MIPS для более новых 1.26.x — см.
+    # комментарий в ci.yml). Другой тулчейн на машине владельца даёт другие
+    # байты НЕ ПОТОМУ ЧТО ЧТО-ТО СЛОМАНО, а просто потому что это другой
+    # компилятор — и тогда сверка либо ложно падает (запрещает валидный
+    # релиз), либо, что хуже, случайно совпадает и создаёт уверенность на
+    # пустом месте. Версия — из ci.yml, единственного источника правды,
+    # чтобы не завести ЕЩЁ одну копию "1.25.12", которая когда-нибудь
+    # разойдётся с двумя уже существующими (Makefile, ci.yml).
+    _go_ver=$(sed -n 's/^[[:space:]]*GO_VERSION:[[:space:]]*"\([^"]*\)".*/\1/p' .github/workflows/ci.yml | head -1)
+    [ -n "$_go_ver" ] || die "не нашёл GO_VERSION в .github/workflows/ci.yml — нечем определить, каким тулчейном сверяться с mtproxy-client"
+    _go_bin="$HOME/go/bin/go$_go_ver"
+    [ -x "$_go_bin" ] || die "mtproxy-client изменился, нужен ИМЕННО go$_go_ver (прод-тулчейн) для сверки — $_go_bin не найден или не исполняем.
+     Поставьте: https://go.dev/dl/go${_go_ver}.$(uname -s | tr 'A-Z' 'a-z')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz в \$HOME/go/bin/go$_go_ver"
+    _go_actual=$("$_go_bin" version 2>/dev/null | grep -oE 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+    [ "$_go_actual" = "go$_go_ver" ] || die "release: $_go_bin сообщает версию '$_go_actual', а нужен ровно go$_go_ver — файл переименован или подменён"
     _mt_rc=0
     _mt_tmp=$(mktemp -d) || die "mktemp для сверки mtproxy-client"
     while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
@@ -244,7 +260,7 @@ if [ -n "$_mtproxy_changed" ]; then
         [ -f "$want" ] || { printf 'release: нет отгружаемого %s\n' "$want" >&2; _mt_rc=1; continue; }
         # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
         if ! ( cd mtproxy-client && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
-                 go build -trimpath -buildvcs=false \
+                 "$_go_bin" build -trimpath -buildvcs=false \
                  -ldflags="-s -w -X main.defaultTunnelSecret=$Z2K_TUNNEL_SECRET" \
                  -o "$_mt_tmp/rebuilt" "$pkg" ); then
             printf 'release: mtproxy-client/%s не собирается\n' "$goarch" >&2; _mt_rc=1; continue

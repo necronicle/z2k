@@ -210,6 +210,41 @@ else
     no "отклонённый релиз (mtproxy без секрета) не трогает манифест" "без изменений" "манифест переписан"
 fi
 
+# --- property 5b: mtproxy-client SOURCE-ONLY (без единого байта в builds/) ---
+#
+# Реальная дыра, найденная живьём: правка main.go/go.mod/go.sum/Makefile без
+# последующего `make all` НЕ оставляет диффа в builds/ вообще — старый гейт,
+# завязанный только на builds/, такую рассинхронизацию не видел бы совсем.
+# main.go сам по себе не доставляем (au_install_paths о нём не знает —
+# исходник, не артефакт), поэтому бандлим с реальным доставляемым файлом,
+# иначе release.sh упадёт раньше с "релизить нечего", и до нужного гейта
+# дело не дойдёт вовсе.
+#
+# TYPE=reinstall, не patch: клон продолжается с property 4/5 БЕЗ отката —
+# их правки (lib/config_official.sh, mtproxy-client/builds/...) остаются в
+# том же диффе PREV_REF..HEAD и сами уже требуют reinstall. На patch тут
+# первым сработал бы ИХ гейт, а не тот, что проверяет property 5b — реальная
+# логика release.sh это не бесит, дело в накопленном состоянии теста.
+echo "// test: source-only change, builds/ untouched" >> mtproxy-client/main.go
+echo "-- test: unrelated patchable change" >> files/lua/z2k-fooling-ext.lua
+git add mtproxy-client/main.go files/lua/z2k-fooling-ext.lua
+git commit -q -m "тест: mtproxy source-only (builds/ не тронут) + не связанная патчуемая правка"
+out=$(env -u Z2K_TUNNEL_SECRET sh scripts/release.sh r-9999.4 reinstall "тест: mtproxy source-only без секрета" 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "release.sh отвергает SOURCE-ONLY правку mtproxy-client (builds/ не тронут) без секрета"
+else
+    no "release.sh отвергает source-only mtproxy без секрета" "ненулевой код" "0"
+fi
+case "$out" in
+    *"Z2K_TUNNEL_SECRET"*) ok "source-only: отказ называет Z2K_TUNNEL_SECRET причиной" ;;
+    *) no "source-only: отказ называет Z2K_TUNNEL_SECRET причиной" "упоминание Z2K_TUNNEL_SECRET" "$(printf '%s' "$out" | head -1)" ;;
+esac
+if git diff --quiet -- UPDATES.json; then
+    ok "отклонённый релиз (mtproxy source-only) не трогает манифест"
+else
+    no "отклонённый релиз (mtproxy source-only) не трогает манифест" "без изменений" "манифест переписан"
+fi
+
 # Незакоммиченные НЕотслеживаемые файлы не должны блокировать релиз: в карту они
 # не попадают (git ls-files их не видит), значит и опасности не создают.
 echo x > untracked_probe.tmp
