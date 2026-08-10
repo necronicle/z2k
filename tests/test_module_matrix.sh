@@ -118,5 +118,21 @@ for m in $MODULES; do
 done
 ok "наличие тестов проверено"
 
+# --- 6. dependabot целится в staging, а не в канал доставки --------------------
+#
+# Без target-branch бот целится в ветку по умолчанию, а она у нас —
+# z2k-enhanced, то есть КАНАЛ ДОСТАВКИ: с её верхушки роутеры тянут манифест и
+# файлы, двигает её только publish.yml после зелёного CI. Влитый туда PR попал
+# бы к людям сразу, минуя релиз и манифест. Так и пришёл #32 (закрыт).
+# Правило то же, что и для человека: пишем в z2k-staging.
+_upd=$(grep -c '^  - package-ecosystem:' "$DEP")
+_tgt=$(grep -c '^    target-branch: z2k-staging$' "$DEP")
+if [ "$_upd" -gt 0 ] && [ "$_upd" = "$_tgt" ]; then
+    ok "у всех $_upd записей dependabot target-branch = z2k-staging"
+else
+    no "каждая запись dependabot целится в z2k-staging" \
+       "target-branch у всех $_upd записей" "проставлен у $_tgt — остальные уйдут в канал доставки"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

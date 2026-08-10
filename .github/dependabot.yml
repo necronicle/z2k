@@ -7,10 +7,18 @@
 #
 # PR — это ПРЕДЛОЖЕНИЕ: мерджится руками после зелёного CI, в релизы попадает
 # по обычному релизному циклу.
+#
+# target-branch ОБЯЗАТЕЛЕН у каждой записи. Без него dependabot целится в ветку
+# по умолчанию, а она у нас — z2k-enhanced, то есть КАНАЛ ДОСТАВКИ: с её
+# верхушки роутеры тянут манифест и файлы, и двигает её только publish.yml
+# после зелёного CI. Влитый туда PR попал бы к людям сразу, минуя релиз и
+# манифест. Так и пришёл #32 (закрыт): бамп go-модулей, нацеленный прямо в
+# релизную ветку. Человек пишет в z2k-staging — бот тоже.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: z2k-staging
     schedule:
       interval: weekly
       day: monday
@@ -25,6 +33,7 @@ updates:
       - /vps-relay
       - /z2k-detect
       - /z2k-verify
+    target-branch: z2k-staging
     schedule:
       interval: weekly
       day: monday
