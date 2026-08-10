@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 4,
-  "current": "p-75.2",
+  "seq": 5,
+  "current": "p-75.3",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -54,7 +54,7 @@
   "files/lua/z2k-fooling-ext.lua": "4b5efb6672f54dbe4d04440066f06e84d92e43c8534cdfb88d136028e6d8231f",
   "files/lua/z2k-modern-core.lua": "5f4b5312e69447b887d868be74b756d103515eca59765f9155a358bf96da08c7",
   "files/lua/z2k-range-rand.lua": "073c24d9133484b9f2282f1e398b5963eb577b483c1cab8c29cfd6e7bf8acd9a",
-  "files/lua/z2k-state-persist.lua": "731b8aeed325a18b63478a2abef4ac3a095dae010634fa33dbfe7ef7e511a227",
+  "files/lua/z2k-state-persist.lua": "3e190a968fdc67a48795126c125134655a02d56d438c7a1aa7304eba0fb4ea9f",
   "files/ndm/90-z2k-tg-redirect.sh": "ca6de843d4fd820a58ad0fc76566b7640011d7f6161d31b5b84720197f0fe19a",
   "files/ndm/91-z2k-http-tunnel-redirect.sh": "72af35f3cd1a8751a97bae24b241191b0ba625bac6d2d429ed822958a2af6b0f",
   "files/ndm/91-z2k-ttl-bypass.sh": "337275f481555e5a261556014edbb0352b701db40919d983b8eccc3fa7d3f084",
@@ -108,7 +108,7 @@
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
   "webpanel/www/app.js": "2357bbc2852b698897c87ca14ae828f24186423403835e856afc521810d86abe",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "3fa218ad2564ba52f5f72c5f9793bd7d96ddfb885155335bda5185c7736c6bd8",
+  "webpanel/www/index.html": "714059f55e62b423575ab27df7dd29786b469ee0492c8268283a47592b74cb8c",
   "webpanel/www/style.css": "912fef03b336963e4654e7d5fcc6f1e6bfcdee40bdfdf8db2293d461f25a1734",
   "z2k.sh": "9979f965adeff4b40696dae11ce4b2393037c5140dd9d5c562e416c64d95bdf8"
   },
@@ -267,6 +267,7 @@
 {"v": "p-74.2", "type": "patch", "ts": "2026-08-08T11:51:42Z", "ref": "0ab07b6", "desc": "Обновление через веб-панель больше не показывает ложную ошибку: раньше панель на несколько секунд теряла связь с собой во время установки и объявляла, что всё сорвалось, хотя обновление шло и доходило до конца. Последний шаг установки перестал молчать — теперь видно, что он делает, а не замерший экран.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "webpanel/www/app.js", "UPDATES.json"]},
 {"v": "r-75", "type": "reinstall", "ts": "2026-08-09T08:15:03Z", "ref": "1ecd7ca", "desc": "Обновления теперь подписаны, и роутер проверяет подпись перед установкой. Исправлены случаи, когда сбой обновления выглядел успешным. Веб-панель больше не принимает строку стратегии, способную выполнить команду.", "changed_files": ["webpanel/www/index.html", "files/etc/z2k-update-pub.pem", "files/lua/z2k-detectors.lua", "files/lua/z2k-state-persist.lua", "files/z2k-auto-update.sh", "files/z2k-detect-watchdog.sh", "files/z2k-scheduler.sh", "files/z2k-stats-upload.sh", "files/z2k-update-lists.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/install.sh", "webpanel/www/app.js", "z2k.sh", "UPDATES.json"]},
 {"v": "p-75.1", "type": "patch", "ts": "2026-08-09T13:38:40Z", "ref": "b414aa8", "desc": "Во время обновления панель больше не сообщает об ошибке — раньше она пугала сообщением о сбое там, где установка шла нормально. Исправлено бесполезное перезапускание внутренней службы расписания, которое засоряло журнал.", "changed_files": ["files/init.d/S99z2k-scheduler", "files/z2k-scheduler.sh", "webpanel/www/app.js", "webpanel/www/index.html", "UPDATES.json"]},
-{"v": "p-75.2", "type": "patch", "ts": "2026-08-09T19:44:13Z", "ref": "p-75.2", "desc": "Внутренняя техническая проверка процесса выпуска обновлений. Пользователю ничего делать не нужно.", "changed_files": ["files/lua/z2k-detectors.lua", "lib/auto_update.sh", "webpanel/www/index.html", "UPDATES.json"]}
+{"v": "p-75.2", "type": "patch", "ts": "2026-08-09T19:44:13Z", "ref": "p-75.2", "desc": "Внутренняя техническая проверка процесса выпуска обновлений. Пользователю ничего делать не нужно.", "changed_files": ["files/lua/z2k-detectors.lua", "lib/auto_update.sh", "webpanel/www/index.html", "UPDATES.json"]},
+{"v": "p-75.3", "type": "patch", "ts": "2026-08-10T04:39:29Z", "ref": "p-75.3", "desc": "Внутренняя техническая проверка процесса выпуска обновлений. Пользователю ничего делать не нужно.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-state-persist.lua", "UPDATES.json"]}
   ]
 }
