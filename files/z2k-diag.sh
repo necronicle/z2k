@@ -283,6 +283,31 @@ print_iptables() {
     printf 'TG ipset z2k_tg_dc: %s DC subnets (expected 10)\n' "$tg_ipset_n"
     printf 'TG v6 REJECT FWD  : %s  (expected 1 — fast-reject dead v6 DCs)\n' "$tg_reject6_fwd"
     printf 'TG v6 REJECT OUT  : %s  (expected 1)\n' "$tg_reject6_out"
+
+    # СКОЛЬКО трафика реально идёт через правила, а не только сколько правил.
+    #
+    # Отвечает на «интернет с z2k вдвое медленнее». Число правил тут не говорит
+    # ничего: важно, сколько пакетов через них прошло.
+    #   * NFQUEUE — пакеты, уехавшие в userspace. Отсечка connbytes держит там
+    #     только начало соединения, поэтому счётчик обязан быть маленьким
+    #     относительно общего трафика. Миллионы = отсечка не работает и в
+    #     очередь идёт весь поток.
+    #   * -j PPE — пакеты, СНЯТЫЕ с аппаратного ускорения (окно connskip).
+    #     Тоже обязан быть небольшим: массовая передача должна вернуться в
+    #     железо после окна. Миллионы = скорость упирается в CPU.
+    # Счётчики накопительные с момента установки правил — смотреть надо ПРИРОСТ
+    # за время нагрузки, а не абсолютное значение.
+    local ipt_counters
+    ipt_counters=$( (iptables -t mangle -vnL 2>/dev/null || true) \
+        | awk '
+            /NFQUEUE/ { printf "  %-8s pkts=%-12s bytes=%-12s %s\n", "NFQUEUE", $1, $2, $3; next }
+            / PPE / || /-j PPE/ || $3 == "PPE" { printf "  %-8s pkts=%-12s bytes=%-12s %s\n", "PPE", $1, $2, $3 }
+          ' )
+    if [ -n "$ipt_counters" ]; then
+        printf 'счётчики правил (прирост под нагрузкой важнее абсолюта):\n%s\n' "$ipt_counters"
+    else
+        printf 'счётчики правил : недоступны (iptables -vnL не отработал)\n'
+    fi
     printf 'TG ipset z2k_tg_dc6: %s DC subnets (expected 4)\n' "$tg_ipset6_n"
     if [ -e /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh ]; then
         printf 'NDM hook          : installed\n'
@@ -573,6 +598,15 @@ print_platform() {
             "$(awk '/^MemAvailable:/{a=$2} /^MemTotal:/{t=$2} /^SwapFree:/{sf=$2} /^SwapTotal:/{st=$2}
                     END {printf "%d МБ свободно из %d, swap %d/%d МБ",
                          a/1024, t/1024, (st-sf)/1024, st/1024}' /proc/meminfo 2>/dev/null)"
+    fi
+
+    # Загрузка CPU. Без неё счётчики правил выше неоднозначны: «медленно»
+    # из-за того, что поток идёт мимо аппаратного ускорения, и «медленно»
+    # из-за того, что процессор занят чем-то посторонним, выглядят одинаково.
+    if [ -r /proc/loadavg ]; then
+        printf 'loadavg           : %s (ядер: %s)\n' \
+            "$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)" \
+            "$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo '?')"
     fi
 
     # Компоненты прошивки Keenetic. «Не стартует» чаще всего упирается сюда, и
