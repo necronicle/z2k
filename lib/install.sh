@@ -3929,9 +3929,30 @@ step_finalize() {
         fi
     fi
 
-    if [ -f "$backup_tmp/webpanel-port" ]; then
+    # ПРИЗНАК «панель у человека была» — выживший init-скрипт, а НЕ файл порта.
+    #
+    # Раньше восстановление включалось только по $backup_tmp/webpanel-port,
+    # который снимается с $ZAPRET2_DIR/webpanel/port. Но если дерево панели уже
+    # сломано (а именно это и приводит человека к переустановке), файла порта
+    # нет — бэкап пуст, восстановление не срабатывает, и переустановка панель НЕ
+    # ставит. Состояние самозапирающееся: сломанная панель остаётся сломанной
+    # после ЛЮБОГО числа переустановок.
+    #
+    # Снаружи это выглядит особенно обманчиво: S96z2k-webpanel живёт в
+    # /opt/etc/init.d/ и переустановку переживает, поэтому lighttpd исправно
+    # слушает :8088 — без корня и без конфига. netstat показывает работающую
+    # панель, а она отдаёт 404 на всё.
+    #
+    # Поймано в поле 2026-08-10: человек переустановил, панель не появилась.
+    if [ -f "$backup_tmp/webpanel-port" ] || [ -f /opt/etc/init.d/S96z2k-webpanel ]; then
         local _wp_port _wp_args _wp_src
         _wp_port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null | tr -dc '0-9')
+        # Порт мог не сохраниться вместе с деревом — тогда берём тот, что записан
+        # в выжившем init-скрипте, и лишь затем умолчание установщика.
+        if [ -z "$_wp_port" ]; then
+            _wp_port=$(sed -n 's/^[[:space:]]*PORT=\{0,1\}"\{0,1\}\([0-9]\{2,5\}\).*/\1/p' \
+                       /opt/etc/init.d/S96z2k-webpanel 2>/dev/null | head -1)
+        fi
         # Do NOT replay the saved bind: r-56.3 could have persisted the wrong
         # LAN segment (e.g. a guest bridge) into webpanel/bind, and replaying
         # it would keep the panel on the unreachable address. Let

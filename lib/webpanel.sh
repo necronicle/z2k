@@ -11,8 +11,15 @@ WEBPANEL_PIDFILE="/var/run/z2k-webpanel.pid"
 # Source dir for webpanel assets — depends on where z2k.sh placed them.
 # At runtime z2k bootstraps into /tmp/z2k/, so this is where webpanel/ lives.
 webpanel_source_dir() {
+    # Каталог мало найти — в нём должен быть установщик.
+    #
+    # z2k.sh создаёт /tmp/z2k/webpanel через mkdir ДО загрузки, а каждую
+    # неудачную загрузку лишь предупреждает («опциональный компонент») и идёт
+    # дальше. Поэтому пустой каталог — штатный исход сорванной сети, и проверка
+    # `[ -d ]` его принимала: меню печатало «Запуск установщика из
+    # /tmp/z2k/webpanel» и падало без внятной причины.
     for d in /tmp/z2k/webpanel /opt/zapret2/webpanel-src; do
-        [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+        [ -f "$d/install.sh" ] && { printf '%s' "$d"; return 0; }
     done
     return 1
 }
