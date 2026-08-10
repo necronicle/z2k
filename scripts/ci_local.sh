@@ -231,6 +231,14 @@ fi
 
 # ---------------------------------------------------------------------------
 step "actionlint (workflows)"
+# SHELLCHECK_OPTS обязателен и здесь: actionlint без него гоняет встроенный
+# ShellCheck на info-уровне (см. тот же комментарий в ci.yml, job
+# "Workflow lint"), и без этой переменной локальный прогон красный там, где
+# реальный CI зелёный — то самое расхождение "локально строже, чем судья",
+# которое эта же переменная там и лечит. Найдено на практике: SC2094 (info)
+# на двух местах в jsdelivr-purge.yml завалил ci_local.sh, хотя реальный CI
+# эти же строки принял бы молча.
+export SHELLCHECK_OPTS="--severity=warning"
 if command -v actionlint >/dev/null 2>&1; then
     if actionlint; then passed "actionlint"; else failed "actionlint"; fi
 elif [ -x "$HOME/go/bin/actionlint" ]; then

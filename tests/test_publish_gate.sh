@@ -28,6 +28,7 @@ PUB="$ROOT/.github/workflows/publish.yml"
 CDN="$ROOT/.github/workflows/jsdelivr-purge.yml"
 CI="$ROOT/.github/workflows/ci.yml"
 REL="$ROOT/scripts/release.sh"
+CILOCAL="$ROOT/scripts/ci_local.sh"
 
 for f in "$PUB" "$CDN" "$CI" "$REL"; do
     [ -f "$f" ] || { printf '[FAIL] нет %s\n' "$f"; exit 1; }
@@ -135,12 +136,18 @@ else
     no "объявление с непродвинутым seq отклоняется" "проверка seq" "не найдено"
 fi
 
-# Публикуем только верхушку staging: промежуточный коммит имеет свой вердикт, и
-# у людей оказалось бы состояние, которого нет ни у кого в работе.
+# tip-check ОСОЗНАННО убран (было: "публикуем только если CAND == верхушка
+# staging"). Он противоречил формальной модели "кандидат = подписанный тег":
+# уже подписанный, полностью валидный тег A застревал НАВСЕГДА, стоило после
+# него появиться любому обычному коммиту B без своего релиза — свой ран у A
+# не было и вызвать некому. Защиту от публикации УЖЕ УСТАРЕВШЕГО кандидата
+# даёт seq (см. проверку выше): если что-то новее уже опубликовано,
+# seq(candidate) <= seq(published) и гейт откажет по существу, а не по
+# случайному совпадению с текущим состоянием ветки.
 if grep -q 'CAND" != "\$TIP' "$PUB"; then
-    ok "публикуется только верхушка staging"
+    no "tip-check убран (застревал валидный тег из-за постороннего коммита)" "нет сравнения с tip" "остался"
 else
-    no "публикуется только верхушка staging" "сравнение с tip" "не найдено"
+    ok "tip-check убран — seq и history остаются единственной защитой от устаревшего кандидата"
 fi
 
 # --- 5. Перемотка вперёд, без --force -----------------------------------------
@@ -226,21 +233,42 @@ fi
 # как "job cancelled" безо всякой диагностики. Сверяем таймаут job с суммой
 # ВСЕХ дедлайнов, которые эта job проходит одну за другой, а не гоняем реальный
 # workflow_run (нельзя, см. шапку файла).
-_deadlines=$(grep -oE '\(started \+ [0-9]+\)|cdn_deadline=\$\(\( \$\(date \+%s\) \+ [0-9]+ \)\)' "$CDN" \
+# Не привязываемся к конкретному имени переменной (cdn_deadline,
+# _cdn_tag_deadline, ...) — только к форме выражения справа. Привязка к
+# точному имени уже один раз чуть не подвела: новый дедлайн для jsdelivr по
+# тегу назвали "_cdn_tag_deadline=", а не "cdn_deadline=", и старый regex
+# его бы молча пропустил.
+_deadlines=$(grep -oE '\(started \+ [0-9]+\)|\$\(\( \$\(date \+%s\) \+ [0-9]+ \)\)' "$CDN" \
              | grep -oE '[0-9]+' )
 _sig_retries=$(awk '/for i in 1 2 3 4 5 6 7 8 9 10;/{print}' "$CDN" | grep -oE '1 2 3 4 5 6 7 8 9 10' | wc -w)
 _sig_sleep=$(grep -A3 'sleep 20' "$CDN" | grep -oE 'sleep [0-9]+' | head -1 | grep -oE '[0-9]+')
+# Каждая попытка внутри "for i in 1..10" — это не только sleep между ними: два
+# curl --max-time на СЕТЕВОЙ запрос (m.json + m.sig), и при реальном
+# зависании (не быстром отказе) КАЖДЫЙ добирает до своего таймаута целиком.
+# Считать только sleep — недосчитать ровно эти сетевые max-time; раньше здесь
+# так и было, разница набегала до 400с (10 попыток × 2 curl × 20с).
+_sig_curl_per_try=$(awk '/for i in 1 2 3 4 5 6 7 8 9 10;/,/^          done$/' "$CDN" \
+                     | grep -oE -- '--max-time [0-9]+' | grep -oE '[0-9]+' \
+                     | awk '{s+=$1} END{print s+0}')
 _sum=0
 for d in $_deadlines; do _sum=$((_sum + d)); done
 if [ -n "$_sig_retries" ] && [ -n "$_sig_sleep" ]; then
-    _sum=$((_sum + _sig_retries * _sig_sleep))
+    _sum=$((_sum + _sig_retries * (_sig_sleep + _sig_curl_per_try)))
 fi
+# Не просто "больше" — эта сумма уже один раз оказалась заниженной на 400с
+# (сетевые --max-time внутри retry-цикла подписи не считались), и "timeout
+# больше суммы на 4 минуты" оказалось технически "проходит", но по факту
+# без реального запаса. Требуем минимум 20% сверху — не строгая граница,
+# а сигнал "числа наступают друг другу на пятки, посмотри ещё раз", если
+# кто-то добавит новую последовательную проверку и подвинет сумму вплотную
+# к таймауту.
 _timeout_min=$(awk '/^  verify:/{f=1} f && /timeout-minutes:/{print $2; exit}' "$CDN")
-if [ -n "$_timeout_min" ] && [ -n "$_sum" ] && [ "$_sum" -gt "0" ] && [ $((_timeout_min * 60)) -gt "$_sum" ]; then
-    ok "timeout-minutes у verify ($_timeout_min мин) покрывает сумму внутренних дедлайнов (${_sum}с = $((_sum / 60))мин)"
+_min_required=$(( _sum * 12 / 10 ))
+if [ -n "$_timeout_min" ] && [ -n "$_sum" ] && [ "$_sum" -gt "0" ] && [ $((_timeout_min * 60)) -ge "$_min_required" ]; then
+    ok "timeout-minutes у verify ($_timeout_min мин) покрывает сумму внутренних дедлайнов с запасом ≥20% (${_sum}с = $((_sum / 60))мин)"
 else
-    no "timeout-minutes покрывает сумму дедлайнов" \
-       "timeout*60 > сумма($_sum с)" "timeout=${_timeout_min:-?}мин, сумма=${_sum:-?}с"
+    no "timeout-minutes покрывает сумму дедлайнов с запасом ≥20%" \
+       "timeout*60 >= сумма*1.2 ($_min_required с)" "timeout=${_timeout_min:-?}мин (=$((_timeout_min * 60))с), сумма=${_sum:-?}с"
 fi
 
 # --- 7. В release.sh не осталось обходимого гейта ------------------------------
@@ -397,22 +425,26 @@ for _f_name in "publish.yml:$PUB" "ci.yml (preflight):$CI"; do
     fi
 done
 
-# --- 13. Окно между решением gate и реальным push -----------------------------
+# --- 13. Push не делает второй tip-check — тег уже полностью провалидирован --
 #
-# gate и publish — РАЗНЫЕ job'ы: между вердиктом "publish=yes" (по состоянию
-# staging НА МОМЕНТ gate) и фактическим push проходит реальное время
-# (раннер для publish ещё нужно поднять, смонтировать checkout). Если за это
-# время на staging прилетел новый коммит, "$SHA" из gate — уже не верхушка.
-if awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q 'git fetch -q origin z2k-staging'; then
-    ok "push повторно fetch'ит staging непосредственно перед публикацией"
+# Был "повторный fetch + сверка верхушки" прямо перед push — убран тем же
+# коммитом, что и tip-check в gate: тот же anti-паттерн (валидный тег
+# застревает из-за постороннего коммита на staging), только на более узком
+# окне. Единственная оставшаяся защита здесь — сам git push без --force:
+# он либо пройдёт (fast-forward), либо честно упадёт (job красная), а не
+# тихо "пропущено, устарело".
+if grep -q '_tip_now' "$PUB"; then
+    no "второй tip-check перед push убран" "нет повторной сверки с tip staging" "остался (_tip_now)"
 else
-    no "push повторно fetch'ит staging перед публикацией" "git fetch -q origin z2k-staging в шаге Push fast-forward" "не найдено"
+    ok "второй tip-check перед push убран — push либо проходит, либо честно падает по fast-forward"
 fi
 
-if awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q '"\$_tip_now" != "\$SHA"'; then
-    ok "push сверяет точное равенство верхушки перед публикацией, не публикует устаревший SHA"
+if grep -q 'if ! git push origin "\$SHA:refs/heads/z2k-enhanced"; then' "$PUB" \
+    && awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q 'moved=no' \
+    && awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q 'exit 1'; then
+    ok "неудачный push (не fast-forward) — это красная job с moved=no, а не тихий пропуск"
 else
-    no "push сверяет верхушку перед публикацией" '"$_tip_now" != "$SHA"' "не найдено"
+    no "неудачный push красит job, а не пропускает молча" 'if ! git push ...; then moved=no; exit 1; fi' "не найдено"
 fi
 
 # --- 14. CDN verify не режет список файлов молча ------------------------------
@@ -510,6 +542,53 @@ if [ "$_round_i_count" = "2" ] && grep -q '"\$(date +%s)" -ge "\$deadline"' "$CD
     ok "CDN-verify проверяет дедлайн перед КАЖДЫМ файлом внутри раунда — в ОБОИХ циклах (ветка и тег)"
 else
     no "CDN-verify проверяет дедлайн внутри раунда в обоих циклах" "2 вхождения _round_i" "$_round_i_count"
+fi
+
+# --- 19. raw и jsdelivr — независимые проходы, не один цикл на двоих --------
+#
+# Раньше на каждый файл в raw-раунде синхронно ждали ЕЩЁ и jsdelivr — тот же
+# curl --max-time 30, только к необязательному фоллбэку, и ЭТО время всё
+# равно вычиталось из дедлайна raw — единственного гейта, который решает
+# исход публикации. Полностью исправный, быстрый raw мог получить ложный
+# красный результат по вине зависшего фоллбэка. Проверяем ПОВЕДЕНЧЕСКИ, не
+# по тексту: внутри цикла, который читает pending.txt (raw-гейт), не должно
+# быть обращений к cdn.jsdelivr.net вообще — jsdelivr должен жить в
+# отдельном, более позднем блоке.
+if awk '/cp \/tmp\/verify\/files.txt \/tmp\/verify\/pending.txt/,/^          done$/' "$CDN" \
+    | grep -q 'cdn.jsdelivr.net'; then
+    no "raw-раунд (branch) не обращается к jsdelivr внутри себя" "нет cdn.jsdelivr.net в raw-цикле" "найдено"
+else
+    ok "raw-раунд (branch) полностью независим от jsdelivr — не может получить от него ложный красный"
+fi
+
+if awk '/cp \/tmp\/verify\/files.txt \/tmp\/verify\/tag_pending.txt/,/^          done$/' "$CDN" \
+    | grep -q 'cdn.jsdelivr.net'; then
+    no "raw-раунд (tag) не обращается к jsdelivr внутри себя" "нет cdn.jsdelivr.net в tag raw-цикле" "найдено"
+else
+    ok "raw-раунд (tag) полностью независим от jsdelivr — не может получить от него ложный красный"
+fi
+
+if grep -q 'raw_ok.txt' "$CDN" && grep -q 'tag_raw_ok.txt' "$CDN"; then
+    ok "оба raw-гейта копят СВОЙ список успехов (raw_ok/tag_raw_ok) отдельно от jsdelivr-проверки"
+else
+    no "raw-гейты копят список успехов отдельно от jsdelivr" "raw_ok.txt и tag_raw_ok.txt" "не найдено"
+fi
+
+# --- 20. ci_local.sh не строже реального CI на severity actionlint'а --------
+#
+# Найдено на практике, не в теории: actionlint без SHELLCHECK_OPTS гоняет
+# встроенный ShellCheck на info-уровне, ci.yml ("Workflow lint") явно
+# понижает до warning — а ci_local.sh этого не делал, и локальный прогон
+# падал на info-находке (SC2094), которую реальный CI пропустил бы молча.
+# "Локально строже судьи" — тот же класс расхождения, что уже чинили для
+# go-модулей (build-matrix.tsv), только для линтера, а не для сборки.
+if [ -f "$CILOCAL" ]; then
+    if grep -q 'SHELLCHECK_OPTS' "$CI" && ! grep -q 'SHELLCHECK_OPTS' "$CILOCAL"; then
+        no "ci_local.sh задаёт тот же SHELLCHECK_OPTS для actionlint, что и ci.yml" \
+           "SHELLCHECK_OPTS в обоих файлах" "есть в ci.yml, нет в ci_local.sh"
+    else
+        ok "ci_local.sh не строже реального CI на severity встроенного в actionlint ShellCheck"
+    fi
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
