@@ -3558,10 +3558,7 @@ step_finalize() {
     # tunnel is currently enabled. This is important for existing installs:
     # an old S98tg-tunnel that ignores TG_PROXY_USER_DISABLED would otherwise
     # remain on disk and resurrect the tunnel on the next reboot.
-    # usb.d — события подключения накопителей. Политика кэша записи живёт в
-    # очереди блочного устройства и обнуляется при каждом переподключении,
-    # поэтому её переставляет хук оттуда (см. z2k-storage-cache.sh).
-    mkdir -p /opt/etc/init.d /opt/etc/ndm/netfilter.d /opt/etc/ndm/usb.d /opt/zapret2
+    mkdir -p /opt/etc/init.d /opt/etc/ndm/netfilter.d /opt/zapret2
     # Fail-closed (Codex 2026-05-28): TG/HTTP-tunnel init-скрипты, NDM-хуки и
     # watchdog деплоятся критично. Провал (incomplete WORK_DIR / disk-full) →
     # return 1 → z2k_restore_old_tree вернёт прежнюю рабочую установку, а не
@@ -3624,16 +3621,6 @@ step_finalize() {
     # boxes without the firmware `-j PPE` target. Soft deploy (additive).
     deploy_critical_file "files/z2k-ppe-deoffload.sh"            "/opt/zapret2/z2k-ppe-deoffload.sh" || print_warning "ppe: shared-lib deploy failed (per-flow de-offload disabled)"
     deploy_critical_file "files/ndm/94-z2k-ppe-deoffload.sh"     "/opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh" || print_warning "ppe: NDM hook deploy failed"
-
-    # Кэш записи накопителя под /opt. Без этого ядро считает, что кэша нет,
-    # и барьеры журнала ext4 не доходят до носителя — измерено 2026-08-10.
-    deploy_critical_file "files/z2k-storage-cache.sh"            "/opt/zapret2/z2k-storage-cache.sh" || print_warning "storage-cache: shared-lib deploy failed"
-    deploy_critical_file "files/ndm/96-z2k-storage-cache.sh"     "/opt/etc/ndm/usb.d/96-z2k-storage-cache.sh" || print_warning "storage-cache: NDM hook deploy failed"
-    if [ -r /opt/zapret2/z2k-storage-cache.sh ]; then
-        # shellcheck disable=SC1091
-        . /opt/zapret2/z2k-storage-cache.sh
-        z2k_sc_apply || true
-    fi
 
     # Reboot-independent watchdog for the scheduler stack. NDM re-runs netfilter.d
     # hooks on boot/WAN/hotplug; this one resurrects the scheduler supervisor if it
