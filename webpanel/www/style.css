@@ -70,8 +70,11 @@
   --skel-c1: rgba(255, 255, 255, 0.04);
   --skel-c2: rgba(255, 255, 255, 0.10);
 
-  /* Fira Code (mono) + Fira Sans (body) loaded from Google Fonts in index.html.
-     System fonts fallback while web fonts swap in (font-display: swap). */
+  /* Веб-шрифты НЕ загружаются — см. комментарий в index.html, там же причина.
+     Раньше здесь стояло «loaded from Google Fonts in index.html»: после
+     удаления ссылки это стало прямой инструкцией следующему автору вернуть
+     <link> обратно. Fira остаётся первой в стеке намеренно — если она есть в
+     системе, подхватится локально; иначе идёт системный шрифт. */
   --font-mono: "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --font-sans: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
@@ -351,7 +354,7 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
   resize: vertical;
@@ -563,6 +566,28 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
    пилюля «Операция выполняется…» (.page-locked-pill — одна на страницу, в
    нормальном потоке, без absolute). Анимация появления объявлена отдельно, в
    секции ROUTE TRANSITION, рядом со своими @keyframes и правилами карточек. */
+/* Вердикт первого экрана. Живёт дочерним span внутри .page-title, поэтому
+   красим его отдельно: сам заголовок остаётся нейтральным, а слово «включён»
+   или «выключен» несёт цвет состояния. Без этих правил текст выходил серым. */
+/* Метка семейства адресов в таблице состояния. IPv4 и IPv6 у одного домена —
+   разные записи с разными стратегиями, и раньше это показывалось суффиксом
+   «|4»/«|6» прямо в имени. Метка отделяет служебное от имени сайта. */
+.fam-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  vertical-align: 1px;
+}
+
+#verdict.good { color: var(--good); }
+#verdict.warn { color: var(--warn); }
+#verdict.bad  { color: var(--bad); }
+
 .page-title {
   font-size: 22px;
   font-weight: 600;
@@ -946,8 +971,10 @@ ol.steps > li,
   border-radius: 12px;
   margin: 0;
   position: relative;
+  /* transform здесь не менял никто (press-feedback этот селектор не
+     перечисляет), а реально меняющийся на :hover фон не анимировался вовсе. */
   transition: border-color var(--dur-micro) var(--spring-smooth),
-              transform var(--dur-micro) var(--spring-snappy);
+              background var(--dur-micro) var(--spring-smooth);
 }
 ol.steps > li::marker,
 .how-to ol.steps > li::marker {
@@ -1425,7 +1452,7 @@ pre.log {
   margin-bottom: 4px;
 }
 .upd-tag {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
   color: var(--text);
 }
@@ -1905,7 +1932,11 @@ input[type="checkbox"] { accent-color: var(--accent); }
 @media (hover: none) {
   .wl-list li button:hover { color: var(--text-muted); background: transparent; }
   .state-table tbody tr:hover { background: transparent; }
-  .how-to ol.steps > li:hover { background: var(--bg-card); border-color: var(--border); }
+  /* --bg, а не --bg-card: базовый фон карточки шага задан на .how-to ol.steps > li
+     как var(--bg). Строка была скопирована с кнопочных правил ниже, где базовый
+     действительно --bg-card, и из-за этого нейтрализатор тач-hover сам сдвигал
+     фон: на светлой теме #f6f8fa → #ffffff, и шаг сливался с белой карточкой. */
+  .how-to ol.steps > li:hover { background: var(--bg); border-color: var(--border); }
   .brand:hover { transform: none; }
 }
 

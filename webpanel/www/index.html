@@ -18,9 +18,21 @@
     } catch (e) { /* localStorage disabled — остаёмся на dark default */ }
   })();
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap">
+<!-- ВЕБ-ШРИФТЫ НЕ ПОДКЛЮЧАЕМ. НАМЕРЕННО, НЕ ЗАБЫЛИ.
+     Здесь стояли preconnect на fonts.googleapis.com/fonts.gstatic.com и
+     блокирующий <link rel=stylesheet> на Google Fonts. Браузер не рисует
+     НИЧЕГО, пока кросс-доменная таблица стилей не разрешится, а display=swap
+     от этого не спасает: он про второй хоп (сам woff2), а не про первый.
+     Панель живёт на роутере, который стоит ради обхода блокировок, и её
+     открывают ровно тогда, когда с сетью плохо. Отказ по «connection refused»
+     отваливается мгновенно, а тихий дроп ТСПУ — это белый экран на десятки
+     секунд у страницы, физически лежащей в двух метрах. Оба этих хоста, к
+     слову, есть в наших же списках на обход (files/lists/.../YT/List.txt).
+     Стеки --font-mono/--font-sans в style.css оставлены как есть: если Fira
+     установлена в системе, она подхватится локально, иначе системный шрифт.
+     Не возвращать. Хостить у себя — тоже не drop-in: список файлов панели
+     захардкожен в webpanel/install.sh и z2k.sh, .woff2 нет в mimetype.assign
+     lighttpd.conf, плюс ~150 КБ на флеш ради типографики. -->
 <link rel="stylesheet" href="style.css?v=r-75.6">
 <link rel="icon" href="favicon.svg?v=r-75.6" type="image/svg+xml" sizes="any">
 <link rel="mask-icon" href="favicon.svg?v=r-75.6" color="#1AC3B4">

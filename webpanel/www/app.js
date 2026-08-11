@@ -314,30 +314,43 @@
 
   // ---------- Dashboard ----------
   async function renderDashboard() {
+    // ПОРЯДОК БЛОКОВ — НЕ КОСМЕТИКА.
+    //
+    // Человек открывает эту страницу с телефона, когда что-то перестало
+    // работать. Раньше первым шёл заголовок «Дашборд» (слово, уже сказанное в
+    // меню и в заголовке вкладки), затем восемь равновесных плиток, и только
+    // под ними — единственная кнопка, которая помогает. На небольшом экране она
+    // оказывалась ниже сгиба, а у свежей установки её ещё и отодвигала карточка
+    // про телеметрию.
+    //
+    // Теперь сверху ответ и действие, подробности ниже. Вердикт — ДОЧЕРНИЙ span,
+    // а не сам h1: в .page-title дописывает пилюлю «Операция выполняется…»
+    // глобальный лок, и перезапись заголовка целиком её бы стирала.
     $app.innerHTML = `
+      <h1 class="page-title"><span id="verdict">Проверяем…</span></h1>
       <div id="update-banner" hidden></div>
-      <div id="stats-notice" hidden></div>
-      <h1 class="page-title">Дашборд</h1>
-      <div class="card" id="status-card">
-        <h3>Состояние</h3>
-        <div class="status-grid" id="status-grid">${skeletonBlocks(7)}</div>
-      </div>
-      <div class="card">
-        <h3>Управление сервисом</h3>
-        <p class="desc">Запуск, остановка и перезапуск nfqws2.</p>
+      <div class="card" id="verdict-card">
+        <h3>Управление обходом</h3>
+        <p class="desc" id="svc-desc"></p>
         <div class="btn-row">
           <button class="btn btn-primary" data-svc="start" data-target="active">Запустить</button>
           <button class="btn" data-svc="restart" data-target="active">Перезапустить</button>
           <button class="btn btn-danger" data-svc="stop" data-target="stopped">Остановить</button>
         </div>
+        <div class="desc" id="update-line"></div>
       </div>
+      <div class="card" id="status-card">
+        <h3>Подробности</h3>
+        <div class="status-grid" id="status-grid">${skeletonBlocks(7)}</div>
+      </div>
+      <div id="stats-notice" hidden></div>
     `;
 
     $app.querySelectorAll("[data-svc]").forEach(btn => {
       btn.addEventListener("click", async () => {
         if (btn.disabled) return;
         const action = btn.dataset.svc;
-        const titleByAction = { start: "Запуск сервиса", stop: "Остановка сервиса", restart: "Перезапуск сервиса" };
+        const titleByAction = { start: "Включаю обход", stop: "Выключаю обход", restart: "Перезапускаю обход" };
         const title = titleByAction[action] || ("Действие: " + action);
         // Глобальный лок включается только когда придёт id задачи, а до тех
         // пор кнопка кликабельна: второй клик по «Перезапустить» запускал
@@ -741,18 +754,51 @@
       renderStatusGrid(s);
     } catch (e) {
       if (_stale("status", seq)) return;
-      grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
+      // ОТКАЗ ЧТЕНИЯ — НЕ ПОВОД ОСТАВИТЬ ЧЕЛОВЕКА БЕЗ ДЕЙСТВИЙ.
+      //
+      // Раньше здесь рисовалась одна ячейка со словом «Ошибка», а
+      // syncServiceButtons в этой ветке не вызывался вовсе — то есть при
+      // неизвестном состоянии оставались видны все три кнопки сразу, либо
+      // залипал набор от прошлого снимка. Вдобавок для 404/502/503/504
+      // сообщение намеренно пустое (в этот момент отвечает lighttpd, а не наш
+      // CGI), и человек видел «Ошибка» и пустоту. Автоповтора у страницы нет.
+      //
+      // Теперь: понятная причина, кнопка повтора и вердикт, который не врёт.
+      const why = (e && e.message)
+        ? escapeHtml(e.message)
+        : "Панель сейчас не отвечает — обычно так выглядит идущее обновление.";
+      grid.innerHTML =
+        '<div class="status-cell warn">' +
+          '<div class="label">Состояние роутера</div>' +
+          '<div class="value">Не удалось прочитать</div>' +
+        '</div>' +
+        '<p class="desc" id="status-why">' + why + '</p>' +
+        '<div class="btn-row"><button class="btn" id="status-retry" type="button">Повторить</button></div>';
+      const retry = document.getElementById("status-retry");
+      if (retry) retry.addEventListener("click", () => {
+        retry.disabled = true;
+        retry.textContent = "Читаю…";
+        refreshStatus();
+      });
+      // Кнопки сервиса не прячем: когда отвалился именно CGI состояния,
+      // «Перезапустить» — ровно то, что помогает. Вердикт при этом честный.
+      syncServiceButtons(undefined);
     }
   }
 
   function renderStatusGrid(s) {
     const grid = document.getElementById("status-grid");
     if (!grid) return;
+    // Ячейки «Установлен» здесь нет намеренно: installed выводится из service
+    // на бэкенде (actions.sh: is_running → active; is_installed → stopped;
+    // иначе not_installed), поэтому «Установлен: Нет» появлялось ровно тогда,
+    // когда соседняя ячейка уже говорила «не установлен». Заодно ячеек стало
+    // семь — ровно столько, сколько рисует skeletonBlocks(7), и сетка больше
+    // не подпрыгивает на ряд после загрузки.
     const cells = [
-      { label: "Установлен", value: s.installed ? "Да" : "Нет", kind: s.installed ? "good" : "bad" },
-      { label: "Сервис", value: fmtSvc(s.service), kind: s.service === "active" ? "good" : (s.service === "stopped" ? "warn" : "bad") },
+      { label: "Обход", value: fmtSvc(s.service), kind: s.service === "active" ? "good" : (s.service === "stopped" ? "warn" : "bad") },
       { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
-      { label: "RST фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
+      { label: "RST-фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
       { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
       { label: "WARP", value: bool(s.toggles.game_warp), kind: s.toggles.game_warp === "1" ? "good" : "" },
       { label: "Автообновление", value: bool(s.toggles.auto_update), kind: s.toggles.auto_update === "1" ? "good" : "warn" },
@@ -773,7 +819,28 @@
   // Используем style.display а не hidden attribute, потому что
   // `.btn { display: inline-block }` переопределяет [hidden] {display:none}
   // по специфичности (one-class > attribute).
+  // Вердикт первого экрана. Формулировки выбраны по тому, что панель РЕАЛЬНО
+  // знает: is_running() — это «жив процесс с нужным cmdline», и не более того.
+  // При вычищенных правилах NDM или отсутствующем ipset сервис остаётся
+  // active, а обход мёртв. Поэтому «обход ВКЛЮЧЁН», а не «работает»: второе
+  // было бы враньём ровно тому человеку, у которого сайт не грузится.
+  const VERDICT = {
+    active:        { text: "Обход включён",       kind: "good", desc: "Сайты из списков идут через обход." },
+    stopped:       { text: "Обход выключен",      kind: "warn", desc: "Пока выключен — сайты из списков открываются напрямую." },
+    not_installed: { text: "z2k не установлен",   kind: "bad",  desc: "z2k на роутере не найден — управлять нечем. Переустановите по инструкции из README." },
+  };
+
   function syncServiceButtons(svc) {
+    // Вердикт и подпись заполняем ДО раннего возврата ниже: иначе на странице
+    // без кнопок (или при неожиданном значении service) заголовок навсегда
+    // застрянет на «Проверяем…».
+    const v = VERDICT[svc] || { text: "Состояние неизвестно", kind: "warn",
+                                desc: "Панель не смогла разобрать ответ роутера." };
+    const vEl = document.getElementById("verdict");
+    if (vEl) { vEl.textContent = v.text; vEl.className = v.kind; }
+    const dEl = document.getElementById("svc-desc");
+    if (dEl) dEl.textContent = v.desc;
+
     const startBtn   = $app.querySelector('[data-svc="start"]');
     const restartBtn = $app.querySelector('[data-svc="restart"]');
     const stopBtn    = $app.querySelector('[data-svc="stop"]');
@@ -1619,7 +1686,13 @@
       ta.value = text;
     }
     card.hidden = false;
-    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Плавную прокрутку просим только у тех, кто её не отключал: у остальных
+    // это единственное место в панели, где reduced-motion игнорировался.
+    card.scrollIntoView({
+      behavior: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto" : "smooth",
+      block: "start",
+    });
     ta.focus();
   }
 
@@ -2637,7 +2710,7 @@
   const STATE_SORT_KEY = "z2k-state-sort";
   // The labels double as the mobile sheet's option list, so the set of sortable
   // keys is declared once and cannot drift between the two controls.
-  const STATE_SORT_LABELS = { key: "Профиль", host: "Домен", strategy: "Стратегия", age: "Возраст" };
+  const STATE_SORT_LABELS = { key: "Пул", host: "Домен", strategy: "Стратегия", age: "Возраст" };
 
   function loadStateSort() {
     // Anything unrecognised falls back to the default. A stale value (a column
@@ -2852,6 +2925,24 @@
       // после первого «Применить» (до него записи не существует) — поэтому на
       // свежем роутере дубля не видно и баг доживал до первого звонка.
       // Колонка «Домен» показывала бы у него буквальное «nohost».
+      // Ключ ротации хранится с суффиксом семейства адресов: example.com|4 и
+      // example.com|6 — это ДВЕ разные записи с разными стратегиями. Раньше
+      // суффикс печатался как есть: один сайт стоял двумя строками с
+      // непонятным хвостом, тот же хвост уходил в подсказку скринридера
+      // (читалась вертикальная черта) и в вопрос перед удалением.
+      //
+      // Суффикс есть НЕ ВСЕГДА: у записей без имени хоста и у строк,
+      // сохранённых старыми версиями, его нет. Поэтому третье состояние —
+      // «неизвестно», и тогда метка просто не ставится, а не выдумывается.
+      const splitFamily = (h) => {
+        const raw = String(h == null ? "" : h);
+        const cut = raw.lastIndexOf("|");
+        if (cut < 0) return { name: raw, fam: "" };
+        const tail = raw.slice(cut + 1);
+        if (tail === "4") return { name: raw.slice(0, cut), fam: "IPv4" };
+        if (tail === "6") return { name: raw.slice(0, cut), fam: "IPv6" };
+        return { name: raw, fam: "" };
+      };
       const visible = entries.filter(e => e.host !== "nohost");
 
       if (!visible.length) {
@@ -2891,18 +2982,21 @@
         for (let i = 1; i <= N; i++) {
           opts += `<option value="${i}"${i === Number(e.strategy) ? " selected" : ""}>${i}</option>`;
         }
+        // data-host в атрибутах остаётся СЫРЫМ ключом: это идентификатор записи
+        // для API, его резать нельзя. Разделяем только то, что видит человек.
+        const _hf = splitFamily(e.host);
         // data-label attrs feed the mobile card layout (CSS pseudo-elements)
         return `
           <tr${frozen ? ' style="background:rgba(120,140,255,0.10)"' : ''}>
             <td data-label="">
               <button class="btn btn-danger btn-icon state-del"
                       title="Удалить запись"
-                      aria-label="Удалить ${escapeHtml(e.host)}"
+                      aria-label="Удалить ${escapeHtml(_hf.name)}${_hf.fam ? ", " + _hf.fam : ""}"
                       data-key="${escapeHtml(e.key)}"
                       data-host="${escapeHtml(e.host)}">${_icons.close}</button>
             </td>
-            <td data-label="Профиль">${escapeHtml(e.key)}</td>
-            <td data-label="Домен">${escapeHtml(e.host)}</td>
+            <td data-label="Пул">${escapeHtml(e.key)}</td>
+            <td data-label="Домен">${escapeHtml(_hf.name)}${_hf.fam ? ` <span class="fam-tag">${_hf.fam}</span>` : ""}</td>
             <td data-label="Стратегия">
               <select class="state-strat-sel"
                       data-key="${escapeHtml(e.key)}"
@@ -2925,7 +3019,7 @@
 
       const arrow = k => stateSort.key === k ? (stateSort.dir === "asc" ? " " + _icons.arrowUp : " " + _icons.arrowDown) : "";
       const th = (k, label) => `<th class="sortable" data-sort="${k}">${label}${arrow(k)}</th>`;
-      const sortLabel = STATE_SORT_LABELS[stateSort.key] || "Профиль";
+      const sortLabel = STATE_SORT_LABELS[stateSort.key] || "Пул";
       const sortArrow = stateSort.dir === "asc" ? _icons.arrowUp : _icons.arrowDown;
       body.innerHTML = `
         <button type="button" class="sort-trigger" id="state-sort-btn"
@@ -2934,7 +3028,7 @@
         </button>
         <table class="state-table">
           <thead>
-            <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
+            <tr><th></th>${th("key","Пул")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
@@ -2977,7 +3071,8 @@
   }
 
   async function stateDelete(key, host) {
-    if (!confirm(`Удалить запись для ${host} (${key})?\n\nПодбор начнётся с первой стратегии при следующей попытке.`)) return;
+    const _h = String(host).replace(/\|4$/, " (IPv4)").replace(/\|6$/, " (IPv6)");
+    if (!confirm(`Удалить запись для ${_h} — пул ${key}?\n\nПодбор начнётся с первой стратегии при следующей попытке.`)) return;
     try {
       await apiPost("/state/delete", { key, host });
       toast("Удалено");
