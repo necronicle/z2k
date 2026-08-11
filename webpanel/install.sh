@@ -495,6 +495,18 @@ cp -f "$SRC_DIR/www/style.css"   "$STAGE_WWW/style.css"
 if [ -f "$SRC_DIR/www/favicon.svg" ]; then
     cp -f "$SRC_DIR/www/favicon.svg" "$STAGE_WWW/favicon.svg"
 fi
+# Шрифты панели. Копируются каталогом, а не поимённо: список файлов задаётся
+# в style.css (@font-face), и поимённый cp разошёлся бы с ним при первой же
+# правке — тихо, потому что браузер молча откатится на системный шрифт.
+#
+# Не критично для установки, как и favicon: если файлов нет (обрыв загрузки),
+# панель работает, просто системным шрифтом. Ронять из-за этого установку
+# нельзя — иначе неудачный фетч шрифта оставит человека вообще без панели.
+if [ -d "$SRC_DIR/www/fonts" ]; then
+    mkdir -p "$STAGE_WWW/fonts"
+    cp -f "$SRC_DIR"/www/fonts/*.woff2 "$STAGE_WWW/fonts/" 2>/dev/null || true
+    chmod 644 "$STAGE_WWW"/fonts/*.woff2 2>/dev/null || true
+fi
 chmod 644 "$STAGE_WWW/index.html" "$STAGE_WWW/app.js" "$STAGE_WWW/style.css" \
           "$STAGE_WWW/favicon.svg" 2>/dev/null || true
 

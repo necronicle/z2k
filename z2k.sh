@@ -1070,12 +1070,34 @@ download_init_script() {
     # Web panel source tree — downloaded only if user installs via menu [P].
     # z2k.sh bootstraps files into /tmp/z2k/; install.sh copies from /tmp/z2k/webpanel.
     local webpanel_dir="${WORK_DIR}/webpanel"
-    mkdir -p "$webpanel_dir/cgi" "$webpanel_dir/www" "$webpanel_dir/init.d"
+    mkdir -p "$webpanel_dir/cgi" "$webpanel_dir/www" "$webpanel_dir/init.d" \
+             "$webpanel_dir/www/fonts"
+    # Шрифты панели тянутся сюда же. Они не роскошь: без них панель рисуется
+    # системным шрифтом, и это ЗАМЕТНО. Из интернета их не берём принципиально —
+    # устройство стоит ради обхода блокировок, и ждать чужой CDN на первом
+    # экране нельзя (раньше index.html тянул их с fonts.googleapis.com
+    # блокирующим <link>). Каждый файл опционален: не доехал — панель работает.
+    #
+    # Список обязан совпадать с @font-face в webpanel/www/style.css. Разойдётся
+    # — браузер молча откатится на системный шрифт, и причину будет не видно.
     for wp_file in \
         install.sh uninstall.sh lighttpd.conf \
         init.d/S96z2k-webpanel \
         cgi/api.sh cgi/auth.sh cgi/actions.sh \
-        www/index.html www/app.js www/style.css www/favicon.svg
+        www/index.html www/app.js www/style.css www/favicon.svg \
+        www/fonts/FiraCode-400-cyrillic.woff2 \
+        www/fonts/FiraCode-400-latin.woff2 \
+        www/fonts/FiraCode-500-cyrillic.woff2 \
+        www/fonts/FiraCode-500-latin.woff2 \
+        www/fonts/FiraSans-400-cyrillic.woff2 \
+        www/fonts/FiraSans-400-latin.woff2 \
+        www/fonts/FiraSans-500-cyrillic.woff2 \
+        www/fonts/FiraSans-500-latin.woff2 \
+        www/fonts/FiraSans-600-cyrillic.woff2 \
+        www/fonts/FiraSans-600-latin.woff2 \
+        www/fonts/FiraSans-700-cyrillic.woff2 \
+        www/fonts/FiraSans-700-latin.woff2 \
+        ;
     do
         url="${GITHUB_RAW}/webpanel/${wp_file}"
         output="${webpanel_dir}/${wp_file}"
