@@ -125,19 +125,6 @@ poller.attachers.add((log, done) => { logs.push({ log, done, atCall: jobCalls })
 
 // Состояние СВЯЗИ — отдельный канал от лога.
 //
-// Пережидать переезд молча оказалось половиной решения: лог замирает на
-// последней строке, и «идёт долгий шаг» становится неотличимо от «повисло».
-// Человек с r-75.4 видел застывший «Шаг 4/12» и решил, что установка встала.
-// Поллер обязан сообщать подписчику, что сейчас не дозванивается — и что
-// снова дозвонился.
-// Проверка 5 того же теста прогоняет ЭТОТ ЖЕ харнесс на app.js до правки, где
-// канала связи ещё нет. Отсутствие поля — это результат (сигнала нет), а не
-// повод уронить прогон.
-const linkEvents = [];
-if (poller.linkAttachers && typeof poller.linkAttachers.add === "function") {
-  poller.linkAttachers.add((online) => linkEvents.push({ online, atCall: jobCalls }));
-}
-
 realTimeout(() => {
   const all = logs.map(x => x.log).join("\n");
   const doneEarly = logs.find(x => x.done && x.atCall <= OUTAGE_TICKS);
@@ -151,11 +138,14 @@ realTimeout(() => {
     toasts,
     // Объявила ли задачу законченной ДО того, как панель вернулась.
     finishedDuringOutage: !!doneEarly,
-    linkEvents,
-    // Сообщила ли, что связи нет, пока её действительно не было.
-    signalledOutage: linkEvents.some(e => e.online === false && e.atCall <= OUTAGE_TICKS),
-    // И что связь вернулась — иначе индикатор завис бы навсегда.
-    signalledRecovery: linkEvents.some(e => e.online === true && e.atCall > OUTAGE_TICKS),
+    // ПРИЗНАК ЖИЗНИ В ЛОГЕ, пока панель не отвечает. Молчание здесь
+    // неотличимо от зависшей установки: лог замирает на последней строке, и
+    // человек видит застывший «Шаг 4/12». Так и пожаловались после r-75.6 —
+    // «ни логов, ни того, что панель скоро вернётся». До p-73.2 счётчик
+    // ожидания в логе был, и его убрали заодно с ложными вердиктами.
+    waitedInLog: /панель пока не отвечает, ждём/.test(all),
+    // И отметка возврата связи — иначе непонятно, что всё продолжилось.
+    backInLog: /панель снова на связи/.test(all),
   };
   console.log(JSON.stringify(result, null, 2));
   process.exit(0);

@@ -2433,10 +2433,9 @@
       lastLog: "Запуск…",
       lastData: null,
       consecutiveErrors: 0,
+      lastOutageWarn: 0,
       httpErrors: 0,
-      online: true,
       attachers: new Set(),      // (log, done, data) callbacks
-      linkAttachers: new Set(),  // (online) callbacks — только состояние связи
     };
     _jobPollers.set(jobId, state);
 
@@ -2458,28 +2457,6 @@
       }
     };
 
-    // Состояние СВЯЗИ, а не задачи.
-    //
-    // Зачем отдельно от лога. Пока опрос не проходит, лог замирает на
-    // последней полученной строке — и «идёт долгий шаг» становится
-    // неотличимо от «всё повисло». Человек видел замерший «Шаг 4/12» и
-    // закономерно считал, что установка встала.
-    //
-    // В ЛОГ ЭТО НЕ ПИШЕТСЯ. Лог — вывод роутера, и дописывать туда свои
-    // догадки уже пробовали: во время переустановки дерево переезжает,
-    // lighttpd отвечает 404, и панель печатала сообщение о поломке, которой
-    // нет. Правильный уровень — отдельный индикатор рядом с логом, который
-    // говорит ровно то, что мы знаем: сейчас не дозваниваемся, продолжаем
-    // пробовать. Никакой классификации кодов ответа: она здесь трижды
-    // оказывалась неверной, а факт «опрос не прошёл» верен всегда.
-    const setOnline = (v) => {
-      if (state.online === v) return;
-      state.online = v;
-      for (const cb of state.linkAttachers) {
-        try { cb(v); } catch (_) {}
-      }
-    };
-
     const finish = (d) => {
       state.stopped = true;
       _jobPollers.delete(jobId);
@@ -2494,8 +2471,9 @@
       if (state.stopped) return;
       try {
         const d = await apiGet("/job?id=" + encodeURIComponent(jobId));
+        const recovered = state.consecutiveErrors > 0;
         state.consecutiveErrors = 0;
-        setOnline(true);
+        state.lastOutageWarn = 0;
         // Задачи нет: файлы подчистил job_reap или роутер перезагрузился
         // посреди операции. Ответ при этом успешный (HTTP 200), счётчик
         // сетевых ошибок его не поймает — терминальность решается здесь.
@@ -2509,7 +2487,11 @@
           return;
         }
         // «Снова на связи» не пишем: мы не говорили, что связь пропадала.
-        const log = d.log || "(нет вывода)";
+        const baseLog = d.log || "(нет вывода)";
+        // Возврат связи отмечаем В ЛОГЕ. Это поведение было до p-73.2 и его
+        // убрали заодно с ложными вердиктами — а зря: без него человек, у
+        // которого лог замер на «Шаг 4/12», не понимает, что всё продолжилось.
+        const log = recovered ? baseLog + "\n[панель снова на связи]" : baseLog;
         notify(log, !!d.done, d);
         if (d.done) { finish(d); return; }
       } catch (e) {
@@ -2530,7 +2512,6 @@
         // всплывают там, где их обрабатывают. Здесь они не превращают идущую
         // задачу в проваленную.
         state.consecutiveErrors++;
-        setOnline(false);
         // Определённый отказ (403, 5xx кроме «поднимаюсь») — это ОТВЕТ, а не
         // переезд: ждать его «возвращения» бессмысленно, и держать из-за него
         // весь UI залоченным десять минут нельзя. Такой опрос прекращаем
@@ -2544,6 +2525,23 @@
           return;
         }
       }
+        // ПРИЗНАК ЖИЗНИ, ПОКА ПАНЕЛЬ НЕ ОТВЕЧАЕТ.
+        //
+        // Лог во время переезда дерева замирает на последней строке. Молчание
+        // здесь неотличимо от зависшей установки — именно на это и пожаловались
+        // после r-75.6: «ни логов, ни того, что панель скоро вернётся».
+        //
+        // Пишем ровно то, что знаем: сколько уже ждём. Это НЕ вердикт о судьбе
+        // задачи (её мы по-прежнему не объявляем ни проваленной, ни законченной)
+        // — это счётчик ожидания, который был здесь до p-73.2 и был полезен.
+        // Предыдущую такую строку затираем, чтобы лог не рос столбиком.
+        if (state.consecutiveErrors === 2
+            || (state.consecutiveErrors - state.lastOutageWarn) >= 15) {
+          const secs = Math.round(state.consecutiveErrors * POLL_ERR_MS / 1000);
+          const clean = String(state.lastLog || "").replace(/\n\[панель пока не отвечает.*\]$/g, "");
+          notify(clean + "\n[панель пока не отвечает, ждём… " + secs + "с]", false, null);
+          state.lastOutageWarn = state.consecutiveErrors;
+        }
       setTimeout(tick, state.consecutiveErrors > 0 ? POLL_ERR_MS : POLL_OK_MS);
     }
     tick();
@@ -2572,10 +2570,6 @@
         <h3>${escapeHtml(title)}</h3>
         ${warning}
         <pre class="log" id="job-log">${escapeHtml(poller.lastLog || "Запуск…")}</pre>
-        <div class="job-link" id="job-link" hidden aria-live="polite">
-          Панель сейчас недоступна — переподключаюсь. Задача идёт на роутере,
-          лог догонит сам.
-        </div>
         <div class="modal-footer">
           <button class="btn" id="job-close">Скрыть</button>
         </div>
@@ -2583,15 +2577,8 @@
     `;
     document.body.appendChild(backdrop);
     const logEl = backdrop.querySelector("#job-log");
-    const linkEl = backdrop.querySelector("#job-link");
     const closeBtn = backdrop.querySelector("#job-close");
     logEl.scrollTop = logEl.scrollHeight;
-
-    // Индикатор связи. Держим его в актуальном состоянии и при повторном
-    // открытии модалки через badge: poller живёт дольше окна.
-    const onLink = (online) => { linkEl.hidden = !!online; };
-    onLink(poller.online);
-    poller.linkAttachers.add(onLink);
 
     // Модалка — подписчик на background poller. На done меняет текст
     // кнопки на «Готово»/«Закрыть». Если юзер закроет до done — мы
@@ -2599,9 +2586,6 @@
     const onTick = (log, done, d) => {
       logEl.textContent = log;
       logEl.scrollTop = logEl.scrollHeight;
-      // Задача кончилась — индикатору связи больше нечего сообщать: он
-      // говорит об опросе, которого уже нет.
-      if (done) linkEl.hidden = true;
       if (done) {
         const isLockHeld = (log || "").includes("lock held by pid=");
         if (d && d.exit === 0) {
@@ -2623,7 +2607,6 @@
 
     closeBtn.addEventListener("click", () => {
       poller.attachers.delete(onTick);
-      poller.linkAttachers.delete(onLink);
       backdrop.remove();
     });
   }
