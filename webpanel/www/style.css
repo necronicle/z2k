@@ -84,7 +84,14 @@
 @font-face {
   font-family: "Fira Code";
   font-style: normal;
-  font-weight: 400;
+  /* ДИАПАЗОН, А НЕ ОДНО ЗНАЧЕНИЕ. Fira Code здесь — вариативный шрифт (в
+     файле есть таблица fvar), то есть обычное и полужирное начертание он
+     рисует из одних и тех же контуров по оси веса. Раньше вес 500 был
+     объявлен отдельной парой файлов — и это оказались побайтово те же самые
+     файлы, что и у 400: один шрифт отгружался дважды под разными именами,
+     лишние 48 КБ на каждую загрузку панели. Теперь пара одна, а диапазон
+     покрывает оба веса, которые мы используем. */
+  font-weight: 400 500;
   font-display: swap;
   src: local("Fira Code Regular"), local("FiraCode-Regular"),
        url("fonts/FiraCode-400-latin.woff2") format("woff2");
@@ -93,28 +100,10 @@
 @font-face {
   font-family: "Fira Code";
   font-style: normal;
-  font-weight: 400;
+  font-weight: 400 500;  /* см. латиницу выше */
   font-display: swap;
   src: local("Fira Code Regular"), local("FiraCode-Regular"),
        url("fonts/FiraCode-400-cyrillic.woff2") format("woff2");
-  unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;
-}
-@font-face {
-  font-family: "Fira Code";
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: local("Fira Code Medium"), local("FiraCode-Medium"),
-       url("fonts/FiraCode-500-latin.woff2") format("woff2");
-  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
-}
-@font-face {
-  font-family: "Fira Code";
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: local("Fira Code Medium"), local("FiraCode-Medium"),
-       url("fonts/FiraCode-500-cyrillic.woff2") format("woff2");
   unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;
 }
 
@@ -958,7 +947,12 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   font-size: 13px;
   color: var(--text-muted);
 }
-.typed-confirm-input {
+/* Селектор с типом, а не просто класс: ниже по файлу стоит
+   `input[type="text"] { font-family: inherit }` со специфичностью (0,1,1),
+   и голый `.typed-confirm-input` (0,1,0) ему проигрывал — поле оставалось
+   пропорциональным шрифтом, ради которого всё и затевалось (в моноширинном
+   опечатка в наборанном слове видна посимвольно). */
+input[type="text"].typed-confirm-input {
   width: 100%;
   font-family: var(--font-mono);
   letter-spacing: 0.08em;
@@ -1946,6 +1940,15 @@ body[data-page="strategies"] #app { max-width: none; }
   .state-table td {
     border: 0;
     padding: 3px 0;
+    /* height: auto ОБЯЗАТЕЛЕН здесь. Десктопная строка таблицы держит 40px
+       через `height` у ячейки — для настоящей табличной ячейки это минимум,
+       и содержимое её растягивает. Но на телефоне таблица превращается в
+       карточки, и та же `td` становится flex-боксом, где height — уже
+       жёсткая высота: каждое из шести полей раздувалось бы с ~24px до 40px
+       (карточка домена со 170px до 270px), а длинное имя вроде
+       rr1---sn-4g5e6nzz.googlevideo.com переносилось бы на вторую строку и
+       налезало на соседнее поле вместо того, чтобы раздвинуть бокс. */
+    height: auto;
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;

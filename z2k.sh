@@ -1087,8 +1087,6 @@ download_init_script() {
         www/index.html www/app.js www/style.css www/favicon.svg \
         www/fonts/FiraCode-400-cyrillic.woff2 \
         www/fonts/FiraCode-400-latin.woff2 \
-        www/fonts/FiraCode-500-cyrillic.woff2 \
-        www/fonts/FiraCode-500-latin.woff2 \
         www/fonts/FiraSans-400-cyrillic.woff2 \
         www/fonts/FiraSans-400-latin.woff2 \
         www/fonts/FiraSans-500-cyrillic.woff2 \
@@ -1453,7 +1451,33 @@ main() {
     # ~13s. Install/update/uninstall всегда режут /tmp/z2k для чистоты.
     local _need_fetch=1
     case "${1:-}" in
-        install|i|update|u|uninstall|remove)
+        uninstall|remove)
+            # УДАЛЕНИЕ ОБЯЗАНО РАБОТАТЬ БЕЗ ИНТЕРНЕТА.
+            #
+            # Раньше `uninstall` стоял в одной ветке с install/update, то есть
+            # перед сносом z2k скачивал с GitHub всё дерево заново — модули,
+            # базы стратегий, fake-блобы, init-скрипт. На первом же неудачном
+            # фетче download_modules делает die, и до самого удаления дело не
+            # доходило вообще: ничего не снесено, в логе минуты попыток curl.
+            #
+            # А просят удалить чаще всего именно тогда, когда сеть не работает.
+            # То есть команда отказывала ровно в том случае, ради которого
+            # существует. Из панели это выглядело как «кнопка не работает».
+            #
+            # Скачивать при этом нечего: uninstall_zapret2 живёт в lib/install.sh,
+            # а все модули двадцатью строками ниже и так копируются в кэш из
+            # /opt/zapret2/lib — установленного дерева, которое мы и удаляем.
+            # Стратегии, блобы и init-скрипт удалению не нужны совсем.
+            #
+            # Фетч отключаем ТОЛЬКО если модули действительно на диске: если
+            # установленное дерево разрушено, старое поведение (скачать и
+            # попробовать) остаётся единственным шансом что-то доделать.
+            _need_fetch=0
+            for _um in $MODULES; do
+                [ -f "/opt/zapret2/lib/${_um}.sh" ] || _need_fetch=1
+            done
+            ;;
+        install|i|update|u)
             # Чистая установка/обновление — обязательно свежие файлы.
             rm -rf "$WORK_DIR"
             # Defensive /tmp cleanup перед install. Field incident 2026-05-28:

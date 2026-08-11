@@ -796,7 +796,37 @@
       renderStatusGrid(s);
     } catch (e) {
       if (_stale("status", seq)) return;
-      grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
+      // ОТКАЗ ЧТЕНИЯ — НЕ ПОВОД ОСТАВИТЬ ЧЕЛОВЕКА БЕЗ ДЕЙСТВИЙ.
+      //
+      // Здесь рисовалась одна ячейка со словом «Ошибка», а syncServiceButtons
+      // в этой ветке не вызывался вовсе — то есть при неизвестном состоянии
+      // оставались видны все три кнопки сразу, и «Запустить» уходило на роутер
+      // посреди переустановки. Вдобавок для 404/502/503/504 сообщение
+      // намеренно пустое (в этот момент отвечает lighttpd, а не наш CGI) —
+      // человек видел «Ошибка» и пустоту. Автоповтора у страницы нет: сюда
+      // попадали на всё время обновления и до перезагрузки вкладки.
+      //
+      // Правка была сделана в r-75.7 и потерялась при возврате прежней
+      // раскладки — она к раскладке отношения не имеет.
+      const why = (e && e.message)
+        ? escapeHtml(e.message)
+        : "Панель сейчас не отвечает — обычно так выглядит идущее обновление.";
+      grid.innerHTML =
+        '<div class="status-cell warn">' +
+          '<div class="label">Состояние роутера</div>' +
+          '<div class="value">Не удалось прочитать</div>' +
+        '</div>' +
+        '<p class="desc" id="status-why">' + why + '</p>' +
+        '<div class="btn-row"><button class="btn" id="status-retry" type="button">Повторить</button></div>';
+      const retry = document.getElementById("status-retry");
+      if (retry) retry.addEventListener("click", () => {
+        retry.disabled = true;
+        retry.textContent = "Читаю…";
+        refreshStatus();
+      });
+      // Кнопки сервиса не прячем: когда отвалился именно CGI состояния,
+      // «Перезапустить» — ровно то, что помогает. Вердикт при этом честный.
+      syncServiceButtons(undefined);
     }
   }
 
@@ -2358,7 +2388,12 @@
         }
       }
     });
-    document.querySelectorAll("[data-svc], #tg-enable, #tg-disable").forEach(btn => {
+    // #uninstall-btn ОБЯЗАН быть в этом списке. Без него кнопка удаления
+    // оставалась живой во время чужой фоновой задачи: можно было запустить
+    // снос дерева параллельно идущей переустановке — общего замка у них нет,
+    // и `rm -rf` гонялся бы с записью файлов установщиком. Тем же путём второй
+    // клик по самой кнопке в первые секунды порождал второе удаление.
+    document.querySelectorAll("[data-svc], #tg-enable, #tg-disable, #uninstall-btn").forEach(btn => {
       if (busy) {
         if (btn.dataset.lockBackup === undefined) {
           btn.dataset.lockBackup = btn.disabled ? "1" : "0";
@@ -2376,7 +2411,10 @@
     // Dimmed cards — signal что заблокировано на каждой карточке с
     // контролами. Без overlay'а — content виден полностью.
     document.querySelectorAll(".card").forEach(card => {
-      const hasLockableControl = card.querySelector(".switch input[type=\"checkbox\"], [data-svc], #tg-enable, #tg-disable");
+      // Тот же список, что и у лока выше — иначе карточка удаления гасила бы
+      // кнопку, но сама оставалась яркой, и выключенная кнопка выглядела бы
+      // поломкой, а не занятостью.
+      const hasLockableControl = card.querySelector(".switch input[type=\"checkbox\"], [data-svc], #tg-enable, #tg-disable, #uninstall-btn");
       if (!hasLockableControl) return;
       if (busy) card.classList.add("card-locked");
       else card.classList.remove("card-locked");
@@ -2511,8 +2549,26 @@
         // секунд тишины, столько штатная пауза не длится.
         if (state.opts.expectGone && state.consecutiveErrors >= 10) {
           const clean = String(state.lastLog || "").replace(/\n\[панель.*\]$/g, "");
-          const log = clean + "\n[z2k удалён — панель выключена вместе с ним, эту вкладку можно закрыть]";
-          const fin = { done: true, exit: 0, status: "done", log };
+          // ИТОГ НЕ ОБЪЯВЛЯЕТСЯ УСПЕШНЫМ, И ЭТО ВАЖНО.
+          //
+          // Молчание сервера говорит ровно одно: панели больше нет. Про то,
+          // чем кончилось удаление, оно не говорит ничего — а панель гасится
+          // ВТОРЫМ действием, задолго до чистки правил, сноса дерева и
+          // конфига. Всё, что упадёт после (носитель ушёл в read-only,
+          // коробку перезагрузили), случится уже за нашей спиной.
+          //
+          // Здесь стояло exit: 0 и «z2k удалён». Это была догадка, поданная
+          // как факт: человек читал «удалён», закрывал вкладку, а дерево и
+          // правила оставались на месте, и проверить было уже нечем —
+          // журнал задачи лежит в /tmp и доступен только по SSH.
+          //
+          // Поэтому статус unknown: опрос прекращается, UI разблокируется,
+          // но успех не заявлен. В логе — что известно и что делать дальше.
+          const log = clean +
+            "\n[панель выключилась — так и должно быть, она удаляется вместе с z2k]" +
+            "\n[дальше удаление идёт без неё, и результат отсюда уже не виден]" +
+            "\n[если z2k остался, откройте меню в терминале — пункт 5]";
+          const fin = { done: true, exit: null, status: "unknown", log };
           notify(log, true, fin);
           finish(fin);
           return;
