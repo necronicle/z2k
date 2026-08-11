@@ -18,24 +18,20 @@
     } catch (e) { /* localStorage disabled — остаёмся на dark default */ }
   })();
 </script>
-<!-- ВЕБ-ШРИФТЫ НЕ ПОДКЛЮЧАЕМ. НАМЕРЕННО, НЕ ЗАБЫЛИ.
+<!-- ВЕБ-ШРИФТЫ НЕ ПОДКЛЮЧАЕМ ИЗВНЕ. НАМЕРЕННО, НЕ ЗАБЫЛИ.
      Здесь стояли preconnect на fonts.googleapis.com/fonts.gstatic.com и
      блокирующий <link rel=stylesheet> на Google Fonts. Браузер не рисует
      НИЧЕГО, пока кросс-доменная таблица стилей не разрешится, а display=swap
      от этого не спасает: он про второй хоп (сам woff2), а не про первый.
      Панель живёт на роутере, который стоит ради обхода блокировок, и её
-     открывают ровно тогда, когда с сетью плохо. Отказ по «connection refused»
-     отваливается мгновенно, а тихий дроп ТСПУ — это белый экран на десятки
-     секунд у страницы, физически лежащей в двух метрах. Оба этих хоста, к
-     слову, есть в наших же списках на обход (files/lists/.../YT/List.txt).
-     Стеки --font-mono/--font-sans в style.css оставлены как есть: если Fira
-     установлена в системе, она подхватится локально, иначе системный шрифт.
-     Не возвращать. Хостить у себя — тоже не drop-in: список файлов панели
-     захардкожен в webpanel/install.sh и z2k.sh, .woff2 нет в mimetype.assign
-     lighttpd.conf, плюс ~150 КБ на флеш ради типографики. -->
-<link rel="stylesheet" href="style.css?v=r-75.7">
-<link rel="icon" href="favicon.svg?v=r-75.7" type="image/svg+xml" sizes="any">
-<link rel="mask-icon" href="favicon.svg?v=r-75.7" color="#1AC3B4">
+     открывают ровно тогда, когда с сетью плохо: тихий дроп — это белый экран
+     на десятки секунд у страницы, лежащей в двух метрах. Оба хоста, к слову,
+     есть в наших же списках на обход.
+     Сама Fira никуда не делась — она отгружается вместе с панелью и
+     объявлена через @font-face в style.css (webpanel/www/fonts/). -->
+<link rel="stylesheet" href="style.css?v=r-75.8">
+<link rel="icon" href="favicon.svg?v=r-75.8" type="image/svg+xml" sizes="any">
+<link rel="mask-icon" href="favicon.svg?v=r-75.8" color="#1AC3B4">
 </head>
 <body>
 <header class="topbar">
@@ -137,6 +133,6 @@
 <div class="menu-backdrop" id="menu-backdrop" hidden></div>
 <main id="app"></main>
 <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
-<script src="app.js?v=r-75.7"></script>
+<script src="app.js?v=r-75.8"></script>
 </body>
 </html>
