@@ -118,11 +118,12 @@ whitelist, логи. Ставится отдельно через меню, LAN-
 [2] Удалить
 [3] Перезапустить
 [4] Показать URL
+[5] Изменить адрес и порт
 [B] Назад
 
 SUBMENU
 
-    printf "Выберите опцию [1-4,B]: "
+    printf "Выберите опцию [1-5,B]: "
     read_input wp_choice
 
     # Обработчики могут вернуть ненулевой код (например «веб-панель не
@@ -135,9 +136,154 @@ SUBMENU
         2) webpanel_do_uninstall     || true ;;
         3) webpanel_do_restart       || true ;;
         4) webpanel_show_credentials || true ;;
+        5) webpanel_change_address   || true ;;
         b|B) return 0 ;;
         *) print_error "Неверный выбор: $wp_choice"; pause ;;
     esac
+}
+
+# [P]→[5] Изменить адрес и порт панели.
+#
+# ЗАЧЕМ ЭТО В ТЕРМИНАЛЕ, А НЕ В САМОЙ ПАНЕЛИ. Настройка меняет адрес, по
+# которому панель отвечает. Ошибись в нём — и чинить будет уже нечем: страница,
+# с которой правили, останется на старом адресе и не откроется. Терминал
+# доступен в любом случае, поэтому единственная настройка, способная отрезать
+# доступ к панели, живёт здесь.
+#
+# ЗАЧЕМ ВООБЩЕ. Адрес меняли правкой lighttpd.conf, а он генерируется из
+# шаблона при каждой установке — правка стиралась каждым обновлением, и человек
+# вписывал её заново изо дня в день. Установщик умеет и принимать адрес флагом,
+# и переигрывать его при переустановке (маркер bind.explicit) — не хватало
+# только способа задать, не набирая команду руками.
+#
+# Адрес не вводится строкой, а выбирается из тех, что роутер реально держит.
+# Свободный ввод здесь — это ровно тот случай, когда опечатка оставляет человека
+# без панели: lighttpd не встанет на чужой адрес и умрёт на старте.
+# Адрес поднят на каком-то интерфейсе прямо сейчас? Тот же приём, что в
+# установщике (webpanel/install.sh:_ip_present) — здесь он нужен только чтобы
+# предупредить, решение остаётся за человеком.
+_ip_present_local() {
+    ip -4 addr show 2>/dev/null | grep -q "inet $1[/ ]"
+}
+
+webpanel_change_address() {
+    if ! webpanel_is_installed; then
+        print_info "Веб-панель не установлена — сначала пункт [1]"
+        pause
+        return 0
+    fi
+
+    local wp_dir="/opt/zapret2/webpanel"
+    local cur_bind cur_port
+    cur_bind=$(sed -n 's/^[[:space:]]*server\.bind[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+               "$wp_dir/lighttpd.conf" 2>/dev/null | head -1)
+    cur_port=$(sed -n 's/^[[:space:]]*server\.port[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' \
+               "$wp_dir/lighttpd.conf" 2>/dev/null | head -1)
+
+    clear_screen
+    print_header "Адрес и порт веб-панели"
+    print_info "Сейчас: ${cur_bind:-?}:${cur_port:-?}"
+    print_separator
+
+    # Адреса роутера показываем ПОДСКАЗКОЙ, а не списком выбора. Выбор из
+    # списка запрещал бы то, что человек как раз и хочет: вписать адрес,
+    # которого сейчас на интерфейсах нет — поднимаемый позже VPN, второй мост,
+    # адрес, который вот-вот появится. Ошибётся — вернётся сюда и введёт снова,
+    # для того этот пункт и в терминале, а не в самой панели.
+    local addrs
+    addrs=$(ip -4 addr show 2>/dev/null \
+            | sed -n 's|^[[:space:]]*inet \([0-9.]*\)/.*|\1|p' \
+            | grep -v '^127\.' | sort -u | tr '\n' ' ')
+    [ -n "$addrs" ] && print_info "Адреса роутера: $addrs"
+    print_info "0.0.0.0 — все интерфейсы (см. предупреждение ниже)"
+    printf "\n"
+
+    printf "Адрес [Enter — оставить %s]: " "${cur_bind:-как есть}"
+    read_input wp_new_bind
+    local new_bind="${wp_new_bind:-$cur_bind}"
+
+    # Проверяем ФОРМАТ, а не принадлежность. Формат — это защита от опечатки
+    # вроде «192.168.1.» или случайно вставленного URL: такое значение уедет
+    # в конфиг, lighttpd не стартует, и человек останется без панели, не поняв
+    # почему. Принадлежность адреса роутеру — не наше дело: адрес может
+    # появиться позже.
+    _valid_ipv4() {
+        local _s="$1" _o1 _o2 _o3 _o4 _rest
+        case "$_s" in
+            *[!0-9.]*|*..*|.*|*.) return 1 ;;
+        esac
+        IFS=. read -r _o1 _o2 _o3 _o4 _rest <<EOF
+$_s
+EOF
+        [ -n "$_o4" ] && [ -z "$_rest" ] || return 1
+        for _o in "$_o1" "$_o2" "$_o3" "$_o4"; do
+            [ -n "$_o" ] || return 1
+            [ "$_o" -le 255 ] 2>/dev/null || return 1
+        done
+        return 0
+    }
+    if ! _valid_ipv4 "$new_bind"; then
+        print_error "Это не адрес IPv4: $new_bind"
+        pause
+        return 1
+    fi
+
+    printf "Порт [1-65535, Enter — оставить %s]: " "${cur_port:-8088}"
+    read_input wp_port_choice
+    local new_port="${wp_port_choice:-${cur_port:-8088}}"
+    case "$new_port" in
+        ""|*[!0-9]*) print_error "Порт — только цифры"; pause; return 1 ;;
+    esac
+    if [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
+        print_error "Порт вне диапазона: $new_port"
+        pause
+        return 1
+    fi
+
+    if [ "$new_bind" = "$cur_bind" ] && [ "$new_port" = "$cur_port" ]; then
+        print_info "Ничего не изменилось"
+        pause
+        return 0
+    fi
+
+    print_separator
+    print_warning "Панель переедет на http://${new_bind}:${new_port}/"
+    if [ "$new_bind" = "0.0.0.0" ]; then
+        print_warning "0.0.0.0 — это ВСЕ интерфейсы, включая провайдерский и гостевой."
+        print_warning "У панели нет пароля, а её CGI работает от root."
+    elif ! _ip_present_local "$new_bind"; then
+        # Предупреждение, а НЕ запрет: адрес может появиться позже — VPN,
+        # второй мост, интерфейс, который сейчас не поднят. Но чаще это всё-таки
+        # опечатка, и сказать об этом надо до того, как панель не поднимется.
+        print_warning "Сейчас такого адреса на роутере нет."
+        print_warning "Если он не появится, панель не поднимется — вернитесь сюда и введите другой."
+    fi
+    printf "\n"
+    if ! confirm "Применить?" "N"; then
+        print_info "Отмена"
+        pause
+        return 0
+    fi
+
+    # Переустановка панели установщиком с флагами. Только этот путь оставляет
+    # маркер bind.explicit, ради которого всё и затевалось: без него следующая
+    # же переустановка вернула бы автоопределённый адрес.
+    local src
+    if ! src=$(webpanel_source_dir); then
+        print_error "Исходники webpanel не найдены."
+        print_info "Ожидалось: /tmp/z2k/webpanel/ (при запуске через z2k.sh)"
+        pause
+        return 1
+    fi
+    print_info "Переустанавливаю панель на ${new_bind}:${new_port} ..."
+    if ! sh "$src/install.sh" --bind "$new_bind" --port "$new_port"; then
+        print_error "Не удалось применить: панель осталась на прежнем адресе"
+        pause
+        return 1
+    fi
+    print_success "Готово: http://${new_bind}:${new_port}/"
+    print_info "Адрес и порт переживут обновления — заданы явно."
+    pause
 }
 
 webpanel_do_install() {
