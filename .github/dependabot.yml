@@ -14,6 +14,15 @@
 # после зелёного CI. Влитый туда PR попал бы к людям сразу, минуя релиз и
 # манифест. Так и пришёл #32 (закрыт): бамп go-модулей, нацеленный прямо в
 # релизную ветку. Человек пишет в z2k-staging — бот тоже.
+#
+# cooldown — выдержка перед тем, как версия вообще будет предложена. Смысл не в
+# аккуратности, а в supply chain: скомпрометированный релиз пакета живёт до
+# обнаружения обычно считанные дни, и принимать версию, выпущенную час назад,
+# значит подписываться на это первыми. Дефолт GitHub — 3 дня, нам этого мало
+# для мажоров: они и так требуют разбора руками, подождать две недели ничего
+# не стоит. На ИСПРАВЛЕНИЯ БЕЗОПАСНОСТИ выдержка не распространяется, это
+# сказано в документации прямо — то есть дыры мы всё равно получаем сразу.
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -22,6 +31,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       actions:
         patterns: ["*"]
@@ -37,6 +51,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       go-minor-patch:
         update-types: ["minor", "patch"]

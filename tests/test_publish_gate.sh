@@ -150,13 +150,37 @@ else
     ok "tip-check убран — seq и history остаются единственной защитой от устаревшего кандидата"
 fi
 
-# --- 5. Перемотка вперёд, без --force -----------------------------------------
+# --- 5. Перемотка вперёд, без принудительного обновления ----------------------
 #
-# Единственная защита от публикации разошедшейся истории — отказ самого git.
-if grep -q 'git push origin "\$SHA:refs/heads/z2k-enhanced"' "$PUB"; then
-    ok "ветка двигается перемоткой вперёд"
+# Единственная защита от публикации разошедшейся истории — отказ самой
+# платформы. Механизм с 2026-08-11 не `git push`, а REST API: чекаут в job
+# публикации существовал только ради пуша и оставлял токен в .git/config
+# (zizmor artipacked), а документированного способа пушить без сохранённых
+# учётных данных actions/checkout не даёт. Гарантия при этом ровно та же —
+# документация REST API: «Leaving this out or setting it to false will make
+# sure you're not overwriting work» (https://docs.github.com/en/rest/git/refs).
+#
+# Проверяем СВОЙСТВО, а не команду: ссылка переводится на $SHA и параметр
+# force не передаётся ни в каком виде.
+if grep -q 'git/refs/heads/z2k-enhanced' "$PUB" && grep -q 'sha=\${SHA}' "$PUB"; then
+    ok "ветка двигается переводом ссылки на проверенный коммит"
 else
-    no "ветка двигается перемоткой вперёд" "push sha:refs/heads/z2k-enhanced" "не найдено"
+    no "ветка двигается переводом ссылки на \$SHA" "PATCH git/refs/heads/z2k-enhanced + sha=\$SHA" "не найдено"
+fi
+if grep -qE '(-f|-F) *"?force' "$PUB"; then
+    no "принудительное обновление ссылки не используется" "нет force" "force передаётся"
+else
+    ok "force не передаётся — платформа сама отказывает, если это не перемотка вперёд"
+fi
+# Чекаута в job публикации быть не должно: он и тащил за собой токен на диск.
+# Именно ШАГ `- uses: actions/checkout`, а не упоминание в комментарии:
+# обоснование рядом само называет действие по имени, и голый grep зеленел бы
+# на комментарии при вернувшемся чекауте (эта ловушка сегодня срабатывала уже
+# дважды).
+if awk '/^  publish:/,/^  cdn:/' "$PUB" | grep -qE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]*actions/checkout'; then
+    no "job публикации обходится без рабочего дерева" "нет actions/checkout" "чекаут вернулся — вместе с токеном в .git/config"
+else
+    ok "job публикации не выкачивает дерево — токен на диск не попадает"
 fi
 
 if grep -qE 'git push .*(--force|-f )' "$PUB"; then
@@ -439,12 +463,13 @@ else
     ok "второй tip-check перед push убран — push либо проходит, либо честно падает по fast-forward"
 fi
 
-if grep -q 'if ! git push origin "\$SHA:refs/heads/z2k-enhanced"; then' "$PUB" \
-    && awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q 'moved=no' \
-    && awk '/name: Push fast-forward/,/^  cdn:/' "$PUB" | grep -q 'exit 1'; then
-    ok "неудачный push (не fast-forward) — это красная job с moved=no, а не тихий пропуск"
+_pubstep=$(awk '/name: Перевести ссылку релизной ветки/,/^  cdn:/' "$PUB")
+if printf '%s' "$_pubstep" | grep -q 'if ! gh api -X PATCH' \
+    && printf '%s' "$_pubstep" | grep -q 'moved=no' \
+    && printf '%s' "$_pubstep" | grep -q 'exit 1'; then
+    ok "неудачный перевод ссылки — это красная job с moved=no, а не тихий пропуск"
 else
-    no "неудачный push красит job, а не пропускает молча" 'if ! git push ...; then moved=no; exit 1; fi' "не найдено"
+    no "неудачный перевод ссылки красит job" 'if ! gh api -X PATCH ...; then moved=no; exit 1; fi' "не найдено"
 fi
 
 # --- 14. CDN verify не режет список файлов молча ------------------------------
@@ -607,6 +632,29 @@ if grep -qE "cancel-in-progress:.*z2k-enhanced.*&&.*z2k-staging|cancel-in-progre
 else
     no "cancel-in-progress отключён и на staging, не только на enhanced" \
        "ref != z2k-enhanced && ref != z2k-staging" "не найдено"
+fi
+
+# --- 20b. подавление zizmor — только вместе с обоснованием -------------------
+#
+# Подавить находку анализатора легко, и именно поэтому опасно: молчаливый
+# `ignore` неотличим от «разобрались». Требуем, чтобы рядом с подавлением
+# оставался разбор — и чтобы подавлялось ровно одно известное правило, а не
+# всё подряд.
+_zz=$(grep -n 'zizmor: ignore' "$PUB" || true)
+if [ -n "$_zz" ]; then
+    if printf '%s' "$_zz" | grep -q 'ignore\[dangerous-triggers\]' \
+       && grep -q 'публикация требует тег, подписанный ключом' "$PUB"; then
+        ok "подавление zizmor точечное (dangerous-triggers) и снабжено разбором"
+    else
+        no "подавление zizmor названо по правилу и обосновано" \
+           "ignore[dangerous-triggers] + разбор рядом" "$(printf '%s' "$_zz" | head -1)"
+    fi
+    # Никаких «заглушить всё»: подавление без имени правила недопустимо.
+    if printf '%s' "$_zz" | grep -qE 'zizmor: ignore[^[]'; then
+        no "подавление всегда с именем правила" "ignore[<правило>]" "есть безымянное подавление"
+    else
+        ok "безымянных подавлений zizmor нет"
+    fi
 fi
 
 # --- 21a. рассогласованная пара на jsdelivr — красное, а не предупреждение ---
