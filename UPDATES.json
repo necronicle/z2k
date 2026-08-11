@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 8,
-  "current": "r-75.6",
+  "seq": 9,
+  "current": "r-75.7",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -66,7 +66,7 @@
   "files/z2k-blocked-monitor.sh": "d2221cab05461c6f44042464bd3c6979c7303f787460b8b5989f91bf4ebf9a99",
   "files/z2k-config-validator.sh": "31b8e39341f75efb130500ad473cabd90677d814be259bc110429fbc3e4c01d4",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "91a963a866358b81816da1d5d7f6af9f6bc663c65600e56b7d6b69e58d4025da",
+  "files/z2k-diag.sh": "ad04199abba229631a97bfb32016aa3aa42565221e684d112d1b727fcdc0d61b",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "95c79e4a84637a22ea80cfda9417b18a640de8afeee676fa0be49631fdedbf73",
   "files/z2k-insta-ip-refresh.sh": "5503589976353df4d1c69dbf193997a6de48df1dd2af970f91265c83cc8890e0",
@@ -106,10 +106,10 @@
   "webpanel/init.d/S96z2k-webpanel": "d064a61c1845e2a4ade4ed90cb3b6a82f3705fc6784f90f925d27c5bd7bcedbe",
   "webpanel/install.sh": "45c139902fbb78a4dba388a4f68dda697bd0889819e795734f5013679caa09b9",
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
-  "webpanel/www/app.js": "b0df12edc700cfc1850f606fd509fd04f167f54e7b9a4a4bc056399b63e6bc85",
+  "webpanel/www/app.js": "1dac57475611a79bd96f03808dd7998e83c448b87c328324e8ef5621f8f8a72b",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
-  "webpanel/www/index.html": "d00af98e099eac08a94537e21103222536e43a05f5f1914b0961698fabd74cf7",
-  "webpanel/www/style.css": "6d7c571d788e7c7fd1c28f091f4de0796d95852fcac21d64f8509199d330419f",
+  "webpanel/www/index.html": "6f737ddf5bc986f9af068f728c413dddad334605e82bd3b68aac596b5fc3e70d",
+  "webpanel/www/style.css": "40096036c3fb2aa787d5517884b1a0e580608b5b6d0020ff5b4c5bfef301d267",
   "z2k.sh": "e93f8df92e58ceab7e9e833b978b9707e6c56bed59d68332dcc351d15cc8a913"
   },
   "history": [
@@ -271,6 +271,7 @@
 {"v": "p-75.3", "type": "patch", "ts": "2026-08-10T04:39:29Z", "ref": "p-75.3", "desc": "Внутренняя техническая проверка процесса выпуска обновлений. Пользователю ничего делать не нужно.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-state-persist.lua", "UPDATES.json"]},
 {"v": "r-75.4", "type": "reinstall", "ts": "2026-08-10T08:47:45Z", "ref": "r-75.4", "desc": "Исправлена установка веб-панели: если она однажды сломалась, переустановка её пропускала и панель больше не возвращалась. Обновление теперь скачивает файлы строго той версии, которая объявлена.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "lib/webpanel.sh", "UPDATES.json"]},
 {"v": "r-75.5", "type": "reinstall", "ts": "2026-08-10T09:30:37Z", "ref": "r-75.5", "desc": "Веб-панель больше не остаётся неустановленной из-за штатного веб-сервера, занимавшего тот же порт — теперь он отключается автоматически. Если порт занят посторонней программой, установка честно об этом сообщает вместо обрыва без объяснения.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/install.sh", "UPDATES.json"]},
-{"v": "r-75.6", "type": "reinstall", "ts": "2026-08-10T15:36:40Z", "ref": "r-75.6", "desc": "Повышена надёжность обновления и обновлены внутренние компоненты.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/app.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]}
+{"v": "r-75.6", "type": "reinstall", "ts": "2026-08-10T15:36:40Z", "ref": "r-75.6", "desc": "Повышена надёжность обновления и обновлены внутренние компоненты.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/app.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]},
+{"v": "r-75.7", "type": "reinstall", "ts": "2026-08-11T07:14:47Z", "ref": "r-75.7", "desc": "Панель больше не ждёт загрузки шрифтов из интернета и открывается сразу. Главный ответ и кнопки управления теперь наверху экрана, а не под таблицей. В списке стратегий видно, к какому адресу относится запись — IPv4 или IPv6.", "changed_files": ["files/z2k-diag.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"]}
   ]
 }
