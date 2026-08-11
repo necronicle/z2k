@@ -147,5 +147,41 @@ else
     no "cooldown у каждой записи dependabot" "$_upd блоков cooldown" "найдено $_cool"
 fi
 
+# --- 8. Ключи cooldown, которых экосистема не понимает --------------------------
+#
+# Одного «блок cooldown есть» мало, и это выяснилось дорого. У GitHub Actions в
+# таблице поддержки отмечен только default-days; semver-major-days,
+# semver-minor-days и semver-patch-days работают лишь там, где есть SemVer
+# (gomod — работают). Проставленные у github-actions, они роняли разбор ВСЕГО
+# файла: dependabot переставал обновлять и go-модули тоже, то есть одна
+# невалидная запись обесценивала и вторую, валидную. Снаружи это выглядит как
+# молчание бота, а не как ошибка, и заметить можно только в интерфейсе GitHub.
+#
+# Проверка идёт поблочно: ключ сам по себе законен, незаконно его соседство с
+# конкретной экосистемой.
+_bad_eco=""
+_cur_eco=""
+while IFS= read -r _line; do
+    case "$_line" in
+        "  - package-ecosystem:"*)
+            _cur_eco=$(printf '%s' "$_line" | sed 's/.*package-ecosystem:[[:space:]]*//; s/[[:space:]]*$//')
+            ;;
+        *semver-major-days*|*semver-minor-days*|*semver-patch-days*)
+            # Комментарии не считаем: в файле они называют эти ключи по имени,
+            # объясняя, почему их здесь нет.
+            case "$_line" in
+                *"#"*) ;;
+                *) [ "$_cur_eco" = "github-actions" ] && _bad_eco="$_bad_eco $_cur_eco" ;;
+            esac
+            ;;
+    esac
+done < "$DEP"
+if [ -z "$_bad_eco" ]; then
+    ok "у github-actions нет ключей cooldown, которых эта экосистема не понимает"
+else
+    no "semver-*-days только у экосистем с SemVer" "нет их у github-actions" \
+       "найдены у:$_bad_eco — dependabot не разберёт файл целиком"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

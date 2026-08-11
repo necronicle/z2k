@@ -32,10 +32,14 @@ updates:
       interval: weekly
       day: monday
     cooldown:
+      # ТОЛЬКО default-days, и это не упущение. В таблице поддержки cooldown у
+      # GitHub Actions отмечен default-days и НЕ отмечены semver-major-days,
+      # semver-minor-days и semver-patch-days — эти три ключа работают лишь для
+      # экосистем с SemVer (gomod ниже — работают). Проставленные здесь, они
+      # роняли разбор всего файла, и dependabot переставал обновлять что-либо
+      # вообще: одна невалидная запись обесценивает и вторую, валидную.
+      # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
       default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
     groups:
       actions:
         patterns: ["*"]
