@@ -991,6 +991,27 @@ case "$method $path" in
         exit 0
         ;;
 
+    # ---------- УДАЛЕНИЕ ZAPRET2 ----------
+    #
+    # Слово подтверждения проверяет СЕРВЕР, а не только страница. Origin-guard
+    # для POST уже стоит, но он защищает от чужого сайта, а не от случайного
+    # запроса из локальной сети: панель работает без авторизации и доверяет
+    # всему сегменту. Это единственный необратимый вызов в API, поэтому у него
+    # есть собственный ключ, который нельзя проставить, не зная его.
+    "POST /uninstall")
+        body=$(read_body)
+        confirm_word=$(form_value "$body" "confirm")
+        if [ "$confirm_word" != "УДАЛИТЬ" ]; then
+            json_fail "400 Bad Request" "запрос отклонён: не подтверждено удаление"
+        fi
+        job_id=$(uninstall_async) || json_fail "500 Internal Server Error" "uninstall launch failed"
+        json_header
+        printf '{"ok":true,"job":'
+        json_string "$job_id"
+        printf '}\n'
+        exit 0
+        ;;
+
     # ---------- DEFAULT ----------
     *)
         json_fail "404 Not Found" "no such endpoint: $method $path"
