@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 10,
-  "current": "r-75.8",
+  "seq": 11,
+  "current": "p-75.9",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -85,7 +85,7 @@
   "lib/menu.sh": "f63008af53e110bbf0f7a0210f221e73d7ebb395c3e55b5dcb0831f58decd371",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
   "lib/utils.sh": "455dcc1a757e8ba1a90039809d885f3203860c0e3b0789489690feaf1ae700f4",
-  "lib/webpanel.sh": "896e4f66ee941a0003881be54a19a38c43ebe0d22b0e5697315cea61596216f3",
+  "lib/webpanel.sh": "ba329871eb03194cd8db8a52e7fa8792ff62366f957951766ba2f2b1ed4e22b5",
   "mtproxy-client/builds/tg-mtproxy-client-linux-amd64": "1315d2cf6c57cf058560492eba2fd7c7228876158df03c8c1a671620407da7f1",
   "mtproxy-client/builds/tg-mtproxy-client-linux-arm": "5d0bb3be9d7229b16fa053ecd51e11fda24415c0001b3e301eb39a218e95c06a",
   "mtproxy-client/builds/tg-mtproxy-client-linux-arm64": "491c0c9d7dd4ea667edb5515258f7d6989fad2a57eb060fe8c4e5a92a1ff0bf8",
@@ -118,7 +118,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "c52eb15be29c87da0d4062d43b0735f1bc03182d62d9dca48321e07aa6c1317c",
+  "webpanel/www/index.html": "3c1ac9995b4ededf88a3f2466bf14e57c7f5e096bb42a0809342fad5415fa4a5",
   "webpanel/www/style.css": "5e9dc2f7ec78438b57e98305788c8207d0921f66e075e8fd4213fcf50c154c1f",
   "z2k.sh": "74a5ceec0260845559f51fc2f6a828a4741920c807ae0463c6a2a0c1ca3bdbf8"
   },
@@ -283,6 +283,7 @@
 {"v": "r-75.5", "type": "reinstall", "ts": "2026-08-10T09:30:37Z", "ref": "r-75.5", "desc": "Веб-панель больше не остаётся неустановленной из-за штатного веб-сервера, занимавшего тот же порт — теперь он отключается автоматически. Если порт занят посторонней программой, установка честно об этом сообщает вместо обрыва без объяснения.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/install.sh", "UPDATES.json"]},
 {"v": "r-75.6", "type": "reinstall", "ts": "2026-08-10T15:36:40Z", "ref": "r-75.6", "desc": "Повышена надёжность обновления и обновлены внутренние компоненты.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/app.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]},
 {"v": "r-75.7", "type": "reinstall", "ts": "2026-08-11T07:14:47Z", "ref": "r-75.7", "desc": "Панель больше не ждёт загрузки шрифтов из интернета и открывается сразу. Главный ответ и кнопки управления теперь наверху экрана, а не под таблицей. В списке стратегий видно, к какому адресу относится запись — IPv4 или IPv6.", "changed_files": ["files/z2k-diag.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"]},
-{"v": "r-75.8", "type": "reinstall", "ts": "2026-08-11T12:49:44Z", "ref": "r-75.8", "desc": "Панель стала компактнее и аккуратнее: поля больше не разъезжаются на широких экранах, список стратегий читается плотнее и ровнее. Появилась кнопка удаления z2k прямо в панели — с подтверждением, чтобы нажать случайно было нельзя. Шрифты теперь встроены, панель открывается сразу и ничего не тянет из интернета.", "changed_files": ["lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/fonts/FiraCode-400-cyrillic.woff2", "webpanel/www/fonts/FiraCode-400-latin.woff2", "webpanel/www/fonts/FiraSans-400-cyrillic.woff2", "webpanel/www/fonts/FiraSans-400-latin.woff2", "webpanel/www/fonts/FiraSans-500-cyrillic.woff2", "webpanel/www/fonts/FiraSans-500-latin.woff2", "webpanel/www/fonts/FiraSans-600-cyrillic.woff2", "webpanel/www/fonts/FiraSans-600-latin.woff2", "webpanel/www/fonts/FiraSans-700-cyrillic.woff2", "webpanel/www/fonts/FiraSans-700-latin.woff2", "webpanel/www/index.html", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]}
+{"v": "r-75.8", "type": "reinstall", "ts": "2026-08-11T12:49:44Z", "ref": "r-75.8", "desc": "Панель стала компактнее и аккуратнее: поля больше не разъезжаются на широких экранах, список стратегий читается плотнее и ровнее. Появилась кнопка удаления z2k прямо в панели — с подтверждением, чтобы нажать случайно было нельзя. Шрифты теперь встроены, панель открывается сразу и ничего не тянет из интернета.", "changed_files": ["lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/fonts/FiraCode-400-cyrillic.woff2", "webpanel/www/fonts/FiraCode-400-latin.woff2", "webpanel/www/fonts/FiraSans-400-cyrillic.woff2", "webpanel/www/fonts/FiraSans-400-latin.woff2", "webpanel/www/fonts/FiraSans-500-cyrillic.woff2", "webpanel/www/fonts/FiraSans-500-latin.woff2", "webpanel/www/fonts/FiraSans-600-cyrillic.woff2", "webpanel/www/fonts/FiraSans-600-latin.woff2", "webpanel/www/fonts/FiraSans-700-cyrillic.woff2", "webpanel/www/fonts/FiraSans-700-latin.woff2", "webpanel/www/index.html", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]},
+{"v": "p-75.9", "type": "patch", "ts": "2026-08-11T19:34:21Z", "ref": "p-75.9", "desc": "Адрес и порт веб-панели теперь можно сменить прямо в меню роутера, и они больше не сбрасываются при каждом обновлении — раньше настройку приходилось возвращать вручную.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "UPDATES.json"]}
   ]
 }
