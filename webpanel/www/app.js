@@ -276,6 +276,10 @@
     for (const a of $nav.querySelectorAll("a")) {
       a.classList.toggle("active", a.dataset.route === navName);
     }
+    // Имя экрана в DOM: по нему стилям видно, где мы находимся. Нужно
+    // ровно одному правилу — экран стратегий снимает кап ширины, потому что
+    // это таблица на сотни строк, а не текст.
+    document.body.setAttribute("data-page", name);
     const pageTitle = ROUTE_TITLES[name] || "antiDPI для Keenetic";
     document.title = `${pageTitle} · Z2K`;
     closeNavMore();
@@ -314,43 +318,81 @@
 
   // ---------- Dashboard ----------
   async function renderDashboard() {
-    // ПОРЯДОК БЛОКОВ — НЕ КОСМЕТИКА.
-    //
-    // Человек открывает эту страницу с телефона, когда что-то перестало
-    // работать. Раньше первым шёл заголовок «Дашборд» (слово, уже сказанное в
-    // меню и в заголовке вкладки), затем восемь равновесных плиток, и только
-    // под ними — единственная кнопка, которая помогает. На небольшом экране она
-    // оказывалась ниже сгиба, а у свежей установки её ещё и отодвигала карточка
-    // про телеметрию.
-    //
-    // Теперь сверху ответ и действие, подробности ниже. Вердикт — ДОЧЕРНИЙ span,
-    // а не сам h1: в .page-title дописывает пилюлю «Операция выполняется…»
-    // глобальный лок, и перезапись заголовка целиком её бы стирала.
     $app.innerHTML = `
-      <h1 class="page-title"><span id="verdict">Проверяем…</span></h1>
       <div id="update-banner" hidden></div>
-      <div class="card" id="verdict-card">
-        <h3>Управление обходом</h3>
-        <p class="desc" id="svc-desc"></p>
+      <div id="stats-notice" hidden></div>
+      <h1 class="page-title">Дашборд</h1>
+      <div class="card" id="status-card">
+        <h3>Состояние</h3>
+        <div class="status-grid" id="status-grid">${skeletonBlocks(7)}</div>
+      </div>
+      <div class="card">
+        <h3>Управление сервисом</h3>
+        <p class="desc">Запуск, остановка и перезапуск nfqws2.</p>
         <div class="btn-row">
           <button class="btn btn-primary" data-svc="start" data-target="active">Запустить</button>
           <button class="btn" data-svc="restart" data-target="active">Перезапустить</button>
           <button class="btn btn-danger" data-svc="stop" data-target="stopped">Остановить</button>
         </div>
-        <div class="desc" id="update-line"></div>
       </div>
-      <div class="card" id="status-card">
-        <h3>Подробности</h3>
-        <div class="status-grid" id="status-grid">${skeletonBlocks(7)}</div>
+      <!-- ОТДЕЛЬНАЯ КАРТОЧКА, А НЕ ЧЕТВЁРТАЯ КНОПКА В РЯДУ ВЫШЕ.
+           «Остановить» обратимо и делается каждый день; удаление необратимо и
+           делается один раз. В одном ряду они получили бы одинаковый вес и
+           отличались бы только подписью — так и промахиваются. -->
+      <div class="card card-danger" id="uninstall-card">
+        <h3>Удаление z2k</h3>
+        <p class="desc">
+          Снимает z2k с роутера полностью: сервис, правила обхода, настройки,
+          подобранные стратегии и саму эту панель. Отмены нет — вернуть можно
+          только установкой заново, с нуля.
+        </p>
+        <div class="btn-row">
+          <button class="btn btn-danger" id="uninstall-btn">Удалить z2k</button>
+        </div>
       </div>
-      <div id="stats-notice" hidden></div>
     `;
+
+    // querySelectorAll().forEach, а не querySelector().addEventListener — тем же
+    // приёмом, что и обработчик [data-svc] выше. Пустая выборка просто ничего не
+    // делает, а обращение к .addEventListener у null роняет весь рендер
+    // страницы: дашборд собирается одной строкой innerHTML, и любой сторонний
+    // рендер этой же разметки (тестовый харнесс, будущая подстраница) уронил бы
+    // не кнопку, а экран целиком.
+    $app.querySelectorAll("#uninstall-btn").forEach(btn => btn.addEventListener("click", async () => {
+      const ok = await confirmTypedModal(
+        "Удалить z2k с роутера",
+        [
+          "Будут удалены: служба обхода и её автозапуск, все правила iptables, " +
+            "настройки, списки доменов и подобранные для них стратегии.",
+          "Вместе с ними исчезнет и эта панель — страница перестанет отвечать " +
+            "примерно на середине, и это нормальный конец, а не сбой.",
+          "Интернет продолжит работать, но уже без обхода блокировок.",
+        ],
+        "УДАЛИТЬ",
+        "Удалить z2k"
+      );
+      if (!ok) return;
+      let resp;
+      try {
+        resp = await apiPost("/uninstall", { confirm: "УДАЛИТЬ" });
+      } catch (e) {
+        toast("Не удалось запустить удаление: " + e.message, "bad");
+        return;
+      }
+      openJobModal("Удаление z2k", resp.job, {
+        tolerateOutage: true,
+        // Панель входит в удаляемое и обратно не поднимется. Без этого флага
+        // опрос честно ждал бы её возвращения десять минут и всё это время
+        // писал «ждём…» — про сервер, которого больше нет.
+        expectGone: true,
+      });
+    }));
 
     $app.querySelectorAll("[data-svc]").forEach(btn => {
       btn.addEventListener("click", async () => {
         if (btn.disabled) return;
         const action = btn.dataset.svc;
-        const titleByAction = { start: "Включаю обход", stop: "Выключаю обход", restart: "Перезапускаю обход" };
+        const titleByAction = { start: "Запуск сервиса", stop: "Остановка сервиса", restart: "Перезапуск сервиса" };
         const title = titleByAction[action] || ("Действие: " + action);
         // Глобальный лок включается только когда придёт id задачи, а до тех
         // пор кнопка кликабельна: второй клик по «Перезапустить» запускал
@@ -754,51 +796,18 @@
       renderStatusGrid(s);
     } catch (e) {
       if (_stale("status", seq)) return;
-      // ОТКАЗ ЧТЕНИЯ — НЕ ПОВОД ОСТАВИТЬ ЧЕЛОВЕКА БЕЗ ДЕЙСТВИЙ.
-      //
-      // Раньше здесь рисовалась одна ячейка со словом «Ошибка», а
-      // syncServiceButtons в этой ветке не вызывался вовсе — то есть при
-      // неизвестном состоянии оставались видны все три кнопки сразу, либо
-      // залипал набор от прошлого снимка. Вдобавок для 404/502/503/504
-      // сообщение намеренно пустое (в этот момент отвечает lighttpd, а не наш
-      // CGI), и человек видел «Ошибка» и пустоту. Автоповтора у страницы нет.
-      //
-      // Теперь: понятная причина, кнопка повтора и вердикт, который не врёт.
-      const why = (e && e.message)
-        ? escapeHtml(e.message)
-        : "Панель сейчас не отвечает — обычно так выглядит идущее обновление.";
-      grid.innerHTML =
-        '<div class="status-cell warn">' +
-          '<div class="label">Состояние роутера</div>' +
-          '<div class="value">Не удалось прочитать</div>' +
-        '</div>' +
-        '<p class="desc" id="status-why">' + why + '</p>' +
-        '<div class="btn-row"><button class="btn" id="status-retry" type="button">Повторить</button></div>';
-      const retry = document.getElementById("status-retry");
-      if (retry) retry.addEventListener("click", () => {
-        retry.disabled = true;
-        retry.textContent = "Читаю…";
-        refreshStatus();
-      });
-      // Кнопки сервиса не прячем: когда отвалился именно CGI состояния,
-      // «Перезапустить» — ровно то, что помогает. Вердикт при этом честный.
-      syncServiceButtons(undefined);
+      grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
     }
   }
 
   function renderStatusGrid(s) {
     const grid = document.getElementById("status-grid");
     if (!grid) return;
-    // Ячейки «Установлен» здесь нет намеренно: installed выводится из service
-    // на бэкенде (actions.sh: is_running → active; is_installed → stopped;
-    // иначе not_installed), поэтому «Установлен: Нет» появлялось ровно тогда,
-    // когда соседняя ячейка уже говорила «не установлен». Заодно ячеек стало
-    // семь — ровно столько, сколько рисует skeletonBlocks(7), и сетка больше
-    // не подпрыгивает на ряд после загрузки.
     const cells = [
-      { label: "Обход", value: fmtSvc(s.service), kind: s.service === "active" ? "good" : (s.service === "stopped" ? "warn" : "bad") },
+      { label: "Установлен", value: s.installed ? "Да" : "Нет", kind: s.installed ? "good" : "bad" },
+      { label: "Сервис", value: fmtSvc(s.service), kind: s.service === "active" ? "good" : (s.service === "stopped" ? "warn" : "bad") },
       { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
-      { label: "RST-фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
+      { label: "RST фильтр", value: rstIsOn(s.toggles.rst_filter) ? (rstIsAggressive(s.toggles.rst_filter) ? "Вкл (агрессивный)" : "Вкл") : "Выкл", kind: rstIsOn(s.toggles.rst_filter) ? "good" : "" },
       { label: "Silent fallback", value: bool(s.toggles.silent_fallback), kind: s.toggles.silent_fallback === "1" ? "warn" : "" },
       { label: "WARP", value: bool(s.toggles.game_warp), kind: s.toggles.game_warp === "1" ? "good" : "" },
       { label: "Автообновление", value: bool(s.toggles.auto_update), kind: s.toggles.auto_update === "1" ? "good" : "warn" },
@@ -819,28 +828,7 @@
   // Используем style.display а не hidden attribute, потому что
   // `.btn { display: inline-block }` переопределяет [hidden] {display:none}
   // по специфичности (one-class > attribute).
-  // Вердикт первого экрана. Формулировки выбраны по тому, что панель РЕАЛЬНО
-  // знает: is_running() — это «жив процесс с нужным cmdline», и не более того.
-  // При вычищенных правилах NDM или отсутствующем ipset сервис остаётся
-  // active, а обход мёртв. Поэтому «обход ВКЛЮЧЁН», а не «работает»: второе
-  // было бы враньём ровно тому человеку, у которого сайт не грузится.
-  const VERDICT = {
-    active:        { text: "Обход включён",       kind: "good", desc: "Сайты из списков идут через обход." },
-    stopped:       { text: "Обход выключен",      kind: "warn", desc: "Пока выключен — сайты из списков открываются напрямую." },
-    not_installed: { text: "z2k не установлен",   kind: "bad",  desc: "z2k на роутере не найден — управлять нечем. Переустановите по инструкции из README." },
-  };
-
   function syncServiceButtons(svc) {
-    // Вердикт и подпись заполняем ДО раннего возврата ниже: иначе на странице
-    // без кнопок (или при неожиданном значении service) заголовок навсегда
-    // застрянет на «Проверяем…».
-    const v = VERDICT[svc] || { text: "Состояние неизвестно", kind: "warn",
-                                desc: "Панель не смогла разобрать ответ роутера." };
-    const vEl = document.getElementById("verdict");
-    if (vEl) { vEl.textContent = v.text; vEl.className = v.kind; }
-    const dEl = document.getElementById("svc-desc");
-    if (dEl) dEl.textContent = v.desc;
-
     const startBtn   = $app.querySelector('[data-svc="start"]');
     const restartBtn = $app.querySelector('[data-svc="restart"]');
     const stopBtn    = $app.querySelector('[data-svc="stop"]');
@@ -1686,13 +1674,7 @@
       ta.value = text;
     }
     card.hidden = false;
-    // Плавную прокрутку просим только у тех, кто её не отключал: у остальных
-    // это единственное место в панели, где reduced-motion игнорировался.
-    card.scrollIntoView({
-      behavior: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? "auto" : "smooth",
-      block: "start",
-    });
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
     ta.focus();
   }
 
@@ -2488,9 +2470,7 @@
         }
         // «Снова на связи» не пишем: мы не говорили, что связь пропадала.
         const baseLog = d.log || "(нет вывода)";
-        // Возврат связи отмечаем В ЛОГЕ. Это поведение было до p-73.2 и его
-        // убрали заодно с ложными вердиктами — а зря: без него человек, у
-        // которого лог замер на «Шаг 4/12», не понимает, что всё продолжилось.
+        // Возврат связи отмечаем В ЛОГЕ — так было до p-73.2.
         const log = recovered ? baseLog + "\n[панель снова на связи]" : baseLog;
         notify(log, !!d.done, d);
         if (d.done) { finish(d); return; }
@@ -2518,6 +2498,25 @@
         // быстро — но так же молча: что произошло на самом деле, человеку
         // покажет перечитанное с роутера состояние, а не наша догадка.
         if (isRefusal(e)) state.httpErrors++; else state.httpErrors = 0;
+        // ЗАДАЧА, КОТОРАЯ УБИВАЕТ САМУ ПАНЕЛЬ.
+        //
+        // Для удаления пропажа сервера — не «переезд, переждём», а ожидаемый
+        // финал: lighttpd гасится вместе со всем деревом и не поднимется.
+        // Ждать его «возвращения» здесь означало бы врать десять минут подряд,
+        // а потом всё равно закончить молчанием.
+        //
+        // Порог небольшой, но не единичный: одиночный промах CGI на роутере
+        // под памятью бывает и без всякого удаления, и объявлять по нему
+        // «z2k удалён» нельзя. Десять подряд по две секунды — это двадцать
+        // секунд тишины, столько штатная пауза не длится.
+        if (state.opts.expectGone && state.consecutiveErrors >= 10) {
+          const clean = String(state.lastLog || "").replace(/\n\[панель.*\]$/g, "");
+          const log = clean + "\n[z2k удалён — панель выключена вместе с ним, эту вкладку можно закрыть]";
+          const fin = { done: true, exit: 0, status: "done", log };
+          notify(log, true, fin);
+          finish(fin);
+          return;
+        }
         if (state.httpErrors >= MAX_HTTP_ERRORS || state.consecutiveErrors >= MAX_ERRORS) {
           // В лог не дописываем ничего: jobUnresolved заставит UI перечитать
           // состояние, и человек увидит факт вместо жалобы.
@@ -2527,19 +2526,23 @@
       }
         // ПРИЗНАК ЖИЗНИ, ПОКА ПАНЕЛЬ НЕ ОТВЕЧАЕТ.
         //
-        // Лог во время переезда дерева замирает на последней строке. Молчание
-        // здесь неотличимо от зависшей установки — именно на это и пожаловались
-        // после r-75.6: «ни логов, ни того, что панель скоро вернётся».
-        //
-        // Пишем ровно то, что знаем: сколько уже ждём. Это НЕ вердикт о судьбе
-        // задачи (её мы по-прежнему не объявляем ни проваленной, ни законченной)
-        // — это счётчик ожидания, который был здесь до p-73.2 и был полезен.
-        // Предыдущую такую строку затираем, чтобы лог не рос столбиком.
+        // Лог во время переезда дерева замирает на последней строке, и
+        // молчание неотличимо от зависшей установки — именно на это и
+        // пожаловались: «ни логов, ни того, что панель скоро вернётся».
+        // До p-73.2 счётчик ожидания здесь был; его снесли ЗАОДНО с ложными
+        // вердиктами («панель ответила ошибкой… чем кончилась задача,
+        // неизвестно»). Вердикты убраны правильно, счётчик — нет: он ничего
+        // не утверждает о судьбе задачи, он показывает, что мы ещё ждём.
+        // Предыдущую строку затираем, чтобы лог не рос столбиком.
         if (state.consecutiveErrors === 2
             || (state.consecutiveErrors - state.lastOutageWarn) >= 15) {
           const secs = Math.round(state.consecutiveErrors * POLL_ERR_MS / 1000);
-          const clean = String(state.lastLog || "").replace(/\n\[панель пока не отвечает.*\]$/g, "");
-          notify(clean + "\n[панель пока не отвечает, ждём… " + secs + "с]", false, null);
+          const clean = String(state.lastLog || "").replace(/\n\[панель.*\]$/g, "");
+          // При удалении панель не «пока не отвечает», а выключается насовсем —
+          // и обещать её возвращение нельзя.
+          notify(clean + (state.opts.expectGone
+            ? "\n[панель выключается вместе с z2k… " + secs + "с]"
+            : "\n[панель пока не отвечает, ждём… " + secs + "с]"), false, null);
           state.lastOutageWarn = state.consecutiveErrors;
         }
       setTimeout(tick, state.consecutiveErrors > 0 ? POLL_ERR_MS : POLL_OK_MS);
@@ -2615,6 +2618,93 @@
   // годится: его кнопки всегда OK/Отмена, а вопрос вида «Включать /
   // Не включать» ответом «ОК» не описывается.
   // Разметка — те же классы, что у openJobModal: своих в style.css нет.
+  // Подтверждение НАБОРОМ СЛОВА — для единственного необратимого действия.
+  //
+  // Обычная модалка «Да/Отмена» здесь не годится: она отделяет от катастрофы
+  // одним кликом, а к кликам «Да» в диалогах у всех выработан рефлекс. Набор
+  // слова требует прочитать, что именно произойдёт, и физически это набрать.
+  // Приём стандартный для необратимых операций (так спрашивают об удалении
+  // репозитория на GitHub и проекта в Vercel), и здесь он уместен ровно по той
+  // же причине: восстановления нет, есть только установка заново.
+  //
+  // То же слово проверяет и сервер: панель работает без авторизации и доверяет
+  // всей локальной сети, поэтому единственный необратимый вызов в API не должен
+  // срабатывать от голого POST.
+  function confirmTypedModal(title, lines, word, okLabel) {
+    return new Promise(resolve => {
+      const prevFocus = document.activeElement;
+      const backdrop = document.createElement("div");
+      backdrop.className = "modal-backdrop";
+      backdrop.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true"
+             aria-labelledby="typed-title" aria-describedby="typed-text">
+          <h3 id="typed-title">${escapeHtml(title)}</h3>
+          <div class="modal-warning" id="typed-text">
+            ${lines.map(l => `<p>${escapeHtml(l)}</p>`).join("")}
+          </div>
+          <label class="typed-confirm-label" for="typed-input">
+            Наберите <b>${escapeHtml(word)}</b>, чтобы подтвердить
+          </label>
+          <input type="text" id="typed-input" class="typed-confirm-input"
+                 autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <div class="modal-footer">
+            <button class="btn btn-danger" id="typed-ok" disabled>${escapeHtml(okLabel)}</button>
+            <button class="btn btn-primary" id="typed-cancel">Отмена</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(backdrop);
+      const input = backdrop.querySelector("#typed-input");
+      const okBtn = backdrop.querySelector("#typed-ok");
+      const cancelBtn = backdrop.querySelector("#typed-cancel");
+
+      let answered = false;
+      function finish(answer) {
+        if (answered) return;
+        answered = true;
+        document.removeEventListener("keydown", onKey);
+        backdrop.remove();
+        if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
+        resolve(answer);
+      }
+      // Сверяем без учёта регистра и краевых пробелов: требование — прочитать и
+      // осознанно набрать, а не попасть в раскладку и Caps Lock.
+      const matches = () => input.value.trim().toLocaleUpperCase("ru") === word;
+      const sync = () => { okBtn.disabled = !matches(); };
+      // Начальное состояние выставляем КОДОМ, а не только атрибутом в разметке:
+      // атрибут легко потерять при правке шаблона, и тогда кнопка удаления
+      // окажется активной с первой миллисекунды — ровно то, от чего диалог и
+      // защищает. Плюс браузер может восстановить значение поля при возврате
+      // на страницу, и тогда состояние кнопки обязано ему соответствовать.
+      sync();
+      input.addEventListener("input", sync);
+      function onKey(e) {
+        if (e.key === "Escape") { finish(false); return; }
+        if (e.key === "Enter" && document.activeElement === input) {
+          // Enter в поле подтверждает, только если слово уже совпало — иначе
+          // это просто попытка отправить полупустую форму.
+          if (matches()) { e.preventDefault(); finish(true); }
+          return;
+        }
+        if (e.key !== "Tab") return;
+        const stops = [input, okBtn, cancelBtn];
+        const first = e.shiftKey ? stops[stops.length - 1] : stops[0];
+        const last = e.shiftKey ? stops[0] : stops[stops.length - 1];
+        if (document.activeElement === last || !backdrop.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+      okBtn.addEventListener("click", () => { if (matches()) finish(true); });
+      cancelBtn.addEventListener("click", () => finish(false));
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) finish(false); });
+      document.addEventListener("keydown", onKey);
+      // Фокус в поле: диалог не подталкивает к согласию — кнопка выключена,
+      // пока слово не набрано, — но и не заставляет искать, куда печатать.
+      input.focus();
+    });
+  }
+
   function confirmModal(title, text, okLabel, cancelLabel) {
     return new Promise(resolve => {
       const prevFocus = document.activeElement;
@@ -2693,7 +2783,7 @@
   const STATE_SORT_KEY = "z2k-state-sort";
   // The labels double as the mobile sheet's option list, so the set of sortable
   // keys is declared once and cannot drift between the two controls.
-  const STATE_SORT_LABELS = { key: "Пул", host: "Домен", strategy: "Стратегия", age: "Возраст" };
+  const STATE_SORT_LABELS = { key: "Профиль", host: "Домен", strategy: "Стратегия", age: "Возраст" };
 
   function loadStateSort() {
     // Anything unrecognised falls back to the default. A stale value (a column
@@ -2909,14 +2999,12 @@
       // свежем роутере дубля не видно и баг доживал до первого звонка.
       // Колонка «Домен» показывала бы у него буквальное «nohost».
       // Ключ ротации хранится с суффиксом семейства адресов: example.com|4 и
-      // example.com|6 — это ДВЕ разные записи с разными стратегиями. Раньше
-      // суффикс печатался как есть: один сайт стоял двумя строками с
-      // непонятным хвостом, тот же хвост уходил в подсказку скринридера
-      // (читалась вертикальная черта) и в вопрос перед удалением.
+      // example.com|6 — ДВЕ разные записи с разными стратегиями. Суффикс
+      // печатался как есть: непонятный хвост в имени, он же в подсказке
+      // скринридера (читалась вертикальная черта) и в вопросе перед удалением.
       //
-      // Суффикс есть НЕ ВСЕГДА: у записей без имени хоста и у строк,
-      // сохранённых старыми версиями, его нет. Поэтому третье состояние —
-      // «неизвестно», и тогда метка просто не ставится, а не выдумывается.
+      // Суффикса может и не быть: у записей без имени хоста и у строк от
+      // старых версий. Тогда метку не ставим, а не выдумываем.
       const splitFamily = (h) => {
         const raw = String(h == null ? "" : h);
         const cut = raw.lastIndexOf("|");
@@ -2965,8 +3053,8 @@
         for (let i = 1; i <= N; i++) {
           opts += `<option value="${i}"${i === Number(e.strategy) ? " selected" : ""}>${i}</option>`;
         }
-        // data-host в атрибутах остаётся СЫРЫМ ключом: это идентификатор записи
-        // для API, его резать нельзя. Разделяем только то, что видит человек.
+        // data-host в атрибутах остаётся СЫРЫМ ключом: это идентификатор
+        // записи для API, его резать нельзя. Делим только видимое человеку.
         const _hf = splitFamily(e.host);
         // data-label attrs feed the mobile card layout (CSS pseudo-elements)
         return `
@@ -2978,7 +3066,7 @@
                       data-key="${escapeHtml(e.key)}"
                       data-host="${escapeHtml(e.host)}">${_icons.close}</button>
             </td>
-            <td data-label="Пул">${escapeHtml(e.key)}</td>
+            <td data-label="Профиль">${escapeHtml(e.key)}</td>
             <td data-label="Домен">${escapeHtml(_hf.name)}${_hf.fam ? ` <span class="fam-tag">${_hf.fam}</span>` : ""}</td>
             <td data-label="Стратегия">
               <select class="state-strat-sel"
@@ -3002,7 +3090,7 @@
 
       const arrow = k => stateSort.key === k ? (stateSort.dir === "asc" ? " " + _icons.arrowUp : " " + _icons.arrowDown) : "";
       const th = (k, label) => `<th class="sortable" data-sort="${k}">${label}${arrow(k)}</th>`;
-      const sortLabel = STATE_SORT_LABELS[stateSort.key] || "Пул";
+      const sortLabel = STATE_SORT_LABELS[stateSort.key] || "Профиль";
       const sortArrow = stateSort.dir === "asc" ? _icons.arrowUp : _icons.arrowDown;
       body.innerHTML = `
         <button type="button" class="sort-trigger" id="state-sort-btn"
@@ -3011,7 +3099,7 @@
         </button>
         <table class="state-table">
           <thead>
-            <tr><th></th>${th("key","Пул")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
+            <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
@@ -3055,7 +3143,7 @@
 
   async function stateDelete(key, host) {
     const _h = String(host).replace(/\|4$/, " (IPv4)").replace(/\|6$/, " (IPv6)");
-    if (!confirm(`Удалить запись для ${_h} — пул ${key}?\n\nПодбор начнётся с первой стратегии при следующей попытке.`)) return;
+    if (!confirm(`Удалить запись для ${_h} (${key})?\n\nПодбор начнётся с первой стратегии при следующей попытке.`)) return;
     try {
       await apiPost("/state/delete", { key, host });
       toast("Удалено");

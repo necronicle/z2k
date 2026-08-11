@@ -141,6 +141,38 @@
   --bad: #f85149;
   --radius: 8px;
 
+  /* ШКАЛА ОТСТУПОВ. База 4px, рабочий ритм 8px — так устроены все шкалы,
+     на которые мы смотрели: 4px у Polaris, Primer, Tailwind и Ant Design
+     (sizeUnit=4), 8px у Carbon (miniUnit), Atlassian (space.100), Material 3
+     (space100=8dp), MUI и Grafana. Material отдельно разрешает 4px как
+     полушаг: «padding is measured in increments of 4dp».
+
+     Зачем шкала вообще. До неё в файле было три размерных токена на 316
+     объявлений padding/margin/gap, и значения шли вперемешку: 3, 6, 9, 10,
+     14, 18, 22, 26. Ни 9, ни 14, ни 26 не выводятся ни из базы 4, ни из
+     базы 8 — то есть выбирались на глаз, и вертикальный ритм страницы
+     получался немонотонным (18 под заголовком → 14 между карточками →
+     16 внутри карточки → 10 в сетке). Carbon формулирует это как дефект:
+     «deviating from the spacing scales should be avoided whenever possible».
+
+     Токены введены и применены там, где значение было вне шкалы. Массово
+     переписывать литералы, которые и так на шкале (16px → var(--space-16)),
+     я не стал: визуально это ноль, а диффом — весь файл. */
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+  --space-64: 64px;
+
+  /* Высота шапки — одним числом, потому что от неё зависит верхний отступ
+     бокового меню. Раньше меню резервировало 64px под шапку высотой 73px, и
+     первые 9px первого пункта лежали под непрозрачной sticky-шапкой
+     (z-index 200 против 195). Две константы вместо одной — так и расходятся. */
+  --topbar-h: 64px;
+
   /* Motion tokens — Apple-style snappy/smooth springs.
      - spring-snappy: лёгкий overshoot (1.56), tactile feel (modals, drawers, button press)
      - spring-smooth: monotonic (no bounce, no overshoot), цвет/opacity transitions
@@ -190,11 +222,8 @@
   --skel-c1: rgba(255, 255, 255, 0.04);
   --skel-c2: rgba(255, 255, 255, 0.10);
 
-  /* Веб-шрифты НЕ загружаются — см. комментарий в index.html, там же причина.
-     Раньше здесь стояло «loaded from Google Fonts in index.html»: после
-     удаления ссылки это стало прямой инструкцией следующему автору вернуть
-     <link> обратно. Fira остаётся первой в стеке намеренно — если она есть в
-     системе, подхватится локально; иначе идёт системный шрифт. */
+  /* Fira Code (mono) + Fira Sans (body) loaded from Google Fonts in index.html.
+     System fonts fallback while web fonts swap in (font-display: swap). */
   --font-mono: "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --font-sans: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
@@ -295,7 +324,13 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 20px;
+  /* 64px против прежних 73px. Верхняя граница по источникам — 64px
+     (MUI Toolbar на ≥600px, antd Layout.Header); Carbon UI Shell держит
+     48px. 73px не совпадало ни с чем и съедало первый экран на телефоне.
+     Высота задана явно, а не набегает из паддинга: от неё считается
+     верхний отступ бокового меню, и вычислять её в двух местах нельзя. */
+  height: var(--topbar-h);
+  padding: 0 var(--space-24);
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -330,7 +365,9 @@ body {
   flex-direction: column;
   align-items: stretch;
   gap: 2px;
-  padding: 64px 8px 12px;  /* 64px зарезервировано под topbar (z2k brand row) */
+  /* Резерв под шапку берётся из её же токена. Раньше здесь стояло литеральное
+     64px при фактической шапке 73px, и первый пункт меню на 9px уходил под неё. */
+  padding: var(--topbar-h) var(--space-8) var(--space-12);
   overflow-y: auto;
   overflow-x: hidden;
   z-index: 195;
@@ -474,7 +511,7 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-mono);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   line-height: 1.5;
   resize: vertical;
@@ -676,42 +713,47 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 }
 
 /* ---------- LAYOUT ---------- */
+/* ВЕРТИКАЛЬНЫЕ ПОЛЯ НЕ ЗАВИСЯТ ОТ ШИРИНЫ ОКНА, И ЭТО НЕ ВКУСОВЩИНА.
+   Было: сверху 16 → 28 → 32 → 40px по четырём брейкпоинтам, снизу 60 → 80 → 96.
+   Ни одна из девяти дизайн-систем, которые мы разбирали, так не делает.
+   Carbon отвечает прямо: «Are the spacing tokens responsive? No». У Atlassian
+   в конфиге брейкпоинтов ровно две величины — gridMargin и gridItemGutter,
+   вертикального аналога нет. Material 3 нормирует только leading/trailing
+   (16→24→24→24→24dp) и не нормирует верх и низ вовсе. Fluent специально
+   разводит spacingHorizontal* и spacingVertical* в два семейства, чтобы оси
+   не связывались. Прецеденты «за» есть — Polaris 8→20, Grafana 16→32,
+   Primer 16→24, — но у всех трёх это ОДИН шаг на пороге телефон→планшет, и
+   выше он заморожен: на 1440 и на 2560 значение одинаковое. Шага на 1440px
+   не делает никто, и 40px больше всех трёх прецедентов.
+
+   Практический вред от лестницы был виден глазами: на широком мониторе
+   единственное, что реагировало на ширину, — внешняя рамка (40px сверху),
+   а весь внутренний ритм оставался прежним (карточки через 14px). Воздух
+   вокруг плотного содержимого.
+
+   Теперь по ширине меняется только то, что от ширины и зависит: кап
+   контентной колонки. Отступы — константы шкалы.
+
+   Базовое правило раньше было мёртвым: 24px/20px/860px не применялись ни на
+   одной ширине, его перекрывали медиа-запросы с обеих сторон. Теперь это
+   честная база узкого экрана. */
 #app {
-  max-width: 860px;
   margin: 0 auto;
-  padding: 24px 20px 80px;
+  padding: var(--space-16) var(--space-16) var(--space-64);
 }
 
 /* Flex-строка, а не просто заголовок: рядом с текстом в том же ряду стоит
    пилюля «Операция выполняется…» (.page-locked-pill — одна на страницу, в
    нормальном потоке, без absolute). Анимация появления объявлена отдельно, в
    секции ROUTE TRANSITION, рядом со своими @keyframes и правилами карточек. */
-/* Вердикт первого экрана. Живёт дочерним span внутри .page-title, поэтому
-   красим его отдельно: сам заголовок остаётся нейтральным, а слово «включён»
-   или «выключен» несёт цвет состояния. Без этих правил текст выходил серым. */
-/* Метка семейства адресов в таблице состояния. IPv4 и IPv6 у одного домена —
-   разные записи с разными стратегиями, и раньше это показывалось суффиксом
-   «|4»/«|6» прямо в имени. Метка отделяет служебное от имени сайта. */
-.fam-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-  vertical-align: 1px;
-}
-
-#verdict.good { color: var(--good); }
-#verdict.warn { color: var(--warn); }
-#verdict.bad  { color: var(--bad); }
-
 .page-title {
   font-size: 22px;
   font-weight: 600;
-  margin: 0 0 18px;
+  /* 24px — межсекционный ярус: Material spacer 24dp, вертикальный ритм
+     Carbon (8/16/24/32/48/64/80), нижняя граница layout-яруса Atlassian.
+     18px не выводится ни из базы 4, ни из базы 8, и заголовок прижимался
+     к первой карточке теснее, чем карточки друг к другу. */
+  margin: 0 0 var(--space-24);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -723,8 +765,13 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px;
-  margin-bottom: 14px;
+  /* 16px по кругу. Асимметрия 16/18 ничем не подтверждалась: медиана
+     паддинга карточки — 16 (Material, MUI CardContent, Polaris, Primer).
+     Зазор между карточками был 14px — единственное значение, которого нет
+     ни в одной из шести шкал; 16 стоит у Primer (stack-gap normal),
+     Polaris (card-gap) и Carbon (narrow row-gap). */
+  padding: var(--space-16);
+  margin-bottom: var(--space-16);
 }
 .card h3 {
   margin: 0 0 10px;
@@ -735,7 +782,11 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .card .desc {
   color: var(--text-muted);
   font-size: 13px;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-12);
+  /* Строку длиной во всю карточку читать нельзя: на 1200px это 170+ символов
+     при норме Material 40–60 и потолке WCAG 1.4.8 в 80. Кап страницы задачу
+     не решает — карточка занимает её целиком. Ограничиваем сам абзац. */
+  max-width: 68ch;
 }
 
 /* ---------- CREDITS ---------- */
@@ -811,14 +862,46 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .state-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  /* 14px, а не 13. Carbon и Ant Design держат 14px на всех плотностях —
+     у antd это прямо видно в токенах: cellFontSize = cellFontSizeMD =
+     cellFontSizeSM. Ниже опускает только Fluent и только на строке 24px,
+     а у нас строка 40px. Кегль — последнее, что стоит ужимать в таблице,
+     которую читают в поисках одного домена среди сотен. */
+  font-size: 14px;
 }
 .state-table th,
 .state-table td {
   text-align: left;
-  padding: 8px 10px;
+  padding: 6px var(--space-12);
   border-bottom: 1px solid var(--border);
+  /* Единая высота строки. Была разнобойной: 36.5px у текстовых строк и
+     43px у строк с выпадающим списком — в одном списке две высоты, чего
+     Carbon прямо не допускает (плотность выбирается на блок целиком).
+     40px = Carbon md, между Grafana sm 36 и md 42: плотный ярус сохранён.
+     Для ячейки height работает как минимум, поэтому строка не «схлопнется»
+     на длинном домене в две строки. */
+  height: 40px;
 }
+/* Управляющие элементы внутри строки не должны её распирать. Ячейка отдаёт
+   под содержимое 40 − 8 − 8 = 24px, и это ровно пол WCAG 2.2 SC 2.5.8 для
+   цели указателя; на тач-устройствах медиа-запрос (pointer: coarse) ниже
+   поднимает их до 44px, и строка там честно вырастает. Без этих трёх правил
+   строки со списком стояли 48px против 40px у остальных — Carbon такую
+   разнобойность внутри одного списка не допускает. */
+.state-table select {
+  padding: 0 22px 0 var(--space-8);
+  line-height: 1.3;
+  background-position: right 6px center;
+}
+.state-table select,
+.state-table .btn-icon,
+.state-table .btn-danger {
+  height: 26px;
+  min-height: 26px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.state-table .btn-icon { padding-left: var(--space-8); padding-right: var(--space-8); }
 .state-table th {
   color: var(--text-muted);
   font-weight: 500;
@@ -841,10 +924,60 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   font-variant-numeric: tabular-nums;
 }
 .state-table .btn-danger {
-  padding: 2px 8px;
-  min-width: auto;
+  /* WCAG 2.2 SC 2.5.8 (уровень AA) требует цель не меньше 24×24 CSS px,
+     если вокруг неё нет разнесения на 24px — в строке таблицы его нет.
+     Было 20px по высоте: единственное прямое нарушение норматива в файле. */
+  padding: var(--space-4) var(--space-8);
+  min-width: 24px;
+  min-height: 24px;
   font-size: 14px;
   line-height: 1;
+}
+/* КАРТОЧКА НЕОБРАТИМОГО ДЕЙСТВИЯ.
+   Отдельная зона внизу страницы — общепринятая раскладка для операций без
+   отката. Отличается не яркостью, а рамкой и подложкой: красная кнопка внутри
+   и так есть, а кричащая карточка на первом экране мешала бы читать всё
+   остальное. */
+.card-danger {
+  /* Цвета заданы литеральной rgba, а не через color-mix(): функция требует
+     Chrome 111 / Safari 16.2 и старше, а панель открывают в том числе со
+     старых телефонов и телевизоров. Не поддержана — правило отбрасывается
+     целиком, и опасная карточка стала бы неотличима от обычной. Оттенок один
+     на обе темы: полупрозрачный красный ложится и на светлую подложку, и на
+     тёмную. */
+  border-color: rgba(248, 81, 73, 0.45);
+  background: rgba(248, 81, 73, 0.05);
+}
+.card-danger h3 { color: var(--bad); }
+
+/* Поле подтверждения набором. Моноширинный шрифт — чтобы набранное слово
+   читалось посимвольно и опечатка была видна до нажатия кнопки. */
+.typed-confirm-label {
+  display: block;
+  margin: var(--space-16) 0 var(--space-8);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.typed-confirm-input {
+  width: 100%;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Метка семейства адреса. Ключ строки — «example.com|4»: одно и то же имя
+   живёт в таблице дважды, отдельно для IPv4 и IPv6, и стратегия у них разная.
+   Показывать людям служебную палку нельзя, а терять различие — тем более. */
+.fam-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  vertical-align: 1px;
 }
 
 /* ---------- STATUS GRID ---------- */
@@ -894,7 +1027,11 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .toggle-row:last-child { border-bottom: 0; }
 .toggle-row .t-text { flex: 1; min-width: 0; }
 .toggle-row .t-name { font-weight: 600; margin-bottom: 2px; }
-.toggle-row .t-desc { color: var(--text-muted); font-size: 13px; }
+/* Описание режима — такой же длинный текст, как .card .desc, и норма длины
+   строки к нему относится ровно так же: на широком мониторе строка доходила
+   до 160 символов при потолке WCAG 1.4.8 в 80. Отдельный класс — потому что
+   строка живёт в сетке .toggle-row рядом с переключателем. */
+.toggle-row .t-desc { color: var(--text-muted); font-size: 13px; max-width: 68ch; }
 
 /* Toggle switch */
 .switch {
@@ -1066,7 +1203,8 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
    шаг — отдельная rounded card с badge-номером в углу. Apple/Linear
    aesthetic, no native list markers. */
 .how-to {
-  margin-top: 16px;
+  margin-top: var(--space-16);
+  max-width: 68ch;  /* см. .card .desc — та же норма длины строки */
 }
 ol.steps,
 .how-to ol.steps,
@@ -1091,10 +1229,8 @@ ol.steps > li,
   border-radius: 12px;
   margin: 0;
   position: relative;
-  /* transform здесь не менял никто (press-feedback этот селектор не
-     перечисляет), а реально меняющийся на :hover фон не анимировался вовсе. */
   transition: border-color var(--dur-micro) var(--spring-smooth),
-              background var(--dur-micro) var(--spring-smooth);
+              transform var(--dur-micro) var(--spring-snappy);
 }
 ol.steps > li::marker,
 .how-to ol.steps > li::marker {
@@ -1572,7 +1708,7 @@ pre.log {
   margin-bottom: 4px;
 }
 .upd-tag {
-  font-family: var(--font-mono);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 600;
   color: var(--text);
 }
@@ -1629,6 +1765,19 @@ pre.log {
   color: var(--text);
 }
 
+/* Индикатор связи под логом задачи. Показывается, только пока опрос не
+   проходит: лог в это время замирает, и без него «идёт долгий шаг» выглядит
+   ровно как «повисло». Намеренно НЕ красный — это не отказ, а переезд
+   (при reinstall'е дерево панели уезжает из-под lighttpd). */
+.job-link {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--muted);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.job-link[hidden] { display: none; }
 
 /* ---------- CARD LOCKED STATE ---------- */
 /* Применяется к .card когда есть active background job. Карточка слегка
@@ -1740,26 +1889,37 @@ pre.log {
 
 /* Tablet (≥768px) — больше пространства для status grid и контента. */
 @media (min-width: 768px) {
-  #app { max-width: 920px; padding: 28px 24px 80px; }
+  #app { max-width: 920px; padding: var(--space-24) var(--space-24) var(--space-64); }
   .status-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
-/* Desktop (≥1024px) — поднимем max-width для рабочих столов. */
+/* Desktop (≥1024px) — растёт только кап колонки. Отступы заморожены на
+   ступени ≥768px: по ширине масштабируется горизонталь, не вертикаль. */
 @media (min-width: 1024px) {
-  #app { max-width: 1080px; padding: 32px 28px 80px; }
+  #app { max-width: 1080px; }
   .status-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
-/* Wide desktop (≥1440px) — больше воздуха, шире контент. */
+/* Экраны-таблицы кап ширины не имеют. Таблица стратегий — сотни строк, и
+   Carbon про плотный режим говорит прямо: «uses the full width of the
+   browser, so the bigger the screen, the more information the user will
+   see»; Datadog в High Density Mode добирает колонки, а не воздух. Кап 1200px
+   у нас обоснован длиной текстовой строки — к таблице это не относится.
+   Маршруты: state — «Стратегии», strategies — их редактор. */
+body[data-page="state"] #app,
+body[data-page="strategies"] #app { max-width: none; }
+
+/* Wide desktop (≥1440px) — снова только кап. Лишняя ширина уходит в
+   margin: 0 auto, как у Polaris и Primer: «кап + фиксированное поле». */
 @media (min-width: 1440px) {
-  #app { max-width: 1200px; padding: 40px 32px 96px; }
+  #app { max-width: 1200px; }
 }
 
 /* Phone (≤767px) + landscape короткий — content layout consistent
    с drawer pattern. */
 @media (max-width: 767.98px), (max-height: 500px) {
-  .topbar { padding: 12px 14px; gap: 12px; }
-  #app { padding: 16px 14px 60px; }
+  .topbar { padding: 0 var(--space-16); gap: 12px; }
+  #app { padding: var(--space-16) var(--space-16) var(--space-64); }
   .status-grid { grid-template-columns: repeat(2, 1fr); }
   .update-banner { flex-direction: column; align-items: stretch; }
   .update-banner-actions { justify-content: flex-end; }
@@ -1819,7 +1979,7 @@ pre.log {
 /* Small phone (≤374px) — ещё компактнее на старых iPhone SE.
    Skill: 375 is the standard small-phone breakpoint; we tighten below it. */
 @media (max-width: 374.98px) {
-  #app { padding: 14px 10px 60px; }
+  #app { padding: var(--space-12) var(--space-12) var(--space-64); }
   .page-title { font-size: 19px; }
   .card { padding: 14px 12px; }
 }
@@ -2005,14 +2165,22 @@ input[type="checkbox"] { accent-color: var(--accent); }
      .state-table .btn-danger (0,2,0) перебивала .btn-icon, из-за чего
      фактические размеры были 28×24 и 34×22. Это ОСНОВНОЕ деструктивное
      действие в списках и единственное действие карточки ротатора. */
+  /* Пол — 44px. Источники расходятся (Primer для coarse-pointer 44px,
+     Material 48dp), берём нижнюю границу диапазона и применяем её ко всему,
+     что было ниже: 36px у .sheet-close и 40px здесь. 48px у .sheet-option
+     не трогаем — это верх того же диапазона, а не выброс. */
   .wl-list li button,
   .state-table .btn-danger,
   .btn-icon {
-    min-width: 40px;
-    min-height: 40px;
+    min-width: 44px;
+    min-height: 44px;
   }
-  .theme-toggle button { width: 40px; height: 40px; }
+  .theme-toggle button { width: 44px; height: 44px; }
   .sheet-close { width: 44px; height: 44px; }
+  /* Селектор длинный не для красоты: сама кнопка объявлена как
+     `.topbar > #nav .nav-drawer-close` (специфичность 0,2,1), и короткое
+     правило её бы не перебило независимо от порядка в файле. */
+  .topbar > #nav .nav-drawer-close { width: 44px; height: 44px; }
   /* Сам переключатель остаётся 40×22 (это его вид), но кликабельная область
      строки дотягивается до 44px по вертикали. */
   .switch { min-height: 44px; }
@@ -2039,11 +2207,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 @media (hover: none) {
   .wl-list li button:hover { color: var(--text-muted); background: transparent; }
   .state-table tbody tr:hover { background: transparent; }
-  /* --bg, а не --bg-card: базовый фон карточки шага задан на .how-to ol.steps > li
-     как var(--bg). Строка была скопирована с кнопочных правил ниже, где базовый
-     действительно --bg-card, и из-за этого нейтрализатор тач-hover сам сдвигал
-     фон: на светлой теме #f6f8fa → #ffffff, и шаг сливался с белой карточкой. */
-  .how-to ol.steps > li:hover { background: var(--bg); border-color: var(--border); }
+  .how-to ol.steps > li:hover { background: var(--bg-card); border-color: var(--border); }
   .brand:hover { transform: none; }
 }
 
