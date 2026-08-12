@@ -11,7 +11,8 @@
 # bypassing DPI" and rotates a perfectly working strategy needlessly.
 #
 # This script: hits the VPS /resolve endpoint (HMAC-authenticated),
-# rewrites `ip host` entries for the 7 insta hostnames, flushes stale
+# rewrites `ip host` entries for the 12 hostnames in HOSTS (7 Instagram +
+# 5 WhatsApp, добавлены 2026-08-05), flushes stale
 # conntrack so apps reconnect through new IPs.
 #
 # Honors:
@@ -219,7 +220,15 @@ fi
 # что видит клиент (57.144.245.32 и 57.145.5.32 — ответ, 57.144.249.32 и
 # 157.240.253.60 — тишина), то есть проба не врёт в ту сторону, где мы отбросили
 # бы годный адрес.
-PROBE_TIMEOUT="${Z2K_IP_PROBE_TIMEOUT:-6}"
+# 3 с, а не 6. Замерено на живой сети: отвечающий узел Meta укладывается в
+# 0,3 с, а молчащий адрес (157.240.0.60, 57.144.249.32 — TCP не соединяется
+# вовсе, time_connect=0) выбирает таймаут целиком, сколько его ни поставь.
+# То есть лишние секунды покупают только ожидание на мёртвом адресе. Запас
+# десятикратный: роутер медленнее ноутбука, но не в двадцать раз.
+#
+# Если адрес всё же не успел — не страшно: он просто не попадёт в пин, а
+# прежние записи останутся нетронутыми (см. filter_alive ниже).
+PROBE_TIMEOUT="${Z2K_IP_PROBE_TIMEOUT:-3}"
 PROBE_MAX_TRY="${Z2K_IP_PROBE_MAX_TRY:-4}"
 PROBE_KEEP="${Z2K_IP_PROBE_KEEP:-2}"
 

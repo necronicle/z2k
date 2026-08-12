@@ -3334,9 +3334,21 @@ step_finalize() {
     # Goes through deploy_critical_file so even if z2k.sh bootstrap missed
     # this file (it wasn't in the legacy tool_name loop until p-29) it gets
     # pulled directly from GitHub.
-    if deploy_critical_file "files/z2k-insta-ip-refresh.sh" "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh"; then
-        sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" >/dev/null 2>&1 || true
-    fi
+    # Файл доставляем здесь, а ЗАПУСКАЕМ в самом конце установки и в фоне.
+    #
+    # Раньше он запускался прямо тут, синхронно и с полностью погашенным
+    # выводом. Внутри — проба живости каждого адреса: 12 хостов, до 29 адресов,
+    # по 6 секунд на каждый молчащий. Замерено на живой сети: 41,7 с, из них
+    # 37 съедают четыре хоста WhatsApp — их адреса 157.240.0.60 и 57.144.249.32
+    # не отвечают на TCP вообще (time_connect=0), то есть выбирают таймаут
+    # целиком. У кого провайдер режет шире, все 29 адресов молчат — это 174 с.
+    # Человек всё это время видел замерший экран после строки про Instagram.
+    #
+    # Работа нужная (ею и чинился веб-клиент WhatsApp — она отбрасывает как раз
+    # эти мёртвые адреса), но установку она не блокирует: записи ip host на
+    # роутере уже есть и рабочие. Поэтому — фоном, после того как установка
+    # объявлена завершённой.
+    deploy_critical_file "files/z2k-insta-ip-refresh.sh" "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" || true
 
     # Same idea for the WARP game lists: a fresh install goes nowhere near the
     # auto-updater, so without this the first thing a new user sees on the WARP
@@ -3852,6 +3864,23 @@ step_finalize() {
     printf "  %-25s: %s\n" "Списки доменов" "$LISTS_DIR"
     printf "  %-25s: %s\n" "Стратегии" "$STRATEGIES_CONF"
     printf "  %-25s: %s\n" "Tools" "${ZAPRET2_DIR}/ip2net, ${ZAPRET2_DIR}/mdig"
+
+    # ОБНОВЛЕНИЕ АДРЕСОВ INSTAGRAM/WHATSAPP — ФОНОМ, УСТАНОВКА ЕГО НЕ ЖДЁТ.
+    #
+    # trap '' HUP обязателен: установщик вот-вот завершится, а busybox ash шлёт
+    # фоновым детям SIGHUP при выходе родителя — без него задача умрёт на
+    # середине проб. Тот же приём, что у фоновых задач веб-панели.
+    #
+    # Стдин закрыт и вывод отвязан: иначе фоновый процесс держал бы открытым
+    # конвейер установщика, и вызывающий (веб-панель, auto-update) не увидел бы
+    # завершения, пока не досчитаются все пробы.
+    if [ -x "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" ]; then
+        (
+            trap "" HUP
+            sh "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh"
+        ) </dev/null >/dev/null 2>&1 &
+        print_info "Адреса Instagram/WhatsApp обновляются в фоне (журнал: /tmp/z2k-log/z2k-insta-refresh.log)"
+    fi
 
     # Save local z2k entrypoint for future runs without curl. Use
     # z2k_fetch so the install final step also benefits from the
