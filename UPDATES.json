@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 15,
-  "current": "p-75.13",
+  "seq": 16,
+  "current": "r-75.14",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -80,12 +80,12 @@
   "files/z2k-warp.sh": "ce0ddf75c0d45320e990dfc0c41990f2c18017d8928b18acdc12945ffcb26784",
   "lib/auto_update.sh": "a7b2561d0cd2523dcd43d0ff56d0295dc8725cf583c6d846b3adb33c69c2535d",
   "lib/config.sh": "58f55d0a569b8e047bb461602d3d91fad9d7cc37dca74a799232f5ca2e834945",
-  "lib/config_official.sh": "58a2c3536ecc4479ede9f0ee36b7ba5d3f96ed680ecce1e257430a54c6f45beb",
+  "lib/config_official.sh": "6009ff2dc67c28bf35c40a589e2c7d445c12ea339b9c6d64c0610f8ca8487ba8",
   "lib/install.sh": "811cdabc077c76190e409cb082d2935e19a65b14e641a4450b1f3ce4c30a8c2e",
-  "lib/menu.sh": "b428f30deddc780a5e7459ee10e6ca8f764dc043dc196bfa28caa1025470bcac",
+  "lib/menu.sh": "f4543b40d1ac895d353b0e0d57be5ca591353d659396fdbdedc0d1c1d7768d04",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
   "lib/utils.sh": "455dcc1a757e8ba1a90039809d885f3203860c0e3b0789489690feaf1ae700f4",
-  "lib/webpanel.sh": "df3fb8ffa0d458cda126557b2b3bc39ee4b86dff7d5af06eac655ac4e0c5fe30",
+  "lib/webpanel.sh": "b2ebe881592f18759babccb6c68a8eff6c0a901a3d0afe8571490ec7a0be2307",
   "mtproxy-client/builds/tg-mtproxy-client-linux-amd64": "1315d2cf6c57cf058560492eba2fd7c7228876158df03c8c1a671620407da7f1",
   "mtproxy-client/builds/tg-mtproxy-client-linux-arm": "5d0bb3be9d7229b16fa053ecd51e11fda24415c0001b3e301eb39a218e95c06a",
   "mtproxy-client/builds/tg-mtproxy-client-linux-arm64": "491c0c9d7dd4ea667edb5515258f7d6989fad2a57eb060fe8c4e5a92a1ff0bf8",
@@ -101,12 +101,12 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "f16f41f01e3d0d81a71eaf7e6f7daa2afa768b2b2b4babdbff23560a60ff2ca8",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "d5bcca71d6dc44f152c29722c1d39b9153acb49e44d5a18191897e979b632745",
   "webpanel/cgi/actions.sh": "fbc0276bdb5dc0875e317da6cabce25131506493fc5b9a7591af23aaf65ace0b",
-  "webpanel/cgi/api.sh": "eeadc9ade62debd5c1635cf615745aa552ad0132cc6d83ebba75d226184d76b0",
-  "webpanel/cgi/auth.sh": "f59538c97090b22c3ed67a47814cbe17f15c88cba46df9d83aa420d5a6b983b9",
+  "webpanel/cgi/api.sh": "9fadf5da252ab4446dda3de20dff0d826b84f54d1a1824fa5e58cebc0a7eee09",
+  "webpanel/cgi/auth.sh": "aa2d34f9f41444ba41a888a0da5214ff688b037457c54256546938b27391b333",
   "webpanel/init.d/S96z2k-webpanel": "d064a61c1845e2a4ade4ed90cb3b6a82f3705fc6784f90f925d27c5bd7bcedbe",
-  "webpanel/install.sh": "92b7370c7f0e2aea87b231b903e1d2836da698fcd53a42fe44c6dc4fe98a0cef",
+  "webpanel/install.sh": "1b97eba0031d66aa12fc2405602206fb631b03823265d51286f19b41ddc1b3ef",
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
-  "webpanel/www/app.js": "3736ba17791c280c5d4279b78bfa76e6a3650b2d6e9f3b810989fddd91e3dcdd",
+  "webpanel/www/app.js": "e09c8c6100457463e29c2af2381da97ae20aae254fdc51cdb1eb5228041f8b96",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/fonts/FiraCode-400-cyrillic.woff2": "98651a0dc8960be552a69783b5b35d3a00ccb999584d9a152b50632c8e87bbcf",
   "webpanel/www/fonts/FiraCode-400-latin.woff2": "d32d5b5a7c9720cf3812f7d1e3ebdb54116f8f656e7471a03a5a93bdd93c98b3",
@@ -118,8 +118,8 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "ef90f7a04f19fa514bb5a17ceed60b95407925b7f965e1bd908d57acd9dfaf1e",
-  "webpanel/www/style.css": "408c1224619360c1cb13f660ca89c9d8c7a8f50ceb1db3ed72dca18ccc8a8e20",
+  "webpanel/www/index.html": "dc2f4258b6e94d1faa2c81ba21c621068f437671cf8db72ad4bbcb87bc3a80e0",
+  "webpanel/www/style.css": "d64c61e652b12b4b2fdfe59fe88595f59cc169f62724fafe312628964dcabaf6",
   "z2k.sh": "74a5ceec0260845559f51fc2f6a828a4741920c807ae0463c6a2a0c1ca3bdbf8"
   },
   "history": [
@@ -288,6 +288,7 @@
 {"v": "p-75.10", "type": "patch", "ts": "2026-08-12T04:35:37Z", "ref": "p-75.10", "desc": "Установка больше не замирает на несколько минут после строки про Instagram: обновление адресов Instagram и WhatsApp теперь идёт в фоне и не задерживает завершение.", "changed_files": ["webpanel/www/index.html", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "UPDATES.json"]},
 {"v": "p-75.11", "type": "patch", "ts": "2026-08-12T06:35:02Z", "ref": "p-75.11", "desc": "Роутерам с большим объёмом памяти больше не выдаётся расширенный список заблокированных сайтов: он занимал впятеро больше оперативной памяти, а разница в охвате того не стоила. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "files/z2k-geosite.sh", "lib/menu.sh", "webpanel/www/app.js", "UPDATES.json"]},
 {"v": "p-75.12", "type": "patch", "ts": "2026-08-12T12:40:45Z", "ref": "p-75.12", "desc": "На странице «Диагностика» появилась проверка домена: вводите адрес и сразу видите, открывается ли он, на каком шаге обрывается соединение и блокируют ли его. Раньше это было только в меню роутера.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]},
-{"v": "p-75.13", "type": "patch", "ts": "2026-08-12T14:10:59Z", "ref": "p-75.13", "desc": "Имя политики доступа Keenetic теперь можно вводить по-русски и с пробелами — форма больше не отклоняет такие имена. Адрес и порт веб-панели можно задать заранее, ещё до её установки, и вернуть к заводским значениям.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "webpanel/www/app.js", "UPDATES.json"]}
+{"v": "p-75.13", "type": "patch", "ts": "2026-08-12T14:10:59Z", "ref": "p-75.13", "desc": "Имя политики доступа Keenetic теперь можно вводить по-русски и с пробелами — форма больше не отклоняет такие имена. Адрес и порт веб-панели можно задать заранее, ещё до её установки, и вернуть к заводским значениям.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "webpanel/www/app.js", "UPDATES.json"]},
+{"v": "r-75.14", "type": "reinstall", "ts": "2026-08-12T22:38:55Z", "ref": "r-75.14", "desc": "В панели появился необязательный вход по паролю — тому же, что у веб-интерфейса роутера; по умолчанию выключен. Панель теперь умеет отвечать и по IPv6, и эта настройка больше не сбрасывается при обновлении. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]}
   ]
 }
