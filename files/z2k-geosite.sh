@@ -21,15 +21,30 @@
 # `<name>.shipped` so you can manually revert with `cp *.shipped <name>`
 # and a service restart. No automated rollback UI by design.
 #
-# RAM-adaptive RKN selection:
+# RKN-список: всегда ru-blocked.txt (~1,7 МБ, ~75 тыс. доменов, отобранный
+# antifilter-download-community + re:filter).
 #
-#   ≥ 400 MB total RAM → ru-blocked-all.txt (~30 MB file, ~700k domains,
-#                         maximum coverage, upstream "use with caution")
-#   < 400 MB total RAM → ru-blocked.txt (~1.7 MB file, ~80k domains,
-#                         curated antifilter-download-community + re:filter)
+# Полный ru-blocked-all.txt по умолчанию НЕ берётся. Раньше он выдавался
+# роутерам с памятью выше порога, и это перестало быть безобидным: апстрим
+# вырос почти вдвое с тех пор, как порог калибровали.
 #
-# Tunable via env: Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB (default 400)
-# Override fully via env: Z2K_GEOSITE_RKN_ASSET=ru-blocked-all.txt
+# Замерено 2026-08-12 на двух роутерах с одинаковой строкой запуска nfqws2
+# (30794 байта, байт в байт) — разница была только в этом файле:
+#
+#   ru-blocked.txt        74 720 доменов → nfqws2  16,7 МБ RSS
+#   ru-blocked-all.txt 1 369 008 доменов → nfqws2 177,4 МБ RSS
+#
+# То есть ~127 байт памяти на домен, и полный список стоит +157 МБ. На роутере
+# с гигабайтом это 18% всей памяти в одном процессе, и nfqws2 становится там
+# крупнейшим потребителем — больше xray. Сам апстрим помечает полный список
+# как «use with caution».
+#
+# Кому он всё же нужен — берётся явно: Z2K_GEOSITE_RKN_ASSET=ru-blocked-all.txt.
+# Осознанный выбор человека, а не догадка по объёму планок памяти.
+#
+# У тех, кому большой список уже приехал, он сменится на короткий сам при
+# ближайшем обновлении: страж усадки пропускает смену класса списка (см.
+# asset_marker ниже), поэтому путь на понижение открыт.
 #
 # Usage:
 #   z2k-geosite.sh fetch                fetch all, replace production lists
@@ -76,15 +91,21 @@ _z2k_vps_gh_resolve() {
 ETAG_DIR="${ZAPRET2_DIR}/extra_strats/cache/geosite-etag"
 TMP_DIR="/tmp/z2k-geosite.$$"
 
-# RAM threshold for selecting the big ru-blocked-all list. Set
-# conservatively — field testing on a 489 MB router showed nfqws2
-# crashing when loading the 1.2M-line ru-blocked-all list. The
-# smaller ru-blocked (~80k lines) is safe on sub-gigabyte routers.
-# Only routers with ≥900 MB total RAM (typically the 1-2 GB Keenetic
-# Ultra/Giga-class) get the maximum-coverage variant automatically.
-# Users with medium routers who want more coverage can opt in via
-# Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB=500 or similar.
-RAM_THRESHOLD_MB="${Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB:-900}"
+# ПОРОГА ПО ПАМЯТИ БОЛЬШЕ НЕТ, И ВОТ ПОЧЕМУ ОН БЫЛ.
+#
+# Он появился после полевого случая: на роутере с 489 МБ полный список
+# ru-blocked-all (тогда 1,2 млн строк) РОНЯЛ nfqws2. Порог 900 МБ выдавал
+# полный список только гигабайтным моделям, где он не убивал процесс.
+#
+# Правило работало, но решало не ту задачу: «не падает» — это не то же самое,
+# что «уместно». Замер 2026-08-12 на гигабайтном роутере: полный список стоит
+# 177 МБ RSS против 16,7 МБ у короткого, то есть 18% всей памяти устройства в
+# одном процессе. Порог при этом калибровали, когда список был вдвое меньше.
+#
+# Теперь по умолчанию всем идёт короткий, а полный берётся явной переменной
+# Z2K_GEOSITE_RKN_ASSET=ru-blocked-all.txt. Отбор по объёму планок памяти
+# угадывал за человека цену охвата — этого больше не делаем.
+
 
 cleanup() {
     [ -n "${TMP_DIR:-}" ] && [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
@@ -109,25 +130,19 @@ ensure_deps() {
 # --- RAM-based RKN asset selection ------------------------------------------
 
 pick_rkn_asset() {
+    # Явное указание человека уважаем без разговоров — в том числе на полный
+    # список: это осознанное решение, и цену его мы назвали в шапке.
     if [ -n "${Z2K_GEOSITE_RKN_ASSET:-}" ]; then
+        log "RKN-ассет задан явно: ${Z2K_GEOSITE_RKN_ASSET}"
         echo "$Z2K_GEOSITE_RKN_ASSET"
         return
     fi
-    local total_kb=0
-    if command -v free >/dev/null 2>&1; then
-        total_kb=$(free 2>/dev/null | awk '/^Mem:/ {print $2; exit}')
-    fi
-    case "$total_kb" in
-        ''|*[!0-9]*) total_kb=0 ;;
-    esac
-    local total_mb=$((total_kb / 1024))
-    if [ "$total_mb" -ge "$RAM_THRESHOLD_MB" ]; then
-        log "RAM ${total_mb} MB ≥ ${RAM_THRESHOLD_MB} MB threshold → ru-blocked-all"
-        echo "ru-blocked-all.txt"
-    else
-        log "RAM ${total_mb} MB < ${RAM_THRESHOLD_MB} MB threshold → ru-blocked"
-        echo "ru-blocked.txt"
-    fi
+    # Выбора по объёму памяти больше нет. Он давал полный список любому
+    # роутеру выше порога, а полный список стоит +157 МБ в nfqws2 (замер в
+    # шапке) — и вырос вдвое с тех пор, как порог задавали. Отбор по железу
+    # угадывал за человека, во что ему обойдётся охват; теперь по умолчанию
+    # берём короткий, а полный — только по прямой просьбе.
+    echo "ru-blocked.txt"
 }
 
 # --- Download an asset ONCE to a canonical tmp file ------------------------

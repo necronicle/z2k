@@ -3456,6 +3456,16 @@
             и позволяют развивать z2k дальше.
           </p>
         </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+          <div class="credits-name">KIBERPANK</div>
+          <p class="desc">
+            Спасибо, KIBERPANK. У проекта нет ни рекламы, ни платных версий —
+            он держится ровно на таких людях, и благодаря им остаётся
+            бесплатным для всех остальных.
+          </p>
+        </div>
       </div>
     `;
   }

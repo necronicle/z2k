@@ -44,6 +44,7 @@ show_main_menu() {
 |  - hoaxx                                          |
 |  - Mansurchick                                    |
 |  - Dkarloff - SEO отец                            |
+|  - KIBERPANK                                      |
 +===================================================+
 
 MENU
@@ -456,7 +457,9 @@ menu_instagram_dns() {
 # now pulled unconditionally from runetfreedom/russia-blocked-geosite
 # at install time and via cron (z2k-update-lists.sh → z2k-geosite.sh
 # fetch). No user toggle — always on. Manual override for power users
-# is env var Z2K_GEOSITE_RKN_RAM_THRESHOLD_MB when running the script.
+# is env var Z2K_GEOSITE_RKN_ASSET when running the script (по умолчанию
+# берётся короткий ru-blocked.txt; полный ru-blocked-all стоит +157 МБ RSS
+# в nfqws2 и запрашивается только явно).
 
 # ==============================================================================
 # ПОДМЕНЮ: УСТАНОВКА
