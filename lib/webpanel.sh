@@ -119,11 +119,12 @@ whitelist, логи. Ставится отдельно через меню, LAN-
 [3] Перезапустить
 [4] Показать URL
 [5] Адрес и порт панели (можно задать до установки)
+[6] Вход по паролю от роутера
 [B] Назад
 
 SUBMENU
 
-    printf "Выберите опцию [1-5,B]: "
+    printf "Выберите опцию [1-6,B]: "
     read_input wp_choice
 
     # Обработчики могут вернуть ненулевой код (например «веб-панель не
@@ -137,6 +138,7 @@ SUBMENU
         3) webpanel_do_restart       || true ;;
         4) webpanel_show_credentials || true ;;
         5) webpanel_change_address   || true ;;
+        6) webpanel_toggle_auth      || true ;;
         b|B) return 0 ;;
         *) print_error "Неверный выбор: $wp_choice"; pause ;;
     esac
@@ -164,6 +166,68 @@ SUBMENU
 # предупредить, решение остаётся за человеком.
 _ip_present_local() {
     ip -4 addr show 2>/dev/null | grep -q "inet $1[/ ]"
+}
+
+# [P]→[6] Вход по паролю — и, что важнее, СНЯТИЕ пароля.
+#
+# ЭТОТ ПУНКТ — АВАРИЙНЫЙ ВЫХОД, а не просто настройка. Если веб-интерфейс
+# роутера не отвечает, панель не может проверить пароль и никого не пускает
+# (пускать всех нельзя — тогда достаточно уронить роутеру порт 80). Чтобы это
+# не превратилось в запертую дверь, выключатель живёт в терминале: SSH не
+# зависит ни от панели, ни от веб-морды роутера. Поэтому текст отказа при входе
+# прямо называет этот пункт.
+#
+# Своего пароля нет: панель спрашивает сам роутер (схема x-ndw2-interactive,
+# см. webpanel/cgi/auth.sh). Заводить, хранить и восстанавливать нечего.
+webpanel_toggle_auth() {
+    local cfg=/opt/zapret2/config
+    local cur="0"
+    if [ -f "$cfg" ]; then
+        local _v
+        _v=$(sed -n 's/^Z2K_PANEL_AUTH=["'"'"']*\([01]\).*/\1/p' "$cfg" 2>/dev/null | tail -1)
+        [ -n "$_v" ] && cur="$_v"
+    fi
+
+    clear_screen
+    print_header "Вход в панель по паролю"
+    if [ "$cur" = "1" ]; then
+        print_info "Сейчас: ВКЛЮЧЁН"
+    else
+        print_info "Сейчас: выключен (панель открыта всем в локальной сети)"
+    fi
+    print_separator
+    print_info "Логин и пароль — те же, что у веб-интерфейса роутера."
+    print_info "Отдельный пароль не заводится и нигде не хранится: панель"
+    print_info "спрашивает сам роутер, а по сети идёт одноразовый ответ."
+    print_info "Пускаются только учётки, которым разрешён веб-интерфейс."
+    printf "\n"
+
+    if [ "$cur" = "1" ]; then
+        if confirm "Выключить вход по паролю?" "N"; then
+            touch "$cfg" 2>/dev/null
+            set_flag Z2K_PANEL_AUTH 0 "$cfg"
+            rm -rf /tmp/z2k-panel-sessions 2>/dev/null
+            print_success "Вход по паролю выключен, открытые сессии сброшены"
+        else
+            print_info "Отмена"
+        fi
+    else
+        print_warning "Панель работает по HTTP без шифрования."
+        print_warning "Пароль защитит от того, кто уже в вашей сети, но не от"
+        print_warning "того, кто слушает трафик внутри неё."
+        printf "\n"
+        if confirm "Включить вход по паролю?" "N"; then
+            touch "$cfg" 2>/dev/null
+            set_flag Z2K_PANEL_AUTH 1 "$cfg"
+            rm -rf /tmp/z2k-panel-sessions 2>/dev/null
+            print_success "Вход по паролю включён"
+            print_info "Снять его всегда можно здесь же — этот пункт работает"
+            print_info "даже когда в панель войти не получается."
+        else
+            print_info "Отмена"
+        fi
+    fi
+    pause
 }
 
 webpanel_change_address() {
@@ -219,7 +283,8 @@ webpanel_change_address() {
         read_input wp_reset
         case "$wp_reset" in
             y|Y)
-                rm -f "$wp_dir/bind" "$wp_dir/bind.explicit" "$wp_dir/port" 2>/dev/null
+                rm -f "$wp_dir/bind" "$wp_dir/bind.explicit" "$wp_dir/port" \
+                      "$wp_dir/bind6" 2>/dev/null
                 print_success "Свои значения удалены"
                 if webpanel_is_installed; then
                     local src_r
@@ -298,7 +363,43 @@ EOF
         return 1
     fi
 
-    if [ "$new_bind" = "$cur_bind" ] && [ "$new_port" = "$cur_port" ]; then
+    # IPv6 — ОТДЕЛЬНЫЙ СОКЕТ, а не замена адресу.
+    #
+    # server.bind принимает ровно один адрес, поэтому слушать обе версии
+    # протокола можно только вторым блоком в конфиге. Люди дописывали его
+    # руками и теряли при каждом обновлении: файл генерируется из шаблона.
+    local cur_bind6=""
+    [ -s "$wp_dir/bind6" ] && cur_bind6=$(tr -d ' \t\r\n' < "$wp_dir/bind6" 2>/dev/null)
+    local addrs6
+    addrs6=$(ip -6 addr show 2>/dev/null \
+             | sed -n 's|^[[:space:]]*inet6 \([0-9a-fA-F:]*\)/.*|\1|p' \
+             | grep -v '^::1$' | grep -vi '^fe80' | sort -u | tr '\n' ' ')
+    print_separator
+    if [ -n "$cur_bind6" ]; then
+        print_info "IPv6 сейчас: $cur_bind6"
+    else
+        print_info "IPv6 сейчас: не слушаем"
+    fi
+    [ -n "$addrs6" ] && print_info "Адреса IPv6 у роутера: $addrs6"
+    print_info "Пусто — не слушать. :: — все интерфейсы. Или конкретный адрес."
+    printf "IPv6 [Enter — оставить %s]: " "${cur_bind6:-как есть}"
+    read_input wp_new_bind6
+    local new_bind6="${wp_new_bind6:-$cur_bind6}"
+    # Слово «нет» — способ выключить, не путая пустой ввод со «стереть».
+    case "$wp_new_bind6" in
+        нет|net|no|off|-) new_bind6="" ;;
+    esac
+    # Проверяем форму: в конфиг уедет строка, и мусор в ней означает, что
+    # lighttpd не стартует, а панель молча не поднимется после обновления.
+    if [ -n "$new_bind6" ]; then
+        case "$new_bind6" in
+            *:*) case "$new_bind6" in *[!0-9a-fA-F:]*) print_error "Это не адрес IPv6: $new_bind6"; pause; return 1 ;; esac ;;
+            *) print_error "Это не адрес IPv6: $new_bind6"; pause; return 1 ;;
+        esac
+    fi
+
+    if [ "$new_bind" = "$cur_bind" ] && [ "$new_port" = "$cur_port" ] \
+       && [ "$new_bind6" = "$cur_bind6" ]; then
         print_info "Ничего не изменилось"
         pause
         return 0
@@ -309,6 +410,15 @@ EOF
         print_warning "Панель переедет на http://${new_bind}:${new_port}/"
     else
         print_warning "При установке панель поднимется на http://${new_bind}:${new_port}/"
+    fi
+    if [ -n "$new_bind6" ]; then
+        print_warning "Также будет слушать [${new_bind6}]:${new_port}"
+        if [ "$new_bind6" = "::" ]; then
+            print_warning ":: — это ВСЕ адреса IPv6, включая глобальный."
+            print_warning "У IPv6 нет NAT: адрес виден снаружи напрямую."
+            print_warning "Входящие сейчас закрыты межсетевым экраном роутера —"
+            print_warning "но если его открыть, панель окажется в интернете."
+        fi
     fi
     if [ "$new_bind" = "0.0.0.0" ]; then
         print_warning "0.0.0.0 — это ВСЕ интерфейсы, включая провайдерский и гостевой."
@@ -342,7 +452,8 @@ EOF
         printf '%s' "$new_bind" > "$wp_dir/bind" 2>/dev/null || true
         : > "$wp_dir/bind.explicit" 2>/dev/null || true
         printf '%s' "$new_port" > "$wp_dir/port" 2>/dev/null || true
-        print_success "Сохранено: ${new_bind}:${new_port}"
+        printf '%s' "$new_bind6" > "$wp_dir/bind6" 2>/dev/null || true
+        print_success "Сохранено: ${new_bind}:${new_port}${new_bind6:+ + [$new_bind6]}"
         print_info "Применится при установке панели (пункт [1])."
         pause
         return 0
@@ -359,7 +470,8 @@ EOF
         return 1
     fi
     print_info "Переустанавливаю панель на ${new_bind}:${new_port} ..."
-    if ! sh "$src/install.sh" --bind "$new_bind" --port "$new_port"; then
+    if ! sh "$src/install.sh" --bind "$new_bind" --port "$new_port" \
+             --bind6 "${new_bind6:-off}"; then
         print_error "Не удалось применить: панель осталась на прежнем адресе"
         pause
         return 1

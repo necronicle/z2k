@@ -77,6 +77,15 @@ _ip_present() {
     ip -4 addr show 2>/dev/null | grep -q "inet $1[/ ]"
 }
 
+# Строка второго сокета для шаблона. Собирается ровно один раз и здесь, а не
+# внутри sed: пустое значение обязано давать ПУСТУЮ строку, а не строку с
+# синтаксисом lighttpd и пустым адресом внутри — такой конфиг не стартует, и
+# панель молча не поднимется после обновления.
+_build_ipv6_socket() {
+    [ -n "$BIND6" ] || { printf ''; return 0; }
+    printf '$SERVER["socket"] == "[%s]:%s" { }' "$BIND6" "$PORT"
+}
+
 # Prefer Entware lighttpd ONLY. We cannot use the Keenetic stock lighttpd
 # at /usr/sbin/lighttpd because (a) its mod_cgi lives at
 # /usr/lib/lighttpd/ and opkg will not manage it, (b) Keenetic system
@@ -111,11 +120,17 @@ find_lighttpd() {
 PORT=""
 BIND=""
 BIND_EXPLICIT=0
+# Адрес IPv6 для второго сокета. Пусто = не слушаем IPv6 вовсе (умолчание:
+# панель годами работала по IPv4, и обновление не должно открывать новый
+# сокет само). "off" — явное выключение, чтобы сброс отличался от «не задано».
+BIND6=""
+BIND6_GIVEN=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --port) PORT="$2"; shift 2 ;;
         --bind) BIND="$2"; BIND_EXPLICIT=1; shift 2 ;;
+        --bind6) BIND6="$2"; BIND6_GIVEN=1; shift 2 ;;
         -h|--help)
             cat <<EOF
 z2k webpanel installer (lighttpd-based, LAN-only)
@@ -149,6 +164,15 @@ fi
 # успел записать в bind неверный LAN-сегмент, и его повтор держал бы панель
 # на недостижимом адресе — по той же причине auto-update передаёт сюда
 # только --port.
+# IPv6 переживает переустановку так же, как порт: сохранённое значение
+# читается ДО того, как что-либо снесено. Маркер здесь не нужен — сам факт
+# непустого файла и есть осознанный выбор, автоопределения для IPv6 у нас нет.
+if [ "$BIND6_GIVEN" = "0" ] && [ -s "$WEBPANEL_DIR/bind6" ]; then
+    BIND6=$(tr -d ' \t\r\n' < "$WEBPANEL_DIR/bind6" 2>/dev/null)
+    [ -n "$BIND6" ] && [ "$BIND6" != "off" ] && echo "reusing saved IPv6 bind $BIND6 (pass --bind6 off to disable)"
+fi
+[ "$BIND6" = "off" ] && BIND6=""
+
 if [ -z "$BIND" ] && [ -f "$WEBPANEL_DIR/bind.explicit" ] && [ -s "$WEBPANEL_DIR/bind" ]; then
     SAVED_BIND=$(tr -d ' \t\r\n' < "$WEBPANEL_DIR/bind")
     if [ "$SAVED_BIND" = "0.0.0.0" ] || _ip_present "$SAVED_BIND"; then
@@ -515,9 +539,11 @@ sed \
     -e "s|@WWW_DIR@|${WWW_DIR}|g" \
     -e "s|@PORT@|${PORT}|g" \
     -e "s|@BIND@|${BIND}|g" \
+    -e "s|@IPV6_SOCKET@|$(_build_ipv6_socket)|g" \
     "$SRC_DIR/lighttpd.conf" > "$STAGE_WP/lighttpd.conf"
 
 printf '%s' "$PORT" > "$STAGE_WP/port"
+printf '%s' "$BIND6" > "$STAGE_WP/bind6"
 printf '%s' "$BIND" > "$STAGE_WP/bind"
 # Маркер «bind задан юзером»: только такой bind переигрывается при
 # переустановке (см. комментарий у разбора сохранённых значений выше).

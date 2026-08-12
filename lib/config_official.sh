@@ -1649,6 +1649,18 @@ create_official_config() {
     local saved_POLICY_EXCLUDE="0"
     local saved_Z2K_PPE_DEOFFLOAD="1"
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
+    # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
+    # без пароля, и регенерация конфига не должна его однажды включить.
+    #
+    # ПОЧЕМУ ЭТОТ КЛЮЧ ОБЯЗАН БЫТЬ ЗДЕСЬ. Генератор пишет конфиг С НУЛЯ по
+    # фиксированному списку и подменяет боевой файл. Ключ, которого в списке
+    # нет, ИСЧЕЗАЕТ — а set_flag из панели и меню дописывает его в конец. То
+    # есть без этой строки пароль снимался сам: достаточно щёлкнуть любой
+    # тумблер в панели (каждый зовёт regenerate_config) или дождаться ночного
+    # обновления, и панель молча открыта всем в локальной сети, причём
+    # владельцу об этом никто не сообщит. Выключатель безопасности, который
+    # выключается сам, хуже его отсутствия.
+    local saved_Z2K_PANEL_AUTH="0"
     if [ -f "$config_file" ]; then
         saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
         saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
@@ -1706,6 +1718,7 @@ create_official_config() {
         # and the r-56.6 DISABLE_IPV6 fix).
         saved_Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "$config_file" "1")
         saved_Z2K_PPE_DEOFFLOAD_QUIC=$(safe_config_read "Z2K_PPE_DEOFFLOAD_QUIC" "$config_file" "1")
+        saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
     fi
 
     # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
@@ -2008,6 +2021,7 @@ POLICY_EXCLUDE="${saved_POLICY_EXCLUDE}"
 # silently re-enable de-offload after the user turned it off.
 Z2K_PPE_DEOFFLOAD=${saved_Z2K_PPE_DEOFFLOAD}
 Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
+Z2K_PANEL_AUTH=${saved_Z2K_PANEL_AUTH}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can

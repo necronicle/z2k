@@ -175,6 +175,9 @@
       // доставалось «403 Forbidden» без единой подсказки, и это на 22 из 48
       // вызовов, то есть на загрузке всех страниц.
       const data = await r.json().catch(() => null);
+      // needauth — не «ошибка», а «покажи форму входа». Признак машиночитаемый,
+      // потому что по тексту сообщения такие вещи не различают.
+      if (data && data.needauth) { showLoginScreen(); throw httpError(401, "", ""); }
       throw httpError(r.status, r.statusText, (data && data.error) || undefined);
     }
     return r.json();
@@ -189,7 +192,10 @@
       body: body.toString(),
     });
     const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
-    if (!r.ok) throw httpError(r.status, r.statusText, data.error || `${r.status}`);
+    if (!r.ok) {
+      if (data && data.needauth) { showLoginScreen(); throw httpError(401, "", ""); }
+      throw httpError(r.status, r.statusText, data.error || `${r.status}`);
+    }
     if (!data.ok) throw new Error(data.error || `${r.status}`);
     return data;
   }
@@ -213,7 +219,10 @@
       body: text,
     });
     const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
-    if (!r.ok) throw httpError(r.status, r.statusText, data.error || `${r.status}`);
+    if (!r.ok) {
+      if (data && data.needauth) { showLoginScreen(); throw httpError(401, "", ""); }
+      throw httpError(r.status, r.statusText, data.error || `${r.status}`);
+    }
     if (!data.ok) throw new Error(data.error || `${r.status}`);
     return data;
   }
@@ -3257,6 +3266,177 @@
   }
 
   // ---------- Diag (Phase 3) ----------
+  // MD5 — своей реализацией, потому что в браузере его нет.
+  //
+  // Схема входа Keenetic требует ровно MD5(логин:realm:пароль): Web Crypto
+  // умеет SHA-*, но MD5 из него намеренно исключён как устаревший. Заменить
+  // алгоритм нельзя — его выбирает роутер, а не мы.
+  //
+  // Считать ОБЯЗАТЕЛЬНО здесь, а не на сервере: панель работает по HTTP, и
+  // отправка пароля на роутер открытым текстом перечеркнула бы весь смысл
+  // схемы — она существует ровно для того, чтобы пароль не попадал в сеть.
+  // Реализация классическая (RFC 1321), работает над UTF-8 байтами.
+  function md5hex(str) {
+    const bytes = new TextEncoder().encode(str);
+    const S = [7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
+               5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
+               4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
+               6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21];
+    const K = new Uint32Array(64);
+    for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296);
+    const len = bytes.length;
+    const withPad = new Uint8Array((((len + 8) >> 6) + 1) << 6);
+    withPad.set(bytes);
+    withPad[len] = 0x80;
+    const bitLen = len * 8;
+    const dv = new DataView(withPad.buffer);
+    dv.setUint32(withPad.length - 8, bitLen >>> 0, true);
+    dv.setUint32(withPad.length - 4, Math.floor(bitLen / 4294967296), true);
+
+    let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+    const rotl = (x, c) => (x << c) | (x >>> (32 - c));
+    for (let off = 0; off < withPad.length; off += 64) {
+      let A = a0, B = b0, C = c0, D = d0;
+      for (let i = 0; i < 64; i++) {
+        let F, g;
+        if (i < 16)      { F = (B & C) | (~B & D);            g = i; }
+        else if (i < 32) { F = (D & B) | (~D & C);            g = (5 * i + 1) % 16; }
+        else if (i < 48) { F = B ^ C ^ D;                     g = (3 * i + 5) % 16; }
+        else             { F = C ^ (B | ~D);                  g = (7 * i) % 16; }
+        F = (F + A + K[i] + dv.getUint32(off + g * 4, true)) >>> 0;
+        A = D; D = C; C = B;
+        B = (B + rotl(F, S[i])) >>> 0;
+      }
+      a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0;
+      c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
+    }
+    const out = new Uint8Array(16);
+    new DataView(out.buffer).setUint32(0, a0, true);
+    new DataView(out.buffer).setUint32(4, b0, true);
+    new DataView(out.buffer).setUint32(8, c0, true);
+    new DataView(out.buffer).setUint32(12, d0, true);
+    return Array.from(out, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function sha256hex(str) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+
+  // ЭКРАН ВХОДА.
+  //
+  // Показывается не «когда мы решили», а когда бекенд прислал needauth: только
+  // он знает, включён ли пароль и жива ли сессия. Страница про это не гадает.
+  //
+  // Экран заменяет собой всё, а не всплывает поверх: под ним нет ничего, что
+  // человек мог бы сделать без входа, и полупрозрачная модалка над пустым
+  // интерфейсом только создавала бы вид, будто данные уже загружены.
+  // Признак «форма уже на экране» — ПРОВЕРКА DOM, а не переменная.
+  //
+  // С булевой переменной форма исчезала навсегда: она ставилась один раз, а
+  // роутер страницы при любой смене адреса безусловно затирает $app. После
+  // первого же перехода по меню человек оставался с пустыми скелетонами и без
+  // единого поля для пароля — то самое состояние, из которого нет выхода.
+  // DOM врать не может: нет поля — рисуем заново.
+  function showLoginScreen(msg) {
+    if (document.getElementById("login-go")) {
+      if (msg) {
+        const e = document.getElementById("login-error");
+        if (e) { e.textContent = msg; e.hidden = false; }
+      }
+      return;
+    }
+    document.body.setAttribute("data-page", "login");
+    $app.innerHTML = `
+      <div class="login-box">
+        <h1 class="page-title">Вход в панель</h1>
+        <p class="desc">
+          Логин и пароль — те же, что у веб-интерфейса роутера. Отдельного
+          пароля у панели нет: она спрашивает сам роутер.
+        </p>
+        <label class="login-label" for="login-user">Логин</label>
+        <input type="text" id="login-user" autocomplete="username"
+               autocapitalize="none" spellcheck="false" value="admin">
+        <label class="login-label" for="login-pass">Пароль</label>
+        <input type="password" id="login-pass" autocomplete="current-password">
+        <div class="login-error" id="login-error" hidden></div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="login-go">Войти</button>
+        </div>
+        <p class="desc login-hint">
+          Забыли пароль или панель не пускает — вход можно снять в меню роутера:
+          пункт «Веб-панель», переключатель входа по паролю. Он работает,
+          даже когда сюда войти не получается.
+        </p>
+      </div>
+    `;
+    const user = document.getElementById("login-user");
+    const pass = document.getElementById("login-pass");
+    const err  = document.getElementById("login-error");
+    const go   = document.getElementById("login-go");
+
+    const submit = async () => {
+      err.hidden = true;
+      go.disabled = true;
+      const label = go.textContent;
+      go.textContent = "Проверяю…";
+      try {
+        // ШАГ 1: берём у роутера realm и одноразовый вызов.
+        const c = await fetch(API + "/auth/challenge", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { ...PANEL_HDR, "Content-Type": "application/x-www-form-urlencoded" },
+          body: "",
+        });
+        const cd = await c.json().catch(() => null);
+        if (!c.ok || !cd || !cd.ok) {
+          err.textContent = (cd && cd.error) || "не удалось начать вход";
+          err.hidden = false;
+          go.disabled = false; go.textContent = label;
+          return;
+        }
+        // ШАГ 2: ответ считаем ЗДЕСЬ. Пароль дальше этой строки не уходит —
+        // ни в сеть, ни на роутер: панель работает по HTTP, и отправлять его
+        // означало бы отдать пароль администратора любому, кто слушает сеть.
+        const ha1  = md5hex(user.value.trim() + ":" + cd.realm + ":" + pass.value);
+        const resp = await sha256hex(cd.challenge + ha1);
+        pass.value = "";
+        const r = await fetch(API + "/auth/login", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { ...PANEL_HDR, "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            login: user.value.trim(), ticket: cd.ticket, response: resp,
+          }).toString(),
+        });
+        const d = await r.json().catch(() => null);
+        if (r.ok && d && d.ok) {
+          // Перезагружаем страницу целиком: половина экранов уже пыталась
+          // загрузиться и получила отказ, и дорисовывать их по одному —
+          // верный способ забыть один.
+          location.reload();
+          return;
+        }
+        err.textContent = (d && d.error) || "не удалось войти";
+        err.hidden = false;
+      } catch (e) {
+        err.textContent = "панель не отвечает";
+        err.hidden = false;
+      }
+      go.disabled = false;
+      go.textContent = label;
+      pass.focus();
+      pass.select();
+    };
+
+    go.addEventListener("click", submit);
+    for (const el of [user, pass]) {
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    }
+    pass.focus();
+    if (msg) { err.textContent = msg; err.hidden = false; }
+  }
+
   // ПРОВЕРКА ДОМЕНА — аналог пункта [Y] терминального меню.
   //
   // Отчёт приходит текстом от z2k-detect. Разбираем его на поля и рисуем
@@ -3596,6 +3776,18 @@
             Спасибо, KIBERPANK. У проекта нет ни рекламы, ни платных версий —
             он держится ровно на таких людях, и благодаря им остаётся
             бесплатным для всех остальных.
+          </p>
+        </div>
+
+        <div class="card credits-card sponsor-card">
+          <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+          <div class="credits-name">olmer2002</div>
+          <p class="desc">
+            Спасибо, olmer2002. Обход блокировок — не готовая вещь, а работа,
+            которая не кончается: то, что открывалось вчера, завтра приходится
+            открывать заново. Поддержка вроде этой покупает не отдельную
+            функцию, а саму возможность продолжать — для всех, кто этим
+            пользуется.
           </p>
         </div>
       </div>

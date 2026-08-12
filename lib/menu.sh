@@ -45,6 +45,7 @@ show_main_menu() {
 |  - Mansurchick                                    |
 |  - Dkarloff - SEO отец                            |
 |  - KIBERPANK                                      |
+|  - olmer2002                                      |
 +===================================================+
 
 MENU

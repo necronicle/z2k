@@ -959,6 +959,44 @@ input[type="text"].typed-confirm-input {
   text-transform: uppercase;
 }
 
+/* ЭКРАН ВХОДА. Узкая колонка по центру: на нём ровно одно действие, и
+   растягивать форму на всю ширину монитора незачем. */
+.login-box {
+  max-width: 380px;
+  margin: 8vh auto 0;
+}
+.login-box .desc { max-width: none; }
+.login-label {
+  display: block;
+  margin: var(--space-12) 0 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.login-box input[type="text"],
+.login-box input[type="password"] { width: 100%; }
+.login-box .btn-row { margin-top: var(--space-16); }
+.login-box .btn-primary { width: 100%; justify-content: center; }
+.login-error {
+  margin-top: var(--space-12);
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius);
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--bad);
+  font-size: 13px;
+}
+/* Подсказка про аварийный выход — тише основного текста, но всегда на виду:
+   человек читает её ровно тогда, когда войти не получается. */
+.login-hint {
+  margin-top: var(--space-24);
+  font-size: 12px;
+  opacity: 0.85;
+}
+/* На экране входа боковое меню не нужно: под ним нет ни одной доступной
+   страницы, а видимый список разделов создавал бы вид работающей панели. */
+body[data-page="login"] #nav,
+body[data-page="login"] .topbar > #nav { display: none; }
+body[data-page="login"] #app { max-width: none; }
+
 /* ПРОВЕРКА ДОМЕНА на странице «Диагностика».
    Стадии — не украшение: человек смотрит, ГДЕ оборвалось, поэтому четыре
    состояния должны читаться одним взглядом, а не вычитываться из строки. */

@@ -1,4 +1,4 @@
-name: Release CDN (purge + verify)
+name: Release CDN (purge)
 
 # z2k-enhanced — канал доставки: роутеры тянут файлы прямо с
 # raw.githubusercontent.com (и зеркал) по имени ветки. Двигать эту ветку умеет
@@ -6,18 +6,25 @@ name: Release CDN (purge + verify)
 # отрабатывает этот workflow, релиз УЖЕ у людей. Здесь — вторая половина
 # деплоя, пост-выкладочная:
 #
-#   1) purge  — сбросить edge-кэш jsdelivr (иначе фоллбэк-зеркало z2k_fetch
-#      отдаёт до 12 часов старья; purge.jsdelivr.net выселяет за ~1 сек);
-#   2) verify — дождаться, пока КАЖДЫЙ изменённый файл, который юзер может
-#      фетчить, реально отдаётся с правильным sha256. Гейт держит
-#      raw.githubusercontent (штатный источник); отставание jsdelivr —
-#      фоллбэка — только громкое предупреждение: блокировать выпуск причиной,
-#      которая на доставку не влияет, дороже, чем её пережить.
+# Один шаг: сбросить edge-кэш jsdelivr. Иначе фоллбэк-зеркало z2k_fetch
+# отдаёт до 12 часов старья; purge.jsdelivr.net выселяет за ~1 сек.
 #
-# Второй пункт — пост-деплойная верификация: класс отказа «версия сдвинулась,
-# а зеркало отдало старьё» уже пинил юзера к ревизии двухдневной давности пять
-# релизов подряд (issue #26). Красный ран здесь = юзеры прямо сейчас могут
-# получать не те байты, это не «annoying», это инцидент.
+# ПОЧЕМУ ЗДЕСЬ БОЛЬШЕ НЕТ ПРОВЕРКИ ОТДАЧИ (2026-08-12, решение Марка).
+#
+# Была вторая job, verify: она дожидалась, пока каждый изменённый файл реально
+# отдаётся с правильным sha256, и краснела, если этого не происходило. Задумана
+# против класса отказа «версия сдвинулась, а зеркало отдало старьё» (issue #26).
+#
+# На практике краснела она не от него. Гейтом доставки служит
+# raw.githubusercontent, а красный статус давало ОТСТАВАНИЕ JSDELIVR — то есть
+# фоллбэка, который к моменту проверки просто не успел прогреться и сам
+# догоняет за часы. Доставка при этом исправна. Каждый релиз давал письмо о
+# провале там, где ничего не сломано, и цена такого сигнала отрицательная:
+# на красный перестают смотреть вообще, включая тот раз, когда он настоящий.
+#
+# Что мы при этом теряем, чтобы это было сказано вслух: автоматического
+# сторожа над issue #26 больше нет. Если зеркало однажды и правда начнёт
+# отдавать не те байты, узнаем мы об этом от людей, а не из ленты сборок.
 #
 # workflow_dispatch: 2026-08-06 p-73 ушёл в пуш в окно сбоя GitHub Actions —
 # раны не создались вовсе, purge никто не сделал, и дёрнуть его вручную было
@@ -43,19 +50,17 @@ on:
 permissions:
   contents: read
 
-# Два пуша подряд: старый ран НЕ гасим (его verify всё ещё осмыслен — файлы,
-# не тронутые вторым пушем, обязаны сойтись), но и параллельно не поллим CDN
-# двумя ранами — последовательно.
+# Два пуша подряд: старый ран НЕ гасим (его сброс кэша всё ещё осмыслен —
+# файлы, не тронутые вторым пушем, тоже надо выселить), но и параллельно не
+# дёргаем CDN двумя ранами — последовательно.
 #
 # queue: max — потому что одного `cancel-in-progress: false` для намерения
 # выше НЕ ХВАТАЕТ: он сохраняет только УЖЕ ИДУЩИЙ ран, а в очереди группы у
 # GitHub по умолчанию держится ровно ОДИН pending — следующий триггер молча
 # отменяет и заменяет его. То есть «старый ран не гасим» работало, пока ранов
-# два, и переставало ровно на третьем: verify здесь идёт до 60 минут, так что
-# очередь — не гипотеза. Хуже всего, что теряется именно ПРОВЕРКА: ветка к
-# этому моменту уже сдвинута, релиз у людей, а detector того самого класса
-# отказа «зеркало отдаёт старьё» (issue #26) тихо исчезает — ран не красный,
-# его просто нет.
+# два, и переставало ровно на третьем. Теряется при этом именно СБРОС КЭША:
+# ветка к этому моменту уже сдвинута, релиз у людей, а зеркало продолжает
+# отдавать старьё — ран не красный, его просто нет.
 #
 # Группа здесь общая на все три триггера не по недосмотру, а фактически:
 # ветка по умолчанию репозитория — z2k-enhanced, поэтому и push в неё, и
@@ -161,439 +166,3 @@ jobs:
           # already ensures that, this `exit 0` is just belt-and-braces.
           exit 0
 
-  verify:
-    name: Verify CDN serves this release
-    runs-on: ubuntu-latest
-    # Ждём purge (иначе меряем кэш, который сами же собирались сбросить), но
-    # его провал нас не останавливает: verify тогда просто честно покажет,
-    # сколько старья видят юзеры. continue-on-error у purge это уже допускает.
-    needs: purge
-    # 25 минут хватало, пока в job был один поллер (ветка). Внутренние дедлайны
-    # шагов ниже теперь СУММИРУЮТСЯ последовательно в одной job:
-    #   подпись зеркала: до 10 попыток, КАЖДАЯ — 2 curl --max-time 20
-    #     (m.json + m.sig) плюс sleep 20 между попытками = 60с/попытка = 10 мин
-    #     (раньше считали только sleep — 3.3 мин, недосчитывая ровно сетевые
-    #     таймауты; при реальном зависании (не быстром отказе) каждый curl
-    #     добирает свои 20с целиком, а не завершается мгновенно)
-    #   поллинг по ВЕТКЕ (raw)                            =    18 мин
-    #   грация jsdelivr по ветке                          =     3 мин
-    #   поллинг по ТЕГУ (raw)                             =    10 мин
-    #   ожидание сошедшейся пары на jsdelivr (10 × 20 с)  =  ~3.3 мин
-    # итого worst case ~44 мин — GitHub убил бы job таймаутом ДО того, как
-    # тег-проверка вообще успела бы начаться, и это выглядело бы как "job
-    # cancelled", а не как содержательный отказ. Таймаут — не источник
-    # стоимости (раннер платится по факту, не по лимиту), поэтому берём с
-    # ощутимым запасом (не "чуть больше суммы"), а не впритык — сумма и так уже
-    # один раз оказывалась занижена на нетривиальную величину (400с), и тест
-    # ниже требует не просто "больше", а разумный процент запаса сверху.
-    # Любая новая последовательная проверка обязана попасть в эту сумму,
-    # иначе грабли повторятся тем же способом.
-    timeout-minutes: 80
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: 0
-          # Явно, а не понадеявшись на fetch-depth:0: следующему шагу нужен
-          # локальный refs/tags/$TAG, чтобы свериться с ним по имени тега
-          # (см. шаг "Тот же контент отдаётся и по тегу" ниже).
-          fetch-tags: true
-
-      - name: Compute files users can fetch
-        id: files
-        env:
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.event.after }}
-        run: |
-          set -eu
-          mkdir -p /tmp/verify
-          # Что проверяем:
-          #   push     — всё изменённое пушем, что существует в HEAD дерева
-          #              (роутеры фетчат не только карту files_sha256: инсталлер
-          #              тянет lib/*, webpanel/* и прочее прямо из ветки);
-          #   dispatch — контракт целиком: UPDATES.json + вся карта files_sha256
-          #              (ровно то, что сверяет z2k_fetch на роутерах).
-          if [ -n "${AFTER:-}" ] && [ "$AFTER" != "0000000000000000000000000000000000000000" ] \
-             && [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-              git diff --name-only "$BEFORE" "$AFTER" > /tmp/verify/changed.txt
-          else
-              # dispatch или недоступный BEFORE: полная карта манифеста.
-              sed -n '/"files_sha256"[[:space:]]*:[[:space:]]*{/,/^[[:space:]]*}/p' UPDATES.json \
-                | sed -n 's/^[[:space:]]*"\([^"]*\)":.*/\1/p' > /tmp/verify/changed.txt
-              echo "UPDATES.json" >> /tmp/verify/changed.txt
-          fi
-          # Подпись манифеста — ВСЕГДА в списке, наравне с самим манифестом.
-          #
-          # Её нет ни в files_sha256, ни (на пути dispatch/workflow_call) в
-          # changed_files, поэтому раньше она не попадала сюда вовсе: манифест
-          # прогревался и проверялся, а его подпись оставалась ждать, пока
-          # протухнет чужой кэш (raw — минуты, jsdelivr — до 12 часов). В этом
-          # окне роутер получал свежий манифест со старой подписью, пара не
-          # сходилась, и с защёлкнутым храповиком это жёсткий отказ обновляться
-          # — то есть массовый локаут. Ровно это и случилось на r-75.4
-          # (2026-08-10). Клиент теперь умеет пересобрать пару по неизменяемому
-          # пути тега (lib/auto_update.sh: au_reverify_immutable), но окно
-          # правильнее не создавать: манифест и подпись — одна неделимая
-          # единица доставки, и прогревать их надо вместе.
-          if ! grep -qx 'UPDATES.json.sig' /tmp/verify/changed.txt; then
-              echo "UPDATES.json.sig" >> /tmp/verify/changed.txt
-          fi
-          # Существующие в HEAD файлы; UPDATES.json — всегда первым (это trust
-          # root, который апдейтер фетчит раньше всего остального), сразу за ним
-          # его подпись.
-          : > /tmp/verify/files.txt
-          if grep -qx 'UPDATES.json' /tmp/verify/changed.txt; then
-              echo "UPDATES.json" >> /tmp/verify/files.txt
-          fi
-          if git cat-file -e 'HEAD:UPDATES.json.sig' 2>/dev/null; then
-              echo "UPDATES.json.sig" >> /tmp/verify/files.txt
-          fi
-          grep -vxE 'UPDATES\.json|UPDATES\.json\.sig' /tmp/verify/changed.txt | LC_ALL=C sort -u \
-            | while IFS= read -r f; do
-                [ -n "$f" ] || continue
-                # if, а не `&& echo || true`: под set -e поведение то же, но
-                # A && B || C — это не if-then-else (SC2015).
-                if git cat-file -e "HEAD:$f" 2>/dev/null; then echo "$f"; fi
-              done >> /tmp/verify/files.txt
-          # Кап — fail CLOSED, не молчаливое усечение. Раньше при превышении
-          # лимита job резала список до 120 файлов, печатала ::warning:: и
-          # ШЛА ДАЛЬШЕ ЗЕЛЁНОЙ — «проверено» и «проверено первые 120» неотличимы
-          # по цвету job'ы, а warning легко пролистать. Манифест уже нёс 107
-          # файлов на момент, когда это заметили: до тихого провала оставался
-          # десяток обычных PR. 300 — не наука, а разовый запас с учётом
-          # текущих 107; если репозиторий когда-нибудь реально дорастёт до
-          # такого числа доставляемых файлов, это стоит увидеть КРАСНЫМ и
-          # решить руками (поднять число и/или распараллелить цикл ниже —
-          # он пока последовательный, curl на файл), а не съехать по нему тихо.
-          total=$(wc -l < /tmp/verify/files.txt | tr -d ' ')
-          if [ "$total" -gt 300 ]; then
-              echo "::error::verify видит $total файлов, лимит 300 — часть осталась бы непроверенной."
-              echo "::error::Раньше это резалось до 300 молча с ::warning::; теперь останавливаем job вместо тихой частичной проверки."
-              echo "::error::Поднимите лимит в jsdelivr-purge.yml осознанно (и посмотрите, не пора ли распараллелить цикл поллинга)."
-              exit 1
-          fi
-          count=$(wc -l < /tmp/verify/files.txt | tr -d ' ')
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-          echo "---Files to verify ($count)---"
-          cat /tmp/verify/files.txt
-
-      - name: Подпись опубликованного манифеста сходится на самом зеркале
-        env:
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          set -eu
-          # ПРОВЕРЯЕМ ТО, ЧТО ОТДАЁТ ЗЕРКАЛО, А НЕ ТО, ЧТО ЛЕЖИТ В РЕПОЗИТОРИИ.
-          #
-          # Суммы файлов сверяются ниже, но сама карта берётся из манифеста, а
-          # манифест — из подписи. Если зеркало отдаёт манифест и подпись из
-          # РАЗНЫХ моментов (частичный purge, разошедшийся кэш), роутер с
-          # защёлкнутым храповиком отвергнет релиз — и мы об этом не узнаем:
-          # весь остальной verify при этом зелёный, потому что файлы сходятся
-          # с той картой, которую он же и скачал.
-          #
-          # Тянем манифест и подпись как пара, проверяем подпись ключом ИЗ
-          # ДЕРЕВА (тем, что уехал людям) и сверяем байты с репозиторием.
-          RAW="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
-          mkdir -p /tmp/sigchk
-          rc=0
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            rc=0
-            curl -fsS --max-time 20 "$RAW/UPDATES.json"     -o /tmp/sigchk/m.json || rc=1
-            curl -fsS --max-time 20 "$RAW/UPDATES.json.sig" -o /tmp/sigchk/m.sig  || rc=1
-            if [ "$rc" = "0" ] && cmp -s /tmp/sigchk/m.json UPDATES.json \
-               && cmp -s /tmp/sigchk/m.sig UPDATES.json.sig; then
-              break
-            fi
-            rc=1
-            echo "raw ещё не догнал (попытка $i) — жду"
-            sleep 20
-          done
-          if [ "$rc" != "0" ]; then
-            echo "::error::raw отдаёт не те байты манифеста/подписи, что в релизе"
-            exit 1
-          fi
-          if ! openssl pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
-                 -in /tmp/sigchk/m.json -sigfile /tmp/sigchk/m.sig >/dev/null 2>&1; then
-            echo "::error::подпись манифеста, отдаваемого зеркалом, не сходится — роутеры отвергнут релиз"
-            exit 1
-          fi
-          echo "raw: манифест и подпись совпадают с релизом, подпись сходится"
-
-          # jsdelivr: для КОРНЯ ДОВЕРИЯ отставание — это отказ, а не деградация.
-          #
-          # Политика «jsdelivr фоллбэк, его лаг только предупреждает» была верна
-          # ДО подписи: отстающее зеркало отдавало чуть более старые файлы, и
-          # это переживалось. С подписью и храповиком это больше не так.
-          # Манифест и подпись — две независимые записи кэша, и стоит им
-          # разъехаться, роутер, попавший на это зеркало, получает не «файлы
-          # постарее», а ЖЁСТКИЙ ОТКАЗ обновляться: пара не сходится, храповик
-          # защёлкнут. Предупреждение в такой ситуации бесполезно — оно тонет в
-          # зелёном ране, а люди в это время не могут обновиться.
-          #
-          # Именно так и вышло с r-75.5 (2026-08-10): ран отчитался зелёным,
-          # purge отчитался успехом, а jsdelivr ещё долго отдавал манифест
-          # r-75.4 вместе со свежей подписью. Успех purge-запроса не равен
-          # выселению, поэтому единственный честный гейт — дождаться, что
-          # зеркало реально отдаёт сошедшуюся пару.
-          JSD="https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}"
-          jrc=1
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            jrc=1
-            if curl -fsS --max-time 20 "$JSD/UPDATES.json" -o /tmp/sigchk/j.json \
-               && curl -fsS --max-time 20 "$JSD/UPDATES.json.sig" -o /tmp/sigchk/j.sig \
-               && openssl pkeyutl -verify -rawin -pubin -inkey files/etc/z2k-update-pub.pem \
-                    -in /tmp/sigchk/j.json -sigfile /tmp/sigchk/j.sig >/dev/null 2>&1; then
-              jrc=0; break
-            fi
-            echo "jsdelivr ещё отдаёт несошедшуюся пару (попытка $i) — жду"
-            sleep 20
-          done
-          if [ "$jrc" != "0" ]; then
-            echo "::error::jsdelivr отдаёт манифест и подпись из разных моментов — попавшие на это зеркало не смогут обновиться"
-            exit 1
-          fi
-          echo "jsdelivr: подпись сходится"
-
-      - name: Poll CDNs until every file matches the pushed bytes
-        if: steps.files.outputs.count != '0'
-        env:
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          set -u
-          # Зеркала неравноценны, и гейт обязан это отражать.
-          #
-          # raw.githubusercontent — то, откуда роутеры берут байты штатно
-          # (z2k_fetch: VPS-хоп, затем raw). Он не догнал ветку — это инцидент,
-          # и релиз объявлять нельзя: люди получат старый код под новым номером.
-          #
-          # jsdelivr — ФОЛЛБЭК на случай, когда raw недоступен. Его edge-кэш
-          # после purge обычно сходится за секунды, но иногда залипает на
-          # десятки минут, и это его нормальное поведение, а не наша поломка.
-          # Раньше цикл ждал ОБА зеркала и валил сборку из-за отставшего
-          # фоллбэка — то есть блокировал выпуск по причине, которая на
-          # доставку не влияет, пока жив первичный источник. Теперь отставание
-          # jsdelivr — громкое предупреждение, а красным job делает только raw.
-          # RAW и JSDELIVR — НЕЗАВИСИМЫЕ проходы, не один цикл на двоих.
-          #
-          # Раньше на каждый файл в raw-раунде синхронно ждали ЕЩЁ и cdn —
-          # тот же curl --max-time 30, только к необязательному фоллбэку. Раз
-          # jsdelivr завис (не отказал быстро, а именно завис до полного
-          # таймаута) на многих файлах подряд, ЭТО время всё равно вычиталось
-          # из дедлайна RAW — гейта, который единственный решает исход
-          # публикации. Итог: полностью исправный, быстрый raw мог получить
-          # ложный красный результат по вине необязательного зеркала. raw
-          # теперь проверяется САМ ПО СЕБЕ, без единого обращения к jsdelivr
-          # внутри этого цикла; jsdelivr идёт отдельным проходом ниже, своим
-          # бюджетом, и физически не может украсть время у raw-гейта.
-          started=$(date +%s)
-          deadline=$((started + 1080))
-          cp /tmp/verify/files.txt /tmp/verify/pending.txt
-          : > /tmp/verify/raw_ok.txt
-          round=0
-          while [ -s /tmp/verify/pending.txt ]; do
-              round=$((round + 1))
-              # Два релиза подряд: raw отдаёт уже СЛЕДУЮЩИЙ tip, и наш хеш не
-              # сойдётся никогда — это не «старьё у юзеров», это нас перекрыл
-              # более новый push, у которого будет свой verify-ран
-              # (concurrency их сериализует). Файл, чьё содержимое на живом tip
-              # ветки отличается от нашего HEAD, помечается superseded и из
-              # проверки выбывает.
-              git fetch -q origin "$BRANCH" 2>/dev/null || true
-              TIP=$(git rev-parse FETCH_HEAD 2>/dev/null || git rev-parse HEAD)
-              : > /tmp/verify/next.txt
-              _round_total=$(wc -l < /tmp/verify/pending.txt | tr -d ' ')
-              _round_i=0
-              while IFS= read -r f; do
-                  # Дедлайн проверяем ПЕРЕД каждым файлом, а не только между
-                  # раундами. Раунд — это ПОСЛЕДОВАТЕЛЬНЫЙ проход по pending с
-                  # curl --max-time 30 на файл; при большом количестве файлов
-                  # и реально зависшей сети (не быстрый отказ, а именно
-                  # зависание на все 30с) один раунд сам по себе может
-                  # пересидеть весь бюджет job — до сюда проверка между
-                  # раундами просто не доедет.
-                  _round_i=$((_round_i + 1))
-                  if [ "$(date +%s)" -ge "$deadline" ]; then
-                      echo "::error::raw.githubusercontent не сошёлся за отведённое время — превышение ВНУТРИ раунда $round, проверено $((_round_i - 1))/$_round_total файлов этого прохода, юзеры получат старые байты"
-                      echo "  оставшиеся в этом раунде и всё, что уже в pending на следующий — не проверены"
-                      exit 1
-                  fi
-                  want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
-                  if [ "$TIP" != "$(git rev-parse HEAD)" ]; then
-                      tipw=$(git show "$TIP:$f" 2>/dev/null | sha256sum | cut -d' ' -f1)
-                      if [ "$tipw" != "$want" ]; then
-                          printf '  [superseded] %s — перекрыт более новым пушем, проверит его ран\n' "$f"
-                          continue
-                      fi
-                  fi
-                  raw=$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/${REPO}/${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || raw="FETCH-ERR"
-                  if [ "$raw" = "$want" ]; then
-                      printf '  [raw ok +%ss] %s\n' "$(( $(date +%s) - started ))" "$f"
-                      echo "$f" >> /tmp/verify/raw_ok.txt
-                  else
-                      printf '  [stale raw] %s\n' "$f"
-                      echo "$f" >> /tmp/verify/next.txt
-                  fi
-              done < /tmp/verify/pending.txt
-              mv /tmp/verify/next.txt /tmp/verify/pending.txt
-              [ -s /tmp/verify/pending.txt ] || break
-              if [ "$(date +%s)" -ge "$deadline" ]; then
-                  echo "::error::raw.githubusercontent не сошёлся за 18 минут — юзеры получат старые байты:"
-                  sed 's/^/  STALE RAW: /' /tmp/verify/pending.txt
-                  exit 1
-              fi
-              echo "--- round $round: $(wc -l < /tmp/verify/pending.txt | tr -d ' ') файлов ещё не сошлись на raw, повтор через 30с ---"
-              sleep 30
-          done
-
-          # RAW-гейт полностью пройден — отсюда jsdelivr проверяется НЕЗАВИСИМО,
-          # своим бюджетом (180с), и уже никак не может повлиять на raw. Список
-          # для проверки — ВСЕ файлы, прошедшие raw (raw_ok.txt), а не только
-          # те, что кто-то по пути пометил отставшими: раньше это был один и
-          # тот же список, накопленный ВНУТРИ raw-цикла синхронно — то есть
-          # именно то смешение, которое эту находку и породило.
-          cp /tmp/verify/raw_ok.txt /tmp/verify/cdnlag.txt
-          # Первичный источник сошёлся. Даём фоллбэку короткую фору и, если он
-          # так и не догнал, говорим об этом громко — но не блокируем выпуск.
-          if [ -s /tmp/verify/cdnlag.txt ]; then
-              echo "--- raw сошёлся; жду jsdelivr ещё до 3 минут ---"
-              cdn_deadline=$(( $(date +%s) + 180 ))
-              while [ -s /tmp/verify/cdnlag.txt ] && [ "$(date +%s)" -lt "$cdn_deadline" ]; do
-                  : > /tmp/verify/next.txt
-                  _grace_i=0
-                  while IFS= read -r f; do
-                      _grace_i=$((_grace_i + 1))
-                      # Не гейт (jsdelivr — фоллбэк, только warning), но обрыв
-                      # ПОСЕРЕДИНЕ входного файла требует аккуратности: если
-                      # просто break и сразу `mv next.txt cdnlag.txt`, все
-                      # строки cdnlag.txt, до которых чтение ещё не дошло,
-                      # никуда не попадают — не в next.txt (не прочитаны), не
-                      # в cdnlag.txt (его вот-вот перезапишут пустым/частичным
-                      # next.txt). Список лагающих файлов тихо усыхает, и
-                      # финальный `if [ -s cdnlag.txt ]` в худшем случае вообще
-                      # не сработает — предупреждение о реальном отставании
-                      # молча не покажется. Раньше здесь стояло "точный список
-                      # не критичен" — неверно: критичен не список, а сам факт
-                      # непустого предупреждения.
-                      if [ "$(date +%s)" -ge "$cdn_deadline" ]; then
-                          tail -n "+$_grace_i" /tmp/verify/cdnlag.txt >> /tmp/verify/next.txt
-                          break
-                      fi
-                      want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
-                      cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
-                      if [ "$cdn" = "$want" ]; then
-                          printf '  [cdn догнал] %s\n' "$f"
-                      else
-                          echo "$f" >> /tmp/verify/next.txt
-                      fi
-                  done < /tmp/verify/cdnlag.txt
-                  mv /tmp/verify/next.txt /tmp/verify/cdnlag.txt
-                  [ -s /tmp/verify/cdnlag.txt ] || break
-                  sleep 30
-              done
-          fi
-          if [ -s /tmp/verify/cdnlag.txt ]; then
-              echo "::warning::jsdelivr всё ещё отдаёт старые байты для $(wc -l < /tmp/verify/cdnlag.txt | tr -d ' ') файлов. Это ФОЛЛБЭК-зеркало: пока raw жив, доставка не страдает, но у тех, у кого raw заблокирован, обновление может отстать до суток."
-              sed 's/^/  CDN LAG: /' /tmp/verify/cdnlag.txt
-          fi
-          echo "raw сошёлся: все проверенные файлы отдаются с правильным sha256 (+$(( $(date +%s) - started ))s)"
-
-      - name: Тот же контент отдаётся и по тегу — именно так патч тянет роутер
-        if: steps.files.outputs.count != '0'
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          set -u
-          # ВСЁ ВЫШЕ ПРОВЕРЯЛО ВЕТКУ. Роутер, скачивающий содержимое релиза
-          # (patch changed_files), фетчит НЕ по ветке — по имени тега:
-          # lib/auto_update.sh подставляет Z2K_AU_TARGET_REF (= current из
-          # манифеста = имя тега, см. scripts/release.sh) в ТОТ ЖЕ URL-шаблон
-          # raw.githubusercontent.com/OWNER/REPO/<ref>/path и cdn.jsdelivr.net/
-          # gh/OWNER/REPO@<ref>/path, где <ref> для установщика — ветка, а для
-          # патча — тег. Это РАЗНЫЕ ключи кэша на обоих CDN: тёплый кэш на
-          # ветке ничего не говорит про кэш на теге. До сих пор здесь
-          # проверялась только ветка — то есть ровно та половина пути, которую
-          # тег-доставка (r-75) не использует.
-          TAG=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' UPDATES.json | head -1)
-          if [ -z "$TAG" ]; then
-              echo "::error::не читается current из UPDATES.json — не по чему проверять тег-путь"
-              exit 1
-          fi
-          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-              echo "::error::локально нет тега $TAG — checkout сделан без fetch-tags или тег не запушен"
-              exit 1
-          fi
-          echo "тег релиза: $TAG"
-
-          # Тег неизменяем по построению (release.sh отказывается переиспользовать
-          # имя, см. tests/test_release_script.sh) — в отличие от ветки, «более
-          # свежий пуш перекрыл файл» здесь структурно невозможно, всей логики
-          # superseded из шага выше тут не нужно.
-          # Та же независимость raw/jsdelivr, что и у branch-цикла выше:
-          # cdn проверяется ОТДЕЛЬНЫМ проходом после raw, не внутри одной
-          # итерации — зависший фоллбэк не должен красть время у гейта.
-          started=$(date +%s)
-          deadline=$((started + 600))
-          cp /tmp/verify/files.txt /tmp/verify/tag_pending.txt
-          : > /tmp/verify/tag_raw_ok.txt
-          round=0
-          while [ -s /tmp/verify/tag_pending.txt ]; do
-              round=$((round + 1))
-              : > /tmp/verify/tag_next.txt
-              _round_total=$(wc -l < /tmp/verify/tag_pending.txt | tr -d ' ')
-              _round_i=0
-              while IFS= read -r f; do
-                  # Тот же класс проблемы, что и в branch-цикле выше, и здесь
-                  # он даже острее: дедлайн 10 минут, а раунд всё так же
-                  # последовательный (curl --max-time 30 на файл). 107 файлов
-                  # в один зависший раунд — потенциально ~107 минут, а не 10,
-                  # если бы проверка стояла только между раундами. Проверяем
-                  # перед КАЖДЫМ файлом.
-                  _round_i=$((_round_i + 1))
-                  if [ "$(date +%s)" -ge "$deadline" ]; then
-                      echo "::error::raw по тегу $TAG не сошёлся за отведённое время — превышение ВНУТРИ раунда $round, проверено $((_round_i - 1))/$_round_total файлов этого прохода"
-                      exit 1
-                  fi
-                  want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
-                  raw=$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/${REPO}/${TAG}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || raw="FETCH-ERR"
-                  if [ "$raw" = "$want" ]; then
-                      printf '  [тег: raw ok +%ss] %s\n' "$(( $(date +%s) - started ))" "$f"
-                      echo "$f" >> /tmp/verify/tag_raw_ok.txt
-                  else
-                      printf '  [тег: stale raw] %s\n' "$f"
-                      echo "$f" >> /tmp/verify/tag_next.txt
-                  fi
-              done < /tmp/verify/tag_pending.txt
-              mv /tmp/verify/tag_next.txt /tmp/verify/tag_pending.txt
-              [ -s /tmp/verify/tag_pending.txt ] || break
-              if [ "$(date +%s)" -ge "$deadline" ]; then
-                  echo "::error::raw по тегу $TAG не сошёлся за 10 минут — обновление патчем получит старые байты:"
-                  sed 's/^/  STALE RAW (tag): /' /tmp/verify/tag_pending.txt
-                  exit 1
-              fi
-              echo "--- тег, раунд $round: $(wc -l < /tmp/verify/tag_pending.txt | tr -d ' ') файлов ещё не сошлись, повтор через 30с ---"
-              sleep 30
-          done
-
-          # raw-гейт по тегу пройден. jsdelivr — один независимый проход по
-          # всему, что сошлось на raw, со своим бюджетом (не гейт, только
-          # предупреждение), и это НЕ может задержать вывод выше.
-          : > /tmp/verify/tag_cdnlag.txt
-          _cdn_tag_deadline=$(( $(date +%s) + 120 ))
-          while IFS= read -r f; do
-              if [ "$(date +%s)" -ge "$_cdn_tag_deadline" ]; then
-                  echo "::warning::jsdelivr по тегу $TAG: проверка фоллбэка прервана по дедлайну (120с), остаток не проверен"
-                  break
-              fi
-              want=$(git show "HEAD:$f" | sha256sum | cut -d' ' -f1)
-              cdn=$(curl -fsS --max-time 30 "https://cdn.jsdelivr.net/gh/${REPO}@${TAG}/${f}" 2>/dev/null | sha256sum | cut -d' ' -f1) || cdn="FETCH-ERR"
-              [ "$cdn" = "$want" ] || echo "$f" >> /tmp/verify/tag_cdnlag.txt
-          done < /tmp/verify/tag_raw_ok.txt
-          if [ -s /tmp/verify/tag_cdnlag.txt ]; then
-              echo "::warning::jsdelivr по тегу $TAG отстаёт для $(wc -l < /tmp/verify/tag_cdnlag.txt | tr -d ' ') файлов — тот же фоллбэк-статус, что и у ветки."
-              sed 's/^/  CDN LAG (tag): /' /tmp/verify/tag_cdnlag.txt
-          fi
-          echo "тег $TAG: raw отдаёт правильные байты — патч-доставка (Z2K_AU_TARGET_REF) получит именно этот релиз"

@@ -126,9 +126,28 @@ require_method() {
     fi
 }
 
+# ПОТОЛОК РАЗМЕРА ТЕЛА. `dd bs=1` — это один системный вызов на байт, то есть
+# секунды процессорного времени на роутере за килобайт. Пока каждый POST
+# требовал признака страницы, худшее, что мог сделать чужой, — потратить своё
+# же время. С появлением входа по паролю два маршрута (/auth/challenge и
+# /auth/login) стали доступны БЕЗ сессии: сосед по сети мог послать туда тело
+# в мегабайты и занять роутер на минуты одним запросом.
+#
+# 8 КБ хватает с запасом: самое большое тело здесь — строка своей стратегии.
+# Загрузка списков идёт другим путём (read_body_raw, там head -c блоками).
+# Общий потолок в lighttpd тоже стоит (server.max-request-size), но он в
+# мегабайтах и защищает память, а не процессор.
+Z2K_MAX_BODY="${Z2K_MAX_BODY:-8192}"
+
+# ВНИМАНИЕ: отсюда НЕЛЬЗЯ отвечать ошибкой. read_body почти всегда вызывают
+# как `body=$(read_body)`, а json_fail внутри подстановки завершает только
+# подоболочку: заголовки уехали бы в переменную, а запрос продолжил бы
+# выполняться. Поэтому размер проверяется ОДИН раз в основном потоке, до
+# разбора маршрута (см. проверку сразу после panel_auth_gate).
 read_body() {
     local len="${CONTENT_LENGTH:-0}"
     [ "$len" -gt 0 ] 2>/dev/null || { echo ""; return 0; }
+    [ "$len" -gt "$Z2K_MAX_BODY" ] && { echo ""; return 0; }
     dd bs=1 count="$len" 2>/dev/null
 }
 
@@ -193,6 +212,23 @@ form_value() {
 # --- route dispatch ---
 
 auth_require
+panel_auth_gate
+
+# Потолок размера тела — в основном потоке, а не внутри read_body: оттуда
+# ответить нельзя (см. комментарий у read_body). Два маршрута входа доступны
+# БЕЗ сессии, и без этой проверки сосед по локальной сети занимал бы роутер
+# мегабайтным телом через `dd bs=1` — сисколл на байт.
+#
+# Крупные загрузки (списки, своя стратегия) идут через read_body_raw и свои
+# собственные потолки в мегабайтах — их это ограничение не касается.
+case "$PATH_INFO" in
+    /warp/list/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate) ;;
+    *)
+        if [ "${CONTENT_LENGTH:-0}" -gt "$Z2K_MAX_BODY" ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "запрос слишком большой"
+        fi
+        ;;
+esac
 
 path="${PATH_INFO:-/}"
 method="${REQUEST_METHOD:-GET}"
@@ -919,6 +955,94 @@ case "$method $path" in
     # browser UI doesn't 404 silently.
     "POST /probe/run")
         json_fail "410 Gone" "active probe removed in r-15"
+        ;;
+
+    # ---------- ВХОД ПО ПАРОЛЮ ОТ РОУТЕРА ----------
+    "GET /auth/state")
+        json_header
+        printf '{"ok":true,"required":%s,"signed_in":%s}\n' \
+            "$(panel_auth_enabled && echo true || echo false)" \
+            "$(panel_session_valid && echo true || echo false)"
+        exit 0
+        ;;
+
+    # ВЫЗОВ ДЛЯ БРАУЗЕРА. Пароль считает страница, сюда он не приходит.
+    #
+    # Первая версия принимала пароль в теле запроса и считала ответ здесь — и
+    # это перечёркивало весь смысл схемы: пароль администратора роутера ехал
+    # по локальной сети открытым текстом, потому что панель работает по HTTP.
+    # Схема x-ndw2-interactive существует ровно для того, чтобы пароль в сеть
+    # не попадал; теперь так и есть.
+    #
+    # Куку сессии роутера, привязанную к вызову, держим у себя: она нужна на
+    # втором шаге, а браузеру знать про неё незачем.
+    "POST /auth/challenge")
+        panel_auth_enabled || json_ok
+        chal_jar="/tmp/z2k-ndm-jar.$$"
+        chal=$(panel_ndm_challenge "$chal_jar") || {
+            rm -f "$chal_jar" 2>/dev/null
+            json_fail "503 Service Unavailable" \
+              "веб-интерфейс роутера не отвечает — пароль сейчас не проверить. Пароль можно снять в меню роутера: пункт [P], переключатель входа"
+        }
+        chal_realm=${chal%%	*}
+        chal_rest=${chal#*	}
+        chal_value=${chal_rest%%	*}
+        chal_host=${chal_rest#*	}
+        # Билет связывает вызов, куку роутера и адрес: без него второй шаг
+        # пришлось бы принимать на веру от браузера.
+        chal_id=$(panel_challenge_store "$chal_value" "$chal_host" "$chal_jar") \
+            || json_fail "500 Internal Server Error" "не удалось начать вход"
+        json_header
+        printf '{"ok":true,"realm":'; json_string "$chal_realm"
+        printf ',"challenge":'; json_string "$chal_value"
+        printf ',"ticket":'; json_string "$chal_id"
+        printf '}\n'
+        exit 0
+        ;;
+
+    "POST /auth/login")
+        panel_auth_enabled || json_ok
+        body=$(read_body)
+        login=$(form_value "$body" "login")
+        ticket=$(form_value "$body" "ticket")
+        response=$(form_value "$body" "response")
+        panel_challenge_use "$ticket" || json_fail "400 Bad Request" "вход просрочен — попробуйте ещё раз"
+        panel_verify_ndm_response "$login" "$response" "$PANEL_CHAL_HOST" "$PANEL_CHAL_JAR"
+        vrc=$?
+        panel_challenge_clear
+        case "$vrc" in
+            0) ;;
+            2)
+                # Роутер не ответил — это НЕ «пароль неверный». Пускать всех
+                # нельзя (иначе достаточно уронить роутеру порт 80), поэтому
+                # отказываем и сразу говорим, где выход, чтобы человек не
+                # оказался запертым.
+                json_fail "503 Service Unavailable" \
+                  "веб-интерфейс роутера не отвечает — пароль сейчас не проверить. Пароль можно снять в меню роутера: пункт [P], переключатель входа" ;;
+            *)
+                json_fail "401 Unauthorized" "неверный логин или пароль" ;;
+        esac
+        sid=$(panel_session_create "$login") || json_fail "500 Internal Server Error" "не удалось открыть сессию"
+        printf 'Status: 200 OK\r\n'
+        printf 'Content-Type: application/json; charset=utf-8\r\n'
+        printf 'Cache-Control: no-store\r\n'
+        # HttpOnly — чтобы скрипт на странице не мог её прочитать; SameSite=Strict
+        # — чтобы кука не уезжала с чужого сайта. Secure не ставим: панель по HTTP,
+        # с ним кука просто не сохранилась бы.
+        printf 'Set-Cookie: z2kpsid=%s; Path=/; Max-Age=%s; HttpOnly; SameSite=Strict\r\n' \
+            "$sid" "$Z2K_PANEL_SESS_TTL"
+        printf '\r\n{"ok":true}\n'
+        exit 0
+        ;;
+
+    "POST /auth/logout")
+        panel_session_drop
+        printf 'Status: 200 OK\r\n'
+        printf 'Content-Type: application/json; charset=utf-8\r\n'
+        printf 'Cache-Control: no-store\r\n'
+        printf 'Set-Cookie: z2kpsid=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict\r\n'
+        printf '\r\n{"ok":true}\n'
+        exit 0
         ;;
 
     # ---------- ПРОВЕРКА ДОМЕНА (аналог пункта [Y] в меню) ----------
