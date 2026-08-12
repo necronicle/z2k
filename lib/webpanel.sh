@@ -118,7 +118,7 @@ whitelist, логи. Ставится отдельно через меню, LAN-
 [2] Удалить
 [3] Перезапустить
 [4] Показать URL
-[5] Изменить адрес и порт
+[5] Адрес и порт панели (можно задать до установки)
 [B] Назад
 
 SUBMENU
@@ -167,12 +167,17 @@ _ip_present_local() {
 }
 
 webpanel_change_address() {
-    if ! webpanel_is_installed; then
-        print_info "Веб-панель не установлена — сначала пункт [1]"
-        pause
-        return 0
-    fi
-
+    # РАБОТАЕТ И ДО УСТАНОВКИ. Раньше здесь стоял гейт «сначала пункт [1]», и
+    # задать адрес заранее было нельзя: панель сперва вставала на
+    # автоопределённый адрес, и только потом её можно было переселить —
+    # то есть на роутере с несколькими сегментами она сначала поднималась там,
+    # где её не ждали.
+    #
+    # Установщик читает $WEBPANEL_DIR/{port,bind} и маркер bind.explicit ДО
+    # того, как что-либо снесёт (webpanel/install.sh, «Сохранённые значения
+    # читаем ДО любого разрушения»). Значит достаточно положить файлы заранее —
+    # первая же установка их подхватит. Маркер обязателен: без него сохранённый
+    # адрес игнорируется, это отдельная защита от залипания на мёртвом адресе.
     local wp_dir="/opt/zapret2/webpanel"
     local cur_bind cur_port
     cur_bind=$(sed -n 's/^[[:space:]]*server\.bind[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -180,10 +185,63 @@ webpanel_change_address() {
     cur_port=$(sed -n 's/^[[:space:]]*server\.port[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' \
                "$wp_dir/lighttpd.conf" 2>/dev/null | head -1)
 
+    # Панель ещё не стоит — показываем не «?», а то, что реально произойдёт:
+    # либо заранее заданные значения, либо умолчания.
+    local preset="нет"
+    if ! webpanel_is_installed; then
+        cur_bind=""; cur_port=""
+        [ -s "$wp_dir/bind" ] && [ -f "$wp_dir/bind.explicit" ] && \
+            cur_bind=$(tr -d ' \t\r\n' < "$wp_dir/bind" 2>/dev/null)
+        [ -s "$wp_dir/port" ] && cur_port=$(tr -dc '0-9' < "$wp_dir/port" 2>/dev/null)
+        [ -n "$cur_bind$cur_port" ] && preset="да"
+    fi
+
     clear_screen
     print_header "Адрес и порт веб-панели"
-    print_info "Сейчас: ${cur_bind:-?}:${cur_port:-?}"
+    if webpanel_is_installed; then
+        print_info "Сейчас:  ${cur_bind:-?}:${cur_port:-?}"
+    elif [ "$preset" = "да" ]; then
+        print_info "Панель не установлена."
+        print_info "Задано заранее: ${cur_bind:-автоопределение}:${cur_port:-8088}"
+        print_info "Применится при установке (пункт [1])."
+    else
+        print_info "Панель не установлена."
+        print_info "По умолчанию: адрес роутера в локальной сети, порт 8088."
+        print_info "Здесь можно задать своё — применится при установке (пункт [1])."
+    fi
     print_separator
+
+    # Возврат к умолчаниям — отдельным действием, а не «введите пусто»: пустой
+    # ввод здесь означает «оставить как есть», и перегружать его вторым смыслом
+    # значит гарантированно однажды сбросить настройку по ошибке.
+    if [ -f "$wp_dir/bind.explicit" ] || [ -s "$wp_dir/port" ]; then
+        printf "Сбросить на умолчания (автоопределение адреса, порт 8088)? [y/N]: "
+        read_input wp_reset
+        case "$wp_reset" in
+            y|Y)
+                rm -f "$wp_dir/bind" "$wp_dir/bind.explicit" "$wp_dir/port" 2>/dev/null
+                print_success "Свои значения удалены"
+                if webpanel_is_installed; then
+                    local src_r
+                    if src_r=$(webpanel_source_dir); then
+                        print_info "Переустанавливаю панель на умолчаниях..."
+                        if sh "$src_r/install.sh"; then
+                            print_success "Готово: $(webpanel_url)"
+                        else
+                            print_error "Не удалось применить: панель осталась на прежнем адресе"
+                        fi
+                    else
+                        print_error "Исходники webpanel не найдены — сброс применится при следующей установке"
+                    fi
+                else
+                    print_info "Применится при установке (пункт [1])."
+                fi
+                pause
+                return 0
+                ;;
+        esac
+        print_separator
+    fi
 
     # Адреса роутера показываем ПОДСКАЗКОЙ, а не списком выбора. Выбор из
     # списка запрещал бы то, что человек как раз и хочет: вписать адрес,
@@ -247,7 +305,11 @@ EOF
     fi
 
     print_separator
-    print_warning "Панель переедет на http://${new_bind}:${new_port}/"
+    if webpanel_is_installed; then
+        print_warning "Панель переедет на http://${new_bind}:${new_port}/"
+    else
+        print_warning "При установке панель поднимется на http://${new_bind}:${new_port}/"
+    fi
     if [ "$new_bind" = "0.0.0.0" ]; then
         print_warning "0.0.0.0 — это ВСЕ интерфейсы, включая провайдерский и гостевой."
         print_warning "У панели нет пароля, а её CGI работает от root."
@@ -261,6 +323,27 @@ EOF
     printf "\n"
     if ! confirm "Применить?" "N"; then
         print_info "Отмена"
+        pause
+        return 0
+    fi
+
+    # ПАНЕЛЬ ЕЩЁ НЕ СТОИТ — переустанавливать нечего, значения кладём на диск.
+    #
+    # Установщик прочитает их сам: он смотрит $WEBPANEL_DIR/{port,bind} и маркер
+    # bind.explicit ДО того, как что-либо снесёт. Маркер обязателен — без него
+    # сохранённый адрес игнорируется (защита от залипания на мёртвом адресе
+    # после r-56.3), и заранее заданное значение молча пропало бы.
+    if ! webpanel_is_installed; then
+        mkdir -p "$wp_dir" 2>/dev/null || {
+            print_error "Не удалось создать $wp_dir"
+            pause
+            return 1
+        }
+        printf '%s' "$new_bind" > "$wp_dir/bind" 2>/dev/null || true
+        : > "$wp_dir/bind.explicit" 2>/dev/null || true
+        printf '%s' "$new_port" > "$wp_dir/port" 2>/dev/null || true
+        print_success "Сохранено: ${new_bind}:${new_port}"
+        print_info "Применится при установке панели (пункт [1])."
         pause
         return 0
     fi

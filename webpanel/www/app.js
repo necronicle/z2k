@@ -1174,7 +1174,29 @@
     const statusEl  = $app.querySelector("#policy-status");
     const segGroup  = $app.querySelector("#policy-mode");
     const saveBtn   = $app.querySelector("#policy-save-btn");
-    const NAME_RE   = /^[A-Za-z0-9_-]{0,32}$/;
+    // ПРАВИЛО ЗДЕСЬ ОБЯЗАНО СОВПАДАТЬ С СЕРВЕРНЫМ, И РАНЬШЕ НЕ СОВПАДАЛО.
+    //
+    // Стояло /^[A-Za-z0-9_-]{0,32}$/ — то есть латиница и всё. На сервере это
+    // давно исправлено: политики Keenetic люди называют по-русски и с пробелами
+    // («Незарегистрированные клиенты», «Через ВПН»), и обработчик их принимает.
+    // А форма отбивала такое имя ДО отправки, поэтому серверная правка выглядела
+    // сделанной, но пользователю по-прежнему было нельзя.
+    //
+    // Запрещаем ровно то же, что и сервер, и ровно по тем же причинам:
+    //   " $ ` \ ;  — ломают `. config`, куда имя попадает через set_flag;
+    //   '            — set_flag экранирует апостроф как '\'', а обратно это не
+    //                  разворачивается: имя портится навсегда при первой же
+    //                  перегенерации конфига;
+    //   |            — policy_status отдаёт «name=%s|exclude=%s», и на чтении
+    //                  назад имя срезалось бы по разделителю;
+    //   перевод строки — по той же причине, что и всё выше.
+    const NAME_BAD_RE = /["$`\\;'|\n\r]/;
+    // Длина в СИМВОЛАХ, а не в кодовых единицах: '…'.length считает UTF-16, и
+    // на суррогатных парах цифра разошлась бы с серверной, где считаются
+    // символы UTF-8.
+    const nameLen = (v) => Array.from(v).length;
+    const nameOk  = (v) => v.length > 0 && !NAME_BAD_RE.test(v) && nameLen(v) <= 32;
+    const NAME_HINT = "Имя политики: до 32 символов, нельзя \" $ ` \\ ; \u0027 |";
 
     function setPolicyStatus(state, text) {
       // state: good | warn | muted | error
@@ -1212,8 +1234,8 @@
     // Validate + (опционально) повторный status check на blur
     nameInput.addEventListener("blur", () => {
       const v = nameInput.value.trim();
-      if (!NAME_RE.test(v)) {
-        setPolicyStatus("error", "Имя: только буквы/цифры/«_»/«-», 1–32 символа");
+      if (!nameOk(v)) {
+        setPolicyStatus("error", NAME_HINT);
         return;
       }
       // Запрос свежего status'а с currently-saved конфигом — input не сохранит
@@ -1231,8 +1253,8 @@
     saveBtn.addEventListener("click", async () => {
       if (saveBtn.disabled) return;
       const v = nameInput.value.trim();
-      if (!NAME_RE.test(v)) {
-        toast("Имя политики: только буквы/цифры/«_»/«-», 1–32 символа", "bad");
+      if (!nameOk(v)) {
+        toast(NAME_HINT, "bad");
         nameInput.focus();
         return;
       }
