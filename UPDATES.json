@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 11,
-  "current": "p-75.9",
+  "seq": 12,
+  "current": "p-75.10",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -69,7 +69,7 @@
   "files/z2k-diag.sh": "ad04199abba229631a97bfb32016aa3aa42565221e684d112d1b727fcdc0d61b",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "95c79e4a84637a22ea80cfda9417b18a640de8afeee676fa0be49631fdedbf73",
-  "files/z2k-insta-ip-refresh.sh": "5503589976353df4d1c69dbf193997a6de48df1dd2af970f91265c83cc8890e0",
+  "files/z2k-insta-ip-refresh.sh": "01a1b7bf28c7850a1db934f4e8dadb46ccd70ff3a3beb5a1c227104daab86320",
   "files/z2k-nfqueue-selfheal.sh": "f170f69077da716473ef2a8ec63381bd6eb4e55316104924a36e784dcfb2a63c",
   "files/z2k-ppe-deoffload.sh": "2e17688dc5de388fe95fbfc36b49b0c71485537faac7de639e17560006b43ced",
   "files/z2k-scheduler.sh": "23399c160354fc9410ba5b3571b748a45e7982be9b17df5d4b3f6c9df485acd6",
@@ -81,7 +81,7 @@
   "lib/auto_update.sh": "a7b2561d0cd2523dcd43d0ff56d0295dc8725cf583c6d846b3adb33c69c2535d",
   "lib/config.sh": "58f55d0a569b8e047bb461602d3d91fad9d7cc37dca74a799232f5ca2e834945",
   "lib/config_official.sh": "58a2c3536ecc4479ede9f0ee36b7ba5d3f96ed680ecce1e257430a54c6f45beb",
-  "lib/install.sh": "208ff30003ab9e78ac93ddb28988b2833f147bd9dd88ab27f15bd88873bc9b67",
+  "lib/install.sh": "811cdabc077c76190e409cb082d2935e19a65b14e641a4450b1f3ce4c30a8c2e",
   "lib/menu.sh": "f63008af53e110bbf0f7a0210f221e73d7ebb395c3e55b5dcb0831f58decd371",
   "lib/strategies.sh": "88670ab0be51c86c0d8d662b170411bca312bfb5fb104da2db9ab766a4db0705",
   "lib/utils.sh": "455dcc1a757e8ba1a90039809d885f3203860c0e3b0789489690feaf1ae700f4",
@@ -118,7 +118,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "3c1ac9995b4ededf88a3f2466bf14e57c7f5e096bb42a0809342fad5415fa4a5",
+  "webpanel/www/index.html": "d5aacea9e57e6fad6da8b7e979331159c1e90748f66f7183088ac4647140d999",
   "webpanel/www/style.css": "5e9dc2f7ec78438b57e98305788c8207d0921f66e075e8fd4213fcf50c154c1f",
   "z2k.sh": "74a5ceec0260845559f51fc2f6a828a4741920c807ae0463c6a2a0c1ca3bdbf8"
   },
@@ -284,6 +284,7 @@
 {"v": "r-75.6", "type": "reinstall", "ts": "2026-08-10T15:36:40Z", "ref": "r-75.6", "desc": "Повышена надёжность обновления и обновлены внутренние компоненты.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/app.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]},
 {"v": "r-75.7", "type": "reinstall", "ts": "2026-08-11T07:14:47Z", "ref": "r-75.7", "desc": "Панель больше не ждёт загрузки шрифтов из интернета и открывается сразу. Главный ответ и кнопки управления теперь наверху экрана, а не под таблицей. В списке стратегий видно, к какому адресу относится запись — IPv4 или IPv6.", "changed_files": ["files/z2k-diag.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"]},
 {"v": "r-75.8", "type": "reinstall", "ts": "2026-08-11T12:49:44Z", "ref": "r-75.8", "desc": "Панель стала компактнее и аккуратнее: поля больше не разъезжаются на широких экранах, список стратегий читается плотнее и ровнее. Появилась кнопка удаления z2k прямо в панели — с подтверждением, чтобы нажать случайно было нельзя. Шрифты теперь встроены, панель открывается сразу и ничего не тянет из интернета.", "changed_files": ["lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/fonts/FiraCode-400-cyrillic.woff2", "webpanel/www/fonts/FiraCode-400-latin.woff2", "webpanel/www/fonts/FiraSans-400-cyrillic.woff2", "webpanel/www/fonts/FiraSans-400-latin.woff2", "webpanel/www/fonts/FiraSans-500-cyrillic.woff2", "webpanel/www/fonts/FiraSans-500-latin.woff2", "webpanel/www/fonts/FiraSans-600-cyrillic.woff2", "webpanel/www/fonts/FiraSans-600-latin.woff2", "webpanel/www/fonts/FiraSans-700-cyrillic.woff2", "webpanel/www/fonts/FiraSans-700-latin.woff2", "webpanel/www/index.html", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]},
-{"v": "p-75.9", "type": "patch", "ts": "2026-08-11T19:34:21Z", "ref": "p-75.9", "desc": "Адрес и порт веб-панели теперь можно сменить прямо в меню роутера, и они больше не сбрасываются при каждом обновлении — раньше настройку приходилось возвращать вручную.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "UPDATES.json"]}
+{"v": "p-75.9", "type": "patch", "ts": "2026-08-11T19:34:21Z", "ref": "p-75.9", "desc": "Адрес и порт веб-панели теперь можно сменить прямо в меню роутера, и они больше не сбрасываются при каждом обновлении — раньше настройку приходилось возвращать вручную.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "UPDATES.json"]},
+{"v": "p-75.10", "type": "patch", "ts": "2026-08-12T04:35:37Z", "ref": "p-75.10", "desc": "Установка больше не замирает на несколько минут после строки про Instagram: обновление адресов Instagram и WhatsApp теперь идёт в фоне и не задерживает завершение.", "changed_files": ["webpanel/www/index.html", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "UPDATES.json"]}
   ]
 }
