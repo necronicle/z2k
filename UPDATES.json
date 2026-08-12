@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 13,
-  "current": "p-75.11",
+  "seq": 14,
+  "current": "p-75.12",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -100,13 +100,13 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "74787661986108c8964c0253b8a0581cb9f04bf214cc5b6f8ee5f87697ade271",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "f16f41f01e3d0d81a71eaf7e6f7daa2afa768b2b2b4babdbff23560a60ff2ca8",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "d5bcca71d6dc44f152c29722c1d39b9153acb49e44d5a18191897e979b632745",
-  "webpanel/cgi/actions.sh": "dcd22b489627d3169c133551ef9451102af480d7d9fac6101e839aecff80113d",
-  "webpanel/cgi/api.sh": "fda8704ba4f45a6f7138b7f79e1ba3dc905bf95239fbd99157dbd7f6cf5a4aef",
+  "webpanel/cgi/actions.sh": "fbc0276bdb5dc0875e317da6cabce25131506493fc5b9a7591af23aaf65ace0b",
+  "webpanel/cgi/api.sh": "eeadc9ade62debd5c1635cf615745aa552ad0132cc6d83ebba75d226184d76b0",
   "webpanel/cgi/auth.sh": "f59538c97090b22c3ed67a47814cbe17f15c88cba46df9d83aa420d5a6b983b9",
   "webpanel/init.d/S96z2k-webpanel": "d064a61c1845e2a4ade4ed90cb3b6a82f3705fc6784f90f925d27c5bd7bcedbe",
   "webpanel/install.sh": "92b7370c7f0e2aea87b231b903e1d2836da698fcd53a42fe44c6dc4fe98a0cef",
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
-  "webpanel/www/app.js": "e790aa8c5e0385dab01b49567b4a60a92e9d75cce3da98de758c1c64d679c1e0",
+  "webpanel/www/app.js": "dc0e49739a8acbfde9e73f1479fb3b3eca5ac20d89bd5047634a3cd9598ebdfd",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/fonts/FiraCode-400-cyrillic.woff2": "98651a0dc8960be552a69783b5b35d3a00ccb999584d9a152b50632c8e87bbcf",
   "webpanel/www/fonts/FiraCode-400-latin.woff2": "d32d5b5a7c9720cf3812f7d1e3ebdb54116f8f656e7471a03a5a93bdd93c98b3",
@@ -118,8 +118,8 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "3ff55edd561a623b59cacb4c3bc45ebe94ea71073bf0d9fbf7e62d68f2355a8b",
-  "webpanel/www/style.css": "5e9dc2f7ec78438b57e98305788c8207d0921f66e075e8fd4213fcf50c154c1f",
+  "webpanel/www/index.html": "ae28db23172250ec72b7c027e09f5218a450784d3533a601d85c619dfc739c2c",
+  "webpanel/www/style.css": "408c1224619360c1cb13f660ca89c9d8c7a8f50ceb1db3ed72dca18ccc8a8e20",
   "z2k.sh": "74a5ceec0260845559f51fc2f6a828a4741920c807ae0463c6a2a0c1ca3bdbf8"
   },
   "history": [
@@ -286,6 +286,7 @@
 {"v": "r-75.8", "type": "reinstall", "ts": "2026-08-11T12:49:44Z", "ref": "r-75.8", "desc": "Панель стала компактнее и аккуратнее: поля больше не разъезжаются на широких экранах, список стратегий читается плотнее и ровнее. Появилась кнопка удаления z2k прямо в панели — с подтверждением, чтобы нажать случайно было нельзя. Шрифты теперь встроены, панель открывается сразу и ничего не тянет из интернета.", "changed_files": ["lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/fonts/FiraCode-400-cyrillic.woff2", "webpanel/www/fonts/FiraCode-400-latin.woff2", "webpanel/www/fonts/FiraSans-400-cyrillic.woff2", "webpanel/www/fonts/FiraSans-400-latin.woff2", "webpanel/www/fonts/FiraSans-500-cyrillic.woff2", "webpanel/www/fonts/FiraSans-500-latin.woff2", "webpanel/www/fonts/FiraSans-600-cyrillic.woff2", "webpanel/www/fonts/FiraSans-600-latin.woff2", "webpanel/www/fonts/FiraSans-700-cyrillic.woff2", "webpanel/www/fonts/FiraSans-700-latin.woff2", "webpanel/www/index.html", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]},
 {"v": "p-75.9", "type": "patch", "ts": "2026-08-11T19:34:21Z", "ref": "p-75.9", "desc": "Адрес и порт веб-панели теперь можно сменить прямо в меню роутера, и они больше не сбрасываются при каждом обновлении — раньше настройку приходилось возвращать вручную.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "UPDATES.json"]},
 {"v": "p-75.10", "type": "patch", "ts": "2026-08-12T04:35:37Z", "ref": "p-75.10", "desc": "Установка больше не замирает на несколько минут после строки про Instagram: обновление адресов Instagram и WhatsApp теперь идёт в фоне и не задерживает завершение.", "changed_files": ["webpanel/www/index.html", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "UPDATES.json"]},
-{"v": "p-75.11", "type": "patch", "ts": "2026-08-12T06:35:02Z", "ref": "p-75.11", "desc": "Роутерам с большим объёмом памяти больше не выдаётся расширенный список заблокированных сайтов: он занимал впятеро больше оперативной памяти, а разница в охвате того не стоила. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "files/z2k-geosite.sh", "lib/menu.sh", "webpanel/www/app.js", "UPDATES.json"]}
+{"v": "p-75.11", "type": "patch", "ts": "2026-08-12T06:35:02Z", "ref": "p-75.11", "desc": "Роутерам с большим объёмом памяти больше не выдаётся расширенный список заблокированных сайтов: он занимал впятеро больше оперативной памяти, а разница в охвате того не стоила. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "files/z2k-geosite.sh", "lib/menu.sh", "webpanel/www/app.js", "UPDATES.json"]},
+{"v": "p-75.12", "type": "patch", "ts": "2026-08-12T12:40:45Z", "ref": "p-75.12", "desc": "На странице «Диагностика» появилась проверка домена: вводите адрес и сразу видите, открывается ли он, на каком шаге обрывается соединение и блокируют ли его. Раньше это было только в меню роутера.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]}
   ]
 }
