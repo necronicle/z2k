@@ -921,6 +921,30 @@ case "$method $path" in
         json_fail "410 Gone" "active probe removed in r-15"
         ;;
 
+    # ---------- ПРОВЕРКА ДОМЕНА (аналог пункта [Y] в меню) ----------
+    #
+    # Не путать с /probe/run выше: тот был АВТОМАТИЧЕСКОЙ пробой ротатора и
+    # убран в r-15. Здесь человек сам вводит домен и сам жмёт кнопку, а проба
+    # стателесс — ничего не пишет ни в состояние, ни в списки.
+    "POST /diag/probe")
+        body=$(read_body)
+        domain=$(form_value "$body" "domain")
+        [ -n "$domain" ] || json_fail "400 Bad Request" "укажите домен"
+        probe_out=$(detect_probe_domain "$domain" 2>&1)
+        case "$?" in
+            0) ;;
+            2) json_fail "400 Bad Request" "в имени домена есть недопустимые символы" ;;
+            3) json_fail "503 Service Unavailable" "модуль проверки не установлен — переустановите z2k" ;;
+            4) json_fail "504 Gateway Timeout" "проверка не уложилась в 20 секунд" ;;
+            *) json_fail "500 Internal Server Error" "проверка не выполнилась" ;;
+        esac
+        json_header
+        printf '{"ok":true,"report":'
+        json_string "$probe_out"
+        printf '}\n'
+        exit 0
+        ;;
+
     # ---------- DEBUG FLAG (Phase 3) ----------
     "GET /debug")
         json_header

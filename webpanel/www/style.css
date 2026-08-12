@@ -959,6 +959,71 @@ input[type="text"].typed-confirm-input {
   text-transform: uppercase;
 }
 
+/* ПРОВЕРКА ДОМЕНА на странице «Диагностика».
+   Стадии — не украшение: человек смотрит, ГДЕ оборвалось, поэтому четыре
+   состояния должны читаться одним взглядом, а не вычитываться из строки. */
+.probe-row {
+  display: flex;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-12);
+}
+.probe-row input[type="text"] { flex: 1 1 240px; min-width: 0; }
+
+.probe-report { margin-top: var(--space-12); }
+.probe-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  align-items: center;
+  margin-bottom: var(--space-12);
+}
+.probe-stage {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.probe-stage b { font-family: var(--font-mono); font-size: 12px; }
+.probe-stage.good  { border-color: rgba(63, 185, 80, 0.45); }
+.probe-stage.good b  { color: var(--good); }
+.probe-stage.bad   { border-color: rgba(248, 81, 73, 0.45); }
+.probe-stage.bad b   { color: var(--bad); }
+.probe-stage.muted b { color: var(--text-muted); }
+.probe-lat { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.probe-line {
+  display: flex;
+  gap: var(--space-8);
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.probe-line > span { color: var(--text-muted); flex: 0 0 64px; }
+.probe-line code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.probe-verdict {
+  margin: var(--space-12) 0 var(--space-8);
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius);
+  font-weight: 600;
+  font-size: 13px;
+}
+/* HOT — «блокируют». Это ожидаемый ответ, а не поломка панели, поэтому
+   предупреждающий тон, а не красный «всё сломалось». */
+.probe-verdict.hot  { background: rgba(210, 153, 34, 0.12); color: var(--warn); }
+.probe-verdict.calm { background: var(--bg-card-hover); color: var(--text); }
+.probe-raw summary { cursor: pointer; font-size: 13px; color: var(--text-muted); }
+.probe-raw[open] summary { margin-bottom: var(--space-8); }
+
 /* Метка семейства адреса. Ключ строки — «example.com|4»: одно и то же имя
    живёт в таблице дважды, отдельно для IPv4 и IPv6, и стратегия у них разная.
    Показывать людям служебную палку нельзя, а терять различие — тем более. */
