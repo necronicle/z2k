@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 17,
-  "current": "p-75.15",
+  "seq": 18,
+  "current": "r-75.16",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
+  "files/S99zapret2.new": "9459c89f0aed5a8577486b52c0a7c9957064bc1500690913aaaa58d59f5616ba",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/4pda.bin": "eefeaf09dde8d69b1f176212541f63c68b314a33a335eced99a8a29f17254da8",
@@ -64,9 +64,9 @@
   "files/ndm/95-z2k-scheduler-watchdog.sh": "d73955d742263bda01ecca1be4b04deb7bba61164a5da2609f3e9977f443ad63",
   "files/z2k-auto-update.sh": "4cedd4232c3c12a2e4861de625c9e8a45a6919c1ec66f9bca0a580a73a9963b3",
   "files/z2k-blocked-monitor.sh": "d2221cab05461c6f44042464bd3c6979c7303f787460b8b5989f91bf4ebf9a99",
-  "files/z2k-config-validator.sh": "31b8e39341f75efb130500ad473cabd90677d814be259bc110429fbc3e4c01d4",
+  "files/z2k-config-validator.sh": "877eb6aa90939e30fa405f8483a685761a37911f736820a382ed81f663f28ae7",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "ad04199abba229631a97bfb32016aa3aa42565221e684d112d1b727fcdc0d61b",
+  "files/z2k-diag.sh": "9c9ed63dcb9e0e0ac600c939e51fc1b7a8c909466e7569f8cba4a38ff4504598",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "4e6b35c7784511bb83104adcef39b0a9d91940ea068bbaff7597cf0167eac90f",
   "files/z2k-insta-ip-refresh.sh": "01a1b7bf28c7850a1db934f4e8dadb46ccd70ff3a3beb5a1c227104daab86320",
@@ -118,7 +118,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "361cbeb846cf2736ad516f96368982ad02d00780ab6bca993cf5eb55d28b0032",
+  "webpanel/www/index.html": "abc40ab0070c8c6623d044c65728125d7f2b36c472bc7bbac248687dd04872fe",
   "webpanel/www/style.css": "d64c61e652b12b4b2fdfe59fe88595f59cc169f62724fafe312628964dcabaf6",
   "z2k.sh": "74a5ceec0260845559f51fc2f6a828a4741920c807ae0463c6a2a0c1ca3bdbf8"
   },
@@ -290,6 +290,7 @@
 {"v": "p-75.12", "type": "patch", "ts": "2026-08-12T12:40:45Z", "ref": "p-75.12", "desc": "На странице «Диагностика» появилась проверка домена: вводите адрес и сразу видите, открывается ли он, на каком шаге обрывается соединение и блокируют ли его. Раньше это было только в меню роутера.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]},
 {"v": "p-75.13", "type": "patch", "ts": "2026-08-12T14:10:59Z", "ref": "p-75.13", "desc": "Имя политики доступа Keenetic теперь можно вводить по-русски и с пробелами — форма больше не отклоняет такие имена. Адрес и порт веб-панели можно задать заранее, ещё до её установки, и вернуть к заводским значениям.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "webpanel/www/app.js", "UPDATES.json"]},
 {"v": "r-75.14", "type": "reinstall", "ts": "2026-08-12T22:38:55Z", "ref": "r-75.14", "desc": "В панели появился необязательный вход по паролю — тому же, что у веб-интерфейса роутера; по умолчанию выключен. Панель теперь умеет отвечать и по IPv6, и эта настройка больше не сбрасывается при обновлении. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]},
-{"v": "p-75.15", "type": "patch", "ts": "2026-08-13T16:46:50Z", "ref": "p-75.15", "desc": "Исправлен вход по паролю в веб-панель: при обращении по локальному адресу он не срабатывал. По умолчанию вход по паролю выключен — если вы его не включали, изменение вас не касается.", "changed_files": ["webpanel/www/index.html", "webpanel/www/app.js", "UPDATES.json"]}
+{"v": "p-75.15", "type": "patch", "ts": "2026-08-13T16:46:50Z", "ref": "p-75.15", "desc": "Исправлен вход по паролю в веб-панель: при обращении по локальному адресу он не срабатывал. По умолчанию вход по паролю выключен — если вы его не включали, изменение вас не касается.", "changed_files": ["webpanel/www/index.html", "webpanel/www/app.js", "UPDATES.json"]},
+{"v": "r-75.16", "type": "reinstall", "ts": "2026-08-13T19:55:48Z", "ref": "r-75.16", "desc": "Если сервис не запускается, z2k теперь прямо говорит почему — раньше в этом месте была только фраза «не удалось запустить» без единой подробности. Диагностика тоже показывает причину сама и отдельно следит за правилами, без которых стратегии перестают подбираться.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "UPDATES.json"]}
   ]
 }
