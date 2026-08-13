@@ -391,8 +391,41 @@ if command -v node >/dev/null 2>&1; then
     esac
     grep -q 'function md5hex' "$APPJS" \
         && ok "MD5 считается в браузере" || no "MD5 в браузере" "md5hex" "нет"
-    grep -q 'crypto.subtle.digest("SHA-256"' "$APPJS" \
-        && ok "SHA-256 считается в браузере" || no "SHA-256 в браузере" "crypto.subtle" "нет"
+    # SHA-256 НЕ ДОЛЖЕН ЗАВИСЕТЬ ОТ crypto.subtle.
+    #
+    # Полевой отказ r-75.14: по KeenDNS вход работал, по локалке — нет.
+    # crypto.subtle доступен ТОЛЬКО в защищённом контексте, а панель по
+    # умолчанию открывают по http://192.168.1.1:8088 — там его нет вовсе
+    # (проверено в браузере на роутере: isSecureContext=false,
+    # crypto.subtle=undefined). То есть вход ломался ровно на основном пути.
+    grep -q 'function sha256hexJS' "$APPJS" \
+        && ok "есть своя реализация SHA-256, не зависящая от защищённого контекста" \
+        || no "своя SHA-256" "sha256hexJS" "нет — по локалке вход не сработает"
+    awk '/^  async function sha256hex\(str\)/,/^  \}/' "$APPJS" | grep -q 'sha256hexJS' \
+        && ok "при отсутствии crypto.subtle используется своя реализация" \
+        || no "запасной путь" "вызов sha256hexJS" "нет"
+    awk '/^  async function sha256hex\(str\)/,/^  \}/' "$APPJS" | grep -q 'isSecureContext' \
+        && ok "защищённость контекста проверяется явно" \
+        || no "проверка контекста" "isSecureContext" "нет"
+
+    # И сама реализация обязана считать ВЕРНО — иначе запасной путь просто
+    # меняет отказ на неверный пароль.
+    _sha=$(node -e '
+      const fs=require("fs"), crypto=require("crypto");
+      const src=fs.readFileSync(process.argv[1],"utf8");
+      const m=src.match(/function sha256hexJS\(str\)[\s\S]*?\n  \}/);
+      if(!m){console.log("MISSING");process.exit(0);}
+      const f=new Function("TextEncoder","DataView","Uint8Array","Uint32Array",
+                m[0]+"; return sha256hexJS;")(require("util").TextEncoder,DataView,Uint8Array,Uint32Array);
+      const cases=["","abc","admin:Keenetic Ultra:test","ы".repeat(100),"x".repeat(1000)];
+      const bad=cases.filter(c => f(c)!==crypto.createHash("sha256").update(c,"utf8").digest("hex"));
+      console.log(bad.length ? "BAD:"+bad.length : "OK");
+    ' "$APPJS" 2>&1)
+    case "$_sha" in
+        OK) ok "своя SHA-256 совпадает с эталоном на всех проверенных входах" ;;
+        MISSING) no "sha256hexJS найдена" "функция" "нет" ;;
+        *) no "своя SHA-256 считает верно" "совпадение с эталоном" "$_sha" ;;
+    esac
     # Пароль не должен уходить в тело запроса.
     awk '/const submit = async/,/^    };/' "$APPJS" | grep -q 'password: pass.value' \
         && no "пароль не уходит в сеть" "в теле только response" "пароль в теле запроса" \
