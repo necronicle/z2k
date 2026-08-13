@@ -208,6 +208,57 @@ print_version_host() {
     printf 'LAN IP            : %s\n' "$lan_ip"
 }
 
+# Почему nfqws2 не поднялся.
+#
+# «nfqws2 PIDs: (not running)» — это симптом, а диагностика ради него и
+# собирается. До 2026-08-13 причина не попадала в неё никогда: init печатал
+# «Daemon 1 failed to start» в консоль тому, кто запускал руками, и всё. Человек
+# присылал диагностику, в ней стояло «не запущен», и дальше начиналась переписка.
+#
+# Порядок такой же, как в init: сперва то, что демон успел сказать при последней
+# попытке старта, потом — разбор параметров движком.
+#
+# Гоняем --dry-run ТОЛЬКО когда демон лежит. Он грузит списки, а на больших
+# списках РКН это заметная разовая память; если демон работает, конфигурация
+# заведомо разобралась, и платить за это нечем.
+print_nfqws_start_failure() {
+    local _bin="${ZAPRET2_DIR}/nfq2/nfqws2"
+    local _err
+    for _err in /tmp/.z2k-daemon-nfqws2-*.err; do
+        [ -s "$_err" ] || continue
+        printf 'причина отказа    : (от nfqws2, %s)\n' "$_err"
+        tail -n 5 "$_err" 2>/dev/null | sed 's/^/  | /'
+        return 0
+    done
+
+    [ -x "$_bin" ] || { printf 'причина отказа    : бинарник недоступен (%s)\n' "$_bin"; return 0; }
+    "$_bin" --help 2>&1 | grep -q -- '--dry-run' || return 0
+
+    local _opt
+    _opt=$(sed -n '/^NFQWS2_OPT="/,/"[[:space:]]*$/p' "${ZAPRET2_DIR}/config" 2>/dev/null \
+           | sed '1s/^NFQWS2_OPT="//; $s/"[[:space:]]*$//' | tr '\n' ' ')
+    [ -n "$(printf '%s' "$_opt" | tr -d ' \t')" ] || {
+        printf 'причина отказа    : NFQWS2_OPT пуст — стратегий нет вообще\n'; return 0; }
+
+    local _out _rc
+    _out=$(
+        set -f
+        # shellcheck disable=SC2086  # строка опций, словоделение здесь и нужно
+        set -- $_opt
+        "$_bin" --dry-run --qnum=299 "$@" 2>&1
+    )
+    _rc=$?
+    if [ "$_rc" -eq 0 ]; then
+        printf 'причина отказа    : конфигурация разобрана без ошибок — дело не в ней\n'
+        printf 'очередь 200 занята: %s\n' \
+            "$(grep -cE '^[[:space:]]*200[[:space:]]' /proc/net/netfilter/nfnetlink_queue 2>/dev/null || echo '?')"
+    else
+        printf 'причина отказа    : nfqws2 отверг конфигурацию (код %s)\n' "$_rc"
+        printf '%s\n' "$_out" | grep -viE '^loading|^Loaded |^Running as|^github version|^$' \
+            | tail -n 6 | sed 's/^/  | /'
+    fi
+}
+
 # =============================================================================
 # SECTION: service state + config flags
 # =============================================================================
@@ -227,6 +278,7 @@ print_service() {
         fi
     else
         printf 'nfqws2 PIDs       : (not running)\n'
+        print_nfqws_start_failure
     fi
 
     local cfg="${ZAPRET2_DIR}/config"
@@ -252,13 +304,21 @@ print_iptables() {
     # grep -c already prints a number and returns exit 1 on 0 matches —
     # wrap in `|| true` so set -u / set -e friends don't abort and so the
     # caller variable is a clean integer.
-    local nfq_mangle nfq_prerouting tg_redirect_pre tg_redirect_out
+    # Считаем ИСХОДЯЩУЮ и ВХОДЯЩУЮ половины отдельно.
+    #
+    # Правил шесть: 2 в POSTROUTING (исходящие) и по 2 в INPUT и FORWARD
+    # (входящие — из них живёт детекция неудач автоциркуляра). PREROUTING мы не
+    # используем вовсе, и старая строка «NFQUEUE prerouting: 0» пугала на пустом
+    # месте, зато про четыре правила, от которых зависит ротация, диагностика
+    # молчала: пропади входящая половина — здесь стояло бы бодрое «postroute 2».
+    local nfq_mangle nfq_in tg_redirect_pre tg_redirect_out
     nfq_mangle=$( (iptables -t mangle -L POSTROUTING -n 2>/dev/null || true) | grep -c NFQUEUE || true)
-    nfq_prerouting=$( (iptables -t mangle -L PREROUTING -n 2>/dev/null || true) | grep -c NFQUEUE || true)
+    nfq_in=$( ( (iptables -t mangle -L INPUT -n 2>/dev/null || true); \
+                (iptables -t mangle -L FORWARD -n 2>/dev/null || true) ) | grep -c NFQUEUE || true)
     tg_redirect_pre=$( (iptables -t nat -L PREROUTING -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
     tg_redirect_out=$( (iptables -t nat -L OUTPUT -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
     : "${nfq_mangle:=0}"
-    : "${nfq_prerouting:=0}"
+    : "${nfq_in:=0}"
     : "${tg_redirect_pre:=0}"
     : "${tg_redirect_out:=0}"
     # r-50+: TG redirect is one ipset match-set rule per chain (the 10 DC
@@ -276,8 +336,8 @@ print_iptables() {
     : "${tg_reject6_fwd:=0}"
     : "${tg_reject6_out:=0}"
     : "${tg_ipset6_n:=0}"
-    printf 'NFQUEUE postroute : %s\n' "$nfq_mangle"
-    printf 'NFQUEUE prerouting: %s\n' "$nfq_prerouting"
+    printf 'NFQUEUE исходящие : %s  (postrouting, ожидается 2)\n' "$nfq_mangle"
+    printf 'NFQUEUE входящие  : %s  (input+forward, ожидается 4 — без них не работает автоподбор стратегий)\n' "$nfq_in"
     printf 'TG REDIR PREROUT  : %s  (expected 1 — ipset match-set, r-50+)\n' "$tg_redirect_pre"
     printf 'TG REDIR OUTPUT   : %s  (expected 1 — ipset match-set, r-50+)\n' "$tg_redirect_out"
     printf 'TG ipset z2k_tg_dc: %s DC subnets (expected 10)\n' "$tg_ipset_n"
@@ -485,8 +545,21 @@ print_health() {
             _add "fastnat=1 — трафик идёт мимо conntrack, стратегии не применяются"
     fi
 
+    # «Не запущен» без причины — это половина ответа, за которой всегда следует
+    # круг переписки. Причина уже собрана секцией service, здесь на неё ссылаемся.
     pgrep -f 'nfq2/nfqws2' >/dev/null 2>&1 || \
-        _add "nfqws2 не запущен — обход не работает"
+        _add "nfqws2 не запущен — обход не работает (причина в разделе service, строка «причина отказа»)"
+
+    # Половина правил на месте, половины нет. Снаружи это выглядит не как поломка,
+    # а как «стратегия залипла»: десинк работает, а переключать её не на чем —
+    # признаки неудачи приходят входящими пакетами, которых движок не видит.
+    if pgrep -f 'nfq2/nfqws2' >/dev/null 2>&1; then
+        local _nfq_in
+        _nfq_in=$( ( (iptables -t mangle -L INPUT -n 2>/dev/null || true); \
+                     (iptables -t mangle -L FORWARD -n 2>/dev/null || true) ) | grep -c NFQUEUE || true)
+        [ "${_nfq_in:-0}" -eq 0 ] && \
+            _add "правила для входящих пакетов отсутствуют — обход работает, но стратегии перестанут переключаться сами"
+    fi
 
     if command -v df >/dev/null 2>&1; then
         local freek

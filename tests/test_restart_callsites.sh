@@ -314,7 +314,12 @@ fi
 # 2. run_daemon
 # ==============================================================================
 FNS_RUN="$TMP/fns_run.sh"
-load_fns "$FNS_RUN" z2k_pid_running z2k_fracsleep_avail z2k_wait_queue_bound run_daemon
+# z2k_daemon_err_file / z2k_daemon_explain — зависимости run_daemon с 2026-08-13:
+# демон запускается со stderr в файл, чтобы причина отказа не пропадала. Без них
+# извлечённый run_daemon падает на «command not found», и обвязка проверяет не
+# то, что выполняется на роутере.
+load_fns "$FNS_RUN" z2k_pid_running z2k_fracsleep_avail z2k_wait_queue_bound \
+                    z2k_daemon_err_file z2k_daemon_explain run_daemon
 export FNS_RUN
 # Same functions, but with the hardcoded proc path repointed at a fixture so the
 # real z2k_wait_queue_bound can run off-router. ONLY that literal is rewritten.

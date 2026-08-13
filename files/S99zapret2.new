@@ -1196,6 +1196,56 @@ Z2K_DAEMON_FAIL_FILE="${Z2K_DAEMON_FAIL_FILE:-/tmp/.z2k-daemon-failures}"
 
 z2k_daemon_fail_reset() { : > "$Z2K_DAEMON_FAIL_FILE" 2>/dev/null || true; }
 z2k_daemon_fail_note()  { echo "$1" >> "$Z2K_DAEMON_FAIL_FILE" 2>/dev/null || true; }
+
+# Причина отказа старта. До 2026-08-13 демон запускался как `>/dev/null 2>&1`,
+# то есть nfqws2 честно писал, что именно ему не понравилось, а мы это стирали.
+# Человек получал «ERROR: Daemon 1 failed to start» и больше ни слова — по такому
+# сообщению диагностировать нечего, и полевой случай 08-13 закончился слепым
+# перезапуском роутера вместо починки.
+#
+# Ловим stderr в файл на время старта. Он нужен ровно до решения «поднялся или
+# нет»: при успехе файл удаляется (демон продолжает писать в уже отвязанный
+# inode, и /tmp = tmpfs не растёт после его смерти), при отказе — печатается.
+z2k_daemon_err_file()
+{
+    echo "/tmp/.z2k-daemon-${1}-${2}.err"
+}
+
+# Что печатать, когда демон не поднялся.
+#
+# Сначала то, что сказал сам nfqws2 — это точный ответ. Если он не сказал ничего
+# (умер до того, как успел, либо причина не в разборе параметров), повторяем
+# запуск с --dry-run: он проверяет параметры, грузит списки и блобы, но НЕ
+# занимает очередь, поэтому безопасен и в этот момент, и вообще. Пустой вывод у
+# обоих означает, что параметры верны — и тогда это единственный полезный факт,
+# который у нас есть: искать надо не в конфиге.
+z2k_daemon_explain()
+{
+    # $1 - err-файл, $2 - бинарник, $3 - аргументы
+    local _n=0
+    if [ -s "$1" ]; then
+        _n=$(wc -l < "$1" 2>/dev/null | tr -d ' \t')
+        echo "  причина (от nfqws2):"
+        tail -n 5 "$1" 2>/dev/null | sed 's/^/    /'
+        [ "${_n:-0}" -gt 5 ] && echo "    (полностью: $1)"
+        return 0
+    fi
+    local _dry
+    # shellcheck disable=SC2086  # $3 — строка аргументов, нужно словоделение
+    _dry=$("$2" --dry-run $3 2>&1)
+    if [ $? -ne 0 ]; then
+        echo "  причина (проверка параметров):"
+        # Баннер версии и пустые строки — шум: настоящая причина идёт последней,
+        # и без отсева она тонет в тех же пяти строках, что мы показываем.
+        printf '%s\n' "$_dry" \
+            | grep -viE '^loading|^Loaded |^Running as|^github version|^$' \
+            | tail -n 5 | sed 's/^/    /'
+    else
+        echo "  параметры конфигурации разобраны без ошибок — дело не в них."
+        echo "  проверьте, не занята ли очередь ${QNUM:-200} другим процессом:"
+        echo "    cat /proc/net/netfilter/nfnetlink_queue"
+    fi
+}
 z2k_daemon_fail_count() {
     [ -f "$Z2K_DAEMON_FAIL_FILE" ] || { echo 0; return 0; }
     wc -l < "$Z2K_DAEMON_FAIL_FILE" 2>/dev/null | tr -d ' \t' || echo 0
@@ -1213,7 +1263,10 @@ run_daemon()
     echo "Starting daemon $1: $2 $3"
 
     # ������ � ���� � ����������� PID
-    $2 $3 >/dev/null 2>&1 &
+    local ERRFILE
+    ERRFILE=$(z2k_daemon_err_file "$DAEMONBASE" "$1")
+    : > "$ERRFILE" 2>/dev/null || true
+    $2 $3 >/dev/null 2>"$ERRFILE" &
     local PID=$!
 
     # ��������� PID
@@ -1243,9 +1296,14 @@ run_daemon()
     # trade in the path this whole change exists to shorten.
     if z2k_pid_running "$PID"; then
         echo "Daemon $1 started with PID $PID"
+        # Демон жив и держит fd открытым. Отвязываем файл: то, что он напишет в
+        # stderr дальше, уйдёт в inode без имени и освободится вместе с
+        # процессом — tmpfs не копится, а мусорного файла в /tmp не остаётся.
+        rm -f "$ERRFILE" 2>/dev/null || true
         return 0
     else
         echo "ERROR: Daemon $1 failed to start"
+        z2k_daemon_explain "$ERRFILE" "$2" "$3"
         z2k_daemon_fail_note "$1"
         rm -f "$PIDFILE"
         return 1

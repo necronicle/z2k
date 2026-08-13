@@ -423,7 +423,13 @@ done
 # ===========================================================================
 # nfqws2 gets the positive readiness wait; everything else keeps `sleep 1`.
 # Runs the REAL run_daemon with a stub binary, stub PIDDIR and traced waits.
-{ extract_fn z2k_pid_running "$INIT"; echo; extract_fn run_daemon "$INIT"; } > "$TMP/rd.sh"
+# z2k_daemon_err_file/_explain — зависимости run_daemon с 2026-08-13 (stderr
+# демона больше не выбрасывается). Без них перенаправление 2>"$ERRFILE" уходит в
+# пустое имя, старт «проваливается» на ровном месте, и тест меряет обвязку.
+{ extract_fn z2k_pid_running "$INIT"; echo
+  extract_fn z2k_daemon_err_file "$INIT"; echo
+  extract_fn z2k_daemon_explain "$INIT"; echo
+  extract_fn run_daemon "$INIT"; } > "$TMP/rd.sh"
 [ -s "$TMP/rd.sh" ] || no "run_daemon extractable" "a body" "empty"
 mkdir -p "$TMP/bin" "$TMP/pids"
 for b in nfqws2 tpws2; do
