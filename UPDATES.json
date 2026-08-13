@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 16,
-  "current": "r-75.14",
+  "seq": 17,
+  "current": "p-75.15",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "4e3d74d87e00428e51e78742cedabfa9234bbc247bf631d1ef6b31a839006c67",
@@ -106,7 +106,7 @@
   "webpanel/init.d/S96z2k-webpanel": "d064a61c1845e2a4ade4ed90cb3b6a82f3705fc6784f90f925d27c5bd7bcedbe",
   "webpanel/install.sh": "1b97eba0031d66aa12fc2405602206fb631b03823265d51286f19b41ddc1b3ef",
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
-  "webpanel/www/app.js": "e09c8c6100457463e29c2af2381da97ae20aae254fdc51cdb1eb5228041f8b96",
+  "webpanel/www/app.js": "0bd19ac1a5d1736e1082f26cb467b699f0a6c80ffdb39f3765e4725ef314853b",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
   "webpanel/www/fonts/FiraCode-400-cyrillic.woff2": "98651a0dc8960be552a69783b5b35d3a00ccb999584d9a152b50632c8e87bbcf",
   "webpanel/www/fonts/FiraCode-400-latin.woff2": "d32d5b5a7c9720cf3812f7d1e3ebdb54116f8f656e7471a03a5a93bdd93c98b3",
@@ -118,7 +118,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "dc2f4258b6e94d1faa2c81ba21c621068f437671cf8db72ad4bbcb87bc3a80e0",
+  "webpanel/www/index.html": "361cbeb846cf2736ad516f96368982ad02d00780ab6bca993cf5eb55d28b0032",
   "webpanel/www/style.css": "d64c61e652b12b4b2fdfe59fe88595f59cc169f62724fafe312628964dcabaf6",
   "z2k.sh": "74a5ceec0260845559f51fc2f6a828a4741920c807ae0463c6a2a0c1ca3bdbf8"
   },
@@ -289,6 +289,7 @@
 {"v": "p-75.11", "type": "patch", "ts": "2026-08-12T06:35:02Z", "ref": "p-75.11", "desc": "Роутерам с большим объёмом памяти больше не выдаётся расширенный список заблокированных сайтов: он занимал впятеро больше оперативной памяти, а разница в охвате того не стоила. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "files/z2k-geosite.sh", "lib/menu.sh", "webpanel/www/app.js", "UPDATES.json"]},
 {"v": "p-75.12", "type": "patch", "ts": "2026-08-12T12:40:45Z", "ref": "p-75.12", "desc": "На странице «Диагностика» появилась проверка домена: вводите адрес и сразу видите, открывается ли он, на каком шаге обрывается соединение и блокируют ли его. Раньше это было только в меню роутера.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]},
 {"v": "p-75.13", "type": "patch", "ts": "2026-08-12T14:10:59Z", "ref": "p-75.13", "desc": "Имя политики доступа Keenetic теперь можно вводить по-русски и с пробелами — форма больше не отклоняет такие имена. Адрес и порт веб-панели можно задать заранее, ещё до её установки, и вернуть к заводским значениям.", "changed_files": ["webpanel/www/index.html", "lib/webpanel.sh", "webpanel/www/app.js", "UPDATES.json"]},
-{"v": "r-75.14", "type": "reinstall", "ts": "2026-08-12T22:38:55Z", "ref": "r-75.14", "desc": "В панели появился необязательный вход по паролю — тому же, что у веб-интерфейса роутера; по умолчанию выключен. Панель теперь умеет отвечать и по IPv6, и эта настройка больше не сбрасывается при обновлении. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]}
+{"v": "r-75.14", "type": "reinstall", "ts": "2026-08-12T22:38:55Z", "ref": "r-75.14", "desc": "В панели появился необязательный вход по паролю — тому же, что у веб-интерфейса роутера; по умолчанию выключен. Панель теперь умеет отвечать и по IPv6, и эта настройка больше не сбрасывается при обновлении. Добавлен новый спонсор проекта.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/style.css", "UPDATES.json"]},
+{"v": "p-75.15", "type": "patch", "ts": "2026-08-13T16:46:50Z", "ref": "p-75.15", "desc": "Исправлен вход по паролю в веб-панель: при обращении по локальному адресу он не срабатывал. По умолчанию вход по паролю выключен — если вы его не включали, изменение вас не касается.", "changed_files": ["webpanel/www/index.html", "webpanel/www/app.js", "UPDATES.json"]}
   ]
 }
