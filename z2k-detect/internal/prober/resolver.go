@@ -246,6 +246,23 @@ func isPrivateIP(host string) bool {
 	return false
 }
 
+// poolDial возвращает Dial-функцию резолвера для одного сервера пула.
+//
+// network передаётся КАК ЗАПРОШЕНО, а не прибитый "udp". Резолвер Go
+// начинает с UDP и при усечённом ответе (TC=1) повторяет по TCP тем же
+// Dial'ом; прибитый "udp" подсовывал TCP-повтору UDP-сокет —
+// length-prefixed запрос уходил в никуда, повтор таймаутил, и большой
+// ответ (>1232 Б, либо EDNS срезан миддлбоксом) превращался в «резолвер
+// не ответил» у ВСЕХ резолверов пула разом. Ровно эта ошибка уже была
+// найдена и исправлена в rt-proxy (directResolver) — с тем же
+// обоснованием в комментарии там. Вынесено в функцию, чтобы тест мог
+// доказать соответствие network↔сокет, не поднимая настоящий DNS.
+func poolDial(srv string) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{Timeout: dnsTimeout}).DialContext(ctx, network, srv)
+	}
+}
+
 // resolveDomain asks every nameserver from the system's resolv.conf in
 // parallel and returns the IPs of the first successful answer. Full
 // per-resolver attempts are returned so the caller can surface
@@ -265,9 +282,7 @@ func resolveDomain(ctx context.Context, domain string) ([]net.IPAddr, []resolver
 			defer wg.Done()
 			resolver := &net.Resolver{
 				PreferGo: true,
-				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-					return (&net.Dialer{Timeout: dnsTimeout}).DialContext(ctx, "udp", srv)
-				},
+				Dial:     poolDial(srv),
 			}
 			subCtx, cancel := context.WithTimeout(ctx, dnsTimeout)
 			defer cancel()

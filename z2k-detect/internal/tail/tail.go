@@ -70,17 +70,25 @@ func Follow(ctx context.Context, path string, opts Options) (<-chan string, <-ch
 		}
 
 		openFile := func() error {
+			// СНАЧАЛА открываем новый, ПОТОМ закрываем старый. В обратном
+			// порядке провал os.Open (файл исчез на мгновение между Stat и
+			// Open при ротации) оставлял f=nil при reader'е, глядящем в уже
+			// закрытый файл — следующий ReadString возвращал «file already
+			// closed», это не EOF, и хвост умирал целиком вместе с демоном.
+			// Пакет обещает «surviving … brief disappearance»; со старым
+			// хендлом в руках мы просто дочитываем прежний файл и пробуем
+			// переоткрыться на следующем тике.
+			nf, err := os.Open(path)
+			if err != nil {
+				return err
+			}
 			if f != nil {
 				f.Close()
 				if watcher != nil {
 					_ = watcher.Remove(path)
 				}
 			}
-			var err error
-			f, err = os.Open(path)
-			if err != nil {
-				return err
-			}
+			f = nf
 			if opts.StartAtEnd {
 				if _, err := f.Seek(0, io.SeekEnd); err != nil {
 					return err
@@ -154,10 +162,26 @@ func Follow(ctx context.Context, path string, opts Options) (<-chan string, <-ch
 			if time.Since(lastStat) >= opts.ReopenCheckEvery {
 				lastStat = time.Now()
 				fi, err := os.Stat(path)
-				if err == nil && inode(fi) != curIno {
-					_ = openFile()
-					if watcher != nil {
-						events = watcher.Events
+				if err == nil {
+					reopen := inode(fi) != curIno
+					// Усечение: тот же inode, но файл стал короче нашей
+					// позиции (logrotate copytruncate; AGH умеет резать
+					// querylog.json на месте). Раньше проверки не было
+					// вовсе — заголовок пакета обещал «surviving
+					// truncation», а на деле offset оставался за концом
+					// файла, чтение возвращало EOF, и события молча
+					// пропадали, пока файл не дорастёт до старой позиции.
+					if !reopen {
+						if pos, perr := f.Seek(0, io.SeekCurrent); perr == nil &&
+							fi.Size() < pos-int64(reader.Buffered()) {
+							reopen = true
+						}
+					}
+					if reopen {
+						_ = openFile()
+						if watcher != nil {
+							events = watcher.Events
+						}
 					}
 				}
 			}

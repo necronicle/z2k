@@ -37,14 +37,20 @@ var z2kHostlists = []struct {
 }
 
 // findDomainInZ2kLists scans the well-known z2k hostlists for `domain`.
-// Returns the human label of the first file that contains an exact match,
-// or empty string if not found. Comment lines and blanks are skipped.
+// Returns the human label of the first file that covers it, or empty
+// string if not found. Comment lines and blanks are skipped.
 //
-// Match is case-insensitive (DNS names are case-insensitive per RFC 1035),
-// exact-string against the trimmed line. No glob/wildcard logic; the
-// hostlists are flat domain lists.
+// Match is case-insensitive (DNS names are case-insensitive per RFC 1035)
+// and BY SUFFIX, mirroring nfqws2 semantics: в хостлистах поддомены
+// учитываются автоматически (manual, «формат хостлистов»), и движковый
+// skip-список (engine.skippedLocked) ходит по родительским меткам ровно
+// так же. Точное сравнение здесь противоречило обоим: [Y] на
+// rr3---sn-xyz.googlevideo.com отвечал «домен НЕ в списках — добавьте в
+// extra-domains», хотя googlevideo.com лежит в списке и уже покрывает
+// его. Человек следовал совету и засорял extra-domains записями,
+// которые ничего не меняли.
 func findDomainInZ2kLists(domain string) string {
-	needle := strings.ToLower(strings.TrimSpace(domain))
+	needle := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 	if needle == "" {
 		return ""
 	}
@@ -65,13 +71,27 @@ func findDomainInZ2kLists(domain string) string {
 func scanForDomain(f *os.File, needle string) bool {
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+		line := strings.ToLower(strings.TrimSpace(sc.Text()))
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.ToLower(line) == needle {
+		if coversDomain(line, needle) {
 			return true
 		}
 	}
 	return false
+}
+
+// coversDomain reports whether hostlist entry covers needle: exact match
+// or needle is a subdomain of entry (dot-anchored, so "evilgooglevideo.com"
+// is NOT covered by "googlevideo.com"). Entries starting with '^' are
+// nfqws2's «без поддоменов» form — exact match only.
+func coversDomain(entry, needle string) bool {
+	if exact := strings.TrimPrefix(entry, "^"); exact != entry {
+		return needle == exact
+	}
+	if needle == entry {
+		return true
+	}
+	return strings.HasSuffix(needle, "."+entry)
 }
