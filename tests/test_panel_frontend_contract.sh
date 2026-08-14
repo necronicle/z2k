@@ -15,7 +15,10 @@
 # POSIX sh.
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-JS="$HERE/webpanel/www/app.js"
+# Источник — ВЕСЬ JavaScript панели, а не один файл: с 2026-08-14 фронтенд
+# разбит на модули, и греп по точке входа не нашёл бы ничего (см.
+# tests/lib/panel_js.sh).
+JS=$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")
 CSS="$HERE/webpanel/www/style.css"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/pfront.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT

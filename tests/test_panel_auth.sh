@@ -38,7 +38,10 @@ ROOT=$(cd "$HERE/.." && pwd)
 AUTH="$ROOT/webpanel/cgi/auth.sh"
 API="$ROOT/webpanel/cgi/api.sh"
 WP="$ROOT/lib/webpanel.sh"
-APPJS="$ROOT/webpanel/www/app.js"
+# Источник — ВЕСЬ JavaScript панели, а не один файл: с 2026-08-14 фронтенд
+# разбит на модули, и греп по точке входа не нашёл бы ничего (см.
+# tests/lib/panel_js.sh).
+APPJS=$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")
 
 for f in "$AUTH" "$API" "$WP" "$APPJS"; do
     [ -f "$f" ] || { printf '[FAIL] нет %s\n' "$f"; exit 1; }

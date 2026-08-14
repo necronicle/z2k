@@ -28,7 +28,10 @@ CFG="$HERE/lib/config_official.sh"
 ACTIONS="$HERE/webpanel/cgi/actions.sh"
 API="$HERE/webpanel/cgi/api.sh"
 MENU="$HERE/lib/menu.sh"
-APPJS="$HERE/webpanel/www/app.js"
+# Источник — ВЕСЬ JavaScript панели, а не один файл: с 2026-08-14 фронтенд
+# разбит на модули, и греп по точке входа не нашёл бы ничего (см.
+# tests/lib/panel_js.sh).
+APPJS=$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")
 INST="$HERE/lib/install.sh"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cstrat.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT

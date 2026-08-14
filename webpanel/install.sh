@@ -351,6 +351,16 @@ for _f in cgi/auth.sh cgi/actions.sh cgi/api.sh \
           lighttpd.conf init.d/S96z2k-webpanel; do
     [ -s "$SRC_DIR/$_f" ] || MISSING="$MISSING $_f"
 done
+# Модули панели. Проверяются ЗДЕСЬ, вместе с остальным, а не при копировании:
+# ниже начинаются разрушающие шаги, и обнаружить пропажу после них — значит
+# оставить человека без рабочей панели. Поимённого списка нет намеренно:
+# он разошёлся бы с деревом при первой же правке. Проверяем то, без чего
+# панель заведомо мертва, — что каталог есть и в нём есть модули.
+if [ ! -d "$SRC_DIR/www/js" ]; then
+    MISSING="$MISSING www/js/(каталог)"
+elif [ "$(find "$SRC_DIR/www/js" -name '*.js' 2>/dev/null | wc -l)" -eq 0 ]; then
+    MISSING="$MISSING www/js/(пусто)"
+fi
 if [ -n "$MISSING" ]; then
     echo "  source files missing or empty:$MISSING" >&2
     echo "  refusing to touch the installed panel — re-download z2k and retry" >&2
@@ -513,6 +523,24 @@ ln -sf "$WEBPANEL_DIR/cgi/api.sh" "$STAGE_WWW/cgi-bin/api"
 cp -f "$SRC_DIR/www/index.html"  "$STAGE_WWW/index.html"
 cp -f "$SRC_DIR/www/app.js"      "$STAGE_WWW/app.js"
 cp -f "$SRC_DIR/www/style.css"   "$STAGE_WWW/style.css"
+
+# Модули панели — ДЕРЕВОМ, а не поимённо: по той же причине, что и шрифты ниже
+# (список разойдётся с деревом при первой правке), но с обратным отношением к
+# пропаже. Шрифт не доехал — панель работает системным шрифтом. Модуль не
+# доехал — точка входа падает на первом же import, и панель не открывается
+# вовсе, молча. Поэтому здесь не мягкий guard, а пересчёт и жёсткий отказ.
+_js_src=$(find "$SRC_DIR/www/js" -name '*.js' | wc -l)
+mkdir -p "$STAGE_WWW/js"
+if ! cp -R "$SRC_DIR/www/js/." "$STAGE_WWW/js/"; then
+    echo "  не удалось скопировать модули панели" >&2
+    exit 1
+fi
+_js_dst=$(find "$STAGE_WWW/js" -name '*.js' | wc -l)
+if [ "$_js_src" -ne "$_js_dst" ]; then
+    echo "  модулей скопировано $_js_dst из $_js_src — установка прервана" >&2
+    exit 1
+fi
+find "$STAGE_WWW/js" -name '*.js' -exec chmod 644 {} + 2>/dev/null || true
 # Favicon is decorative — guard against missing file so a partial download
 # (e.g. CDN miss on the SVG) doesn't fail the entire webpanel install and
 # leave the panel dead after auto-update reinstall.

@@ -133,6 +133,19 @@
 <div class="menu-backdrop" id="menu-backdrop" hidden></div>
 <main id="app"></main>
 <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
-<script src="app.js?v=r-75.17"></script>
+<!-- Точка входа — ES-модуль. Вся работа в js/, разложена по слоям; связность
+     мерена по AST, граф ациклический (см. шапку app.js).
+     Модуль откладывается до разбора разметки, как и прежний тег в конце body. -->
+<script type="module" src="app.js?v=r-75.17"></script>
+<!-- Браузер без модулей (старше 2018 года) молча не выполнил бы НИЧЕГО и
+     показал бы пустую страницу без единого объяснения. -->
+<script nomodule>
+  document.addEventListener("DOMContentLoaded", function () {
+    var a = document.getElementById("app");
+    if (a) a.innerHTML = '<div class="card"><h2>Браузер слишком старый</h2>' +
+      '<p class="desc">Панель использует модули JavaScript — их поддерживают ' +
+      'браузеры с 2018 года. Откройте её в более новом браузере.</p></div>';
+  });
+</script>
 </body>
 </html>

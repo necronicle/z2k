@@ -3,7 +3,7 @@
 #
 # ЗАЧЕМ. Спонсоры перечислены ТРИЖДЫ и в трёх разных форматах: README.md
 # (маркдаун-список), lib/menu.sh (ASCII-коробка фиксированной ширины) и
-# webpanel/www/app.js (карточки раздела «Благодарности»). Добавляют человека
+# webpanel/www/js/pages/credits.js (карточки «Благодарности»). Добавляют человека
 # руками в каждое место. Забыть одно из трёх — вопрос времени, а заметить это
 # некому: ошибки не будет нигде, просто человек, давший денег, не увидит себя
 # там, куда пойдёт смотреть.
@@ -26,7 +26,7 @@ no() { FAIL=$((FAIL+1)); printf '[FAIL] %s\n%s\n' "$1" "$2"; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 
-for f in README.md lib/menu.sh webpanel/www/app.js; do
+for f in README.md lib/menu.sh webpanel/www/js/pages/credits.js; do
     [ -f "$ROOT/$f" ] || { printf '[FAIL] нет %s\n' "$f"; exit 1; }
 done
 
@@ -41,7 +41,9 @@ import re, sys, html
 root = sys.argv[1]
 rd_txt = open(f"{root}/README.md", encoding="utf-8").read()
 mn_txt = open(f"{root}/lib/menu.sh", encoding="utf-8").read()
-js_txt = open(f"{root}/webpanel/www/app.js", encoding="utf-8").read()
+# Карточки живут в модуле «Благодарности» — фронтенд разбит на модули
+# 2026-08-14, и чтение app.js возвращало бы точку входа без единого имени.
+js_txt = open(f"{root}/webpanel/www/js/pages/credits.js", encoding="utf-8").read()
 
 # README: список под заголовком благодарности, до первой пустой строки после него.
 m = re.search(r'^## .*спонсор.*$', rd_txt, re.M | re.I)

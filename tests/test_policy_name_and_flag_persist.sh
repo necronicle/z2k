@@ -70,7 +70,7 @@ done
 if ! command -v node >/dev/null 2>&1; then
     printf '[SKIP] сверка формы панели с сервером (нет node; в CI проверяется)\n'
 else
-    if grep -q 'NAME_RE *= *\/\^\[A-Za-z0-9_-\]' "$ROOT/webpanel/www/app.js" 2>/dev/null; then
+    if grep -q 'NAME_RE *= *\/\^\[A-Za-z0-9_-\]' "$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")" 2>/dev/null; then
         no "форма панели допускает не только латиницу" \
            "в app.js вернулся список [A-Za-z0-9_-] — форма снова отбивает кириллицу"
     else
@@ -92,7 +92,7 @@ else
       for (const v of good) if (!nameOk(v)) wrong.push("отбито хорошее: " + v);
       for (const v of bad)  if (nameOk(v))  wrong.push("принято опасное: " + v);
       console.log(wrong.length ? wrong.join(" | ") : "OK");
-    ' "$ROOT/webpanel/www/app.js" 2>&1)
+    ' "$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")" 2>&1)
 
     case "$_cmp" in
         OK)      ok "форма панели выносит тот же вердикт, что и сервер, на всех входах" ;;
@@ -102,7 +102,7 @@ else
 
     # Длина в СИМВОЛАХ, а не в кодовых единицах: на сервере считаются символы
     # UTF-8, и 32 кириллических имени обязаны приниматься обеими сторонами.
-    if grep -q 'Array.from(v).length' "$ROOT/webpanel/www/app.js"; then
+    if grep -q 'Array.from(v).length' "$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")"; then
         ok "длина имени в форме считается символами, а не байтами/кодовыми единицами"
     else
         no "длина в символах" "Array.from(v).length — иначе кириллица упрётся в лимит вдвое раньше"

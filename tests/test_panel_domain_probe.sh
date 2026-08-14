@@ -29,7 +29,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 API="$ROOT/webpanel/cgi/api.sh"
 ACT="$ROOT/webpanel/cgi/actions.sh"
-APPJS="$ROOT/webpanel/www/app.js"
+# Источник — ВЕСЬ JavaScript панели, а не один файл: с 2026-08-14 фронтенд
+# разбит на модули, и греп по точке входа не нашёл бы ничего (см.
+# tests/lib/panel_js.sh).
+APPJS=$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")
 CSS="$ROOT/webpanel/www/style.css"
 MENU="$ROOT/lib/menu.sh"
 

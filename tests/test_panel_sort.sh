@@ -22,7 +22,10 @@
 # otherwise; the structural ones always run. POSIX sh.
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-JS="$HERE/webpanel/www/app.js"
+# Источник — ВЕСЬ JavaScript панели, а не один файл: с 2026-08-14 фронтенд
+# разбит на модули, и греп по точке входа не нашёл бы ничего (см.
+# tests/lib/panel_js.sh).
+JS=$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")
 CSS="$HERE/webpanel/www/style.css"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/psort.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
@@ -83,7 +86,17 @@ if [ -n "$mob_line" ] && [ -n "$hide_line" ]; then
 fi
 
 # --- dismissal, per NN/g -----------------------------------------------------
-sheet=$(awk '/---------- Sort sheet \(mobile\)/,/---------- Boot/' "$JS")
+# Раздел вырезается по границе МОДУЛЯ, а не по маркеру-комментарию.
+#
+# Разбиение 2026-08-14 убрало маркеры вида «// ---------- Sort sheet ----------»:
+# в модулях имя файла и есть маркер, дублировать его комментарием незачем.
+# Шторка живёт в js/chrome.js вместе с остальной оболочкой (боковая панель,
+# тема, выдвижное меню) — берём модуль целиком. Надмножество здесь безопасно:
+# проверки ниже ищут конкретные признаки шторки, а не отсутствие чужих.
+sheet=$(awk '/===== js\/chrome\.js =====/{f=1;next} f && /===== /{exit} f' "$JS")
+if [ -z "$sheet" ]; then
+    no "модуль оболочки вырезан" "непустой кусок" "пусто — граница модуля не найдена"
+fi
 case "$sheet" in
     *'id="sort-sheet-close"'*) ok "у шторки есть видимая кнопка закрытия" ;;
     *) no "у шторки есть видимая кнопка закрытия" "sort-sheet-close" "нет" ;;
@@ -163,8 +176,11 @@ esac
 # already in the browser, so re-sorting them is a render, not a fetch — the
 # first version refetched on every column tap and every pick in the sheet.
 case "$sheet" in
-    *resortState*) ok "шторка пересортировывает без запроса к роутеру" ;;
-    *) no "шторка пересортировывает без запроса" "resortState()" "loadState()" ;;
+    # После инверсии 2026-08-14 шторка не знает, кого звать: страница передаёт
+    # действие при открытии. Проверяем, что зовётся переданное, а не сетевой
+    # путь — смысл проверки тот же, имя другое.
+    *onSortPicked*) ok "шторка пересортировывает без запроса к роутеру" ;;
+    *) no "шторка пересортировывает без запроса" "onSortPicked()" "loadState()" ;;
 esac
 case "$hdr" in
     *resortState*) ok "клик по заголовку тоже без запроса" ;;

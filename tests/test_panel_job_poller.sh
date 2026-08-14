@@ -26,7 +26,10 @@ no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-APPJS="$ROOT/webpanel/www/app.js"
+# Источник — ВЕСЬ JavaScript панели, а не один файл: с 2026-08-14 фронтенд
+# разбит на модули, и греп по точке входа не нашёл бы ничего (см.
+# tests/lib/panel_js.sh).
+APPJS=$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")
 HARNESS="$HERE/panel_job_poller_harness.js"
 
 [ -f "$APPJS" ]   || { printf '[FAIL] нет %s\n' "$APPJS"; exit 1; }

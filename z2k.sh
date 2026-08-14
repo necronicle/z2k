@@ -1071,20 +1071,48 @@ download_init_script() {
     # z2k.sh bootstraps files into /tmp/z2k/; install.sh copies from /tmp/z2k/webpanel.
     local webpanel_dir="${WORK_DIR}/webpanel"
     mkdir -p "$webpanel_dir/cgi" "$webpanel_dir/www" "$webpanel_dir/init.d" \
-             "$webpanel_dir/www/fonts"
+             "$webpanel_dir/www/fonts" \
+             "$webpanel_dir/www/js/core" "$webpanel_dir/www/js/pages"
     # Шрифты панели тянутся сюда же. Они не роскошь: без них панель рисуется
     # системным шрифтом, и это ЗАМЕТНО. Из интернета их не берём принципиально —
     # устройство стоит ради обхода блокировок, и ждать чужой CDN на первом
     # экране нельзя (раньше index.html тянул их с fonts.googleapis.com
     # блокирующим <link>). Каждый файл опционален: не доехал — панель работает.
     #
-    # Список обязан совпадать с @font-face в webpanel/www/style.css. Разойдётся
-    # — браузер молча откатится на системный шрифт, и причину будет не видно.
+    # Список шрифтов обязан совпадать с @font-face в webpanel/www/style.css.
+    # Разойдётся — браузер молча откатится на системный шрифт.
+    #
+    # МОДУЛИ ПАНЕЛИ (www/js/**) — другое дело: пропущенный здесь модуль это не
+    # косметика, а мёртвая панель. Каталога у raw.githubusercontent нет, листинг
+    # взять неоткуда, поэтому список именной — но разойтись он не может:
+    # tests/test_panel_modules_delivered.sh сверяет его с деревом на диске и
+    # краснеет, если добавленный модуль сюда не вписан.
     for wp_file in \
         install.sh uninstall.sh lighttpd.conf \
         init.d/S96z2k-webpanel \
         cgi/api.sh cgi/auth.sh cgi/actions.sh \
         www/index.html www/app.js www/style.css www/favicon.svg \
+        www/js/chrome.js \
+        www/js/core/api.js \
+        www/js/core/auth.js \
+        www/js/core/clipboard.js \
+        www/js/core/dom.js \
+        www/js/core/loadorder.js \
+        www/js/core/toast.js \
+        www/js/job.js \
+        www/js/pages/credits.js \
+        www/js/pages/dashboard.js \
+        www/js/pages/diag.js \
+        www/js/pages/exclude.js \
+        www/js/pages/extra-domains.js \
+        www/js/pages/policy.js \
+        www/js/pages/strategies.js \
+        www/js/pages/telemetry.js \
+        www/js/pages/toggles.js \
+        www/js/pages/update.js \
+        www/js/pages/warp.js \
+        www/js/router.js \
+        www/js/state-model.js \
         www/fonts/FiraCode-400-cyrillic.woff2 \
         www/fonts/FiraCode-400-latin.woff2 \
         www/fonts/FiraSans-400-cyrillic.woff2 \

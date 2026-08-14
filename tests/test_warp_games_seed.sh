@@ -137,7 +137,10 @@ grep -q 'ls "${ZAPRET2_DIR}/lists/warp/games/"\*.txt' "$INST" \
     || no "и с тем же гейтом на пустоту" "проверка каталога" "нет"
 
 # --- the panel must not promise a day of waiting any more --------------------
-APPJS="$HERE/webpanel/www/app.js"
+# Источник — ВЕСЬ JavaScript панели, а не один файл: с 2026-08-14 фронтенд
+# разбит на модули, и греп по точке входа не нашёл бы ничего (см.
+# tests/lib/panel_js.sh).
+APPJS=$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")
 grep -q 'раз в сутки' "$APPJS" \
     && no "текст про ожидание суток убран" "нет такого текста" "остался" \
     || ok "текст про ожидание суток убран"

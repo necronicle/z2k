@@ -27,7 +27,7 @@ fi
 ROUTES="dashboard toggles strategies state warp whitelist exclude extra-domains diag credits"
 
 # shellcheck disable=SC2086
-out=$(node "$ROOT/tests/panel_harness.js" "$ROOT/webpanel/www/app.js" $ROUTES 2>&1)
+out=$(node "$ROOT/tests/panel_harness.js" "$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")" $ROUTES 2>&1)
 rc=$?
 printf '%s\n' "$out" | sed 's/^/    /'
 for r in $ROUTES; do
@@ -58,7 +58,7 @@ meta_case() {
     awk -v pat="$pattern" '
         $0 ~ pat { skip=1 }
         skip { if (/\};[[:space:]]*$/) skip=0; next }
-        { print }' "$ROOT/webpanel/www/app.js" > "$tmp"
+        { print }' "$(sh "$(cd "$(dirname "$0")" && pwd)/lib/panel_js.sh")" > "$tmp"
     if ! grep -q "$pattern" "$tmp"; then
         if node "$ROOT/tests/panel_harness.js" "$tmp" "$route" 2>&1 | grep -q "ПАДАЕТ"; then
             ok "тест ловит поломку: $label"
