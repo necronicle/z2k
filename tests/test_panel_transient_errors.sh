@@ -15,9 +15,17 @@
 #                    и в awaitPanelBack. Сырой текст ошибки печатает больше сорока
 #                    мест в app.js, и все они продолжали показывать людям «404».
 #
-# Поэтому проверяем не одну ветку, а сам источник: текст ошибки рождается в
-# httpError, и для временных статусов он обязан быть человеческим. Тогда все
-# места, которые его показывают, чинятся разом и не могут разойтись снова.
+#   ...и это оказалось верно только наполовину. Источник чинить было правильно,
+#   но обещание «текста нет» выполняется ровно настолько, насколько с ним
+#   считается каждое место ПОКАЗА. Ревью 08-14 пересчитало: 11 мест печатали
+#   пустой текст прямо в разметку (красная плашка «Ошибка» и пустота под ней),
+#   а 26 склеивали «Ошибка: » + e.message ДО вызова toast — и его защита от
+#   пустого текста не срабатывала, потому что строка «Ошибка: » непустая.
+#
+# Поэтому теперь проверяются ОБА конца. Источник: httpError рождает пустой
+# текст для временных статусов. Потребители: показ идёт через общую пару
+# errMsg/errHtml/toastErr, а не через e.message россыпью — иначе следующее
+# добавленное место снова разойдётся с обещанием.
 #
 # POSIX sh + node (без node — честный SKIP, в CI node есть).
 
@@ -188,6 +196,55 @@ if [ -n "$_wait" ]; then
 else
     no "в логе есть счётчик ожидания" "строка «панель пока не отвечает»" \
        "нет — замерший лог снова неотличим от зависшей установки"
+fi
+
+# --- Потребители: пустой текст не должен доходить до человека ------------------
+#
+# Комментарии отсеиваем: тест уже трижды в этом проекте зеленел на прозе,
+# описывающей снятый дефект.
+_code() { grep -vE '^[[:space:]]*(//|\*|/\*)' "$APPJS"; }
+
+_raw_html=$(_code | grep -cE 'escapeHtml\(e\.message\)' || true)
+if [ "${_raw_html:-0}" = "0" ]; then
+    ok "в разметку не печатается сырой e.message (иначе — «Ошибка» и пустота)"
+else
+    no "сырой e.message в разметке" "0 мест" "$_raw_html — при временном статусе там пустота"
+fi
+
+_raw_toast=$(_code | grep -cE 'toast\([^)]*\+ e\.message' || true)
+if [ "${_raw_toast:-0}" = "0" ]; then
+    ok "тосты не склеивают текст до toast (иначе защита от пустоты не сработает)"
+else
+    no "склейка до toast" "0 мест" "$_raw_toast — человек увидит «Ошибка:» без продолжения"
+fi
+
+# Сама пара должна существовать и вести себя как обещано — ИСПОЛНЯЕМ её.
+if command -v node >/dev/null 2>&1; then
+    _beh=$(node -e '
+      const fs = require("fs");
+      const src = fs.readFileSync(process.argv[1], "utf8");
+      const grab = (re, what) => { const m = src.match(re); if (!m) { console.log("MISSING:" + what); process.exit(0); } return m[0]; };
+      const code = grab(/const TRANSIENT_WHY = [\s\S]*?;/, "TRANSIENT_WHY") + "\n" +
+                   grab(/function errMsg\([\s\S]*?\n  \}/, "errMsg") + "\n" +
+                   grab(/function escapeHtml\([\s\S]*?\n  \}/, "escapeHtml") + "\n" +
+                   grab(/function errHtml\([\s\S]*?\n  \}/, "errHtml");
+      const api = new Function(code + "; return { errMsg, errHtml, TRANSIENT_WHY };")();
+      const empty = api.errMsg({ message: "" });
+      const real  = api.errMsg({ message: "403 Forbidden" });
+      console.log(JSON.stringify({
+        emptyBecameHuman: empty === api.TRANSIENT_WHY,
+        realKept: real === "403 Forbidden",
+        htmlNotBlank: api.errHtml({ message: "" }).trim().length > 0,
+      }));
+    ' "$APPJS" 2>&1)
+    case "$_beh" in
+        MISSING:*) no "пара errMsg/errHtml существует" "обе" "${_beh#MISSING:} отсутствует" ;;
+        *'"emptyBecameHuman":true'*'"realKept":true'*'"htmlNotBlank":true'*)
+            ok "пустой текст превращается в человеческий, настоящий отказ сохраняется" ;;
+        *) no "поведение пары" "пустой→человеческий, настоящий→как есть" "$_beh" ;;
+    esac
+else
+    SKIP=$((SKIP+1)); printf '[SKIP] поведение errMsg/errHtml (нет node)\n'
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"

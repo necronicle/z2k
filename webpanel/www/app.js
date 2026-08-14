@@ -144,6 +144,41 @@
     e.transient = !!TRANSIENT_HTTP[status];
     return e;
   }
+
+  // ПАРА К httpError СО СТОРОНЫ ПОКАЗА.
+  //
+  // httpError рождает пустой текст для временных статусов, и обещание «текста
+  // нет» выполняется ровно настолько, насколько с ним считается каждое место
+  // показа. А их 37, и считалось — одно.
+  //
+  // Что было: 11 мест печатали e.message прямо в разметку, давая красную
+  // плашку «Ошибка» с пустотой под ней. Ещё 26 склеивали «Ошибка: » + e.message
+  // ДО вызова toast, из-за чего его защита от пустого текста не срабатывала:
+  // строка «Ошибка: » непустая. То есть починка «убрано как класс» была верна
+  // у источника и неверна у потребителей — человек посреди переустановки
+  // по-прежнему получал испуг, только другой формы.
+  //
+  // Дашборд свою копию этой развилки уже завёл (9f3ea92) — здесь она общая,
+  // чтобы следующее место показа не пришлось чинить отдельно.
+  const TRANSIENT_WHY = "Панель сейчас не отвечает — обычно так выглядит идущее обновление.";
+
+  // Простой текст: для textContent и подписей.
+  function errMsg(e) {
+    return (e && e.message) ? String(e.message) : TRANSIENT_WHY;
+  }
+
+  // Уже экранированный текст: для вставки в разметку.
+  function errHtml(e) {
+    return escapeHtml(errMsg(e));
+  }
+
+  // Тост об ошибке. Пустой текст — осознанное молчание, ровно как задумано у
+  // toast: во время переустановки каждый фоновый загрузчик спотыкается о
+  // переезжающее дерево, и очередь красных плашек не нужна никому.
+  function toastErr(prefix, e) {
+    if (!e || !e.message) return;
+    toast((prefix || "") + e.message, "bad");
+  }
   function isHttpError(e) { return !!e && typeof e.httpStatus === "number"; }
 
   // Отказ ли это на самом деле.
@@ -205,7 +240,24 @@
     const r = await fetch(API + path, { credentials: "same-origin", headers: PANEL_HDR });
     if (!r.ok) {
       let msg = `${r.status} ${r.statusText}`;
-      try { const d = await r.json(); if (d && d.error) msg = d.error; } catch (_) {}
+      let needauth = false;
+      try {
+        const d = await r.json();
+        if (d && d.error) msg = d.error;
+        needauth = !!(d && d.needauth);
+      } catch (_) { /* тело не JSON — оставляем статус как есть */ }
+      // Форма входа, как в остальных трёх помощниках.
+      //
+      // Ветка needauth появилась в 627f756 сразу в apiGet, apiPost и
+      // apiPostText — одним диффом, а сюда не попала. Между тем через
+      // apiGetText идут четыре живых вызова: правка списка WARP (дважды),
+      // выгрузка диагностики и редактор своей стратегии. Сервер на протухшей
+      // сессии отдаёт 401 {needauth:true} на ЛЮБОЙ маршрут, кроме /auth/*,
+      // поэтому человек, открывший вкладку дольше двух часов назад, получал
+      // тост с невнятной причиной и НИ ОДНОГО способа войти — форма не
+      // показывалась вовсе, и оставалось только догадаться перезагрузить
+      // страницу.
+      if (needauth) { showLoginScreen(); throw httpError(401, "", ""); }
       throw httpError(r.status, r.statusText, msg);
     }
     return r.text();
@@ -385,7 +437,7 @@
       try {
         resp = await apiPost("/uninstall", { confirm: "УДАЛИТЬ" });
       } catch (e) {
-        toast("Не удалось запустить удаление: " + e.message, "bad");
+        toastErr("Не удалось запустить удаление: ", e);
         return;
       }
       openJobModal("Удаление z2k", resp.job, {
@@ -412,7 +464,7 @@
           resp = await apiPost("/service/" + action);
         } catch (e) {
           btn.disabled = false;
-          toast("Ошибка запуска: " + e.message, "bad");
+          toastErr("Ошибка запуска: ", e);
           return;
         }
         // Кнопку возвращаем в исходное состояние ДО openJobModal: лок
@@ -489,7 +541,7 @@
     const done = () => { host.hidden = true; host.innerHTML = ""; };
     document.getElementById("stats-ack-ok").addEventListener("click", async () => {
       try { await apiPost("/stats/ack"); toast("Понятно, больше не показываем"); }
-      catch (e) { toast("Ошибка: " + e.message, "bad"); }
+      catch (e) { toastErr("Ошибка: ", e); }
       done();
     });
     document.getElementById("stats-ack-off").addEventListener("click", async () => {
@@ -497,7 +549,7 @@
         await apiPost("/toggle/stats", { value: "0" });
         await apiPost("/stats/ack");
         toast("Сбор статистики выключен");
-      } catch (e) { toast("Ошибка: " + e.message, "bad"); }
+      } catch (e) { toastErr("Ошибка: ", e); }
       done();
     });
   }
@@ -667,7 +719,7 @@
     try {
       resp = await apiPost("/update/apply");
     } catch (e) {
-      toast("Ошибка запуска: " + e.message, "bad");
+      toastErr("Ошибка запуска: ", e);
       return;
     }
     // Persist across "Скрыть" / page reload so the user can resume the
@@ -817,9 +869,7 @@
       //
       // Правка была сделана в r-75.7 и потерялась при возврате прежней
       // раскладки — она к раскладке отношения не имеет.
-      const why = (e && e.message)
-        ? escapeHtml(e.message)
-        : "Панель сейчас не отвечает — обычно так выглядит идущее обновление.";
+      const why = errHtml(e);
       grid.innerHTML =
         '<div class="status-cell warn">' +
           '<div class="label">Состояние роутера</div>' +
@@ -1068,7 +1118,7 @@
         setLockAware($app.querySelector("#tg-disable"), true);
         errBox.hidden = false;
         errBox.innerHTML = `
-          <p class="desc" style="color:var(--bad)">Не удалось прочитать состояние: ${escapeHtml(e.message)}.
+          <p class="desc" style="color:var(--bad)">Не удалось прочитать состояние: ${errHtml(e)}.
              Переключатели заблокированы — панель не знает, что сейчас включено.</p>
           <div class="btn-row" style="margin-bottom:10px">
             <button class="btn btn-primary" id="toggles-retry">Повторить</button>
@@ -1131,7 +1181,7 @@
         resp = await apiPost("/tunnel/" + action);
       } catch (e) {
         restoreBtns();
-        toast("Ошибка: " + e.message, "bad");
+        toastErr("Ошибка: ", e);
         return;
       }
       const expectRunning = (action === "enable");
@@ -1150,7 +1200,7 @@
           } catch (e) {
             // network blip — продолжим
           }
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => { setTimeout(r, 500); });
         }
         return false;
       }
@@ -1235,7 +1285,7 @@
         }
       } catch (e) {
         if (_stale("policy", seq)) return;
-        setPolicyStatus("error", "Ошибка: " + e.message);
+        setPolicyStatus("error", "Ошибка: " + errMsg(e));
       }
     }
     loadPolicyStatus();
@@ -1276,7 +1326,7 @@
         resp = await apiPost("/policy/save", { name: v, exclude });
       } catch (e) {
         saveBtn.disabled = false;
-        toast("Ошибка: " + e.message, "bad");
+        toastErr("Ошибка: ", e);
         return;
       }
       if (resp && resp.job) {
@@ -1358,7 +1408,7 @@
       box.checked = !box.checked; // revert
       box.disabled = false;
       sw.classList.remove("loading");
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
       return;
     }
     // Backend async — открываем модалку с live-логом. Состояние switch'а
@@ -1513,7 +1563,7 @@
       d = await apiGet("/warp/games");
     } catch (e) {
       if (_stale("warpGames", seq)) return;
-      host.innerHTML = `<p class="desc">Не удалось загрузить: ${escapeHtml(e.message)}</p>`;
+      host.innerHTML = `<p class="desc">Не удалось загрузить: ${errHtml(e)}</p>`;
       return;
     }
     if (_stale("warpGames", seq)) return;
@@ -1556,7 +1606,7 @@
       await apiPost("/warp/games/toggle", { name: name, value: wanted });
     } catch (e) {
       box.checked = !box.checked;   // revert: the server did not accept it
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
       box.disabled = false;
       return;
     }
@@ -1574,7 +1624,7 @@
       d = await apiGet("/warp/status");
     } catch (e) {
       if (_stale("warpStatus", seq)) return;
-      grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${escapeHtml(e.message)}</div></div>`;
+      grid.innerHTML = `<div class="status-cell bad"><div class="label">Ошибка</div><div class="value">${errHtml(e)}</div></div>`;
       return;
     }
     if (_stale("warpStatus", seq)) return;
@@ -1639,7 +1689,7 @@
       box.checked = !box.checked;
       box.disabled = false;
       sw.classList.remove("loading");
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
       return;
     }
     openJobModal((wanted === "1" ? "Включаю" : "Отключаю") + " WARP-туннель", resp.job, {
@@ -1702,7 +1752,7 @@
       });
     } catch (e) {
       if (_stale("warpLists", seq)) return;
-      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+      list.innerHTML = `<li style="color:var(--bad)">${errHtml(e)}</li>`;
     }
   }
 
@@ -1725,7 +1775,7 @@
       try {
         text = await apiGetText("/warp/list?name=" + encodeURIComponent(name));
       } catch (e) {
-        toast("Не удалось загрузить список: " + e.message, "bad");
+        toastErr("Не удалось загрузить список: ", e);
         if (card.dataset.name === name) card.hidden = true;
         return;
       }
@@ -1757,7 +1807,7 @@
       loadWarpLists();
       loadWarpStatus();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     } finally {
       btn.disabled = false;
     }
@@ -1848,7 +1898,7 @@
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      toast("Ошибка экспорта: " + e.message, "bad");
+      toastErr("Ошибка экспорта: ", e);
     }
   }
 
@@ -1862,7 +1912,7 @@
       loadWarpLists();
       loadWarpStatus();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -1960,7 +2010,7 @@
       renderExcludeLegacy(d.legacy_domains || []);
     } catch (e) {
       if (_stale("exclude", seq)) return;
-      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+      list.innerHTML = `<li style="color:var(--bad)">${errHtml(e)}</li>`;
     }
   }
 
@@ -2001,7 +2051,7 @@
       toast("Добавлено");
       loadExclude();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -2011,7 +2061,7 @@
       toast("Удалено");
       loadExclude();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -2105,7 +2155,7 @@
       });
     } catch (e) {
       if (_stale("whitelist", seq)) return;
-      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+      list.innerHTML = `<li style="color:var(--bad)">${errHtml(e)}</li>`;
     }
   }
 
@@ -2119,7 +2169,7 @@
       toast("Добавлено");
       loadWhitelist();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -2129,7 +2179,7 @@
       toast("Удалено");
       loadWhitelist();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -2205,7 +2255,7 @@
       });
     } catch (e) {
       if (_stale("autohostDomains", seq)) return;
-      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+      list.innerHTML = `<li style="color:var(--bad)">${errHtml(e)}</li>`;
     }
   }
 
@@ -2215,7 +2265,7 @@
       toast("Удалено");
       loadAutohostlistDomains();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -2266,7 +2316,7 @@
       });
     } catch (e) {
       if (_stale("extraDomains", seq)) return;
-      list.innerHTML = `<li style="color:var(--bad)">${escapeHtml(e.message)}</li>`;
+      list.innerHTML = `<li style="color:var(--bad)">${errHtml(e)}</li>`;
     }
   }
 
@@ -2280,7 +2330,7 @@
       toast("Добавлено");
       loadExtraDomains();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -2290,7 +2340,7 @@
       toast("Удалено");
       loadExtraDomains();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -2346,7 +2396,7 @@
         // файлов отвечает именно 404. Ждать тут как раз и надо.
         if (isRefusal(e)) return null;
         if (Date.now() >= deadline) return null;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => { setTimeout(r, 2000); });
       }
     }
   }
@@ -3073,6 +3123,10 @@
         if (_stale("state", seq)) return;
         statePools = (poolsResp && poolsResp.pools) || {};
         entries = d.entries || [];
+        // Гонку закрывает метка _stale несколькими строками выше: ответ,
+        // обогнанный более свежим, до этого места не доходит. Линтер видит
+        // «запись после await», но гейта не видит.
+        // eslint-disable-next-line require-atomic-updates
         stateCache = entries;
       }
 
@@ -3224,7 +3278,7 @@
       });
     } catch (e) {
       if (seq && _stale("state", seq)) return;
-      body.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
+      body.innerHTML = `<p style="color:var(--bad)">${errHtml(e)}</p>`;
     }
   }
 
@@ -3236,7 +3290,7 @@
       toast("Удалено");
       loadState();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -3247,7 +3301,7 @@
       toast("Весь state очищен");
       loadState();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -3261,7 +3315,7 @@
       toast(mode === "frozen" ? `Заморожено на стратегии ${strategy}` : `Стратегия ${strategy} выбрана`);
       loadState();
     } catch (e) {
-      toast("Ошибка: " + e.message, "bad");
+      toastErr("Ошибка: ", e);
     }
   }
 
@@ -3579,7 +3633,7 @@
       } catch (e) {
         // Причину показываем как есть: её пишет бекенд человеческим текстом
         // (недопустимые символы, модуль не установлен, не уложились в 20 с).
-        box.innerHTML = `<div class="probe-report"><div class="probe-verdict hot">${escapeHtml(e.message || "проверка не выполнилась")}</div></div>`;
+        box.innerHTML = `<div class="probe-report"><div class="probe-verdict hot">${errHtml(e)}</div></div>`;
       }
       btn.disabled = false;
       btn.textContent = label;
@@ -3661,7 +3715,7 @@
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      toast("Не удалось скачать отчёт: " + e.message, "bad");
+      toastErr("Не удалось скачать отчёт: ", e);
     } finally {
       btn.disabled = false;
       btn.textContent = label;
@@ -3679,7 +3733,7 @@
       el.textContent = d.diag || "(пусто)";
     } catch (e) {
       if (_stale("diag", seq)) return;
-      el.textContent = "Ошибка: " + e.message;
+      el.textContent = "Ошибка: " + errMsg(e);
     }
   }
 
@@ -3901,7 +3955,7 @@
       d = await apiGet("/strategy/pools");
     } catch (e) {
       if (_stale("strategyPools", seq)) return;
-      host.innerHTML = `<p class="desc">Не удалось загрузить: ${escapeHtml(e.message)}</p>`;
+      host.innerHTML = `<p class="desc">Не удалось загрузить: ${errHtml(e)}</p>`;
       return;
     }
     if (_stale("strategyPools", seq)) return;
@@ -3952,7 +4006,7 @@
         if (isCustom) {
           if (!confirm(`Вернуть «${STRATEGY_POOL_NAMES[pool] || pool}» на автоподбор?\n\nВаша строка будет удалена.`)) return;
           try { await apiPost("/strategy/pool/reset", { pool }); }
-          catch (e) { toast("Ошибка: " + e.message, "bad"); return; }
+          catch (e) { toastErr("Ошибка: ", e); return; }
           toast("Пул вернулся на автоподбор");
           loadStrategyPools();
         } else {
@@ -3967,7 +4021,7 @@
           const r = await apiPostText("/strategy/pool/validate?pool=" + encodeURIComponent(pool), ta.value);
           if (r && r.valid) say("Строка корректна — можно сохранять", true);
           else say("Не принято движком: " + (r && r.error ? r.error : "неизвестная ошибка"), false);
-        } catch (e) { say("Ошибка проверки: " + e.message, false); }
+        } catch (e) { say("Ошибка проверки: " + errMsg(e), false); }
       });
 
       card.querySelector('[data-act="save"]').addEventListener("click", async () => {
@@ -3983,7 +4037,7 @@
         } catch (e) {
           // The line was rejected — nothing was applied and the previous state
           // is untouched, which is exactly what the message must convey.
-          say("Не сохранено: " + e.message, false);
+          say("Не сохранено: " + errMsg(e), false);
           return;
         }
         toast("Стратегия применена, сервис перезапущен — автоподбор для пула выключен");
@@ -4000,7 +4054,7 @@
       // «Сохранить и применить», и на бекенд уходит пустое тело поверх
       // работающей строки. Поэтому — сказать вслух и не подсовывать пустоту.
       ta.value = "";
-      if (say) say("Не удалось прочитать текущую строку: " + e.message +
+      if (say) say("Не удалось прочитать текущую строку: " + errMsg(e) +
                    ". Не сохраняйте, пока она не загрузится — отправится пустая.", false);
     }
   }
