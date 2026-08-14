@@ -221,11 +221,16 @@ if ! command -v node >/dev/null 2>&1; then
     SKIP=$((SKIP+1))
     printf '[SKIP] панельная часть (нет node; в CI проверяется)\n'
 else
-    _hooks=$(grep -c 'needauth) { showLoginScreen' "$APPJS" 2>/dev/null || echo 0)
-    # Три помощника ходят в API: apiGet, apiPost, apiPostText. Пропустить один —
-    # значит на части страниц получить красную плашку вместо формы входа.
+    # Проверяем ОБЕ половины связки, а не имя внутри помощника.
+    #
+    # Раньше здесь искалась строка «needauth) { showLoginScreen» — то есть
+    # внутренность реализации. Слой запросов больше не знает про экран входа:
+    # он зовёт крючок, а вход себя регистрирует. Половин стало две, и молча
+    # сломаться может любая — крючок без регистрации оставит человека без
+    # формы так же надёжно, как пропущенный помощник.
+    _hooks=$(grep -c 'needauth) { onUnauthorized()' "$APPJS" 2>/dev/null || echo 0)
     if [ "${_hooks:-0}" -ge 3 ]; then
-        ok "форму входа показывают все помощники API ($_hooks из 3)"
+        ok "все помощники API зовут крючок «сессия кончилась» ($_hooks)"
     else
         no "перехват needauth во всех помощниках" "3" "${_hooks:-0}"
     fi
@@ -448,7 +453,7 @@ _missing=""
 for _fn in apiGet apiPost apiGetText apiPostText; do
     _body=$(awk "/async function ${_fn}\\(/,/^  }$/" "$APPJS")
     case "$_body" in
-        *needauth*showLoginScreen*) ;;
+        *needauth*onUnauthorized*) ;;
         *) _missing="$_missing $_fn" ;;
     esac
 done
@@ -456,6 +461,15 @@ if [ -z "$_missing" ]; then
     ok "форма входа показывается из всех четырёх помощников fetch"
 else
     no "needauth во всех помощниках" "все четыре" "нет в:$_missing — там человек останется без формы входа"
+fi
+
+# Вторая половина связки: крючок без регистрации молчит.
+if grep -q 'setUnauthorizedHandler(' "$APPJS" && \
+   grep -A 1 'setUnauthorizedHandler(' "$APPJS" | grep -q 'showLoginScreen'; then
+    ok "крючок связан с экраном входа (иначе он пустой и формы не будет)"
+else
+    no "регистрация крючка" "setUnauthorizedHandler → showLoginScreen" \
+       "не найдена — помощники зовут пустышку"
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"

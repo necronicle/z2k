@@ -105,6 +105,15 @@
   // одновременно кричит про ошибку.
   const TRANSIENT_HTTP = { 404: 1, 502: 1, 503: 1, 504: 1 };
 
+  // ЧТО ДЕЛАТЬ, КОГДА СЕССИЯ КОНЧИЛАСЬ, РЕШАЕТ НЕ ТРАНСПОРТ.
+  //
+  // Помощники fetch звали showLoginScreen напрямую, то есть слой запросов знал
+  // про устройство экрана входа. При разбиении по файлам это давало цикл:
+  // запросы → вход → запросы. Инверсия развязывает его и заодно ставит вещи на
+  // места — транспорту незачем знать, чем именно мы просим человека войти.
+  let onUnauthorized = () => {};
+  function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
+
   function httpError(status, statusText, message) {
     // Текст для ЧЕЛОВЕКА, а не код протокола.
     //
@@ -212,7 +221,7 @@
       const data = await r.json().catch(() => null);
       // needauth — не «ошибка», а «покажи форму входа». Признак машиночитаемый,
       // потому что по тексту сообщения такие вещи не различают.
-      if (data && data.needauth) { showLoginScreen(); throw httpError(401, "", ""); }
+      if (data && data.needauth) { onUnauthorized(); throw httpError(401, "", ""); }
       throw httpError(r.status, r.statusText, (data && data.error) || undefined);
     }
     return r.json();
@@ -228,7 +237,7 @@
     });
     const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
     if (!r.ok) {
-      if (data && data.needauth) { showLoginScreen(); throw httpError(401, "", ""); }
+      if (data && data.needauth) { onUnauthorized(); throw httpError(401, "", ""); }
       throw httpError(r.status, r.statusText, data.error || `${r.status}`);
     }
     if (!data.ok) throw new Error(data.error || `${r.status}`);
@@ -257,7 +266,7 @@
       // тост с невнятной причиной и НИ ОДНОГО способа войти — форма не
       // показывалась вовсе, и оставалось только догадаться перезагрузить
       // страницу.
-      if (needauth) { showLoginScreen(); throw httpError(401, "", ""); }
+      if (needauth) { onUnauthorized(); throw httpError(401, "", ""); }
       throw httpError(r.status, r.statusText, msg);
     }
     return r.text();
@@ -272,7 +281,7 @@
     });
     const data = await r.json().catch(() => ({ ok: false, error: `${r.status}` }));
     if (!r.ok) {
-      if (data && data.needauth) { showLoginScreen(); throw httpError(401, "", ""); }
+      if (data && data.needauth) { onUnauthorized(); throw httpError(401, "", ""); }
       throw httpError(r.status, r.statusText, data.error || `${r.status}`);
     }
     if (!data.ok) throw new Error(data.error || `${r.status}`);
@@ -3261,7 +3270,7 @@
         });
       });
       const sortBtn = document.getElementById("state-sort-btn");
-      if (sortBtn) sortBtn.addEventListener("click", openSortSheet);
+      if (sortBtn) sortBtn.addEventListener("click", () => openSortSheet(resortState));
       body.querySelectorAll("th.sortable").forEach(th => {
         th.addEventListener("click", () => {
           const key = th.dataset.sort;
@@ -3456,6 +3465,11 @@
   // первого же перехода по меню человек оставался с пустыми скелетонами и без
   // единого поля для пароля — то самое состояние, из которого нет выхода.
   // DOM врать не может: нет поля — рисуем заново.
+  // Регистрация рядом с самим экраном, а не в общем запуске: при выносе входа
+  // в отдельный файл связка обязана уехать вместе с ним, иначе транспорт
+  // молча останется с пустым обработчиком и форма перестанет появляться.
+  setUnauthorizedHandler((msg) => showLoginScreen(msg));
+
   function showLoginScreen(msg) {
     if (document.getElementById("login-go")) {
       if (msg) {
@@ -4272,12 +4286,20 @@
         saveStateSort();
         renderSortOptions();   // reflect the new arrow before closing
         closeSortSheet();
-        resortState();
+        onSortPicked();
       });
     });
   }
 
-  function openSortSheet() {
+  // КОГО ЗВАТЬ ПОСЛЕ ВЫБОРА, РЕШАЕТ НЕ ЛИСТ СОРТИРОВКИ.
+  //
+  // Он звал resortState напрямую — то есть общая деталь оболочки знала про
+  // конкретную страницу. При разбиении это давало цикл оболочка → страница →
+  // оболочка. Теперь страница передаёт, что сделать после выбора.
+  let onSortPicked = () => {};
+
+  function openSortSheet(afterPick) {
+    if (typeof afterPick === "function") onSortPicked = afterPick;
     const sheet = ensureSortSheet();
     const backdrop = document.getElementById("sort-sheet-backdrop");
     renderSortOptions();
