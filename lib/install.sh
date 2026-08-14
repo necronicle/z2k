@@ -1533,11 +1533,25 @@ step_build_zapret2() {
         # после reinstall'а /opt/zapret2/webpanel и lighttpd не стартует.
         # Без этого backup'а webpanel юзера тихо ломается на любом auto-
         # update reinstall'е.
-        if [ -f "$ZAPRET2_DIR/webpanel/port" ]; then
-            cp -f "$ZAPRET2_DIR/webpanel/port" "$backup_tmp/webpanel-port"
-            [ -f "$ZAPRET2_DIR/webpanel/bind" ] && \
-                cp -f "$ZAPRET2_DIR/webpanel/bind" "$backup_tmp/webpanel-bind"
-            print_success "Webpanel state сохранён (port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null), bind=$(cat "$backup_tmp/webpanel-bind" 2>/dev/null || echo auto))"
+        # Сохраняем ВСЁ, чем задан адрес панели, а не только порт.
+        #
+        # Полевой случай 08-14: человек ставит 0.0.0.0, меню рапортует «адрес и
+        # порт переживут обновления», после обновления адрес снова 192.168.1.1.
+        # Причина была здесь: bind6 не сохранялся вообще, а сам bind сохранялся
+        # и никем не читался — восстановление его не возвращало, и установщик
+        # панели определял адрес заново.
+        #
+        # Условие по ЛЮБОМУ из файлов, а не по одному port: адрес мог быть задан
+        # до установки панели, и тогда port'а ещё нет, а терять заданный адрес
+        # нельзя.
+        if [ -f "$ZAPRET2_DIR/webpanel/port" ] || [ -f "$ZAPRET2_DIR/webpanel/bind" ] || \
+           [ -f "$ZAPRET2_DIR/webpanel/bind6" ]; then
+            local _wpf
+            for _wpf in port bind bind6; do
+                [ -f "$ZAPRET2_DIR/webpanel/$_wpf" ] && \
+                    cp -f "$ZAPRET2_DIR/webpanel/$_wpf" "$backup_tmp/webpanel-$_wpf"
+            done
+    print_success "Webpanel state сохранён (port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null || echo default), адрес=$(cat "$backup_tmp/webpanel-bind" 2>/dev/null || echo auto), IPv6=$(cat "$backup_tmp/webpanel-bind6" 2>/dev/null || echo нет))"
         fi
         print_success "Настройки сохранены"
 
@@ -3998,16 +4012,29 @@ step_finalize() {
             _wp_port=$(sed -n 's/^[[:space:]]*PORT=\{0,1\}"\{0,1\}\([0-9]\{2,5\}\).*/\1/p' \
                        /opt/etc/init.d/S96z2k-webpanel 2>/dev/null | head -1)
         fi
-        # Do NOT replay the saved bind: r-56.3 could have persisted the wrong
-        # LAN segment (e.g. a guest bridge) into webpanel/bind, and replaying
-        # it would keep the panel on the unreachable address. Let
-        # webpanel/install.sh auto-detect the LAN IP fresh on every restore
-        # (single-IP detect_lan_ip, 192.168 > 172.16-31 > 10 priority).
+        # Возвращаем в дерево то, чем задан адрес, — и отдаём решение
+        # установщику панели, а не принимаем его здесь.
+        #
+        # Исторически тут стояло «bind не воспроизводить никогда»: r-56.3 умел
+        # записать в webpanel/bind неверный LAN-сегмент (гостевой мост), и его
+        # повтор держал бы панель на недостижимом адресе. Правило теперь простое:
+        # что записано — то и возвращается, а сбросить на умолчания можно явным
+        # пунктом меню. От залипания на мёртвом адресе защищает сам установщик
+        # панели: адрес, которого нет ни на одном интерфейсе, он не берёт и
+        # определяет заново. Поэтому здесь достаточно вернуть файлы.
+        mkdir -p "$ZAPRET2_DIR/webpanel" 2>/dev/null || true
+        local _wpf
+        for _wpf in bind bind6; do
+            [ -f "$backup_tmp/webpanel-$_wpf" ] && \
+                cp -f "$backup_tmp/webpanel-$_wpf" "$ZAPRET2_DIR/webpanel/$_wpf" 2>/dev/null || true
+        done
         _wp_args=""
         [ -n "$_wp_port" ] && _wp_args="--port $_wp_port"
         _wp_src="${WORK_DIR}/webpanel/install.sh"
         if [ -f "$_wp_src" ]; then
-            print_info "Восстановление веб-панели (port=${_wp_port:-default}, bind=auto)..."
+            local _wp_saidbind
+            _wp_saidbind=$(cat "$ZAPRET2_DIR/webpanel/bind" 2>/dev/null || echo auto)
+            print_info "Восстановление веб-панели (port=${_wp_port:-default}, адрес=${_wp_saidbind})..."
             # shellcheck disable=SC2086
             if sh "$_wp_src" $_wp_args >/dev/null 2>&1; then
                 print_success "Веб-панель восстановлена и запущена"
