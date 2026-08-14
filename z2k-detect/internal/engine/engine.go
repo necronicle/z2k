@@ -98,14 +98,17 @@ type state struct {
 	cooldown map[string]time.Time
 	// skipSet is the union of SkipPaths content — domains already
 	// covered by operator-managed hostlists. Refreshed periodically.
-	skipSet map[string]struct{}
+	//
+	// Значение = «строгая запись» (nfqws2-форма `^domain`, покрывает только
+	// сама себя). false = обычная запись, покрывает и поддомены.
+	skipSet map[string]bool
 }
 
 func newState() *state {
 	return &state{
 		bypassed: make(map[string]struct{}),
 		cooldown: make(map[string]time.Time),
-		skipSet:  make(map[string]struct{}),
+		skipSet:  make(map[string]bool),
 	}
 }
 
@@ -258,15 +261,21 @@ func (s *state) markProbed(domain string) {
 // both the probe traffic and the map growth, all of it against names the
 // operator had already said to leave alone.
 func (s *state) skippedLocked(domain string) bool {
+	// Точное совпадение покрывает обе формы записи.
 	if _, ok := s.skipSet[domain]; ok {
 		return true
 	}
 	// Walk the parent labels: a.b.example.com -> b.example.com -> example.com
+	//
+	// Родитель покрывает поддомен ТОЛЬКО если он записан обычной формой.
+	// Строгая форма `^domain` для того и существует, чтобы поддомены не
+	// покрывались; раньше она вообще не работала — readHostlist клал ключ
+	// вместе с '^', и с ним не совпадало ничто.
 	for i := 0; i < len(domain); i++ {
 		if domain[i] != '.' {
 			continue
 		}
-		if _, ok := s.skipSet[domain[i+1:]]; ok {
+		if strict, ok := s.skipSet[domain[i+1:]]; ok && !strict {
 			return true
 		}
 	}
@@ -370,7 +379,7 @@ func (s *state) loadBypassed(path string) error {
 }
 
 func (s *state) reloadSkipSet(paths []string) {
-	next := make(map[string]struct{})
+	next := make(map[string]bool)
 	for _, p := range paths {
 		readHostlist(p, next)
 	}
@@ -433,7 +442,19 @@ func (s *state) evictCooldown(cooldown time.Duration) int {
 	return n
 }
 
-func readHostlist(path string, out map[string]struct{}) {
+// readHostlist разбирает один хостлист nfqws2 в набор «домен → строгая ли
+// запись».
+//
+// Форма `^domain` — задокументированный синтаксис nfqws2: «Если в начале идет
+// символ ^, автоматический учет поддоменов отменяется для этого домена»
+// (мануал bol-van, формат хостлистов). Раньше строка клалась в набор КАК ЕСТЬ,
+// поэтому ключом становилось буквально "^domain" — а skippedLocked ищет
+// "domain" и его родителей, и с таким ключом не совпадало НИКОГДА. То есть
+// строгая запись не просто теряла строгость, она переставала действовать
+// вовсе. Направление отказа худшее: whitelist.txt входит в SkipPaths, оператор
+// пишет туда домен, чтобы обход НЕ включался, а демон такой домен пробивал и
+// при вердикте Hot дописывал в discovered-domains.txt.
+func readHostlist(path string, out map[string]bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -446,7 +467,12 @@ func readHostlist(path string, out map[string]struct{}) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		out[strings.ToLower(line)] = struct{}{}
+		line = strings.ToLower(line)
+		if strings.HasPrefix(line, "^") {
+			out[strings.TrimPrefix(line, "^")] = true
+			continue
+		}
+		out[line] = false
 	}
 }
 

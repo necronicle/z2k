@@ -54,12 +54,18 @@ var (
 	dialTO        = flag.Duration("dial-timeout", 8*time.Second, "dial/handshake timeout for live connections")
 	probeTO       = flag.Duration("probe-timeout", 12*time.Second, "total budget for one END-TO-END health probe (dial + CONNECT + inner TLS to the target)")
 	recoverEvery  = flag.Duration("recover-interval", 10*time.Second, "faster re-probe interval while the pool has 0 live IPs")
-	// NOT an idle timeout, despite the flag name kept for compatibility: the timer in
-	// handle() is created once and never Reset, so this is an ABSOLUTE cap on the
-	// lifetime of a spliced connection. Documented honestly rather than silently
-	// renamed — the flag is in shipped init scripts. Making it genuinely idle means
-	// refreshing a deadline inside the splice, which is the load-bearing path; that
-	// change needs on-router validation, not a drive-by edit.
+	// Настоящий idle-таймаут: соединение закрывается, когда в ОБЕ стороны не
+	// прошло ни байта в течение этого срока. Сторож в handle() смотрит на
+	// отметку последней активности, которую обновляет всякое чтение, реально
+	// сдвинувшее байты (activityReader).
+	//
+	// Здесь стояло предупреждение, что это не idle, а абсолютный потолок
+	// жизни соединения — «таймер создаётся один раз и не сбрасывается». Оно
+	// описывало прежнюю реализацию и с тех пор устарело: сторож с атомарной
+	// отметкой как раз и был сделан вместо того таймера (см. комментарий у
+	// watchdog в handle). Оставленное предупреждение утверждало обратное
+	// тому, что делает код, — а именно в этом файле расхождение опаснее
+	// всего: зависание здесь клиенту не видно.
 	idleTO         = flag.Duration("timeout", 15*time.Minute, "per-connection IDLE timeout: closed after this long with no bytes moving in either direction")
 	pickWaitTO     = flag.Duration("pick-wait", 15*time.Second, "max wait for a live upstream before dropping (cold-start / transient-empty smoothing)")
 	maxTries       = flag.Int("max-tries", 4, "max upstream IPs to try per connection before dropping")

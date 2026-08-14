@@ -520,8 +520,22 @@ func (s *dialStats) loop(interval time.Duration, stop <-chan struct{}) {
 
 // stream represents one tunneled TCP connection to a Telegram DC.
 //
-// aborted is set ONLY by sendAbort (per-stream cap exceeded, peer-write
-// error, or kill); EOF on upstream conn does NOT set this flag.
+// aborted помечает стрим как отменённый: writePump выбрасывает его кадры, не
+// отправляя, а pumpReadFromTCP не шлёт по нему упорядоченный CLOSE.
+//
+// Выставляется в ЧЕТЫРЁХ местах, и это важно знать, добавляя пятое:
+//   - sendAbort — единственный, кто делает это через CAS и потому шлёт ровно
+//     один CLOSE (превышен потолок стрима, ошибка записи пиру);
+//   - kill — гасит все стримы сессии разом;
+//   - closeStream — закрытие по инициативе клиента (CLOSE от него);
+//   - handleConnect — вытесняя прежний стрим с тем же идентификатором.
+//
+// Прежняя редакция утверждала «set ONLY by sendAbort», и это было неверно уже
+// на момент написания: три прямых Store существуют рядом. Прочитавший
+// поверил бы, что достаточно обойти sendAbort, чтобы флаг не поднялся.
+//
+// EOF на соединении с Telegram флаг НЕ выставляет — это штатный конец, по
+// нему уходит упорядоченный CLOSE.
 type stream struct {
 	id          uint16
 	conn        net.Conn

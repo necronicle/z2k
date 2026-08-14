@@ -64,8 +64,8 @@ func TestEligibleRespectsCooldownExpiry(t *testing.T) {
 // просили не трогать, и каждый уникальный поддомен занимал слот в cooldown.
 func TestSkipSetMatchesSuffix(t *testing.T) {
 	s := newState()
-	s.skipSet["googlevideo.com"] = struct{}{}
-	s.skipSet["example.org"] = struct{}{}
+	s.skipSet["googlevideo.com"] = false
+	s.skipSet["example.org"] = false
 
 	cases := []struct {
 		domain string
@@ -93,7 +93,7 @@ func TestSkipSetMatchesSuffix(t *testing.T) {
 
 func TestEligibleHonoursSkipAndBypass(t *testing.T) {
 	s := newState()
-	s.skipSet["skipme.com"] = struct{}{}
+	s.skipSet["skipme.com"] = false
 	s.bypassed["done.com"] = struct{}{}
 
 	if s.eligible("sub.skipme.com", time.Minute) {

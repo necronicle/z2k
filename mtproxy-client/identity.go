@@ -6,11 +6,18 @@ package main
 // /opt/zapret2/.z2k-relay-id (private key never leaves the device, never in the
 // repo/binary). It registers its public key with the relay (/register) and then
 // authenticates the tunnel with a per-install signature instead of the shared
-// secret. This is DUAL with the shared-secret path and is NOT a flip: the client
-// only switches to per-install auth AFTER a successful registration, and falls
-// back to shared-secret auth on repeated failure — so Telegram never breaks
-// regardless of rollout order (a relay without /register => register fails =>
-// client stays on shared-secret).
+// secret. Клиент переходит на персональную аутентификацию ТОЛЬКО после удачной
+// регистрации; пока она не прошла, он пользуется общим секретом — поэтому
+// порядок раскатки не ломает телеграм (релей без /register => регистрация не
+// удаётся => клиент остаётся на общем секрете).
+//
+// ОБРАТНОГО ХОДА НЕТ. Здесь говорилось «falls back to shared-secret auth on
+// repeated failure», и это перестало быть правдой: откат убран (tunnel.go,
+// ветка про --require-per-install). useID выставляется в true один раз и
+// никогда не сбрасывается. Причина в самом релее: с включённым требованием
+// персональной аутентификации он общий секрет отвергает молча, и откат
+// превращал поправимую заминку в гарантированно мёртвый туннель. Вместо
+// отката при череде быстрых обрывов идёт повторная регистрация.
 
 import (
 	"bytes"
