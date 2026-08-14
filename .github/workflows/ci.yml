@@ -110,6 +110,36 @@ jobs:
           SHELLCHECK_OPTS: --severity=warning
         run: actionlint -color
 
+  eslint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    # Один линтер по одному большому файлу — минуты хватает с большим запасом.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      # npm ci, а не npm install: ставит РОВНО то, что записано в
+      # package-lock.json, и падает при расхождении с package.json. Для
+      # инструмента проверки это единственно верный режим — иначе версия
+      # линтера на раннере уезжает от локальной, и вердикт начинает зависеть
+      # от даты прогона.
+      - name: Install eslint
+        run: npm ci --no-audit --no-fund
+
+      # JavaScript вебпанели до 2026-08-14 не проверялся НИЧЕМ — единственный
+      # язык в репозитории без статики. Набор правил подобран под конкретные
+      # грабли (см. eslint.config.mjs), стиль намеренно не ловится: шумный
+      # линтер перестают читать.
+      - name: Lint JavaScript
+        run: npx eslint .
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest

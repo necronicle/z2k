@@ -184,6 +184,28 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# JavaScript вебпанели. До 2026-08-14 это был ЕДИНСТВЕННЫЙ язык в репозитории
+# без единой статической проверки: у Go есть vet и gofmt, у Lua — luacheck,
+# у shell своя проверка ниже, у workflow-файлов actionlint, а 4262 строки
+# панели правились вслепую. Главное правило набора — no-undef: оно же
+# страховка под будущее разбиение монолита по файлам.
+#
+# (Строку выше не начинать словом-директивой: проверяльщик shell принимает
+#  «# <имя>» в начале строки за свою директиву и падает разбором.)
+step "eslint"
+if [ -x node_modules/.bin/eslint ]; then
+    if node_modules/.bin/eslint .; then
+        passed "eslint"
+    else
+        failed "eslint"
+    fi
+elif command -v npm >/dev/null 2>&1; then
+    skipped "eslint" "нет node_modules (npm ci)"
+else
+    skipped "eslint" "нет npm"
+fi
+
+# ---------------------------------------------------------------------------
 step "luacheck"
 if command -v luacheck >/dev/null 2>&1; then
     if luacheck files/lua/*.lua --codes -q; then
