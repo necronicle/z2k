@@ -342,6 +342,69 @@ generate_nfqws2_opt_from_strategies() {
     # -s5556) is reachable on short flows; the silent CH-drop failure mode is
     # caught by the silent_drop head's out>>in heuristic (zero incoming).
 
+    # ensure_circular_in_range: окно входящих обязано быть ВЫШЕ порога inseq.
+    #
+    # ЗАЧЕМ. Порог inseq задаётся здесь, а окно `--in-range` живёт в файле
+    # стратегий — два разных места, и никто их не сверял. Замерено 2026-08-14:
+    #
+    #   rkn_tcp  окно -s20000  порог 26000  -> полоса (26000, 20000] пуста
+    #   yt_tcp   окно -s5556   порог 18000  -> полоса (18000, 5556]  пуста
+    #
+    # Успех по входящим срабатывает строго при `начальный rseq > inseq`, а за
+    # верхней границей окна nfqws2 выключает Lua по потоку (lua cutoff). Полоса
+    # пуста -> путь мёртв, и порог, посаженный за верхнюю границу TLS-затыка
+    # (ntc.party 22516: тихий обрыв стрима на 14-30 KB без RST/FIN/alert),
+    # не срабатывает ни разу. Ровно от этого уходили 21.05, когда подняли
+    # `bytes_in_handshake_done` 3072 -> 16384: голый ServerHello ложно
+    # закрепляет страту, которая проходит TLS и ломает потоки HTTP/2 внутри
+    # мультиплекса.
+    #
+    # Инвариант держим ЗДЕСЬ, а не правкой файла стратегий: порог тоже ставится
+    # здесь, и только так они больше не разъедутся. Правленный руками
+    # Strategy.txt лечится этим же проходом.
+    #
+    # Запас 1500 байт (у bol-van 1460 = максимум данных в TCP-пакете): нужно,
+    # чтобы в полосу успел попасть реальный пакет, а не только её граница.
+    # Стоимость невелика: iptables и так отдаёт в очередь первые 30 входящих
+    # пакетов потока, так что лишних переходов через ядро нет — прибавляются
+    # только вызовы Lua.
+    ensure_circular_in_range() {
+        local input="$1"
+        local inseq="" want="" cur="" out="" token=""
+
+        set -f
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    case "$token" in
+                        *:inseq=*) inseq="${token##*:inseq=}"; inseq="${inseq%%:*}" ;;
+                    esac
+                    ;;
+            esac
+        done
+        case "$inseq" in ''|*[!0-9]*) set +f; printf '%s' "$input"; return 0 ;; esac
+        want=$((inseq + 1500))
+
+        for token in $input; do
+            case "$token" in
+                --in-range=-s*)
+                    cur="${token#--in-range=-s}"
+                    case "$cur" in
+                        ''|*[!0-9]*) ;;
+                        *) [ "$cur" -le "$inseq" ] && token="--in-range=-s${want}" ;;
+                    esac
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        set +f
+        printf '%s' "$out"
+    }
+
+    youtube_tcp=$(ensure_circular_in_range "$youtube_tcp")
+    youtube_gv_tcp=$(ensure_circular_in_range "$youtube_gv_tcp")
+    rkn_tcp=$(ensure_circular_in_range "$rkn_tcp")
+
     # ensure_circular_retrans: force `retrans=N` on circular tokens (strip any
     # existing retrans=, re-add). Same strip-and-re-add shape as the nld2/inseq
     # passes above.
