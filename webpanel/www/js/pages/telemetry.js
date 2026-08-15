@@ -35,7 +35,7 @@ export async function renderStatsNotice() {
       Адрес: <code>${escapeHtml(STATS_ENDPOINT)}</code>. Сейчас без TLS —
       содержимое видно вашему провайдеру. Подробности в README.
     </p>
-    <div class="row">
+    <div class="btn-row">
       <button class="btn" id="stats-ack-ok">Понятно</button>
       <button class="btn" id="stats-ack-off">Выключить сбор</button>
     </div>

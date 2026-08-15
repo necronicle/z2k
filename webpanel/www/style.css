@@ -211,8 +211,15 @@
   --skel-c1: rgba(255, 255, 255, 0.04);
   --skel-c2: rgba(255, 255, 255, 0.10);
 
-  /* Fira Code (mono) + Fira Sans (body) loaded from Google Fonts in index.html.
-     System fonts fallback while web fonts swap in (font-display: swap). */
+  /* Fira Code (mono) + Fira Sans (body) — ЛОКАЛЬНЫЕ, объявлены через
+     @font-face выше в этом же файле (webpanel/www/fonts/). Системные шрифты
+     стоят запасными на время подмены (font-display: swap).
+     Здесь было написано «loaded from Google Fonts in index.html» — неправда с
+     тех пор, как внешнее подключение убрали. index.html на этом месте несёт
+     отдельное предупреждение: блокирующая кросс-доменная таблица стилей даёт
+     белый экран на роутере, у которого плохо с сетью, а именно тогда панель и
+     открывают. Комментарий был единственным местом рядом с токенами, и по
+     нему следующий читатель мог «восстановить» ровно ту регрессию. */
   --font-mono: "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --font-sans: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
@@ -613,6 +620,21 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
   /* Sidebar collapse button скрыт на mobile — drawer не collapse'ится */
   #nav .sidebar-collapse { display: none; }
 
+  /* СВЁРНУТАЯ БОКОВАЯ ПАНЕЛЬ НЕ ДОЛЖНА ДОТЯГИВАТЬСЯ ДО ВЫДВИЖНОГО МЕНЮ.
+     Кнопку свёртывания здесь прячут, но САМО СОСТОЯНИЕ остаётся: атрибут
+     живёт на body и переживает изменение размера окна. А правила
+     body[data-sidebar="collapsed"] #nav имеют специфичность (1,1,1) против
+     (1,0,0) у здешнего #nav — медиазапрос специфичности не добавляет, поэтому
+     побеждали они.
+     Итог был такой: свернул панель на настольном браузере, сузил окно (или
+     просто сделал его невысоким — эта ветка включается ещё и по max-height:
+     500px, то есть на обычном ноутбуке) — и выдвижное меню открывается
+     шириной 56 пикселей и без подписей, одними значками.
+     Возвращаем ветке её значения явно, с той же специфичностью. */
+  body[data-sidebar="collapsed"] #nav { width: 280px; max-width: 85vw; }
+  body[data-sidebar="collapsed"] #nav .nav-label { display: revert; }
+  body[data-sidebar="collapsed"] #nav a { justify-content: flex-start; }
+
   .menu-toggle { display: inline-flex; }
 
   /* Drawer header: "Меню" + X (Skill rule: modal-escape / escape-routes
@@ -848,6 +870,20 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
 .sponsor-card .credits-name { color: var(--accent); }
 
 /* ---------- STATE TABLE (Phase 3 rotator viewer) ---------- */
+
+/* ШИРОКОЕ СОДЕРЖИМОЕ ПРОКРУЧИВАЕТСЯ ВНУТРИ СЕБЯ, А НЕ ТАЩИТ СТРАНИЦУ.
+   Таблица ротатора — это сотни строк, и в колонке «Домен» попадаются имена
+   вроде rr3---sn-4g5e6nez.googlevideo.com|4. Переносов у ячеек нет намеренно
+   (строка обязана быть одной высоты, иначе список читать невозможно), а
+   обёртки не было вовсе — и на телефоне таблица уносила вбок ВСЮ страницу:
+   уезжали шапка, боковое меню и остальные карточки, а вернуться можно было
+   только прокруткой назад.
+   Прокрутка теперь своя у таблицы. -webkit-overflow-scrolling — для старых
+   мобильных вебкитов, где иначе прокрутка получается рывками. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .state-table {
   width: 100%;
   border-collapse: collapse;
@@ -2277,6 +2313,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
      не трогаем — это верх того же диапазона, а не выброс. */
   .wl-list li button,
   .state-table .btn-danger,
+  /* .state-table .btn-icon — ОТДЕЛЬНОЙ строкой, и это не избыточность.
+     Голый .btn-icon (0,1,0) проигрывает безусловному .state-table .btn-icon
+     (0,2,0) с min-height:26px выше по файлу — то есть кнопка заморозки в
+     таблице ротатора оставалась 44 в ширину и 26 в высоту, вдвое ниже порога,
+     который этот же блок и вводит. Соседняя кнопка удаления в той же строке
+     была починена, эта — нет: комментарий выше перечисляет побеждённые
+     селекторы, и её в списке не было. */
+  .state-table .btn-icon,
   .btn-icon {
     min-width: 44px;
     min-height: 44px;

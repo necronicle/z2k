@@ -300,12 +300,14 @@ async function loadState(useCache) {
               aria-haspopup="dialog" aria-expanded="false">
         Сортировка: ${sortLabel} ${sortArrow}
       </button>
+      <div class="table-scroll">
       <table class="state-table">
         <thead>
           <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
+      </div>
     `;
     body.querySelectorAll(".state-del").forEach(btn => {
       btn.addEventListener("click", () => stateDelete(btn.dataset.key, btn.dataset.host));
