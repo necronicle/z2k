@@ -22,6 +22,6 @@
 printf 'release.sh УСТАРЕЛ и ничего не делает.\n\n' >&2
 printf 'Этот скрипт выпускал релиз В ОБХОД гейта на зелёный CI.\n' >&2
 printf 'Канонический путь:\n\n' >&2
-printf '    sh scripts/release.sh <patch|reinstall> "<описание>"\n\n' >&2
+printf '    sh scripts/release.sh <версия> <patch|reinstall> "<описание>"\n\n' >&2
 printf 'Порядок релиза, правила patch/reinstall и откат — см. RELEASING.md\n' >&2
 exit 1

@@ -5,9 +5,12 @@ the upstream zapret2 project.
 
 ## 1. Native circular persistence (HIGH priority)
 
-**Current state:** z2k implements `z2k-autocircular.lua` (~1300 lines) to persist
-per-host `nstrategy` across nfqws2 restarts. This is critical for autocircular
-stability — without it, every restart resets all domains to strategy 1.
+**Current state:** z2k persists per-host `nstrategy` across nfqws2 restarts —
+critical for autocircular stability, since without it every restart resets all
+domains to strategy 1. Historically this lived in `z2k-autocircular.lua`
+(~1300 lines); that file has since been archived and superseded by the native
+circular orchestrator plus `files/lua/z2k-state-persist.lua`. The need for a
+built-in option is unchanged — only the shape of our workaround.
 
 **Proposal:** Add built-in `--circular-state-file=PATH` option to nfqws2 core.
 The Lua overlay approach works but adds complexity, file locking concerns, and

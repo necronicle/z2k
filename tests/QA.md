@@ -28,9 +28,8 @@ sh tests/run_all.sh                                   # юнит + приёмо�
 for t in tests/test_*.sh; do dash "$t" || echo "POSIX FAIL: $t"; done
 cd rt-proxy && CGO_ENABLED=0 go test -count=1 -cover ./... && cd ..
 sh tests/mutation.sh                                  # 0 выживших обязательно
-find . -name '*.sh' \( -path './z2k.sh' -o -path './lib/*.sh' -o -path './files/*.sh' \
-   -o -path './tests/*.sh' -o -path './webpanel/cgi/*.sh' \) \
-  | xargs shellcheck --severity=warning --exclude=SC1007,SC1090,SC1091,SC3043,SC3040,SC2034,SC2148,SC2154
+# Проще и надёжнее — прогнать весь локальный CI, он держит маску в одном месте:
+sh scripts/ci_local.sh
 luacheck files/lua/*.lua --codes -q
 ```
 
