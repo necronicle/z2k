@@ -541,6 +541,37 @@ if [ "$_js_src" -ne "$_js_dst" ]; then
     exit 1
 fi
 find "$STAGE_WWW/js" -name '*.js' -exec chmod 644 {} + 2>/dev/null || true
+
+# ГРАФ ИМПОРТОВ ОБЯЗАН СХОДИТЬСЯ НА ДИСКЕ.
+#
+# Пересчёт выше сравнивает исходное дерево со скопированным и ловит порчу
+# при копировании. Против недокомплекта, ПРИЕХАВШЕГО УЖЕ НЕПОЛНЫМ, он
+# бессилен: если скачалось 20 файлов из 21, обе стороны равны двадцати и
+# проверка проходит. Панель при этом мертва — точка входа падает на первом
+# же import, браузер показывает пустую страницу, а в логе установки успех.
+#
+# Поэтому проверяем не количество, а связность: каждый путь, который модуль
+# импортирует, обязан существовать. Никакого списка и никакого магического
+# числа — источник истины сам код. Добавили модуль, забыли где-то прописать
+# — здесь и упадёт.
+_broken=""
+find "$STAGE_WWW/js" -name '*.js' > "$STAGE_WWW/.jslist"
+while IFS= read -r _m; do
+    _dir=$(dirname "$_m")
+    for _imp in $(sed -n 's/^import .* from "\(\.[^"]*\)";$/\1/p' "$_m"); do
+        [ -f "$_dir/$_imp" ] || _broken="$_broken ${_m#"$STAGE_WWW/"}→$_imp"
+    done
+done < "$STAGE_WWW/.jslist"
+rm -f "$STAGE_WWW/.jslist"
+# Точку входа проверяем тем же правилом: она тоже импортирует.
+for _imp in $(sed -n 's/^import .* from "\(\.[^"]*\)";$/\1/p' "$STAGE_WWW/app.js"); do
+    [ -f "$STAGE_WWW/$_imp" ] || _broken="$_broken app.js→$_imp"
+done
+if [ -n "$_broken" ]; then
+    echo "  панель приехала неполной, не хватает:$_broken" >&2
+    echo "  установка прервана — иначе панель открылась бы пустой страницей" >&2
+    exit 1
+fi
 # Favicon is decorative — guard against missing file so a partial download
 # (e.g. CDN miss on the SVG) doesn't fail the entire webpanel install and
 # leave the panel dead after auto-update reinstall.
