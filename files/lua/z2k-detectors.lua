@@ -1230,8 +1230,24 @@ function z2k_http_mid_stream_stall(desync, crec)
     z2k_http_mid_stream_maybe_evict()
   end
 
-  -- Incoming http_reply — track byte progress and FIN/RST.
-  if not desync.outgoing and desync.l7payload == "http_reply" then
+  -- Incoming — учёт байт и FIN/RST. БЕЗ ГЕЙТА ПО l7payload, и это принципиально.
+  --
+  -- Здесь стояло `and desync.l7payload == "http_reply"`, а nfqws2 ставит эту
+  -- метку ТОЛЬКО НА ПЕРВЫЙ пакет ответа — continuation-сегменты идут без неё.
+  -- То есть max_seq не рос выше первого сегмента (около полутора килобайт) и
+  -- НИКОГДА не доходил до порога в 14 КБ. Детектор, написанный ровно ради
+  -- полосы 14-32 КБ, не срабатывал ни разу.
+  --
+  -- Тот же факт записан ниже, в комментарии к z2k_http_partial_response, и
+  -- ТОТ детектор от этой схемы ушёл (3fde238, «старая версия фолс-фейлила
+  -- КАЖДЫЙ multi-packet ответ»). Здесь схема осталась прежней: соседа
+  -- починили, этот пропустили. Так же написан и TLS-собрат выше —
+  -- z2k_mid_stream_stall считает по `if not desync.outgoing then`, без метки.
+  --
+  -- Гейт не был нужен и раньше: счёт идёт по th_seq относительно первого
+  -- увиденного пакета потока, а это к метке нечувствительно. Пакеты без
+  -- полезной нагрузки (голый ACK) счётчик просто не двигают — проверка ниже.
+  if not desync.outgoing then
     local dis = desync.dis
     if not dis or not dis.tcp then return false end
 
@@ -1264,23 +1280,6 @@ function z2k_http_mid_stream_stall(desync, crec)
 
     if flow_st.max_seq >= Z2K_HTTP_MID_STREAM_LO then
       z2k_http_mid_stream_publish_candidate(key_st, flow_st)
-    end
-    return false
-  end
-
-  -- Incoming non-http_reply (other payloads on same TCP — e.g. control
-  -- packets) — игнорируем для byte tracking, но FIN/RST всё равно
-  -- закроет flow.
-  if not desync.outgoing then
-    local dis = desync.dis
-    if dis and dis.tcp then
-      local flags = tonumber(dis.tcp.th_flags) or 0
-      local fin_bit = (TH_FIN and bitand(flags, TH_FIN)) or 0
-      local rst_bit = (TH_RST and bitand(flags, TH_RST)) or 0
-      if fin_bit ~= 0 or rst_bit ~= 0 then
-        flow_st.fin_seen = true
-        key_st.candidates[flow_st.flow_id] = nil
-      end
     end
     return false
   end

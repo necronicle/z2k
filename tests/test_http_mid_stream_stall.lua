@@ -72,10 +72,24 @@ z2k_classify_http_reply      = function() return nil, nil end
 -- per-flow state in lua_state.http_mid_stream.
 local function mk_flow(host)
     local lua_state = {}
+    -- ПОДДЕЛКА ОБЯЗАНА ВЕСТИ СЕБЯ КАК ДВИЖОК, а не как удобно тесту.
+    --
+    -- Здесь на КАЖДЫЙ входящий пакет ставилось l7payload = "http_reply".
+    -- В настоящем nfqws2 так не бывает: метку получает только ПЕРВЫЙ пакет
+    -- ответа, continuation-сегменты идут без неё (это записано и в соседнем
+    -- детекторе, z2k_http_partial_response). Из-за подделки тест проверял
+    -- поведение, которого в природе нет, и оставался зелёным, пока детектор
+    -- не работал вовсе: накопление байт было загейчено на этой метке, порог
+    -- в 14 КБ не достигался никогда.
+    --
+    -- Теперь метку получает первый пакет потока, дальше nil — как на роутере.
+    local first_in = true
     local function in_pkt(seq, payload_len, flags)
+        local tag = first_in and "http_reply" or nil
+        first_in = false
         return {
             outgoing  = false,
-            l7payload = "http_reply",
+            l7payload = tag,
             track     = { hostname = host, lua_state = lua_state },
             dis = {
                 payload = payload_len and string.rep("x", payload_len) or nil,

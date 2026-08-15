@@ -703,8 +703,20 @@ if type(circular) == "function" then
         -- (HTTP/2 fan-out behind one hostname). Without this, state.tsv records
         -- the drifted strategy, not the working one. Per-profile scope
         -- (hostn|askey): success on gv_tcp must NOT freeze rotation on yt_tcp.
-        local sticky_key = (hostn and askey_after)
-          and (hostn .. "|" .. tostring(askey_after)) or nil
+        -- Ключ вяжется на askey (разрешённый выше), а НЕ на askey_after.
+        --
+        -- Строкой 617 этот же файл предупреждает: askey_after может указывать
+        -- на исполненный инстанс (fake_1_2), а не на состояние circular. Везде
+        -- ниже используется разрешённый askey — is_sticky_eligible,
+        -- persist_if_changed. Здесь стоял сырой askey_after, и это ломало
+        -- механизм полностью: имя инстанса МЕНЯЕТСЯ при смене стратегии, то
+        -- есть ровно в тот момент, когда откат и должен сработать. Отметка
+        -- успеха записывалась под одним ключом, а искалась под другим —
+        -- промах, отката нет, в state.tsv уезжала уведённая стратегия вместо
+        -- работающей. Файл называет этот механизм «THE accuracy fix», и он не
+        -- срабатывал ни разу.
+        local sticky_key = (hostn and askey)
+          and (hostn .. "|" .. tostring(askey)) or nil
         -- z2k content-gated sticky re-arm. A BARE TLS ServerHello (response_state)
         -- on a handshake-but-BLOCKED host (whatsapp/Meta) must NOT re-arm the
         -- sticky timestamp — otherwise the ~150 ServerHellos perpetually refresh

@@ -87,6 +87,23 @@ function circular(ctx, desync)        -- luacheck: ignore
   for _, ins in pairs(desync.plan or {}) do
     if ins.arg and tonumber(ins.arg.strategy) == hrec.nstrategy then executed = hrec.nstrategy end
   end
+  -- ПОДДЕЛКА ОБЯЗАНА ВЕСТИ СЕБЯ КАК ДВИЖОК.
+  --
+  -- Настоящий circular исполняет план через plan_instance_execute, а тот
+  -- (apply_execution_plan в zapret-lib.lua) БЕЗУСЛОВНО перезаписывает
+  -- desync.arg и desync.func_instance личностью исполненного инстанса.
+  -- Инстансы отдельных стратегий не несут arg.key — key= стоит только на
+  -- строке circular, — поэтому после вызова askey, посчитанный по desync,
+  -- превращается в имя вида "fake_2_1" И МЕНЯЕТСЯ при каждой смене стратегии.
+  --
+  -- Подделка этого не делала, и потому маскировала настоящий дефект: ключ
+  -- «липкого успеха» вязался на это меняющееся имя, отметка записывалась под
+  -- одним ключом, а искалась под другим, и откат ложной ротации не срабатывал
+  -- никогда. Тест при этом был зелёным.
+  if hrec.nstrategy then
+    desync.func_instance = "fake_" .. tostring(hrec.nstrategy) .. "_1"
+    desync.arg = { strategy = tostring(hrec.nstrategy) }
+  end
   return 0
 end
 
