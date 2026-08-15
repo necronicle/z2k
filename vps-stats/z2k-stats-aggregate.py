@@ -135,6 +135,25 @@ def aggregate(samples):
     for rec in samples:
         total_samples += 1
         seen_pools = set()
+        # ONE UPLOAD COUNTS ONCE PER (pool, strategy), however many rows it sent.
+        #
+        # This is the invariant the README and the collector header both state —
+        # "the aggregator treats each upload as one anonymous device-day sample" —
+        # and until now nothing enforced it: `hits` was incremented per ROW. Two
+        # consequences, one hostile and one ordinary, and the ordinary one is
+        # arguably worse:
+        #   * hostile: a single request carrying 400 copies of the same pair, every
+        #     value inside its declared bound so not one 422, multiplied that
+        #     pair's sample count and score by 400 in the summary humans read when
+        #     choosing which strategies to promote for the whole fleet;
+        #   * ordinary: the client emits one row per (pool, host), so a router
+        #     with five hosts on one strategy already counted as five samples.
+        #     Pools with more hosts simply outvoted pools with fewer, for no
+        #     reason anyone intended.
+        # Counting per upload fixes both. The dwell of every individual row still
+        # feeds the percentiles below — nothing is discarded, only the vote is
+        # made one-per-device-day as documented.
+        seen_keys = set()
         for row in rec.get("rows", []):
             # Defensive: a hand-corrupted raw.jsonl line could be schema-valid
             # yet carry a non-dict / key-missing / unhashable row. The collector
@@ -154,7 +173,9 @@ def aggregate(samples):
                 count = 1
             key = (pool, strat)
             bucket[key].append((dwell, count))
-            hits[key] += 1
+            if key not in seen_keys:
+                seen_keys.add(key)
+                hits[key] += 1
             pool_strategies[pool].add(strat)
             seen_pools.add(pool)
         for pool in seen_pools:
@@ -190,6 +211,8 @@ def render(out, pool_samples, pool_strategies, catalog, total_samples, dates):
         lines.append(f"# date span: {dates[0]} .. {dates[-1]}")
     lines.append("# metric: stable dwell (proxy for 'works'); NOT a success signal.")
     lines.append("# columns: strategy  samples  slots  dwell_p50(s)  dwell_p75(s)  score")
+    lines.append("#   samples = uploads that saw this strategy (one vote per upload)")
+    lines.append("#   slots   = individual (host) rows behind those uploads")
     lines.append("")
     summary = {"total_samples": total_samples, "date_span": dates, "pools": {}}
     for pool in pools:

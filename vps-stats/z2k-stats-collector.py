@@ -92,19 +92,24 @@ def sanitize(payload):
     rows = payload.get("rows")
     if not isinstance(rows, list) or len(rows) == 0 or len(rows) > MAX_ROWS:
         return None
-    # COLLAPSED BY (pool, strategy), NOT just appended.
+    # ROWS ARE KEPT AS SENT — NOT COLLAPSED BY (pool, strategy).
     #
-    # The aggregator counts one "hit" per row and both this file's header and the
-    # README state the load-bearing invariant that one upload is one anonymous
-    # device-day sample. Nothing on the wire enforced it: a single request of 400
-    # copies of the same row — every value inside its declared bound, so not a
-    # single 422 — multiplied that pair's sample count and score by 400 in the
-    # summary humans read when deciding which strategies to promote for the whole
-    # fleet. Collapsing here makes the invariant true by construction rather than
-    # by trusting the client, and costs a well-behaved client nothing: it already
-    # folds repeated state.tsv rows into one entry carrying `count`.
-    merged = {}
-    order = []
+    # It is tempting to merge duplicate pairs here, and a first attempt at
+    # hardening did exactly that. It was wrong, because duplicates are NORMAL.
+    # The client emits one row per (pool, host) straight out of state.tsv and
+    # never sends `count` at all, so a pool where five hosts sit on the same
+    # strategy legitimately produces five rows with that same (pool, strategy)
+    # and five DIFFERENT dwell values. Merging them kept one dwell and threw the
+    # rest away, corrupting the very distribution the aggregator exists to
+    # measure — a real cost paid by every healthy multi-host router, to blunt an
+    # abuse case.
+    #
+    # The invariant that actually needed enforcing ("one upload is one sample")
+    # is not a property of a row, it is a property of an upload — so it belongs
+    # in the aggregator, which is where it now lives: it counts each
+    # (pool, strategy) at most once per upload. That kills the inflation without
+    # discarding a single legitimate measurement.
+    clean_rows = []
     for r in rows:
         if not isinstance(r, dict):
             return None
@@ -120,17 +125,8 @@ def sanitize(payload):
             return None
         if not _valid_int(count, 1, 100000):
             return None
-        key = (pool, strat)
-        if key in merged:
-            prev = merged[key]
-            # Same slot reported twice in one upload: keep the longer dwell and
-            # add the slot counts, still bounded by the per-row ceiling.
-            prev["dwell"] = max(prev["dwell"], dwell)
-            prev["count"] = min(prev["count"] + count, 100000)
-        else:
-            merged[key] = {"pool": pool, "strategy": strat, "dwell": dwell, "count": count}
-            order.append(key)
-    return {"schema": 1, "rows": [merged[k] for k in order]}
+        clean_rows.append({"pool": pool, "strategy": strat, "dwell": dwell, "count": count})
+    return {"schema": 1, "rows": clean_rows}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -237,6 +233,7 @@ class Server(ThreadingHTTPServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._slots = threading.BoundedSemaphore(MAX_CONN)
+        self._refused = 0
 
     def process_request(self, request, client_address):
         # Hard bound on live connections — see MAX_CONN. Refusing at accept time
@@ -244,6 +241,16 @@ class Server(ThreadingHTTPServer):
         # will happily give out thousands.
         if not self._slots.acquire(blocking=False):
             self.shutdown_request(request)
+            # A ceiling nobody can see is indistinguishable from a ceiling set
+            # too low: uploads would vanish during the nightly peak with no
+            # trace anywhere. Count refusals and say so, sparsely — a bare
+            # number, no address, first one and then every 100th, so a real
+            # squeeze is visible in the journal without a flood becoming its own
+            # denial of service via log writes.
+            self._refused += 1
+            if self._refused == 1 or self._refused % 100 == 0:
+                sys.stderr.write("connection refused at MAX_CONN=%d (total refused: %d)\n"
+                                 % (MAX_CONN, self._refused))
             return
         try:
             super().process_request(request, client_address)

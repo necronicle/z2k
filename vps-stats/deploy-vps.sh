@@ -20,8 +20,19 @@ ENV_FILE="/etc/z2k-stats.env"
 DATA_DIR="/var/lib/z2k-stats"
 CADDYFILE="/etc/caddy/Caddyfile"
 PORT_PUBLIC=8088
+# Snapshot dir for whatever this run is about to overwrite. z2k-stats-trim.sh
+# in particular has exactly one commit in this repo — the one being deployed
+# right now — so a copy already running on a live VPS is the only record of
+# whatever retention logic came before it anywhere. `install` has no concept
+# of "keep the old one"; this does that ourselves before every overwrite.
+BACKUP_DIR="/var/backups/z2k-stats/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$BACKUP_DIR"
 
 log() { printf '[deploy] %s\n' "$*"; }
+backup_before_overwrite() {
+	# $1 = path about to be replaced. No-op if nothing is there yet.
+	[ -e "$1" ] && cp -a "$1" "$BACKUP_DIR/$(basename "$1")"
+}
 
 # 1. unprivileged user
 if ! id z2kstats >/dev/null 2>&1; then
@@ -30,7 +41,10 @@ if ! id z2kstats >/dev/null 2>&1; then
 fi
 
 # 2. binaries
-log "installing collector + aggregator + trim to $BIN_DIR"
+log "installing collector + aggregator + trim to $BIN_DIR (backing up any previous copy to $BACKUP_DIR first)"
+backup_before_overwrite "$BIN_DIR/z2k-stats-collector.py"
+backup_before_overwrite "$BIN_DIR/z2k-stats-aggregate.py"
+backup_before_overwrite "$BIN_DIR/z2k-stats-trim.sh"
 install -m 0755 "$SRC_DIR/z2k-stats-collector.py" "$BIN_DIR/z2k-stats-collector.py"
 install -m 0755 "$SRC_DIR/z2k-stats-aggregate.py" "$BIN_DIR/z2k-stats-aggregate.py"
 install -m 0755 "$SRC_DIR/z2k-stats-trim.sh"      "$BIN_DIR/z2k-stats-trim.sh"
@@ -83,10 +97,29 @@ systemctl enable --now z2k-stats-collector.service
 systemctl enable --now z2k-stats-aggregate.timer
 systemctl enable --now z2k-stats-trim.timer
 
+# RESTART, NOT JUST enable --now. On a machine where the collector is already
+# running — that is, every re-run, which this script advertises as its normal
+# mode — `enable --now` is a no-op: the unit is enabled and it is active, so
+# systemd does nothing at all. The new .py sits on disk, the old one keeps
+# serving from the running process's memory, and the deploy reports success.
+# Python reads the source once at exec, so only a restart picks it up.
+log "restarting collector to pick up the new code"
+systemctl restart z2k-stats-collector.service
+sleep 1
+if systemctl is-active --quiet z2k-stats-collector.service; then
+	log "collector restarted and active"
+else
+	log "ERROR: collector did not come back after restart"
+	systemctl --no-pager --lines=20 status z2k-stats-collector.service || true
+	exit 1
+fi
+
 # Supersede the hand-installed cron entry this timer replaces, so the rewrite
-# cannot run twice from two schedulers.
+# cannot run twice from two schedulers. Backed up first for the same reason as
+# the binaries above: this trigger has no copy anywhere else either.
 if [ -e /etc/cron.monthly/z2k-stats-trim ]; then
-	log "removing superseded /etc/cron.monthly/z2k-stats-trim (now a systemd timer)"
+	backup_before_overwrite /etc/cron.monthly/z2k-stats-trim
+	log "removing superseded /etc/cron.monthly/z2k-stats-trim (backed up to $BACKUP_DIR, now a systemd timer)"
 	rm -f /etc/cron.monthly/z2k-stats-trim
 fi
 
@@ -112,7 +145,32 @@ if ! grep -q '^:8088 {' "$CADDYFILE" 2>/dev/null; then
 		exit 1
 	fi
 else
-	log "caddy :$PORT_PUBLIC block already present"
+	# BLOCK PRESENT — AND THAT IS NOT THE SAME AS "UP TO DATE".
+	#
+	# The old test was `if ! grep -q '^:8088 {'`, so once the block existed the
+	# whole step was skipped forever and any later change to the shipped snippet
+	# silently never reached the server. Detect the drift and say so, loudly.
+	#
+	# But do NOT apply it automatically. `admin off` in the global block disables
+	# the admin API that `systemctl reload` drives, so the only way to apply a
+	# Caddyfile change here is a RESTART — and caddy also terminates :8443, which
+	# is the Telegram relay path. A restart drops every established tunnel at
+	# once and sends the whole fleet into a simultaneous reconnect. That is a
+	# decision for a human at a chosen moment, not a side effect of running an
+	# installer.
+	_live=$(sed -n "/^:$PORT_PUBLIC {/,/^}/p" "$CADDYFILE" | sed 's/[[:space:]]*$//')
+	_want=$(sed -e '/^#/d' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]*$//' "$SRC_DIR/caddy-z2k-stats.snippet")
+	if [ "$_live" = "$_want" ]; then
+		log "caddy :$PORT_PUBLIC block present and matches the shipped snippet"
+	else
+		log "NOTE: caddy :$PORT_PUBLIC block differs from the shipped snippet."
+		log "      Not applied automatically: 'admin off' means reload is unavailable,"
+		log "      and restarting caddy also bounces :8443 — every Telegram tunnel."
+		log "      To apply during a chosen maintenance window:"
+		log "        sed -i '/^:$PORT_PUBLIC {/,/^}/d' $CADDYFILE"
+		log "        cat $SRC_DIR/caddy-z2k-stats.snippet >> $CADDYFILE"
+		log "        caddy validate --config $CADDYFILE --adapter caddyfile && systemctl restart caddy"
+	fi
 fi
 
 # 7. firewall — host INPUT policy is ACCEPT, but make 8088 explicit + persistent.
