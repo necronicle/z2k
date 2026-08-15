@@ -20,6 +20,9 @@ ALL_TSV="${CACHE_DIR}/blocked_all.tsv"
 TCP_TSV="${CACHE_DIR}/blocked_tcp.tsv"
 UDP_TSV="${CACHE_DIR}/blocked_udp.tsv"
 IPMAP_TSV="${CACHE_DIR}/ip2host.tsv"
+# Потолок на каждый TSV. ~200к строк это порядка 20 МБ — с запасом для разбора
+# и заведомо безопасно для флешки. См. trim_tsv() в start_monitor.
+MAX_TSV_LINES="${MAX_TSV_LINES:-200000}"
 
 DEFAULT_TCP_PORTS="80,443,2053,2083,2087,2096,8443"
 DEFAULT_UDP_PORTS="443"
@@ -499,6 +502,33 @@ start_monitor() {
 	filter="$(build_tcpdump_filter)"
 	iface="$(choose_capture_iface "$tcpdump_bin")"
 	write_awk_parser || return 1
+
+	# ПОДРЕЗКА ПЕРЕД КАЖДЫМ ЗАПУСКОМ.
+	#
+	# Дальше tcpdump пишет в эти TSV непрерывно и без всякого потолка, а лежат
+	# они под /opt, то есть на флешке. PID-файл автор осознанно вынес в /tmp
+	# именно из этих соображений (комментарий в шапке файла), но к самим данным
+	# то же рассуждение не применили: на шумной сети файл растёт часами и месяц
+	# работы съедает раздел, на котором живёт весь z2k.
+	#
+	# Держим хвост: последние MAX_TSV_LINES строк. Инструмент диагностический,
+	# смотрят в него свежее, а старое не нужно никому. Подрезаем на старте, а не
+	# по таймеру — монитор включают руками на время разбора, и каждый следующий
+	# запуск сам ограничивает то, что накопил предыдущий.
+	trim_tsv() {
+		_t="$1"
+		[ -f "$_t" ] || return 0
+		_n=$(wc -l < "$_t" 2>/dev/null) || return 0
+		[ "${_n:-0}" -gt "$MAX_TSV_LINES" ] 2>/dev/null || return 0
+		if tail -n "$MAX_TSV_LINES" "$_t" > "${_t}.trim" 2>/dev/null; then
+			mv -f "${_t}.trim" "$_t" 2>/dev/null || rm -f "${_t}.trim" 2>/dev/null
+		else
+			rm -f "${_t}.trim" 2>/dev/null
+		fi
+	}
+	for _tsv in "$ALL_TSV" "$TCP_TSV" "$UDP_TSV" "$IPMAP_TSV"; do
+		trim_tsv "$_tsv"
+	done
 
 	echo "# started: $(date)" >> "$ALL_TSV"
 	echo "# tcp_ports: $tcp_ports" >> "$ALL_TSV"

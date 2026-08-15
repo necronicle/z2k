@@ -51,21 +51,39 @@ au_log() {
 }
 
 au_lock_acquire() {
-    if [ -f "$Z2K_AU_LOCK_FILE" ]; then
-        local pid
-        pid=$(cat "$Z2K_AU_LOCK_FILE" 2>/dev/null)
+    # ЗАХВАТ ЧЕРЕЗ mkdir, А НЕ «проверил файл — записал файл».
+    #
+    # Прежняя схема состояла из двух отдельных шагов: `[ -f ... ]` и, если файла
+    # нет, `echo $$ > ...`. Между ними ничего не мешает второму процессу пройти
+    # ту же проверку — и оба считают, что владеют замком. Ровно этот сценарий
+    # здесь достижим: ночной планировщик и человек, нажавший «обновить» в меню
+    # или в панели, стартуют независимо, а обновление переписывает init-скрипты
+    # и lib/*, которые в этот момент сорсит второй экземпляр.
+    #
+    # mkdir атомарен: каталог либо создаётся, либо нет, третьего нет. Тот же
+    # приём уже используется в lib/install.sh для его собственного замка — здесь
+    # просто не был применён. PID кладём внутрь каталога, чтобы сохранить
+    # прежнюю диагностику битого замка.
+    local _d="${Z2K_AU_LOCK_FILE}.d" pid
+    if ! mkdir "$_d" 2>/dev/null; then
+        pid=$(cat "$_d/pid" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             au_log "lock held by pid=$pid, skipping"
             return 1
         fi
-        au_log "stale lock removed (pid=$pid not alive)"
-        rm -f "$Z2K_AU_LOCK_FILE"
+        au_log "stale lock removed (pid=${pid:-?} not alive)"
+        rm -rf "$_d" 2>/dev/null
+        mkdir "$_d" 2>/dev/null || { au_log "lock: не удалось создать $_d"; return 1; }
     fi
-    echo "$$" > "$Z2K_AU_LOCK_FILE" 2>/dev/null || return 1
+    echo "$$" > "$_d/pid" 2>/dev/null
+    # Файл прежнего формата оставляем для внешних наблюдателей (диагностика,
+    # старые скрипты), но решение о владении принимается ТОЛЬКО по каталогу.
+    echo "$$" > "$Z2K_AU_LOCK_FILE" 2>/dev/null || true
     return 0
 }
 
 au_lock_release() {
+    rm -rf "${Z2K_AU_LOCK_FILE}.d" 2>/dev/null || true
     rm -f "$Z2K_AU_LOCK_FILE" 2>/dev/null || true
 }
 
@@ -991,6 +1009,22 @@ $files
 EOF
 
     # 2) install each file
+    #
+    # ОТКАЗ УСТАНОВКИ ОБЯЗАН ДОЙТИ ДО ВЫЗЫВАЮЩЕГО. Ниже обе ветки отказа (cp и
+    # mv) раньше только писали в лог и шли к следующему файлу, а функция затем
+    # безусловно доходила до записи installed-tag и `return 0`. Вся остальная
+    # машинерия обновления — au_rollback_patch, маркер «смешанное дерево»
+    # au_mark_dirty_tree — висит на единственной ветке `if ! au_apply_patch`,
+    # то есть при частичной установке не срабатывала НИКОГДА.
+    #
+    # Почему это не теоретическое: файлы качаются в Z2K_AU_TMP_DIR (/tmp, ОЗУ), а
+    # раскладываются в /opt (флешка). Это разные точки монтирования, и ровно /opt
+    # у этого проекта регулярно уходит в read-only или в ENOSPC (мёртвый NAND,
+    # power-loss). Скачивание при этом проходит, а установка части файлов — нет.
+    # Дальше installed-tag продвигался на новую версию, и следующий прогон
+    # сравнивал теги, видел совпадение и не делал ничего. Роутер оставался на
+    # смеси старого и нового навсегда, без единого признака в статусе.
+    local _au_install_failed=0
     local targets target _del_targets _dt
     while IFS= read -r repo_path; do
         [ -z "$repo_path" ] && continue
@@ -1047,10 +1081,12 @@ EOF_DEL
                 else
                     rm -f "$_au_tmp" 2>/dev/null
                     au_log "patch: FAILED to install $repo_path -> $target (rename)"
+                    _au_install_failed=$((_au_install_failed + 1))
                 fi
             else
                 rm -f "$_au_tmp" 2>/dev/null
                 au_log "patch: FAILED to stage $repo_path -> $target (copy)"
+                _au_install_failed=$((_au_install_failed + 1))
             fi
         done <<EOF_TARGETS
 $targets
@@ -1058,6 +1094,19 @@ EOF_TARGETS
     done <<EOF
 $files
 EOF
+
+    # 2a) хоть один файл не встал — это НЕ успех.
+    #
+    # Возвращаемся с ошибкой ДО записи installed-tag: тег — единственное, по чему
+    # следующий прогон понимает, нужно ли обновляться, и продвинуть его на
+    # версию, которая разложена наполовину, значит закрыть себе путь к
+    # исправлению навсегда. Вызывающий (au_run_apply) на ненулевом коде откатит
+    # патч и пометит дерево смешанным — ровно то, ради чего эти механизмы и
+    # написаны.
+    if [ "$_au_install_failed" -gt 0 ]; then
+        au_log "patch: не установлено файлов: $_au_install_failed — тег НЕ продвигаем, отдаём ошибку для отката"
+        return 1
+    fi
 
     # 3) reapply feature flags (config might have been replaced if it was
     # in changed_files). For pure lua/list patches this is a no-op.

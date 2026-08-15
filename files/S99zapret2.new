@@ -1,24 +1,24 @@
 #!/bin/sh
 # /opt/etc/init.d/S99zapret2
-# ��������� ������������ init.d/openwrt/zapret2 ��� Keenetic
-# ���������� ������ common/ � config ���� ������ hardcoded ��������
+# Адаптация официального init.d/openwrt/zapret2 для Keenetic
+# Использует модули common/ и config файл вместо hardcoded настроек
 
 # ==============================================================================
-# ���� � ����������
+# ПУТИ И ПЕРЕМЕННЫЕ
 # ==============================================================================
 
 ZAPRET_BASE=/opt/zapret2
 ZAPRET_RW=${ZAPRET_RW:-"$ZAPRET_BASE"}
 ZAPRET_CONFIG=${ZAPRET_CONFIG:-"$ZAPRET_RW/config"}
 
-# �������� ��� zapret2 ����������
+# Проверка что zapret2 установлен
 [ -d "$ZAPRET_BASE" ] || {
     echo "ERROR: zapret2 not installed in $ZAPRET_BASE"
     exit 1
 }
 
 # ==============================================================================
-# SOURCE ����������� ������� (��� � init.d/openwrt/functions)
+# SOURCE ОФИЦИАЛЬНЫХ МОДУЛЕЙ (как в init.d/openwrt/functions)
 # ==============================================================================
 
 # ������� �������
@@ -153,15 +153,15 @@ z2k_wait_queue_bound()
     return 0
 }
 
-# ����������� ���� firewall (iptables/nftables)
+# Определение типа firewall (iptables/nftables)
 . "$ZAPRET_BASE/common/fwtype.sh"
 
-# KEENETIC FIX: �������������� linux_ipt_avail ��� ������ ��� ip6tables
-# �� Keenetic ����� ���� DISABLE_IPV6=1, �� iptables ��� ����� ��������
+# KEENETIC FIX: Переопределить linux_ipt_avail для работы без ip6tables
+# На Keenetic может быть DISABLE_IPV6=1, но iptables все равно работает
 linux_ipt_avail()
 {
-	# ��� Keenetic ���������� ������ iptables (IPv4-only �����)
-	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: linux_ipt_avail() �������"
+	# Для Keenetic достаточно только iptables (IPv4-only режим)
+	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: linux_ipt_avail() вызвана"
 	exists iptables
 	local result=$?
 	[ -n "$Z2K_DEBUG" ] && echo "DEBUG: exists iptables = $result"
@@ -171,22 +171,22 @@ linux_ipt_avail()
 # IP helper functions
 . "$ZAPRET_BASE/common/linux_iphelper.sh"
 
-# ������� ��� ������ � iptables
+# Функции для работы с iptables
 . "$ZAPRET_BASE/common/ipt.sh"
 
-# ������� ��� ������ � nftables (���� ��������)
+# Функции для работы с nftables (если доступны)
 existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 
-# ���������� firewall
+# Управление firewall
 . "$ZAPRET_BASE/common/linux_fw.sh"
 
-# ���������� daemon ����������
+# Управление daemon процессами
 . "$ZAPRET_BASE/common/linux_daemons.sh"
 
-# ������ �� �������� �������
+# Работа со списками доменов
 . "$ZAPRET_BASE/common/list.sh"
 
-# ��������� custom scripts
+# Поддержка custom scripts
 . "$ZAPRET_BASE/common/custom.sh"
 
 # ==============================================================================
@@ -196,14 +196,14 @@ existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 # ��������� ������������
 . "$ZAPRET_CONFIG"
 
-# DEBUG: ��������� FWTYPE ����� �������� config
-[ -n "$Z2K_DEBUG" ] && echo "DEBUG: ����� �������� config - FWTYPE='$FWTYPE'"
+# DEBUG: Проверить FWTYPE после загрузки config
+[ -n "$Z2K_DEBUG" ] && echo "DEBUG: После загрузки config - FWTYPE='$FWTYPE'"
 
-# ��������: ������������� ����� � ������ iptables (�������� - �� :)
-# std_ports() ���� ������� ��� �������� ipt.sh, �� ����� ���������� ���� ������
-# �������� ������� std_ports() ����� �������� config
+# КРИТИЧНО: Преобразовать порты в формат iptables (заменить - на :)
+# std_ports() была вызвана при загрузке ipt.sh, но тогда переменные были пустые
+# Повторно вызвать std_ports() ПОСЛЕ загрузки config
 command -v std_ports >/dev/null 2>&1 && std_ports
-[ -n "$Z2K_DEBUG" ] && echo "DEBUG: std_ports() ������� - NFQWS2_PORTS_TCP_IPT='$NFQWS2_PORTS_TCP_IPT'"
+[ -n "$Z2K_DEBUG" ] && echo "DEBUG: std_ports() вызвана - NFQWS2_PORTS_TCP_IPT='$NFQWS2_PORTS_TCP_IPT'"
 
 # ------------------------------------------------------------------------------
 # �������� ������ ��� ORCHESTRATION (STRICT MANUAL MODE)
@@ -574,7 +574,7 @@ traffic_debug_tcpdump_stop()
 	rm -f "$pidfile" 2>/dev/null || true
 }
 # ==============================================================================
-# ��������� ����������� ��� KEENETIC
+# НАСТРОЙКИ СПЕЦИФИЧНЫЕ ДЛЯ KEENETIC
 # ==============================================================================
 
 PIDDIR=/var/run
@@ -784,7 +784,7 @@ CUSTOM_DIR="${CUSTOM_DIR:-$ZAPRET_RW/init.d/keenetic}"
 IPSET_CR="$ZAPRET_BASE/ipset/create_ipset.sh"
 
 # ==============================================================================
-# ������� ��� ������ � IPSET
+# ФУНКЦИИ ДЛЯ РАБОТЫ С IPSET
 # ==============================================================================
 
 create_ipset()
@@ -1041,7 +1041,7 @@ z2k_seed_user_exclusions()
 }
 
 # ==============================================================================
-# KEENETIC FIREWALL FUNCTIONS (������ OpenWrt network.sh ������������)
+# KEENETIC FIREWALL FUNCTIONS (замена OpenWrt network.sh зависимостей)
 # ==============================================================================
 
 get_default_ifaces4()
@@ -1109,9 +1109,9 @@ get_wan_ifaces6()
 	[ -n "$ifaces" ] && unique $ifaces || true
 }
 
-# Keenetic-specific: ���������� ������ fw_nfqws_post4/post6/pre4/pre6
-# � ������� �� OpenWrt, �� ������� network.sh � ����������� WAN �����������
-# �������� ���������� WAN �� default route
+# Keenetic-specific: упрощенные версии fw_nfqws_post4/post6/pre4/pre6
+# В отличие от OpenWrt, не требуют network.sh и определения WAN интерфейсов
+# Пытаемся определить WAN по default route
 
 fw_nfqws_post4()
 {
@@ -1176,7 +1176,7 @@ fw_nfqws_pre6()
 }
 
 # ==============================================================================
-# ������� ���������� DAEMON (������������ ��� KEENETIC ��� PROCD)
+# ФУНКЦИИ УПРАВЛЕНИЯ DAEMON (АДАПТИРОВАНО ДЛЯ KEENETIC БЕЗ PROCD)
 # ==============================================================================
 
 # Учёт демонов, не сумевших стартовать.
@@ -1262,17 +1262,17 @@ run_daemon()
 
     echo "Starting daemon $1: $2 $3"
 
-    # ������ � ���� � ����������� PID
+    # Запуск в фоне с сохранением PID
     local ERRFILE
     ERRFILE=$(z2k_daemon_err_file "$DAEMONBASE" "$1")
     : > "$ERRFILE" 2>/dev/null || true
     $2 $3 >/dev/null 2>"$ERRFILE" &
     local PID=$!
 
-    # ��������� PID
+    # Сохранить PID
     echo $PID > "$PIDFILE"
 
-    # ��������� ��� ������� ����������
+    # Проверить что процесс запустился
     # Which queue THIS daemon was told to bind. custom.d instances
     # (50-stun4all, 50-discord-media) pass their own --qnum, so the global
     # $QNUM is simply wrong for them - we would wait on the main daemon's
@@ -1353,7 +1353,7 @@ stop_daemon_by_pidfile()
             # (measured) because nfqws.c checks bQuit right after select().
             # Same 3 s SIGKILL deadline, just not paid when it is not needed.
             z2k_wait_gone "$PID" 3
-            # Force kill ���� �� �����������
+            # Force kill если не остановился
             kill -0 $PID 2>/dev/null && kill -9 $PID 2>/dev/null
         fi
         rm -f "$1"
@@ -1369,7 +1369,7 @@ stop_all_nfqws()
         [ -f "$pidfile" ] && stop_daemon_by_pidfile "$pidfile"
     done
 
-    # Fallback: killall ���� ���-�� ��������
+    # Fallback: killall если что-то осталось
     killall nfqws2 2>/dev/null
 
     # �������� ��� PID �����
@@ -1377,7 +1377,7 @@ stop_all_nfqws()
 }
 
 # ==============================================================================
-# ������� START/STOP DAEMONS
+# ФУНКЦИИ START/STOP DAEMONS
 # ==============================================================================
 
 start_daemons()
@@ -1387,8 +1387,8 @@ start_daemons()
     z2k_daemon_fail_reset
     ensure_autocircular_files
 
-    # ������������ ������� �� common/linux_daemons.sh
-    # standard_mode_daemons �������� do_nfqws
+    # Использовать функции из common/linux_daemons.sh
+    # standard_mode_daemons вызывает do_nfqws
     standard_mode_daemons 1
 
     # ��������� custom scripts ���� ����
@@ -1410,7 +1410,7 @@ stop_daemons()
 {
     echo "Stopping zapret2 daemons"
 
-    # ���������� ��� nfqws ��������
+    # Остановить все nfqws процессы
     stop_all_nfqws
 
     # ��������� custom scripts ��� ���������
@@ -1427,7 +1427,7 @@ restart_daemons()
 }
 
 # ==============================================================================
-# ������� START/STOP FIREWALL
+# ФУНКЦИИ START/STOP FIREWALL
 # ==============================================================================
 
 # Where the FIRMWARE keeps its modules.
@@ -1498,7 +1498,7 @@ load_modules()
 {
     echo "Loading required kernel modules"
 
-    # ������ ����������� ������� ��� ������ zapret2
+    # Список необходимых модулей для работы zapret2
     #
     # xt_CONNMARK/xt_connmark serve one feature — Keenetic policy exclusion — and it
     # is safe to enable only because z2k_policy_connmark_start now refuses to install
@@ -2076,18 +2076,18 @@ start_fw()
 {
     echo "Applying zapret2 firewall rules"
 
-    # DEBUG: ��������� FWTYPE ����� linux_fwtype
-    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: � start_fw() ����� linux_fwtype - FWTYPE='$FWTYPE'"
+    # DEBUG: проверить FWTYPE после linux_fwtype
+    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: в start_fw() после linux_fwtype - FWTYPE='$FWTYPE'"
 
-    # ���������� ��� firewall (iptables/nftables)
+    # Определить тип firewall (iptables/nftables)
     linux_fwtype
 
-    # DEBUG: ��������� FWTYPE ����� linux_fwtype
-    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: � start_fw() ����� linux_fwtype - FWTYPE='$FWTYPE'"
+    # DEBUG: проверить FWTYPE после linux_fwtype
+    [ -n "$Z2K_DEBUG" ] && echo "DEBUG: в start_fw() после linux_fwtype - FWTYPE='$FWTYPE'"
 
     echo "Detected firewall type: $FWTYPE"
 
-    # ������������ ����������� ������� �� common/linux_fw.sh
+    # Использовать официальную функцию из common/linux_fw.sh
     z2k_connmark_init
     z2k_conntrack_tune_start
     zapret_apply_firewall
@@ -2117,11 +2117,11 @@ stop_fw()
 {
     echo "Removing zapret2 firewall rules"
 
-    # ���������� ��� firewall
+    # Определить тип firewall
     linux_fwtype
 
     z2k_rst_filter_stop
-    # ������������ ����������� �������
+    # Использовать официальную функцию
     z2k_connmark_init
     z2k_udp_masquerade_fix_stop
     z2k_policy_connmark_stop
@@ -2203,7 +2203,7 @@ list_table()
 }
 
 # ==============================================================================
-# �������� ������� START/STOP/RESTART
+# ОСНОВНЫЕ ФУНКЦИИ START/STOP/RESTART
 # ==============================================================================
 
 start()
@@ -2215,7 +2215,7 @@ start()
 
     echo "Starting zapret2 service"
 
-    # 1. ��������� ����������� ������ ����
+    # 1. Загрузить необходимые модули ядра
     load_modules || echo "Warning: Some modules failed to load"
 
     # 2. ��������� firewall �������
@@ -2237,7 +2237,7 @@ start()
     traffic_debug_enable_nfqws2_log
     traffic_debug_tcpdump_start
 
-    # 3. ��������� daemon ��������
+    # 3. Запустить daemon процессы
     # Результат больше НЕ игнорируется: раньше здесь стоял голый вызов, и ниже
     # безусловно печаталось «service started» + return 0 — отсюда зелёная панель
     # при мёртвом обходе.
@@ -2260,7 +2260,7 @@ stop()
     traffic_debug_tcpdump_stop
     # Orchestrator stop removed: upstream daemon удалён 2026-05-07.
 
-    # 1. ���������� daemon ��������
+    # 1. Остановить daemon процессы
     stop_daemons
 
     # Sync auto-detected domains after runtime updates.
@@ -2286,7 +2286,7 @@ status()
 {
     echo "Checking zapret2 status..."
 
-    # ��������� �������� �� PID ������
+    # Проверить процессы по PID файлам
     local running=0
     for pidfile in $PIDDIR/nfqws2_*.pid; do
         if [ -f "$pidfile" ]; then
@@ -2304,7 +2304,7 @@ status()
     if [ $running -gt 0 ]; then
         echo "zapret2 is running ($running daemons)"
 
-        # �������� ��������
+        # Показать процессы
         echo "Processes:"
         pgrep -af nfqws2
 

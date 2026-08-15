@@ -1184,6 +1184,22 @@ _whitelist_add_locked() {
 }
 
 whitelist_import() {
+    # ПОД ЗАМКОМ, как whitelist_add и whitelist_delete рядом.
+    #
+    # Импорт единственный из троих его не брал, хотя пишет в тот же файл и делает
+    # это дольше всех: сначала снимает снимок существующих строк через grep, потом
+    # дописывает новые через `cat >>`. Между этими двумя шагами удаление,
+    # пришедшее из панели или из меню, успевает переписать файл целиком — и его
+    # версия, уже без удалённого домена, затирается нашим дописыванием поверх
+    # устаревшего снимка. Пропадает не импорт, а ЧУЖОЕ удаление, поэтому человек
+    # ничего не замечает: домен, который он только что убрал, просто снова здесь.
+    _list_lock "$WHITELIST_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _whitelist_import_locked "$@"; _rc=$?
+    _list_unlock "$WHITELIST_FILE"
+    return $_rc
+}
+
+_whitelist_import_locked() {
     # Bulk merge — читает многострочный список доменов из stdin (TXT файл).
     # Per-line: trim CR/spaces, skip empty/comments (#), lowercase, validate.
     # Dedup vs existing whitelist через sort + comm. Append only new entries.
@@ -1363,7 +1379,17 @@ autohostlist_domains_list() {
 # Удаление — это «автохостлист ошибся, домен сюда не относится». Убираем и из
 # накопленного, и из РКН-списка, иначе следующий старт вернёт его обратно.
 autohostlist_domains_delete() {
-    local domain="$1" rkn tmp
+    # ПОД ЗАМКОМ — как extra_domains_delete и whitelist_delete ниже.
+    #
+    # Функция трогает ДВА файла, и второй из них, extra_strats/TCP/RKN/List.txt,
+    # переписывает не только панель: его же обновляет фоновая синхронизация
+    # списков. Схема «grep -v в temp, затем mv» атомарна сама по себе, но не
+    # защищает от того, что снимок для grep взят до чужой записи: тогда mv
+    # возвращает файл к состоянию, в котором чужих правок ещё не было, и они
+    # исчезают. Замок берём на каждый файл по очереди, а не один общий: они
+    # независимы, и держать оба разом значило бы связать панель с фоновой
+    # задачей крепче, чем нужно.
+    local domain="$1" rkn tmp _f_rc
     case "$domain" in
         ''|*' '*|-*|*[!a-zA-Z0-9.-]*) echo "invalid domain" >&2; return 1 ;;
     esac
@@ -1372,13 +1398,19 @@ autohostlist_domains_delete() {
     rkn="${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt"
     for f in "$AUTOHOSTLIST_DOMAINS_FILE" "$rkn"; do
         [ -f "$f" ] || continue
+        _list_lock "$f" || { echo "список занят, повторите" >&2; return 1; }
         tmp="${f}.z2k.$$"
         grep -vxF "$domain" "$f" > "$tmp" 2>/dev/null
         # grep -v выходит с единицей, когда не осталось ни строки, — на статус
         # тут смотреть нельзя, иначе удаление последней записи молча отменится.
+        _f_rc=0
         if [ -f "$tmp" ]; then
-            mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+            mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; _f_rc=1; }
+        else
+            _f_rc=1
         fi
+        _list_unlock "$f"
+        [ "$_f_rc" -eq 0 ] || { echo "не удалось переписать $f" >&2; return 1; }
     done
     return 0
 }
@@ -1583,6 +1615,17 @@ warp_games() {
 }
 
 warp_game_toggle() {
+    # ПОД ЗАМКОМ. Каждый чекбокс на странице WARP шлёт свой запрос, и человек
+    # щёлкает их подряд: два запроса читают один и тот же .enabled, каждый
+    # переписывает его целиком своим вариантом, и побеждает тот, кто закончил
+    # вторым. Первый тумблер откатывается сам собой через секунду после нажатия.
+    _list_lock "$WARP_ENABLED_FILE" || { echo "список занят, повторите" >&2; return 1; }
+    _warp_game_toggle_locked "$@"; _rc=$?
+    _list_unlock "$WARP_ENABLED_FILE"
+    return $_rc
+}
+
+_warp_game_toggle_locked() {
     # warp_game_toggle <name> <0|1>
     local name="$1" want="$2" tmp
     warp_name_ok "$name" || { echo "invalid list name" >&2; return 1; }

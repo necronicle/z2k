@@ -32,6 +32,8 @@ no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
 
 sha_of() { shasum -a 256 "$1" 2>/dev/null | awk '{print $1}' || sha256sum "$1" | awk '{print $1}'; }
 sha_str() { printf '%s' "$1" > "$TMP/.s"; sha_of "$TMP/.s"; }
+# То же для потока: содержимое приходит из git, а не с диска.
+sha_stdin() { cat > "$TMP/.si"; sha_of "$TMP/.si"; }
 
 # ---------------------------------------------------------------------------
 # A fake curl. _z2k_curl_etag invokes curl with -o <body> and -w '%{http_code}';
@@ -117,11 +119,27 @@ case "$rc" in *rc=0*) ok "без ожидаемого хеша фетч не и�
 MAN="$HERE/UPDATES.json"
 lookup() { sh -c "Z2K_AU_SOURCE_ONLY=1 . '$HERE/lib/auto_update.sh' 2>/dev/null; au_manifest_file_sha '$1' '$2'"; }
 
+# СВЕРЯЕМ С ТЕМ, ЧТО МАНИФЕСТ ВЫПУСТИЛ, А НЕ С РАБОЧИМ ДЕРЕВОМ.
+#
+# Инвариант здесь один: манифест не врёт о содержимом, которое он объявил. Это
+# состояние файла на релизном коммите — том самом, что последним трогал
+# UPDATES.json. Сравнение с рабочей копией проверяло другое и превращало любую
+# правку любого файла из манифеста (а их 117) в красный тест до следующего
+# релиза: то есть ровно тогда, когда работа и идёт.
 want=$(lookup "$MAN" "files/z2k-warp.sh")
-real=$(sha_of "$HERE/files/z2k-warp.sh")
+_rel_commit=$(git -C "$HERE" log --format=%H -1 -- UPDATES.json 2>/dev/null)
+if [ -n "$_rel_commit" ] && git -C "$HERE" cat-file -e "$_rel_commit:files/z2k-warp.sh" 2>/dev/null; then
+    real=$(git -C "$HERE" show "$_rel_commit:files/z2k-warp.sh" 2>/dev/null | sha_stdin)
+    _what="на релизном коммите ${_rel_commit%"${_rel_commit#???????}"}"
+else
+    # Не git-чекаут (или файла на том коммите нет) — сверяем с рабочей копией,
+    # как раньше. Тогда расхождение означает лишь «файл правили после релиза».
+    real=$(sha_of "$HERE/files/z2k-warp.sh")
+    _what="в рабочем дереве"
+fi
 [ -n "$want" ] && [ "$want" = "$real" ] \
-    && ok "манифест публикует верный sha256 для files/z2k-warp.sh" \
-    || no "манифест публикует верный sha256" "$real" "$want"
+    && ok "манифест публикует верный sha256 для files/z2k-warp.sh ($_what)" \
+    || no "манифест публикует верный sha256 ($_what)" "$real" "$want"
 
 [ -z "$(lookup "$MAN" "files/no-such-file.sh")" ] \
     && ok "неизвестный путь → пусто (проверка просто не применяется)" \

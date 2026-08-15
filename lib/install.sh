@@ -3510,9 +3510,19 @@ step_finalize() {
                 fi
             fi
             if $tg_valid; then
-                z2k_snapshot_external "$tg_dest"     # для rollback
-                mv -f "$tg_tmp" "$tg_dest" && chmod +x "$tg_dest"
-                print_success "Telegram прокси установлен ($tg_arch)"
+                # Снапшот — гейт, а не жест. Политика прописана в самой
+                # z2k_snapshot_external: «на mkdir/cp/marker fail возвращаем
+                # non-zero, чтобы callsite прервал перезапись ДО мутации». Здесь
+                # возврат игнорировался, то есть при переполненной флешке старый
+                # рабочий бинарник затирался новым, а копии для отката не
+                # оставалось — ровно тот случай, ради которого снапшот и заведён.
+                if z2k_snapshot_external "$tg_dest"; then
+                    mv -f "$tg_tmp" "$tg_dest" && chmod +x "$tg_dest"
+                    print_success "Telegram прокси установлен ($tg_arch)"
+                else
+                    rm -f "$tg_tmp"
+                    print_warning "Снапшот tg-mtproxy-client не удался — оставлен текущий рабочий бинарник"
+                fi
             else
                 rm -f "$tg_tmp"
                 # КРИТИЧНО: оставляем существующий рабочий бинарник, НЕ удаляем.
@@ -3815,7 +3825,12 @@ step_finalize() {
                 fi
             fi
             if $zd_valid; then
-                z2k_snapshot_external "$zd_dest"     # для rollback
+                # Возврат снапшота проверяется — см. пояснение у tg-mtproxy-client
+                # выше и готовый образец семью строками ниже (S98z2k-detect).
+                if ! z2k_snapshot_external "$zd_dest"; then
+                    rm -f "$zd_tmp"
+                    print_warning "Снапшот z2k-detect не удался — оставлен текущий рабочий бинарник"
+                else
                 mv -f "$zd_tmp" "$zd_dest" && chmod +x "$zd_dest"
                 print_success "z2k-detect установлен ($zd_arch)"
                 # Демон stateless — никаких отдельных state-файлов на диске.
@@ -3846,6 +3861,7 @@ step_finalize() {
                 # (engine.Defaults() reads RKN/extra/whitelist on
                 # startup + every 5min). Restart picks up new binary.
                 /opt/etc/init.d/S98z2k-detect restart >/dev/null 2>&1 || true
+                fi   # снапшот z2k-detect удался
             else
                 # Невалидная загрузка — удаляем ТОЛЬКО temp, рабочий бинарник
                 # НЕ трогаем (Codex 2026-05-28: transient CDN-fail удалял

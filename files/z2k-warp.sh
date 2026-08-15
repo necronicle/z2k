@@ -841,9 +841,30 @@ warp_pbr_up() {
 }
 
 warp_pbr_down() {
+    # СНИМАТЬ НАДО ОБЕ ФОРМЫ МАРКИРОВКИ, И ГЛАВНОЕ — ТУ, КОТОРУЮ СТАВИТ pbr_up.
+    #
+    # warp_pbr_up ставит правило с `--set-xmark $MARK/$MARK`, а здесь искали и
+    # удаляли `--set-mark $MARK`. Для iptables это разные правила: --set-mark X
+    # разворачивается в --set-xmark X/0xffffffff, а маска у нас своя. Поэтому
+    # `-C` не находил ничего, цикл завершался с первой же итерации, и правило
+    # маркировки оставалось в mangle PREROUTING навсегда.
+    #
+    # Последствие ощутимое: человек выключает WARP, ip rule и таблица
+    # маршрутизации снимаются ниже, а пакеты к адресам из ipset продолжают
+    # помечаться. Дальше они уходят в правило, которого больше нет, то есть
+    # обычным маршрутом — но сама маркировка остаётся на пакетах и мешает
+    # чужим политикам Keenetic, которые смотрят на тот же mark. Накапливается
+    # молча: каждое включение добавляет правило, ни одно выключение не убирает.
+    #
+    # Форму --set-mark сохраняем в списке: ею пользовались до r-62, и на
+    # роутерах, переживших те версии, такие правила ещё лежат.
     for ch in OUTPUT PREROUTING; do   # OUTPUT drained too, to clean any legacy rule
-        while iptables -w -t mangle -C "$ch" -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK" 2>/dev/null; do
-            iptables -w -t mangle -D "$ch" -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK" 2>/dev/null || break
+        for _mk in "--set-xmark $WARP_MARK/$WARP_MARK" "--set-mark $WARP_MARK"; do
+            # shellcheck disable=SC2086  # $_mk — это два отдельных аргумента, разбиение намеренно
+            while iptables -w -t mangle -C "$ch" -m set --match-set "$WARP_IPSET" dst -j MARK $_mk 2>/dev/null; do
+                # shellcheck disable=SC2086
+                iptables -w -t mangle -D "$ch" -m set --match-set "$WARP_IPSET" dst -j MARK $_mk 2>/dev/null || break
+            done
         done
     done
     warp_purge_legacy_nat   # no-op once the r-62 drain has run

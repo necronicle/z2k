@@ -640,6 +640,18 @@ case "$method $path" in
     # the daemon down rather than after.
     "POST /strategy/pool/validate")
         s_name=$(form_value "${QUERY_STRING:-}" "pool")
+        # СВОЙ ПОТОЛОК — тот, что обещан комментарием у общего гейта.
+        #
+        # Оба маршрута /strategy/pool/* исключены из общего ограничения в 8 КБ с
+        # пояснением «крупные загрузки идут через read_body_raw и свои
+        # собственные потолки». У /whitelist/import и /warp/list/save такой
+        # потолок действительно есть (2 МБ), а здесь его не было вовсе: тело
+        # уходило в head -c "$CONTENT_LENGTH" без верхней границы, то есть один
+        # запрос мог занять слот CGI и память роутера на сколько угодно.
+        # Стратегия — это несколько килобайт текста; 256 КБ с большим запасом.
+        if [ "${CONTENT_LENGTH:-0}" -gt 262144 ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "стратегия слишком большая (максимум 256 КБ)"
+        fi
         s_err=$(read_body_raw | strategy_validate "$s_name" 2>&1) && {
             json_header; printf '{"ok":true,"valid":true}\n'; exit 0; }
         json_header
@@ -650,6 +662,10 @@ case "$method $path" in
 
     "POST /strategy/pool/save")
         s_name=$(form_value "${QUERY_STRING:-}" "pool")
+        # Тот же потолок, что и у /strategy/pool/validate выше — см. пояснение там.
+        if [ "${CONTENT_LENGTH:-0}" -gt 262144 ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "стратегия слишком большая (максимум 256 КБ)"
+        fi
         s_err=$(read_body_raw | strategy_pool_save "$s_name" 2>&1) || \
             json_fail "400 Bad Request" "$s_err"
         json_header

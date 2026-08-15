@@ -31,6 +31,16 @@ LISTEN_PORT="1444"
 
 CIDRS="168.119.95.238/32"
 
+# Тот же приём, что у соседа S96z2k-rt-proxy: правила ставим под блокировкой
+# xtables. Без -w две службы, стартующие одновременно (а они и стартуют — S96,
+# S97, S98 идут подряд, и NDM в это же время перестраивает свои цепочки),
+# получают "another app is currently holding the xtables lock" и молча уходят в
+# 2>/dev/null: правило не встало, туннель не работает, в логе пусто.
+#
+# Откат на вызов без -w обязателен: флаг понимают не все сборки BusyBox, и
+# жёсткое -w сломало бы перенаправление там, где раньше оно работало.
+ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
+
 start() {
     [ -x "$BIN" ] || exit 0
     # Уважать TG_PROXY_USER_DISABLED так же, как S98tg-tunnel. Оба туннеля —
@@ -103,10 +113,10 @@ start() {
     echo $! > "$PIDFILE"
     sleep 2
     for cidr in $CIDRS; do
-        iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-            iptables -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
-        iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || \
-            iptables -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null
+        ipt -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT || \
+            ipt -t nat -I PREROUTING 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT
+        ipt -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT || \
+            ipt -t nat -I OUTPUT 1 -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT
     done
     for cidr in $CIDRS; do
         conntrack -D -d "${cidr%/*}" 2>/dev/null || true
@@ -139,11 +149,11 @@ stop() {
         done
     fi
     for cidr in $CIDRS; do
-        while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
-            iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+        while ipt -t nat -C PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT; do
+            ipt -t nat -D PREROUTING -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT || break
         done
-        while iptables -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null; do
-            iptables -t nat -D OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT 2>/dev/null || break
+        while ipt -t nat -C OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT; do
+            ipt -t nat -D OUTPUT -d "$cidr" -p tcp --dport 80 -j REDIRECT --to-port $LISTEN_PORT || break
         done
     done
 }
