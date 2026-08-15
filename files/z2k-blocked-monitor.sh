@@ -180,7 +180,13 @@ build_tcpdump_filter() {
 
 write_awk_parser() {
 	cat > "$AWK_FILE" <<'AWK'
-function split_endpoint(ep, out, s, p) {
+# i объявлена в параметрах НАМЕРЕННО: в awk локальные переменные функции — это
+# лишние параметры, и без этого `i` была бы глобальной. Все восемь остальных
+# функций здесь так и делают, а эта одна — нет. Сегодня безвредно (все циклы по
+# `i` завершаются до вызова), но это мина: любой будущий цикл, зовущий
+# split_endpoint внутри, молча получил бы затёртый счётчик. Проверено прогоном:
+# цикл на три итерации выполнял одну и выходил с i=10.
+function split_endpoint(ep, out, s, p, i) {
 	s = ep
 	gsub(/,/, "", s)
 	sub(/:$/, "", s)
@@ -280,8 +286,18 @@ function sweep(ts, k, age, syns, outs, ins, ip, port, a) {
 			cleanup_tcp(k)
 			continue
 		}
-		if (age >= tcp_timeout && syns >= tcp_min_syn) {
-			emit_block(ts, "TCP", ip, port, "tcp_no_synack", "syn_retries=" syns)
+		# ПО ИСТЕЧЕНИИ СРОКА УБИРАЕМ ВСЕГДА, а сообщаем — только если набралось.
+		#
+		# Раньше условие было одно на двоих: `age >= timeout && syns >= min_syn`.
+		# Поток, который просрочился, но не добрал попыток (одна-две SYN вместо
+		# трёх), не проходил ни по этой ветке, ни по какой другой — и оставался в
+		# памяти НАВСЕГДА. А это самый обычный случай: браузер дёрнул адрес,
+		# получил тишину и больше не пробовал. На шумной сети такие ключи копятся
+		# всё время работы монитора, на устройстве со 128 МБ.
+		if (age >= tcp_timeout) {
+			if (syns >= tcp_min_syn) {
+				emit_block(ts, "TCP", ip, port, "tcp_no_synack", "syn_retries=" syns)
+			}
 			cleanup_tcp(k)
 		}
 	}
@@ -298,48 +314,108 @@ function sweep(ts, k, age, syns, outs, ins, ip, port, a) {
 			cleanup_udp(k)
 			continue
 		}
-		if (age >= udp_timeout && outs >= udp_min_out && ins <= udp_max_in) {
-			emit_block(ts, "UDP", ip, port, "udp_no_reply", "out=" outs ",in=" ins)
+		# Та же правка, что и для TCP выше: срок вышел — ключ уходит в любом
+		# случае, сообщение печатается только при наборе порога.
+		if (age >= udp_timeout) {
+			if (outs >= udp_min_out && ins <= udp_max_in) {
+				emit_block(ts, "UDP", ip, port, "udp_no_reply", "out=" outs ",in=" ins)
+			}
 			cleanup_udp(k)
+		}
+	}
+
+	# НЕОТВЕЧЕННЫЕ DNS-ЗАПРОСЫ ТОЖЕ НАДО УБИРАТЬ.
+	#
+	# dns_query_key_to_host заполняется на каждый запрос, а удаляется только на
+	# УСПЕШНОМ сопоставлении ответа. Запрос, оставшийся без ответа — то есть
+	# ровно то, что бывает при блокировке по DNS, ради чего инструмент и
+	# написан, — не удалялся ничем и никогда. Плюс к этому чтение
+	# dns_query_key_to_host[k] для чужого ответа создаёт пустой элемент (в awk
+	# обращение к несуществующему ключу его заводит), а `return` по пустому
+	# домену происходит ДО delete — так что каждый посторонний DNS-ответ тоже
+	# оставлял по ключу.
+	for (k in dns_query_ts) {
+		if (ts - dns_query_ts[k] >= dns_timeout) {
+			delete dns_query_key_to_host[k]
+			delete dns_query_ts[k]
 		}
 	}
 }
 
 function process_dns_query(ts, src_ip, src_port, payload, txid, domain, k) {
+	# ИДЕНТИФИКАТОР БЕРЁМ ВЕДУЩИМИ ЦИФРАМИ, а не «до плюса».
+	#
+	# Было `sub(/\+.*/, "", txid)` — обрезка по флагу RD. Но флаг печатается
+	# только когда бит выставлен: у запроса без рекурсии плюса нет, обрезать
+	# нечего, и txid остаётся строкой вида «12346 A? google.com. (27)», которая
+	# не проходит проверку на цифры. Такой запрос терялся целиком, и ответ на
+	# него потом не с чем было сопоставить. match+substr берёт ровно ведущее
+	# число, каким бы ни был хвост, и работает в BusyBox awk.
 	txid = payload
 	sub(/^[[:space:]]*/, "", txid)
-	sub(/\+.*/, "", txid)
-	if (txid !~ /^[0-9]+$/) return
+	if (!match(txid, /^[0-9]+/)) return
+	txid = substr(txid, RSTART, RLENGTH)
 
+	# Тип записи не только A: AAAA, HTTPS и прочие ходят тем же путём. Раньше
+	# ловилось строго « A? », поэтому запрос AAAA не запоминался вовсе, и ответ
+	# на него оставался безымянным.
 	domain = payload
-	sub(/.* A\? /, "", domain)
-	if (domain == payload) return
+	if (!match(domain, /[[:space:]][A-Z0-9]+\? /)) return
+	domain = substr(domain, RSTART + RLENGTH)
 	sub(/[[:space:]].*$/, "", domain)
 	gsub(/\.$/, "", domain)
 	if (domain == "") return
 	k = src_ip "|" src_port "|" txid
 	dns_query_key_to_host[k] = domain
+	# Метка времени — чтобы sweep() мог убрать неотвеченный запрос.
+	dns_query_ts[k] = ts
 }
 
-function process_dns_response(ts, dst_ip, dst_port, payload, txid, k, domain, ip) {
+function process_dns_response(ts, dst_ip, dst_port, payload, txid, k, domain, ip, rest, n) {
+	# ТО ЖЕ, ЧТО В ЗАПРОСЕ: идентификатор — это ведущие цифры.
+	#
+	# Было `sub(/[[:space:]].*$/, "", txid)` — обрезка по первому пробелу. Но
+	# tcpdump печатает флаги ответа СЛИТНО с идентификатором, без разделителя:
+	# «34521*» (авторитетный), «34521-» (нет рекурсии), «34521|» (усечён), а
+	# также текст кода ошибки. Такой txid не проходил проверку на цифры, и ответ
+	# отбрасывался целиком. Хуже всего, что среди отброшенных — NXDomain и
+	# SERVFAIL, то есть типовая подпись блокировки по DNS: ровно тот трафик,
+	# ради которого монитор и включают.
 	txid = payload
 	sub(/^[[:space:]]*/, "", txid)
-	sub(/[[:space:]].*$/, "", txid)
-	if (txid !~ /^[0-9]+$/) return
+	if (!match(txid, /^[0-9]+/)) return
+	txid = substr(txid, RSTART, RLENGTH)
 
 	k = dst_ip "|" dst_port "|" txid
+	# Проверяем наличие ключа, а НЕ читаем его: чтение несуществующего элемента
+	# в awk создаёт его пустым, и такой мусор от чужих ответов оседал в массиве.
+	if (!(k in dns_query_key_to_host)) return
 	domain = dns_query_key_to_host[k]
-	if (domain == "") return
+	if (domain == "") { delete dns_query_key_to_host[k]; delete dns_query_ts[k]; return }
 
-	ip = payload
-	sub(/.* A /, "", ip)
-	if (ip == payload) return
-	sub(/[^0-9.].*$/, "", ip)
-	if (ip !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return
-
-	ip2host[ip] = domain
-	print int(ts) "\t" ip "\t" domain >> ipmap_out
+	# ВСЕ АДРЕСА ОТВЕТА, А НЕ ПОСЛЕДНИЙ.
+	#
+	# Было `sub(/.* A /, "", ip)` — одиночная замена с жадным `.*`, то есть
+	# отрезалось всё до ПОСЛЕДНЕГО « A ». У домена с несколькими A-записями
+	# (обычное дело для любого CDN: google.com отдаёт шесть) запоминался ровно
+	# один адрес, последний. Клиент же соединяется с любым из них, поэтому имя
+	# находилось примерно в одном случае из N, а в остальных в отчёт попадал
+	# голый IP вместо домена. Идём по строке циклом и запоминаем каждый.
+	n = 0
+	rest = payload
+	while (match(rest, /[[:space:]]A[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+		ip = substr(rest, RSTART, RLENGTH)
+		rest = substr(rest, RSTART + RLENGTH)
+		sub(/^[[:space:]]*A[[:space:]]*/, "", ip)
+		if (ip !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) continue
+		ip2host[ip] = domain
+		print int(ts) "\t" ip "\t" domain >> ipmap_out
+		n++
+	}
+	# Ответ дошёл и разобран (даже если адресов в нём не было — например
+	# NXDomain): запрос закрыт, ключ убираем, иначе он останется до подметания.
 	delete dns_query_key_to_host[k]
+	delete dns_query_ts[k]
 }
 
 BEGIN {
@@ -349,6 +425,10 @@ BEGIN {
 	udp_min_out = (udp_min_out == "" ? 4 : udp_min_out) + 0
 	udp_max_in = (udp_max_in == "" ? 1 : udp_max_in) + 0
 	dedupe_sec = (dedupe_sec == "" ? 60 : dedupe_sec) + 0
+	# Срок жизни незакрытого DNS-запроса. Ответ приходит за миллисекунды, так
+	# что тридцать секунд — это заведомо «ответа не будет». См. подметание в
+	# sweep(): без него такие ключи не удалялись вообще ничем.
+	dns_timeout = (dns_timeout == "" ? 30 : dns_timeout) + 0
 
 	n_tcp = split(tcp_ports, tarr, ",")
 	for (i = 1; i <= n_tcp; i++) {
@@ -391,7 +471,14 @@ BEGIN {
 		next
 	}
 
-	colon_pos = index($0, ":")
+	# РАЗДЕЛИТЕЛЬ — ДВОЕТОЧИЕ С ПРОБЕЛОМ, а не первое попавшееся двоеточие.
+	#
+	# `index($0, ":")` находил двоеточие ВНУТРИ адреса IPv6: у строки вида
+	# `IP6 2001:db8::1.53 > ...` payload начинался с середины адреса, и весь
+	# разбор DNS по IPv6 не работал вовсе. В самом адресе двоеточие никогда не
+	# сопровождается пробелом, поэтому `: ` однозначно отделяет заголовок от
+	# содержимого и для IPv4, и для IPv6.
+	colon_pos = match($0, /: /)
 	payload = (colon_pos > 0) ? substr($0, colon_pos + 1) : ""
 
 	# DNS mapping: query/response.
@@ -399,15 +486,32 @@ BEGIN {
 	if (src_port + 0 == 53) process_dns_response(ts, dst_ip, dst_port, payload)
 
 	# TCP tracking.
-	if (index($0, "Flags [") > 0) {
-		if (index($0, "Flags [S]") > 0 && index($0, "Flags [S.]") == 0 && is_watched_port(dst_port, "tcp")) {
+	#
+	# ФЛАГИ РАЗБИРАЕМ ПО СОДЕРЖИМОМУ СКОБОК, а не точным совпадением строки.
+	#
+	# Было `index($0, "Flags [S]")` — то есть SYN засчитывался, только если в
+	# скобках стоит ровно «S». Но tcpdump печатает туда все взведённые флаги
+	# разом, и у обычного современного клиента с ECN это «[S.E]», «[SEW]»,
+	# «[SE]». Такой SYN не попадал в трекер ВООБЩЕ: соединение, оставшееся без
+	# ответа, не считалось попыткой и не сообщалось как заблокированное — то
+	# есть монитор молча пропускал ровно то, что должен ловить.
+	#
+	# Буквы tcpdump: S=SYN, .=ACK, R=RST, F=FIN, P=PUSH, U=URG, W=CWR, E=ECE.
+	# Различаем по смыслу: SYN без ACK — наша попытка; SYN с ACK — ответ сервера.
+	if (match($0, /Flags \[[^]]*\]/)) {
+		tcpflags = substr($0, RSTART + 7, RLENGTH - 8)
+		if (tcpflags ~ /S/ && tcpflags !~ /\./ && is_watched_port(dst_port, "tcp")) {
 			k = src_ip "|" src_port "|" dst_ip "|" dst_port
 			tcp_syn_count[k]++
 			if (!(k in tcp_first_ts)) tcp_first_ts[k] = ts
-		} else if (index($0, "Flags [S.]") > 0 && is_watched_port(src_port, "tcp")) {
+		} else if (tcpflags ~ /S/ && tcpflags ~ /\./ && is_watched_port(src_port, "tcp")) {
 			k = dst_ip "|" dst_port "|" src_ip "|" src_port
 			tcp_ok[k] = 1
-		} else if (index($0, "Flags [R") > 0 && is_watched_port(src_port, "tcp")) {
+			# Метка времени нужна и здесь: sweep() ходит ТОЛЬКО по tcp_first_ts,
+			# поэтому ключ, заведённый лишь в tcp_ok, не подметался никогда. Это
+			# штатный случай — монитор включают на уже живущем соединении.
+			if (!(k in tcp_first_ts)) tcp_first_ts[k] = ts
+		} else if (tcpflags ~ /R/ && is_watched_port(src_port, "tcp")) {
 			k = dst_ip "|" dst_port "|" src_ip "|" src_port
 			tcp_rst[k] = 1
 			if (!(k in tcp_first_ts)) tcp_first_ts[k] = ts
@@ -415,6 +519,7 @@ BEGIN {
 			# Any packet from server watched port means flow is alive.
 			k = dst_ip "|" dst_port "|" src_ip "|" src_port
 			tcp_ok[k] = 1
+			if (!(k in tcp_first_ts)) tcp_first_ts[k] = ts
 		}
 	}
 
