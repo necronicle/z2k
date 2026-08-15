@@ -1,0 +1,9 @@
+[Unit]
+Description=z2k stats log retention (oneshot, driven by timer)
+
+[Service]
+Type=oneshot
+# Root, unlike the collector and the aggregator: this one stops and starts the
+# collector around the rewrite.
+User=root
+ExecStart=/usr/local/bin/z2k-stats-trim.sh

@@ -31,6 +31,28 @@ Default ON (`Z2K_STATS=1`, project policy: all features default on). Opt out via
 the TUI menu `[C]`, the webpanel "Режимы → Сбор статистики" toggle, or
 `Z2K_STATS=0` in `/opt/zapret2/config` (preserved across auto-update).
 
+### The transport is NOT private, and that is the part that matters here
+
+Everything above is about the *contents* of the upload. The *transport* is plain
+HTTP to a bare IP: `http://213.176.74.63:8088/stats`, no TLS
+(`files/z2k-stats-upload.sh`). Say plainly what that means, because for a
+circumvention tool it outweighs the field-level anonymization:
+
+- anyone who can watch the connection — in Russia that means the operator's DPI —
+  sees a regular POST from your address to a fixed server, in the clear, carrying
+  pool and strategy names. That is a usable signal for classifying the device as
+  running z2k, and it is *more* revealing than any field inside the body;
+- the body is anonymized against **us**, the people who run the server. It is not
+  anonymized against an observer on the path, who already knows your address
+  because they are carrying the packets.
+
+So the honest summary is: the payload tells us nothing about you; the fact that
+you sent it tells your ISP something about you. If that trade is not acceptable,
+turn the collection off — the opt-out above is real and takes effect immediately.
+
+Moving this to HTTPS is an outstanding public commitment (issue #28, point 3);
+until it ships, this section is the disclosure, not a caveat buried in code.
+
 ## Metric: stable dwell (and its honest limitation)
 
 `state.tsv` records WHERE rotation landed, not directly WHETHER it worked. The
@@ -59,7 +81,13 @@ Server (this dir → VPS):
 - `z2k-stats-aggregate.py` — daily, turns `raw.jsonl` into `summary.{json,txt}`:
   per-(pool,strategy) sample count, dwell p50/p75, a stable-adoption score, and
   (given `--catalog`) the NEVER-PLAYED gap.
-- `z2k-stats-collector.service` / `z2k-stats-aggregate.{service,timer}` — systemd.
+- `z2k-stats-trim.sh` — weekly retention: lines older than 60 days move to a
+  per-month gzip archive. The collector only ever appends, so without this the
+  log has no ceiling on a box that also carries the Telegram tunnels and the
+  WhatsApp relay. The collector additionally refuses to append past
+  `Z2K_STATS_MAX_RAW` (256 MiB) so a flood cannot fill the disk between runs.
+- `z2k-stats-collector.service` / `z2k-stats-aggregate.{service,timer}` /
+  `z2k-stats-trim.{service,timer}` — systemd.
 - `caddy-z2k-stats.snippet` — additive `:8088` reverse-proxy block (does NOT touch
   the relay's nginx:443 SNI router or caddy:8443 block).
 - `deploy-vps.sh` — idempotent installer (user, binaries, env+token, units, caddy

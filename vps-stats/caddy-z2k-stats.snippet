@@ -6,9 +6,29 @@
 # port, so the router's curl needs no certificate handling. Only the /stats
 # path is proxied to the localhost collector; everything else 404s.
 
+# NO TIMEOUT DIRECTIVES HERE, DELIBERATELY. Caddy v2 has no default HTTP
+# read/write timeout, and the collector's own socket timeout is not a substitute
+# because it resets on every byte received — so a slow client is bounded by
+# neither. The fix would be `servers { timeouts { ... } }`, but that is a GLOBAL
+# option: it must live in the single global block at the very top of the
+# Caddyfile. This file is APPENDED to a Caddyfile that already serves the
+# Telegram relay, and appending a second global block breaks the whole config —
+# the relay included. Editing the existing global block in place is not worth the
+# risk to a service people depend on.
+#
+# What bounds slow clients instead is MAX_CONN in the collector: a ceiling on
+# concurrent connections makes the attack finite regardless of how long any one
+# of them lingers. If timeouts are ever wanted here, add them to the global block
+# by hand, once, and not from this installer.
+#
+# max_size is a per-site directive and does work: it rejects an oversized body at
+# the edge, before it reaches Python.
 :8088 {
 	@stats path /stats /stats/
 	handle @stats {
+		request_body {
+			max_size 64KiB
+		}
 		reverse_proxy 127.0.0.1:9099
 	}
 	handle {

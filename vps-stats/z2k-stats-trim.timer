@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly z2k stats log retention
+
+[Timer]
+# Weekly, and deliberately not monthly: a monthly run lets the log stretch to
+# KEEP_DAYS plus a whole month between trims. Sunday 04:30 is 60 minutes before
+# the aggregation timer, so a run that overruns still finishes first.
+OnCalendar=Sun *-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

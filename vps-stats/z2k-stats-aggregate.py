@@ -47,42 +47,93 @@ def weighted_percentile(pairs, pct):
     return pairs[-1][0]
 
 
-def load_samples(raw_path, window_days):
-    """Read raw.jsonl, return (samples, dates). Each upload line is one sample.
-    If window_days is set, keep only samples from the most recent N distinct
-    receive-dates (we only store coarse dates, never times)."""
-    samples = []
+def _parse_line(line):
+    """One raw.jsonl line -> record, or None if it is not a usable sample.
+
+    RecursionError is caught alongside ValueError on purpose. The collector
+    already guards its own json.loads against it, because a deeply-nested
+    document under the size cap makes the C scanner blow the recursion limit —
+    and RecursionError is a RuntimeError, so `except ValueError` does not see it.
+    This file reads the very same format and states three lines below that it
+    "must not crash on a tampered data file", but only guarded the SHAPE of a
+    row, not the parse. One hand-edited line would take down the daily timer for
+    good: it would fail, the summary would silently stop updating, and the timer
+    would keep failing every morning with nobody looking.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        rec = json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(rec, dict):
+        return None
+    if rec.get("schema") != 1 or not isinstance(rec.get("rows"), list):
+        return None
+    return rec
+
+
+def scan_dates(raw_path):
+    """First pass: the distinct receive-dates present in the log, sorted.
+
+    Cheap by design — parses each line and keeps only a date string, never the
+    record. See iter_samples() for why the log is read twice instead of once.
+    """
     dates = set()
     try:
         with open(raw_path, "r", encoding="utf-8") as f:
             for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if rec.get("schema") != 1 or not isinstance(rec.get("rows"), list):
-                    continue
-                dates.add(rec.get("rx_date", ""))
-                samples.append(rec)
+                rec = _parse_line(line)
+                if rec is not None:
+                    dates.add(rec.get("rx_date", ""))
     except FileNotFoundError:
-        return [], []
+        return []
+    return sorted(d for d in dates if d)
 
-    if window_days and dates:
-        keep = set(sorted(d for d in dates if d)[-window_days:])
-        samples = [r for r in samples if r.get("rx_date", "") in keep]
-    return samples, sorted(d for d in dates if d)
+
+def iter_samples(raw_path, keep):
+    """Second pass: yield only the records inside the window.
+
+    TWO PASSES, NOT ONE BIG LIST. This used to append every record in the file to
+    a list and filter afterwards, so peak memory tracked the whole history rather
+    than the 14-day window actually reported on. Measured on the live VPS: an
+    87 MB log cost 444 MB of resident memory, on a 2 GB box that also carries the
+    Telegram tunnels and the WhatsApp relay — roughly five bytes of RAM per byte
+    of log, growing with the log rather than with the window. Streaming keeps
+    resident memory proportional to the number of distinct (pool, strategy) keys
+    instead, which is bounded by the strategy catalog and does not grow over time.
+
+    Reading the file twice is the cheap half of that trade: the pass is
+    sequential I/O against the page cache, while the list it replaces was
+    unbounded.
+    """
+    try:
+        with open(raw_path, "r", encoding="utf-8") as f:
+            for line in f:
+                rec = _parse_line(line)
+                if rec is None:
+                    continue
+                if keep is not None and rec.get("rx_date", "") not in keep:
+                    continue
+                yield rec
+    except FileNotFoundError:
+        return
 
 
 def aggregate(samples):
+    """Consumes an ITERABLE of records (see iter_samples) and returns
+    (out, pool_samples, pool_strategies, total_samples). It counts the samples
+    itself rather than taking len() of a list, so the caller never has to hold
+    the log in memory."""
     # per (pool, strategy): list of (dwell, weight=count) + how many samples hit it
     bucket = defaultdict(list)
     hits = defaultdict(int)
     pool_samples = defaultdict(int)
     pool_strategies = defaultdict(set)
+    total_samples = 0
     for rec in samples:
+        total_samples += 1
         seen_pools = set()
         for row in rec.get("rows", []):
             # Defensive: a hand-corrupted raw.jsonl line could be schema-valid
@@ -127,7 +178,7 @@ def aggregate(samples):
             "dwell_p75": p75,
             "score": score,
         }
-    return out, pool_samples, pool_strategies
+    return out, pool_samples, pool_strategies, total_samples
 
 
 def render(out, pool_samples, pool_strategies, catalog, total_samples, dates):
@@ -188,9 +239,10 @@ def main():
         except (OSError, ValueError):
             catalog = {}
 
-    samples, dates = load_samples(args.raw, args.window_days)
-    out, pool_samples, pool_strategies = aggregate(samples)
-    txt, summary = render(out, pool_samples, pool_strategies, catalog, len(samples), dates)
+    dates = scan_dates(args.raw)
+    keep = set(dates[-args.window_days:]) if (args.window_days and dates) else None
+    out, pool_samples, pool_strategies, total = aggregate(iter_samples(args.raw, keep))
+    txt, summary = render(out, pool_samples, pool_strategies, catalog, total, dates)
 
     try:
         with open(args.out_txt, "w", encoding="utf-8") as f:

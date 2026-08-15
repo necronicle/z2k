@@ -30,9 +30,10 @@ if ! id z2kstats >/dev/null 2>&1; then
 fi
 
 # 2. binaries
-log "installing collector + aggregator to $BIN_DIR"
+log "installing collector + aggregator + trim to $BIN_DIR"
 install -m 0755 "$SRC_DIR/z2k-stats-collector.py" "$BIN_DIR/z2k-stats-collector.py"
 install -m 0755 "$SRC_DIR/z2k-stats-aggregate.py" "$BIN_DIR/z2k-stats-aggregate.py"
+install -m 0755 "$SRC_DIR/z2k-stats-trim.sh"      "$BIN_DIR/z2k-stats-trim.sh"
 
 # 3. data dir
 mkdir -p "$DATA_DIR"
@@ -67,13 +68,28 @@ else
 fi
 
 # 5. systemd units
+#    The trim timer is not optional garnish: without it the collector appends
+#    forever. It used to be installed by hand on the one live VPS and existed
+#    nowhere in the repository, so any redeploy or rebuild produced a service
+#    with no retention at all. See z2k-stats-trim.sh.
 log "installing systemd units"
 install -m 0644 "$SRC_DIR/z2k-stats-collector.service" /etc/systemd/system/z2k-stats-collector.service
 install -m 0644 "$SRC_DIR/z2k-stats-aggregate.service"  /etc/systemd/system/z2k-stats-aggregate.service
 install -m 0644 "$SRC_DIR/z2k-stats-aggregate.timer"    /etc/systemd/system/z2k-stats-aggregate.timer
+install -m 0644 "$SRC_DIR/z2k-stats-trim.service"       /etc/systemd/system/z2k-stats-trim.service
+install -m 0644 "$SRC_DIR/z2k-stats-trim.timer"         /etc/systemd/system/z2k-stats-trim.timer
 systemctl daemon-reload
 systemctl enable --now z2k-stats-collector.service
 systemctl enable --now z2k-stats-aggregate.timer
+systemctl enable --now z2k-stats-trim.timer
+
+# Supersede the hand-installed cron entry this timer replaces, so the rewrite
+# cannot run twice from two schedulers.
+if [ -e /etc/cron.monthly/z2k-stats-trim ]; then
+	log "removing superseded /etc/cron.monthly/z2k-stats-trim (now a systemd timer)"
+	rm -f /etc/cron.monthly/z2k-stats-trim
+fi
+
 log "collector status:"; systemctl --no-pager --lines=0 status z2k-stats-collector.service | head -3 || true
 
 # 6. caddy public entrypoint (append-only, idempotent)
