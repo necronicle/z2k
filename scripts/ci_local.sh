@@ -275,6 +275,45 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "бинарники собираются из этого исходника (байт-в-байт)"
+#
+# ЗАЧЕМ ЗДЕСЬ. Эта проверка была ТОЛЬКО в ci.yml, и локальный прогон её не знал.
+# 2026-08-15 это стоило красного релиза: правки в rt-proxy и z2k-detect ушли без
+# пересборки бинарников, локально всё зелёное, а раннер честно упал на четырнадцати
+# файлах. Смысл ci_local.sh — предсказывать удалённый вердикт; проверка, которой
+# здесь нет, делает предсказание ложным ровно там, где цена ошибки высшая.
+#
+# Логика дословно та же, что в ci.yml (набор берётся из build-matrix.tsv,
+# mtproxy-client пропускается — в него вшивается секрет и без него байты не
+# воспроизвести). Расходиться этим двум местам нельзя.
+if [ -n "$GO" ] && [ -f build-matrix.tsv ]; then
+    brc=0
+    while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+        case "$mod" in ''|\#*) continue ;; esac
+        [ "$bdir" = "-" ] && continue
+        [ "$mod" = "mtproxy-client" ] && continue
+        want="$bdir/$prefix-linux-$sfx"
+        [ -f "$want" ] || { printf '  нет отгружаемого %s\n' "$want"; brc=1; continue; }
+        [ "$extra" = "-" ] && extra=""
+        # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+        ( cd "$mod" && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+            "$GO" build -ldflags="-s -w" -trimpath -buildvcs=false -o /tmp/z2k-rebuilt "$pkg" ) \
+            || { printf '  %s/%s не собирается\n' "$mod" "$goarch"; brc=1; continue; }
+        a=$(shasum -a256 < /tmp/z2k-rebuilt | cut -d' ' -f1)
+        b=$(shasum -a256 < "$want" | cut -d' ' -f1)
+        [ "$a" = "$b" ] || { printf '  %s не совпадает с пересборкой\n' "$want"; brc=1; }
+    done < build-matrix.tsv
+    rm -f /tmp/z2k-rebuilt
+    if [ "$brc" -eq 0 ]; then
+        passed "бинарники воспроизводятся"
+    else
+        failed "бинарники воспроизводятся (пересоберите: cd <модуль> && make all)"
+    fi
+else
+    skipped "бинарники воспроизводятся" "нет go или build-matrix.tsv"
+fi
+
+# ---------------------------------------------------------------------------
 step "мутационное тестирование"
 if [ -n "$GO" ]; then
     if GO="$GO" sh tests/mutation.sh; then
