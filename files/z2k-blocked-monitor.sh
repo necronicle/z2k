@@ -338,11 +338,12 @@ function sweep(ts, k, age, syns, outs, ins, ip, port, a) {
 		if (ts - dns_query_ts[k] >= dns_timeout) {
 			delete dns_query_key_to_host[k]
 			delete dns_query_ts[k]
+			delete dns_query_srv[k]
 		}
 	}
 }
 
-function process_dns_query(ts, src_ip, src_port, payload, txid, domain, k) {
+function process_dns_query(ts, src_ip, src_port, srv_ip, payload, txid, domain, k) {
 	# ИДЕНТИФИКАТОР БЕРЁМ ВЕДУЩИМИ ЦИФРАМИ, а не «до плюса».
 	#
 	# Было `sub(/\+.*/, "", txid)` — обрезка по флагу RD. Но флаг печатается
@@ -367,11 +368,14 @@ function process_dns_query(ts, src_ip, src_port, payload, txid, domain, k) {
 	if (domain == "") return
 	k = src_ip "|" src_port "|" txid
 	dns_query_key_to_host[k] = domain
+	# Адрес резолвера, которому запрос ушёл. Нужен, чтобы ответ от постороннего
+	# хоста не принимался за настоящий — см. проверку в process_dns_response.
+	dns_query_srv[k] = srv_ip
 	# Метка времени — чтобы sweep() мог убрать неотвеченный запрос.
 	dns_query_ts[k] = ts
 }
 
-function process_dns_response(ts, dst_ip, dst_port, payload, txid, k, domain, ip, rest, n) {
+function process_dns_response(ts, dst_ip, dst_port, from_ip, payload, txid, k, domain, ip, rest, n) {
 	# ТО ЖЕ, ЧТО В ЗАПРОСЕ: идентификатор — это ведущие цифры.
 	#
 	# Было `sub(/[[:space:]].*$/, "", txid)` — обрезка по первому пробелу. Но
@@ -390,8 +394,20 @@ function process_dns_response(ts, dst_ip, dst_port, payload, txid, k, domain, ip
 	# Проверяем наличие ключа, а НЕ читаем его: чтение несуществующего элемента
 	# в awk создаёт его пустым, и такой мусор от чужих ответов оседал в массиве.
 	if (!(k in dns_query_key_to_host)) return
+	# ОТВЕТ ОБЯЗАН ПРИЙТИ ОТТУДА, КУДА УШЁЛ ЗАПРОС.
+	#
+	# Сопоставление шло только по «кому адресован пакет» и номеру запроса, а
+	# личность отправителя не проверялась вовсе — её даже не передавали в
+	# функцию. Любой хост, угадавший или подсмотревший шестнадцатибитный номер,
+	# записывал в карту произвольный адрес под чужим именем. Воспроизведено:
+	# посторонний 6.6.6.6 подменил bank.example.com на 203.0.113.66.
+	#
+	# Для инструмента, который наблюдает за цензурой, это особенно неуместно:
+	# подмена DNS-ответов — штатный приём той самой стороны, за которой он и
+	# следит, то есть отравить журнал может ровно тот, кого он изучает.
+	if ((k in dns_query_srv) && dns_query_srv[k] != "" && dns_query_srv[k] != from_ip) return
 	domain = dns_query_key_to_host[k]
-	if (domain == "") { delete dns_query_key_to_host[k]; delete dns_query_ts[k]; return }
+	if (domain == "") { delete dns_query_key_to_host[k]; delete dns_query_ts[k]; delete dns_query_srv[k]; return }
 
 	# ВСЕ АДРЕСА ОТВЕТА, А НЕ ПОСЛЕДНИЙ.
 	#
@@ -416,6 +432,7 @@ function process_dns_response(ts, dst_ip, dst_port, payload, txid, k, domain, ip
 	# NXDomain): запрос закрыт, ключ убираем, иначе он останется до подметания.
 	delete dns_query_key_to_host[k]
 	delete dns_query_ts[k]
+	delete dns_query_srv[k]
 }
 
 BEGIN {
@@ -482,8 +499,8 @@ BEGIN {
 	payload = (colon_pos > 0) ? substr($0, colon_pos + 1) : ""
 
 	# DNS mapping: query/response.
-	if (dst_port + 0 == 53) process_dns_query(ts, src_ip, src_port, payload)
-	if (src_port + 0 == 53) process_dns_response(ts, dst_ip, dst_port, payload)
+	if (dst_port + 0 == 53) process_dns_query(ts, src_ip, src_port, dst_ip, payload)
+	if (src_port + 0 == 53) process_dns_response(ts, dst_ip, dst_port, src_ip, payload)
 
 	# TCP tracking.
 	#
