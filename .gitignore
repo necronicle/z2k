@@ -16,7 +16,10 @@ discord_blockcheck2_tls13_20260123_131631.txt
 /%TEMP%*.txt
 /__codex_quarantine/
 /nul
-mtproxy-client/mtproxy-client
+# Имя бинарника — tg-mtproxy-client (BINARY в mtproxy-client/Makefile). Здесь
+# годами лежало правило под прежним именем `mtproxy-client/mtproxy-client`,
+# то есть не совпадало ни с чем. Точные правила живут в mtproxy-client/.gitignore.
+mtproxy-client/tg-mtproxy-client
 
 # Temporary and editor files
 *.tmp
