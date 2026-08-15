@@ -62,7 +62,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     printf '  (версии кодов расходятся между релизами — судья всё равно CI-раннер)\n'
     # Тот же набор файлов и исключений, что в ci.yml — маски менять ТОЛЬКО
     # синхронно с ним.
-    if { find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './scripts/*.sh' -o -path './webpanel/cgi/*.sh' \); \
+    if { find . -name '*.sh' \( -path './z2k.sh' -o -path './z2k_cleanup.sh' -o -path './lib/*.sh' -o -path './files/*.sh' -o -path './tests/*.sh' -o -path './scripts/*.sh' -o -path './webpanel/*.sh' -o -path './webpanel/cgi/*.sh' \); \
          find ./files/init.d -type f -name 'S*'; \
          find ./files -maxdepth 1 -type f -name 'S*'; } \
          | xargs shellcheck --severity=warning --exclude=SC1007,SC1090,SC1091,SC3043,SC3040,SC2034,SC2148,SC2154; then
@@ -86,7 +86,7 @@ if command -v dash >/dev/null 2>&1; then
             printf 'SYNTAX ERROR in %s:\n' "$f"; cat /tmp/z2k_synerr.$$; rc=1
         fi
     done <<Z2KFILES
-$(find ./files ./lib ./webpanel/cgi -type f \( -name '*.sh' -o -name 'S*' \) 2>/dev/null)
+$(find ./files ./lib ./webpanel -type f \( -name '*.sh' -o -name 'S*' \) 2>/dev/null)
 ./z2k.sh
 ./z2k_cleanup.sh
 Z2KFILES

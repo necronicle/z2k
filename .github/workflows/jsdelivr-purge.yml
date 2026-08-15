@@ -46,6 +46,14 @@ on:
         description: "Коммит, состояние которого проверяем на зеркалах"
         required: false
         type: string
+      before:
+        description: >-
+          Вершина z2k-enhanced ДО перевода. Без неё разницу посчитать не из
+          чего: на workflow_call полей github.event.before/after не существует,
+          и шаг ниже уходил в фоллбэк «первые 200 файлов дерева» на КАЖДОМ
+          релизе — то есть выселял tests/*, но не webpanel/* и не z2k.sh.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -94,23 +102,43 @@ jobs:
       - name: Compute changed files
         id: files
         env:
-          BEFORE: ${{ github.event.before }}
+          # Вход workflow_call имеет ПРИОРИТЕТ над полем события.
+          #
+          # github.event.before/after существуют только на push. На единственном
+          # боевом пути (publish.yml вызывает нас через workflow_call) их нет
+          # вовсе — оба пусты, условие фоллбэка ниже истинно всегда, и каждый
+          # релиз выселял «первые 200 файлов дерева» вместо изменённых. Первые
+          # двести по алфавиту — это tests/*; webpanel/* и z2k.sh туда не
+          # попадают. То есть кэш сбрасывался ровно там, где его никто не
+          # читает, и не сбрасывался там, где читают.
+          #
+          # AFTER не нужен: у нас уже есть ref (он же HEAD чекаута), а на
+          # workflow_call event.after пуст — сравниваем с HEAD.
+          BEFORE: ${{ inputs.before || github.event.before }}
           AFTER: ${{ github.event.after }}
         run: |
           set -eu
           mkdir -p /tmp/purge
+          # AFTER пуст на workflow_call — тогда вторая точка это HEAD чекаута,
+          # а он выставлен на inputs.ref, то есть ровно на публикуемый коммит.
+          [ -n "${AFTER:-}" ] || AFTER=$(git rev-parse HEAD)
           # BEFORE может быть unreachable если push был force-push'ом amend'нутого
           # коммита: предыдущий tip SHA orphan'нулся, actions/checkout его не
           # fetch'нул. `git cat-file -e` проверяет наличие объекта в локальной
           # копии — fallback на top-200 strategy если коммита нет.
-          # На workflow_dispatch BEFORE/AFTER пусты — тот же фоллбэк.
+          # На workflow_dispatch BEFORE пуст — тот же фоллбэк.
+          #
+          # Фоллбэк теперь ДЕЙСТВИТЕЛЬНО крайний случай, а не обычный путь: на
+          # публикации BEFORE приходит входом от publish.yml. Если он всё же
+          # сработал на релизе — это сигнал, что связка publish→purge разошлась,
+          # поэтому ниже об этом пишется предупреждением, а не рядовой строкой.
           if [ -z "${BEFORE:-}" ] \
              || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               # New branch / force-push'ом amend'нутого / orphan before SHA:
               # before commit недоступен. Fall back to purging the whole
               # branch's top 200 files by name. Full-tree purge would rate-limit.
-              echo "BEFORE='${BEFORE:-}' unavailable or unset — using top 200 files from HEAD tree"
+              echo "::warning::BEFORE='${BEFORE:-}' недоступен — выселяю первые 200 файлов дерева вместо изменённых. На публикации этого быть не должно: publish.yml передаёт before входом."
               git ls-tree -r --name-only HEAD | head -200 > /tmp/purge/files.txt
           else
               # `git diff --name-only before..after` covers every file

@@ -372,6 +372,8 @@ jobs:
       contents: write
     outputs:
       moved: ${{ steps.push.outputs.moved }}
+      # Вершина z2k-enhanced ДО перевода — вход для сброса кэша CDN.
+      before: ${{ steps.push.outputs.before }}
     steps:
       # Чекаута здесь НЕТ, и это не упущение.
       #
@@ -393,6 +395,26 @@ jobs:
           VER: ${{ needs.gate.outputs.version }}
         run: |
           set -eu
+          # Прежняя вершина ветки — ЗАПОМИНАЕМ ДО ПЕРЕВОДА.
+          #
+          # Она нужна не здесь, а дальше, в сбросе кэша CDN: без неё purge не
+          # знает, какие файлы изменил релиз, и уходит в фоллбэк «первые 200
+          # файлов дерева». В этих двухстах по алфавиту лежат tests/*, а
+          # webpanel/* и сам z2k.sh не лежат — то есть выселялось всё, кроме
+          # того, что менялось. Проверено на реальном прогоне r-75.17: список
+          # обрывается на tests/test_panel_auth.sh.
+          #
+          # Раньше purge пытался взять эти точки из github.event.before/after.
+          # На единственном боевом пути их не существует: publish вызывает
+          # purge через workflow_call, а не пушем, и полей before/after в
+          # унаследованном контексте нет. Условие фоллбэка было истинно ВСЕГДА.
+          #
+          # Отказ чтения не роняет публикацию: пустой BEFORE вернёт purge к
+          # прежнему поведению, а не остановит релиз.
+          BEFORE=$(gh api "repos/${REPO}/git/refs/heads/z2k-enhanced" \
+                     --jq .object.sha 2>/dev/null || echo "")
+          echo "before=${BEFORE}" >> "$GITHUB_OUTPUT"
+
           # Никакого повторного tip-check здесь больше нет (был, убран — см.
           # комментарий в gate про формальную модель "кандидат = подписанный
           # тег"). "$SHA" уже прошёл gate целиком: подпись, тег, история, seq
@@ -437,3 +459,6 @@ jobs:
     uses: ./.github/workflows/jsdelivr-purge.yml
     with:
       ref: ${{ needs.gate.outputs.sha }}
+      # Обе точки, а не только новая: без before purge не может посчитать
+      # разницу и выселяет не те файлы. См. пояснение в шаге push выше.
+      before: ${{ needs.publish.outputs.before }}
