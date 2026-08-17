@@ -50,12 +50,15 @@ extract_fn() {
 
 FNS="$TMP/fns.sh"
 {
+    # Гейт фаервола: слои z2k теперь ходят через него вместо собственной
+    # тихой проверки FWTYPE, поэтому без него вытащенная функция не запустится.
+    extract_fn z2k_fw_is_iptables        "$INIT"; echo
     extract_fn z2k_ndmc_bin              "$INIT"; echo
     extract_fn z2k_policy_id             "$INIT"; echo
     extract_fn z2k_policy_members        "$INIT"; echo
     extract_fn z2k_policy_connmark_start "$INIT"; echo
 } > "$FNS"
-for f in z2k_ndmc_bin z2k_policy_id z2k_policy_members z2k_policy_connmark_start; do
+for f in z2k_fw_is_iptables z2k_ndmc_bin z2k_policy_id z2k_policy_members z2k_policy_connmark_start; do
     grep -q "^$f()" "$FNS" && ok "extracted $f()" \
                            || no "extracted $f()" "a definition" "none"
 done

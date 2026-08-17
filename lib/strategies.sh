@@ -40,34 +40,77 @@ save_strategy_to_category() {
 
 # Создать дефолтные файлы стратегий при установке
 # Вызывается из step_create_config_and_init()
+# Номера боевых пулов в манифесте strats_new2.txt: YouTube TCP, YouTube GV, RKN.
+#
+# ОДНО МЕСТО НА ВЕСЬ ПРОДУКТ. Их читает и первичная материализация при установке
+# (create_default_strategy_files), и повторное применение из меню
+# (apply_autocircular_strategies). Пока номера жили в двух местах, разъехаться
+# они могли молча — и человек получил бы конфиг, собранный из одного пула, при
+# меню, показывающем другой.
+default_pool_numbers() {
+    Z2K_POOL_YT=2
+    Z2K_POOL_GV=3
+    Z2K_POOL_RKN=1
+}
+
 create_default_strategy_files() {
     local extra_strats_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats"
 
     print_info "Создание дефолтных файлов стратегий..."
 
-    # Дефолтная TCP стратегия
-    local default_tcp="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=4"
-
-    # Дефолтная UDP стратегия (QUIC) — 13 стратегий, проверенный fake-escalation
-    # впереди, экспериментальные z2k-морфы в хвосте (слоты 11-13).
-    # ВАЖНО: должна совпадать с дефолтом quic_udp в config_official.sh.
-    # Примитивный дефолт (fake:repeats=3) НЕ работает — при переустановке
-    # Strategy.txt перезаписывается и затирает рабочий дефолт из config_official.sh.
-    # На реальной установке этот дефолт перетирается материализацией yt_quic_autocircular
-    # из quic_strats.ini (apply → save_strategy_to_category YT UDP), где google-блоб впереди.
-    local default_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=1 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=1 --lua-desync=drop:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=2 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=2 --lua-desync=drop:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=6 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=8 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=8 --lua-desync=drop:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=9 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=9 --lua-desync=drop:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=10 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=11 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=12 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=13"
-
-    # Создать директории и файлы
+    # Создать директории
     mkdir -p "$extra_strats_dir/TCP/YT"
     mkdir -p "$extra_strats_dir/TCP/YT_GV"
     mkdir -p "$extra_strats_dir/TCP/RKN"
     mkdir -p "$extra_strats_dir/UDP/YT"
 
-    # Сохранить дефолтные стратегии
+    # СРАЗУ БОЕВЫЕ ПУЛЫ, А НЕ ЗАГЛУШКИ.
+    #
+    # Раньше здесь писались временные строки: для TCP — один фейк без circular
+    # вообще, для UDP — четырёхкилобайтная копия QUIC-пула прямо в этом файле.
+    # Из них тут же собирался NFQWS2_OPT (install.sh: create_official_config
+    # идёт следующим шагом), и только в самом конце установки
+    # apply_autocircular_strategies перетирал всё боевыми пулами и генерил
+    # конфиг во второй раз. То есть конфиг собирался дважды, первый раз — из
+    # стратегии без ротации; обрыв установки между этими шагами оставлял
+    # человека с рабочим сервисом и одним фейком вместо пула.
+    #
+    # Берём то же самое и оттуда же, откуда возьмёт apply: strategies.conf и
+    # quic_strategies.conf, разобранные из манифестов strats_new2.txt и
+    # quic_strats.ini (lib/config.sh: create_base_config кладёт их в CONFIG_DIR
+    # раньше по ходу установки). Поздний apply становится идемпотентным —
+    # пишет ровно то, что уже лежит.
+    local yt gv rkn quic p_yt p_gv p_rkn p_quic
+    default_pool_numbers; yt=$Z2K_POOL_YT; gv=$Z2K_POOL_GV; rkn=$Z2K_POOL_RKN
+    quic=$(get_quic_strategy_num_by_name "yt_quic_autocircular" 2>/dev/null)
+    [ -n "$quic" ] || quic=2
+
+    p_yt=$(get_strategy "$yt" 2>/dev/null)
+    p_gv=$(get_strategy "$gv" 2>/dev/null)
+    p_rkn=$(get_strategy "$rkn" 2>/dev/null)
+    p_quic=$(get_quic_strategy "$quic" 2>/dev/null)
+
+    if [ -n "$p_yt" ] && [ -n "$p_gv" ] && [ -n "$p_rkn" ] && [ -n "$p_quic" ]; then
+        save_strategy_to_category "YT"    "TCP" "$(build_tls_profile_params "$p_yt")"  || return 1
+        save_strategy_to_category "YT_GV" "TCP" "$(build_tls_profile_params "$p_gv")"  || return 1
+        save_strategy_to_category "RKN"   "TCP" "$(build_tls_profile_params "$p_rkn")" || return 1
+        save_strategy_to_category "YT"    "UDP" "$(build_quic_profile_params "$p_quic")" || return 1
+        # Зафиксировать выбор QUIC-пула, иначе get_current_quic_profile_params
+        # у позднего apply вернёт другой номер и файл будет переписан зря.
+        set_current_quic_strategy "$quic"
+        print_success "Стратегии материализованы из манифестов (YT #$yt, GV #$gv, RKN #$rkn, QUIC #$quic)"
+        return 0
+    fi
+
+    # Манифест не прочитался (битая загрузка, обрезанный файл) — ставим
+    # минимальный рабочий дефолт, как было раньше, чтобы установка не встала.
+    print_warning "Манифесты стратегий недоступны — ставлю минимальный дефолт"
+    local default_tcp="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=4"
     echo "$default_tcp" > "$extra_strats_dir/TCP/YT/Strategy.txt"
     echo "$default_tcp" > "$extra_strats_dir/TCP/YT_GV/Strategy.txt"
     echo "$default_tcp" > "$extra_strats_dir/TCP/RKN/Strategy.txt"
-    echo "$default_udp" > "$extra_strats_dir/UDP/YT/Strategy.txt"
+    echo "--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6" \
+        > "$extra_strats_dir/UDP/YT/Strategy.txt"
 
     print_success "Дефолтные файлы стратегий созданы"
     return 0
@@ -584,9 +627,9 @@ apply_autocircular_strategies() {
         auto_mode=1
     fi
 
-    local yt_tcp=2
-    local yt_gv=3
-    local rkn=1
+    # Номера боевых пулов — из одного места (см. default_pool_numbers).
+    local yt_tcp yt_gv rkn
+    default_pool_numbers; yt_tcp=$Z2K_POOL_YT; yt_gv=$Z2K_POOL_GV; rkn=$Z2K_POOL_RKN
     local quic
     quic=$(get_quic_strategy_num_by_name "yt_quic_autocircular")
     [ -z "$quic" ] && quic=2

@@ -1404,6 +1404,7 @@ step_build_zapret2() {
             local _item
             for _item in config lists/whitelist.txt lists/extra-domains.txt \
                          lists/custom-strategies lists/warp \
+                         lists/autohostlist-domains.txt lists/discovered-domains.txt \
                          ipset/zapret-hosts-user-exclude.txt \
                          extra_strats/cache/autocircular/state.tsv .z2k-relay-id; do
                 [ -e "$_rescued/$_item" ] || continue
@@ -1501,6 +1502,25 @@ step_build_zapret2() {
             mkdir -p "$backup_tmp/custom-strategies" 2>/dev/null
             cp -f "$ZAPRET2_DIR/lists/custom-strategies/"*.txt "$backup_tmp/custom-strategies/" 2>/dev/null
         fi
+        # Домены, найденные автоматикой на ЭТОМ устройстве, а не человеком:
+        # lists/autohostlist-domains.txt — след автохостлиста движка,
+        # lists/discovered-domains.txt — публикации демона z2k-detect.
+        #
+        # Оба видны в панели отдельными категориями (webpanel/cgi/actions.sh,
+        # _domain_lists_catalog), оба копятся неделями и оба до этой правки
+        # переустановку не переживали: первый не бэкапился вовсе, второй ниже
+        # по коду пересоздавался ПУСТЫМ. Обновление у нас — это reinstall,
+        # то есть терялось на каждой обнове, и незаметно: панель показывала
+        # те же категории, просто пустые — «пока ничего не нашлось».
+        #
+        # Восстановить их нечем: они не выводятся ни из shipped-файлов, ни из
+        # апстрима — только повторным наблюдением за трафиком. Поэтому тот же
+        # fail-closed, что у whitelist: abort ДО удаления текущего дерева.
+        for _acc in autohostlist-domains discovered-domains; do
+            [ -f "$ZAPRET2_DIR/lists/${_acc}.txt" ] || continue
+            cp -f "$ZAPRET2_DIR/lists/${_acc}.txt" "$backup_tmp/${_acc}.txt" || \
+                die "Не удалось сохранить ${_acc}.txt в бэкап — установка прервана, чтобы не потерять найденные автоматически домены."
+        done
         # Autocircular state (найденные рабочие стратегии) — recoverable
         # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
         # warn и продолжаем, не блокируя установку ради cache.
@@ -2243,6 +2263,23 @@ step_build_zapret2() {
         print_info "Восстановлены пользовательские стратегии"
         [ "$_wl_restored" -gt 0 ] && print_info "Восстановлены списки WARP ($_wl_restored файл(ов))"
     fi
+    # Найденные автоматикой домены — обратно на место (бэкап см. backup_tmp).
+    # Идёт ПОСЛЕ пустышки discovered-domains.txt выше и ДО генерации
+    # NFQWS2_OPT, поэтому в командную строку nfqws2 попадает уже наполненный
+    # файл, а не пустой.
+    for _acc in autohostlist-domains discovered-domains; do
+        [ -f "$backup_tmp/${_acc}.txt" ] || continue
+        if cp -f "$backup_tmp/${_acc}.txt" "${ZAPRET2_DIR}/lists/${_acc}.txt" 2>/dev/null; then
+            chmod 644 "${ZAPRET2_DIR}/lists/${_acc}.txt" 2>/dev/null || true
+            print_info "Восстановлен ${_acc}.txt ($(grep -cvE '^[[:space:]]*(#|$)' "${ZAPRET2_DIR}/lists/${_acc}.txt" 2>/dev/null || echo 0) домен(ов))"
+        else
+            # $backup_tmp сносится в конце установки, поэтому «копия осталась
+            # в бэкапе» было бы неправдой — уносим её туда, где она доживёт
+            # хотя бы до перезагрузки, и называем реальный путь.
+            cp -f "$backup_tmp/${_acc}.txt" "/tmp/z2k-${_acc}.txt" 2>/dev/null
+            print_warning "Не удалось восстановить ${_acc}.txt — копия в /tmp/z2k-${_acc}.txt (до перезагрузки)"
+        fi
+    done
     # NB: игровые списки WARP здесь не разворачиваются вовсе. z2k-update-lists.sh
     # тянет их пер-игровыми файлами в lists/warp/games/ и владеет ими целиком;
     # shipped-снимка больше нет. Восстанавливается только выбор пользователя
@@ -2617,11 +2654,27 @@ step_check_and_select_fwtype() {
     # Автоопределение через функцию из zapret2
     linux_fwtype
 
-    # linux_fwtype может вернуть "unsupported" если ни iptables, ни nftables
-    # не нашлись (как раз случай с битым PATH выше). Старая проверка ловила
-    # только пустую строку — добавлено явное "unsupported".
-    if [ -z "$FWTYPE" ] || [ "$FWTYPE" = "unsupported" ]; then
-        print_warning "linux_fwtype вернул '$FWTYPE' — используем fallback iptables"
+    # ВЫБОР ПРИБИТ К IPTABLES, И ЭТО НЕ УПРЯМСТВО.
+    #
+    # Правило автора движка (docs/manual.md:416): «однозначно выбирайте
+    # nftables… НО если ядро старее 5.15 или nft старее 1.0.1 — тогда лучше
+    # iptables, со старыми ядрами будут проблемы». У Keenetic ядро 4.9. Там же
+    # (:413) второй довод: nft-сеты требуют 256-320 МБ на 100K адресов, а мы
+    # целимся в коробки с 64 МБ. В обсуждении по запуску на Keenetic автор
+    # рекомендует iptables прямо.
+    #
+    # Автодетект сегодня и так падает на iptables — он требует ядро ≥4.16, —
+    # но полагаться на это нельзя: порог там 4.16 против «доверять с 5.15» у
+    # автора, а наличие nft проверяется буквально существованием бинарника,
+    # без единой проверки поддержки ядром. Появись у Keenetic ядро поновее и
+    # пакет nftables из Entware — установщик записал бы FWTYPE=nftables, и все
+    # пять наших слоёв молча не поставились бы: сервис есть, обхода нет.
+    #
+    # Терять при этом нечего: единственное, ради чего нужен POSTNAT — техника
+    # synack, а про неё мануал (:4508) пишет «ломает NAT, через NAT применение
+    # невозможно», то есть на роутере она неприменима по определению.
+    if [ "$FWTYPE" != "iptables" ]; then
+        print_warning "linux_fwtype вернул '$FWTYPE' — принудительно ставим iptables (ядро Keenetic 4.9, см. комментарий в install.sh)"
         FWTYPE="iptables"
     fi
 
