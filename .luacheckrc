@@ -28,6 +28,11 @@ globals = {
     "z2k_cdn_detect",
     "cond_tcp_has_ts",
     "circular",
+    -- Сброс накопленных счётчиков удач/неудач хоста. Предусмотрен движком
+    -- ровно для нашего случая: состояние ротации меняет не детектор, а человек
+    -- (пин/выбор стратегии в панели). Зовём через гейт на существование, так
+    -- что на старом движке без него ничего не ломается.
+    "automate_failure_counter_reset",
     -- z2k-modern-core.lua hostkey fn (returns "nohost" for IP/no-hostname flows)
     "z2k_nohost_key",
     -- z2k-state-persist.lua exported API table

@@ -42,6 +42,15 @@ function standard_hostkey(desync)     -- mirrors zapret-auto.lua
   return hostkey
 end
 
+-- mirrors zapret-auto.lua:159-166 (движок; в тесте он не загружен)
+function automate_failure_counter_reset(hrec)   -- luacheck: ignore
+  if hrec.failure_counter or hrec.success_counter then
+    hrec.failure_counter = nil
+    hrec.success_counter = nil
+    hrec.success_time_last = nil
+  end
+end
+
 function z2k_nohost_key(desync)       -- mirrors z2k-modern-core.lua
   local t = desync and desync.track
   local h = t and t.hostname
@@ -638,6 +647,46 @@ do
   check("T36: out-of-range frozen pin clamped to 1 in live",
         1, autostate["rkn_tcp"]["clamp.com"].nstrategy)
   check("T36: invalid frozen row cleared from disk", nil, row("rkn_tcp", "clamp.com"))
+end
+
+-- T37: ручной выбор стратегии ОБНУЛЯЕТ накопленные неудачи хоста.
+--
+-- Человек жмёт «×» или выбирает стратегию ровно тогда, когда только что увидел
+-- отвалившийся сайт — то есть счётчик неудач уже почти добит (2 из 3 в окне
+-- 60 с). Без сброса первая же неудача на ТОЛЬКО ЧТО выбранной стратегии
+-- добивает порог, и ротатор с неё уезжает: человек уверен, что закрепил выбор,
+-- а выбор сменился сам. Неудачи, накопленные ДО вмешательства, к новой
+-- стратегии отношения не имеют.
+do
+  fresh()
+  now = 11000
+  circular(nil, mk("rkn_tcp", "reset.com", {sim = 2}))     -- live=2, disk=2
+  local hrec = autostate["rkn_tcp"]["reset.com"]
+  hrec.failure_counter  = 2                                 -- 2 из 3 — порог рядом
+  hrec.failure_time_last = now
+  hrec.success_counter  = 1
+  hrec.success_time_last = now
+  write_file("# h\n# h2\nrkn_tcp\treset.com\t3\t11100\n")   -- оператор выбрал 3
+  now = 11005
+  circular(nil, mk("rkn_tcp", "reset.com"))
+  check("T37: ручной выбор принят", 3, autostate["rkn_tcp"]["reset.com"].nstrategy)
+  check("T37: счётчик неудач обнулён", nil, autostate["rkn_tcp"]["reset.com"].failure_counter)
+  check("T37: счётчик удач обнулён",   nil, autostate["rkn_tcp"]["reset.com"].success_counter)
+end
+
+-- T38: то же для удаления строки из панели (сброс на стратегию 1).
+do
+  fresh()
+  now = 12000
+  circular(nil, mk("rkn_tcp", "del.com", {sim = 3}))
+  local hrec = autostate["rkn_tcp"]["del.com"]
+  hrec.failure_counter = 2
+  hrec.failure_time_last = now
+  write_file("# h\n# h2\n")                                 -- оператор удалил строку
+  now = 12005
+  circular(nil, mk("rkn_tcp", "del.com"))
+  check("T38: удаление сбросило на 1", 1, autostate["rkn_tcp"]["del.com"].nstrategy)
+  check("T38: счётчик неудач обнулён", nil, autostate["rkn_tcp"]["del.com"].failure_counter)
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
