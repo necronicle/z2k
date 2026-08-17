@@ -37,6 +37,64 @@ type Result struct {
 	FailureCode   FailureCode
 	FailureReason string
 	LatencyMS     int
+
+	// PathVerdict отвечает на первый вопрос поддержки: «обход тут вообще
+	// поможет?». Заполняется ТОЛЬКО когда проба провалилась, потому что у
+	// успешной пробы вопроса нет.
+	//
+	//   PathSNI    — путь до сервера живой, режут по имени. Наш случай:
+	//                десинхронизация работает именно с этим.
+	//   PathIP     — до адреса не доходит ничего или доходит, но сервер молчит
+	//                на любое имя. Пакетными техниками это не обходится в
+	//                принципе (manual: «zapret не может обойти блок по IP»),
+	//                нужен туннель или другой адрес.
+	//   PathServer — ответил сам сервер (TLS alert, требование клиентского
+	//                сертификата). Это его политика, а не цензура.
+	PathVerdict string
+	PathReason  string
+}
+
+const (
+	PathSNI    = "sni"
+	PathIP     = "ip"
+	PathServer = "server"
+
+	// Нейтральное имя для проверки «а по этому адресу вообще пускают».
+	// example.com зарезервирован IANA под примеры, в блок-листы не попадает
+	// и у провайдеров не режется — именно это здесь и нужно.
+	neutralSNI = "example.com"
+)
+
+// classifyPath решает, где блокируют: по имени или по адресу.
+//
+// Приём взят у автора движка (manual, «Проверка блока по IP»): к тому же
+// адресу стучимся с ЗАВЕДОМО НЕ ЗАБЛОКИРОВАННЫМ именем. Если так сервер
+// отвечает — путь до него живой, значит режут по имени, и десинк применим.
+// Если и с нейтральным именем тишина — режут адрес, и обход тут бессилен.
+//
+// Ответом считается ЛЮБОЙ ответ TLS-уровня, включая alert: alert на чужое имя
+// — нормальная реакция сервера, который такой домен не обслуживает, и он же
+// доказывает, что байты дошли и вернулись.
+//
+// Чистая функция: сеть дёргает вызывающий и передаёт сюда результат.
+func classifyPath(r *Result, neutralOK bool, neutralCode FailureCode) {
+	switch {
+	case r.TLSOK && !IsServerReachable(r.FailureCode):
+		return // проба прошла — классифицировать нечего
+	case IsServerReachable(r.FailureCode):
+		r.PathVerdict = PathServer
+		r.PathReason = "сервер ответил сам (" + string(r.FailureCode) + ") — это его политика, не блокировка"
+	case !r.TCPOK:
+		r.PathVerdict = PathIP
+		r.PathReason = "порт 443 не отвечает (" + string(r.FailureCode) + ") — блок по адресу или порту"
+	case neutralOK || IsServerReachable(neutralCode):
+		r.PathVerdict = PathSNI
+		r.PathReason = "с нейтральным именем " + neutralSNI + " тот же адрес отвечает — режут по имени"
+	default:
+		r.PathVerdict = PathIP
+		r.PathReason = "с нейтральным именем " + neutralSNI + " тот же адрес тоже молчит (" +
+			string(neutralCode) + ") — режут адрес, не имя"
+	}
 }
 
 const (
@@ -161,6 +219,7 @@ func probeTCPTLS(ctx context.Context, r Result, started time.Time, timeout time.
 			r.FailureCode = CodeTCPError
 			r.FailureReason = "tcp_connect_failed"
 		}
+		classifyPath(&r, false, r.FailureCode)
 		r.LatencyMS = int(time.Since(started) / time.Millisecond)
 		return r
 	}
@@ -173,6 +232,15 @@ func probeTCPTLS(ctx context.Context, r Result, started time.Time, timeout time.
 		liftTLS13Verdict(&r)
 	}
 	runH2MultiplexProbe(ctx, &r, []string{reachable}, r.Domain, timeout)
+	// Лишний хендшейк платим только на провалившейся пробе — там, где человек
+	// и спрашивает «это вообще обходится?».
+	if !r.TLSOK || IsServerReachable(r.FailureCode) {
+		nconn, ncode, _, _ := tlsHandshake(reachable, "443", neutralSNI, timeout, 0)
+		if nconn != nil {
+			nconn.Close()
+		}
+		classifyPath(&r, nconn != nil, ncode)
+	}
 	r.LatencyMS = int(time.Since(started) / time.Millisecond)
 	return r
 }

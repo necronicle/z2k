@@ -144,6 +144,19 @@ func probeCmd(ctx context.Context, rest []string) {
 	if res.FailureReason != "" {
 		fmt.Printf("Reason:  %s\n", res.FailureReason)
 	}
+	// Первый вопрос по любому домену — «обход тут вообще поможет?».
+	// Печатаем сразу под причиной, чтобы человек не гадал по кодам.
+	switch res.PathVerdict {
+	case prober.PathSNI:
+		fmt.Printf("Блок:    ПО ИМЕНИ — %s\n", res.PathReason)
+		fmt.Println("  → это наш случай, обход применим.")
+	case prober.PathIP:
+		fmt.Printf("Блок:    ПО АДРЕСУ — %s\n", res.PathReason)
+		fmt.Println("  → пакетными техниками не обходится: движок не может обойти блок по IP.")
+		fmt.Println("    Помогает только другой адрес (свежий резолв) или туннель — WARP/релей.")
+	case prober.PathServer:
+		fmt.Printf("Блок:    НЕТ — %s\n", res.PathReason)
+	}
 
 	verdict := decision.Classify(res)
 	inList := findDomainInZ2kLists(domain)
