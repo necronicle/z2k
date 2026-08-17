@@ -561,7 +561,21 @@ run_generator() {
 # http_rkn lives on a separate line (filter-tcp=80, key=http_rkn) and
 # is filtered out by the key match.
 get_rkn_tcp_arm_line() {
-    printf '%s\n' "$1" | grep -F 'key=rkn_tcp' | head -1
+    printf '%s\n' "$1" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" \
+        | grep -F 'key=rkn_tcp' | head -1
+}
+
+# Профиль ЦЕЛИКОМ из готового config-файла.
+#
+# Арсенал РКН объявляется в конфиге один раз (--template) и подставляется в
+# профили (--import), поэтому «взять строку с key=rkn_tcp» больше не значит
+# «взять весь профиль»: стратегии лежат в блоке шаблона. Раскрыватель
+# возвращает прежний взгляд — профиль одной строкой со всеми инстансами.
+config_profile_line() {
+    sed -n '/^NFQWS2_OPT="/,/^"[[:space:]]*$/p' "$1" \
+        | sed '1d;$d' \
+        | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" \
+        | grep -F "$2" | head -1
 }
 
 printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: explicit OFF (=0) ---\n"
@@ -833,7 +847,7 @@ Z2K_PADENCAP=$flag
 EOF
     ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
     local rkn_arm
-    rkn_arm=$(grep -F 'key=rkn_tcp' "$root/config" | head -1)
+    rkn_arm=$(config_profile_line "$root/config" 'key=rkn_tcp')
 
     if [ "$expect_padencap" = "1" ]; then
         assert_contains "padencap flag=$flag: rkn_tcp tls_mod has padencap" \
@@ -847,7 +861,7 @@ EOF
     # запуске create_official_config (injector гейт *padencap* skip).
     ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
     local rkn_arm_2nd
-    rkn_arm_2nd=$(grep -F 'key=rkn_tcp' "$root/config" | head -1)
+    rkn_arm_2nd=$(config_profile_line "$root/config" 'key=rkn_tcp')
     local padencap_count
     padencap_count=$(printf '%s' "$rkn_arm_2nd" | grep -o "padencap" | wc -l | tr -d ' ')
     if [ "$expect_padencap" = "1" ]; then

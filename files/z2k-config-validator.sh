@@ -271,8 +271,21 @@ check_hostlist_files() {
                 if [ ! -f "$_path" ]; then
                     _missing="$_missing $_path"
                 elif [ ! -s "$_path" ]; then
-                    _empty="$_empty $_path"
+                    # Накопители пустуют по построению, пока автоматика ничего
+                    # не нашла. Ругаться на это — учить человека не читать
+                    # предупреждения.
+                    case "${_path##*/}" in
+                        zapret-hosts-auto.txt|autohostlist-domains.txt|discovered-domains.txt) : ;;
+                        *) _empty="$_empty $_path" ;;
+                    esac
                 fi
+                ;;
+            --hostlist-auto=*)
+                # Автолист движка. Он его сам и наполняет — проверяем только
+                # существование: без файла демон не стартует вообще.
+                _path="${_tok#*=}"
+                [ -z "$_path" ] && continue
+                [ -f "$_path" ] || _missing="$_missing $_path"
                 ;;
             --hostlist-exclude=*)
                 _path="${_tok#*=}"
@@ -437,10 +450,28 @@ check_profile_structure() {
     # Проверяем каждый профиль
     _current_filters=""
     _in_profile=1
+    # Блок шаблона (--template) — не профиль: он не участвует в подборе и
+    # фильтров у него нет по построению. Считать его профилем значит выдавать
+    # предупреждение «нет --filter-tcp» на каждой генерации конфига.
+    _is_template=0
+    _templates=0
 
     for _tok in $_tokens; do
         case "$_tok" in
+            --template|--template=*)
+                _is_template=1
+                continue
+                ;;
+        esac
+        case "$_tok" in
             --new)
+                if [ "$_is_template" = "1" ]; then
+                    _templates=$((_templates + 1))
+                    _is_template=0
+                    _current_filters=""
+                    _in_profile=1
+                    continue
+                fi
                 # Конец текущего профиля
                 if [ "$_in_profile" = "1" ] && [ -z "$_current_filters" ]; then
                     # Профиль без --filter-tcp/--filter-udp
@@ -488,6 +519,7 @@ check_profile_structure() {
     else
         report_ok "Конфигурация содержит 1 профиль"
     fi
+    [ "${_templates:-0}" -gt 0 ] && report_ok "Найдено ${_templates} шаблон(ов) --template"
 
     if [ "$_missing_filter" -gt 0 ]; then
         report_warn "${_missing_filter} профиль(ей) без --filter-tcp/--filter-udp"
@@ -529,7 +561,7 @@ check_missing_new_separator() {
             --new)
                 _prev_was_filter=0
                 ;;
-            --lua-desync=*|--hostlist=*|--hostlist-exclude=*|--payload=*|--out-range=*|--in-range=*|--filter-l7=*|--ipset=*|--hostlist-domains=*)
+            --lua-desync=*|--hostlist=*|--hostlist-exclude=*|--payload=*|--out-range=*|--in-range=*|--filter-l7=*|--ipset=*|--hostlist-domains=*|--hostlist-auto=*|--hostlist-auto-*)
                 _prev_was_filter=0
                 ;;
         esac

@@ -76,24 +76,45 @@ printf '# h\n# h2\nyt_tcp\tyoutube.com\t4\t1000\n' > "$STATE_FILE"
 assert_eq "legacy 4-col read: strategy" "4" "$(row_field yt_tcp youtube.com 3)"
 
 # ------------------------------------------------------------------------------
-# pools_read awk logic (replicated — pools_read itself reads /proc/<nfqws2>/cmdline
-# which isn't available under test). Counts DISTINCT strategy=N per circular key.
+# pools_read — считает РАЗНЫЕ strategy=N на каждый circular-ключ.
+#
+# Здесь исполняется НАСТОЯЩАЯ функция панели, а не её копия. Копия жила в этом
+# файле годами и проверяла сама себя: правку в actions.sh она бы не заметила.
+# А правка случилась — арсенал переехал в блок --template, и наивный подсчёт
+# по сырым токенам стал давать ноль у профилей, которые его импортируют.
 # ------------------------------------------------------------------------------
 printf "\n--- pools_read: distinct strategy count per key ---\n"
-CMDLINE="nfqws2 --filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1 --lua-desync=split:strategy=2 --lua-desync=fake:strategy=2 --new --filter-udp=50000 --lua-desync=circular:fails=3:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:strategy=1 --lua-desync=fake:strategy=2 --lua-desync=fake:strategy=3"
-POOLS=$(printf '%s' "$CMDLINE" | awk '
-{
-    n = split($0, toks, " "); ck = ""
-    for (i = 1; i <= n; i++) {
-        t = toks[i]
-        if (t ~ /^--lua-desync=circular:/) { if (match(t, /key=[a-z0-9_]+/)) ck = substr(t, RSTART+4, RLENGTH-4); else ck = "" }
-        else if (t == "--new") { ck = "" }
-        if (ck != "" && match(t, /:strategy=[0-9]+/)) { s = substr(t, RSTART+10, RLENGTH-10); kk = ck SUBSEP s; if (!(kk in seen)) { seen[kk] = 1; cnt[ck]++ } }
-    }
-    for (k in cnt) print k "\t" cnt[k]
-}')
-assert_contains "pools: rkn_tcp=2 (distinct strategies)"     "rkn_tcp	2"     "$POOLS"
-assert_contains "pools: discord_udp=3 (distinct strategies)" "discord_udp	3" "$POOLS"
+
+mk_cfg() {   # $1 — тело NFQWS2_OPT
+    CONFIG_FILE="$SB/config"
+    {
+        printf '# комментарий, в котором встречается слово --template и --import\n'
+        printf 'NFQWS2_OPT="\n%s\n"\n' "$1"
+    } > "$CONFIG_FILE"
+}
+
+# 1) Плоский конфиг — как было до шаблонов.
+mk_cfg '--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1 --lua-desync=split:strategy=2 --lua-desync=fake:strategy=2 --new
+--filter-udp=50000 --lua-desync=circular:fails=3:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:strategy=1 --lua-desync=fake:strategy=2 --lua-desync=fake:strategy=3'
+POOLS=$(pools_read)
+assert_contains "pools (плоский): rkn_tcp=2"     "rkn_tcp	2"     "$POOLS"
+assert_contains "pools (плоский): discord_udp=3" "discord_udp	3" "$POOLS"
+
+# 2) Шаблон + импорт: два профиля делят один арсенал, у каждого свой ключ.
+mk_cfg '--template=z2k_rkn_arsenal --lua-desync=fake:strategy=1 --lua-desync=split:strategy=2 --lua-desync=fake:strategy=2 --new
+--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2 --import=z2k_rkn_arsenal --new
+--filter-tcp=443 --ipset=/tmp/cf.txt --lua-desync=circular:fails=3:key=cf_extra:nld=2 --import=z2k_rkn_arsenal --new
+--filter-udp=50000 --lua-desync=circular:fails=3:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:strategy=1 --lua-desync=fake:strategy=2 --lua-desync=fake:strategy=3'
+POOLS=$(pools_read)
+assert_contains "pools (шаблон): rkn_tcp=2"     "rkn_tcp	2"     "$POOLS"
+assert_contains "pools (шаблон): cf_extra=2"    "cf_extra	2"    "$POOLS"
+assert_contains "pools (шаблон): discord_udp=3" "discord_udp	3" "$POOLS"
+# Сам шаблон не должен превратиться в пул: у него нет своего ключа.
+case "$POOLS" in
+    *z2k_rkn_arsenal*) printf '[FAIL] шаблон попал в список пулов\n'; TESTS_FAILED=$((TESTS_FAILED+1)) ;;
+    *) printf '[PASS] шаблон не считается пулом\n'; TESTS_PASSED=$((TESTS_PASSED+1)) ;;
+esac
+rm -f "$CONFIG_FILE"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 printf "Results: %d passed, %d failed\n" "$TESTS_PASSED" "$TESTS_FAILED"

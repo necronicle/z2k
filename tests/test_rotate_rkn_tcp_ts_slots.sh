@@ -1,170 +1,132 @@
 #!/bin/sh
-# tests/test_rotate_rkn_tcp_ts_slots.sh — rkn_tcp tcp_ts slot rotation.
-# Run: sh tests/test_rotate_rkn_tcp_ts_slots.sh
+# tests/test_rotate_rkn_tcp_ts_slots.sh — значения tcp_ts живут в пуле, а не в
+# таблице слотов генератора.
+#
+# ЧТО БЫЛО. Генератор находил токены с выгоревшим `tcp_ts=-1000` и подставлял
+# альтернативные значения по таблице «номер стратегии → значение» из
+# четырнадцати слотов. Связь держалась на ПОРЯДКЕ стратегий в пуле: любая
+# вставка или перестановка молча уводила значения на чужие стратегии. Именно
+# так однажды и вышло — strategy=37 (hostfakesplit host=ozon.ru) прикусила
+# браузер. К моменту снятия пять слотов таблицы уже указывали в пустоту:
+# токенов с такими номерами в пуле не осталось.
+#
+# ЧТО СТАЛО. Значения записаны прямо в пул (strats_new2.txt, манифест rkn) и
+# доезжают до Strategy.txt как есть. Генератор их не трогает вообще.
+# Сгенерированный NFQWS2_OPT при снятии не изменился ни на байт, а поведение
+# проверено на живом роутере: девять затронутых стратегий по отдельности дают
+# на meduza.io ровно тот же результат, что и до правки.
+#
+# ЧТО ОХРАНЯЕТСЯ ЗДЕСЬ:
+#
+#   1. В генераторе больше нет ни функции ротации, ни карты номеров — иначе
+#      мина вернётся вместе с ними.
+#   2. В пуле нет `tcp_ts=-1000` на тех стратегиях, которым таблица раздавала
+#      значения: это и есть «значения переехали в пул».
+#   3. Значения в пуле — те самые, что раздавала таблица.
+#   4. Остальные `tcp_ts=-1000` в пуле сохранены. Их там 20 штук намеренно:
+#      заменять ВСЕ вхождения нельзя, это меняет весь пул разом.
+#
 # POSIX sh compatible (busybox ash).
 
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-assert_eq() {
-    local desc="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-        printf "[PASS] %s\n" "$desc"
+ok()  { TESTS_PASSED=$((TESTS_PASSED + 1)); printf "[PASS] %s\n" "$1"; }
+no()  { TESTS_FAILED=$((TESTS_FAILED + 1)); printf "[FAIL] %s (want=%s got=%s)\n" "$1" "$2" "$3"; }
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
+CFG="$ROOT/lib/config_official.sh"
+POOLS="$ROOT/strats_new2.txt"
+for f in "$CFG" "$POOLS"; do
+    [ -f "$f" ] || { printf '[FAIL] нет %s\n' "$f"; exit 1; }
+done
+
+# Строка манифеста РКН — та, что уезжает в extra_strats/TCP/RKN/Strategy.txt
+# (lib/strategies.sh: rkn=1).
+RKN_LINE=$(grep '^manual_autocircular_rkn' "$POOLS" | head -1)
+[ -n "$RKN_LINE" ] || { printf '[FAIL] в пуле нет строки manual_autocircular_rkn\n'; exit 1; }
+
+# --- 1. Ротации в генераторе больше нет --------------------------------------
+if grep -q 'rotate_rkn_tcp_ts_slots' "$CFG"; then
+    no "функция ротации снята" "нет упоминаний" "ещё в генераторе"
+else
+    ok "функция ротации снята из генератора"
+fi
+# Карта номеров — вторая половина той же мины. Ищем характерную пару
+# «номер) new_ts=».
+if grep -qE '^[[:space:]]*[0-9]+\)[[:space:]]*new_ts=' "$CFG"; then
+    no "карта номер→значение снята" "нет" "карта ещё на месте"
+else
+    ok "карта «номер стратегии → значение» снята"
+fi
+
+# --- 2 и 3. Значения переехали в пул ----------------------------------------
+# Таблица раздавала эти значения этим стратегиям. Проверяем по факту: у
+# стратегии есть токен с нужным tcp_ts и НЕТ токена с выгоревшим -1000.
+check_slot() {   # $1 — номер стратегии, $2 — ожидаемое значение
+    _toks=$(printf '%s' "$RKN_LINE" | tr ' ' '\n' | grep -- "--lua-desync=" | grep -E ":strategy=$1(:|\$)" | grep 'tcp_ts=')
+    if [ -z "$_toks" ]; then
+        no "слот $1: токен с tcp_ts на месте" "есть" "в пуле нет такого токена — карта разошлась с пулом"
+        return
+    fi
+    # Граница обязательна: -1000 — префикс -10000 и -100000, без неё
+    # проверка «выгоревшее убрано» валит как раз те слоты, где всё сделано.
+    if printf '%s' "$_toks" | grep -qE 'tcp_ts=-1000(:|$)'; then
+        no "слот $1: выгоревшее -1000 убрано" "tcp_ts=$2" "остался -1000"
+        return
+    fi
+    if printf '%s' "$_toks" | grep -qE "tcp_ts=$2(:|\$)"; then
+        ok "слот $1: в пуле tcp_ts=$2"
     else
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-        printf "[FAIL] %s:\n  expected: %s\n  actual:   %s\n" "$desc" "$expected" "$actual"
+        no "слот $1: значение из таблицы" "tcp_ts=$2" "$(printf '%s' "$_toks" | sed -n 's/.*\(tcp_ts=[^:]*\).*/\1/p' | tr '\n' ' ')"
     fi
 }
+check_slot 11 -43210
+check_slot 15 -100000
+check_slot 18 -500000
+check_slot 23 -43210
+check_slot 24 -7777
+check_slot 25 -43210
+check_slot 35 -43210
+check_slot 37 -100000
+check_slot 42 -10000
 
-assert_contains() {
-    local desc="$1" needle="$2" haystack="$3"
-    case "$haystack" in
-        *"$needle"*)
-            TESTS_PASSED=$((TESTS_PASSED + 1))
-            printf "[PASS] %s\n" "$desc"
-            ;;
-        *)
-            TESTS_FAILED=$((TESTS_FAILED + 1))
-            printf "[FAIL] %s: missing '%s'\n" "$desc" "$needle"
-            ;;
-    esac
-}
+# --- 4. Остальные -1000 не тронуты -------------------------------------------
+#
+# Заменять ВСЕ вхождения нельзя: -1000 выгорело не везде и не для всех, а
+# массовая замена — это уже другой пул, а не снятие таблицы.
+_left=$(printf '%s' "$RKN_LINE" | tr ' ' '\n' | grep -cE 'tcp_ts=-1000(:|$)')
+if [ "$_left" -ge 15 ]; then
+    ok "прочие tcp_ts=-1000 в пуле сохранены ($_left шт.)"
+else
+    no "прочие -1000 сохранены" ">=15" "$_left — похоже, заменили всё подряд"
+fi
 
-assert_not_contains() {
-    local desc="$1" needle="$2" haystack="$3"
-    case "$haystack" in
-        *"$needle"*)
-            TESTS_FAILED=$((TESTS_FAILED + 1))
-            printf "[FAIL] %s: unexpected '%s'\n" "$desc" "$needle"
-            ;;
-        *)
-            TESTS_PASSED=$((TESTS_PASSED + 1))
-            printf "[PASS] %s\n" "$desc"
-            ;;
-    esac
-}
-
-# Local copy — kept in sync with lib/config_official.sh.
-rotate_rkn_tcp_ts_slots() {
-    local input="$1"
-    local out=""
-    local token=""
-    local strategy_id=""
-    local new_ts=""
-    for token in $input; do
-        case "$token" in
-            *:tcp_ts=-1000:*|*:tcp_ts=-1000)
-                strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
-                case "$strategy_id" in
-                    # Original 10 slots после +6 сдвига (вставка 6 white-rescue
-                    # strategies в позиции 4/5/6/10/11/12).
-                    11) new_ts="-43210"  ;;
-                    15) new_ts="-100000" ;;
-                    18) new_ts="-500000" ;;
-                    23) new_ts="-43210"  ;;
-                    24) new_ts="-7777"   ;;
-                    28) new_ts="-10000"  ;;
-                    30) new_ts="-7777"   ;;
-                    35) new_ts="-43210"  ;;
-                    37) new_ts="-100000" ;;
-                    42) new_ts="-10000"  ;;
-                    # New rotated slots после +6 сдвига.
-                    25) new_ts="-43210"  ;;
-                    26) new_ts="-10000"  ;;
-                    38) new_ts="-7777"   ;;
-                    40) new_ts="-100000" ;;
-                    *)  new_ts=""        ;;
-                esac
-                if [ -n "$new_ts" ]; then
-                    token=$(printf '%s' "$token" | sed -e "s/:tcp_ts=-1000:/:tcp_ts=${new_ts}:/g" -e "s/:tcp_ts=-1000\$/:tcp_ts=${new_ts}/")
-                fi
-                ;;
-        esac
-        out="${out:+$out }$token"
-    done
-    printf '%s' "$out"
-}
-
-printf "\n--- rotate_rkn_tcp_ts_slots: target slots ---\n"
-
-# slot → expected_value map (must match lib/config_official.sh)
-# Format: "slot:expected" pairs — drives both positive assertions and the
-# multi-token integration test below.
-TARGET_SLOTS="11:-43210 15:-100000 18:-500000 23:-43210 24:-7777 28:-10000 30:-7777 35:-43210 37:-100000 42:-10000 25:-43210 26:-10000 38:-7777 40:-100000"
-
-for pair in $TARGET_SLOTS; do
-    slot=$(printf '%s' "$pair" | cut -d: -f1)
-    want=$(printf '%s' "$pair" | cut -d: -f2)
-    T="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=$slot"
-    R=$(rotate_rkn_tcp_ts_slots "$T")
-    assert_contains "slot $slot: rewritten to $want" "tcp_ts=$want" "$R"
-    # Check `tcp_ts=-1000:` (with trailing colon) — needed because some
-    # rewrite values like -10000 / -100000 contain `-1000` as a prefix
-    # substring. The `:` boundary disambiguates a leftover original from
-    # a substring match inside the new value.
-    assert_not_contains "slot $slot: original -1000 gone" "tcp_ts=-1000:" "$R"
-done
-
-# Keep R11 alias for downstream idempotency assertion below.
-# (17 = первый ротируемый slot после +6 сдвига вставки 6 white-rescue strats.)
-R11=$(rotate_rkn_tcp_ts_slots "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:repeats=6:tcp_ts=-1000:strategy=11")
-
-printf "\n--- rotate_rkn_tcp_ts_slots: untouched slots ---\n"
-
-# Slots NOT in rotation must keep -1000. После rollback white-rescue strats
-# (Phase 5 cleanup) нумерация вернулась к pre-shift. Untouched-list:
-# {1, 5, 10, 14, 39, 43, 47}. Slot 48 (бывшая padencap) tcp_ts=-1000 не имеет.
-for slot in 1 5 10 14 39 43 47; do
-    T="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=$slot"
-    R=$(rotate_rkn_tcp_ts_slots "$T")
-    assert_contains "slot $slot: untouched (keeps -1000)" "tcp_ts=-1000" "$R"
-done
-
-printf "\n--- rotate_rkn_tcp_ts_slots: edge cases ---\n"
-
-# Token without tcp_ts — passthrough (slot 17 = первый ротируемый после +6 сдвига).
-T_NOTS="--lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:strategy=11"
-R_NOTS=$(rotate_rkn_tcp_ts_slots "$T_NOTS")
-assert_eq "no tcp_ts: passthrough" "$T_NOTS" "$R_NOTS"
-
-# tcp_ts at end of token (no trailing colon)
-T_END="--lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:strategy=11:tcp_ts=-1000"
-R_END=$(rotate_rkn_tcp_ts_slots "$T_END")
-assert_contains "tcp_ts at end: rewritten" "tcp_ts=-43210" "$R_END"
-assert_not_contains "tcp_ts at end: -1000 gone" "tcp_ts=-1000" "$R_END"
-
-# Idempotency: second pass changes nothing
-R_IDEM=$(rotate_rkn_tcp_ts_slots "$R11")
-assert_eq "idempotent: 2nd pass = 1st pass" "$R11" "$R_IDEM"
-
-# Empty input
-R_EMPTY=$(rotate_rkn_tcp_ts_slots "")
-assert_eq "empty input: empty output" "" "$R_EMPTY"
-
-# Different value tcp_ts (e.g. -43210 already there) — untouched
-T_ALREADY="--lua-desync=fake:payload=tls_client_hello:dir=out:tcp_ts=-43210:strategy=11"
-R_ALREADY=$(rotate_rkn_tcp_ts_slots "$T_ALREADY")
-assert_eq "non-(-1000) value: passthrough" "$T_ALREADY" "$R_ALREADY"
-
-printf "\n--- rotate_rkn_tcp_ts_slots: multi-token rotator ---\n"
-
-# Realistic mini-rotator после вставки 6 white-rescue strats (4/5/6/10/11/12).
-# Slot=1 — старая strategy=1 (fake:google-ts + multisplit:google), не ротируется.
-# Slots 17/21/30/43/48 — original-shifted (+6 от 11/15/24/37/42).
-# Slot 31 — Phase 1.3 new (+6 от 25).
-MULTI="--lua-desync=fake:payload=tls_client_hello:dir=out:tcp_ts=-1000:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=11 --lua-desync=fake:payload=tls_client_hello:dir=out:host=ya.ru:tcp_ts=-1000:strategy=15 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=24 --lua-desync=hostfakesplit:payload=tls_client_hello:dir=out:host=ozon.ru:tcp_ts=-1000:strategy=37 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tcp_ts=-1000:strategy=42 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=stun:tcp_ts=-1000:strategy=25"
-R_MULTI=$(rotate_rkn_tcp_ts_slots "$MULTI")
-assert_contains "multi: slot=1 keeps -1000"   "tcp_ts=-1000:strategy=1"    "$R_MULTI"
-assert_contains "multi: slot=11 has -43210"   "tcp_ts=-43210:strategy=11"  "$R_MULTI"
-assert_contains "multi: slot=15 has -100000"  "tcp_ts=-100000:strategy=15" "$R_MULTI"
-assert_contains "multi: slot=24 has -7777"    "tcp_ts=-7777:strategy=24"   "$R_MULTI"
-assert_contains "multi: slot=37 has -100000"  "tcp_ts=-100000:strategy=37" "$R_MULTI"
-assert_contains "multi: slot=42 has -10000"   "tcp_ts=-10000:strategy=42"  "$R_MULTI"
-assert_contains "multi: slot=25 has -43210 (new rotated)" "tcp_ts=-43210:strategy=25" "$R_MULTI"
+# --- 5. Генератор больше не переписывает tcp_ts ------------------------------
+#
+# Прямая проверка на поведении: кладём в пул-подделку стратегию с -1000 на
+# «слотовом» номере и убеждаемся, что на выходе он таким и остался.
+# shellcheck source=/dev/null
+. "$ROOT/lib/utils.sh" >/dev/null 2>&1
+# shellcheck source=/dev/null
+. "$CFG" >/dev/null 2>&1
+TMP=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMP"' EXIT INT TERM
+mkdir -p "$TMP/extra_strats/TCP/RKN" "$TMP/extra_strats/TCP/YT" \
+         "$TMP/extra_strats/TCP/YT_GV" "$TMP/extra_strats/UDP/YT" "$TMP/lists"
+echo rutracker.org > "$TMP/extra_strats/TCP/RKN/List.txt"
+echo w > "$TMP/lists/whitelist.txt"
+printf '%s\n' '--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tcp_ts=-1000:strategy=11' \
+    > "$TMP/extra_strats/TCP/RKN/Strategy.txt"
+: > "$TMP/config"
+OUT=$( ZAPRET2_DIR="$TMP" generate_nfqws2_opt_from_strategies 2>/dev/null )
+case "$OUT" in
+    *tcp_ts=-1000*) ok "генератор оставляет tcp_ts как в пуле" ;;
+    *) no "генератор не переписывает tcp_ts" "-1000 доехало как есть" "переписано — таблица вернулась" ;;
+esac
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 printf "Results: %d passed, %d failed\n" "$TESTS_PASSED" "$TESTS_FAILED"
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-
-[ "$TESTS_FAILED" -eq 0 ] && exit 0 || exit 1
+[ "$TESTS_FAILED" -eq 0 ]

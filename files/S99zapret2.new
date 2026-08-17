@@ -224,12 +224,31 @@ ensure_autohostlist_files()
 	local auto="$base/zapret-hosts-auto.txt"
 	local debuglog="$base/zapret-hosts-auto-debug.log"
 	[ -f "$auto" ] || : > "$auto"
-	[ "$AUTOHOSTLIST_DEBUGLOG" = "1" ] && [ -f "$debuglog" ] || : > "$debuglog"
 
-	# Populate iptables exclude list from z2k whitelist so nfqueue never sees them
-	local whitelist="${AUTOHOSTLIST_WHITELIST:-$ZAPRET_BASE/lists/whitelist.txt}"
-	local exclude_txt="$base/zapret-hosts-exclude.txt"
-	[ -f "$whitelist" ] && cp -f "$whitelist" "$exclude_txt" 2>/dev/null || : > "$exclude_txt"
+	# Файл ОБЯЗАН быть записываемым для WS_USER: демон роняет привилегии в
+	# nobody (--user=$WS_USER), а этот файл создаёт root. Без chown движок
+	# молча не может дописать найденный домен — детектор считает неудачи,
+	# доходит до порога и падает на fopen("at"). Так же сделано у
+	# ensure_autocircular_files ниже, и по той же причине.
+	if [ -n "$WS_USER" ] && [ "$WS_USER" != "root" ]; then
+		chown "$WS_USER" "$auto" 2>/dev/null || true
+	fi
+
+	# Отладочный лог движка (--hostlist-auto-debug). Скобки обязательны:
+	# без них `A && B || C` при выключенной отладке уходил в C и обнулял лог
+	# на каждом старте — то есть ровно тогда, когда его никто не просил.
+	if [ "$AUTOHOSTLIST_DEBUGLOG" = "1" ]; then
+		[ -f "$debuglog" ] || : > "$debuglog"
+		if [ -n "$WS_USER" ] && [ "$WS_USER" != "root" ]; then
+			chown "$WS_USER" "$debuglog" 2>/dev/null || true
+		fi
+	fi
+
+	# Здесь копировался whitelist в ipset/zapret-hosts-exclude.txt «чтобы
+	# nfqueue их не видел». Имя было выбрано неверно: апстрим читает
+	# zapret-hosts-user-exclude.txt, а этот файл не читал никто и никогда.
+	# Исключения в автолистовом профиле работают штатным
+	# --hostlist-exclude=lists/whitelist.txt (см. lib/config_official.sh).
 }
 
 normalize_autohost_domains()
@@ -294,22 +313,59 @@ sync_autohostlist_to_rkn()
 	mkdir -p "$(dirname "$rkn_list")" 2>/dev/null || true
 	[ -f "$rkn_list" ] || : > "$rkn_list"
 
-	local tmp_auto tmp_have tmp_add tmp_final
+	local tmp_auto tmp_have tmp_add tmp_final drain
 	tmp_auto="$(mktemp /tmp/z2k_ah_auto.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_auto.$$")"
 	tmp_have="$(mktemp /tmp/z2k_ah_have.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_have.$$")"
 	tmp_add="$(mktemp /tmp/z2k_ah_add.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_add.$$")"
 	tmp_final="$(mktemp /tmp/z2k_ah_final.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_final.$$")"
 
+	# Забираем находки ПЕРЕИМЕНОВАНИЕМ, а не «прочитать и потом обнулить».
+	#
+	# Движок дописывает в этот файл по одной строке, без блокировок, в момент
+	# попадания хоста в лист (nfq2/desync.c → helpers.c, fopen "at"). Прежняя
+	# схема читала файл, а обнуляла его в самом конце — всё, что движок успевал
+	# дописать между этими двумя моментами, стиралось молча. rename атомарен:
+	# после него движок открывает уже новый файл, и потерять нечего.
+	#
+	# Файл обязан существовать к следующему старту демона: он объявлен в
+	# аргументах как обычный хостлист, а движок резолвит путь при разборе
+	# аргументов и не стартует, если пути нет. Поэтому сразу создаём пустой —
+	# но только если движок не создал его сам своей же записью.
+	drain="$auto.drain.$$"
+	if [ -s "$auto" ] && mv -f "$auto" "$drain" 2>/dev/null; then
+		[ -f "$auto" ] || {
+			: > "$auto"
+			[ -n "$WS_USER" ] && [ "$WS_USER" != "root" ] && chown "$WS_USER" "$auto" 2>/dev/null
+		}
+	else
+		# Нечего забирать. Имя всё равно оставляем непустым: ниже оно уходит в
+		# один общий rm -f, а `rm -f ""` на busybox — это ошибка, а не no-op.
+		drain="/tmp/z2k_ah_nodrain.$$"
+	fi
+
 	# Источник = свежая находка ∪ уже накопленное. Второе слагаемое и есть
 	# восстановление после того, как апстримный список затёр цель.
 	{
-		[ -f "$auto" ] && cat "$auto"
+		[ -n "$drain" ] && [ -f "$drain" ] && cat "$drain"
 		[ -f "$keep" ] && cat "$keep"
 	} | normalize_autohost_domains | sort -u > "$tmp_auto" 2>/dev/null || true
 	[ -s "$tmp_auto" ] || {
-		rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" 2>/dev/null || true
+		rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" "$drain" 2>/dev/null || true
 		return 0
 	}
+
+	# Домены из whitelist выкидываем ДО того, как сохранить накопленное.
+	#
+	# Раньше whitelist вычитался только перед вливанием в РКН-список, а в
+	# накопленное («Автохостлист» во вкладке доп. доменов) домен попадал как
+	# есть. Человек видел его в списке найденного, хотя сам же его исключил и
+	# обход для него не включается — панель показывала то, чего нет.
+	local tmp_wl
+	tmp_wl="$(mktemp /tmp/z2k_ah_wl.XXXXXX 2>/dev/null || echo "/tmp/z2k_ah_wl.$$")"
+	[ -f "$whitelist" ] && normalize_autohost_domains < "$whitelist" | sort -u > "$tmp_wl" 2>/dev/null
+	[ -f "$tmp_wl" ] || : > "$tmp_wl"
+	awk 'NR==FNR { wl[$0]=1; next } !($0 in wl) { print }' "$tmp_wl" "$tmp_auto" > "$tmp_final" 2>/dev/null \
+		&& mv -f "$tmp_final" "$tmp_auto" 2>/dev/null
 
 	# Накопленное сохраняем ДО слияния: если ниже что-то оборвётся, находки уже
 	# не потеряются. Пишем через temp + mv, чтобы не оставить обрубок.
@@ -320,7 +376,7 @@ sync_autohostlist_to_rkn()
 
 	{
 		[ -f "$rkn_list" ] && cat "$rkn_list"
-		[ -f "$whitelist" ] && cat "$whitelist"
+		cat "$tmp_wl"
 	} | normalize_autohost_domains | sort -u > "$tmp_have" 2>/dev/null || true
 
 	awk 'NR==FNR { seen[$0]=1; next } !($0 in seen) { print }' "$tmp_have" "$tmp_auto" > "$tmp_add"
@@ -331,11 +387,13 @@ sync_autohostlist_to_rkn()
 		cat "$tmp_add" >> "$rkn_list"
 		sort -u "$rkn_list" > "$tmp_final" 2>/dev/null && mv "$tmp_final" "$rkn_list"
 		echo "autohostlist sync: added $added domains to $rkn_list"
-		# Clear the auto list to prevent infinite growth and redundant reparsing
-		: > "$auto"
 	fi
 
-	rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" 2>/dev/null || true
+	# Исходник больше не обнуляем: он уже забран переименованием выше, причём
+	# независимо от того, оказалось ли что дописывать в РКН-список. Прежний
+	# `: > "$auto"` под условием added>0 оставлял файл расти, когда все находки
+	# уже были в списке, — а счётчик в меню продолжал их считать «новыми».
+	rm -f "$tmp_auto" "$tmp_have" "$tmp_add" "$tmp_final" "$tmp_wl" "$drain" 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------------------
@@ -1391,6 +1449,12 @@ start_daemons()
 
     z2k_daemon_fail_reset
     ensure_autocircular_files
+    # Автолист объявлен в аргументах демона обычным хостлистом, а путь движок
+    # резолвит при разборе аргументов: нет файла — демон не стартует вовсе.
+    # start() создаёт его выше, но `start_daemons` вызывают и отдельной
+    # командой (см. разбор аргументов внизу), поэтому страхуемся здесь — как
+    # это уже сделано для autocircular строкой выше. No-op вне режима.
+    ensure_autohostlist_files
 
     # Использовать функции из common/linux_daemons.sh
     # standard_mode_daemons вызывает do_nfqws
@@ -1610,12 +1674,36 @@ z2k_connmark_check_avail6()
     return 0
 }
 
+# Все собственные слои z2k построены на iptables: правила NFQUEUE, исключения
+# по connmark, снятие аппаратного ускорения, redirect Telegram, фильтр RST,
+# лечение udp-masquerade. На nftables ни один из них не ставится.
+#
+# Раньше каждый слой просто делал `return 0` — то есть при FWTYPE=nftables
+# сервис поднимался как ни в чём не бывало, а обхода не было вообще, и узнать
+# об этом человеку было неоткуда. Молчать здесь нельзя: это не «фича
+# недоступна», это «продукт не работает».
+#
+# Сам выбор прибит к iptables в установщике (lib/install.sh) по правилу автора
+# движка: nftables он рекомендует только с ядром от 5.15, а у Keenetic 4.9, и
+# nft-сеты требуют сотни мегабайт там, где у роутера их всего 64-256.
+z2k_fw_is_iptables()
+{
+    [ "$FWTYPE" = "iptables" ] && return 0
+    if [ -z "$Z2K_FWTYPE_COMPLAINED" ]; then
+        Z2K_FWTYPE_COMPLAINED=1
+        echo "ОШИБКА: FWTYPE='$FWTYPE', а все правила обхода z2k построены на iptables."
+        echo "        Ни одно правило не будет поставлено — обход работать НЕ БУДЕТ."
+        echo "        Поправьте FWTYPE=iptables в /opt/zapret2/config и перезапустите."
+    fi
+    return 1
+}
+
 z2k_connmark_init()
 {
     Z2K_CONNMARK_OK4=0
     Z2K_CONNMARK_OK6=0
 
-    [ "$FWTYPE" = "iptables" ] || return 0
+    z2k_fw_is_iptables || return 0
 
     # Try to load connmark modules (may be built-in).
     modprobe xt_CONNMARK 2>/dev/null || true
@@ -1743,7 +1831,7 @@ z2k_policy_members()
 
 z2k_policy_connmark_start()
 {
-    [ "$FWTYPE" = "iptables" ] || return 0
+    z2k_fw_is_iptables || return 0
     [ "$Z2K_CONNMARK_OK4" = "1" ] || return 0
 
     z2k_detect_policy_mark || return 0
@@ -1814,7 +1902,7 @@ z2k_policy_connmark_start()
 
 z2k_policy_connmark_stop()
 {
-    [ "$FWTYPE" = "iptables" ] || return 0
+    z2k_fw_is_iptables || return 0
     [ "$Z2K_CONNMARK_OK4" = "1" ] || return 0
 
     z2k_detect_policy_mark || return 0
@@ -1962,7 +2050,7 @@ _fw_nfqws_pre6()
 
 z2k_udp_masquerade_fix_start()
 {
-    [ "$FWTYPE" = "iptables" ] || return 0
+    z2k_fw_is_iptables || return 0
     exists iptables || return 0
 
     local wan iface
@@ -1986,7 +2074,7 @@ z2k_udp_masquerade_fix_start()
 
 z2k_udp_masquerade_fix_stop()
 {
-    [ "$FWTYPE" = "iptables" ] || return 0
+    z2k_fw_is_iptables || return 0
     exists iptables || return 0
 
     while iptablesw -t nat -C POSTROUTING -j "$Z2K_IPT_NAT_CHAIN" 2>/dev/null; do

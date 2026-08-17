@@ -77,6 +77,12 @@ func Defaults() Config {
 			"/opt/zapret2/extra_strats/UDP/YT/List.txt",
 			"/opt/zapret2/lists/extra-domains.txt",
 			"/opt/zapret2/lists/whitelist.txt",
+			// Autohostlist (Z2K_AUTOHOSTLIST=1). The engine's own detector
+			// publishes here; both files are wired into the rkn_tcp profile,
+			// so a domain already found by nfqws2 is bypassed and must not be
+			// probed and re-published by us into a second list.
+			"/opt/zapret2/ipset/zapret-hosts-auto.txt",
+			"/opt/zapret2/lists/autohostlist-domains.txt",
 		},
 		SkipReloadInterval: 5 * time.Minute,
 		ProbeTimeout:       1500 * time.Millisecond,

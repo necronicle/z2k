@@ -757,92 +757,18 @@ generate_nfqws2_opt_from_strategies() {
         youtube_gv_tcp=$(inject_z2k_tls_mods "$youtube_gv_tcp")
     fi
 
-    # Phase 6C: tcp_ts rotation across select rkn_tcp strategy slots.
+    # Ротация tcp_ts по слотам СНЯТА: значения теперь записаны прямо в пуле
+    # (strats_new2.txt, строка манифеста rkn) и приезжают в Strategy.txt как
+    # есть. Раньше генератор переписывал `tcp_ts=-1000` по НОМЕРУ стратегии по
+    # таблице из четырнадцати слотов — и это была мина: любая вставка или
+    # перестановка стратегии в пуле молча уводила чужие значения на чужие
+    # стратегии. Ровно так однажды и вышло (случай со strategy=37 и ozon.ru,
+    # прикусившим браузер). Плюс к моменту снятия пять слотов таблицы уже
+    # указывали в пустоту — в пуле не осталось токенов с такими номерами.
     #
-    # Background: ntc.party #826 + thread #812 (Feanor1397, 2026-04-12) и
-    # последующие field-сигналы показывают, что значение `tcp_ts=-1000` на
-    # части ТСПУ перестало проходить с ~2026-04-20 — fake packet режется,
-    # пользователь видит 16KB cap (window_update инжект до handshake clearance).
-    # На других ТСПУ -1000 продолжает работать.
-    #
-    # Стратегия: НЕ заменяем все вхождения `tcp_ts=-1000` (это поломает
-    # провайдеров где -1000 живой). Вместо этого ротируем небольшое число
-    # slot'ов на альтернативные значения, чтобы circular ротатор rkn_tcp
-    # имел хотя бы одну живую ветвь на новом ТСПУ. Остальные слоты
-    # остаются с -1000 для обратной совместимости.
-    #
-    # 2026-05-01 expansion (Phase 6C v2): после field-кейса где
-    # autocircular зацепился за strategy=37 (tcp_ts=-1000:hostfakesplit) и
-    # CSS-стримы дохли селективно (только HTML root пробивался) — расширили
-    # ротацию с 4 до 10 слотов. Значения взяты из реально-рабочих field-
-    # рецептов: Feanor1397 #812 (-43210), Decavoid #729 (-100000, -500000).
-    # Архитектурный фикс через `cond=cond_tcp_has_ts` (bol-van #660-661 +
-    # SeamniZ #815 `tcp_ts_up`) — отдельный PR (B-tier).
-    #
-    # Slot selection rationale (10 slots ≈ 50% от ~17 слотов с -1000):
-    #   slot=11 — early-mid: fake+stun + fake+tls_clienthello_www_google_com
-    #   slot=15 — mid:       fake+sni=ya.ru fallback
-    #   slot=18 — mid:       fake+sni=fonts.google.com
-    #   slot=23 — mid-late:  hostfakesplit:host=ozon.ru:tcp_md5
-    #   slot=24 — mid:       fake+stun + fake+tls_clienthello_4pda_to
-    #   slot=28 — mid-late:  fake+stun + fake+tls_max_ru
-    #   slot=30 — late:      fake+stun:badsum + fake+tls_max_ru:msn.com
-    #   slot=35 — late:      fake+tls_clienthello_4pda_to (fallback)
-    #   slot=37 — late:      hostfakesplit:host=ozon.ru:badsum (the one that
-    #                        bit Mark's browser today — pinned by autocircular,
-    #                        broke CSS streams; was unrotated before this commit)
-    #   slot=42 — late:      fake+fake_default_tls:badsum:tcp_seq=2
-    #
-    # Идемпотентно: повторный запуск над уже мутированной строкой просто
-    # не находит `tcp_ts=-1000` в этих слотах и проходит no-op.
-    #
-    # Только rkn_tcp — yt_tcp/gv_tcp используют tcp_ts реже и для разных
-    # целей; их ротация оставлена на отдельный анализ.
-    rotate_rkn_tcp_ts_slots() {
-        local input="$1"
-        local out=""
-        local token=""
-        local strategy_id=""
-        local new_ts=""
-        for token in $input; do
-            case "$token" in
-                *:tcp_ts=-1000:*|*:tcp_ts=-1000)
-                    strategy_id=$(printf '%s' "$token" | sed -n 's/.*:strategy=\([0-9][0-9]*\).*/\1/p')
-                    case "$strategy_id" in
-                        # Original 10 slots — sliding +6 после вставки 6 white-
-                        # rescue strategies (positions 4,5,6,10,11,12 в rkn arm).
-                        # Все исходные strategy=7..48 сдвинулись на +6, slot IDs
-                        # отслеживают физические tcp_ts=-1000 токены.
-                        11) new_ts="-43210"  ;;
-                        15) new_ts="-100000" ;;
-                        18) new_ts="-500000" ;;
-                        23) new_ts="-43210"  ;;
-                        24) new_ts="-7777"   ;;
-                        28) new_ts="-10000"  ;;
-                        30) new_ts="-7777"   ;;
-                        35) new_ts="-43210"  ;;
-                        37) new_ts="-100000" ;;
-                        42) new_ts="-10000"  ;;
-                        # New rotated slots (Phase 1.3, теперь после +6 сдвига).
-                        # tcp_ts=-1000 частично сгорел с 2026-04-20 — нестандартные
-                        # ts для variability fingerprint'а.
-                        25) new_ts="-43210"  ;;
-                        26) new_ts="-10000"  ;;
-                        38) new_ts="-7777"   ;;
-                        40) new_ts="-100000" ;;
-                        *)  new_ts=""        ;;
-                    esac
-                    if [ -n "$new_ts" ]; then
-                        token=$(printf '%s' "$token" | sed -e "s/:tcp_ts=-1000:/:tcp_ts=${new_ts}:/g" -e "s/:tcp_ts=-1000\$/:tcp_ts=${new_ts}/")
-                    fi
-                    ;;
-            esac
-            out="${out:+$out }$token"
-        done
-        printf '%s' "$out"
-    }
-
-    rkn_tcp=$(rotate_rkn_tcp_ts_slots "$rkn_tcp")
+    # Значения не изменились: сгенерированный NFQWS2_OPT до и после снятия
+    # совпадает побайтно (tests/test_tcp_ts_baked.sh стережёт, что в пуле нет
+    # выгоревшего -1000 на тех слотах и что генератор его больше не трогает).
 
     # Phase 14: bol-van badseq alias expansion.
     #
@@ -1402,20 +1328,124 @@ generate_nfqws2_opt_from_strategies() {
     }
 
 
-    # RKN TCP (include Discord hostlist into RKN profile)
-    local rkn_hostlists="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt"
-    [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
+    # Общее для профилей объявляем ОДИН раз.
+    #
+    # Исключения по whitelist повторялись восемью литералами в восьми строках,
+    # а РКН-триада хостлистов собиралась двумя независимыми блоками кода — и
+    # они уже разъехались: TCP_Discord.txt попал только в один из них. Любое
+    # изменение общего условия требовало правки во всех местах сразу, и
+    # промах был бы виден не в тестах, а у людей.
+    local wl_excl="--hostlist-exclude=${lists_dir}/whitelist.txt"
+
+    # --------------------------------------------------------------------------
+    # ШАБЛОН ДВИЖКА: арсенал РКН объявляется один раз
+    # --------------------------------------------------------------------------
+    #
+    # Профиль cf_extra — это ДОСЛОВНАЯ копия арсенала rkn_tcp, отличающаяся
+    # ровно одним словом (key= у circular). Замерено на боевых пулах: 13 154
+    # байта совпадают побайтно, а весь профиль — 30% всей строки NFQWS2_OPT.
+    # Копия делалась `sed s/key=rkn_tcp/key=cf_extra/` по готовой строке, то
+    # есть любая правка арсенала уезжала в оба места молча — и длина
+    # командной строки платилась дважды. Длина здесь не абстракция: разбор
+    # 29 КБ строки шеллом уже стоил 17 из 25 секунд рестарта.
+    #
+    # Движок умеет объявить набор один раз (--template=имя) и подставить его в
+    # профиль (--import=имя). Правила слияния (проверены прогоном движка):
+    #   • инстансы шаблона ДОПИСЫВАЮТСЯ в хвост списка профиля — поэтому
+    #     circular обязан быть объявлен ДО --import, иначе оркестратор не
+    #     увидит ни одной своей стратегии (план строится только из инстансов,
+    #     идущих ПОСЛЕ него) и упадёт;
+    #   • --payload/--in-range/--out-range — это состояние разборщика, оно
+    #     снимается в момент объявления инстанса и переезжает вместе с ним;
+    #     поэтому в шаблон переносится и состояние из головы профиля;
+    #   • шаблон обязан быть объявлен РАНЬШЕ первого --import: ссылка вперёд
+    #     не работает, движок падает с «template not found».
+    #
+    # Аварийный выключатель: Z2K_NFQWS2_TEMPLATES=0 возвращает прежнюю плоскую
+    # сборку. Пробу бинарника не делаем: --template/--import есть во всех
+    # сборках движка, которые z2k когда-либо ставил (проверено strings по
+    # релизным бинарникам и по тегам форка), а лишний запуск движка на каждую
+    # генерацию конфига — это ещё один fork+exec на каждый щелчок тумблера.
+    local z2k_templates rkn_tpl rkn_head rkn_circ rkn_tail rkn_tpl_line=""
+    z2k_templates=$(safe_config_read "Z2K_NFQWS2_TEMPLATES" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    rkn_tpl="z2k_rkn_arsenal"
+    rkn_head=""; rkn_circ=""; rkn_tail=""
+    if [ "$z2k_templates" != "0" ] && [ -n "$rkn_tcp" ]; then
+        local _t _state=""
+        for _t in $rkn_tcp; do
+            case "$_t" in
+                --lua-desync=circular:*)
+                    if [ -z "$rkn_circ" ]; then rkn_circ="$_t"; continue; fi
+                    ;;
+            esac
+            if [ -z "$rkn_circ" ]; then
+                rkn_head="${rkn_head:+$rkn_head }$_t"
+                # Состояние разборщика из головы действует и на инстансы,
+                # уезжающие в шаблон. Не перенести его — значит отдать им
+                # дефолтные диапазоны вместо -s34228.
+                case "$_t" in
+                    --payload=*|--in-range=*|--out-range=*) _state="${_state:+$_state }$_t" ;;
+                esac
+            else
+                rkn_tail="${rkn_tail:+$rkn_tail }$_t"
+            fi
+        done
+        if [ -n "$rkn_circ" ] && [ -n "$rkn_tail" ]; then
+            rkn_tpl_line="--template=$rkn_tpl${_state:+ $_state} $rkn_tail --new"
+        else
+            # Пул без circular (или без стратегий после него) шаблоном не
+            # выражается — собираем как раньше.
+            rkn_head=""; rkn_circ=""; rkn_tail=""
+        fi
+    fi
+
+    # Хостлисты РКН-домена собираются ОДИН раз на два профиля — TLS (443) и
+    # HTTP (80). Раньше их собирали два независимых блока кода, и они уже
+    # разошлись: Discord-список попал только в первый. Теперь расхождение
+    # выражено явно — общая часть в одной переменной, отличие ровно одно и
+    # прокомментировано.
+    local rkn_lists_head="--hostlist=${extra_strats_dir}/TCP/RKN/List.txt"
+    local rkn_lists_tail=""
     # Shipped extras curated on top of runetfreedom RKN — domains users
     # reported missing (fast-torrent.ru etc). Refreshed on every install.
-    [ -s "${lists_dir}/extra-domains.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${lists_dir}/extra-domains.txt"
+    [ -s "${lists_dir}/extra-domains.txt" ] && rkn_lists_tail="$rkn_lists_tail --hostlist=${lists_dir}/extra-domains.txt"
     # z2k-detect daemon-managed hostlist. Populated reactively from probe
     # verdicts (hot ∪ cache → discovered-domains.txt). Wired unconditionally
     # — install.sh touches the file early (step_build_zapret2) so the path
     # is always valid by the time NFQWS2_OPT is generated. Dropping the
     # `[ -e ]` guard makes the wiring static against static analysis and
     # eliminates a "fresh install timing" foot-gun.
-    rkn_hostlists="$rkn_hostlists --hostlist=${lists_dir}/discovered-domains.txt"
-    add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt $rkn_hostlists $rkn_tcp --new"
+    rkn_lists_tail="$rkn_lists_tail --hostlist=${lists_dir}/discovered-domains.txt"
+    # Автохостлист (Z2K_AUTOHOSTLIST=1): домены, которые движок нашёл сам,
+    # подхватываются ЭТИМИ профилями — со всем арсеналом и ротацией РКН.
+    # Профиль-детектор (в хвосте, см. ниже) только НАХОДИТ и дописывает имя в
+    # файл; обходит уже rkn_tcp, потому что файл объявлен здесь обычным
+    # хостлистом. Движок перечитывает списки по mtime, то есть обход для
+    # найденного домена включается через секунды и без рестарта.
+    local z2k_autohostlist autohostlist_file
+    z2k_autohostlist=$(safe_config_read "Z2K_AUTOHOSTLIST" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+    autohostlist_file="${ZAPRET2_DIR:-/opt/zapret2}/ipset/zapret-hosts-auto.txt"
+    if [ "$z2k_autohostlist" = "1" ]; then
+        # Файл обязан существовать К МОМЕНТУ СТАРТА демона: путь объявлен в
+        # аргументах, а движок резолвит его при разборе и без файла не
+        # стартует вовсе — это была бы не «автолист не работает», а «обход не
+        # поднялся». Создаём здесь же, где объявляем, чтобы порядок вызовов в
+        # init-скрипте не был единственной гарантией.
+        mkdir -p "${ZAPRET2_DIR:-/opt/zapret2}/ipset" 2>/dev/null
+        [ -e "$autohostlist_file" ] || : > "$autohostlist_file"
+        rkn_lists_tail="$rkn_lists_tail --hostlist=${autohostlist_file}"
+    fi
+    # Единственное отличие TLS-профиля: Discord-домены живут на 443 и на 80-м
+    # порту не встречаются.
+    local rkn_hostlists="$rkn_lists_head"
+    [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
+    rkn_hostlists="$rkn_hostlists$rkn_lists_tail"
+    if [ -n "$rkn_circ" ]; then
+        add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" \
+            "$wl_excl $rkn_hostlists $rkn_head $rkn_circ --import=$rkn_tpl --new"
+    else
+        add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$wl_excl $rkn_hostlists $rkn_tcp --new"
+    fi
 
     # cdn_tls профиль удалён 2026-04-27. Был добавлен в Variant A refactor
     # (b7f7ae6) для перехвата non-RKN CF/OVH/Hetzner/DO трафика, но на field
@@ -1437,9 +1467,20 @@ generate_nfqws2_opt_from_strategies() {
     local Z2K_CF_EXTRA_CHECK
     Z2K_CF_EXTRA_CHECK=$(safe_config_read "Z2K_CF_EXTRA_CHECK" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
     if [ "$Z2K_CF_EXTRA_CHECK" = "1" ] && [ -s "${lists_dir}/cf_extra_check_ips.txt" ]; then
-        local cf_extra_strategies
-        cf_extra_strategies=$(printf '%s' "$rkn_tcp" | sed 's/key=rkn_tcp/key=cf_extra/')
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443 --filter-l7=tls --ipset=${lists_dir}/cf_extra_check_ips.txt --hostlist-exclude=${lists_dir}/whitelist.txt $cf_extra_strategies --new\\n"
+        if [ -n "$rkn_circ" ]; then
+            # Копируется ТОЛЬКО circular-токен (в нём и есть отличие — key=),
+            # арсенал приезжает импортом. Голова профиля повторяет голову
+            # rkn_tcp намеренно: сегодня cf_extra наследует её из копии тела и
+            # ловит все шесть портов, а не один 443 — убрать это здесь значило
+            # бы тихо сузить профиль под видом рефакторинга.
+            local cf_circ
+            cf_circ=$(printf '%s' "$rkn_circ" | sed 's/key=rkn_tcp/key=cf_extra/')
+            nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443 --filter-l7=tls --ipset=${lists_dir}/cf_extra_check_ips.txt $wl_excl $rkn_head $cf_circ --import=$rkn_tpl --new\\n"
+        else
+            local cf_extra_strategies
+            cf_extra_strategies=$(printf '%s' "$rkn_tcp" | sed 's/key=rkn_tcp/key=cf_extra/')
+            nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=443 --filter-l7=tls --ipset=${lists_dir}/cf_extra_check_ips.txt $wl_excl $cf_extra_strategies --new\\n"
+        fi
     fi
 
     # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls
@@ -1471,18 +1512,18 @@ generate_nfqws2_opt_from_strategies() {
         local merged_google_tls
         merged_google_tls=$(printf '%s' "$youtube_tcp" | sed 's/key=yt_tcp/key=google_tls/')
         merged_google_tls="$merged_google_tls $gv_strategies_only"
-        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
     else
         # YouTube TCP
-        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
         # YouTube GV — dedicated hostlist (extra_strats/TCP/YT_GV/List.txt,
         # содержит apex googlevideo.com → match всех поддоменов: rr1-rr9,
         # manifest, и т.д.). Расширяется добавлением строк в файл.
-        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
     fi
 
     # QUIC YT
-    add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "--hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp --new"
+    add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_udp --new"
 
     # Discord TCP: currently disabled for autocircular profile set.
     if [ -n "$discord_tcp_block" ]; then
@@ -1521,11 +1562,9 @@ generate_nfqws2_opt_from_strategies() {
     # Strategy 5: fakedsplit at method+2 with badsum
     # Strategy 6: z4r original (fake 0x0E + tcp_md5 + multisplit host+1)
     # Strategy 7: fake badsum + multisplit method+2
-    local rkn_http_extras=""
-    [ -s "${lists_dir}/extra-domains.txt" ] && rkn_http_extras=" --hostlist=${lists_dir}/extra-domains.txt"
-    # z2k-detect daemon-managed (same rationale as rkn_tcp above) — wired
-    # unconditionally, file is touched in install.sh:step_build_zapret2.
-    rkn_http_extras="$rkn_http_extras --hostlist=${lists_dir}/discovered-domains.txt"
+    # Тот же набор списков, что у TLS-профиля, минус Discord (см. сборку выше).
+    # Отдельного второго сборщика здесь больше нет — именно он и разъезжался.
+    local rkn_http_extras="$rkn_lists_tail"
     # native rollback 2026-05-28: http_rkn failure_detector=/success_detector=
     # инжекты z2k_* и no_http_redirect убраны. circular идёт на нативных
     # standard_failure_detector / standard_success_detector bol-van zapret2
@@ -1545,10 +1584,75 @@ generate_nfqws2_opt_from_strategies() {
     #                 (multisplit/syndata/fake/etc) внутри scope-нуты на
     #                 payload=http_req, так что они не сработают на
     #                 incoming replies — только detectors классифицируют.
-    http_rkn="--filter-tcp=80 --hostlist-exclude=${lists_dir}/whitelist.txt --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
+    http_rkn="--filter-tcp=80 $wl_excl --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
     [ "${Z2K_NATIVE_DETECTORS:-1}" != "0" ] && http_rkn=$(z2k_strip_custom_detectors "$http_rkn")
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$http_rkn"
 
+    # --------------------------------------------------------------------------
+    # АВТОХОСТЛИСТ: профиль-детектор (только при Z2K_AUTOHOSTLIST=1)
+    # --------------------------------------------------------------------------
+    #
+    # Тумблер «Автохостлист» существовал с r-45 и до сих пор не доходил до
+    # движка вовсе: апстрим подставляет --hostlist-auto только заменой
+    # плейсхолдера <HOSTLIST> (common/list.sh), а мы генерируем профили с
+    # явными путями и плейсхолдеров не используем. Аргументы демона в обоих
+    # положениях тумблера были байт в байт одинаковы — человеку при этом в
+    # трёх местах обещано, что «движок сам находит заблокированные домены».
+    #
+    # ПОЧЕМУ ОТДЕЛЬНЫЙ ПРОФИЛЬ И ПОЧЕМУ В ХВОСТЕ. Профиль с --hostlist-auto
+    # выигрывает подбор при ЛЮБОМ известном имени хоста, независимо от своих
+    # списков (nfq2/desync.c: «autohostlist profile ... always win if we have a
+    # hostname»), а подбор останавливается на первом совпадении. Повесить флаг
+    # на rkn_tcp — значит отдать ему youtube.com и googlevideo.com: профили
+    # yt_tcp/gv_tcp стоят ниже с тем же фильтром портов и живут только за счёт
+    # непересекающихся хостлистов. Поэтому детектор — последний профиль:
+    # ему достаётся ровно то, что не разобрали профили выше.
+    #
+    # ПОЧЕМУ БЕЗ СТРАТЕГИЙ. К хосту вне списков десинк не применяется в любом
+    # случае (движок помнит отрицательный результат проверки списков), поэтому
+    # инстансы здесь были бы мёртвым грузом: детектор считает неудачи, пишет
+    # имя в файл, а обходит уже rkn_tcp — файл подключён к нему хостлистом
+    # выше. Заодно не дублируется 13 КБ арсенала в командной строке.
+    if [ "$z2k_autohostlist" = "1" ]; then
+        # Порты берём из самого rkn_tcp, а не литералом: набор задаётся в
+        # lib/strategies.sh и уже расходился с копиями в других местах.
+        local ah_ports
+        ah_ports=$(printf '%s' "$rkn_tcp" | sed -n 's/.*--filter-tcp=\([0-9,-]*\).*/\1/p' | head -1)
+        [ -n "$ah_ports" ] || ah_ports="443,2053,2083,2087,2096,8443"
+
+        # Пороги детектора. Пустое значение = дефолт движка (3 неудачи за 60 с
+        # и т.д.), поэтому каждый флаг добавляется ТОЛЬКО если человек задал
+        # его в config — командная строка не растёт зря, а дефолты остаются
+        # там, где их сопровождает автор движка.
+        local ah_tune="" ah_key ah_val ah_flag
+        for ah_key in FAIL_THRESHOLD:fail-threshold FAIL_TIME:fail-time \
+                      RETRANS_THRESHOLD:retrans-threshold RETRANS_RESET:retrans-reset \
+                      RETRANS_MAXSEQ:retrans-maxseq INCOMING_MAXSEQ:incoming-maxseq \
+                      UDP_IN:udp-in UDP_OUT:udp-out; do
+            ah_val=$(safe_config_read "AUTOHOSTLIST_${ah_key%%:*}" "${ZAPRET2_DIR:-/opt/zapret2}/config" "")
+            [ -n "$ah_val" ] || continue
+            ah_flag="${ah_key#*:}"
+            ah_tune="$ah_tune --hostlist-auto-${ah_flag}=${ah_val}"
+        done
+        # Отладочный лог движка — параметр глобальный, не профильный. Наружу
+        # не выставлен намеренно: включаем его мы, разбирая конкретный тикет.
+        if [ "$(safe_config_read "AUTOHOSTLIST_DEBUGLOG" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")" = "1" ]; then
+            ah_tune="$ah_tune --hostlist-auto-debug=${ZAPRET2_DIR:-/opt/zapret2}/ipset/zapret-hosts-auto-debug.log"
+        fi
+
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-tcp=${ah_ports} --filter-l7=tls $wl_excl --hostlist-auto=${autohostlist_file}${ah_tune} --new\\n"
+    fi
+
+    # Шаблон ставится В ГОЛОВУ и только если его кто-то импортирует: ссылка
+    # вперёд движком не поддерживается, а объявленный и никем не использованный
+    # шаблон — это просто мусор в конфиге, который человек читает при разборе
+    # тикетов.
+    if [ -n "$rkn_tpl_line" ]; then
+        case "$nfqws2_opt_lines" in
+            *"--import=$rkn_tpl"*)
+                nfqws2_opt_lines="$rkn_tpl_line\\n$nfqws2_opt_lines" ;;
+        esac
+    fi
 
     local nfqws2_opt_value
     nfqws2_opt_value=$(printf "%b" "$nfqws2_opt_lines" | sed '/^$/d')
@@ -1703,6 +1807,7 @@ create_official_config() {
     local saved_ENABLED="1"
     local saved_Z2K_USE_MID_STREAM_DETECTOR="1"
     local saved_Z2K_PADENCAP="1"
+    local saved_Z2K_NFQWS2_TEMPLATES="1"
     local saved_Z2K_INJECT_TLS_MODS="0"
     local saved_Z2K_DYNAMIC_TTL="1"
     local saved_Z2K_STATS="1"
@@ -1745,6 +1850,7 @@ create_official_config() {
         # появления. Юзер может выставить =0 explicitly чтобы откатиться.
         saved_Z2K_USE_MID_STREAM_DETECTOR=$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "$config_file" "1")
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
+        saved_Z2K_NFQWS2_TEMPLATES=$(safe_config_read "Z2K_NFQWS2_TEMPLATES" "$config_file" "1")
         saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
         # Z2K_AUTOHOSTLIST — default 0, deliberately against the "new flags come
         # on" rule. It does not improve behaviour, it swaps the filtering mode
@@ -1802,6 +1908,31 @@ create_official_config() {
     local z2k_mode_filter=hostlist
     [ "${saved_Z2K_AUTOHOSTLIST:-0}" = "1" ] && z2k_mode_filter=autohostlist
 
+    # Пороги детектора автохостлиста. Наружу не выставлены: их не крутит ни
+    # меню, ни панель — это ручка для разбора конкретного тикета. В конфиге
+    # они лежат закомментированными вместе с дефолтами движка, чтобы было
+    # видно, что вообще можно подкрутить и каким значением; раскомментированное
+    # переживает регенерацию, как и всё остальное, что задал человек.
+    #
+    # Значение чистим до цифр: строка уходит и в аргументы демона, и обратно в
+    # конфиг, который сорсится от root. Апостроф в числовом поле — это не
+    # злоумышленник, это опечатка, но сервис от неё не поднимется.
+    local _ah_block="" _ah_pair _ah_name _ah_def _ah_cur
+    for _ah_pair in FAIL_THRESHOLD=3 FAIL_TIME=60 RETRANS_THRESHOLD=3 RETRANS_RESET=1 \
+                    RETRANS_MAXSEQ=32768 INCOMING_MAXSEQ=4096 UDP_IN=1 UDP_OUT=4 DEBUGLOG=0; do
+        _ah_name="AUTOHOSTLIST_${_ah_pair%%=*}"
+        _ah_def="${_ah_pair#*=}"
+        _ah_cur=$(safe_config_read "$_ah_name" "$config_file" "")
+        _ah_cur=$(printf '%s' "$_ah_cur" | tr -dc '0-9')
+        if [ -n "$_ah_cur" ]; then
+            _ah_block="${_ah_block}${_ah_name}=${_ah_cur}
+"
+        else
+            _ah_block="${_ah_block}#${_ah_name}=${_ah_def}
+"
+        fi
+    done
+
     # Пишем во ВРЕМЕННЫЙ файл, а боевой подменяем одним rename в самом конце.
     #
     # Ниже конфиг собирается десятком отдельных `>>`. Раньше они шли прямо в
@@ -1835,6 +1966,16 @@ ENABLED=${saved_ENABLED}
 # in S99zapret2), appending what it finds to the RKN list.
 MODE_FILTER=${z2k_mode_filter}
 Z2K_AUTOHOSTLIST=${saved_Z2K_AUTOHOSTLIST}
+
+# Пороги детектора автохостлиста. Действуют только при Z2K_AUTOHOSTLIST=1.
+# Закомментировано = значение по умолчанию самого движка (показано справа).
+# FAIL_THRESHOLD — сколько неудач подряд заносят хост в список
+# FAIL_TIME — за сколько секунд от ПЕРВОЙ неудачи они должны уложиться
+# RETRANS_* — что считать неудачей по TCP-ретрансмиссиям
+# INCOMING_MAXSEQ — до какого места во входящем потоке ищется RST/редирект
+# UDP_IN/UDP_OUT — критерий неудачи для QUIC/UDP
+# DEBUGLOG=1 — построчный лог решений детектора (пишется на флеш, включать точечно)
+${_ah_block}
 
 # Firewall type - AUTO-DETECTED by init script, DO NOT set manually
 # Init script calls linux_fwtype() which detects iptables/nftables automatically
@@ -1956,7 +2097,8 @@ IPSET_OPT="hashsize 262144 maxelem $SET_MAXELEM"
 IP2NET_OPT4="--prefix-length=22-30 --v4-threshold=3/4"
 IP2NET_OPT6="--prefix-length=56-64 --v6-threshold=5"
 
-# AUTOHOSTLIST SETTINGS отключены — используется режим hostlist с явными списками доменов
+# Пороги автохостлиста живут выше, рядом с MODE_FILTER (секция с подстановкой):
+# этот heredoc в одинарных кавычках и сохранённые значения сюда не подставить.
 
 # ==============================================================================
 # CUSTOM SCRIPTS
@@ -2078,6 +2220,14 @@ DISABLE_CUSTOM=${saved_DISABLE_CUSTOM}
 # к z2k_grease/alpn/psk/keyshare/earlydata/pha/sct/delegcred. =0 для
 # отката padencap при включённой остальной инъекции.
 Z2K_PADENCAP=${saved_Z2K_PADENCAP}
+
+# Форма записи профилей в NFQWS2_OPT. =1 — общий арсенал объявляется один раз
+# (--template) и подставляется в профили (--import); строка короче на 13 КБ, а
+# правка арсенала физически не может разъехаться между профилями. =0 — прежняя
+# плоская запись, где каждый профиль несёт свою полную копию. Аварийный
+# выключатель: на поведение движка не влияет (проверено дампом профилей —
+# идентичны), но если формат чем-то помешает, откат не требует нового релиза.
+Z2K_NFQWS2_TEMPLATES=${saved_Z2K_NFQWS2_TEMPLATES}
 
 # Keenetic policy integration (см. S99zapret2.new). POLICY_NAME — имя политики
 # в админке Keenetic, POLICY_EXCLUDE — режим:

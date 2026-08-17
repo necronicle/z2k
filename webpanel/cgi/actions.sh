@@ -1396,7 +1396,11 @@ autohostlist_domains_delete() {
     domain=$(printf '%s' "$domain" | tr 'A-Z' 'a-z'); domain="${domain%.}"
     [ -n "$domain" ] || { echo "invalid domain" >&2; return 1; }
     rkn="${ZAPRET2_DIR}/extra_strats/TCP/RKN/List.txt"
-    for f in "$AUTOHOSTLIST_DOMAINS_FILE" "$rkn"; do
+    # Третий файл — живой автолист движка. Пока его тут не было, удаление
+    # работало только до следующего слива: домен лежал в ipset/zapret-hosts-auto.txt,
+    # и старт сервиса возвращал его и в накопленное, и в РКН-список.
+    local auto_live="${ZAPRET2_DIR}/ipset/zapret-hosts-auto.txt"
+    for f in "$AUTOHOSTLIST_DOMAINS_FILE" "$auto_live" "$rkn"; do
         [ -f "$f" ] || continue
         _list_lock "$f" || { echo "список занят, повторите" >&2; return 1; }
         tmp="${f}.z2k.$$"
@@ -2106,28 +2110,69 @@ state_set() {
 pools_read() {
     local src="" pid
     if [ -r "$CONFIG_FILE" ]; then
-        src=$(cat "$CONFIG_FILE" 2>/dev/null)
-    else
+        # ТОЛЬКО значение NFQWS2_OPT, а не весь конфиг.
+        #
+        # Раньше сюда шёл файл целиком, и это работало лишь потому, что в
+        # комментариях случайно не встречалось нужных токенов. Теперь в строке
+        # опций есть блок --template, и достаточно одного слова «--template» в
+        # комментарии, чтобы разбор посчитал шаблоном первый настоящий профиль
+        # и /pools потерял целый пул.
+        src=$(sed -n '/^NFQWS2_OPT="/,/^"[[:space:]]*$/p' "$CONFIG_FILE" 2>/dev/null | sed '1d;$d')
+    fi
+    if [ -z "$src" ]; then
         pid=$(pidof nfqws2 2>/dev/null | tr ' ' '\n' | head -1)
         [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] && src=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
     fi
     [ -n "$src" ] || return 0
     printf '%s\n' "$src" | awk '
     { all = all " " $0 }                         # accumulate (config is multi-line)
-    END {
-        n = split(all, toks, " ")
-        ck = ""                                  # current circular key
+    # Арсенал объявляется один раз (--template=имя) и подставляется в профили
+    # (--import=имя). Считать стратегии по сырым токенам после этого нельзя:
+    # у рабочего профиля есть свой circular:key=, а инстансы со strategy=N
+    # лежат в блоке шаблона — без раскрытия каждый пул показал бы ноль.
+    function expand(body, depth,   i, n, p, out, nm) {
+        if (depth > 8) return body
+        n = split(body, p, " ")
+        out = ""
         for (i = 1; i <= n; i++) {
-            t = toks[i]
-            if (t ~ /^--lua-desync=circular:/) {
-                if (match(t, /key=[a-z0-9_]+/)) ck = substr(t, RSTART+4, RLENGTH-4); else ck = ""
-            } else if (t == "--new") {
-                ck = ""
+            if (p[i] == "") continue
+            if (p[i] ~ /^--import=/) {
+                nm = substr(p[i], 10)
+                if (nm in TPL) { out = out " " expand(TPL[nm], depth + 1); continue }
             }
-            if (ck != "" && match(t, /:strategy=[0-9]+/)) {
-                s = substr(t, RSTART+10, RLENGTH-10)
-                kk = ck SUBSEP s
-                if (!(kk in seen)) { seen[kk] = 1; cnt[ck]++ }
+            out = out " " p[i]
+        }
+        return out
+    }
+    END {
+        nb = split(all, blocks, / --new( |$)/)
+        # Первый проход — шаблоны. Объявление всегда раньше импорта.
+        for (b = 1; b <= nb; b++) {
+            nm = ""; istpl = 0
+            n = split(blocks[b], p, " ")
+            for (i = 1; i <= n; i++) {
+                if (p[i] == "--template") istpl = 1
+                else if (p[i] ~ /^--template=/) { istpl = 1; nm = substr(p[i], 12) }
+                else if (p[i] ~ /^--name=/ && nm == "") nm = substr(p[i], 8)
+            }
+            if (istpl && nm != "") { body = blocks[b]; gsub(/--template(=[^ ]*)?/, "", body); TPL[nm] = body }
+            if (istpl) skip[b] = 1
+        }
+        # Второй — считаем стратегии по каждому рабочему профилю отдельно.
+        for (b = 1; b <= nb; b++) {
+            if (b in skip) continue
+            n = split(expand(blocks[b], 0), toks, " ")
+            ck = ""
+            for (i = 1; i <= n; i++) {
+                t = toks[i]
+                if (t ~ /^--lua-desync=circular:/) {
+                    if (match(t, /key=[a-z0-9_]+/)) ck = substr(t, RSTART+4, RLENGTH-4); else ck = ""
+                }
+                if (ck != "" && match(t, /:strategy=[0-9]+/)) {
+                    s = substr(t, RSTART+10, RLENGTH-10)
+                    kk = ck SUBSEP s
+                    if (!(kk in seen)) { seen[kk] = 1; cnt[ck]++ }
+                }
             }
         }
         for (k in cnt) print k "\t" cnt[k]
