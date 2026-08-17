@@ -315,8 +315,8 @@ print_iptables() {
     nfq_mangle=$( (iptables -t mangle -L POSTROUTING -n 2>/dev/null || true) | grep -c NFQUEUE || true)
     nfq_in=$( ( (iptables -t mangle -L INPUT -n 2>/dev/null || true); \
                 (iptables -t mangle -L FORWARD -n 2>/dev/null || true) ) | grep -c NFQUEUE || true)
-    tg_redirect_pre=$( (iptables -t nat -L PREROUTING -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
-    tg_redirect_out=$( (iptables -t nat -L OUTPUT -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
+    tg_redirect_pre=$(tg_redirect_counts | cut -d' ' -f1)
+    tg_redirect_out=$(tg_redirect_counts | cut -d' ' -f2)
     : "${nfq_mangle:=0}"
     : "${nfq_in:=0}"
     : "${tg_redirect_pre:=0}"
@@ -500,6 +500,19 @@ bitmap_port_ok() {
 #
 # Считаем сами: date -d не понимает RFC-формат ни в busybox, ни в BSD, то есть
 # очевидный способ здесь просто не работает.
+# Сколько правил редиректа телеграма стоит сейчас: "<PREROUTING> <OUTPUT>".
+#
+# Вынесено в функцию по той же причине, что и clock_skew_vs_relay: нужно в двух
+# местах — в разделе iptables и в сводке «что не так». Дублировать подсчёт
+# нельзя, разойдётся, а разошедшись даст ровно то, из-за чего эта проверка и
+# появилась: в деталях «0, ожидается 1», а в сводке «проблем не найдено».
+tg_redirect_counts() {
+    local _pre _out
+    _pre=$( (iptables -t nat -L PREROUTING -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
+    _out=$( (iptables -t nat -L OUTPUT -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
+    printf '%s %s\n' "${_pre:-0}" "${_out:-0}"
+}
+
 clock_skew_vs_relay() {
     local srv_date srv_epoch now_epoch
     srv_date=$(curl -s -m 8 -D - -o /dev/null "https://${VPS_IP}.nip.io/" 2>/dev/null \
@@ -605,6 +618,22 @@ print_health() {
     if [ -x /opt/sbin/tg-mtproxy-client ]; then
         pgrep -f 'tg-mtproxy-client' >/dev/null 2>&1 || \
             _add "телеграм-туннель установлен, но не запущен — телеграм работать не будет"
+
+        # А ЕЩЁ ПРАВИЛА РЕДИРЕКТА. Процесс может быть живым, слушать свой порт
+        # и при этом не получать ни одного пакета: без правил в nat трафик к
+        # дата-центрам телеграма уходит прямо в WAN, где его и режут. Человек
+        # видит вечное «Подключение…».
+        #
+        # Полевой случай (issue #34, 2026-08-17): в разделе iptables честно
+        # напечатано «TG REDIR PREROUT: 0 (expected 1)», а сводка «что не так»
+        # сказала «явных проблем не найдено» — она про эти правила не
+        # спрашивала вовсе. Человек читает первую строку и успокаивается.
+        local _tgr_pre _tgr_out
+        _tgr_pre=$(tg_redirect_counts | cut -d' ' -f1)
+        _tgr_out=$(tg_redirect_counts | cut -d' ' -f2)
+        if [ "$_tgr_pre" = "0" ] || [ "$_tgr_out" = "0" ]; then
+            _add "правила редиректа телеграма отсутствуют (PREROUTING=$_tgr_pre, OUTPUT=$_tgr_out, ожидается по 1) — трафик идёт мимо туннеля, телеграм не подключится"
+        fi
     fi
 
     # Обновление откатилось. Симптом «nfqws2 не запущен» мы называем выше, но

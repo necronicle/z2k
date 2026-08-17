@@ -149,6 +149,11 @@ func (id *relayIdentity) register(registerURL, secret string) error {
 // перевыпуском личности, повторные попытки с тем же ключом бессмысленны.
 var errIdentityTaken = errors.New("install_id taken by another key")
 
+// errNotRegistered — личность ещё не зарегистрирована на релее. Не ошибка
+// сети и не повод для паники: identityLoop крутится параллельно и повторяет
+// регистрацию. Подключаться до неё нечем — общий секрет релей отвергает.
+var errNotRegistered = errors.New("identity not registered yet")
+
 // reMintIdentity удаляет файл личности и создаёт новую пару.
 //
 // Нужно ровно для одного случая: релей ответил 409. loadOrMintIdentity сам

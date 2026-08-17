@@ -285,6 +285,27 @@ func (tc *tunnelClient) triggerReRegister() {
 }
 
 func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
+	// БЕЗ ЗАРЕГИСТРИРОВАННОЙ ЛИЧНОСТИ НЕ ЛЕЗЕМ НА РЕЛЕЙ ВОВСЕ.
+	//
+	// Здесь был фоллбэк: пока личность не зарегистрирована, клиент
+	// подключался общим секретом (кадр типа 0x00) — с комментарием «релей
+	// принимает обе схемы, это не переключение». Комментарий устарел и стоил
+	// людям связи: релей давно поднят с --require-per-install и общий секрет
+	// отвергает наглухо. useID же выставляется только ПОСЛЕ успешной
+	// регистрации. Получался вечный цикл «подключился → отвергнут →
+	// переподключился» по разу в 48 секунд, и телеграм у человека не
+	// поднимался никогда. На релее это выглядело как 5900 отказов в час с 78
+	// адресов при одной успешной регистрации за тот же час (issue #34).
+	//
+	// Проверяем ДО набора номера, а не перед отправкой кадра: иначе на каждую
+	// попытку тратится TCP+TLS до релея, и его лог забивают пары
+	// «WS accepted / WS closed dur=0s». Регистрацией занимается identityLoop
+	// параллельно, ему нужно только время.
+	id := tc.identity.Load()
+	if id == nil || !tc.useID.Load() {
+		return nil, errNotRegistered
+	}
+
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: false,
@@ -313,15 +334,7 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 	}
 	configureWSKeepalive(ws)
 
-	// Auth frame. Per-install (muxAUTHID 0x06: [id:16][ts:8][ed25519 sig:64]) when
-	// we hold a registered identity; otherwise the shared-secret HMAC (type 0x00).
-	// The relay dual-accepts both — this is not a flip.
-	var authFrame []byte
-	if id := tc.identity.Load(); id != nil && tc.useID.Load() {
-		authFrame = encodeMuxFrame(0x0000, 0x06, id.authPayload())
-	} else {
-		authFrame = encodeMuxFrame(0x0000, 0x00, computeAuthHMAC(tc.tunnelSecret))
-	}
+	authFrame := encodeMuxFrame(0x0000, 0x06, id.authPayload())
 	ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := ws.WriteMessage(websocket.BinaryMessage, authFrame); err != nil {
 		ws.Close()
@@ -455,6 +468,18 @@ func (tc *tunnelClient) run() {
 		}
 
 		ws, err := tc.connectTunnelWS()
+		if errors.Is(err, errNotRegistered) {
+			// Не отказ сети и не повод раскручивать backoff до двух минут:
+			// регистрацией занимается identityLoop, ему нужно время. Ждём
+			// коротко и молча — жаловаться тут не на что, а вот стучаться в
+			// релей схемой, которую он отвергает, было бы вредно и ему, и нам.
+			select {
+			case <-time.After(5 * time.Second):
+				continue
+			case <-tc.ctx.Done():
+				return
+			}
+		}
 		if err != nil {
 			consecutiveFails++
 			backoff := 3 * time.Second
