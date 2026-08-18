@@ -401,6 +401,17 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
+    # Соединения без SNI движок помечает l7proto=unknown. Профиль с
+    # --filter-l7=tls их не берёт — и они уходят в no_action мимо обхода.
+    # Ровно так пропадал телевизор: адрес известен через ipcache, а протокол
+    # для фильтра «не тот». Пулы видео обязаны брать и unknown. РКН намеренно
+    # не трогаем — там на тех же портах живёт слишком много чужого.
+    ensure_l7_unknown() {
+        printf '%s' "$1" | sed 's/--filter-l7=tls\([^,a-z_]\|$\)/--filter-l7=tls,unknown\1/g'
+    }
+    youtube_tcp=$(ensure_l7_unknown "$youtube_tcp")
+    youtube_gv_tcp=$(ensure_l7_unknown "$youtube_gv_tcp")
+
     youtube_tcp=$(ensure_circular_in_range "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_in_range "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_in_range "$rkn_tcp")
@@ -1317,8 +1328,8 @@ generate_nfqws2_opt_from_strategies() {
     #      закрывается по FIN) не даёт детектору вообще никакого события, и
     #      нерабочая страта не ротируется никогда.
     #
-    # Только rkn_tcp: там живут домены, где этот класс отказа и наблюдается.
-    # yt/gv трогать не начинаем, пока не будет такого же замера по ним.
+    # Изначально ставилось только на rkn_tcp. С 2026-08-18 стоит и на пулах
+    # видео: замер по ним получен, см. ниже у самой проводки.
     #
     # Проводка ставится ТОЛЬКО если файл детектора реально лежит на диске.
     # Без него движок валится в error() на каждом пакете профиля, а это не
@@ -1326,8 +1337,17 @@ generate_nfqws2_opt_from_strategies() {
     # статусе сервиса и без единой жалобы в логе.
     if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-alert.lua" ]; then
         rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp" "z2k_fail_tls_alert")
+        # Пулы видео — замер 2026-08-18 на LG webOS. На заведомо нерабочей
+        # стратегии соединение поднималось, сервер отдавал 4482 байта и дальше
+        # слал один и тот же сегмент 15-16 раз. Ни RST, ни FIN, ни исходящих
+        # ретрансмитов — штатный детектор молчал (676 вызовов, ноль событий),
+        # страта стояла вечно, видео и превью не грузились.
+        # С обёрткой: ytimg 20->22, googleusercontent 20->21, ggpht 20->21,
+        # googlevideo 20->21, одиннадцать ротаций, всё на живом трафике.
+        youtube_tcp=$(ensure_rkn_failure_detector "$youtube_tcp" "z2k_fail_tls_alert")
+        youtube_gv_tcp=$(ensure_rkn_failure_detector "$youtube_gv_tcp" "z2k_fail_tls_alert")
     else
-        echo "WARN: lua/z2k-alert.lua отсутствует — rkn_tcp остаётся на чистом штатном детекторе" 1>&2
+        echo "WARN: lua/z2k-alert.lua отсутствует — детекторы остаются чисто штатными" 1>&2
     fi
 
     rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp" "$rkn_in_range_bytes")

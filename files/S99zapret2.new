@@ -738,6 +738,19 @@ LUA_Z2K_STATE_PERSIST="$ZAPRET_BASE/lua/z2k-state-persist.lua"
 # interface. The shipped nfqws2 supports both flags on every arch (verified).
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK --bind-fix4 --bind-fix6 $LUAOPT"
 
+# Помнить, какое имя стояло в SNI у этого IP, и подставлять его при поиске
+# профиля для соединений БЕЗ SNI.
+#
+# Без этого без обхода остаётся телевизор. Замер 2026-08-18, LG webOS: часть
+# его соединений уходит с пустым hostname, профиль для них не находится, и они
+# падают в no_action — DPI работает с ними напрямую. Ключ автостейта при этом
+# не создаётся вовсе, поэтому и ротировать нечего: страта стоит, картинки не
+# грузятся, а в логе тишина.
+#
+# Опция демонская (params.cache_hostname), не профильная — потому и живёт
+# здесь, а не в строке профилей.
+NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --ipcache-hostname=1"
+
 # RST-фильтры сняты 2026-08-17. Их было два, и оба отнимали больше, чем
 # давали:
 #
