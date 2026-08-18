@@ -16,10 +16,21 @@ discord_blockcheck2_tls13_20260123_131631.txt
 /%TEMP%*.txt
 /__codex_quarantine/
 /nul
-# Имя бинарника — tg-mtproxy-client (BINARY в mtproxy-client/Makefile). Здесь
-# годами лежало правило под прежним именем `mtproxy-client/mtproxy-client`,
-# то есть не совпадало ни с чем. Точные правила живут в mtproxy-client/.gitignore.
+# Имя релизного бинарника — tg-mtproxy-client (BINARY в mtproxy-client/Makefile);
+# точные правила живут в mtproxy-client/.gitignore.
 mtproxy-client/tg-mtproxy-client
+# А это — локальная сборка `go build` без -o: имя артефакта совпадает с именем
+# каталога модуля. Правило когда-то сочли мёртвым и сняли; 2026-08-17 ровно
+# такой артефакт (8,3 МБ Mach-O под макбук) уехал в репозиторий вместе с
+# релизным коммитом и стал самым большим файлом дерева. Возвращено для всех
+# пяти модулей сразу.
+mtproxy-client/mtproxy-client
+rt-proxy/rt-proxy
+vps-relay/vps-relay
+z2k-detect/z2k-detect
+z2k-verify/z2k-verify
+# Заметки для апстрима (bol-van) — рабочий черновик, не часть поставки.
+UPSTREAM_PROPOSALS.md
 
 # Temporary and editor files
 *.tmp

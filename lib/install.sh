@@ -1438,7 +1438,7 @@ step_build_zapret2() {
         if ! mkdir -p "$backup_tmp"; then
             die "Не удалось создать каталог бэкапа ${backup_tmp} — установка прервана БЕЗ удаления текущей (нет места на /opt?). Ваши настройки не тронуты."
         fi
-        # Config (содержит DROP_DPI_RST, RKN_SILENT_FALLBACK и др.) — critical
+        # Config (содержит GAME_WARP_ENABLED, POLICY_* и др.) — critical
         # user state. Backup идёт ДО mv старого дерева; если config есть, но
         # скопировать не удалось — abort, иначе commit (delete old) безвозвратно
         # потеряет настройки (Codex 2026-05-28). На /opt место есть почти
@@ -1539,9 +1539,6 @@ step_build_zapret2() {
         fi
         # Strategy.txt — shipped, не user-owned. Не бэкапим: при реустановке/апдейте
         # свежая shipped-версия из репо побеждает (см. feedback_z2k_user_overrides_policy).
-        # Silent fallback flag
-        [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" ] && \
-            touch "$backup_tmp/rkn_silent_fallback.flag"
         # Webpanel state — opt-in component (installed via menu [P] → 1).
         # Сохраняем port+bind (lighttpd binding) чтобы после reinstall'а
         # автоматически re-install'нуть webpanel на тех же значениях.
@@ -2350,17 +2347,17 @@ step_build_zapret2() {
             if [ "$Z2K_AUTO_UPDATE" = "1" ]; then
                 local _flag_backup="$backup_tmp/feature-flags.txt"
                 # Preserve both Z2K_* feature flags and the non-Z2K_ user-
-                # settable knobs (RST filter, RKN silent fallback, WARP game
-                # mode, Keenetic policy integration, TG-tunnel disable marker).
+                # settable knobs (WARP game mode, Keenetic policy
+                # integration, TG-tunnel disable marker).
                 # Раньше regex был только `^Z2K_[A-Z0-9_]+=`, из-за чего
-                # DROP_DPI_RST, POLICY_NAME/EXCLUDE и т.д. слетали при
+                # GAME_WARP_ENABLED, POLICY_NAME/EXCLUDE и т.д. слетали при
                 # auto-update reinstall'е (selected NDM policy сбрасывалась
                 # на дефолт «nfqws»).
                 # Список явный — shipped config_official.sh пишет эти
                 # же ключи через ${saved_*}, без них create_official_config
                 # вернётся к дефолтам. Если добавляешь новый non-Z2K_
                 # user flag в config_official.sh — добавь его и сюда.
-                grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+                grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
                 if [ -s "$_flag_backup" ] && [ -f "$ZAPRET2_DIR/config" ]; then
                     local _line _flag_name _escaped _applied=0
                     while IFS= read -r _line; do
@@ -2444,12 +2441,6 @@ step_build_zapret2() {
 
         # Strategy.txt не восстанавливаем — shipped-версия из репо имеет
         # приоритет (см. feedback_z2k_user_overrides_policy).
-
-        # Восстановить silent fallback flag
-        if [ -f "$backup_tmp/rkn_silent_fallback.flag" ]; then
-            touch "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag"
-            chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null || true
-        fi
 
         # NB: backup_tmp НЕ удаляем здесь — step_finalize ниже использует
         # $backup_tmp/webpanel-port/bind для re-install'а webpanel. Удаление
@@ -3236,7 +3227,7 @@ step_finalize() {
     local backup_tmp_early="/opt/z2k-upgrade-backup"
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
         if [ -s "$_flag_backup_early" ]; then
             local _line_early _flag_name_early _escaped_early _applied_early=0
             while IFS= read -r _line_early; do
@@ -4019,7 +4010,7 @@ step_finalize() {
     # — re-running is a no-op when nothing changed.
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup="$backup_tmp/feature-flags-late.txt"
-        grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|DROP_DPI_RST|RST_FILTER|RKN_SILENT_FALLBACK|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
+        grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp/config" > "$_flag_backup" 2>/dev/null || true
         if [ -s "$_flag_backup" ]; then
             local _line _flag_name _escaped _applied=0
             while IFS= read -r _line; do

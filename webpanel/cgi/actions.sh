@@ -668,34 +668,10 @@ svc_action_async() {
 # NFQWS2_OPT via create_official_config (only for toggles that affect it), and
 # restarts the running service. Idempotent — setting the same value twice is a no-op.
 
-toggle_rst_filter() {
-    # Переключаем nfqws C-level RST_FILTER (нашa реализация в fork'е,
-    # branch feat/rst-filter — 3 эвристики drop'a fake DPI RST'ов:
-    # pre-response RST, multi-RST burst, TTL fingerprint mismatch).
-    # Раньше тут стоял DROP_DPI_RST (iptables xt_u32) — устаревший, фейлил
-    # на Keenetic без kmod-ipt-u32. RST_FILTER не требует kmod, работает на
-    # уровне nfqws. config_official.sh подхватит RST_FILTER при regenerate.
-    local want="$1"
-    set_flag "RST_FILTER" "$want" "$CONFIG_FILE" || return 1
-    regenerate_config
-    restart_service_if_running
-}
-
-toggle_silent_fallback() {
-    local want="$1"
-    set_flag "RKN_SILENT_FALLBACK" "$want" "$CONFIG_FILE" || return 1
-    # Flag file consumed by autocircular machinery, mirrors menu_rkn_silent_fallback.
-    local flag_file="$ZAPRET2_DIR/extra_strats/cache/autocircular/rkn_silent_fallback.flag"
-    if [ "$want" = "1" ]; then
-        mkdir -p "$(dirname "$flag_file")" 2>/dev/null
-        touch "$flag_file" 2>/dev/null
-    else
-        rm -f "$flag_file" 2>/dev/null
-    fi
-    regenerate_config
-    restart_service_if_running
-}
-
+# RST-фильтр и Silent fallback РКН сняты 2026-08-17 — оба тумблера удалены
+# вместе с механизмами. RST-фильтр вырезал входящий RST до детекторов, на
+# которых стоит ротация и автохостлист; silent fallback к тому моменту
+# сводился к одному лишнему --payload перед circular и только сужал обзор.
 
 # WARP game mode — route only the game-server ipset through a Cloudflare WARP
 # (usque/MASQUE) tunnel; everything else stays direct. Independent of nfqws2:

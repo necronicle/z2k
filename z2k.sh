@@ -1165,6 +1165,20 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-detectors.lua"
     fi
 
+    # z2k-alert.lua — две поправки к штатному детектору неудач (замеры
+    # 2026-08-18): ретрансмит считается провалом только на ClientHello, и
+    # фатальный TLS-алерт до ServerHello тоже считается провалом. Профиль
+    # rkn_tcp ссылается на функцию по имени через failure_detector=, поэтому
+    # файл обязан приехать вместе с конфигом: без него движок падает в
+    # error() на каждом пакете профиля.
+    url="${GITHUB_RAW}/files/lua/z2k-alert.lua"
+    output="${lua_dir}/z2k-alert.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-alert.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-alert.lua"
+    fi
+
     # Phase 6: anti-ТСПУ fool extensions (z2k_dynamic_ttl and friends).
     # Strategies reference them by name via `fool=z2k_dynamic_ttl`, so the
     # file must be downloaded before strategies load — ordering mirrors

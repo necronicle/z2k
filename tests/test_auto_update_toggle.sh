@@ -282,9 +282,9 @@ got=$(tgl "$(api_cgi GET /status "")" auto_update)
 # Соседние поля не должны разъезжаться: раньше это стерегла проверка на
 # «сбалансированность» плейсхолдеров, теперь — четыре различимых значения,
 # каждое на своём месте.
-printf 'ENABLED=1\nRST_FILTER=1\nZ2K_STATS=0\nZ2K_AUTO_UPDATE_ENABLED=0\nZ2K_AUTOHOSTLIST=1\n' > "$API_CFG"
+printf 'ENABLED=1\nGAME_WARP_ENABLED=1\nZ2K_STATS=0\nZ2K_AUTO_UPDATE_ENABLED=0\nZ2K_AUTOHOSTLIST=1\n' > "$API_CFG"
 body=$(api_cgi GET /status "")
-got="$(tgl "$body" rst_filter)|$(tgl "$body" stats)|$(tgl "$body" auto_update)|$(tgl "$body" autohostlist)"
+got="$(tgl "$body" game_warp)|$(tgl "$body" stats)|$(tgl "$body" auto_update)|$(tgl "$body" autohostlist)"
 [ "$got" = "1|0|0|1" ] && ok "тумблеры в JSON не съехали друг относительно друга" \
                        || no "тумблеры в JSON не съехали" "1|0|0|1" "$got"
 
