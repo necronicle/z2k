@@ -123,6 +123,7 @@ read_globals = {
     "instance_cutoff",
     "resolve_multi_pos",
     "delete_pos_1",
+    "is_retransmission",  -- nfqws2: пакет не выше уже виденного максимума позиции (lua/zapret-lib.lua)
     "pos_get",       -- nfqws2 byte/datagram counter accessor: pos_get(desync, mode[, reverse]) — manual §pos_get
     "pos_get_pos",   -- sibling: pos_get_pos(track_pos, mode)
     "rawsend_opts",
