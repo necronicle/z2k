@@ -77,8 +77,8 @@ echo "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:payload=tls_client_hell
 echo "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=4" > "$MOCK_EXTRA_STRATS/TCP/YT_GV/Strategy.txt"
 echo "--filter-udp=443 --filter-l7=quic --lua-desync=circular:fails=3:time=60:key=yt_quic --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:strategy=1" > "$MOCK_EXTRA_STRATS/UDP/YT/Strategy.txt"
 
-# Create mock config (no Austerus, no RKN_SILENT_FALLBACK)
-echo "RKN_SILENT_FALLBACK=0" > "$MOCK_ZAPRET2/config"
+# Create mock config (no Austerus)
+echo "ENABLED=1" > "$MOCK_ZAPRET2/config"
 
 # Source utils.sh first (provides safe_config_read, print_*, etc.)
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -552,6 +552,12 @@ run_generator() {
     echo "--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:strategy=1" \
         > "$root/extra_strats/TCP/RKN/Strategy.txt"
     printf '%s\n' "$cfg" > "$root/config"
+    # Детектор z2k_fail_tls_alert проводится в rkn_tcp только если lua-файл
+    # реально лежит на диске (иначе движок падал бы в error() на каждом
+    # пакете). Мок обязан повторять установленную систему, иначе тесты
+    # проверяют не ту ветку.
+    mkdir -p "$root/lua"
+    cp "$SCRIPT_DIR/files/lua/z2k-alert.lua" "$root/lua/" 2>/dev/null || true
     [ -n "$extra_cb" ] && eval "$extra_cb \"$root\""
     ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null )
     rm -rf "$root"
@@ -589,13 +595,17 @@ RKN_ARM_OFF=$(get_rkn_tcp_arm_line "$OUT_MS_OFF")
 
 assert_contains "ms flag=0: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_OFF"
-assert_contains "ms flag=0: rkn_tcp keeps --in-range=-s5556" \
-    "--in-range=-s5556" "$RKN_ARM_OFF"
+# Окно больше не константа флага: инвариант «окно выше порога inseq» (см.
+# блок ниже) поднимает его до inseq+1500 в обеих позициях флага. Для rkn_tcp
+# порог всегда 26000, значит окно всегда 27500 — иначе полоса, в которой
+# срабатывает успех по входящим, пуста. Флаг продолжает управлять вторым
+# рычагом пакета — NFQWS2_TCP_PKT_IN (проверяется ниже).
+assert_contains "ms flag=0: окно rkn_tcp держит инвариант (inseq 26000 + 1500)" \
+    "--in-range=-s27500" "$RKN_ARM_OFF"
 assert_contains "ms flag=0: rkn_tcp failure_detector=z2k_silent_drop_detector" \
     "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_OFF"
-# Half-state guards on flag=0 — byte-cap не должен прыгнуть на bundle.
-assert_not_contains "ms flag=0: no s20000 leaks into rkn_tcp" \
-    "--in-range=-s20000" "$RKN_ARM_OFF"
+assert_not_contains "ms flag=0: старое окно ниже порога не вернулось" \
+    "--in-range=-s5556" "$RKN_ARM_OFF"
 # Old detector names не должны быть primary в config-string. Они
 # доступны через chain в lua, не через config text.
 assert_not_contains "ms flag=0: no z2k_tls_stalled as primary" \
@@ -613,8 +623,8 @@ RKN_ARM_ON=$(get_rkn_tcp_arm_line "$OUT_MS_ON")
 
 assert_contains "ms flag=1: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_ON"
-assert_contains "ms flag=1: rkn_tcp uses --in-range=-s20000" \
-    "--in-range=-s20000" "$RKN_ARM_ON"
+assert_contains "ms flag=1: окно rkn_tcp держит инвариант (inseq 26000 + 1500)" \
+    "--in-range=-s27500" "$RKN_ARM_ON"
 assert_contains "ms flag=1: rkn_tcp failure_detector=z2k_silent_drop_detector" \
     "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_ON"
 # Half-state guards on flag=1 — bundle byte-cap должен land, но primary
@@ -627,38 +637,54 @@ assert_not_contains "ms flag=1: no z2k_tls_stalled as primary" \
 assert_not_contains "ms flag=1: no z2k_mid_stream_stall as primary" \
     "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_ON"
 
-printf "\n--- Z2K_USE_MID_STREAM_DETECTOR + RKN_SILENT_FALLBACK ---\n"
+printf "\n--- окно входящих выше порога inseq ---\n"
 
-# RKN silent fallback uses ensure_youtube_tls_failure_detection (not
-# the manual_layout helper). That path also injects --in-range=-sN,
-# so the bundle byte cap MUST flow through it too — otherwise we get
-# the exact half-state this commit guards against (byte-window
-# detector wired but blind past 5.5K). Combined-flag test exercises
-# the silent-fallback code path with the bundle on.
-OUT_MS_SILENT=$(run_generator "ms-silent" \
-    "Z2K_USE_MID_STREAM_DETECTOR=1
-RKN_SILENT_FALLBACK=1" "")
-RKN_ARM_SILENT=$(get_rkn_tcp_arm_line "$OUT_MS_SILENT")
+# Порог inseq ставится в config_official.sh, а окно `--in-range=-sN` вставляют
+# раскладчики ensure_youtube_tls_* НИЖЕ по коду — константой, ничего не зная
+# про порог. Гейт ensure_circular_in_range, заведённый 2026-08-14, правит
+# только уже существующий токен, поэтому на дефолтной поставке (в стратегии
+# токена нет вовсе) он не срабатывал, и на боевом роутере 2026-08-17 стояло:
+#
+#   rkn_tcp  --in-range=-s20000  inseq=26000   полоса пуста
+#   yt_tcp   --in-range=-s5556   inseq=18000   полоса пуста
+#
+# Пустая полоса = успех по входящим недостижим, а окно, в котором входящий RST
+# ещё считается провалом, обрезано окном видимости, а не порогом. Сторожим
+# инвариант на всех TLS-пулах сразу.
+# YT/GV в run_generator по умолчанию идут без circular — дописываем, иначе
+# сторожить у них нечего.
+_seed_tls_circulars() {
+    local root="$1"
+    echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=yt_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:strategy=1" \
+        > "$root/extra_strats/TCP/YT/Strategy.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=gv_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:strategy=1" \
+        > "$root/extra_strats/TCP/YT_GV/Strategy.txt"
+}
+OUT_RANGE=$(run_generator "in-range-vs-inseq" "Z2K_USE_MID_STREAM_DETECTOR=1" "_seed_tls_circulars")
+_flat_range=$(printf '%s\n' "$OUT_RANGE" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk")
 
-assert_contains "ms+silent: rkn_tcp arm emitted" \
-    "key=rkn_tcp" "$RKN_ARM_SILENT"
-assert_contains "ms+silent: silent path also bumps to s20000" \
-    "--in-range=-s20000" "$RKN_ARM_SILENT"
-assert_contains "ms+silent: rkn_tcp failure_detector=z2k_silent_drop_detector" \
-    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_SILENT"
-# Silent fallback's success_detector contract: append
-# z2k_success_no_reset only when one isn't already set. rkn_tcp gets
-# z2k_http_success_positive_only earlier from ensure_circular_arg_set,
-# so it survives — assert that survival rather than the no-reset
-# variant that only fires on bare circulars.
-assert_contains "ms+silent: rkn_tcp keeps z2k_http_success_positive_only (survives silent fallback)" \
-    "success_detector=z2k_http_success_positive_only" "$RKN_ARM_SILENT"
-assert_not_contains "ms+silent: no s5556 leak via silent path" \
-    "--in-range=-s5556" "$RKN_ARM_SILENT"
-assert_not_contains "ms+silent: no z2k_tls_stalled as primary" \
-    "failure_detector=z2k_tls_stalled" "$RKN_ARM_SILENT"
-assert_not_contains "ms+silent: no z2k_mid_stream_stall as primary" \
-    "failure_detector=z2k_mid_stream_stall" "$RKN_ARM_SILENT"
+check_range_above_inseq() {
+    local key="$1" line cap inseq
+    line=$(printf '%s\n' "$_flat_range" | grep -F "key=$key" | head -1)
+    [ -n "$line" ] || { assert_eq "$key: строка профиля найдена" "да" "нет"; return; }
+    cap=$(printf '%s\n' "$line" | tr ' ' '\n' | grep -o -- '--in-range=-s[0-9]*' | head -1 | sed 's/.*-s//')
+    inseq=$(printf '%s\n' "$line" | tr ' ' '\n' | grep -o 'inseq=[0-9]*' | head -1 | sed 's/inseq=//')
+    if [ -z "$inseq" ]; then
+        assert_eq "$key: inseq на месте" "число" "пусто"
+        return
+    fi
+    if [ -n "$cap" ] && [ "$cap" -gt "$inseq" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        printf "[PASS] %s: окно -s%s выше порога inseq=%s\n" "$key" "$cap" "$inseq"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        printf "[FAIL] %s: окно -s%s НЕ выше порога inseq=%s — полоса пуста\n" "$key" "${cap:-нет}" "$inseq"
+    fi
+}
+
+check_range_above_inseq rkn_tcp
+check_range_above_inseq yt_tcp
+check_range_above_inseq gv_tcp
 
 printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: NFQWS2_TCP_PKT_IN bundle ---\n"
 
@@ -707,7 +733,7 @@ EOF
 }
 
 test_pkt_in_under_flag "0" "10" "NFQWS2_TCP_PKT_IN stays at 10"
-test_pkt_in_under_flag "1" "30" "NFQWS2_TCP_PKT_IN bumps to 30"
+test_pkt_in_under_flag "1" "50" "NFQWS2_TCP_PKT_IN поднят до 50 (замер 2026-08-18: при 30 успех не срабатывал ни разу)"
 
 printf "\n--- DISABLE_IPV6: preserved across config regen (user request 2026-06-19) ---\n"
 
@@ -939,7 +965,17 @@ OUT_NATIVE=$(run_generator "native-default" "" "")
 export Z2K_NATIVE_DETECTORS=0
 RKN_ARM_NATIVE=$(get_rkn_tcp_arm_line "$OUT_NATIVE")
 assert_contains     "native: rkn_tcp arm emitted"               "key=rkn_tcp"          "$RKN_ARM_NATIVE"
-assert_not_contains "native: rkn_tcp has NO failure_detector"   "failure_detector="    "$RKN_ARM_NATIVE"
+# 2026-08-18: контракт уточнён. Кастомная библиотека детекторов по-прежнему
+# срезается целиком, но ПОСЛЕ среза на rkn_tcp ставится ровно одна обёртка —
+# z2k_fail_tls_alert. Она не заменяет штатный детектор, а вызывает его и
+# добавляет два измеренных на боевом роутере отличия: ретрансмит считается
+# только на ClientHello (иначе потеря пакета в живой сессии уводит рабочую
+# страту) и фатальный TLS-алерт до ServerHello считается провалом (иначе
+# нерабочая страта не ротируется вовсе — событий у детектора нет).
+assert_contains     "native: rkn_tcp несёт обёртку z2k_fail_tls_alert" \
+                    "failure_detector=z2k_fail_tls_alert" "$RKN_ARM_NATIVE"
+assert_not_contains "native: старая библиотека детекторов не вернулась" \
+                    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_NATIVE"
 assert_not_contains "native: rkn_tcp has NO success_detector"   "success_detector="    "$RKN_ARM_NATIVE"
 assert_not_contains "native: rkn_tcp has NO no_http_redirect"   "no_http_redirect"     "$RKN_ARM_NATIVE"
 assert_contains     "native: rkn_tcp keeps native inseq="       "inseq="               "$RKN_ARM_NATIVE"

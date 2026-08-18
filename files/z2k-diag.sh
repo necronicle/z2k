@@ -285,7 +285,7 @@ print_service() {
     if [ -r "$cfg" ]; then
         printf 'config flags      : '
         local flags=""
-        for k in GAME_WARP_ENABLED RKN_SILENT_FALLBACK DROP_DPI_RST RST_FILTER GEOSITE_ENABLED; do
+        for k in GAME_WARP_ENABLED GEOSITE_ENABLED; do
             local v
             v=$(safe_read "$k" "$cfg" "-")
             flags="$flags $k=$v"

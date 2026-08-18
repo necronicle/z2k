@@ -680,6 +680,19 @@ LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 # приходит на Этапах 2-3, поэтому сейчас поведение не меняется.
 LUA_Z2K_DETECTORS="$ZAPRET_BASE/lua/z2k-detectors.lua"
 [ -f "$LUA_Z2K_DETECTORS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DETECTORS"
+# z2k-alert.lua — две поправки к ШТАТНОМУ детектору неудач, обе по замерам на
+# боевом роутере 2026-08-18 (файл сам их и описывает):
+#   - ретрансмиссия считается провалом только на ClientHello. Пойманная ложная
+#     ротация: телефон переслал пакет TLS application data в уже работающей
+#     сессии, и это увело рабочую стратегию при 29 успехах против 3 провалов;
+#   - фатальный TLS-алерт до ServerHello считается провалом. Пойманный тихий
+#     случай: сервер подтверждает ClientHello, отвечает семибайтовым алертом и
+#     закрывается по FIN — ни RST, ни ретрансмитов, штатный детектор слеп и
+#     страта не ротируется никогда.
+# Логика bol-van вызывается как есть, мы только сужаем вход и добавляем сигнал.
+# Грузится ПОСЛЕ zapret-auto.lua (нужны standard_failure_detector и pos_get).
+LUA_Z2K_ALERT="$ZAPRET_BASE/lua/z2k-alert.lua"
+[ -f "$LUA_Z2K_ALERT" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_ALERT"
 # Phase 6: z2k-fooling-ext.lua exports anti-ТСПУ fool functions like
 # z2k_dynamic_ttl, referenced by strategies via `fool=<name>` arg. Must
 # load after zapret-lib.lua (provides apply_fooling's extension point)
@@ -725,24 +738,22 @@ LUA_Z2K_STATE_PERSIST="$ZAPRET_BASE/lua/z2k-state-persist.lua"
 # interface. The shipped nfqws2 supports both flags on every arch (verified).
 NFQWS2_OPT_BASE="$USEROPT --fwmark=$DESYNC_MARK --bind-fix4 --bind-fix6 $LUAOPT"
 
-# Phase 6B: C-level RST drop filter (necronicle/zapret2-z2k r1+).
-# Default OFF: master does not run this filter, and field reports show
-# Cloudflare can legitimately send pre-payload RSTs that this heuristic
-# drops, turning a quick reconnect into a slow/no-load timeout.
-# Opt in through /opt/zapret2/config:
-#   RST_FILTER=1                -> --rst-filter=on
-#   RST_FILTER=aggressive|agg   -> --rst-filter=aggressive
-# The older xt_u32 IP-ID iptables rule (z2k_rst_filter_start/stop below)
-# still lives behind DROP_DPI_RST=1 and complements this at raw PREROUTING.
-RST_FILTER=${RST_FILTER:-0}
-case "$RST_FILTER" in
-    1|on|true|yes)
-        NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=on"
-        ;;
-    aggressive|agg|aggro)
-        NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --rst-filter=aggressive"
-        ;;
-esac
+# RST-фильтры сняты 2026-08-17. Их было два, и оба отнимали больше, чем
+# давали:
+#
+#   RST_FILTER -> --rst-filter движка. Дропает входящий RST в
+#   dpi_desync_packet_play ДО диспетчеризации профиля, то есть до
+#   standard_failure_detector (lua/zapret-auto.lua) и до детектора
+#   автохостлиста. На входящем RST стоит вся ротация — ниже мы специально
+#   ставим tcp_be_liberal=1, ЧТОБЫ nfqws этот RST видел. Включение фильтра
+#   ослепляло ровно то, ради чего conntrack и настраивался.
+#
+#   DROP_DPI_RST -> правило iptables u32 по IP ID 0x0-0xF. Легитимный RST от
+#   Linux-сервера идёт с id 0 (снят с нашего же VPS: id 0, flags [DF]),
+#   поэтому правило резало нормальные ресеты: вместо мгновенного отказа
+#   клиент ждал таймаут.
+#
+# Флаг движка остаётся в бинарнике (default off) — мы его просто не передаём.
 
 # Phase 9: IP block detection + client RST (necronicle/zapret2-z2k r5+).
 # Watches outgoing ClientHello retransmits (upstream is_retransmission
@@ -1381,17 +1392,19 @@ run_nfqws()
     # intentionally run without hostlists, relying on firewall rules (u32/nft @ih).
     # Hostlist checks happen at config generation time (add_hostlist_line in config_official.sh).
     #
-    # Keep engine rotation CONSISTENT with the detector wiring actually present in
-    # these args. If the profiles still carry custom failure/success detectors
-    # (Z2K_NATIVE_DETECTORS=0 legacy mode), the engine MUST keep the r-49
-    # proof-of-life/dominance offset — else those detectors' false-failures would
-    # rotate working hosts. Pure-native profiles (the default) get pure-native
-    # rotation (POL off), so a real RST/retrans is never drowned. Deriving it from
-    # the args (not a separate flag) makes the two impossible to desync.
-    case " $NFQWS2_OPT_BASE $2 " in
-        *failure_detector=*|*success_detector=*) export Z2K_NATIVE_ROTATION=0 ;;
-        *)                                       export Z2K_NATIVE_ROTATION=1 ;;
-    esac
+    # Переключателя режима ротации здесь нет и не будет. Ротация всегда
+    # нативная, как у bol-van; ветка r-49 (proof-of-life + content-gate внутри
+    # automate_failure_check) снята с вооружения 18.08.2026 вместе с
+    # управлявшей ею переменной окружения.
+    #
+    # Почему её убрали: режим выводился по подстроке — встретилось в
+    # аргументах `failure_detector=`, значит не нативный. Решение по
+    # написанию, а не по смыслу. Наша обёртка (lua/z2k-alert.lua) делегирует
+    # штатному детектору, семантика остаётся нативной, а режим переворачивался
+    # и молча включал целый пласт чужой логики. В логе это было видно как
+    # `failure counter 3-9(succ)=net -6/3` — счётчики, которых при нативной
+    # ротации быть не должно. Политику «живой хост не ротируем» держим у себя,
+    # в той же обёртке, где её видно и можно проверить тестами.
     run_daemon $1 "$NFQWS2" "$NFQWS2_OPT_BASE $2"
 }
 
@@ -2085,55 +2098,31 @@ z2k_udp_masquerade_fix_stop()
     iptablesw -t nat -X "$Z2K_IPT_NAT_CHAIN"
 }
 # ==============================================================================
-# PASSIVE DPI FILTER: drop TCP RST packets injected by TSPU/DPI
-# TSPU injects fake RST packets with IP ID in range 0x0000-0x000F.
-# These arrive BEFORE the real server response and kill the connection.
-# Dropping them lets the real response through.
-# Enable: DROP_DPI_RST=1 in /opt/zapret2/config
+# СНЯТИЕ СТАРОГО RST-ФИЛЬТРА (DROP_DPI_RST) — только уборка, ставить нечего.
+#
+# Правило дропало входящий TCP RST с IP ID 0x0000-0x000F, паттерн взят из
+# GoodbyeDPI. На сегодняшнем интернете он несостоятелен: Linux шлёт атомарные
+# DF-датаграммы с id 0, и легитимный RST от сервера попадает в тот же диапазон
+# (снято с нашего VPS: `id 0, flags [DF] ... Flags [R.]`). Вместо мгновенного
+# отказа соединения клиент висел до таймаута.
+#
+# У тех, кто успел включить флаг, цепочка осталась в raw PREROUTING и без этой
+# уборки продолжала бы резать ресеты после обновления. Поэтому purge зовётся
+# безусловно и на старте, и на стопе.
 # ==============================================================================
 
 Z2K_RST_CHAIN="z2k_dpi_rst"
 
-z2k_rst_filter_start()
+z2k_rst_filter_purge()
 {
-    [ "$DROP_DPI_RST" = "1" ] || return 0
-    echo "Enabling passive DPI RST filter (IP ID 0x0-0xF)"
+    z2k_fw_is_iptables || return 0
+    exists iptables || return 0
 
-    # Check u32 module availability
-    iptables -m u32 -h >/dev/null 2>&1 || {
-        echo "WARN: xt_u32 module not available, RST filter disabled"
-        return 1
-    }
-
-    # Create dedicated chain (idempotent)
-    iptables -t raw -N "$Z2K_RST_CHAIN" 2>/dev/null || iptables -t raw -F "$Z2K_RST_CHAIN"
-
-    # Match TCP RST where IP Identification field (offset 4, 2 bytes) is 0x0000-0x000F
-    # IP header byte 4-5 = Identification field
-    # u32 expression: "0>>22&0xFFFF=0x0:0xF" means: word at offset 0, shift right 22 bits (not needed)
-    # Actually: offset 4 in IP header = 2nd 32-bit word, upper 16 bits
-    # u32: "4&0xFFFF0000=0x0:0xF0000" or simpler via "0>>16&0xFFFF@0>>16&0xFFFF"
-    # Simplest: match raw bytes at offset 4-5
-    iptables -t raw -A "$Z2K_RST_CHAIN" -p tcp --tcp-flags RST RST \
-        -m u32 --u32 "4&0xFFFF0000=0x00000000:0x000F0000" \
-        -j DROP
-
-    # Hook into PREROUTING (incoming packets)
-    iptables -t raw -C PREROUTING -j "$Z2K_RST_CHAIN" 2>/dev/null || \
-        iptables -t raw -A PREROUTING -j "$Z2K_RST_CHAIN"
-
-    echo "Passive DPI RST filter active"
-}
-
-z2k_rst_filter_stop()
-{
-    # Remove hook
-    while iptables -t raw -C PREROUTING -j "$Z2K_RST_CHAIN" 2>/dev/null; do
-        iptables -t raw -D PREROUTING -j "$Z2K_RST_CHAIN" || break
+    while iptablesw -t raw -C PREROUTING -j "$Z2K_RST_CHAIN" 2>/dev/null; do
+        iptablesw -t raw -D PREROUTING -j "$Z2K_RST_CHAIN" || break
     done
-    # Flush and delete chain
-    iptables -t raw -F "$Z2K_RST_CHAIN" 2>/dev/null
-    iptables -t raw -X "$Z2K_RST_CHAIN" 2>/dev/null
+    iptablesw -t raw -F "$Z2K_RST_CHAIN" 2>/dev/null
+    iptablesw -t raw -X "$Z2K_RST_CHAIN" 2>/dev/null
 }
 
 # Conntrack tuning so nfqws SEES incoming DPI RSTs (the rotator needs them to
@@ -2194,7 +2183,7 @@ start_fw()
     z2k_seed_user_exclusions
     z2k_policy_connmark_start
     z2k_udp_masquerade_fix_start
-    z2k_rst_filter_start
+    z2k_rst_filter_purge
 
     # Game WARP mode — bring up the usque (MASQUE) tunnel + game-ipset split-tunnel
     # when enabled. Backgrounded so a slow usque registration never stalls the
@@ -2213,7 +2202,7 @@ stop_fw()
     # Определить тип firewall
     linux_fwtype
 
-    z2k_rst_filter_stop
+    z2k_rst_filter_purge
     # Использовать официальную функцию
     z2k_connmark_init
     z2k_udp_masquerade_fix_stop

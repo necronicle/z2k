@@ -1,15 +1,11 @@
 import { apiGet, apiPost, errHtml, errMsg, toastErr } from "../core/api.js";
 import { $app } from "../core/dom.js";
-import { _newLoad, _stale, refreshStatus, rstIsOn } from "../core/loadorder.js";
+import { _newLoad, _stale, refreshStatus } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
 import { JOB_FAIL, _updateGlobalUILock, confirmModal, jobOutcome, jobUnresolved, openJobModal, setLockAware, unresolvedMsg } from "../job.js";
 import { AUTOHOSTLIST_WARNING, TOGGLES_RESTART_SERVICE, resyncToggle } from "./policy.js";
 
 const TOGGLE_DEFS = [
-  { key: "rst_filter", name: "RST-фильтр (пассивный DPI)",
-    desc: "Блокирует поддельные TCP RST от ТСПУ через nfqws — 3 эвристики (pre-response RST, multi-RST burst, TTL mismatch). Не требует kernel-модулей. Может задеть редкие edge cases у Cloudflare — отключите если заметили проблемы с reconnect'ом." },
-  { key: "silent_fallback", name: "Silent fallback РКН",
-    desc: "Детект «тихих чёрных дыр» РКН. Осторожно — возможны ложные срабатывания." },
   // game_warp переехал в собственный раздел «WARP» (renderWarp) вместе с
   // управлением списками адресов — здесь его больше нет.
   { key: "customd", name: "Скрипты custom.d",
@@ -27,8 +23,6 @@ const TOGGLE_DEFS = [
 ];
 
 const TOGGLE_API_NAME = {
-  rst_filter: "rst-filter",
-  silent_fallback: "silent-fallback",
   customd: "customd",
   dynamic_ttl: "dynamic-ttl",
   stats: "stats",
@@ -199,7 +193,7 @@ export async function renderToggles() {
       const row = $app.querySelector(`[data-key="${t.key}"]`);
       if (!row) return;
       const box = row.querySelector("input");
-      box.checked = t.key === "rst_filter" ? rstIsOn(s.toggles[t.key]) : s.toggles[t.key] === "1";
+      box.checked = s.toggles[t.key] === "1";
       setLockAware(box, false);
       // Повторная загрузка не должна вешать второй обработчик: два POST'а
       // на один клик — два конкурентных рестарта сервиса.
@@ -430,8 +424,6 @@ async function toggleClick(key, box) {
   const restarts = TOGGLES_RESTART_SERVICE[key] === 1;
   const verb = wanted === "1" ? "Включаю" : "Отключаю";
   const niceName = {
-    rst_filter: "RST-фильтр",
-    silent_fallback: "Silent fallback",
     customd: "custom.d",
     dynamic_ttl: "Динамический TTL",
     stats: "Сбор статистики",

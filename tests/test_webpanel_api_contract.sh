@@ -73,7 +73,7 @@ STATE_FILE_FALLBACK="$SB/state-fallback.tsv";   export STATE_FILE_FALLBACK
 INIT_SCRIPT="$SB/S99-stub";                     export INIT_SCRIPT
 AU_MANIFEST_CACHE="$SB/manifest.json";          export AU_MANIFEST_CACHE
 mkdir -p "$LISTS_DIR" "$CUSTOM_STRAT_DIR" "$ZAPRET2_DIR/lib"
-printf 'ENABLED=1\nRST_FILTER=0\n' > "$CONFIG_FILE"
+printf 'ENABLED=1\nGAME_WARP_ENABLED=0\n' > "$CONFIG_FILE"
 
 # Заглушка генератора: regenerate_config ищет lib/config_official.sh сначала в
 # $ZAPRET2_DIR/lib, потом в /tmp/z2k/lib — свой кладём первым, чтобы тест не
@@ -174,15 +174,15 @@ printf "\n--- /status: значение флага с кавычкой не рв
 # read_flag снимает только ОКРУЖАЮЩИЕ кавычки, так что правленный руками
 # конфиг отдаёт значение с кавычкой внутри. Раньше оно шло в "%s" как есть:
 # JSON.parse во фронте падал, и весь дашборд показывал «Ошибка».
-printf 'ENABLED=1\nRST_FILTER=0"x\nRKN_SILENT_FALLBACK=a\\b\nZ2K_STATS=да\n' > "$CONFIG_FILE"
+printf 'ENABLED=1\nGAME_WARP_ENABLED=0"x\nZ2K_PPE_DEOFFLOAD=a\\b\nZ2K_STATS=да\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /status "" | cgi_body)
 assert_eq "тело /status — валидный JSON"      "1"    "$(json_ok_p "$OUT")"
-assert_eq "кавычка доехала экранированной"    '0"x'  "$(jget "$OUT" 'd["toggles"]["rst_filter"]')"
-assert_eq "обратный слэш доехал экранированным" 'a\b' "$(jget "$OUT" 'd["toggles"]["silent_fallback"]')"
+assert_eq "кавычка доехала экранированной"    '0"x'  "$(jget "$OUT" 'd["toggles"]["game_warp"]')"
+assert_eq "обратный слэш доехал экранированным" 'a\b' "$(jget "$OUT" 'd["toggles"]["ppe"]')"
 assert_eq "кириллица не превратилась в escape" 'да'  "$(jget "$OUT" 'd["toggles"]["stats"]')"
-printf 'ENABLED=1\nRST_FILTER=1\n' > "$CONFIG_FILE"
+printf 'ENABLED=1\nGAME_WARP_ENABLED=1\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /status "" | cgi_body)
-assert_eq "нормальный флаг читается как раньше" "1" "$(jget "$OUT" 'd["toggles"]["rst_filter"]')"
+assert_eq "нормальный флаг читается как раньше" "1" "$(jget "$OUT" 'd["toggles"]["game_warp"]')"
 
 printf "\n--- /policy/status, /warp/status, /debug: те же сырые %%s ---\n"
 printf 'ENABLED=1\nPOLICY_NAME=Через ВПН\nPOLICY_EXCLUDE=0"x\n' > "$CONFIG_FILE"

@@ -236,7 +236,7 @@ global.prompt = () => null;
 
 const STATUS = {
   ok: true, installed: "r-73", service: "active",
-  toggles: { rst_filter: "0", silent_fallback: "0", game_warp: "0", customd: "0",
+  toggles: { game_warp: "0", customd: "0",
              dynamic_ttl: "1", stats: "1", ppe: "1", auto_update: "1", autohostlist: "0" },
   tunnel: { running: false },
 };
@@ -696,20 +696,20 @@ const SCENARIOS = {
     hash: "#/toggles",
     setup() {
       ROUTER = async (p) => {
-        if (p === "/toggle/rst-filter") return { ok: true, job: "23" };
+        if (p === "/toggle/customd") return { ok: true, job: "23" };
         if (p === "/job") return { ok: true, done: true, exit: 0, log: "готово" };
         return STATUS;
       };
     },
     async run() {
       await sleep(80);
-      const box = q('#app>[data-key="rst_filter"]>input');
+      const box = q('#app>[data-key="customd"]>input');
       box.checked = true;
       box.fire("change");
       await sleep(60);
       check("другой тумблер не спрашивает подтверждения", confirmBox() === null, "модалка показана");
       check("другой тумблер ушёл на бекенд сразу",
-            (CALLS["/toggle/rst-filter"] || 0) === 1, "запросов: " + CALLS["/toggle/rst-filter"]);
+            (CALLS["/toggle/customd"] || 0) === 1, "запросов: " + CALLS["/toggle/customd"]);
     },
   },
 

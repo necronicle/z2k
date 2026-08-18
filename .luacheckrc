@@ -7,6 +7,7 @@ max_line_length = false
 -- nfqws2 runtime globals (provided by zapret-auto.lua and nfqws2 core)
 globals = {
     -- Desync action entry points (registered by z2k)
+    "z2k_fail_tls_alert",
     "z2k_tls_alert_fatal",
     "z2k_tls_stalled",
     "z2k_mid_stream_stall",
@@ -27,6 +28,7 @@ globals = {
     "z2k_dynamic_strategy",
     "z2k_cdn_detect",
     "cond_tcp_has_ts",
+    "automate_host_record",
     "circular",
     -- Сброс накопленных счётчиков удач/неудач хоста. Предусмотрен движком
     -- ровно для нашего случая: состояние ротации меняет не детектор, а человек

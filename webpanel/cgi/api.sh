@@ -244,8 +244,6 @@ case "$method $path" in
         installed=$(is_installed && echo true || echo false)
         running=$(is_running   && echo true || echo false)
         svc_state=$(service_status_string)
-        rst_filter=$(read_flag "RST_FILTER" "$CONFIG_FILE" "0")
-        silent_fb=$(read_flag "RKN_SILENT_FALLBACK" "$CONFIG_FILE" "0")
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
         # UI wants positive "customd_enabled"
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
@@ -266,15 +264,13 @@ case "$method $path" in
         json_header
         # Каждое значение флага — через json_string, а не прямым %s. read_flag
         # снимает только ОКРУЖАЮЩИЕ кавычки, поэтому правленный руками конфиг
-        # (RST_FILTER=0") отдаёт значение, которое рвёт строку JSON. Ломается при
+        # (Z2K_STATS=0") отдаёт значение, которое рвёт строку JSON. Ломается при
         # этом не один тумблер: фронт не разбирает ответ целиком и весь дашборд
         # уходит в «Ошибка». Быстрый путь json_string на "0"/"1" не форкает.
         printf '{"ok":true,"installed":%s,"running":%s,"service":' \
             "${installed:-false}" "${running:-false}"
         json_string "${svc_state:-unknown}"
-        printf ',"toggles":{"rst_filter":';  json_string "${rst_filter:-0}"
-        printf ',"silent_fallback":';        json_string "${silent_fb:-0}"
-        printf ',"game_warp":';              json_string "${game_warp:-0}"
+        printf ',"toggles":{"game_warp":';   json_string "${game_warp:-0}"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
         printf ',"stats":';                  json_string "${stats:-1}"
@@ -324,8 +320,6 @@ case "$method $path" in
         ;;
 
     # ---------- TOGGLES (async — returns job_id) ----------
-    "POST /toggle/rst-filter"|\
-    "POST /toggle/silent-fallback"|\
     "POST /toggle/game-warp"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
@@ -341,8 +335,6 @@ case "$method $path" in
             *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
         esac
         case "$path" in
-            /toggle/rst-filter)      _toggle_fn=toggle_rst_filter;      _label="RST-фильтр" ;;
-            /toggle/silent-fallback) _toggle_fn=toggle_silent_fallback; _label="Silent fallback" ;;
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;

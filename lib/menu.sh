@@ -90,20 +90,8 @@ MENU
                 printf " Текущая стратегия: #%s\n" "$(get_current_strategy)"
             fi
 
-            # Показать статус RST-фильтра и silent fallback
             local rst_config_file="${ZAPRET2_DIR}/config"
             if [ -f "$rst_config_file" ]; then
-                local RST_FILTER
-                RST_FILTER=$(safe_config_read "RST_FILTER" "$rst_config_file" "0")
-                case "$RST_FILTER" in
-                    1|on|true|yes) printf " RST-фильтр: Включен\n" ;;
-                    aggressive|agg|aggro) printf " RST-фильтр: Включен (агрессивный)\n" ;;
-                esac
-                local RKN_SILENT_FALLBACK
-                RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rst_config_file" "0")
-                if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
-                    printf " Silent fallback РКН: Включен\n"
-                fi
                 local Z2K_DYNAMIC_TTL
                 Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$rst_config_file" "1")
                 if [ "$Z2K_DYNAMIC_TTL" = "0" ]; then
@@ -130,8 +118,6 @@ MENU
 [5] Удалить zapret2
 [U] Проверить обновления z2k
 [W] Исключения — домены
-[R] RST-фильтр (пассивный DPI)
-[F] Silent fallback для РКН (осторожно, возможны поломки)
 [E] Игровой режим WARP (Cloudflare-туннель для игр, заблоченных по IP)
 [T] Telegram прокси
 [S] Скрипты custom.d
@@ -169,12 +155,6 @@ MENU
                 ;;
             u|U)
                 menu_check_updates
-                ;;
-            r|R)
-                menu_rst_filter
-                ;;
-            f|F)
-                menu_rkn_silent_fallback
                 ;;
             e|E)
                 menu_game_warp
@@ -759,100 +739,6 @@ menu_check_updates() {
     return 0
 }
 
-# ==============================================================================
-# ПОДМЕНЮ: RST-ФИЛЬТР (ПАССИВНЫЙ DPI)
-# ==============================================================================
-
-menu_rst_filter() {
-    clear_screen
-    print_header "RST-фильтр (пассивный DPI)"
-
-    local config_file="${ZAPRET2_DIR}/config"
-
-    if [ ! -f "$config_file" ]; then
-        print_error "Конфиг не найден: $config_file"
-        print_info "Запустите установку сначала"
-        pause
-        return 1
-    fi
-
-    local RST_FILTER
-    RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
-    local rst_on=0
-    case "$RST_FILTER" in 1|on|true|yes|aggressive|agg|aggro) rst_on=1 ;; esac
-
-    print_separator
-    print_info "Статус: $([ "$rst_on" = "1" ] && echo "Включен ($RST_FILTER)" || echo 'Выключен')"
-    print_separator
-
-    cat <<'SUBMENU'
-
-ТСПУ (DPI провайдера) отправляет поддельные TCP RST пакеты
-раньше реального ответа сервера, чтобы разорвать соединение.
-
-RST-фильтр работает на уровне nfqws и ловит инжекцию через
-три независимые эвристики:
-  • RST до того, как сервер вообще что-то ответил
-  • Несколько RST подряд на одном flow (реальный close = один RST)
-  • TTL не совпадает с TTL предыдущих пакетов сервера
-
-Помогает если сайты разрываются сразу после TLS handshake.
-Не требует дополнительных kernel-модулей.
-
-[1] Включить (нормальный режим)
-[2] Включить агрессивный (узкая TTL-толерантность, выше FP-риск)
-[3] Выключить
-[B] Назад
-
-SUBMENU
-
-    printf "Выберите опцию [1-3,B]: "
-    read_input sub_choice
-
-    _menu_rst_set_and_restart() {
-        local val="$1"
-        set_flag RST_FILTER "$val" "$config_file"
-        if is_zapret2_running; then
-            print_info "Перезапуск сервиса..."
-            "$INIT_SCRIPT" restart
-            print_success "Сервис перезапущен"
-        else
-            print_warning "Сервис не запущен. Запустите через [4] Управление сервисом"
-        fi
-    }
-
-    case "$sub_choice" in
-        1)
-            _menu_rst_set_and_restart "1"
-            print_success "RST-фильтр включен (нормальный режим)"
-            pause
-            ;;
-        2)
-            _menu_rst_set_and_restart "aggressive"
-            print_success "RST-фильтр включен (агрессивный режим)"
-            pause
-            ;;
-        3)
-            if [ "$rst_on" != "1" ]; then
-                print_info "Фильтр уже выключен"
-                pause
-                return 0
-            fi
-            _menu_rst_set_and_restart "0"
-            print_success "RST-фильтр выключен"
-            pause
-            ;;
-
-        b|B)
-            return 0
-            ;;
-
-        *)
-            print_error "Неверный выбор: $sub_choice"
-            pause
-            ;;
-    esac
-}
 
 # ==============================================================================
 # ПОДМЕНЮ: СКРИПТЫ CUSTOM.D
@@ -951,111 +837,6 @@ INFO
     esac
 }
 
-menu_rkn_silent_fallback() {
-    clear_screen
-    print_header "Silent fallback для РКН (осторожно!)"
-
-    local config_file="${ZAPRET2_DIR}/config"
-
-    if [ ! -f "$config_file" ]; then
-        print_error "Конфиг не найден: $config_file"
-        print_info "Запустите установку сначала"
-        pause
-        return 1
-    fi
-
-    local RKN_SILENT_FALLBACK
-    RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
-
-    print_separator
-    print_info "Статус: $([ "$RKN_SILENT_FALLBACK" = "1" ] && echo 'Включен' || echo 'Выключен')"
-    print_separator
-
-    cat <<'SUBMENU'
-
-Детектор «тихих чёрных дыр» для РКН-списков.
-
-Когда DPI молча блокирует соединение (не отвечая RST/alert),
-circular не может определить, что стратегия не работает.
-Silent fallback считает повторные ClientHello без ответа
-за failure и принудительно ротирует стратегию.
-
-По умолчанию включено только для YouTube. Включение для РКН
-может вызвать ложные срабатывания на медленных сайтах — circular
-будет ротировать стратегию когда сайт просто долго отвечает.
-
-[1] Включить  (возможны поломки на медленных сайтах!)
-[2] Выключить
-[B] Назад
-
-SUBMENU
-
-    printf "Выберите опцию [1-2,B]: "
-    read_input sub_choice
-
-    case "$sub_choice" in
-        1)
-            if grep -q '^RKN_SILENT_FALLBACK=' "$config_file"; then
-                sed -i 's/^RKN_SILENT_FALLBACK=.*/RKN_SILENT_FALLBACK=1/' "$config_file"
-            else
-                echo "RKN_SILENT_FALLBACK=1" >> "$config_file"
-            fi
-            print_success "Silent fallback для РКН включен"
-
-            # Создать флаг-файл для Lua
-            local flag_dir="${ZAPRET2_DIR}/extra_strats/cache/autocircular"
-            touch "${flag_dir}/rkn_silent_fallback.flag" 2>/dev/null
-
-            # Перегенерировать конфиг с новыми параметрами circular
-            print_info "Пересоздание конфига..."
-            create_official_config "/opt/zapret2/config"
-
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-                print_success "Сервис перезапущен с silent fallback для РКН"
-            else
-                print_warning "Сервис не запущен. Запустите через [2] Управление сервисом"
-            fi
-
-            pause
-            ;;
-
-        2)
-            if [ "$RKN_SILENT_FALLBACK" != "1" ]; then
-                print_info "Silent fallback уже выключен"
-                pause
-                return 0
-            fi
-
-            sed -i 's/^RKN_SILENT_FALLBACK=.*/RKN_SILENT_FALLBACK=0/' "$config_file"
-            # Удалить флаг-файл
-            rm -f "${ZAPRET2_DIR}/extra_strats/cache/autocircular/rkn_silent_fallback.flag" 2>/dev/null
-            print_success "Silent fallback для РКН выключен"
-
-            # Перегенерировать конфиг
-            print_info "Пересоздание конфига..."
-            create_official_config "/opt/zapret2/config"
-
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-                print_success "Сервис перезапущен"
-            fi
-
-            pause
-            ;;
-
-        b|B)
-            return 0
-            ;;
-
-        *)
-            print_error "Неверный выбор: $sub_choice"
-            pause
-            ;;
-    esac
-}
 
 # ==============================================================================
 # ПОДМЕНЮ: ПОЛИТИКА ДОСТУПА KEENETIC (фильтр трафика по NDM ip policy)

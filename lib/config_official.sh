@@ -1136,12 +1136,15 @@ generate_nfqws2_opt_from_strategies() {
     # - prevent successes from other devices on the same domain from resetting
     #   failure counters via success_detector=z2k_success_no_reset
     #
-    # Used by youtube_tcp (default) and by rkn_tcp's RKN_SILENT_FALLBACK=1
-    # path. The two share the same conservative shape; the rkn_tcp silent
-    # path passes the bundle's byte cap (20000 when
-    # Z2K_USE_MID_STREAM_DETECTOR=1) instead of the youtube default so
-    # the byte-window detector isn't silently blinded past 5.5K when
-    # both flags are on.
+    # Используется только youtube_tcp. Тумблер RKN_SILENT_FALLBACK, водивший
+    # сюда же rkn_tcp, снят 2026-08-17: замер генератора показал, что вся его
+    # разница — добавленный `--payload=tls_client_hello,empty` перед circular,
+    # тогда как в дефолтном пути payload переносится ЗА circular и тот идёт с
+    # `--payload=all` (дефолт движка). all ⊃ {tls_client_hello, empty}, то есть
+    # тумблер обзор не расширял, а сужал. Детектор z2k_silent_drop_detector,
+    # ради которого он назывался silent, срезается z2k_strip_custom_detectors
+    # при Z2K_NATIVE_DETECTORS=1 (дефолт) и в конфиг не попадал ни при ON, ни
+    # при OFF.
     #
     # $2 is the byte cap for the inserted `--in-range=-sN`; default 5556
     # matches the master-compatible layout that youtube_tcp keeps.
@@ -1281,10 +1284,9 @@ generate_nfqws2_opt_from_strategies() {
     #
     # DEFAULT = native (Z2K_NATIVE_DETECTORS unset/1). Set Z2K_NATIVE_DETECTORS=0
     # to restore the legacy custom detectors. The engine's rotation mode is tied
-    # to this automatically: run_nfqws (S99zapret2) exports Z2K_NATIVE_ROTATION
-    # off whenever the generated profiles still carry custom detectors, so the two
-    # never disagree (custom detectors need the r-49 POL offset; native must not
-    # have it). See [project_pure_default_rotation].
+    # Ротация в движке с 18.08.2026 всегда нативная: переключателя режима
+    # больше нет, ветка r-49 снята с вооружения вместе с ним.
+    # См. [project_pure_default_rotation].
     z2k_strip_custom_detectors() {
         printf '%s' "$1" | sed \
             -e 's/:failure_detector=[^: ]*//g' \
@@ -1297,20 +1299,59 @@ generate_nfqws2_opt_from_strategies() {
         youtube_gv_tcp=$(z2k_strip_custom_detectors "$youtube_gv_tcp")
     fi
 
-    # Silent fallback для RKN — включается через меню (флаг-файл).
-    # failure_detection включает в себя manual_layout (--in-range + payload),
-    # поэтому они взаимоисключающие, не накладываются.
-    local rkn_silent_conf="${ZAPRET2_DIR:-/opt/zapret2}/config"
-    local RKN_SILENT_FALLBACK
-    RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$rkn_silent_conf" "0")
-    local rkn_silent_flag="${extra_strats_dir}/cache/autocircular/rkn_silent_fallback.flag"
-    if [ "$RKN_SILENT_FALLBACK" = "1" ]; then
-        rkn_tcp=$(ensure_youtube_tls_failure_detection "$rkn_tcp" "$rkn_in_range_bytes")
-        touch "$rkn_silent_flag" 2>/dev/null
+    # ---- Поправки к штатному детектору (files/lua/z2k-alert.lua) -------------
+    #
+    # ПОСЛЕ среза кастомной проводки, а не до: z2k_strip_custom_detectors
+    # вырезает ЛЮБОЙ :failure_detector=, включая наш. Поставь строку выше — и
+    # она молча исчезнет из конфига, а поведение вернётся к тому, что мы
+    # только что чинили.
+    #
+    # Сам детектор не заменяет штатный, а оборачивает: вызывает
+    # standard_failure_detector и добавляет ровно два отличия, оба измерены на
+    # боевом роутере 2026-08-18 (подробности — в шапке lua-файла):
+    #   1. ретрансмиссию считаем провалом только на ClientHello. Иначе провалом
+    #      становится любая потеря пакета в уже работающей сессии, и рабочая
+    #      страта уезжает при 29 успехах против 3 провалов;
+    #   2. фатальный TLS-алерт до ServerHello считаем провалом. Без этого целый
+    #      класс блокировок (сервер подтверждает ClientHello, отвечает алертом и
+    #      закрывается по FIN) не даёт детектору вообще никакого события, и
+    #      нерабочая страта не ротируется никогда.
+    #
+    # Только rkn_tcp: там живут домены, где этот класс отказа и наблюдается.
+    # yt/gv трогать не начинаем, пока не будет такого же замера по ним.
+    #
+    # Проводка ставится ТОЛЬКО если файл детектора реально лежит на диске.
+    # Без него движок валится в error() на каждом пакете профиля, а это не
+    # «детектор не работает», это «профиль РКН стал пустышкой» — при зелёном
+    # статусе сервиса и без единой жалобы в логе.
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-alert.lua" ]; then
+        rkn_tcp=$(ensure_rkn_failure_detector "$rkn_tcp" "z2k_fail_tls_alert")
     else
-        rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp" "$rkn_in_range_bytes")
-        rm -f "$rkn_silent_flag" 2>/dev/null
+        echo "WARN: lua/z2k-alert.lua отсутствует — rkn_tcp остаётся на чистом штатном детекторе" 1>&2
     fi
+
+    rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp" "$rkn_in_range_bytes")
+
+    # Окно входящих обязано быть выше порога inseq — второй проход.
+    #
+    # Инвариант заведён выше (ensure_circular_in_range, вызовы у объявления
+    # порогов). Тот проход правит только УЖЕ существующий в стратегии токен
+    # `--in-range=-sN`, а в дефолтной поставке его там нет вовсе: окно
+    # вставляют раскладчики (ensure_youtube_tls_*) ниже по коду, и вставляют
+    # константу, ничего не зная про inseq. Гейт оказывался позади события,
+    # которое сторожит.
+    #
+    # Замерено на боевом роутере 2026-08-17 (конфиг сгенерирован кодом, где
+    # первый проход уже был):
+    #   rkn_tcp  --in-range=-s20000  inseq=26000  -> полоса пуста
+    #   yt_tcp   --in-range=-s5556   inseq=18000  -> полоса пуста
+    #   gv_tcp   --in-range=-s26000  inseq=24000  -> ок (константа совпала)
+    #
+    # Прогон после раскладчиков чинит все три разом и держит единственный
+    # источник правды — сам ensure_circular_in_range с его запасом 1500.
+    youtube_tcp=$(ensure_circular_in_range "$youtube_tcp")
+    youtube_gv_tcp=$(ensure_circular_in_range "$youtube_gv_tcp")
+    rkn_tcp=$(ensure_circular_in_range "$rkn_tcp")
 
     # Генерировать NFQWS2_OPT в формате официального config
     local nfqws2_opt_lines=""
@@ -1799,9 +1840,6 @@ create_official_config() {
     fi
 
     # Сохранить пользовательские настройки из существующего конфига
-    local saved_DROP_DPI_RST="0"
-    local saved_RST_FILTER="0"
-    local saved_RKN_SILENT_FALLBACK="0"
     local saved_GAME_WARP_ENABLED="0"
     local saved_TG_PROXY_USER_DISABLED="0"
     local saved_ENABLED="1"
@@ -1831,9 +1869,6 @@ create_official_config() {
     # выключается сам, хуже его отсутствия.
     local saved_Z2K_PANEL_AUTH="0"
     if [ -f "$config_file" ]; then
-        saved_DROP_DPI_RST=$(safe_config_read "DROP_DPI_RST" "$config_file" "0")
-        saved_RST_FILTER=$(safe_config_read "RST_FILTER" "$config_file" "0")
-        saved_RKN_SILENT_FALLBACK=$(safe_config_read "RKN_SILENT_FALLBACK" "$config_file" "0")
         saved_GAME_WARP_ENABLED=$(safe_config_read "GAME_WARP_ENABLED" "$config_file" "0")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
         # ENABLED — master service on/off gate (read by S99zapret2.new start()).
@@ -1901,7 +1936,14 @@ create_official_config() {
     # NFQUEUE pressure on embedded routers.
     local nfqws2_tcp_pkt_in="10"
     if [ "$saved_Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
-        nfqws2_tcp_pkt_in="30"
+        # 50, а не 30. Замерено на боевом роутере 2026-08-18: при 30 пакетах
+        # ответа наблюдение обрывается примерно на 20 КБ (первые пакеты потока
+        # мелкие — записи рукопожатия, кадры HTTP/2), а порог успеха inseq у
+        # rkn_tcp стоит на 26000. Успех не срабатывал НИ РАЗУ, то есть счётчик
+        # провалов было нечем обнулять. С 50 глубина дошла до 26849 и успех
+        # наконец сработал. Цена того же прогона: +28% пакетов в очередь, +9%
+        # процессорного времени, дропов 0, RSS без изменений.
+        nfqws2_tcp_pkt_in="50"
     fi
 
     # Создать полный config файл
@@ -2150,18 +2192,6 @@ CONFIG
 
     # Append settings that need variable expansion (heredoc with quotes doesn't expand)
     cat >> "$config_file" <<EOF
-
-# Passive DPI RST filter: drop injected TCP RST with IP ID 0x0-0xF
-DROP_DPI_RST=${saved_DROP_DPI_RST}
-
-# z2k nfqws2 C-level RST filter. Default 0 matches master behavior.
-# Enable only for ISPs where injected RSTs are confirmed and legitimate
-# pre-payload RSTs are not being dropped.
-# Values: 0, 1, aggressive, agg, aggro
-RST_FILTER=${saved_RST_FILTER}
-
-# Silent fallback for RKN
-RKN_SILENT_FALLBACK=${saved_RKN_SILENT_FALLBACK}
 
 # Game WARP mode — route game-server ipset through Cloudflare WARP (usque/MASQUE);
 # engine is z2k-warp.sh. Toggled from the webpanel / menu [E].
