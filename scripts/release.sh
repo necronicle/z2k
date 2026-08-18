@@ -260,8 +260,14 @@ fi
 # такое присваивание молча валит весь скрипт без единого сообщения die. Тот
 # же класс бага, что уже ловился на _reinstall_changed чуть выше — там
 # ловушка была в while-цикле, здесь — в голом grep на конце пайпа.
+# mtproxy-client/mtproxy-client исключён намеренно: это локальный артефакт
+# `go build` без -o (имя = имя каталога модуля), а не исходник и не поставка.
+# Он один раз уехал в репозиторий с релизным коммитом, в r-77 удалён и внесён
+# в .gitignore. Его УДАЛЕНИЕ не может рассинхронизировать builds/, но гейт
+# считал любой путь под mtproxy-client/ поводом требовать секрет сборки.
 _mtproxy_changed=$(git diff --name-only "$PREV_REF"..HEAD \
-    | grep -E '^mtproxy-client/|^build-matrix\.tsv$' || true)
+    | grep -E '^mtproxy-client/|^build-matrix\.tsv$' \
+    | grep -vx 'mtproxy-client/mtproxy-client' || true)
 if [ -n "$_mtproxy_changed" ]; then
     [ -n "${Z2K_TUNNEL_SECRET:-}" ] || die "mtproxy-client ($(printf '%s' "$_mtproxy_changed" | tr '\n' ' ')) изменился, но Z2K_TUNNEL_SECRET не задан —
      нечем пересобрать и свериться с тем, что реально лежит в builds/.
