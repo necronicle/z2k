@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 23,
-  "current": "r-77.1",
+  "seq": 22,
+  "current": "r-77",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "bc837006b9ba6d65dbbfbc0810ca0cbfbe06d4bf57db76c3ec21bbe09545f332",
+  "files/S99zapret2.new": "0df86b96f4d5f1cc155852e2ffa86829a8c0e8d9e59b39db3c3740a4d6ba28e4",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/4pda.bin": "eefeaf09dde8d69b1f176212541f63c68b314a33a335eced99a8a29f17254da8",
@@ -38,7 +38,6 @@
   "files/init.d/S98z2k-detect": "14d282d28264c2b2b7cac20ae577f6a6bc1b013f8d47bc8e7f55809797f34bb2",
   "files/init.d/S99z2k-scheduler": "402742731b523ddf050c1f3e74b09e90b3a1254e0b139d5076d2ce9ac537d149",
   "files/lists/cf_extra_check_ips.txt": "79ffc4803151f5ded1de96d7dc1ecaba37ec2e4b2bb7985cecf8c7ff8da68975",
-  "files/lists/cloudflare-ranges.txt": "b7533fdba4a7831837de3e58cc68e6ce59dbecc786e268d657e1c033ae0f9068",
   "files/lists/extra-domains.txt": "744c86618b146e9f709235a58560285eb5f7e455eab842cce55d1d191e96f6f5",
   "files/lists/extra_strats/TCP/RKN/Discord.txt": "a56b277a06466c6a6152d7a48c17010629ae6f50c038a55b9d3889202bc9a7f1",
   "files/lists/extra_strats/TCP/RKN/List.txt": "e8c04588571fc5fbd798c255c5d39ac34af9855d86802f2dfbca97e5f3f251b2",
@@ -51,11 +50,10 @@
   "files/lists/telegram_ips.txt": "e6a64d3224dc507f6b9faf50dadf7f1594f056de5a1d5b2f02fd8f5d880851b8",
   "files/lists/youtube_ips.txt": "e3118339de975d0a13c17c0cbb99e4f968a217dd579f30f94f71bd37cd2180e7",
   "files/lists/youtube_ips6.txt": "d51f5e44b989b503729ae35b79cf80adf7e47ac96fde42d785e0ba6e501c28cb",
-  "files/lua/z2k-alert.lua": "33b3c1ee1a6af2ca5cd57a363322c705817ffe0a8844061655828292b335dff2",
+  "files/lua/z2k-alert.lua": "1323b675a7ecd41c74d7c72092061aec83c97fc13b7665e229b7a8a800a0c128",
   "files/lua/z2k-detectors.lua": "c7702b2f1adb007176fe25ebe25cfedfd24827891e7883477340479fadf3eac4",
   "files/lua/z2k-fooling-ext.lua": "4b5efb6672f54dbe4d04440066f06e84d92e43c8534cdfb88d136028e6d8231f",
   "files/lua/z2k-modern-core.lua": "5f4b5312e69447b887d868be74b756d103515eca59765f9155a358bf96da08c7",
-  "files/lua/z2k-quic-silence.lua": "3080b592cee163c99eb60ebc1a074fd66f5d04d822821d066a358c455e50dde3",
   "files/lua/z2k-range-rand.lua": "073c24d9133484b9f2282f1e398b5963eb577b483c1cab8c29cfd6e7bf8acd9a",
   "files/lua/z2k-state-persist.lua": "fa4cd3fc83449b1d85e92e75848109cc03340343af87fc014ced423bd9574219",
   "files/ndm/90-z2k-tg-redirect.sh": "ca6de843d4fd820a58ad0fc76566b7640011d7f6161d31b5b84720197f0fe19a",
@@ -72,7 +70,7 @@
   "files/z2k-diag.sh": "2c34a0ae7dedb3bd72cd5818352c60750dfbfcacfa0922325b6625ba2c153b24",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "4e6b35c7784511bb83104adcef39b0a9d91940ea068bbaff7597cf0167eac90f",
-  "files/z2k-insta-ip-refresh.sh": "fb136112dee28417282c7bfcd38465de045ca21ae089ea789a0f97321d5c75d7",
+  "files/z2k-insta-ip-refresh.sh": "01a1b7bf28c7850a1db934f4e8dadb46ccd70ff3a3beb5a1c227104daab86320",
   "files/z2k-nfqueue-selfheal.sh": "f170f69077da716473ef2a8ec63381bd6eb4e55316104924a36e784dcfb2a63c",
   "files/z2k-ppe-deoffload.sh": "2e17688dc5de388fe95fbfc36b49b0c71485537faac7de639e17560006b43ced",
   "files/z2k-scheduler.sh": "23399c160354fc9410ba5b3571b748a45e7982be9b17df5d4b3f6c9df485acd6",
@@ -83,9 +81,9 @@
   "files/z2k-warp.sh": "6858b475fb4e05eecd7e8df2c9b161d964338df34bf4096cdb75e7abfa649ca2",
   "lib/auto_update.sh": "40e0a03f740d9d43bc59d4f47fa7149d8e80e3819d7873dbceae7b4e47e1ee54",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
-  "lib/config_official.sh": "2f390ddb5b680c6db4943efbf04d33492bb4487980e6d413ac1650ec605f329e",
-  "lib/install.sh": "8d60b72a1be5147e82becc66c315137b36460da6dea0873bbb970bf8500de6e8",
-  "lib/menu.sh": "8e3bf1d3f6e68298b1b0c1ef8fb8ab956b4ae86918eaa79508bd8309ffe101e8",
+  "lib/config_official.sh": "89ff57dfdd81c298b600a2b7b09accf0cbfb9a1e5f1152f729c54200331a9c6a",
+  "lib/install.sh": "a0fbe59ff68928349b42a2eeed590f1e9d24ba4d2e459d5d2f17b78b67d6d726",
+  "lib/menu.sh": "aaacc5ceed123f102d06d9ca881358567ef23dc1eaffcbefefe54dcc45c2ba02",
   "lib/strategies.sh": "e9eaa6ba09458d3841c91bc8756aef32133e26126e8d0e5b3359831113f92484",
   "lib/utils.sh": "8fb1955587e7ce02d48ad5f8cd92ae227b8bf6cd7912be66b77d50714954a233",
   "lib/webpanel.sh": "c26cc1e1af535539ab6706d6946888770ca0b89ccc2772a23ee6d50504244e82",
@@ -121,7 +119,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "5a0dc6cc72af545c9240a5a6fa72b67123ad7f7ddaefe911b8461f767be87edc",
+  "webpanel/www/index.html": "6d4a89d72b09afe06588f400781f6ed6ab318b2f5f9cac3ffa34818ad841cbdc",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -130,7 +128,7 @@
   "webpanel/www/js/core/loadorder.js": "ba986ce2d61c9cc9e73c032a4553ff8f22247573bace4e2933766fdcb096545e",
   "webpanel/www/js/core/toast.js": "2fdf1025826a4db97484ac702ff907ef280736d3a4d2639398182b9ef4cf4b2a",
   "webpanel/www/js/job.js": "da0832ecbb70861fa26d17008d5df9fbb69d240869771522bb8f9408f205365b",
-  "webpanel/www/js/pages/credits.js": "0e554f68313beb93434cafe82d294f99bc557f326ccb0c46a1cd0e96fae8a1c6",
+  "webpanel/www/js/pages/credits.js": "ac5bb6375a68fa665f2f55a28eb7b4390633713ceca55f7cfb5be0d62f40c29f",
   "webpanel/www/js/pages/dashboard.js": "8d4a142cff54cb919f0b142a40c306df34728a94075240624a3d09b4ea5c6840",
   "webpanel/www/js/pages/diag.js": "1e40f55eb5f130e638141bc42ea4cf56f9de5c2ef78fd67d13248768a3e27d8e",
   "webpanel/www/js/pages/exclude.js": "e504ab23d951a99ef56c220a19fecc1cb9e689f59f547e1b20284100319ecd39",
@@ -144,7 +142,7 @@
   "webpanel/www/js/router.js": "b5a5a74b16bd51919bf9266f11871f6aed62a1828bd5891a13b1bf2e5cf951ed",
   "webpanel/www/js/state-model.js": "5c45e8aa73857dd453c011fa4c533c8b8e9a6acecba97f37b7d6a90d63896405",
   "webpanel/www/style.css": "6c9079eb073b400a4c79d382323283fec9b83847ff5eb81e9215cdb050713d9a",
-  "z2k.sh": "b32e6a16fe4574091aab9f85e31e9dd4e2a22799b1c503329767393b76c00420"
+  "z2k.sh": "2b24cbb8efe5f1a445fc0ebea806acc162f185552ff523213646851e5d4b18f0"
   },
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
@@ -319,7 +317,6 @@
 {"v": "r-75.17", "type": "reinstall", "ts": "2026-08-14T10:14:49Z", "ref": "r-75.17", "desc": "Адрес, порт и IPv6 веб-панели, заданные вручную, больше не сбрасываются при обновлении. Если вы ничего не меняли, адрес по-прежнему определяется автоматически.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "lib/webpanel.sh", "webpanel/install.sh", "UPDATES.json"]},
 {"v": "r-76.1", "type": "reinstall", "ts": "2026-08-15T19:35:56Z", "ref": "r-76.1", "desc": "Ответ «отмена» или «нет» на вопрос с подтверждением больше не принимается за согласие: раньше на роутере некоторые слова читались как «да». Имя политики Keenetic кириллицей теперь сохраняется, а переключатели в панели не сбрасываются обратно, если нажать несколько подряд. Обновление больше не сообщает об успехе, когда часть файлов установить не удалось.", "changed_files": ["files/S99zapret2.new", "files/init.d/S97z2k-http-tunnel", "files/lua/z2k-detectors.lua", "files/lua/z2k-state-persist.lua", "files/z2k-blocked-monitor.sh", "files/z2k-config-validator.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/config.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/install.sh", "webpanel/www/app.js", "webpanel/www/index.html", "webpanel/www/js/chrome.js", "webpanel/www/js/core/api.js", "webpanel/www/js/core/auth.js", "webpanel/www/js/core/clipboard.js", "webpanel/www/js/core/dom.js", "webpanel/www/js/core/loadorder.js", "webpanel/www/js/core/toast.js", "webpanel/www/js/job.js", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/dashboard.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/exclude.js", "webpanel/www/js/pages/extra-domains.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/telemetry.js", "webpanel/www/js/pages/toggles.js", "webpanel/www/js/pages/update.js", "webpanel/www/js/pages/warp.js", "webpanel/www/js/router.js", "webpanel/www/js/state-model.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"]},
 {"v": "r-76.2", "type": "reinstall", "ts": "2026-08-17T08:39:31Z", "ref": "r-76.2", "desc": "Телеграм у части людей не подключался вовсе: клиент бесконечно стучался в сервер способом, который тот больше не принимает. Домены, которые обход нашёл сам, больше не пропадают при обновлении. Режим самостоятельного поиска заблокированных доменов раньше включался только на словах — теперь он действительно работает.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-state-persist.lua", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "lib/config_official.sh", "lib/install.sh", "lib/strategies.sh", "webpanel/cgi/actions.sh", "UPDATES.json"]},
-{"v": "r-77", "type": "reinstall", "ts": "2026-08-18T09:34:21Z", "ref": "r-77", "desc": "Подбор стратегии стал умнее: он видит блокировки, которые раньше пропускал молча, и больше не сбрасывает рабочую настройку из-за случайной потери пакета или поддельного разрыва соединения. Из меню и панели убраны два старых переключателя, от которых давно был только вред.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/z2k-diag.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/loadorder.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"]},
-{"v": "r-77.1", "type": "reinstall", "ts": "2026-08-19T11:27:23Z", "ref": "r-77.1", "desc": "Кнопка отключения автообновлений больше не включается сама. 4PDA снова открывается. Подбор рабочей настройки для видео и картинок YouTube теперь действительно срабатывает — раньше он в части случаев молча стоял на месте.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/cloudflare-ranges.txt", "files/lua/z2k-alert.lua", "files/lua/z2k-quic-silence.lua", "files/z2k-insta-ip-refresh.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "z2k.sh", "UPDATES.json"]}
+{"v": "r-77", "type": "reinstall", "ts": "2026-08-18T09:34:21Z", "ref": "r-77", "desc": "Подбор стратегии стал умнее: он видит блокировки, которые раньше пропускал молча, и больше не сбрасывает рабочую настройку из-за случайной потери пакета или поддельного разрыва соединения. Из меню и панели убраны два старых переключателя, от которых давно был только вред.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/z2k-diag.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/loadorder.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"]}
   ]
 }
