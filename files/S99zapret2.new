@@ -446,9 +446,28 @@ Z2K_TRAFFIC_DEBUG=0
 Z2K_TRAFFIC_DEBUG_BASE=""
 Z2K_TRAFFIC_DEBUG_PIDFILE=""
 
+# Куда пишется отладка. ВЫВОД ИДЁТ В tmpfs, НЕ НА ФЛЕШКУ.
+#
+# Раньше лог лежал в extra_strats/cache/traffic, то есть прямо в /opt на USB.
+# Замер 2026-08-19: за 17 часов включённой отладки файл вырос до 475 МБ
+# непрерывных мелких дописываний. Штатная работа такой нагрузки не создаёт
+# никогда — это единственный источник интенсивной записи на носитель, и живёт
+# он ровно столько, сколько длится сеанс отладки.
+#
+# Флаг включения debug.flag остаётся на флешке: он переживает перезагрузку, и
+# его руками ставит человек. А результат — в память.
+Z2K_TRAFFIC_DEBUG_FLAGDIR="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic"
+Z2K_TRAFFIC_DEBUG_TMPDIR="/tmp/z2k-traffic-debug"
+
+# Сколько мегабайт отладочного лога держим. /tmp это RAM, а её на роутере 500 МБ:
+# без потолка один забытый на ночь debug.flag съест память и получит OOM вместо
+# данных. Уборкой занимается traffic_debug_rotate ниже.
+Z2K_TRAFFIC_DEBUG_MAXMB="${Z2K_TRAFFIC_DEBUG_MAXMB:-64}"
+
 ensure_traffic_debug_files()
 {
-	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic"
+	local base="$Z2K_TRAFFIC_DEBUG_TMPDIR"
+	mkdir -p "$Z2K_TRAFFIC_DEBUG_FLAGDIR" 2>/dev/null || true
 	mkdir -p "$base" || return 1
 	chmod 755 "$base" 2>/dev/null || true
 	chown nobody "$base" 2>/dev/null || true
@@ -461,18 +480,38 @@ ensure_traffic_debug_files()
 	chmod 644 "$base/tcpdump.err.log" 2>/dev/null || true
 	chown nobody "$base/tcpdump.err.log" 2>/dev/null || true
 
-	# Optional toggle file; keep if present and readable.
-	[ -f "$base/debug.flag" ] && chmod 644 "$base/debug.flag" 2>/dev/null || true
-	[ -f "$base/debug.flag" ] && chown nobody "$base/debug.flag" 2>/dev/null || true
+	# Флаг включения — на флешке, чтобы пережить перезагрузку.
+	local flag="$Z2K_TRAFFIC_DEBUG_FLAGDIR/debug.flag"
+	[ -f "$flag" ] && chmod 644 "$flag" 2>/dev/null || true
+	[ -f "$flag" ] && chown nobody "$flag" 2>/dev/null || true
+}
+
+# Обрезать лог, если он перерос потолок. Именно обрезать на месте (>), а не
+# удалять: nfqws2 держит файл открытым, и удаление оставило бы его писать в
+# отвязанный инод — место в tmpfs не освободится, а данные пропадут.
+traffic_debug_rotate()
+{
+	[ "$Z2K_TRAFFIC_DEBUG" = "1" ] || return 0
+	local f="$Z2K_TRAFFIC_DEBUG_TMPDIR/nfqws2.debug.log"
+	[ -f "$f" ] || return 0
+
+	local kb
+	kb=$(du -k "$f" 2>/dev/null | awk '{print $1}')
+	[ -n "$kb" ] || return 0
+	[ "$kb" -gt $((Z2K_TRAFFIC_DEBUG_MAXMB * 1024)) ] 2>/dev/null || return 0
+
+	: > "$f"
+	echo "z2k: отладочный лог превысил ${Z2K_TRAFFIC_DEBUG_MAXMB}МБ и обрезан" >> "$f"
 }
 
 traffic_debug_prepare()
 {
-	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic"
+	local base="$Z2K_TRAFFIC_DEBUG_TMPDIR"
 	Z2K_TRAFFIC_DEBUG_BASE="$base"
 	Z2K_TRAFFIC_DEBUG_PIDFILE="$base/tcpdump.pid"
 
-	if [ -f "$base/debug.flag" ]; then
+	# Флаг ищем на флешке — он должен переживать перезагрузку.
+	if [ -f "$Z2K_TRAFFIC_DEBUG_FLAGDIR/debug.flag" ]; then
 		Z2K_TRAFFIC_DEBUG=1
 	else
 		Z2K_TRAFFIC_DEBUG=0
@@ -618,7 +657,7 @@ traffic_debug_tcpdump_start()
 
 traffic_debug_tcpdump_stop()
 {
-	local pidfile="${Z2K_TRAFFIC_DEBUG_PIDFILE:-${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/traffic/tcpdump.pid}"
+	local pidfile="${Z2K_TRAFFIC_DEBUG_PIDFILE:-$Z2K_TRAFFIC_DEBUG_TMPDIR/tcpdump.pid}"
 	[ -f "$pidfile" ] || return 0
 
 	local pid
@@ -2329,6 +2368,7 @@ start()
     # traffic debug (optional): nfqws2 debug log + tcpdump pcap capture
     ensure_traffic_debug_files
     traffic_debug_prepare
+    traffic_debug_rotate
     traffic_debug_enable_nfqws2_log
     traffic_debug_tcpdump_start
 
