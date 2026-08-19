@@ -2,6 +2,14 @@
 # lib/config_official.sh - Генерация официального config файла для zapret2
 # Адаптировано для z2k с multi-profile стратегиями
 
+# Окно перехвата UDP — сколько пакетов потока уходит в очередь.
+# Обоснование значений — у места, где они попадают в config (ищи
+# NFQWS2_UDP_PKT_OUT). Здесь они лежат на уровне файла, а не внутри функции,
+# потому что их читают две разные: одна строит стратегии и сверяет с ними
+# пороги детекторов, другая пишет config.
+Z2K_UDP_PKT_OUT="8"
+Z2K_UDP_PKT_IN="8"
+
 # ==============================================================================
 # ГЕНЕРАЦИЯ NFQWS2_OPT ИЗ СТРАТЕГИЙ Z2K
 # ==============================================================================
@@ -174,14 +182,35 @@ generate_nfqws2_opt_from_strategies() {
     # first; experimental z2k morphs demoted to the tail (slots 11-13). This inline is
     # only the cold-start default — extra_strats/UDP/YT/Strategy.txt (from quic_strats.ini)
     # overrides it on any real install (see below). key=yt_quic stable key; nld=2 cuts CDN churn.
-    # udp_in=8 (was 1, 2026-06-08): a blocked-but-responding QUIC flow leaks 2-3 handshake
-    # packets; at udp_in=1 the native success_detector (pos_in>udp_in) latched those as
-    # "success" → crec.nocheck → host stuck on its strategy, never rotates (field: QUIC
-    # "не двигается" on many routers). At udp_in=8 success no longer latches on those few
-    # packets, and failure (pos_out>=4 = client retransmits the QUIC Initial = blocked)
-    # drives rotation; a genuinely working flow gets a response without retransmitting
-    # (pos_out<4) so it never false-rotates. Same change mirrored in quic_strats.ini.
-    quic_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=8:udp_out=4:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=1 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=1 --lua-desync=drop:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=2 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=2 --lua-desync=drop:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=6 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=8 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=8 --lua-desync=drop:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=9 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=9 --lua-desync=drop:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=10 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=11 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=12 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=13"
+    # udp_in=3, udp_out=5 (было 8/4 с 2026-06-08, до того 1/4).
+    #
+    # Замер 2026-08-19, 1646 QUIC-потоков из журнала боевого роутера разбил
+    # посылку, на которой стояла июньская правка. Мёртвый QUIC-поток шлёт
+    # МЕНЬШЕ пакетов, чем живой, а не больше: браузер не долбится в стену, а
+    # отправляет Initial, ждёт и откатывается на TCP:
+    #     мёртвые (402):  1 пакет 57, 2 пакета 222, 3+ — остальные
+    #     живые (1239):  до третьего входящего успевают отправить 2-5
+    # Значит «pos_out>=N = клиент ретрансмитит Initial = блокировка» неверно, и
+    # порогом по числу исходящих эти два класса не разделяются вообще.
+    #
+    # Спасает схему только сброс счётчика по успеху: ротация идёт, только если три
+    # провала подряд не разбавлены ни одним успехом. При udp_in=8 успех не
+    # срабатывает практически никогда — тормоза нет. Симуляция счётчика на том же
+    # журнале (трафик был здоровый, 235 живых потоков из 237):
+    #     udp_in=8 udp_out=4  ->  15 ротаций, 58 ложных провалов,   1 успех
+    #     udp_in=3 udp_out=5  ->   1 ротация,   7 ложных провалов, 228 успехов
+    # (оценка ротаций нижняя: группировка шла по серверному IP, а реальный ключ
+    #  nld=2 объединяет все IP одного домена, там серии длиннее)
+    #
+    # udp_in=3 — успех требует четырёх входящих. Выше «просочившихся 2-3
+    # пакетов», из-за которых правили в июне, и ниже реального ответа сервера:
+    # распределение входящих бимодальное (0 либо >=3, полоса 1-2 пуста).
+    # udp_out=5 — компромисс там, где разделения нет: 21% отлова мёртвых против
+    # 5,5% у шестёрки при том же числе ложных срабатываний.
+    #
+    # Оба порога обязаны лежать ниже окна перехвата NFQWS2_UDP_PKT_IN/OUT —
+    # см. комментарий там же. Same change mirrored in quic_strats.ini.
+    quic_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=3:udp_out=5:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=1 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=1 --lua-desync=drop:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=2 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=2 --lua-desync=drop:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=6 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=8 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=8 --lua-desync=drop:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=9 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=9 --lua-desync=drop:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=10 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=11 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=12 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=13"
 
     # If category strategy files exist, prefer them over hardcoded QUIC defaults.
     _cs=$(z2k_custom_strategy yt_quic) && [ -n "$_cs" ] && quic_udp="$_cs"
@@ -411,6 +440,38 @@ generate_nfqws2_opt_from_strategies() {
     }
     youtube_tcp=$(ensure_l7_unknown "$youtube_tcp")
     youtube_gv_tcp=$(ensure_l7_unknown "$youtube_gv_tcp")
+
+    # Инвариант для UDP: пороги детекторов обязаны лежать НИЖЕ окна перехвата.
+    #
+    # Для TCP такая сверка есть с самого начала (ensure_circular_in_range ниже
+    # держит --in-range выше inseq). На UDP её не распространили, и это стоило
+    # нам двух месяцев ротации по шуму: udp_in=8 при окне в 3 входящих пакета
+    # означает, что успех недостижим, счётчик неудач нечем сбросить, и страта
+    # уезжает на полностью здоровом трафике.
+    #
+    # Мануал, «Обслуживание позиций»: «Счетчик не может и не будет считать то,
+    # что не перехватывается». Ошибка молчаливая — ни в логе, ни в статусе она
+    # никак не видна, поэтому проверяем на этапе генерации.
+    check_udp_thresholds() {
+        local pool="$1" tok in_thr out_thr
+        for tok in $2; do
+            case "$tok" in
+                --lua-desync=circular:*)
+                    case "$tok" in *:udp_in=*) in_thr="${tok##*:udp_in=}"; in_thr="${in_thr%%:*}" ;; *) in_thr="" ;; esac
+                    case "$tok" in *:udp_out=*) out_thr="${tok##*:udp_out=}"; out_thr="${out_thr%%:*}" ;; *) out_thr="" ;; esac
+                    # Успех срабатывает на пакете udp_in+1 — окно должно его застать.
+                    if [ -n "$in_thr" ] && [ "$in_thr" -ge "$Z2K_UDP_PKT_IN" ] 2>/dev/null; then
+                        echo "WARN: $pool: udp_in=$in_thr не ниже окна NFQWS2_UDP_PKT_IN=$Z2K_UDP_PKT_IN — успех недостижим, ротация пойдёт по шуму" 1>&2
+                    fi
+                    if [ -n "$out_thr" ] && [ "$out_thr" -gt "$Z2K_UDP_PKT_OUT" ] 2>/dev/null; then
+                        echo "WARN: $pool: udp_out=$out_thr выше окна NFQWS2_UDP_PKT_OUT=$Z2K_UDP_PKT_OUT — провал недостижим" 1>&2
+                    fi
+                    ;;
+            esac
+        done
+    }
+    check_udp_thresholds yt_quic "$quic_udp"
+    check_udp_thresholds discord_udp "$discord_udp"
 
     youtube_tcp=$(ensure_circular_in_range "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_in_range "$youtube_gv_tcp")
@@ -2078,8 +2139,32 @@ NFQWS2_PORTS_UDP_KEEPALIVE=""
 # Official zapret2 defaults: TCP_PKT_OUT=20, UDP_PKT_OUT=5
 NFQWS2_TCP_PKT_OUT="20"
 NFQWS2_TCP_PKT_IN="${nfqws2_tcp_pkt_in}"
-NFQWS2_UDP_PKT_OUT="5"
-NFQWS2_UDP_PKT_IN="3"
+# UDP-окно: 8/8 вместо апстримных 5/3.
+#
+# Замер 2026-08-19 на боевом роутере, 1646 QUIC-потоков. Окно в 3 входящих
+# НЕ ДЕРЖИТ: в журнале есть потоки с семью и более входящими, дошедшими до
+# демона. Причина — kernel-conntrack по UDP протухает за 30 секунд, запись
+# пересоздаётся, connbytes считает заново, а собственный ctrack демона живёт
+# 60 секунд (CTRACK_T_UDP) и продолжает копить. То есть счётчики у нас
+# работают благодаря протуханию conntrack, а не вопреки ему.
+#
+# Полагаться на это нельзя: на роутере с другими таймаутами окно окажется
+# жёстким потолком в 3 пакета, и порог успеха udp_in станет недостижим —
+# получим ровно тот баг, который здесь и чиним (успех не срабатывает никогда,
+# провалы копятся без сброса, страта ротируется на здоровом трафике).
+#
+# Мануал, «Обслуживание позиций»: «Счетчик не может и не будет считать то,
+# что не перехватывается», и там же у детекторов: «требуют перенаправления
+# входящего и исходящего трафика в объеме, необходимом для срабатывания их
+# критериев». В собственном примере правил перехвата мануал ставит
+# MAX_PKT_IN=15 и MAX_PKT_OUT=15 одинаково для TCP и UDP, так что 8 —
+# осторожная величина, а не смелая. TCP у нас давно 50/20.
+#
+# Инвариант, который обязан держаться: окно > порога детектора.
+#   yt_quic   udp_in=3 udp_out=5   -> нужно >=6, ставим 8
+#   discord   udp_in=1 udp_out=4   -> нужно >=5, ставим 8
+NFQWS2_UDP_PKT_OUT="${Z2K_UDP_PKT_OUT}"
+NFQWS2_UDP_PKT_IN="${Z2K_UDP_PKT_IN}"
 
 # ==============================================================================
 # NFQWS2 OPTIONS (MULTI-PROFILE MODE)

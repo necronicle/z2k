@@ -1025,12 +1025,13 @@ assert_contains     "docalign: discord payload=discord_ip_discovery,stun" \
 assert_not_contains "docalign: discord no stale quic_initial gate" \
                     "--payload=quic_initial"                    "$DISCORD_ARM_DOC"
 
-# yt_quic udp_in 1->8: QUIC blocked-but-responding rotation fix (2026-06-08).
-# At udp_in=1 the native success_detector latched the 2-3 leaked handshake packets
-# as success → stuck; udp_in=8 lets failure (pos_out>=4) drive rotation.
+# yt_quic 8/4 -> 3/5 (2026-08-19). Замер 1646 QUIC-потоков: при udp_in=8 порог
+# успеха лежит ВЫШЕ окна перехвата, успех недостижим (1 на 237 потоков), счётчик
+# неудач нечем сбросить — симуляция даёт 15 ротаций на здоровом трафике. Порог
+# успеха обязан быть ниже окна, это же сторожит tests/test_udp_detector_window.sh.
 YT_QUIC_DOC=$(printf '%s\n' "$OUT_DOC" | grep -F 'key=yt_quic' | head -1)
-assert_contains     "docalign: yt_quic udp_in=8"          "udp_in=8:udp_out=4:key=yt_quic" "$YT_QUIC_DOC"
-assert_not_contains "docalign: yt_quic no stale udp_in=1" "udp_in=1:udp_out=4:key=yt_quic" "$YT_QUIC_DOC"
+assert_contains     "docalign: yt_quic udp_in=3 udp_out=5" "udp_in=3:udp_out=5:key=yt_quic" "$YT_QUIC_DOC"
+assert_not_contains "docalign: yt_quic без старого udp_in=8" "udp_in=8:" "$YT_QUIC_DOC"
 
 printf "\n--- corrupt pool Strategy.txt: fail closed, keep old config (field 2026-08-06) ---\n"
 
