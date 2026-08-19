@@ -8,6 +8,11 @@ max_line_length = false
 globals = {
     -- Desync action entry points (registered by z2k)
     "z2k_fail_tls_alert",
+    -- Детектор молчания QUIC и его таймер-функция (files/lua/z2k-quic-silence.lua).
+    -- Обе объявляются глобально намеренно: движок ищет detector по имени в _G,
+    -- а таймер-функцию — по строке, переданной в timer_set.
+    "z2k_fail_quic_silence",
+    "z2k_quic_silence_timer",
     "z2k_tls_alert_fatal",
     "z2k_tls_stalled",
     "z2k_mid_stream_stall",
@@ -35,6 +40,9 @@ globals = {
     -- (пин/выбор стратегии в панели). Зовём через гейт на существование, так
     -- что на старом движке без него ничего не ломается.
     "automate_failure_counter_reset",
+    -- Счётчик неудач хоста. Из таймера вызывается штатно: ему нужны только
+    -- hrec/crec и os.time(), никакого desync (lua/zapret-auto.lua).
+    "automate_failure_counter",
     -- z2k-modern-core.lua hostkey fn (returns "nohost" for IP/no-hostname flows)
     "z2k_nohost_key",
     -- z2k-state-persist.lua exported API table
@@ -123,7 +131,9 @@ read_globals = {
     "instance_cutoff",
     "resolve_multi_pos",
     "delete_pos_1",
+    "dis_timer_name",     -- nfqws2: имя по пятёрке адрес-порт для таймеров (lua/zapret-lib.lua)
     "is_retransmission",  -- nfqws2: пакет не выше уже виденного максимума позиции (lua/zapret-lib.lua)
+    "timer_set",          -- nfqws2: завести таймер, timer_set(name, func, period_ms, oneshot, data)
     "pos_get",       -- nfqws2 byte/datagram counter accessor: pos_get(desync, mode[, reverse]) — manual §pos_get
     "pos_get_pos",   -- sibling: pos_get_pos(track_pos, mode)
     "rawsend_opts",

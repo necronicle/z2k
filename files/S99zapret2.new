@@ -732,6 +732,13 @@ LUA_Z2K_DETECTORS="$ZAPRET_BASE/lua/z2k-detectors.lua"
 # Грузится ПОСЛЕ zapret-auto.lua (нужны standard_failure_detector и pos_get).
 LUA_Z2K_ALERT="$ZAPRET_BASE/lua/z2k-alert.lua"
 [ -f "$LUA_Z2K_ALERT" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_ALERT"
+
+# Детектор молчания QUIC. Грузится отдельным файлом по той же схеме и с той же
+# проверкой на существование: без файла профиль с failure_detector= валился бы
+# в error на каждом пакете, а это не «детектор не работает», а «пул стал
+# пустышкой» при зелёном статусе сервиса.
+LUA_Z2K_QUIC_SILENCE="$ZAPRET_BASE/lua/z2k-quic-silence.lua"
+[ -f "$LUA_Z2K_QUIC_SILENCE" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_QUIC_SILENCE"
 # Phase 6: z2k-fooling-ext.lua exports anti-ТСПУ fool functions like
 # z2k_dynamic_ttl, referenced by strategies via `fool=<name>` arg. Must
 # load after zapret-lib.lua (provides apply_fooling's extension point)

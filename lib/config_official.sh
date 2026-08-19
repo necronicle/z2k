@@ -1411,6 +1411,19 @@ generate_nfqws2_opt_from_strategies() {
         echo "WARN: lua/z2k-alert.lua отсутствует — детекторы остаются чисто штатными" 1>&2
     fi
 
+    # QUIC — детектор по молчанию, отдельным файлом и отдельным гейтом.
+    #
+    # Штатный детектор для QUIC не работает в принципе: он считает провалом
+    # «отослано много, принято мало», а мёртвый QUIC-поток шлёт МЕНЬШЕ пакетов,
+    # чем живой — браузер не ретрансмитит Initial, а уходит на TCP. Замер
+    # 2026-08-19 по 1646 потокам: ни один порог от 2 до 12 эти классы не
+    # разделяет. Различает их время, поэтому детектор ждёт ответа по таймеру.
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-quic-silence.lua" ]; then
+        quic_udp=$(ensure_rkn_failure_detector "$quic_udp" "z2k_fail_quic_silence")
+    else
+        echo "WARN: lua/z2k-quic-silence.lua отсутствует — QUIC остаётся на штатном детекторе" 1>&2
+    fi
+
     rkn_tcp=$(ensure_youtube_tls_circular_manual_layout "$rkn_tcp" "$rkn_in_range_bytes")
 
     # Окно входящих обязано быть выше порога inseq — второй проход.
