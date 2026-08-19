@@ -1962,6 +1962,16 @@ create_official_config() {
     # владельцу об этом никто не сообщит. Выключатель безопасности, который
     # выключается сам, хуже его отсутствия.
     local saved_Z2K_PANEL_AUTH="0"
+    # Автообновление ночью. Умолчание 1 — как было всегда.
+    #
+    # Ключ пропал из этого списка и стоил нам issue #38 «Бесполезная кнопка
+    # отключения авто обновлений». Механика ровно та же, что описана абзацем
+    # выше: панель дописывает Z2K_AUTO_UPDATE_ENABLED=0 в конец конфига, а
+    # следующая регенерация пишет файл заново по списку, ключа в нём нет, он
+    # исчезает — и read_flag возвращает умолчание, то есть «включено».
+    # Регенерацию вызывает любой другой тумблер панели и само ночное
+    # обновление, поэтому выключение не переживало ни одного цикла.
+    local saved_Z2K_AUTO_UPDATE_ENABLED="1"
     if [ -f "$config_file" ]; then
         saved_GAME_WARP_ENABLED=$(safe_config_read "GAME_WARP_ENABLED" "$config_file" "0")
         saved_TG_PROXY_USER_DISABLED=$(safe_config_read "TG_PROXY_USER_DISABLED" "$config_file" "0")
@@ -2018,6 +2028,7 @@ create_official_config() {
         saved_Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "$config_file" "1")
         saved_Z2K_PPE_DEOFFLOAD_QUIC=$(safe_config_read "Z2K_PPE_DEOFFLOAD_QUIC" "$config_file" "1")
         saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
+        saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
     fi
 
     # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
@@ -2406,6 +2417,7 @@ POLICY_EXCLUDE='${_pe_q}'
 Z2K_PPE_DEOFFLOAD=${saved_Z2K_PPE_DEOFFLOAD}
 Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
 Z2K_PANEL_AUTH=${saved_Z2K_PANEL_AUTH}
+Z2K_AUTO_UPDATE_ENABLED=${saved_Z2K_AUTO_UPDATE_ENABLED}
 
 # Persist the branch URL that this install was booted from, so that
 # z2k-update-lists.sh and other post-install tools (cron-driven) can
