@@ -173,6 +173,18 @@ func probeCmd(ctx context.Context, rest []string) {
 			fmt.Printf("  → добавить в bypass: `echo %s >> /opt/zapret2/lists/extra-domains.txt`\n", domain)
 			fmt.Println("    или через webpanel «Доп. домены» — nfqws2 подхватит за секунды.")
 		}
+	case decision.Watch:
+		// Блок по адресу. Строка «Блок: ПО АДРЕСУ» выше уже объяснила почему;
+		// здесь только вывод, что делать. В bypass такой домен добавлять
+		// нельзя: ротатор впустую переберёт весь арсенал пула.
+		fmt.Println("Verdict: WATCH — блокируют по адресу, обход бессилен.")
+		if inList != "" {
+			fmt.Printf("  → домен уже в списке (%s) — оттуда его лучше УБРАТЬ: autocircular будет\n", inList)
+			fmt.Println("    впустую крутить стратегии, а заодно двигать их для остальных доменов пула.")
+		} else {
+			fmt.Println("  → в bypass добавлять НЕ надо, ротация тут ничего не подберёт.")
+		}
+		fmt.Println("    Помогает другой адрес (свежий резолв) либо туннель — WARP/релей.")
 	case decision.Ignore:
 		switch {
 		case !res.DNSOK && (res.FailureCode == prober.CodeDNSNXDomain || res.FailureCode == prober.CodeNoIPs):

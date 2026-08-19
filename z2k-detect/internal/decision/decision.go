@@ -3,6 +3,7 @@
 // Current policy:
 //
 //	DNS failed              → Ignore  (domain doesn't resolve — not ours)
+//	Блок по адресу          → Watch   (пакетные техники бессильны — нужен туннель)
 //	TCP:443 failed          → Hot     (reachable name, unreachable host → likely blocked)
 //	TLS handshake failed    → Hot     (TLS interception / blackhole → likely blocked)
 //	HTTP cutoff             → Hot     (TLS up but stream severed mid-response — L7 DPI signature)
@@ -30,6 +31,21 @@ const (
 func Classify(r prober.Result) Verdict {
 	if !r.DNSOK {
 		return Ignore
+	}
+	// Блок ПО АДРЕСУ пакетными техниками не обходится — manual, «Блокировка
+	// по IP»: «zapret не может обойти блок по IP». Проба это уже установила,
+	// постучавшись к тому же адресу с нейтральным именем example.com.
+	//
+	// Hot здесь был бы прямым вредом. Он означает «домен в bypass, autocircular
+	// подберёт стратегию», а подбирать нечего: ротатор впустую переберёт весь
+	// арсенал, каждый неудачный перебор — это ещё и смена стратегии для всех
+	// остальных доменов того же пула. Плюс с -publish такой домен уезжает в
+	// discovered-domains.txt и остаётся там навсегда.
+	//
+	// Watch: заблокировано, но не нашими средствами. Помогает другой адрес
+	// (свежий резолв) или туннель.
+	if r.PathVerdict == prober.PathIP {
+		return Watch
 	}
 	if !r.TCPOK || !r.TLSOK {
 		return Hot
