@@ -66,6 +66,7 @@ show_main_menu() {
 |  - Dkarloff - SEO отец                            |
 |  - KIBERPANK                                      |
 |  - olmer2002                                      |
+|  - TiaMax                                         |
 +===================================================+
 
 MENU

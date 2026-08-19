@@ -175,6 +175,17 @@ export function renderCredits() {
           пользуется.
         </p>
       </div>
+
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">TiaMax</div>
+        <p class="desc">
+          Спасибо, TiaMax. Проект живёт не разовым усилием, а тем, что кто-то
+          готов поддержать его в тот момент, когда всё уже вроде бы работает
+          и незаметно. Именно на такой поддержке держится то, чем каждый день
+          пользуются молча.
+        </p>
+      </div>
     </div>
   `;
 }
