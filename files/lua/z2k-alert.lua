@@ -79,6 +79,13 @@ end
 -- Живой ответ = сервер прислал непустой пейлоад, который не является
 -- фатальным алертом. Считаем по хосту, а не по соединению: ложная ротация
 -- как раз и складывается из нескольких соединений.
+--
+-- Окно отсчитывается от ПЕРВОГО успеха в серии, а не от последнего. Сброс по
+-- давности последнего пакета окном не является: на хосте с непрерывным
+-- трафиком каждый пакет отодвигает срок, счётчик не обнуляется никогда, и
+-- получается «три успеха когда-либо плюс один пакет за минуту». Тогда хост,
+-- который час назад работал, а сейчас режется, держит гвард взведённым вечно —
+-- ровно то, что в шапке названо недопустимым.
 local function note_alive(desync, is_fatal_alert)
 	if is_fatal_alert then return end
 	local p = desync.dis and desync.dis.payload
@@ -86,19 +93,20 @@ local function note_alive(desync, is_fatal_alert)
 	local hrec = host_record(desync)
 	if not hrec then return end
 	local now = os.time()
-	if hrec.z2k_ok_last and (now - hrec.z2k_ok_last) > Z2K_OK_WINDOW then
-		hrec.z2k_ok_n = nil
+	if not hrec.z2k_ok_start or (now - hrec.z2k_ok_start) > Z2K_OK_WINDOW then
+		hrec.z2k_ok_n = 0
+		hrec.z2k_ok_start = now
 	end
-	hrec.z2k_ok_n = (hrec.z2k_ok_n or 0) + 1
+	hrec.z2k_ok_n = hrec.z2k_ok_n + 1
 	hrec.z2k_ok_last = now
 end
 
 -- true, если хост прямо сейчас доказал, что работает.
 local function host_alive(desync)
 	local hrec = host_record(desync)
-	if not hrec or not hrec.z2k_ok_last then return false end
-	if (os.time() - hrec.z2k_ok_last) > Z2K_OK_WINDOW then
-		hrec.z2k_ok_n = nil
+	if not hrec or not hrec.z2k_ok_start then return false end
+	if (os.time() - hrec.z2k_ok_start) > Z2K_OK_WINDOW then
+		hrec.z2k_ok_n = 0
 		return false
 	end
 	return (hrec.z2k_ok_n or 0) >= Z2K_OK_MIN
@@ -201,22 +209,43 @@ local function note_server_ttl(desync, crec)
 	crec.z2k_srv_ttl = packet_ttl(desync)
 end
 
--- true, если RST пришёл тем же путём, что и данные сервера, то есть сервер
--- закрыл соединение сам. Без эталона (данных ещё не было) не судим — там как
--- раз и живёт классический DPI-сброс на хендшейке.
-local function server_reset(desync, crec)
-	if not crec or not crec.z2k_srv_ttl then return false end
+-- Вердикт по входящему провалу, который нашёл штатный детектор:
+--   "server" — RST пришёл тем же путём, что и данные: сервер закрылся сам;
+--   "block"  — либо RST с чужим TTL (инжект), либо вовсе не RST (DPI-редирект);
+--   nil      — судить не по чему, решает гвард живости.
+--
+-- Почему "block" обязан идти МИМО гварда живости. Гвард считает живым любой
+-- непустой ответ, а оба этих класса блокировки как раз и приходят ПОСЛЕ
+-- нормальных данных:
+--   * байтовый гейт ТСПУ — ради него планка inseq и поднята до 26К — рвёт
+--     соединение на 12-18 КБ, то есть после десятков «живых» пакетов. С
+--     гвардом впереди он не даёт события никогда, и планка стоит впустую;
+--   * страница-заглушка в HTTP-пуле — тоже непустой ответ, и три соединения
+--     подряд успевают взвести гвард раньше, чем наберётся порог провалов.
+-- Инжект и редирект — доказательства блокировки сами по себе, живость хоста
+-- их не отменяет.
+local function incoming_reset_verdict(desync, crec)
 	local tcp = desync.dis and desync.dis.tcp
-	if not tcp or not tcp.th_flags or not TH_RST then return false end
-	if bitand(tcp.th_flags, TH_RST) == 0 then return false end
+	if not tcp or not tcp.th_flags or not TH_RST then return nil end
+	if bitand(tcp.th_flags, TH_RST) == 0 then return "block" end
+
+	-- Эталона нет: данных сервер ещё не присылал. Это классический DPI-сброс
+	-- на хендшейке, но ровно так же выглядит и поддельный RST на живом хосте,
+	-- поэтому оставляем решение гварду живости.
+	if not crec or not crec.z2k_srv_ttl then return nil end
+
 	local t = packet_ttl(desync)
-	if not t then return false end
+	if not t then return nil end
 	local d = t - crec.z2k_srv_ttl
 	if d < 0 then d = -d end
-	if d > Z2K_TTL_TOLERANCE then return false end
+	if d > Z2K_TTL_TOLERANCE then
+		DLOG("z2k_fail_tls_alert: RST с TTL " .. t .. " при данных сервера TTL " ..
+		     crec.z2k_srv_ttl .. " — инжект, провал независимо от живости хоста")
+		return "block"
+	end
 	DLOG("z2k_fail_tls_alert: RST с TTL " .. t .. " при данных сервера TTL " ..
 	     crec.z2k_srv_ttl .. " — разрыв со стороны сервера, не провал")
-	return true
+	return "server"
 end
 
 local function suppressed(desync, why)
@@ -262,7 +291,9 @@ function z2k_fail_tls_alert(desync, crec)
 	-- Входящее: штатный детектор (входящий RST, DPI-редирект), окно 16К-гейта
 	-- по inseq — его же.
 	if standard_failure_detector(desync, crec) then
-		if server_reset(desync, crec) then return false end
+		local verdict = incoming_reset_verdict(desync, crec)
+		if verdict == "server" then return false end
+		if verdict == "block" then return true end
 		if suppressed(desync, "входящий провал") then return false end
 		return true
 	end

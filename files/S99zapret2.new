@@ -2501,8 +2501,17 @@ case "$1" in
     list_table)
         list_table
         ;;
+    debug_rotate)
+        # Потолок отладочного лога. Зовётся раз в минуту планировщиком: сам по
+        # себе traffic_debug_rotate срабатывал ТОЛЬКО при старте сервиса, а лог
+        # с 19.08.2026 живёт в tmpfs, то есть в оперативке. Флаг, забытый
+        # включённым на ночь без единого рестарта, съедал память до OOM —
+        # замеренные 475 МБ за 17 часов при 500 МБ ОЗУ на роутере.
+        traffic_debug_prepare
+        traffic_debug_rotate
+        ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|start_fw|stop_fw|restart_fw|start_daemons|stop_daemons|restart_daemons|reload_ifsets|list_ifsets|list_table}"
+        echo "Usage: $0 {start|stop|restart|status|start_fw|stop_fw|restart_fw|start_daemons|stop_daemons|restart_daemons|reload_ifsets|list_ifsets|list_table|debug_rotate}"
         exit 1
         ;;
 esac

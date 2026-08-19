@@ -118,6 +118,10 @@ echo "example.com" > "$root/extra_strats/UDP/YT/List.txt"
 echo "w.example.com" > "$root/lists/whitelist.txt"
 echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:strategy=1" \
     > "$root/extra_strats/TCP/RKN/Strategy.txt"
+echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=yt_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:strategy=1" \
+    > "$root/extra_strats/TCP/YT/Strategy.txt"
+echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=gv_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:strategy=1" \
+    > "$root/extra_strats/TCP/YT_GV/Strategy.txt"
 echo "ENABLED=1" > "$root/config"
 # Файл детектора на месте — проводка обязана появиться.
 mkdir -p "$root/lua"; cp "$LUA" "$root/lua/z2k-alert.lua"
@@ -153,6 +157,36 @@ case "$HTTP" in
     *)
         no "проводка детектора в http_rkn" "failure_detector=z2k_fail_tls_alert" "срезана или не добавлена" ;;
 esac
+
+# --- 2в. Инстанс circular не должен быть сужен по payload ----------------------
+# Движок зовёт lua-инстанс только на подходящем payload. Если --payload= стоит
+# ПЕРЕД circular, детектор не увидит ни одного входящего пакета С ДАННЫМИ, и
+# разом умирают: правило вставшего потока, фатальный TLS-алерт, сверка TTL и
+# гвард живости — им всем нужен пейлоад. Доедут только ClientHello и пустые
+# пакеты, то есть RST вообще без гвардов.
+#
+# Замер 19.08.2026 на боевом роутере, до правки:
+#   key="yt_tcp"  ... payload_type= empty tls_client_hello
+#   key="gv_tcp"  ... payload_type= all
+#   key="rkn_tcp" ... payload_type= all
+# Сторожим порядок токенов у всех трёх TLS-пулов сразу.
+for _key in rkn_tcp yt_tcp gv_tcp; do
+    _prof=$(printf '%s\n' "$OUT" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" \
+            | grep -F "key=$_key" | head -1)
+    if [ -z "$_prof" ]; then
+        no "пул $_key присутствует в конфиге" "профиль" "не найден"
+        continue
+    fi
+    _gated=$(printf '%s' "$_prof" | tr ' ' '\n' | awk '
+        /^--payload=/       { if (!seen_circular) gated = 1 }
+        /^--lua-desync=circular:/ { seen_circular = 1 }
+        END { print gated + 0 }')
+    if [ "$_gated" = "0" ]; then
+        ok "$_key: circular не сужен по payload (детектор видит данные)"
+    else
+        no "$_key: сужение circular по payload" "--payload= после circular" "стоит перед ним"
+    fi
+done
 
 # --- 2b. Нет файла — нет и проводки --------------------------------------------
 # Иначе движок валится в error() на каждом пакете профиля, и профиль РКН

@@ -206,12 +206,27 @@ end
 -- живость протухает: успехи старше окна не защищают
 reset_host()
 for _ = 1, 3 do run(incoming("HTTP/2 payload")) end
-hrec.z2k_ok_last = os.time() - 600
+hrec.z2k_ok_start = os.time() - 600
 fired = run(incoming(""))
 if fired then
     ok("протухшие успехи не защищают страту")
 else
     no("устаревание живости", "true", tostring(fired))
+end
+
+-- Окно отсчитывается от ПЕРВОГО успеха серии, а не от последнего. Иначе на
+-- хосте с непрерывным трафиком счётчик не обнуляется никогда: каждый пакет
+-- отодвигает срок, и хост, который час назад работал, а сейчас режется,
+-- держит гвард взведённым вечно.
+reset_host()
+for _ = 1, 3 do run(incoming("HTTP/2 payload")) end
+hrec.z2k_ok_start = os.time() - 600   -- серия началась давно
+run(incoming("HTTP/2 payload"))        -- но трафик идёт прямо сейчас
+fired = run(incoming(""))
+if fired then
+    ok("непрерывный трафик не продлевает окно живости бесконечно")
+else
+    no("окно от первого успеха", "true", tostring(fired))
 end
 
 -- фатальный алерт сам живым ответом не считается
@@ -506,6 +521,53 @@ if fired then
     ok("RST без разобранного IP-заголовка судится по-старому")
 else
     no("нет TTL — нет подавления", "true", tostring(fired))
+end
+
+-- ----- 7. блокировка идёт мимо гварда живости -------------------------------
+-- Гвард считает живым ЛЮБОЙ непустой ответ, а два класса блокировки как раз и
+-- приходят ПОСЛЕ нормальных данных. Если пустить их через гвард, планка
+-- inseq=26000 стоит впустую, а HTTP-пул не ротируется на заглушке.
+
+-- байтовый гейт ТСПУ: сервер отдал 12 КБ (десятки «живых» пакетов), затем
+-- инжектированный RST на s16000. Это ровно тот случай, ради которого планка
+-- inseq и поднята до 26000.
+reset_host(); conn = {}
+std_result = false
+for i = 1, 10 do pos_value = i * 1400; run(srv_data(52), conn) end
+std_result = true; pos_value = 16000
+fired = run(srv_rst(126), conn)
+if fired then
+    ok("байтовый гейт: инжектированный RST после 12 КБ данных = провал")
+else
+    no("гейт не душится живостью", "true", tostring(fired))
+end
+
+-- DPI-редирект в HTTP-пуле: страница-заглушка тоже непустой ответ, и три
+-- соединения подряд успевают взвести гвард раньше порога провалов.
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+for _ = 1, 5 do run(srv_data(52), conn) end
+std_result = true; pos_value = 2000
+local blockpage = srv_data(52); blockpage.dis.tcp.th_flags = 0x18
+fired = run(blockpage, conn)
+if fired then
+    ok("DPI-редирект засчитывается, даже когда хост выглядит живым")
+else
+    no("редирект мимо гварда", "true", tostring(fired))
+end
+
+-- А вот RST БЕЗ эталона TTL по-прежнему решает гвард: так выглядит и
+-- поддельный RST на живом хосте (замер 18.08, ttl 126 при девяти успешных
+-- соединениях в том же окне), и настоящий сброс на хендшейке.
+reset_host(); conn = {}
+std_result = false
+for _ = 1, 3 do run(incoming("HTTP/2 payload")) end
+std_result = true; pos_value = 1
+fired = run(srv_rst(126), conn)
+if not fired then
+    ok("RST без эталона TTL на живом хосте остаётся под гвардом")
+else
+    no("гвард сохранён там, где судить не по чему", "false", tostring(fired))
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))

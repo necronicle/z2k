@@ -222,6 +222,22 @@ while true; do
         fi
     fi
 
+    # Minute-cadence task: потолок отладочного лога.
+    #
+    # traffic_debug_rotate внутри S99zapret2 срабатывает ТОЛЬКО при старте
+    # сервиса, а лог с 19.08.2026 пишется в /tmp, то есть в оперативку. Флаг,
+    # забытый включённым на ночь без единого рестарта, растёт без предела:
+    # замеренные 475 МБ за 17 часов при 500 МБ ОЗУ — это OOM, ради которого
+    # потолок и заводили. Дёшево: при выключенной отладке verb выходит сразу.
+    if [ -x /opt/etc/init.d/S99zapret2 ]; then
+        last_dbg=$(last_fired_in "$TMP_STATE" debug-rotate-epoch)
+        case "$last_dbg" in ''|*[!0-9]*) last_dbg=0 ;; esac
+        if [ "$((now_epoch - last_dbg))" -ge 55 ]; then
+            mark_fired_in "$TMP_STATE" debug-rotate-epoch "$now_epoch"
+            /opt/etc/init.d/S99zapret2 debug_rotate >/dev/null 2>&1 &
+        fi
+    fi
+
     # Per-flow PPE de-offload re-assert (mangle FORWARD/PREROUTING). The NDM hook
     # (94-z2k-ppe-deoffload.sh) handles event-driven re-apply after netfilter
     # regen; this is the secondary net AND the boot-time apply (the rule is

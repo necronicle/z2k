@@ -208,6 +208,14 @@ generate_nfqws2_opt_from_strategies() {
     # udp_out=5 — компромисс там, где разделения нет: 21% отлова мёртвых против
     # 5,5% у шестёрки при том же числе ложных срабатываний.
     #
+    # ВАЖНО с 19.08.2026: на yt_quic этот компромисс больше не наступает.
+    # Провалы пула считает z2k_fail_quic_silence, и штатному детектору он
+    # UDP-пакеты своих пулов НЕ отдаёт — то есть правило «отослано >= udp_out
+    # при принято <= udp_in» не выполняется вовсе, и udp_out там инертен.
+    # Значение оставлено как есть: оно действует на пулах без нашего детектора
+    # и служит документацией порога, если детектор снимут. udp_in продолжает
+    # работать — его читает standard_success_detector.
+    #
     # Оба порога обязаны лежать ниже окна перехвата NFQWS2_UDP_PKT_IN/OUT —
     # см. комментарий там же. Same change mirrored in quic_strats.ini.
     quic_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=3:udp_out=5:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=1 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=1 --lua-desync=drop:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=2 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=2 --lua-desync=drop:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=5 --lua-desync=drop:strategy=5 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=6 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=8 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=8 --lua-desync=drop:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=9 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=9 --lua-desync=drop:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=10 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=11 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=12 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=13"
@@ -468,6 +476,11 @@ generate_nfqws2_opt_from_strategies() {
     # никак не видна, поэтому проверяем на этапе генерации.
     check_udp_thresholds() {
         local pool="$1" tok in_thr out_thr
+        # no glob: токены приходят в том числе из Strategy.txt и custom-strategy,
+        # где законно встречаются *,?,[ ] — без этого сторож молча слепнет на
+        # раскрытом по каталогу токене. Так же обёрнуты все прочие циклы разбора
+        # в этом файле.
+        set -f
         for tok in $2; do
             case "$tok" in
                 --lua-desync=circular:*)
@@ -483,6 +496,7 @@ generate_nfqws2_opt_from_strategies() {
                     ;;
             esac
         done
+        set +f
     }
     check_udp_thresholds yt_quic "$quic_udp"
     check_udp_thresholds discord_udp "$discord_udp"
@@ -1305,7 +1319,23 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
-    youtube_tcp=$(ensure_youtube_tls_failure_detection "$youtube_tcp")
+    # yt_tcp переведён на ту же раскладку, что gv_tcp и rkn_tcp (19.08.2026).
+    #
+    # ensure_youtube_tls_failure_detection оставляет --payload= ПЕРЕД circular,
+    # и инстанс получает payload_type = {tls_client_hello, empty} вместо all.
+    # Ровно об этом сужении написано в комментарии выше — вывод сделали, когда
+    # снимали тумблер RKN_SILENT_FALLBACK, но сам yt_tcp на сужающей ветке так
+    # и остался. Цена, замер на боевом роутере 19.08.2026:
+    #   key="yt_tcp" ... payload_type= empty tls_client_hello
+    #   key="gv_tcp" ... payload_type= all
+    #   key="rkn_tcp" ... payload_type= all
+    # Движок зовёт инстанс только на подходящем payload, поэтому на yt_tcp до
+    # детектора НЕ доходил ни один входящий пакет С ДАННЫМИ. Мёртвыми там были
+    # разом: правило вставшего потока (при том что yt_tcp прямо перечислен в
+    # Z2K_RETRANS_POOLS), фатальный TLS-алерт, сверка TTL и весь гвард живости —
+    # им всем нужен пакет с пейлоадом. Доезжали только исходящий ClientHello и
+    # пустые пакеты, то есть RST без единого гварда.
+    youtube_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_tcp" "19500")
     youtube_gv_tcp=$(ensure_youtube_tls_circular_manual_layout "$youtube_gv_tcp" "26000")
 
     # RKN: failure_detector — z2k_tls_stalled by default, overridable
