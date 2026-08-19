@@ -373,6 +373,62 @@ if command -v ndmc >/dev/null 2>&1; then
     fi
 fi
 
+# ------------------------------------------------------------------
+# DNS-пины остальных доменов: Instagram, WhatsApp, 4pda.
+#
+# ЗАЧЕМ. Выше снимаются только rutracker-пины, перечисленные руками. Всё
+# остальное оставалось висеть НАВСЕГДА: человек снёс z2k, а роутер продолжает
+# резолвить instagram.com и 4pda.to в адреса, которые мы туда прошили. Через
+# недели-месяцы адреса протухают, и у него ломается то, что без z2k работало бы
+# нормально — причём причину найти неоткуда. Плюс у Keenetic потолок 256
+# статических записей, и его уже однажды съели пинами Discord.
+#
+# СПИСОК ДОМЕНОВ НЕ ДУБЛИРУЕМ. Он берётся из HOSTS в самом
+# z2k-insta-ip-refresh.sh — то есть оттуда же, откуда берётся при установке.
+# Иначе каждый новый домен надо не забыть внести во ВТОРОЕ место, а этот класс
+# ошибок у нас уже случался: 4pda добавили 19.08 и в удаление он не попал бы.
+# Скрипт на этот момент ещё на диске — /opt/zapret2 сносится ниже.
+#
+# Строку из running-config подставляем в `no <строка>` целиком: у ndmc удаление
+# принимает те же аргументы, что и добавление, а IP в записи может быть любым
+# (их переписывает ежедневное обновление).
+if command -v ndmc >/dev/null 2>&1; then
+    _refresh_sh="${ZAPRET2_DIR:-/opt/zapret2}/z2k-insta-ip-refresh.sh"
+    _pin_hosts=""
+    if [ -r "$_refresh_sh" ]; then
+        _pin_hosts=$(sed -n 's/^HOSTS="\(.*\)"$/\1/p' "$_refresh_sh" | head -1)
+    fi
+    # Запасной список — на случай, когда скрипта уже нет (частичная установка,
+    # ручное удаление файлов). Лучше снять по памяти, чем не снять вовсе.
+    [ -n "$_pin_hosts" ] || _pin_hosts="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com 4pda.to www.4pda.to s.4pda.to"
+
+    _pin_removed=0
+    _running=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
+    for _h in $_pin_hosts; do
+        # Точное совпадение по имени: подстрока зацепила бы чужие домены.
+        _lines=$(printf '%s\n' "$_running" | awk -v h="$_h" '$1=="ip" && $2=="host" && $3==h {print}')
+        [ -n "$_lines" ] || continue
+        _IFS_save="$IFS"
+        IFS='
+'
+        for _line in $_lines; do
+            IFS="$_IFS_save"
+            if LD_LIBRARY_PATH= ndmc -c "no $_line" >/dev/null 2>&1; then
+                _pin_removed=$((_pin_removed + 1))
+            fi
+            IFS='
+'
+        done
+        IFS="$_IFS_save"
+    done
+    if [ "$_pin_removed" -gt 0 ]; then
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
+        log_info "  Снято DNS-пинов Instagram/WhatsApp/4pda: $_pin_removed"
+    else
+        log_skip "DNS-пинов Instagram/WhatsApp/4pda не найдено"
+    fi
+fi
+
 # Бинарь и его init-скрипт (директории /opt/zapret2 сносятся ниже, но /opt/sbin — нет).
 for _f in /opt/sbin/z2k-rt-proxy /opt/sbin/z2k-rt-proxy.z2kbak; do
     [ -f "$_f" ] && rm -f "$_f" && log_info "  Удалён $_f"

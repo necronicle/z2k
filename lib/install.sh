@@ -4865,6 +4865,42 @@ uninstall_zapret2() {
             done
         LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
     fi
+    # Пины Instagram, WhatsApp (метовские) и 4pda — те, что ведёт
+    # z2k-insta-ip-refresh.sh. Выше снимаются только rutracker, релейные
+    # (→ наш VPS) и discord-voice; эти оставались висеть НАВСЕГДА.
+    #
+    # Чем это плохо: человек снёс z2k, а роутер продолжает резолвить
+    # instagram.com и 4pda.to в прошитые нами адреса. Cloudflare и Meta их
+    # ротируют, через недели адреса протухают — и у человека ломается то, что
+    # без z2k работало бы нормально, причём причину найти неоткуда. Плюс у
+    # Keenetic потолок 256 статических записей, и его уже однажды съели пинами
+    # Discord. Замер на боевом роутере: 24 таких записи из 79.
+    #
+    # Список доменов НЕ дублируем — читаем HOSTS из самого скрипта обновления,
+    # то есть оттуда же, откуда он берётся при установке. Набранный руками во
+    # втором месте он отстаёт: 4pda добавили 19.08.2026, и сюда бы не попал.
+    # Тот же приём и в z2k_cleanup.sh (аварийная дочистка).
+    if command -v ndmc >/dev/null 2>&1; then
+        _pin_hosts=""
+        if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-insta-ip-refresh.sh" ]; then
+            _pin_hosts=$(sed -n 's/^HOSTS="\(.*\)"$/\1/p' "${ZAPRET2_DIR:-/opt/zapret2}/z2k-insta-ip-refresh.sh" | head -1)
+        fi
+        [ -n "$_pin_hosts" ] || _pin_hosts="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com 4pda.to www.4pda.to s.4pda.to"
+
+        _running=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
+        for _ph in $_pin_hosts; do
+            # Совпадение по имени ТОЧНОЕ: подстрока зацепила бы чужое
+            # (not-4pda.to содержит 4pda.to). Снимаем все записи домена —
+            # адреса переписывает ежедневное обновление, и их несколько.
+            printf '%s\n' "$_running" \
+                | awk -v h="$_ph" '$1=="ip" && $2=="host" && $3==h {print}' \
+                | while IFS= read -r _pl; do
+                    [ -n "$_pl" ] && LD_LIBRARY_PATH= ndmc -c "no $_pl" >/dev/null 2>&1
+                done
+        done
+        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
+    fi
+
     rm -f "${ZAPRET2_DIR:-/opt/zapret2}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null || true
     rm -f /opt/etc/init.d/S96z2k-rt-proxy \
           /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
