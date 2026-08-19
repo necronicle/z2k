@@ -1,6 +1,7 @@
 #!/bin/sh
-# /opt/zapret2/z2k-insta-ip-refresh.sh — refresh Instagram/cdninstagram
-# ip host records from a fresh DNS lookup on the EU-egress VPS.
+# /opt/zapret2/z2k-insta-ip-refresh.sh — refresh ip host records from a fresh
+# DNS lookup on the EU-egress VPS. Имя историческое: кроме Instagram и
+# WhatsApp сюда входит 4pda.to (см. HOSTS).
 #
 # Background: Keenetic users get Instagram via ndmc `ip host` static
 # overrides (provider DNS pollutes A records). install.sh bakes in a
@@ -11,9 +12,9 @@
 # bypassing DPI" and rotates a perfectly working strategy needlessly.
 #
 # This script: hits the VPS /resolve endpoint (HMAC-authenticated),
-# rewrites `ip host` entries for the 12 hostnames in HOSTS (7 Instagram +
-# 5 WhatsApp, добавлены 2026-08-05), flushes stale
-# conntrack so apps reconnect through new IPs.
+# rewrites `ip host` entries for the 15 hostnames in HOSTS (7 Instagram,
+# 5 WhatsApp — добавлены 2026-08-05, 3 4pda — добавлены 2026-08-19),
+# flushes stale conntrack so apps reconnect through new IPs.
 #
 # Honors:
 #  - Z2K_INSTA_IP_REFRESH=0 in /opt/zapret2/config  →  skip
@@ -66,7 +67,16 @@ SECRET=$(awk -F= '/^Z2K_RESOLVE_SECRET=/ {gsub(/[" ]/,"",$2); print $2; exit}' "
 # whatsapp.net, g/static/mmg/pps/dit/v.whatsapp.net, crashlogs). Иначе два
 # механизма перепишут записи друг друга по кругу: обновление адресов снимет пин
 # на релей, а следующая переустановка вернёт его обратно.
-HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com"
+#
+# 4pda.to добавлен 2026-08-19 — первый не-мета домен здесь, и по той же
+# причине. Провайдерский DNS отдаёт 8.6.112.0 и 8.47.69.0, к ним TLS не встаёт
+# вовсе; те же адреса с зарубежного выхода отвечают подлинным сертификатом
+# CN=4pda.to. Наша диагностика (z2k-detect probe) видит блок ПО АДРЕСУ: с
+# нейтральным именем example.com те же адреса тоже молчат. Пакетными техниками
+# это не обходится в принципе, помогает только другой адрес. С адресами из
+# зарубежного резолва TLS встаёт за 150 мс. Три имени, а не одно: www и s
+# резолвятся в те же битые адреса и нужны для картинок и статики.
+HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com 4pda.to www.4pda.to s.4pda.to"
 
 log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$LOG"
@@ -96,10 +106,15 @@ fi
 
 # 3. If the user has zero ip host records for insta, they cleared them
 #    via menu [I] — respect that, do not resurrect.
+# Сторож «пользователь всё вычистил». Смотрим записи ВСЕХ управляемых семейств,
+# а не только инстаграмных: 4pda.to добавлен 2026-08-19 и к инстаграму отношения
+# не имеет. Пока сторож смотрел только на instagram/cdninstagram, человек,
+# нажавший [I] Очистить, терял заодно и обновление адресов 4pda — а он этого
+# не выбирал.
 existing=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-    | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
+    | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/ || $3 ~ /(^|\.)4pda\.to$/) {print}')
 if [ -z "$existing" ]; then
-    log "no existing ip host insta records (cleared by user via [I]?) — exit"
+    log "no existing ip host records for managed domains (cleared by user via [I]?) — exit"
     exit 0
 fi
 log "found existing ip host records: $(printf '%s\n' "$existing" | wc -l | tr -d ' ')"
@@ -174,9 +189,25 @@ fi
 # Список — выделения RIR (AS32934), а не отдельные анонсы: они меняются годами,
 # поэтому список не протухает между релизами. Сравнение без побитовых операций —
 # busybox awk их не гарантирует, поэтому делим на 2^(32-len).
+# Список диапазонов выбирается ПО СЕМЕЙСТВУ ДОМЕНА, а не один на всех.
+# Meta-домены сверяются с выделениями AS32934, 4pda.to — с выделениями
+# Cloudflare AS13335. Одним общим списком делать нельзя: он разрешил бы увести
+# instagram.com на адрес Cloudflare и наоборот, то есть ослабил бы ровно ту
+# защиту, ради которой проверка и заводилась.
 META_RANGES="${ZAPRET2_DIR:-/opt/zapret2}/lists/meta-ranges.txt"
-if [ -s "$META_RANGES" ]; then
-    filtered=$(printf '%s\n' "$parsed" | awk -v rf="$META_RANGES" '
+CF_RANGES="${ZAPRET2_DIR:-/opt/zapret2}/lists/cloudflare-ranges.txt"
+
+# Какой файл диапазонов сторожит этот хост.
+ranges_for_host() {
+    case "$1" in
+        4pda.to|*.4pda.to) printf '%s' "$CF_RANGES" ;;
+        *)                 printf '%s' "$META_RANGES" ;;
+    esac
+}
+
+filter_by_ranges() {
+    # $1 - строки "хост адрес", $2 - файл диапазонов
+    printf '%s\n' "$1" | awk -v rf="$2" '
         function ip2n(s,  a) { split(s, a, "."); return ((a[1]*256+a[2])*256+a[3])*256+a[4] }
         BEGIN {
             n = 0
@@ -195,17 +226,39 @@ if [ -s "$META_RANGES" ]; then
             }
             if (ok) print
             else print "REJECT\t" $1 "\t" $2 > "/dev/stderr"
-        }' 2>>"$LOG")
-    rejected=$(printf '%s\n' "$parsed" | wc -l)
+        }' 2>>"$LOG"
+}
+
+filtered=""
+checked=0
+for _rf in "$META_RANGES" "$CF_RANGES"; do
+    [ -s "$_rf" ] || { log "WARN: $_rf отсутствует — хосты этого семейства не применяются"; continue; }
+    checked=1
+    # read без IFS= режет по ЛЮБОМУ пробельному: строки приходят разделёнными
+    # табом, и срез по пробелу (${line%% *}) оставлял бы в имени хоста весь
+    # остаток строки — тогда ни один case не совпадал и всё уходило в проверку
+    # по диапазонам Meta, где адреса Cloudflare законно отбраковывались.
+    _subset=$(printf '%s\n' "$parsed" | while read -r _h _ip _rest; do
+        [ -n "$_h" ] && [ -n "$_ip" ] || continue
+        [ "$(ranges_for_host "$_h")" = "$_rf" ] && printf '%s %s\n' "$_h" "$_ip"
+    done)
+    [ -n "$_subset" ] || continue
+    _keep=$(filter_by_ranges "$_subset" "$_rf")
+    [ -n "$_keep" ] && filtered=$(printf '%s\n%s' "$filtered" "$_keep")
+done
+filtered=$(printf '%s\n' "$filtered" | grep -c . >/dev/null 2>&1 && printf '%s\n' "$filtered" | grep . || true)
+
+if [ "$checked" = 1 ]; then
+    rejected=$(printf '%s\n' "$parsed" | grep -c . 2>/dev/null || echo 0)
     kept=$(printf '%s\n' "$filtered" | grep -c . 2>/dev/null || echo 0)
     if [ "$kept" = 0 ]; then
-        log "FAIL: ни один адрес не попал в диапазоны Meta — ответ подозрительный, записи не трогаем"
+        log "FAIL: ни один адрес не попал в разрешённые диапазоны — ответ подозрительный, записи не трогаем"
         exit 1
     fi
-    [ "$kept" -lt "$rejected" ] && log "часть адресов вне диапазонов Meta отброшена ($kept из $rejected принято)"
+    [ "$kept" -lt "$rejected" ] && log "часть адресов вне разрешённых диапазонов отброшена ($kept из $rejected принято)"
     parsed="$filtered"
 else
-    log "WARN: $META_RANGES отсутствует — адреса применяются без проверки принадлежности Meta"
+    log "WARN: файлов диапазонов нет — адреса применяются без проверки принадлежности"
 fi
 
 # --- Живая проба адреса ------------------------------------------------------

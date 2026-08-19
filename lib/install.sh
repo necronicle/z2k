@@ -2198,7 +2198,7 @@ step_build_zapret2() {
     # game-warp-ips.txt намеренно отсутствует: legacy-агрегат на 14297 записей
     # (15% IPv4, включая приватные сети и LAN пользователя) удалён из проекта.
     # WARP теперь работает на пер-игровых списках, выбираемых в панели.
-    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt; do
+    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt cloudflare-ranges.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
@@ -3198,6 +3198,28 @@ HOOK
 # SINGLE source of truth for these 7 records — shared by step_finalize (fresh
 # install) and the [I] menu restore path (lib/menu.sh menu_instagram_dns).
 # Pure add (no presence guard) — callers gate on whether records already exist.
+# 4pda.to — статический fallback, отдельно от инстаграмного.
+#
+# Намеренно НЕ внутри z2k_instagram_dns_add_fallback: та функция общая с пунктом
+# меню [I], и очистка записей инстаграма пользователем не должна уносить с собой
+# 4pda, к которому инстаграм отношения не имеет.
+#
+# Почему статикой вообще: провайдерский DNS отдаёт 8.6.112.0 и 8.47.69.0, к ним
+# TLS не встаёт (tls_handshake_timeout). Диагностика показывает блок ПО АДРЕСУ —
+# с нейтральным именем example.com те же адреса тоже молчат, значит режут адрес,
+# а не имя, и пакетными техниками это не обходится (manual, «Блокировка по IP»).
+# Адреса ниже — из зарубежного резолва, проверены сертификатом CN=4pda.to;
+# с ними TLS встаёт за 150 мс. Cloudflare их ротирует, поэтому это лишь
+# стартовое значение: z2k-insta-ip-refresh.sh перепишет их живым резолвом.
+z2k_4pda_dns_add_fallback() {
+    command -v ndmc >/dev/null 2>&1 || return 1
+    LD_LIBRARY_PATH= ndmc -c "ip host 4pda.to 104.20.39.144" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host www.4pda.to 104.20.39.144" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "ip host s.4pda.to 104.20.39.144" 2>/dev/null
+    LD_LIBRARY_PATH= ndmc -c "system configuration save" 2>/dev/null
+    return 0
+}
+
 z2k_instagram_dns_add_fallback() {
     command -v ndmc >/dev/null 2>&1 || return 1
     LD_LIBRARY_PATH= ndmc -c "ip host instagram.com 157.240.9.174" 2>/dev/null
@@ -3384,6 +3406,14 @@ step_finalize() {
             print_success "DNS записи для Instagram добавлены"
         else
             print_info "DNS записи для Instagram уже настроены"
+        fi
+
+        if ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host 4pda.to"; then
+            print_info "Настройка DNS для 4PDA..."
+            z2k_4pda_dns_add_fallback
+            print_success "DNS записи для 4PDA добавлены"
+        else
+            print_info "DNS записи для 4PDA уже настроены"
         fi
     fi
 
