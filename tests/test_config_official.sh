@@ -686,6 +686,51 @@ check_range_above_inseq rkn_tcp
 check_range_above_inseq yt_tcp
 check_range_above_inseq gv_tcp
 
+# Расширение l7 и окно наблюдения обязаны сосуществовать.
+#
+# Ловим конкретный провал r-77.1. Пулы видео берут --filter-l7=tls,unknown,
+# чтобы забирать соединения без SNI, а раскладку с --in-range вставляет хелпер,
+# который сравнивал токен с «--filter-l7=tls» ТОЧНО. С довеском совпадение
+# пропадало, раскладка молча не применялась, окно оставалось пустым.
+#
+# Проверка не заметила бы этого на макбуке: переписывание было сделано через
+# sed с \| в BRE — у GNU это альтернатива, у BSD литерал, поэтому на маке
+# подстановка не выполнялась вовсе и тест шёл по старому пути. Здесь смотрим
+# РЕЗУЛЬТАТ, а не способ: в строке обязаны быть оба признака сразу.
+check_l7_and_range_together() {
+    local key="$1" line
+    line=$(printf '%s\n' "$_flat_range" | grep -F "key=$key" | head -1)
+    [ -n "$line" ] || { assert_eq "$key: строка профиля найдена" "да" "нет"; return; }
+    case "$line" in
+        *--filter-l7=tls,unknown*)
+            case "$line" in
+                *--in-range=-s*)
+                    TESTS_PASSED=$((TESTS_PASSED + 1))
+                    printf "[PASS] %s: tls,unknown и окно --in-range вместе\n" "$key" ;;
+                *)
+                    TESTS_FAILED=$((TESTS_FAILED + 1))
+                    printf "[FAIL] %s: есть tls,unknown, но окна --in-range нет — раскладка не применилась\n" "$key" ;;
+            esac ;;
+        *)
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            printf "[FAIL] %s: нет --filter-l7=tls,unknown — соединения без SNI пройдут мимо профиля\n" "$key" ;;
+    esac
+}
+
+check_l7_and_range_together yt_tcp
+check_l7_and_range_together gv_tcp
+
+# РКН намеренно остаётся на чистом tls: там на тех же портах живёт слишком
+# много чужого, и расширение забрало бы его в пул.
+case $(printf '%s\n' "$_flat_range" | grep -F "key=rkn_tcp" | head -1) in
+    *--filter-l7=tls,unknown*)
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        printf "[FAIL] rkn_tcp: l7 расширен до tls,unknown — РКН это не нужно\n" ;;
+    *)
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        printf "[PASS] rkn_tcp: l7 остался чистым tls\n" ;;
+esac
+
 printf "\n--- Z2K_USE_MID_STREAM_DETECTOR: NFQWS2_TCP_PKT_IN bundle ---\n"
 
 # Third bundle knob: NFQWS2_TCP_PKT_IN drives the iptables connbytes

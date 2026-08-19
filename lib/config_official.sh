@@ -435,8 +435,22 @@ generate_nfqws2_opt_from_strategies() {
     # Ровно так пропадал телевизор: адрес известен через ipcache, а протокол
     # для фильтра «не тот». Пулы видео обязаны брать и unknown. РКН намеренно
     # не трогаем — там на тех же портах живёт слишком много чужого.
+    # Токен переписываем перебором, а не регуляркой.
+    #
+    # Было: sed 's/--filter-l7=tls\([^,a-z_]\|$\)/.../g'. У GNU sed \| это
+    # альтернатива, у BSD — литерал, поэтому на макбуке подстановка МОЛЧА не
+    # выполнялась. Локальные тесты были зелёными, а в CI на Linux — красными,
+    # и разошлось это только на релизе r-77.1. Перебор токенов ведёт себя
+    # одинаково везде и заодно точнее: правим ровно тот токен, а не подстроку.
     ensure_l7_unknown() {
-        printf '%s' "$1" | sed 's/--filter-l7=tls\([^,a-z_]\|$\)/--filter-l7=tls,unknown\1/g'
+        local _t _out=""
+        set -f
+        for _t in $1; do
+            [ "$_t" = "--filter-l7=tls" ] && _t="--filter-l7=tls,unknown"
+            _out="${_out:+$_out }$_t"
+        done
+        set +f
+        printf '%s' "$_out"
     }
     youtube_tcp=$(ensure_l7_unknown "$youtube_tcp")
     youtube_gv_tcp=$(ensure_l7_unknown "$youtube_gv_tcp")
@@ -1138,7 +1152,11 @@ generate_nfqws2_opt_from_strategies() {
         set -f  # no glob: $input tokens may contain *,?,[ ] from hand-edited Strategy.txt
         for token in $input; do
             case "$token" in
-                --filter-l7=tls) has_tls="1" ;;
+                # tls ИЛИ tls с довесками: пул видео ходит с
+                # --filter-l7=tls,unknown, чтобы забирать соединения без SNI.
+                # Жёсткое сравнение здесь означало, что раскладка с --in-range
+                # молча не применялась и окно наблюдения оставалось пустым.
+                --filter-l7=tls|--filter-l7=tls,*) has_tls="1" ;;
                 --lua-desync=circular:*) has_circular="1" ;;
                 --in-range=*) has_in_range="1" ;;
             esac
@@ -1233,7 +1251,11 @@ generate_nfqws2_opt_from_strategies() {
 
         for token in $input; do
             case "$token" in
-                --filter-l7=tls) has_tls="1" ;;
+                # tls ИЛИ tls с довесками: пул видео ходит с
+                # --filter-l7=tls,unknown, чтобы забирать соединения без SNI.
+                # Жёсткое сравнение здесь означало, что раскладка с --in-range
+                # молча не применялась и окно наблюдения оставалось пустым.
+                --filter-l7=tls|--filter-l7=tls,*) has_tls="1" ;;
                 --lua-desync=circular:*) has_circular="1" ;;
                 --in-range=*) has_in_range="1" ;;
             esac
