@@ -79,6 +79,18 @@ missing=""
 checked=0
 for f in $(git diff --name-only "$prev_ref" "$cur_ref" 2>/dev/null); do
     [ "$f" = "UPDATES.json" ] && continue
+    # Удалённые файлы не заявляются — заявить к доставке нечего, и release.sh
+    # их отсеивает тем же условием («удалённые не заявляем»). Без этой строки
+    # гейт требовал объявить файл, которого в релизном коммите уже нет, и любое
+    # удаление доставляемого файла роняло выпуск. Поймано на r-77.4, где из
+    # проекта убирали lists/cloudflare-ranges.txt.
+    #
+    # Оговорка, которую надо держать в голове: у уже установленных роутеров
+    # такой файл остаётся лежать. Для списков и прочей пассивной начинки это
+    # безвредно, но если когда-нибудь удалять придётся код, который что-то
+    # делает, — это отдельная задача, и решать её надо явной зачисткой в
+    # lib/install.sh, а не молчанием манифеста.
+    git cat-file -e "$cur_ref:$f" 2>/dev/null || continue
     target=$(sh -c "Z2K_AU_SOURCE_ONLY=1 . ./lib/auto_update.sh 2>/dev/null; au_install_paths '$f'")
     [ -n "$target" ] || continue          # no install target — updater skips it anyway
     checked=$((checked + 1))
