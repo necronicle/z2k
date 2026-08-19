@@ -1265,7 +1265,6 @@ extra_strats/UDP/YT/List.txt
 extra-domains.txt
 rkn-false-positive.txt
 meta-ranges.txt
-cloudflare-ranges.txt
 "
 
     while read -r list_file; do

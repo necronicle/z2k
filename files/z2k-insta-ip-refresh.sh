@@ -1,7 +1,6 @@
 #!/bin/sh
 # /opt/zapret2/z2k-insta-ip-refresh.sh — refresh ip host records from a fresh
-# DNS lookup on the EU-egress VPS. Имя историческое: кроме Instagram и
-# WhatsApp сюда входит 4pda.to (см. HOSTS).
+# DNS lookup on the EU-egress VPS.
 #
 # Background: Keenetic users get Instagram via ndmc `ip host` static
 # overrides (provider DNS pollutes A records). install.sh bakes in a
@@ -12,9 +11,9 @@
 # bypassing DPI" and rotates a perfectly working strategy needlessly.
 #
 # This script: hits the VPS /resolve endpoint (HMAC-authenticated),
-# rewrites `ip host` entries for the 15 hostnames in HOSTS (7 Instagram,
-# 5 WhatsApp — добавлены 2026-08-05, 3 4pda — добавлены 2026-08-19),
-# flushes stale conntrack so apps reconnect through new IPs.
+# rewrites `ip host` entries for the 12 hostnames in HOSTS (7 Instagram +
+# 5 WhatsApp, добавлены 2026-08-05), flushes stale
+# conntrack so apps reconnect through new IPs.
 #
 # Honors:
 #  - Z2K_INSTA_IP_REFRESH=0 in /opt/zapret2/config  →  skip
@@ -68,15 +67,13 @@ SECRET=$(awk -F= '/^Z2K_RESOLVE_SECRET=/ {gsub(/[" ]/,"",$2); print $2; exit}' "
 # механизма перепишут записи друг друга по кругу: обновление адресов снимет пин
 # на релей, а следующая переустановка вернёт его обратно.
 #
-# 4pda.to добавлен 2026-08-19 — первый не-мета домен здесь, и по той же
-# причине. Провайдерский DNS отдаёт 8.6.112.0 и 8.47.69.0, к ним TLS не встаёт
-# вовсе; те же адреса с зарубежного выхода отвечают подлинным сертификатом
-# CN=4pda.to. Наша диагностика (z2k-detect probe) видит блок ПО АДРЕСУ: с
-# нейтральным именем example.com те же адреса тоже молчат. Пакетными техниками
-# это не обходится в принципе, помогает только другой адрес. С адресами из
-# зарубежного резолва TLS встаёт за 150 мс. Три имени, а не одно: www и s
-# резолвятся в те же битые адреса и нужны для картинок и статики.
-HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com 4pda.to www.4pda.to s.4pda.to"
+# 4pda.to здесь БЫЛ 19.08.2026 и снят в тот же день. Блокировка по адресу
+# продержалась несколько часов: до неё те же 8.6.112.0 и 8.47.69.0 давали
+# tls_handshake_timeout, после — отвечают за 100 мс. Держать домен на
+# зарубежном резолве ради временного блока незачем, а прошитые адреса
+# Cloudflare ротирует, и через недели они стали бы мёртвыми.
+# Снятие уже прошитых записей — миграция в lib/install.sh.
+HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com"
 
 log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$LOG"
@@ -189,19 +186,19 @@ fi
 # Список — выделения RIR (AS32934), а не отдельные анонсы: они меняются годами,
 # поэтому список не протухает между релизами. Сравнение без побитовых операций —
 # busybox awk их не гарантирует, поэтому делим на 2^(32-len).
-# Список диапазонов выбирается ПО СЕМЕЙСТВУ ДОМЕНА, а не один на всех.
-# Meta-домены сверяются с выделениями AS32934, 4pda.to — с выделениями
-# Cloudflare AS13335. Одним общим списком делать нельзя: он разрешил бы увести
-# instagram.com на адрес Cloudflare и наоборот, то есть ослабил бы ровно ту
-# защиту, ради которой проверка и заводилась.
+# Проверка по диапазонам ВЛАДЕЛЬЦА домена. Разбивка по семействам заведена
+# 19.08.2026 под 4pda (Cloudflare) и осталась после его снятия: сейчас семейство
+# одно, но структура нужная — общий список на всех разрешил бы увести
+# instagram.com на чужой диапазон, то есть снял бы ровно ту защиту, ради которой
+# проверка и делалась (issue #28).
 META_RANGES="${ZAPRET2_DIR:-/opt/zapret2}/lists/meta-ranges.txt"
 CF_RANGES="${ZAPRET2_DIR:-/opt/zapret2}/lists/cloudflare-ranges.txt"
 
-# Какой файл диапазонов сторожит этот хост.
+# Какой файл диапазонов сторожит этот хост. Новый домен вне Meta — добавить
+# сюда ветку и завести его список в lists/, а не расширять общий.
 ranges_for_host() {
     case "$1" in
-        4pda.to|*.4pda.to) printf '%s' "$CF_RANGES" ;;
-        *)                 printf '%s' "$META_RANGES" ;;
+        *) printf '%s' "$META_RANGES" ;;
     esac
 }
 

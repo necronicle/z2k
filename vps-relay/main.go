@@ -1184,7 +1184,7 @@ func makeSessionID() string {
 // Anything else is silently dropped from the response. Per-host LookupHost
 // timeout is short; failures are also silently dropped.
 
-// Аллоулист /resolve. Имя isInstaHost историческое: сюда добавились WhatsApp и 4pda.
+// Аллоулист /resolve. Имя isInstaHost историческое: сюда добавился WhatsApp.
 //
 // WhatsApp попал по той же причине, что и Instagram, — блокировка идёт по
 // диапазону адресов, а не по имени. Замер 2026-08-05: всё, что резолвится в
@@ -1197,22 +1197,18 @@ func makeSessionID() string {
 // клиента, а каждый лишний домен — это лишняя статическая запись DNS на
 // роутере, где потолок 256 и его уже однажды съели пинами Discord.
 //
-// 4pda.to добавлен 2026-08-19 по тому же признаку, и это первый не-мета случай.
-// Замер: провайдерский DNS отдаёт 8.6.112.0 и 8.47.69.0, к ним TLS не встаёт
-// вовсе (tls_handshake_timeout за 5 секунд). Те же адреса с зарубежного выхода
-// отвечают подлинным сертификатом CN=4pda.to, то есть узлы живые, закрыт путь.
-// Наша же диагностика подтверждает блок по адресу: с нейтральным именем
-// example.com те же адреса тоже молчат — режут адрес, не имя, а такое пакетными
-// техниками не обходится (manual, «Блокировка по IP»). С адресами из
-// зарубежного резолва (104.20.39.144, 172.66.159.63) TLS встаёт за 150 мс.
+// 4pda.to здесь БЫЛ 19.08.2026 и снят в тот же день: блокировка по адресу
+// продержалась несколько часов. Замер до неё — tls_handshake_timeout на
+// 8.6.112.0 и 8.47.69.0; замер после снятия — те же адреса отвечают за 100 мс.
+// Держать домен в аллоулисте ради временного блока смысла нет: пины пришлось
+// бы обновлять ежедневно, а без них сайт открывается сам.
 var instaApex = map[string]bool{
 	"instagram.com":    true,
 	"cdninstagram.com": true,
 	"whatsapp.com":     true,
 	"whatsapp.net":     true,
-	"4pda.to":          true,
 }
-var instaSuffixes = []string{".instagram.com", ".cdninstagram.com", ".whatsapp.com", ".whatsapp.net", ".4pda.to"}
+var instaSuffixes = []string{".instagram.com", ".cdninstagram.com", ".whatsapp.com", ".whatsapp.net"}
 
 func isInstaHost(h string) bool {
 	h = strings.ToLower(strings.TrimSuffix(h, "."))
