@@ -1743,6 +1743,20 @@ generate_nfqws2_opt_from_strategies() {
     #                 incoming replies — только detectors классифицируют.
     http_rkn="--filter-tcp=80 $wl_excl --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=2:failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only:no_http_redirect --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
     [ "${Z2K_NATIVE_DETECTORS:-1}" != "0" ] && http_rkn=$(z2k_strip_custom_detectors "$http_rkn")
+
+    # Обёртка нужна и здесь. Пул объявляется НИЖЕ блока проводки TLS-пулов, и
+    # до 19.08.2026 его туда просто забыли добавить: после среза кастомных
+    # детекторов http_rkn оставался на голом standard_failure_detector без
+    # единого гварда. Цена — apple.com уехал с рабочей первой стратегии на
+    # вторую на живом трафике, замер тем же вечером:
+    #   standard_failure_detector: incoming RST s524 in range s4096   x13/мин
+    # RST после 524 байт ответа — это сервер закрылся сам, а не DPI. Обёртка
+    # отсеивает такие по TTL и по живости хоста; исходящий ретрансмит она
+    # пропускает в штатный детектор на http_req ровно так же, как на
+    # ClientHello, поэтому детект молчаливого дропа не теряется.
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-alert.lua" ]; then
+        http_rkn=$(ensure_rkn_failure_detector "$http_rkn" "z2k_fail_tls_alert")
+    fi
     add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$http_rkn"
 
     # --------------------------------------------------------------------------

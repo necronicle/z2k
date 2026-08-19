@@ -2,7 +2,7 @@
 -- роутере 18.08.2026. Логика bol-van вызывается как есть, мы только сужаем
 -- вход, добавляем сигналы и держим политику «живой хост не ротируем».
 --
--- 1. РЕТРАНСМИТ СЧИТАЕМ ТОЛЬКО НА ClientHello.
+-- 1. РЕТРАНСМИТ СЧИТАЕМ ТОЛЬКО НА ПЕРВОМ ЗАПРОСЕ (ClientHello / HTTP-запрос).
 --    standard_failure_detector считает провалом ЛЮБУЮ исходящую
 --    ретрансмиссию в пределах maxseq. Пойманный случай: телефон по вайфаю
 --    переслал пакет TLS application data (17 03 03 ...) в УЖЕ РАБОТАЮЩЕЙ
@@ -227,11 +227,16 @@ local function suppressed(desync, why)
 	return false
 end
 
+-- Первый запрос клиента в соединении: до ответа сервера его ретрансмит
+-- действительно означает, что запрос не дошёл. Пул HTTP работает с http_req,
+-- пулы TLS — с tls_client_hello; всё остальное это уже живая сессия.
+local Z2K_FIRST_REQUEST = { tls_client_hello = true, http_req = true }
+
 function z2k_fail_tls_alert(desync, crec)
-	-- Исходящее: в штатный детектор пускаем только ClientHello. Ретрансмиты
+	-- Исходящее: в штатный детектор пускаем только первый запрос. Ретрансмиты
 	-- живой сессии — не признак негодной стратегии.
 	if desync.outgoing then
-		if desync.l7payload ~= "tls_client_hello" then return false end
+		if not Z2K_FIRST_REQUEST[desync.l7payload] then return false end
 		if not standard_failure_detector(desync, crec) then return false end
 		if suppressed(desync, "ретрансмит ClientHello") then return false end
 		return true

@@ -109,11 +109,22 @@ else
     no("app data не считается провалом", "false/0", tostring(fired) .. "/" .. calls)
 end
 
+-- HTTP-пул (http_rkn) работает с http_req: для него это тот же первый запрос,
+-- что ClientHello для TLS, и его ретрансмит так же означает, что запрос не
+-- дошёл. Без этого обёртку нельзя надеть на http_rkn, не потеряв детект
+-- молчаливого дропа.
 fired, calls = run(outgoing("http_req"))
-if not fired and calls == 0 then
-    ok("прочие исходящие пейлоады тоже не считаются")
+if fired and calls == 1 then
+    ok("ретрансмит HTTP-запроса уходит в штатный детектор и считается провалом")
 else
-    no("http_req не считается", "false/0", tostring(fired) .. "/" .. calls)
+    no("http_req делегируется", "true/1", tostring(fired) .. "/" .. calls)
+end
+
+fired, calls = run(outgoing("http_reply"))
+if not fired and calls == 0 then
+    ok("прочие исходящие пейлоады не считаются")
+else
+    no("http_reply не считается", "false/0", tostring(fired) .. "/" .. calls)
 end
 
 -- ----- 2. входящее: штатный вызывается всегда --------------------------------

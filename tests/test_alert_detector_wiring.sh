@@ -60,11 +60,15 @@ if grep -q 'standard_failure_detector' "$LUA"; then
 else
     no "делегирование штатному" "вызов standard_failure_detector" "нет"
 fi
-# Ретрансмит — только на ClientHello, иначе возвращается ложная ротация.
-if grep -q 'l7payload ~= "tls_client_hello"' "$LUA"; then
-    ok "ретрансмиссия считается только на ClientHello"
+# Ретрансмит — только на ПЕРВОМ запросе соединения, иначе возвращается ложная
+# ротация: провалом становится любая потеря пакета в живой сессии. Для TLS это
+# ClientHello, для HTTP-пула — http_req; всё остальное отсекается.
+if grep -q 'Z2K_FIRST_REQUEST\[desync.l7payload\]' "$LUA" \
+   && grep -q 'tls_client_hello = true' "$LUA" \
+   && grep -q 'http_req = true' "$LUA"; then
+    ok "ретрансмиссия считается только на первом запросе (ClientHello / http_req)"
 else
-    no "сужение по ClientHello" 'l7payload ~= "tls_client_hello"' "нет"
+    no "сужение по первому запросу" 'Z2K_FIRST_REQUEST с tls_client_hello и http_req' "нет"
 fi
 # Уровень alert: 2 = fatal. Уровень 1 (close_notify) — штатное завершение,
 # считать его провалом значит ротировать на каждом закрытии сессии.
@@ -136,11 +140,18 @@ case "$RKN" in
         no "inseq/retrans уцелели" "inseq=26000 и retrans=2" "$RKN" ;;
 esac
 
-# yt/gv пока без проводки — трогаем только там, где есть замер.
-YT=$(printf '%s\n' "$OUT" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" | grep -F 'key=yt_tcp' | head -1)
-case "$YT" in
-    *failure_detector=*) no "yt_tcp без проводки" "нет failure_detector" "есть" ;;
-    *)                   ok "yt_tcp остаётся на чистом штатном детекторе" ;;
+# HTTP-пул объявляется НИЖЕ блока проводки TLS-пулов, и до 19.08.2026 его туда
+# просто забыли добавить: после среза кастомных детекторов он оставался на
+# голом standard_failure_detector без единого гварда. Цена — apple.com уехал с
+# рабочей первой стратегии на вторую, замер тем же вечером:
+#   standard_failure_detector: incoming RST s524 in range s4096   x13/мин
+# Сторожим именно связь «пул объявлен ниже — проводка всё равно на нём».
+HTTP=$(printf '%s\n' "$OUT" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" | grep -F 'key=http_rkn' | head -1)
+case "$HTTP" in
+    *failure_detector=z2k_fail_tls_alert*)
+        ok "http_rkn несёт failure_detector=z2k_fail_tls_alert" ;;
+    *)
+        no "проводка детектора в http_rkn" "failure_detector=z2k_fail_tls_alert" "срезана или не добавлена" ;;
 esac
 
 # --- 2b. Нет файла — нет и проводки --------------------------------------------
@@ -154,6 +165,13 @@ case "$RKN_NOLUA" in
         no "без lua-файла проводки нет" "нет failure_detector" "проводка осталась" ;;
     *)
         ok "без lua-файла профиль остаётся на чистом штатном детекторе" ;;
+esac
+HTTP_NOLUA=$(printf '%s\n' "$OUT_NOLUA" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" | grep -F 'key=http_rkn' | head -1)
+case "$HTTP_NOLUA" in
+    *failure_detector=*)
+        no "без lua-файла http_rkn тоже без проводки" "нет failure_detector" "проводка осталась" ;;
+    *)
+        ok "без lua-файла http_rkn остаётся на чистом штатном детекторе" ;;
 esac
 
 # --- 3. Окно входящих ----------------------------------------------------------
