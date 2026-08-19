@@ -23,6 +23,7 @@ end
 -- ----- окружение движка (минимальные заглушки) ------------------------------
 function DLOG() end
 TH_FIN = 0x01
+TH_RST = 0x04
 function bitand(a, b)
     local r, p = 0, 1
     while a > 0 and b > 0 do
@@ -216,14 +217,20 @@ else
     no("алерты не считаются живостью", "true", tostring(fired))
 end
 
--- ----- 5. входящий ретрансмит (только пулы видео) -------------------------
+-- ----- 5. вставший входящий поток (только пулы видео) ---------------------
 -- Полевой случай LG webOS на нерабочей 20-й стратегии: сервер отдаёт 4482
 -- байта и дальше шлёт один и тот же сегмент 15-16 раз, телевизор не
 -- подтверждает. Ни RST, ни FIN, ни исходящих ретрансмитов — детектор молчал.
+--
+-- Признак — ОСТАНОВКА потока, а не факт повтора. Первая редакция считала любой
+-- входящий ретрансмит в пределах inseq и 19.08.2026 увела gv_tcp с первой
+-- стратегии на четвёртую без единого реального блока: под планкой inseq=24000
+-- лежит не хендшейк, а первые 24 КБ видеопотока, где телевизор по вайфаю
+-- штатно теряет пакеты.
 reset_host()
 std_result = false
 
--- первое появление сегмента и два повтора — ещё не приговор
+-- первое появление сегмента и пять повторов — ещё не приговор
 local conn = {}
 fired = run(seg_gv(4482, 24000, nil, false), conn)
 if not fired then
@@ -231,33 +238,70 @@ if not fired then
 else
     no("первый приход", "false", tostring(fired))
 end
-fired = run(seg_gv(4482, 24000), conn)
-if not fired then ok("один повтор — ещё не провал")
-else no("один повтор", "false", tostring(fired)) end
-fired = run(seg_gv(4482, 24000), conn)
-if not fired then ok("два повтора — ещё не провал")
-else no("два повтора", "false", tostring(fired)) end
+local early = false
+for _ = 1, 5 do
+    if run(seg_gv(4482, 24000), conn) then early = true end
+end
+if not early then
+    ok("пять повторов подряд — ещё не провал")
+else
+    no("порог не срабатывает раньше шести", "false", "true")
+end
 fired = run(seg_gv(4482, 24000), conn)
 if fired then
-    ok("три повтора одного сегмента = провал")
+    ok("шесть повторов одного сегмента без продвижения = провал")
 else
-    no("порог трёх повторов", "true", tostring(fired))
+    no("порог шести повторов", "true", tostring(fired))
 end
 
--- поток, который движется вперёд, повторов не даёт вовсе
+-- ГЛАВНОЕ. Поток теряет пакеты, но едет: за повтором приходят новые данные.
+-- Ровно это давал телевизор на РАБОЧЕЙ стратегии, и ровно это уводило gv_tcp.
+-- Двадцать ретрансмитов в окне не должны дать ни одного события.
 conn = {}
-for _, pos in ipairs({1400, 2800, 4200, 5600, 7000}) do
-    fired = run(seg_gv(pos, 24000, nil, false), conn)
+local pos = 1400
+local retrans_seen = 0
+fired = false
+for _ = 1, 10 do
+    if run(seg_gv(pos, 24000, nil, false), conn) then fired = true end   -- новые данные
+    if run(seg_gv(pos, 24000), conn) then fired = true end               -- потеря, повтор
+    if run(seg_gv(pos, 24000), conn) then fired = true end               -- и ещё один
+    retrans_seen = retrans_seen + 2
+    pos = pos + 1400
+end
+if not fired and retrans_seen == 20 then
+    ok("поток с потерями, но идущий вперёд, провалом не считается (20 ретрансмитов)")
+else
+    no("продвижение обнуляет счёт", "false", tostring(fired))
+end
+
+-- поток, который движется вперёд без единого повтора, тем более молчит
+conn = {}
+for _, p in ipairs({1400, 2800, 4200, 5600, 7000}) do
+    fired = run(seg_gv(p, 24000, nil, false), conn)
 end
 if not fired then
-    ok("поток, идущий вперёд, провалом не считается")
+    ok("поток без повторов провалом не считается")
 else
     no("движение вперёд провалом не считается", "false", tostring(fired))
 end
 
+-- сервер отъезжает назад по окну на РАЗНЫЕ сегменты — это не залипание
+conn = {}
+fired = false
+for _ = 1, 4 do
+    for _, p in ipairs({4482, 5882, 7282}) do
+        if run(seg_gv(p, 24000), conn) then fired = true end
+    end
+end
+if not fired then
+    ok("повторы разных сегментов не складываются в залипание")
+else
+    no("залипание = один и тот же сегмент", "false", tostring(fired))
+end
+
 -- повторы за планкой успеха — обычная потеря пакетов, не наше дело
 conn = {}
-for _ = 1, 6 do fired = run(seg_gv(30000, 24000), conn) end
+for _ = 1, 12 do fired = run(seg_gv(30000, 24000), conn) end
 if not fired then
     ok("повторы выше планки успеха провалом не считаются")
 else
@@ -267,7 +311,7 @@ end
 -- чистые ACK стоят на одной позиции: их повторами считать нельзя
 conn = {}
 local ack = seg_gv(4482, 24000); ack.dis.payload = ""
-for _ = 1, 8 do fired = run(ack, conn) end
+for _ = 1, 12 do fired = run(ack, conn) end
 if not fired then
     ok("серия пустых ACK на одной позиции провалом не считается")
 else
@@ -277,7 +321,7 @@ end
 -- ключ yt_tcp тоже под правилом: картинки и страницы ютуба залипают так же
 conn = {}
 fired = false
-for _ = 1, 4 do if run(seg_gv(4482, 18000, "yt_tcp"), conn) then fired = true end end
+for _ = 1, 7 do if run(seg_gv(4482, 18000, "yt_tcp"), conn) then fired = true end end
 if fired then
     ok("правило работает и в пуле yt_tcp")
 else
@@ -286,7 +330,7 @@ end
 
 -- РКН не трогаем намеренно: там на одном хосте и API-ответы, и страницы
 conn = {}
-for _ = 1, 8 do fired = run(seg_gv(4482, 26000, "rkn_tcp"), conn) end
+for _ = 1, 12 do fired = run(seg_gv(4482, 26000, "rkn_tcp"), conn) end
 if not fired then
     ok("в пуле rkn_tcp правило молчит")
 else
@@ -299,11 +343,11 @@ reset_host()
 for _ = 1, 3 do run(incoming("HTTP/2 payload")) end
 conn = {}
 fired = false
-for _ = 1, 4 do if run(seg_gv(4482, 24000), conn) then fired = true end end
+for _ = 1, 7 do if run(seg_gv(4482, 24000), conn) then fired = true end end
 if fired then
-    ok("ретрансмит засчитывается даже когда хост считается живым")
+    ok("залипание засчитывается даже когда хост считается живым")
 else
-    no("живость не подавляет ретрансмит", "true", tostring(fired))
+    no("живость не подавляет залипание", "true", tostring(fired))
 end
 
 -- одно соединение — одно событие. Сервер повторяет сегмент пятнадцать раз;
@@ -311,11 +355,11 @@ end
 -- провалов и уводит страту, работающую для остальных соединений.
 conn = {}
 local fires = 0
-for _ = 1, 12 do
+for _ = 1, 16 do
     if run(seg_gv(4482, 24000), conn) then fires = fires + 1 end
 end
 if fires == 1 then
-    ok("двенадцать повторов одного потока дают ровно одно событие")
+    ok("шестнадцать повторов одного потока дают ровно одно событие")
 else
     no("одно соединение — одно событие", "1", fires)
 end
@@ -323,13 +367,134 @@ end
 -- счёт ведётся по соединению, а не по хосту: два разных залипших потока
 -- не должны складываться в одно событие раньше времени
 local c1, c2 = {}, {}
-run(seg_gv(4482, 24000), c1)
-run(seg_gv(4482, 24000), c2)
-fired = run(seg_gv(4482, 24000), c1)
+fired = false
+for _ = 1, 5 do
+    if run(seg_gv(4482, 24000), c1) then fired = true end
+    if run(seg_gv(4482, 24000), c2) then fired = true end
+end
 if not fired then
     ok("повторы разных соединений не складываются")
 else
     no("счёт по соединению", "false", tostring(fired))
+end
+
+-- ----- 6. RST от самого сервера (сверка TTL) --------------------------------
+-- Полевой случай 19.08.2026: apple.com уехал с рабочей первой стратегии на
+-- нерабочую вторую. За 4.5 часа отладки все 15 событий детектора — incoming
+-- RST, и два прошедших были на s7488, то есть после 7.4 КБ доставленных
+-- данных. Это разрыв со стороны сервера, а не DPI. Планку inseq снижать
+-- нельзя (на ней держится детект байтового гейта ТСПУ на 12-18К), поэтому
+-- различаем по TTL.
+reset_host()
+
+local function srv_data(ttl, hlim)
+    local d = { outgoing = false, l7payload = "unknown", arg = {},
+                dis = { tcp = { th_flags = 0x18 }, payload = string.rep("z", 1400) } }
+    if hlim then d.dis.ip6 = { ip6_hlim = hlim } else d.dis.ip = { ip_ttl = ttl } end
+    return d
+end
+local function srv_rst(ttl, hlim)
+    local d = { outgoing = false, l7payload = "unknown", arg = {},
+                dis = { tcp = { th_flags = TH_RST }, payload = "" } }
+    if hlim then d.dis.ip6 = { ip6_hlim = hlim } else d.dis.ip = { ip_ttl = ttl } end
+    return d
+end
+
+-- сервер отдал данные и сам же закрылся: TTL тот же
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+run(srv_data(52), conn)
+std_result = true; pos_value = 7488
+fired = run(srv_rst(52), conn)
+if not fired then
+    ok("RST с TTL потока = разрыв сервера, страту не уводит")
+else
+    no("RST сервера не провал", "false", tostring(fired))
+end
+
+-- ТСПУ в двух хопах от нас: данные сервера ttl 52, инжект ttl 126
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+run(srv_data(52), conn)
+std_result = true; pos_value = 14000
+fired = run(srv_rst(126), conn)
+if fired then
+    ok("инжектированный RST (TTL 126 против 52) остаётся провалом")
+else
+    no("байтовый гейт ТСПУ ловится", "true", tostring(fired))
+end
+
+-- эталона нет — данных сервер не присылал вовсе: классический сброс на
+-- хендшейке, судить не по чему, считаем провалом как раньше
+reset_host(); conn = {}
+std_result = true; pos_value = 1
+fired = run(srv_rst(126), conn)
+if fired then
+    ok("RST до первого байта данных считается провалом (эталона нет)")
+else
+    no("сброс на хендшейке ловится", "true", tostring(fired))
+end
+
+-- балансир CDN отвечает с соседней машины: хоп-другой разницы — всё ещё сервер
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+run(srv_data(52), conn)
+std_result = true; pos_value = 9000
+fired = run(srv_rst(50), conn)
+if not fired then
+    ok("разброс TTL в пределах двух хопов — всё ещё сервер")
+else
+    no("допуск на балансир", "false", tostring(fired))
+end
+
+-- а вот три хопа разницы — уже не тот путь
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+run(srv_data(52), conn)
+std_result = true; pos_value = 9000
+fired = run(srv_rst(56), conn)
+if fired then
+    ok("разброс больше двух хопов считается провалом")
+else
+    no("порог допуска", "true", tostring(fired))
+end
+
+-- IPv6: то же самое по ip6_hlim
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+run(srv_data(nil, 54), conn)
+std_result = true; pos_value = 7488
+fired = run(srv_rst(nil, 54), conn)
+if not fired then
+    ok("сверка работает и по IPv6 (ip6_hlim)")
+else
+    no("IPv6 hop limit", "false", tostring(fired))
+end
+
+-- провал не по RST (DPI-редирект) сверкой TTL не подавляется
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+run(srv_data(52), conn)
+std_result = true; pos_value = 2000
+local redirect = srv_data(52); redirect.dis.tcp.th_flags = 0x18
+fired = run(redirect, conn)
+if fired then
+    ok("не-RST провал (редирект) сверкой TTL не подавляется")
+else
+    no("редирект остаётся провалом", "true", tostring(fired))
+end
+
+-- пакет без IP-заголовка в дизассемблере не роняет детектор
+reset_host(); conn = {}
+std_result = false; pos_value = 1400
+run(srv_data(52), conn)
+std_result = true; pos_value = 7488
+local bare = srv_rst(52); bare.dis.ip = nil
+fired = run(bare, conn)
+if fired then
+    ok("RST без разобранного IP-заголовка судится по-старому")
+else
+    no("нет TTL — нет подавления", "true", tostring(fired))
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
