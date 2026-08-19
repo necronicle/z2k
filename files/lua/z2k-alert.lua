@@ -13,6 +13,26 @@
 --    alert и закрывается по FIN. Ретрансмитить нечего, RST нет — штатный
 --    детектор слеп, страта не ротируется никогда.
 --
+-- 6. ПРОВАЛ ЗАСЧИТЫВАЕТСЯ ТОЙ СТРАТЕГИИ, НА КОТОРОЙ СОЕДИНЕНИЕ НАЧАЛОСЬ.
+--    Замер 19.08.2026: инстаграм принудительно посажен на заведомо нерабочую
+--    седьмую стратегию. Сервер честно ответил `decode_error` на покорёженный
+--    ClientHello — 104 фатальных алерта. Ротировать было правильно, но
+--    instagram.com по IPv6 за ОДНУ СЕКУНДУ пролистал двенадцать стратегий:
+--      failure counter 3/3 -> circular: rotate strategy to 15
+--      failure counter 3/3 -> circular: rotate strategy to 16
+--      failure counter 3/3 -> circular: rotate strategy to 17
+--    Причина в темпе, а не в логике. Страница открывает десятки соединений
+--    разом; все они ушли на седьмой и все вернулись с алертом. Каждые три
+--    провала — немедленная ротация, а провалы соединений, начатых ещё на
+--    седьмой, продолжали капать уже после неё и вешались на стратегии, которые
+--    не отправили ни одного пакета. Успехов за это время ноль, гасить счётчик
+--    нечем.
+--
+--    Поэтому соединение помечается номером стратегии при первом же пакете, и
+--    провал засчитывается, только если она всё ещё текущая. После ротации
+--    счётчик набирается заново — теми соединениями, которые реально пошли на
+--    новой стратегии.
+
 -- 5. RST ОТ САМОГО СЕРВЕРА — НЕ ПРОВАЛ.
 --    Планка `inseq` у нас поднята до 18-26К намеренно (см. комментарий в
 --    lib/config_official.sh): ниже неё не срабатывает штатный success, иначе
@@ -112,12 +132,24 @@ local function host_alive(desync)
 	return (hrec.z2k_ok_n or 0) >= Z2K_OK_MIN
 end
 
--- Пулы, где входящий ретрансмит считается провалом. Видео и картинки ютуба:
--- там поток либо идёт, либо не идёт, промежуточных «маленьких правильных
--- ответов» не бывает. РКН сюда не включён намеренно — там на одном хосте
--- живут и API-ответы в пару килобайт, и страницы, и рвать рабочую страту из-за
--- одного залипшего соединения нельзя.
-local Z2K_RETRANS_POOLS = { yt_tcp = true, gv_tcp = true }
+-- Пулы, где вставший входящий поток считается провалом.
+--
+-- РКН включён 19.08.2026. До этого он был исключён намеренно, и причина в
+-- комментарии стояла такая: на одном хосте живут и API-ответы в пару
+-- килобайт, и страницы, и рвать рабочую страту из-за одного залипшего
+-- соединения нельзя. Но это была претензия к ПЕРВОЙ редакции правила, которая
+-- считала провалом любой входящий ретрансмит — то есть любую потерю пакета.
+-- Ровно она в тот же день увела gv_tcp с первой стратегии на четвёртую.
+-- Нынешняя редакция требует шесть повторов ОДНОГО сегмента без единого
+-- продвижения вперёд, даёт одно событие на соединение, и на ротацию нужно три
+-- соединения. Потеря пакета такого не набирает.
+--
+-- Зачем это РКН. `inseq` там поднят до 26000 ради байтового гейта ТСПУ, но
+-- сам гейт он не ЛОВИТ — только не даёт объявить успех раньше него. Если гейт
+-- рвёт поток тихо, без RST и FIN, у профиля не остаётся ни одного события, и
+-- заблокированный сайт стоит на нерабочей стратегии вечно. Это правило —
+-- единственный сигнал на такой случай.
+local Z2K_RETRANS_POOLS = { yt_tcp = true, gv_tcp = true, rkn_tcp = true }
 -- Сколько раз подряд сервер должен повторить ОДИН И ТОТ ЖЕ сегмент, ни разу
 -- не продвинув поток вперёд, чтобы считать поток вставшим. Полевой замер
 -- 18.08.2026, LG webOS на заведомо нерабочей 20-й стратегии: на КАЖДОМ
@@ -227,7 +259,15 @@ end
 local function incoming_reset_verdict(desync, crec)
 	local tcp = desync.dis and desync.dis.tcp
 	if not tcp or not tcp.th_flags or not TH_RST then return nil end
-	if bitand(tcp.th_flags, TH_RST) == 0 then return "block" end
+	-- Не RST — значит DPI-редирект. Мимо гварда его пускать НЕЛЬЗЯ:
+	-- is_dpi_redirect (zapret-auto.lua:108) считает редиректом ЛЮБОЙ ответ,
+	-- где SLD цели не совпал с SLD запроса, без всякой проверки на страницу-
+	-- заглушку. На восьмидесятом порту такие редиректы законны сплошь и рядом
+	-- — сокращатели ссылок, передача на CDN другого домена, OAuth. Ложное
+	-- срабатывание тут стоит рабочей стратегии, а самоподавление настоящего
+	-- редиректа закрыто иначе: провальный пакет больше не считается «живым»
+	-- ответом (см. порядок вызовов в z2k_fail_tls_alert).
+	if bitand(tcp.th_flags, TH_RST) == 0 then return nil end
 
 	-- Эталона нет: данных сервер ещё не присылал. Это классический DPI-сброс
 	-- на хендшейке, но ровно так же выглядит и поддельный RST на живом хосте,
@@ -248,6 +288,24 @@ local function incoming_reset_verdict(desync, crec)
 	return "server"
 end
 
+-- Номер стратегии, под которым соединение началось. Ставится на первом же
+-- пакете, до любых проверок: если пометить позже, соединение, чей провал
+-- доехал уже после ротации, унаследует НОВЫЙ номер и отфильтровано не будет.
+local function note_strategy(desync, crec)
+	if not crec or crec.z2k_nstrat then return end
+	local hrec = host_record(desync)
+	if hrec and hrec.nstrategy then crec.z2k_nstrat = hrec.nstrategy end
+end
+
+-- false, если стратегия под соединением уже сменилась. Без пометки или без
+-- host-записи не судим: лучше засчитать лишний провал, чем ослепить детектор.
+local function strategy_current(desync, crec)
+	if not crec or not crec.z2k_nstrat then return true end
+	local hrec = host_record(desync)
+	if not hrec or not hrec.nstrategy then return true end
+	return crec.z2k_nstrat == hrec.nstrategy
+end
+
 local function suppressed(desync, why)
 	if host_alive(desync) then
 		DLOG("z2k_fail_tls_alert: " .. why .. " подавлен — хост отвечает живьём в текущем окне")
@@ -261,7 +319,7 @@ end
 -- пулы TLS — с tls_client_hello; всё остальное это уже живая сессия.
 local Z2K_FIRST_REQUEST = { tls_client_hello = true, http_req = true }
 
-function z2k_fail_tls_alert(desync, crec)
+local function z2k_fail_verdict(desync, crec)
 	-- Исходящее: в штатный детектор пускаем только первый запрос. Ретрансмиты
 	-- живой сессии — не признак негодной стратегии.
 	if desync.outgoing then
@@ -285,12 +343,21 @@ function z2k_fail_tls_alert(desync, crec)
 		fatal_alert = (s <= 1024)
 	end
 
-	note_alive(desync, fatal_alert)
 	note_server_ttl(desync, crec)
 
 	-- Входящее: штатный детектор (входящий RST, DPI-редирект), окно 16К-гейта
 	-- по inseq — его же.
-	if standard_failure_detector(desync, crec) then
+	--
+	-- ПОРЯДОК ВАЖЕН. Учёт живости идёт ПОСЛЕ вердикта и только если провала
+	-- нет: иначе пакет, который сам является блокировкой, засчитывается в
+	-- доказательство того, что хост живой, и глушит собственный провал.
+	-- Страница-заглушка DPI — непустой ответ, и трёх соединений хватает, чтобы
+	-- взвести гвард раньше, чем наберётся порог провалов; блокировка тогда не
+	-- ротируется никогда.
+	local failed = standard_failure_detector(desync, crec)
+	if not failed then note_alive(desync, fatal_alert) end
+
+	if failed then
 		local verdict = incoming_reset_verdict(desync, crec)
 		if verdict == "server" then return false end
 		if verdict == "block" then return true end
@@ -308,4 +375,18 @@ function z2k_fail_tls_alert(desync, crec)
 	end
 
 	return false
+end
+
+function z2k_fail_tls_alert(desync, crec)
+	note_strategy(desync, crec)
+
+	local failed = z2k_fail_verdict(desync, crec)
+	if not failed then return false end
+
+	if not strategy_current(desync, crec) then
+		DLOG("z2k_fail_tls_alert: провал соединения со стратегии " ..
+		     tostring(crec.z2k_nstrat) .. " не засчитан — сейчас уже другая")
+		return false
+	end
+	return true
 end

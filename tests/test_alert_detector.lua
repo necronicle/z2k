@@ -181,12 +181,15 @@ end
 -- Пойманный полевой случай: три поддельных RST на фоне девяти нормальных
 -- соединений к тому же хосту уводили рабочую страту.
 reset_host()
-std_result = true
 pos_value = 1
 
--- три живых ответа сервера подряд
+-- Три живых ответа сервера подряд. std_result=false — это ОБЫЧНЫЕ ответы, на
+-- которых штатный детектор молчит. Пакет, который сам является провалом, в
+-- живость больше не засчитывается, и подпирать гвард им нельзя.
+std_result = false
 for _ = 1, 3 do run(incoming("HTTP/2 payload")) end
 
+std_result = true
 fired = run(incoming(""))     -- RST: штатный детектор говорит «провал»
 if not fired then
     ok("провал подавлен: хост в этом же окне трижды ответил живьём")
@@ -354,13 +357,45 @@ else
     no("yt_tcp под правилом", "true", tostring(fired))
 end
 
--- РКН не трогаем намеренно: там на одном хосте и API-ответы, и страницы
+-- РКН включён 19.08.2026: без этого правила тихий байтовый гейт ТСПУ не даёт
+-- профилю ни одного события, и заблокированный сайт стоит на нерабочей
+-- стратегии вечно. Считаем ЛЮБОЕ срабатывание за прогон, а не последнее:
+-- после порога правило возвращает false (одно событие на соединение), и
+-- проверка по последнему вызову молча пропускала бы отключённый пул.
 conn = {}
-for _ = 1, 12 do fired = run(seg_gv(4482, 26000, "rkn_tcp"), conn) end
-if not fired then
-    ok("в пуле rkn_tcp правило молчит")
+fired = false
+for _ = 1, 12 do if run(seg_gv(4482, 26000, "rkn_tcp"), conn) then fired = true end end
+if fired then
+    ok("в пуле rkn_tcp правило работает")
 else
-    no("правило только для видео", "false", tostring(fired))
+    no("РКН под правилом", "true", tostring(fired))
+end
+
+-- А вот пул, которого в списке нет, правило игнорирует целиком.
+conn = {}
+fired = false
+for _ = 1, 12 do if run(seg_gv(4482, 26000, "discord_udp"), conn) then fired = true end end
+if not fired then
+    ok("пул вне списка правило не трогает")
+else
+    no("правило только для перечисленных пулов", "false", tostring(fired))
+end
+
+-- И главное для РКН: потеря пакета на живом соединении провалом НЕ становится.
+-- Именно этого боялись, когда РКН из правила исключали.
+conn = {}
+fired = false
+local rkn_pos = 1400
+for _ = 1, 10 do
+    if run(seg_gv(rkn_pos, 26000, "rkn_tcp", false), conn) then fired = true end
+    if run(seg_gv(rkn_pos, 26000, "rkn_tcp"), conn) then fired = true end
+    if run(seg_gv(rkn_pos, 26000, "rkn_tcp"), conn) then fired = true end
+    rkn_pos = rkn_pos + 1400
+end
+if not fired then
+    ok("на РКН поток с потерями, но идущий вперёд, провалом не считается")
+else
+    no("РКН: продвижение обнуляет счёт", "false", tostring(fired))
 end
 
 -- гвард по живости здесь НЕ применяется: залипшее соединение само же и
@@ -542,18 +577,36 @@ else
     no("гейт не душится живостью", "true", tostring(fired))
 end
 
--- DPI-редирект в HTTP-пуле: страница-заглушка тоже непустой ответ, и три
--- соединения подряд успевают взвести гвард раньше порога провалов.
-reset_host(); conn = {}
-std_result = false; pos_value = 1400
-for _ = 1, 5 do run(srv_data(52), conn) end
+-- DPI-редирект в HTTP-пуле: страница-заглушка — тоже непустой ответ. Если
+-- считать её признаком жизни, три соединения подряд взводят гвард раньше, чем
+-- наберётся порог провалов, и блокировка не ротируется никогда. Проверяем, что
+-- серия заглушек гвард НЕ взводит и каждая засчитывается провалом.
+reset_host()
 std_result = true; pos_value = 2000
-local blockpage = srv_data(52); blockpage.dis.tcp.th_flags = 0x18
-fired = run(blockpage, conn)
-if fired then
-    ok("DPI-редирект засчитывается, даже когда хост выглядит живым")
+local blocked = 0
+for _ = 1, 5 do
+    local blockpage = srv_data(52); blockpage.dis.tcp.th_flags = 0x18
+    if run(blockpage, {}) then blocked = blocked + 1 end
+end
+if blocked == 5 then
+    ok("серия страниц-заглушек не взводит гвард живости")
 else
-    no("редирект мимо гварда", "true", tostring(fired))
+    no("заглушка не признак жизни", "5", blocked)
+end
+
+-- Но законный редирект на живом хосте гвард обязан душить: is_dpi_redirect
+-- считает редиректом любое несовпадение SLD, без проверки на заглушку, а на
+-- восьмидесятом порту это сплошь сокращатели ссылок и передача на чужой CDN.
+reset_host()
+std_result = false; pos_value = 1400
+for _ = 1, 3 do run(srv_data(52), {}) end
+std_result = true; pos_value = 2000
+local legit = srv_data(52); legit.dis.tcp.th_flags = 0x18
+fired = run(legit, {})
+if not fired then
+    ok("редирект на хосте с живым трафиком подавлен гвардом")
+else
+    no("законный редирект не уводит страту", "false", tostring(fired))
 end
 
 -- А вот RST БЕЗ эталона TTL по-прежнему решает гвард: так выглядит и
@@ -568,6 +621,62 @@ if not fired then
     ok("RST без эталона TTL на живом хосте остаётся под гвардом")
 else
     no("гвард сохранён там, где судить не по чему", "false", tostring(fired))
+end
+
+-- ----- 8. провал принадлежит стратегии, на которой соединение началось -------
+-- Замер 19.08.2026: инстаграм на заведомо нерабочей 7-й стратегии пролистал
+-- ДВЕНАДЦАТЬ стратегий за одну секунду. Ротировать было правильно — сервер
+-- отвечал decode_error, — но десятки соединений ушли на 7-ю разом, и их
+-- провалы капали уже после ротации, вешаясь на стратегии, которые не отправили
+-- ни одного пакета.
+
+-- провал соединения, начатого на текущей стратегии, засчитывается
+reset_host()
+hrec.nstrategy = 7
+std_result = true; pos_value = 1
+conn = {}
+fired = run(incoming(""), conn)
+if fired then
+    ok("провал на текущей стратегии засчитывается")
+else
+    no("обычный провал не потерян", "true", tostring(fired))
+end
+
+-- то же соединение после ротации — провал больше не наш
+reset_host()
+hrec.nstrategy = 7
+std_result = false; pos_value = 1
+conn = {}
+run(incoming("данные"), conn)      -- соединение началось на 7-й
+hrec.nstrategy = 8                  -- ротация произошла
+std_result = true
+fired = run(incoming(""), conn)
+if not fired then
+    ok("провал соединения с прошлой стратегии не засчитывается")
+else
+    no("провал не вешается на новую стратегию", "false", tostring(fired))
+end
+
+-- а соединение, ОТКРЫТОЕ уже после ротации, считается как обычно
+reset_host()
+hrec.nstrategy = 8
+std_result = true; pos_value = 1
+fired = run(incoming(""), {})
+if fired then
+    ok("новое соединение после ротации провал засчитывает")
+else
+    no("после ротации счётчик набирается заново", "true", tostring(fired))
+end
+
+-- без номера стратегии в host-записи не судим: лучше лишний провал, чем
+-- ослепший детектор
+reset_host()
+std_result = true; pos_value = 1
+fired = run(incoming(""), {})
+if fired then
+    ok("без номера стратегии провал засчитывается по-старому")
+else
+    no("нет nstrategy — не слепнем", "true", tostring(fired))
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
