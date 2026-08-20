@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 25,
-  "current": "r-77.4",
+  "seq": 26,
+  "current": "r-77.5",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "bc837006b9ba6d65dbbfbc0810ca0cbfbe06d4bf57db76c3ec21bbe09545f332",
+  "files/S99zapret2.new": "32d36e3bf0f9ebde9318ebd31992f5bffb0b247f348d1f2df23d80b269cd1385",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/4pda.bin": "eefeaf09dde8d69b1f176212541f63c68b314a33a335eced99a8a29f17254da8",
@@ -50,7 +50,7 @@
   "files/lists/telegram_ips.txt": "e6a64d3224dc507f6b9faf50dadf7f1594f056de5a1d5b2f02fd8f5d880851b8",
   "files/lists/youtube_ips.txt": "e3118339de975d0a13c17c0cbb99e4f968a217dd579f30f94f71bd37cd2180e7",
   "files/lists/youtube_ips6.txt": "d51f5e44b989b503729ae35b79cf80adf7e47ac96fde42d785e0ba6e501c28cb",
-  "files/lua/z2k-alert.lua": "33b3c1ee1a6af2ca5cd57a363322c705817ffe0a8844061655828292b335dff2",
+  "files/lua/z2k-alert.lua": "bc0e702e52e090c6340779c70bd101d2707e202ee1a772083d4f8535bd90ec47",
   "files/lua/z2k-detectors.lua": "c7702b2f1adb007176fe25ebe25cfedfd24827891e7883477340479fadf3eac4",
   "files/lua/z2k-fooling-ext.lua": "4b5efb6672f54dbe4d04440066f06e84d92e43c8534cdfb88d136028e6d8231f",
   "files/lua/z2k-modern-core.lua": "5f4b5312e69447b887d868be74b756d103515eca59765f9155a358bf96da08c7",
@@ -74,7 +74,7 @@
   "files/z2k-insta-ip-refresh.sh": "ad64f9ed5d64e77659cfae5dc32df90b40d5dc42ce981a2ff6655af0c90deb21",
   "files/z2k-nfqueue-selfheal.sh": "f170f69077da716473ef2a8ec63381bd6eb4e55316104924a36e784dcfb2a63c",
   "files/z2k-ppe-deoffload.sh": "2e17688dc5de388fe95fbfc36b49b0c71485537faac7de639e17560006b43ced",
-  "files/z2k-scheduler.sh": "23399c160354fc9410ba5b3571b748a45e7982be9b17df5d4b3f6c9df485acd6",
+  "files/z2k-scheduler.sh": "cd6b079c10b1bf6a28cbf732977daf01640e597387924b54c245002421502ac1",
   "files/z2k-stats-upload.sh": "0641c6e8dcf5d07ca0b479af712f7080b5b3c579856c0c4f6fd24370c607b87c",
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
@@ -82,7 +82,7 @@
   "files/z2k-warp.sh": "6858b475fb4e05eecd7e8df2c9b161d964338df34bf4096cdb75e7abfa649ca2",
   "lib/auto_update.sh": "40e0a03f740d9d43bc59d4f47fa7149d8e80e3819d7873dbceae7b4e47e1ee54",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
-  "lib/config_official.sh": "988813d1cc6f632afd741168829f97f9aa9b5441392988b1102e07b4754282c5",
+  "lib/config_official.sh": "e9c212b815d0064600187ecc75dfb342da0018569ab0631c8ee6b1b08a93257a",
   "lib/install.sh": "bd3b7101358e746da3a5d55f6403d6162459602689b7556f01aa59f96b8de0bf",
   "lib/menu.sh": "8e3bf1d3f6e68298b1b0c1ef8fb8ab956b4ae86918eaa79508bd8309ffe101e8",
   "lib/strategies.sh": "e9eaa6ba09458d3841c91bc8756aef32133e26126e8d0e5b3359831113f92484",
@@ -120,7 +120,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "c97da4fb1229a22a5292ac01bd7fc1c0da68fe768fab06b3e752c1583a0d12c3",
+  "webpanel/www/index.html": "8f051d7ea622aa3f89ad668ccf6fc89cc98bbb47ebac76bab6e958fcf6d7ec0e",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -321,6 +321,7 @@
 {"v": "r-77", "type": "reinstall", "ts": "2026-08-18T09:34:21Z", "ref": "r-77", "desc": "Подбор стратегии стал умнее: он видит блокировки, которые раньше пропускал молча, и больше не сбрасывает рабочую настройку из-за случайной потери пакета или поддельного разрыва соединения. Из меню и панели убраны два старых переключателя, от которых давно был только вред.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/z2k-diag.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/loadorder.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"]},
 {"v": "r-77.2", "type": "reinstall", "ts": "2026-08-19T11:59:57Z", "ref": "r-77.2", "desc": "Кнопка отключения автообновлений больше не включается сама. 4PDA снова открывается. Подбор рабочей настройки для видео и картинок YouTube теперь действительно срабатывает — раньше он в части случаев молча стоял на месте.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/cloudflare-ranges.txt", "files/lua/z2k-alert.lua", "files/lua/z2k-quic-silence.lua", "files/z2k-insta-ip-refresh.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "z2k.sh", "UPDATES.json"]},
 {"v": "p-77.3", "type": "patch", "ts": "2026-08-19T13:54:34Z", "ref": "p-77.3", "desc": "При удалении z2k теперь убирает за собой все статические DNS-записи, которые прописывал. Раньше оставались записи для Instagram, WhatsApp и 4PDA — со временем адреса устаревали, и эти сайты переставали открываться уже без z2k.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "UPDATES.json"]},
-{"v": "r-77.4", "type": "reinstall", "ts": "2026-08-19T15:22:04Z", "ref": "r-77.4", "desc": "4PDA снова открывается напрямую — временная блокировка снята, и прошитые адреса больше не нужны. При обновлении они убираются автоматически, чтобы со временем не начали мешать.", "changed_files": ["webpanel/www/index.html", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "z2k.sh", "UPDATES.json"]}
+{"v": "r-77.4", "type": "reinstall", "ts": "2026-08-19T15:22:04Z", "ref": "r-77.4", "desc": "4PDA снова открывается напрямую — временная блокировка снята, и прошитые адреса больше не нужны. При обновлении они убираются автоматически, чтобы со временем не начали мешать.", "changed_files": ["webpanel/www/index.html", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "z2k.sh", "UPDATES.json"]},
+{"v": "r-77.5", "type": "reinstall", "ts": "2026-08-20T07:26:11Z", "ref": "r-77.5", "desc": "Автоподбор рабочей настройки стал точнее. Он больше не сбрасывает работающую настройку из-за потерянного пакета или обычного разрыва соединения со стороны сайта — от этого раньше страдали видео и Instagram. При этом он теперь замечает блокировки, которые раньше пропускал молча, и не перебирает по десятку настроек разом, когда страница открывает много соединений сразу.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/z2k-scheduler.sh", "lib/config_official.sh", "UPDATES.json"]}
   ]
 }
