@@ -288,5 +288,28 @@ for f in $COPIES; do
     esac
 done
 
+# ============================================================================
+# 9. Z2K_LAST_HTTP остаётся ЧИСТЫМ кодом ответа
+# ============================================================================
+#
+# В files/z2k-update-lists.sh на этой переменной висит решение «у апстрима
+# файла нет» против «зеркала не отвечают»: `[ "$Z2K_LAST_HTTP" = "404" ]`.
+# Когда helper стал просить у curl два поля, присваивание осталось ВЫШЕ
+# разбора и переменная получала "404 0.000000" — сравнение переставало
+# совпадать никогда, и настоящий 404 навсегда выглядел бы отказом зеркал.
+_ulh=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    CURL_LOG="$TMP/ulh.log" STUB_MODE=none SB="$TMP" \
+    /bin/sh -c '
+        : > "$CURL_LOG"
+        awk "/^_z2k_curl_etag\\(\\) \\{/,/^\\}/" "$1" > "$SB/ulh_fn.sh"
+        . "$SB/ulh_fn.sh"
+        _z2k_curl_etag "https://example.invalid/x" "$SB/ulh_dest" "" >/dev/null 2>&1
+        printf "%s" "${Z2K_LAST_HTTP:-пусто}"
+    ' _ "$ROOT/files/z2k-update-lists.sh" 2>/dev/null)
+case "$_ulh" in
+    200) ok "Z2K_LAST_HTTP — чистый код ответа, без времени коннекта" ;;
+    *)   no "Z2K_LAST_HTTP — чистый код ответа" "200" "$_ulh" ;;
+esac
+
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
