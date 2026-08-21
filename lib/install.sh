@@ -1500,6 +1500,30 @@ step_build_zapret2() {
             # с вооружения 3-way merge больше не существуют.
             [ -f "$ZAPRET2_DIR/lists/warp/.enabled" ] && \
                 cp -f "$ZAPRET2_DIR/lists/warp/.enabled" "$backup_tmp/warp-lists/.enabled" 2>/dev/null
+            # Игровые списки (games/*.txt) — апстрим-данные, и раньше их
+            # намеренно не сохраняли: «пере-скачаются». Пере-скачивались они
+            # каждый раз и в ПЕРЕДНЕМ плане: шаг, который сам себя подписывает
+            # «самый долгий шаг установки», взял 79.7 с из 405 на замере
+            # 2026-08-21 — на роутере с GAME_WARP_ENABLED=0, то есть при
+            # ВЫКЛЮЧЕННОЙ фиче.
+            #
+            # Гейт на этот шаг есть (качаем, только если games/ пуст), но
+            # сработать не мог никогда: дерево уезжает в .old.$$ раньше, чем
+            # гейт спрашивают, и каталог пуст ВСЕГДА. Обещание «a reinstall
+            # that already has them does not go out to the network at all»
+            # описывало намерение, а не поведение.
+            #
+            # Best-effort, не fail-closed: это единственное в блоке, что
+            # восстановимо загрузкой. Не скопировалось — вернёмся к прежнему
+            # поведению и скачаем.
+            if [ -d "$ZAPRET2_DIR/lists/warp/games" ] && \
+               mkdir -p "$backup_tmp/warp-games" 2>/dev/null; then
+                for _wg in "$ZAPRET2_DIR/lists/warp/games/"*.txt; do
+                    [ -f "$_wg" ] || continue
+                    cp -f "$_wg" "$backup_tmp/warp-games/" 2>/dev/null || \
+                        print_warning "Не удалось сохранить игровой список $(basename "$_wg") — он перекачается"
+                done
+            fi
         fi
         # Пользовательские стратегии на пул — user-owned, как whitelist. Правки
         # shipped Strategy.txt мы намеренно затираем, а ЭТИ обязаны пережить
@@ -2261,6 +2285,21 @@ step_build_zapret2() {
         [ -f "$backup_tmp/warp-lists/.enabled" ] && \
             cp -f "$backup_tmp/warp-lists/.enabled" "${ZAPRET2_DIR}/lists/warp/.enabled" 2>/dev/null
     fi
+    # Игровые списки обратно на место — чтобы гейт «games/ пуст» наконец
+    # означал написанное: на реинсталле в сеть за ними не ходим.
+    if [ -d "$backup_tmp/warp-games" ]; then
+        mkdir -p "${ZAPRET2_DIR}/lists/warp/games" 2>/dev/null
+        local _wg_restored=0
+        for _wg in "$backup_tmp/warp-games/"*.txt; do
+            [ -f "$_wg" ] || continue
+            cp -f "$_wg" "${ZAPRET2_DIR}/lists/warp/games/" 2>/dev/null && \
+                _wg_restored=$((_wg_restored + 1))
+        done
+        chmod 644 "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null || true
+        if [ "$_wg_restored" -gt 0 ]; then
+            print_info "Игровые списки WARP перенесены из прошлой установки (${_wg_restored} шт.) — качать не нужно"
+        fi
+    fi
     if [ -d "$backup_tmp/custom-strategies" ]; then
         mkdir -p "${ZAPRET2_DIR}/lists/custom-strategies" 2>/dev/null
         cp -f "$backup_tmp/custom-strategies/"*.txt "${ZAPRET2_DIR}/lists/custom-strategies/" 2>/dev/null
@@ -2284,10 +2323,11 @@ step_build_zapret2() {
             print_warning "Не удалось восстановить ${_acc}.txt — копия в /tmp/z2k-${_acc}.txt (до перезагрузки)"
         fi
     done
-    # NB: игровые списки WARP здесь не разворачиваются вовсе. z2k-update-lists.sh
-    # тянет их пер-игровыми файлами в lists/warp/games/ и владеет ими целиком;
-    # shipped-снимка больше нет. Восстанавливается только выбор пользователя
-    # (.enabled) и его собственные списки.
+    # NB: shipped-снимка игровых списков нет — z2k-update-lists.sh тянет их
+    # пер-игровыми файлами в lists/warp/games/ и владеет ими целиком. Здесь они
+    # не РАЗВОРАЧИВАЮТСЯ, а переносятся из прошлой установки (см. блок
+    # warp-games выше): владение остаётся у обновлялки, а установка перестаёт
+    # заново качать 740 КБ, которые уже лежали на устройстве.
     # Decompress lua.gz files (if any are shipped by embedded builds)
     if [ -d "${ZAPRET2_DIR}/lua" ]; then
         if command -v gzip >/dev/null 2>&1; then

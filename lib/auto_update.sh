@@ -1706,9 +1706,10 @@ au_run_apply() {
     # Gated on the directory being EMPTY rather than on a one-shot marker. That
     # makes it a single fetch in practice (once lists exist, every later update
     # skips it — the nightly refresh owns them from then on) and it still
-    # self-heals the one case a marker would strand: games/ is deliberately not
-    # preserved across a reinstall, so a marker set today would leave a
-    # reinstalled router with no lists and no way to get them until tomorrow.
+    # self-heals the one case a marker would strand: a router that has never
+    # had the lists at all. (A reinstall now carries games/ forward — see the
+    # warp-games backup block in install.sh — so the common path no longer
+    # arrives here empty; a fresh install still does.)
     #
     # Backgrounded and non-fatal: the update is already finished and healthy
     # here, so an unreachable list mirror must not stretch it, fail it, or roll
