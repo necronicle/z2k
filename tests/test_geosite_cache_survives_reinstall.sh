@@ -225,6 +225,32 @@ case "$r" in
     *)   no "без ETag загрузка идёт" "0:1" "$r" ;;
 esac
 
+# --- Б2. Порядок в исходнике, а не только в песочнице ------------------------
+#
+# Харнесс выше гоняет блоки в порядке, который сам же и задаёт. Реальный
+# порядок — «download_domain_lists → восстановление → geosite fetch» — держит
+# на себе всю правку: восстановишь ДО shipped-списков, и они затрут перенос;
+# восстановишь ПОСЛЕ fetch — переносить будет уже поздно. Здесь пинится он.
+_ln_ship=$(grep -n 'download_domain_lists ||' "$SRC" | head -1 | cut -d: -f1)
+_ln_rest=$(grep -n 'if \[ -d "\$Z2K_UPGRADE_BACKUP/geosite" \]; then' "$SRC" | head -1 | cut -d: -f1)
+_ln_fetch=$(grep -n 'sh "\$geosite" fetch' "$SRC" | head -1 | cut -d: -f1)
+if [ -n "$_ln_ship" ] && [ -n "$_ln_rest" ] && [ -n "$_ln_fetch" ] \
+   && [ "$_ln_ship" -lt "$_ln_rest" ] && [ "$_ln_rest" -lt "$_ln_fetch" ]; then
+    ok "восстановление стоит после shipped-списков (${_ln_ship}) и до fetch (${_ln_fetch})"
+else
+    no "порядок: shipped → восстановление → fetch" "строки по возрастанию" \
+       "shipped=${_ln_ship:-нет} restore=${_ln_rest:-нет} fetch=${_ln_fetch:-нет}"
+fi
+
+# Бэкап обязан стоять ДО переноса дерева в .old.$$ — иначе копировать уже нечего.
+_ln_bk=$(grep -n 'mkdir -p "\$backup_tmp/geosite"' "$SRC" | head -1 | cut -d: -f1)
+_ln_mv=$(grep -n 'if mv "\$ZAPRET2_DIR" "\$_old_tree"' "$SRC" | head -1 | cut -d: -f1)
+if [ -n "$_ln_bk" ] && [ -n "$_ln_mv" ] && [ "$_ln_bk" -lt "$_ln_mv" ]; then
+    ok "бэкап кеша geosite стоит до mv дерева в .old (${_ln_bk} < ${_ln_mv})"
+else
+    no "бэкап до mv дерева" "backup < mv" "backup=${_ln_bk:-нет} mv=${_ln_mv:-нет}"
+fi
+
 # ============================================================================
 # Г. Порча не переносится, а .shipped переносится
 # ============================================================================
