@@ -53,6 +53,29 @@ default_pool_numbers() {
     Z2K_POOL_RKN=1
 }
 
+# Аварийный пул на случай, когда манифест стратегий не прочитался.
+#
+# ПОЧЕМУ ОН ОБЯЗАН НЕСТИ circular. Прежний аварийный дефолт был одиночным
+# статическим `fake:blob=fake_default_tls:repeats=4` — без ротации вообще. Это
+# строго хуже, чем у любого соседнего проекта: у конкурента три стратегии под
+# circular лежат статикой в пакете и не могут не прочитаться, а мы в той же
+# ситуации оставались с одним приёмом и без единого запасного.
+#
+# Техника здесь не выдумана: слоты 1-3 повторяют то, что уже стоит в боевых
+# пулах (fake+multisplit, multisplit со сдвигом, fake+fakedsplit). Блоб только
+# встроенный в движок: в аварии скачанных файлов из files/fake/ может не быть
+# тоже, и ссылаться на них — значит получить пул, который не стартует.
+z2k_emergency_tcp_pool() {
+    local key="$1"
+    printf '%s' "--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=circular:fails=3:retrans=2:maxseq=16384:time=60:key=${key}:nld=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,midsld:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tcp_ts=-1000:badsum:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3"
+}
+
+# Лесенка repeats 11/6/3 — не произвол: её дважды пытались срезать и дважды
+# откатывали по живым поломкам мобильного QUIC.
+z2k_emergency_quic_pool() {
+    printf '%s' "--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=circular:fails=3:time=60:udp_in=3:udp_out=5:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=3"
+}
+
 create_default_strategy_files() {
     local extra_strats_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats"
 
@@ -90,29 +113,54 @@ create_default_strategy_files() {
     p_rkn=$(get_strategy "$rkn" 2>/dev/null)
     p_quic=$(get_quic_strategy "$quic" 2>/dev/null)
 
-    if [ -n "$p_yt" ] && [ -n "$p_gv" ] && [ -n "$p_rkn" ] && [ -n "$p_quic" ]; then
-        save_strategy_to_category "YT"    "TCP" "$(build_tls_profile_params "$p_yt")"  || return 1
-        save_strategy_to_category "YT_GV" "TCP" "$(build_tls_profile_params "$p_gv")"  || return 1
-        save_strategy_to_category "RKN"   "TCP" "$(build_tls_profile_params "$p_rkn")" || return 1
-        save_strategy_to_category "YT"    "UDP" "$(build_quic_profile_params "$p_quic")" || return 1
+    # ДЕГРАДИРУЕМ ПОШТУЧНО, А НЕ СКОПОМ.
+    #
+    # Раньше здесь стояло `if [ -n "$p_yt" ] && [ -n "$p_gv" ] && ... ; then`:
+    # один непрочитавшийся манифест ронял ВСЕ ЧЕТЫРЕ пула в аварийный дефолт.
+    # То есть порча одного файла стоила обхода на всех категориях сразу, и
+    # происходило это молча — чтения идут с 2>/dev/null.
+    local degraded=0
+
+    if [ -n "$p_yt" ]; then
+        save_strategy_to_category "YT" "TCP" "$(build_tls_profile_params "$p_yt")" || return 1
+    else
+        print_warning "Пул YouTube TCP (#$yt) не прочитался — аварийный набор с ротацией"
+        save_strategy_to_category "YT" "TCP" "$(z2k_emergency_tcp_pool yt_tcp)" || return 1
+        degraded=$((degraded + 1))
+    fi
+
+    if [ -n "$p_gv" ]; then
+        save_strategy_to_category "YT_GV" "TCP" "$(build_tls_profile_params "$p_gv")" || return 1
+    else
+        print_warning "Пул googlevideo (#$gv) не прочитался — аварийный набор с ротацией"
+        save_strategy_to_category "YT_GV" "TCP" "$(z2k_emergency_tcp_pool gv_tcp)" || return 1
+        degraded=$((degraded + 1))
+    fi
+
+    if [ -n "$p_rkn" ]; then
+        save_strategy_to_category "RKN" "TCP" "$(build_tls_profile_params "$p_rkn")" || return 1
+    else
+        print_warning "Пул РКН (#$rkn) не прочитался — аварийный набор с ротацией"
+        save_strategy_to_category "RKN" "TCP" "$(z2k_emergency_tcp_pool rkn_tcp)" || return 1
+        degraded=$((degraded + 1))
+    fi
+
+    if [ -n "$p_quic" ]; then
+        save_strategy_to_category "YT" "UDP" "$(build_quic_profile_params "$p_quic")" || return 1
         # Зафиксировать выбор QUIC-пула, иначе get_current_quic_profile_params
         # у позднего apply вернёт другой номер и файл будет переписан зря.
         set_current_quic_strategy "$quic"
-        print_success "Стратегии материализованы из манифестов (YT #$yt, GV #$gv, RKN #$rkn, QUIC #$quic)"
-        return 0
+    else
+        print_warning "Пул QUIC (#$quic) не прочитался — аварийный набор с ротацией"
+        save_strategy_to_category "YT" "UDP" "$(z2k_emergency_quic_pool)" || return 1
+        degraded=$((degraded + 1))
     fi
 
-    # Манифест не прочитался (битая загрузка, обрезанный файл) — ставим
-    # минимальный рабочий дефолт, как было раньше, чтобы установка не встала.
-    print_warning "Манифесты стратегий недоступны — ставлю минимальный дефолт"
-    local default_tcp="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=4"
-    echo "$default_tcp" > "$extra_strats_dir/TCP/YT/Strategy.txt"
-    echo "$default_tcp" > "$extra_strats_dir/TCP/YT_GV/Strategy.txt"
-    echo "$default_tcp" > "$extra_strats_dir/TCP/RKN/Strategy.txt"
-    echo "--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6" \
-        > "$extra_strats_dir/UDP/YT/Strategy.txt"
-
-    print_success "Дефолтные файлы стратегий созданы"
+    if [ "$degraded" -eq 0 ]; then
+        print_success "Стратегии материализованы из манифестов (YT #$yt, GV #$gv, RKN #$rkn, QUIC #$quic)"
+    else
+        print_warning "Стратегии материализованы, но $degraded из 4 пулов — аварийные"
+    fi
     return 0
 }
 
