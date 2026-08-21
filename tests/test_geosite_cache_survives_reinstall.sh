@@ -288,5 +288,49 @@ else
     no "битый список не переносится" "цель=shipped.example.com, маркер=нет" "цель=${_got}, маркер=${_mk}"
 fi
 
+# ============================================================================
+# Д. Сквозной цикл ETag: первый запрос сохраняет, ВТОРОЙ обязан дать 304
+# ============================================================================
+#
+# Разделы выше клали etag-файл в фикстуре руками и потому проверяли только
+# ПОТРЕБЛЕНИЕ кеша, а не его ЗАПИСЬ. Этого мало: --etag-save пишет в отдельный
+# файл (${etag_file}.new), и если перенос в рабочий etag_file пропадёт, кеш
+# перестанет существовать вовсе — каждый прогон пойдёт за полным телом, а все
+# прежние проверки останутся зелёными. Ровно так один раз и случилось: патч
+# наложился наполовину, --etag-save уехал в .new, а переноса не было.
+#
+# Здесь etag-файл НЕ создаётся заранее. Два запроса подряд, каждый со своим
+# TMP_DIR (иначе fetch_to_tmp отдаст кеш этого же прогона), общий ETAG_DIR.
+_g2="$TMP/geo2"; rm -rf "$_g2"; mkdir -p "$_g2/etag" "$_g2/t"
+printf 'prev.example.com\n' > "$_g2/t/List.txt"
+printf 'ru-blocked.txt\n'   > "$_g2/t/List.txt.asset"
+_cycle_run() {
+    rm -rf "$_g2/tmp$1"; mkdir -p "$_g2/tmp$1"
+    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+        G="$_g2" FNS="$TMP/geo_fns.sh" DL_LOG="$_g2/dl$1.log" \
+        UPSTREAM_ETAG='"апстрим-v1"' N="$1" /bin/sh -c '
+            : > "$DL_LOG"
+            . "$FNS"
+            ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp$N"
+            RELEASE_BASE="https://example.invalid/dl"
+            log() { :; }
+            _z2k_vps_gh_resolve() { printf ""; }
+            apply_new_list() { cp -f "$1" "$2" && printf "%s\n" "$3" > "$2.asset"; }
+            fetch_asset "ru-blocked.txt" "$G/t/List.txt" >/dev/null 2>&1
+            n=$(grep -c СКАЧАНО "$DL_LOG" 2>/dev/null); [ -n "$n" ] || n=0
+            printf "%s" "$n"
+        ' 2>/dev/null
+}
+_d1=$(_cycle_run 1)
+_d2=$(_cycle_run 2)
+_etag_saved=$([ -s "$_g2/etag/ru-blocked.txt.etag" ] && echo да || echo нет)
+if [ "$_d1" = "1" ] && [ "$_d2" = "0" ] && [ "$_etag_saved" = "да" ]; then
+    ok "ETag сохраняется первым запросом и работает на втором (загрузки 1 → 0)"
+else
+    no "сквозной цикл ETag" "загрузки 1 → 0, etag сохранён" \
+       "загрузки ${_d1} → ${_d2}, etag сохранён=${_etag_saved}"
+fi
+
+
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

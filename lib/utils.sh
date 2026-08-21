@@ -188,8 +188,7 @@ _z2k_curl_etag() {
                 rm -f "$hdr_file" "$tmp_body" "$etag_file"
                 return 1
             fi
-            if [ -n "$new_etag" ]; then printf '%s\n' "$new_etag" > "$etag_file"
-            else rm -f "$etag_file"; fi
+            if [ -n "$new_etag" ]; then printf '%s\n' "$new_etag" > "$etag_file"; fi
             rm -f "$hdr_file"; return 0 ;;
         *) rm -f "$hdr_file" "$tmp_body"; return 1 ;;
     esac
