@@ -72,6 +72,15 @@ EXTRA="${ZAPRET2_DIR}/extra_strats"
 # codeload) на реальный backend с валидным сертом github. `--resolve` —
 # транзиентный, per-request, без записей в конфиг.
 Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
+# Те же ручки Layer 0, что у трёх остальных копий транспорта (z2k.sh,
+# lib/utils.sh, files/z2k-update-lists.sh). Этот файл — ЧЕТВЁРТАЯ точка выхода
+# на VPS, и правка бюджета до него не доехала: тут стоял зашитый
+# --connect-timeout 15 без повторов, то есть один потерянный пакет
+# рукопожатия стоил 15 с на VPS-хопе плюс столько же на прямом, и так на
+# каждый ассет — до 45 с на шаге установки, ради экономии на котором всё и
+# делалось.
+Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+Z2K_FETCH_VPS_TRIES="${Z2K_FETCH_VPS_TRIES:-2}"
 
 _z2k_vps_gh_resolve() {
     [ -n "${Z2K_VPS_GH_IP:-}" ] || return 0
@@ -185,15 +194,45 @@ fetch_to_tmp() {
     # выбирал бы весь --max-time 600, и только потом начинался прямой запрос со
     # своими 600 — до 20 минут на ассет, а их четыре, и всё это на пути установки.
     _vps_resolve=$(_z2k_vps_gh_resolve "$url")
-    # shellcheck disable=SC2086
-    http=$(curl -sSL --connect-timeout 15 --max-time 600 $_vps_resolve \
-                --speed-limit 1024 --speed-time 30 \
-                --etag-compare "$etag_file" \
-                --etag-save "${etag_file}.new" \
-                -o "$tmp" \
-                -D "$hdr" \
-                -w '%{http_code}' \
-                "$url" 2>/dev/null) || http="000"
+    # Повтор — только для НЕустановившегося соединения (time_connect=0), как и
+    # в трёх остальных копиях: потеря пакета рукопожатия независима, а вот
+    # упор в --max-time на зависшей передаче или ответ 5xx повторять нельзя.
+    local _vps_try=0 _vps_tries _vps_raw _vps_conn="" _ct
+    _vps_tries="${Z2K_FETCH_VPS_TRIES:-2}"
+    case "$_vps_tries" in ''|*[!0-9]*) _vps_tries=2 ;; esac
+    [ "$_vps_tries" -ge 1 ] || _vps_tries=1
+    # Бюджет коннекта — короткий ТОЛЬКО когда за спиной есть запасной путь,
+    # то есть когда мы идём через VPS. При выключенном Layer 0 этот же запрос
+    # И ЕСТЬ прямой, и торопиться с ним нельзя.
+    if [ -n "$_vps_resolve" ]; then
+        _ct="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+    else
+        _ct=15
+    fi
+    http="000"
+    while :; do
+        _vps_try=$((_vps_try + 1))
+        # shellcheck disable=SC2086
+        _vps_raw=$(curl -sSL --connect-timeout "$_ct" --max-time 600 $_vps_resolve \
+                    --speed-limit 1024 --speed-time 30 \
+                    --etag-compare "$etag_file" \
+                    --etag-save "${etag_file}.new" \
+                    -o "$tmp" \
+                    -D "$hdr" \
+                    -w '%{http_code} %{time_connect}' \
+                    "$url" 2>/dev/null) || _vps_raw="000 0"
+        http="${_vps_raw%% *}"; _vps_conn="${_vps_raw##* }"
+        if [ "$http" = "304" ] || { [ "$http" = "200" ] && [ -s "$tmp" ]; }; then break; fi
+        # Повторять есть смысл только через VPS: без него это уже прямой запрос,
+        # и за ним никого нет.
+        [ -n "$_vps_resolve" ] || break
+        [ "$_vps_try" -lt "$_vps_tries" ] || break
+        # …и только если соединение не установилось вовсе.
+        case "$_vps_conn" in
+            0|0.0|0.00|0.000|0.0000|0.00000|0.000000) ;;
+            *) break ;;
+        esac
+    done
     # ЛЮБОЙ неуспех VPS-хопа → прямой запрос, как в каноне z2k_fetch (там слой
     # считается пройденным только на 200 с непустым телом или 304, всё остальное
     # валится на следующий слой). Раньше здесь стояло только `http = 000`, и живой,
@@ -210,6 +249,7 @@ fetch_to_tmp() {
                     -D "$hdr" \
                     -w '%{http_code}' \
                     "$url" 2>/dev/null) || http="000"
+        # Прямой запрос свои 15 с сохраняет: за ним запасного пути нет.
     fi
 
     # --etag-save пишет в отдельный файл, и сюда его переносим только непустым.
@@ -379,14 +419,32 @@ apply_new_list() {
     case "$in_n" in ''|*[!0-9]*) in_n=0 ;; esac
     case "$out_n" in ''|*[!0-9]*) out_n=0 ;; esac
 
+    # ЛЮБОЙ отказ применения ниже снимает ETag этого ассета.
+    #
+    # curl сохраняет ETag во время СКАЧИВАНИЯ, и fetch_to_tmp переносит его в
+    # рабочий кеш сразу по ответу 200 — то есть ещё до того, как выяснится,
+    # ляжет ли содержимое в цель. Если применение потом откажет, ETag всё равно
+    # записан, и следующий прогон получает честный 304: цель непустая, маркер
+    # происхождения совпадает (обычный случай — источник тот же), и fetch_asset
+    # рапортует «unchanged, keep existing» с кодом 0. Отказ закрепляется и
+    # ИСЧЕЗАЕТ ИЗ ОТЧЁТА: fail_count обнуляется, строки «N failed» больше нет.
+    #
+    # Маркер происхождения тут не спасает: он ловит только ЧУЖОЙ источник в
+    # цели, а при неизменном имени ассета не ловит ничего.
+    #
+    # Раньше замок ломала установка: она звала geosite с --force и сносила кеш
+    # целиком на каждом реинстале. Делать это перестали, значит замок надо
+    # снимать там, где он возникает. Для разового отказа (обрубок нормализации
+    # при нехватке места в /tmp, провал записи) это буквально разница между
+    # «повторим следующей ночью» и «замолчали до смены апстрима».
     if [ "$out_n" -eq 0 ]; then
         log "  $asset: нормализация дала пустой результат из $in_n строк — список НЕ трогаем"
-        rm -f "$final"
+        rm -f "$final" "$ETAG_DIR/${asset}.etag"
         return 1
     fi
     if [ "$in_n" -gt 0 ] && [ "$((out_n * 100 / in_n))" -lt 50 ]; then
         log "  $asset: нормализация потеряла больше половины ($in_n → $out_n строк) — список НЕ трогаем"
-        rm -f "$final"
+        rm -f "$final" "$ETAG_DIR/${asset}.etag"
         return 1
     fi
 
@@ -425,7 +483,7 @@ apply_new_list() {
         case "$old_n" in ''|*[!0-9]*) old_n=0 ;; esac
         if [ "$old_n" -gt 0 ] && [ "$((out_n * 100 / old_n))" -lt 80 ]; then
             log "  $asset: новый список $out_n строк < 80% от нынешних $old_n — список НЕ трогаем"
-            rm -f "$final"
+            rm -f "$final" "$ETAG_DIR/${asset}.etag"
             return 1
         fi
     elif [ -s "$target" ] && [ "$prev_asset" != "$asset" ]; then
@@ -446,7 +504,9 @@ apply_new_list() {
     # if the install script is killed mid-copy.
     local target_tmp="${target}.probe"
     cp "$final" "$target_tmp" && mv "$target_tmp" "$target" \
-        || { log "  $asset: failed to write $target"; return 1; }
+        || { log "  $asset: failed to write $target"
+             rm -f "$ETAG_DIR/${asset}.etag"
+             return 1; }
 
     # Record which asset produced this target so the shrink guard above can
     # tell an intentional big↔small class switch (bypass guard) from a genuine

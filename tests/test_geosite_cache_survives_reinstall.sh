@@ -162,7 +162,7 @@ exit 0
 STUBC
 chmod +x "$TMP/bin/curl"
 
-awk '/^(fetch_to_tmp|fetch_asset)\(\) \{/,/^\}/' "$GEO" > "$TMP/geo_fns.sh"
+awk '/^(fetch_to_tmp|fetch_asset|apply_new_list)\(\) \{/,/^\}/' "$GEO" > "$TMP/geo_fns.sh"
 if grep -q '^fetch_asset() {' "$TMP/geo_fns.sh" && grep -q '^fetch_to_tmp() {' "$TMP/geo_fns.sh"; then
     ok "fetch_to_tmp/fetch_asset извлечены из z2k-geosite.sh"
 else
@@ -329,6 +329,161 @@ if [ "$_d1" = "1" ] && [ "$_d2" = "0" ] && [ "$_etag_saved" = "да" ]; then
 else
     no "сквозной цикл ETag" "загрузки 1 → 0, etag сохранён" \
        "загрузки ${_d1} → ${_d2}, etag сохранён=${_etag_saved}"
+fi
+
+
+# ============================================================================
+# Е. Отказ применения обязан снимать ETag, иначе он залипает и ИСЧЕЗАЕТ ИЗ ОТЧЁТА
+# ============================================================================
+#
+# fetch_to_tmp переносит ETag в рабочий кеш сразу по ответу 200 — до того, как
+# выяснится, ляжет ли содержимое в цель. Если apply_new_list откажет (страж
+# усадки, обрубок нормализации, провал записи), ETag всё равно записан, и
+# следующий прогон получает честный 304: цель непустая, маркер происхождения
+# совпадает (источник тот же) — и fetch_asset рапортует «unchanged, keep
+# existing» с кодом 0. Отказ закрепляется до следующей смены апстрима, а
+# счётчик failed обнуляется, то есть в отчёте его не видно вовсе.
+#
+# Раньше замок ломала установка своим --force. Она это делать перестала.
+# Здесь гоняется НАСТОЯЩИЙ apply_new_list со своим стражем усадки.
+_g3="$TMP/geo3"; rm -rf "$_g3"; mkdir -p "$_g3/etag" "$_g3/t"
+_i=1; : > "$_g3/t/List.txt"
+while [ "$_i" -le 100 ]; do printf 'host%s.example.com\n' "$_i" >> "$_g3/t/List.txt"; _i=$((_i+1)); done
+printf 'ru-blocked.txt\n' > "$_g3/t/List.txt.asset"
+printf '"upstream-v1"'    > "$_g3/etag/ru-blocked.txt.etag"
+
+# апстрим усох вдвое и сменил ETag → 200, страж усадки обязан отвергнуть
+cat > "$TMP/bin/shrunk" <<'SH'
+#!/bin/sh
+i=1; while [ "$i" -le 50 ]; do printf 'host%s.example.com\n' "$i"; i=$((i+1)); done
+SH
+chmod +x "$TMP/bin/shrunk"
+_run3() {
+    rm -rf "$_g3/tmp$1"; mkdir -p "$_g3/tmp$1"
+    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+        G="$_g3" FNS="$TMP/geo_fns.sh" DL_LOG="$_g3/dl$1.log" \
+        UPSTREAM_ETAG="$2" N="$1" /bin/sh -c '
+            : > "$DL_LOG"
+            . "$FNS"
+            ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp$N"
+            RELEASE_BASE="https://example.invalid/dl"
+            log() { :; }
+            _z2k_vps_gh_resolve() { printf ""; }
+            if fetch_asset "ru-blocked.txt" "$G/t/List.txt"; then rc=0; else rc=1; fi
+            n=$(grep -c СКАЧАНО "$DL_LOG" 2>/dev/null); [ -n "$n" ] || n=0
+            printf "rc=%s качали=%s" "$rc" "$n"
+        ' 2>/dev/null
+}
+# стаб отдаёт усохший список
+sed -i.bak 's|printf .свежий\.домен\\n. > "$out"|"$SHRUNK" > "$out"|' "$TMP/bin/curl" 2>/dev/null || true
+cp "$TMP/bin/curl" "$TMP/bin/curl.orig"
+cat > "$TMP/bin/curl" <<'STUBC'
+#!/bin/sh
+out=""; cmp=""; save=""; hdr=""; prev=""
+for a in "$@"; do
+    case "$prev" in
+        -o) out="$a" ;; --etag-compare) cmp="$a" ;; --etag-save) save="$a" ;; -D) hdr="$a" ;;
+    esac
+    prev="$a"
+done
+[ -n "$hdr" ] && printf 'HTTP/1.1 200 OK\r\n\r\n' > "$hdr"
+if [ -n "$cmp" ] && [ -f "$cmp" ] && [ "$(cat "$cmp" 2>/dev/null)" = "$UPSTREAM_ETAG" ]; then
+    printf '304'; exit 0
+fi
+printf 'СКАЧАНО\n' >> "$DL_LOG"
+[ -n "$out" ] && shrunk > "$out"
+[ -n "$save" ] && printf '%s' "$UPSTREAM_ETAG" > "$save"
+printf '200'
+exit 0
+STUBC
+chmod +x "$TMP/bin/curl"
+
+_r1=$(_run3 1 '"upstream-v2"')          # 200, страж отвергает
+_etag_after=$([ -s "$_g3/etag/ru-blocked.txt.etag" ] && echo остался || echo снят)
+_r2=$(_run3 2 '"upstream-v2"')          # апстрим не менялся
+
+if [ "$_etag_after" = "снят" ]; then
+    ok "отказ стража усадки снимает ETag"
+else
+    no "отказ стража усадки снимает ETag" "снят" "остался — отказ залипнет"
+fi
+case "$_r2" in
+    *"качали=1"*) ok "после отказа следующий прогон ПОВТОРЯЕТ загрузку, а не рапортует «unchanged»" ;;
+    *) no "после отказа идёт повторная попытка" "качали=1" "$_r2 (отказ исчез из отчёта)" ;;
+esac
+# цель при этом не испорчена — остался прежний стослойный список
+_tl=$(wc -l < "$_g3/t/List.txt" 2>/dev/null | tr -d ' ')
+if [ "$_tl" = "100" ]; then
+    ok "цель не испорчена отвергнутым списком (осталось $_tl строк)"
+else
+    no "цель не испорчена" "100 строк" "$_tl"
+fi
+cp "$TMP/bin/curl.orig" "$TMP/bin/curl" 2>/dev/null || true
+
+
+# ============================================================================
+# Ж. geosite — ЧЕТВЁРТАЯ копия транспорта: тот же бюджет и тот же повтор
+# ============================================================================
+#
+# У этого файла собственный curl на VPS, и правка Layer 0 (бюджет 3 с + вторая
+# попытка) до него сначала не доехала: тут был зашит --connect-timeout 15 без
+# повторов. Один потерянный пакет рукопожатия стоил 15 с на VPS-хопе плюс
+# столько же на прямом, и так на каждый ассет.
+#
+# Здесь пинится и повтор, и то, что при ВЫКЛЮЧЕННОМ Layer 0 запрос всё равно
+# делается: раньше первый curl и был прямым, и цикл не должен был это сломать.
+_g4="$TMP/geo4"; rm -rf "$_g4"; mkdir -p "$_g4/bin" "$_g4/etag" "$_g4/tmp" "$_g4/t"
+cat > "$_g4/bin/curl" <<'STUBD'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CALLS"
+case "$*" in
+    *--resolve*)
+        n=$(cat "$CALLS.v" 2>/dev/null || echo 0); n=$((n+1)); printf '%s' "$n" > "$CALLS.v"
+        if [ "$n" = "1" ]; then printf '000 0.000000'; exit 28; fi ;;
+esac
+prev=""; out=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+[ -n "$out" ] && printf 'ok.example.com\n' > "$out"
+printf '200 0.075'
+exit 0
+STUBD
+chmod +x "$_g4/bin/curl"
+_geo4() {  # _geo4 <включён ли Layer 0>
+    : > "$_g4/calls"; rm -f "$_g4/calls.v"; rm -rf "$_g4/tmp"; mkdir -p "$_g4/tmp"
+    env -i PATH="$_g4/bin:/usr/bin:/bin" HOME="$TMP" G="$_g4" FNS="$TMP/geo_fns.sh" \
+        CALLS="$_g4/calls" L0="$1" /bin/sh -c '
+            . "$FNS"
+            ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp"; RELEASE_BASE="https://example.invalid/dl"
+            log() { :; }
+            if [ "$L0" = "1" ]; then _z2k_vps_gh_resolve() { printf " --resolve h:443:203.0.113.9"; }
+            else _z2k_vps_gh_resolve() { printf ""; }; fi
+            fetch_to_tmp "ru-blocked.txt" >/dev/null 2>&1
+            v=$(grep -c -- "--resolve" "$CALLS" 2>/dev/null); [ -n "$v" ] || v=0
+            d=$(grep -vc -- "--resolve" "$CALLS" 2>/dev/null); [ -n "$d" ] || d=0
+            printf "vps=%s direct=%s" "$v" "$d"
+        ' 2>/dev/null
+}
+_r4=$(_geo4 1)
+case "$_r4" in
+    "vps=2 direct=0") ok "geosite повторяет VPS-хоп на потерянном рукопожатии и не уходит в прямой" ;;
+    *) no "geosite повторяет VPS-хоп" "vps=2 direct=0" "$_r4" ;;
+esac
+_b4=$(grep -- "--resolve" "$_g4/calls" 2>/dev/null | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')
+if [ "$_b4" = "3" ]; then
+    ok "бюджет VPS-хопа geosite = 3 с (было зашито 15)"
+else
+    no "бюджет VPS-хопа geosite" "3" "${_b4:-нет}"
+fi
+_r5=$(_geo4 0)
+case "$_r5" in
+    "vps=0 direct=1") ok "при выключенном Layer 0 запрос всё равно делается, ровно один" ;;
+    *) no "выключенный Layer 0 не отменяет запрос" "vps=0 direct=1" "$_r5" ;;
+esac
+_b5=$(grep -v -- "--resolve" "$_g4/calls" 2>/dev/null | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')
+if [ "$_b5" = "15" ]; then
+    ok "без Layer 0 бюджет остаётся 15 с — за этим запросом никого нет"
+else
+    no "бюджет без Layer 0" "15" "${_b5:-нет}"
 fi
 
 
