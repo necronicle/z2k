@@ -74,6 +74,15 @@ deploy_critical_file() {
     return 1
 }
 
+# Каталог, в котором установка держит user-data, пока пересобирает дерево.
+#
+# Путь нужен четырём разным функциям — бэкапу (step_build_zapret2),
+# восстановлению, позднему merge'у флагов (step_finalize) и финальной уборке, —
+# и в каждой он был записан литералом заново. Опечатка в одной из копий молча
+# отключила бы соответствующий кусок восстановления, а выглядело бы это как
+# «настройки не пережили обновление» без единой строчки в логе.
+Z2K_UPGRADE_BACKUP="${Z2K_UPGRADE_BACKUP:-/opt/z2k-upgrade-backup}"
+
 # ==============================================================================
 # Transactional install: old-tree backup + restore
 # ==============================================================================
@@ -1438,7 +1447,7 @@ step_build_zapret2() {
     fi
 
     # Сохранить пользовательские данные перед удалением
-    local backup_tmp="/opt/z2k-upgrade-backup"
+    local backup_tmp="$Z2K_UPGRADE_BACKUP"
     rm -rf "$backup_tmp"
     if [ -d "$ZAPRET2_DIR" ]; then
         print_info "Сохранение пользовательских настроек..."
@@ -1558,6 +1567,35 @@ step_build_zapret2() {
         if [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" ]; then
             cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv" || \
                 print_warning "Не удалось сохранить state.tsv — стратегии переподберутся автоматически после установки."
+        fi
+        # Кеш geosite: ETag'и, сами цели и маркеры происхождения (*.asset).
+        #
+        # Установка звала geosite с --force, то есть сносила ETag-кеш перед
+        # каждой загрузкой — 52.7 с из 405 на замере 2026-08-21. Убрать один
+        # только --force было бы бесполезно: и кеш, и цели лежат ВНУТРИ дерева,
+        # которое ниже уезжает в .old.$$, и 304 стало бы просто не на что
+        # получать.
+        #
+        # Цели ищем по маркерам *.asset, а не списком путей: список живёт в
+        # z2k-geosite.sh (fetch_all), и его копия здесь разъехалась бы молча,
+        # стоит добавить туда шестую цель.
+        #
+        # Best-effort: всё это кеш, восстановимый загрузкой.
+        if [ -d "$ZAPRET2_DIR/extra_strats" ] && mkdir -p "$backup_tmp/geosite" 2>/dev/null; then
+            if [ -d "$ZAPRET2_DIR/extra_strats/cache/geosite-etag" ] && \
+               mkdir -p "$backup_tmp/geosite/etag" 2>/dev/null; then
+                cp -f "$ZAPRET2_DIR/extra_strats/cache/geosite-etag/"*.etag \
+                      "$backup_tmp/geosite/etag/" 2>/dev/null || true
+            fi
+            find "$ZAPRET2_DIR/extra_strats" -type f -name '*.asset' 2>/dev/null \
+            | while IFS= read -r _gs; do
+                _grel="${_gs#"$ZAPRET2_DIR"/}"
+                mkdir -p "$backup_tmp/geosite/targets/$(dirname "$_grel")" 2>/dev/null || continue
+                cp -f "$_gs" "$backup_tmp/geosite/targets/$_grel" 2>/dev/null || true
+                if [ -f "${_gs%.asset}" ]; then
+                    cp -f "${_gs%.asset}" "$backup_tmp/geosite/targets/${_grel%.asset}" 2>/dev/null || true
+                fi
+            done
         fi
         # Per-install relay identity (Stage B): the Ed25519 keypair + install_id the
         # tunnel client minted once. Preserve across reinstall so the device keeps the
@@ -2774,10 +2812,45 @@ step_download_domain_lists() {
     # ru-blocked-all on 1 GB+ routers, selected by z2k-geosite.sh
     # RAM probe). Non-fatal — if fetch fails (DNS, GitHub down,
     # rate limit), keep the shipped snapshot as fallback.
+    # Кеш geosite обратно на место: ПОСЛЕ shipped-снимков (иначе они его
+    # затрут) и ДО самого fetch.
+    #
+    # Здесь стоял --force, снося ETag-кеш перед каждой загрузкой. Он появился
+    # ради одного случая: протухший ETag отдал бы 304, и в цели остался бы
+    # shipped-файл. С тех пор ровно этот случай закрыт строже — маркером
+    # происхождения в z2k-geosite.sh (fetch_asset): 304 принимается, только
+    # если цель собрана ИМЕННО ЭТИМ источником, иначе ETag сносится и загрузка
+    # идёт заново. То есть --force дублировал более слабой мерой то, что уже
+    # сделано более сильной, и стоил полной перекачки на каждой установке.
+    if [ -d "$Z2K_UPGRADE_BACKUP/geosite" ]; then
+        if [ -d "$Z2K_UPGRADE_BACKUP/geosite/etag" ] && \
+           mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/geosite-etag" 2>/dev/null; then
+            cp -f "$Z2K_UPGRADE_BACKUP/geosite/etag/"*.etag \
+                  "${ZAPRET2_DIR}/extra_strats/cache/geosite-etag/" 2>/dev/null || true
+        fi
+        if [ -d "$Z2K_UPGRADE_BACKUP/geosite/targets" ]; then
+            local _gs_restored=0 _grel
+            # here-doc, а не пайп: в пайпе цикл ушёл бы в подоболочку и счётчик
+            # не пережил бы её.
+            while IFS= read -r _grel; do
+                [ -n "$_grel" ] || continue
+                mkdir -p "$(dirname "${ZAPRET2_DIR}/$_grel")" 2>/dev/null || continue
+                cp -f "$Z2K_UPGRADE_BACKUP/geosite/targets/$_grel" \
+                      "${ZAPRET2_DIR}/$_grel" 2>/dev/null && \
+                    _gs_restored=$((_gs_restored + 1))
+            done <<GEOSITE_RESTORE
+$(cd "$Z2K_UPGRADE_BACKUP/geosite/targets" 2>/dev/null && find . -type f 2>/dev/null | sed 's|^\./||')
+GEOSITE_RESTORE
+            if [ "$_gs_restored" -gt 0 ]; then
+                print_info "Списки geosite перенесены из прошлой установки (${_gs_restored} файл(ов)) — при неизменившемся апстриме заново качать нечего"
+            fi
+        fi
+    fi
+
     local geosite="${ZAPRET2_DIR}/z2k-geosite.sh"
     if [ -x "$geosite" ]; then
         print_info "Обновление списков из runetfreedom geosite..."
-        FORCE_REFETCH=1 sh "$geosite" fetch --force 2>&1 | sed 's/^/  /' || \
+        sh "$geosite" fetch 2>&1 | sed 's/^/  /' || \
             print_warning "geosite fetch partial/failed — using shipped fallback"
     else
         print_warning "z2k-geosite.sh не найден, пропускаю geosite fetch"
@@ -3271,7 +3344,7 @@ step_finalize() {
     # would affect Z2K_DYNAMIC_TTL and other flags that gate later
     # actions in step_finalize.
     # =====================================================================
-    local backup_tmp_early="/opt/z2k-upgrade-backup"
+    local backup_tmp_early="$Z2K_UPGRADE_BACKUP"
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
         grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$backup_tmp_early/config" > "$_flag_backup_early" 2>/dev/null || true
@@ -4039,7 +4112,7 @@ step_finalize() {
     # r-20 referenced $backup_tmp directly: it was empty → check became
     # `[ -f /webpanel-port ]` and webpanel restore never fired. Fixed
     # in r-22.
-    local backup_tmp="/opt/z2k-upgrade-backup"
+    local backup_tmp="$Z2K_UPGRADE_BACKUP"
 
     # =====================================================================
     # Auto-update: re-apply preserved Z2K_* / non-Z2K_ user flags AFTER
