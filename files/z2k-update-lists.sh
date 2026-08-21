@@ -88,17 +88,25 @@ _z2k_curl_etag() {
     if [ -n "$old_etag" ]; then
         http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 $resolve_args \
             -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
-            -w "%{http_code}" "$url" 2>/dev/null)
+            -w "%{http_code} %{time_connect}" "$url" 2>/dev/null)
         curl_rc=$?
     else
         http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 $resolve_args \
             -D "$hdr_file" -o "$tmp_body" \
-            -w "%{http_code}" "$url" 2>/dev/null)
+            -w "%{http_code} %{time_connect}" "$url" 2>/dev/null)
         curl_rc=$?
     fi
     # Статус нужен вызывающему: «файла нет у апстрима» и «зеркала не отвечают» —
     # это разные события, а по коду возврата они неразличимы.
     Z2K_LAST_HTTP="$http_status"
+    # Код ответа и время установления соединения приходят одной строкой.
+    # Нулевое время — «соединение не установилось вовсе». Это единственный
+    # класс отказа, для которого повтор Layer 0 осмыслен: потерянный пакет
+    # рукопожатия — событие независимое. Упор в --max-time на зависшей
+    # передаче, 5xx, 404, пустое тело и промах sha-гейта повторять нельзя —
+    # там повтор просто удваивает цену отказа.
+    Z2K_LAST_CONNECT="${http_status##* }"
+    http_status="${http_status%% *}"
     [ "$curl_rc" -eq 0 ] || { Z2K_LAST_HTTP="000"; rm -f "$hdr_file" "$tmp_body"; return 1; }
     case "$http_status" in
         304) rm -f "$hdr_file" "$tmp_body"; return 0 ;;
@@ -184,14 +192,25 @@ z2k_fetch() {
     # блокирует прямые github-IP). На сбой тихо валимся в цепочку ниже.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
     if [ -n "$_vps_resolve" ]; then
+        # Ручку никто не валидировал: Z2K_FETCH_VPS_TRIES=abc роняло `test`
+        # с «Illegal number», цикл не исполнялся ни разу, и Layer 0 молча
+        # выключался целиком — при этом в поток установки сыпалась ошибка.
+        local _vps_tries="${Z2K_FETCH_VPS_TRIES:-2}"
+        case "$_vps_tries" in ''|*[!0-9]*) _vps_tries=2 ;; esac
+        [ "$_vps_tries" -ge 1 ] || _vps_tries=1
         local _vps_try=0
-        while [ "$_vps_try" -lt "${Z2K_FETCH_VPS_TRIES:-2}" ]; do
+        while [ "$_vps_try" -lt "$_vps_tries" ]; do
             _vps_try=$((_vps_try + 1))
             if _z2k_curl_etag "$url" "$dest" "$_vps_resolve" \
                    "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}" \
                && _z2k_ul_verify "$dest"; then
                 return 0
             fi
+            # Повторяем ТОЛЬКО не установившееся соединение (см. Z2K_LAST_CONNECT).
+            case "${Z2K_LAST_CONNECT:-0}" in
+                0|0.0|0.00|0.000|0.0000|0.00000|0.000000) ;;
+                *) break ;;
+            esac
         done
         # Статус последней попытки: настоящий 404 отдаётся на обеих.
         [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0

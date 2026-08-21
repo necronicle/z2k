@@ -294,12 +294,20 @@ fi
 # --- 10. every hop is gated -------------------------------------------------
 # One ungated layer is enough to reintroduce the bug: the fetch would return 0
 # from it and never reach a verified mirror.
-ungated=$(grep -nE '_z2k_curl_etag "|_z2k_curl_doh "' "$HERE/z2k.sh" "$HERE/lib/utils.sh" \
+# Считаем по СКЛЕЕННЫМ строкам, а не по физическим.
+#
+# Раньше здесь стоял допуск «<=1 (перенос строки)»: вызов, разбитый обратным
+# слэшем, выглядел негейтованным, и вместо того чтобы склеить строки, проверка
+# разрешала одно такое совпадение. Допуск — это дыра ровно в один настоящий
+# негейтованный слой, и он же ложно краснел, стоило появиться второму переносу.
+_joined=$(sed -e :a -e '/\\$/{N;s/\\\n//;ba' -e '}' "$HERE/z2k.sh" "$HERE/lib/utils.sh")
+ungated=$(printf '%s\n' "$_joined" \
+          | grep -E '_z2k_curl_etag "|_z2k_curl_doh "' \
           | grep -v '_z2k_verify_fetched' \
-          | grep -vE '\(\)|resolve_args|:[0-9]+:[[:space:]]*#' \
+          | grep -vE '\(\)|resolve_args|^[[:space:]]*#' \
           | grep -c 'dest"' )
-[ "$ungated" -le 1 ] && ok "все слои загрузки проходят проверку содержимого" \
-                     || no "все слои загрузки проходят проверку содержимого" "<=1 (перенос строки)" "$ungated"
+[ "$ungated" -eq 0 ] && ok "все слои загрузки проходят проверку содержимого" \
+                     || no "все слои загрузки проходят проверку содержимого" "0 негейтованных" "$ungated"
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

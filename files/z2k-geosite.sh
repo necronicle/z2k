@@ -189,7 +189,7 @@ fetch_to_tmp() {
     http=$(curl -sSL --connect-timeout 15 --max-time 600 $_vps_resolve \
                 --speed-limit 1024 --speed-time 30 \
                 --etag-compare "$etag_file" \
-                --etag-save "$etag_file" \
+                --etag-save "${etag_file}.new" \
                 -o "$tmp" \
                 -D "$hdr" \
                 -w '%{http_code}' \
@@ -205,7 +205,7 @@ fetch_to_tmp() {
         log "  $asset: VPS-хоп не прошёл (HTTP $http), пробую напрямую"
         http=$(curl -sSL --connect-timeout 15 --max-time 600 \
                     --etag-compare "$etag_file" \
-                    --etag-save "$etag_file" \
+                    --etag-save "${etag_file}.new" \
                     -o "$tmp" \
                     -D "$hdr" \
                     -w '%{http_code}' \

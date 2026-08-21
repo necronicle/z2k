@@ -1587,14 +1587,22 @@ step_build_zapret2() {
                 cp -f "$ZAPRET2_DIR/extra_strats/cache/geosite-etag/"*.etag \
                       "$backup_tmp/geosite/etag/" 2>/dev/null || true
             fi
+            # Порядок здесь несущий: сначала ЦЕЛЬ, маркер — только если цель
+            # доехала. Обратный порядок опасен ровно тем, ради чего стоял
+            # --force: на переполненной флешке 15-байтовый маркер ложится, а
+            # список на 1,2 МБ — нет; восстановление кладёт маркер поверх
+            # shipped-снимка, geosite видит «своё» происхождение, отвечает
+            # «unchanged» и закрепляет shipped-бандл как апстримный.
+            #
+            # Обратная асимметрия безопасна: цель без маркера geosite считает
+            # происхождением неизвестным и качает заново.
             find "$ZAPRET2_DIR/extra_strats" -type f -name '*.asset' 2>/dev/null \
             | while IFS= read -r _gs; do
+                [ -f "${_gs%.asset}" ] || continue
                 _grel="${_gs#"$ZAPRET2_DIR"/}"
                 mkdir -p "$backup_tmp/geosite/targets/$(dirname "$_grel")" 2>/dev/null || continue
+                cp -f "${_gs%.asset}" "$backup_tmp/geosite/targets/${_grel%.asset}" 2>/dev/null || continue
                 cp -f "$_gs" "$backup_tmp/geosite/targets/$_grel" 2>/dev/null || true
-                if [ -f "${_gs%.asset}" ]; then
-                    cp -f "${_gs%.asset}" "$backup_tmp/geosite/targets/${_grel%.asset}" 2>/dev/null || true
-                fi
             done
         fi
         # Per-install relay identity (Stage B): the Ed25519 keypair + install_id the
@@ -2334,7 +2342,22 @@ step_build_zapret2() {
                 _wg_restored=$((_wg_restored + 1))
         done
         chmod 644 "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null || true
-        if [ "$_wg_restored" -gt 0 ]; then
+        # Всё или ничего.
+        #
+        # Гейт на загрузку — «каталог games/ пуст». Частично доехавший перенос
+        # (флешка кончилась на пятом файле из двадцати одного) делает каталог
+        # НЕпустым, и гейт молча решает, что качать нечего: недостающие списки
+        # не подтянет ни установка, ни self-heal в auto_update, ни планировщик —
+        # они все смотрят на ту же пустоту. Человек с включённым Steam остался
+        # бы без списка Steam до ночного обновления и без единой строчки в логе.
+        #
+        # Поэтому неполный перенос откатываем целиком: пусть гейт увидит пустой
+        # каталог и всё скачается, как скачивалось раньше.
+        _wg_backed=$(ls "$backup_tmp/warp-games/"*.txt 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${_wg_backed:-0}" -gt 0 ] && [ "$_wg_restored" -ne "${_wg_backed:-0}" ]; then
+            print_warning "Игровые списки WARP перенеслись не полностью (${_wg_restored} из ${_wg_backed}) — убираю частичный перенос, спискам дадут скачаться заново"
+            rm -f "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null
+        elif [ "$_wg_restored" -gt 0 ]; then
             print_info "Игровые списки WARP перенесены из прошлой установки (${_wg_restored} шт.) — качать не нужно"
         fi
     fi
@@ -2830,6 +2853,11 @@ step_download_domain_lists() {
         fi
         if [ -d "$Z2K_UPGRADE_BACKUP/geosite/targets" ]; then
             local _gs_restored=0 _grel
+            # Два прохода, и порядок несущий — та же асимметрия, что в бэкапе:
+            # маркер кладём ТОЛЬКО поверх доехавшей цели. Иначе «маркер без
+            # цели» подтвердит geosite'у происхождение shipped-снимка, тот
+            # ответит «unchanged» и закрепит его навсегда.
+            #
             # here-doc, а не пайп: в пайпе цикл ушёл бы в подоболочку и счётчик
             # не пережил бы её.
             while IFS= read -r _grel; do
@@ -2838,9 +2866,18 @@ step_download_domain_lists() {
                 cp -f "$Z2K_UPGRADE_BACKUP/geosite/targets/$_grel" \
                       "${ZAPRET2_DIR}/$_grel" 2>/dev/null && \
                     _gs_restored=$((_gs_restored + 1))
-            done <<GEOSITE_RESTORE
-$(cd "$Z2K_UPGRADE_BACKUP/geosite/targets" 2>/dev/null && find . -type f 2>/dev/null | sed 's|^\./||')
-GEOSITE_RESTORE
+            done <<GEOSITE_TARGETS
+$(cd "$Z2K_UPGRADE_BACKUP/geosite/targets" 2>/dev/null && find . -type f ! -name '*.asset' 2>/dev/null | sed 's|^\./||')
+GEOSITE_TARGETS
+            while IFS= read -r _grel; do
+                [ -n "$_grel" ] || continue
+                # цели нет — маркер не кладём, пусть geosite качает заново
+                [ -s "${ZAPRET2_DIR}/${_grel%.asset}" ] || continue
+                cp -f "$Z2K_UPGRADE_BACKUP/geosite/targets/$_grel" \
+                      "${ZAPRET2_DIR}/$_grel" 2>/dev/null || true
+            done <<GEOSITE_MARKERS
+$(cd "$Z2K_UPGRADE_BACKUP/geosite/targets" 2>/dev/null && find . -type f -name '*.asset' 2>/dev/null | sed 's|^\./||')
+GEOSITE_MARKERS
             if [ "$_gs_restored" -gt 0 ]; then
                 print_info "Списки geosite перенесены из прошлой установки (${_gs_restored} файл(ов)) — при неизменившемся апстриме заново качать нечего"
             fi
