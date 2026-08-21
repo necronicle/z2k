@@ -58,6 +58,26 @@ GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-e
 # `--resolve <host>:443:<VPS>` качает по валидному TLS. Транзиентно.
 Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
 
+# Бюджет коннекта Layer 0 и число попыток.
+#
+# Замер 2026-08-21 на живом роутере: здоровый коннект к нашему VPS — 0.075 с
+# TCP, 0.185 с вместе с TLS. При этом 13-17% попыток не устанавливаются вовсе:
+# SYN до VPS доходит, VPS отвечает SYN-ACK через 14 мкс, обратный пакет
+# теряется, а повторные SYN до VPS уже не долетают. Со --connect-timeout 10
+# каждый такой случай стоил полные 10.5 с — за одну установку 10 штук, то есть
+# 105 с из 405.
+#
+# curl(1) про --connect-timeout: "The connection phase is considered complete
+# when the DNS lookup and requested TCP, TLS or QUIC handshakes are done", то
+# есть бюджет покрывает и TLS — меряем против 0.185 с, а не против 0.075 с.
+# 3 с = 16-кратный запас к измеренному.
+#
+# Вторая попытка, а не просто короткий таймаут: Layer 0 существует ради тех, у
+# кого прямой github закрыт, и бросать основной путь из-за одного потерянного
+# пакета нельзя. Потеря SYN-ACK — событие независимое, повтор стоит 0.27 с.
+Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+Z2K_FETCH_VPS_TRIES="${Z2K_FETCH_VPS_TRIES:-2}"
+
 # Echo `--resolve h:443:<VPS> ...` для всех github-хостов цепочки редиректов,
 # но только для URL, чей origin VPS passthrough-роутит (*.githubusercontent.com,
 # github.com/*.github.com). Пусто для jsdelivr/gh-proxy/прочих (пинить нельзя).
@@ -120,7 +140,7 @@ fi
 # добавленная в копию z2k.sh, потерялась бы молча, без единого признака.
 if ! command -v _z2k_curl_etag >/dev/null 2>&1; then
 _z2k_curl_etag() {
-    local url="$1" dest="$2" resolve_args="$3"
+    local url="$1" dest="$2" resolve_args="$3" conn_to="${4:-10}"
     local etag_file="${dest}.etag"
     local hdr_file="${dest}.hdr.$$"
     local tmp_body="${dest}.new.$$"
@@ -131,12 +151,12 @@ _z2k_curl_etag() {
     # $resolve_args (unquoted word-split — намеренно): пусто в обычных вызовах,
     # `--resolve h:443:ip ...` в Layer 0 VPS-хопе.
     if [ -n "$old_etag" ]; then
-        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 $resolve_args \
+        http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 $resolve_args \
             -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
         curl_rc=$?
     else
-        http_status=$(curl -sSL --connect-timeout 10 --max-time 180 $resolve_args \
+        http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 $resolve_args \
             -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code}" "$url" 2>/dev/null)
         curl_rc=$?
@@ -366,7 +386,17 @@ z2k_fetch() {
     # bytes (stale cache, truncated body) is treated exactly like one that did
     # not answer at all, and we move to the next.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
-    [ -n "$_vps_resolve" ] && _z2k_curl_etag "$url" "$dest" "$_vps_resolve" && _z2k_verify_fetched "$dest" && return 0
+    if [ -n "$_vps_resolve" ]; then
+        local _vps_try=0
+        while [ "$_vps_try" -lt "${Z2K_FETCH_VPS_TRIES:-2}" ]; do
+            _vps_try=$((_vps_try + 1))
+            if _z2k_curl_etag "$url" "$dest" "$_vps_resolve" \
+                   "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}" \
+               && _z2k_verify_fetched "$dest"; then
+                return 0
+            fi
+        done
+    fi
 
     if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest"; then return 0; fi
     [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && return 0

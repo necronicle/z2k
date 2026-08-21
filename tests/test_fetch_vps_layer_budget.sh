@@ -1,0 +1,235 @@
+#!/bin/sh
+# tests/test_fetch_vps_layer_budget.sh — Layer 0 не имеет права стоить десять
+# секунд, и не имеет права сдаваться с одной попытки.
+#
+# ЗАЧЕМ. Layer 0 (VPS SNI-passthrough) пробуется ПЕРВЫМ для каждого github-URL,
+# и на нём стоял `--connect-timeout 10`. Замер 2026-08-21 на живом роутере:
+#
+#   здоровый коннект  — 0.075 с TCP, 0.185 с вместе с TLS;
+#   13-17% попыток    — не устанавливаются вовсе.
+#
+# У провала характерная подпись: SYN доходит до VPS, VPS отвечает SYN-ACK через
+# 14 мкс, обратный пакет теряется, повторные SYN до VPS уже не долетают. То есть
+# теряется ОДИН пакет, а цена — полные 10.5 с. На одной установке таких случаев
+# было десять: 105 с из 405.
+#
+# Отсюда две половины правки, и обе должны быть закреплены:
+#
+#   1. Бюджет коннекта Layer 0 — короткий. curl(1) считает фазу коннекта
+#      законченной после "DNS lookup and requested TCP, TLS or QUIC handshakes",
+#      то есть бюджет покрывает TLS; меряем против 0.185 с, а не 0.075 с.
+#
+#   2. Попыток — две. Просто урезать таймаут было бы хуже, чем ничего: Layer 0
+#      существует ради тех, у кого прямой github закрыт, и бросать основной путь
+#      из-за одного потерянного пакета — значит чинить скорость за счёт тех, для
+#      кого этот слой и делался. Потеря SYN-ACK — событие независимое.
+#
+# Слои 1-4 (raw/jsdelivr/gh-proxy) свои 10 с сохраняют: там за спиной нет
+# запасного пути такого же качества, и торопиться незачем.
+#
+# Гейт ПОВЕДЕНЧЕСКИЙ: каждая из трёх копий транспорта исполняется в песочнице с
+# подставным curl, который пишет свой argv в лог. Спрашивается результат, а не
+# текст исходника — иначе тест краснел бы от переформатирования.
+#
+# POSIX sh.
+
+PASS=0; FAIL=0
+ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
+no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/z2k-vpsbudget.XXXXXX") || exit 1
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+COPIES="z2k.sh lib/utils.sh files/z2k-update-lists.sh"
+
+# --- подставной curl ----------------------------------------------------------
+#
+# Пишет argv одной строкой в $CURL_LOG и отвечает по $STUB_MODE:
+#   vps_fail   — любой вызов с --resolve (то есть Layer 0) валится как таймаут
+#                коннекта (rc=28), остальные отдают 200;
+#   vps_flap   — ПЕРВЫЙ вызов с --resolve валится, следующие отдают 200. Это
+#                ровно измеренная картина: потерян один пакет, не путь.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/curl" <<'STUBC'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CURL_LOG"
+hdr=""; body=""; resolve=0
+prev=""
+for a in "$@"; do
+    case "$prev" in
+        -D) hdr="$a" ;;
+        -o) body="$a" ;;
+    esac
+    [ "$a" = "--resolve" ] && resolve=1
+    prev="$a"
+done
+if [ "$resolve" = "1" ]; then
+    n=$(cat "$CURL_LOG.vps" 2>/dev/null || echo 0)
+    n=$((n + 1)); printf '%s' "$n" > "$CURL_LOG.vps"
+    if [ "$STUB_MODE" = "vps_fail" ] || { [ "$STUB_MODE" = "vps_flap" ] && [ "$n" = "1" ]; }; then
+        printf '000'
+        exit 28
+    fi
+fi
+[ -n "$body" ] && printf 'ТЕЛО\n' > "$body"
+[ -n "$hdr" ] && printf 'HTTP/1.1 200 OK\r\n\r\n' > "$hdr"
+printf '200'
+exit 0
+STUBC
+chmod +x "$TMP/bin/curl"
+
+# --- харнесс ------------------------------------------------------------------
+#
+# Сорсить файл целиком нельзя — там установочная логика. Вынимаем только
+# определения функций верхнего уровня (`^имя() {` … `^}`) и исполняем их.
+extract_fns() {
+    awk '/^(_z2k_[a-z_]+|z2k_fetch)\(\) \{/,/^\}/' "$1"
+}
+
+# run <файл> <STUB_MODE> [доп. env]
+# Печатает: "rc=<код> vps=<сколько вызовов Layer 0> direct=<сколько остальных>"
+run() {
+    _file="$1"; _mode="$2"; _extra="${3:-}"
+    _sb="$TMP/run"; rm -rf "$_sb"; mkdir -p "$_sb"
+    extract_fns "$ROOT/$_file" > "$_sb/fns.sh"
+    grep -q '^z2k_fetch() {' "$_sb/fns.sh" || { printf 'NOFN'; return; }
+
+    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+        CURL_LOG="$_sb/curl.log" STUB_MODE="$_mode" \
+        SB="$_sb" EXTRA="$_extra" \
+        /bin/sh -c '
+            : > "$CURL_LOG"
+            . "$SB/fns.sh"
+            GITHUB_RAW="https://raw.githubusercontent.com/o/r/main"
+            Z2K_VPS_GH_IP="203.0.113.9"
+            Z2K_FETCH_ALL_404=0
+            # Слои 5+ (DoH) в этом тесте не участвуют: до них дело не доходит,
+            # а если дойдёт — обязаны провалиться, чтобы не маскировать регресс.
+            _z2k_curl_doh() { return 1; }
+            _z2k_manifest_sha() { printf ""; }
+            # shellcheck disable=SC2086
+            [ -n "$EXTRA" ] && export $EXTRA
+            if z2k_fetch "/файл.txt" "$SB/dest" >/dev/null 2>&1; then rc=0; else rc=1; fi
+            # grep -c печатает 0 И возвращает 1 — `|| echo 0` дописал бы второй ноль.
+            v=$(grep -c -- "--resolve" "$CURL_LOG" 2>/dev/null); [ -n "$v" ] || v=0
+            d=$(grep -vc -- "--resolve" "$CURL_LOG" 2>/dev/null); [ -n "$d" ] || d=0
+            printf "rc=%s vps=%s direct=%s" "$rc" "$v" "$d"
+        ' 2>/dev/null
+}
+
+# бюджет, попавший в вызовы Layer 0 (уникальные значения через запятую)
+vps_budget() {
+    grep -- "--resolve" "$TMP/run/curl.log" 2>/dev/null \
+        | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//'
+}
+# бюджет, попавший в вызовы слоёв 1-4
+direct_budget() {
+    grep -v -- "--resolve" "$TMP/run/curl.log" 2>/dev/null \
+        | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//'
+}
+
+# ============================================================================
+# 1. Layer 0 глухо молчит: две попытки, короткий бюджет, и путь НЕ брошен
+# ============================================================================
+for f in $COPIES; do
+    r=$(run "$f" vps_fail)
+    case "$r" in
+        NOFN) no "$f: z2k_fetch извлечена" "определение есть" "не найдено"; continue ;;
+    esac
+    b=$(vps_budget)
+    db=$(direct_budget)
+
+    case "$r" in
+        *"vps=2"*) ok "$f: Layer 0 пробуется дважды, а не один раз" ;;
+        *) no "$f: Layer 0 пробуется дважды" "vps=2" "$r" ;;
+    esac
+
+    if [ "$b" = "3" ]; then
+        ok "$f: бюджет коннекта Layer 0 = 3 с (было 10)"
+    else
+        no "$f: бюджет коннекта Layer 0" "3" "${b:-нет --connect-timeout}"
+    fi
+
+    if [ "$db" = "10" ]; then
+        ok "$f: слои 1-4 сохранили свои 10 с"
+    else
+        no "$f: слои 1-4 сохранили 10 с" "10" "${db:-нет вызовов}"
+    fi
+
+    case "$r" in
+        rc=0*) ok "$f: после провала Layer 0 загрузка всё равно удалась (фоллбэк цел)" ;;
+        *) no "$f: фоллбэк после провала Layer 0" "rc=0" "$r" ;;
+    esac
+done
+
+# ============================================================================
+# 2. Потерян ОДИН пакет: вторая попытка обязана вытащить, не уходя в фоллбэк
+# ============================================================================
+#
+# Это главное, ради чего повтор и добавлен. Если здесь vps=2 direct=0 — значит
+# один потерянный SYN-ACK больше не сбрасывает нас с основного пути.
+for f in $COPIES; do
+    r=$(run "$f" vps_flap)
+    case "$r" in
+        "rc=0 vps=2 direct=0") ok "$f: одиночная потеря лечится повтором, до фоллбэка не доходит" ;;
+        NOFN) no "$f: z2k_fetch извлечена" "определение есть" "не найдено" ;;
+        *) no "$f: одиночная потеря лечится повтором" "rc=0 vps=2 direct=0" "$r" ;;
+    esac
+done
+
+# ============================================================================
+# 3. Число попыток — ручка, а не константа
+# ============================================================================
+#
+# Ручка нужна не для красоты: если у кого-то Layer 0 мёртв целиком, повтор для
+# него чистый убыток, и выключаться это должно без правки кода.
+for f in $COPIES; do
+    r=$(run "$f" vps_fail "Z2K_FETCH_VPS_TRIES=1")
+    case "$r" in
+        *"vps=1"*) ok "$f: Z2K_FETCH_VPS_TRIES=1 честно оставляет одну попытку" ;;
+        NOFN) no "$f: z2k_fetch извлечена" "определение есть" "не найдено" ;;
+        *) no "$f: Z2K_FETCH_VPS_TRIES=1" "vps=1" "$r" ;;
+    esac
+done
+
+# ============================================================================
+# 4. Бюджет — тоже ручка
+# ============================================================================
+r=$(run z2k.sh vps_fail "Z2K_FETCH_VPS_CONNECT_TIMEOUT=7")
+b=$(vps_budget)
+if [ "$b" = "7" ]; then
+    ok "Z2K_FETCH_VPS_CONNECT_TIMEOUT задаёт бюджет Layer 0"
+else
+    no "Z2K_FETCH_VPS_CONNECT_TIMEOUT задаёт бюджет" "7" "${b:-нет}"
+fi
+
+# ============================================================================
+# 5. Умолчание _z2k_curl_etag без 4-го аргумента — прежние 10 с
+# ============================================================================
+#
+# Слои 1-4 зовут helper тремя аргументами. Если умолчание съедет, они молча
+# получат короткий бюджет — то есть правка, сделанная ради Layer 0, ударит по
+# слоям, у которых запасного пути уже нет.
+for f in $COPIES; do
+    sb="$TMP/dflt"; rm -rf "$sb"; mkdir -p "$sb"
+    extract_fns "$ROOT/$f" > "$sb/fns.sh"
+    out=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+        CURL_LOG="$sb/curl.log" STUB_MODE=none SB="$sb" \
+        /bin/sh -c '
+            : > "$CURL_LOG"
+            . "$SB/fns.sh"
+            _z2k_curl_etag "https://example.invalid/x" "$SB/d" "" >/dev/null 2>&1
+            sed -n "s/.*--connect-timeout \([^ ]*\).*/\1/p" "$CURL_LOG" | sort -u | tr "\n" ","
+        ' 2>/dev/null)
+    if [ "$out" = "10," ]; then
+        ok "$f: без 4-го аргумента helper по-прежнему берёт 10 с"
+    else
+        no "$f: умолчание helper'а" "10," "${out:-пусто}"
+    fi
+done
+
+printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ]
