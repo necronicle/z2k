@@ -88,7 +88,8 @@ cycle() {  # cycle <есть ли что переносить: 1/0>
     rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/bk"
     mkdir -p "$TMP/opt/extra_strats/TCP/RKN" "$TMP/opt/extra_strats/cache/geosite-etag"
     if [ "$_have" = "1" ]; then
-        printf 'прежний-список\n'   > "$TMP/opt/extra_strats/TCP/RKN/List.txt"
+        printf 'prev.example.com\n'   > "$TMP/opt/extra_strats/TCP/RKN/List.txt"
+        printf 'shipped.example.com\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt.shipped"
         printf 'ru-blocked.txt\n'   > "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset"
         printf '"старый-etag"\n'    > "$TMP/opt/extra_strats/cache/geosite-etag/ru-blocked.txt.etag"
     fi
@@ -112,10 +113,10 @@ if [ "$(cat "$TMP/opt/extra_strats/cache/geosite-etag/ru-blocked.txt.etag" 2>/de
 else
     no "ETag пережил пересборку" '"старый-etag"' "$(cat "$TMP/opt/extra_strats/cache/geosite-etag/ru-blocked.txt.etag" 2>/dev/null)"
 fi
-if [ "$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt" 2>/dev/null)" = "прежний-список" ]; then
+if [ "$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt" 2>/dev/null)" = "prev.example.com" ]; then
     ok "цель пережила пересборку и перекрыла shipped-снимок"
 else
-    no "цель пережила пересборку" "прежний-список" "$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt" 2>/dev/null)"
+    no "цель пережила пересборку" "prev.example.com" "$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt" 2>/dev/null)"
 fi
 if [ "$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset" 2>/dev/null)" = "ru-blocked.txt" ]; then
     ok "маркер происхождения пережил пересборку"
@@ -173,7 +174,7 @@ fi
 geo() {
     _etag="$1"; _marker="$2"
     _g="$TMP/geo"; rm -rf "$_g"; mkdir -p "$_g/etag" "$_g/tmp" "$_g/t"
-    printf 'прежний-список\n' > "$_g/t/List.txt"
+    printf 'prev.example.com\n' > "$_g/t/List.txt"
     [ "$_etag"   = "1" ] && printf '"апстрим-v1"' > "$_g/etag/ru-blocked.txt.etag"
     [ "$_marker" = "1" ] && printf 'ru-blocked.txt\n' > "$_g/t/List.txt.asset"
 
@@ -223,6 +224,43 @@ case "$r" in
     0:1) ok "без ETag (свежая установка) загрузка идёт как раньше" ;;
     *)   no "без ETag загрузка идёт" "0:1" "$r" ;;
 esac
+
+# ============================================================================
+# Г. Порча не переносится, а .shipped переносится
+# ============================================================================
+#
+# Порчу раньше лечила сама переустановка: цель пересевалась с нуля. Теперь она
+# переносится, а 304-путь содержимого не проверяет — забитый 0xFF файл остался
+# бы живым --hostlist навсегда. Отдельно: .shipped обязан доехать, иначе
+# обещанный в шапке geosite ручной откат `cp *.shipped <name>` откатывал бы на
+# апстримный список вместо шипнутого.
+cycle 1
+if [ "$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt.shipped" 2>/dev/null)" = "shipped.example.com" ]; then
+    ok ".shipped пережил пересборку — ручной откат остался откатом"
+else
+    no ".shipped пережил пересборку" "shipped.example.com" \
+       "$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt.shipped" 2>/dev/null)"
+fi
+
+rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/bk"
+mkdir -p "$TMP/opt/extra_strats/TCP/RKN" "$TMP/opt/extra_strats/cache/geosite-etag"
+printf '\377\377\377\377\377\377\377\377\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt"
+printf 'ru-blocked.txt\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset"
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" /bin/sh -c '
+    ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"; Z2K_UPGRADE_BACKUP="$SB/bk"
+    print_info() { :; }; print_warning() { :; }
+    _b() { . "$SB/backup.sh"; }; _b
+    rm -rf "$ZAPRET2_DIR"; mkdir -p "$ZAPRET2_DIR/extra_strats/TCP/RKN"
+    printf "shipped.example.com\n" > "$ZAPRET2_DIR/extra_strats/TCP/RKN/List.txt"
+    _r() { . "$SB/restore.sh"; }; _r
+' 2>/dev/null
+_got=$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt" 2>/dev/null)
+_mk=$([ -f "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset" ] && echo есть || echo нет)
+if [ "$_got" = "shipped.example.com" ] && [ "$_mk" = "нет" ]; then
+    ok "битый список (0xFF) не переносится, и маркер за ним не кладётся"
+else
+    no "битый список не переносится" "цель=shipped.example.com, маркер=нет" "цель=${_got}, маркер=${_mk}"
+fi
 
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

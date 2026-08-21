@@ -1603,6 +1603,16 @@ step_build_zapret2() {
                 mkdir -p "$backup_tmp/geosite/targets/$(dirname "$_grel")" 2>/dev/null || continue
                 cp -f "${_gs%.asset}" "$backup_tmp/geosite/targets/${_grel%.asset}" 2>/dev/null || continue
                 cp -f "$_gs" "$backup_tmp/geosite/targets/$_grel" 2>/dev/null || true
+                # .shipped — снимок того, что лежало в цели до первого удачного
+                # применения; шапка z2k-geosite.sh обещает ручной откат через
+                # `cp *.shipped <name>`. Он лежит внутри дерева, и без переноса
+                # первое же применение после реинстала записало бы в него
+                # АПСТРИМНЫЙ список вместо шипнутого — обещание перестало бы
+                # выполняться молча.
+                if [ -f "${_gs%.asset}.shipped" ]; then
+                    cp -f "${_gs%.asset}.shipped" \
+                          "$backup_tmp/geosite/targets/${_grel%.asset}.shipped" 2>/dev/null || true
+                fi
             done
         fi
         # Per-install relay identity (Stage B): the Ed25519 keypair + install_id the
@@ -2852,7 +2862,13 @@ step_download_domain_lists() {
                   "${ZAPRET2_DIR}/extra_strats/cache/geosite-etag/" 2>/dev/null || true
         fi
         if [ -d "$Z2K_UPGRADE_BACKUP/geosite/targets" ]; then
-            local _gs_restored=0 _grel
+            local _gs_restored=0 _grel _gtmp
+            # Список реально доехавших целей. Маркер кладём ТОЛЬКО поверх такой
+            # цели: проверки «цель непустая» мало — непустой она бывает и с
+            # shipped-снимком, который туда только что записал шаг списков, и
+            # маркер поверх него подтвердил бы geosite'у чужое происхождение.
+            local _carried="$Z2K_UPGRADE_BACKUP/geosite/.carried"
+            : > "$_carried" 2>/dev/null || true
             # Два прохода, и порядок несущий — та же асимметрия, что в бэкапе:
             # маркер кладём ТОЛЬКО поверх доехавшей цели. Иначе «маркер без
             # цели» подтвердит geosite'у происхождение shipped-снимка, тот
@@ -2863,16 +2879,45 @@ step_download_domain_lists() {
             while IFS= read -r _grel; do
                 [ -n "$_grel" ] || continue
                 mkdir -p "$(dirname "${ZAPRET2_DIR}/$_grel")" 2>/dev/null || continue
+                # Кладём во временный файл и проверяем ДО подмены: иначе
+                # отбраковка битого переноса снесла бы вместе с ним и свежий
+                # shipped-снимок, только что записанный download_domain_lists,
+                # оставив цель пустой — то есть хуже, чем не переносить вовсе.
+                _gtmp="${ZAPRET2_DIR}/${_grel}.carry.$$"
                 cp -f "$Z2K_UPGRADE_BACKUP/geosite/targets/$_grel" \
-                      "${ZAPRET2_DIR}/$_grel" 2>/dev/null && \
-                    _gs_restored=$((_gs_restored + 1))
+                      "$_gtmp" 2>/dev/null || { rm -f "$_gtmp" 2>/dev/null; continue; }
+                case "$_grel" in
+                    *.shipped) mv -f "$_gtmp" "${ZAPRET2_DIR}/$_grel" 2>/dev/null || rm -f "$_gtmp"
+                               continue ;;
+                esac
+                # Порчу содержимого раньше лечила сама переустановка: цель
+                # пересевалась с нуля. Теперь она переносится, а fetch_asset при
+                # 304 смотрит только на непустоту и имя ассета — содержимое не
+                # проверяет никто, и пост-проверка ниже по коду тоже только -s.
+                # На этой платформе обрубленный или забитый 0xFF файл — штатный
+                # отказ (грязный размонтаж USB, мёртвый NAND), и он остался бы
+                # живым --hostlist навсегда.
+                #
+                # Проверка дешёвая и по существу: в списке доменов обязана быть
+                # хотя бы одна строка, похожая на домен. Файл из нулей или 0xFF
+                # её не даст, а мы просто дадим списку скачаться заново.
+                if grep -qE '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z][A-Za-z]+$' \
+                        "$_gtmp" 2>/dev/null; then
+                    if mv -f "$_gtmp" "${ZAPRET2_DIR}/$_grel" 2>/dev/null; then
+                        printf '%s\n' "$_grel" >> "$_carried" 2>/dev/null || true
+                        _gs_restored=$((_gs_restored + 1))
+                    fi
+                else
+                    print_warning "Перенесённый список ${_grel##*/} не похож на список доменов — оставляю шипнутый и дам скачаться заново"
+                    rm -f "$_gtmp" 2>/dev/null
+                fi
             done <<GEOSITE_TARGETS
 $(cd "$Z2K_UPGRADE_BACKUP/geosite/targets" 2>/dev/null && find . -type f ! -name '*.asset' 2>/dev/null | sed 's|^\./||')
 GEOSITE_TARGETS
             while IFS= read -r _grel; do
                 [ -n "$_grel" ] || continue
-                # цели нет — маркер не кладём, пусть geosite качает заново
-                [ -s "${ZAPRET2_DIR}/${_grel%.asset}" ] || continue
+                # цель не доехала — маркер не кладём, пусть geosite качает заново
+                grep -qxF "${_grel%.asset}" "$_carried" 2>/dev/null || continue
                 cp -f "$Z2K_UPGRADE_BACKUP/geosite/targets/$_grel" \
                       "${ZAPRET2_DIR}/$_grel" 2>/dev/null || true
             done <<GEOSITE_MARKERS

@@ -504,8 +504,11 @@ update_warp_game_list() {
             continue
         fi
 
-        # Sanitize even when unchanged: games/ is not preserved across a
-        # reinstall, so the .txt can be missing while the raw is still cached.
+        # Sanitize even when unchanged: the cached .raw is a dotfile and the
+        # reinstall carries forward only games/*.txt, so the .txt can be missing
+        # while the raw is still cached. (Раньше здесь стояло «games/ is not
+        # preserved across a reinstall» — с тех пор переносится, но вывод тот
+        # же: раздельная судьба .raw и .txt требует санитайза при unchanged.)
         san="$gdir/.$n.san"
         if ! awk '
 # --- z2k warp address filter (canonical; keep byte-identical in all 3 copies) ---
@@ -546,6 +549,31 @@ function z2k_warp_addr_ok(s,   ip, h, o) {
             rm -f "$san" "$gdir/$n.txt"
         fi
     done
+
+    # Уборка списков, которых больше нет в апстрим-индексе.
+    #
+    # Раньше сборщиком мусора работала переустановка: дерево уезжало в .old, и
+    # games/ пересевался с нуля по свежему sources.json. Теперь каталог
+    # переносится через реинсталл, значит игра, выпавшая из индекса или
+    # переименованная, осталась бы в нём навсегда — светилась бы в панели и
+    # продолжала подмешиваться в ipset WARP.
+    #
+    # Трогаем только .txt и только когда индекс реально прочитан ($names
+    # непуст): пустой индекс — это отказ загрузки, а не «игр больше нет».
+    if [ -n "$names" ]; then
+        local _keep _f _base _pruned=0
+        _keep=" $(printf '%s ' $names)"
+        for _f in "$gdir"/*.txt; do
+            [ -f "$_f" ] || continue
+            _base=$(basename "$_f" .txt)
+            case "$_keep" in
+                *" $_base "*) ;;
+                *) rm -f "$_f" "$gdir/.$_base.raw" "$gdir/.$_base.raw.etag" 2>/dev/null \
+                   && _pruned=$((_pruned + 1)) ;;
+            esac
+        done
+        [ "$_pruned" -gt 0 ] && log_msg "pruned $_pruned game list(s) no longer in upstream index"
+    fi
 
     log_msg "OK: warp game lists refreshed ($ok lists, $skipped unavailable)"
 
