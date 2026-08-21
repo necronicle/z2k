@@ -128,5 +128,91 @@ else
        "$uniq_behaviours варианта: $results"
 fi
 
+# --- 3. Матрица поведения: одна ветка из пяти — это не гейт -------------------
+#
+# Прежние пункты гоняли ровно один сценарий (провал записи) и требовали от
+# каждой копии одну и ту же литеральную строку. Из-за этого:
+#   * ветки 304, «200 с пустым телом» и сброса протухшего ETag не исполнялись
+#     вовсе — мутация в любой из них оставляла тест зелёным;
+#   * 4-й параметр (бюджет соединения) не передавался, то есть расхождение
+#     копий по бюджету было не видно;
+#   * пункт 2 логически следовал из пункта 1 и своей силы не имел.
+#
+# Проверено: три независимые мутации в lib/utils.sh (бюджет, сброс ETag,
+# семантика 304) — каждая создаёт настоящее расхождение с двумя другими
+# копиями — оставляли набор зелёным 5/0.
+#
+# Здесь каждая копия прогоняется по матрице сценариев, и сверяется ВЕСЬ ответ.
+cat > "$TMP/bin/curl2" <<'STUB2'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CLOG"
+hdr=""; body=""; prev=""
+for a in "$@"; do
+    case "$prev" in -D) hdr="$a" ;; -o) body="$a" ;; esac
+    prev="$a"
+done
+case "$MODE" in
+    m304)  [ -n "$hdr" ] && printf 'HTTP/1.1 304 Not Modified\r\n\r\n' > "$hdr"
+           printf '304 0.075'; exit 0 ;;
+    empty) [ -n "$hdr" ] && printf 'HTTP/1.1 200 OK\r\n\r\n' > "$hdr"
+           : > "$body"; printf '200 0.075'; exit 0 ;;
+    e500)  [ -n "$hdr" ] && printf 'HTTP/1.1 500 Oops\r\n\r\n' > "$hdr"
+           printf '500 0.075'; exit 0 ;;
+    *)     [ -n "$body" ] && printf 'ТЕЛО\n' > "$body"
+           [ -n "$hdr" ] && printf 'HTTP/1.1 200 OK\r\nETag: "новый"\r\n\r\n' > "$hdr"
+           printf '200 0.075'; exit 0 ;;
+esac
+STUB2
+chmod +x "$TMP/bin/curl2"
+
+# probe <файл> <MODE> <есть ли уже etag+тело> <4-й аргумент или пусто>
+# Печатает: rc, остался ли etag, каким стало тело, какой бюджет ушёл в curl.
+probe() {
+    _f="$1"; _m="$2"; _pre="$3"; _to="$4"
+    _sb="$TMP/probe"; rm -rf "$_sb"; mkdir -p "$_sb"
+    extract_fn "$ROOT/$_f" > "$_sb/fn.sh"
+    if [ "$_pre" = "1" ]; then
+        printf 'СТАРОЕ\n' > "$_sb/target"
+        printf '"старый"\n' > "$_sb/target.etag"
+    else
+        : > "$_sb/target"
+    fi
+    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+        SB="$_sb" MODE="$_m" TO="$_to" CLOG="$_sb/clog" \
+        /bin/sh -c '
+            : > "$CLOG"
+            cp "$(command -v curl2)" "$(dirname "$(command -v curl2)")/curl" 2>/dev/null
+            . "$SB/fn.sh"
+            if [ -n "$TO" ]; then _z2k_curl_etag "https://example.invalid/x" "$SB/target" "" "$TO"
+            else _z2k_curl_etag "https://example.invalid/x" "$SB/target" ""; fi
+            rc=$?
+            printf "rc=%s etag=%s тело=%s бюджет=%s" "$rc" \
+                "$([ -s "$SB/target.etag" ] && echo есть || echo нет)" \
+                "$(head -c 12 "$SB/target" 2>/dev/null | tr -d "\n")" \
+                "$(sed -n "s/.*--connect-timeout \([^ ]*\).*/\1/p" "$CLOG" | head -1)"
+        ' 2>/dev/null
+}
+
+# Сценарий: <MODE> <есть ли кеш> <4-й аргумент>
+for _sc in "ok 0 " "ok 0 4" "m304 1 " "empty 1 " "e500 1 "; do
+    set -- $_sc
+    _m="$1"; _pre="$2"; _to="${3:-}"
+    _seen=""; _n=0
+    for f in $COPIES; do
+        _r=$(probe "$f" "$_m" "$_pre" "$_to")
+        _seen="$_seen[$f] $_r
+"
+        _n=$((_n + 1))
+    done
+    _uniq=$(printf '%s' "$_seen" | sed 's/^\[[^]]*\] //' | sort -u | grep -c .)
+    if [ "$_uniq" = "1" ]; then
+        ok "сценарий $_m (кеш=$_pre, бюджет=${_to:-умолчание}): все копии совпали"
+    else
+        no "сценарий $_m (кеш=$_pre, бюджет=${_to:-умолчание})" "1 вариант" \
+           "$_uniq варианта:
+$_seen"
+    fi
+done
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
