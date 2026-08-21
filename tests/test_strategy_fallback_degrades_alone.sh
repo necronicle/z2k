@@ -154,5 +154,57 @@ else
     no "деградация пула сообщается" "есть WARN" "тишина"
 fi
 
+# ============================================================================
+# ВТОРАЯ ЛИНИЯ ОБОРОНЫ: тот же дефект жил вторым экземпляром в генераторе
+# конфига. create_default_strategy_files отрабатывает при установке, а
+# config_official.sh — при КАЖДОЙ пересборке, то есть при каждом применении
+# стратегий. Именно туда попадает роутер, у которого Strategy.txt испортился
+# уже после установки.
+# ============================================================================
+CFG="${Z2K_CONFIG_OFFICIAL_UNDER_TEST:-$ROOT/lib/config_official.sh}"
+
+if grep -q '_z2k_pool_default' "$CFG"; then
+    ok "генератор конфига имеет именованный аварийный дефолт"
+else
+    no "генератор конфига имеет именованный аварийный дефолт" "_z2k_pool_default" "нет"
+fi
+
+# Пустой пул НЕ должен превращаться в одиночный fake без ротации.
+_gen_default=$(sed -n "/_z2k_pool_default() {/,/^    }/p" "$CFG")
+if printf '%s' "$_gen_default" | grep -q "z2k_emergency_tcp_pool"; then
+    ok "генератор берёт аварийный набор из общего определения"
+else
+    no "генератор берёт аварийный набор из общего определения" "z2k_emergency_tcp_pool" "нет"
+fi
+
+# Ключ ротации обязан совпадать с боевым, иначе состояние уедет в чужую ячейку
+# и пул будет стартовать холодным при каждой пересборке конфига.
+_keys_ok=1
+for pair in "youtube_tcp yt_tcp" "youtube_gv_tcp gv_tcp" "rkn_tcp rkn_tcp"; do
+    var=${pair%% *}; key=${pair##* }
+    grep -Fq "${var}=\$(_z2k_pool_default ${key})" "$CFG" || _keys_ok=0
+done
+if [ "$_keys_ok" = "1" ]; then
+    ok "каждый пул получает аварийный набор со СВОИМ ключом ротации"
+else
+    no "каждый пул получает аварийный набор со своим ключом" \
+       "yt_tcp / gv_tcp / rkn_tcp" "ключи не сошлись"
+fi
+
+# И поведенчески: без общего определения дефолт обязан деградировать в прежний
+# статический набор, а не сломаться. Иначе правка была бы опаснее старого кода.
+_pd=$(sed -n "/    _z2k_pool_default() {/,/^    }/p" "$CFG")
+_probe_with=$( { printf '%s\n' "$_pd"; echo 'z2k_emergency_tcp_pool() { printf "ROTATING(%s)" "$1"; }';
+                 echo '_z2k_pool_default gv_tcp'; } | sh 2>/dev/null )
+_probe_without=$( { printf '%s\n' "$_pd"; echo '_z2k_pool_default gv_tcp'; } | sh 2>/dev/null )
+case "$_probe_with" in
+    ROTATING\(gv_tcp\)) ok "с общим определением дефолт берёт ротирующий набор" ;;
+    *) no "с общим определением дефолт берёт ротирующий набор" "ROTATING(gv_tcp)" "$_probe_with" ;;
+esac
+case "$_probe_without" in
+    *lua-desync*) ok "без общего определения дефолт не ломается, а деградирует" ;;
+    *) no "без общего определения дефолт деградирует" "старый статический набор" "пусто" ;;
+esac
+
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

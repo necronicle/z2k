@@ -253,13 +253,34 @@ generate_nfqws2_opt_from_strategies() {
     # allow_nohost (z2k-autocircular) — алгоритм ротации остаётся circular().
     discord_udp="--filter-udp=50000-50100,1400,3478-3481,5349,19294-19344 --filter-l7=discord,stun --out-range=-d4 --payload=discord_ip_discovery,stun --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=4:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=10:strategy=1 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=3:strategy=2 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:strategy=3 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=4:strategy=5 --lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=5:strategy=6"
 
-    # Дефолтная стратегия если не загружена
-    local default_strategy="--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=6"
+    # Дефолт для пула, чей Strategy.txt пуст или нечитаем.
+    #
+    # ВТОРАЯ ЛИНИЯ ОБОРОНЫ, И СРАБАТЫВАЕТ ОНА ЧАЩЕ ПЕРВОЙ.
+    # create_default_strategy_files (lib/strategies.sh) отрабатывает один раз, при
+    # установке. Этот путь — при КАЖДОЙ пересборке конфига, то есть при каждом
+    # применении стратегий. Сюда попадает роутер, у которого файл испортился уже
+    # ПОСЛЕ установки, а нули в Strategy.txt на этом железе случались.
+    #
+    # Раньше здесь стоял одиночный `fake:blob=fake_default_tls:repeats=6` без
+    # circular. Пул терял не только свою технику, но и саму способность перебирать
+    # запасные: один приём, и если он не проходит — всё.
+    #
+    # Аварийный набор берём из strategies.sh, чтобы определение было одно. Проверка
+    # доступности — на случай путей, где config_official сорсится в одиночку
+    # (lib/install.sh:4051): без неё правка могла бы сделать хуже, чем было.
+    _z2k_pool_default() {
+        if command -v z2k_emergency_tcp_pool >/dev/null 2>&1; then
+            z2k_emergency_tcp_pool "$1"
+        else
+            printf '%s' "--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=6"
+        fi
+    }
 
-    # Использовать дефолт если стратегия пустая
-    [ -z "$youtube_tcp" ] && youtube_tcp="$default_strategy"
-    [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp="$default_strategy"
-    [ -z "$rkn_tcp" ] && rkn_tcp="$default_strategy"
+    # Использовать дефолт если стратегия пустая. Ключ circular обязан совпадать с
+    # боевым, иначе состояние ротации уедет в чужую ячейку.
+    [ -z "$youtube_tcp" ] && youtube_tcp=$(_z2k_pool_default yt_tcp)
+    [ -z "$youtube_gv_tcp" ] && youtube_gv_tcp=$(_z2k_pool_default gv_tcp)
+    [ -z "$rkn_tcp" ] && rkn_tcp=$(_z2k_pool_default rkn_tcp)
 
 
     # Force domain-level memory for all autocircular profiles.
