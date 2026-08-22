@@ -518,5 +518,83 @@ else
 fi
 
 
+# ============================================================================
+# И. Оборванная на середине загрузка НЕ считается успехом
+# ============================================================================
+#
+# curl печатает %{http_code}=200, даже когда тело оборвалось: rc=18 (partial
+# file), rc=56 (reset), rc=23 (write error на забитой флешке), rc=28 (упор в
+# --speed-time). В цели тогда огрызок — НЕПУСТОЙ, то есть проверку `-s` он
+# проходит. Дальше огрызок уезжает в цель, рядом встаёт маркер происхождения,
+# ETag ПОЛНОЙ версии уходит в кеш — и следующий прогон отвечает «unchanged».
+# Список замирает огрызком до следующей публикации апстрима, а geosite
+# рапортует «ok» и выходит с нулём.
+#
+# На чистом устройстве ловить это больше нечем: страж усадки там намеренно
+# пропущен (происхождения цели ещё нет), а внутренний порог 50% сравнивает
+# нормализованный вывод с тем же огрызком на входе.
+_g5="$TMP/geo5"; rm -rf "$_g5"; mkdir -p "$_g5/bin" "$_g5/etag" "$_g5/tmp" "$_g5/t"
+cat > "$_g5/bin/curl" <<'STUBE'
+#!/bin/sh
+prev=""; out=""; save=""
+for a in "$@"; do
+    case "$prev" in -o) out="$a" ;; --etag-save) save="$a" ;; esac
+    prev="$a"
+done
+# тело оборвалось на середине: непустой огрызок, код 200, НЕнулевой возврат
+[ -n "$out" ] && printf 'огрызок.example.com\n' > "$out"
+[ -n "$save" ] && printf '"полная-версия"' > "$save"
+printf '200 0.075'
+exit 18
+STUBE
+chmod +x "$_g5/bin/curl"
+_trunc=$(env -i PATH="$_g5/bin:/usr/bin:/bin" HOME="$TMP" G="$_g5" FNS="$TMP/geo_fns.sh" /bin/sh -c '
+    . "$FNS"
+    ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp"; RELEASE_BASE="https://example.invalid/dl"
+    log() { :; }
+    _z2k_vps_gh_resolve() { printf ""; }
+    if fetch_to_tmp "ru-blocked.txt"; then rc=0; else rc=$?; fi
+    printf "rc=%s тело=%s etag=%s" "$rc" \
+        "$([ -s "$G/tmp/ru-blocked.txt" ] && echo осталось || echo снято)" \
+        "$([ -s "$G/etag/ru-blocked.txt.etag" ] && echo принят || echo отвергнут)"
+' 2>/dev/null)
+case "$_trunc" in
+    "rc=1 тело=снято etag=отвергнут")
+        ok "оборванная загрузка отвергнута: огрызок снят, ETag не принят" ;;
+    *)  no "оборванная загрузка отвергнута" "rc=1 тело=снято etag=отвергнут" \
+           "$_trunc — огрызок уедет в цель и замрёт там" ;;
+esac
+
+
+# ============================================================================
+# К. Обрубок не переносится — он из печатных символов, 0xFF-проверки мало
+# ============================================================================
+#
+# Обрубленный список — валидный текст: полсписка доменов проходит любую
+# проверку на печатность. А попав в цель вместе с маркером происхождения и
+# ETag, он замирает там до следующей публикации апстрима: на 304 geosite
+# смотрит только на непустоту цели и совпадение маркера. Раньше это лечила
+# сама переустановка, пересевая цель с нуля; перенос это самолечение отменил.
+rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/bk"
+mkdir -p "$TMP/opt/extra_strats/TCP/RKN" "$TMP/opt/extra_strats/cache/geosite-etag"
+printf 'a.example.com\nb.exa' > "$TMP/opt/extra_strats/TCP/RKN/List.txt"   # обрыв посреди строки
+printf 'ru-blocked.txt\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset"
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" /bin/sh -c '
+    ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"; Z2K_UPGRADE_BACKUP="$SB/bk"
+    print_info() { :; }; print_warning() { :; }
+    _b() { . "$SB/backup.sh"; }; _b
+    rm -rf "$ZAPRET2_DIR"; mkdir -p "$ZAPRET2_DIR/extra_strats/TCP/RKN"
+    printf "shipped.example.com\n" > "$ZAPRET2_DIR/extra_strats/TCP/RKN/List.txt"
+    _r() { . "$SB/restore.sh"; }; _r
+' 2>/dev/null
+_got=$(cat "$TMP/opt/extra_strats/TCP/RKN/List.txt" 2>/dev/null)
+_mk=$([ -f "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset" ] && echo есть || echo нет)
+if [ "$_got" = "shipped.example.com" ] && [ "$_mk" = "нет" ]; then
+    ok "обрубок не перенесён, маркер за ним не положен — список скачается заново"
+else
+    no "обрубок не переносится" "цель=shipped.example.com, маркер=нет" "цель=${_got}, маркер=${_mk}"
+fi
+
+
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -247,5 +247,33 @@ else
 fi
 
 
+# ============================================================================
+# 9. Пропавший счётчик источника НЕ должен выключать гейт
+# ============================================================================
+#
+# Счётчик пишется с `|| true` — падать он права не имеет. Но если место на
+# флешке кончилось ровно между копированием списков и его записью, счётчика
+# нет. Раньше это молча превращалось в 0 и гейт «всё или ничего» отключался:
+# частичный перенос проходил за полный. Сценарий тот же самый, под который
+# гейт и писался.
+rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
+_i=1
+while [ "$_i" -le 4 ]; do printf 'd%s.example.com\n' "$_i" > "$TMP/opt/lists/warp/games/S$_i.txt"; _i=$((_i+1)); done
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" /bin/sh -c '
+    ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
+    print_warning() { :; }; print_info() { :; }
+    _b() { . "$SB/backup.sh"; }; _b
+    rm -f "$backup_tmp/warp-games/.source-count"   # место кончилось на этой записи
+    rm -rf "$ZAPRET2_DIR"; mkdir -p "$ZAPRET2_DIR/lists/warp"
+    _r() { . "$SB/restore.sh"; }; _r
+' 2>/dev/null
+_left=$(ls "$TMP/opt/lists/warp/games/"*.txt 2>/dev/null | wc -l | tr -d ' ')
+if [ "$_left" = "0" ]; then
+    ok "без счётчика перенос не принимается — гейт увидит пустоту и всё скачается"
+else
+    no "без счётчика перенос не принимается" "0 файлов" "$_left — гейт молча выключился"
+fi
+
+
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
