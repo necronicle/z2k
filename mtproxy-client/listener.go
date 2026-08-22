@@ -13,6 +13,29 @@ const (
 	solIPv6        = 41 // SOL_IPV6
 )
 
+// sockaddrOrder is the byte order of the sa_family_t field the kernel fills in.
+// It is HOST order — unlike sin_port two bytes later, which is always network
+// order. Hardcoding little-endian here was correct on every little-endian build
+// and silently wrong on big-endian MIPS (Keenetic mips-3.4_kn): AF_INET came
+// back as 0x0200 = 512, the correct IPv4 answer was discarded, execution fell
+// through to the IPv6 branch, and every redirected Telegram connection was
+// dropped with "IP6T_SO_ORIGINAL_DST: invalid argument" — a message about IPv6
+// on a path where no IPv6 was involved. Diagnosed 2026-08-22 from a mips-3.4_kn
+// router whose tunnel logged nothing else; an aarch64 router on the same build
+// was unaffected, which is why it read as a user-side fault for so long.
+var sockaddrOrder binary.ByteOrder = binary.NativeEndian
+
+// decodeIPv4Dst reads a redirected IPv4 destination out of a raw sockaddr_in.
+// ok is false when the buffer does not hold an AF_INET address under the given
+// order — kept as a pure function so both byte orders are exercised by tests on
+// any host, which the inline version could not be.
+func decodeIPv4Dst(order binary.ByteOrder, raw []byte) (net.IP, int, bool) {
+	if len(raw) < 8 || order.Uint16(raw[0:2]) != syscall.AF_INET {
+		return nil, 0, false
+	}
+	return net.IPv4(raw[4], raw[5], raw[6], raw[7]), int(binary.BigEndian.Uint16(raw[2:4])), true
+}
+
 // getOriginalDst retrieves the original destination address from a redirected connection.
 // Works with iptables/ip6tables REDIRECT target. Supports both IPv4 and IPv6.
 //
@@ -44,10 +67,8 @@ func getOriginalDst(conn *net.TCPConn) (net.IP, int, error) {
 		addr, err := syscall.GetsockoptIPv6Mreq(int(fd), syscall.IPPROTO_IP, soOriginalDst)
 		if err == nil {
 			raw := addr.Multiaddr
-			family := binary.LittleEndian.Uint16(raw[0:2])
-			if family == syscall.AF_INET {
-				origPort = int(binary.BigEndian.Uint16(raw[2:4]))
-				origIP = net.IPv4(raw[4], raw[5], raw[6], raw[7])
+			if ip, port, ok := decodeIPv4Dst(sockaddrOrder, raw[:]); ok {
+				origIP, origPort = ip, port
 				return
 			}
 		}
@@ -64,7 +85,7 @@ func getOriginalDst(conn *net.TCPConn) (net.IP, int, error) {
 		}
 
 		raw6 := addr6.Multiaddr
-		family6 := binary.LittleEndian.Uint16(raw6[0:2])
+		family6 := sockaddrOrder.Uint16(raw6[0:2])
 		if family6 != syscall.AF_INET6 {
 			syscallErr = fmt.Errorf("unexpected address family %d", family6)
 			return
