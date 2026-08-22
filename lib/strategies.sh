@@ -97,11 +97,30 @@ create_default_strategy_files() {
     # происходило это молча — чтения идут с 2>/dev/null.
     local degraded=0
 
+    # НЕТ АВАРИЙНОГО НАБОРА — НЕ ПОВОД РОНЯТЬ УСТАНОВКУ.
+    #
+    # Сами наборы живут в lib/utils.sh (почему — см. комментарий там). Если
+    # strategies.sh подключили без utils.sh, подстановка $(z2k_emergency_*)
+    # даёт ПУСТУЮ строку, save_strategy_to_category отвергает её fail-closed
+    # (:19-22), и `|| return 1` доходит до шага 10 (lib/install.sh:3269) —
+    # z2k_restore_old_tree откатывает установку целиком из-за неподключённой
+    # библиотеки. Поэтому файл в этом случае не пишем вовсе: пустой пул
+    # подхватит _z2k_pool_default генератора конфига (lib/config_official.sh),
+    # у него свой ротирующий запасной набор.
+    local emerg=1
+    if ! command -v z2k_emergency_tcp_pool >/dev/null 2>&1 ||
+       ! command -v z2k_emergency_quic_pool >/dev/null 2>&1; then
+        emerg=0
+        print_warning "Аварийные наборы недоступны (utils.sh не подключён) — непрочитавшиеся пулы оставлены генератору конфига"
+    fi
+
     if [ -n "$p_yt" ]; then
         save_strategy_to_category "YT" "TCP" "$(build_tls_profile_params "$p_yt")" || return 1
     else
         print_warning "Пул YouTube TCP (#$yt) не прочитался — аварийный набор с ротацией"
-        save_strategy_to_category "YT" "TCP" "$(z2k_emergency_tcp_pool yt_tcp)" || return 1
+        if [ "$emerg" = "1" ]; then
+            save_strategy_to_category "YT" "TCP" "$(z2k_emergency_tcp_pool yt_tcp)" || return 1
+        fi
         degraded=$((degraded + 1))
     fi
 
@@ -109,7 +128,9 @@ create_default_strategy_files() {
         save_strategy_to_category "YT_GV" "TCP" "$(build_tls_profile_params "$p_gv")" || return 1
     else
         print_warning "Пул googlevideo (#$gv) не прочитался — аварийный набор с ротацией"
-        save_strategy_to_category "YT_GV" "TCP" "$(z2k_emergency_tcp_pool gv_tcp)" || return 1
+        if [ "$emerg" = "1" ]; then
+            save_strategy_to_category "YT_GV" "TCP" "$(z2k_emergency_tcp_pool gv_tcp)" || return 1
+        fi
         degraded=$((degraded + 1))
     fi
 
@@ -117,7 +138,9 @@ create_default_strategy_files() {
         save_strategy_to_category "RKN" "TCP" "$(build_tls_profile_params "$p_rkn")" || return 1
     else
         print_warning "Пул РКН (#$rkn) не прочитался — аварийный набор с ротацией"
-        save_strategy_to_category "RKN" "TCP" "$(z2k_emergency_tcp_pool rkn_tcp)" || return 1
+        if [ "$emerg" = "1" ]; then
+            save_strategy_to_category "RKN" "TCP" "$(z2k_emergency_tcp_pool rkn_tcp)" || return 1
+        fi
         degraded=$((degraded + 1))
     fi
 
@@ -128,7 +151,9 @@ create_default_strategy_files() {
         set_current_quic_strategy "$quic"
     else
         print_warning "Пул QUIC (#$quic) не прочитался — аварийный набор с ротацией"
-        save_strategy_to_category "YT" "UDP" "$(z2k_emergency_quic_pool)" || return 1
+        if [ "$emerg" = "1" ]; then
+            save_strategy_to_category "YT" "UDP" "$(z2k_emergency_quic_pool)" || return 1
+        fi
         degraded=$((degraded + 1))
     fi
 
@@ -325,7 +350,20 @@ get_current_quic_profile_params() {
     quic_params=$(get_quic_strategy "$quic_strategy" 2>/dev/null)
 
     if [ -z "$quic_params" ]; then
-        quic_params="--payload=quic_initial --lua-desync=fake:blob=fake_default_quic:repeats=6"
+        # ТОТ ЖЕ АВАРИЙНЫЙ ПУЛ, ЧТО КЛАДЁТ УСТАНОВКА.
+        #
+        # Здесь стоял одиночный fake:blob=fake_default_quic:repeats=6 — без
+        # ротации и без key=yt_quic. При непрочитанном манифесте установка
+        # честно клала аварийный пул с ротацией, а поздний apply в КОНЦЕ той же
+        # установки перетирал его этой статикой: пул терял запасные слоты, а
+        # состояние ротации уезжало в чужую ячейку (ключ по умолчанию).
+        #
+        # Набор уже полный (--filter-udp/--filter-l7 внутри), поэтому мимо
+        # build_quic_profile_params: иначе фильтры задвоились бы и файл
+        # разъехался бы с тем, что записала установка.
+        command -v z2k_emergency_quic_pool >/dev/null 2>&1 || return 1
+        z2k_emergency_quic_pool
+        return 0
     fi
 
     build_quic_profile_params "$quic_params"
@@ -536,46 +574,70 @@ apply_category_strategies_v2() {
     print_info "  YouTube GV  -> стратегия #$yt_gv_strategy"
     print_info "  RKN         -> стратегия #$rkn_strategy"
 
+    # ДЕГРАДИРОВАННЫЙ ДЕФОЛТ — ТОТ ЖЕ АВАРИЙНЫЙ ПУЛ, ЧТО У УСТАНОВКИ.
+    #
+    # Здесь на всех трёх категориях стоял одиночный
+    # fake:blob=fake_default_tls:repeats=6 — без circular и без ключа ротации.
+    # А зовут эту функцию в КОНЦЕ той же установки (lib/install.sh:4503,
+    # apply_autocircular_strategies --auto), которая парой шагов раньше уже
+    # положила при непрочитанном манифесте аварийный набор с ротацией
+    # (create_default_strategy_files). Итог был такой: человеку печатали
+    # «аварийный набор с ротацией», а на диск ложилась прежняя статика —
+    # обещанная идемпотентность позднего apply держалась ровно на здоровом
+    # пути и ломалась ровно там, где нужна.
+    #
+    # Аварийный набор пишется МИМО build_tls_profile_params: он уже полный
+    # (фильтры и payload внутри), а прогон через профиль добавил бы ведущие
+    # пробелы, и файл байт-в-байт разошёлся бы с записью установки.
+    local emerg=1
+    if ! command -v z2k_emergency_tcp_pool >/dev/null 2>&1; then
+        emerg=0
+        print_warning "Аварийные наборы недоступны (utils.sh не подключён) — ненайденные стратегии оставлены как есть"
+    fi
+
     # Получить параметры для каждой стратегии
-    local yt_tcp_params
+    local yt_tcp_params yt_gv_params rkn_params
+    local yt_tcp_full="" yt_gv_full="" rkn_full=""
+
     yt_tcp_params=$(get_strategy "$yt_tcp_strategy")
-    if [ -z "$yt_tcp_params" ]; then
-        print_warning "Стратегия #$yt_tcp_strategy не найдена, используется дефолтная"
-        yt_tcp_params="--lua-desync=fake:blob=fake_default_tls:repeats=6"
+    if [ -n "$yt_tcp_params" ]; then
+        yt_tcp_full=$(build_tls_profile_params "$yt_tcp_params")
+    else
+        print_warning "Стратегия #$yt_tcp_strategy не найдена — аварийный набор с ротацией"
+        [ "$emerg" = "1" ] && yt_tcp_full=$(z2k_emergency_tcp_pool yt_tcp)
     fi
 
-    local yt_gv_params
     yt_gv_params=$(get_strategy "$yt_gv_strategy")
-    if [ -z "$yt_gv_params" ]; then
-        print_warning "Стратегия #$yt_gv_strategy не найдена, используется дефолтная"
-        yt_gv_params="--lua-desync=fake:blob=fake_default_tls:repeats=6"
+    if [ -n "$yt_gv_params" ]; then
+        yt_gv_full=$(build_tls_profile_params "$yt_gv_params")
+    else
+        print_warning "Стратегия #$yt_gv_strategy не найдена — аварийный набор с ротацией"
+        [ "$emerg" = "1" ] && yt_gv_full=$(z2k_emergency_tcp_pool gv_tcp)
     fi
 
-    local rkn_params
     rkn_params=$(get_strategy "$rkn_strategy")
-    if [ -z "$rkn_params" ]; then
-        print_warning "Стратегия #$rkn_strategy не найдена, используется дефолтная"
-        rkn_params="--lua-desync=fake:blob=fake_default_tls:repeats=6"
+    if [ -n "$rkn_params" ]; then
+        rkn_full=$(build_tls_profile_params "$rkn_params")
+    else
+        print_warning "Стратегия #$rkn_strategy не найдена — аварийный набор с ротацией"
+        [ "$emerg" = "1" ] && rkn_full=$(z2k_emergency_tcp_pool rkn_tcp)
     fi
 
-    # Формировать полные параметры TCP для каждой категории
-    local yt_tcp_full
-    local yt_gv_full
-    local rkn_full
-    yt_tcp_full=$(build_tls_profile_params "$yt_tcp_params")
-    yt_gv_full=$(build_tls_profile_params "$yt_gv_params")
-    rkn_full=$(build_tls_profile_params "$rkn_params")
-
-    # QUIC параметры (единый профиль)
+    # QUIC параметры (единый профиль). Свой аварийный набор — внутри
+    # get_current_quic_profile_params.
     local udp_quic
     udp_quic=$(get_current_quic_profile_params)
 
-    # Сохранить стратегии в файлы категорий (config-driven)
+    # Сохранить стратегии в файлы категорий (config-driven).
+    # Пустое значение = аварийного набора нет вовсе; тогда файл НЕ трогаем
+    # (save_strategy_to_category отвергает пустое fail-closed и уронил бы
+    # установку) — прежний файл остаётся, а пустой пул подхватит
+    # _z2k_pool_default генератора конфига.
     print_info "Сохранение стратегий в файлы категорий..."
-    save_strategy_to_category "YT" "TCP" "$yt_tcp_full" || return 1
-    save_strategy_to_category "YT_GV" "TCP" "$yt_gv_full" || return 1
-    save_strategy_to_category "RKN" "TCP" "$rkn_full" || return 1
-    save_strategy_to_category "YT" "UDP" "$udp_quic" || return 1
+    [ -n "$yt_tcp_full" ] && { save_strategy_to_category "YT" "TCP" "$yt_tcp_full" || return 1; }
+    [ -n "$yt_gv_full" ] && { save_strategy_to_category "YT_GV" "TCP" "$yt_gv_full" || return 1; }
+    [ -n "$rkn_full" ] && { save_strategy_to_category "RKN" "TCP" "$rkn_full" || return 1; }
+    [ -n "$udp_quic" ] && { save_strategy_to_category "YT" "UDP" "$udp_quic" || return 1; }
 
     # Обновить config файл (NFQWS2_OPT секцию)
     print_info "Обновление config файла..."

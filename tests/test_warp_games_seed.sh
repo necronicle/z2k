@@ -9,14 +9,27 @@
 # The fetch therefore also happens as part of an update and of a fresh install.
 # Two properties matter and pull in opposite directions:
 #
-#   * it must happen when there is nothing to show, including after a reinstall,
-#     which deliberately does NOT preserve games/ (upstream data, re-fetched);
+#   * it must happen when there is nothing to show;
 #   * it must NOT happen on every update — once lists exist the nightly refresh
 #     owns them, and hitting the mirror after each patch is pointless traffic.
 #
 # Hence the gate is "the directory is empty", not a one-shot marker: a marker
-# would satisfy the second property and break the first, stranding a reinstalled
-# router with no lists and no way to get them until the next night.
+# would satisfy the second property and break the first, stranding a router
+# with no lists and no way to get them until the next night.
+#
+# КОНТРАКТ ПЕРЕУСТАНОВКИ ИЗМЕНИЛСЯ, и шапка это врала. Раньше здесь стояло
+# «переустановка ОСОЗНАННО не сохраняет games/ — данные апстрима, перекачаем».
+# Теперь install.sh переносит games/ через пересборку дерева ВМЕСТЕ с кешем
+# .<имя>.raw (см. tests/test_warp_games_survive_reinstall.sh): загрузка четырёх
+# десятков списков стоила минут на пути установки, а данные при этом не
+# менялись. Оба теста при этом проходили механически — они сами чистили
+# каталог перед прогоном, то есть никогда не наблюдали ни перенос, ни его
+# отсутствие.
+#
+# Гейт от этого не изменился и меняться не должен: он спрашивает КАТАЛОГ, а не
+# «была ли переустановка». Перенос удался — каталог непуст, в сеть не идём;
+# перенос отвергнут гейтом полноты (битый .raw, обрубленный .txt) — каталог
+# пуст, и списки тянутся, как и раньше. Ниже пинятся обе половины.
 #
 # POSIX sh.
 
@@ -99,11 +112,32 @@ run_gate
 [ "$(calls)" = 0 ] && ok "списки на месте -> в сеть не идём (не на каждое обновление)" \
                    || no "списки на месте -> в сеть не идём" "0" "$(calls)"
 
-# The reinstall case the marker approach would have broken.
+# The reinstall case the marker approach would have broken: перенос не удался
+# (гейт полноты отверг битый кеш и вычистил каталог) — списки обязаны
+# дотянуться, иначе роутер остался бы без адресов до следующей ночи.
 rm -f "$ZD/lists/warp/games/"*.txt
 run_gate
-[ "$(calls)" = 1 ] && ok "после реинстала (games/ вычищен) списки тянутся снова" \
-                   || no "после реинстала списки тянутся снова" "1" "$(calls)"
+[ "$(calls)" = 1 ] && ok "перенос отвергнут (games/ вычищен) — списки тянутся снова" \
+                   || no "перенос отвергнут — списки тянутся снова" "1" "$(calls)"
+
+# А вот УДАВШИЙСЯ перенос обязан оставить гейт закрытым: ради этого перенос и
+# делался, и «фетч на каждую переустановку» вернул бы потерянные минуты.
+printf '1.2.3.4\n' > "$ZD/lists/warp/games/Steam.txt"
+printf '1.2.3.4\n' > "$ZD/lists/warp/games/.Steam.raw"
+run_gate
+[ "$(calls)" = 0 ] && ok "перенос удался (games/ непуст) — в сеть не идём" \
+                   || no "перенос удался — в сеть не идём" "0" "$(calls)"
+rm -f "$ZD/lists/warp/games/"*.txt "$ZD/lists/warp/games/".*.raw
+
+# И перенос действительно существует ОБЕИМИ половинами. Бэкап без возврата (или
+# наоборот) — это молчаливый возврат к прежнему поведению: гейт всё так же
+# зелен, а человек снова ждёт загрузку на каждой переустановке.
+_wg_b=$(grep -c 'mkdir -p "\$backup_tmp/warp-games"' "$INST")
+_wg_r=$(grep -c 'if \[ -d "\$backup_tmp/warp-games" \]' "$INST")
+[ "$_wg_b" = "1" ] && ok "install.sh складывает games/ в бэкап" \
+                   || no "install.sh складывает games/ в бэкап" "1 блок" "$_wg_b"
+[ "$_wg_r" = "1" ] && ok "install.sh возвращает games/ из бэкапа" \
+                   || no "install.sh возвращает games/ из бэкапа" "1 блок" "$_wg_r"
 
 # Missing updater must not blow up the tail of a successful update.
 mv "$ZD/z2k-update-lists.sh" "$TMP/moved.sh"

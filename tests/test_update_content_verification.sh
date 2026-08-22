@@ -36,8 +36,11 @@ sha_str() { printf '%s' "$1" > "$TMP/.s"; sha_of "$TMP/.s"; }
 sha_stdin() { cat > "$TMP/.si"; sha_of "$TMP/.si"; }
 
 # ---------------------------------------------------------------------------
-# A fake curl. _z2k_curl_etag invokes curl with -o <body> and -w '%{http_code}';
-# we honour exactly that contract and serve a different body per invocation, so
+# A fake curl. _z2k_curl_etag invokes curl with -o <body> and
+# -w '%{http_code} %{time_connect}' — TWO fields, and the caller now splits that
+# line: the tail becomes Z2K_LAST_CONNECT and gates the Layer 0 retry. A stub
+# that prints one field makes every assertion about that split vacuously green,
+# so we honour the contract exactly and serve a different body per invocation:
 # a test can say "hop 1 is stale, hop 2 is fresh" and observe which one wins.
 # ---------------------------------------------------------------------------
 mkdir -p "$TMP/bin"
@@ -59,7 +62,8 @@ if [ -f "$body" ] && [ -n "$out" ]; then cat "$body" > "$out"; fi
 if [ -n "$hdr" ]; then
     printf 'HTTP/2 200\r\netag: "hop-%s"\r\n\r\n' "$n" > "$hdr"
 fi
-printf '200'
+# Два поля, как просит боевой -w: код ответа и время коннекта.
+printf '200 0.075'
 exit 0
 STUB
 chmod +x "$TMP/bin/curl"

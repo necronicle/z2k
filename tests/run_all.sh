@@ -35,6 +35,14 @@ SUITE_BUDGET="${Z2K_SUITE_BUDGET:-60}"
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Каким интерпретатором гонять сами наборы. На ubuntu-latest /bin/sh — это
+# dash, на macOS — bash, и наборы под ними расходятся не косметически (см.
+# шапку tests/lib/common.sh). Переменная наследуется внутрь каждого набора и
+# оттуда — во вложенные оболочки, поэтому один и тот же прогон можно повторить
+# в диалекте CI, не правя ни одного теста.
+. "$TESTS_DIR/lib/common.sh"
+printf 'Интерпретатор наборов: %s\n\n' "$Z2K_TEST_SH"
+
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 printf "  z2k Integration Test Suite\n"
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -49,7 +57,7 @@ for test_file in "$TESTS_DIR"/test_*.sh; do
     printf '%s\n' "----------------------------------------------------"
 
     _t0=$(date +%s)
-    output=$(sh "$test_file" 2>&1)
+    output=$("$Z2K_TEST_SH" "$test_file" 2>&1)
     rc=$?
     _elapsed=$(( $(date +%s) - _t0 ))
     printf '%s\t%s\n' "$_elapsed" "$suite_name" >> "$TIMINGS"
@@ -98,7 +106,7 @@ done
 if [ -f "$TESTS_DIR/bdd.sh" ]; then
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
     printf "\n▶ acceptance specs (bdd)\n"
-    bdd_out=$(sh "$TESTS_DIR/bdd.sh" 2>&1)
+    bdd_out=$("$Z2K_TEST_SH" "$TESTS_DIR/bdd.sh" 2>&1)
     bdd_rc=$?
     bdd_pass=$(printf '%s' "$bdd_out" | sed -n 's/.*BDD: \([0-9]*\) steps passed.*/\1/p')
     bdd_fail=$(printf '%s' "$bdd_out" | sed -n 's/.*steps passed, \([0-9]*\) failed.*/\1/p')

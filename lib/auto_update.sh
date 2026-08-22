@@ -756,6 +756,22 @@ au_reinstall_required() {
             # A patch overwrites the .sh source but does not re-run it — an
             # already-installed router keeps the old generated output.
             echo 1 ;;
+        lib/install.sh)
+            # Тот же класс, что и генераторы выше, и он тут отсутствовал: весь
+            # код install.sh выполняется ТОЛЬКО внутри установки (step_*,
+            # migrate_*). Патч кладёт свежий файл в ${zd}/lib/install.sh и на
+            # этом всё — ни один его шаг не переигрывается, а reinstall и вовсе
+            # качает модули заново, так что доставленная копия не участвует даже
+            # в следующей установке. Релиз, где изменился только install.sh,
+            # уезжал бы патчем: версия вперёд, installed_tag вперёд, поведение
+            # роутера ровно прежнее — авария без единой строчки в логе.
+            #
+            # ПОЧЕМУ НЕ ВЕСЬ lib/*. Остальные модули (utils, menu, config,
+            # webpanel, auto_update) z2k.sh пересобирает в память на КАЖДОМ
+            # запуске из ${zd}/lib — их правку патч доставляет по-настоящему.
+            # Загонять и их в reinstall значило бы платить полной переустановкой
+            # за однострочный фикс в меню.
+            echo 1 ;;
         webpanel/lighttpd.conf)
             # Templated with @PORT@/@BIND@ substitution at install time
             # (webpanel/install.sh). A patch has no re-templating step, so it
@@ -1131,7 +1147,7 @@ EOF
     # of shipping the fix. S99zapret2 always restarts because the nfqws2
     # input set (lua / hostlists / config / fake blobs) goes through it.
     local restart_set="S99zapret2"
-    local geosite_refresh=0
+    local geosite_refresh=0 geosite_force=0
     local f
     while IFS= read -r f; do
         case "$f" in
@@ -1143,10 +1159,27 @@ EOF
             files/z2k-scheduler.sh)            restart_set="$restart_set S99z2k-scheduler" ;;
             files/init.d/S98z2k-detect)        restart_set="$restart_set S98z2k-detect" ;;
             webpanel/*)                        restart_set="$restart_set S96z2k-webpanel" ;;
-            files/z2k-geosite.sh|files/lists/rkn-false-positive.txt)
-                # New geosite logic or false-positive list — нужен immediate
-                # refresh, иначе filter применится только при следующем
-                # scheduler tick (раз в сутки).
+            files/z2k-geosite.sh)
+                # Новая логика geosite — нужен immediate refresh, иначе она
+                # применится только при следующем scheduler tick (раз в сутки).
+                #
+                # ФОРСИРУЕМ снос ETag-кеша ТОЛЬКО здесь. Правка самого скрипта
+                # способна поменять что угодно в разборе и нормализации, а на
+                # 304 цель не пересобирается вовсе — значит новый код к старому
+                # содержимому цели не применится. Цена (полная перекачка всех
+                # ассетов) платится за смену кода, а не за смену одной строки в
+                # списке.
+                geosite_refresh=1; geosite_force=1 ;;
+            files/lists/rkn-false-positive.txt)
+                # Список ложных срабатываний — тот же immediate refresh, но БЕЗ
+                # форса. Раньше здесь стоял общий FORCE_REFETCH=1, и правка
+                # одной строки в fp-списке стоила повторной перекачки ВСЕХ
+                # четырёх ассетов (RKN + youtube + discord), хотя пересобрать
+                # надо ровно RKN. Инвариант «сменился fp-список → RKN собрать
+                # заново» теперь держит сам z2k-geosite.sh (_z2k_rkn_fp_gate,
+                # гейт по отпечатку перед fetch RKN) — и держит на ВСЕХ путях,
+                # включая ночной cron и правку списка рукой, куда форс отсюда
+                # не доставал никогда.
                 geosite_refresh=1 ;;
         esac
     done <<EOF
@@ -1186,7 +1219,10 @@ EOF
     # исполнения не нужен и на части установок не выставлен.
     if [ "$geosite_refresh" = "1" ] && [ -r "${zd}/z2k-geosite.sh" ]; then
         au_log "patch: triggering geosite refresh (filter applied immediately)"
-        FORCE_REFETCH=1 sh "${zd}/z2k-geosite.sh" fetch >/dev/null 2>&1 || \
+        # FORCE_REFETCH=0 — это НЕ «выключено», а «форс только там, где он
+        # нужен»: geosite читает эту переменную как признак сноса ETag-кеша, и
+        # передавать её значением дешевле, чем городить две ветки вызова.
+        FORCE_REFETCH="$geosite_force" sh "${zd}/z2k-geosite.sh" fetch >/dev/null 2>&1 || \
             au_log "patch: geosite refresh returned non-zero (continuing)"
     fi
 

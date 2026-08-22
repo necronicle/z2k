@@ -168,7 +168,7 @@ eq "no procfs entry falls back to kill -0 (says running)" "rc=0" "$out"
 snip <<EOF
 Z2K_PROCPID="$PROCPID"
 . "$PLIB"
-/bin/sh -c 'exit 0' & d=\$!
+"$TSH" -c 'exit 0' & d=\$!
 wait \$d 2>/dev/null
 mkdir -p "\$Z2K_PROCPID/\$d"
 printf '%s (nfqws2) S 1 0 0 0 -1 0\n' "\$d" > "\$Z2K_PROCPID/\$d/stat"

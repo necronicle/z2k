@@ -18,6 +18,11 @@
 #
 # POSIX sh.
 
+# Диалект вложенных оболочек задаётся набором, а не хардкодом: на macOS
+# /bin/sh — это bash, в CI — dash, и один и тот же тест под ними ведёт себя
+# по-разному. См. шапку tests/lib/common.sh.
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
@@ -236,7 +241,7 @@ for _l in $_wp_libs; do
     [ -f "$ROOT/lib/$_l" ] && cat "$ROOT/lib/$_l" >> "$_wp/libs.sh"
 done
 _pd=$(sed -n "/    _z2k_pool_default() {/,/^    }/p" "$CFG")
-_wp_out=$(env -i PATH=/usr/bin:/bin HOME="$TMP" SB="$_wp" PD="$_pd" /bin/sh -c '
+_wp_out=$(env -i PATH=/usr/bin:/bin HOME="$TMP" SB="$_wp" PD="$_pd" "$Z2K_TEST_SH" -c '
     # только то, что реально видит панель
     . "$SB/libs.sh" 2>/dev/null
     eval "$PD"

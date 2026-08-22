@@ -29,6 +29,11 @@
 #
 # POSIX sh.
 
+# Диалект вложенных оболочек задаётся набором, а не хардкодом: на macOS
+# /bin/sh — это bash, в CI — dash, и один и тот же тест под ними ведёт себя
+# по-разному. См. шапку tests/lib/common.sh.
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
@@ -42,21 +47,11 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 # --- извлечение блоков из install.sh -----------------------------------------
 #
-# Оба блока живут внутри огромных функций, целиком их не вынуть. Берём по
-# опорной строке и до закрывающего `fi` на том же отступе.
-# `awk -v` обрабатывает escape-последовательности в присваивании, поэтому
-# regexp сюда передавать нельзя: `\[` доехало бы как `[` и открыло класс
-# символов. Ищем ПОДСТРОКУ через index().
-extract_block() {  # extract_block <опорная подстрока> <отступ>
-    awk -v pat="$1" -v ind="$2" '
-        index($0, pat) > 0 { inb = 1 }
-        inb { print }
-        inb && $0 == ind "fi" { exit }
-    ' "$SRC"
-}
-
-extract_block 'if [ -d "$ZAPRET2_DIR/lists/warp/games" ]' '            ' > "$TMP/backup.sh"
-extract_block 'if [ -d "$backup_tmp/warp-games" ]'        '    '        > "$TMP/restore.sh"
+# Оба блока живут внутри огромных функций, целиком их не вынуть. Экстрактор
+# общий (tests/lib/common.sh): третьей копией того же awk стал бы каждый новый
+# тест реинсталла.
+z2k_extract_block "$SRC" 'if [ -d "$ZAPRET2_DIR/lists/warp/games" ]' '            ' > "$TMP/backup.sh"
+z2k_extract_block "$SRC" 'if [ -d "$backup_tmp/warp-games" ]'        '    '        > "$TMP/restore.sh"
 
 for b in backup restore; do
     if [ -s "$TMP/$b.sh" ] && grep -q 'warp-games' "$TMP/$b.sh"; then
@@ -81,19 +76,44 @@ fi
 #
 # Блоки исполняются как есть, обёрнутые в функцию: в restore есть `local`, а
 # вне функции ash/dash на нём падает.
-run_cycle() {  # run_cycle <сколько игровых списков положить>
-    _n="$1"
+#
+# Второй аргумент — что положить рядом со списками и как это испортить:
+#
+#   (пусто)      только <имя>.txt, как было до появления переноса кеша;
+#   full         .txt + .<имя>.raw + .<имя>.raw.etag на каждый список — так
+#                каталог выглядит на роутере, где хоть раз отработал update_list;
+#   raw-trunc    то же, но .game2.raw обрублен ПОСРЕДИ строки (обрыв записи);
+#   txt-ff       то же, но game2.txt забит 0xFF (мёртвый NAND);
+#   orphan-etag  .txt + пара .raw/.raw.etag плюс осиротевший .Ghost.raw.etag,
+#                у которого своего .raw нет вовсе.
+run_cycle() {  # run_cycle <сколько игровых списков положить> [что положить рядом]
+    _n="$1"; _mode="${2:-}"
     rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
     printf 'мой-личный-список\n' > "$TMP/opt/lists/warp/user.txt"
     printf '1\n' > "$TMP/opt/lists/warp/.enabled"
     _i=1
     while [ "$_i" -le "$_n" ]; do
         printf 'домен-%s.example\n' "$_i" > "$TMP/opt/lists/warp/games/game$_i.txt"
+        case "$_mode" in
+            '') : ;;
+            *)  # кеш условных запросов пишется в ASCII — .raw это тело ответа
+                printf 'host%s.example.com\n' "$_i" > "$TMP/opt/lists/warp/games/.game$_i.raw"
+                printf '"etag-%s"\n' "$_i" > "$TMP/opt/lists/warp/games/.game$_i.raw.etag" ;;
+        esac
         _i=$((_i + 1))
     done
+    case "$_mode" in
+        raw-trunc)
+            # обрыв записи режет посреди строки: перевода строки в конце нет
+            printf 'host1.example.com\nhost2.exa' > "$TMP/opt/lists/warp/games/.game2.raw" ;;
+        txt-ff)
+            printf '\377\377\377\377\377\377\377\377\n' > "$TMP/opt/lists/warp/games/game2.txt" ;;
+        orphan-etag)
+            printf '"etag-призрак"\n' > "$TMP/opt/lists/warp/games/.Ghost.raw.etag" ;;
+    esac
 
     env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
-        SB="$TMP" GATEEXPR="$GATE" /bin/sh -c '
+        SB="$TMP" GATEEXPR="$GATE" "$Z2K_TEST_SH" -c '
             ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
             print_warning() { printf "WARN %s\n" "$1" >> "$SB/log"; }
             print_info()    { printf "INFO %s\n" "$1" >> "$SB/log"; }
@@ -114,6 +134,14 @@ run_cycle() {  # run_cycle <сколько игровых списков пол�
             if eval "$GATEEXPR"; then printf "СЕТЬ"; else printf "ПРОПУСК"; fi
             printf ":%s" "$(ls "$ZAPRET2_DIR/lists/warp/games/"*.txt 2>/dev/null | wc -l | tr -d " ")"
         ' 2>/dev/null
+}
+
+# Что осталось в games/ после цикла. Считаем через find, а не глобом: весь кеш
+# условных запросов — ДОТФАЙЛЫ, и именно они делали прежний откат пустым
+# обещанием, потому что под `*.txt` не попадают.
+games_have() {  # games_have <regexp по имени файла> → число
+    find "$TMP/opt/lists/warp/games" -maxdepth 1 -type f 2>/dev/null \
+        | sed 's|.*/||' | grep -c -- "$1"
 }
 
 # --- 1. ГЛАВНОЕ: списки пережили цикл, гейт больше не гонит в сеть -----------
@@ -203,7 +231,7 @@ rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
 printf 'a.example.com\n' > "$TMP/opt/lists/warp/games/Game1.txt"
 printf 'a.example.com\n' > "$TMP/opt/lists/warp/games/.Game1.raw"
 printf '"etag-1"\n'      > "$TMP/opt/lists/warp/games/.Game1.raw.etag"
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" /bin/sh -c '
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
     print_warning() { :; }; print_info() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -230,7 +258,7 @@ fi
 rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
 _i=1
 while [ "$_i" -le 5 ]; do printf 'd%s.example.com\n' "$_i" > "$TMP/opt/lists/warp/games/G$_i.txt"; _i=$((_i+1)); done
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" GATE="$GATE" /bin/sh -c '
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" GATE="$GATE" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
     print_warning() { :; }; print_info() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -259,7 +287,7 @@ fi
 rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
 _i=1
 while [ "$_i" -le 4 ]; do printf 'd%s.example.com\n' "$_i" > "$TMP/opt/lists/warp/games/S$_i.txt"; _i=$((_i+1)); done
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" /bin/sh -c '
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
     print_warning() { :; }; print_info() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -273,6 +301,162 @@ if [ "$_left" = "0" ]; then
 else
     no "без счётчика перенос не принимается" "0 файлов" "$_left — гейт молча выключился"
 fi
+
+
+# ============================================================================
+# 10. Порча содержимого откатывает перенос ЦЕЛИКОМ — вместе с дотфайлами
+# ============================================================================
+#
+# До появления переноса порчу лечила сама переустановка: games/ пересевался с
+# нуля. Теперь каталог едет вперёд, и битый файл уехал бы вместе с ним
+# НАВСЕГДА: ночной прогон получает 304 против выжившего .raw.etag, санитайзер
+# пересобирает .txt из ТОГО ЖЕ битого .raw, а страж усадки сравнивает файл сам
+# с собой. Ни один из трёх слоёв порчу не видит.
+#
+# Отдельно и не менее важно — ЧТО именно сносит откат. Пока там стоял один
+# glob *.txt, откат был обещанием на словах: дотфайлы .<имя>.raw и
+# .<имя>.raw.etag под него не попадают. Гейт «games/ пуст» после такого отката
+# звал обновлялку, каждый список отвечал 304 против выжившего .raw.etag, и
+# .txt пересобирался из того же обрубка — в сеть не уходило ни байта, хотя
+# сообщение обещало перекачку. Поэтому здесь проверяется не только пустота по
+# *.txt, но и по обоим дотфайлам.
+
+# (в) сначала контрольная точка: всё цело — перенос ОБЯЗАН быть принят.
+# Без неё «откат целиком» проходил бы и на коде, который откатывает всегда.
+r=$(run_cycle 3 full)
+_t=$(games_have '\.txt$'); _rw=$(games_have '^\..*\.raw$'); _et=$(games_have '\.raw\.etag$')
+if [ "$r" = "ПРОПУСК:3" ] && [ "$_t" = "3" ] && [ "$_rw" = "3" ] && [ "$_et" = "3" ]; then
+    ok "целый каталог со списками и кешем перенесён полностью, гейт пропускает загрузку"
+else
+    no "целый каталог перенесён полностью" "ПРОПУСК:3, txt=3 raw=3 etag=3" \
+       "$r, txt=$_t raw=$_rw etag=$_et"
+fi
+
+# (а) .<имя>.raw обрублен посреди строки, а все .txt целы. Гейт «games/ пуст»
+#     такую порчу не видит вовсе — каталог-то непустой.
+r=$(run_cycle 3 raw-trunc)
+_t=$(games_have '\.txt$'); _rw=$(games_have '^\..*\.raw$'); _et=$(games_have '\.raw\.etag$')
+if [ "$r" = "СЕТЬ:0" ] && [ "$_t" = "0" ] && [ "$_rw" = "0" ] && [ "$_et" = "0" ]; then
+    ok "обрубленный .raw при целых .txt откатывает перенос целиком — не осталось ни .txt, ни .raw, ни .raw.etag"
+else
+    no "обрубленный .raw откатывает перенос целиком" "СЕТЬ:0, txt=0 raw=0 etag=0" \
+       "$r, txt=$_t raw=$_rw etag=$_et"
+fi
+
+# (б) 0xFF в самом списке — штатный отказ мёртвого NAND на этой платформе.
+r=$(run_cycle 3 txt-ff)
+_t=$(games_have '\.txt$'); _rw=$(games_have '^\..*\.raw$'); _et=$(games_have '\.raw\.etag$')
+if [ "$r" = "СЕТЬ:0" ] && [ "$_t" = "0" ] && [ "$_rw" = "0" ] && [ "$_et" = "0" ]; then
+    ok "список, забитый 0xFF, откатывает перенос целиком — каталог пуст и всё скачается заново"
+else
+    no "0xFF в списке откатывает перенос целиком" "СЕТЬ:0, txt=0 raw=0 etag=0" \
+       "$r, txt=$_t raw=$_rw etag=$_et"
+fi
+
+
+# ============================================================================
+# 11. Осиротевший .<имя>.raw.etag в бэкап не попадает
+# ============================================================================
+#
+# ETag без своего тела — это не «половина кеша», это ХУЖЕ пустоты: следующий
+# условный запрос получает 304 «не изменилось», а сравнивать не с чем —
+# санитайзеру нечего пересобирать, и цель остаётся без содержимого. Осиротеть
+# .raw.etag может ровно тем же обрывом, что и всё прочее здесь.
+#
+# Поэтому бэкап ходит по .raw и берёт .raw.etag ТОЛЬКО прицепом к своему телу.
+r=$(run_cycle 1 orphan-etag)
+_ghost_bk=$([ -f "$TMP/bk/warp-games/.Ghost.raw.etag" ] && echo взят || echo пропущен)
+_ghost_tree=$([ -f "$TMP/opt/lists/warp/games/.Ghost.raw.etag" ] && echo есть || echo нет)
+_pair=$([ -f "$TMP/opt/lists/warp/games/.game1.raw" ] && \
+        [ -f "$TMP/opt/lists/warp/games/.game1.raw.etag" ] && echo цела || echo неполна)
+if [ "$_ghost_bk" = "пропущен" ] && [ "$_ghost_tree" = "нет" ] \
+   && [ "$_pair" = "цела" ] && [ "$r" = "ПРОПУСК:1" ]; then
+    ok "осиротевший .raw.etag не взят в бэкап и не воскрес в дереве, а полная пара доехала"
+else
+    no "осиротевший .raw.etag не переносится" "в бэкапе=пропущен, в дереве=нет, пара=цела, ПРОПУСК:1" \
+       "в бэкапе=$_ghost_bk, в дереве=$_ghost_tree, пара=$_pair, $r"
+fi
+
+
+# ============================================================================
+# 12. Метёлка временных файлов: все четыре суффикса, со счётом и отчётом
+# ============================================================================
+#
+# Живёт она в том же step_build_zapret2 и в той же его части «до mv дерева»,
+# что и бэкап игровых списков выше, — потому и пинится здесь.
+#
+# Суффиксов четыре, и раньше убирался ровно один: .carry.<pid> — полная копия
+# geosite-цели (1,2 МБ у ru-blocked, ~24 МБ у ru-blocked-all) от прерванного
+# переноса; .probe — проба записи из z2k-geosite.sh; .new.<pid> и .hdr.<pid> —
+# тело и заголовки от оборванного условного запроса (lib/utils.sh,
+# files/z2k-update-lists.sh пишут их РЯДОМ С ЦЕЛЬЮ, то есть и в games/ тоже).
+# Каждый обрыв оставляет свой хвост, а типичная причина обрыва — нехватка
+# места: круг замыкается, следующая попытка падает вероятнее предыдущей.
+#
+# Метёлка не заканчивается на `fi` (это while с here-doc), поэтому общий
+# z2k_extract_block сюда не подходит: берём от первой строки до строки отчёта
+# включительно.
+awk -v s='local _junk _jfreed=0' -v e='Убрано временных файлов' '
+    index($0, s) > 0 { inb = 1 }
+    inb { print }
+    inb && index($0, e) > 0 { exit }
+' "$SRC" > "$TMP/junk.sh"
+if [ -s "$TMP/junk.sh" ] && grep -q 'carry' "$TMP/junk.sh" && grep -q 'TMPJUNK' "$TMP/junk.sh"; then
+    ok "блок метёлки временных файлов извлечён из install.sh"
+else
+    no "блок метёлки извлечён" "непустой блок с here-doc" "пусто"
+fi
+
+sweep() {  # sweep <класть ли мусор: 1/0> → "<лог>|<что осталось>"
+    rm -rf "$TMP/j"; mkdir -p "$TMP/j/extra_strats/TCP/RKN" \
+                              "$TMP/j/extra_strats/cache/geosite-etag" \
+                              "$TMP/j/lists/warp/games"
+    # рабочие файлы — их трогать нельзя
+    printf 'upstream.example.com\n' > "$TMP/j/extra_strats/TCP/RKN/List.txt"
+    printf 'ru-blocked.txt\n'       > "$TMP/j/extra_strats/TCP/RKN/List.txt.asset"
+    printf '"etag"\n'               > "$TMP/j/extra_strats/cache/geosite-etag/ru-blocked.txt.etag"
+    printf 'steam.example.com\n'    > "$TMP/j/lists/warp/games/Steam.txt"
+    printf 'steam.example.com\n'    > "$TMP/j/lists/warp/games/.Steam.raw"
+    if [ "$1" = "1" ]; then
+        # по одному хвосту на каждый суффикс, имена ровно как их пишет боевой код
+        printf 'x\n' > "$TMP/j/extra_strats/TCP/RKN/List.txt.carry.4242"
+        printf 'x\n' > "$TMP/j/extra_strats/TCP/RKN/List.txt.probe"
+        printf 'x\n' > "$TMP/j/lists/warp/games/.Steam.raw.new.4242"
+        printf 'x\n' > "$TMP/j/lists/warp/games/.Steam.raw.hdr.4242"
+    fi
+    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+        ZAPRET2_DIR="$SB/j"
+        print_info() { printf "%s\n" "$1"; }
+        _sweep() { . "$SB/junk.sh"; }
+        _sweep
+    ' 2>/dev/null | tr '\n' ' '
+    printf '|'
+    # LC_ALL=C: порядок сортировки не должен зависеть от локали машины.
+    find "$TMP/j" -type f 2>/dev/null | sed "s|$TMP/j/||" | LC_ALL=C sort | tr '\n' ' '
+}
+
+_sw=$(sweep 1)
+_left=${_sw#*|}
+case "$_sw" in
+    *"Убрано временных файлов от прерванных прогонов: 4"*)
+        ok "метёлка убрала все четыре суффикса и сказала сколько (4)" ;;
+    *)  no "метёлка убирает все четыре суффикса и считает их" \
+           "отчёт «Убрано ...: 4»" "${_sw%%|*}" ;;
+esac
+_expected='extra_strats/TCP/RKN/List.txt extra_strats/TCP/RKN/List.txt.asset extra_strats/cache/geosite-etag/ru-blocked.txt.etag lists/warp/games/.Steam.raw lists/warp/games/Steam.txt '
+if [ "$_left" = "$_expected" ]; then
+    ok "рабочие файлы метёлка не тронула (списки, кеш .raw, ETag, маркер происхождения)"
+else
+    no "рабочие файлы не тронуты" "$_expected" "$_left"
+fi
+
+# Мусора нет — молчим. Иначе установка на каждом запуске рапортовала бы о нуле.
+_sw0=$(sweep 0)
+case "${_sw0%%|*}" in
+    *"Убрано временных файлов"*)
+        no "без мусора метёлка молчит" "пустой вывод" "${_sw0%%|*}" ;;
+    *)  ok "без мусора метёлка молчит — про ноль убранного не рапортует" ;;
+esac
 
 
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"

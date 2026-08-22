@@ -105,21 +105,19 @@ generate_nfqws2_opt_from_strategies() {
     # мусор, попав в обработку NFQWS2_OPT, вешает генерацию в бесконечный цикл
     # и пишет на диск конфиг-мину, которая роняет nfqws2 на следующем рестарте.
     #
-    # Проверяем два признака: (1) NUL/0xFF-байты — их в строке опций быть не
-    # может; (2) наличие хотя бы одного `--`, т.е. файл вообще похож на набор
-    # опций. Намеренно НЕ требуем `--lua-desync`: пользовательская стратегия
-    # может состоять из одних фильтров, и отвергать её было бы ложным срабатыванием.
-    # Смысловую валидность всё равно проверяет nfqws2 --dry-run ниже по функции.
-    z2k_strategy_file_sane() {
-        local _f="$1" _junk
-        # Арифметическое сравнение, а не строковое: `wc -c` на части платформ
-        # (BSD/busybox-вариантах) паддит вывод пробелами, и `[ "  0" != "0" ]`
-        # дало бы ложный REJECT на исправном файле; в `-gt` ведущие пробелы
-        # съедаются числовым контекстом.
-        _junk=$(tr -cd '\000\377' < "$_f" | wc -c)
-        [ "${_junk:-0}" -gt 0 ] 2>/dev/null && return 1
-        grep -q -- "--" "$_f" || return 1
-        return 0
+    # Сама проверка живёт в lib/utils.sh на верхнем уровне: её зовёт не только
+    # генерация конфига, но и диагностика, а две копии одной проверки расходятся
+    # молча. Вложенная копия была вдобавок недоступна снаружи вообще.
+    #
+    # Здесь остаётся гард на её отсутствие: вебпанель (webpanel/cgi/actions.sh,
+    # _gen_libs_source) сорсит utils.sh УСЛОВНО, и на обрезанном дереве сюда
+    # входят без него. Проверить нечем — но и отказывать в генерации нельзя:
+    # тогда недостающая библиотека гасила бы любой тумблер панели на исправном
+    # роутере. Смысловую валидность ниже по функции всё равно ловит nfqws2
+    # --dry-run.
+    _z2k_file_sane() {
+        command -v z2k_strategy_file_sane >/dev/null 2>&1 || return 0
+        z2k_strategy_file_sane "$1"
     }
 
     z2k_custom_strategy() {
@@ -139,7 +137,7 @@ generate_nfqws2_opt_from_strategies() {
     z2k_read_pool_strategy() {
         # z2k_read_pool_strategy <file> — содержимое в stdout, либо rc=1
         local _f="$1"
-        if ! z2k_strategy_file_sane "$_f"; then
+        if ! _z2k_file_sane "$_f"; then
             print_error "Файл стратегий повреждён (бинарный мусор вместо опций): $_f"
             print_error "Генерация конфига остановлена, старый конфиг сохранён. Лечится обновлением/переустановкой z2k."
             return 1
@@ -155,7 +153,7 @@ generate_nfqws2_opt_from_strategies() {
     for _cs_pool in yt_tcp gv_tcp rkn_tcp yt_quic; do
         _cs_check="${ZAPRET2_DIR:-/opt/zapret2}/lists/custom-strategies/${_cs_pool}.txt"
         [ -s "$_cs_check" ] || continue
-        if ! z2k_strategy_file_sane "$_cs_check"; then
+        if ! _z2k_file_sane "$_cs_check"; then
             print_error "Пользовательский файл стратегий повреждён (бинарный мусор вместо опций): $_cs_check"
             print_error "Генерация конфига остановлена, старый конфиг сохранён. Исправьте или удалите этот файл."
             return 1
@@ -265,14 +263,24 @@ generate_nfqws2_opt_from_strategies() {
     # circular. Пул терял не только свою технику, но и саму способность перебирать
     # запасные: один приём, и если он не проходит — всё.
     #
-    # Аварийный набор берём из strategies.sh, чтобы определение было одно. Проверка
-    # доступности — на случай путей, где config_official сорсится в одиночку
-    # (lib/install.sh:4051): без неё правка могла бы сделать хуже, чем было.
+    # Аварийный набор берём из lib/utils.sh, чтобы определение было одно. Проверка
+    # доступности — на случай путей, где config_official сорсится в одиночку:
+    # вебпанель (webpanel/cgi/actions.sh, _gen_libs_source) сорсит utils.sh
+    # УСЛОВНО, и на роутере с обрезанным деревом сюда входят без него.
+    #
+    # ЗАПАСНОЙ ЛИТЕРАЛ — ТОЖЕ РОТИРУЮЩИЙ, И ЭТО НЕСУЩЕЕ. Здесь лежала
+    # дореформенная строка: один fake без circular и без key=. Достижима она
+    # ровно на том пути, который случается чаще всего — тумблер в панели, — и
+    # схлопывала ВСЕ ТРИ TCP-пула в статический фейк с общей ячейкой ротации.
+    # В панели такое состояние неотличимо от здорового, то есть человек видел
+    # «всё применилось», а обход оставался с одним приёмом без запасных.
+    # Строка — дословная копия z2k_emergency_tcp_pool (lib/utils.sh); при
+    # правке того набора править и здесь, иначе деградированные пути разъедутся.
     _z2k_pool_default() {
         if command -v z2k_emergency_tcp_pool >/dev/null 2>&1; then
             z2k_emergency_tcp_pool "$1"
         else
-            printf '%s' "--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=fake:blob=fake_default_tls:repeats=6"
+            printf '%s' "--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=circular:fails=3:retrans=2:maxseq=16384:time=60:key=$1:nld=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,midsld:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tcp_ts=-1000:badsum:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3"
         fi
     }
 

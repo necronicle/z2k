@@ -5,6 +5,11 @@
 # auth.sh дёргается напрямую, без HTTP: важно ровно то, какие переменные
 # окружения CGI до него доезжают.
 
+# Диалект вложенных оболочек задаётся набором, а не хардкодом: на macOS
+# /bin/sh — это bash, в CI — dash, и один и тот же тест под ними ведёт себя
+# по-разному. См. шапку tests/lib/common.sh.
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 TESTS_DIR=$(dirname "$SELF")
 Z2K_DIR=$(dirname "$TESTS_DIR")
@@ -23,7 +28,7 @@ pass=0; fail=0
 # Прогон auth_require в отдельном shell. Печатает ALLOW либо DENY.
 # Аргументы — присваивания вида ИМЯ=значение, пустое значение = заголовка нет.
 run_guard() {
-    env -i "PATH=$PATH" "AUTH_FILE=$AUTH" "SELF_DIR=$TMP/webpanel/cgi" "$@" /bin/sh -c '
+    env -i "PATH=$PATH" "AUTH_FILE=$AUTH" "SELF_DIR=$TMP/webpanel/cgi" "$@" "$Z2K_TEST_SH" -c '
         set -u
         . "$AUTH_FILE"
         auth_require

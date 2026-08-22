@@ -18,6 +18,11 @@
 #
 # POSIX sh.
 
+# Диалект вложенных оболочек задаётся набором, а не хардкодом: на macOS
+# /bin/sh — это bash, в CI — dash, и один и тот же тест под ними ведёт себя
+# по-разному. См. шапку tests/lib/common.sh.
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
@@ -93,7 +98,7 @@ run_copy() {
     mkdir -p "$_sandbox/ro"
     : > "$_sandbox/ro/target"
     _out=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
-        /bin/sh -c '
+        "$Z2K_TEST_SH" -c '
             . "$1/fn.sh"
             # Запись цели не удалась — единственное, что здесь проверяется.
             mv() { return 1; }
@@ -153,11 +158,53 @@ else
     no "хоп geosite читает те же ручки" "обе ручки" \
        "$_geo_knobs из 2 — четвёртая точка выхода снова разъехалась"
 fi
-if grep -qE -- '--connect-timeout 1[0-9]' "$GEO" && ! grep -q '_ct=15' "$GEO"; then
-    no "в geosite не осталось зашитого бюджета VPS-хопа" "через ручку" "зашитое число"
-else
-    ok "в geosite зашитый бюджет остался только у прямого запроса (за ним никого нет)"
-fi
+# ГЕЙТ, КОТОРЫЙ МОЖЕТ УПАСТЬ.
+#
+# Прежняя проверка была вакуумной: условие требовало ОТСУТСТВИЯ подстроки
+# `_ct=15`, а она стоит в самом geosite (ветка «Layer 0 выключен»). То есть
+# второй операнд всегда ложь, и брался всегда `ok`. Гейт зеленел бы и на
+# коде, где VPS-хоп снова зашит на 15 с — ровно то, ради чего он писался.
+#
+# Спрашиваем не текст, а поведение: гоняем настоящий fetch_to_tmp с подставным
+# curl и смотрим, КАКОЙ бюджет доехал до каждого хопа.
+_gsb="$TMP/geo"; rm -rf "$_gsb"; mkdir -p "$_gsb/etag" "$_gsb/tmp"
+awk '/^(fetch_to_tmp|z2k_uint|z2k_connfail)\(\) \{/,/^\}/' "$GEO" > "$_gsb/fns.sh"
+z2k_write_curl_stub "$TMP/bin/curl_geo"
+mkdir -p "$_gsb/bin"; cp "$TMP/bin/curl_geo" "$_gsb/bin/curl"
+
+# geo_budget <включён ли Layer 0> → "vps=<бюджеты> direct=<бюджеты>"
+geo_budget() {
+    rm -rf "$_gsb/tmp"; mkdir -p "$_gsb/tmp"; : > "$_gsb/curl.log"; rm -f "$_gsb/curl.log.v"
+    env -i PATH="$_gsb/bin:/usr/bin:/bin" HOME="$TMP" G="$_gsb" L0="$1" \
+        Z2K_STUB_LOG="$_gsb/curl.log" Z2K_STUB_MODE=vps_fail \
+        Z2K_FETCH_VPS_CONNECT_TIMEOUT=7 \
+        "$Z2K_TEST_SH" -c '
+            . "$G/fns.sh"
+            ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp"; RELEASE_BASE="https://example.invalid/dl"
+            log() { :; }
+            if [ "$L0" = "1" ]; then _z2k_vps_gh_resolve() { printf " --resolve h:443:203.0.113.9"; }
+            else _z2k_vps_gh_resolve() { printf ""; }; fi
+            fetch_to_tmp "ru-blocked.txt" >/dev/null 2>&1
+        ' 2>/dev/null
+    printf 'vps=%s direct=%s' \
+        "$(grep -- '--resolve' "$_gsb/curl.log" 2>/dev/null | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')" \
+        "$(grep -v -- '--resolve' "$_gsb/curl.log" 2>/dev/null | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')"
+}
+
+_gb=$(geo_budget 1)
+case "$_gb" in
+    "vps=7 direct=15")
+        ok "geosite: VPS-хоп берёт бюджет из ручки (7), прямой сохранил свои 15 с" ;;
+    *)  no "geosite: бюджет VPS-хопа идёт из ручки" "vps=7 direct=15" \
+           "$_gb — четвёртая точка выхода снова живёт своей жизнью" ;;
+esac
+
+# Layer 0 выключен — этот же запрос И ЕСТЬ прямой, торопиться с ним нельзя.
+_gb0=$(geo_budget 0)
+case "$_gb0" in
+    "vps= direct=15") ok "geosite без Layer 0: единственный запрос идёт с 15 с, а не с коротким бюджетом" ;;
+    *) no "geosite без Layer 0 не торопится" "vps= direct=15" "$_gb0" ;;
+esac
 
 # --- 3. Матрица поведения: одна ветка из пяти — это не гейт -------------------
 #
@@ -210,7 +257,7 @@ probe() {
     fi
     env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
         SB="$_sb" MODE="$_m" TO="$_to" CLOG="$_sb/clog" \
-        /bin/sh -c '
+        "$Z2K_TEST_SH" -c '
             : > "$CLOG"
             cp "$(command -v curl2)" "$(dirname "$(command -v curl2)")/curl" 2>/dev/null
             . "$SB/fn.sh"

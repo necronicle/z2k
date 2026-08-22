@@ -83,6 +83,41 @@ deploy_critical_file() {
 # «настройки не пережили обновление» без единой строчки в логе.
 Z2K_UPGRADE_BACKUP="${Z2K_UPGRADE_BACKUP:-/opt/z2k-upgrade-backup}"
 
+# Пары «сохранить X» / «вернуть X» из $Z2K_UPGRADE_BACKUP.
+#
+# Пар этих в установке больше десятка, а половинки разнесены почти на тысячу
+# строк — сцеплены они были только именем файла в бэкапе, записанным руками с
+# обеих сторон. Разъехаться такая связка может молча: сохраняем в одно имя,
+# ищем при возврате другое, и человек узнаёт об этом как «настройки не пережили
+# обновление». Ровно этот промах в этом же дереве уже случался — перенос ETag
+# geosite был наложен наполовину. Имя теперь пишется по разу на пару.
+#
+# z2k_backup_file ИСХОДНИК ИМЯ — «нет исходника» это не отказ (return 0),
+# поэтому вызывающий волен ставить || die только на настоящий сбой копирования:
+# у whitelist потеря невосстановима, у state.tsv — нет, и решать это должен он.
+z2k_backup_file() {
+    [ -f "$1" ] || return 0
+    cp -f "$1" "${Z2K_UPGRADE_BACKUP}/$2"
+}
+# z2k_restore_file ИМЯ ЦЕЛЬ — 0 только если файл РЕАЛЬНО вернулся: вызывающие
+# печатают по этому коду «восстановлено», и «в бэкапе ничего не было» обязано
+# отличаться от «вернули».
+#
+# Часть пар осталась рукописной, и намеренно. Каталоги (warp-lists, warp-games,
+# custom-strategies, geosite) переносятся не файлом, а циклом со счётчиком и
+# проверкой содержимого — под эту форму хелпер не подходит. Адресные
+# исключения, найденные автоматикой домены и адрес вебпанели вырезаются из
+# ЭТОГО файла тестами (test_local_exclusions, test_found_domains_survive_
+# reinstall, test_webpanel_bind_survives_update) и исполняются фрагментом с
+# заглушками только на print_*/die: вызов функции, определённой в другом конце
+# файла, в такой песочнице не найдётся и превратится в отказ бэкапа. Переводить
+# их надо вместе с харнессами, не в одиночку.
+z2k_restore_file() {
+    [ -f "${Z2K_UPGRADE_BACKUP}/$1" ] || return 1
+    mkdir -p "$(dirname "$2")" 2>/dev/null
+    cp -f "${Z2K_UPGRADE_BACKUP}/$1" "$2"
+}
+
 # ==============================================================================
 # Transactional install: old-tree backup + restore
 # ==============================================================================
@@ -177,6 +212,18 @@ z2k_restore_old_tree() {
             [ -x "/opt/etc/init.d/${_svc}" ] && /opt/etc/init.d/${_svc} restart >/dev/null 2>&1
         done
         rm -rf "${Z2K_OLD_TREE_BACKUP}.ext" 2>/dev/null
+        # …и каталог с пользовательскими данными: всё, что в нём лежит, уже
+        # вернулось на место вместе с деревом.
+        #
+        # Убираем ТОЛЬКО здесь, после удавшегося возврата. Сносили его прежде
+        # лишь в двух местах — в начале СЛЕДУЮЩЕЙ установки и в конце удачного
+        # finalize, — то есть любой отказ на шагах 8-12 оставлял копию на /opt
+        # до следующей УДАЧНОЙ установки. Раньше там лежали config, whitelist,
+        # extra-domains и state.tsv (сотни килобайт), теперь ещё и полные копии
+        # geosite-целей со всеми игровыми списками: около 2,5 МБ по умолчанию и
+        # около 26 МБ у выбравших ru-blocked-all. А типичная причина отказа —
+        # нехватка места.
+        rm -rf "$Z2K_UPGRADE_BACKUP" 2>/dev/null
         unset Z2K_OLD_TREE_BACKUP
         [ "$_ext_ok" = "1" ]
         return
@@ -1417,11 +1464,24 @@ step_build_zapret2() {
         done
         if [ -n "$_rescued" ]; then
             print_warning "Прошлая установка не завершилась — восстанавливаю настройки из ${_rescued##*/}"
+            # Список обязан покрывать ВСЁ, что ниже уходит в бэкап и не
+            # восстанавливается загрузкой. Третья копия того же перечня,
+            # сверенная глазом, — добавляешь бэкап, добавь и сюда.
+            #
+            # webpanel/{port,bind,bind6} тут не было, и это уже описанный ниже
+            # полевой дефект, только другим путём: адрес панели задан явно, шаг
+            # 12 ставит панель ПОСЛЕ конфига, поэтому в оборвавшемся раньше
+            # прогоне живое дерево webpanel/ не содержит вовсе — все три файла
+            # остаются в сироте. Бэкап читает живое дерево, не находит ничего,
+            # и следующая установка определяет адрес заново. Порт ещё спасал
+            # выживший S96 (step_finalize вычитывает его оттуда), а bind/bind6
+            # брать неоткуда.
             local _item
             for _item in config lists/whitelist.txt lists/extra-domains.txt \
                          lists/custom-strategies lists/warp \
                          lists/autohostlist-domains.txt lists/discovered-domains.txt \
                          ipset/zapret-hosts-user-exclude.txt \
+                         webpanel/port webpanel/bind webpanel/bind6 \
                          extra_strats/cache/autocircular/state.tsv .z2k-relay-id; do
                 [ -e "$_rescued/$_item" ] || continue
                 [ -e "$ZAPRET2_DIR/$_item" ] && continue
@@ -1459,23 +1519,25 @@ step_build_zapret2() {
         # скопировать не удалось — abort, иначе commit (delete old) безвозвратно
         # потеряет настройки (Codex 2026-05-28). На /opt место есть почти
         # всегда, но проверяем явно.
-        if [ -f "$ZAPRET2_DIR/config" ]; then
-            cp -f "$ZAPRET2_DIR/config" "$backup_tmp/config" || \
-                die "Не удалось сохранить config в бэкап — установка прервана до удаления текущей, чтобы не потерять ваши настройки."
-        fi
+        z2k_backup_file "$ZAPRET2_DIR/config" config || \
+            die "Не удалось сохранить config в бэкап — установка прервана до удаления текущей, чтобы не потерять ваши настройки."
         # Whitelist (пользовательские исключения) — невосстановимый user-data,
         # backup обязателен. Если есть но не скопировался — abort до mv старого
         # дерева, иначе commit его сотрёт безвозвратно (Codex 2026-05-28).
-        if [ -f "$ZAPRET2_DIR/lists/whitelist.txt" ]; then
-            cp -f "$ZAPRET2_DIR/lists/whitelist.txt" "$backup_tmp/whitelist.txt" || \
-                die "Не удалось сохранить whitelist в бэкап — установка прервана, чтобы не потерять ваши исключения."
-        fi
+        z2k_backup_file "$ZAPRET2_DIR/lists/whitelist.txt" whitelist.txt || \
+            die "Не удалось сохранить whitelist в бэкап — установка прервана, чтобы не потерять ваши исключения."
         # extra-domains.txt — юзерские добавки (echo >> extra-domains.txt).
         # Тоже невосстановимый user-data — backup обязателен.
-        if [ -f "$ZAPRET2_DIR/lists/extra-domains.txt" ]; then
-            cp -f "$ZAPRET2_DIR/lists/extra-domains.txt" "$backup_tmp/extra-domains.txt" || \
-                die "Не удалось сохранить extra-domains в бэкап — установка прервана, чтобы не потерять ваши домены."
-        fi
+        #
+        # Возврат у этой пары не восстановление, а слияние: обратно кладётся
+        # свежий shipped-файл, а из бэкапа добираются только строки, которых в
+        # нём нет. z2k_restore_file такую форму не выражает, поэтому имя копии
+        # на той стороне всё равно записано вручную (см. «extra-domains.txt:
+        # preserve user-added lines»). Здесь helper берём ради того же, ради
+        # чего он и заведён: «нет исходника — не отказ» и die только на
+        # настоящем сбое копирования.
+        z2k_backup_file "$ZAPRET2_DIR/lists/extra-domains.txt" extra-domains.txt || \
+            die "Не удалось сохранить extra-domains в бэкап — установка прервана, чтобы не потерять ваши домены."
         # Адресные исключения (вкладка «Исключения» -> «Адреса»). Лежат ВНУТРИ
         # дерева, которое reinstall уносит в .old и удаляет, поэтому без явного
         # бэкапа переустановка стирала их безвозвратно. Коварство в том, что
@@ -1543,11 +1605,22 @@ step_build_zapret2() {
                 # (.<имя>.raw и .<имя>.raw.etag), под glob *.txt они не
                 # попадают. Без них первый же ночной прогон после переустановки
                 # тянет все списки заново: сравнивать не с чем, ETag потерян.
-                for _wg in "$ZAPRET2_DIR/lists/warp/games/".*.raw \
-                           "$ZAPRET2_DIR/lists/warp/games/".*.raw.etag; do
+                # Кеш считаем так же поимённо, как и сами списки: гейт полноты
+                # ниже стережёт и его. Обрубленный .raw с целым .raw.etag
+                # переживает ночной прогон (304 → санитайз ТОГО ЖЕ .raw) и
+                # каждую следующую переустановку — раньше такую порчу лечила
+                # сама переустановка, теперь лечить обязан гейт.
+                _wg_raw_src=0
+                for _wg in "$ZAPRET2_DIR/lists/warp/games/".*.raw; do
                     [ -f "$_wg" ] || continue
+                    _wg_raw_src=$((_wg_raw_src + 1))
                     cp -f "$_wg" "$backup_tmp/warp-games/" 2>/dev/null || true
+                    # ETag ходит только парой со своим .raw: без тела он даёт
+                    # 304 «сравнить не с чем», то есть цель без содержимого.
+                    [ -f "${_wg}.etag" ] && \
+                        cp -f "${_wg}.etag" "$backup_tmp/warp-games/" 2>/dev/null
                 done
+                printf '%s\n' "$_wg_raw_src" > "$backup_tmp/warp-games/.source-raw-count" 2>/dev/null || true
             fi
         fi
         # Пользовательские стратегии на пул — user-owned, как whitelist. Правки
@@ -1580,66 +1653,22 @@ step_build_zapret2() {
         # Autocircular state (найденные рабочие стратегии) — recoverable
         # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
         # warn и продолжаем, не блокируя установку ради cache.
-        if [ -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" ]; then
-            cp -f "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" "$backup_tmp/state.tsv" || \
-                print_warning "Не удалось сохранить state.tsv — стратегии переподберутся автоматически после установки."
-        fi
-        # Кеш geosite: ETag'и, сами цели и маркеры происхождения (*.asset).
-        #
-        # Установка звала geosite с --force, то есть сносила ETag-кеш перед
-        # каждой загрузкой — 52.7 с из 405 на замере 2026-08-21. Убрать один
-        # только --force было бы бесполезно: и кеш, и цели лежат ВНУТРИ дерева,
-        # которое ниже уезжает в .old.$$, и 304 стало бы просто не на что
-        # получать.
-        #
-        # Цели ищем по маркерам *.asset, а не списком путей: список живёт в
-        # z2k-geosite.sh (fetch_all), и его копия здесь разъехалась бы молча,
-        # стоит добавить туда шестую цель.
-        #
-        # Best-effort: всё это кеш, восстановимый загрузкой.
-        if [ -d "$ZAPRET2_DIR/extra_strats" ] && mkdir -p "$backup_tmp/geosite" 2>/dev/null; then
-            if [ -d "$ZAPRET2_DIR/extra_strats/cache/geosite-etag" ] && \
-               mkdir -p "$backup_tmp/geosite/etag" 2>/dev/null; then
-                cp -f "$ZAPRET2_DIR/extra_strats/cache/geosite-etag/"*.etag \
-                      "$backup_tmp/geosite/etag/" 2>/dev/null || true
-            fi
-            # Порядок здесь несущий: сначала ЦЕЛЬ, маркер — только если цель
-            # доехала. Обратный порядок опасен ровно тем, ради чего стоял
-            # --force: на переполненной флешке 15-байтовый маркер ложится, а
-            # список на 1,2 МБ — нет; восстановление кладёт маркер поверх
-            # shipped-снимка, geosite видит «своё» происхождение, отвечает
-            # «unchanged» и закрепляет shipped-бандл как апстримный.
-            #
-            # Обратная асимметрия безопасна: цель без маркера geosite считает
-            # происхождением неизвестным и качает заново.
-            find "$ZAPRET2_DIR/extra_strats" -type f -name '*.asset' 2>/dev/null \
-            | while IFS= read -r _gs; do
-                [ -f "${_gs%.asset}" ] || continue
-                _grel="${_gs#"$ZAPRET2_DIR"/}"
-                mkdir -p "$backup_tmp/geosite/targets/$(dirname "$_grel")" 2>/dev/null || continue
-                cp -f "${_gs%.asset}" "$backup_tmp/geosite/targets/${_grel%.asset}" 2>/dev/null || continue
-                cp -f "$_gs" "$backup_tmp/geosite/targets/$_grel" 2>/dev/null || true
-                # .shipped — снимок того, что лежало в цели до первого удачного
-                # применения; шапка z2k-geosite.sh обещает ручной откат через
-                # `cp *.shipped <name>`. Он лежит внутри дерева, и без переноса
-                # первое же применение после реинстала записало бы в него
-                # АПСТРИМНЫЙ список вместо шипнутого — обещание перестало бы
-                # выполняться молча.
-                if [ -f "${_gs%.asset}.shipped" ]; then
-                    cp -f "${_gs%.asset}.shipped" \
-                          "$backup_tmp/geosite/targets/${_grel%.asset}.shipped" 2>/dev/null || true
-                fi
-            done
-        fi
+        z2k_backup_file "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" state.tsv || \
+            print_warning "Не удалось сохранить state.tsv — стратегии переподберутся автоматически после установки."
+        # Порядок здесь несущий: дешёвое и незаменимое — раньше объёмного и
+        # восстановимого. Ниже лежит перенос geosite-целей: около 2,5 МБ по
+        # умолчанию и около 26 МБ на роутере, выбравшем ru-blocked-all. Пока он
+        # шёл первым, место на /opt кончалось именно на том, что идёт следом, —
+        # а следом идут две вещи по несколько байт, которые загрузкой не
+        # восстанавливаются: идентичность туннеля (переминт = осиротевшая
+        # запись в реестре) и адрес вебпанели (её cp не прикрыт вообще ничем).
         # Per-install relay identity (Stage B): the Ed25519 keypair + install_id the
         # tunnel client minted once. Preserve across reinstall so the device keeps the
         # SAME registered identity (re-minting orphans the old registry entry and
         # forces a re-register). Recoverable (client re-mints+registers if lost) — so
         # warn, not fatal.
-        if [ -f "$ZAPRET2_DIR/.z2k-relay-id" ]; then
-            cp -f "$ZAPRET2_DIR/.z2k-relay-id" "$backup_tmp/z2k-relay-id" || \
-                print_warning "Не удалось сохранить relay-id — будет переминчен (новая регистрация)."
-        fi
+        z2k_backup_file "$ZAPRET2_DIR/.z2k-relay-id" z2k-relay-id || \
+            print_warning "Не удалось сохранить relay-id — будет переминчен (новая регистрация)."
         # Strategy.txt — shipped, не user-owned. Не бэкапим: при реустановке/апдейте
         # свежая shipped-версия из репо побеждает (см. feedback_z2k_user_overrides_policy).
         # Webpanel state — opt-in component (installed via menu [P] → 1).
@@ -1672,6 +1701,71 @@ step_build_zapret2() {
                     cp -f "$ZAPRET2_DIR/webpanel/$_wpf" "$backup_tmp/webpanel-$_wpf"
             done
     print_success "Webpanel state сохранён (port=$(cat "$backup_tmp/webpanel-port" 2>/dev/null || echo default), адрес=$(cat "$backup_tmp/webpanel-bind" 2>/dev/null || echo auto), IPv6=$(cat "$backup_tmp/webpanel-bind6" 2>/dev/null || echo нет))"
+        fi
+        # Кеш geosite: ETag'и, сами цели и маркеры происхождения (*.asset).
+        #
+        # Установка звала geosite с --force, то есть сносила ETag-кеш перед
+        # каждой загрузкой — 52.7 с из 405 на замере 2026-08-21. Убрать один
+        # только --force было бы бесполезно: и кеш, и цели лежат ВНУТРИ дерева,
+        # которое ниже уезжает в .old.$$, и 304 стало бы просто не на что
+        # получать.
+        #
+        # Цели ищем по маркерам *.asset, а не списком путей: список живёт в
+        # z2k-geosite.sh (fetch_all), и его копия здесь разъехалась бы молча,
+        # стоит добавить туда шестую цель.
+        #
+        # Best-effort: всё это кеш, восстановимый загрузкой.
+        if [ -d "$ZAPRET2_DIR/extra_strats" ] && mkdir -p "$backup_tmp/geosite" 2>/dev/null; then
+            if [ -d "$ZAPRET2_DIR/extra_strats/cache/geosite-etag" ] && \
+               mkdir -p "$backup_tmp/geosite/etag" 2>/dev/null; then
+                cp -f "$ZAPRET2_DIR/extra_strats/cache/geosite-etag/"*.etag \
+                      "$backup_tmp/geosite/etag/" 2>/dev/null || true
+            fi
+            # Порядок здесь несущий: сначала ЦЕЛЬ, маркер — только если цель
+            # доехала. Обратный порядок опасен ровно тем, ради чего стоял
+            # --force: на переполненной флешке 15-байтовый маркер ложится, а
+            # список на 1,2 МБ — нет; восстановление кладёт маркер поверх
+            # shipped-снимка, geosite видит «своё» происхождение, отвечает
+            # «unchanged» и закрепляет shipped-бандл как апстримный.
+            #
+            # Обратная асимметрия безопасна: цель без маркера geosite считает
+            # происхождением неизвестным и качает заново.
+            find "$ZAPRET2_DIR/extra_strats" -type f -name '*.asset' 2>/dev/null \
+            | while IFS= read -r _gs; do
+                [ -f "${_gs%.asset}" ] || continue
+                # Переносим только цели АПСТРИМНОГО происхождения.
+                #
+                # В этом же маркере lib/config.sh (z2k_mark_shipped_fallback)
+                # пишет слово shipped-fallback на списки ИЗ БАНДЛА — TCP/YT,
+                # TCP/RKN, UDP/YT и TCP_Discord помечаются так на каждой
+                # установке. Такую цель переносить нельзя: на роутере, где
+                # geosite ни разу не доехал (сеть режет), реинсталл положил бы
+                # прошлогоднюю копию поверх бандла, который шаг списков только
+                # что записал, geosite ответил бы «keeping existing» — и правки
+                # шипнутых списков не приезжали бы на такой роутер уже НИКОГДА.
+                # ARCHITECTURE.md обещает обратное: поставляемые списки
+                # заменяются.
+                #
+                # Снимок обязан уступать свежему бандлу: терять тут нечего —
+                # это ровно тот же файл из репозитория, только старее.
+                case "$(cat "$_gs" 2>/dev/null)" in
+                    shipped-fallback) continue ;;
+                esac
+                _grel="${_gs#"$ZAPRET2_DIR"/}"
+                mkdir -p "$backup_tmp/geosite/targets/$(dirname "$_grel")" 2>/dev/null || continue
+                cp -f "${_gs%.asset}" "$backup_tmp/geosite/targets/${_grel%.asset}" 2>/dev/null || continue
+                cp -f "$_gs" "$backup_tmp/geosite/targets/$_grel" 2>/dev/null || true
+                # .shipped — снимок того, что лежало в цели до первого удачного
+                # применения; шапка z2k-geosite.sh обещает ручной откат через
+                # `cp *.shipped <name>`. Он лежит внутри дерева, и без переноса
+                # первое же применение после реинстала записало бы в него
+                # АПСТРИМНЫЙ список вместо шипнутого — обещание перестало бы
+                # выполняться молча.
+                if [ -f "${_gs%.asset}.shipped" ]; then
+                    cp -f "${_gs%.asset}.shipped" \
+                          "$backup_tmp/geosite/targets/${_grel%.asset}.shipped" 2>/dev/null || true
+                fi
+            done
         fi
         print_success "Настройки сохранены"
 
@@ -1747,6 +1841,30 @@ step_build_zapret2() {
             rm -f "$_stale" 2>/dev/null && _sfreed=$((_sfreed + 1))
         done
         [ "$_sfreed" -gt 0 ] && print_info "Убрано недокачанных бинарников от прошлых установок: ${_sfreed}"
+
+        # Сироты временных файлов ВНУТРИ дерева — тот же класс, что .old.* и
+        # .new.<pid> выше, поэтому и убираются здесь же: до того, как установка
+        # начнёт занимать место (дерево уедет в .old.$$ и будет жить рядом с
+        # новым до самого конца, так что освобождённое достаётся текущему
+        # прогону).
+        #
+        # Суффиксов четыре, и раньше не убирался ни один: .carry.<pid> — полная
+        # копия geosite-цели (1,2 МБ у ru-blocked, ~24 МБ у ru-blocked-all) от
+        # прерванного переноса; .probe — проба записи из z2k-geosite.sh;
+        # .new.<pid> и .hdr.<pid> — тело и заголовки от оборванного условного
+        # запроса (_z2k_curl_etag пишет их рядом с целью). Каждый обрыв
+        # оставляет свой хвост, а типичная причина обрыва — нехватка места:
+        # круг замыкается, следующая попытка падает вероятнее предыдущей.
+        local _junk _jfreed=0
+        while IFS= read -r _junk; do
+            [ -n "$_junk" ] || continue
+            rm -f "$_junk" 2>/dev/null && _jfreed=$((_jfreed + 1))
+        done <<TMPJUNK
+$(find "${ZAPRET2_DIR}/extra_strats" "${ZAPRET2_DIR}/lists" -type f \
+       \( -name '*.carry.*' -o -name '*.probe' -o -name '*.new.*' -o -name '*.hdr.*' \) \
+       2>/dev/null)
+TMPJUNK
+        [ "$_jfreed" -gt 0 ] && print_info "Убрано временных файлов от прерванных прогонов: ${_jfreed}"
 
         print_info "Сохранение старой установки для отката (mv → .old)..."
         local _old_tree="${ZAPRET2_DIR}.old.$$"
@@ -2356,20 +2474,62 @@ step_build_zapret2() {
         # Restore the user's choice of enabled game lists (see backup block).
         [ -f "$backup_tmp/warp-lists/.enabled" ] && \
             cp -f "$backup_tmp/warp-lists/.enabled" "${ZAPRET2_DIR}/lists/warp/.enabled" 2>/dev/null
+        # Отчёт о переносе — здесь, а не в чужом блоке.
+        #
+        # Стояла эта строка внутри восстановления custom-strategies, то есть
+        # про списки WARP человек читал только на роутере, где ЕЩЁ И свои
+        # стратегии заведены. А когда каталога warp-lists в бэкапе не было,
+        # `_wl_restored` в том блоке был не нулём, а несуществующей
+        # переменной — `[: Illegal number:` в лицо посреди установки.
+        if [ "$_wl_restored" -gt 0 ]; then
+            print_info "Восстановлены списки WARP ($_wl_restored файл(ов))"
+        fi
     fi
     # Игровые списки обратно на место — чтобы гейт «games/ пуст» наконец
     # означал написанное: на реинсталле в сеть за ними не ходим.
     if [ -d "$backup_tmp/warp-games" ]; then
         mkdir -p "${ZAPRET2_DIR}/lists/warp/games" 2>/dev/null
-        local _wg_restored=0
+        # Порчу содержимого раньше лечила сама переустановка: games/ пересевался
+        # с нуля. Теперь каталог переносится, и обрубленный или забитый 0xFF
+        # файл (грязный размонтаж USB, мёртвый NAND — на этой платформе штатный
+        # отказ) уехал бы вперёд навсегда: ночной прогон получит 304 против
+        # выжившего .raw.etag, санитайзер пересоберёт .txt из ТОГО ЖЕ битого
+        # .raw, а страж усадки в update_list сравнит файл сам с собой.
+        #
+        # Проверка та же, что у geosite-целей ниже (держать одинаковыми): нет
+        # ни одного 0x00/0xFF и файл заканчивается переводом строки. Обрыв
+        # записи почти всегда режет посреди строки, а санитайзер games пишет
+        # через awk print — перевод строки в конце у него есть всегда.
+        _wg_sane() {
+            [ -s "$1" ] || return 1
+            _wgj=$(LC_ALL=C tr -cd '\000\377' < "$1" 2>/dev/null | wc -c)
+            [ "${_wgj:-1}" -gt 0 ] 2>/dev/null && return 1
+            _wgt=$(tail -c 1 "$1" 2>/dev/null | od -An -c 2>/dev/null | tr -d ' ')
+            [ "$_wgt" = "\\n" ]
+        }
+        local _wg_restored=0 _wg_raw_restored=0
         for _wg in "$backup_tmp/warp-games/"*.txt; do
             [ -f "$_wg" ] || continue
+            if ! _wg_sane "$_wg"; then
+                print_warning "Игровой список ${_wg##*/} повреждён — перенос будет отменён целиком"
+                continue
+            fi
             cp -f "$_wg" "${ZAPRET2_DIR}/lists/warp/games/" 2>/dev/null && \
                 _wg_restored=$((_wg_restored + 1))
         done
-        for _wg in "$backup_tmp/warp-games/".*.raw "$backup_tmp/warp-games/".*.raw.etag; do
+        for _wg in "$backup_tmp/warp-games/".*.raw; do
             [ -f "$_wg" ] || continue
-            cp -f "$_wg" "${ZAPRET2_DIR}/lists/warp/games/" 2>/dev/null || true
+            if ! _wg_sane "$_wg"; then
+                print_warning "Кеш ${_wg##*/} повреждён — перенос будет отменён целиком"
+                continue
+            fi
+            if cp -f "$_wg" "${ZAPRET2_DIR}/lists/warp/games/" 2>/dev/null; then
+                _wg_raw_restored=$((_wg_raw_restored + 1))
+                # ETag едет только за своим .raw: без тела он превращает 304 в
+                # «цель есть, сравнить не с чем».
+                [ -f "${_wg}.etag" ] && \
+                    cp -f "${_wg}.etag" "${ZAPRET2_DIR}/lists/warp/games/" 2>/dev/null
+            fi
         done
         chmod 644 "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null || true
         # Всё или ничего.
@@ -2393,14 +2553,32 @@ step_build_zapret2() {
         # счётчика (запись закрыта `|| true`, она падать не имеет права).
         # Не знаем — не доверяем: считаем перенос неполным.
         case "${_wg_backed:-}" in ''|*[!0-9]*) _wg_backed=-1 ;; esac
-        if [ "$_wg_backed" -lt 0 ] || \
-           { [ "$_wg_backed" -gt 0 ] && [ "$_wg_restored" -ne "$_wg_backed" ]; }; then
-            if [ "$_wg_backed" -lt 0 ]; then
+        # Кеш условных запросов считается наравне со списками. Он не пустяк:
+        # именно он решает, что уйдёт в ipset WARP следующей ночью, а битый или
+        # недоехавший .raw гейт «games/ пуст» не видит вовсе — каталог-то
+        # непустой.
+        _wg_raw_backed=$(cat "$backup_tmp/warp-games/.source-raw-count" 2>/dev/null)
+        case "${_wg_raw_backed:-}" in ''|*[!0-9]*) _wg_raw_backed=-1 ;; esac
+        if [ "$_wg_backed" -lt 0 ] || [ "$_wg_raw_backed" -lt 0 ] || \
+           { [ "$_wg_backed" -gt 0 ] && [ "$_wg_restored" -ne "$_wg_backed" ]; } || \
+           { [ "$_wg_raw_backed" -gt 0 ] && [ "$_wg_raw_restored" -ne "$_wg_raw_backed" ]; }; then
+            if [ "$_wg_backed" -lt 0 ] || [ "$_wg_raw_backed" -lt 0 ]; then
                 print_warning "Не удалось сверить полноту переноса игровых списков WARP — убираю перенос, спискам дадут скачаться заново"
             else
-                print_warning "Игровые списки WARP перенеслись не полностью (${_wg_restored} из ${_wg_backed}) — убираю частичный перенос, спискам дадут скачаться заново"
+                print_warning "Игровые списки WARP перенеслись не полностью (списки ${_wg_restored} из ${_wg_backed}, кеш ${_wg_raw_restored} из ${_wg_raw_backed}) — убираю частичный перенос, спискам дадут скачаться заново"
             fi
-            rm -f "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null
+            # Вместе со списками сносим и кеш.
+            #
+            # Пока здесь стоял один glob *.txt, откат был обещанием на словах:
+            # дотфайлы .<имя>.raw и .<имя>.raw.etag под него не попадают и
+            # выживали. Дальше гейт «games/ пуст» звал обновлялку, каждый список
+            # отвечал 304 против выжившего .raw.etag, и санитайзер пересобирал
+            # .txt из ТОГО ЖЕ .raw — в сеть не уходило ни байта, хотя сообщение
+            # обещало перекачку. А причина отката — сбой копирования, то есть
+            # выжившие .raw это ровно те артефакты, которые под подозрением.
+            rm -f "${ZAPRET2_DIR}/lists/warp/games/"*.txt \
+                  "${ZAPRET2_DIR}/lists/warp/games/".*.raw \
+                  "${ZAPRET2_DIR}/lists/warp/games/".*.raw.etag 2>/dev/null
         elif [ "$_wg_restored" -gt 0 ]; then
             print_info "Игровые списки WARP перенесены из прошлой установки (${_wg_restored} шт.) — качать не нужно"
         fi
@@ -2409,7 +2587,6 @@ step_build_zapret2() {
         mkdir -p "${ZAPRET2_DIR}/lists/custom-strategies" 2>/dev/null
         cp -f "$backup_tmp/custom-strategies/"*.txt "${ZAPRET2_DIR}/lists/custom-strategies/" 2>/dev/null
         print_info "Восстановлены пользовательские стратегии"
-        [ "$_wl_restored" -gt 0 ] && print_info "Восстановлены списки WARP ($_wl_restored файл(ов))"
     fi
     # Найденные автоматикой домены — обратно на место (бэкап см. backup_tmp).
     # Идёт ПОСЛЕ пустышки discovered-domains.txt выше и ДО генерации
@@ -2543,9 +2720,7 @@ step_build_zapret2() {
         fi
 
         # Восстановить доменные исключения
-        if [ -f "$backup_tmp/whitelist.txt" ]; then
-            mkdir -p "$ZAPRET2_DIR/lists"
-            cp -f "$backup_tmp/whitelist.txt" "$ZAPRET2_DIR/lists/whitelist.txt"
+        if z2k_restore_file whitelist.txt "$ZAPRET2_DIR/lists/whitelist.txt"; then
             print_success "Доменные исключения восстановлены"
         fi
 
@@ -2573,21 +2748,17 @@ step_build_zapret2() {
         # «отсутствовал» → one-shot срабатывал СНОВА → state затирался на
         # КАЖДОМ обновлении, даже без reset_state. Ветка убрана (r-6 давно
         # позади; с нативной ротацией state.tsv не runtime-критичен).
-        if [ -f "$backup_tmp/state.tsv" ]; then
-            if [ "$Z2K_RESET_STATE" = "1" ]; then
-                # state.tsv уже truncated на шаге 4.6 — просто не restore'им.
-                print_info "autocircular state reset (Z2K_RESET_STATE=1 from release flag) — ротация с нуля"
-            else
-                cp -f "$backup_tmp/state.tsv" "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"
-                chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
-                print_success "Стратегии autocircular восстановлены"
-            fi
+        if [ -f "$backup_tmp/state.tsv" ] && [ "$Z2K_RESET_STATE" = "1" ]; then
+            # state.tsv уже truncated на шаге 4.6 — просто не restore'им.
+            print_info "autocircular state reset (Z2K_RESET_STATE=1 from release flag) — ротация с нуля"
+        elif z2k_restore_file state.tsv "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"; then
+            chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
+            print_success "Стратегии autocircular восстановлены"
         fi
 
         # Per-install relay identity (Stage B) — restore the device's minted keypair
         # so it keeps its registered identity (no re-mint / re-register) across reinstall.
-        if [ -f "$backup_tmp/z2k-relay-id" ]; then
-            cp -f "$backup_tmp/z2k-relay-id" "$ZAPRET2_DIR/.z2k-relay-id"
+        if z2k_restore_file z2k-relay-id "$ZAPRET2_DIR/.z2k-relay-id"; then
             chmod 600 "$ZAPRET2_DIR/.z2k-relay-id" 2>/dev/null || true
         fi
 
@@ -2889,13 +3060,11 @@ step_download_domain_lists() {
     # если цель собрана ИМЕННО ЭТИМ источником, иначе ETag сносится и загрузка
     # идёт заново. То есть --force дублировал более слабой мерой то, что уже
     # сделано более сильной, и стоил полной перекачки на каждой установке.
-    # Осиротевшие временные копии от прерванных прогонов. Файл .carry.<pid>
-    # это полная копия цели (1,2 МБ у ru-blocked, ~24 МБ у ru-blocked-all), и
-    # если установку убили между cp и mv, он остаётся в дереве навсегда: его не
-    # трогает ни следующая установка (её find ищет *.asset), ни что-либо ещё.
-    # На флешке, которую этот проект и так считает дефицитной, это по копии за
-    # каждый обрыв.
-    find "${ZAPRET2_DIR}/extra_strats" -type f -name '*.carry.*' -exec rm -f {} + 2>/dev/null || true
+    # Осиротевшие временные копии (.carry/.probe/.new/.hdr) убирает общая
+    # метёлка в step_build_zapret2 — там же, где .old.* и недокачанные
+    # бинарники, и ДО того как установка начнёт занимать место. Здесь стояла
+    # вторая, молчаливая: она работала уже после пересборки дерева, знала один
+    # суффикс из четырёх и ничего не сообщала.
     if [ -d "$Z2K_UPGRADE_BACKUP/geosite" ]; then
         if [ -d "$Z2K_UPGRADE_BACKUP/geosite/etag" ] && \
            mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/geosite-etag" 2>/dev/null; then
@@ -2949,12 +3118,21 @@ step_download_domain_lists() {
                 # адресами или сетями — и каждый реинсталл отвергал бы его с
                 # руганью в лицо человеку.
                 #
-                # Спрашиваем ровно то, что нужно: есть ли в файле печатный
-                # символ. Забитый 0xFF или нулями не даёт его вовсе (проверено),
-                # а домены и CIDR проходят одинаково.
+                # Спрашиваем ровно то, что нужно: нет ли в файле байтов мёртвого
+                # NAND. Домены и CIDR проходят одинаково.
+                #
+                # Формулировка «есть хотя бы один печатный символ» отвечала на
+                # тот же вопрос слабее: она проходит на файле, где ОДИН печатный
+                # байт среди мегабайта 0xFF. Канонический ответ на этот вопрос в
+                # проекте один — счётчик 0x00/0xFF из z2k_strategy_file_sane
+                # (lib/utils.sh), написанный по тому же полевому инциденту.
+                # Саму функцию тут звать нельзя: она требует ещё и `--` в файле
+                # (признак СТРОКИ СТРАТЕГИИ), а список доменов его не содержит —
+                # проверка отвергала бы все цели подряд. Берём из неё ту часть,
+                # которая про порчу, и держим форму той же.
                 # Две проверки, и вторая не менее важна первой.
                 #
-                # Печатный символ отсекает файл, забитый 0xFF или нулями. Но
+                # Отсутствие мусорных байтов отсекает файл, забитый 0xFF. Но
                 # ОБРУБОК из печатных символов состоит целиком: полсписка
                 # доменов — валидный текст. А обрубленный --hostlist, попав в
                 # цель вместе с маркером происхождения и ETag, замирает там до
@@ -2967,7 +3145,8 @@ step_download_domain_lists() {
                 # заменил собой прежнее самолечение (реинсталл пересевал цель с
                 # нуля), поэтому здесь важно ошибаться в сторону перекачки.
                 _gtail=$(tail -c 1 "$_gtmp" 2>/dev/null | od -An -c 2>/dev/null | tr -d ' ')
-                if LC_ALL=C grep -q '[[:print:]]' "$_gtmp" 2>/dev/null \
+                _gjunk=$(LC_ALL=C tr -cd '\000\377' < "$_gtmp" 2>/dev/null | wc -c)
+                if [ -s "$_gtmp" ] && [ "${_gjunk:-1}" -eq 0 ] 2>/dev/null \
                    && [ "$_gtail" = "\\n" ]; then
                     if mv -f "$_gtmp" "${ZAPRET2_DIR}/$_grel" 2>/dev/null; then
                         printf '%s\n' "$_grel" >> "$_carried" 2>/dev/null || true
@@ -2991,6 +3170,48 @@ $(cd "$Z2K_UPGRADE_BACKUP/geosite/targets" 2>/dev/null && find . -type f -name '
 GEOSITE_MARKERS
             if [ "$_gs_restored" -gt 0 ]; then
                 print_info "Списки geosite перенесены из прошлой установки (${_gs_restored} файл(ов)) — при неизменившемся апстриме заново качать нечего"
+            fi
+        fi
+    fi
+
+    # Смена шипнутого списка ложных срабатываний обязана пересобрать RKN.
+    #
+    # subtract_false_positive_from_rkn умеет только ВЫЧИТАТЬ. Домен, который мы
+    # из rkn-false-positive.txt убрали (перепроверили — он таки блокируется), в
+    # цель сам не вернётся: она собирается один раз при загрузке апстрима, а
+    # дальше только урезается. Раньше возврат делала сама установка — она звала
+    # geosite с --force, ETag сносился, RKN качался целиком и вычитание шло уже
+    # новым списком. Теперь ETag переносится, приезжает 304, и правка
+    # rkn-false-positive.txt доезжает до роутера, но в хостлисте не отражается
+    # до ближайшего переиздания апстрима.
+    #
+    # Сносим ETag ассета RKN ровно тогда, когда шипнутый список ИЗМЕНИЛСЯ —
+    # ускорение установки при этом не теряется: в обычной установке список тот
+    # же, и 304 работает как задумано.
+    #
+    # Отпечаток держим в /opt/etc, а не в дереве: всё, что внутри дерева,
+    # умирает вместе с ним на каждой переустановке (тот же довод, что у
+    # one-shot маркеров в z2k-geosite.sh). Пишем его в момент СНЯТИЯ ETag'а:
+    # если загрузка потом не удастся, ETag'а всё равно нет — полная перекачка
+    # просто уедет на ближайший ночной прогон.
+    #
+    # Какой из двух ассетов RKN выбран, решает RAM-проба в z2k-geosite.sh —
+    # снимаем оба, несуществующий ETag снести не жалко.
+    local _fp_list="${ZAPRET2_DIR}/lists/rkn-false-positive.txt"
+    local _fp_mark="/opt/etc/.z2k-rkn-fp.sha256" _fp_now="" _fp_was=""
+    if [ -f "$_fp_list" ] && command -v z2k_sha256_file >/dev/null 2>&1; then
+        _fp_now=$(z2k_sha256_file "$_fp_list" 2>/dev/null)
+        _fp_was=$(cat "$_fp_mark" 2>/dev/null)
+        # Считать нечем (нет ни sha256sum, ни openssl) — ведём себя как раньше:
+        # молчим и ничего не сносим. Полная перекачка RKN на КАЖДОЙ установке
+        # хуже, чем окно до ближайшего переиздания апстрима.
+        if [ -n "$_fp_now" ] && [ "$_fp_now" != "$_fp_was" ]; then
+            rm -f "${ZAPRET2_DIR}/extra_strats/cache/geosite-etag/ru-blocked.txt.etag" \
+                  "${ZAPRET2_DIR}/extra_strats/cache/geosite-etag/ru-blocked-all.txt.etag" \
+                  2>/dev/null
+            printf '%s\n' "$_fp_now" > "$_fp_mark" 2>/dev/null || true
+            if [ -n "$_fp_was" ]; then
+                print_info "Список ложных срабатываний РКН изменился — RKN-хостлист будет собран из апстрима заново"
             fi
         fi
     fi

@@ -6,8 +6,16 @@
 # Replaces the old test_warp_merge.sh, which exercised a 3-way merge that no
 # longer exists. That merge was there because one aggregate list doubled as
 # upstream data AND the user's editable list. Splitting the two removed the need
-# for it: games/ is upstream-owned and overwritten wholesale, the user's own
-# lists sit beside it and are never touched by a refresh.
+# for it: games/ is upstream-owned and overwritten wholesale by the nightly
+# refresh, the user's own lists sit beside it and are never touched by it.
+#
+# "Upstream-owned" НЕ значит «выбрасывается при переустановке». Раньше значило,
+# и это стоило минут на каждой установке: четыре десятка списков качались
+# заново, хотя не менялись. Теперь install.sh переносит games/ через пересборку
+# дерева вместе с кешем .<имя>.raw, а перенос проходит гейт полноты — обрубок
+# или битый кеш отвергаются ЦЕЛИКОМ, и тогда списки честно тянутся заново
+# (tests/test_warp_games_survive_reinstall.sh, tests/test_warp_games_seed.sh).
+# Владение осталось у обновлялки: установка ничего в games/ не пишет.
 #
 # What actually has to hold now:
 #   * Other_Games is never fetched — a catch-all bucket nobody asked for.
@@ -173,6 +181,20 @@ assert_eq "install.sh backs the choice up" "1" \
           "$(grep -c 'cp -f "\$ZAPRET2_DIR/lists/warp/\.enabled" "\$backup_tmp' "$SCRIPT_DIR/lib/install.sh")"
 assert_eq "install.sh restores the choice" "1" \
           "$(grep -c 'cp -f "\$backup_tmp/warp-lists/\.enabled"' "$SCRIPT_DIR/lib/install.sh")"
+
+printf "\n--- games/ survives the reinstall (the contract that changed) ---\n"
+# Обе половины, как и у .enabled: бэкап без возврата означал бы, что перенос
+# «есть», а списки всё равно качаются заново — то есть прежнее поведение под
+# новым кодом. И наоборот. Само поведение переноса пинится отдельным набором.
+assert_eq "install.sh backs games/ up"     "1" \
+          "$(grep -c 'mkdir -p "\$backup_tmp/warp-games"' "$SCRIPT_DIR/lib/install.sh")"
+assert_eq "install.sh restores games/"     "1" \
+          "$(grep -c 'if \[ -d "\$backup_tmp/warp-games" \]' "$SCRIPT_DIR/lib/install.sh")"
+# И кеш .raw переносится вместе со списками: без него ночной refresh скачал бы
+# всё заново уже на следующую ночь, и экономия установки была бы отложенной,
+# а не настоящей.
+assert_eq "install.sh carries the .raw cache too" "1" \
+          "$([ "$(grep -c '"\$backup_tmp/warp-games/"\.\*\.raw' "$SCRIPT_DIR/lib/install.sh")" -ge 1 ] && echo 1 || echo 0)"
 
 printf "\nPASSED: %d\nFAILED: %d\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" = 0 ]

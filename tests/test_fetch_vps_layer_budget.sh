@@ -33,6 +33,11 @@
 #
 # POSIX sh.
 
+# Диалект вложенных оболочек задаётся набором, а не хардкодом: на macOS
+# /bin/sh — это bash, в CI — dash, и один и тот же тест под ними ведёт себя
+# по-разному. См. шапку tests/lib/common.sh.
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
@@ -91,8 +96,15 @@ chmod +x "$TMP/bin/curl"
 #
 # Сорсить файл целиком нельзя — там установочная логика. Вынимаем только
 # определения функций верхнего уровня (`^имя() {` … `^}`) и исполняем их.
+#
+# ПЕРЕЧЕНЬ ИМЁН, А НЕ ПРЕФИКС. Регулярка ловила только `_z2k_*` и `z2k_fetch`,
+# а транспорт с тех пор оброс общими помощниками без этого префикса
+# (z2k_uint, z2k_connfail). В песочнице они не определялись, число попыток
+# приезжало пустым, Layer 0 не пробовался ВООБЩЕ — и весь набор краснел на
+# 29 проверках, хотя ошибки в проверяемом коде не было ни одной. Новый общий
+# помощник обязан появиться здесь же.
 extract_fns() {
-    awk '/^(_z2k_[a-z_]+|z2k_fetch)\(\) \{/,/^\}/' "$1"
+    awk '/^(_z2k_[a-z_]+|z2k_fetch|z2k_uint|z2k_connfail)\(\) \{/,/^\}/' "$1"
 }
 
 # run <файл> <STUB_MODE> [доп. env]
@@ -106,7 +118,7 @@ run() {
     env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
         CURL_LOG="$_sb/curl.log" STUB_MODE="$_mode" \
         SB="$_sb" EXTRA="$_extra" \
-        /bin/sh -c '
+        "$Z2K_TEST_SH" -c '
             : > "$CURL_LOG"
             . "$SB/fns.sh"
             GITHUB_RAW="https://raw.githubusercontent.com/o/r/main"
@@ -224,7 +236,7 @@ for f in $COPIES; do
     extract_fns "$ROOT/$f" > "$sb/fns.sh"
     out=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
         CURL_LOG="$sb/curl.log" STUB_MODE=none SB="$sb" \
-        /bin/sh -c '
+        "$Z2K_TEST_SH" -c '
             : > "$CURL_LOG"
             . "$SB/fns.sh"
             _z2k_curl_etag "https://example.invalid/x" "$SB/d" "" >/dev/null 2>&1
@@ -299,7 +311,7 @@ done
 # совпадать никогда, и настоящий 404 навсегда выглядел бы отказом зеркал.
 _ulh=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
     CURL_LOG="$TMP/ulh.log" STUB_MODE=none SB="$TMP" \
-    /bin/sh -c '
+    "$Z2K_TEST_SH" -c '
         : > "$CURL_LOG"
         awk "/^_z2k_curl_etag\\(\\) \\{/,/^\\}/" "$1" > "$SB/ulh_fn.sh"
         . "$SB/ulh_fn.sh"
