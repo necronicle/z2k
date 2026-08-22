@@ -52,30 +52,6 @@ default_pool_numbers() {
     Z2K_POOL_GV=3
     Z2K_POOL_RKN=1
 }
-
-# Аварийный пул на случай, когда манифест стратегий не прочитался.
-#
-# ПОЧЕМУ ОН ОБЯЗАН НЕСТИ circular. Прежний аварийный дефолт был одиночным
-# статическим `fake:blob=fake_default_tls:repeats=4` — без ротации вообще. Это
-# строго хуже, чем у любого соседнего проекта: у конкурента три стратегии под
-# circular лежат статикой в пакете и не могут не прочитаться, а мы в той же
-# ситуации оставались с одним приёмом и без единого запасного.
-#
-# Техника здесь не выдумана: слоты 1-3 повторяют то, что уже стоит в боевых
-# пулах (fake+multisplit, multisplit со сдвигом, fake+fakedsplit). Блоб только
-# встроенный в движок: в аварии скачанных файлов из files/fake/ может не быть
-# тоже, и ссылаться на них — значит получить пул, который не стартует.
-z2k_emergency_tcp_pool() {
-    local key="$1"
-    printf '%s' "--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=circular:fails=3:retrans=2:maxseq=16384:time=60:key=${key}:nld=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,midsld:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tcp_ts=-1000:badsum:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3"
-}
-
-# Лесенка repeats 11/6/3 — не произвол: её дважды пытались срезать и дважды
-# откатывали по живым поломкам мобильного QUIC.
-z2k_emergency_quic_pool() {
-    printf '%s' "--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=circular:fails=3:time=60:udp_in=3:udp_out=5:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=3"
-}
-
 create_default_strategy_files() {
     local extra_strats_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats"
 

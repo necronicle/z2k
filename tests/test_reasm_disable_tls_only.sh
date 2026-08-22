@@ -42,29 +42,78 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 # --- собираем строку опций демона так, как её собирает init ------------------
 #
-# Берём ТОЛЬКО присваивания NFQWS2_OPT_BASE и исполняем их с подставными
-# входами. Это не грепанье по файлу: если завтра флаг переедет в переменную,
-# в подстановку или под условие, здесь он всё равно окажется в итоговой строке
-# — либо не окажется, и тест покраснеет.
-grep -n '^NFQWS2_OPT_BASE=' "$SRC" | sed 's/^[0-9]*://' > "$TMP/opts.sh"
-if [ -s "$TMP/opts.sh" ]; then
-    ok "присваивания NFQWS2_OPT_BASE извлечены ($(wc -l < "$TMP/opts.sh" | tr -d ' ') шт.)"
+# ИСПОЛНЯЕМ блок, а не грепаем строки.
+#
+# Прежний харнесс брал `grep '^NFQWS2_OPT_BASE='`, то есть присваивания РОВНО с
+# нулевой колонки — и обещал при этом в комментарии, что поймает флаг,
+# переехавший «под условие». Обещание было ложным в обе стороны: флаг под `if`
+# (а он теперь именно там, за пробой возможностей движка) в выборку не попадал
+# вовсе, а условие, ложное в бою, наоборот считалось бы применённым.
+#
+# Берём весь участок от первой сборки NFQWS2_OPT_BASE до закрытия блока с
+# reasm и исполняем его с подставным движком. Тогда проверяется то, что
+# получится в реальной командной строке, вместе со всеми условиями.
+awk '
+    /^NFQWS2_OPT_BASE="\$USEROPT/ { inb = 1 }
+    inb { print }
+    inb && /reasm-disable/ { seen = 1; next }
+    seen && /^fi$/ { exit }
+' "$SRC" > "$TMP/opts.sh"
+printf 'fi\n' >> "$TMP/opts.sh"
+
+if [ -s "$TMP/opts.sh" ] && grep -q 'NFQWS2_OPT_BASE=' "$TMP/opts.sh"; then
+    ok "участок сборки опций демона извлечён ($(wc -l < "$TMP/opts.sh" | tr -d ' ') строк)"
 else
-    no "присваивания NFQWS2_OPT_BASE извлечены" "хотя бы одно" "ноль"
+    no "участок сборки опций извлечён" "непустой блок" "пусто"
     printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"; exit 1
 fi
 
-OPTS=$(env -i PATH=/usr/bin:/bin SB="$TMP" /bin/sh -c '
-    USEROPT="--user=nobody"; DESYNC_MARK="0x40000000"; LUAOPT="--lua-init=@x.lua"
-    . "$SB/opts.sh"
-    printf "%s" "$NFQWS2_OPT_BASE"
-' 2>/dev/null)
+# Подставной движок: с поддержкой флага и без неё.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/nfqws2-new" <<'ENGNEW'
+#!/bin/sh
+echo "  --reasm-disable=[type[,type]]   ; disable reasm for these L7 payloads"
+ENGNEW
+cat > "$TMP/bin/nfqws2-old" <<'ENGOLD'
+#!/bin/sh
+echo "  --dpi-desync=mode   ; старый движок, про reasm не знает"
+ENGOLD
+chmod +x "$TMP/bin/nfqws2-new" "$TMP/bin/nfqws2-old"
+
+build_opts() {  # build_opts <путь к движку>
+    env -i PATH=/usr/bin:/bin SB="$TMP" ENG="$1" /bin/sh -c '
+        USEROPT="--user=nobody"; DESYNC_MARK="0x40000000"; LUAOPT="--lua-init=@x.lua"
+        NFQWS2="$ENG"
+        . "$SB/opts.sh"
+        printf "%s" "$NFQWS2_OPT_BASE"
+    ' 2>/dev/null
+}
+OPTS=$(build_opts "$TMP/bin/nfqws2-new")
+OPTS_OLD=$(build_opts "$TMP/bin/nfqws2-old")
 
 if [ -n "$OPTS" ]; then
     ok "строка опций демона собралась"
 else
     no "строка опций демона собралась" "непустая" "пусто"
 fi
+
+# --- ГЛАВНОЕ ПРО БЕЗОПАСНОСТЬ ВЫКАТКИ ----------------------------------------
+#
+# Этот файл уезжает патч-каналом ОТДЕЛЬНО от бинарника (lib/auto_update.sh:670
+# кладёт его в /opt/etc/init.d/S99zapret2, restart_set там безусловно содержит
+# "S99zapret2"). Роутер может получить новый init и рестарт, оставшись на
+# старом движке. Незнакомая опция — это не деградация обхода, это НЕЗАПУСК
+# демона: обход пропадает целиком.
+case "$OPTS_OLD" in
+    *--reasm-disable*)
+        no "старому движку флаг НЕ передаётся" "без --reasm-disable" \
+           "флаг передан — демон не поднимется, обход пропадёт целиком" ;;
+    *)  ok "движку без поддержки флаг не передаётся — демон поднимется" ;;
+esac
+case "$OPTS_OLD" in
+    *--user=nobody*) ok "остальные опции старому движку передаются как прежде" ;;
+    *) no "остальные опции сохранены" "--user=nobody" "${OPTS_OLD:-пусто}" ;;
+esac
 
 # --- 1. ГЛАВНОЕ: пересборка TLS ClientHello выключена ------------------------
 case "$OPTS" in
@@ -105,11 +154,13 @@ case "$OPTS" in
     *)       ok "флаг лежит в опциях демона, а не в строке профиля" ;;
 esac
 
+# Вхождений теперь два и должно быть ровно два: проба возможностей движка и
+# само присваивание. Третье означало бы вторую копию — они разъедутся.
 _in_profile=$(grep -c -- '--reasm-disable' "$SRC" 2>/dev/null)
-if [ "${_in_profile:-0}" = "1" ]; then
-    ok "флаг задан ровно в одном месте"
+if [ "${_in_profile:-0}" = "2" ]; then
+    ok "флаг задан в одном месте, под одной пробой (2 вхождения)"
 else
-    no "флаг задан ровно в одном месте" "1 вхождение" "$_in_profile — есть вторая копия, они разъедутся"
+    no "флаг задан в одном месте под пробой" "2 вхождения" "$_in_profile"
 fi
 
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"

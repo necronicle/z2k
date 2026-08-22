@@ -198,11 +198,22 @@ z2k_fetch() {
         local _vps_tries="${Z2K_FETCH_VPS_TRIES:-2}"
         case "$_vps_tries" in ''|*[!0-9]*) _vps_tries=2 ;; esac
         [ "$_vps_tries" -ge 1 ] || _vps_tries=1
+        # Потолок: без него TRIES=100000 превращает Layer 0 в многочасовой
+        # последовательный перебор ДО того, как будет испробован прямой путь.
+        [ "$_vps_tries" -le 5 ] || _vps_tries=5
+        # Бюджет валидируем так же. Мусор в нём (abc, "3s", лишний пробел)
+        # заставляет curl выйти с rc=2 и НЕ напечатать ничего: код ответа пуст,
+        # время коннекта пусто, обе попытки сгорают мгновенно — Layer 0 молча
+        # выключается на весь прогон. Ровно тот отказ, ради которого рядом
+        # появилась проверка числа попыток.
+        local _vps_ct="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+        case "$_vps_ct" in ''|*[!0-9]*) _vps_ct=3 ;; esac
+        [ "$_vps_ct" -ge 1 ] || _vps_ct=3
         local _vps_try=0
         while [ "$_vps_try" -lt "$_vps_tries" ]; do
             _vps_try=$((_vps_try + 1))
             if _z2k_curl_etag "$url" "$dest" "$_vps_resolve" \
-                   "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}" \
+                   "$_vps_ct" \
                && _z2k_ul_verify "$dest"; then
                 return 0
             fi
@@ -565,7 +576,7 @@ function z2k_warp_addr_ok(s,   ip, h, o) {
         _keep=" $(printf '%s ' $names)"
         for _f in "$gdir"/*.txt; do
             [ -f "$_f" ] || continue
-            _base=$(basename "$_f" .txt)
+            _base="${_f##*/}"; _base="${_base%.txt}"
             case "$_keep" in
                 *" $_base "*) ;;
                 *) rm -f "$_f" "$gdir/.$_base.raw" "$gdir/.$_base.raw.etag" 2>/dev/null \

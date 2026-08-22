@@ -191,5 +191,61 @@ else
     ok "auto_update.sh не утверждает больше, что games/ не переносится"
 fi
 
+# ============================================================================
+# 7. Кеш условных запросов переносится вместе со списками
+# ============================================================================
+#
+# Списки лежат как games/<имя>.txt, а рядом — дотфайлы .<имя>.raw и
+# .<имя>.raw.etag: это то, чем update_list спрашивает «изменилось?». Под glob
+# *.txt они не попадают. Пока переносились только .txt, первый же ночной прогон
+# после переустановки тянул все 740 КБ заново: сравнивать было не с чем.
+rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
+printf 'a.example.com\n' > "$TMP/opt/lists/warp/games/Game1.txt"
+printf 'a.example.com\n' > "$TMP/opt/lists/warp/games/.Game1.raw"
+printf '"etag-1"\n'      > "$TMP/opt/lists/warp/games/.Game1.raw.etag"
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" /bin/sh -c '
+    ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
+    print_warning() { :; }; print_info() { :; }
+    _b() { . "$SB/backup.sh"; }; _b
+    rm -rf "$ZAPRET2_DIR"; mkdir -p "$ZAPRET2_DIR/lists/warp"
+    _r() { . "$SB/restore.sh"; }; _r
+' 2>/dev/null
+_raw=$([ -s "$TMP/opt/lists/warp/games/.Game1.raw" ] && echo да || echo нет)
+_et=$([ -s "$TMP/opt/lists/warp/games/.Game1.raw.etag" ] && echo да || echo нет)
+if [ "$_raw" = "да" ] && [ "$_et" = "да" ]; then
+    ok "кеш условных запросов (.raw + .raw.etag) пережил переустановку"
+else
+    no "кеш условных запросов пережил переустановку" "оба на месте" ".raw=$_raw .raw.etag=$_et"
+fi
+
+# ============================================================================
+# 8. Частичный БЭКАП не должен проходить гейт «всё или ничего»
+# ============================================================================
+#
+# Бэкап сам best-effort: cp каждого файла может упасть по отдельности, и на
+# кончающейся флешке доедет, скажем, два файла из двадцати одного. Если гейт
+# сравнивает с содержимым БЭКАПА, он такой перенос объявит полным — каталог
+# станет непустым, и недостающие списки не подтянет уже никто: ни установка,
+# ни self-heal авто-обновления, ни планировщик, все смотрят на ту же пустоту.
+rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
+_i=1
+while [ "$_i" -le 5 ]; do printf 'd%s.example.com\n' "$_i" > "$TMP/opt/lists/warp/games/G$_i.txt"; _i=$((_i+1)); done
+env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" GATE="$GATE" /bin/sh -c '
+    ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
+    print_warning() { :; }; print_info() { :; }
+    _b() { . "$SB/backup.sh"; }; _b
+    # флешка кончилась: до бэкапа доехали только два файла из пяти
+    rm -f "$backup_tmp/warp-games/G3.txt" "$backup_tmp/warp-games/G4.txt" "$backup_tmp/warp-games/G5.txt"
+    rm -rf "$ZAPRET2_DIR"; mkdir -p "$ZAPRET2_DIR/lists/warp"
+    _r() { . "$SB/restore.sh"; }; _r
+' 2>/dev/null
+_left=$(ls "$TMP/opt/lists/warp/games/"*.txt 2>/dev/null | wc -l | tr -d ' ')
+if [ "$_left" = "0" ]; then
+    ok "частичный перенос откачен целиком — гейт увидит пустоту и всё скачается"
+else
+    no "частичный перенос откачен" "0 файлов" "$_left — гейт решит, что переносить больше нечего"
+fi
+
+
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

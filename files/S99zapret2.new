@@ -821,7 +821,19 @@ NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --ipcache-hostname=1"
 #
 # Выключаем только tls_client_hello: пересборка quic_initial нужна юзабельной,
 # на ней стоит ютубный UDP-пул.
-NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --reasm-disable=tls_client_hello"
+# Флаг ставим ТОЛЬКО если движок его знает.
+#
+# Этот файл уезжает патч-каналом ОТДЕЛЬНО от бинарника: lib/auto_update.sh
+# кладёт files/S99zapret2.new в /opt/etc/init.d/S99zapret2, и restart_set там
+# безусловно содержит "S99zapret2". То есть роутер может получить новый init и
+# рестарт, оставшись на старом движке. Незнакомая опция в командной строке —
+# это не деградация обхода, это НЕЗАПУСК демона: обход пропадает целиком.
+#
+# Проба стоит один exec на старте и врёт только в безопасную сторону: не смогли
+# спросить — не ставим.
+if "$NFQWS2" --help 2>&1 | grep -q -- "--reasm-disable"; then
+    NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --reasm-disable=tls_client_hello"
+fi
 
 # RST-фильтры сняты 2026-08-17. Их было два, и оба отнимали больше, чем
 # давали:

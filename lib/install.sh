@@ -1527,10 +1527,26 @@ step_build_zapret2() {
             # поведению и скачаем.
             if [ -d "$ZAPRET2_DIR/lists/warp/games" ] && \
                mkdir -p "$backup_tmp/warp-games" 2>/dev/null; then
+                # Считаем ИСХОДНОЕ число: гейт «всё или ничего» ниже обязан
+                # сравнивать с тем, сколько было на роутере, а не с тем, сколько
+                # доехало в бэкап. Иначе частичный бэкап (флешка кончилась на
+                # пятом файле из двадцати одного) сам себя объявит полным.
+                _wg_src=0
                 for _wg in "$ZAPRET2_DIR/lists/warp/games/"*.txt; do
                     [ -f "$_wg" ] || continue
+                    _wg_src=$((_wg_src + 1))
                     cp -f "$_wg" "$backup_tmp/warp-games/" 2>/dev/null || \
-                        print_warning "Не удалось сохранить игровой список $(basename "$_wg") — он перекачается"
+                        print_warning "Не удалось сохранить игровой список ${_wg##*/} — он перекачается"
+                done
+                printf '%s\n' "$_wg_src" > "$backup_tmp/warp-games/.source-count" 2>/dev/null || true
+                # …и кеш условных запросов рядом с ними. Это дотфайлы
+                # (.<имя>.raw и .<имя>.raw.etag), под glob *.txt они не
+                # попадают. Без них первый же ночной прогон после переустановки
+                # тянет все списки заново: сравнивать не с чем, ETag потерян.
+                for _wg in "$ZAPRET2_DIR/lists/warp/games/".*.raw \
+                           "$ZAPRET2_DIR/lists/warp/games/".*.raw.etag; do
+                    [ -f "$_wg" ] || continue
+                    cp -f "$_wg" "$backup_tmp/warp-games/" 2>/dev/null || true
                 done
             fi
         fi
@@ -2351,6 +2367,10 @@ step_build_zapret2() {
             cp -f "$_wg" "${ZAPRET2_DIR}/lists/warp/games/" 2>/dev/null && \
                 _wg_restored=$((_wg_restored + 1))
         done
+        for _wg in "$backup_tmp/warp-games/".*.raw "$backup_tmp/warp-games/".*.raw.etag; do
+            [ -f "$_wg" ] || continue
+            cp -f "$_wg" "${ZAPRET2_DIR}/lists/warp/games/" 2>/dev/null || true
+        done
         chmod 644 "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null || true
         # Всё или ничего.
         #
@@ -2363,8 +2383,11 @@ step_build_zapret2() {
         #
         # Поэтому неполный перенос откатываем целиком: пусть гейт увидит пустой
         # каталог и всё скачается, как скачивалось раньше.
-        _wg_backed=$(ls "$backup_tmp/warp-games/"*.txt 2>/dev/null | wc -l | tr -d ' ')
-        if [ "${_wg_backed:-0}" -gt 0 ] && [ "$_wg_restored" -ne "${_wg_backed:-0}" ]; then
+        # Сравниваем с ИСХОДНЫМ числом на роутере, а не с содержимым бэкапа:
+        # бэкап сам best-effort, и частичный бэкап иначе прошёл бы гейт.
+        _wg_backed=$(cat "$backup_tmp/warp-games/.source-count" 2>/dev/null)
+        case "${_wg_backed:-}" in ''|*[!0-9]*) _wg_backed=0 ;; esac
+        if [ "$_wg_backed" -gt 0 ] && [ "$_wg_restored" -ne "$_wg_backed" ]; then
             print_warning "Игровые списки WARP перенеслись не полностью (${_wg_restored} из ${_wg_backed}) — убираю частичный перенос, спискам дадут скачаться заново"
             rm -f "${ZAPRET2_DIR}/lists/warp/games/"*.txt 2>/dev/null
         elif [ "$_wg_restored" -gt 0 ]; then
@@ -2855,6 +2878,13 @@ step_download_domain_lists() {
     # если цель собрана ИМЕННО ЭТИМ источником, иначе ETag сносится и загрузка
     # идёт заново. То есть --force дублировал более слабой мерой то, что уже
     # сделано более сильной, и стоил полной перекачки на каждой установке.
+    # Осиротевшие временные копии от прерванных прогонов. Файл .carry.<pid>
+    # это полная копия цели (1,2 МБ у ru-blocked, ~24 МБ у ru-blocked-all), и
+    # если установку убили между cp и mv, он остаётся в дереве навсегда: его не
+    # трогает ни следующая установка (её find ищет *.asset), ни что-либо ещё.
+    # На флешке, которую этот проект и так считает дефицитной, это по копии за
+    # каждый обрыв.
+    find "${ZAPRET2_DIR}/extra_strats" -type f -name '*.carry.*' -exec rm -f {} + 2>/dev/null || true
     if [ -d "$Z2K_UPGRADE_BACKUP/geosite" ]; then
         if [ -d "$Z2K_UPGRADE_BACKUP/geosite/etag" ] && \
            mkdir -p "${ZAPRET2_DIR}/extra_strats/cache/geosite-etag" 2>/dev/null; then
@@ -2901,8 +2931,17 @@ step_download_domain_lists() {
                 # Проверка дешёвая и по существу: в списке доменов обязана быть
                 # хотя бы одна строка, похожая на домен. Файл из нулей или 0xFF
                 # её не даст, а мы просто дадим списку скачаться заново.
-                if grep -qE '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z][A-Za-z]+$' \
-                        "$_gtmp" 2>/dev/null; then
+                # Проверка НЕ про домены. Бэкап выше специально ищет цели по
+                # маркерам, чтобы список ассетов жил в одном месте (geosite,
+                # fetch_all) и не разъезжался. Регексп «строка похожа на домен»
+                # ту же связанность вернул бы с другой стороны: заведут ассет с
+                # адресами или сетями — и каждый реинсталл отвергал бы его с
+                # руганью в лицо человеку.
+                #
+                # Спрашиваем ровно то, что нужно: есть ли в файле печатный
+                # символ. Забитый 0xFF или нулями не даёт его вовсе (проверено),
+                # а домены и CIDR проходят одинаково.
+                if LC_ALL=C grep -q '[[:print:]]' "$_gtmp" 2>/dev/null; then
                     if mv -f "$_gtmp" "${ZAPRET2_DIR}/$_grel" 2>/dev/null; then
                         printf '%s\n' "$_grel" >> "$_carried" 2>/dev/null || true
                         _gs_restored=$((_gs_restored + 1))

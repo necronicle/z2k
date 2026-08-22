@@ -201,11 +201,21 @@ fetch_to_tmp() {
     _vps_tries="${Z2K_FETCH_VPS_TRIES:-2}"
     case "$_vps_tries" in ''|*[!0-9]*) _vps_tries=2 ;; esac
     [ "$_vps_tries" -ge 1 ] || _vps_tries=1
+    # Потолок: без него Z2K_FETCH_VPS_TRIES=100000 превращает Layer 0 в
+    # многочасовой последовательный перебор ДО того, как будет испробован
+    # прямой путь. Ручка нужна, чтобы выключать повтор, а не чтобы зацикливать.
+    [ "$_vps_tries" -le 5 ] || _vps_tries=5
     # Бюджет коннекта — короткий ТОЛЬКО когда за спиной есть запасной путь,
     # то есть когда мы идём через VPS. При выключенном Layer 0 этот же запрос
     # И ЕСТЬ прямой, и торопиться с ним нельзя.
     if [ -n "$_vps_resolve" ]; then
+        # Ручку валидируем так же, как соседнюю: мусор в ней (abc, "3s", лишний
+        # пробел) заставляет curl выйти с rc=2 и НЕ напечатать ничего — тогда
+        # http пуст, время коннекта пусто, и Layer 0 молча выключается на весь
+        # прогон без единого сообщения.
         _ct="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+        case "$_ct" in ''|*[!0-9]*) _ct=3 ;; esac
+        [ "$_ct" -ge 1 ] || _ct=3
     else
         _ct=15
     fi
@@ -220,7 +230,16 @@ fetch_to_tmp() {
                     -o "$tmp" \
                     -D "$hdr" \
                     -w '%{http_code} %{time_connect}' \
-                    "$url" 2>/dev/null) || _vps_raw="000 0"
+                    "$url" 2>/dev/null) || true
+        # НЕ затирать вывод при ненулевом коде curl.
+        #
+        # curl печатает --write-out и на отказе: у соединения, которое
+        # УСТАНОВИЛОСЬ и потом встало (обрыв по --speed-time), rc=28, а
+        # %{time_connect} НЕнулевой. Подстановка "000 0" стирала это, и гейт
+        # повтора ниже принимал зависшую передачу за потерянное рукопожатие —
+        # ровно тот класс, который повторять нельзя. Пусто бывает, только если
+        # curl не запустился вовсе.
+        [ -n "$_vps_raw" ] || _vps_raw="000 0"
         http="${_vps_raw%% *}"; _vps_conn="${_vps_raw##* }"
         if [ "$http" = "304" ] || { [ "$http" = "200" ] && [ -s "$tmp" ]; }; then break; fi
         # Повторять есть смысл только через VPS: без него это уже прямой запрос,
@@ -263,7 +282,15 @@ fetch_to_tmp() {
     # не зависит, а цена зануления высокая и молчаливая: кеш начинает чередовать
     # 200/304, каждый второй ночной прогон тянет списки целиком, и увидеть это
     # можно только по трафику. Здесь это закрыто для любой версии.
-    if [ -s "${etag_file}.new" ]; then
+    # Переносим ТОЛЬКО когда ответ принят: 304 либо 200 с непустым телом.
+    #
+    # Безусловный перенос закреплял отказ на кадр выше того, где это чинилось:
+    # апстрим отдаёт 200 + ETag + пустое тело, curl выходит с нулём, ETag уже в
+    # рабочем кеше — а ниже мы этот ответ отвергаем. Следующей ночью приходит
+    # 304, маркер происхождения совпадает, и ассет заморожен, причём отказ
+    # исчезает из отчёта.
+    if { [ "$http" = "304" ] || { [ "$http" = "200" ] && [ -s "$tmp" ]; }; } \
+       && [ -s "${etag_file}.new" ]; then
         mv -f "${etag_file}.new" "$etag_file" 2>/dev/null || true
     fi
     rm -f "${etag_file}.new" 2>/dev/null
@@ -356,6 +383,36 @@ fetch_asset() {
 }
 
 # Args: $1 new content file, $2 target path, $3 asset name (for log)
+# Отказ применения: снять ETag, но ровно ОДИН раз на версию апстрима.
+#
+# Просто снимать ETag на каждом отказе нельзя. Отказы бывают двух родов, и по
+# коду они неразличимы:
+#   * разовый — обрубок нормализации при нехватке места в /tmp (а /tmp здесь
+#     RAM), провал записи. Такому повтор нужен: следующей ночью пройдёт;
+#   * стойкий — апстрим правда опубликовал список ниже 80% от нынешнего.
+#     Такому повтор бесполезен, а стоит он полной перекачки КАЖДУЮ ночь:
+#     ru-blocked ~1.7 МБ, а ru-blocked-all на согласившихся роутерах ~33 МБ,
+#     и всё это через нормализацию в тмпфс. Раньше цена была один 304.
+#
+# Различаем по факту: запоминаем ETag отвергнутой версии. Совпал с текущим —
+# эту версию мы уже пробовали, ETag не трогаем (значит будет дешёвый 304 и
+# цель останется прежней). Не совпал — версия новая, даём ей одну попытку.
+_z2k_geosite_reject() {
+    local _rj_asset="$1"
+    local _rj_etag="$ETAG_DIR/${_rj_asset}.etag"
+    local _rj_mark="$ETAG_DIR/${_rj_asset}.rejected"
+    local _rj_cur="" _rj_prev=""
+    [ -f "$_rj_etag" ] && _rj_cur=$(cat "$_rj_etag" 2>/dev/null)
+    [ -f "$_rj_mark" ] && _rj_prev=$(cat "$_rj_mark" 2>/dev/null)
+    if [ -n "$_rj_cur" ] && [ "$_rj_cur" = "$_rj_prev" ]; then
+        log "  $_rj_asset: эта версия апстрима уже отвергалась — ETag оставляем, чтобы не качать её каждую ночь"
+        return 0
+    fi
+    [ -n "$_rj_cur" ] && printf '%s' "$_rj_cur" > "$_rj_mark" 2>/dev/null
+    rm -f "$_rj_etag" 2>/dev/null
+    return 0
+}
+
 apply_new_list() {
     local newf="$1"
     local target="$2"
@@ -439,12 +496,12 @@ apply_new_list() {
     # «повторим следующей ночью» и «замолчали до смены апстрима».
     if [ "$out_n" -eq 0 ]; then
         log "  $asset: нормализация дала пустой результат из $in_n строк — список НЕ трогаем"
-        rm -f "$final" "$ETAG_DIR/${asset}.etag"
+        rm -f "$final"; _z2k_geosite_reject "$asset"
         return 1
     fi
     if [ "$in_n" -gt 0 ] && [ "$((out_n * 100 / in_n))" -lt 50 ]; then
         log "  $asset: нормализация потеряла больше половины ($in_n → $out_n строк) — список НЕ трогаем"
-        rm -f "$final" "$ETAG_DIR/${asset}.etag"
+        rm -f "$final"; _z2k_geosite_reject "$asset"
         return 1
     fi
 
@@ -483,7 +540,7 @@ apply_new_list() {
         case "$old_n" in ''|*[!0-9]*) old_n=0 ;; esac
         if [ "$old_n" -gt 0 ] && [ "$((out_n * 100 / old_n))" -lt 80 ]; then
             log "  $asset: новый список $out_n строк < 80% от нынешних $old_n — список НЕ трогаем"
-            rm -f "$final" "$ETAG_DIR/${asset}.etag"
+            rm -f "$final"; _z2k_geosite_reject "$asset"
             return 1
         fi
     elif [ -s "$target" ] && [ "$prev_asset" != "$asset" ]; then
@@ -505,13 +562,16 @@ apply_new_list() {
     local target_tmp="${target}.probe"
     cp "$final" "$target_tmp" && mv "$target_tmp" "$target" \
         || { log "  $asset: failed to write $target"
-             rm -f "$ETAG_DIR/${asset}.etag"
+             _z2k_geosite_reject "$asset"
              return 1; }
 
     # Record which asset produced this target so the shrink guard above can
     # tell an intentional big↔small class switch (bypass guard) from a genuine
     # truncation regression (enforce guard).
     printf '%s\n' "$asset" > "$asset_marker" 2>/dev/null || true
+    # Применилось — карантин снимаем: следующая отвергнутая версия получит
+    # свою попытку, а не унаследует чужую отметку.
+    rm -f "$ETAG_DIR/${asset}.rejected" 2>/dev/null
 
     local lines
     lines=$(wc -l < "$target" 2>/dev/null || echo 0)

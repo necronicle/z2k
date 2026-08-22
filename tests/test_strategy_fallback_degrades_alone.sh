@@ -28,8 +28,13 @@ SRC="${Z2K_STRATEGIES_UNDER_TEST:-$ROOT/lib/strategies.sh}"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/z2k-fallback.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-sed -n '/^default_pool_numbers() {/,/^}/p;/^save_strategy_to_category() {/,/^}/p;/^z2k_emergency_tcp_pool() {/,/^}/p;/^z2k_emergency_quic_pool() {/,/^}/p;/^create_default_strategy_files() {/,/^}/p' \
-    "$SRC" > "$TMP/fns.sh"
+UTILS="${Z2K_UTILS_UNDER_TEST:-$ROOT/lib/utils.sh}"
+# Аварийные наборы живут в utils.sh, а не рядом с потребителем: их зовёт ещё и
+# генератор конфига, который на пути вебпанели strategies.sh не видит вовсе.
+sed -n '/^z2k_emergency_tcp_pool() {/,/^}/p;/^z2k_emergency_quic_pool() {/,/^}/p' \
+    "$UTILS" > "$TMP/fns.sh"
+sed -n '/^default_pool_numbers() {/,/^}/p;/^save_strategy_to_category() {/,/^}/p;/^create_default_strategy_files() {/,/^}/p' \
+    "$SRC" >> "$TMP/fns.sh"
 for _fn in default_pool_numbers save_strategy_to_category z2k_emergency_tcp_pool \
            z2k_emergency_quic_pool create_default_strategy_files; do
     grep -q "^${_fn}() {" "$TMP/fns.sh" || {
@@ -204,6 +209,44 @@ esac
 case "$_probe_without" in
     *lua-desync*) ok "без общего определения дефолт не ломается, а деградирует" ;;
     *) no "без общего определения дефолт деградирует" "старый статический набор" "пусто" ;;
+esac
+
+# ============================================================================
+# ПУТЬ ВЕБПАНЕЛИ: самый частый, и раньше он аварийного набора НЕ ВИДЕЛ
+# ============================================================================
+#
+# _z2k_pool_default в config_official.sh спрашивает `command -v
+# z2k_emergency_tcp_pool`. Пока определения лежали в strategies.sh, на пути
+# вебпанели ответ был всегда «нет»: webpanel/cgi/actions.sh (_gen_libs_source)
+# сорсит РОВНО ДВА файла — utils.sh и config_official.sh. Значит роутер с
+# обнулённым Strategy.txt, у которого человек щёлкнул любой тумблер в панели,
+# получал обратно одиночный fake без circular — ровно то, что правка отменяла.
+#
+# Проверка поведенческая: собираем ту же пару файлов, что собирает панель, и
+# спрашиваем результат.
+_wp_libs=$(sed -n 's/.*\[ -f "\$d\/\([a-z_]*\.sh\)" \].*/\1/p' "$ROOT/webpanel/cgi/actions.sh" | sort -u | tr '\n' ' ')
+if [ -n "$_wp_libs" ]; then
+    ok "какие библиотеки сорсит панель: ${_wp_libs}"
+else
+    no "определить, что сорсит панель" "список файлов" "не разобрал"
+fi
+
+_wp=$TMP/webpanel; rm -rf "$_wp"; mkdir -p "$_wp"
+for _l in $_wp_libs; do
+    [ -f "$ROOT/lib/$_l" ] && cat "$ROOT/lib/$_l" >> "$_wp/libs.sh"
+done
+_pd=$(sed -n "/    _z2k_pool_default() {/,/^    }/p" "$CFG")
+_wp_out=$(env -i PATH=/usr/bin:/bin HOME="$TMP" SB="$_wp" PD="$_pd" /bin/sh -c '
+    # только то, что реально видит панель
+    . "$SB/libs.sh" 2>/dev/null
+    eval "$PD"
+    _z2k_pool_default gv_tcp
+' 2>/dev/null)
+case "$_wp_out" in
+    *circular:*key=gv_tcp*) ok "на пути вебпанели аварийный набор РОТИРУЮЩИЙ (circular + свой ключ)" ;;
+    *lua-desync=fake*)      no "на пути вебпанели аварийный набор ротирующий" "circular + key=gv_tcp" \
+                               "одиночный fake без circular — панель не видит определения" ;;
+    *)                      no "на пути вебпанели аварийный набор ротирующий" "circular + key=gv_tcp" "${_wp_out:-пусто}" ;;
 esac
 
 printf '\n%s: PASS=%s FAIL=%s\n' "$(basename "$0")" "$PASS" "$FAIL"

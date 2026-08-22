@@ -196,6 +196,47 @@ _z2k_curl_etag() {
 }
 fi
 
+# ==============================================================================
+# Аварийные наборы стратегий
+# ==============================================================================
+#
+# ЖИВУТ ЗДЕСЬ, А НЕ В strategies.sh, И ЭТО НЕСУЩЕЕ.
+#
+# Их зовут два разных потребителя: create_default_strategy_files (установка) и
+# _z2k_pool_default в config_official.sh (ЛЮБАЯ пересборка конфига). Второй путь
+# чаще: его дёргает вебпанель на каждое переключение тумблера. А вебпанель
+# (webpanel/cgi/actions.sh, _gen_libs_source) сорсит ровно два файла — utils.sh
+# и config_official.sh, — и strategies.sh среди них нет.
+#
+# Пока определения лежали в strategies.sh, проверка `command -v` в
+# _z2k_pool_default на пути вебпанели всегда была ложной, и роутер с обнулённым
+# Strategy.txt получал обратно одиночный fake без circular — ровно то, что
+# правка отменяла. Тест этого не видел: он грепал текст исходника.
+
+
+# Аварийный пул на случай, когда манифест стратегий не прочитался.
+#
+# ПОЧЕМУ ОН ОБЯЗАН НЕСТИ circular. Прежний аварийный дефолт был одиночным
+# статическим `fake:blob=fake_default_tls:repeats=4` — без ротации вообще. Это
+# строго хуже, чем у любого соседнего проекта: у конкурента три стратегии под
+# circular лежат статикой в пакете и не могут не прочитаться, а мы в той же
+# ситуации оставались с одним приёмом и без единого запасного.
+#
+# Техника здесь не выдумана: слоты 1-3 повторяют то, что уже стоит в боевых
+# пулах (fake+multisplit, multisplit со сдвигом, fake+fakedsplit). Блоб только
+# встроенный в движок: в аварии скачанных файлов из files/fake/ может не быть
+# тоже, и ссылаться на них — значит получить пул, который не стартует.
+z2k_emergency_tcp_pool() {
+    local key="$1"
+    printf '%s' "--filter-tcp=443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello,http_req,http_reply,unknown,tls_server_hello --out-range=-s34228 --lua-desync=circular:fails=3:retrans=2:maxseq=16384:time=60:key=${key}:nld=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tls_mod=rnd,dupsid,sni=www.google.com:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,midsld:strategy=1 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1,sniext+1:seqovl=1:strategy=2 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:tcp_ts=-1000:badsum:strategy=3 --lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1:strategy=3"
+}
+
+# Лесенка repeats 11/6/3 — не произвол: её дважды пытались срезать и дважды
+# откатывали по живым поломкам мобильного QUIC.
+z2k_emergency_quic_pool() {
+    printf '%s' "--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=circular:fails=3:time=60:udp_in=3:udp_out=5:key=yt_quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=3"
+}
+
 # --- запись ключа в config -------------------------------------------------
 #
 # ЕДИНСТВЕННАЯ писалка конфига. Раньше их было шесть: канон в webpanel/cgi/
@@ -401,11 +442,22 @@ z2k_fetch() {
         local _vps_tries="${Z2K_FETCH_VPS_TRIES:-2}"
         case "$_vps_tries" in ''|*[!0-9]*) _vps_tries=2 ;; esac
         [ "$_vps_tries" -ge 1 ] || _vps_tries=1
+        # Потолок: без него TRIES=100000 превращает Layer 0 в многочасовой
+        # последовательный перебор ДО того, как будет испробован прямой путь.
+        [ "$_vps_tries" -le 5 ] || _vps_tries=5
+        # Бюджет валидируем так же. Мусор в нём (abc, "3s", лишний пробел)
+        # заставляет curl выйти с rc=2 и НЕ напечатать ничего: код ответа пуст,
+        # время коннекта пусто, обе попытки сгорают мгновенно — Layer 0 молча
+        # выключается на весь прогон. Ровно тот отказ, ради которого рядом
+        # появилась проверка числа попыток.
+        local _vps_ct="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+        case "$_vps_ct" in ''|*[!0-9]*) _vps_ct=3 ;; esac
+        [ "$_vps_ct" -ge 1 ] || _vps_ct=3
         local _vps_try=0
         while [ "$_vps_try" -lt "$_vps_tries" ]; do
             _vps_try=$((_vps_try + 1))
             if _z2k_curl_etag "$url" "$dest" "$_vps_resolve" \
-                   "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}" \
+                   "$_vps_ct" \
                && _z2k_verify_fetched "$dest"; then
                 return 0
             fi
