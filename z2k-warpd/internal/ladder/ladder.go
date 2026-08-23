@@ -22,6 +22,10 @@ const (
 
 	defaultWGPort = 2408
 	h2Port        = 443
+	// earlyWG — сколько WG-шагов пробовать до h2. Портов у регистрации ~50,
+	// по 5 с на каждый — h2 наступал бы через четыре минуты, а enable ждёт
+	// две. h2 встаёт после первых шагов, остальные WG-порты — после него.
+	earlyWG = 5
 )
 
 // Ladder — текущая позиция и память о проходах.
@@ -55,7 +59,13 @@ func New(ep account.Endpoint, start *account.Step) *Ladder {
 			addHost(a.Host, a.Ports)
 		}
 	}
-	steps = append(steps, account.Step{Transport: "h2", Port: h2Port})
+	h2 := account.Step{Transport: "h2", Port: h2Port}
+	if len(steps) > earlyWG {
+		rest := append([]account.Step{}, steps[earlyWG:]...)
+		steps = append(append(steps[:earlyWG], h2), rest...)
+	} else {
+		steps = append(steps, h2)
+	}
 	l := &Ladder{steps: steps}
 	if start != nil {
 		for i, s := range steps {
@@ -74,8 +84,8 @@ func (l *Ladder) Current() account.Step { return l.steps[l.idx] }
 // Index — номер шага (для статуса).
 func (l *Ladder) Index() int { return l.idx }
 
-// OnH2 — стоим ли на последней ступени.
-func (l *Ladder) OnH2() bool { return l.idx == len(l.steps)-1 }
+// OnH2 — стоим ли на h2.
+func (l *Ladder) OnH2() bool { return l.steps[l.idx].Transport == "h2" }
 
 // Next переходит к следующему шагу. После h2 — обратно на вершину, и тогда
 // wait говорит, сколько ещё ждать до начала нового прохода.

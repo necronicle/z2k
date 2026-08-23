@@ -640,6 +640,70 @@ print_tunnel() {
 }
 
 # =============================================================================
+# SECTION: warp
+# =============================================================================
+# Код last_error движка → смысл (те же четыре, что переводит панель).
+warp_status_reason() {
+    local code
+    code=$(sed -n 's/.*"last_error":"\([^"]*\)".*/\1/p' /tmp/z2k-warp/status.json 2>/dev/null)
+    case "$code" in
+        register_blocked) echo "регистрация у Cloudflare заблокирована — ни напрямую, ни через релей" ;;
+        device_revoked)   echo "Cloudflare отозвал устройство, идёт перерегистрация" ;;
+        no_endpoint)      echo "ни один адрес Cloudflare не отвечает — провайдер блокирует WARP целиком" ;;
+        tun_failed)       echo "прошивка не даёт создать туннельный интерфейс" ;;
+        "")               echo "поднимается" ;;
+        *)                echo "$code" ;;
+    esac
+}
+
+print_warp() {
+    printf '\n=== warp ===\n'
+    local on bin=/opt/sbin/z2k-warpd st=/tmp/z2k-warp/status.json dev=/opt/etc/z2k-warp/device.json
+    on=$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null | cut -d= -f2 | tr -d '" ')
+    printf 'mode              : %s\n' "$([ "$on" = "1" ] && echo on || echo off)"
+    if [ -x "$bin" ]; then
+        printf 'engine            : %s (%s bytes, %s)\n' "$bin" "$(wc -c < "$bin" 2>/dev/null | tr -d ' ')" "$("$bin" version 2>/dev/null || echo '?')"
+    else
+        printf 'engine            : not installed\n'
+    fi
+    if [ -s "$dev" ]; then
+        # Ключ не печатаем; id, эндпоинт и тип активного ключа — достаточно для триажа.
+        printf 'device            : id=%s tunnel=%s endpoint=%s ports=%s iface=%s\n' \
+            "$(sed -n 's/.*"id": *"\([^"]*\)".*/\1/p' "$dev" | head -1)" \
+            "$(sed -n 's/.*"tunnel": *"\([^"]*\)".*/\1/p' "$dev" | head -1)" \
+            "$(sed -n 's/.*"v4": *"\([^"]*\)".*/\1/p' "$dev" | head -1)" \
+            "$(tr -d ' \n' < "$dev" | sed -n 's/^[^[]*"ports":\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | grep -c .)" \
+            "$(sed -n 's/.*"iface": *"\([^"]*\)".*/\1/p' "$dev" | head -1)"
+    else
+        printf 'device            : not registered\n'
+    fi
+    if [ -f "$st" ]; then
+        printf 'status            : %s\n' "$(cat "$st")"
+        printf 'verdict           : %s\n' "$(grep -q '"ready":true' "$st" && echo 'ready' || echo "not ready — $(warp_status_reason)")"
+    else
+        printf 'status            : no status.json (daemon not running)\n'
+    fi
+    local ifc
+    ifc=$(sed -n 's/.*"iface": *"\([^"]*\)".*/\1/p' "$dev" 2>/dev/null | head -1)
+    if [ -n "$ifc" ]; then
+        printf 'netdev            : %s\n' "$(ip -o link show "$ifc" 2>/dev/null | sed 's/\\.*//' | cut -c1-80 || echo absent)"
+        printf 'routing           : rule=%s route=%s mark=%s nat=%s fwd=%s\n' \
+            "$(ip rule show 2>/dev/null | grep -c 'fwmark 0x989')" \
+            "$(ip route show table 989 2>/dev/null | grep -c "$ifc")" \
+            "$(iptables -w -t mangle -S PREROUTING 2>/dev/null | grep -c 'z2k_warp')" \
+            "$(iptables -w -t nat -S POSTROUTING 2>/dev/null | grep -c "$ifc")" \
+            "$(iptables -w -t filter -S FORWARD 2>/dev/null | grep -c "$ifc")"
+    fi
+    printf 'ipset             : z2k_warp=%s z2k_warp_src=%s\n' \
+        "$(ipset list z2k_warp 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')" \
+        "$(ipset list z2k_warp_src 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')"
+    if [ -f /tmp/z2k-warp/warpd.log ]; then
+        printf 'warpd.log (last 15):\n'
+        tail -15 /tmp/z2k-warp/warpd.log 2>/dev/null | sed 's/^/  /'
+    fi
+}
+
+# =============================================================================
 # SECTION: autocircular state
 # =============================================================================
 print_rotator() {
@@ -1022,12 +1086,19 @@ print_health() {
         fi
     fi
 
-    # WARP включён, но туннеля нет. Игровые адреса при этом уедут в никуда.
+    # WARP включён, но туннель не несёт трафик. Источник правды — status.json
+    # движка z2k-warpd (ready + код причины); игровые адреса при этом идут
+    # напрямую (fail open), то есть обход для них не работает.
     local _warp_on
     _warp_on=$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null | cut -d= -f2 | tr -d '" ')
     if [ "$_warp_on" = "1" ]; then
-        pgrep -f 'usque' >/dev/null 2>&1 || \
-            _add "WARP включён, но туннель не поднят — игровой трафик пойдёт мимо него"
+        if [ ! -x /opt/sbin/z2k-warpd ]; then
+            _add "WARP включён, но движок не установлен — нажмите «Установить WARP» в панели"
+        elif [ ! -f /tmp/z2k-warp/status.json ]; then
+            _add "WARP включён, но движок не запущен (нет status.json) — selfheal поднимет его в течение минуты"
+        elif ! grep -q '"ready":true' /tmp/z2k-warp/status.json 2>/dev/null; then
+            _add "WARP включён, но туннель не несёт трафик ($(warp_status_reason)) — игровой трафик идёт напрямую"
+        fi
     fi
 
     printf '=== что не так ===\n'
@@ -1296,7 +1367,7 @@ fi
 # лишних строк на роутере без этих подсистем не будет.
 Z2K_DIAG_LOGS="/opt/var/log/z2k-auto-update.log /opt/var/log/z2k-scheduler.log
 /opt/zapret2/update-lists.log /tmp/z2k-log/tg-tunnel.log
-/tmp/z2k-log/z2k-warp.log /tmp/z2k-log/z2k-rt-proxy.log /tmp/z2k-log/z2k-http-tunnel.log
+/tmp/z2k-warp/warpd.log /tmp/z2k-log/z2k-rt-proxy.log /tmp/z2k-log/z2k-http-tunnel.log
 /tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-webpanel-error.log
 /var/log/z2k-detect.log /opt/var/log/z2k-detect-watchdog.log
 /tmp/z2k-log/z2k-webpanel-sup.log /tmp/z2k-log/z2k-webpanel-startcheck.log
@@ -1437,6 +1508,7 @@ case "$MODE" in
         print_netpath
         print_lists
         print_tunnel
+        print_warp
         print_rotator
         print_logs
         printf '\n=== end of diag ===\n'

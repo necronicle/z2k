@@ -1475,6 +1475,7 @@ warp_name_ok() {
     case "$1" in
         ''|.*|-*) return 1 ;;
         *[!A-Za-z0-9._-]*) return 1 ;;
+        devices) return 1 ;;   # зарезервировано: список устройств, не адресов
     esac
     [ "${#1}" -le 64 ]
 }
@@ -1620,6 +1621,7 @@ warp_lists() {
     for f in "$WARP_LISTS_DIR"/*.txt; do
         [ -f "$f" ] || continue
         name=$(basename "$f" .txt)
+        [ "$name" = "devices" ] && continue   # устройства — своя карточка, не список адресов
         entries=$(awk '{sub(/\r$/,""); gsub(/^[ \t]+|[ \t]+$/,"")} /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/{n++} END{print n+0}' "$f")
         size=$(wc -c < "$f" | tr -d ' ')
         # busybox: date -r (no stat -c), see update_status_string

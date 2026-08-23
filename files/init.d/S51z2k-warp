@@ -18,6 +18,12 @@ PIDFILE="${PIDFILE:-/var/run/z2k-warpd.pid}"
 # Go async-preempt роняет процесс на MIPS (известный краш) — выключаем.
 case "$(uname -m)" in mips*) export GODEBUG=asyncpreemptoff=1 ;; esac
 
+# VPS-релей для API Cloudflare, если напрямую заблокирован: тот же, что у
+# регистрации в z2k-warp.sh (переопределяется Z2K_WARP_VPS_PROXY в конфиге).
+_cfg="${ZAPRET2_DIR:-/opt/zapret2}/config"
+_proxy=$(grep -m1 '^Z2K_WARP_VPS_PROXY=' "$_cfg" 2>/dev/null | cut -d= -f2- | tr -d '"')
+export Z2K_WARP_VPS_PROXY="${_proxy:-http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119}"
+
 running() {
     [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
 }

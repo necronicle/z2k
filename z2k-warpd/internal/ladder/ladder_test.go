@@ -102,6 +102,25 @@ func TestString(t *testing.T) {
 	}
 }
 
+func TestH2ComesAfterFirstFiveWGSteps(t *testing.T) {
+	l := New(account.Endpoint{V4: "8.6.112.0", Ports: []int{1, 2, 3, 4, 5, 6, 7, 8}}, nil)
+	got := ""
+	for i := 0; ; i++ {
+		if got != "" {
+			got += " "
+		}
+		got += Label(l.Current())
+		if i == 9 {
+			break
+		}
+		l.Next(time.Unix(0, 0))
+	}
+	want := "wg:8.6.112.0:2408 wg:8.6.112.0:1 wg:8.6.112.0:2 wg:8.6.112.0:3 wg:8.6.112.0:4 h2:443 wg:8.6.112.0:5 wg:8.6.112.0:6 wg:8.6.112.0:7 wg:8.6.112.0:8"
+	if got != want {
+		t.Fatalf("\n got %s\nwant %s", got, want)
+	}
+}
+
 func TestAltHostsAfterPrimary(t *testing.T) {
 	e := account.Endpoint{V4: "8.6.112.0", Ports: []int{854},
 		Alt: []account.HostPorts{{Host: "162.159.192.10", Ports: []int{500}}, {Host: "8.6.112.0", Ports: []int{1}}}}

@@ -59,6 +59,7 @@ assert_eq "bad octet dropped" "0" "$(grep -c '999' "$SB/ipset.log")"
 assert_eq "private-range device IP allowed (it is a LAN client)" "1" "$(grep -c '^add z2k_warp_src_new 10.0.0.7 ' "$SB/ipset.log")"
 assert_eq "src set swapped in" "1" "$(grep -c '^swap z2k_warp_src_new z2k_warp_src' "$SB/ipset.log")"
 assert_eq "dst set also (re)built" "1" "$(grep -c '^swap z2k_warp_new z2k_warp' "$SB/ipset.log")"
+assert_eq "devices never leak into the DESTINATION set" "0" "$(grep -c '^add z2k_warp_new ' "$SB/ipset.log")"
 
 printf "\nPASSED: %d\nFAILED: %d\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]

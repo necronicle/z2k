@@ -107,6 +107,7 @@ func cmdRun(args []string) int {
 	stPath := fs.String("status", defaultStatus, "status.json")
 	logPath := fs.String("log", defaultLog, "лог (tmpfs)")
 	force := fs.String("force-transport", "", "wg:PORT | wg:HOST:PORT | h2 — только этот шаг")
+	proxy := fs.String("proxy", os.Getenv("Z2K_WARP_VPS_PROXY"), "HTTPS-прокси (VPS-релей) для API, если напрямую заблокирован")
 	verbose := fs.Bool("v", false, "подробный лог")
 	fs.Parse(args)
 
@@ -124,6 +125,7 @@ func cmdRun(args []string) int {
 		DevicePath: *devPath,
 		StatusPath: *stPath,
 		Logf:       logf,
+		Proxy:      *proxy,
 		NewTransport: func(step account.Step, dev tun.Device, d *account.Device) (transport.Transport, error) {
 			switch step.Transport {
 			case "wg":

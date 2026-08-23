@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,20 @@ type Device struct {
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
+}
+
+// WithProxy — копия клиента, ходящая через HTTPS-прокси (VPS-релей): для
+// роутеров, у которых api.cloudflareclient.com заблокирован напрямую.
+func (c *Client) WithProxy(proxyURL string) (*Client, error) {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	timeout := 25 * time.Second
+	if c.HTTP != nil && c.HTTP.Timeout > 0 {
+		timeout = c.HTTP.Timeout
+	}
+	return &Client{BaseURL: c.BaseURL, HTTP: &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: http.ProxyURL(u)}}}, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path, token string, body any) (*http.Response, error) {
@@ -285,7 +300,7 @@ func (c *Client) Register(ctx context.Context) (*Device, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return nil, err
 	}
-	d := &Device{PrivateKey: priv, Tunnel: TunnelWG}
+	d := &Device{PrivateKey: priv, Tunnel: TunnelWG, Endpoint: Endpoint{H2: DefaultH2Endpoint}}
 	if err := r.apply(d, true); err != nil {
 		return nil, err
 	}

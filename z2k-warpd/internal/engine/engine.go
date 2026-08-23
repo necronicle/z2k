@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -49,7 +50,9 @@ type Config struct {
 	Run          tundev.Runner
 	Probe        health.Prober
 	SwitchTunnel func(ctx context.Context, d *account.Device, tunnel string) error
-	Tick         time.Duration
+	// Proxy — VPS-релей для API, если напрямую заблокирован (как у register).
+	Proxy string
+	Tick  time.Duration
 }
 
 func (c *Config) defaults() {
@@ -81,8 +84,25 @@ func (c *Config) defaults() {
 		c.Probe = health.TraceProbe(8 * time.Second)
 	}
 	if c.SwitchTunnel == nil {
-		api := &account.Client{}
-		c.SwitchTunnel = api.SwitchTunnel
+		api := &account.Client{HTTP: &http.Client{Timeout: 25 * time.Second}}
+		proxy := c.Proxy
+		logf := c.Logf
+		// Подмена ключа — это вызов API. На роутере, где API заблокирован
+		// DPI, прямой PATCH не пройдёт, и без запасного пути h2-шаг умирал
+		// ещё до транспорта — с тем же вердиктом no_endpoint, что и настоящий
+		// полный блок. Тот же релей, что у регистрации.
+		c.SwitchTunnel = func(ctx context.Context, d *account.Device, tunnel string) error {
+			err := api.SwitchTunnel(ctx, d, tunnel)
+			if err == nil || errors.Is(err, account.ErrRevoked) || proxy == "" {
+				return err
+			}
+			logf("api: direct switch to %s failed (%v) — retrying via relay", tunnel, err)
+			relay, perr := api.WithProxy(proxy)
+			if perr != nil {
+				return err
+			}
+			return relay.SwitchTunnel(ctx, d, tunnel)
+		}
 	}
 	if c.Tick == 0 {
 		c.Tick = tick
