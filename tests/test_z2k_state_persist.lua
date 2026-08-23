@@ -82,6 +82,11 @@ function circular(ctx, desync)        -- luacheck: ignore
   -- mirror automate_content_gate (zapret-auto.lua): an incoming flow delivering
   -- real reverse content past the handshake region stamps the per-host content
   -- gate, which drives state-persist's content-backed sticky re-arm.
+  --
+  -- ПРОВЕРЕНО НА БОЕВОМ ДВИЖКЕ 2026-08-22: функция существует
+  -- (/opt/zapret2/lua/zapret-auto.lua, Z2K_CONTENT_GATE_BYTES=16384) и читает
+  -- ИМЕННО reverse: `pos_get(desync,'b',true)`, где третий аргумент выбирает
+  -- pos.reverse (zapret-lib.lua: pos_get). Мок повторяет это дословно.
   if not desync.outgoing then
     local rev = desync.track.pos and desync.track.pos.reverse
     if rev and tonumber(rev.pbcounter) and rev.pbcounter > 16384 then
@@ -136,6 +141,8 @@ local function mk(key, host, opts)
   }
   if opts.hostkey then d.arg.hostkey = opts.hostkey end
   if opts.hostname_is_ip then d.track.hostname_is_ip = true end
+  -- in_bytes кладём в reverse — ту сторону, которую читает боевой
+  -- automate_content_gate движка (pos_get(desync,'b',true), см. мок выше).
   if opts.in_bytes and d.track then d.track.pos = { reverse = { pbcounter = opts.in_bytes } } end
   if opts.sim then d._sim = opts.sim end
   if opts.crec and d.track then d.track.lua_state = { automate = opts.crec } end
@@ -687,6 +694,74 @@ do
   circular(nil, mk("rkn_tcp", "del.com"))
   check("T38: удаление сбросило на 1", 1, autostate["rkn_tcp"]["del.com"].nstrategy)
   check("T38: счётчик неудач обнулён", nil, autostate["rkn_tcp"]["del.com"].failure_counter)
+end
+
+-- C1: sticky НЕ отменяет ротацию, которую провалы только что оплатили.
+--
+-- Механизм задумывался против дрейфа от параллельных flow'ов. Но откат
+-- срабатывал по ЛЮБОМУ успеху в окне 30 с, включая успех, случившийся ДО
+-- провалов: успех на S, затем три новых провала, circular честно уходит на S+1,
+-- и sticky немедленно возвращает S. Провалы при этом уже потрачены, кворум
+-- набирать заново, хост залипает на неработающей стратегии.
+--
+-- Отметку времени засчитанного провала ставит files/lua/z2k-alert.lua.
+do
+  fresh()
+  now = 2000
+  circular(nil, mk("rkn_tcp", "stale.com", {outgoing = false, l7payload = "tls_server_hello", in_bytes = 20000}))
+  local hrec = autostate["rkn_tcp"]["stale.com"]
+  hrec.z2k_last_fail_ts = 2005          -- провалы ПОСЛЕ успеха
+  now = 2010
+  circular(nil, mk("rkn_tcp", "stale.com", {sim = 3}))
+  check("C1: успех СТАРШЕ провалов не откатывает ротацию", 3, hrec.nstrategy)
+end
+
+do
+  fresh()
+  now = 3000
+  local d = mk("rkn_tcp", "fresh.com", {outgoing = false, l7payload = "tls_server_hello", in_bytes = 20000})
+  circular(nil, d)
+  local hrec = autostate["rkn_tcp"]["fresh.com"]
+  hrec.z2k_last_fail_ts = 2990          -- провалы ДО успеха
+  now = 3010
+  circular(nil, mk("rkn_tcp", "fresh.com", {sim = 3}))
+  check("C1: успех НОВЕЕ провалов откат по-прежнему делает", 1, hrec.nstrategy)
+end
+
+-- B1: успех соединения, начатого на ПРЕЖНЕЙ стратегии, не перевзводит sticky.
+--
+-- Для провалов attribution был (z2k-alert.lua запоминает номер страты начала
+-- соединения), для успеха — нет. Старый flow, начатый на S и доехавший уже
+-- после перехода на S+1, вооружал sticky для S+1 и мог вернуть стратегию,
+-- через которую вообще не проходил.
+do
+  fresh()
+  now = 4000
+  -- уводим хост на страту 2 БЕЗ успеха: иначе успех того же вызова откатит сам себя
+  circular(nil, mk("rkn_tcp", "late.com", {sim = 2}))
+  now = 4005
+  -- успех приносит flow, НАЧАТЫЙ на страте 1 — он про неё, а не про нынешнюю
+  circular(nil, mk("rkn_tcp", "late.com", {outgoing = false, l7payload = "tls_server_hello",
+                                           in_bytes = 20000, crec = { z2k_nstrat = 1 }}))
+  now = 4010
+  circular(nil, mk("rkn_tcp", "late.com", {sim = 3}))
+  check("B1: запоздалый успех старого flow не откатывает ротацию", 3,
+        autostate["rkn_tcp"]["late.com"].nstrategy)
+end
+
+-- Контроль к B1: успех flow'а, начатого на ТЕКУЩЕЙ страте, откат делает.
+-- Без этой половины тест прошёл бы и на коде, который перевзвод сломал вовсе.
+do
+  fresh()
+  now = 5000
+  circular(nil, mk("rkn_tcp", "cur.com", {sim = 2}))
+  now = 5005
+  circular(nil, mk("rkn_tcp", "cur.com", {outgoing = false, l7payload = "tls_server_hello",
+                                          in_bytes = 20000, crec = { z2k_nstrat = 2 }}))
+  now = 5010
+  circular(nil, mk("rkn_tcp", "cur.com", {sim = 3}))
+  check("B1-контроль: успех flow'а с текущей страты откат делает", 2,
+        autostate["rkn_tcp"]["cur.com"].nstrategy)
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))

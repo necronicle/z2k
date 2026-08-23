@@ -679,5 +679,122 @@ else
     no("нет nstrategy — не слепнем", "true", tostring(fired))
 end
 
+-- ----- живость: ОДНО СОЕДИНЕНИЕ = ОДНО ДОКАЗАТЕЛЬСТВО ------------------------
+--
+-- Гвард живости глушит провалы, пока хост доказанно отвечает. Считался каждый
+-- входящий пакет, поэтому три сегмента ОДНОГО ответа взводили его, и дальше он
+-- гасил провалы ПАРАЛЛЕЛЬНЫХ соединений — ретрансмит ClientHello, ранний RST,
+-- фатальный алерт. Порог обоснован как «три ОТВЕТА», а не «три пакета».
+--
+-- Взведённость наблюдаем поведением: при взведённом гварде входящий провал
+-- подавляется, при невзведённом — засчитывается.
+local function live(crec)
+    std_result = false
+    pos_value = 1
+    run(incoming(string.rep("d", 500)), crec)
+end
+
+local function failure_counted()
+    std_result = true
+    pos_value = 1
+    return (run(incoming(string.rep("z", 300)), {}))
+end
+
+reset_host(); hrec.nstrategy = 1
+local one_flow = {}
+live(one_flow); live(one_flow); live(one_flow)
+if failure_counted() then
+    ok("три пакета ОДНОГО соединения не взводят гвард живости")
+else
+    no("три пакета одного flow не доказывают жизнь", "провал засчитан",
+       "подавлен — гвард взвёлся с одного соединения")
+end
+
+reset_host(); hrec.nstrategy = 1
+live({}); live({}); live({})
+if not failure_counted() then
+    ok("три РАЗНЫХ соединения гвард взводят — защита от ложной ротации цела")
+else
+    no("три соединения взводят гвард", "провал подавлен", "засчитан")
+end
+
+-- ----- живость привязана к НОМЕРУ стратегии ---------------------------------
+--
+-- Доказательства, набранные на старой страте, гасили провалы новой все 60 с
+-- окна: счётчик не сбрасывался при ротации вообще ничем.
+reset_host(); hrec.nstrategy = 1
+live({}); live({}); live({})
+hrec.nstrategy = 2
+if failure_counted() then
+    ok("смена стратегии обнуляет доказательства живости")
+else
+    no("живость старой страты не защищает новую", "провал засчитан",
+       "подавлен — счётчик пережил ротацию")
+end
+
+-- ----- успех запоздалого flow не защищает нынешнюю страту -------------------
+--
+-- Для провалов это уже проверялось выше (strategy_current). Для успеха
+-- проверки не было — асимметрия, из-за которой ответ соединения, начатого на
+-- прежней страте, взводил гвард для новой.
+reset_host(); hrec.nstrategy = 2
+live({ z2k_nstrat = 1 }); live({ z2k_nstrat = 1 }); live({ z2k_nstrat = 1 })
+if failure_counted() then
+    ok("успех соединения со СТАРОЙ стратегии не взводит гвард")
+else
+    no("запоздалый успех не защищает новую страту", "провал засчитан", "подавлен")
+end
+
+-- ----- HTTP: маркер блокировки = провал, а не доказательство жизни ----------
+--
+-- При Z2K_NATIVE_DETECTORS=1 (дефолт) наши разборы кодов срезаются с http_rkn,
+-- и остаётся эта обёртка. Штатный детектор кодов не смотрит, поэтому заглушка
+-- DPI с 403/451 проходила как обычный ответ И засчитывалась в живость.
+-- Классификатор здесь подменён: проверяется проводка обёртки, а сам разбор
+-- кодов пинится своими тестами (tests/test_http_classifier.*).
+local http_class_stub = nil
+function z2k_classify_http_reply() return http_class_stub end
+
+reset_host(); hrec.nstrategy = 1
+http_class_stub = "hard_fail"
+std_result = false; pos_value = 1
+local blocked = run(incoming("HTTP/1.1 403 Forbidden\r\n\r\n<html>rkn</html>"), {})
+if blocked then
+    ok("HTTP-ответ с маркером блокировки становится провалом")
+else
+    no("маркер блокировки = провал", "true", tostring(blocked))
+end
+
+reset_host(); hrec.nstrategy = 1
+http_class_stub = "hard_fail"
+live({}); live({}); live({})
+http_class_stub = nil
+if failure_counted() then
+    ok("заглушка блокировки не идёт в доказательства живости")
+else
+    no("страница блокировки не доказывает жизнь", "провал засчитан",
+       "подавлен — заглушки взвели гвард")
+end
+
+reset_host(); hrec.nstrategy = 1
+http_class_stub = "neutral"
+live({}); live({}); live({})
+http_class_stub = nil
+if failure_counted() then
+    ok("голый 451 / WAF-заголовок тоже не доказывают жизнь")
+else
+    no("neutral не доказывает жизнь", "провал засчитан", "подавлен")
+end
+
+-- ----- отметка времени провала для sticky в z2k-state-persist ---------------
+reset_host(); hrec.nstrategy = 1
+std_result = true; pos_value = 1
+run(incoming(string.rep("z", 300)), {})
+if tonumber(hrec.z2k_last_fail_ts) then
+    ok("засчитанный провал оставляет отметку времени для sticky")
+else
+    no("отметка времени провала", "число", tostring(hrec.z2k_last_fail_ts))
+end
+
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
 os.exit(FAIL == 0 and 0 or 1)

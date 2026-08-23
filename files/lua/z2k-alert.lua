@@ -106,25 +106,61 @@ end
 -- получается «три успеха когда-либо плюс один пакет за минуту». Тогда хост,
 -- который час назад работал, а сейчас режется, держит гвард взведённым вечно —
 -- ровно то, что в шапке названо недопустимым.
-local function note_alive(desync, is_fatal_alert)
+-- Форвард-декларация: strategy_current определён ниже, рядом с note_strategy,
+-- но нужен уже здесь. Без неё имя ушло бы в ГЛОБАЛЬНУЮ таблицу и вернуло nil —
+-- ошибка была бы рантаймовой, то есть невидимой и для luac, и для тестов,
+-- которые зовут только host_alive.
+local strategy_current
+
+local function note_alive(desync, crec, is_fatal_alert)
 	if is_fatal_alert then return end
 	local p = desync.dis and desync.dis.payload
 	if not p or #p == 0 then return end
+	-- ОДНО СОЕДИНЕНИЕ = ОДНО ДОКАЗАТЕЛЬСТВО.
+	--
+	-- Считался каждый входящий пакет, поэтому три сегмента ОДНОГО ответа
+	-- взводили гвард, а он дальше глушил провалы параллельных соединений:
+	-- ретрансмит ClientHello, ранний RST и фатальный алерт. Порог выше
+	-- обоснован как «три живых ОТВЕТА», а не «три пакета» — приводим
+	-- реализацию к тому, что в нём написано. Без crec (движок не дал запись
+	-- соединения) считаем как раньше: ослепить детектор хуже, чем пересчитать.
+	if crec then
+		if crec.z2k_alive_seen then return end
+	end
+	-- Успех соединения, начатого на ПРЕЖНЕЙ стратегии, ничего не говорит о
+	-- нынешней. Проверка стояла только на провалах (strategy_current ниже),
+	-- и из-за этой асимметрии запоздалый ответ старого flow защищал страту,
+	-- через которую он не проходил.
+	if not strategy_current(desync, crec) then return end
 	local hrec = host_record(desync)
 	if not hrec then return end
 	local now = os.time()
+	-- Счётчик привязан к НОМЕРУ стратегии. Раньше привязки не было вовсе:
+	-- после ротации доказательства, набранные на старой страте, продолжали
+	-- гасить провалы новой все 60 секунд окна.
+	if hrec.z2k_ok_nstrat ~= hrec.nstrategy then
+		hrec.z2k_ok_n = 0
+		hrec.z2k_ok_start = now
+		hrec.z2k_ok_nstrat = hrec.nstrategy
+	end
 	if not hrec.z2k_ok_start or (now - hrec.z2k_ok_start) > Z2K_OK_WINDOW then
 		hrec.z2k_ok_n = 0
 		hrec.z2k_ok_start = now
 	end
 	hrec.z2k_ok_n = hrec.z2k_ok_n + 1
 	hrec.z2k_ok_last = now
+	if crec then crec.z2k_alive_seen = true end
 end
 
 -- true, если хост прямо сейчас доказал, что работает.
 local function host_alive(desync)
 	local hrec = host_record(desync)
 	if not hrec or not hrec.z2k_ok_start then return false end
+	-- Доказательства другой стратегии не в счёт — см. note_alive.
+	if hrec.z2k_ok_nstrat ~= hrec.nstrategy then
+		hrec.z2k_ok_n = 0
+		return false
+	end
 	if (os.time() - hrec.z2k_ok_start) > Z2K_OK_WINDOW then
 		hrec.z2k_ok_n = 0
 		return false
@@ -299,7 +335,7 @@ end
 
 -- false, если стратегия под соединением уже сменилась. Без пометки или без
 -- host-записи не судим: лучше засчитать лишний провал, чем ослепить детектор.
-local function strategy_current(desync, crec)
+strategy_current = function(desync, crec)
 	if not crec or not crec.z2k_nstrat then return true end
 	local hrec = host_record(desync)
 	if not hrec or not hrec.nstrategy then return true end
@@ -354,8 +390,38 @@ local function z2k_fail_verdict(desync, crec)
 	-- Страница-заглушка DPI — непустой ответ, и трёх соединений хватает, чтобы
 	-- взвести гвард раньше, чем наберётся порог провалов; блокировка тогда не
 	-- ротируется никогда.
+	-- HTTP-ОТВЕТ РАЗБИРАЕМ СВОИМ КЛАССИФИКАТОРОМ, ДО ШТАТНОГО ДЕТЕКТОРА.
+	--
+	-- При Z2K_NATIVE_DETECTORS=1 (дефолт) z2k_strip_custom_detectors режет с
+	-- http_rkn и трёх TCP-пулов ЛЮБОЙ :failure_detector=, включая наши разборы
+	-- кодов, а на их место встаёт эта обёртка. Штатный детектор кодов не
+	-- смотрит вовсе, поэтому 403/451/5xx с нашими маркерами блокировки и
+	-- редирект на страницу блокировки проходили как обычный ответ — и, хуже
+	-- того, засчитывались в живость хоста ниже: заглушка DPI это непустой
+	-- пейлоад без фатального алерта. Трёх таких хватало, чтобы взвести гвард
+	-- раньше, чем наберётся кворум провалов, и блокировка не ротировалась.
+	--
+	-- Обе lua-подсистемы грузятся вместе (S99zapret2.new: LUA_Z2K_DETECTORS и
+	-- LUA_Z2K_ALERT), но проверку типа держим: файл детекторов могли не
+	-- подключить, и тогда обёртка обязана деградировать, а не падать.
+	local http_class
+	if type(z2k_classify_http_reply) == "function" then
+		local ok_c, cls = pcall(z2k_classify_http_reply, desync)
+		if ok_c then http_class = cls end
+	end
+	if http_class == "hard_fail" then
+		DLOG("z2k_fail_tls_alert: HTTP-ответ с маркером блокировки -> failure")
+		return true
+	end
+
 	local failed = standard_failure_detector(desync, crec)
-	if not failed then note_alive(desync, fatal_alert) end
+	-- В живость идёт только то, что доказывает работу: разбор либо не про
+	-- HTTP (nil), либо признал ответ настоящим (positive). "neutral" — это
+	-- голый 451, WAF-заголовок, 4xx без тела: провалом не считаем, но и
+	-- доказательством жизни оно не является.
+	if not failed and (http_class == nil or http_class == "positive") then
+		note_alive(desync, crec, fatal_alert)
+	end
 
 	if failed then
 		local verdict = incoming_reset_verdict(desync, crec)
@@ -387,6 +453,22 @@ function z2k_fail_tls_alert(desync, crec)
 		DLOG("z2k_fail_tls_alert: провал соединения со стратегии " ..
 		     tostring(crec.z2k_nstrat) .. " не засчитан — сейчас уже другая")
 		return false
+	end
+	-- Время последнего ЗАСЧИТАННОГО провала. Читает z2k-state-persist.lua:
+	-- откат sticky-успехом разрешён только если успех НОВЕЕ этой отметки.
+	-- Иначе успех, случившийся ДО провалов, отменяет ротацию, которую эти
+	-- провалы только что оплатили, и кворум приходится набирать заново.
+	local hrec = host_record(desync)
+	if hrec then
+		-- Тот же источник времени, что у z2k-state-persist.lua (now_f): их
+		-- значения сравниваются напрямую, и расхождение в базе часов дало бы
+		-- сравнение целых секунд с дробными и промах на секунду в обе стороны.
+		local t
+		if type(clock_getfloattime) == "function" then
+			local ok_t, v = pcall(clock_getfloattime)
+			if ok_t and tonumber(v) then t = tonumber(v) end
+		end
+		hrec.z2k_last_fail_ts = t or os.time()
 	end
 	return true
 end

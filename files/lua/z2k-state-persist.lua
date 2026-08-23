@@ -746,8 +746,25 @@ if type(circular) == "function" then
         -- QUIC candidate path are NOT gated — those are strong proofs already.
         local content_backed = hrec.content_seen_last
           and (now_f() - (tonumber(hrec.content_seen_last) or 0)) <= STICKY_WINDOW_SEC
-        local rearm_event = successful_state or quic_candidate_state
-          or (response_state and content_backed)
+        -- ATTRIBUTION ДЛЯ УСПЕХА. Для провалов z2k-alert.lua запоминает номер
+        -- стратегии, на которой соединение НАЧАЛОСЬ, и отбрасывает запоздалые
+        -- события; для успеха такой проверки не было ни здесь, ни там. Старый
+        -- flow, начатый на S и завершившийся уже после перехода на S+1, мог
+        -- перевзвести sticky для S+1 — то есть повлиять на стратегию, через
+        -- которую он вообще не проходил.
+        --
+        -- crec — это desync.track.lua_state.automate (движок: automate_conn_record
+        -- в lua/zapret-auto.lua), та же таблица, куда пишет z2k-alert.lua.
+        -- Сверяем с nstrategy_before_circular, а не с hrec.nstrategy: если
+        -- circular только что сдвинул номер, flow законно шёл на прежнем.
+        local flow_crec = desync and desync.track and desync.track.lua_state
+          and desync.track.lua_state.automate
+        local flow_nstrat = flow_crec and tonumber(flow_crec.z2k_nstrat)
+        -- Без метки не судим — ослепить перевзвод хуже, чем разрешить лишний.
+        local flow_current = (flow_nstrat == nil) or (nstrategy_before_circular == nil)
+          or (flow_nstrat == nstrategy_before_circular)
+        local rearm_event = flow_current and (successful_state or quic_candidate_state
+          or (response_state and content_backed))
         _G.Z2K_STICKY_SUCCESS_TS = _G.Z2K_STICKY_SUCCESS_TS or {}
         if rearm_event and sticky_key then
           _G.Z2K_STICKY_SUCCESS_TS[sticky_key] = now_f()
@@ -755,7 +772,18 @@ if type(circular) == "function" then
         if sticky_key and is_sticky_eligible(askey, hostn) and nstrategy_before_circular and hrec.nstrategy
            and (tonumber(hrec.nstrategy) or 0) > nstrategy_before_circular then
           local last_ok = _G.Z2K_STICKY_SUCCESS_TS[sticky_key]
-          if last_ok and (now_f() - last_ok) <= STICKY_WINDOW_SEC then
+          -- Откат разрешён, только если успех НОВЕЕ последнего засчитанного
+          -- провала (отметку ставит z2k-alert.lua на том же источнике времени).
+          --
+          -- Иначе выходило так: успех на S, затем три новых провала, circular
+          -- честно уходит на S+1 — и sticky немедленно возвращает S успехом,
+          -- который случился ДО этих провалов. Провалы при этом уже потрачены,
+          -- кворум надо набирать заново, и хост залипает на неработающей
+          -- стратегии. Механизм задумывался против дрейфа от параллельных
+          -- flow'ов, а не против ротации, которую провалы только что оплатили.
+          local fail_ts = tonumber(hrec.z2k_last_fail_ts)
+          local ok_is_fresh = last_ok and (not fail_ts or last_ok > fail_ts)
+          if ok_is_fresh and (now_f() - last_ok) <= STICKY_WINDOW_SEC then
             hrec.nstrategy = nstrategy_before_circular
           end
         end
