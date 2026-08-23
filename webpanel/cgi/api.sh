@@ -837,9 +837,16 @@ case "$method $path" in
 
     # ---------- DIAG (Phase 3) ----------
     "GET /diag")
-        diag_content=$(diag_run)
+        diag_content=$(diag_run); diag_rc=$?
         json_header
-        printf '{"ok":true,"diag":'
+        # ok отражает КОД ВОЗВРАТА, а не факт того, что что-то напечаталось.
+        # Раньше здесь стояло безусловное true, и оборванный отчёт приходил в
+        # панель неотличимым от целого.
+        if [ "$diag_rc" = "0" ]; then
+            printf '{"ok":true,"diag":'
+        else
+            printf '{"ok":false,"rc":%s,"diag":' "$diag_rc"
+        fi
         json_string "$diag_content"
         printf '}\n'
         exit 0
@@ -852,7 +859,19 @@ case "$method $path" in
     # Content-Type text/plain, а не application/octet-stream: так вложение
     # можно открыть просмотром прямо в клиенте, не скачивая.
     "GET /diag/download")
-        diag_content=$(diag_run report)
+        diag_content=$(diag_run report); diag_rc=$?
+        # Обрыв виден В САМОМ ФАЙЛЕ, а не только в статусе. Отдавать 500 нельзя:
+        # браузер тогда не сохранит вложение, и человек останется вообще без
+        # данных, хотя частичный отчёт для разбора всё-таки полезен. Поэтому
+        # файл отдаём, но обрыв в нём написан прямым текстом — иначе обрезок
+        # выглядит как полная картина.
+        if [ "$diag_rc" != "0" ] || ! diag_is_complete "$diag_content"; then
+            diag_content="${diag_content}
+
+=== ОТЧЁТ ОБОРВАН (код возврата ${diag_rc}) ===
+Файл неполный: сбор прервался. Данные выше верны, но ниже них могло быть
+что-то ещё. Пришлите файл как есть и скажите, что он оборван."
+        fi
         printf 'Status: 200 OK\r\n'
         printf 'Content-Type: text/plain; charset=utf-8\r\n'
         printf 'Content-Disposition: attachment; filename="z2k-diag-%s.txt"\r\n' \

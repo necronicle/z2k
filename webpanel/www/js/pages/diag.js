@@ -156,7 +156,12 @@ export async function renderDiag() {
   `;
   document.getElementById("diag-refresh").addEventListener("click", loadDiag);
   document.getElementById("diag-copy").addEventListener("click", () => {
-    copyToClipboard(document.getElementById("diag-output").textContent);
+    // Пока на месте скелет, копировать нечего: кнопка отдавала пустую строку и
+    // рапортовала «Скопировано». Человек вставлял пустоту в чат поддержки и был
+    // уверен, что отправил отчёт.
+    const out = document.getElementById("diag-output");
+    if (out.querySelector(".skel-text") || !out.textContent.trim()) return;
+    copyToClipboard(out.textContent);
   });
   document.getElementById("diag-download").addEventListener("click", diagDownload);
   wireDomainProbe();

@@ -145,12 +145,16 @@ short_tail() {
     # Файла может не быть штатно (компонент не запускался) — молчим, а не пишем
     # «(file missing)»: раньше отчёт открывался именно такой строкой.
     [ -r "$file" ] || return 0
+    # Пустота определяется РАЗМЕРОМ, а не числом строк. `wc -l` считает переводы
+    # строки: файл с текстом, но без завершающего \n, давал ноль и печатался как
+    # «(empty)» — а именно так выглядит лог демона, убитого на середине записи,
+    # то есть ровно тот случай, ради которого лог и читают.
+    [ -s "$file" ] || { echo "(empty)"; return; }
     local total
     total=$(wc -l < "$file" 2>/dev/null | tr -d ' ')
-    if [ -z "$total" ] || [ "$total" = "0" ]; then
-        echo "(empty)"
-        return
-    fi
+    case "$total" in ''|*[!0-9]*) total=0 ;; esac
+    # Непустой файл без единого перевода строки — это одна строка.
+    [ "$total" -eq 0 ] && total=1
     if [ "$total" -gt "$lines" ]; then
         local extra=$((total - lines))
         echo "(... first ${extra} older lines skipped)"
@@ -273,6 +277,13 @@ nfqws_strategy_counts() {
     _out=$(printf '%s\n' "$_cmd" | awk '
         BEGIN { prof = 0 }
         $0 == "--new" { prof++; next }
+        # Плечи профиля могут приезжать НЕ своими токенами, а импортом шаблона:
+        # `--lua-desync=circular:...key=rkn_tcp... --import=z2k_rkn_arsenal`.
+        # Тогда в самом профиле ни одного strategy= нет, и профиль ошибочно
+        # объявлялся мёртвым. Полевой случай 2026-08-23: свежая установка r-78,
+        # 117 плеч в 6 пулах — все на месте, — а сводка гнала человека
+        # переустанавливать z2k, который он только что поставил с форматированием.
+        /^--(import|template)=/ { imp[prof] = 1; next }
         /^--lua-desync=circular:/ { circ[prof] = 1; next }
         /^--lua-desync=/ {
             desync[prof] = 1
@@ -286,7 +297,7 @@ nfqws_strategy_counts() {
                 n = cnt[i] + 0
                 if (n == 0 && desync[i]) n = 1
                 arms += n
-                if (circ[i]) { pools++; if (n == 0) dead++ }
+                if (circ[i]) { pools++; if (n == 0 && !imp[i]) dead++ }
             }
             printf "%d %d %d", arms, pools, dead
         }')
@@ -336,8 +347,14 @@ nfqws_reasm_state() {
 # заведомо разобралась, и платить за это нечем.
 print_nfqws_start_failure() {
     local _bin="${ZAPRET2_DIR}/nfq2/nfqws2"
-    local _err
-    for _err in /tmp/.z2k-daemon-nfqws2-*.err; do
+    # САМЫЙ СВЕЖИЙ файл, а не первый по алфавиту. Глоб отдаёт имена
+    # лексикографически, и при нескольких попытках старта диагностика брала
+    # старейший — то есть причину ПРОШЛОГО отказа, а не текущего. `ls -t` есть и
+    # в busybox; если он почему-то не отработал, порядок остаётся прежним.
+    local _err _errs
+    _errs=$(ls -t /tmp/.z2k-daemon-nfqws2-*.err 2>/dev/null) || _errs=""
+    [ -n "$_errs" ] || _errs=$(printf '%s\n' /tmp/.z2k-daemon-nfqws2-*.err)
+    for _err in $_errs; do
         [ -s "$_err" ] || continue
         printf 'причина отказа    : (от nfqws2, %s)\n' "$_err"
         tail -n 5 "$_err" 2>/dev/null | sed 's/^/  | /'
@@ -499,9 +516,10 @@ print_iptables() {
     # месте, зато про четыре правила, от которых зависит ротация, диагностика
     # молчала: пропади входящая половина — здесь стояло бы бодрое «postroute 2».
     local nfq_mangle nfq_in tg_redirect_pre tg_redirect_out
-    nfq_mangle=$( (iptables -t mangle -L POSTROUTING -n 2>/dev/null || true) | grep -c NFQUEUE || true)
-    nfq_in=$( ( (iptables -t mangle -L INPUT -n 2>/dev/null || true); \
-                (iptables -t mangle -L FORWARD -n 2>/dev/null || true) ) | grep -c NFQUEUE || true)
+    local _nfq_all
+    _nfq_all=$(nfqueue_counts)
+    nfq_mangle=$(printf '%s' "$_nfq_all" | cut -d' ' -f1)
+    nfq_in=$(printf '%s' "$_nfq_all" | cut -d' ' -f2)
     tg_redirect_pre=$(tg_redirect_counts | cut -d' ' -f1)
     tg_redirect_out=$(tg_redirect_counts | cut -d' ' -f2)
     : "${nfq_mangle:=0}"
@@ -574,7 +592,7 @@ print_tunnel() {
         md5=$(md5sum "$tg_bin" 2>/dev/null | awk '{print $1}')
         size=$(wc -c < "$tg_bin" 2>/dev/null | tr -d ' ')
         printf 'binary            : %s (%s bytes, md5 %s)\n' "$tg_bin" "$size" "$md5"
-        tg_pid=$(pgrep -fa tg-mtproxy-client 2>/dev/null | grep -v grep | awk '{print $1}' | head -1)
+        tg_pid=$(tg_tunnel_pid)
         if [ -n "$tg_pid" ]; then
             printf 'process           : PID %s\n' "$tg_pid"
         else
@@ -649,26 +667,46 @@ print_rotator() {
     fi
 }
 
-# Проба bitmap:port кэшируется: её дёргают и шапка, и секция platform, а это
-# create+destroy реального набора — делать дважды незачем.
-Z2K_BITMAP_OK=""
+# Проба bitmap:port: create+destroy реального набора. Её дёргают и шапка, и
+# секция platform.
+#
+# КЭШ В ФАЙЛЕ, А НЕ В ПЕРЕМЕННОЙ. Обоих потребителей зовут через $( ), то есть в
+# ПОДОБОЛОЧКЕ: присваивание Z2K_BITMAP_OK там и умирало, родитель оставался
+# пустым, и проба выполнялась заново каждый раз. Переменная-кэш, которую
+# невозможно записать, — это не кэш, а комментарий о намерениях.
+#
+# ИМЯ НАБОРА УНИКАЛЬНО НА ПРОГОН. Оно было фиксированным, а панель разрешает
+# автозагрузку, «Обновить» и «Скачать файл» одновременно. Два отчёта внахлёст
+# дрались за один набор: чужой destroy сносил наш до create, create падал
+# «set exists» — и отчёт открывался строкой «обход не работает ЦЕЛИКОМ» на
+# полностью здоровом ядре. Хуже ложной тревоги только ложная тревога,
+# приходящая через раз.
+Z2K_BITMAP_CACHE="${TMPDIR:-/tmp}/.z2k-diag-bitmap.$$"
+# Единственный trap в файле. Кэш живёт в tmpfs и переживёт разве что аварийный
+# kill -9, но оставлять мусор в /tmp роутера незачем: отчёт дёргают и панель, и
+# бот, и планировщик.
+trap 'rm -f "$Z2K_BITMAP_CACHE" 2>/dev/null' EXIT INT TERM
 bitmap_port_ok() {
-    if [ -z "$Z2K_BITMAP_OK" ]; then
-        if ! command -v ipset >/dev/null 2>&1; then
-            Z2K_BITMAP_OK="unknown"
-        # Снести возможный залипший набор от прерванного прошлого прогона: иначе
-        # create падает «set exists», проба врёт «нет bitmap:port», и КАЖДЫЙ
-        # следующий отчёт открывается ложным «обход не работает ЦЕЛИКОМ».
-        # Та же конвенция уже принята в lib/utils.sh и files/S99zapret2.new.
-        elif { ipset destroy z2k_diag_probe 2>/dev/null || true
-               ipset create z2k_diag_probe bitmap:port range 0-65535 2>/dev/null; }; then
-            ipset destroy z2k_diag_probe 2>/dev/null
-            Z2K_BITMAP_OK="yes"
-        else
-            Z2K_BITMAP_OK="no"
-        fi
+    if [ -s "$Z2K_BITMAP_CACHE" ]; then
+        cat "$Z2K_BITMAP_CACHE"
+        return 0
     fi
-    printf '%s' "$Z2K_BITMAP_OK"
+    local _verdict _set
+    _set="z2k_diag_probe_$$"
+    if ! command -v ipset >/dev/null 2>&1; then
+        _verdict="unknown"
+    # Свой набор всё равно сносим перед create: прошлый прогон с ТЕМ ЖЕ pid мог
+    # оборваться между create и destroy. Та же конвенция принята в lib/utils.sh
+    # и files/S99zapret2.new.
+    elif { ipset destroy "$_set" 2>/dev/null || true
+           ipset create "$_set" bitmap:port range 0-65535 2>/dev/null; }; then
+        ipset destroy "$_set" 2>/dev/null
+        _verdict="yes"
+    else
+        _verdict="no"
+    fi
+    printf '%s' "$_verdict" > "$Z2K_BITMAP_CACHE" 2>/dev/null
+    printf '%s' "$_verdict"
 }
 
 # =============================================================================
@@ -693,10 +731,76 @@ bitmap_port_ok() {
 # местах — в разделе iptables и в сводке «что не так». Дублировать подсчёт
 # нельзя, разойдётся, а разошедшись даст ровно то, из-за чего эта проверка и
 # появилась: в деталях «0, ожидается 1», а в сводке «проблем не найдено».
+# PID ИМЕННО ТЕЛЕГРАМ-ТУННЕЛЯ, а не любого экземпляра бинарника.
+#
+# Тот же бинарник поднимается ДВАЖДЫ: телеграм слушает :1443, а cdnbase-туннель
+# (S97z2k-http-tunnel) — :1444. Голый `pgrep -f tg-mtproxy-client` ловит оба,
+# поэтому живой http-туннель маскировал смерть телеграмного: процесс есть,
+# сводка молчит, у человека телеграм не работает. В webpanel/cgi/actions.sh:1775
+# этот полевой баг уже закрыт фильтром по порту — диагностика от него отстала.
+tg_tunnel_pid() {
+    pgrep -f "tg-mtproxy-client .*--listen=:1443" 2>/dev/null | head -1
+}
+
+# Выключен ли туннель самим человеком. Намеренно выключенное — не поломка, и
+# кричать о нём в сводке значит приучать читать её по диагонали.
+tg_user_disabled() {
+    # Читаем так же, как соседние флаги в этом файле (строка про
+    # GAME_WARP_ENABLED): отдельного помощника здесь нет, и заводить его ради
+    # одного значения — лишняя сущность.
+    [ "$(grep -m1 '^TG_PROXY_USER_DISABLED=' "${ZAPRET2_DIR}/config" 2>/dev/null \
+         | cut -d= -f2 | tr -d '"'"'"'" ')" = "1" ]
+}
+
+# nfqueue_counts -> "<исходящих> <входящих> <читалось_ли>"
+#
+# ОДИН источник чисел для деталей и для вердикта. Раньше каждый считал сам, и
+# это ровно тот класс, из-за которого сводка сегодня разошлась с деталями по
+# телеграму: одно место говорило «правил нет», другое — «есть».
+#
+# Три вещи, которых не было:
+#   1. -w. Без него занятый xtables-lock (NDM правит правила постоянно) роняет
+#      iptables с пустым выводом, и «нет правил» печатается на исправном роутере.
+#   2. Отличие ОШИБКИ ЧТЕНИЯ от НУЛЯ. Раньше `2>/dev/null || true` превращал
+#      любой сбой в ноль, то есть в тревогу. Не смогли прочитать — молчим:
+#      молчание честнее выдумки.
+#   3. Фильтр по НОМЕРУ очереди. Считался любой NFQUEUE, включая чужие правила.
+#      Если фильтр по номеру дал ноль, а без фильтра правила есть — значит формат
+#      вывода iptables другой; тогда берём общий счёт, чтобы не выдумать поломку.
+nfqueue_counts() {
+    local _q _out _in _raw_out _raw_in _ok=1
+    _q="${QNUM:-200}"
+    case "$_q" in ''|*[!0-9]*) _q=200 ;; esac
+
+    # Каждое чтение — отдельным присваиванием в РОДИТЕЛЕ. Собрать обе цепочки
+    # одним $( { ...; } ) нельзя: `_ok=0` внутри подстановки останется в
+    # подоболочке и наружу не выйдет — ровно тот дефект, из-за которого рядом
+    # не работал кэш пробы bitmap.
+    local _in_a _in_b
+    _raw_out=$(iptables -w -t mangle -L POSTROUTING -n 2>/dev/null) || _ok=0
+    _in_a=$(iptables -w -t mangle -L INPUT -n 2>/dev/null) || _ok=0
+    _in_b=$(iptables -w -t mangle -L FORWARD -n 2>/dev/null) || _ok=0
+    _raw_in="$_in_a
+$_in_b"
+
+    _out=$(printf '%s\n' "$_raw_out" | grep -c "NFQUEUE num $_q" || true)
+    _in=$(printf '%s\n' "$_raw_in"  | grep -c "NFQUEUE num $_q" || true)
+    if [ "${_out:-0}" -eq 0 ] && [ "${_in:-0}" -eq 0 ]; then
+        _out=$(printf '%s\n' "$_raw_out" | grep -c NFQUEUE || true)
+        _in=$(printf '%s\n' "$_raw_in"  | grep -c NFQUEUE || true)
+    fi
+    printf '%s %s %s\n' "${_out:-0}" "${_in:-0}" "$_ok"
+}
+
 tg_redirect_counts() {
     local _pre _out
-    _pre=$( (iptables -t nat -L PREROUTING -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
-    _out=$( (iptables -t nat -L OUTPUT -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
+    # -w ОБЯЗАТЕЛЕН. Без него занятый xtables-lock (NDM правит правила постоянно)
+    # роняет iptables с пустым выводом, grep -c даёт 0 — и сводка объявляет
+    # правила пропавшими на исправном роутере. Полевой случай 2026-08-23: в
+    # сводке «редирект телеграма отсутствует, PREROUTING=0», а пятью строками
+    # ниже в том же файле «TG REDIR PREROUT: 1» и CONNECT_OK в логе туннеля.
+    _pre=$( (iptables -w -t nat -L PREROUTING -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
+    _out=$( (iptables -w -t nat -L OUTPUT -n 2>/dev/null || true) | grep -c 'redir ports 1443' || true)
     printf '%s %s\n' "${_pre:-0}" "${_out:-0}"
 }
 
@@ -760,11 +864,29 @@ print_health() {
     # а как «стратегия залипла»: десинк работает, а переключать её не на чем —
     # признаки неудачи приходят входящими пакетами, которых движок не видит.
     if [ -n "$_nfq_pid" ]; then
-        local _nfq_in
-        _nfq_in=$( ( (iptables -t mangle -L INPUT -n 2>/dev/null || true); \
-                     (iptables -t mangle -L FORWARD -n 2>/dev/null || true) ) | grep -c NFQUEUE || true)
-        [ "${_nfq_in:-0}" -eq 0 ] && \
-            _add "правила для входящих пакетов отсутствуют — обход работает, но стратегии перестанут переключаться сами"
+        local _nfq_c _nfq_out _nfq_in _nfq_ok
+        _nfq_c=$(nfqueue_counts)
+        _nfq_out=$(printf '%s' "$_nfq_c" | cut -d' ' -f1)
+        _nfq_in=$(printf '%s' "$_nfq_c" | cut -d' ' -f2)
+        _nfq_ok=$(printf '%s' "$_nfq_c" | cut -d' ' -f3)
+        # Читать не смогли — не судим вовсе. Иначе занятый xtables-lock печатает
+        # человеку «обход не работает» на исправном роутере.
+        if [ "$_nfq_ok" = "1" ]; then
+            # ИСХОДЯЩИЕ. Вердикт про них не спрашивал вообще: демон живой,
+            # правил в POSTROUTING нет — и сводка молчала, хотя десинк не
+            # применяется ни к одному пакету.
+            [ "${_nfq_out:-0}" -eq 0 ] && \
+                _add "правила для исходящих пакетов отсутствуют — движок запущен, но десинк не применяется ни к чему"
+            [ "${_nfq_in:-0}" -eq 0 ] && \
+                _add "правила для входящих пакетов отсутствуют — обход работает, но стратегии перестанут переключаться сами"
+            # ПОЛОВИНА правил. Тревожил только точный ноль, поэтому «1 из 4»
+            # проходило молча — а это, например, пропавший FORWARD целиком, то
+            # есть ротация не работает для клиентов сети, только для роутера.
+            [ "${_nfq_in:-0}" -gt 0 ] && [ "${_nfq_in:-0}" -lt 4 ] && \
+                _add "правил для входящих пакетов меньше, чем нужно (${_nfq_in} из 4) — ротация работает не для всех клиентов сети"
+            [ "${_nfq_out:-0}" -gt 0 ] && [ "${_nfq_out:-0}" -lt 2 ] && \
+                _add "правил для исходящих пакетов меньше, чем нужно (${_nfq_out} из 2) — часть трафика идёт мимо обхода"
+        fi
     fi
 
     if command -v df >/dev/null 2>&1; then
@@ -853,8 +975,20 @@ print_health() {
     # Туннель телеграма: бинарник на месте, а процесса нет. Это не «медленно»,
     # это телеграм не работает вообще.
     if [ -x /opt/sbin/tg-mtproxy-client ]; then
-        pgrep -f 'tg-mtproxy-client' >/dev/null 2>&1 || \
+        if tg_user_disabled; then
+            :
+        elif [ -z "$(tg_tunnel_pid)" ]; then
             _add "телеграм-туннель установлен, но не запущен — телеграм работать не будет"
+        else
+            # Процесс живой и правила стоят, а список подсетей дата-центров пуст:
+            # правило ссылается на ipset, в котором нечему совпасть, и трафик
+            # идёт мимо туннеля. В деталях это видно строкой «TG ipset
+            # z2k_tg_dc: 0», в вердикте не было ничего.
+            local _tgset
+            _tgset=$( (ipset list z2k_tg_dc 2>/dev/null || true) | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+            [ "${_tgset:-0}" -eq 0 ] && \
+                _add "список подсетей телеграма пуст — правила редиректа ссылаются на пустой ipset, трафик идёт мимо туннеля"
+        fi
 
         # А ЕЩЁ ПРАВИЛА РЕДИРЕКТА. Процесс может быть живым, слушать свой порт
         # и при этом не получать ни одного пакета: без правил в nat трафик к
@@ -1156,10 +1290,17 @@ fi
 # «(file missing: ...)» первым же, что видит человек. А трёх, где как раз лежат
 # ответы на «после обновления сломалось», в списке не было вовсе. Это важно
 # именно сейчас: раздел «Логи» снят, и диагностика объявлена его заменой.
+# Секция обещает «ошибки из ВСЕХ логов». Пять файлов в списке не значились, и
+# ровно в них лежит причина двух самых частых обращений: «панель не открывается»
+# и «детектор молчит». Отсутствующие файлы пропускаются сами ([ -r ]), так что
+# лишних строк на роутере без этих подсистем не будет.
 Z2K_DIAG_LOGS="/opt/var/log/z2k-auto-update.log /opt/var/log/z2k-scheduler.log
 /opt/zapret2/update-lists.log /tmp/z2k-log/tg-tunnel.log
 /tmp/z2k-log/z2k-warp.log /tmp/z2k-log/z2k-rt-proxy.log /tmp/z2k-log/z2k-http-tunnel.log
-/tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-webpanel-error.log"
+/tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-webpanel-error.log
+/var/log/z2k-detect.log /opt/var/log/z2k-detect-watchdog.log
+/tmp/z2k-log/z2k-webpanel-sup.log /tmp/z2k-log/z2k-webpanel-startcheck.log
+/tmp/z2k-log/z2k-webpanel-wait.log"
 
 print_logs() {
     printf '\n=== errors across all logs ===\n'
@@ -1197,8 +1338,16 @@ _print_errors_section() {
         # cut -c1-200 — в scheduler.log целиком печатаются строки NFQWS2_OPT, где
         # «fails=3» матчится на «fail»; без обрезки одна такая строка съедает
         # весь бюджет секции.
-        hits=$(grep -iE 'error|fail|fatal|panic|refused|denied|timeout|cannot|unable' "$f" 2>/dev/null \
-               | grep -vE 'fail=0|failed=0|0 failed|0 errors|errors=0|error=0' \
+        # ВКЛЮЧАЮЩИЙ фильтр был только английским, а половина наших сообщений —
+        # русские: «не удалось», «ОТКАЗ», «туннель НЕ поднялся» не попадали в
+        # секцию вовсе, хотя именно их человек и присылает.
+        #
+        # ИСКЛЮЧАЮЩИЙ: '0 failed' стоял без границы слева, поэтому выбрасывал и
+        # «10 failed», и «100 failed» — то есть глушил ровно те строки, ради
+        # которых секция существует. Прижимаем к началу строки или к неразрядной
+        # позиции слева.
+        hits=$(grep -iE 'error|fail|fatal|panic|refused|denied|timeout|cannot|unable|не удалось|отказ|не поднялся|не запустил|ошибка|таймаут' "$f" 2>/dev/null \
+               | grep -vE 'fail=0|failed=0|(^|[^0-9])0 failed|(^|[^0-9])0 errors|errors=0|error=0' \
                | grep -vE '^[[:space:]]*--|--lua-desync|--hostlist|--filter-' \
                | cut -c1-200 \
                | tail -40 \

@@ -30,7 +30,9 @@ no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-DIAG="$ROOT/files/z2k-diag.sh"
+# Шов для негативной проверки: подставить прежнюю версию файла и убедиться, что
+# набор её ловит. Соседний test_diag_reports_strategies.sh имеет такой же.
+DIAG="${Z2K_DIAG_UNDER_TEST:-$ROOT/files/z2k-diag.sh}"
 [ -f "$DIAG" ] || { printf '[FAIL] нет %s\n' "$DIAG"; exit 1; }
 
 TMP=$(mktemp -d) || exit 1
@@ -87,6 +89,37 @@ if [ "$_out" = "1 1" ]; then
     ok "с правилами помощник считает их обоих"
 else
     no "счёт правил" "1 1" "$_out"
+fi
+
+# --- 4. Занятый xtables-lock не превращается в «правил нет» -------------------
+#
+# ПОЛЕВОЙ СЛУЧАЙ 2026-08-23. В сводке: «правила редиректа телеграма отсутствуют
+# (PREROUTING=0, OUTPUT=1)». В том же файле пятью строками ниже: «TG REDIR
+# PREROUT: 1», а в логе туннеля — CONNECT_OK. Телеграм работал.
+#
+# Причина: чтение шло без -w. NDM правит правила постоянно, и при занятом
+# xtables-lock iptables падает с пустым выводом — grep -c даёт 0, и сводка
+# объявляет правила пропавшими на исправном роутере, отправляя человека
+# переустанавливать z2k.
+#
+# Заглушка моделирует именно это: без -w команда проигрывает гонку за блокировку
+# и не печатает ничего, с -w дожидается и печатает правило.
+cat > "$TMP/bin/iptables" <<'STUB'
+#!/bin/sh
+_w=0
+for a in "$@"; do [ "$a" = "-w" ] && _w=1; done
+if [ "$_w" = "0" ]; then
+    echo "iptables: Resource temporarily unavailable." >&2
+    exit 4
+fi
+echo "REDIRECT   tcp  --  0.0.0.0/0   0.0.0.0/0   match-set z2k_tg_dc dst tcp dpt:443 redir ports 1443"
+STUB
+chmod +x "$TMP/bin/iptables"
+_out=$( PATH="$TMP/bin:$PATH"; . "$TMP/fn.sh"; tg_redirect_counts )
+if [ "$_out" = "1 1" ]; then
+    ok "занятый xtables-lock не читается как «правил нет» (-w на месте)"
+else
+    no "ожидание блокировки xtables" "1 1" "$_out — читаем без -w, гонка с NDM даёт ложную тревогу"
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"

@@ -81,6 +81,19 @@ counts() {  # counts <аргументы командной строки чер�
 r=$(counts '--lua-desync=circular:key=a|--lua-desync=fake:strategy=1|--lua-desync=fake:strategy=2|--new|--lua-desync=circular:key=b|--lua-desync=fake:strategy=1|--lua-desync=multisplit:strategy=1')
 if [ "$r" = "3 2 0" ]; then ok "норма: 3 плеча в 2 пулах, мёртвых нет"; else no "норма" "3 2 0" "$r"; fi
 
+# ПОЛЕВОЙ СЛУЧАЙ 2026-08-23 (r-78, свежая установка с форматированием). Плечи
+# профиля могут приезжать НЕ своими токенами, а импортом шаблона: у rkn_tcp в
+# боевом конфиге стоит `--lua-desync=circular:...key=rkn_tcp... --import=...`,
+# и ни одного strategy= в самом профиле нет. Проверка объявила такой пул мёртвым
+# и написала человеку «переустановите z2k» — на исправном роутере, где все 117
+# плеч были на месте. Импортирующий профиль мёртвым НЕ считается.
+r=$(counts '--template=arsenal|--lua-desync=fake:strategy=1|--lua-desync=fake:strategy=2|--new|--lua-desync=circular:key=rkn_tcp|--import=arsenal')
+if [ "$r" = "2 1 0" ]; then
+    ok "пул с плечами из импортированного шаблона не считается мёртвым"
+else
+    no "импорт шаблона = живой пул" "2 1 0" "$r"
+fi
+
 # ГЛАВНОЕ. Пул, приехавший ОДНИМ circular-заголовком: circular есть, перебирать
 # нечего. Старый счёт токенов рапортовал это как живой пул.
 r=$(counts '--lua-desync=circular:key=a|--lua-desync=fake:strategy=1|--lua-desync=fake:strategy=2|--new|--lua-desync=circular:key=b')
