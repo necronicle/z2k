@@ -51,22 +51,11 @@ show_main_menu() {
 |          z2k - Zapret2 для Keenetic               |
 +---------------------------------------------------+
 |  Огромная благодарность спонсорам проекта:        |
-|  - SupWgeneral                                    |
-|  - Alexey                                         |
-|  - Jet_sk_ya                                      |
-|  - Suharik39                                      |
-|  - ZyaK<-                                         |
-|  - Алексей Стрельцов                              |
-|  - Diman86RUS                                     |
-|  - Alex                                           |
-|  - GRM                                            |
-|  - Dez                                            |
-|  - hoaxx                                          |
-|  - Mansurchick                                    |
-|  - Dkarloff - SEO отец                            |
-|  - KIBERPANK                                      |
-|  - olmer2002                                      |
-|  - TiaMax                                         |
+|  SupWgeneral, Alexey, Jet_sk_ya, Suharik39,       |
+|  ZyaK<-, Алексей Стрельцов, Diman86RUS, Alex,     |
+|  GRM, Dez, hoaxx, Mansurchick,                    |
+|  Dkarloff - SEO отец, KIBERPANK, olmer2002,       |
+|  TiaMax, Denis, Mega Man                          |
 +===================================================+
 
 MENU
