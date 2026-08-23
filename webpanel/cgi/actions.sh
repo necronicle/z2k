@@ -1523,6 +1523,72 @@ warp_devices_read() {
     return 0
 }
 
+# Устройства в сети — из Keenetic (`show ip hotspot`): имя, которое юзер дал
+# устройству в веб-интерфейсе роутера, hostname, IP, сеть, онлайн. TSV:
+#   mac<TAB>ip<TAB>label<TAB>net<TAB>active(0/1)<TAB>on(0/1)
+# on — MAC уже в devices.txt. Без ndmc (не Keenetic / тесты) — пусто.
+# WARP_NDMC — стаб в тестах.
+warp_neighbors() {
+    local ndmc_bin="${WARP_NDMC:-ndmc}"
+    [ -x /bin/ndmc ] && [ -z "${WARP_NDMC:-}" ] && ndmc_bin="/bin/ndmc"
+    command -v "$ndmc_bin" >/dev/null 2>&1 || return 0
+    local sel="$WARP_LISTS_DIR/devices.txt"
+    [ -f "$sel" ] || sel=/dev/null
+    LD_LIBRARY_PATH= "$ndmc_bin" -c "show ip hotspot" 2>/dev/null | awk -v sel="$sel" '
+    BEGIN {
+        while ((getline l < sel) > 0) {
+            gsub(/\r/, "", l); gsub(/^[ \t]+|[ \t]+$/, "", l); l = tolower(l); gsub(/-/, ":", l)
+            if (l ~ /^([0-9a-f][0-9a-f]:)+[0-9a-f][0-9a-f]$/) on[l] = 1
+        }
+    }
+    function flush() {
+        if (mac == "") return
+        # Авто-имя Keenetic «<mac|host> - Home network - 2026-01-24» — не имя:
+        # берём hostname, а без него — часть до « - ».
+        if (name ~ / - [^-]* network -/) {
+            base = name; sub(/ - .*$/, "", base)
+            name = (host != "") ? host : base
+        }
+        label = name; if (label == "") label = host; if (label == "") label = mac
+        if (ip == "0.0.0.0") ip = ""
+        printf "%s\t%s\t%s\t%s\t%d\t%d\n", mac, ip, label, net, active, (mac in on)
+        mac = ""; ip = ""; host = ""; name = ""; net = ""; active = 0
+    }
+    {
+        sub(/^[ \t]+/, ""); k = $1; sub(/^[^:]*:[ \t]*/, ""); v = $0
+        if (k == "mac:") { flush(); mac = tolower(v) }
+        else if (k == "ip:") ip = v
+        else if (k == "hostname:") host = v
+        else if (k == "name:" && net == "" && mac != "" && !iface) { name = v }
+        else if (k == "interface:") iface = 1
+        else if (k == "name:" && iface) { net = v; iface = 0 }
+        else if (k == "active:") active = (v == "yes")
+    }
+    END { flush() }' | awk -F'\t' '{ gsub(/"/, "", $3); print }' OFS='\t' | sort -t "$(printf '\t')" -k5,5r -k3,3f
+}
+
+# Включить/выключить устройство по MAC: строка в devices.txt добавляется или
+# убирается; ручные строки (IP, чужие MAC) не трогаются.
+warp_device_toggle() {
+    local mac val="$2" f="$WARP_LISTS_DIR/devices.txt" tmp
+    mac=$(printf '%s' "$1" | tr 'A-Z-' 'a-z:')
+    case "$mac" in
+        ??:??:??:??:??:??) ;;
+        *) return 1 ;;
+    esac
+    case "$mac" in *[!0-9a-f:]*) return 1 ;; esac
+    warp_lists_ensure_dir || return 1
+    tmp="$WARP_LISTS_DIR/.devices.$$"
+    {
+        [ -f "$f" ] && awk -v m="$mac" '{ l = tolower($0); gsub(/-/, ":", l); gsub(/^[ \t]+|[ \t]+$/, "", l); if (l != m) print }' "$f"
+        [ "$val" = "1" ] && printf '%s\n' "$mac"
+        true
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$f" && chmod 644 "$f"
+    warp_ipset_reload_if_enabled
+    return 0
+}
+
 warp_devices_save() {
     # stdin → devices.txt; stdout: "entries=N dropped=M"
     warp_lists_ensure_dir || return 1

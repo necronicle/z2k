@@ -84,33 +84,20 @@ func cmdRegister(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if d, err := account.Load(*devPath); err == nil && d.ID != "" {
-		err := client.Refresh(ctx, d)
-		switch {
-		case err == nil:
-			if err := d.Save(*devPath); err != nil {
-				fmt.Fprintln(os.Stderr, "save:", err)
-				return 1
-			}
-			fmt.Println("device ok", d.ID)
-			return 0
-		case errors.Is(err, account.ErrRevoked):
-			fmt.Fprintln(os.Stderr, status.ErrDeviceRevoked, "— registering a new device")
-		default:
-			fmt.Fprintln(os.Stderr, status.ErrRegisterBlocked, err)
-			return 1
-		}
-	}
-	d, err := client.Register(ctx)
+	d, created, err := client.Ensure(ctx, *devPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, status.ErrRegisterBlocked, err)
+		if errors.Is(err, account.ErrRevoked) {
+			fmt.Fprintln(os.Stderr, status.ErrDeviceRevoked, err)
+		} else {
+			fmt.Fprintln(os.Stderr, status.ErrRegisterBlocked, err)
+		}
 		return 1
 	}
-	if err := d.Save(*devPath); err != nil {
-		fmt.Fprintln(os.Stderr, "save:", err)
-		return 1
+	if created {
+		fmt.Println("registered", d.ID)
+	} else {
+		fmt.Println("device ok", d.ID)
 	}
-	fmt.Println("registered", d.ID)
 	return 0
 }
 

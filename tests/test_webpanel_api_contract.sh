@@ -238,6 +238,35 @@ assert_eq "devices.txt — MAC нормализован"     "aa:bb:cc:dd:ee:ff"
 OUT=$(cgi GET /warp/devices "")
 assert_eq "warp/devices — text/plain"          "1" "$(printf '%s' "$OUT" | grep -c 'Content-Type: text/plain')"
 assert_eq "warp/devices — отдаёт сохранённое"  "1" "$(printf '%s' "$OUT" | grep -c '^11:22:33:44:55:66$')"
+
+# Соседи из Keenetic: стаб ndmc отдаёт формат `show ip hotspot`.
+cat > "$SB/ndmc-stub" <<'NSTUB'
+#!/bin/sh
+printf '                  mac: 6c:15:db:10:cc:7a\n                   ip: 10.1.30.147\n             hostname: LGwebOSTV\n                 name: Телевизор "LG"\n            interface: \n                     name: Guest\n           registered: yes\n               active: yes\n'
+printf '                  mac: AA:BB:CC:DD:EE:FF\n                   ip: 192.168.1.77\n             hostname: PS5-xyz\n                 name: aa:bb:cc:dd:ee:ff - Home network - 2026-01-24\n            interface: \n                     name: Home\n           registered: no\n               active: no\n'
+NSTUB
+chmod +x "$SB/ndmc-stub"; WARP_NDMC="$SB/ndmc-stub"; export WARP_NDMC
+OUT=$(cgi GET /warp/neighbors "" | cgi_body)
+assert_eq "warp/neighbors — валидный JSON"      "1" "$(json_ok_p "$OUT")"
+assert_eq "warp/neighbors — два устройства"     "2" "$(jget "$OUT" 'len(d["devices"])')"
+assert_eq "warp/neighbors — имя из Keenetic без кавычек" "Телевизор LG" "$(jget "$OUT" '[x for x in d["devices"] if x["mac"]=="6c:15:db:10:cc:7a"][0]["label"]')"
+assert_eq "warp/neighbors — hostname вместо авто-имени Keenetic" "PS5-xyz" "$(jget "$OUT" '[x for x in d["devices"] if x["mac"]=="aa:bb:cc:dd:ee:ff"][0]["label"]')"
+assert_eq "warp/neighbors — on по devices.txt"  "true" "$(jget "$OUT" '[x for x in d["devices"] if x["mac"]=="aa:bb:cc:dd:ee:ff"][0]["on"]')"
+assert_eq "warp/neighbors — сеть"               "Guest" "$(jget "$OUT" 'd["devices"][0]["net"]')"
+assert_eq "warp/neighbors — активные первыми"   "6c:15:db:10:cc:7a" "$(jget "$OUT" 'd["devices"][0]["mac"]')"
+printf 'mac=6c:15:db:10:cc:7a&value=1\n' > "$SB/tg.body"
+OUT=$(cgi POST /warp/devices/toggle "" "$SB/tg.body" | cgi_body)
+assert_eq "warp/devices/toggle on — ok"        "true" "$(jget "$OUT" 'd["ok"]')"
+assert_eq "devices.txt — MAC добавлен"         "1" "$(grep -c '^6c:15:db:10:cc:7a$' "$WARP_LISTS_DIR/devices.txt")"
+printf 'mac=AA-BB-CC-DD-EE-FF&value=0\n' > "$SB/tg.body"
+OUT=$(cgi POST /warp/devices/toggle "" "$SB/tg.body" | cgi_body)
+assert_eq "warp/devices/toggle off — ok"       "true" "$(jget "$OUT" 'd["ok"]')"
+assert_eq "devices.txt — MAC убран"            "0" "$(grep -c 'aa:bb:cc:dd:ee:ff' "$WARP_LISTS_DIR/devices.txt")"
+assert_eq "devices.txt — ручная строка цела"   "1" "$(grep -c '^192.168.1.5$' "$WARP_LISTS_DIR/devices.txt")"
+printf 'mac=zz&value=1\n' > "$SB/tg.body"
+OUT=$(cgi POST /warp/devices/toggle "" "$SB/tg.body" | cgi_body)
+assert_eq "warp/devices/toggle bad mac — ok:false" "false" "$(jget "$OUT" 'd["ok"]')"
+unset WARP_NDMC
 printf 'ENABLED=1\n' > "$CONFIG_FILE"
 
 printf "\n--- /state: битое 4-е поле не роняет весь ответ ---\n"

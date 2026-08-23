@@ -388,6 +388,29 @@ func (c *Client) SwitchTunnel(ctx context.Context, d *Device, tunnel string) err
 	return nil
 }
 
+// Ensure — «устройство есть и живо»: существующий device.json проверяется
+// через GET (и обновляется), новое устройство заводится ТОЛЬКО если файла нет
+// или Cloudflare отозвал старое (ErrRevoked). Сетевая ошибка на GET — это
+// ошибка, а не повод регистрироваться заново: лимит устройств на аккаунте
+// конечен, и каждая лишняя регистрация его съедает. Возвращает true, если
+// устройство создано заново.
+func (c *Client) Ensure(ctx context.Context, path string) (*Device, bool, error) {
+	if d, err := Load(path); err == nil && d.ID != "" {
+		err := c.Refresh(ctx, d)
+		if err == nil {
+			return d, false, d.Save(path)
+		}
+		if !errors.Is(err, ErrRevoked) {
+			return nil, false, err
+		}
+	}
+	d, err := c.Register(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	return d, true, d.Save(path)
+}
+
 // Reserved — три байта client_id, которые несёт заголовок каждого WG-пакета.
 func (d *Device) Reserved() ([3]byte, error) {
 	var r [3]byte

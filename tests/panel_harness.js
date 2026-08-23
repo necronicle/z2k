@@ -105,6 +105,8 @@ const FIXTURES = {
     ? { ok:true, enabled:"0", installed:false, ready:false, transport:"", endpoint:"", iface:"", addr:"", entries:0, devices:0, error:"" }
     : { ok:true, enabled:"1", installed:true, ready:true, transport:"wg", endpoint:"8.6.112.0:2408", iface:"z2ktun0", addr:"172.16.0.2", entries:1234, devices:2, error:"" },
   "/warp/devices": "192.168.1.50\naa:bb:cc:dd:ee:ff\n",
+  "/warp/neighbors": { ok:true, devices:[{mac:"aa:bb:cc:dd:ee:ff",ip:"192.168.1.77",label:"PS5",net:"Home",active:true,on:true},
+    {mac:"11:22:33:44:55:66",ip:"192.168.1.78",label:"iPhone",net:"Home",active:false,on:false}] },
   "/warp/games": { ok:true, games:[{name:"ApexLegends",entries:42,on:1},{name:"Valorant",entries:13,on:0}] },
   "/warp/lists": { ok:true, lists:[{name:"custom",entries:5,size:120,mtime:1785830000}] },
   "/warp/list": { ok:true, name:"custom", content:"1.2.3.4\n5.6.7.8" },

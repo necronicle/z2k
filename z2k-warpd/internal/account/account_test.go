@@ -207,6 +207,53 @@ func TestSwitchTunnelMasqueThenBack(t *testing.T) {
 	}
 }
 
+func TestEnsureExistingDeviceIsNotReRegistered(t *testing.T) {
+	posts := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST":
+			posts++
+			w.Write([]byte(regBody))
+		case r.Method == "PATCH":
+			w.Write([]byte(`{"warp_enabled":true}`))
+		case r.Method == "GET" && r.URL.Path == "/v0a2158/reg/dev1":
+			w.Write([]byte(regBody))
+		case r.Method == "GET" && r.URL.Path == "/v0a2158/reg/gone":
+			w.WriteHeader(404)
+		case r.Method == "GET" && r.URL.Path == "/v0a2158/reg/flaky":
+			w.WriteHeader(503)
+		default:
+			w.WriteHeader(500)
+		}
+	}))
+	defer s.Close()
+	c := &Client{BaseURL: s.URL, HTTP: s.Client()}
+	p := filepath.Join(t.TempDir(), "device.json")
+
+	// нет файла → регистрация
+	d, created, err := c.Ensure(context.Background(), p)
+	if err != nil || !created || d.ID != "dev1" || posts != 1 {
+		t.Fatalf("fresh: created=%v err=%v posts=%d", created, err, posts)
+	}
+	// файл есть, GET 200 → без POST
+	d, created, err = c.Ensure(context.Background(), p)
+	if err != nil || created || posts != 1 {
+		t.Fatalf("existing: created=%v err=%v posts=%d", created, err, posts)
+	}
+	// файл есть, GET 503 → ошибка, без POST (не сжигать устройство на сетевой ошибке)
+	d.ID = "flaky"
+	d.Save(p)
+	if _, created, err = c.Ensure(context.Background(), p); err == nil || created || posts != 1 {
+		t.Fatalf("flaky: created=%v err=%v posts=%d", created, err, posts)
+	}
+	// файл есть, GET 404 (отозвано) → новая регистрация
+	d.ID = "gone"
+	d.Save(p)
+	if _, created, err = c.Ensure(context.Background(), p); err != nil || !created || posts != 2 {
+		t.Fatalf("revoked: created=%v err=%v posts=%d", created, err, posts)
+	}
+}
+
 func TestReservedRejectsBadClientID(t *testing.T) {
 	d := &Device{ClientID: "!!"}
 	if _, err := d.Reserved(); err == nil {

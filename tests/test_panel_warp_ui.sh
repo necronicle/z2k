@@ -23,6 +23,9 @@ assert_eq "remove posts /warp/remove"        "1" "$(count '"/warp/remove"')"
 assert_eq "devices: GET"                     "1" "$(count '"/warp/devices"')"
 assert_eq "devices: save"                    "1" "$(count '"/warp/devices/save"')"
 assert_eq "devices textarea"                 "1" "$(count 'id="warp-devices"')"
+assert_eq "devices: neighbors list"          "1" "$(count '"/warp/neighbors"')"
+assert_eq "devices: per-device toggle"       "1" "$(count '"/warp/devices/toggle"')"
+assert_eq "no «адрес(ов)» wording"           "0" "$(count 'адрес(ов)')"
 for code in register_blocked device_revoked no_endpoint tun_failed; do
     assert_eq "error text for $code"         "1" "$(count "$code:")"
 done

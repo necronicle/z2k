@@ -1600,6 +1600,13 @@ input[type=text]:focus, input[type=password]:focus {
   letter-spacing: 0.02em;
 }
 
+/* hidden — значит скрыт. Авторские display у .btn, .switch и прочих перебивали
+   UA-правило [hidden]{display:none} по специфичности; это ловилось уже трижды
+   точечно (.tg-state-badge, .job-link, кнопки дашборда через style.display)
+   и в четвёртый раз дало кнопку «Удалить WARP» на странице без WARP. Закрыто
+   классом целиком. */
+[hidden] { display: none !important; }
+
 /* ---------- WARP SECTION ---------- */
 /* The status grid sits under the toggle-row's border-bottom (the toggle→status
    divider). The shared .toggle-row has padding:12px 0 above that border but the
@@ -1609,9 +1616,33 @@ input[type=text]:focus, input[type=password]:focus {
    4-col track left an empty slot. auto-fit spreads the 3 cells edge-to-edge on
    wide screens and wraps cleanly on narrow ones. */
 #warp-status-grid {
-  margin-top: 16px;
+  margin-top: 12px;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
+
+/* Игровые списки: 22 строки по 58px делали страницу нечитаемой. Компактная
+   строка — имя и счётчик в одну линию, на ширине ≥720px в две колонки. */
+.warp-games {
+  display: grid;
+  grid-template-columns: 1fr;
+  column-gap: 24px;
+}
+@media (min-width: 720px) { .warp-games { grid-template-columns: 1fr 1fr; } }
+.warp-games > .desc { grid-column: 1 / -1; }
+.warp-games .toggle-row { padding: 6px 0; gap: 10px; }
+.warp-games .t-text { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.warp-games .t-name { font-weight: 500; font-size: 13px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warp-games .t-desc { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.warp-games .switch { flex-shrink: 0; }
+.warp-games .t-name { flex-shrink: 1; }
+.warp-games > .warp-offline { grid-column: 1 / -1; margin-top: 8px; }
+.warp-offline summary { cursor: pointer; font-size: 13px; color: var(--text-muted); padding: 6px 0; }
+
+/* Устройства — обычно 1-5 строк; 320px пустого поля были провалом. */
+textarea.warp-editor.warp-devices { min-height: 96px; height: 96px; }
+.warp-manual { margin-top: 10px; }
+.warp-manual summary { cursor: pointer; font-size: 13px; color: var(--text-muted); }
+.warp-manual[open] summary { margin-bottom: 8px; }
 
 /* ---------- WARP LISTS ---------- */
 /* Row content in the lists <ul>: name on top, muted meta underneath. Action

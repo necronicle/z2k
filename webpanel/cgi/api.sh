@@ -599,6 +599,32 @@ case "$method $path" in
         exit 0
         ;;
 
+    # Устройства в сети роутера с отметкой, кто уже в WARP.
+    "GET /warp/neighbors")
+        json_header
+        printf '{"ok":true,"devices":['
+        _first=1
+        warp_neighbors | while IFS="$(printf '\t')" read -r n_mac n_ip n_label n_net n_active n_on; do
+            [ "$_first" = 1 ] || printf ','
+            _first=0
+            printf '{"mac":'; json_string "$n_mac"
+            printf ',"ip":';  json_string "$n_ip"
+            printf ',"label":'; json_string "$n_label"
+            printf ',"net":'; json_string "$n_net"
+            printf ',"active":%s,"on":%s}' "$([ "$n_active" = 1 ] && echo true || echo false)" "$([ "$n_on" = 1 ] && echo true || echo false)"
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+    "POST /warp/devices/toggle")
+        body=$(read_body)
+        n_mac=$(form_value "$body" "mac")
+        n_val=$(form_value "$body" "value")
+        case "$n_val" in 0|1) ;; *) json_fail "400 Bad Request" "value must be 0 or 1" ;; esac
+        warp_device_toggle "$n_mac" "$n_val" || json_fail "400 Bad Request" "bad mac or save failed"
+        json_ok
+        ;;
+
     # Устройства «всё в WARP»: text/plain, как /warp/list.
     "GET /warp/devices")
         printf 'Content-Type: text/plain; charset=utf-8\r\n\r\n'

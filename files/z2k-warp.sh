@@ -314,15 +314,19 @@ warp_fetch_engine() {
         want=$(warp_expected_sha "$arch")
         if [ -x "$WARP_BIN" ] && [ -n "$want" ] && command -v z2k_sha256_file >/dev/null 2>&1; then
             have=$(z2k_sha256_file "$WARP_BIN" 2>/dev/null)
-            [ "$have" = "$want" ] && return 0     # уже актуальный
+            [ "$have" = "$want" ] && { _wlog "движок уже актуален ($arch)"; return 0; }
         fi
         local url="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}/z2k-warpd/builds/z2k-warpd-linux-$arch"
+        # Прогресс — в stderr: это лог job'а в панели. Скачивание ~7 МБ на плохой
+        # связи идёт минуты, и молчание выглядело как зависшая установка.
+        _wlog "скачиваю движок ($arch, ~7 МБ) — на медленной связи до 3 минут..."
         if command -v z2k_fetch >/dev/null 2>&1; then
             z2k_fetch "$url" "$tmp" 2>/dev/null || curl -sSL --max-time 180 "$url" -o "$tmp"
         else
             curl -sSL --max-time 180 "$url" -o "$tmp"
         fi
         rm -f "$tmp.etag" 2>/dev/null
+        [ -s "$tmp" ] && _wlog "скачано: $(wc -c < "$tmp" | tr -d ' ') байт, проверяю..."
         if [ -n "$want" ] && command -v z2k_sha256_file >/dev/null 2>&1; then
             have=$(z2k_sha256_file "$tmp" 2>/dev/null)
             [ "$have" = "$want" ] || { _wlog "sha256 mismatch for engine ($arch)"; rm -f "$tmp"; return 1; }
@@ -336,6 +340,7 @@ warp_fetch_engine() {
     "$tmp" version >/dev/null 2>&1 || { _wlog "engine does not run on this architecture"; rm -f "$tmp"; return 1; }
     mkdir -p "$(dirname "$WARP_BIN")" 2>/dev/null
     mv -f "$tmp" "$WARP_BIN" || { rm -f "$tmp"; return 1; }
+    _wlog "движок установлен: $WARP_BIN"
     return 0
 }
 
@@ -345,12 +350,17 @@ warp_install() {
     # Регистрация: есть device.json — проверка, нет — новое устройство.
     # Напрямую (десинк nfqws2), затем через VPS-релей. Ничего не запускается.
     local out
+    if [ -s "$WARP_DEVICE" ]; then
+        _wlog "ключ устройства уже есть — проверяю у Cloudflare (новое устройство не создаётся)..."
+    else
+        _wlog "регистрирую устройство у Cloudflare (до минуты)..."
+    fi
     if out=$("$WARP_BIN" register --device "$WARP_DEVICE" 2>&1); then
         _wlog "$out"; return 0
     fi
-    _wlog "direct registration failed: $out"
+    _wlog "напрямую не вышло ($out) — пробую через релей..."
     if [ -n "$WARP_VPS_PROXY" ] && out=$("$WARP_BIN" register --device "$WARP_DEVICE" --proxy "$WARP_VPS_PROXY" 2>&1); then
-        _wlog "registered via relay: $out"; return 0
+        _wlog "через релей: $out"; return 0
     fi
     _wlog "${out:-register_blocked}"
     return 1

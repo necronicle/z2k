@@ -23,6 +23,16 @@ function warpNameValid(n) {
   return /^[A-Za-z0-9._-]{1,64}$/.test(n) && !/^[.-]/.test(n);
 }
 
+// «1 адрес, 2 адреса, 5 адресов» — а не скобочная форма.
+function plural(n, one, few, many) {
+  n = Math.abs(Number(n) || 0);
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return `${n} ${one}`;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} ${few}`;
+  return `${n} ${many}`;
+}
+const addrs = n => plural(n, "адрес", "адреса", "адресов");
+
 function fmtSize(b) {
   b = Number(b) || 0;
   if (b < 1024) return b + " Б";
@@ -37,23 +47,18 @@ export async function renderWarp() {
       <div class="toggle-row" data-key="game_warp">
         <div class="t-text">
           <div class="t-name">WARP-туннель</div>
-          <div class="t-desc">Заворачивает трафик к адресам из списков ниже и к выбранным
-            устройствам в туннель Cloudflare WARP. Помогает сервисам, заблокированным
-            по IP: игровым серверам, хостингам, диапазонам Cloudflare/AWS из списка РКН.
-            Транспорт выбирается сам: WireGuard, а если провайдер режет UDP —
-            MASQUE по TCP 443. Это не десинк, а туннель: трафик к этим адресам идёт
-            через Cloudflare и может быть медленнее прямого.</div>
+          <div class="t-desc">Туннель Cloudflare для игр и сервисов, заблокированных по IP.
+            В него идут адреса из списков ниже и выбранные устройства; остальной трафик — напрямую.</div>
         </div>
         <label class="switch" id="warp-switch" hidden>
           <input type="checkbox" disabled>
           <span class="slider"></span>
         </label>
       </div>
-      <div class="status-grid" id="warp-status-grid">${skeletonBlocks(3)}</div>
-      <div class="btn-row" id="warp-actions" style="margin-top:10px" hidden>
+      <div class="status-grid" id="warp-status-grid" hidden></div>
+      <div class="btn-row" id="warp-actions" style="margin-top:12px;align-items:center;flex-wrap:wrap" hidden>
         <button class="btn btn-primary" id="warp-install-btn" hidden>Установить WARP</button>
-        <span class="desc" id="warp-install-note" hidden>Скачает движок (~7 МБ) и зарегистрирует
-          устройство у Cloudflare. Ничего не запускается, пока не включите тумблер.</span>
+        <span class="desc" id="warp-install-note" style="margin:0" hidden>~7 МБ; регистрирует устройство у Cloudflare. Ничего не запускается, пока не включите тумблер.</span>
         <button class="btn btn-danger" id="warp-remove-btn" hidden>Удалить WARP</button>
       </div>
     </div>
@@ -65,21 +70,24 @@ export async function renderWarp() {
         чем меньше адресов в туннеле, тем меньше на него завязано. Списки только для
         чтения; свои адреса добавляйте ниже, отдельным списком.
       </p>
-      <div id="warp-games">${skeletonBlocks(3)}</div>
+      <div id="warp-games" class="warp-games">${skeletonBlocks(3)}</div>
     </div>
     <div class="card" id="warp-devices-card" hidden>
       <h3>Устройства</h3>
-      <p class="desc">
-        Весь трафик устройства — в WARP, независимо от списков. Одна строка —
-        один IP (<code>192.168.1.50</code>) или MAC (<code>aa:bb:cc:dd:ee:ff</code>);
-        MAC удобнее: адрес может меняться. <b>Применяется сразу.</b>
-      </p>
-      <textarea id="warp-devices" class="warp-editor" spellcheck="false"
-                autocomplete="off" autocapitalize="off" autocorrect="off"
-                placeholder="192.168.1.50"></textarea>
-      <div class="btn-row" style="margin-top:10px">
-        <button class="btn btn-primary" id="warp-devices-save">Сохранить</button>
-      </div>
+      <p class="desc">Включите устройство — и весь его трафик пойдёт через WARP, независимо от
+        списков. Удобно для консоли или телефона. <b>Применяется сразу.</b></p>
+      <div id="warp-neighbors" class="warp-games">${skeletonBlocks(2)}</div>
+      <details class="disclosure warp-manual">
+        <summary>Вручную: IP или MAC по строке</summary>
+        <p class="desc">Для устройств, которых нет в списке выше: <code>192.168.1.50</code> или
+          <code>aa:bb:cc:dd:ee:ff</code>. Переключатели выше пишут сюда же.</p>
+        <textarea id="warp-devices" class="warp-editor warp-devices" spellcheck="false"
+                  autocomplete="off" autocapitalize="off" autocorrect="off"
+                  placeholder="192.168.1.50"></textarea>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-primary" id="warp-devices-save">Сохранить</button>
+        </div>
+      </details>
     </div>
     <div class="card">
       <h3>Списки адресов</h3>
@@ -127,8 +135,73 @@ export async function renderWarp() {
   loadWarpStatus();
   loadWarpGames();
   loadWarpLists();
+  loadWarpNeighbors();
   loadWarpDevices();
   _updateGlobalUILock();
+}
+
+// Устройства в сети — из Keenetic (имя, которое дали роутеру, иначе hostname).
+// Тумблер пишет MAC в devices.txt; остальное там не трогается.
+async function loadWarpNeighbors() {
+  const host = document.getElementById("warp-neighbors");
+  if (!host) return;
+  const seq = _newLoad("warpNeighbors");
+  let d;
+  try {
+    d = await apiGet("/warp/neighbors");
+  } catch (e) {
+    if (_stale("warpNeighbors", seq)) return;
+    host.innerHTML = `<p class="desc">Не удалось получить список устройств: ${errHtml(e)}</p>`;
+    return;
+  }
+  if (_stale("warpNeighbors", seq)) return;
+  const devs = (d && d.devices) || [];
+  if (!devs.length) {
+    host.innerHTML = `<p class="desc">Роутер не отдал список устройств — добавьте вручную ниже.</p>`;
+    return;
+  }
+  const row = x => `
+    <div class="toggle-row" data-mac="${escapeHtml(x.mac)}">
+      <div class="t-text">
+        <div class="t-name" title="${escapeHtml(x.mac)}">${escapeHtml(x.label)}</div>
+        <div class="t-desc">${escapeHtml(x.ip || "—")}${x.net ? " · " + escapeHtml(x.net) : ""}</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" ${x.on ? "checked" : ""}>
+        <span class="slider"></span>
+      </label>
+    </div>`;
+  // Онлайн — сразу; не в сети (обычно десятки старых записей) — под
+  // раскрывашкой, но включённые показываем всегда: человек должен видеть,
+  // что его выключенная консоль уже настроена.
+  const online = devs.filter(x => x.active || x.on);
+  const offline = devs.filter(x => !x.active && !x.on);
+  host.innerHTML = online.map(row).join("") + (offline.length ? `
+    <details class="disclosure warp-offline">
+      <summary>Не в сети: ${offline.length}</summary>
+      <div class="warp-games">${offline.map(row).join("")}</div>
+    </details>` : "");
+  host.querySelectorAll("[data-mac] input").forEach(box => {
+    box.addEventListener("change", () => warpNeighborToggle(box));
+  });
+}
+
+async function warpNeighborToggle(box) {
+  const row = box.closest("[data-mac]");
+  const mac = row.dataset.mac;
+  const wanted = box.checked ? "1" : "0";
+  box.disabled = true;
+  try {
+    await apiPost("/warp/devices/toggle", { mac, value: wanted });
+    toast(wanted === "1" ? `${row.querySelector(".t-name").textContent} — через WARP` : `${row.querySelector(".t-name").textContent} — напрямую`);
+    loadWarpDevices();
+    loadWarpStatus();
+  } catch (e) {
+    box.checked = !box.checked;
+    toastErr("Не сохранилось: ", e);
+  } finally {
+    box.disabled = false;
+  }
 }
 
 // Upstream per-game lists: switches only. They are refreshed wholesale from
@@ -163,8 +236,8 @@ async function loadWarpGames() {
     ${games.map(g => `
       <div class="toggle-row" data-game="${escapeHtml(g.name)}">
         <div class="t-text">
-          <div class="t-name">${escapeHtml(g.name)}</div>
-          <div class="t-desc">${Number(g.entries) || 0} адрес(ов)</div>
+          <div class="t-name" title="${escapeHtml(g.name)}">${escapeHtml(g.name.replace(/_/g, " "))}</div>
+          <div class="t-desc">${addrs(g.entries)}</div>
         </div>
         <label class="switch">
           <input type="checkbox" ${(g.enabled === 1 || g.enabled === "1") ? "checked" : ""}>
@@ -219,6 +292,7 @@ async function loadWarpStatus() {
   const installNote = document.getElementById("warp-install-note");
   const removeBtn = document.getElementById("warp-remove-btn");
   sw.hidden = !installed;
+  grid.hidden = !installed;
   actions.hidden = false;
   installBtn.hidden = installed;
   installNote.hidden = installed;
@@ -240,7 +314,7 @@ async function loadWarpStatus() {
   }
 
   if (!installed) {
-    grid.innerHTML = `<div class="status-cell"><div class="label">Движок</div><div class="value">не установлен</div></div>`;
+    grid.innerHTML = "";
     return;
   }
   // Туннель — три состояния. ready = движок доказал, что трафик ходит
@@ -261,14 +335,12 @@ async function loadWarpStatus() {
     tunnelKind = "";
   }
   const transport = d.transport === "wg" ? "WireGuard" : d.transport === "h2" ? "MASQUE (TCP 443)" : "—";
+  // Две ячейки, не четыре: счётчики адресов и устройств и так видны в своих
+  // карточках ниже, а пустые «—» только раздували шапку.
   const cells = [
     { label: "Туннель", value: tunnelValue, kind: tunnelKind },
     { label: "Транспорт", value: d.ready ? transport + (d.endpoint ? " · " + d.endpoint : "") : "—",
       kind: d.ready ? "good" : "" },
-    { label: "Адресов в маршрутизации", value: enabled ? String(d.entries) : "—",
-      kind: enabled && Number(d.entries) > 0 ? "good" : "" },
-    { label: "Устройств целиком", value: enabled ? String(d.devices) : "—",
-      kind: enabled && Number(d.devices) > 0 ? "good" : "" },
   ];
   grid.innerHTML = cells.map(c => {
     const icon = statusIcon(c.kind);
@@ -348,6 +420,7 @@ async function warpDevicesSave() {
     const d = await apiPostText("/warp/devices/save", ta.value);
     toast(`Сохранено: ${Number(d.entries) || 0}` + (Number(d.dropped) > 0 ? `, отброшено строк: ${d.dropped}` : ""));
     loadWarpDevices();
+    loadWarpNeighbors();
     loadWarpStatus();
   } catch (e) {
     toastErr("Не сохранилось: ", e);
@@ -413,7 +486,7 @@ async function loadWarpLists() {
       <li>
         <span class="warp-item">
           <span class="warp-item-name">${escapeHtml(l.name)}.txt</span>
-          <span class="warp-item-meta">адресов: ${Number(l.entries) || 0} · ${fmtSize(l.size)}${Number(l.mtime) > 0 ? " · изменён " + humanAgo(Number(l.mtime)) : ""}</span>
+          <span class="warp-item-meta">${addrs(l.entries)} · ${fmtSize(l.size)}${Number(l.mtime) > 0 ? " · изменён " + humanAgo(Number(l.mtime)) : ""}</span>
         </span>
         <span class="warp-item-actions">
           <button class="btn-icon" title="Редактировать" aria-label="Редактировать ${escapeHtml(l.name)}" data-edit="${escapeHtml(l.name)}">${_icons.edit}</button>
