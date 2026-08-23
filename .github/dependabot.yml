@@ -51,6 +51,7 @@ updates:
       - /vps-relay
       - /z2k-detect
       - /z2k-verify
+      - /z2k-warpd
     target-branch: z2k-staging
     schedule:
       interval: weekly

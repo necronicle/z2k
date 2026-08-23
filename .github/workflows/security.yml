@@ -52,7 +52,7 @@ jobs:
           # Пока источник матрицы не един, здесь обязаны быть ВСЕ модули с go.mod
           # (сторожит tests/test_module_matrix.sh).
           rc=0
-          for m in mtproxy-client rt-proxy vps-relay z2k-detect z2k-verify; do
+          for m in mtproxy-client rt-proxy vps-relay z2k-detect z2k-verify z2k-warpd; do
             echo "=== govulncheck: $m ==="
             (cd "$m" && govulncheck ./...) || rc=1
           done

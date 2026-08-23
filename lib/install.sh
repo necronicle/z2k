@@ -1835,7 +1835,7 @@ step_build_zapret2() {
         # текущего процесса) не трогаем — он ещё понадобится.
         local _stale _sfreed=0
         for _stale in /opt/sbin/tg-mtproxy-client.new.* /opt/sbin/z2k-rt-proxy.new.* \
-                      /opt/sbin/z2k-detect.new.* /opt/sbin/z2k-usque.new.*; do
+                      /opt/sbin/z2k-detect.new.* /opt/sbin/z2k-warpd.new.*; do
             [ -f "$_stale" ] || continue
             [ "$_stale" = "${_stale%.new.$$}" ] || continue
             rm -f "$_stale" 2>/dev/null && _sfreed=$((_sfreed + 1))
@@ -4175,13 +4175,11 @@ step_finalize() {
     deploy_critical_file "files/ndm/91-z2k-http-tunnel-redirect.sh" "/opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh" || return 1
     deploy_critical_file "files/init.d/S96z2k-rt-proxy"            "/opt/etc/init.d/S96z2k-rt-proxy" || return 1
     deploy_critical_file "files/ndm/92-z2k-rt-proxy-redirect.sh"    "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh" || return 1
-    # WARP tunnel lifecycle — OUR init, replacing the usque-keenetic package's S51usque
-    # (see files/init.d/S51z2k-warp for the list of package behaviours that forced this).
-    # Soft: the mode is optional and off by default, so a deploy failure must not sink the
-    # whole install — WARP simply stays unavailable until the next update.
+    # WARP: init движка z2k-warpd (start/stop; без бинаря — exit 0) и NDM-хук,
+    # возвращающий MARK/NAT/MSS после регена. Ставятся всегда — отдельного
+    # init-менеджмента нет; сам движок появляется только по кнопке «Установить».
+    # Soft: режим опционален, провал деплоя не должен ронять установку.
     deploy_critical_file "files/init.d/S51z2k-warp"                 "/opt/etc/init.d/S51z2k-warp" || print_warning "warp: init deploy failed (режим WARP будет недоступен)"
-    # WARP: re-assert the game-ipset MARK rule after an NDM mangle regen (soft — the mode
-    # is optional and off by default, a missing hook must not fail the whole install).
     deploy_critical_file "files/ndm/93-z2k-warp.sh"                 "/opt/etc/ndm/netfilter.d/93-z2k-warp.sh" || print_warning "warp: NDM hook deploy failed (маршрут WARP восстановится самолечением в течение минуты)"
     deploy_critical_file "files/z2k-tg-watchdog.sh"               "/opt/zapret2/tg-tunnel-watchdog.sh" || return 1
 
@@ -4595,28 +4593,20 @@ step_finalize() {
         fi
     fi
 
-    # WARP game mode: pre-install the usque tunnel engine HERE, during setup, instead of
-    # lazily on the first webpanel/menu toggle. The usque-keenetic package's own postinst
-    # does the whole bring-up (register → NDM OpkgTun interface → opkgtun0 up) in one
-    # uninterrupted pass; running it here — not racing a live toggle plus the minute-
-    # cadence selfheal — is what makes it reliable (the "first enable needs a reboot"
-    # failure was that race). Only for users who have the mode enabled; a brand-new
-    # activation still installs cleanly on first enable (selfheal is route-only now, so
-    # nothing races it). Idempotent — skipped when usque is already installed.
-    if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$ZAPRET2_DIR/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] \
-       && [ -x "$ZAPRET2_DIR/z2k-warp.sh" ]; then
-        # Test the ENGINE we actually ship, not the old package's init: gating on S51usque
-        # skipped provisioning for exactly the cohort this migration exists for, leaving
-        # /opt/sbin/z2k-usque absent and the mode permanently dead.
-        if [ -x /opt/sbin/z2k-usque ]; then
-            print_info "WARP: движок usque уже установлен"
+    # WARP: движок z2k-warpd ставится ТОЛЬКО по кнопке «Установить» (z2k-warp.sh
+    # install) — без намерения юзера на роутере нет ни бинаря, ни демона. Здесь
+    # две вещи: разовая зачистка usque-эпохи (migrate) и обновление УЖЕ
+    # установленного движка: бинарь лежит вне /opt/zapret2 и сам не обновится,
+    # а новый релиз может нести новую версию. Нет бинаря — ничего не качаем.
+    if [ -x "$ZAPRET2_DIR/z2k-warp.sh" ]; then
+        sh "$ZAPRET2_DIR/z2k-warp.sh" migrate >/dev/null 2>&1 || true
+    fi
+    if [ -x /opt/sbin/z2k-warpd ]; then
+        print_info "WARP: обновляю установленный движок z2k-warpd..."
+        if sh "$ZAPRET2_DIR/z2k-warp.sh" install >/dev/null 2>&1; then
+            print_success "WARP: движок актуален"
         else
-            print_info "WARP: устанавливаю движок usque (один раз, при установке)..."
-            if sh "$ZAPRET2_DIR/z2k-warp.sh" install >/dev/null 2>&1; then
-                print_success "WARP: движок usque установлен и поднят"
-            else
-                print_warning "WARP: usque не установился сейчас — режим поднимется при первом включении"
-            fi
+            print_warning "WARP: движок не обновился — оставлен текущий"
         fi
     fi
 
@@ -4781,7 +4771,7 @@ ROLLBACK_DIR_LEGACY="/opt/zapret2/.rollback"
 # Бинарники, которые переустановка заменяет. Лежат вне ZAPRET2_DIR, поэтому
 # транзакционный .old.$$ их не покрывает — без явного сохранения регрессия в
 # любом из них необратима на месте.
-ROLLBACK_SBIN_BINS="tg-mtproxy-client z2k-rt-proxy z2k-detect z2k-usque"
+ROLLBACK_SBIN_BINS="tg-mtproxy-client z2k-rt-proxy z2k-detect z2k-warpd"
 
 # Сколько килобайт держать свободными на /opt после сохранения бинарников.
 # Снапшот не должен становиться причиной того, что установке не хватит места
@@ -5017,6 +5007,7 @@ _rollback_service_for_binary() {
     case "$1" in
         z2k-rt-proxy)      echo "/opt/etc/init.d/S96z2k-rt-proxy" ;;
         z2k-detect)        echo "/opt/etc/init.d/S98z2k-detect" ;;
+        z2k-warpd)         echo "/opt/etc/init.d/S51z2k-warp" ;;
         tg-mtproxy-client) echo "/opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97z2k-http-tunnel" ;;
         *)                 echo "" ;;
     esac
@@ -5368,46 +5359,16 @@ uninstall_zapret2() {
           /tmp/z2k-log/z2k-rt-proxy.log 2>/dev/null || true
     killall -9 z2k-rt-proxy 2>/dev/null || true
 
-    # Tear down the WARP split-tunnel. The usque package itself is NOT removed — it is a
-    # separate opkg package the user may have installed for other reasons, and removing it
-    # would tear down their NDM OpkgTun interface. We only drop what z2k added: the mangle
-    # MARK rule, the policy-routing rule/table, the NDM hook and our state stamps. The
-    # z2k_warp ipset is destroyed here, BEFORE the generic z2k-ipset sweep further down,
-    # so that sweep cannot trip over "set in use" while the MARK rule still references it.
+    # WARP: `remove` снимает маршрут, останавливает движок, удаляет бинарь и
+    # ipset'ы (ДО общей зачистки ipset'ов ниже — иначе «set in use»). device.json
+    # в /opt/etc/z2k-warp остаётся намеренно: повторная установка не должна
+    # регистрировать новое устройство у Cloudflare.
     if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" ]; then
-        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable >/dev/null 2>&1 || true
+        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" remove >/dev/null 2>&1 || true
     fi
-    _warp_mark_args="-m set --match-set z2k_warp dst -j MARK --set-mark 0x989"
-    for _c in PREROUTING OUTPUT; do
-        while iptables -w -t mangle -C "$_c" $_warp_mark_args 2>/dev/null; do
-            iptables -w -t mangle -D "$_c" $_warp_mark_args 2>/dev/null || break
-        done
-    done
-    ip rule del fwmark 0x989 table 989 2>/dev/null || true
-    ip route flush table 989 2>/dev/null || true
-    ipset destroy z2k_warp 2>/dev/null || true
-    ipset destroy z2k_warp_new 2>/dev/null || true
-    # Stop and remove OUR tunnel service. The usque-keenetic package (if the user still has
-    # it) is deliberately left alone — it is a separate opkg package they may have installed
-    # themselves, and removing it would tear down their NDM interface.
-    if [ -x /opt/etc/init.d/S51z2k-warp ]; then
-        /opt/etc/init.d/S51z2k-warp stop >/dev/null 2>&1 || true
-    fi
-    killall z2k-usque 2>/dev/null || true
-    # Give the package's service its executable bit back. We took it so it could not race us
-    # at boot; leaving it disabled after WE are gone would silently break a package the user
-    # installed themselves and may still want.
-    [ -f /opt/etc/init.d/S51usque ] && chmod +x /opt/etc/init.d/S51usque 2>/dev/null
-    rm -rf /opt/etc/z2k-warp /var/run/z2k-warp.lock 2>/dev/null || true
-    rm -f /opt/etc/init.d/S51z2k-warp \
-          /opt/sbin/z2k-usque \
-          /var/run/z2k-warp.pid \
-          /opt/etc/ndm/netfilter.d/93-z2k-warp.sh \
-          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-kick" \
-          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-reg" \
-          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-install" \
-          "${ZAPRET2_DIR:-/opt/zapret2}/.z2k-warp-legacy-purged" \
-          /tmp/z2k-warp-live /tmp/z2k-warp-regcount 2>/dev/null || true
+    rm -f /opt/etc/init.d/S51z2k-warp /opt/etc/ndm/netfilter.d/93-z2k-warp.sh
+    rm -f /var/run/z2k-warpd.pid 2>/dev/null || true
+    rm -rf /tmp/z2k-warp 2>/dev/null || true
 
     # Tear down the tpws youtube layer (removed as a feature). Same sweep as
     # install/update — destroys the ipsets BEFORE the generic z2k-ipset destroy

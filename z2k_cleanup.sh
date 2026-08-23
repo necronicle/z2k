@@ -110,7 +110,12 @@ done
 log_info "Поиск и завершение процессов nfqws / nfqws2..."
 
 killed=0
-for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-usque; do
+# Осиротевший туннельный интерфейс WARP (демон упал без cleanup)
+for _tun in $(ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \(z2ktun[0-9]*\)[:@].*/\1/p'); do
+    ip link set "$_tun" down 2>/dev/null
+    ip tuntap del dev "$_tun" mode tun 2>/dev/null
+done
+for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-warpd; do
     pids=$(pidof "$proc_name" 2>/dev/null || true)
     if [ -n "$pids" ]; then
         for pid in $pids; do
@@ -122,7 +127,7 @@ for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-usque; do
 done
 
 # Дополнительный поиск через ps (на случай если pidof не нашёл)
-for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-usque; do
+for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-warpd; do
     ps_pids=$(ps w 2>/dev/null | awk -v name="$proc_name" '$0 ~ "/"name"( |$)" || $0 ~ " "name"( |$)" {print $1}' || true)
     if [ -n "$ps_pids" ]; then
         for pid in $ps_pids; do
@@ -500,7 +505,7 @@ for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
               /var/run/tg-tunnel.pid \
               /tmp/z2k-log/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
               /tmp/z2k-log/z2k-rt-proxy.log /var/run/z2k-rt-proxy.pid \
-              /var/run/z2k-warp.pid \
+              /var/run/z2k-warpd.pid \
               /tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-insta-refresh.log.old \
               /var/run/z2k-scheduler.pid /opt/var/log/z2k-scheduler.log \
               /opt/var/log/z2k-classify.log \

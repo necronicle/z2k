@@ -271,18 +271,10 @@ while true; do
         fi
     fi
 
-    # Game WARP mode self-heal (minute-cadence). z2k-warp.sh selfheal is a no-op
-    # unless GAME_WARP_ENABLED=1; when on it re-applies the ipset MARK / route / MSS
-    # clamp lost to an NDM firewall reload or WAN flap, and restarts a WEDGED (but
-    # already-registered) tunnel. It does NOT do the first install / first bring-up of
-    # the tunnel — that is the enable/boot/package's job (doing it here raced the
-    # first-enable → opkgtun0 drift). Mirrors the ppe/nfqueue self-heal pattern.
-    # CADENCE IS LOAD-BEARING, not a polling preference. Cloudflare drops an IDLE MASQUE
-    # session (usque logs H3_NO_ERROR / "Tunnel connection lost"), and usque's author states
-    # plainly that keeping light traffic on it prevents the drop entirely — upstream issue
-    # Diniboy1123/usque#49, where users otherwise ended up cron-restarting the daemon. The
-    # self-heal probe IS that light traffic, so running it every ~25s is the keepalive: it
-    # costs one tiny request and removes the failure instead of reacting to it.
+    # WARP: selfheal каждые 25 с — ставит/снимает маршрут по status.json
+    # движка z2k-warpd (fail open: мёртвый туннель = трафик напрямую, а не в
+    # чёрную дыру) и поднимает демон, если он не запущен. No-op при
+    # GAME_WARP_ENABLED=0 или без установленного движка.
     if [ -r "${ZAPRET2_DIR}/z2k-warp.sh" ]; then
         last_warp=$(last_fired_in "$TMP_STATE" warp-selfheal-epoch)
         case "$last_warp" in ''|*[!0-9]*) last_warp=0 ;; esac
