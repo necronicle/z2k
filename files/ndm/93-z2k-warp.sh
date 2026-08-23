@@ -1,41 +1,58 @@
 #!/bin/sh
-export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
+# Z2K_STUB_PATH — только для тестов: каталог со стабами iptables/ipset/uname
+# встаёт перед системным PATH. В проде переменной нет.
+export PATH="${Z2K_STUB_PATH:+$Z2K_STUB_PATH:}/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin"
 
 # /opt/etc/ndm/netfilter.d/93-z2k-warp.sh
 #
-# Companion to /opt/zapret2/z2k-warp.sh. NDM rebuilds the netfilter tables on every
-# regen (WAN flap, hotplug, policy change, reboot) and drops non-NDM rules with them.
-# WARP was the ONE z2k layer without a hook: its mangle PREROUTING MARK rule — the
-# thing that actually steers the game ipset into the tunnel — was only restored by the
-# minute-cadence scheduler selfheal, so every regen left a window of up to a minute in
-# which WARP silently did nothing while the panel still showed it enabled.
+# NDM пересобирает таблицы netfilter на каждом регене (WAN-флап, hotplug,
+# смена политики, ребут) и сносит все не свои правила. Для WARP это три
+# вещи, и все три — наши, потому что интерфейс z2ktunN в NDM не
+# зарегистрирован (NDM принимает только тип OpkgTun, см. спек):
+#   mangle PREROUTING  — MARK по ipset'ам z2k_warp (dst) и z2k_warp_src (src);
+#   mangle FORWARD     — MSS-clamp на z2ktunN;
+#   nat    POSTROUTING — MASQUERADE на z2ktunN.
+# Маршрут (`ip rule` / table 989) реген не трогает.
 #
-# Routing state (`ip rule` / table 989) survives a netfilter regen untouched, so this
-# hook only has to re-assert the MARK rule. Same shape as 92-z2k-rt-proxy-redirect.sh.
+# Только пока режим включён: иначе реген воскресил бы маршрутизацию выключенной
+# функции. Имя интерфейса — из device.json (его выбирает движок один раз).
 
+# shellcheck disable=SC2154 # type/table приходят из окружения NDM
 [ "$type" = "ip6tables" ] && exit 0
-[ "$table" = "mangle" ] || exit 0
 
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
-CONFIG_FILE="$ZAPRET2_DIR/config"
-WARP_IPSET="${WARP_IPSET:-z2k_warp}"
+CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
+DEVICE_JSON="${DEVICE_JSON:-/opt/etc/z2k-warp/device.json}"
 WARP_MARK="${WARP_MARK:-0x989}"
 
-# Only while the user actually has the mode on — otherwise a regen would resurrect
-# routing for a feature that is switched off.
-[ "$(grep -m1 '^GAME_WARP_ENABLED=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] || exit 0
+[ "$(grep -m1 '^GAME_WARP_ENABLED=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] || exit 0
 
-# The set is z2k-owned and survives NDM regens (ipsets are not wiped), but a MARK rule
-# referencing a missing set is rejected outright — bail rather than log noise.
-ipset list "$WARP_IPSET" >/dev/null 2>&1 || exit 0
+iface=$(sed -n 's/.*"iface"[[:space:]]*:[[:space:]]*"\(z2ktun[0-9]*\)".*/\1/p' "$DEVICE_JSON" 2>/dev/null | head -1)
+[ -n "$iface" ] || exit 0
 
-# xtables-lock-safe (-w): without it an insert racing NDM's own iptables churn returns
-# EBUSY and fails SILENTLY, dropping the rule.
+# -w обязателен: без него вставка, гоняющаяся с churn'ом NDM, молча падает с EBUSY.
 ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
 
-# PREROUTING only — forwarded LAN-client traffic (console/phone). NOT OUTPUT: routing a
-# router-originated packet into the tun breaks its reply path and blackholes the router's
-# own Cloudflare/AWS access (github fetches, VPS relay).
-ipt -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK" || \
-    ipt -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET" dst -j MARK --set-mark "$WARP_MARK"
-
+# shellcheck disable=SC2154
+case "$table" in
+    mangle)
+        # Только PREROUTING (трафик LAN-клиентов). НЕ OUTPUT: собственный пакет
+        # роутера, ушедший в TUN, ломает reply-path и глушит его же доступ к
+        # Cloudflare/GitHub. Форма --set-xmark с маской: --set-mark затирает
+        # весь mark-word, включая метки Keenetic.
+        for set in "z2k_warp dst" "z2k_warp_src src"; do
+            name=${set%% *}
+            ipset list -n "$name" >/dev/null 2>&1 || continue
+            # shellcheck disable=SC2086 # $set — два аргумента, разбиение намеренно
+            ipt -t mangle -C PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" \
+                || ipt -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK"
+        done
+        ipt -t mangle -C FORWARD -o "$iface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu \
+            || ipt -t mangle -A FORWARD -o "$iface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        ;;
+    nat)
+        ipt -t nat -C POSTROUTING -o "$iface" -j MASQUERADE \
+            || ipt -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
+        ;;
+esac
+exit 0
