@@ -1158,6 +1158,15 @@ body[data-page="login"] #app { max-width: none; }
   border-bottom: 1px solid var(--border);
 }
 .toggle-row:last-child { border-bottom: 0; }
+/* Первая строка в карточке: её собственные 12px сверху складывались с
+   паддингом карточки, и карточки, начинающиеся со строки («Режимы», шапка
+   WARP), сидели заметно ниже карточек, начинающихся с заголовка. Не через
+   :first-child — перед строкой часто стоит скрытый элемент (#toggles-error),
+   и первая видимая строка первым ребёнком не является. Верхний паддинг
+   получает только строка, идущая ЗА строкой. */
+.card > .toggle-row { padding-top: 0; }
+.card > .toggle-row + .toggle-row { padding-top: 12px; }
+.card > .toggle-row:last-child { padding-bottom: 0; }
 .toggle-row .t-text { flex: 1; min-width: 0; }
 .toggle-row .t-name { font-weight: 600; margin-bottom: 2px; }
 /* Описание режима — такой же длинный текст, как .card .desc, и норма длины
