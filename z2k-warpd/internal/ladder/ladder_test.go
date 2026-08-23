@@ -9,7 +9,7 @@ import (
 
 func TestOrderIsWgDefaultThenPortsThenH2(t *testing.T) {
 	l := New([]int{854, 859}, nil)
-	want := []account.Step{{"wg", 2408}, {"wg", 854}, {"wg", 859}, {"h2", 443}}
+	want := []account.Step{{Transport: "wg", Port: 2408}, {Transport: "wg", Port: 854}, {Transport: "wg", Port: 859}, {Transport: "h2", Port: 443}}
 	for i, w := range want {
 		if l.Current() != w {
 			t.Fatalf("step %d: %+v", i, l.Current())
