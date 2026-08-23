@@ -3866,7 +3866,12 @@ step_finalize() {
     # z2k-update-lists.sh on the daily cron and is also kicked off
     # once at the end of this install. It rewrites these records to
     # whatever the EU-egress VPS resolves today, deleting stale dups.
-    if command -v ndmc >/dev/null 2>&1; then
+    # Z2K_INSTA_DNS=0 — юзер убрал записи через меню [I] (issue #39): это его
+    # решение в конфиге, и обновление его не перебивает. Раньше гейт был только
+    # в рефреше, а установка смотрела на «записи есть?» — и прошивала заново.
+    if [ "$(safe_config_read "Z2K_INSTA_DNS" "$ZAPRET2_DIR/config" "1")" = "0" ]; then
+        print_info "DNS записи для Instagram убраны пользователем (Z2K_INSTA_DNS=0) — не трогаю"
+    elif command -v ndmc >/dev/null 2>&1; then
         if ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host instagram.com"; then
             print_info "Настройка DNS для Instagram..."
             z2k_instagram_dns_add_fallback

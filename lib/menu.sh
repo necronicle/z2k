@@ -387,8 +387,10 @@ menu_instagram_dns() {
         IFS="$IFS_orig"
 
         if [ "$removed" -gt 0 ]; then
+            # Решение юзера — в конфиг: обновление и рефреш записи не вернут (issue #39).
+            set_flag "Z2K_INSTA_DNS" "0" "${ZAPRET2_DIR}/config" 2>/dev/null
             if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
-                print_success "Убрано: $removed (конфиг сохранён)"
+                print_success "Убрано: $removed (конфиг сохранён; обновления их не вернут)"
             else
                 print_warning "Убрано: $removed, но save конфига не прошёл"
                 print_warning "Запусти вручную: LD_LIBRARY_PATH= ndmc -c \"system configuration save\""
@@ -412,6 +414,7 @@ menu_instagram_dns() {
         fi
 
         print_info "Прошиваю базовый набор записей..."
+        set_flag "Z2K_INSTA_DNS" "1" "${ZAPRET2_DIR}/config" 2>/dev/null
         # Общая функция из install.sh (один источник истины для 7 записей).
         if ! z2k_instagram_dns_add_fallback; then
             print_error "Не удалось прошить записи (ndmc недоступен)"

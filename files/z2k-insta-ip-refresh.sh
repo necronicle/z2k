@@ -26,7 +26,7 @@
 
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
-LOG="/tmp/z2k-log/z2k-insta-refresh.log"
+LOG="${LOG_FILE:-/tmp/z2k-log/z2k-insta-refresh.log}"
 # CWE-59: root-owned 0700 log dir
 # CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
 # не-каталог / чужой владелец = возможная подмена атакующим (с planted
@@ -38,7 +38,7 @@ if [ -L /tmp/z2k-log ] || { [ -e /tmp/z2k-log ] && [ ! -d /tmp/z2k-log ]; } || \
 fi
 mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
-CONFIG="/opt/zapret2/config"
+CONFIG="${CONFIG_FILE:-/opt/zapret2/config}"
 RELAY_URL="https://213.176.74.63.nip.io/resolve"
 # Dedicated /resolve secret, DECOUPLED from the tunnel secret (Mark 2026-06-20).
 # Rotating the tunnel credential must not break Instagram IP refresh, and this
@@ -87,10 +87,18 @@ fi
 log "=== refresh start ==="
 
 # 1. Explicit user disable wins.
+#    Z2K_INSTA_DNS=0 — юзер убрал статические записи через меню [I] (issue #39).
+#    Это его решение, записанное в конфиг, а не догадка по «ноль записей»;
+#    оно переживает реинсталл, и ни рефреш, ни установка его не перебивают.
 if [ -f "$CONFIG" ]; then
     flag=$(awk -F= '/^Z2K_INSTA_IP_REFRESH=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG")
     if [ "$flag" = "0" ]; then
         log "Z2K_INSTA_IP_REFRESH=0 — disabled by user, exit"
+        exit 0
+    fi
+    flag=$(awk -F= '/^Z2K_INSTA_DNS=/ {gsub(/[" ]/,"",$2); print $2; exit}' "$CONFIG")
+    if [ "$flag" = "0" ]; then
+        log "Z2K_INSTA_DNS=0 — static records removed by user via [I], exit"
         exit 0
     fi
 fi
