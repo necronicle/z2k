@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -118,10 +119,18 @@ func (t *Transport) tlsConfig() (*tls.Config, error) {
 	return cfg, nil
 }
 
+// pinnedKey разбирает публичный ключ эндпоинта. Для MASQUE регистрация
+// отдаёт его PEM-блоком; на всякий случай принимаем и голый base64-DER.
 func (t *Transport) pinnedKey() *ecdsa.PublicKey {
-	der, err := base64.StdEncoding.DecodeString(t.d.H2.PeerKey)
-	if err != nil {
-		return nil
+	raw := t.d.H2.PeerKey
+	var der []byte
+	if block, _ := pem.Decode([]byte(raw)); block != nil {
+		der = block.Bytes
+	} else {
+		var err error
+		if der, err = base64.StdEncoding.DecodeString(raw); err != nil {
+			return nil
+		}
 	}
 	pub, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {

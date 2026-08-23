@@ -7,9 +7,12 @@ import (
 	"github.com/necronicle/z2k/z2k-warpd/internal/account"
 )
 
+func ep(ports ...int) account.Endpoint { return account.Endpoint{V4: "8.6.112.0", Ports: ports} }
+
 func TestOrderIsWgDefaultThenPortsThenH2(t *testing.T) {
-	l := New([]int{854, 859}, nil)
-	want := []account.Step{{Transport: "wg", Port: 2408}, {Transport: "wg", Port: 854}, {Transport: "wg", Port: 859}, {Transport: "h2", Port: 443}}
+	l := New(ep(854, 859), nil)
+	H := "8.6.112.0"
+	want := []account.Step{{Transport: "wg", Host: H, Port: 2408}, {Transport: "wg", Host: H, Port: 854}, {Transport: "wg", Host: H, Port: 859}, {Transport: "h2", Port: 443}}
 	for i, w := range want {
 		if l.Current() != w {
 			t.Fatalf("step %d: %+v", i, l.Current())
@@ -24,8 +27,8 @@ func TestOrderIsWgDefaultThenPortsThenH2(t *testing.T) {
 }
 
 func TestStartsFromLastGood(t *testing.T) {
-	l := New([]int{854}, &account.Step{Transport: "wg", Port: 854})
-	if l.Current() != (account.Step{Transport: "wg", Port: 854}) {
+	l := New(ep(854), &account.Step{Transport: "wg", Host: "8.6.112.0", Port: 854})
+	if l.Current() != (account.Step{Transport: "wg", Host: "8.6.112.0", Port: 854}) {
 		t.Fatalf("%+v", l.Current())
 	}
 	if l.Index() != 1 {
@@ -34,21 +37,21 @@ func TestStartsFromLastGood(t *testing.T) {
 }
 
 func TestUnknownLastGoodIgnored(t *testing.T) {
-	l := New([]int{854}, &account.Step{Transport: "wg", Port: 9999})
-	if l.Current() != (account.Step{Transport: "wg", Port: 2408}) {
+	l := New(ep(854), &account.Step{Transport: "wg", Host: "8.6.112.0", Port: 9999})
+	if l.Current() != (account.Step{Transport: "wg", Host: "8.6.112.0", Port: 2408}) {
 		t.Fatalf("%+v", l.Current())
 	}
 }
 
 func TestWrapAppliesCooldown(t *testing.T) {
-	l := New(nil, nil) // wg:2408, h2:443
+	l := New(ep(), nil) // wg:2408, h2:443
 	t0 := time.Unix(1000, 0)
 	s, wait := l.Next(t0) // -> h2
 	if s != (account.Step{Transport: "h2", Port: 443}) || wait != 0 {
 		t.Fatalf("%+v %v", s, wait)
 	}
 	s, wait = l.Next(t0.Add(time.Second)) // wrap
-	if s != (account.Step{Transport: "wg", Port: 2408}) {
+	if s != (account.Step{Transport: "wg", Host: "8.6.112.0", Port: 2408}) {
 		t.Fatalf("%+v", s)
 	}
 	if wait < 4*time.Minute || wait > Cooldown {
@@ -61,7 +64,7 @@ func TestWrapAppliesCooldown(t *testing.T) {
 }
 
 func TestWrapAfterCooldownHasNoWait(t *testing.T) {
-	l := New(nil, nil)
+	l := New(ep(), nil)
 	t0 := time.Unix(1000, 0)
 	l.Next(t0)
 	_, wait := l.Next(t0.Add(Cooldown + time.Second))
@@ -71,7 +74,7 @@ func TestWrapAfterCooldownHasNoWait(t *testing.T) {
 }
 
 func TestPortsDeduplicated(t *testing.T) {
-	l := New([]int{2408, 854, 854, 0, -1, 70000}, nil)
+	l := New(ep(2408, 854, 854, 0, -1, 70000), nil)
 	n := 1
 	for !l.OnH2() {
 		l.Next(time.Unix(0, 0))
@@ -83,15 +86,51 @@ func TestPortsDeduplicated(t *testing.T) {
 }
 
 func TestGoodReturnsCurrent(t *testing.T) {
-	l := New([]int{854}, nil)
+	l := New(ep(854), nil)
 	l.Next(time.Unix(0, 0))
-	if g := l.Good(); g != (account.Step{Transport: "wg", Port: 854}) {
+	if g := l.Good(); g != (account.Step{Transport: "wg", Host: "8.6.112.0", Port: 854}) {
 		t.Fatalf("%+v", g)
 	}
 }
 
 func TestString(t *testing.T) {
-	if s := (account.Step{Transport: "wg", Port: 2408}); Label(s) != "wg:2408" {
+	if s := (account.Step{Transport: "wg", Host: "8.6.112.0", Port: 2408}); Label(s) != "wg:8.6.112.0:2408" {
 		t.Fatal(Label(s))
+	}
+	if s := (account.Step{Transport: "h2", Port: 443}); Label(s) != "h2:443" {
+		t.Fatal(Label(s))
+	}
+}
+
+func TestAltHostsAfterPrimary(t *testing.T) {
+	e := account.Endpoint{V4: "8.6.112.0", Ports: []int{854},
+		Alt: []account.HostPorts{{Host: "162.159.192.10", Ports: []int{500}}, {Host: "8.6.112.0", Ports: []int{1}}}}
+	l := New(e, nil)
+	got := ""
+	for {
+		if got != "" {
+			got += " "
+		}
+		got += Label(l.Current())
+		if l.OnH2() {
+			break
+		}
+		l.Next(time.Unix(0, 0))
+	}
+	want := "wg:8.6.112.0:2408 wg:8.6.112.0:854 wg:162.159.192.10:2408 wg:162.159.192.10:500 h2:443"
+	if got != want {
+		t.Fatalf("\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestFixedAlwaysSameStepWithCooldown(t *testing.T) {
+	l := NewFixed(account.Step{Transport: "h2", Port: 443})
+	t0 := time.Unix(1000, 0)
+	s, wait := l.Next(t0)
+	if s != (account.Step{Transport: "h2", Port: 443}) || wait < 4*time.Minute {
+		t.Fatalf("%+v %v", s, wait)
+	}
+	if !l.OnH2() {
+		t.Fatal("single h2 step must report OnH2")
 	}
 }

@@ -38,13 +38,16 @@ type Transport struct {
 	closed bool
 }
 
-// New собирает транспорт на tunDev; сессия ещё не открыта.
-func New(tunDev tun.Device, d *account.Device, port int, logf func(string, ...any)) (*Transport, error) {
+// New собирает транспорт на tunDev к host:port; сессия ещё не открыта.
+func New(tunDev tun.Device, d *account.Device, host string, port int, logf func(string, ...any)) (*Transport, error) {
 	reserved, err := d.Reserved()
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := ipcConfig(d.PrivateKey, d.PeerKey, d.Endpoint.V4, port)
+	if host == "" {
+		host = d.Endpoint.V4
+	}
+	cfg, err := ipcConfig(d.PrivateKey, d.PeerKey, host, port)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +63,7 @@ func New(tunDev tun.Device, d *account.Device, port int, logf func(string, ...an
 		dev.Close()
 		return nil, fmt.Errorf("wg config: %w", err)
 	}
-	return &Transport{dev: dev, logf: logf, ep: fmt.Sprintf("%s:%d", d.Endpoint.V4, port)}, nil
+	return &Transport{dev: dev, logf: logf, ep: fmt.Sprintf("%s:%d", host, port)}, nil
 }
 
 // Open поднимает устройство и ждёт handshake.

@@ -18,7 +18,7 @@ const regBody = `{"id":"dev1","token":"tok1","warp_enabled":false,
 func srv(t *testing.T, patched *bool) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == "POST" && r.URL.Path == "/v0a4471/reg":
+		case r.Method == "POST" && r.URL.Path == "/v0a2158/reg":
 			if r.Header.Get("CF-Client-Version") == "" {
 				t.Error("no CF-Client-Version")
 			}
@@ -30,7 +30,7 @@ func srv(t *testing.T, patched *bool) *httptest.Server {
 				t.Errorf("register must declare wireguard key: %v", body)
 			}
 			w.Write([]byte(regBody))
-		case r.Method == "PATCH" && r.URL.Path == "/v0a4471/reg/dev1":
+		case r.Method == "PATCH" && r.URL.Path == "/v0a2158/reg/dev1":
 			if r.Header.Get("Authorization") != "Bearer tok1" {
 				t.Error("no bearer")
 			}
@@ -55,9 +55,9 @@ func srv(t *testing.T, patched *bool) *httptest.Server {
 			}
 			t.Errorf("unexpected PATCH body %v", body)
 			w.WriteHeader(400)
-		case r.Method == "GET" && r.URL.Path == "/v0a4471/reg/dev1":
+		case r.Method == "GET" && r.URL.Path == "/v0a2158/reg/dev1":
 			w.Write([]byte(regBody))
-		case r.Method == "GET" && r.URL.Path == "/v0a4471/reg/gone":
+		case r.Method == "GET" && r.URL.Path == "/v0a2158/reg/gone":
 			w.WriteHeader(404)
 		default:
 			w.WriteHeader(500)
@@ -108,6 +108,29 @@ func TestRefreshUpdatesEndpointKeepsIdentity(t *testing.T) {
 	}
 	if d.PrivateKey != "keep" || d.ID != "dev1" || d.Endpoint.V4 != "8.6.112.0" || d.ClientID != "Mv0s" {
 		t.Fatalf("%+v", d)
+	}
+}
+
+func TestRefreshKeepsPrimaryEndpointCollectsAlt(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"dev1","config":{"client_id":"Mv0s","interface":{"addresses":{"v4":"172.16.0.2"}},
+		 "peers":[{"public_key":"pk","endpoint":{"v4":"162.159.192.10:0","ports":[500,1701]}}]}}`))
+	}))
+	defer s.Close()
+	c := &Client{BaseURL: s.URL, HTTP: s.Client()}
+	d := &Device{ID: "dev1", Token: "t", Tunnel: TunnelWG, Endpoint: Endpoint{V4: "8.6.112.0", Ports: []int{854}}}
+	if err := c.Refresh(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Endpoint.V4 != "8.6.112.0" || len(d.Endpoint.Ports) != 1 {
+		t.Fatalf("primary overwritten: %+v", d.Endpoint)
+	}
+	if len(d.Endpoint.Alt) != 1 || d.Endpoint.Alt[0].Host != "162.159.192.10" || len(d.Endpoint.Alt[0].Ports) != 2 {
+		t.Fatalf("alt not collected: %+v", d.Endpoint.Alt)
+	}
+	c.Refresh(context.Background(), d) // повтор — без дублей
+	if len(d.Endpoint.Alt) != 1 {
+		t.Fatalf("alt duplicated: %+v", d.Endpoint.Alt)
 	}
 }
 
@@ -169,8 +192,8 @@ func TestSwitchTunnelMasqueThenBack(t *testing.T) {
 	if d.Tunnel != TunnelMasque || d.H2 == nil || d.H2.PrivateKey == "" || d.H2.PeerKey != "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpeer" {
 		t.Fatalf("%+v %+v", d, d.H2)
 	}
-	if d.Endpoint.V4 != "162.159.198.1" {
-		t.Fatalf("endpoint %q", d.Endpoint.V4)
+	if d.Endpoint.V4 != "8.6.112.0" || len(d.Endpoint.Alt) != 0 {
+		t.Fatalf("masque switch must not touch WG endpoint: %+v", d.Endpoint)
 	}
 	if _, err := ECPrivateKey(d.H2.PrivateKey); err != nil {
 		t.Fatal(err)

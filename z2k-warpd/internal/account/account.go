@@ -30,9 +30,12 @@ import (
 const (
 	// DefaultBaseURL — API регистрации. Десинкается nfqws2 как любой трафик роутера.
 	DefaultBaseURL = "https://api.cloudflareclient.com"
-	apiPath        = "/v0a4471"
-	clientVersion  = "a-6.35-4471"
-	userAgent      = "WARP for Android"
+	// Версия API выбрана по замеру, не по свежести: v0a4471 выдаёт
+	// эндпоинт 162.159.192.x с четырьмя портами — диапазон, который РФ-ISP
+	// режут; v0a2158 — 8.x (anycast) и ~50 запасных портов, и он ходит.
+	apiPath        = "/v0a2158"
+	clientVersion  = "a-6.10-2158"
+	userAgent      = "okhttp/3.12.1"
 
 	// Типы ключа/туннеля в API. У одного устройства активен ровно один ключ:
 	// переход на MASQUE — это PATCH того же устройства, не второе устройство.
@@ -49,16 +52,30 @@ const (
 // ErrRevoked — устройство больше не известно Cloudflare (401/403/404 на GET).
 var ErrRevoked = errors.New("device revoked")
 
-// Endpoint — куда подключаться. Ports — запасные UDP-порты WireGuard из регистрации.
-type Endpoint struct {
-	V4    string `json:"v4"`
-	H2    string `json:"h2,omitempty"`
+// HostPorts — один WG-хост и его порты.
+type HostPorts struct {
+	Host  string `json:"host"`
 	Ports []int  `json:"ports"`
 }
 
-// Step — транспорт и порт; используется лестницей и как last_good.
+// Endpoint — куда подключаться.
+//
+// V4/Ports — WG-эндпоинт из ПЕРВИЧНОЙ регистрации, и он не перезаписывается:
+// измерено, что POST отдаёт 8.x (anycast) с ~50 портами, а GET/PATCH потом
+// отдают 162.159.192.x с четырьмя — диапазон, который РФ-ISP режут, тогда
+// как 8.x принимает тот же ключ и после любых переключений. Всё, что API
+// отдаёт позже, копится в Alt и пробуется после первичного.
+type Endpoint struct {
+	V4    string      `json:"v4"`
+	Ports []int       `json:"ports"`
+	Alt   []HostPorts `json:"alt,omitempty"`
+	H2    string      `json:"h2,omitempty"`
+}
+
+// Step — транспорт, хост и порт; используется лестницей и как last_good.
 type Step struct {
 	Transport string `json:"transport"`
+	Host      string `json:"host,omitempty"`
 	Port      int    `json:"port"`
 }
 
@@ -144,8 +161,10 @@ type regResp struct {
 }
 
 // apply переносит ответ API в Device. ID/Token берутся только если заполнены
-// (GET отдаёт их тоже, но перезаписывать нечем и незачем).
-func (r *regResp) apply(d *Device) error {
+// (GET отдаёт их тоже, но перезаписывать нечем и незачем). WG-эндпоинт
+// пишется в V4/Ports только при первичной регистрации (initial); дальше
+// новые хосты копятся в Alt — см. Endpoint.
+func (r *regResp) apply(d *Device, initial bool) error {
 	if len(r.Config.Peers) == 0 {
 		return errors.New("registration has no peers")
 	}
@@ -161,8 +180,24 @@ func (r *regResp) apply(d *Device) error {
 	if i := strings.LastIndex(host, ":"); i > 0 {
 		host = host[:i]
 	}
-	d.Endpoint.V4 = host
-	d.Endpoint.Ports = p.Endpoint.Ports
+	if d.Tunnel == TunnelMasque {
+		return nil // эндпоинт MASQUE к WG-лестнице не относится
+	}
+	if initial || d.Endpoint.V4 == "" {
+		d.Endpoint.V4 = host
+		d.Endpoint.Ports = p.Endpoint.Ports
+		return nil
+	}
+	if host == "" || host == d.Endpoint.V4 {
+		return nil
+	}
+	for i, a := range d.Endpoint.Alt {
+		if a.Host == host {
+			d.Endpoint.Alt[i].Ports = p.Endpoint.Ports
+			return nil
+		}
+	}
+	d.Endpoint.Alt = append(d.Endpoint.Alt, HostPorts{Host: host, Ports: p.Endpoint.Ports})
 	return nil
 }
 
@@ -251,7 +286,7 @@ func (c *Client) Register(ctx context.Context) (*Device, error) {
 		return nil, err
 	}
 	d := &Device{PrivateKey: priv, Tunnel: TunnelWG}
-	if err := r.apply(d); err != nil {
+	if err := r.apply(d, true); err != nil {
 		return nil, err
 	}
 	if d.ID == "" || d.Token == "" {
@@ -296,7 +331,7 @@ func (c *Client) Refresh(ctx context.Context, d *Device) error {
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return err
 	}
-	return r.apply(d)
+	return r.apply(d, false)
 }
 
 // SwitchTunnel переключает ключ устройства: masque — на H2-ключ (генерируется,
@@ -343,10 +378,10 @@ func (c *Client) SwitchTunnel(ctx context.Context, d *Device, tunnel string) err
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return err
 	}
-	if err := r.apply(d); err != nil {
+	d.Tunnel = tunnel
+	if err := r.apply(d, false); err != nil {
 		return err
 	}
-	d.Tunnel = tunnel
 	if tunnel == TunnelMasque {
 		d.H2.PeerKey = d.PeerKey
 	}

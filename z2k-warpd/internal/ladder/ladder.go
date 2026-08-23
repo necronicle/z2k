@@ -31,17 +31,29 @@ type Ladder struct {
 	passStart time.Time // начало текущего прохода; zero = ещё не начинался
 }
 
-// New строит лестницу из портов регистрации. start — last_good; если его нет
-// в лестнице (порты обновились), начинаем с вершины.
-func New(ports []int, start *account.Step) *Ladder {
-	steps := []account.Step{{Transport: "wg", Port: defaultWGPort}}
-	seen := map[int]bool{defaultWGPort: true}
-	for _, p := range ports {
-		if p <= 0 || p > 65535 || seen[p] {
-			continue
+// New строит лестницу: первичный WG-хост по всем портам, затем запасные
+// хосты по своим портам, затем h2. start — last_good; если его нет в
+// лестнице (эндпоинты обновились), начинаем с вершины.
+func New(ep account.Endpoint, start *account.Step) *Ladder {
+	var steps []account.Step
+	addHost := func(host string, ports []int) {
+		if host == "" {
+			return
 		}
-		seen[p] = true
-		steps = append(steps, account.Step{Transport: "wg", Port: p})
+		seen := map[int]bool{}
+		for _, p := range append([]int{defaultWGPort}, ports...) {
+			if p <= 0 || p > 65535 || seen[p] {
+				continue
+			}
+			seen[p] = true
+			steps = append(steps, account.Step{Transport: "wg", Host: host, Port: p})
+		}
+	}
+	addHost(ep.V4, ep.Ports)
+	for _, a := range ep.Alt {
+		if a.Host != ep.V4 {
+			addHost(a.Host, a.Ports)
+		}
 	}
 	steps = append(steps, account.Step{Transport: "h2", Port: h2Port})
 	l := &Ladder{steps: steps}
@@ -95,5 +107,14 @@ func (l *Ladder) Good() account.Step {
 // Top возвращает лестницу на вершину (после успешного возврата на WG).
 func (l *Ladder) Top() { l.idx = 0 }
 
-// Label — "wg:2408" / "h2:443" для логов и статуса.
-func Label(s account.Step) string { return fmt.Sprintf("%s:%d", s.Transport, s.Port) }
+// Label — "wg:8.6.112.0:2408" / "h2:443" для логов и статуса.
+func Label(s account.Step) string {
+	if s.Host != "" {
+		return fmt.Sprintf("%s:%s:%d", s.Transport, s.Host, s.Port)
+	}
+	return fmt.Sprintf("%s:%d", s.Transport, s.Port)
+}
+
+// NewFixed — лестница из одного шага (--force-transport): Next всегда
+// возвращает тот же шаг с кулдауном.
+func NewFixed(s account.Step) *Ladder { return &Ladder{steps: []account.Step{s}} }

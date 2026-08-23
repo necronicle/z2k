@@ -37,4 +37,6 @@ type Transport interface {
 	Open(ctx context.Context) error
 	Health() Health
 	Close() error
+	// Endpoint — "ip:port" для статуса и логов.
+	Endpoint() string
 }
