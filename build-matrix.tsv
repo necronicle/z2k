@@ -45,6 +45,11 @@ rt-proxy	.	mtproxy-client/builds	z2k-rt-proxy	arm64	arm64	-
 rt-proxy	.	mtproxy-client/builds	z2k-rt-proxy	arm	arm	GOARM=7
 rt-proxy	.	mtproxy-client/builds	z2k-rt-proxy	amd64	amd64	-
 rt-proxy	.	mtproxy-client/builds	z2k-rt-proxy	mips	mips	GOMIPS=softfloat
+z2k-warpd	./cmd/z2k-warpd	z2k-warpd/builds	z2k-warpd	arm64	arm64	-
+z2k-warpd	./cmd/z2k-warpd	z2k-warpd/builds	z2k-warpd	arm	arm	GOARM=7
+z2k-warpd	./cmd/z2k-warpd	z2k-warpd/builds	z2k-warpd	amd64	amd64	-
+z2k-warpd	./cmd/z2k-warpd	z2k-warpd/builds	z2k-warpd	mips	mips	GOMIPS=softfloat
+z2k-warpd	./cmd/z2k-warpd	z2k-warpd/builds	z2k-warpd	mipsle	mipsel	GOMIPS=softfloat
 rt-proxy	.	mtproxy-client/builds	z2k-rt-proxy	mipsle	mipsel	GOMIPS=softfloat
 z2k-detect	./cmd/z2k-detect	z2k-detect/builds	z2k-detect	arm64	arm64	-
 z2k-detect	./cmd/z2k-detect	z2k-detect/builds	z2k-detect	arm	arm	GOARM=5

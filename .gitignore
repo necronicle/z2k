@@ -57,3 +57,6 @@ z2k-signing/
 # package.json/package-lock.json в репозитории ЕСТЬ намеренно: они фиксируют
 # версию линтера, иначе вердикт CI начинает зависеть от даты прогона.
 node_modules/
+
+# Local-only design specs/plans (superpowers)
+docs/superpowers/

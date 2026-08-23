@@ -479,7 +479,7 @@ jobs:
       # релизе важно видеть ПОЛНУЮ картину, а не первую красную джобу.
       fail-fast: false
       matrix:
-        module: [mtproxy-client, rt-proxy, vps-relay, z2k-detect, z2k-verify]
+        module: [mtproxy-client, rt-proxy, vps-relay, z2k-detect, z2k-verify, z2k-warpd]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
