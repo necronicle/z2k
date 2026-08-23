@@ -186,6 +186,28 @@ export function renderCredits() {
           пользуются молча.
         </p>
       </div>
+
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">Denis</div>
+        <p class="desc">
+          Спасибо, Denis. Обход блокировок — это гонка, в которой финиша нет:
+          каждую неделю что-то ломают, и каждую неделю это надо чинить. Такая
+          поддержка — это не «спасибо за вчера», а возможность быть готовыми
+          к завтра.
+        </p>
+      </div>
+
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">Mega Man</div>
+        <p class="desc">
+          Спасибо, Mega Man. Проект не продаёт подписок и не показывает
+          рекламу — он существует ровно настолько, насколько его готовы
+          поддерживать те, кому он нужен. Каждая такая поддержка — ещё немного
+          времени, которое можно потратить на то, чтобы всё просто работало.
+        </p>
+      </div>
     </div>
   `;
 }
