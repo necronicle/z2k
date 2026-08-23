@@ -4,12 +4,20 @@ import { _newLoad, _stale } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
 import { JOB_FAIL, _activeJobs, _updateGlobalUILock, awaitPanelBack, jobOutcome, jobUnresolved, openJobModal, unresolvedMsg } from "../job.js";
 
-// Раздел «WARP»: тумблер включения (бывший «Игровой режим (WARP)» со
-// страницы «Режимы») + пользовательские списки IPv4/CIDR, которые целиком
-// грузятся в ipset z2k_warp и маршрутизируются через туннель Cloudflare
-// WARP (usque/MASQUE). Списки — файлы /opt/zapret2/lists/warp/*.txt,
-// редактируются здесь же (textarea), экспорт/импорт — обычный .txt.
+// Раздел «WARP»: туннель Cloudflare WARP на нашем движке z2k-warpd
+// (WireGuard, при полном UDP-блоке — MASQUE по TCP 443). Три действия —
+// Установить / тумблер / Удалить: без намерения юзера на роутере нет ни
+// движка, ни демона. Что идёт в туннель: адреса из списков (игровые +
+// свои) и целые устройства по IP/MAC. Всё — файлы в /opt/zapret2/lists/warp/.
 let _warpLists = [];
+
+// Коды last_error движка → текст. Движок пишет код, панель — смысл.
+const WARP_ERRORS = {
+  register_blocked: "Cloudflare не отвечает на регистрацию — ни напрямую, ни через релей. Попробуйте позже.",
+  device_revoked: "Cloudflare отозвал устройство — регистрирую заново.",
+  no_endpoint: "Ни один адрес Cloudflare не отвечает — провайдер блокирует WARP целиком.",
+  tun_failed: "Прошивка не даёт создать туннельный интерфейс.",
+};
 
 function warpNameValid(n) {
   return /^[A-Za-z0-9._-]{1,64}$/.test(n) && !/^[.-]/.test(n);
@@ -29,19 +37,25 @@ export async function renderWarp() {
       <div class="toggle-row" data-key="game_warp">
         <div class="t-text">
           <div class="t-name">WARP-туннель</div>
-          <div class="t-desc">Заворачивает трафик к адресам из списков ниже в туннель
-            Cloudflare WARP (usque/MASQUE по TCP 443 — работает из РФ, где нативный
-            WireGuard-WARP по UDP режут). Помогает сервисам, заблокированным по IP:
-            игровым серверам, хостингам, диапазонам Cloudflare/AWS из списка РКН.
-            Это не десинк, а туннель — трафик к этим адресам идёт через Cloudflare
-            и может быть медленнее прямого.</div>
+          <div class="t-desc">Заворачивает трафик к адресам из списков ниже и к выбранным
+            устройствам в туннель Cloudflare WARP. Помогает сервисам, заблокированным
+            по IP: игровым серверам, хостингам, диапазонам Cloudflare/AWS из списка РКН.
+            Транспорт выбирается сам: WireGuard, а если провайдер режет UDP —
+            MASQUE по TCP 443. Это не десинк, а туннель: трафик к этим адресам идёт
+            через Cloudflare и может быть медленнее прямого.</div>
         </div>
-        <label class="switch">
+        <label class="switch" id="warp-switch" hidden>
           <input type="checkbox" disabled>
           <span class="slider"></span>
         </label>
       </div>
       <div class="status-grid" id="warp-status-grid">${skeletonBlocks(3)}</div>
+      <div class="btn-row" id="warp-actions" style="margin-top:10px" hidden>
+        <button class="btn btn-primary" id="warp-install-btn" hidden>Установить WARP</button>
+        <span class="desc" id="warp-install-note" hidden>Скачает движок (~7 МБ) и зарегистрирует
+          устройство у Cloudflare. Ничего не запускается, пока не включите тумблер.</span>
+        <button class="btn btn-danger" id="warp-remove-btn" hidden>Удалить WARP</button>
+      </div>
     </div>
     <div class="card">
       <h3>Игровые списки</h3>
@@ -52,6 +66,20 @@ export async function renderWarp() {
         чтения; свои адреса добавляйте ниже, отдельным списком.
       </p>
       <div id="warp-games">${skeletonBlocks(3)}</div>
+    </div>
+    <div class="card" id="warp-devices-card" hidden>
+      <h3>Устройства</h3>
+      <p class="desc">
+        Весь трафик устройства — в WARP, независимо от списков. Одна строка —
+        один IP (<code>192.168.1.50</code>) или MAC (<code>aa:bb:cc:dd:ee:ff</code>);
+        MAC удобнее: адрес может меняться. <b>Применяется сразу.</b>
+      </p>
+      <textarea id="warp-devices" class="warp-editor" spellcheck="false"
+                autocomplete="off" autocapitalize="off" autocorrect="off"
+                placeholder="192.168.1.50"></textarea>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn btn-primary" id="warp-devices-save">Сохранить</button>
+      </div>
     </div>
     <div class="card">
       <h3>Списки адресов</h3>
@@ -84,6 +112,9 @@ export async function renderWarp() {
   `;
   const box = $app.querySelector('[data-key="game_warp"] input');
   box.addEventListener("change", () => warpToggle(box));
+  document.getElementById("warp-install-btn").addEventListener("click", warpInstall);
+  document.getElementById("warp-remove-btn").addEventListener("click", warpRemove);
+  document.getElementById("warp-devices-save").addEventListener("click", warpDevicesSave);
   document.getElementById("warp-new-btn").addEventListener("click", warpNewList);
   document.getElementById("warp-import-btn").addEventListener("click", () => {
     document.getElementById("warp-import-file").click();
@@ -96,6 +127,7 @@ export async function renderWarp() {
   loadWarpStatus();
   loadWarpGames();
   loadWarpLists();
+  loadWarpDevices();
   _updateGlobalUILock();
 }
 
@@ -176,13 +208,29 @@ async function loadWarpStatus() {
   }
   if (_stale("warpStatus", seq)) return;
   const enabled = d.enabled === "1";
+  const installed = !!d.installed;
+
+  // Три состояния раздела — из одного ответа. Не установлен: одна кнопка, без
+  // тумблера и статуса (нечего показывать). Установлен: тумблер + статус +
+  // «Удалить». Списки и устройства видны всегда — это данные юзера.
+  const sw = document.getElementById("warp-switch");
+  const actions = document.getElementById("warp-actions");
+  const installBtn = document.getElementById("warp-install-btn");
+  const installNote = document.getElementById("warp-install-note");
+  const removeBtn = document.getElementById("warp-remove-btn");
+  sw.hidden = !installed;
+  actions.hidden = false;
+  installBtn.hidden = installed;
+  installNote.hidden = installed;
+  removeBtn.hidden = !installed;
+  document.getElementById("warp-devices-card").hidden = false;
+
   const box = $app.querySelector('[data-key="game_warp"] input');
   if (box) {
     // Checked-состояние синкаем ВСЕГДА. С disabled аккуратнее: если сейчас
     // идёт job, свитч залочен _updateGlobalUILock'ом — не раслочиваем его в
     // обход лока, а поправляем lockBackup, чтобы разлочка после job'а
-    // вернула enabled (шаблон рендерит <input disabled>, и лок иначе
-    // запоминает это исходное disabled как «правильное» состояние).
+    // вернула enabled.
     box.checked = enabled;
     if (_activeJobs.size) {
       if (box.dataset.lockBackup !== undefined) box.dataset.lockBackup = "0";
@@ -190,36 +238,122 @@ async function loadWarpStatus() {
       box.disabled = false;
     }
   }
-  // Туннель — три состояния, не два. d.live это результат сквозной проверки (запрос к
-  // Cloudflare ЧЕРЕЗ интерфейс): true = трафик реально ходит, false = интерфейс поднят,
-  // но туннель мёртв, null = ещё не проверялось. Раньше здесь было только «есть адрес»,
-  // а адрес роутер выдаёт интерфейсу независимо от того, установилось ли соединение с
-  // Cloudflare — поэтому панель показывала «работает» на полностью мёртвом туннеле.
+
+  if (!installed) {
+    grid.innerHTML = `<div class="status-cell"><div class="label">Движок</div><div class="value">не установлен</div></div>`;
+    return;
+  }
+  // Туннель — три состояния. ready = движок доказал, что трафик ходит
+  // (handshake + счётчики + при сомнении сквозная проба), а не «интерфейс
+  // есть». При включённом режиме и не-ready показываем причину кодом → текст.
   let tunnelValue, tunnelKind;
-  if (!d.tunnel_up) {
-    tunnelValue = "не запущен";
-    tunnelKind = enabled ? "bad" : "";
-  } else if (d.live === false) {
-    tunnelValue = "поднят, но трафик не идёт";
-    tunnelKind = "bad";
-  } else if (d.live === true) {
+  if (d.ready) {
     tunnelValue = "работает" + (d.addr ? " · " + d.addr : "");
     tunnelKind = "good";
+  } else if (!enabled) {
+    tunnelValue = "выключен";
+    tunnelKind = "";
+  } else if (d.error) {
+    tunnelValue = WARP_ERRORS[d.error] || d.error;
+    tunnelKind = "bad";
   } else {
-    tunnelValue = "поднят, проверяется" + (d.addr ? " · " + d.addr : "");
+    tunnelValue = "поднимается";
     tunnelKind = "";
   }
+  const transport = d.transport === "wg" ? "WireGuard" : d.transport === "h2" ? "MASQUE (TCP 443)" : "—";
   const cells = [
     { label: "Туннель", value: tunnelValue, kind: tunnelKind },
-    { label: "Клиент usque", value: d.installed ? "установлен" : "ставится при первом включении",
-      kind: d.installed ? "good" : "" },
+    { label: "Транспорт", value: d.ready ? transport + (d.endpoint ? " · " + d.endpoint : "") : "—",
+      kind: d.ready ? "good" : "" },
     { label: "Адресов в маршрутизации", value: enabled ? String(d.entries) : "—",
       kind: enabled && Number(d.entries) > 0 ? "good" : "" },
+    { label: "Устройств целиком", value: enabled ? String(d.devices) : "—",
+      kind: enabled && Number(d.devices) > 0 ? "good" : "" },
   ];
   grid.innerHTML = cells.map(c => {
     const icon = statusIcon(c.kind);
     return `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${icon ? `<span class="status-ico">${icon}</span>` : ""}${escapeHtml(c.value)}</div></div>`;
   }).join("");
+}
+
+// Установить / Удалить — долгие действия, идут job'ом с модалкой, как
+// тумблеры. Названия совпадают на кнопке, в модалке и в тосте.
+async function warpInstall() {
+  const btn = document.getElementById("warp-install-btn");
+  btn.disabled = true;
+  let resp;
+  try {
+    resp = await apiPost("/warp/install", {});
+  } catch (e) {
+    btn.disabled = false;
+    toastErr("Ошибка: ", e);
+    return;
+  }
+  openJobModal("Устанавливаю WARP", resp.job, {
+    onDone: (d) => {
+      btn.disabled = false;
+      const outcome = jobOutcome(d);
+      if (outcome === JOB_FAIL) toast("Не установился — причина в логе выше", "bad");
+      else if (!jobUnresolved(outcome)) toast("Установлено. Включите тумблером");
+      else { const m = unresolvedMsg(outcome); if (m) toast(m, "bad"); awaitPanelBack().then(() => loadWarpStatus()); return; }
+      loadWarpStatus();
+    },
+  });
+}
+
+async function warpRemove() {
+  if (!confirm("Удалить WARP?\n\nДвижок будет удалён, туннель выключен. Ключ устройства и ваши списки сохранятся — повторная установка не заведёт новое устройство у Cloudflare.")) return;
+  const btn = document.getElementById("warp-remove-btn");
+  btn.disabled = true;
+  let resp;
+  try {
+    resp = await apiPost("/warp/remove", {});
+  } catch (e) {
+    btn.disabled = false;
+    toastErr("Ошибка: ", e);
+    return;
+  }
+  openJobModal("Удаляю WARP", resp.job, {
+    onDone: (d) => {
+      btn.disabled = false;
+      const outcome = jobOutcome(d);
+      if (outcome === JOB_FAIL) toast("Не удалилось — причина в логе выше", "bad");
+      else if (!jobUnresolved(outcome)) toast("Удалено");
+      else { const m = unresolvedMsg(outcome); if (m) toast(m, "bad"); awaitPanelBack().then(() => loadWarpStatus()); return; }
+      loadWarpStatus();
+    },
+  });
+}
+
+// Устройства «всё в WARP»: text/plain, как списки адресов.
+async function loadWarpDevices() {
+  const ta = document.getElementById("warp-devices");
+  if (!ta) return;
+  const seq = _newLoad("warpDevices");
+  try {
+    const text = await apiGetText("/warp/devices");
+    if (_stale("warpDevices", seq)) return;
+    ta.value = text;
+  } catch (e) {
+    if (_stale("warpDevices", seq)) return;
+    toastErr("Устройства: ", e);
+  }
+}
+
+async function warpDevicesSave() {
+  const ta = document.getElementById("warp-devices");
+  const btn = document.getElementById("warp-devices-save");
+  btn.disabled = true;
+  try {
+    const d = await apiPostText("/warp/devices/save", ta.value);
+    toast(`Сохранено: ${Number(d.entries) || 0}` + (Number(d.dropped) > 0 ? `, отброшено строк: ${d.dropped}` : ""));
+    loadWarpDevices();
+    loadWarpStatus();
+  } catch (e) {
+    toastErr("Не сохранилось: ", e);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // Аналог toggleClick, но со своим onDone: после переключения обновляем
@@ -246,7 +380,7 @@ async function warpToggle(box) {
       const outcome = jobOutcome(d);
       if (outcome === JOB_FAIL) {
         box.checked = !box.checked;
-        toast("Не получилось — вернул как было", "bad");
+        toast("Не включилось — причина в логе выше", "bad");
       } else if (jobUnresolved(outcome)) {
         // Не знаем, чем кончилось — не откатываем чекбокс и не врём.
         // loadWarpStatus сам вернёт фактическое состояние, когда панель

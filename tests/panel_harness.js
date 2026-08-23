@@ -101,7 +101,10 @@ const FIXTURES = {
   "/whitelist": { ok:true, domains:["gosuslugi.ru","sberbank.ru","keenetic.link"] },
   "/exclude": { ok:true, entries:["tiandycloud.com","203.0.113.0/24","2001:db8::1"] },
   "/extra-domains": { ok:true, domains:["example.org","cdnbase.com"] },
-  "/warp/status": { ok:true, enabled:false, running:false, iface:"", ip:"" },
+  "/warp/status": (process.env.Z2K_WARP_MOCK === "uninstalled")
+    ? { ok:true, enabled:"0", installed:false, ready:false, transport:"", endpoint:"", iface:"", addr:"", entries:0, devices:0, error:"" }
+    : { ok:true, enabled:"1", installed:true, ready:true, transport:"wg", endpoint:"8.6.112.0:2408", iface:"z2ktun0", addr:"172.16.0.2", entries:1234, devices:2, error:"" },
+  "/warp/devices": "192.168.1.50\naa:bb:cc:dd:ee:ff\n",
   "/warp/games": { ok:true, games:[{name:"ApexLegends",entries:42,on:1},{name:"Valorant",entries:13,on:0}] },
   "/warp/lists": { ok:true, lists:[{name:"custom",entries:5,size:120,mtime:1785830000}] },
   "/warp/list": { ok:true, name:"custom", content:"1.2.3.4\n5.6.7.8" },
@@ -114,7 +117,9 @@ const FIXTURES = {
 global.fetch = async (url) => {
   const p = String(url).replace(/^.*\/cgi-bin\/api/, "").split("?")[0];
   const body = FIXTURES[p] || { ok:true };
-  return { ok:true, status:200, json: async () => body, text: async () => JSON.stringify(body) };
+  // Строковая фикстура — text/plain эндпоинт (/warp/devices): text() отдаёт как есть.
+  return { ok:true, status:200, json: async () => body,
+           text: async () => (typeof body === "string" ? body : JSON.stringify(body)) };
 };
 process.on("unhandledRejection", e => errors.push("async: " + (e && e.message || e)));
 
