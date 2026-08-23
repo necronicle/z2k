@@ -186,7 +186,7 @@ func TestFirstFailsSecondWorksAndRemembersLastGood(t *testing.T) {
 		t.Fatal("status.json must be removed on exit")
 	}
 	joined := strings.Join(h.cmds, "\n")
-	for _, want := range []string{"ip addr add 172.16.0.2/32 dev z2ktun0", "-A POSTROUTING -o z2ktun0 -j MASQUERADE", "-D POSTROUTING -o z2ktun0 -j MASQUERADE", "ip link set dev z2ktun0 down"} {
+	for _, want := range []string{"ip addr add 172.16.0.2/32 dev z2ktun0", "-A FORWARD -o z2ktun0 -j ACCEPT", "-A POSTROUTING -o z2ktun0 -j MASQUERADE", "-D POSTROUTING -o z2ktun0 -j MASQUERADE", "-D FORWARD -o z2ktun0 -j ACCEPT", "ip link set dev z2ktun0 down"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in\n%s", want, joined)
 		}

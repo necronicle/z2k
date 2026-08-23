@@ -7,10 +7,11 @@ export PATH="${Z2K_STUB_PATH:+$Z2K_STUB_PATH:}/opt/sbin:/opt/bin:/opt/usr/sbin:/
 #
 # NDM пересобирает таблицы netfilter на каждом регене (WAN-флап, hotplug,
 # смена политики, ребут) и сносит все не свои правила. Для WARP это три
-# вещи, и все три — наши, потому что интерфейс z2ktunN в NDM не
-# зарегистрирован (NDM принимает только тип OpkgTun, см. спек):
+# вещи, и все — наши, потому что интерфейс z2ktunN в NDM не зарегистрирован
+# (NDM принимает только тип OpkgTun, см. спек):
 #   mangle PREROUTING  — MARK по ipset'ам z2k_warp (dst) и z2k_warp_src (src);
 #   mangle FORWARD     — MSS-clamp на z2ktunN;
+#   filter FORWARD     — ACCEPT на z2ktunN (политика NDM — DROP на чужие интерфейсы);
 #   nat    POSTROUTING — MASQUERADE на z2ktunN.
 # Маршрут (`ip rule` / table 989) реген не трогает.
 #
@@ -53,6 +54,10 @@ case "$table" in
     nat)
         ipt -t nat -C POSTROUTING -o "$iface" -j MASQUERADE \
             || ipt -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
+        ;;
+    filter)
+        ipt -t filter -C FORWARD -o "$iface" -j ACCEPT \
+            || ipt -t filter -A FORWARD -o "$iface" -j ACCEPT
         ;;
 esac
 exit 0

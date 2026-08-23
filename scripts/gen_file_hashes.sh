@@ -144,7 +144,7 @@ fi
 # а z2k_fetch получает по ним sha и сверяет (см. _z2k_manifest_sha в z2k.sh).
 _verify_only() {
     case "$1" in
-        mtproxy-client/builds/*) return 0 ;;
+        mtproxy-client/builds/*|z2k-warpd/builds/*) return 0 ;;
         *) return 1 ;;
     esac
 }

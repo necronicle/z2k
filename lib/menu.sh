@@ -1410,50 +1410,67 @@ SUBMENU
 # ==============================================================================
 # ПОДМЕНЮ: ИГРОВОЙ РЕЖИМ WARP
 # ==============================================================================
-# Заворачивает только игровой ipset в туннель Cloudflare WARP (usque/MASQUE по
-# TCP — единственный рабочий транспорт из РФ). Ортогонально десинк-режиму;
-# движок — z2k-warp.sh; флаг GAME_WARP_ENABLED. Без рестарта nfqws2.
+# Туннель Cloudflare WARP на нашем движке z2k-warpd (WireGuard → MASQUE-h2).
+# Три действия, как в панели: Установить / Вкл-Выкл / Удалить — без намерения
+# юзера на роутере нет ни движка, ни демона. Ортогонально десинку: движок —
+# z2k-warp.sh, флаг GAME_WARP_ENABLED, без рестарта nfqws2.
 menu_game_warp() {
     clear_screen
     print_header "Игровой режим (WARP)"
-    local config_file="${ZAPRET2_DIR}/config"
-    # self-contained flag writer (KEY=value setter into the config)
-    # Тонкая обёртка над общей set_flag: local $config_file уже в области
-    # видимости, а вызовы ниже писались под два аргумента.
-    _set_flag() { set_flag "$1" "$2" "$config_file"; }
-    local cur; cur=$(safe_config_read "GAME_WARP_ENABLED" "$config_file" "0")
-    echo "Заворачивает заблокированные по IP хостинги (игровые серверы + диапазоны"
-    echo "Cloudflare/AWS из списка РКН) в туннель Cloudflare WARP. Внимание: пока"
-    echo "режим включён, часть сайтов на этих хостингах тоже идёт через туннель и"
-    echo "может быть медленнее. Держи выключенным вне игры."
+    local st installed cur
+    st=$(sh "${ZAPRET2_DIR}/z2k-warp.sh" status 2>/dev/null)
+    installed=$(printf '%s' "$st" | sed -n 's/.*installed=\([01]\).*/\1/p')
+    cur=$(printf '%s' "$st" | sed -n 's/.*enabled=\([01]\).*/\1/p')
+    echo "Заворачивает заблокированные по IP хостинги (игровые серверы, диапазоны"
+    echo "Cloudflare/AWS из списка РКН) и выбранные устройства в туннель Cloudflare"
+    echo "WARP. Пока режим включён, часть сайтов на этих хостингах тоже идёт через"
+    echo "туннель и может быть медленнее. Держи выключенным вне игры."
     echo
-    echo "Текущее состояние: $([ "$cur" = "1" ] && echo "ВКЛючён" || echo "выключен")"
-    [ -r "${ZAPRET2_DIR}/z2k-warp.sh" ] && { printf '  '; sh "${ZAPRET2_DIR}/z2k-warp.sh" status 2>/dev/null; }
-    echo
-    echo "[1] Включить   [0] Выключить   [B] Назад"
+    if [ "$installed" = "1" ]; then
+        echo "Движок: установлен. Режим: $([ "$cur" = "1" ] && echo "ВКЛючён" || echo "выключен")"
+        printf '  %s\n' "$st"
+        echo
+        echo "[1] Включить   [0] Выключить   [D] Удалить WARP   [B] Назад"
+    else
+        echo "Движок: не установлен (на роутере нет ни бинаря, ни демона)."
+        echo
+        echo "[I] Установить WARP (~7 МБ + регистрация у Cloudflare)   [B] Назад"
+    fi
     printf "Выбор: "; read_input sub_choice
     case "$sub_choice" in
-        1)
-            _set_flag GAME_WARP_ENABLED 1
-            print_info "Поднимаю WARP (регистрация + туннель, ~10с)..."
-            sh "${ZAPRET2_DIR}/z2k-warp.sh" enable; _warp_rc=$?
-            # Same three-way contract as the webpanel toggle (see warp_enable): 0 = verified
-            # carrying traffic, 2 = on but not up yet (keep the flag — only self-heal can
-            # finish it), anything else = hard failure, revert.
-            if [ "$_warp_rc" = "0" ]; then
-                print_success "Игровой WARP-режим включён, туннель проверен (warp=on)"
-            elif [ "$_warp_rc" = "2" ]; then
-                print_warning "Режим включён, но туннель пока не поднялся — z2k продолжит поднимать его в фоне (проверьте через минуту)"
+        [Ii])
+            print_info "Скачиваю движок и регистрирую устройство..."
+            if sh "${ZAPRET2_DIR}/z2k-warp.sh" install; then
+                print_success "WARP установлен. Включи пунктом [1]"
             else
-                _set_flag GAME_WARP_ENABLED 0
-                sh "${ZAPRET2_DIR}/z2k-warp.sh" disable >/dev/null 2>&1
-                print_error "WARP не поднялся (клиент usque недоступен) — режим оставлен выключенным"
+                print_error "Не установился — причина строкой выше"
+            fi
+            ;;
+        1)
+            [ "$installed" = "1" ] || { print_error "Сначала установи — пункт [I]"; pause; return 0; }
+            print_info "Поднимаю туннель (до 2 минут)..."
+            sh "${ZAPRET2_DIR}/z2k-warp.sh" enable; _warp_rc=$?
+            # Тот же контракт, что у тумблера панели: 0 — ready, 2 — включено,
+            # туннель поднимается (флаг остаётся), 1 — движка нет.
+            if [ "$_warp_rc" = "0" ]; then
+                print_success "WARP включён, туннель проверен"
+            elif [ "$_warp_rc" = "2" ]; then
+                print_warning "Режим включён, но туннель пока не поднялся — причина строкой выше; движок продолжает попытки в фоне"
+            else
+                print_error "WARP не установлен — режим оставлен выключенным"
             fi
             ;;
         0)
-            _set_flag GAME_WARP_ENABLED 0
             sh "${ZAPRET2_DIR}/z2k-warp.sh" disable >/dev/null 2>&1
-            print_success "Игровой WARP-режим выключен"
+            print_success "WARP выключен"
+            ;;
+        [Dd])
+            [ "$installed" = "1" ] || { print_error "Нечего удалять"; pause; return 0; }
+            printf "Удалить движок WARP? Ключ устройства и списки сохранятся [y/N]: "; read_input _c
+            case "$_c" in
+                [Yy]) sh "${ZAPRET2_DIR}/z2k-warp.sh" remove >/dev/null 2>&1; print_success "WARP удалён" ;;
+                *) print_info "Отмена" ;;
+            esac
             ;;
         [Bb]) return 0 ;;
         *) print_error "Неверный выбор" ;;

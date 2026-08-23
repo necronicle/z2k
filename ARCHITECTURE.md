@@ -106,7 +106,7 @@ reinstall» рядом с ним читать было некому).
 КАЖДОМ патче безусловно (`restart_set` в `au_apply_patch` им инициализируется),
 потому что весь вход движка — lua, хостлисты, конфиг, fake-блобы — идёт через
 него. Остальные перезапускаются по факту своего изменения: `S98tg-tunnel`,
-`S97z2k-http-tunnel`, `S96z2k-rt-proxy`, `S51z2k-warp`, `S99z2k-scheduler` (и на
+`S97z2k-http-tunnel`, `S96z2k-rt-proxy`, `S51z2k-warp` (движок WARP `z2k-warpd`, модуль `z2k-warpd/`; ставится только по кнопке), `S99z2k-scheduler` (и на
 `files/z2k-scheduler.sh` тоже), `S98z2k-detect`, `S96z2k-webpanel` (на любой
 правке `webpanel/*`). Правка `files/z2k-geosite.sh` или
 `files/lists/rkn-false-positive.txt` дополнительно тянет немедленный

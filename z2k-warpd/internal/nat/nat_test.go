@@ -19,6 +19,8 @@ func TestEnsureIsIdempotentViaCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
+		"-w -t filter -C FORWARD -o z2ktun0 -j ACCEPT",
+		"-w -t filter -A FORWARD -o z2ktun0 -j ACCEPT",
 		"-w -t nat -C POSTROUTING -o z2ktun0 -j MASQUERADE",
 		"-w -t nat -A POSTROUTING -o z2ktun0 -j MASQUERADE",
 		"-w -t mangle -C FORWARD -o z2ktun0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
@@ -51,7 +53,7 @@ func TestEnsureSkipsAddWhenPresent(t *testing.T) {
 }
 
 func TestRemoveLoopsUntilGone(t *testing.T) {
-	present := map[string]int{"nat": 2, "mangle": 1} // дубликаты от старых запусков
+	present := map[string]int{"filter": 1, "nat": 2, "mangle": 1} // дубликаты от старых запусков
 	var dels int
 	run := func(n string, a ...string) (string, error) {
 		tbl := a[2]
@@ -70,7 +72,7 @@ func TestRemoveLoopsUntilGone(t *testing.T) {
 	if err := Remove(run, "z2ktun0"); err != nil {
 		t.Fatal(err)
 	}
-	if dels != 3 || present["nat"] != 0 || present["mangle"] != 0 {
+	if dels != 4 || present["nat"] != 0 || present["mangle"] != 0 || present["filter"] != 0 {
 		t.Fatalf("dels=%d present=%v", dels, present)
 	}
 }

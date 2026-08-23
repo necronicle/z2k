@@ -54,7 +54,8 @@ assert_eq "nat: MASQUERADE on z2ktun3" "1" "$(grep -c -- '-w -t nat -A POSTROUTI
 assert_eq "nat: no mangle rules" "0" "$(grep -c -- '-t mangle' "$SB/ipt.log")"
 
 run iptables filter
-assert_eq "filter: nothing" "0" "$(wc -l < "$SB/ipt.log" | tr -d ' ')"
+assert_eq "filter: FORWARD accept on z2ktun3" "1" "$(grep -c -- '-w -t filter -A FORWARD -o z2ktun3 -j ACCEPT' "$SB/ipt.log")"
+assert_eq "filter: nothing else" "0" "$(grep -vc -- "-t filter" "$SB/ipt.log")"
 
 run ip6tables mangle
 assert_eq "ip6tables: nothing" "0" "$(wc -l < "$SB/ipt.log" | tr -d ' ')"

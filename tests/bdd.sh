@@ -27,56 +27,53 @@ fail_step() {
 pass_step() { PASSED=$((PASSED + 1)); printf '    [ok] %s\n' "$1"; }
 
 # ---- the world under test ---------------------------------------------------
+# Источник правды о туннеле — status.json движка z2k-warpd. Стабы ниже заменяют
+# РОУТЕР (iptables, ip, ipset, init движка), а не решения обвязки.
 Z2K_WARP_SOURCE_ONLY=1
 export Z2K_WARP_SOURCE_ONLY
+WARP_BIN="$SB/engine"; printf '#!/bin/sh\nexit 0\n' > "$WARP_BIN"; chmod 755 "$WARP_BIN"
+WARP_INIT="$SB/init"
+WARP_DEVICE="$SB/device.json"; printf '{"iface":"z2ktun0","id":"dev"}\n' > "$WARP_DEVICE"
+WARP_STATUS="$SB/status.json"
+WARP_LISTS_DIR="$SB/lists"; mkdir -p "$WARP_LISTS_DIR/games"
+CONFIG_FILE="$SB/config"; printf 'GAME_WARP_ENABLED=1\n' > "$CONFIG_FILE"
+WARP_READY_WAIT=1
+export WARP_BIN WARP_INIT WARP_DEVICE WARP_STATUS WARP_LISTS_DIR CONFIG_FILE WARP_READY_WAIT
 # shellcheck disable=SC1091
 . "$ROOT/files/z2k-warp.sh"
 
-WARP_DIR="$SB/warp";                 mkdir -p "$WARP_DIR"
-WARP_LIVE_STAMP="$SB/live"
-WARP_FAIL_STREAK="$SB/streak"
-WARP_KICK_STAMP="$SB/kick"
-WARP_LIVE_MAXAGE=180
-WARP_FAIL_THRESHOLD=3
-WARP_PROBE_RETRY_WAIT=0
-WARP_KICK_COOLDOWN=300
-USQUE_INIT="$SB/init"
-# self-heal gates on the ENGINE before anything else; without one it (correctly) tries to
-# provision instead of routing, and every scenario below would silentlycheck nothing.
-USQUE_BIN="$SB/engine"; printf '#!/bin/sh\nexit 0\n' > "$USQUE_BIN"; chmod 755 "$USQUE_BIN"
-USQUE_SESSION="$SB/session.conf"; echo key > "$USQUE_SESSION"
-PBR_UP="$SB/pbr_up"; PBR_DOWN="$SB/pbr_down"; RESTARTS="$SB/restarts"
+PBR_UP="$SB/pbr_up"; PBR_DOWN="$SB/pbr_down"; RESTARTS="$SB/restarts"; STOPS="$SB/stops"
 
-cat > "$USQUE_INIT" <<EOF
+cat > "$WARP_INIT" <<EOF
 #!/bin/sh
-echo x >> "$RESTARTS"
-exit 0
+case "\$1" in
+    start)  echo x >> "$RESTARTS"; touch "$SB/engine_running" ;;
+    stop)   echo x >> "$STOPS"; rm -f "$SB/engine_running" ;;
+    status) [ -f "$SB/engine_running" ] ;;
+esac
 EOF
-chmod 755 "$USQUE_INIT"
+chmod 755 "$WARP_INIT"
 
 # Router-side stubs. Everything below replaces HARDWARE, not decisions.
 warp_pbr_up()   { echo x >> "$PBR_UP"; }
 warp_pbr_down() { echo x >> "$PBR_DOWN"; }
-warp_ipset_load() { return 0; }
-warp_purge_legacy_nat() { return 0; }
-warp_write_iface_ip() { return 1; }
-warp_enroll_or_fallback() { return 1; }
-warp_link_up() { return 0; }
-warp_flag() { echo 1; }
-ipset() { return 0; }
-ip() {   # an interface that exists, is addressed and UP — the "looks healthy" case
-    if [ "$1" = "-o" ]; then echo "44: $WARP_IFACE    inet 172.16.240.2/32 scope global $WARP_IFACE"; return 0; fi
-    if [ "$1" = link ]; then echo "44: $WARP_IFACE: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1280"; return 0; fi
-    return 0
+warp_ipset_all() { return 0; }
+warp_ipset_src_load() { return 0; }
+ipset() { case "$*" in list*) echo "Members:"; return 0 ;; esac; return 0; }
+ip() { return 0; }
+iptables() { return 0; }
+
+status_json() { # $1 = true|false, $2 = last_error
+    printf '{"ready":%s,"transport":"wg","endpoint":"8.6.112.0:2408","iface":"z2ktun0","addr":"172.16.0.2","last_error":"%s"}\n' "$1" "${2:-}" > "$WARP_STATUS"
 }
-warp_usque_running() { [ -f "$SB/engine_running" ]; }
-date_now() { date +%s; }
 
 reset_world() {
-    : > "$PBR_UP"; : > "$PBR_DOWN"; : > "$RESTARTS"
-    rm -f "$WARP_LIVE_STAMP" "$WARP_FAIL_STREAK" "$WARP_KICK_STAMP"
+    : > "$PBR_UP"; : > "$PBR_DOWN"; : > "$RESTARTS"; : > "$STOPS"
+    rm -f "$WARP_STATUS"
     touch "$SB/engine_running"
-    LAST_STATE=""
+    printf '#!/bin/sh\nexit 0\n' > "$WARP_BIN"; chmod 755 "$WARP_BIN"
+    printf 'GAME_WARP_ENABLED=1\n' > "$CONFIG_FILE"
+    LAST_STATE=""; LAST_RC=""; LAST_OUT=""
 }
 count() { wc -l < "$1" 2>/dev/null | tr -d ' '; }
 
@@ -94,47 +91,49 @@ check_scenario_had_steps() {
 run_step() {
     step="$1"
     case "$step" in
-        "туннель не проводит трафик")
-            warp_tunnel_live_retry() { return 1; }; return 0 ;;
-        "туннель проводит трафик")
-            warp_tunnel_live_retry() { return 0; }; return 0 ;;
-        "проверка живости провалилась подряд раз: "*)
-            n=${step##*: }
-            # the scenario's Nth failure is the one the When performs
-            echo $((n - 1)) > "$WARP_FAIL_STREAK"; return 0 ;;
+        "движок сообщает, что туннель не проводит трафик")
+            status_json false; return 0 ;;
+        "движок сообщает, что туннель проводит трафик")
+            status_json true; return 0 ;;
+        "причина отказа: "*)
+            status_json false "${step##*: }"; return 0 ;;
         "движок не запущен")
             rm -f "$SB/engine_running"; return 0 ;;
-        "вердикт о живости старше допустимого")
-            echo "$(( $(date_now) - 100000 )) 1" > "$WARP_LIVE_STAMP"; return 0 ;;
-        "вердикт о живости свежий и положительный")
-            echo "$(date_now) 1" > "$WARP_LIVE_STAMP"; return 0 ;;
+        "движок не установлен")
+            rm -f "$WARP_BIN"; rm -f "$SB/engine_running"; return 0 ;;
+        "движок не оставил вердикта")
+            rm -f "$WARP_STATUS"; return 0 ;;
         "режим выключается")
             warp_disable >/dev/null 2>&1; return 0 ;;
+        "режим включается")
+            LAST_OUT=$(warp_enable 2>&1); LAST_RC=$?; return 0 ;;
         "выполняется самолечение")
             warp_selfheal >/dev/null 2>&1; return 0 ;;
         "панель спрашивает состояние")
-            LAST_STATE=$(warp_live_cached); return 0 ;;
+            LAST_STATE=$(warp_status | sed -n 's/.*ready=\([01]\).*/\1/p'); return 0 ;;
 
         "маршрутизация снята")
             [ "$(count "$PBR_DOWN")" -ge 1 ] || { REASON="routing was never torn down"; return 1; }; return 0 ;;
-        "маршрутизация сохранена")
-            [ "$(count "$PBR_DOWN")" -eq 0 ] || { REASON="routing was torn down on a single miss"; return 1; }; return 0 ;;
         "маршрутизация применена")
             [ "$(count "$PBR_UP")" -ge 1 ] || { REASON="routing was never applied"; return 1; }; return 0 ;;
+        "маршрутизация не трогалась")
+            [ "$(count "$PBR_UP")" -eq 0 ] && [ "$(count "$PBR_DOWN")" -eq 0 ] || { REASON="routing was touched"; return 1; }; return 0 ;;
         "трафик идёт напрямую")
             [ "$(count "$PBR_UP")" -eq 0 ] || { REASON="routing was applied into a dead tunnel"; return 1; }; return 0 ;;
-        "предпринята попытка восстановления")
-            [ "$(count "$RESTARTS")" -ge 1 ] || { REASON="no recovery was attempted"; return 1; }; return 0 ;;
         "движок не перезапускался")
-            [ "$(count "$RESTARTS")" -eq 0 ] || { REASON="a healthy tunnel was restarted"; return 1; }; return 0 ;;
+            [ "$(count "$RESTARTS")" -eq 0 ] || { REASON="engine was (re)started"; return 1; }; return 0 ;;
         "движок запущен")
             [ "$(count "$RESTARTS")" -ge 1 ] || { REASON="a stopped engine was not started"; return 1; }; return 0 ;;
-        "состояние неизвестно")
-            [ -z "$LAST_STATE" ] || { REASON="stale verdict reported as '$LAST_STATE'"; return 1; }; return 0 ;;
+        "движок остановлен")
+            [ "$(count "$STOPS")" -ge 1 ] || { REASON="engine was not stopped"; return 1; }; return 0 ;;
+        "включение ответило кодом "*)
+            [ "$LAST_RC" = "${step##*кодом }" ] || { REASON="enable rc=$LAST_RC"; return 1; }; return 0 ;;
+        "причина названа: "*)
+            printf '%s' "$LAST_OUT" | grep -q "${step##*: }" || { REASON="reason missing in: $LAST_OUT"; return 1; }; return 0 ;;
+        "состояние не живое")
+            [ "$LAST_STATE" = "0" ] || { REASON="missing verdict reported as '$LAST_STATE'"; return 1; }; return 0 ;;
         "состояние живое")
             [ "$LAST_STATE" = "1" ] || { REASON="fresh live verdict reported as '$LAST_STATE'"; return 1; }; return 0 ;;
-        "вердикт о живости удалён")
-            [ ! -f "$WARP_LIVE_STAMP" ] || { REASON="the liveness verdict outlived the mode"; return 1; }; return 0 ;;
         *) return 2 ;;
     esac
 }

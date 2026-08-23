@@ -381,7 +381,7 @@ else
     no "место проверки размера" "между воротами и разбором" "ворота=$_gate_line потолок=$_cap_line case=$_case_line"
 fi
 # Крупные загрузки не должны попасть под общий потолок.
-grep -q '/warp/list/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate' "$API" \
+grep -q '/warp/list/save|/warp/devices/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate' "$API" \
     && ok "маршруты крупных загрузок выведены из-под общего потолка" \
     || no "исключения для крупных загрузок" "перечислены" "нет"
 

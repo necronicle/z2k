@@ -106,13 +106,13 @@ go_mutant "probe body-byte requirement removed" \
     'if n, err := io.CopyN(io.Discard, rd, 0); err != nil && n < 0 {'
 
 # ---------------------------------------------------------------------------
-# Shell mutants — files/z2k-warp.sh against tests/test_warp_selfheal.sh
+# Shell mutants — files/z2k-warp.sh against tests/test_warp_script.sh
 # ---------------------------------------------------------------------------
 sh_mutant() {
     desc="$1"; from="$2"; to="$3"
     rm -rf "$WORK/sh"; mkdir -p "$WORK/sh/files" "$WORK/sh/tests"
     cp "$ROOT/files/z2k-warp.sh" "$WORK/sh/files/"
-    cp "$ROOT/tests/test_warp_selfheal.sh" "$WORK/sh/tests/"
+    cp "$ROOT/tests/test_warp_script.sh" "$WORK/sh/tests/"
     if ! grep -qF "$from" "$WORK/sh/files/z2k-warp.sh"; then
         stale "$desc (якорь не найден — мутант протух)"
         return
@@ -123,7 +123,7 @@ path, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path, encoding='utf-8').read()
 open(path, 'w', encoding='utf-8').write(s.replace(frm, to, 1))
 PY
-    if sh "$WORK/sh/tests/test_warp_selfheal.sh" >/dev/null 2>&1; then
+    if sh "$WORK/sh/tests/test_warp_script.sh" >/dev/null 2>&1; then
         fail "sh: $desc"
     else
         pass "sh: $desc"
@@ -132,49 +132,55 @@ PY
 
 printf '\n=== Shell mutants (z2k-warp.sh) ===\n'
 
-# Fail-open is what stops a dead tunnel blackholing ~14k networks.
-sh_mutant "fail-open never triggers (threshold raised out of reach)" \
-    'if [ "$streak" -ge "$WARP_FAIL_THRESHOLD" ]; then' \
-    'if [ "$streak" -ge 999999 ]; then'
+# Fail-open: мёртвый туннель обязан отпустить трафик напрямую, а не держать его в чёрной дыре.
+sh_mutant "fail-open removed (dead tunnel keeps the route)" \
+    '        warp_pbr_down            # fail open: напрямую лучше, чем в чёрную дыру' \
+    '        warp_pbr_up'
 
-# Tearing routing down on the FIRST miss fights usque's wake-on-traffic recovery.
-sh_mutant "fail-open on the first miss (recovery window removed)" \
-    'if [ "$streak" -ge "$WARP_FAIL_THRESHOLD" ]; then' \
-    'if [ "$streak" -ge 1 ]; then'
+# Маршрут — только на доказанно живой туннель.
+sh_mutant "enable routes regardless of readiness" \
+    '    if warp_ready; then
+        warp_pbr_up' \
+    '    if true; then
+        warp_pbr_up'
 
-# The cooldown is the only thing between a blocked endpoint and a restart storm.
-sh_mutant "restart cooldown bypassed" \
-    '_warp_cooldown_ok "$WARP_KICK_STAMP" "$WARP_KICK_COOLDOWN" || return 0' \
-    'true || return 0'
+# «Удалить» оставляет ключ устройства: иначе каждая переустановка — новое устройство у Cloudflare.
+sh_mutant "remove burns the device key" \
+    '    rm -f "$WARP_BIN" "$WARP_BIN".new.* 2>/dev/null' \
+    '    rm -f "$WARP_BIN" "$WARP_BIN".new.* "$WARP_DEVICE" 2>/dev/null'
 
-# A stamp we cannot write must mean "do not act", or a read-only /opt becomes a storm.
-sh_mutant "unwritable cooldown stamp treated as permission to proceed" \
-    '{ echo "$now" > "$stamp"; } 2>/dev/null || return 1' \
-    '{ echo "$now" > "$stamp"; } 2>/dev/null; true'
+# Без движка флаг обязан откатиться, иначе панель врёт «включено».
+sh_mutant "enable without engine leaves the flag on" \
+    '    [ -x "$WARP_BIN" ] || { _wlog "движок не установлен — нажмите «Установить»"; warp_set_flag 0; return 1; }' \
+    '    [ -x "$WARP_BIN" ] || { _wlog "движок не установлен — нажмите «Установить»"; return 1; }'
 
-# Enrollment must alternate; defecting to the relay for good strands routers permanently.
-sh_mutant "enrolment counter never resets (relay-only forever)" \
-    '{ echo 0 > "$WARP_REG_COUNT"; } 2>/dev/null' \
-    'true'
+# --set-mark затирает mark-word Keenetic; форма с маской — не косметика.
+sh_mutant "MARK regresses to --set-mark (clobbers the mark word)" \
+    '            || iptables -w -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null' \
+    '            || iptables -w -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-mark "$WARP_MARK" 2>/dev/null'
 
-# A stale liveness verdict must read as unknown, never as "working".
-sh_mutant "stale liveness verdict reported as live" \
-    '[ $((now - ts)) -gt "$WARP_LIVE_MAXAGE" ] && return 0' \
-    'true'
+# Selfheal при выключенном режиме — no-op, иначе реген воскрешает выключенную функцию.
+sh_mutant "selfheal runs with the mode off" \
+    'warp_selfheal() {
+    [ "$(warp_flag)" = "1" ] || return 0' \
+    'warp_selfheal() {
+    true'
 
-# Routing must only be asserted while the tunnel is proven — this is the blackhole guard.
-sh_mutant "routing applied regardless of the liveness verdict" \
-    'if warp_tunnel_live_retry; then' \
-    'if true; then'
+# Установка — это бинарь и ключ, и только. Демон стартует по тумблеру.
+sh_mutant "install starts the daemon" \
+    '    if out=$("$WARP_BIN" register --device "$WARP_DEVICE" 2>&1); then
+        _wlog "$out"; return 0' \
+    '    if out=$("$WARP_BIN" register --device "$WARP_DEVICE" 2>&1); then
+        _wlog "$out"; sh "$WARP_INIT" start >/dev/null 2>&1; return 0'
 
 # ---------------------------------------------------------------------------
-# Init-script mutants — files/init.d/S51z2k-warp against tests/test_warp_init.sh
+# Init-script mutants — files/init.d/S51z2k-warp against tests/test_warp_init_thin.sh
 # ---------------------------------------------------------------------------
 init_mutant() {
     desc="$1"; from="$2"; to="$3"
     rm -rf "$WORK/init"; mkdir -p "$WORK/init/files/init.d" "$WORK/init/tests"
     cp "$ROOT/files/init.d/S51z2k-warp" "$WORK/init/files/init.d/"
-    cp "$ROOT/tests/test_warp_init.sh" "$WORK/init/tests/"
+    cp "$ROOT/tests/test_warp_init_thin.sh" "$WORK/init/tests/"
     if ! grep -qF "$from" "$WORK/init/files/init.d/S51z2k-warp"; then
         stale "$desc (якорь не найден — мутант протух)"
         return
@@ -185,7 +191,7 @@ path, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path, encoding='utf-8').read()
 open(path, 'w', encoding='utf-8').write(s.replace(frm, to, 1))
 PY2
-    if sh "$WORK/init/tests/test_warp_init.sh" >/dev/null 2>&1; then
+    if sh "$WORK/init/tests/test_warp_init_thin.sh" >/dev/null 2>&1; then
         fail "init: $desc"
     else
         pass "init: $desc"
@@ -194,20 +200,20 @@ PY2
 
 printf '\n=== Init mutants (S51z2k-warp) ===\n'
 
-# Adopting any live opkgtunN hijacks another Entware tunnel and drops it on our stop().
-init_mutant "adopts ANY existing tunnel, not just the package's" \
-    '    i=$(grep -m1 '"'"'^IFACE='"'"' /opt/etc/usque/usque.conf 2>/dev/null | cut -d= -f2 | tr -d '"'"'"'"'"' | tr -d '"'"' '"'"')' \
-    '    i=$(ip -o link show 2>/dev/null | awk -F": " "{print \$2}" | grep "^opkgtun[0-9]*$" | head -1)'
+# Без бинаря — штатно, exit 0; иначе Entware считает сервис сломанным на каждом буте.
+init_mutant "missing engine reported as failure" \
+    '[ -x "$BIN" ] || exit 0' \
+    '[ -x "$BIN" ] || exit 1'
 
-# "Held by us" must not count as a conflict, or we move address on every start.
-init_mutant "own address counted as a conflict" \
-    '$2 != ifc { sub(/\/.*/, "", $4); if ($4 == want) found = 1 }' \
-    '{ sub(/\/.*/, "", $4); if ($4 == want) found = 1 }'
+# Повторный start не плодит второй демон.
+init_mutant "second start spawns a second daemon" \
+    '        if running; then' \
+    '        if false; then'
 
-# Ignoring conflicts is what left NDM refusing to raise the interface, silently.
-init_mutant "address conflict ignored (pin unconditionally)" \
-    '        if ! addr_taken_by_other "$a" "$ifc"; then' \
-    '        if true; then'
+# MIPS без asyncpreemptoff — известный краш Go.
+init_mutant "MIPS async-preempt guard removed" \
+    'case "$(uname -m)" in mips*) export GODEBUG=asyncpreemptoff=1 ;; esac' \
+    ':'
 
 printf '\n=== mutation score: %d killed, %d survived, %d stale ===\n' "$KILLED" "$SURVIVED" "$STALE"
 if [ "$SURVIVED" -ne 0 ]; then
