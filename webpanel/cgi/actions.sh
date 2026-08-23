@@ -673,40 +673,32 @@ svc_action_async() {
 # которых стоит ротация и автохостлист; silent fallback к тому моменту
 # сводился к одному лишнему --payload перед circular и только сужал обзор.
 
-# WARP game mode — route only the game-server ipset through a Cloudflare WARP
-# (usque/MASQUE) tunnel; everything else stays direct. Independent of nfqws2:
-# NO regenerate_config / service restart (it's routing, not desync). z2k-warp.sh
-# is the engine. On enable-failure (e.g. usque registration timed out under RU
-# CF throttle) we revert the flag so the UI never lies about being on.
+# WARP — игровой режим поверх нашего движка z2k-warpd. Маршрутизация, не
+# десинк: никакого regenerate_config / рестарта nfqws2. Движок — z2k-warp.sh.
+# Коды enable — контракт: 0 ready; 2 включено, туннель поднимается (флаг
+# остаётся, причина — код в статусе, панель переводит его в текст); 1 — нет
+# бинаря (флаг откатывается).
 toggle_game_warp() {
     local want="$1" rc
-    set_flag "GAME_WARP_ENABLED" "$want" "$CONFIG_FILE" || return 1
     if [ "$want" = "1" ]; then
-        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable; rc=$?
-        # rc=2: routing is applied but the end-to-end probe says the tunnel is not carrying
-        # traffic yet (enrollment blocked, usque still reconnecting). Do NOT revert the flag —
-        # self-heal is the only thing that can finish the job and it only runs while the mode
-        # is on. Report it honestly instead; the old code returned success here regardless,
-        # which is exactly why the panel claimed "включено" over a dead tunnel.
+        sh "$WARP_SCRIPT" enable; rc=$?
         if [ "$rc" = "2" ]; then
-            # A FINAL answer, not a homework assignment. z2k-warp.sh has already spent its
-            # budget starting, restarting and probing, and prints a "причина: ..." line right
-            # above this one. Telling the user to come back and look again is the one outcome
-            # that helps nobody — they do not come back, they file another identical report.
-            echo "Туннель поднять не удалось — причина указана строкой выше. Режим оставлен включённым, трафик идёт напрямую; z2k продолжит попытки в фоне, повторное включение ничего не изменит." >&2
+            echo "Туннель ещё не поднялся — причина в статусе раздела WARP. Режим оставлен включённым, трафик пока идёт напрямую; движок продолжает попытки в фоне." >&2
             return 0
         fi
         if [ "$rc" != "0" ]; then
-            set_flag "GAME_WARP_ENABLED" "0" "$CONFIG_FILE"
-            # tear down any half-started tunnel so a failed enable doesn't orphan usque
-            sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable >/dev/null 2>&1
-            echo "WARP не поднялся (клиент usque недоступен) — режим оставлен выключенным" >&2
+            echo "WARP не установлен — нажмите «Установить» в разделе WARP" >&2
             return 1
         fi
     else
-        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" disable
+        sh "$WARP_SCRIPT" disable
     fi
 }
+
+# Установка движка: скачать бинарь под арку, зарегистрировать устройство.
+# Ничего не запускает — это делает тумблер. Удаление: всё кроме device.json.
+warp_install_action() { sh "$WARP_SCRIPT" install; }
+warp_remove_action()  { sh "$WARP_SCRIPT" remove; }
 
 toggle_customd() {
     # Note: 1 = ENABLED, 0 = DISABLED in our API; the config flag is
@@ -1514,41 +1506,45 @@ warp_ipset_reload_if_enabled() {
 }
 
 warp_status_info() {
-    # Stdout-эмиссия для api.sh: "enabled=X|installed=X|tunnel_up=X|live=X|addr=X|entries=N"
-    # WARP_IFACE/WARP_IPSET are ENV tunables of z2k-warp.sh (it does not read
-    # the config file) — mirror that here, do not invent a config override.
-    #
-    # tunnel_up ("интерфейс настроен") and live ("трафик реально ходит") are DIFFERENT
-    # questions and the difference is the whole bug this replaces: the address is assigned
-    # by NDM at usque start time whether or not the MASQUE session to Cloudflare ever came
-    # up, so tunnel_up alone reported stone-dead tunnels as working. `live` is the cached
-    # verdict of z2k-warp.sh's end-to-end probe — read from a stamp, never probed here: a
-    # status call is on the panel's polling path and must not block for seconds. Empty
-    # means "не проверялось / устарело", which the UI must render as unknown, not as dead.
-    local enabled installed tunnel_up live addr entries iface ipset_name st
-    enabled=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
-    ipset_name="${WARP_IPSET:-z2k_warp}"
-    installed=0
-    # The ENGINE binary is the thing that has to exist — not the old package's init script.
-    # This still pointed at /opt/etc/init.d/S51usque after z2k took the tunnel lifecycle over,
-    # and since we now deliberately disable that script, the panel reported "ставится при
-    # первом включении" on a router where the engine was installed and the tunnel was up.
-    [ -x /opt/sbin/z2k-usque ] && installed=1
-    # Ask the engine — ONE status call gives both the cached liveness verdict and the
-    # interface name. Do NOT hard-code opkgtun0 here: the usque package picks the first free
-    # opkgtunN at install time, so on a router with a leftover interface the real tunnel is
-    # opkgtun1 and this panel would have reported on an orphan.
-    st=""
+    # Stdout для api.sh — строка key=value от z2k-warp.sh status (он читает
+    # status.json движка; проб здесь нет и быть не должно — это путь опроса
+    # панели). enabled берём из конфига сами: значение может быть битым, и
+    # контрактный тест требует донести его как есть.
+    local st=""
     [ -f "$WARP_SCRIPT" ] && st=$(sh "$WARP_SCRIPT" status 2>/dev/null)
-    live=$(printf '%s' "$st" | sed -n 's/.*live=\([01]*\).*/\1/p')
-    iface=$(printf '%s' "$st" | sed -n 's/.*iface=\([^ ]*\).*/\1/p')
-    [ -n "$iface" ] || iface="${WARP_IFACE:-opkgtun0}"
-    addr=$(ip -o addr show "$iface" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | cut -d' ' -f2)
-    tunnel_up=0
-    [ -n "$addr" ] && tunnel_up=1
-    entries=$(ipset list "$ipset_name" 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')
-    printf 'enabled=%s|installed=%s|tunnel_up=%s|live=%s|addr=%s|entries=%s\n' \
-        "$enabled" "$installed" "$tunnel_up" "${live:-}" "${addr:-}" "${entries:-0}"
+    printf '%s enabled=%s\n' "$st" "$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")"
+}
+
+# ---------- устройства «всё в WARP» (lists/warp/devices.txt) ----------
+# Строка — IPv4 или MAC; MAC нормализуется к нижнему регистру с двоеточиями.
+# Мусор отбрасывается и считается. Живой ipset пересобирается, если режим включён.
+warp_devices_read() {
+    [ -f "$WARP_LISTS_DIR/devices.txt" ] && cat "$WARP_LISTS_DIR/devices.txt"
+    return 0
+}
+
+warp_devices_save() {
+    # stdin → devices.txt; stdout: "entries=N dropped=M"
+    warp_lists_ensure_dir || return 1
+    local tmp="$WARP_LISTS_DIR/.devices.$$"
+    awk '
+    function ip_ok(s,  o) {
+        if (s !~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/) return 0
+        split(s, o, "."); return (o[1] > 0 && o[1] <= 255 && o[2] <= 255 && o[3] <= 255 && o[4] <= 255)
+    }
+    {
+        sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
+        if ($0 == "" || $0 ~ /^#/) next
+        m = tolower($0); gsub(/-/, ":", m)
+        if (m ~ /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/) { print m; n++; next }
+        if (ip_ok($0)) { print $0; n++; next }
+        d++
+    }
+    END { printf "entries=%d dropped=%d\n", n, d > "/dev/stderr" }' > "$tmp" 2> "$tmp.stat" || { rm -f "$tmp" "$tmp.stat"; return 1; }
+    mv -f "$tmp" "$WARP_LISTS_DIR/devices.txt" && chmod 644 "$WARP_LISTS_DIR/devices.txt"
+    cat "$tmp.stat"; rm -f "$tmp.stat"
+    warp_ipset_reload_if_enabled
+    return 0
 }
 
 warp_lists() {

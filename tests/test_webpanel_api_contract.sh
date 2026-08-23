@@ -200,6 +200,46 @@ OUT=$(cgi GET /debug "" | cgi_body)
 assert_eq "debug — валидный JSON"          "1"  "$(json_ok_p "$OUT")"
 printf 'ENABLED=1\n' > "$CONFIG_FILE"
 
+printf "\n--- /warp/status: поля движка z2k-warpd; /warp/install|remove: job; /warp/devices ---\n"
+# Статус панель читает из status.json движка через z2k-warp.sh status — без проб.
+WARP_SCRIPT="$SB/warp-stub.sh"; export WARP_SCRIPT
+cat > "$WARP_SCRIPT" <<'WSTUB'
+#!/bin/sh
+case "$1" in
+    status) echo 'installed=1 enabled=1 ready=1 transport=wg endpoint=8.6.112.0:2408 iface=z2ktun0 addr=172.16.0.2 entries=12 devices=2 error=' ;;
+    ipset)  : ;;
+    migrate) mkdir -p "$WARP_LISTS_DIR"; touch "$WARP_LISTS_DIR/.legacy-aggregate-purged" ;;
+esac
+WSTUB
+chmod +x "$WARP_SCRIPT"
+printf 'ENABLED=1\nGAME_WARP_ENABLED=1\n' > "$CONFIG_FILE"
+OUT=$(cgi GET /warp/status "" | cgi_body)
+assert_eq "warp/status — валидный JSON"          "1"               "$(json_ok_p "$OUT")"
+assert_eq "warp/status — installed из скрипта"   "true"            "$(jget "$OUT" 'd["installed"]')"
+assert_eq "warp/status — ready"                  "true"            "$(jget "$OUT" 'd["ready"]')"
+assert_eq "warp/status — transport"              "wg"              "$(jget "$OUT" 'd["transport"]')"
+assert_eq "warp/status — endpoint"               "8.6.112.0:2408"  "$(jget "$OUT" 'd["endpoint"]')"
+assert_eq "warp/status — iface"                  "z2ktun0"         "$(jget "$OUT" 'd["iface"]')"
+assert_eq "warp/status — devices"                "2"               "$(jget "$OUT" 'd["devices"]')"
+assert_eq "warp/status — error пустой"           ""                "$(jget "$OUT" 'd["error"]')"
+
+OUT=$(cgi POST /warp/install "" | cgi_body)
+assert_eq "warp/install — валидный JSON с job" "1" "$(jget "$OUT" '1 if d.get("job") else 0')"
+OUT=$(cgi POST /warp/remove "" | cgi_body)
+assert_eq "warp/remove — валидный JSON с job"  "1" "$(jget "$OUT" '1 if d.get("job") else 0')"
+
+printf '192.168.1.5\nzz\nAA:BB:CC:DD:EE:FF\n11-22-33-44-55-66\n999.1.1.1\n' > "$SB/devices.body"
+OUT=$(cgi POST /warp/devices/save "" "$SB/devices.body" | cgi_body)
+assert_eq "warp/devices/save — валидный JSON"  "1" "$(json_ok_p "$OUT")"
+assert_eq "warp/devices/save — entries=3"      "3" "$(jget "$OUT" 'd["entries"]')"
+assert_eq "warp/devices/save — dropped=2"      "2" "$(jget "$OUT" 'd["dropped"]')"
+assert_eq "devices.txt — три строки"           "3" "$(wc -l < "$WARP_LISTS_DIR/devices.txt" | tr -d ' ')"
+assert_eq "devices.txt — MAC нормализован"     "aa:bb:cc:dd:ee:ff" "$(sed -n 2p "$WARP_LISTS_DIR/devices.txt")"
+OUT=$(cgi GET /warp/devices "")
+assert_eq "warp/devices — text/plain"          "1" "$(printf '%s' "$OUT" | grep -c 'Content-Type: text/plain')"
+assert_eq "warp/devices — отдаёт сохранённое"  "1" "$(printf '%s' "$OUT" | grep -c '^11:22:33:44:55:66$')"
+printf 'ENABLED=1\n' > "$CONFIG_FILE"
+
 printf "\n--- /state: битое 4-е поле не роняет весь ответ ---\n"
 # ts печатается ЧИСЛОМ без кавычек. Обрыв записи в state.tsv оставлял там
 # мусор, и невалидным становился ВЕСЬ ответ — таблица пустела целиком.

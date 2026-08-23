@@ -222,7 +222,7 @@ panel_auth_gate
 # Крупные загрузки (списки, своя стратегия) идут через read_body_raw и свои
 # собственные потолки в мегабайтах — их это ограничение не касается.
 case "$PATH_INFO" in
-    /warp/list/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate) ;;
+    /warp/list/save|/warp/devices/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate) ;;
     *)
         if [ "${CONTENT_LENGTH:-0}" -gt "$Z2K_MAX_BODY" ] 2>/dev/null; then
             json_fail "413 Payload Too Large" "запрос слишком большой"
@@ -568,32 +568,52 @@ case "$method $path" in
     # ---------- WARP (webpanel «WARP» section) ----------
     "GET /warp/status")
         result=$(warp_status_info)
-        w_enabled=$(printf '%s' "$result" | sed -n 's/.*enabled=\([^|]*\).*/\1/p')
-        w_installed=$(printf '%s' "$result" | sed -n 's/.*installed=\([0-9]*\).*/\1/p')
-        w_up=$(printf '%s' "$result" | sed -n 's/.*tunnel_up=\([0-9]*\).*/\1/p')
-        w_live=$(printf '%s' "$result" | sed -n 's/.*live=\([^|]*\).*/\1/p')
-        w_addr=$(printf '%s' "$result" | sed -n 's/.*addr=\([^|]*\).*/\1/p')
-        w_entries=$(printf '%s' "$result" | sed -n 's/.*entries=\([0-9]*\).*/\1/p')
-        w_inst_j=false; [ "${w_installed:-0}" = "1" ] && w_inst_j=true
-        w_up_j=false;   [ "${w_up:-0}" = "1" ] && w_up_j=true
-        # "live" is deliberately TRI-state: true / false / null. null = не проверялось или
-        # проверка устарела — the UI must not paint that as a failure.
-        #
-        # Ветвление вынесено ИЗ printf: `$(case ... )` разбирают не все оболочки
-        # (bash 3.2 печатает синтаксическую ошибку прямо в тело ответа, и JSON
-        # разваливается), а /warp/status лежит на пути опроса панели.
-        case "${w_live:-}" in
-            1) w_live_j=true ;;
-            0) w_live_j=false ;;
-            *) w_live_j=null ;;
-        esac
+        _wf() { printf '%s' "$result" | sed -n "s/.*$1=\([^ ]*\).*/\1/p" | head -1; }
+        w_enabled=$(printf '%s' "$result" | sed -n 's/.*enabled=\(.*\)$/\1/p')
+        w_inst_j=false;  [ "$(_wf installed)" = "1" ] && w_inst_j=true
+        w_ready_j=false; [ "$(_wf ready)" = "1" ] && w_ready_j=true
         json_header
-        printf '{"ok":true,"enabled":'
-        json_string "${w_enabled:-0}"
-        printf ',"installed":%s,"tunnel_up":%s,"live":%s,"addr":' \
-            "$w_inst_j" "$w_up_j" "$w_live_j"
-        json_string "${w_addr:-}"
-        printf ',"entries":%s}\n' "${w_entries:-0}"
+        printf '{"ok":true,"enabled":'; json_string "${w_enabled:-0}"
+        printf ',"installed":%s,"ready":%s,"transport":' "$w_inst_j" "$w_ready_j"; json_string "$(_wf transport)"
+        printf ',"endpoint":'; json_string "$(_wf endpoint)"
+        printf ',"iface":';    json_string "$(_wf iface)"
+        printf ',"addr":';     json_string "$(_wf addr)"
+        printf ',"entries":%s,"devices":%s,"error":' "$(_wf entries | grep -E '^[0-9]+$' || echo 0)" "$(_wf devices | grep -E '^[0-9]+$' || echo 0)"
+        json_string "$(_wf error)"
+        printf '}\n'
+        exit 0
+        ;;
+
+    # Установка/удаление движка — долгие (скачивание ~7 МБ, регистрация у
+    # Cloudflare через десинк или релей), поэтому job, как у тумблеров.
+    "POST /warp/install")
+        job_id=$(svc_action_async "Установка WARP" "warp_install_action")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+    "POST /warp/remove")
+        job_id=$(svc_action_async "Удаление WARP" "warp_remove_action")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+
+    # Устройства «всё в WARP»: text/plain, как /warp/list.
+    "GET /warp/devices")
+        printf 'Content-Type: text/plain; charset=utf-8\r\n\r\n'
+        warp_devices_read
+        exit 0
+        ;;
+    "POST /warp/devices/save")
+        if [ "${CONTENT_LENGTH:-0}" -gt 2097152 ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "list too large (max 2 MB)"
+        fi
+        result=$(read_body_raw | warp_devices_save) || json_fail "400 Bad Request" "save failed"
+        w_n=$(printf '%s' "$result" | sed -n 's/.*entries=\([0-9]*\).*/\1/p')
+        w_d=$(printf '%s' "$result" | sed -n 's/.*dropped=\([0-9]*\).*/\1/p')
+        json_header
+        printf '{"ok":true,"entries":%d,"dropped":%d}\n' "${w_n:-0}" "${w_d:-0}"
         exit 0
         ;;
 
