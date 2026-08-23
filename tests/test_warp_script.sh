@@ -196,10 +196,19 @@ MIG() {
 }
 mkdir -p "$SB/etc/z2k-warp-legacy" "$SB/initd"
 
-# (а) наследие z2k: бинарь, снятый нами бит на S51usque, session.conf, стампы, пакет стоит
-touch "$SB/sbin/z2k-usque" "$SB/initd/S51usque" "$SB/etc/z2k-warp-legacy/session.conf" "$SB/etc/z2k-warp-legacy/iface" "$SB/z2k/.z2k-warp-kick" "$SB/pkg.installed"
-chmod -x "$SB/initd/S51usque"; rm -f "$SB/opkg.log"
+cat > "$SB/bin/ndmc" <<EOF
+#!/bin/sh
+echo "\$2" >> "$SB/ndmc.log"
+EOF
+chmod +x "$SB/bin/ndmc"
+# (а) наследие z2k: бинарь, снятый нами бит на S51usque, session.conf, iface, стампы, пакет стоит
+touch "$SB/sbin/z2k-usque" "$SB/initd/S51usque" "$SB/etc/z2k-warp-legacy/session.conf" "$SB/z2k/.z2k-warp-kick" "$SB/pkg.installed"
+echo opkgtun1 > "$SB/etc/z2k-warp-legacy/iface"
+chmod -x "$SB/initd/S51usque"; rm -f "$SB/opkg.log" "$SB/ndmc.log"
 MIG
+assert_eq "migrate(ours): NDM interface removed by our recorded name" "1" "$(grep -c '^no interface OpkgTun1$' "$SB/ndmc.log")"
+assert_eq "migrate(ours): NDM config saved" "1" "$(grep -c '^system configuration save$' "$SB/ndmc.log")"
+assert_eq "migrate(ours): iface record removed after NDM" "no" "$([ -e "$SB/etc/z2k-warp-legacy/iface" ] && echo yes || echo no)"
 assert_eq "migrate(ours): usque binary removed" "no" "$([ -e "$SB/sbin/z2k-usque" ] && echo yes || echo no)"
 assert_eq "migrate(ours): S51usque removed" "no" "$([ -e "$SB/initd/S51usque" ] && echo yes || echo no)"
 assert_eq "migrate(ours): session.conf removed" "no" "$([ -e "$SB/etc/z2k-warp-legacy/session.conf" ] && echo yes || echo no)"
@@ -214,9 +223,10 @@ MIG
 assert_eq "migrate(after purge): foreign package kept" "0" "$([ -f "$SB/opkg.log" ] && grep -c '^remove' "$SB/opkg.log" || echo 0)"
 assert_eq "migrate(after purge): foreign S51usque kept" "yes" "$([ -e "$SB/initd/S51usque" ] && echo yes || echo no)"
 
-# (в) то же на свежем роутере, где z2k никогда WARP не ставил
-rm -f "$SB/opkg.log"
+# (в) то же на свежем роутере, где z2k никогда WARP не ставил; чужой OpkgTun не трогаем
+rm -f "$SB/opkg.log" "$SB/ndmc.log"
 MIG
+assert_eq "migrate(foreign): no ndmc calls (foreign OpkgTun untouched)" "0" "$([ -f "$SB/ndmc.log" ] && wc -l < "$SB/ndmc.log" | tr -d ' ' || echo 0)"
 assert_eq "migrate(foreign): package kept" "0" "$([ -f "$SB/opkg.log" ] && grep -c '^remove' "$SB/opkg.log" || echo 0)"
 assert_eq "migrate(foreign): S51usque kept" "yes" "$([ -e "$SB/initd/S51usque" ] && echo yes || echo no)"
 

@@ -440,6 +440,21 @@ warp_migrate_usque() {
     [ -e "$WARP_LEGACY_DIR/session.conf" ] || [ -e "$WARP_LEGACY_DIR/iface" ] && ours=1
     ls "$ZAPRET2_DIR"/.z2k-warp-* >/dev/null 2>&1 && ours=1
     [ -d "$ZAPRET2_DIR/warp" ] && ours=1
+    # NDM-интерфейс старого туннеля (OpkgTunN с 172.16.x.x, `ip global`) живёт
+    # в конфигурации Keenetic и переживает любую зачистку файлов. Имя наш
+    # старый init записывал в iface — по нему и снимаем, чужие OpkgTunN не
+    # трогаем. Сначала NDM, потом файл: иначе улика уйдёт раньше интерфейса.
+    local legacy_if
+    legacy_if=$(tr -d ' \n' < "$WARP_LEGACY_DIR/iface" 2>/dev/null)
+    case "$legacy_if" in
+        opkgtun[0-9]*)
+            if command -v ndmc >/dev/null 2>&1; then
+                LD_LIBRARY_PATH= ndmc -c "no interface $(echo "$legacy_if" | sed 's/^opkg/Opkg/; s/tun/Tun/')" >/dev/null 2>&1
+                LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
+                _wlog "NDM-интерфейс прежнего туннеля снят: $legacy_if"
+            fi
+            ;;
+    esac
     # Класс 1 — всегда.
     [ -e "$WARP_LEGACY_BIN" ] && killall z2k-usque 2>/dev/null
     rm -f "$WARP_LEGACY_BIN" 2>/dev/null
