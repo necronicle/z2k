@@ -1,0 +1,99 @@
+// Package ladder — порядок, в котором движок пробует транспорты.
+//
+// WG :2408 → WG по каждому запасному порту из регистрации → MASQUE-h2 :443.
+// Чистый автомат без горутин и часов: время приходит аргументом, поэтому
+// тесты детерминированы. Запасные порты — от Cloudflare (их ~50), не хардкод:
+// это встроенный обход 5-tuple-блоков.
+package ladder
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/necronicle/z2k/z2k-warpd/internal/account"
+)
+
+const (
+	// Cooldown — пауза между полными проходами лестницы: на провайдере с
+	// полным блоком не молотить.
+	Cooldown = 5 * time.Minute
+	// ProbeUpEvery — как часто, сидя на h2, пробовать вернуться на WG.
+	ProbeUpEvery = 10 * time.Minute
+
+	defaultWGPort = 2408
+	h2Port        = 443
+)
+
+// Ladder — текущая позиция и память о проходах.
+type Ladder struct {
+	steps     []account.Step
+	idx       int
+	passStart time.Time // начало текущего прохода; zero = ещё не начинался
+}
+
+// New строит лестницу из портов регистрации. start — last_good; если его нет
+// в лестнице (порты обновились), начинаем с вершины.
+func New(ports []int, start *account.Step) *Ladder {
+	steps := []account.Step{{Transport: "wg", Port: defaultWGPort}}
+	seen := map[int]bool{defaultWGPort: true}
+	for _, p := range ports {
+		if p <= 0 || p > 65535 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		steps = append(steps, account.Step{Transport: "wg", Port: p})
+	}
+	steps = append(steps, account.Step{Transport: "h2", Port: h2Port})
+	l := &Ladder{steps: steps}
+	if start != nil {
+		for i, s := range steps {
+			if s == *start {
+				l.idx = i
+				break
+			}
+		}
+	}
+	return l
+}
+
+// Current — шаг, который движок должен пробовать сейчас.
+func (l *Ladder) Current() account.Step { return l.steps[l.idx] }
+
+// Index — номер шага (для статуса).
+func (l *Ladder) Index() int { return l.idx }
+
+// OnH2 — стоим ли на последней ступени.
+func (l *Ladder) OnH2() bool { return l.idx == len(l.steps)-1 }
+
+// Next переходит к следующему шагу. После h2 — обратно на вершину, и тогда
+// wait говорит, сколько ещё ждать до начала нового прохода.
+func (l *Ladder) Next(now time.Time) (account.Step, time.Duration) {
+	if l.passStart.IsZero() {
+		l.passStart = now
+	}
+	if l.idx < len(l.steps)-1 {
+		l.idx++
+		return l.steps[l.idx], 0
+	}
+	// Проход закончился безрезультатно. Следующий — не раньше Cooldown от
+	// начала этого: быстрый провал всей лестницы ждёт, медленный — нет.
+	l.idx = 0
+	var wait time.Duration
+	if elapsed := now.Sub(l.passStart); elapsed < Cooldown {
+		wait = Cooldown - elapsed
+	}
+	l.passStart = now.Add(wait)
+	return l.steps[0], wait
+}
+
+// Good фиксирует текущий шаг как рабочий и возвращает его для last_good.
+func (l *Ladder) Good() account.Step {
+	l.passStart = time.Time{}
+	return l.steps[l.idx]
+}
+
+// Top возвращает лестницу на вершину (после успешного возврата на WG).
+func (l *Ladder) Top() { l.idx = 0 }
+
+// Label — "wg:2408" / "h2:443" для логов и статуса.
+func Label(s account.Step) string { return fmt.Sprintf("%s:%d", s.Transport, s.Port) }
