@@ -204,10 +204,15 @@ function z2k_warp_addr_ok(s,   ip, h, o) {
 # нет: это DNS-слой, которого у нас нет по решению владельца.
 warp_devices_ips() {
     [ -s "$WARP_DEVICES_FILE" ] || return 0
-    ip neigh show 2>/dev/null | awk '$0 ~ /lladdr/ {for (i=1;i<=NF;i++) if ($i=="lladdr") print tolower($(i+1)), $1}' > "${WARP_STATUS%/*}/.neigh.$$" 2>/dev/null \
-        || : > "${WARP_STATUS%/*}/.neigh.$$"
-    awk -v neigh="${WARP_STATUS%/*}/.neigh.$$" '
-    BEGIN { while ((getline l < neigh) > 0) { split(l, f, " "); mac[f[1]] = f[2] } }
+    # Таблица соседей — переменной, не временным файлом: каталог для файла
+    # (/tmp/z2k-warp) появляется только с первым стартом демона, и до него
+    # весь список устройств молча терялся (ловилось CI, не глазами).
+    # Одной строкой через «;»: многострочное значение в awk -v — ошибка
+    # «newline in string» и у BSD awk, и у mawk.
+    local neigh
+    neigh=$(ip neigh show 2>/dev/null | awk '$0 ~ /lladdr/ {for (i=1;i<=NF;i++) if ($i=="lladdr") printf "%s %s;", tolower($(i+1)), $1}')
+    awk -v neigh="$neigh" '
+    BEGIN { n = split(neigh, lines, ";"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); if (f[1] != "") mac[f[1]] = f[2] } }
     function ip_ok(s,  o) {
         if (s !~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/) return 0
         split(s, o, "."); return (o[1] <= 255 && o[2] <= 255 && o[3] <= 255 && o[4] <= 255 && o[1] > 0)
@@ -219,7 +224,6 @@ warp_devices_ips() {
         if (s ~ /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/) { if (s in mac) print mac[s]; next }
         if (ip_ok($0)) print $0
     }' "$WARP_DEVICES_FILE"
-    rm -f "${WARP_STATUS%/*}/.neigh.$$" 2>/dev/null
 }
 
 warp_ipset_src_load() {
