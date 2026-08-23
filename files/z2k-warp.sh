@@ -210,7 +210,10 @@ warp_devices_ips() {
     # Одной строкой через «;»: многострочное значение в awk -v — ошибка
     # «newline in string» и у BSD awk, и у mawk.
     local neigh
-    neigh=$(ip neigh show 2>/dev/null | awk '$0 ~ /lladdr/ {for (i=1;i<=NF;i++) if ($i=="lladdr") printf "%s %s;", tolower($(i+1)), $1}')
+    # Только IPv4: `ip neigh` без -4 отдаёт и fe80::… с тем же MAC, запись
+    # перекрывала IPv4, в restore уезжал IPv6 для hash:ip inet — и весь поток
+    # отвергался, сет оставался пустым («устройств: 0» при записанном MAC).
+    neigh=$(ip -4 neigh show 2>/dev/null | awk '$0 ~ /lladdr/ {for (i=1;i<=NF;i++) if ($i=="lladdr") printf "%s %s;", tolower($(i+1)), $1}')
     awk -v neigh="$neigh" '
     BEGIN { n = split(neigh, lines, ";"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); if (f[1] != "") mac[f[1]] = f[2] } }
     function ip_ok(s,  o) {
@@ -221,7 +224,7 @@ warp_devices_ips() {
         sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
         if ($0 == "" || $0 ~ /^#/) next
         s = tolower($0); gsub(/-/, ":", s)
-        if (s ~ /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/) { if (s in mac) print mac[s]; next }
+        if (s ~ /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/) { if ((s in mac) && ip_ok(mac[s])) print mac[s]; next }
         if (ip_ok($0)) print $0
     }' "$WARP_DEVICES_FILE"
 }

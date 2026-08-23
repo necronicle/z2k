@@ -21,7 +21,8 @@ cp "$SCRIPT_DIR/files/z2k-warp.sh" "$SB/z2k/z2k-warp.sh"
 cat > "$SB/bin/ip" <<EOF
 #!/bin/sh
 case "\$*" in
-    "neigh show"*) printf '192.168.1.77 dev br0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\\n192.168.1.78 dev br0 lladdr 11:22:33:44:55:66 STALE\\n192.168.1.79 dev br0  FAILED\\n' ;;
+    "-4 neigh show"*) printf '192.168.1.77 dev br0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\\n192.168.1.78 dev br0 lladdr 11:22:33:44:55:66 STALE\\n192.168.1.79 dev br0  FAILED\\n' ;;
+    "neigh show"*) printf 'fe80::1 dev br0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\\n192.168.1.77 dev br0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\\n' ;;
 esac
 exit 0
 EOF
@@ -52,6 +53,7 @@ assert_eq "plain IPv4 loaded" "1" "$(grep -c '^add z2k_warp_src_new 192.168.1.50
 assert_eq "MAC resolved via ip neigh (upper-case)" "1" "$(grep -c '^add z2k_warp_src_new 192.168.1.77 ' "$SB/ipset.log")"
 assert_eq "MAC with dashes resolved" "1" "$(grep -c '^add z2k_warp_src_new 192.168.1.78 ' "$SB/ipset.log")"
 assert_eq "offline MAC skipped silently" "0" "$(grep -c 'de:ad:be:ef' "$SB/ipset.log")"
+assert_eq "no IPv6 leaks into the inet set" "0" "$(grep -c 'fe80' "$SB/ipset.log")"
 assert_eq "garbage dropped" "0" "$(grep -c 'bad' "$SB/ipset.log")"
 assert_eq "bad octet dropped" "0" "$(grep -c '999' "$SB/ipset.log")"
 assert_eq "private-range device IP allowed (it is a LAN client)" "1" "$(grep -c '^add z2k_warp_src_new 10.0.0.7 ' "$SB/ipset.log")"
