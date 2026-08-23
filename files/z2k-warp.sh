@@ -419,15 +419,44 @@ warp_status() {
         "${entries:-0}" "${devices:-0}" "$(_json_str "$WARP_STATUS" last_error)"
 }
 
-# Разовая зачистка usque-эпохи: бинарь, пакетный init, session.conf и прочее.
-# device.json и списки юзера не трогаем.
+# Зачистка usque-эпохи — по уликам, а не по имени, и пакет — один раз.
+#
+# Три класса следов:
+#   1. Наши по имени: /opt/sbin/z2k-usque, session.conf/iface/addr в НАШЕМ
+#      каталоге, стампы /opt/zapret2/.z2k-warp-*. Их не создаёт никто, кроме
+#      старого z2k → сносим всегда, это идемпотентно.
+#   2. Пакет usque-keenetic (S51usque, /opt/etc/usque). Его мог поставить и
+#      старый z2k, и сам юзер — для своих целей. Сносим ТОЛЬКО при уликах,
+#      что его принёс z2k: старый init снимал с S51usque бит исполнения
+#      («z2k owns the tunnel now»), либо рядом лежат следы класса 1 (эпоха
+#      r-61.x, когда пакет был движком напрямую). Чужой живой пакет — S51usque
+#      с +x и без наших следов — не трогаем.
+# Маркера нет намеренно: улики исчезают вместе с зачисткой (снятый бит — с
+# S51usque, наши файлы — с собой), так что повторные прогоны чужой пакет не
+# тронут по построению, а не по памяти.
 warp_migrate_usque() {
-    killall z2k-usque 2>/dev/null
-    rm -f "$WARP_LEGACY_BIN" "$WARP_LEGACY_INIT" 2>/dev/null
+    local ours=0
+    [ -e "$WARP_LEGACY_BIN" ] && ours=1
+    [ -e "$WARP_LEGACY_DIR/session.conf" ] || [ -e "$WARP_LEGACY_DIR/iface" ] && ours=1
+    ls "$ZAPRET2_DIR"/.z2k-warp-* >/dev/null 2>&1 && ours=1
+    [ -d "$ZAPRET2_DIR/warp" ] && ours=1
+    # Класс 1 — всегда.
+    [ -e "$WARP_LEGACY_BIN" ] && killall z2k-usque 2>/dev/null
+    rm -f "$WARP_LEGACY_BIN" 2>/dev/null
     rm -f "$WARP_LEGACY_DIR/session.conf" "$WARP_LEGACY_DIR/session.conf.prev" "$WARP_LEGACY_DIR/session.alt.conf" \
           "$WARP_LEGACY_DIR/iface" "$WARP_LEGACY_DIR/addr" 2>/dev/null
     rm -f "$ZAPRET2_DIR"/.z2k-warp-* 2>/dev/null
-    command -v opkg >/dev/null 2>&1 && opkg list-installed 2>/dev/null | grep -q '^usque' && opkg remove usque-keenetic >/dev/null 2>&1
+    rm -rf "$ZAPRET2_DIR/warp" 2>/dev/null
+    # Класс 2 — только по уликам.
+    if [ -e "$WARP_LEGACY_INIT" ] && [ ! -x "$WARP_LEGACY_INIT" ]; then
+        ours=1    # бит снимал наш старый init
+    fi
+    [ "$ours" = "1" ] || return 0
+    rm -f "$WARP_LEGACY_INIT" 2>/dev/null
+    if command -v opkg >/dev/null 2>&1 && opkg list-installed 2>/dev/null | grep -q '^usque'; then
+        opkg remove usque-keenetic >/dev/null 2>&1 || opkg remove usque >/dev/null 2>&1
+    fi
+    _wlog "остатки прежнего WARP (usque) убраны"
     return 0
 }
 

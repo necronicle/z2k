@@ -175,18 +175,69 @@ assert_eq "remove: flag 0" "0" "$(flag)"
 assert_eq "remove: S51 stopped" "1" "$(grep -c '^stop' "$SB/s51.log")"
 assert_eq "remove: ipsets destroyed" "2" "$(grep -c '^destroy z2k_warp' "$SB/ipset.log")"
 
-# ---------- migrate: зачистка usque ----------
+# ---------- migrate: зачистка usque — наше всегда, чужое никогда ----------
+# Наши следы по имени (z2k-usque, session.conf в нашем каталоге, стампы)
+# сносятся всегда; пакет usque-keenetic — только при уликах, что его принёс
+# z2k (S51usque без +x: старый init снимал бит; или наши следы рядом). Чужой
+# живой пакет (S51usque с +x, без наших следов) не трогаем. Маркера нет:
+# улики уходят вместе с зачисткой, повторный прогон чужое не тронет.
+cat > "$SB/bin/opkg" <<EOF
+#!/bin/sh
+echo "\$*" >> "$SB/opkg.log"
+case "\$1" in list-installed) [ -f "$SB/pkg.installed" ] && echo "usque-keenetic - 1.0" ;; remove) rm -f "$SB/pkg.installed" ;; esac
+exit 0
+EOF
+chmod +x "$SB/bin/opkg"
+MIG() {
+    Z2K_STUB_PATH="$SB/bin" ZAPRET2_DIR="$SB/z2k" WARP_LISTS_DIR="$SB/z2k/lists/warp" WARP_DEVICE="$SB/etc/device.json" \
+        WARP_LEGACY_BIN="$SB/sbin/z2k-usque" WARP_LEGACY_INIT="$SB/initd/S51usque" WARP_LEGACY_DIR="$SB/etc/z2k-warp-legacy" \
+        WARP_PURGE_MARK="$SB/etc/z2k-warp-legacy/.usque-purged" \
+        sh "$SB/z2k/z2k-warp.sh" migrate >/dev/null 2>&1
+}
 mkdir -p "$SB/etc/z2k-warp-legacy" "$SB/initd"
-touch "$SB/sbin/z2k-usque" "$SB/initd/S51usque" "$SB/etc/z2k-warp-legacy/session.conf" "$SB/etc/z2k-warp-legacy/iface" "$SB/z2k/.z2k-warp-kick"
-Z2K_STUB_PATH="$SB/bin" ZAPRET2_DIR="$SB/z2k" WARP_LISTS_DIR="$SB/z2k/lists/warp" WARP_DEVICE="$SB/etc/device.json" \
-    WARP_LEGACY_BIN="$SB/sbin/z2k-usque" WARP_LEGACY_INIT="$SB/initd/S51usque" WARP_LEGACY_DIR="$SB/etc/z2k-warp-legacy" \
-    sh "$SB/z2k/z2k-warp.sh" migrate >/dev/null 2>&1
-assert_eq "migrate: usque binary removed" "no" "$([ -e "$SB/sbin/z2k-usque" ] && echo yes || echo no)"
-assert_eq "migrate: S51usque removed" "no" "$([ -e "$SB/initd/S51usque" ] && echo yes || echo no)"
-assert_eq "migrate: session.conf removed" "no" "$([ -e "$SB/etc/z2k-warp-legacy/session.conf" ] && echo yes || echo no)"
-assert_eq "migrate: kick stamp removed" "no" "$([ -e "$SB/z2k/.z2k-warp-kick" ] && echo yes || echo no)"
-assert_eq "migrate: device.json untouched" "yes" "$([ -s "$SB/etc/device.json" ] && echo yes || echo no)"
-assert_eq "migrate: user list untouched" "yes" "$([ -s "$SB/z2k/lists/warp/my.txt" ] && echo yes || echo no)"
+
+# (а) наследие z2k: бинарь, снятый нами бит на S51usque, session.conf, стампы, пакет стоит
+touch "$SB/sbin/z2k-usque" "$SB/initd/S51usque" "$SB/etc/z2k-warp-legacy/session.conf" "$SB/etc/z2k-warp-legacy/iface" "$SB/z2k/.z2k-warp-kick" "$SB/pkg.installed"
+chmod -x "$SB/initd/S51usque"; rm -f "$SB/opkg.log"
+MIG
+assert_eq "migrate(ours): usque binary removed" "no" "$([ -e "$SB/sbin/z2k-usque" ] && echo yes || echo no)"
+assert_eq "migrate(ours): S51usque removed" "no" "$([ -e "$SB/initd/S51usque" ] && echo yes || echo no)"
+assert_eq "migrate(ours): session.conf removed" "no" "$([ -e "$SB/etc/z2k-warp-legacy/session.conf" ] && echo yes || echo no)"
+assert_eq "migrate(ours): kick stamp removed" "no" "$([ -e "$SB/z2k/.z2k-warp-kick" ] && echo yes || echo no)"
+assert_eq "migrate(ours): package removed" "1" "$(grep -c '^remove usque-keenetic' "$SB/opkg.log")"
+assert_eq "migrate(ours): device.json untouched" "yes" "$([ -s "$SB/etc/device.json" ] && echo yes || echo no)"
+assert_eq "migrate(ours): user list untouched" "yes" "$([ -s "$SB/z2k/lists/warp/my.txt" ] && echo yes || echo no)"
+
+# (б) после зачистки юзер ставит usque-keenetic сам (+x, наших следов нет) — не трогаем
+touch "$SB/pkg.installed" "$SB/initd/S51usque"; chmod +x "$SB/initd/S51usque"; rm -f "$SB/opkg.log"
+MIG
+assert_eq "migrate(after purge): foreign package kept" "0" "$([ -f "$SB/opkg.log" ] && grep -c '^remove' "$SB/opkg.log" || echo 0)"
+assert_eq "migrate(after purge): foreign S51usque kept" "yes" "$([ -e "$SB/initd/S51usque" ] && echo yes || echo no)"
+
+# (в) то же на свежем роутере, где z2k никогда WARP не ставил
+rm -f "$SB/opkg.log"
+MIG
+assert_eq "migrate(foreign): package kept" "0" "$([ -f "$SB/opkg.log" ] && grep -c '^remove' "$SB/opkg.log" || echo 0)"
+assert_eq "migrate(foreign): S51usque kept" "yes" "$([ -e "$SB/initd/S51usque" ] && echo yes || echo no)"
+
+# (г) наши следы рядом с исполняемым S51usque (эпоха r-61.x, до нашего init) — улика, сносим
+touch "$SB/etc/z2k-warp-legacy/session.conf"; rm -f "$SB/opkg.log"
+MIG
+assert_eq "migrate(r-61 era): package removed on our evidence" "1" "$(grep -c '^remove usque-keenetic' "$SB/opkg.log")"
+assert_eq "migrate(r-61 era): evidence consumed" "no" "$([ -e "$SB/etc/z2k-warp-legacy/session.conf" ] && echo yes || echo no)"
+# …и сразу следом юзер ставит пакет снова — улик больше нет, не трогаем
+touch "$SB/pkg.installed" "$SB/initd/S51usque"; chmod +x "$SB/initd/S51usque"; rm -f "$SB/opkg.log"
+MIG
+assert_eq "migrate(re-added by user): package kept" "0" "$([ -f "$SB/opkg.log" ] && grep -c '^remove' "$SB/opkg.log" || echo 0)"
+
+# (д) любой наш артефакт — улика, и потребляется за один прогон: стамп
+# старого z2k-warp.sh пишется только когда z2k сам гонял usque.
+touch "$SB/z2k/.z2k-warp-reg"; rm -f "$SB/opkg.log"
+MIG
+assert_eq "migrate(stamp): our stamp removed" "no" "$([ -e "$SB/z2k/.z2k-warp-reg" ] && echo yes || echo no)"
+touch "$SB/sbin/z2k-usque"
+MIG
+assert_eq "migrate(after purge): z2k-usque binary still removed" "no" "$([ -e "$SB/sbin/z2k-usque" ] && echo yes || echo no)"
 
 printf "\nPASSED: %d\nFAILED: %d\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]
