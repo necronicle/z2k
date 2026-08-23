@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 29,
-  "current": "r-79.1",
+  "seq": 30,
+  "current": "r-79.2",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "2e73d3b4db3a3018603d78ff57e6402e24d1efb6c9b3d4c93a3abb27f4169b9f",
@@ -79,7 +79,7 @@
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "d721298ed9e8bf948f06807251f65db256d340c4f96f14fa3131e91c49d5f3ff",
-  "files/z2k-warp.sh": "87fdeeed7b1f20d8ee8a892879e01aa4cb56611b5b55dce7c0a1b362b0a4e92d",
+  "files/z2k-warp.sh": "4529b930c1af20284086992981145e64be0b78d0fe620c9c563ee376770899e2",
   "lib/auto_update.sh": "400b1328fb0248ad1054869c84010641cb981125c3384738288f38adea666111",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
   "lib/config_official.sh": "52a224db5a025b5daeeb752aa14a326edadfe765fb7369d4c4c32eeeee84a0b6",
@@ -102,8 +102,8 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "2b8cec24a6bf0fe522e0b368a763f0f65c6de7af44b8b7cfde6bc7358ee7a204",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "7475d651fe127bd8b9278b9db6e06d45ad86aadd81f02b5960a498b99bd5b441",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "4c99e7a21d09e578a3e894ee4ee9b92117af48fd81ab376515b1b880b1073113",
-  "webpanel/cgi/actions.sh": "40d04dc37137c188adc13bb743d343933567b2fb0e2972e01d7ee4c15a00b1ab",
-  "webpanel/cgi/api.sh": "caffae6af589c55fbb095814b4f62fa841afab14bf804e0f2184218c2c1e0a98",
+  "webpanel/cgi/actions.sh": "b32b2e4fca0ab20cf924e0ddb2e64f0b53a7a8a3afc0d8e2ae89b0ffd0995567",
+  "webpanel/cgi/api.sh": "264726547fd9dd326a4490a49c49defec0fa5253f523b39dbf3745588952bc50",
   "webpanel/cgi/auth.sh": "aa2d34f9f41444ba41a888a0da5214ff688b037457c54256546938b27391b333",
   "webpanel/init.d/S96z2k-webpanel": "d064a61c1845e2a4ade4ed90cb3b6a82f3705fc6784f90f925d27c5bd7bcedbe",
   "webpanel/install.sh": "d16d95e2ca878f04a2093a8b64aa4daadf21c637e5a934dc41cfc3257bb27817",
@@ -120,7 +120,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "0d08d635006f7e177015a756f45c2438b4928a382333d610a7f460734f00ef98",
+  "webpanel/www/index.html": "b235b4e37b5af595129bc2b041e81c16e031edabeca05e6b1aae094e21186554",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -139,15 +139,15 @@
   "webpanel/www/js/pages/telemetry.js": "eafe3bf099ff56ab987bf1b57874de84a555f095ee0068af39bd18c9c3fd2d07",
   "webpanel/www/js/pages/toggles.js": "f2b8704ee6ed65441e712395064955b989aa182fc1edead85100cd7dc97d1863",
   "webpanel/www/js/pages/update.js": "e81fec280b94a6050f300c967775968d87986ef15ec54e4232445ace9abc7f80",
-  "webpanel/www/js/pages/warp.js": "070ad56ca26447e957afaf3808a15eb64adbcad5dea7b49330e744a952a7cd51",
+  "webpanel/www/js/pages/warp.js": "f91e3a4b6a364d2108e5c51a5bd33147e2f502b6a30f06396da16f02ecae8e80",
   "webpanel/www/js/router.js": "b5a5a74b16bd51919bf9266f11871f6aed62a1828bd5891a13b1bf2e5cf951ed",
   "webpanel/www/js/state-model.js": "5c45e8aa73857dd453c011fa4c533c8b8e9a6acecba97f37b7d6a90d63896405",
-  "webpanel/www/style.css": "6c9079eb073b400a4c79d382323283fec9b83847ff5eb81e9215cdb050713d9a",
-  "z2k-warpd/builds/z2k-warpd-linux-amd64": "7146c2ed00e8e953233865f515e3e7f7fcc95998eda82d264cd4c588d89482e4",
-  "z2k-warpd/builds/z2k-warpd-linux-arm": "69aace1e589f3826120d8d309700ab2d991b11033780cb7d6ef09ad407a9fecf",
-  "z2k-warpd/builds/z2k-warpd-linux-arm64": "81233674c6f18878432181f3af84bd050f249c31ef91bb72f0a1cbb70548b5c4",
-  "z2k-warpd/builds/z2k-warpd-linux-mips": "7de378c37200bd1234e67c2be8016ad43aba3b451e2883597a2a2bd33b27908f",
-  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "f3f3cbd10dd91afa30784e60cef5d487cac02531a57a7cb079bb7b824c4062cf",
+  "webpanel/www/style.css": "f18bb7b88f2e1fd763ea68444d427cef14fc04f0ef6661d5a3df13378f23d83c",
+  "z2k-warpd/builds/z2k-warpd-linux-amd64": "f292b9f756b9323adb63a5a9440a63809b6360c604d30bab18d6fbf5362d7dc3",
+  "z2k-warpd/builds/z2k-warpd-linux-arm": "bd30e3ec33e46d241d8a67674bd04e3aa5e2fcaca444e69b3943c2de94a0e0ef",
+  "z2k-warpd/builds/z2k-warpd-linux-arm64": "8de1783105e8c7100944c33e66a709aba4deb6d257d5238115aa535642baa6c9",
+  "z2k-warpd/builds/z2k-warpd-linux-mips": "9990368180b49b90a51689264a532853edb58cb633e49662568ea9ac7f7017f3",
+  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "ff0848ca51f02ba19e4d5307e0d982f00f282c4933691ff10dbd5fe7a82092b3",
   "z2k.sh": "eaff72fc2dd2a931d639af2ce8ded19da5c6c7b4de1d881da9e21e8ce7aabaef"
   },
   "history": [
@@ -330,6 +330,7 @@
 {"v": "r-77.5", "type": "reinstall", "ts": "2026-08-20T07:26:11Z", "ref": "r-77.5", "desc": "Автоподбор рабочей настройки стал точнее. Он больше не сбрасывает работающую настройку из-за потерянного пакета или обычного разрыва соединения со стороны сайта — от этого раньше страдали видео и Instagram. При этом он теперь замечает блокировки, которые раньше пропускал молча, и не перебирает по десятку настроек разом, когда страница открывает много соединений сразу.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/z2k-scheduler.sh", "lib/config_official.sh", "UPDATES.json"]},
 {"v": "r-78", "type": "reinstall", "ts": "2026-08-22T17:15:24Z", "ref": "r-78", "desc": "Телеграм снова работает на роутерах, где он молча не поднимался. Переустановка перестала терять игровые списки и затирать свежие списки блокировок старыми, а обновление списков стало быстрее и надёжнее на плохой связи.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-diag.sh", "files/z2k-geosite.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/strategies.sh", "lib/utils.sh", "z2k.sh", "UPDATES.json"]},
 {"v": "p-78.1", "type": "patch", "ts": "2026-08-23T07:07:27Z", "ref": "p-78.1", "desc": "Проверка состояния перестала сообщать о поломках на исправном роутере — из-за этого приходилось переустанавливать систему без причины. Автоподбор рабочей настройки стал точнее: он больше не удерживает нерабочую настройку из-за случайного успеха соседнего соединения и теперь замечает страницы-заглушки, которые раньше принимал за нормальный ответ.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-alert.lua", "files/lua/z2k-state-persist.lua", "files/z2k-diag.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/diag.js", "UPDATES.json"]},
-{"v": "r-79.1", "type": "reinstall", "ts": "2026-08-23T12:50:03Z", "ref": "r-79.1", "desc": "WARP переведён на собственный движок: быстрее и надёжнее, ставится только по кнопке и удаляется целиком, а любое устройство теперь можно целиком пустить через туннель. Убранные вручную адреса Instagram больше не возвращаются после обновления.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/ndm/93-z2k-warp.sh", "files/z2k-insta-ip-refresh.sh", "files/z2k-scheduler.sh", "files/z2k-warp.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"]}
+{"v": "r-79.1", "type": "reinstall", "ts": "2026-08-23T12:50:03Z", "ref": "r-79.1", "desc": "WARP переведён на собственный движок: быстрее и надёжнее, ставится только по кнопке и удаляется целиком, а любое устройство теперь можно целиком пустить через туннель. Убранные вручную адреса Instagram больше не возвращаются после обновления.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/ndm/93-z2k-warp.sh", "files/z2k-insta-ip-refresh.sh", "files/z2k-scheduler.sh", "files/z2k-warp.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"]},
+{"v": "r-79.2", "type": "reinstall", "ts": "2026-08-23T14:10:59Z", "ref": "r-79.2", "desc": "Раздел WARP в панели стал проще: устройства выбираются из списка вашей сети по имени, игровые списки компактнее, а установка показывает, что происходит, вместо молчания.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "webpanel/www/style.css", "UPDATES.json"]}
   ]
 }
