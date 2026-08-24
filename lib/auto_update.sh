@@ -483,27 +483,62 @@ au_targets_for() {
 # секунды, вместе с бинарниками и движком (30 МБ) — секунда.
 
 # au_converge_plan <manifest> — что разошлось с манифестом (0..N путей в репо).
+# au_manifest_pairs <manifest> — «путь<TAB>sha<TAB>первая цель» одним проходом
+# awk, по строке на деливерабл.
+#
+# ЗАЧЕМ ОДНИМ ПРОХОДОМ. Наивная версия звала au_manifest_install_targets на
+# каждый из 145 файлов, а та каждый раз перечитывала манифест целиком (206 КБ)
+# и гоняла по нему sed — тридцать мегабайт чтения и три сотни процессов ради
+# сверки, которая должна занимать секунду. На arm64 это незаметно, на mipsel —
+# десятки секунд, и весь смысл переработки уходит в них.
+au_manifest_pairs() {
+    awk '
+        # install_map: "путь": ["цель", …] — берём первую цель как представителя,
+        # остальные копии (списки лежат в двух местах) выравниваются при раскладке.
+        /"[^"]+"[[:space:]]*:[[:space:]]*\[/ {
+            line = $0
+            if (match(line, /"[^"]+"[[:space:]]*:[[:space:]]*\[/)) {
+                key = substr(line, RSTART + 1)
+                sub(/"[[:space:]]*:[[:space:]]*\[.*/, "", key)
+                rest = substr(line, RSTART + RLENGTH)
+                sub(/\].*/, "", rest)
+                if (match(rest, /"[^"]*"/)) {
+                    t = substr(rest, RSTART + 1, RLENGTH - 2)
+                    if (t ~ /^\//) target[key] = t
+                }
+            }
+            next
+        }
+        # files_sha256: "путь": "<64 hex>"
+        /"[^"]+"[[:space:]]*:[[:space:]]*"[0-9a-f][0-9a-f]*"/ {
+            line = $0
+            if (match(line, /"[^"]+"[[:space:]]*:[[:space:]]*"[0-9a-f][0-9a-f]*"/)) {
+                seg = substr(line, RSTART, RLENGTH)
+                key = substr(seg, 2); sub(/"[[:space:]]*:.*/, "", key)
+                val = seg; sub(/.*:[[:space:]]*"/, "", val); sub(/"$/, "", val)
+                if (length(val) == 64) sha[key] = val
+            }
+            next
+        }
+        END {
+            for (k in sha) if (k in target) printf "%s\t%s\t%s\n", k, sha[k], target[k]
+        }
+    ' "$1" 2>/dev/null
+}
+
+# au_converge_plan <manifest> — что разошлось с манифестом (0..N путей в репо).
+# Файлы без цели (verify-only бинарники) сюда не попадают: их обновляет
+# отдельный шаг refresh-binaries, потому что адрес зависит от арки роутера.
 au_converge_plan() {
     local manifest="$1"
     [ -f "$manifest" ] || return 0
-    # Ключи files_sha256: путь + шестидесятичетырёхзначная сумма. Пары из
-    # install_map под шаблон не подходят (там значение-список), записи истории
-    # тоже (там путь стоит значением).
-    grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "$manifest" 2>/dev/null \
-    | sed 's/"[[:space:]]*:.*//; s/^"//' \
-    | while IFS= read -r repo_path; do
-        [ -n "$repo_path" ] || continue
-        _cp_want=$(au_manifest_file_sha "$manifest" "$repo_path")
-        [ -n "$_cp_want" ] || continue
-        # Первая цель — представитель: остальные её копии (списки лежат в двух
-        # местах) выравниваются при раскладке.
-        _cp_first=$(au_manifest_install_targets "$manifest" "$repo_path" | head -1)
-        [ -n "$_cp_first" ] || continue   # verify-only (бинарники) — не этот путь
+    au_manifest_pairs "$manifest" | while IFS="$(printf '\t')" read -r _cp_path _cp_want _cp_first; do
+        [ -n "$_cp_path" ] && [ -n "$_cp_first" ] || continue
         if [ ! -f "$_cp_first" ]; then
-            printf '%s\n' "$repo_path"; continue
+            printf '%s\n' "$_cp_path"; continue
         fi
-        _cp_got=$(z2k_sha256_file "$_cp_first" 2>/dev/null)
-        [ "$_cp_got" = "$_cp_want" ] || printf '%s\n' "$repo_path"
+        [ "$(z2k_sha256_file "$_cp_first" 2>/dev/null)" = "$_cp_want" ] \
+            || printf '%s\n' "$_cp_path"
     done
 }
 

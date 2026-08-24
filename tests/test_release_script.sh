@@ -51,52 +51,28 @@ else
     no "доставляемость проверяется через z2k_install_paths" "проверки нет"
 fi
 
-# 3) ЛЮБОЙ путь, который патч доставить не может (арх-бинарники, install-time
-#    генераторы, install-time шаблоны), гейтится ОДНОЙ политикой —
-#    z2k_legacy_reinstall_required() в lib/release_map.sh — а не разрозненными
-#    regex-ами прямо в release.sh, которые заводились по одному на находку
-#    (сперва только mtproxy-client, потом отдельно z2k-detect/z2k-verify,
-#    потом отдельно config_official.sh/strategies.sh — а webpanel/lighttpd.conf
-#    так и не попал ни в один из них, хотя комментарий рядом с ним прямо
-#    гласил "ship as reinstall"). Проверяем ПОВЕДЕНИЕ функции, а не текст
-#    скрипта — иначе тест сторожит формулировку, а не факт.
+# 3) Гейта «доставить может только переустановка» больше нет: четыре класса
+#    путей, ради которых он существовал (арх-бинарники, генераторы конфига и
+#    стратегий, шаблон lighttpd.conf), теперь выражены адресными шагами, которые
+#    релиз объявляет данными. Проверяем, что механизм объявления на месте — и
+#    что старый гейт не вернулся тихо: он стоил четырёх с половиной минут флоту
+#    за однострочную правку генератора.
+if grep -q 'z2k_steps_merged' "$REL"; then
+    ok "последствия релиза выводятся из диффа и объявляются данными"
+else
+    no "последствия релиза объявляются данными" "вызов z2k_steps_merged" "не найден"
+fi
+if grep -q 'Z2K_RELEASE_FULL_INSTALL' "$REL"; then
+    ok "полная переустановка осталась явным аварийным люком"
+else
+    no "полная переустановка осталась явным аварийным люком" "Z2K_RELEASE_FULL_INSTALL" "не найден"
+fi
 if grep -q 'z2k_legacy_reinstall_required' "$REL"; then
-    ok "release.sh гейтит через единую z2k_legacy_reinstall_required(), а не свои regex-ы"
+    no "старый гейт не вернулся" "гейта нет" "гейт на месте — бинарник снова стоит флоту 4.5 минуты"
 else
-    no "release.sh использует единую z2k_legacy_reinstall_required()" "вызов функции" "не найден"
+    ok "старый гейт не вернулся"
 fi
 
-# shellcheck disable=SC1091
-. "$ROOT/lib/release_map.sh"
-
-_covered=0; _total=0
-for _p in "mtproxy-client/builds/tg-mtproxy-client-linux-arm64" \
-          "z2k-detect/builds/z2k-detect-linux-mips" \
-          "lib/config_official.sh" \
-          "lib/strategies.sh" \
-          "webpanel/lighttpd.conf"; do
-    _total=$((_total + 1))
-    if [ -n "$(z2k_legacy_reinstall_required "$_p")" ]; then
-        _covered=$((_covered + 1))
-    else
-        printf '[FAIL] z2k_legacy_reinstall_required не накрывает %s\n' "$_p"
-    fi
-done
-if [ "$_covered" = "$_total" ]; then
-    ok "z2k_legacy_reinstall_required накрывает бинарники ЛЮБОГО модуля, генераторы конфига/стратегий и шаблон lighttpd.conf ($_covered/$_total)"
-else
-    FAIL=$((FAIL + (_total - _covered)))
-fi
-
-# И не перехватывает то, что патчу доставлять положено штатно — иначе гейт
-# заставлял бы делать reinstall на каждую мелкую правку.
-for _p in "lib/auto_update.sh" "files/lua/z2k-detectors.lua" "webpanel/cgi/api.sh"; do
-    if [ -n "$(z2k_legacy_reinstall_required "$_p")" ]; then
-        no "z2k_legacy_reinstall_required не перехватывает штатно патчуемые пути" "пусто для $_p" "непусто"
-    else
-        ok "z2k_legacy_reinstall_required не трогает штатно патчуемый путь ($_p)"
-    fi
-done
 
 # 4) ref = уже существующий несущий коммит (HEAD), одним коммитом.
 #
@@ -146,14 +122,15 @@ else
     no "отсутствие/сбой ключа останавливает релиз" "die в обеих ветках" "не найдено"
 fi
 
-# 4б) Покрытие каждого класса (генераторы, шаблон, бинарники) проверено выше
-#     поведенчески через z2k_legacy_reinstall_required(). Здесь — что сам гейт в
-#     release.sh условен на TYPE, а не абсолютный запрет менять эти пути.
-if grep -q '_reinstall_changed' "$REL" && grep -q '"\$TYPE" != "reinstall"' "$REL"; then
-    ok "гейт единой политики условен на TYPE=reinstall (снимается, не абсолютный запрет)"
+# 4б) Полная переустановка перестала быть режимом обычного обновления, но
+#     осталась доступной. Проверяем ровно это: люк есть и он ЯВНЫЙ (переменная
+#     окружения при сборке), а не выводится из путей — вывод из путей и был тем
+#     гейтом, который заставлял флот платить четыре с половиной минуты за
+#     однострочную правку генератора.
+if grep -q 'Z2K_RELEASE_FULL_INSTALL:-0' "$REL" && grep -q 'FULL_INSTALL=true' "$REL"; then
+    ok "полная переустановка объявляется явно, а не выводится из путей"
 else
-    no "гейт единой политики условен на TYPE=reinstall" \
-       "_reinstall_changed + проверка \$TYPE != reinstall" "не найдено"
+    no "полная переустановка объявляется явно" "Z2K_RELEASE_FULL_INSTALL + FULL_INSTALL=true" "не найдено"
 fi
 
 # 4в) Push — одной атомарной операцией. Два отдельных push оставляли окно, где
