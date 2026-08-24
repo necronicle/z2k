@@ -55,7 +55,7 @@ show_main_menu() {
 |  ZyaK<-, Алексей Стрельцов, Diman86RUS, Alex,     |
 |  GRM, Dez, hoaxx, Mansurchick,                    |
 |  Dkarloff - SEO отец, KIBERPANK, olmer2002,       |
-|  TiaMax, Denis, Mega Man                          |
+|  TiaMax, Denis, Mega Man, TheGreatYogo            |
 +===================================================+
 
 MENU
