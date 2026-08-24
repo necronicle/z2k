@@ -92,5 +92,37 @@ printf 'files/lua/a.lua\n' > "$SB/plan4.txt"
 assert_eq "обрыв загрузки — отказ" "1" "$(au_converge_apply "$SB/manifest.json" "$SB/plan4.txt"; echo $?)"
 assert_eq "после обрыва цель цела" "цел" "$(cat "$SB/zd/lua/a.lua")"
 
+# ── ХОД РАБОТЫ ───────────────────────────────────────────────────────────────
+#
+# Владелец роутера прочитал обычное обновление как поломку: журнал печатал
+# «расходится файлов — 10» и молчал всё время скачивания. Молчание в журнале
+# неотличимо от зависания, поэтому строка на каждый файл — часть работы, а не
+# оформление, и уходить она не должна.
+_log="$SB/progress.log"
+au_log() { printf '%s\n' "$*" >> "$_log"; }
+: > "$_log"
+au_download_repo_file() { cp "$SB/repo/$1" "$2" 2>/dev/null; }
+mkdir -p "$SB/repo/files/lua" "$SB/zd/lua"
+printf 'p1\n' > "$SB/repo/files/lua/p1.lua"
+printf 'p2\n' > "$SB/repo/files/lua/p2.lua"
+cat > "$SB/m3.json" <<EOF
+{
+  "install_map": {
+    "files/lua/p1.lua": ["$SB/zd/lua/p1.lua"],
+    "files/lua/p2.lua": ["$SB/zd/lua/p2.lua"]
+  },
+  "files_sha256": {
+    "files/lua/p1.lua": "$(sha "$SB/repo/files/lua/p1.lua")",
+    "files/lua/p2.lua": "$(sha "$SB/repo/files/lua/p2.lua")"
+  }
+}
+EOF
+printf 'files/lua/p1.lua\nfiles/lua/p2.lua\n' > "$SB/plan5.txt"
+assert_eq "оба файла доставлены" "0" "$(au_converge_apply "$SB/m3.json" "$SB/plan5.txt" >/dev/null 2>&1; echo $?)"
+assert_eq "виден ход: строка на каждый файл" "2" "$(grep -c 'качаю' "$_log")"
+assert_eq "видно, сколько осталось"          "1" "$(grep -c '\[2/2\]' "$_log")"
+assert_eq "видно, что качается прямо сейчас" "1" "$(grep -c '\[1/2\] качаю files/lua/p1.lua' "$_log")"
+au_log() { :; }
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

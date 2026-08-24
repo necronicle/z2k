@@ -68,10 +68,10 @@ au_lock_acquire() {
     if ! mkdir "$_d" 2>/dev/null; then
         pid=$(cat "$_d/pid" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            au_log "lock held by pid=$pid, skipping"
+            au_log "уже работает другой прогон (pid=$pid) — пропускаю"
             return 1
         fi
-        au_log "stale lock removed (pid=${pid:-?} not alive)"
+        au_log "снял зависшую блокировку (процесса ${pid:-?} нет)"
         rm -rf "$_d" 2>/dev/null
         mkdir "$_d" 2>/dev/null || { au_log "lock: не удалось создать $_d"; return 1; }
     fi
@@ -553,8 +553,18 @@ au_converge_apply() {
     local dl="$Z2K_AU_TMP_DIR/converge"
     [ -f "$plan" ] || return 0
     rm -rf "$dl"; mkdir -p "$dl" || return 1
+    # СЧЁТЧИК ОБЯЗАТЕЛЕН, И ЭТО НЕ УКРАШЕНИЕ. Раньше здесь не было ни строки:
+    # человек видел «расходится файлов — 10» и дальше молчание на всё время
+    # скачивания. Отличить работу от зависания по такому журналу невозможно, и
+    # владелец читал обычное обновление как поломку. Строка на файл печатается
+    # ДО загрузки, а не после: смысл её в том, чтобы показать, на чём мы стоим
+    # прямо сейчас, а не отчитаться о том, что уже прошло.
+    local _ca_n _ca_i=0
+    _ca_n=$(awk 'END {print NR}' "$plan" 2>/dev/null); [ -n "$_ca_n" ] || _ca_n=0
     while IFS= read -r _ca_path; do
         [ -n "$_ca_path" ] || continue
+        _ca_i=$((_ca_i + 1))
+        au_log "  [$_ca_i/$_ca_n] качаю $_ca_path"
         _ca_stage="$dl/$(printf '%s' "$_ca_path" | tr '/' '_')"
         au_download_repo_file "$_ca_path" "$_ca_stage" || {
             au_log "сходимость: не скачался $_ca_path"; return 1; }
@@ -780,6 +790,10 @@ au_step_refresh_binaries() {
         fi
         _rb_tmp="${_rb_dest}.z2k-au.$$"
         rm -f "$_rb_tmp" "${_rb_tmp}.etag" 2>/dev/null
+        # Бинарники — мегабайты против килобайтов у остального дерева, и на
+        # медленном канале это единственное место, где обновление стоит долго.
+        # Молчать здесь нельзя ровно по той же причине, что и в сходимости.
+        au_log "refresh-binaries: качаю $_rb_name (файл большой, это дольше остального)"
         if ! au_download_repo_file "$_rb_path" "$_rb_tmp"; then
             au_log "refresh-binaries: не скачался $_rb_path"; rm -f "$_rb_tmp"; echo 1 >> "$fail"; continue
         fi
@@ -904,15 +918,31 @@ au_run_step() {
     esac
 }
 
+# au_step_human <шаг> — как назвать шаг в журнале. Идентификаторы вроде
+# «regen-strategies» нужны коду, а человеку нужно знать, что делают с его
+# роутером. Неизвестный шаг печатаем как есть: соврать хуже, чем не перевести.
+au_step_human() {
+    case "$1" in
+        regen-strategies) printf 'пересобираю стратегии' ;;
+        regen-config)     printf 'пересобираю конфиг' ;;
+        validate-config)  printf 'проверяю конфиг' ;;
+        refresh-binaries) printf 'обновляю бинарники' ;;
+        rebuild-panel)    printf 'пересобираю веб-панель' ;;
+        reset-state)      printf 'сбрасываю состояние стратегий' ;;
+        restart-service)  printf 'перезапускаю сервис' ;;
+        *)                printf '%s' "$1" ;;
+    esac
+}
+
 # au_run_steps <шаг>… — по порядку, до первой осечки. Останов, а не «идём
 # дальше и надеемся»: провал валидации обязан отменить перезапуск.
 au_run_steps() {
     local s rc
     for s in "$@"; do
-        au_log "шаг: $s"
+        au_log "шаг: $(au_step_human "$s")"
         au_run_step "$s"; rc=$?
         if [ "$rc" != 0 ]; then
-            au_log "шаг $s вернул $rc — цепочка остановлена"
+            au_log "шаг «$(au_step_human "$s")» не удался (код $rc) — дальше не идём"
             return "$rc"
         fi
     done
@@ -946,7 +976,7 @@ au_decide() {
     local current
     current=$(au_manifest_current "$manifest")
     if [ -z "$current" ]; then
-        au_log "manifest has no current field"
+        au_log "в манифесте нет поля current"
         echo "none"
         return 0
     fi
@@ -956,7 +986,7 @@ au_decide() {
     # An empty tag reaching here means a truncated/corrupt .z2k-installed-tag;
     # refuse to interpret it as "behind by the entire history".
     if [ -z "$installed_tag" ]; then
-        au_log "installed tag empty/corrupt — no update (refusing blind reinstall)"
+        au_log "отметка версии пуста или испорчена — обновления не будет (вслепую переустанавливать не станем)"
         echo "none"
         return 0
     fi
@@ -964,7 +994,7 @@ au_decide() {
     # Non-empty tag absent from append-only history = drift/corruption, never
     # a legitimately-behind router. Skip rather than blind-reinstall to current.
     if ! au_tag_in_history "$manifest" "$installed_tag"; then
-        au_log "installed tag '$installed_tag' not in history — no update (refusing blind reinstall)"
+        au_log "версии '$installed_tag' нет в истории релизов — обновления не будет (вслепую переустанавливать не станем)"
         echo "none"
         return 0
     fi
@@ -1166,7 +1196,7 @@ au_download_reinstall_script() {
 
     for url in "$(au_repo_base)/z2k.sh" "$jsdelivr" "$gh_proxy"; do
         [ -z "$url" ] && continue
-        au_log "reinstall: fetching z2k.sh from $url"
+        au_log "переустановка: качаю z2k.sh с $url"
         if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$target" \
            && [ -s "$target" ]; then
             if [ -z "$want_sha" ]; then
@@ -1606,16 +1636,16 @@ au_apply_reinstall() {
     rc=$(cat "$rc_file" 2>/dev/null || echo 1)
     rm -f "$rc_file"
     if [ "$rc" -ne 0 ]; then
-        au_log "reinstall failed rc=$rc"
+        au_log "переустановка не удалась, код $rc"
         return 1
     fi
 
     # install.sh may have already written the tag, but enforce it here too.
     if ! au_write_installed_tag "$target_tag"; then
-        au_log "reinstall: НЕ удалось записать installed-tag — следующий прогон не увидит обновлений"
+        au_log "переустановка: НЕ удалось записать отметку версии — следующий прогон не увидит обновлений"
         return 1
     fi
-    au_log "reinstall applied: $target_tag"
+    au_log "переустановка выполнена: $target_tag"
     return 0
 }
 
@@ -1624,7 +1654,7 @@ au_apply_reinstall() {
 au_health_check() {
     # Override via Z2K_AU_HEALTH_TIMEOUT env var (set before sourcing the module).
     local timeout="$Z2K_AU_HEALTH_TIMEOUT"
-    au_log "health-check: ${timeout}s stability window, then checking"
+    au_log "проверка после обновления: жду ${timeout} с, потом смотрю, всё ли живо"
     sleep "$timeout"
 
     # nfqws2 was already confirmed up and queue-bound by the restart itself.
@@ -1638,10 +1668,10 @@ au_health_check() {
         # КАЖДОЕ обновление откатывалось само. Человек не мог обновиться никогда
         # и не понимал почему.
         if [ "${Z2K_AU_NFQWS_WAS_ALIVE:-1}" = "0" ]; then
-            au_log "health-check: nfqws2 не работает, но он и ДО обновления не работал — патч ни при чём, оставляем"
-            au_log "health-check: разберитесь, почему не стартует сервис (диагностика: раздел «что не так»)"
+            au_log "проверка: nfqws2 не работает, но он и ДО обновления не работал — обновление ни при чём, оставляем"
+            au_log "проверка: разберитесь, почему не стартует сервис (диагностика: раздел «что не так»)"
         else
-            au_log "health-check FAILED: nfqws2 died after start"
+            au_log "проверка не пройдена: nfqws2 запустился и умер"
             return 1
         fi
     fi
@@ -1658,7 +1688,7 @@ au_health_check() {
         sh -n "$_s" 2>/dev/null || _bad="$_bad $_s"
     done
     if [ -n "$_bad" ]; then
-        au_log "health-check FAILED: syntax error in installed script(s):$_bad"
+        au_log "проверка не пройдена: синтаксическая ошибка в файлах:$_bad"
         return 1
     fi
 
@@ -1685,8 +1715,8 @@ au_health_check() {
         pgrep -f "$_svc_pat" >/dev/null 2>&1 || _down="$_down $_svc"
     done
     if [ -n "$_down" ]; then
-        au_log "health-check: ВНИМАНИЕ, после обновления не работают:$_down"
-        au_log "health-check: обход (nfqws2) жив, откат не делаем — но эти сервисы нужно поднять"
+        au_log "проверка: ВНИМАНИЕ, после обновления не работают:$_down"
+        au_log "проверка: обход (nfqws2) жив, откат не делаем — но эти сервисы нужно поднять"
     fi
 
     # GitHub reachability is an ADVISORY signal — NOT a health gate. The probe
@@ -1698,10 +1728,10 @@ au_health_check() {
     # alive and every installed script parses clean (the two checks above) — that
     # already proves the update is healthy. A failed probe only logs a warning.
     if ! curl -fsS --max-time 10 -o /dev/null "$Z2K_AU_HEALTH_GH_URL"; then
-        au_log "health-check: github unreachable (advisory only — update kept; nfqws2 alive + scripts parse clean)"
+        au_log "проверка: до GitHub не достучались — на обновление это не влияет, обход жив и файлы целы"
     fi
 
-    au_log "health-check OK"
+    au_log "проверка пройдена: всё живо"
     return 0
 }
 
@@ -1904,7 +1934,7 @@ au_apply_converge() {
         return 0
     fi
 
-    au_log "сходимость: расходится файлов — $n"
+    au_log "нужно обновить файлов: $n"
     au_snapshot_for_patch "$(tr '\n' ' ' < "$plan")" || {
         au_log "снимок не снялся — обновление отменено"; return 1; }
 
@@ -1937,7 +1967,7 @@ au_apply_converge() {
     fi
 
     if ! au_health_check; then
-        au_log "health-check не прошёл — откат"
+        au_log "проверка не пройдена — откат"
         if au_rollback_patch; then
             au_run_steps regen-config restart-service >/dev/null 2>&1
         else
@@ -2099,7 +2129,13 @@ au_run_apply() {
             # shellcheck disable=SC2086
             _steps=$( { au_steps_union "$manifest" $_tags
                         [ -n "$_reset" ] && echo reset-state; } | au_steps_ordered | tr '\n' ' ')
-            au_log "новый путь: $installed -> $target_tag, последствия: ${_steps:-нет}"
+            _steps_h=""
+            for _sh in $_steps; do _steps_h="$_steps_h, $(au_step_human "$_sh")"; done
+            if [ -n "$_steps" ]; then
+                au_log "обновление $installed -> $target_tag; после доставки: ${_steps_h#, }"
+            else
+                au_log "обновление $installed -> $target_tag; после доставки делать ничего не нужно"
+            fi
             if pgrep -f nfqws2 >/dev/null 2>&1; then
                 Z2K_AU_NFQWS_WAS_ALIVE=1
             else
