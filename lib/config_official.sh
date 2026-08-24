@@ -2417,6 +2417,25 @@ CONFIG
     _pe_q=$(printf '%s' "$saved_POLICY_EXCLUDE" | sed "s/'/'\\\\''/g")
 
     # Append settings that need variable expansion (heredoc with quotes doesn't expand)
+    # База для ночного обновления списков доменов. Это ПОСТОЯННОЕ значение, а не
+    # источник текущего прогона: z2k-update-lists.sh читает его из конфига по
+    # расписанию, годами.
+    #
+    # Обновление на время своей работы пинит GITHUB_RAW на НЕИЗМЕНЯЕМЫЙ тег
+    # релиза, чтобы всё приехало из одного среза. Раньше этот пин утекал сюда и
+    # застывал в конфиге: роутер, переустановившийся на r-79.7, потом вечно
+    # тянул списки из тега r-79.7 — ветка уезжала, а у него списки замирали, и
+    # ни в одном логе это не выглядело ошибкой. С переходом на адресные
+    # обновления переустановки стали редкими, то есть пин жил бы дольше.
+    #
+    # Поэтому пин срезаем: в конфиг идёт ветка, из которой роутер живёт.
+    _z2k_persist_raw="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
+    case "$_z2k_persist_raw" in
+        */necronicle/z2k/z2k-enhanced|*/necronicle/z2k/z2k-staging) ;;
+        */necronicle/z2k/*)
+            _z2k_persist_raw="${Z2K_RELEASE_BRANCH:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}" ;;
+    esac
+
     cat >> "$config_file" <<EOF
 
 # Game WARP mode — route game-server ipset through Cloudflare WARP (usque/MASQUE);
@@ -2526,7 +2545,7 @@ Z2K_AUTO_UPDATE_ENABLED=${saved_Z2K_AUTO_UPDATE_ENABLED}
 # continue pulling from the SAME branch instead of defaulting back to
 # master. Set automatically from \$GITHUB_RAW at install time; edit by
 # hand only if you know what you are doing.
-Z2K_GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}"
+Z2K_GITHUB_RAW="${_z2k_persist_raw}"
 EOF
 
     # Записалось ли всё до конца. Хвост heredoc'а — последнее, что попадает в
