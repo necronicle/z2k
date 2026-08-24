@@ -113,9 +113,9 @@ func (c *Config) defaults() {
 
 // Engine — состояние одного запуска.
 type Engine struct {
-	cfg    Config
-	d      *account.Device
-	st     *status.Writer
+	cfg     Config
+	d       *account.Device
+	st      *status.Writer
 	tunDev  *tunshare.Shared
 	iface   string
 	since   time.Time
