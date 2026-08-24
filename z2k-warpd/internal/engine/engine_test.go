@@ -148,15 +148,29 @@ func baseDevice() *account.Device {
 		PeerKey: "peer", Tunnel: account.TunnelWG, Endpoint: account.Endpoint{V4: "8.6.112.0", Ports: []int{854}}}
 }
 
+// waitFor ждёт условие до deadline, а не фиксированные 200 итераций по 5 мс.
+//
+// Прежний бюджет — ровно одна секунда — измерял не поведение движка, а скорость
+// машины. Под -race детектор гонок замедляет всё в разы, и на общем раннере
+// GitHub этой секунды не хватало: TestAllFailSetsNoEndpointAndCoolsDown падал
+// «timeout waiting for no_endpoint status» на коммите, который движка вообще не
+// касался, и краснил релиз. Локально тот же тест проходил всегда.
+//
+// Таймаут здесь — страховка от зависания, а не утверждение о скорости, поэтому
+// бюджет щедрый: зелёный прогон всё равно возвращается за миллисекунды, а
+// красный означает настоящее зависание, а не занятый раннер.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for i := 0; i < 200; i++ {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
 		if cond() {
 			return
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for %s", what)
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("timeout waiting for %s", what)
 }
 
 func readStatus(h *harness) *status.Status {
