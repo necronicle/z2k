@@ -69,6 +69,28 @@ else
     no "release.sh принимает ручные шаги" "Z2K_RELEASE_STEPS" "не найден"
 fi
 
+
+# ПОД `set -e` РЕЛИЗ БЕЗ ВЫВЕДЕННЫХ ШАГОВ НЕ ДОЛЖЕН ТЕРЯТЬ РУЧНОЙ.
+#
+# Финальная команда внутри слияния — `grep -qx`, и когда не совпало ничего, она
+# возвращает «не найдено». release.sh работает под `set -e`, поэтому такой
+# конвейер обрывал всю группу — вместе с ещё не выполненным циклом ручных шагов.
+# Симптом ровно тот, что стоил выпуска p-79.10: переменная на месте, а релиз
+# печатает «последствий нет». Воспроизводим ИМЕННО под set -e — без него
+# ошибка не видна.
+_manual=$(sh -c 'set -e
+. "'"$ROOT"'/lib/release_map.sh"
+{ printf "" | z2k_steps_merged -
+  printf "restart-service\n"; } | z2k_steps_merged_names | tr "\n" " " | sed "s/ $//"')
+assert_eq "дифф без шагов + ручной шаг под set -e" "restart-service" "$_manual"
+
+_both=$(sh -c 'set -e
+. "'"$ROOT"'/lib/release_map.sh"
+{ printf "lib/config_official.sh\n" | z2k_steps_merged -
+  printf "reset-state\n"; } | z2k_steps_merged_names | tr "\n" " " | sed "s/ $//"')
+assert_eq "выведенные и ручные шаги сливаются в один порядок" \
+    "regen-config validate-config reset-state restart-service" "$_both"
+
 # release.sh обязан объявлять шаги, а не оставлять их человеку.
 REL="$ROOT/scripts/release.sh"
 if grep -q 'z2k_steps_merged' "$REL"; then

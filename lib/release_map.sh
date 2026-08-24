@@ -202,6 +202,14 @@ z2k_all_steps() {
 # строке». Отдельный признак, а не «нет аргументов»: пустой набор — законный
 # случай (релиз, где изменились только списки), и молча уйти читать stdin вместо
 # ответа «последствий нет» значило бы повиснуть.
+#
+# `|| true` на конвейерах ОБЯЗАТЕЛЕН, и это не косметика. Последняя команда
+# внутри — `grep -qx`, и когда не совпало ничего (релиз без последствий), она
+# возвращает «не найдено». Вызывающий работает под `set -e`, поэтому такой
+# конвейер обрывает всю группу — вместе с ещё не выполненным циклом ручных
+# шагов. Симптом: релиз с Z2K_RELEASE_STEPS печатает «последствий нет» и
+# объявляет пустой список, хотя переменная на месте. Тот же класс, что уже
+# ловился в release.sh на голом grep в конце пайпа.
 z2k_steps_merged() {
     _zsm_tmp=$(mktemp) || return 1
     if [ "$#" = 1 ] && [ "$1" = "-" ]; then
@@ -213,7 +221,7 @@ z2k_steps_merged() {
     fi
     z2k_all_steps | while IFS= read -r _zsm_s; do
         grep -qx "$_zsm_s" "$_zsm_tmp" && printf '%s\n' "$_zsm_s"
-    done
+    done || true
     rm -f "$_zsm_tmp"
     unset _zsm_tmp _zsm_f _zsm_s
     return 0
@@ -278,11 +286,11 @@ z2k_steps_merged_names() {
     sort -u > "$_zsn_tmp"
     z2k_all_steps | while IFS= read -r _zsn_s; do
         grep -qx "$_zsn_s" "$_zsn_tmp" && printf '%s\n' "$_zsn_s"
-    done
+    done || true
     while IFS= read -r _zsn_s; do
         [ -n "$_zsn_s" ] || continue
         z2k_all_steps | grep -qx "$_zsn_s" || printf '%s\n' "$_zsn_s"
-    done < "$_zsn_tmp"
+    done < "$_zsn_tmp" || true
     rm -f "$_zsn_tmp"
     unset _zsn_tmp _zsn_s
     return 0
