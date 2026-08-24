@@ -61,7 +61,6 @@ export async function renderWarp() {
         <span class="desc" id="warp-install-note" style="margin:0" hidden>~7 МБ; регистрирует устройство у Cloudflare. Ничего не запускается, пока не включите тумблер.</span>
         <button class="btn btn-danger" id="warp-remove-btn" hidden>Удалить WARP</button>
         <button class="btn btn-danger" id="warp-rereg-btn" hidden>Перерегистрировать устройство</button>
-        <span class="desc" id="warp-rereg-note" style="margin:0" hidden>Только по согласованию в чате: тратит одно устройство из лимита Cloudflare. Обычные проблемы с подключением лечатся не этим.</span>
       </div>
     </div>
     <div class="card">
@@ -300,12 +299,15 @@ async function loadWarpStatus() {
   installBtn.hidden = installed;
   installNote.hidden = installed;
   removeBtn.hidden = !installed;
-  // Перерегистрация имеет смысл только когда устройство есть. Предупреждение
-  // висит рядом с кнопкой, а не в подсказке: рычаг платный.
+  // Перерегистрация имеет смысл только когда устройство есть.
+  //
+  // ПРЕДУПРЕЖДЕНИЕ ЖИВЁТ В ОКНЕ ПОДТВЕРЖДЕНИЯ, А НЕ СБОКУ ОТ КНОПКИ. Строка
+  // рядом стояла в одном ряду с «Удалить WARP», и ряд читался как сплошной
+  // запрет: три опасных элемента подряд, к какому относится текст — неясно.
+  // Текст, объясняющий цену действия, нужен ровно в момент нажатия, и там он
+  // и стоит.
   const reregBtn = document.getElementById("warp-rereg-btn");
-  const reregNote = document.getElementById("warp-rereg-note");
   if (reregBtn) reregBtn.hidden = !installed;
-  if (reregNote) reregNote.hidden = !installed;
   document.getElementById("warp-devices-card").hidden = false;
 
   const box = $app.querySelector('[data-key="game_warp"] input');

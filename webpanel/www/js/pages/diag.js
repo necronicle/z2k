@@ -333,8 +333,8 @@ function renderDnsResult(d) {
   // он переехал в подпись группы обычного DNS, где и объясняет её состояние.
   const stubNote = d.stub ? `порт 53, без шифрования · заглушка ${escapeHtml(d.stub)}` : "порт 53, без шифрования";
   host.innerHTML = `
-    ${dnsPathGroup("Обычный DNS", stubNote, plain, true)}
-    ${dnsPathGroup("Шифрованный DoH", "запрос внутри HTTPS", doh, true)}
+    ${dnsPathGroup("Обычный DNS", stubNote, plain, false)}
+    ${dnsPathGroup("Шифрованный DoH", "запрос внутри HTTPS", doh, false)}
     ${dnsPathGroup("Шифрованный DoT", "запрос внутри TLS, порт 853", dot, false)}`;
 }
 
