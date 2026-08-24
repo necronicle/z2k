@@ -232,6 +232,18 @@ z2k_fetch() {
     local dest="$2"
     local url
     Z2K_FETCH_ALL_404=1
+    # Отдельно от «все ответили 404» — был ли АВТОРИТЕТНЫЙ 404.
+    #
+    # Единогласия требовать нельзя: у зеркал разные причины ответить не-404
+    # (jsdelivr ещё не прогрел кэш, gh-proxy моргнул, слой упал в таймаут), и
+    # один такой ответ перебивал четыре честных 404 — «файла у апстрима нет»
+    # превращалось в «all mirrors failed». Человек видел поломку там, где её
+    # нет, и шёл с ней в поддержку (поле 2026-08-24, три игры ru-gaming-blocklist).
+    #
+    # 404 от raw.githubusercontent.com — сам по себе доказательство отсутствия
+    # файла. Таймаут соседнего зеркала к этому доказательству ничего не
+    # добавляет, поэтому и отменять его не должен.
+    Z2K_FETCH_AUTH_404=0
 
     case "$src" in
         http://*|https://*) url="$src" ;;
@@ -304,11 +316,13 @@ z2k_fetch() {
             # --- end z2k layer0 retry gate ---
         done
         # Статус последней попытки: настоящий 404 отдаётся на обеих.
-        [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
+        # Слой 0 — сквозной проход к raw.githubusercontent.com, его 404 авторитетен.
+        if [ "${Z2K_LAST_HTTP:-}" = "404" ]; then Z2K_FETCH_AUTH_404=1; else Z2K_FETCH_ALL_404=0; fi
     fi
 
     if _z2k_curl_etag "$url" "$dest" && _z2k_ul_verify "$dest"; then return 0; fi
-    [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
+    # Прямой raw — тоже авторитетный источник.
+    if [ "${Z2K_LAST_HTTP:-}" = "404" ]; then Z2K_FETCH_AUTH_404=1; else Z2K_FETCH_ALL_404=0; fi
     if [ -n "$jsdelivr" ]; then
         _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_ul_verify "$dest" && return 0
         [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
@@ -441,7 +455,7 @@ update_list() {
         # MagicTheGathering). Раньше это писалось как «all mirrors failed» и
         # всплывало в диагностике под «errors across all logs» — то есть человек
         # видел поломку там, где её нет, и шёл с ней в поддержку.
-        if [ "${Z2K_FETCH_ALL_404:-0}" = "1" ]; then
+        if [ "${Z2K_FETCH_ALL_404:-0}" = "1" ] || [ "${Z2K_FETCH_AUTH_404:-0}" = "1" ]; then
             log_msg "$name: у апстрима такого файла нет (404), пропускаю"
         else
             log_msg "FAIL: download $name from $url (all mirrors failed)"
