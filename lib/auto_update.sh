@@ -470,6 +470,106 @@ au_targets_for() {
     au_manifest_install_targets "$Z2K_AU_TMP_DIR/UPDATES.json" "$1"
 }
 
+# ---- сходимость к манифесту --------------------------------------------------
+#
+# Обновление больше не «применяет дельту», объявленную релизом: оно приводит
+# дерево к состоянию, которое манифест описывает целиком. Отсюда три свойства
+# даром — прерванное обновление доделывается со следующего запуска, повторное
+# ничего не делает, а файл, потерянный старым апдейтером как «no install target»,
+# встаёт на место. Не потому что мы это предусмотрели, а потому что он не совпал
+# по sha.
+#
+# Цена сверки измерена на роутере владельца: 89 файлов дерева (2.2 МБ) — меньше
+# секунды, вместе с бинарниками и движком (30 МБ) — секунда.
+
+# au_converge_plan <manifest> — что разошлось с манифестом (0..N путей в репо).
+au_converge_plan() {
+    local manifest="$1"
+    [ -f "$manifest" ] || return 0
+    # Ключи files_sha256: путь + шестидесятичетырёхзначная сумма. Пары из
+    # install_map под шаблон не подходят (там значение-список), записи истории
+    # тоже (там путь стоит значением).
+    grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "$manifest" 2>/dev/null \
+    | sed 's/"[[:space:]]*:.*//; s/^"//' \
+    | while IFS= read -r repo_path; do
+        [ -n "$repo_path" ] || continue
+        _cp_want=$(au_manifest_file_sha "$manifest" "$repo_path")
+        [ -n "$_cp_want" ] || continue
+        # Первая цель — представитель: остальные её копии (списки лежат в двух
+        # местах) выравниваются при раскладке.
+        _cp_first=$(au_manifest_install_targets "$manifest" "$repo_path" | head -1)
+        [ -n "$_cp_first" ] || continue   # verify-only (бинарники) — не этот путь
+        if [ ! -f "$_cp_first" ]; then
+            printf '%s\n' "$repo_path"; continue
+        fi
+        _cp_got=$(z2k_sha256_file "$_cp_first" 2>/dev/null)
+        [ "$_cp_got" = "$_cp_want" ] || printf '%s\n' "$repo_path"
+    done
+}
+
+# au_converge_apply <manifest> <файл плана> — доставить перечисленное.
+#
+# Сначала скачать и проверить ВСЁ, только потом раскладывать. Обрыв связи или
+# протухший ответ зеркала на середине не должен оставить дерево наполовину
+# новым: до раскладки отказ ничего не стоит, после — это смесь версий, которую
+# следующий прогон уже не отличит от нормы.
+au_converge_apply() {
+    local manifest="$1" plan="$2"
+    local dl="$Z2K_AU_TMP_DIR/converge"
+    [ -f "$plan" ] || return 0
+    rm -rf "$dl"; mkdir -p "$dl" || return 1
+    while IFS= read -r _ca_path; do
+        [ -n "$_ca_path" ] || continue
+        _ca_stage="$dl/$(printf '%s' "$_ca_path" | tr '/' '_')"
+        au_download_repo_file "$_ca_path" "$_ca_stage" || {
+            au_log "сходимость: не скачался $_ca_path"; return 1; }
+        _ca_want=$(au_manifest_file_sha "$manifest" "$_ca_path")
+        if [ -n "$_ca_want" ]; then
+            _ca_got=$(z2k_sha256_file "$_ca_stage" 2>/dev/null)
+            if [ "$_ca_got" != "$_ca_want" ]; then
+                au_log "сходимость: sha не сошлась у $_ca_path — раскладки не будет"
+                return 1
+            fi
+        fi
+    done < "$plan"
+
+    local rc=0
+    while IFS= read -r _ca_path; do
+        [ -n "$_ca_path" ] || continue
+        _ca_stage="$dl/$(printf '%s' "$_ca_path" | tr '/' '_')"
+        [ -f "$_ca_stage" ] || continue
+        _ca_targets=$(au_manifest_install_targets "$manifest" "$_ca_path")
+        while IFS= read -r _ca_t; do
+            [ -n "$_ca_t" ] || continue
+            mkdir -p "$(dirname "$_ca_t")" 2>/dev/null
+            # Атомарно: временный файл в ТОЙ ЖЕ директории и rename. Голый cp
+            # переписывает цель на месте, и прерывание (обрыв питания, OOM —
+            # обычное дело на этих коробках) оставляет полуфайл, смертельный
+            # для init-скрипта или модуля, который сорсится прямо сейчас.
+            # Бит +x восстанавливаем ДО переименования: cp не переносит его
+            # надёжно между сборками BusyBox (скачанный файл 0644), и p-42
+            # ровно так уронил S99zapret2 в 0644 — «Permission denied» при
+            # рестарте.
+            _ca_tmp="${_ca_t}.z2k-cv.$$"
+            if cp -f "$_ca_stage" "$_ca_tmp" 2>/dev/null; then
+                case "$_ca_t" in
+                    */init.d/*|*.sh) chmod +x "$_ca_tmp" 2>/dev/null || true ;;
+                esac
+                if ! mv -f "$_ca_tmp" "$_ca_t" 2>/dev/null; then
+                    rm -f "$_ca_tmp" 2>/dev/null
+                    au_log "сходимость: не записался $_ca_t (rename)"; rc=1
+                fi
+            else
+                rm -f "$_ca_tmp" 2>/dev/null
+                au_log "сходимость: не записался $_ca_t (copy)"; rc=1
+            fi
+        done <<EOF_CT
+$_ca_targets
+EOF_CT
+    done < "$plan"
+    return "$rc"
+}
+
 # ------------------------------------------------------------ decide ---
 
 # au_decide INSTALLED_TAG MANIFEST_PATH
