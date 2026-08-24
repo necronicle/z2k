@@ -570,6 +570,251 @@ EOF_CT
     return "$rc"
 }
 
+# ---- последствия: каталог шагов ----------------------------------------------
+#
+# Что выполнить после доставки, объявляет РЕЛИЗ (history[].steps), а исполнитель
+# исполняет. Каталог закрытый: шаг, которого здесь нет, — это релиз новее нашего
+# кода, и единственный честный ответ на него «не могу, нужна полная установка»,
+# а не тихо пропустить и сдвинуть версию.
+
+# au_step_order — КАНОНИЧЕСКИЙ порядок. Исполнитель не доверяет порядку, в
+# котором шаги перечислены в манифесте: он их сливает и идёт этим списком.
+# Семь изменившихся lua плюс конфиг плюс бинарь дают ОДИН перезапуск в конце,
+# а не девять действий. Дублирует z2k_all_steps из lib/release_map.sh намеренно:
+# сборка и исполнитель — две стороны контракта, и tests/test_au_steps.sh сверяет,
+# что стороны сошлись.
+au_step_order() {
+    echo regen-strategies
+    echo regen-config
+    echo validate-config
+    echo refresh-binaries
+    echo rebuild-panel
+    echo reset-state
+    echo restart-service
+}
+
+# au_entry_steps <manifest> <тег> — шаги одной записи истории (0..N строк).
+# Запись без поля steps — это релиз старого образца: пусто, и это не ошибка.
+au_entry_steps() {
+    awk -v want="$2" '
+        /^[[:space:]]*\{[[:space:]]*"v"[[:space:]]*:/ {
+            v = $0; sub(/.*"v"[[:space:]]*:[[:space:]]*"/, "", v); sub(/".*/, "", v)
+            if (v != want) next
+            if ($0 !~ /"steps"/) next
+            s = $0
+            sub(/.*"steps"[[:space:]]*:[[:space:]]*\[/, "", s); sub(/\].*/, "", s)
+            n = split(s, parts, ",")
+            for (i = 1; i <= n; i++) {
+                gsub(/[[:space:]"]/, "", parts[i])
+                if (parts[i] != "") print parts[i]
+            }
+        }' "$1" 2>/dev/null
+}
+
+# au_steps_union <manifest> <тег>… — объединение шагов набора релизов в
+# каноническом порядке, каждый максимум один раз.
+au_steps_union() {
+    local manifest="$1"; shift
+    local tmp="$Z2K_AU_TMP_DIR/steps.$$"
+    mkdir -p "$(dirname "$tmp")" 2>/dev/null
+    : > "$tmp" || return 1
+    local t
+    for t in "$@"; do au_entry_steps "$manifest" "$t" >> "$tmp"; done
+    au_step_order | while IFS= read -r s; do
+        grep -qx "$s" "$tmp" 2>/dev/null && printf '%s\n' "$s"
+    done
+    rm -f "$tmp"
+}
+
+# Сорсинг генераторов из доставленного дерева. Тот же приём, что у вебморды
+# (_gen_libs_source в webpanel/cgi/actions.sh): модули читаются из ${zd}/lib,
+# то есть уже НОВЫЕ — их положила сходимость этим же прогоном.
+au_gen_libs_source() {
+    local zd="${ZAPRET2_DIR:-/opt/zapret2}" d
+    for d in "$zd/lib" /tmp/z2k/lib; do
+        [ -f "$d/config_official.sh" ] || continue
+        # shellcheck disable=SC1090
+        [ -f "$d/utils.sh" ] && . "$d/utils.sh"
+        # shellcheck disable=SC1090
+        . "$d/config_official.sh" || return 1
+        # shellcheck disable=SC1090
+        [ -f "$d/strategies.sh" ] && . "$d/strategies.sh"
+        return 0
+    done
+    return 1
+}
+
+au_step_regen_strategies() {
+    au_gen_libs_source || { au_log "regen-strategies: нет генераторов в ${ZAPRET2_DIR}/lib"; return 1; }
+    command -v create_default_strategy_files >/dev/null 2>&1 || {
+        au_log "regen-strategies: create_default_strategy_files недоступна"; return 1; }
+    create_default_strategy_files >/dev/null 2>&1
+}
+
+au_step_regen_config() {
+    au_gen_libs_source || { au_log "regen-config: нет генераторов в ${ZAPRET2_DIR}/lib"; return 1; }
+    command -v create_official_config >/dev/null 2>&1 || {
+        au_log "regen-config: create_official_config недоступна"; return 1; }
+    create_official_config "${ZAPRET2_DIR}/config" >/dev/null 2>&1
+}
+
+# Валидация — с правом вето. Перезапуск в сломанный конфиг оставляет роутер без
+# обхода до утра, поэтому провал здесь обязан остановить всю цепочку.
+au_step_validate_config() {
+    local v="${ZAPRET2_DIR}/z2k-config-validator.sh"
+    [ -f "$v" ] || { au_log "validate-config: валидатора нет — считаю проверку непройденной"; return 1; }
+    sh "$v" "${ZAPRET2_DIR}/config" >/dev/null 2>&1
+}
+
+# Бинарники: цель зависит от арки роутера, поэтому в install_map их нет и
+# сходимость их не трогает. Здесь — адресно: своя сборка, сверка по манифесту,
+# атомарная подмена, перезапуск владельца.
+au_bin_goarch() {
+    local hw ba
+    hw=$(get_arch 2>/dev/null || uname -m)
+    ba=$(map_arch_to_bin_arch "$hw" 2>/dev/null || true)
+    case "$ba" in
+        linux-arm64)    echo arm64 ;;
+        linux-arm)      echo arm ;;
+        linux-mipsel)   echo mipsle ;;
+        linux-mips64el) echo mips64le ;;
+        linux-mips64)   echo mips64le ;;
+        linux-mips)     echo mips ;;
+        linux-x86_64)   echo amd64 ;;
+        linux-x86)      echo 386 ;;
+        linux-riscv64)  echo riscv64 ;;
+        linux-ppc)      echo ppc64 ;;
+    esac
+}
+
+au_step_refresh_binaries() {
+    local manifest="$Z2K_AU_TMP_DIR/UPDATES.json"
+    local goarch; goarch=$(au_bin_goarch)
+    [ -n "$goarch" ] || { au_log "refresh-binaries: арка не опознана"; return 1; }
+    # Осечки копим в файле, а не в переменной: цикл ниже идёт за пайпом, то есть
+    # в подоболочке — присвоение оттуда не переживает конец цикла, и провал
+    # загрузки вернулся бы наружу успехом.
+    local fail="$Z2K_AU_TMP_DIR/refresh-binaries.fail"
+    mkdir -p "$(dirname "$fail")" 2>/dev/null
+    rm -f "$fail"
+    # Все сборки под нашу арку, объявленные манифестом.
+    grep -oE '"[^"]+/builds/[^"]+-linux-'"$goarch"'"[[:space:]]*:' "$manifest" 2>/dev/null \
+    | sed 's/"[[:space:]]*:.*//; s/^"//' | sort -u \
+    | while IFS= read -r _rb_path; do
+        [ -n "$_rb_path" ] || continue
+        _rb_base=$(basename "$_rb_path")
+        _rb_name="${_rb_base%-linux-$goarch}"
+        _rb_dest="/opt/sbin/${_rb_name}"
+        _rb_want=$(au_manifest_file_sha "$manifest" "$_rb_path")
+        if [ -f "$_rb_dest" ] && [ -n "$_rb_want" ] \
+           && [ "$(z2k_sha256_file "$_rb_dest" 2>/dev/null)" = "$_rb_want" ]; then
+            continue
+        fi
+        _rb_tmp="${_rb_dest}.z2k-au.$$"
+        rm -f "$_rb_tmp" "${_rb_tmp}.etag" 2>/dev/null
+        if ! au_download_repo_file "$_rb_path" "$_rb_tmp"; then
+            au_log "refresh-binaries: не скачался $_rb_path"; rm -f "$_rb_tmp"; echo 1 >> "$fail"; continue
+        fi
+        rm -f "${_rb_tmp}.etag" 2>/dev/null
+        if [ -n "$_rb_want" ] && [ "$(z2k_sha256_file "$_rb_tmp" 2>/dev/null)" != "$_rb_want" ]; then
+            au_log "refresh-binaries: sha не сошлась у $_rb_path — рабочий бинарник не трогаю"
+            rm -f "$_rb_tmp"; echo 1 >> "$fail"; continue
+        fi
+        chmod +x "$_rb_tmp" 2>/dev/null
+        # Владельца останавливаем ДО подмены: mv атомарен и ETXTBSY не даёт, но
+        # оставленный работать старый процесс продолжил бы крутить старый код.
+        for _rb_svc in $(au_service_for_binary "$_rb_name"); do
+            [ -x "$_rb_svc" ] && "$_rb_svc" stop >/dev/null 2>&1
+        done
+        if mv -f "$_rb_tmp" "$_rb_dest" 2>/dev/null; then
+            au_log "refresh-binaries: обновлён $_rb_dest"
+        else
+            rm -f "$_rb_tmp" 2>/dev/null
+            au_log "refresh-binaries: не записался $_rb_dest"; echo 1 >> "$fail"
+        fi
+        for _rb_svc in $(au_service_for_binary "$_rb_name"); do
+            [ -x "$_rb_svc" ] && "$_rb_svc" start >/dev/null 2>&1
+        done
+    done
+    if [ -s "$fail" ]; then rm -f "$fail"; return 1; fi
+    rm -f "$fail"
+    return 0
+}
+
+# Init-скрипты, владеющие бинарником. У tg-mtproxy-client их два: S98tg-tunnel
+# держит :1443 (Telegram), S97z2k-http-tunnel — :1444 (cdnbase); оба гоняют один
+# файл, поэтому подменять его можно только остановив оба.
+au_service_for_binary() {
+    case "$1" in
+        z2k-rt-proxy)      echo "/opt/etc/init.d/S96z2k-rt-proxy" ;;
+        z2k-detect)        echo "/opt/etc/init.d/S98z2k-detect" ;;
+        z2k-warpd)         echo "/opt/etc/init.d/S51z2k-warp" ;;
+        tg-mtproxy-client) echo "/opt/etc/init.d/S98tg-tunnel /opt/etc/init.d/S97z2k-http-tunnel" ;;
+    esac
+}
+
+# Панель: lighttpd.conf шаблонизируется установщиком (@PORT@/@BIND@), поэтому
+# доставленный файл сам по себе ничего не меняет. Установщик читает
+# сохранённые port/bind из дерева, так что адрес панели не сбрасывается.
+au_step_rebuild_panel() {
+    local wp="${ZAPRET2_DIR}/webpanel/install.sh"
+    [ -f "$wp" ] || { au_log "rebuild-panel: ${wp} нет"; return 1; }
+    local port
+    port=$(sed -n 's/^[[:space:]]*PORT=\{0,1\}"\{0,1\}\([0-9]\{2,5\}\).*/\1/p' \
+           /opt/etc/init.d/S96z2k-webpanel 2>/dev/null | head -1)
+    if [ -n "$port" ]; then
+        sh "$wp" --port "$port" >/dev/null 2>&1
+    else
+        sh "$wp" >/dev/null 2>&1
+    fi
+}
+
+# Сброс состояния автоподбора. Объявляется вручную — при сдвиге нумерации пулов
+# накопленная статистика начинает указывать не на те стратегии.
+au_step_reset_state() {
+    rm -f "${ZAPRET2_DIR}/state.tsv" 2>/dev/null
+    au_log "reset-state: состояние автоподбора сброшено"
+    return 0
+}
+
+au_step_restart_service() {
+    local init="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
+    [ -f "$init" ] || { au_log "restart-service: $init нет"; return 1; }
+    # Бит +x: патч-путь на некоторых сборках BusyBox его ронял (p-42), и прямой
+    # запуск падал с rc 126.
+    chmod +x "$init" 2>/dev/null
+    "$init" restart >/dev/null 2>&1
+}
+
+# au_run_step <шаг> — rc: 0 сделано, 1 шаг провалился, 2 шага не знаем.
+au_run_step() {
+    case "$1" in
+        regen-strategies) au_step_regen_strategies ;;
+        regen-config)     au_step_regen_config ;;
+        validate-config)  au_step_validate_config ;;
+        refresh-binaries) au_step_refresh_binaries ;;
+        rebuild-panel)    au_step_rebuild_panel ;;
+        reset-state)      au_step_reset_state ;;
+        restart-service)  au_step_restart_service ;;
+        *) au_log "неизвестный шаг «$1» — нужна полная переустановка"; return 2 ;;
+    esac
+}
+
+# au_run_steps <шаг>… — по порядку, до первой осечки. Останов, а не «идём
+# дальше и надеемся»: провал валидации обязан отменить перезапуск.
+au_run_steps() {
+    local s rc
+    for s in "$@"; do
+        au_log "шаг: $s"
+        au_run_step "$s"; rc=$?
+        if [ "$rc" != 0 ]; then
+            au_log "шаг $s вернул $rc — цепочка остановлена"
+            return "$rc"
+        fi
+    done
+    return 0
+}
+
 # ------------------------------------------------------------ decide ---
 
 # au_decide INSTALLED_TAG MANIFEST_PATH
