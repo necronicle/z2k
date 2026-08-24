@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 38,
-  "current": "p-79.11",
+  "seq": 37,
+  "current": "p-79.10",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -92,7 +92,6 @@
   "webpanel/cgi/auth.sh": ["/opt/zapret2/webpanel/cgi/auth.sh"],
   "webpanel/init.d/S96z2k-webpanel": ["/opt/etc/init.d/S96z2k-webpanel"],
   "webpanel/install.sh": ["/opt/zapret2/webpanel/install.sh"],
-  "webpanel/lighttpd.conf": ["/opt/zapret2/webpanel/lighttpd.conf.in"],
   "webpanel/uninstall.sh": ["/opt/zapret2/webpanel/uninstall.sh"],
   "webpanel/www/app.js": ["/opt/zapret2/www/app.js"],
   "webpanel/www/favicon.svg": ["/opt/zapret2/www/favicon.svg"],
@@ -207,9 +206,9 @@
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "f59b40925a154a3768870e3abb381f7160843fd79f3cf6f5c7b3bf17863840d8",
   "files/z2k-warp.sh": "494cf37d547106852456b9568ee7a989c3de55395a06287a31ecbdf414f10d25",
-  "lib/auto_update.sh": "b27c35fe26d68a6e204ff6d9acf3e06480bfd17bbb444e10515bf1e32d234e9d",
+  "lib/auto_update.sh": "ccd5682bb06c3c5037f0e42c016c4bc3e58ae9d29b7242f6dbafe4e53af78c0e",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
-  "lib/config_official.sh": "6189d919478e34a3f0f5c596081648a9308d636166e16321085c69a88483fc2c",
+  "lib/config_official.sh": "52a224db5a025b5daeeb752aa14a326edadfe765fb7369d4c4c32eeeee84a0b6",
   "lib/install.sh": "b534c16dc248e04555e00544190da54bf2ed9c7b651dfde0763ec56e12cdc333",
   "lib/menu.sh": "623aaa28c65eb059baf198ce2e31c3a5e0c2b55a3b148599918e34333193d326",
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
@@ -234,7 +233,6 @@
   "webpanel/cgi/auth.sh": "aa2d34f9f41444ba41a888a0da5214ff688b037457c54256546938b27391b333",
   "webpanel/init.d/S96z2k-webpanel": "d064a61c1845e2a4ade4ed90cb3b6a82f3705fc6784f90f925d27c5bd7bcedbe",
   "webpanel/install.sh": "d16d95e2ca878f04a2093a8b64aa4daadf21c637e5a934dc41cfc3257bb27817",
-  "webpanel/lighttpd.conf": "e17a7953047aef3d215cf071297b7378ccd2d0a8a7a88f76a0bcad8abfd0455f",
   "webpanel/uninstall.sh": "b2b53fce5eb2506946cce6f114ef27bba49d124d811d2628a7201389f920c7e3",
   "webpanel/www/app.js": "4acce04edc120e996e33818adf68efe0225a553676f79cb2ff59f997d5171e3a",
   "webpanel/www/favicon.svg": "1b011055277d598f2384c9485bfffcd7aeb7f7a09f99c72748afc96617bc3fd4",
@@ -248,7 +246,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "ab9905f2985f12a65ac05bcada3af12af218672a3b3fb9ede642db3d0485d0ae",
+  "webpanel/www/index.html": "ae0ba7ec7e5d9a63bc78cc154bdf0b0b79493c74ffb75360fda6ea3a30d6d6d2",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -466,7 +464,6 @@
 {"v": "r-79.7", "type": "reinstall", "ts": "2026-08-24T09:56:47Z", "ref": "r-79.7", "desc": "Обновления стали быстрыми: теперь роутер докачивает только то, что действительно изменилось, вместо того чтобы каждый раз переустанавливать всё целиком. Это обновление — последнее долгое, дальше секунды вместо минут.", "changed_files": ["webpanel/www/index.html", "files/z2k-auto-update.sh", "files/z2k-stats-upload.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/utils.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-79.8", "type": "patch", "ts": "2026-08-24T11:08:44Z", "ref": "p-79.8", "desc": "В веб-панели у устройств не в сети имя больше не стоит на месте адреса. Плюс исправлено обновление: безобидное предупреждение о настройках больше не считается ошибкой и не откатывает обновление.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-79.9", "type": "patch", "ts": "2026-08-24T12:43:47Z", "ref": "p-79.9", "desc": "Исправлен отказ запуска: у части роутеров после обновления переставал работать обход. Причина — лишний файл-заготовка, который движок отказывался принимать; он убран, сервис перезапускается автоматически.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "lib/auto_update.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
-{"v": "p-79.10", "type": "patch", "ts": "2026-08-24T14:56:04Z", "ref": "p-79.10", "desc": "Поднимает обход у тех, у кого он перестал запускаться после вчерашних обновлений, и убирает с роутера файл, ставший причиной. Если у вас всё работало — ничего не изменится.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
-{"v": "p-79.11", "type": "patch", "ts": "2026-08-24T15:47:45Z", "ref": "p-79.11", "desc": "Списки доменов снова обновляются у всех — раньше после переустановки роутер мог замереть на старой версии списков. Плюс исправлены внутренние шаги обновления, которые раньше не сработали бы.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "lib/config_official.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
+{"v": "p-79.10", "type": "patch", "ts": "2026-08-24T14:56:04Z", "ref": "p-79.10", "desc": "Поднимает обход у тех, у кого он перестал запускаться после вчерашних обновлений, и убирает с роутера файл, ставший причиной. Если у вас всё работало — ничего не изменится.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
