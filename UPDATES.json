@@ -1,14 +1,13 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 35,
-  "current": "p-79.8",
+  "seq": 36,
+  "current": "p-79.9",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
   "files/etc/z2k-roots.pem": ["/opt/zapret2/etc/z2k-roots.pem"],
   "files/etc/z2k-update-pub.pem": ["/opt/zapret2/etc/z2k-update-pub.pem"],
-  "files/fake/4pda.bin": ["/opt/zapret2/files/fake/4pda.bin"],
   "files/fake/http_iana_org.bin": ["/opt/zapret2/files/fake/http_iana_org.bin"],
   "files/fake/quic_1.bin": ["/opt/zapret2/files/fake/quic_1.bin"],
   "files/fake/quic_4.bin": ["/opt/zapret2/files/fake/quic_4.bin"],
@@ -133,10 +132,9 @@
   },
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "2e73d3b4db3a3018603d78ff57e6402e24d1efb6c9b3d4c93a3abb27f4169b9f",
+  "files/S99zapret2.new": "b3fadef8c053c5609431d155a2bbb9866ab78a6dda2f279bb5141a80cf38f973",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
-  "files/fake/4pda.bin": "eefeaf09dde8d69b1f176212541f63c68b314a33a335eced99a8a29f17254da8",
   "files/fake/http_iana_org.bin": "f77d1cdaff02b6311d4276eeb8479830ab777d8fce4a4b116135c7768f3a284a",
   "files/fake/quic_1.bin": "f4589c57749f956bb30538197a521d7005f8b0a8723b4707e72405e51ddac50a",
   "files/fake/quic_4.bin": "0e53683f2408bab1f52bc3db10c11b3a2bf238f68db64f4d0ea8aff37e07a61d",
@@ -208,7 +206,7 @@
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "f59b40925a154a3768870e3abb381f7160843fd79f3cf6f5c7b3bf17863840d8",
   "files/z2k-warp.sh": "494cf37d547106852456b9568ee7a989c3de55395a06287a31ecbdf414f10d25",
-  "lib/auto_update.sh": "21adecd3b917c974fd538647a785c7b67d9428f5aaee529bf58c37e7e6f75fad",
+  "lib/auto_update.sh": "ca78a1f70239f515f6335cbedec493e39b932a0be4903d05c1ff97a8a463ba4c",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
   "lib/config_official.sh": "52a224db5a025b5daeeb752aa14a326edadfe765fb7369d4c4c32eeeee84a0b6",
   "lib/install.sh": "b534c16dc248e04555e00544190da54bf2ed9c7b651dfde0763ec56e12cdc333",
@@ -248,7 +246,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "33ee83e73ede0b8ec4438fbb29a6c6d4cd2098afba0dcd0fc3b87957a9c78d46",
+  "webpanel/www/index.html": "3f104dd1d58997fe2d57128dc746fd97dfb26cf659b8f82dc904645a35ead480",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -464,6 +462,7 @@
 {"v": "r-79.4", "type": "reinstall", "ts": "2026-08-23T17:22:56Z", "ref": "r-79.4", "desc": "WARP быстрее поднимается там, где провайдер блокирует UDP: запасной транспорт по TCP пробуется через полминуты, а не через несколько минут. Список устройств больше не путается со списками адресов. В диагностике появился раздел WARP.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/www/style.css", "UPDATES.json"]},
 {"v": "r-79.6", "type": "reinstall", "ts": "2026-08-24T05:34:18Z", "ref": "r-79.6", "desc": "Исправлено то, что сломалось в прошлом обновлении: WARP снова работает у тех, у кого перестал, и больше не показывает «движок не запущен» при живом туннеле. Если туннель не поднялся с первой попытки, перебор адресов теперь доходит до конца, а не останавливается на пять минут.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/z2k-warp.sh", "UPDATES.json"]},
 {"v": "r-79.7", "type": "reinstall", "ts": "2026-08-24T09:56:47Z", "ref": "r-79.7", "desc": "Обновления стали быстрыми: теперь роутер докачивает только то, что действительно изменилось, вместо того чтобы каждый раз переустанавливать всё целиком. Это обновление — последнее долгое, дальше секунды вместо минут.", "changed_files": ["webpanel/www/index.html", "files/z2k-auto-update.sh", "files/z2k-stats-upload.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/utils.sh", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-79.8", "type": "patch", "ts": "2026-08-24T11:08:44Z", "ref": "p-79.8", "desc": "В веб-панели у устройств не в сети имя больше не стоит на месте адреса. Плюс исправлено обновление: безобидное предупреждение о настройках больше не считается ошибкой и не откатывает обновление.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-79.8", "type": "patch", "ts": "2026-08-24T11:08:44Z", "ref": "p-79.8", "desc": "В веб-панели у устройств не в сети имя больше не стоит на месте адреса. Плюс исправлено обновление: безобидное предупреждение о настройках больше не считается ошибкой и не откатывает обновление.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-79.9", "type": "patch", "ts": "2026-08-24T12:43:47Z", "ref": "p-79.9", "desc": "Исправлен отказ запуска: у части роутеров после обновления переставал работать обход. Причина — лишний файл-заготовка, который движок отказывался принимать; он убран, сервис перезапускается автоматически.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "lib/auto_update.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
