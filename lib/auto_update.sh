@@ -862,8 +862,21 @@ au_step_rebuild_panel() {
 
 # Сброс состояния автоподбора. Объявляется вручную — при сдвиге нумерации пулов
 # накопленная статистика начинает указывать не на те стратегии.
+#
+# ПУТЬ БЫЛ НЕВЕРНЫЙ, и это стоило бы молчаливого «сделано»: state.tsv лежит в
+# extra_strats/cache/autocircular/, а не в корне ${zd}. Шаг удалял
+# несуществующий файл и возвращал успех — то есть релиз, объявивший сброс, его
+# бы не выполнил, и никто бы не узнал. Проверено на роутере владельца.
+#
+# Снимаем тот же набор, что и переустановка (lib/install.sh): сам state, его
+# lock/tmp и запасную копию в /tmp — иначе сброшенная ротация тут же поднимет
+# старую статистику из кэша.
 au_step_reset_state() {
-    rm -f "${ZAPRET2_DIR}/state.tsv" 2>/dev/null
+    local zd="${ZAPRET2_DIR:-/opt/zapret2}"
+    local ac="$zd/extra_strats/cache/autocircular"
+    rm -f "${STATE_FILE:-$ac/state.tsv}" \
+          "$ac/state.tsv.lock" "$ac/state.tsv.tmp" \
+          /tmp/z2k-autocircular-state.tsv 2>/dev/null
     au_log "reset-state: состояние автоподбора сброшено"
     return 0
 }

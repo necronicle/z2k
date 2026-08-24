@@ -160,6 +160,23 @@ printf 'x = @PORT@\n' > "$SB/zd/webpanel/lighttpd.conf.in"; : > "$SB/zd/webpanel
 assert_eq "нет порта — отказ" "1" "$(ZAPRET2_DIR="$SB/zd" au_step_rebuild_panel; echo $?)"
 unset ZAPRET2_DIR
 
+# RESET-STATE УДАЛЯЕТ ТОТ ФАЙЛ, КОТОРЫЙ ЕСТЬ.
+#
+# Путь был неверный: state.tsv лежит в extra_strats/cache/autocircular/, а не в
+# корне ${zd}. Шаг удалял несуществующий файл и возвращал успех — релиз,
+# объявивший сброс, его бы не выполнил, и никто бы не узнал. Найдено прогоном на
+# роутере владельца, а не по коду.
+mkdir -p "$SB/zd/extra_strats/cache/autocircular"
+printf 'rkn_tcp\thost\t1\t0\tauto\n' > "$SB/zd/extra_strats/cache/autocircular/state.tsv"
+: > "$SB/zd/extra_strats/cache/autocircular/state.tsv.lock"
+: > "$SB/zd/extra_strats/cache/autocircular/telemetry.tsv"
+ZAPRET2_DIR="$SB/zd" au_step_reset_state
+assert_eq "state.tsv снят"        "0" "$([ -e "$SB/zd/extra_strats/cache/autocircular/state.tsv" ] && echo 1 || echo 0)"
+assert_eq "lock тоже снят"        "0" "$([ -e "$SB/zd/extra_strats/cache/autocircular/state.tsv.lock" ] && echo 1 || echo 0)"
+assert_eq "телеметрия не тронута" "1" "$([ -e "$SB/zd/extra_strats/cache/autocircular/telemetry.tsv" ] && echo 1 || echo 0)"
+assert_eq "повторный вызов — успех" "0" "$(ZAPRET2_DIR="$SB/zd" au_step_reset_state; echo $?)"
+unset ZAPRET2_DIR
+
 # Исполнение: подменяем действия наблюдаемыми заглушками.
 : > "$SB/done.log"
 au_step_regen_strategies(){ echo regen-strategies >> "$SB/done.log"; }
