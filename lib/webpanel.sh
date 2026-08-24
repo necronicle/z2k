@@ -3,6 +3,21 @@
 # Sourced from lib/menu.sh.
 
 WEBPANEL_DIR="/opt/zapret2/webpanel"
+# Стойкая копия того, что задал человек: адрес, порт, IPv6.
+#
+# ЗАЧЕМ ОТДЕЛЬНЫЙ КАТАЛОГ. Настройки лежали внутри $WEBPANEL_DIR — ровно там,
+# который установщик панели на КАЖДОЙ установке отодвигает в сторону
+# (`mv "$WEBPANEL_DIR" "$OLD_WP"`, затем `mv "$STAGE_WP" "$WEBPANEL_DIR"`).
+# Откат на случай обрыва есть, но висит на `trap ... EXIT` и не срабатывает при
+# потере питания, OOM или KILL.
+#
+# Поле 2026-08-24: обновление у человека оборвалось на переезде дерева, каталог
+# панели остался снесённым — меню честно показало «запущена, но не установлена»,
+# — а следующая установка восстанавливать адрес уже не могла. Заданный им
+# 0.0.0.0 заменился автоопределением, и вернуть его было нечем.
+#
+# /opt/etc/z2k вне дерева /opt/zapret2, его переустановка не трогает.
+WEBPANEL_KEEP_DIR="/opt/etc/z2k/webpanel"
 WEBPANEL_INIT="/opt/etc/init.d/S96z2k-webpanel"
 WEBPANEL_PORT_FILE="$WEBPANEL_DIR/port"
 WEBPANEL_BIND_FILE="$WEBPANEL_DIR/bind"
@@ -282,7 +297,11 @@ webpanel_change_address() {
         read_input wp_reset
         case "$wp_reset" in
             y|Y)
+                # Обе копии: иначе «сбросить» не сбрасывает — стойкая вернёт
+                # старое при первой же переустановке.
                 rm -f "$wp_dir/bind" "$wp_dir/port" "$wp_dir/bind6" 2>/dev/null
+                rm -f "$WEBPANEL_KEEP_DIR/bind" "$WEBPANEL_KEEP_DIR/port" \
+                      "$WEBPANEL_KEEP_DIR/bind6" 2>/dev/null
                 print_success "Свои значения удалены"
                 if webpanel_is_installed; then
                     local src_r
@@ -448,6 +467,12 @@ EOF
         printf '%s' "$new_bind" > "$wp_dir/bind" 2>/dev/null || true
         printf '%s' "$new_port" > "$wp_dir/port" 2>/dev/null || true
         printf '%s' "$new_bind6" > "$wp_dir/bind6" 2>/dev/null || true
+        # То же самое — в стойкий каталог. Он вне дерева, которое пересобирает
+        # переустановка, поэтому обрыв на переезде больше не уносит настройку.
+        mkdir -p "$WEBPANEL_KEEP_DIR" 2>/dev/null || true
+        printf '%s' "$new_bind" > "$WEBPANEL_KEEP_DIR/bind" 2>/dev/null || true
+        printf '%s' "$new_port" > "$WEBPANEL_KEEP_DIR/port" 2>/dev/null || true
+        printf '%s' "$new_bind6" > "$WEBPANEL_KEEP_DIR/bind6" 2>/dev/null || true
         print_success "Сохранено: ${new_bind}:${new_port}${new_bind6:+ + [$new_bind6]}"
         print_info "Применится при установке панели (пункт [1])."
         pause

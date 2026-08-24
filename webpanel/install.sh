@@ -14,6 +14,10 @@ set -eu
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 WEBPANEL_DIR="/opt/zapret2/webpanel"
+# Стойкая копия заданного человеком адреса/порта. Живёт ВНЕ дерева, которое эта
+# же установка отодвигает в сторону (см. атомарную подмену ниже): обрыв на
+# переезде больше не уносит настройку вместе с каталогом.
+WEBPANEL_KEEP_DIR="${WEBPANEL_KEEP_DIR:-/opt/etc/z2k/webpanel}"
 WWW_DIR="/opt/zapret2/www"
 INIT_DST="/opt/etc/init.d/S96z2k-webpanel"
 CONF_DST="$WEBPANEL_DIR/lighttpd.conf"
@@ -151,6 +155,10 @@ if [ -z "$PORT" ] && [ -s "$WEBPANEL_DIR/port" ]; then
     PORT=$(tr -dc '0-9' < "$WEBPANEL_DIR/port")
     [ -n "$PORT" ] && echo "reusing saved port $PORT (pass --port to override)"
 fi
+if [ -z "$PORT" ] && [ -s "$WEBPANEL_KEEP_DIR/port" ]; then
+    PORT=$(tr -dc '0-9' < "$WEBPANEL_KEEP_DIR/port")
+    [ -n "$PORT" ] && echo "восстановлен порт $PORT из стойкой копии (каталог панели был потерян)"
+fi
 [ -n "$PORT" ] || PORT=8088
 
 # Default BIND is the detected LAN IP, NOT 0.0.0.0. On Rostelecom routers
@@ -168,12 +176,25 @@ fi
 # IPv6 переживает переустановку так же, как порт: сохранённое значение
 # читается ДО того, как что-либо снесено. Маркер здесь не нужен — сам факт
 # непустого файла и есть осознанный выбор, автоопределения для IPv6 у нас нет.
+if [ "$BIND6_GIVEN" = "0" ] && [ ! -s "$WEBPANEL_DIR/bind6" ] && [ -s "$WEBPANEL_KEEP_DIR/bind6" ]; then
+    BIND6=$(tr -d ' \t\r\n' < "$WEBPANEL_KEEP_DIR/bind6" 2>/dev/null)
+    [ -n "$BIND6" ] && [ "$BIND6" != "off" ] && echo "восстановлен IPv6 $BIND6 из стойкой копии"
+fi
 if [ "$BIND6_GIVEN" = "0" ] && [ -s "$WEBPANEL_DIR/bind6" ]; then
     BIND6=$(tr -d ' \t\r\n' < "$WEBPANEL_DIR/bind6" 2>/dev/null)
     [ -n "$BIND6" ] && [ "$BIND6" != "off" ] && echo "reusing saved IPv6 bind $BIND6 (pass --bind6 off to disable)"
 fi
 [ "$BIND6" = "off" ] && BIND6=""
 
+# Своя копия главнее стойкой: в ней результат последней установки. Стойкая —
+# на случай, когда каталога панели нет вовсе (оборванная переустановка).
+if [ -z "$BIND" ] && [ ! -s "$WEBPANEL_DIR/bind" ] && [ -s "$WEBPANEL_KEEP_DIR/bind" ]; then
+    SAVED_BIND=$(tr -d ' \t\r\n' < "$WEBPANEL_KEEP_DIR/bind")
+    if [ "$SAVED_BIND" = "0.0.0.0" ] || _ip_present "$SAVED_BIND"; then
+        BIND="$SAVED_BIND"
+        echo "восстановлен адрес $BIND из стойкой копии (каталог панели был потерян)"
+    fi
+fi
 if [ -z "$BIND" ] && [ -s "$WEBPANEL_DIR/bind" ]; then
     SAVED_BIND=$(tr -d ' \t\r\n' < "$WEBPANEL_DIR/bind")
     if [ "$SAVED_BIND" = "0.0.0.0" ] || _ip_present "$SAVED_BIND"; then
@@ -600,6 +621,13 @@ sed \
     -e "s|@BIND@|${BIND}|g" \
     -e "s|@IPV6_SOCKET@|$(_build_ipv6_socket)|g" \
     "$SRC_DIR/lighttpd.conf" > "$STAGE_WP/lighttpd.conf"
+
+# Стойкая копия обновляется тем же значением, что легло в панель: она обязана
+# отражать действительность, а не только то, что человек когда-то вводил.
+mkdir -p "$WEBPANEL_KEEP_DIR" 2>/dev/null || true
+printf '%s' "$PORT"  > "$WEBPANEL_KEEP_DIR/port"  2>/dev/null || true
+printf '%s' "$BIND"  > "$WEBPANEL_KEEP_DIR/bind"  2>/dev/null || true
+printf '%s' "$BIND6" > "$WEBPANEL_KEEP_DIR/bind6" 2>/dev/null || true
 
 printf '%s' "$PORT" > "$STAGE_WP/port"
 printf '%s' "$BIND6" > "$STAGE_WP/bind6"
