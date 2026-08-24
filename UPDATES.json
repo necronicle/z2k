@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 32,
-  "current": "r-79.4",
+  "seq": 33,
+  "current": "r-79.6",
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
   "files/S99zapret2.new": "2e73d3b4db3a3018603d78ff57e6402e24d1efb6c9b3d4c93a3abb27f4169b9f",
@@ -31,7 +31,7 @@
   "files/fake/tls_clienthello_www_google_com.bin": "936c2bee4cfb80aa3c426b2dcbcc834b3fbcd1adb17172959dc569c73a14275c",
   "files/fake/tls_clienthello_www_onetrust_com.bin": "4ee0870abe0a0128600b0095189987ba1d210dae8bf963bc725aff49cf922624",
   "files/fake/zero_256.bin": "5341e6b2646979a70e57653007a1f310169421ec9bdd9f1a5648f75ade005af1",
-  "files/init.d/S51z2k-warp": "87dade8856fe99a498473e71af7c2557ef78352e4c559900185b6f56273ad3c2",
+  "files/init.d/S51z2k-warp": "8fa888a81cf97d333168831a13601c44a03fe68945743ec66dc08e6bfee25eca",
   "files/init.d/S96z2k-rt-proxy": "ec48bd44cfd8c983e9ff5b148af58f8aeb57a51d0e7eef40338eba5b007c36f2",
   "files/init.d/S97z2k-http-tunnel": "066d20cecdafa961b9ad98fd57cce5592f8a335cb777190a70d952b010b6df92",
   "files/init.d/S98tg-tunnel": "4f3ffcfc1b8fb966f71f8f94b0d562edde286a33cd6107b7482be25da7815fbf",
@@ -79,7 +79,7 @@
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "d721298ed9e8bf948f06807251f65db256d340c4f96f14fa3131e91c49d5f3ff",
-  "files/z2k-warp.sh": "af23ce7363151e521f038d64109d68905145bbe6e86c2a236d6bfa4023526d02",
+  "files/z2k-warp.sh": "494cf37d547106852456b9568ee7a989c3de55395a06287a31ecbdf414f10d25",
   "lib/auto_update.sh": "400b1328fb0248ad1054869c84010641cb981125c3384738288f38adea666111",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
   "lib/config_official.sh": "52a224db5a025b5daeeb752aa14a326edadfe765fb7369d4c4c32eeeee84a0b6",
@@ -120,7 +120,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "cbdda1721d9cc5e63b884b510d2956f3b3a179362ff53470fdbfe838227ecc2c",
+  "webpanel/www/index.html": "8e0aa6ad07b973606b83e9682dfa3a5613dd1246fc8a1837a9e7850ffe0027f6",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -143,11 +143,11 @@
   "webpanel/www/js/router.js": "b5a5a74b16bd51919bf9266f11871f6aed62a1828bd5891a13b1bf2e5cf951ed",
   "webpanel/www/js/state-model.js": "5c45e8aa73857dd453c011fa4c533c8b8e9a6acecba97f37b7d6a90d63896405",
   "webpanel/www/style.css": "5911f8c6dcd7dd2ab516c150c5e6eebcdad6c1daf317d671ad9dc2bbb5b07944",
-  "z2k-warpd/builds/z2k-warpd-linux-amd64": "7bdd79698c3928e45a3ac460f3c6b4cf987a3c12a9353df257a8f3c9c25320b8",
-  "z2k-warpd/builds/z2k-warpd-linux-arm": "d26b08b1d39af47227f7e5c71f9b39e30bf39da48349db877c9dae5f02f8bfbb",
-  "z2k-warpd/builds/z2k-warpd-linux-arm64": "91506cf8bfdb3739df7ac47a92624f962ecd975ff829b39f320f2c00db3d7234",
-  "z2k-warpd/builds/z2k-warpd-linux-mips": "0a4757b3862a466b768583aa3a2b3ffb9051f15fc17fbc27edcb794d99f94ed7",
-  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "54e0cf0892b15daba66b1dcfa773bfa5b6086a7288dfe51918872b85ae4ccfe9",
+  "z2k-warpd/builds/z2k-warpd-linux-amd64": "d57b9a90267c74caf4b3fc7f6dd5efef1df7b34d9558629bff55ffded4b16762",
+  "z2k-warpd/builds/z2k-warpd-linux-arm": "5e680930cd7e7a6323b97b0debc30e1f4b486a88153c9aa52e6b2ba3b26a03c9",
+  "z2k-warpd/builds/z2k-warpd-linux-arm64": "265d4e9bcbdc62a95f12ef634bc60baa17a042e7b7cd374a640b2d3c9727aefa",
+  "z2k-warpd/builds/z2k-warpd-linux-mips": "8feb939485c1641ac8cd161f20b3bab137a341d22eac13a7fc2429272708b17d",
+  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "fbbc0a64f3c5d0f5cae3e1f0b47b5cba233f0b148c6561a53be0db86279c6cf1",
   "z2k.sh": "eaff72fc2dd2a931d639af2ce8ded19da5c6c7b4de1d881da9e21e8ce7aabaef"
   },
   "history": [
@@ -333,6 +333,7 @@
 {"v": "r-79.1", "type": "reinstall", "ts": "2026-08-23T12:50:03Z", "ref": "r-79.1", "desc": "WARP переведён на собственный движок: быстрее и надёжнее, ставится только по кнопке и удаляется целиком, а любое устройство теперь можно целиком пустить через туннель. Убранные вручную адреса Instagram больше не возвращаются после обновления.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/ndm/93-z2k-warp.sh", "files/z2k-insta-ip-refresh.sh", "files/z2k-scheduler.sh", "files/z2k-warp.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"]},
 {"v": "r-79.2", "type": "reinstall", "ts": "2026-08-23T14:10:59Z", "ref": "r-79.2", "desc": "Раздел WARP в панели стал проще: устройства выбираются из списка вашей сети по имени, игровые списки компактнее, а установка показывает, что происходит, вместо молчания.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "webpanel/www/style.css", "UPDATES.json"]},
 {"v": "p-79.3", "type": "patch", "ts": "2026-08-23T14:20:44Z", "ref": "p-79.3", "desc": "Устройства, добавленные в WARP по MAC-адресу, теперь действительно идут через туннель — раньше счётчик показывал 0 и трафик шёл напрямую.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "UPDATES.json"]},
-{"v": "r-79.4", "type": "reinstall", "ts": "2026-08-23T17:22:56Z", "ref": "r-79.4", "desc": "WARP быстрее поднимается там, где провайдер блокирует UDP: запасной транспорт по TCP пробуется через полминуты, а не через несколько минут. Список устройств больше не путается со списками адресов. В диагностике появился раздел WARP.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/www/style.css", "UPDATES.json"]}
+{"v": "r-79.4", "type": "reinstall", "ts": "2026-08-23T17:22:56Z", "ref": "r-79.4", "desc": "WARP быстрее поднимается там, где провайдер блокирует UDP: запасной транспорт по TCP пробуется через полминуты, а не через несколько минут. Список устройств больше не путается со списками адресов. В диагностике появился раздел WARP.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/www/style.css", "UPDATES.json"]},
+{"v": "r-79.6", "type": "reinstall", "ts": "2026-08-24T05:34:18Z", "ref": "r-79.6", "desc": "Исправлено то, что сломалось в прошлом обновлении: WARP снова работает у тех, у кого перестал, и больше не показывает «движок не запущен» при живом туннеле. Если туннель не поднялся с первой попытки, перебор адресов теперь доходит до конца, а не останавливается на пять минут.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "files/z2k-warp.sh", "UPDATES.json"]}
   ]
 }
