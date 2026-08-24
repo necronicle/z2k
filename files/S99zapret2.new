@@ -966,8 +966,19 @@ TLS_ONETRUST_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_www_onetrust_com.bin"
 TLS_T2_BLOB="$ZAPRET_BASE/files/fake/t2.bin"
 [ -s "$TLS_T2_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=t2:@$TLS_T2_BLOB"
 
-TLS_4PDA_SHORT_BLOB="$ZAPRET_BASE/files/fake/4pda.bin"
-[ -s "$TLS_4PDA_SHORT_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=4pda:@$TLS_4PDA_SHORT_BLOB"
+# Здесь регистрировался `--blob=4pda:@files/fake/4pda.bin`. Снято, и не ради
+# чистоты: nfqws2 такой идентификатор ОТВЕРГАЕТ — «bad identifier '4pda'», имя
+# не может начинаться с цифры, — и демон не стартовал вовсе.
+#
+# Строка лежала в дереве с марта и молчала лишь потому, что сам файл на роутеры
+# не приезжал: прежняя доставка возила только то, что релиз перечислил поимённо,
+# а 4pda.bin с тех пор не менялся. Как только обновление стало приводить дерево
+# к манифесту целиком, файл приехал, условие `[ -s ... ]` стало истинным — и
+# обход лёг у всех, кто перезапустил сервис.
+#
+# Сам блоб был не нужен: 4pda.bin байт-в-байт совпадал с
+# tls_clienthello_4pda_to.bin, и на имя `4pda` не ссылалась ни одна стратегия.
+# Файл удалён вместе с регистрацией. Сторож — tests/test_blob_identifiers.sh.
 
 HTTP_IANA_BLOB="$ZAPRET_BASE/files/fake/http_iana_org.bin"
 [ -s "$HTTP_IANA_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=http_iana:@$HTTP_IANA_BLOB"

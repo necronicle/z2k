@@ -54,6 +54,19 @@ assert_eq "неизвестный шаг переживает упорядочи
 assert_eq "упорядочивание дедуплицирует" "restart-service" \
     "$(printf 'restart-service\nrestart-service\nrestart-service\n' | au_steps_ordered | tr '\n' ' ' | sed 's/ $//')"
 
+# ВЛОЖЕННЫЙ ВЫЗОВ НЕ ДОЛЖЕН РАЗРУШАТЬ ВНЕШНИЙ.
+#
+# Так это и вызывается на живом пути: { au_steps_union …; echo reset-state; }
+# | au_steps_ordered — внутренний упорядочиватель работает ВНУТРИ внешнего, в
+# том же пайпе. Пока имя временного файла бралось из PID, оба брали одно и то
+# же имя, внутренний удалял файл из-под внешнего, и объявленные шаги могли
+# молча пропасть. На роутере это видно строкой «can't open …/steps.NNNNN».
+assert_eq "вложенный вызов не рушит внешний" "regen-config restart-service" \
+    "$( { printf 'restart-service\n' | au_steps_ordered; printf 'regen-config\n'; } | au_steps_ordered | tr '\n' ' ' | sed 's/ $//')"
+_leftover=0
+for _f in "$Z2K_AU_TMP_DIR"/steps.*; do [ -e "$_f" ] && _leftover=$((_leftover + 1)); done
+assert_eq "вложенный вызов не оставляет мусора" "0" "$_leftover"
+
 # Каталог исполнителя и каталог сборки — две стороны одного контракта.
 # shellcheck disable=SC1091
 . "$ROOT/lib/release_map.sh"

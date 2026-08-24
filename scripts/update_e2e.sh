@@ -18,7 +18,13 @@ fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 # Счётчик байтов WAN-интерфейса. Он общий на весь роутер, поэтому в замер попадёт
 # и посторонний трафик — но порядок величины («сотни КБ» против «шести МБ») это
 # показывает честно, а стерильной сети у нас всё равно не будет.
-RX='cat /sys/class/net/$(ip route show default 2>/dev/null | awk "{print \$5; exit}")/statistics/rx_bytes 2>/dev/null || echo 0'
+#
+# Интерфейс берём из /proc/net/route, а не из `ip route show default`: на
+# Keenetic аплинк — ppp0 с маршрутом в отдельной таблице, и `ip route show
+# default` возвращал ПУСТО. Замер при этом не падал, а печатал правдоподобный
+# ноль — худший вид неверного числа. /proc/net/route не зависит ни от PATH, ни
+# от политики маршрутизации: строка с назначением 00000000 и есть уплинк.
+RX='w=$(awk "\$2==\"00000000\" {print \$1; exit}" /proc/net/route 2>/dev/null); [ -n "$w" ] && cat "/sys/class/net/$w/statistics/rx_bytes" 2>/dev/null || echo NA'
 
 step "исходное состояние"
 BEFORE=$(ssh_r 'cat /opt/zapret2/.z2k-installed-tag 2>/dev/null' | tr -d '\r')
@@ -37,8 +43,11 @@ ssh_r 'Z2K_AU_MANUAL=1 Z2K_AU_NO_JITTER=1 sh /opt/zapret2/z2k-auto-update.sh app
 
 T1=$(ssh_r 'date +%s' | tr -d '\r'); RX1=$(ssh_r "$RX" | tr -d '\r')
 AFTER=$(ssh_r 'cat /opt/zapret2/.z2k-installed-tag 2>/dev/null' | tr -d '\r')
-printf '\nбыло: %s → стало: %s\nвремя: %s с\nскачано: %s КБ (счётчик WAN, вместе с посторонним трафиком)\n' \
-    "$BEFORE" "$AFTER" "$((T1 - T0))" "$(( (RX1 - RX0) / 1024 ))"
+printf '\nбыло: %s → стало: %s\nвремя: %s с\n' "$BEFORE" "$AFTER" "$((T1 - T0))"
+case "${RX0}${RX1}" in
+    *NA*) printf 'скачано: не измерено — не нашёлся аплинк в /proc/net/route\n' ;;
+    *)    printf 'скачано: %s КБ (счётчик WAN, вместе с посторонним трафиком)\n' "$(( (RX1 - RX0) / 1024 ))" ;;
+esac
 [ "$AFTER" != "$BEFORE" ] || printf 'версия не изменилась — либо уже последняя, либо обновление отказало (см. лог выше)\n'
 
 step "сервис жив"
