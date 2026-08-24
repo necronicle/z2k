@@ -190,42 +190,11 @@ verdict=$(au_decide "$(printf 'r-100\r')" "$AU_TMP/manifest.json" | head -1)
 check "au_decide: CRLF-tainted current tag → none (trimmed, up to date)" \
       "none" "$verdict"
 
-# ----- au_install_paths --------------------------------------------------
-
-check_path() {
-    name="$1"; repo="$2"; want="$3"
-    got=$(au_install_paths "$repo" | tr '\n' '|')
-    check "$name" "$want" "$got"
-}
-
-# Existing mappings still work.
-check_path "au_install_paths: files/lua/x.lua" \
-    "files/lua/foo.lua" "/opt/zapret2/lua/foo.lua|"
-
-# New mappings: lib/*, UPDATES.json, z2k.sh.
-check_path "au_install_paths: lib/auto_update.sh" \
-    "lib/auto_update.sh" "/opt/zapret2/lib/auto_update.sh|"
-
-check_path "au_install_paths: lib/install.sh" \
-    "lib/install.sh" "/opt/zapret2/lib/install.sh|"
-
-check_path "au_install_paths: lib/utils.sh (any lib/ depth)" \
-    "lib/utils.sh" "/opt/zapret2/lib/utils.sh|"
-
-check_path "au_install_paths: UPDATES.json" \
-    "UPDATES.json" "/opt/zapret2/UPDATES.json|"
-
-check_path "au_install_paths: z2k.sh" \
-    "z2k.sh" "/opt/zapret2/z2k.sh|"
-
-# tests/* остаются unmapped (dev-only artifacts), но silent — без шума
-# в логе. Просто empty output.
-check_path "au_install_paths: tests/* → empty (silent skip)" \
-    "tests/test_x.sh" ""
-
-# Unknown paths остаются empty.
-check_path "au_install_paths: unknown root file → empty" \
-    "RANDOM.txt" ""
+# ----- карта путей ----------------------------------------------------------
+# Проверки au_install_paths переехали в tests/test_release_map.sh вместе с самой
+# таблицей: она больше не живёт в апдейтере, потому что оттуда опаздывала на
+# релиз. Здесь остаётся то, что апдейтер делает сам, — читает адреса из
+# install_map присланного манифеста.
 
 # ----- summary ------------------------------------------------------------
 

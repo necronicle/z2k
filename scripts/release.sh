@@ -178,7 +178,7 @@ fi
 # Заявляем то, что реально изменилось с предыдущего релиза И имеет цель на
 # роутере. Файл без цели (vps-relay/, docs, планы) заявлять нечем и незачем:
 # патч его никуда не положит.
-Z2K_AU_SOURCE_ONLY=1 . ./lib/auto_update.sh 2>/dev/null
+. ./lib/release_map.sh
 
 CHANGED=$(mktemp) || exit 1
 trap 'rm -f "$CHANGED"' EXIT
@@ -191,7 +191,7 @@ while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ -f "$f" ] || continue            # удалённые не заявляем
     [ "$f" = "$MANIFEST" ] && continue # добавим отдельно, он всегда меняется
-    if [ -n "$(au_install_paths "$f" 2>/dev/null)" ]; then
+    if [ -n "$(z2k_install_paths "$f" 2>/dev/null)" ]; then
         DELIVERABLE="$DELIVERABLE $f"
     else
         SKIPPED="$SKIPPED $f"
@@ -208,7 +208,7 @@ if [ -n "$SKIPPED" ]; then
 fi
 
 # ЕДИНАЯ политика path -> patch/reinstall/ignore живёт в одном месте:
-# au_reinstall_required() (lib/auto_update.sh, рядом с au_install_paths, тем
+# z2k_legacy_reinstall_required() (lib/release_map.sh — таблицы переехали на сборку, тем
 # же case-статементом). Раньше каждый такой путь получал свой отдельный гейт
 # по мере обнаружения — сперва только mtproxy-client, потом отдельно
 # z2k-detect/z2k-verify (общий regex по builds/), потом отдельно
@@ -216,12 +216,12 @@ fi
 # webpanel/lighttpd.conf: рядом с ним лежал комментарий "if it actually
 # changes, ship as reinstall", который никто и ничто не читало — очередной
 # частный случай, до которого просто не дошла очередь. Список путей теперь
-# один, живёт в au_reinstall_required(), и покрывает всё сразу: любой бинарник
-# (au_install_paths для */builds/* цели не знает — патч не разложит чужую
+# один, живёт в z2k_legacy_reinstall_required() (lib/release_map.sh), и покрывает всё сразу: любой бинарник
+# (z2k_install_paths для */builds/* цели не знает — патч не разложит чужую
 # арку, файл молча выпадет из changed_files, а версия уедет вперёд), генераторы
 # конфига/стратегий и шаблон lighttpd.conf.
 _reinstall_changed=$(git diff --name-only "$PREV_REF"..HEAD | while IFS= read -r f; do
-    if [ -n "$(au_reinstall_required "$f")" ]; then
+    if [ -n "$(z2k_legacy_reinstall_required "$f")" ]; then
         printf '%s\n' "$f"
     fi
 done; true)

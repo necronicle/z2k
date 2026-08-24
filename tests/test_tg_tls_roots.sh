@@ -135,10 +135,10 @@ grep -q 'mkdir -p "${ZAPRET2_DIR}/etc"' "$INSTALL" \
     || no "install.sh creates the directory first" "mkdir" "absent"
 # Patch-deliverable BY THE UPDATER ALREADY ON THE ROUTER. This is why the bundle lives
 # under files/etc/ and not a new directory: delivery is performed by the INSTALLED
-# lib/auto_update.sh, which knows nothing about paths added in the same release. A new
+# lib/release_map.sh — the table now lives on the build side. A new
 # mapping would have been skipped and the fix would have reached nobody until the update
 # after next.
-p=$(sh -c "Z2K_AU_SOURCE_ONLY=1 . '$AU' 2>/dev/null; au_install_paths files/etc/z2k-roots.pem")
+p=$(sh -c ". '$HERE/lib/release_map.sh' 2>/dev/null; z2k_install_paths files/etc/z2k-roots.pem")
 [ "$p" = "/opt/zapret2/etc/z2k-roots.pem" ] \
     && ok "the bundle is patch-deliverable ($p)" \
     || no "the bundle is patch-deliverable" "/opt/zapret2/etc/z2k-roots.pem" "$p"

@@ -91,7 +91,7 @@ for f in $(git diff --name-only "$prev_ref" "$cur_ref" 2>/dev/null); do
     # делает, — это отдельная задача, и решать её надо явной зачисткой в
     # lib/install.sh, а не молчанием манифеста.
     git cat-file -e "$cur_ref:$f" 2>/dev/null || continue
-    target=$(sh -c "Z2K_AU_SOURCE_ONLY=1 . ./lib/auto_update.sh 2>/dev/null; au_install_paths '$f'")
+    target=$(sh -c ". ./lib/release_map.sh 2>/dev/null; z2k_install_paths '$f'")
     [ -n "$target" ] || continue          # no install target — updater skips it anyway
     checked=$((checked + 1))
     printf '%s\n' "$declared" | grep -qxF "$f" || missing="$missing $f"

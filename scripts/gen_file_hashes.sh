@@ -16,7 +16,7 @@
 # Run from the repo root. Regenerates in place; CI fails if the result differs
 # from what is committed, so the map cannot drift away from the tree.
 #
-# The deliverable set is not hardcoded: it is whatever au_install_paths() maps
+# The deliverable set is not hardcoded: it is whatever z2k_install_paths() maps
 # to an install target, so a newly shipped file is covered the moment it becomes
 # deliverable.
 #
@@ -54,8 +54,8 @@ else
     echo "нужен sha256sum или shasum" >&2; exit 1
 fi
 
-# Deliverable = au_install_paths() gives it a destination on the router.
-Z2K_AU_SOURCE_ONLY=1 . ./lib/auto_update.sh 2>/dev/null
+# Deliverable = z2k_install_paths() gives it a destination on the router.
+. ./lib/release_map.sh
 
 BLOCK=$(mktemp) || exit 1
 OUT=$(mktemp) || exit 1
@@ -140,7 +140,7 @@ fi
 #
 # Целью установки их делать нельзя: цель зависит от архитектуры роутера, и патч
 # начал бы раскладывать arm64-бинарник на mipsel. Поэтому они попадают в карту,
-# но au_install_paths для них по-прежнему пуст — доставка остаётся за reinstall,
+# но z2k_install_paths для них по-прежнему пуст — доставка остаётся за reinstall,
 # а z2k_fetch получает по ним sha и сверяет (см. _z2k_manifest_sha в z2k.sh).
 _verify_only() {
     case "$1" in
@@ -154,7 +154,7 @@ for f in $(git ls-files | LC_ALL=C sort); do
     [ -f "$f" ] || continue
     [ "$f" = "$MANIFEST" ] && continue          # cannot contain its own digest
     if ! _verify_only "$f"; then
-        [ -n "$(au_install_paths "$f" 2>/dev/null)" ] || continue
+        [ -n "$(z2k_install_paths "$f" 2>/dev/null)" ] || continue
     fi
     printf '  "%s": "%s",\n' "$f" "$(_sha "$f")" >> "$BLOCK"
     n=$((n + 1))

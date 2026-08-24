@@ -436,6 +436,40 @@ au_manifest_file_sha() {
         | head -1
 }
 
+# ---- адреса доставки: из манифеста, а не из пути ---------------------------
+#
+# install_map едет данными ровно потому, что обновление выполняет СТАРЫЙ
+# апдейтер. Пока адреса выводились локальной таблицей, файл нового класса
+# писался в лог как «no install target … (skipped)», а версия уезжала вперёд —
+# доставки не было, а снаружи всё выглядело успешным.
+
+# au_manifest_has_install_map <manifest> — есть ли карта. Её отсутствие (откат
+# манифеста, ручная правка) НЕ повод гадать: вызывающий обязан потребовать
+# полную переустановку, а не двигать версию.
+au_manifest_has_install_map() {
+    grep -q '"install_map"' "$1" 2>/dev/null
+}
+
+# au_manifest_install_targets <manifest> <путь в репо> — куда класть (0..N строк).
+#
+# Ищем ровно `"путь": [ … ]` по всему файлу: с двоеточием и скобкой этот путь
+# встречается только в install_map. В files_sha256 у него значение-строка, а в
+# changed_files он сам стоит значением — ни то, ни другое под шаблон не попадёт.
+au_manifest_install_targets() {
+    local manifest="$1" repo_path="$2" esc
+    [ -f "$manifest" ] || return 0
+    esc=$(printf '%s' "$repo_path" | sed 's/[][\.*^$\/]/\\&/g')
+    tr -d '\n' < "$manifest" 2>/dev/null \
+        | sed -n "s/.*\"${esc}\"[[:space:]]*:[[:space:]]*\\[\\([^]]*\\)\\].*/\\1/p" \
+        | head -1 | tr ',' '\n' \
+        | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | grep -v '^$'
+}
+
+# au_targets_for <путь в репо> — адреса из скачанного манифеста этого прогона.
+au_targets_for() {
+    au_manifest_install_targets "$Z2K_AU_TMP_DIR/UPDATES.json" "$1"
+}
+
 # ------------------------------------------------------------ decide ---
 
 # au_decide INSTALLED_TAG MANIFEST_PATH
@@ -587,198 +621,16 @@ au_reapply_feature_flags() {
     return 0
 }
 
-# --------------------------------------------- repo path → install path ---
-
-# Map a repo-relative path (e.g. "files/lua/z2k-detectors.lua") to one or
-# more on-disk install paths. Echoes one path per line. Empty if the repo
-# path has no runtime install target (e.g. lib/, tests/).
-au_install_paths() {
-    local repo_path="$1"
-    local zd="${ZAPRET2_DIR:-/opt/zapret2}"
-    case "$repo_path" in
-        files/lua/*)
-            echo "${zd}/lua/${repo_path#files/lua/}"
-            ;;
-        files/lists/extra-domains.txt)
-            # Both shipped baseline and runtime merged copy. Caller treats
-            # these as a special case for 3-way merge.
-            echo "${zd}/files/lists/extra-domains.txt"
-            echo "${zd}/lists/extra-domains.txt"
-            ;;
-        files/lists/*.txt)
-            # IP/host lists that install.sh dual-copies (files/lists/ + lists/).
-            echo "${zd}/files/lists/${repo_path#files/lists/}"
-            echo "${zd}/lists/${repo_path#files/lists/}"
-            ;;
-        files/extra_strats/*/Strategy.txt)
-            echo "${zd}/extra_strats/${repo_path#files/extra_strats/}"
-            ;;
-        files/extra_strats/*)
-            echo "${zd}/extra_strats/${repo_path#files/extra_strats/}"
-            ;;
-        files/fake/*)
-            echo "${zd}/files/fake/${repo_path#files/fake/}"
-            ;;
-        files/etc/*)
-            echo "${zd}/etc/${repo_path#files/etc/}"
-            ;;
-        files/init.d/S98z2k-detect)
-            # z2k-detect daemon init script — install.sh copies to
-            # /opt/etc/init.d (Entware standard), not into $ZAPRET2_DIR.
-            echo "/opt/etc/init.d/S98z2k-detect"
-            ;;
-        files/init.d/S96z2k-rt-proxy)
-            # rt-proxy daemon init script — install.sh copies to
-            # /opt/etc/init.d (Entware standard), not into $ZAPRET2_DIR.
-            echo "/opt/etc/init.d/S96z2k-rt-proxy"
-            ;;
-        files/init.d/S98tg-tunnel)
-            # TG-tunnel supervisor — install.sh copies to /opt/etc/init.d,
-            # NOT into $ZAPRET2_DIR. Without this case a patch misplaced it to
-            # ${zd}/init.d/ (via files/init.d/* below), missing the live script.
-            echo "/opt/etc/init.d/S98tg-tunnel"
-            ;;
-        files/init.d/S99z2k-scheduler)
-            # Same trap, found by the completeness test rather than by another field failure:
-            # install.sh:2770 deploys it to /opt/etc/init.d, so a patch touching the scheduler
-            # was landing in ${zd}/init.d/ and never reaching the running system.
-            echo "/opt/etc/init.d/S99z2k-scheduler"
-            ;;
-        files/init.d/S51z2k-warp)
-            # WARP tunnel supervisor — install.sh copies it to /opt/etc/init.d, NOT into
-            # $ZAPRET2_DIR. Without this case a patch touching it lands in ${zd}/init.d/ and is
-            # silently lost while installed_tag advances — the r-59.9 failure, again.
-            echo "/opt/etc/init.d/S51z2k-warp"
-            ;;
-        files/init.d/S97z2k-http-tunnel)
-            # http-tunnel supervisor — same /opt/etc/init.d placement as above.
-            echo "/opt/etc/init.d/S97z2k-http-tunnel"
-            ;;
-        files/ndm/92-z2k-rt-proxy-redirect.sh)
-            echo "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh"
-            ;;
-        files/000-zapret2.sh)
-            # Primary NDM netfilter.d recovery hook — install.sh copies it to
-            # /opt/etc/ndm/netfilter.d/, NOT into $ZAPRET2_DIR. Without this case
-            # it fell into files/*.sh below and a patch misplaced it to
-            # ${zd}/000-zapret2.sh, silently skipping the real hook (r-59.9).
-            echo "/opt/etc/ndm/netfilter.d/000-zapret2.sh"
-            ;;
-        files/init.d/*)
-            echo "${zd}/init.d/${repo_path#files/init.d/}"
-            ;;
-        files/S99zapret2.new)
-            echo "/opt/etc/init.d/S99zapret2"
-            ;;
-        files/*.sh|files/*.lua)
-            echo "${zd}/${repo_path#files/}"
-            ;;
-        lib/*)
-            # Library scripts (auto_update.sh, install.sh, config*.sh,
-            # utils.sh, …) live under $ZAPRET2_DIR/lib at runtime.
-            # Without this mapping patch-type releases silently skipped
-            # all lib/* changes (no install target).
-            echo "${zd}/${repo_path}"
-            ;;
-        UPDATES.json)
-            # The manifest itself ships with the install so that an
-            # offline `z2k diag` can show installed_tag context.
-            echo "${zd}/${repo_path}"
-            ;;
-        z2k.sh)
-            # Top-level entrypoint. Reinstall flow re-downloads this
-            # script separately via au_download_reinstall_script, but
-            # patch-type releases touching z2k.sh need the mapping too.
-            echo "${zd}/${repo_path}"
-            ;;
-        webpanel/cgi/*.sh)
-            # Webpanel CGI handlers — auth.sh / actions.sh / api.sh.
-            # webpanel/install.sh deploys to ${zd}/webpanel/cgi/.
-            echo "${zd}/webpanel/cgi/${repo_path#webpanel/cgi/}"
-            ;;
-        webpanel/www/*)
-            # Webpanel static assets — lighttpd serves from ${zd}/www
-            # (NOT ${zd}/webpanel/www — webpanel/install.sh copies to
-            # the lighttpd document-root which is a separate path).
-            echo "${zd}/www/${repo_path#webpanel/www/}"
-            ;;
-        webpanel/init.d/S96z2k-webpanel)
-            echo "/opt/etc/init.d/S96z2k-webpanel"
-            ;;
-        webpanel/install.sh|webpanel/uninstall.sh)
-            echo "${zd}/webpanel/${repo_path#webpanel/}"
-            ;;
-        webpanel/lighttpd.conf)
-            # Generated at install time from a template with @PORT@/@BIND@
-            # substitution — see au_reinstall_required() below for the other
-            # half of this: patch can't re-template it, so a plain "no target
-            # here" is not enough, changing it must force a reinstall release.
-            : ;;
-        tests/*)
-            : # tests are dev/CI artifacts; not shipped to runtime.
-            ;;
-        *)
-            : # no runtime target
-            ;;
-    esac
-}
-
-# repo path -> "1" if a patch release cannot deliver a change to it at all,
-# and reinstall is the ONLY route. Empty otherwise (includes paths with no
-# runtime target whatsoever, e.g. tests/, scripts/ — those are not "needs
-# reinstall", they're "never shipped").
+# ------------------------------------------------ карта путей — на сборке ---
 #
-# WHY THIS IS SEPARATE FROM au_install_paths(). An empty au_install_paths()
-# result is ambiguous on its own: it means either "this repo path has no
-# runtime existence at all" (tests/, scripts/, docs — safe to ignore) or "this
-# DOES reach the router, but only via a step that a patch cannot repeat"
-# (an install-time generator, an arch-specific binary, a build-time template).
-# scripts/release.sh used to special-case each of the second kind by hand as
-# they were found (mtproxy-client, then z2k-detect/z2k-verify, then
-# lib/config_official.sh/strategies.sh) — and exactly that pattern is how
-# webpanel/lighttpd.conf slipped through: it carries a comment right above,
-# "if lighttpd.conf actually changes, ship as reinstall", and nothing ever
-# read that comment. A single table that release.sh actually consults closes
-# the whole class at once instead of one more special case at a time.
-au_reinstall_required() {
-    local repo_path="$1"
-    case "$repo_path" in
-        */builds/*)
-            # Arch-specific binaries. au_install_paths() has no target for
-            # them at all (the target depends on the router's architecture),
-            # so a patch would not deliver them — it would silently drop them
-            # from changed_files while the version number moves forward.
-            echo 1 ;;
-        lib/config_official.sh|lib/strategies.sh)
-            # Install-time generators: their code runs exactly once, during
-            # step_create_config_and_init, and the result (config,
-            # extra_strats/*/Strategy.txt) is written to disk as plain files.
-            # A patch overwrites the .sh source but does not re-run it — an
-            # already-installed router keeps the old generated output.
-            echo 1 ;;
-        lib/install.sh)
-            # Тот же класс, что и генераторы выше, и он тут отсутствовал: весь
-            # код install.sh выполняется ТОЛЬКО внутри установки (step_*,
-            # migrate_*). Патч кладёт свежий файл в ${zd}/lib/install.sh и на
-            # этом всё — ни один его шаг не переигрывается, а reinstall и вовсе
-            # качает модули заново, так что доставленная копия не участвует даже
-            # в следующей установке. Релиз, где изменился только install.sh,
-            # уезжал бы патчем: версия вперёд, installed_tag вперёд, поведение
-            # роутера ровно прежнее — авария без единой строчки в логе.
-            #
-            # ПОЧЕМУ НЕ ВЕСЬ lib/*. Остальные модули (utils, menu, config,
-            # webpanel, auto_update) z2k.sh пересобирает в память на КАЖДОМ
-            # запуске из ${zd}/lib — их правку патч доставляет по-настоящему.
-            # Загонять и их в reinstall значило бы платить полной переустановкой
-            # за однострочный фикс в меню.
-            echo 1 ;;
-        webpanel/lighttpd.conf)
-            # Templated with @PORT@/@BIND@ substitution at install time
-            # (webpanel/install.sh). A patch has no re-templating step, so it
-            # would overwrite nothing and the router keeps the stale config.
-            echo 1 ;;
-    esac
-}
+# au_install_paths() и au_reinstall_required() жили здесь и потому опаздывали
+# на релиз: обновление выполняет СТАРЫЙ апдейтер, и правило, добавленное в
+# релизе N, при переходе НА N не действовало — файл нового класса писался в лог
+# как «no install target … (skipped)», а версия уезжала вперёд.
+#
+# Теперь таблицы читает только сборка — lib/release_map.sh, — а результат едет
+# в UPDATES.json данными: install_map (куда класть) и history[].steps (что
+# делать после). Роутер ничего не выводит из пути, он исполняет присланное.
 
 # Download a single repo file via z2k_fetch (or curl) into a target.
 au_download_repo_file() {
@@ -962,6 +814,16 @@ au_apply_patch() {
         return 0
     fi
 
+    # Адреса доставки берутся из install_map манифеста. Нет карты — значит
+    # манифест старше исполнителя (откат манифеста, ручная правка), и гадать по
+    # шаблонам путей нельзя: именно так файл нового класса терялся, а версия
+    # уезжала вперёд. Честно говорим «не могу» и уходим на полную переустановку.
+    if ! au_manifest_has_install_map "$Z2K_AU_TMP_DIR/UPDATES.json"; then
+        au_log "в манифесте нет install_map — патчем доставить нечем, нужна полная переустановка"
+        return 2
+    fi
+
+
     # Start from an EMPTY staging dir. It used to be mkdir -p only, never
     # cleaned, so a file staged by an earlier run survived here alongside its
     # .etag sidecar — and the next run could present that stale pair to a
@@ -1047,7 +909,7 @@ EOF
         # Deleted upstream (404 in step 1) → remove the stale local target(s), skip.
         case " $deleted_paths " in
             *" $repo_path "*)
-                _del_targets=$(au_install_paths "$repo_path")
+                _del_targets=$(au_targets_for "$repo_path")
                 while IFS= read -r _dt; do
                     [ -z "$_dt" ] && continue
                     [ -e "$_dt" ] && rm -f "$_dt" 2>/dev/null && \
@@ -1058,7 +920,7 @@ EOF_DEL
                 continue ;;
         esac
         stage="$Z2K_AU_TMP_DIR/dl/$(echo "$repo_path" | tr '/' '_')"
-        targets=$(au_install_paths "$repo_path")
+        targets=$(au_targets_for "$repo_path")
         if [ -z "$targets" ]; then
             au_log "patch: no install target for $repo_path (skipped)"
             continue
@@ -1519,7 +1381,7 @@ au_snapshot_for_patch() {
     local repo_path targets target relpath dst
     while IFS= read -r repo_path; do
         [ -z "$repo_path" ] && continue
-        targets=$(au_install_paths "$repo_path")
+        targets=$(au_targets_for "$repo_path")
         while IFS= read -r target; do
             [ -z "$target" ] && continue
             [ -f "$target" ] || continue

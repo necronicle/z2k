@@ -137,7 +137,7 @@ MAP_RC=0
 # ==============================================================================
 # INIT-SCRIPT PATH MAPPING (regression: r-59.9, p-27, and again with S51z2k-warp)
 # ==============================================================================
-# Every init script we ship is installed to /opt/etc/init.d/. If au_install_paths does not
+# Every init script we ship is installed to /opt/etc/init.d/. If z2k_install_paths does not
 # know that, a patch-type release writes it into $ZAPRET2_DIR/init.d/ instead — the file
 # silently never reaches the running system while installed_tag advances, so there is no
 # retry and no error. This has now cost three releases; assert it for ALL of them at once.
@@ -151,11 +151,11 @@ printf "\n--- init.d path mapping is complete ---\n"
     # проверки, и весь блок «3 passed, 1 failed» получал любой, кто запускал
     # тест по имени файла из tests/. Через run_all с абсолютным путём тот же
     # тест проходил, поэтому расхождение годами выглядело как «у меня не так».
-    . lib/auto_update.sh 2>/dev/null
+    . lib/release_map.sh 2>/dev/null
     for f in files/init.d/S*; do
         [ -f "$f" ] || continue
         base=$(basename "$f")
-        got=$(au_install_paths "files/init.d/$base" | head -1)
+        got=$(z2k_install_paths "files/init.d/$base" | head -1)
         want="/opt/etc/init.d/$base"
         if [ "$got" = "$want" ]; then
             printf "[PASS] %s -> %s\n" "$base" "$got"
