@@ -141,6 +141,12 @@ mkdir -p "$SB/zd/webpanel" "$SB/zd/www"
 printf 'server.document-root = "@WWW_DIR@"\nserver.port = @PORT@\nserver.bind = "@BIND@"\n' > "$SB/zd/webpanel/lighttpd.conf.in"
 printf '8088' > "$SB/zd/webpanel/port"
 printf '192.168.1.1\n' > "$SB/zd/webpanel/bind"
+# Зовём НАСТОЯЩУЮ функцию из lib/auto_update.sh, которую этот файл засорсил
+# выше. Ниже по файлу лежат одноимённые заглушки — они для другой фазы теста, и
+# линтер на раннере (версия строже локальной) видит только их, считая вызов
+# опережающим. Порядок здесь несущий: сперва настоящие тела на песочнице, потом
+# заглушки для проверки порядка и вето.
+# shellcheck disable=SC2218
 ZAPRET2_DIR="$SB/zd" au_step_rebuild_panel; _rc=$?
 assert_eq "пересборка прошла" "0" "$_rc"
 assert_eq "порт подставлен"   "1" "$(grep -c 'server.port = 8088' "$SB/zd/webpanel/lighttpd.conf")"
@@ -170,6 +176,12 @@ mkdir -p "$SB/zd/extra_strats/cache/autocircular"
 printf 'rkn_tcp\thost\t1\t0\tauto\n' > "$SB/zd/extra_strats/cache/autocircular/state.tsv"
 : > "$SB/zd/extra_strats/cache/autocircular/state.tsv.lock"
 : > "$SB/zd/extra_strats/cache/autocircular/telemetry.tsv"
+# Зовём НАСТОЯЩУЮ функцию из lib/auto_update.sh, которую этот файл засорсил
+# выше. Ниже по файлу лежат одноимённые заглушки — они для другой фазы теста, и
+# линтер на раннере (версия строже локальной) видит только их, считая вызов
+# опережающим. Порядок здесь несущий: сперва настоящие тела на песочнице, потом
+# заглушки для проверки порядка и вето.
+# shellcheck disable=SC2218
 ZAPRET2_DIR="$SB/zd" au_step_reset_state
 assert_eq "state.tsv снят"        "0" "$([ -e "$SB/zd/extra_strats/cache/autocircular/state.tsv" ] && echo 1 || echo 0)"
 assert_eq "lock тоже снят"        "0" "$([ -e "$SB/zd/extra_strats/cache/autocircular/state.tsv.lock" ] && echo 1 || echo 0)"
