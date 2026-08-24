@@ -195,11 +195,22 @@ z2k_all_steps() {
     echo restart-service
 }
 
-# z2k_steps_merged <файл> … — объединить последствия набора файлов и выдать их
+# z2k_steps_merged <файл …> — объединить последствия набора файлов и выдать их
 # в каноническом порядке, каждый максимум один раз.
+#
+# Единственный аргумент «-» означает «список файлов на stdin, по одному в
+# строке». Отдельный признак, а не «нет аргументов»: пустой набор — законный
+# случай (релиз, где изменились только списки), и молча уйти читать stdin вместо
+# ответа «последствий нет» значило бы повиснуть.
 z2k_steps_merged() {
     _zsm_tmp=$(mktemp) || return 1
-    for _zsm_f in "$@"; do z2k_steps_for "$_zsm_f"; done | sort -u > "$_zsm_tmp"
+    if [ "$#" = 1 ] && [ "$1" = "-" ]; then
+        while IFS= read -r _zsm_f; do
+            [ -n "$_zsm_f" ] && z2k_steps_for "$_zsm_f"
+        done | sort -u > "$_zsm_tmp"
+    else
+        for _zsm_f in "$@"; do z2k_steps_for "$_zsm_f"; done | sort -u > "$_zsm_tmp"
+    fi
     z2k_all_steps | while IFS= read -r _zsm_s; do
         grep -qx "$_zsm_s" "$_zsm_tmp" && printf '%s\n' "$_zsm_s"
     done

@@ -27,6 +27,8 @@ assert_eq "порядок не зависит от порядка файлов" 
     "$(m lib/strategies.sh z2k-warpd/builds/x webpanel/lighttpd.conf)" \
     "$(m webpanel/lighttpd.conf z2k-warpd/builds/x lib/strategies.sh)"
 assert_eq "пустой набор" "" "$(m)"
+assert_eq "список файлов со stdin" "regen-config validate-config restart-service" \
+    "$(printf 'files/lua/a.lua\nlib/config_official.sh\n' | z2k_steps_merged - | tr '\n' ' ' | sed 's/ $//')"
 
 # Контракт: у каждого шага из таблиц есть место в каноническом порядке.
 missing=""
@@ -44,10 +46,10 @@ assert_eq "все объявляемые шаги есть в порядке и�
 # месте, сервис на старом.
 assert_eq "бинарник в одиночку даёт refresh-binaries" "refresh-binaries" \
     "$(m z2k-warpd/builds/z2k-warpd-linux-arm64)"
-if grep -q 'z2k_steps_merged \$(tr' "$ROOT/scripts/release.sh"; then
+if grep -q 'z2k_steps_merged - < "\$CHANGED"' "$ROOT/scripts/release.sh"; then
     ok "шаги считаются по всему диффу, а не по списку заявленного"
 else
-    no "шаги считаются по всему диффу" "z2k_steps_merged по \$CHANGED" "по \$DELIVERABLE — бинарники выпадут"
+    no "шаги считаются по всему диффу" "z2k_steps_merged - < \$CHANGED" "по \$DELIVERABLE — бинарники выпадут"
 fi
 
 # release.sh обязан объявлять шаги, а не оставлять их человеку.

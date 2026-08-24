@@ -611,19 +611,32 @@ au_entry_steps() {
         }' "$1" 2>/dev/null
 }
 
+# au_steps_ordered — читает имена шагов со stdin и выдаёт их в каноническом
+# порядке, каждый максимум один раз. Неизвестные ПРОПУСКАЕТ НЕ МОЛЧА: они
+# выдаются в конце, чтобы au_run_steps упёрся в них и потребовал полную
+# переустановку. Тихо отбросить шаг из будущего значило бы сдвинуть версию, не
+# сделав того, что релиз объявил.
+au_steps_ordered() {
+    local tmp="$Z2K_AU_TMP_DIR/steps.$$"
+    mkdir -p "$(dirname "$tmp")" 2>/dev/null
+    sort -u > "$tmp" || return 1
+    local s
+    au_step_order | while IFS= read -r s; do
+        grep -qx "$s" "$tmp" 2>/dev/null && printf '%s\n' "$s"
+    done
+    while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        au_step_order | grep -qx "$s" || printf '%s\n' "$s"
+    done < "$tmp"
+    rm -f "$tmp"
+}
+
 # au_steps_union <manifest> <тег>… — объединение шагов набора релизов в
 # каноническом порядке, каждый максимум один раз.
 au_steps_union() {
     local manifest="$1"; shift
-    local tmp="$Z2K_AU_TMP_DIR/steps.$$"
-    mkdir -p "$(dirname "$tmp")" 2>/dev/null
-    : > "$tmp" || return 1
     local t
-    for t in "$@"; do au_entry_steps "$manifest" "$t" >> "$tmp"; done
-    au_step_order | while IFS= read -r s; do
-        grep -qx "$s" "$tmp" 2>/dev/null && printf '%s\n' "$s"
-    done
-    rm -f "$tmp"
+    for t in "$@"; do au_entry_steps "$manifest" "$t"; done | au_steps_ordered
 }
 
 # Сорсинг генераторов из доставленного дерева. Тот же приём, что у вебморды
@@ -1743,6 +1756,85 @@ EOF_F
     return 0
 }
 
+# ---- новый путь обновления ---------------------------------------------------
+#
+# Порядок операций здесь — это и есть безопасность обновления:
+#   снимок → доставка → шаги → health-check → и ТОЛЬКО ПОТОМ версия.
+# Версия последней: пока не доказано, что живо, роутер считает себя на прежней и
+# завтра попробует снова. Обратный порядок дал бы «тег новый, поведение старое» —
+# состояние, которое снаружи неотличимо от успеха.
+#
+# rc: 0 — обновились, 1 — не вышло (откатились, версия на месте),
+#     2 — нужна полная переустановка (шаг из будущего).
+au_apply_converge() {
+    local target_tag="$1"; shift
+    local manifest="$Z2K_AU_TMP_DIR/UPDATES.json"
+    local plan="$Z2K_AU_TMP_DIR/converge.plan"
+    local rc
+
+    au_converge_plan "$manifest" > "$plan"
+    # Не `grep -c . || echo 0`: на пустом файле grep печатает 0 И возвращает 1,
+    # так что запасная ветка дописывала второй ноль, и дальше «-eq 0» падало на
+    # нечисловом значении — идемпотентный прогон снимал снимок и лез работать.
+    local n; n=$(awk 'END {print NR}' "$plan" 2>/dev/null)
+    [ -n "$n" ] || n=0
+
+    if [ "$n" -eq 0 ] && [ -z "$*" ]; then
+        # Дерево уже совпадает с манифестом и делать нечего. Это штатный исход
+        # повторного прогона, а не ошибка: сходимость идемпотентна.
+        au_log "дерево совпадает с манифестом — только отметка версии"
+        au_write_installed_tag "$target_tag" || {
+            au_log "ВНИМАНИЕ: тег не записался — обновления встанут"; return 1; }
+        return 0
+    fi
+
+    au_log "сходимость: расходится файлов — $n"
+    au_snapshot_for_patch "$(tr '\n' ' ' < "$plan")" || {
+        au_log "снимок не снялся — обновление отменено"; return 1; }
+
+    if ! au_converge_apply "$manifest" "$plan"; then
+        au_log "доставка не удалась — откат"
+        au_rollback_patch || au_mark_dirty_tree "$(cat "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)" "$target_tag"
+        return 1
+    fi
+
+    au_run_steps "$@"; rc=$?
+    if [ "$rc" = 2 ]; then
+        # Шаг из будущего: файлы уже разложены, но что с ними делать — мы не
+        # знаем. Возвращаем дерево как было и уходим за полной переустановкой.
+        au_log "шаг неизвестен — откат и полная переустановка"
+        au_rollback_patch || au_mark_dirty_tree "$(cat "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)" "$target_tag"
+        return 2
+    fi
+    if [ "$rc" != 0 ]; then
+        au_log "шаги провалились — откат"
+        if au_rollback_patch; then
+            # Конфиг мог быть перегенерирован из новых файлов — вернуть его к
+            # тому, что описывают вернувшиеся.
+            au_run_steps regen-config restart-service >/dev/null 2>&1
+        else
+            au_mark_dirty_tree "$(cat "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)" "$target_tag"
+        fi
+        return 1
+    fi
+
+    if ! au_health_check; then
+        au_log "health-check не прошёл — откат"
+        if au_rollback_patch; then
+            au_run_steps regen-config restart-service >/dev/null 2>&1
+        else
+            au_mark_dirty_tree "$(cat "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)" "$target_tag"
+        fi
+        return 1
+    fi
+
+    au_write_installed_tag "$target_tag" || {
+        au_log "ВНИМАНИЕ: обновились, но тег не записался — следующей ночью прогон повторится вхолостую"
+        return 1; }
+    au_log "обновление завершено: $target_tag"
+    return 0
+}
+
 # ------------------------------------------------------ main entry points ---
 
 # au_run_check — dry run: show what would happen, don't apply.
@@ -1857,6 +1949,56 @@ au_run_apply() {
     target_tag=$(echo "$decision" | head -1 | awk '{print $2}')
     reset_state=$(echo "$decision" | head -1 | awk '{print $3}')
     files=$(echo "$decision" | tail -n +2)
+
+    # --- НОВЫЙ ПУТЬ -----------------------------------------------------------
+    #
+    # Условий три: манифест несёт карту адресов, ни один релиз окна не помечен
+    # аварийным флагом, и все объявленные шаги нам известны. Иначе — старый путь,
+    # он никуда не делся и остаётся аварийным выходом.
+    #
+    # Тип релиза (patch/reinstall) здесь не смотрим намеренно: «reinstall» был
+    # признанием бессилия — доставить объявленное патчем было нечем. Теперь
+    # доставка и последствия выражаются адресно, и полная переустановка нужна
+    # только тому, что не является нашими файлами (пакеты opkg, движок, структура
+    # каталогов) — это и объявляет full_install.
+    if [ "$action" != "none" ] && au_manifest_has_install_map "$manifest"; then
+        local _tags _tag _e _full="" _reset="" _steps
+        _tags=$(au_history_entries_after "$manifest" "$installed" \
+                | sed -n 's/.*"v"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        for _tag in $_tags; do
+            _e=$(grep "^[[:space:]]*{\"v\": \"$_tag\"" "$manifest" | head -1)
+            [ -n "$(au_entry_bool "$_e" full_install)" ] && _full=1
+            # Старый флаг релиза «сбросить состояние автоподбора». Он появился
+            # до каталога шагов и раньше работал только через полную
+            # переустановку. Новый путь обязан его уважать — иначе релиз со
+            # сдвигом нумерации пулов приедет, а накопленная статистика
+            # останется указывать не на те стратегии.
+            [ "$(au_entry_bool "$_e" reset_state)" = "true" ] && _reset=1
+        done
+        if [ -n "$_full" ]; then
+            au_log "релиз помечен как требующий полной переустановки — иду старым путём"
+        else
+            # shellcheck disable=SC2086
+            _steps=$( { au_steps_union "$manifest" $_tags
+                        [ -n "$_reset" ] && echo reset-state; } | au_steps_ordered | tr '\n' ' ')
+            au_log "новый путь: $installed -> $target_tag, последствия: ${_steps:-нет}"
+            if pgrep -f nfqws2 >/dev/null 2>&1; then
+                Z2K_AU_NFQWS_WAS_ALIVE=1
+            else
+                Z2K_AU_NFQWS_WAS_ALIVE=0
+                au_log "внимание: nfqws2 не работает ЕЩЁ ДО обновления"
+            fi
+            export Z2K_AU_NFQWS_WAS_ALIVE
+            # shellcheck disable=SC2086
+            au_apply_converge "$target_tag" $_steps
+            case "$?" in
+                0) au_lock_release; return 0 ;;
+                2) au_log "шаг из будущего — падаю на полную переустановку" ;;
+                *) au_lock_release; return 1 ;;
+            esac
+            action="reinstall"
+        fi
+    fi
 
     case "$action" in
         none)

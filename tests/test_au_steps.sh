@@ -45,6 +45,15 @@ assert_eq "порядок объединения не зависит от пор
     "$(au_steps_union "$SB/m.json" p-1 p-2 p-3 | tr '\n' ' ')" \
     "$(au_steps_union "$SB/m.json" p-3 p-1 p-2 | tr '\n' ' ')"
 
+# Неизвестный шаг НЕ отбрасывается при упорядочивании: он должен дойти до
+# au_run_steps и там потребовать полную переустановку. Тихо выкинуть шаг из
+# будущего — значит сдвинуть версию, не сделав того, что релиз объявил.
+assert_eq "неизвестный шаг переживает упорядочивание" \
+    "regen-config restart-service шаг-из-будущего" \
+    "$(printf 'restart-service\nшаг-из-будущего\nregen-config\n' | au_steps_ordered | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "упорядочивание дедуплицирует" "restart-service" \
+    "$(printf 'restart-service\nrestart-service\nrestart-service\n' | au_steps_ordered | tr '\n' ' ' | sed 's/ $//')"
+
 # Каталог исполнителя и каталог сборки — две стороны одного контракта.
 # shellcheck disable=SC1091
 . "$ROOT/lib/release_map.sh"

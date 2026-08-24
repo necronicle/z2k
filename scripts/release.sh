@@ -358,7 +358,7 @@ git diff --quiet && git diff --cached --quiet \
 # считаются (цель зависит от арки роутера и в install_map их нет) — и ровно они
 # требуют refresh-binaries. По $DELIVERABLE релиз с новым z2k-warpd объявил бы
 # пустой список последствий: файл приехал бы, а сервис остался на старом.
-STEPS=$(z2k_steps_merged $(tr '\n' ' ' < "$CHANGED") | tr '\n' ' ' | sed 's/ $//')
+STEPS=$(z2k_steps_merged - < "$CHANGED" | tr '\n' ' ' | sed 's/ $//')
 if [ -n "$STEPS" ]; then
     printf 'последствия релиза: %s\n' "$STEPS"
 else
