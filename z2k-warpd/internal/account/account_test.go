@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,9 @@ const regBody = `{"id":"dev1","token":"tok1","warp_enabled":false,
  "config":{"client_id":"Mv0s","interface":{"addresses":{"v4":"172.16.0.2","v6":"2606:4700:110:8::1"}},
  "peers":[{"public_key":"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
  "endpoint":{"v4":"8.6.112.0:0","host":"engage.cloudflareclient.com:2408","ports":[854,859]}}]}}`
+
+// badRegBody — тот же ответ, но с эндпоинтом из негодного диапазона.
+var badRegBody = strings.Replace(regBody, `"v4":"8.6.112.0:0"`, `"v4":"162.159.192.9:0"`, 1)
 
 func srv(t *testing.T, patched *bool) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,6 +255,146 @@ func TestEnsureExistingDeviceIsNotReRegistered(t *testing.T) {
 	d.Save(p)
 	if _, created, err = c.Ensure(context.Background(), p); err != nil || !created || posts != 2 {
 		t.Fatalf("revoked: created=%v err=%v posts=%d", created, err, posts)
+	}
+}
+
+// Эндпоинт из 162.159.192.0/24 — не «редкий случай», а негодная регистрация.
+//
+// Замер, из-за которого версия API и пинится: v0a4471 отдаёт этот диапазон с
+// ЧЕТЫРЬМЯ портами, и РФ-провайдеры его режут — WireGuard не получает
+// рукопожатия ни на одном порту. Рабочая регистрация даёт 8.x анкастом с
+// полусотней портов. Поле 2026-08-24: у человека tx=314 КБ, rx=248 байт,
+// компьютер завёрнут в чёрную дыру, а починить нечем — «Удалить WARP»
+// намеренно сохраняет ключ, и переустановка возвращает ту же мёртвую запись.
+func TestBadEndpointRangeIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		host string
+		bad  bool
+	}{
+		{"162.159.192.9", true},
+		{"162.159.192.1", true},
+		{"162.159.193.9", false}, // соседняя /24 под запрет не попадает
+		{"8.6.112.0", false},
+		{"188.114.97.1", false},
+		{"", false},
+	} {
+		if got := badEndpoint(tc.host); got != tc.bad {
+			t.Errorf("badEndpoint(%q) = %v, want %v", tc.host, got, tc.bad)
+		}
+	}
+}
+
+// Сохранённая запись с негодным адресом чинится САМА, один раз: перерегистрация
+// на старте. Именно на старте, а не по факту неудачи туннеля — «туннель не
+// поднялся» имеет десяток причин (провайдер, DPI, поезд), и перерегистрация по
+// такому признаку жгла бы регистрации Cloudflare в цикле у того, у кого просто
+// плохая сеть. Признак негодного адреса детерминированный и самоограниченный:
+// новая запись плохого диапазона уже не содержит, значит второй раз не сработает.
+func TestEnsureReRegistersOnBadEndpoint(t *testing.T) {
+	posts := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST":
+			posts++
+			w.Write([]byte(regBody))
+		case r.Method == "PATCH":
+			w.Write([]byte(`{"warp_enabled":true}`))
+		case r.Method == "GET":
+			w.Write([]byte(regBody))
+		default:
+			w.WriteHeader(500)
+		}
+	}))
+	defer s.Close()
+	c := &Client{BaseURL: s.URL, HTTP: s.Client()}
+	p := filepath.Join(t.TempDir(), "device.json")
+
+	bad := &Device{ID: "dev1", Token: "t", PrivateKey: "k", Tunnel: TunnelWG,
+		Endpoint: Endpoint{V4: "162.159.192.9", Ports: []int{2408, 500, 1701, 4500}}}
+	if err := bad.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	d, created, err := c.Ensure(context.Background(), p)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if !created || posts != 1 {
+		t.Fatalf("негодный адрес обязан вызвать перерегистрацию: created=%v posts=%d", created, posts)
+	}
+	if badEndpoint(d.Endpoint.V4) {
+		t.Fatalf("после перерегистрации адрес снова негодный: %s", d.Endpoint.V4)
+	}
+	// Второй прогон уже НЕ перерегистрирует: запись здоровая.
+	if _, created, err = c.Ensure(context.Background(), p); err != nil || created || posts != 1 {
+		t.Fatalf("повторный прогон: created=%v err=%v posts=%d", created, err, posts)
+	}
+}
+
+// Неудачная перерегистрация НЕ должна оставить человека без устройства: пока
+// новая запись не получена, старая остаётся на диске. Негодная лучше, чем
+// никакой — с ней хотя бы виден диагноз.
+func TestBadEndpointKeptWhenReRegistrationFails(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(503)
+			return
+		}
+		w.Write([]byte(regBody))
+	}))
+	defer s.Close()
+	c := &Client{BaseURL: s.URL, HTTP: s.Client()}
+	p := filepath.Join(t.TempDir(), "device.json")
+	bad := &Device{ID: "dev1", Token: "t", PrivateKey: "k", Tunnel: TunnelWG,
+		Endpoint: Endpoint{V4: "162.159.192.9", Ports: []int{2408}}}
+	bad.Save(p)
+
+	if _, _, err := c.Ensure(context.Background(), p); err == nil {
+		t.Fatal("перерегистрация провалилась — Ensure обязан вернуть ошибку")
+	}
+	back, err := Load(p)
+	if err != nil || back.ID != "dev1" || back.Endpoint.V4 != "162.159.192.9" {
+		t.Fatalf("старая запись должна была уцелеть: %+v err=%v", back, err)
+	}
+}
+
+// Перерегистрация — РОВНО ОДНА на запись.
+//
+// Если API у человека отдаёт плохой диапазон и в ответ на новую регистрацию
+// тоже, наивная проверка «адрес плохой → регистрируйся» сработает при КАЖДОМ
+// старте демона и сожжёт лимит устройств Cloudflare. Отметка в записи делает
+// попытку одноразовой: сеть починится — поможет кнопка в панели, а не цикл.
+func TestReRegistrationHappensAtMostOnce(t *testing.T) {
+	posts := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			posts++
+			w.Write([]byte(badRegBody)) // API упорно отдаёт негодный диапазон
+		case "PATCH":
+			w.Write([]byte(`{"warp_enabled":true}`))
+		default:
+			w.Write([]byte(badRegBody))
+		}
+	}))
+	defer s.Close()
+	c := &Client{BaseURL: s.URL, HTTP: s.Client()}
+	p := filepath.Join(t.TempDir(), "device.json")
+
+	bad := &Device{ID: "dev1", Token: "t", PrivateKey: "k", Tunnel: TunnelWG,
+		Endpoint: Endpoint{V4: "162.159.192.9", Ports: []int{2408}}}
+	bad.Save(p)
+
+	if _, created, err := c.Ensure(context.Background(), p); err != nil || !created || posts != 1 {
+		t.Fatalf("первая попытка: created=%v err=%v posts=%d", created, err, posts)
+	}
+	// Адрес снова негодный — но второй регистрации быть не должно.
+	for i := 0; i < 3; i++ {
+		if _, created, err := c.Ensure(context.Background(), p); err != nil || created {
+			t.Fatalf("прогон %d: created=%v err=%v", i, created, err)
+		}
+	}
+	if posts != 1 {
+		t.Fatalf("регистраций всего должно быть 1, а их %d — лимит Cloudflare сгорит", posts)
 	}
 }
 

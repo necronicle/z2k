@@ -44,5 +44,27 @@ else
     printf '[SKIP] node не найден — рендер пропущен\n'
 fi
 
+# --- перерегистрация: рычаг платный, предупреждение обязано быть ---------------
+#
+# Кнопка нужна ровно для случая, когда в записи устройства стоит адрес из
+# диапазона, который режут провайдеры: «Удалить WARP» ключ намеренно сохраняет,
+# поэтому переустановка возвращает ту же мёртвую запись. Цена нажатия — одно
+# устройство из лимита Cloudflare, поэтому текст обязан говорить это прямо, а не
+# спрашивать «вы уверены?».
+J="$ROOT/webpanel/www/js/pages/warp.js"
+assert_eq "кнопка перерегистрации есть"      "1" "$(grep -c 'id="warp-rereg-btn"' "$J")"
+assert_eq "обработчик подключён"             "1" "$(grep -c 'warp-rereg-btn").addEventListener' "$J")"
+assert_eq "зовёт свой эндпоинт"              "1" "$(grep -c '"/warp/reregister"' "$J")"
+assert_eq "спрашивает подтверждение"         "1" "$(grep -c 'Перерегистрировать устройство у Cloudflare?' "$J")"
+if grep -q "по согласованию в чате" "$J"; then ok "предупреждает про согласование"; else no "предупреждает про согласование" "текст есть" "нет"; fi
+if grep -q "лимита Cloudflare" "$J"; then ok "называет цену — лимит Cloudflare"; else no "называет цену" "упоминание лимита" "нет"; fi
+assert_eq "видна только при установленном"   "1" "$(grep -c 'reregBtn.hidden = !installed' "$J")"
+
+A="$ROOT/webpanel/cgi/actions.sh"
+assert_eq "действие есть"                    "1" "$(grep -c '^warp_reregister()' "$A")"
+assert_eq "снимает запись устройства"        "1" "$(grep -c 'rm -f "\$dev"' "$A")"
+assert_eq "держит копию до успеха"           "1" "$(grep -c 'dev}.prev' "$A" | awk '{print ($1>0)?1:0}')"
+assert_eq "эндпоинт объявлен"                "1" "$(grep -c '"POST /warp/reregister")' "$ROOT/webpanel/cgi/api.sh")"
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

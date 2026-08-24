@@ -223,11 +223,16 @@ func TestAllFailSetsNoEndpointAndCoolsDown(t *testing.T) {
 		return false
 	})
 	waitFor(t, "no_endpoint status", func() bool { s := readStatus(h); return s != nil && !s.Ready && s.LastError == status.ErrNoEndpoint })
+	// Переключения ключа на masque больше не ждём: h2 снят из автоматической
+	// лестницы (замер 2026-08-24 — поднимается, рапортует готовность и не
+	// возит ничего). Полный провал всех WG-ступеней обязан честно дать
+	// no_endpoint, а не увести на транспорт, который не работает: тогда
+	// срабатывает fail-open и трафик идёт напрямую, а не в чёрную дыру.
 	h.mu.Lock()
 	sw := strings.Join(h.switched, ",")
 	h.mu.Unlock()
-	if !strings.Contains(sw, "masque") {
-		t.Fatalf("h2 step must switch key to masque: %q", sw)
+	if strings.Contains(sw, "masque") {
+		t.Fatalf("автоматическая лестница не должна переключать ключ на masque: %q", sw)
 	}
 	cancel()
 	<-done

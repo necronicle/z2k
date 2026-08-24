@@ -59,6 +59,21 @@ type HostPorts struct {
 	Ports []int  `json:"ports"`
 }
 
+// badEndpoint — адрес, с которым туннель не заработает никогда.
+//
+// 162.159.192.0/24 отдаёт v0a4471 (и GET/PATCH любой версии) вместе с четырьмя
+// портами вместо полусотни. РФ-провайдеры этот диапазон режут: WireGuard не
+// получает рукопожатия ни на одном порту, а MASQUE Cloudflare обрывает каждые
+// несколько минут. Снаружи это выглядит хуже, чем отказ: туннель числится
+// живым, трафик уходит и не возвращается.
+//
+// Поле 2026-08-24: tx=314 КБ, rx=248 байт, компьютер без интернета. Починить
+// было нечем — «Удалить WARP» намеренно сохраняет ключ устройства, поэтому
+// переустановка возвращала ту же мёртвую запись.
+func badEndpoint(host string) bool {
+	return strings.HasPrefix(host, "162.159.192.")
+}
+
 // Endpoint — куда подключаться.
 //
 // V4/Ports — WG-эндпоинт из ПЕРВИЧНОЙ регистрации, и он не перезаписывается:
@@ -101,6 +116,13 @@ type Device struct {
 	Iface      string   `json:"iface,omitempty"`
 	LastGood   *Step    `json:"last_good,omitempty"`
 	H2         *H2Key   `json:"h2,omitempty"`
+	// EndpointRetried — перерегистрация из-за негодного адреса уже была.
+	//
+	// Без этой отметки проверка «адрес плохой → регистрируйся» срабатывает при
+	// КАЖДОМ старте у того, чей API упорно отдаёт 162.159.192.x, и сжигает
+	// лимит устройств Cloudflare. Попытка одноразовая: если и новая запись
+	// пришла негодной, дальше решает человек кнопкой в панели, а не цикл.
+	EndpointRetried bool `json:"endpoint_retried,omitempty"`
 }
 
 // Client — HTTP-клиент API регистрации.
@@ -411,6 +433,26 @@ func (c *Client) SwitchTunnel(ctx context.Context, d *Device, tunnel string) err
 // устройство создано заново.
 func (c *Client) Ensure(ctx context.Context, path string) (*Device, bool, error) {
 	if d, err := Load(path); err == nil && d.ID != "" {
+		// Негодный адрес чиним ДО обращения к API: Refresh его не исправит —
+		// первичный эндпоинт намеренно не перезаписывается (см. Endpoint), а
+		// GET отдаёт как раз тот диапазон, из-за которого запись и мертва.
+		// Признак детерминированный и самоограниченный: новая регистрация
+		// плохого диапазона не содержит, значит второй раз не сработает.
+		//
+		// Именно на старте, а НЕ по факту «туннель не поднялся»: у неудачи
+		// туннеля десяток причин (провайдер, DPI, поезд), и перерегистрация по
+		// такому признаку жгла бы регистрации Cloudflare в цикле у того, у кого
+		// просто плохая сеть.
+		if badEndpoint(d.Endpoint.V4) && !d.EndpointRetried {
+			fresh, rerr := c.Register(ctx)
+			if rerr != nil {
+				// Старую запись НЕ трогаем: негодная лучше, чем никакой — с ней
+				// хотя бы виден диагноз, и следующий запуск попробует снова.
+				return nil, false, fmt.Errorf("re-register (bad endpoint %s): %w", d.Endpoint.V4, rerr)
+			}
+			fresh.EndpointRetried = true
+			return fresh, true, fresh.Save(path)
+		}
 		err := c.Refresh(ctx, d)
 		if err == nil {
 			return d, false, d.Save(path)

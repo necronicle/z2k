@@ -9,10 +9,15 @@ import (
 
 func ep(ports ...int) account.Endpoint { return account.Endpoint{V4: "8.6.112.0", Ports: ports} }
 
-func TestOrderIsWgDefaultThenPortsThenH2(t *testing.T) {
+// MASQUE в автоматической лестнице больше нет: замер 2026-08-24 показал, что
+// он поднимается, рапортует готовность и не возит ничего (ICMP 100% потерь,
+// TCP код 000). Пока шаг стоял здесь, он был ловушкой — движок падал на него
+// при заблокированном WG, объявлял готовность, маршрут поднимался, и человек
+// оставался без интернета. Ручной запуск (-force-transport h2) идёт мимо New.
+func TestOrderIsWgDefaultThenPortsNoH2(t *testing.T) {
 	l := New(ep(854, 859), nil)
 	H := "8.6.112.0"
-	want := []account.Step{{Transport: "wg", Host: H, Port: 2408}, {Transport: "wg", Host: H, Port: 854}, {Transport: "wg", Host: H, Port: 859}, {Transport: "h2", Port: 443}}
+	want := []account.Step{{Transport: "wg", Host: H, Port: 2408}, {Transport: "wg", Host: H, Port: 854}, {Transport: "wg", Host: H, Port: 859}}
 	for i, w := range want {
 		if l.Current() != w {
 			t.Fatalf("step %d: %+v", i, l.Current())
@@ -21,8 +26,8 @@ func TestOrderIsWgDefaultThenPortsThenH2(t *testing.T) {
 			l.Next(time.Unix(0, 0))
 		}
 	}
-	if !l.OnH2() {
-		t.Fatal("last step must be h2")
+	if l.OnH2() {
+		t.Fatal("h2 не должен появляться в автоматической лестнице")
 	}
 }
 
@@ -48,20 +53,23 @@ func TestStartAtLastStepStillTriesTheRestBeforeCooldown(t *testing.T) {
 	// сматывался в начало и объявлял «полный проход провален», уходя на
 	// 5 минут. WG-ступени не пробовались НИ РАЗУ.
 	e := account.Endpoint{V4: "8.6.112.0", Ports: []int{500, 1701, 4500}}
+	// last_good может указывать на h2 у того, кто обновился со старой версии:
+	// шага в списке больше нет, и лестница обязана просто начать с вершины,
+	// а не сломаться.
 	l := New(e, &account.Step{Transport: "h2", Port: 443})
-	if !l.OnH2() {
-		t.Fatalf("start: %+v", l.Current())
+	if l.OnH2() {
+		t.Fatalf("h2 из last_good не должен воскрешать снятый шаг: %+v", l.Current())
 	}
 	t0 := time.Unix(1000, 0)
 	seen := map[string]bool{Label(l.Current()): true}
-	for i := 0; i < 4; i++ { // ещё 4 ступени: 2408, 500, 1701, 4500
+	for i := 0; i < 3; i++ { // остальные ступени: 500, 1701, 4500
 		s, wait := l.Next(t0)
 		if wait != 0 {
 			t.Fatalf("шаг %d: кулдаун до того, как перебрали все ступени (%v)", i, wait)
 		}
 		seen[Label(s)] = true
 	}
-	if len(seen) != 5 {
+	if len(seen) != 4 {
 		t.Fatalf("перебрали не все ступени: %v", seen)
 	}
 	if _, wait := l.Next(t0); wait == 0 {
@@ -70,10 +78,10 @@ func TestStartAtLastStepStillTriesTheRestBeforeCooldown(t *testing.T) {
 }
 
 func TestWrapAppliesCooldown(t *testing.T) {
-	l := New(ep(), nil) // wg:2408, h2:443
+	l := New(ep(854), nil) // wg:2408, wg:854
 	t0 := time.Unix(1000, 0)
-	s, wait := l.Next(t0) // -> h2
-	if s != (account.Step{Transport: "h2", Port: 443}) || wait != 0 {
+	s, wait := l.Next(t0) // -> wg:854
+	if s != (account.Step{Transport: "wg", Host: "8.6.112.0", Port: 854}) || wait != 0 {
 		t.Fatalf("%+v %v", s, wait)
 	}
 	s, wait = l.Next(t0.Add(time.Second)) // wrap
@@ -90,7 +98,10 @@ func TestWrapAppliesCooldown(t *testing.T) {
 }
 
 func TestWrapAfterCooldownHasNoWait(t *testing.T) {
-	l := New(ep(), nil)
+	// Две ступени: раньше их давали wg+h2, теперь — wg:2408 и wg:854. Смысл
+	// теста в том, что после отбытого кулдауна новый проход начинается без
+	// ожидания, и он от числа ступеней не зависит.
+	l := New(ep(854), nil)
 	t0 := time.Unix(1000, 0)
 	l.Next(t0)
 	_, wait := l.Next(t0.Add(Cooldown + time.Second))
@@ -101,13 +112,8 @@ func TestWrapAfterCooldownHasNoWait(t *testing.T) {
 
 func TestPortsDeduplicated(t *testing.T) {
 	l := New(ep(2408, 854, 854, 0, -1, 70000), nil)
-	n := 1
-	for !l.OnH2() {
-		l.Next(time.Unix(0, 0))
-		n++
-	}
-	if n != 3 {
-		t.Fatalf("want 3 steps (2408, 854, h2), got %d", n)
+	if got := l.Len(); got != 2 {
+		t.Fatalf("want 2 steps (2408, 854), got %d", got)
 	}
 }
 
@@ -128,41 +134,19 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestH2ComesAfterFirstFiveWGSteps(t *testing.T) {
-	l := New(account.Endpoint{V4: "8.6.112.0", Ports: []int{1, 2, 3, 4, 5, 6, 7, 8}}, nil)
-	got := ""
-	for i := 0; ; i++ {
-		if got != "" {
-			got += " "
-		}
-		got += Label(l.Current())
-		if i == 9 {
-			break
-		}
-		l.Next(time.Unix(0, 0))
-	}
-	want := "wg:8.6.112.0:2408 wg:8.6.112.0:1 wg:8.6.112.0:2 wg:8.6.112.0:3 wg:8.6.112.0:4 h2:443 wg:8.6.112.0:5 wg:8.6.112.0:6 wg:8.6.112.0:7 wg:8.6.112.0:8"
-	if got != want {
-		t.Fatalf("\n got %s\nwant %s", got, want)
-	}
-}
-
 func TestAltHostsAfterPrimary(t *testing.T) {
 	e := account.Endpoint{V4: "8.6.112.0", Ports: []int{854},
 		Alt: []account.HostPorts{{Host: "162.159.192.10", Ports: []int{500}}, {Host: "8.6.112.0", Ports: []int{1}}}}
 	l := New(e, nil)
 	got := ""
-	for {
+	for i := 0; i < l.Len(); i++ {
 		if got != "" {
 			got += " "
 		}
 		got += Label(l.Current())
-		if l.OnH2() {
-			break
-		}
 		l.Next(time.Unix(0, 0))
 	}
-	want := "wg:8.6.112.0:2408 wg:8.6.112.0:854 wg:162.159.192.10:2408 wg:162.159.192.10:500 h2:443"
+	want := "wg:8.6.112.0:2408 wg:8.6.112.0:854 wg:162.159.192.10:2408 wg:162.159.192.10:500"
 	if got != want {
 		t.Fatalf("\n got %s\nwant %s", got, want)
 	}

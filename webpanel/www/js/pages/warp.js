@@ -60,6 +60,8 @@ export async function renderWarp() {
         <button class="btn btn-primary" id="warp-install-btn" hidden>Установить WARP</button>
         <span class="desc" id="warp-install-note" style="margin:0" hidden>~7 МБ; регистрирует устройство у Cloudflare. Ничего не запускается, пока не включите тумблер.</span>
         <button class="btn btn-danger" id="warp-remove-btn" hidden>Удалить WARP</button>
+        <button class="btn btn-danger" id="warp-rereg-btn" hidden>Перерегистрировать устройство</button>
+        <span class="desc" id="warp-rereg-note" style="margin:0" hidden>Только по согласованию в чате: тратит одно устройство из лимита Cloudflare. Обычные проблемы с подключением лечатся не этим.</span>
       </div>
     </div>
     <div class="card">
@@ -122,6 +124,7 @@ export async function renderWarp() {
   box.addEventListener("change", () => warpToggle(box));
   document.getElementById("warp-install-btn").addEventListener("click", warpInstall);
   document.getElementById("warp-remove-btn").addEventListener("click", warpRemove);
+  document.getElementById("warp-rereg-btn").addEventListener("click", warpReregister);
   document.getElementById("warp-devices-save").addEventListener("click", warpDevicesSave);
   document.getElementById("warp-new-btn").addEventListener("click", warpNewList);
   document.getElementById("warp-import-btn").addEventListener("click", () => {
@@ -297,6 +300,12 @@ async function loadWarpStatus() {
   installBtn.hidden = installed;
   installNote.hidden = installed;
   removeBtn.hidden = !installed;
+  // Перерегистрация имеет смысл только когда устройство есть. Предупреждение
+  // висит рядом с кнопкой, а не в подсказке: рычаг платный.
+  const reregBtn = document.getElementById("warp-rereg-btn");
+  const reregNote = document.getElementById("warp-rereg-note");
+  if (reregBtn) reregBtn.hidden = !installed;
+  if (reregNote) reregNote.hidden = !installed;
   document.getElementById("warp-devices-card").hidden = false;
 
   const box = $app.querySelector('[data-key="game_warp"] input');
@@ -367,6 +376,40 @@ async function warpInstall() {
       const outcome = jobOutcome(d);
       if (outcome === JOB_FAIL) toast("Не установился — причина в логе выше", "bad");
       else if (!jobUnresolved(outcome)) toast("Установлено. Включите тумблером");
+      else { const m = unresolvedMsg(outcome); if (m) toast(m, "bad"); awaitPanelBack().then(() => loadWarpStatus()); return; }
+      loadWarpStatus();
+    },
+  });
+}
+
+// Перерегистрация — рычаг на один конкретный случай: в записи устройства стоит
+// адрес из диапазона, который режут провайдеры, и починить его нечем — «Удалить
+// WARP» ключ намеренно сохраняет, поэтому переустановка возвращает ту же
+// мёртвую запись. Цена — одно устройство из лимита Cloudflare, поэтому
+// предупреждение прямое, а не «вы уверены?».
+async function warpReregister() {
+  if (!confirm(
+    "Перерегистрировать устройство у Cloudflare?\n\n" +
+    "Нажимайте только по согласованию в чате поддержки.\n\n" +
+    "Действие тратит одно устройство из лимита вашего аккаунта Cloudflare и нужно ровно в одном случае: " +
+    "когда выданный адрес попал в диапазон, который блокируют провайдеры. " +
+    "Обычные обрывы и медленная работа лечатся не этим.")) return;
+  const btn = document.getElementById("warp-rereg-btn");
+  btn.disabled = true;
+  let resp;
+  try {
+    resp = await apiPost("/warp/reregister", {});
+  } catch (e) {
+    btn.disabled = false;
+    toastErr("Ошибка: ", e);
+    return;
+  }
+  openJobModal("Перерегистрирую устройство", resp.job, {
+    onDone: (d) => {
+      btn.disabled = false;
+      const outcome = jobOutcome(d);
+      if (outcome === JOB_FAIL) toast("Не перерегистрировалось — причина в логе выше", "bad");
+      else if (!jobUnresolved(outcome)) toast("Устройство перерегистрировано");
       else { const m = unresolvedMsg(outcome); if (m) toast(m, "bad"); awaitPanelBack().then(() => loadWarpStatus()); return; }
       loadWarpStatus();
     },
