@@ -109,6 +109,27 @@ rm -f "$SB/zd/z2k-config-validator.sh"
 assert_eq "валидатора нет — ВЕТО (доставка не сработала)"     "1" "$(au_step_validate_config; echo $?)"
 unset ZAPRET2_DIR
 
+# ОТОЗВАННЫЙ ФАЙЛ СНИМАЕТСЯ С РОУТЕРА.
+#
+# Сходимость умеет добавлять и обновлять, но не удалять: манифест описывает, что
+# должно быть, и молчит о том, чего быть не должно. Обычно лишний файл просто
+# лежит — но именно «просто лежит» и стоило обхода: 4pda.bin приехал ко всем,
+# init увидел его существование и зарегистрировал блоб с невалидным именем.
+mkdir -p "$SB/zd/files/fake"
+: > "$SB/zd/files/fake/4pda.bin"
+: > "$SB/zd/files/fake/tls_clienthello_4pda_to.bin"
+ZAPRET2_DIR="$SB/zd" au_prune_orphans
+assert_eq "отозванный файл снят" "0" "$([ -e "$SB/zd/files/fake/4pda.bin" ] && echo 1 || echo 0)"
+assert_eq "соседний файл не тронут" "1" "$([ -e "$SB/zd/files/fake/tls_clienthello_4pda_to.bin" ] && echo 1 || echo 0)"
+assert_eq "повторный вызов — не ошибка" "0" "$(ZAPRET2_DIR="$SB/zd" au_prune_orphans; echo $?)"
+
+# Список отзыва ЯВНЫЙ, а не «всё, чего нет в манифесте»: удаление по разнице
+# снесло бы пользовательские файлы в тех же каталогах — списки, ключи, свои
+# стратегии, — и цена ошибки там несопоставима с пользой уборки.
+: > "$SB/zd/files/fake/пользовательский.bin"
+ZAPRET2_DIR="$SB/zd" au_prune_orphans
+assert_eq "чужой файл в том же каталоге цел" "1" "$([ -e "$SB/zd/files/fake/пользовательский.bin" ] && echo 1 || echo 0)"
+
 # Исполнение: подменяем действия наблюдаемыми заглушками.
 : > "$SB/done.log"
 au_step_regen_strategies(){ echo regen-strategies >> "$SB/done.log"; }

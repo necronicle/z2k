@@ -267,3 +267,23 @@ z2k_legacy_reinstall_required() {
             echo 1 ;;
     esac
 }
+
+# z2k_steps_merged_names — то же упорядочивание, но на входе уже ИМЕНА шагов,
+# а не пути файлов. Нужно, чтобы объявленные вручную шаги (Z2K_RELEASE_STEPS)
+# слились с выведенными из диффа в один канонический порядок, а не приписались
+# хвостом. Неизвестное имя пропускаем в конец: пусть упрётся исполнитель и
+# потребует полную переустановку, а не тихо потеряется на сборке.
+z2k_steps_merged_names() {
+    _zsn_tmp=$(mktemp) || return 1
+    sort -u > "$_zsn_tmp"
+    z2k_all_steps | while IFS= read -r _zsn_s; do
+        grep -qx "$_zsn_s" "$_zsn_tmp" && printf '%s\n' "$_zsn_s"
+    done
+    while IFS= read -r _zsn_s; do
+        [ -n "$_zsn_s" ] || continue
+        z2k_all_steps | grep -qx "$_zsn_s" || printf '%s\n' "$_zsn_s"
+    done < "$_zsn_tmp"
+    rm -f "$_zsn_tmp"
+    unset _zsn_tmp _zsn_s
+    return 0
+}

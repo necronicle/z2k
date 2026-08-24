@@ -52,6 +52,23 @@ else
     no "шаги считаются по всему диффу" "z2k_steps_merged - < \$CHANGED" "по \$DELIVERABLE — бинарники выпадут"
 fi
 
+
+# ШАГ, КОТОРЫЙ ДИФФ НЕ ПОДРАЗУМЕВАЕТ, релиз обязан уметь объявить вручную.
+# Спек этот случай называл (reset-state при сдвиге нумерации пулов), а способа
+# не было. Живой пример: p-79.9 чинил init-скрипт, но перезапуск на роутерах не
+# случился, и у тех, у кого обход уже лежал, он лежать и остался.
+assert_eq "ручной шаг сливается в канонический порядок" "regen-config restart-service" \
+    "$(printf 'regen-config\nrestart-service\n' | z2k_steps_merged_names | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "ручной шаг не дублируется" "restart-service" \
+    "$(printf 'restart-service\nrestart-service\n' | z2k_steps_merged_names | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "неизвестное имя уходит в конец, а не теряется" "regen-config шаг-из-будущего" \
+    "$(printf 'шаг-из-будущего\nregen-config\n' | z2k_steps_merged_names | tr '\n' ' ' | sed 's/ $//')"
+if grep -q 'Z2K_RELEASE_STEPS' "$ROOT/scripts/release.sh"; then
+    ok "release.sh принимает ручные шаги"
+else
+    no "release.sh принимает ручные шаги" "Z2K_RELEASE_STEPS" "не найден"
+fi
+
 # release.sh обязан объявлять шаги, а не оставлять их человеку.
 REL="$ROOT/scripts/release.sh"
 if grep -q 'z2k_steps_merged' "$REL"; then
