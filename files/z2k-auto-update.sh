@@ -80,14 +80,15 @@ fi
 
 case "$ACTION" in
     apply)
-        # Deterministic per-host jitter 0..5400 sec (90 min) — only for cron path.
-        # Manual `apply` (e.g. forcing from menu) shouldn't sleep, so the jitter
-        # is gated by stdin being non-tty (cron) and ACTION being unset/apply
-        # without explicit "now".
+        # Разброс 0..90 мин — только для планового пути. Ручной apply (из меню
+        # или панели) ждать не должен, поэтому гейт по stdin (не tty) и
+        # Z2K_AU_NO_JITTER. Сам расчёт — z2k_host_jitter (lib/utils.sh): он
+        # НИКОГДА не возвращает ноль всем сразу, чего не скажешь о прежнем
+        # `cksum`, отсутствующем на Entware, — с ним флот обновлялся ровно
+        # в 02:00:00, все вместе.
         if [ ! -t 0 ] && [ "$Z2K_AU_NO_JITTER" != "1" ]; then
-            HOST="$(hostname 2>/dev/null || echo unknown)"
-            JITTER=$( ( echo "$HOST" | cksum | awk '{print $1 % 5400}' ) 2>/dev/null )
-            [ -z "$JITTER" ] && JITTER=0
+            JITTER=$(z2k_host_jitter 5400)
+            au_log "ночной разброс: жду ${JITTER}с"
             sleep "$JITTER"
         fi
         au_run_apply

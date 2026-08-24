@@ -443,6 +443,55 @@ z2k_strategy_file_sane() {
 # z2k_sha256_file FILE -> hex digest on stdout, empty if it cannot be computed.
 # busybox ships sha256sum on Entware and openssl-util is a declared dependency,
 # so in practice one of these always exists.
+# z2k_host_jitter <макс_секунд> — своя для каждого роутера задержка 0..макс-1.
+#
+# ЗАЧЕМ. Ночные задачи стоят на точных минутах (02:00 обновление, 03:00
+# статистика, 04:00 списки). Без разброса весь флот делает их одновременно:
+# роутер получает пик нагрузки в одну и ту же минуту, наш VPS — весь флот
+# разом, GitHub — тоже.
+#
+# ПОЧЕМУ НЕ cksum. Раньше считали через `cksum`, которого на Entware НЕТ, а
+# следом стояло «не посчиталось — значит ноль». Тихий сбой превращался в
+# «ноль у всех», и разброса не было НИКОГДА, ни на одном роутере (замер на
+# роутере владельца: fire 02:00:20 → done 02:00:22 вместо +46 минут).
+#
+# ПОЭТОМУ ЗДЕСЬ НЕТ ПУТИ, ВЕДУЩЕГО В НОЛЬ ДЛЯ ВСЕХ. Не сошлось с md5sum —
+# пробуем sha256sum, не вышло и это — берём pid и время: пусть значение
+# будет неповторяемым, лишь бы не общим. Разное время у всех важнее, чем
+# одинаковое от ночи к ночи у одного.
+#
+# В хеш идёт hostname ПЛЮС MAC: заводские имена у части моделей совпадают,
+# а MAC свой у каждого.
+z2k_host_jitter() {
+    local max="${1:-5400}" host hex j
+    case "$max" in ''|*[!0-9]*) max=5400 ;; esac
+    [ "$max" -gt 0 ] || max=5400
+    host=$(hostname 2>/dev/null)
+    [ -n "$host" ] || host=$(cat /proc/sys/kernel/hostname 2>/dev/null)
+    host="${host}$(cat /sys/class/net/*/address 2>/dev/null | head -1)"
+    hex=""
+    if command -v md5sum >/dev/null 2>&1; then
+        hex=$(printf '%s' "$host" | md5sum 2>/dev/null | cut -c1-6)
+    fi
+    case "$hex" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+        *) hex="" ;;
+    esac
+    if [ -z "$hex" ] && command -v sha256sum >/dev/null 2>&1; then
+        hex=$(printf '%s' "$host" | sha256sum 2>/dev/null | cut -c1-6)
+        case "$hex" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) hex="" ;;
+        esac
+    fi
+    j=""
+    [ -n "$hex" ] && j=$(( 0x$hex % max )) 2>/dev/null
+    case "$j" in
+        ''|*[!0-9]*) j=$(( ($$ + $(date +%s 2>/dev/null || echo 1)) % max )) ;;
+    esac
+    echo "$j"
+}
+
 z2k_sha256_file() {
     [ -f "$1" ] || return 1
     if command -v sha256sum >/dev/null 2>&1; then

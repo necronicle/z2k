@@ -33,6 +33,17 @@ ZAPRET2_DIR="/opt/zapret2"
 CONFIG="${ZAPRET2_DIR}/config"
 STATE_TSV="${ZAPRET2_DIR}/extra_strats/cache/autocircular/state.tsv"
 
+# Разброс 0..30 мин: в 03:00 отчёт шлёт ВЕСЬ флот, и наш VPS получает его в
+# одну минуту. Только плановый путь (stdin не tty); ручной запуск не ждёт.
+if [ ! -t 0 ] && [ "${Z2K_STATS_NO_JITTER:-0}" != "1" ]; then
+    _u="${ZAPRET2_DIR:-/opt/zapret2}/lib/utils.sh"
+    # shellcheck disable=SC1090
+    [ -r "$_u" ] && . "$_u" 2>/dev/null
+    if command -v z2k_host_jitter >/dev/null 2>&1; then
+        sleep "$(z2k_host_jitter 1800)"
+    fi
+fi
+
 # Endpoint + anti-abuse token. The token is a spam speed-bump (the payload is
 # anonymized), not a secret; it can be rotated by setting Z2K_STATS_TOKEN /
 # Z2K_STATS_ENDPOINT in the config without a code release.
