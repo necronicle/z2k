@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -155,6 +156,9 @@ func (t *Transport) Open(ctx context.Context) error {
 	tconn := tls.Client(raw, cfg)
 	if err := tconn.HandshakeContext(dctx); err != nil {
 		raw.Close()
+		if strings.Contains(err.Error(), "access denied") {
+			return fmt.Errorf("h2 tls: %w: %v", transport.ErrNotEnrolled, err)
+		}
 		return fmt.Errorf("h2 tls: %w", err)
 	}
 	cc, err := (&http2.Transport{}).NewClientConn(tconn)
@@ -176,6 +180,9 @@ func (t *Transport) Open(ctx context.Context) error {
 		cancel()
 		pw.Close()
 		tconn.Close()
+		if strings.Contains(err.Error(), "access denied") {
+			return fmt.Errorf("h2 connect: %w: %v", transport.ErrNotEnrolled, err)
+		}
 		return fmt.Errorf("h2 connect: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

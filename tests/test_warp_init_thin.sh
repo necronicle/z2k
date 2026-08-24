@@ -61,6 +61,26 @@ assert_eq "stop kills the process" "dead" "$(kill -0 "$pid" 2>/dev/null && echo 
 rc=0; BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" status >/dev/null 2>&1 || rc=$?
 assert_eq "status exits 1 when stopped" "1" "$rc"
 
+# --- мгновенно умирающий движок: мёртвый pid в pidfile = вечная карусель ---
+# Поле r-79.4: неудачный старт (замок/TUN заняты) записывал свой pid, selfheal
+# видел мёртвый процесс и поднимал новый — каждые 25 с, при живом демоне.
+printf '#!/bin/sh\nexit 1\n' > "$SB/dead-warpd-$$"; chmod +x "$SB/dead-warpd-$$"
+rm -f "$SB/pid"
+BIN="$SB/dead-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
+assert_eq "мгновенная смерть: pidfile не создан" "no" "$([ -f "$SB/pid" ] && echo yes || echo no)"
+rc=0; BIN="$SB/dead-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" status >/dev/null 2>&1 || rc=$?
+assert_eq "мгновенная смерть: status говорит «остановлен»" "1" "$rc"
+
+# --- живой демон без pidfile: status обязан его увидеть (второй источник правды) ---
+rm -f "$SB/pid"
+"$SB/fake-warpd-$$" run >/dev/null 2>&1 &
+sleep 1
+rc=0; BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" status >/dev/null 2>&1 || rc=$?
+assert_eq "живой демон без pidfile опознан по имени" "0" "$rc"
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
+sleep 1
+assert_eq "stop добивает демона без pidfile" "0" "$(pgrep -f "fake-warpd-$$ run" | wc -l | tr -d ' ')"
+
 # --- MIPS: GODEBUG ---
 mkdir -p "$SB/bin"; printf '#!/bin/sh\necho mipsel\n' > "$SB/bin/uname"; chmod +x "$SB/bin/uname"
 rm -f "$SB/env"

@@ -24,8 +24,15 @@ _cfg="${ZAPRET2_DIR:-/opt/zapret2}/config"
 _proxy=$(grep -m1 '^Z2K_WARP_VPS_PROXY=' "$_cfg" 2>/dev/null | cut -d= -f2- | tr -d '"')
 export Z2K_WARP_VPS_PROXY="${_proxy:-http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119}"
 
+# Два источника правды, и это не перестраховка. Неудачный старт (замок занят,
+# TUN занят) писал в pidfile мёртвый pid — и selfheal каждые 25 с поднимал
+# новый обречённый процесс при ЖИВОМ демоне, снося ему status.json. Поле
+# r-79.4, три диагностики.
 running() {
-    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+        return 0
+    fi
+    pgrep -f "$BIN run" >/dev/null 2>&1
 }
 
 case "$1" in
@@ -38,14 +45,25 @@ case "$1" in
         # Отвязка от потоков обязательна: NDM читает вывод init-скрипта до
         # конца потока, а демон унаследовал бы его и держал открытым.
         "$BIN" run >/dev/null 2>&1 </dev/null &
-        echo $! > "$PIDFILE"
-        echo "z2k-warpd started (pid $!)"
+        _pid=$!
+        # Даём процессу секунду умереть: мёртвый pid в pidfile — это вечная
+        # карусель перезапусков (см. running выше).
+        sleep 1
+        if kill -0 "$_pid" 2>/dev/null; then
+            echo "$_pid" > "$PIDFILE"
+            echo "z2k-warpd started (pid $_pid)"
+        else
+            rm -f "$PIDFILE"
+            echo "z2k-warpd не поднялся — см. /tmp/z2k-warp/warpd.log"
+        fi
         ;;
     stop)
         if [ -f "$PIDFILE" ]; then
             kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
             rm -f "$PIDFILE"
         fi
+        # Пидфайл мог разойтись с реальностью — добиваем по имени.
+        pkill -f "$BIN run" 2>/dev/null
         echo "z2k-warpd stopped"
         ;;
     restart)

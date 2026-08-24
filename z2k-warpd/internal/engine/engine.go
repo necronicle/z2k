@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
@@ -40,6 +41,7 @@ type TransportFactory func(step account.Step, dev tun.Device, d *account.Device)
 type Config struct {
 	DevicePath string
 	StatusPath string
+	LockPath   string        // пусто = рядом со status.json
 	ForceStep  *account.Step // --force-transport: лестница из одного шага
 	Logf       func(string, ...any)
 
@@ -114,19 +116,33 @@ type Engine struct {
 	cfg    Config
 	d      *account.Device
 	st     *status.Writer
-	tunDev *tunshare.Shared
-	iface  string
-	since  time.Time
+	tunDev  *tunshare.Shared
+	iface   string
+	since   time.Time
+	lastErr string // причина держится до первого успеха, а не до следующей записи
 }
 
 // Run выполняет цикл до отмены ctx. Возвращает ошибку только для
 // невосстановимых состояний (нет device.json, нет TUN).
 func Run(ctx context.Context, cfg Config) error {
 	cfg.defaults()
+	// Замок ДО всего: пока он не наш, мы не трогаем ни TUN, ни status.json —
+	// иначе обречённый второй экземпляр сносит состояние живого первого.
+	lockPath := cfg.LockPath
+	if lockPath == "" {
+		lockPath = filepath.Join(filepath.Dir(cfg.StatusPath), "warpd.lock")
+	}
+	release, err := acquireLock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	e := &Engine{cfg: cfg, st: &status.Writer{Path: cfg.StatusPath, MinInterval: time.Second}, since: cfg.Now()}
 	defer e.st.Remove()
 
-	d, err := account.Load(cfg.DevicePath)
+	d, err2 := account.Load(cfg.DevicePath)
+	err = err2
 	if err != nil {
 		e.write(status.Status{LastError: status.ErrRegisterBlocked})
 		e.st.Flush()
@@ -140,6 +156,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer e.tearDownTUN()
+
+	// Статус пишем СРАЗУ, ещё до первой ступени: обход лестницы занимает
+	// десятки секунд, а до этой строки status.json не существовал вовсе — и
+	// панель, диагностика и selfheal всё это время читали «движок не
+	// запущен» вместо «поднимается» (поле r-79.4).
+	e.write(status.Status{Ready: false, Iface: e.iface, Addr: d.AddrV4, HandshakeAge: -1})
+	e.st.Flush()
 
 	if err := nat.Ensure(nat.Runner(cfg.Run), e.iface); err != nil {
 		cfg.Logf("nat: %v", err)
@@ -160,12 +183,15 @@ func Run(ctx context.Context, cfg Config) error {
 
 	for ctx.Err() == nil {
 		step := lad.Current()
+		e.write(status.Status{Ready: false, Transport: step.Transport, Endpoint: ladder.Label(step),
+			Iface: e.iface, Addr: d.AddrV4, HandshakeAge: -1, LadderStep: lad.Index()})
 		tr, err := e.open(ctx, step, e.tunDev.Handle())
 		if err != nil {
 			cfg.Logf("ladder: %s failed: %v", ladder.Label(step), err)
 			next, wait := lad.Next(cfg.Now())
 			if wait > 0 {
 				cfg.Logf("ladder: full pass failed, next try in %s", wait.Round(time.Second))
+				e.lastErr = status.ErrNoEndpoint
 				e.write(status.Status{LastError: status.ErrNoEndpoint, LadderStep: lad.Index()})
 				if err := cfg.Sleep(ctx, wait); err != nil {
 					return nil
@@ -174,6 +200,7 @@ func Run(ctx context.Context, cfg Config) error {
 			_ = next
 			continue
 		}
+		e.lastErr = ""
 		good := lad.Good()
 		// Форсированный шаг — отладка, а не опыт: память лестницы не трогаем,
 		// иначе один прогон с --force-transport h2 пинил бы роутер на h2.
@@ -198,13 +225,30 @@ func Run(ctx context.Context, cfg Config) error {
 // open строит и открывает транспорт шага, переключая ключ устройства,
 // если у Cloudflare активен ключ другого типа.
 func (e *Engine) open(ctx context.Context, step account.Step, dev tun.Device) (transport.Transport, error) {
+	tr, err := e.openOnce(ctx, step, dev, false)
+	if err == nil || !errors.Is(err, transport.ErrNotEnrolled) {
+		return tr, err
+	}
+	// Ключ, записанный у нас, Cloudflare не знает: device.json говорит
+	// «masque», а на сервере зарегистрирован другой ключ (прерванная смена
+	// транспорта, гонка, откат). Обычный путь сюда не заглядывает — он
+	// меняет ключ, только если ТИП не совпал, — и роутер оставался в
+	// «access denied» навсегда (поле r-79.4). Перерегистрируем тот же ключ.
+	e.cfg.Logf("api: ключ не зарегистрирован — перерегистрирую и пробую снова")
+	return e.openOnce(ctx, step, dev, true)
+}
+
+// openOnce строит и открывает транспорт; force — сменить ключ даже если тип
+// в device.json уже совпадает.
+func (e *Engine) openOnce(ctx context.Context, step account.Step, dev tun.Device, force bool) (transport.Transport, error) {
 	want := account.TunnelWG
 	if step.Transport == "h2" {
 		want = account.TunnelMasque
 	}
-	if e.d.Tunnel != want {
+	if force || e.d.Tunnel != want {
 		if err := e.cfg.SwitchTunnel(ctx, e.d, want); err != nil {
 			if errors.Is(err, account.ErrRevoked) {
+				e.lastErr = status.ErrDeviceRevoked
 				e.write(status.Status{LastError: status.ErrDeviceRevoked, Iface: e.iface})
 			}
 			return nil, fmt.Errorf("switch key to %s: %w", want, err)
@@ -317,6 +361,9 @@ func (e *Engine) tearDownTUN() {
 
 func (e *Engine) write(s status.Status) {
 	s.PID = os.Getpid()
+	if s.LastError == "" {
+		s.LastError = e.lastErr
+	}
 	if s.Iface == "" {
 		s.Iface = e.iface
 	}

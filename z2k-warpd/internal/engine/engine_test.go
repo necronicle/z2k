@@ -244,6 +244,40 @@ func TestDeadTransportIsClosedAndLadderMoves(t *testing.T) {
 	<-done
 }
 
+func TestSecondInstanceRefusesAndKeepsTheFirstOnesStatus(t *testing.T) {
+	// Поле r-79.4: второй экземпляр падал на TUN («device or resource busy»),
+	// но по дороге сносил status.json живого первого, а init записывал в
+	// pidfile его мёртвый pid — selfheal перезапускал вечно.
+	h := newHarness(t, baseDevice(), map[string]bool{"wg:2408": true})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Run(ctx, h.config()); close(done) }()
+	waitFor(t, "первый готов", func() bool { s := readStatus(h); return s != nil && s.Ready })
+
+	cfg2 := h.config()
+	if err := Run(context.Background(), cfg2); err != ErrAlreadyRunning {
+		t.Fatalf("второй экземпляр обязан отказаться: %v", err)
+	}
+	if s := readStatus(h); s == nil || !s.Ready {
+		t.Fatal("второй экземпляр снёс status.json первого")
+	}
+	cancel()
+	<-done
+}
+
+func TestStatusExistsWhileTheLadderIsStillWalking(t *testing.T) {
+	// Пока лестница ищет транспорт (десятки секунд), status.json обязан
+	// существовать со «не готов»: иначе панель и диагностика говорят
+	// «движок не запущен», а selfheal снимает маршрут.
+	h := newHarness(t, baseDevice(), map[string]bool{}) // ни один транспорт не поднимется
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Run(ctx, h.config()); close(done) }()
+	waitFor(t, "статус во время обхода", func() bool { s := readStatus(h); return s != nil && !s.Ready && s.Iface == "z2ktun0" })
+	cancel()
+	<-done
+}
+
 func TestMissingDeviceJSON(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{DevicePath: filepath.Join(dir, "none.json"), StatusPath: filepath.Join(dir, "status.json")}

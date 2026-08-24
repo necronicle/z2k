@@ -32,7 +32,8 @@ const (
 type Ladder struct {
 	steps     []account.Step
 	idx       int
-	passStart time.Time // начало текущего прохода; zero = ещё не начинался
+	tried     int       // ступеней опробовано с последнего успеха/кулдауна
+	passStart time.Time // начало текущего круга; zero = ещё не начинался
 }
 
 // New строит лестницу: первичный WG-хост по всем портам, затем запасные
@@ -93,24 +94,31 @@ func (l *Ladder) Next(now time.Time) (account.Step, time.Duration) {
 	if l.passStart.IsZero() {
 		l.passStart = now
 	}
-	if l.idx < len(l.steps)-1 {
-		l.idx++
+	// Считаем ОПРОБОВАННЫЕ ступени, а не позицию в списке. Старт с last_good
+	// (память об удачном транспорте) может прийтись на последнюю ступень —
+	// и тогда позиционная проверка объявляла «полный проход провален» после
+	// одной-единственной попытки, уходя на пятиминутный кулдаун и не пробуя
+	// остальные ступени НИ РАЗУ (поле r-79.4).
+	l.tried++
+	l.idx = (l.idx + 1) % len(l.steps)
+	if l.tried < len(l.steps) {
 		return l.steps[l.idx], 0
 	}
-	// Проход закончился безрезультатно. Следующий — не раньше Cooldown от
-	// начала этого: быстрый провал всей лестницы ждёт, медленный — нет.
-	l.idx = 0
+	// Круг пройден целиком и безрезультатно. Следующий — не раньше Cooldown
+	// от начала этого: быстрый провал всей лестницы ждёт, медленный — нет.
+	l.tried = 0
 	var wait time.Duration
 	if elapsed := now.Sub(l.passStart); elapsed < Cooldown {
 		wait = Cooldown - elapsed
 	}
 	l.passStart = now.Add(wait)
-	return l.steps[0], wait
+	return l.steps[l.idx], wait
 }
 
 // Good фиксирует текущий шаг как рабочий и возвращает его для last_good.
 func (l *Ladder) Good() account.Step {
 	l.passStart = time.Time{}
+	l.tried = 0
 	return l.steps[l.idx]
 }
 

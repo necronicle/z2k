@@ -43,6 +43,32 @@ func TestUnknownLastGoodIgnored(t *testing.T) {
 	}
 }
 
+func TestStartAtLastStepStillTriesTheRestBeforeCooldown(t *testing.T) {
+	// Поле r-79.4: last_good=h2 (последняя ступень) → первый же Next
+	// сматывался в начало и объявлял «полный проход провален», уходя на
+	// 5 минут. WG-ступени не пробовались НИ РАЗУ.
+	e := account.Endpoint{V4: "8.6.112.0", Ports: []int{500, 1701, 4500}}
+	l := New(e, &account.Step{Transport: "h2", Port: 443})
+	if !l.OnH2() {
+		t.Fatalf("start: %+v", l.Current())
+	}
+	t0 := time.Unix(1000, 0)
+	seen := map[string]bool{Label(l.Current()): true}
+	for i := 0; i < 4; i++ { // ещё 4 ступени: 2408, 500, 1701, 4500
+		s, wait := l.Next(t0)
+		if wait != 0 {
+			t.Fatalf("шаг %d: кулдаун до того, как перебрали все ступени (%v)", i, wait)
+		}
+		seen[Label(s)] = true
+	}
+	if len(seen) != 5 {
+		t.Fatalf("перебрали не все ступени: %v", seen)
+	}
+	if _, wait := l.Next(t0); wait == 0 {
+		t.Fatal("после полного круга кулдаун обязан быть")
+	}
+}
+
 func TestWrapAppliesCooldown(t *testing.T) {
 	l := New(ep(), nil) // wg:2408, h2:443
 	t0 := time.Unix(1000, 0)

@@ -150,6 +150,12 @@ func cmdRun(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := engine.Run(ctx, cfg); err != nil {
+		// Другой экземпляр уже держит туннель — это нормальный исход гонки
+		// (selfheal и enable могут стартовать одновременно), а не сбой.
+		if errors.Is(err, engine.ErrAlreadyRunning) {
+			logf("движок уже запущен другим процессом — выхожу")
+			return 0
+		}
 		logf("fatal: %v", err)
 		fmt.Fprintln(os.Stderr, err)
 		return 1

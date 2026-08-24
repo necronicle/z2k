@@ -117,7 +117,7 @@ assert_eq "enable: route default dev z2ktun0 table 989" "1" "$(grep -c 'route re
 assert_eq "enable: MARK dst xmark" "1" "$(grep -c -- '-A PREROUTING -m set --match-set z2k_warp dst -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 assert_eq "enable: MARK src xmark" "1" "$(grep -c -- '-A PREROUTING -m set --match-set z2k_warp_src src -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 assert_eq "enable: ipset loaded from user list" "1" "$(grep -c 'add z2k_warp_new 1.2.3.0/24' "$SB/ipset.log")"
-assert_eq "enable: h2 endpoint excluded from desync" "yes" "$(grep -q "add nozapret 162.159.198.2" "$SB/ipset.log" && echo yes || echo no)"
+assert_eq "enable: MASQUE-эндпоинт НЕ исключается из десинка (измерено: без десинка туннель не несёт трафик)" "0" "$(grep -c 'nozapret' "$SB/ipset.log")"
 assert_eq "enable: nothing in OUTPUT" "0" "$(grep -c ' OUTPUT ' "$SB/ipt.log")"
 
 # ---------- enable (not ready) ----------
@@ -127,7 +127,6 @@ assert_eq "enable not-ready: rc 2" "2" "$rc"
 assert_eq "enable not-ready: flag stays 1" "1" "$(flag)"
 assert_eq "enable not-ready: reason code on stderr" "1" "$(printf '%s' "$out" | grep -c no_endpoint)"
 assert_eq "enable not-ready: no MARK rules" "0" "$(grep -c -- '-A PREROUTING' "$SB/ipt.log" 2>/dev/null || echo 0)"
-assert_eq "enable not-ready: h2 endpoint still excluded from desync (before ready)" "1" "$(grep -c 'add nozapret 162.159.198.2' "$SB/ipset.log")"
 
 # ---------- enable (no binary) ----------
 clearlogs; W disable >/dev/null 2>&1; clearlogs; mv "$SB/sbin/z2k-warpd" "$SB/sbin/z2k-warpd.off"
@@ -152,7 +151,6 @@ ready true ""; W selfheal >/dev/null 2>&1
 assert_eq "selfheal ready: route asserted" "1" "$(grep -c 'route replace default dev z2ktun0 table 989' "$SB/ip.log")"
 clearlogs; ready false no_endpoint; W selfheal >/dev/null 2>&1
 assert_eq "selfheal dead: MARK removed (fail open)" "1" "$(grep -c -- '-D PREROUTING -m set --match-set z2k_warp dst' "$SB/ipt.log")"
-assert_eq "selfheal dead: h2 endpoint kept out of desync" "1" "$(grep -c 'add nozapret 162.159.198.2' "$SB/ipset.log")"
 clearlogs; rm -f "$SB/s51.running"; ready true ""; W selfheal >/dev/null 2>&1
 assert_eq "selfheal: daemon down → started" "1" "$(grep -c '^start' "$SB/s51.log")"
 printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"; clearlogs; W selfheal >/dev/null 2>&1

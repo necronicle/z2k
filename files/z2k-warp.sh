@@ -65,18 +65,16 @@ warp_set_flag() {
 _json_str() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" 2>/dev/null | head -1; }
 _json_raw() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([a-z0-9.-]*\).*/\1/p" "$1" 2>/dev/null | head -1; }
 warp_iface()   { _json_str "$WARP_DEVICE" iface; }
-# h2-эндпоинт: из device.json, иначе тот же дефолт, что зашит в движке.
-warp_h2_host() { local h; h=$(_json_str "$WARP_DEVICE" h2); printf '%s' "${h:-162.159.198.2}"; }
-# Собственный TLS движка к MASQUE-эндпоинту — вне десинка nfqws2, что бы ни
-# говорил whitelist: в поле десинк ломал этот handshake, и старый код это уже
-# выучил. Ставится ДО старта демона и на каждом selfheal, а не после ready —
-# иначе h2-шаг лестницы пробовался под десинком и падал.
-warp_nozapret_h2() {
-    local h2; h2=$(warp_h2_host)
-    [ -n "$h2" ] || return 0
-    ipset list -n nozapret >/dev/null 2>&1 || return 0
-    ipset add nozapret "$h2" -exist 2>/dev/null
-}
+
+# MASQUE-ЭНДПОИНТ ИЗ ОБХОДА НЕ ИСКЛЮЧАЕТСЯ — И ЭТО ИЗМЕРЕНО, А НЕ ЗАБЫТО.
+#
+# В r-79.4 он добавлялся в nozapret «чтобы наш собственный handshake не ломал
+# десинк». Результат на роутере владельца, по три прогона в каждом состоянии:
+#   без nozapret (как в r-79.1/79.2): сквозная проба 9 из 9
+#   с   nozapret (как в r-79.4):      сквозная проба 0 из 9
+# TLS-сессия в обоих случаях УСТАНАВЛИВАЕТСЯ, но без десинка ТСПУ душит её
+# сразу после — туннель «поднят» и не несёт ничего. Ровно это и сломало тех,
+# у кого WARP работал. Десинк MASQUE-сессии нужен; ничего не исключаем.
 warp_ready()   { [ "$(_json_raw "$WARP_STATUS" ready)" = "true" ]; }
 warp_daemon_running() { [ -x "$WARP_INIT" ] && sh "$WARP_INIT" status >/dev/null 2>&1; }
 
@@ -260,7 +258,6 @@ warp_ipset_all() { warp_ipset_load; warp_ipset_src_load; }
 warp_pbr_up() {
     local iface; iface=$(warp_iface)
     [ -n "$iface" ] || { _wlog "нет имени интерфейса в device.json"; return 1; }
-    warp_nozapret_h2
     ip route replace default dev "$iface" table "$WARP_TABLE" 2>/dev/null
     ip rule show 2>/dev/null | grep -q "fwmark $WARP_MARK" \
         || ip rule add pref "$WARP_RULE_PREF" fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
@@ -386,7 +383,6 @@ warp_enable() {
     [ -x "$WARP_BIN" ] || { _wlog "движок не установлен — нажмите «Установить»"; warp_set_flag 0; return 1; }
     warp_ipset_all
     ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || { _wlog "cannot create ipset $WARP_IPSET"; warp_set_flag 0; return 1; }
-    warp_nozapret_h2
     warp_daemon_running || sh "$WARP_INIT" start >/dev/null 2>&1
     local waited=0
     while [ "$waited" -lt "$WARP_READY_WAIT" ]; do
@@ -424,7 +420,6 @@ warp_remove() {
 warp_selfheal() {
     [ "$(warp_flag)" = "1" ] || return 0
     [ -x "$WARP_BIN" ] || return 0
-    warp_nozapret_h2
     warp_daemon_running || { sh "$WARP_INIT" start >/dev/null 2>&1; return 0; }
     if warp_ready; then
         ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_all

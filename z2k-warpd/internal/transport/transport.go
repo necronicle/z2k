@@ -14,6 +14,12 @@ import (
 // ErrNoHandshake — сессия не установилась за отведённое время.
 var ErrNoHandshake = errors.New("no handshake")
 
+// ErrNotEnrolled — сервер отверг наш клиентский сертификат (TLS alert
+// access_denied): ключ, которым мы представляемся, у Cloudflare не
+// зарегистрирован. Лечится ПЕРЕрегистрацией ключа, а не сменой адреса —
+// поэтому отдельный тип, а не просто ошибка соединения.
+var ErrNotEnrolled = errors.New("client key is not enrolled")
+
 // Health — мгновенный снимок состояния сессии.
 type Health struct {
 	Connected     bool
