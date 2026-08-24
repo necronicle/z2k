@@ -1529,6 +1529,100 @@ warp_devices_read() {
 #   mac<TAB>ip<TAB>label<TAB>net<TAB>active(0/1)<TAB>on(0/1)
 # on — MAC уже в devices.txt. Без ndmc (не Keenetic / тесты) — пусто.
 # WARP_NDMC — стаб в тестах.
+# Перерегистрация устройства у Cloudflare.
+#
+# Сносим ТОЛЬКО запись устройства и поднимаем демон заново — он зарегистрируется
+# с нуля. Нужно ровно для одного случая: в записи стоит адрес из диапазона,
+# который режут провайдеры, и починить его нечем — «Удалить WARP» намеренно
+# сохраняет ключ, поэтому переустановка возвращает ту же мёртвую запись.
+#
+# Действие не бесплатное: у Cloudflare есть лимит устройств на аккаунт, и каждое
+# нажатие тратит одно. Поэтому кнопка снабжена предупреждением, а не спрятана:
+# спрятанный рычаг ищут наугад, предупреждённый — по делу.
+# --- проверка DNS ---------------------------------------------------------
+#
+# Обёртка над files/z2k-dns-check.sh: он спрашивает публичные серверы и решает,
+# кто отвечает честно. Ничего не меняет, пишет только в tmpfs.
+#
+# Долгая по природе (заблокированный сервер стоит полного таймаута), поэтому
+# вызывается задачей, как установка WARP, а не синхронно из запроса.
+DNS_CHECK_SCRIPT="${DNS_CHECK_SCRIPT:-$ZAPRET2_DIR/z2k-dns-check.sh}"
+DNS_CHECK_OUT="${DNS_CHECK_OUT:-/tmp/z2k-dns-check.json}"
+DNS_CHECK_OWN="${DNS_CHECK_OWN:-$ZAPRET2_DIR/lists/dns-check.txt}"
+
+dns_check_run() {
+    [ -f "$DNS_CHECK_SCRIPT" ] || { echo "нет $DNS_CHECK_SCRIPT"; return 1; }
+    # Прогресс скрипт пишет в stderr, готовый JSON — в stdout и в файл.
+    # В журнал задачи пускаем ТОЛЬКО прогресс: JSON там нечитаем, а человек
+    # смотрит туда, чтобы понять, что работа идёт.
+    # Порядок редиректов здесь ОБРАТНЫЙ обычному и нарочно: сперва stderr
+    # уходит туда, куда сейчас смотрит stdout (в журнал), и только потом stdout
+    # затыкается. Написав привычное `>/dev/null 2>&1`, мы отправили бы в никуда
+    # и прогресс тоже.
+    # shellcheck disable=SC2069
+    Z2K_DNS_OUT="$DNS_CHECK_OUT" Z2K_DNS_OWN="$DNS_CHECK_OWN" \
+        sh "$DNS_CHECK_SCRIPT" 2>&1 >/dev/null || return 1
+    return 0
+}
+
+# Последний результат. Пусто — проверку ещё не запускали.
+dns_check_last() {
+    [ -s "$DNS_CHECK_OUT" ] && cat "$DNS_CHECK_OUT"
+}
+
+# Свои серверы человека. Одна строка — один сервер: адрес для UDP или ссылка
+# для DoH. Файл лежит в lists/ рядом с остальными пользовательскими списками,
+# поэтому переживает обновление и переустановку.
+dns_check_own_read() {
+    [ -f "$DNS_CHECK_OWN" ] && cat "$DNS_CHECK_OWN"
+    return 0
+}
+
+dns_check_own_save() {
+    local tmp="${DNS_CHECK_OWN}.new.$$" kept=0 dropped=0 line
+    mkdir -p "$(dirname "$DNS_CHECK_OWN")" 2>/dev/null
+    : > "$tmp" || return 1
+    while IFS= read -r line; do
+        line=$(printf '%s' "$line" | tr -d ' \t\r')
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in
+            https://*)
+                printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1)) ;;
+            *[!0-9.]*)
+                dropped=$((dropped + 1)) ;;
+            *.*.*.*)
+                printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1)) ;;
+            *)
+                dropped=$((dropped + 1)) ;;
+        esac
+    done
+    mv -f "$tmp" "$DNS_CHECK_OWN" && chmod 644 "$DNS_CHECK_OWN"
+    printf 'entries=%s dropped=%s\n' "$kept" "$dropped"
+    return 0
+}
+
+warp_reregister() {
+    local dev="${WARP_DEVICE:-/opt/etc/z2k-warp/device.json}"
+    local init="${WARP_INIT:-/opt/etc/init.d/S51z2k-warp}"
+    [ -f "$dev" ] || { echo "запись устройства и так отсутствует — регистрация произойдёт при следующем запуске"; return 0; }
+    # Копию держим до конца: если новая регистрация не удастся, человек
+    # останется хотя бы с прежней записью, а не без устройства вовсе.
+    cp -f "$dev" "${dev}.prev" 2>/dev/null
+    rm -f "$dev" 2>/dev/null
+    echo "запись устройства снята, поднимаю движок заново"
+    [ -x "$init" ] && "$init" restart 2>&1
+    sleep 8
+    if [ -s "$dev" ]; then
+        echo "новая регистрация получена: $(sed -n 's/.*"v4": *"\([^"]*\)".*/адрес \1/p' "$dev" | head -1)"
+        rm -f "${dev}.prev" 2>/dev/null
+        return 0
+    fi
+    echo "новая регистрация не получена — возвращаю прежнюю запись"
+    [ -f "${dev}.prev" ] && mv -f "${dev}.prev" "$dev"
+    [ -x "$init" ] && "$init" restart >/dev/null 2>&1
+    return 1
+}
+
 warp_neighbors() {
     local ndmc_bin="${WARP_NDMC:-ndmc}"
     [ -x /bin/ndmc ] && [ -z "${WARP_NDMC:-}" ] && ndmc_bin="/bin/ndmc"

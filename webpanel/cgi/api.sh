@@ -592,6 +592,39 @@ case "$method $path" in
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0
         ;;
+    "GET /dns/check")
+        json_header
+        _last=$(dns_check_last)
+        if [ -n "$_last" ]; then
+            printf '{"ok":true,"result":%s,"own":' "$_last"; json_string "$(dns_check_own_read)"; printf '}\n'
+        else
+            printf '{"ok":true,"result":null,"own":'; json_string "$(dns_check_own_read)"; printf '}\n'
+        fi
+        exit 0
+        ;;
+
+    "POST /dns/check")
+        job_id=$(svc_action_async "Проверка DNS" "dns_check_run")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+
+    "POST /dns/own")
+        body=$(read_body)
+        _res=$(printf '%s' "$body" | dns_check_own_save) || json_fail "500 Internal Server Error" "save failed"
+        json_header
+        printf '{"ok":true,"saved":'; json_string "$_res"; printf '}\n'
+        exit 0
+        ;;
+
+    "POST /warp/reregister")
+        job_id=$(svc_action_async "Перерегистрация устройства WARP" "warp_reregister")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+
     "POST /warp/remove")
         job_id=$(svc_action_async "Удаление WARP" "warp_remove_action")
         json_header
