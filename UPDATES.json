@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 39,
-  "current": "p-79.13",
+  "seq": 40,
+  "current": "p-79.14",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -209,7 +209,7 @@
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "22f8dfad23bf5ea084fe14c2a104d59d73aae5a0f739af3b7a3baac4a9d5ed3c",
   "files/z2k-warp.sh": "494cf37d547106852456b9568ee7a989c3de55395a06287a31ecbdf414f10d25",
-  "lib/auto_update.sh": "b27c35fe26d68a6e204ff6d9acf3e06480bfd17bbb444e10515bf1e32d234e9d",
+  "lib/auto_update.sh": "cfb95db237d35c189a0c5f01bcad3e3bc78dbbac246698d74a2823103b4ac9df",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
   "lib/config_official.sh": "6189d919478e34a3f0f5c596081648a9308d636166e16321085c69a88483fc2c",
   "lib/install.sh": "1ae0ccd85348d759b282d946c8efc455ca0122a49426ae7b39c17213155a4ddd",
@@ -250,7 +250,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "e1ec9d4c75ec5210f2b90581bc77c3132e799945ae54be66bb973964c77e2dc6",
+  "webpanel/www/index.html": "5a88a7d773d562105e112068669a7ae70e2ba216f0e0b037ee473a7c0fe36f81",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -261,7 +261,7 @@
   "webpanel/www/js/job.js": "da0832ecbb70861fa26d17008d5df9fbb69d240869771522bb8f9408f205365b",
   "webpanel/www/js/pages/credits.js": "4bcba5fd3c66e76b9230db9dad033c89038dff6fcada1d71774e5375732f199e",
   "webpanel/www/js/pages/dashboard.js": "8d4a142cff54cb919f0b142a40c306df34728a94075240624a3d09b4ea5c6840",
-  "webpanel/www/js/pages/diag.js": "dfe9bc352435131518f2b6644348a5e565fc1a06c8631f587c44eb65603fbd53",
+  "webpanel/www/js/pages/diag.js": "e8411baa40e9ad499a4e593307c2f7d32b5817ec673abe5e1afdd9d9fa9fed6d",
   "webpanel/www/js/pages/exclude.js": "e504ab23d951a99ef56c220a19fecc1cb9e689f59f547e1b20284100319ecd39",
   "webpanel/www/js/pages/extra-domains.js": "81efb7d4e4102be249367f9dd210dc661efa6a6957ed5dffa8118319b394a326",
   "webpanel/www/js/pages/policy.js": "e9e1d623fef531084fad829cbedcb8df2593408ebc7f40b495e464e3a463dcd6",
@@ -269,7 +269,7 @@
   "webpanel/www/js/pages/telemetry.js": "eafe3bf099ff56ab987bf1b57874de84a555f095ee0068af39bd18c9c3fd2d07",
   "webpanel/www/js/pages/toggles.js": "f2b8704ee6ed65441e712395064955b989aa182fc1edead85100cd7dc97d1863",
   "webpanel/www/js/pages/update.js": "e81fec280b94a6050f300c967775968d87986ef15ec54e4232445ace9abc7f80",
-  "webpanel/www/js/pages/warp.js": "9019438c2744d11ca8963811652c3f9e346da97d3609db482c49ca7adc795cd5",
+  "webpanel/www/js/pages/warp.js": "b39116f82f19c0d590c69944690f1d11ade5a2b78024c588b1018a1bd1f392bf",
   "webpanel/www/js/router.js": "b5a5a74b16bd51919bf9266f11871f6aed62a1828bd5891a13b1bf2e5cf951ed",
   "webpanel/www/js/state-model.js": "5c45e8aa73857dd453c011fa4c533c8b8e9a6acecba97f37b7d6a90d63896405",
   "webpanel/www/style.css": "98880300f72f79d6251e841437f12e9851e7f3011b49c5a6cede45df6c5d7d08",
@@ -470,6 +470,7 @@
 {"v": "p-79.9", "type": "patch", "ts": "2026-08-24T12:43:47Z", "ref": "p-79.9", "desc": "Исправлен отказ запуска: у части роутеров после обновления переставал работать обход. Причина — лишний файл-заготовка, который движок отказывался принимать; он убран, сервис перезапускается автоматически.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "lib/auto_update.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-79.10", "type": "patch", "ts": "2026-08-24T14:56:04Z", "ref": "p-79.10", "desc": "Поднимает обход у тех, у кого он перестал запускаться после вчерашних обновлений, и убирает с роутера файл, ставший причиной. Если у вас всё работало — ничего не изменится.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-79.12", "type": "patch", "ts": "2026-08-24T16:09:30Z", "ref": "p-79.12", "desc": "Списки доменов снова обновляются у всех — раньше после переустановки роутер мог замереть на старой версии списков. Плюс исправлены внутренние шаги обновления, которые раньше не сработали бы.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "lib/config_official.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "p-79.13", "type": "patch", "ts": "2026-08-24T21:53:17Z", "ref": "p-79.13", "desc": "Появилась проверка DNS в разделе «Диагностика»: она показывает, подменяет ли провайдер ответы серверов имён, и какими серверами можно пользоваться — обычными, DoH и DoT. Свои серверы можно добавить в проверку. WARP теперь сам переснимает регистрацию, если ему достался заблокированный в России адрес, а настройки веб-панели больше не сбрасываются при обновлении.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "files/z2k-update-lists.sh", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "webpanel/www/style.css", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-79.13", "type": "patch", "ts": "2026-08-24T21:53:17Z", "ref": "p-79.13", "desc": "Появилась проверка DNS в разделе «Диагностика»: она показывает, подменяет ли провайдер ответы серверов имён, и какими серверами можно пользоваться — обычными, DoH и DoT. Свои серверы можно добавить в проверку. WARP теперь сам переснимает регистрацию, если ему достался заблокированный в России адрес, а настройки веб-панели больше не сбрасываются при обновлении.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "files/z2k-update-lists.sh", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "webpanel/www/style.css", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-79.14", "type": "patch", "ts": "2026-08-24T22:38:53Z", "ref": "p-79.14", "desc": "Журнал обновления теперь показывает, какой файл скачивается и сколько осталось — раньше он надолго замолкал, и обновление выглядело зависшим. Проверка DNS в «Диагностике» открывается свёрнутой. Предупреждение о перерегистрации WARP переехало в окно подтверждения, чтобы не путать с соседними кнопками.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
