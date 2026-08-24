@@ -824,17 +824,40 @@ au_service_for_binary() {
 # Панель: lighttpd.conf шаблонизируется установщиком (@PORT@/@BIND@), поэтому
 # доставленный файл сам по себе ничего не меняет. Установщик читает
 # сохранённые port/bind из дерева, так что адрес панели не сбрасывается.
+# Панель: lighttpd.conf собирается из шаблона подстановкой @PORT@/@BIND@/
+# @WWW_DIR@, поэтому доставленный файл сам по себе ничего не меняет.
+#
+# ЗВАТЬ УСТАНОВЩИК ПАНЕЛИ ОТСЮДА НЕЛЬЗЯ, и это проверено на роутере: он живёт в
+# ${zd}/webpanel/install.sh, но исходники панели (www/, init.d/) лежат рядом с
+# ним только во время установки. Запущенный на месте он говорит «source files
+# missing or empty — refusing to touch the installed panel» и возвращает 1. То
+# есть шаг в прежнем виде провалился бы на каждом роутере.
+#
+# Подставляем сами, из того, что на роутере уже есть: шаблон .in и сохранённые
+# порт с адресом. Ни один плейсхолдер не должен остаться — иначе панель поднимет
+# конфиг с @PORT@ и умрёт, поэтому проверяем и отказываемся.
 au_step_rebuild_panel() {
-    local wp="${ZAPRET2_DIR}/webpanel/install.sh"
-    [ -f "$wp" ] || { au_log "rebuild-panel: ${wp} нет"; return 1; }
-    local port
-    port=$(sed -n 's/^[[:space:]]*PORT=\{0,1\}"\{0,1\}\([0-9]\{2,5\}\).*/\1/p' \
-           /opt/etc/init.d/S96z2k-webpanel 2>/dev/null | head -1)
-    if [ -n "$port" ]; then
-        sh "$wp" --port "$port" >/dev/null 2>&1
-    else
-        sh "$wp" >/dev/null 2>&1
+    local zd="${ZAPRET2_DIR:-/opt/zapret2}"
+    local tpl="$zd/webpanel/lighttpd.conf.in"
+    local dst="$zd/webpanel/lighttpd.conf"
+    local port bind www tmp
+    [ -f "$tpl" ] || { au_log "rebuild-panel: шаблона $tpl нет — пересобирать не из чего"; return 1; }
+    port=$(tr -dc '0-9' < "$zd/webpanel/port" 2>/dev/null)
+    bind=$(tr -d '[:space:]' < "$zd/webpanel/bind" 2>/dev/null)
+    www="$zd/www"
+    [ -n "$port" ] || { au_log "rebuild-panel: не читается сохранённый порт"; return 1; }
+    [ -n "$bind" ] || { au_log "rebuild-panel: не читается сохранённый адрес"; return 1; }
+    tmp="${dst}.z2k-au.$$"
+    sed -e "s|@WWW_DIR@|${www}|g" -e "s|@PORT@|${port}|g" -e "s|@BIND@|${bind}|g" \
+        "$tpl" > "$tmp" 2>/dev/null || { rm -f "$tmp"; au_log "rebuild-panel: подстановка не удалась"; return 1; }
+    if grep -q '@[A-Z_]*@' "$tmp" 2>/dev/null; then
+        au_log "rebuild-panel: в конфиге остался плейсхолдер $(grep -o '@[A-Z_]*@' "$tmp" | head -1) — панель не трогаю"
+        rm -f "$tmp"; return 1
     fi
+    mv -f "$tmp" "$dst" || { rm -f "$tmp"; au_log "rebuild-panel: не записался $dst"; return 1; }
+    au_log "rebuild-panel: конфиг панели пересобран (порт $port, адрес $bind)"
+    [ -x /opt/etc/init.d/S96z2k-webpanel ] && /opt/etc/init.d/S96z2k-webpanel restart >/dev/null 2>&1
+    return 0
 }
 
 # Сброс состояния автоподбора. Объявляется вручную — при сдвиге нумерации пулов

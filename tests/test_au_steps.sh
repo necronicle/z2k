@@ -130,6 +130,36 @@ assert_eq "повторный вызов — не ошибка" "0" "$(ZAPRET2_D
 ZAPRET2_DIR="$SB/zd" au_prune_orphans
 assert_eq "чужой файл в том же каталоге цел" "1" "$([ -e "$SB/zd/files/fake/пользовательский.bin" ] && echo 1 || echo 0)"
 
+# REBUILD-PANEL СОБИРАЕТ КОНФИГ САМ, А НЕ ЗОВЁТ УСТАНОВЩИК.
+#
+# Прежняя версия звала ${zd}/webpanel/install.sh. Проверено на роутере: он там
+# лежит, но исходники панели (www/, init.d/) рядом с ним есть только во время
+# установки, поэтому запущенный на месте он отвечает «source files missing or
+# empty — refusing to touch the installed panel» и возвращает 1. Шаг провалился
+# бы на КАЖДОМ роутере — и не проваливался лишь потому, что ни разу не вызывался.
+mkdir -p "$SB/zd/webpanel" "$SB/zd/www"
+printf 'server.document-root = "@WWW_DIR@"\nserver.port = @PORT@\nserver.bind = "@BIND@"\n' > "$SB/zd/webpanel/lighttpd.conf.in"
+printf '8088' > "$SB/zd/webpanel/port"
+printf '192.168.1.1\n' > "$SB/zd/webpanel/bind"
+ZAPRET2_DIR="$SB/zd" au_step_rebuild_panel; _rc=$?
+assert_eq "пересборка прошла" "0" "$_rc"
+assert_eq "порт подставлен"   "1" "$(grep -c 'server.port = 8088' "$SB/zd/webpanel/lighttpd.conf")"
+assert_eq "адрес подставлен"  "1" "$(grep -c '192.168.1.1' "$SB/zd/webpanel/lighttpd.conf")"
+assert_eq "плейсхолдеров не осталось" "0" "$(grep -c '@[A-Z_]*@' "$SB/zd/webpanel/lighttpd.conf")"
+
+# Незакрытый плейсхолдер — отказ, а не битый конфиг: панель с @PORT@ не поднимется.
+printf 'server.port = @PORT@\nfoo = @UNKNOWN@\n' > "$SB/zd/webpanel/lighttpd.conf.in"
+cp -f "$SB/zd/webpanel/lighttpd.conf" "$SB/zd/webpanel/lighttpd.conf.keep"
+assert_eq "остался плейсхолдер — отказ" "1" "$(ZAPRET2_DIR="$SB/zd" au_step_rebuild_panel; echo $?)"
+assert_eq "живой конфиг не испорчен" "0" "$(grep -c '@UNKNOWN@' "$SB/zd/webpanel/lighttpd.conf")"
+
+# Нет шаблона или нет сохранённого порта — тоже отказ, а не молчаливый успех.
+rm -f "$SB/zd/webpanel/lighttpd.conf.in"
+assert_eq "нет шаблона — отказ" "1" "$(ZAPRET2_DIR="$SB/zd" au_step_rebuild_panel; echo $?)"
+printf 'x = @PORT@\n' > "$SB/zd/webpanel/lighttpd.conf.in"; : > "$SB/zd/webpanel/port"
+assert_eq "нет порта — отказ" "1" "$(ZAPRET2_DIR="$SB/zd" au_step_rebuild_panel; echo $?)"
+unset ZAPRET2_DIR
+
 # Исполнение: подменяем действия наблюдаемыми заглушками.
 : > "$SB/done.log"
 au_step_regen_strategies(){ echo regen-strategies >> "$SB/done.log"; }

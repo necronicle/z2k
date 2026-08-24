@@ -138,11 +138,15 @@ z2k_install_paths() {
             echo "${zd}/webpanel/${repo_path#webpanel/}"
             ;;
         webpanel/lighttpd.conf)
-            # Generated at install time from a template with @PORT@/@BIND@
-            # substitution — see au_reinstall_required() below for the other
-            # half of this: patch can't re-template it, so a plain "no target
-            # here" is not enough, changing it must force a reinstall release.
-            : ;;
+            # ШАБЛОН, а не готовый конфиг: внутри @PORT@/@BIND@/@WWW_DIR@,
+            # которые подставляет установщик панели. Поэтому доставляется рядом,
+            # с суффиксом .in, и НЕ поверх живого lighttpd.conf — иначе панель
+            # получила бы конфиг с плейсхолдерами и умерла.
+            #
+            # Раньше цели не было вовсе, и шаг rebuild-panel не мог работать в
+            # принципе: пересобирать было не из чего. Теперь шаблон на роутере,
+            # и шаг подставляет в него сохранённые порт и адрес.
+            echo "${zd}/webpanel/lighttpd.conf.in" ;;
         tests/*)
             : # tests are dev/CI artifacts; not shipped to runtime.
             ;;
