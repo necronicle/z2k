@@ -77,6 +77,25 @@ assert_eq "refresh-binaries: обрыв загрузки виден снаруж
 au_download_repo_file() { printf 'подделка\n' > "$2"; }
 assert_eq "refresh-binaries: чужая sha виден снаружи" "1" "$(au_step_refresh_binaries; echo $?)"
 
+# ВЕТО СРАБАТЫВАЕТ НА ОШИБКАХ, А НЕ НА ПРЕДУПРЕЖДЕНИЯХ.
+#
+# z2k-config-validator.sh различает три исхода: 0 — чисто, 1 — предупреждения
+# («дублирующийся фильтр между профилями» и подобное), 2 — ошибки, nfqws2 может
+# не запуститься. Наивное «любой ненулевой код = не прошло» превращает штатное
+# предупреждение в отказ обновления с откатом — а на роутере владельца такое
+# предупреждение есть прямо сейчас, то есть откатывалось бы КАЖДОЕ обновление,
+# объявившее validate-config.
+mkdir -p "$SB/zd"
+ZAPRET2_DIR="$SB/zd"; export ZAPRET2_DIR
+_mkval() { printf '#!/bin/sh\nexit %s\n' "$1" > "$SB/zd/z2k-config-validator.sh"; chmod +x "$SB/zd/z2k-config-validator.sh"; }
+_mkval 0; assert_eq "валидатор: чисто — идём дальше"          "0" "$(au_step_validate_config; echo $?)"
+_mkval 1; assert_eq "валидатор: предупреждения — идём дальше" "0" "$(au_step_validate_config; echo $?)"
+_mkval 2; assert_eq "валидатор: ошибки — ВЕТО"                "1" "$(au_step_validate_config; echo $?)"
+_mkval 127; assert_eq "валидатор: неизвестный код — ВЕТО"     "1" "$(au_step_validate_config; echo $?)"
+rm -f "$SB/zd/z2k-config-validator.sh"
+assert_eq "валидатора нет — ВЕТО (доставка не сработала)"     "1" "$(au_step_validate_config; echo $?)"
+unset ZAPRET2_DIR
+
 # Исполнение: подменяем действия наблюдаемыми заглушками.
 : > "$SB/done.log"
 au_step_regen_strategies(){ echo regen-strategies >> "$SB/done.log"; }

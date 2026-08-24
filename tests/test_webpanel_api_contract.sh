@@ -244,11 +244,23 @@ cat > "$SB/ndmc-stub" <<'NSTUB'
 #!/bin/sh
 printf '                  mac: 6c:15:db:10:cc:7a\n                   ip: 10.1.30.147\n             hostname: LGwebOSTV\n                 name: Телевизор "LG"\n            interface: \n                     name: Guest\n           registered: yes\n               active: yes\n'
 printf '                  mac: AA:BB:CC:DD:EE:FF\n                   ip: 192.168.1.77\n             hostname: PS5-xyz\n                 name: aa:bb:cc:dd:ee:ff - Home network - 2026-01-24\n            interface: \n                     name: Home\n           registered: no\n               active: no\n'
+# Устройство НЕ В СЕТИ: ip и сегмент пусты — ровно это Марк увидел на панели
+# (имя стояло на месте адреса, а на месте имени и сегмента — нули). Причина не
+# косметическая: таб входит в число IFS-ПРОБЕЛЬНЫХ символов, поэтому `read`
+# схлопывает два подряд идущих таба в один разделитель, и все поля после
+# пустого съезжают влево. У офлайн-устройства пустых полей ДВА.
+printf '                  mac: de:ad:be:ef:00:01\n                   ip: 0.0.0.0\n             hostname: \n                 name: Jellyfin\n           registered: yes\n               active: no\n'
 NSTUB
 chmod +x "$SB/ndmc-stub"; WARP_NDMC="$SB/ndmc-stub"; export WARP_NDMC
 OUT=$(cgi GET /warp/neighbors "" | cgi_body)
 assert_eq "warp/neighbors — валидный JSON"      "1" "$(json_ok_p "$OUT")"
-assert_eq "warp/neighbors — два устройства"     "2" "$(jget "$OUT" 'len(d["devices"])')"
+assert_eq "warp/neighbors — три устройства"     "3" "$(jget "$OUT" 'len(d["devices"])')"
+_off='[x for x in d["devices"] if x["mac"]=="de:ad:be:ef:00:01"][0]'
+assert_eq "офлайн: имя на месте имени"          "Jellyfin" "$(jget "$OUT" "${_off}[\"label\"]")"
+assert_eq "офлайн: адрес пуст, а не имя"        "" "$(jget "$OUT" "${_off}[\"ip\"]")"
+assert_eq "офлайн: сегмент пуст, а не ноль"     "" "$(jget "$OUT" "${_off}[\"net\"]")"
+assert_eq "офлайн: active=false"                "false" "$(jget "$OUT" "${_off}[\"active\"]")"
+assert_eq "офлайн: on=false"                    "false" "$(jget "$OUT" "${_off}[\"on\"]")"
 assert_eq "warp/neighbors — имя из Keenetic без кавычек" "Телевизор LG" "$(jget "$OUT" '[x for x in d["devices"] if x["mac"]=="6c:15:db:10:cc:7a"][0]["label"]')"
 assert_eq "warp/neighbors — hostname вместо авто-имени Keenetic" "PS5-xyz" "$(jget "$OUT" '[x for x in d["devices"] if x["mac"]=="aa:bb:cc:dd:ee:ff"][0]["label"]')"
 assert_eq "warp/neighbors — on по devices.txt"  "true" "$(jget "$OUT" '[x for x in d["devices"] if x["mac"]=="aa:bb:cc:dd:ee:ff"][0]["on"]')"

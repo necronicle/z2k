@@ -28,8 +28,12 @@ ssh_r 'sh /opt/zapret2/z2k-auto-update.sh check 2>&1 | tail -5'
 
 RX0=$(ssh_r "$RX" | tr -d '\r'); T0=$(ssh_r 'date +%s' | tr -d '\r')
 
+# Z2K_AU_NO_JITTER=1 обязателен. Плановый разброс 0..90 мин включается по
+# признаку «stdin не терминал», а ssh без tty выглядит ровно так — прогон уходил
+# спать до полутора часов с пустым выводом. Панель и меню флаг ставят
+# (webpanel/cgi/actions.sh, lib/menu.sh), замер обязан вести себя так же.
 step "обновление"
-ssh_r 'Z2K_AU_MANUAL=1 sh /opt/zapret2/z2k-auto-update.sh apply 2>&1 | tail -25' || fail "обновление вернуло ошибку"
+ssh_r 'Z2K_AU_MANUAL=1 Z2K_AU_NO_JITTER=1 sh /opt/zapret2/z2k-auto-update.sh apply 2>&1 | tail -25' || fail "обновление вернуло ошибку"
 
 T1=$(ssh_r 'date +%s' | tr -d '\r'); RX1=$(ssh_r "$RX" | tr -d '\r')
 AFTER=$(ssh_r 'cat /opt/zapret2/.z2k-installed-tag 2>/dev/null' | tr -d '\r')
@@ -40,9 +44,12 @@ printf '\nбыло: %s → стало: %s\nвремя: %s с\nскачано: %s
 step "сервис жив"
 ssh_r 'pgrep -f nfqws2 >/dev/null 2>&1' || fail "nfqws2 не работает после обновления"
 printf 'nfqws2 работает\n'
-ssh_r 'sh /opt/zapret2/z2k-config-validator.sh /opt/zapret2/config >/dev/null 2>&1' \
+# Коды валидатора: 0 — чисто, 1 — предупреждения, 2 — ошибки. Предупреждения
+# («дублирующийся фильтр между профилями») есть на живых роутерах и обновление
+# не порочат; падать нужно на ошибках.
+ssh_r 'sh /opt/zapret2/z2k-config-validator.sh /opt/zapret2/config >/dev/null 2>&1; [ $? -le 1 ]' \
     || fail "конфиг не проходит валидацию ПОСЛЕ обновления"
-printf 'конфиг валиден\n'
+printf 'конфиг валиден (ошибок нет)\n'
 ssh_r 'sh /opt/zapret2/z2k-diag.sh 2>/dev/null | sed -n "/=== что не так ===/,/^$/p"'
 
 step "дерево сошлось с манифестом"
@@ -58,7 +65,7 @@ ssh_r 'Z2K_AU_SOURCE_ONLY=1 . /opt/zapret2/lib/utils.sh 2>/dev/null
 
 step "идемпотентность: второй прогон не делает ничего"
 T2=$(ssh_r 'date +%s' | tr -d '\r')
-ssh_r 'Z2K_AU_MANUAL=1 sh /opt/zapret2/z2k-auto-update.sh apply 2>&1 | tail -3'
+ssh_r 'Z2K_AU_MANUAL=1 Z2K_AU_NO_JITTER=1 sh /opt/zapret2/z2k-auto-update.sh apply 2>&1 | tail -3'
 T3=$(ssh_r 'date +%s' | tr -d '\r')
 printf 'повторный прогон: %s с\n' "$((T3 - T2))"
 [ "$((T3 - T2))" -le 30 ] || fail "повторный прогон занял $((T3 - T2)) с — сходимость не идемпотентна"

@@ -1552,7 +1552,16 @@ warp_neighbors() {
         }
         label = name; if (label == "") label = host; if (label == "") label = mac
         if (ip == "0.0.0.0") ip = ""
-        printf "%s\t%s\t%s\t%s\t%d\t%d\n", mac, ip, label, net, active, (mac in on)
+        # Разделитель — \037 (unit separator), а НЕ таб.
+        #
+        # Таб входит в число IFS-ПРОБЕЛЬНЫХ символов, и `read` схлопывает
+        # подряд идущие пробельные разделители в один — даже когда IFS явно
+        # выставлен ровно в таб. У офлайн-устройства пусты и адрес, и сегмент:
+        # два таба подряд превращались в один, все поля съезжали влево, и
+        # панель показывала имя на месте адреса, а на месте имени и сегмента —
+        # остатки числовых полей. \037 пробельным не является, пустые поля
+        # переживают чтение, и в выводе ndmc он встретиться не может.
+        printf "%s\037%s\037%s\037%s\037%d\037%d\n", mac, ip, label, net, active, (mac in on)
         mac = ""; ip = ""; host = ""; name = ""; net = ""; active = 0
     }
     {
@@ -1565,7 +1574,7 @@ warp_neighbors() {
         else if (k == "name:" && iface) { net = v; iface = 0 }
         else if (k == "active:") active = (v == "yes")
     }
-    END { flush() }' | awk -F'\t' '{ gsub(/"/, "", $3); print }' OFS='\t' | sort -t "$(printf '\t')" -k5,5r -k3,3f
+    END { flush() }' | awk -F'\037' '{ gsub(/"/, "", $3); print }' OFS='\037' | sort -t "$(printf '\037')" -k5,5r -k3,3f
 }
 
 # Включить/выключить устройство по MAC: строка в devices.txt добавляется или

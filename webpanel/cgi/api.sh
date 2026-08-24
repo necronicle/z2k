@@ -604,7 +604,9 @@ case "$method $path" in
         json_header
         printf '{"ok":true,"devices":['
         _first=1
-        warp_neighbors | while IFS="$(printf '\t')" read -r n_mac n_ip n_label n_net n_active n_on; do
+        # \037, не таб: таб — IFS-пробельный, и пустые поля офлайн-устройств
+        # (нет адреса, нет сегмента) схлопывались бы вместе с разделителями.
+        warp_neighbors | while IFS="$(printf '\037')" read -r n_mac n_ip n_label n_net n_active n_on; do
             [ "$_first" = 1 ] || printf ','
             _first=0
             printf '{"mac":'; json_string "$n_mac"
