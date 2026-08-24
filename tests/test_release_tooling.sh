@@ -336,16 +336,24 @@ else
     no "release.sh сохраняет files_sha256 в манифесте" "карта на месте" "карта потеряна"
 fi
 
-# Порядок ключей важен: генератор вставляет блок сразу после "current", и
+# Порядок ключей важен: генератор вставляет блоки сразу после "current", и
 # построчный awk-парсер апдейтера рассчитывает на записи истории по одной в строке.
+#
+# install_map необязателен: этот манифест — ЗАКОММИЧЕННЫЙ, а карта появляется в
+# нём только с первым релизом нового генератора. Проверяем не наличие, а место:
+# если карта есть, она обязана стоять между "current" и files_sha256.
 if python3 -c "
 import json,sys
 m=json.load(open('UPDATES.json'))
-sys.exit(0 if list(m.keys())==['schema','branch','seq','current','files_sha256','history'] else 1)
+head=['schema','branch','seq','current']
+tail=['files_sha256','history']
+want=head + (['install_map'] if 'install_map' in m else []) + tail
+sys.exit(0 if list(m.keys())==want else 1)
 " 2>/dev/null; then
     ok "порядок ключей манифеста сохранён"
 else
-    no "порядок ключей манифеста сохранён" "schema,branch,seq,current,files_sha256,history" "другой"
+    no "порядок ключей манифеста сохранён" "schema,branch,seq,current[,install_map],files_sha256,history" \
+       "$(python3 -c "import json;print(','.join(json.load(open('UPDATES.json')).keys()))" 2>/dev/null)"
 fi
 
 if [ "$(grep -c '^{"v":' UPDATES.json)" -gt 1 ]; then

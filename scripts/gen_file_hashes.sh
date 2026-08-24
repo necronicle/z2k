@@ -58,8 +58,9 @@ fi
 . ./lib/release_map.sh
 
 BLOCK=$(mktemp) || exit 1
+MAPBLOCK=$(mktemp) || exit 1
 OUT=$(mktemp) || exit 1
-trap 'rm -f "$BLOCK" "$OUT"' EXIT
+trap 'rm -f "$BLOCK" "$MAPBLOCK" "$OUT"' EXIT
 
 # Pin the panel's cache-buster to the release BEFORE hashing, or the digest we
 # publish for index.html is the one from before the rewrite — the map then needs
@@ -150,6 +151,7 @@ _verify_only() {
 }
 
 n=0
+m=0
 for f in $(git ls-files | LC_ALL=C sort); do
     [ -f "$f" ] || continue
     [ "$f" = "$MANIFEST" ] && continue          # cannot contain its own digest
@@ -158,21 +160,34 @@ for f in $(git ls-files | LC_ALL=C sort); do
     fi
     printf '  "%s": "%s",\n' "$f" "$(_sha "$f")" >> "$BLOCK"
     n=$((n + 1))
+    # install_map — куда класть. Едет ДАННЫМИ, потому что обновление выполняет
+    # старый апдейтер, который шаблонов новых путей не знает: пока он выводил
+    # адрес сам, файл нового класса терялся, а версия уезжала вперёд.
+    _targets=$(z2k_install_paths "$f" 2>/dev/null)
+    [ -n "$_targets" ] || continue
+    _json=$(printf '%s\n' "$_targets" | awk 'NF {printf "%s\"%s\"", (c++ ? ", " : ""), $0}')
+    printf '  "%s": [%s],\n' "$f" "$_json" >> "$MAPBLOCK"
+    m=$((m + 1))
 done
 [ "$n" -gt 0 ] || { echo "не найдено ни одного доставляемого файла — генерация прервана" >&2; exit 1; }
 
 # Strip the trailing comma of the last pair (JSON has no trailing commas).
 sed -i.bak '$ s/,$//' "$BLOCK" && rm -f "${BLOCK}.bak"
+sed -i.bak '$ s/,$//' "$MAPBLOCK" && rm -f "${MAPBLOCK}.bak"
 
 # Rebuild: everything as-is, minus any previous block of ours, plus a fresh one
 # straight after "current". awk state machine, so no dependence on where the old
 # block happened to sit.
-awk -v blockfile="$BLOCK" '
-    /^[[:space:]]*"files_sha256"[[:space:]]*:[[:space:]]*\{/ { skipping = 1; next }
+awk -v blockfile="$BLOCK" -v mapfile="$MAPBLOCK" '
+    /^[[:space:]]*"(files_sha256|install_map)"[[:space:]]*:[[:space:]]*\{/ { skipping = 1; next }
     skipping && /^[[:space:]]*\},?[[:space:]]*$/            { skipping = 0; next }
     skipping                                                { next }
     { print }
     /^[[:space:]]*"current"[[:space:]]*:/ && !emitted {
+        print "  \"install_map\": {"
+        while ((getline line < mapfile) > 0) print line
+        close(mapfile)
+        print "  },"
         print "  \"files_sha256\": {"
         while ((getline line < blockfile) > 0) print line
         close(blockfile)
@@ -187,6 +202,7 @@ if command -v python3 >/dev/null 2>&1; then
         || { echo "результат не парсится как JSON — исходник не тронут" >&2; exit 1; }
 fi
 grep -q '"files_sha256"' "$OUT" || { echo "блок не вставился — исходник не тронут" >&2; exit 1; }
+grep -q '"install_map"' "$OUT" || { echo "install_map не вставился — исходник не тронут" >&2; exit 1; }
 
 cat "$OUT" > "$MANIFEST"
-printf 'files_sha256: %d файлов\n' "$n"
+printf 'files_sha256: %d файлов, install_map: %d целей\n' "$n" "$m"

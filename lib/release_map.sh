@@ -19,6 +19,12 @@ z2k_install_paths() {
     local repo_path="$1"
     local zd="${ZAPRET2_DIR:-/opt/zapret2}"
     case "$repo_path" in
+        lib/release_map.sh)
+            # Сам себя не доставляет. Общий lib/* ниже утащил бы этот модуль на
+            # роутер, где его никто не читает: адреса и последствия приезжают
+            # туда данными в манифесте, а не кодом. Мёртвый файл в /opt/zapret2/lib
+            # стоил бы одной лишней загадки при следующем разборе.
+            : ;;
         files/lua/*)
             echo "${zd}/lua/${repo_path#files/lua/}"
             ;;
