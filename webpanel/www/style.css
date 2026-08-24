@@ -2416,3 +2416,91 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .modal { max-height: none; }
   .modal pre.log { min-height: 120px; }
 }
+
+/* ── Проверка DNS ────────────────────────────────────────────────────────────
+   Три группы по путям, и больше ничего: сводки стоят в их заголовках, свой
+   резолвер помечен в строке. Цвета состояний — семантические токены
+   (--good/--warn/--bad), а не акцент: акцент означает «сюда можно нажать»,
+   и путать его с «всё плохо» нельзя. */
+.dns-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 500; white-space: nowrap;
+  border: 1px solid currentColor; border-radius: 999px; padding: 2px 10px;
+}
+.dns-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.dns-good { color: var(--good); }
+.dns-warn { color: var(--warn); }
+.dns-bad  { color: var(--bad); }
+
+.dns-group { border: 1px solid var(--border); border-radius: 6px; margin-top: var(--space-8); overflow: hidden; }
+.dns-group > summary {
+  cursor: pointer; list-style: none;
+  padding: var(--space-12) var(--space-16);
+  display: flex; align-items: center; gap: var(--space-8);
+  background: var(--bg-subtle); font-weight: 500; font-size: 14px;
+}
+.dns-group > summary::-webkit-details-marker { display: none; }
+.dns-group > summary::after { content: "▾"; margin-left: auto; color: var(--text-muted); font-size: 12px; }
+.dns-group[open] > summary::after { content: "▴"; }
+.dns-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dns-count { color: var(--text-muted); font-weight: 400; }
+.dns-group ul { margin: 0; padding: var(--space-8) var(--space-16) var(--space-16); list-style: none; }
+.dns-group li {
+  display: flex; justify-content: space-between; gap: var(--space-16);
+  padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 14px;
+}
+.dns-group li:last-child { border-bottom: none; }
+/* Цифры в правой колонке выравниваются по разрядам — иначе «124 мс» и «98 мс»
+   пляшут относительно друг друга. */
+.dns-metric { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.dns-own { margin-top: var(--space-24); padding-top: var(--space-16); border-top: 1px solid var(--border); }
+.dns-own label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.dns-own textarea {
+  width: 100%; min-height: 76px; resize: vertical;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: var(--space-8) var(--space-12);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.6;
+}
+.dns-own textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Метка текущего резолвера. Приглушённая рамка, а не цвет состояния: это не
+   вердикт, а ответ на вопрос «который из них мой». */
+.dns-cur {
+  font-size: 11px; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 8px; margin-left: 6px; white-space: nowrap;
+}
+/* Подпись пути в строке результата. Приглушённая и в верхнем регистре: это
+   ярлык колонки, а не значение, и он не должен спорить с самим вердиктом. */
+.dns-proto {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted); opacity: 0.8; margin-right: 2px;
+}
+.dns-sep { color: var(--border); margin: 0 6px; }
+.dns-group li .dns-metric { text-align: right; }
+/* Заголовок группы-пути: название пути, пояснение мелким, сводка справа.
+   Три уровня подряд, поэтому вес и цвет убывают слева направо — иначе строка
+   читается как три равноправных ярлыка и распадается. */
+.dns-path { font-weight: 600; }
+.dns-group > summary .dns-count { font-size: 12px; }
+.dns-tally {
+  margin-left: auto; margin-right: var(--space-12);
+  font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.dns-state { white-space: nowrap; font-size: 13px; }
+.dns-state .dns-metric { margin-left: 6px; }
+@media (max-width: 560px) {
+  .dns-group > summary { flex-wrap: wrap; }
+  .dns-tally { margin-left: 0; width: 100%; }
+  .dns-group li { flex-direction: column; gap: 2px; }
+  .dns-state { text-align: left; }
+}
+/* Сервер жив и честен, но адреса для ютуба не даёт — состоянием пути этого не
+   видно, поэтому отдельной пометкой. */
+.dns-yt {
+  font-size: 11px; color: var(--bad);
+  border: 1px solid var(--bad); border-radius: 999px;
+  padding: 1px 8px; margin-left: 6px; white-space: nowrap;
+}

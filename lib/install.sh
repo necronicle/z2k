@@ -2291,7 +2291,7 @@ TMPJUNK
     # installs (r-18). Every tool here is load-bearing, so every tool gets the
     # same treatment: WORK_DIR if present, network if not, and a loud line if
     # neither worked instead of a silent stale file.
-    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh z2k-warp.sh; do
+    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-stats-upload.sh z2k-warp.sh z2k-dns-check.sh; do
         if deploy_critical_file "files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 755; then
             print_info "Установлен: ${tool_script}"
         else

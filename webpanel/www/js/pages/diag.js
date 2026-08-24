@@ -1,8 +1,10 @@
-import { apiGet, apiGetText, apiPost, errHtml, errMsg, setUnauthorizedHandler, toastErr } from "../core/api.js";
+import { apiGet, apiGetText, apiPost, apiPostText, errHtml, errMsg, setUnauthorizedHandler, toastErr } from "../core/api.js";
 import { showLoginScreen } from "../core/auth.js";
 import { copyToClipboard } from "../core/clipboard.js";
 import { $app, escapeHtml, skeletonLines } from "../core/dom.js";
 import { _newLoad, _stale } from "../core/loadorder.js";
+import { JOB_FAIL, awaitPanelBack, jobOutcome, jobUnresolved, openJobModal, unresolvedMsg } from "../job.js";
+import { toast } from "../core/toast.js";
 
 // ЭКРАН ВХОДА.
 //
@@ -136,6 +138,37 @@ export async function renderDiag() {
       <div id="probe-result"></div>
     </div>
 
+    <!-- Проверка DNS идёт следом за проверкой домена: оба отвечают на «почему
+         не открывается», только эта — про слой имён. Сводка ниже, она для
+         пересылки в чат, а не для чтения здесь. -->
+    <div class="card">
+      <div class="row-between">
+        <div>
+          <h3>Проверка DNS</h3>
+          <p class="desc">
+            Проверяем три пути к каждому серверу: <b>обычный DNS</b> (порт 53,
+            без шифрования), <b>DoH</b> (внутри HTTPS) и <b>DoT</b> (внутри TLS,
+            порт 853). Быстрый
+            ответ ещё не значит правдивый: перехваченный запрос возвращается
+            быстрее всех, потому что отвечает не тот, кого спросили. Ничего не
+            меняет, занимает около минуты.
+          </p>
+        </div>
+        <button class="btn btn-primary" id="dns-run">Проверить</button>
+      </div>
+      <div id="dns-result"></div>
+      <div class="dns-own">
+        <label for="dns-own-text">Свои серверы</label>
+        <textarea id="dns-own-text" spellcheck="false" autocapitalize="none"
+                  placeholder="1.1.1.2&#10;https://dns.example.org/dns-query"></textarea>
+        <p class="desc" style="margin:6px 0 10px">
+          По одному в строке: адрес для обычного DNS или ссылка для DoH.
+          Проверяются вместе с остальными.
+        </p>
+        <button class="btn" id="dns-own-save">Сохранить</button>
+      </div>
+    </div>
+
     <div class="card">
       <h3>Сводка z2k-diag</h3>
       <p class="desc">
@@ -154,6 +187,10 @@ export async function renderDiag() {
       <pre class="log" id="diag-output"><span class="skel-text">${skeletonLines(10)}</span></pre>
     </div>
   `;
+  document.getElementById("dns-run").addEventListener("click", dnsRun);
+  document.getElementById("dns-own-save").addEventListener("click", dnsOwnSave);
+  loadDnsLast();
+
   document.getElementById("diag-refresh").addEventListener("click", loadDiag);
   document.getElementById("diag-copy").addEventListener("click", () => {
     // Пока на месте скелет, копировать нечего: кнопка отдавала пустую строку и
@@ -208,5 +245,154 @@ async function loadDiag() {
   } catch (e) {
     if (_stale("diag", seq)) return;
     el.textContent = "Ошибка: " + errMsg(e);
+  }
+}
+
+
+// ---- проверка DNS -----------------------------------------------------------
+//
+// Раскладка «сначала вывод»: крупная строка о том, что происходит, под ней три
+// группы — работают / подменяют / молчат. Человек приходит сюда с вопросом
+// «что мне делать», а не «покажи таблицу»; цифры доступны, но не первыми.
+
+// ГРУППИРУЕМ ПО ПУТИ, А НЕ ПО СЕРВЕРУ.
+//
+// Сначала группы были «доходят целыми / ответы подменяются», то есть про
+// сервер, а состояние в строке — про путь. Quad9 с подменённым обычным ответом
+// и целым DoH попадал в «доходят целыми», и заголовок спорил с собственным
+// содержимым: «доходят целыми» напротив «ответ подменён».
+//
+// Спорить нечему, когда группа и строка говорят об одном. Путь — это и есть
+// то, что проверяется и что человек меняет: обычный DNS отравлен, шифрованный
+// цел, и вывод «включите DoH» читается прямо из структуры, а не из сносок.
+
+const DNS_STATE = {
+  works: { cls: "good", label: "честно" },
+  spoof: { cls: "bad", label: "ответ подменён" },
+  silent: { cls: "warn", label: "не ответил" },
+};
+
+function dnsPathGroup(title, sub, list, openIt) {
+  if (!list.length) return "";
+  const bad = list.filter(x => x.state === "spoof").length;
+  const mute = list.filter(x => x.state === "silent").length;
+  const ok = list.filter(x => x.state === "works").length;
+
+  // Состояние группы — по её содержимому: если целых нет вовсе, путь мёртв.
+  const cls = ok === 0 ? (bad ? "bad" : "warn") : bad ? "bad" : "good";
+  const tally = [
+    ok ? `${ok} целых` : "",
+    bad ? `${bad} подменено` : "",
+    mute ? `${mute} без ответа` : "",
+  ].filter(Boolean).join(" · ");
+
+  const rows = list.map(x => {
+    const st = DNS_STATE[x.state] || DNS_STATE.silent;
+    const ms = x.ms != null ? ` <span class="dns-metric">${x.ms} мс</span>` : "";
+    const tag = x.current ? ` <span class="dns-cur">используется сейчас</span>` : "";
+    // Отдельная пометка: сервер жив и честен, но адреса для ютуба не даёт.
+    // Снаружи это выглядит как «интернет есть, а видео не открывается», и по
+    // состоянию пути такое не видно — путь-то в порядке.
+    const yt = x.yt === "empty" ? ` <span class="dns-yt">нет адреса для youtube.com</span>` : "";
+    return `<li>
+      <span>${escapeHtml(x.name)}${tag}${yt}</span>
+      <span class="dns-state dns-${st.cls}">${st.label}${ms}</span>
+    </li>`;
+  }).join("");
+
+  return `
+    <details class="dns-group"${openIt ? " open" : ""}>
+      <summary>
+        <span class="dns-path">${escapeHtml(title)}</span>
+        <span class="dns-count">${escapeHtml(sub)}</span>
+        <span class="dns-tally dns-${cls}">${escapeHtml(tally)}</span>
+      </summary>
+      <ul>${rows}</ul>
+    </details>`;
+}
+
+function renderDnsResult(d) {
+  const host = document.getElementById("dns-result");
+  if (!host) return;
+  if (!d) {
+    host.innerHTML = `<p class="desc" style="margin-top:12px">Проверка ещё не запускалась.</p>`;
+    return;
+  }
+  const srv = d.servers || [];
+  const plain = srv.filter(s => s.udp !== "none").map(s => ({ name: s.name, state: s.udp, ms: null, current: s.current, yt: s.yt }));
+  const doh = srv.filter(s => s.doh !== "none").map(s => ({ name: s.name, state: s.doh, ms: s.doh_ms, current: s.current, yt: s.yt }));
+  // DoT — только состояние, без времени: ожидание опрашивается посекундно
+  // (дробного sleep на busybox нет), и любое «время» отсюда врало бы на порядок.
+  const dot = srv.filter(s => s.dot !== "none").map(s => ({ name: s.name, state: s.dot, ms: null, current: s.current, yt: s.yt }));
+
+  // Сводного блока здесь БОЛЬШЕ НЕТ, и это снятие, а не пропажа.
+  //
+  // Он повторял то, что и так стоит в заголовках групп: сколько путей целы,
+  // сколько подменено. Свой резолвер помечен прямо в строке, ютуб — ярлыком у
+  // имени. Единственный факт, которого больше нигде не было, — адрес заглушки;
+  // он переехал в подпись группы обычного DNS, где и объясняет её состояние.
+  const stubNote = d.stub ? `порт 53, без шифрования · заглушка ${escapeHtml(d.stub)}` : "порт 53, без шифрования";
+  host.innerHTML = `
+    ${dnsPathGroup("Обычный DNS", stubNote, plain, true)}
+    ${dnsPathGroup("Шифрованный DoH", "запрос внутри HTTPS", doh, true)}
+    ${dnsPathGroup("Шифрованный DoT", "запрос внутри TLS, порт 853", dot, false)}`;
+}
+
+async function loadDnsLast() {
+  const seq = _newLoad("dnsCheck");
+  let d;
+  try {
+    d = await apiGet("/dns/check");
+  } catch (e) {
+    return;
+  }
+  if (_stale("dnsCheck", seq)) return;
+  const ta = document.getElementById("dns-own-text");
+  if (ta && typeof d.own === "string") ta.value = d.own;
+  renderDnsResult(d.result);
+}
+
+async function dnsRun() {
+  const btn = document.getElementById("dns-run");
+  btn.disabled = true;
+  let resp;
+  try {
+    resp = await apiPost("/dns/check", {});
+  } catch (e) {
+    btn.disabled = false;
+    toastErr("Не удалось запустить проверку: ", e);
+    return;
+  }
+  openJobModal("Проверяю серверы имён", resp.job, {
+    onDone: (d) => {
+      btn.disabled = false;
+      const outcome = jobOutcome(d);
+      if (outcome === JOB_FAIL) toast("Проверка не прошла — причина в логе выше", "bad");
+      else if (jobUnresolved(outcome)) {
+        const m = unresolvedMsg(outcome);
+        if (m) toast(m, "bad");
+        awaitPanelBack().then(() => loadDnsLast());
+        return;
+      }
+      loadDnsLast();
+    },
+  });
+}
+
+async function dnsOwnSave() {
+  const btn = document.getElementById("dns-own-save");
+  const ta = document.getElementById("dns-own-text");
+  btn.disabled = true;
+  try {
+    const r = await apiPostText("/dns/own", ta.value);
+    toast("Сохранено");
+    if (r && r.saved) {
+      const dropped = /dropped=(\d+)/.exec(r.saved);
+      if (dropped && dropped[1] !== "0") toast(`Строк отброшено: ${dropped[1]} — не адрес и не ссылка`, "bad");
+    }
+  } catch (e) {
+    toastErr("Не сохранилось: ", e);
+  } finally {
+    btn.disabled = false;
   }
 }
