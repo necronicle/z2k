@@ -21,7 +21,7 @@ fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 RX='cat /sys/class/net/$(ip route show default 2>/dev/null | awk "{print \$5; exit}")/statistics/rx_bytes 2>/dev/null || echo 0'
 
 step "исходное состояние"
-BEFORE=$(ssh_r 'cat /opt/zapret2/.installed-tag 2>/dev/null' | tr -d '\r')
+BEFORE=$(ssh_r 'cat /opt/zapret2/.z2k-installed-tag 2>/dev/null' | tr -d '\r')
 [ -n "$BEFORE" ] || fail "не читается .installed-tag — роутер недоступен или z2k не установлен"
 printf 'установлено: %s\n' "$BEFORE"
 ssh_r 'sh /opt/zapret2/z2k-auto-update.sh check 2>&1 | tail -5'
@@ -32,7 +32,7 @@ step "обновление"
 ssh_r 'Z2K_AU_MANUAL=1 sh /opt/zapret2/z2k-auto-update.sh apply 2>&1 | tail -25' || fail "обновление вернуло ошибку"
 
 T1=$(ssh_r 'date +%s' | tr -d '\r'); RX1=$(ssh_r "$RX" | tr -d '\r')
-AFTER=$(ssh_r 'cat /opt/zapret2/.installed-tag 2>/dev/null' | tr -d '\r')
+AFTER=$(ssh_r 'cat /opt/zapret2/.z2k-installed-tag 2>/dev/null' | tr -d '\r')
 printf '\nбыло: %s → стало: %s\nвремя: %s с\nскачано: %s КБ (счётчик WAN, вместе с посторонним трафиком)\n' \
     "$BEFORE" "$AFTER" "$((T1 - T0))" "$(( (RX1 - RX0) / 1024 ))"
 [ "$AFTER" != "$BEFORE" ] || printf 'версия не изменилась — либо уже последняя, либо обновление отказало (см. лог выше)\n'
