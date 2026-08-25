@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 42,
-  "current": "p-79.16",
+  "seq": 43,
+  "current": "p-79.17",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -196,7 +196,7 @@
   "files/z2k-blocked-monitor.sh": "a998797d7796859ec95d74d52b9f732dc89bf14a44351ac23e9c0632656767d2",
   "files/z2k-config-validator.sh": "30a4c557fae94db49227318ed98e09b80651f4692b75da0b74830ddec90186eb",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "dd92fb1e9aee672cf5966d1967c41b44db067e6c20a6873efa6c7a544f59592a",
+  "files/z2k-diag.sh": "60df00284d69fb4f3f8ac77f256704020a4db5069c1c3e246cf5cdd3b9a4257e",
   "files/z2k-dns-check.sh": "077964013ff52e425d73416354dd4c7214068bb6ded6262c8374168ab67eb287",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "516839c1e52913a88fc4eb94ff9ba0c84f744fc626740f7f1e06d62c57b0fb7d",
@@ -250,7 +250,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "6b7e51c90125dd128d40ed1b0e05e23b868e1e3323713fb272964d88170d6250",
+  "webpanel/www/index.html": "d9ccbb6904e8d2edc640f63e514e559d74a054a547550ae24a3d43b40ba7afa9",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -473,6 +473,7 @@
 {"v": "p-79.13", "type": "patch", "ts": "2026-08-24T21:53:17Z", "ref": "p-79.13", "desc": "Появилась проверка DNS в разделе «Диагностика»: она показывает, подменяет ли провайдер ответы серверов имён, и какими серверами можно пользоваться — обычными, DoH и DoT. Свои серверы можно добавить в проверку. WARP теперь сам переснимает регистрацию, если ему достался заблокированный в России адрес, а настройки веб-панели больше не сбрасываются при обновлении.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "files/z2k-update-lists.sh", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "webpanel/www/style.css", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-79.14", "type": "patch", "ts": "2026-08-24T22:38:53Z", "ref": "p-79.14", "desc": "Журнал обновления теперь показывает, какой файл скачивается и сколько осталось — раньше он надолго замолкал, и обновление выглядело зависшим. Проверка DNS в «Диагностике» открывается свёрнутой. Предупреждение о перерегистрации WARP переехало в окно подтверждения, чтобы не путать с соседними кнопками.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-79.15", "type": "patch", "ts": "2026-08-25T07:21:46Z", "ref": "p-79.15", "desc": "WARP теперь считает туннель рабочим только после того, как убедится, что через него действительно идут данные — раньше на некоторых сетях соединение объявлялось готовым, а трафик уходил в никуда. Обновление из терминала больше не обрывается молча на середине. Диагностика не сообщает о неисправности Telegram, если туннель выключен вручную, и показывает состояние адресов Instagram и WhatsApp.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-79.16", "type": "patch", "ts": "2026-08-25T10:37:22Z", "ref": "p-79.16", "desc": "Обновления стали заметно быстрее: подготовка к установке занимала около сорока секунд без единого сообщения на экране — теперь она проходит мгновенно. В проверке DNS исправлено сохранение своих серверов и добавлено время ответа для DoT.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "lib/auto_update.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-79.16", "type": "patch", "ts": "2026-08-25T10:37:22Z", "ref": "p-79.16", "desc": "Обновления стали заметно быстрее: подготовка к установке занимала около сорока секунд без единого сообщения на экране — теперь она проходит мгновенно. В проверке DNS исправлено сохранение своих серверов и добавлено время ответа для DoT.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "lib/auto_update.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-79.17", "type": "patch", "ts": "2026-08-25T14:36:11Z", "ref": "p-79.17", "desc": "В диагностике исправлен адрес роутера: у подключений IPoE там мог оказаться адрес провайдера вместо адреса домашней сети.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
