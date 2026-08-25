@@ -502,3 +502,21 @@ func TestRepairBadEndpoint(t *testing.T) {
 		}
 	})
 }
+
+// Отсутствие device.json — штатное состояние, а не провал перерегистрации.
+//
+// Поле 2026-08-25: на старте без регистрации в журнал уезжало
+// «endpoint: перерегистрация не удалась (open …/device.json: no such file or
+// directory)», и приславший диагностику решил, что WARP не поднялся из-за
+// этого. Молчать надо, а не пугать.
+func TestRepairSilentWhenNoDevice(t *testing.T) {
+	c := &Client{}
+	d, done, err := c.RepairBadEndpoint(context.Background(),
+		filepath.Join(t.TempDir(), "нет-такого.json"))
+	if err != nil {
+		t.Fatalf("отсутствие файла отдано ошибкой: %v", err)
+	}
+	if done || d != nil {
+		t.Fatalf("чинить было нечего, а функция что-то вернула: done=%v d=%+v", done, d)
+	}
+}

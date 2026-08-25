@@ -7,6 +7,8 @@
 package main
 
 import (
+	"net"
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/necronicle/z2k/z2k-warpd/internal/account"
 	"github.com/necronicle/z2k/z2k-warpd/internal/engine"
+	"github.com/necronicle/z2k/z2k-warpd/internal/ladder"
 	"github.com/necronicle/z2k/z2k-warpd/internal/logrot"
 	"github.com/necronicle/z2k/z2k-warpd/internal/status"
 	"github.com/necronicle/z2k/z2k-warpd/internal/transport"
@@ -38,6 +41,15 @@ const (
 	defaultDevice = "/opt/etc/z2k-warp/device.json"
 	defaultStatus = "/tmp/z2k-warp/status.json"
 	defaultLog    = "/tmp/z2k-warp/warpd.log"
+	// Запасные эндпоинты — ДАННЫЕ. Файл доставляется обновлением и правится без
+	// пересборки бинарников под пять арок; нет файла — работает встроенный
+	// список.
+	//
+	// РЯДОМ С каталогом lists/warp, а НЕ внутри: туда складывают
+	// пользовательские списки адресов, и всё, что там лежит, попадает в ipset
+	// z2k_warp. Наши эндпоинты оказались бы завёрнуты в тот самый туннель,
+	// через который к ним и идёт подключение.
+	defaultEndpoints = "/opt/zapret2/lists/warp-endpoints.txt"
 	logMax        = 256 * 1024
 )
 
@@ -121,6 +133,30 @@ func repairBadEndpoint(devPath, proxy string, logf func(string, ...any)) {
 	}
 }
 
+// readEndpoints — по адресу на строку, «#» комментарий. Мусор пропускаем
+// молча: файл правят руками, и одна кривая строка не должна лишать роутера
+// всех запасных адресов.
+func readEndpoints(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if net.ParseIP(line) == nil {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
 func cmdRun(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	devPath := fs.String("device", defaultDevice, "device.json")
@@ -128,6 +164,7 @@ func cmdRun(args []string) int {
 	logPath := fs.String("log", defaultLog, "лог (tmpfs)")
 	force := fs.String("force-transport", "", "wg:PORT | wg:HOST:PORT | h2 — только этот шаг")
 	proxy := fs.String("proxy", os.Getenv("Z2K_WARP_VPS_PROXY"), "HTTPS-прокси (VPS-релей) для API, если напрямую заблокирован")
+	epPath := fs.String("endpoints", defaultEndpoints, "список запасных эндпоинтов")
 	verbose := fs.Bool("v", false, "подробный лог")
 	fs.Parse(args)
 
@@ -140,6 +177,13 @@ func cmdRun(args []string) int {
 	defer lw.Close()
 	logf := lw.Logf
 	logf("z2k-warpd %s starting", version)
+
+	// Запасные адреса из файла. Молчим, если его нет: это штатное состояние —
+	// работает встроенный список.
+	if hosts := readEndpoints(*epPath); len(hosts) > 0 {
+		ladder.SetFallbackHosts(hosts)
+		logf("запасных эндпоинтов из %s: %d", *epPath, len(hosts))
+	}
 
 	// ПОЧИНКА НЕГОДНОГО АДРЕСА — ЗДЕСЬ, А НЕ ТОЛЬКО В register.
 	//

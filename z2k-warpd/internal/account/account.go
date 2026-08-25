@@ -441,9 +441,20 @@ func (c *Client) SwitchTunnel(ctx context.Context, d *Device, tunnel string) err
 // 162.159.192.x лежит запасным), а флаг EndpointRetried не даёт жечь лимит
 // устройств Cloudflare в цикле.
 func (c *Client) RepairBadEndpoint(ctx context.Context, path string) (*Device, bool, error) {
+	// ОТСУТСТВИЕ device.json — НЕ ОШИБКА. Устройство ещё не заводили, чинить
+	// нечего. Возвращая ошибку, мы заставляли вызывающего писать в журнал
+	// «перерегистрация не удалась (no such file or directory)» на каждом старте
+	// без регистрации — и человек, приславший диагностику, справедливо решил,
+	// что WARP не поднялся именно из-за неё.
 	d, err := Load(path)
-	if err != nil || d.ID == "" {
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
 		return nil, false, err
+	}
+	if d.ID == "" {
+		return nil, false, nil
 	}
 	if !badEndpoint(d.Endpoint.V4) || d.EndpointRetried {
 		return d, false, nil

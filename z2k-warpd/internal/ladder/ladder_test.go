@@ -1,15 +1,30 @@
 package ladder
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/necronicle/z2k/z2k-warpd/internal/account"
 )
 
+
+// noFallback — проверить лестницу БЕЗ запасных адресов.
+//
+// Тесты ниже описывают порядок выданных ступеней и место h2; хвост из запасных
+// эндпоинтов к их предмету не относится и только мешал бы сравнению дословно.
+// Сами запасные проверяются отдельно: TestFallbackHostsAfterRegistered.
+func noFallback(t *testing.T) {
+	t.Helper()
+	saved := fallbackHosts
+	fallbackHosts = nil
+	t.Cleanup(func() { fallbackHosts = saved })
+}
+
 func ep(ports ...int) account.Endpoint { return account.Endpoint{V4: "8.6.112.0", Ports: ports} }
 
 func TestOrderIsWgDefaultThenPortsThenH2(t *testing.T) {
+	noFallback(t)
 	l := New(ep(854, 859), nil)
 	H := "8.6.112.0"
 	want := []account.Step{{Transport: "wg", Host: H, Port: 2408}, {Transport: "wg", Host: H, Port: 854}, {Transport: "wg", Host: H, Port: 859}, {Transport: "h2", Port: 443}}
@@ -44,6 +59,7 @@ func TestUnknownLastGoodIgnored(t *testing.T) {
 }
 
 func TestStartAtLastStepStillTriesTheRestBeforeCooldown(t *testing.T) {
+	noFallback(t)
 	// Поле r-79.4: last_good=h2 (последняя ступень) → первый же Next
 	// сматывался в начало и объявлял «полный проход провален», уходя на
 	// 5 минут. WG-ступени не пробовались НИ РАЗУ.
@@ -70,6 +86,7 @@ func TestStartAtLastStepStillTriesTheRestBeforeCooldown(t *testing.T) {
 }
 
 func TestWrapAppliesCooldown(t *testing.T) {
+	noFallback(t)
 	l := New(ep(), nil) // wg:2408, h2:443
 	t0 := time.Unix(1000, 0)
 	s, wait := l.Next(t0) // -> h2
@@ -90,6 +107,7 @@ func TestWrapAppliesCooldown(t *testing.T) {
 }
 
 func TestWrapAfterCooldownHasNoWait(t *testing.T) {
+	noFallback(t)
 	l := New(ep(), nil)
 	t0 := time.Unix(1000, 0)
 	l.Next(t0)
@@ -100,6 +118,7 @@ func TestWrapAfterCooldownHasNoWait(t *testing.T) {
 }
 
 func TestPortsDeduplicated(t *testing.T) {
+	noFallback(t)
 	l := New(ep(2408, 854, 854, 0, -1, 70000), nil)
 	n := 1
 	for !l.OnH2() {
@@ -148,6 +167,7 @@ func TestH2ComesAfterFirstFiveWGSteps(t *testing.T) {
 }
 
 func TestAltHostsAfterPrimary(t *testing.T) {
+	noFallback(t)
 	e := account.Endpoint{V4: "8.6.112.0", Ports: []int{854},
 		Alt: []account.HostPorts{{Host: "162.159.192.10", Ports: []int{500}}, {Host: "8.6.112.0", Ports: []int{1}}}}
 	l := New(e, nil)
@@ -205,5 +225,141 @@ func TestH2StaysInAutomaticLadder(t *testing.T) {
 	}
 	if !h2 {
 		t.Fatal("h2 обязан быть в лестнице: без него у мёртвого WG-диапазона транспорта не остаётся вовсе")
+	}
+}
+
+// ЗАПАСНЫЕ ЭНДПОИНТЫ, КОГДА ВЫДАННЫЕ МЕРТВЫ.
+//
+// Поле 2026-08-25: Cloudflare выдал устройству ТОЛЬКО 162.159.192.4 — диапазон,
+// который режут целиком. Перерегистрация не спасла: со второй попытки пришёл
+// другой адрес из того же блока, то есть «новая регистрация плохого диапазона
+// не содержит» оказалось неверным допущением. WARP не поднимался вовсе.
+//
+// Замер на роутере владельца показал, что ключ к выданному адресу НЕ привязан:
+//
+//	8.6.112.1      handshake ok   (устройству не выдавался)
+//	8.47.69.1      handshake ok   (другой диапазон)
+//	188.114.96.1   handshake ok
+//	188.114.97.1   handshake ok
+//	162.159.195.1  no handshake
+//	162.159.192.10 no handshake   (СВОЙ запасной — диапазон режут)
+//
+// Значит когда выданные адреса мертвы, можно идти на известные рабочие.
+func TestFallbackHostsAfterRegistered(t *testing.T) {
+	// Худший случай из поля: один хост, весь в блокируемом диапазоне.
+	l := New(account.Endpoint{V4: "162.159.192.4", Ports: []int{500, 1701, 4500}}, nil)
+	var haveFallback, haveRegistered bool
+	firstFallback := -1
+	lastRegistered := -1
+	for i := 0; i < l.Len(); i++ {
+		s := l.steps[i]
+		if s.Transport != "wg" {
+			continue
+		}
+		if s.Host == "162.159.192.4" {
+			haveRegistered = true
+			lastRegistered = i
+			continue
+		}
+		haveFallback = true
+		if firstFallback < 0 {
+			firstFallback = i
+		}
+	}
+	if !haveRegistered {
+		t.Fatal("выданный адрес пропал из лестницы")
+	}
+	if !haveFallback {
+		t.Fatal("запасных адресов нет — при мёртвом диапазоне лестница пуста")
+	}
+	if firstFallback < lastRegistered {
+		t.Fatalf("запасные идут ДО выданных (%d < %d): выданный адрес обязан пробоваться первым",
+			firstFallback, lastRegistered)
+	}
+}
+
+// Запасной адрес, уже выданный устройству, дублировать не нужно.
+func TestFallbackNotDuplicated(t *testing.T) {
+	l := New(account.Endpoint{V4: "8.6.112.1", Ports: []int{}}, nil)
+	n := 0
+	for i := 0; i < l.Len(); i++ {
+		if l.steps[i].Transport == "wg" && l.steps[i].Host == "8.6.112.1" && l.steps[i].Port == 2408 {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("адрес 8.6.112.1:2408 встречается %d раз", n)
+	}
+}
+
+// СПИСОК ЗАПАСНЫХ — ДАННЫЕ, А НЕ КОД.
+//
+// Зашитый в бинарник список стареет: 162.159.193.x работал, а к концу 2024
+// перестал — и остался бы в коде навсегда, пока кто-нибудь не выпустит релиз с
+// пересборкой под пять арок. Адреса обязаны обновляться как список, а не как
+// программа.
+//
+// Встроенный список остаётся запасным для случая, когда файла нет: свежая
+// установка не должна оказаться вообще без запасных адресов.
+func TestFallbackHostsAreReplaceable(t *testing.T) {
+	saved := fallbackHosts
+	t.Cleanup(func() { fallbackHosts = saved })
+
+	SetFallbackHosts([]string{"203.0.113.7"})
+	l := New(account.Endpoint{V4: "162.159.192.4"}, nil)
+	found := false
+	for i := 0; i < l.Len(); i++ {
+		if l.steps[i].Host == "203.0.113.7" {
+			found = true
+		}
+		if l.steps[i].Host == "8.6.112.1" {
+			t.Fatal("встроенный список не заменился, а дополнился")
+		}
+	}
+	if !found {
+		t.Fatal("заданный список не применился")
+	}
+
+	// Пустой список не должен оставлять роутер без запасных: возвращаем
+	// встроенный.
+	SetFallbackHosts(nil)
+	l = New(account.Endpoint{V4: "162.159.192.4"}, nil)
+	builtin := false
+	for i := 0; i < l.Len(); i++ {
+		if l.steps[i].Host == "8.6.112.1" {
+			builtin = true
+		}
+	}
+	if !builtin {
+		t.Fatal("пустой список оставил лестницу без запасных адресов")
+	}
+}
+
+// ДИАПАЗОНЫ, А НЕ АДРЕСА.
+//
+// Четыре адреса, измеренные на одной линии, — догадка: у другого провайдера их
+// может резать, и человек вернётся с той же жалобой. Блокируют СЕТЯМИ, поэтому
+// хранить надо сети, а адреса из них роутер подбирает сам — тем же перебором,
+// которым и так проверяет каждую ступень.
+func TestCIDRExpandsToSeveralHosts(t *testing.T) {
+	saved := fallbackHosts
+	t.Cleanup(func() { fallbackHosts = saved })
+
+	SetFallbackHosts([]string{"203.0.113.0/24"})
+	l := New(account.Endpoint{V4: "162.159.192.4"}, nil)
+	seen := map[string]bool{}
+	for i := 0; i < l.Len(); i++ {
+		h := l.steps[i].Host
+		if strings.HasPrefix(h, "203.0.113.") {
+			seen[h] = true
+		}
+	}
+	if len(seen) < 2 {
+		t.Fatalf("из сети взят %d адрес — одна проба не отличает мёртвую сеть от мёртвого адреса", len(seen))
+	}
+	for h := range seen {
+		if h == "203.0.113.0" {
+			t.Fatal("взят адрес сети")
+		}
 	}
 }
