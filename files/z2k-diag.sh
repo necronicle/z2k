@@ -1271,7 +1271,48 @@ print_netpath() {
                                  : "НЕ РЕЗОЛВИТСЯ — проблема в DNS, а не в обходе")}')"
     fi
 
+    print_insta_pins
     print_agh
+}
+
+# Наши записи `ip host` — те самые пины Instagram/WhatsApp.
+#
+# ПЕЧАТАЕТСЯ ВСЕГДА, А НЕ ТОЛЬКО ПРИ ADGUARD HOME. Счёт этих записей жил внутри
+# print_agh и выводился лишь на роутерах с AGH — то есть у меньшинства. У всех
+# остальных диагностика про пины не говорила НИЧЕГО: в журнале рефрешера стоит
+# «6 host(s) updated, ndmc config saved», а есть ли записи на роутере сейчас —
+# по отчёту не установить. Ровно этот вопрос и пришёл из поля.
+#
+# Ноль записей поломкой НЕ называем: их штатно вычищает пункт меню [I], и
+# выдавать осознанное действие человека за неисправность мы уже научены.
+insta_pinned() {
+    local hosts
+    hosts=$(awk -F'"' '/^HOSTS=/ {print $2; exit}' "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" 2>/dev/null)
+    [ -n "$hosts" ] || return 0
+    command -v ndmc >/dev/null 2>&1 || return 0
+    LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+        | awk -v hosts="$hosts" '
+            BEGIN { n = split(hosts, h, " "); for (i = 1; i <= n; i++) own[h[i]] = 1 }
+            /^ip host/ && ($3 in own) && $4 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $3 "\t" $4 }'
+}
+
+print_insta_pins() {
+    local hosts n_hosts n_rec n_names
+    hosts=$(awk -F'"' '/^HOSTS=/ {print $2; exit}' "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" 2>/dev/null)
+    if [ -z "$hosts" ] || ! command -v ndmc >/dev/null 2>&1; then
+        printf 'ip host insta/wa  : сверить не с чем (нет ndmc или списка доменов)\n'
+        return 0
+    fi
+    n_hosts=$(printf '%s\n' $hosts | awk 'END {print NR}')
+    Z2K_PINNED=$(insta_pinned)
+    n_rec=$(printf '%s' "$Z2K_PINNED" | grep -c . || true)
+    n_names=$(printf '%s' "$Z2K_PINNED" | awk 'NF {print $1}' | sort -u | grep -c . || true)
+    if [ "${n_rec:-0}" -eq 0 ]; then
+        printf 'ip host insta/wa  : записей нет — адресный обход Instagram/WhatsApp выключен (его чистит пункт меню [I])\n'
+    else
+        printf 'ip host insta/wa  : %s записей на %s из %s доменов\n' \
+            "$n_rec" "$n_names" "$n_hosts"
+    fi
 }
 
 # AdGuard Home. Если он стоит, 53-й порт держит он, а встроенный dns-proxy
@@ -1306,10 +1347,10 @@ print_agh() {
         printf 'AdGuardHome       : %s (сверить записи не с чем)\n' "$state"
         return 0
     fi
-    pinned=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-        | awk -v hosts="$hosts" '
-            BEGIN { n = split(hosts, h, " "); for (i = 1; i <= n; i++) own[h[i]] = 1 }
-            /^ip host/ && ($3 in own) && $4 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $3 "\t" $4 }')
+    # Список уже собран print_insta_pins — второй раз ndmc не дёргаем: два
+    # обращения к одному источнику разъезжаются, и отчёт начинает спорить сам
+    # с собой.
+    pinned="${Z2K_PINNED:-$(insta_pinned)}"
     inagh=$(awk -v hosts="$hosts" '
         function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
         function unq(s) { gsub(/"/, "", s); gsub(Q, "", s); return s }
