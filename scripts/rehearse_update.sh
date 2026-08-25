@@ -15,33 +15,60 @@
 # ВЫЗОВ, а не результат. Что делают сами шаги — за границей этой проверки, и в
 # спеке это записано прямо.
 #
+# АДРЕСА ПЕРЕПИСЫВАЮТСЯ ПОД КОРЕНЬ ПЕСОЧНИЦЫ. install_map содержит цели ВНЕ
+# ZAPRET2_DIR — /opt/etc/init.d/S99zapret2, /opt/etc/ndm/netfilter.d/… и ещё
+# восемь, — они зашиты абсолютными и подмену корня не уважают. Держать их
+# песочница не может, поэтому кандидатский манифест копируется с префиксом:
+# «/opt/x» становится «$SBOX/opt/x». Раскладка исходного дерева и сверка идут
+# по ОДНОЙ этой карте — две карты разъедутся, и зелёный перестанет что-либо
+# значить.
+#
+# Правильность самих адресов проверяет не эта репетиция, а
+# tests/test_manifest_install_map.sh: здесь проверяется МЕХАНИЗМ.
+#
 # Использование:
-#   sh scripts/rehearse_update.sh --base КАТ --candidate КАТ --from ТЕГ --to ТЕГ
+#   sh scripts/rehearse_update.sh --prev КАТ --candidate КАТ --from ТЕГ --to ТЕГ
 #                                 [--interrupt-after N]
+#
+#   --prev      дерево предыдущего релиза В ВИДЕ РЕПОЗИТОРИЯ (files/…, lib/…)
+#   --candidate дерево кандидата, тоже в виде репозитория, с UPDATES.json
+#   --updater   ЧЕЙ апдейтер выполняет обновление: prev (по умолчанию) или
+#               candidate
+#
+# ПОЧЕМУ ПО УМОЛЧАНИЮ ЧУЖОЙ. На роутере обновление всегда выполняет СТАРЫЙ
+# апдейтер — тот, что уже лежит на диске; новый приезжает этим же обновлением и
+# начинает работать только со следующего. Гейт релиза обязан репетировать то,
+# что произойдёт на самом деле, поэтому берёт код из --prev.
+#
+# Новый апдейтер при этом не остаётся непроверенным: его на каждом коммите гоняет
+# tests/test_release_rehearsal.sh с --updater candidate. Разделение то же, что и
+# в жизни: релизный гейт отвечает на «сядет ли это на роутеры», постоянный тест
+# — на «не сломали ли мы код».
 #
 # Возврат: 0 — все утверждения выполнены, 1 — нарушено хотя бы одно.
 #
 # POSIX sh.
 set -u
 
-BASE=""; CAND=""; FROM=""; TO=""; INTERRUPT=0
+PREV=""; CAND=""; FROM=""; TO=""; INTERRUPT=0; UPDATER="prev"
 while [ $# -gt 0 ]; do
     case "$1" in
-        --base)            BASE="${2:-}"; shift 2 ;;
+        --prev)            PREV="${2:-}"; shift 2 ;;
         --candidate)       CAND="${2:-}"; shift 2 ;;
         --from)            FROM="${2:-}"; shift 2 ;;
         --to)              TO="${2:-}"; shift 2 ;;
         --interrupt-after) INTERRUPT="${2:-0}"; shift 2 ;;
+        --updater)         UPDATER="${2:-prev}"; shift 2 ;;
         *) printf 'неизвестный ключ: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
-[ -n "$BASE" ] && [ -n "$CAND" ] && [ -n "$FROM" ] && [ -n "$TO" ] \
-    || { printf 'нужны --base --candidate --from --to\n' >&2; exit 2; }
-[ -d "$BASE" ] || { printf 'нет дерева --base: %s\n' "$BASE" >&2; exit 2; }
+[ -n "$PREV" ] && [ -n "$CAND" ] && [ -n "$FROM" ] && [ -n "$TO" ] \
+    || { printf 'нужны --prev --candidate --from --to\n' >&2; exit 2; }
+[ -d "$PREV" ] || { printf 'нет дерева --prev: %s\n' "$PREV" >&2; exit 2; }
 [ -s "$CAND/UPDATES.json" ] || { printf 'нет %s/UPDATES.json\n' "$CAND" >&2; exit 2; }
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-BASE=$(cd "$BASE" && pwd)
+PREV=$(cd "$PREV" && pwd)
 CAND=$(cd "$CAND" && pwd)
 
 FAILED=0
@@ -53,11 +80,52 @@ SRV=""
 cleanup() { [ -n "$SRV" ] && kill "$SRV" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 
+SBOX="$WORK/root"
+BASE="$SBOX/opt/zapret2"
+mkdir -p "$BASE"
+
+# --- Кандидатский манифест под корень песочницы ---------------------------------
+#
+# Каждая цель install_map получает префикс. Одна карта — и для раскладки
+# исходного дерева, и для сверки после: две карты разъедутся, и зелёный
+# перестанет что-либо значить.
+CANDSB="$WORK/cand"
+mkdir -p "$CANDSB"
+cp -R "$CAND/." "$CANDSB/" 2>/dev/null || { printf 'не копируется кандидат\n' >&2; exit 2; }
+awk -v sb="$SBOX" '
+    /"[^"]+"[[:space:]]*:[[:space:]]*\[/ {
+        line = $0; out = ""
+        while (match(line, /"\/[^"]*"/)) {
+            out = out substr(line, 1, RSTART) sb substr(line, RSTART + 1, RLENGTH - 1)
+            line = substr(line, RSTART + RLENGTH - 1)
+        }
+        print out line; next
+    }
+    { print }
+' "$CAND/UPDATES.json" > "$CANDSB/UPDATES.json"
+
+# --- Исходное дерево ------------------------------------------------------------
+#
+# Строит ДВИЖОК, а не вызывающий: раскладка и сверка обязаны идти по одной
+# карте. Файлы, которых в предыдущем релизе не было, просто не появляются — и
+# сходимость обязана их привезти.
+sh "$ROOT/scripts/rehearse_check_sha.sh" --targets "$CANDSB/UPDATES.json" \
+| while IFS="$(printf '\t')" read -r repo_path target; do
+    [ -n "$target" ] || continue
+    [ -f "$PREV/$repo_path" ] || continue
+    mkdir -p "$(dirname "$target")" 2>/dev/null
+    cp -f "$PREV/$repo_path" "$target"
+done
+printf '%s\n' "$FROM" > "$BASE/.z2k-installed-tag"
+
+_n_base=$(find "$BASE" -type f 2>/dev/null | awk 'END {print NR+0}')
+[ "${_n_base:-0}" -gt 0 ] || { printf 'исходное дерево пустое — раскладка не сработала\n' >&2; exit 2; }
+
 # Слепок исходного дерева — чтобы проверить откат ПОБАЙТНО, а не «файлы на
 # месте». Половина обновления выглядит как целое дерево, если считать файлы.
 BEFORE="$WORK/before.list"
-( cd "$BASE" && find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$BEFORE" 2>/dev/null \
-    || ( cd "$BASE" && find . -type f -exec shasum -a 256 {} + 2>/dev/null | sort ) > "$BEFORE"
+( cd "$SBOX" && find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$BEFORE" 2>/dev/null \
+    || ( cd "$SBOX" && find . -type f -exec shasum -a 256 {} + 2>/dev/null | sort ) > "$BEFORE"
 
 # --- Локальный источник --------------------------------------------------------
 #
@@ -87,10 +155,10 @@ class H(http.server.SimpleHTTPRequestHandler):
 http.server.HTTPServer(('127.0.0.1', int(sys.argv[2])),
                        functools.partial(H, directory=sys.argv[3])).serve_forever()
 PY
-    python3 "$WORK/srv.py" "$INTERRUPT" "$PORT" "$CAND" >/dev/null 2>&1 &
+    python3 "$WORK/srv.py" "$INTERRUPT" "$PORT" "$CANDSB" >/dev/null 2>&1 &
     SRV=$!
 else
-    ( cd "$CAND" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 ) &
+    ( cd "$CANDSB" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 ) &
     SRV=$!
 fi
 
@@ -106,6 +174,15 @@ STEPS="$WORK/steps.log"
 LOG="$WORK/au.log"
 : > "$STEPS"; : > "$LOG"
 
+# Чей апдейтер выполняет обновление — см. шапку.
+case "$UPDATER" in
+    prev)      LIBDIR="$PREV/lib" ;;
+    candidate) LIBDIR="$CAND/lib" ;;
+    *) printf 'у --updater бывает только prev или candidate\n' >&2; exit 2 ;;
+esac
+[ -f "$LIBDIR/auto_update.sh" ] || LIBDIR="$ROOT/lib"
+printf 'апдейтер: %s (%s)\n' "$UPDATER" "$LIBDIR"
+
 cat > "$WORK/run.sh" <<RUNNER
 set -e
 ZAPRET2_DIR="$BASE"; export ZAPRET2_DIR
@@ -116,9 +193,9 @@ Z2K_AU_REPO_RAW="http://127.0.0.1:$PORT"; export Z2K_AU_REPO_RAW
 Z2K_AU_MANIFEST_URL="http://127.0.0.1:$PORT/UPDATES.json"; export Z2K_AU_MANIFEST_URL
 GITHUB_RAW="http://127.0.0.1:$PORT"; export GITHUB_RAW
 mkdir -p "\$Z2K_AU_TMP_DIR"
-cp "$CAND/UPDATES.json" "\$Z2K_AU_TMP_DIR/UPDATES.json"
-. "$ROOT/lib/utils.sh"
-Z2K_AU_SOURCE_ONLY=1 . "$ROOT/lib/auto_update.sh"
+cp "$CANDSB/UPDATES.json" "\$Z2K_AU_TMP_DIR/UPDATES.json"
+. "$LIBDIR/utils.sh"
+Z2K_AU_SOURCE_ONLY=1 . "$LIBDIR/auto_update.sh"
 # Шаги подменяем счётчиком: проверяется вызов и его порядок, а не результат.
 au_run_step() { printf '%s\n' "\$1" >> "$STEPS"; return 0; }
 # Проверка живости смотрит на СИСТЕМУ — работает ли nfqws2, парсятся ли
@@ -146,8 +223,8 @@ if [ "$INTERRUPT" -gt 0 ]; then
     fi
 
     AFTER="$WORK/after.list"
-    ( cd "$BASE" && find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$AFTER" 2>/dev/null \
-        || ( cd "$BASE" && find . -type f -exec shasum -a 256 {} + 2>/dev/null | sort ) > "$AFTER"
+    ( cd "$SBOX" && find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$AFTER" 2>/dev/null \
+        || ( cd "$SBOX" && find . -type f -exec shasum -a 256 {} + 2>/dev/null | sort ) > "$AFTER"
     if diff "$BEFORE" "$AFTER" >/dev/null 2>&1; then
         ok "откат: дерево вернулось как было"
     else
@@ -169,7 +246,7 @@ else
     bad "прогон умер под set -e (код $RUN_RC): $(tail -3 "$WORK/out" | tr '\n' ' ')"
 fi
 
-if _sha_out=$(sh "$ROOT/scripts/rehearse_check_sha.sh" "$CAND/UPDATES.json" 2>&1); then
+if _sha_out=$(sh "$ROOT/scripts/rehearse_check_sha.sh" "$CANDSB/UPDATES.json" 2>&1); then
     ok "сходимость: дерево совпало с манифестом"
 else
     bad "сходимость: $(printf '%s' "$_sha_out" | head -3 | tr '\n' ' ')"
@@ -188,7 +265,7 @@ want_steps=$(awk -v t="$TO" '
         n = split(s, p, ",")
         for (i = 1; i <= n; i++) { gsub(/[[:space:]"]/, "", p[i]); if (p[i] != "") print p[i] }
         exit
-    }' "$CAND/UPDATES.json")
+    }' "$CANDSB/UPDATES.json")
 got_steps=$(cat "$STEPS")
 if [ "$want_steps" = "$got_steps" ]; then
     ok "шаги: [$(printf '%s' "$got_steps" | tr '\n' ' ')]"
