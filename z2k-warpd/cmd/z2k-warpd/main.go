@@ -7,12 +7,12 @@
 package main
 
 import (
-	"net"
 	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -50,7 +50,7 @@ const (
 	// z2k_warp. Наши эндпоинты оказались бы завёрнуты в тот самый туннель,
 	// через который к ним и идёт подключение.
 	defaultEndpoints = "/opt/zapret2/lists/warp-endpoints.txt"
-	logMax        = 256 * 1024
+	logMax           = 256 * 1024
 )
 
 func main() {

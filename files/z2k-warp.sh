@@ -378,6 +378,88 @@ warp_install() {
     return 1
 }
 
+# ---- подбор плеча под MASQUE ----------------------------------------------------
+#
+# ЗАЧЕМ. MASQUE (транспорт h2) — то, на чём WARP работал ещё до нашего движка, и
+# работал надёжно. Он и сейчас встаёт первым, но выживает ТОЛЬКО под десинком:
+# замер 2026-08-24 — сквозная проба 9 из 9 с десинком против 0 из 9 без него.
+# Десинк применяется к SNI consumer-masque.cloudflareclient.com, то есть по
+# записи rkn_tcp/cloudflareclient.com, а какое плечо ротации на неё встало —
+# дело случая.
+#
+# Поле 2026-08-25: у человека MASQUE поднимался за три секунды и умирал через
+# семнадцать — «h2: connected», затем «health: h2:443 dead (<nil>)», без ошибки
+# транспорта. Сессию душили снаружи. На роутере владельца тот же MASQUE в тот же
+# час вёз трафик (сквозная проба 200 за 0.16 с) — разница ровно в выбранном
+# плече.
+#
+# Поэтому плечо не ждём от ротатора, а ПОДБИРАЕМ: закрепляем, поднимаем туннель,
+# спрашиваем готовность. Готовность с p-79.15 означает доказанную — туннель
+# провёз сквозную пробу, — так что «встало» и «везёт» здесь не путаются.
+WARP_TUNE_KEY="${WARP_TUNE_KEY:-rkn_tcp}"
+WARP_TUNE_HOST="${WARP_TUNE_HOST:-cloudflareclient.com|4}"
+WARP_TUNE_MAX="${WARP_TUNE_MAX:-50}"
+WARP_TUNE_WAIT="${WARP_TUNE_WAIT:-14}"
+WARP_STATE="${WARP_STATE:-$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv}"
+WARP_STATE_FALLBACK="${WARP_STATE_FALLBACK:-/tmp/z2k-autocircular-state.tsv}"
+
+# warp_state_pin <плечо> — закрепить плечо за нашим хостом в обоих файлах.
+#
+# Режим «manual», а не «auto»: закреплённое нами не должно быть смыто первой же
+# ротацией, иначе подбор придётся повторять после каждого чиха.
+warp_state_pin() {
+    local strat="$1" f tmp ts
+    ts=$(date +%s 2>/dev/null || echo 0)
+    for f in "$WARP_STATE" "$WARP_STATE_FALLBACK"; do
+        [ -n "$f" ] || continue
+        mkdir -p "$(dirname "$f")" 2>/dev/null
+        if [ ! -f "$f" ]; then
+            printf '# z2k autocircular state (persisted circular nstrategy)\n# key\thost\tstrategy\tts\tmode\n' \
+                > "$f" 2>/dev/null || continue
+            chmod 644 "$f" 2>/dev/null
+        fi
+        tmp="$f.z2k-warp.$$"
+        awk -F'\t' -v k="$WARP_TUNE_KEY" -v h="$WARP_TUNE_HOST" -v s="$strat" -v ts="$ts" '
+            BEGIN { OFS = "\t" }
+            ($1 == k && $2 == h) { next }
+            { print }
+            END { print k, h, s, ts, "manual" }
+        ' "$f" > "$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
+        chmod 644 "$tmp" 2>/dev/null
+        mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+    done
+}
+
+# warp_masque_tune — перебрать плечи, пока туннель не начнёт везти.
+#
+# Возвращает 0, как только готовность доказана; 1 — если не помогло ни одно.
+# В последнем случае закрепление снимаем: врать ротатору про «ручной выбор»,
+# который ничего не дал, значит запретить ему искать самому.
+warp_masque_tune() {
+    local i=1 had
+    had=$(awk -F'\t' -v k="$WARP_TUNE_KEY" -v h="$WARP_TUNE_HOST" \
+              '($1 == k && $2 == h) { print $3; exit }' "$WARP_STATE" 2>/dev/null)
+    _wlog "подбираю плечо десинка под MASQUE (до $WARP_TUNE_MAX)..."
+    while [ "$i" -le "$WARP_TUNE_MAX" ]; do
+        warp_state_pin "$i"
+        sh "$WARP_INIT" restart >/dev/null 2>&1
+        local waited=0
+        while [ "$waited" -lt "$WARP_TUNE_WAIT" ]; do
+            warp_ready && {
+                _wlog "плечо $i держит MASQUE — закрепил"
+                return 0
+            }
+            sleep 2; waited=$((waited + 2))
+        done
+        _wlog "плечо $i не держит"
+        i=$((i + 1))
+    done
+    # Не нашли — возвращаем как было, чтобы ротатор снова стал хозяином записи.
+    if [ -n "$had" ]; then warp_state_pin "$had"; fi
+    _wlog "ни одно плечо не удержало MASQUE"
+    return 1
+}
+
 warp_enable() {
     warp_set_flag 1
     [ -x "$WARP_BIN" ] || { _wlog "движок не установлен — нажмите «Установить»"; warp_set_flag 0; return 1; }
@@ -394,9 +476,17 @@ warp_enable() {
         _wlog "WARP ready: $(_json_str "$WARP_STATUS" transport) $(_json_str "$WARP_STATUS" endpoint)"
         return 0
     fi
-    # Не ready — маршрут НЕ ставим (игровой ipset в мёртвый туннель = чёрная
-    # дыра), флаг оставляем: движок продолжает лестницу, selfheal поставит маршрут.
+    # Не ready. Прежде чем сдаться — подобрать плечо десинка: MASQUE выживает
+    # только под ним, а какое плечо встало, решал случай. Подбор идёт ФОНОМ и
+    # переживает обрыв: он занимает минуты, и держать ради него кнопку нельзя.
+    # Трафик всё это время идёт напрямую — маршрут ставится только по
+    # доказанной готовности.
     _wlog "причина: $(_json_str "$WARP_STATUS" last_error)"
+    if [ "${WARP_TUNE:-1}" = "1" ]; then
+        ( trap '' HUP
+          warp_masque_tune && warp_pbr_up ) >/dev/null 2>&1 &
+        _wlog "подбираю рабочее плечо десинка фоном — туннель поднимется сам"
+    fi
     return 2
 }
 

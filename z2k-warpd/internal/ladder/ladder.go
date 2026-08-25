@@ -7,8 +7,8 @@
 package ladder
 
 import (
-	"net"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/necronicle/z2k/z2k-warpd/internal/account"

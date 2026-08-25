@@ -8,7 +8,6 @@ import (
 	"github.com/necronicle/z2k/z2k-warpd/internal/account"
 )
 
-
 // noFallback — проверить лестницу БЕЗ запасных адресов.
 //
 // Тесты ниже описывают порядок выданных ступеней и место h2; хвост из запасных
