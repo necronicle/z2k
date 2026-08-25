@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 41,
-  "current": "p-79.15",
+  "seq": 42,
+  "current": "p-79.16",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -197,7 +197,7 @@
   "files/z2k-config-validator.sh": "30a4c557fae94db49227318ed98e09b80651f4692b75da0b74830ddec90186eb",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
   "files/z2k-diag.sh": "dd92fb1e9aee672cf5966d1967c41b44db067e6c20a6873efa6c7a544f59592a",
-  "files/z2k-dns-check.sh": "7049f2e022b57576ecccf828ff185dbe26931e1d7252d17191e89204741a0f67",
+  "files/z2k-dns-check.sh": "077964013ff52e425d73416354dd4c7214068bb6ded6262c8374168ab67eb287",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "516839c1e52913a88fc4eb94ff9ba0c84f744fc626740f7f1e06d62c57b0fb7d",
   "files/z2k-insta-ip-refresh.sh": "8d34326e051b2c225aa855d2f4addb79a19b955807ec36b768dd6059403f290a",
@@ -209,7 +209,7 @@
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "22f8dfad23bf5ea084fe14c2a104d59d73aae5a0f739af3b7a3baac4a9d5ed3c",
   "files/z2k-warp.sh": "494cf37d547106852456b9568ee7a989c3de55395a06287a31ecbdf414f10d25",
-  "lib/auto_update.sh": "c06696badee8aa11d371c1da9147437f957059313556b4ca96045259f51ff2f7",
+  "lib/auto_update.sh": "4485ac0d3d5d9604ba2118cda9993e41ee3ffabb022706d384e1afcbe4ecc02b",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
   "lib/config_official.sh": "6189d919478e34a3f0f5c596081648a9308d636166e16321085c69a88483fc2c",
   "lib/install.sh": "1ae0ccd85348d759b282d946c8efc455ca0122a49426ae7b39c17213155a4ddd",
@@ -231,7 +231,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "2b8cec24a6bf0fe522e0b368a763f0f65c6de7af44b8b7cfde6bc7358ee7a204",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "7475d651fe127bd8b9278b9db6e06d45ad86aadd81f02b5960a498b99bd5b441",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "4c99e7a21d09e578a3e894ee4ee9b92117af48fd81ab376515b1b880b1073113",
-  "webpanel/cgi/actions.sh": "55eb762f3f2639e353f01a1fb6f24e31f5c0852ec5ec3943a9be4c10eb9d7e2e",
+  "webpanel/cgi/actions.sh": "9c15dfc314c6f70e33b5262fc01a0ef689b31ce2c159e9bbbaf341fa49ad5c67",
   "webpanel/cgi/api.sh": "f7338f34d912fdd8479a8d2d3fcf0df0f9ca4cbad8c9ae61b5ff1c660882d574",
   "webpanel/cgi/auth.sh": "aa2d34f9f41444ba41a888a0da5214ff688b037457c54256546938b27391b333",
   "webpanel/init.d/S96z2k-webpanel": "38b7a6367aab790148945c2fe6b990730b3dec1572a7cef5516951cbe8e93231",
@@ -250,7 +250,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "63a14223090d0eb9c092d1489bf4c85e79c6710d10560347518753d691805ad0",
+  "webpanel/www/index.html": "6b7e51c90125dd128d40ed1b0e05e23b868e1e3323713fb272964d88170d6250",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -261,7 +261,7 @@
   "webpanel/www/js/job.js": "da0832ecbb70861fa26d17008d5df9fbb69d240869771522bb8f9408f205365b",
   "webpanel/www/js/pages/credits.js": "2cc35603f1361ff4bd26fff917156567228d0e8295182733d34cf6c8aa0925fb",
   "webpanel/www/js/pages/dashboard.js": "8d4a142cff54cb919f0b142a40c306df34728a94075240624a3d09b4ea5c6840",
-  "webpanel/www/js/pages/diag.js": "e8411baa40e9ad499a4e593307c2f7d32b5817ec673abe5e1afdd9d9fa9fed6d",
+  "webpanel/www/js/pages/diag.js": "ab8d1ca357b54542cb03e9cfa51f76da34ded542defa91fe4c91b7f31c72b3af",
   "webpanel/www/js/pages/exclude.js": "e504ab23d951a99ef56c220a19fecc1cb9e689f59f547e1b20284100319ecd39",
   "webpanel/www/js/pages/extra-domains.js": "81efb7d4e4102be249367f9dd210dc661efa6a6957ed5dffa8118319b394a326",
   "webpanel/www/js/pages/policy.js": "e9e1d623fef531084fad829cbedcb8df2593408ebc7f40b495e464e3a463dcd6",
@@ -472,6 +472,7 @@
 {"v": "p-79.12", "type": "patch", "ts": "2026-08-24T16:09:30Z", "ref": "p-79.12", "desc": "Списки доменов снова обновляются у всех — раньше после переустановки роутер мог замереть на старой версии списков. Плюс исправлены внутренние шаги обновления, которые раньше не сработали бы.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "lib/config_official.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "p-79.13", "type": "patch", "ts": "2026-08-24T21:53:17Z", "ref": "p-79.13", "desc": "Появилась проверка DNS в разделе «Диагностика»: она показывает, подменяет ли провайдер ответы серверов имён, и какими серверами можно пользоваться — обычными, DoH и DoT. Свои серверы можно добавить в проверку. WARP теперь сам переснимает регистрацию, если ему достался заблокированный в России адрес, а настройки веб-панели больше не сбрасываются при обновлении.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "files/z2k-update-lists.sh", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "webpanel/www/style.css", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-79.14", "type": "patch", "ts": "2026-08-24T22:38:53Z", "ref": "p-79.14", "desc": "Журнал обновления теперь показывает, какой файл скачивается и сколько осталось — раньше он надолго замолкал, и обновление выглядело зависшим. Проверка DNS в «Диагностике» открывается свёрнутой. Предупреждение о перерегистрации WARP переехало в окно подтверждения, чтобы не путать с соседними кнопками.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-79.15", "type": "patch", "ts": "2026-08-25T07:21:46Z", "ref": "p-79.15", "desc": "WARP теперь считает туннель рабочим только после того, как убедится, что через него действительно идут данные — раньше на некоторых сетях соединение объявлялось готовым, а трафик уходил в никуда. Обновление из терминала больше не обрывается молча на середине. Диагностика не сообщает о неисправности Telegram, если туннель выключен вручную, и показывает состояние адресов Instagram и WhatsApp.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-79.15", "type": "patch", "ts": "2026-08-25T07:21:46Z", "ref": "p-79.15", "desc": "WARP теперь считает туннель рабочим только после того, как убедится, что через него действительно идут данные — раньше на некоторых сетях соединение объявлялось готовым, а трафик уходил в никуда. Обновление из терминала больше не обрывается молча на середине. Диагностика не сообщает о неисправности Telegram, если туннель выключен вручную, и показывает состояние адресов Instagram и WhatsApp.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-79.16", "type": "patch", "ts": "2026-08-25T10:37:22Z", "ref": "p-79.16", "desc": "Обновления стали заметно быстрее: подготовка к установке занимала около сорока секунд без единого сообщения на экране — теперь она проходит мгновенно. В проверке DNS исправлено сохранение своих серверов и добавлено время ответа для DoT.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "lib/auto_update.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
