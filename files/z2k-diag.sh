@@ -543,8 +543,16 @@ print_iptables() {
     : "${tg_ipset6_n:=0}"
     printf 'NFQUEUE исходящие : %s  (postrouting, ожидается 2)\n' "$nfq_mangle"
     printf 'NFQUEUE входящие  : %s  (input+forward, ожидается 4 — без них не работает автоподбор стратегий)\n' "$nfq_in"
-    printf 'TG REDIR PREROUT  : %s  (expected 1 — ipset match-set, r-50+)\n' "$tg_redirect_pre"
-    printf 'TG REDIR OUTPUT   : %s  (expected 1 — ipset match-set, r-50+)\n' "$tg_redirect_out"
+    # Ожидание зависит от того, включён ли туннель. Выключив телеграм руками,
+    # человек штатно остаётся без этих правил — и читал про себя «expected 1»,
+    # то есть отчёт о неисправности там, где всё как он и просил.
+    if tg_user_disabled; then
+        _tg_exp='туннель выключен вручную — правил и не должно быть'
+    else
+        _tg_exp='expected 1 — ipset match-set, r-50+'
+    fi
+    printf 'TG REDIR PREROUT  : %s  (%s)\n' "$tg_redirect_pre" "$_tg_exp"
+    printf 'TG REDIR OUTPUT   : %s  (%s)\n' "$tg_redirect_out" "$_tg_exp"
     printf 'TG ipset z2k_tg_dc: %s DC subnets (expected 10)\n' "$tg_ipset_n"
     printf 'TG v6 REJECT FWD  : %s  (expected 1 — fast-reject dead v6 DCs)\n' "$tg_reject6_fwd"
     printf 'TG v6 REJECT OUT  : %s  (expected 1)\n' "$tg_reject6_out"
@@ -1038,10 +1046,14 @@ print_health() {
 
     # Туннель телеграма: бинарник на месте, а процесса нет. Это не «медленно»,
     # это телеграм не работает вообще.
-    if [ -x /opt/sbin/tg-mtproxy-client ]; then
-        if tg_user_disabled; then
-            :
-        elif [ -z "$(tg_tunnel_pid)" ]; then
+    # ВЫКЛЮЧЕННЫЙ РУКАМИ ТУННЕЛЬ — НЕ ПОЛОМКА, И МОЛЧАТЬ ПРО НЕГО ОБЯЗАНЫ ВСЕ
+    # ПРОВЕРКИ РАЗОМ. Раньше защита стояла только на «процесса нет», а проверка
+    # правил редиректа висела ниже, вне этой ветки. Человек выключал телеграм
+    # сам, правила при этом снимаются штатно — и диагностика писала ему
+    # «правила редиректа телеграма отсутствуют, телеграм не подключится», то
+    # есть выдавала его же осознанное действие за неисправность.
+    if [ -x /opt/sbin/tg-mtproxy-client ] && ! tg_user_disabled; then
+        if [ -z "$(tg_tunnel_pid)" ]; then
             _add "телеграм-туннель установлен, но не запущен — телеграм работать не будет"
         else
             # Процесс живой и правила стоят, а список подсетей дата-центров пуст:
