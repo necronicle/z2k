@@ -124,5 +124,57 @@ assert_eq "видно, сколько осталось"          "1" "$(grep -c 
 assert_eq "видно, что качается прямо сейчас" "1" "$(grep -c '\[1/2\] качаю files/lua/p1.lua' "$_log")"
 au_log() { :; }
 
+
+# ── СНИМОК ДЛЯ ОТКАТА ────────────────────────────────────────────────────────
+#
+# Замер на роутере владельца 2026-08-25: снимок занимал 42 секунды и не снимал
+# НИ ОДНОГО файла. Из 57 секунд всего обновления 43 приходились на этот
+# молчаливый кусок — человек читал его как «висит и ничего не происходит».
+#
+# Причина: список путей приходил ОДНОЙ строкой («a b c d e»), а разбирался
+# построчно. Получался один вызов поиска целей с этой строкой вместо пяти
+# нормальных. Манифест на 222 КБ склеивается в одну строку и прогоняется через
+# sed с `.*` по обоим краям — на такой длине это десятки секунд, а совпадения
+# нет, потому что «a b c d e» ключом в манифесте не бывает.
+#
+# Вторая беда тяжелее первой: пустой снимок означает, что откатывать НЕЧЕГО.
+# Провал доставки вернул бы дерево не «как было», а никак.
+_snapdir="$SB/snap"; mkdir -p "$_snapdir/zd"
+printf 'старое A\n' > "$_snapdir/zd/a.lua"
+printf 'старое B\n' > "$_snapdir/zd/b.lua"
+cat > "$SB/m4.json" <<EOF
+{
+  "install_map": {
+    "files/lua/a.lua": ["$_snapdir/zd/a.lua"],
+    "files/lua/b.lua": ["$_snapdir/zd/b.lua"]
+  },
+  "files_sha256": { "files/lua/a.lua": "$(sha "$_snapdir/zd/a.lua")" }
+}
+EOF
+cp "$SB/m4.json" "$Z2K_AU_TMP_DIR/UPDATES.json"
+au_snapshot_for_patch "files/lua/a.lua files/lua/b.lua"
+assert_eq "снимок берёт файлы из списка через пробел" "2" \
+    "$(find "$Z2K_AU_TMP_DIR/pre-apply" -type f 2>/dev/null | awk 'END {print NR+0}')"
+
+rm -rf "$Z2K_AU_TMP_DIR/pre-apply"
+au_snapshot_for_patch "$(printf 'files/lua/a.lua\nfiles/lua/b.lua\n')"
+assert_eq "и из списка через перевод строки" "2" \
+    "$(find "$Z2K_AU_TMP_DIR/pre-apply" -type f 2>/dev/null | awk 'END {print NR+0}')"
+
+# Цена снимка не должна расти с числом файлов кратно проходам по манифесту:
+# один проход на весь список, а не вызов на каждый путь.
+assert_eq "снимок ищет цели одним проходом" "1" \
+    "$(grep -c 'au_targets_bulk "$Z2K_AU_TMP_DIR/UPDATES.json"' "$ROOT/lib/auto_update.sh")"
+# И раскладка тоже: поиск на каждый файл давал полминуты молчания между
+# последней скачанной строкой и первым шагом на большом обновлении.
+assert_eq "раскладка ищет цели одним проходом" "1" \
+    "$(grep -c 'au_targets_bulk "$manifest" "$plan"' "$ROOT/lib/auto_update.sh")"
+assert_eq "поиска на каждый файл не осталось" "0" \
+    "$(grep -c 'au_manifest_install_targets "$manifest" "$_ca_path"' "$ROOT/lib/auto_update.sh")"
+# Провал раскладки обязан вернуться провалом: цикл идёт за пайпом, и rc из
+# подоболочки наружу не переживает — отсюда файл-маркер.
+assert_eq "осечка за пайпом не теряется" "1" \
+    "$(grep -c 'converge.fail' "$ROOT/lib/auto_update.sh" | awk '{print ($1>0)?1:0}')"
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -578,40 +578,47 @@ au_converge_apply() {
         fi
     done < "$plan"
 
+    # ЦЕЛИ БЕРЁМ ОДНИМ ПРОХОДОМ, а не поиском на каждый файл. Прежний вариант
+    # склеивал манифест (222 КБ) в одну строку и гонял по ней sed на КАЖДЫЙ путь:
+    # доля секунды на файл, но на обновлении в полторы сотни файлов — полминуты
+    # молчания между последней скачанной строкой и первым шагом.
+    #
+    # Осечки копим в файле: цикл идёт за пайпом, то есть в подоболочке, и
+    # присвоение rc оттуда наружу не переживает конец цикла — провал раскладки
+    # вернулся бы успехом. Тот же приём стоит в refresh-binaries.
     local rc=0
-    while IFS= read -r _ca_path; do
-        [ -n "$_ca_path" ] || continue
+    local cvfail="$Z2K_AU_TMP_DIR/converge.fail"
+    rm -f "$cvfail"
+    au_targets_bulk "$manifest" "$plan" \
+    | while IFS="$(printf '\t')" read -r _ca_path _ca_t; do
+        [ -n "$_ca_t" ] || continue
         _ca_stage="$dl/$(printf '%s' "$_ca_path" | tr '/' '_')"
         [ -f "$_ca_stage" ] || continue
-        _ca_targets=$(au_manifest_install_targets "$manifest" "$_ca_path")
-        while IFS= read -r _ca_t; do
-            [ -n "$_ca_t" ] || continue
-            mkdir -p "$(dirname "$_ca_t")" 2>/dev/null
-            # Атомарно: временный файл в ТОЙ ЖЕ директории и rename. Голый cp
-            # переписывает цель на месте, и прерывание (обрыв питания, OOM —
-            # обычное дело на этих коробках) оставляет полуфайл, смертельный
-            # для init-скрипта или модуля, который сорсится прямо сейчас.
-            # Бит +x восстанавливаем ДО переименования: cp не переносит его
-            # надёжно между сборками BusyBox (скачанный файл 0644), и p-42
-            # ровно так уронил S99zapret2 в 0644 — «Permission denied» при
-            # рестарте.
-            _ca_tmp="${_ca_t}.z2k-cv.$$"
-            if cp -f "$_ca_stage" "$_ca_tmp" 2>/dev/null; then
-                case "$_ca_t" in
-                    */init.d/*|*.sh) chmod +x "$_ca_tmp" 2>/dev/null || true ;;
-                esac
-                if ! mv -f "$_ca_tmp" "$_ca_t" 2>/dev/null; then
-                    rm -f "$_ca_tmp" 2>/dev/null
-                    au_log "сходимость: не записался $_ca_t (rename)"; rc=1
-                fi
-            else
+        mkdir -p "$(dirname "$_ca_t")" 2>/dev/null
+        # Атомарно: временный файл в ТОЙ ЖЕ директории и rename. Голый cp
+        # переписывает цель на месте, и прерывание (обрыв питания, OOM —
+        # обычное дело на этих коробках) оставляет полуфайл, смертельный
+        # для init-скрипта или модуля, который сорсится прямо сейчас.
+        # Бит +x восстанавливаем ДО переименования: cp не переносит его
+        # надёжно между сборками BusyBox (скачанный файл 0644), и p-42
+        # ровно так уронил S99zapret2 в 0644 — «Permission denied» при
+        # рестарте.
+        _ca_tmp="${_ca_t}.z2k-cv.$$"
+        if cp -f "$_ca_stage" "$_ca_tmp" 2>/dev/null; then
+            case "$_ca_t" in
+                */init.d/*|*.sh) chmod +x "$_ca_tmp" 2>/dev/null || true ;;
+            esac
+            if ! mv -f "$_ca_tmp" "$_ca_t" 2>/dev/null; then
                 rm -f "$_ca_tmp" 2>/dev/null
-                au_log "сходимость: не записался $_ca_t (copy)"; rc=1
+                au_log "сходимость: не записался $_ca_t (rename)"; echo 1 >> "$cvfail"
             fi
-        done <<EOF_CT
-$_ca_targets
-EOF_CT
-    done < "$plan"
+        else
+            rm -f "$_ca_tmp" 2>/dev/null
+            au_log "сходимость: не записался $_ca_t (copy)"; echo 1 >> "$cvfail"
+        fi
+    done
+    [ -s "$cvfail" ] && rc=1
+    rm -f "$cvfail"
     return "$rc"
 }
 
@@ -1862,28 +1869,65 @@ au_rollback_patch() {
 
 # Snapshot files about to be replaced (called from au_apply_patch before
 # any cp -f). Mirrors target paths under $Z2K_AU_TMP_DIR/pre-apply/.
+# au_targets_bulk <манифест> <файл со списком путей> — «путь<TAB>цель» для ВСЕХ
+# целей за ОДИН проход по манифесту.
+#
+# ЗАЧЕМ ОТДЕЛЬНАЯ ФУНКЦИЯ. au_manifest_install_targets ищет цели ОДНОГО пути и
+# ради этого склеивает манифест (222 КБ) в одну строку и гоняет по ней sed с
+# `.*` по обоим краям. Один вызов — доли секунды, но вызовов столько же,
+# сколько файлов, и на большом обновлении это десятки секунд молчания. Здесь
+# весь список разбирается за один проход, и цена перестаёт зависеть от числа
+# файлов.
+au_targets_bulk() {
+    awk -v plist="$2" '
+        BEGIN { while ((getline p < plist) > 0) if (p != "") want[p] = 1 }
+        /"[^"]+"[[:space:]]*:[[:space:]]*\[/ {
+            key = $0
+            if (!match(key, /"[^"]+"[[:space:]]*:[[:space:]]*\[/)) next
+            rest = substr(key, RSTART + RLENGTH)
+            key = substr(key, RSTART + 1); sub(/"[[:space:]]*:[[:space:]]*\[.*/, "", key)
+            if (!(key in want)) next
+            sub(/\].*/, "", rest)
+            n = split(rest, parts, ",")
+            for (i = 1; i <= n; i++) {
+                t = parts[i]
+                gsub(/^[[:space:]]*"/, "", t); gsub(/"[[:space:]]*$/, "", t)
+                if (t ~ /^\//) print key "\t" t
+            }
+        }
+    ' "$1"
+}
+
+# au_snapshot_for_patch <пути> — копия текущих файлов на случай отката.
+#
+# СПИСОК РАЗБИРАЕТСЯ ПО СЛОВАМ, А НЕ ПО СТРОКАМ, и это не мелочь. Вызывающий
+# передаёт план одной строкой через пробел; разбор `while read` видел в ней
+# ОДИН путь «a b c d e», искал его цели в манифесте и, разумеется, не находил.
+# Замер на роутере владельца: 42 секунды и НОЛЬ снятых файлов — то есть
+# откатывать в случае провала было бы нечего, а человек всё это время смотрел
+# на молчащий журнал. Разделение по IFS принимает оба вида списка.
 au_snapshot_for_patch() {
     local files="$*"
     local snap="$Z2K_AU_TMP_DIR/pre-apply"
     rm -rf "$snap"
     mkdir -p "$snap"
-    local repo_path targets target relpath dst
-    while IFS= read -r repo_path; do
-        [ -z "$repo_path" ] && continue
-        targets=$(au_targets_for "$repo_path")
-        while IFS= read -r target; do
-            [ -z "$target" ] && continue
-            [ -f "$target" ] || continue
-            relpath="${target#/}"
-            dst="$snap/$relpath"
-            mkdir -p "$(dirname "$dst")"
-            cp -f "$target" "$dst"
-        done <<EOF_T
-$targets
-EOF_T
-    done <<EOF_F
-$files
-EOF_F
+    local plist="$Z2K_AU_TMP_DIR/snap.paths"
+    local repo_path target relpath dst
+    : > "$plist"
+    for repo_path in $files; do
+        [ -n "$repo_path" ] && printf '%s\n' "$repo_path" >> "$plist"
+    done
+    [ -s "$plist" ] || { rm -f "$plist"; return 0; }
+    au_targets_bulk "$Z2K_AU_TMP_DIR/UPDATES.json" "$plist" \
+    | while IFS="$(printf '\t')" read -r repo_path target; do
+        [ -n "$target" ] || continue
+        [ -f "$target" ] || continue
+        relpath="${target#/}"
+        dst="$snap/$relpath"
+        mkdir -p "$(dirname "$dst")"
+        cp -f "$target" "$dst"
+    done
+    rm -f "$plist"
     return 0
 }
 
