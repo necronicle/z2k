@@ -107,13 +107,46 @@ get_entware_arch() {
     ' || uname -m 2>/dev/null
 }
 
-# Primary LAN IP (prefer RFC1918 over the public WAN default-route source).
+# Адрес роутера в домашней сети.
+#
+# ИСКЛЮЧАЕМ АПЛИНК, А НЕ ПРОСТО ИЩЕМ ПРИВАТНЫЙ. Раньше бралcя ПЕРВЫЙ адрес из
+# 10/8, 172.16/12 или 192.168/16 — с расчётом, что WAN публичный, а приватный
+# бывает только у LAN. На IPoE это неверно: провайдер выдаёт роутеру серый
+# адрес, интерфейс аплинка стоит в списке раньше моста, и в отчёте появлялось
+# «LAN IP: 192.168.100.10» — адрес WAN под именем LAN. Жалоба из поля.
+#
+# Туннели исключаем по той же причине: у z2ktun0 адрес 172.16.0.2, и без моста
+# выбрали бы его.
+#
+# Аплинк определяем по `ip route get`, а не по `ip route show default`: на
+# Keenetic аплинк — ppp0 с маршрутом в отдельной таблице, и show default
+# возвращает пусто. /proc/net/route — запасной путь, он не зависит ни от PATH,
+# ни от политики маршрутизации.
 get_lan_ip() {
-    local ip
-    ip=$(ip -4 addr show 2>/dev/null \
-        | awk '/inet (10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {split($2,a,"/"); print a[1]; exit}')
+    local wan ip
+    wan=$(ip route get 1.1.1.1 2>/dev/null \
+          | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i+1); exit }}')
+    [ -n "$wan" ] || wan=$(awk '$2 == "00000000" {print $1; exit}' /proc/net/route 2>/dev/null)
+
+    # Мост предпочитаем явно: на Keenetic домашнюю сеть держит br*, и когда
+    # приватных адресов несколько, нужен именно он.
+    ip=$(ip -4 addr show 2>/dev/null | awk -v wan="${wan:-}" '
+        /^[0-9]+:/ { dev = $2; sub(/:$/, "", dev); sub(/@.*/, "", dev); next }
+        /inet (10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/ {
+            if (dev == "lo" || dev == wan) next
+            if (dev ~ /^(z2ktun|tun|tap|wg|nwg)/) next
+            split($2, a, "/")
+            if (dev ~ /^br/) { print a[1]; exit }
+            if (first == "") first = a[1]
+        }
+        END { if (first != "") print first }' | head -1)
+
+    # Ничего не нашлось — отдаём адрес источника наружу и НАЗЫВАЕМ ЕГО ТАК ЖЕ,
+    # как раньше: соврать про «LAN» второй раз хуже, чем признать неизвестность.
     if [ -z "$ip" ]; then
-        ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+        ip=$(ip route get 1.1.1.1 2>/dev/null \
+             | awk '{for (i = 1; i < NF; i++) if ($i == "src") { print $(i+1); exit }}')
+        [ -n "$ip" ] && ip="$ip (адрес наружу, домашней сети не нашлось)"
     fi
     printf '%s' "${ip:-unknown}"
 }
