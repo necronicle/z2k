@@ -51,15 +51,39 @@ type Monitor struct {
 	Doubt time.Duration // сколько терпеть «tx растёт, rx нет» до пробы
 	Fails int           // сколько провалов проб подряд = Dead
 
+	// ProveEvery — как часто пробовать доказать НЕДОКАЗАННЫЙ транспорт.
+	// Отдельно от Doubt (30 с) намеренно: пока транспорт не доказан, лестница
+	// стоит на нём, а человек без WARP. Ждать полминуты на каждой мёртвой
+	// ступени значит превратить перебор в вечность. Ноль — 3 с.
+	ProveEvery time.Duration
+
 	lastRx, lastTx uint64
 	rxLastMoved    time.Time // когда rx в последний раз рос (или первый замер)
 	lastProbe      time.Time
 	fails          int
 	seen           bool
+	proven         bool
 }
 
+// Proven — доказал ли ЭТОТ транспорт, что несёт трафик до конца.
+//
+// ГОТОВНОСТЬ ОБЯЗАНА БЫТЬ ДОКАЗАННОЙ. Shell-контракт всегда говорил
+// «0 — ready (туннель доказанно несёт трафик)», а монитор возвращал Alive на
+// первом же опросе, до единой пробы: достаточно было, что сессия установлена.
+// Маршруты поднимались на непроверенном туннеле, и там, где транспорт не
+// возит — MASQUE на линии, где его глушат, — трафик уходил в чёрную дыру.
+//
+// Чинить это выбором транспортов в коде нельзя, и попытка стоила поля: h2
+// сняли из лестницы по замеру на ОДНОЙ линии, а у тех, чей WG-диапазон
+// заблокирован целиком, он был единственным рабочим — WARP отключился совсем.
+// Решать обязан замер на КАЖДОМ роутере: держим в лестнице всё, а готовность
+// даём только тому, что доказало себя здесь.
+func (m *Monitor) Proven() bool { return m.proven }
+
 // Reset — после переоткрытия транспорта счётчики начинаются заново.
-func (m *Monitor) Reset() { *m = Monitor{Probe: m.Probe, Doubt: m.Doubt, Fails: m.Fails} }
+func (m *Monitor) Reset() {
+	*m = Monitor{Probe: m.Probe, Doubt: m.Doubt, Fails: m.Fails, ProveEvery: m.ProveEvery}
+}
 
 // Assess оценивает снимок h в момент now. src — имя интерфейса для пробы.
 func (m *Monitor) Assess(ctx context.Context, h transport.Health, now time.Time, src string) Verdict {
@@ -75,7 +99,12 @@ func (m *Monitor) Assess(ctx context.Context, h transport.Health, now time.Time,
 		m.seen = true
 		m.lastRx, m.lastTx = h.Rx, h.Tx
 		m.rxLastMoved = now
-		return Alive
+	}
+	if !m.proven {
+		// Сессия есть — но донесёт ли она до другого конца, ещё не известно.
+		// Пока не доказано, Alive не отдаём ни при каких счётчиках: у
+		// чёрной дыры rx тоже растёт, пока сервер здоровается.
+		return m.probe(ctx, now, src)
 	}
 	rxGrew := h.Rx > m.lastRx
 	txGrew := h.Tx > m.lastTx
@@ -99,7 +128,14 @@ func (m *Monitor) probe(ctx context.Context, now time.Time, src string) Verdict 
 	if m.Probe == nil {
 		return Doubtful
 	}
-	if !m.lastProbe.IsZero() && now.Sub(m.lastProbe) < m.Doubt {
+	every := m.Doubt
+	if !m.proven {
+		every = m.ProveEvery
+		if every <= 0 {
+			every = 3 * time.Second
+		}
+	}
+	if !m.lastProbe.IsZero() && now.Sub(m.lastProbe) < every {
 		if m.fails >= m.Fails {
 			return Dead
 		}
@@ -109,6 +145,7 @@ func (m *Monitor) probe(ctx context.Context, now time.Time, src string) Verdict 
 	if err := m.Probe(ctx, src); err == nil {
 		m.fails = 0
 		m.rxLastMoved = now
+		m.proven = true
 		return Alive
 	}
 	m.fails++

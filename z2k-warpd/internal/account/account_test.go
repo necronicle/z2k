@@ -404,3 +404,101 @@ func TestReservedRejectsBadClientID(t *testing.T) {
 		t.Fatal("want error")
 	}
 }
+
+// Починка негодного адреса обязана работать ОТДЕЛЬНО от Ensure: Ensure зовётся
+// только из подкоманды register, то есть при нажатии «Установить WARP». У того,
+// кто установил WARP раньше, она не выполнялась ни разу — демон читает
+// device.json напрямую. Поэтому старт демона зовёт именно эту функцию, и её
+// поведение проверяется само по себе.
+func TestRepairBadEndpoint(t *testing.T) {
+	newSrv := func(hits *int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*hits++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"new-id","token":"t","account":{"id":"a"},
+				"config":{"client_id":"cid","interface":{"addresses":{"v4":"172.16.0.2","v6":"::1"}},
+				"peers":[{"public_key":"pk","endpoint":{"v4":"8.6.112.0:2408","host":"engage.cloudflareclient.com:2408"}}]}}`))
+		}))
+	}
+
+	write := func(t *testing.T, dir, v4 string, retried bool) string {
+		t.Helper()
+		p := filepath.Join(dir, "device.json")
+		d := &Device{ID: "old-id", Token: "t", PrivateKey: "k", EndpointRetried: retried}
+		d.Endpoint.V4 = v4
+		if err := d.Save(p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	t.Run("негодный адрес чинится", func(t *testing.T) {
+		hits := 0
+		srv := newSrv(&hits)
+		defer srv.Close()
+		p := write(t, t.TempDir(), "162.159.192.6", false)
+		c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+		got, done, err := c.RepairBadEndpoint(context.Background(), p)
+		if err != nil || !done {
+			t.Fatalf("хотели перерегистрацию, получили done=%v err=%v", done, err)
+		}
+		if got.Endpoint.V4 == "162.159.192.6" {
+			t.Fatalf("адрес не сменился: %s", got.Endpoint.V4)
+		}
+		// Флаг обязан лечь НА ДИСК: иначе следующий старт демона попробует
+		// снова и будет жечь лимит устройств Cloudflare на каждой загрузке.
+		back, err := Load(p)
+		if err != nil || !back.EndpointRetried {
+			t.Fatalf("флаг не сохранён: %+v err=%v", back, err)
+		}
+	})
+
+	t.Run("второй раз не жжём лимит", func(t *testing.T) {
+		hits := 0
+		srv := newSrv(&hits)
+		defer srv.Close()
+		p := write(t, t.TempDir(), "162.159.192.6", true)
+		c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+		if _, done, err := c.RepairBadEndpoint(context.Background(), p); done || err != nil {
+			t.Fatalf("не должны были регистрироваться: done=%v err=%v", done, err)
+		}
+		if hits != 0 {
+			t.Fatalf("к API ходили %d раз, ожидали 0", hits)
+		}
+	})
+
+	t.Run("годный адрес не трогаем", func(t *testing.T) {
+		hits := 0
+		srv := newSrv(&hits)
+		defer srv.Close()
+		p := write(t, t.TempDir(), "8.6.112.0", false)
+		c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+		if _, done, err := c.RepairBadEndpoint(context.Background(), p); done || err != nil {
+			t.Fatalf("годный адрес чинить нечего: done=%v err=%v", done, err)
+		}
+		if hits != 0 {
+			t.Fatalf("к API ходили %d раз, ожидали 0", hits)
+		}
+	})
+
+	t.Run("отказ API оставляет старую запись", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		defer srv.Close()
+		p := write(t, t.TempDir(), "162.159.192.6", false)
+		c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+		got, done, err := c.RepairBadEndpoint(context.Background(), p)
+		if err == nil || done {
+			t.Fatalf("ждали ошибку без перерегистрации: done=%v err=%v", done, err)
+		}
+		// Негодная запись лучше, чем никакой: с ней виден диагноз.
+		if got == nil || got.ID != "old-id" {
+			t.Fatalf("старая запись потеряна: %+v", got)
+		}
+		back, _ := Load(p)
+		if back.EndpointRetried {
+			t.Fatal("флаг выставлен при неудаче — следующий старт не попробует")
+		}
+	})
+}

@@ -223,16 +223,11 @@ func TestAllFailSetsNoEndpointAndCoolsDown(t *testing.T) {
 		return false
 	})
 	waitFor(t, "no_endpoint status", func() bool { s := readStatus(h); return s != nil && !s.Ready && s.LastError == status.ErrNoEndpoint })
-	// Переключения ключа на masque больше не ждём: h2 снят из автоматической
-	// лестницы (замер 2026-08-24 — поднимается, рапортует готовность и не
-	// возит ничего). Полный провал всех WG-ступеней обязан честно дать
-	// no_endpoint, а не увести на транспорт, который не работает: тогда
-	// срабатывает fail-open и трафик идёт напрямую, а не в чёрную дыру.
 	h.mu.Lock()
 	sw := strings.Join(h.switched, ",")
 	h.mu.Unlock()
-	if strings.Contains(sw, "masque") {
-		t.Fatalf("автоматическая лестница не должна переключать ключ на masque: %q", sw)
+	if !strings.Contains(sw, "masque") {
+		t.Fatalf("h2 step must switch key to masque: %q", sw)
 	}
 	cancel()
 	<-done
@@ -338,4 +333,44 @@ func TestForcedStepDoesNotWriteLastGood(t *testing.T) {
 	if d.LastGood != nil {
 		t.Fatalf("forced run wrote last_good %+v", d.LastGood)
 	}
+}
+
+// РЕГРЕСС ИЗ ПОЛЯ: транспорт встал — трафик не идёт — готовность объявлена.
+//
+// Диагностика 2026-08-24 15:44 с роутера пользователя:
+//
+//	"ready":true,"transport":"h2","rx":248,"tx":314319
+//
+// Триста килобайт отправлено, двести сорок восемь байт получено. Маршруты
+// подняты, весь завёрнутый в WARP трафик — в никуда, и так пять минут, пока
+// не пришёл EOF. Проба не спасала, потому что rx ПОДТЕКАЛ: любой его рост
+// сбрасывает счётчик сомнения, тридцатисекундное окно не истекает никогда.
+//
+// Чинить это выбором транспортов в коде нельзя — на одной линии мёртв один,
+// на другой другой, и правка начинает ходить по кругу. Готовность обязана
+// быть ДОКАЗАННОЙ: пока сквозная проба не прошла, ready не даём, и тогда
+// shell не поднимает маршрут, а трафик идёт напрямую (fail-open).
+func TestBlackHoleNeverBecomesReady(t *testing.T) {
+	h := newHarness(t, baseDevice(), map[string]bool{"wg:2408": true})
+	cfg := h.config()
+	cfg.Probe = func(context.Context, string) error { return errors.New("чёрная дыра") }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = Run(ctx, cfg); close(done) }()
+
+	// Транспорт открылся — это видно по появлению status.json с ним.
+	waitFor(t, "транспорт открыт", func() bool {
+		s := readStatus(h)
+		return s != nil && s.Transport != ""
+	})
+	// И сколько бы он ни держался, готовым не становится ни разу.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s := readStatus(h); s != nil && s.Ready {
+			t.Fatal("непроверенный туннель объявлен готовым — маршруты уйдут в чёрную дыру")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
 }

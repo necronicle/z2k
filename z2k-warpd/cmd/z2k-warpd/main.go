@@ -101,6 +101,26 @@ func cmdRegister(args []string) int {
 	return 0
 }
 
+// repairBadEndpoint — см. account.RepairBadEndpoint. Отдельная функция, чтобы
+// сеть и таймаут не размазывались по телу cmdRun.
+func repairBadEndpoint(devPath, proxy string, logf func(string, ...any)) {
+	cl := &account.Client{HTTP: &http.Client{Timeout: 25 * time.Second}}
+	if proxy != "" {
+		if u, err := url.Parse(proxy); err == nil {
+			cl.HTTP.Transport = &http.Transport{Proxy: http.ProxyURL(u)}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	fresh, done, err := cl.RepairBadEndpoint(ctx, devPath)
+	switch {
+	case err != nil:
+		logf("endpoint: перерегистрация не удалась (%v) — поднимаюсь со старой записью", err)
+	case done:
+		logf("endpoint: выданный адрес из блокируемого диапазона — устройство перерегистрировано, новый %s", fresh.Endpoint.V4)
+	}
+}
+
 func cmdRun(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	devPath := fs.String("device", defaultDevice, "device.json")
@@ -120,6 +140,19 @@ func cmdRun(args []string) int {
 	defer lw.Close()
 	logf := lw.Logf
 	logf("z2k-warpd %s starting", version)
+
+	// ПОЧИНКА НЕГОДНОГО АДРЕСА — ЗДЕСЬ, А НЕ ТОЛЬКО В register.
+	//
+	// Запись, которой Cloudflare выдал первичный адрес из блокируемого
+	// целиком диапазона, не заработает никогда: вся лестница оказывается
+	// внутри него, и в логе видно четыре попытки на один и тот же адрес.
+	// Проверка жила в Ensure, а её зовёт только «Установить WARP» — до тех,
+	// у кого WARP уже стоял, она не доезжала вовсе.
+	//
+	// FAIL-OPEN: не вышло перерегистрировать — идём поднимать туннель со
+	// старой записью. Она мертва, но отказ стартовать оставил бы человека без
+	// диагноза, а с ней в статусе видно, ЧТО именно не работает.
+	repairBadEndpoint(*devPath, *proxy, logf)
 
 	cfg := engine.Config{
 		DevicePath: *devPath,

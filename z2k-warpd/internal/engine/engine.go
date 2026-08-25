@@ -179,7 +179,8 @@ func Run(ctx context.Context, cfg Config) error {
 	} else {
 		lad = ladder.New(d.Endpoint, d.LastGood)
 	}
-	mon := &health.Monitor{Probe: cfg.Probe, Doubt: 30 * time.Second, Fails: 2}
+	mon := &health.Monitor{Probe: cfg.Probe, Doubt: 30 * time.Second, Fails: 2,
+		ProveEvery: 3 * time.Second}
 
 	for ctx.Err() == nil {
 		step := lad.Current()
@@ -278,8 +279,18 @@ func (e *Engine) serve(ctx context.Context, tr transport.Transport, step account
 		now := e.cfg.Now()
 		h := tr.Health()
 		v := mon.Assess(ctx, h, now, e.iface)
+		// ГОТОВНОСТЬ — ТОЛЬКО ДОКАЗАННАЯ. Раньше здесь стояло просто
+		// «не мёртв», и туннель объявлялся готовым, едва встала сессия.
+		// В поле это выглядело так: ready=true, transport=h2, tx=314319 при
+		// rx=248 — маршруты подняты, трафик в никуда, и так пять минут, пока
+		// не пришёл EOF. Проба не срабатывала, потому что rx ПОДТЕКАЛ: любой
+		// его рост сбрасывает счётчик сомнения, и тридцатисекундное окно не
+		// истекает никогда.
+		//
+		// Doubtful у доказанного туннеля готовности НЕ снимает — иначе
+		// маршрут снимался бы при каждой паузе в трафике.
 		e.write(status.Status{
-			Ready:        v != health.Dead,
+			Ready:        v != health.Dead && mon.Proven(),
 			Transport:    step.Transport,
 			Endpoint:     tr.Endpoint(),
 			Iface:        e.iface,

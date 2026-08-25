@@ -425,6 +425,39 @@ func (c *Client) SwitchTunnel(ctx context.Context, d *Device, tunnel string) err
 	return nil
 }
 
+// RepairBadEndpoint — перерегистрация записи, которой Cloudflare выдал адрес из
+// диапазона, блокируемого целиком. Возвращает (устройство, была ли
+// перерегистрация, ошибка).
+//
+// ОТДЕЛЬНОЙ ФУНКЦИЕЙ, А НЕ ВНУТРИ Ensure, И ЭТО НЕ ВКУСОВЩИНА. Сначала проверка
+// жила только в Ensure — а Ensure зовётся ИСКЛЮЧИТЕЛЬНО из подкоманды register,
+// то есть при нажатии «Установить WARP». У того, кто установил WARP раньше и
+// больше эту кнопку не трогал, проверка не выполнялась НИ РАЗУ: демон при
+// старте читает device.json напрямую. Починка, до которой нельзя доехать
+// обновлением, — не починка. Теперь её зовёт и старт демона.
+//
+// Признак детерминированный и самоограниченный: новая регистрация плохого
+// диапазона не содержит (замер: на здоровой записи первичный 8.6.112.0, а
+// 162.159.192.x лежит запасным), а флаг EndpointRetried не даёт жечь лимит
+// устройств Cloudflare в цикле.
+func (c *Client) RepairBadEndpoint(ctx context.Context, path string) (*Device, bool, error) {
+	d, err := Load(path)
+	if err != nil || d.ID == "" {
+		return nil, false, err
+	}
+	if !badEndpoint(d.Endpoint.V4) || d.EndpointRetried {
+		return d, false, nil
+	}
+	fresh, rerr := c.Register(ctx)
+	if rerr != nil {
+		// Старую запись НЕ трогаем: негодная лучше, чем никакой — с ней хотя бы
+		// виден диагноз, и следующий запуск попробует снова.
+		return d, false, fmt.Errorf("re-register (bad endpoint %s): %w", d.Endpoint.V4, rerr)
+	}
+	fresh.EndpointRetried = true
+	return fresh, true, fresh.Save(path)
+}
+
 // Ensure — «устройство есть и живо»: существующий device.json проверяется
 // через GET (и обновляется), новое устройство заводится ТОЛЬКО если файла нет
 // или Cloudflare отозвал старое (ErrRevoked). Сетевая ошибка на GET — это
@@ -443,15 +476,10 @@ func (c *Client) Ensure(ctx context.Context, path string) (*Device, bool, error)
 		// туннеля десяток причин (провайдер, DPI, поезд), и перерегистрация по
 		// такому признаку жгла бы регистрации Cloudflare в цикле у того, у кого
 		// просто плохая сеть.
-		if badEndpoint(d.Endpoint.V4) && !d.EndpointRetried {
-			fresh, rerr := c.Register(ctx)
-			if rerr != nil {
-				// Старую запись НЕ трогаем: негодная лучше, чем никакой — с ней
-				// хотя бы виден диагноз, и следующий запуск попробует снова.
-				return nil, false, fmt.Errorf("re-register (bad endpoint %s): %w", d.Endpoint.V4, rerr)
-			}
-			fresh.EndpointRetried = true
-			return fresh, true, fresh.Save(path)
+		if fresh, done, rerr := c.RepairBadEndpoint(ctx, path); rerr != nil {
+			return nil, false, rerr
+		} else if done {
+			return fresh, true, nil
 		}
 		err := c.Refresh(ctx, d)
 		if err == nil {
