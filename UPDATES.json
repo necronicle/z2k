@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 40,
-  "current": "p-79.14",
+  "seq": 41,
+  "current": "p-79.15",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -196,7 +196,7 @@
   "files/z2k-blocked-monitor.sh": "a998797d7796859ec95d74d52b9f732dc89bf14a44351ac23e9c0632656767d2",
   "files/z2k-config-validator.sh": "30a4c557fae94db49227318ed98e09b80651f4692b75da0b74830ddec90186eb",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "80152c3777e10566efebfb13d9ee7464cca21fc35caff9225a796cf396a11b90",
+  "files/z2k-diag.sh": "dd92fb1e9aee672cf5966d1967c41b44db067e6c20a6873efa6c7a544f59592a",
   "files/z2k-dns-check.sh": "7049f2e022b57576ecccf828ff185dbe26931e1d7252d17191e89204741a0f67",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "516839c1e52913a88fc4eb94ff9ba0c84f744fc626740f7f1e06d62c57b0fb7d",
@@ -209,11 +209,11 @@
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "22f8dfad23bf5ea084fe14c2a104d59d73aae5a0f739af3b7a3baac4a9d5ed3c",
   "files/z2k-warp.sh": "494cf37d547106852456b9568ee7a989c3de55395a06287a31ecbdf414f10d25",
-  "lib/auto_update.sh": "cfb95db237d35c189a0c5f01bcad3e3bc78dbbac246698d74a2823103b4ac9df",
+  "lib/auto_update.sh": "c06696badee8aa11d371c1da9147437f957059313556b4ca96045259f51ff2f7",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
   "lib/config_official.sh": "6189d919478e34a3f0f5c596081648a9308d636166e16321085c69a88483fc2c",
   "lib/install.sh": "1ae0ccd85348d759b282d946c8efc455ca0122a49426ae7b39c17213155a4ddd",
-  "lib/menu.sh": "1949ecc7b01d8afc2c0a4dc9628e799418790ad547990027b8d8ffab35e523b2",
+  "lib/menu.sh": "ef00abcfacc32b2279f3d6278874a8455f1944b5dbd9a1c4feee102a11aba79d",
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
   "lib/utils.sh": "c057dd527c4e9bb47b7b4c40894184cc291f0dd95a8cd09a2ce404dc1a18b518",
   "lib/webpanel.sh": "02d92e6b020e711ec2d8b4bbfc2c24000d1abf0d3a64f5cbc40b310fafb24af7",
@@ -250,7 +250,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "5a88a7d773d562105e112068669a7ae70e2ba216f0e0b037ee473a7c0fe36f81",
+  "webpanel/www/index.html": "63a14223090d0eb9c092d1489bf4c85e79c6710d10560347518753d691805ad0",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -259,7 +259,7 @@
   "webpanel/www/js/core/loadorder.js": "ba986ce2d61c9cc9e73c032a4553ff8f22247573bace4e2933766fdcb096545e",
   "webpanel/www/js/core/toast.js": "2fdf1025826a4db97484ac702ff907ef280736d3a4d2639398182b9ef4cf4b2a",
   "webpanel/www/js/job.js": "da0832ecbb70861fa26d17008d5df9fbb69d240869771522bb8f9408f205365b",
-  "webpanel/www/js/pages/credits.js": "4bcba5fd3c66e76b9230db9dad033c89038dff6fcada1d71774e5375732f199e",
+  "webpanel/www/js/pages/credits.js": "2cc35603f1361ff4bd26fff917156567228d0e8295182733d34cf6c8aa0925fb",
   "webpanel/www/js/pages/dashboard.js": "8d4a142cff54cb919f0b142a40c306df34728a94075240624a3d09b4ea5c6840",
   "webpanel/www/js/pages/diag.js": "e8411baa40e9ad499a4e593307c2f7d32b5817ec673abe5e1afdd9d9fa9fed6d",
   "webpanel/www/js/pages/exclude.js": "e504ab23d951a99ef56c220a19fecc1cb9e689f59f547e1b20284100319ecd39",
@@ -273,11 +273,11 @@
   "webpanel/www/js/router.js": "b5a5a74b16bd51919bf9266f11871f6aed62a1828bd5891a13b1bf2e5cf951ed",
   "webpanel/www/js/state-model.js": "5c45e8aa73857dd453c011fa4c533c8b8e9a6acecba97f37b7d6a90d63896405",
   "webpanel/www/style.css": "98880300f72f79d6251e841437f12e9851e7f3011b49c5a6cede45df6c5d7d08",
-  "z2k-warpd/builds/z2k-warpd-linux-amd64": "db488391ef5d5197ca90c3f0569ee35418b81dd2592c865e6bda3d44c70aaa7a",
-  "z2k-warpd/builds/z2k-warpd-linux-arm": "26921c96c054b9c3b64510f4e4a23dae63a71bb7cf0cd83cda940f5b8eec74cb",
-  "z2k-warpd/builds/z2k-warpd-linux-arm64": "79e525edb5655fd5884f67aefbd12a7b6e663c7766e13ec61efec357dcd1d8f9",
-  "z2k-warpd/builds/z2k-warpd-linux-mips": "f220429c773d1748c8dd814954c6cb39b070c0682e3808980546a84258eaf5e9",
-  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "fad15d878583fff1874c11598645693f70132558aecfb3ee74ab46e252e6e74c",
+  "z2k-warpd/builds/z2k-warpd-linux-amd64": "059006470af04343949b1def82d5d43a946468baa54c56db2124b3a973768278",
+  "z2k-warpd/builds/z2k-warpd-linux-arm": "fe345de6c963cd3d18812215886e42b296839ce1f2888f367957eba1ddd322b8",
+  "z2k-warpd/builds/z2k-warpd-linux-arm64": "6870ee515383502a944e6c0445f3e34d443fc01cba6d01a9709f316376d16728",
+  "z2k-warpd/builds/z2k-warpd-linux-mips": "f2bc9317c050b4dbeab778e052b0c617ee0f00146a1e90a2166bc9a6d2651ef5",
+  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "d56120c8f369c484303b298198c53b795a813c0b4672758c1ee8fd2ef585b76f",
   "z2k.sh": "eaff72fc2dd2a931d639af2ce8ded19da5c6c7b4de1d881da9e21e8ce7aabaef"
   },
   "history": [
@@ -471,6 +471,7 @@
 {"v": "p-79.10", "type": "patch", "ts": "2026-08-24T14:56:04Z", "ref": "p-79.10", "desc": "Поднимает обход у тех, у кого он перестал запускаться после вчерашних обновлений, и убирает с роутера файл, ставший причиной. Если у вас всё работало — ничего не изменится.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-79.12", "type": "patch", "ts": "2026-08-24T16:09:30Z", "ref": "p-79.12", "desc": "Списки доменов снова обновляются у всех — раньше после переустановки роутер мог замереть на старой версии списков. Плюс исправлены внутренние шаги обновления, которые раньше не сработали бы.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "lib/config_official.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "p-79.13", "type": "patch", "ts": "2026-08-24T21:53:17Z", "ref": "p-79.13", "desc": "Появилась проверка DNS в разделе «Диагностика»: она показывает, подменяет ли провайдер ответы серверов имён, и какими серверами можно пользоваться — обычными, DoH и DoT. Свои серверы можно добавить в проверку. WARP теперь сам переснимает регистрацию, если ему достался заблокированный в России адрес, а настройки веб-панели больше не сбрасываются при обновлении.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "files/z2k-update-lists.sh", "lib/install.sh", "lib/menu.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/init.d/S96z2k-webpanel", "webpanel/install.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "webpanel/www/style.css", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-79.14", "type": "patch", "ts": "2026-08-24T22:38:53Z", "ref": "p-79.14", "desc": "Журнал обновления теперь показывает, какой файл скачивается и сколько осталось — раньше он надолго замолкал, и обновление выглядело зависшим. Проверка DNS в «Диагностике» открывается свёрнутой. Предупреждение о перерегистрации WARP переехало в окно подтверждения, чтобы не путать с соседними кнопками.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-79.14", "type": "patch", "ts": "2026-08-24T22:38:53Z", "ref": "p-79.14", "desc": "Журнал обновления теперь показывает, какой файл скачивается и сколько осталось — раньше он надолго замолкал, и обновление выглядело зависшим. Проверка DNS в «Диагностике» открывается свёрнутой. Предупреждение о перерегистрации WARP переехало в окно подтверждения, чтобы не путать с соседними кнопками.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-79.15", "type": "patch", "ts": "2026-08-25T07:21:46Z", "ref": "p-79.15", "desc": "WARP теперь считает туннель рабочим только после того, как убедится, что через него действительно идут данные — раньше на некоторых сетях соединение объявлялось готовым, а трафик уходил в никуда. Обновление из терминала больше не обрывается молча на середине. Диагностика не сообщает о неисправности Telegram, если туннель выключен вручную, и показывает состояние адресов Instagram и WhatsApp.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
