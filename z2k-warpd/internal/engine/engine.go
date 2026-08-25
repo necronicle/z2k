@@ -164,10 +164,12 @@ func Run(ctx context.Context, cfg Config) error {
 	e.write(status.Status{Ready: false, Iface: e.iface, Addr: d.AddrV4, HandshakeAge: -1})
 	e.st.Flush()
 
-	if err := nat.Ensure(nat.Runner(cfg.Run), e.iface); err != nil {
+	// MSS считаем от MTU туннеля, а не вписываем числом: два числа в разных
+	// местах разъедутся при первой же смене MTU. 20 байт IP плюс 20 TCP.
+	if err := nat.Ensure(nat.Runner(cfg.Run), e.iface, MTU-40); err != nil {
 		cfg.Logf("nat: %v", err)
 	}
-	defer nat.Remove(nat.Runner(cfg.Run), e.iface)
+	defer nat.Remove(nat.Runner(cfg.Run), e.iface, MTU-40)
 
 	var lad *ladder.Ladder
 	if cfg.ForceStep != nil {

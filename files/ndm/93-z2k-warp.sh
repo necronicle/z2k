@@ -48,8 +48,26 @@ case "$table" in
             ipt -t mangle -C PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" \
                 || ipt -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK"
         done
+        # MSS ЗАЖИМАЕМ В ОБЕ СТОРОНЫ, и второе правило не зеркально первому.
+        #
+        # Замер на роутере владельца 2026-08-25, живой трафик телефона:
+        #   SYN     клиент -> в туннель  : mss 1240  (140 из 140 — зажат)
+        #   SYN-ACK сервер -> из туннеля : mss 1460  (140 из 140 — НЕ зажат)
+        # Клиенту разрешалось слать в туннель с MTU 1280 сегменты по 1460:
+        # скачивание шло, а всё, что он ОТПРАВЛЯЕТ крупнее 1240 байт,
+        # обрывалось. В поле — «карты не грузятся, hh падает».
+        #
+        # Зеркальное правило не годится: SYN-ACK уходит через мост с MTU 1500,
+        # и clamp-mss-to-pmtu дал бы там те же 1460. Нужен явный set-mss по MTU
+        # туннеля: 1280 - 20 (IP) - 20 (TCP). Прошивка для своего ppp0 ставит
+        # зажим в обе стороны — мы делали в одну.
+        #
+        # Число здесь ДОЛЖНО совпадать с engine.MTU-40 в движке; за этим следит
+        # tests/test_warp_mss_both_ways.sh.
         ipt -t mangle -C FORWARD -o "$iface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu \
             || ipt -t mangle -A FORWARD -o "$iface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        ipt -t mangle -C FORWARD -i "$iface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240 \
+            || ipt -t mangle -A FORWARD -i "$iface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240
         ;;
     nat)
         ipt -t nat -C POSTROUTING -o "$iface" -j MASQUERADE \
