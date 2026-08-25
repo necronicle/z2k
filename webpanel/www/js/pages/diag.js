@@ -321,9 +321,10 @@ function renderDnsResult(d) {
   const srv = d.servers || [];
   const plain = srv.filter(s => s.udp !== "none").map(s => ({ name: s.name, state: s.udp, ms: null, current: s.current, yt: s.yt }));
   const doh = srv.filter(s => s.doh !== "none").map(s => ({ name: s.name, state: s.doh, ms: s.doh_ms, current: s.current, yt: s.yt }));
-  // DoT — только состояние, без времени: ожидание опрашивается посекундно
-  // (дробного sleep на busybox нет), и любое «время» отсюда врало бы на порядок.
-  const dot = srv.filter(s => s.dot !== "none").map(s => ({ name: s.name, state: s.dot, ms: null, current: s.current, yt: s.yt }));
+  // У DoT время ЕСТЬ: счётчик опросов с шагом 10 мс меряет полный обмен —
+  // TCP, TLS и сам запрос. Раньше здесь стоял null, потому что я счёл
+  // измерение невозможным; невозможен был только посекундный опрос.
+  const dot = srv.filter(s => s.dot !== "none").map(s => ({ name: s.name, state: s.dot, ms: s.dot_ms, current: s.current, yt: s.yt }));
 
   // Сводного блока здесь БОЛЬШЕ НЕТ, и это снятие, а не пропажа.
   //
