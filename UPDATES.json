@@ -1,14 +1,14 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 45,
-  "current": "r-80",
+  "seq": 46,
+  "current": "r-80.1",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
   "files/etc/z2k-roots.pem": ["/opt/zapret2/etc/z2k-roots.pem"],
   "files/etc/z2k-update-pub.pem": ["/opt/zapret2/etc/z2k-update-pub.pem"],
-  "files/fake/ACTIVE_DISCORD_UDP.bin": ["/opt/zapret2/files/fake/ACTIVE_DISCORD_UDP.bin"],
+  "files/fake/active_discord_udp.bin": ["/opt/zapret2/files/fake/active_discord_udp.bin"],
   "files/fake/quic_1.bin": ["/opt/zapret2/files/fake/quic_1.bin"],
   "files/fake/quic_4.bin": ["/opt/zapret2/files/fake/quic_4.bin"],
   "files/fake/quic_5.bin": ["/opt/zapret2/files/fake/quic_5.bin"],
@@ -131,10 +131,10 @@
   },
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "5a445a085523c9f1d89ee2d19ff9aa9a342043eb15b45ea11980edc082e74b83",
+  "files/S99zapret2.new": "a3bfe88754cccfd10688f6e0a4b0216b31d097ebdfa2631f4681a6a2483a609b",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
-  "files/fake/ACTIVE_DISCORD_UDP.bin": "2fe18b3bd20807d36704d0b072092ee49ae84edca907a4420ab9a0f0f28fddcf",
+  "files/fake/active_discord_udp.bin": "2fe18b3bd20807d36704d0b072092ee49ae84edca907a4420ab9a0f0f28fddcf",
   "files/fake/quic_1.bin": "f4589c57749f956bb30538197a521d7005f8b0a8723b4707e72405e51ddac50a",
   "files/fake/quic_4.bin": "0e53683f2408bab1f52bc3db10c11b3a2bf238f68db64f4d0ea8aff37e07a61d",
   "files/fake/quic_5.bin": "a7ea947b0efe4690b91f6180ff16c0f750443901f0f6310d94dca9f0b8606dac",
@@ -188,7 +188,7 @@
   "files/ndm/95-z2k-scheduler-watchdog.sh": "d73955d742263bda01ecca1be4b04deb7bba61164a5da2609f3e9977f443ad63",
   "files/z2k-auto-update.sh": "f8b10d95667dc4eb2a64a5a126b42cf4572170cfe23655bfe5effe831a77e9b7",
   "files/z2k-blocked-monitor.sh": "a998797d7796859ec95d74d52b9f732dc89bf14a44351ac23e9c0632656767d2",
-  "files/z2k-config-validator.sh": "30a4c557fae94db49227318ed98e09b80651f4692b75da0b74830ddec90186eb",
+  "files/z2k-config-validator.sh": "a8d01d7f7eb2268dd3487e1b560700ad7eb2c5b87a8428c61df25c9570fdf09a",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
   "files/z2k-diag.sh": "60df00284d69fb4f3f8ac77f256704020a4db5069c1c3e246cf5cdd3b9a4257e",
   "files/z2k-dns-check.sh": "e568560eeb992b0e118b7422bae9ed3e240bbe91d2fc00395102e31a9db60031",
@@ -244,7 +244,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "8c50b326f1d138d3f376f46749d35d04e09356b502e6a1a64a239612a04dc588",
+  "webpanel/www/index.html": "638cce935953d72d12b7e3b6e20c3d8915bd8685d56ce31b747e7d398804f7a2",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -272,7 +272,7 @@
   "z2k-warpd/builds/z2k-warpd-linux-arm64": "6234bafd85cdc204aadae4063cee7db99e9b1085280c6c0d0a584b25a18bcf7f",
   "z2k-warpd/builds/z2k-warpd-linux-mips": "f1c8cdb6ff6ae79abcbbcae58dc7f1f96a8e456caf381a2ae40e46da6b719a71",
   "z2k-warpd/builds/z2k-warpd-linux-mipsel": "58dababfe3d76d76860cfe3d7391ce7163f92d752a65e02dc72ed018058daf43",
-  "z2k.sh": "bb39d492032749095d0af5e5aa085c2fe9639325e11e6b289e29d8025e94de04"
+  "z2k.sh": "e0b556e7c19847e30c260b97caae4e0998cac2d21acd467c9d4f97389903e489"
   },
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
@@ -470,6 +470,7 @@
 {"v": "p-79.16", "type": "patch", "ts": "2026-08-25T10:37:22Z", "ref": "p-79.16", "desc": "Обновления стали заметно быстрее: подготовка к установке занимала около сорока секунд без единого сообщения на экране — теперь она проходит мгновенно. В проверке DNS исправлено сохранение своих серверов и добавлено время ответа для DoT.", "changed_files": ["webpanel/www/index.html", "files/z2k-dns-check.sh", "lib/auto_update.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-79.17", "type": "patch", "ts": "2026-08-25T14:36:11Z", "ref": "p-79.17", "desc": "В диагностике исправлен адрес роутера: у подключений IPoE там мог оказаться адрес провайдера вместо адреса домашней сети.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-79.18", "type": "patch", "ts": "2026-08-25T19:49:04Z", "ref": "p-79.18", "desc": "WARP стал подниматься там, где раньше не мог: движок сам находит рабочее подключение, если выданные Cloudflare адреса не отвечают, и подбирает настройку обхода, при которой соединение не обрывают. Исправлена работа сайтов через WARP — раньше часть страниц не открывалась, хотя скачивание шло.", "changed_files": ["webpanel/www/index.html", "files/lists/warp-endpoints.txt", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "webpanel/www/js/pages/toggles.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "r-80", "type": "reinstall", "ts": "2026-08-26T19:39:59Z", "ref": "r-80", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/ACTIVE_DISCORD_UDP.bin", "files/lua/z2k-alert.lua", "files/lua/z2k-state-persist.lua", "files/z2k-dns-check.sh", "files/z2k-geosite.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false}
+{"v": "r-80", "type": "reinstall", "ts": "2026-08-26T19:39:59Z", "ref": "r-80", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/ACTIVE_DISCORD_UDP.bin", "files/lua/z2k-alert.lua", "files/lua/z2k-state-persist.lua", "files/z2k-dns-check.sh", "files/z2k-geosite.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
+{"v": "r-80.1", "type": "reinstall", "ts": "2026-08-26T21:59:05Z", "ref": "r-80.1", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/active_discord_udp.bin", "files/z2k-config-validator.sh", "z2k.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
