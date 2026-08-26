@@ -75,7 +75,7 @@ Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
 # Вторая попытка, а не просто короткий таймаут: Layer 0 существует ради тех, у
 # кого прямой github закрыт, и бросать основной путь из-за одного потерянного
 # пакета нельзя. Потеря SYN-ACK — событие независимое, повтор стоит 0.27 с.
-Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-8}"
 Z2K_FETCH_VPS_TRIES="${Z2K_FETCH_VPS_TRIES:-2}"
 
 # Echo `--resolve h:443:<VPS> ...` для всех github-хостов цепочки редиректов,
@@ -521,7 +521,7 @@ z2k_sha256_file() {
 # If no digest tool exists we accept and warn rather than fail: refusing every
 # update on such a router is a worse outcome than the status quo it inherits.
 _z2k_verify_fetched() {
-    local dest="$1" want="${Z2K_FETCH_SHA256:-}" got
+    local dest="$1" src="${2:-}" want="${Z2K_FETCH_SHA256:-}" got
     [ -n "$want" ] || return 0
     got=$(z2k_sha256_file "$dest" 2>/dev/null)
     if [ -z "$got" ]; then
@@ -529,8 +529,12 @@ _z2k_verify_fetched() {
         return 0
     fi
     [ "$got" = "$want" ] && return 0
-    printf '[z2k_fetch] содержимое не совпало с ожидаемым (ждали %.12s…, получили %.12s…) — источник отклонён\n' \
-        "$want" "$got" >&2
+    # ИМЯ ИСТОЧНИКА В СООБЩЕНИИ ОБЯЗАТЕЛЬНО. Без него журнал говорит «байты не
+    # те», но не говорит ОТКУДА, и разбор случая упирается в догадки: у нас
+    # четыре слоя, и виноват всегда ровно один. Ровно так и вышло с диагностикой
+    # 26.08.2026 — установить зеркало по журналу было нельзя.
+    printf '[z2k_fetch] %s: содержимое не совпало с ожидаемым (ждали %.12s…, получили %.12s…) — источник отклонён\n' \
+        "${src:-источник}" "$want" "$got" >&2
     rm -f "$dest" "${dest}.etag" 2>/dev/null
     return 1
 }
@@ -602,7 +606,8 @@ z2k_fetch() {
     # bytes (stale cache, truncated body) is treated exactly like one that did
     # not answer at all, and we move to the next.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
-    if [ -n "$_vps_resolve" ]; then
+    # Слой 0 отключён размыкателем ниже, если VPS не отвечал подряд.
+    if [ -n "$_vps_resolve" ] && [ "${Z2K_FETCH_VPS_OUT:-0}" != "1" ]; then
         local _vps_tries _vps_ct
         # --- z2k layer0 vps knobs (canonical; keep byte-identical in all 4 copies) ---
         # Санитайз ручек — в z2k_uint: мусор → дефолт, выход за границы → зажим.
@@ -610,14 +615,15 @@ z2k_fetch() {
         # последовательный перебор ДО того, как будет испробован прямой путь.
         # Вложенность у четвёртой копии своя — сравнивать без ведущих пробелов.
         _vps_tries=$(z2k_uint "${Z2K_FETCH_VPS_TRIES:-2}" 2 1 5)
-        _vps_ct=$(z2k_uint "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}" 3 1)
+        _vps_ct=$(z2k_uint "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-8}" 8 1)
         # --- end z2k layer0 vps knobs ---
         local _vps_try=0
         while [ "$_vps_try" -lt "$_vps_tries" ]; do
             _vps_try=$((_vps_try + 1))
             if _z2k_curl_etag "$url" "$dest" "$_vps_resolve" \
                    "$_vps_ct" \
-               && _z2k_verify_fetched "$dest"; then
+               && _z2k_verify_fetched "$dest" "VPS"; then
+                Z2K_FETCH_VPS_CONNFAILS=0; export Z2K_FETCH_VPS_CONNFAILS
                 return 0
             fi
             # --- z2k layer0 retry gate (canonical; keep byte-identical in all 4 copies) ---
@@ -626,11 +632,34 @@ z2k_fetch() {
             [ "${Z2K_LAST_CONNFAIL:-0}" = "1" ] || break
             # --- end z2k layer0 retry gate ---
         done
+        # --- z2k layer0 breaker (canonical; keep byte-identical in all 4 copies) ---
+        # Мёртвый VPS не должен стоить бюджета НА КАЖДОМ файле. Обновление тянет
+        # полторы сотни файлов, и при 8 с в две попытки это сорок минут чистого
+        # ожидания там, где ответ известен уже после первого. Считаем ПОДРЯД
+        # идущие отказы ФАЗЫ СОЕДИНЕНИЯ; после второго слой 0 отключается до
+        # конца прогона, любой его успех счётчик обнуляет.
+        #
+        # Отказ по СОДЕРЖИМОМУ сюда не идёт намеренно: там виноват не канал, и
+        # следующий файл с того же VPS может прийти целым. Отключать слой из-за
+        # одного расхождения значит терять первичный путь на ровном месте.
+        if [ "${Z2K_LAST_CONNFAIL:-0}" = "1" ]; then
+            # Считаем ПОПЫТКИ, а не вызовы: две подряд и есть исчерпанный
+            # бюджет слоя. По вызовам порог не взводился бы на первом файле,
+            # то есть ровно там, где ответ уже известен.
+            Z2K_FETCH_VPS_CONNFAILS=$(( ${Z2K_FETCH_VPS_CONNFAILS:-0} + _vps_try ))
+            export Z2K_FETCH_VPS_CONNFAILS
+            if [ "$Z2K_FETCH_VPS_CONNFAILS" -ge "$(z2k_uint "${Z2K_FETCH_VPS_GIVEUP:-2}" 2 1 20)" ]; then
+                Z2K_FETCH_VPS_OUT=1; export Z2K_FETCH_VPS_OUT
+                printf '[z2k_fetch] VPS не отвечает %s раз подряд — слой 0 отключён до конца прогона\n' \
+                    "$Z2K_FETCH_VPS_CONNFAILS" >&2
+            fi
+        fi
+        # --- end z2k layer0 breaker ---
     fi
 
-    if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest"; then return 0; fi
-    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && return 0
-    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" && return 0
+    if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest" "GitHub напрямую"; then return 0; fi
+    [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" "jsdelivr" && return 0
+    [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" "gh-proxy" && return 0
 
     # All three normal mirrors fell through. Bump a cross-call streak counter:
     # a SINGLE transient fall-through must NOT trigger the ndmc DNS override,
@@ -665,9 +694,9 @@ z2k_fetch() {
         done
         if [ "$resolved_any" = "1" ]; then
             sleep 1
-            if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest"; then return 0; fi
-            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" && return 0
-            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" && return 0
+            if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest" "GitHub напрямую (после ndmc)"; then return 0; fi
+            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" "jsdelivr (после ndmc)" && return 0
+            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" "gh-proxy (после ndmc)" && return 0
         fi
     fi
 

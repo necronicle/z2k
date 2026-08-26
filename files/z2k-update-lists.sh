@@ -49,7 +49,7 @@ Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
 # Вторая попытка, а не просто короткий таймаут: Layer 0 существует ради тех, у
 # кого прямой github закрыт, и бросать основной путь из-за одного потерянного
 # пакета нельзя. Потеря SYN-ACK — событие независимое, повтор стоит 0.27 с.
-Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-8}"
 Z2K_FETCH_VPS_TRIES="${Z2K_FETCH_VPS_TRIES:-2}"
 
 _z2k_vps_gh_resolve() {
@@ -291,7 +291,8 @@ z2k_fetch() {
     # Layer 0: VPS SNI-passthrough egress — первичный путь для github (RU
     # блокирует прямые github-IP). На сбой тихо валимся в цепочку ниже.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
-    if [ -n "$_vps_resolve" ]; then
+    # Слой 0 отключён размыкателем ниже, если VPS не отвечал подряд.
+    if [ -n "$_vps_resolve" ] && [ "${Z2K_FETCH_VPS_OUT:-0}" != "1" ]; then
         local _vps_tries _vps_ct
         # --- z2k layer0 vps knobs (canonical; keep byte-identical in all 4 copies) ---
         # Санитайз ручек — в z2k_uint: мусор → дефолт, выход за границы → зажим.
@@ -299,7 +300,7 @@ z2k_fetch() {
         # последовательный перебор ДО того, как будет испробован прямой путь.
         # Вложенность у четвёртой копии своя — сравнивать без ведущих пробелов.
         _vps_tries=$(z2k_uint "${Z2K_FETCH_VPS_TRIES:-2}" 2 1 5)
-        _vps_ct=$(z2k_uint "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}" 3 1)
+        _vps_ct=$(z2k_uint "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-8}" 8 1)
         # --- end z2k layer0 vps knobs ---
         local _vps_try=0
         while [ "$_vps_try" -lt "$_vps_tries" ]; do
@@ -307,6 +308,7 @@ z2k_fetch() {
             if _z2k_curl_etag "$url" "$dest" "$_vps_resolve" \
                    "$_vps_ct" \
                && _z2k_ul_verify "$dest"; then
+                Z2K_FETCH_VPS_CONNFAILS=0; export Z2K_FETCH_VPS_CONNFAILS
                 return 0
             fi
             # --- z2k layer0 retry gate (canonical; keep byte-identical in all 4 copies) ---
@@ -315,6 +317,29 @@ z2k_fetch() {
             [ "${Z2K_LAST_CONNFAIL:-0}" = "1" ] || break
             # --- end z2k layer0 retry gate ---
         done
+        # --- z2k layer0 breaker (canonical; keep byte-identical in all 4 copies) ---
+        # Мёртвый VPS не должен стоить бюджета НА КАЖДОМ файле. Обновление тянет
+        # полторы сотни файлов, и при 8 с в две попытки это сорок минут чистого
+        # ожидания там, где ответ известен уже после первого. Считаем ПОДРЯД
+        # идущие отказы ФАЗЫ СОЕДИНЕНИЯ; после второго слой 0 отключается до
+        # конца прогона, любой его успех счётчик обнуляет.
+        #
+        # Отказ по СОДЕРЖИМОМУ сюда не идёт намеренно: там виноват не канал, и
+        # следующий файл с того же VPS может прийти целым. Отключать слой из-за
+        # одного расхождения значит терять первичный путь на ровном месте.
+        if [ "${Z2K_LAST_CONNFAIL:-0}" = "1" ]; then
+            # Считаем ПОПЫТКИ, а не вызовы: две подряд и есть исчерпанный
+            # бюджет слоя. По вызовам порог не взводился бы на первом файле,
+            # то есть ровно там, где ответ уже известен.
+            Z2K_FETCH_VPS_CONNFAILS=$(( ${Z2K_FETCH_VPS_CONNFAILS:-0} + _vps_try ))
+            export Z2K_FETCH_VPS_CONNFAILS
+            if [ "$Z2K_FETCH_VPS_CONNFAILS" -ge "$(z2k_uint "${Z2K_FETCH_VPS_GIVEUP:-2}" 2 1 20)" ]; then
+                Z2K_FETCH_VPS_OUT=1; export Z2K_FETCH_VPS_OUT
+                printf '[z2k_fetch] VPS не отвечает %s раз подряд — слой 0 отключён до конца прогона\n' \
+                    "$Z2K_FETCH_VPS_CONNFAILS" >&2
+            fi
+        fi
+        # --- end z2k layer0 breaker ---
         # Статус последней попытки: настоящий 404 отдаётся на обеих.
         # Слой 0 — сквозной проход к raw.githubusercontent.com, его 404 авторитетен.
         if [ "${Z2K_LAST_HTTP:-}" = "404" ]; then Z2K_FETCH_AUTH_404=1; else Z2K_FETCH_ALL_404=0; fi

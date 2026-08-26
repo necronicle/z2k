@@ -100,7 +100,7 @@ Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
 # рукопожатия стоил 15 с на VPS-хопе плюс столько же на прямом, и так на
 # каждый ассет — до 45 с на шаге установки, ради экономии на котором всё и
 # делалось.
-Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}"
+Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-8}"
 Z2K_FETCH_VPS_TRIES="${Z2K_FETCH_VPS_TRIES:-2}"
 
 _z2k_vps_gh_resolve() {
@@ -282,7 +282,7 @@ fetch_to_tmp() {
     # последовательный перебор ДО того, как будет испробован прямой путь.
     # Вложенность у четвёртой копии своя — сравнивать без ведущих пробелов.
     _vps_tries=$(z2k_uint "${Z2K_FETCH_VPS_TRIES:-2}" 2 1 5)
-    _vps_ct=$(z2k_uint "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-3}" 3 1)
+    _vps_ct=$(z2k_uint "${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-8}" 8 1)
     # --- end z2k layer0 vps knobs ---
     # Бюджет коннекта — короткий ТОЛЬКО когда за спиной есть запасной путь,
     # то есть когда мы идём через VPS. При выключенном Layer 0 этот же запрос
