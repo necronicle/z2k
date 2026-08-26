@@ -510,6 +510,8 @@ check_profile_structure() {
     _consecutive_new=0
     _filters_seen=""
     _dup_filters=""
+    _prof_keys=""
+    _current_sel=""
 
     # Преобразуем в строку токенов
     _tokens=$(printf "%s\n" "$_opt_text" | tr '\n' ' ' | sed 's/  */ /g')
@@ -547,36 +549,45 @@ check_profile_structure() {
                         _missing_filter=$((_missing_filter + 1))
                     fi
                 fi
-                # Проверить дубликаты фильтров
+                # ДУБЛЬ — ЭТО ПОВТОР ПРОФИЛЯ ЦЕЛИКОМ, А НЕ ПОВТОР ПОРТА.
+                #
+                # Раньше сравнивался один --filter-tcp, и предупреждение падало
+                # на КАЖДОЙ здоровой генерации: у нас несколько профилей на 443
+                # по построению — один порт, разные хостлисты, разные стратегии.
+                # Предупреждение, которое горит всегда, не читают вообще, и
+                # рядом с ним не замечают настоящее.
+                #
+                # Недостижим профиль только тогда, когда он не отличается от
+                # предыдущего НИЧЕМ: те же порты И те же селекторы. Тогда до
+                # него не дойдёт ни один пакет — вот об этом и говорим.
                 if [ -n "$_current_filters" ]; then
-                    for _cf in $_current_filters; do
-                        case " $_filters_seen " in
-                            *" $_cf "*)
-                                _dup_filters="$_dup_filters $_cf"
-                                ;;
-                        esac
-                    done
-                    _filters_seen="$_filters_seen $_current_filters"
+                    _key=$(printf '%s|%s' "$_current_filters" "$_current_sel" | tr -d ' ')
+                    case "|$_prof_keys|" in
+                        *"|$_key|"*) _dup_filters="$_dup_filters $_current_filters" ;;
+                    esac
+                    _prof_keys="$_prof_keys|$_key"
                 fi
-                _current_filters=""
+                _current_filters=""; _current_sel=""
                 _profile_idx=$((_profile_idx + 1))
                 _in_profile=1
                 ;;
             --filter-tcp=*|--filter-udp=*)
                 _current_filters="$_current_filters $_tok"
                 ;;
+            --hostlist=*|--hostlist-exclude=*|--hostlist-domains=*|--hostlist-exclude-domains=*|--ipset=*|--ipset-exclude=*)
+                # Селекторы профиля: именно они отличают два профиля на одном
+                # порту друг от друга. См. проверку дублей ниже.
+                _current_sel="$_current_sel $_tok"
+                ;;
         esac
     done
 
     # Последний профиль (после последнего --new или без --new)
     if [ "$_in_profile" = "1" ] && [ -n "$_current_filters" ]; then
-        for _cf in $_current_filters; do
-            case " $_filters_seen " in
-                *" $_cf "*)
-                    _dup_filters="$_dup_filters $_cf"
-                    ;;
-            esac
-        done
+        _key=$(printf '%s|%s' "$_current_filters" "$_current_sel" | tr -d ' ')
+        case "|$_prof_keys|" in
+            *"|$_key|"*) _dup_filters="$_dup_filters $_current_filters" ;;
+        esac
     fi
 
     _total_profiles=$((_profile_idx + 1))
@@ -592,7 +603,7 @@ check_profile_structure() {
         report_warn "${_missing_filter} профиль(ей) без --filter-tcp/--filter-udp"
     fi
 
-    # Дубликаты фильтров (не всегда ошибка, но подозрительно)
+    # Профиль, повторяющий предыдущий целиком: до него не дойдёт ни один пакет.
     if [ -n "$_dup_filters" ]; then
         _seen=""
         for _d in $_dup_filters; do
@@ -600,7 +611,7 @@ check_profile_structure() {
                 *" $_d "*) continue ;;
             esac
             _seen="$_seen $_d"
-            report_warn "Дублирующийся фильтр между профилями: $_d"
+            report_warn "Профиль недостижим — повторяет предыдущий целиком: $_d"
         done
     fi
 }

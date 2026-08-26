@@ -1156,7 +1156,7 @@ au_download_repo_file() {
     local repo_path="$1"
     local target="$2"
     local want_sha="${3:-}"
-    local url rc
+    local url rc _cb _cburl
     url="$(au_repo_base)/${repo_path}"
     mkdir -p "$(dirname "$target")"
     if command -v z2k_fetch >/dev/null 2>&1; then
@@ -1173,6 +1173,38 @@ au_download_repo_file() {
         z2k_fetch "$url" "$target" || rc=$?
         unset Z2K_FETCH_SHA256
         [ "$rc" = "0" ] && { [ -s "$target" ] || [ -f "$target" ]; } && return 0
+
+        # ПЕРЕЗАПРОС МИМО КЭША. Перебор зеркал не спасает от единственной
+        # причины, общей для ВСЕХ зеркал сразу: релизная ветка только что
+        # переехала, а кэши ещё несколько минут отдают до-релизные байты.
+        # Манифест этим уже защищён (au_repair_torn_pair), файлы — не были, и
+        # окно после каждой публикации гарантированно ловило того, кто
+        # проверился первым: манифест свежий, файл старый, sha не сходится,
+        # откат. Так лёг r-80.1 на первом же роутере.
+        #
+        # Ждать истечения кэша — не решение: обновление и так уже объявлено,
+        # а роутер уходит в откат и следующую попытку делает через сутки.
+        # Спрашиваем те же зеркала ещё раз, но с уникальным параметром: для
+        # кэша это другой объект, и он идёт за ним к первоисточнику.
+        #
+        # Только когда ждём КОНКРЕТНЫЕ байты: без эталона перезапрос ничего не
+        # доказывает, а лишний обход зеркал стоит времени на этих коробках.
+        if [ -n "$want_sha" ]; then
+            local _cb _cburl
+            _cb="$(date +%s 2>/dev/null)-$$"
+            case "$url" in
+                *\?*) _cburl="${url}&z2kcb=${_cb}" ;;
+                *)     _cburl="${url}?z2kcb=${_cb}" ;;
+            esac
+            Z2K_FETCH_SHA256="$want_sha"; export Z2K_FETCH_SHA256
+            rc=0
+            z2k_fetch "$_cburl" "$target" || rc=$?
+            unset Z2K_FETCH_SHA256
+            if [ "$rc" = "0" ] && { [ -s "$target" ] || [ -f "$target" ]; }; then
+                au_log "  $repo_path: зеркала отдали несвежее, перезапрос мимо кэша помог"
+                return 0
+            fi
+        fi
     else
         # Резервный путь без z2k_fetch — одно зеркало, перебирать нечего, но
         # молча принять чужие байты нельзя и здесь.
@@ -1181,6 +1213,22 @@ au_download_repo_file() {
                 return 0
             fi
             rm -f "$target" "${target}.etag" 2>/dev/null
+            # Тот же перезапрос мимо кэша, что и выше: причина промаха здесь
+            # ровно та же, а запасной путь ходит к одному источнику и обязан
+            # уметь пробить его кэш сам.
+            if [ -n "$want_sha" ]; then
+                _cb="$(date +%s 2>/dev/null)-$$"
+                case "$url" in
+                    *\?*) _cburl="${url}&z2kcb=${_cb}" ;;
+                    *)     _cburl="${url}?z2kcb=${_cb}" ;;
+                esac
+                if curl -fsSL --max-time 30 "$_cburl" -o "$target" \
+                   && [ "$(z2k_sha256_file "$target" 2>/dev/null)" = "$want_sha" ]; then
+                    au_log "  $repo_path: источник отдал несвежее, перезапрос мимо кэша помог"
+                    return 0
+                fi
+                rm -f "$target" "${target}.etag" 2>/dev/null
+            fi
         fi
     fi
     # Download failed. Distinguish a file DELETED upstream (a later release in
