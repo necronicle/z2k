@@ -319,7 +319,12 @@ function renderDnsResult(d) {
     return;
   }
   const srv = d.servers || [];
-  const plain = srv.filter(s => s.udp !== "none").map(s => ({ name: s.name, state: s.udp, ms: null, current: s.current, yt: s.yt }));
+  // У обычного DNS время появилось: его печатает dig, если он установлен
+  // (пакет bind-dig, ставится отдельно). Нет dig — приходит null, и строка
+  // выглядит как раньше, без числа. Своими руками UDP-запрос с роутера не
+  // послать, а время nslookup врёт на порядок: он делает обратный запрос на
+  // каждый адрес ответа.
+  const plain = srv.filter(s => s.udp !== "none").map(s => ({ name: s.name, state: s.udp, ms: s.udp_ms, current: s.current, yt: s.yt }));
   const doh = srv.filter(s => s.doh !== "none").map(s => ({ name: s.name, state: s.doh, ms: s.doh_ms, current: s.current, yt: s.yt }));
   // У DoT время ЕСТЬ: счётчик опросов с шагом 10 мс меряет полный обмен —
   // TCP, TLS и сам запрос. Раньше здесь стоял null, потому что я счёл
