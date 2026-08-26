@@ -1116,17 +1116,13 @@ tls_clienthello_gosuslugi_ru.bin
 t2.bin
 syn_packet.bin
 stun.bin
-http_iana_org.bin
 quic_initial_www_google_com.bin
 quic_initial_rutracker_org.bin
 quic_initial_dbankcloud_ru.bin
-quic_initial_ozon_ru.bin
 quic_1.bin
 quic_4.bin
 quic_5.bin
 quic_6.bin
-quic_test_00.bin
-zero_256.bin
 "
 
     while read -r file; do

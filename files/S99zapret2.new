@@ -953,8 +953,11 @@ QUIC6_BLOB="$ZAPRET_BASE/files/fake/quic_6.bin"
 QUIC1_BLOB="$ZAPRET_BASE/files/fake/quic_1.bin"
 [ -s "$QUIC1_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic1:@$QUIC1_BLOB"
 
-QUIC_TEST_BLOB="$ZAPRET_BASE/files/fake/quic_test_00.bin"
-[ -s "$QUIC_TEST_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_test:@$QUIC_TEST_BLOB"
+# СНЯТО 26.08.2026. Сверка стратегий с первоисточниками показала, что эти
+# блобы регистрировались и грузились в движок при каждом старте, но НИ ОДНА
+# стратегия на них не ссылалась — ни в strats_new2.txt, ни в quic_strats.ini,
+# ни в config_official.sh. Проверено и на живом роутере по командной строке
+# процесса. Сторож от повторения — tests/test_blob_identifiers.sh.
 
 QUIC_RUTRACKER_BLOB="$ZAPRET_BASE/files/fake/quic_initial_rutracker_org.bin"
 [ -s "$QUIC_RUTRACKER_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=quic_rutracker:@$QUIC_RUTRACKER_BLOB"
@@ -984,11 +987,7 @@ TLS_T2_BLOB="$ZAPRET_BASE/files/fake/t2.bin"
 # tls_clienthello_4pda_to.bin, и на имя `4pda` не ссылалась ни одна стратегия.
 # Файл удалён вместе с регистрацией. Сторож — tests/test_blob_identifiers.sh.
 
-HTTP_IANA_BLOB="$ZAPRET_BASE/files/fake/http_iana_org.bin"
-[ -s "$HTTP_IANA_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=http_iana:@$HTTP_IANA_BLOB"
 
-ZERO_256_BLOB="$ZAPRET_BASE/files/fake/zero_256.bin"
-[ -s "$ZERO_256_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=zero_256:@$ZERO_256_BLOB"
 
 LISTS_DIR="$ZAPRET_BASE/lists"
 EXTRA_STRATS_DIR="$ZAPRET_BASE/extra_strats"

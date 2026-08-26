@@ -119,8 +119,12 @@ assert_eq "регистрации blob=4pda больше нет" "0" \
 # Закрыто при сверке стратегий с первоисточниками 26.08.2026, когда в дерево
 # приехал снимок ACTIVE_DISCORD_UDP и забыть его зарегистрировать было бы ровно
 # этой ошибкой.
-_ref=$(grep -ohE 'blob=[A-Za-z_][A-Za-z0-9_]*' "$ROOT/strats_new2.txt" "$ROOT/quic_strats.ini" \
-       "$ROOT/lib/config_official.sh" 2>/dev/null | sed 's/blob=//' | sort -u)
+# Ссылкой считается не только blob=, но и seqovl_pattern= с pattern=: блоб может
+# использоваться ТОЛЬКО как заполнитель разреза и при этом быть совершенно
+# нужным. Без этого проверка объявила бы мёртвыми activated, gosuslugi и vk_com.
+_ref=$(grep -ohE '(blob|seqovl_pattern|pattern)=[A-Za-z_][A-Za-z0-9_]*' \
+       "$ROOT/strats_new2.txt" "$ROOT/quic_strats.ini" "$ROOT/lib/config_official.sh" 2>/dev/null \
+       | sed 's/.*=//' | sort -u)
 _reg=$(grep -ohE '\-\-blob=[A-Za-z_][A-Za-z0-9_]*:' "$ROOT/files/S99zapret2.new" 2>/dev/null \
        | sed 's/--blob=//; s/:$//' | sort -u)
 _missing=""
@@ -134,6 +138,40 @@ if [ -z "$_missing" ]; then
     ok "каждый блоб из стратегий зарегистрирован в init-скрипте"
 else
     no "каждый блоб из стратегий зарегистрирован" "пусто" "нет регистрации:$_missing"
+fi
+
+
+# ── Обратная сторона: мёртвый груз ───────────────────────────────────────────
+#
+# Проверка выше стережёт, чтобы стратегия не сослалась на незарегистрированный
+# блоб. Обратное направление не стерёг никто, и груз накопился: три блоба
+# грузились в движок при каждом старте, не будучи нужны ни одной стратегии
+# (http_iana, quic_test, zero_256), а один файл — quic_initial_ozon_ru.bin —
+# доставлялся на все роутеры вообще без регистрации, то есть движку был
+# недоступен в принципе. Снято 26.08.2026 по сверке с первоисточниками.
+#
+# Стоимость такого груза не в обходе, а в памяти роутера и в трафике каждого
+# обновления, и заметить его можно только этой проверкой.
+_unused=""
+for _b in $_reg; do
+    printf '%s\n' "$_ref" | grep -qx "$_b" || _unused="$_unused $_b"
+done
+if [ -z "$_unused" ]; then
+    ok "нет блобов, которые грузятся впустую"
+else
+    no "нет блобов, которые грузятся впустую" "пусто" "не используются:$_unused"
+fi
+
+_orphan=""
+for _f in "$ROOT"/files/fake/*.bin; do
+    [ -f "$_f" ] || continue
+    _n=$(basename "$_f")
+    grep -q "files/fake/$_n\"" "$ROOT/files/S99zapret2.new" || _orphan="$_orphan $_n"
+done
+if [ -z "$_orphan" ]; then
+    ok "нет файлов, которые возим без регистрации"
+else
+    no "нет файлов, которые возим без регистрации" "пусто" "без регистрации:$_orphan"
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
