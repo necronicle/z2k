@@ -920,7 +920,13 @@ TLS_STUN_BLOB="$ZAPRET_BASE/files/fake/stun.bin"
 # первоисточниками показало, что весь наш пул дискорда — порт z4r на его блобе
 # quic_dbankcloud, а стратегий Flowseal на его собственном снимке у нас не было
 # вовсе. Они поставлены В НАЧАЛО очереди ротации.
-ACTIVE_DISCORD_BLOB="$ZAPRET_BASE/files/fake/ACTIVE_DISCORD_UDP.bin"
+# ИМЯ ФАЙЛА ОБЯЗАНО СОВПАДАТЬ С ИМЕНЕМ БЛОБА. Валидатор конфига ищет файл по
+# имени блоба (files/fake/<имя>[.bin]) и на несовпадении даёт вето на
+# перезапуск. У других несовпадающих имён это закрыто симлинками из
+# install.sh, но их кладёт ТОЛЬКО полная установка: обновление идёт
+# сходимостью, install.sh не запускает, и симлинк не появился бы ни у кого.
+# Ровно так r-80 и лёг у всех: вето валидатора, откат.
+ACTIVE_DISCORD_BLOB="$ZAPRET_BASE/files/fake/active_discord_udp.bin"
 [ -s "$ACTIVE_DISCORD_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=active_discord_udp:@$ACTIVE_DISCORD_BLOB"
 
 TLS_4PDA_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_4pda_to.bin"
