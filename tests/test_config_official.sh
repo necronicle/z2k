@@ -1035,12 +1035,30 @@ assert_contains     "docalign: http_rkn fails=3"                "circular:fails=
 assert_not_contains "docalign: http_rkn no fails=2"             "fails=2"          "$HTTP_ARM_DOC"
 assert_not_contains "docalign: http_rkn NO reset"               ":reset"           "$HTTP_ARM_DOC"
 
-# discord_udp: NO reset (r-54.1); strategy=1 = dbankcloud x6, no stun blob.
+# discord_udp: NO reset (r-54.1).
 assert_not_contains "docalign: discord_udp circular NO reset"   ":reset"        "$DISCORD_ARM_DOC"
-assert_contains     "docalign: discord voice #1 = dbankcloud repeats=10 (bol-van repeats lever)" \
-                    "blob=quic_dbankcloud:repeats=10:strategy=1" "$DISCORD_ARM_DOC"
-assert_not_contains "docalign: discord voice #1 dropped stun blob" \
-                    "blob=stun:repeats=3:strategy=1"            "$DISCORD_ARM_DOC"
+
+# ОЧЕРЕДЬ ПЕРЕСОБРАНА 26.08.2026, и утверждение здесь поменялось вместе с ней.
+#
+# Сопоставление всех наших стратегий с первоисточниками (БД по Flowseal /
+# remittor / z4r) показало по дискорду две вещи. Первая: весь наш пул — порт
+# z4r, включая список портов и блоб quic_dbankcloud; у z4r на discord-пейлоаде
+# фейка ДВА (stun, затем dbankcloud), у нас при переносе остался один — потеря
+# восстановлена. Вторая: у Flowseal свой снимок живого дискорд-пакета
+# (ACTIVE_DISCORD_UDP), стратегий на нём у нас не было вовсе — они добавлены и
+# поставлены В НАЧАЛО очереди, чтобы ротация пробовала их первыми.
+#
+# Поэтому dbankcloud теперь не первый, а четвёртый, и это не регресс.
+assert_contains     "очередь дискорда начинается со снимка Flowseal" \
+                    "blob=active_discord_udp:repeats=6:strategy=1" "$DISCORD_ARM_DOC"
+assert_contains     "второй арм — тот же снимок с repeats=5 (их ALT13)" \
+                    "blob=active_discord_udp:repeats=5:strategy=2" "$DISCORD_ARM_DOC"
+assert_contains     "наш прежний первый стал четвёртым и цел" \
+                    "blob=quic_dbankcloud:repeats=10:strategy=4" "$DISCORD_ARM_DOC"
+# Потерянный при переносе фейк вернулся: у z4r он идёт ПЕРЕД dbankcloud и
+# только на discord-пейлоаде.
+assert_contains     "восстановлен первый фейк z4r (stun на discord-пейлоаде)" \
+                    "fake:payload=discord_ip_discovery:blob=stun:repeats=10:strategy=4" "$DISCORD_ARM_DOC"
 # bol-van canon: tight start-of-flow cutoff + connbytes, NOT keepalive.
 # --out-range=-d4 = fake only on the first 4 data packets per flow (#1267
 # "n2 или d2 лучше"; tight cutoff = fewer packets faked = stream-safe). The

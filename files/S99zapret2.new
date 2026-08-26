@@ -915,6 +915,14 @@ TLS_GOOGLE_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_www_google_com.bin"
 TLS_STUN_BLOB="$ZAPRET_BASE/files/fake/stun.bin"
 [ -s "$TLS_STUN_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=stun:@$TLS_STUN_BLOB"
 
+# Снимок живого дискорд-пакета из Flowseal/zapret-discord-youtube (MIT,
+# (c) bol-van + Flowseal). Добавлен 26.08.2026: сопоставление наших стратегий с
+# первоисточниками показало, что весь наш пул дискорда — порт z4r на его блобе
+# quic_dbankcloud, а стратегий Flowseal на его собственном снимке у нас не было
+# вовсе. Они поставлены В НАЧАЛО очереди ротации.
+ACTIVE_DISCORD_BLOB="$ZAPRET_BASE/files/fake/ACTIVE_DISCORD_UDP.bin"
+[ -s "$ACTIVE_DISCORD_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=active_discord_udp:@$ACTIVE_DISCORD_BLOB"
+
 TLS_4PDA_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_4pda_to.bin"
 [ -s "$TLS_4PDA_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_4pda_to:@$TLS_4PDA_BLOB"
 

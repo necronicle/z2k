@@ -1110,6 +1110,7 @@ tls_clienthello_www_google_com.bin
 tls_clienthello_www_onetrust_com.bin
 tls_clienthello_activated.bin
 tls_clienthello_4pda_to.bin
+ACTIVE_DISCORD_UDP.bin
 tls_clienthello_vk_com.bin
 tls_clienthello_gosuslugi_ru.bin
 t2.bin

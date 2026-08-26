@@ -108,5 +108,33 @@ assert_eq "4pda.bin убран из поставки" "0" "$([ -f "$ROOT/files/f
 assert_eq "регистрации blob=4pda больше нет" "0" \
     "$(grep -c '^\[ -s "\$TLS_4PDA_SHORT_BLOB" \]' "$INIT" | tr -d ' ')"
 
+
+# ── Ссылка из стратегии обязана быть зарегистрирована ────────────────────────
+#
+# Проверки выше стерегут ИМЯ регистрируемого блоба. Обратную сторону не стерёг
+# никто: стратегия могла сослаться на блоб, которого никто не регистрировал, и
+# это тот же класс аварии — строка живёт, выглядит рабочей, а фейка нет.
+# Дыра была настоящей: тест проходил с заведомо несуществующим именем.
+#
+# Закрыто при сверке стратегий с первоисточниками 26.08.2026, когда в дерево
+# приехал снимок ACTIVE_DISCORD_UDP и забыть его зарегистрировать было бы ровно
+# этой ошибкой.
+_ref=$(grep -ohE 'blob=[A-Za-z_][A-Za-z0-9_]*' "$ROOT/strats_new2.txt" "$ROOT/quic_strats.ini" \
+       "$ROOT/lib/config_official.sh" 2>/dev/null | sed 's/blob=//' | sort -u)
+_reg=$(grep -ohE '\-\-blob=[A-Za-z_][A-Za-z0-9_]*:' "$ROOT/files/S99zapret2.new" 2>/dev/null \
+       | sed 's/--blob=//; s/:$//' | sort -u)
+_missing=""
+for _b in $_ref; do
+    # fake_default_tls/quic/http — встроенные фейки движка, они
+    # существуют без --blob.
+    case "$_b" in fake_default_tls|fake_default_quic|fake_default_http) continue ;; esac
+    printf '%s\n' "$_reg" | grep -qx "$_b" || _missing="$_missing $_b"
+done
+if [ -z "$_missing" ]; then
+    ok "каждый блоб из стратегий зарегистрирован в init-скрипте"
+else
+    no "каждый блоб из стратегий зарегистрирован" "пусто" "нет регистрации:$_missing"
+fi
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
