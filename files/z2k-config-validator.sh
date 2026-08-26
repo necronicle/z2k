@@ -21,6 +21,10 @@ CONFIG_FILE="${1:-/opt/zapret2/config}"
 ZAPRET_BASE="${ZAPRET_BASE:-/opt/zapret2}"
 NFQWS2_BIN="${ZAPRET_BASE}/nfq2/nfqws2"
 FAKE_DIR="${ZAPRET_BASE}/files/fake"
+# Init-скрипт — единственное место, где живут строки регистрации блобов
+# (`--blob=<имя>:@<путь>`). В конфиге их нет вовсе, поэтому карту имён
+# приходится читать отсюда. См. check_blob_references.
+INIT_SCRIPT="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 
 # Счётчики
 PASS_COUNT=0
@@ -321,8 +325,63 @@ check_hostlist_files() {
 check_blob_references() {
     _opt_text="$1"
     _bad_blobs=""
+    _bad_reg=""
+
+    # СНАЧАЛА КАРТА РЕГИСТРАЦИЙ, ПОТОМ ПРОВЕРКА ССЫЛОК.
+    #
+    # `--blob=<имя>:@<путь>` — это и есть авторитетное отображение имени в файл,
+    # и путь там АБСОЛЮТНЫЙ: движок берёт файл по нему, а не по имени. Проверка,
+    # игнорировавшая регистрацию и искавшая files/fake/<имя>[.bin], объявляла
+    # ненайденным блоб, который движок прекрасно грузит.
+    #
+    # Цена ошибки здесь не косметическая. Автообновление трактует ненулевой код
+    # валидатора как вето на перезапуск и откатывает релиз ЦЕЛИКОМ. Так и легло
+    # r-80 у всех до единого: файл назывался ACTIVE_DISCORD_UDP.bin, был
+    # зарегистрирован под именем active_discord_udp с абсолютным путём, движком
+    # читался — а валидатор искал по имени, не нашёл и снёс релиз всему парку.
+    #
+    # Поэтому порядок такой: есть регистрация — проверяем файл по её пути;
+    # регистрации нет — падаем на прежний files/fake/<имя>[.bin] (так находятся
+    # блобы, чьё имя совпадает с именем файла, и старые имена под симлинками).
+    # Карта берётся ИЗ INIT-СКРИПТА, а не из конфига: в конфиге строк
+    # регистрации нет ни одной, там только места использования `blob=<имя>`.
+    # Путь в регистрации записан через переменную — разворачиваем её тут же по
+    # присваиванию в том же файле, подставляя известный нам ZAPRET_BASE.
+    _reg_map=""
+    if [ -f "$INIT_SCRIPT" ]; then
+        for _rt in $(grep -o -- '--blob=[A-Za-z_][A-Za-z0-9_]*:@[^" ]*' "$INIT_SCRIPT" 2>/dev/null); do
+            _rname="${_rt#--blob=}"
+            _rref="${_rname#*:@}"
+            _rname="${_rname%%:@*}"
+            [ -n "$_rname" ] && [ -n "$_rref" ] || continue
+            case "$_rref" in
+                '$'*)   # и $VAR, и ${VAR} — оба начинаются с $
+                    _rvar="${_rref#\$}"; _rvar="${_rvar#\{}"; _rvar="${_rvar%\}}"
+                    _rpath=$(sed -n "s/^[[:space:]]*${_rvar}=\"\\([^\"]*\\)\".*/\\1/p" \
+                             "$INIT_SCRIPT" 2>/dev/null | head -1)
+                    ;;
+                *) _rpath="$_rref" ;;
+            esac
+            [ -n "$_rpath" ] || continue
+            _rpath=$(printf '%s' "$_rpath" | sed -e "s|\${ZAPRET_BASE}|${ZAPRET_BASE}|g" \
+                                                 -e "s|\$ZAPRET_BASE|${ZAPRET_BASE}|g")
+            case "$_rpath" in
+                /*) ;;
+                *) continue ;;
+            esac
+            _reg_map="${_reg_map}${_rname}=${_rpath}
+"
+            if [ ! -f "$_rpath" ]; then
+                _bad_reg="$_bad_reg ${_rname}=${_rpath}"
+            fi
+        done
+    fi
 
     for _tok in $(printf "%s\n" "$_opt_text" | tr '\n' ' '); do
+        # Сами строки регистрации уже проверены выше по своему пути.
+        case "$_tok" in
+            --blob=*:@*) continue ;;
+        esac
         case "$_tok" in
             *blob=*)
                 # Извлечь значение blob из формата key=value:key=value
@@ -346,6 +405,10 @@ check_blob_references() {
                         case "$_blob_name" in
                             fake_default_tls|fake_default_http|fake_default_quic) continue ;;
                         esac
+                        # Имя, объявленное регистрацией, уже разобрано по её пути.
+                        if printf '%s' "$_reg_map" | grep -q "^${_blob_name}="; then
+                            continue
+                        fi
                         # Проверить файл в fake директории
                         if [ ! -f "${FAKE_DIR}/${_blob_name}" ] && [ ! -f "${FAKE_DIR}/${_blob_name}.bin" ]; then
                             _bad_blobs="$_bad_blobs $_blob_name"
@@ -354,6 +417,10 @@ check_blob_references() {
                 esac
                 ;;
         esac
+    done
+
+    for _r in $_bad_reg; do
+        report_fail "Blob зарегистрирован, но файла нет: ${_r#*=} (имя ${_r%%=*})"
     done
 
     if [ -n "$_bad_blobs" ]; then
@@ -366,8 +433,8 @@ check_blob_references() {
             _seen="$_seen $_b"
             report_fail "Blob файл не найден: ${FAKE_DIR}/${_b}[.bin]"
         done
-    else
-        report_ok "Все blob файлы найдены в ${FAKE_DIR}/"
+    elif [ -z "$_bad_reg" ]; then
+        report_ok "Все blob файлы найдены"
     fi
 }
 

@@ -251,6 +251,68 @@ assert_eq "valid ports: no port-related failures" "0" "$PORTS_FAIL"
 # CLEANUP AND REPORT
 # ==============================================================================
 
+# ==============================================================================
+# TEST: имя блоба, не совпадающее с именем файла, разрешается регистрацией
+# ==============================================================================
+#
+# ЧТО СЛУЧИЛОСЬ. Валидатор искал блоб ТОЛЬКО как files/fake/<имя>[.bin] и не
+# смотрел в строку регистрации `--blob=<имя>:@<путь>` из init-скрипта, где путь
+# АБСОЛЮТНЫЙ. r-80 привёз active_discord_udp файлом ACTIVE_DISCORD_UDP.bin:
+# nfqws2 брал его по пути и работал, а валидатор объявлял ненайденным. Дальше
+# автообновление трактует ненулевой код как вето на перезапуск — и релиз
+# откатился у всего парка из-за расхождения в регистре имени.
+#
+# Проверяем оба направления: регистрация закрывает расхождение имён, но НЕ
+# закрывает настоящую пропажу файла.
+
+printf "\n--- Validator: блоб разрешается регистрацией из init-скрипта ---\n"
+
+MOCK_INIT="${MOCK_DIR}/S99zapret2"
+printf 'ODD_BLOB="$ZAPRET_BASE/files/fake/ODD_NAME.bin"\n[ -s "$ODD_BLOB" ] && OPT="$OPT --blob=odd_blob:@$ODD_BLOB"\n' > "$MOCK_INIT"
+: > "${MOCK_FAKE}/ODD_NAME.bin"
+
+REG_CONFIG="${MOCK_DIR}/config_reg"
+cat > "$REG_CONFIG" <<EOF
+ENABLED=1
+NFQWS2_ENABLE=1
+NFQWS2_OPT="
+--filter-tcp=443 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=odd_blob:repeats=6
+"
+EOF
+
+REG_OUTPUT=$(ZAPRET_BASE="$MOCK_ZAPRET2" INIT_SCRIPT="$MOCK_INIT" sh "$VALIDATOR" "$REG_CONFIG" 2>&1)
+REG_RC=$?
+assert_eq "регистрация закрывает расхождение имени и файла: код 0" "0" "$REG_RC"
+case "$REG_OUTPUT" in
+    *"Blob"*"не найден"*) assert_eq "регистрация: нет ложного FAIL по блобу" "нет" "есть" ;;
+    *) assert_eq "регистрация: нет ложного FAIL по блобу" "нет" "нет" ;;
+esac
+
+printf "\n--- Validator: зарегистрированный файл действительно пропал ---\n"
+
+rm -f "${MOCK_FAKE}/ODD_NAME.bin"
+GONE_OUTPUT=$(ZAPRET_BASE="$MOCK_ZAPRET2" INIT_SCRIPT="$MOCK_INIT" sh "$VALIDATOR" "$REG_CONFIG" 2>&1)
+GONE_RC=$?
+assert_eq "пропавший зарегистрированный файл: код 2" "2" "$GONE_RC"
+assert_contains "пропавший зарегистрированный файл: сказано, чего нет" \
+    "ODD_NAME.bin" "$GONE_OUTPUT"
+
+printf "\n--- Validator: блоб без регистрации и без файла ---\n"
+
+NOREG_CONFIG="${MOCK_DIR}/config_noreg"
+cat > "$NOREG_CONFIG" <<EOF
+ENABLED=1
+NFQWS2_ENABLE=1
+NFQWS2_OPT="
+--filter-tcp=443 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=nowhere_blob:repeats=6
+"
+EOF
+NOREG_OUTPUT=$(ZAPRET_BASE="$MOCK_ZAPRET2" INIT_SCRIPT="$MOCK_INIT" sh "$VALIDATOR" "$NOREG_CONFIG" 2>&1)
+NOREG_RC=$?
+assert_eq "незарегистрированный и отсутствующий блоб: код 2" "2" "$NOREG_RC"
+assert_contains "незарегистрированный блоб: назван по имени" \
+    "nowhere_blob" "$NOREG_OUTPUT"
+
 rm -rf "$MOCK_DIR"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
