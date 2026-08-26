@@ -710,15 +710,11 @@ LUA_AUTO="$ZAPRET_BASE/lua/zapret-auto.lua"
 # failure_detector=z2k_tls_stalled by global name when parsing profiles,
 # so the functions need to exist already. Autocircular still references
 # z2k_tls_alert_fatal via name-lookup after Phase 4 refactor.
-# z2k-detectors.lua ВОЗВРАЩЁН 2026-05-30 (Этап 1 ревью-восстановления архива):
-# кастомные детекторы (TLS-alert / HTTP-classifier / mid-stream-stall /
-# silent-drop / server-active-reject). Грузятся ПОСЛЕ zapret-auto.lua
-# (определяет standard_*_detector); резолвятся по имени через
-# failure_detector=/success_detector= в профилях. На Этапе 1 — ТОЛЬКО
-# загрузка (определения функций); проводка инъекций в config_official.sh
-# приходит на Этапах 2-3, поэтому сейчас поведение не меняется.
-LUA_Z2K_DETECTORS="$ZAPRET_BASE/lua/z2k-detectors.lua"
-[ -f "$LUA_Z2K_DETECTORS" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DETECTORS"
+# z2k-detectors.lua УДАЛЁН 2026-08-26. Файл на 1858 строк грузился в память и
+# не делал ничего: замер боевого конфига показал, что из него достижима ровно
+# одна функция — HTTP-классификатор ответов, — и она переехала в z2k-alert.lua.
+# Остальные детекторы в профили не проводились ни разу; единственное упоминание
+# z2k_mid_stream_stall нашлось В КОММЕНТАРИИ к конфигу.
 # z2k-alert.lua — две поправки к ШТАТНОМУ детектору неудач, обе по замерам на
 # боевом роутере 2026-08-18 (файл сам их и описывает):
 #   - ретрансмиссия считается провалом только на ClientHello. Пойманная ложная

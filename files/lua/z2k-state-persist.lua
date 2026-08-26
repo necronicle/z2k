@@ -425,9 +425,11 @@ end
 
 -- A real success signal on an INCOMING packet. TLS ServerHello = handshake
 -- reached the server. HTTP reply must be classified "positive" by
--- z2k_classify_http_reply (z2k-detectors.lua, loaded earlier in the --lua-init
--- chain); neutral 4xx/5xx and unmarked cross-SLD redirects must NOT pin.
--- Liberal fallback if the classifier is not loaded (init-order race).
+-- z2k_classify_http_reply (с 2026-08-26 живёт в z2k-alert.lua, который в
+-- --lua-init стоит РАНЬШЕ этого файла — см. S99zapret2.new); neutral 4xx/5xx и
+-- cross-SLD редиректы без маркера пинить НЕ должны.
+-- Мягкий откат, если классификатор не загрузился: обновление раскладывает
+-- файлы по одному, и в этом окне рядом может лежать ещё старая пара.
 local function has_positive_incoming_response(desync)
   if not desync or desync.outgoing then return false end
   local p = desync.l7payload

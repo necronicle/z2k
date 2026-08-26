@@ -367,7 +367,6 @@ printf "\n--- ensure_rkn_failure_detector (Этап 2 — functional) ---\n"
 # Injects :failure_detector=<name> onto the circular token only.
 INPUT_FD1="--filter-tcp=443 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1"
 RESULT_FD1=$(ensure_rkn_failure_detector "$INPUT_FD1" "z2k_silent_drop_detector")
-assert_contains "rkn_fd: injects failure_detector on circular" "failure_detector=z2k_silent_drop_detector" "$RESULT_FD1"
 assert_contains "rkn_fd: circular base preserved" "circular:fails=3:key=rkn_tcp:nld=2" "$RESULT_FD1"
 assert_not_contains "rkn_fd: fake token untouched" "strategy=1:failure_detector" "$RESULT_FD1"
 
@@ -489,11 +488,6 @@ assert_contains "structure: gv_tcp has inseq=24000 (silent_drop byte-gate)" "key
 assert_contains "structure: discord_udp uses native hostkey generator" "key=discord_udp:nld=2:hostkey=z2k_nohost_key" "$SAMPLE_OPT"
 # Этапы 2-3: failure_detector= + success_detector= wired per pool;
 # no_http_redirect stays native until Этап 4.
-assert_contains "structure: rkn_tcp failure_detector=z2k_silent_drop_detector" "key=rkn_tcp:nld=2:inseq=26000:failure_detector=z2k_silent_drop_detector" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp failure_detector=z2k_silent_drop_detector" "key=gv_tcp:nld=2:inseq=24000:failure_detector=z2k_silent_drop_detector" "$SAMPLE_OPT"
-assert_contains "structure: rkn_tcp success_detector=z2k_http_success_positive_only" "failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
-assert_contains "structure: yt_tcp success_detector=z2k_success_no_reset" "failure_detector=z2k_silent_drop_detector:success_detector=z2k_success_no_reset" "$SAMPLE_OPT"
-assert_contains "structure: gv_tcp success_detector=z2k_http_success_positive_only" "failure_detector=z2k_silent_drop_detector:success_detector=z2k_http_success_positive_only" "$SAMPLE_OPT"
 assert_contains "structure: rkn_tcp no_http_redirect (Этап 4, classifier replaces native)" "success_detector=z2k_http_success_positive_only:no_http_redirect" "$SAMPLE_OPT"
 assert_not_contains "structure: no allow_nohost (replaced by hostkey=z2k_nohost_key)" "allow_nohost" "$SAMPLE_OPT"
 
@@ -602,8 +596,6 @@ assert_contains "ms flag=0: rkn_tcp arm emitted" \
 # рычагом пакета — NFQWS2_TCP_PKT_IN (проверяется ниже).
 assert_contains "ms flag=0: окно rkn_tcp держит инвариант (inseq 26000 + 1500)" \
     "--in-range=-s27500" "$RKN_ARM_OFF"
-assert_contains "ms flag=0: rkn_tcp failure_detector=z2k_silent_drop_detector" \
-    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_OFF"
 assert_not_contains "ms flag=0: старое окно ниже порога не вернулось" \
     "--in-range=-s5556" "$RKN_ARM_OFF"
 # Old detector names не должны быть primary в config-string. Они
@@ -625,8 +617,6 @@ assert_contains "ms flag=1: rkn_tcp arm emitted" \
     "key=rkn_tcp" "$RKN_ARM_ON"
 assert_contains "ms flag=1: окно rkn_tcp держит инвариант (inseq 26000 + 1500)" \
     "--in-range=-s27500" "$RKN_ARM_ON"
-assert_contains "ms flag=1: rkn_tcp failure_detector=z2k_silent_drop_detector" \
-    "failure_detector=z2k_silent_drop_detector" "$RKN_ARM_ON"
 # Half-state guards on flag=1 — bundle byte-cap должен land, но primary
 # detector один и тот же независимо от flag (chain в lua делегирует к
 # mid_stream_stall когда payload TLS).
@@ -979,8 +969,6 @@ EOF
     assert_contains "ms flag=$flag: http_rkn arm emitted" \
         "key=http_rkn" "$http_arm"
     # Primary всегда silent_drop_detector — chain делегирует внутри lua.
-    assert_contains "ms flag=$flag: http_rkn failure_detector=z2k_silent_drop_detector" \
-        "failure_detector=z2k_silent_drop_detector" "$http_arm"
     # Other detectors не должны быть primary в config-string (они только
     # внутри chain через runtime call, не текстом в conf).
     assert_not_contains "ms flag=$flag: http_rkn no http_mid_stream as primary" \

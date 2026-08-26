@@ -167,6 +167,23 @@ git checkout -q -- lib/install.sh
 # объявленных шагов был бы прежней аварией под новым именем: файл приехал,
 # конфиг остался старым, версия сдвинулась.
 git checkout -q -B z2k-staging
+# Свойство про ГЕНЕРАТОР, поэтому в дереве не должно остаться постороннего
+# незарелизенного. Клон несёт рабочую копию целиком, и любая правка
+# mtproxy-client в ней упирает release.sh в отдельный гейт: туда на сборке
+# вшивается Z2K_TUNNEL_SECRET, без него пересобрать и сверить builds/ нечем.
+# Гейт правильный, но к этому свойству отношения не имеет — и делал тест
+# красным всякий раз, когда рядом лежала невыпущенная правка туннеля.
+# Приводим mtproxy-client к опубликованному состоянию, чтобы дельта была одна.
+if git rev-parse --verify -q origin/z2k-enhanced >/dev/null 2>&1; then
+    # rm -rf до checkout: восстановление из ссылки возвращает только то, что
+    # в ней есть, и НЕ убирает файлы, появившиеся позже. Один новый файл в
+    # каталоге — и дельта снова не одна.
+    rm -rf mtproxy-client
+    git checkout -q origin/z2k-enhanced -- mtproxy-client 2>/dev/null || true
+    git add -A mtproxy-client 2>/dev/null || true
+    git diff --cached --quiet -- mtproxy-client 2>/dev/null \
+        || git commit -q -m "тест: mtproxy-client к опубликованному состоянию"
+fi
 echo "# generator touch" >> lib/config_official.sh
 git add lib/config_official.sh
 git commit -q -m "тест: правка генератора конфига"

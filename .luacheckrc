@@ -5,6 +5,9 @@ std = "max"
 max_line_length = false
 
 -- nfqws2 runtime globals (provided by zapret-auto.lua and nfqws2 core)
+-- Список чистился 26.08.2026 вместе с удалением z2k-detectors.lua: объявление
+-- глобали, которой нет на диске, глушит опечатку в её имени — luacheck молчит
+-- там, где обязан ругаться.
 globals = {
     -- Desync action entry points (registered by z2k)
     "z2k_fail_tls_alert",
@@ -13,25 +16,15 @@ globals = {
     -- а таймер-функцию — по строке, переданной в timer_set.
     "z2k_fail_quic_silence",
     "z2k_quic_silence_timer",
-    "z2k_tls_alert_fatal",
     "z2k_tls_stalled",
     "z2k_mid_stream_stall",
-    "z2k_http_mid_stream_stall",
     "z2k_silent_drop_detector",
-    "z2k_http_partial_response",
-    "z2k_quic_success",
-    "z2k_quic_stall",
     -- HTTP-bypass primitives (z2k-http-strats.lua, ALFiX port)
-    "z2k_success_no_reset",
-    "z2k_http_success_positive_only",
     "z2k_timing_morph",
     "z2k_quic_morph_v2",
-    "z2k_game_udp",
     "z2k_ipfrag3",
     "z2k_ipfrag3_tiny",
     "z2k_dynamic_ttl",
-    "z2k_dynamic_strategy",
-    "z2k_cdn_detect",
     "cond_tcp_has_ts",
     "automate_host_record",
     "circular",
@@ -49,13 +42,11 @@ globals = {
     "z2k_state_persist",
     -- z2k-detectors.lua internal helper, top-level so earlier detector
     -- functions in the same file (z2k_tls_alert_fatal) can call it
-    "z2k_detector_log_init_once",
     -- z2k-detectors.lua exported HTTP classifier; called from
     -- z2k-autocircular.lua's has_positive_incoming_response()
     "z2k_classify_http_reply",
     -- z2k-detectors.lua internal classifier; called from
     -- z2k_silent_drop_detector and z2k_tls_alert_fatal in the same file
-    "z2k_classify_server_active",
     -- nfqws2 writable state/functions (set by fallback stubs or runtime)
     "DLOG",
     "DLOG_ERR",

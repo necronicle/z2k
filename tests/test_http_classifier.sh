@@ -31,7 +31,7 @@ if [ -z "$LUA" ]; then
     exit 0
 fi
 
-# The .lua harness loads files/lua/z2k-detectors.lua via dofile() with
+# The .lua harness loads files/lua/z2k-alert.lua via dofile() with
 # a project-root-relative path, so cd there before invoking.
 cd "$PROJECT_ROOT"
 exec "$LUA" tests/test_http_classifier.lua

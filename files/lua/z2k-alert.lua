@@ -85,6 +85,313 @@
 
 -- Окно и порог. Окно совпадает с `time=` у circular (60 с по умолчанию):
 -- дольше держать нельзя, иначе вчерашние успехи защищают сегодня умерший хост.
+-- ── HTTP-классификатор ответов ───────────────────────────────────────────────
+--
+-- ПЕРЕЕХАЛ СЮДА 26.08.2026 из z2k-detectors.lua, который удалён целиком.
+--
+-- Тот файл на 1858 строк был мёртв: замер боевого конфига показал, что из него
+-- достижима ровно одна функция — эта, и зовёт её z2k_fail_verdict ниже. Все
+-- остальные детекторы (z2k_silent_drop_detector, z2k_mid_stream_stall,
+-- z2k_tls_stalled и прочие) в конфиг не проводились ни разу; единственное
+-- упоминание z2k_mid_stream_stall нашлось В КОММЕНТАРИИ.
+--
+-- ПОЧЕМУ КЛАССИФИКАТОР НЕ УДАЛЁН ВМЕСТЕ С ФАЙЛОМ. Проба 29 доменов из боевого
+-- списка РКН с линии Марка: 19 обычных редиректов, 7 без ответа вовсе, 2 ответа
+-- 403 и один 200. Оба 403 прогнаны через эту самую функцию — оба neutral, ни
+-- одного hard_fail. Блокировка ТАМ приходит молчанием, а молчание
+-- классификатору недоступно: классифицировать нечего.
+--
+-- Но это ОДНА линия у ОДНОГО провайдера. Там, где провайдер инжектирует
+-- страницу-заглушку, эта функция — единственная, кто её видит: штатный детектор
+-- смотрит только редирект 302/307. Двести строк не та цена, ради которой стоит
+-- терять покрытие, опровергнутое на одном провайдере из всех наших.
+-- ---------------------------------------------------------------------------
+--
+-- Body markers: substrings checked against lowercased response body.
+-- These are RU-DPI specific; "blackhole" is included because it appears
+-- both as a domain name (blackhole.svyaztelecom.ru) and in some block-page
+-- HTML. Generic words like "forbidden"/"warning"/"restrict" are NOT in
+-- the body list because they appear on legitimate 4xx pages too.
+local Z2K_HTTP_BLOCK_BODY_MARKERS = {
+  "rkn", "lawfilter", "zapret", "eais", "blocked-by", "vigruzki", "blackhole",
+}
+
+-- Host-prefix markers for cross-SLD redirect detection. Operator block
+-- pages commonly live on subdomains like warn.beeline.ru, deny.megafon.ru.
+-- These prefixes (with trailing dot — host-anchored) catch operator
+-- redirect targets without firing on legitimate URLs containing the
+-- bare word in path/query.
+-- Leading-label-anchored (sub(1,#p)==p, every entry ends in "."). Inflected
+-- forms added 2026-05-30 (review w7kkh0yb7): "warn." alone MISSED the single
+-- most common RU stub warning.rt.ru (Ростелеком) — "warning" is one label with
+-- no dot after "warn"; same for restricted./blocking./blockpage. A host that
+-- STARTS with these is a block portal (legit sites don't), so leading-anchored
+-- prefixes are low-FP. (Bare generic words stay OUT of the body list — they
+-- appear on legit 4xx pages.)
+local Z2K_HTTP_BLOCK_HOST_PREFIXES = {
+  "warn.", "warning.", "deny.", "restrict.", "restricted.", "block.",
+  "blocked.", "blocking.", "blockpage.", "blackhole.", "forbidden.",
+}
+
+-- Server-side WAF response headers — signal that the SERVER (not DPI on
+-- path) actively rejected the request. Each entry is {lowered_header,
+-- lowered_value_substring}. Match fires when the header is present AND
+-- its lowered value contains the substring.
+--
+-- Initial conservative list — only signals confirmed in the wild as
+-- pure server-side enforcement, NOT mixable with DPI imitation:
+--   x-vercel-mitigated: deny     (Vercel WAF hard block)
+--
+-- Additional headers gated behind Z2K_WAF_MARKERS_AGGRESSIVE=1 env
+-- because they can fire on legitimate per-request CF challenges or
+-- Sucuri rate-limit pages that the user is supposed to retry through;
+-- counting those as server-active would skip bypass attempts that
+-- ARE worth trying.
+local Z2K_HTTP_WAF_HEADERS_CORE = {
+  { "x-vercel-mitigated", "deny" },
+}
+local Z2K_HTTP_WAF_HEADERS_AGGRESSIVE = {
+  { "x-vercel-mitigated", "deny" },
+  { "cf-mitigated", "challenge" },
+  { "cf-mitigated", "block" },
+  { "x-sucuri-block", "" },
+}
+local Z2K_HTTP_WAF_HEADERS =
+  (os.getenv("Z2K_WAF_MARKERS_AGGRESSIVE") == "1")
+    and Z2K_HTTP_WAF_HEADERS_AGGRESSIVE
+    or  Z2K_HTTP_WAF_HEADERS_CORE
+
+-- Sanitize a reason_detail string for safe inclusion in debug.log lines.
+-- Keep ASCII alphanumeric + dot/dash/equals/colon/underscore; replace
+-- everything else (CRLF, spaces, tabs, non-ASCII, raw URL chars) with
+-- underscore. Cap length at 64 chars to avoid log bloat. This prevents
+-- log injection from attacker-controlled Location URLs / response bodies.
+local function z2k_sanitize_reason(s)
+  if type(s) ~= "string" then return "" end
+  if #s > 64 then s = s:sub(1, 64) end
+  return (s:gsub("[^A-Za-z0-9._:=-]", "_"))
+end
+
+local function z2k_find_body_marker(payload_lower)
+  for _, m in ipairs(Z2K_HTTP_BLOCK_BODY_MARKERS) do
+    if payload_lower:find(m, 1, true) then return m end
+  end
+  return nil
+end
+
+local function z2k_find_host_marker(host_lower)
+  -- Match a block marker as a COMPLETE dot-delimited domain label, NOT a bare
+  -- substring. Operator/RKN block pages carry the marker as a real label
+  -- (lawfilter.ertelecom.ru, eais.rkn.gov.ru, blackhole.svyaztelecom.ru), so
+  -- label-anchoring keeps real coverage while killing the false-positive a bare
+  -- substring scan produced: short markers matched INSIDE legitimate hostnames
+  -- ("rkn" inside spa-rkn-otes.com, "eais" inside id-eais.com), which then
+  -- counted a legit cross-SLD redirect as a DPI block and rotated the strategy
+  -- needlessly. (Stage 1 review w4h4x4bif flagged this; Этап 4 fix.)
+  local padded = "." .. host_lower .. "."
+  for _, m in ipairs(Z2K_HTTP_BLOCK_BODY_MARKERS) do
+    if padded:find("." .. m .. ".", 1, true) then return m end
+  end
+  -- Host-prefix markers (warn.beeline.ru, deny.megafon.ru, etc).
+  for _, p in ipairs(Z2K_HTTP_BLOCK_HOST_PREFIXES) do
+    if host_lower:sub(1, #p) == p then return "prefix:" .. p end
+  end
+  -- CGNAT captive-portal redirect target (review w7kkh0yb7): an operator
+  -- DNS-poison / 302 to a literal 100.64.0.0/10 (carrier-grade NAT) address is
+  -- a block portal, never a real cross-SLD destination. Match the /10 range
+  -- exactly (2nd octet 64-127) — NOT a raw "100." prefix, which would
+  -- false-positive on public 100.x addresses.
+  local o2 = host_lower:match("^100%.(%d+)%.")
+  if o2 then
+    local n = tonumber(o2)
+    if n and n >= 64 and n <= 127 then return "cgnat:100.64/10" end
+  end
+  return nil
+end
+
+-- Scan dissected HTTP reply headers for server-side WAF rejection
+-- markers. `headers` is the array returned by http_dissect_reply with
+-- {header, header_low, value} items. Returns "header:value-substring"
+-- on match (used as reason suffix), nil otherwise.
+local function z2k_find_waf_header(headers)
+  if type(headers) ~= "table" then return nil end
+  for _, want in ipairs(Z2K_HTTP_WAF_HEADERS) do
+    local want_header, want_value = want[1], want[2]
+    for _, h in ipairs(headers) do
+      if type(h) == "table" and h.header_low == want_header then
+        local v = type(h.value) == "string" and h.value:lower() or ""
+        if want_value == "" or v:find(want_value, 1, true) then
+          return want_header .. ":" .. (want_value ~= "" and want_value or v:sub(1, 24))
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- Extract host from Location header value, lowercased. Handles three
+-- forms:
+--   1. absolute URL    "https://example.com/path"  → use dissect_url
+--   2. scheme-relative "//example.com/path"        → manual parse
+--                       (dissect_url misses these — its regex is
+--                       `[a-z]+://` which doesn't match `//host`)
+--   3. path-only       "/some/path"                → returns nil
+--                       (no host change, same-origin redirect)
+-- Strip `:port` suffix from a hostname (mirrors dissect_url's domain
+-- extraction at zapret-lib.lua:1816-1821). Apply before SLD comparison
+-- so example.com:443 == example.com.
+local function z2k_strip_port(host)
+  if type(host) ~= "string" then return host end
+  return (host:gsub(":%d+$", ""))
+end
+
+local function z2k_extract_loc_host(location)
+  if type(location) ~= "string" or location == "" then return nil end
+  if location:sub(1, 2) == "//" then
+    local host = location:match("^//([^/?#]+)")
+    if not host then return nil end
+    return z2k_strip_port(host):lower()
+  end
+  if type(dissect_url) == "function" then
+    local ds = dissect_url(location)
+    if ds and ds.domain then return ds.domain:lower() end
+  end
+  return nil
+end
+
+-- z2k_classify_http_reply(desync) — shared HTTP-reply classifier.
+--
+-- Returns:
+--   "positive", nil                  — real-success response (2xx, 304,
+--                                       same-SLD 3xx upgrade)
+--   "neutral",  reason_string        — suspicious/ambiguous response
+--                                       (4xx/5xx no marker, cross-SLD 3xx
+--                                       no marker, unparseable redirect)
+--   "hard_fail", reason_string       — confirmed block (4xx/5xx with body
+--                                       marker; cross-SLD 3xx with host
+--                                       marker or block-prefix)
+--   "server_active_reject", reason   — server itself rejected (bare 451
+--                                       без RKN markers = RFC 7725 origin
+--                                       compliance; 4xx с WAF response
+--                                       header = server WAF, не DPI).
+--                                       Не fail (bypass не поможет) и не
+--                                       success (бэкап-роутинг бессмыслен) —
+--                                       autocircular skip-rotation gate.
+--   nil, nil                         — not applicable (not http_reply,
+--                                       no payload, no parseable code)
+function z2k_classify_http_reply(desync)
+  if not desync or desync.outgoing then return nil, nil end
+  if desync.l7payload ~= "http_reply" then return nil, nil end
+  local payload = desync.dis and desync.dis.payload
+  if type(payload) ~= "string" then return nil, nil end
+
+  local code_s = payload:match("^HTTP/%d%.%d%s+([0-9][0-9][0-9])")
+  local code = tonumber(code_s)
+  if not code then return nil, nil end
+
+  -- 2xx and 304 = real positive
+  if code >= 200 and code < 300 then return "positive", nil end
+  if code == 304 then return "positive", nil end
+
+  -- 4xx / 5xx — dissect once for body + headers (WAF marker scan и
+  -- body marker scan делят один parse).
+  --
+  -- IMPORTANT: body marker scan читает только BODY, не headers. Per RFC
+  -- 7725 a legitimate 451 from origin/CDN may carry `Link: <authority>;
+  -- rel="blocked-by"` header — substring "blocked-by" в нашем
+  -- body-marker списке. WAF header scan — отдельный list (X-Vercel-*,
+  -- cf-mitigated, X-Sucuri-Block), не пересекается с body markers.
+  if code >= 400 and code < 600 then
+    local body = ""
+    local hdis = nil
+    if type(http_dissect_reply) == "function" then
+      hdis = http_dissect_reply(payload)
+      if hdis and hdis.body then body = hdis.body end
+    end
+    -- Fallback: separate body manually at first blank-line if dissector
+    -- is unavailable / returned no body field.
+    if body == "" then
+      local sep = payload:find("\r\n\r\n", 1, true)
+      if sep then body = payload:sub(sep + 4) end
+    end
+
+    local low = body ~= "" and body:lower() or ""
+    local rkn_marker = low ~= "" and z2k_find_body_marker(low) or nil
+
+    -- 451 split: RKN body marker → hard_fail (наш RKN). Bare 451 (no
+    -- marker) was previously classified as server_active_reject, but
+    -- we treat this as Hot — origin geo-compliance MAY be
+    -- bypassable by changing egress fingerprint (different SNI / fake
+    -- TLS hello), so autocircular keeps rotating.
+    if code == 451 then
+      if rkn_marker then
+        return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(rkn_marker)
+      end
+      return "neutral", "http_451_no_marker"
+    end
+
+    -- WAF response headers (Vercel/CF/Sucuri) used to be classified as
+    -- server_active_reject. Same rationale as bare 451:
+    -- packet-level fingerprint masking can sometimes evade WAF
+    -- signature matching, so let autocircular rotate before giving up.
+    if hdis and hdis.headers then
+      local waf = z2k_find_waf_header(hdis.headers)
+      if waf then
+        return "neutral", "waf_header:" .. z2k_sanitize_reason(waf)
+      end
+    end
+
+    if body == "" then
+      return "neutral", "http_4xx_no_body:code=" .. tostring(code)
+    end
+    if rkn_marker then
+      return "hard_fail", "http_4xx_marker:" .. z2k_sanitize_reason(rkn_marker)
+    end
+    return "neutral", "http_4xx_no_marker:code=" .. tostring(code)
+  end
+
+  -- 3xx — Location parse + cross-SLD check
+  if code == 301 or code == 302 or code == 303 or code == 307 or code == 308 then
+    if type(http_dissect_reply) ~= "function" or
+       type(array_field_search) ~= "function" then
+      return "neutral", "http_redirect_no_dissector"
+    end
+    local hdis = http_dissect_reply(payload)
+    if not hdis then return "neutral", "http_redirect_unparseable" end
+    local idx = array_field_search(hdis.headers, "header_low", "location")
+    if not idx then return "neutral", "http_redirect_no_location" end
+    local loc_host = z2k_extract_loc_host(hdis.headers[idx].value)
+    if not loc_host then
+      -- Path-only or unparseable Location — same-origin redirect, treat
+      -- as positive (the request handshake succeeded; redirect is just
+      -- application-level navigation).
+      return "positive", nil
+    end
+    local req_host = desync.track and desync.track.hostname
+    if not req_host then return "neutral", "http_redirect_no_req_host" end
+    -- Defensive port-strip: HTTP Host header may carry port even though
+    -- nfqws2 dissector usually normalises it. Cheap to apply, prevents
+    -- a same-origin redirect to host:port being misclassified cross-SLD.
+    local req_lower = z2k_strip_port(req_host:lower())
+    local req_sld = type(dissect_nld) == "function" and dissect_nld(req_lower, 2) or req_lower
+    local loc_sld = type(dissect_nld) == "function" and dissect_nld(loc_host, 2) or loc_host
+    if req_sld and loc_sld and req_sld == loc_sld then
+      -- Same-SLD redirect = legit (HTTP→HTTPS upgrade, vanity URL,
+      -- internal app routing). Strategy did its job — handshake worked.
+      return "positive", nil
+    end
+    -- Cross-SLD — check if loc_host carries a block marker
+    local marker = z2k_find_host_marker(loc_host)
+    if marker then
+      return "hard_fail", "http_redirect_marker:" .. z2k_sanitize_reason(marker)
+    end
+    return "neutral", "http_redirect_cross_sld_no_marker"
+  end
+
+  -- 1xx informational, 3xx other (300/305/306/...), unknown — neutral.
+  return "neutral", "http_other_code:code=" .. tostring(code)
+end
+
 local Z2K_OK_WINDOW = 60
 -- Сколько живых ответов за окно считаем доказательством, что страта рабочая.
 -- Три: одиночный ответ бывает и на пути, который DPI рвёт через раз.
@@ -392,18 +699,19 @@ local function z2k_fail_verdict(desync, crec)
 	-- ротируется никогда.
 	-- HTTP-ОТВЕТ РАЗБИРАЕМ СВОИМ КЛАССИФИКАТОРОМ, ДО ШТАТНОГО ДЕТЕКТОРА.
 	--
-	-- При Z2K_NATIVE_DETECTORS=1 (дефолт) z2k_strip_custom_detectors режет с
-	-- http_rkn и трёх TCP-пулов ЛЮБОЙ :failure_detector=, включая наши разборы
-	-- кодов, а на их место встаёт эта обёртка. Штатный детектор кодов не
-	-- смотрит вовсе, поэтому 403/451/5xx с нашими маркерами блокировки и
+	-- Разборов кодов в профилях нет: их инжекции и проход, который их же
+	-- вырезал, сняты 2026-08-26 — в конфиг они не попадали ни разу. Их работу
+	-- делает эта обёртка. Штатный детектор кодов не смотрит вовсе, поэтому
+	-- 403/451/5xx с нашими маркерами блокировки и
 	-- редирект на страницу блокировки проходили как обычный ответ — и, хуже
 	-- того, засчитывались в живость хоста ниже: заглушка DPI это непустой
 	-- пейлоад без фатального алерта. Трёх таких хватало, чтобы взвести гвард
 	-- раньше, чем наберётся кворум провалов, и блокировка не ротировалась.
 	--
-	-- Обе lua-подсистемы грузятся вместе (S99zapret2.new: LUA_Z2K_DETECTORS и
-	-- LUA_Z2K_ALERT), но проверку типа держим: файл детекторов могли не
-	-- подключить, и тогда обёртка обязана деградировать, а не падать.
+	-- Классификатор с 26.08.2026 живёт в ЭТОМ же файле (см. шапку). Проверку
+	-- типа держим не ради отсутствующего файла, а ради частично обновлённой
+	-- установки: обновление раскладывает файлы по одному, и обёртка обязана
+	-- пережить окно, в котором рядом лежит ещё старая пара.
 	local http_class
 	if type(z2k_classify_http_reply) == "function" then
 		local ok_c, cls = pcall(z2k_classify_http_reply, desync)

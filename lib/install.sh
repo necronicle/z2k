@@ -2157,6 +2157,11 @@ TMPJUNK
     if [ -d "${WORK_DIR}/files/lua" ]; then
         mkdir -p "${ZAPRET2_DIR}/lua"
         cp -f "${WORK_DIR}/files/lua/"*.lua "${ZAPRET2_DIR}/lua/" 2>/dev/null || true
+        # z2k-detectors.lua удалён из состава 2026-08-26. У тех, кто ставился
+        # раньше, файл остаётся лежать: копирование новых его не затирает, а
+        # S99zapret2 его больше не грузит. Инертные 60 КБ на флешке и ложный
+        # след при чтении /opt — убираем явно.
+        rm -f "${ZAPRET2_DIR}/lua/z2k-detectors.lua" 2>/dev/null || true
     fi
 
     # Обновить fake blobs если есть более свежие в z2k

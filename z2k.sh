@@ -1272,15 +1272,6 @@ download_init_script() {
     local lua_dir="${files_dir}/lua"
     mkdir -p "$lua_dir" || die "Не удалось создать $lua_dir"
 
-    # z2k-detectors.lua ВОЗВРАЩЁН 2026-05-30 (Этап 1): кастомные детекторы.
-    url="${GITHUB_RAW}/files/lua/z2k-detectors.lua"
-    output="${lua_dir}/z2k-detectors.lua"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/lua/z2k-detectors.lua"
-    else
-        die "Ошибка загрузки files/lua/z2k-detectors.lua"
-    fi
-
     # z2k-alert.lua — две поправки к штатному детектору неудач (замеры
     # 2026-08-18): ретрансмит считается провалом только на ClientHello, и
     # фатальный TLS-алерт до ServerHello тоже считается провалом. Профиль
@@ -1310,8 +1301,8 @@ download_init_script() {
 
     # Phase 6: anti-ТСПУ fool extensions (z2k_dynamic_ttl and friends).
     # Strategies reference them by name via `fool=z2k_dynamic_ttl`, so the
-    # file must be downloaded before strategies load — ordering mirrors
-    # z2k-detectors.lua above.
+    # file must be downloaded before strategies load — он резолвится по имени
+    # так же, как детекторы, и обязан лежать раньше стратегий.
     url="${GITHUB_RAW}/files/lua/z2k-fooling-ext.lua"
     output="${lua_dir}/z2k-fooling-ext.lua"
     if z2k_fetch "$url" "$output"; then
@@ -1554,7 +1545,7 @@ handle_arguments() {
             ;;
         # probe / classify CLI handlers removed in r-15 (Phase 1 of the
         # detection stack). Replaced by the server-active
-        # taxonomy in z2k-detectors.lua (immediate effect on rotation)
+        # taxonomy жила в z2k-detectors.lua (удалён 2026-08-26)
         # and, when Phase 3 lands, by the z2k-detect daemon's reactive
         # discovery + cross-vantage probe. See lib/menu.sh notice for
         # rationale.
@@ -1692,8 +1683,7 @@ main() {
             # 2026-05-28). Их чистит webpanel по возрасту после завершения.
             rm -rf /tmp/wpinst /tmp/nfqws2.bak /tmp/zapret2_build \
                    /tmp/z2k-install.sh /tmp/z2k-au-manifest.json /tmp/S99_lib.sh \
-                   /tmp/cdnbase_test /tmp/config_official.sh \
-                   /tmp/z2k-detectors.lua.backup 2>/dev/null
+                   /tmp/cdnbase_test /tmp/config_official.sh 2>/dev/null
             # Truncate наши растущие логи. Их держат открытыми живые daemon'ы
             # (tg-mtproxy-client, lighttpd) — поэтому `rm` НЕ вернёт место
             # (deleted-but-held-open, как было в инциденте). `: > file`
