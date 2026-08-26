@@ -634,6 +634,20 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		return
 	}
 
+	// САМОНАБОР ОТСЕКАЕМ ЗДЕСЬ, а не у релея. Релей и так отказывает, но
+	// клиент повторяет: одна такая сессия давала две попытки в секунду
+	// круглосуточно (замер 26.08.2026 — ~16 000 отказов в сутки, больше, чем
+	// все прочие источники релея вместе). Отказ на своей стороне обрывает
+	// петлю в её начале и не тратит ни канал, ни чужой процессор.
+	if isSelfDial(origIP, origPort, listenPortOf(*listenAddr)) {
+		if *verbose {
+			log.Printf("[tunnel] самонабор на %s:%d — соединение пришло на слушатель напрямую, не через redirect", origIP, origPort)
+		}
+		clientConn.Close()
+		<-connSemaphore
+		return
+	}
+
 	// Allocate stream ID — skip IDs still in use (prevents wrap-around collision)
 	var streamID uint16
 	idFound := false
