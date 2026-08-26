@@ -566,13 +566,18 @@ au_converge_apply() {
         _ca_i=$((_ca_i + 1))
         au_log "  [$_ca_i/$_ca_n] качаю $_ca_path"
         _ca_stage="$dl/$(printf '%s' "$_ca_path" | tr '/' '_')"
-        au_download_repo_file "$_ca_path" "$_ca_stage" || {
-            au_log "сходимость: не скачался $_ca_path"; return 1; }
+        # Эталон вычисляем ДО загрузки и отдаём загрузчику: тогда зеркало с
+        # чужими байтами отклоняется как молчащее и пробуется следующее. Раньше
+        # он считался после, и первое же несвежее зеркало роняло обновление
+        # целиком, хотя рядом были ещё три исправных источника.
         _ca_want=$(au_manifest_file_sha "$manifest" "$_ca_path")
+        au_download_repo_file "$_ca_path" "$_ca_stage" "$_ca_want" || {
+            au_log "сходимость: не скачался $_ca_path"; return 1; }
         if [ -n "$_ca_want" ]; then
             _ca_got=$(z2k_sha256_file "$_ca_stage" 2>/dev/null)
             if [ "$_ca_got" != "$_ca_want" ]; then
-                au_log "сходимость: sha не сошлась у $_ca_path — раскладки не будет"
+                # Сюда доходим, только если ВСЕ источники отдали чужое.
+                au_log "сходимость: sha не сошлась у $_ca_path ни на одном источнике — раскладки не будет"
                 return 1
             fi
         fi
@@ -810,7 +815,7 @@ au_step_refresh_binaries() {
         # медленном канале это единственное место, где обновление стоит долго.
         # Молчать здесь нельзя ровно по той же причине, что и в сходимости.
         au_log "refresh-binaries: качаю $_rb_name (файл большой, это дольше остального)"
-        if ! au_download_repo_file "$_rb_path" "$_rb_tmp"; then
+        if ! au_download_repo_file "$_rb_path" "$_rb_tmp" "$_rb_want"; then
             au_log "refresh-binaries: не скачался $_rb_path"; rm -f "$_rb_tmp"; echo 1 >> "$fail"; continue
         fi
         rm -f "${_rb_tmp}.etag" 2>/dev/null
@@ -1129,16 +1134,54 @@ au_reapply_feature_flags() {
 # делать после). Роутер ничего не выводит из пути, он исполняет присланное.
 
 # Download a single repo file via z2k_fetch (or curl) into a target.
+# au_download_repo_file ПУТЬ ЦЕЛЬ [ОЖИДАЕМЫЙ_SHA256]
+#
+# ТРЕТИЙ ПАРАМЕТР ОБЯЗАН ПЕРЕДАВАТЬСЯ ВЕЗДЕ, ГДЕ ЭТАЛОН ИЗВЕСТЕН. Без него
+# z2k_fetch принимает ответ ЛЮБОГО зеркала, лишь бы это был не HTML с ошибкой,
+# — а зеркала кэшируют ветку и отдают байты прошлого релиза. Дальше сверка
+# ловит расхождение, но уже поздно: источник не помечен негодным, следующий
+# хоп не пробуется, и обновление падает целиком.
+#
+# Так и легло обновление у пользователя 26.08.2026 (диагностика 1007):
+# p-79.10 -> p-79.17, тридцать три файла скачаны, на webpanel/www/js/pages/warp.js
+# sha не сошлась — «раскладки не будет», откат. Манифест при этом сходился сам
+# с собой в обоих релизах, и сам файл между ними не менялся: расходились
+# доставленные байты, то есть отвечало несвежее зеркало.
+#
+# Ожидание передаётся ПАРАМЕТРОМ, а не глобальной переменной. Прежде его
+# выставляли снаружи, и получилось ровно то, что бывает с такой связью: путь
+# патча и загрузка z2k.sh выставляли, сходимость и бинарники — забыли, а
+# заметить это по коду вызова было нельзя.
 au_download_repo_file() {
     local repo_path="$1"
     local target="$2"
-    local url
+    local want_sha="${3:-}"
+    local url rc
     url="$(au_repo_base)/${repo_path}"
     mkdir -p "$(dirname "$target")"
     if command -v z2k_fetch >/dev/null 2>&1; then
-        z2k_fetch "$url" "$target" && { [ -s "$target" ] || [ -f "$target" ]; } && return 0
+        # z2k_fetch сверяет КАЖДЫЙ хоп сам и отклоняет зеркало с чужими байтами
+        # так же, как молчащее, — переходя к следующему.
+        if [ -n "$want_sha" ]; then
+            Z2K_FETCH_SHA256="$want_sha"; export Z2K_FETCH_SHA256
+        fi
+        # `cmd || rc=$?`, а НЕ `cmd; rc=$?`: скрипт сорсится в z2k.sh под
+        # `set -e`, и вторая форма убивает оболочку на самой команде, до
+        # присваивания, молча. Слева от `||` команда стоит в условии, и errexit
+        # там не срабатывает.
+        rc=0
+        z2k_fetch "$url" "$target" || rc=$?
+        unset Z2K_FETCH_SHA256
+        [ "$rc" = "0" ] && { [ -s "$target" ] || [ -f "$target" ]; } && return 0
     else
-        curl -fsSL --max-time 30 "$url" -o "$target" && { [ -s "$target" ] || [ -f "$target" ]; } && return 0
+        # Резервный путь без z2k_fetch — одно зеркало, перебирать нечего, но
+        # молча принять чужие байты нельзя и здесь.
+        if curl -fsSL --max-time 30 "$url" -o "$target" && { [ -s "$target" ] || [ -f "$target" ]; }; then
+            if [ -z "$want_sha" ] || [ "$(z2k_sha256_file "$target" 2>/dev/null)" = "$want_sha" ]; then
+                return 0
+            fi
+            rm -f "$target" "${target}.etag" 2>/dev/null
+        fi
     fi
     # Download failed. Distinguish a file DELETED upstream (a later release in
     # the patch window removed it — e.g. a dropped feature) from a transient
@@ -1359,12 +1402,9 @@ au_apply_patch() {
             fi
         else
             _want_sha=$(au_manifest_file_sha "$Z2K_AU_TMP_DIR/UPDATES.json" "$repo_path")
-            if [ -n "$_want_sha" ]; then
-                Z2K_FETCH_SHA256="$_want_sha"; export Z2K_FETCH_SHA256
-            else
+            [ -n "$_want_sha" ] || \
                 au_log "patch: $repo_path — в манифесте нет sha256, содержимое не проверяется"
-            fi
-            au_download_repo_file "$repo_path" "$stage"
+            au_download_repo_file "$repo_path" "$stage" "$_want_sha"
             _dl_rc=$?
         fi
         unset Z2K_FETCH_SHA256
