@@ -173,16 +173,28 @@ git checkout -q -B z2k-staging
 # вшивается Z2K_TUNNEL_SECRET, без него пересобрать и сверить builds/ нечем.
 # Гейт правильный, но к этому свойству отношения не имеет — и делал тест
 # красным всякий раз, когда рядом лежала невыпущенная правка туннеля.
-# Приводим mtproxy-client к опубликованному состоянию, чтобы дельта была одна.
-if git rev-parse --verify -q origin/z2k-enhanced >/dev/null 2>&1; then
+#
+# BASELINE — ТЕГ ПРЕДЫДУЩЕГО РЕЛИЗА, А НЕ origin/z2k-enhanced.
+#
+# Раньше здесь стояло origin/z2k-enhanced, и это делало тест зависимым от того,
+# когда в чекауте последний раз делали fetch. На CI ветку подтягивают, поэтому
+# там было зелено; локально она отставала на дюжину коммитов, тест подставлял
+# СТАРЫЙ mtproxy-client — и падал на чужом гейте про Z2K_TUNNEL_SECRET, показывая
+# осмысленный на вид отказ вместо своей настоящей причины. Тест, чей вердикт
+# зависит от свежести remote-tracking ref, не проверяет ничего.
+#
+# Тег предыдущего релиза свободен от этого: release.sh сам диффает ОТ НЕГО, он
+# лежит в любом клоне и не зависит ни от какой сети.
+_prev_rel=$(sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' UPDATES.json | head -1)
+if [ -n "$_prev_rel" ] && git rev-parse --verify -q "$_prev_rel" >/dev/null 2>&1; then
     # rm -rf до checkout: восстановление из ссылки возвращает только то, что
     # в ней есть, и НЕ убирает файлы, появившиеся позже. Один новый файл в
     # каталоге — и дельта снова не одна.
     rm -rf mtproxy-client
-    git checkout -q origin/z2k-enhanced -- mtproxy-client 2>/dev/null || true
+    git checkout -q "$_prev_rel" -- mtproxy-client 2>/dev/null || true
     git add -A mtproxy-client 2>/dev/null || true
     git diff --cached --quiet -- mtproxy-client 2>/dev/null \
-        || git commit -q -m "тест: mtproxy-client к опубликованному состоянию"
+        || git commit -q -m "тест: mtproxy-client к состоянию предыдущего релиза"
 fi
 echo "# generator touch" >> lib/config_official.sh
 git add lib/config_official.sh
