@@ -116,6 +116,53 @@ case "$POOLS" in
 esac
 rm -f "$CONFIG_FILE"
 
+printf "\n--- возраст страты: метка живёт, пока живёт стратегия ---\n"
+# ЗАЧЕМ. Замечание пользователя: «страта работает сутки, жму замок — счётчик
+# обнуляется, снимаю замок — снова обнуляется. Не ясно, сколько страта была
+# живой». Метка означает «когда эта стратегия стала текущей», а не «когда по
+# строке кликнули». Lua это правило уже держит (z2k-state-persist.lua:
+# `if prev == n then return false end`), панель его нарушала.
+rm -f "$STATE_FILE" "$STATE_FILE_FALLBACK"
+state_set rkn_tcp age.example 7 auto
+TS0=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE")
+
+# Состариваем строку на сутки, как в жалобе.
+DAY_AGO=$((TS0 - 86400))
+awk -F'\t' -v OFS='\t' -v d="$DAY_AGO" '
+    $1=="rkn_tcp" && $2=="age.example" { $4=d } { print }
+' "$STATE_FILE" > "$STATE_FILE.aged" && mv "$STATE_FILE.aged" "$STATE_FILE"
+awk -F'\t' -v OFS='\t' -v d="$DAY_AGO" '
+    $1=="rkn_tcp" && $2=="age.example" { $4=d } { print }
+' "$STATE_FILE_FALLBACK" > "$STATE_FILE_FALLBACK.aged" \
+    && mv "$STATE_FILE_FALLBACK.aged" "$STATE_FILE_FALLBACK"
+
+# Замок на ТОЙ ЖЕ стратегии — возраст обязан уцелеть.
+state_set rkn_tcp age.example 7 frozen
+TS_FROZEN=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE")
+assert_eq "замок не обнуляет возраст" "$DAY_AGO" "$TS_FROZEN"
+assert_contains "но режим переключился" "age.example	7	$DAY_AGO	frozen" "$(cat "$STATE_FILE")"
+
+# Разморозка — тоже смена только режима.
+state_set rkn_tcp age.example 7 auto
+TS_THAWED=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE")
+assert_eq "разморозка не обнуляет возраст" "$DAY_AGO" "$TS_THAWED"
+
+# А вот смена номера — обязана обнулить: пошёл отсчёт другой стратегии.
+state_set rkn_tcp age.example 8 auto
+TS_NEW=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE")
+if [ "$TS_NEW" -gt "$DAY_AGO" ] 2>/dev/null; then
+    printf '[PASS] смена стратегии начинает отсчёт заново\n'; TESTS_PASSED=$((TESTS_PASSED+1))
+else
+    printf '[FAIL] смена стратегии начинает отсчёт заново (метка осталась %s)\n' "$TS_NEW"
+    TESTS_FAILED=$((TESTS_FAILED+1))
+fi
+
+# Оба файла обязаны нести ОДНУ метку: читатели склеивают их по «свежее
+# побеждает», и расхождение показало бы возраст то одной строки, то другой.
+TS_P=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE")
+TS_F=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE_FALLBACK")
+assert_eq "основной файл и запасной несут одну метку" "$TS_P" "$TS_F"
+
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 printf "Results: %d passed, %d failed\n" "$TESTS_PASSED" "$TESTS_FAILED"
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

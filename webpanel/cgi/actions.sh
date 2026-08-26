@@ -2230,6 +2230,34 @@ _state_set_one_file() {
     return 0
 }
 
+# Метка времени строки состояния означает «когда эта стратегия стала текущей»,
+# а не «когда по строке последний раз кликнули». Lua уже держит это правило:
+# z2k-state-persist.lua обновляет ts ТОЛЬКО при смене номера
+# (`if prev == n then return false end`). Панель это правило нарушала: замок и
+# разморозка переписывали ts всегда, и возраст страты обнулялся от каждого
+# клика — человек переставал видеть, сколько она на самом деле продержалась.
+#
+# Возвращаем прежнюю метку, если номер стратегии не изменился. Смотрим ту же
+# склейку двух файлов, что читают все остальные (побеждает более свежая метка),
+# иначе панель считала бы возраст не по тому, что показывает.
+_state_prev_ts() {
+    local key="$1" host="$2" strat="$3" f
+    for f in "$STATE_FILE" "$STATE_FILE_FALLBACK"; do
+        [ -f "$f" ] || continue
+        awk -F'\t' -v k="$key" -v h="$host" '
+            $1 == k && $2 == h && $4 ~ /^[0-9]+$/ { print $3 "\t" $4 }
+        ' "$f" 2>/dev/null
+    done | awk -F'\t' -v strat="$strat" '
+        # Побеждает самая свежая строка — то же правило, что у читателей.
+        $2 + 0 > best + 0 { best = $2; beststrat = $1 }
+        END {
+            # Номер тот же — метку сохраняем. Другой (или строки не было) —
+            # печатаем пусто, и вызывающий поставит текущее время.
+            if (best != "" && beststrat + 0 == strat + 0) print best
+        }
+    '
+}
+
 # Set (pin / manually select) a rotator row's strategy + mode.
 #   mode=auto   → adopt this strategy live; rotation continues (skip a broken
 #                 strategy, or test one without locking it).
@@ -2249,7 +2277,9 @@ state_set() {
     case "$strat" in ''|*[!0-9]*) echo "bad strategy" >&2; return 1 ;; esac
     [ "$strat" -ge 1 ] 2>/dev/null || { echo "strategy must be >=1" >&2; return 1; }
     case "$mode" in auto|frozen) ;; *) echo "bad mode" >&2; return 1 ;; esac
-    local ts; ts=$(date +%s 2>/dev/null || echo 0)
+    # Метку сохраняем, если стратегия та же — см. _state_prev_ts выше.
+    local ts; ts=$(_state_prev_ts "$key" "$host" "$strat")
+    [ -n "$ts" ] || ts=$(date +%s 2>/dev/null || echo 0)
     local ok=1
     # Тот же общий с Lua замок: пин и заморозка — это как раз то намерение
     # оператора, которое проигранная гонка стирает молча.
