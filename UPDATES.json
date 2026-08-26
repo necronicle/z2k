@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 46,
-  "current": "r-80.1",
+  "seq": 47,
+  "current": "r-80.2",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -188,7 +188,7 @@
   "files/ndm/95-z2k-scheduler-watchdog.sh": "d73955d742263bda01ecca1be4b04deb7bba61164a5da2609f3e9977f443ad63",
   "files/z2k-auto-update.sh": "f8b10d95667dc4eb2a64a5a126b42cf4572170cfe23655bfe5effe831a77e9b7",
   "files/z2k-blocked-monitor.sh": "a998797d7796859ec95d74d52b9f732dc89bf14a44351ac23e9c0632656767d2",
-  "files/z2k-config-validator.sh": "a8d01d7f7eb2268dd3487e1b560700ad7eb2c5b87a8428c61df25c9570fdf09a",
+  "files/z2k-config-validator.sh": "90292fd78c0322c14de1c0a84251a67301848731e26de682e0dcb08efedfb025",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
   "files/z2k-diag.sh": "60df00284d69fb4f3f8ac77f256704020a4db5069c1c3e246cf5cdd3b9a4257e",
   "files/z2k-dns-check.sh": "e568560eeb992b0e118b7422bae9ed3e240bbe91d2fc00395102e31a9db60031",
@@ -203,7 +203,7 @@
   "files/z2k-tg-watchdog.sh": "2c5a8cb5511c9ea800fbe4cbf9d39730b45b8958f16abb222a791d898b0fa2a0",
   "files/z2k-update-lists.sh": "a32df510bef2e739b427a6f70e5a6db13a53e8fbe9e31dcb1022707795549dd5",
   "files/z2k-warp.sh": "ffbb965bb803a806c2208bf404006274961525df12fedb3cae03ffc6c8c53a00",
-  "lib/auto_update.sh": "890ff13843a5be62aa6794b5c96bd68dbad6e13f65c936931f4a856fae15f047",
+  "lib/auto_update.sh": "79e8ba3f5d0f91b661474044ddaa9990c8a0ed13e70d524f5bf06280471f245a",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
   "lib/config_official.sh": "f2f6f8c1a5e6afcbc822ef0c0db7ab5da37d56219b8fcccc2c4a5d78f09eb7cd",
   "lib/install.sh": "251cf807723019b5af2f3152c65538cb21820055e07e585a59ae3311eeff28e7",
@@ -244,7 +244,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "638cce935953d72d12b7e3b6e20c3d8915bd8685d56ce31b747e7d398804f7a2",
+  "webpanel/www/index.html": "d96dcec724979c4f8edd700fd9ef6c3cc89c98c0e0afe50ebe43360f33ba64fe",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -471,6 +471,7 @@
 {"v": "p-79.17", "type": "patch", "ts": "2026-08-25T14:36:11Z", "ref": "p-79.17", "desc": "В диагностике исправлен адрес роутера: у подключений IPoE там мог оказаться адрес провайдера вместо адреса домашней сети.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-79.18", "type": "patch", "ts": "2026-08-25T19:49:04Z", "ref": "p-79.18", "desc": "WARP стал подниматься там, где раньше не мог: движок сам находит рабочее подключение, если выданные Cloudflare адреса не отвечают, и подбирает настройку обхода, при которой соединение не обрывают. Исправлена работа сайтов через WARP — раньше часть страниц не открывалась, хотя скачивание шло.", "changed_files": ["webpanel/www/index.html", "files/lists/warp-endpoints.txt", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "webpanel/www/js/pages/toggles.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "r-80", "type": "reinstall", "ts": "2026-08-26T19:39:59Z", "ref": "r-80", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/ACTIVE_DISCORD_UDP.bin", "files/lua/z2k-alert.lua", "files/lua/z2k-state-persist.lua", "files/z2k-dns-check.sh", "files/z2k-geosite.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
-{"v": "r-80.1", "type": "reinstall", "ts": "2026-08-26T21:59:05Z", "ref": "r-80.1", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/active_discord_udp.bin", "files/z2k-config-validator.sh", "z2k.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
+{"v": "r-80.1", "type": "reinstall", "ts": "2026-08-26T21:59:05Z", "ref": "r-80.1", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/active_discord_udp.bin", "files/z2k-config-validator.sh", "z2k.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
+{"v": "r-80.2", "type": "reinstall", "ts": "2026-08-26T23:46:35Z", "ref": "r-80.2", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать. Кроме того, обновление больше не срывается, если роутер проверил его в первые минуты после выхода новой версии.", "changed_files": ["webpanel/www/index.html", "files/z2k-config-validator.sh", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
