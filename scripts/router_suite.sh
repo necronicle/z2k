@@ -44,12 +44,19 @@ snapshot() {
       printf "iptables-nat    %s\n" "$(iptables -w -t nat -S 2>/dev/null | md5sum | cut -d" " -f1)"
       printf "iptables-mangle %s\n" "$(iptables -w -t mangle -S 2>/dev/null | md5sum | cut -d" " -f1)"
       printf "ipsets          %s\n" "$(ipset list -n 2>/dev/null | sort | md5sum | cut -d" " -f1)"
-      # Кэш ротатора и README живут своей жизнью: state.tsv пишется каждые
-      # несколько секунд, и без отсева отпечаток «дрейфовал» на каждом прогоне,
-      # превращая тревогу в фон. Отсев узкий и назван поимённо.
-      printf "zapret2-tree    %s\n" "$(ls -lR /opt/zapret2 2>/dev/null \
-          | grep -vE "extra_strats/cache|autocircular|user-exclude.README" \
-          | md5sum | cut -d" " -f1)"
+      # ИМЕНА И РАЗМЕРЫ, А НЕ MTIME. `ls -lR` печатает время правки, и отпечаток
+      # дрейфовал от штатной работы роутера: ротатор пишет state.tsv каждые
+      # несколько секунд, задача get-config переписывает README в ipset/ — а
+      # заодно меняется mtime самого каталога, который отсевом по имени файла не
+      # убрать. Тревога звучала на каждом прогоне и перестала что-либо значить.
+      #
+      # Нас интересует ровно одно: не появился, не исчез и не изменился ли файл.
+      # Это видно по именам и размерам, и это не зависит от часов.
+      printf "zapret2-tree    %s\n" "$(find /opt/zapret2 -type f 2>/dev/null \
+          | grep -vE "extra_strats/cache|autocircular|user-exclude\.README" \
+          | sort | while IFS= read -r _f; do \
+                printf "%s %s\n" "$_f" "$(wc -c < "$_f" 2>/dev/null)"; \
+            done | md5sum | cut -d" " -f1)"
       printf "config          %s\n" "$(md5sum /opt/zapret2/config 2>/dev/null | cut -d" " -f1)"
       # Через grep с классом символов: `pgrep nfqws2` находил САМУ ЭТУ КОМАНДУ
       # (её argv содержит строку), и отпечаток менялся от прогона к прогону,
