@@ -18,11 +18,39 @@ PIDFILE="${PIDFILE:-/var/run/z2k-warpd.pid}"
 # Go async-preempt роняет процесс на MIPS (известный краш) — выключаем.
 case "$(uname -m)" in mips*) export GODEBUG=asyncpreemptoff=1 ;; esac
 
+# Z2K_WARP_FORCE — закрепить ОДИН шаг лестницы на время подбора плеча десинка
+# (z2k-warp.sh warp_masque_tune). Живёт только в этом процессе: обычный start
+# без переменной поднимает движок с полной лестницей, поэтому подбор не может
+# оставить роутер запертым на h2 навсегда.
+#
+# Значение проверяем, а не подставляем как есть: оно уезжает в командную
+# строку демона.
+FORCE_ARG=""
+case "$Z2K_WARP_FORCE" in
+    "")   : ;;
+    h2)   FORCE_ARG="-force-transport h2" ;;
+    wg:[0-9]*|wg:[0-9]*.[0-9]*.[0-9]*.[0-9]*:[0-9]*) FORCE_ARG="-force-transport $Z2K_WARP_FORCE" ;;
+    *)    echo "z2k-warpd: Z2K_WARP_FORCE=$Z2K_WARP_FORCE не распознан — игнорирую" >&2 ;;
+esac
+
 # VPS-релей для API Cloudflare, если напрямую заблокирован: тот же, что у
 # регистрации в z2k-warp.sh (переопределяется Z2K_WARP_VPS_PROXY в конфиге).
 _cfg="${ZAPRET2_DIR:-/opt/zapret2}/config"
 _proxy=$(grep -m1 '^Z2K_WARP_VPS_PROXY=' "$_cfg" 2>/dev/null | cut -d= -f2- | tr -d '"')
 export Z2K_WARP_VPS_PROXY="${_proxy:-http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119}"
+
+# ЗАПУСКАТЬ ИЛИ НЕТ, РЕШАЕТ ФЛАГ, А НЕ НАЛИЧИЕ БИНАРНИКА.
+#
+# Бинарник остаётся на диске и после «Выключить WARP» — чтобы повторное
+# включение не качало семь мегабайт заново. Без этой проверки первый же ребут
+# поднимал движок тому, кто WARP выключил: Entware при загрузке дёргает все
+# S*-скрипты подряд, туннель вставал, NAT и MASQUERADE появлялись, и роутер
+# ходил к Cloudflare круглосуточно при GAME_WARP_ENABLED=0.
+#
+# Нет конфига — не запускаем: включённость подтверждается, а не предполагается.
+warp_enabled() {
+    [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$_cfg" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ]
+}
 
 # Два источника правды, и это не перестраховка. Неудачный старт (замок занят,
 # TUN занят) писал в pidfile мёртвый pid — и selfheal каждые 25 с поднимал
@@ -37,6 +65,10 @@ running() {
 
 case "$1" in
     start)
+        if ! warp_enabled; then
+            echo "z2k-warpd: WARP выключен (GAME_WARP_ENABLED=1 включает) — не запускаю"
+            exit 0
+        fi
         if running; then
             echo "z2k-warpd already running (pid $(cat "$PIDFILE"))"
             exit 0
@@ -44,7 +76,8 @@ case "$1" in
         mkdir -p /tmp/z2k-warp "$(dirname "$PIDFILE")" 2>/dev/null
         # Отвязка от потоков обязательна: NDM читает вывод init-скрипта до
         # конца потока, а демон унаследовал бы его и держал открытым.
-        "$BIN" run >/dev/null 2>&1 </dev/null &
+        # shellcheck disable=SC2086  # FORCE_ARG — либо пусто, либо два слова
+        "$BIN" run $FORCE_ARG >/dev/null 2>&1 </dev/null &
         _pid=$!
         # Даём процессу секунду умереть: мёртвый pid в pidfile — это вечная
         # карусель перезапусков (см. running выше).

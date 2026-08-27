@@ -441,8 +441,24 @@ warp_install() {
 # провёз сквозную пробу, — так что «встало» и «везёт» здесь не путаются.
 WARP_TUNE_KEY="${WARP_TUNE_KEY:-rkn_tcp}"
 WARP_TUNE_HOST="${WARP_TUNE_HOST:-cloudflareclient.com|4}"
-WARP_TUNE_MAX="${WARP_TUNE_MAX:-50}"
-WARP_TUNE_WAIT="${WARP_TUNE_WAIT:-14}"
+WARP_TUNE_MAX="${WARP_TUNE_MAX:-50}"        # всего плеч в пуле rkn_tcp
+# WARP_TUNE_RUN — сколько плеч перебирать ЗА ОДИН заход.
+#
+# Перебор идёт с движком, закреплённым на h2, то есть запасные WG-адреса на это
+# время недоступны. Пятьдесят плеч по WARP_TUNE_WAIT — это почти двадцать минут
+# без лестницы, и человек всё это время без WARP по нашей вине, а не по вине
+# провайдера. Заход ограничен пятью минутами; продолжение — со следующего плеча
+# (WARP_TUNE_CURSOR), поэтому повторное «Включить» не топчется по началу пула.
+WARP_TUNE_RUN="${WARP_TUNE_RUN:-15}"
+# WARP_TUNE_WAIT — сколько ждать готовности под очередным плечом.
+#
+# Не меньше времени, за которое монитор живости успевает вынести вердикт:
+# таймаут пробы 8 с, два провала подряд = смерть, плюс пара секунд на
+# stop/sleep/start. При прежних 14 с «плечо не держит» печаталось раньше, чем
+# монитор вообще мог что-то доказать.
+WARP_TUNE_WAIT="${WARP_TUNE_WAIT:-20}"
+WARP_TUNE_LOCK="${WARP_TUNE_LOCK:-/tmp/z2k-warp/tune.lock}"
+WARP_TUNE_CURSOR="${WARP_TUNE_CURSOR:-/opt/etc/z2k-warp/tune.cursor}"
 WARP_STATE="${WARP_STATE:-$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv}"
 WARP_STATE_FALLBACK="${WARP_STATE_FALLBACK:-/tmp/z2k-autocircular-state.tsv}"
 
@@ -478,29 +494,78 @@ warp_state_pin() {
 # Возвращает 0, как только готовность доказана; 1 — если не помогло ни одно.
 # В последнем случае закрепление снимаем: врать ротатору про «ручной выбор»,
 # который ничего не дал, значит запретить ему искать самому.
+#
+# ПОДБОР ЗАКРЕПЛЯЕТ ДВИЖОК НА h2 И ВСЕГДА ОТПУСКАЕТ ЕГО В КОНЦЕ.
+#
+# Поле 2026-08-27: перезапуск шёл вслепую, каждые шестнадцать секунд, независимо
+# от того, чем движок занят. Роутер стоял на WG-ступени (188.114.97.1:4500,
+# рукопожатие проходит) — плечо десинка на cloudflareclient.com не влияет на
+# WireGuard НИКАК, — а подборщик рвал ему лестницу по кругу пятьдесят раз
+# подряд. В диагностике это выглядело как «поднимается» тринадцать минут.
+#
+# Закрепление на h2 делает перезапуск осмысленным: подбираем плечо ровно под тот
+# транспорт, на который плечо влияет. Форс живёт в окружении процесса, а не в
+# конфиге, и последний перезапуск заход делает уже без него — запереть роутер на
+# h2 подбор не может по построению.
 warp_masque_tune() {
-    local i=1 had
+    local i had rc=1 tried=0 first
+    mkdir -p "$(dirname "$WARP_TUNE_LOCK")" 2>/dev/null
+    # Один подборщик на роутер. Два нажатия «Включить» подряд давали два фоновых
+    # цикла, и каждый перезапускал движок под другим.
+    mkdir "$WARP_TUNE_LOCK" 2>/dev/null || { _wlog "подбор плеча уже идёт — второй не запускаю"; return 1; }
     had=$(awk -F'\t' -v k="$WARP_TUNE_KEY" -v h="$WARP_TUNE_HOST" \
               '($1 == k && $2 == h) { print $3; exit }' "$WARP_STATE" 2>/dev/null)
-    _wlog "подбираю плечо десинка под MASQUE (до $WARP_TUNE_MAX)..."
-    while [ "$i" -le "$WARP_TUNE_MAX" ]; do
+    first=$(cat "$WARP_TUNE_CURSOR" 2>/dev/null)
+    case "$first" in ''|*[!0-9]*) first=1 ;; *) first=$((first + 1)) ;; esac
+    [ "$first" -gt "$WARP_TUNE_MAX" ] && first=1
+    i="$first"
+    _wlog "подбираю плечо десинка под MASQUE (с $first, до $WARP_TUNE_RUN за заход)..."
+    while [ "$tried" -lt "$WARP_TUNE_RUN" ]; do
+        [ "$(warp_flag)" = "1" ] || { _wlog "WARP выключили — подбор прекращён"; break; }
         warp_state_pin "$i"
-        sh "$WARP_INIT" restart >/dev/null 2>&1
+        mkdir -p "$(dirname "$WARP_TUNE_CURSOR")" 2>/dev/null
+        printf '%s\n' "$i" > "$WARP_TUNE_CURSOR" 2>/dev/null
+        Z2K_WARP_FORCE=h2 sh "$WARP_INIT" restart >/dev/null 2>&1
         local waited=0
         while [ "$waited" -lt "$WARP_TUNE_WAIT" ]; do
-            warp_ready && {
-                _wlog "плечо $i держит MASQUE — закрепил"
-                return 0
-            }
+            warp_ready && break
             sleep 2; waited=$((waited + 2))
         done
+        if warp_ready; then
+            _wlog "плечо $i держит MASQUE — закрепил"
+            rc=0
+            break
+        fi
         _wlog "плечо $i не держит"
+        tried=$((tried + 1))
         i=$((i + 1))
+        [ "$i" -gt "$WARP_TUNE_MAX" ] && i=1
     done
-    # Не нашли — возвращаем как было, чтобы ротатор снова стал хозяином записи.
-    if [ -n "$had" ]; then warp_state_pin "$had"; fi
-    _wlog "ни одно плечо не удержало MASQUE"
-    return 1
+    if [ "$rc" != "0" ] && [ -n "$had" ]; then warp_state_pin "$had"; fi
+    if [ "$(warp_flag)" != "1" ]; then
+        # WARP выключили, пока мы подбирали. Наш последний restart мог поднять
+        # демона уже ПОСЛЕ того, как disable его остановил — добиваем, иначе на
+        # роутере остаётся форсированный на h2 процесс при выключенном WARP.
+        sh "$WARP_INIT" stop >/dev/null 2>&1
+        rmdir "$WARP_TUNE_LOCK" 2>/dev/null
+        return 1
+    fi
+    # Форс снимаем ВСЕГДА, чем бы заход ни кончился: движок возвращается к полной
+    # лестнице. С закреплённым плечом h2 доказывает себя сам и попадает в
+    # last_good; не доказывает — работают запасные WG-адреса.
+    sh "$WARP_INIT" restart >/dev/null 2>&1
+    if [ "$rc" = "0" ]; then
+        local back=0
+        while [ "$back" -lt "$WARP_READY_WAIT" ]; do
+            warp_ready && break
+            sleep 2; back=$((back + 2))
+        done
+        warp_ready || { _wlog "плечо $i держало под форсом, но не удержало на полной лестнице"; rc=1; }
+    else
+        _wlog "ни одно из $tried плеч не удержало MASQUE — нажмите «Включить» ещё раз, перебор продолжится дальше по пулу"
+    fi
+    rmdir "$WARP_TUNE_LOCK" 2>/dev/null
+    return "$rc"
 }
 
 warp_enable() {

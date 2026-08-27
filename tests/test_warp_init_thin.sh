@@ -23,6 +23,13 @@ INIT="$SCRIPT_DIR/files/init.d/S51z2k-warp"
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"; pkill -f "fake-warpd-$$" 2>/dev/null' EXIT
 
+# Конфиг с флагом: запуск разрешает ФЛАГ, а не наличие бинарника (иначе первый
+# же ребут поднимал движок тому, кто WARP выключил — S*-скрипты Entware при
+# загрузке дёргаются все подряд).
+mkdir -p "$SB/zd"
+printf 'GAME_WARP_ENABLED=1\n' > "$SB/zd/config"
+export ZAPRET2_DIR="$SB/zd"
+
 # --- нет бинаря ---
 rc=0; BIN="$SB/absent" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1 || rc=$?
 assert_eq "start without binary exits 0" "0" "$rc"
@@ -53,6 +60,42 @@ assert_eq "second start spawns no second process" "1" "$(pgrep -f "fake-warpd-$$
 
 rc=0; BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" status >/dev/null 2>&1 || rc=$?
 assert_eq "status exits 0 while running" "0" "$rc"
+
+# --- флаг выключен: бинарник есть, запускать нечего --------------------------
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
+sleep 1
+printf 'GAME_WARP_ENABLED=0\n' > "$SB/zd/config"
+rc=0; BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1 || rc=$?
+assert_eq "выключенный WARP: start выходит 0" "0" "$rc"
+assert_eq "выключенный WARP: движок не поднят" "0" "$(pgrep -f "fake-warpd-$$" | wc -l | tr -d ' ')"
+assert_eq "выключенный WARP: pidfile не создан" "no" "$([ -f "$SB/pid" ] && echo yes || echo no)"
+# Нет конфига — включённость не подтверждена, значит не запускаем.
+rm -f "$SB/zd/config"
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
+assert_eq "нет конфига: движок не поднят" "0" "$(pgrep -f "fake-warpd-$$" | wc -l | tr -d ' ')"
+printf 'GAME_WARP_ENABLED=1\n' > "$SB/zd/config"
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
+sleep 1
+pid=$(cat "$SB/pid" 2>/dev/null)
+assert_eq "флаг вернули — движок снова поднят" "alive" "$(kill -0 "$pid" 2>/dev/null && echo alive || echo dead)"
+
+# --- Z2K_WARP_FORCE закрепляет один шаг лестницы на время подбора плеча ------
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
+sleep 1
+Z2K_WARP_FORCE=h2 BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
+sleep 1
+assert_eq "форс уезжает в командную строку" "ARGS=run -force-transport h2" "$(grep ARGS "$SB/env")"
+# Значение проверяем: оно попадает в командную строку демона.
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
+sleep 1
+Z2K_WARP_FORCE='h2; rm -rf /' BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
+sleep 1
+assert_eq "мусор в форсе игнорируется" "ARGS=run" "$(grep ARGS "$SB/env")"
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
+sleep 1
+BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
+sleep 1
+pid=$(cat "$SB/pid" 2>/dev/null)
 
 BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
 sleep 1
