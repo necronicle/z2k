@@ -196,7 +196,15 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 			continue
 		}
-		e.lastErr = ""
+		// ПРИЧИНУ СНИМАЕТ ДОКАЗАННАЯ ЖИВОСТЬ, А НЕ ОТКРЫТАЯ СЕССИЯ.
+		//
+		// Здесь стояло e.lastErr = "" сразу после open — и на линии, где каждая
+		// ступень встаёт, но ни одна не возит, статус мигал: no_transit жил
+		// микросекунды до следующего open, а status.Writer отдаёт наружу не
+		// чаще раза в секунду и просто терял его. Панель показывала пустую
+		// причину, то есть «поднимается», ровно в том случае, ради которого
+		// no_transit и заведён. Снимаем причину там же, где фиксируем рабочую
+		// ступень, — по доказанной пробе.
 		e.since = cfg.Now()
 		mon.Reset()
 		cfg.Logf("ladder: %s ok (%s)", ladder.Label(step), tr.Endpoint())
@@ -253,6 +261,10 @@ func (e *Engine) advance(ctx context.Context, lad *ladder.Ladder, reason string)
 // Форсированный шаг — отладка, а не опыт: память не трогаем, иначе один прогон
 // с --force-transport h2 пинил бы роутер на h2.
 func (e *Engine) commitGood(lad *ladder.Ladder) {
+	// Причину снимаем ДО сторожа форса: под --force-transport память лестницы
+	// мы намеренно не трогаем, но живой транспорт остаётся живым — иначе
+	// no_transit висел бы в статусе вечно на отладочном прогоне.
+	e.lastErr = ""
 	if e.cfg.ForceStep != nil {
 		return
 	}
