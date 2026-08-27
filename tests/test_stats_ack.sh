@@ -16,6 +16,10 @@
 #
 # POSIX sh.
 
+# Диалект и PATH песочниц — общие для набора: на Keenetic /usr/bin и /bin
+# пусты (см. tests/lib/common.sh).
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
@@ -49,6 +53,31 @@ exit 0
 STUBC
 chmod +x "$TMP/bin/curl"
 
+# Подставной date: сдвигает «сейчас» вперёд, всё остальное отдаёт настоящему.
+#
+# ВОЗРАСТ УСТАНОВКИ ПОДДЕЛЫВАЕТСЯ ВРЕМЕНЕМ, А НЕ MTIME. Здесь стояло
+# `touch -t "$(date -v-3d …)"`, и на роутере не работала НИ ОДНА половина:
+# busybox date не знает ни `-v` (BSD), ни `-d "-3 days"` (GNU), а busybox touch
+# не знает `-t` вовсе — его usage это `touch [-ch] FILE...`. Метка не ставилась,
+# возраст оставался нулевым, и проверка «через трое суток ожидание кончается»
+# краснела на роутере, ничего не проверив.
+#
+# Аплоадер берёт «сейчас» через `date +%s`, а возраст установки — через
+# `date -r ФАЙЛ +%s` (эта форма есть и у GNU, и у busybox). Значит достаточно
+# сдвинуть первое, не трогая второе.
+# Путь к настоящему date зашивается СЕЙЧАС: `command date` внутри стаба снова
+# нашёл бы стаб (command обходит функции, но не PATH) и ушёл в рекурсию.
+_real_date=$(command -v date)
+cat > "$TMP/bin/date" <<STUBD
+#!/bin/sh
+if [ "\$1" = "+%s" ] && [ -n "\${Z2K_TEST_NOW_SHIFT:-}" ]; then
+    printf '%s\\n' "\$(( \$($_real_date +%s) + Z2K_TEST_NOW_SHIFT ))"
+    exit 0
+fi
+exec $_real_date "\$@"
+STUBD
+chmod +x "$TMP/bin/date"
+
 STATE="$TMP/z2k/extra_strats/cache/autocircular/state.tsv"
 printf '# z2k state\nyt_tcp\ta.com\t3\t%s\n' "$(date +%s)" > "$STATE"
 
@@ -61,9 +90,11 @@ run_upload() {
         [ "$_ack" != "-" ] && printf 'Z2K_STATS_ACK=%s\n' "$_ack"
     } > "$TMP/z2k/config"
     # Возраст установки задаём временем файла-метки.
-    touch -t "$(date -v-"${_age_days}"d '+%Y%m%d%H%M' 2>/dev/null || date -d "-${_age_days} days" '+%Y%m%d%H%M')" \
-        "$TMP/z2k/config" 2>/dev/null
-    env PATH="$TMP/bin:/usr/bin:/bin" Z2K_TEST_SENT="$TMP/sent" \
+    # Возраст задаём сдвигом «сейчас» вперёд: mtime старым не сделать —
+    # busybox touch не умеет -t (см. стаб date выше).
+    Z2K_TEST_NOW_SHIFT=$(( _age_days * 86400 ))
+    env PATH="$TMP/bin:$Z2K_TEST_PATH" Z2K_TEST_SENT="$TMP/sent" \
+        Z2K_TEST_NOW_SHIFT="$Z2K_TEST_NOW_SHIFT" \
         ZAPRET2_DIR="$TMP/z2k" CONFIG="$TMP/z2k/config" \
         STATE_TSV="$STATE" \
         sh "$UP" >/dev/null 2>&1
@@ -80,8 +111,8 @@ run_upload() {
 # три тестовых замера уехали на прод.
 sed -e "s|^ZAPRET2_DIR=.*|ZAPRET2_DIR=\"$TMP/z2k\"|" \
     -e "s|^STATE_TSV=.*|STATE_TSV=\"$STATE\"|" \
-    -e "s|^export PATH=.*|export PATH=\"$TMP/bin:/usr/bin:/bin\"|" \
-    -e "s|^PATH=.*|PATH=\"$TMP/bin:/usr/bin:/bin\"|" \
+    -e "s|^export PATH=.*|export PATH=\"$TMP/bin:$Z2K_TEST_PATH\"|" \
+    -e "s|^PATH=.*|PATH=\"$TMP/bin:$Z2K_TEST_PATH\"|" \
     "$UP" > "$TMP/upload.sh"
 UP="$TMP/upload.sh"
 

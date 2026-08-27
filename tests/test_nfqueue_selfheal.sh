@@ -26,7 +26,8 @@ EOF
 chmod +x "$INIT"
 
 # mock bin: iptables (NFQ copies of an NFQUEUE line), pidof, ip (default route)
-BIN="$TMP/bin"; mkdir -p "$BIN"
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+BIN="$TMP/bin"; mkdir -p "$BIN" "$TMP/run"
 cat > "$BIN/iptables" <<'EOF'
 #!/bin/sh
 # only care about `-t mangle -S`. IPT_FAIL=1 simulates an xtables-lock race
@@ -57,7 +58,18 @@ case "$1" in
 esac
 exit 0
 EOF
-chmod +x "$BIN/iptables" "$BIN/ip6tables" "$BIN/pidof" "$BIN/ip"
+# pgrep — ВТОРАЯ ветка nfqws2_alive(), и без стаба она уходит в НАСТОЯЩУЮ
+# таблицу процессов. На маке и в CI там nfqws2 нет, и дыры не видно; на роутере
+# он живой, поэтому «nfqws2 down» превращалось в «жив», самолечение срабатывало
+# и проверка краснела. Тест обязан быть герметичным ОТ окружения, а не «обычно
+# совпадать» с ним.
+cat > "$BIN/pgrep" <<'EOF'
+#!/bin/sh
+[ "${PIDOF_OK:-1}" = 1 ] || exit 1
+echo 12345
+exit 0
+EOF
+chmod +x "$BIN/iptables" "$BIN/ip6tables" "$BIN/pidof" "$BIN/ip" "$BIN/pgrep"
 
 CFG="$TMP/config"; printf 'ENABLED=1\n' > "$CFG"
 LOCK="$TMP/lock"; LAST="$TMP/last"; LOG="$TMP/log"
@@ -71,6 +83,8 @@ run() {  # env: NFQ, NFQ6 (def NFQ), PIDOF_OK, ROUTE_OK (v4 def 1), ROUTE6_OK (v
         INIT_SCRIPT="$INIT" ZAPRET_CONFIG="$CFG" \
         RESTART_FW_LOCK="$LOCK" RESTART_FW_LAST="$LAST" \
         MIN_INTERVAL="${MI:-15}" LOCK_STALE="${LS:-60}" SELFHEAL_LOG="$LOG" \
+        Z2K_TEST_NOW_SHIFT="${Z2K_TEST_NOW_SHIFT:-}" \
+        NFQWS2_PIDFILES="$TMP/run/nfqws2_*.pid $TMP/run/nfqws2.pid" \
         CONFIRM_SETTLE="${CS:-0}" \
         sh "$SH"
 }
@@ -120,8 +134,13 @@ NFQ=0 PIDOF_OK=1 ROUTE_OK=1 run
 n=$(count); [ "$n" = "0" ] && ok "mutex held -> skip (coalesced)" || no "mutex skip" "0" "$n"
 
 # --- 9) stale lock (>LOCK_STALE) is cleared, then heal fires ---------------
-reset; mkdir -p "$LOCK"; touch -d '2000-01-01' "$LOCK" 2>/dev/null || touch -t 200001010000 "$LOCK" 2>/dev/null
-NFQ=0 PIDOF_OK=1 ROUTE_OK=1 LS=60 run
+# Замок старим СДВИГОМ «СЕЙЧАС»: busybox touch не знает ни -d, ни -t, и на
+# роутере обе половины прежней строки молча не срабатывали. Самолечение считает
+# возраст как now - `date -r ЗАМОК`, поэтому сдвиг эквивалентен.
+reset; mkdir -p "$LOCK"; z2k_write_date_stub "$BIN/date"
+# Сдвиг ставим и снимаем явно: присваивание перед вызовом функции в POSIX sh
+# остаётся в окружении до конца скрипта и утекло бы в следующие секции.
+Z2K_TEST_NOW_SHIFT=86400; NFQ=0 PIDOF_OK=1 ROUTE_OK=1 LS=60 run; unset Z2K_TEST_NOW_SHIFT
 n=$(count); [ "$n" = "1" ] && ok "stale mutex cleared -> heal fires" || no "stale mutex" "1" "$n"
 
 # --- 10) both families healthy (v6 route up + v6 rules) -> no-op ----------

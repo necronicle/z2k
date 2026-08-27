@@ -211,5 +211,49 @@ else
     no "наборы передают аргументы окружением" "ничего" "$BADT"
 fi
 
+# --- 8. Опции утилит, которых у busybox нет: touch -t, date -v, date -d "-N" --
+#
+# ЧЕТВЁРТЫЙ СЛУЧАЙ ТОГО ЖЕ КЛАССА. Замер на роутере владельца 2026-08-27:
+#
+#   touch --help          →  Usage: touch [-ch] FILE...   (никакого -t)
+#   date -v-3d            →  date: invalid option -- 'v'
+#   date -d "-3 days"     →  date: invalid date '-3 days'
+#   date -d "@1787000000" →  работает
+#   date -r ФАЙЛ +%s      →  работает (и у GNU, и у busybox)
+#
+# В test_stats_ack стояло `touch -t "$(date -v-3d … || date -d "-3 days" …)"`, и
+# на роутере не работала ни одна из трёх частей: возраст установки оставался
+# нулевым, а проверка «через трое суток ожидание кончается» краснела, ничего не
+# проверив. Портируемые формы: `date -d @эпоха` / `date -r ФАЙЛ`, а возраст
+# подделывается сдвигом «сейчас», а не mtime.
+BADDT=""
+for f in $(find "$ROOT/files" "$ROOT/lib" "$ROOT/webpanel" "$ROOT/tests" -name '*.sh' 2>/dev/null) \
+         $(find "$ROOT/files/init.d" "$ROOT/files/ndm" -type f 2>/dev/null) \
+         "$ROOT/z2k.sh" "$ROOT/z2k_cleanup.sh"; do
+    [ -f "$f" ] || continue
+    # Единственное разрешённое место — z2k_backdate в tests/lib/common.sh: там
+    # `touch -t` СТОИТ НАМЕРЕННО и обёрнут в проверку успеха, чтобы наборы
+    # могли честно пропустить проверку там, где возраст подделать нечем.
+    case "$f" in
+        *test_router_shell_portability.sh) continue ;;
+        */tests/lib/common.sh) continue ;;
+    esac
+    grep -vE '^[[:space:]]*#' "$f" 2>/dev/null \
+        | grep -qE 'touch +-[a-z]*t|date +-v|date +-d +"[-+]' \
+        && BADDT="$BADDT $(basename "$f")"
+done
+if [ -z "$BADDT" ]; then
+    ok "нет touch -t и относительных дат — busybox их не знает"
+else
+    no "нет touch -t и относительных дат" "ничего" "$BADDT"
+fi
+
+# Отрицательный контроль на все три формы.
+for _bad in 'touch -t 202601010000 f' 'date -v-3d "+%s"' 'date -d "-3 days"'; do
+    printf '#!/bin/sh\n%s\n' "$_bad" > "$SB/lib/dt.sh"
+    _hit=$(grep -vE '^[[:space:]]*#' "$SB/lib/dt.sh" | grep -cE 'touch +-[a-z]*t|date +-v|date +-d +"[-+]')
+    assert_eq "правило ловит: $_bad" "1" "$_hit"
+done
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

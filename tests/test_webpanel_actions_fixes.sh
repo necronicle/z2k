@@ -52,6 +52,7 @@ PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
 skip() { printf '[SKIP] %s (%s)\n' "$1" "$2"; }
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
 
 # `sed -i EXPR FILE` shim. Продакшн-код использует busybox/GNU-форму, которая
 # верна для роутера; BSD sed на маке ждёт после -i СУФФИКС и молча съел бы
@@ -207,7 +208,7 @@ printf -- '--lua-desync=fake\n' > "$LIVE"
 # mtime в прошлое: содержимое можно вернуть как было, а вот метку времени и
 # inode запись подделать нечем. Именно поэтому проверка не на «содержимое
 # совпало» — «записали и восстановили» её проходит.
-touch -t 200001020304.05 "$LIVE"
+z2k_backdate "$LIVE" 200001020304.05 || _no_backdate=1
 _live_ino=$(finode "$LIVE"); _live_mt=$(fmtime "$LIVE")
 _shadow_before=$(ls -d /tmp/z2k-strat-shadow.* 2>/dev/null | wc -l | tr -d ' ')
 
@@ -795,12 +796,20 @@ printf '\n--- 13. осиротевший скретч в /tmp подчищает
 # CGI, убитый lighttpd'ом, уносит уборку с собой, а /tmp на роутере — это
 # ОПЕРАТИВКА. Уборка «по своему $$» в начале обработчика спасает только при
 # совпадении PID.
-mkdir -p "$ORPH/lists"; touch -t 200001020304.05 "$ORPH"
+mkdir -p "$ORPH/lists"
 mkdir -p "$ORPH_NEW/lists"
-act 'printf -- "--lua-desync=split2\n" | strategy_validate rkn_tcp' >/dev/null 2>&1
-[ -d "$ORPH" ] \
-    && no "чужая осиротевшая тень снесена" "каталога нет" "остался $ORPH" \
-    || ok "чужая осиротевшая тень старше часа снесена"
+if z2k_backdate "$ORPH" 200001020304.05; then
+    act 'printf -- "--lua-desync=split2\n" | strategy_validate rkn_tcp' >/dev/null 2>&1
+    [ -d "$ORPH" ] \
+        && no "чужая осиротевшая тень снесена" "каталога нет" "остался $ORPH" \
+        || ok "чужая осиротевшая тень старше часа снесена"
+else
+    # Уборка гейтится `find -mmin +60`, то есть РЕАЛЬНЫМИ часами. Состарить
+    # каталог нечем: busybox touch не умеет -t. Подменять сам find нельзя —
+    # проверка потеряет смысл. Честный пропуск.
+    act 'printf -- "--lua-desync=split2\n" | strategy_validate rkn_tcp' >/dev/null 2>&1
+    skip "чужая осиротевшая тень старше часа снесена" "busybox touch не умеет -t: возраст не подделать"
+fi
 [ -d "$ORPH_NEW" ] \
     && ok "свежая чужая тень не тронута (рядом может идти живая проверка)" \
     || no "свежая чужая тень не тронута" "каталог на месте" "снесён"

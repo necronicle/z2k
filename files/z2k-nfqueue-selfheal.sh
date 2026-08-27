@@ -40,6 +40,11 @@ RESTART_FW_LOCK="${RESTART_FW_LOCK:-/tmp/zapret2-restart-fw.lock}"
 RESTART_FW_LAST="${RESTART_FW_LAST:-/tmp/zapret2-restart-fw.last}"
 MIN_INTERVAL="${MIN_INTERVAL:-15}"     # с — не топтать свежий restart_fw хука
 LOCK_STALE="${LOCK_STALE:-60}"         # с — снять зависший mutex упавшего restart_fw
+# Где лежат pid-файлы движка. Переопределяемо ради теста: pidof и pgrep он
+# подменяет в PATH, а эта ветка читала АБСОЛЮТНЫЙ /var/run и находила живой
+# nfqws2 роутера — «движок выключен» превращалось в «жив», самолечение
+# срабатывало, и проверка краснела на железе, оставаясь зелёной на маке.
+NFQWS2_PIDFILES="${NFQWS2_PIDFILES:-/var/run/nfqws2_*.pid /var/run/nfqws2.pid}"
 CONFIRM_SETTLE="${CONFIRM_SETTLE:-2}"  # с — settle+re-verify перед fire (гасит ложные падения)
 # Порог ЧАСТИЧНОГО вайпа (issue #23). NDM при устойчивом реген-флапе (напр. мёртвый
 # IKEv2-пир: DPD ~5с гоняет пересборку фаервола) сносит наш набор NFQUEUE не в ноль,
@@ -74,7 +79,8 @@ is_nfqws2_running() {
         pidof nfqws2 >/dev/null 2>&1 && return 0
     fi
     command -v pgrep >/dev/null 2>&1 && pgrep -x nfqws2 >/dev/null 2>&1 && return 0
-    for pidfile in /var/run/nfqws2_*.pid /var/run/nfqws2.pid; do
+    # shellcheck disable=SC2086  # список путей с шаблонами — раскрытие намеренно
+    for pidfile in $NFQWS2_PIDFILES; do
         [ -f "$pidfile" ] || continue
         pid="$(cat "$pidfile" 2>/dev/null)"
         [ -n "$pid" ] || continue

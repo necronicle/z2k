@@ -44,9 +44,17 @@ snapshot() {
       printf "iptables-nat    %s\n" "$(iptables -w -t nat -S 2>/dev/null | md5sum | cut -d" " -f1)"
       printf "iptables-mangle %s\n" "$(iptables -w -t mangle -S 2>/dev/null | md5sum | cut -d" " -f1)"
       printf "ipsets          %s\n" "$(ipset list -n 2>/dev/null | sort | md5sum | cut -d" " -f1)"
-      printf "zapret2-tree    %s\n" "$(ls -lR /opt/zapret2 2>/dev/null | md5sum | cut -d" " -f1)"
+      # Кэш ротатора и README живут своей жизнью: state.tsv пишется каждые
+      # несколько секунд, и без отсева отпечаток «дрейфовал» на каждом прогоне,
+      # превращая тревогу в фон. Отсев узкий и назван поимённо.
+      printf "zapret2-tree    %s\n" "$(ls -lR /opt/zapret2 2>/dev/null \
+          | grep -vE "extra_strats/cache|autocircular|user-exclude.README" \
+          | md5sum | cut -d" " -f1)"
       printf "config          %s\n" "$(md5sum /opt/zapret2/config 2>/dev/null | cut -d" " -f1)"
-      printf "nfqws2-pids     %s\n" "$(pgrep nfqws2 2>/dev/null | tr "\n" " ")"
+      # Через grep с классом символов: `pgrep nfqws2` находил САМУ ЭТУ КОМАНДУ
+      # (её argv содержит строку), и отпечаток менялся от прогона к прогону,
+      # хотя движок не перезапускался ни разу.
+      printf "nfqws2-count    %s\n" "$(ps w 2>/dev/null | grep -c "[n]fq2/nfqws2")"
       printf "initd           %s\n" "$(ls /opt/etc/init.d 2>/dev/null | md5sum | cut -d" " -f1)"
     '
 }

@@ -32,8 +32,10 @@ printf '#!/bin/sh\necho 12345\nexit 0\n' > "$BIN/pidof"
 chmod +x "$BIN/pidof"
 
 LOCK="$TMP/lock"; LAST="$TMP/last"
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
+
 run_hook() {  # MI / HS overridable per call
-    table=mangle PATH="$BIN:$PATH" \
+    table=mangle PATH="$BIN:$PATH" Z2K_TEST_NOW_SHIFT="${Z2K_TEST_NOW_SHIFT:-}" \
         INIT_SCRIPT="$INIT" ZAPRET_CONFIG="$TMP/config" \
         LOCK_DIR="$LOCK" LAST_RUN="$LAST" MIN_INTERVAL="${MI:-15}" HOOK_SETTLE="${HS:-0}" \
         sh "$HOOK"
@@ -60,9 +62,16 @@ n=$(count); [ "$n" = "1" ] && ok "past debounce window restart_fw runs again" ||
 # (busybox/GNU: file mtime; BSD/macOS: arg is epoch seconds -> skip there)
 if date -r "$TMP" +%s 2>/dev/null | grep -qE '^[0-9]{10}$'; then
     rm -rf "$LOCK"; mkdir "$LOCK"
-    touch -t 202601010000.00 "$LOCK" 2>/dev/null   # backdate ~months
+    # Замок старим СДВИГОМ «СЕЙЧАС», а не mtime: busybox touch не знает -t
+    # (usage — `touch [-ch] FILE...`), метка не ставилась, и на роутере замок
+    # оставался свежим. Хук считает возраст как now - `date -r ЗАМОК`, так что
+    # сдвиг эквивалентен и портируем. См. z2k_write_date_stub.
+    z2k_write_date_stub "$BIN/date"
     echo 1 > "$LAST"                                # no debounce
-    : > "$CNT"; run_hook; sleep 1
+    # Присваивание ПЕРЕД ВЫЗОВОМ ФУНКЦИИ в POSIX sh не локально: оно остаётся в
+    # окружении до конца скрипта, и сдвиг «сейчас» утекал в следующие секции —
+    # свежий замок выглядел просроченным. Ставим и снимаем явно.
+    : > "$CNT"; Z2K_TEST_NOW_SHIFT=86400; run_hook; unset Z2K_TEST_NOW_SHIFT; sleep 1
     n=$(count); [ "$n" = "1" ] && ok "stale lock reclaimed -> restart_fw runs" || no "stale lock reclaim" "1" "$n"
     [ ! -d "$LOCK" ] && ok "reclaimed lock released" || no "reclaimed lock released" "absent" "present"
 else
