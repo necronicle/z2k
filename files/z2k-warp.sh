@@ -228,10 +228,26 @@ warp_devices_ips() {
     neigh=$(ip -4 neigh show 2>/dev/null | awk '$0 ~ /lladdr/ {for (i=1;i<=NF;i++) if ($i=="lladdr") printf "%s %s;", tolower($(i+1)), $1}')
     awk -v neigh="$neigh" '
     BEGIN { n = split(neigh, lines, ";"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); if (f[1] != "") mac[f[1]] = f[2] } }
+    # --- z2k warp SOURCE filter (canonical; keep byte-identical in both copies) ---
+    # Поле означает УСТРОЙСТВО В ЛОКАЛЬНОЙ СЕТИ, и фильтр обязан это отражать.
+    # Раньше принималось всё с первым октетом 1-255 — включая 127.0.0.1 и любой
+    # ПУБЛИЧНЫЙ адрес. Цена ошибки не теоретическая: MARK-правило для источников
+    # стоит в PREROUTING БЕЗ `-i`, то есть матчится и на lo, и на входе с WAN.
+    # Публичный адрес в этом списке метит ВХОДЯЩИЙ трафик от того хоста и уводит
+    # ответы ему в туннель — так можно отрезать роутеру, например, его апстрим.
+    # Поэтому: только приватные и CGNAT-диапазоны, где LAN-устройство и живёт.
+    # Отброшенное не теряется молча — панель возвращает "entries=N dropped=M".
     function ip_ok(s,  o) {
         if (s !~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/) return 0
-        split(s, o, "."); return (o[1] <= 255 && o[2] <= 255 && o[3] <= 255 && o[4] <= 255 && o[1] > 0)
+        split(s, o, ".")
+        if (o[1] > 255 || o[2] > 255 || o[3] > 255 || o[4] > 255) return 0
+        if (o[1] == 10) return 1
+        if (o[1] == 172 && o[2] >= 16 && o[2] <= 31) return 1
+        if (o[1] == 192 && o[2] == 168) return 1
+        if (o[1] == 100 && o[2] >= 64 && o[2] <= 127) return 1
+        return 0
     }
+    # --- end z2k warp SOURCE filter ---
     {
         sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
         if ($0 == "" || $0 ~ /^#/) next
@@ -255,9 +271,36 @@ warp_ipset_src_load() {
 warp_ipset_all() { warp_ipset_load; warp_ipset_src_load; }
 
 # ---- маршрутизация --------------------------------------------------------------
+# Снять правила в OUTPUT — ОТДЕЛЬНО И БЕЗУСЛОВНО.
+#
+# До r-62 мы метили трафик в mangle OUTPUT. Это ЕДИНСТВЕННЫЙ механизм, которым
+# мы вообще способны увести пакеты, порождённые самим роутером, — то есть и его
+# собственные DNS-запросы, если адрес апстрима попал в набор. Сейчас мы такие
+# правила не ставим, но снимали их только в warp_pbr_down, а он вызывается лишь
+# при выключении WARP и при НЕ поднявшемся туннеле. На роутере с живым WARP
+# реликт не подметался никогда и в диагностику не попадал: print_warp считает
+# только PREROUTING.
+#
+# Поэтому чистим при каждом подъёме: апгрейд с любой старой версии снимает след
+# сам, без участия человека.
+warp_pbr_clear_output() {
+    local set mk
+    for set in "$WARP_IPSET dst" "$WARP_IPSET_SRC src"; do
+        for mk in "--set-xmark $WARP_MARK/$WARP_MARK" "--set-mark $WARP_MARK"; do
+            # shellcheck disable=SC2086
+            while iptables -w -t mangle -C OUTPUT -m set --match-set $set -j MARK $mk 2>/dev/null; do
+                # shellcheck disable=SC2086
+                iptables -w -t mangle -D OUTPUT -m set --match-set $set -j MARK $mk 2>/dev/null || break
+                _wlog "снят реликт до-r-62: mangle OUTPUT $set"
+            done
+        done
+    done
+}
+
 warp_pbr_up() {
     local iface; iface=$(warp_iface)
     [ -n "$iface" ] || { _wlog "нет имени интерфейса в device.json"; return 1; }
+    warp_pbr_clear_output
     ip route replace default dev "$iface" table "$WARP_TABLE" 2>/dev/null
     ip rule show 2>/dev/null | grep -q "fwmark $WARP_MARK" \
         || ip rule add pref "$WARP_RULE_PREF" fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null

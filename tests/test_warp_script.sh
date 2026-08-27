@@ -118,7 +118,16 @@ assert_eq "enable: MARK dst xmark" "1" "$(grep -c -- '-A PREROUTING -m set --mat
 assert_eq "enable: MARK src xmark" "1" "$(grep -c -- '-A PREROUTING -m set --match-set z2k_warp_src src -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 assert_eq "enable: ipset loaded from user list" "1" "$(grep -c 'add z2k_warp_new 1.2.3.0/24' "$SB/ipset.log")"
 assert_eq "enable: MASQUE-эндпоинт НЕ исключается из десинка (измерено: без десинка туннель не несёт трафик)" "0" "$(grep -c 'nozapret' "$SB/ipset.log")"
-assert_eq "enable: nothing in OUTPUT" "0" "$(grep -c ' OUTPUT ' "$SB/ipt.log")"
+# СОЗДАВАТЬ правила в OUTPUT нельзя — это единственный способ увести пакеты
+# самого роутера, и до r-62 мы так делали. Но ПРОВЕРЯТЬ и СНИМАТЬ там мы
+# обязаны: реликтовые правила остались на роутерах, переживших те версии, и
+# снимались только при выключении WARP, то есть на живом туннеле не снимались
+# никогда. Поэтому сторожим то, что и должно сторожиться, — отсутствие -A/-I,
+# а не всякое упоминание цепочки.
+assert_eq "enable: ничего НЕ создаётся в OUTPUT" "0" \
+    "$(grep -cE -- '-(A|I) OUTPUT ' "$SB/ipt.log")"
+assert_eq "enable: реликтовые правила в OUTPUT проверяются на снятие" "1" \
+    "$([ "$(grep -cE -- '-C OUTPUT .*z2k_warp' "$SB/ipt.log")" -gt 0 ] && echo 1 || echo 0)"
 
 # ---------- enable (not ready) ----------
 clearlogs; ready false no_endpoint; W disable >/dev/null 2>&1; clearlogs

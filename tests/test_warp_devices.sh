@@ -44,6 +44,10 @@ de:ad:be:ef:00:01
 bad
 999.1.1.1
 10.0.0.7
+100.64.5.5
+127.0.0.1
+8.8.8.8
+213.176.74.63
 EOF
 
 Z2K_STUB_PATH="$SB/bin" ZAPRET2_DIR="$SB/z2k" WARP_LISTS_DIR="$SB/z2k/lists/warp" WARP_DEVICE="$SB/etc/device.json" \
@@ -57,6 +61,15 @@ assert_eq "no IPv6 leaks into the inet set" "0" "$(grep -c 'fe80' "$SB/ipset.log
 assert_eq "garbage dropped" "0" "$(grep -c 'bad' "$SB/ipset.log")"
 assert_eq "bad octet dropped" "0" "$(grep -c '999' "$SB/ipset.log")"
 assert_eq "private-range device IP allowed (it is a LAN client)" "1" "$(grep -c '^add z2k_warp_src_new 10.0.0.7 ' "$SB/ipset.log")"
+# ПОЛЕ ОЗНАЧАЕТ УСТРОЙСТВО В ЛОКАЛЬНОЙ СЕТИ, и фильтр обязан это отражать.
+# Раньше принималось всё с первым октетом 1-255. Правило для источников стоит
+# в PREROUTING БЕЗ `-i`, поэтому публичный адрес здесь метит ВХОДЯЩИЙ трафик от
+# того хоста и уводит ответы ему в туннель — так можно отрезать роутеру его же
+# апстрим. Loopback по той же причине: правило матчится и на lo.
+assert_eq "CGNAT-адрес устройства принимается" "1" "$(grep -c '^add z2k_warp_src_new 100.64.5.5 ' "$SB/ipset.log")"
+assert_eq "loopback в источники не попадает" "0" "$(grep -c '127.0.0.1' "$SB/ipset.log")"
+assert_eq "публичный адрес в источники не попадает" "0" "$(grep -c '8.8.8.8' "$SB/ipset.log")"
+assert_eq "адрес релея в источники не попадает" "0" "$(grep -c '213.176.74.63' "$SB/ipset.log")"
 assert_eq "src set swapped in" "1" "$(grep -c '^swap z2k_warp_src_new z2k_warp_src' "$SB/ipset.log")"
 assert_eq "dst set also (re)built" "1" "$(grep -c '^swap z2k_warp_new z2k_warp' "$SB/ipset.log")"
 assert_eq "devices never leak into the DESTINATION set" "0" "$(grep -c '^add z2k_warp_new ' "$SB/ipset.log")"
