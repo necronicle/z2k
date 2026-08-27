@@ -17,6 +17,9 @@ const WARP_ERRORS = {
   device_revoked: "Cloudflare отозвал устройство — регистрирую заново.",
   no_endpoint: "Ни один адрес Cloudflare не отвечает — провайдер блокирует WARP целиком.",
   tun_failed: "Прошивка не даёт создать туннельный интерфейс.",
+  no_transit:
+    "Туннель встаёт, но не возит трафик — перебираю адреса Cloudflare. " +
+    "Игровой трафик пока идёт напрямую.",
 };
 
 function warpNameValid(n) {

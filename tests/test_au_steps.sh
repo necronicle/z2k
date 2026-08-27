@@ -85,10 +85,21 @@ cat > "$Z2K_AU_TMP_DIR/UPDATES.json" <<'EOF'
 EOF
 au_bin_goarch() { echo testarch; }
 au_service_for_binary() { echo ""; }
+Z2K_AU_SBIN="$SB/sbin"; mkdir -p "$Z2K_AU_SBIN"
+
+# ОТСУТСТВУЮЩИЙ БИНАРНИК НЕ ДОСТАВЛЯЕМ. z2k-warpd ставится только кнопкой
+# «Установить WARP»; шаг, который тянул его на каждый роутер, объявлял WARP
+# установленным там, где его никто не включал (и стоил семь мегабайт трафика).
+au_download_repo_file() { printf 'не должно быть вызвано\n' > "$2"; return 0; }
+assert_eq "refresh-binaries: чужой движок не ставится с нуля" "0" "$(au_step_refresh_binaries; echo $?)"
+assert_eq "и на диске его нет"                               "0" "$(ls "$Z2K_AU_SBIN" | wc -l | tr -d ' ')"
+
+printf 'старый движок\n' > "$Z2K_AU_SBIN/z2k-warpd"
 au_download_repo_file() { return 1; }
 assert_eq "refresh-binaries: обрыв загрузки виден снаружи" "1" "$(au_step_refresh_binaries; echo $?)"
 au_download_repo_file() { printf 'подделка\n' > "$2"; }
 assert_eq "refresh-binaries: чужая sha виден снаружи" "1" "$(au_step_refresh_binaries; echo $?)"
+assert_eq "и рабочий бинарник не тронут" "старый движок" "$(cat "$Z2K_AU_SBIN/z2k-warpd")"
 
 # ВЕТО СРАБАТЫВАЕТ НА ОШИБКАХ, А НЕ НА ПРЕДУПРЕЖДЕНИЯХ.
 #

@@ -26,7 +26,7 @@ assert_eq "devices textarea"                 "1" "$(count 'id="warp-devices"')"
 assert_eq "devices: neighbors list"          "1" "$(count '"/warp/neighbors"')"
 assert_eq "devices: per-device toggle"       "1" "$(count '"/warp/devices/toggle"')"
 assert_eq "no «адрес(ов)» wording"           "0" "$(count 'адрес(ов)')"
-for code in register_blocked device_revoked no_endpoint tun_failed; do
+for code in register_blocked device_revoked no_endpoint tun_failed no_transit; do
     assert_eq "error text for $code"         "1" "$(count "$code:")"
 done
 assert_eq "no usque wording"                 "0" "$(grep -ci 'usque' "$J")"

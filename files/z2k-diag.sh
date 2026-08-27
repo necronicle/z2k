@@ -692,6 +692,7 @@ warp_status_reason() {
         device_revoked)   echo "Cloudflare отозвал устройство, идёт перерегистрация" ;;
         no_endpoint)      echo "ни один адрес Cloudflare не отвечает — провайдер блокирует WARP целиком" ;;
         tun_failed)       echo "прошивка не даёт создать туннельный интерфейс" ;;
+        no_transit)       echo "сессия встаёт, но сквозная проба не проходит — туннель не возит" ;;
         "")               echo "поднимается" ;;
         *)                echo "$code" ;;
     esac
@@ -709,12 +710,17 @@ print_warp() {
     fi
     if [ -s "$dev" ]; then
         # Ключ не печатаем; id, эндпоинт и тип активного ключа — достаточно для триажа.
-        printf 'device            : id=%s tunnel=%s endpoint=%s ports=%s iface=%s\n' \
+        # client_id печатаем намеренно: он не секрет — эти три байта уезжают в
+        # заголовке КАЖДОГО WG-пакета. Зато без них Cloudflare маршрутизирует
+        # сессию мимо consumer-WARP, и симптом ровно тот, что мы ловим: handshake
+        # проходит, TCP не идёт.
+        printf 'device            : id=%s tunnel=%s endpoint=%s ports=%s iface=%s client_id=%s\n' \
             "$(sed -n 's/.*"id": *"\([^"]*\)".*/\1/p' "$dev" | head -1)" \
             "$(sed -n 's/.*"tunnel": *"\([^"]*\)".*/\1/p' "$dev" | head -1)" \
             "$(sed -n 's/.*"v4": *"\([^"]*\)".*/\1/p' "$dev" | head -1)" \
             "$(tr -d ' \n' < "$dev" | sed -n 's/^[^[]*"ports":\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | grep -c .)" \
-            "$(sed -n 's/.*"iface": *"\([^"]*\)".*/\1/p' "$dev" | head -1)"
+            "$(sed -n 's/.*"iface": *"\([^"]*\)".*/\1/p' "$dev" | head -1)" \
+            "$(sed -n 's/.*"client_id": *"\([^"]*\)".*/\1/p' "$dev" | head -1)"
     else
         printf 'device            : not registered\n'
     fi
@@ -1147,6 +1153,22 @@ print_health() {
             _add "WARP включён, но движок не запущен (нет status.json) — selfheal поднимет его в течение минуты"
         elif ! grep -q '"ready":true' /tmp/z2k-warp/status.json 2>/dev/null; then
             _add "WARP включён, но туннель не несёт трафик ($(warp_status_reason)) — игровой трафик идёт напрямую"
+            # Карусель перезапусков. Симптом «поднимается» выглядит одинаково и
+            # когда движок терпеливо идёт по лестнице, и когда его каждые
+            # пятнадцать секунд перезапускают снаружи (поле 2026-08-27 —
+            # подбор плеча десинка рвал лестницу пятьдесят раз подряд). Разница
+            # видна только по числу «starting» в хвосте лога.
+            if [ "$(tail -40 /tmp/z2k-warp/warpd.log 2>/dev/null | grep -c 'starting')" -ge 3 ]; then
+                _add "движок WARP перезапускается по кругу — лестница адресов не успевает пройти ни разу (/tmp/z2k-warp/warpd.log)"
+            fi
+        else
+            # Туннель поднят — а заворачивать в него нечего. Без этой строки
+            # диагностика молчит: «проблем не найдено» при полностью
+            # бесполезном WARP.
+            _warp_n=$(ipset list z2k_warp 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')
+            if [ "${_warp_n:-0}" = "0" ]; then
+                _add "WARP поднят, но ни один список адресов не выбран — в туннель не заворачивается ничего (панель → WARP → списки игр)"
+            fi
         fi
     fi
 

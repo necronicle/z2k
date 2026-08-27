@@ -803,9 +803,19 @@ au_step_refresh_binaries() {
         [ -n "$_rb_path" ] || continue
         _rb_base=$(basename "$_rb_path")
         _rb_name="${_rb_base%-linux-$goarch}"
-        _rb_dest="/opt/sbin/${_rb_name}"
+        # Каталог переопределим ради тестов: живой путь — /opt/sbin.
+        _rb_dest="${Z2K_AU_SBIN:-/opt/sbin}/${_rb_name}"
         _rb_want=$(au_manifest_file_sha "$manifest" "$_rb_path")
-        if [ -f "$_rb_dest" ] && [ -n "$_rb_want" ] \
+        # ОБНОВЛЯЕМ, А НЕ СТАВИМ. Отсутствующий бинарник — это не «его надо
+        # доставить», а «его тут не должно быть»: z2k-warpd ставится только
+        # кнопкой «Установить WARP», а tg-mtproxy-client и z2k-detect — самой
+        # установкой. Без этой проверки шаг тянул семь мегабайт движка WARP на
+        # роутеры, где WARP никто не включал, и панель после этого показывала
+        # его установленным.
+        if [ ! -f "$_rb_dest" ]; then
+            continue
+        fi
+        if [ -n "$_rb_want" ] \
            && [ "$(z2k_sha256_file "$_rb_dest" 2>/dev/null)" = "$_rb_want" ]; then
             continue
         fi
