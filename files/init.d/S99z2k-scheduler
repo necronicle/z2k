@@ -4,6 +4,11 @@
 # / get_config) because the daemon's reload mechanism is broken on
 # Keenetic Entware builds (see r-26 field notes).
 
+# PATH ЗДЕСЬ ОБЯЗАТЕЛЕН. Это был единственный init-скрипт проекта без него, а
+# stop() зовёт rm/cat/pkill, start() — mkdir, и ни одной из этих команд на
+# прошивочном PATH Keenetic не существует: они живут только в /opt/bin.
+export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
+
 # Пути переопределяемы из окружения ТОЛЬКО ради тестируемости: надзиратель —
 # вечный цикл с форками, и проверить его поведение можно лишь запустив его с
 # подставным планировщиком. На роутере переменные никто не задаёт, и значения

@@ -17,7 +17,7 @@
 #   04:00  z2k-update-lists.sh             — RKN/YT hostlist refresh
 #   06:00  ipset/get_config.sh              — IP-set resolution
 
-export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
+export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
 ZAPRET2_DIR="/opt/zapret2"
 PIDFILE="${Z2K_SCHED_PIDFILE:-/var/run/z2k-scheduler.pid}"
@@ -55,7 +55,25 @@ if [ -f "$PIDFILE" ]; then
     fi
 fi
 echo $$ > "$PIDFILE"
-trap 'rm -f "$PIDFILE"; exit 0' INT TERM HUP
+# `:` — СПЕЦИАЛЬНЫЙ ВСТРОЕННЫЙ ОПЕРАТОР, А НЕ ВНЕШНИЙ БИНАРНИК.
+#
+# Здесь стоял `rm -f "$PIDFILE"`, и он падал: на Keenetic `rm` вне /opt НЕ
+# СУЩЕСТВУЕТ ВОВСЕ (в /bin только ndm-овские утилиты и sh), единственные копии —
+# /opt/bin/rm. Тело трапа исполняется в момент прерывания, и шелл приписывает
+# ошибку той строке, на которой процесс застали, — отсюда загадочное
+# «z2k-scheduler.sh: line 293: rm: not found» рядом с «Terminated» в журналах.
+#
+# Последствие не косметическое: pidfile оставался с мёртвым pid. Обычно это
+# безвредно, но планировщик форкает около шести детей в минуту, и попадание
+# живого чужого процесса на застрявший pid уводит надзирателя в ветку «уже
+# запущен другим родителем» — а там встают ВСЕ периодические задачи разом:
+# обновление, списки, статистика, сторож туннеля, self-heal NFQUEUE и WARP.
+#
+# `:` не форкает, не смотрит в PATH и работает даже при отвалившемся /opt —
+# то есть ровно в том случае, когда `rm` не работает по определению. Для всех
+# читателей pidfile пустой файл равнозначен отсутствию: они делают `cat`, а
+# затем `[ -n "$pid" ] && kill -0`.
+trap ': > "$PIDFILE"; exit 0' INT TERM HUP
 
 # We were forked by the OOM-protected supervisor (S99z2k-scheduler sets its
 # oom_score_adj to -1000) and inherit that immunity. Reset ours to normal so the
