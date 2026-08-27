@@ -104,7 +104,14 @@ tar cf - --exclude='./.git' --exclude='./node_modules' --exclude='*/builds/*' \
 
 # ------------------------------------------------------------------ прогон --
 #
-# КОРЕНЬ УСТАНОВКИ ПОДМЕНЯЕМ НА ЛАБОРАТОРНЫЙ. Набор, забывший переопределить
+# КОРЕНЬ УСТАНОВКИ ПОДМЕНЯЕМ НА ЛАБОРАТОРНЫЙ.
+#
+# CONFIG_FILE тут НЕ ЭКСПОРТИРУЕТСЯ намеренно: код выводит его из ZAPRET2_DIR
+# сам, а глобальный экспорт протекал в netfilter.d-хук, который читает именно
+# эту переменную, — хук видел пустой лабораторный конфиг, выходил на первой
+# строке, и пять проверок warp-хука краснели, не выполнив ни одной.
+#
+# Набор, забывший переопределить
 # ZAPRET2_DIR, на маке молча ничего не делает (каталога нет) и зеленеет, а на
 # роутере пишет в ЖИВОЙ /opt/zapret2 — так 2026-08-27 в конфиг владельца уехал
 # TMPDIR прогонного окружения. Подмена превращает такую забывчивость из аварии
@@ -112,14 +119,16 @@ tar cf - --exclude='./.git' --exclude='./node_modules' --exclude='*/builds/*' \
 # Наборы, которым нужны отгружаемые бинарники: builds/ — это 194 МБ, а tmpfs
 # роутера всего 226 МБ. Везти их некуда, а на флешку тестовый груз не пишем.
 # Пропуск ОБЪЯВЛЕН: 42 красных «файла нет» маскировали настоящие находки.
-Z2K_SKIP='test_build_matrix test_rt_proxy_binary_drift'
+# test_update_content_verification сверяет манифест с git-деревом, а .git — это
+# 860 МБ; test_*_binary_drift и test_build_matrix читают builds/ (194 МБ). Ни то,
+# ни другое в 226 МБ tmpfs не везётся, а на флешку тестовый груз не пишем.
+Z2K_SKIP='test_build_matrix test_rt_proxy_binary_drift test_tg_binary_drift test_update_content_verification'
 export Z2K_SKIP
 
 say 'гоню сьют под ash + busybox (корень установки — лабораторный)'
 rsh "mkdir -p $LAB/fakeroot/opt/zapret2"
 rsh "cd $LAB && TMPDIR=$LAB/tmp Z2K_TEST_SH=/bin/sh PATH=$LAB/guard:$RPATH \
      ZAPRET2_DIR=$LAB/fakeroot/opt/zapret2 \
-     CONFIG_FILE=$LAB/fakeroot/opt/zapret2/config \
      Z2K_AU_INSTALLED_TAG_FILE=$LAB/fakeroot/opt/zapret2/.z2k-installed-tag \
      Z2K_SKIP_SUITES='$Z2K_SKIP' sh tests/run_all.sh" > "$OUT" 2>&1 || true
 

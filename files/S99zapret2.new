@@ -1953,7 +1953,14 @@ z2k_detect_policy_mark()
 # mandatory at every call site (Entware's OpenSSL makes it die 0xcffd0060).
 z2k_ndmc_bin()
 {
-    if [ -x /bin/ndmc ]; then echo /bin/ndmc
+    # Z2K_NDMC_BIN — переопределение для тестов. Абсолютный /bin/ndmc стоит
+    # первым намеренно (в PATH у Entware его может не быть), но именно поэтому
+    # подменить его в PATH нельзя: на роутере /bin/ndmc существует, и набор,
+    # подставивший свой ndmc, разговаривал с НАСТОЯЩИМ NDM. На маке файла нет,
+    # стаб выигрывал, и дыры не было видно (поймано прогоном на роутере
+    # 2026-08-27).
+    if [ -n "${Z2K_NDMC_BIN:-}" ]; then echo "$Z2K_NDMC_BIN"
+    elif [ -x /bin/ndmc ]; then echo /bin/ndmc
     elif command -v ndmc >/dev/null 2>&1; then echo ndmc
     else return 1; fi
 }

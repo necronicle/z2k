@@ -21,7 +21,17 @@ assert_eq() {
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 INIT="$SCRIPT_DIR/files/init.d/S51z2k-warp"
 SB="$(mktemp -d)"
-trap 'rm -rf "$SB"; pkill -f "fake-warpd-$$" 2>/dev/null' EXIT
+# Без pkill: апплета нет в busybox Entware, уборка тихо не работала и фейковые
+# демоны переживали набор. pgrep -f есть; $$ пропускаем — busybox pgrep
+# вызывающую оболочку не исключает.
+_cleanup() {
+    rm -rf "$SB"
+    for _p in $(pgrep -f "fake-warpd-$$" 2>/dev/null); do
+        [ "$_p" = "$$" ] && continue
+        kill "$_p" 2>/dev/null
+    done
+}
+trap _cleanup EXIT
 
 # Конфиг с флагом: запуск разрешает ФЛАГ, а не наличие бинарника (иначе первый
 # же ребут поднимал движок тому, кто WARP выключил — S*-скрипты Entware при

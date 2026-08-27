@@ -75,6 +75,9 @@ esac
 exit 0
 EOF
 chmod +x "$BIN/ndmc"
+# Абсолютный путь: на роутере /bin/ndmc существует, и z2k_ndmc_bin выбрал бы
+# его, а не наш стаб из PATH — тест разговаривал бы с настоящим NDM.
+Z2K_NDMC_BIN="$BIN/ndmc"; export Z2K_NDMC_BIN
 
 cat > "$TMP/policy.out" <<'EOF'
            policy, name = Policy0, description = VPN политика: 

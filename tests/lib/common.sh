@@ -60,6 +60,15 @@ z2k_test_path() {
 Z2K_TEST_PATH="${Z2K_TEST_PATH:-$(z2k_test_path)}"
 export Z2K_TEST_PATH
 
+# Z2K_TEST_FRAC_SLEEP — умеет ли хозяин `sleep 0.1`.
+#
+# Busybox НЕ умеет: его usage — `sleep [N]...`, дробь даёт «invalid number».
+# Наборы писали `sleep 0.1 2>/dev/null || sleep 1`, и на роутере цикл из
+# тридцати итераций растягивался с трёх секунд до тридцати — проверка
+# «работа доживает до конца» читала результат, которого ещё не было.
+if sleep 0.05 2>/dev/null; then Z2K_TEST_FRAC_SLEEP=1; else Z2K_TEST_FRAC_SLEEP=0; fi
+export Z2K_TEST_FRAC_SLEEP
+
 # z2k_test_stamp <дней_назад>
 #
 # Отметка времени для `touch -t`. Наборы писали
@@ -118,6 +127,28 @@ STUBDATE
 # иначе тест перестанет проверять то, ради чего написан.
 z2k_backdate() {
     touch -t "$2" "$1" 2>/dev/null || return 1
+}
+
+# z2k_pct_bytes — читает stdin и печатает %XX для каждого БАЙТА.
+#
+# Наборы писали `od -An -tx1 -v`. Busybox знает у od только -abcdeFfhiloxsv:
+# ни -A, ни -t, ни -v. Команда падала в закрытый stderr, подстановка выходила
+# пустой — тот же класс, что issue #43.
+#
+# `od -b` есть и у busybox, и у GNU, и у BSD, и печатает одинаково: смещение в
+# первом поле, дальше октальные байты. Октальное в шестнадцатеричное считаем
+# руками: strtonum() — это gawk, у busybox его нет.
+z2k_pct_bytes() {
+    # -v ОБЯЗАТЕЛЕН: без него od схлопывает повторяющиеся строки в «*», и
+    # длинная строка из одинаковых символов теряет байты — имя из 33 кириллиц
+    # приезжало короче и проходило проверку длины. -v есть у busybox
+    # (usage: [-abcdeFfhiloxsv]), у GNU и у BSD.
+    od -b -v | awk '
+        { for (i = 2; i <= NF; i++) {
+              v = 0
+              for (k = 1; k <= length($i); k++) v = v * 8 + substr($i, k, 1)
+              printf "%%%02X", v
+          } }'
 }
 
 # z2k_extract_block <файл> <опорная подстрока> <отступ>

@@ -138,7 +138,11 @@ grep -q 'mkdir -p "${ZAPRET2_DIR}/etc"' "$INSTALL" \
 # lib/release_map.sh — the table now lives on the build side. A new
 # mapping would have been skipped and the fix would have reached nobody until the update
 # after next.
-p=$(sh -c ". '$HERE/lib/release_map.sh' 2>/dev/null; z2k_install_paths files/etc/z2k-roots.pem")
+# ZAPRET2_DIR пиним НА УМОЛЧАНИЕ: проверяется ОТГРУЖАЕМЫЙ путь, а он по
+# контракту абсолютный. Наследованная переменная (прогон на роутере ставит
+# лабораторный корень, чтобы забывчивый набор не писал в прод) подменяла бы
+# ожидаемое значение и краснела на ровном месте.
+p=$(env -u ZAPRET2_DIR sh -c ". '$HERE/lib/release_map.sh' 2>/dev/null; z2k_install_paths files/etc/z2k-roots.pem")
 [ "$p" = "/opt/zapret2/etc/z2k-roots.pem" ] \
     && ok "the bundle is patch-deliverable ($p)" \
     || no "the bundle is patch-deliverable" "/opt/zapret2/etc/z2k-roots.pem" "$p"

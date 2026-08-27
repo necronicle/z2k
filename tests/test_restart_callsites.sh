@@ -160,7 +160,10 @@ DEATHBIN="$TMP/bin_death"; mkdir -p "$DEATHBIN"
 cat > "$DEATHBIN/usleep" <<EOF
 #!/bin/sh
 i=0
-while [ ! -e "$DEADFLAG" ] && [ \$i -lt 300 ]; do /bin/sleep 0.01; i=\$((i+1)); done
+# Без дробей и без /bin/sleep: у busybox дробь — «invalid number», а /bin на
+# Keenetic это демоны прошивки. Крутим пустой цикл, он и был здесь смыслом —
+# дождаться флага, не завися от точности сна.
+while [ ! -e "$DEADFLAG" ] && [ \$i -lt 30000 ]; do i=\$((i+1)); done
 exit 0
 EOF
 chmod +x "$BIN/usleep" "$BIN/nfqws2" "$BIN/tpws2" "$DEADBIN/nfqws2" "$DEATHBIN/usleep"

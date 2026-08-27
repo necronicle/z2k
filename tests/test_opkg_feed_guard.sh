@@ -75,14 +75,19 @@ EOF
     # EXPR as one, silently leaving the file untouched. That is exactly how this test first
     # "passed" the rewrite assertion against an unmodified config, so the shim is what makes
     # the test faithful to the router rather than to the host.
-    cat > "$BIN/sed" <<'SHIM'
+    # Путь к настоящему sed берём У ХОЗЯИНА, а не пишем /usr/bin/sed: на
+    # Keenetic его там НЕТ (sed живёт в /opt/bin), шим падал молча, файл
+    # оставался нетронутым — и на роутере краснели три проверки, ни одна из
+    # которых не про дефект. Та же ошибка, что жёсткий PATH="/usr/bin:/bin".
+    _real_sed=$(command -v sed)
+    cat > "$BIN/sed" <<SHIM
 #!/bin/sh
-if [ "$1" = "-i" ]; then
-    _expr=$2; _file=$3
-    /usr/bin/sed "$_expr" "$_file" > "$_file.shim" && mv "$_file.shim" "$_file"
-    exit $?
+if [ "\$1" = "-i" ]; then
+    _expr=\$2; _file=\$3
+    $_real_sed "\$_expr" "\$_file" > "\$_file.shim" && mv "\$_file.shim" "\$_file"
+    exit \$?
 fi
-exec /usr/bin/sed "$@"
+exec $_real_sed "\$@"
 SHIM
     chmod +x "$BIN/sed"
     : > "$TMP/opkg.calls"
@@ -192,10 +197,11 @@ mk_env
 # where GNU sed happily performs the edit, the rewrite succeeds, and the case
 # tested nothing (it failed there while passing locally). Simulate the no-op
 # explicitly instead, so the branch under test is reached on every host.
-cat > "$BIN/sed" <<'NOOP'
+_real_sed=$(command -v sed)   # у хозяина, а не /usr/bin: на Keenetic его там нет
+cat > "$BIN/sed" <<NOOP
 #!/bin/sh
-[ "$1" = "-i" ] && exit 0     # pretend the in-place edit happened; change nothing
-exec /usr/bin/sed "$@"
+[ "\$1" = "-i" ] && exit 0     # pretend the in-place edit happened; change nothing
+exec $_real_sed "\$@"
 NOOP
 chmod +x "$BIN/sed"
 # ...and prove the stub really is a no-op, or this case would be green for the

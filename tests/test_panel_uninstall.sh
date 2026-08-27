@@ -87,8 +87,11 @@ _out=$(
         id=$(uninstall_async) || { echo "__LAUNCHFAIL__"; exit 0; }
         # Задача фоновая: дожидаемся файла .exit, но не дольше 10 секунд.
         i=0
-        while [ ! -f "/tmp/z2k-job-$id.exit" ] && [ "$i" -lt 100 ]; do
-            i=$((i+1)); sleep 0.1 2>/dev/null || sleep 1
+        # Шаг — СЕКУНДА: busybox sleep дробей не принимает («invalid number»),
+        # и прежний `sleep 0.1 || sleep 1` растягивал потолок со ста десятых
+        # долей до ста секунд. Потолок пересчитан под секундный шаг.
+        while [ ! -f "/tmp/z2k-job-$id.exit" ] && [ "$i" -lt 10 ]; do
+            i=$((i+1)); sleep 1
         done
         echo "__ID__$id"
         cat "/tmp/z2k-job-$id.log" 2>/dev/null

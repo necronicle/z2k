@@ -125,10 +125,11 @@ EOF
 # weight in the tests: the fallback walk finds the .ko wherever it is, so deleting
 # /lib/system-modules from the search changed no result and the NDMS 5.1.2 case
 # was passing for the wrong reason (verified by mutation — it killed nothing).
+_real_find=$(command -v find)  # у хозяина, а не /usr/bin: на Keenetic его там нет
 cat > "$BIN/find" <<EOF
 #!/bin/sh
 [ -f "$TMP/nofind" ] && exit 0
-exec /usr/bin/find "\$@"
+exec $_real_find "\$@"
 EOF
 # ipset: the bitmap:port capability probe. Stubbed rather than left to the host —
 # without this the suite would call the REAL ipset wherever one is installed, which

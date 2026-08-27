@@ -47,7 +47,11 @@ else
     echo; echo "PASSED: $PASS"; echo "FAILED: $FAIL"; exit 1
 fi
 
-lost=$(comm -23 "$tmp/written" "$tmp/saved")
+# БЕЗ comm: этого апплета в busybox Entware НЕТ вовсе (`command -v comm` пусто,
+# `busybox comm` — «applet not found»). На маке и в CI он есть из coreutils, и
+# обе сверки ниже молча выдавали пустоту — «ничего не потеряно» и «сторож
+# декоративен». awk делает то же и работает везде.
+lost=$(awk 'NR==FNR { seen[$0] = 1; next } !seen[$0]' "$tmp/saved" "$tmp/written")
 if [ -z "$lost" ]; then
     ok "все переключаемые флаги сохраняются при пересоздании конфига"
 else
@@ -88,7 +92,7 @@ fi
 sed '/saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read/d' "$GEN" > "$tmp/gen_broken.sh"
 grep -oE 'safe_config_read "[A-Z0-9_]+"' "$tmp/gen_broken.sh" \
     | sed 's/safe_config_read "//; s/"//' | sort -u > "$tmp/saved_broken"
-if [ -n "$(comm -23 "$tmp/written" "$tmp/saved_broken")" ]; then
+if [ -n "$(awk 'NR==FNR { seen[$0] = 1; next } !seen[$0]' "$tmp/saved_broken" "$tmp/written")" ]; then
     ok "сверка ловит удалённый ключ (проверено на испорченной копии)"
 else
     bad "сверка НЕ ловит удалённый ключ — тест декоративный"

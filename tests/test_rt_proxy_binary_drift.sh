@@ -100,7 +100,9 @@ for a in $ARCHES; do
     s="$SHIPPED/z2k-rt-proxy-linux-$a"
     [ -f "$s" ] || continue
     # ELF magic: 0x7f 'E' 'L' 'F'
-    if [ "$(dd if="$s" bs=4 count=1 2>/dev/null | od -An -c | tr -d ' \n')" = '177ELF' ]; then
+    # od -b вместо od -An -c: busybox знает только -abcdeFfhiloxsv. Первые
+    # четыре байта ELF — 0x7F 'E' 'L' 'F' = 177 105 114 106 в восьмеричном.
+    if [ "$(dd if="$s" bs=4 count=1 2>/dev/null | od -b | awk 'NR==1{print $2, $3, $4, $5}')" = '177 105 114 106' ]; then
         ok "$a: shipped file is an ELF binary"
     else
         no "$a: shipped file is an ELF binary" "ELF magic" "something else"

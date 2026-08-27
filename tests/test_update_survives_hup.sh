@@ -28,12 +28,17 @@ fi
 # сигнала наследуется через exec, поэтому переживает и дочерние процессы.
 SB=$(mktemp -d) || exit 1
 trap 'rm -rf "$SB"' EXIT
-cat > "$SB/work.sh" <<'INNER'
+# Длительность работы задаём В СЕКУНДАХ, а не числом итераций: busybox sleep
+# дробей не принимает (usage — `sleep [N]...`), и `sleep 0.1 || sleep 1`
+# растягивал тридцать итераций с трёх секунд до тридцати — внешний код ждал три
+# и читал пустоту.
+if [ "${Z2K_TEST_FRAC_SLEEP:-0}" = 1 ]; then _iter=30; _unit=0.1; else _iter=3; _unit=1; fi
+cat > "$SB/work.sh" <<INNER
 ( trap '' HUP
   i=0
-  while [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 0.1 2>/dev/null || sleep 1; done
-  echo done > "$1/result" ) &
-echo $! > "$1/pid"
+  while [ "\$i" -lt $_iter ]; do i=\$((i + 1)); sleep $_unit; done
+  echo done > "\$1/result" ) &
+echo \$! > "\$1/pid"
 wait
 INNER
 sh "$SB/work.sh" "$SB" >/dev/null 2>&1 &

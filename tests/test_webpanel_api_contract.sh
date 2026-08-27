@@ -5,6 +5,7 @@
 # полным CGI-вызовом с env как у lighttpd; валидность JSON проверяет python3.
 # POSIX sh compatible (busybox ash).
 
+. "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
@@ -345,7 +346,8 @@ policy_post() { # policy_post <urlencoded-name>
     cgi POST /policy/save "" "$BODYF" | cgi_body
 }
 urlenc() { # urlenc <строка> -> %XX для КАЖДОГО байта (form_value декодирует %XX)
-    printf '%s' "$1" | od -An -tx1 -v | awk '{ for (i = 1; i <= NF; i++) printf "%%%s", $i }'
+    # Через z2k_pct_bytes: busybox od не знает ни -A, ни -t, ни -v.
+    printf '%s' "$1" | z2k_pct_bytes
 }
 job_wait() { # job_wait <id> — ждём появления .exit, не дольше 10 с
     _w=0

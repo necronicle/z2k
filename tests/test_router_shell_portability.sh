@@ -39,9 +39,13 @@ trap 'rm -rf "$SB"' EXIT INT TERM
 # Разрешённые опции взяты из самой строки помощи BusyBox v1.37.0 на роутере:
 #   Usage: od [-abcdeFfhiloxsv] [FILE]
 BAD=""
-for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" -name '*.sh' 2>/dev/null) \
+# Наборы сюда ВХОДЯТ наравне с боевым кодом: тест, зовущий od -An, на роутере
+# не падает — он молча получает пустую строку и краснеет, ничего не проверив
+# (так было в test_webpanel_actions_fixes).
+for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" -name '*.sh' 2>/dev/null) \
          "$ROOT/z2k.sh" "$ROOT/z2k_cleanup.sh" "$ROOT/files/S99zapret2.new"; do
     [ -f "$f" ] || continue
+    case "$f" in *test_router_shell_portability.sh) continue ;; esac
     # od с опцией вне набора busybox. Комментарии не считаем: в них разбор
     # этой самой аварии.
     hits=$(grep -n '[^#]*\bod  *-' "$f" 2>/dev/null \
@@ -117,10 +121,14 @@ assert_eq "и не ругается на разрешённый od -c" "0" "$_fa
 # в Entware как таковом.
 ABSENT="pkill timeout flock comm realpath nl fold"
 BADCMD=""
-for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" -name '*.sh' 2>/dev/null) \
+# Наборы входят наравне с боевым кодом: отсутствующая команда в тесте не
+# падает громко — она отдаёт пустоту, и проверка молча становится
+# декоративной (так `comm -23` делал сторож ключей конфига).
+for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" -name '*.sh' 2>/dev/null) \
          $(find "$ROOT/files/init.d" "$ROOT/files/ndm" -type f 2>/dev/null) \
          "$ROOT/z2k.sh" "$ROOT/z2k_cleanup.sh" "$ROOT/files/S99zapret2.new"; do
     [ -f "$f" ] || continue
+    case "$f" in *test_router_shell_portability.sh) continue ;; esac
     for c in $ABSENT; do
         # Вызов команды: начало строки, пайп, ;, &&, ( или $( — и сразу имя.
         # Так `--connect-timeout` и `$timeout` под запрет не попадают.
@@ -254,6 +262,61 @@ for _bad in 'touch -t 202601010000 f' 'date -v-3d "+%s"' 'date -d "-3 days"'; do
     _hit=$(grep -vE '^[[:space:]]*#' "$SB/lib/dt.sh" | grep -cE 'touch +-[a-z]*t|date +-v|date +-d +"[-+]')
     assert_eq "правило ловит: $_bad" "1" "$_hit"
 done
+
+# --- 9. Утилиты не зовутся по жёсткому /usr/bin и /bin ------------------------
+#
+# ПЯТЫЙ СЛУЧАЙ ТОГО ЖЕ КЛАССА. На Keenetic /usr/bin — это пять посторонних
+# бинарников, /bin — sh и демоны прошивки; sed, awk, find и прочее живут в
+# /opt/bin. Шим `exec /usr/bin/sed "$@"` в test_opkg_feed_guard молча падал, и
+# на роутере краснели три проверки, ни одна из которых не про дефект.
+#
+# Путь к настоящей утилите берётся `command -v` У ХОЗЯИНА и зашивается при
+# создании стаба.
+BADABS=""
+for f in "$ROOT"/tests/test_*.sh "$ROOT"/scripts/*.sh \
+         $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" -name '*.sh' 2>/dev/null) \
+         "$ROOT/z2k.sh"; do
+    [ -f "$f" ] || continue
+    case "$f" in *test_router_shell_portability.sh) continue ;; esac
+    grep -vE '^[[:space:]]*#' "$f" 2>/dev/null \
+        | grep -qE '(^|[^A-Za-z0-9_./-])/(usr/)?bin/(sed|awk|grep|cat|tr|head|tail|cut|sort|wc|date|od|dd|find|xargs)([^A-Za-z0-9_-]|$)' \
+        && BADABS="$BADABS $(basename "$f")"
+done
+if [ -z "$BADABS" ]; then
+    ok "утилиты не зовутся по жёсткому /usr/bin и /bin"
+else
+    no "утилиты не зовутся по жёсткому /usr/bin и /bin" "ничего" "$BADABS"
+fi
+
+printf '#!/bin/sh\nexec /usr/bin/sed "$@"\n' > "$SB/lib/abs.sh"
+_ab=$(grep -vE '^[[:space:]]*#' "$SB/lib/abs.sh" \
+      | grep -cE '(^|[^A-Za-z0-9_./-])/(usr/)?bin/(sed|awk|grep)([^A-Za-z0-9_-]|$)')
+assert_eq "правило ловит /usr/bin/sed" "1" "$_ab"
+
+# --- 10. Дробный sleep -------------------------------------------------------
+#
+# ШЕСТОЙ СЛУЧАЙ. Busybox: `Usage: sleep [N]...`, `sleep 0.1` → «invalid number».
+# Наборы писали `sleep 0.1 2>/dev/null || sleep 1`, и цикл из тридцати итераций
+# растягивался с трёх секунд до тридцати: внешний код ждал три и читал пустоту.
+# Правильно — задавать длительность В СЕКУНДАХ и брать шаг по
+# Z2K_TEST_FRAC_SLEEP, а не «дробь или секунда» в теле цикла.
+BADSL=""
+for f in "$ROOT"/tests/test_*.sh \
+         $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" -name '*.sh' 2>/dev/null) \
+         "$ROOT/z2k.sh"; do
+    [ -f "$f" ] || continue
+    case "$f" in *test_router_shell_portability.sh|*test_restart_helpers.sh) continue ;; esac
+    grep -vE '^[[:space:]]*#' "$f" 2>/dev/null | grep -qE 'sleep +0?\.[0-9]' \
+        && BADSL="$BADSL $(basename "$f")"
+done
+if [ -z "$BADSL" ]; then
+    ok "нет дробного sleep — busybox его не принимает"
+else
+    no "нет дробного sleep" "ничего" "$BADSL"
+fi
+printf '#!/bin/sh\nsleep 0.1\n' > "$SB/lib/sl.sh"
+assert_eq "правило ловит sleep 0.1" "1" \
+    "$(grep -vE '^[[:space:]]*#' "$SB/lib/sl.sh" | grep -cE 'sleep +0?\.[0-9]')"
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
