@@ -89,24 +89,6 @@ sleep 1
 pid=$(cat "$SB/pid" 2>/dev/null)
 assert_eq "флаг вернули — движок снова поднят" "alive" "$(kill -0 "$pid" 2>/dev/null && echo alive || echo dead)"
 
-# --- Z2K_WARP_FORCE закрепляет один шаг лестницы на время подбора плеча ------
-BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
-sleep 1
-Z2K_WARP_FORCE=h2 BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
-sleep 1
-assert_eq "форс уезжает в командную строку" "ARGS=run -force-transport h2" "$(grep ARGS "$SB/env")"
-# Значение проверяем: оно попадает в командную строку демона.
-BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
-sleep 1
-Z2K_WARP_FORCE='h2; rm -rf /' BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
-sleep 1
-assert_eq "мусор в форсе игнорируется" "ARGS=run" "$(grep ARGS "$SB/env")"
-BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
-sleep 1
-BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" start >/dev/null 2>&1
-sleep 1
-pid=$(cat "$SB/pid" 2>/dev/null)
-
 BIN="$SB/fake-warpd-$$" PIDFILE="$SB/pid" sh "$INIT" stop >/dev/null 2>&1
 sleep 1
 assert_eq "stop removes pidfile" "no" "$([ -f "$SB/pid" ] && echo yes || echo no)"

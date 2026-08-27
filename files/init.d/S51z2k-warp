@@ -18,21 +18,6 @@ PIDFILE="${PIDFILE:-/var/run/z2k-warpd.pid}"
 # Go async-preempt роняет процесс на MIPS (известный краш) — выключаем.
 case "$(uname -m)" in mips*) export GODEBUG=asyncpreemptoff=1 ;; esac
 
-# Z2K_WARP_FORCE — закрепить ОДИН шаг лестницы на время подбора плеча десинка
-# (z2k-warp.sh warp_masque_tune). Живёт только в этом процессе: обычный start
-# без переменной поднимает движок с полной лестницей, поэтому подбор не может
-# оставить роутер запертым на h2 навсегда.
-#
-# Значение проверяем, а не подставляем как есть: оно уезжает в командную
-# строку демона.
-FORCE_ARG=""
-case "$Z2K_WARP_FORCE" in
-    "")   : ;;
-    h2)   FORCE_ARG="-force-transport h2" ;;
-    wg:[0-9]*|wg:[0-9]*.[0-9]*.[0-9]*.[0-9]*:[0-9]*) FORCE_ARG="-force-transport $Z2K_WARP_FORCE" ;;
-    *)    echo "z2k-warpd: Z2K_WARP_FORCE=$Z2K_WARP_FORCE не распознан — игнорирую" >&2 ;;
-esac
-
 # VPS-релей для API Cloudflare, если напрямую заблокирован: тот же, что у
 # регистрации в z2k-warp.sh (переопределяется Z2K_WARP_VPS_PROXY в конфиге).
 _cfg="${ZAPRET2_DIR:-/opt/zapret2}/config"
@@ -76,8 +61,7 @@ case "$1" in
         mkdir -p /tmp/z2k-warp "$(dirname "$PIDFILE")" 2>/dev/null
         # Отвязка от потоков обязательна: NDM читает вывод init-скрипта до
         # конца потока, а демон унаследовал бы его и держал открытым.
-        # shellcheck disable=SC2086  # FORCE_ARG — либо пусто, либо два слова
-        "$BIN" run $FORCE_ARG >/dev/null 2>&1 </dev/null &
+        "$BIN" run >/dev/null 2>&1 </dev/null &
         _pid=$!
         # Даём процессу секунду умереть: мёртвый pid в pidfile — это вечная
         # карусель перезапусков (см. running выше).

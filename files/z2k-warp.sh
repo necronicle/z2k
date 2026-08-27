@@ -421,155 +421,46 @@ warp_install() {
     return 1
 }
 
-# ---- подбор плеча под MASQUE ----------------------------------------------------
-#
-# ЗАЧЕМ. MASQUE (транспорт h2) — то, на чём WARP работал ещё до нашего движка, и
-# работал надёжно. Он и сейчас встаёт первым, но выживает ТОЛЬКО под десинком:
-# замер 2026-08-24 — сквозная проба 9 из 9 с десинком против 0 из 9 без него.
-# Десинк применяется к SNI consumer-masque.cloudflareclient.com, то есть по
-# записи rkn_tcp/cloudflareclient.com, а какое плечо ротации на неё встало —
-# дело случая.
-#
-# Поле 2026-08-25: у человека MASQUE поднимался за три секунды и умирал через
-# семнадцать — «h2: connected», затем «health: h2:443 dead (<nil>)», без ошибки
-# транспорта. Сессию душили снаружи. На роутере владельца тот же MASQUE в тот же
-# час вёз трафик (сквозная проба 200 за 0.16 с) — разница ровно в выбранном
-# плече.
-#
-# Поэтому плечо не ждём от ротатора, а ПОДБИРАЕМ: закрепляем, поднимаем туннель,
-# спрашиваем готовность. Готовность с p-79.15 означает доказанную — туннель
-# провёз сквозную пробу, — так что «встало» и «везёт» здесь не путаются.
-WARP_TUNE_KEY="${WARP_TUNE_KEY:-rkn_tcp}"
-WARP_TUNE_HOST="${WARP_TUNE_HOST:-cloudflareclient.com|4}"
-WARP_TUNE_MAX="${WARP_TUNE_MAX:-50}"        # всего плеч в пуле rkn_tcp
-# WARP_TUNE_RUN — сколько плеч перебирать ЗА ОДИН заход.
-#
-# Перебор идёт с движком, закреплённым на h2, то есть запасные WG-адреса на это
-# время недоступны. Пятьдесят плеч по WARP_TUNE_WAIT — это почти двадцать минут
-# без лестницы, и человек всё это время без WARP по нашей вине, а не по вине
-# провайдера. Заход ограничен пятью минутами; продолжение — со следующего плеча
-# (WARP_TUNE_CURSOR), поэтому повторное «Включить» не топчется по началу пула.
-WARP_TUNE_RUN="${WARP_TUNE_RUN:-15}"
-# WARP_TUNE_WAIT — сколько ждать готовности под очередным плечом.
-#
-# Не меньше времени, за которое монитор живости успевает вынести вердикт:
-# таймаут пробы 8 с, два провала подряд = смерть, плюс пара секунд на
-# stop/sleep/start. При прежних 14 с «плечо не держит» печаталось раньше, чем
-# монитор вообще мог что-то доказать.
-WARP_TUNE_WAIT="${WARP_TUNE_WAIT:-20}"
-WARP_TUNE_LOCK="${WARP_TUNE_LOCK:-/tmp/z2k-warp/tune.lock}"
-WARP_TUNE_CURSOR="${WARP_TUNE_CURSOR:-/opt/etc/z2k-warp/tune.cursor}"
+# ---- состояние ротации ---------------------------------------------------------
+# Пути нужны только для одноразовой уборки ниже: подбор плеча удалён.
 WARP_STATE="${WARP_STATE:-$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv}"
 WARP_STATE_FALLBACK="${WARP_STATE_FALLBACK:-/tmp/z2k-autocircular-state.tsv}"
+WARP_TUNE_KEY="${WARP_TUNE_KEY:-rkn_tcp}"
+WARP_TUNE_HOST="${WARP_TUNE_HOST:-cloudflareclient.com|4}"
 
-# warp_state_pin <плечо> — закрепить плечо за нашим хостом в обоих файлах.
+# warp_unpin_legacy — снять закрепление, оставленное УДАЛЁННЫМ подборщиком плеча.
 #
-# Режим «manual», а не «auto»: закреплённое нами не должно быть смыто первой же
-# ротацией, иначе подбор придётся повторять после каждого чиха.
-warp_state_pin() {
-    local strat="$1" f tmp ts
-    ts=$(date +%s 2>/dev/null || echo 0)
+# ПОДБОР ПЛЕЧА УДАЛЁН. Он крутил плечо десинка ротации ради туннеля WARP:
+# закреплял rkn_tcp/cloudflareclient.com|4 на очередном номере в режиме
+# «manual», перезапускал движок и смотрел, встанет ли MASQUE. Побочных эффектов
+# у этого оказалось больше, чем пользы: запись в «manual» ротатор не трогает
+# никогда, поэтому брошенный на полпути подбор оставлял хост навсегда на
+# случайном плече (замер на роутере владельца 2026-08-27: одиннадцатое), а сам
+# перебор рвал лестницу транспортов движку.
+#
+# Уборка одноразовая и по уликам: снимаем ТОЛЬКО нашу запись и ТОЛЬКО если она
+# «manual». Чужие ручные закрепления и любые «auto» не трогаем.
+warp_unpin_legacy() {
+    local f tmp
     for f in "$WARP_STATE" "$WARP_STATE_FALLBACK"; do
-        [ -n "$f" ] || continue
-        mkdir -p "$(dirname "$f")" 2>/dev/null
-        if [ ! -f "$f" ]; then
-            printf '# z2k autocircular state (persisted circular nstrategy)\n# key\thost\tstrategy\tts\tmode\n' \
-                > "$f" 2>/dev/null || continue
-            chmod 644 "$f" 2>/dev/null
+        [ -n "$f" ] && [ -f "$f" ] || continue
+        awk -F'\t' -v k="$WARP_TUNE_KEY" -v h="$WARP_TUNE_HOST" \
+            '($1 == k && $2 == h && $5 == "manual") { next } { print }' \
+            "$f" > "$f.z2k-unpin.$$" 2>/dev/null || { rm -f "$f.z2k-unpin.$$"; continue; }
+        if cmp -s "$f" "$f.z2k-unpin.$$"; then
+            rm -f "$f.z2k-unpin.$$"
+        else
+            chmod 644 "$f.z2k-unpin.$$" 2>/dev/null
+            mv -f "$f.z2k-unpin.$$" "$f" 2>/dev/null || rm -f "$f.z2k-unpin.$$"
+            _wlog "снято закрепление плеча, оставленное удалённым подборщиком ($h)"
         fi
-        tmp="$f.z2k-warp.$$"
-        awk -F'\t' -v k="$WARP_TUNE_KEY" -v h="$WARP_TUNE_HOST" -v s="$strat" -v ts="$ts" '
-            BEGIN { OFS = "\t" }
-            ($1 == k && $2 == h) { next }
-            { print }
-            END { print k, h, s, ts, "manual" }
-        ' "$f" > "$tmp" 2>/dev/null || { rm -f "$tmp"; continue; }
-        chmod 644 "$tmp" 2>/dev/null
-        mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
     done
-}
-
-# warp_masque_tune — перебрать плечи, пока туннель не начнёт везти.
-#
-# Возвращает 0, как только готовность доказана; 1 — если не помогло ни одно.
-# В последнем случае закрепление снимаем: врать ротатору про «ручной выбор»,
-# который ничего не дал, значит запретить ему искать самому.
-#
-# ПОДБОР ЗАКРЕПЛЯЕТ ДВИЖОК НА h2 И ВСЕГДА ОТПУСКАЕТ ЕГО В КОНЦЕ.
-#
-# Поле 2026-08-27: перезапуск шёл вслепую, каждые шестнадцать секунд, независимо
-# от того, чем движок занят. Роутер стоял на WG-ступени (188.114.97.1:4500,
-# рукопожатие проходит) — плечо десинка на cloudflareclient.com не влияет на
-# WireGuard НИКАК, — а подборщик рвал ему лестницу по кругу пятьдесят раз
-# подряд. В диагностике это выглядело как «поднимается» тринадцать минут.
-#
-# Закрепление на h2 делает перезапуск осмысленным: подбираем плечо ровно под тот
-# транспорт, на который плечо влияет. Форс живёт в окружении процесса, а не в
-# конфиге, и последний перезапуск заход делает уже без него — запереть роутер на
-# h2 подбор не может по построению.
-warp_masque_tune() {
-    local i had rc=1 tried=0 first
-    mkdir -p "$(dirname "$WARP_TUNE_LOCK")" 2>/dev/null
-    # Один подборщик на роутер. Два нажатия «Включить» подряд давали два фоновых
-    # цикла, и каждый перезапускал движок под другим.
-    mkdir "$WARP_TUNE_LOCK" 2>/dev/null || { _wlog "подбор плеча уже идёт — второй не запускаю"; return 1; }
-    had=$(awk -F'\t' -v k="$WARP_TUNE_KEY" -v h="$WARP_TUNE_HOST" \
-              '($1 == k && $2 == h) { print $3; exit }' "$WARP_STATE" 2>/dev/null)
-    first=$(cat "$WARP_TUNE_CURSOR" 2>/dev/null)
-    case "$first" in ''|*[!0-9]*) first=1 ;; *) first=$((first + 1)) ;; esac
-    [ "$first" -gt "$WARP_TUNE_MAX" ] && first=1
-    i="$first"
-    _wlog "подбираю плечо десинка под MASQUE (с $first, до $WARP_TUNE_RUN за заход)..."
-    while [ "$tried" -lt "$WARP_TUNE_RUN" ]; do
-        [ "$(warp_flag)" = "1" ] || { _wlog "WARP выключили — подбор прекращён"; break; }
-        warp_state_pin "$i"
-        mkdir -p "$(dirname "$WARP_TUNE_CURSOR")" 2>/dev/null
-        printf '%s\n' "$i" > "$WARP_TUNE_CURSOR" 2>/dev/null
-        Z2K_WARP_FORCE=h2 sh "$WARP_INIT" restart >/dev/null 2>&1
-        local waited=0
-        while [ "$waited" -lt "$WARP_TUNE_WAIT" ]; do
-            warp_ready && break
-            sleep 2; waited=$((waited + 2))
-        done
-        if warp_ready; then
-            _wlog "плечо $i держит MASQUE — закрепил"
-            rc=0
-            break
-        fi
-        _wlog "плечо $i не держит"
-        tried=$((tried + 1))
-        i=$((i + 1))
-        [ "$i" -gt "$WARP_TUNE_MAX" ] && i=1
-    done
-    if [ "$rc" != "0" ] && [ -n "$had" ]; then warp_state_pin "$had"; fi
-    if [ "$(warp_flag)" != "1" ]; then
-        # WARP выключили, пока мы подбирали. Наш последний restart мог поднять
-        # демона уже ПОСЛЕ того, как disable его остановил — добиваем, иначе на
-        # роутере остаётся форсированный на h2 процесс при выключенном WARP.
-        sh "$WARP_INIT" stop >/dev/null 2>&1
-        rmdir "$WARP_TUNE_LOCK" 2>/dev/null
-        return 1
-    fi
-    # Форс снимаем ВСЕГДА, чем бы заход ни кончился: движок возвращается к полной
-    # лестнице. С закреплённым плечом h2 доказывает себя сам и попадает в
-    # last_good; не доказывает — работают запасные WG-адреса.
-    sh "$WARP_INIT" restart >/dev/null 2>&1
-    if [ "$rc" = "0" ]; then
-        local back=0
-        while [ "$back" -lt "$WARP_READY_WAIT" ]; do
-            warp_ready && break
-            sleep 2; back=$((back + 2))
-        done
-        warp_ready || { _wlog "плечо $i держало под форсом, но не удержало на полной лестнице"; rc=1; }
-    else
-        _wlog "ни одно из $tried плеч не удержало MASQUE — нажмите «Включить» ещё раз, перебор продолжится дальше по пулу"
-    fi
-    rmdir "$WARP_TUNE_LOCK" 2>/dev/null
-    return "$rc"
+    return 0
 }
 
 warp_enable() {
     warp_set_flag 1
+    warp_unpin_legacy
     [ -x "$WARP_BIN" ] || { _wlog "движок не установлен — нажмите «Установить»"; warp_set_flag 0; return 1; }
     warp_ipset_all
     ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || { _wlog "cannot create ipset $WARP_IPSET"; warp_set_flag 0; return 1; }
@@ -584,21 +475,15 @@ warp_enable() {
         _wlog "WARP ready: $(_json_str "$WARP_STATUS" transport) $(_json_str "$WARP_STATUS" endpoint)"
         return 0
     fi
-    # Не ready. Прежде чем сдаться — подобрать плечо десинка: MASQUE выживает
-    # только под ним, а какое плечо встало, решал случай. Подбор идёт ФОНОМ и
-    # переживает обрыв: он занимает минуты, и держать ради него кнопку нельзя.
-    # Трафик всё это время идёт напрямую — маршрут ставится только по
-    # доказанной готовности.
+    # Не ready — так и говорим. Подбор плеча десинка отсюда УДАЛЁН: туннель не
+    # имеет права крутить ротацию обхода ради себя, а брошенный подбор оставлял
+    # хост закреплённым навсегда. Движок ищет рабочий транспорт сам, лестницей.
     _wlog "причина: $(_json_str "$WARP_STATUS" last_error)"
-    if [ "${WARP_TUNE:-1}" = "1" ]; then
-        ( trap '' HUP
-          warp_masque_tune && warp_pbr_up ) >/dev/null 2>&1 &
-        _wlog "подбираю рабочее плечо десинка фоном — туннель поднимется сам"
-    fi
     return 2
 }
 
 warp_disable() {
+    warp_unpin_legacy
     warp_pbr_down
     [ -x "$WARP_INIT" ] && sh "$WARP_INIT" stop >/dev/null 2>&1
     warp_set_flag 0
