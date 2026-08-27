@@ -96,7 +96,14 @@ case "$1" in
             rm -f "$PIDFILE"
         fi
         # Пидфайл мог разойтись с реальностью — добиваем по имени.
-        pkill -f "$BIN run" 2>/dev/null
+        # pkill НА РОУТЕРЕ НЕТ: Entware собирает busybox без этого апплета, и вызов под
+        # `2>/dev/null` не падал — он просто НИКОГДА НЕ СРАБАТЫВАЛ (тот же класс, что
+        # od -A в issue #43). killall бьёт по имени и снёс бы чужие процессы; pgrep -f
+        # есть. $$ пропускаем: busybox pgrep вызывающую оболочку не исключает.
+        for _p in $(pgrep -f "$BIN run" 2>/dev/null); do
+            [ "$_p" = "$$" ] && continue
+            kill "$_p" 2>/dev/null
+        done
         echo "z2k-warpd stopped"
         ;;
     restart)

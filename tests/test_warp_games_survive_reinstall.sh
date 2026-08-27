@@ -112,7 +112,7 @@ run_cycle() {  # run_cycle <сколько игровых списков пол�
             printf '"etag-призрак"\n' > "$TMP/opt/lists/warp/games/.Ghost.raw.etag" ;;
     esac
 
-    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         SB="$TMP" GATEEXPR="$GATE" "$Z2K_TEST_SH" -c '
             ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
             print_warning() { printf "WARN %s\n" "$1" >> "$SB/log"; }
@@ -231,7 +231,7 @@ rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
 printf 'a.example.com\n' > "$TMP/opt/lists/warp/games/Game1.txt"
 printf 'a.example.com\n' > "$TMP/opt/lists/warp/games/.Game1.raw"
 printf '"etag-1"\n'      > "$TMP/opt/lists/warp/games/.Game1.raw.etag"
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
     print_warning() { :; }; print_info() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -258,7 +258,7 @@ fi
 rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
 _i=1
 while [ "$_i" -le 5 ]; do printf 'd%s.example.com\n' "$_i" > "$TMP/opt/lists/warp/games/G$_i.txt"; _i=$((_i+1)); done
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" GATE="$GATE" "$Z2K_TEST_SH" -c '
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" GATE="$GATE" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
     print_warning() { :; }; print_info() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -287,7 +287,7 @@ fi
 rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/opt/lists/warp/games" "$TMP/bk"
 _i=1
 while [ "$_i" -le 4 ]; do printf 'd%s.example.com\n' "$_i" > "$TMP/opt/lists/warp/games/S$_i.txt"; _i=$((_i+1)); done
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"
     print_warning() { :; }; print_info() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -424,7 +424,7 @@ sweep() {  # sweep <класть ли мусор: 1/0> → "<лог>|<что о�
         printf 'x\n' > "$TMP/j/lists/warp/games/.Steam.raw.new.4242"
         printf 'x\n' > "$TMP/j/lists/warp/games/.Steam.raw.hdr.4242"
     fi
-    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+    env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
         ZAPRET2_DIR="$SB/j"
         print_info() { printf "%s\n" "$1"; }
         _sweep() { . "$SB/junk.sh"; }

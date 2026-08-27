@@ -70,7 +70,7 @@ fi
 # --- 1. Счёт ПЛЕЧ, а не токенов ----------------------------------------------
 counts() {  # counts <аргументы командной строки через |>
     printf '%s' "$1" | tr '|' '\n' | tr '\n' '\0' > "$TMP/cmd.bin"
-    env -i PATH=/usr/bin:/bin SB="$TMP" "$Z2K_TEST_SH" -c '
+    env -i PATH="$Z2K_TEST_PATH" SB="$TMP" "$Z2K_TEST_SH" -c '
         . "$SB/fns.sh"
         Z2K_DIAG_CMDLINE_SRC="$SB/cmd.bin" nfqws_strategy_counts
     ' 2>/dev/null
@@ -113,7 +113,7 @@ if [ "$r" = "1 0 0" ]; then ok "статический набор без сло�
 
 # Не прочитать — молчим, а не выдумываем ноль. Ноль здесь означал бы
 # «стратегий нет», то есть диагностика соврала бы в самую опасную сторону.
-if env -i PATH=/usr/bin:/bin SB="$TMP" "$Z2K_TEST_SH" -c '
+if env -i PATH="$Z2K_TEST_PATH" SB="$TMP" "$Z2K_TEST_SH" -c '
         . "$SB/fns.sh"
         Z2K_DIAG_CMDLINE_SRC="$SB/нет-такого-файла" nfqws_strategy_counts
     ' >/dev/null 2>&1; then
@@ -129,7 +129,7 @@ fi
 # тогда большой ClientHello по-прежнему виснет, хотя релиз обещает обратное.
 reasm() {
     printf '%s' "$1" | tr '|' '\n' | tr '\n' '\0' > "$TMP/cmd.bin"
-    env -i PATH=/usr/bin:/bin SB="$TMP" "$Z2K_TEST_SH" -c '
+    env -i PATH="$Z2K_TEST_PATH" SB="$TMP" "$Z2K_TEST_SH" -c '
         . "$SB/fns.sh"
         Z2K_DIAG_CMDLINE_SRC="$SB/cmd.bin" nfqws_reasm_state
     ' 2>/dev/null
@@ -152,7 +152,7 @@ r=$(reasm '--user=nobody|--payload=tls_client_hello|--lua-desync=fake:x')
 # файла всегда стояло «1 строк»: и у живого, и у обрезанного до заголовка.
 arms_of() {
     printf '%s' "$1" > "$TMP/pool.txt"
-    env -i PATH=/usr/bin:/bin SB="$TMP" "$Z2K_TEST_SH" -c '
+    env -i PATH="$Z2K_TEST_PATH" SB="$TMP" "$Z2K_TEST_SH" -c '
         . "$SB/fns.sh"; strategy_file_arms "$SB/pool.txt"
     ' 2>/dev/null
 }
@@ -179,7 +179,7 @@ else
 fi
 
 verdict() {  # verdict <что вернёт счётчик> [что вернёт гейт reasm]
-    env -i PATH=/usr/bin:/bin SB="$TMP" CNT="$1" RSM="${2:-on}" "$Z2K_TEST_SH" -c '
+    env -i PATH="$Z2K_TEST_PATH" SB="$TMP" CNT="$1" RSM="${2:-on}" "$Z2K_TEST_SH" -c '
         issues=""
         _add() { issues="${issues}[!] $1
 "; }
@@ -246,7 +246,7 @@ done
 # Было ~6 обходов /proc через pgrep на отчёт, и, что важнее, соседние строки
 # могли описывать РАЗНЫЕ процессы, если движок рестартанул посреди дампа.
 awk '/^print_health\(\) \{/,/^\}/' "$SRC" > "$TMP/health.sh"
-_d7=$(env -i PATH=/usr/bin:/bin SB="$TMP" ZD="$TMP/zd" "$Z2K_TEST_SH" -c '
+_d7=$(env -i PATH="$Z2K_TEST_PATH" SB="$TMP" ZD="$TMP/zd" "$Z2K_TEST_SH" -c '
     mkdir -p "$ZD/extra_strats/TCP/RKN"
     : > "$ZD/extra_strats/TCP/RKN/List.txt"
     ZAPRET2_DIR="$ZD"

@@ -99,7 +99,7 @@ done
 # гейта (WARNING), затем «---», затем число exec'ов движка.
 gate_run() {
     : > "$TMP/eng.calls"
-    env -i PATH=/usr/bin:/bin SB="$TMP" ENG="$1" N="$2" \
+    env -i PATH="$Z2K_TEST_PATH" SB="$TMP" ENG="$1" N="$2" \
         ENG_CALLS="$TMP/eng.calls" "$Z2K_TEST_SH" -c '
         USEROPT="--user=nobody"; DESYNC_MARK="0x40000000"; LUAOPT="--lua-init=@x.lua"
         NFQWS2="$ENG"

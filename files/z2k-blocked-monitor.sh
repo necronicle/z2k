@@ -5,6 +5,22 @@
 
 set -u
 
+# PATH ЗАДАЁМ САМИ, И ЭТО НЕ ГИГИЕНА, А УСЛОВИЕ РАБОТОСПОСОБНОСТИ.
+#
+# Ниже стоит `sh -c '…' _ arg1 … arg12` — запуск tcpdump с двенадцатью
+# аргументами. Какой это будет `sh`, решает PATH, а на Keenetic /bin/sh — НЕ
+# ash: это NDM Shell Wrapper v1.0.10, и позиционные аргументы `sh -c` он
+# ТЕРЯЕТ. Замер на роутере владельца 2026-08-27:
+#
+#   /bin/sh     -c 'echo [$0] [$1]' _ ААА  →  [/opt/bin/sh] []
+#   /opt/bin/sh -c 'echo [$0] [$1]' _ ААА  →  [_] [ААА]
+#
+# То есть без /opt/bin впереди PATH вся команда захвата собиралась из пустых
+# строк. Скрипт запускают руками и из cron, а cron на Entware отдаёт PATH без
+# /opt/bin — там это и стреляло. Остальные наши скрипты PATH объявляют, этот
+# был единственным без него.
+export PATH="${Z2K_STUB_PATH:+$Z2K_STUB_PATH:}/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin"
+
 ZAPRET_BASE="${ZAPRET_BASE:-/opt/zapret2}"
 ZAPRET_CONFIG="${ZAPRET_CONFIG:-$ZAPRET_BASE/config}"
 CACHE_DIR="${ZAPRET_BASE}/extra_strats/cache/blocked_monitor"
@@ -743,14 +759,17 @@ stop_monitor() {
 	#    no-setsid fallback the subshell is NOT a group leader, so the
 	#    negative-PID kill above is a no-op and the orphan tcpdump would keep
 	#    capturing — pkill -P targets the children of our pipeline by PPID.
-	pkill -P "$pid" 2>/dev/null || true
+	#    pkill на роутере НЕТ (busybox Entware его не собирает), поэтому
+	#    детей берём pgrep -P и бьём поимённо. Прежний вызов не срабатывал
+	#    никогда — тот же класс, что od -A в issue #43.
+	for _c in $(pgrep -P "$pid" 2>/dev/null); do kill "$_c" 2>/dev/null; done
 	# 3) Finally the subshell/leader itself.
 	kill "$pid" 2>/dev/null || true
 
 	sleep 1
 	if kill -0 "$pid" 2>/dev/null; then
 		kill -9 -- -"$pid" 2>/dev/null || true
-		pkill -9 -P "$pid" 2>/dev/null || true
+		for _c in $(pgrep -P "$pid" 2>/dev/null); do kill -9 "$_c" 2>/dev/null; done
 		kill -9 "$pid" 2>/dev/null || true
 	fi
 	rm -f "$PID_FILE" 2>/dev/null || true

@@ -27,6 +27,39 @@
 Z2K_TEST_SH="${Z2K_TEST_SH:-/bin/sh}"
 export Z2K_TEST_SH
 
+# Z2K_TEST_PATH — PATH для песочниц `env -i`.
+#
+# Наборы писали `env -i PATH="/usr/bin:/bin"` руками. На маке и на
+# ubuntu-latest там coreutils, и всё работало. На Keenetic там НЕТ НИЧЕГО:
+# /bin — это sh и одиннадцать демонов прошивки (ndm, ndmc, wind, tsmb-*),
+# /usr/bin — пять посторонних бинарников (dropbearkey, iperf3, lpac,
+# minidlna, uart_launcher). Ни grep, ни sed, ни cat, ни awk: всё в /opt.
+#
+# Песочница получалась пустой, проверяемый код не выполнял ни строчки, и
+# прогон на роутере 2026-08-27 дал 87 красных проверок из 186 — ни одна из
+# них не про ошибку в коде. Хуже того: до починки эти наборы физически не
+# могли проверить роутер, ради которого написаны.
+#
+# Собираем из МЕСТ, ГДЕ УТИЛИТЫ ЛЕЖАТ НА САМОМ ДЕЛЕ. Изоляция при этом
+# сохраняется: `env -i` по-прежнему выносит всё окружение, кроме PATH.
+z2k_test_path() {
+    _ztp=""
+    for _ztu in sh grep sed awk cat od tr wc; do
+        _ztd=$(command -v "$_ztu" 2>/dev/null) || continue
+        # Встроенные в оболочку команды `command -v` отдаёт БЕЗ пути, и
+        # `${x%/*}` вернул бы само имя — «printf» попадало в PATH как каталог.
+        case "$_ztd" in /*) ;; *) continue ;; esac
+        _ztd="${_ztd%/*}"
+        case ":$_ztp:" in
+            *":$_ztd:"*) ;;
+            *) _ztp="${_ztp:+$_ztp:}$_ztd" ;;
+        esac
+    done
+    printf '%s' "${_ztp:-/usr/bin:/bin}"
+}
+Z2K_TEST_PATH="${Z2K_TEST_PATH:-$(z2k_test_path)}"
+export Z2K_TEST_PATH
+
 # z2k_extract_block <файл> <опорная подстрока> <отступ>
 #
 # Блоки, которые нужно исполнить, живут внутри огромных функций установки —

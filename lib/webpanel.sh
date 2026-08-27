@@ -546,8 +546,26 @@ webpanel_do_uninstall() {
         [ -x "$WEBPANEL_INIT" ] && "$WEBPANEL_INIT" stop 2>/dev/null
         # init мог быть снесён оборванной установкой — supervisor/waiter
         # добиваем по cmdline, иначе они поднимут lighttpd после удаления.
-        pkill -f "$WEBPANEL_INIT" 2>/dev/null || true
-        pkill -f "lighttpd.*$WEBPANEL_DIR" 2>/dev/null || true
+        # pkill НА РОУТЕРЕ НЕТ. Entware собирает busybox без этого апплета: `command -v
+        # pkill` пусто, `busybox pkill` — «applet not found», в списке есть только pgrep
+        # и killall. Все вызовы pkill стояли под `2>/dev/null || true`, поэтому они не
+        # падали — они просто НИКОГДА НИЧЕГО НЕ ДЕЛАЛИ. Тот же класс, что od -A в
+        # issue #43: страховка, ни разу не сработавшая.
+        #
+        # killall не подходит: он бьёт по ИМЕНИ процесса, то есть `killall lighttpd`
+        # снёс бы и чужой lighttpd юзера. pgrep -f есть и умеет и шаблон, и -P.
+        #
+        # $$ пропускаем обязательно: busybox pgrep СЕБЯ И ВЫЗЫВАЮЩЕГО НЕ ИСКЛЮЧАЕТ
+        # (проверено на роутере: pgrep -f по шаблону из собственного argv возвращает
+        # pid вызывающей оболочки), и без этой строки скрипт убивал бы сам себя.
+        for _p in $(pgrep -f "$WEBPANEL_INIT" 2>/dev/null); do
+            [ "$_p" = "$$" ] && continue
+            kill "$_p" 2>/dev/null
+        done
+        for _q in $(pgrep -f "lighttpd.*$WEBPANEL_DIR" 2>/dev/null); do
+            [ "$_q" = "$$" ] && continue
+            kill "$_q" 2>/dev/null
+        done
         rm -f "$WEBPANEL_INIT" "$WEBPANEL_PIDFILE" \
               /var/run/z2k-webpanel-sup.pid \
               /var/run/z2k-webpanel-wait.pid \

@@ -93,7 +93,7 @@ cycle() {  # cycle <есть ли что переносить: 1/0>
         printf '"старый-etag"\n'    > "$TMP/opt/extra_strats/cache/geosite-etag/ru-blocked.txt.etag"
     fi
 
-    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+    env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
         ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"; Z2K_UPGRADE_BACKUP="$SB/bk"
         print_info() { :; }; print_warning() { :; }
         _b() { . "$SB/backup.sh"; }; _b
@@ -181,7 +181,7 @@ geo() {
     [ "$_etag"   = "1" ] && printf '"апстрим-v1"' > "$_g/etag/ru-blocked.txt.etag"
     [ "$_marker" = "1" ] && printf 'ru-blocked.txt\n' > "$_g/t/List.txt.asset"
 
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
         G="$_g" FNS="$TMP/geo_fns.sh" DL_LOG="$_g/dl.log" \
         UPSTREAM_ETAG="${3:-\"апстрим-v1\"}" "$Z2K_TEST_SH" -c '
             : > "$DL_LOG"
@@ -275,7 +275,7 @@ rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/bk"
 mkdir -p "$TMP/opt/extra_strats/TCP/RKN" "$TMP/opt/extra_strats/cache/geosite-etag"
 printf '\377\377\377\377\377\377\377\377\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt"
 printf 'ru-blocked.txt\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset"
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"; Z2K_UPGRADE_BACKUP="$SB/bk"
     print_info() { :; }; print_warning() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -309,7 +309,7 @@ printf 'prev.example.com\n' > "$_g2/t/List.txt"
 printf 'ru-blocked.txt\n'   > "$_g2/t/List.txt.asset"
 _cycle_run() {
     rm -rf "$_g2/tmp$1"; mkdir -p "$_g2/tmp$1"
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
         G="$_g2" FNS="$TMP/geo_fns.sh" DL_LOG="$_g2/dl$1.log" \
         UPSTREAM_ETAG='"апстрим-v1"' N="$1" "$Z2K_TEST_SH" -c '
             : > "$DL_LOG"
@@ -363,7 +363,7 @@ SH
 chmod +x "$TMP/bin/shrunk"
 _run3() {
     rm -rf "$_g3/tmp$1"; mkdir -p "$_g3/tmp$1"
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
         G="$_g3" FNS="$TMP/geo_fns.sh" DL_LOG="$_g3/dl$1.log" \
         UPSTREAM_ETAG="$2" N="$1" "$Z2K_TEST_SH" -c '
             : > "$DL_LOG"
@@ -453,7 +453,7 @@ STUBD
 chmod +x "$_g4/bin/curl"
 _geo4() {  # _geo4 <включён ли Layer 0>
     : > "$_g4/calls"; rm -f "$_g4/calls.v"; rm -rf "$_g4/tmp"; mkdir -p "$_g4/tmp"
-    env -i PATH="$_g4/bin:/usr/bin:/bin" HOME="$TMP" G="$_g4" FNS="$TMP/geo_fns.sh" \
+    env -i PATH="$_g4/bin:$Z2K_TEST_PATH" HOME="$TMP" G="$_g4" FNS="$TMP/geo_fns.sh" \
         CALLS="$_g4/calls" L0="$1" "$Z2K_TEST_SH" -c '
             . "$FNS"
             ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp"; RELEASE_BASE="https://example.invalid/dl"
@@ -555,7 +555,7 @@ printf '200 0.075'
 exit 18
 STUBE
 chmod +x "$_g5/bin/curl"
-_trunc=$(env -i PATH="$_g5/bin:/usr/bin:/bin" HOME="$TMP" G="$_g5" FNS="$TMP/geo_fns.sh" "$Z2K_TEST_SH" -c '
+_trunc=$(env -i PATH="$_g5/bin:$Z2K_TEST_PATH" HOME="$TMP" G="$_g5" FNS="$TMP/geo_fns.sh" "$Z2K_TEST_SH" -c '
     . "$FNS"
     ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp"; RELEASE_BASE="https://example.invalid/dl"
     log() { :; }
@@ -586,7 +586,7 @@ rm -rf "$TMP/opt" "$TMP/bk"; mkdir -p "$TMP/bk"
 mkdir -p "$TMP/opt/extra_strats/TCP/RKN" "$TMP/opt/extra_strats/cache/geosite-etag"
 printf 'a.example.com\nb.exa' > "$TMP/opt/extra_strats/TCP/RKN/List.txt"   # обрыв посреди строки
 printf 'ru-blocked.txt\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset"
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"; Z2K_UPGRADE_BACKUP="$SB/bk"
     print_info() { :; }; print_warning() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -626,7 +626,7 @@ printf 'upstream.example.com\n' > "$TMP/opt/extra_strats/TCP/RKN/List.txt"
 printf 'ru-blocked.txt\n'       > "$TMP/opt/extra_strats/TCP/RKN/List.txt.asset"
 printf 'прошлогодний-бандл.example\n' > "$TMP/opt/extra_strats/TCP/YT/List.txt"
 printf 'shipped-fallback\n'           > "$TMP/opt/extra_strats/TCP/YT/List.txt.asset"
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
     ZAPRET2_DIR="$SB/opt"; backup_tmp="$SB/bk"; Z2K_UPGRADE_BACKUP="$SB/bk"
     print_info() { :; }; print_warning() { :; }
     _b() { . "$SB/backup.sh"; }; _b
@@ -696,7 +696,7 @@ _fp_run() {  # _fp_run <содержимое шипнутого списка> �
     printf '%s\n' "$1" > "$TMP/fp/tree/lists/rkn-false-positive.txt"
     printf '"etag-ru"\n'  > "$TMP/fp/tree/extra_strats/cache/geosite-etag/ru-blocked.txt.etag"
     printf '"etag-all"\n' > "$TMP/fp/tree/extra_strats/cache/geosite-etag/ru-blocked-all.txt.etag"
-    _said=$(env -i PATH="/usr/bin:/bin" HOME="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+    _said=$(env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
         ZAPRET2_DIR="$SB/fp/tree"
         print_info() { printf "СКАЗАЛ" ; }
         . "$SB/sha.sh"
@@ -789,7 +789,7 @@ _rollback() {  # _rollback <ok|fail — удастся ли mv дерева> →
         # единственный способ смоделировать «дерево вернуть не удалось»
         printf '#!/bin/sh\nexit 1\n' > "$TMP/rb/bin/mv"; chmod +x "$TMP/rb/bin/mv"
     fi
-    env -i PATH="$TMP/rb/bin:/usr/bin:/bin" HOME="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
+    env -i PATH="$TMP/rb/bin:$Z2K_TEST_PATH" HOME="$TMP" SB="$TMP" "$Z2K_TEST_SH" -c '
         . "$SB/rollback.sh"
         ZAPRET2_DIR="$SB/rb/new"
         Z2K_OLD_TREE_BACKUP="$SB/rb/old"

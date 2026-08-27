@@ -98,7 +98,7 @@ awk '/^z2k_uint\(\) \{/,/^\}/'     "$ROOT/lib/utils.sh" >  "$TMP/helpers.sh"
 awk '/^z2k_connfail\(\) \{/,/^\}/' "$ROOT/lib/utils.sh" >> "$TMP/helpers.sh"
 
 uint() {
-    env -i PATH=/usr/bin:/bin SB="$TMP" A="$1" B="$2" C="${3:-}" D="${4:-}" \
+    env -i PATH="$Z2K_TEST_PATH" SB="$TMP" A="$1" B="$2" C="${3:-}" D="${4:-}" \
         "$Z2K_TEST_SH" -c '
         . "$SB/helpers.sh"
         z2k_uint "$A" "$B" ${C:+"$C"} ${D:+"$D"}
@@ -117,7 +117,7 @@ _t " 3"     3 1 "" 3
 
 # Код возврата ВСЕГДА нулевой: в z2k.sh активен set -e, и присваивание из
 # подстановки не имеет права ронять установку из-за мусора в переменной среды.
-_rc=$(env -i PATH=/usr/bin:/bin SB="$TMP" "$Z2K_TEST_SH" -c '
+_rc=$(env -i PATH="$Z2K_TEST_PATH" SB="$TMP" "$Z2K_TEST_SH" -c '
     set -e
     . "$SB/helpers.sh"
     v=$(z2k_uint "abc" 2 1 5)
@@ -139,7 +139,7 @@ fi
 # tc=0.000000 (повтор), а «TCP встал, TLS не ответил» — tc=0.032246, то есть
 # уходило в break, хотя это ровно тот же класс отказа.
 cf() {
-    env -i PATH=/usr/bin:/bin SB="$TMP" RC="$1" HTTP="$2" "$Z2K_TEST_SH" -c '
+    env -i PATH="$Z2K_TEST_PATH" SB="$TMP" RC="$1" HTTP="$2" "$Z2K_TEST_SH" -c '
         . "$SB/helpers.sh"
         if z2k_connfail "$RC" "$HTTP"; then printf повтор; else printf нет; fi
     ' 2>/dev/null
@@ -184,7 +184,7 @@ chmod +x "$TMP/bin/curl"
 for _f in z2k.sh lib/utils.sh files/z2k-update-lists.sh; do
     _sb="$TMP/w"; rm -rf "$_sb"; mkdir -p "$_sb"
     awk '/^(_z2k_curl_etag|z2k_connfail)\(\) \{/,/^\}/' "$ROOT/$_f" > "$_sb/fn.sh"
-    _r=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" SB="$_sb" "$Z2K_TEST_SH" -c '
+    _r=$(env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" SB="$_sb" "$Z2K_TEST_SH" -c '
         . "$SB/fn.sh"
         _z2k_curl_etag "https://example.invalid/x" "$SB/dest" "" >/dev/null 2>&1
         printf "connect=%s" "${Z2K_LAST_CONNECT:-пусто}"
@@ -202,7 +202,7 @@ done
 # "404" ]`). Обрезка времени коннекта не имеет права его пачкать.
 _sb="$TMP/wh"; rm -rf "$_sb"; mkdir -p "$_sb"
 awk '/^(_z2k_curl_etag|z2k_connfail)\(\) \{/,/^\}/' "$ROOT/files/z2k-update-lists.sh" > "$_sb/fn.sh"
-_rh=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" SB="$_sb" "$Z2K_TEST_SH" -c '
+_rh=$(env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" SB="$_sb" "$Z2K_TEST_SH" -c '
     . "$SB/fn.sh"
     _z2k_curl_etag "https://example.invalid/x" "$SB/dest" "" >/dev/null 2>&1
     printf "%s" "${Z2K_LAST_HTTP:-пусто}"
@@ -243,7 +243,7 @@ r7() {  # r7 <файл> <CASE> → "vps=<хопов Layer 0>"
     _sb="$TMP/r7"; rm -rf "$_sb"; mkdir -p "$_sb/bin"
     cp "$TMP/bin/curl_r7" "$_sb/bin/curl"
     awk '/^(_z2k_[a-z_]+|z2k_fetch|z2k_uint|z2k_connfail)\(\) \{/,/^\}/' "$ROOT/$1" > "$_sb/fns.sh"
-    env -i PATH="$_sb/bin:/usr/bin:/bin" HOME="$TMP" SB="$_sb" LOG="$_sb/log" CASE="$2" \
+    env -i PATH="$_sb/bin:$Z2K_TEST_PATH" HOME="$TMP" SB="$_sb" LOG="$_sb/log" CASE="$2" \
         "$Z2K_TEST_SH" -c '
             : > "$LOG"
             . "$SB/fns.sh"

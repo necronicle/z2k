@@ -81,8 +81,8 @@ chmod +x "$TMP/fake-z2k.sh"
 # actions.sh тянет за собой окружение панели; берём из него только нужную
 # функцию, ровно как это делает сам CGI, но с подменённым путём к скрипту.
 _out=$(
-    ZAPRET2_DIR="$TMP" Z2K_SH="$TMP/fake-z2k.sh" sh -c '
-        . "$1" 2>/dev/null || true
+    ZAPRET2_DIR="$TMP" Z2K_SH="$TMP/fake-z2k.sh" Z2K_ACTIONS="$ACTIONS" sh -c '
+        . "$Z2K_ACTIONS" 2>/dev/null || true
         command -v uninstall_async >/dev/null 2>&1 || { echo "__NOFUNC__"; exit 0; }
         id=$(uninstall_async) || { echo "__LAUNCHFAIL__"; exit 0; }
         # Задача фоновая: дожидаемся файла .exit, но не дольше 10 секунд.
@@ -93,7 +93,7 @@ _out=$(
         echo "__ID__$id"
         cat "/tmp/z2k-job-$id.log" 2>/dev/null
         rm -f "/tmp/z2k-job-$id".* 2>/dev/null
-    ' _ "$ACTIONS" 2>&1
+    ' 2>&1
 )
 
 case "$_out" in

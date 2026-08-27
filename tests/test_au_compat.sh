@@ -11,6 +11,20 @@ no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
 assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$2" "$3"; fi; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SB=$(mktemp -d) || exit 1; trap 'rm -rf "$SB"' EXIT
+
+# КОРЕНЬ УСТАНОВКИ — В ПЕСОЧНИЦУ, И ЭТО НЕ ФОРМАЛЬНОСТЬ.
+#
+# au_apply_patch/au_apply_converge пишут в ${ZAPRET2_DIR:-/opt/zapret2}: конфиг
+# через regen-config и .z2k-installed-tag. Набор их звал, ничего не переопределив.
+# На маке и в CI каталога /opt/zapret2 нет, поэтому записи молча проваливались и
+# тест зеленел — а на роутере он ПЕРЕПИСАЛ ЖИВОЙ КОНФИГ (проверено 2026-08-27:
+# в конфиг владельца уехал TMPDIR прогонного окружения). Тест, который трогает
+# прод, опаснее бага, который он ищет.
+ZAPRET2_DIR="$SB/zd"; CONFIG_FILE="$SB/zd/config"
+Z2K_AU_INSTALLED_TAG_FILE="$SB/zd/.z2k-installed-tag"
+export ZAPRET2_DIR CONFIG_FILE Z2K_AU_INSTALLED_TAG_FILE
+mkdir -p "$SB/zd"
+
 Z2K_AU_SOURCE_ONLY=1; export Z2K_AU_SOURCE_ONLY
 # shellcheck disable=SC1091
 . "$ROOT/lib/utils.sh" 2>/dev/null

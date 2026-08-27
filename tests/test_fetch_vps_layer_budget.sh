@@ -115,7 +115,7 @@ run() {
     extract_fns "$ROOT/$_file" > "$_sb/fns.sh"
     grep -q '^z2k_fetch() {' "$_sb/fns.sh" || { printf 'NOFN'; return; }
 
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
         CURL_LOG="$_sb/curl.log" STUB_MODE="$_mode" \
         SB="$_sb" EXTRA="$_extra" \
         "$Z2K_TEST_SH" -c '
@@ -240,7 +240,7 @@ fi
 for f in $COPIES; do
     sb="$TMP/dflt"; rm -rf "$sb"; mkdir -p "$sb"
     extract_fns "$ROOT/$f" > "$sb/fns.sh"
-    out=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    out=$(env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
         CURL_LOG="$sb/curl.log" STUB_MODE=none SB="$sb" \
         "$Z2K_TEST_SH" -c '
             : > "$CURL_LOG"
@@ -315,15 +315,23 @@ done
 # Когда helper стал просить у curl два поля, присваивание осталось ВЫШЕ
 # разбора и переменная получала "404 0.000000" — сравнение переставало
 # совпадать никогда, и настоящий 404 навсегда выглядел бы отказом зеркал.
-_ulh=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+# ИСХОДНИК ЕДЕТ ПЕРЕМЕННОЙ ОКРУЖЕНИЯ, А НЕ ПОЗИЦИОННЫМ АРГУМЕНТОМ.
+#
+# Было `"$Z2K_TEST_SH" -c '…' _ "$ROOT/files/…"`. На Keenetic /bin/sh — это не
+# ash, а NDM Shell Wrapper v1.0.10, и он ПОЗИЦИОННЫЕ АРГУМЕНТЫ `sh -c` теряет:
+# замер на роутере владельца 2026-08-27 — `sh -c 'echo $1' _ ААА` печатает
+# пусто, а $0 подменяется на /opt/bin/sh. Файл не находился, awk читал stdin,
+# функция не определялась, и проверка краснела на роутере, ничего не проверив.
+_ulh=$(env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
     CURL_LOG="$TMP/ulh.log" STUB_MODE=none SB="$TMP" \
+    SRC="$ROOT/files/z2k-update-lists.sh" \
     "$Z2K_TEST_SH" -c '
         : > "$CURL_LOG"
-        awk "/^_z2k_curl_etag\\(\\) \\{/,/^\\}/" "$1" > "$SB/ulh_fn.sh"
+        awk "/^_z2k_curl_etag\\(\\) \\{/,/^\\}/" "$SRC" > "$SB/ulh_fn.sh"
         . "$SB/ulh_fn.sh"
         _z2k_curl_etag "https://example.invalid/x" "$SB/ulh_dest" "" >/dev/null 2>&1
         printf "%s" "${Z2K_LAST_HTTP:-пусто}"
-    ' _ "$ROOT/files/z2k-update-lists.sh" 2>/dev/null)
+    ' 2>/dev/null)
 case "$_ulh" in
     200) ok "Z2K_LAST_HTTP — чистый код ответа, без времени коннекта" ;;
     *)   no "Z2K_LAST_HTTP — чистый код ответа" "200" "$_ulh" ;;
@@ -384,7 +392,7 @@ run2() {
     _sb="$TMP/run2"; rm -rf "$_sb"; mkdir -p "$_sb"
     extract_fns "$ROOT/$_file" > "$_sb/fns.sh"
     grep -q '^z2k_fetch() {' "$_sb/fns.sh" || { printf 'NOFN'; return; }
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
         CURL_LOG="$_sb/curl.log" STUB_MODE="$_mode" SB="$_sb" \
         "$Z2K_TEST_SH" -c '
             : > "$CURL_LOG"

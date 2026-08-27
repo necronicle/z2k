@@ -241,7 +241,7 @@ for _l in $_wp_libs; do
     [ -f "$ROOT/lib/$_l" ] && cat "$ROOT/lib/$_l" >> "$_wp/libs.sh"
 done
 _pd=$(sed -n "/    _z2k_pool_default() {/,/^    }/p" "$CFG")
-_wp_out=$(env -i PATH=/usr/bin:/bin HOME="$TMP" SB="$_wp" PD="$_pd" "$Z2K_TEST_SH" -c '
+_wp_out=$(env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" SB="$_wp" PD="$_pd" "$Z2K_TEST_SH" -c '
     # только то, что реально видит панель
     . "$SB/libs.sh" 2>/dev/null
     eval "$PD"

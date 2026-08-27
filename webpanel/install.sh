@@ -519,11 +519,22 @@ if [ -x "$INIT_DST" ]; then
 fi
 # Осиротевшие supervisor/waiter (init снесён, фон остался) — по cmdline,
 # иначе выживший супервизор поднимет lighttpd поверх нашего нового.
-pkill -f "$INIT_DST" 2>/dev/null || true
-pkill -f "lighttpd.*$WEBPANEL_DIR" 2>/dev/null || true
+# pkill НА РОУТЕРЕ НЕТ: Entware собирает busybox без этого апплета. Вызов под
+# `|| true` не падал — он НИКОГДА НЕ СРАБАТЫВАЛ, и выживший супервизор
+# поднимал lighttpd поверх (тот же класс, что od -A в issue #43). killall бьёт
+# по имени и снёс бы чужой lighttpd; pgrep -f есть. $$ пропускаем: busybox
+# pgrep вызывающую оболочку не исключает.
+_kill_matching() {
+    for _p in $(pgrep -f "$1" 2>/dev/null); do
+        [ "$_p" = "$$" ] && continue
+        kill "$_p" 2>/dev/null
+    done
+}
+_kill_matching "$INIT_DST"
+_kill_matching "lighttpd.*$WEBPANEL_DIR"
 # Also stop any leftover busybox httpd bound to the same www dir from an
 # earlier (pre-lighttpd) install.
-pkill -f "httpd.*$WWW_DIR" 2>/dev/null || true
+_kill_matching "httpd.*$WWW_DIR"
 rm -f /var/run/z2k-webpanel-sup.pid /var/run/z2k-webpanel-wait.pid
 
 echo "[4/7] Staging new panel files"

@@ -47,10 +47,24 @@ printf "━━━━━━━━━━━━━━━━━━━━━━━━
 printf "  z2k Integration Test Suite\n"
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
+# Z2K_SKIP_SUITES — набор имён через пробел, которые в ЭТОМ окружении
+# проверить нечем. Пропуск объявляется вслух и не засчитывается пройденным:
+# прогон на роутере не везёт с собой builds/ (194 МБ против 226 МБ в tmpfs),
+# и без этой строки два набора отдавали 42 красных «файла нет», маскируя
+# настоящие находки.
 for test_file in "$TESTS_DIR"/test_*.sh; do
     [ -f "$test_file" ] || continue
 
     suite_name=$(basename "$test_file" .sh)
+    case " ${Z2K_SKIP_SUITES:-} " in
+        *" $suite_name "*)
+            TOTAL_SUITES=$((TOTAL_SUITES + 1))
+            TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
+            SKIPPED_SUITES="$SKIPPED_SUITES $suite_name"
+            printf '>>> Skipping %s (Z2K_SKIP_SUITES)\n' "$suite_name"
+            printf '  [SKIP] набор целиком: в этом окружении проверять нечем\n' >> "$SKIPLOG"
+            continue ;;
+    esac
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
 
     printf ">>> Running %s ...\n" "$suite_name"

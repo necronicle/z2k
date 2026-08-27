@@ -157,7 +157,14 @@ stop() {
     rm -f "$PIDFILE"
     # Sweep stragglers matching by cmdline (the init wrapper is S99z2k-scheduler,
     # so this matches only the scheduler.sh process tree, not the supervisor).
-    pkill -f "z2k-scheduler\.sh" 2>/dev/null
+    # pkill НА РОУТЕРЕ НЕТ: Entware собирает busybox без этого апплета, и вызов под
+    # `2>/dev/null` не падал — он просто НИКОГДА НЕ СРАБАТЫВАЛ (тот же класс, что
+    # od -A в issue #43). killall бьёт по имени и снёс бы чужие процессы; pgrep -f
+    # есть. $$ пропускаем: busybox pgrep вызывающую оболочку не исключает.
+    for _p in $(pgrep -f "z2k-scheduler\.sh" 2>/dev/null); do
+        [ "$_p" = "$$" ] && continue
+        kill "$_p" 2>/dev/null
+    done
     echo "z2k-scheduler stopped"
 }
 

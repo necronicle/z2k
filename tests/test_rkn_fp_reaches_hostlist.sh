@@ -129,7 +129,7 @@ seed() {
 # run — один прогон настоящего z2k-geosite.sh. Печатает число перекачанных тел.
 run() {
     : > "$TMP/dl.log"
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         ZAPRET2_DIR="$SB/opt" \
         ZAPRET2_FALSE_POSITIVE_LIST="$FPL" \
         Z2K_GEOSITE_RKN_ASSET="ru-blocked.txt" \
@@ -285,7 +285,7 @@ printf 'FORCE=%s\n' "\${FORCE_REFETCH:-unset}" > "$TMP/force.out"
 exit 0
 PWSTUB
     rm -f "$TMP/force.out"
-    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         CASE="$TMP/au_case.sh" CALL="$TMP/au_call.sh" ZD="$_pw_zd" FILES="$1" \
         "$Z2K_TEST_SH" -c '
             au_log() { :; }
@@ -360,7 +360,7 @@ else
     printf 'upstream-v1' > "$TMP/pp/opt/extra_strats/cache/geosite-etag/ru-blocked.txt.etag"
     rm -f "$TMP/pp/mark.sha256"
 
-    pp=$(env -i PATH="/usr/bin:/bin" HOME="$TMP" \
+    pp=$(env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" \
         IG="$TMP/inst_gate_sb.sh" GG="$TMP/geo_gate.sh" US="$TMP/utils_sha.sh" \
         PP="$TMP/pp" "$Z2K_TEST_SH" -c '
             . "$US"

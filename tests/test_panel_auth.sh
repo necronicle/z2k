@@ -57,7 +57,7 @@ run() {
     Z2K_PANEL_SESS_TTL="${TTL:-43200}" \
     HTTP_COOKIE="${COOKIE:-}" \
     PATH_INFO="${PINFO:-/status}" \
-    sh -c '. "$1" 2>/dev/null; shift; eval "$@"' _ "$AUTH" "$@" 2>&1
+    Z2K_AUTH="$AUTH" Z2K_CMD="$*" sh -c '. "$Z2K_AUTH" 2>/dev/null; eval "$Z2K_CMD"' 2>&1
 }
 
 # --- 1. Выключено по умолчанию -------------------------------------------------
@@ -155,7 +155,7 @@ PINFO=/status run 'panel_auth_gate; echo PASSED' | grep -q PASSED \
 # 203.0.113.1 — документационный диапазон, гарантированно не отвечает.
 printf 'Z2K_PANEL_AUTH=1\n' > "$TMP/config"
 rc=$(Z2K_PANEL_CONFIG="$TMP/config" Z2K_NDM_HOST=203.0.113.1 \
-     sh -c '. "$1" 2>/dev/null; panel_verify_router_password admin x >/dev/null 2>&1; echo $?' _ "$AUTH")
+     Z2K_AUTH="$AUTH" sh -c '. "$Z2K_AUTH" 2>/dev/null; panel_verify_router_password admin x >/dev/null 2>&1; echo $?')
 [ "$rc" = "2" ] && ok "недоступный роутер даёт отдельный код (2), а не «неверный пароль»" \
                || no "код при недоступном роутере" "2" "$rc"
 
@@ -267,7 +267,7 @@ fi
 if command -v awk >/dev/null 2>&1; then
     GT="$TMP/gen"; mkdir -p "$GT"
     printf 'Z2K_PANEL_AUTH=1\nENABLED=1\n' > "$GT/config"
-    ( cd "$ROOT" && ZAPRET2_DIR="$GT" sh -c '. lib/utils.sh 2>/dev/null; . lib/config_official.sh 2>/dev/null; create_official_config "$1" >/dev/null 2>&1' _ "$GT/config" ) || true
+    ( cd "$ROOT" && ZAPRET2_DIR="$GT" Z2K_CFG="$GT/config" sh -c '. lib/utils.sh 2>/dev/null; . lib/config_official.sh 2>/dev/null; create_official_config "$Z2K_CFG" >/dev/null 2>&1' ) || true
     if grep -q '^Z2K_PANEL_AUTH=1' "$GT/config" 2>/dev/null; then
         ok "включённый пароль переживает перегенерацию конфига (проверено запуском генератора)"
     else
@@ -332,7 +332,7 @@ awk '/^_panel_mkdir_private\(\)/,/^}/' "$AUTH" | grep -q '\-L "\$_d"' \
 awk '/^panel_session_valid\(\)/,/^}/' "$AUTH" | grep -q 'REMOTE_ADDR' \
     && ok "сессия проверяет адрес клиента" || no "привязка сессии" "REMOTE_ADDR" "нет"
 SID_A=$(REMOTE_ADDR=192.168.1.50 Z2K_PANEL_CONFIG="$TMP/config" Z2K_PANEL_SESS_DIR="$TMP/sess" \
-        sh -c '. "$1"; panel_session_create admin' _ "$AUTH")
+        Z2K_AUTH="$AUTH" sh -c '. "$Z2K_AUTH"; panel_session_create admin')
 _v=$(REMOTE_ADDR=192.168.1.99 COOKIE="z2kpsid=$SID_A" run 'panel_session_valid && echo yes || echo no')
 case "$_v" in
     *no*) ok "чужой адрес с той же кукой не принимается" ;;
@@ -340,7 +340,7 @@ case "$_v" in
 esac
 _v=$(REMOTE_ADDR=192.168.1.50 COOKIE="z2kpsid=$SID_A" Z2K_PANEL_CONFIG="$TMP/config" \
      Z2K_PANEL_SESS_DIR="$TMP/sess" HTTP_COOKIE="z2kpsid=$SID_A" \
-     sh -c '. "$1"; panel_session_valid && echo yes || echo no' _ "$AUTH")
+     Z2K_AUTH="$AUTH" sh -c '. "$Z2K_AUTH"; panel_session_valid && echo yes || echo no')
 case "$_v" in
     *yes*) ok "со своего адреса кука работает" ;;
     *) no "кука со своего адреса" "yes" "$_v" ;;

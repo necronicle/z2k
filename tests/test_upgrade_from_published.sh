@@ -236,7 +236,7 @@ seed_published_disk() {
     # UDP/YT: geosite до этого роутера не добрался ни разу (сеть режет), и
     # цель осталась помеченной как шипнутый фоллбек — это делает
     # z2k_mark_shipped_fallback из lib/config.sh опубликованной ревизии.
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         OPT="$OPT" GEOFNS="$TMP/pub_geo_fns.sh" CFGFNS="$TMP/pub_cfg_fns.sh" \
         DL_LOG="$TMP/seed-dl.log" STUB_BODY='domain:апстрим-1.example' \
         UPSTREAM_ETAG='"pub-v1"' "$Z2K_TEST_SH" -c '
@@ -266,7 +266,7 @@ seed_published_disk() {
     printf 'Fortnite-остался-от-старой-ревизии\n' > "$OPT/lists/warp/games/Fortnite.txt"
     printf '9.9.9.9\n'                            > "$OPT/lists/warp/games/.Fortnite.raw"
     printf '"игра-fortnite-v1"'                   > "$OPT/lists/warp/games/.Fortnite.raw.etag"
-    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         OPT="$OPT" PUB_UL="$PUB_UL" SB="$TMP" Z2K_UL_SOURCE_ONLY=1 \
         "$Z2K_TEST_SH" -c '
             # ZAPRET2_DIR ставится ПОСЛЕ сорса: файл присваивает его сам,
@@ -350,7 +350,7 @@ fi
 # метит его как фоллбек → восстановления → перенос кеша geosite → отпечаток
 # fp-списка.
 head_upgrade_cycle() {
-    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         OPT="$OPT" BK="$BK" SB="$TMP" LOG="$TMP/cycle.log" "$Z2K_TEST_SH" -c '
             ZAPRET2_DIR="$OPT"; backup_tmp="$BK"; Z2K_UPGRADE_BACKUP="$BK"
             Z2K_RESET_STATE=0
@@ -480,7 +480,7 @@ eq "содержимое игрового списка доехало непов
 # .raw. И заодно всплывает мусор, который опубликованная ревизия собрать не
 # умела: уборки в ней нет вовсе, поэтому список игры, выпавшей из
 # апстрим-индекса, лежал на диске вечно.
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
     OPT="$OPT" UL="$UL" SB="$TMP" Z2K_UL_SOURCE_ONLY=1 "$Z2K_TEST_SH" -c '
         . "$UL"
         ZAPRET2_DIR="$OPT"; LOG_FILE="$SB/ul-head.log"
@@ -542,7 +542,7 @@ fp_cycle() {  # fp_cycle <содержимое rkn-false-positive.txt> → "<ETa
     printf '%s\n' "$1" > "$FPOPT/lists/rkn-false-positive.txt"
     # ETag, как его вернул бы очередной ночной прогон geosite.
     printf '"pub-v2"' > "$FPOPT/extra_strats/cache/geosite-etag/ru-blocked.txt.etag"
-    env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         OPT="$FPOPT" ETC="$ETC" SB="$TMP" LOG="$TMP/fp.log" "$Z2K_TEST_SH" -c '
             ZAPRET2_DIR="$OPT"; : > "$LOG"
             print_info() { printf "INFO %s\n" "$1" >> "$LOG"; }
@@ -583,7 +583,7 @@ eq "…и он непустой (иначе сверять было бы не с
 # не упасть, не потерять пользовательское, не оставить роутер без обхода.
 
 # Маркер карантина кладёт САМ HEAD — своей настоящей функцией.
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
     OPT="$OPT" SB="$TMP" "$Z2K_TEST_SH" -c '
         . "$SB/head_geo_fns.sh"
         ETAG_DIR="$OPT/extra_strats/cache/geosite-etag"
@@ -597,7 +597,7 @@ eq "HEAD оставил маркер карантина .rejected" '"pub-v1"' \
 # в кеш пишет при этом САМ HEAD — через временный `${etag}.new` и mv. Это и
 # есть тот артефакт, который потом достанется откату: подделывать его руками
 # нельзя, иначе часть 2 проверяла бы фикстуру, а не код.
-env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
     OPT="$OPT" SB="$TMP" DL_LOG="$TMP/head-night.log" \
     STUB_BODY='domain:апстрим-1.example' UPSTREAM_ETAG='"pub-v2"' "$Z2K_TEST_SH" -c '
         . "$SB/head_geo_fns.sh"
@@ -647,7 +647,7 @@ fi
 
 # --- 2.1 Старая установка поверх состояния HEAD ------------------------------
 BK2="$TMP/bk-rollback"
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
     OPT="$OPT" BK="$BK2" SB="$TMP" LOG="$TMP/rollback.log" GATEEXPR="$OGATE" \
     "$Z2K_TEST_SH" -c '
         ZAPRET2_DIR="$OPT"; backup_tmp="$BK"
@@ -700,7 +700,7 @@ eq "после отката старый гейт видит пустой games/
 old_geo() {   # old_geo <ETag апстрима> → "<rc>:<скачано тел>"
     rm -rf "$HL/tmp"; mkdir -p "$HL/tmp"
     : > "$TMP/rb-dl.log"
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
         HL="$HL" FNS="$TMP/pub_geo_fns.sh" DL_LOG="$TMP/rb-dl.log" \
         STUB_BODY='domain:после-отката.example' UPSTREAM_ETAG="$1" \
         "$Z2K_TEST_SH" -c '
@@ -739,7 +739,7 @@ eq "…ETag обновлён прямо в кеше, как это делает 
 # Опубликованная ревизия читает их теми же именами — значит откат обязан
 # получить условный запрос, а не перекачку, и собрать .txt из того же кеша.
 : > "$TMP/rb-games-dl.log"
-env -i PATH="/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMP" \
+env -i PATH="$Z2K_TEST_PATH" HOME="$TMP" TMPDIR="$TMP" \
     HL="$HL" PUB_UL="$PUB_UL" SB="$TMP" Z2K_UL_SOURCE_ONLY=1 "$Z2K_TEST_SH" -c '
         . "$PUB_UL"
         ZAPRET2_DIR="$HL"; LOG_FILE="$SB/ul-rollback.log"

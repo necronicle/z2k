@@ -73,11 +73,11 @@ STUB
 chmod +x "$TMP/fake-detect"
 
 probe() {   # domain -> печатает "rc=<код>" и вывод
-    Z2K_DETECT_BIN="$TMP/fake-detect" sh -c '
-        . "$1" 2>/dev/null || true
-        out=$(detect_probe_domain "$2" 2>&1); rc=$?
+    Z2K_DETECT_BIN="$TMP/fake-detect" Z2K_ACT="$ACT" Z2K_DOM="$1" sh -c '
+        . "$Z2K_ACT" 2>/dev/null || true
+        out=$(detect_probe_domain "$Z2K_DOM" 2>&1); rc=$?
         echo "rc=$rc"; printf "%s\n" "$out"
-    ' _ "$ACT" "$1" 2>&1
+    ' 2>&1
 }
 
 _r=$(probe "instagram.com")
@@ -116,7 +116,7 @@ else
 fi
 
 # Отсутствующий модуль — отдельный код, чтобы человеку сказать «переустановите».
-_r=$(Z2K_DETECT_BIN="$TMP/nope" sh -c '. "$1" 2>/dev/null||true; detect_probe_domain ok.test >/dev/null 2>&1; echo "rc=$?"' _ "$ACT")
+_r=$(Z2K_DETECT_BIN="$TMP/nope" Z2K_ACT="$ACT" sh -c '. "$Z2K_ACT" 2>/dev/null||true; detect_probe_domain ok.test >/dev/null 2>&1; echo "rc=$?"')
 case "$_r" in
     *"rc=3"*) ok "отсутствие z2k-detect отличается от прочих отказов" ;;
     *) no "модуль не установлен" "rc=3" "$_r" ;;

@@ -54,11 +54,11 @@ else
     # Внутри вырезанного case ветки делают return 0/1 — оборачиваем в функцию и
     # смотрим на код возврата: 0 = да, 1 = нет, REPROMPT = не распознано.
     verdict() {
-        _v=$("$SH" -c '
+        _v=$(Z2K_WORD="$1" "$SH" -c '
             print_warning() { :; }
             ans() { answer="$1"; '"$(cat "$TMP/case.frag")"'
                     return 2; }
-            ans "$1"; echo "rc=$?"' _ "$1" 2>/dev/null)
+            ans "$Z2K_WORD"; echo "rc=$?"' 2>/dev/null)
         case "$_v" in *rc=0*) echo YES ;; *rc=1*) echo NO ;; *) echo REPROMPT ;; esac
     }
 
@@ -108,9 +108,9 @@ if [ -z "$_pipe" ]; then
     no "конвейер очистки найден в read_input" "строки с printf|tr|sed" "не найдены"
 else
     clean() {
-        "$SH" -c '_z2k_raw="$1"
+        Z2K_RAW="$1" "$SH" -c '_z2k_raw="$Z2K_RAW"
             '"$_pipe"'
-            printf "%s" "$_z2k_raw"' _ "$1" 2>/dev/null
+            printf "%s" "$_z2k_raw"' 2>/dev/null
     }
     if [ "$(clean 'Домашние устройства')" = "Домашние устройства" ]; then
         ok "кириллическое имя проходит read_input целиком"

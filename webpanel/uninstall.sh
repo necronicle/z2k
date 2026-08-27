@@ -21,8 +21,19 @@ if [ -x "$INIT_DST" ]; then
 fi
 # Осиротевшие supervisor/waiter (init уже снесён, фон остался) — по cmdline,
 # иначе выживший супервизор поднимет lighttpd после удаления файлов.
-pkill -f "$INIT_DST" 2>/dev/null || true
-pkill -f "lighttpd.*$WEBPANEL_DIR" 2>/dev/null || true
+# pkill НА РОУТЕРЕ НЕТ: Entware собирает busybox без этого апплета. Вызов под
+# `|| true` не падал — он НИКОГДА НЕ СРАБАТЫВАЛ, и выживший супервизор
+# поднимал lighttpd поверх (тот же класс, что od -A в issue #43). killall бьёт
+# по имени и снёс бы чужой lighttpd; pgrep -f есть. $$ пропускаем: busybox
+# pgrep вызывающую оболочку не исключает.
+_kill_matching() {
+    for _p in $(pgrep -f "$1" 2>/dev/null); do
+        [ "$_p" = "$$" ] && continue
+        kill "$_p" 2>/dev/null
+    done
+}
+_kill_matching "$INIT_DST"
+_kill_matching "lighttpd.*$WEBPANEL_DIR"
 rm -f "$PIDFILE" "$SUP_PIDFILE" "$WAIT_PIDFILE"
 
 echo "[2/5] Removing init.d script"

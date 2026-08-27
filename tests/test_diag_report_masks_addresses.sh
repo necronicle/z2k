@@ -54,7 +54,7 @@ else
 fi
 
 run_section() {  # run_section <MODE>
-    env -i PATH="/usr/bin:/bin" MODE="$1" LOGF="$LOG" \
+    env -i PATH="$Z2K_TEST_PATH" MODE="$1" LOGF="$LOG" \
         M="$TMP/mask.sh" E="$TMP/errsec.sh" "$Z2K_TEST_SH" -c '
             . "$M"
             Z2K_DIAG_LOGS="$LOGF"

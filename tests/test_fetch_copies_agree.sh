@@ -97,18 +97,23 @@ run_copy() {
 
     mkdir -p "$_sandbox/ro"
     : > "$_sandbox/ro/target"
-    _out=$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    # Песочница едет ПЕРЕМЕННОЙ ОКРУЖЕНИЯ, а не позиционным аргументом:
+    # /bin/sh на Keenetic — NDM Shell Wrapper v1.0.10, и аргументы `sh -c` он
+    # теряет (замер на роутере владельца 2026-08-27). С пустым $1 функция
+    # вызывалась на путь "/fn.sh", ничего не находила, и три проверки краснели
+    # на роутере, не выполнив ни строчки проверяемого кода.
+    _out=$(env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" SBX="$_sandbox" \
         "$Z2K_TEST_SH" -c '
-            . "$1/fn.sh"
+            . "$SBX/fn.sh"
             # Запись цели не удалась — единственное, что здесь проверяется.
             mv() { return 1; }
-            if _z2k_curl_etag "https://example.invalid/x" "$1/ro/target" ""; then
+            if _z2k_curl_etag "https://example.invalid/x" "$SBX/ro/target" ""; then
                 printf "RC0"
             else
                 printf "RC1"
             fi
-            [ -e "$1/ro/target.etag" ] && printf ":ETAG-ОСТАЛСЯ" || printf ":БЕЗ-ETAG"
-        ' _ "$_sandbox" 2>/dev/null)
+            [ -e "$SBX/ro/target.etag" ] && printf ":ETAG-ОСТАЛСЯ" || printf ":БЕЗ-ETAG"
+        ' 2>/dev/null)
     printf '%s' "$_out"
 }
 
@@ -175,7 +180,7 @@ mkdir -p "$_gsb/bin"; cp "$TMP/bin/curl_geo" "$_gsb/bin/curl"
 # geo_budget <включён ли Layer 0> → "vps=<бюджеты> direct=<бюджеты>"
 geo_budget() {
     rm -rf "$_gsb/tmp"; mkdir -p "$_gsb/tmp"; : > "$_gsb/curl.log"; rm -f "$_gsb/curl.log.v"
-    env -i PATH="$_gsb/bin:/usr/bin:/bin" HOME="$TMP" G="$_gsb" L0="$1" \
+    env -i PATH="$_gsb/bin:$Z2K_TEST_PATH" HOME="$TMP" G="$_gsb" L0="$1" \
         Z2K_STUB_LOG="$_gsb/curl.log" Z2K_STUB_MODE=vps_fail \
         Z2K_FETCH_VPS_CONNECT_TIMEOUT=7 \
         "$Z2K_TEST_SH" -c '
@@ -255,7 +260,7 @@ probe() {
     else
         : > "$_sb/target"
     fi
-    env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" \
+    env -i PATH="$TMP/bin:$Z2K_TEST_PATH" HOME="$TMP" \
         SB="$_sb" MODE="$_m" TO="$_to" CLOG="$_sb/clog" \
         "$Z2K_TEST_SH" -c '
             : > "$CLOG"
