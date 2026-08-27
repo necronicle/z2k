@@ -36,15 +36,23 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 # --- фикстура: лог ровно той формы, что приехала из поля ---------------------
 LOG="$TMP/tg-tunnel.log"
-cat > "$LOG" <<'LOGEOF'
-2026/08/22 12:44:08 [tunnel] регистрация не удалась: Post "https://213.176.74.63.nip.io/register": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
-2026/08/22 12:44:20 [tunnel] stream 709: 192.168.1.67:58315 -> 149.154.167.50:443
+# Дата — ВЧЕРАШНЯЯ, а не зашитая: раздел ошибок с r-80.3 показывает окно в
+# несколько суток, и фикстура с фиксированной датой однажды выпала бы из него
+# сама собой — тест бы «сломался» без единой правки кода.
+_fx=$(z2k_test_stamp 1 | cut -c1-8)
+_fx="$(printf '%s' "$_fx" | cut -c1-4)/$(printf '%s' "$_fx" | cut -c5-6)/$(printf '%s' "$_fx" | cut -c7-8)"
+cat > "$LOG" <<LOGEOF
+$_fx 12:44:08 [tunnel] регистрация не удалась: Post "https://213.176.74.63.nip.io/register": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+$_fx 12:44:20 [tunnel] stream 709: 192.168.1.67:58315 -> 149.154.167.50:443
 LOGEOF
 
 # Берём НАСТОЯЩИЕ функции из скрипта: маскировщик и секцию агрегированных
 # ошибок. Грепать текст бессмысленно — проверяем то, что реально напечатается.
 z2k_extract_fn "$SRC" z2k_mask_addrs        > "$TMP/mask.sh"
 z2k_extract_fn "$SRC" _print_errors_section > "$TMP/errsec.sh"
+# Секция ходит за строками через окно по времени — помощника тоже берём из
+# исходника, иначе она молча вернёт пустоту.
+sed -n '/^Z2K_ERR_DAYS=/,/^}/p' "$SRC" >> "$TMP/errsec.sh"
 
 if [ -s "$TMP/mask.sh" ] && [ -s "$TMP/errsec.sh" ]; then
     ok "маскировщик и секция ошибок извлечены"
