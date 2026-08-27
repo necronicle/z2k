@@ -28,6 +28,14 @@
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 cd "$HERE" || exit 1
 
+# Мы зовём release.sh, а он звал бы весь сьют заново — вместе с этим набором,
+# который снова клонирует дерево и снова зовёт release.sh. Замер 2026-08-27:
+# 367 c из 596 c прогона уходило на два вложенных повтора ТЕХ ЖЕ тестов на ТОМ
+# ЖЕ дереве. Переменная экспортируется, поэтому разрывает рекурсию на любой
+# глубине, а не только на первой.
+Z2K_RELEASE_UNDER_TEST=1
+export Z2K_RELEASE_UNDER_TEST
+
 PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
 no()   { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
@@ -60,7 +68,13 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 # манифест, опаснее бага, который он ищет.
 #
 # ------------------------------------------------------------ all properties --
-if ! git clone -q --no-hardlinks --local . "$TMP/clone" 2>/dev/null; then
+# --local БЕЗ --no-hardlinks: объекты git неизменяемы, и клон делит их с
+# оригиналом по жёстким ссылкам — это дефолт git для локального клона. С
+# --no-hardlinks каждый прогон физически переписывал 206 МБ пака ради теста,
+# который проверяет отказ на грязном дереве. Ни gc, ни push в клоне исходные
+# файлы не правят: git пишет новые и отвязывает старые, а отвязка жёсткой
+# ссылки второе имя не трогает.
+if ! git clone -q --local . "$TMP/clone" 2>/dev/null; then
     skip "release.sh: карта и гейт на грязное дерево" "клонирование недоступно"
     done_report; exit $?
 fi
@@ -322,6 +336,12 @@ git commit -q -m "тест: доставляемая правка поверх �
 git update-ref refs/remotes/origin/z2k-enhanced "$_pub_head"
 git remote set-url origin "$TMP/pubrepo" 2>/dev/null
 git init -q --bare "$TMP/pubrepo" 2>/dev/null
+# «Опубликованный» репозиторий делит объекты с клоном, а не получает их копию.
+# Нам от него нужна ОДНА ССЫЛКА — где стоит z2k-enhanced; истории он не хранит,
+# он её видит. Без alternates push паковал всю историю целиком: 304 МБ и 38
+# секунд на каждом прогоне (замер 2026-08-27), то есть половина стоимости всего
+# набора уходила на пересылку данных самим себе.
+printf '%s\n' "$TMP/clone/.git/objects" > "$TMP/pubrepo/objects/info/alternates" 2>/dev/null
 git push -q "$TMP/pubrepo" "$_pub_head:refs/heads/z2k-enhanced" 2>/dev/null
 out=$(sh scripts/release.sh p-9999.7 patch "тест: предыдущий релиз не опубликован" 2>&1); rc=$?
 if [ "$rc" -ne 0 ]; then
