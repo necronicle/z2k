@@ -121,7 +121,11 @@ func (id *relayIdentity) register(registerURL, secret string) error {
 			// Force IPv4 — IPv6 to Cloudflare is unstable on some ISPs (mirrors
 			// the WS dialer).
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", addr)
+				// relayDialAddr: имя вида <ip>.nip.io несёт адрес внутри себя,
+				// поэтому в резолвер за ним не ходим — иначе мёртвый резолвер
+				// на роутере убивает регистрацию, а с ней и весь туннель.
+				// TLS-имя при этом не меняется: сертификат проверяется по URL.
+				return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp4", relayDialAddr(addr))
 			},
 		},
 	}

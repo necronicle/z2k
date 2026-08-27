@@ -40,6 +40,33 @@ mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
 CONFIG="${CONFIG_FILE:-/opt/zapret2/config}"
 RELAY_URL="https://213.176.74.63.nip.io/resolve"
+# АДРЕС РЕЛЕЯ БЕРЁМ ИЗ ИМЕНИ, А НЕ У РЕЗОЛВЕРА.
+# nip.io — wildcard-DNS: ответ по определению равен первым четырём меткам хоста.
+# Спрашивать его значит без нужды зависеть от резолвера роутера, а он у людей
+# ломается: 2026-08-27 у человека молчал dns-proxy прошивки, и вместе с ним
+# лёг телеграм (та же болезнь лечится в mtproxy-client/dialaddr.go). Имя
+# оставляем — оно нужно для SNI и проверки сертификата, меняем только адрес
+# сокета. Тот же --resolve уже используется ниже в probe_ip_alive.
+# Разбор БЕЗ regex: `\?` в sed — расширение GNU, на BSD его нет, и одно и то
+# же выражение вело бы себя по-разному на роутере и на прогоне тестов.
+# Параметрические подстановки и case одинаковы везде.
+RELAY_HOST="${RELAY_URL#*://}"
+RELAY_HOST="${RELAY_HOST%%/*}"
+RELAY_HOST="${RELAY_HOST%%:*}"
+RELAY_IP=""
+case "$RELAY_HOST" in
+    *.nip.io)
+        _rl="${RELAY_HOST%.nip.io}"
+        # ровно четыре числовые метки и ничего кроме цифр и точек
+        case "$_rl" in
+            *[!0-9.]*|*..*|.*|*.) ;;
+            *.*.*.*.*) ;;
+            *.*.*.*) RELAY_IP="$_rl" ;;
+        esac
+        ;;
+esac
+RELAY_RESOLVE=""
+[ -n "$RELAY_IP" ] && RELAY_RESOLVE="--resolve $RELAY_HOST:443:$RELAY_IP"
 # Dedicated /resolve secret, DECOUPLED from the tunnel secret (Mark 2026-06-20).
 # Rotating the tunnel credential must not break Instagram IP refresh, and this
 # low-value secret — it only gates a public DNS A-record lookup, not the Telegram
@@ -145,7 +172,8 @@ if [ -z "$sig" ]; then
 fi
 
 # 6. POST to VPS.
-response=$(curl -sS --max-time 15 -X POST "$RELAY_URL" \
+# shellcheck disable=SC2086 # RELAY_RESOLVE — это пара аргументов или пусто
+response=$(curl -sS --max-time 15 $RELAY_RESOLVE -X POST "$RELAY_URL" \
     -H "Content-Type: application/json" \
     -H "X-Z2K-Auth: $sig" \
     --data "$body" 2>>"$LOG")

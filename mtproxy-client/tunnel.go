@@ -133,6 +133,8 @@ type tunnelClient struct {
 	writer     *wsWriter
 	streams    sync.Map // uint16 → *tunnelStream
 	nextID     atomic.Uint32
+	dropped    atomic.Uint64 // отброшено соединений, пока WS не поднят
+	dropLogged atomic.Bool   // строка «WS не поднят» уже сказана — не повторяем на каждое
 	mu         sync.Mutex    // protects ws/writer replacement during reconnect
 	connectSem chan struct{} // limits concurrent in-flight CONNECTs — 6 keeps SYN rate under TG DC burst threshold
 	ctx        context.Context
@@ -315,8 +317,11 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 		WriteBufferSize:   256 * 1024,
 		EnableCompression: false,
 		NetDial: func(network, addr string) (net.Conn, error) {
-			// Force IPv4 — IPv6 to Cloudflare is unstable on some ISPs
-			conn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
+			// Force IPv4 — IPv6 to Cloudflare is unstable on some ISPs.
+			// relayDialAddr — тот же обход резолвера, что и в регистрации
+			// (dialaddr.go): без него отказ DNS на роутере валит туннель,
+			// хотя адрес релея записан прямо в его имени.
+			conn, err := net.DialTimeout("tcp4", relayDialAddr(addr), 10*time.Second)
 			if err != nil {
 				return nil, err
 			}
@@ -503,6 +508,10 @@ func (tc *tunnelClient) run() {
 		tc.ws = ws
 		tc.writer = &wsWriter{ws: ws}
 		tc.mu.Unlock()
+		if n := tc.dropped.Swap(0); n > 0 {
+			log.Printf("[tunnel] WS поднят; пока его не было, отброшено соединений: %d", n)
+		}
+		tc.dropLogged.Store(false)
 
 		connectedAt := time.Now()
 
@@ -670,8 +679,20 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 	w := tc.writer
 	tc.mu.Unlock()
 	if w == nil {
-		if *verbose {
-			log.Printf("[tunnel] no WS connection, dropping stream %d", streamID)
+		// СТРОКА НА КАЖДОЕ СОЕДИНЕНИЕ УБИВАЛА ДИАГНОСТИКУ.
+		//
+		// Пока WS не поднят, клиент телеграма ломится непрерывно: он видит
+		// завершённый TCP-хендшейк и мгновенный обрыв, то есть отказ НЕ на SYN,
+		// и своего бэкоффа у него не наступает. Получались сотни строк
+		// «dropping stream N» в секунду — а причина («регистрация не удалась:
+		// ...») печатается раз в ~40 с. Сторож поверх этого затирал лог каждые
+		// три минуты, и в отчёте у человека оставались одни дропы без причины.
+		// Диагноз приходилось ставить по тому, чего в логе НЕТ.
+		//
+		// Теперь громко сообщаем только СМЕНУ состояния и раз в минуту — сводку.
+		tc.dropped.Add(1)
+		if tc.dropLogged.CompareAndSwap(false, true) {
+			log.Printf("[tunnel] WS не поднят — входящие соединения отбрасываются (причина выше)")
 		}
 		clientConn.Close()
 		<-connSemaphore
@@ -761,6 +782,31 @@ func runTunnel() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	// Сводка раз в минуту, пока WS лежит. Одной строки при падении мало:
+	// если туннель не поднимется часами (мёртвый резолвер, недоступный релей),
+	// объём отбрасываемого останется невидимым, а именно он объясняет, почему
+	// у человека «телеграм не работает», хотя процесс жив и порт слушается.
+	go func() {
+		t := time.NewTicker(60 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-tc.ctx.Done():
+				return
+			case <-t.C:
+				tc.mu.Lock()
+				w := tc.writer
+				tc.mu.Unlock()
+				if w != nil {
+					continue
+				}
+				if n := tc.dropped.Swap(0); n > 0 {
+					log.Printf("[tunnel] WS всё ещё не поднят; за минуту отброшено соединений: %d", n)
+				}
+			}
+		}
+	}()
 
 	go func() {
 		<-ctx.Done()

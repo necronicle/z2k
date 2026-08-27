@@ -911,7 +911,11 @@ tg_redirect_counts() {
 
 clock_skew_vs_relay() {
     local srv_date srv_epoch now_epoch
-    srv_date=$(curl -s -m 8 -D - -o /dev/null "https://${VPS_IP}.nip.io/" 2>/dev/null \
+    # --resolve: адрес уже записан в имени (nip.io), незачем зависеть от
+    # резолвера — на роутере с мёртвым DNS диагностика обязана работать именно
+    # тогда, когда она нужнее всего. TLS-имя не меняется.
+    srv_date=$(curl -s -m 8 --resolve "${VPS_IP}.nip.io:443:${VPS_IP}" \
+               -D - -o /dev/null "https://${VPS_IP}.nip.io/" 2>/dev/null \
                | awk 'tolower($1)=="date:"{sub(/^[Dd]ate: */,""); sub(/\r$/,""); print; exit}')
     [ -n "$srv_date" ] || return 1
     srv_epoch=$(printf '%s\n' "$srv_date" | awk '
