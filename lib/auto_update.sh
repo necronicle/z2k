@@ -1806,17 +1806,12 @@ au_health_check() {
     #
     # Проверяем только те, что реально установлены: набор сервисов зависит от
     # включённых фич, и отсутствующий init-скрипт — не отказ.
+    # Смотрим ТОЛЬКО на те, что работали до обновления (au_snapshot_services).
+    # Сервис, выключенный флагом, до обновления не работал и после не работает —
+    # обновление тут ни при чём, и сообщать не о чем.
     local _svc _svc_pat _down=""
-    for _svc in S98tg-tunnel S96z2k-rt-proxy S99z2k-scheduler S98z2k-detect S96z2k-webpanel; do
-        [ -x "/opt/etc/init.d/$_svc" ] || continue
-        case "$_svc" in
-            S98tg-tunnel)      _svc_pat="tg-mtproxy-client" ;;
-            S96z2k-rt-proxy)   _svc_pat="rt-proxy" ;;
-            S99z2k-scheduler)  _svc_pat="z2k-scheduler" ;;
-            S98z2k-detect)     _svc_pat="z2k-detect" ;;
-            S96z2k-webpanel)   _svc_pat="lighttpd" ;;
-            *)                 continue ;;
-        esac
+    for _svc in ${Z2K_AU_SVC_ALIVE:-}; do
+        _svc_pat=$(au_service_pattern "$_svc") || continue
         pgrep -f "$_svc_pat" >/dev/null 2>&1 || _down="$_down $_svc"
     done
     if [ -n "$_down" ]; then
@@ -1838,6 +1833,43 @@ au_health_check() {
 
     au_log "проверка пройдена: всё живо"
     return 0
+}
+
+# au_snapshot_services — какие сервисы z2k работали ДО обновления.
+#
+# ЗАЧЕМ. Health-check раньше ругался на любой неработающий сервис из списка. Но
+# половина из них выключается флагом: Z2K_DISCOVER по умолчанию OFF, поэтому
+# «ВНИМАНИЕ, после обновления не работают: S98z2k-detect» получал весь флот при
+# КАЖДОМ обновлении — на здоровом роутере, где сервис и не должен работать.
+# Такую строку перестают читать, а вместе с ней перестают замечать настоящую.
+#
+# Ругаться надо не на «выключен», а на «работал и перестал»: это ровно то, что
+# может сломать обновление, и это не зависит ни от одного флага фич. Ту же
+# логику мы уже применяем к nfqws2 (Z2K_AU_NFQWS_WAS_ALIVE).
+au_services_list() {
+    printf '%s\n' S98tg-tunnel S96z2k-rt-proxy S99z2k-scheduler S98z2k-detect S96z2k-webpanel
+}
+
+au_service_pattern() {
+    case "$1" in
+        S98tg-tunnel)      printf 'tg-mtproxy-client' ;;
+        S96z2k-rt-proxy)   printf 'rt-proxy' ;;
+        S99z2k-scheduler)  printf 'z2k-scheduler' ;;
+        S98z2k-detect)     printf 'z2k-detect' ;;
+        S96z2k-webpanel)   printf 'lighttpd' ;;
+        *)                 return 1 ;;
+    esac
+}
+
+au_snapshot_services() {
+    local _s _p _alive=""
+    for _s in $(au_services_list); do
+        [ -x "/opt/etc/init.d/$_s" ] || continue
+        _p=$(au_service_pattern "$_s") || continue
+        pgrep -f "$_p" >/dev/null 2>&1 && _alive="$_alive $_s"
+    done
+    Z2K_AU_SVC_ALIVE="$_alive"
+    export Z2K_AU_SVC_ALIVE
 }
 
 # Re-applied when health-check fails. Two different snapshots are in play:
@@ -2286,6 +2318,7 @@ au_run_apply() {
                 au_log "внимание: nfqws2 не работает ЕЩЁ ДО обновления"
             fi
             export Z2K_AU_NFQWS_WAS_ALIVE
+            au_snapshot_services
             # shellcheck disable=SC2086
             au_apply_converge "$target_tag" $_steps
             case "$?" in
@@ -2314,6 +2347,7 @@ au_run_apply() {
                 au_log "внимание: nfqws2 не работает ЕЩЁ ДО обновления"
             fi
             export Z2K_AU_NFQWS_WAS_ALIVE
+            au_snapshot_services
             au_snapshot_for_patch "$files"
             if ! au_apply_patch "$target_tag" "$files"; then
                 au_log "patch apply failed, rolling back"
@@ -2354,6 +2388,7 @@ au_run_apply() {
                 au_log "внимание: nfqws2 не работает ЕЩЁ ДО обновления"
             fi
             export Z2K_AU_NFQWS_WAS_ALIVE
+            au_snapshot_services
             if ! au_apply_reinstall "$target_tag" "$reset_state"; then
                 au_log "reinstall apply failed"
                 # install.sh took a rollback snapshot before it started (config
