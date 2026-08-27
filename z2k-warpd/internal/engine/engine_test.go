@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,10 @@ func (h *harness) config() Config {
 		Tick: time.Second,
 	}
 }
+
+// fmtSprintf — форматирование логов теста; отдельной функцией, чтобы
+// "fmt" не тянулся в каждый вызов.
+func fmtSprintf(f string, a ...any) string { return fmt.Sprintf(f, a...) }
 
 func itoa(i int) string {
 	b := []byte{}
@@ -370,6 +375,59 @@ func TestBlackHoleNeverBecomesReady(t *testing.T) {
 			t.Fatal("непроверенный туннель объявлен готовым — маршруты уйдут в чёрную дыру")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
+// Шаг, который ВСТАЁТ, но не возит, не должен ни попадать в last_good, ни
+// сбрасывать счёт прохода лестницы.
+//
+// Поле 2026-08-27: wg:188.114.97.1:4500 — «handshake ok», через 15 с «dead».
+// Роутер записывал его как рабочий по факту рукопожатия и каждый следующий
+// старт начинал ровно с него; остальные ступени не пробовались ни разу, а
+// кулдаун не наступал никогда, потому что тот же вызов сбрасывал счёт прохода.
+func TestOpenedButUnprovenIsNotRememberedAndCoolsDown(t *testing.T) {
+	h := newHarness(t, baseDevice(), map[string]bool{"wg:2408": true, "wg:854": true, "h2:443": true})
+	cfg := h.config()
+	var logMu sync.Mutex
+	var logged strings.Builder
+	cfg.Logf = func(f string, a ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logged.WriteString(fmtSprintf(f, a...) + "\n")
+	}
+	cfg.Probe = func(context.Context, string) error { return errors.New("probe: warp=off") }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Run(ctx, cfg); close(done) }()
+
+	waitFor(t, "cooldown sleep", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for _, s := range h.sleeps {
+			if s >= 4*time.Minute {
+				return true
+			}
+		}
+		return false
+	})
+	waitFor(t, "no_transit status", func() bool {
+		s := readStatus(h)
+		return s != nil && !s.Ready && s.LastError == status.ErrNoTransit
+	})
+	d, _ := account.Load(h.dev)
+	if d.LastGood != nil {
+		t.Fatalf("шаг без доказанной живости попал в last_good: %+v", d.LastGood)
+	}
+	logMu.Lock()
+	out := logged.String()
+	logMu.Unlock()
+	if !strings.Contains(out, "dead (probe: warp=off)") {
+		t.Fatalf("причина смерти не из пробы:\n%s", out)
+	}
+	if strings.Contains(out, "dead (<nil>)") {
+		t.Fatalf("пустая причина смерти в логе:\n%s", out)
 	}
 	cancel()
 	<-done

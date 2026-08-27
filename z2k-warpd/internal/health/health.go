@@ -63,7 +63,18 @@ type Monitor struct {
 	fails          int
 	seen           bool
 	proven         bool
+	lastErr        error // почему провалилась последняя проба
 }
+
+// Err — ошибка последней неудачной пробы; nil, если последняя прошла.
+//
+// БЕЗ НЕЁ СМЕРТЬ ТУННЕЛЯ НЕ ДИАГНОСТИРУЕТСЯ. Движок печатал причину из
+// transport.Health.Err, а на пути через пробу он всегда nil — в логе стояло
+// «health: h2:443 dead (<nil>)», и это ровно та строка, ради которой
+// 2026-08-25 пришлось идти на роутер руками (см. tests/test_warp_masque_tune.sh).
+// Разница между «connection timed out» и «probe: warp=off» — это разница между
+// «линию режут» и «наш критерий готовности не тот», и по логу её видно не было.
+func (m *Monitor) Err() error { return m.lastErr }
 
 // Proven — доказал ли ЭТОТ транспорт, что несёт трафик до конца.
 //
@@ -142,7 +153,9 @@ func (m *Monitor) probe(ctx context.Context, now time.Time, src string) Verdict 
 		return Doubtful
 	}
 	m.lastProbe = now
-	if err := m.Probe(ctx, src); err == nil {
+	err := m.Probe(ctx, src)
+	m.lastErr = err
+	if err == nil {
 		m.fails = 0
 		m.rxLastMoved = now
 		m.proven = true

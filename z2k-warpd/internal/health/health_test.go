@@ -212,3 +212,35 @@ func TestUnprovenGivesUpFast(t *testing.T) {
 		t.Fatal("недоказанный транспорт с падающей пробой обязан стать Dead")
 	}
 }
+
+// Причина смерти обязана быть ЧИТАЕМОЙ: transport.Health.Err на пути через
+// пробу всегда nil, и без Err() в логе стояло «dead (<nil>)».
+func TestErrCarriesProbeFailure(t *testing.T) {
+	boom := errors.New("probe: warp=off")
+	m := &Monitor{Probe: func(context.Context, string) error { return boom }, Doubt: 30 * time.Second, Fails: 2,
+		ProveEvery: time.Second}
+	now := time.Unix(1000, 0)
+	h := transport.Health{Connected: true, LastHandshake: now}
+	if v := m.Assess(context.Background(), h, now, "z2ktun0"); v != Doubtful {
+		t.Fatalf("первый провал = %v", v)
+	}
+	if !errors.Is(m.Err(), boom) {
+		t.Fatalf("Err() = %v", m.Err())
+	}
+	now = now.Add(2 * time.Second)
+	if v := m.Assess(context.Background(), h, now, "z2ktun0"); v != Dead {
+		t.Fatalf("второй провал = %v", v)
+	}
+	if !errors.Is(m.Err(), boom) {
+		t.Fatalf("Err() после смерти = %v", m.Err())
+	}
+	// Удачная проба причину снимает — иначе старая ошибка переживает выздоровление.
+	m.Probe = func(context.Context, string) error { return nil }
+	now = now.Add(2 * time.Second)
+	if v := m.Assess(context.Background(), h, now, "z2ktun0"); v != Alive {
+		t.Fatalf("после удачной пробы = %v", v)
+	}
+	if m.Err() != nil {
+		t.Fatalf("Err() после успеха = %v", m.Err())
+	}
+}

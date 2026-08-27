@@ -17,6 +17,10 @@ const (
 	ErrDeviceRevoked   = "device_revoked"   // GET /reg → 401/404
 	ErrNoEndpoint      = "no_endpoint"      // ни один WG-порт, ни h2
 	ErrTunFailed       = "tun_failed"       // нет /dev/net/tun или настройка не удалась
+	// ErrNoTransit — сессия встаёт (handshake/CONNECT прошли), но сквозная
+	// проба не проходит: туннель не возит. Отдельно от no_endpoint, потому
+	// что лечится это иначе — сменой ступени, а не «провайдер режет WARP».
+	ErrNoTransit = "no_transit"
 )
 
 // Status — содержимое status.json.

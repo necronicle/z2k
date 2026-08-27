@@ -191,38 +191,76 @@ func Run(ctx context.Context, cfg Config) error {
 		tr, err := e.open(ctx, step, e.tunDev.Handle())
 		if err != nil {
 			cfg.Logf("ladder: %s failed: %v", ladder.Label(step), err)
-			next, wait := lad.Next(cfg.Now())
-			if wait > 0 {
-				cfg.Logf("ladder: full pass failed, next try in %s", wait.Round(time.Second))
-				e.lastErr = status.ErrNoEndpoint
-				e.write(status.Status{LastError: status.ErrNoEndpoint, LadderStep: lad.Index()})
-				if err := cfg.Sleep(ctx, wait); err != nil {
-					return nil
-				}
+			if !e.advance(ctx, lad, status.ErrNoEndpoint) {
+				return nil
 			}
-			_ = next
 			continue
 		}
 		e.lastErr = ""
-		good := lad.Good()
-		// Форсированный шаг — отладка, а не опыт: память лестницы не трогаем,
-		// иначе один прогон с --force-transport h2 пинил бы роутер на h2.
-		if cfg.ForceStep == nil {
-			d.LastGood = &good
-			if err := d.Save(cfg.DevicePath); err != nil {
-				cfg.Logf("device.json: %v", err)
-			}
-		}
 		e.since = cfg.Now()
 		mon.Reset()
 		cfg.Logf("ladder: %s ok (%s)", ladder.Label(step), tr.Endpoint())
-		e.serve(ctx, tr, step, lad, mon)
+		retop := e.serve(ctx, tr, step, lad, mon)
 		tr.Close()
-		if ctx.Err() == nil {
-			lad.Next(cfg.Now())
+		// Вернулись на вершину лестницы сами (h2 → WG снова доступен) — шаг
+		// уже выбран, и Next() тут сдвинул бы нас МИМО него.
+		if ctx.Err() != nil || retop {
+			continue
+		}
+		reason := e.lastErr
+		if reason == "" {
+			reason = status.ErrNoEndpoint
+		}
+		if !e.advance(ctx, lad, reason) {
+			return nil
 		}
 	}
 	return nil
+}
+
+// advance переходит к следующей ступени и, если круг пройден целиком,
+// выдерживает кулдаун. Возвращает false, если ждать больше не нужно (ctx).
+//
+// КУЛДАУН ОБЯЗАН РАБОТАТЬ И ПОСЛЕ serve, А НЕ ТОЛЬКО ПОСЛЕ open. Раньше
+// возврат Next() в этой ветке просто выбрасывался: на линии, где КАЖДАЯ
+// ступень встаёт и НИ ОДНА не возит, круг закрывался, кулдаун вычислялся — и
+// уходил в никуда. Движок молотил всю лестницу по кругу без единой паузы,
+// поднимая по рукопожатию на каждую ступень, круглосуточно.
+func (e *Engine) advance(ctx context.Context, lad *ladder.Ladder, reason string) bool {
+	_, wait := lad.Next(e.cfg.Now())
+	if wait <= 0 {
+		return true
+	}
+	e.cfg.Logf("ladder: full pass failed, next try in %s", wait.Round(time.Second))
+	e.lastErr = reason
+	e.write(status.Status{LastError: reason, LadderStep: lad.Index()})
+	return e.cfg.Sleep(ctx, wait) == nil
+}
+
+// commitGood запоминает шаг как рабочий.
+//
+// ТОЛЬКО ПО ДОКАЗАННОЙ ЖИВОСТИ, и это не педантизм. Раньше вызов стоял сразу
+// после open, то есть по факту рукопожатия, — и роутер запоминал как «рабочий»
+// шаг, который встаёт, но не возит (поле 2026-08-27: wg:188.114.97.1:4500,
+// handshake ok, TCP не проходит). Каждый следующий старт начинал ровно с него,
+// и лестница до остальных ступеней не доходила НИКОГДА.
+//
+// Тем же вызовом сбрасывалась и память о проходе (Ladder.Good), поэтому на
+// линии, где ВСЕ ступени встают и ни одна не возит, круг никогда не считался
+// пройденным и пятиминутный кулдаун не наступал: движок молотил лестницу без
+// пауз — ровно то, против чего кулдаун и введён.
+//
+// Форсированный шаг — отладка, а не опыт: память не трогаем, иначе один прогон
+// с --force-transport h2 пинил бы роутер на h2.
+func (e *Engine) commitGood(lad *ladder.Ladder) {
+	if e.cfg.ForceStep != nil {
+		return
+	}
+	good := lad.Good()
+	e.d.LastGood = &good
+	if err := e.d.Save(e.cfg.DevicePath); err != nil {
+		e.cfg.Logf("device.json: %v", err)
+	}
 }
 
 // open строит и открывает транспорт шага, переключая ключ устройства,
@@ -274,9 +312,11 @@ func (e *Engine) openOnce(ctx context.Context, step account.Step, dev tun.Device
 }
 
 // serve держит транспорт, пока монитор не скажет Dead или не отменят ctx.
-// На h2 раз в ProbeUpEvery пробует вернуться на WG.
-func (e *Engine) serve(ctx context.Context, tr transport.Transport, step account.Step, lad *ladder.Ladder, mon *health.Monitor) {
+// На h2 раз в ProbeUpEvery пробует вернуться на WG. Возвращает true, если
+// вышел из-за возврата на вершину лестницы (шаг уже выбран, Next() не нужен).
+func (e *Engine) serve(ctx context.Context, tr transport.Transport, step account.Step, lad *ladder.Ladder, mon *health.Monitor) bool {
 	lastUp := e.cfg.Now()
+	committed := false
 	for {
 		now := e.cfg.Now()
 		h := tr.Health()
@@ -303,20 +343,37 @@ func (e *Engine) serve(ctx context.Context, tr transport.Transport, step account
 			LadderStep:   lad.Index(),
 			Since:        e.since.Unix(),
 		})
+		if !committed && mon.Proven() {
+			committed = true
+			e.commitGood(lad)
+		}
 		if v == health.Dead {
-			e.cfg.Logf("health: %s dead (%v)", ladder.Label(step), h.Err)
-			return
+			// Причина — из транспорта, если она там есть, иначе из монитора:
+			// на пути через пробу transport.Health.Err всегда nil, и печатать
+			// его значило печатать «dead (<nil>)» — строку без содержания.
+			reason := h.Err
+			if reason == nil {
+				reason = mon.Err()
+			}
+			e.cfg.Logf("health: %s dead (%v)", ladder.Label(step), reason)
+			// Сессия ВСТАЁТ, но не возит — это не «поднимается» и не «ни один
+			// адрес не отвечает». Отдельный код, иначе панель и диагностика
+			// показывают пустую причину и человек читает её как «ещё грузится».
+			if h.Err == nil && !mon.Proven() {
+				e.lastErr = status.ErrNoTransit
+			}
+			return false
 		}
 		if lad.OnH2() && e.cfg.ForceStep == nil && now.Sub(lastUp) >= ladder.ProbeUpEvery {
 			lastUp = now
 			if e.wgReachable(ctx) {
 				e.cfg.Logf("ladder: WireGuard reachable again — leaving h2")
 				lad.Top()
-				return
+				return true
 			}
 		}
 		if err := e.cfg.Sleep(ctx, e.cfg.Tick); err != nil {
-			return
+			return false
 		}
 	}
 }
