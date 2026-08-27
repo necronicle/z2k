@@ -49,14 +49,29 @@ PROBE_RESOLVE_IP=149.154.167.99
 # bare `killall tg-mtproxy-client` would silently take out the cdnbase tunnel
 # too → cdnbase blackhole (no watchdog on :1444 to bring it back). Match by
 # cmdline like actions.sh tunnel_pid() does.
+# ЖИВ ЛИ ИМЕННО НАШ ЭКЗЕМПЛЯР.
+#
+# Голый `pidof tg-mtproxy-client` отвечает «да» и тогда, когда :1443 мёртв, а
+# жив только cdnbase-туннель на :1444 — бинарник у них ОДИН. Из-за этого
+# триггер «процесс не работает» не срабатывал никогда, пока второй экземпляр
+# на месте, и телеграм лежал молча. Фильтр по cmdline здесь тот же, что уже
+# применялся при убийстве, — просто вынесен, чтобы им пользовались все проверки.
+tg_1443_pids() {
+    pidof tg-mtproxy-client 2>/dev/null | tr ' ' '\n' | while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        [ -r "/proc/$p/cmdline" ] || continue
+        tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- "--listen=:1443" && printf '%s\n' "$p"
+    done
+}
+
+tg_1443_running() {
+    [ -n "$(tg_1443_pids)" ]
+}
+
 kill_tg_1443() {
-    if pidof tg-mtproxy-client >/dev/null 2>&1; then
-        for p in $(pidof tg-mtproxy-client); do
-            if [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- "--listen=:1443"; then
-                kill -9 "$p" 2>/dev/null
-            fi
-        done
-    fi
+    for p in $(tg_1443_pids); do
+        kill -9 "$p" 2>/dev/null
+    done
 }
 
 # CWE-59: restart_tunnel (fallback) и cap_log пишут в /tmp/z2k-log как root.
@@ -136,6 +151,11 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 restart_tunnel() {
+    if ! restart_allowed; then
+        logger -t z2k-tg-watchdog "рестарт отложен (подряд: $RESTARTS): $1" 2>/dev/null
+        return 0
+    fi
+    RESTARTS=$((RESTARTS + 1))
     local reason="$1"
     logger -t tg-watchdog "restart: $reason"
     if [ -x "$INIT" ]; then
@@ -144,25 +164,84 @@ restart_tunnel() {
         # belt-and-suspenders kill in case init script left a leftover
         kill_tg_1443
         sleep 1
-        # Truncate log to exactly one marker line. Without this, the very
-        # CONNECT_FAIL storm that triggered the restart is still sitting in
-        # tail -40 when cron runs again in a minute, and the detector fires
-        # a second restart before the new session has time to stabilise —
-        # classic restart loop.
-        echo "$(date) watchdog restart: $reason" > "$LOG"
+        mark_log "$reason"
         "$INIT" start >/dev/null 2>&1
     else
         kill_tg_1443
         sleep 1
-        echo "$(date) watchdog restart: $reason" > "$LOG"
+        mark_log "$reason"
         "$BIN" --listen=:1443 -v >> "$LOG" 2>&1 &
     fi
     echo 0 > "$STATE"
+    printf '%s %s\n' "$RESTARTS" "$(now_epoch)" > "$RSTATE"
+}
+
+# ЛОГ БОЛЬШЕ НЕ ЗАТИРАЕТСЯ ЦЕЛИКОМ.
+#
+# Раньше при рестарте лог обнулялся до одной строки-маркера. Причина была
+# уважительная: тот самый шторм CONNECT_FAIL, из-за которого мы перезапускались,
+# оставался в `tail -40` и через минуту вызывал второй рестарт — карусель.
+#
+# Но цена оказалась выше пользы. Единственная строка, называющая ПРИЧИНУ
+# («регистрация не удалась: ...»), печатается раз в ~40 с — и затиралась каждые
+# три минуты. В отчёте у человека оставались одни дропы без причины, и диагноз
+# приходилось ставить по тому, чего в логе НЕТ.
+#
+# Карусель лечится не затиранием, а якорем: детектор считает CONNECT_FAIL
+# только ПОСЛЕ последнего маркера. Хвост при этом сохраняется и доезжает до
+# z2k-diag.
+mark_log() {
+    _ml_tmp=$(mktemp "/tmp/.tgwd-mark.XXXXXX" 2>/dev/null) || {
+        echo "$(date) watchdog restart: $1" >> "$LOG"; return 0; }
+    { tail -n 200 "$LOG" 2>/dev/null; echo "$(date) watchdog restart: $1"; } > "$_ml_tmp" 2>/dev/null \
+        && mv -f "$_ml_tmp" "$LOG" 2>/dev/null || rm -f "$_ml_tmp" 2>/dev/null
+}
+
+now_epoch() {
+    _ne=$(date +%s 2>/dev/null)
+    case "$_ne" in ''|*[!0-9]*) _ne=0 ;; esac
+    printf '%s' "$_ne"
+}
+
+# ПАУЗА МЕЖДУ РЕСТАРТАМИ РАСТЁТ.
+#
+# Счётчик провалов обнулялся внутри самого рестарта, поэтому при неустранимой
+# причине (мёртвый резолвер, недоступный релей) сторож перезапускал туннель
+# ровно раз в три минуты вечно. Каждый такой рестарт ничего не чинит и стоит
+# дорого: снятие и наложение правил, kill -9, паузы, пересборка ipset — плюс
+# окно в несколько секунд, когда REDIRECT снят и телеграм идёт мимо туннеля.
+# Вдобавок он обнулял ступени повторной регистрации внутри клиента, так что
+# самая длинная из них не наступала никогда.
+#
+# Теперь: 1, 2, 4, 8, 16, 30 минут (потолок). Обнуляется ТОЛЬКО удачной пробой —
+# то есть тогда, когда рестарт действительно помог.
+RSTATE=/tmp/tg-tunnel-watchdog.restarts
+RESTARTS=0
+RLAST=0
+if [ -f "$RSTATE" ]; then
+    RESTARTS=$(awk 'NR==1{print $1+0}' "$RSTATE" 2>/dev/null)
+    RLAST=$(awk 'NR==1{print $2+0}' "$RSTATE" 2>/dev/null)
+fi
+case "$RESTARTS" in ''|*[!0-9]*) RESTARTS=0 ;; esac
+case "$RLAST" in ''|*[!0-9]*) RLAST=0 ;; esac
+
+restart_allowed() {
+    [ "$RESTARTS" -gt 0 ] || return 0
+    _ra_wait=1; _ra_i=1
+    while [ "$_ra_i" -lt "$RESTARTS" ] && [ "$_ra_wait" -lt 30 ]; do
+        _ra_wait=$((_ra_wait * 2)); _ra_i=$((_ra_i + 1))
+    done
+    [ "$_ra_wait" -gt 30 ] && _ra_wait=30
+    _ra_now=$(now_epoch)
+    [ $((_ra_now - RLAST)) -ge $((_ra_wait * 60)) ]
 }
 
 # 1) CONNECT_FAIL storm (legacy)
-if [ -f "$LOG" ] && pidof tg-mtproxy-client >/dev/null 2>&1; then
-    FAILS=$(tail -40 "$LOG" 2>/dev/null | grep -c "CONNECT_FAIL")
+if [ -f "$LOG" ] && tg_1443_running; then
+    # Считаем только ПОСЛЕ последнего маркера рестарта: старый шторм из
+    # хвоста больше не вызывает второй рестарт, и затирать лог не нужно.
+    FAILS=$(tail -40 "$LOG" 2>/dev/null \
+            | awk '/watchdog restart:/ {n=0; next} /CONNECT_FAIL/ {n++} END {print n+0}')
     if [ "$FAILS" -ge 10 ]; then
         restart_tunnel "CONNECT_FAIL storm ($FAILS in last 40 lines)"
         exit 0
@@ -170,7 +249,7 @@ if [ -f "$LOG" ] && pidof tg-mtproxy-client >/dev/null 2>&1; then
 fi
 
 # If the binary isn't running at all, just start it and reset state.
-if ! pidof tg-mtproxy-client >/dev/null 2>&1; then
+if ! tg_1443_running; then
     restart_tunnel "tunnel process not running"
     exit 0
 fi
@@ -207,6 +286,7 @@ if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null \
         --resolve "core.telegram.org:443:$PROBE_RESOLVE_IP" \
         "$PROBE_URL" 2>/dev/null; then
     echo 0 > "$STATE"
+    rm -f "$RSTATE" 2>/dev/null
     exit 0
 fi
 
