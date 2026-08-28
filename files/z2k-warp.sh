@@ -32,6 +32,11 @@ WARP_BIN="${WARP_BIN:-/opt/sbin/z2k-warpd}"
 WARP_INIT="${WARP_INIT:-/opt/etc/init.d/S51z2k-warp}"
 WARP_DEVICE="${WARP_DEVICE:-/opt/etc/z2k-warp/device.json}"
 WARP_STATUS="${WARP_STATUS:-/tmp/z2k-warp/status.json}"
+WARP_LOG="${WARP_LOG:-/tmp/z2k-warp/warpd.log}"
+# Повтор регистрации из selfheal: не чаще раза в 10 минут, чтобы
+# заблокированный API Cloudflare не долбить каждые 25 секунд.
+WARP_REG_RETRY="${WARP_REG_RETRY:-600}"
+WARP_REG_STAMP="${WARP_REG_STAMP:-/tmp/z2k-warp/register.stamp}"
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"
 WARP_DEVICES_FILE="${WARP_DEVICES_FILE:-$WARP_LISTS_DIR/devices.txt}"
 WARP_IPSET="${WARP_IPSET:-z2k_warp}"
@@ -399,11 +404,16 @@ warp_fetch_engine() {
     return 0
 }
 
-warp_install() {
-    warp_lists_migrate
-    warp_fetch_engine || return 1
-    # Регистрация: есть device.json — проверка, нет — новое устройство.
-    # Напрямую (десинк nfqws2), затем через VPS-релей. Ничего не запускается.
+# Регистрация устройства у Cloudflare: напрямую (десинк nfqws2 пробивает
+# cloudflareclient.com), затем через VPS-релей. Есть device.json — движок его
+# проверяет, новое устройство не заводится.
+#
+# Вынесено из warp_install ОТДЕЛЬНОЙ функцией, потому что регистрация нужна не
+# только под кнопкой «Установить». Без device.json движок падает на старте, а
+# selfheal умел только перезапускать процесс — и перезапускал труп каждые 25 с
+# бесконечно (поле 2026-08-28: карусель шла сутки, в логе сорок «fatal:
+# device.json ... no such file» подряд).
+warp_register() {
     local out
     if [ -s "$WARP_DEVICE" ]; then
         _wlog "ключ устройства уже есть — проверяю у Cloudflare (новое устройство не создаётся)..."
@@ -419,6 +429,23 @@ warp_install() {
     fi
     _wlog "${out:-register_blocked}"
     return 1
+}
+
+# Пора ли пробовать регистрацию снова. Метка ставится ДО попытки: исход не
+# важен, важно не ходить к заблокированному API чаще, чем раз в WARP_REG_RETRY.
+warp_register_due() {
+    local now last
+    now=$(date +%s 2>/dev/null) || return 1
+    last=$(cat "$WARP_REG_STAMP" 2>/dev/null)
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    [ "$((now - last))" -ge "$WARP_REG_RETRY" ]
+}
+
+warp_install() {
+    warp_lists_migrate
+    warp_fetch_engine || return 1
+    # Ничего не запускается: только движок на диск и ключ устройства.
+    warp_register
 }
 
 # ---- состояние ротации ---------------------------------------------------------
@@ -503,6 +530,23 @@ warp_remove() {
 warp_selfheal() {
     [ "$(warp_flag)" = "1" ] || return 0
     [ -x "$WARP_BIN" ] || return 0
+    # НЕТ КЛЮЧА УСТРОЙСТВА — ПЕРЕЗАПУСКАТЬ БЕСПОЛЕЗНО.
+    #
+    # Движок без device.json падает на старте всегда: «fatal: device.json ...
+    # no such file». Проверялись флаг, бинарь и живость демона — и ни разу
+    # наличие ключа, поэтому selfheal поднимал заведомого покойника каждые
+    # 25 с, а починить это могла только кнопка «Установить» руками.
+    # Регистрация живёт в warp_install, и сюда её приводит та же функция.
+    if [ ! -s "$WARP_DEVICE" ]; then
+        warp_register_due || return 0
+        mkdir -p "$(dirname "$WARP_REG_STAMP")" 2>/dev/null
+        date +%s > "$WARP_REG_STAMP" 2>/dev/null
+        # Лог selfheal шедулер выбрасывает в /dev/null, поэтому пишем в журнал
+        # движка — туда же смотрят и диагностика, и человек.
+        { _wlog "нет ключа устройства — пробую зарегистрировать"; warp_register; } >>"$WARP_LOG" 2>&1 \
+            && sh "$WARP_INIT" start >/dev/null 2>&1
+        return 0
+    fi
     warp_daemon_running || { sh "$WARP_INIT" start >/dev/null 2>&1; return 0; }
     if warp_ready; then
         ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_all
