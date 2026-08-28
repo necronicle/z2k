@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 48,
-  "current": "r-80.3",
+  "seq": 49,
+  "current": "p-80.4",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -205,9 +205,9 @@
   "files/z2k-warp.sh": "34faed4a22dbe6facfa774e8c7cff294439c53c8fc9d3d31caa10da29b73f0df",
   "lib/auto_update.sh": "821ad743b1e0c906ce07cd551d6864200c734944e4f79e22cf862f2af76554d8",
   "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
-  "lib/config_official.sh": "f2f6f8c1a5e6afcbc822ef0c0db7ab5da37d56219b8fcccc2c4a5d78f09eb7cd",
+  "lib/config_official.sh": "c3c185a984c0b2b1298453e70e1ed8460f9ec7d7ca2bcdb906b02fda6cd29ea4",
   "lib/install.sh": "dc077083dfd0562c81b8be16dd3a6251758535c4bf6aca6dcd3009a5ae3c3487",
-  "lib/menu.sh": "ef00abcfacc32b2279f3d6278874a8455f1944b5dbd9a1c4feee102a11aba79d",
+  "lib/menu.sh": "ebf5b4c6c7ff3287986cfad3a4f79d4aa0e85045e387797d00a9bf54f9926061",
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
   "lib/utils.sh": "e17ece0ef51ed63e70a6e55c4f03a89a0434fc8db338001bbc7113d282008513",
   "lib/webpanel.sh": "7e44a9f94e442d87f67bce091548dc482c921fad49014face9af53e8ed3e9504",
@@ -244,7 +244,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "79bcd1f8221943eb27eb9bf8670d0ccf0ff393ea10543bb29d9f71fbfa1b31f6",
+  "webpanel/www/index.html": "c9192145c6e1232b788d7b01d109d9dfc8c447b5d845ba69ee70f81314a27684",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -473,6 +473,7 @@
 {"v": "r-80", "type": "reinstall", "ts": "2026-08-26T19:39:59Z", "ref": "r-80", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/ACTIVE_DISCORD_UDP.bin", "files/lua/z2k-alert.lua", "files/lua/z2k-state-persist.lua", "files/z2k-dns-check.sh", "files/z2k-geosite.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/diag.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
 {"v": "r-80.1", "type": "reinstall", "ts": "2026-08-26T21:59:05Z", "ref": "r-80.1", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/fake/active_discord_udp.bin", "files/z2k-config-validator.sh", "z2k.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "r-80.2", "type": "reinstall", "ts": "2026-08-26T23:46:35Z", "ref": "r-80.2", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать. Кроме того, обновление больше не срывается, если роутер проверил его в первые минуты после выхода новой версии.", "changed_files": ["webpanel/www/index.html", "files/z2k-config-validator.sh", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "r-80.3", "type": "reinstall", "ts": "2026-08-27T16:47:18Z", "ref": "r-80.3", "desc": "WARP больше не меняет настройки обхода ради себя и не запускается, когда выключен; если туннель не поднимается, причина теперь называется прямо. Переустановка перестала считать игровые списки повреждёнными и качать их заново. В диагностике снова видно, если обновление откатилось, а в списке ошибок остаются только свежие.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/init.d/S51z2k-warp", "files/init.d/S99z2k-scheduler", "files/z2k-blocked-monitor.sh", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-insta-ip-refresh.sh", "files/z2k-nfqueue-selfheal.sh", "files/z2k-scheduler.sh", "files/z2k-tg-watchdog.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/install.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/install.sh", "webpanel/uninstall.sh", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false}
+{"v": "r-80.3", "type": "reinstall", "ts": "2026-08-27T16:47:18Z", "ref": "r-80.3", "desc": "WARP больше не меняет настройки обхода ради себя и не запускается, когда выключен; если туннель не поднимается, причина теперь называется прямо. Переустановка перестала считать игровые списки повреждёнными и качать их заново. В диагностике снова видно, если обновление откатилось, а в списке ошибок остаются только свежие.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/init.d/S51z2k-warp", "files/init.d/S99z2k-scheduler", "files/z2k-blocked-monitor.sh", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-insta-ip-refresh.sh", "files/z2k-nfqueue-selfheal.sh", "files/z2k-scheduler.sh", "files/z2k-tg-watchdog.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/install.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/install.sh", "webpanel/uninstall.sh", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false},
+{"v": "p-80.4", "type": "patch", "ts": "2026-08-28T07:55:22Z", "ref": "p-80.4", "desc": "Переключатель автодетекции в диагностике домена больше не сбрасывается после обновления, а меню перестало показывать её включённой, когда она выключена. Функция остаётся опытной и по умолчанию выключена.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
   ]
 }
