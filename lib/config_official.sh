@@ -2111,6 +2111,7 @@ create_official_config() {
     local saved_Z2K_PADENCAP="1"
     local saved_Z2K_NFQWS2_TEMPLATES="1"
     local saved_Z2K_INJECT_TLS_MODS="0"
+    local saved_Z2K_DISCOVER="0"
     local saved_Z2K_DYNAMIC_TTL="1"
     local saved_Z2K_INSTA_DNS="1"
     local saved_Z2K_STATS="1"
@@ -2162,6 +2163,11 @@ create_official_config() {
         saved_Z2K_PADENCAP=$(safe_config_read "Z2K_PADENCAP" "$config_file" "1")
         saved_Z2K_NFQWS2_TEMPLATES=$(safe_config_read "Z2K_NFQWS2_TEMPLATES" "$config_file" "1")
         saved_Z2K_INJECT_TLS_MODS=$(safe_config_read "Z2K_INJECT_TLS_MODS" "$config_file" "0")
+        # Z2K_DISCOVER — умолчание 0, и ключ обязан ПЕРЕЖИВАТЬ перегенерацию.
+        # Его тут не было вовсе: генератор ключ не сохранял, установка потом
+        # дописывала «Z2K_DISCOVER=0», и включённая вручную автодетекция
+        # сбрасывалась при каждом обновлении (issue #44).
+        saved_Z2K_DISCOVER=$(safe_config_read "Z2K_DISCOVER" "$config_file" "0")
         # Z2K_AUTOHOSTLIST — default 0, deliberately against the "new flags come
         # on" rule. It does not improve behaviour, it swaps the filtering mode
         # for ALL traffic: nfqws2 starts deciding for itself which hosts are
@@ -2285,6 +2291,12 @@ ENABLED=${saved_ENABLED}
 # in S99zapret2), appending what it finds to the RKN list.
 MODE_FILTER=${z2k_mode_filter}
 Z2K_AUTOHOSTLIST=${saved_Z2K_AUTOHOSTLIST}
+
+# Автодетекция блокировок (демон z2k-detect, пункт [Y] в меню).
+# ФУНКЦИЯ ОПЫТНАЯ, по умолчанию выключена и на эксплуатацию не рассчитана.
+# Ключ сохраняется между перегенерациями: включённый вручную режим не должен
+# сбрасываться обновлением.
+Z2K_DISCOVER=${saved_Z2K_DISCOVER}
 
 # Пороги детектора автохостлиста. Действуют только при Z2K_AUTOHOSTLIST=1.
 # Закомментировано = значение по умолчанию самого движка (показано справа).

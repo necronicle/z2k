@@ -215,7 +215,13 @@ menu_diagnose_domain() {
     fi
 
     # Daemon status + Z2K_DISCOVER flag — operator's at-a-glance summary.
-    local flag="1"
+    #
+    # УМОЛЧАНИЕ — 0, КАК У ДВИЖКА. Здесь стояла единица, и при отсутствующем
+    # ключе меню показывало «Автодетекция: 1», тогда как init и генератор
+    # конфига в этом же случае считают её ВЫКЛЮЧЕННОЙ. Человек читал «включено»
+    # при фактически выключенном демоне и не понимал, работает оно или нет
+    # (issue #44).
+    local flag="0"
     if [ -f "$cfg" ]; then
         local _v
         _v=$(grep -E "^Z2K_DISCOVER=" "$cfg" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '" ')
@@ -229,7 +235,7 @@ menu_diagnose_domain() {
     printf "Демон запущен:  %s\n" "$running"
     print_separator
     print_info "[D] Проверить домен"
-    print_info "[T] Переключить автодетекцию (текущее: $flag)"
+    print_info "[T] Переключить автодетекцию (текущее: $flag) — опытная, по умолчанию выключена"
     print_info "[Enter] Выход"
     printf "> "
     local action
