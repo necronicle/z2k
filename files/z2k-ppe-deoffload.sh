@@ -55,7 +55,10 @@
 # we cannot hook its firewall apply. Ports mirror the bypass dst-port set. Only
 # forwarded flows are touched (mangle FORWARD/PREROUTING), connskip-bounded to the
 # handshake window, so de-offloading without the nozapret exclusion is harmless.
-PPE_PORTS="${PPE_PORTS:-80,443,2053,2083,2087,2096,8443}"
+# 5222 — шлюз WhatsApp. Без снятия аппаратного офлоада поток идёт мимо
+# netfilter целиком, и правило NFQUEUE его не видит, сколько порт ни клади
+# в zport_tcp: замер 2026-08-28, в отладке нет ни одной строки про 5222.
+PPE_PORTS="${PPE_PORTS:-80,443,2053,2083,2087,2096,5222,8443}"
 PPE_QUIC_PORT="${PPE_QUIC_PORT:-443}"       # QUIC UDP port — de-offload its handshake window too
 PPE_CONNSKIP="${PPE_CONNSKIP:-30}"          # first-N packets kept on CPU (handshake window)
 PPE_TARGET="${PPE_TARGET:-PPE}"             # firmware per-flow offload-skip target (ppe_tg)
