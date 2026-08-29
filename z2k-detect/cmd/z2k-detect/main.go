@@ -68,10 +68,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/necronicle/z2k/z2k-detect/internal/classify"
 	"github.com/necronicle/z2k/z2k-detect/internal/decision"
 	"github.com/necronicle/z2k/z2k-detect/internal/dnssrc"
 	"github.com/necronicle/z2k/z2k-detect/internal/engine"
@@ -82,6 +85,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: z2k-detect <cmd> [args]
 commands:
   probe <domain>            one-shot diagnostic probe, print verdict
+  classify <host:port>      измерить, ЧЕМ режут, и вывести стратегию
   run [-dns-source SRC]     start daemon. SRC: agh|dnsmasq|pkt (default: auto)`)
 }
 
@@ -101,10 +105,173 @@ func main() {
 	switch args[0] {
 	case "probe":
 		probeCmd(ctx, args[1:])
+	case "classify":
+		classifyCmd(ctx, args[1:])
 	case "run":
 		runCmd(ctx, args[1:])
 	default:
 		fatal("unknown command: %s", args[0])
+	}
+}
+
+// classifyCmd измеряет функцию решения DPI и печатает вердикт со стратегией.
+//
+// Отличие от probe: probe отвечает «работает или нет», classify — «чем именно
+// режут и что с этим делать». Состояния не трогает, в списки не пишет.
+func classifyCmd(ctx context.Context, rest []string) {
+	fs := flag.NewFlagSet("classify", flag.ExitOnError)
+	sni := fs.String("sni", "", "собрать триггер как ClientHello с этим именем")
+	raw := fs.String("raw", "", "триггер шестнадцатеричной строкой (для не-TLS протоколов)")
+	repeats := fs.Int("repeats", 3, "повторов на зонд; вердикт только при единогласии")
+	timeout := fs.Duration("timeout", 6*time.Second, "сколько ждать ответа")
+	transfer := fs.Bool("transfer", false, "зонд объёма: доезжает ли ответ целиком (ловит троттлинг)")
+	echo := fs.Bool("raw-echo", false, "положительный контроль: сырое рукопожатие + триггер без приёмов")
+	only := fs.String("only", "", "прогнать только эту гипотезу (для отладки зондов)")
+	ctlSNI := fs.String("control-sni", "", "имя для контрольного зонда; сервер обязан его обслуживать")
+	asJSON := fs.Bool("json", false, "выдать Result как JSON")
+	_ = fs.Parse(rest)
+	if fs.NArg() < 1 {
+		fatal("classify: не указан адрес host:port")
+	}
+	addr := fs.Arg(0)
+
+	var (
+		tr  classify.Trigger
+		err error
+	)
+	switch {
+	case *raw != "" && *sni != "":
+		fatal("classify: -sni и -raw взаимоисключающие")
+	case *raw != "":
+		tr, err = classify.RawTrigger(*raw)
+	default:
+		name := *sni
+		if name == "" {
+			// Имя не задано — берём его из адреса. Для TLS это ровно то, по
+			// чему DPI и принимает решение, так что умолчание осмысленное.
+			if h, _, e := net.SplitHostPort(addr); e == nil {
+				name = h
+			}
+		}
+		tr, err = classify.TLSTrigger(name)
+	}
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	// Контроль собираем всегда, когда он вообще собирается: без него вердикт
+	// «непрозрачно» склеивает два разных мира — пересборку и блок по адресу.
+	opts := classify.Options{Repeats: *repeats, Timeout: *timeout, Only: *only}
+	// Контроль тем же именем, что и триггер, — не контроль вовсе: если имя под
+	// блокировкой, молчать будут оба, и вердикт «режут адрес» получится из
+	// собственной ошибки ввода.
+	if *ctlSNI != "" && *ctlSNI == *sni {
+		fatal("classify: -control-sni совпадает с -sni; контролем должно быть ДРУГОЕ имя, заведомо не блокируемое")
+	}
+	if *ctlSNI != "" {
+		// Имя названо руками — значит за базу ручается оператор, и молчание
+		// контроля можно засчитать как блок по адресу.
+		if ctl, cerr := classify.TLSTrigger(*ctlSNI); cerr == nil {
+			ctl.Name = "control:" + *ctlSNI
+			opts.Control, opts.ControlVouched = ctl, true
+		}
+	} else if ctl, cerr := classify.ControlTrigger("z2k"); cerr == nil {
+		opts.Control = ctl
+	}
+	if *transfer {
+		name := *sni
+		if name == "" {
+			if h, _, e := net.SplitHostPort(addr); e == nil {
+				name = h
+			}
+		}
+		tr, terr := classify.TransferProbe(ctx, addr, name, *timeout)
+		if terr != nil {
+			fatal("transfer: %v", terr)
+		}
+		if *asJSON {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(tr)
+			return
+		}
+		fmt.Printf("Цель:     %s (%s)\n", tr.Host, tr.Addr)
+		fmt.Printf("Вердикт:  %s — %s\n", tr.Verdict, tr.Reason)
+		fmt.Printf("Ответ:    код %d, объявлено %d, получено тела %d, всего %d байт за %d мс\n",
+			tr.Status, tr.ContentLength, tr.BodyBytes, tr.TotalBytes, tr.DurationMS)
+		fmt.Printf("Закрытие: %v\n", tr.ClosedByPeer)
+		return
+	}
+	if *echo {
+		ok, err := classify.RawEcho(ctx, addr, tr, *timeout)
+		if err != nil {
+			fatal("raw-echo: %v", err)
+		}
+		if ok {
+			fmt.Println("raw-echo: ОТВЕТ ЕСТЬ — путь данных сырого слоя рабочий")
+		} else {
+			fmt.Println("raw-echo: тишина — либо цель под блокировкой, либо сервер не берёт наши сегменты")
+		}
+		return
+	}
+	res := classify.Run(ctx, addr, tr, opts)
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(res)
+		return
+	}
+	fmt.Printf("Цель:     %s\n", res.Target)
+	fmt.Printf("Триггер:  %s (%d байт)\n", tr.Name, res.TriggerLen)
+	fmt.Printf("Вердикт:  %s — %s\n", res.Verdict, res.Reason)
+	fmt.Printf("Зондов:   %d за %s (по %d повтора)\n", res.Probes, res.Duration, res.Repeats)
+	if res.Boundary > 0 {
+		fmt.Printf("Граница:  сигнатура кончается на байте %d\n", res.Boundary)
+	}
+	if res.Reassembles != nil {
+		if *res.Reassembles {
+			fmt.Printf("Пересборка: ЕСТЬ — при паузе блок возвращается\n")
+		} else {
+			fmt.Printf("Пересборка: нет\n")
+		}
+	}
+	if res.Strategy != "" {
+		fmt.Printf("Стратегия: %s\n", res.Strategy)
+	}
+	if res.Verdict == classify.VerdictOpaque && !res.RawUsable {
+		fmt.Printf("ВНИМАНИЕ: сырые зонды не отработали — отрицательный вывод про отравление НЕ значим\n")
+	}
+	pr := res.Props
+	if pr.Reassembles != nil || pr.ParsesL7 != nil || pr.ValidatesChecksum != nil ||
+		pr.ToleratesReorder != nil || pr.ToleratesLeftOverlap != nil || pr.HopTTL > 0 {
+		fmt.Println("Свойства коробки:")
+		yn := func(b *bool) string {
+			if b == nil {
+				return "не измерено"
+			}
+			if *b {
+				return "да"
+			}
+			return "нет"
+		}
+		fmt.Printf("  пересобирает поток:        %s\n", yn(pr.Reassembles))
+		fmt.Printf("  разбирает протокол:        %s\n", yn(pr.ParsesL7))
+		fmt.Printf("  проверяет контр. сумму:    %s\n", yn(pr.ValidatesChecksum))
+		fmt.Printf("  держит переупорядочивание: %s\n", yn(pr.ToleratesReorder))
+		fmt.Printf("  держит перекрытие слева:   %s\n", yn(pr.ToleratesLeftOverlap))
+		if pr.HopTTL > 0 {
+			fmt.Printf("  расстояние до неё:         %d хопов\n", pr.HopTTL)
+		}
+	}
+	fmt.Println("Трасса:")
+	for _, o := range res.Trace {
+		cuts := "-"
+		if len(o.Cuts) > 0 {
+			cuts = fmt.Sprint(o.Cuts)
+		}
+		fmt.Printf("  %-11s cuts=%-8s пауза=%dмс  прошло=%d не прошло=%d %s\n",
+			o.Probe, cuts, o.DelayM, o.Pass, o.Fail, o.Err)
 	}
 }
 
