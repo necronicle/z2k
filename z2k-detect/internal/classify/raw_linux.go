@@ -363,6 +363,21 @@ func checksum(b []byte) uint16 {
 	return ^uint16(sum)
 }
 
+// sendURG шлёт один байт как срочные данные: флаг URG плюс указатель за ним.
+// Сервер по RFC 793 изымает такой байт из потока, коробка — обычно нет.
+func (c *rawConn) sendURG(payload []byte) error {
+	pkt := buildIPv4TCPOpts(c.src, c.dst, c.sport, c.dport, c.seq, c.ack, tcpPSH|tcpACK|0x20, payload, poison{}, nil)
+	// Указатель срочности — сразу за нашим байтом.
+	t := pkt[20:]
+	t[18], t[19] = 0x00, byte(len(payload))
+	sum := tcpChecksum(c.src, c.dst, t)
+	t[16], t[17] = byte(sum>>8), byte(sum)
+	var to syscall.SockaddrInet4
+	copy(to.Addr[:], c.dst)
+	to.Port = int(c.dport)
+	return syscall.Sendto(c.sendFD, pkt, 0, &to)
+}
+
 // probeRawHandshake — самопроверка сырого слоя: доходит ли наше собственное
 // рукопожатие. Проверять его отправкой полезной нагрузки нельзя — поле
 // 2026-08-28, googlevideo: тот фронтенд обслуживает только заблокированные
@@ -448,6 +463,77 @@ func probePoison(ctx context.Context, dstIP net.IP, port uint16, tr Trigger, p p
 	// ШАГ 2: настоящие данные.
 	base := c.seq
 	switch {
+	case p.synData:
+		// ДАННЫЕ В САМОМ SYN. Рукопожатие уже прошло обычным путём, поэтому
+		// здесь мы шлём приветствие сегментом с флагом SYN поверх готового
+		// соединения: коробка увидит SYN и, если она payload в нём не
+		// разбирает, сигнатуру пропустит. Сервер такой сегмент по номеру
+		// примет как обычные данные.
+		if err := c.send(tr.Payload, tcpSYN|tcpPSH|tcpACK, poison{}); err != nil {
+			return false, err
+		}
+	case p.oob:
+		// БАЙТ ВНЕ ПОЛОСЫ. Вставляем посторонний символ в середину имени и
+		// помечаем его срочным: сервер по правилам изымет его из потока,
+		// коробка, читающая всё подряд, оставит — и соберёт не ту строку.
+		mid := len(tr.Payload) / 2
+		if tr.SNILen > 1 && tr.SNIOffset > 0 {
+			mid = tr.SNIOffset + tr.SNILen/2
+		}
+		if mid < 1 || mid >= len(tr.Payload) {
+			mid = len(tr.Payload) / 2
+		}
+		if err := c.send(tr.Payload[:mid], tcpPSH|tcpACK, poison{}); err != nil {
+			return false, err
+		}
+		c.seq = base + uint32(mid)
+		if err := c.sendURG([]byte{0x0f}); err != nil {
+			return false, err
+		}
+		c.seq = base + uint32(mid) + 1
+		if err := c.send(tr.Payload[mid:], tcpPSH|tcpACK, poison{}); err != nil {
+			return false, err
+		}
+		c.seq = base + uint32(len(tr.Payload)) + 1
+		pay, err := c.readPayload(ctx, timeout)
+		if err != nil {
+			return false, nil
+		}
+		return tr.Accept == nil || tr.Accept(pay), nil
+	case p.fakeBetween:
+		// ФАЛЬШИВКА МЕЖДУ КУСКАМИ. Отличие от общего пути — размещение:
+		// сперва настоящий первый кусок, следом фальшивка на его же
+		// продолжение, и только потом настоящий остаток.
+		mid := 1
+		if tr.SNILen > 1 && tr.SNIOffset > 0 {
+			mid = tr.SNIOffset
+		}
+		if mid >= len(tr.Payload) {
+			mid = 1
+		}
+		if err := c.send(tr.Payload[:mid], tcpPSH|tcpACK, poison{}); err != nil {
+			return false, err
+		}
+		fake := make([]byte, len(tr.Payload)-mid)
+		for i := range fake {
+			fake[i] = 0x0f
+		}
+		reps := p.repeats
+		if reps < 1 {
+			reps = 1
+		}
+		fp := poison{badsum: p.badsum, ttl: p.ttl}
+		for i := 0; i < reps; i++ {
+			c.seq = base + uint32(mid)
+			if err := c.send(fake, tcpPSH|tcpACK, fp); err != nil {
+				return false, err
+			}
+		}
+		time.Sleep(12 * time.Millisecond)
+		c.seq = base + uint32(mid)
+		if err := c.send(tr.Payload[mid:], tcpPSH|tcpACK, poison{}); err != nil {
+			return false, err
+		}
 	case p.seqovl > 0 && p.disorder:
 		// ПЕРЕКРЫТИЕ ВМЕСТЕ С ПОРЯДКОМ. Раньше это были взаимоисключающие
 		// ветки, и связка не проверялась вовсе — а боевое плечо 1 пула

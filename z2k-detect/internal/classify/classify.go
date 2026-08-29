@@ -125,6 +125,16 @@ type Result struct {
 	// разбирает, переупорядочивание не держит», и уже ИЗ НИХ собирается
 	// стратегия. То же знание годится для другого хоста и другой линии.
 	Props Properties `json:"props"`
+	// Path — каким из трёх путей получен ответ. Различать их важно: это и есть
+	// мера того, насколько инструмент ушёл от перебора.
+	//   "свойство" — ответила фаза вопросов о коробке;
+	//   "собрано"  — стратегия построена из вектора свойств;
+	//   "перебор"  — вектор не помог, ответ нашёлся запасным перебором.
+	Path string `json:"path,omitempty"`
+	// Composed — стратегия СОБРАНА из вектора свойств, а не найдена перебором.
+	// Ложь при найденной стратегии означает, что вектор не сработал и ответ
+	// пришёл из запасного перебора — то есть модель этот случай не описывает.
+	Composed bool `json:"composed"`
 	// RawUsable — прошла ли самопроверка сырого слоя. Ложь означает, что
 	// отрицательный результат отравления ничего не доказывает.
 	RawUsable bool `json:"raw_usable"`
@@ -150,6 +160,10 @@ type Properties struct {
 	ToleratesReorder *bool `json:"tolerates_reorder,omitempty"`
 	// ToleratesLeftOverlap — правильно ли обрабатывает перекрытие слева.
 	ToleratesLeftOverlap *bool `json:"tolerates_left_overlap,omitempty"`
+	// CountsDuplicates — считает ли повторы одного сегмента как ретрансмиты.
+	CountsDuplicates *bool `json:"counts_duplicates,omitempty"`
+	// InspectsSYN — разбирает ли полезную нагрузку в SYN.
+	InspectsSYN *bool `json:"inspects_syn,omitempty"`
 	// HopTTL — наименьший TTL, при котором фальшивка до коробки ещё доходит,
 	// а до сервера уже нет. Это её расстояние в хопах: не только стратегия,
 	// но и адрес коробки в сети.
@@ -447,6 +461,21 @@ type poison struct {
 	// коробки есть временное окно, плотная очередь и растянутая пара для него
 	// не одно и то же — и тогда порог обязан упасть с ростом паузы.
 	gapMS int
+	// synData — положить приветствие ПРЯМО В SYN. По стандарту данных там не
+	// ждут, и коробка вправе их не разбирать: сигнатура проезжает мимо неё, а
+	// сервер, поддерживающий TCP Fast Open или просто терпимый к payload в
+	// SYN, их примет. Отдельный механизм, а не вариант уже покрытых.
+	synData bool
+	// oob — байт ВНЕ ПОЛОСЫ (флаг URG плюс указатель). Сервер по правилам
+	// изымает его из потока, коробка, читающая всё подряд, — оставляет.
+	// Получается, что собранные ими байты расходятся ровно на один символ,
+	// вставленный в середину сигнатуры.
+	oob bool
+	// fakeBetween — фальшивку класть МЕЖДУ кусками правды, а не перед всеми.
+	// Размещение решает: сегодняшний замер показал, что фальшивка отдельной
+	// посылкой перед перекрытием работает там, где та же приманка внутри
+	// перекрывающего сегмента — нет.
+	fakeBetween bool
 	// repeats — сколько копий фальшивки слать подряд. Ноль и единица значат
 	// одно и то же. Боевые плечи ставят 4–8: одиночную копию коробка может
 	// потерять или отбросить, а серия повышает шанс, что хотя бы одна ляжет в
@@ -477,6 +506,11 @@ type poison struct {
 
 // hasFake — ставится ли отдельная посылка-приманка перед настоящими данными.
 func (p poison) hasFake() bool {
+	// synData и oob фальшивки не несут вовсе, fakeBetween ставит её сам и в
+	// другом месте — общий путь отправки для них не годится.
+	if p.synData || p.oob || p.fakeBetween {
+		return false
+	}
 	return p.badsum || p.md5 || p.ttl > 0 || p.seqShift != 0
 }
 
@@ -498,6 +532,15 @@ func poisons() []poison {
 		{name: "md5", md5: true},
 		{name: "seq-out-of-window", seqShift: -66000},
 	}
+	// ПРИМИТИВЫ, КОТОРЫХ НЕ БЫЛО. Все три — самостоятельные механизмы, а не
+	// варианты уже покрытых, и каждый бьёт по своей особенности коробки.
+	out = append(out, poison{name: "syndata"}, poison{name: "oob"})
+	for _, n := range []int{1, 336} {
+		out = append(out, poison{name: fmt.Sprintf("fakedsplit-%d", n), fakeBetween: true, badsum: true, seqovl: n})
+	}
+	out = append(out, poison{name: "fakedsplit", fakeBetween: true, badsum: true})
+	out = append(out, poison{name: "fakedsplit+disorder", fakeBetween: true, badsum: true, disorder: true})
+	out = append(out, poison{name: "fakedsplit-x7", fakeBetween: true, badsum: true, repeats: 7})
 	// ТОЧНАЯ КОПИЯ БОЕВОГО ПЛЕЧА 1: семь копий фальшивки отдельной посылкой,
 	// затем перекрытие слева длиной в целое приветствие. Собрано по дампу, а
 	// не по описанию — три предыдущие попытки воспроизвести его по конфигу
@@ -651,6 +694,39 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 	}
 	res.RawUsable = true
 
+	// СВОЙСТВА СПЕРВА, СТРАТЕГИЯ — ИЗ НИХ.
+	//
+	// Шесть вопросов вместо девяноста попыток. Каждый отвечает на что-то о
+	// коробке, даже когда сам обхода не даёт, и заполняет вектор, из которого
+	// стратегия СОБИРАЕТСЯ. Перебор ниже остаётся, но уже запасным путём —
+	// для случаев, где собранное не сработало.
+	if opt.Only == "" {
+		if hit, ok := runProperties(ctx, ip, uint16(port), tr, opt, res); ok {
+			res.Path = "свойство"
+			return hit, true
+		}
+		for _, cand := range composeFromProps(res.Props, opt.Control.Payload) {
+			if ctx.Err() != nil {
+				break
+			}
+			obs := Observation{Probe: cand.name, DelayM: cand.gapMS}
+			pass := 0
+			for i := 0; i < opt.Repeats; i++ {
+				ok, err := probePoison(ctx, ip, uint16(port), tr, cand, opt.Timeout)
+				res.Probes++
+				if err == nil && ok {
+					pass++
+				}
+			}
+			obs.Pass, obs.Fail = pass, opt.Repeats-pass
+			res.Trace = append(res.Trace, obs)
+			if pass == opt.Repeats {
+				res.Composed, res.Path = true, "собрано"
+				return cand, true
+			}
+		}
+	}
+
 	for _, p := range poisons() {
 		if ctx.Err() != nil {
 			break
@@ -658,7 +734,7 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 		if opt.Only != "" && p.name != opt.Only {
 			continue
 		}
-		obs := Observation{Probe: "poison:" + p.name}
+		obs := Observation{Probe: "poison:" + p.name, DelayM: p.gapMS}
 		for i := 0; i < opt.Repeats; i++ {
 			pp := p
 			if pp.decoy == "hello" {
@@ -688,6 +764,9 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 		// стратегией то, что не работает.
 		if obs.Pass == opt.Repeats {
 			notePropsHit(&res.Props, p)
+			if res.Path == "" {
+				res.Path = "перебор"
+			}
 			return p, true
 		}
 		notePropsMiss(&res.Props, p)
@@ -729,6 +808,22 @@ func notePropsMiss(pr *Properties, p poison) {
 
 // strategyForPoison переводит найденную разницу в термины nfqws2.
 func strategyForPoison(p poison) string {
+	if p.synData {
+		return "--lua-desync=syndata:payload=tls_client_hello:dir=out"
+	}
+	if p.oob {
+		return "--lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:oob"
+	}
+	if p.fakeBetween {
+		st := "--lua-desync=fakedsplit:payload=tls_client_hello:dir=out:pos=1"
+		if p.badsum {
+			st += ":badsum"
+		}
+		if p.repeats > 1 {
+			st += fmt.Sprintf(":repeats=%d", p.repeats)
+		}
+		return st
+	}
 	if p.hasFake() && (p.seqovl > 0 || p.seqovlExact) {
 		f := "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:tls_mod=rnd,dupsid,sni=www.google.com"
 		if p.badsum {

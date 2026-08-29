@@ -237,7 +237,15 @@ func classifyCmd(ctx context.Context, rest []string) {
 		}
 	}
 	if res.Strategy != "" {
-		fmt.Printf("Стратегия: %s\n", res.Strategy)
+		how := map[string]string{
+			"свойство": "ответила фаза свойств — 6 вопросов о коробке",
+			"собрано":  "СОБРАНА из вектора свойств",
+			"перебор":  "вектор не помог, найдена запасным перебором",
+		}[res.Path]
+		if how == "" {
+			how = "путь не отмечен"
+		}
+		fmt.Printf("Стратегия: %s\n           (%s)\n", res.Strategy, how)
 	}
 	if res.Verdict == classify.VerdictOpaque && !res.RawUsable {
 		fmt.Printf("ВНИМАНИЕ: сырые зонды не отработали — отрицательный вывод про отравление НЕ значим\n")
