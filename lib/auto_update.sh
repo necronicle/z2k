@@ -935,6 +935,23 @@ au_step_restart_service() {
     "$init" restart >/dev/null 2>&1
 }
 
+# Вычистить наши ip host записи из конфига роутера.
+#
+# Четвёртый слой скачивания писал их постоянно и на каждую неудачную попытку;
+# слой снят 30.08.2026, но у людей накопленное осталось — по три-четыре строки
+# на домен при 256 слотах у Keenetic. Обновление обязано прибирать за прошлыми
+# версиями: реинсталл это уже делает, а сходимость шла мимо.
+#
+# Идемпотентно и дёшево: одно чтение running-config. Гейт на доступность —
+# как у regen-config: функция живёт в lib/install.sh, и в контексте, где её нет,
+# шаг просто пропускается, а не валит обновление.
+au_step_cleanup_ip_hosts() {
+    command -v cleanup_legacy_ip_hosts >/dev/null 2>&1 || {
+        au_log "cleanup-ip-hosts: функция недоступна, пропускаю"; return 0; }
+    cleanup_legacy_ip_hosts >/dev/null 2>&1
+    return 0
+}
+
 # au_run_step <шаг> — rc: 0 сделано, 1 шаг провалился, 2 шага не знаем.
 au_run_step() {
     case "$1" in
@@ -945,6 +962,7 @@ au_run_step() {
         rebuild-panel)    au_step_rebuild_panel ;;
         reset-state)      au_step_reset_state ;;
         restart-service)  au_step_restart_service ;;
+        cleanup-ip-hosts) au_step_cleanup_ip_hosts ;;
         *) au_log "неизвестный шаг «$1» — нужна полная переустановка"; return 2 ;;
     esac
 }
@@ -961,6 +979,7 @@ au_step_human() {
         rebuild-panel)    printf 'пересобираю веб-панель' ;;
         reset-state)      printf 'сбрасываю состояние стратегий' ;;
         restart-service)  printf 'перезапускаю сервис' ;;
+        cleanup-ip-hosts) printf 'убираю записи от прежних версий' ;;
         *)                printf '%s' "$1" ;;
     esac
 }
@@ -2332,7 +2351,12 @@ au_run_apply() {
             # shellcheck disable=SC2086
             au_apply_converge "$target_tag" $_steps
             case "$?" in
-                0) au_lock_release; return 0 ;;
+                0)
+                    # Прибрать за прежними версиями безусловно, не полагаясь на
+                    # то, что релиз перечислил шаг в манифесте: мусор в конфиге
+                    # роутера накопился ДО того, как этот шаг появился.
+                    au_step_cleanup_ip_hosts
+                    au_lock_release; return 0 ;;
                 2) au_log "шаг из будущего — падаю на полную переустановку" ;;
                 *) au_lock_release; return 1 ;;
             esac

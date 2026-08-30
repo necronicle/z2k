@@ -350,6 +350,28 @@ cleanup_legacy_ip_hosts() {
                 # открываться у тех, у кого без нас открывался бы. Снимаем при
                 # первом же обновлении, независимо от адреса.
                 if (tolower(host) == "4pda.to" || tolower(host) ~ /\.4pda\.to$/) print
+
+                # GITHUB И ЗЕРКАЛА — наш собственный мусор, снятый 30.08.2026
+                # вместе с четвёртым слоем скачивания. Тот слой писал ПОСТОЯННУЮ
+                # запись на КАЖДУЮ неудачную попытку, а у GitHub много адресов и
+                # CDN отдаёт разные — у людей набралось по три-четыре строки на
+                # домен. У Keenetic под статический DNS всего 256 слотов.
+                #
+                # Снимаем ПО ИМЕНИ, а не по адресу: эти записи указывают на
+                # адреса самого GitHub, под правило «наши VPS-IP» выше они не
+                # попадают. Список имён закрытый — ровно те семь, что писал тот
+                # слой, — поэтому чужого не заденем: человек, прописавший свой
+                # ip host для github, в этот набор не попадёт разве что чудом,
+                # а вот всё, что попало, писали мы.
+                if (tolower(host) == "github.com"          ||
+                    tolower(host) == "api.github.com"      ||
+                    tolower(host) == "codeload.github.com" ||
+                    tolower(host) == "raw.githubusercontent.com"            ||
+                    tolower(host) == "objects.githubusercontent.com"        ||
+                    tolower(host) == "release-assets.githubusercontent.com" ||
+                    tolower(host) == "gist.githubusercontent.com"           ||
+                    tolower(host) == "cdn.jsdelivr.net"    ||
+                    tolower(host) == "gh-proxy.com") print
             }' || true)
     # Under z2k.sh `set -e`, `[ -z "$x" ] && return 0` aborts the script
     # when $x is non-empty (the [ exits 1 because -z is false). Use if/fi.
@@ -369,8 +391,11 @@ cleanup_legacy_ip_hosts() {
 
     if [ "$removed" -gt 0 ]; then
         LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
-        print_info "Migration: очищено $removed legacy ip host записей (DNS→Router 2026-04-27)"
+        print_info "Очищено $removed записей ip host, оставшихся от прежних версий"
     fi
+    # Учётный файл четвёртого слоя. Сам слой снят, писать в него больше некому,
+    # а его наличие вводило бы в заблуждение при разборе следующей жалобы.
+    rm -f "${ZAPRET2_DIR:-/opt/zapret2}/state/ndmc-managed.txt" 2>/dev/null || true
     return 0
 }
 
@@ -1308,6 +1333,34 @@ download_openwrt_embedded_release() {
 
     rm -f "$dest"
 
+    # ПЕРВЫМ ХОДОМ — НАШ VPS, как и во всех остальных скачиваниях.
+    #
+    # Раньше этой функции VPS не знал вовсе: она шла своей лесенкой мимо общей
+    # (github напрямую → gh-proxy → и только потом z2k_fetch). На линии, где до
+    # GitHub не достучаться, это стоило человеку 10 секунд в таймаут плюс три
+    # минуты на оборвавшемся gh-proxy — и установка не состоялась (полевой лог
+    # 30.08.2026: «curl: (28) Operation timed out after 180001 ms with 17757
+    # out of 4373648 bytes received»).
+    #
+    # VPS терминирует по SNI и форвардит на настоящий backend GitHub, поэтому
+    # TLS остаётся сквозным: подменяется только адрес назначения. Для релизов
+    # это важно вдвойне — github.com отдаёт 302 на CDN-хост, и --resolve обязан
+    # покрывать всю цепочку редиректа, что _z2k_vps_gh_resolve и делает.
+    local _vps_resolve=""
+    if command -v _z2k_vps_gh_resolve >/dev/null 2>&1; then
+        _vps_resolve=$(_z2k_vps_gh_resolve "$url")
+    fi
+    if [ -n "$_vps_resolve" ]; then
+        print_info "Пробую скачать релиз через наш VPS..."
+        # shellcheck disable=SC2086
+        if curl -fsSL --connect-timeout "${Z2K_VPS_CONNECT_TIMEOUT:-3}" \
+            --max-time "${Z2K_RELEASE_DIRECT_TIMEOUT:-45}" \
+            $_vps_resolve "$url" -o "$dest"; then
+            return 0
+        fi
+        rm -f "$dest"
+    fi
+
     print_info "Пробую скачать релиз напрямую с GitHub..."
     if curl -fsSL --connect-timeout 10 --max-time "${Z2K_RELEASE_DIRECT_TIMEOUT:-45}" \
         "$url" -o "$dest"; then
@@ -1328,9 +1381,8 @@ download_openwrt_embedded_release() {
     esac
 
     if command -v z2k_fetch >/dev/null 2>&1; then
-        print_warning "Обычные release-зеркала не сработали — пробую DoH/NDM fallback"
-        Z2K_FETCH_PREFER_DOH=1 Z2K_FETCH_NDMC_THRESHOLD=1 \
-            z2k_fetch "$url" "$dest" && return 0
+        print_warning "Обычные release-зеркала не сработали — пробую DoH"
+        Z2K_FETCH_PREFER_DOH=1 z2k_fetch "$url" "$dest" && return 0
         rm -f "$dest"
     fi
 
@@ -5267,6 +5319,35 @@ uninstall_zapret2() {
         if [ -f "$_init" ]; then
             rm -f "$_init"
             print_info "Удален init скрипт: $_init"
+        fi
+    done
+
+    # Вычистить наши ip host записи. При удалении это обязательно: иначе
+    # человек снёс z2k, а мусор в конфиге роутера остался навсегда, и виноват
+    # в его глазах будет роутер.
+    cleanup_legacy_ip_hosts
+
+    # ВЕРНУТЬ ШТАТНЫЙ lighttpd, ЕСЛИ МЫ ЕГО ВЫКЛЮЧАЛИ.
+    #
+    # Установка панели переименовывает конфликтующий S*lighttpd в
+    # .<имя>.disabled-by-z2k, чтобы он не держал порт. Возврат был написан, но
+    # жил только в webpanel/uninstall.sh, а основное удаление её не зовёт —
+    # снимает лишь S96z2k-webpanel. В итоге у человека, снёсшего z2k, штатный
+    # lighttpd оставался выключенным навсегда и без единого следа почему
+    # (жалоба с поля 30.08.2026: /opt/etc/init.d/.S80lighttpd.disabled-by-z2k).
+    #
+    # Если имя уже занято — не трогаем: значит человек что-то сделал сам, и
+    # затирать его файл мы не вправе.
+    local _dis _base
+    for _dis in /opt/etc/init.d/.S*lighttpd.disabled-by-z2k; do
+        [ -e "$_dis" ] || continue
+        _base="${_dis##*/}"; _base="${_base#.}"; _base="${_base%.disabled-by-z2k}"
+        if [ -e "${_dis%/*}/$_base" ]; then
+            print_warning "Не возвращаю $_base — файл с таким именем уже есть"
+        elif mv "$_dis" "${_dis%/*}/$_base" 2>/dev/null; then
+            print_info "Возвращён штатный init: $_base"
+        else
+            print_warning "Не удалось вернуть $_dis — перенесите вручную"
         fi
     done
 

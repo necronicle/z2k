@@ -60,7 +60,7 @@ export GITHUB_RAW
 # хосты на реальный backend через EU-egress, отдавая СОБСТВЕННЫЙ сертификат
 # GitHub — значит обычный `--resolve <githubhost>:443:<VPS>` качает по TLS с
 # валидным сертом, без pin/конфига. Транзиентно per-request (в отличие от
-# постоянной ndmc `ip host` записи в Layer 4). Overridable через env.
+# лишней тяжёлой попытки скачивания). Overridable через env.
 Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-213.176.74.63}"
 export Z2K_VPS_GH_IP
 
@@ -265,7 +265,8 @@ z2k_connfail() {
 #   2. cdn.jsdelivr.net/gh/<o>/<r>@<br>/<p> — CDN, 12h edge-кеш
 #                                            (purge: https://purge.jsdelivr.net/gh/<o>/<r>@<br>/<p>)
 #   3. gh-proxy.com/<raw-url>              — reverse-proxy без кеша
-#   4. Keenetic-only: nslookup через 8.8.8.8 → `ndmc ip host`, повтор 1+2.
+# Четвёртого слоя больше нет: он писал постоянные записи в конфиг роутера,
+# см. комментарий в теле функции.
 #
 # Использование:
 #   z2k_fetch "https://raw.githubusercontent.com/owner/repo/branch/path" /tmp/dest
@@ -713,8 +714,8 @@ z2k_fetch() {
     #
     # Разница между зеркалами не в надёжности, а в том, кто владеет ключом от
     # TLS. jsdelivr и gh-proxy оба терминируют соединение у себя, но jsdelivr —
-    # Fastly с юрлицом, а gh-proxy анонимный сторонний прокси. Layer 0 (VPS) и
-    # ndmc безопасны: там подменяется только адрес назначения, TLS остаётся
+    # Fastly с юрлицом, а gh-proxy анонимный сторонний прокси. Layer 0 (VPS)
+    # безопасен: там подменяется только адрес назначения, TLS остаётся
     # сквозным до GitHub, и подделать его нельзя.
     #
     # Отключаем gh-proxy для файлов РЕПОЗИТОРИЯ без известного дайджеста. Это
@@ -783,7 +784,7 @@ z2k_fetch() {
     # реальные github-IP валятся по всей стране. Наш VPS форвардит реальный
     # github-хост через EU-egress с СЕРТификатом самого github (валидный TLS).
     # Пробуем ПЕРВЫМ для github-URL; на ЛЮБОЙ сбой — ТИХО проваливаемся в
-    # цепочку direct→jsdelivr→gh-proxy→ndmc→DoH ниже (значит отказ VPS
+    # цепочку direct→jsdelivr→gh-proxy→DoH ниже (значит отказ VPS
     # деградирует до сегодняшнего поведения, а не в жёсткий фейл). Транзиентно:
     # per-request --resolve, никаких постоянных записей в конфиг.
     local _vps_resolve; _vps_resolve=$(_z2k_vps_gh_resolve "$url")
@@ -864,50 +865,26 @@ z2k_fetch() {
     # All three normal mirrors fell through. This is the signal the user
     # might have a poisoned/blocked channel — but ONE failure can also be
     # transient (api.github.com rate limit, sporadic TCP RST). Bump the
-    # streak counter; only the heavyweight fallbacks (Layer 4 ndmc DNS
-    # override, Layer 5 DoH) fire after the streak crosses a threshold.
+    # streak counter; the heavyweight fallback (Layer 5 DoH) fires after
+    # the streak crosses a threshold.
     Z2K_FETCH_FAIL_STREAK=$((${Z2K_FETCH_FAIL_STREAK:-0} + 1))
     export Z2K_FETCH_FAIL_STREAK
 
-    # --- Layer 4: Keenetic DNS override via 8.8.8.8 + ndmc ip host ---
-    # Originally added 2026-04-25 for users (e.g. Денис, MTS) where all
-    # three direct fetches failed mid-install due to ISP DNS poisoning
-    # of github hosts.
+    # ЧЕТВЁРТЫЙ СЛОЙ (ndmc "ip host") УБРАН 30.08.2026.
     #
-    # Gated by Z2K_FETCH_NDMC_THRESHOLD (default 2): a single transient
-    # Layer 1-3 fall-through is NOT enough. Pre-gate, one rate-limit on
-    # api.github.com would silently inject a permanent `ip host` record
-    # into the user's running-config, pinning all their github traffic
-    # to a single IP forever (Mark, 2026-04-28). The threshold ensures
-    # only sustained inability to reach github triggers DNS override.
+    # Он писал ПОСТОЯННЫЕ записи в конфиг роутера пользователя. Приём был
+    # скопирован из чужого проекта (zapret4rocket) коммитом f4897e2 от 23.04,
+    # и в описании того коммита прямым текстом стоит «not tested».
     #
-    # Records we write are tracked in Z2K_MANAGED_NDMC so install/uninstall
-    # can clean them up later, and so a future fix can refresh them when
-    # they go stale.
-    : "${Z2K_FETCH_NDMC_THRESHOLD:=2}"
-    Z2K_MANAGED_NDMC="${Z2K_MANAGED_NDMC:-/opt/zapret2/state/ndmc-managed.txt}"
-    if [ "$Z2K_FETCH_FAIL_STREAK" -ge "$Z2K_FETCH_NDMC_THRESHOLD" ] && \
-       command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
-        local resolved_any=0 host ip
-        mkdir -p "$(dirname "$Z2K_MANAGED_NDMC")" 2>/dev/null
-        for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com \
-                    github.com objects.githubusercontent.com release-assets.githubusercontent.com; do
-            ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
-                 | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
-            if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
-                if LD_LIBRARY_PATH= ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
-                    resolved_any=1
-                    printf '%s %s\n' "$host" "$ip" >> "$Z2K_MANAGED_NDMC" 2>/dev/null
-                fi
-            fi
-        done
-        if [ "$resolved_any" = "1" ]; then
-            sleep 1
-            if _z2k_curl_etag "$url" "$dest" && _z2k_verify_fetched "$dest" "GitHub напрямую (после ndmc)"; then _z2k_fetch_ok; return 0; fi
-            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_verify_fetched "$dest" "jsdelivr (после ndmc)" && { _z2k_fetch_ok; return 0; }
-            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_verify_fetched "$dest" "gh-proxy (после ndmc)" && { _z2k_fetch_ok; return 0; }
-        fi
-    fi
+    # На поле это дало помойку: у GitHub много адресов, CDN отдаёт разные, и
+    # каждый неудачный заход добавлял ещё строку. У пользователя набралось по
+    # три-четыре записи на домен, при том что у Keenetic под статический DNS
+    # всего 256 слотов. Лезть в конфиг роутера ради ещё одной попытки
+    # скачивания мы права не имеем — тем более что первым ходом теперь идёт
+    # наш VPS, а за ним три зеркала.
+    #
+    # Накопленное вычищается z2k_ndmc_cleanup() — при установке, обновлении и
+    # удалении.
 
     # --- Layer 5: DoH (Cloudflare 1.1.1.1) + pinned anycast edge IPs ---
     # Last resort for MTS-style stateful TSPU (post-2026-03-31): RST'ит

@@ -131,7 +131,7 @@ z2k_connfail() {
 # ==============================================================================
 # Дублирует логику z2k.sh / lib/utils.sh для standalone cron-запуска (этот
 # скрипт не source'ит utils.sh). Слои: raw.github → jsdelivr → gh-proxy →
-# Keenetic DNS override через 8.8.8.8 + ndmc.
+# Четвёртого слоя (ndmc) больше нет — см. комментарий в теле функции.
 _z2k_curl_etag() {
     local url="$1" dest="$2" resolve_args="$3" conn_to="${4:-10}"
     local etag_file="${dest}.etag"
@@ -270,7 +270,7 @@ z2k_fetch() {
     #
     # Тот же fail-safe, что в z2k.sh и lib/utils.sh; здесь его не было вовсе.
     # jsdelivr и gh-proxy оба терминируют TLS у себя, но jsdelivr — Fastly с
-    # юрлицом, а gh-proxy анонимный сторонний прокси. Layer 0 и ndmc безопасны:
+    # юрлицом, а gh-proxy анонимный сторонний прокси. Layer 0 безопасен:
     # там подменяется только адрес назначения, TLS остаётся сквозным до GitHub.
     #
     # А дайджест в ЭТОЙ копии не наполняется ничем: чужие списки в карту сумм не
@@ -278,7 +278,7 @@ z2k_fetch() {
     # ЛЮБОЙ ответ. То есть на анонимное зеркало мы ходили за содержимым, которое
     # потом никто не сверял, — а подменённый хостлист тихо решает, какие домены
     # получают обход, а какие нет. Нет дайджеста — нет и этого зеркала;
-    # остальные слои (Layer 0, прямой, jsdelivr, ndmc) на месте.
+    # остальные слои (Layer 0, прямой, jsdelivr) на месте.
     #
     # Релиз-ассетам gh-proxy ОСТАВЛЯЕМ: они проверяются ниже по течению, и это
     # единственное их запасное зеркало — jsdelivr релизы не зеркалит вовсе.
@@ -357,38 +357,10 @@ z2k_fetch() {
         [ "${Z2K_LAST_HTTP:-}" = "404" ] || Z2K_FETCH_ALL_404=0
     fi
 
-    # All three normal mirrors fell through. Gate the ndmc DNS-override behind a
-    # cross-call streak counter + track the records in Z2K_MANAGED_NDMC — a single
-    # transient fall-through must NOT permanently pin github hosts to one IP in the
-    # running-config (regression 2026-04-28). Mirrors the gated z2k_fetch in z2k.sh
-    # / lib/utils.sh; this is a standalone cron copy that must not be laxer.
-    Z2K_FETCH_FAIL_STREAK=$((${Z2K_FETCH_FAIL_STREAK:-0} + 1))
-    export Z2K_FETCH_FAIL_STREAK
-    : "${Z2K_FETCH_NDMC_THRESHOLD:=2}"
-    Z2K_MANAGED_NDMC="${Z2K_MANAGED_NDMC:-/opt/zapret2/state/ndmc-managed.txt}"
-
-    if [ "$Z2K_FETCH_FAIL_STREAK" -ge "$Z2K_FETCH_NDMC_THRESHOLD" ] && \
-       command -v ndmc >/dev/null 2>&1 && command -v nslookup >/dev/null 2>&1; then
-        local resolved_any=0 host ip
-        mkdir -p "$(dirname "$Z2K_MANAGED_NDMC")" 2>/dev/null
-        for host in raw.githubusercontent.com cdn.jsdelivr.net gh-proxy.com api.github.com \
-                    github.com objects.githubusercontent.com release-assets.githubusercontent.com; do
-            ip=$(nslookup "$host" 8.8.8.8 2>/dev/null \
-                 | awk '/^Name:/ {s=1; next} s && /^Address [0-9]+: [0-9]+\./ {print $3; exit}')
-            if [ -n "$ip" ] && [ "$ip" != "127.0.0.1" ] && [ "$ip" != "8.8.8.8" ]; then
-                if LD_LIBRARY_PATH= ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
-                    resolved_any=1
-                    printf '%s %s\n' "$host" "$ip" >> "$Z2K_MANAGED_NDMC" 2>/dev/null
-                fi
-            fi
-        done
-        if [ "$resolved_any" = "1" ]; then
-            sleep 1
-            if _z2k_curl_etag "$url" "$dest" && _z2k_ul_verify "$dest"; then return 0; fi
-            [ -n "$jsdelivr" ] && _z2k_curl_etag "$jsdelivr" "$dest" && _z2k_ul_verify "$dest" && return 0
-            [ -n "$gh_proxy" ] && _z2k_curl_etag "$gh_proxy" "$dest" && _z2k_ul_verify "$dest" && return 0
-        fi
-    fi
+    # ЧЕТВЁРТЫЙ СЛОЙ (ndmc "ip host") УБРАН 30.08.2026 — он писал ПОСТОЯННЫЕ
+    # записи в конфиг роутера пользователя. Подробности в z2k.sh; здесь важно,
+    # что это КРОНОВАЯ копия: она ходила без человека, раз в сутки, и мусор
+    # копила молча. Накопленное вычищает z2k_ndmc_cleanup().
 
     return 1
 }
