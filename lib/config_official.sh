@@ -1785,7 +1785,29 @@ generate_nfqws2_opt_from_strategies() {
         # рабочему хосту чужое имя.
         local _sp_cap
         _sp_cap=$(z2k_reply_pkt_cap "$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")")
-        sni_pick="--lua-desync=z2k_stall_watch:dir=in:cap=${_sp_cap}${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
+        # СТОРОЖУ — СВОЙ, РАСШИРЕННЫЙ ДИАПАЗОН.
+        #
+        # Профиль ограничивает разбор первыми килобайтами ответа (--in-range),
+        # и закрывающий пакет большой загрузки до инстанса не доходит вовсе:
+        # замер 30.08.2026 — «in pos a0 s168082 ... is beyond range a0-s27500».
+        # Ровно этот пакет и доказывает, что поток ехал за нашим горизонтом,
+        # а без него сторож не мог отличить здоровую крупную загрузку от
+        # обрыва и записывал рабочим хостам чужие имена.
+        #
+        # Диапазон — позиционное состояние разборщика: оно действует на всё,
+        # что объявлено дальше. Поэтому сразу за нашим инстансом возвращаем
+        # прежнее значение, иначе расширение утечёт на circular и сломает ему
+        # планку inseq. Если в голове диапазона нет — не трогаем ничего:
+        # восстанавливать было бы нечем.
+        local _sp_ir="" _t3 _seen_circ=0
+        for _t3 in $rkn_tcp; do
+            case "$_t3" in
+                --lua-desync=circular:*) _seen_circ=1; break ;;
+                --in-range=*) _sp_ir="$_t3" ;;
+            esac
+        done
+        [ "$_seen_circ" = "1" ] || _sp_ir=""
+        sni_pick="${_sp_ir:+--in-range=a- }--lua-desync=z2k_stall_watch:dir=in:cap=${_sp_cap}${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}${_sp_ir:+ $_sp_ir}"
         sni_pick="$sni_pick --lua-desync=z2k_sni_pick:payload=tls_client_hello:dir=out:blob=z2k_ch${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
         sni_pick="$sni_pick --lua-desync=fake:payload=tls_client_hello:dir=out:blob=z2k_ch:optional:repeats=8:tcp_ts=-1000"
     fi
