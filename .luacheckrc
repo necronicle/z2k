@@ -32,7 +32,7 @@ globals = {
     -- Готовит фейковый ClientHello с подобранным именем и кладёт его в поле
     -- desync; шлёт штатный fake с optional. Глобальна, потому что движок ищет
     -- десинк-функцию по имени в _G.
-    "z2k_sni_pick", "z2k_sni_proven", "z2k_sni_pinned", "z2k_sni_locked",
+    "z2k_sni_pick", "z2k_sni_proven", "z2k_sni_pinned", "z2k_sni_locked", "z2k_sni_net_match",
     -- Наблюдение за обрывом: свой инстанс с dir=in, потому что детектор
     -- ротатора после защёлки успеха не зовётся вовсе.
     "z2k_stall_watch",

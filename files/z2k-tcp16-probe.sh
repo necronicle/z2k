@@ -22,6 +22,9 @@ ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
 DETECT="${DETECT:-$ZAPRET2_DIR/z2k-detect}"
 TARGETS="${TARGETS:-$ZAPRET2_DIR/lists/tcp16_targets.txt}"
 FLAG="$ZAPRET2_DIR/state/tcp16.flag"
+# Список AS, где блок найден: по нему рантайм решает, кому ставить имя, а кому
+# не надо. Без него имя уходит всему пулу подряд.
+ASNOUT="$ZAPRET2_DIR/state/tcp16_asn.txt"
 LOG="${LOG:-/tmp/z2k-tcp16-probe.log}"
 
 # Подтверждённых AS хватает за глаза: они и подобраны как самые надёжные
@@ -33,7 +36,10 @@ LIMIT="${LIMIT:-12}"
 [ -s "$TARGETS" ] || { echo "нет $TARGETS" >&2; exit 1; }
 mkdir -p "$(dirname "$FLAG")" 2>/dev/null
 
-"$DETECT" tcp16 -targets "$TARGETS" -confirmed -limit "$LIMIT" -parallel 3 > "$LOG" 2>&1
+# Без -confirmed: список AS нужен ПОЛНЫЙ, иначе имя не достанется тем, кого
+# режут, но чья AS не помечена звёздочкой. Полный прогон стоит около минуты
+# и делается раз в неделю.
+"$DETECT" tcp16 -targets "$TARGETS" -parallel 4 -asn-out "$ASNOUT" > "$LOG" 2>&1
 rc=$?
 
 case "$rc" in

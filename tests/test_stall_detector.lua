@@ -347,6 +347,46 @@ do
     dofile("files/lua/z2k-alert.lua")
 end
 
+-- ИМЯ СТАВИТСЯ ТОЛЬКО СЕТЯМ, ГДЕ БЛОК НАЙДЕН. Замер 30.08.2026: linode,
+-- cdn77, aws и scaleway доезжают целиком и без имени — платить за лишний фейк
+-- в каждом их рукопожатии незачем.
+do
+    local asnf, netf = os.tmpname(), os.tmpname()
+    local f = io.open(asnf, "w"); f:write("# найдено\n24940\n199524\n"); f:close()
+    f = io.open(netf, "w")
+    f:write("24940\t91.98.0.0/16\n24940\t46.62.0.0/16\n")
+    f:write("16509\t52.94.0.0/16\n")            -- AS без блока: не должна попасть
+    f:write("199524\t2a03:90c0::/32\n")
+    f:close()
+    local rg = os.getenv
+    os.getenv = function(k)
+        if k == "Z2K_TCP16_ASN" then return asnf end
+        if k == "Z2K_TCP16_NETS" then return netf end
+        if k == "Z2K_SNI_PERHOST" then return "1" end
+        return rg(k)
+    end
+    package.loaded["z2k-alert"] = nil
+    dofile("files/lua/z2k-alert.lua")
+
+    local function v4(a, b) return { dis = { ip = { ip_dst = string.char(a, b, 0, 1) } } } end
+    is("адрес из найденной AS — ставим", true, z2k_sni_net_match(v4(91, 98)))
+    is("вторая сеть той же AS — ставим", true, z2k_sni_net_match(v4(46, 62)))
+    is("AS без блока — не ставим", false, z2k_sni_net_match(v4(52, 94)))
+    is("посторонняя сеть — не ставим", false, z2k_sni_net_match(v4(8, 8)))
+
+    local v6 = { dis = { ip6 = { ip6_dst = string.char(0x2a, 0x03, 0x90, 0xc0) ..
+                                           string.rep("\0", 12) } } }
+    is("v6 из найденной AS — ставим", true, z2k_sni_net_match(v6))
+
+    os.remove(asnf); os.remove(netf)
+    os.getenv = rg
+    package.loaded["z2k-alert"] = nil
+    dofile("files/lua/z2k-alert.lua")
+    -- Карты нет — не выключаем обход всем: одна не доехавшая проба не должна
+    -- лишать имени тех, у кого оно работало.
+    is("без карты сетей ставим всем", true, z2k_sni_net_match(v4(1, 2)))
+end
+
 -- ПЕРВЫЙ HELLO ПОСЛЕ ПЕРЕЗАПУСКА. Селектор стоит в профиле ПЕРЕД circular, а
 -- запись хоста засевается с диска внутри circular — поэтому имя он обязан
 -- подтянуть сам. Иначе после каждого рестарта человек получает одну заведомо

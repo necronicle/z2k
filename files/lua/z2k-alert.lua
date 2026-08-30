@@ -937,6 +937,89 @@ local Z2K_SNI_LIST_PATH = os.getenv("Z2K_SNI_LIST") or
                           "/opt/zapret2/lists/sni_wl_candidates.txt"
 local sni_list, sni_loaded = nil, false
 
+-- КОМУ СТАВИТЬ ИМЯ: ТОЛЬКО СЕТЯМ, ГДЕ БЛОК НАЙДЕН.
+--
+-- Проба выписывает список AS, в которых обрыв по объёму подтверждён
+-- (state/tcp16_asn.txt), а карта lists/tcp16_nets.txt переводит адрес в AS.
+-- Без этого имя уходило всему пулу подряд: замер 30.08.2026 — linode, cdn77,
+-- aws и scaleway доезжают целиком и без имени, то есть платили за лишний фейк
+-- в каждом рукопожатии зря.
+--
+-- Огрубление до /16 (v4) и /32 (v6) намеренное: точных префиксов у этих AS
+-- около 52 тысяч, а огрублённых — 6 тысяч. Цена — имя достанется соседям по
+-- /16; замерено, что лишний фейк рабочим сайтам не мешает. Это ровно то, что
+-- происходит сегодня со всем пулом, только в тысячу раз реже.
+local z2k_nets, z2k_nets_loaded = nil, false
+local function z2k_nets_load()
+	if z2k_nets_loaded then return z2k_nets end
+	z2k_nets_loaded = true
+	local asnpath = os.getenv("Z2K_TCP16_ASN") or "/opt/zapret2/state/tcp16_asn.txt"
+	local f = io.open(asnpath, "r")
+	if not f then return nil end
+	local want = {}
+	local n = 0
+	for line in f:lines() do
+		local a = line:match("^(%d+)")
+		if a then want[a] = true; n = n + 1 end
+	end
+	f:close()
+	if n == 0 then return nil end
+
+	local netpath = os.getenv("Z2K_TCP16_NETS") or "/opt/zapret2/lists/tcp16_nets.txt"
+	local nf = io.open(netpath, "r")
+	if not nf then return nil end
+	local set, cnt = {}, 0
+	for line in nf:lines() do
+		local a, p = line:match("^(%d+)\t([^%s]+)")
+		if a and p and want[a] then
+			-- v4 «a.b.0.0/16» кладём ключом a*256+b, v6 «xxxx:yyyy::/32» —
+			-- первыми двумя группами. Сравнение потом идёт по тому же ключу.
+			local o1, o2 = p:match("^(%d+)%.(%d+)%.")
+			if o1 then
+				set[tonumber(o1) * 256 + tonumber(o2)] = true
+				cnt = cnt + 1
+			else
+				local g1, g2 = p:match("^(%x+):(%x*):")
+				if g1 then
+					set[(g1 or "") .. ":" .. (g2 or "")] = true
+					cnt = cnt + 1
+				end
+			end
+		end
+	end
+	nf:close()
+	if cnt == 0 then return nil end
+	DLOG("z2k_sni: карта сетей загружена, " .. cnt .. " записей")
+	z2k_nets = set
+	return set
+end
+
+-- Адрес назначения принадлежит сети, где блок найден?
+-- Карты нет — считаем, что да: иначе одна не доехавшая проба выключила бы
+-- обход всем, у кого он работал.
+function z2k_sni_net_match(desync)
+	local set = z2k_nets_load()
+	if not set then return true end
+	local d = desync and desync.dis
+	if not d then return true end
+	if d.ip and d.ip.ip_dst then
+		local b = d.ip.ip_dst
+		if #b >= 2 then
+			return set[b:byte(1) * 256 + b:byte(2)] == true
+		end
+	elseif d.ip6 and d.ip6.ip6_dst then
+		local b = d.ip6.ip6_dst
+		if #b >= 4 then
+			local g1 = string.format("%x", b:byte(1) * 256 + b:byte(2))
+			local g2 = string.format("%x", b:byte(3) * 256 + b:byte(4))
+			if set[g1 .. ":" .. g2] then return true end
+			-- Ведущие нули во второй группе первоисточник печатает по-разному.
+			return set[g1 .. ":"] == true
+		end
+	end
+	return true
+end
+
 -- ЗАКРЕПЛЁННОЕ ИМЯ ЛИНИИ.
 --
 -- Один файл, одно имя. Его выбирает проба (z2k-sni-select.sh) на курируемой
@@ -1060,6 +1143,7 @@ function z2k_sni_pick(ctx, desync)
 	-- 18:37:57, посреди прогона подбора.
 	local pin = z2k_sni_pinned()
 	if pin == nil and (z2k_sni_locked() or not Z2K_SNI_PERHOST) then return end
+	if pin and not z2k_sni_net_match(desync) then return end
 	if pin then
 		local base_pin = blob(desync, desync.arg.src or "fake_default_tls")
 		if not base_pin then return end

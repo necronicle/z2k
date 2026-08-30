@@ -33,6 +33,7 @@ func tcp16Cmd(ctx context.Context, rest []string) {
 	scan := fs.String("scan", "", "файл имён-кандидатов: искать проходящее имя")
 	sni := fs.String("sni", "", "проверить одно конкретное имя")
 	par := fs.Int("parallel", 4, "сколько проб разом")
+	asnOut := fs.String("asn-out", "", "куда выписать AS, где блок найден (по одной в строке)")
 	first := fs.Bool("first", true, "при -scan остановиться на первом подошедшем имени")
 	_ = fs.Parse(rest)
 
@@ -52,11 +53,11 @@ func tcp16Cmd(ctx context.Context, rest []string) {
 		scanNames(ctx, tg, names, *par, *first)
 		return
 	}
-	probeLine(ctx, tg, *sni, *par)
+	probeLine(ctx, tg, *sni, *par, *asnOut)
 }
 
 // probeLine отвечает на вопрос «есть ли блок на линии» по каждой AS отдельно.
-func probeLine(ctx context.Context, tg []tcp16.Target, sni string, par int) {
+func probeLine(ctx context.Context, tg []tcp16.Target, sni string, par int, asnOut string) {
 	res := runAll(ctx, tg, sni, par)
 
 	type agg struct{ detected, alive, total int }
@@ -81,9 +82,18 @@ func probeLine(ctx context.Context, tg []tcp16.Target, sni string, par int) {
 	}
 	sort.Strings(keys)
 
+	// Список AS с блоком нужен рантайму: имя из белого списка ставится только
+	// тем адресам, что принадлежат этим AS. Без него мы ставим его всему пулу
+	// подряд — замер 30.08.2026: linode, cdn77, aws и scaleway доезжают целиком
+	// и без имени, то есть платят за него зря.
+	var detectedASN []string
+
 	anyDetected, anyAlive := 0, 0
 	for _, k := range keys {
 		a := byASN[k]
+		if a.detected > 0 {
+			detectedASN = append(detectedASN, k)
+		}
 		anyDetected += a.detected
 		anyAlive += a.alive
 		mark := "—"
@@ -94,6 +104,18 @@ func probeLine(ctx context.Context, tg []tcp16.Target, sni string, par int) {
 		}
 		fmt.Printf("AS%-8s %-6s  мишеней %2d, ответили %2d, блок на %d\n", k, mark, a.total, a.alive, a.detected)
 	}
+	if asnOut != "" {
+		var sb strings.Builder
+		sb.WriteString("# AS, где проба нашла блок по объёму. Пересобирается пробой.\n")
+		for _, k := range detectedASN {
+			sb.WriteString(k)
+			sb.WriteString("\n")
+		}
+		if err := os.WriteFile(asnOut, []byte(sb.String()), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "не смог записать %s: %v\n", asnOut, err)
+		}
+	}
+
 	fmt.Println()
 	switch {
 	case anyAlive == 0:
