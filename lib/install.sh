@@ -2424,11 +2424,7 @@ TMPJUNK
     # game-warp-ips.txt намеренно отсутствует: legacy-агрегат на 14297 записей
     # (15% IPv4, включая приватные сети и LAN пользователя) удалён из проекта.
     # WARP теперь работает на пер-игровых списках, выбираемых в панели.
-    # sni_wl_candidates.txt — shipped-replace, как и остальные в этом списке:
-    # это наш курируемый список кандидатов, а не пользовательский файл. Правки
-    # юзера здесь затираются намеренно, иначе устаревший белый список провайдера
-    # переживёт обновление и подбор имени будет искать по мёртвым записям.
-    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt sni_wl_candidates.txt; do
+    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
