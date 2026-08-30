@@ -1098,6 +1098,34 @@ body[data-page="login"] #app { max-width: none; }
 .probe-raw summary { cursor: pointer; font-size: 13px; color: var(--text-muted); }
 .probe-raw[open] summary { margin-bottom: var(--space-8); }
 
+/* ПОДБОР ПО ДОМЕНУ. Строка стратегии — единственное, ради чего сюда приходят,
+   поэтому весь акцент страницы отдан ей, а всё вокруг намеренно тихое.
+   Полоса слева, а не заливка целиком: строка длинная, и залитый блок на
+   пол-экрана читался бы как предупреждение, хотя это ответ.
+   user-select:all — один клик выделяет строку целиком: её отсюда уносят
+   копированием, и это самое частое действие на странице. */
+.pick-report { margin-top: var(--space-12); }
+.pick-head { font-size: 14px; margin-bottom: var(--space-8); }
+.pick-head b { font-family: var(--font-mono); font-size: 13px; }
+.pick-line {
+  margin: 0 0 var(--space-8);
+  padding: var(--space-12);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--bg-card-hover);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.pick-actions {
+  display: flex;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
+}
+
 /* Метка семейства адреса. Ключ строки — «example.com|4»: одно и то же имя
    живёт в таблице дважды, отдельно для IPv4 и IPv6, и стратегия у них разная.
    Показывать людям служебную палку нельзя, а терять различие — тем более. */

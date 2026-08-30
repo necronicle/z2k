@@ -6,6 +6,7 @@ import { renderDiag } from "./pages/diag.js";
 import { renderExcludeAddresses, renderExcludeDomains } from "./pages/exclude.js";
 import { renderAutohostlistDomains, renderExtraDomains } from "./pages/extra-domains.js";
 import { renderState } from "./pages/strategies.js";
+import { renderStrategyPick } from "./pages/strategy-pick.js";
 import { renderToggles } from "./pages/toggles.js";
 import { renderWarp } from "./pages/warp.js";
 
@@ -25,6 +26,7 @@ const routes = {
   // у «Исключений»: на неё можно дать ссылку и она переживает перезагрузку.
   autohostlist: renderAutohostlistDomains,
   state: renderState,
+  pick: renderStrategyPick,
   strategies: renderStrategies,
   diag: renderDiag,
   credits: renderCredits,
@@ -47,6 +49,7 @@ const ROUTE_TITLES = {
   // стояло «Rotator», из-за чего один раздел назывался четырьмя разными
   // именами (меню, маршрут, заголовок страницы, README).
   state:           "Стратегии",
+  pick:            "Стратегии",
   strategies:      "Стратегии",
   diag:            "Диагностика",
   credits:         "Благодарности",
@@ -56,6 +59,7 @@ const ROUTE_TITLES = {
 // которые являются подвкладками чужого раздела.
 const NAV_OF_ROUTE = {
   state: "strategies",
+  pick: "strategies",
   whitelist: "exclude",
 };
 

@@ -681,6 +681,38 @@ case "$method $path" in
     # Upstream per-game lists: name, entry count, and whether they are switched
     # on. Read-only by design — editing them is meaningless, the next refresh
     # overwrites the file.
+    # Подбор стратегии под домен замером. Отдаётся JSON самого замера как есть —
+    # разбирает его страница. Здесь ничего не интерпретируем намеренно: набор
+    # полей у замера свой и меняется вместе с инструментом, а лишний слой
+    # перевода только разъезжался бы с ним.
+    "GET /strategy/pick")
+        json_header
+        _pick=$(strategy_pick_last)
+        if [ -n "$_pick" ]; then
+            printf '{"ok":true,"result":%s}\n' "$_pick"
+        else
+            printf '{"ok":true,"result":null}\n'
+        fi
+        exit 0
+        ;;
+
+    # Запуск замера. Минута работы, поэтому задачей — синхронный CGI на это
+    # время занял бы воркер lighttpd (ср. /diag/probe: та проба идёт секунды и
+    # потому синхронная).
+    "POST /strategy/pick")
+        body=$(read_body)
+        domain=$(form_value "$body" "domain")
+        [ -n "$domain" ] || json_fail "400 Bad Request" "укажите домен"
+        case "$domain" in
+            *[!a-zA-Z0-9.-]*) json_fail "400 Bad Request" "в имени домена есть недопустимые символы" ;;
+        esac
+        [ "${#domain}" -le 253 ] || json_fail "400 Bad Request" "слишком длинное имя домена"
+        job_id=$(svc_action_async "Подбор стратегии для $domain" "strategy_pick_run $domain")
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+
     # Per-pool strategies: which pools have a user line, and what it is.
     "GET /strategy/pools")
         json_header

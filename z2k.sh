@@ -1248,6 +1248,7 @@ download_init_script() {
         www/js/pages/extra-domains.js \
         www/js/pages/policy.js \
         www/js/pages/strategies.js \
+        www/js/pages/strategy-pick.js \
         www/js/pages/telemetry.js \
         www/js/pages/toggles.js \
         www/js/pages/update.js \
