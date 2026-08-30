@@ -26,6 +26,7 @@ import (
 	"github.com/necronicle/z2k/z2k-detect/internal/decision"
 	"github.com/necronicle/z2k/z2k-detect/internal/dnssrc"
 	"github.com/necronicle/z2k/z2k-detect/internal/prober"
+	"github.com/necronicle/z2k/z2k-detect/internal/sniwl"
 )
 
 // Config tunes daemon behaviour.
@@ -59,6 +60,26 @@ type Config struct {
 	// itself, since our own daemon HTTP probes would echo through the
 	// source).
 	IgnorePeer string
+
+	// SNIWL — подбор whitelisted-SNI для класса «поток встаёт на 16–20 КБ».
+	// Отдельная подсистема со своими ручками: её единица — СЕТЬ /16, а не
+	// домен, и её проба тянет десятки килобайт против полутора секунд
+	// обычной. Enabled=false отключает целиком.
+	SNIWL sniwl.Config
+
+	// SNIWLHostlists — списки БЛОКИРОВОК, по которым решается, что домен
+	// вообще будет покрыт новым профилем. Профиль совпадает только на
+	// пересечении «адрес в поражённой сети» И «домен в списке», поэтому
+	// характеризовать сеть имеет смысл ровно по таким доменам.
+	//
+	// Это НЕ SkipPaths: туда входит whitelist.txt, то есть список
+	// «обход не включать», и предлагать оттуда сети было бы прямо против
+	// воли оператора.
+	SNIWLHostlists []string
+
+	// SNIWLExclude — списки исключений: домен, попавший сюда, не ставится
+	// в очередь, даже если он есть в списке блокировок.
+	SNIWLExclude []string
 }
 
 // Defaults returns the production config for the service-mode invocation.
@@ -89,6 +110,17 @@ func Defaults() Config {
 		ProbeCooldown:      5 * time.Minute,
 		ProbeConcurrency:   8,
 		IgnorePeer:         "192.168.1.1",
+		SNIWL:              sniwl.Defaults(),
+		SNIWLHostlists: []string{
+			"/opt/zapret2/extra_strats/TCP/RKN/List.txt",
+			"/opt/zapret2/lists/extra-domains.txt",
+			"/opt/zapret2/lists/discovered-domains.txt",
+			"/opt/zapret2/lists/autohostlist-domains.txt",
+			"/opt/zapret2/ipset/zapret-hosts-auto.txt",
+		},
+		SNIWLExclude: []string{
+			"/opt/zapret2/lists/whitelist.txt",
+		},
 	}
 }
 
@@ -108,13 +140,23 @@ type state struct {
 	// Значение = «строгая запись» (nfqws2-форма `^domain`, покрывает только
 	// сама себя). false = обычная запись, покрывает и поддомены.
 	skipSet map[string]bool
+	// blockSet — объединение SNIWLHostlists, blockExcl — SNIWLExclude.
+	// Обновляются тем же тикером, что и skipSet.
+	blockSet  map[string]bool
+	blockExcl map[string]bool
+
+	// sniwl — подсистема подбора whitelisted-SNI; nil, когда выключена.
+	// Ставится один раз при старте и дальше только читается.
+	sniwl *sniwl.Manager
 }
 
 func newState() *state {
 	return &state{
-		bypassed: make(map[string]struct{}),
-		cooldown: make(map[string]time.Time),
-		skipSet:  make(map[string]bool),
+		bypassed:  make(map[string]struct{}),
+		cooldown:  make(map[string]time.Time),
+		skipSet:   make(map[string]bool),
+		blockSet:  make(map[string]bool),
+		blockExcl: make(map[string]bool),
 	}
 }
 
@@ -140,9 +182,24 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := st.loadBypassed(cfg.PublishPath); err != nil {
 		log.Printf("engine: load %s: %v", cfg.PublishPath, err)
 	}
-	st.reloadSkipSet(cfg.SkipPaths)
+	st.reloadSkipSet(cfg)
 	log.Printf("engine: bootstrap — source=%s, %d bypassed, %d skip",
 		cfg.DNSSource.Name(), len(st.bypassed), len(st.skipSet))
+
+	// Подбор whitelisted-SNI. Провал инициализации (нет файла кандидатов на
+	// старой установке) НЕ фатален: это дополнительная подсистема, и демон
+	// без неё делает ровно то, что делал раньше.
+	if cfg.SNIWL.Enabled {
+		mgr, err := sniwl.New(cfg.SNIWL)
+		if err != nil {
+			log.Printf("engine: sniwl отключён: %v", err)
+		} else {
+			st.sniwl = mgr
+			go mgr.Run(ctx)
+			log.Printf("engine: sniwl — %d кандидатов, %d известных сетей, имя %q",
+				len(mgr.Candidates()), mgr.Stats().Networks, mgr.Stats().Name)
+		}
+	}
 
 	// Bounded semaphore for parallel probes. Keeps router CPU/network
 	// usage predictable even under DNS-floods.
@@ -193,6 +250,14 @@ func Run(ctx context.Context, cfg Config) error {
 			// never going to probe anyway.
 			if err := prober.Validate(ev.Domain); err != nil {
 				continue
+			}
+			// Домен уже в списке блокировок — обычная проба его пропустит
+			// (он покрыт оператором), но для подбора имени он и есть самый
+			// нужный: новый профиль совпадает только на пересечении
+			// «поражённая сеть» И «домен в списке». Offer не ходит в сеть и
+			// не блокирует — резолвит и меряет отдельная горутина.
+			if st.sniwl != nil && st.inBlocklist(ev.Domain) {
+				st.sniwl.Offer(ev.Domain, nil)
 			}
 			if !st.eligible(ev.Domain, cfg.ProbeCooldown) {
 				continue
@@ -267,25 +332,7 @@ func (s *state) markProbed(domain string) {
 // both the probe traffic and the map growth, all of it against names the
 // operator had already said to leave alone.
 func (s *state) skippedLocked(domain string) bool {
-	// Точное совпадение покрывает обе формы записи.
-	if _, ok := s.skipSet[domain]; ok {
-		return true
-	}
-	// Walk the parent labels: a.b.example.com -> b.example.com -> example.com
-	//
-	// Родитель покрывает поддомен ТОЛЬКО если он записан обычной формой.
-	// Строгая форма `^domain` для того и существует, чтобы поддомены не
-	// покрывались; раньше она вообще не работала — readHostlist клал ключ
-	// вместе с '^', и с ним не совпадало ничто.
-	for i := 0; i < len(domain); i++ {
-		if domain[i] != '.' {
-			continue
-		}
-		if strict, ok := s.skipSet[domain[i+1:]]; ok && !strict {
-			return true
-		}
-	}
-	return false
+	return matchHostSet(s.skipSet, domain)
 }
 
 // probeAndPublish runs one probe and appends to PublishPath iff the
@@ -318,6 +365,14 @@ func (s *state) probeAndPublish(ctx context.Context, domain string, cfg Config) 
 	case decision.Ignore:
 		// Silent — too chatty otherwise. Operators wanting visibility
 		// run `z2k-detect probe <domain>` manually.
+		//
+		// Но именно сюда падает класс «поток встаёт на 16–20 КБ»: DNS, TCP
+		// и TLS прошли, HTTPOK остался nil (markHTTPInconclusive на
+		// read-timeout), и Classify честно говорит Ignore. Для домена это
+		// верно — для СЕТИ вопрос ещё не задан, и здесь он задаётся.
+		if s.sniwl != nil && res.TCPOK && res.TLSOK && len(res.ResolvedIPs) > 0 {
+			s.sniwl.Offer(domain, res.ResolvedIPs)
+		}
 	case decision.Watch:
 		// Unused at present; placeholder for future verdicts.
 	}
@@ -384,14 +439,67 @@ func (s *state) loadBypassed(path string) error {
 	return sc.Err()
 }
 
-func (s *state) reloadSkipSet(paths []string) {
+func (s *state) reloadSkipSet(cfg Config) {
 	next := make(map[string]bool)
-	for _, p := range paths {
+	for _, p := range cfg.SkipPaths {
 		readHostlist(p, next)
+	}
+	block := make(map[string]bool)
+	for _, p := range cfg.SNIWLHostlists {
+		readHostlist(p, block)
+	}
+	excl := make(map[string]bool)
+	for _, p := range cfg.SNIWLExclude {
+		readHostlist(p, excl)
 	}
 	s.mu.Lock()
 	s.skipSet = next
+	s.blockSet = block
+	s.blockExcl = excl
 	s.mu.Unlock()
+}
+
+// inBlocklist reports whether the domain is one the new profile would cover:
+// present in a blocklist AND not in the operator's exclusion list.
+//
+// Матчинг тот же суффиксный, что и у skipSet, и по той же причине: хостлисты
+// nfqws2 суффиксные, запись `googlevideo.com` покрывает поддомены, а форма
+// `^domain` эту автоматику отменяет.
+func (s *state) inBlocklist(domain string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if matchHostSet(s.blockExcl, domain) {
+		return false
+	}
+	return matchHostSet(s.blockSet, domain)
+}
+
+// matchHostSet — суффиксное совпадение по набору хостлиста. Общая механика
+// для skipSet, blockSet и blockExcl: разбирает их один и тот же readHostlist,
+// и правило совпадения у них обязано быть одно.
+func matchHostSet(set map[string]bool, domain string) bool {
+	if len(set) == 0 {
+		return false
+	}
+	// Точное совпадение покрывает обе формы записи.
+	if _, ok := set[domain]; ok {
+		return true
+	}
+	// Walk the parent labels: a.b.example.com -> b.example.com -> example.com
+	//
+	// Родитель покрывает поддомен ТОЛЬКО если он записан обычной формой.
+	// Строгая форма `^domain` для того и существует, чтобы поддомены не
+	// покрывались; раньше она вообще не работала — readHostlist клал ключ
+	// вместе с '^', и с ним не совпадало ничто.
+	for i := 0; i < len(domain); i++ {
+		if domain[i] != '.' {
+			continue
+		}
+		if strict, ok := set[domain[i+1:]]; ok && !strict {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *state) skipReloadLoop(ctx context.Context, cfg Config) {
@@ -405,7 +513,7 @@ func (s *state) skipReloadLoop(ctx context.Context, cfg Config) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.reloadSkipSet(cfg.SkipPaths)
+			s.reloadSkipSet(cfg)
 		}
 	}
 }

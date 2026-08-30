@@ -79,6 +79,7 @@ import (
 	"github.com/necronicle/z2k/z2k-detect/internal/dnssrc"
 	"github.com/necronicle/z2k/z2k-detect/internal/engine"
 	"github.com/necronicle/z2k/z2k-detect/internal/prober"
+	"github.com/necronicle/z2k/z2k-detect/internal/sniwl"
 )
 
 func usage() {
@@ -86,6 +87,7 @@ func usage() {
 commands:
   probe <domain>            one-shot diagnostic probe, print verdict
   classify <host:port>      измерить, ЧЕМ режут, и вывести стратегию
+  sniwl <domain|ip>         подобрать whitelisted-SNI для сети /16 этого адреса
   run [-dns-source SRC]     start daemon. SRC: agh|dnsmasq|pkt (default: auto)`)
 }
 
@@ -107,6 +109,8 @@ func main() {
 		probeCmd(ctx, args[1:])
 	case "classify":
 		classifyCmd(ctx, args[1:])
+	case "sniwl":
+		sniwlCmd(ctx, args[1:])
 	case "run":
 		runCmd(ctx, args[1:])
 	default:
@@ -393,10 +397,20 @@ func runCmd(ctx context.Context, rest []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dnsSrc := fs.String("dns-source", "", "DNS observation source: agh|dnsmasq|pkt. Empty = auto-detect (AGH → dnsmasq → AF_PACKET sniff)")
 	publishPath := fs.String("publish", "/opt/zapret2/lists/discovered-domains.txt", "where to append HOT-verdict hostnames")
+	sniwlOn := fs.Bool("sniwl", true, "подбор whitelisted-SNI для класса «поток встаёт на 16–20 КБ»")
 	_ = fs.Parse(rest)
 
 	cfg := engine.Defaults()
 	cfg.PublishPath = *publishPath
+	// Новая подсистема включена по умолчанию, как и остальные наши флаги.
+	// Выключается флагом или конфигом. Z2K_SNI_WL_FAKE — тот же тумблер, что
+	// гейтит генерацию профиля: выключив профиль, оператор сказал, что этот
+	// приём ему не нужен, и гонять ради него мусор в аплинк было бы тратой
+	// его канала без единого следствия.
+	cfg.SNIWL.Enabled = *sniwlOn
+	if os.Getenv("Z2K_SNIWL") == "0" || os.Getenv("Z2K_SNI_WL_FAKE") == "0" {
+		cfg.SNIWL.Enabled = false
+	}
 	if *dnsSrc != "" {
 		src, err := dnssrc.Detect(*dnsSrc)
 		if err != nil {
@@ -413,6 +427,112 @@ func runCmd(ctx context.Context, rest []string) {
 		fatal("engine: %v", err)
 	}
 	fmt.Fprintln(os.Stderr, "engine: stopped")
+}
+
+// sniwlCmd — разовый подбор whitelisted-SNI для сети /16 указанного адреса.
+//
+// Отвечает на два вопроса подряд: «режет ли эта сеть поток по объёму» и «какое
+// имя из белого списка коробки её пробивает». Без -write состояния не трогает
+// вовсе — это триаж, а не раскатка.
+func sniwlCmd(ctx context.Context, rest []string) {
+	fs := flag.NewFlagSet("sniwl", flag.ExitOnError)
+	candPath := fs.String("candidates", sniwl.DefaultCandidatesPath, "файл кандидатов; порядок в нём = приоритет")
+	netPath := fs.String("networks", sniwl.DefaultNetworksPath, "файл поражённых сетей (--ipset профиля)")
+	namePath := fs.String("name", sniwl.DefaultNamePath, "файл имени-победителя")
+	maxCand := fs.Int("max", sniwl.DefaultMaxCandidates, "потолок кандидатов за прогон")
+	conc := fs.Int("concurrency", sniwl.DefaultSweepConcurrency, "одновременных проб")
+	pause := fs.Duration("pause", sniwl.DefaultBatchPause,
+		"пауза между батчами (0 — умолчание, отрицательное — без паузы)")
+	baseline := fs.String("baseline", sniwl.DefaultBaselineSNI, "нейтральное имя контрольного плеча")
+	write := fs.Bool("write", false, "записать находку в файлы состояния (по умолчанию только печать)")
+	asJSON := fs.Bool("json", false, "выдать результат как JSON")
+	_ = fs.Parse(rest)
+	if fs.NArg() < 1 {
+		fatal("sniwl: не указан домен или адрес")
+	}
+	target := fs.Arg(0)
+
+	ips := []string{target}
+	if net.ParseIP(target) == nil {
+		res := prober.Probe(ctx, target, 0)
+		if len(res.ResolvedIPs) == 0 {
+			fatal("sniwl: %s не резолвится (%s)", target, res.FailureCode)
+		}
+		ips = res.ResolvedIPs
+	}
+	ip, key, ok := sniwl.FirstRoutable(ips)
+	if !ok {
+		fatal("sniwl: среди адресов %v нет ни одного публичного IPv4", ips)
+	}
+
+	cands, err := sniwl.LoadCandidates(*candPath)
+	if err != nil {
+		fatal("%v", err)
+	}
+	store := sniwl.NewStore(*netPath, *namePath)
+	incumbent, _ := store.LoadName()
+	cands = sniwl.OrderWithIncumbent(cands, incumbent)
+
+	cfg := sniwl.SweepConfig{
+		BaselineSNI:   *baseline,
+		MaxCandidates: *maxCand,
+		Concurrency:   *conc,
+		BatchPause:    *pause,
+	}
+	out := sniwl.RunSweep(ctx, net.JoinHostPort(ip, "443"), cands, cfg)
+	out.Network = sniwl.CIDR(key)
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+	} else {
+		fmt.Printf("Цель:      %s → %s (сеть %s)\n", target, out.Addr, out.Network)
+		fmt.Printf("Контроль:  %s (%s) — %s, аплинк %d Б, кусок %d\n",
+			out.Baseline.Status, *baseline, out.Baseline.Detail, out.Baseline.UplinkBytes, out.Baseline.Chunk)
+		fmt.Printf("Без SNI:   %s — %s\n", out.NoSNI.Status, out.NoSNI.Detail)
+		if out.Recheck.Status != "" {
+			fmt.Printf("Переконтроль: %s — %s\n", out.Recheck.Status, out.Recheck.Detail)
+		}
+		fmt.Printf("Сеть:      состояние=%s режет=%v имя-триггер=%v\n", out.State, out.Affected, out.NoSNIWorks)
+		switch {
+		case out.Winner != "":
+			fmt.Printf("Имя:       %s (строка %d), проб сделано %d, за %s\n",
+				out.Winner, out.WinnerLine, out.Tried, out.Took.Round(time.Millisecond))
+		case out.State == sniwl.StateInconclusive:
+			// Не «имени нет», а «мы не узнали»: адрес перестал отвечать так
+			// же, как в начале, и последние пробы были не про имена.
+			fmt.Printf("Имя:       НЕУБЕДИТЕЛЬНО, проб сделано %d за %s — мерить заново позже\n",
+				out.Tried, out.Took.Round(time.Millisecond))
+		default:
+			fmt.Printf("Имя:       не найдено, проб сделано %d за %s\n", out.Tried, out.Took.Round(time.Millisecond))
+		}
+		fmt.Printf("Итог:      %s\n", out.Reason)
+	}
+
+	if !*write {
+		return
+	}
+	if out.State != sniwl.StateFound {
+		fmt.Fprintf(os.Stderr, "sniwl: писать нечего — состояние прогона %s\n", out.State)
+		os.Exit(1)
+	}
+	detail := fmt.Sprintf("%s | ручной прогон | имя %s (строка %d) | контроль встал на %d Б",
+		out.Network, out.Winner, out.WinnerLine, out.Baseline.UplinkBytes)
+	// Имя пишем ПЕРВЫМ: профиль гейтится непустым файлом сетей, и обратный
+	// порядок открыл бы окно «профиль собирается, подставлять нечего».
+	if err := store.SetName(out.Winner, detail); err != nil {
+		fatal("sniwl: %v", err)
+	}
+	added, err := store.AddNetwork(key, detail)
+	if err != nil {
+		fatal("sniwl: %v", err)
+	}
+	if added {
+		fmt.Printf("Записано:  %s → %s, имя → %s\n", out.Network, *netPath, *namePath)
+	} else {
+		fmt.Printf("Записано:  имя → %s (сеть %s уже была в %s)\n", *namePath, out.Network, *netPath)
+	}
 }
 
 func okStr(b *bool) string {
