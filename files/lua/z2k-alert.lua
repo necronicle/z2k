@@ -515,6 +515,14 @@ local function incoming_retrans_failure(desync, crec)
 	if not crec then return false end
 	if not Z2K_RETRANS_POOLS[desync.arg.key] then return false end
 
+	-- Клиент закрылся раньше — считать нечего. Замер 30.08.2026, ловушка на
+	-- facebook.com|6: при НАСТОЯЩЕЙ блокировке клиент молчит и ждёт, а FIN шлёт
+	-- лишь через четырнадцать секунд ПОСЛЕ того, как вердикт уже вынесен. То
+	-- есть боевые срабатывания этот гвард не глушит, а брошенное соединение —
+	-- где FIN идёт ПЕРВЫМ, и уже потом сервер долбит закрытый сокет — перестаёт
+	-- набивать ротатору провалы и уводить рабочую стратегию.
+	if crec.z2k_cli_closed then return false end
+
 	local p = desync.dis.payload
 	-- Чистые ACK данных не несут, повторами их считать нечего.
 	if not p or #p == 0 then return false end
@@ -780,3 +788,11 @@ function z2k_fail_tls_alert(desync, crec)
 	end
 	return true
 end
+		-- КЛИЕНТ УШЁЛ ПЕРВЫМ. Отмечаем момент, когда клиент закрыл свою сторону:
+		-- всё, что сервер повторяет после этого, он повторяет в закрытый сокет,
+		-- и к качеству стратегии отношения не имеет.
+		local fl = desync.dis and desync.dis.tcp and desync.dis.tcp.th_flags
+		if fl and TH_FIN and TH_RST and crec and not crec.z2k_cli_closed
+		   and (bitand(fl, TH_FIN) ~= 0 or bitand(fl, TH_RST) ~= 0) then
+			crec.z2k_cli_closed = os.time()
+		end

@@ -283,6 +283,65 @@ else
     no("порог шести повторов", "true", tostring(fired))
 end
 
+-- БРОШЕННОЕ СОЕДИНЕНИЕ. Клиент закрыл свою сторону — дальше сервер долбит уже
+-- закрытый сокет, и повторы там про качество стратегии не говорят ничего.
+--
+-- Замер 30.08.2026, ловушка на боевом роутере (facebook.com|6): при НАСТОЯЩЕЙ
+-- блокировке клиент молчит и ждёт, а FIN шлёт лишь через четырнадцать секунд
+-- ПОСЛЕ вынесенного вердикта. Отсюда и разделитель — не наличие FIN, а его
+-- порядок: закрылся раньше повторов — не считаем.
+local function client_fin()
+    return { outgoing = true, l7payload = "unknown", arg = { key = "gv_tcp" },
+             dis = { tcp = { th_flags = 0x11 }, payload = "" } }   -- ACK+FIN
+end
+local function client_rst()
+    return { outgoing = true, l7payload = "unknown", arg = { key = "gv_tcp" },
+             dis = { tcp = { th_flags = 0x04 }, payload = "" } }
+end
+
+reset_host()
+conn = {}
+run(client_fin(), conn)
+fired = false
+run(seg_gv(4482, 24000, nil, false), conn)
+for _ = 1, 8 do
+    if run(seg_gv(4482, 24000), conn) then fired = true end
+end
+if not fired then
+    ok("клиент ушёл первым — повторы в закрытый сокет провалом не считаются")
+else
+    no("брошенное соединение не должно давать провал", "false", "true")
+end
+
+reset_host()
+conn = {}
+run(client_rst(), conn)
+fired = false
+run(seg_gv(4482, 24000, nil, false), conn)
+for _ = 1, 8 do
+    if run(seg_gv(4482, 24000), conn) then fired = true end
+end
+if not fired then
+    ok("RST клиента гасит счёт так же, как FIN")
+else
+    no("RST клиента", "false", "true")
+end
+
+-- Обратная сторона: без закрытия со стороны клиента боевой вердикт обязан
+-- остаться. Иначе гвард съел бы ровно тот случай, ради которого всё писалось.
+reset_host()
+conn = {}
+fired = false
+run(seg_gv(4482, 24000, nil, false), conn)
+for _ = 1, 8 do
+    if run(seg_gv(4482, 24000), conn) then fired = true end
+end
+if fired then
+    ok("клиент молчит и ждёт — блокировка по-прежнему ловится")
+else
+    no("боевой вердикт не должен глохнуть", "true", "false")
+end
+
 -- ГЛАВНОЕ. Поток теряет пакеты, но едет: за повтором приходят новые данные.
 -- Ровно это давал телевизор на РАБОЧЕЙ стратегии, и ровно это уводило gv_tcp.
 -- Двадцать ретрансмитов в окне не должны дать ни одного события.
