@@ -18,6 +18,24 @@ globals = {
     "z2k_quic_silence_timer",
     "z2k_tls_stalled",
     "z2k_mid_stream_stall",
+    -- Детектор обрыва потока посреди TLS-записи (files/lua/z2k-alert.lua).
+    -- Обе глобальны намеренно: таймер-функцию движок ищет по строке, переданной
+    -- в timer_set, а машинку кадрирования бьёт напрямую юнит-тест — она разбирает
+    -- делимый между пакетами заголовок, и через весь детектор такое не проверить.
+    "z2k_stall_timer",
+    "z2k_tls_frame_feed",
+    -- Загрузка списка имён-кандидатов и сдвиг хоста на следующее имя.
+    -- Глобальны ради теста: в список уезжают имена, которые пойдут в фейковый
+    -- ClientHello, и разбор с валидацией надо бить напрямую.
+    "z2k_sni_candidates",
+    "z2k_sni_next",
+    -- Готовит фейковый ClientHello с подобранным именем и кладёт его в поле
+    -- desync; шлёт штатный fake с optional. Глобальна, потому что движок ищет
+    -- десинк-функцию по имени в _G.
+    "z2k_sni_pick", "z2k_sni_proven",
+    -- Наблюдение за обрывом: свой инстанс с dir=in, потому что детектор
+    -- ротатора после защёлки успеха не зовётся вовсе.
+    "z2k_stall_watch",
     "z2k_silent_drop_detector",
     -- HTTP-bypass primitives (z2k-http-strats.lua, ALFiX port)
     "z2k_timing_morph",
@@ -125,6 +143,7 @@ read_globals = {
     "dis_timer_name",     -- nfqws2: имя по пятёрке адрес-порт для таймеров (lua/zapret-lib.lua)
     "is_retransmission",  -- nfqws2: пакет не выше уже виденного максимума позиции (lua/zapret-lib.lua)
     "timer_set",          -- nfqws2: завести таймер, timer_set(name, func, period_ms, oneshot, data)
+    "timer_del",          -- nfqws2: снять таймер по имени; текущий вызов не прерывает (manual §timer_del)
     "pos_get",       -- nfqws2 byte/datagram counter accessor: pos_get(desync, mode[, reverse]) — manual §pos_get
     "pos_get_pos",   -- sibling: pos_get_pos(track_pos, mode)
     "rawsend_opts",

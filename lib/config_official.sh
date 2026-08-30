@@ -1732,11 +1732,84 @@ generate_nfqws2_opt_from_strategies() {
     local rkn_hostlists="$rkn_lists_head"
     [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
     rkn_hostlists="$rkn_hostlists$rkn_lists_tail"
+    # ПОДСТАНОВКА ПОДОБРАННОГО ИМЕНИ В ФЕЙКОВЫЙ ClientHello.
+    #
+    # Лечит класс блокировки, который ротатор не берёт в принципе: рукопожатие
+    # проходит, а поток встаёт на 12-24 КБ. Замер на роутере владельца:
+    # hetzner.com отдавал ровно 15994 байта; тот же хост с фейком, несущим чужое
+    # имя из белого списка провайдера, — 163654 за 0.5 с. Несущая часть — ИМЯ, а
+    # не разрез: результат одинаков и с hostfakesplit, и с multisplit:seqovl=1.
+    #
+    # Имя подбирается В РАНТАЙМЕ (files/lua/z2k-alert.lua): детектор ловит обрыв
+    # посреди TLS-записи, сдвигает хост на следующего кандидата из
+    # lists/sni_wl_candidates.txt, и следующая попытка проверяет уже его.
+    # Перебор идёт на трафике самого человека, отдельных проб нет.
+    #
+    # ДВЕ СТРОКИ, И ОБЕ ДО circular, БЕЗ strategy=N. Инстанс без этого аргумента
+    # circular не вызывает вовсе — его исполняет линейный оркестратор. Значит имя
+    # подставляется на ЛЮБОМ плече, а разрез продолжает ротироваться штатно.
+    # Имя и разрез — разные оси, сваливать их в одно плечо неверно.
+    #
+    # Сами не отправляем: селектор только готовит блоб, шлёт ШТАТНЫЙ fake. Так
+    # ttl, badsum, tcp_ts и repeats остаются в ведении движка, а `optional` даёт
+    # тихий пропуск, пока имя не подобрано — у тех, кто на этот класс не
+    # наткнулся, не происходит ничего.
+    #
+    # key и nld копируются из circular: возьми селектор другой ключ — он читал бы
+    # не ту запись хоста, в которую пишет детектор.
+    #
+    # Считается ДО развилки «шаблон / плоская форма»: аварийный выключатель
+    # шаблонов (Z2K_NFQWS2_TEMPLATES=0) не должен заодно выключать обход по
+    # объёму. В плоской форме тот же блок вставляется перед circular вручную.
+    local Z2K_SNI_STALL sni_pick="" _sp_circ="" _t2
+    Z2K_SNI_STALL=$(safe_config_read "Z2K_SNI_STALL" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    if [ -n "$rkn_circ" ]; then
+        _sp_circ="$rkn_circ"
+    else
+        for _t2 in $rkn_tcp; do
+            case "$_t2" in --lua-desync=circular:*) _sp_circ="$_t2"; break ;; esac
+        done
+    fi
+    if [ "$Z2K_SNI_STALL" = "1" ] && [ -n "$_sp_circ" ]; then
+        local _sp_k _sp_n
+        _sp_k=$(printf '%s' "$_sp_circ" | sed -n 's/.*:\(key=[a-z_]*\).*/\1/p')
+        _sp_n=$(printf '%s' "$_sp_circ" | sed -n 's/.*:\(nld=[0-9]*\).*/\1/p')
+        # Наблюдение за обрывом — СВОИМ инстансом с dir=in. Внутрь детектора
+        # его класть нельзя: детектор ротатора после защёлки успеха не
+        # зовётся вовсе, и все 16 КБ прошли бы мимо. Проверено на живом
+        # обрыве: circular отработал 48 раз, детектор — ни разу.
+        # cap — потолок видимости в пакетах. Без него сторож принимал за обрыв
+        # ЛЮБУЮ большую загрузку: поток уходит за потолок очереди, пакеты
+        # перестают доходить, и молчание выглядит как остановка. Замер
+        # 30.08.2026: chatgpt.com отдал 340 КБ, сторож увидел 17137 Б и записал
+        # рабочему хосту чужое имя.
+        local _sp_cap
+        _sp_cap=$(z2k_reply_pkt_cap "$(safe_config_read "Z2K_USE_MID_STREAM_DETECTOR" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")")
+        sni_pick="--lua-desync=z2k_stall_watch:dir=in:cap=${_sp_cap}${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
+        sni_pick="$sni_pick --lua-desync=z2k_sni_pick:payload=tls_client_hello:dir=out:blob=z2k_ch${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
+        sni_pick="$sni_pick --lua-desync=fake:payload=tls_client_hello:dir=out:blob=z2k_ch:optional:repeats=8:tcp_ts=-1000"
+    fi
+
     if [ -n "$rkn_circ" ]; then
         add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" \
-            "$wl_excl $rkn_hostlists $rkn_head $rkn_circ --import=$rkn_tpl --new"
+            "$wl_excl $rkn_hostlists $rkn_head $sni_pick $rkn_circ --import=$rkn_tpl --new"
     else
-        add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$wl_excl $rkn_hostlists $rkn_tcp --new"
+        # Плоская форма: тот же блок ставим перед первым circular. Позиция
+        # обязательна — инстанс без strategy=N исполняет линейный оркестратор,
+        # а он до аргументов ЗА ротатором не доходит.
+        local rkn_flat="" _sp_done=0
+        for _t2 in $rkn_tcp; do
+            case "$_t2" in
+                --lua-desync=circular:*)
+                    if [ "$_sp_done" = "0" ] && [ -n "$sni_pick" ]; then
+                        rkn_flat="${rkn_flat:+$rkn_flat }$sni_pick"
+                        _sp_done=1
+                    fi
+                    ;;
+            esac
+            rkn_flat="${rkn_flat:+$rkn_flat }$_t2"
+        done
+        add_hostlist_line "${extra_strats_dir}/TCP/RKN/List.txt" "$wl_excl $rkn_hostlists $rkn_flat --new"
     fi
 
     # cdn_tls профиль удалён 2026-04-27. Был добавлен в Variant A refactor
@@ -2012,6 +2085,25 @@ NFQWS2_OPT
 # СОЗДАНИЕ ОФИЦИАЛЬНОГО CONFIG ФАЙЛА
 # ==============================================================================
 
+# Потолок видимости входящего потока В ПАКЕТАХ: сколько ответных пакетов
+# iptables отдаёт в очередь (NFQWS2_TCP_PKT_IN, `--connbytes 1:N ... dir reply`).
+# Дальше него движок не видит НИЧЕГО — ни данных, ни FIN, — и молчание там
+# ничего не означает.
+#
+# Число нужно в двух местах: в теле конфига и в аргументе сторожа обрыва,
+# который по нему отличает «поток встал» от «мы ослепли». Разъедься эти два
+# места — сторож начнёт судить вслепую, поэтому значение живёт в одной функции.
+z2k_reply_pkt_cap() {
+    # 50, а не 30: замер на боевом роутере 18.08.2026 — при 30 пакетах ответа
+    # наблюдение обрывалось около 20 КБ (первые пакеты потока мелкие: записи
+    # рукопожатия, кадры HTTP/2), а порог успеха inseq у rkn_tcp стоит на 26000,
+    # и успех не срабатывал НИ РАЗУ — счётчик провалов было нечем обнулять.
+    # С 50 глубина дошла до 26849 и успех наконец сработал. Цена того же
+    # прогона: +28% пакетов в очередь, +9% процессорного времени, дропов 0.
+    # При флаге 0 остаётся master-совместимая десятка: видно только рукопожатие.
+    if [ "$1" = "1" ]; then echo 50; else echo 10; fi
+}
+
 create_official_config() {
     # $1 - путь к config файлу (обычно /opt/zapret2/config)
 
@@ -2245,25 +2337,11 @@ create_official_config() {
         saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
     fi
 
-    # NFQWS2_TCP_PKT_IN bundle: at flag=0 keep the master-compatible 10
-    # (handshake-only visibility for lua failure_detector); at flag=1 bump
-    # to 30 so lua can observe the [8K, 18K] CF stall window AND so
-    # success_detector=z2k_http_success_positive_only's inseq=18000 gate
-    # is reachable on long TLS flows. Below 30 the bundle is structurally
-    # half-state — failure_detector wired but blind. Above 30 the marginal
-    # gain (more byte coverage past 30KB) doesn't justify the per-flow
-    # NFQUEUE pressure on embedded routers.
-    local nfqws2_tcp_pkt_in="10"
-    if [ "$saved_Z2K_USE_MID_STREAM_DETECTOR" = "1" ]; then
-        # 50, а не 30. Замерено на боевом роутере 2026-08-18: при 30 пакетах
-        # ответа наблюдение обрывается примерно на 20 КБ (первые пакеты потока
-        # мелкие — записи рукопожатия, кадры HTTP/2), а порог успеха inseq у
-        # rkn_tcp стоит на 26000. Успех не срабатывал НИ РАЗУ, то есть счётчик
-        # провалов было нечем обнулять. С 50 глубина дошла до 26849 и успех
-        # наконец сработал. Цена того же прогона: +28% пакетов в очередь, +9%
-        # процессорного времени, дропов 0, RSS без изменений.
-        nfqws2_tcp_pkt_in="50"
-    fi
+    # NFQWS2_TCP_PKT_IN — глубина наблюдения за ответом. Само число и повод
+    # для него лежат в z2k_reply_pkt_cap: его читает и сторож обрыва, и потому
+    # оно обязано быть одним.
+    local nfqws2_tcp_pkt_in
+    nfqws2_tcp_pkt_in=$(z2k_reply_pkt_cap "$saved_Z2K_USE_MID_STREAM_DETECTOR")
 
     # Создать полный config файл
     local z2k_mode_filter=hostlist

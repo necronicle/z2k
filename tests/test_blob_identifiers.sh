@@ -127,11 +127,23 @@ _ref=$(grep -ohE '(blob|seqovl_pattern|pattern)=[A-Za-z_][A-Za-z0-9_]*' \
        | sed 's/.*=//' | sort -u)
 _reg=$(grep -ohE '\-\-blob=[A-Za-z_][A-Za-z0-9_]*:' "$ROOT/files/S99zapret2.new" 2>/dev/null \
        | sed 's/--blob=//; s/:$//' | sort -u)
+# Блоб может не иметь файла вовсе: наш Lua готовит его в рантайме и кладёт в
+# desync под этим именем (обход блокировки по объёму — фейковый ClientHello с
+# подобранным именем собирается на лету, файлом его не выразить). Такой блоб
+# «регистрирует» собственный инстанс-производитель в той же строке профиля.
+# Правило общее, без списка исключений: имя засчитано, только если его пишет
+# наш же --lua-desync=z2k_*. Ссылка на блоб, которого никто не производит и не
+# регистрирует, по-прежнему провал.
+_runtime=$(grep -ohE '\-\-lua-desync=z2k_[A-Za-z0-9_]*:[^ ]*blob=[A-Za-z_][A-Za-z0-9_]*' \
+           "$ROOT/lib/config_official.sh" 2>/dev/null \
+           | sed 's/.*blob=//; s/:.*//' | sort -u)
+
 _missing=""
 for _b in $_ref; do
     # fake_default_tls/quic/http — встроенные фейки движка, они
     # существуют без --blob.
     case "$_b" in fake_default_tls|fake_default_quic|fake_default_http) continue ;; esac
+    printf '%s\n' "$_runtime" | grep -qx "$_b" && continue
     printf '%s\n' "$_reg" | grep -qx "$_b" || _missing="$_missing $_b"
 done
 if [ -z "$_missing" ]; then

@@ -97,7 +97,7 @@ local function create_empty_state_file(path)
   local f = io.open(path, "w")
   if not f then return false end
   f:write("# z2k autocircular state (persisted circular nstrategy)\n")
-  f:write("# key\thost\tstrategy\tts\tmode\n")
+  f:write("# key\thost\tstrategy\tts\tmode\tsni\n")
   f:close()
   return true
 end
@@ -127,7 +127,8 @@ local function merge_state_file_into(path, dest)
     if line ~= "" and not line:match("^%s*#") then
       -- 5th column = mode (auto|frozen). Optional for backward compat: a legacy
       -- 4-column row parses mode="" → normalized to "auto" below.
-      local askey, host, strat, ts, mode = line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)\t?([a-z]*)")
+      local askey, host, strat, ts, mode, sni =
+        line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)\t?([a-z]*)\t?([A-Za-z0-9.-]*)")
       if askey and host and strat then
         local n = tonumber(strat)
         if n and n >= 1 then
@@ -138,7 +139,8 @@ local function merge_state_file_into(path, dest)
             local m = (mode ~= nil and mode ~= "") and mode or "auto"
             local prev = dest[askey][hn]
             if (not prev) or ((tonumber(prev.ts) or 0) <= tsn) then
-              dest[askey][hn] = { strategy = n, ts = tsn, mode = m }
+              dest[askey][hn] = { strategy = n, ts = tsn, mode = m,
+                                  sni = (sni and #sni > 0) and sni or nil }
             end
           end
         end
@@ -156,7 +158,8 @@ local function snapshot_strategies(src)
     out[askey] = {}
     for hostn, rec in pairs(hosts) do
       if rec and rec.strategy then
-        out[askey][hostn] = { strategy = rec.strategy, ts = rec.ts, mode = rec.mode or "auto" }
+        out[askey][hostn] = { strategy = rec.strategy, ts = rec.ts,
+                              mode = rec.mode or "auto", sni = rec.sni }
       end
     end
   end
@@ -277,13 +280,17 @@ local function write_state()
   local f = io.open(tmp, "w")
   if not f then release_lock(lockfile); return end
   f:write("# z2k autocircular state (persisted circular nstrategy)\n")
-  f:write("# key\thost\tstrategy\tts\tmode\n")
+  f:write("# key\thost\tstrategy\tts\tmode\tsni\n")
   for askey, hosts in pairs(merged) do
     for hostn, rec in pairs(hosts) do
       if rec and rec.strategy then
+        -- Шестая колонка приписана в хвост намеренно: парсер читает поля по
+        -- позиции, поэтому старый файл без неё читается как прежде, а старая
+        -- версия кода на новом файле просто не увидит лишнее поле.
         f:write(tostring(askey), "\t", tostring(hostn), "\t",
                 tostring(rec.strategy), "\t", tostring(rec.ts or 0), "\t",
-                tostring(rec.mode or "auto"), "\n")
+                tostring(rec.mode or "auto"), "\t",
+                tostring(rec.sni or ""), "\n")
       end
     end
   end
@@ -352,6 +359,12 @@ local function get_record_for_desync(desync, do_seed)
     local rec = state[askey] and state[askey][hostn]
     if rec and rec.strategy then
       hrec.nstrategy = rec.strategy
+      -- Подобранное имя переживает перезапуск: иначе после каждого рестарта
+      -- человек снова платил бы полным перебором за уже найденное.
+      -- Имя в файле — уже доказанное (см. запись), поэтому и восстанавливаем его
+      -- как доказанное: одна неудачная попытка после рестарта не должна
+      -- отправлять человека проходить перебор заново.
+      if rec.sni then hrec.z2k_sni = rec.sni; hrec.z2k_sni_ok = true end
     end
   end
   return askey, hostn, hrec
@@ -375,14 +388,25 @@ local function persist_if_changed(askey, hostn, hrec)
   local n = tonumber(hrec.nstrategy)
   if not n or n < 1 then return false end
   local prev = state[askey] and state[askey][hostn] and state[askey][hostn].strategy or nil
-  if prev == n then return false end          -- skip ONLY when unchanged
+  -- Подобранное имя из белого списка. Хранится рядом с номером плеча, а не
+  -- вместо него: имя и разрез — разные оси, разрез продолжает ротироваться.
+  -- В файл уезжает только ДОКАЗАВШЕЕ себя имя — то, с которым хост ответил.
+  -- Имена-кандидаты живут в памяти: после перезапуска памяти нет, и записанный
+  -- кандидат означал бы «начни с середины списка», а записанный неудачник —
+  -- «начни с заведомо плохого». Замер 30.08.2026 показал второе.
+  local sni = hrec.z2k_sni_ok and hrec.z2k_sni or nil
+  local prev_sni = state[askey] and state[askey][hostn] and state[askey][hostn].sni or nil
+  -- Пропускаем, только если не изменилось НИ ОДНО из двух. Проверять один
+  -- номер плеча нельзя: у обхода 16 КБ плечо как раз стоит на месте, а меняется
+  -- имя — с прежним условием шестая колонка не записалась бы никогда.
+  if prev == n and prev_sni == sni then return false end
   -- Preserve any operator-set mode (frozen) across an engine-driven save: a row
   -- the operator froze must keep mode="frozen" on disk even if some code path
   -- persists its strategy. (For a frozen row the freeze gate forces nstrategy back
   -- to the pinned value, so prev==n and we return above before reaching here.)
   local mode = (state[askey] and state[askey][hostn] and state[askey][hostn].mode) or "auto"
   if not state[askey] then state[askey] = {} end
-  state[askey][hostn] = { strategy = n, ts = now_t(), mode = mode }
+  state[askey][hostn] = { strategy = n, ts = now_t(), mode = mode, sni = sni }
   write_state()
   return true
 end

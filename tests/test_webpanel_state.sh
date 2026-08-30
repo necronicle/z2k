@@ -163,6 +163,49 @@ TS_P=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE
 TS_F=$(awk -F'\t' '$1=="rkn_tcp" && $2=="age.example" { print $4 }' "$STATE_FILE_FALLBACK")
 assert_eq "основной файл и запасной несут одну метку" "$TS_P" "$TS_F"
 
+printf "\n--- шестая колонка: подобранное имя переживает клики в панели ---\n"
+# Имя пишет ротатор, панель про него не знает. Но переписывает строку целиком
+# именно панель — при заморозке, разморозке и ручном выборе номера. Если оно
+# при этом теряется, перебор начинается заново, а это до двух десятков
+# неудачных загрузок у человека на глазах.
+printf 'rkn_tcp\tsni.example\t2\t1000\tauto\tdisk.rzd.ru\n' >> "$STATE_FILE"
+printf 'rkn_tcp\tsni.example\t2\t1000\tauto\tdisk.rzd.ru\n' >> "$STATE_FILE_FALLBACK"
+
+state_set rkn_tcp sni.example 2 frozen
+assert_eq "заморозка сохраняет имя"     "disk.rzd.ru" "$(row_field rkn_tcp sni.example 6)"
+assert_eq "заморозка меняет режим"      "frozen"      "$(row_field rkn_tcp sni.example 5)"
+
+state_set rkn_tcp sni.example 4 auto
+assert_eq "смена номера сохраняет имя"  "disk.rzd.ru" "$(row_field rkn_tcp sni.example 6)"
+assert_eq "смена номера применена"      "4"           "$(row_field rkn_tcp sni.example 3)"
+
+SNI_F=$(awk -F'\t' '$1=="rkn_tcp" && $2=="sni.example" { print $6 }' "$STATE_FILE_FALLBACK")
+assert_eq "запасной файл несёт то же имя" "disk.rzd.ru" "$SNI_F"
+
+# Строка без имени шестой колонкой не обрастает: пустое поле в хвосте сбивало
+# бы разбор у читателей, которые считают колонки.
+state_set rkn_tcp plain.example 3 auto
+COLS=$(awk -F'\t' '$1=="rkn_tcp" && $2=="plain.example" { print NF }' "$STATE_FILE")
+assert_eq "строка без имени остаётся пятиколоночной" "5" "$COLS"
+
+printf "\n--- GET /state отдаёт имя шестым полем ---\n"
+# Дальше по цепочке имя показывает панель под селектом стратегии — человек по
+# нему видит, чем именно сейчас пробивается сайт. Читаем НАСТОЯЩИЙ эндпоинт,
+# а не свою копию awk: экранирование и порядок полей живут только в api.sh.
+API_SB=$(mktemp -d)
+printf '# h\n# k\nrkn_tcp\thetzner.com|4\t2\t1788088861\tauto\t300.ya.ru\nrkn_tcp\tplain.com\t1\t1788088000\tauto\n' > "$API_SB/state.tsv"
+: > "$API_SB/fb.tsv"
+mkdir -p "$API_SB/opt/zapret2"
+API_JSON=$(ZAPRET2_DIR="$API_SB/opt/zapret2" \
+    STATE_FILE="$API_SB/state.tsv" STATE_FILE_FALLBACK="$API_SB/fb.tsv" \
+    HTTP_HOST=192.168.1.1 HTTP_SEC_FETCH_SITE=same-origin \
+    REQUEST_METHOD=GET PATH_INFO=/state \
+    sh "$SCRIPT_DIR/webpanel/cgi/api.sh" 2>/dev/null | tail -1)
+rm -rf "$API_SB"
+
+assert_contains "имя доехало до JSON" '"sni":"300.ya.ru"' "$API_JSON"
+assert_contains "строка без имени отдаёт пустое поле" '"host":"plain.com","strategy":"1","ts":1788088000,"mode":"auto","sni":""' "$API_JSON"
+
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 printf "Results: %d passed, %d failed\n" "$TESTS_PASSED" "$TESTS_FAILED"
 printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

@@ -214,6 +214,70 @@ do
   check("T4: second persist (same) returns false", false, P.persist_if_changed("rkn_tcp", "a.com", hrec))
 end
 
+-- T4b: подобранное имя из белого списка (обход блокировки по объёму).
+--
+-- Главное здесь — что запись происходит при СМЕНЕ ИМЕНИ, хотя номер плеча
+-- стоит на месте. У этого обхода плечо как раз не меняется: имя и разрез разные
+-- оси. С прежним условием «пропустить, если номер тот же» шестая колонка не
+-- записалась бы никогда.
+do
+  fresh()
+  local hrec = { nstrategy = 2 }
+  check("T4b: первая запись без имени", true, P.persist_if_changed("rkn_tcp", "b.com", hrec))
+  check("T4b: повтор без изменений — не пишем", false, P.persist_if_changed("rkn_tcp", "b.com", hrec))
+  -- Кандидат, себя ещё не доказавший, в файл НЕ уезжает: после перезапуска
+  -- памяти нет, и записанный неудачник означал бы «начни с плохого имени».
+  hrec.z2k_sni = "hcaptcha.com"
+  check("T4b: неподтверждённый кандидат не пишется", false,
+        P.persist_if_changed("rkn_tcp", "b.com", hrec))
+
+  hrec.z2k_sni = "300.ya.ru"; hrec.z2k_sni_ok = true
+  check("T4b: имя появилось — ПИШЕМ, хотя плечо то же", true,
+        P.persist_if_changed("rkn_tcp", "b.com", hrec))
+  check("T4b: то же имя второй раз — не пишем", false,
+        P.persist_if_changed("rkn_tcp", "b.com", hrec))
+  hrec.z2k_sni = "disk.rzd.ru"
+  check("T4b: имя сменилось — пишем", true, P.persist_if_changed("rkn_tcp", "b.com", hrec))
+
+  local f = io.open(STATE_FILE, "r"); local body = f:read("*a"); f:close()
+  check("T4b: имя лежит шестой колонкой", true,
+        body:find("rkn_tcp\tb%.com\t2\t%d+\tauto\tdisk%.rzd%.ru") ~= nil)
+
+  -- Имя обязано пережить перезапуск: иначе после каждого рестарта человек снова
+  -- платил бы полным перебором за уже найденное. Перезапуск изображаем как в
+  -- T3: память сброшена, первый пакет сеет запись с диска.
+  P._reset(); autostate = {}
+  circular(nil, mk("rkn_tcp", "b.com"))
+  check("T4b: имя восстановлено из файла", "disk.rzd.ru",
+        autostate["rkn_tcp"] and autostate["rkn_tcp"]["b.com"] and
+        autostate["rkn_tcp"]["b.com"].z2k_sni)
+  check("T4b: восстановленное имя считается доказанным", true,
+        autostate["rkn_tcp"] and autostate["rkn_tcp"]["b.com"] and
+        autostate["rkn_tcp"]["b.com"].z2k_sni_ok)
+end
+
+-- T4c: строка СТАРОГО формата, без шестой колонки, читается как прежде.
+do
+  fresh()
+  local f = io.open(STATE_FILE, "w")
+  f:write("# key\thost\tstrategy\tts\tmode\n")
+  f:write("rkn_tcp\told.com\t4\t9700\tauto\n")
+  f:close()
+  P._reset(); autostate = {}
+  now = 9701
+  -- Пул на 5 плеч: закреплённое 4-е должно в него влезать, иначе запись
+  -- срежется как «конфиг ужался» и тест будет мерить не то.
+  local plan5 = { {arg={strategy=1}}, {arg={strategy=2}}, {arg={strategy=3}},
+                  {arg={strategy=4}}, {arg={strategy=5}} }
+  circular(nil, mk("rkn_tcp", "old.com", {plan = plan5}))
+  check("T4c: старый файл читается", 4,
+        autostate["rkn_tcp"] and autostate["rkn_tcp"]["old.com"] and
+        autostate["rkn_tcp"]["old.com"].nstrategy)
+  check("T4c: имени нет и не выдумано", nil,
+        autostate["rkn_tcp"] and autostate["rkn_tcp"]["old.com"] and
+        autostate["rkn_tcp"]["old.com"].z2k_sni)
+end
+
 -- T5: on-disk format is `key<TAB>host<TAB>strategy<TAB>ts`.
 do
   fresh()

@@ -670,10 +670,378 @@ end
 -- пулы TLS — с tls_client_hello; всё остальное это уже живая сессия.
 local Z2K_FIRST_REQUEST = { tls_client_hello = true, http_req = true }
 
+-- ОБРЫВ ПОТОКА ПОСРЕДИ TLS-ЗАПИСИ.
+--
+-- Класс блокировки: рукопожатие проходит, ответ идёт, и на 12-24 КБ гейт
+-- глушит поток. Ни одно наше правило его не видит: FIN и RST в этом классе
+-- НЕ ПРИХОДЯТ ВОВСЕ (полевой замер на LG webOS: сервер слал один seq 15-16
+-- раз, RST и FIN не приходили), а входящих повторов может не быть — сервер
+-- иногда просто замолкает. Поймать можно только по молчанию, то есть таймером.
+--
+-- ПОЧЕМУ ОДНОГО ТАЙМЕРА МАЛО. Молчание после ответа в 20 КБ — это ещё и
+-- обычный keep-alive завершённого ответа. По таймеру они неотличимы, и мы
+-- ловили бы ложняк на ровном месте.
+--
+-- РАЗДЕЛИТЕЛЬ — КАДРИРОВАНИЕ TLS, ПОДТВЕРЖДЁН ЗАМЕРОМ. Дамп зависшего
+-- hetzner.com (30.08, 19 сегментов, 22286 байт): последняя запись объявила
+-- 16401 байт, доехало 2309, не хватило 14092. Завершённый ответ ВСЕГДА
+-- кончается на границе записи, усечённый — нет. Отсюда и «16 КБ»: сервер
+-- шлёт записи по 16401 байт, гейт режет внутри такой записи.
+--
+-- ТРЕТЬЕ УСЛОВИЕ, БЕЗ КОТОРОГО ВСЁ ЛОЖНО. До нас доезжает только первые
+-- ~26.8 КБ ответа — потолок ставит iptables connbytes reply 1:50. У здоровой
+-- большой загрузки пакеты после него просто перестают приходить, трекер
+-- остаётся посреди записи, и таймер выдал бы обрыв на КАЖДОМ большом файле.
+-- Поэтому взводимся только пока uppos ниже Z2K_STALL_MAX, а выше — снимаем.
+--
+-- Мерим по pos.server.tcp.uppos (высшая отметка реальных данных), а НЕ по
+-- pbcounter: тот считает и повторы, на вставшем потоке набежит 20+ КБ при
+-- реальных 16.
+local Z2K_STALL_MIN = tonumber(os.getenv("Z2K_STALL_MIN")) or 12288
+local Z2K_STALL_MAX = tonumber(os.getenv("Z2K_STALL_MAX")) or 24000
+local Z2K_STALL_MS  = tonumber(os.getenv("Z2K_STALL_MS"))  or 4000
+-- Отдельное окно на рукопожатие: длиннее тишины в потоке, сюда входит вся
+-- дорога до сервера и обратно.
+local Z2K_STALL_HS_MS = tonumber(os.getenv("Z2K_STALL_HS_MS")) or 7000
+-- Потолок перебора на хост. Каждый кандидат стоит одной неудачной попытки
+-- открыть сайт, поэтому список из 188 имён целиком не гоняем: на линии
+-- владельца первое рабочее имя было пятым, у автора dpi-detector три рабочих
+-- имени находились в пределах первых десятков.
+local Z2K_SNI_TRIES = tonumber(os.getenv("Z2K_SNI_TRIES")) or 24
+-- Сколько провалов подряд терпит УЖЕ ДОКАЗАВШЕЕ себя имя, прежде чем мы
+-- признаем его негодным и вернёмся к перебору.
+local Z2K_SNI_PROVEN_FAILS = tonumber(os.getenv("Z2K_SNI_PROVEN_FAILS")) or 3
+-- Сколько неудачных рукопожатий подряд нужно, чтобы ВООБЩЕ начать подбор.
+-- Одного мало: сразу после перезапуска ни один хост ещё не отмечен живым, и
+-- любая случайная неудача первого коннекта запускала перебор рабочему сайту.
+local Z2K_SNI_START_FAILS = tonumber(os.getenv("Z2K_SNI_START_FAILS")) or 2
+-- Сколько хост считается живым после последней реальной доставки данных.
+-- Совпадает с окном контент-гейта в движке: та же величина, тот же смысл.
+local Z2K_ALIVE_WINDOW = tonumber(os.getenv("Z2K_ALIVE_WINDOW")) or 300
+local Z2K_STALL_POOLS = { rkn_tcp = true, yt_tcp = true, gv_tcp = true }
+
+-- Машинка кадрирования. Запись делится между пакетами, в пакете бывает
+-- несколько записей, пятибайтовый заголовок тоже делится — поэтому состояние,
+-- а не разбор одного пакета.
+function z2k_tls_frame_feed(st, p)
+	local i, n = 1, #p
+	while i <= n do
+		if (st.need or 0) > 0 then
+			local take = st.need
+			if take > n - i + 1 then take = n - i + 1 end
+			st.need = st.need - take
+			i = i + take
+		else
+			local have = st.hdr and #st.hdr or 0
+			local take = 5 - have
+			if take > n - i + 1 then take = n - i + 1 end
+			st.hdr = (st.hdr or "") .. p:sub(i, i + take - 1)
+			i = i + take
+			if #st.hdr == 5 then
+				st.need = st.hdr:byte(4) * 256 + st.hdr:byte(5)
+				st.hdr = nil
+			end
+		end
+	end
+end
+
+-- Обработчик таймера. Контекста у него НЕТ: ни desync, ни ctx (движок зовёт
+-- его из главного цикла с двумя аргументами). Всё нужное лежит в data живыми
+-- ссылками: st — таблица в lua_state потока, hrec — запись хоста в autostate.
+-- Хост ответил: он жив, а имя, с которым это вышло, себя доказало.
+--
+-- Разделение «доказанное имя» и «имя-кандидат» нужно из-за перезапуска. Раньше
+-- в файл уезжало ЛЮБОЕ имя, включая неудачных кандидатов, а после рестарта
+-- памяти нет: одна неудачная попытка — и найденное имя выбрасывалось, перебор
+-- начинался с первого кандидата. Замер 30.08.2026: hetzner с уже найденным
+-- 300.ya.ru после рестарта ушёл на hcaptcha.com и снова прошёл весь путь.
+function z2k_sni_proven(hrec)
+	if not hrec then return end
+	hrec.z2k_alive_at = os.time()
+	hrec.z2k_hs_fails = 0
+	if hrec.z2k_sni then
+		hrec.z2k_sni_ok = true
+		hrec.z2k_sni_fails = 0
+	end
+end
+
+-- Сдвиг на следующего кандидата. Доказанное имя за один провал не отдаём:
+-- у любого рабочего сайта случается неудачный коннект, а цена ошибки —
+-- полный перебор заново, до двух десятков неудачных загрузок у человека.
+local function z2k_sni_advance(hrec)
+	if hrec.z2k_sni_ok then
+		local f = (hrec.z2k_sni_fails or 0) + 1
+		hrec.z2k_sni_fails = f
+		if f < Z2K_SNI_PROVEN_FAILS then return hrec.z2k_sni end
+		hrec.z2k_sni_ok = false
+	end
+	return z2k_sni_next(hrec)
+end
+
+function z2k_stall_timer(name, data)
+	local st = data and data.st
+	local hrec = data and data.hrec
+	if not st or not hrec then return end
+	if st.judged then return end
+
+	-- ПОТОЛОК ВИДИМОСТИ. Поток ушёл за горизонт не на фиксированном объёме, а
+	-- на фиксированном ЧИСЛЕ пакетов: `--connbytes 1:N ... dir reply`. Дальше
+	-- него не видно ничего, и молчание означает только нашу слепоту.
+	--
+	-- И это же — доказательство ЖИВОСТИ хоста. Замер 30.08.2026: instagram
+	-- отдал 404 КБ, из них видно 17 КБ на пятидесяти пакетах. Ответ у такого
+	-- хоста НИКОГДА не кончается на границе записи в пределах нашей видимости,
+	-- поэтому по «завершённому ответу» он живым не признаётся никогда — и одно
+	-- случайное неудачное рукопожатие запускало ему подбор чужого имени.
+	--
+	-- Запас в шесть пакетов — на ответные пакеты, которые до нашего инстанса не
+	-- доходят (отсеяны фильтром профиля), но потолок расходуют.
+	if (st.cap or 0) > 0 and (st.rx or 0) >= (st.cap - 6) then
+		if (st.high or 0) >= 1024 then z2k_sni_proven(hrec) end
+		return
+	end
+
+	-- ИСХОД ПЕРВЫЙ: рукопожатие не состоялось. Раньше мы ждали именно обрыва
+	-- объёма, и из-за этого механизм не запускался вовсе там, где хост валится
+	-- ещё на hello — а это ровно случай hetzner на первом плече. Полагаться на
+	-- то, что ротация сперва уведёт хост на плечо, где обрыв виден, нельзя:
+	-- имя из белого списка снимает инспекцию ЦЕЛИКОМ и чинит оба случая, так
+	-- что ждать чужой помощи механизму незачем.
+	--
+	-- Здесь же ловится и обратное: неподходящее имя делает ХУЖЕ, чем его
+	-- отсутствие. Замер на роутере: без имени 15994 байта, с чужим hcaptcha.com
+	-- ноль. Без этого исхода перебор вставал намертво — данных нет, значит нет
+	-- и обрыва, значит следующее имя не берётся никогда.
+	if (st.high or 0) < 1024 then
+		st.judged = true
+		if (hrec.z2k_sni_idx or 0) >= Z2K_SNI_TRIES then return end
+		-- Хост, недавно отдававший данные, живой: одно неудачное рукопожатие у
+		-- него ничего не доказывает, а подбор имени способен его сломать.
+		-- Подбор начинаем только у того, кто молчит целиком.
+		local alive = hrec.z2k_alive_at
+		if alive and os.time() <= (alive + Z2K_ALIVE_WINDOW) then return end
+		-- Пока имени нет — стартуем не с первой неудачи. Замер 30.08.2026:
+		-- chatgpt.com получил чужое имя с одного неудачного коннекта сразу
+		-- после перезапуска, когда отметки живости ещё нет ни у кого.
+		if not hrec.z2k_sni then
+			local f = (hrec.z2k_hs_fails or 0) + 1
+			hrec.z2k_hs_fails = f
+			if f < Z2K_SNI_START_FAILS then return end
+		end
+		local nm = z2k_sni_advance(hrec)
+		DLOG("z2k_stall: рукопожатие не состоялось (" .. tostring(st.high or 0) ..
+		     " Б); имя: " .. tostring(nm))
+		return
+	end
+
+	-- ИСХОД ВТОРОЙ: кончились ровно на границе записи — завершённый ответ.
+	-- Вот он и есть доказательство живости хоста, а НЕ сам факт пришедших байтов:
+	-- зарезанный поток тоже приносит данные (hetzner на втором плече отдаёт 15994
+	-- байта и встаёт), и по «пришли байты» мы заглушили бы подбор ровно там, где
+	-- он нужен. Завершённость записи различает эти два случая, и это единственное,
+	-- что их различает.
+	if not st.mid then
+		if (st.high or 0) >= 1024 then z2k_sni_proven(hrec) end
+		return
+	end
+	if (st.high or 0) >= Z2K_STALL_MAX then return end
+	if (st.high or 0) < Z2K_STALL_MIN then return end
+	if (hrec.z2k_sni_idx or 0) >= Z2K_SNI_TRIES then return end
+	st.judged = true
+	hrec.z2k_stall_at = os.time()
+	hrec.z2k_stall_high = st.high
+	-- Имя сдвигаем ПРЯМО ЗДЕСЬ, а не в детекторе ротатора: тот после
+	-- защёлки успеха не зовётся вовсе, и сдвиг никогда бы не случился.
+	-- Проверено на живом обрыве: наблюдатель отработал, детектор — нет.
+	local nm = z2k_sni_advance(hrec)
+	DLOG("z2k_stall: поток встал на " .. tostring(st.high) ..
+	     " Б посреди TLS-записи, тишина " .. Z2K_STALL_MS ..
+	     " мс; следующее имя: " .. tostring(nm))
+end
+
+-- СПИСОК ИМЁН-КАНДИДАТОВ И ПЕРЕБОР ПО НЕМУ.
+--
+-- Перебор идёт на трафике самого пользователя: каждый зафиксированный обрыв
+-- сдвигает хост на следующее имя, и следующая попытка открыть сайт проверяет
+-- уже его. Отдельных проб не заводим — они потребовали бы своей машинерии и
+-- своего состояния, а повторная попытка у человека и так происходит.
+--
+-- Порядок файла = приоритет, поэтому идём строго сверху вниз. Список кончился
+-- — возвращаем nil: значит на этой линии белый список другой, и врать про
+-- «подобрали» нельзя.
+local Z2K_SNI_LIST_PATH = os.getenv("Z2K_SNI_LIST") or
+                          "/opt/zapret2/lists/sni_wl_candidates.txt"
+local sni_list, sni_loaded = nil, false
+
+function z2k_sni_candidates()
+	if sni_loaded then return sni_list end
+	sni_loaded = true
+	local f = io.open(Z2K_SNI_LIST_PATH, "r")
+	if not f then return nil end
+	local t = {}
+	for raw in f:lines() do
+		local line = raw:gsub("#.*$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+		-- Имя уезжает в фейковый ClientHello. Пропускаем только то, что является
+		-- именем хоста: мусор оттуда уже не выковырять, а падать будет молча.
+		if #line > 0 and #line <= 253 and not line:find("[^%w%.%-]") then
+			t[#t + 1] = line
+		end
+	end
+	f:close()
+	if #t == 0 then t = nil end
+	sni_list = t
+	return t
+end
+
+-- Следующее имя для хоста. nil — кандидаты кончились.
+function z2k_sni_next(hrec)
+	local t = z2k_sni_candidates()
+	if not t then return nil end
+	local i = (hrec.z2k_sni_idx or 0) + 1
+	if i > #t then return nil end
+	hrec.z2k_sni_idx = i
+	hrec.z2k_sni = t[i]
+	return t[i]
+end
+
+-- ПОДСТАНОВКА ПОДОБРАННОГО ИМЕНИ В ФЕЙКОВЫЙ ClientHello.
+--
+-- Сам не отправляет: готовит блоб и кладёт его в поле desync, а шлёт штатный
+-- fake с флагом optional. Так мы не повторяем своими руками ttl, badsum,
+-- tcp_ts и repeats — всё это остаётся в ведении движка, — а optional даёт
+-- тихий пропуск, когда имя ещё не подобрано. У того, кто на этот класс
+-- блокировки не наткнулся, не происходит ровно ничего.
+--
+-- Ставится ДО circular и БЕЗ strategy=N: инстанс без этого аргумента circular
+-- не вызывает вовсе, его исполняет линейный оркестратор. Значит имя
+-- подставляется на ЛЮБОМ плече, а разрез продолжает ротироваться штатно —
+-- имя и разрез это разные оси, и смешивать их в одно плечо неверно.
+--
+-- key и nld обязаны совпадать с теми, что у circular: иначе запись хоста
+-- возьмётся под другим ключом, и селектор будет читать не то состояние,
+-- которое пишет детектор обрыва.
+function z2k_sni_pick(ctx, desync)
+	direction_cutoff_opposite(ctx, desync)
+	if not desync.dis or not desync.dis.tcp then return end
+	if not (direction_check(desync) and payload_check(desync)) then return end
+	if not replay_first(desync) then return end
+
+	local ok_h, hrec = pcall(automate_host_record, desync)
+	if not ok_h or not hrec then return end
+
+	-- ПОДТЯНУТЬ НАЙДЕННОЕ ИМЯ С ДИСКА ПРЯМО ЗДЕСЬ.
+	--
+	-- Селектор стоит В ПРОФИЛЕ ПЕРЕД circular, а запись хоста засевается с диска
+	-- внутри circular — то есть на первом же hello после перезапуска имени в
+	-- памяти ещё нет, и человек получает одну гарантированно неудачную загрузку.
+	-- Замер 30.08.2026: после рестарта первая попытка ноль байт, вторая 163654.
+	if not hrec.z2k_sni and type(z2k_state_persist) == "table"
+	   and type(z2k_state_persist.get_record) == "function" then
+		pcall(z2k_state_persist.get_record, desync, true)
+	end
+
+	-- СТОРОЖ ВЗВОДИТСЯ ВСЕГДА, ещё до того как имя выбрано.
+	--
+	-- Иначе механизм не запускается там, где хост валится на самом рукопожатии:
+	-- имени нет, значит нечего подставлять, значит таймер никто не взводит,
+	-- значит имя не выберется никогда. Замкнутый круг, проверенный на живом
+	-- hetzner: шесть заходов подряд по нулю байт и ни одной записи в логе.
+	--
+	-- Взвод стоит здесь, на исходящем hello, потому что это единственный пакет,
+	-- который на таком потоке гарантированно есть.
+	local crec = desync.track and desync.track.lua_state
+	if crec then
+		local st = crec.z2k_tls
+		if not st then st = {}; crec.z2k_tls = st end
+		st.named = (hrec.z2k_sni ~= nil)
+		timer_set("z2k_stall_" .. dis_timer_name(desync.dis),
+		          "z2k_stall_timer", Z2K_STALL_HS_MS, true, { st = st, hrec = hrec })
+	end
+
+	if not hrec.z2k_sni then return end
+
+	local base = blob(desync, desync.arg.src or "fake_default_tls")
+	if not base then return end
+
+	-- rnd и dupsid — то же, чем штатные плечи готовят свой фейк: случайные
+	-- random/session id и копия session id с настоящего hello.
+	local mods = (desync.arg.mods or "rnd,dupsid") .. ",sni=" .. hrec.z2k_sni
+	local ok_m, ch = pcall(tls_mod, base, mods, desync.reasm_data)
+	if not ok_m or not ch then return end
+
+	desync[desync.arg.blob or "z2k_ch"] = ch
+	if b_debug then
+		DLOG("z2k_sni_pick: подставлено имя " .. hrec.z2k_sni)
+	end
+end
+
+-- Взвод и перевзвод на каждом входящем пакете с данными.
+--
+-- ОТДЕЛЬНЫЙ ИНСТАНС, А НЕ ЧАСТЬ ДЕТЕКТОРА, И ЭТО ВАЖНО. Детектор ротатора
+-- зовётся только пока соединение не признано успешным: automate_failure_check
+-- выходит по crec.nocheck. На нашем классе рукопожатие проходит и успех
+-- защёлкивается сразу, поэтому наблюдение внутри детектора не увидело бы
+-- НИ ОДНОГО пакета из тех 16 КБ, ради которых всё и затевалось. Проверено на
+-- живом обрыве: circular отработал 48 раз, детектор не позвался ни разу.
+--
+-- Поэтому наблюдение живёт своим инстансом с dir=in, до circular и без
+-- strategy=N. key и nld обязаны совпадать с circular — иначе запись хоста
+-- возьмётся под другим ключом.
+function z2k_stall_watch(ctx, desync)
+	if not desync.dis or not desync.dis.tcp then return end
+	if not direction_check(desync) then return end
+	-- Страховка на случай, если инстанс припишут не к тому профилю:
+	-- наблюдение осмысленно только там, где есть ротация и наш детектор.
+	if not Z2K_STALL_POOLS[desync.arg.key] then return end
+	local ok_h, hrec = pcall(automate_host_record, desync)
+	if not ok_h or not hrec then return end
+	local crec = desync.track and desync.track.lua_state
+	if not crec then return end
+	if not desync.track or not desync.track.pos then return end
+	local srv = desync.track.pos.server
+	if not srv or not srv.tcp then return end
+	local st = crec.z2k_tls
+	if not st then st = {}; crec.z2k_tls = st end
+	-- Пакеты считаем ДО проверки на данные: потолок очереди
+	-- (`--connbytes 1:N ... dir reply`) считает пакеты, а не байты, и пустые
+	-- ACK расходуют его наравне с данными.
+	st.rx = (st.rx or 0) + 1
+	st.cap = tonumber(desync.arg.cap) or st.cap
+
+	local p = desync.dis and desync.dis.payload
+	if not p or #p == 0 then return end
+	z2k_tls_frame_feed(st, p)
+	st.mid  = ((st.need or 0) > 0) or (st.hdr ~= nil and #st.hdr > 0)
+	st.high = srv.tcp.uppos or 0
+
+	local name = "z2k_stall_" .. dis_timer_name(desync.dis)
+	if st.high >= Z2K_STALL_MAX then
+		-- Поток ушёл за наш горизонт видимости: молчание там ничего не значит.
+		timer_del(name)
+		return
+	end
+	if st.high < Z2K_STALL_MIN then
+		-- Данных ещё мало. Таймер НЕ снимаем: он поставлен на исходящем hello и
+		-- сторожит как раз случай «рукопожатие не состоялось». Просто ждём.
+		return
+	end
+	-- Одноимённый таймер движок замещает с обнулением отсчёта — это и есть
+	-- перевзвод: каждый новый пакет с данными отодвигает срок.
+	timer_set(name, "z2k_stall_timer", Z2K_STALL_MS, true, { st = st, hrec = hrec })
+end
+
 local function z2k_fail_verdict(desync, crec)
 	-- Исходящее: в штатный детектор пускаем только первый запрос. Ретрансмиты
 	-- живой сессии — не признак негодной стратегии.
 	if desync.outgoing then
+		-- КЛИЕНТ УШЁЛ ПЕРВЫМ. Отмечаем момент, когда клиент закрыл свою сторону:
+		-- всё, что сервер повторяет после этого, он повторяет в закрытый сокет,
+		-- и к качеству стратегии отношения не имеет.
+		local fl = desync.dis and desync.dis.tcp and desync.dis.tcp.th_flags
+		if fl and TH_FIN and TH_RST and crec and not crec.z2k_cli_closed
+		   and (bitand(fl, TH_FIN) ~= 0 or bitand(fl, TH_RST) ~= 0) then
+			crec.z2k_cli_closed = os.time()
+		end
 		if not Z2K_FIRST_REQUEST[desync.l7payload] then return false end
 		if not standard_failure_detector(desync, crec) then return false end
 		if suppressed(desync, "ретрансмит ClientHello") then return false end
@@ -788,11 +1156,3 @@ function z2k_fail_tls_alert(desync, crec)
 	end
 	return true
 end
-		-- КЛИЕНТ УШЁЛ ПЕРВЫМ. Отмечаем момент, когда клиент закрыл свою сторону:
-		-- всё, что сервер повторяет после этого, он повторяет в закрытый сокет,
-		-- и к качеству стратегии отношения не имеет.
-		local fl = desync.dis and desync.dis.tcp and desync.dis.tcp.th_flags
-		if fl and TH_FIN and TH_RST and crec and not crec.z2k_cli_closed
-		   and (bitand(fl, TH_FIN) ~= 0 or bitand(fl, TH_RST) ~= 0) then
-			crec.z2k_cli_closed = os.time()
-		end

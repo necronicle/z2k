@@ -209,8 +209,11 @@ case "$HTTP_NOLUA" in
 esac
 
 # --- 3. Окно входящих ----------------------------------------------------------
-_pkt_in=$(grep -A 12 'local nfqws2_tcp_pkt_in=' "$ROOT/lib/config_official.sh" \
-          | grep -oE 'nfqws2_tcp_pkt_in="[0-9]+"' | sed -n '2s/.*"\([0-9]*\)".*/\1/p')
+# Число живёт в z2k_reply_pkt_cap: его читает и тело конфига, и сторож обрыва
+# (ему потолок нужен, чтобы отличать «поток встал» от «мы ослепли»). Разъедься
+# они — сторож начнёт судить вслепую, поэтому проверяем саму функцию.
+_pkt_in=$(sed -n '/^z2k_reply_pkt_cap()/,/^}/p' "$ROOT/lib/config_official.sh" \
+          | grep -oE 'echo 50' | head -1 | grep -oE '[0-9]+')
 if [ "$_pkt_in" = "50" ]; then
     ok "NFQWS2_TCP_PKT_IN при включённом пакете = 50"
 else

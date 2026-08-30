@@ -1104,6 +1104,17 @@ body[data-page="login"] #app { max-width: none; }
    пол-экрана читался бы как предупреждение, хотя это ответ.
    user-select:all — один клик выделяет строку целиком: её отсюда уносят
    копированием, и это самое частое действие на странице. */
+/* Подобранное имя под номером плеча. Моноширинное и приглушённое: это
+   служебная величина, которую читают глазами при разборе, а не то, чем
+   пользуются каждый день. */
+.state-sni {
+  margin-top: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 .pick-report { margin-top: var(--space-12); }
 .pick-head { font-size: 14px; margin-bottom: var(--space-8); }
 .pick-head b { font-family: var(--font-mono); font-size: 13px; }

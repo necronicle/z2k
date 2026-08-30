@@ -65,6 +65,11 @@ export function strategiesShell(activeId, bodyHtml) {
   `;
 }
 
+// Подобранное имя показывается ПОД номером плеча, а не отдельной колонкой.
+// Причина простая: имя есть у единиц строк — только там, где сработал обход
+// блокировки по объёму, — и отдельный столбец у всех остальных был бы пустым.
+// А не показывать вовсе нельзя: номер плеча сам по себе поведение уже не
+// объясняет, и таблица врала бы умолчанием.
 export async function renderState() {
   $app.innerHTML = strategiesShell("live", `
     <div class="card">
@@ -282,6 +287,7 @@ async function loadState(useCache) {
                     data-key="${escapeHtml(e.key)}"
                     data-host="${escapeHtml(e.host)}"
                     data-mode="${frozen ? "frozen" : "auto"}">${opts}</select>
+            ${e.sni ? `<div class="state-sni" title="Домен пробивается подставным именем — обход блокировки по объёму">${escapeHtml(e.sni)}</div>` : ""}
           </td>
           <td data-label="Заморозка">
             <button class="btn btn-icon state-freeze"

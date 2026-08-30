@@ -1,0 +1,118 @@
+#!/bin/sh
+# tests/test_sni_stall_wiring.sh — проводка обхода блокировки по объёму
+# (стрим встаёт на 16-20 КБ) внутри существующего ротатора.
+#
+# Механизм собран из трёх частей, и каждая из них молча выключается от
+# правки в соседнем файле:
+#   - lib/config_official.sh   — два инстанса в профиле RKN;
+#   - files/lua/z2k-alert.lua  — сами функции, по именам из конфига;
+#   - files/lists/sni_wl_candidates.txt — имена-кандидаты.
+# Отказ здесь беззвучный: nfqws2 стартует, трафик идёт, обход просто не
+# происходит. Поэтому связки проверяем статически, до раскатки.
+# POSIX sh (busybox ash).
+
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GEN="$DIR/lib/config_official.sh"
+LUA="$DIR/files/lua/z2k-alert.lua"
+LIST="$DIR/files/lists/sni_wl_candidates.txt"
+
+PASS=0; FAIL=0
+ok()  { PASS=$((PASS + 1)); printf '[PASS] %s\n' "$1"; }
+bad() { FAIL=$((FAIL + 1)); printf '[FAIL] %s\n' "$1"; }
+has() { grep -q "$1" "$2" 2>/dev/null; }
+
+for f in "$GEN" "$LUA" "$LIST"; do
+    [ -f "$f" ] || { printf '[FAIL] нет %s\n' "$f"; exit 1; }
+done
+
+printf '\n--- конфиг: инстансы на месте ---\n'
+has 'lua-desync=z2k_stall_watch:dir=in' "$GEN" \
+    && ok "сторож обрыва заводится своим инстансом с dir=in" \
+    || bad "нет инстанса z2k_stall_watch:dir=in — обрыв никто не увидит"
+
+has 'lua-desync=z2k_sni_pick:payload=tls_client_hello:dir=out' "$GEN" \
+    && ok "селектор имени висит на исходящем ClientHello" \
+    || bad "нет инстанса z2k_sni_pick на tls_client_hello"
+
+# Потолок видимости в пакетах — единственное, что отличает «поток встал» от
+# «мы ослепли». Пропадёт аргумент — сторож снова начнёт вешать чужие имена на
+# рабочие хосты, и молча.
+has 'lua-desync=z2k_stall_watch:dir=in:cap=' "$GEN" \
+    && ok "сторожу передан потолок видимости в пакетах" \
+    || bad "у z2k_stall_watch нет cap= — сторож будет судить вслепую"
+
+grep -q 'z2k_reply_pkt_cap()' "$GEN" \
+    && ok "потолок берётся из общей функции (одно число на конфиг и на сторожа)" \
+    || bad "нет z2k_reply_pkt_cap — число разъедется между конфигом и сторожем"
+
+printf '\n--- конфиг: порядок и владение ---\n'
+# Инстанс без :strategy= ротатору не принадлежит и запускается линейно. Стоит
+# ему уехать ЗА circular — и линейный запуск до него не дойдёт: профиль
+# заканчивается на ротаторе.
+PROFILE=$(grep -n 'sni_pick \$rkn_circ' "$GEN" | head -1)
+[ -n "$PROFILE" ] \
+    && ok "оба инстанса стоят ПЕРЕД circular в строке профиля" \
+    || bad "в строке профиля RKN нет '\$sni_pick \$rkn_circ' — порядок нарушен"
+
+if grep -E 'lua-desync=(z2k_stall_watch|z2k_sni_pick)[^ ]*:strategy=' "$GEN" >/dev/null 2>&1; then
+    bad "на инстансе стоит :strategy= — его заберёт circular, и линейно он не запустится"
+else
+    ok "ни на одном инстансе нет :strategy= — оба запускаются линейно"
+fi
+
+# Селектор готовит блоб, отправляет его штатный fake. Разъехались имена —
+# fake шлёт пустоту (:optional глушит ошибку), и обход исчезает молча.
+BLOB_PICK=$(grep -o 'z2k_sni_pick[^ ]*blob=[a-z0-9_]*' "$GEN" | sed 's/.*blob=//' | head -1)
+BLOB_FAKE=$(grep -o 'lua-desync=fake:payload=tls_client_hello:dir=out:blob=[a-z0-9_]*:optional' "$GEN" \
+            | sed 's/.*blob=//; s/:optional//' | head -1)
+if [ -n "$BLOB_PICK" ] && [ "$BLOB_PICK" = "$BLOB_FAKE" ]; then
+    ok "имя блоба у селектора и у fake одно ($BLOB_PICK)"
+else
+    bad "блобы разъехались: селектор '$BLOB_PICK', fake '$BLOB_FAKE'"
+fi
+
+printf '\n--- конфиг: ключ ротатора и умолчание ---\n'
+# key и nld копируются из самого circular: возьми селектор другой ключ — он
+# читал бы не ту запись хоста, в которую пишет сторож.
+has '_sp_k=$(printf' "$GEN" \
+    && ok "key берётся из строки circular, а не прописан вторым местом" \
+    || bad "key не копируется из circular — селектор и сторож разойдутся по ключам"
+
+has 'safe_config_read "Z2K_SNI_STALL" .* "1"' "$GEN" \
+    && ok "умолчание Z2K_SNI_STALL=1 (новое включено у всех)" \
+    || bad "Z2K_SNI_STALL по умолчанию не 1"
+
+printf '\n--- lua: функции существуют под теми же именами ---\n'
+for fn in z2k_stall_watch z2k_sni_pick z2k_stall_timer z2k_tls_frame_feed z2k_sni_next; do
+    if grep -q "^function $fn(" "$LUA"; then
+        ok "$fn определена"
+    else
+        bad "$fn не определена в z2k-alert.lua — конфиг зовёт несуществующее"
+    fi
+done
+
+# Таймер движок ищет по имени в _G. Локальная функция сюда не годится.
+if grep -qE "^local function (z2k_stall_timer|z2k_stall_watch|z2k_sni_pick)\(" "$LUA"; then
+    bad "функция объявлена local — движок не найдёт её по имени"
+else
+    ok "функции глобальные — движок находит их по имени"
+fi
+
+printf '\n--- список кандидатов ---\n'
+NAMES=$(sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' "$LIST" | grep -c '.')
+[ "$NAMES" -ge 50 ] \
+    && ok "имён в списке: $NAMES" \
+    || bad "в списке всего $NAMES имён — перебору не из чего выбирать"
+
+# Кандидат уходит в SNI настоящего ClientHello к настоящему серверу. Мусор
+# отсюда не выковырять, поэтому файл держим чистым на уровне репозитория.
+BAD=$(sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' "$LIST" | grep '.' \
+      | grep -vE '^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$' | head -3)
+[ -z "$BAD" ] \
+    && ok "все строки списка — валидные имена хостов" \
+    || bad "в списке не-имена: $(printf '%s ' $BAD)"
+
+printf '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+printf 'Results: %d passed, %d failed\n' "$PASS" "$FAIL"
+printf '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+[ "$FAIL" -eq 0 ] && exit 0 || exit 1

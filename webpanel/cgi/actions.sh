@@ -2247,11 +2247,17 @@ _state_set_one_file() {
         chmod 644 "$file" 2>/dev/null
     fi
     local tmp="$file.z2k-new.$$"
+    # Шестая колонка (подобранное имя для белого SNI) переносится из прежней
+    # строки. Она принадлежит ротатору, а не панели: панель про имя ничего не
+    # знает и знать не должна. Без переноса любой клик по замку или по номеру
+    # стратегии стирал бы находку, и перебор — до двух десятков неудачных
+    # загрузок у человека на глазах — начинался бы заново.
     awk -F'\t' -v key="$key" -v host="$host" -v strat="$strat" -v mode="$mode" -v ts="$ts" '
-        BEGIN { OFS="\t" }
-        ($1 == key && $2 == host) { next }      # drop any prior row for this key+host
+        BEGIN { OFS="\t"; sni = "" }
+        ($1 == key && $2 == host) { if ($6 != "") sni = $6; next }  # drop prior row, keep its name
         { print }
-        END { print key, host, strat, ts, mode } # append the upserted row
+        END { if (sni != "") print key, host, strat, ts, mode, sni
+              else            print key, host, strat, ts, mode }
     ' "$file" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
     _file_replace "$file" "$tmp" || return 1
     return 0
