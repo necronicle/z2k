@@ -64,8 +64,12 @@ assert_eq "target is PPE"            "PPE" "$PPE_TARGET"
 
 # ---- ensure_rules shape ----
 z2k_ppe_ensure_rules >/dev/null 2>&1
+# Список портов берём из самого модуля, а не переписываем сюда: он растёт
+# (5222 приехал 28.08.2026 под шлюз WhatsApp), и вписанная копия делала сторожа
+# красным на ровном месте — правило-то верное. Сторожим ФОРМУ правила и то, что
+# в него ушёл ровно объявленный список.
 assert_has "v4 FORWARD multiport+connskip -j PPE" "$CALLS" \
-    'v4 .*-t mangle -I FORWARD -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE'
+    "v4 .*-t mangle -I FORWARD -p tcp -m multiport --dports $PPE_PORTS -m connskip --connskip 30 -j PPE"
 assert_has "v4 PREROUTING multiport+connskip -j PPE" "$CALLS" \
     'v4 .*-t mangle -I PREROUTING -p tcp -m multiport --dports .* -m connskip --connskip 30 -j PPE'
 assert_has "v6 FORWARD rule too (best-effort)" "$CALLS" \
