@@ -24,6 +24,12 @@ function DLOG(s) DLOGS[#DLOGS + 1] = tostring(s) end
 function DLOG_ERR() end
 b_debug = false
 autostate = {}
+-- Поштучный перебор по умолчанию выключен (его сменило закрепление на линию).
+-- Тесты проверяют ИМЕННО его, поэтому включаем явно — и заодно сторожим, что
+-- выключатель существует и читается из окружения.
+local real_getenv0 = os.getenv
+os.getenv = function(k) if k == "Z2K_SNI_PERHOST" then return "1" end return real_getenv0(k) end
+
 local FAKE_NOW = 1700000000
 local real_time = os.time
 os.time = function() return FAKE_NOW end
@@ -326,6 +332,16 @@ do
 
     os.remove(pinfile)
     is("нет файла — нет закрепления", nil, z2k_sni_pinned())
+
+    -- ЗАМОК ПОДБОРА. Пока он стоит, поштучный перебор не работает: подбор на
+    -- первом шаге снимает закрепление, и без замка старый путь успевает
+    -- повесить своего первого кандидата на посторонний хост. Замер
+    -- 30.08.2026: так chatgpt получил hcaptcha.com посреди прогона подбора.
+    is("без файла замка перебор разрешён", false, z2k_sni_locked())
+    local lf = io.open(pinfile .. ".lock", "w"); lf:write(""); lf:close()
+    is("замок виден", true, z2k_sni_locked())
+    os.remove(pinfile .. ".lock")
+    is("замок снят", false, z2k_sni_locked())
     os.getenv = real_getenv2
     package.loaded["z2k-alert"] = nil
     dofile("files/lua/z2k-alert.lua")

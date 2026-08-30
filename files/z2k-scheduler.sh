@@ -14,6 +14,7 @@
 # Tasks (HH:MM <command>):
 #   02:00  z2k-auto-update.sh apply       — nightly auto-update check
 #   03:00  z2k-stats-upload.sh             — anonymized strategy stats -> VPS
+#   03:30  z2k-sni-select.sh               — свежесть белого имени (+ проба линии по воскресеньям)
 #   04:00  z2k-update-lists.sh             — RKN/YT hostlist refresh
 #   06:00  ipset/get_config.sh              — IP-set resolution
 
@@ -174,20 +175,28 @@ if [ -x "${ZAPRET2_DIR}/z2k-update-lists.sh" ] && \
     run_task warp-games-seed sh "${ZAPRET2_DIR}/z2k-update-lists.sh" warp-games
 fi
 
-# Проба линии на блокировку по объёму соединения — при первом же старте после
-# установки или обновления, если ответа ещё нет.
+# СТАРТ СЛУЖБЫ — ЭТО И ЕСТЬ УСТАНОВКА И ОБНОВЛЕНИЕ.
 #
-# Механизм подстановки белого имени выключен, пока линия не измерена: включать
-# его «на всякий случай» нельзя, определение блока по чужому трафику ошибается
-# на здоровых крупных загрузках. Проба стоит десяток соединений к курируемым
-# мишеням и даёт ответ за секунды.
-if [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ] && \
-   [ ! -s "${ZAPRET2_DIR}/state/tcp16.flag" ]; then
-    run_task tcp16-probe sh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
-    # Блок есть — сразу подбираем имя: без него механизм включён, но пуст.
+# Отдельных крючков в установщике и обновлении не нужно: и то, и другое
+# перезапускает службу, а планировщик стартует вместе с ней. Здесь мы меряем
+# линию (если ещё не мерили) и приводим имя в порядок — селектор сам сперва
+# проверит текущее и полезет в перебор только если оно перестало пробивать.
+#
+# Дроссель на час. Перезапусков бывает много подряд — NDM дёргает службу на
+# каждое переподключение, и self-heal тоже, — а платить за каждый лишний
+# запрос незачем. Отметка лежит в /tmp: переживать перезагрузку ей ни к чему,
+# после неё как раз и надо проверить заново.
+_sni_stamp=/tmp/z2k-sni-refresh.ts
+_sni_now=$(date +%s 2>/dev/null || echo 0)
+_sni_last=$(cat "$_sni_stamp" 2>/dev/null || echo 0)
+case "$_sni_last" in ''|*[!0-9]*) _sni_last=0 ;; esac
+if [ $((_sni_now - _sni_last)) -ge 3600 ]; then
+    echo "$_sni_now" > "$_sni_stamp" 2>/dev/null
+    if [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ] && [ ! -s "${ZAPRET2_DIR}/state/tcp16.flag" ]; then
+        run_task tcp16-probe sh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
+    fi
     if [ "$(cat "${ZAPRET2_DIR}/state/tcp16.flag" 2>/dev/null)" = "1" ] && \
-       [ -x "${ZAPRET2_DIR}/z2k-sni-select.sh" ] && \
-       [ ! -s "${ZAPRET2_DIR}/lists/sni_wl_pin.txt" ]; then
+       [ -x "${ZAPRET2_DIR}/z2k-sni-select.sh" ]; then
         run_task sni-select sh "${ZAPRET2_DIR}/z2k-sni-select.sh"
     fi
 fi
@@ -212,6 +221,25 @@ while true; do
             if [ "$(last_fired_for_key stats-upload)" != "$today" ]; then
                 mark_fired stats-upload "$today"
                 run_task stats-upload "${ZAPRET2_DIR}/z2k-stats-upload.sh"
+            fi
+            ;;
+        03:30)
+            # Свежесть имени из белого списка провайдера.
+            #
+            # Оно протухает: замер 30.08.2026 — имя работало в 17:19 и
+            # перестало через час. Раз в сутки проверяем текущее одним
+            # запросом и, если перестало пробивать, подбираем заново (около
+            # тридцати секунд). Заодно раз в неделю перемеряется сама линия:
+            # провайдер может блок и снять, тогда механизм уходит из конфига.
+            if [ "$(last_fired_for_key sni-refresh)" != "$today" ]; then
+                mark_fired sni-refresh "$today"
+                if [ "$(date +%u)" = "7" ] && [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ]; then
+                    run_task tcp16-probe "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
+                fi
+                if [ "$(cat "${ZAPRET2_DIR}/state/tcp16.flag" 2>/dev/null)" = "1" ] &&
+                   [ -x "${ZAPRET2_DIR}/z2k-sni-select.sh" ]; then
+                    run_task sni-refresh "${ZAPRET2_DIR}/z2k-sni-select.sh"
+                fi
             fi
             ;;
         04:00)

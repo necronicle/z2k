@@ -715,6 +715,19 @@ local Z2K_SNI_PROVEN_FAILS = tonumber(os.getenv("Z2K_SNI_PROVEN_FAILS")) or 3
 -- Одного мало: сразу после перезапуска ни один хост ещё не отмечен живым, и
 -- любая случайная неудача первого коннекта запускала перебор рабочему сайту.
 local Z2K_SNI_START_FAILS = tonumber(os.getenv("Z2K_SNI_START_FAILS")) or 2
+-- ПОШТУЧНЫЙ ПЕРЕБОР ПО ХОСТАМ — ВЫКЛЮЧЕН.
+--
+-- Он определял блок по поведению чужого потока и ошибался: горизонт видимости
+-- меряется в ПАКЕТАХ, и здоровая крупная загрузка неотличима от обрыва. Его
+-- сменил замер линии пробой (z2k-tcp16-probe.sh) и одно закреплённое имя на
+-- всю линию — блок оказался свойством линии, а не хоста: 34 AS из 43.
+--
+-- Код оставлен на случай линии, где закрепить нечего, но по умолчанию молчит:
+-- пользы от него там всё равно нет (перебирать он будет тот же список, который
+-- уже не дал ни одного проходящего имени), а вреда — сколько угодно. Замер
+-- 30.08.2026: он просыпался в секунду, когда подбор снимает закрепление, и
+-- вешал первого кандидата на посторонний хост.
+local Z2K_SNI_PERHOST = (os.getenv("Z2K_SNI_PERHOST") == "1")
 -- Насколько дальше последнего разобранного байта должен оказаться закрывающий
 -- пакет, чтобы считать, что поток ехал за нашим горизонтом. Одна TLS-запись
 -- бывает до 16 КБ, поэтому планка выше неё: меньший отрыв объясняется и
@@ -784,6 +797,7 @@ local function z2k_sni_advance(hrec)
 end
 
 function z2k_stall_timer(name, data)
+	if not Z2K_SNI_PERHOST then return end
 	local st = data and data.st
 	local hrec = data and data.hrec
 	if not st or not hrec then return end
@@ -931,8 +945,13 @@ local sni_list, sni_loaded = nil, false
 -- перезапуска, как и у списков движка.
 -- Читаем не чаще раза в Z2K_PIN_RECHECK секунд: это путь КАЖДОГО исходящего
 -- хелло, и открывать файл на каждый пакет незачем.
+--
+-- Секунда, а не десять. Десятью подбор ломался незаметно: он меняет имя в
+-- файле и тут же проверяет мишень, а движок ещё девять секунд применял
+-- ПРЕДЫДУЩЕЕ — то есть вердикт мог достаться не тому кандидату. Один io.open
+-- в секунду на весь роутер не стоит ничего, а неверный подбор стоит дорого.
 local z2k_pin_name, z2k_pin_at = nil, 0
-local Z2K_PIN_RECHECK = tonumber(os.getenv("Z2K_PIN_RECHECK")) or 10
+local Z2K_PIN_RECHECK = tonumber(os.getenv("Z2K_PIN_RECHECK")) or 1
 function z2k_sni_pinned()
 	local now = os.time()
 	if now < (z2k_pin_at + Z2K_PIN_RECHECK) then return z2k_pin_name end
@@ -948,6 +967,20 @@ function z2k_sni_pinned()
 	if nm == "" or #nm > 253 or nm:find("[^%w%.%-]") then return nil end
 	z2k_pin_name = nm
 	return nm
+end
+
+-- Замок подбора: файл рядом с закреплением, живёт только пока идёт перебор.
+-- Проверяется тем же кэшем, что и само закрепление, — это путь каждого хелло.
+local z2k_lock_on, z2k_lock_at = false, 0
+function z2k_sni_locked()
+	local now = os.time()
+	if now < (z2k_lock_at + Z2K_PIN_RECHECK) then return z2k_lock_on end
+	z2k_lock_at = now
+	local path = os.getenv("Z2K_SNI_PIN") or "/opt/zapret2/lists/sni_wl_pin.txt"
+	local f = io.open(path .. ".lock", "r")
+	z2k_lock_on = (f ~= nil)
+	if f then f:close() end
+	return z2k_lock_on
 end
 
 function z2k_sni_candidates()
@@ -1017,7 +1050,16 @@ function z2k_sni_pick(ctx, desync)
 	-- Поэтому, когда имя выбрано заранее (файл заполняет z2k-sni-select.sh),
 	-- мы не ведём ни поиска, ни записи о хосте: подставили и вышли. Перебор по
 	-- живому трафику остаётся запасным путём — для линий, где закрепить нечего.
+	-- ПОКА ИДЁТ ПОДБОР — ПОШТУЧНЫЙ ПУТЬ ЗАПЕРТ.
+	--
+	-- Подбор на первом шаге снимает закрепление, чтобы измерить мишень без
+	-- имени. В эту секунду просыпался старый перебор и вешал своего первого
+	-- кандидата на всё, что подвернулось; следом подбор ставил то же имя
+	-- закреплением, хост отвечал — и имя записывалось «доказанным» тому, кому
+	-- оно не нужно. Замер 30.08.2026: ровно так chatgpt получил hcaptcha.com в
+	-- 18:37:57, посреди прогона подбора.
 	local pin = z2k_sni_pinned()
+	if pin == nil and (z2k_sni_locked() or not Z2K_SNI_PERHOST) then return end
 	if pin then
 		local base_pin = blob(desync, desync.arg.src or "fake_default_tls")
 		if not base_pin then return end
