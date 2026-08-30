@@ -976,12 +976,12 @@ local function z2k_nets_load()
 			-- первыми двумя группами. Сравнение потом идёт по тому же ключу.
 			local o1, o2 = p:match("^(%d+)%.(%d+)%.")
 			if o1 then
-				set[tonumber(o1) * 256 + tonumber(o2)] = true
+				set[tonumber(o1) * 256 + tonumber(o2)] = a
 				cnt = cnt + 1
 			else
 				local g1, g2 = p:match("^(%x+):(%x*):")
 				if g1 then
-					set[(g1 or "") .. ":" .. (g2 or "")] = true
+					set[(g1 or "") .. ":" .. (g2 or "")] = a
 					cnt = cnt + 1
 				end
 			end
@@ -994,30 +994,64 @@ local function z2k_nets_load()
 	return set
 end
 
--- Адрес назначения принадлежит сети, где блок найден?
--- Карты нет — считаем, что да: иначе одна не доехавшая проба выключила бы
--- обход всем, у кого он работал.
-function z2k_sni_net_match(desync)
+-- Какой AS принадлежит адрес назначения.
+local function z2k_asn_of(desync)
 	local set = z2k_nets_load()
-	if not set then return true end
+	if not set then return nil end
 	local d = desync and desync.dis
-	if not d then return true end
+	if not d then return nil end
 	if d.ip and d.ip.ip_dst then
 		local b = d.ip.ip_dst
-		if #b >= 2 then
-			return set[b:byte(1) * 256 + b:byte(2)] == true
-		end
+		if #b >= 2 then return set[b:byte(1) * 256 + b:byte(2)] end
 	elseif d.ip6 and d.ip6.ip6_dst then
 		local b = d.ip6.ip6_dst
 		if #b >= 4 then
 			local g1 = string.format("%x", b:byte(1) * 256 + b:byte(2))
 			local g2 = string.format("%x", b:byte(3) * 256 + b:byte(4))
-			if set[g1 .. ":" .. g2] then return true end
-			-- Ведущие нули во второй группе первоисточник печатает по-разному.
-			return set[g1 .. ":"] == true
+			return set[g1 .. ":" .. g2] or set[g1 .. ":"]
 		end
 	end
-	return true
+	return nil
+end
+
+-- КАЖДОЙ СЕТИ — СВОЁ ИМЯ.
+--
+-- Одного имени на всех не бывает. Замер 30.08.2026 на линии владельца:
+-- hcaptcha.com бьёт двадцать AS, но НЕ Hetzner; Hetzner, DigitalOcean и OVH
+-- берёт 300.ya.ru; Melbicom — ad.adriver.ru; семь AS не берёт ничто из списка.
+-- Карту «сеть → имя» готовит проба (z2k-detect tcp16 -per-asn).
+local z2k_asn_sni, z2k_asn_sni_loaded = nil, false
+local function z2k_asn_sni_load()
+	if z2k_asn_sni_loaded then return z2k_asn_sni end
+	z2k_asn_sni_loaded = true
+	local path = os.getenv("Z2K_TCP16_SNI") or "/opt/zapret2/state/tcp16_sni.txt"
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local m, n = {}, 0
+	for line in f:lines() do
+		local a, nm = line:match("^(%d+)\t([%w%.%-]+)")
+		if a and nm then m[a] = nm; n = n + 1 end
+	end
+	f:close()
+	if n == 0 then return nil end
+	DLOG("z2k_sni: карта имён по сетям загружена, " .. n .. " сетей")
+	z2k_asn_sni = m
+	return m
+end
+
+-- Имя для этого адреса: сперва своё для его AS, потом общее закрепление.
+-- Карты нет вовсе — общее закрепление и есть ответ (так работали до появления
+-- поимённого подбора, и ломать это на переходе нельзя).
+function z2k_sni_for(desync, pin)
+	local m = z2k_asn_sni_load()
+	if not m then return pin end
+	local asn = z2k_asn_of(desync)
+	if asn and m[asn] then return m[asn] end
+	-- AS известна, а имени для неё нет — значит проба его не нашла, и
+	-- подставлять чужое незачем: оно этой сети не поможет.
+	if asn then return nil end
+	-- Адрес вне карты: сети с блоком его не покрывают, имя не нужно.
+	return nil
 end
 
 -- ЗАКРЕПЛЁННОЕ ИМЯ ЛИНИИ.
@@ -1141,9 +1175,8 @@ function z2k_sni_pick(ctx, desync)
 	-- закреплением, хост отвечал — и имя записывалось «доказанным» тому, кому
 	-- оно не нужно. Замер 30.08.2026: ровно так chatgpt получил hcaptcha.com в
 	-- 18:37:57, посреди прогона подбора.
-	local pin = z2k_sni_pinned()
+	local pin = z2k_sni_for(desync, z2k_sni_pinned())
 	if pin == nil and (z2k_sni_locked() or not Z2K_SNI_PERHOST) then return end
-	if pin and not z2k_sni_net_match(desync) then return end
 	if pin then
 		local base_pin = blob(desync, desync.arg.src or "fake_default_tls")
 		if not base_pin then return end

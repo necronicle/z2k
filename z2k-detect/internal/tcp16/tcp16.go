@@ -31,14 +31,15 @@ import (
 
 const (
 	// Размер мусорного заголовка и число запросов — как в первоисточнике.
-	ChunkSize   = 4000
-	ChunkCount  = 10
+	ChunkSize  = 4000
+	ChunkCount = 10
 	// Порог: до 12 КБ обрыв не считается этим классом. Ниже него рвут по
 	// множеству обычных причин, и вердикт был бы шумом.
 	MinDetectKB = 12
 
-	connectTimeout = 5 * time.Second
-	readTimeout    = 6 * time.Second
+	connectTimeout   = 5 * time.Second
+	handshakeTimeout = 6 * time.Second
+	readTimeout      = 6 * time.Second
 )
 
 // Target — мишень пробы: адрес, порт и AS, к которой он принадлежит.
@@ -52,13 +53,13 @@ type Target struct {
 
 // Result — исход одной пробы.
 type Result struct {
-	Target    Target
-	SNI       string
-	Alive     bool   // сервер вообще ответил на первый запрос
-	Detected  bool   // соединение умерло за порогом — это наш класс
-	DiedAtKB  int    // на каком накопленном объёме умерло
-	Err       string // человеческая причина, если проба не состоялась
-	RTT       time.Duration
+	Target   Target
+	SNI      string
+	Alive    bool   // сервер вообще ответил на первый запрос
+	Detected bool   // соединение умерло за порогом — это наш класс
+	DiedAtKB int    // на каком накопленном объёме умерло
+	Err      string // человеческая причина, если проба не состоялась
+	RTT      time.Duration
 }
 
 var padPool = func() string {
@@ -89,6 +90,12 @@ func Probe(ctx context.Context, t Target, sni string) Result {
 	if t.Port != 80 {
 		// Сертификат не проверяем: идём по адресу, имя подставляем сами —
 		// нас интересует реакция коробки, а не подлинность сервера.
+		//
+		// Дедлайн обязателен. Коробка на неподходящем имени не отвечает вовсе,
+		// и рукопожатие висит без ограничения по времени: перебор кандидатов
+		// вставал намертво на первом же таком имени и до рабочего не доходил.
+		// Замер 30.08.2026: hcaptcha.com к Hetzner — тишина, 300.ya.ru — проходит.
+		raw.SetDeadline(time.Now().Add(handshakeTimeout))
 		tc := tls.Client(raw, &tls.Config{ServerName: sni, InsecureSkipVerify: true})
 		if err := tc.HandshakeContext(ctx); err != nil {
 			res.Err = "нет TLS: " + errShort(err)
@@ -96,6 +103,7 @@ func Probe(ctx context.Context, t Target, sni string) Result {
 		}
 		conn = tc
 	}
+	raw.SetDeadline(time.Time{})
 	res.RTT = time.Since(start)
 
 	host := t.IP

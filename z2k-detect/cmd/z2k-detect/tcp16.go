@@ -18,8 +18,9 @@ import (
 // tcp16Cmd — проба на блокировку по объёму соединения.
 //
 // Два режима, и это принципиально разные вопросы:
-//   без -scan   есть ли этот блок на линии (и в каких AS);
-//   с  -scan    какое имя из белого списка провайдер пропускает.
+//
+//	без -scan   есть ли этот блок на линии (и в каких AS);
+//	с  -scan    какое имя из белого списка провайдер пропускает.
 //
 // Оба идут по КУРИРУЕМЫМ мишеням, а не по трафику человека: наблюдение за
 // чужим потоком отвечает на вопрос «этот хост сейчас режут?» и ошибается, а
@@ -35,6 +36,8 @@ func tcp16Cmd(ctx context.Context, rest []string) {
 	par := fs.Int("parallel", 4, "сколько проб разом")
 	asnOut := fs.String("asn-out", "", "куда выписать AS, где блок найден (по одной в строке)")
 	first := fs.Bool("first", true, "при -scan остановиться на первом подошедшем имени")
+	perASN := fs.Bool("per-asn", false, "искать своё имя для КАЖДОЙ сети с блоком")
+	sniOut := fs.String("sni-out", "", "куда выписать карту «сеть -> имя»")
 	_ = fs.Parse(rest)
 
 	tg, err := loadTargets(*targets, *asn, *confirmed, *limit)
@@ -50,7 +53,11 @@ func tcp16Cmd(ctx context.Context, rest []string) {
 		if err != nil {
 			fatal("%v", err)
 		}
-		scanNames(ctx, tg, names, *par, *first)
+		if *perASN {
+			scanPerASN(ctx, tg, names, *par, *sniOut)
+		} else {
+			scanNames(ctx, tg, names, *par, *first)
+		}
 		return
 	}
 	probeLine(ctx, tg, *sni, *par, *asnOut)
@@ -126,6 +133,136 @@ func probeLine(ctx context.Context, tg []tcp16.Target, sni string, par int, asnO
 		os.Exit(1)
 	default:
 		fmt.Printf("ВЕРДИКТ: блока по объёму НЕТ (%d мишеней ответили, ни одна не оборвалась)\n", anyAlive)
+	}
+}
+
+// scanPerASN ищет СВОЁ имя для КАЖДОЙ сети, где нашёлся блок.
+//
+// Одного имени на всех не бывает — замер 30.08.2026 на линии владельца:
+// hcaptcha.com бьёт двадцать AS, но не Hetzner; Hetzner, DigitalOcean и OVH
+// берёт 300.ya.ru; Melbicom — ad.adriver.ru; семь AS не берёт ничего.
+//
+// Мишени порта 80 в подборе не участвуют: там нет TLS, имя подставлять некуда,
+// и требовать от них «пройти» — значит не найти имя никогда.
+// Столько имён проверяем разом внутри одной сети — как в первоисточнике.
+const sniBatch = 5
+
+func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par int, out string) {
+	byASN := map[string][]tcp16.Target{}
+	for _, t := range tg {
+		if t.Port != 443 {
+			continue
+		}
+		byASN[t.ASN] = append(byASN[t.ASN], t)
+	}
+	if len(byASN) == 0 {
+		fatal("нет мишеней с портом 443")
+	}
+
+	keys := make([]string, 0, len(byASN))
+	for k := range byASN {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	type found struct {
+		asn, name string
+		tried     int
+	}
+	results := make([]found, len(keys))
+	sem := make(chan struct{}, par)
+	var wg sync.WaitGroup
+
+	for i, asn := range keys {
+		wg.Add(1)
+		go func(i int, asn string, tgs []tcp16.Target) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Мишень выбираем ту, на которой блок реально виден: без него
+			// «подошло» скажет любое имя, и мы запишем первое попавшееся.
+			var target *tcp16.Target
+			for j := range tgs {
+				r := tcp16.Probe(ctx, tgs[j], "")
+				if r.Alive && r.Detected {
+					target = &tgs[j]
+					break
+				}
+			}
+			if target == nil {
+				results[i] = found{asn: asn, name: ""}
+				return
+			}
+
+			// Кандидаты идём БАТЧАМИ. По одному это 188 × шесть секунд на
+			// сеть, где не подходит ничто, — двадцать минут вместо четырёх.
+			// Батч запускается целиком, из подошедших берём ПЕРВОГО ПО
+			// ПОРЯДКУ В ФАЙЛЕ: порядок там осмысленный, и «какой раньше
+			// ответил» его бы ломал.
+			for start := 0; start < len(names); start += sniBatch {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				end := start + sniBatch
+				if end > len(names) {
+					end = len(names)
+				}
+				batch := names[start:end]
+				okIdx := make([]bool, len(batch))
+				var bwg sync.WaitGroup
+				for j, name := range batch {
+					bwg.Add(1)
+					go func(j int, name string) {
+						defer bwg.Done()
+						r := tcp16.Probe(ctx, *target, name)
+						okIdx[j] = r.Alive && !r.Detected
+					}(j, name)
+				}
+				bwg.Wait()
+				for j := range batch {
+					if okIdx[j] {
+						results[i] = found{asn: asn, name: batch[j], tried: start + j + 1}
+						return
+					}
+				}
+			}
+			results[i] = found{asn: asn, name: "", tried: len(names)}
+		}(i, asn, byASN[asn])
+	}
+	wg.Wait()
+
+	var sb strings.Builder
+	sb.WriteString("# Имя из белого списка на каждую сеть, где найден блок по объёму.\n")
+	sb.WriteString("# Формат: <asn><TAB><имя>. Пересобирается пробой.\n")
+	ok := 0
+	for _, r := range results {
+		if r.asn == "" {
+			continue
+		}
+		if r.name != "" {
+			fmt.Printf("AS%-8s ПОДОШЛО %-24s (кандидат %d)\n", r.asn, r.name, r.tried)
+			sb.WriteString(r.asn)
+			sb.WriteString("\t")
+			sb.WriteString(r.name)
+			sb.WriteString("\n")
+			ok++
+		} else if r.tried > 0 {
+			fmt.Printf("AS%-8s имя не найдено (перебрано %d)\n", r.asn, r.tried)
+		} else {
+			fmt.Printf("AS%-8s блока нет — имя не нужно\n", r.asn)
+		}
+	}
+	fmt.Printf("\nимена найдены для %d сетей из %d\n", ok, len(keys))
+	if out != "" {
+		if err := os.WriteFile(out, []byte(sb.String()), 0o644); err != nil {
+			fatal("не смог записать %s: %v", out, err)
+		}
+	}
+	if ok == 0 {
+		os.Exit(2)
 	}
 }
 

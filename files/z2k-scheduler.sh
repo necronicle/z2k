@@ -14,7 +14,7 @@
 # Tasks (HH:MM <command>):
 #   02:00  z2k-auto-update.sh apply       — nightly auto-update check
 #   03:00  z2k-stats-upload.sh             — anonymized strategy stats -> VPS
-#   03:30  z2k-sni-select.sh               — свежесть белого имени (+ проба линии по воскресеньям)
+#   03:30  z2k-tcp16-probe.sh              — блок по объёму: сети и имя на каждую
 #   04:00  z2k-update-lists.sh             — RKN/YT hostlist refresh
 #   06:00  ipset/get_config.sh              — IP-set resolution
 
@@ -195,10 +195,7 @@ if [ $((_sni_now - _sni_last)) -ge 3600 ]; then
     if [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ] && [ ! -s "${ZAPRET2_DIR}/state/tcp16.flag" ]; then
         run_task tcp16-probe sh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
     fi
-    if [ "$(cat "${ZAPRET2_DIR}/state/tcp16.flag" 2>/dev/null)" = "1" ] && \
-       [ -x "${ZAPRET2_DIR}/z2k-sni-select.sh" ]; then
-        run_task sni-select sh "${ZAPRET2_DIR}/z2k-sni-select.sh"
-    fi
+
 fi
 
 while true; do
@@ -233,12 +230,8 @@ while true; do
             # провайдер может блок и снять, тогда механизм уходит из конфига.
             if [ "$(last_fired_for_key sni-refresh)" != "$today" ]; then
                 mark_fired sni-refresh "$today"
-                if [ "$(date +%u)" = "7" ] && [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ]; then
-                    run_task tcp16-probe "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
-                fi
-                if [ "$(cat "${ZAPRET2_DIR}/state/tcp16.flag" 2>/dev/null)" = "1" ] &&
-                   [ -x "${ZAPRET2_DIR}/z2k-sni-select.sh" ]; then
-                    run_task sni-refresh "${ZAPRET2_DIR}/z2k-sni-select.sh"
+                if [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ]; then
+                    run_task sni-refresh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
                 fi
             fi
             ;;
