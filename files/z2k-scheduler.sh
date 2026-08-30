@@ -174,6 +174,24 @@ if [ -x "${ZAPRET2_DIR}/z2k-update-lists.sh" ] && \
     run_task warp-games-seed sh "${ZAPRET2_DIR}/z2k-update-lists.sh" warp-games
 fi
 
+# Проба линии на блокировку по объёму соединения — при первом же старте после
+# установки или обновления, если ответа ещё нет.
+#
+# Механизм подстановки белого имени выключен, пока линия не измерена: включать
+# его «на всякий случай» нельзя, определение блока по чужому трафику ошибается
+# на здоровых крупных загрузках. Проба стоит десяток соединений к курируемым
+# мишеням и даёт ответ за секунды.
+if [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ] && \
+   [ ! -s "${ZAPRET2_DIR}/state/tcp16.flag" ]; then
+    run_task tcp16-probe sh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
+    # Блок есть — сразу подбираем имя: без него механизм включён, но пуст.
+    if [ "$(cat "${ZAPRET2_DIR}/state/tcp16.flag" 2>/dev/null)" = "1" ] && \
+       [ -x "${ZAPRET2_DIR}/z2k-sni-select.sh" ] && \
+       [ ! -s "${ZAPRET2_DIR}/lists/sni_wl_pin.txt" ]; then
+        run_task sni-select sh "${ZAPRET2_DIR}/z2k-sni-select.sh"
+    fi
+fi
+
 while true; do
     hhmm=$(date +%H:%M)
     today=$(date +%Y-%m-%d)

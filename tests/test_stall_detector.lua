@@ -232,6 +232,14 @@ z2k_stall_timer("t", { st = { mid = true, high = 15994, hi_seen = 16500, rx = 20
 is("малый отрыв имя не оправдывает", nil, h_nojump.z2k_sni_ok)
 is("и это по-прежнему обрыв", "disk.rzd.ru", h_nojump.z2k_sni)
 
+-- ГВАРД ЖИВОСТИ СТЕРЕЖЁТ СТАРТ, А НЕ ХОД ПОДБОРА. Пока кандидат не оправдан,
+-- отметка живости от соседнего соединения не должна морозить перебор: замер
+-- 30.08.2026 — 79 соединений браузера, 58 подстановок, ОДИН сдвиг за пять
+-- минут, потому что живость обновлялась быстрее, чем шёл перебор.
+local h_run = { z2k_sni = "disk.rzd.ru", z2k_sni_idx = 1, z2k_alive_at = FAKE_NOW - 10 }
+z2k_stall_timer("t", { st = { mid = true, high = 0 }, hrec = h_run })
+is("подбор в ходу — живость его не морозит", "300.ya.ru", h_run.z2k_sni)
+
 -- ЗАВЕРШЁННЫЙ ОТВЕТ СНИМАЕТ ЛИШНИЙ ПОДБОР. Хост ответил целиком в пределах
 -- нашей видимости — по объёму его не режут, имя ему не нужно, и держать чужое
 -- в каждом хелло рабочего сайта незачем.
@@ -246,6 +254,11 @@ is("а хост отмечен живым", FAKE_NOW, h_done2.z2k_alive_at)
 local h_keep = { z2k_sni = "300.ya.ru", z2k_sni_ok = true, z2k_sni_idx = 5 }
 z2k_stall_timer("t", { st = { mid = false, high = 8484 }, hrec = h_keep })
 is("оправданное имя завершённый ответ сохраняет", "300.ya.ru", h_keep.z2k_sni)
+
+-- А оправданное имя живость по-прежнему защищает: там перебору делать нечего.
+local h_okname = { z2k_sni = "300.ya.ru", z2k_sni_ok = true, z2k_alive_at = FAKE_NOW - 10 }
+z2k_stall_timer("t", { st = { mid = true, high = 0 }, hrec = h_okname })
+is("оправданное имя при живом хосте не трогаем", "300.ya.ru", h_okname.z2k_sni)
 
 local h_seen = {}
 z2k_stall_timer("t", { st = { mid = true, high = 15994, rx = 18, cap = 50 }, hrec = h_seen })
@@ -291,6 +304,33 @@ is("после обнуления имя снова держится", "300.ya.r
 local h_cap = { z2k_sni_idx = 24 }
 z2k_stall_timer("t", { st = { mid = true, high = 0 }, hrec = h_cap })
 is("потолок перебора соблюдён", 24, h_cap.z2k_sni_idx)
+-- ЗАКРЕПЛЁННОЕ ИМЯ ЛИНИИ. Блок по объёму — свойство линии, а не хоста: проба
+-- 30.08.2026 нашла его в 34 AS из 43, включая Cloudflare. Значит одно имя
+-- годится для всех, и перебирать по хостам незачем.
+do
+    local pinfile = os.tmpname()
+    local real_getenv2 = os.getenv
+    os.getenv = function(k)
+        if k == "Z2K_SNI_PIN" then return pinfile end
+        if k == "Z2K_PIN_RECHECK" then return "0" end
+        return real_getenv2(k)
+    end
+    package.loaded["z2k-alert"] = nil
+    dofile("files/lua/z2k-alert.lua")
+
+    local f = io.open(pinfile, "w"); f:write("  300.ya.ru  # выбрано пробой\n"); f:close()
+    is("имя читается, пробелы и комментарий срезаны", "300.ya.ru", z2k_sni_pinned())
+
+    f = io.open(pinfile, "w"); f:write("плохое имя с пробелом\n"); f:close()
+    is("мусор в файле закрепления игнорируется", nil, z2k_sni_pinned())
+
+    os.remove(pinfile)
+    is("нет файла — нет закрепления", nil, z2k_sni_pinned())
+    os.getenv = real_getenv2
+    package.loaded["z2k-alert"] = nil
+    dofile("files/lua/z2k-alert.lua")
+end
+
 -- ПЕРВЫЙ HELLO ПОСЛЕ ПЕРЕЗАПУСКА. Селектор стоит в профиле ПЕРЕД circular, а
 -- запись хоста засевается с диска внутри circular — поэтому имя он обязан
 -- подтянуть сам. Иначе после каждого рестарта человек получает одну заведомо

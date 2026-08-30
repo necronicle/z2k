@@ -836,8 +836,18 @@ function z2k_stall_timer(name, data)
 		-- Хост, недавно отдававший данные, живой: одно неудачное рукопожатие у
 		-- него ничего не доказывает, а подбор имени способен его сломать.
 		-- Подбор начинаем только у того, кто молчит целиком.
-		local alive = hrec.z2k_alive_at
-		if alive and os.time() <= (alive + Z2K_ALIVE_WINDOW) then return end
+		-- ГВАРД ЖИВОСТИ СТЕРЕЖЁТ СТАРТ ПОДБОРА, А НЕ ЕГО ХОД.
+		--
+		-- Пока имя не найдено, хост отвечает — на нём же и стоит наш неудачный
+		-- кандидат, ломающий соединения. Отметка живости от соседнего
+		-- соединения гасила сдвиг на следующее имя, и подбор двигался не чаще
+		-- раза в Z2K_ALIVE_WINDOW. Замер 30.08.2026: браузер за пять минут
+		-- открыл 79 соединений, имя подставилось в 58, а сдвиг случился ОДИН.
+		-- При позиции рабочего имени K=5 это полчаса неработающего сайта.
+		if not (hrec.z2k_sni and not hrec.z2k_sni_ok) then
+			local alive = hrec.z2k_alive_at
+			if alive and os.time() <= (alive + Z2K_ALIVE_WINDOW) then return end
+		end
 		-- Пока имени нет — стартуем не с первой неудачи. Замер 30.08.2026:
 		-- chatgpt.com получил чужое имя с одного неудачного коннекта сразу
 		-- после перезапуска, когда отметки живости ещё нет ни у кого.
@@ -913,6 +923,33 @@ local Z2K_SNI_LIST_PATH = os.getenv("Z2K_SNI_LIST") or
                           "/opt/zapret2/lists/sni_wl_candidates.txt"
 local sni_list, sni_loaded = nil, false
 
+-- ЗАКРЕПЛЁННОЕ ИМЯ ЛИНИИ.
+--
+-- Один файл, одно имя. Его выбирает проба (z2k-sni-select.sh) на курируемой
+-- мишени, а не догадка по чужому трафику, поэтому здесь только чтение и
+-- проверка формы. Файл перечитывается по mtime: смена имени не требует
+-- перезапуска, как и у списков движка.
+-- Читаем не чаще раза в Z2K_PIN_RECHECK секунд: это путь КАЖДОГО исходящего
+-- хелло, и открывать файл на каждый пакет незачем.
+local z2k_pin_name, z2k_pin_at = nil, 0
+local Z2K_PIN_RECHECK = tonumber(os.getenv("Z2K_PIN_RECHECK")) or 10
+function z2k_sni_pinned()
+	local now = os.time()
+	if now < (z2k_pin_at + Z2K_PIN_RECHECK) then return z2k_pin_name end
+	z2k_pin_at = now
+	z2k_pin_name = nil
+	local path = os.getenv("Z2K_SNI_PIN") or "/opt/zapret2/lists/sni_wl_pin.txt"
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local raw = f:read("*l")
+	f:close()
+	if not raw then return nil end
+	local nm = raw:gsub("#.*", ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if nm == "" or #nm > 253 or nm:find("[^%w%.%-]") then return nil end
+	z2k_pin_name = nm
+	return nm
+end
+
 function z2k_sni_candidates()
 	if sni_loaded then return sni_list end
 	sni_loaded = true
@@ -968,6 +1005,27 @@ function z2k_sni_pick(ctx, desync)
 
 	local ok_h, hrec = pcall(automate_host_record, desync)
 	if not ok_h or not hrec then return end
+
+	-- ЗАКРЕПЛЁННОЕ ИМЯ НА ВСЮ ЛИНИЮ — если оно выбрано, перебирать нечего.
+	--
+	-- Замер 30.08.2026 на линии владельца: проба по курируемым мишеням нашла
+	-- блок по объёму в 34 AS из 43 — включая Cloudflare. Это свойство ЛИНИИ, а
+	-- не отдельного хоста, и одно проходящее имя годится для всех: с ним
+	-- hetzner отдал 163 654 Б вместо 15 994, а youtube, rutracker и chatgpt не
+	-- изменились вовсе.
+	--
+	-- Поэтому, когда имя выбрано заранее (файл заполняет z2k-sni-select.sh),
+	-- мы не ведём ни поиска, ни записи о хосте: подставили и вышли. Перебор по
+	-- живому трафику остаётся запасным путём — для линий, где закрепить нечего.
+	local pin = z2k_sni_pinned()
+	if pin then
+		local base_pin = blob(desync, desync.arg.src or "fake_default_tls")
+		if not base_pin then return end
+		local out_pin = tls_mod(base_pin,
+			(desync.arg.mods or "rnd,dupsid") .. ",sni=" .. pin, desync.reasm_data)
+		if out_pin then desync[desync.arg.blob or "z2k_ch"] = out_pin end
+		return
+	end
 
 	-- ПОДТЯНУТЬ НАЙДЕННОЕ ИМЯ С ДИСКА ПРЯМО ЗДЕСЬ.
 	--
@@ -1048,16 +1106,6 @@ function z2k_stall_watch(ctx, desync)
 	st.rx = (st.rx or 0) + 1
 	st.cap = tonumber(desync.arg.cap) or st.cap
 
-	local p = desync.dis and desync.dis.payload
-	if not p or #p == 0 then return end
-	z2k_tls_frame_feed(st, p)
-	st.mid  = ((st.need or 0) > 0) or (st.hdr ~= nil and #st.hdr > 0)
-	st.high = srv.tcp.uppos or 0
-
-	local name = "z2k_stall_" .. dis_timer_name(desync.dis)
-	if st.high >= Z2K_STALL_MAX then
-		-- Поток ушёл за наш горизонт видимости: молчание там ничего не значит.
-		timer_del(name)
 	-- САМАЯ ДАЛЬНЯЯ УВИДЕННАЯ ПОЗИЦИЯ — отдельно от разобранной.
 	--
 	-- Кадрирование идёт только по пакетам в пределах диапазона профиля, а вот
@@ -1069,6 +1117,16 @@ function z2k_stall_watch(ctx, desync)
 	local pos_here = pos_get(desync, "s")
 	if pos_here and pos_here > (st.hi_seen or 0) then st.hi_seen = pos_here end
 
+	local p = desync.dis and desync.dis.payload
+	if not p or #p == 0 then return end
+	z2k_tls_frame_feed(st, p)
+	st.mid  = ((st.need or 0) > 0) or (st.hdr ~= nil and #st.hdr > 0)
+	st.high = srv.tcp.uppos or 0
+
+	local name = "z2k_stall_" .. dis_timer_name(desync.dis)
+	if st.high >= Z2K_STALL_MAX then
+		-- Поток ушёл за наш горизонт видимости: молчание там ничего не значит.
+		timer_del(name)
 		return
 	end
 	if st.high < Z2K_STALL_MIN then

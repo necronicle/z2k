@@ -1,0 +1,232 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/tcp16"
+)
+
+// tcp16Cmd — проба на блокировку по объёму соединения.
+//
+// Два режима, и это принципиально разные вопросы:
+//   без -scan   есть ли этот блок на линии (и в каких AS);
+//   с  -scan    какое имя из белого списка провайдер пропускает.
+//
+// Оба идут по КУРИРУЕМЫМ мишеням, а не по трафику человека: наблюдение за
+// чужим потоком отвечает на вопрос «этот хост сейчас режут?» и ошибается, а
+// проба спрашивает про линию и мерит контролируемым объёмом.
+func tcp16Cmd(ctx context.Context, rest []string) {
+	fs := flag.NewFlagSet("tcp16", flag.ExitOnError)
+	targets := fs.String("targets", "/opt/zapret2/lists/tcp16_targets.txt", "файл мишеней")
+	asn := fs.String("asn", "", "только эта AS (иначе все)")
+	confirmed := fs.Bool("confirmed", false, "только AS, подтверждённые многими сообщениями")
+	limit := fs.Int("limit", 0, "не больше N мишеней (0 — все)")
+	scan := fs.String("scan", "", "файл имён-кандидатов: искать проходящее имя")
+	sni := fs.String("sni", "", "проверить одно конкретное имя")
+	par := fs.Int("parallel", 4, "сколько проб разом")
+	first := fs.Bool("first", true, "при -scan остановиться на первом подошедшем имени")
+	_ = fs.Parse(rest)
+
+	tg, err := loadTargets(*targets, *asn, *confirmed, *limit)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if len(tg) == 0 {
+		fatal("мишеней не осталось после фильтров")
+	}
+
+	if *scan != "" {
+		names, err := loadNames(*scan)
+		if err != nil {
+			fatal("%v", err)
+		}
+		scanNames(ctx, tg, names, *par, *first)
+		return
+	}
+	probeLine(ctx, tg, *sni, *par)
+}
+
+// probeLine отвечает на вопрос «есть ли блок на линии» по каждой AS отдельно.
+func probeLine(ctx context.Context, tg []tcp16.Target, sni string, par int) {
+	res := runAll(ctx, tg, sni, par)
+
+	type agg struct{ detected, alive, total int }
+	byASN := map[string]*agg{}
+	for _, r := range res {
+		a := byASN[r.Target.ASN]
+		if a == nil {
+			a = &agg{}
+			byASN[r.Target.ASN] = a
+		}
+		a.total++
+		if r.Alive {
+			a.alive++
+		}
+		if r.Detected {
+			a.detected++
+		}
+	}
+	keys := make([]string, 0, len(byASN))
+	for k := range byASN {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	anyDetected, anyAlive := 0, 0
+	for _, k := range keys {
+		a := byASN[k]
+		anyDetected += a.detected
+		anyAlive += a.alive
+		mark := "—"
+		if a.detected > 0 {
+			mark = "БЛОК"
+		} else if a.alive > 0 {
+			mark = "чисто"
+		}
+		fmt.Printf("AS%-8s %-6s  мишеней %2d, ответили %2d, блок на %d\n", k, mark, a.total, a.alive, a.detected)
+	}
+	fmt.Println()
+	switch {
+	case anyAlive == 0:
+		fmt.Println("ВЕРДИКТ: мишени не отвечают вовсе — линия или список мишеней негодны, судить не по чему")
+		os.Exit(3)
+	case anyDetected > 0:
+		fmt.Printf("ВЕРДИКТ: блок по объёму ЕСТЬ (сработал на %d мишенях из %d ответивших)\n", anyDetected, anyAlive)
+		os.Exit(1)
+	default:
+		fmt.Printf("ВЕРДИКТ: блока по объёму НЕТ (%d мишеней ответили, ни одна не оборвалась)\n", anyAlive)
+	}
+}
+
+// scanNames ищет имя, с которым мишень перестаёт обрываться.
+func scanNames(ctx context.Context, tg []tcp16.Target, names []string, par int, stopFirst bool) {
+	// Сперва убеждаемся, что на этих мишенях блок вообще есть: иначе любое имя
+	// «подойдёт», и мы запишем в находки первое попавшееся.
+	base := runAll(ctx, tg, "", par)
+	blocked := base[:0]
+	for _, r := range base {
+		if r.Detected {
+			blocked = append(blocked, r)
+		}
+	}
+	if len(blocked) == 0 {
+		fmt.Println("на этих мишенях блока нет — искать нечего")
+		os.Exit(2)
+	}
+	fmt.Printf("мишеней с блоком: %d, кандидатов: %d\n\n", len(blocked), len(names))
+
+	found := 0
+	for _, name := range names {
+		ok := 0
+		for _, b := range blocked {
+			r := tcp16.Probe(ctx, b.Target, name)
+			if r.Alive && !r.Detected {
+				ok++
+			}
+		}
+		if ok == len(blocked) {
+			fmt.Printf("ПОДОШЛО %s (прошло %d/%d мишеней)\n", name, ok, len(blocked))
+			found++
+			if stopFirst {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+	if found == 0 {
+		fmt.Println("ни одно имя из списка не прошло")
+		os.Exit(2)
+	}
+}
+
+func runAll(ctx context.Context, tg []tcp16.Target, sni string, par int) []tcp16.Result {
+	if par < 1 {
+		par = 1
+	}
+	out := make([]tcp16.Result, len(tg))
+	sem := make(chan struct{}, par)
+	var wg sync.WaitGroup
+	for i, t := range tg {
+		wg.Add(1)
+		go func(i int, t tcp16.Target) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			c, cancel := context.WithTimeout(ctx, 40*time.Second)
+			defer cancel()
+			out[i] = tcp16.Probe(c, t, sni)
+		}(i, t)
+	}
+	wg.Wait()
+	return out
+}
+
+func loadTargets(path, asn string, confirmedOnly bool, limit int) ([]tcp16.Target, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("нет файла мишеней %s: %w", path, err)
+	}
+	defer f.Close()
+
+	var out []tcp16.Target
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		p := strings.Split(line, "\t")
+		if len(p) < 6 {
+			continue
+		}
+		if asn != "" && p[1] != asn {
+			continue
+		}
+		if confirmedOnly && p[2] != "*" {
+			continue
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(p[5]))
+		if err != nil {
+			continue
+		}
+		out = append(out, tcp16.Target{ID: p[0], ASN: p[1], Provider: p[3], IP: p[4], Port: port})
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, sc.Err()
+}
+
+func loadNames(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("нет файла имён %s: %w", path, err)
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		s := sc.Text()
+		if i := strings.IndexByte(s, '#'); i >= 0 {
+			s = s[:i]
+		}
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, sc.Err()
+}

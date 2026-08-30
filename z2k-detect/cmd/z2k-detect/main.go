@@ -86,6 +86,7 @@ func usage() {
 commands:
   probe <domain>            one-shot diagnostic probe, print verdict
   classify <host:port>      измерить, ЧЕМ режут, и вывести стратегию
+  tcp16 [-asn N] [-scan F]  проба на блок по объёму соединения; -scan ищет проходящее имя
   run [-dns-source SRC]     start daemon. SRC: agh|dnsmasq|pkt (default: auto)`)
 }
 
@@ -107,6 +108,8 @@ func main() {
 		probeCmd(ctx, args[1:])
 	case "classify":
 		classifyCmd(ctx, args[1:])
+	case "tcp16":
+		tcp16Cmd(ctx, args[1:])
 	case "run":
 		runCmd(ctx, args[1:])
 	default:
