@@ -41,7 +41,7 @@ if [ -z "${DETECT:-}" ]; then
     for _d in $DETECT_DIRS; do
         if [ -x "$_d/z2k-detect" ]; then DETECT="$_d/z2k-detect"; break; fi
     done
-    DETECT="${DETECT:-/opt/sbin/z2k-detect}"
+    DETECT="${DETECT:-${DETECT_DIRS%% *}/z2k-detect}"
 fi
 TARGETS="${TARGETS:-$ZAPRET2_DIR/lists/tcp16_targets.txt}"
 FLAG="$ZAPRET2_DIR/state/tcp16.flag"
@@ -74,34 +74,76 @@ BATCH="${BATCH:-5}"
 # «данных нет» и НЕ трогать флаг — иначе запишет «блока нет» на пустом месте и
 # выключит механизм до следующей ночи. Диагностика пользователя 31.08.2026
 # показывала ровно это: «0 из 0 кандидатов», «карта сетей: 0 записей».
-[ -x "$DETECT" ] || { echo "нет бинарника пробы: $DETECT" >&2; exit 2; }
-
-# БИНАРНИК СТАРЫЙ — ОБНОВИТЬ САМИМ, А НЕ ЖДАТЬ ПРАВИЛЬНОГО РЕЛИЗА.
+# БИНАРНИКА НЕТ ВОВСЕ ИЛИ ОН СТАРЫЙ — ДОСТАТЬ САМИМ, А НЕ ЖДАТЬ РЕЛИЗА.
 #
-# Шаг refresh-binaries выполняется, только если релиз его объявил, а объявляется
-# он по изменению самих сборок. Сборки z2k-detect вдобавок годами не попадали в
-# карту сумм, поэтому у людей остаётся бинарник от установки — без команды
-# tcp16, и весь механизм молчит. Цепочка «кто-то не забудет объявить шаг» уже
-# подвела четыре выпуска подряд, поэтому чиним на месте: не умеет tcp16 —
-# зовём тот же шаг обновления сами, один раз, и проверяем снова.
-if ! "$DETECT" tcp16 -h >/dev/null 2>&1; then
-    echo "бинарник не умеет tcp16 — обновляю его"
+# Раньше эти два случая обрабатывались по-разному, и это стоило людям
+# работающего механизма. Самолечение стояло НИЖЕ проверки `-x`, то есть
+# срабатывало только когда бинарник есть, но не умеет tcp16. У кого его не было
+# совсем — а таких оказалось большинство: сборки z2k-detect годами не попадали в
+# карту сумм, и установка их не клала — проба выходила первой же строкой и до
+# самолечения не доходила никогда. В диагностике это выглядело как «нет
+# /opt/zapret2/z2k-detect» и мгновенный выход (жалобы 31.08.2026).
+#
+# Случай ровно один: нужного бинарника нет. Достаём его тем же штатным шагом.
+if ! [ -x "$DETECT" ] || ! "$DETECT" tcp16 -h >/dev/null 2>&1; then
+    if [ -x "$DETECT" ]; then
+        echo "бинарник не умеет tcp16 — обновляю его"
+    else
+        echo "бинарника пробы нет ($DETECT) — достаю его"
+    fi
     if [ -r "$ZAPRET2_DIR/lib/auto_update.sh" ]; then
         # shellcheck source=/dev/null
         . "$ZAPRET2_DIR/lib/utils.sh" >/dev/null 2>&1
         # shellcheck source=/dev/null
         . "$ZAPRET2_DIR/lib/auto_update.sh" >/dev/null 2>&1
-        if command -v au_fetch_manifest >/dev/null 2>&1 && command -v au_step_refresh_binaries >/dev/null 2>&1; then
+        # Тянем бинарник САМИ, а не шагом refresh-binaries.
+        #
+        # Тот шаг ОБНОВЛЯЕТ, но принципиально не СТАВИТ отсутствующее, и это
+        # правильно: иначе он тащил бы семимегабайтный движок WARP на роутеры,
+        # где WARP никто не включал. Значит для нашего случая — «бинарника нет
+        # вовсе» — он не годится по замыслу, и звать его было бесполезно
+        # (проверено на роутере: шаг отработал молча и ничего не положил).
+        if command -v au_fetch_manifest >/dev/null 2>&1 \
+           && command -v au_download_repo_file >/dev/null 2>&1 \
+           && command -v au_bin_goarch >/dev/null 2>&1; then
             au_fetch_manifest >/dev/null 2>&1 || true
-            au_step_refresh_binaries >/dev/null 2>&1 || true
+            _pd_arch=$(au_bin_goarch 2>/dev/null)
+            _pd_man="${Z2K_AU_TMP_DIR:-/tmp/z2k_au}/UPDATES.json"
+            if [ -n "$_pd_arch" ] && [ -s "$_pd_man" ]; then
+                _pd_src="z2k-detect/builds/z2k-detect-linux-$_pd_arch"
+                _pd_sha=$(au_manifest_file_sha "$_pd_man" "$_pd_src" 2>/dev/null)
+                _pd_tmp="/tmp/z2k-detect.$$"
+                # Ставим в ПЕРВЫЙ каталог списка поиска, а не в зашитый путь:
+                # иначе добыча и поиск могут разойтись, и проверить это нечем.
+                _pd_dir=${DETECT_DIRS%% *}
+                if au_download_repo_file "$_pd_src" "$_pd_tmp" "$_pd_sha" 2>/dev/null; then
+                    mkdir -p "$_pd_dir" 2>/dev/null
+                    # Кладём во временный файл рядом и переименовываем: замена
+                    # работающего бинарника на месте роняет его текущий запуск.
+                    if mv -f "$_pd_tmp" "$_pd_dir/z2k-detect.new" 2>/dev/null \
+                       && chmod 755 "$_pd_dir/z2k-detect.new" 2>/dev/null \
+                       && mv -f "$_pd_dir/z2k-detect.new" "$_pd_dir/z2k-detect" 2>/dev/null; then
+                        echo "бинарник получен: $_pd_src -> $_pd_dir/z2k-detect"
+                    fi
+                fi
+                rm -f "$_pd_tmp" "$_pd_dir/z2k-detect.new" 2>/dev/null
+            fi
         fi
     fi
-    if ! "$DETECT" tcp16 -h >/dev/null 2>&1; then
-        echo "обновить бинарник не удалось — проба отложена" >&2
+    # Ищем заново: шаг обновления кладёт бинарник в штатное место, а до него
+    # переменная могла указывать на другой каталог из списка поиска.
+    DETECT=""
+    for _d in $DETECT_DIRS; do
+        if [ -x "$_d/z2k-detect" ]; then DETECT="$_d/z2k-detect"; break; fi
+    done
+    DETECT="${DETECT:-${DETECT_DIRS%% *}/z2k-detect}"
+    if ! [ -x "$DETECT" ] || ! "$DETECT" tcp16 -h >/dev/null 2>&1; then
+        echo "достать бинарник не удалось — проба отложена" >&2
         exit 2
     fi
-    echo "бинарник обновлён"
+    echo "бинарник готов: $DETECT"
 fi
+
 [ -s "$TARGETS" ] || { echo "нет списка мишеней: $TARGETS — отложено" >&2; exit 2; }
 [ -s "$CAND" ] || { echo "нет списка имён: $CAND — отложено" >&2; exit 2; }
 mkdir -p "$(dirname "$FLAG")" 2>/dev/null
