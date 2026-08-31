@@ -230,12 +230,33 @@ _sni_stamp=/tmp/z2k-sni-refresh.ts
 _sni_now=$(date +%s 2>/dev/null || echo 0)
 _sni_last=$(cat "$_sni_stamp" 2>/dev/null || echo 0)
 case "$_sni_last" in ''|*[!0-9]*) _sni_last=0 ;; esac
-if [ $((_sni_now - _sni_last)) -ge 3600 ]; then
+
+# Дроссель разный для двух разных случаев, и это важно.
+#
+# «Уже мерили» — час: перемер нужен редко, а перезапусков бывает много подряд.
+# «Не мерили ни разу» — десять минут: тут механизм ВЫКЛЮЧЕН, и держать человека
+# без обхода целый час из-за отметки в /tmp неправильно. Отметка переживает
+# переустановку (она в /tmp, а не в /opt), поэтому иначе переустановка могла
+# оставить механизм выключенным на час, ничем этого не показав.
+# Совсем без дросселя нельзя: проба, которая падает, устроила бы шторм на
+# каждом перезапуске службы.
+if [ -s "${ZAPRET2_DIR}/state/tcp16.flag" ]; then
+    _sni_gap=3600
+else
+    _sni_gap=600
+fi
+if [ $((_sni_now - _sni_last)) -ge "$_sni_gap" ]; then
     echo "$_sni_now" > "$_sni_stamp" 2>/dev/null
-    if [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ] && [ ! -s "${ZAPRET2_DIR}/state/tcp16.flag" ]; then
+    # Проверяем ЧИТАЕМОСТЬ, а не бит запуска: запускаем через sh, а бит
+    # patch-путь на части сборок BusyBox терял (p-42). Гвард строже вызова —
+    # это тихая осечка, а тихих осечек в этом механизме уже было довольно.
+    if [ ! -r "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ]; then
+        log "проба линии: файла нет — пропускаю"
+    elif [ -s "${ZAPRET2_DIR}/state/tcp16.flag" ]; then
+        : # линия уже измерена, перемер — ночным слотом
+    else
         run_task tcp16-probe sh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
     fi
-
 fi
 
 # ПЕРЕЗАПУСК САМОГО СЕБЯ, КОГДА ФАЙЛ ОБНОВИЛСЯ.
@@ -250,6 +271,13 @@ fi
 # заново с того же файла, и следующая проверка совпадёт.
 _self="${ZAPRET2_DIR}/z2k-scheduler.sh"
 _self_mtime=$(_z2k_mtime "$_self")
+
+# Отметка «на диске лежит ровно тот код, что сейчас в памяти». По ней init
+# главной службы понимает, что после обновления нас надо перезапустить: сама
+# сходимость этого не делает, и до 31.08.2026 новый код планировщика ждал
+# перезагрузки роутера. Пишем её и здесь, и в init'е — значения совпадают,
+# лишнего перезапуска не будет.
+[ -n "$_self_mtime" ] && echo "$_self_mtime" > /tmp/z2k-scheduler.mtime 2>/dev/null
 
 while true; do
     _now_mtime=$(_z2k_mtime "$_self")
@@ -288,8 +316,10 @@ while true; do
             # провайдер может блок и снять, тогда механизм уходит из конфига.
             if [ "$(last_fired_for_key sni-refresh)" != "$today" ]; then
                 mark_fired sni-refresh "$today"
-                if [ -x "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ]; then
-                    run_task sni-refresh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
+                if [ -r "${ZAPRET2_DIR}/z2k-tcp16-probe.sh" ]; then
+                    run_task sni-refresh sh "${ZAPRET2_DIR}/z2k-tcp16-probe.sh"
+                else
+                    log "проба линии: файла нет — ночной перемер пропущен"
                 fi
             fi
             ;;
