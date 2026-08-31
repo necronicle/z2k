@@ -37,8 +37,20 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'ПРОВАЛ: %s\n' "$*" >&2; exit 1; }
 
 WORK=$(mktemp -d) || die "нет временного каталога"
+
+# ВОЗВРАТ ВЕРСИИ ОБЯЗАТЕЛЕН. Проверочная версия отсутствует в истории релизов, и
+# роутер, оставленный на ней, больше не обновится вовсе: обновлятель честно
+# скажет «версии нет в истории» и остановится. Прогон часто идёт на живом
+# роутере, которым человек пользуется, поэтому отметку возвращаем ВСЕГДА — и на
+# провале, и по Ctrl-C. Один раз я этого не сделал, и владелец увидел в панели
+# «Установлена последняя версия (p-99.1-проверка)».
+ORIG_TAG=""
 cleanup() {
     [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null
+    if [ -n "$ORIG_TAG" ]; then
+        rsh "printf '%s\n' '$ORIG_TAG' > /opt/zapret2/.z2k-installed-tag" 2>/dev/null \
+            && printf 'версия возвращена на %s\n' "$ORIG_TAG"
+    fi
     rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -88,6 +100,9 @@ rsh "curl -fsS --max-time 8 http://$MAC_IP:$HTTP_PORT/UPDATES.json >/dev/null" \
 
 # ── 3. Состояние пользователя ────────────────────────────────────────────────
 say "3/5 воспроизвожу состояние пользователя (ничего не подложено)"
+# Запоминаем ДО того, как тронем: возвращать будем именно то, что было.
+ORIG_TAG=$(rsh "cat /opt/zapret2/.z2k-installed-tag 2>/dev/null" || true)
+[ -n "$ORIG_TAG" ] || ORIG_TAG="$PUBLISHED"
 rsh "sh -s" <<EOF || die "не удалось привести роутер в чистое состояние"
 rm -f /opt/sbin/z2k-detect /opt/zapret2/z2k-detect
 rm -f /opt/zapret2/state/tcp16.flag /opt/zapret2/state/tcp16.flag.ts
