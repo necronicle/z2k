@@ -21,16 +21,23 @@ cd "$ROOT" || exit 1
 # он честно падает), потом -f.
 #
 # Обожгло 31.08.2026: тест планировщика зеленел на маке и уронил CI.
-bad_order=$(grep -rn 'stat -f [^|]*|| *stat -c' --include='*.sh' . 2>/dev/null \
-            | grep -v '^\./tests/test_portability_traps\.sh:' || true)
-bad_order2=$(grep -rn 'stat -f' files/S99zapret2.new 2>/dev/null \
-            | grep -v 'stat -c %Y' || true)
-if [ -z "$bad_order" ] && [ -z "$bad_order2" ]; then
+# Проверяем ПОРЯДОК внутри строки, а не наличие. Первая версия искала строки
+# по маске *.sh и отдельно смотрела init — и не ловила ничего: init называется
+# S99zapret2.new и под маску не попадал, а второе правило гасило само себя,
+# потому что в перевёрнутой строке `stat -c` тоже присутствует, только позже.
+FILES=$(find . -type f \( -name '*.sh' -o -name 'S*' -o -name '*.new' \) \
+        ! -path './.git/*' ! -name 'test_portability_traps.sh' 2>/dev/null)
+viol=$(printf '%s\n' "$FILES" | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    awk -v F="$f" '
+        { fp = index($0, "stat -f"); cp = index($0, "stat -c") }
+        fp > 0 && cp > 0 && fp < cp { printf "%s:%d: %s\n", F, NR, $0 }
+    ' "$f"
+done)
+if [ -z "$viol" ]; then
     ok "везде stat -c пробуется раньше stat -f"
 else
-    printf '%s\n%s\n' "$bad_order" "$bad_order2" | grep -v '^$' | while IFS= read -r l; do
-        printf '   %s\n' "$l"
-    done
+    printf '%s\n' "$viol" | head -5 | sed 's/^/   /'
     bad "stat -f стоит раньше stat -c — на Linux вернётся статистика ФС, а не время файла"
 fi
 
