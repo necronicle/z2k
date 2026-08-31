@@ -37,6 +37,7 @@ func tcp16Cmd(ctx context.Context, rest []string) {
 	asnOut := fs.String("asn-out", "", "куда выписать AS, где блок найден (по одной в строке)")
 	first := fs.Bool("first", true, "при -scan остановиться на первом подошедшем имени")
 	perASN := fs.Bool("per-asn", false, "искать своё имя для КАЖДОЙ сети с блоком")
+	batch := fs.Int("batch", 5, "сколько имён проверять разом внутри одной сети")
 	sniOut := fs.String("sni-out", "", "куда выписать карту «сеть -> имя»")
 	_ = fs.Parse(rest)
 
@@ -54,7 +55,7 @@ func tcp16Cmd(ctx context.Context, rest []string) {
 			fatal("%v", err)
 		}
 		if *perASN {
-			scanPerASN(ctx, tg, names, *par, *sniOut)
+			scanPerASN(ctx, tg, names, *par, *batch, *sniOut)
 		} else {
 			scanNames(ctx, tg, names, *par, *first)
 		}
@@ -139,15 +140,15 @@ func probeLine(ctx context.Context, tg []tcp16.Target, sni string, par int, asnO
 // scanPerASN ищет СВОЁ имя для КАЖДОЙ сети, где нашёлся блок.
 //
 // Одного имени на всех не бывает — замер 30.08.2026 на линии владельца:
-// hcaptcha.com бьёт двадцать AS, но не Hetzner; Hetzner, DigitalOcean и OVH
+// hcaptcha.com бьёт двадцать AS, но НЕ Hetzner; Hetzner, DigitalOcean и OVH
 // берёт 300.ya.ru; Melbicom — ad.adriver.ru; семь AS не берёт ничего.
 //
 // Мишени порта 80 в подборе не участвуют: там нет TLS, имя подставлять некуда,
 // и требовать от них «пройти» — значит не найти имя никогда.
-// Столько имён проверяем разом внутри одной сети — как в первоисточнике.
-const sniBatch = 5
-
-func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par int, out string) {
+func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par, sniBatch int, out string) {
+	if sniBatch < 1 {
+		sniBatch = 1
+	}
 	byASN := map[string][]tcp16.Target{}
 	for _, t := range tg {
 		if t.Port != 443 {
@@ -170,28 +171,54 @@ func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par int,
 		tried     int
 	}
 	results := make([]found, len(keys))
-	sem := make(chan struct{}, par)
+	// Общий потолок одновременных проб на весь прогон. Ограничивать только
+	// число сетей мало: внутри каждой идёт ещё батч, и суммарная нагрузка
+	// получается непредсказуемой. Замер 31.08.2026 на роутере: проба линии по
+	// 110 мишеням при потолке 4 шла 2 м 44 с, при 50 — 15 секунд.
+	gate := make(chan struct{}, par)
+	probe := func(t tcp16.Target, sni string) tcp16.Result {
+		gate <- struct{}{}
+		defer func() { <-gate }()
+		return tcp16.Probe(ctx, t, sni)
+	}
+	// Печатаем по мере готовности: полный прогон идёт минуты, и молчащий до
+	// конца вывод не даёт понять ни что он жив, ни на чём стоит.
+	var pmu sync.Mutex
+	say := func(f found) {
+		pmu.Lock()
+		defer pmu.Unlock()
+		switch {
+		case f.name != "":
+			fmt.Printf("AS%-8s ПОДОШЛО %-24s (кандидат %d)\n", f.asn, f.name, f.tried)
+		case f.tried > 0:
+			fmt.Printf("AS%-8s имя не найдено (перебрано %d)\n", f.asn, f.tried)
+		default:
+			fmt.Printf("AS%-8s блока нет — имя не нужно\n", f.asn)
+		}
+	}
 	var wg sync.WaitGroup
 
 	for i, asn := range keys {
 		wg.Add(1)
 		go func(i int, asn string, tgs []tcp16.Target) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 
-			// Мишень выбираем ту, на которой блок реально виден: без него
-			// «подошло» скажет любое имя, и мы запишем первое попавшееся.
+			// Мишень выбираем ту, на которой блок реально виден, а из
+			// нескольких таких — с наименьшим RTT: перебор идёт по ней сотню
+			// раз, и лишние сто миллисекунд на пробу выливаются в минуты.
+			// Без проверки «блок виден» «подошло» скажет любое имя.
 			var target *tcp16.Target
+			var bestRTT time.Duration
 			for j := range tgs {
-				r := tcp16.Probe(ctx, tgs[j], "")
-				if r.Alive && r.Detected {
+				r := probe(tgs[j], "")
+				if r.Alive && r.Detected && (target == nil || r.RTT < bestRTT) {
 					target = &tgs[j]
-					break
+					bestRTT = r.RTT
 				}
 			}
 			if target == nil {
 				results[i] = found{asn: asn, name: ""}
+				say(results[i])
 				return
 			}
 
@@ -217,7 +244,7 @@ func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par int,
 					bwg.Add(1)
 					go func(j int, name string) {
 						defer bwg.Done()
-						r := tcp16.Probe(ctx, *target, name)
+						r := probe(*target, name)
 						okIdx[j] = r.Alive && !r.Detected
 					}(j, name)
 				}
@@ -225,11 +252,13 @@ func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par int,
 				for j := range batch {
 					if okIdx[j] {
 						results[i] = found{asn: asn, name: batch[j], tried: start + j + 1}
+						say(results[i])
 						return
 					}
 				}
 			}
 			results[i] = found{asn: asn, name: "", tried: len(names)}
+			say(results[i])
 		}(i, asn, byASN[asn])
 	}
 	wg.Wait()
@@ -243,16 +272,11 @@ func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par int,
 			continue
 		}
 		if r.name != "" {
-			fmt.Printf("AS%-8s ПОДОШЛО %-24s (кандидат %d)\n", r.asn, r.name, r.tried)
 			sb.WriteString(r.asn)
 			sb.WriteString("\t")
 			sb.WriteString(r.name)
 			sb.WriteString("\n")
 			ok++
-		} else if r.tried > 0 {
-			fmt.Printf("AS%-8s имя не найдено (перебрано %d)\n", r.asn, r.tried)
-		} else {
-			fmt.Printf("AS%-8s блока нет — имя не нужно\n", r.asn)
 		}
 	}
 	fmt.Printf("\nимена найдены для %d сетей из %d\n", ok, len(keys))

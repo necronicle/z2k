@@ -698,6 +698,68 @@ warp_status_reason() {
     esac
 }
 
+# Блокировка по объёму соединения: что проба намерила и доехало ли это до
+# конфига.
+#
+# Раздел появился после r-81.1, где расхождение между «намерили» и «применяем»
+# стоило выпуска: у людей проба отработала и карту имён записала, а инстансы в
+# конфиг не попали — версия сменилась, обход молчал. Снаружи это выглядело как
+# «обновилось и не работает», и по логам различить было нечем.
+#
+# Поэтому здесь печатается И то, и другое: ответ пробы и факт по конфигу.
+# Расхождение — само по себе диагноз.
+print_tcp16() {
+    printf '\n=== блок по объёму (16-20КБ) ===\n'
+    local flag="${ZAPRET2_DIR}/state/tcp16.flag"
+    local asn="${ZAPRET2_DIR}/state/tcp16_asn.txt"
+    local map="${ZAPRET2_DIR}/state/tcp16_sni.txt"
+    local nets="${ZAPRET2_DIR}/lists/tcp16_nets.txt"
+    local cand="${ZAPRET2_DIR}/lists/sni_wl_candidates.txt"
+
+    local f; f=$(cat "$flag" 2>/dev/null)
+    case "$f" in
+        1) printf 'проба линии       : блок ЕСТЬ\n' ;;
+        0) printf 'проба линии       : блока нет — механизм не нужен\n' ;;
+        *) printf 'проба линии       : не измерялась (механизм выключен)\n' ;;
+    esac
+    # Метку времени печатаем только вместе с ответом: одна без другого
+    # означает, что проба сейчас идёт, и «измерено 13 ч назад» рядом с «не
+    # измерялась» читателя только запутает.
+    if [ -s "$flag.ts" ] && [ -s "$flag" ]; then
+        local ts age
+        ts=$(cat "$flag.ts" 2>/dev/null)
+        age=$(( $(date +%s) - ts ))
+        if [ "$age" -lt 3600 ] 2>/dev/null; then
+            printf 'измерено          : %s мин назад\n' "$((age / 60))"
+        else
+            printf 'измерено          : %s ч назад\n' "$((age / 3600))"
+        fi
+    fi
+
+    printf 'сетей с блоком    : %s\n' "$(grep -vc '^#' "$asn" 2>/dev/null || echo 0)"
+    printf 'имён подобрано    : %s из %s кандидатов\n' \
+        "$(grep -vc '^#' "$map" 2>/dev/null || echo 0)" \
+        "$(grep -vc '^#' "$cand" 2>/dev/null || echo 0)"
+    printf 'карта сетей       : %s записей\n' "$(grep -vc '^#' "$nets" 2>/dev/null || echo 0)"
+
+    # Главное: доехало ли намеренное до конфига.
+    local in_cfg=0
+    grep -q -- '--lua-desync=z2k_sni_pick' "${ZAPRET2_DIR}/config" 2>/dev/null && in_cfg=1
+    printf 'в конфиге         : %s\n' "$([ "$in_cfg" = 1 ] && echo 'да' || echo 'НЕТ')"
+    if [ "$f" = "1" ] && [ "$in_cfg" = "0" ]; then
+        printf 'вердикт           : РАСХОЖДЕНИЕ — блок найден, а механизма в конфиге нет.\n'
+        printf '                    Конфиг собран раньше пробы и не пересобран. Лечится\n'
+        printf '                    запуском %s/z2k-tcp16-probe.sh\n' "$ZAPRET2_DIR"
+    elif [ "$f" = "1" ] && [ ! -s "$map" ]; then
+        printf 'вердикт           : блок есть, но ни одного имени не подобрано —\n'
+        printf '                    на этой линии не подходит ни один кандидат\n'
+    elif [ "$f" = "1" ]; then
+        # Первые несколько строк карты: по ним видно, каким сетям что досталось.
+        printf 'примеры           : %s\n' \
+            "$(grep -v '^#' "$map" 2>/dev/null | head -3 | awk '{printf "AS%s->%s ", $1, $2}')"
+    fi
+}
+
 print_warp() {
     printf '\n=== warp ===\n'
     local on bin=/opt/sbin/z2k-warpd st=/tmp/z2k-warp/status.json dev=/opt/etc/z2k-warp/device.json
@@ -1700,6 +1762,7 @@ case "$MODE" in
         print_lists
         print_tunnel
         print_warp
+        print_tcp16
         print_rotator
         print_logs
         printf '\n=== end of diag ===\n'

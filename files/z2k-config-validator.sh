@@ -430,6 +430,25 @@ check_blob_references() {
                         if printf '%s' "$_reg_map" | grep -q "^${_blob_name}="; then
                             continue
                         fi
+                        # БЛОБ, СОБИРАЕМЫЙ В РАНТАЙМЕ, ФАЙЛА НЕ ИМЕЕТ.
+                        #
+                        # Наш Lua готовит фейковый ClientHello на лету и кладёт
+                        # его в desync под этим именем — на диске такого файла
+                        # нет и быть не может. Проверка этого не знала и
+                        # объявляла конфиг негодным: обновление r-81.1 у всех,
+                        # у кого механизм включён, упиралось в вето на
+                        # перезапуск и откатывалось. Ровно это правило уже
+                        # стояло в тесте (tests/test_blob_identifiers.sh), а в
+                        # самом валидаторе его не было.
+                        #
+                        # Признак ровно один и проверяемый: имя пишет наш же
+                        # инстанс --lua-desync=z2k_*. Ссылка на блоб, которого
+                        # никто не регистрирует и не производит, по-прежнему
+                        # провал.
+                        if printf '%s\n' "$_opt_text" \
+                           | grep -qE -- "--lua-desync=z2k_[A-Za-z0-9_]*:[^ ]*blob=${_blob_name}([:[:space:]]|$)"; then
+                            continue
+                        fi
                         # Проверить файл в fake директории
                         if [ ! -f "${FAKE_DIR}/${_blob_name}" ] && [ ! -f "${FAKE_DIR}/${_blob_name}.bin" ]; then
                             _bad_blobs="$_bad_blobs $_blob_name"
@@ -473,7 +492,8 @@ KNOWN_LUA_DESYNC_ACTIONS="fake send drop circular \
 fakedsplit fakeddisorder multisplit multidisorder \
 hostfakesplit http_methodeol syndata pktmod udplen \
 rst rstack synack \
-z2k_quic_morph_v2 z2k_timing_morph z2k_ipfrag3 z2k_ipfrag3_tiny"
+z2k_quic_morph_v2 z2k_timing_morph z2k_ipfrag3 z2k_ipfrag3_tiny \
+z2k_stall_watch z2k_sni_pick"
 
 is_known_action() {
     _action="$1"
