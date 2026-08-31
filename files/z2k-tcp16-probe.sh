@@ -75,6 +75,33 @@ BATCH="${BATCH:-5}"
 # выключит механизм до следующей ночи. Диагностика пользователя 31.08.2026
 # показывала ровно это: «0 из 0 кандидатов», «карта сетей: 0 записей».
 [ -x "$DETECT" ] || { echo "нет бинарника пробы: $DETECT" >&2; exit 2; }
+
+# БИНАРНИК СТАРЫЙ — ОБНОВИТЬ САМИМ, А НЕ ЖДАТЬ ПРАВИЛЬНОГО РЕЛИЗА.
+#
+# Шаг refresh-binaries выполняется, только если релиз его объявил, а объявляется
+# он по изменению самих сборок. Сборки z2k-detect вдобавок годами не попадали в
+# карту сумм, поэтому у людей остаётся бинарник от установки — без команды
+# tcp16, и весь механизм молчит. Цепочка «кто-то не забудет объявить шаг» уже
+# подвела четыре выпуска подряд, поэтому чиним на месте: не умеет tcp16 —
+# зовём тот же шаг обновления сами, один раз, и проверяем снова.
+if ! "$DETECT" tcp16 -h >/dev/null 2>&1; then
+    echo "бинарник не умеет tcp16 — обновляю его"
+    if [ -r "$ZAPRET2_DIR/lib/auto_update.sh" ]; then
+        # shellcheck source=/dev/null
+        . "$ZAPRET2_DIR/lib/utils.sh" >/dev/null 2>&1
+        # shellcheck source=/dev/null
+        . "$ZAPRET2_DIR/lib/auto_update.sh" >/dev/null 2>&1
+        if command -v au_fetch_manifest >/dev/null 2>&1 && command -v au_step_refresh_binaries >/dev/null 2>&1; then
+            au_fetch_manifest >/dev/null 2>&1 || true
+            au_step_refresh_binaries >/dev/null 2>&1 || true
+        fi
+    fi
+    if ! "$DETECT" tcp16 -h >/dev/null 2>&1; then
+        echo "обновить бинарник не удалось — проба отложена" >&2
+        exit 2
+    fi
+    echo "бинарник обновлён"
+fi
 [ -s "$TARGETS" ] || { echo "нет списка мишеней: $TARGETS — отложено" >&2; exit 2; }
 [ -s "$CAND" ] || { echo "нет списка имён: $CAND — отложено" >&2; exit 2; }
 mkdir -p "$(dirname "$FLAG")" 2>/dev/null

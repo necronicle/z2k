@@ -90,6 +90,33 @@ done
 [ -z "$MISS" ] && ok "все файлы механизма объявлены к доставке" \
                || bad "не доставляются:$MISS"
 
+# --- 6. Устаревший бинарник проба чинит сама --------------------------------
+# Шаг refresh-binaries выполняется, только если релиз его объявил, а объявляется
+# он по изменению сборок. Полагаться на «кто-то не забудет» уже нельзя: четыре
+# выпуска подряд бинарник у людей оставался прежним, без команды tcp16, и
+# механизм молчал. Проверяем запуском: подставной бинарник, не знающий tcp16,
+# обязан привести к вызову обновления.
+mkdir -p "$SB/heal/lib" "$SB/heal/state" "$SB/heal/lists"
+cat > "$SB/heal/detect" <<'STUB'
+#!/bin/sh
+[ "$1" = "tcp16" ] && [ -f "$SBDIR/heal/upgraded" ] && exit 0
+[ "$1" = "tcp16" ] && exit 2
+exit 0
+STUB
+chmod +x "$SB/heal/detect"
+printf 'au_fetch_manifest() { :; }
+au_step_refresh_binaries() { : > "$SBDIR/heal/upgraded"; }
+'     > "$SB/heal/lib/auto_update.sh"
+: > "$SB/heal/lib/utils.sh"
+printf 'T1\t24940\t*\tHetzner\t192.0.2.1\t443\n' > "$SB/heal/lists/tcp16_targets.txt"
+printf 'example.com\n' > "$SB/heal/lists/sni_wl_candidates.txt"
+SBDIR="$SB" DETECT="$SB/heal/detect" ZAPRET2_DIR="$SB/heal" \
+    TARGETS="$SB/heal/lists/tcp16_targets.txt" CAND="$SB/heal/lists/sni_wl_candidates.txt" \
+    LOG="$SB/heal/probe.log" sh "$PROBE" >/dev/null 2>&1
+[ -f "$SB/heal/upgraded" ] \
+    && ok "устаревший бинарник проба обновляет сама" \
+    || bad "проба не пытается обновить бинарник — механизм останется мёртвым"
+
 # --- 6. Проба замыкает петлю: сама пересобирает конфиг -----------------------
 # Иначе флаг появляется после пересборки, и механизм не попадает в конфиг —
 # ровно то, из-за чего r-81.1 «установился и молчал».
