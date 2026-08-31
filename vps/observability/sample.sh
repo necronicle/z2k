@@ -20,7 +20,7 @@ MAX_KB="${Z2K_SAMPLE_MAX_KB:-4096}"
 
 get() { nstat -az 2>/dev/null | awk -v k="$1" '$1==k{print $2; exit}'; }
 
-[ -s "$OUT" ] || printf 'время\tпринято/мин\tисходящих/мин\tSYN_потеряно\tочередь_перепол\tsyncookies\tполуоткрытых\tна_443\tтуннелей\n' > "$OUT"
+[ -s "$OUT" ] || printf 'время\tпринято/мин\tисходящих/мин\tSYN_потеряно\tочередь_перепол\tsyncookies\tполуоткрытых\tадресов_среди_них\tна_443\tтуннелей\n' > "$OUT"
 
 p_acc=$(get TcpPassiveOpens); p_act=$(get TcpActiveOpens)
 p_drop=$(get TcpExtTCPReqQFullDrop); p_ovf=$(get TcpExtListenOverflows); p_ck=$(get TcpExtSyncookiesSent)
@@ -29,11 +29,16 @@ while :; do
     sleep 60
     acc=$(get TcpPassiveOpens); act=$(get TcpActiveOpens)
     drop=$(get TcpExtTCPReqQFullDrop); ovf=$(get TcpExtListenOverflows); ck=$(get TcpExtSyncookiesSent)
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    # Число УНИКАЛЬНЫХ адресов среди полуоткрытых — то, что отличает волну своих
+    # от сканера без всякого гадания. 31.08.2026 всплеск в 1580 рукопожатий
+    # пришлось разбирать по косвенному признаку (достроились они или нет),
+    # потому что этой колонки не было.
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date '+%Y-%m-%d %H:%M')" \
         "$((acc - p_acc))" "$((act - p_act))" \
         "$((drop - p_drop))" "$((ovf - p_ovf))" "$((ck - p_ck))" \
         "$(ss -tn state syn-recv 2>/dev/null | wc -l)" \
+        "$(ss -tn state syn-recv 2>/dev/null | awk 'NR>1{split($4,a,\":\"); print a[1]}' | sort -u | wc -l)" \
         "$(ss -tn state established '( sport = :443 )' 2>/dev/null | wc -l)" \
         "$(ss -tn state established '( sport = :8443 )' 2>/dev/null | wc -l)" \
         >> "$OUT"
