@@ -249,6 +249,13 @@ r7() {  # r7 <файл> <CASE> → "vps=<хопов Layer 0>"
             . "$SB/fns.sh"
             GITHUB_RAW="https://raw.githubusercontent.com/o/r/main"
             Z2K_VPS_GH_IP="203.0.113.9"
+            # Эти проверки про СЛОЙ VPS: его повторы, бюджеты и размыкатель.
+            # С 31.08.2026 первым по умолчанию идёт прямой GitHub — весь флот
+            # ходил к нему через один наш адрес, и лимиты там считаются по
+            # адресу источника. Чтобы проверять именно слой VPS, прямой путь
+            # здесь выключен явно; отдельные случаи ниже задают DIRECT_FIRST=1
+            # и проверяют новый порядок.
+            Z2K_FETCH_DIRECT_FIRST="${DIRECT_FIRST:-0}"; export Z2K_FETCH_DIRECT_FIRST
             Z2K_FETCH_ALL_404=0
             _z2k_curl_doh() { return 1; }
             _z2k_manifest_sha() { printf ""; }
