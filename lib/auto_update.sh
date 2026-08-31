@@ -648,6 +648,11 @@ au_step_order() {
     echo rebuild-panel
     echo reset-state
     echo restart-service
+    # Чистка записей ip host — последней: она правит конфигурацию роутера, а не
+    # наш обход, и её неудача не должна задерживать подъём сервиса. Порядок
+    # обязан совпадать с z2k_all_steps в lib/release_map.sh — это один
+    # контракт, и его сторожит tests/test_au_steps.sh.
+    echo cleanup-ip-hosts
 }
 
 # au_entry_steps <manifest> <тег> — шаги одной записи истории (0..N строк).

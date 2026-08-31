@@ -33,7 +33,7 @@ assert_eq "список — без последствий" "" "$(s files/lists/a
 assert_eq "install.sh — без последствий (носитель шагов установки)" "" "$(s lib/install.sh)"
 
 assert_eq "канонический порядок" \
-  "regen-strategies regen-config validate-config refresh-binaries rebuild-panel reset-state restart-service" \
+  "regen-strategies regen-config validate-config refresh-binaries rebuild-panel reset-state restart-service cleanup-ip-hosts" \
   "$(z2k_all_steps | tr '\n' ' ' | sed 's/ $//')"
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
