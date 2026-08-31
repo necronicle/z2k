@@ -1,0 +1,14 @@
+[Unit]
+Description=z2k: разнос приёма пакетов по ядрам (RPS)
+Documentation=file:/opt/z2k-vps/bin/net-tuning.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/z2k-vps/bin/net-tuning.sh
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

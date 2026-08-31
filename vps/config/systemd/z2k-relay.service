@@ -1,0 +1,21 @@
+[Unit]
+Description=z2k tunnel relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/z2k-vps-relay   --listen=127.0.0.1:8080   --secret=<СЕКРЕТ>   --secret-prev=<СЕКРЕТ>   --resolve-secret=<СЕКРЕТ>   --registry-path=/var/lib/z2k-relay/registry.json   --dial-limit-per-target=8   --dial-throttle-timeout=3s   --per-stream-queue-bytes=2097152   --session-queue-bytes=25165824   --session-queue-depth=1024   --control-queue-depth=256   --dial-stats-interval=30s   --extra-cidrs=168.119.95.238/32
+Restart=always
+RestartSec=2
+User=nobody
+Group=nogroup
+StateDirectory=z2k-relay
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
