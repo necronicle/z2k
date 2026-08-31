@@ -210,7 +210,10 @@ func scanPerASN(ctx context.Context, tg []tcp16.Target, names []string, par, sni
 			var target *tcp16.Target
 			var bestRTT time.Duration
 			for j := range tgs {
-				r := probe(tgs[j], "")
+				// Имя мишени, если оно у неё есть. Раньше здесь стояла пустая
+				// строка для ВСЕХ — и мишени, отвечающие только по имени,
+				// молча выпадали из замера.
+				r := probe(tgs[j], tgs[j].SNI)
 				if r.Alive && r.Detected && (target == nil || r.RTT < bestRTT) {
 					target = &tgs[j]
 					bestRTT = r.RTT
@@ -385,7 +388,13 @@ func loadTargets(path, asn string, confirmedOnly bool, limit int) ([]tcp16.Targe
 		if err != nil {
 			continue
 		}
-		out = append(out, tcp16.Target{ID: p[0], ASN: p[1], Provider: p[3], IP: p[4], Port: port})
+		t := tcp16.Target{ID: p[0], ASN: p[1], Provider: p[3], IP: p[4], Port: port}
+		// Седьмая колонка — имя для SNI, необязательная: файлы прежнего
+		// формата читаются как раньше.
+		if len(p) >= 7 {
+			t.SNI = strings.TrimSpace(p[6])
+		}
+		out = append(out, t)
 		if limit > 0 && len(out) >= limit {
 			break
 		}
