@@ -104,18 +104,37 @@ cat > "$SB/heal/detect" <<'STUB'
 exit 0
 STUB
 chmod +x "$SB/heal/detect"
-printf 'au_fetch_manifest() { :; }
-au_step_refresh_binaries() { : > "$SBDIR/heal/upgraded"; }
+# Подставляем ЗАГРУЗЧИК, а не шаг обновления бинарников. Шаг для этого не
+# годится по замыслу: он ОБНОВЛЯЕТ, но не СТАВИТ отсутствующее, иначе тащил бы
+# движок WARP тем, кто его не включал. Проба поэтому тянет сборку сама.
+printf 'au_fetch_manifest() { mkdir -p "$Z2K_AU_TMP_DIR"; printf "{}" > "$Z2K_AU_TMP_DIR/UPDATES.json"; }
+au_bin_goarch() { echo arm64; }
+au_manifest_file_sha() { echo ""; }
+au_download_repo_file() { : > "$SBDIR/heal/upgraded"; cp "$SBDIR/heal/detect" "$2"; chmod 755 "$2"; }
 '     > "$SB/heal/lib/auto_update.sh"
 : > "$SB/heal/lib/utils.sh"
 printf 'T1\t24940\t*\tHetzner\t192.0.2.1\t443\n' > "$SB/heal/lists/tcp16_targets.txt"
 printf 'example.com\n' > "$SB/heal/lists/sni_wl_candidates.txt"
-SBDIR="$SB" DETECT="$SB/heal/detect" ZAPRET2_DIR="$SB/heal" \
+SBDIR="$SB" DETECT="$SB/heal/detect" ZAPRET2_DIR="$SB/heal" DETECT_DIRS="$SB/heal/bin" \
+    Z2K_AU_TMP_DIR="$SB/heal/tmp" \
     TARGETS="$SB/heal/lists/tcp16_targets.txt" CAND="$SB/heal/lists/sni_wl_candidates.txt" \
     LOG="$SB/heal/probe.log" sh "$PROBE" >/dev/null 2>&1
 [ -f "$SB/heal/upgraded" ] \
-    && ok "устаревший бинарник проба обновляет сама" \
-    || bad "проба не пытается обновить бинарник — механизм останется мёртвым"
+    && ok "негодный бинарник проба заменяет сама" \
+    || bad "проба не пытается достать бинарник — механизм останется мёртвым"
+
+# И то же для случая, из-за которого механизм молчал у людей: бинарника нет
+# ВООБЩЕ. Прежде проверка на наличие стояла выше самолечения, и до него дело не
+# доходило никогда.
+rm -f "$SB/heal/upgraded"
+mkdir -p "$SB/heal/empty"
+SBDIR="$SB" ZAPRET2_DIR="$SB/heal" DETECT_DIRS="$SB/heal/empty" \
+    Z2K_AU_TMP_DIR="$SB/heal/tmp2" \
+    TARGETS="$SB/heal/lists/tcp16_targets.txt" CAND="$SB/heal/lists/sni_wl_candidates.txt" \
+    LOG="$SB/heal/probe2.log" sh "$PROBE" >/dev/null 2>&1
+[ -f "$SB/heal/upgraded" ] \
+    && ok "отсутствующий бинарник проба достаёт сама" \
+    || bad "бинарника нет — проба сдаётся, и механизм не включится ни у кого"
 
 # --- 6. Проба замыкает петлю: сама пересобирает конфиг -----------------------
 # Иначе флаг появляется после пересборки, и механизм не попадает в конфиг —
