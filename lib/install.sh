@@ -2403,7 +2403,17 @@ TMPJUNK
     # game-warp-ips.txt намеренно отсутствует: legacy-агрегат на 14297 записей
     # (15% IPv4, включая приватные сети и LAN пользователя) удалён из проекта.
     # WARP теперь работает на пер-игровых списках, выбираемых в панели.
-    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt; do
+    # Список зашит здесь, а обновление кладёт файлы по карте install_map — это
+    # ДВА разных списка, и они разъехались молча. Три файла механизма обхода
+    # блока по объёму (мишени, кандидаты имён, карта сетей) были в карте, но не
+    # здесь: при обновлении приезжали, при чистой установке — нет. У всех, кто
+    # ставил начисто, механизм не мог заработать в принципе, и это стоило нам
+    # четырёх выпусков вслепую (найдено на чистой установке 31.08.2026).
+    #
+    # Расхождение теперь сторожит tests/test_install_lists_match_map.sh.
+    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt \
+                  tcp16_targets.txt sni_wl_candidates.txt tcp16_nets.txt \
+                  warp-endpoints.txt; do
         if [ -f "${WORK_DIR}/files/lists/${iplist}" ]; then
             cp -f "${WORK_DIR}/files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 2>/dev/null || true
         fi
