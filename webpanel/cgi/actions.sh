@@ -362,7 +362,12 @@ strategy_complete_line() {
         *)               printf '%s\n' "$body"; return 0 ;;
     esac
 
-    src=$(_strategy_pool_source "$pool") || { printf '%s\n' "$body"; return 0; }
+    # Каркас берём из ТЕКУЩЕЙ строки пула, если она есть, и только иначе из
+    # поставляемой. Иначе своя настройка человека — другие порты, другое окно —
+    # молча пропадала бы при каждой вставке нового приёма: он-то менял приём, а
+    # получал сброс всего остального к заводскому.
+    src="$CUSTOM_STRAT_DIR/$pool.txt"
+    [ -s "$src" ] || src=$(_strategy_pool_source "$pool") || { printf '%s\n' "$body"; return 0; }
     [ -s "$src" ] || { printf '%s\n' "$body"; return 0; }
 
     # Каркас: всё до ПЕРВОГО приёма. circular остаётся, он часть каркаса.

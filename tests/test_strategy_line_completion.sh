@@ -112,5 +112,32 @@ else
     bad "движок вызывается без --qnum — отвергнет любую строку: $err"
 fi
 
+# --- 9. Каркас берётся из ТЕКУЩЕЙ строки пула, а не из заводской -------------
+# Человек мог уже настроить порты или окно под себя. Если каждый раз брать
+# заводской каркас, его настройка молча слетает: он менял приём, а получал
+# сброс всего остального.
+CUSTOM_STRAT_DIR="$SB/custom"
+mkdir -p "$CUSTOM_STRAT_DIR"
+MYSKEL='--filter-tcp=8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=9:key=rkn_tcp'
+printf '%s --lua-desync=fake:dir=out\n' "$MYSKEL" > "$CUSTOM_STRAT_DIR/rkn_tcp.txt"
+out9=$(printf '%s\n' "$PRIM" | strategy_complete_line rkn_tcp)
+case "$out9" in
+    "$MYSKEL $PRIM") ok "каркас взят из текущей строки человека" ;;
+    *) bad "своя настройка потеряна: [$out9]" ;;
+esac
+rm -f "$CUSTOM_STRAT_DIR/rkn_tcp.txt"
+
+# --- 10. Пути к файлам пулов не разъехались с генератором конфига ------------
+# Панель и генератор намеренно не сорсят друг друга, поэтому пути дублируются.
+# Разъедутся — панель молча перестанет достраивать, и человек снова получит
+# непонятную ошибку. Сверяем напрямую.
+for _p in rkn_tcp yt_tcp gv_tcp yt_quic; do
+    _panel=$(ZAPRET2_DIR="/opt/zapret2" _strategy_pool_source "$_p")
+    _rel=${_panel#/opt/zapret2/}
+    grep -q "z2k_read_pool_strategy \"\${extra_strats_dir}/${_rel#extra_strats/}\"" "$ROOT/lib/config_official.sh" \
+        || bad "$_p: панель ищет $_rel, а генератор — другой файл"
+done
+ok "пути к файлам пулов совпадают с генератором"
+
 printf '\nPASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
