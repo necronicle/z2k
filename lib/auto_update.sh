@@ -2212,23 +2212,31 @@ au_apply_converge() {
     #
     # Возврат 2 — уже существующий сигнал «падаю на полную переустановку», тот
     # же, что и для незнакомого шага. Отдельного канала заводить не нужно.
+    # Каталог создаём ЗАРАНЕЕ и записи не даём уронить прогон.
+    #
+    # Апдейтер работает под set -e, и перенаправление в несуществующий каталог
+    # убивает оболочку МОЛЧА — после успешной доставки, то есть в самом плохом
+    # месте. Поймала репетиция релиза, на живых роутерах этого никто бы не
+    # связал со счётчиком. Счётчик — вспомогательный: не записался, значит в
+    # худшем случае эскалация случится позже, а ронять из-за него обновление
+    # нельзя ни при каком исходе.
     _ac_fails_file="${ZAPRET2_DIR:-/opt/zapret2}/state/au-delivery-fails"
+    mkdir -p "$(dirname "$_ac_fails_file")" 2>/dev/null || true
     if ! au_converge_apply "$manifest" "$plan"; then
         au_log "доставка не удалась — откат"
         au_rollback_patch || au_mark_dirty_tree "$(cat "$Z2K_AU_INSTALLED_TAG_FILE" 2>/dev/null)" "$target_tag"
-        mkdir -p "$(dirname "$_ac_fails_file")" 2>/dev/null
         _ac_fails=$(z2k_uint "$(cat "$_ac_fails_file" 2>/dev/null)" 0 0 999)
         _ac_fails=$((_ac_fails + 1))
-        printf '%s\n' "$_ac_fails" > "$_ac_fails_file" 2>/dev/null
+        printf '%s\n' "$_ac_fails" > "$_ac_fails_file" 2>/dev/null || true
         if [ "$_ac_fails" -ge "$(z2k_uint "${Z2K_AU_DELIVERY_GIVEUP:-3}" 3 1 20)" ]; then
             au_log "доставка не удаётся $_ac_fails раз подряд — ухожу на полную переустановку"
-            printf '0\n' > "$_ac_fails_file" 2>/dev/null
+            printf '0\n' > "$_ac_fails_file" 2>/dev/null || true
             return 2
         fi
         au_log "неудач доставки подряд: $_ac_fails (на третьей уйду на полную переустановку)"
         return 1
     fi
-    printf '0\n' > "$_ac_fails_file" 2>/dev/null
+    printf '0\n' > "$_ac_fails_file" 2>/dev/null || true
 
     au_prune_orphans
 

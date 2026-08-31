@@ -143,9 +143,17 @@ _n_base=$(find "$BASE" -type f 2>/dev/null | awk 'END {print NR+0}')
 
 # Слепок исходного дерева — чтобы проверить откат ПОБАЙТНО, а не «файлы на
 # месте». Половина обновления выглядит как целое дерево, если считать файлы.
+#
+# Каталог state/ из слепка ИСКЛЮЧЁН, и это уточнение проверки, а не поблажка.
+# Туда обновление не доставляет НИ ОДНОГО файла (проверено по install_map): это
+# рантайм самого роутера — отметка проверки линии, признак пройденной чистки,
+# счётчик неудач доставки. Откат обязан вернуть ДОСТАВЛЕННОЕ, а не стереть то,
+# что роутер записал про себя сам. Без исключения проверка падала на счётчике,
+# который апдейтер честно ведёт и после неудачи.
 BEFORE="$WORK/before.list"
-( cd "$SBOX" && find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$BEFORE" 2>/dev/null \
-    || ( cd "$SBOX" && find . -type f -exec shasum -a 256 {} + 2>/dev/null | sort ) > "$BEFORE"
+_snap() { cd "$1" && find . -type f ! -path './opt/zapret2/state/*' -exec sha256sum {} + 2>/dev/null | sort; }
+_snap_bsd() { cd "$1" && find . -type f ! -path './opt/zapret2/state/*' -exec shasum -a 256 {} + 2>/dev/null | sort; }
+_snap "$SBOX" > "$BEFORE" 2>/dev/null || _snap_bsd "$SBOX" > "$BEFORE"
 
 # --- Локальный источник --------------------------------------------------------
 #
@@ -243,8 +251,8 @@ if [ "$INTERRUPT" -gt 0 ]; then
     fi
 
     AFTER="$WORK/after.list"
-    ( cd "$SBOX" && find . -type f -exec sha256sum {} + 2>/dev/null | sort ) > "$AFTER" 2>/dev/null \
-        || ( cd "$SBOX" && find . -type f -exec shasum -a 256 {} + 2>/dev/null | sort ) > "$AFTER"
+    # Тем же снимком, что и BEFORE, — две разные выборки сравнивать бессмысленно.
+    _snap "$SBOX" > "$AFTER" 2>/dev/null || _snap_bsd "$SBOX" > "$AFTER"
     if diff "$BEFORE" "$AFTER" >/dev/null 2>&1; then
         ok "откат: дерево вернулось как было"
     else
