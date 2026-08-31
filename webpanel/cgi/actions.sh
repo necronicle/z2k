@@ -323,6 +323,67 @@ strategy_pool_ok() {
     return 1
 }
 
+# _strategy_pool_source <пул> — поставляемый файл стратегий этого пула.
+# Те же пути, что читает генератор конфига (lib/config_official.sh).
+_strategy_pool_source() {
+    case "$1" in
+        rkn_tcp) printf '%s\n' "$ZAPRET2_DIR/extra_strats/TCP/RKN/Strategy.txt" ;;
+        yt_tcp)  printf '%s\n' "$ZAPRET2_DIR/extra_strats/TCP/YT/Strategy.txt" ;;
+        gv_tcp)  printf '%s\n' "$ZAPRET2_DIR/extra_strats/TCP/YT_GV/Strategy.txt" ;;
+        yt_quic) printf '%s\n' "$ZAPRET2_DIR/extra_strats/UDP/YT/Strategy.txt" ;;
+        *) return 1 ;;
+    esac
+}
+
+# strategy_complete_line <пул> — читает строку со stdin и печатает готовую.
+#
+# ЗАЧЕМ. Подбор по домену выдаёт ОДИН приём:
+#   --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=1
+# а движку нужен полный набор опций профиля: фильтры портов и уровня, полезная
+# нагрузка, окно и токен circular С КЛЮЧОМ ПУЛА (у РКН key=rkn_tcp, у ютуба
+# yt_tcp). Человек вставлял то, что дал инструмент, и получал «не удалось
+# собрать конфиг» — формат был виноват, а выглядело как поломка.
+#
+# Достраиваем каркасом ТОГО ПУЛА, куда вставляют: берём поставляемую строку и
+# отрезаем её по первому приёму, оставляя всё до него включительно с circular.
+# Ключ пула таким образом всегда правильный — он приезжает из каркаса, а не
+# угадывается.
+#
+# Не трогаем строку, если в ней уже есть --filter-: значит человек принёс полный
+# набор и знает, что делает. И не трогаем, если приёма нет вовсе — пусть
+# валидатор скажет своё, молча дописывать каркас к мусору незачем.
+strategy_complete_line() {
+    local pool="$1" body src skel joined
+    body=$(cat)
+
+    case "$body" in
+        *--filter-*)     printf '%s\n' "$body"; return 0 ;;
+        *--lua-desync=*) ;;
+        *)               printf '%s\n' "$body"; return 0 ;;
+    esac
+
+    src=$(_strategy_pool_source "$pool") || { printf '%s\n' "$body"; return 0; }
+    [ -s "$src" ] || { printf '%s\n' "$body"; return 0; }
+
+    # Каркас: всё до ПЕРВОГО приёма. circular остаётся, он часть каркаса.
+    skel=$(awk '{ sub(/\r$/,""); sub(/^[[:space:]]*#.*$/,"") } NF { printf "%s ", $0 }' "$src" \
+        | awk '{ out=""
+                 for (i = 1; i <= NF; i++) {
+                     if ($i ~ /^--lua-desync=/ && $i !~ /^--lua-desync=circular/) break
+                     out = out (out == "" ? "" : " ") $i
+                 }
+                 print out }')
+    case "$skel" in
+        *--lua-desync=circular*) ;;
+        *) printf '%s\n' "$body"; return 0 ;;
+    esac
+
+    # Тело человека приводим к одной строке: инструмент отдаёт одну, но из чата
+    # приходит и с переносами.
+    joined=$(printf '%s\n' "$body" | awk '{ sub(/\r$/,"") } NF { printf "%s ", $0 }' | sed 's/[[:space:]]*$//')
+    printf '%s %s\n' "$skel" "$joined"
+}
+
 # strategy_validate — the load-bearing part of this feature.
 #
 # One typo takes down nfqws2 ENTIRELY, not just the pool it was written for:
@@ -396,7 +457,10 @@ strategy_validate() {
     }
 
     local cand="$shadow/lists/custom-strategies/$pool.txt"
-    cat > "$cand" || {
+    # Достраиваем ЗДЕСЬ, а не у вызывающего: проверка и сохранение обязаны
+    # видеть одну и ту же строку, иначе «Проверить» скажет одно, а применится
+    # другое.
+    strategy_complete_line "$pool" > "$cand" || {
         rm -rf "$shadow" 2>/dev/null
         echo "не удалось записать кандидата"
         return 1
@@ -433,8 +497,14 @@ strategy_validate() {
         if [ -z "$opt" ]; then
             rc=1; err="в собранном конфиге пустые опции nfqws2"
         else
+            # --qnum ОБЯЗАТЕЛЕН, и его нет в NFQWS2_OPT: номер очереди
+            # подставляет init при запуске, а в конфиг он не пишется. Без него
+            # движок отвечает «Need queue number» на ЛЮБУЮ строку — то есть
+            # проверка отвергала и заведомо исправные, включая поставляемые
+            # пуловые (проверено на роутере 31.08.2026). Номер здесь любой:
+            # при --dry-run движок разбирает опции и ничего не занимает.
             # shellcheck disable=SC2086
-            err=$("$engine" --dry-run $opt 2>&1) || rc=1
+            err=$("$engine" --dry-run --qnum=200 $opt 2>&1) || rc=1
         fi
     fi
 
@@ -507,7 +577,7 @@ strategy_pool_read() {
 strategy_pool_save() {
     local pool="$1" body
     strategy_pool_ok "$pool" || { echo "unknown pool" >&2; return 1; }
-    body=$(cat)
+    body=$(strategy_complete_line "$pool")
     printf '%s\n' "$body" | strategy_validate "$pool" >"/tmp/z2k-strategy-err.$$" 2>&1 || {
         cat "/tmp/z2k-strategy-err.$$" >&2; rm -f "/tmp/z2k-strategy-err.$$"; return 1; }
     rm -f "/tmp/z2k-strategy-err.$$"

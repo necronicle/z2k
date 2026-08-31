@@ -757,8 +757,16 @@ case "$method $path" in
         if [ "${CONTENT_LENGTH:-0}" -gt 262144 ] 2>/dev/null; then
             json_fail "413 Payload Too Large" "стратегия слишком большая (максимум 256 КБ)"
         fi
-        s_err=$(read_body_raw | strategy_validate "$s_name" 2>&1) && {
-            json_header; printf '{"ok":true,"valid":true}\n'; exit 0; }
+        # Тело читаем В ПЕРЕМЕННУЮ: оно нужно дважды — достроить каркасом и
+        # проверить. Через конвейер stdin кончается на первом же чтении.
+        s_body=$(read_body_raw)
+        s_full=$(printf '%s\n' "$s_body" | strategy_complete_line "$s_name")
+        s_err=$(printf '%s\n' "$s_full" | strategy_validate "$s_name" 2>&1) && {
+            json_header
+            # Отдаём собранную строку: человек вставил один приём, а применится
+            # полный набор — он обязан это увидеть, а не догадываться.
+            printf '{"ok":true,"valid":true,"line":'; json_string "$s_full"
+            printf '}\n'; exit 0; }
         json_header
         printf '{"ok":true,"valid":false,"error":'; json_string "$s_err"
         printf '}\n'

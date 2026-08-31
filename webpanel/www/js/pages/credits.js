@@ -344,7 +344,18 @@ async function loadStrategyPools() {
       say("Проверяю…", true);
       try {
         const r = await apiPostText("/strategy/pool/validate?pool=" + encodeURIComponent(pool), ta.value);
-        if (r && r.valid) say("Строка корректна — можно сохранять", true);
+        if (r && r.valid) {
+          // Подбор по домену выдаёт ОДИН приём, а движку нужен полный набор
+          // опций пула. Бекенд достраивает недостающее сам — и возвращает то,
+          // что реально применится. Показываем это в том же поле: иначе
+          // человек сохранит одно, а работать будет другое, и он об этом не
+          // узнает.
+          const done = r.line && r.line.trim() !== ta.value.trim();
+          if (done) ta.value = r.line;
+          say(done
+            ? "Строка корректна. Дописал недостающие параметры пула — применится то, что в поле"
+            : "Строка корректна — можно сохранять", true);
+        }
         else say("Не принято движком: " + (r && r.error ? r.error : "неизвестная ошибка"), false);
       } catch (e) { say("Ошибка проверки: " + errMsg(e), false); }
     });
