@@ -35,6 +35,11 @@ BOUNDARY=" z2k_fetch au_log print_info print_success print_warning print_error
  curl wget iptables ip6tables ipset pgrep pkill sleep date hostname nft
  au_download_repo_file z2k_sha256_file safe_config_read read_flag is_running
  au_snapshot_services au_step_refresh_binaries au_repo_base start stop restart "
+# Список многострочный, а сверка идёт подстрокой " имя ". За последним словом
+# каждой строки стоит перевод строки, а не пробел, поэтому такие имена в
+# исключение не попадали: is_running был внесён явно и всё равно объявлялся
+# нарушением. Сводим к одной строке с пробелами по краям.
+BOUNDARY=" $(printf '%s' "$BOUNDARY" | tr '\n' ' ') "
 
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT

@@ -142,13 +142,21 @@ _z2k_curl_etag() {
         old_etag=$(cat "$etag_file" 2>/dev/null)
     fi
     # $resolve_args (unquoted word-split): пусто обычно, `--resolve ...` в Layer 0.
+    # ОГРАНИЧИТЕЛЬ ЗАВИСШЕЙ ПЕРЕДАЧИ. --connect-timeout бюджетирует ТОЛЬКО
+    # рукопожатие; после него у передачи оставался один потолок — --max-time 180.
+    # Блокировка по SNI рвёт соединение сразу и стоит миллисекунды, а вот
+    # ЗАМЕДЛЕНИЕ выглядит как живой канал: байты идут, но по капле. Такой файл
+    # держал слой три минуты, и на полутора сотнях файлов обновления это часы
+    # вместо перехода к следующему зеркалу. --speed-limit/--speed-time обрывают
+    # передачу, если она пятнадцать секунд идёт медленнее килобайта в секунду:
+    # медленная, но живая загрузка не страдает, мёртвая отпускает за 15 с.
     if [ -n "$old_etag" ]; then
-        http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 $resolve_args \
+        http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 --speed-limit "${Z2K_FETCH_STALL_BYTES:-1024}" --speed-time "${Z2K_FETCH_STALL_SECONDS:-15}" $resolve_args \
             -H "If-None-Match: $old_etag" -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code} %{time_connect}" "$url" 2>/dev/null)
         curl_rc=$?
     else
-        http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 $resolve_args \
+        http_status=$(curl -sSL --connect-timeout "$conn_to" --max-time 180 --speed-limit "${Z2K_FETCH_STALL_BYTES:-1024}" --speed-time "${Z2K_FETCH_STALL_SECONDS:-15}" $resolve_args \
             -D "$hdr_file" -o "$tmp_body" \
             -w "%{http_code} %{time_connect}" "$url" 2>/dev/null)
         curl_rc=$?
