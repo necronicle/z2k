@@ -231,28 +231,27 @@ assert_contains "retrans: target=2 round-trip (flag-off keeps 2)" "retrans=2" "$
 # TEST: ensure_rkn_failure_detector (replicated from config_official.sh)
 # ==============================================================================
 
-# Local copy of ensure_rkn_failure_detector — kept in sync with the
-# production version in lib/config_official.sh. Этап 2: functional again —
-# injects :failure_detector=<name> into the circular token (default
-# z2k_tls_stalled; rkn_tcp passes z2k_silent_drop_detector). Idempotent.
-ensure_rkn_failure_detector() {
-    local input="$1"
-    local detector_name="${2:-z2k_tls_stalled}"
-    local out=""
-    local token=""
-    for token in $input; do
-        case "$token" in
-            --lua-desync=circular:*)
-                case "$token" in
-                    *failure_detector=*) ;;
-                    *) token="${token}:failure_detector=${detector_name}" ;;
-                esac
-                ;;
-        esac
-        out="${out:+$out }$token"
-    done
-    printf '%s' "$out"
-}
+# Функция берётся ИЗ ПОСТАВЛЯЕМОГО ФАЙЛА, а не переписывается сюда.
+#
+# Здесь лежала «local copy — kept in sync», и синхронной она не была: боевая
+# версия ТРЕБУЕТ имя детектора (`${2:?...}`, умолчание убрано намеренно — оно
+# указывало на функцию из удалённого z2k-detectors.lua), а копия продолжала
+# подставлять z2k_tls_stalled. Тест охранял поведение, от которого код отказался
+# (аудит 31.08.2026).
+#
+# Определение вложено в create_official_config, поэтому вырезаем ровно его.
+_SRC_CO="$(cd "$(dirname "$0")/.." && pwd)/lib/config_official.sh"
+[ -r "$_SRC_CO" ] || { echo "нет $_SRC_CO"; exit 1; }
+_FN_FD=$(awk '
+    /^[[:space:]]*ensure_rkn_failure_detector\(\)[[:space:]]*\{/ { inside=1 }
+    inside { print }
+    inside && /^    \}[[:space:]]*$/ { exit }
+' "$_SRC_CO")
+case "$_FN_FD" in
+    *detector_name*) : ;;
+    *) echo "не удалось вырезать ensure_rkn_failure_detector"; exit 1 ;;
+esac
+eval "$_FN_FD"
 
 # Local copy of ensure_circular_tcp_inseq — kept in sync with
 # lib/config_official.sh (added 2026-04-29 commit 4c852f5). Production
@@ -370,10 +369,17 @@ RESULT_FD1=$(ensure_rkn_failure_detector "$INPUT_FD1" "z2k_silent_drop_detector"
 assert_contains "rkn_fd: circular base preserved" "circular:fails=3:key=rkn_tcp:nld=2" "$RESULT_FD1"
 assert_not_contains "rkn_fd: fake token untouched" "strategy=1:failure_detector" "$RESULT_FD1"
 
-# Default detector name when $2 omitted.
+# Имя детектора ОБЯЗАТЕЛЬНО: умолчания больше нет, и это не придирка. Прежнее
+# умолчание указывало на функцию из удалённого z2k-detectors.lua, то есть тихо
+# довело бы до движка несуществующее имя — error() на каждом пакете при зелёной
+# службе. Проверяем, что вызов без имени падает, а не молча что-то подставляет.
 INPUT_FD2="--lua-desync=circular:fails=3:key=rkn_tcp:nld=2"
-RESULT_FD2=$(ensure_rkn_failure_detector "$INPUT_FD2")
-assert_contains "rkn_fd: default detector z2k_tls_stalled" "failure_detector=z2k_tls_stalled" "$RESULT_FD2"
+if RESULT_FD2=$(ensure_rkn_failure_detector "$INPUT_FD2" 2>/dev/null); then
+    assert_contains "rkn_fd: вызов без имени детектора обязан падать" "ДОЛЖЕН БЫЛ УПАСТЬ" "$RESULT_FD2"
+else
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    printf "[PASS] %s\n" "rkn_fd: вызов без имени детектора падает, а не подставляет умолчание"
+fi
 
 # Idempotent — an existing failure_detector= is preserved, not duplicated.
 INPUT_FD4="--lua-desync=circular:fails=3:failure_detector=z2k_existing:key=rkn_tcp"

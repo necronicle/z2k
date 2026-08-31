@@ -36,44 +36,29 @@ assert_contains() {
     esac
 }
 
-# Local copy — kept in sync with lib/config_official.sh.
-inject_z2k_range_rand() {
-    local input="$1"
-    local token=""
-    local out=""
-    for token in $input; do
-        case "$token" in
-            --lua-desync=fake:*|\
-            --lua-desync=fakedsplit:*|\
-            --lua-desync=fakeddisorder:*|\
-            --lua-desync=hostfakesplit:*|\
-            --lua-desync=syndata:*)
-                case "$token" in
-                    *:repeats=*)
-                        token=$(printf '%s' "$token" | awk '
-                            {
-                                n = split($0, parts, ":")
-                                for (i = 1; i <= n; i++) {
-                                    if (parts[i] ~ /^repeats=[0-9]+$/) {
-                                        v = substr(parts[i], 9) + 0
-                                        lo = (v - 2 < 1) ? 1 : v - 2
-                                        hi = v + 2
-                                        parts[i] = "repeats=" lo "-" hi
-                                    }
-                                }
-                                out = parts[1]
-                                for (i = 2; i <= n; i++) out = out ":" parts[i]
-                                print out
-                            }
-                        ')
-                        ;;
-                esac
-                ;;
-        esac
-        out="${out:+$out }$token"
-    done
-    printf '%s' "$out"
-}
+# Функция берётся ИЗ ПОСТАВЛЯЕМОГО ФАЙЛА, а не переписывается сюда.
+#
+# Раньше здесь лежала «local copy — kept in sync with lib/config_official.sh»,
+# и синхронной она не была: аудит 31.08.2026 показал, что тест проходит даже
+# когда lib/config_official.sh ПУСТ. То есть он охранял собственную копию, а
+# боевой код мог быть сломан как угодно.
+#
+# Определение вложено в create_official_config, подключить файл целиком нельзя
+# (он тянет генерацию конфига), поэтому вырезаем ровно это определение по
+# отступу и исполняем его. Разойтись с боевым текстом теперь физически нельзя.
+_SRC="$(cd "$(dirname "$0")/.." && pwd)/lib/config_official.sh"
+[ -r "$_SRC" ] || { echo "нет $_SRC"; exit 1; }
+_FN=$(awk '
+    /^[[:space:]]*inject_z2k_range_rand\(\)[[:space:]]*\{/ { inside=1 }
+    inside { print }
+    inside && /^    \}[[:space:]]*$/ { exit }
+' "$_SRC")
+case "$_FN" in
+    *inject_z2k_range_rand*) : ;;
+    *) echo "не удалось вырезать inject_z2k_range_rand из $_SRC"; exit 1 ;;
+esac
+eval "$_FN"
+command -v inject_z2k_range_rand >/dev/null 2>&1 || { echo "функция не определилась"; exit 1; }
 
 printf "\n--- baseline: simple fake with repeats=N ---\n"
 
