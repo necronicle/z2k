@@ -28,6 +28,7 @@ printf -- '--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt
 # Берём только нужные функции: подключать actions.sh целиком нельзя — он лезет
 # в живой роутер.
 eval "$(awk '/^_strategy_pool_source\(\)/,/^}/' "$ROOT/webpanel/cgi/actions.sh")"
+eval "$(awk '/^_strategy_tag_arms\(\)/,/^}/' "$ROOT/webpanel/cgi/actions.sh")"
 eval "$(awk '/^strategy_complete_line\(\)/,/^}/' "$ROOT/webpanel/cgi/actions.sh")"
 ZAPRET2_DIR="$SB"
 command -v strategy_complete_line >/dev/null 2>&1 \
@@ -38,7 +39,7 @@ PRIM='--lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=1'
 # --- 1. Голый приём достраивается каркасом своего пула ------------------------
 out=$(printf '%s\n' "$PRIM" | strategy_complete_line rkn_tcp)
 case "$out" in
-    "$SKEL $PRIM") ok "приём достроен каркасом пула, приём в конце" ;;
+    "$SKEL $PRIM:strategy=1") ok "приём достроен каркасом пула, приём в конце" ;;
     *) bad "достроено не так: [$out]" ;;
 esac
 
@@ -63,7 +64,7 @@ n=$(printf '%s\n' "$out" | grep -o -- '--lua-desync=' | wc -l | tr -d ' ')
 
 # --- 4. Полную строку не трогаем ---------------------------------------------
 # Человек мог принести свой набор целиком, и дописывать ему нечего.
-full="$SKEL --lua-desync=fake:dir=out"
+full="$SKEL --lua-desync=fake:dir=out:strategy=1"
 out2=$(printf '%s\n' "$full" | strategy_complete_line rkn_tcp)
 [ "$out2" = "$full" ] && ok "готовая строка остаётся как есть" \
                       || bad "готовую строку изменили: [$out2]"
@@ -122,7 +123,7 @@ MYSKEL='--filter-tcp=8443 --filter-l7=tls --payload=tls_client_hello --lua-desyn
 printf '%s --lua-desync=fake:dir=out\n' "$MYSKEL" > "$CUSTOM_STRAT_DIR/rkn_tcp.txt"
 out9=$(printf '%s\n' "$PRIM" | strategy_complete_line rkn_tcp)
 case "$out9" in
-    "$MYSKEL $PRIM") ok "каркас взят из текущей строки человека" ;;
+    "$MYSKEL $PRIM:strategy=1") ok "каркас взят из текущей строки человека" ;;
     *) bad "своя настройка потеряна: [$out9]" ;;
 esac
 rm -f "$CUSTOM_STRAT_DIR/rkn_tcp.txt"
@@ -138,6 +139,50 @@ for _p in rkn_tcp yt_tcp gv_tcp yt_quic; do
         || bad "$_p: панель ищет $_rel, а генератор — другой файл"
 done
 ok "пути к файлам пулов совпадают с генератором"
+
+# --- 11. Приёмы под ротатором обязаны иметь номер ----------------------------
+# ЭТО ГЛАВНОЕ. Ротатор circular выбирает приём ПО НОМЕРУ. Приём без номера не
+# принадлежит ни одному плечу, и ротатор не применяет НИЧЕГО. Строка при этом
+# синтаксически верна, движок её принимает молча, панель показывает «сохранено»
+# — а обхода нет.
+#
+# Замер на роутере 01.09.2026, bdsmx.tube, строка от «Подбора по домену»:
+#   без ротатора вовсе .......... 200, 75624 байта, 3 из 3
+#   ротатор + приёмы без номера .. RST на ClientHello, 0 из 4
+#   ротатор + :strategy=1 ........ 200, 75624 байта, 4 из 4
+# Каркас вернуть: тест 7 его снёс, а здесь нужен именно путь «подбор + каркас».
+printf '%s --lua-desync=fake:payload=tls_client_hello:dir=out --lua-desync=multisplit:pos=1\n' "$SKEL" \
+    > "$SB/extra_strats/TCP/RKN/Strategy.txt"
+PAIR='--lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:badsum:repeats=7 --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=681'
+out11=$(printf '%s\n' "$PAIR" | strategy_complete_line rkn_tcp)
+n_arm=$(printf '%s\n' "$out11" | tr ' ' '\n' | grep -c '^--lua-desync=' )
+n_num=$(printf '%s\n' "$out11" | tr ' ' '\n' | grep '^--lua-desync=' | grep -vc '^--lua-desync=circular')
+n_tag=$(printf '%s\n' "$out11" | tr ' ' '\n' | grep -c ':strategy=1$')
+[ "$n_tag" = "$n_num" ] && [ "$n_num" -gt 0 ] \
+    && ok "оба приёма получили номер ($n_tag из $n_num)" \
+    || bad "приёмы без номера — ротатор не применит их: [$out11]"
+circ=$(printf '%s\n' "$out11" | tr ' ' '\n' | grep '^--lua-desync=circular' | head -1)
+case "$circ" in
+    *strategy=*) bad "номер повешен на сам ротатор: [$circ]" ;;
+    *)           ok "ротатор номером не помечен" ;;
+esac
+[ "$n_arm" = "3" ] || bad "приёмов в строке $n_arm, ожидалось 3 (circular + два)"
+
+# --- 12. Чужие номера не переписываем ----------------------------------------
+# Человек мог принести настоящий пул из нескольких плеч. Схлопнуть их все в
+# strategy=1 значит превратить пул в одно плечо.
+many_arms="$SKEL --lua-desync=fake:dir=out:strategy=1 --lua-desync=multisplit:pos=1:strategy=2"
+out12=$(printf '%s\n' "$many_arms" | strategy_complete_line rkn_tcp)
+[ "$out12" = "$many_arms" ] && ok "пул с номерами не тронут" \
+                             || bad "номера в пуле переписаны: [$out12]"
+
+# --- 13. Без ротатора номера не нужны ----------------------------------------
+# Строка без circular применяет свои приёмы всегда; лишний номер там — шум.
+no_rotator='--filter-tcp=443 --filter-l7=tls --lua-desync=fake:dir=out'
+out13=$(printf '%s\n' "$no_rotator" | strategy_complete_line rkn_tcp)
+[ "$out13" = "$no_rotator" ] && ok "строка без ротатора не помечается" \
+                             || bad "номер повешен без ротатора: [$out13]"
+
 
 printf '\nPASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

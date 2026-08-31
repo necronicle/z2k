@@ -352,14 +352,44 @@ _strategy_pool_source() {
 # Не трогаем строку, если в ней уже есть --filter-: значит человек принёс полный
 # набор и знает, что делает. И не трогаем, если приёма нет вовсе — пусть
 # валидатор скажет своё, молча дописывать каркас к мусору незачем.
+# _strategy_tag_arms — читает строку со stdin и печатает её же, проставив
+# приёмам номер strategy=1, если в строке есть ротатор circular, а номеров нет
+# ни у одного приёма.
+#
+# Ротатор выбирает приём ПО НОМЕРУ. Приёмы без номера не принадлежат ни одному
+# плечу, и ротатор не применяет НИЧЕГО: строка синтаксически верна, движок
+# молчит, обхода нет. Инструмент подбора отдаёт приёмы без номеров — ему номера
+# не нужны, он их применяет сам, — поэтому склейка обязана их проставить.
+#
+# Поле 2026-09-01, bdsmx.tube: приём, подобранный инструментом, открывал сайт
+# (200, 75624 байта, 3 из 3), та же строка под ротатором без номеров давала RST
+# на ClientHello (0 из 4), она же с :strategy=1 — снова 200 (4 из 4).
+_strategy_tag_arms() {
+    awk '{
+        has_circ = 0; has_num = 0
+        for (i = 1; i <= NF; i++) {
+            if ($i ~ /^--lua-desync=circular/) { has_circ = 1; continue }
+            if ($i ~ /^--lua-desync=/ && $i ~ /:strategy=/) has_num = 1
+        }
+        if (!has_circ || has_num) { print; next }
+        out = ""
+        for (i = 1; i <= NF; i++) {
+            t = $i
+            if (t ~ /^--lua-desync=/ && t !~ /^--lua-desync=circular/) t = t ":strategy=1"
+            out = out (out == "" ? "" : " ") t
+        }
+        print out
+    }'
+}
+
 strategy_complete_line() {
     local pool="$1" body src skel joined
     body=$(cat)
 
     case "$body" in
-        *--filter-*)     printf '%s\n' "$body"; return 0 ;;
+        *--filter-*)     printf '%s\n' "$body" | _strategy_tag_arms; return 0 ;;
         *--lua-desync=*) ;;
-        *)               printf '%s\n' "$body"; return 0 ;;
+        *)               printf '%s\n' "$body" | _strategy_tag_arms; return 0 ;;
     esac
 
     # Каркас берём из ТЕКУЩЕЙ строки пула, если она есть, и только иначе из
@@ -367,8 +397,8 @@ strategy_complete_line() {
     # молча пропадала бы при каждой вставке нового приёма: он-то менял приём, а
     # получал сброс всего остального к заводскому.
     src="$CUSTOM_STRAT_DIR/$pool.txt"
-    [ -s "$src" ] || src=$(_strategy_pool_source "$pool") || { printf '%s\n' "$body"; return 0; }
-    [ -s "$src" ] || { printf '%s\n' "$body"; return 0; }
+    [ -s "$src" ] || src=$(_strategy_pool_source "$pool") || { printf '%s\n' "$body" | _strategy_tag_arms; return 0; }
+    [ -s "$src" ] || { printf '%s\n' "$body" | _strategy_tag_arms; return 0; }
 
     # Каркас: всё до ПЕРВОГО приёма. circular остаётся, он часть каркаса.
     skel=$(awk '{ sub(/\r$/,""); sub(/^[[:space:]]*#.*$/,"") } NF { printf "%s ", $0 }' "$src" \
@@ -380,13 +410,13 @@ strategy_complete_line() {
                  print out }')
     case "$skel" in
         *--lua-desync=circular*) ;;
-        *) printf '%s\n' "$body"; return 0 ;;
+        *) printf '%s\n' "$body" | _strategy_tag_arms; return 0 ;;
     esac
 
     # Тело человека приводим к одной строке: инструмент отдаёт одну, но из чата
     # приходит и с переносами.
     joined=$(printf '%s\n' "$body" | awk '{ sub(/\r$/,"") } NF { printf "%s ", $0 }' | sed 's/[[:space:]]*$//')
-    printf '%s %s\n' "$skel" "$joined"
+    printf '%s %s\n' "$skel" "$joined" | _strategy_tag_arms
 }
 
 # strategy_validate — the load-bearing part of this feature.
