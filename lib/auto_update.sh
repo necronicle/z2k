@@ -793,6 +793,10 @@ au_bin_goarch() {
 
 au_step_refresh_binaries() {
     local manifest="$Z2K_AU_TMP_DIR/UPDATES.json"
+    # Опознание арки живёт в utils.sh (get_arch, map_arch_to_bin_arch). Штатный
+    # вход его подключает, но полагаться на вызывающего нельзя: ровно на такой
+    # неявной зависимости шаг очистки записей молчал у всех.
+    au_gen_libs_source >/dev/null 2>&1 || true
     local goarch; goarch=$(au_bin_goarch)
     [ -n "$goarch" ] || { au_log "refresh-binaries: арка не опознана"; return 1; }
     # Осечки копим в файле, а не в переменной: цикл ниже идёт за пайпом, то есть

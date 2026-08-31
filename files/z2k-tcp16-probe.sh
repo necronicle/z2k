@@ -27,7 +27,22 @@ PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
-DETECT="${DETECT:-$ZAPRET2_DIR/z2k-detect}"
+# ГДЕ ИСКАТЬ БИНАРНИК. Штатное место установки — /opt/sbin/z2k-detect: туда
+# его кладёт установщик, оттуда его обновляет шаг refresh-binaries. Прежде
+# здесь стоял только путь внутри каталога обхода, и у КАЖДОГО пользователя
+# проба падала первой строкой «нет /opt/zapret2/z2k-detect» — механизм не
+# работал вообще (жалоба с диагностикой 31.08.2026). У меня на стенде она
+# проходила лишь потому, что копия бинарника лежала там руками.
+#
+# Каталог обхода оставлен вторым: там бинарник может оказаться на стендах и у
+# тех, кто ставил его вручную.
+DETECT_DIRS="${DETECT_DIRS:-/opt/sbin $ZAPRET2_DIR}"
+if [ -z "${DETECT:-}" ]; then
+    for _d in $DETECT_DIRS; do
+        if [ -x "$_d/z2k-detect" ]; then DETECT="$_d/z2k-detect"; break; fi
+    done
+    DETECT="${DETECT:-/opt/sbin/z2k-detect}"
+fi
 TARGETS="${TARGETS:-$ZAPRET2_DIR/lists/tcp16_targets.txt}"
 FLAG="$ZAPRET2_DIR/state/tcp16.flag"
 # Список AS, где блок найден: по нему рантайм решает, кому ставить имя, а кому
@@ -61,7 +76,15 @@ mkdir -p "$(dirname "$FLAG")" 2>/dev/null
 # Без -confirmed: список AS нужен ПОЛНЫЙ, иначе имя не достанется тем, кого
 # режут, но чья AS не помечена звёздочкой. Полный прогон стоит около минуты
 # и делается раз в неделю.
-"$DETECT" tcp16 -targets "$TARGETS" -parallel "$PARALLEL" -asn-out "$ASNOUT" > "$LOG" 2>&1
+# GODEBUG=asyncpreemptoff=1 — обязательно, а не на всякий случай.
+#
+# На MIPS вытеснение горутин по SIGURG роняет Go-бинарники: демон z2k-detect
+# запускается с этим флагом с самого начала, а проба его не ставила — на
+# роутерах mips она падала бы там, где демон живёт. Пользователь с mips как раз
+# и прислал диагностику, где механизм молчит.
+DETECT_ENV="GODEBUG=asyncpreemptoff=1"
+
+env $DETECT_ENV "$DETECT" tcp16 -targets "$TARGETS" -parallel "$PARALLEL" -asn-out "$ASNOUT" > "$LOG" 2>&1
 rc=$?
 
 case "$rc" in
@@ -70,7 +93,7 @@ case "$rc" in
         # Имя на каждую найденную сеть. Пишем во временный файл и подменяем
         # разом: половина карты хуже, чем прежняя целая.
         if [ -s "$CAND" ]; then
-            if "$DETECT" tcp16 -targets "$TARGETS" -scan "$CAND" -per-asn \
+            if env $DETECT_ENV "$DETECT" tcp16 -targets "$TARGETS" -scan "$CAND" -per-asn \
                  -sni-out "$SNIOUT.new" -parallel "$PARALLEL" -batch "$BATCH" >> "$LOG" 2>&1; then
                 mv -f "$SNIOUT.new" "$SNIOUT"
             else

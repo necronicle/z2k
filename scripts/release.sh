@@ -465,6 +465,22 @@ PY
 # момент ещё не изменён.
 sh scripts/gen_file_hashes.sh
 
+# КАЖДЫЙ бинарник, который установщик качает напрямую, обязан оказаться в
+# карте сумм: шаг refresh-binaries берёт список ИЗ НЕЁ, и то, чего там нет, не
+# обновляется у людей никогда. Так сборки z2k-detect не обновлялись с самого
+# появления — установщик их клал, а обновление не трогало, и новая команда
+# tcp16 не доезжала ни до кого (r-81.1 … r-81.4 молчали именно поэтому).
+#
+# Проверка стоит ЗДЕСЬ, сразу после пересборки карты: между релизами манифест
+# законно отстаёт от дерева, и тест в наборах об этом судить не может.
+_rel_bin_modules=$(grep -ohE '\$\{GITHUB_RAW\}/[a-z0-9_-]+/builds/' lib/install.sh files/*.sh 2>/dev/null \
+    | sed 's|\${GITHUB_RAW}/||; s|/builds/||' | sort -u)
+_rel_bin_sha=$(awk '/"files_sha256"/{f=1} f{print} f&&/^  }/{exit}' UPDATES.json)
+for _m in $_rel_bin_modules; do
+    printf '%s' "$_rel_bin_sha" | grep -q "\"$_m/builds/" || \
+        die "сборок $_m нет в карте сумм — refresh-binaries не обновит их у людей. Проверьте _verify_only в scripts/gen_file_hashes.sh"
+done
+
 python3 -c "import json; json.load(open('$MANIFEST'))" || die "после правки $MANIFEST перестал быть валидным JSON"
 
 # --- Подпись ------------------------------------------------------------------

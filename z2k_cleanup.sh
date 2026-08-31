@@ -435,7 +435,10 @@ if command -v ndmc >/dev/null 2>&1; then
 fi
 
 # Бинарь и его init-скрипт (директории /opt/zapret2 сносятся ниже, но /opt/sbin — нет).
-for _f in /opt/sbin/z2k-rt-proxy /opt/sbin/z2k-rt-proxy.z2kbak; do
+# z2k-detect и z2k-warpd лежат там же и так же не уходят с деревом: их забыли
+# внести, и после деинсталляции на флешке оставалось 12 МБ мёртвых бинарников.
+for _f in /opt/sbin/z2k-rt-proxy /opt/sbin/z2k-rt-proxy.z2kbak \
+          /opt/sbin/z2k-detect /opt/sbin/z2k-warpd; do
     [ -f "$_f" ] && rm -f "$_f" && log_info "  Удалён $_f"
 done
 

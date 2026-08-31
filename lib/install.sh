@@ -5467,6 +5467,7 @@ uninstall_zapret2() {
           /opt/etc/init.d/S02z2k-tcp-tuning \
           /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
           /opt/sbin/tg-mtproxy-client \
+          /opt/sbin/z2k-detect /opt/sbin/z2k-warpd \
           /var/run/tg-tunnel.pid \
           /tmp/z2k-log/tg-tunnel.log \
           /tmp/tg-tunnel-watchdog.state \
