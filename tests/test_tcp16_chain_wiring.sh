@@ -109,7 +109,7 @@ chmod +x "$SB/heal/detect"
 # движок WARP тем, кто его не включал. Проба поэтому тянет сборку сама.
 printf 'au_fetch_manifest() { mkdir -p "$Z2K_AU_TMP_DIR"; printf "{}" > "$Z2K_AU_TMP_DIR/UPDATES.json"; }
 au_bin_goarch() { echo arm64; }
-au_manifest_file_sha() { echo ""; }
+au_manifest_file_sha() { echo "0000000000000000000000000000000000000000000000000000000000000000"; }
 au_download_repo_file() { : > "$SBDIR/heal/upgraded"; cp "$SBDIR/heal/detect" "$2"; chmod 755 "$2"; }
 '     > "$SB/heal/lib/auto_update.sh"
 : > "$SB/heal/lib/utils.sh"
