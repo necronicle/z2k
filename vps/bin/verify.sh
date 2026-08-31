@@ -27,6 +27,7 @@ config/Caddyfile:/etc/caddy/Caddyfile
 config/sysctl.d/99-z2k-relay.conf:/etc/sysctl.d/99-z2k-relay.conf
 config/sysctl.d/99-z2k-tcp.conf:/etc/sysctl.d/99-z2k-tcp.conf
 config/sysctl.conf:/etc/sysctl.conf
+config/tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf
 config/systemd/z2k-relay.service:/etc/systemd/system/z2k-relay.service
 config/systemd/z2k-relay.service.d/10-require-per-install.conf:/etc/systemd/system/z2k-relay.service.d/10-require-per-install.conf
 config/systemd/z2k-stats-collector.service:/etc/systemd/system/z2k-stats-collector.service
@@ -38,7 +39,7 @@ bin/net-tuning.sh:/opt/z2k-vps/bin/net-tuning.sh
 # осмысленной, ОДНА И ТА ЖЕ маска накладывается на обе стороны: сравнивается
 # структура команды запуска, а не значения ключей. Сами ключи проверяются
 # отдельно — тем, что их не должно быть видно в /proc/<pid>/cmdline.
-MASK='s/(--secret|--secret-prev|--resolve-secret|--admin-token)=[^ "]*/\1=<СЕКРЕТ>/g'
+MASK='s/(--secret|--secret-prev|--resolve-secret|--admin-token)=[^ "]*/\1=<СЕКРЕТ>/g; s/^(BasicAuth[[:space:]]+[^[:space:]]+[[:space:]]+).*$/\1<СЕКРЕТ>/'
 
 drift=0
 printf '=== файлы конфигурации\n'
@@ -98,12 +99,19 @@ fi
 
 # Секреты не должны лежать в командной строке: её видит любой процесс.
 printf '\n=== секреты в командной строке служб\n'
-leak=$($SSH "tr '\\0' ' ' < /proc/\$(pgrep -f z2k-vps-relay | head -1)/cmdline 2>/dev/null | grep -o -- '--admin-token=[^ ]*' | head -1")
-if [ -n "$leak" ]; then
-    printf '  ВИДЕН        --admin-token в /proc/<pid>/cmdline\n'
+# Ссылка — не утечка. Релей принимает `env:ИМЯ` и `@/путь` и подставляет
+# значение сам (vps-relay/secretsrc.go); в командной строке тогда остаётся
+# только имя переменной. Ругаться надо на ЛИТЕРАЛ, иначе проверка кричит на
+# правильно настроенную машину и её перестают читать.
+leaks=$($SSH "tr '\\0' '\\n' < /proc/\$(pgrep -f z2k-vps-relay | head -1)/cmdline 2>/dev/null \
+    | grep -E -- '^--(secret|secret-prev|resolve-secret|admin-token)=' \
+    | grep -vE '=(env:|@)' | sed -E 's/=.*/=<ЗНАЧЕНИЕ>/'")
+if [ -n "$leaks" ]; then
+    printf '  ВИДНЫ        секреты значением в /proc/<pid>/cmdline:\n'
+    printf '%s\n' "$leaks" | sed 's/^/                 /'
     drift=$((drift+1))
 else
-    printf '  чисто        токена в командной строке нет\n'
+    printf '  чисто        секреты передаются ссылкой, значений в командной строке нет\n'
 fi
 
 printf '\n'

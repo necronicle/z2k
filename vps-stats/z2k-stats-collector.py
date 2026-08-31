@@ -228,7 +228,14 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     # Deeper accept queue than the stdlib default of 5: the whole fleet uploads
     # in the same nightly window, and a refused SYN is a lost day of data.
-    request_queue_size = 128
+    #
+    # 8192, а не 128, с 31.08.2026. Ночная выгрузка разведена по времени, но
+    # люди обновляются ВРУЧНУЮ и приходят разом на публикацию релиза — тогда
+    # 128 была самой мелкой очередью на машине. Потолок одновременно
+    # обслуживаемых держит MAX_CONN, а не эта величина: она лишь решает,
+    # ждёт клиент или получает отказ на уровне ядра. Системный somaxconn здесь
+    # 8192, поэтому значение не срезается.
+    request_queue_size = 8192
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

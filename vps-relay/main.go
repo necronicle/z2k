@@ -1392,6 +1392,13 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 
 func main() {
 	flag.Parse()
+
+	// Секреты могут приходить как env:ИМЯ или @/путь — тогда в командной строке
+	// остаётся только ссылка. Разбор идёт сразу после разбора флагов, чтобы
+	// дальше по коду секрет был обычной строкой (см. secretsrc.go).
+	if err := resolveAllSecrets(); err != nil {
+		log.Fatalf("секреты: %v", err)
+	}
 	if *secret == "" {
 		log.Fatal("--secret is required")
 	}

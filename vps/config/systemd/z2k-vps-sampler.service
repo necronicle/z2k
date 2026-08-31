@@ -1,0 +1,14 @@
+[Unit]
+Description=z2k: поминутный срез узла (форма всплесков)
+Documentation=file:/opt/z2k-vps/observability/sample.sh
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/z2k-vps/observability/sample.sh /var/log/z2k-vps-samples.tsv
+Restart=always
+RestartSec=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
