@@ -3948,7 +3948,15 @@ step_finalize() {
         # through the 1-CPU VPS; an image-heavy TM page (~120 s1.ticketm.net + ~48
         # prismic in parallel) then CHOKED the relay → ~half the images failed. They
         # must load direct from Fastly. See project_whatsapp_ip_block (2026-06-08).
-        local relay_hosts="whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com spon.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com"
+        # TICKETMASTER УБРАН 31.08.2026 по просьбе пользователей.
+        #
+        # Он занимал 22 записи статического DNS из 256, что есть у Keenetic, —
+        # ради одного сайта. Обход у него через релей и оставался единственным
+        # рабочим, но цена в слотах несоразмерна: люди упирались в лимит и
+        # теряли записи, нужные им самим. Имена перечислены ниже в relay_unpin,
+        # то есть у уже поставивших пины снимаются, а не просто перестают
+        # ставиться.
+        local relay_hosts="whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net"
         # CDN/asset hosts r-51/r-52 wrongly pinned — un-pin so they go DIRECT (Fastly).
         # Un-pin (→ go DIRECT): TM CDN/asset hosts (Fastly, not geo-blocked).
         #
@@ -3960,12 +3968,14 @@ step_finalize() {
         # z2k-insta-ip-refresh.sh: он берёт зарубежный резолв, пробует каждый
         # адрес живым запросом и прописывает тот, что ответил.
         # Мобильные точки (g/mmg/static/…whatsapp.net) как шли через релей, так и идут.
-        local relay_unpin="static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co"
+        local relay_unpin="static.ticketmaster.com js.ticketmaster.com media.ticketmaster.com s1.ticketm.net media.ticketm.net spon.ticketmaster.net prismic-images.tmol.io mapsapi.tmol.io venue.tmol.co ticketmaster.com www.ticketmaster.com app.ticketmaster.com api.ticketmaster.com auth.ticketmaster.com identity.ticketmaster.com checkout.ticketmaster.com checkout.prod.ticketmaster.com secure-entry.ticketmaster.com my.ticketmaster.com pubapi.ticketmaster.com help.ticketmaster.com blog.ticketmaster.com legal.ticketmaster.com travel.ticketmaster.com privacy.ticketmaster.com business.ticketmaster.com offeradapter.ticketmaster.com rsvp.ticketmaster.com fan-wallet.ticketmaster.com developer.ticketmaster.com"
         # Run when a CDN pin still lingers (old install → migrate) OR the app isn't
         # pinned yet (fresh install). Idempotent; skips on an already-migrated box.
-        if LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host (prismic-images.tmol.io|s1.ticketm.net|web.whatsapp.com|www.whatsapp.com) $relay_vps" \
-           || ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host www.ticketmaster.com $relay_vps"; then
-            print_info "Настройка релея WhatsApp/Ticketmaster (app → VPS, CDN-картинки напрямую)..."
+        # Запускаем, если остался ЛЮБОЙ снимаемый пин (в том числе ticketmaster,
+        # который мы теперь убираем) или если WhatsApp ещё не закреплён.
+        if LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -qE "ip host ([a-z0-9.-]*ticketmaster[a-z.]*|[a-z0-9.-]*ticketm\.net|[a-z0-9.-]*tmol\.(io|co)|web\.whatsapp\.com|www\.whatsapp\.com) $relay_vps" \
+           || ! LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | grep -q "ip host g.whatsapp.net $relay_vps"; then
+            print_info "Настройка релея WhatsApp (шлюзы → VPS); записи Ticketmaster снимаются..."
             local _u _uold _rh _rold
             for _u in $relay_unpin; do
                 for _uold in $(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null | awk -v h="$_u" '/^ip host/ && $3==h {print $4}'); do

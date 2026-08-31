@@ -1261,10 +1261,14 @@ cleanup_legacy_ip_hosts() {
             /^ip host/ {
                 host = $3; ip = $4
                 if (ip == "213.176.74.63" || ip == "79.137.196.7") {
-                    # z2k whatsapp/ticketmaster relay pins legitimately point at
-                    # the VPS now (default-on SNI-passthrough relay) — these are
-                    # current, not legacy DNS-project leftovers. Keep them.
-                    if (tolower(host) ~ /whatsapp\.(com|net)$|ticketmaster\.(com|net)$|ticketm\.net$|tmol\.(io|co)$/) next
+                    # Пины релея WhatsApp указывают на VPS законно — это
+                    # рабочий обход, а не наследие DNS-проекта. Их сохраняем.
+                    #
+                    # Ticketmaster отсюда УБРАН 31.08.2026 по просьбе
+                    # пользователей: он занимал 22 записи статического DNS из
+                    # 256 доступных, ради одного сайта. Теперь эти записи
+                    # подпадают под общее правило и снимаются чисткой.
+                    if (tolower(host) ~ /whatsapp\.(com|net)$/) next
                     print; next
                 }
                 if (ip == "2.58.104.1") {

@@ -156,6 +156,10 @@ run_task() {
     ( "$@" >> "$LOG" 2>&1; log "done $label (exit $?)" ) &
 }
 
+# Время файла: busybox stat поддерживает -c %Y; если его нет — молчим и
+# считаем, что перезапускаться не по чему.
+_z2k_mtime() { stat -c %Y "$1" 2>/dev/null || echo ""; }
+
 log "scheduler started (pid $$, $(uname -srm))"
 
 # Seed the per-game WARP lists if there are none.
@@ -197,9 +201,18 @@ if [ ! -f "$_cl_done" ] && [ -r "${ZAPRET2_DIR}/lib/utils.sh" ]; then
     mkdir -p "${ZAPRET2_DIR}/state" 2>/dev/null
     # Отметку ставим ПОСЛЕ чистки и только при её успехе: иначе оборванный
     # прогон закрыл бы себе путь навсегда, а записи остались бы висеть.
+    # Функция может быть ещё не доставлена: обновление кладёт файлы по одному,
+    # и планировщик способен подняться раньше, чем приедет новый utils.sh.
+    # Тогда молча откладываем до следующего старта — отметку не ставим, иначе
+    # чистка не случится никогда. В журнале это выглядело как «sh:
+    # cleanup_legacy_ip_hosts: not found» (диагностика пользователя 31.08.2026).
     run_task cleanup-ip-hosts sh -c \
         ". ${ZAPRET2_DIR}/lib/utils.sh >/dev/null 2>&1
-         cleanup_legacy_ip_hosts && date +%s > \"$_cl_done\""
+         if command -v cleanup_legacy_ip_hosts >/dev/null 2>&1; then
+             cleanup_legacy_ip_hosts && date +%s > \"$_cl_done\"
+         else
+             echo \"чистка отложена: utils.sh ещё не обновлён\"
+         fi"
 fi
 
 # СТАРТ СЛУЖБЫ — ЭТО И ЕСТЬ УСТАНОВКА И ОБНОВЛЕНИЕ.
@@ -225,7 +238,25 @@ if [ $((_sni_now - _sni_last)) -ge 3600 ]; then
 
 fi
 
+# ПЕРЕЗАПУСК САМОГО СЕБЯ, КОГДА ФАЙЛ ОБНОВИЛСЯ.
+#
+# Путь сходимости выполняет только те шаги, что объявил релиз, и планировщик в
+# них не входит: новый код приезжал на диск и ждал перезагрузки роутера —
+# то есть неделями. Так одноразовая чистка записей и проба линии не начинались
+# у людей вовсе.
+#
+# Сравниваем время файла с тем, что было при старте, и переходим на новый код
+# через exec. Зацикливания нет по построению: после exec отметка снимается
+# заново с того же файла, и следующая проверка совпадёт.
+_self="${ZAPRET2_DIR}/z2k-scheduler.sh"
+_self_mtime=$(_z2k_mtime "$_self")
+
 while true; do
+    _now_mtime=$(_z2k_mtime "$_self")
+    if [ -n "$_now_mtime" ] && [ "$_now_mtime" != "$_self_mtime" ]; then
+        log "файл планировщика обновлён — перехожу на новый код"
+        exec sh "$_self"
+    fi
     hhmm=$(date +%H:%M)
     today=$(date +%Y-%m-%d)
     now_epoch=$(date +%s)
