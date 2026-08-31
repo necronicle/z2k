@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 56,
-  "current": "p-81.8",
+  "seq": 57,
+  "current": "p-81.9",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -207,7 +207,7 @@
   "files/z2k-ppe-deoffload.sh": "9a98f3f22c6572d3692a7b4cf7fb1432f2c42fc9d67d06e3841cffb9c0f4b4e4",
   "files/z2k-scheduler.sh": "90246e17cdae8da675821766bcbbbd0ea1cb9845dbb15f72b886897d1e20ea02",
   "files/z2k-stats-upload.sh": "45f33be7405bfa1e6445b6c7969cfa2555778fae05843e4dd60f06bc816e1ce5",
-  "files/z2k-tcp16-probe.sh": "b2eb74520da3d36f29057001a1da8421ea1c2ee481140647ac250902b7b3deb5",
+  "files/z2k-tcp16-probe.sh": "29379eee0665262f4e6c3a204b74a613589eaf2b6f295f62d3890301779f9605",
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
   "files/z2k-tg-watchdog.sh": "f433391db09dad96471cf96dc6c814fbff846c285ba3cb424806f08ab040ce8f",
   "files/z2k-update-lists.sh": "a70af63cc3e77aed5c2a1af8ca6acdf8ccead092d65cc930ec0ef457533736f1",
@@ -234,8 +234,8 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "2b8cec24a6bf0fe522e0b368a763f0f65c6de7af44b8b7cfde6bc7358ee7a204",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "7475d651fe127bd8b9278b9db6e06d45ad86aadd81f02b5960a498b99bd5b441",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "4c99e7a21d09e578a3e894ee4ee9b92117af48fd81ab376515b1b880b1073113",
-  "webpanel/cgi/actions.sh": "d53af09cce7b3ae4ae40f6b84ad63bfe3427686c3fabc19be42fb92cfc3e802c",
-  "webpanel/cgi/api.sh": "2d27a6325b807f5625a495a3a4ade43d099d5df873cee67872cbf25b7b676e57",
+  "webpanel/cgi/actions.sh": "41c10b92bbed3f44b4b9b378e3c2a10c5f03793a5579c84b36ac0f50316350b6",
+  "webpanel/cgi/api.sh": "d816192d4df824d8766b74a79d8cf6f738f1477ab984837874914fecd3c5d0ca",
   "webpanel/cgi/auth.sh": "aa2d34f9f41444ba41a888a0da5214ff688b037457c54256546938b27391b333",
   "webpanel/init.d/S96z2k-webpanel": "8dd6c8192cd680c3fbabc4827be392525a585344231cd659d3f8b10f0292a1f3",
   "webpanel/install.sh": "e6f8e0a1188ac0747a6ffe06f8429cec46363b5b2534f2d63309c1fb3bdf67fd",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "60df502783d95a7bf7053134fcd55b7f23e936b166440c3a18c23ac8f7ddc014",
+  "webpanel/www/index.html": "c38ab7dcb24c6680e25d476ba24b75e3f57ff57bef5ec2ae79ea5705b6f309b3",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -262,7 +262,7 @@
   "webpanel/www/js/core/loadorder.js": "ba986ce2d61c9cc9e73c032a4553ff8f22247573bace4e2933766fdcb096545e",
   "webpanel/www/js/core/toast.js": "2fdf1025826a4db97484ac702ff907ef280736d3a4d2639398182b9ef4cf4b2a",
   "webpanel/www/js/job.js": "da0832ecbb70861fa26d17008d5df9fbb69d240869771522bb8f9408f205365b",
-  "webpanel/www/js/pages/credits.js": "2cc35603f1361ff4bd26fff917156567228d0e8295182733d34cf6c8aa0925fb",
+  "webpanel/www/js/pages/credits.js": "1dce593aff59af00665acf25bd5a16a86f9363fb43e47258e562df2f52aa850c",
   "webpanel/www/js/pages/dashboard.js": "8d4a142cff54cb919f0b142a40c306df34728a94075240624a3d09b4ea5c6840",
   "webpanel/www/js/pages/diag.js": "40d104ca2ad115298ab2d81a2191e1df36a4430f422667ac2245ad027e9ba8cf",
   "webpanel/www/js/pages/exclude.js": "e504ab23d951a99ef56c220a19fecc1cb9e689f59f547e1b20284100319ecd39",
@@ -500,6 +500,7 @@
 {"v": "r-81.4", "type": "reinstall", "ts": "2026-08-31T08:27:24Z", "ref": "r-81.4", "desc": "Роутер один раз убирает за собой старые записи DNS, накопившиеся с апреля: они занимали ограниченные слоты в настройках. Чужие записи не трогаются.", "changed_files": ["webpanel/www/index.html", "files/z2k-scheduler.sh", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "r-81.5", "type": "reinstall", "ts": "2026-08-31T10:06:54Z", "ref": "r-81.5", "desc": "Исправлена установка панели и обновление роутера: часть новых настроек раньше не применялась до перезагрузки. Убраны лишние записи DNS для Ticketmaster — они занимали ограниченные слоты в настройках роутера.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-alert.lua", "files/z2k-diag.sh", "files/z2k-scheduler.sh", "files/z2k-tcp16-probe.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "webpanel/init.d/S96z2k-webpanel", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "r-81.6", "type": "reinstall", "ts": "2026-08-31T10:39:15Z", "ref": "r-81.6", "desc": "Роутер сам обновляет служебную программу проверки, если она устарела: раньше новая защита не включалась, потому что программа оставалась старой.", "changed_files": ["webpanel/www/index.html", "files/z2k-tcp16-probe.sh", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-81.8", "type": "patch", "ts": "2026-08-31T14:45:01Z", "ref": "p-81.8", "desc": "Обновления больше не застревают: файл, который не скачался с первого раза, роутер пробует ещё, а если три ночи подряд ничего не выходит — обновляется целиком. Защита от обрыва загрузки на 16 килобайтах включается сразу после обновления, а не после перезагрузки роутера. Скачивание релиза через наш сервер получило столько же времени на подключение, сколько и остальные загрузки.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-diag.sh", "files/z2k-scheduler.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
+{"v": "p-81.8", "type": "patch", "ts": "2026-08-31T14:45:01Z", "ref": "p-81.8", "desc": "Обновления больше не застревают: файл, который не скачался с первого раза, роутер пробует ещё, а если три ночи подряд ничего не выходит — обновляется целиком. Защита от обрыва загрузки на 16 килобайтах включается сразу после обновления, а не после перезагрузки роутера. Скачивание релиза через наш сервер получило столько же времени на подключение, сколько и остальные загрузки.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-diag.sh", "files/z2k-scheduler.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
+{"v": "p-81.9", "type": "patch", "ts": "2026-08-31T18:43:52Z", "ref": "p-81.9", "desc": "Защита от обрыва загрузки на 16 килобайтах наконец включается сама: роутер догружает служебную программу проверки, без которой она не запускалась — у большинства её просто не было. Обновления больше не застревают: файл, не скачавшийся с первого раза, роутер пробует ещё, а после трёх неудачных ночей подряд обновляется целиком. Строку из «Подбора по домену» теперь можно вставлять в «Свои стратегии» как есть — панель дописывает недостающее сама.", "changed_files": ["webpanel/www/index.html", "files/z2k-tcp16-probe.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
