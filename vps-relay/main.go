@@ -1360,6 +1360,16 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Expected WebSocket", http.StatusUpgradeRequired)
 		return
 	}
+	// Потолок проверяется ДО апгрейда: после него соединение уже не HTTP, и
+	// сказать клиенту «приходи через минуту» нечем — остаётся молча закрыть,
+	// что для него неотличимо от обрыва.
+	if ok, retry := acquireSession(); !ok {
+		w.Header().Set("Retry-After", retryAfterHeader(retry))
+		http.Error(w, "узел перегружен, попробуйте позже", http.StatusServiceUnavailable)
+		return
+	}
+	defer releaseSession()
+
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("upgrade err: %v", err)
