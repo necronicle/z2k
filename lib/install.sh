@@ -302,102 +302,14 @@ z2k_remove_tpws() {
     fi
     return 0
 }
-
-# Force-push снёс код, но записи в running-config persistent (system save).
-# Юзеры с этого окна страдают: github проксируется через VPS Frankfurt → 5-10x
-# медленнее, AI-домены идут через мёртвый теперь nginx-cloak-passthrough.
+# cleanup_legacy_ip_hosts переехала в lib/utils.sh.
 #
-# Этот cleanup при каждом install убирает любые ip host записи с нашими VPS-IP
-# и MГТС CF alt-anycast. Idempotent: на чистом роутере noop.
-#
-# NB: каждый вызов ndmc в z2k префиксован `LD_LIBRARY_PATH=`. На KeenOS 4.3+/5.x,
-# когда LD_LIBRARY_PATH содержит Entware-пути (/opt/lib), ndmc грузит несовместимый
-# OpenSSL и падает `system failed [0xcffd0060]` / `Cli::Main: failed to initialize`
-# на КАЖДОМ вызове (установка идёт через `curl|sh` в этом замусоренном окружении →
-# отсюда «портянка» и не ставится). Очистка переменной для конкретного вызова
-# заставляет ndmc взять системный OpenSSL. (root cause подтверждён 2026-06-22,
-# forum.keenetic.ru/topic/20203)
-cleanup_legacy_ip_hosts() {
-    command -v ndmc >/dev/null 2>&1 || return 0
-    # 213.176.74.63 / 79.137.196.7 — always-purge legacy VPS Frankfurt IPs.
-    # 2.58.104.1 — also a legitimate CF alt-anycast that z2k-classify
-    # recommends for МГТС L3 bypass (z2k-classify/src/main.c:115-122,
-    # recipe.c:376,417). DO NOT delete entries pointing CF SLDs at it —
-    # those are user-applied L3 bypasses and must survive the cleanup.
-    # Heuristic: hostname containing "cloudflare" is a classifier-emitted
-    # L3 bypass; everything else on 2.58.104.1 was the legacy Module-3
-    # МГТС catch-all and gets purged.
-    local entries
-    entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-        | awk '
-            /^ip host/ {
-                host = $3; ip = $4
-                if (ip == "213.176.74.63" || ip == "79.137.196.7") {
-                    # z2k whatsapp/ticketmaster relay pins legitimately point at
-                    # the VPS now (default-on SNI-passthrough relay) — these are
-                    # current, not legacy DNS-project leftovers. Keep them.
-                    if (tolower(host) ~ /whatsapp\.(com|net)$|ticketmaster\.(com|net)$|ticketm\.net$|tmol\.(io|co)$/) next
-                    print; next
-                }
-                if (ip == "2.58.104.1") {
-                    if (tolower(host) ~ /cloudflare/) next
-                    print
-                }
-                # 4pda.to — пины ставились r-77.2 (19.08.2026) под блок по
-                # адресу, который в тот же день сняли. Домен убран из HOSTS,
-                # значит обновлять эти записи больше некому: адреса Cloudflare
-                # ротирует, и через недели они станут мёртвыми — сайт перестанет
-                # открываться у тех, у кого без нас открывался бы. Снимаем при
-                # первом же обновлении, независимо от адреса.
-                if (tolower(host) == "4pda.to" || tolower(host) ~ /\.4pda\.to$/) print
+# Причина переезда: её вызывает шаг обновления cleanup-ip-hosts, а апдейтер
+# подключает utils.sh, config_official.sh и strategies.sh — install.sh он не
+# подключает вовсе. Пока функция жила здесь, шаг КАЖДЫЙ раз писал в журнал
+# «функция недоступна, пропускаю» и не делал ничего: чистка записей ip host при
+# обновлении не выполнялась ни у кого (жалоба пользователя 31.08.2026).
 
-                # GITHUB И ЗЕРКАЛА — наш собственный мусор, снятый 30.08.2026
-                # вместе с четвёртым слоем скачивания. Тот слой писал ПОСТОЯННУЮ
-                # запись на КАЖДУЮ неудачную попытку, а у GitHub много адресов и
-                # CDN отдаёт разные — у людей набралось по три-четыре строки на
-                # домен. У Keenetic под статический DNS всего 256 слотов.
-                #
-                # Снимаем ПО ИМЕНИ, а не по адресу: эти записи указывают на
-                # адреса самого GitHub, под правило «наши VPS-IP» выше они не
-                # попадают. Список имён закрытый — ровно те семь, что писал тот
-                # слой, — поэтому чужого не заденем: человек, прописавший свой
-                # ip host для github, в этот набор не попадёт разве что чудом,
-                # а вот всё, что попало, писали мы.
-                if (tolower(host) == "github.com"          ||
-                    tolower(host) == "api.github.com"      ||
-                    tolower(host) == "codeload.github.com" ||
-                    tolower(host) == "raw.githubusercontent.com"            ||
-                    tolower(host) == "objects.githubusercontent.com"        ||
-                    tolower(host) == "release-assets.githubusercontent.com" ||
-                    tolower(host) == "gist.githubusercontent.com"           ||
-                    tolower(host) == "cdn.jsdelivr.net"    ||
-                    tolower(host) == "gh-proxy.com") print
-            }' || true)
-    # Under z2k.sh `set -e`, `[ -z "$x" ] && return 0` aborts the script
-    # when $x is non-empty (the [ exits 1 because -z is false). Use if/fi.
-    if [ -z "$entries" ]; then return 0; fi
-
-    local removed=0 line
-    local IFS_orig="$IFS"
-    IFS='
-'
-    for line in $entries; do
-        IFS="$IFS_orig"
-        LD_LIBRARY_PATH= ndmc -c "no $line" >/dev/null 2>&1 && removed=$((removed + 1))
-        IFS='
-'
-    done
-    IFS="$IFS_orig"
-
-    if [ "$removed" -gt 0 ]; then
-        LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
-        print_info "Очищено $removed записей ip host, оставшихся от прежних версий"
-    fi
-    # Учётный файл четвёртого слоя. Сам слой снят, писать в него больше некому,
-    # а его наличие вводило бы в заблуждение при разборе следующей жалобы.
-    rm -f "${ZAPRET2_DIR:-/opt/zapret2}/state/ndmc-managed.txt" 2>/dev/null || true
-    return 0
-}
 
 # MIGRATION 2026-08-04: снять режим Austerusj (all_tcp443.conf).
 #
