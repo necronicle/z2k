@@ -23,13 +23,17 @@ bad() { FAIL=$((FAIL+1)); printf '[FAIL] %s\n' "$1"; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/files/z2k-tcp16-probe.sh"
+# Z2K_TCP16_WAIT_BIN=0 у каждого запуска пробы: на свежей установке она ждёт
+# появления бинарника до двух минут, и это правильно в бою, но здесь бинарника
+# нет НАМЕРЕННО. Без обнуления набор простаивал 241 секунду на двух ожиданиях,
+# ничего этим не проверяя.
 SB=$(mktemp -d) || exit 1
 trap 'rm -rf "$SB"' EXIT
 
 # --- 1. Ветка «нет бинарника» ведёт к загрузке, а не к выходу -----------------
 # Вырезаем блок добычи и смотрим на его СОДЕРЖИМОЕ: он обязан звать загрузчик
 # файлов, а не шаг обновления бинарников.
-blk=$(awk '/БИНАРНИКА НЕТ ВОВСЕ/,/^fi$/' "$PROBE")
+blk=$(awk '/БИНАРНИКА НЕТ ВОВСЕ/,/КОНЕЦ БЛОКА ДОБЫЧИ БИНАРНИКА/' "$PROBE")
 [ -n "$blk" ] || bad "в пробе нет блока добычи бинарника"
 
 case "$blk" in
@@ -77,7 +81,7 @@ printf 'a.example\n'   > "$SB/opt/zapret2/lists/sni_wl_candidates.txt"
 
 out=$(ZAPRET2_DIR="$SB/opt/zapret2" DETECT_DIRS="$SB/sbin" \
       Z2K_AU_TMP_DIR="$SB/tmp/z2k_au" \
-      sh "$PROBE" 2>&1)
+      Z2K_TCP16_WAIT_BIN=0 sh "$PROBE" 2>&1)
 case "$out" in
     *"бинарника пробы нет"*) ok "проба сообщает, что бинарника нет" ;;
     *) bad "нет сообщения об отсутствии бинарника: $out" ;;
@@ -99,7 +103,7 @@ au_download_repo_file() { : > "\$SBDIR/скачано"; printf '#!/bin/sh\nexit 
 LIB
 rm -f "$SB/скачано"
 SBDIR="$SB" ZAPRET2_DIR="$SB/opt/zapret2" DETECT_DIRS="$SB/sbin2" \
-    Z2K_AU_TMP_DIR="$SB/tmp/au2" sh "$PROBE" >"$SB/out2" 2>&1
+    Z2K_AU_TMP_DIR="$SB/tmp/au2" Z2K_TCP16_WAIT_BIN=0 sh "$PROBE" >"$SB/out2" 2>&1
 if [ -f "$SB/скачано" ]; then
     bad "бинарник скачан без суммы — это установка непроверенного исполняемого файла"
 else
