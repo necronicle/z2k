@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 50,
-  "current": "r-81.1",
+  "seq": 51,
+  "current": "r-81.2",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -196,9 +196,9 @@
   "files/ndm/95-z2k-scheduler-watchdog.sh": "d73955d742263bda01ecca1be4b04deb7bba61164a5da2609f3e9977f443ad63",
   "files/z2k-auto-update.sh": "f8b10d95667dc4eb2a64a5a126b42cf4572170cfe23655bfe5effe831a77e9b7",
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
-  "files/z2k-config-validator.sh": "9238d78b12b9fbeb4ca6c233d95317e7d83d398a689a9cfe36f459135f236e57",
+  "files/z2k-config-validator.sh": "3c4ca25d412902825a407e9af0725bca049e0cd278306c4514c12b98ca9276d4",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "1b1ee130349a6fe616e814881c79943642839a2bcc8722ae29d5139da3b80f6b",
+  "files/z2k-diag.sh": "627067460956fe30abe1e0cc889c372383d2b200eaccd6f47ddb0bb1fd4ac6b2",
   "files/z2k-dns-check.sh": "e568560eeb992b0e118b7422bae9ed3e240bbe91d2fc00395102e31a9db60031",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "3167cff1eb6dd894f633cbf9d38dc102ce7b7c7e48ee68334fb57ca19c10f8ff",
@@ -207,7 +207,7 @@
   "files/z2k-ppe-deoffload.sh": "9a98f3f22c6572d3692a7b4cf7fb1432f2c42fc9d67d06e3841cffb9c0f4b4e4",
   "files/z2k-scheduler.sh": "0763c4c2a60c3a737c6922db845cf479c1af727b771de84a987a42d478c46060",
   "files/z2k-stats-upload.sh": "45f33be7405bfa1e6445b6c7969cfa2555778fae05843e4dd60f06bc816e1ce5",
-  "files/z2k-tcp16-probe.sh": "fb7d2870ee827406c1a2681aebb22de98200ea73d3bf06c7ac72eb3c33be4036",
+  "files/z2k-tcp16-probe.sh": "930c92b7df265f89968324d328c90634a8b3d5766fd7fa9b5ab869ce7d8bb185",
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
   "files/z2k-tg-watchdog.sh": "f433391db09dad96471cf96dc6c814fbff846c285ba3cb424806f08ab040ce8f",
   "files/z2k-update-lists.sh": "8ee890ea100dd25b9a248859733ff68caa54fbbd009f9cc2ff395ed7b30681b9",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "e6d0fcea9ee756bd393f8d2c986392793dc12b555efbbf248a370022d7989789",
+  "webpanel/www/index.html": "46c7b5dec3d2908368a0e79403516620a5984eac2d7ed0e69d3ba40a603379dc",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -485,6 +485,7 @@
 {"v": "r-80.2", "type": "reinstall", "ts": "2026-08-26T23:46:35Z", "ref": "r-80.2", "desc": "Обновления перестали срываться из-за одного неисправного зеркала: у части людей они вставали намертво и откатывались. Стратегии обхода сверены с первоисточниками — у ютуба, дискорда и заблокированных сайтов исправлены поддельные пакеты, которые при переносе подставились не те. На телевизорах и приставках наконец начали переключаться стратегии: раньше счётчик сбоев обнулялся раньше, чем успевал сработать. Кроме того, обновление больше не срывается, если роутер проверил его в первые минуты после выхода новой версии.", "changed_files": ["webpanel/www/index.html", "files/z2k-config-validator.sh", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "r-80.3", "type": "reinstall", "ts": "2026-08-27T16:47:18Z", "ref": "r-80.3", "desc": "WARP больше не меняет настройки обхода ради себя и не запускается, когда выключен; если туннель не поднимается, причина теперь называется прямо. Переустановка перестала считать игровые списки повреждёнными и качать их заново. В диагностике снова видно, если обновление откатилось, а в списке ошибок остаются только свежие.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/init.d/S51z2k-warp", "files/init.d/S99z2k-scheduler", "files/z2k-blocked-monitor.sh", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-insta-ip-refresh.sh", "files/z2k-nfqueue-selfheal.sh", "files/z2k-scheduler.sh", "files/z2k-tg-watchdog.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/install.sh", "lib/webpanel.sh", "webpanel/cgi/actions.sh", "webpanel/install.sh", "webpanel/uninstall.sh", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-80.4", "type": "patch", "ts": "2026-08-28T07:55:22Z", "ref": "p-80.4", "desc": "Переключатель автодетекции в диагностике домена больше не сбрасывается после обновления, а меню перестало показывать её включённой, когда она выключена. Функция остаётся опытной и по умолчанию выключена.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "lib/menu.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "r-81.1", "type": "reinstall", "ts": "2026-08-30T18:11:50Z", "ref": "r-81.1", "desc": "Сайты, которые раньше открывались наполовину и замирали, теперь открываются целиком. Роутер сам проверяет, у каких хостингов провайдер обрывает загрузку, и подбирает обход отдельно под каждого — проверка повторяется каждую ночь.", "changed_files": ["webpanel/www/index.html", "files/lists/sni_wl_candidates.txt", "files/lists/tcp16_nets.txt", "files/lists/tcp16_targets.txt", "files/lua/z2k-alert.lua", "files/lua/z2k-state-persist.lua", "files/z2k-diag.sh", "files/z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "files/z2k-tcp16-probe.sh", "files/z2k-update-lists.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/strategy-pick.js", "webpanel/www/js/router.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false}
+{"v": "r-81.1", "type": "reinstall", "ts": "2026-08-30T18:11:50Z", "ref": "r-81.1", "desc": "Сайты, которые раньше открывались наполовину и замирали, теперь открываются целиком. Роутер сам проверяет, у каких хостингов провайдер обрывает загрузку, и подбирает обход отдельно под каждого — проверка повторяется каждую ночь.", "changed_files": ["webpanel/www/index.html", "files/lists/sni_wl_candidates.txt", "files/lists/tcp16_nets.txt", "files/lists/tcp16_targets.txt", "files/lua/z2k-alert.lua", "files/lua/z2k-state-persist.lua", "files/z2k-diag.sh", "files/z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "files/z2k-tcp16-probe.sh", "files/z2k-update-lists.sh", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/strategy-pick.js", "webpanel/www/js/router.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
+{"v": "r-81.2", "type": "reinstall", "ts": "2026-08-31T06:24:53Z", "ref": "r-81.2", "desc": "Исправлено обновление: у части роутеров оно откатывалось, а у остальных ставилось, но новая защита оставалась выключенной. Теперь роутер сам доводит проверку до конца и включает подобранный обход.", "changed_files": ["webpanel/www/index.html", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-tcp16-probe.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
