@@ -64,7 +64,12 @@ function renderStatusGrid(s) {
     { label: "Туннель ТГ", value: s.tunnel?.running ? "работает" : "остановлен", kind: s.tunnel?.running ? "good" : "warn" },
     { label: "WARP", value: bool(s.toggles.game_warp), kind: s.toggles.game_warp === "1" ? "good" : "" },
     { label: "Автообновление", value: bool(s.toggles.auto_update), kind: s.toggles.auto_update === "1" ? "good" : "warn" },
-    { label: "custom.d", value: bool(s.toggles.customd), kind: "" },
+    // kind вычисляется, а не зашит: плитка с зашитым "" не получала ни иконки,
+    // ни цвета и выглядела сломанной рядом с соседями при том же значении
+    // «Вкл» (скриншот с роутера 01.09.2026). Семантика как у WARP, а не как у
+    // автообновления: выключенный custom.d — законный выбор, а не тревога,
+    // поэтому «выкл» остаётся нейтральным, без warn.
+    { label: "custom.d", value: bool(s.toggles.customd), kind: s.toggles.customd === "1" ? "good" : "" },
   ];
   grid.innerHTML = cells.map(c => {
     const icon = statusIcon(c.kind);
