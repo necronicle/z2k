@@ -453,6 +453,37 @@ _stock_lighttpd_port() {
     return 1
 }
 
+# _stock_init_verdict <порт стокового> <наш порт> <держатель нашего порта>
+#   -> disable | keep
+#
+# ПОРТ 80 НА KEENETIC ПРИНАДЛЕЖИТ САМОМУ РОУТЕРУ, И ЭТО НЕ ОБСУЖДАЕТСЯ.
+#
+# Раньше правило было одно: «объявленный порт не совпал с нашим и никто наш
+# порт не держит — оставляем». Стоковый init со стоковым конфигом под это
+# подходил идеально: в /opt/etc/lighttpd/lighttpd.conf нет ни server.port, ни
+# server.bind, значит 0.0.0.0:80, а панель у нас на 8088 — «не конфликтует».
+# Мешает он не панели, а nginx самого роутера, тому, что отдаёт вебморду.
+#
+# Поле 01.09.2026, журнал роутера пользователя:
+#   bind() to 192.168.1.1:80 failed (98: Address in use)
+#   bind() to 127.0.0.1:80  failed (98: Address in use)
+#   ... still could not bind()
+#   Service: "Nginx": unexpectedly stopped.
+# Падение на ВСЕХ адресах разом, включая петлевой, — подпись держателя маски
+# 0.0.0.0:80. Интернет при этом работает: маршрутизация живёт в ядре, а морду
+# отдаёт упавшая служба. Кто выиграет гонку при загрузке — наш пакетный
+# lighttpd или nginx прошивки — зависит от порядка старта, поэтому «первый раз
+# такое вижу» после очередной перезагрузки.
+#
+# Мы этот init не приносили бы вовсе, если бы не ставили пакет lighttpd ради
+# панели. Раз принесли — обязаны и обезвредить. Переименование обратимо, и
+# штатное удаление z2k возвращает файл на место.
+_stock_init_verdict() {
+    [ "$1" = "80" ] && { printf 'disable'; return 0; }
+    if [ "$1" != "$2" ] && [ -z "$3" ]; then printf 'keep'; return 0; fi
+    printf 'disable'
+}
+
 # Порт занят кем-то, кто вообще не lighttpd — трогать чужой сервис молча нельзя,
 # но и делать вид, что всё хорошо, тоже: панель на этом порту не поднимется.
 case "$_holder_cmd" in
@@ -468,12 +499,12 @@ for _init in /opt/etc/init.d/S*lighttpd; do
     _sport=$(_stock_lighttpd_port) || _sport=""
     # Без server.port в конфиге lighttpd слушает 80.
     [ -n "$_sport" ] || _sport=80
-    # Конфликт — это либо совпадение объявленного порта, либо ФАКТ: чужой
-    # lighttpd уже держит наш порт прямо сейчас.
-    if [ "$_sport" != "$PORT" ] && [ -z "$_holder_cmd" ]; then
+    if [ "$(_stock_init_verdict "$_sport" "$PORT" "$_holder_cmd")" = "keep" ]; then
         echo "  keeping stock lighttpd init $_init (its port $_sport does not conflict with $PORT)"
         continue
     fi
+    [ "$_sport" = "80" ] && \
+        echo "  disabling stock lighttpd init $_init: порт 80 отнял бы вебморду роутера"
     if [ -n "$_holder_cmd" ] && [ "$_sport" != "$PORT" ]; then
         echo "  штатный lighttpd объявляет порт $_sport, но реально держит $PORT (pid $_holder) — отключаю"
     fi
