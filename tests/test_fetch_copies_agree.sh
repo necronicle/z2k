@@ -181,7 +181,7 @@ mkdir -p "$_gsb/bin"; cp "$TMP/bin/curl_geo" "$_gsb/bin/curl"
 geo_budget() {
     rm -rf "$_gsb/tmp"; mkdir -p "$_gsb/tmp"; : > "$_gsb/curl.log"; rm -f "$_gsb/curl.log.v"
     env -i PATH="$_gsb/bin:$Z2K_TEST_PATH" HOME="$TMP" G="$_gsb" L0="$1" \
-        Z2K_STUB_LOG="$_gsb/curl.log" Z2K_STUB_MODE=vps_fail \
+        Z2K_STUB_LOG="$_gsb/curl.log" Z2K_STUB_MODE="${GEO_MODE:-direct_fail}" \
         Z2K_FETCH_VPS_CONNECT_TIMEOUT=7 \
         "$Z2K_TEST_SH" -c '
             . "$G/fns.sh"
@@ -196,11 +196,15 @@ geo_budget() {
         "$(grep -v -- '--resolve' "$_gsb/curl.log" 2>/dev/null | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')"
 }
 
+# Прямой путь ходит ПЕРВЫМ, поэтому наблюдать бюджет VPS-хопа можно только
+# когда прямой упал: режим direct_fail роняет его по фазе соединения.
+# Прямой при этом идёт с коротким бюджетом пробы (3 с) — за ним есть запасной
+# путь; VPS берёт свои 7 из ручки.
 _gb=$(geo_budget 1)
 case "$_gb" in
-    "vps=7 direct=15")
-        ok "geosite: VPS-хоп берёт бюджет из ручки (7), прямой сохранил свои 15 с" ;;
-    *)  no "geosite: бюджет VPS-хопа идёт из ручки" "vps=7 direct=15" \
+    "vps=7 direct=3")
+        ok "geosite: прямой пробует первым (3 с), VPS-хоп берёт бюджет из ручки (7)" ;;
+    *)  no "geosite: порядок и бюджеты хопов" "vps=7 direct=3" \
            "$_gb — четвёртая точка выхода снова живёт своей жизнью" ;;
 esac
 

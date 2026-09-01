@@ -443,6 +443,9 @@ case "$*" in
     *--resolve*)
         n=$(cat "$CALLS.v" 2>/dev/null || echo 0); n=$((n+1)); printf '%s' "$n" > "$CALLS.v"
         if [ "$n" = "1" ]; then printf '000 0.000000'; exit 28; fi ;;
+    *)  # Прямой хоп идёт ПЕРВЫМ, и пока он отвечает, до VPS дело не доходит.
+        # Чтобы проверить поведение VPS-хопа, прямой роняем по требованию.
+        [ -n "$GEO_DIRECT_FAIL" ] && { printf '000 0.000000'; exit 28; } ;;
 esac
 prev=""; out=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
@@ -451,10 +454,10 @@ printf '200 0.075'
 exit 0
 STUBD
 chmod +x "$_g4/bin/curl"
-_geo4() {  # _geo4 <включён ли Layer 0>
+_geo4() {  # _geo4 <включён ли Layer 0> [роняем ли прямой хоп]
     : > "$_g4/calls"; rm -f "$_g4/calls.v"; rm -rf "$_g4/tmp"; mkdir -p "$_g4/tmp"
     env -i PATH="$_g4/bin:$Z2K_TEST_PATH" HOME="$TMP" G="$_g4" FNS="$TMP/geo_fns.sh" \
-        CALLS="$_g4/calls" L0="$1" "$Z2K_TEST_SH" -c '
+        CALLS="$_g4/calls" L0="$1" GEO_DIRECT_FAIL="${2:-}" "$Z2K_TEST_SH" -c '
             . "$FNS"
             ETAG_DIR="$G/etag"; TMP_DIR="$G/tmp"; RELEASE_BASE="https://example.invalid/dl"
             log() { :; }
@@ -466,10 +469,13 @@ _geo4() {  # _geo4 <включён ли Layer 0>
             printf "vps=%s direct=%s" "$v" "$d"
         ' 2>/dev/null
 }
-_r4=$(_geo4 1)
+# Прямой роняем намеренно: он ходит первым, и пока отвечает — VPS-хоп не
+# наблюдаем вовсе. Ожидаем: одна упавшая прямая попытка, затем VPS дважды
+# (потерянное рукопожатие повторяется), и в зеркала не уходим.
+_r4=$(_geo4 1 1)
 case "$_r4" in
-    "vps=2 direct=0") ok "geosite повторяет VPS-хоп на потерянном рукопожатии и не уходит в прямой" ;;
-    *) no "geosite повторяет VPS-хоп" "vps=2 direct=0" "$_r4" ;;
+    "vps=2 direct=1") ok "geosite повторяет VPS-хоп на потерянном рукопожатии и не уходит в прямой" ;;
+    *) no "geosite повторяет VPS-хоп" "vps=2 direct=1" "$_r4" ;;
 esac
 _b4=$(grep -- "--resolve" "$_g4/calls" 2>/dev/null | sed -n 's/.*--connect-timeout \([^ ]*\).*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')
 # 3 -> 8 секунд, 26.08.2026, одновременно во всех четырёх копиях транспорта.

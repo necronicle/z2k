@@ -275,7 +275,7 @@ fetch_to_tmp() {
     # Повтор — только для отказа ФАЗЫ СОЕДИНЕНИЯ (см. z2k_connfail), как и в
     # трёх остальных копиях: потеря пакета рукопожатия независима, а вот упор
     # в --max-time на зависшей передаче или ответ 5xx повторять нельзя.
-    local _vps_try=0 _vps_tries _vps_raw _ct _vps_rc _vps_ct
+    local _vps_try=0 _vps_tries _vps_raw _ct _vps_rc _vps_ct _gs_direct_took=0 _gs_direct_tried=0
     # --- z2k layer0 vps knobs (canonical; keep byte-identical in all 4 copies) ---
     # Санитайз ручек — в z2k_uint: мусор → дефолт, выход за границы → зажим.
     # Потолок в 5 попыток держит Layer 0 от превращения в многочасовой
@@ -293,7 +293,57 @@ fetch_to_tmp() {
         _ct=15
     fi
     http="000"
-    while :; do
+
+    # ПРЯМОЙ GITHUB — ПЕРВЫМ, ПОКА ОН ОТВЕЧАЕТ.
+    #
+    # Это четвёртая копия слоя, и до неё порядок «сначала прямой» не доехал
+    # вместе с остальными тремя. Цена видна в поле: журнал роутера, 01.09.2026 —
+    # `ru-blocked.txt: VPS-хоп не прошёл (HTTP 429), пробую напрямую`, и так на
+    # КАЖДОМ списке КАЖДУЮ ночь. 429 отдаёт не наш узел, а GitHub: лимиты там
+    # считаются по адресу источника, а через узел ходит весь флот с одного
+    # адреса. Прямой путь идёт с адреса самого человека и ни с кем не делится.
+    #
+    # Вердикт выносится ОДИН РАЗ ЗА ПРОГОН (Z2K_FETCH_DIRECT_OUT), иначе человек
+    # с заблокированным GitHub платил бы таймаут на каждом списке. Бюджет
+    # короткий — это проба «жив или нет», а не загрузка; но если VPS-хопа нет
+    # вовсе, торопиться нельзя: тогда этот запрос И ЕСТЬ единственный.
+    if [ "${Z2K_FETCH_DIRECT_FIRST:-1}" = "1" ] && [ "${Z2K_FETCH_DIRECT_OUT:-0}" != "1" ]; then
+        local _d_ct _d_raw _d_rc
+        _gs_direct_tried=1
+        if [ -n "$_vps_resolve" ]; then
+            _d_ct=$(z2k_uint "${Z2K_FETCH_DIRECT_CONNECT_TIMEOUT:-3}" 3 1 30)
+        else
+            _d_ct=15
+        fi
+        _d_raw=$(curl -sSL --connect-timeout "$_d_ct" --max-time 600 \
+                    --speed-limit 1024 --speed-time 30 \
+                    --etag-compare "$etag_file" \
+                    --etag-save "${etag_file}.new" \
+                    -o "$tmp" \
+                    -D "$hdr" \
+                    -w '%{http_code} %{time_connect}' \
+                    "$url" 2>/dev/null) && _d_rc=0 || _d_rc=$?
+        [ -n "$_d_raw" ] || _d_raw="000 0"
+        if [ "$_d_rc" -eq 0 ]; then http="${_d_raw%% *}"; else http="000"; rm -f "$tmp" 2>/dev/null; fi
+        if [ "$http" = "304" ] || { [ "$http" = "200" ] && [ -s "$tmp" ]; }; then
+            Z2K_FETCH_DIRECT_CONNFAILS=0; export Z2K_FETCH_DIRECT_CONNFAILS
+            _gs_direct_took=1
+        else
+            # Считаем ТОЛЬКО отказ фазы соединения: 429 или 5xx означают, что
+            # путь жив, просто ответ не тот, и выключать его из-за этого нельзя.
+            if z2k_connfail "$_d_rc" "${_d_raw%% *}"; then
+                Z2K_FETCH_DIRECT_CONNFAILS=$(( ${Z2K_FETCH_DIRECT_CONNFAILS:-0} + 1 ))
+                export Z2K_FETCH_DIRECT_CONNFAILS
+                if [ "$Z2K_FETCH_DIRECT_CONNFAILS" -ge "$(z2k_uint "${Z2K_FETCH_DIRECT_GIVEUP:-2}" 2 1 20)" ]; then
+                    Z2K_FETCH_DIRECT_OUT=1; export Z2K_FETCH_DIRECT_OUT
+                    log "  прямой GitHub не отвечает $Z2K_FETCH_DIRECT_CONNFAILS раз подряд — дальше через VPS"
+                fi
+            fi
+            http="000"
+        fi
+    fi
+
+    while [ "${_gs_direct_took:-0}" != "1" ]; do
         _vps_try=$((_vps_try + 1))
         # shellcheck disable=SC2086
         _vps_raw=$(curl -sSL --connect-timeout "$_ct" --max-time 600 $_vps_resolve \
@@ -352,7 +402,9 @@ fetch_to_tmp() {
     # насмерть — geosite уходил в shipped-fallback ДАЖЕ там, где github был доступен
     # напрямую. То есть отказ VPS был жёстче, чем его отсутствие: ровно то, что этот
     # слой обещал не делать.
-    if [ -n "$_vps_resolve" ] && ! { [ "$http" = "304" ] || { [ "$http" = "200" ] && [ -s "$tmp" ]; }; }; then
+    if [ -n "$_vps_resolve" ] && [ "$_gs_direct_took" != "1" ] \
+       && [ "$_gs_direct_tried" != "1" ] \
+       && ! { [ "$http" = "304" ] || { [ "$http" = "200" ] && [ -s "$tmp" ]; }; }; then
         log "  $asset: VPS-хоп не прошёл (HTTP $http), пробую напрямую"
         http=$(curl -sSL --connect-timeout 15 --max-time 600 \
                     --etag-compare "$etag_file" \

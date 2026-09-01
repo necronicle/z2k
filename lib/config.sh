@@ -605,6 +605,7 @@ keenetic.com
 keenetic.io
 keenetic.cloud
 keenetic.link
+keenetic.net
 
 # === Netcraze (KeenDNS под российским брендом, та же инфраструктура) ===
 netcraze.pro
@@ -642,6 +643,21 @@ keenetic.cloud
 keenetic.link
 KEENETIC
             print_info "Добавлены домены Keenetic в whitelist"
+        fi
+
+        # keenetic.net — отдельным сторожем, а не внутри блока выше.
+        #
+        # Пять доменов Keenetic лежали в белом списке с самого начала, а самый
+        # ходовой — НЕТ: `my.keenetic.net` это адрес, по которому человек
+        # заходит в морду своего роутера. Сторож блока выше проверяет
+        # `keenetic.pro`, поэтому у всех, кто уже установлен, дозапись не
+        # срабатывала бы вовсе: домены как бы есть.
+        #
+        # Запись без точки впереди покрывает и поддомены — так работает
+        # hostlist движка, — то есть `my.keenetic.net` закрывается одной строкой.
+        if ! grep -q "^keenetic\.net$" "$whitelist" 2>/dev/null; then
+            printf 'keenetic.net\n' >> "$whitelist"
+            print_info "Добавлен keenetic.net в whitelist (адрес морды роутера)"
         fi
 
         # Дозаписать netcraze (новый бренд KeenDNS в РФ, та же инфраструктура)
