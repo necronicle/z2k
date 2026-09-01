@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 58,
-  "current": "p-81.10",
+  "seq": 59,
+  "current": "p-81.11",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -136,7 +136,7 @@
   },
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "37a44cd3e11a186085e823b601e46f839005446eabe0847f3bf7b7eea5a23988",
+  "files/S99zapret2.new": "d3a8e8a42f5d8900589d67b727b472799fe712160bfcb8b2fbf23e353f310fee",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/active_discord_udp.bin": "2fe18b3bd20807d36704d0b072092ee49ae84edca907a4420ab9a0f0f28fddcf",
@@ -201,7 +201,7 @@
   "files/z2k-diag.sh": "49f438df202a482106f59e3f717d3f1fadf3e94fe7b3b75a5eed20799f773c01",
   "files/z2k-dns-check.sh": "e568560eeb992b0e118b7422bae9ed3e240bbe91d2fc00395102e31a9db60031",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
-  "files/z2k-geosite.sh": "3167cff1eb6dd894f633cbf9d38dc102ce7b7c7e48ee68334fb57ca19c10f8ff",
+  "files/z2k-geosite.sh": "690a1f98afad41a4fb6452c789a08c3928939bf8a96c33547d07dad0790fde00",
   "files/z2k-insta-ip-refresh.sh": "67d073f508bd3bc0b3d83ac6cb91635f2817fdbb85af997ef8714c909078da69",
   "files/z2k-nfqueue-selfheal.sh": "4095adce7626c7ceffa6779be428920286b1dd9d98427e1e49b36d2895d3fd8a",
   "files/z2k-ppe-deoffload.sh": "9a98f3f22c6572d3692a7b4cf7fb1432f2c42fc9d67d06e3841cffb9c0f4b4e4",
@@ -213,7 +213,7 @@
   "files/z2k-update-lists.sh": "84bb046ed26e3e46abaf116e8139bea4a49dfde102d7cfa974ccef81fd99d84c",
   "files/z2k-warp.sh": "cd20c7b4a5cd0023a9f79917288be498a65c3543a9959d578e50d6ecc2580e6c",
   "lib/auto_update.sh": "fa5b99f32429d37be574e5ebe18a3333a7d4371018762d3c4438ddb5129a3bb6",
-  "lib/config.sh": "fc9b4ce6bd6f758b74f9b4184ca4d2d410b7220f3f2718375aee6460fc039f70",
+  "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
   "lib/config_official.sh": "f803fa99950f763d47a8508fb197f3fb0108686475368345b1ba84e7c72ca094",
   "lib/install.sh": "87af237a3a93977b89da01ba25e7098ed30e38792654a31250a718276b6002be",
   "lib/menu.sh": "ebf5b4c6c7ff3287986cfad3a4f79d4aa0e85045e387797d00a9bf54f9926061",
@@ -238,7 +238,7 @@
   "webpanel/cgi/api.sh": "d816192d4df824d8766b74a79d8cf6f738f1477ab984837874914fecd3c5d0ca",
   "webpanel/cgi/auth.sh": "aa2d34f9f41444ba41a888a0da5214ff688b037457c54256546938b27391b333",
   "webpanel/init.d/S96z2k-webpanel": "8dd6c8192cd680c3fbabc4827be392525a585344231cd659d3f8b10f0292a1f3",
-  "webpanel/install.sh": "e6f8e0a1188ac0747a6ffe06f8429cec46363b5b2534f2d63309c1fb3bdf67fd",
+  "webpanel/install.sh": "4261945565de76f5ce0cbcc2c715461c16ab9873499c831a0989e586d83da32b",
   "webpanel/lighttpd.conf": "e17a7953047aef3d215cf071297b7378ccd2d0a8a7a88f76a0bcad8abfd0455f",
   "webpanel/uninstall.sh": "0288f4c4c8ae0fcd381b603abde0744ffb85936e742de3b0bb4954a6ca6198ef",
   "webpanel/www/app.js": "4acce04edc120e996e33818adf68efe0225a553676f79cb2ff59f997d5171e3a",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "c616d616fd18d87ecc3ef0f19af926de523561b2abc4b4346da15b5c27913381",
+  "webpanel/www/index.html": "8c779d73218609e80d8ebb63eacb1e647a47ec96002a5cd4d7a954dffb930e9e",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -502,6 +502,7 @@
 {"v": "r-81.6", "type": "reinstall", "ts": "2026-08-31T10:39:15Z", "ref": "r-81.6", "desc": "Роутер сам обновляет служебную программу проверки, если она устарела: раньше новая защита не включалась, потому что программа оставалась старой.", "changed_files": ["webpanel/www/index.html", "files/z2k-tcp16-probe.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-81.8", "type": "patch", "ts": "2026-08-31T14:45:01Z", "ref": "p-81.8", "desc": "Обновления больше не застревают: файл, который не скачался с первого раза, роутер пробует ещё, а если три ночи подряд ничего не выходит — обновляется целиком. Защита от обрыва загрузки на 16 килобайтах включается сразу после обновления, а не после перезагрузки роутера. Скачивание релиза через наш сервер получило столько же времени на подключение, сколько и остальные загрузки.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-diag.sh", "files/z2k-scheduler.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-81.9", "type": "patch", "ts": "2026-08-31T18:43:52Z", "ref": "p-81.9", "desc": "Защита от обрыва загрузки на 16 килобайтах наконец включается сама: роутер догружает служебную программу проверки, без которой она не запускалась — у большинства её просто не было. Обновления больше не застревают: файл, не скачавшийся с первого раза, роутер пробует ещё, а после трёх неудачных ночей подряд обновляется целиком. Строку из «Подбора по домену» теперь можно вставлять в «Свои стратегии» как есть — панель дописывает недостающее сама.", "changed_files": ["webpanel/www/index.html", "files/z2k-tcp16-probe.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
-{"v": "p-81.10", "type": "patch", "ts": "2026-08-31T23:10:28Z", "ref": "p-81.10", "desc": "Меняем кукичи на пакичи.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/tcp16_targets.txt", "files/z2k-scheduler.sh", "files/z2k-tcp16-probe.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "z2k.sh", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false}
+{"v": "p-81.10", "type": "patch", "ts": "2026-08-31T23:10:28Z", "ref": "p-81.10", "desc": "Меняем кукичи на пакичи.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/tcp16_targets.txt", "files/z2k-scheduler.sh", "files/z2k-tcp16-probe.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "z2k.sh", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false},
+{"v": "p-81.11", "type": "patch", "ts": "2026-09-01T09:09:07Z", "ref": "p-81.11", "desc": "Починили проблему с вебмордой Keenetic.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-geosite.sh", "lib/config.sh", "webpanel/install.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
