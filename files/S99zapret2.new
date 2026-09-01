@@ -2524,8 +2524,66 @@ _z2k_scheduler_sync()
     return 0
 }
 
+# ОБЕЗВРЕДИТЬ СТОКОВЫЙ lighttpd, ЕСЛИ ОН МЕТИТ НА 80-й ПОРТ.
+#
+# Пакет lighttpd мы ставим ради своей панели, а он приносит собственный
+# автостартующий init со стоковым конфигом: там нет ни server.port, ни
+# server.bind, то есть 0.0.0.0:80. На Keenetic 80-й принадлежит самому роутеру,
+# и при загрузке начинается гонка: S80lighttpd стартует раньше нашего S96, и
+# если он успевает первым, nginx прошивки не может занять НИ ОДИН адрес.
+#
+# Поле 01.09.2026: `0.0.0.0:80 LISTEN 1353/lighttpd` при порте нашей панели
+# 8088, а в журнале роутера — bind() failed на всех адресах подряд, включая
+# петлевой, и «Service: Nginx: unexpectedly stopped». Интернет при этом жив:
+# маршрутизация в ядре, а морду отдаёт упавшая служба.
+#
+# ПОЧЕМУ ЗДЕСЬ, А НЕ В УСТАНОВЩИКЕ ПАНЕЛИ. В установщике это тоже исправлено,
+# но его при обычном обновлении никто не запускает — шаги обновления только
+# обновляют бинарники и перезапускают сервис. А этот файл обновление исполняет
+# СВЕЖИМ С ДИСКА на шаге restart-service, поэтому правка срабатывает на том же
+# обновлении, а не через одно, и повторяется при каждом старте.
+#
+# Переименование обратимо и совпадает по имени с тем, что делает установщик:
+# штатное удаление z2k возвращает файл на место.
+_z2k_disarm_stock_lighttpd()
+{
+    _dsl_init=""
+    for _dsl_c in /opt/etc/init.d/S*lighttpd; do
+        [ -e "$_dsl_c" ] || continue
+        case "$_dsl_c" in *z2k*) continue ;; esac
+        _dsl_init="$_dsl_c"
+        break
+    done
+    [ -n "$_dsl_init" ] || return 0
+
+    # Порт берём из конфига; НЕТ записи — значит умолчание lighttpd, то есть 80.
+    _dsl_port=""
+    for _dsl_f in /opt/etc/lighttpd/lighttpd.conf /opt/etc/lighttpd/conf.d/*.conf; do
+        [ -f "$_dsl_f" ] || continue
+        _dsl_port=$(sed -n 's/^[[:space:]]*server\.port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$_dsl_f" | head -1)
+        [ -n "$_dsl_port" ] && break
+    done
+    [ -n "$_dsl_port" ] || _dsl_port=80
+    [ "$_dsl_port" = "80" ] || return 0
+
+    _dsl_dst="${_dsl_init%/*}/.${_dsl_init##*/}.disabled-by-z2k"
+    if [ -e "$_dsl_dst" ]; then
+        # Уже обезврежен раньше, а файл вернулся — значит пакет переустановили.
+        _dsl_dst="${_dsl_dst}.$$"
+    fi
+    "$_dsl_init" stop >/dev/null 2>&1
+    if mv "$_dsl_init" "$_dsl_dst" 2>/dev/null; then
+        echo "z2k: отключён штатный $( basename "$_dsl_init" ) — он занимал 80-й порт вебморды роутера"
+    else
+        echo "z2k: не смог отключить $_dsl_init — он может отнять 80-й порт у вебморды роутера" >&2
+    fi
+}
+
 start()
 {
+    # ДО проверки ENABLED: мина наша независимо от того, включён ли обход.
+    _z2k_disarm_stock_lighttpd
+
     if [ "$ENABLED" != "1" ]; then
         echo "zapret2 is disabled in config"
         return 1
