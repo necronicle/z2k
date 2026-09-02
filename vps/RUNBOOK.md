@@ -125,3 +125,30 @@ cd vps-relay && ulimit -n 20000 && go test -tags load -run TestLoad_3000Sessions
 замер дал 79 КБ и p95 кадра 78 мкс. Если число выросло — сначала
 `-memprofile` и `go tool pprof -top -sample_index=inuse_space`: 02.09 весь
 рост был в буферах чтения, прибитых к стримам.
+
+## Деплой релея без разрыва (с плана 3 v2)
+
+Релей — шаблон `z2k-relay@.service`, экземпляры `a` и `b`; одновременно
+работает один. Оба слушают 8445 (TLS за nginx, PROXY-заголовок) и plain-порт
+из `/etc/z2k/relay-<i>.env` через reuseport.
+
+```
+cd vps-relay && PATH=<go1.25.12>:$PATH sh deploy/build.sh
+scp -O vps-relay/z2k-vps-relay root@213.176.74.63:/usr/local/bin/z2k-vps-relay.new
+ssh root@213.176.74.63 'cp -p /usr/local/bin/z2k-vps-relay /usr/local/bin/z2k-vps-relay.prev && mv -f /usr/local/bin/z2k-vps-relay.new /usr/local/bin/z2k-vps-relay'
+sh vps/bin/deploy.sh --apply              # юнит/скрипты; nginx перезагружается только если менялся
+ssh root@213.176.74.63 'sh /opt/z2k-vps/bin/relay-switch.sh'   # поднимает спящий, проверяет, гасит работающий (drain до 120 с)
+```
+Откат: вернуть `.prev` тем же `mv` и снова `relay-switch.sh`.
+
+- Первая миграция 02.09.2026 со старого одиночного юнита шла на `b` с
+  `Z2K_PLAIN_PORT=8081`: старый процесс держал 8080 без reuseport. Экземпляр
+  `a` уже с 8080; следующий `relay-switch.sh` вернёт схему в норму.
+- `http: TLS handshake error … EOF` в журнале — клиенты и сканеры, закрывшие
+  соединение до конца рукопожатия; это не отказ.
+- Сертификат: кеш autocert `/var/lib/z2k-relay/acme/213.176.74.63.nip.io`,
+  импортирован из caddy 02.09.2026 (годен до 08.11.2026). Продление — сам
+  autocert через TLS-ALPN за 30 дней до конца; проверить в начале октября:
+  `journalctl -u 'z2k-relay@*' | grep -i acme`.
+- caddy выключается отдельным шагом после суток наблюдения (план 3, шаг 8);
+  вместе с ним раскатывается `config/nginx-http-z2k.conf` (:8088 и :80).
