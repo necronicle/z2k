@@ -23,7 +23,6 @@ SSH="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=12 -i $KEY root@$HOST"
 # выставленный нами syncookies=1 не действовал, и это было не видно ничем.
 PAIRS="
 config/nginx.conf:/etc/nginx/nginx.conf
-config/Caddyfile:/etc/caddy/Caddyfile
 config/sysctl.d/99-z2k-relay.conf:/etc/sysctl.d/99-z2k-relay.conf
 config/sysctl.d/99-z2k-tcp.conf:/etc/sysctl.d/99-z2k-tcp.conf
 config/sysctl.conf:/etc/sysctl.conf

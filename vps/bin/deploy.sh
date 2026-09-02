@@ -34,11 +34,10 @@ MASK='s/(--secret|--secret-prev|--resolve-secret|--admin-token)=[^ "]*/\1=<СЕ�
 # Они существуют в репозитории ради сверки структуры, а не ради установки.
 # 10-require-per-install.conf ссылается на секреты через env:, значений в нём
 # нет — он раскатывается обычным порядком.
-SECRET_BEARING="config/systemd/z2k-relay.service"
+SECRET_BEARING=""
 
 PAIRS="
 config/nginx.conf:/etc/nginx/nginx.conf:nginx
-config/Caddyfile:/etc/caddy/Caddyfile:caddy
 config/sysctl.d/99-z2k-relay.conf:/etc/sysctl.d/99-z2k-relay.conf:sysctl
 config/sysctl.d/99-z2k-tcp.conf:/etc/sysctl.d/99-z2k-tcp.conf:sysctl
 config/systemd/z2k-net-tuning.service:/etc/systemd/system/z2k-net-tuning.service:systemd
@@ -61,7 +60,7 @@ config/nginx-http-z2k.conf:/etc/nginx/z2k-http/z2k.conf:nginx
 
 [ "$APPLY" = 1 ] || printf 'РЕЖИМ ПРОСМОТРА. Ничего не меняется. Для раскатки: --apply\n\n'
 
-changed_nginx=0; changed_caddy=0; changed_sysctl=0; changed_systemd=0; changed_journald=0; changed_timer=0; changed=0
+changed_nginx=0; changed_sysctl=0; changed_systemd=0; changed_journald=0; changed_timer=0; changed=0
 for p in $PAIRS; do
     [ -z "$p" ] && continue
     rel="${p%%:*}"; rest="${p#*:}"; remote_f="${rest%%:*}"; kind="${rest##*:}"
@@ -95,7 +94,6 @@ for p in $PAIRS; do
     esac
     case "$kind" in
         nginx)  changed_nginx=1 ;;
-        caddy)  changed_caddy=1 ;;
         sysctl) changed_sysctl=1 ;;
         systemd) changed_systemd=1 ;;
         journald) changed_journald=1 ;;
@@ -120,16 +118,6 @@ if [ "$changed_nginx" = 1 ]; then
         printf '  NGINX НЕ ПРОШЁЛ ПРОВЕРКУ — возвращаю прежний файл\n'
         $SSH "cp /etc/nginx/nginx.conf.z2kbak /etc/nginx/nginx.conf"
         $SSH "nginx -t" 2>&1 | tail -3
-        exit 1
-    fi
-fi
-
-if [ "$changed_caddy" = 1 ]; then
-    if $SSH "caddy validate --config /etc/caddy/Caddyfile" >/dev/null 2>&1; then
-        $SSH "systemctl reload caddy" && printf '  caddy перезагружен\n'
-    else
-        printf '  CADDY НЕ ПРОШЁЛ ПРОВЕРКУ — возвращаю прежний файл\n'
-        $SSH "cp /etc/caddy/Caddyfile.z2kbak /etc/caddy/Caddyfile"
         exit 1
     fi
 fi
