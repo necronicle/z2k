@@ -11,7 +11,7 @@ set -e
 cd "$(dirname "$0")/.."   # -> vps-relay/
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOTOOLCHAIN=local \
-	go build -trimpath -ldflags="-s -w" -o z2k-vps-relay .
+	go build -trimpath -ldflags="-s -w -X main.buildVersion=$(git describe --tags --always --dirty 2>/dev/null || echo unknown)" -o z2k-vps-relay .
 
 echo "built: $(pwd)/z2k-vps-relay"
 ls -la z2k-vps-relay

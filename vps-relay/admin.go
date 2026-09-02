@@ -19,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"time"
 )
 
@@ -58,6 +59,17 @@ type adminInstallsResp struct {
 
 func newAdminMux() *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// Метрики и pprof: порт слушает только 127.0.0.1, наружу не виден.
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		metrics.write(w)
+	})
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	// Сводка. По умолчанию показывает всех: замер важнее краткости, а число
 	// установок здесь измеряется сотнями, не миллионами.

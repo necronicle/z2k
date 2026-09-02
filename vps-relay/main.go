@@ -460,6 +460,15 @@ type dialStats struct {
 }
 
 func (s *dialStats) record(ok, throttled bool, retried bool, lat time.Duration) {
+	switch {
+	case throttled:
+		metrics.inc("relay_dial_total", `result="throttle"`)
+	case ok:
+		metrics.inc("relay_dial_total", `result="ok"`)
+		metrics.observe("relay_dial_latency_seconds", lat)
+	default:
+		metrics.inc("relay_dial_total", `result="fail"`)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if throttled {
@@ -670,6 +679,17 @@ func (s *session) closeReason() string {
 
 // classifyReadErr сводит ошибку чтения WS к причине события: таймаут —
 // read_timeout, штатное закрытие пиром — peer_close, остальное — prefix.
+func authRejectClass(why string) string {
+	switch {
+	case strings.HasPrefix(why, "часы разошлись"):
+		return "clock_skew"
+	case strings.HasPrefix(why, "повтор подписи"):
+		return "replay"
+	default:
+		return "other"
+	}
+}
+
 func classifyReadErr(err error, prefix string) string {
 	if isTimeoutErr(err) {
 		if prefix == "auth_read_err" {
@@ -826,6 +846,8 @@ func (s *session) emitStreamClose(st *stream, reason string) {
 	if !st.closeReason.CompareAndSwap(nil, reason) {
 		return
 	}
+	liveStreams.Add(-1)
+	metrics.inc("relay_stream_close_total", fmt.Sprintf("reason=%q", reason))
 	events.Emit(Event{
 		Ev: "stream_close", SID: s.id, Install: s.relayID, Reason: reason,
 		DurMS: time.Since(st.opened).Milliseconds(), Detail: st.target,
@@ -902,6 +924,9 @@ func (s *session) writePump() {
 	writeFrame := func(frame []byte) bool {
 		_ = s.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := s.ws.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+			if isTimeoutErr(err) {
+				metrics.inc("relay_ws_write_timeouts_total", "")
+			}
 			if *verbose {
 				log.Printf("[%s] write err: %v", s.id, err)
 			}
@@ -1045,6 +1070,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 		}
 	}
 	s.streams[id] = st
+	liveStreams.Add(1)
 	active := len(s.streams)
 	for {
 		cur := s.peakStreams.Load()
@@ -1178,6 +1204,7 @@ func (s *session) readPump() {
 		if !legacyScheme {
 			log.Printf("[%s] auth rejected (type=0x%02x scheme=%s id=%s): %s", s.id, mt, scheme, relayID, why)
 			events.Emit(Event{Ev: "auth_reject", SID: s.id, IP: s.clientIP, Install: relayID, Reason: why})
+			metrics.inc("relay_auth_reject_total", fmt.Sprintf("reason=%q", authRejectClass(why)))
 		}
 		s.killWith("auth_rejected")
 		return
@@ -1256,6 +1283,13 @@ func (s *session) readPump() {
 
 var dialThrottle *dialLimiter
 var stats = &dialStats{}
+
+// buildVersion подставляется сборкой (-X main.buildVersion=...).
+var buildVersion = "dev"
+
+// liveStreams — стримы с открытым сокетом к DC; инкремент при вставке в
+// карту сессии, декремент ровно один раз в emitStreamClose.
+var liveStreams atomic.Int64
 
 // WS buffers are per-connection and held for the connection's lifetime. With
 // ~1600 concurrent tunnels the old 256KB read + 256KB write (512KB/conn, no
@@ -1534,6 +1568,7 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 		DurMS: time.Since(started).Milliseconds(), RX: rx, TX: tx,
 		Streams: int(s.peakStreams.Load()), Reason: s.closeReason(), Detail: s.noisyDetail(),
 	})
+	metrics.inc("relay_session_close_total", fmt.Sprintf("reason=%q", s.closeReason()))
 }
 
 // asnLookup — заглушка до задачи 6 плана (таблица ASN).
@@ -1556,6 +1591,10 @@ func main() {
 		events = fe
 		defer fe.Close()
 	}
+	metrics.gauge("relay_sessions", func() int64 { return liveSessions.Load() })
+	metrics.gauge("relay_streams", func() int64 { return liveStreams.Load() })
+	metrics.gauge("relay_event_write_errors_total", func() int64 { return eventWriteErrors.Load() })
+	metrics.add("relay_build_info", fmt.Sprintf("version=%q", buildVersion), 1)
 	if *secret == "" {
 		log.Fatal("--secret is required")
 	}
