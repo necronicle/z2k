@@ -60,6 +60,7 @@ var (
 	eventsDir       = flag.String("events-dir", "", "каталог структурного журнала событий (пусто = выключено)")
 	eventsKeep      = flag.Int("events-keep", 30, "сколько суточных файлов событий хранить")
 	authReadTimeout = flag.Duration("auth-read-timeout", 90*time.Second, "таймаут чтения WS до и после авторизации")
+	asnTablePath    = flag.String("asn-table", "", "путь к ip2asn-v4.tsv (пусто = ASN в событиях не пишется)")
 
 	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 8, "max in-flight dials per Telegram DC IP")
 	dialThrottleTimeout   = flag.Duration("dial-throttle-timeout", 3*time.Second, "max wait for dial slot before failing CONNECT")
@@ -1571,9 +1572,6 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	metrics.inc("relay_session_close_total", fmt.Sprintf("reason=%q", s.closeReason()))
 }
 
-// asnLookup — заглушка до задачи 6 плана (таблица ASN).
-func asnLookup(ip string) uint32 { return 0 }
-
 func main() {
 	flag.Parse()
 
@@ -1614,6 +1612,14 @@ func main() {
 	dialThrottle = newDialLimiter(*dialLimitPerTarget, *dialThrottleTimeout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	if *asnTablePath != "" {
+		if t, err := loadASNTable(*asnTablePath); err != nil {
+			log.Printf("ASN-таблица не загружена: %v (события пойдут без asn)", err)
+		} else {
+			asnTab.Store(t)
+		}
+		go watchASNTable(*asnTablePath, time.Hour, ctx.Done())
+	}
 	defer stop()
 
 	statsStop := make(chan struct{})

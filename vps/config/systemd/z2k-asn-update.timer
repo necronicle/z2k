@@ -1,0 +1,10 @@
+[Unit]
+Description=z2k: таблица ASN раз в неделю
+
+[Timer]
+OnCalendar=Mon *-*-* 04:30:00 UTC
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

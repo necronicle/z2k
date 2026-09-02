@@ -1,0 +1,8 @@
+[Unit]
+Description=z2k: обновление таблицы префикс→ASN для событий релея
+Documentation=file:/opt/z2k-vps/observability/asn-update.sh
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/z2k-vps/observability/asn-update.sh /var/lib/z2k-relay/ip2asn-v4.tsv
