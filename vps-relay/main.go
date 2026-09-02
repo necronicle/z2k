@@ -57,6 +57,8 @@ var (
 	secretPrev    = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
 	resolveSecret = flag.String("resolve-secret", "", "dedicated HMAC secret for /resolve (decoupled from the tunnel secret); falls back to --secret when empty")
 	verbose       = flag.Bool("v", false, "verbose logging")
+	eventsDir     = flag.String("events-dir", "", "каталог структурного журнала событий (пусто = выключено)")
+	eventsKeep    = flag.Int("events-keep", 30, "сколько суточных файлов событий хранить")
 
 	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 8, "max in-flight dials per Telegram DC IP")
 	dialThrottleTimeout   = flag.Duration("dial-throttle-timeout", 3*time.Second, "max wait for dial slot before failing CONNECT")
@@ -1408,6 +1410,14 @@ func main() {
 	// дальше по коду секрет был обычной строкой (см. secretsrc.go).
 	if err := resolveAllSecrets(); err != nil {
 		log.Fatalf("секреты: %v", err)
+	}
+	if *eventsDir != "" {
+		fe, err := newFileEvents(*eventsDir, *eventsKeep)
+		if err != nil {
+			log.Fatalf("события: %v", err)
+		}
+		events = fe
+		defer fe.Close()
 	}
 	if *secret == "" {
 		log.Fatal("--secret is required")
