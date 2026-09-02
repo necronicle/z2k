@@ -51,6 +51,12 @@ config/systemd/z2k-alert.service:/etc/systemd/system/z2k-alert.service:systemd
 config/systemd/z2k-alert.timer:/etc/systemd/system/z2k-alert.timer:timer
 observability/asn-update.sh:/opt/z2k-vps/observability/asn-update.sh:script
 observability/alert.sh:/opt/z2k-vps/observability/alert.sh:script
+config/systemd/z2k-relay@.service:/etc/systemd/system/z2k-relay@.service:systemd
+config/z2k/relay-a.env:/etc/z2k/relay-a.env:env
+config/z2k/relay-b.env:/etc/z2k/relay-b.env:env
+bin/relay-switch.sh:/opt/z2k-vps/bin/relay-switch.sh:script
+bin/acme-import-from-caddy.sh:/opt/z2k-vps/bin/acme-import-from-caddy.sh:script
+config/nginx-http-z2k.conf:/etc/nginx/z2k-http/z2k.conf:nginx
 "
 
 [ "$APPLY" = 1 ] || printf 'РЕЖИМ ПРОСМОТРА. Ничего не меняется. Для раскатки: --apply\n\n'
@@ -85,6 +91,7 @@ for p in $PAIRS; do
     $SSH "mv '$remote_f.new' '$remote_f'"
     case "$kind" in
         script) $SSH "chmod +x '$remote_f'" ;;
+        env)    $SSH "chmod 600 '$remote_f'" ;;
     esac
     case "$kind" in
         nginx)  changed_nginx=1 ;;

@@ -18,7 +18,7 @@ cat > "$TMP/bin/curl" <<EOF
 #!/bin/sh
 case "\$*" in
   *api.telegram.org*) printf '%s\n' "\$*" >> "$SENT"; exit 0 ;;
-  *metrics*) cat "$TMP/metrics.txt"; exit 0 ;;
+  *127.0.0.1:9098/metrics*) cat "$TMP/metrics.txt"; exit 0 ;;
 esac
 exit 1
 EOF

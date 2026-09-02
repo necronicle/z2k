@@ -206,6 +206,30 @@ else
     printf '  чисто        секреты передаются ссылкой, значений в командной строке нет\n'
 fi
 
+# Релей двумя экземплярами (план 3 v2): ровно один активен, TLS-порт 8445
+# слушает релей, сертификат лежит в кеше autocert.
+printf '\n=== экземпляры релея и TLS\n'
+act=$($SSH "for i in a b; do systemctl is-active --quiet z2k-relay@\$i && printf '%s ' \$i; done")
+case "$(echo $act)" in
+    a|b) printf '  один активен %s\n' "z2k-relay@$(echo $act)" ;;
+    "") if $SSH "systemctl is-active --quiet z2k-relay.service"; then
+            printf '  прежняя схема z2k-relay.service (до первого relay-switch.sh)\n'
+        else
+            printf '  НИКТО       ни один экземпляр релея не активен\n'; drift=$((drift+1))
+        fi ;;
+    *) printf '  ОБА          активны a и b — переключение не завершено\n'; drift=$((drift+1)) ;;
+esac
+if $SSH "ss -Hltnp 2>/dev/null | grep -q '127.0.0.1:8445.*z2k-vps-relay'"; then
+    printf '  8445         слушает релей (TLS)\n'
+else
+    printf '  8445         релей не слушает — трафик имени идёт мимо (или ещё caddy)\n'
+fi
+if $SSH "test -s /var/lib/z2k-relay/acme/213.176.74.63.nip.io"; then
+    printf '  сертификат   в кеше autocert: %s\n' "$($SSH "openssl x509 -in /var/lib/z2k-relay/acme/213.176.74.63.nip.io -noout -enddate 2>/dev/null")"
+else
+    printf '  сертификат   кеш autocert пуст — до релиза TLS-фронта импортировать из caddy\n'
+fi
+
 printf '\n'
 if [ "$drift" = 0 ]; then
     printf 'РАСХОЖДЕНИЙ НЕТ\n'

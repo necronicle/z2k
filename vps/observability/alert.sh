@@ -38,7 +38,16 @@ recent() {
         }'
 }
 count_ev() { recent "$1" | grep -c "\"ev\":\"$2\""; }
-metric() { curl -fsS --max-time 5 "$METRICS" 2>/dev/null | awk -v n="$1" '$1==n {print $2; exit}'; }
+# Релей работает одним из двух экземпляров (9098/9097), во время переключения
+# — обоими: метрику суммируем по всем, кто отвечает.
+metric() {
+    total=0; seen=0
+    for u in "$METRICS" "${METRICS_B:-http://127.0.0.1:9097/metrics}"; do
+        v=$(curl -fsS --max-time 5 "$u" 2>/dev/null | awk -v n="$1" '$1==n {print $2; exit}')
+        [ -n "$v" ] && { total=$((total + v)); seen=1; }
+    done
+    [ "$seen" = 1 ] && echo "$total"
+}
 
 send() { # send RULE TEXT
     rule="$1"; text="$2"
