@@ -25,7 +25,7 @@ else
 fi
 f="$TMP/cache/$H"
 [ -f "$f" ] && ok "файл кеша создан" || bad "файл кеша создан" "нет $f"
-perm=$(stat -f %Lp "$f" 2>/dev/null || stat -c %a "$f" 2>/dev/null)
+perm=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f" 2>/dev/null)
 [ "$perm" = 600 ] && ok "права 0600" || bad "права 0600" "$perm"
 openssl pkey -in "$f" -noout 2>/dev/null && ok "ключ читается из кеша" || bad "ключ читается" "openssl pkey"
 openssl x509 -in "$f" -noout -subject 2>/dev/null | grep -q "$H" && ok "сертификат читается из кеша" || bad "сертификат читается" "openssl x509"
