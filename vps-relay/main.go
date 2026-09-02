@@ -40,17 +40,22 @@ import (
 )
 
 var (
-	listenAddr      = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
-	secret          = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
-	secretPrev      = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
-	resolveSecret   = flag.String("resolve-secret", "", "dedicated HMAC secret for /resolve (decoupled from the tunnel secret); falls back to --secret when empty")
-	verbose         = flag.Bool("v", false, "verbose logging")
-	eventsDir       = flag.String("events-dir", "", "каталог структурного журнала событий (пусто = выключено)")
-	eventsKeep      = flag.Int("events-keep", 30, "сколько суточных файлов событий хранить")
-	authReadTimeout = flag.Duration("auth-read-timeout", 90*time.Second, "таймаут чтения WS до и после авторизации")
-	asnTablePath    = flag.String("asn-table", "", "путь к ip2asn-v4.tsv (пусто = ASN в событиях не пишется)")
+	listenAddr           = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
+	secret               = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
+	secretPrev           = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
+	resolveSecret        = flag.String("resolve-secret", "", "dedicated HMAC secret for /resolve (decoupled from the tunnel secret); falls back to --secret when empty")
+	verbose              = flag.Bool("v", false, "verbose logging")
+	eventsDir            = flag.String("events-dir", "", "каталог структурного журнала событий (пусто = выключено)")
+	eventsKeep           = flag.Int("events-keep", 30, "сколько суточных файлов событий хранить")
+	authReadTimeout      = flag.Duration("auth-read-timeout", 90*time.Second, "таймаут чтения WS до и после авторизации")
+	defaultWindow        = flag.Int("default-window", 256*1024, "начальный кредит на стрим, байт (v2)")
+	upstreamWriteTimeout = flag.Duration("upstream-write-timeout", 15*time.Second, "дедлайн записи в сокет DC")
+	wsWriteTimeout       = flag.Duration("ws-write-timeout", 10*time.Second, "дедлайн записи кадра в WS")
+	minBuild             = flag.String("min-build", "", "минимальная версия клиента v2 (пусто = не требовать)")
+	drainTimeout         = flag.Duration("drain-timeout", 90*time.Second, "сколько ждать сессии при остановке")
+	asnTablePath         = flag.String("asn-table", "", "путь к ip2asn-v4.tsv (пусто = ASN в событиях не пишется)")
 
-	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 8, "max in-flight dials per Telegram DC IP")
+	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 32, "max in-flight dials per Telegram DC IP (поверх потолка 6 на установку)")
 	dialThrottleTimeout   = flag.Duration("dial-throttle-timeout", 3*time.Second, "max wait for dial slot before failing CONNECT")
 	dialPerAttemptTimeout = flag.Duration("dial-per-attempt-timeout", 10*time.Second, "TCP dial timeout for a single attempt")
 	dialRetryCount        = flag.Int("dial-retry-count", 1, "extra dial attempts on i/o timeout (0 disables retry)")
@@ -319,22 +324,49 @@ func newDialLimiter(limit int, timeout time.Duration) *dialLimiter {
 }
 
 func (l *dialLimiter) bucketFor(target string) chan struct{} {
+	return l.bucketForN(target, l.limit)
+}
+
+func (l *dialLimiter) bucketForN(key string, limit int) chan struct{} {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	bucket, ok := l.buckets[target]
+	bucket, ok := l.buckets[key]
 	if !ok {
-		bucket = make(chan struct{}, l.limit)
-		l.buckets[target] = bucket
+		bucket = make(chan struct{}, limit)
+		l.buckets[key] = bucket
 	}
-	l.lastUsed[target] = time.Now()
+	l.lastUsed[key] = time.Now()
 	return bucket
+}
+
+// perInstallDialLimit — потолок одновременных дозвонов одной установки к
+// одному адресату: столько же, сколько connectSem у клиента.
+const perInstallDialLimit = 6
+
+// acquire2 — сначала ведро «установка|адресат», затем общее ведро адресата.
+// Так один клиент не съедает чужой доступ к DC (аудит 02.09.2026).
+func (l *dialLimiter) acquire2(ctx context.Context, install, target string) (func(), error) {
+	rel1, err := l.acquireN(ctx, install+"|"+target, perInstallDialLimit)
+	if err != nil {
+		return nil, err
+	}
+	rel2, err := l.acquire(ctx, target)
+	if err != nil {
+		rel1()
+		return nil, err
+	}
+	return func() { rel2(); rel1() }, nil
 }
 
 // acquire returns a release closure that frees the slot exactly once.
 // The returned function is safe to call multiple times — only the first call
 // releases the slot.
 func (l *dialLimiter) acquire(ctx context.Context, target string) (release func(), err error) {
-	bucket := l.bucketFor(target)
+	return l.acquireN(ctx, target, l.limit)
+}
+
+func (l *dialLimiter) acquireN(ctx context.Context, key string, limit int) (release func(), err error) {
+	bucket := l.bucketForN(key, limit)
 	timer := time.NewTimer(l.timeout)
 	defer timer.Stop()
 
@@ -471,775 +503,6 @@ func (s *dialStats) loop(interval time.Duration, stop <-chan struct{}) {
 	}
 }
 
-// stream represents one tunneled TCP connection to a Telegram DC.
-//
-// aborted помечает стрим как отменённый: writePump выбрасывает его кадры, не
-// отправляя, а pumpReadFromTCP не шлёт по нему упорядоченный CLOSE.
-//
-// Выставляется в ЧЕТЫРЁХ местах, и это важно знать, добавляя пятое:
-//   - sendAbort — единственный, кто делает это через CAS и потому шлёт ровно
-//     один CLOSE (превышен потолок стрима, ошибка записи пиру);
-//   - kill — гасит все стримы сессии разом;
-//   - closeStream — закрытие по инициативе клиента (CLOSE от него);
-//   - handleConnect — вытесняя прежний стрим с тем же идентификатором.
-//
-// Прежняя редакция утверждала «set ONLY by sendAbort», и это было неверно уже
-// на момент написания: три прямых Store существуют рядом. Прочитавший
-// поверил бы, что достаточно обойти sendAbort, чтобы флаг не поднялся.
-//
-// EOF на соединении с Telegram флаг НЕ выставляет — это штатный конец, по
-// нему уходит упорядоченный CLOSE.
-type stream struct {
-	id          uint16
-	conn        net.Conn
-	queuedBytes atomic.Int64
-	aborted     atomic.Bool
-	opened      time.Time
-	target      string
-	closeReason atomic.Value // string; выставляется первым, кто закрывает
-}
-
-// queuedFrame carries a frame plus identity of its stream so writePump can
-// decrement the right counter even after stream-ID reuse / wrap-around.
-type queuedFrame struct {
-	stream  *stream
-	frame   []byte
-	counted int64 // bytes to decrement from stream.queuedBytes (0 for non-DATA)
-}
-
-type session struct {
-	id      string
-	relayID string // per-install identity (Stage B); "" for shared-secret auth
-	// Настоящий адрес клиента — известен уже при принятии соединения, а нужен
-	// глубже, в аутентификации, где становится известна установка. Связать одно
-	// с другим сшивкой строк лога нельзя надёжно, поэтому адрес едет в сессии.
-	clientIP string
-	ws       *websocket.Conn
-
-	// Кумулятивный объём за сессию. Раньше в релее не было НИ ОДНОГО счётчика
-	// трафика: queuedBytes ниже — это датчик подпора очереди, он уменьшается
-	// при отправке и накопленного не показывает. Без объёма нельзя отличить
-	// домашний роутер от того, кто раздаёт наш туннель дальше.
-	rxBytes atomic.Int64 // от Telegram к клиенту
-	txBytes atomic.Int64 // от клиента к Telegram
-
-	writeCh   chan queuedFrame // DATA + ordered-CLOSE; FIFO
-	controlCh chan []byte      // CONNECT_OK/FAIL + abort-CLOSE; priority
-	done      chan struct{}
-	once      sync.Once
-
-	// Причина закрытия: выставляется первым вызовом killWith и читается
-	// после завершения readPump — kill идёт через once, поэтому чтение
-	// после него упорядочено с записью.
-	reasonOnce  sync.Once
-	reason      string
-	peakStreams atomic.Int32
-	proto       string
-	started     time.Time
-
-	noisyMu sync.Mutex
-	noisyN  map[string]int
-
-	// Потолок одновременных обработчиков CONNECT. Буферизованный канал, а не
-	// счётчик: слот занимается ДО запуска горутины, поэтому переполнение видно
-	// сразу и отвечается отказом, а не копится в памяти.
-	connectSlots chan struct{}
-
-	mu          sync.Mutex
-	queueMu     sync.Mutex
-	queuedBytes int
-	streams     map[uint16]*stream
-
-	dialCtx    context.Context
-	dialCancel context.CancelFunc
-	dialFn     func(ctx context.Context, network, addr string) (net.Conn, error)
-}
-
-func newSession(ws *websocket.Conn, id string, parentCtx context.Context) *session {
-	dialCtx, dialCancel := context.WithCancel(parentCtx)
-	return &session{
-		id:           id,
-		ws:           ws,
-		proto:        "v1",
-		started:      time.Now(),
-		writeCh:      make(chan queuedFrame, *sessionQueueDepth),
-		controlCh:    make(chan []byte, *controlQueueDepth),
-		connectSlots: newConnectSlots(),
-		done:         make(chan struct{}),
-		streams:      make(map[uint16]*stream),
-		dialCtx:      dialCtx,
-		dialCancel:   dialCancel,
-		dialFn:       (&net.Dialer{}).DialContext,
-	}
-}
-
-// killWith фиксирует причину и закрывает сессию. Повторные вызовы причину
-// не меняют: первая и есть настоящая.
-func (s *session) killWith(reason string) {
-	s.reasonOnce.Do(func() { s.reason = reason })
-	s.kill()
-}
-
-const noisyPrintLimit = 3
-
-// noisy считает повторяющиеся отказы одной сессии и разрешает печать
-// только первых трёх: одна установка с самонабором давала 13 тысяч строк
-// за два часа и вымывала журнал релея до пяти часов истории (02.09.2026).
-func (s *session) noisy(kind string) bool {
-	s.noisyMu.Lock()
-	defer s.noisyMu.Unlock()
-	if s.noisyN == nil {
-		s.noisyN = map[string]int{}
-	}
-	s.noisyN[kind]++
-	return s.noisyN[kind] <= noisyPrintLimit
-}
-
-func (s *session) noisyDetail() string {
-	s.noisyMu.Lock()
-	defer s.noisyMu.Unlock()
-	if len(s.noisyN) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(s.noisyN))
-	for k := range s.noisyN {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%d", k, s.noisyN[k]))
-	}
-	return strings.Join(parts, " ")
-}
-
-func (s *session) closeReason() string {
-	s.reasonOnce.Do(func() { s.reason = "peer_close" })
-	return s.reason
-}
-
-// classifyReadErr сводит ошибку чтения WS к причине события: таймаут —
-// read_timeout, штатное закрытие пиром — peer_close, остальное — prefix.
-func authRejectClass(why string) string {
-	switch {
-	case strings.HasPrefix(why, "часы разошлись"):
-		return "clock_skew"
-	case strings.HasPrefix(why, "повтор подписи"):
-		return "replay"
-	default:
-		return "other"
-	}
-}
-
-func classifyReadErr(err error, prefix string) string {
-	if isTimeoutErr(err) {
-		if prefix == "auth_read_err" {
-			return "auth_read_err:timeout"
-		}
-		return "read_timeout"
-	}
-	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) || errors.Is(err, io.EOF) {
-		if prefix == "auth_read_err" {
-			return "auth_read_err:eof"
-		}
-		return "peer_close"
-	}
-	return prefix
-}
-
-func (s *session) kill() {
-	s.once.Do(func() {
-		close(s.done)
-		s.dialCancel()
-		_ = s.ws.Close()
-		s.mu.Lock()
-		for _, st := range s.streams {
-			s.emitStreamClose(st, "session_close")
-			st.aborted.Store(true)
-			if st.conn != nil {
-				_ = st.conn.Close()
-			}
-		}
-		s.streams = nil
-		s.mu.Unlock()
-	})
-}
-
-func (s *session) reserveSession(n int) bool {
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
-	if s.queuedBytes+n > *sessionQueueBytes {
-		return false
-	}
-	s.queuedBytes += n
-	return true
-}
-
-func (s *session) releaseSession(n int) {
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
-	s.queuedBytes -= n
-	if s.queuedBytes < 0 {
-		s.queuedBytes = 0
-	}
-}
-
-// sendData enqueues a DATA frame via writeCh (FIFO).
-//
-// Skip if stream already aborted or replaced in the map (pointer identity).
-// Per-stream cap exceeded → call sendAbort (drops pending DATA).
-// Session cap exceeded → kill session (true session-wide abuse).
-// writeCh full → call sendAbort.
-func (s *session) sendData(st *stream, payload []byte) {
-	s.sendDataFrame(st, encodeFrame(st.id, muxDATA, payload))
-}
-
-// sendDataFrame — то же самое, но кадр уже собран вызывающим.
-//
-// Разделено, чтобы горячий путь (pumpReadFromTCP) мог собрать кадр прямо из
-// буфера чтения: там иначе получалось два выделения и два копирования на
-// каждый прочитанный блок, причём первая копия становилась мусором сразу же.
-// sendData оставлена для вызовов, у которых на руках именно payload.
-func (s *session) sendDataFrame(st *stream, frame []byte) {
-	if st.aborted.Load() {
-		return
-	}
-	n := int64(len(frame))
-	// Учёт трафика — по полезной нагрузке, без трёх байт заголовка: цифра
-	// должна означать то же, что и раньше.
-	s.rxBytes.Add(n - 3)
-	s.mu.Lock()
-	cur := s.streams[st.id]
-	s.mu.Unlock()
-	if cur != st {
-		return
-	}
-
-	if st.queuedBytes.Add(n) > int64(*perStreamQueueBytes) {
-		st.queuedBytes.Add(-n)
-		if s.noisy("queue_abort") {
-			log.Printf("[%s] stream %d per-stream queue exceeded, aborting", s.id, st.id)
-		}
-		s.sendAbort(st)
-		return
-	}
-
-	if !s.reserveSession(int(n)) {
-		st.queuedBytes.Add(-n)
-		log.Printf("[%s] session queue %d bytes exceeded, killing session", s.id, *sessionQueueBytes)
-		go s.killWith("session_queue")
-		return
-	}
-
-	qf := queuedFrame{stream: st, frame: frame, counted: n}
-	select {
-	case s.writeCh <- qf:
-	case <-s.done:
-		s.releaseSession(int(n))
-		st.queuedBytes.Add(-n)
-	default:
-		s.releaseSession(int(n))
-		st.queuedBytes.Add(-n)
-		if s.noisy("queue_abort") {
-			log.Printf("[%s] stream %d writeCh full, aborting stream", s.id, st.id)
-		}
-		s.sendAbort(st)
-	}
-}
-
-// sendOrderedClose enqueues an EOF CLOSE through writeCh, preserving FIFO
-// order with any pending DATA frames for this stream.
-//
-// Caller MUST have already removed st from s.streams. Caller MUST NOT have
-// set st.aborted (that would belong to abort-path, which uses sendAbort).
-// counted=0 — CLOSE frame is not charged against per-stream cap.
-func (s *session) sendOrderedClose(st *stream) {
-	if st.aborted.Load() {
-		return
-	}
-	frame := encodeFrame(st.id, muxCLOSE, nil)
-	n := int64(len(frame))
-
-	if !s.reserveSession(int(n)) {
-		log.Printf("[%s] stream %d ordered close — session full, dropping", s.id, st.id)
-		return
-	}
-
-	qf := queuedFrame{stream: st, frame: frame, counted: 0}
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	select {
-	case s.writeCh <- qf:
-	case <-s.done:
-		s.releaseSession(int(n))
-	case <-timer.C:
-		s.releaseSession(int(n))
-		log.Printf("[%s] stream %d ordered close — writeCh blocked, dropping", s.id, st.id)
-	}
-}
-
-// sendAbort marks the stream aborted, removes it from the map, closes the
-// upstream conn, and enqueues a CLOSE via the priority controlCh. Idempotent
-// via CAS — concurrent abort-paths produce exactly one CLOSE frame.
-// emitStreamClose пишет ровно одно событие закрытия на стрим: первая
-// причина побеждает, повторные вызовы игнорируются.
-func (s *session) emitStreamClose(st *stream, reason string) {
-	if !st.closeReason.CompareAndSwap(nil, reason) {
-		return
-	}
-	liveStreams.Add(-1)
-	metrics.inc("relay_stream_close_total", fmt.Sprintf("reason=%q", reason))
-	events.Emit(Event{
-		Ev: "stream_close", SID: s.id, Install: s.relayID, Reason: reason,
-		DurMS: time.Since(st.opened).Milliseconds(), Detail: st.target,
-	})
-}
-
-func (s *session) sendAbort(st *stream) {
-	if !st.aborted.CompareAndSwap(false, true) {
-		return
-	}
-	s.emitStreamClose(st, "abort")
-	s.mu.Lock()
-	if cur, ok := s.streams[st.id]; ok && cur == st {
-		delete(s.streams, st.id)
-	}
-	s.mu.Unlock()
-	if st.conn != nil {
-		_ = st.conn.Close()
-	}
-
-	frame := encodeFrame(st.id, muxCLOSE, nil)
-	select {
-	case s.controlCh <- frame:
-	case <-s.done:
-	default:
-		log.Printf("[%s] controlCh full on abort, killing session", s.id)
-		go s.killWith("control_queue")
-	}
-}
-
-func (s *session) sendConnectResult(streamID uint16, ok bool) {
-	mt := muxCONNECT_FAIL
-	if ok {
-		mt = muxCONNECT_OK
-	}
-	frame := encodeFrame(streamID, mt, nil)
-	select {
-	case s.controlCh <- frame:
-	case <-s.done:
-	default:
-		log.Printf("[%s] controlCh full on connect-result, killing session", s.id)
-		go s.killWith("control_queue")
-	}
-}
-
-// closeStream handles peer-initiated close (muxCLOSE from client).
-// No CLOSE frame back — peer already knows. Marks aborted so any in-flight
-// pumpReadFromTCP and pending writeCh frames are dropped.
-func (s *session) closeStream(id uint16) {
-	s.mu.Lock()
-	st, ok := s.streams[id]
-	if ok {
-		delete(s.streams, id)
-	}
-	s.mu.Unlock()
-	if !ok {
-		return
-	}
-	s.emitStreamClose(st, "peer_close")
-	st.aborted.Store(true)
-	if st.conn != nil {
-		_ = st.conn.Close()
-	}
-}
-
-// writePump is the single goroutine that owns the WS write side. It drains
-// controlCh with priority over writeCh; on every writeCh dequeue it
-// decrements the per-stream and per-session counters, then skips ws.Write
-// if the stream was aborted (drops pending DATA after sendAbort).
-func (s *session) writePump() {
-	ping := time.NewTicker(30 * time.Second)
-	defer ping.Stop()
-
-	writeFrame := func(frame []byte) bool {
-		_ = s.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := s.ws.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-			if isTimeoutErr(err) {
-				metrics.inc("relay_ws_write_timeouts_total", "")
-			}
-			if *verbose {
-				log.Printf("[%s] write err: %v", s.id, err)
-			}
-			return false
-		}
-		return true
-	}
-
-	for {
-		// Priority: drain one control frame if available.
-		select {
-		case frame := <-s.controlCh:
-			if !writeFrame(frame) {
-				s.killWith("write_err")
-				return
-			}
-			continue
-		default:
-		}
-
-		select {
-		case frame := <-s.controlCh:
-			if !writeFrame(frame) {
-				s.killWith("write_err")
-				return
-			}
-		case qf := <-s.writeCh:
-			if qf.counted > 0 {
-				qf.stream.queuedBytes.Add(-qf.counted)
-			}
-			s.releaseSession(len(qf.frame))
-			if qf.stream != nil && qf.stream.aborted.Load() {
-				continue
-			}
-			if !writeFrame(qf.frame) {
-				s.killWith("write_err")
-				return
-			}
-		case <-ping.C:
-			_ = s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if err := s.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-				log.Printf("[%s] ping failed: %v", s.id, err)
-				s.killWith("ping_failed")
-				return
-			}
-		case <-s.done:
-			return
-		}
-	}
-}
-
-func (s *session) handleConnect(id uint16, payload []byte) {
-	addr, port, err := parseConnectPayload(payload)
-	if err != nil {
-		if *verbose {
-			log.Printf("[%s] stream %d bad CONNECT: %v", s.id, id, err)
-		}
-		s.sendConnectResult(id, false)
-		return
-	}
-	if !isTelegramAddr(addr) {
-		if s.noisy("rejected_non_tg") {
-			log.Printf("[%s] stream %d rejected non-Telegram %s:%d", s.id, id, addr, port)
-		}
-		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "not_allowed", Detail: net.JoinHostPort(addr, strconv.Itoa(port))})
-		s.sendConnectResult(id, false)
-		return
-	}
-
-	target := net.JoinHostPort(addr, strconv.Itoa(port))
-
-	release, terr := dialThrottle.acquire(s.dialCtx, addr)
-	if terr != nil {
-		if errors.Is(terr, errDialThrottle) {
-			stats.record(false, true, false, 0)
-			if *verbose {
-				log.Printf("[%s] stream %d dial throttle %s", s.id, id, addr)
-			}
-			events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "throttled", Detail: target})
-		}
-		s.sendConnectResult(id, false)
-		return
-	}
-
-	t0 := time.Now()
-	conn, attempt, err := dialWithRetry(s.dialCtx, s.dialFn, target, *dialPerAttemptTimeout, 1+*dialRetryCount, *dialRetryBackoff)
-	release()
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		stats.record(false, false, false, 0)
-		if s.noisy("dial_failed") {
-			log.Printf("[%s] stream %d dial %s failed (attempts=%d): %v", s.id, id, target, attempt+1, err)
-		}
-		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "dial_error", Detail: target})
-		s.sendConnectResult(id, false)
-		return
-	}
-	lat := time.Since(t0)
-	stats.record(true, false, attempt > 0, lat)
-
-	if tc, ok := conn.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-		_ = tc.SetKeepAlive(true)
-		_ = tc.SetKeepAlivePeriod(60 * time.Second)
-	}
-
-	st := &stream{id: id, conn: conn, opened: time.Now(), target: target}
-
-	s.mu.Lock()
-	if s.streams == nil {
-		s.mu.Unlock()
-		_ = conn.Close()
-		return
-	}
-	_, replacing := s.streams[id]
-	// Потолок стримов. Переиспользование существующего id пропускаем всегда:
-	// это не рост, а замена, и отказ там оборвал бы живой стрим.
-	//
-	// Без потолка предел задавала только разрядность uint16 — 65536 стримов в
-	// одной сессии, каждый со своим соединением и очередью. На машине с 2 ГБ
-	// это чужая память, купленная десятибайтовыми кадрами.
-	if !replacing && *maxStreamsPerSess > 0 && len(s.streams) >= *maxStreamsPerSess {
-		s.mu.Unlock()
-		if s.noisy("stream_limit") {
-			log.Printf("[%s] stream %d: превышен потолок стримов на сессию (%d) — отказ",
-				s.id, id, *maxStreamsPerSess)
-		}
-		_ = conn.Close()
-		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "stream_limit", Detail: target})
-		s.sendConnectResult(id, false)
-		return
-	}
-	if replacing {
-		old := s.streams[id]
-		s.emitStreamClose(old, "replaced")
-		old.aborted.Store(true)
-		if old.conn != nil {
-			_ = old.conn.Close()
-		}
-	}
-	s.streams[id] = st
-	liveStreams.Add(1)
-	active := len(s.streams)
-	for {
-		cur := s.peakStreams.Load()
-		if int32(active) <= cur || s.peakStreams.CompareAndSwap(cur, int32(active)) {
-			break
-		}
-	}
-	s.mu.Unlock()
-
-	if *verbose {
-		log.Printf("[%s] stream %d CONNECT %s ok (%s) active=%d", s.id, id, target, lat, active)
-	}
-	s.sendConnectResult(id, true)
-	events.Emit(Event{Ev: "stream_open", SID: s.id, Install: s.relayID, DurMS: lat.Milliseconds(), Detail: target})
-
-	go s.pumpReadFromTCP(st)
-}
-
-// pumpReadFromTCP copies upstream TCP bytes into DATA frames. On EOF it
-// removes the stream from the map (so further peer-side writes ignore it)
-// and emits an ordered CLOSE — but only if the stream wasn't aborted in
-// parallel.
-func (s *session) pumpReadFromTCP(st *stream) {
-	// Буфер чтения — из пула, а не свой на каждый стрим.
-	//
-	// Раньше здесь стоял make([]byte, 64*1024) на КАЖДЫЙ стрим, и он жил всю
-	// жизнь стрима, а стримы у Telegram живут часами. При наблюдаемых ~1300
-	// туннелях это доминирующий член в RSS релея: около 400 КБ на туннель, из
-	// которых основная часть — вот эти буферы. Потолок здесь не OOM: GOMEMLIMIT
-	// мягкий, поэтому раньше него придёт непрерывный GC на двух ядрах, то есть
-	// вязкий Telegram у всех и ни строчки в логах.
-	bufp := readBufPool.Get().(*[]byte)
-	buf := *bufp
-	defer readBufPool.Put(bufp)
-	for {
-		n, err := st.conn.Read(buf)
-		if n > 0 {
-			// Кадр собираем СРАЗУ из буфера чтения: одно выделение и одно
-			// копирование вместо двух. Раньше был payload := make(); copy(),
-			// а потом encodeFrame выделял ещё раз и копировал повторно —
-			// первая копия становилась мусором немедленно, то есть мы кормили
-			// сборщик ровно объёмом трафика.
-			s.sendDataFrame(st, encodeFrame(st.id, muxDATA, buf[:n]))
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	s.mu.Lock()
-	cur, exists := s.streams[st.id]
-	if exists && cur == st {
-		delete(s.streams, st.id)
-	}
-	s.mu.Unlock()
-	_ = st.conn.Close()
-	if exists && cur == st && !st.aborted.Load() {
-		s.emitStreamClose(st, "eof")
-		s.sendOrderedClose(st)
-	}
-}
-
-func (s *session) readPump() {
-	defer s.kill()
-
-	s.ws.SetReadLimit(2 * 1024 * 1024)
-	_ = s.ws.SetReadDeadline(time.Now().Add(*authReadTimeout))
-	s.ws.SetPongHandler(func(string) error {
-		_ = s.ws.SetReadDeadline(time.Now().Add(*authReadTimeout))
-		return nil
-	})
-	s.ws.SetPingHandler(func(data string) error {
-		_ = s.ws.SetReadDeadline(time.Now().Add(*authReadTimeout))
-		return s.ws.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(5*time.Second))
-	})
-
-	_, msg, err := s.ws.ReadMessage()
-	if err != nil {
-		if *verbose {
-			log.Printf("[%s] auth read err: %v", s.id, err)
-		}
-		s.killWith(classifyReadErr(err, "auth_read_err"))
-		return
-	}
-	sid, mt, p, err := decodeFrame(msg)
-	if err != nil || sid != 0 || (mt != muxAUTH && mt != muxAUTHID) {
-		log.Printf("[%s] first message not auth (sid=%d type=0x%02x)", s.id, sid, mt)
-		s.killWith("first_not_auth")
-		return
-	}
-	// Dual-accept (NO flip): a registered per-install Ed25519 signature (Stage B,
-	// muxAUTHID) is always honored; the shared-secret HMAC (Stage A, muxAUTH) is
-	// honored too — with the current AND previous secret — UNLESS the flip
-	// (--require-per-install) is enabled. Nothing here blocks a current client.
-	var relayID, scheme, why string
-	authedOK := false
-	if mt == muxAUTHID {
-		relayID, authedOK, why = verifyPerInstallAuth(p)
-		scheme = "per-install"
-	} else if !*requirePerInstall {
-		authedOK = subtle.ConstantTimeCompare(p, computeAuthHMAC(*secret)) == 1
-		if !authedOK && *secretPrev != "" {
-			authedOK = subtle.ConstantTimeCompare(p, computeAuthHMAC(*secretPrev)) == 1
-		}
-		scheme = "shared-secret"
-		if !authedOK {
-			// Флаг --require-per-install выключен, а общий секрет не сошёлся.
-			why = "общий секрет не совпал"
-		}
-	}
-	legacyScheme := false
-	if mt != muxAUTHID && mt != muxAUTH {
-		why = "неизвестный тип кадра"
-	} else if why == "" && !authedOK {
-		// Сюда попадает кадр 0x00 при включённом флаге: ветку общего секрета
-		// пропустили целиком, поэтому причина не выставлена ни одной проверкой.
-		why = "старая схема (общий секрет) при включённом требовании персональной"
-		legacyScheme = true
-	}
-	if !authedOK {
-		// Кадр 0x00 — это клиент до r-76.2, который ещё стучится общим
-		// секретом. Общий секрет отменён, такие подключения отвергаются
-		// всегда, и писать про каждое незачем: 18.08.2026 их было 28 329 за
-		// сутки, треть всего журнала релея. Настоящие инциденты в этом шуме
-		// не видно. Флот доедет до r-76.2+ сам, а строка на каждую попытку
-		// не приближает этот момент ни на секунду.
-		//
-		// Всё остальное (неизвестный тип кадра, несовпавшая персональная
-		// подпись, испорченный id) логируется как раньше — это уже не
-		// «старый клиент», а либо ошибка, либо чужой стук.
-		if !legacyScheme {
-			log.Printf("[%s] auth rejected (type=0x%02x scheme=%s id=%s): %s", s.id, mt, scheme, relayID, why)
-			events.Emit(Event{Ev: "auth_reject", SID: s.id, IP: s.clientIP, Install: relayID, Reason: why})
-			metrics.inc("relay_auth_reject_total", fmt.Sprintf("reason=%q", authRejectClass(why)))
-		}
-		s.killWith("auth_rejected")
-		return
-	}
-	if relayID != "" {
-		if ok, why := acquireInstallSession(relayID, s.clientIP, s); !ok {
-			log.Printf("[%s] отказ установке %s: %s", s.id, relayID, why)
-			s.killWith("install_refused")
-			return
-		}
-		s.relayID = relayID
-		defer func() {
-			rx, tx := s.bytes()
-			releaseInstallSession(relayID, s, rx, tx)
-		}()
-	}
-	log.Printf("[%s] authenticated (scheme=%s id=%s)", s.id, scheme, relayID)
-
-	for {
-		_, msg, err := s.ws.ReadMessage()
-		if err != nil {
-			if *verbose {
-				log.Printf("[%s] read err: %v", s.id, err)
-			}
-			s.killWith(classifyReadErr(err, "read_err"))
-			return
-		}
-		sid, mt, payload, err := decodeFrame(msg)
-		if err != nil {
-			if *verbose {
-				log.Printf("[%s] bad frame: %v", s.id, err)
-			}
-			continue
-		}
-
-		switch mt {
-		case muxCONNECT:
-			// Слот берём ЗДЕСЬ, до запуска горутины. Без слота — честный
-			// CONNECT_FAIL: клиент попробует ещё раз, а мы не копим работу,
-			// за которую никто не платил.
-			if !s.acquireConnectSlot() {
-				if s.noisy("connect_limit") {
-					log.Printf("[%s] stream %d: превышен потолок одновременных CONNECT (%d) — отказ",
-						s.id, sid, *maxPendingConnects)
-				}
-				s.sendConnectResult(sid, false)
-				continue
-			}
-			go func(id uint16, pl []byte) {
-				defer s.releaseConnectSlot()
-				s.handleConnect(id, pl)
-			}(sid, payload)
-		case muxDATA:
-			s.mu.Lock()
-			st, ok := s.streams[sid]
-			s.mu.Unlock()
-			if !ok || st.conn == nil {
-				continue
-			}
-			s.txBytes.Add(int64(len(payload)))
-			if _, err := st.conn.Write(payload); err != nil {
-				if *verbose {
-					log.Printf("[%s] stream %d tcp write err: %v", s.id, sid, err)
-				}
-				s.sendAbort(st)
-			}
-		case muxCLOSE:
-			s.closeStream(sid)
-		default:
-			if *verbose {
-				log.Printf("[%s] unknown msg type 0x%02x stream=%d", s.id, mt, sid)
-			}
-		}
-	}
-}
-
-var dialThrottle *dialLimiter
-var stats = &dialStats{}
-
-// buildVersion подставляется сборкой (-X main.buildVersion=...).
-var buildVersion = "dev"
-
-// liveStreams — стримы с открытым сокетом к DC; инкремент при вставке в
-// карту сессии, декремент ровно один раз в emitStreamClose.
-var liveStreams atomic.Int64
-
-// WS buffers are per-connection and held for the connection's lifetime. With
-// ~1600 concurrent tunnels the old 256KB read + 256KB write (512KB/conn, no
-// pool) was ~840MB — ~85% of relay RSS, not workload. Read is small (upstream is
-// read in 64KB chunks at pumpReadFromTCP and copied out, so the WS read buffer
-// only needs to hold framing); write buffers are shared via a sync.Pool
-// (gorilla's documented fix for "many conns, intermittent writes" — exactly us).
-var wsWriteBufPool = &sync.Pool{}
-
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:    32 * 1024,
 	WriteBufferSize:   16 * 1024,
@@ -1257,11 +520,6 @@ var upgrader = websocket.Upgrader{
 // «установка» пишутся раздельно и сшиваются по нему — на коллизии сшивка
 // приписывает чужой адрес чужой установке, то есть врёт ровно там, где мы
 // собираемся искать злоупотребление.
-// bytes возвращает накопленный объём за сессию (принято, отправлено).
-func (s *session) bytes() (int64, int64) {
-	return s.rxBytes.Load(), s.txBytes.Load()
-}
-
 func makeSessionID() string {
 	var b [5]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -1485,18 +743,12 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	// проставил наш прокси. Всё левее прислал клиент и подделать может любой.
 	ip := resolveRemoteIP(r)
 	log.Printf("[%s] WS accepted from %s", sid, ip)
-	events.Emit(Event{Ev: "session_open", SID: sid, IP: ip, ASN: asnLookup(ip), Proto: "v1"})
-	s := newSession(ws, sid, parentCtx)
-	s.clientIP = ip
+	s := newSession(ws, sid, ip, parentCtx)
 	started := time.Now()
-	go s.writePump()
-	s.readPump()
+	s.run()
 
 	// Строка закрытия несёт всё, что нужно для разбора, СРАЗУ — установку,
-	// адрес, длительность и объём. Раньше здесь было только «WS closed», и
-	// чтобы понять, кто это был, приходилось сшивать три разные строки по
-	// идентификатору сессии. Для поиска того, кто раздаёт наш туннель дальше,
-	// нужен ровно этот набор в одном месте: одна установка, много адресов.
+	// адрес, длительность, объём и причину.
 	rx, tx := s.bytes()
 	who := s.relayID
 	if who == "" {
@@ -1504,8 +756,8 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	}
 	log.Printf("[%s] WS closed install=%s ip=%s dur=%s rx=%d tx=%d reason=%s",
 		sid, who, ip, time.Since(started).Truncate(time.Second), rx, tx, s.closeReason())
-	events.Emit(Event{
-		Ev: "session_close", SID: sid, Install: who, IP: ip, ASN: asnLookup(ip), Proto: s.proto,
+	emitEvent(Event{
+		Ev: "session_close", SID: sid, Install: who, IP: ip, ASN: asnLookup(ip), Proto: s.pr.name(),
 		DurMS: time.Since(started).Milliseconds(), RX: rx, TX: tx,
 		Streams: int(s.peakStreams.Load()), Reason: s.closeReason(), Detail: s.noisyDetail(),
 	})
@@ -1526,13 +778,15 @@ func main() {
 		if err != nil {
 			log.Fatalf("события: %v", err)
 		}
-		events = fe
+		setEvents(fe)
 		defer fe.Close()
 	}
 	metrics.gauge("relay_sessions", func() int64 { return liveSessions.Load() })
 	metrics.gauge("relay_streams", func() int64 { return liveStreams.Load() })
 	metrics.gauge("relay_event_write_errors_total", func() int64 { return eventWriteErrors.Load() })
 	metrics.add("relay_build_info", fmt.Sprintf("version=%q", buildVersion), 1)
+	budget = newMemBudget(memLimitBytes())
+	metrics.gauge("relay_queue_bytes", func() int64 { return budget.used.Load() })
 	if *secret == "" {
 		log.Fatal("--secret is required")
 	}

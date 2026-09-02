@@ -37,9 +37,16 @@ type nopEvents struct{}
 
 func (nopEvents) Emit(Event) {}
 
-// events — глобальный сток. По умолчанию ничего не пишет; main() подменяет
-// на файловый, тесты — на memEvents.
-var events eventSink = nopEvents{}
+// Глобальный сток событий. По умолчанию ничего не пишет; main() подменяет
+// на файловый, тесты — на memEvents. Доступ атомарный: сессии дописывают
+// закрытие уже после того, как тест сменил сток.
+var eventsSink atomic.Value
+
+func init() { setEvents(nopEvents{}) }
+
+func setEvents(s eventSink) { eventsSink.Store(&s) }
+
+func emitEvent(ev Event) { (*eventsSink.Load().(*eventSink)).Emit(ev) }
 
 // eventWriteErrors — счётчик неудачных записей; писатель никогда не роняет
 // релей из-за диска, но и не молчит: значение уходит в /metrics.

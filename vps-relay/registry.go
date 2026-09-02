@@ -36,7 +36,6 @@ import (
 	"filippo.io/edwards25519"
 )
 
-
 var (
 	registryPath          = flag.String("registry-path", "/var/lib/z2k-relay/registry.json", "per-install identity registry file")
 	requirePerInstall     = flag.Bool("require-per-install", false, "FLIP: reject static-secret auth, require a registered per-install signature. DO NOT enable until adoption is high — it black-holes every non-migrated install.")
@@ -639,6 +638,34 @@ func verifyPerInstallAuth(payload []byte) (string, bool, string) {
 		return id, false, "повтор подписи"
 	}
 	return id, true, ""
+}
+
+// verifyPerInstallAuthV2 — подпись над id||ts||nonce; nonce одноразовый на
+// сессию, поэтому replay-кэш не нужен и два коннекта в одну секунду не
+// конфликтуют (спека §2.4). Возвращает ещё и код причины для INFO GOODBYE.
+func verifyPerInstallAuthV2(a authV2, nonce [16]byte) (string, bool, string, byte) {
+	if a.Nonce != nonce {
+		return a.ID, false, "nonce не совпал", rAuthFailed
+	}
+	now := time.Now().Unix()
+	if a.TS < now-*authSkewSeconds || a.TS > now+*authSkewSeconds {
+		return a.ID, false, fmt.Sprintf("часы разошлись на %+ds (допуск ±%ds)", a.TS-now, *authSkewSeconds), rClockSkew
+	}
+	e := reg.get(a.ID)
+	if e == nil {
+		return a.ID, false, "установка не зарегистрирована", rAuthFailed
+	}
+	if e.Revoked {
+		return a.ID, false, "установка отозвана", rRevoked
+	}
+	pub, err := base64.StdEncoding.DecodeString(e.Pubkey)
+	if err != nil || !validEd25519Pubkey(pub) {
+		return a.ID, false, "в реестре негодный публичный ключ", rAuthFailed
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), a.Signed, a.Sig) {
+		return a.ID, false, "подпись не сходится с ключом в реестре", rAuthFailed
+	}
+	return a.ID, true, "", rNormal
 }
 
 // ------------------------------------------------ per-install session quota ---
