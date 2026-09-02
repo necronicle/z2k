@@ -1,9 +1,9 @@
 package main
 
 import (
-	"io"
 	"compress/gzip"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"

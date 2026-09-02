@@ -11,7 +11,7 @@ import (
 // превышении high режется самый тяжёлый — сессия жива, событие budget_trim.
 func TestBudget_TrimsHeaviestStreamNotSession(t *testing.T) {
 	m := withMemEvents(t)
-	smallSocketBuffers(t) // иначе ядро на loopback вбирает всё, что клиент «не читает»
+	smallSocketBuffers(t)       // иначе ядро на loopback вбирает всё, что клиент «не читает»
 	budget.setLimit(256 * 1024) // high = 100 КБ, low = 75 КБ
 	t.Cleanup(func() { budget.setLimit(0) })
 	stop := make(chan struct{})

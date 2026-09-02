@@ -24,6 +24,7 @@ type fakeRelay struct {
 	rejectV2 bool
 	window   uint32
 
+	client   *tunnelClient // кого ждёт waitReady
 	mu       sync.Mutex
 	ws       *websocket.Conn
 	proto    atomic.Int32 // 1 или 2, версия последней сессии
@@ -150,9 +151,13 @@ func newTestClient(t *testing.T, fr *fakeRelay) *tunnelClient {
 	t.Cleanup(tc.cancel)
 	tc.identity.Store(id)
 	tc.useID.Store(true)
+	fr.client = tc
 	return tc
 }
 
+// waitReady — релей завершил рукопожатие И клиент выставил писателя: до
+// этого openStream отбрасывает соединения («WS не поднят»). На GitHub (Linux)
+// тест обгонял клиента и стрим не открывался.
 func waitReady(t *testing.T, fr *fakeRelay) {
 	t.Helper()
 	select {
@@ -160,6 +165,17 @@ func waitReady(t *testing.T, fr *fakeRelay) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("релей не дождался сессии")
 	}
+	tc := fr.client
+	for i := 0; i < 500; i++ {
+		tc.mu.Lock()
+		w := tc.writer
+		tc.mu.Unlock()
+		if w != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("клиент не выставил писателя после рукопожатия")
 }
 
 // pipePair — «телефон»: слушатель на loopback, клиентская сторона теста.
