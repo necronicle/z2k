@@ -587,6 +587,9 @@ type session struct {
 	proto       string
 	started     time.Time
 
+	noisyMu sync.Mutex
+	noisyN  map[string]int
+
 	// Потолок одновременных обработчиков CONNECT. Буферизованный канал, а не
 	// счётчик: слот занимается ДО запуска горутины, поэтому переполнение видно
 	// сразу и отвечается отказом, а не копится в памяти.
@@ -625,6 +628,39 @@ func newSession(ws *websocket.Conn, id string, parentCtx context.Context) *sessi
 func (s *session) killWith(reason string) {
 	s.reasonOnce.Do(func() { s.reason = reason })
 	s.kill()
+}
+
+const noisyPrintLimit = 3
+
+// noisy считает повторяющиеся отказы одной сессии и разрешает печать
+// только первых трёх: одна установка с самонабором давала 13 тысяч строк
+// за два часа и вымывала журнал релея до пяти часов истории (02.09.2026).
+func (s *session) noisy(kind string) bool {
+	s.noisyMu.Lock()
+	defer s.noisyMu.Unlock()
+	if s.noisyN == nil {
+		s.noisyN = map[string]int{}
+	}
+	s.noisyN[kind]++
+	return s.noisyN[kind] <= noisyPrintLimit
+}
+
+func (s *session) noisyDetail() string {
+	s.noisyMu.Lock()
+	defer s.noisyMu.Unlock()
+	if len(s.noisyN) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(s.noisyN))
+	for k := range s.noisyN {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, s.noisyN[k]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *session) closeReason() string {
@@ -720,7 +756,9 @@ func (s *session) sendDataFrame(st *stream, frame []byte) {
 
 	if st.queuedBytes.Add(n) > int64(*perStreamQueueBytes) {
 		st.queuedBytes.Add(-n)
-		log.Printf("[%s] stream %d per-stream queue exceeded, aborting", s.id, st.id)
+		if s.noisy("queue_abort") {
+			log.Printf("[%s] stream %d per-stream queue exceeded, aborting", s.id, st.id)
+		}
 		s.sendAbort(st)
 		return
 	}
@@ -741,7 +779,9 @@ func (s *session) sendDataFrame(st *stream, frame []byte) {
 	default:
 		s.releaseSession(int(n))
 		st.queuedBytes.Add(-n)
-		log.Printf("[%s] stream %d writeCh full, aborting stream", s.id, st.id)
+		if s.noisy("queue_abort") {
+			log.Printf("[%s] stream %d writeCh full, aborting stream", s.id, st.id)
+		}
 		s.sendAbort(st)
 	}
 }
@@ -923,7 +963,9 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 		return
 	}
 	if !isTelegramAddr(addr) {
-		log.Printf("[%s] stream %d rejected non-Telegram %s:%d", s.id, id, addr, port)
+		if s.noisy("rejected_non_tg") {
+			log.Printf("[%s] stream %d rejected non-Telegram %s:%d", s.id, id, addr, port)
+		}
 		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "not_allowed", Detail: net.JoinHostPort(addr, strconv.Itoa(port))})
 		s.sendConnectResult(id, false)
 		return
@@ -952,7 +994,9 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 			return
 		}
 		stats.record(false, false, false, 0)
-		log.Printf("[%s] stream %d dial %s failed (attempts=%d): %v", s.id, id, target, attempt+1, err)
+		if s.noisy("dial_failed") {
+			log.Printf("[%s] stream %d dial %s failed (attempts=%d): %v", s.id, id, target, attempt+1, err)
+		}
 		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "dial_error", Detail: target})
 		s.sendConnectResult(id, false)
 		return
@@ -983,8 +1027,10 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 	// это чужая память, купленная десятибайтовыми кадрами.
 	if !replacing && *maxStreamsPerSess > 0 && len(s.streams) >= *maxStreamsPerSess {
 		s.mu.Unlock()
-		log.Printf("[%s] stream %d: превышен потолок стримов на сессию (%d) — отказ",
-			s.id, id, *maxStreamsPerSess)
+		if s.noisy("stream_limit") {
+			log.Printf("[%s] stream %d: превышен потолок стримов на сессию (%d) — отказ",
+				s.id, id, *maxStreamsPerSess)
+		}
 		_ = conn.Close()
 		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "stream_limit", Detail: target})
 		s.sendConnectResult(id, false)
@@ -1173,8 +1219,10 @@ func (s *session) readPump() {
 			// CONNECT_FAIL: клиент попробует ещё раз, а мы не копим работу,
 			// за которую никто не платил.
 			if !s.acquireConnectSlot() {
-				log.Printf("[%s] stream %d: превышен потолок одновременных CONNECT (%d) — отказ",
-					s.id, sid, *maxPendingConnects)
+				if s.noisy("connect_limit") {
+					log.Printf("[%s] stream %d: превышен потолок одновременных CONNECT (%d) — отказ",
+						s.id, sid, *maxPendingConnects)
+				}
 				s.sendConnectResult(sid, false)
 				continue
 			}
@@ -1484,7 +1532,7 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	events.Emit(Event{
 		Ev: "session_close", SID: sid, Install: who, IP: ip, ASN: asnLookup(ip), Proto: s.proto,
 		DurMS: time.Since(started).Milliseconds(), RX: rx, TX: tx,
-		Streams: int(s.peakStreams.Load()), Reason: s.closeReason(),
+		Streams: int(s.peakStreams.Load()), Reason: s.closeReason(), Detail: s.noisyDetail(),
 	})
 }
 
