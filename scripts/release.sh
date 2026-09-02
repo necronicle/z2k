@@ -297,7 +297,7 @@ if [ -n "$_mtproxy_changed" ]; then
         # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
         if ! ( cd mtproxy-client && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
                  "$_go_bin" build -trimpath -buildvcs=false \
-                 -ldflags="-s -w -X main.defaultTunnelSecret=$Z2K_TUNNEL_SECRET" \
+                 -ldflags="-s -w -X main.defaultTunnelSecret=$Z2K_TUNNEL_SECRET -X main.buildVersion=$VER" \
                  -o "$_mt_tmp/rebuilt" "$pkg" ); then
             printf 'release: mtproxy-client/%s не собирается\n' "$goarch" >&2; _mt_rc=1; continue
         fi
@@ -315,7 +315,8 @@ if [ -n "$_mtproxy_changed" ]; then
     done < build-matrix.tsv
     rm -rf "$_mt_tmp"
     [ "$_mt_rc" = "0" ] || die "mtproxy-client в builds/ не совпадает с пересборкой из этого исходника (реальный секрет) —
-     пересоберите: cd mtproxy-client && make all Z2K_TUNNEL_SECRET=... — и закоммитьте builds/"
+     пересоберите: cd mtproxy-client && make all Z2K_TUNNEL_SECRET=... Z2K_BUILD_VERSION=$VER — и закоммитьте builds/
+     (версия релиза вшивается в клиент для HELLO релею, поэтому сборка должна знать её заранее)"
     printf 'mtproxy-client: все изменённые архитектуры совпадают с пересборкой (реальный секрет)\n'
 fi
 
