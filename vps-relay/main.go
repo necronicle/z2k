@@ -544,6 +544,9 @@ type stream struct {
 	conn        net.Conn
 	queuedBytes atomic.Int64
 	aborted     atomic.Bool
+	opened      time.Time
+	target      string
+	closeReason atomic.Value // string; выставляется первым, кто закрывает
 }
 
 // queuedFrame carries a frame plus identity of its stream so writePump can
@@ -654,6 +657,7 @@ func (s *session) kill() {
 		_ = s.ws.Close()
 		s.mu.Lock()
 		for _, st := range s.streams {
+			s.emitStreamClose(st, "session_close")
 			st.aborted.Store(true)
 			if st.conn != nil {
 				_ = st.conn.Close()
@@ -776,10 +780,23 @@ func (s *session) sendOrderedClose(st *stream) {
 // sendAbort marks the stream aborted, removes it from the map, closes the
 // upstream conn, and enqueues a CLOSE via the priority controlCh. Idempotent
 // via CAS — concurrent abort-paths produce exactly one CLOSE frame.
+// emitStreamClose пишет ровно одно событие закрытия на стрим: первая
+// причина побеждает, повторные вызовы игнорируются.
+func (s *session) emitStreamClose(st *stream, reason string) {
+	if !st.closeReason.CompareAndSwap(nil, reason) {
+		return
+	}
+	events.Emit(Event{
+		Ev: "stream_close", SID: s.id, Install: s.relayID, Reason: reason,
+		DurMS: time.Since(st.opened).Milliseconds(), Detail: st.target,
+	})
+}
+
 func (s *session) sendAbort(st *stream) {
 	if !st.aborted.CompareAndSwap(false, true) {
 		return
 	}
+	s.emitStreamClose(st, "abort")
 	s.mu.Lock()
 	if cur, ok := s.streams[st.id]; ok && cur == st {
 		delete(s.streams, st.id)
@@ -827,6 +844,7 @@ func (s *session) closeStream(id uint16) {
 	if !ok {
 		return
 	}
+	s.emitStreamClose(st, "peer_close")
 	st.aborted.Store(true)
 	if st.conn != nil {
 		_ = st.conn.Close()
@@ -906,6 +924,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 	}
 	if !isTelegramAddr(addr) {
 		log.Printf("[%s] stream %d rejected non-Telegram %s:%d", s.id, id, addr, port)
+		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "not_allowed", Detail: net.JoinHostPort(addr, strconv.Itoa(port))})
 		s.sendConnectResult(id, false)
 		return
 	}
@@ -919,6 +938,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 			if *verbose {
 				log.Printf("[%s] stream %d dial throttle %s", s.id, id, addr)
 			}
+			events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "throttled", Detail: target})
 		}
 		s.sendConnectResult(id, false)
 		return
@@ -933,6 +953,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 		}
 		stats.record(false, false, false, 0)
 		log.Printf("[%s] stream %d dial %s failed (attempts=%d): %v", s.id, id, target, attempt+1, err)
+		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "dial_error", Detail: target})
 		s.sendConnectResult(id, false)
 		return
 	}
@@ -945,7 +966,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 		_ = tc.SetKeepAlivePeriod(60 * time.Second)
 	}
 
-	st := &stream{id: id, conn: conn}
+	st := &stream{id: id, conn: conn, opened: time.Now(), target: target}
 
 	s.mu.Lock()
 	if s.streams == nil {
@@ -965,11 +986,13 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 		log.Printf("[%s] stream %d: превышен потолок стримов на сессию (%d) — отказ",
 			s.id, id, *maxStreamsPerSess)
 		_ = conn.Close()
+		events.Emit(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "stream_limit", Detail: target})
 		s.sendConnectResult(id, false)
 		return
 	}
 	if replacing {
 		old := s.streams[id]
+		s.emitStreamClose(old, "replaced")
 		old.aborted.Store(true)
 		if old.conn != nil {
 			_ = old.conn.Close()
@@ -989,6 +1012,7 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 		log.Printf("[%s] stream %d CONNECT %s ok (%s) active=%d", s.id, id, target, lat, active)
 	}
 	s.sendConnectResult(id, true)
+	events.Emit(Event{Ev: "stream_open", SID: s.id, Install: s.relayID, DurMS: lat.Milliseconds(), Detail: target})
 
 	go s.pumpReadFromTCP(st)
 }
@@ -1032,6 +1056,7 @@ func (s *session) pumpReadFromTCP(st *stream) {
 	s.mu.Unlock()
 	_ = st.conn.Close()
 	if exists && cur == st && !st.aborted.Load() {
+		s.emitStreamClose(st, "eof")
 		s.sendOrderedClose(st)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,5 +99,79 @@ func TestHandleWS_ReadTimeoutReason(t *testing.T) {
 	}
 	if r := m.byEv("session_close")[0].Reason; !strings.HasPrefix(r, "auth_read_err") {
 		t.Fatalf("reason=%q, ожидался auth_read_err", r)
+	}
+}
+
+func TestStreamEvents_EOFClose(t *testing.T) {
+	m := withMemEvents(t)
+	sess, client, cleanup := newTestSession(t)
+	defer cleanup()
+	go sess.writePump()
+
+	// Настоящий TCP-апстрим: сервер отдаёт байты и закрывает.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = c.Write([]byte("hello"))
+		_ = c.Close()
+	}()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &stream{id: 7, conn: conn, opened: time.Now(), target: ln.Addr().String()}
+	sess.mu.Lock()
+	sess.streams[7] = st
+	sess.mu.Unlock()
+	events.Emit(Event{Ev: "stream_open", SID: sess.id, Detail: st.target})
+	go sess.pumpReadFromTCP(st)
+
+	frames := readFrames(t, client, 2*time.Second)
+	var sawClose bool
+	for _, f := range frames {
+		if f.msgType == muxCLOSE && f.streamID == 7 {
+			sawClose = true
+		}
+	}
+	if !sawClose {
+		t.Fatal("клиент не получил CLOSE после EOF апстрима")
+	}
+	if !m.wait("stream_close", 1, time.Second) {
+		t.Fatal("нет события stream_close")
+	}
+	ev := m.byEv("stream_close")[0]
+	if ev.Reason != "eof" || ev.Detail != st.target || ev.SID != sess.id {
+		t.Fatalf("stream_close неверен: %+v", ev)
+	}
+}
+
+func TestStreamEvents_AbortReason(t *testing.T) {
+	m := withMemEvents(t)
+	sess, client, cleanup := newTestSession(t)
+	defer cleanup()
+	defer client.Close()
+	go sess.writePump()
+	st := &stream{id: 3, conn: nopConn{}, opened: time.Now(), target: "149.154.167.50:443"}
+	sess.mu.Lock()
+	sess.streams[3] = st
+	sess.mu.Unlock()
+	sess.sendAbort(st)
+	sess.sendAbort(st) // повтор не даёт второго события
+	if !m.wait("stream_close", 1, time.Second) {
+		t.Fatal("нет stream_close после abort")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(m.byEv("stream_close")); n != 1 {
+		t.Fatalf("stream_close должно быть одно, получено %d", n)
+	}
+	if r := m.byEv("stream_close")[0].Reason; r != "abort" {
+		t.Fatalf("reason=%q, ожидалось abort", r)
 	}
 }
