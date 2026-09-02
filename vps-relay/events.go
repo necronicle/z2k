@@ -1,11 +1,14 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,7 +55,29 @@ func emitEvent(ev Event) { (*eventsSink.Load().(*eventSink)).Emit(ev) }
 // релей из-за диска, но и не молчит: значение уходит в /metrics.
 var eventWriteErrors atomic.Int64
 
-// fileEvents пишет события в файл дня и держит не больше keep файлов.
+// worthKeeping — что попадает в файл. Штатное открытие и закрытие стрима
+// (eof, peer_close, закрытие вместе с сессией) — 99,5 % строк журнала
+// (замер 02.09.2026: 1,58 млн из 1,59 млн, 274 МБ за день) при нулевой
+// диагностической ценности: число стримов есть в session_close и в
+// метриках. В файл идут сессии, отказы, дозвоны и только ненормальные
+// закрытия стримов. Сток в памяти (тесты) видит всё.
+func worthKeeping(ev Event) bool {
+	switch ev.Ev {
+	case "stream_open":
+		return false
+	case "stream_close":
+		switch ev.Reason {
+		case "eof", "peer_close", "session_close":
+			return false
+		}
+	}
+	return true
+}
+
+// fileEvents пишет события в файл дня и держит не больше keep суток.
+// Файлы прошлых дней сжимаются gzip (на живых данных 10:1) и удаляются
+// по старшинству; уборка идёт отдельной горутиной, чтобы не держать
+// сессии на замке писателя во время сжатия.
 type fileEvents struct {
 	mu   sync.Mutex
 	dir  string
@@ -60,6 +85,8 @@ type fileEvents struct {
 	day  string
 	f    *os.File
 	now  func() time.Time
+	hk   sync.WaitGroup
+	hkMu sync.Mutex
 }
 
 func newFileEvents(dir string, keep int) (*fileEvents, error) {
@@ -78,6 +105,9 @@ func newFileEvents(dir string, keep int) (*fileEvents, error) {
 }
 
 func (e *fileEvents) Emit(ev Event) {
+	if !worthKeeping(ev) {
+		return
+	}
 	now := e.now().UTC()
 	if ev.TS == "" {
 		ev.TS = now.Format(time.RFC3339Nano)
@@ -103,7 +133,7 @@ func (e *fileEvents) Emit(ev Event) {
 	}
 }
 
-// rotateLocked открывает файл дня и удаляет всё старше keep файлов.
+// rotateLocked открывает файл дня и запускает уборку прошлых дней.
 func (e *fileEvents) rotateLocked(day string) error {
 	if e.f != nil {
 		_ = e.f.Close()
@@ -115,22 +145,99 @@ func (e *fileEvents) rotateLocked(day string) error {
 		return err
 	}
 	e.f, e.day = f, day
-	names, _ := filepath.Glob(filepath.Join(e.dir, "events-*.jsonl"))
-	sort.Strings(names) // имена с датой ISO сортируются хронологически
-	for len(names) > e.keep {
-		_ = os.Remove(names[0])
-		names = names[1:]
-	}
+	e.hk.Add(1)
+	go func() {
+		defer e.hk.Done()
+		e.housekeep()
+	}()
 	return nil
 }
 
+// housekeep — удалить дни старше keep, сжать несжатые файлы прошлых дней.
+// Сначала удаление: незачем сжимать то, что сейчас уйдёт. Текущий день
+// берётся у писателя в момент уборки, а не в момент запуска: две ротации
+// подряд (полночь и перезапуск) не должны сжать файл, который уже пишется.
+func (e *fileEvents) housekeep() {
+	e.hkMu.Lock()
+	defer e.hkMu.Unlock()
+	e.mu.Lock()
+	current := e.day
+	e.mu.Unlock()
+	names, _ := filepath.Glob(filepath.Join(e.dir, "events-*.jsonl*"))
+	byDay := map[string][]string{}
+	for _, n := range names {
+		d := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(n), "events-"), ".gz"), ".jsonl")
+		byDay[d] = append(byDay[d], n)
+	}
+	days := make([]string, 0, len(byDay))
+	for d := range byDay {
+		days = append(days, d)
+	}
+	sort.Strings(days) // даты ISO сортируются хронологически
+	for len(days) > e.keep {
+		for _, n := range byDay[days[0]] {
+			_ = os.Remove(n)
+		}
+		days = days[1:]
+	}
+	for _, d := range days {
+		if d >= current {
+			continue
+		}
+		for _, n := range byDay[d] {
+			if strings.HasSuffix(n, ".jsonl") {
+				if err := gzipFile(n); err != nil {
+					eventWriteErrors.Add(1)
+				}
+			}
+		}
+	}
+}
+
+// gzipFile — сжать src в src.gz и удалить src; при ошибке оригинал остаётся.
+func gzipFile(src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := src + ".gz.tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	zw := gzip.NewWriter(out)
+	if _, err := io.Copy(zw, in); err != nil {
+		zw.Close()
+		out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, src+".gz"); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Remove(src)
+}
+
+// Close закрывает файл дня и дожидается уборки.
 func (e *fileEvents) Close() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.f == nil {
-		return nil
+	var err error
+	if e.f != nil {
+		err = e.f.Close()
+		e.f = nil
 	}
-	err := e.f.Close()
-	e.f = nil
+	e.mu.Unlock()
+	e.hk.Wait()
 	return err
 }

@@ -98,8 +98,11 @@ sh vps/bin/verify.sh | grep -A1 'разнос приёма'
 
 ## События, метрики, тревоги (с плана 1 v2)
 
-- События: `/var/log/z2k-relay/events-YYYY-MM-DD.jsonl`, 30 суток. Быстрые срезы:
+- События: `/var/log/z2k-relay/events-YYYY-MM-DD.jsonl` (сегодня) и `.jsonl.gz` (прошлые дни, сжатие 10:1), 30 суток.
+  Штатные `stream_open`/`stream_close` (eof, peer_close, session_close) в файл НЕ пишутся — это было 99,5 % объёма
+  (274 МБ/сутки до 03.09.2026); стримы считаются в `session_close.streams` и в метриках. Быстрые срезы:
   `jq -r 'select(.ev=="session_close") | .reason' events-$(date -u +%F).jsonl | sort | uniq -c | sort -rn`
+  По прошлому дню: `zcat events-2026-09-02.jsonl.gz | jq -r ...`
   `jq -r 'select(.ev=="session_close" and .reason=="read_timeout") | .asn' … | sort | uniq -c | sort -rn | head`
 - Метрики: `curl -s 127.0.0.1:9098/metrics`; pprof: `go tool pprof http://127.0.0.1:9098/debug/pprof/heap`.
 - Тревоги: `systemctl list-timers z2k-alert.timer`, состояние `/var/lib/z2k-relay/alert-state/`, правила в `alert.sh`.

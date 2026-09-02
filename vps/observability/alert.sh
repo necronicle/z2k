@@ -15,7 +15,10 @@ yday=$(date -u -d "@$((now-86400))" +%Y-%m-%d 2>/dev/null || date -u -r $((now-8
 # арифметикой (days_from_civil): mktime есть только в gawk, а на узле mawk,
 # на машине сборки — BWK awk.
 recent() {
-    cat "$EV_DIR/events-$yday.jsonl" "$EV_DIR/events-$today.jsonl" 2>/dev/null \
+    # вчерашний день релей сжимает после полуночи (.jsonl.gz); сразу после
+    # ротации, пока сжатие идёт, есть оба — читаем что есть
+    { gzip -dc "$EV_DIR/events-$yday.jsonl.gz" 2>/dev/null
+      cat "$EV_DIR/events-$yday.jsonl" "$EV_DIR/events-$today.jsonl" 2>/dev/null; } \
     | awk -v now="$now" -v win="$1" '
         function days_from_civil(y, m, d,   era, yoe, doy, doe) {
             y -= (m <= 2)
