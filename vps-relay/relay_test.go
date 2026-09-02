@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,12 +37,41 @@ func withMemEvents(t *testing.T) *memEvents {
 	return m
 }
 
+// testSmallSockBufs — сжать буферы сокетов WS до 8 КБ с обеих сторон.
+// Тестам давления на память нужен клиент, который «не читает»: на Linux
+// автонастройка tcp_rmem/tcp_wmem на loopback молча вбирает несколько МБ, и
+// очередь релея не растёт, хотя клиент не читает ничего (GitHub CI, 02.09.2026).
+var testSmallSockBufs atomic.Bool
+
+func smallSocketBuffers(t *testing.T) {
+	t.Helper()
+	testSmallSockBufs.Store(true)
+	t.Cleanup(func() { testSmallSockBufs.Store(false) })
+}
+
+type smallBufListener struct{ net.Listener }
+
+func (l smallBufListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetWriteBuffer(8 * 1024)
+			_ = tc.SetReadBuffer(8 * 1024)
+		}
+	}
+	return c, err
+}
+
 func startRelay(t *testing.T) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleWS(ctx, w, r)
 	}))
+	if testSmallSockBufs.Load() {
+		srv.Listener = smallBufListener{srv.Listener}
+	}
+	srv.Start()
 	t.Cleanup(func() {
 		cancel()
 		srv.Close()
@@ -163,7 +193,20 @@ func expectFrame(t *testing.T, ws *websocket.Conn, sid uint16, mt byte, timeout 
 
 func dialWS(t *testing.T, url string) *websocket.Conn {
 	t.Helper()
-	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	d := *websocket.DefaultDialer
+	if testSmallSockBufs.Load() {
+		d.NetDial = func(network, addr string) (net.Conn, error) {
+			c, err := net.Dial(network, addr)
+			if err == nil {
+				if tc, ok := c.(*net.TCPConn); ok {
+					_ = tc.SetWriteBuffer(8 * 1024)
+					_ = tc.SetReadBuffer(8 * 1024)
+				}
+			}
+			return c, err
+		}
+	}
+	ws, _, err := d.Dial(url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
