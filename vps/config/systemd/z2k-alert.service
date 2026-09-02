@@ -1,0 +1,8 @@
+[Unit]
+Description=z2k: правила тревог по событиям релея
+Documentation=file:/opt/z2k-vps/observability/alert.sh
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/z2k/secrets.env
+ExecStart=/opt/z2k-vps/observability/alert.sh /var/log/z2k-relay http://127.0.0.1:9098/metrics /var/lib/z2k-relay/alert-state

@@ -32,7 +32,9 @@ MASK='s/(--secret|--secret-prev|--resolve-secret|--admin-token)=[^ "]*/\1=<СЕ�
 # Файлы с секретами не раскатываются: в репозитории они лежат с маской
 # <СЕКРЕТ>, и раскатка подставила бы эту маску вместо настоящего ключа.
 # Они существуют в репозитории ради сверки структуры, а не ради установки.
-SECRET_BEARING="config/systemd/z2k-relay.service config/systemd/z2k-relay.service.d/10-require-per-install.conf"
+# 10-require-per-install.conf ссылается на секреты через env:, значений в нём
+# нет — он раскатывается обычным порядком.
+SECRET_BEARING="config/systemd/z2k-relay.service"
 
 PAIRS="
 config/nginx.conf:/etc/nginx/nginx.conf:nginx
@@ -41,11 +43,19 @@ config/sysctl.d/99-z2k-relay.conf:/etc/sysctl.d/99-z2k-relay.conf:sysctl
 config/sysctl.d/99-z2k-tcp.conf:/etc/sysctl.d/99-z2k-tcp.conf:sysctl
 config/systemd/z2k-net-tuning.service:/etc/systemd/system/z2k-net-tuning.service:systemd
 bin/net-tuning.sh:/opt/z2k-vps/bin/net-tuning.sh:script
+config/systemd/z2k-relay.service.d/10-require-per-install.conf:/etc/systemd/system/z2k-relay.service.d/10-require-per-install.conf:systemd
+config/journald.conf.d/z2k.conf:/etc/systemd/journald.conf.d/z2k.conf:journald
+config/systemd/z2k-asn-update.service:/etc/systemd/system/z2k-asn-update.service:systemd
+config/systemd/z2k-asn-update.timer:/etc/systemd/system/z2k-asn-update.timer:timer
+config/systemd/z2k-alert.service:/etc/systemd/system/z2k-alert.service:systemd
+config/systemd/z2k-alert.timer:/etc/systemd/system/z2k-alert.timer:timer
+observability/asn-update.sh:/opt/z2k-vps/observability/asn-update.sh:script
+observability/alert.sh:/opt/z2k-vps/observability/alert.sh:script
 "
 
 [ "$APPLY" = 1 ] || printf 'РЕЖИМ ПРОСМОТРА. Ничего не меняется. Для раскатки: --apply\n\n'
 
-changed_nginx=0; changed_caddy=0; changed_sysctl=0; changed_systemd=0; changed=0
+changed_nginx=0; changed_caddy=0; changed_sysctl=0; changed_systemd=0; changed_journald=0; changed_timer=0; changed=0
 for p in $PAIRS; do
     [ -z "$p" ] && continue
     rel="${p%%:*}"; rest="${p#*:}"; remote_f="${rest%%:*}"; kind="${rest##*:}"
@@ -54,6 +64,12 @@ for p in $PAIRS; do
 
     case " $SECRET_BEARING " in
         *" $rel "*) printf 'только сверка %s (содержит секреты, не раскатывается)\n' "$rel"; continue ;;
+    esac
+    # Z2K_DEPLOY_SKIP — пути через пробел, которые в этот раз не раскатывать.
+    # Нужно, когда файл обязан приехать ВМЕСТЕ с чем-то, чего deploy.sh не
+    # возит: drop-in юнита с новыми флагами релея — только с новым бинарником.
+    case " ${Z2K_DEPLOY_SKIP:-} " in
+        *" $rel "*) printf 'пропуск      %s (Z2K_DEPLOY_SKIP)\n' "$rel"; continue ;;
     esac
 
     r=$($SSH "cat '$remote_f' 2>/dev/null" | sed -E "$MASK" | shasum -a 256 | cut -d' ' -f1)
@@ -75,6 +91,8 @@ for p in $PAIRS; do
         caddy)  changed_caddy=1 ;;
         sysctl) changed_sysctl=1 ;;
         systemd) changed_systemd=1 ;;
+        journald) changed_journald=1 ;;
+        timer) changed_systemd=1; changed_timer=1 ;;
     esac
 done
 
@@ -118,6 +136,15 @@ if [ "$changed_systemd" = 1 ]; then
     $SSH "systemctl is-enabled z2k-net-tuning.service >/dev/null 2>&1" \
         || $SSH "systemctl enable --now z2k-net-tuning.service" >/dev/null 2>&1
     $SSH "systemctl restart z2k-net-tuning.service" && printf '  разнос приёма по ядрам переприменён\n'
+fi
+
+# Юнит релея перечитан, но НЕ перезапущен: новые флаги вступят в силу при
+# следующем перезапуске релея, который делается только в окно (RUNBOOK).
+if [ "$changed_journald" = 1 ]; then
+    $SSH "systemctl restart systemd-journald" && printf '  journald перезапущен (потолок 256M)\n'
+fi
+if [ "$changed_timer" = 1 ]; then
+    $SSH "systemctl enable --now z2k-asn-update.timer z2k-alert.timer" && printf '  таймеры включены\n'
 fi
 
 printf '\n=== сверка после раскатки\n'

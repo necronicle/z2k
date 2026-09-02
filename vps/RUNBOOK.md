@@ -95,3 +95,15 @@ sh vps/bin/verify.sh | grep -A1 'разнос приёма'
 
 `ВЫКЛЮЧЕН` означает, что юнит не отработал — приём идёт в один поток, узел
 держит примерно вдвое меньший всплеск.
+
+## События, метрики, тревоги (с плана 1 v2)
+
+- События: `/var/log/z2k-relay/events-YYYY-MM-DD.jsonl`, 30 суток. Быстрые срезы:
+  `jq -r 'select(.ev=="session_close") | .reason' events-$(date -u +%F).jsonl | sort | uniq -c | sort -rn`
+  `jq -r 'select(.ev=="session_close" and .reason=="read_timeout") | .asn' … | sort | uniq -c | sort -rn | head`
+- Метрики: `curl -s 127.0.0.1:9098/metrics`; pprof: `go tool pprof http://127.0.0.1:9098/debug/pprof/heap`.
+- Тревоги: `systemctl list-timers z2k-alert.timer`, состояние `/var/lib/z2k-relay/alert-state/`, правила в `alert.sh`.
+  Секреты `Z2K_ALERT_BOT_TOKEN` и `Z2K_ALERT_CHAT_ID` — в `/etc/z2k/secrets.env`.
+- Таблица ASN: `systemctl start z2k-asn-update.service` для ручного обновления; релей подхватывает в течение часа.
+- Новые флаги релея (`--events-dir`, `--asn-table`) лежат в drop-in юнита и вступают в силу
+  при перезапуске релея — это окно: `systemctl restart z2k-relay` рвёт все туннели.
