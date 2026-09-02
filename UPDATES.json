@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 63,
-  "current": "p-81.15",
+  "seq": 64,
+  "current": "r-82.1",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -220,15 +220,15 @@
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
   "lib/utils.sh": "a128fd3d64dd774bab77ad0abff626413ef8c04f535b11b13a9abfad9c6e86ca",
   "lib/webpanel.sh": "7e44a9f94e442d87f67bce091548dc482c921fad49014face9af53e8ed3e9504",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-amd64": "dc9a3d2313f007c355f8cca2fd2d2910da2eda0e87fce1760685be1d8e77bf52",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-arm": "502a5715fd66a8209a979265863a3910a28ef97a91f0b5b7c2e3e1f53eaf4ea8",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-arm64": "b63de3f3f366ffd7aef4858a327906a64d4ef04a5e5cdd0dc059dd593693ab9f",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-mips": "28ab76b8e6192f929e0006a288ca30242af7fa21a17c6b5486f3be5c9eb3f484",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el": "486fd641f601f028970543e46b5b70b83dff4f68c883376ea04b1e954a283ff9",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel": "fe68e2d5e023e005995d72c887ae5d33e305c53e00cb6e82aaa635c1e2e6f273",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64": "b6820dd915e2bd662d63e4ad9408d600047028583f9f55edf845bde784cbee54",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64": "8a6c880fa4f1c10f6f81d79054f5dc499f7b78a58b6e86765565529e35230ea3",
-  "mtproxy-client/builds/tg-mtproxy-client-linux-x86": "a157f3cc76f48f581a65e2c656626e3d757960748ce3308fa758b4e7fb6d0028",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-amd64": "4aaaa0433e9e47e06664590af335ec8dec3f2a7aa2dbbb7e1f21568b2e4129aa",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-arm": "02d1e3dc35b96f370d7c21421a9fad5cfa649de894bc7baedb31b92913215e64",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-arm64": "4c1cd9236f2913d339f10f28b7e3f430c302f3fc32610f2a22d3dcc3c36ca067",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-mips": "c9cffdd59b359442bd939c5e85a33d5c016b71fd83452bb4ad2e6927ad913322",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el": "d2149154afe4fcf90beb447ca822cf421620bc3fc159b725d5d3c19a43835fa4",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel": "ec58959fb2d2bf433078914d38dffaaf999925ce2fc412af706676635500eed3",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64": "eff46a004acbdf58a3a37a916f1c037dbc69b55cdc085b414dd15ba4ea1a09a0",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64": "6e08f883e0cb6ac68d0d15336e12eeb1bb83153372fd9b0112673256232b0778",
+  "mtproxy-client/builds/tg-mtproxy-client-linux-x86": "07b95eed3c313e4b543f605f100996fb69c39f0104b9901390e99d3e34550904",
   "mtproxy-client/builds/z2k-rt-proxy-linux-amd64": "405ff0a5637a450b3b7b0bc1d990f967544b80e65ff87c6d4ebf2ad5455e9948",
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm": "5482e415469b054fc4f7561b76b532542439e72194aa55cdee277095fea5386b",
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "2b8cec24a6bf0fe522e0b368a763f0f65c6de7af44b8b7cfde6bc7358ee7a204",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "17858877c166ff569ef92c16a20baeec009ae09cd234ba613a7941f68d96334a",
+  "webpanel/www/index.html": "0eba01b915287b8eb1fa344885854f3c8ef884c2b787542af140fcac7100435f",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -507,6 +507,7 @@
 {"v": "p-81.12", "type": "patch", "ts": "2026-09-01T18:01:30Z", "ref": "p-81.12", "desc": "Вход в панель работает, когда веб-интерфейс роутера перенесён на другой порт.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "webpanel/cgi/auth.sh", "webpanel/www/js/core/loadorder.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-81.13", "type": "patch", "ts": "2026-09-02T06:23:28Z", "ref": "p-81.13", "desc": "Исключения по адресу больше не пропадают по ночам: адреса с комментарием в строке и локальная сеть остаются исключёнными, а домены в этот список не попадают. Подсказка к файлу списка описывает то, что есть на самом деле. Обновление больше не оставляет роутер на полминуты без планировщика задач.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-scheduler.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "r-81.14", "type": "reinstall", "ts": "2026-09-02T09:05:33Z", "ref": "r-81.14", "desc": "Telegram быстрее восстанавливается после обрывов связи с узлом: перерыв сокращён примерно с двух минут до сорока секунд.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-81.15", "type": "patch", "ts": "2026-09-02T15:57:27Z", "ref": "p-81.15", "desc": "Режим WARP стал заметно экономнее: движок больше не разрастается до сотни мегабайт под нагрузкой и не падает на роутерах с малым объёмом памяти. Панель теперь показывает, сколько памяти он занимает.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-81.15", "type": "patch", "ts": "2026-09-02T15:57:27Z", "ref": "p-81.15", "desc": "Режим WARP стал заметно экономнее: движок больше не разрастается до сотни мегабайт под нагрузкой и не падает на роутерах с малым объёмом памяти. Панель теперь показывает, сколько памяти он занимает.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "r-82.1", "type": "reinstall", "ts": "2026-09-02T22:38:23Z", "ref": "r-82.1", "desc": "Telegram через наш сервер: обновлён протокол связи роутера с сервером. Одно медленное устройство больше не тормозит остальные, переподключения после сбоев сети распределяются во времени, а поток данных идёт с контролем очередей — меньше обрывов и зависаний в вечерние часы.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
