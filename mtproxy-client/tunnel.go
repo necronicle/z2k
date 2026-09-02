@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -147,6 +148,16 @@ type tunnelClient struct {
 	connectSem chan struct{} // limits concurrent in-flight CONNECTs — 6 keeps SYN rate under TG DC burst threshold
 	ctx        context.Context
 	cancel     context.CancelFunc
+
+	// Протокол v2 (спека §2, §4). forceV1 — релей отверг рукопожатие v2 или
+	// не ответил на HELLO: дальше ходим по v1, как раньше. clockOffset —
+	// поправка часов из HELLO_ACK, применяется к ts в подписи. retryAfter —
+	// пауза, которую попросил релей (INFO RETRY_AFTER) перед переподключением.
+	v2          atomic.Bool
+	forceV1     atomic.Bool
+	clockOffset atomic.Int64
+	retryAfter  atomic.Int64
+	window      atomic.Int64
 }
 
 type tunnelStream struct {
@@ -155,12 +166,48 @@ type tunnelStream struct {
 	client      *tunnelClient
 	closeOnce   sync.Once
 	remoteClose atomic.Bool // set when relay initiated the close
+	semHeld     atomic.Bool // держим слот connectSem до CONNECT_OK/FAIL или закрытия
+	writing     atomic.Bool // phoneWriter запущен (после CONNECT_OK)
+
+	// К телефону — через очередь и свой писатель (спека §4.3): уснувший
+	// телефон раньше стопорил reader WS и с ним все стримы сессии.
+	outq *byteQueue
+
+	// v2: кредит, выданный релеем (сколько можно послать), и сколько получено
+	// от релея и ещё не подтверждено кадром WINDOW.
+	credit      atomic.Int64
+	creditWake  chan struct{}
+	recvUnacked atomic.Int64
+}
+
+func newTunnelStream(id uint16, conn *net.TCPConn, tc *tunnelClient) *tunnelStream {
+	return &tunnelStream{id: id, conn: conn, client: tc,
+		outq: newByteQueue(phoneQueueBytes), creditWake: make(chan struct{}, 1)}
+}
+
+// phoneQueueBytes — очередь к телефону; в v2 её реально ограничивает окно,
+// которое мы выдали релею, здесь только страховка.
+const phoneQueueBytes = 2 * 1024 * 1024
+
+func (s *tunnelStream) releaseSem() {
+	if s.semHeld.CompareAndSwap(true, false) {
+		select {
+		case <-s.client.connectSem:
+		default:
+		}
+	}
 }
 
 func (s *tunnelStream) close() {
 	s.closeOnce.Do(func() {
+		s.outq.close()
 		s.conn.Close()
 		s.client.streams.Delete(s.id)
+		s.releaseSem()
+		select {
+		case s.creditWake <- struct{}{}:
+		default:
+		}
 		// Only send CLOSE if we initiated the close (not the relay)
 		if !s.remoteClose.Load() {
 			s.client.mu.Lock()
@@ -174,6 +221,53 @@ func (s *tunnelStream) close() {
 		// Release connection semaphore
 		<-connSemaphore
 	})
+}
+
+// phoneWriter — единственный писатель в сокет телефона; дедлайн 15 с.
+// После записи половины окна релею уходит WINDOW (v2).
+func (s *tunnelStream) phoneWriter() {
+	tc := s.client
+	var consumed int64
+	// Выход из цикла: очередь закрыта (стрим уже закрывается), хвост после
+	// CLOSE релея дописан (закрываем сами) или контекст отменён.
+	defer s.close()
+	for s.outq.wait(tc.ctx.Done()) {
+		p, ok := s.outq.pop()
+		if !ok {
+			continue
+		}
+		s.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+		if _, err := s.conn.Write(p); err != nil {
+			if *verbose {
+				log.Printf("[tunnel] stream %d write error: %v", s.id, err)
+			}
+			s.close()
+			return
+		}
+		s.conn.SetDeadline(time.Now().Add(*connTimeout))
+		if tc.v2.Load() {
+			consumed += int64(len(p))
+			if win := tc.window.Load(); win > 0 && consumed >= win/2 {
+				tc.mu.Lock()
+				w := tc.writer
+				tc.mu.Unlock()
+				if w != nil {
+					w.WriteMessage(websocket.BinaryMessage, encodeMuxFrame(s.id, muxWINDOW, encodeWindow(uint32(consumed))))
+				}
+				s.recvUnacked.Add(-consumed)
+				consumed = 0
+			}
+		}
+	}
+}
+
+// grant — WINDOW от релея: можно слать ещё credit байт.
+func (s *tunnelStream) grant(credit int64) {
+	s.credit.Add(credit)
+	select {
+	case s.creditWake <- struct{}{}:
+	default:
+	}
 }
 
 // connectTunnelWS establishes a WebSocket connection to the tunnel relay.
@@ -295,40 +389,20 @@ func (tc *tunnelClient) triggerReRegister() {
 }
 
 func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
-	// БЕЗ ЗАРЕГИСТРИРОВАННОЙ ЛИЧНОСТИ НЕ ЛЕЗЕМ НА РЕЛЕЙ ВОВСЕ.
-	//
-	// Здесь был фоллбэк: пока личность не зарегистрирована, клиент
-	// подключался общим секретом (кадр типа 0x00) — с комментарием «релей
-	// принимает обе схемы, это не переключение». Комментарий устарел и стоил
-	// людям связи: релей давно поднят с --require-per-install и общий секрет
-	// отвергает наглухо. useID же выставляется только ПОСЛЕ успешной
-	// регистрации. Получался вечный цикл «подключился → отвергнут →
-	// переподключился» по разу в 48 секунд, и телеграм у человека не
-	// поднимался никогда. На релее это выглядело как 5900 отказов в час с 78
-	// адресов при одной успешной регистрации за тот же час (issue #34).
-	//
-	// Проверяем ДО набора номера, а не перед отправкой кадра: иначе на каждую
-	// попытку тратится TCP+TLS до релея, и его лог забивают пары
-	// «WS accepted / WS closed dur=0s». Регистрацией занимается identityLoop
-	// параллельно, ему нужно только время.
+	// БЕЗ ЗАРЕГИСТРИРОВАННОЙ ЛИЧНОСТИ НЕ ЛЕЗЕМ НА РЕЛЕЙ ВОВСЕ: релей поднят с
+	// --require-per-install и общий секрет отвергает наглухо (issue #34).
+	// Регистрацией занимается identityLoop параллельно, ему нужно только время.
 	id := tc.identity.Load()
 	if id == nil || !tc.useID.Load() {
 		return nil, errNotRegistered
 	}
 
 	dialer := websocket.Dialer{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,
-		},
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: false},
 		HandshakeTimeout:  10 * time.Second,
-		ReadBufferSize:    256 * 1024,
-		WriteBufferSize:   256 * 1024,
 		EnableCompression: false,
 		NetDial: func(network, addr string) (net.Conn, error) {
-			// Force IPv4 — IPv6 to Cloudflare is unstable on some ISPs.
-			// relayDialAddr — тот же обход резолвера, что и в регистрации
-			// (dialaddr.go): без него отказ DNS на роутере валит туннель,
-			// хотя адрес релея записан прямо в его имени.
+			// Force IPv4; relayDialAddr — адрес из имени, резолвер не нужен.
 			conn, err := net.DialTimeout("tcp4", relayDialAddr(addr), 10*time.Second)
 			if err != nil {
 				return nil, err
@@ -339,24 +413,102 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 			return conn, nil
 		},
 	}
-
-	headers := http.Header{}
-	ws, _, err := dialer.Dial(tc.tunnelURL, headers)
+	ws, _, err := dialer.Dial(tc.tunnelURL, http.Header{})
 	if err != nil {
 		return nil, fmt.Errorf("WS dial %s: %w", tc.tunnelURL, err)
 	}
 	configureWSKeepalive(ws)
 
-	authFrame := encodeMuxFrame(0x0000, 0x06, id.authPayload())
+	if !tc.forceV1.Load() {
+		if err := tc.handshakeV2(ws, id); err != nil {
+			ws.Close()
+			// Релей не говорит на v2 или отверг рукопожатие по протоколу —
+			// дальше ходим по v1, как до r-82. Отказ по авторизации сюда
+			// не попадает: он одинаков для обеих версий.
+			tc.forceV1.Store(true)
+			return nil, fmt.Errorf("рукопожатие v2: %w (следующая попытка — v1)", err)
+		}
+		tc.v2.Store(true)
+		log.Printf("[tunnel] connected to %s (proto v2, window %d)", tc.tunnelURL, tc.window.Load())
+		return ws, nil
+	}
+
+	authFrame := encodeMuxFrame(0x0000, muxAUTHID, id.authPayload())
 	ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := ws.WriteMessage(websocket.BinaryMessage, authFrame); err != nil {
 		ws.Close()
 		return nil, fmt.Errorf("WS auth write: %w", err)
 	}
-
-	log.Printf("[tunnel] connected to %s", tc.tunnelURL)
+	tc.v2.Store(false)
+	log.Printf("[tunnel] connected to %s (proto v1)", tc.tunnelURL)
 	return ws, nil
 }
+
+var errHandshakeRejected = errors.New("relay rejected v2 handshake")
+
+// handshakeV2: HELLO → HELLO_ACK(nonce, время сервера) → AUTHID v2 → INFO
+// AUTH_OK. Любой другой ответ или тишина в 10 с — ошибка; вызывающий уходит
+// на v1. Отказ авторизации (GOODBYE с причиной не PROTOCOL) — тоже ошибка,
+// но с текстом причины в логе: часы, отзыв, регистрация.
+func (tc *tunnelClient) handshakeV2(ws *websocket.Conn, id *relayIdentity) error {
+	ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := ws.WriteMessage(websocket.BinaryMessage, encodeMuxFrame(0, muxHELLO, encodeHello(buildVersion))); err != nil {
+		return fmt.Errorf("HELLO: %w", err)
+	}
+	ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, msg, err := ws.ReadMessage()
+	if err != nil {
+		return fmt.Errorf("нет HELLO_ACK: %w", err)
+	}
+	f, err := decodeMuxFrame(msg)
+	if err != nil || f.StreamID != 0 || f.MsgType != muxHELLO_ACK {
+		return fmt.Errorf("вместо HELLO_ACK кадр 0x%02x: %w", f.MsgType, errHandshakeRejected)
+	}
+	ack, err := decodeHelloAck(f.Payload)
+	if err != nil {
+		return err
+	}
+	tc.clockOffset.Store(ack.ServerUnix - time.Now().Unix())
+	tc.window.Store(int64(ack.DefaultWindow))
+	if ack.MinBuild != "" && buildVersion != "dev" && buildVersion < ack.MinBuild {
+		log.Printf("[tunnel] релей просит клиента не старше %s, у нас %s — обновитесь", ack.MinBuild, buildVersion)
+	}
+	ts := time.Now().Unix() + tc.clockOffset.Load()
+	ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := ws.WriteMessage(websocket.BinaryMessage, encodeMuxFrame(0, muxAUTHID, id.authPayloadV2(ts, ack.Nonce))); err != nil {
+		return fmt.Errorf("AUTHID: %w", err)
+	}
+	ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, msg, err = ws.ReadMessage()
+	if err != nil {
+		return fmt.Errorf("нет ответа на AUTHID: %w", err)
+	}
+	f, err = decodeMuxFrame(msg)
+	if err != nil || f.StreamID != 0 || f.MsgType != muxINFO {
+		return fmt.Errorf("вместо INFO кадр 0x%02x: %w", f.MsgType, errHandshakeRejected)
+	}
+	kind, arg, text, err := decodeInfo(f.Payload)
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case infoAuthOK:
+		ws.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		return nil
+	case infoClockSkew:
+		log.Printf("[tunnel] релей: часы разошлись на %d с — поправка применена", int32(arg))
+		return fmt.Errorf("часы: %w", errHandshakeRejected)
+	case infoGoodbye:
+		log.Printf("[tunnel] релей отказал: %s %s", reasonName(byte(arg)), text)
+		if byte(arg) == rProtocol {
+			return errHandshakeRejected
+		}
+		return errAuthRefused
+	}
+	return fmt.Errorf("INFO kind=%d в рукопожатии: %w", kind, errHandshakeRejected)
+}
+
+var errAuthRefused = errors.New("relay refused auth")
 
 // closeAllStreams closes all active tunnel streams.
 func (tc *tunnelClient) closeAllStreams() {
@@ -367,7 +519,8 @@ func (tc *tunnelClient) closeAllStreams() {
 	})
 }
 
-// readLoop reads mux frames from the WS and dispatches to streams.
+// readLoop reads mux frames from the WS and dispatches to streams. Только
+// раскладывает: в сокеты телефонов пишут phoneWriter'ы стримов.
 func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 	for {
 		_, msg, err := ws.ReadMessage()
@@ -377,7 +530,6 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 			}
 			return
 		}
-
 		frame, err := decodeMuxFrame(msg)
 		if err != nil {
 			if *verbose {
@@ -385,7 +537,10 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 			}
 			continue
 		}
-
+		if frame.StreamID == 0 {
+			tc.onControl(frame)
+			continue
+		}
 		val, ok := tc.streams.Load(frame.StreamID)
 		if !ok {
 			if *verbose && frame.MsgType != muxCLOSE {
@@ -397,39 +552,61 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 
 		switch frame.MsgType {
 		case muxDATA:
-			stream.conn.SetDeadline(time.Now().Add(*connTimeout))
-			if _, err := stream.conn.Write(frame.Payload); err != nil {
+			if tc.v2.Load() && stream.recvUnacked.Add(int64(len(frame.Payload))) > tc.window.Load() {
+				log.Printf("[tunnel] stream %d: релей превысил окно — закрываю", frame.StreamID)
+				stream.close()
+				continue
+			}
+			if !stream.outq.push(frame.Payload) {
 				if *verbose {
-					log.Printf("[tunnel] stream %d write error: %v", frame.StreamID, err)
+					log.Printf("[tunnel] stream %d: очередь к телефону переполнена", frame.StreamID)
 				}
 				stream.close()
 			}
 
 		case muxCLOSE:
-			if *verbose {
+			if r, txt := decodeClose(frame.Payload); tc.v2.Load() && r != rNormal {
+				log.Printf("[tunnel] stream %d closed by relay: %s %s", frame.StreamID, reasonName(r), txt)
+			} else if *verbose {
 				log.Printf("[tunnel] stream %d closed by relay", frame.StreamID)
 			}
 			stream.remoteClose.Store(true)
-			stream.close()
+			if stream.writing.Load() {
+				stream.outq.finish() // хвост данных дописать, потом закрыть
+			} else {
+				stream.close()
+			}
 
 		case muxCONNECT_OK:
-			select {
-			case <-tc.connectSem:
-			default:
+			stream.releaseSem()
+			if tc.v2.Load() {
+				if w := decodeConnectOK(frame.Payload); w > 0 {
+					stream.credit.Store(int64(w))
+				} else {
+					stream.credit.Store(tc.window.Load())
+				}
 			}
 			if *verbose {
 				log.Printf("[tunnel] stream %d CONNECT_OK", frame.StreamID)
 			}
+			stream.writing.Store(true)
+			go stream.phoneWriter()
 			go tc.streamReadLoop(stream)
 
 		case muxCONNECT_FAIL:
-			select {
-			case <-tc.connectSem:
-			default:
+			stream.releaseSem()
+			if r, txt := decodeClose(frame.Payload); tc.v2.Load() && len(frame.Payload) > 0 {
+				log.Printf("[tunnel] stream %d CONNECT_FAIL: %s %s", frame.StreamID, reasonName(r), txt)
+			} else {
+				log.Printf("[tunnel] stream %d CONNECT_FAIL", frame.StreamID)
 			}
-			log.Printf("[tunnel] stream %d CONNECT_FAIL", frame.StreamID)
 			stream.remoteClose.Store(true)
 			stream.close()
+
+		case muxWINDOW:
+			if c, err := decodeWindow(frame.Payload); err == nil {
+				stream.grant(int64(c))
+			}
 
 		default:
 			if *verbose {
@@ -439,16 +616,59 @@ func (tc *tunnelClient) readLoop(ws *websocket.Conn) {
 	}
 }
 
+// onControl — кадры на стриме 0 после рукопожатия: только INFO.
+func (tc *tunnelClient) onControl(frame muxFrame) {
+	if frame.MsgType != muxINFO {
+		return
+	}
+	kind, arg, text, err := decodeInfo(frame.Payload)
+	if err != nil {
+		return
+	}
+	switch kind {
+	case infoRetryAfter:
+		tc.retryAfter.Store(int64(arg))
+		log.Printf("[tunnel] релей просит переподключиться через %d с (%s)", arg, text)
+	case infoUpdateRequired:
+		log.Printf("[tunnel] релей: требуется обновление клиента (%s)", text)
+	case infoClockSkew:
+		log.Printf("[tunnel] релей: часы разошлись на %d с", int32(arg))
+	case infoGoodbye:
+		log.Printf("[tunnel] релей закрывает сессию: %s %s", reasonName(byte(arg)), text)
+	}
+}
+
 // streamReadLoop reads from a TCP client and sends DATA frames over WS.
+// В v2 отправка идёт в пределах кредита релея: нет кредита — не читаем
+// телефон, давление доходит до приложения по TCP.
 func (tc *tunnelClient) streamReadLoop(stream *tunnelStream) {
 	defer stream.close()
 
-	buf := make([]byte, 64*1024)
+	buf := make([]byte, 16*1024)
 
 	for {
-		n, err := stream.conn.Read(buf)
+		want := len(buf)
+		if tc.v2.Load() {
+			for stream.credit.Load() <= 0 {
+				select {
+				case <-stream.creditWake:
+				case <-tc.ctx.Done():
+					return
+				}
+				if stream.outq.isClosed() {
+					return
+				}
+			}
+			if cr := stream.credit.Load(); cr < int64(want) {
+				want = int(cr)
+			}
+		}
+		n, err := stream.conn.Read(buf[:want])
 		if n > 0 {
 			stream.conn.SetDeadline(time.Now().Add(*connTimeout))
+			if tc.v2.Load() {
+				stream.credit.Add(-int64(n))
+			}
 			frame := encodeMuxFrame(stream.id, muxDATA, buf[:n])
 			tc.mu.Lock()
 			w := tc.writer
@@ -495,15 +715,8 @@ func (tc *tunnelClient) run() {
 		}
 		if err != nil {
 			consecutiveFails++
-			backoff := 3 * time.Second
-			if consecutiveFails >= 10 {
-				backoff = 120 * time.Second
-			} else if consecutiveFails >= 5 {
-				backoff = 30 * time.Second
-			} else if consecutiveFails >= 3 {
-				backoff = 10 * time.Second
-			}
-			log.Printf("[tunnel] connect failed (%d in a row, backoff %s): %v", consecutiveFails, backoff, err)
+			backoff := jitter(backoffFor(consecutiveFails))
+			log.Printf("[tunnel] connect failed (%d in a row, backoff %s): %v", consecutiveFails, backoff.Round(time.Millisecond), err)
 			select {
 			case <-time.After(backoff):
 				continue
@@ -606,18 +819,22 @@ func (tc *tunnelClient) run() {
 			}
 		}
 
-		// If WS lived < 5 seconds, it's a rapid death — increase backoff
-		if time.Since(connectedAt) < 5*time.Second {
-			consecutiveFails++
-			backoff := 3 * time.Second
-			if consecutiveFails >= 10 {
-				backoff = 120 * time.Second
-			} else if consecutiveFails >= 5 {
-				backoff = 30 * time.Second
-			} else if consecutiveFails >= 3 {
-				backoff = 10 * time.Second
+		// Пауза перед переподключением: RETRY_AFTER от релея (деплой) важнее
+		// собственной ступени; и то и другое с джиттером, иначе весь парк бьёт
+		// в узел одной секундой (SYN-очередь 31.08.2026).
+		if ra := tc.retryAfter.Swap(0); ra > 0 {
+			wait := jitter(time.Duration(ra) * time.Second)
+			log.Printf("[tunnel] reconnecting in %s (relay asked)", wait.Round(time.Millisecond))
+			select {
+			case <-time.After(wait):
+			case <-tc.ctx.Done():
+				return
 			}
-			log.Printf("[tunnel] WS died too fast (%d in a row), backing off %s", consecutiveFails, backoff)
+		} else if time.Since(connectedAt) < 5*time.Second {
+			// If WS lived < 5 seconds, it's a rapid death — increase backoff
+			consecutiveFails++
+			backoff := jitter(backoffFor(consecutiveFails))
+			log.Printf("[tunnel] WS died too fast (%d in a row), backing off %s", consecutiveFails, backoff.Round(time.Millisecond))
 			select {
 			case <-time.After(backoff):
 			case <-tc.ctx.Done():
@@ -628,7 +845,7 @@ func (tc *tunnelClient) run() {
 			select {
 			case <-tc.ctx.Done():
 				return
-			case <-time.After(1 * time.Second):
+			case <-time.After(jitter(1 * time.Second)):
 				log.Printf("[tunnel] reconnecting...")
 			}
 		}
@@ -665,6 +882,13 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		return
 	}
 
+	tc.openStream(clientConn, origIP, origPort)
+}
+
+// openStream — часть handleTunnelConn после определения адресата: выделяет
+// стрим, берёт слот connectSem и шлёт CONNECT. Отдельно, чтобы тесты могли
+// обойти SO_ORIGINAL_DST.
+func (tc *tunnelClient) openStream(clientConn *net.TCPConn, origIP net.IP, origPort int) {
 	// Allocate stream ID — skip IDs still in use (prevents wrap-around collision)
 	var streamID uint16
 	idFound := false
@@ -707,11 +931,7 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		return
 	}
 
-	stream := &tunnelStream{
-		id:     streamID,
-		conn:   clientConn,
-		client: tc,
-	}
+	stream := newTunnelStream(streamID, clientConn, tc)
 	tc.streams.Store(streamID, stream)
 
 	if *verbose {
@@ -721,6 +941,7 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 	// Rate-limit concurrent in-flight CONNECTs — TG DC throttles SYN bursts from single IP
 	select {
 	case tc.connectSem <- struct{}{}:
+		stream.semHeld.Store(true)
 	case <-time.After(10 * time.Second):
 		log.Printf("[tunnel] stream %d CONNECT throttled (timeout)", streamID)
 		stream.remoteClose.Store(true)
@@ -732,7 +953,6 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 	connectPayload := encodeConnectPayload(origIP, origPort)
 	frame := encodeMuxFrame(streamID, muxCONNECT, connectPayload)
 	if err := w.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-		<-tc.connectSem
 		log.Printf("[tunnel] stream %d CONNECT write error: %v", streamID, err)
 		stream.remoteClose.Store(true)
 		stream.close()
@@ -883,4 +1103,25 @@ func runTunnel() error {
 			conn.Close()
 		}
 	}
+}
+
+// backoffFor — ступени паузы по числу подряд неудач (как до r-82).
+func backoffFor(consecutiveFails int) time.Duration {
+	switch {
+	case consecutiveFails >= 10:
+		return 120 * time.Second
+	case consecutiveFails >= 5:
+		return 30 * time.Second
+	case consecutiveFails >= 3:
+		return 10 * time.Second
+	}
+	return 3 * time.Second
+}
+
+// jitter — ±30 % случайного разброса: у полутора тысяч роутеров общее
+// событие (обрыв транзита, деплой релея) не должно превращаться в одну
+// секунду переподключений.
+func jitter(d time.Duration) time.Duration {
+	f := 0.7 + rand.Float64()*0.6
+	return time.Duration(float64(d) * f)
 }

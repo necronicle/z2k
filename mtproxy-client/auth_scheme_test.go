@@ -53,7 +53,7 @@ func TestAuthFrameTypeIsPerInstallOnly(t *testing.T) {
 	if strings.Contains(src, "computeAuthHMAC(tc.tunnelSecret)") {
 		t.Fatal("в tunnel.go снова собирается кадр авторизации общим секретом — релей его отвергает")
 	}
-	if !strings.Contains(src, "encodeMuxFrame(0x0000, 0x06,") {
+	if !strings.Contains(src, "encodeMuxFrame(0x0000, muxAUTHID,") || !strings.Contains(src, "encodeMuxFrame(0, muxAUTHID, id.authPayloadV2(") {
 		t.Fatal("персональная авторизация (0x06) пропала из подключения")
 	}
 }

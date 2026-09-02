@@ -40,7 +40,10 @@ GO ?= $(HOME)/go/bin/go1.25.12
 # как способ проверки релиза не работает.
 # -buildvcs=false — иначе Go вшивает ревизию git и признак «грязного» дерева,
 # и одни и те же исходники дают разные байты до и после коммита.
-GOFLAGS=-ldflags="-s -w -X main.defaultTunnelSecret=$(Z2K_TUNNEL_SECRET)" -trimpath -buildvcs=false
+# Версия для HELLO релею: по умолчанию текущая из UPDATES.json (при релизе
+# передавать явно: make all Z2K_BUILD_VERSION=r-82 Z2K_TUNNEL_SECRET=…).
+Z2K_BUILD_VERSION ?= $(shell sed -n 's/.*"current": *"\([^"]*\)".*/\1/p' ../UPDATES.json 2>/dev/null | head -1)
+GOFLAGS=-ldflags="-s -w -X main.defaultTunnelSecret=$(Z2K_TUNNEL_SECRET) -X main.buildVersion=$(Z2K_BUILD_VERSION)" -trimpath -buildvcs=false
 
 # РЕЦЕПТЫ ПРИГЛУШЕНЫ (@) НЕ РАДИ ТИШИНЫ, А РАДИ СЕКРЕТА.
 #

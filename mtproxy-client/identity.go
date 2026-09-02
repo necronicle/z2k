@@ -102,6 +102,27 @@ func (id *relayIdentity) authPayload() []byte {
 	return append(buf, sig...)
 }
 
+// authPayloadV2 — кадр AUTHID протокола v2 (спека §2.4):
+//
+//	[install_id:16][ts:8 BE unix][nonce:16][ed25519 sig:64]   (104 байта)
+//
+// ts — время с поправкой на часы релея (из HELLO_ACK), nonce — из него же:
+// подпись одноразовая на сессию, replay-кэш релею не нужен.
+func (id *relayIdentity) authPayloadV2(ts int64, nonce [16]byte) []byte {
+	idb, _ := hex.DecodeString(id.InstallID)
+	buf := make([]byte, 40, 104)
+	copy(buf[0:16], idb)
+	binary.BigEndian.PutUint64(buf[16:24], uint64(ts))
+	copy(buf[24:40], nonce[:])
+	sig := ed25519.Sign(id.priv, buf)
+	return append(buf, sig...)
+}
+
+// verifySig — для тестов: проверка подписи публичным ключом личности.
+func verifySig(id *relayIdentity, msg, sig []byte) bool {
+	return ed25519.Verify(id.priv.Public().(ed25519.PublicKey), msg, sig)
+}
+
 // register POSTs {install_id, pubkey} to the relay's /register, authenticated
 // with the shared secret (the relay also dual-accepts the previous secret).
 // Idempotent and best-effort.

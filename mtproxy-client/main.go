@@ -19,6 +19,10 @@ import (
 // /opt/zapret2/config Z2K_RELAY_SECRET when set; see files/init.d/S98tg-tunnel).
 var defaultTunnelSecret = ""
 
+// buildVersion — версия релиза z2k, вшивается Makefile (-X main.buildVersion);
+// уходит релею в HELLO, чтобы тот мог попросить обновиться.
+var buildVersion = "dev"
+
 var (
 	listenAddr   = flag.String("listen", ":1443", "Local listen address")
 	tunnelURL    = flag.String("tunnel-url", "wss://213.176.74.63.nip.io/ws", "Tunnel relay WebSocket URL")
@@ -46,9 +50,10 @@ func (w *wsWriter) WriteMessage(messageType int, data []byte) error {
 	return w.ws.WriteMessage(messageType, data)
 }
 
+// WriteControl — без общего замка: gorilla допускает control-кадры параллельно
+// с data-записью, а под замком пинг ждал медленную DATA-запись и WS умирал
+// по «read timeout» ни за что.
 func (w *wsWriter) WriteControl(messageType int, data []byte, deadline time.Time) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
 	return w.ws.WriteControl(messageType, data, deadline)
 }
 
