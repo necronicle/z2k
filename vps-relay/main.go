@@ -39,18 +39,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	muxAUTH         byte = 0x00
-	muxCONNECT      byte = 0x01
-	muxDATA         byte = 0x02
-	muxCLOSE        byte = 0x03
-	muxCONNECT_OK   byte = 0x04
-	muxCONNECT_FAIL byte = 0x05
-
-	addrIPv4 = 1
-	addrIPv6 = 4
-)
-
 var (
 	listenAddr      = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
 	secret          = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
@@ -241,54 +229,6 @@ func (s *session) releaseConnectSlot() {
 	}
 }
 
-func encodeFrame(streamID uint16, msgType byte, payload []byte) []byte {
-	buf := make([]byte, 3+len(payload))
-	binary.BigEndian.PutUint16(buf[0:2], streamID)
-	buf[2] = msgType
-	if len(payload) > 0 {
-		copy(buf[3:], payload)
-	}
-	return buf
-}
-
-func decodeFrame(data []byte) (streamID uint16, msgType byte, payload []byte, err error) {
-	if len(data) < 3 {
-		err = fmt.Errorf("frame too short: %d", len(data))
-		return
-	}
-	streamID = binary.BigEndian.Uint16(data[0:2])
-	msgType = data[2]
-	payload = data[3:]
-	return
-}
-
-func parseConnectPayload(p []byte) (addr string, port int, err error) {
-	if len(p) < 1 {
-		return "", 0, fmt.Errorf("empty")
-	}
-	switch p[0] {
-	case addrIPv4:
-		if len(p) < 7 {
-			return "", 0, fmt.Errorf("short v4")
-		}
-		addr = fmt.Sprintf("%d.%d.%d.%d", p[1], p[2], p[3], p[4])
-		port = int(binary.BigEndian.Uint16(p[5:7]))
-	case addrIPv6:
-		if len(p) < 19 {
-			return "", 0, fmt.Errorf("short v6")
-		}
-		ip := make(net.IP, 16)
-		copy(ip, p[1:17])
-		addr = ip.String()
-		port = int(binary.BigEndian.Uint16(p[17:19]))
-	default:
-		return "", 0, fmt.Errorf("unknown addr type %d", p[0])
-	}
-	return
-}
-
-// dialLimiter caps concurrent in-flight dials per target IP. Prevents SYN
-// bursts to a single Telegram DC from triggering upstream anti-abuse.
 var errDialThrottle = errors.New("dial throttle timeout")
 
 type dialLimiter struct {

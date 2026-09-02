@@ -36,7 +36,6 @@ import (
 	"filippo.io/edwards25519"
 )
 
-const muxAUTHID byte = 0x06 // per-install AUTH frame: [id:16][ts:8][sig:64]
 
 var (
 	registryPath          = flag.String("registry-path", "/var/lib/z2k-relay/registry.json", "per-install identity registry file")
