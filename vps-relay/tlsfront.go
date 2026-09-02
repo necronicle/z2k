@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -45,8 +47,26 @@ func newTLSFront(handler http.Handler, addr, host, cache, email string) (*tlsFro
 
 // tlsFrontWithConfig — без autocert: тесты подставляют свой сертификат.
 func tlsFrontWithConfig(handler http.Handler, ln net.Listener, cfg *tls.Config) *tlsFront {
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, TLSConfig: cfg}
+	srv := &http.Server{
+		Handler: handler, ReadHeaderTimeout: 10 * time.Second, TLSConfig: cfg,
+		ErrorLog: log.New(&handshakeNoiseFilter{}, "", 0),
+	}
 	return &tlsFront{srv: srv, ln: tls.NewListener(ln, cfg)}
+}
+
+// handshakeNoiseFilter — «http: TLS handshake error … EOF» от сканеров и
+// клиентов, закрывших соединение на полпути: 16 строк в минуту сразу после
+// переключения (02.09.2026). Считаем в метрику, в журнал не пишем; всё
+// остальное от http.Server идёт в обычный лог.
+type handshakeNoiseFilter struct{}
+
+func (handshakeNoiseFilter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("TLS handshake error")) {
+		metrics.inc("relay_tls_handshake_errors_total", "")
+		return len(p), nil
+	}
+	log.Printf("%s", bytes.TrimRight(p, "\n"))
+	return len(p), nil
 }
 
 func (f *tlsFront) serve() error { return f.srv.Serve(f.ln) }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,9 +9,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,4 +96,50 @@ func TestTLSFront_ProxyHeaderGivesClientIP(t *testing.T) {
 	if ip := m.byEv("session_open")[0].IP; ip != "46.146.27.195" {
 		t.Fatalf("ip в событии %q, ожидался адрес из PROXY-заголовка", ip)
 	}
+}
+
+// Обрыв на середине TLS-рукопожатия не пишется в журнал, а считается.
+func TestTLSFront_HandshakeNoiseCounted(t *testing.T) {
+	cert := selfSigned(t, "x.nip.io")
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := tlsFrontWithConfig(http.NewServeMux(), newProxyListener(raw), cfg)
+	go front.serve()
+	t.Cleanup(func() { front.shutdown(context.Background()) })
+	buf := &syncBuffer{}
+	prev := log.Writer()
+	log.SetOutput(buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	before := metricValue("relay_tls_handshake_errors_total")
+	c, err := net.Dial("tcp", raw.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Write([]byte("PROXY TCP4 1.2.3.4 127.0.0.1 1 2\r\n\x16\x03\x01\x00\x05\x01\x00\x00\x01\x00"))
+	c.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && metricValue("relay_tls_handshake_errors_total") == before {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if metricValue("relay_tls_handshake_errors_total") == before {
+		t.Fatal("ошибка рукопожатия не посчитана")
+	}
+	if strings.Contains(buf.String(), "TLS handshake error") {
+		t.Fatal("шум рукопожатия попал в журнал")
+	}
+}
+
+func metricValue(name string) int64 {
+	var b bytes.Buffer
+	metrics.write(&b)
+	for _, ln := range strings.Split(b.String(), "\n") {
+		if strings.HasPrefix(ln, name+" ") {
+			v, _ := strconv.ParseInt(strings.TrimPrefix(ln, name+" "), 10, 64)
+			return v
+		}
+	}
+	return 0
 }
