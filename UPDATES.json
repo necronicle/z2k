@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 62,
-  "current": "r-81.14",
+  "seq": 63,
+  "current": "p-81.15",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -198,7 +198,7 @@
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
   "files/z2k-config-validator.sh": "3c4ca25d412902825a407e9af0725bca049e0cd278306c4514c12b98ca9276d4",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "7e9e16ae55b74763b2f50514836472126357c3ad52b8a94b21c21877eaccb050",
+  "files/z2k-diag.sh": "de74c1f53d1bc26757fa66172fe32e3d09d66a4bf118b0fe7d414f7ad6b6c8a9",
   "files/z2k-dns-check.sh": "e568560eeb992b0e118b7422bae9ed3e240bbe91d2fc00395102e31a9db60031",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "690a1f98afad41a4fb6452c789a08c3928939bf8a96c33547d07dad0790fde00",
@@ -211,7 +211,7 @@
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
   "files/z2k-tg-watchdog.sh": "f433391db09dad96471cf96dc6c814fbff846c285ba3cb424806f08ab040ce8f",
   "files/z2k-update-lists.sh": "84bb046ed26e3e46abaf116e8139bea4a49dfde102d7cfa974ccef81fd99d84c",
-  "files/z2k-warp.sh": "cd20c7b4a5cd0023a9f79917288be498a65c3543a9959d578e50d6ecc2580e6c",
+  "files/z2k-warp.sh": "1e6843bb711afa4d66c739648419a531feffadcd2ffea4716d75d62a2a56bdc7",
   "lib/auto_update.sh": "fa5b99f32429d37be574e5ebe18a3333a7d4371018762d3c4438ddb5129a3bb6",
   "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
   "lib/config_official.sh": "f803fa99950f763d47a8508fb197f3fb0108686475368345b1ba84e7c72ca094",
@@ -235,7 +235,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "7475d651fe127bd8b9278b9db6e06d45ad86aadd81f02b5960a498b99bd5b441",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "4c99e7a21d09e578a3e894ee4ee9b92117af48fd81ab376515b1b880b1073113",
   "webpanel/cgi/actions.sh": "9dbc58e844c30cb88937144a60fb70b8709a7706edc30b66192ec10c3ddd4cfc",
-  "webpanel/cgi/api.sh": "d816192d4df824d8766b74a79d8cf6f738f1477ab984837874914fecd3c5d0ca",
+  "webpanel/cgi/api.sh": "c58dbae34e2284d947bb83e567e8617d3c3df65e902e14c74fd7bf01c9ec5abb",
   "webpanel/cgi/auth.sh": "08517f8892f1e3430157b223d585fa0ad05156b611511ea3ba4f6990de8a5f0a",
   "webpanel/init.d/S96z2k-webpanel": "8dd6c8192cd680c3fbabc4827be392525a585344231cd659d3f8b10f0292a1f3",
   "webpanel/install.sh": "4261945565de76f5ce0cbcc2c715461c16ab9873499c831a0989e586d83da32b",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "460fad4c0ba2f881893920d0c2136c1b3441f712a055e921e3aefad93d2f887f",
+  "webpanel/www/index.html": "17858877c166ff569ef92c16a20baeec009ae09cd234ba613a7941f68d96334a",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -273,7 +273,7 @@
   "webpanel/www/js/pages/telemetry.js": "eafe3bf099ff56ab987bf1b57874de84a555f095ee0068af39bd18c9c3fd2d07",
   "webpanel/www/js/pages/toggles.js": "acb6f2523d6574818123c670b4130fc5cb52be60cb4a0a133454eba0c662e49c",
   "webpanel/www/js/pages/update.js": "e81fec280b94a6050f300c967775968d87986ef15ec54e4232445ace9abc7f80",
-  "webpanel/www/js/pages/warp.js": "a4c157f9284b0ccc3124ca408f99ee0efc598f6c55c1bcb4176a36dd5c51ef7e",
+  "webpanel/www/js/pages/warp.js": "61f8875aad791650140e8b20b5a30e7d15c249e0bfe038563e27181b5893d1fd",
   "webpanel/www/js/router.js": "3bae8e6ec636585c1a1904c146262d4a384700d319e6653117d95825f5544a57",
   "webpanel/www/js/state-model.js": "5c45e8aa73857dd453c011fa4c533c8b8e9a6acecba97f37b7d6a90d63896405",
   "webpanel/www/style.css": "2205fcbd5d5a6442b351f82d4e10d5471558439db212af8aadd2e593148f1804",
@@ -286,11 +286,11 @@
   "z2k-detect/builds/z2k-detect-linux-mipsle": "1194097d1757ac0f0f2b8ad85a77f038c1d545654c00b8456563aa241034307a",
   "z2k-detect/builds/z2k-detect-linux-ppc64": "478cbcbf0618daf3d10b66c8e9ecc6cd81c787ef7366b6182d2fb5e7bd1f926c",
   "z2k-detect/builds/z2k-detect-linux-riscv64": "f6e341adcb4e89b141a0d6d6c5fa9e5a276df8eef1e1bd4388c44cee31cf1771",
-  "z2k-warpd/builds/z2k-warpd-linux-amd64": "4e7d6c561da8a72026b1c14fc6fe480fdb5caeb32aa9b580a5c3e5db0979a18c",
-  "z2k-warpd/builds/z2k-warpd-linux-arm": "1f26f2eb3fa9686504d6b9b93dfabf798ffef16a7bed6cf981ab07a5e511b52a",
-  "z2k-warpd/builds/z2k-warpd-linux-arm64": "323d43adf8664e5462556f28b94bc25fba2ae425739a33200eabce9edc8bf910",
-  "z2k-warpd/builds/z2k-warpd-linux-mips": "590f0e6e752c433ef27c5d9d6a040eecaf301fe06ad9d650c0dd574bc2d8b16d",
-  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "05f458b4f7b09cfaa1698fd70daa72d14a5fef8f4e2a3e9ed26d4f384d06d05c",
+  "z2k-warpd/builds/z2k-warpd-linux-amd64": "a13927946d9cd402f1bf82664ebd9f886a372d34f4064c7367c96fe2380151a7",
+  "z2k-warpd/builds/z2k-warpd-linux-arm": "0746917ff298313cd1ad24930b8c0964de1c800da9be90d0c9eec968e5b7cd8d",
+  "z2k-warpd/builds/z2k-warpd-linux-arm64": "723458713592ab8ac65d17b907521e3949affd948c75485d05c4ced72c4c03a7",
+  "z2k-warpd/builds/z2k-warpd-linux-mips": "73252c710eec594a1c8970165946265998cd83d3e797407fd9bd91bc7b03d79a",
+  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "7fa37d9b30da02c04e35729fa89059fc58a7dd7ea56860a130aced650eaa59d9",
   "z2k.sh": "ce0a053c87503801b41abb541c3565998f54b4cabb9e1a73433233e89fe2ed7e"
   },
   "history": [
@@ -506,6 +506,7 @@
 {"v": "p-81.11", "type": "patch", "ts": "2026-09-01T09:09:07Z", "ref": "p-81.11", "desc": "Починили проблему с вебмордой Keenetic.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-geosite.sh", "lib/config.sh", "webpanel/install.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-81.12", "type": "patch", "ts": "2026-09-01T18:01:30Z", "ref": "p-81.12", "desc": "Вход в панель работает, когда веб-интерфейс роутера перенесён на другой порт.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "webpanel/cgi/auth.sh", "webpanel/www/js/core/loadorder.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-81.13", "type": "patch", "ts": "2026-09-02T06:23:28Z", "ref": "p-81.13", "desc": "Исключения по адресу больше не пропадают по ночам: адреса с комментарием в строке и локальная сеть остаются исключёнными, а домены в этот список не попадают. Подсказка к файлу списка описывает то, что есть на самом деле. Обновление больше не оставляет роутер на полминуты без планировщика задач.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-scheduler.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
-{"v": "r-81.14", "type": "reinstall", "ts": "2026-09-02T09:05:33Z", "ref": "r-81.14", "desc": "Telegram быстрее восстанавливается после обрывов связи с узлом: перерыв сокращён примерно с двух минут до сорока секунд.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "r-81.14", "type": "reinstall", "ts": "2026-09-02T09:05:33Z", "ref": "r-81.14", "desc": "Telegram быстрее восстанавливается после обрывов связи с узлом: перерыв сокращён примерно с двух минут до сорока секунд.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-81.15", "type": "patch", "ts": "2026-09-02T15:57:27Z", "ref": "p-81.15", "desc": "Режим WARP стал заметно экономнее: движок больше не разрастается до сотни мегабайт под нагрузкой и не падает на роутерах с малым объёмом памяти. Панель теперь показывает, сколько памяти он занимает.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
