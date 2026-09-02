@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 60,
-  "current": "p-81.12",
+  "seq": 61,
+  "current": "p-81.13",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -136,7 +136,7 @@
   },
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "d3a8e8a42f5d8900589d67b727b472799fe712160bfcb8b2fbf23e353f310fee",
+  "files/S99zapret2.new": "6b08c2185173fbe68aa8e9fa999aeef905033122306a8a424bdc898298b25e07",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/active_discord_udp.bin": "2fe18b3bd20807d36704d0b072092ee49ae84edca907a4420ab9a0f0f28fddcf",
@@ -205,7 +205,7 @@
   "files/z2k-insta-ip-refresh.sh": "67d073f508bd3bc0b3d83ac6cb91635f2817fdbb85af997ef8714c909078da69",
   "files/z2k-nfqueue-selfheal.sh": "4095adce7626c7ceffa6779be428920286b1dd9d98427e1e49b36d2895d3fd8a",
   "files/z2k-ppe-deoffload.sh": "9a98f3f22c6572d3692a7b4cf7fb1432f2c42fc9d67d06e3841cffb9c0f4b4e4",
-  "files/z2k-scheduler.sh": "3861e7e38993269f27b5ad401b0db6f50ec12bbeeff7dacba0849ac1f458043c",
+  "files/z2k-scheduler.sh": "9acf5767d2525390f2e430973b3c60c613d366dc4cb16ba746c676333f21d32e",
   "files/z2k-stats-upload.sh": "45f33be7405bfa1e6445b6c7969cfa2555778fae05843e4dd60f06bc816e1ce5",
   "files/z2k-tcp16-probe.sh": "bc1d6af7370b5efbed14103be4420b24a996cafaf67bd7cc32075be1be9647f9",
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
@@ -215,7 +215,7 @@
   "lib/auto_update.sh": "fa5b99f32429d37be574e5ebe18a3333a7d4371018762d3c4438ddb5129a3bb6",
   "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
   "lib/config_official.sh": "f803fa99950f763d47a8508fb197f3fb0108686475368345b1ba84e7c72ca094",
-  "lib/install.sh": "87af237a3a93977b89da01ba25e7098ed30e38792654a31250a718276b6002be",
+  "lib/install.sh": "f538c5b37f2aaeb3ac56a2fe5d89fc25e5af99c6b281bf73558a2bb528c92567",
   "lib/menu.sh": "ebf5b4c6c7ff3287986cfad3a4f79d4aa0e85045e387797d00a9bf54f9926061",
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
   "lib/utils.sh": "a128fd3d64dd774bab77ad0abff626413ef8c04f535b11b13a9abfad9c6e86ca",
@@ -234,7 +234,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-arm64": "2b8cec24a6bf0fe522e0b368a763f0f65c6de7af44b8b7cfde6bc7358ee7a204",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "7475d651fe127bd8b9278b9db6e06d45ad86aadd81f02b5960a498b99bd5b441",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "4c99e7a21d09e578a3e894ee4ee9b92117af48fd81ab376515b1b880b1073113",
-  "webpanel/cgi/actions.sh": "a84dc349f0afdfacfd8ea794a6b5a5f2a7685e35c65200d864317ca2d111f4dd",
+  "webpanel/cgi/actions.sh": "9dbc58e844c30cb88937144a60fb70b8709a7706edc30b66192ec10c3ddd4cfc",
   "webpanel/cgi/api.sh": "d816192d4df824d8766b74a79d8cf6f738f1477ab984837874914fecd3c5d0ca",
   "webpanel/cgi/auth.sh": "08517f8892f1e3430157b223d585fa0ad05156b611511ea3ba4f6990de8a5f0a",
   "webpanel/init.d/S96z2k-webpanel": "8dd6c8192cd680c3fbabc4827be392525a585344231cd659d3f8b10f0292a1f3",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "86c04ac728aed1205ad03a66781e0f274e5d5e7ff4e1f7b4cea94007dbf8d5ce",
+  "webpanel/www/index.html": "67f1d1f8a4908cfe0002fd1661e694d94e8cee486d64523c4d99aa000d93aa89",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -504,6 +504,7 @@
 {"v": "p-81.9", "type": "patch", "ts": "2026-08-31T18:43:52Z", "ref": "p-81.9", "desc": "Защита от обрыва загрузки на 16 килобайтах наконец включается сама: роутер догружает служебную программу проверки, без которой она не запускалась — у большинства её просто не было. Обновления больше не застревают: файл, не скачавшийся с первого раза, роутер пробует ещё, а после трёх неудачных ночей подряд обновляется целиком. Строку из «Подбора по домену» теперь можно вставлять в «Свои стратегии» как есть — панель дописывает недостающее сама.", "changed_files": ["webpanel/www/index.html", "files/z2k-tcp16-probe.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-81.10", "type": "patch", "ts": "2026-08-31T23:10:28Z", "ref": "p-81.10", "desc": "Меняем кукичи на пакичи.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/tcp16_targets.txt", "files/z2k-scheduler.sh", "files/z2k-tcp16-probe.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "z2k.sh", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-81.11", "type": "patch", "ts": "2026-09-01T09:09:07Z", "ref": "p-81.11", "desc": "Починили проблему с вебмордой Keenetic.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-geosite.sh", "lib/config.sh", "webpanel/install.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
-{"v": "p-81.12", "type": "patch", "ts": "2026-09-01T18:01:30Z", "ref": "p-81.12", "desc": "Вход в панель работает, когда веб-интерфейс роутера перенесён на другой порт.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "webpanel/cgi/auth.sh", "webpanel/www/js/core/loadorder.js", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-81.12", "type": "patch", "ts": "2026-09-01T18:01:30Z", "ref": "p-81.12", "desc": "Вход в панель работает, когда веб-интерфейс роутера перенесён на другой порт.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "webpanel/cgi/auth.sh", "webpanel/www/js/core/loadorder.js", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-81.13", "type": "patch", "ts": "2026-09-02T06:23:28Z", "ref": "p-81.13", "desc": "Исключения по адресу больше не пропадают по ночам: адреса с комментарием в строке и локальная сеть остаются исключёнными, а домены в этот список не попадают. Подсказка к файлу списка описывает то, что есть на самом деле. Обновление больше не оставляет роутер на полминуты без планировщика задач.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-scheduler.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
