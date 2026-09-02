@@ -24,6 +24,15 @@ assert_eq "статика панели"           "/opt/zapret2/www/js/app.js|" 
 assert_eq "не деливерабл"            "" "$(p tests/test_x.sh)"
 assert_eq "бинарник — не по общему пути" "" "$(p z2k-warpd/builds/z2k-warpd-linux-arm64)"
 
+# Доставляемость — адрес ИЛИ шаг. Релиз из одних бинарников доставляем
+# (refresh-binaries), а vps-relay/, docs и тесты — нечем и незачем.
+d() { if z2k_is_deliverable "$1"; then echo yes; else echo no; fi; }
+assert_eq "бинарник доставляем (шагом)"    "yes" "$(d mtproxy-client/builds/tg-mtproxy-client-linux-arm64)"
+assert_eq "скрипт доставляем (адресом)"    "yes" "$(d files/z2k-scheduler.sh)"
+assert_eq "код релея не доставляем"        "no"  "$(d vps-relay/main.go)"
+assert_eq "тест не доставляем"             "no"  "$(d tests/test_x.sh)"
+assert_eq "исходник клиента не доставляем" "no"  "$(d mtproxy-client/tunnel.go)"
+
 assert_eq "генератор конфига"        "regen-config restart-service validate-config " "$(s lib/config_official.sh)"
 assert_eq "генератор стратегий"      "regen-config regen-strategies restart-service validate-config " "$(s lib/strategies.sh)"
 assert_eq "lua → только рестарт"     "restart-service " "$(s files/lua/x.lua)"

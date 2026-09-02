@@ -191,7 +191,7 @@ while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ -f "$f" ] || continue            # удалённые не заявляем
     [ "$f" = "$MANIFEST" ] && continue # добавим отдельно, он всегда меняется
-    if [ -n "$(z2k_install_paths "$f" 2>/dev/null)" ]; then
+    if z2k_is_deliverable "$f"; then
         DELIVERABLE="$DELIVERABLE $f"
     else
         SKIPPED="$SKIPPED $f"
