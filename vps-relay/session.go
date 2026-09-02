@@ -23,7 +23,7 @@ type session struct {
 	id       string
 	relayID  string
 	clientIP string
-	pr       proto
+	prV      atomic.Pointer[protoHolder] // читают горутины стримов и drain
 	build    string
 	ws       *websocket.Conn
 	started  time.Time
@@ -55,13 +55,20 @@ type session struct {
 func newSession(ws *websocket.Conn, id, ip string, parent context.Context) *session {
 	dialCtx, dialCancel := context.WithCancel(parent)
 	s := &session{
-		id: id, clientIP: ip, pr: protoV1, ws: ws, started: time.Now(),
+		id: id, clientIP: ip, ws: ws, started: time.Now(),
 		dialCtx: dialCtx, dialCancel: dialCancel, dialFn: sessionDialFn,
 		done: make(chan struct{}), streams: map[uint16]*stream{}, connectSlots: newConnectSlots(),
 	}
+	s.setProto(protoV1)
 	s.writer = newWSWriter(s)
 	return s
 }
+
+// protoHolder — обёртка для atomic.Pointer: v1 и v2 разные типы.
+type protoHolder struct{ p proto }
+
+func (s *session) proto() proto     { return s.prV.Load().p }
+func (s *session) setProto(p proto) { s.prV.Store(&protoHolder{p: p}) }
 
 // run — вся жизнь сессии: рукопожатие, reader, смерть. Возвращается, когда
 // сессия закрыта и все стримы сняты.
@@ -73,7 +80,7 @@ func (s *session) run() {
 	if !s.handshake() {
 		return
 	}
-	emitEvent(Event{Ev: "session_open", SID: s.id, IP: s.clientIP, ASN: asnLookup(s.clientIP), Proto: s.pr.name(), Install: s.relayID})
+	emitEvent(Event{Ev: "session_open", SID: s.id, IP: s.clientIP, ASN: asnLookup(s.clientIP), Proto: s.proto().name(), Install: s.relayID})
 	if s.relayID != "" {
 		if ok, why := acquireInstallSession(s.relayID, s.clientIP, s); !ok {
 			log.Printf("[%s] отказ установке %s: %s", s.id, s.relayID, why)
@@ -86,8 +93,8 @@ func (s *session) run() {
 			releaseInstallSession(s.relayID, s, rx, tx)
 		}()
 	}
-	log.Printf("[%s] authenticated (proto=%s id=%s build=%q)", s.id, s.pr.name(), s.relayID, s.build)
-	if f := s.pr.info(infoAuthOK, uint32(*maxStreamsPerSess), ""); f != nil {
+	log.Printf("[%s] authenticated (proto=%s id=%s build=%q)", s.id, s.proto().name(), s.relayID, s.build)
+	if f := s.proto().info(infoAuthOK, uint32(*maxStreamsPerSess), ""); f != nil {
 		s.writer.control(f)
 	}
 	s.readLoop()
@@ -106,7 +113,7 @@ func (s *session) readLoop() {
 		_ = s.ws.SetReadDeadline(time.Now().Add(*authReadTimeout))
 		sid, mt, payload, err := decodeFrame(msg)
 		if err != nil {
-			if s.pr.windows() {
+			if s.proto().windows() {
 				s.goodbye(rProtocol, "кадр короче 3 байт")
 				s.killWith("protocol")
 				return
@@ -114,7 +121,7 @@ func (s *session) readLoop() {
 			continue
 		}
 		if sid == 0 {
-			if s.pr.windows() {
+			if s.proto().windows() {
 				s.goodbye(rProtocol, fmt.Sprintf("кадр 0x%02x на стриме 0", mt))
 				s.killWith("protocol")
 				return
@@ -133,7 +140,7 @@ func (s *session) readLoop() {
 				st.finish("peer_close")
 			}
 		case muxWINDOW:
-			if st := s.lookup(sid); st != nil && s.pr.windows() {
+			if st := s.lookup(sid); st != nil && s.proto().windows() {
 				if c, err := decodeWindow(payload); err == nil {
 					st.grant(c)
 				} else {
@@ -141,7 +148,7 @@ func (s *session) readLoop() {
 				}
 			}
 		default:
-			if st := s.lookup(sid); st != nil && s.pr.windows() {
+			if st := s.lookup(sid); st != nil && s.proto().windows() {
 				st.abort(rProtocol, fmt.Sprintf("неизвестный тип 0x%02x", mt))
 			} else if *verbose {
 				log.Printf("[%s] unknown msg type 0x%02x stream=%d", s.id, mt, sid)
@@ -167,7 +174,7 @@ func (s *session) removeStream(st *stream) {
 func (s *session) onConnect(id uint16, payload []byte) {
 	addr, port, err := parseConnectPayload(payload)
 	if err != nil {
-		s.writer.control(s.pr.connectFail(id, rProtocol, "плохой CONNECT"))
+		s.writer.control(s.proto().connectFail(id, rProtocol, "плохой CONNECT"))
 		return
 	}
 	target := targetOf(addr, port)
@@ -176,14 +183,14 @@ func (s *session) onConnect(id uint16, payload []byte) {
 			log.Printf("[%s] stream %d rejected non-Telegram %s", s.id, id, target)
 		}
 		emitEvent(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "not_allowed", Detail: target})
-		s.writer.control(s.pr.connectFail(id, rNotAllowed, "адресат не Telegram"))
+		s.writer.control(s.proto().connectFail(id, rNotAllowed, "адресат не Telegram"))
 		return
 	}
 	if !s.acquireConnectSlot() {
 		if s.noisy("connect_limit") {
 			log.Printf("[%s] stream %d: превышен потолок одновременных CONNECT (%d)", s.id, id, *maxPendingConnects)
 		}
-		s.writer.control(s.pr.connectFail(id, rStreamLimit, "слишком много дозвонов"))
+		s.writer.control(s.proto().connectFail(id, rStreamLimit, "слишком много дозвонов"))
 		return
 	}
 	st := s.newStream(id, target)
@@ -196,7 +203,7 @@ func (s *session) onConnect(id uint16, payload []byte) {
 			log.Printf("[%s] stream %d: превышен потолок стримов на сессию (%d)", s.id, id, *maxStreamsPerSess)
 		}
 		emitEvent(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "stream_limit", Detail: target})
-		s.writer.control(s.pr.connectFail(id, rStreamLimit, "потолок стримов"))
+		s.writer.control(s.proto().connectFail(id, rStreamLimit, "потолок стримов"))
 		return
 	}
 	s.streams[id] = st
@@ -222,7 +229,7 @@ func (s *session) onConnect(id uint16, payload []byte) {
 // писатель отправит оба (v1: только Close).
 func (s *session) goodbye(reason byte, text string) {
 	msg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reasonName(reason))
-	s.writer.controlThenClose(s.pr.info(infoGoodbye, uint32(reason), text), msg, 2*time.Second)
+	s.writer.controlThenClose(s.proto().info(infoGoodbye, uint32(reason), text), msg, 2*time.Second)
 }
 
 func (s *session) killWith(reason string) {

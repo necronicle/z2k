@@ -757,7 +757,7 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	log.Printf("[%s] WS closed install=%s ip=%s dur=%s rx=%d tx=%d reason=%s",
 		sid, who, ip, time.Since(started).Truncate(time.Second), rx, tx, s.closeReason())
 	emitEvent(Event{
-		Ev: "session_close", SID: sid, Install: who, IP: ip, ASN: asnLookup(ip), Proto: s.pr.name(),
+		Ev: "session_close", SID: sid, Install: who, IP: ip, ASN: asnLookup(ip), Proto: s.proto().name(),
 		DurMS: time.Since(started).Milliseconds(), RX: rx, TX: tx,
 		Streams: int(s.peakStreams.Load()), Reason: s.closeReason(), Detail: s.noisyDetail(),
 	})
@@ -785,7 +785,7 @@ func main() {
 	metrics.gauge("relay_streams", func() int64 { return liveStreams.Load() })
 	metrics.gauge("relay_event_write_errors_total", func() int64 { return eventWriteErrors.Load() })
 	metrics.add("relay_build_info", fmt.Sprintf("version=%q", buildVersion), 1)
-	budget = newMemBudget(memLimitBytes())
+	budget.setLimit(memLimitBytes())
 	metrics.gauge("relay_queue_bytes", func() int64 { return budget.used.Load() })
 	if *secret == "" {
 		log.Fatal("--secret is required")
@@ -818,6 +818,7 @@ func main() {
 
 	statsStop := make(chan struct{})
 	go stats.loop(*dialStatsInterval, statsStop)
+	go budget.trimLoop(500*time.Millisecond, statsStop)
 	go installs.snapshotLoop(*installSnapshotInterval, statsStop)
 
 	stopAdmin := startAdmin(*adminAddr)
@@ -860,6 +861,7 @@ func main() {
 			log.Printf("graceful shutdown failed: %v", err)
 			_ = srv.Close()
 		}
+		drainSessions(*drainTimeout)
 		close(statsStop)
 		dialThrottle.close()
 		if err := <-serveErr; err != nil && err != http.ErrServerClosed {

@@ -64,7 +64,7 @@ func (s *session) readAuthFrame(errPrefix string) (uint16, byte, []byte, bool) {
 }
 
 func (s *session) handshakeV1(mt byte, p []byte) bool {
-	s.pr = protoV1
+	s.setProto(protoV1)
 	var relayID, scheme, why string
 	authedOK := false
 	if mt == muxAUTHID {
@@ -101,7 +101,7 @@ func (s *session) handshakeV1(mt byte, p []byte) bool {
 }
 
 func (s *session) handshakeV2(p []byte) bool {
-	s.pr = protoV2
+	s.setProto(protoV2)
 	h, err := decodeHello(p)
 	if err != nil || h.Ver != protoVersion2 {
 		s.goodbye(rProtocol, "HELLO не разобран")
@@ -139,7 +139,7 @@ func (s *session) handshakeV2(p []byte) bool {
 		metrics.inc("relay_auth_reject_total", fmt.Sprintf("reason=%q", authRejectClass(why)))
 		if code == rClockSkew {
 			skew := int32(a.TS - time.Now().Unix())
-			s.writer.control(s.pr.info(infoClockSkew, uint32(skew), ""))
+			s.writer.control(s.proto().info(infoClockSkew, uint32(skew), ""))
 		}
 		s.goodbye(code, why)
 		s.killWith("auth_rejected")

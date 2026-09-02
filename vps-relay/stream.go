@@ -55,7 +55,7 @@ type stream struct {
 func (s *session) newStream(id uint16, target string) *stream {
 	win := int64(*defaultWindow)
 	upCap, outCap := win, int64(v2OutQueueCap)
-	if !s.pr.windows() {
+	if !s.proto().windows() {
 		upCap, outCap = int64(*perStreamQueueBytes), int64(*perStreamQueueBytes)
 	}
 	st := &stream{
@@ -127,7 +127,7 @@ func (st *stream) dial() {
 	st.connMu.Unlock()
 
 	emitEvent(Event{Ev: "stream_open", SID: s.id, Install: s.relayID, DurMS: lat.Milliseconds(), Detail: st.target})
-	s.writer.control(s.pr.connectOK(st.id, uint32(st.window)))
+	s.writer.control(s.proto().connectOK(st.id, uint32(st.window)))
 	go st.pumpToUpstream()
 	go st.pumpFromUpstream()
 }
@@ -139,7 +139,7 @@ func (st *stream) fail(reason byte, text string) {
 		st.teardown()
 		st.s.removeStream(st)
 		st.s.emitStreamClose(st, reasonName(reason))
-		st.s.writer.control(st.s.pr.connectFail(st.id, reason, text))
+		st.s.writer.control(st.s.proto().connectFail(st.id, reason, text))
 	})
 }
 
@@ -151,7 +151,7 @@ func (st *stream) abort(reason byte, text string) {
 		st.teardown()
 		st.s.removeStream(st)
 		st.s.emitStreamClose(st, reasonName(reason))
-		st.s.writer.control(st.s.pr.closeFrame(st.id, reason, text))
+		st.s.writer.control(st.s.proto().closeFrame(st.id, reason, text))
 	})
 }
 
@@ -182,7 +182,7 @@ func (st *stream) eof() {
 		st.connMu.Unlock()
 		st.s.removeStream(st)
 		st.s.emitStreamClose(st, "eof")
-		frame := st.s.pr.closeFrame(st.id, rNormal, "")
+		frame := st.s.proto().closeFrame(st.id, rNormal, "")
 		if !st.outq.push(frame) {
 			st.s.writer.control(frame) // очередь полна — пусть уйдёт вне очереди
 			return
@@ -214,12 +214,12 @@ func (st *stream) teardown() {
 func (st *stream) fromClient(payload []byte) {
 	s := st.s
 	if st.state.Load() == stPending {
-		if s.pr.windows() {
+		if s.proto().windows() {
 			st.abort(rProtocol, "DATA до CONNECT_OK")
 		}
 		return // v1: молча, как раньше
 	}
-	if s.pr.windows() && st.recvUnacked.Add(int64(len(payload))) > st.window {
+	if s.proto().windows() && st.recvUnacked.Add(int64(len(payload))) > st.window {
 		st.abort(rProtocol, "превышено окно")
 		return
 	}
@@ -262,7 +262,7 @@ func (st *stream) pumpToUpstream() {
 			}
 			return
 		}
-		if s.pr.windows() {
+		if s.proto().windows() {
 			consumed += int64(len(p))
 			if consumed >= st.window/2 {
 				st.recvUnacked.Add(-consumed)
@@ -288,7 +288,7 @@ func (st *stream) pumpFromUpstream() {
 		return
 	}
 	for {
-		if s.pr.windows() {
+		if s.proto().windows() {
 			for st.creditToClient.Load() <= 0 {
 				select {
 				case <-st.creditWake:
@@ -301,7 +301,7 @@ func (st *stream) pumpFromUpstream() {
 			}
 		}
 		want := len(buf)
-		if s.pr.windows() {
+		if s.proto().windows() {
 			if cr := st.creditToClient.Load(); cr < int64(want) {
 				want = int(cr)
 			}
@@ -309,7 +309,7 @@ func (st *stream) pumpFromUpstream() {
 		n, err := c.Read(buf[:want])
 		if n > 0 {
 			s.rxBytes.Add(int64(n))
-			if s.pr.windows() {
+			if s.proto().windows() {
 				st.creditToClient.Add(-int64(n))
 			}
 			if !s.writer.data(st, encodeFrame(st.id, muxDATA, buf[:n])) {
