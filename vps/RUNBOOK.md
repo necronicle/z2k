@@ -107,3 +107,10 @@ sh vps/bin/verify.sh | grep -A1 'разнос приёма'
 - Таблица ASN: `systemctl start z2k-asn-update.service` для ручного обновления; релей подхватывает в течение часа.
 - Новые флаги релея (`--events-dir`, `--asn-table`) лежат в drop-in юнита и вступают в силу
   при перезапуске релея — это окно: `systemctl restart z2k-relay` рвёт все туннели.
+- Юнит под `ProtectSystem=strict`: писать релей может только в `StateDirectory`
+  (`/var/lib/z2k-relay`) и `LogsDirectory` (`/var/log/z2k-relay`). Любой новый путь
+  для записи объявляется в drop-in, `chown` не поможет (02.09.2026: релей падал на
+  старте, полторы минуты отката).
+- Подмена бинарника ТОЛЬКО через `mv` (rename): `cp` поверх работающего файла даёт
+  «Text file busy». Порядок: `mv relay.new relay` → drop-in с флагами → `restart`;
+  drop-in с новыми флагами раньше бинарника = crash-loop на неизвестном флаге.
