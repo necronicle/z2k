@@ -53,6 +53,11 @@ var (
 	wsWriteTimeout       = flag.Duration("ws-write-timeout", 10*time.Second, "дедлайн записи кадра в WS")
 	minBuild             = flag.String("min-build", "", "минимальная версия клиента v2 (пусто = не требовать)")
 	drainTimeout         = flag.Duration("drain-timeout", 90*time.Second, "сколько ждать сессии при остановке")
+	tlsListen            = flag.String("tls-listen", "", "адрес TLS-слушателя за nginx с proxy_protocol (пусто = выключен)")
+	acmeHost             = flag.String("acme-host", "", "имя для сертификата (SNI)")
+	acmeCache            = flag.String("acme-cache", "", "каталог кеша autocert (внутри StateDirectory)")
+	acmeEmail            = flag.String("acme-email", "", "контакт ACME (необязательно)")
+	instanceName         = flag.String("instance", "", "имя экземпляра (a|b) для логов и метрик")
 	asnTablePath         = flag.String("asn-table", "", "путь к ip2asn-v4.tsv (пусто = ASN в событиях не пишется)")
 
 	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 32, "max in-flight dials per Telegram DC IP (поверх потолка 6 на установку)")
@@ -784,7 +789,7 @@ func main() {
 	metrics.gauge("relay_sessions", func() int64 { return liveSessions.Load() })
 	metrics.gauge("relay_streams", func() int64 { return liveStreams.Load() })
 	metrics.gauge("relay_event_write_errors_total", func() int64 { return eventWriteErrors.Load() })
-	metrics.add("relay_build_info", fmt.Sprintf("version=%q", buildVersion), 1)
+	metrics.add("relay_build_info", fmt.Sprintf("version=%q,instance=%q", buildVersion, *instanceName), 1)
 	budget.setLimit(memLimitBytes())
 	metrics.gauge("relay_queue_bytes", func() int64 { return budget.used.Load() })
 	if *secret == "" {
@@ -840,10 +845,27 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	serveErr := make(chan error, 1)
+	// Оба слушателя на reuseport: второй экземпляр релея поднимается рядом,
+	// и деплой идёт без окна, когда порт никто не слушает (спека §3.6).
+	plainLn, err := listenReusePort("tcp", *listenAddr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", *listenAddr, err)
+	}
+	serveErr := make(chan error, 2)
 	go func() {
-		serveErr <- srv.ListenAndServe()
+		serveErr <- srv.Serve(plainLn)
 	}()
+	var front *tlsFront
+	if *tlsListen != "" {
+		front, err = newTLSFront(mux, *tlsListen, *acmeHost, *acmeCache, *acmeEmail)
+		if err != nil {
+			log.Fatalf("tls-front: %v", err)
+		}
+		go func() {
+			serveErr <- front.serve()
+		}()
+		log.Printf("TLS-фронт на %s, сертификат для %s из %s", *tlsListen, *acmeHost, *acmeCache)
+	}
 
 	log.Printf("z2k vps-relay listening on %s (dial-limit-per-target=%d, dial-throttle-timeout=%s, dial-per-attempt-timeout=%s, dial-retry-count=%d, dial-retry-backoff=%s, per-stream-bytes=%d, session-bytes=%d, session-depth=%d, control-depth=%d, stats-interval=%s)",
 		*listenAddr, *dialLimitPerTarget, *dialThrottleTimeout, *dialPerAttemptTimeout, *dialRetryCount, *dialRetryBackoff, *perStreamQueueBytes, *sessionQueueBytes, *sessionQueueDepth, *controlQueueDepth, *dialStatsInterval)
@@ -860,6 +882,9 @@ func main() {
 		if err := srv.Shutdown(sdCtx); err != nil {
 			log.Printf("graceful shutdown failed: %v", err)
 			_ = srv.Close()
+		}
+		if front != nil {
+			_ = front.shutdown(sdCtx)
 		}
 		drainSessions(*drainTimeout)
 		close(statsStop)

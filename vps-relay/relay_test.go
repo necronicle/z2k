@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -187,6 +188,12 @@ func dialV1(t *testing.T, url, id string, priv ed25519.PrivateKey) *websocket.Co
 func dialV2(t *testing.T, url, id string, priv ed25519.PrivateKey, build string) (*websocket.Conn, helloAck) {
 	t.Helper()
 	ws := dialWS(t, url)
+	return ws, handshakeV2Over(t, ws, id, priv, build)
+}
+
+// handshakeV2Over — рукопожатие v2 на уже открытом WS (TLS-фронт и т.п.).
+func handshakeV2Over(t *testing.T, ws *websocket.Conn, id string, priv ed25519.PrivateKey, build string) helloAck {
+	t.Helper()
 	h := append([]byte{protoVersion2, byte(len(build))}, build...)
 	h = binary.BigEndian.AppendUint32(h, 0)
 	sendFrame(t, ws, 0, muxHELLO, h)
@@ -207,7 +214,15 @@ func dialV2(t *testing.T, url, id string, priv ed25519.PrivateKey, build string)
 	if k != infoAuthOK {
 		t.Fatalf("после AUTHID v2 ожидался INFO AUTH_OK, получен kind=%d", k)
 	}
-	return ws, ack
+	return ack
+}
+
+func mustURL(s string) *url.URL {
+	u, err := url.Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return u
 }
 
 func sendFrame(t *testing.T, ws *websocket.Conn, sid uint16, mt byte, p []byte) {
