@@ -52,13 +52,14 @@ const (
 )
 
 var (
-	listenAddr    = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
-	secret        = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
-	secretPrev    = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
-	resolveSecret = flag.String("resolve-secret", "", "dedicated HMAC secret for /resolve (decoupled from the tunnel secret); falls back to --secret when empty")
-	verbose       = flag.Bool("v", false, "verbose logging")
-	eventsDir     = flag.String("events-dir", "", "каталог структурного журнала событий (пусто = выключено)")
-	eventsKeep    = flag.Int("events-keep", 30, "сколько суточных файлов событий хранить")
+	listenAddr      = flag.String("listen", ":8080", "HTTP listen address (TLS terminated upstream by Caddy)")
+	secret          = flag.String("secret", "", "shared HMAC secret (must match tunnel client)")
+	secretPrev      = flag.String("secret-prev", "", "previous shared HMAC secret, still accepted during rotation (dual-accept; empty=off, NO flip yet)")
+	resolveSecret   = flag.String("resolve-secret", "", "dedicated HMAC secret for /resolve (decoupled from the tunnel secret); falls back to --secret when empty")
+	verbose         = flag.Bool("v", false, "verbose logging")
+	eventsDir       = flag.String("events-dir", "", "каталог структурного журнала событий (пусто = выключено)")
+	eventsKeep      = flag.Int("events-keep", 30, "сколько суточных файлов событий хранить")
+	authReadTimeout = flag.Duration("auth-read-timeout", 90*time.Second, "таймаут чтения WS до и после авторизации")
 
 	dialLimitPerTarget    = flag.Int("dial-limit-per-target", 8, "max in-flight dials per Telegram DC IP")
 	dialThrottleTimeout   = flag.Duration("dial-throttle-timeout", 3*time.Second, "max wait for dial slot before failing CONNECT")
@@ -574,6 +575,15 @@ type session struct {
 	done      chan struct{}
 	once      sync.Once
 
+	// Причина закрытия: выставляется первым вызовом killWith и читается
+	// после завершения readPump — kill идёт через once, поэтому чтение
+	// после него упорядочено с записью.
+	reasonOnce  sync.Once
+	reason      string
+	peakStreams atomic.Int32
+	proto       string
+	started     time.Time
+
 	// Потолок одновременных обработчиков CONNECT. Буферизованный канал, а не
 	// счётчик: слот занимается ДО запуска горутины, поэтому переполнение видно
 	// сразу и отвечается отказом, а не копится в памяти.
@@ -594,6 +604,8 @@ func newSession(ws *websocket.Conn, id string, parentCtx context.Context) *sessi
 	return &session{
 		id:           id,
 		ws:           ws,
+		proto:        "v1",
+		started:      time.Now(),
 		writeCh:      make(chan queuedFrame, *sessionQueueDepth),
 		controlCh:    make(chan []byte, *controlQueueDepth),
 		connectSlots: newConnectSlots(),
@@ -603,6 +615,36 @@ func newSession(ws *websocket.Conn, id string, parentCtx context.Context) *sessi
 		dialCancel:   dialCancel,
 		dialFn:       (&net.Dialer{}).DialContext,
 	}
+}
+
+// killWith фиксирует причину и закрывает сессию. Повторные вызовы причину
+// не меняют: первая и есть настоящая.
+func (s *session) killWith(reason string) {
+	s.reasonOnce.Do(func() { s.reason = reason })
+	s.kill()
+}
+
+func (s *session) closeReason() string {
+	s.reasonOnce.Do(func() { s.reason = "peer_close" })
+	return s.reason
+}
+
+// classifyReadErr сводит ошибку чтения WS к причине события: таймаут —
+// read_timeout, штатное закрытие пиром — peer_close, остальное — prefix.
+func classifyReadErr(err error, prefix string) string {
+	if isTimeoutErr(err) {
+		if prefix == "auth_read_err" {
+			return "auth_read_err:timeout"
+		}
+		return "read_timeout"
+	}
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) || errors.Is(err, io.EOF) {
+		if prefix == "auth_read_err" {
+			return "auth_read_err:eof"
+		}
+		return "peer_close"
+	}
+	return prefix
 }
 
 func (s *session) kill() {
@@ -682,7 +724,7 @@ func (s *session) sendDataFrame(st *stream, frame []byte) {
 	if !s.reserveSession(int(n)) {
 		st.queuedBytes.Add(-n)
 		log.Printf("[%s] session queue %d bytes exceeded, killing session", s.id, *sessionQueueBytes)
-		go s.kill()
+		go s.killWith("session_queue")
 		return
 	}
 
@@ -753,7 +795,7 @@ func (s *session) sendAbort(st *stream) {
 	case <-s.done:
 	default:
 		log.Printf("[%s] controlCh full on abort, killing session", s.id)
-		go s.kill()
+		go s.killWith("control_queue")
 	}
 }
 
@@ -768,7 +810,7 @@ func (s *session) sendConnectResult(streamID uint16, ok bool) {
 	case <-s.done:
 	default:
 		log.Printf("[%s] controlCh full on connect-result, killing session", s.id)
-		go s.kill()
+		go s.killWith("control_queue")
 	}
 }
 
@@ -815,7 +857,7 @@ func (s *session) writePump() {
 		select {
 		case frame := <-s.controlCh:
 			if !writeFrame(frame) {
-				s.kill()
+				s.killWith("write_err")
 				return
 			}
 			continue
@@ -825,7 +867,7 @@ func (s *session) writePump() {
 		select {
 		case frame := <-s.controlCh:
 			if !writeFrame(frame) {
-				s.kill()
+				s.killWith("write_err")
 				return
 			}
 		case qf := <-s.writeCh:
@@ -837,13 +879,14 @@ func (s *session) writePump() {
 				continue
 			}
 			if !writeFrame(qf.frame) {
-				s.kill()
+				s.killWith("write_err")
 				return
 			}
 		case <-ping.C:
 			_ = s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if err := s.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-				s.kill()
+				log.Printf("[%s] ping failed: %v", s.id, err)
+				s.killWith("ping_failed")
 				return
 			}
 		case <-s.done:
@@ -934,6 +977,12 @@ func (s *session) handleConnect(id uint16, payload []byte) {
 	}
 	s.streams[id] = st
 	active := len(s.streams)
+	for {
+		cur := s.peakStreams.Load()
+		if int32(active) <= cur || s.peakStreams.CompareAndSwap(cur, int32(active)) {
+			break
+		}
+	}
 	s.mu.Unlock()
 
 	if *verbose {
@@ -991,13 +1040,13 @@ func (s *session) readPump() {
 	defer s.kill()
 
 	s.ws.SetReadLimit(2 * 1024 * 1024)
-	_ = s.ws.SetReadDeadline(time.Now().Add(90 * time.Second))
+	_ = s.ws.SetReadDeadline(time.Now().Add(*authReadTimeout))
 	s.ws.SetPongHandler(func(string) error {
-		_ = s.ws.SetReadDeadline(time.Now().Add(90 * time.Second))
+		_ = s.ws.SetReadDeadline(time.Now().Add(*authReadTimeout))
 		return nil
 	})
 	s.ws.SetPingHandler(func(data string) error {
-		_ = s.ws.SetReadDeadline(time.Now().Add(90 * time.Second))
+		_ = s.ws.SetReadDeadline(time.Now().Add(*authReadTimeout))
 		return s.ws.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(5*time.Second))
 	})
 
@@ -1006,11 +1055,13 @@ func (s *session) readPump() {
 		if *verbose {
 			log.Printf("[%s] auth read err: %v", s.id, err)
 		}
+		s.killWith(classifyReadErr(err, "auth_read_err"))
 		return
 	}
 	sid, mt, p, err := decodeFrame(msg)
 	if err != nil || sid != 0 || (mt != muxAUTH && mt != muxAUTHID) {
 		log.Printf("[%s] first message not auth (sid=%d type=0x%02x)", s.id, sid, mt)
+		s.killWith("first_not_auth")
 		return
 	}
 	// Dual-accept (NO flip): a registered per-install Ed25519 signature (Stage B,
@@ -1055,12 +1106,15 @@ func (s *session) readPump() {
 		// «старый клиент», а либо ошибка, либо чужой стук.
 		if !legacyScheme {
 			log.Printf("[%s] auth rejected (type=0x%02x scheme=%s id=%s): %s", s.id, mt, scheme, relayID, why)
+			events.Emit(Event{Ev: "auth_reject", SID: s.id, IP: s.clientIP, Install: relayID, Reason: why})
 		}
+		s.killWith("auth_rejected")
 		return
 	}
 	if relayID != "" {
 		if ok, why := acquireInstallSession(relayID, s.clientIP, s); !ok {
 			log.Printf("[%s] отказ установке %s: %s", s.id, relayID, why)
+			s.killWith("install_refused")
 			return
 		}
 		s.relayID = relayID
@@ -1077,6 +1131,7 @@ func (s *session) readPump() {
 			if *verbose {
 				log.Printf("[%s] read err: %v", s.id, err)
 			}
+			s.killWith(classifyReadErr(err, "read_err"))
 			return
 		}
 		sid, mt, payload, err := decodeFrame(msg)
@@ -1382,6 +1437,7 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	// проставил наш прокси. Всё левее прислал клиент и подделать может любой.
 	ip := resolveRemoteIP(r)
 	log.Printf("[%s] WS accepted from %s", sid, ip)
+	events.Emit(Event{Ev: "session_open", SID: sid, IP: ip, ASN: asnLookup(ip), Proto: "v1"})
 	s := newSession(ws, sid, parentCtx)
 	s.clientIP = ip
 	started := time.Now()
@@ -1398,9 +1454,17 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	if who == "" {
 		who = "-"
 	}
-	log.Printf("[%s] WS closed install=%s ip=%s dur=%s rx=%d tx=%d",
-		sid, who, ip, time.Since(started).Truncate(time.Second), rx, tx)
+	log.Printf("[%s] WS closed install=%s ip=%s dur=%s rx=%d tx=%d reason=%s",
+		sid, who, ip, time.Since(started).Truncate(time.Second), rx, tx, s.closeReason())
+	events.Emit(Event{
+		Ev: "session_close", SID: sid, Install: who, IP: ip, ASN: asnLookup(ip), Proto: s.proto,
+		DurMS: time.Since(started).Milliseconds(), RX: rx, TX: tx,
+		Streams: int(s.peakStreams.Load()), Reason: s.closeReason(),
+	})
 }
+
+// asnLookup — заглушка до задачи 6 плана (таблица ASN).
+func asnLookup(ip string) uint32 { return 0 }
 
 func main() {
 	flag.Parse()

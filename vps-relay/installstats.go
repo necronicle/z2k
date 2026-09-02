@@ -212,7 +212,7 @@ func (t *installTracker) killInstall(id string) int {
 	// kill() снаружи замка: он закрывает сокет и ходит по потокам сессии, а
 	// держать общий замок учёта на это время значит подвесить весь релей.
 	for _, s := range victims {
-		s.kill()
+		s.killWith("revoked")
 	}
 	return len(victims)
 }
