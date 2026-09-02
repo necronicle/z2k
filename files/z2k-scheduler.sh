@@ -16,7 +16,6 @@
 #   03:00  z2k-stats-upload.sh             — anonymized strategy stats -> VPS
 #   03:30  z2k-tcp16-probe.sh              — блок по объёму: сети и имя на каждую
 #   04:00  z2k-update-lists.sh             — RKN/YT hostlist refresh
-#   06:00  ipset/get_config.sh              — IP-set resolution
 
 export PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
@@ -355,16 +354,17 @@ while true; do
                 run_task update-lists "${ZAPRET2_DIR}/z2k-update-lists.sh"
             fi
             ;;
-        06:00)
-            if [ "$(last_fired_for_key get-config)" != "$today" ]; then
-                mark_fired get-config "$today"
-                log "fire get-config: ZAPRET_BASE=${ZAPRET2_DIR} ${ZAPRET2_DIR}/ipset/get_config.sh"
-                (
-                    ZAPRET_BASE="${ZAPRET2_DIR}" "${ZAPRET2_DIR}/ipset/get_config.sh" >> "$LOG" 2>&1
-                    log "done get-config (exit $?)"
-                ) &
-            fi
-            ;;
+        # Задачи «06:00 ipset/get_config.sh» здесь больше нет — и возвращать
+        # её нельзя. В z2k (MODE_FILTER=hostlist) сеты zapret/ipban не
+        # используются нигде, а цепочка get_config.sh -> get_ipban.sh ->
+        # create_ipset.sh делала `ipset flush nozapret` и пересобирала сет из
+        # одного вывода mdig по zapret-hosts-user-exclude.txt. Каждую ночь из
+        # nozapret исчезал засев z2k (локальные диапазоны, адреса с
+        # комментарием в конце строки, записи панели), а доменные строки, которые
+        # засев намеренно пропускает, mdig разрешал — в исключения уезжал общий
+        # адрес CDN. На роутере владельца 02.09.2026 сет стоял пустым с 06:00 до
+        # 08:09, пока хук NDM не перезапустил файрвол. Единственный читатель
+        # файла — засев при старте файрвола и панель (tests/test_no_upstream_ipset_job.sh).
     esac
 
     # Minute-cadence task: tg-tunnel-watchdog. Mirrors the old

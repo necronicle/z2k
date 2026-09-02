@@ -3782,7 +3782,7 @@ step_finalize() {
     # =========================================================================
 
     print_separator
-    print_info "Настройка планировщика z2k (auto-update / lists / get_config)..."
+    print_info "Настройка планировщика z2k (auto-update / lists)..."
 
     # Keenetic Entware ships Vixie cron V5.0, but its crontab-reload
     # mechanism is broken on this build: even with mtime updates on the
@@ -3804,7 +3804,7 @@ step_finalize() {
     if [ -x "${ZAPRET2_DIR}/z2k-scheduler.sh" ] && [ -x /opt/etc/init.d/S99z2k-scheduler ]; then
         /opt/etc/init.d/S99z2k-scheduler restart >/dev/null 2>&1
         if pgrep -f "z2k-scheduler\.sh" >/dev/null 2>&1; then
-            print_success "Планировщик z2k запущен (auto-update 02:00, lists 04:00, get_config 06:00)"
+            print_success "Планировщик z2k запущен (auto-update 02:00, lists 04:00)"
         else
             print_warning "Планировщик z2k не запустился — проверьте /opt/var/log/z2k-scheduler.log"
         fi
