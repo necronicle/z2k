@@ -547,7 +547,7 @@ warp_selfheal() {
             && sh "$WARP_INIT" start >/dev/null 2>&1
         return 0
     fi
-    warp_daemon_running || { sh "$WARP_INIT" start >/dev/null 2>&1; return 0; }
+    warp_daemon_running || { warp_note_death; sh "$WARP_INIT" start >/dev/null 2>&1; return 0; }
     if warp_ready; then
         ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_all
         warp_ipset_src_load      # MAC устройств могли появиться в neigh
@@ -558,6 +558,27 @@ warp_selfheal() {
     return 0
 }
 
+# Движок исчез, а в его логе нет ни «stopped», ни «fatal» — оставить след
+# ДО перезапуска. SIGKILL не даёт процессу написать ни строки (OOM-killer
+# именно так и убивает: замер 2026-09-02, anon-rss 98 МБ на роутере с 512 МБ),
+# а selfheal поднимал труп молча каждые 25 с — и ни один лог не показывал,
+# что движок вообще умирал. status.json после SIGKILL остаётся, pid — оттуда.
+warp_note_death() {
+    [ -s "$WARP_LOG" ] || return 0
+    case "$(tail -n1 "$WARP_LOG" 2>/dev/null)" in
+        *" stopped"|*" fatal: "*|*"движок уже запущен"*|*"исчез без остановки"*) return 0 ;;
+    esac
+    local pid why
+    pid=$(_json_raw "$WARP_STATUS" pid)
+    why="причина в логах не записана"
+    if [ -n "$pid" ]; then
+        why=$(dmesg 2>/dev/null | grep "Killed process $pid " | tail -n1 | sed 's/^\[[^]]*\] *//')
+        [ -n "$why" ] && why="OOM-killer: $why" || why="причина в логах не записана"
+    fi
+    printf '%s движок исчез без остановки (pid %s): %s — selfheal перезапускает\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "${pid:-?}" "$why" >> "$WARP_LOG"
+}
+
 warp_status() {
     local installed=0 ready=0
     [ -x "$WARP_BIN" ] && installed=1
@@ -565,11 +586,15 @@ warp_status() {
     local entries devices
     entries=$(warp_ipset_count)
     devices=$(ipset list "$WARP_IPSET_SRC" 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')
-    printf 'installed=%s enabled=%s ready=%s transport=%s endpoint=%s iface=%s addr=%s entries=%s devices=%s error=%s\n' \
+    # mem — RSS движка в КБ из status.json: панель показывает его, чтобы «а
+    # почему WARP ест сто мегабайт» не требовало htop. В конце строки: error=
+    # может быть пустым, и читатели режут строку по ключам, а не по позиции.
+    printf 'installed=%s enabled=%s ready=%s transport=%s endpoint=%s iface=%s addr=%s entries=%s devices=%s error=%s mem=%s\n' \
         "$installed" "${GAME_WARP_ENABLED_OVERRIDE:-$(warp_flag)}" "$ready" \
         "$(_json_str "$WARP_STATUS" transport)" "$(_json_str "$WARP_STATUS" endpoint)" \
         "$(_json_str "$WARP_STATUS" iface)" "$(_json_str "$WARP_STATUS" addr)" \
-        "${entries:-0}" "${devices:-0}" "$(_json_str "$WARP_STATUS" last_error)"
+        "${entries:-0}" "${devices:-0}" "$(_json_str "$WARP_STATUS" last_error)" \
+        "$(_json_raw "$WARP_STATUS" mem_kb)"
 }
 
 # Зачистка usque-эпохи — по уликам, а не по имени, и пакет — один раз.

@@ -86,11 +86,12 @@ W() { # запуск скрипта с окружением песочницы
     Z2K_STUB_PATH="$SB/bin" ZAPRET2_DIR="$SB/z2k" CONFIG_FILE="$SB/z2k/config" \
     WARP_BIN="$SB/sbin/z2k-warpd" WARP_INIT="$SB/bin/S51" WARP_DEVICE="$SB/etc/device.json" \
     WARP_STATUS="$SB/tmp/status.json" WARP_LISTS_DIR="$SB/z2k/lists/warp" WARP_READY_WAIT=1 \
+    WARP_LOG="$SB/tmp/engine.log" \
     WARP_FETCH_STUB="$SB/bin/z2k-warpd-stub" \
     sh "$SB/z2k/z2k-warp.sh" "$@"
 }
 flag() { sed -n 's/^GAME_WARP_ENABLED=//p' "$SB/z2k/config" | tr -d '"'; }
-ready() { printf '{"ready":%s,"transport":"wg","endpoint":"8.6.112.0:2408","iface":"z2ktun0","addr":"172.16.0.2","last_error":"%s","rx":1,"tx":1,"handshake_age":3}\n' "$1" "$2" > "$SB/tmp/status.json"; }
+ready() { printf '{"ready":%s,"transport":"wg","endpoint":"8.6.112.0:2408","iface":"z2ktun0","addr":"172.16.0.2","last_error":"%s","rx":1,"tx":1,"handshake_age":3,"pid":4242,"mem_kb":27136}\n' "$1" "$2" > "$SB/tmp/status.json"; }
 clearlogs() { rm -f "$SB"/*.log "$SB/rules"; }   # ipt.rules — состояние, не лог: не чистим
 
 # ---------- install ----------
@@ -164,6 +165,17 @@ clearlogs; rm -f "$SB/s51.running"; ready true ""; W selfheal >/dev/null 2>&1
 assert_eq "selfheal: daemon down → started" "1" "$(grep -c '^start' "$SB/s51.log")"
 printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"; clearlogs; W selfheal >/dev/null 2>&1
 assert_eq "selfheal: mode off → no-op" "0" "$(cat "$SB/ip.log" "$SB/s51.log" 2>/dev/null | wc -l | tr -d ' ')"
+# Движок исчез без «stopped» в логе (SIGKILL/OOM) — selfheal оставляет след с pid
+# из status.json ДО перезапуска; после штатной остановки следа нет.
+printf 'GAME_WARP_ENABLED=1\n' > "$SB/z2k/config"; clearlogs; rm -f "$SB/s51.running"; ready true ""
+printf '2026-09-02 13:57:18 ladder: wg:8.6.112.0:2408 ok (8.6.112.0:2408)\n' > "$SB/tmp/engine.log"
+W selfheal >/dev/null 2>&1
+assert_eq "selfheal: тихая смерть → след в логе движка с pid" "1" "$(grep -c 'исчез без остановки (pid 4242)' "$SB/tmp/engine.log")"
+assert_eq "selfheal: тихая смерть → всё равно перезапуск" "1" "$(grep -c '^start' "$SB/s51.log")"
+clearlogs; rm -f "$SB/s51.running"
+printf '2026-09-02 13:57:18 ladder: wg:8.6.112.0:2408 ok\n2026-09-02 14:00:00 stopped\n' > "$SB/tmp/engine.log"
+W selfheal >/dev/null 2>&1
+assert_eq "selfheal: штатный stop → следа нет" "0" "$(grep -c 'исчез без остановки' "$SB/tmp/engine.log")"
 
 # ---------- status ----------
 printf 'GAME_WARP_ENABLED=1\n' > "$SB/z2k/config"; ready true ""

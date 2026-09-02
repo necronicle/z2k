@@ -13,3 +13,6 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 )
+
+// Копия с двумя правками про память; см. third_party/wireguard/Z2K-PATCHES.md.
+replace golang.zx2c4.com/wireguard => ./third_party/wireguard

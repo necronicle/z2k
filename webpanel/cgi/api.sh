@@ -580,7 +580,7 @@ case "$method $path" in
         printf ',"addr":';     json_string "$(_wf addr)"
         printf ',"entries":%s,"devices":%s,"error":' "$(_wf entries | grep -E '^[0-9]+$' || echo 0)" "$(_wf devices | grep -E '^[0-9]+$' || echo 0)"
         json_string "$(_wf error)"
-        printf '}\n'
+        printf ',"mem_kb":%s}\n' "$(_wf mem | grep -E '^[0-9]+$' || echo 0)"
         exit 0
         ;;
 

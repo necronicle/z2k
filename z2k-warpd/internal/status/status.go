@@ -37,6 +37,10 @@ type Status struct {
 	LadderStep   int    `json:"ladder_step"`
 	Since        int64  `json:"since"` // unix: с какого момента текущее состояние
 	PID          int    `json:"pid"`
+	// MemKB — RSS демона в КБ. Панель и диагностика показывают его, чтобы
+	// вопрос «почему WARP ест сто мегабайт» закрывался взглядом, а не htop
+	// (поле 2026-09-02: юзер с 118 МБ RSS, замер показал буферы по 64 КБ на пакет).
+	MemKB int `json:"mem_kb"`
 }
 
 // Writer пишет статус не чаще MinInterval; отложенное значение всё равно

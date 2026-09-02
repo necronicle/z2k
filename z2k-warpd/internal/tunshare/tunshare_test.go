@@ -155,3 +155,44 @@ func TestBatchRead(t *testing.T) {
 		t.Fatalf("rest: n=%d", n)
 	}
 }
+
+// capTun запоминает ёмкость буферов, которые пришли в Write: от неё зависит,
+// сможет ли Linux-TUN склеить сегменты в один write(2).
+type capTun struct {
+	fakeTun
+	caps []int
+}
+
+func (c *capTun) Write(bufs [][]byte, offset int) (int, error) {
+	for _, b := range bufs {
+		c.caps = append(c.caps, cap(b)-offset)
+	}
+	return c.fakeTun.Write(bufs, offset)
+}
+
+func TestWriteGivesDeviceRoomToCoalesce(t *testing.T) {
+	ct := &capTun{fakeTun: *newFake()}
+	s := New(ct, 1280, 16)
+	defer s.Close()
+	h := s.Handle()
+	pkt := make([]byte, 16+1280)
+	for i := range pkt {
+		pkt[i] = byte(i)
+	}
+	if _, err := h.Write([][]byte{pkt, pkt}, 16); err != nil {
+		t.Fatal(err)
+	}
+	if len(ct.caps) != 2 {
+		t.Fatalf("устройству ушло %d пакетов, ждали 2", len(ct.caps))
+	}
+	for _, c := range ct.caps {
+		if c < writeBuf {
+			t.Fatalf("ёмкость буфера %d < %d: TUN не сможет склеить сегменты", c, writeBuf)
+		}
+	}
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	if len(ct.wrote) != 2 || string(ct.wrote[0]) != string(pkt[16:]) {
+		t.Fatalf("содержимое пакета изменилось при пересадке")
+	}
+}

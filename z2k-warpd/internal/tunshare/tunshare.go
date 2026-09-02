@@ -9,13 +9,31 @@
 package tunshare
 
 import (
+	"fmt"
 	"os"
 	"sync"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
 
-const queueDepth = 256
+const (
+	queueDepth = 256
+	// readBuf — буфер одного пакета при чтении с устройства. Ядро отдаёт
+	// пакеты не длиннее MTU (GSO-склейку tun.Device режет сам по gso_size),
+	// и 64 КБ здесь были 8 МБ RSS на пустом месте: батч в 128 буферов.
+	// Пакет длиннее буфера Linux-TUN отдаёт ошибкой, не усечением, поэтому
+	// New отказывается от MTU, который сюда не влезает.
+	readBuf = 2048
+	// writeBuf — ёмкость буфера, в котором пакет уходит в устройство. Linux-TUN
+	// с offload склеивает подряд идущие TCP-сегменты одного потока в один
+	// большой пакет и один write(2) — но только если в буфере ПЕРВОГО
+	// сегмента есть место (tun/offload_linux.go: coalesceInsufficientCap).
+	// У транспортов буферы теперь по 2 КБ, склейка в них невозможна, и без
+	// этой пересадки каждый пакет стоил системного вызова: +45% CPU на байт
+	// (замер 2026-09-02). 32 КБ = до 25 сегментов на вызов; на батч из 128
+	// пакетов это не больше 4 МБ, и то лишь под нагрузкой.
+	writeBuf = 32 * 1024
+)
 
 type packet struct {
 	buf  []byte
@@ -31,6 +49,9 @@ type Shared struct {
 	mu     sync.Mutex
 	cur    *Handle
 	pool   sync.Pool
+	wpool  sync.Pool // буферы writeBuf для записи в устройство
+	wmu    sync.Mutex
+	wbufs  [][]byte // рабочий срез под один Write, чтобы не аллоцировать на каждый
 	closed chan struct{}
 	once   sync.Once
 }
@@ -38,8 +59,12 @@ type Shared struct {
 // New запускает читающую горутину. offset — запас перед пакетом, который
 // просят транспорты (16 у wireguard-go); читаем сразу с ним.
 func New(inner tun.Device, mtu, offset int) *Shared {
+	if mtu+64 > readBuf {
+		panic(fmt.Sprintf("tunshare: mtu %d не влезает в буфер чтения %d", mtu, readBuf))
+	}
 	s := &Shared{inner: inner, offset: offset, mtu: mtu, closed: make(chan struct{})}
 	s.pool.New = func() any { return make([]byte, offset+mtu+64) }
+	s.wpool.New = func() any { return make([]byte, offset+writeBuf) }
 	go s.reader()
 	return s
 }
@@ -49,7 +74,7 @@ func (s *Shared) reader() {
 	bufs := make([][]byte, n)
 	sizes := make([]int, n)
 	for i := range bufs {
-		bufs[i] = make([]byte, s.offset+65536)
+		bufs[i] = make([]byte, s.offset+readBuf)
 	}
 	for {
 		cnt, err := s.inner.Read(bufs, sizes, s.offset)
@@ -148,13 +173,39 @@ func (h *Handle) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	}
 }
 
+// Write пересаживает пакеты в буферы с запасом (см. writeBuf) и отдаёт
+// устройству одним батчем. Пакет, который в запас не влезает, идёт как есть.
 func (h *Handle) Write(bufs [][]byte, offset int) (int, error) {
 	select {
 	case <-h.done:
 		return 0, os.ErrClosed
 	default:
 	}
-	return h.s.inner.Write(bufs, offset)
+	return h.s.write(bufs, offset)
+}
+
+func (s *Shared) write(bufs [][]byte, offset int) (int, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	out := s.wbufs[:0]
+	for _, b := range bufs {
+		if len(b) > offset+writeBuf {
+			out = append(out, b)
+			continue
+		}
+		w := s.wpool.Get().([]byte)
+		out = append(out, w[:copy(w, b)])
+	}
+	n, err := s.inner.Write(out, offset)
+	for i, w := range out {
+		// out[i] — либо bufs[i] как есть, либо буфер из пула; отличаем по адресу.
+		if &w[0] != &bufs[i][0] {
+			s.wpool.Put(w[:cap(w)])
+		}
+		out[i] = nil
+	}
+	s.wbufs = out[:0]
+	return n, err
 }
 
 func (h *Handle) MTU() (int, error)        { return h.s.mtu, nil }

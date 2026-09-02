@@ -3,6 +3,8 @@ package status
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,5 +61,33 @@ func TestFlushWritesPendingNow(t *testing.T) {
 func TestReadMissing(t *testing.T) {
 	if _, err := Read(filepath.Join(t.TempDir(), "nope.json")); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestMemKBRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	w := &Writer{Path: filepath.Join(dir, "s.json")}
+	if err := w.Write(Status{MemKB: 12345}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(w.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.MemKB != 12345 {
+		t.Fatalf("mem_kb = %d, ждали 12345", s.MemKB)
+	}
+	b, _ := os.ReadFile(w.Path)
+	if !strings.Contains(string(b), `"mem_kb":12345`) {
+		t.Fatalf("в файле нет mem_kb: %s", b)
+	}
+}
+
+func TestRSSKBOnLinuxIsPositive(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("RSS читается из /proc")
+	}
+	if RSSKB() <= 0 {
+		t.Fatal("RSSKB() = 0 на linux")
 	}
 }

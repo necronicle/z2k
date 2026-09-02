@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -51,6 +52,7 @@ const (
 	// через который к ним и идёт подключение.
 	defaultEndpoints = "/opt/zapret2/lists/warp-endpoints.txt"
 	logMax           = 256 * 1024
+	memLimit         = 48 << 20
 )
 
 func main() {
@@ -169,6 +171,12 @@ func cmdRun(args []string) int {
 	fs.Parse(args)
 
 	runtime.GOMAXPROCS(2)
+	// Мягкий потолок кучи. Живой набор под нагрузкой — около 10 МБ, и сборщик
+	// по умолчанию держал бы вдвое больше; лимит заставляет его прибираться
+	// раньше, чем роутер с 128–256 МБ заметит. Это страховка, а не решение:
+	// буферы под пакеты урезаны в third_party/wireguard, без этого лимит
+	// пик не срезал (VmHWM 84 МБ при лимите 40 МБ, замер 2026-09-02).
+	debug.SetMemoryLimit(memLimit)
 	lw, err := logrot.New(*logPath, logMax)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "log:", err)

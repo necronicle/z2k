@@ -356,6 +356,13 @@ async function loadWarpStatus() {
     { label: "Транспорт", value: d.ready ? transport + (d.endpoint ? " · " + d.endpoint : "") : "—",
       kind: d.ready ? "good" : "" },
   ];
+  // Память движка — только пока он запущен. Растёт с трафиком, не со списком;
+  // после правки буферов норма 20–40 МБ. Выше 96 МБ — предупреждение: на
+  // роутере с 512 МБ движок убивало ровно на этой отметке (замер 2026-09-02).
+  const memKb = Number(d.mem_kb) || 0;
+  if (memKb > 0) {
+    cells.push({ label: "Память движка", value: Math.round(memKb / 1024) + " МБ", kind: memKb > 96 * 1024 ? "warn" : "" });
+  }
   grid.innerHTML = cells.map(c => {
     const icon = statusIcon(c.kind);
     return `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${icon ? `<span class="status-ico">${icon}</span>` : ""}${escapeHtml(c.value)}</div></div>`;

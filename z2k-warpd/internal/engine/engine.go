@@ -443,6 +443,7 @@ func (e *Engine) tearDownTUN() {
 
 func (e *Engine) write(s status.Status) {
 	s.PID = os.Getpid()
+	s.MemKB = status.RSSKB()
 	if s.LastError == "" {
 		s.LastError = e.lastErr
 	}

@@ -800,6 +800,8 @@ print_warp() {
     fi
     if [ -f "$st" ]; then
         printf 'status            : %s\n' "$(cat "$st")"
+        printf 'memory            : %s kB RSS (движок; растёт с трафиком, не со списком)\n' \
+            "$(sed -n 's/.*"mem_kb": *\([0-9]*\).*/\1/p' "$st" | head -1)"
         printf 'verdict           : %s\n' "$(grep -q '"ready":true' "$st" && echo 'ready' || echo "not ready — $(warp_status_reason)")"
     else
         printf 'status            : no status.json (daemon not running)\n'
