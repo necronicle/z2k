@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -275,12 +277,12 @@ func (st *stream) pumpToUpstream() {
 
 // pumpFromUpstream — чтение DC в пределах кредита клиента (v2) или
 // потолка стрима (v1). Без кредита сокет DC не читается: давление доходит
-// до Telegram по TCP.
+// до Telegram по TCP. Буфер чтения берётся из пула только на сам syscall:
+// стримы Telegram живут часами и почти всё время молчат, а буфер, прибитый к
+// стриму на время блокирующего Read, стоил 562 МБ на 9000 стримов (замер
+// 02.09.2026 нагрузочным прогоном).
 func (st *stream) pumpFromUpstream() {
 	s := st.s
-	bufp := readBufPool.Get().(*[]byte)
-	buf := (*bufp)[:16*1024]
-	defer readBufPool.Put(bufp)
 	st.connMu.Lock()
 	c := st.conn
 	st.connMu.Unlock()
@@ -300,19 +302,19 @@ func (st *stream) pumpFromUpstream() {
 				}
 			}
 		}
-		want := len(buf)
+		want := readBufSize
 		if s.proto().windows() {
 			if cr := st.creditToClient.Load(); cr < int64(want) {
 				want = int(cr)
 			}
 		}
-		n, err := c.Read(buf[:want])
+		frame, n, err := readUpstream(c, st.id, want)
 		if n > 0 {
 			s.rxBytes.Add(int64(n))
 			if s.proto().windows() {
 				st.creditToClient.Add(-int64(n))
 			}
-			if !s.writer.data(st, encodeFrame(st.id, muxDATA, buf[:n])) {
+			if !s.writer.data(st, frame) {
 				if st.isClosed() {
 					return
 				}
@@ -330,6 +332,57 @@ func (st *stream) pumpFromUpstream() {
 			return
 		}
 	}
+}
+
+const readBufSize = 16 * 1024
+
+// readUpstream читает до want байт и сразу собирает кадр DATA. Для TCP —
+// через RawConn: ожидание готовности идёт в поллере без буфера, буфер из
+// пула живёт ровно на время syscall. Для остальных соединений (pipe в
+// тестах) — обычный Read с буфером из пула.
+func readUpstream(c net.Conn, id uint16, want int) ([]byte, int, error) {
+	if sc, ok := c.(syscall.Conn); ok {
+		if rc, err := sc.SyscallConn(); err == nil {
+			var frame []byte
+			var n int
+			var rerr error
+			// fn вызывается сразу и затем на каждой готовности; буфер берётся
+			// внутри, чтобы ожидание в поллере шло без него.
+			err = rc.Read(func(fd uintptr) bool {
+				bufp := readBufPool.Get().(*[]byte)
+				buf := (*bufp)[:want]
+				n, rerr = syscall.Read(int(fd), buf)
+				if rerr == syscall.EAGAIN || rerr == syscall.EINTR {
+					readBufPool.Put(bufp)
+					n, rerr = 0, nil
+					return false
+				}
+				if n > 0 {
+					frame = encodeFrame(id, muxDATA, buf[:n])
+				}
+				readBufPool.Put(bufp)
+				return true
+			})
+			if err != nil {
+				return nil, 0, err
+			}
+			if rerr != nil {
+				return nil, 0, rerr
+			}
+			if n == 0 {
+				return nil, 0, io.EOF
+			}
+			return frame, n, nil
+		}
+	}
+	bufp := readBufPool.Get().(*[]byte)
+	defer readBufPool.Put(bufp)
+	buf := (*bufp)[:want]
+	n, err := c.Read(buf)
+	if n > 0 {
+		return encodeFrame(id, muxDATA, buf[:n]), n, err
+	}
+	return nil, 0, err
 }
 
 // grant — WINDOW от клиента (v2).

@@ -197,7 +197,7 @@ func computeAuthHMAC(secret string) []byte {
 // основной вклад в RSS. Пул отдаёт буфер только на время активного чтения.
 var readBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 64*1024)
+		b := make([]byte, readBufSize)
 		return &b
 	},
 }
@@ -504,7 +504,7 @@ func (s *dialStats) loop(interval time.Duration, stop <-chan struct{}) {
 }
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:    32 * 1024,
+	ReadBufferSize:    8 * 1024, // payload копируется наружу, буфер нужен только под заголовок кадра
 	WriteBufferSize:   16 * 1024,
 	WriteBufferPool:   wsWriteBufPool,
 	CheckOrigin:       func(r *http.Request) bool { return true },

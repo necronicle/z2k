@@ -114,3 +114,14 @@ sh vps/bin/verify.sh | grep -A1 'разнос приёма'
 - Подмена бинарника ТОЛЬКО через `mv` (rename): `cp` поверх работающего файла даёт
   «Text file busy». Порядок: `mv relay.new relay` → drop-in с флагами → `restart`;
   drop-in с новыми флагами раньше бинарника = crash-loop на неизвестном флаге.
+
+## Нагрузочный прогон релея (план 2 v2)
+
+```
+cd vps-relay && ulimit -n 20000 && go test -tags load -run TestLoad_3000Sessions -count=1 -v .
+```
+3000 сессий × 3 стрима против настоящего handleWS в одном процессе. Порог
+120 КБ heap на сессию включает поддельный клиент и DC стенда; 02.09.2026
+замер дал 79 КБ и p95 кадра 78 мкс. Если число выросло — сначала
+`-memprofile` и `go tool pprof -top -sample_index=inuse_space`: 02.09 весь
+рост был в буферах чтения, прибитых к стримам.

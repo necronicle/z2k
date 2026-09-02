@@ -32,7 +32,7 @@ func newWSWriter(s *session) *wsWriter {
 	return &wsWriter{
 		s:         s,
 		ctrl:      make(chan ctrlItem, *controlQueueDepth),
-		ready:     make(chan *stream, 1024),
+		ready:     make(chan *stream, 256),
 		pingEvery: 30 * time.Second,
 	}
 }
