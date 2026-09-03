@@ -16,8 +16,8 @@ func TestDrain_SendsRetryAfterThenShutdown(t *testing.T) {
 	go func() { drainSessions(300 * time.Millisecond); close(done) }()
 	p := expectFrame(t, ws, 0, muxINFO, 2*time.Second)
 	k, arg, _, _ := decodeInfo(p)
-	if k != infoRetryAfter || arg > 60 {
-		t.Fatalf("ожидался RETRY_AFTER ≤60, получено kind=%d arg=%d", k, arg)
+	if k != infoRetryAfter || arg > 3 {
+		t.Fatalf("ожидался RETRY_AFTER ≤3, получено kind=%d arg=%d", k, arg)
 	}
 	p = expectFrame(t, ws, 0, muxINFO, 2*time.Second)
 	k, arg, _, _ = decodeInfo(p)

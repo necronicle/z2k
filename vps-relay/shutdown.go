@@ -17,13 +17,16 @@ func forEachSession(fn func(*session)) {
 }
 
 // drainSessions — плавная остановка (спека §3.6, часть про SIGTERM): v2
-// получают RETRY_AFTER с разбросом 0–60 с, затем ждём до timeout, остаток
-// закрываем с причиной SHUTDOWN.
+// получают RETRY_AFTER с разбросом 0–3 с, затем ждём до timeout, остаток
+// закрываем с причиной SHUTDOWN. Разброс был 0–60 с: при переключении
+// экземпляра второй уже работает, а минута ожидания = минута мёртвого
+// Telegram у всех на v2 («разом телега моргнула везде», 03.09.2026).
+// Очередь SYN узла 8192, 1800 переподключений за 3 с ей не страшны.
 func drainSessions(timeout time.Duration) {
 	n := 0
 	forEachSession(func(s *session) {
 		n++
-		if f := s.proto().info(infoRetryAfter, uint32(rand.IntN(61)), "деплой"); f != nil {
+		if f := s.proto().info(infoRetryAfter, uint32(rand.IntN(4)), "деплой"); f != nil {
 			s.writer.control(f)
 		}
 	})
