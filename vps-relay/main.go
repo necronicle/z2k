@@ -48,7 +48,7 @@ var (
 	eventsDir            = flag.String("events-dir", "", "каталог структурного журнала событий (пусто = выключено)")
 	eventsKeep           = flag.Int("events-keep", 30, "сколько суточных файлов событий хранить")
 	authReadTimeout      = flag.Duration("auth-read-timeout", 90*time.Second, "таймаут чтения WS до и после авторизации")
-	defaultWindow        = flag.Int("default-window", 256*1024, "начальный кредит на стрим, байт (v2)")
+	defaultWindow        = flag.Int("default-window", 2*1024*1024, "начальный кредит на стрим, байт (v2); 2 МиБ — как очередь v1: 256 КиБ резали один стрим до ~256К/RTT (03.09.2026)")
 	upstreamWriteTimeout = flag.Duration("upstream-write-timeout", 15*time.Second, "дедлайн записи в сокет DC")
 	wsWriteTimeout       = flag.Duration("ws-write-timeout", 10*time.Second, "дедлайн записи кадра в WS")
 	minBuild             = flag.String("min-build", "", "минимальная версия клиента v2 (пусто = не требовать)")

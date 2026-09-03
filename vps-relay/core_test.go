@@ -168,7 +168,7 @@ func TestV2_RelayHonoursClientCredit(t *testing.T) {
 	pipeDC = func(c net.Conn) {
 		defer c.Close()
 		chunk := bytes.Repeat([]byte("D"), 4096)
-		for i := 0; i < 700*1024/4096; i++ {
+		for i := 0; i < 3*(*defaultWindow)/4096; i++ { // втрое больше окна: релей обязан остановиться
 			if _, err := c.Write(chunk); err != nil {
 				return
 			}
