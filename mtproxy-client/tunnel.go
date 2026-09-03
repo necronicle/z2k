@@ -632,6 +632,12 @@ func (tc *tunnelClient) onControl(frame muxFrame) {
 	}
 	switch kind {
 	case infoRetryAfter:
+		// Потолок 5 с: релей r-82.1 просил до 60 с, и это была минута мёртвого
+		// Telegram у всех при каждом переключении экземпляра (03.09.2026).
+		// Второй экземпляр к этому моменту уже работает — ждать нечего.
+		if arg > maxRetryAfterSec {
+			arg = maxRetryAfterSec
+		}
 		tc.retryAfter.Store(int64(arg))
 		log.Printf("[tunnel] релей просит переподключиться через %d с (%s)", arg, text)
 	case infoUpdateRequired:
@@ -1109,6 +1115,9 @@ func runTunnel() error {
 		}
 	}
 }
+
+// maxRetryAfterSec — потолок RETRY_AFTER от релея.
+const maxRetryAfterSec = 5
 
 // backoffFor — ступени паузы по числу подряд неудач (как до r-82).
 func backoffFor(consecutiveFails int) time.Duration {

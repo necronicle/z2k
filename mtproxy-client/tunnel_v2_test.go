@@ -410,6 +410,11 @@ func TestRetryAfterOverridesBackoff(t *testing.T) {
 	tc := newTestClient(t, fr)
 	go tc.run()
 	waitReady(t, fr)
+	fr.send(encodeMuxFrame(0, muxINFO, append([]byte{infoRetryAfter}, 0, 0, 0, 60)))
+	time.Sleep(100 * time.Millisecond)
+	if tc.retryAfter.Load() != maxRetryAfterSec {
+		t.Fatalf("RETRY_AFTER 60 должен резаться до %d, получено %d", maxRetryAfterSec, tc.retryAfter.Load())
+	}
 	fr.send(encodeMuxFrame(0, muxINFO, append([]byte{infoRetryAfter}, 0, 0, 0, 2)))
 	time.Sleep(100 * time.Millisecond)
 	if tc.retryAfter.Load() != 2 {
