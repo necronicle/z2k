@@ -759,6 +759,13 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 	if who == "" {
 		who = "-"
 	}
+	// Отказ старой схеме без установки: 72 адреса × лестница переподключений
+	// × два процесса = 30 тыс. строк в сутки (03.09.2026). Метрика считает
+	// всё, журнал и события — по одному разу в час на адрес.
+	if s.closeReason() == "auth_rejected" && who == "-" && !legacyRejects.allow(ip, time.Now()) {
+		metrics.inc("relay_session_close_total", fmt.Sprintf("reason=%q", s.closeReason()))
+		return
+	}
 	log.Printf("[%s] WS closed install=%s ip=%s dur=%s rx=%d tx=%d reason=%s",
 		sid, who, ip, time.Since(started).Truncate(time.Second), rx, tx, s.closeReason())
 	emitEvent(Event{
@@ -767,6 +774,33 @@ func handleWS(parentCtx context.Context, w http.ResponseWriter, r *http.Request)
 		Streams: int(s.peakStreams.Load()), Reason: s.closeReason(), Detail: s.noisyDetail(),
 	})
 	metrics.inc("relay_session_close_total", fmt.Sprintf("reason=%q", s.closeReason()))
+}
+
+// perIPHourly — «не чаще раза в час на адрес» для шумных повторов.
+// Забытые адреса вычищаются при каждом проходе, карта не растёт бесконечно.
+type perIPHourly struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+	span time.Duration
+}
+
+var legacyRejects = &perIPHourly{last: map[string]time.Time{}, span: time.Hour}
+
+func (p *perIPHourly) allow(ip string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if t, ok := p.last[ip]; ok && now.Sub(t) < p.span {
+		return false
+	}
+	if len(p.last) > 4096 {
+		for k, t := range p.last {
+			if now.Sub(t) >= p.span {
+				delete(p.last, k)
+			}
+		}
+	}
+	p.last[ip] = now
+	return true
 }
 
 func main() {

@@ -3,6 +3,7 @@ package main
 import (
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -227,5 +228,33 @@ func TestFileEvents_UnwritableDirDoesNotPanic(t *testing.T) {
 	_, err := newFileEvents("/proc/no-such-dir/events", 30)
 	if err == nil {
 		t.Fatal("ожидалась ошибка на недоступном каталоге")
+	}
+}
+
+// Отказ старой схеме с одного адреса: первая строка проходит, повторы в
+// течение часа — нет, через час — снова одна; чужой адрес не задет.
+func TestPerIPHourly(t *testing.T) {
+	p := &perIPHourly{last: map[string]time.Time{}, span: time.Hour}
+	t0 := time.Date(2026, 9, 3, 6, 0, 0, 0, time.UTC)
+	if !p.allow("1.1.1.1", t0) {
+		t.Fatal("первый отказ должен попасть в журнал")
+	}
+	if p.allow("1.1.1.1", t0.Add(30*time.Second)) || p.allow("1.1.1.1", t0.Add(59*time.Minute)) {
+		t.Fatal("повтор в пределах часа должен глушиться")
+	}
+	if !p.allow("2.2.2.2", t0.Add(time.Second)) {
+		t.Fatal("другой адрес не должен глушиться")
+	}
+	if !p.allow("1.1.1.1", t0.Add(61*time.Minute)) {
+		t.Fatal("через час — снова одна строка")
+	}
+	for i := 0; i < 5000; i++ {
+		p.allow(fmt.Sprintf("10.0.%d.%d", i/256, i%256), t0.Add(2*time.Hour))
+	}
+	if len(p.last) > 5001 {
+		t.Fatalf("карта не чистится: %d", len(p.last))
+	}
+	if p.allow("10.0.0.1", t0.Add(3*time.Hour+time.Minute)); len(p.last) > 2 {
+		t.Fatalf("после часа устаревшие адреса должны вычищаться, осталось %d", len(p.last))
 	}
 }
