@@ -329,7 +329,7 @@ z2k_fetch() {
         local _d_ct
         _d_ct=$(z2k_uint "${Z2K_FETCH_DIRECT_CONNECT_TIMEOUT:-3}" 3 1 30)
         if _z2k_curl_etag "$url" "$dest" "" "$_d_ct" \
-           && _z2k_verify_fetched "$dest" "GitHub напрямую"; then
+           && _z2k_ul_verify "$dest"; then
             Z2K_FETCH_DIRECT_CONNFAILS=0; export Z2K_FETCH_DIRECT_CONNFAILS
             return 0
         fi
