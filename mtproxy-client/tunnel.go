@@ -186,8 +186,8 @@ func newTunnelStream(id uint16, conn *net.TCPConn, tc *tunnelClient) *tunnelStre
 }
 
 // phoneQueueBytes — очередь к телефону; в v2 её реально ограничивает окно,
-// которое мы выдали релею, здесь только страховка.
-const phoneQueueBytes = 2 * 1024 * 1024
+// которое выдал релей (2 МиБ с 03.09.2026), здесь только страховка с запасом.
+const phoneQueueBytes = 4 * 1024 * 1024
 
 func (s *tunnelStream) releaseSem() {
 	if s.semHeld.CompareAndSwap(true, false) {
@@ -236,7 +236,12 @@ func (s *tunnelStream) phoneWriter() {
 		if !ok {
 			continue
 		}
-		s.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+		// Дедлайн — тот же простой, что и на чтение (15 мин), а не 15 с:
+		// телефон в кармане не читает сокет минутами, и это норма. Соседей он
+		// не держит — у каждого стрима свой писатель, очередь ограничена окном.
+		// 15 с в r-82.1 рвали стримы уснувших телефонов, и Telegram на
+		// пробуждении показывал «Соединение… Обновление…» (03.09.2026).
+		s.conn.SetWriteDeadline(time.Now().Add(*connTimeout))
 		if _, err := s.conn.Write(p); err != nil {
 			if *verbose {
 				log.Printf("[tunnel] stream %d write error: %v", s.id, err)
