@@ -137,13 +137,14 @@ func (s *session) handshakeV2(p []byte) bool {
 		log.Printf("[%s] auth rejected (v2 id=%s): %s", s.id, id, why)
 		emitEvent(Event{Ev: "auth_reject", SID: s.id, IP: s.clientIP, Install: id, Reason: why})
 		metrics.inc("relay_auth_reject_total", fmt.Sprintf("reason=%q", authRejectClass(why)))
-		if code == rClockSkew {
-			skew := int32(a.TS - time.Now().Unix())
-			s.writer.control(s.proto().info(infoClockSkew, uint32(skew), ""))
-		}
 		s.goodbye(code, why)
 		s.killWith("auth_rejected")
 		return false
+	}
+	// Совет по часам — только после AUTH_OK: клиент r-82.x читает первый кадр
+	// после AUTHID и любой INFO, кроме AUTH_OK, считает отказом.
+	if skew := a.TS - time.Now().Unix(); skew > *authSkewSeconds || skew < -*authSkewSeconds {
+		s.clockSkew = int32(skew)
 	}
 	s.relayID = id
 	return true

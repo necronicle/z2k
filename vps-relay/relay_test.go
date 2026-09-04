@@ -235,7 +235,8 @@ func dialV2(t *testing.T, url, id string, priv ed25519.PrivateKey, build string)
 }
 
 // handshakeV2Over — рукопожатие v2 на уже открытом WS (TLS-фронт и т.п.).
-func handshakeV2Over(t *testing.T, ws *websocket.Conn, id string, priv ed25519.PrivateKey, build string) helloAck {
+// tsOverride — подписать метку времени не серверную, а свою (тест битых часов).
+func handshakeV2Over(t *testing.T, ws *websocket.Conn, id string, priv ed25519.PrivateKey, build string, tsOverride ...int64) helloAck {
 	t.Helper()
 	h := append([]byte{protoVersion2, byte(len(build))}, build...)
 	h = binary.BigEndian.AppendUint32(h, 0)
@@ -248,7 +249,11 @@ func handshakeV2Over(t *testing.T, ws *websocket.Conn, id string, priv ed25519.P
 	raw, _ := hex.DecodeString(id)
 	msg := make([]byte, 40)
 	copy(msg, raw)
-	binary.BigEndian.PutUint64(msg[16:24], uint64(ack.ServerUnix))
+	ts := ack.ServerUnix
+	if len(tsOverride) > 0 {
+		ts = tsOverride[0]
+	}
+	binary.BigEndian.PutUint64(msg[16:24], uint64(ts))
 	copy(msg[24:40], ack.Nonce[:])
 	payload := append(msg, ed25519.Sign(priv, msg)...)
 	sendFrame(t, ws, 0, muxAUTHID, payload)

@@ -50,6 +50,7 @@ type session struct {
 
 	connectSlots chan struct{}
 	nonce        [16]byte
+	clockSkew    int32 // расхождение часов из AUTHID v2, 0 = в допуске
 }
 
 func newSession(ws *websocket.Conn, id, ip string, parent context.Context) *session {
@@ -96,6 +97,15 @@ func (s *session) run() {
 	log.Printf("[%s] authenticated (proto=%s id=%s build=%q)", s.id, s.proto().name(), s.relayID, s.build)
 	if f := s.proto().info(infoAuthOK, uint32(*maxStreamsPerSess), ""); f != nil {
 		s.writer.control(f)
+	}
+	// Часы роутера врут больше допуска: вход разрешён (в v2 от повтора
+	// защищает nonce), но пусть клиент знает и поправится сам.
+	if s.clockSkew != 0 {
+		log.Printf("[%s] часы установки %s расходятся на %+ds — вход разрешён, совет отправлен", s.id, s.relayID, s.clockSkew)
+		metrics.inc("relay_clock_skew_total", "")
+		if f := s.proto().info(infoClockSkew, uint32(s.clockSkew), ""); f != nil {
+			s.writer.control(f)
+		}
 	}
 	s.readLoop()
 }

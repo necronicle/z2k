@@ -647,10 +647,16 @@ func verifyPerInstallAuthV2(a authV2, nonce [16]byte) (string, bool, string, byt
 	if a.Nonce != nonce {
 		return a.ID, false, "nonce не совпал", rAuthFailed
 	}
-	now := time.Now().Unix()
-	if a.TS < now-*authSkewSeconds || a.TS > now+*authSkewSeconds {
-		return a.ID, false, fmt.Sprintf("часы разошлись на %+ds (допуск ±%ds)", a.TS-now, *authSkewSeconds), rClockSkew
-	}
+	// ЧАСЫ В V2 НЕ ОТВЕРГАЮТ ВХОД. От повтора здесь защищает nonce: он выдан
+	// сервером на это соединение и проверен выше, поэтому перехваченный кадр
+	// не подойдёт ни к какому другому. Метка времени осталась в подписи только
+	// как совет клиенту (INFO CLOCK_SKEW после AUTH_OK).
+	//
+	// Раньше тут стоял тот же гейт ±120 с, что и в v1, и он выключал людей
+	// целиком: роутеры без работающего NTP получали отказ на каждой попытке —
+	// замер 02–04.09.2026: 10 установок, 4430 отказов, у одной часы врут на
+	// 31,6 ч и туннель не поднялся ни разу за двое суток. В v1 метка времени
+	// действительно единственная защита от повтора, поэтому там гейт остаётся.
 	e := reg.get(a.ID)
 	if e == nil {
 		return a.ID, false, "установка не зарегистрирована", rAuthFailed

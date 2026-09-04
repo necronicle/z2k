@@ -305,3 +305,38 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+// Роутер без работающего NTP: часы врут на 31,6 ч (полевой случай 02–04.09.2026,
+// установка 7059f2d2 — 2526 отказов и ни одной сессии за двое суток). В v2 от
+// повтора защищает nonce сервера, поэтому вход разрешён, а расхождение уходит
+// клиенту советом ПОСЛЕ AUTH_OK — иначе клиент r-82.x счёл бы INFO отказом.
+func TestV2_BadClockAuthenticatesAndGetsAdvice(t *testing.T) {
+	startFakeDC(t, echoDC)
+	url := startRelay(t)
+	id, priv := testInstall(t)
+	ws := dialWS(t, url)
+	handshakeV2Over(t, ws, id, priv, "r-82.2", time.Now().Unix()-113755) // AUTH_OK внутри
+	p := expectFrame(t, ws, 0, muxINFO, 2*time.Second)
+	k, arg, _, err := decodeInfo(p)
+	if err != nil || k != infoClockSkew {
+		t.Fatalf("ожидался совет INFO CLOCK_SKEW, получено kind=%d err=%v", k, err)
+	}
+	if s := int32(arg); s > -113000 || s < -114500 {
+		t.Fatalf("в совете расхождение %+d с, ожидалось около -113755", s)
+	}
+	// Сессия жива и работает: обычный CONNECT проходит.
+	sendFrame(t, ws, 1, muxCONNECT, connectPayload(tgTarget, 80))
+	expectFrame(t, ws, 1, muxCONNECT_OK, 2*time.Second)
+}
+
+// Часы в допуске — никакого совета, только AUTH_OK и тишина на стриме 0.
+func TestV2_GoodClockNoAdvice(t *testing.T) {
+	url := startRelay(t)
+	id, priv := testInstall(t)
+	ws, _ := dialV2(t, url, id, priv, "r-82.2")
+	ws.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, msg, err := ws.ReadMessage(); err == nil {
+		sid, mt, _, _ := decodeFrame(msg)
+		t.Fatalf("после AUTH_OK пришёл лишний кадр sid=%d type=0x%02x", sid, mt)
+	}
+}
