@@ -1903,10 +1903,11 @@ TMPJUNK
     # it was still pinned to v1.0-z2k-r0 from May, i.e. those users would have installed
     # an engine WITHOUT the contains() fix and kept paying ~17 s of every restart while
     # everyone else got 1.5 s. Bump this together with the fork release.
-    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v1.0.4-z2k-r0/zapret2-v1.0.4-z2k-r0-openwrt-embedded.tar.gz"
+    local fallback_url="https://github.com/necronicle/zapret2-z2k/releases/download/v1.0.5-z2k-r0/zapret2-v1.0.5-z2k-r0-openwrt-embedded.tar.gz"
     local openwrt_url=""
 
-    # Эталон install_bin.sh из ПРИКРЕПЛЁННОГО релиза (v1.0.4-z2k-r0).
+    # Эталон install_bin.sh из ПРИКРЕПЛЁННОГО релиза (v1.0.5-z2k-r0; сам файл
+    # не менялся с v1.0.4-z2k-r0, поэтому сумма та же).
     #
     # Этот скрипт исполняется от root сразу после распаковки, а апстримный
     # sha256sum.txt его НЕ покрывает: там 46 записей, и все — на бинарники
