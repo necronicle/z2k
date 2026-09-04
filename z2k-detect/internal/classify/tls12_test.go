@@ -204,3 +204,58 @@ func TestFallbackKeepsModernStrategyAndWarns(t *testing.T) {
 		}
 	}
 }
+
+// Список доменов старых устройств обязан ловить поддомены и НЕ ловить чужие
+// имена, кончающиеся так же. Шаблон без точки на границе («*youtube.com»)
+// совпал бы с notyoutube.com — такую дыру уже пришлось чинить в шелле панели.
+func TestLegacyDeviceDomainBoundaries(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		want bool
+	}{
+		{"youtube.com", true},
+		{"www.youtube.com", true},
+		{"youtu.be", true},
+		{"rr3---sn-x.googlevideo.com", true},
+		{"i.ytimg.com", true},
+		{"yt3.ggpht.com", true},
+		{"YouTube.com", true},  // регистр не должен решать
+		{"youtube.com.", true}, // корневая точка тоже
+		{"notyoutube.com", false},
+		{"evilggpht.com", false},
+		{"youtube.com.evil.ru", false},
+		{"rutracker.org", false},
+		{"www.instagram.com", false},
+		{"", false},
+	} {
+		if got := LegacyDeviceDomain(c.name); got != c.want {
+			t.Errorf("%q: получено %v, ожидалось %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Кросс-проверка на старом TLS не должна запускаться на обычном домене: она
+// стоит минуты, а телевизоров там нет. Замер 04.09: instagram без неё — 3 с,
+// с ней — 1 м 54 с.
+func TestCrossCheckSkippedOnOrdinaryDomain(t *testing.T) {
+	addr := startStand(t, "", tls.VersionTLS12)
+	tr, err := TLSTrigger("rutracker.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opt := respOpts()
+	opt.withDefaults()
+	res := &Result{Verdict: VerdictPrefix, Reason: "основа", SplitPos: 1}
+
+	start := time.Now()
+	crossCheckTLS12(context.Background(), addr, tr, opt, res, "")
+	if spent := time.Since(start); spent > time.Second {
+		t.Errorf("проверка шла %s на обычном домене — она обязана пропускаться", spent)
+	}
+	if res.CoversTLS12 != nil {
+		t.Errorf("на обычном домене выставлен CoversTLS12=%v", *res.CoversTLS12)
+	}
+	if res.Reason != "основа" {
+		t.Errorf("вердикт дописан на обычном домене: %s", res.Reason)
+	}
+}
