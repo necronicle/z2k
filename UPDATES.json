@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 66,
-  "current": "r-82.3",
+  "seq": 67,
+  "current": "p-82.4",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -210,7 +210,7 @@
   "files/z2k-tcp16-probe.sh": "bc1d6af7370b5efbed14103be4420b24a996cafaf67bd7cc32075be1be9647f9",
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
   "files/z2k-tg-watchdog.sh": "f433391db09dad96471cf96dc6c814fbff846c285ba3cb424806f08ab040ce8f",
-  "files/z2k-update-lists.sh": "84bb046ed26e3e46abaf116e8139bea4a49dfde102d7cfa974ccef81fd99d84c",
+  "files/z2k-update-lists.sh": "e936aa3afbef29ba991a1d51b9d051860a1a9ae453ffe5adbd7292c81d5bb893",
   "files/z2k-warp.sh": "1e6843bb711afa4d66c739648419a531feffadcd2ffea4716d75d62a2a56bdc7",
   "lib/auto_update.sh": "fa5b99f32429d37be574e5ebe18a3333a7d4371018762d3c4438ddb5129a3bb6",
   "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "dfbd08fe61df6ab27eef2b25aef929ed8f1919ffda8d2bbb4ee90bc2ea05d259",
+  "webpanel/www/index.html": "4ac31389e026edb9a02c78f13437d496b738297b8d0f254fbf08146d1dc23df0",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -510,6 +510,7 @@
 {"v": "p-81.15", "type": "patch", "ts": "2026-09-02T15:57:27Z", "ref": "p-81.15", "desc": "Режим WARP стал заметно экономнее: движок больше не разрастается до сотни мегабайт под нагрузкой и не падает на роутерах с малым объёмом памяти. Панель теперь показывает, сколько памяти он занимает.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "r-82.1", "type": "reinstall", "ts": "2026-09-02T22:38:23Z", "ref": "r-82.1", "desc": "Telegram через наш сервер: обновлён протокол связи роутера с сервером. Одно медленное устройство больше не тормозит остальные, переподключения после сбоев сети распределяются во времени, а поток данных идёт с контролем очередей — меньше обрывов и зависаний в вечерние часы.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "r-82.2", "type": "reinstall", "ts": "2026-09-03T18:53:48Z", "ref": "r-82.2", "desc": "Telegram через наш сервер: исправлены недочёты вчерашнего обновления. Телефон, полежавший в кармане, снова подключается мгновенно, без долгого «Соединение… Обновление…»; загрузка видео и файлов больше не упирается в искусственный потолок скорости; при обслуживании сервера связь восстанавливается за секунды, а не за минуту.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "r-82.3", "type": "reinstall", "ts": "2026-09-04T09:58:35Z", "ref": "r-82.3", "desc": "Обновлён движок обхода до версии 1.0.5: исправлена сборка и разбор TCP-опций, проверка длины расширения keyshare при разборе TLS и завершение по сигналу. Добавлен новый спонсор проекта — b11d11, имя появилось в благодарностях: в меню роутера, в описании проекта и на странице «Благодарности» в веб-панели.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "r-82.3", "type": "reinstall", "ts": "2026-09-04T09:58:35Z", "ref": "r-82.3", "desc": "Обновлён движок обхода до версии 1.0.5: исправлена сборка и разбор TCP-опций, проверка длины расширения keyshare при разборе TLS и завершение по сигналу. Добавлен новый спонсор проекта — b11d11, имя появилось в благодарностях: в меню роутера, в описании проекта и на странице «Благодарности» в веб-панели.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-82.4", "type": "patch", "ts": "2026-09-04T10:47:54Z", "ref": "p-82.4", "desc": "Исправлено обновление списков: быстрый путь, который берёт файлы напрямую с GitHub, из-за неверного имени внутренней проверки всегда считался неудачным, и каждый файл шёл через наш сервер. Теперь прямой путь работает как задумано, а в журнале роутера пропадает ошибка на каждый файл.", "changed_files": ["webpanel/www/index.html", "files/z2k-update-lists.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
