@@ -34,48 +34,48 @@ func TestVerifyPerInstallAuth(t *testing.T) {
 	now := time.Now().Unix()
 	frame := mkFrame(idb, now, priv)
 
-	if gotID, ok, _ := verifyPerInstallAuth(frame); !ok || gotID != id {
+	if gotID, ok, _ := verifyPerInstallAuth(frame, "1.2.3.4"); !ok || gotID != id {
 		t.Fatalf("valid auth rejected: ok=%v id=%s want=%s", ok, gotID, id)
 	}
 
 	// tampered signature
 	bad := append([]byte(nil), frame...)
 	bad[30] ^= 0xff
-	if _, ok, _ := verifyPerInstallAuth(bad); ok {
+	if _, ok, _ := verifyPerInstallAuth(bad, "1.2.3.4"); ok {
 		t.Fatal("tampered signature accepted")
 	}
 
 	// wrong length
-	if _, ok, _ := verifyPerInstallAuth(frame[:87]); ok {
+	if _, ok, _ := verifyPerInstallAuth(frame[:87], "1.2.3.4"); ok {
 		t.Fatal("short frame accepted")
 	}
 
 	// stale timestamp (signed correctly but too old)
-	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now-9999, priv)); ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now-9999, priv), "1.2.3.4"); ok {
 		t.Fatal("stale timestamp accepted")
 	}
 	// future timestamp beyond skew
-	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now+9999, priv)); ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now+9999, priv), "1.2.3.4"); ok {
 		t.Fatal("future timestamp accepted")
 	}
 
 	// revoked
 	reg.m[id].Revoked = true
-	if _, ok, _ := verifyPerInstallAuth(frame); ok {
+	if _, ok, _ := verifyPerInstallAuth(frame, "1.2.3.4"); ok {
 		t.Fatal("revoked identity accepted")
 	}
 	reg.m[id].Revoked = false
 
 	// unknown id
 	reg.m = map[string]*regEntry{}
-	if _, ok, _ := verifyPerInstallAuth(frame); ok {
+	if _, ok, _ := verifyPerInstallAuth(frame, "1.2.3.4"); ok {
 		t.Fatal("unknown identity accepted")
 	}
 
 	// signature by a different key (key substitution) must fail
 	reg.m[id] = &regEntry{Pubkey: base64.StdEncoding.EncodeToString(pub)}
 	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
-	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now, otherPriv)); ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now, otherPriv), "1.2.3.4"); ok {
 		t.Fatal("signature from a non-registered key accepted")
 	}
 }
@@ -84,7 +84,7 @@ func TestAuthReplay(t *testing.T) {
 	skew := int64(120)
 	authSkewSeconds = &skew
 	reg = &registry{m: map[string]*regEntry{}}
-	authNonceSeen = map[string]time.Time{} // isolate from other tests
+	authNonceSeen = map[string]authSighting{} // isolate from other tests
 
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	var idb [16]byte
@@ -98,23 +98,28 @@ func TestAuthReplay(t *testing.T) {
 	frame := mkFrame(idb, now, priv)
 
 	// first sighting of a valid frame is accepted
-	if _, ok, _ := verifyPerInstallAuth(frame); !ok {
+	if _, ok, _ := verifyPerInstallAuth(frame, "1.2.3.4"); !ok {
 		t.Fatal("first valid auth rejected")
 	}
-	// an exact replay of the same frame is rejected
-	if _, ok, _ := verifyPerInstallAuth(frame); ok {
-		t.Fatal("replayed auth frame accepted")
+	// ТОТ ЖЕ КАДР С ТОГО ЖЕ АДРЕСА — это второй процесс роутера (:1443 и :1444
+	// поднимаются в одну секунду и подписывают идентичный id||ts). Принимается.
+	if _, ok, why := verifyPerInstallAuth(frame, "1.2.3.4"); !ok {
+		t.Fatalf("второй процесс той же установки отвергнут: %s", why)
+	}
+	// тот же кадр из ДРУГОЙ сети — повтор, отвергается
+	if _, ok, _ := verifyPerInstallAuth(frame, "9.9.9.9"); ok {
+		t.Fatal("повтор подписи из другой сети принят")
 	}
 	// a fresh frame (different ts -> different signature) is still accepted
-	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now+1, priv)); !ok {
+	if _, ok, _ := verifyPerInstallAuth(mkFrame(idb, now+1, priv), "9.9.9.9"); !ok {
 		t.Fatal("distinct-ts frame wrongly rejected as replay")
 	}
 	// once the replay window has passed, the same signature is accepted again
 	sig := frame[24:88]
 	authNonceMu.Lock()
-	authNonceSeen[string(sig)] = time.Now().Add(-time.Duration(2*skew+10) * time.Second)
+	authNonceSeen[string(sig)] = authSighting{ip: "1.2.3.4", at: time.Now().Add(-time.Duration(2*skew+10) * time.Second)}
 	authNonceMu.Unlock()
-	if _, ok, _ := verifyPerInstallAuth(frame); !ok {
+	if _, ok, _ := verifyPerInstallAuth(frame, "9.9.9.9"); !ok {
 		t.Fatal("frame rejected after replay window expired")
 	}
 }

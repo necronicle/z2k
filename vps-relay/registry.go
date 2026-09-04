@@ -554,32 +554,52 @@ func validInstallID(s string) bool {
 
 // Anti-replay: the signed AUTH message is only install_id||timestamp, so a
 // captured 88-byte frame is replayable for the whole ±authSkewSeconds window.
-// We cache the signature of every ACCEPTED frame and reject a second sighting.
-// A legitimate client re-signs with a fresh timestamp on each reconnect (backoff
-// ≥3s), producing a new signature, so this never rejects a real reconnect. The
-// TTL only needs to span the accept window (2*authSkewSeconds) — anything older
-// is already rejected by the skew gate. Mirrors the regRate map+mutex+inline-GC.
+// We cache the signature of every ACCEPTED frame and reject a second sighting
+// ИЗ ДРУГОГО АДРЕСА. Ключ кэша — подпись И адрес клиента.
+//
+// ЗАЧЕМ АДРЕС. Утверждение «клиент подписывает свежей меткой на каждом
+// переподключении, поэтому настоящий коннект здесь не отвергается» неверно: на
+// роутере ДВА процесса с одной установкой (:1443 Telegram и :1444 cdnbase), они
+// поднимаются в одну секунду и подписывают идентичный id||ts — подпись
+// побайтово совпадает. Замер 04.09.2026: 794 отказа «повтор подписи» за день,
+// по 2–3 на установку, все в секунды массового переподключения после
+// переключения экземпляра релея. Один из двух туннелей терял первую попытку и
+// ждал бэкофф; если проигрывал :1443, человек видел лишние секунды
+// «Соединение». Адрес у своих процессов один и тот же, у постороннего — чужой,
+// поэтому повтор из другой сети по-прежнему отсекается.
+//
+// TTL спанит окно приёма (2*authSkewSeconds) — всё старше уже отсечено гейтом
+// часов. Mirrors the regRate map+mutex+inline-GC.
+type authSighting struct {
+	ip string
+	at time.Time
+}
+
 var (
 	authNonceMu   sync.Mutex
-	authNonceSeen = map[string]time.Time{} // key: the 64-byte signature
+	authNonceSeen = map[string]authSighting{} // key: the 64-byte signature
 )
 
-// authReplaySeen records sig and reports whether it was already accepted within
-// the replay window. Call ONLY for cryptographically-valid frames.
-func authReplaySeen(sig []byte) bool {
+// authReplaySeen запоминает подпись вместе с адресом, с которого её приняли, и
+// сообщает «это повтор» только если ту же подпись в пределах окна принесли С
+// ДРУГОГО адреса. Call ONLY for cryptographically-valid frames.
+func authReplaySeen(sig []byte, ip string) bool {
 	ttl := time.Duration(2**authSkewSeconds) * time.Second
 	authNonceMu.Lock()
 	defer authNonceMu.Unlock()
 	now := time.Now()
 	key := string(sig)
-	if t, ok := authNonceSeen[key]; ok && now.Sub(t) < ttl {
-		return true // replay within window
+	if e, ok := authNonceSeen[key]; ok && now.Sub(e.at) < ttl {
+		if e.ip != ip {
+			return true // тот же кадр из другой сети — повтор
+		}
+		return false // второй процесс той же установки
 	}
-	authNonceSeen[key] = now
+	authNonceSeen[key] = authSighting{ip: ip, at: now}
 	// opportunistic GC of expired entries (bounded memory, no goroutine)
 	if len(authNonceSeen) > 8192 {
-		for k, t := range authNonceSeen {
-			if now.Sub(t) >= ttl {
+		for k, e := range authNonceSeen {
+			if now.Sub(e.at) >= ttl {
 				delete(authNonceSeen, k)
 			}
 		}
@@ -603,7 +623,7 @@ func authReplaySeen(sig []byte) bool {
 //
 // Для расхождения часов пишется САМА величина: «на сколько ушли» — это ответ,
 // а «часы не те» — только гипотеза, которую всё равно придётся проверять.
-func verifyPerInstallAuth(payload []byte) (string, bool, string) {
+func verifyPerInstallAuth(payload []byte, clientIP string) (string, bool, string) {
 	if len(payload) != 88 {
 		return "", false, "кадр не 88 байт"
 	}
@@ -634,7 +654,7 @@ func verifyPerInstallAuth(payload []byte) (string, bool, string) {
 		// новую. Если этого не происходит — регистрация до нас не доходит.
 		return id, false, "подпись не сходится с ключом в реестре"
 	}
-	if authReplaySeen(sig) {
+	if authReplaySeen(sig, clientIP) {
 		return id, false, "повтор подписи"
 	}
 	return id, true, ""

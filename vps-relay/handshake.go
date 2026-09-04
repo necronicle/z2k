@@ -68,7 +68,7 @@ func (s *session) handshakeV1(mt byte, p []byte) bool {
 	var relayID, scheme, why string
 	authedOK := false
 	if mt == muxAUTHID {
-		relayID, authedOK, why = verifyPerInstallAuth(p)
+		relayID, authedOK, why = verifyPerInstallAuth(p, s.clientIP)
 		scheme = "per-install"
 	} else if !*requirePerInstall {
 		authedOK = subtle.ConstantTimeCompare(p, computeAuthHMAC(*secret)) == 1
