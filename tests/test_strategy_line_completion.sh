@@ -18,12 +18,21 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB=$(mktemp -d) || exit 1
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/extra_strats/TCP/RKN" "$SB/extra_strats/TCP/YT"
+mkdir -p "$SB/extra_strats/TCP/RKN" "$SB/extra_strats/TCP/YT" \
+         "$SB/extra_strats/TCP/YT_GV" "$SB/extra_strats/UDP/YT"
 SKEL='--filter-tcp=443,2053 --filter-l7=tls --payload=tls_client_hello --out-range=-s34228 --lua-desync=circular:fails=3:key=rkn_tcp:nld=2'
 printf '%s --lua-desync=fake:payload=tls_client_hello:dir=out --lua-desync=multisplit:pos=1\n' "$SKEL" \
     > "$SB/extra_strats/TCP/RKN/Strategy.txt"
 printf -- '--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=yt_tcp --lua-desync=fake:dir=out\n' \
     > "$SB/extra_strats/TCP/YT/Strategy.txt"
+printf -- '--filter-tcp=443 --filter-l7=tls --lua-desync=circular:fails=3:key=gv_tcp --lua-desync=fake:dir=out\n' \
+    > "$SB/extra_strats/TCP/YT_GV/Strategy.txt"
+# Каркас QUIC-пула отличается от TCP не только ключом: другой фильтр порта,
+# другой уровень L7, свои окна и --payload. Форма взята с боевой строки
+# (lib/config_official.sh, quic_udp).
+QSKEL='--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=3:udp_out=5:key=yt_quic:nld=2'
+printf '%s --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3\n' "$QSKEL" \
+    > "$SB/extra_strats/UDP/YT/Strategy.txt"
 
 # Берём только нужные функции: подключать actions.sh целиком нельзя — он лезет
 # в живой роутер.
@@ -183,6 +192,50 @@ out13=$(printf '%s\n' "$no_rotator" | strategy_complete_line rkn_tcp)
 [ "$out13" = "$no_rotator" ] && ok "строка без ротатора не помечается" \
                              || bad "номер повешен без ротатора: [$out13]"
 
+# --- 14. QUIC-подбор достраивается каркасом СВОЕГО пула -----------------------
+# «Подбор по домену» научился мерить QUIC и отдаёт приём так же голым, как это
+# делает TCP-половина. Если бы он отдавал строку уже с --filter-udp, панель
+# сочла бы её полным набором и каркас не добавила: обход остался бы без
+# ротатора, без окон и без --payload — то есть молча без ротации.
+QPRIM='--lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=11'
+outq=$(printf '%s\n' "$QPRIM" | strategy_complete_line yt_quic)
+case "$outq" in
+    *--filter-udp=443*) ok "QUIC: подставлен фильтр порта UDP" ;;
+    *) bad "QUIC: нет --filter-udp: [$outq]" ;;
+esac
+case "$outq" in
+    *--filter-l7=quic*) ok "QUIC: подставлен уровень L7" ;;
+    *) bad "QUIC: нет --filter-l7=quic: [$outq]" ;;
+esac
+case "$outq" in
+    *--payload=all*) ok "QUIC: подставлен --payload пула" ;;
+    *) bad "QUIC: потерян --payload: [$outq]" ;;
+esac
+case "$outq" in
+    *key=yt_quic*) ok "QUIC: ключ ротатора свой" ;;
+    *) bad "QUIC: нет key=yt_quic: [$outq]" ;;
+esac
+case "$outq" in
+    *key=rkn_tcp*|*key=yt_tcp*) bad "QUIC: приехал чужой ключ ротатора: [$outq]" ;;
+    *) ok "QUIC: чужих ключей нет" ;;
+esac
+case "$outq" in
+    *"blob=quic5:repeats=11:strategy=1"*) ok "QUIC: приёму проставлен номер плеча" ;;
+    *) bad "QUIC: приём без номера — ротатор не применит ничего: [$outq]" ;;
+esac
+
+# --- 15. Ютуб-видео (gv_tcp) не забыт ----------------------------------------
+# Пул отдельный, ключ отдельный. Поведенчески он не проверялся вовсе, хотя
+# путь к его файлу сверялся: сверка путей не ловит подстановку чужого каркаса.
+outg=$(printf '%s\n' "$PRIM" | strategy_complete_line gv_tcp)
+case "$outg" in
+    *key=gv_tcp*) ok "ютуб-видео: ключ ротатора свой" ;;
+    *) bad "ютуб-видео: нет key=gv_tcp: [$outg]" ;;
+esac
+case "$outg" in
+    *key=rkn_tcp*|*key=yt_tcp*) bad "ютуб-видео: приехал чужой ключ: [$outg]" ;;
+    *) ok "ютуб-видео: чужих ключей нет" ;;
+esac
 
 printf '\nPASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

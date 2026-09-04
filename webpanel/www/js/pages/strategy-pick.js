@@ -30,9 +30,10 @@ export function renderStrategyPick() {
     <div class="card">
       <h3>Подбор стратегии для домена</h3>
       <p class="desc">
-        Замеряем, чем именно режут этот домен, и показываем строку параметров,
-        которая его пробивает. Замер ничего не меняет и никуда не записывает —
-        что делать со строкой, решаете вы. Занимает около минуты.
+        Замеряем, чем именно режут этот домен по TCP и по QUIC, и показываем
+        строку параметров, которая его пробивает. Замер ничего не меняет и
+        никуда не записывает — что делать со строкой, решаете вы.
+        Занимает около минуты.
       </p>
       <div class="probe-row">
         <input type="text" id="pick-domain" placeholder="например, rutracker.org"
@@ -106,60 +107,134 @@ async function loadLast() {
   const r = d && d.result;
   if (!r) { box.innerHTML = ""; return; }
   box.innerHTML = renderResult(r);
-  const copy = document.getElementById("pick-copy");
-  if (copy) {
-    copy.addEventListener("click", () => {
-      copyToClipboard(copy.dataset.line || "");
+  // Кнопок теперь столько же, сколько найденных строк, — по одной на протокол.
+  // Поэтому класс, а не идентификатор: с идентификатором копирование работало
+  // бы только у первой.
+  box.querySelectorAll(".pick-copy").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      copyToClipboard(btn.dataset.line || "");
       toast("Строка скопирована");
     });
-  }
+  });
 }
 
+// Замер приходит по двум протоколам сразу. Показываем оба, но НЕ двумя
+// одинаковыми карточками: вопрос, с которым сюда приходят, один — «что мне
+// вставить», — и ответом на него остаётся строка. Протокол при ней подпись, а
+// не отдельный раздел.
+//
+// Старый плоский ответ (только TCP) тоже поддерживаем: панель и CGI едут одним
+// релизом, но у человека в браузере может лежать закэшированная страница.
 function renderResult(r) {
-  const target = String(r.target || "").replace(/:443$/, "");
+  // Форму определяем по НАЛИЧИЮ ключей, а не по их истинности: у составного
+  // ответа любая половина может быть null (протокол не дал результата), и по
+  // истинности такой ответ спутался бы со старым плоским.
+  const pair = r && ("tcp" in r || "quic" in r);
+  const parts = pair ? { tcp: r.tcp, quic: r.quic } : { tcp: r, quic: null };
+  const any = parts.tcp || parts.quic;
+  if (!any) return "";
+
+  const target = String(any.target || "").replace(/:443$/, "");
   const raw = `<details class="probe-raw">
       <summary>Подробности замера</summary>
       <pre class="log">${escapeHtml(JSON.stringify(r, null, 2))}</pre>
     </details>`;
 
-  if (r.strategy) {
-    return `
-      <div class="pick-report">
-        <div class="pick-head">Домен <b>${escapeHtml(target)}</b> пробивает такая строка:</div>
-        <pre class="pick-line" id="pick-line">${escapeHtml(r.strategy)}</pre>
-        <div class="pick-actions">
-          <button class="btn" id="pick-copy" data-line="${escapeHtml(r.strategy)}">Скопировать</button>
-        </div>
-        <p class="desc">
-          Чтобы её применить, вставьте строку на вкладке «Свои стратегии».
-          Учтите: своя строка заменяет набор плеч для всего пула целиком,
-          а не только для этого домена.
-        </p>
-        ${raw}
-      </div>`;
-  }
+  const blocks = [
+    protoBlock("TCP", parts.tcp),
+    protoBlock("QUIC", parts.quic),
+  ].filter(Boolean);
 
-  // «Обходить нечего» — не отказ, а хорошая новость, и подать её надо как
-  // ответ на вопрос, с которым пришли, а не как пустой результат.
-  if (r.verdict === "clear") {
-    return `
-      <div class="pick-report">
-        <div class="pick-head">Домен <b>${escapeHtml(target)}</b> открывается и без обхода — подбирать нечего.</div>
-        <p class="desc">
-          Если сайт всё равно не грузится, дело не в блокировке этого имени.
-          Проверьте домен на «Диагностике» — она покажет, на какой стадии обрывается.
-        </p>
-        ${raw}
-      </div>`;
-  }
+  const found = blocks.some((b) => b.hasLine);
+  const head = found
+    ? `Домен <b>${escapeHtml(target)}</b> пробивают такие строки:`
+    : `Домен <b>${escapeHtml(target)}</b> — что показал замер:`;
+
+  const hint = found
+    ? `<p class="desc">
+         Чтобы применить строку, вставьте её на вкладке «Свои стратегии».
+         Учтите: своя строка заменяет набор плеч для всего пула целиком,
+         а не только для этого домена. У TCP и QUIC пулы разные.
+       </p>`
+    : "";
 
   return `
     <div class="pick-report">
-      <div class="pick-head">Для домена <b>${escapeHtml(target)}</b> подход не найден.</div>
-      <p class="desc">
-        Замер не нашёл строки, которая его пробивает. Пришлите домен в поддержку —
-        разберём вручную.
-      </p>
+      <div class="pick-head">${head}</div>
+      ${blocks.map((b) => b.html).join("")}
+      ${hint}
       ${raw}
     </div>`;
+}
+
+// protoBlock — один протокол: подпись и то, что по нему вышло.
+function protoBlock(name, res) {
+  if (!res) return null;
+  if (res.strategy) {
+    // Предупреждение про старые устройства показываем ВСЕГДА, когда замер его
+    // дал. Вердикты и трассу человеку не показываем принципиально, но это не
+    // термин, а последствие: строка починит браузер и не починит телевизор.
+    // Промолчать — значит отправить человека искать поломку в телевизоре.
+    let warn = "";
+    if (res.covers_tls12 === false) {
+      warn = `<p class="desc pick-warn">Эта строка не поможет старым устройствам —
+              телевизорам, приставкам и прочему, что ходит по устаревшему TLS.
+              Браузер на компьютере и телефоне она чинит.</p>`;
+    }
+    return {
+      hasLine: true,
+      html: `
+        <div class="pick-proto">по ${escapeHtml(name)}</div>
+        <pre class="pick-line">${escapeHtml(res.strategy)}</pre>
+        <div class="pick-actions">
+          <button class="btn pick-copy" data-line="${escapeHtml(res.strategy)}">Скопировать</button>
+        </div>
+        ${warn}`,
+    };
+  }
+  return {
+    hasLine: false,
+    html: `
+      <div class="pick-proto">по ${escapeHtml(name)}</div>
+      <p class="desc pick-outcome">${escapeHtml(outcomeText(name, res))}</p>`,
+  };
+}
+
+// outcomeText — вердикт замера человеческими словами.
+//
+// Названий вердиктов человеку не показываем принципиально: слово «poisonable»
+// или «no_quic» ничего ему не говорит и только провоцирует спор о терминах.
+// Показываем то, что из вердикта следует для него.
+function outcomeText(name, res) {
+  switch (res.verdict) {
+    case "clear":
+      return `открывается и без обхода — подбирать нечего.`;
+    case "no_quic":
+      return `сайт не работает по HTTP/3 — обходить нечего, браузер и так пойдёт по TCP.`;
+    case "local_address":
+      return `имя подменяется на уровне DNS: роутер или AdGuard отдают внутренний адрес. `
+        + `Пока это так, замерить по QUIC нечего.`;
+    case "address":
+      return `режут сам адрес, а не имя. Стратегией это не лечится — нужен туннель.`;
+    case "response":
+      // Отдельный класс: запрос доходит, режут ОТВЕТ сервера. Виден только на
+      // TLS 1.2, где сертификат идёт открытым текстом. Написать тут «подход не
+      // найден» значило бы отправить человека искать поломку у себя.
+      return `запрос до сервера доходит, а режут его ответ — так бывает на старом TLS, `
+        + `где имя видно в сертификате. Готового приёма под это у нас пока нет, `
+        + `пришлите домен в поддержку.`;
+    case "flaky":
+      return `замер не воспроизводится: часть зондов прошла, часть нет. Вывод делать рано.`;
+    case "unreachable":
+      return `до адреса нет пути.`;
+    default:
+      // Есть находки, но исполнить их движок пока не умеет — это отдельный,
+      // честный исход, и прятать его за «подход не найден» нельзя.
+      if (res.findings && res.findings.length) {
+        return `домен пробивается, но приёмом, который движок пока не умеет исполнить. `
+          + `Подробности — в разборе замера ниже, пришлите домен в поддержку.`;
+      }
+      return `режут, но строки, которая его пробивает, замер не нашёл. `
+        + `Пришлите домен в поддержку — разберём вручную.`;
+  }
 }

@@ -1137,6 +1137,27 @@ body[data-page="login"] #app { max-width: none; }
   margin-bottom: var(--space-12);
 }
 
+/* Подпись протокола над строкой. Намеренно тихая и в нижнем регистре: это
+   уточнение к строке, а не заголовок раздела — иначе два протокола читались бы
+   как две равнозначные половины страницы, хотя нужен человеку обычно один. */
+.pick-proto {
+  margin-bottom: var(--space-4);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pick-proto + .pick-line { margin-top: 0; }
+.pick-outcome { margin-bottom: var(--space-12); }
+
+/* Предупреждение про старые устройства. Предупреждающий тон, а не красный
+   «всё сломалось»: строка рабочая, просто покрывает не всё. */
+.pick-warn {
+  margin: calc(-1 * var(--space-4)) 0 var(--space-12);
+  padding: var(--space-8) var(--space-12);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: rgba(210, 153, 34, 0.10);
+}
+
 /* Метка семейства адреса. Ключ строки — «example.com|4»: одно и то же имя
    живёт в таблице дважды, отдельно для IPv4 и IPv6, и стратегия у них разная.
    Показывать людям служебную палку нельзя, а терять различие — тем более. */
