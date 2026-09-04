@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -214,5 +215,62 @@ func TestResolveRemoteIPUsesTrustedHop(t *testing.T) {
 	r := &http.Request{Header: http.Header{}, RemoteAddr: "198.51.100.9:5555"}
 	if got := resolveRemoteIP(r); got != "198.51.100.9" {
 		t.Fatalf("без XFF дал %q, ожидалось 198.51.100.9", got)
+	}
+}
+
+// Адрес клиента: заголовок X-Forwarded-For читается ТОЛЬКО от локального
+// прокси. Иначе клиент подделывает свой адрес одной строкой запроса — и
+// вместе с ним ключ ограничителя регистраций и ключ кэша повторов подписей
+// (найдено ревью 04.09.2026, регрессия с плана 3, где релей стал терминировать
+// TLS сам и XFF никто не дописывает).
+func TestResolveRemoteIPTrustsProxyOnly(t *testing.T) {
+	mk := func(remote, xff string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/register", nil)
+		r.RemoteAddr = remote
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return r
+	}
+	if got := resolveRemoteIP(mk("203.0.113.7:44321", "1.1.1.1")); got != "203.0.113.7" {
+		t.Fatalf("подделанный XFF от настоящего клиента принят: %s", got)
+	}
+	if got := resolveRemoteIP(mk("203.0.113.7:44321", "9.9.9.9, 1.1.1.1")); got != "203.0.113.7" {
+		t.Fatalf("подделанная цепочка XFF принята: %s", got)
+	}
+	if got := resolveRemoteIP(mk("127.0.0.1:5555", "8.8.8.8")); got != "8.8.8.8" {
+		t.Fatalf("XFF от локального прокси не прочитан: %s", got)
+	}
+	if got := resolveRemoteIP(mk("127.0.0.1:5555", "9.9.9.9, 8.8.8.8")); got != "8.8.8.8" {
+		t.Fatalf("от прокси нужен последний элемент цепочки: %s", got)
+	}
+	if got := resolveRemoteIP(mk("198.51.100.4:1234", "")); got != "198.51.100.4" {
+		t.Fatalf("без XFF ожидался TCP-пир: %s", got)
+	}
+}
+
+// Прокси перестал передавать адрес: все клиенты сходятся в 127.0.0.1, и
+// правило «тот же адрес — свой второй процесс» различать перестаёт. Тогда
+// дубль подписи отвергается строго.
+func TestAuthReplayStrictWhenAddressBlind(t *testing.T) {
+	skew := int64(120)
+	authSkewSeconds = &skew
+	reg = &registry{m: map[string]*regEntry{}}
+	authNonceSeen = map[string]authSighting{}
+
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	var idb [16]byte
+	if _, err := rand.Read(idb[:]); err != nil {
+		t.Fatal(err)
+	}
+	id := hex.EncodeToString(idb[:])
+	reg.m[id] = &regEntry{Pubkey: base64.StdEncoding.EncodeToString(pub)}
+	frame := mkFrame(idb, time.Now().Unix(), priv)
+
+	if _, ok, _ := verifyPerInstallAuth(frame, "127.0.0.1"); !ok {
+		t.Fatal("первый кадр отвергнут")
+	}
+	if _, ok, _ := verifyPerInstallAuth(frame, "127.0.0.1"); ok {
+		t.Fatal("при слепом адресе дубль подписи принят")
 	}
 }

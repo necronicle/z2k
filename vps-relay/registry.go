@@ -358,18 +358,28 @@ type registerReq struct {
 // подставляя случайный X-Forwarded-For на каждый запрос. Плюс в лог
 // «register: new install ... from ...» писался выдуманный адрес.
 //
-// Последний элемент подделать нельзя: его ставит прокси поверх того, что
-// пришло, уже после клиента.
+// Последний элемент подделать нельзя — НО ТОЛЬКО ПОКА ЕГО ДЕЙСТВИТЕЛЬНО
+// СТАВИТ ПРОКСИ. С 02.09.2026 (план 3) релей терминирует TLS сам, настоящий
+// адрес приходит PROXY-заголовком, то есть r.RemoteAddr уже клиентский и
+// X-Forwarded-For никто не дописывает. Значит «последний элемент» снова
+// выбирает клиент, и одной строкой запроса он подделывает адрес в журнале,
+// ключ ограничителя регистраций и (с 04.09) ключ кэша повторов подписей.
+// Найдено ревью 04.09.2026.
+//
+// Поэтому XFF читается ТОЛЬКО когда TCP-пир петлевой, то есть запрос
+// действительно пришёл через локальный прокси, который его и дописал.
 func resolveRemoteIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := lastIndexByte(xff, ','); i >= 0 {
-			return trimSpace(xff[i+1:])
-		}
-		return trimSpace(xff)
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := lastIndexByte(xff, ','); i >= 0 {
+				return trimSpace(xff[i+1:])
+			}
+			return trimSpace(xff)
+		}
 	}
 	return host
 }
@@ -570,6 +580,39 @@ func validInstallID(s string) bool {
 //
 // TTL спанит окно приёма (2*authSkewSeconds) — всё старше уже отсечено гейтом
 // часов. Mirrors the regRate map+mutex+inline-GC.
+// authIPBlind — адреса, по которым НЕЛЬЗЯ различать клиентов: петлевой (прокси
+// не передал настоящий) и пустой.
+func authIPBlind(ip string) bool {
+	if ip == "" {
+		return true
+	}
+	p := net.ParseIP(ip)
+	return p == nil || p.IsLoopback()
+}
+
+var (
+	authBlindMu   sync.Mutex
+	authBlindLast time.Time
+	authBlindN    int
+)
+
+// authBlindWarn — не чаще раза в минуту, как rateBlindWarn.
+func authBlindWarn() {
+	authBlindMu.Lock()
+	authBlindN++
+	n := authBlindN
+	now := time.Now()
+	shout := now.Sub(authBlindLast) >= time.Minute
+	if shout {
+		authBlindLast = now
+		authBlindN = 0
+	}
+	authBlindMu.Unlock()
+	if shout {
+		log.Printf("ВНИМАНИЕ: кэш повторов видит петлевой адрес (%d кадров) — прокси не передаёт настоящий адрес клиента, дубли подписи отвергаются строго", n)
+	}
+}
+
 type authSighting struct {
 	ip string
 	at time.Time
@@ -590,6 +633,15 @@ func authReplaySeen(sig []byte, ip string) bool {
 	now := time.Now()
 	key := string(sig)
 	if e, ok := authNonceSeen[key]; ok && now.Sub(e.at) < ttl {
+		// Без настоящего адреса (прокси перестал его передавать — полевой
+		// случай 05.08.2026, 1120 из 1120 соединений как 127.0.0.1) правило
+		// «тот же адрес — свой второй процесс» перестаёт что-либо различать:
+		// весь парк сходится в один ключ. Тогда возвращаемся к строгому
+		// одноразовому кадру и жалуемся в журнал, а не принимаем всё подряд.
+		if authIPBlind(ip) {
+			authBlindWarn()
+			return true
+		}
 		if e.ip != ip {
 			return true // тот же кадр из другой сети — повтор
 		}

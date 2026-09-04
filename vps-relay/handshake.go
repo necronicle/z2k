@@ -144,7 +144,9 @@ func (s *session) handshakeV2(p []byte) bool {
 	// Совет по часам — только после AUTH_OK: клиент r-82.x читает первый кадр
 	// после AUTHID и любой INFO, кроме AUTH_OK, считает отказом.
 	if skew := a.TS - time.Now().Unix(); skew > *authSkewSeconds || skew < -*authSkewSeconds {
-		s.clockSkew = int32(skew)
+		// int64 и отдельный признак: при усечении до int32 расхождение ровно
+		// на 2^32 с давало ноль, то есть «часы в допуске» при сдвиге в 136 лет.
+		s.clockSkew, s.clockSkewSeen = skew, true
 	}
 	s.relayID = id
 	return true

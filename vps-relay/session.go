@@ -48,9 +48,10 @@ type session struct {
 	mu      sync.Mutex
 	streams map[uint16]*stream
 
-	connectSlots chan struct{}
-	nonce        [16]byte
-	clockSkew    int32 // расхождение часов из AUTHID v2, 0 = в допуске
+	connectSlots  chan struct{}
+	nonce         [16]byte
+	clockSkew     int64 // расхождение часов из AUTHID v2, секунды
+	clockSkewSeen bool  // расхождение вышло за допуск — послать совет
 }
 
 func newSession(ws *websocket.Conn, id, ip string, parent context.Context) *session {
@@ -100,10 +101,16 @@ func (s *session) run() {
 	}
 	// Часы роутера врут больше допуска: вход разрешён (в v2 от повтора
 	// защищает nonce), но пусть клиент знает и поправится сам.
-	if s.clockSkew != 0 {
+	if s.clockSkewSeen {
 		log.Printf("[%s] часы установки %s расходятся на %+ds — вход разрешён, совет отправлен", s.id, s.relayID, s.clockSkew)
+		adv := s.clockSkew
+		if adv > 2147483647 {
+			adv = 2147483647
+		} else if adv < -2147483648 {
+			adv = -2147483648
+		}
 		metrics.inc("relay_clock_skew_total", "")
-		if f := s.proto().info(infoClockSkew, uint32(s.clockSkew), ""); f != nil {
+		if f := s.proto().info(infoClockSkew, uint32(int32(adv)), ""); f != nil {
 			s.writer.control(f)
 		}
 	}
