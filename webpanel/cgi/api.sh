@@ -702,12 +702,25 @@ case "$method $path" in
     "POST /strategy/pick")
         body=$(read_body)
         domain=$(form_value "$body" "domain")
-        [ -n "$domain" ] || json_fail "400 Bad Request" "укажите домен"
-        case "$domain" in
-            *[!a-zA-Z0-9.-]*) json_fail "400 Bad Request" "в имени домена есть недопустимые символы" ;;
+        pick_mode=$(form_value "$body" "mode")
+        [ -n "$pick_mode" ] || pick_mode=tcp13
+        # У голоса домена нет: сервер выдаётся на сессию, и адрес берётся из
+        # идущего разговора. Требовать имя там, где его не существует, нельзя.
+        if [ "$pick_mode" != voice ]; then
+            [ -n "$domain" ] || json_fail "400 Bad Request" "укажите домен"
+            case "$domain" in
+                *[!a-zA-Z0-9.-]*) json_fail "400 Bad Request" "в имени домена есть недопустимые символы" ;;
+            esac
+            [ "${#domain}" -le 253 ] || json_fail "400 Bad Request" "слишком длинное имя домена"
+        fi
+        # Режим замера выбирает человек: под современные устройства, под старые,
+        # под оба сразу или по QUIC. Проверяем ЗДЕСЬ тоже — значение уходит в
+        # командную строку, а панель без пароля доверяет всей локальной сети.
+        case "$pick_mode" in
+            tcp13|tcp12|mixed|quic|voice) ;;
+            *) json_fail "400 Bad Request" "неизвестный режим замера" ;;
         esac
-        [ "${#domain}" -le 253 ] || json_fail "400 Bad Request" "слишком длинное имя домена"
-        job_id=$(svc_action_async "Подбор стратегии для $domain" "strategy_pick_run $domain")
+        job_id=$(svc_action_async "Подбор стратегии для $domain" "strategy_pick_run $domain $pick_mode")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0

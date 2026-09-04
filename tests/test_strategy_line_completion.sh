@@ -192,6 +192,51 @@ out13=$(printf '%s\n' "$no_rotator" | strategy_complete_line rkn_tcp)
 [ "$out13" = "$no_rotator" ] && ok "строка без ротатора не помечается" \
                              || bad "номер повешен без ротатора: [$out13]"
 
+# --- 13a. Голосовой пул достраивается каркасом из РАБОТАЮЩЕГО конфига --------
+# У discord_udp нет шипованного Strategy.txt: его строка живёт в генераторе.
+# Дублировать её в панель нельзя — копии разъедутся, и панель начнёт
+# достраивать каркасом от прошлой версии. Поэтому каркас берётся из
+# сгенерированного конфига, и проверять надо именно этот путь.
+CONFIG_FILE="$SB/config"
+cat > "$CONFIG_FILE" <<'CFGEOF'
+NFQWS2_OPT="
+--filter-tcp=443 --filter-l7=tls --lua-desync=circular:key=rkn_tcp --lua-desync=fake:dir=out
+--new
+--filter-udp=50000-50100,3478-3481 --filter-l7=discord,stun --payload=discord_ip_discovery,stun --lua-desync=circular:fails=3:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:payload=all:blob=stun:repeats=6:strategy=1
+"
+CFGEOF
+eval "$(awk '/^_strategy_pool_skeleton_from_config\(\)/,/^}/' "$ROOT/webpanel/cgi/actions.sh")"
+VPRIM='--lua-desync=fake:payload=all:blob=quic_dbankcloud:repeats=4'
+outv=$(printf '%s
+' "$VPRIM" | strategy_complete_line discord_udp)
+case "$outv" in
+    *--filter-udp=50000-50100,3478-3481*) ok "голос: подставлены порты профиля" ;;
+    *) bad "голос: нет портов профиля: [$outv]" ;;
+esac
+case "$outv" in
+    *--filter-l7=discord,stun*) ok "голос: подставлен уровень L7" ;;
+    *) bad "голос: нет --filter-l7=discord,stun: [$outv]" ;;
+esac
+case "$outv" in
+    *key=discord_udp*) ok "голос: ключ ротатора свой" ;;
+    *) bad "голос: нет key=discord_udp: [$outv]" ;;
+esac
+case "$outv" in
+    *key=rkn_tcp*) bad "голос: приехал чужой ключ ротатора: [$outv]" ;;
+    *) ok "голос: чужих ключей нет" ;;
+esac
+case "$outv" in
+    *hostkey=z2k_nohost_key*) ok "голос: сохранён ключ потока без имени" ;;
+    *) bad "голос: потерян hostkey — состояние ротации не привяжется: [$outv]" ;;
+esac
+case "$outv" in
+    *"repeats=4:strategy=1"*) ok "голос: приёму проставлен номер плеча" ;;
+    *) bad "голос: приём без номера — ротатор не применит ничего: [$outv]" ;;
+esac
+# Временный файл каркаса не должен оставаться после вызова.
+[ -e "/tmp/z2k-skel.$$" ] && bad "голос: временный файл каркаса не убран" \
+                          || ok "голос: временный файл каркаса убран"
+
 # --- 14. QUIC-подбор достраивается каркасом СВОЕГО пула -----------------------
 # «Подбор по домену» научился мерить QUIC и отдаёт приём так же голым, как это
 # делает TCP-половина. Если бы он отдавал строку уже с --filter-udp, панель

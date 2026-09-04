@@ -150,7 +150,7 @@ generate_nfqws2_opt_from_strategies() {
     # блок под custom-strategies вернул бы ровно то же зависание через чёрный ход.
     # Проверяем их все разом ДО первого использования — так отказ один и тот же
     # (fail-closed), а не «часть пулов подхватилась, часть нет».
-    for _cs_pool in yt_tcp gv_tcp rkn_tcp yt_quic; do
+    for _cs_pool in yt_tcp gv_tcp rkn_tcp yt_quic discord_udp; do
         _cs_check="${ZAPRET2_DIR:-/opt/zapret2}/lists/custom-strategies/${_cs_pool}.txt"
         [ -s "$_cs_check" ] || continue
         if ! _z2k_file_sane "$_cs_check"; then
@@ -598,6 +598,11 @@ generate_nfqws2_opt_from_strategies() {
         set +f
     }
     check_udp_thresholds yt_quic "$quic_udp"
+    # Своя строка человека перекрывает наш набор — так же, как у остальных
+    # пулов. Подставляем ДО проверки порогов: проверять надо то, что реально
+    # уедет в движок, а не то, что мы предлагали по умолчанию.
+    _cs=$(z2k_custom_strategy discord_udp) && [ -n "$_cs" ] && discord_udp="$_cs"
+
     check_udp_thresholds discord_udp "$discord_udp"
 
     youtube_tcp=$(ensure_circular_in_range "$youtube_tcp")

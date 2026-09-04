@@ -253,6 +253,7 @@ const STRATEGY_POOL_NAMES = {
   yt_tcp:  "YouTube (TCP)",
   gv_tcp:  "YouTube видео (TCP)",
   yt_quic: "YouTube (QUIC/UDP)",
+  discord_udp: "Дискорд, голос (UDP)",
 };
 
 export async function renderStrategies() {

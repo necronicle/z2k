@@ -25,17 +25,44 @@ import { strategiesShell } from "./strategies.js";
 // которая пробивает. Сырой ответ замера лежит в свёрнутом блоке — он для
 // поддержки, а не для чтения.
 
+// РЕЖИМЫ ЗАМЕРА. Выбирает человек, а не мы за него.
+//
+// Раньше мерились оба протокола сразу, а подбор под старые устройства
+// включался по списку доменов. И то и другое — гадание: у одного дома
+// телевизор, у другого нет, одному важен браузер, другому приставка. Сколько
+// человек готов ждать, мы тем более не знаем — поэтому цена каждого режима
+// написана рядом с ним, до нажатия, а не выясняется по неподвижному
+// индикатору.
+const MODES = [
+  { id: "tcp13", name: "Современные устройства", hint: "браузеры и телефоны · до 2 минут" },
+  { id: "tcp12", name: "Старые устройства", hint: "телевизоры и приставки · до 2 минут" },
+  { id: "mixed", name: "И те, и другие", hint: "одна строка на всех · 3–5 минут" },
+  { id: "quic", name: "QUIC", hint: "HTTP/3 в браузере · около минуты" },
+  { id: "voice", name: "Голос Дискорда", hint: "нужен идущий разговор · без домена" },
+];
+
+function selectedMode() {
+  const el = document.querySelector('input[name="pick-mode"]:checked');
+  return el ? el.value : "tcp13";
+}
+
 export function renderStrategyPick() {
   $app.innerHTML = strategiesShell("pick", `
     <div class="card">
       <h3>Подбор стратегии для домена</h3>
       <p class="desc">
-        Замеряем, чем именно режут этот домен по TCP и по QUIC, и показываем
-        строку параметров, которая его пробивает. Замер ничего не меняет и
-        никуда не записывает — что делать со строкой, решаете вы.
-        Занимает до двух минут, а для ютуба до пяти: там мы дополнительно
-        подбираем приём, который возьмёт и телевизоры.
+        Замеряем, чем именно режут этот домен, и показываем строку параметров,
+        которая его пробивает. Замер ничего не меняет и никуда не записывает —
+        что делать со строкой, решаете вы.
       </p>
+      <div class="pick-modes" role="radiogroup" aria-label="Что замерять">
+        ${MODES.map((m, i) => `
+          <label class="pick-mode">
+            <input type="radio" name="pick-mode" value="${m.id}"${i === 0 ? " checked" : ""}>
+            <span class="pick-mode-name">${escapeHtml(m.name)}</span>
+            <span class="pick-mode-hint">${escapeHtml(m.hint)}</span>
+          </label>`).join("")}
+      </div>
       <div class="probe-row">
         <input type="text" id="pick-domain" placeholder="например, rutracker.org"
                autocomplete="off" autocapitalize="none" spellcheck="false">
@@ -52,6 +79,17 @@ function wirePick() {
   const input = document.getElementById("pick-domain");
   const btn = document.getElementById("pick-run");
   if (!input || !btn) return;
+  // Поле домена гасим на голосе: там его не существует, и активное поле
+  // заставляло бы человека выдумывать, что туда вписать.
+  const syncInput = () => {
+    const voice = selectedMode() === "voice";
+    input.disabled = voice;
+    input.placeholder = voice ? "домен не нужен — адрес берём из разговора" : "например, rutracker.org";
+  };
+  document.querySelectorAll('input[name="pick-mode"]').forEach((r) => {
+    r.addEventListener("change", syncInput);
+  });
+  syncInput();
   btn.addEventListener("click", () => run(input, btn));
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") run(input, btn); });
 }
@@ -59,16 +97,23 @@ function wirePick() {
 async function run(input, btn) {
   // Люди вставляют ссылку целиком. Схему и путь срезаем молча — ровно так же
   // это сделано у пробы домена на «Диагностике».
-  const domain = input.value.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
-  if (!domain) { input.focus(); return; }
-  input.value = domain;
+  const mode = selectedMode();
+  // У голоса домена нет: сервер выдаётся на сессию, и адрес берётся из
+  // идущего разговора. Поле ввода тут просто ни при чём.
+  const domain = mode === "voice"
+    ? ""
+    : input.value.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+  if (mode !== "voice") {
+    if (!domain) { input.focus(); return; }
+    input.value = domain;
+  }
   btn.disabled = true;
   const label = btn.textContent;
   btn.textContent = "Подбираю…";
 
   let resp;
   try {
-    resp = await apiPost("/strategy/pick", { domain });
+    resp = await apiPost("/strategy/pick", { domain, mode });
   } catch (e) {
     btn.disabled = false;
     btn.textContent = label;
@@ -76,7 +121,8 @@ async function run(input, btn) {
     return;
   }
 
-  openJobModal(`Подбираю стратегию для ${domain}`, resp.job, {
+  const title = mode === "voice" ? "Замеряю голос Дискорда" : `Подбираю стратегию для ${domain}`;
+  openJobModal(title, resp.job, {
     onDone: (d) => {
       btn.disabled = false;
       btn.textContent = label;
@@ -130,7 +176,7 @@ function renderResult(r) {
   // Форму определяем по НАЛИЧИЮ ключей, а не по их истинности: у составного
   // ответа любая половина может быть null (протокол не дал результата), и по
   // истинности такой ответ спутался бы со старым плоским.
-  const pair = r && ("tcp" in r || "quic" in r);
+  const pair = r && ("tcp" in r || "quic" in r || "voice" in r);
   const parts = pair ? { tcp: r.tcp, quic: r.quic } : { tcp: r, quic: null };
   const any = parts.tcp || parts.quic;
   if (!any) return "";
@@ -141,9 +187,16 @@ function renderResult(r) {
       <pre class="log">${escapeHtml(JSON.stringify(r, null, 2))}</pre>
     </details>`;
 
+  // Подпись берём из режима, а не из протокола: «по TCP» одинаково выглядело
+  // бы у замера под браузеры и под телевизоры, хотя это разные ответы.
+  const tcpLabel = {
+    tcp12: "TCP, старые устройства",
+    mixed: "TCP, современные и старые",
+  }[r && r.mode] || "TCP";
   const blocks = [
-    protoBlock("TCP", parts.tcp),
+    protoBlock(tcpLabel, parts.tcp),
     protoBlock("QUIC", parts.quic),
+    protoBlock("Голос Дискорда", r && r.voice),
   ].filter(Boolean);
 
   const found = blocks.some((b) => b.hasLine);
@@ -228,6 +281,13 @@ function outcomeText(name, res) {
       return `замер не воспроизводится: часть зондов прошла, часть нет. Вывод делать рано.`;
     case "unreachable":
       return `до адреса нет пути.`;
+    case "no_call":
+      return `разговор не идёт. Начните звонок в Дискорде и повторите замер: `
+        + `у голоса нет имени, которое можно вписать, адрес берётся из идущего разговора.`;
+    case "no_udp":
+      return `на этом канале не ходит UDP вообще — обходить голос отдельно бессмысленно.`;
+    case "blocked":
+      return `голосовой сервер молчит, хотя UDP на канале ходит: режут именно этот поток.`;
     default:
       // Есть находки, но исполнить их движок пока не умеет — это отдельный,
       // честный исход, и прятать его за «подход не найден» нельзя.

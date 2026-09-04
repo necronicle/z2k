@@ -315,7 +315,7 @@ regenerate_config() {
 # User-owned, unlike shipped Strategy.txt (whose edits an update wipes by
 # design). Read by the generator on EVERY regeneration, so they survive toggles,
 # reinstalls and auto-updates.
-STRATEGY_POOLS="rkn_tcp yt_tcp gv_tcp yt_quic"
+STRATEGY_POOLS="rkn_tcp yt_tcp gv_tcp yt_quic discord_udp"
 CUSTOM_STRAT_DIR="${CUSTOM_STRAT_DIR:-$ZAPRET2_DIR/lists/custom-strategies}"
 
 strategy_pool_ok() {
@@ -331,8 +331,28 @@ _strategy_pool_source() {
         yt_tcp)  printf '%s\n' "$ZAPRET2_DIR/extra_strats/TCP/YT/Strategy.txt" ;;
         gv_tcp)  printf '%s\n' "$ZAPRET2_DIR/extra_strats/TCP/YT_GV/Strategy.txt" ;;
         yt_quic) printf '%s\n' "$ZAPRET2_DIR/extra_strats/UDP/YT/Strategy.txt" ;;
+        # У голосового пула шипованного файла НЕТ: его строка живёт прямо в
+        # генераторе (lib/config_official.sh, discord_udp). Дублировать её сюда
+        # нельзя — две копии длинной строки разъедутся на первом же изменении,
+        # и панель начнёт достраивать каркасом от прошлой версии. Поэтому
+        # каркас берётся из СГЕНЕРИРОВАННОГО конфига, где лежит ровно то, что
+        # сейчас работает; см. _strategy_pool_skeleton_from_config.
+        discord_udp) return 1 ;;
         *) return 1 ;;
     esac
+}
+
+# _strategy_pool_skeleton_from_config <ключ> — вытащить строку профиля из
+# работающего конфига по ключу ротатора.
+#
+# Нужно пулам без шипованного файла. Читаем то, что реально запущено, поэтому
+# каркас не может отстать от генератора.
+_strategy_pool_skeleton_from_config() {
+    [ -s "$CONFIG_FILE" ] || return 1
+    awk -v key="key=$1" '
+        index($0, key) { print; found = 1; exit }
+        END { exit(found ? 0 : 1) }
+    ' "$CONFIG_FILE"
 }
 
 # strategy_complete_line <пул> — читает строку со stdin и печатает готовую.
@@ -383,7 +403,7 @@ _strategy_tag_arms() {
 }
 
 strategy_complete_line() {
-    local pool="$1" body src skel joined
+    local pool="$1" body src skel joined raw
     body=$(cat)
 
     case "$body" in
@@ -397,8 +417,19 @@ strategy_complete_line() {
     # молча пропадала бы при каждой вставке нового приёма: он-то менял приём, а
     # получал сброс всего остального к заводскому.
     src="$CUSTOM_STRAT_DIR/$pool.txt"
-    [ -s "$src" ] || src=$(_strategy_pool_source "$pool") || { printf '%s\n' "$body" | _strategy_tag_arms; return 0; }
-    [ -s "$src" ] || { printf '%s\n' "$body" | _strategy_tag_arms; return 0; }
+    if [ ! -s "$src" ]; then
+        if ! src=$(_strategy_pool_source "$pool"); then
+            # Пул без шипованного файла: каркас берём из работающего конфига.
+            raw=$(_strategy_pool_skeleton_from_config "$pool") || {
+                printf '%s\n' "$body" | _strategy_tag_arms; return 0; }
+            # Временный файл вместо trap RETURN: тот в POSIX sh не определён,
+            # а на BusyBox ash ведёт себя непредсказуемо. Удаляем явно ниже, на
+            # каждом выходе из функции.
+            src="/tmp/z2k-skel.$$"
+            printf '%s\n' "$raw" > "$src"
+        fi
+    fi
+    [ -s "$src" ] || { rm -f "/tmp/z2k-skel.$$"; printf '%s\n' "$body" | _strategy_tag_arms; return 0; }
 
     # Каркас: всё до ПЕРВОГО приёма. circular остаётся, он часть каркаса.
     skel=$(awk '{ sub(/\r$/,""); sub(/^[[:space:]]*#.*$/,"") } NF { printf "%s ", $0 }' "$src" \
@@ -410,12 +441,13 @@ strategy_complete_line() {
                  print out }')
     case "$skel" in
         *--lua-desync=circular*) ;;
-        *) printf '%s\n' "$body" | _strategy_tag_arms; return 0 ;;
+        *) rm -f "/tmp/z2k-skel.$$"; printf '%s\n' "$body" | _strategy_tag_arms; return 0 ;;
     esac
 
     # Тело человека приводим к одной строке: инструмент отдаёт одну, но из чата
     # приходит и с переносами.
     joined=$(printf '%s\n' "$body" | awk '{ sub(/\r$/,"") } NF { printf "%s ", $0 }' | sed 's/[[:space:]]*$//')
+    rm -f "/tmp/z2k-skel.$$"
     printf '%s %s\n' "$skel" "$joined" | _strategy_tag_arms
 }
 
@@ -2938,79 +2970,128 @@ STRATEGY_PICK_OUT="${STRATEGY_PICK_OUT:-/tmp/z2k-strategy-pick.json}"
 # человек смотрит в журнал задачи, чтобы понять, что работа идёт. Поэтому
 # отбиваем такт сами.
 strategy_pick_run() {
-    local domain="$1"
+    local domain="$1" mode="${2:-tcp13}"
     local bin="${Z2K_DETECT_BIN:-/opt/sbin/z2k-detect}"
 
     # Проверка ТУТ, а не только на странице: панель без пароля доверяет всей
     # локальной сети, а значение уходит в командную строку.
-    case "$domain" in
-        ""|*[!a-zA-Z0-9.-]*) echo "в имени домена есть недопустимые символы" >&2; return 2 ;;
+    case "$mode" in
+        tcp13|tcp12|mixed|quic|voice) ;;
+        *) echo "неизвестный режим замера" >&2; return 2 ;;
     esac
-    [ "${#domain}" -le 253 ] || { echo "слишком длинное имя домена" >&2; return 2; }
+    # У голоса домена нет: адрес берётся из идущего разговора. Требовать имя
+    # там, где его не существует, значило бы заставить человека выдумывать.
+    if [ "$mode" != voice ]; then
+        case "$domain" in
+            ""|*[!a-zA-Z0-9.-]*) echo "в имени домена есть недопустимые символы" >&2; return 2 ;;
+        esac
+        [ "${#domain}" -le 253 ] || { echo "слишком длинное имя домена" >&2; return 2; }
+    fi
     [ -x "$bin" ] || { echo "модуль замера не установлен" >&2; return 3; }
 
     rm -f "$STRATEGY_PICK_OUT"
     local tcp_out="/tmp/z2k-strategy-pick-tcp.$$"
     local quic_out="/tmp/z2k-strategy-pick-quic.$$"
-    # GODEBUG — тот же, что у службы: без него Go-бинарники падают на MIPS
-    # от асинхронного вытеснения.
-    GODEBUG=asyncpreemptoff=1 "$bin" classify -json "${domain}:443" > "$tcp_out" 2>/dev/null &
-    local tcp_pid=$!
-    GODEBUG=asyncpreemptoff=1 "$bin" quic -json "$domain" > "$quic_out" 2>/dev/null &
-    local quic_pid=$!
+    local voice_out="/tmp/z2k-strategy-pick-voice.$$"
 
-    local i=0
-    echo "Замеряю $domain сразу по двум протоколам: TCP и QUIC."
-    # Для ютуба замер идёт заметно дольше: там дополнительно подбирается приём,
-    # который возьмёт и старые устройства — телевизоры и приставки ходят на
-    # ютуб по устаревшему TLS. Человек должен знать это ДО ожидания, а не
-    # гадать, почему индикатор не двигается.
-    case "$domain" in
-        youtube.com|*.youtube.com|youtu.be|*.youtu.be|\
-        youtube-nocookie.com|*.youtube-nocookie.com|\
-        googlevideo.com|*.googlevideo.com|ytimg.com|*.ytimg.com|ggpht.com|*.ggpht.com)
-            echo "Это домен ютуба — замер идёт до пяти минут."
-            echo "Дольше обычного потому, что подбираем приём, который возьмёт и телевизоры:"
-            echo "они ходят на ютуб по устаревшему TLS, и обычная строка их не чинит."
+    # РЕЖИМ ВЫБИРАЕТ ЧЕЛОВЕК, А НЕ МЫ ЗА НЕГО.
+    #
+    # Раньше замер всегда шёл по обоим протоколам, а подбор под старые
+    # устройства включался по списку доменов. И то и другое — гадание: у одного
+    # дома телевизор, у другого нет, одному важен браузер, другому приставка, и
+    # сколько человек готов ждать, мы не знаем. Теперь он говорит сам, а мы
+    # честно предупреждаем о цене.
+    #
+    # GODEBUG — тот же, что у службы: без него Go-бинарники падают на MIPS от
+    # асинхронного вытеснения.
+    local tcp_pid= quic_pid= voice_pid= limit=300
+    case "$mode" in
+        tcp13)
+            echo "Замеряю $domain по TCP для современных устройств — браузеры, телефоны."
+            echo "Это занимает до двух минут."
+            GODEBUG=asyncpreemptoff=1 "$bin" classify -json -hello modern "${domain}:443" \
+                > "$tcp_out" 2>/dev/null &
+            tcp_pid=$!
             ;;
-        *)
-            echo "Это занимает до двух минут — зондов несколько десятков, каждый повторяется трижды."
+        tcp12)
+            echo "Замеряю $domain по TCP для старых устройств — телевизоры, приставки."
+            echo "Это занимает до двух минут."
+            GODEBUG=asyncpreemptoff=1 "$bin" classify -json -hello legacy "${domain}:443" \
+                > "$tcp_out" 2>/dev/null &
+            tcp_pid=$!
+            ;;
+        mixed)
+            echo "Замеряю $domain по TCP и подбираю приём, который возьмёт И современные"
+            echo "устройства, И старые. Это занимает 3-5 минут: сперва ищем приём на одном"
+            echo "приветствии, потом проверяем каждую находку на втором."
+            limit=420
+            GODEBUG=asyncpreemptoff=1 "$bin" classify -json -hello both "${domain}:443" \
+                > "$tcp_out" 2>/dev/null &
+            tcp_pid=$!
+            ;;
+        quic)
+            echo "Замеряю $domain по QUIC — так ходят браузеры по HTTP/3."
+            echo "Это занимает около минуты."
+            GODEBUG=asyncpreemptoff=1 "$bin" quic -json "$domain" > "$quic_out" 2>/dev/null &
+            quic_pid=$!
+            ;;
+        voice)
+            echo "Замеряю голос Дискорда. Адрес беру из ИДУЩЕГО разговора: у голоса нет"
+            echo "имени, которое можно вписать, сервер выдаётся на сессию."
+            echo "Если разговор не начат — замер это честно скажет."
+            limit=120
+            GODEBUG=asyncpreemptoff=1 "$bin" voice -json > "$voice_out" 2>/dev/null &
+            voice_pid=$!
             ;;
     esac
-    while kill -0 "$tcp_pid" 2>/dev/null || kill -0 "$quic_pid" 2>/dev/null; do
+
+    local i=0
+    while { [ -n "$tcp_pid" ] && kill -0 "$tcp_pid" 2>/dev/null; } ||
+          { [ -n "$quic_pid" ] && kill -0 "$quic_pid" 2>/dev/null; } ||
+          { [ -n "$voice_pid" ] && kill -0 "$voice_pid" 2>/dev/null; }; do
         i=$((i + 1))
-        # Потолок с запасом к ожидаемому: на медленной линии повторы
-        # растягиваются. Замер на роутере 04.09: чистый домен — секунда,
-        # заблокированный с поиском приёма под оба приветствия TLS — 1 м 54 с.
-        # Прежние 180 с срезали бы такой замер на ровном месте.
-        if [ "$i" -gt 300 ]; then
-            kill -9 "$tcp_pid" "$quic_pid" 2>/dev/null
-            rm -f "$tcp_out" "$quic_out"
-            echo "замер не уложился в пять минут" >&2
+        # Потолок свой на режим: смешанный честно дороже остальных, и общий
+        # потолок либо резал бы его, либо был бы бессмысленно велик для прочих.
+        if [ "$i" -gt "$limit" ]; then
+            [ -n "$tcp_pid" ] && kill -9 "$tcp_pid" 2>/dev/null
+            [ -n "$quic_pid" ] && kill -9 "$quic_pid" 2>/dev/null
+            [ -n "$voice_pid" ] && kill -9 "$voice_pid" 2>/dev/null
+            rm -f "$tcp_out" "$quic_out" "$voice_out"
+            echo "замер не уложился в отведённое время" >&2
             return 4
         fi
         [ $((i % 15)) = 0 ] && echo "  идёт замер, ${i} с"
         sleep 1
     done
-    wait "$tcp_pid" 2>/dev/null
-    wait "$quic_pid" 2>/dev/null
+    [ -n "$tcp_pid" ] && wait "$tcp_pid" 2>/dev/null
+    [ -n "$quic_pid" ] && wait "$quic_pid" 2>/dev/null
+    [ -n "$voice_pid" ] && wait "$voice_pid" 2>/dev/null
 
-    if [ ! -s "$tcp_out" ] && [ ! -s "$quic_out" ]; then
-        rm -f "$tcp_out" "$quic_out"
-        echo "замер не дал результата ни по одному протоколу" >&2
+    if [ ! -s "$tcp_out" ] && [ ! -s "$quic_out" ] && [ ! -s "$voice_out" ]; then
+        rm -f "$tcp_out" "$quic_out" "$voice_out"
+        echo "замер не дал результата" >&2
         return 5
     fi
 
-    # Склейка литералами, а не разбором: оба куска — JSON, выданный нашими же
+    # Форма ответа одна на все режимы: половина, которую не мерили, остаётся
+    # null. Так странице не нужно знать, что именно запрашивали, — она рисует
+    # то, что пришло.
+    #
+    # Склейка литералами, а не разбором: куски — JSON, выданный нашими же
     # бинарниками, и переписывать их шеллом значило бы завести второй формат,
     # который поедет вслед за первым.
     local all="/tmp/z2k-strategy-pick-all.$$"
-    printf '{"tcp":' > "$all"
+    # Режим кладём в ответ: страница читает ПОСЛЕДНИЙ результат и без этого не
+    # знала бы, что именно мерили, — подписала бы замер под старые устройства
+    # как обычный TCP.
+    printf '{"mode":"%s","tcp":' "$mode" > "$all"
     if [ -s "$tcp_out" ]; then cat "$tcp_out" >> "$all"; else printf 'null' >> "$all"; fi
     printf ',"quic":' >> "$all"
     if [ -s "$quic_out" ]; then cat "$quic_out" >> "$all"; else printf 'null' >> "$all"; fi
+    printf ',"voice":' >> "$all"
+    if [ -s "$voice_out" ]; then cat "$voice_out" >> "$all"; else printf 'null' >> "$all"; fi
     printf '}\n' >> "$all"
-    rm -f "$tcp_out" "$quic_out"
+    rm -f "$tcp_out" "$quic_out" "$voice_out"
     mv -f "$all" "$STRATEGY_PICK_OUT"
     echo "Замер закончен за ${i} с."
     return 0
