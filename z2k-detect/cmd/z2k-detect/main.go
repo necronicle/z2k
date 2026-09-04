@@ -86,7 +86,9 @@ func usage() {
 commands:
   probe <domain>            one-shot diagnostic probe, print verdict
   classify <host:port>      измерить, ЧЕМ режут по TCP, и вывести стратегию
+                           (-hello modern|legacy|both — под какие устройства)
   quic <domain>             то же для QUIC/UDP: чем режут датаграммы
+  voice                     голос Дискорда; адрес берётся из ИДУЩЕГО разговора
   tcp16 [-asn N] [-scan F]  проба на блок по объёму соединения; -scan ищет проходящее имя
   run [-dns-source SRC]     start daemon. SRC: agh|dnsmasq|pkt (default: auto)`)
 }
@@ -111,6 +113,8 @@ func main() {
 		classifyCmd(ctx, args[1:])
 	case "quic":
 		quicCmd(ctx, args[1:])
+	case "voice":
+		voiceCmd(ctx, args[1:])
 	case "tcp16":
 		tcp16Cmd(ctx, args[1:])
 	case "run":
@@ -134,6 +138,9 @@ func classifyCmd(ctx context.Context, rest []string) {
 	echo := fs.Bool("raw-echo", false, "положительный контроль: сырое рукопожатие + триггер без приёмов")
 	only := fs.String("only", "", "прогнать только эту гипотезу (для отладки зондов)")
 	ctlSNI := fs.String("control-sni", "", "имя для контрольного зонда; сервер обязан его обслуживать")
+	hello := fs.String("hello", "modern",
+		"какое приветствие TLS мерить: modern (1.3, браузеры и телефоны), "+
+			"legacy (1.2, телевизоры и приставки), both (искать приём под оба, 3-5 минут)")
 	jointBudget := fs.Duration("joint-budget", 0,
 		"потолок поиска приёма, общего для TLS 1.3 и 1.2; ноль — умолчание (90с, под сторож панели)")
 	asJSON := fs.Bool("json", false, "выдать Result как JSON")
@@ -142,6 +149,12 @@ func classifyCmd(ctx context.Context, rest []string) {
 		fatal("classify: не указан адрес host:port")
 	}
 	addr := fs.Arg(0)
+
+	switch *hello {
+	case "modern", "legacy", "both":
+	default:
+		fatal("classify: -hello может быть modern, legacy или both, а не %q", *hello)
+	}
 
 	var (
 		tr  classify.Trigger
@@ -161,7 +174,15 @@ func classifyCmd(ctx context.Context, rest []string) {
 				name = h
 			}
 		}
-		tr, err = classify.TLSTrigger(name)
+		// В режиме legacy мерим ТЕМ приветствием, которым ходит старое
+		// устройство: у него другая длина, другой набор расширений и другое
+		// место имени внутри. Приём, найденный на современном, там может не
+		// работать — ради этого режим и заведён.
+		if *hello == "legacy" {
+			tr, err = classify.TLS12Trigger(name)
+		} else {
+			tr, err = classify.TLSTrigger(name)
+		}
 	}
 	if err != nil {
 		fatal("%v", err)
@@ -170,7 +191,7 @@ func classifyCmd(ctx context.Context, rest []string) {
 	// Контроль собираем всегда, когда он вообще собирается: без него вердикт
 	// «непрозрачно» склеивает два разных мира — пересборку и блок по адресу.
 	opts := classify.Options{Repeats: *repeats, Timeout: *timeout, Only: *only,
-		JointBudget: *jointBudget}
+		JointBudget: *jointBudget, CrossCheckTLS12: *hello == "both"}
 	// Контроль тем же именем, что и триггер, — не контроль вовсе: если имя под
 	// блокировкой, молчать будут оба, и вердикт «режут адрес» получится из
 	// собственной ошибки ввода.

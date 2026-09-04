@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"time"
 )
 
@@ -136,10 +135,10 @@ func verifyTLS12(ctx context.Context, addr string, opt Options, res *Result,
 // Отсюда 150 секунд: 95 на дерево плюс 150 на поиск дают около четырёх минут,
 // то есть минута запаса до сторожа на медленной линии.
 //
-// Бюджет вообще тратится только на доменах старых устройств (см.
-// LegacyDeviceDomain): обычный домен заканчивается за секунды и в поиск не
-// заходит. Полный поиск без потолка доступен вручную: -joint-budget.
-const defaultJointBudget = 150 * time.Second
+// Бюджет тратится только в смешанном режиме, который человек выбрал сам и про
+// длительность которого предупреждён. Полный поиск без потолка доступен
+// вручную: -joint-budget.
+const defaultJointBudget = 4 * time.Minute
 
 // noteTLS12 дописывает в вердикт то, что человеку надо знать про старых
 // клиентов. Молчание тут читалось бы как «покрывает», а это самый дорогой вид
@@ -162,38 +161,6 @@ func noteTLS12(res *Result) {
 	}
 }
 
-// legacyDeviceDomains — где старые устройства реально ходят по TLS 1.2.
-//
-// ПОЧЕМУ СПИСОК, А НЕ ВСЕ ДОМЕНЫ. Проверка приёма на старом приветствии и, тем
-// более, поиск приёма, общего для обоих, стоят дорого: замер на роутере 04.09
-// показал 3 секунды без них и 1 м 54 с с ними, а на www.instagram.com полный
-// поиск занял 3 м 12 с. Платить это на каждом домене нельзя.
-//
-// А смысл платить есть ровно там, где за старым устройством сидит человек:
-// телевизор, приставка, старый смарт-ТВ. Они ходят на ютуб — и на видеоотдачу
-// googlevideo, — а не на форумы и не в соцсети. Для остальных доменов
-// современного приветствия достаточно: по нему ходят браузеры и телефоны.
-var legacyDeviceDomains = []string{
-	"youtube.com",
-	"youtu.be",
-	"youtube-nocookie.com",
-	"googlevideo.com",
-	"ytimg.com",
-	"ggpht.com",
-}
-
-// LegacyDeviceDomain — стоит ли для этого имени тратить время на подбор приёма,
-// который возьмёт и старые устройства.
-func LegacyDeviceDomain(sni string) bool {
-	sni = strings.ToLower(strings.TrimSuffix(sni, "."))
-	for _, d := range legacyDeviceDomains {
-		if sni == d || strings.HasSuffix(sni, "."+d) {
-			return true
-		}
-	}
-	return false
-}
-
 // crossCheckTLS12 — единая точка: перепроверить найденный приём на старом
 // приветствии, а если не прошёл — ИСКАТЬ общий, а не останавливаться на
 // предупреждении.
@@ -202,14 +169,15 @@ func LegacyDeviceDomain(sni string) bool {
 // работает» честно, но это отчёт о неудаче, а не результат: у человека в доме
 // и браузер, и телевизор, и строка нужна ему одна.
 //
-// Делается это ТОЛЬКО для доменов, куда ходят старые устройства (см.
-// LegacyDeviceDomain). На остальных проверка молча пропускается: она стоит
-// минуты, а телевизоров там нет.
+// Делается это только в смешанном режиме, который человек выбирает сам:
+// проверка и поиск стоят минуты, и навязывать их тому, кому нужен один
+// браузер, нельзя. Гадать за человека, что ему нужно и сколько он готов
+// ждать, — тоже: у одного дома телевизор, у другого нет.
 func crossCheckTLS12(ctx context.Context, addr string, tr Trigger, opt Options, res *Result, poisonName string) {
-	sni := triggerSNI(tr)
-	if !LegacyDeviceDomain(sni) {
+	if !opt.CrossCheckTLS12 {
 		return
 	}
+	sni := triggerSNI(tr)
 	res.CoversTLS12 = verifyTLS12(ctx, addr, opt, res, sni, poisonName)
 	if res.CoversTLS12 != nil && !*res.CoversTLS12 {
 		if joint, ok := findJointPoison(ctx, addr, tr, opt, res, sni, poisonName); ok {
