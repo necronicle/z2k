@@ -233,6 +233,17 @@ export function renderCredits() {
           дома, — а не то, что можно поставить и забыть.
         </p>
       </div>
+
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">b11d11</div>
+        <p class="desc">
+          Спасибо, b11d11. Обход живёт не на энтузиазме, а на счетах: аренда
+          узла, домены, железки, на которых всё это проверяется до того, как
+          попадёт к людям. Поддержка закрывает ровно эту часть — ту, которую
+          из окна панели не видно, но без которой окна бы не было.
+        </p>
+      </div>
     </div>
   `;
 }

@@ -56,7 +56,7 @@ show_main_menu() {
 |  GRM, Dez, hoaxx, Mansurchick,                    |
 |  Dkarloff - SEO отец, KIBERPANK, olmer2002,       |
 |  TiaMax, Denis, Mega Man, TheGreatYogo,           |
-|  logistik77                                       |
+|  logistik77, b11d11                               |
 +===================================================+
 
 MENU
