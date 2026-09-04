@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 65,
-  "current": "r-82.2",
+  "seq": 66,
+  "current": "r-82.3",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -215,8 +215,8 @@
   "lib/auto_update.sh": "fa5b99f32429d37be574e5ebe18a3333a7d4371018762d3c4438ddb5129a3bb6",
   "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
   "lib/config_official.sh": "f803fa99950f763d47a8508fb197f3fb0108686475368345b1ba84e7c72ca094",
-  "lib/install.sh": "f538c5b37f2aaeb3ac56a2fe5d89fc25e5af99c6b281bf73558a2bb528c92567",
-  "lib/menu.sh": "ebf5b4c6c7ff3287986cfad3a4f79d4aa0e85045e387797d00a9bf54f9926061",
+  "lib/install.sh": "89633787a2c73fbeffe2afed3671da00ed44deceae65ee281849bc9dc33f3b0a",
+  "lib/menu.sh": "067e7b5ca1a3e19507171d248fe160c0ec0131738dcbf24387023d2a5dcfa6f6",
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
   "lib/utils.sh": "a128fd3d64dd774bab77ad0abff626413ef8c04f535b11b13a9abfad9c6e86ca",
   "lib/webpanel.sh": "7e44a9f94e442d87f67bce091548dc482c921fad49014face9af53e8ed3e9504",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "402c32a903489d0039e0c46d788fe4d15e66c93cd07464cb2ba68688e2b7fa07",
+  "webpanel/www/index.html": "dfbd08fe61df6ab27eef2b25aef929ed8f1919ffda8d2bbb4ee90bc2ea05d259",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -262,7 +262,7 @@
   "webpanel/www/js/core/loadorder.js": "7146d39332c137f19d8a36e15d3e98f75c04bd0d132c4b2bd220b2fb94ae1814",
   "webpanel/www/js/core/toast.js": "2fdf1025826a4db97484ac702ff907ef280736d3a4d2639398182b9ef4cf4b2a",
   "webpanel/www/js/job.js": "da0832ecbb70861fa26d17008d5df9fbb69d240869771522bb8f9408f205365b",
-  "webpanel/www/js/pages/credits.js": "1dce593aff59af00665acf25bd5a16a86f9363fb43e47258e562df2f52aa850c",
+  "webpanel/www/js/pages/credits.js": "cac25d360198db0c70a8f5fcd13feb78c00757cec583eac0100fb1457949cf9a",
   "webpanel/www/js/pages/dashboard.js": "8d4a142cff54cb919f0b142a40c306df34728a94075240624a3d09b4ea5c6840",
   "webpanel/www/js/pages/diag.js": "40d104ca2ad115298ab2d81a2191e1df36a4430f422667ac2245ad027e9ba8cf",
   "webpanel/www/js/pages/exclude.js": "e504ab23d951a99ef56c220a19fecc1cb9e689f59f547e1b20284100319ecd39",
@@ -509,6 +509,7 @@
 {"v": "r-81.14", "type": "reinstall", "ts": "2026-09-02T09:05:33Z", "ref": "r-81.14", "desc": "Telegram быстрее восстанавливается после обрывов связи с узлом: перерыв сокращён примерно с двух минут до сорока секунд.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-81.15", "type": "patch", "ts": "2026-09-02T15:57:27Z", "ref": "p-81.15", "desc": "Режим WARP стал заметно экономнее: движок больше не разрастается до сотни мегабайт под нагрузкой и не падает на роутерах с малым объёмом памяти. Панель теперь показывает, сколько памяти он занимает.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "r-82.1", "type": "reinstall", "ts": "2026-09-02T22:38:23Z", "ref": "r-82.1", "desc": "Telegram через наш сервер: обновлён протокол связи роутера с сервером. Одно медленное устройство больше не тормозит остальные, переподключения после сбоев сети распределяются во времени, а поток данных идёт с контролем очередей — меньше обрывов и зависаний в вечерние часы.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "r-82.2", "type": "reinstall", "ts": "2026-09-03T18:53:48Z", "ref": "r-82.2", "desc": "Telegram через наш сервер: исправлены недочёты вчерашнего обновления. Телефон, полежавший в кармане, снова подключается мгновенно, без долгого «Соединение… Обновление…»; загрузка видео и файлов больше не упирается в искусственный потолок скорости; при обслуживании сервера связь восстанавливается за секунды, а не за минуту.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "r-82.2", "type": "reinstall", "ts": "2026-09-03T18:53:48Z", "ref": "r-82.2", "desc": "Telegram через наш сервер: исправлены недочёты вчерашнего обновления. Телефон, полежавший в кармане, снова подключается мгновенно, без долгого «Соединение… Обновление…»; загрузка видео и файлов больше не упирается в искусственный потолок скорости; при обслуживании сервера связь восстанавливается за секунды, а не за минуту.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "r-82.3", "type": "reinstall", "ts": "2026-09-04T09:58:35Z", "ref": "r-82.3", "desc": "Обновлён движок обхода до версии 1.0.5: исправлена сборка и разбор TCP-опций, проверка длины расширения keyshare при разборе TLS и завершение по сигналу. Добавлен новый спонсор проекта — b11d11, имя появилось в благодарностях: в меню роутера, в описании проекта и на странице «Благодарности» в веб-панели.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
