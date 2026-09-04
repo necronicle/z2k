@@ -93,6 +93,12 @@ const (
 	VerdictFlaky Verdict = "flaky"
 	// VerdictUnreachable — до цели нет даже TCP. Мерить нечего.
 	VerdictUnreachable Verdict = "unreachable"
+	// VerdictResponse — запрос проходит, режут ОТВЕТ.
+	//
+	// Класс существует только у TLS 1.2, где сертификат сервера едет открытым
+	// текстом и содержит имя. Замер одного направления объявлял бы такой домен
+	// «чистым», человек шёл искать поломку у себя, а резали ответ.
+	VerdictResponse Verdict = "response"
 )
 
 // Result — что показал прогон.
@@ -117,6 +123,16 @@ type Result struct {
 	// Strategy — готовая строка для --lua-desync, пустая если вердикт не
 	// даёт рекомендации.
 	Strategy string `json:"strategy,omitempty"`
+	// CoversTLS12 — покрывает ли найденный приём СТАРЫХ клиентов.
+	//
+	// Один сайт в доме открывают и свежий браузер по TLS 1.3, и телевизор по
+	// 1.2. Приветствия у них разные, и коробка на них реагирует по-разному.
+	// nil значит «не проверяли» и отличается от false: «не проверено» и
+	// «проверено, не покрывает» — разные вещи.
+	CoversTLS12 *bool `json:"covers_tls12,omitempty"`
+	// Response — итог зонда ответного направления. Заполняется только там, где
+	// запрос признан проходящим: если режут запрос, про ответ говорить рано.
+	Response *ResponseResult `json:"response,omitempty"`
 	// Props — СВОЙСТВА КОРОБКИ, а не список удачных попыток.
 	//
 	// Разница принципиальная и в ней весь смысл затеи. Перебор плеч отвечает
@@ -215,6 +231,23 @@ type Options struct {
 	// зондов: одна гипотеза это две посылки, её видно в дампе целиком, и с
 	// боевым плечом её можно сверить побайтово.
 	Only string
+	// Skip — гипотезы, которые НЕ пробовать. Нужен поиску общего приёма для
+	// двух приветствий: находку на старом перепроверяют на новом, и если она
+	// не прошла, перебор надо продолжить со следующей, а не получить ту же.
+	Skip map[string]bool
+	// JointBudget — потолок времени на поиск приёма, общего для обоих
+	// приветствий TLS. Ноль — взять умолчание пакета.
+	JointBudget time.Duration
+	// accept — фильтр находок. Перебор зовёт его на КАЖДОЙ сработавшей
+	// гипотезе; вернул false — перебор идёт дальше, как будто гипотеза не
+	// сработала.
+	//
+	// Нужен поиску приёма, общего для двух приветствий TLS. Наивно он делался
+	// перезапуском всего перебора на каждую отвергнутую находку, и на
+	// www.instagram.com это стоило 3 м 45 с при потолке задачи в 180 с. С
+	// фильтром перебор идёт ОДИН раз, а каждая находка тут же проверяется на
+	// втором приветствии.
+	accept func(poison) bool
 	// NoRaw выключает сырые зонды. Они требуют root и AF_INET/SOCK_RAW, зато
 	// только они отвечают на вопрос «чем травить пересобирающую коробку».
 	NoRaw bool
@@ -295,8 +328,26 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 		res.Reason = "нет TCP до цели: " + base.err.Error()
 		return res
 	case base.pass == opt.Repeats:
+		// Запрос проходит. Но это ещё не «обходить нечего»: у TLS 1.2
+		// сертификат сервера идёт открытым текстом, и коробка может пропустить
+		// запрос, а убить ОТВЕТ. Замер одного направления объявил бы такой
+		// домен чистым, и вердикт был бы противоположен правде.
 		res.Verdict = VerdictClear
 		res.Reason = "триггер проходит как есть — обходить нечего"
+		if sni := triggerSNI(tr); sni != "" {
+			rr := ProbeResponse(ctx, addr, sni, opt)
+			res.Response = &rr
+			res.Probes += 2 * opt.Repeats
+			switch rr.Verdict {
+			case RespBlocked:
+				res.Verdict = VerdictResponse
+				res.Reason = rr.Reason
+			case RespNotApplicable, RespFlaky:
+				// «Не проверено» обязано быть видно. Молча оставить «чисто»
+				// значило бы выдать непроверенное за проверенное.
+				res.Reason += " (ответное направление: " + rr.Reason + ")"
+			}
+		}
 		return res
 	case base.pass > 0:
 		res.Verdict = VerdictFlaky
@@ -343,6 +394,7 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 				res.Boundary = 0
 				res.Strategy = strategyForPoison(hit)
 				res.Reason = "поток пересобирается, но буфер травится: коробка глотает «" + hit.name + "», сервер выбрасывает"
+				crossCheckTLS12(ctx, addr, tr, opt, &res, hit.name)
 				return res
 			}
 		}
@@ -391,6 +443,7 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 		res.Reason = "проходит любой разрез — матчер требует пакет целиком"
 		res.SplitPos = 1
 		res.Strategy = strategyFor(1)
+		crossCheckTLS12(ctx, addr, tr, opt, &res, "")
 		return res
 	}
 	hi = len(tr.Payload) - 1
@@ -414,6 +467,7 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 	res.SplitPos = 1
 	res.Strategy = strategyFor(1)
 	res.Reason = fmt.Sprintf("префиксный матчер: сигнатура кончается на байте %d, разрез левее её ломает", hi)
+	crossCheckTLS12(ctx, addr, tr, opt, &res, "")
 	if reass {
 		res.Reason += "; при паузе " + opt.LongGap.String() + " блок возвращается — у коробки есть буфер пересборки"
 	}
@@ -702,12 +756,17 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 	// для случаев, где собранное не сработало.
 	if opt.Only == "" {
 		if hit, ok := runProperties(ctx, ip, uint16(port), tr, opt, res); ok {
-			res.Path = "свойство"
-			return hit, true
+			if opt.acceptable(hit) {
+				res.Path = "свойство"
+				return hit, true
+			}
 		}
 		for _, cand := range composeFromProps(res.Props, opt.Control.Payload) {
 			if ctx.Err() != nil {
 				break
+			}
+			if opt.Skip[cand.name] {
+				continue
 			}
 			obs := Observation{Probe: cand.name, DelayM: cand.gapMS}
 			pass := 0
@@ -721,8 +780,10 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 			obs.Pass, obs.Fail = pass, opt.Repeats-pass
 			res.Trace = append(res.Trace, obs)
 			if pass == opt.Repeats {
-				res.Composed, res.Path = true, "собрано"
-				return cand, true
+				if opt.acceptable(cand) {
+					res.Composed, res.Path = true, "собрано"
+					return cand, true
+				}
 			}
 		}
 	}
@@ -732,6 +793,9 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 			break
 		}
 		if opt.Only != "" && p.name != opt.Only {
+			continue
+		}
+		if opt.Skip[p.name] {
 			continue
 		}
 		obs := Observation{Probe: "poison:" + p.name, DelayM: p.gapMS}
@@ -764,6 +828,9 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 		// стратегией то, что не работает.
 		if obs.Pass == opt.Repeats {
 			notePropsHit(&res.Props, p)
+			if !opt.acceptable(p) {
+				continue
+			}
 			if res.Path == "" {
 				res.Path = "перебор"
 			}
@@ -1019,4 +1086,12 @@ func splitOffsets(cuts []int, n int) []span {
 	}
 	out = append(out, span{prev, n})
 	return out
+}
+
+// acceptable — пропускает ли фильтр эту находку. Без фильтра годится любая.
+func (o Options) acceptable(p poison) bool {
+	if o.accept == nil {
+		return true
+	}
+	return o.accept(p)
 }

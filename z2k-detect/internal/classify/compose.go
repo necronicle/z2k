@@ -150,6 +150,9 @@ func runProperties(ctx context.Context, ip4 []byte, port uint16, tr Trigger, opt
 			break
 		}
 		p := pp.p
+		if opt.Skip[p.name] {
+			continue
+		}
 		if p.decoy == "hello" {
 			p.decoyPayload = opt.Control.Payload
 		}

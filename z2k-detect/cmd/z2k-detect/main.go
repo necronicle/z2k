@@ -85,7 +85,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: z2k-detect <cmd> [args]
 commands:
   probe <domain>            one-shot diagnostic probe, print verdict
-  classify <host:port>      измерить, ЧЕМ режут, и вывести стратегию
+  classify <host:port>      измерить, ЧЕМ режут по TCP, и вывести стратегию
+  quic <domain>             то же для QUIC/UDP: чем режут датаграммы
   tcp16 [-asn N] [-scan F]  проба на блок по объёму соединения; -scan ищет проходящее имя
   run [-dns-source SRC]     start daemon. SRC: agh|dnsmasq|pkt (default: auto)`)
 }
@@ -108,6 +109,8 @@ func main() {
 		probeCmd(ctx, args[1:])
 	case "classify":
 		classifyCmd(ctx, args[1:])
+	case "quic":
+		quicCmd(ctx, args[1:])
 	case "tcp16":
 		tcp16Cmd(ctx, args[1:])
 	case "run":
@@ -131,6 +134,8 @@ func classifyCmd(ctx context.Context, rest []string) {
 	echo := fs.Bool("raw-echo", false, "положительный контроль: сырое рукопожатие + триггер без приёмов")
 	only := fs.String("only", "", "прогнать только эту гипотезу (для отладки зондов)")
 	ctlSNI := fs.String("control-sni", "", "имя для контрольного зонда; сервер обязан его обслуживать")
+	jointBudget := fs.Duration("joint-budget", 0,
+		"потолок поиска приёма, общего для TLS 1.3 и 1.2; ноль — умолчание (90с, под сторож панели)")
 	asJSON := fs.Bool("json", false, "выдать Result как JSON")
 	_ = fs.Parse(rest)
 	if fs.NArg() < 1 {
@@ -164,7 +169,8 @@ func classifyCmd(ctx context.Context, rest []string) {
 
 	// Контроль собираем всегда, когда он вообще собирается: без него вердикт
 	// «непрозрачно» склеивает два разных мира — пересборку и блок по адресу.
-	opts := classify.Options{Repeats: *repeats, Timeout: *timeout, Only: *only}
+	opts := classify.Options{Repeats: *repeats, Timeout: *timeout, Only: *only,
+		JointBudget: *jointBudget}
 	// Контроль тем же именем, что и триггер, — не контроль вовсе: если имя под
 	// блокировкой, молчать будут оба, и вердикт «режут адрес» получится из
 	// собственной ошибки ввода.
