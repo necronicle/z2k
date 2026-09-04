@@ -747,6 +747,15 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 		}
 	}
 	res.RawUsable = true
+	// Если правило подавления ядерного RST не встало, отрицательные исходы
+	// сырых зондов ничего не значат: RST мог прилететь от нашего же ядра.
+	// Сказать об этом обязаны — иначе своя поломка читается как свойство сети.
+	if RawRSTRuleFailed() {
+		res.Trace = append(res.Trace, Observation{
+			Probe: "внимание:правило подавления RST не встало",
+			Err:   "iptables отверг вставку; отрицательные исходы сырых зондов недостоверны",
+		})
+	}
 
 	// СВОЙСТВА СПЕРВА, СТРАТЕГИЯ — ИЗ НИХ.
 	//

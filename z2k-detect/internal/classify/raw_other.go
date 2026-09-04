@@ -20,3 +20,6 @@ func probePoison(context.Context, net.IP, uint16, Trigger, poison, time.Duration
 func probeRawHandshake(context.Context, net.IP, uint16, time.Duration) (bool, error) {
 	return false, errors.New("classify: сырые зонды доступны только на Linux")
 }
+
+// Вне Linux сырых зондов нет, и подавлять нечего.
+func RawRSTRuleFailed() bool { return false }
