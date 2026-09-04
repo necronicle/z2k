@@ -44,10 +44,35 @@ type fakeBox struct {
 
 	conn *net.UDPConn
 
+	// Всё, что читает обслуживающая горутина, живёт под мьютексом. Тесты
+	// выставляют режим стенда ПОСЛЕ newFakeBox, то есть когда горутина уже
+	// работает: без замка это гонка, и детектор её ловит (падение CI на
+	// r-82.5, TestProbeDetectsResidualBlocking и TestProbeSeesAddressBlock).
 	mu       sync.Mutex
 	seen     map[string]bool // пятёрка -> видели ли уже датаграмму
 	tripped  bool
 	requests int
+}
+
+// mode — снимок настроек стенда, снятый под замком.
+type boxMode struct {
+	blocked         string
+	firstPacketOnly bool
+	residual        bool
+	answerInitial   bool
+	silent          bool
+}
+
+func (b *fakeBox) set(f func(*fakeBox)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	f(b)
+}
+
+func (b *fakeBox) mode() boxMode {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return boxMode{b.blocked, b.firstPacketOnly, b.residual, b.answerInitial, b.silent}
 }
 
 func newFakeBox(t *testing.T, blocked string) *fakeBox {
@@ -79,11 +104,12 @@ func (b *fakeBox) serve() {
 func (b *fakeBox) handle(pkt []byte, from *net.UDPAddr) {
 	b.mu.Lock()
 	b.requests++
-	if b.silent {
+	m := boxMode{b.blocked, b.firstPacketOnly, b.residual, b.answerInitial, b.silent}
+	if m.silent {
 		b.mu.Unlock()
 		return
 	}
-	if b.residual && b.tripped {
+	if m.residual && b.tripped {
 		b.mu.Unlock()
 		return // след сработавшей блокировки: молчим на всё подряд
 	}
@@ -105,14 +131,14 @@ func (b *fakeBox) handle(pkt []byte, from *net.UDPAddr) {
 		return // не Initial и не понятно что: настоящий сервер тоже промолчит
 	}
 	// Решение коробки. Разбирает она поток, только если Initial пришёл первым.
-	inspectable := !b.firstPacketOnly || firstInFlow
-	if inspectable && sni == b.blocked {
+	inspectable := !m.firstPacketOnly || firstInFlow
+	if inspectable && sni == m.blocked {
 		b.mu.Lock()
 		b.tripped = true
 		b.mu.Unlock()
 		return
 	}
-	if !b.answerInitial {
+	if !m.answerInitial {
 		return
 	}
 	b.sendServerInitial(dcid, from)
@@ -120,6 +146,7 @@ func (b *fakeBox) handle(pkt []byte, from *net.UDPAddr) {
 
 // inspect — то же, что делает коробка: вывести ключи из DCID и прочитать имя.
 func (b *fakeBox) inspect(pkt []byte) (dcid []byte, sni string, ok bool) {
+	blocked := b.mode().blocked
 	if len(pkt) < 7 || pkt[0]&0x80 == 0 {
 		return nil, "", false
 	}
@@ -184,8 +211,8 @@ func (b *fakeBox) inspect(pkt []byte) (dcid []byte, sni string, ok bool) {
 		if f.Type != FrameCrypto {
 			continue
 		}
-		if i := bytes.Index(f.Data, []byte(b.blocked)); i >= 0 {
-			return dcid, b.blocked, true
+		if i := bytes.Index(f.Data, []byte(blocked)); i >= 0 {
+			return dcid, blocked, true
 		}
 	}
 	return dcid, "", true
@@ -300,7 +327,7 @@ func TestProbeSeesContentBlock(t *testing.T) {
 // увидеть и выдать исполнимую строку — фальшивку перед настоящим пакетом.
 func TestProbeFindsFirstPacketOnly(t *testing.T) {
 	box := newFakeBox(t, "rutracker.org")
-	box.firstPacketOnly = true
+	box.set(func(b *fakeBox) { b.firstPacketOnly = true })
 	res := runAgainst(t, box, "rutracker.org")
 	if res.Verdict != VerdictContent {
 		t.Fatalf("вердикт %q (%s)", res.Verdict, res.Reason)
@@ -318,7 +345,7 @@ func TestProbeFindsFirstPacketOnly(t *testing.T) {
 // тишину и он объявит, что не помогает ничего.
 func TestProbeDetectsResidualBlocking(t *testing.T) {
 	box := newFakeBox(t, "rutracker.org")
-	box.residual = true
+	box.set(func(b *fakeBox) { b.residual = true })
 	res := runAgainst(t, box, "rutracker.org")
 	if res.Props.ResidualBlocking == nil || !*res.Props.ResidualBlocking {
 		t.Fatalf("остаточная блокировка не обнаружена: %+v", res.Props)
@@ -340,7 +367,7 @@ func TestProbeDetectsResidualBlocking(t *testing.T) {
 // выдавать её за блокировку нельзя.
 func TestProbeSeesNoQUIC(t *testing.T) {
 	box := newFakeBox(t, "rutracker.org")
-	box.answerInitial = false
+	box.set(func(b *fakeBox) { b.answerInitial = false })
 	res := runAgainst(t, box, "example.org")
 	if res.Verdict != VerdictNoQUIC {
 		t.Fatalf("вердикт %q (%s), ожидался %q", res.Verdict, res.Reason, VerdictNoQUIC)
@@ -373,7 +400,7 @@ func TestProbeSeesClosedPort(t *testing.T) {
 // это уже блокировка адреса, и десинком она не лечится.
 func TestProbeSeesAddressBlock(t *testing.T) {
 	box := newFakeBox(t, "rutracker.org")
-	box.silent = true
+	box.set(func(b *fakeBox) { b.silent = true })
 	res := runAgainst(t, box, "example.org")
 	if res.Verdict != VerdictAddress {
 		t.Fatalf("вердикт %q (%s), ожидался %q", res.Verdict, res.Reason, VerdictAddress)

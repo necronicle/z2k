@@ -51,17 +51,28 @@ func propProbes() []propProbe {
 			}},
 		{"контрольная сумма", poison{name: "badsum", badsum: true},
 			func(pr *Properties, ok bool) {
+				// Пишем ТОЛЬКО по проходу. Проход однозначен: коробка проглотила
+				// фальшивку с битой суммой, значит сумму не сверяет. Промах
+				// объясняется и разбором L7, и чем угодно ещё, поэтому поле
+				// остаётся неизмеренным — так требует норма пакета.
 				if ok {
 					pr.ValidatesChecksum = &f
-				} else {
-					pr.ValidatesChecksum = &t
 				}
 			}},
 		{"разбор протокола", poison{name: "badsum+hello", badsum: true, decoy: "hello"},
 			func(pr *Properties, ok bool) {
-				// Набивку не взяла, а приветствие взяла — значит разбирает L7.
-				if ok && pr.ValidatesChecksum != nil && *pr.ValidatesChecksum {
+				// Сюда доходим только после промаха зонда выше: набивку коробка
+				// не взяла. Если теперь взяла ПРИВЕТСТВИЕ — значит разбирает L7,
+				// а заодно доказано, что сумму она не сверяет.
+				//
+				// Раньше здесь стояло предусловие «ValidatesChecksum == true»,
+				// и оно было тавтологией с перевёрнутым знаком: true туда
+				// попадал ровно из промаха предыдущего зонда, а проход ЭТОГО
+				// зонда означает обратное. Из-за него отчёт всегда печатал
+				// «разбирает протокол: да» рядом с ложным «сумму проверяет: да».
+				if ok {
 					pr.ParsesL7 = &t
+					pr.ValidatesChecksum = &f
 				}
 			}},
 		{"повтор как ретрансмит", poison{name: "badsum-x2-g20", badsum: true, repeats: 2, gapMS: 20},
@@ -91,7 +102,10 @@ func composeFromProps(pr Properties, ctl []byte) []poison {
 
 	// Коробка глотает битую сумму и разбирает протокол — фальшивка обязана
 	// быть правдоподобной, иначе она её просто пропустит мимо.
-	fakeBase := poison{badsum: no(pr.ValidatesChecksum)}
+	// Битую сумму пробуем и когда свойство НЕ ИЗМЕРЕНО: раньше здесь стояло
+	// no(...), которое при nil давало false и выключало единственный признак,
+	// работающий на коробках, не сверяющих сумму.
+	fakeBase := poison{badsum: !yes(pr.ValidatesChecksum)}
 	if yes(pr.ParsesL7) {
 		fakeBase.decoy = "hello"
 	}

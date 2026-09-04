@@ -1,6 +1,7 @@
 package classify
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -62,7 +63,16 @@ func TLS12Trigger(sni string) (Trigger, error) {
 		if len(b) < 16 {
 			return Trigger{}, fmt.Errorf("classify: приветствие 1.2 вышло длиной %d байт", len(b))
 		}
-		return Trigger{Name: "tls12:" + sni, Payload: b, Accept: acceptServerHello}, nil
+		tr := Trigger{Name: "tls12:" + sni, Payload: b, Accept: acceptServerHello}
+		// КООРДИНАТЫ ИМЕНИ ОБЯЗАТЕЛЬНЫ. По ним сырые зонды режут поток и
+		// ставят байт вне полосы: без них разрез падает на середину пакета, а
+		// у короткого приветствия 1.2 середина в имя не попадает. Приём тогда
+		// систематически не срабатывает, а вывод «коробка так не ловится»
+		// закрепляется как измеренный факт.
+		if i := bytes.Index(b, []byte(sni)); i >= 0 {
+			tr.SNIOffset, tr.SNILen = i, len(sni)
+		}
+		return tr, nil
 	case <-time.After(3 * time.Second):
 		return Trigger{}, errors.New("classify: не удалось собрать приветствие TLS 1.2")
 	}
@@ -98,6 +108,19 @@ func verifyTLS12(ctx context.Context, addr string, opt Options, res *Result,
 	base := measure(ctx, addr, tr12, opt, "как есть", nil, opt.WriteGap, &scratch)
 	if base.pass == opt.Repeats {
 		res.Reason += "; старое приветствие TLS 1.2 проходит и без обхода"
+		return nil
+	}
+
+	// Имя находки обязано существовать в списке гипотез: перепроверка ищет её
+	// там по Options.Only. Находки фазы «собрано» называются «СОБРАНО: …», в
+	// poisons() таких имён нет, и фильтр не совпадал ни с чем — перепроверка
+	// возвращала «не покрывает» НЕ СДЕЛАВ НИ ОДНОГО ЗОНДА, после чего
+	// сжигался бюджет поиска и в вердикт уходило «общего приёма не нашлось».
+	// Утверждение, которого никто не мерил.
+	if res.Verdict == VerdictPoisonable && poisonName != "" && !knownPoison(poisonName) {
+		res.Notes = append(res.Notes, "приём «"+poisonName+"» собран из вектора свойств, "+
+			"и перепроверить его на старом приветствии нечем: перепроверка умеет только "+
+			"именованные гипотезы")
 		return nil
 	}
 
@@ -139,6 +162,16 @@ func verifyTLS12(ctx context.Context, addr string, opt Options, res *Result,
 // длительность которого предупреждён. Полный поиск без потолка доступен
 // вручную: -joint-budget.
 const defaultJointBudget = 4 * time.Minute
+
+// knownPoison — есть ли гипотеза с таким именем в переборе.
+func knownPoison(name string) bool {
+	for _, p := range poisons() {
+		if p.name == name {
+			return true
+		}
+	}
+	return false
+}
 
 // noteTLS12 дописывает в вердикт то, что человеку надо знать про старых
 // клиентов. Молчание тут читалось бы как «покрывает», а это самый дорогой вид
@@ -182,6 +215,7 @@ func crossCheckTLS12(ctx context.Context, addr string, tr Trigger, opt Options, 
 	if res.CoversTLS12 != nil && !*res.CoversTLS12 {
 		if joint, ok := findJointPoison(ctx, addr, tr, opt, res, sni, poisonName); ok {
 			res.Strategy = strategyForPoison(joint)
+			noteGapLoss(res, joint)
 			res.Reason += fmt.Sprintf("; приём «%s» берёт только новое приветствие, общий для обоих — «%s»",
 				poisonName, joint.name)
 			yes := true

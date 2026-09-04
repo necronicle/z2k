@@ -123,6 +123,9 @@ type Result struct {
 	// Strategy — готовая строка для --lua-desync, пустая если вердикт не
 	// даёт рекомендации.
 	Strategy string `json:"strategy,omitempty"`
+	// Notes — служебные оговорки о полноте самого замера: что осталось
+	// непроверенным и почему. Для поддержки, не для обещаний.
+	Notes []string `json:"notes,omitempty"`
 	// CoversTLS12 — покрывает ли найденный приём СТАРЫХ клиентов.
 	//
 	// Один сайт в доме открывают и свежий браузер по TLS 1.3, и телевизор по
@@ -399,6 +402,7 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 				res.Verdict = VerdictPoisonable
 				res.Boundary = 0
 				res.Strategy = strategyForPoison(hit)
+				noteGapLoss(&res, hit)
 				res.Reason = "поток пересобирается, но буфер травится: коробка глотает «" + hit.name + "», сервер выбрасывает"
 				crossCheckTLS12(ctx, addr, tr, opt, &res, hit.name)
 				return res
@@ -594,12 +598,19 @@ func poisons() []poison {
 	}
 	// ПРИМИТИВЫ, КОТОРЫХ НЕ БЫЛО. Все три — самостоятельные механизмы, а не
 	// варианты уже покрытых, и каждый бьёт по своей особенности коробки.
-	out = append(out, poison{name: "syndata"}, poison{name: "oob"})
-	for _, n := range []int{1, 336} {
-		out = append(out, poison{name: fmt.Sprintf("fakedsplit-%d", n), fakeBetween: true, badsum: true, seqovl: n})
-	}
+	// Флаги обязаны стоять: без них это пустые гипотезы с говорящими именами.
+	// Зонд отправлял обычную фальшивку, трасса называла её «syndata», и
+	// отрицательный исход читался как «данные в SYN коробка не берёт» — вывод
+	// о механизме, который ни разу не проверяли.
+	out = append(out, poison{name: "syndata", synData: true}, poison{name: "oob", oob: true})
+	// ОДИН вариант, а не четыре. Отправитель в ветке fakeBetween не читает ни
+	// seqovl, ни disorder: фальшивка там всегда набивка фиксированного вида.
+	// Поэтому fakedsplit-1, fakedsplit-336 и fakedsplit+disorder были побайтно
+	// теми же пакетами, что и fakedsplit, — три лишних зонда по три повтора
+	// каждый, до минуты чистого простоя на прогон, и трасса называла их
+	// разными именами. Вернуть варианты можно будет тогда, когда отправитель
+	// научится их различать.
 	out = append(out, poison{name: "fakedsplit", fakeBetween: true, badsum: true})
-	out = append(out, poison{name: "fakedsplit+disorder", fakeBetween: true, badsum: true, disorder: true})
 	out = append(out, poison{name: "fakedsplit-x7", fakeBetween: true, badsum: true, repeats: 7})
 	// ТОЧНАЯ КОПИЯ БОЕВОГО ПЛЕЧА 1: семь копий фальшивки отдельной посылкой,
 	// затем перекрытие слева длиной в целое приветствие. Собрано по дампу, а
@@ -876,16 +887,55 @@ func notePropsHit(pr *Properties, p poison) {
 	}
 }
 
+// notePropsMiss записывает то, что доказывает ПРОМАХ зонда.
+//
+// Доказывает он немного. Молчание в UDP-подобном смысле здесь тоже
+// многозначно: фальшивка могла не сработать и потому, что коробка нечувствительна
+// к приёму, и потому, что она отбросила именно нашу набивку. Поэтому сюда
+// попадают только те выводы, где промах однозначен: приём НЕ ломает коробку,
+// значит она к нему терпима.
+//
+// ЧЕГО ЗДЕСЬ БОЛЬШЕ НЕТ. Промах badsum-зонда раньше писал ValidatesChecksum =
+// true — «коробка проверяет сумму». Это вывод из тишины, запрещённый нормой
+// самого пакета (nil значит «не измерено», а не «нет»), и он был не просто
+// лишним, а вредным: тот же самый исход в notePropsHit ниже даёт false, то есть
+// один прогон мог выдать оба вывода. Плюс ложный true отключал битую сумму у
+// собранных кандидатов и служил предусловием для вывода о разборе L7.
+//
+// Доказать «сумму проверяет» может только дифференциальный зонд: та же
+// фальшивка с ВЕРНОЙ суммой проходит, а с битой — нет. Такого зонда в poisons()
+// нет, поэтому поле честно остаётся неизмеренным.
 func notePropsMiss(pr *Properties, p poison) {
 	t := true
 	switch {
-	case p.badsum && p.decoy == "":
-		pr.ValidatesChecksum = &t
 	case p.disorder:
 		pr.ToleratesReorder = &t
 	case p.seqovl > 0 && p.decoy == "":
 		pr.ToleratesLeftOverlap = &t
 	}
+}
+
+// noteGapLoss предупреждает, что найденный приём опирался на ПАУЗУ между
+// копиями фальшивки, а движок такую паузу выразить не умеет.
+//
+// Проверено по первоисточнику форка: у функции fake аргумента задержки нет
+// (lua/zapret-antidpi.lua), число копий разворачивается в плотный цикл
+// rawsend_rep без ожидания (nfq2/darkmagic.c), а delay есть только у send —
+// и та откладывает копию НАСТОЯЩЕГО пакета, без подмены содержимого.
+//
+// Молчать нельзя: собственный замер этого пакета показал, что порог копий
+// зависит от паузы («порог 7 оказался артефактом нулевой паузы, при 20 мс
+// хватает двух»). Выдать плотную серию вместо растянутой и не сказать об этом
+// значит отдать человеку строку, которая на его линии может не повторить
+// найденный эффект.
+func noteGapLoss(res *Result, p poison) {
+	if p.gapMS <= 0 {
+		return
+	}
+	res.Notes = append(res.Notes, fmt.Sprintf(
+		"приём сработал с паузой %d мс между копиями фальшивки, а движок паузу выразить не умеет: "+
+			"в строке копии идут вплотную. Если обход не встанет — дело может быть именно в этом",
+		p.gapMS))
 }
 
 // strategyForPoison переводит найденную разницу в термины nfqws2.
@@ -917,7 +967,25 @@ func strategyForPoison(p poison) string {
 		if p.repeats > 1 {
 			f += fmt.Sprintf(":repeats=%d", p.repeats)
 		}
-		return f + " --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
+		// Длину перекрытия печатаем ИЗМЕРЕННУЮ, а не зашитую.
+		//
+		// Раньше здесь всегда стояло seqovl=681 с образцом целого приветствия.
+		// Для seqovlExact это верно — там перекрытие и есть длина приветствия,
+		// а 681 это длина шипованного блоба. Но гипотеза seqovl-1 меряет
+		// перекрытие в ОДИН байт, и печатать ей 681 значит выдать другой приём:
+		// человек вставит строку, которая делает не то, что прошло на замере.
+		ov := " --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=681" +
+			":seqovl_pattern=tls_clienthello_www_google_com"
+		if !p.seqovlExact {
+			ov = fmt.Sprintf(" --lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=%d", p.seqovl)
+			if p.decoy == "hello" {
+				ov += ":seqovl_pattern=tls_clienthello_www_google_com"
+			}
+		}
+		if p.disorder {
+			ov += " --lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=1,midsld"
+		}
+		return f + ov
 	}
 	if p.seqovlExact {
 		st := "--lua-desync=multisplit:payload=tls_client_hello:dir=out:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
@@ -962,6 +1030,23 @@ func strategyForPoison(p poison) string {
 		return st
 	}
 	head := "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls"
+	// Число копий печатается ЗДЕСЬ, до всех ранних возвратов ветки.
+	//
+	// Без этого семнадцать гипотез семейства badsum-x{N}-g{G} выдавали ту же
+	// строку, что одиночная badsum: инструмент отвечал «поймали badsum-x7» и
+	// давал плечо с одной фальшивкой. Собственный комментарий к gapMS выше
+	// фиксирует, что порог копий — величина измеряемая, а не косметика.
+	if p.repeats > 1 {
+		head += fmt.Sprintf(":repeats=%d", p.repeats)
+	}
+	// Метка времени и обнулённый идентификатор — такие же измеренные признаки
+	// боевых плеч. Без них badsum+ts и badsum+ipid были неотличимы от badsum.
+	if p.tcpTS {
+		head += ":tcp_ts=-1000"
+	}
+	if p.ipIDZero {
+		head += ":ip_id=zero"
+	}
 	if p.badsum && p.ttl > 0 {
 		return fmt.Sprintf("%s:badsum:ip_ttl=%d", head, p.ttl)
 	}
