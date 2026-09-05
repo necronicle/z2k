@@ -206,9 +206,16 @@ if [ -n "$_prev_rel" ] && git rev-parse --verify -q "$_prev_rel" >/dev/null 2>&1
     # каталоге — и дельта снова не одна.
     rm -rf mtproxy-client
     git checkout -q "$_prev_rel" -- mtproxy-client 2>/dev/null || true
-    git add -A mtproxy-client 2>/dev/null || true
-    git diff --cached --quiet -- mtproxy-client 2>/dev/null \
-        || git commit -q -m "тест: mtproxy-client к состоянию предыдущего релиза"
+    # И build-matrix.tsv тоже. Гейт про Z2K_TUNNEL_SECRET срабатывает НЕ только
+    # на правку внутри mtproxy-client/, но и на правку матрицы сборок: она может
+    # изменить цель сборки модуля. Сбрасывали здесь лишь каталог, и как только
+    # матрица разошлась с прошлым релизом (05.09.2026, имена-синонимы арок),
+    # release.sh в песочнице снова упирался в чужой гейт, а тест сообщал, будто
+    # правка генератора не объявляет шагов.
+    git checkout -q "$_prev_rel" -- build-matrix.tsv 2>/dev/null || true
+    git add -A mtproxy-client build-matrix.tsv 2>/dev/null || true
+    git diff --cached --quiet -- mtproxy-client build-matrix.tsv 2>/dev/null \
+        || git commit -q -m "тест: mtproxy-client и матрица к состоянию предыдущего релиза"
 fi
 echo "# generator touch" >> lib/config_official.sh
 git add lib/config_official.sh

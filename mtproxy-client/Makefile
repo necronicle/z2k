@@ -59,9 +59,9 @@ GOFLAGS=-ldflags="-s -w -X main.defaultTunnelSecret=$(Z2K_TUNNEL_SECRET) -X main
 
 # Список арок совпадает с тем, что реально лежит в builds/ и что умеет
 # выбирать установщик (lib/install.sh, map_arch_to_bin_arch → tg_arch).
-.PHONY: all arm64 arm mipsel mips mips64el amd64 x86 ppc64 riscv64 local clean
+.PHONY: all arm64 arm mipsel mips mips64el amd64 x86 ppc64 riscv64 local clean aliases
 
-all: arm64 arm mipsel mips mips64el amd64 x86 ppc64 riscv64
+all: arm64 arm mipsel mips mips64el amd64 x86 ppc64 riscv64 aliases
 
 arm64:
 	@echo "  сборка arm64"
@@ -118,3 +118,22 @@ local:
 
 clean:
 	rm -f $(BINARY) $(BINARY)-linux-*
+
+# ВРЕМЕННЫЕ СИНОНИМЫ ИМЁН (05.09.2026, подлежат удалению).
+#
+# Шаг обновления бинарников до p-82.8 искал сборки по ГОШНОМУ написанию арки
+# (mipsle, mips64le, 386), а файлы названы по-энтварному. На этих арках он не
+# находил ничего, и бинарники не обновлялись никогда. Исправленный апдейтер
+# приезжает роутерам только сейчас, а применять обновление будет ещё старый —
+# поэтому те же файлы отгружаются вторым именем, тем, которое он ищет.
+#
+# КОПИРУЕМ, А НЕ ПЕРЕСОБИРАЕМ: содержимое обязано совпадать побайтово, иначе
+# сверка воспроизводимости в CI покраснеет.
+#
+# Удалить вместе со строками в build-matrix.tsv, когда исправленный апдейтер
+# будет у всех.
+aliases: mipsel mips64el x86
+	@echo "  синонимы имён (временно)"
+	@cp -f $(OUT)/$(BINARY)-linux-mipsel $(OUT)/$(BINARY)-linux-mipsle
+	@cp -f $(OUT)/$(BINARY)-linux-mips64el $(OUT)/$(BINARY)-linux-mips64le
+	@cp -f $(OUT)/$(BINARY)-linux-x86 $(OUT)/$(BINARY)-linux-386

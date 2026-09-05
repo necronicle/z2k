@@ -9,9 +9,9 @@ GO ?= $(HOME)/go/bin/go1.25.12
 # after the commit — which silently defeats "rebuild and compare md5" release verification.
 GOFLAGS=-ldflags="-s -w" -trimpath -buildvcs=false
 
-.PHONY: all arm64 arm mipsel mips x86_64 local clean
+.PHONY: all arm64 arm mipsel mips x86_64 local clean aliases
 
-all: arm64 arm mipsel mips x86_64
+all: arm64 arm mipsel mips x86_64 aliases
 
 arm64:
 	GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -o $(BINARY)-linux-arm64
@@ -33,3 +33,20 @@ local:
 
 clean:
 	rm -f $(BINARY) $(BINARY)-linux-*
+
+# ВРЕМЕННЫЕ СИНОНИМЫ ИМЁН (05.09.2026, подлежат удалению).
+#
+# Шаг обновления бинарников до p-82.8 искал сборки по ГОШНОМУ написанию арки
+# (mipsle, mips64le, 386), а файлы названы по-энтварному. На этих арках он не
+# находил ничего, и бинарники не обновлялись никогда. Исправленный апдейтер
+# приезжает роутерам только сейчас, а применять обновление будет ещё старый —
+# поэтому те же файлы отгружаются вторым именем, тем, которое он ищет.
+#
+# КОПИРУЕМ, А НЕ ПЕРЕСОБИРАЕМ: содержимое обязано совпадать побайтово, иначе
+# сверка воспроизводимости в CI покраснеет.
+#
+# Удалить вместе со строками в build-matrix.tsv, когда исправленный апдейтер
+# будет у всех.
+aliases: mipsel
+	@echo "  синонимы имён (временно)"
+	@cp -f $(BINARY)-linux-mipsel $(BINARY)-linux-mipsle

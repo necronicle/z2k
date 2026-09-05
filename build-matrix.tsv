@@ -70,3 +70,29 @@ z2k-verify	./cmd/z2k-verify	z2k-verify/builds	z2k-verify	ppc64	ppc64	-
 z2k-verify	./cmd/z2k-verify	z2k-verify/builds	z2k-verify	riscv64	riscv64	-
 z2k-verify	./cmd/z2k-verify	z2k-verify/builds	z2k-verify	386	386	-
 vps-relay	./...	-	-	amd64	-	-
+
+# --- ВРЕМЕННЫЕ ИМЕНА-СИНОНИМЫ (добавлены 05.09.2026, подлежат удалению) --------
+#
+# Шаг refresh-binaries ищет сборки в манифесте по имени арки, и до p-82.8 он
+# брал ГОШНОЕ написание (mipsle, mips64le, 386), тогда как файлы названы
+# по-энтварному (mipsel, mips64el, x86). На этих трёх арках он не находил
+# ничего, кроме z2k-detect, и клиент туннеля, rt-proxy и warpd не обновлялись
+# НИКОГДА. Починено в p-82.8.
+#
+# Но обновление применяет апдейтер, УЖЕ лежащий на роутере, а исправленный
+# приезжает только этой же ночью. Значит в ближайший круг те же роутеры ещё раз
+# отработают старым кодом и снова ничего не получат — им пришлось бы ждать
+# вторую ночь и второй выпуск.
+#
+# Поэтому те же самые бинарники отгружаются ВТОРОЙ РАЗ под гошными именами —
+# ровно теми, которые ищет старый апдейтер. Содержимое побайтово совпадает с
+# основными файлами, git хранит их одним блобом, так что репозиторий не растёт.
+#
+# УДАЛИТЬ, когда исправленный апдейтер будет у всех: строки ниже, сами файлы и
+# записи в манифесте. Держать их дольше нужного значит возить каждому роутеру
+# лишний список и путать того, кто будет читать матрицу.
+mtproxy-client	.	mtproxy-client/builds	tg-mtproxy-client	mipsle	mipsle	GOMIPS=softfloat
+mtproxy-client	.	mtproxy-client/builds	tg-mtproxy-client	mips64le	mips64le	GOMIPS64=softfloat
+mtproxy-client	.	mtproxy-client/builds	tg-mtproxy-client	386	386	-
+rt-proxy	.	mtproxy-client/builds	z2k-rt-proxy	mipsle	mipsle	GOMIPS=softfloat
+z2k-warpd	./cmd/z2k-warpd	z2k-warpd/builds	z2k-warpd	mipsle	mipsle	GOMIPS=softfloat
