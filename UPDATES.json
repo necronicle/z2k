@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 73,
-  "current": "p-82.11",
+  "seq": 74,
+  "current": "p-82.12",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -257,7 +257,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "a7f17c3807eab90ca3f01a8be70c6bc06a28d9a8ee86b31bbcee49fdfc9fd57d",
+  "webpanel/www/index.html": "c80f0ab4b9e3a5a764cbbf99dba1d56d1a65adaa6a13e5de5db4dbf05d350afb",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -280,7 +280,7 @@
   "webpanel/www/js/pages/warp.js": "61f8875aad791650140e8b20b5a30e7d15c249e0bfe038563e27181b5893d1fd",
   "webpanel/www/js/router.js": "3bae8e6ec636585c1a1904c146262d4a384700d319e6653117d95825f5544a57",
   "webpanel/www/js/state-model.js": "5c45e8aa73857dd453c011fa4c533c8b8e9a6acecba97f37b7d6a90d63896405",
-  "webpanel/www/style.css": "3c95a0580ba3efa7a98a755dda1b2bf7300af53e5bc467c9f6c8c8c1155cc026",
+  "webpanel/www/style.css": "5dacc57eb9a3f2a5edf3181b9bd69a5d168e551ff98dfd5620d0a6998cf6474b",
   "z2k-detect/builds/z2k-detect-linux-386": "b191a434c2e069cab558ff204c8506251fbe8b3f4a3f86b501b49f9aa5aa4b97",
   "z2k-detect/builds/z2k-detect-linux-amd64": "e53a54666d92828e5e97ba3025850e382be15aa2d7130ed7d08fe9c5b0808116",
   "z2k-detect/builds/z2k-detect-linux-arm": "b8f9ec10473673bc528d0bff39f9e11885db572a1abaea2cc8b212fd1696fb1f",
@@ -522,6 +522,7 @@
 {"v": "p-82.8", "type": "patch", "ts": "2026-09-05T08:34:16Z", "ref": "p-82.8", "desc": "Обновление снова доставляет новые версии встроенных компонентов на роутеры, где они не обновлялись с момента установки. Туннель Telegram больше не оставляет вторую копию наблюдателя, которая каждые полминуты писала ошибку в журнал.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "lib/auto_update.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-82.9", "type": "patch", "ts": "2026-09-05T11:25:03Z", "ref": "p-82.9", "desc": "Роутеры, на которых встроенные компоненты не обновлялись с момента установки, наконец получают их новые версии, включая клиент Telegram. В отчёте диагностики теперь видно, какая именно сборка движка WARP стоит на роутере.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-82.10", "type": "patch", "ts": "2026-09-05T12:03:19Z", "ref": "p-82.10", "desc": "Роутеры на MIPS и x86 наконец получают новые версии встроенных компонентов, включая клиент Telegram: до сих пор обновление их не находило и оставляло те, что были поставлены при установке.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-82.11", "type": "patch", "ts": "2026-09-05T13:34:09Z", "ref": "p-82.11", "desc": "Выключенный обход больше не оставляет за собой правила, из-за которых начало каждого соединения продолжало идти через процессор вместо аппаратного ускорителя. И новый спонсор проекта в благодарностях.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/ndm/94-z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
+{"v": "p-82.11", "type": "patch", "ts": "2026-09-05T13:34:09Z", "ref": "p-82.11", "desc": "Выключенный обход больше не оставляет за собой правила, из-за которых начало каждого соединения продолжало идти через процессор вместо аппаратного ускорителя. И новый спонсор проекта в благодарностях.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/ndm/94-z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
+{"v": "p-82.12", "type": "patch", "ts": "2026-09-05T14:33:15Z", "ref": "p-82.12", "desc": "Экран входа в панель больше не съезжает вправо: бокового меню на нём нет, и место под него больше не резервируется.", "changed_files": ["webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
