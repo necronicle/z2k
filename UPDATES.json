@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 72,
-  "current": "p-82.10",
+  "seq": 73,
+  "current": "p-82.11",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -136,7 +136,7 @@
   },
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "6b08c2185173fbe68aa8e9fa999aeef905033122306a8a424bdc898298b25e07",
+  "files/S99zapret2.new": "3bda108c6cd77a5e6f883a5f592d22bb545f876cf447a399ce9ce5e3b83bc685",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/active_discord_udp.bin": "2fe18b3bd20807d36704d0b072092ee49ae84edca907a4420ab9a0f0f28fddcf",
@@ -192,7 +192,7 @@
   "files/ndm/91-z2k-ttl-bypass.sh": "337275f481555e5a261556014edbb0352b701db40919d983b8eccc3fa7d3f084",
   "files/ndm/92-z2k-rt-proxy-redirect.sh": "8092f75c2d4a878c036f5ec3c4aa23578892c09f55b0bf79484c1154986c48a7",
   "files/ndm/93-z2k-warp.sh": "fc4537cec6fe550e6f6fe1b44aa97fd4d7c401bd4a00bdb465af010ed340f480",
-  "files/ndm/94-z2k-ppe-deoffload.sh": "476b7d1047f860ee41a80cfc0c8381178a6e89ed5fb65c480731b5ad25e1c1c6",
+  "files/ndm/94-z2k-ppe-deoffload.sh": "34b025dfb8385c4f837b70e6864c9a61e6823feb7f3cbba5e602ffdb5a6e5254",
   "files/ndm/95-z2k-scheduler-watchdog.sh": "d73955d742263bda01ecca1be4b04deb7bba61164a5da2609f3e9977f443ad63",
   "files/z2k-auto-update.sh": "f8b10d95667dc4eb2a64a5a126b42cf4572170cfe23655bfe5effe831a77e9b7",
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
@@ -205,7 +205,7 @@
   "files/z2k-insta-ip-refresh.sh": "67d073f508bd3bc0b3d83ac6cb91635f2817fdbb85af997ef8714c909078da69",
   "files/z2k-nfqueue-selfheal.sh": "4095adce7626c7ceffa6779be428920286b1dd9d98427e1e49b36d2895d3fd8a",
   "files/z2k-ppe-deoffload.sh": "9a98f3f22c6572d3692a7b4cf7fb1432f2c42fc9d67d06e3841cffb9c0f4b4e4",
-  "files/z2k-scheduler.sh": "9acf5767d2525390f2e430973b3c60c613d366dc4cb16ba746c676333f21d32e",
+  "files/z2k-scheduler.sh": "7bcdac1d25c6c3846326a14035ad0ad93d7f103d721d23935e54c968b8549fe2",
   "files/z2k-stats-upload.sh": "45f33be7405bfa1e6445b6c7969cfa2555778fae05843e4dd60f06bc816e1ce5",
   "files/z2k-tcp16-probe.sh": "bc1d6af7370b5efbed14103be4420b24a996cafaf67bd7cc32075be1be9647f9",
   "files/z2k-tg-redirect.sh": "a44943bee350aab47c86cb5231465a51abe2de6813ac2d1d13cf7e13262f3c29",
@@ -216,7 +216,7 @@
   "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
   "lib/config_official.sh": "f350e6b4ae0d935914d35a37ce9a8e819d4dd715df5e23eb1ba8411483948e2e",
   "lib/install.sh": "89633787a2c73fbeffe2afed3671da00ed44deceae65ee281849bc9dc33f3b0a",
-  "lib/menu.sh": "067e7b5ca1a3e19507171d248fe160c0ec0131738dcbf24387023d2a5dcfa6f6",
+  "lib/menu.sh": "74ef69e68834a1119e159458be00c2449b4a8b51035cde3b2c70c7bfaee9cdd6",
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
   "lib/utils.sh": "a128fd3d64dd774bab77ad0abff626413ef8c04f535b11b13a9abfad9c6e86ca",
   "lib/webpanel.sh": "7e44a9f94e442d87f67bce091548dc482c921fad49014face9af53e8ed3e9504",
@@ -257,7 +257,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "53cb01ac73fcbd27ebb6549bc66f455538720f1cacfd305a94f75b4ec50a0505",
+  "webpanel/www/index.html": "a7f17c3807eab90ca3f01a8be70c6bc06a28d9a8ee86b31bbcee49fdfc9fd57d",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -266,7 +266,7 @@
   "webpanel/www/js/core/loadorder.js": "7146d39332c137f19d8a36e15d3e98f75c04bd0d132c4b2bd220b2fb94ae1814",
   "webpanel/www/js/core/toast.js": "2fdf1025826a4db97484ac702ff907ef280736d3a4d2639398182b9ef4cf4b2a",
   "webpanel/www/js/job.js": "da0832ecbb70861fa26d17008d5df9fbb69d240869771522bb8f9408f205365b",
-  "webpanel/www/js/pages/credits.js": "03cb8e15f06f2e4a1738e42493a472a1466d8c468fbde54117f3992e4eb33bb5",
+  "webpanel/www/js/pages/credits.js": "57122af13383a2d132d7610e3ef27d6d05ac0f584f1bd77ac963c22bc1974b24",
   "webpanel/www/js/pages/dashboard.js": "8d4a142cff54cb919f0b142a40c306df34728a94075240624a3d09b4ea5c6840",
   "webpanel/www/js/pages/diag.js": "40d104ca2ad115298ab2d81a2191e1df36a4430f422667ac2245ad027e9ba8cf",
   "webpanel/www/js/pages/exclude.js": "e504ab23d951a99ef56c220a19fecc1cb9e689f59f547e1b20284100319ecd39",
@@ -521,6 +521,7 @@
 {"v": "r-82.7", "type": "reinstall", "ts": "2026-09-05T05:45:44Z", "ref": "r-82.7", "desc": "Закрыта дыра в веб-панели: при замере голоса Дискорда имя домена не проверялось и могло увести за собой постороннюю команду. Замер голоса теперь показывает результат на странице, а не пустоту. Правило, которое замер временно ставит в фаервол, больше не остаётся висеть, если замер прервали по времени.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/strategy-pick.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-82.8", "type": "patch", "ts": "2026-09-05T08:34:16Z", "ref": "p-82.8", "desc": "Обновление снова доставляет новые версии встроенных компонентов на роутеры, где они не обновлялись с момента установки. Туннель Telegram больше не оставляет вторую копию наблюдателя, которая каждые полминуты писала ошибку в журнал.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "lib/auto_update.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-82.9", "type": "patch", "ts": "2026-09-05T11:25:03Z", "ref": "p-82.9", "desc": "Роутеры, на которых встроенные компоненты не обновлялись с момента установки, наконец получают их новые версии, включая клиент Telegram. В отчёте диагностики теперь видно, какая именно сборка движка WARP стоит на роутере.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-82.10", "type": "patch", "ts": "2026-09-05T12:03:19Z", "ref": "p-82.10", "desc": "Роутеры на MIPS и x86 наконец получают новые версии встроенных компонентов, включая клиент Telegram: до сих пор обновление их не находило и оставляло те, что были поставлены при установке.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-82.10", "type": "patch", "ts": "2026-09-05T12:03:19Z", "ref": "p-82.10", "desc": "Роутеры на MIPS и x86 наконец получают новые версии встроенных компонентов, включая клиент Telegram: до сих пор обновление их не находило и оставляло те, что были поставлены при установке.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-82.11", "type": "patch", "ts": "2026-09-05T13:34:09Z", "ref": "p-82.11", "desc": "Выключенный обход больше не оставляет за собой правила, из-за которых начало каждого соединения продолжало идти через процессор вместо аппаратного ускорителя. И новый спонсор проекта в благодарностях.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/ndm/94-z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
