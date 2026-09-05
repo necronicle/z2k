@@ -1603,9 +1603,11 @@ print_insta_pins() {
 # Ведёт ли апстрим AGH обратно в dns-proxy прошивки. Петля на 53-й порт здесь
 # не ошибка конфигурации, а штатная схема: именно через неё доезжает `ip host`.
 # Разобрать надо все формы, которыми это записывают: 127.0.0.1, 127.0.0.1:53,
-# [::1]:53, udp://127.0.0.1:53 и доменный селектор AGH `[/domain/]127.0.0.1:53`.
+# [::1]:53, udp://127.0.0.1:53, доменный селектор AGH `[/domain/]127.0.0.1:53`
+# и собственный LAN-адрес роутера: на той же схеме он ведёт туда же, куда
+# и петля, но до этой правки считался внешним.
 agh_upstream_is_local() {
-    local u="$1" host port
+    local u="$1" lan="$2" host port
     case "$u" in
         \[/*\]*) u="${u#*\]}" ;;
     esac
@@ -1624,11 +1626,14 @@ agh_upstream_is_local() {
     case "$host" in
         127.*|::1|0:0:0:0:0:0:0:1|localhost) return 0 ;;
     esac
+    # Собственный адрес роутера в домашней сети ведёт в тот же прошивочный
+    # прокси, что и петля: на схеме «AGH перед dns-proxy» это одно и то же.
+    [ -n "$lan" ] && [ "$host" = "$lan" ] && return 0
     return 1
 }
 
 print_agh() {
-    local y c hosts pinned inagh cmp n_pin n_hit n_bad state ups upf u n_up n_uploc uploc
+    local y c hosts pinned inagh cmp n_pin n_hit n_bad state ups upf u n_up n_uploc uploc lan
     y=""
     for c in "${Z2K_AGH_YAML:-}" /opt/etc/AdGuardHome/AdGuardHome.yaml \
              /opt/AdGuardHome/AdGuardHome.yaml /opt/var/AdGuardHome/AdGuardHome.yaml \
@@ -1685,7 +1690,22 @@ print_agh() {
         function unq(s) { gsub(/"/, "", s); gsub(Q, "", s); return s }
         BEGIN { Q = sprintf("%c", 39)
                 KRX = "^[ \t]*[\"" Q "]?upstream_dns[\"" Q "]?[ \t]*:" }
-        !inb && $0 ~ KRX { inb = 1; kin = match($0, /[^ \t]/) - 1; next }
+        !inb && $0 ~ KRX {
+            kin = match($0, /[^ \t]/) - 1
+            match($0, KRX)
+            hv = trim(substr($0, RSTART + RLENGTH))
+            sub(/[ \t]+#.*$/, "", hv)
+            if (hv == "" || substr(hv, 1, 1) == "#") { inb = 1; next }
+            # Значение на той же строке: inline-массив [a, b] или скаляр.
+            # Сам AGH пишет блочный стиль, но правленные руками конфиги —
+            # ровно та аудитория, ради которой эта строка и переписывалась.
+            if (substr(hv, 1, 1) == "[") {
+                sub(/^\[/, "", hv); sub(/\]$/, "", hv)
+                m = split(hv, arr, ",")
+                for (j = 1; j <= m; j++) { w = unq(trim(arr[j])); if (w != "") print w }
+            } else { w = unq(hv); if (w != "") print w }
+            next
+        }
         inb {
             t = trim($0)
             if (t == "" || substr(t, 1, 1) == "#") next
@@ -1704,10 +1724,14 @@ print_agh() {
         ups="$ups
 $(sed 's/#.*//' "$upf" 2>/dev/null)"
     fi
+    # LAN-адрес берём один раз: get_lan_ip дёргает `ip route`, а при неудаче
+    # возвращает адрес с пояснением в скобках — нам нужно только первое слово.
+    lan="${Z2K_LAN_IP:-$(get_lan_ip)}"
+    lan="${lan%% *}"
     n_up=0; n_uploc=0; uploc=""
     for u in $ups; do
         n_up=$((n_up + 1))
-        if agh_upstream_is_local "$u"; then
+        if agh_upstream_is_local "$u" "$lan"; then
             n_uploc=$((n_uploc + 1))
             [ -n "$uploc" ] || uploc="$u"
         fi

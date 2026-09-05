@@ -34,15 +34,29 @@ cat > "$SB/bin/pidof" <<'STUB'
 #!/bin/sh
 exit 1
 STUB
-chmod +x "$SB/bin/ndmc" "$SB/bin/pidof"
+# LAN-адрес роутера берётся настоящим get_lan_ip, а не подставляется переменной:
+# проверять надо ту же цепочку, по которой сводка печатает строку «LAN IP».
+cat > "$SB/bin/ip" <<'STUB'
+#!/bin/sh
+case "$*" in
+    *"route get"*) [ -n "$IP_ROUTE_GET" ] && printf '%s\n' "$IP_ROUTE_GET" ;;
+    *"addr show"*) [ -n "$IP_ADDR" ] && printf '%s\n' "$IP_ADDR" ;;
+esac
+exit 0
+STUB
+chmod +x "$SB/bin/ndmc" "$SB/bin/pidof" "$SB/bin/ip"
+
+DEF_ROUTE='1.1.1.1 via 192.168.100.1 dev eth3 src 192.168.100.10'
+DEF_ADDR='2: br0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+    inet 192.168.1.1/24 brd 192.168.1.255 scope global br0'
 
 # Функции берём настоящие: тест сторожит поведение сводки, а не свою копию кода.
-for fn in insta_pinned agh_upstream_is_local print_agh; do
+for fn in get_lan_ip insta_pinned agh_upstream_is_local print_agh; do
     awk -v f="$fn" 'index($0, f "() {") == 1, /^\}/' "$ROOT/files/z2k-diag.sh" >> "$SB/blk.sh"
     printf '\n' >> "$SB/blk.sh"
 done
 printf 'print_agh\n' >> "$SB/blk.sh"
-for fn in insta_pinned agh_upstream_is_local print_agh; do
+for fn in get_lan_ip insta_pinned agh_upstream_is_local print_agh; do
     grep -q "^${fn}() {" "$SB/blk.sh" || {
         bad "не нашёл $fn в z2k-diag.sh — проверка ослепла"
         printf '\nPASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"; exit 1; }
@@ -56,7 +70,9 @@ run() {  # run <yaml> [running-config]
     printf '%s\n' "$1" > "$SB/agh.yaml"
     printf '%s\n' "${2-$PINS}" > "$SB/ndm.conf"
     env PATH="$SB/bin:$PATH" ZAPRET2_DIR="$SB" Z2K_AGH_YAML="$SB/agh.yaml" \
-        NDM_CONF="$SB/ndm.conf" "${Z2K_TEST_SH:-sh}" "$SB/blk.sh" 2>/dev/null
+        NDM_CONF="$SB/ndm.conf" \
+        IP_ROUTE_GET="${IP_ROUTE_GET-$DEF_ROUTE}" IP_ADDR="${IP_ADDR-$DEF_ADDR}" \
+        "${Z2K_TEST_SH:-sh}" "$SB/blk.sh" 2>/dev/null
 }
 
 Y_LOCAL='dns:
@@ -138,6 +154,41 @@ filtering:
 
 # --- 1. Главный случай: AGH перед прошивочным прокси --------------------------
 # Это и есть исходный дефект: рабочему роутеру сообщалось «работать не будет».
+# Значение на той же строке, что и ключ. AGH так не пишет, но правленые руками
+# конфиги — ровно та аудитория, ради которой строка и переписывалась.
+Y_INLINE='dns:
+  upstream_dns: [127.0.0.1:53]
+  upstream_dns_file: ""
+filtering:
+  rewrites: []'
+
+Y_SCALAR='dns:
+  upstream_dns: 127.0.0.1:53
+  upstream_dns_file: ""
+filtering:
+  rewrites: []'
+
+Y_INLINE_EXT='dns:
+  upstream_dns: [tls://1.1.1.1, 8.8.8.8]
+  upstream_dns_file: ""
+filtering:
+  rewrites: []'
+
+# Собственный адрес роутера ведёт в тот же прошивочный прокси, что и петля.
+Y_LAN='dns:
+  upstream_dns:
+    - 192.168.1.1:53
+  upstream_dns_file: ""
+filtering:
+  rewrites: []'
+
+Y_LAN_OTHER_PORT='dns:
+  upstream_dns:
+    - 192.168.1.1:5353
+  upstream_dns_file: ""
+filtering:
+  rewrites: []'
+
 out=$(run "$Y_LOCAL")
 case "$out" in
     *'работать не будет'*) bad "ложная тревога: апстрим 127.0.0.1:53, пины доезжают: [$out]" ;;
@@ -207,7 +258,58 @@ case "$out" in
     *) bad "непонятный вывод: [$out]" ;;
 esac
 
-# --- 9. Записей ip host нет — сверять нечего ----------------------------------
+# --- 9. Значение на строке ключа: inline-массив ------------------------------
+# Разбор понимал только блочный список: ключ матчился, а значение с той же
+# строки уходило в next — и получалась прежняя ложная тревога.
+out=$(run "$Y_INLINE")
+case "$out" in
+    *'работать не будет'*) bad "inline-массив не разобран: [$out]" ;;
+    *'dns-proxy прошивки'*) ok "inline-массив [127.0.0.1:53] разобран" ;;
+    *) bad "непонятный вывод: [$out]" ;;
+esac
+
+# --- 10. Значение на строке ключа: скаляр ------------------------------------
+out=$(run "$Y_SCALAR")
+case "$out" in
+    *'работать не будет'*) bad "скаляр не разобран: [$out]" ;;
+    *'dns-proxy прошивки'*) ok "скаляр upstream_dns: 127.0.0.1:53 разобран" ;;
+    *) bad "непонятный вывод: [$out]" ;;
+esac
+
+# --- 11. Inline с внешними — настоящий диагноз не потерян --------------------
+out=$(run "$Y_INLINE_EXT")
+case "$out" in
+    *'НЕ синхронизированы'*) ok "inline с внешними апстримами по-прежнему диагноз" ;;
+    *) bad "inline с внешними разобран неверно: [$out]" ;;
+esac
+
+# --- 12. LAN-адрес роутера — тот же прошивочный прокси -----------------------
+out=$(run "$Y_LAN")
+case "$out" in
+    *'работать не будет'*) bad "192.168.1.1:53 объявлен внешним, хотя это сам роутер: [$out]" ;;
+    *'dns-proxy прошивки'*) ok "LAN-адрес роутера распознан через get_lan_ip" ;;
+    *) bad "непонятный вывод: [$out]" ;;
+esac
+
+# --- 13. LAN-адрес, но чужой порт — не наш случай ----------------------------
+out=$(run "$Y_LAN_OTHER_PORT")
+case "$out" in
+    *'НЕ синхронизированы'*) ok "192.168.1.1:5353 за прошивочный прокси не выдаётся" ;;
+    *) bad "чужой порт на адресе роутера принят за dns-proxy: [$out]" ;;
+esac
+
+# --- 14. LAN-адрес не определился — молча считаем внешним --------------------
+# get_lan_ip в этом случае отдаёт "unknown", и сравнение не должно совпасть
+# ни с чем: соврать «всё хорошо» здесь хуже, чем оставить прежний диагноз.
+IP_ADDR=""; IP_ROUTE_GET=""
+out=$(run "$Y_LAN")
+unset IP_ADDR IP_ROUTE_GET
+case "$out" in
+    *'НЕ синхронизированы'*) ok "без известного LAN-адреса апстрим считается внешним" ;;
+    *) bad "неизвестный LAN-адрес дал ложное «всё хорошо»: [$out]" ;;
+esac
+
+# --- 15. Записей ip host нет — сверять нечего ---------------------------------
 out=$(run "$Y_LOCAL" "")
 case "$out" in
     *'сверять нечего'*) ok "пустой ip host не объявляется поломкой" ;;
