@@ -43,6 +43,10 @@ fi
 mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
 PIDFILE="/var/run/tg-tunnel.pid"
+# Поколение надзирателя. Пишется ПЕРЕД запуском подоболочки; подоболочка на
+# каждом круге сверяет его со своим и уходит, если поколение сменилось. Так
+# лишний надзиратель умирает сам, не дожидаясь перезагрузки.
+GENFILE="/var/run/tg-tunnel.gen"
 
 # Telegram-DC redirect helpers (ipset + -w-locked rules). Single source of
 # truth shared with the NDM hook (90-z2k-tg-redirect.sh) and the tg-watchdog.
@@ -58,6 +62,28 @@ start() {
         user_disabled=$(awk -F= '/^TG_PROXY_USER_DISABLED=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
         if [ "$user_disabled" = "1" ]; then
             echo "tg-tunnel disabled by user — skipping autostart"
+            return 0
+        fi
+    fi
+    # ЖИВОЙ НАДЗИРАТЕЛЬ — ВТОРОЙ НЕ НУЖЕН.
+    #
+    # Проверка ниже смотрит на ДЕМОНА, и этого мало: надзиратель между
+    # перезапусками спит до 30 с, и в этот момент демона нет вовсе. Любой
+    # параллельный `start` (сторож раз в минуту, автообновление, хук NDM,
+    # кнопка в панели) проходил проверку и поднимал ВТОРОГО надзирателя.
+    # Дальше два цикла дерутся за :1443: один держит порт, второй каждые 30 с
+    # родит демона, тот падает с «bind: address already in use» и умирает.
+    # Вечный форк-цикл, туннель при этом работает — поэтому никто не замечал.
+    # Найдено на роутере Марка 05.09.2026: два надзирателя, 182 круга в логе.
+    #
+    # У S96z2k-rt-proxy, S97z2k-http-tunnel и S99z2k-scheduler такая проверка
+    # была с самого начала; здесь её не было.
+    if [ -f "$PIDFILE" ]; then
+        _sup=$(cat "$PIDFILE" 2>/dev/null)
+        if [ -n "$_sup" ] && kill -0 "$_sup" 2>/dev/null && \
+           [ -r "/proc/$_sup/cmdline" ] && \
+           tr '\0' ' ' < "/proc/$_sup/cmdline" 2>/dev/null | grep -q "S98tg-tunnel"; then
+            echo "tg-tunnel supervisor already running (pid $_sup)"
             return 0
         fi
     fi
@@ -93,11 +119,21 @@ start() {
         [ -n "$_rs" ] && TUNNEL_FLAGS="$TUNNEL_FLAGS --tunnel-secret=$_rs"
         [ -n "$_ru" ] && TUNNEL_FLAGS="$TUNNEL_FLAGS --tunnel-url=$_ru"
     fi
+    _sup_gen="$(date +%s 2>/dev/null || echo 0).$$"
+    echo "$_sup_gen" > "$GENFILE" 2>/dev/null
     (
         trap '' HUP
         trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
         backoff=1
         while :; do
+            # Сменилось поколение — значит нас уже заменили. Уходим сами, не
+            # дожидаясь, пока кто-то найдёт и убьёт. Проверка стоит В НАЧАЛЕ
+            # круга, поэтому уснувший в backoff дубликат уходит сразу после
+            # пробуждения, а не рожает ещё одного обречённого демона.
+            if [ "$(cat "$GENFILE" 2>/dev/null)" != "$_sup_gen" ]; then
+                echo "$(date 2>/dev/null) [supervisor] поколение сменилось — выхожу (дубликат)" >> "$LOG"
+                exit 0
+            fi
             t0=$(date +%s 2>/dev/null || echo 0)
             # GODEBUG=asyncpreemptoff=1: disable Go's SIGURG-based async goroutine
             # preemption. On MIPS (softfloat Keenetics) it crashes the client with
@@ -166,7 +202,20 @@ stop() {
             fi
         done
     fi
-    rm -f "$PIDFILE"
+    rm -f "$PIDFILE" "$GENFILE"
+    # ОСИРОТЕВШИЕ НАДЗИРАТЕЛИ. До правки 05.09.2026 их могло накопиться
+    # несколько, и в pidfile лежал только последний — остальные переживали
+    # `stop` и продолжали поднимать демона. Добиваем всех: подоболочка после
+    # отвязывания висит на ppid=1, а сам работающий сейчас скрипт исключаем
+    # по $$, иначе `restart` убил бы сам себя посреди работы.
+    for _pd in /proc/[0-9]*; do
+        p="${_pd#/proc/}"
+        [ "$p" = "$$" ] && continue
+        [ -r "$_pd/cmdline" ] || continue
+        tr '\0' ' ' < "$_pd/cmdline" 2>/dev/null | grep -q "S98tg-tunnel" || continue
+        [ "$(awk '/^PPid:/{print $2}' "$_pd/status" 2>/dev/null)" = "1" ] || continue
+        kill "$p" 2>/dev/null
+    done
     # Idempotent removal: drop every matching copy of the rule from both chains.
     z2k_tg_remove_rules          # remove the ipset REDIRECT rules
     z2k_tg_remove_legacy_rules   # and any stale pre-ipset per-CIDR rules
