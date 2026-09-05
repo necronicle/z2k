@@ -181,3 +181,27 @@ func TestGapLossIsAnnounced(t *testing.T) {
 		t.Errorf("оговорка появилась там, где паузы не было: %v", clean.Notes)
 	}
 }
+
+// Разбор правил подавления обязан узнавать СВОЮ форму и не трогать чужие.
+// Правило снимается уборщиком при закрытии соединения, но kill -9 уборщика не
+// даёт — панель именно так и добивает замер, не уложившийся в срок. Поэтому
+// подметаем на старте, и подметать надо ровно своё.
+func TestStaleRuleRecognitionIsExact(t *testing.T) {
+	mine := "-A OUTPUT -p tcp -m tcp --sport 39997 --tcp-flags RST RST -j DROP"
+	if port, ok := parseStaleRSTRule(mine); !ok || port != 39997 {
+		t.Errorf("своё правило не опознано: port=%d ok=%v", port, ok)
+	}
+	foreign := []string{
+		"-A OUTPUT -p tcp -m tcp --sport 39997 --tcp-flags RST RST -j ACCEPT", // чужое действие
+		"-A INPUT -p tcp -m tcp --sport 39997 --tcp-flags RST RST -j DROP",    // другая цепочка
+		"-A OUTPUT -p udp -m udp --sport 39997 -j DROP",                       // другой протокол
+		"-A OUTPUT -p tcp -m tcp --sport 22 --tcp-flags RST RST -j DROP",      // порт не наш
+		"-A OUTPUT -p tcp -m tcp --sport 60000 --tcp-flags RST RST -j DROP",   // выше диапазона
+		"",
+	}
+	for _, line := range foreign {
+		if _, ok := parseStaleRSTRule(line); ok {
+			t.Errorf("чужое правило принято за своё: %q", line)
+		}
+	}
+}

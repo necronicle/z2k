@@ -177,8 +177,14 @@ function renderResult(r) {
   // ответа любая половина может быть null (протокол не дал результата), и по
   // истинности такой ответ спутался бы со старым плоским.
   const pair = r && ("tcp" in r || "quic" in r || "voice" in r);
-  const parts = pair ? { tcp: r.tcp, quic: r.quic } : { tcp: r, quic: null };
-  const any = parts.tcp || parts.quic;
+  const parts = pair
+    ? { tcp: r.tcp, quic: r.quic, voice: r.voice }
+    : { tcp: r, quic: null, voice: null };
+  // Голос обязан считаться наравне с остальными: раньше он в этот перебор не
+  // входил, и чисто голосовой замер рисовал пустоту — человек нажимал
+  // «Подобрать», задача честно отрабатывала, а на странице не появлялось
+  // ничего.
+  const any = parts.tcp || parts.quic || parts.voice;
   if (!any) return "";
 
   const target = String(any.target || "").replace(/:443$/, "");
@@ -196,13 +202,21 @@ function renderResult(r) {
   const blocks = [
     protoBlock(tcpLabel, parts.tcp),
     protoBlock("QUIC", parts.quic),
-    protoBlock("Голос Дискорда", r && r.voice),
+    protoBlock("Голос Дискорда", parts.voice),
   ].filter(Boolean);
 
   const found = blocks.some((b) => b.hasLine);
-  const head = found
-    ? `Домен <b>${escapeHtml(target)}</b> пробивают такие строки:`
-    : `Домен <b>${escapeHtml(target)}</b> — что показал замер:`;
+  // У голоса домена нет, и подставлять туда адрес разговора нельзя: человек
+  // читает это как «домен, который я вводил».
+  const voiceOnly = !parts.tcp && !parts.quic && parts.voice;
+  let head;
+  if (voiceOnly) {
+    head = found ? "Голос Дискорда пробивает такая строка:" : "Голос Дискорда — что показал замер:";
+  } else {
+    head = found
+      ? `Домен <b>${escapeHtml(target)}</b> пробивают такие строки:`
+      : `Домен <b>${escapeHtml(target)}</b> — что показал замер:`;
+  }
 
   const hint = found
     ? `<p class="desc">

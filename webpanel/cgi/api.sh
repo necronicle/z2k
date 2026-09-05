@@ -704,14 +704,21 @@ case "$method $path" in
         domain=$(form_value "$body" "domain")
         pick_mode=$(form_value "$body" "mode")
         [ -n "$pick_mode" ] || pick_mode=tcp13
-        # У голоса домена нет: сервер выдаётся на сессию, и адрес берётся из
+        # НАБОР СИМВОЛОВ ПРОВЕРЯЕТСЯ ВСЕГДА, включая режим голоса.
+        #
+        # Значение уходит в строку, которую svc_action_async исполняет через
+        # eval. Пропуск проверки на одном режиме открывал внедрение команд
+        # любому, кто дотянулся до панели, — а она без пароля доверяет всей
+        # локальной сети. Пустой домен у голоса допустим, непустой мусор — нет
+        # ни в одном режиме.
+        case "$domain" in
+            *[!a-zA-Z0-9.-]*) json_fail "400 Bad Request" "в имени домена есть недопустимые символы" ;;
+        esac
+        [ "${#domain}" -le 253 ] || json_fail "400 Bad Request" "слишком длинное имя домена"
+        # У голоса домена нет: сервер выдаётся на сессию, адрес берётся из
         # идущего разговора. Требовать имя там, где его не существует, нельзя.
-        if [ "$pick_mode" != voice ]; then
-            [ -n "$domain" ] || json_fail "400 Bad Request" "укажите домен"
-            case "$domain" in
-                *[!a-zA-Z0-9.-]*) json_fail "400 Bad Request" "в имени домена есть недопустимые символы" ;;
-            esac
-            [ "${#domain}" -le 253 ] || json_fail "400 Bad Request" "слишком длинное имя домена"
+        if [ "$pick_mode" != voice ] && [ -z "$domain" ]; then
+            json_fail "400 Bad Request" "укажите домен"
         fi
         # Режим замера выбирает человек: под современные устройства, под старые,
         # под оба сразу или по QUIC. Проверяем ЗДЕСЬ тоже — значение уходит в
@@ -720,7 +727,13 @@ case "$method $path" in
             tcp13|tcp12|mixed|quic|voice) ;;
             *) json_fail "400 Bad Request" "неизвестный режим замера" ;;
         esac
-        job_id=$(svc_action_async "Подбор стратегии для $domain" "strategy_pick_run $domain $pick_mode")
+        # ПОЗИЦИЯ АРГУМЕНТОВ НЕ ДОЛЖНА ЗАВИСЕТЬ ОТ ПУСТОТЫ. Пустой домен при
+        # разборе строки схлопывался, режим уезжал на место домена, и голосовой
+        # замер превращался в подбор для домена «voice». Ставим прочерк —
+        # strategy_pick_run понимает его как «домена нет».
+        [ -n "$domain" ] || domain="-"
+        job_id=$(svc_action_async "Подбор стратегии для $domain" \
+            "strategy_pick_run '$domain' '$pick_mode'")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
         exit 0

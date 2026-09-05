@@ -53,6 +53,37 @@ check voice ""          "voice -json"   '"voice":{'
 strategy_pick_run "" tcp13 >/dev/null 2>&1 && bad "tcp13 принял пустой домен" || ok "tcp13 требует домен"
 strategy_pick_run "example.com" bogus >/dev/null 2>&1 && bad "принят неизвестный режим" || ok "неизвестный режим отвергнут"
 
+# ВНЕДРЕНИЕ КОМАНД. Строка задачи исполняется через eval, поэтому набор
+# символов домена проверяется во ВСЕХ режимах. Раньше у голоса проверка
+# пропускалась, и любой, кто дотянулся до панели без пароля, мог выполнить
+# произвольную команду на роутере.
+MARKER="$SB/pwned"
+for m in tcp13 tcp12 mixed quic voice; do
+    : > "$ARGLOG"
+    strategy_pick_run "x; touch $MARKER" "$m" >/dev/null 2>&1
+    if [ -e "$MARKER" ]; then
+        bad "$m: внедрение команды сработало"
+        rm -f "$MARKER"
+    else
+        ok "$m: мусор в домене отвергнут"
+    fi
+done
+
+# Пустой домен у голоса не должен схлопываться так, чтобы режим уехал на его
+# место: раньше получался TCP-подбор для домена «voice».
+: > "$ARGLOG"; rm -f "$STRATEGY_PICK_OUT"
+strategy_pick_run "-" voice >/dev/null 2>&1
+grep -q "voice -json" "$ARGLOG" && ok "голос: прочерк понят как «домена нет»" \
+    || bad "голос: позвали не голосовой замер: $(cat "$ARGLOG")"
+grep -q '"mode":"voice"' "$STRATEGY_PICK_OUT" \
+    && ok "голос: режим в ответе верный" || bad "голос: в ответе не тот режим"
+
+# Домена нет только у голоса; остальным режимам он обязателен.
+for m in tcp13 tcp12 mixed quic; do
+    strategy_pick_run "-" "$m" >/dev/null 2>&1 && bad "$m: принял отсутствие домена" \
+        || ok "$m: без домена отказано"
+done
+
 # Неиспользованные слоты обязаны быть null, иначе страница нарисует пустой блок.
 : > "$ARGLOG"; strategy_pick_run "" voice >/dev/null 2>&1
 grep -q '"tcp":null' "$STRATEGY_PICK_OUT" && grep -q '"quic":null' "$STRATEGY_PICK_OUT" \

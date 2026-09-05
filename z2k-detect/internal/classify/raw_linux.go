@@ -27,6 +27,8 @@ import (
 	"math/rand"
 	"net"
 	"os/exec"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -88,6 +90,7 @@ func dialRaw(ctx context.Context, dstIP net.IP, dport uint16, timeout time.Durat
 
 	c := &rawConn{sendFD: sfd, recvFD: rfd, src: src, dst: dst4, dport: dport}
 	c.wantOpts = true
+	sweepOnce.Do(sweepStaleRSTRules)
 	c.sport = nextSourcePort()
 	c.seq = rand.Uint32()
 	c.cleanup = suppressKernelRST(c.sport)
@@ -122,6 +125,10 @@ func (c *rawConn) Close() {
 //
 // Старт случайный: два прогона подряд не должны попадать в те же порты и
 // натыкаться на подвисшие правила друг друга.
+// Подметаем один раз за прогон, а не перед каждым зондом: зондов сотни, а
+// разбор таблицы стоит вызова iptables.
+var sweepOnce sync.Once
+
 var sourcePortCounter atomic.Uint32
 
 // rstRuleFailed — хоть раз не удалось закрыть ядру рот. Взводится навсегда:
@@ -137,6 +144,32 @@ func init() {
 
 func nextSourcePort() uint16 {
 	return uint16(30000 + sourcePortCounter.Add(1)%25000)
+}
+
+// sweepStaleRSTRules снимает правила подавления, оставшиеся от прошлых
+// прогонов.
+//
+// ЗАЧЕМ ЭТО ВООБЩЕ НУЖНО. Правило снимается уборщиком при закрытии соединения,
+// но уборщик не выполнится, если процесс убили сигналом KILL — а панель именно
+// так и добивает замер, не уложившийся в отведённое время. SIGKILL перехватить
+// нельзя ни при каком старании, поэтому единственная надёжная защита —
+// подмести за собой на СТАРТЕ следующего прогона.
+//
+// Снимаем только своё: точная форма правила и порт из нашего диапазона.
+// Чужие правила с флагом RST — не наша забота, и трогать их нельзя.
+func sweepStaleRSTRules() {
+	out, err := exec.Command("iptables", "-S", "OUTPUT").Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		port, ok := parseStaleRSTRule(line)
+		if !ok {
+			continue
+		}
+		_ = exec.Command("iptables", "-D", "OUTPUT", "-p", "tcp", "--sport",
+			fmt.Sprint(port), "--tcp-flags", "RST", "RST", "-j", "DROP").Run()
+	}
 }
 
 // suppressKernelRST закрывает ядру рот на время зонда и возвращает уборщика.
