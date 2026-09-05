@@ -244,6 +244,18 @@ export function renderCredits() {
           из окна панели не видно, но без которой окна бы не было.
         </p>
       </div>
+
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">BloodKnife39</div>
+        <p class="desc">
+          Спасибо, BloodKnife39. Поддержка оплачивает не только счета, но и время
+          на скучную половину работы: замерить вместо того, чтобы догадаться, и
+          перепроверить на живом железе до того, как выпуск уедет к людям. Эта
+          половина из окна панели не видна — она заметна только тогда, когда её
+          пропустили.
+        </p>
+      </div>
     </div>
   `;
 }
