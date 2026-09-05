@@ -2317,6 +2317,14 @@ start_fw()
     # Game WARP mode — bring up the usque (MASQUE) tunnel + game-ipset split-tunnel
     # when enabled. Backgrounded so a slow usque registration never stalls the
     # firewall apply; z2k-warp.sh selfheal (scheduler, minute-cadence) is the net.
+    # PPE-разгрузку ставим ЗДЕСЬ, а не только раз в 55 секунд из планировщика:
+    # иначе после старта до минуты идёт окно, где nfqws2 уже работает, а потоки
+    # ещё в железе — ровно те первые пакеты, ради которых разгрузка и заведена.
+    if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-ppe-deoffload.sh" ]; then
+        ( . "${ZAPRET2_DIR:-/opt/zapret2}/z2k-ppe-deoffload.sh"
+          z2k_ppe_user_disabled || z2k_ppe_ensure_rules ) >/dev/null 2>&1
+    fi
+
     if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] && [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" ]; then
         ( sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable >/dev/null 2>&1 ) &
     fi
@@ -2339,6 +2347,16 @@ stop_fw()
     z2k_conntrack_tune_stop
     zapret_unapply_firewall
     z2k_sweep_orphan_nfqueue
+
+    # PPE-разгрузка снимается вместе с остальным. Раньше не снималась НИКЕМ:
+    # её ставят установщик, панель, меню, планировщик и хук NDM, а убирает
+    # только удаление z2k. Роутер с остановленным обходом продолжал гонять
+    # начало каждого соединения через процессор впустую (найдено Марком
+    # 05.09.2026, проверено на его роутере: после stop правил остаётся 4).
+    if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-ppe-deoffload.sh" ]; then
+        ( . "${ZAPRET2_DIR:-/opt/zapret2}/z2k-ppe-deoffload.sh"
+          z2k_ppe_remove_rules ) >/dev/null 2>&1
+    fi
 
     return 0
 }

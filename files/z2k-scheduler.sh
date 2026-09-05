@@ -416,6 +416,15 @@ while true; do
         fi
     fi
 
+    # ПРАВИЛА НУЖНЫ ТОЛЬКО ЖИВОМУ nfqws2.
+    #
+    # Разгрузка снимает поток с аппаратного ускорителя ради того, чтобы nfqws2 его
+    # видел. Когда обход остановлен, видеть некому, а плата остаётся: первые пакеты
+    # каждого соединения продолжают идти через процессор. Пользователь выключает
+    # z2k и вправе ожидать, что роутер вернулся к своей штатной скорости.
+    #
+    # Проверка — по живому демону, а не по флагу в конфиге: флаг говорит о намерении
+    # пользователя, а правила осмысленны ровно тогда, когда есть кому смотреть.
     # Per-flow PPE de-offload re-assert (mangle FORWARD/PREROUTING). The NDM hook
     # (94-z2k-ppe-deoffload.sh) handles event-driven re-apply after netfilter
     # regen; this is the secondary net AND the boot-time apply (the rule is
@@ -427,7 +436,8 @@ while true; do
         case "$last_ppe" in ''|*[!0-9]*) last_ppe=0 ;; esac
         if [ "$((now_epoch - last_ppe))" -ge 55 ]; then
             mark_fired_in "$TMP_STATE" ppe-deoffload-epoch "$now_epoch"
-            ( . "${ZAPRET2_DIR}/z2k-ppe-deoffload.sh"
+            ( pidof nfqws2 >/dev/null 2>&1 || exit 0
+              . "${ZAPRET2_DIR}/z2k-ppe-deoffload.sh"
               z2k_ppe_user_disabled || z2k_ppe_ensure_rules ) >/dev/null 2>&1 &
         fi
     fi
