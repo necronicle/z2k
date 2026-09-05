@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 70,
-  "current": "p-82.8",
+  "seq": 71,
+  "current": "p-82.9",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -198,7 +198,7 @@
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
   "files/z2k-config-validator.sh": "3c4ca25d412902825a407e9af0725bca049e0cd278306c4514c12b98ca9276d4",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "de74c1f53d1bc26757fa66172fe32e3d09d66a4bf118b0fe7d414f7ad6b6c8a9",
+  "files/z2k-diag.sh": "87d8846ae198604c34edcdd31a979a489bc4c309ea3cd9609b9f963f2e328b76",
   "files/z2k-dns-check.sh": "e568560eeb992b0e118b7422bae9ed3e240bbe91d2fc00395102e31a9db60031",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "690a1f98afad41a4fb6452c789a08c3928939bf8a96c33547d07dad0790fde00",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "bc0acb347f3f6931cb95d63d1fd5a5794a2a5930b4cada6f89a4f2656557bfbe",
+  "webpanel/www/index.html": "a387120e04c3ef825298c2bda217c0d5dd972215a8d660ce2b48d342ed4c3aac",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -514,6 +514,7 @@
 {"v": "p-82.4", "type": "patch", "ts": "2026-09-04T10:47:54Z", "ref": "p-82.4", "desc": "Исправлено обновление списков: быстрый путь, который берёт файлы напрямую с GitHub, из-за неверного имени внутренней проверки всегда считался неудачным, и каждый файл шёл через наш сервер. Теперь прямой путь работает как задумано, а в журнале роутера пропадает ошибка на каждый файл.", "changed_files": ["webpanel/www/index.html", "files/z2k-update-lists.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "r-82.6", "type": "reinstall", "ts": "2026-09-04T23:27:53Z", "ref": "r-82.6", "desc": "На вкладке «Подбор по домену» появился выбор, для чего подбирать: для современных устройств, для старых вроде телевизоров и приставок, сразу для тех и других, для QUIC или для голоса Дискорда. Замер голоса берёт адрес из идущего разговора, вписывать ничего не нужно. Свою строку теперь можно задать и для голоса Дискорда.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/strategy-pick.js", "webpanel/www/style.css", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
 {"v": "r-82.7", "type": "reinstall", "ts": "2026-09-05T05:45:44Z", "ref": "r-82.7", "desc": "Закрыта дыра в веб-панели: при замере голоса Дискорда имя домена не проверялось и могло увести за собой постороннюю команду. Замер голоса теперь показывает результат на странице, а не пустоту. Правило, которое замер временно ставит в фаервол, больше не остаётся висеть, если замер прервали по времени.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/strategy-pick.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-82.8", "type": "patch", "ts": "2026-09-05T08:34:16Z", "ref": "p-82.8", "desc": "Обновление снова доставляет новые версии встроенных компонентов на роутеры, где они не обновлялись с момента установки. Туннель Telegram больше не оставляет вторую копию наблюдателя, которая каждые полминуты писала ошибку в журнал.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "lib/auto_update.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-82.8", "type": "patch", "ts": "2026-09-05T08:34:16Z", "ref": "p-82.8", "desc": "Обновление снова доставляет новые версии встроенных компонентов на роутеры, где они не обновлялись с момента установки. Туннель Telegram больше не оставляет вторую копию наблюдателя, которая каждые полминуты писала ошибку в журнал.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "lib/auto_update.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-82.9", "type": "patch", "ts": "2026-09-05T11:25:03Z", "ref": "p-82.9", "desc": "Роутеры, на которых встроенные компоненты не обновлялись с момента установки, наконец получают их новые версии, включая клиент Telegram. В отчёте диагностики теперь видно, какая именно сборка движка WARP стоит на роутере.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
