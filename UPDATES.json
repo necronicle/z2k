@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 69,
-  "current": "r-82.7",
+  "seq": 70,
+  "current": "p-82.8",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -161,7 +161,7 @@
   "files/init.d/S51z2k-warp": "182a9297e43cf6db3849919769f84d70b3d71d1fd33b5bcd9acaf4aaac528615",
   "files/init.d/S96z2k-rt-proxy": "ec48bd44cfd8c983e9ff5b148af58f8aeb57a51d0e7eef40338eba5b007c36f2",
   "files/init.d/S97z2k-http-tunnel": "066d20cecdafa961b9ad98fd57cce5592f8a335cb777190a70d952b010b6df92",
-  "files/init.d/S98tg-tunnel": "4f3ffcfc1b8fb966f71f8f94b0d562edde286a33cd6107b7482be25da7815fbf",
+  "files/init.d/S98tg-tunnel": "e1ca904fc41bbc8ad8ef634e4f14d2ea9a0d47578b7a226538c9d44c46a6935b",
   "files/init.d/S98z2k-detect": "14d282d28264c2b2b7cac20ae577f6a6bc1b013f8d47bc8e7f55809797f34bb2",
   "files/init.d/S99z2k-scheduler": "3c1ec23a3f47b2c79fd400da48a7b831b15d11c5553e8be253d48fbbfae7f60d",
   "files/lists/cf_extra_check_ips.txt": "79ffc4803151f5ded1de96d7dc1ecaba37ec2e4b2bb7985cecf8c7ff8da68975",
@@ -212,7 +212,7 @@
   "files/z2k-tg-watchdog.sh": "f433391db09dad96471cf96dc6c814fbff846c285ba3cb424806f08ab040ce8f",
   "files/z2k-update-lists.sh": "e936aa3afbef29ba991a1d51b9d051860a1a9ae453ffe5adbd7292c81d5bb893",
   "files/z2k-warp.sh": "1e6843bb711afa4d66c739648419a531feffadcd2ffea4716d75d62a2a56bdc7",
-  "lib/auto_update.sh": "fa5b99f32429d37be574e5ebe18a3333a7d4371018762d3c4438ddb5129a3bb6",
+  "lib/auto_update.sh": "1d31ce1614072be5c0962dcb5c634eb5c8faca2e77720f16413969ba33816313",
   "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
   "lib/config_official.sh": "f350e6b4ae0d935914d35a37ce9a8e819d4dd715df5e23eb1ba8411483948e2e",
   "lib/install.sh": "89633787a2c73fbeffe2afed3671da00ed44deceae65ee281849bc9dc33f3b0a",
@@ -253,7 +253,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "be8912ca42f5af5bf011f676af9bd7cbb7251d86d0fa8a27549a5d7be6aa3c05",
+  "webpanel/www/index.html": "bc0acb347f3f6931cb95d63d1fd5a5794a2a5930b4cada6f89a4f2656557bfbe",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -513,6 +513,7 @@
 {"v": "r-82.3", "type": "reinstall", "ts": "2026-09-04T09:58:35Z", "ref": "r-82.3", "desc": "Обновлён движок обхода до версии 1.0.5: исправлена сборка и разбор TCP-опций, проверка длины расширения keyshare при разборе TLS и завершение по сигналу. Добавлен новый спонсор проекта — b11d11, имя появилось в благодарностях: в меню роутера, в описании проекта и на странице «Благодарности» в веб-панели.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-82.4", "type": "patch", "ts": "2026-09-04T10:47:54Z", "ref": "p-82.4", "desc": "Исправлено обновление списков: быстрый путь, который берёт файлы напрямую с GitHub, из-за неверного имени внутренней проверки всегда считался неудачным, и каждый файл шёл через наш сервер. Теперь прямой путь работает как задумано, а в журнале роутера пропадает ошибка на каждый файл.", "changed_files": ["webpanel/www/index.html", "files/z2k-update-lists.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "r-82.6", "type": "reinstall", "ts": "2026-09-04T23:27:53Z", "ref": "r-82.6", "desc": "На вкладке «Подбор по домену» появился выбор, для чего подбирать: для современных устройств, для старых вроде телевизоров и приставок, сразу для тех и других, для QUIC или для голоса Дискорда. Замер голоса берёт адрес из идущего разговора, вписывать ничего не нужно. Свою строку теперь можно задать и для голоса Дискорда.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/strategy-pick.js", "webpanel/www/style.css", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
-{"v": "r-82.7", "type": "reinstall", "ts": "2026-09-05T05:45:44Z", "ref": "r-82.7", "desc": "Закрыта дыра в веб-панели: при замере голоса Дискорда имя домена не проверялось и могло увести за собой постороннюю команду. Замер голоса теперь показывает результат на странице, а не пустоту. Правило, которое замер временно ставит в фаервол, больше не остаётся висеть, если замер прервали по времени.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/strategy-pick.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "r-82.7", "type": "reinstall", "ts": "2026-09-05T05:45:44Z", "ref": "r-82.7", "desc": "Закрыта дыра в веб-панели: при замере голоса Дискорда имя домена не проверялось и могло увести за собой постороннюю команду. Замер голоса теперь показывает результат на странице, а не пустоту. Правило, которое замер временно ставит в фаервол, больше не остаётся висеть, если замер прервали по времени.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/strategy-pick.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-82.8", "type": "patch", "ts": "2026-09-05T08:34:16Z", "ref": "p-82.8", "desc": "Обновление снова доставляет новые версии встроенных компонентов на роутеры, где они не обновлялись с момента установки. Туннель Telegram больше не оставляет вторую копию наблюдателя, которая каждые полминуты писала ошибку в журнал.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "lib/auto_update.sh", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
