@@ -35,7 +35,22 @@ cd "$ROOT" || exit 1
 FAILED=""
 SKIPPED=""
 
-step()   { printf '\n━━━ %s ━━━\n' "$1"; }
+# Хронометраж по стадиям. Без него «CI идёт час» — это ощущение, а не факт, и
+# резать начинают наугад. Замер стоит два вызова date на стадию и печатает в
+# конце, куда именно ушло время.
+_STEP_NAME=""; _STEP_T0=0; STEP_TIMES=""
+_step_close() {
+    [ -n "$_STEP_NAME" ] || return 0
+    _sc_t1=$(date +%s 2>/dev/null || echo 0)
+    STEP_TIMES="$STEP_TIMES
+$((_sc_t1 - _STEP_T0))	$_STEP_NAME"
+    _STEP_NAME=""
+}
+step()   {
+    _step_close
+    printf '\n━━━ %s ━━━\n' "$1"
+    _STEP_NAME="$1"; _STEP_T0=$(date +%s 2>/dev/null || echo 0)
+}
 passed() { printf '[OK]   %s\n' "$1"; }
 failed() { printf '[FAIL] %s\n' "$1"; FAILED="$FAILED|$1"; }
 skipped() { printf '[SKIP] %s — %s\n' "$1" "$2"; SKIPPED="$SKIPPED|$1"; }
@@ -275,33 +290,71 @@ if [ -n "$GO" ]; then
     # которая могла разойтись с Makefile'ами ровно так же, как уже расходилась
     # в CI (см. комментарий build-matrix.tsv про GOARM=5 vs GOARM=7).
     _modules=$(awk -F'\t' '!/^#/ && NF>1 {print $1}' build-matrix.tsv | sort -u)
+
+    # МОДУЛИ ПРОВЕРЯЮТСЯ ПАРАЛЛЕЛЬНО. Их семь, они лежат в разных каталогах и
+    # друг о друге не знают; кеш сборки Go к одновременному доступу устойчив.
+    # Замер 05.09.2026: последовательно эта стадия стоила 128 c при десяти
+    # ядрах, из которых занято было одно.
+    #
+    # Вердикты собираются в файлы, а не в переменные: подоболочка не может
+    # дописать FAILED родителю. Родитель потом печатает логи в том же порядке,
+    # что и раньше, и объявляет passed/failed сам — вывод не перемешивается.
+    _gomod_dir=$(mktemp -d "${TMPDIR:-/tmp}/z2k-go.XXXXXX") || exit 1
+    for m in $_modules; do
+        (
+            _v="$_gomod_dir/$m.verdict"; : > "$_v"
+            {
+                unfmt=$(cd "$m" && gofmt -l .)
+                if [ -n "$unfmt" ]; then
+                    printf 'не отформатировано gofmt:\n%s\n' "$unfmt"
+                    printf 'FAIL\t%s gofmt\n' "$m" >> "$_v"
+                else
+                    printf 'OK\t%s gofmt\n' "$m" >> "$_v"
+                fi
+                if (cd "$m" && "$GO" vet ./...); then
+                    printf 'OK\t%s vet\n' "$m" >> "$_v"
+                else
+                    printf 'FAIL\t%s vet\n' "$m" >> "$_v"
+                fi
+                # С -race, тулчейном GO_TEST: см. шапку. Детектор обязателен —
+                # без него локальный гейт слабее настоящего, и красный CI
+                # прилетает уже на теге.
+                if (cd "$m" && "$GO_TEST" test -race -count=1 ./...); then
+                    printf 'OK\t%s test\n' "$m" >> "$_v"
+                else
+                    printf 'FAIL\t%s test\n' "$m" >> "$_v"
+                fi
+
+                xrc=0
+                while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
+                    case "$mod" in ''|\#*) continue ;; esac
+                    [ "$mod" = "$m" ] || continue
+                    [ "$extra" = "-" ] && extra=""
+                    # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
+                    if ! (cd "$m" && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
+                            "$GO" build -trimpath -ldflags="-s -w" -o /dev/null "$pkg"); then
+                        printf 'сломана сборка linux/%s%s\n' "$goarch" "${extra:+ ($extra)}"; xrc=1
+                    fi
+                done < build-matrix.tsv
+                if [ "$xrc" -eq 0 ]; then
+                    printf 'OK\t%s кросс-компиляция\n' "$m" >> "$_v"
+                else
+                    printf 'FAIL\t%s кросс-компиляция\n' "$m" >> "$_v"
+                fi
+            } > "$_gomod_dir/$m.log" 2>&1
+        ) &
+    done
+    wait
+
     for m in $_modules; do
         printf -- '--- %s ---\n' "$m"
-        unfmt=$(cd "$m" && gofmt -l .)
-        if [ -n "$unfmt" ]; then
-            printf 'не отформатировано gofmt:\n%s\n' "$unfmt"
-            failed "$m gofmt"
-        else
-            passed "$m gofmt"
-        fi
-        if (cd "$m" && "$GO" vet ./...); then passed "$m vet"; else failed "$m vet"; fi
-        # С -race, тулчейном GO_TEST: см. шапку. Детектор обязателен — без него
-        # локальный гейт слабее настоящего, и красный CI прилетает уже на теге.
-        if (cd "$m" && "$GO_TEST" test -race -count=1 ./...); then passed "$m test"; else failed "$m test"; fi
-
-        xrc=0
-        while IFS="$(printf '\t')" read -r mod pkg bdir prefix goarch sfx extra; do
-            case "$mod" in ''|\#*) continue ;; esac
-            [ "$mod" = "$m" ] || continue
-            [ "$extra" = "-" ] && extra=""
-            # shellcheck disable=SC2086 # $extra — набор присваиваний окружения
-            if ! (cd "$m" && env CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" $extra \
-                    "$GO" build -trimpath -ldflags="-s -w" -o /dev/null "$pkg"); then
-                printf 'сломана сборка linux/%s%s\n' "$goarch" "${extra:+ ($extra)}"; xrc=1
-            fi
-        done < build-matrix.tsv
-        [ "$xrc" -eq 0 ] && passed "$m кросс-компиляция" || failed "$m кросс-компиляция"
+        [ -f "$_gomod_dir/$m.log" ] && cat "$_gomod_dir/$m.log"
+        while IFS="$(printf '\t')" read -r _verd _what; do
+            [ -n "$_what" ] || continue
+            if [ "$_verd" = "OK" ]; then passed "$_what"; else failed "$_what"; fi
+        done < "$_gomod_dir/$m.verdict"
     done
+    rm -rf "$_gomod_dir"
 else
     skipped "go-модули" "go не установлен"
 fi
@@ -376,6 +429,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+_step_close
+printf '\n━━━ куда ушло время ━━━\n'
+printf '%s\n' "$STEP_TIMES" | grep -v '^$' | sort -rn | head -8 | while IFS='	' read -r _d _n; do
+    printf '  %4s c  %s\n' "$_d" "$_n"
+done
+printf '  ────────\n  %4s c  всего\n' "$(printf '%s\n' "$STEP_TIMES" | grep -v '^$' | awk -F'	' '{s+=$1} END{print s+0}')"
+
 printf '\n━━━ ИТОГ ━━━\n'
 if [ -n "$SKIPPED" ]; then
     printf 'Пропущено (не зелёное, а непроверенное):%s\n' "$(printf '%s' "$SKIPPED" | tr '|' '\n  ')"

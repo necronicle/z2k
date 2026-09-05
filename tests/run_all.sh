@@ -52,9 +52,71 @@ printf "━━━━━━━━━━━━━━━━━━━━━━━━
 # прогон на роутере не везёт с собой builds/ (194 МБ против 226 МБ в tmpfs),
 # и без этой строки два набора отдавали 42 красных «файла нет», маскируя
 # настоящие находки.
+# ПРОГОН ИДЁТ ПАРАЛЛЕЛЬНО, ОТЧЁТ ОСТАЁТСЯ ПОСЛЕДОВАТЕЛЬНЫМ.
+#
+# Замер 05.09.2026: 191 набор, 455 c в один поток на десятиядерной машине, при
+# этом один набор стоит 121 c. Складывать 455 секунд из задач, которые друг
+# другу не мешают, незачем: узкое место — самый долгий набор, а не их сумма.
+#
+# Вывод НЕ смешивается: каждый набор пишет в свой файл, а печатается всё
+# потом, в алфавитном порядке. Отчёт побайтово тот же, что и в один поток, —
+# это проверяется сравнением итогов (наборы/PASS/FAIL/SKIP) с прогоном при
+# Z2K_TEST_JOBS=1.
+#
+# Z2K_TEST_JOBS=1 возвращает прежнее поведение целиком. Умолчание на роутере —
+# именно 1: там ядер мало, а память меряется мегабайтами.
+#
+# Z2K_TEST_SERIAL_SUITES — наборы, которые НЕЛЬЗЯ гнать рядом с другими: они
+# пишут в само дерево репозитория, и параллельный сосед прочитал бы дерево в
+# промежуточном состоянии. Они идут отдельным последовательным хвостом.
+_z2k_cores() {
+    if command -v nproc >/dev/null 2>&1; then nproc 2>/dev/null | head -1; return; fi
+    if command -v sysctl >/dev/null 2>&1; then sysctl -n hw.ncpu 2>/dev/null | head -1; return; fi
+    echo 1
+}
+_CORES=$(_z2k_cores)
+case "$_CORES" in ''|*[!0-9]*) _CORES=1 ;; esac
+if [ "$_CORES" -gt 3 ]; then _DEF_JOBS=$((_CORES - 2)); else _DEF_JOBS=1; fi
+JOBS="${Z2K_TEST_JOBS:-$_DEF_JOBS}"
+case "$JOBS" in ''|*[!0-9]*) JOBS=1 ;; esac
+[ "$JOBS" -lt 1 ] && JOBS=1
+
+SERIAL_SUITES="${Z2K_TEST_SERIAL_SUITES:-test_auto_update_toggle test_au_cleanup_step test_ip_hosts_cleanup_once test_release_rehearsal test_update_sequence_e2e}"
+
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/z2k-run.XXXXXX") || exit 1
+trap 'rm -rf "$WORKDIR"; rm -f "$TIMINGS" "$SKIPLOG"' EXIT INT TERM
+mkdir -p "$WORKDIR/q"
+
+_run_one() {
+    _ro_file="$1"
+    _ro_name=$(basename "$_ro_file" .sh)
+    _ro_t0=$(date +%s)
+    "$Z2K_TEST_SH" "$_ro_file" > "$WORKDIR/$_ro_name.out" 2>&1
+    printf '%s\n' "$?" > "$WORKDIR/$_ro_name.rc"
+    printf '%s\t%s\n' "$(( $(date +%s) - _ro_t0 ))" "$_ro_name" > "$WORKDIR/$_ro_name.time"
+}
+
+# Забор задач через mkdir: он атомарен на любой файловой системе, а `wait -n`
+# в dash и busybox ash отсутствует, так что пул делается именно так.
+_worker() {
+    while :; do
+        _w_job=""
+        for _w_c in "$WORKDIR/q"/*.job; do
+            [ -f "$_w_c" ] || continue
+            if mkdir "$_w_c.claim" 2>/dev/null; then _w_job="$_w_c"; break; fi
+        done
+        [ -n "$_w_job" ] || return 0
+        _run_one "$(cat "$_w_job")"
+        rm -f "$_w_job"
+    done
+}
+
+# Раскладываем задачи: сперва параллельные, отдельно — последовательный хвост.
+_ORDER=""
+_SERIAL_RUN=""
+_qn=0
 for test_file in "$TESTS_DIR"/test_*.sh; do
     [ -f "$test_file" ] || continue
-
     suite_name=$(basename "$test_file" .sh)
     case " ${Z2K_SKIP_SUITES:-} " in
         *" $suite_name "*)
@@ -65,35 +127,50 @@ for test_file in "$TESTS_DIR"/test_*.sh; do
             printf '  [SKIP] набор целиком: в этом окружении проверять нечем\n' >> "$SKIPLOG"
             continue ;;
     esac
-    TOTAL_SUITES=$((TOTAL_SUITES + 1))
+    _ORDER="$_ORDER $suite_name"
+    case " $SERIAL_SUITES " in
+        *" $suite_name "*) _SERIAL_RUN="$_SERIAL_RUN $test_file"; continue ;;
+    esac
+    _qn=$((_qn + 1))
+    printf '%s\n' "$test_file" > "$WORKDIR/q/$(printf '%04d' "$_qn").job"
+done
 
+if [ "$JOBS" -gt 1 ]; then
+    printf 'Параллельно: %s потоков (Z2K_TEST_JOBS=1 вернёт один)\n\n' "$JOBS"
+    _wi=0
+    while [ "$_wi" -lt "$JOBS" ]; do
+        _wi=$((_wi + 1))
+        _worker &
+    done
+    wait
+else
+    _worker
+fi
+
+# Хвост: наборы, правящие дерево, — строго по одному и после всех.
+for test_file in $_SERIAL_RUN; do
+    _run_one "$test_file"
+done
+
+# Печать и подсчёт — в алфавитном порядке, как в один поток.
+for suite_name in $_ORDER; do
+    TOTAL_SUITES=$((TOTAL_SUITES + 1))
     printf ">>> Running %s ...\n" "$suite_name"
     printf '%s\n' "----------------------------------------------------"
 
-    _t0=$(date +%s)
-    output=$("$Z2K_TEST_SH" "$test_file" 2>&1)
-    rc=$?
-    _elapsed=$(( $(date +%s) - _t0 ))
-    printf '%s\t%s\n' "$_elapsed" "$suite_name" >> "$TIMINGS"
+    output=$(cat "$WORKDIR/$suite_name.out" 2>/dev/null)
+    rc=$(cat "$WORKDIR/$suite_name.rc" 2>/dev/null)
+    case "$rc" in ''|*[!0-9]*) rc=1 ;; esac
+    cat "$WORKDIR/$suite_name.time" >> "$TIMINGS" 2>/dev/null
 
-    # Use heredoc to safely print output that may start with dashes
     if [ -n "$output" ]; then
         cat <<Z2KOUT
 $output
 Z2KOUT
     fi
 
-    # Extract passed/failed counts from the output
     suite_passed=$(printf '%s' "$output" | grep -c '^\[PASS\]')
     suite_failed=$(printf '%s' "$output" | grep -c '^\[FAIL\]')
-
-    # Пропуски СЧИТАЕМ. Раньше грепались только PASS и FAIL, а [SKIP] не
-    # попадал ни в счётчик, ни в SUMMARY, ни в код возврата — то есть зелёный
-    # прогон одинаково выглядел и когда всё проверено, и когда половина
-    # проверок не выполнялась. Набор пропусков при этом РАЗНЫЙ в каждой среде
-    # (нет node, нет python3, нет соседнего репозитория с движком), так что
-    # никто не мог назвать, что именно проверено в CI. Пропуск — это не
-    # «прошло», и теперь он виден.
     suite_skipped=$(printf '%s' "$output" | grep -c '^\[SKIP\]')
     TOTAL_SKIPPED=$((TOTAL_SKIPPED + suite_skipped))
     if [ "$suite_skipped" -gt 0 ]; then

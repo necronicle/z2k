@@ -39,28 +39,71 @@ fail() { printf '  [SURVIVED] %s\n' "$1"; SURVIVED=$((SURVIVED + 1)); SURVIVORS=
 # поведения.
 stale() { printf '  [STALE]    %s\n' "$1"; STALE=$((STALE + 1)); STALES="$STALES\n    - $1"; }
 
+# МУТАНТЫ ГОНЯЮТСЯ ПАРАЛЛЕЛЬНО.
+#
+# Каждый мутант и так работает на СВОЕЙ копии кода — репозиторий не портится, —
+# поэтому мешать друг другу им нечем; мешал только общий каталог $WORK/<вид>.
+# Замер 05.09.2026: 18 мутантов по очереди стоили 193 c, то есть 44 % всего CI
+# после того, как остальные стадии распараллелили.
+#
+# Вердикт пишется в файл, а не в счётчик: подоболочка не может увеличить KILLED
+# у родителя. Родитель печатает вердикты в исходном порядке, поэтому вывод
+# совпадает с последовательным прогоном строка в строку.
+#
+# СТРАХОВКА ОТ ПОТЕРИ. Мутант, который не запустился, — худший исход: счёт
+# покажет «все убиты», а защиты не будет. Поэтому каждый запуск учитывается, и
+# отсутствие вердикта считается выжившим, а не пропускается молча.
+MUT_SEQ=0
+BATCH=""
+VERD="$WORK/verdicts"; mkdir -p "$VERD"
+
+_mut_start() { MUT_SEQ=$((MUT_SEQ + 1)); BATCH="$BATCH $MUT_SEQ"; }
+
+_drain() {
+    wait
+    for _d_id in $BATCH; do
+        if [ ! -f "$VERD/$_d_id" ]; then
+            printf '  [ПОТЕРЯН]  мутант #%s не оставил вердикта\n' "$_d_id"
+            SURVIVED=$((SURVIVED + 1))
+            SURVIVORS="$SURVIVORS\n    - мутант #$_d_id не отработал"
+            continue
+        fi
+        _d_verd=$(cut -f1 "$VERD/$_d_id")
+        _d_desc=$(cut -f2- "$VERD/$_d_id")
+        case "$_d_verd" in
+            pass)  pass  "$_d_desc" ;;
+            fail)  fail  "$_d_desc" ;;
+            stale) stale "$_d_desc" ;;
+        esac
+    done
+    BATCH=""
+}
+
 # ---------------------------------------------------------------------------
 # Go mutants — rt-proxy/main.go
 # ---------------------------------------------------------------------------
 go_mutant() {
     desc="$1"; from="$2"; to="$3"
-    rm -rf "$WORK/go"; mkdir -p "$WORK/go"
-    cp "$ROOT/rt-proxy/"*.go "$ROOT/rt-proxy/go.mod" "$WORK/go/"
-    if ! grep -qF "$from" "$WORK/go/main.go"; then
-        stale "$desc (якорь не найден — мутант протух)"
-        return
-    fi
-    python3 - "$WORK/go/main.go" "$from" "$to" <<'PY'
+    _mut_start; _id="$MUT_SEQ"; _dir="$WORK/go.$_id"
+    (
+        mkdir -p "$_dir"
+        cp "$ROOT/rt-proxy/"*.go "$ROOT/rt-proxy/go.mod" "$_dir/"
+        if ! grep -qF "$from" "$_dir/main.go"; then
+            printf 'stale\t%s (якорь не найден — мутант протух)\n' "$desc" > "$VERD/$_id"
+            exit 0
+        fi
+        python3 - "$_dir/main.go" "$from" "$to" <<'PY'
 import sys
 path, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path, encoding='utf-8').read()
 open(path, 'w', encoding='utf-8').write(s.replace(frm, to, 1))
 PY
-    if (cd "$WORK/go" && CGO_ENABLED=0 "$GO" test -count=1 ./... >/dev/null 2>&1); then
-        fail "go: $desc"
-    else
-        pass "go: $desc"
-    fi
+        if (cd "$_dir" && CGO_ENABLED=0 "$GO" test -count=1 ./... >/dev/null 2>&1); then
+            printf 'fail\tgo: %s\n' "$desc" > "$VERD/$_id"
+        else
+            printf 'pass\tgo: %s\n' "$desc" > "$VERD/$_id"
+        fi
+    ) &
 }
 
 printf '\n=== Go mutants (rt-proxy) ===\n'
@@ -110,25 +153,30 @@ go_mutant "probe body-byte requirement removed" \
 # ---------------------------------------------------------------------------
 sh_mutant() {
     desc="$1"; from="$2"; to="$3"
-    rm -rf "$WORK/sh"; mkdir -p "$WORK/sh/files" "$WORK/sh/tests"
-    cp "$ROOT/files/z2k-warp.sh" "$WORK/sh/files/"
-    cp "$ROOT/tests/test_warp_script.sh" "$WORK/sh/tests/"
-    if ! grep -qF "$from" "$WORK/sh/files/z2k-warp.sh"; then
-        stale "$desc (якорь не найден — мутант протух)"
-        return
-    fi
-    python3 - "$WORK/sh/files/z2k-warp.sh" "$from" "$to" <<'PY'
+    _mut_start; _id="$MUT_SEQ"; _dir="$WORK/sh.$_id"
+    (
+        mkdir -p "$_dir/files" "$_dir/tests"
+        cp "$ROOT/files/z2k-warp.sh" "$_dir/files/"
+        cp "$ROOT/tests/test_warp_script.sh" "$_dir/tests/"
+        if ! grep -qF "$from" "$_dir/files/z2k-warp.sh"; then
+            printf 'stale\t%s (якорь не найден — мутант протух)\n' "$desc" > "$VERD/$_id"
+            exit 0
+        fi
+        python3 - "$_dir/files/z2k-warp.sh" "$from" "$to" <<'PY'
 import sys
 path, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path, encoding='utf-8').read()
 open(path, 'w', encoding='utf-8').write(s.replace(frm, to, 1))
 PY
-    if sh "$WORK/sh/tests/test_warp_script.sh" >/dev/null 2>&1; then
-        fail "sh: $desc"
-    else
-        pass "sh: $desc"
-    fi
+        if sh "$_dir/tests/test_warp_script.sh" >/dev/null 2>&1; then
+            printf 'fail\tsh: %s\n' "$desc" > "$VERD/$_id"
+        else
+            printf 'pass\tsh: %s\n' "$desc" > "$VERD/$_id"
+        fi
+    ) &
 }
+
+_drain
 
 printf '\n=== Shell mutants (z2k-warp.sh) ===\n'
 
@@ -178,25 +226,30 @@ sh_mutant "install starts the daemon" \
 # ---------------------------------------------------------------------------
 init_mutant() {
     desc="$1"; from="$2"; to="$3"
-    rm -rf "$WORK/init"; mkdir -p "$WORK/init/files/init.d" "$WORK/init/tests"
-    cp "$ROOT/files/init.d/S51z2k-warp" "$WORK/init/files/init.d/"
-    cp "$ROOT/tests/test_warp_init_thin.sh" "$WORK/init/tests/"
-    if ! grep -qF "$from" "$WORK/init/files/init.d/S51z2k-warp"; then
-        stale "$desc (якорь не найден — мутант протух)"
-        return
-    fi
-    python3 - "$WORK/init/files/init.d/S51z2k-warp" "$from" "$to" <<'PY2'
+    _mut_start; _id="$MUT_SEQ"; _dir="$WORK/init.$_id"
+    (
+        mkdir -p "$_dir/files/init.d" "$_dir/tests"
+        cp "$ROOT/files/init.d/S51z2k-warp" "$_dir/files/init.d/"
+        cp "$ROOT/tests/test_warp_init_thin.sh" "$_dir/tests/"
+        if ! grep -qF "$from" "$_dir/files/init.d/S51z2k-warp"; then
+            printf 'stale\t%s (якорь не найден — мутант протух)\n' "$desc" > "$VERD/$_id"
+            exit 0
+        fi
+        python3 - "$_dir/files/init.d/S51z2k-warp" "$from" "$to" <<'PY2'
 import sys
 path, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path, encoding='utf-8').read()
 open(path, 'w', encoding='utf-8').write(s.replace(frm, to, 1))
 PY2
-    if sh "$WORK/init/tests/test_warp_init_thin.sh" >/dev/null 2>&1; then
-        fail "init: $desc"
-    else
-        pass "init: $desc"
-    fi
+        if sh "$_dir/tests/test_warp_init_thin.sh" >/dev/null 2>&1; then
+            printf 'fail\tinit: %s\n' "$desc" > "$VERD/$_id"
+        else
+            printf 'pass\tinit: %s\n' "$desc" > "$VERD/$_id"
+        fi
+    ) &
 }
+
+_drain
 
 printf '\n=== Init mutants (S51z2k-warp) ===\n'
 
@@ -214,6 +267,8 @@ init_mutant "second start spawns a second daemon" \
 init_mutant "MIPS async-preempt guard removed" \
     'case "$(uname -m)" in mips*) export GODEBUG=asyncpreemptoff=1 ;; esac' \
     ':'
+
+_drain
 
 printf '\n=== mutation score: %d killed, %d survived, %d stale ===\n' "$KILLED" "$SURVIVED" "$STALE"
 if [ "$SURVIVED" -ne 0 ]; then
