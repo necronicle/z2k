@@ -1568,15 +1568,67 @@ print_insta_pins() {
     fi
 }
 
-# AdGuard Home. Если он стоит, 53-й порт держит он, а встроенный dns-proxy
-# прошивки штатно отключается — и записи `ip host`, на которых держится обход
-# Instagram и веб-WhatsApp, не спрашивает НИКТО: они целы и бесполезны, клиент
-# получает подменённый провайдером адрес. Снаружи это неотличимо от «обход не
-# работает», в логах z2k при этом ровно ничего. Разбор такого случая у живого
-# пользователя занял час именно потому, что в сводке не было видно ни AGH, ни
-# того, что наши пины перекрыты.
+# AdGuard Home. Он перехватывает DNS у клиентов, а записи `ip host`, на которых
+# держится обход Instagram и веб-WhatsApp, применяет dns-proxy прошивки. Что из
+# этого выйдет — зависит от того, где именно стоит AGH:
+#
+#   1. AGH забрал 53-й порт, dns-proxy прошивки штатно отключён, наружу AGH
+#      ходит сам. Тогда `ip host` не спрашивает НИКТО: записи целы и бесполезны,
+#      клиент получает подменённый провайдером адрес. Снаружи это неотличимо от
+#      «обход не работает», в логах z2k при этом ровно ничего. Разбор такого
+#      случая у живого пользователя занял час именно потому, что в сводке не
+#      было видно ни AGH, ни того, что наши пины перекрыты.
+#
+#   2. AGH стоит ПЕРЕД прошивочным прокси: слушает свой порт (обычно 5300, а
+#      клиентов заворачивает REDIRECT в firewall), а `upstream_dns` у него —
+#      127.0.0.1:53, то есть тот самый dns-proxy. Пины применяются ниже по
+#      цепочке и доезжают до клиента ровно так же, как без AGH.
+#
+# ЧТО БЫЛО. Считались только записи в `rewrites:`, и во второй схеме сводка
+# объявляла рабочему роутеру «обход Instagram/WhatsApp работать не будет».
+# Рефрешер в rewrites ничего не пишет и не должен (см. шапку
+# z2k-insta-ip-refresh.sh — он правит `ip host`), поэтому счёт `0/N` и крик
+# получал КАЖДЫЙ пользователь с такой схемой, независимо от того, работает у
+# него обход или нет. Проверено пакетом на живом роутере: ответ AGH на
+# www.instagram.com равен записи `ip host`, а TTL в нём на несколько секунд
+# меньше — это его кэш ответа прошивочного прокси.
+#
+# Ложная тревога в диагностике дороже отсутствующей строки: по ней идут чинить
+# то, что не сломано, и добавляют в AGH статические rewrites, которые назавтра
+# протухнут и начнут перебивать свежие `ip host`. Поэтому приговор зависит и от
+# того, остался ли прошивочный прокси в цепочке, — это видно по `upstream_dns`
+# в том же yaml, который уже открыт. А сама та починка — протухшие rewrites поверх
+# свежих `ip host` — теперь ловится отдельной строкой: см. счёт расхождений ниже.
+
+# Ведёт ли апстрим AGH обратно в dns-proxy прошивки. Петля на 53-й порт здесь
+# не ошибка конфигурации, а штатная схема: именно через неё доезжает `ip host`.
+# Разобрать надо все формы, которыми это записывают: 127.0.0.1, 127.0.0.1:53,
+# [::1]:53, udp://127.0.0.1:53 и доменный селектор AGH `[/domain/]127.0.0.1:53`.
+agh_upstream_is_local() {
+    local u="$1" host port
+    case "$u" in
+        \[/*\]*) u="${u#*\]}" ;;
+    esac
+    case "$u" in
+        udp://*|tcp://*) u="${u#*://}" ;;
+        *://*) return 1 ;;
+    esac
+    case "$u" in
+        \[*\]:*) host="${u%%\]*}"; host="${host#\[}"; port="${u##*\]:}" ;;
+        \[*\])   host="${u#\[}"; host="${host%\]}"; port=53 ;;
+        *:*:*)   host="$u"; port=53 ;;
+        *:*)     host="${u%:*}"; port="${u##*:}" ;;
+        *)       host="$u"; port=53 ;;
+    esac
+    [ "$port" = 53 ] || return 1
+    case "$host" in
+        127.*|::1|0:0:0:0:0:0:0:1|localhost) return 0 ;;
+    esac
+    return 1
+}
+
 print_agh() {
-    local y c hosts pinned inagh cmp n_pin n_hit state
+    local y c hosts pinned inagh cmp n_pin n_hit n_bad state ups upf u n_up n_uploc uploc
     y=""
     for c in "${Z2K_AGH_YAML:-}" /opt/etc/AdGuardHome/AdGuardHome.yaml \
              /opt/AdGuardHome/AdGuardHome.yaml /opt/var/AdGuardHome/AdGuardHome.yaml \
@@ -1625,17 +1677,69 @@ print_agh() {
             else if (k == "answer") a = v
             if (d != "" && a != "" && (d in own)) { print d "\t" a; d = "" }
         }' "$y" 2>/dev/null)
+    # Апстримы — из того же файла, который уже открыт. Ни одного сетевого
+    # запроса: сводку гоняют и на роутере без интернета, и она обязана
+    # оставаться быстрой и одинаковой.
+    ups=$(awk '
+        function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+        function unq(s) { gsub(/"/, "", s); gsub(Q, "", s); return s }
+        BEGIN { Q = sprintf("%c", 39)
+                KRX = "^[ \t]*[\"" Q "]?upstream_dns[\"" Q "]?[ \t]*:" }
+        !inb && $0 ~ KRX { inb = 1; kin = match($0, /[^ \t]/) - 1; next }
+        inb {
+            t = trim($0)
+            if (t == "" || substr(t, 1, 1) == "#") next
+            cur = match($0, /[^ \t]/) - 1
+            if (cur < kin || (cur == kin && substr(t, 1, 1) != "-")) { inb = 0; next }
+            if (substr(t, 1, 1) != "-") next
+            v = unq(trim(substr(t, 2)))
+            if (v != "") print v
+        }' "$y" 2>/dev/null)
+    # upstream_dns_file: у части людей список апстримов вынесен в отдельный
+    # файл, и без него схема с прошивочным прокси выглядела бы как «апстримов
+    # нет» — то есть снова ложная тревога.
+    upf=$(sed -n 's/^[[:space:]]*upstream_dns_file[[:space:]]*:[[:space:]]*//p' "$y" 2>/dev/null \
+          | head -1 | tr -d "\"' 	")
+    if [ -n "$upf" ] && [ -r "$upf" ]; then
+        ups="$ups
+$(sed 's/#.*//' "$upf" 2>/dev/null)"
+    fi
+    n_up=0; n_uploc=0; uploc=""
+    for u in $ups; do
+        n_up=$((n_up + 1))
+        if agh_upstream_is_local "$u"; then
+            n_uploc=$((n_uploc + 1))
+            [ -n "$uploc" ] || uploc="$u"
+        fi
+    done
+    # Расхождение считаем отдельно: rewrites СИЛЬНЕЕ апстрима — AGH отвечает из
+    # них, никого не спрашивая. Поэтому запись по нашему домену с чужим адресом
+    # опаснее пустых rewrites: пины рефрешер обновляет каждую ночь, а вбитая
+    # руками копия остаётся с адресами прошлой недели и перебивает свежий
+    # `ip host`. Именно так «чинят» по старой формулировке этой же строки —
+    # случай не гипотетический.
     cmp=$( { printf '%s\n' "$pinned" | sed 's/^/P /'
              printf '%s\n' "$inagh"  | sed 's/^/A /'; } \
            | awk '$1 == "P" && NF == 3 { p[$2 " " $3] = 1; np++ }
                   $1 == "A" && NF == 3 { a[$2 " " $3] = 1 }
-                  END { for (k in p) if (k in a) h++; printf "%d %d", np + 0, h + 0 }')
-    n_pin=${cmp%% *}; n_hit=${cmp##* }
+                  END { for (k in p) if (k in a) h++
+                        for (k in a) if (!(k in p)) x++
+                        printf "%d %d %d", np + 0, h + 0, x + 0 }')
+    n_pin=${cmp%% *}; n_hit=${cmp#* }; n_bad=${n_hit#* }; n_hit=${n_hit%% *}
     if [ "$n_pin" = 0 ]; then
         printf 'AdGuardHome       : %s, наших ip host нет — сверять нечего\n' "$state"
+    elif [ "$n_bad" -gt 0 ]; then
+        printf 'AdGuardHome       : %s, в rewrites %s записей по нашим доменам расходятся с ip host: rewrites сильнее апстрима, клиент получит их адреса — обход Instagram/WhatsApp сломается\n' \
+            "$state" "$n_bad"
     elif [ "$n_hit" = "$n_pin" ]; then
         printf 'AdGuardHome       : %s, наши записи в rewrites: %s/%s — синхронизированы\n' \
             "$state" "$n_hit" "$n_pin"
+    elif [ "$n_up" -gt 0 ] && [ "$n_uploc" = "$n_up" ]; then
+        printf 'AdGuardHome       : %s, в rewrites %s/%s — и это норма: апстрим %s ведёт в dns-proxy прошивки, ip host применяется там\n' \
+            "$state" "$n_hit" "$n_pin" "$uploc"
+    elif [ "$n_uploc" -gt 0 ]; then
+        printf 'AdGuardHome       : %s, в rewrites %s/%s, а в dns-proxy прошивки ведут %s апстрима из %s: на остальных запросах ip host не применяется — обход Instagram/WhatsApp будет работать через раз\n' \
+            "$state" "$n_hit" "$n_pin" "$n_uploc" "$n_up"
     else
         printf 'AdGuardHome       : %s, наши записи в rewrites: %s/%s — НЕ синхронизированы: AGH отвечает клиентам мимо ip host, обход Instagram/WhatsApp работать не будет\n' \
             "$state" "$n_hit" "$n_pin"
