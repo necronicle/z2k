@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 75,
-  "current": "p-82.13",
+  "seq": 76,
+  "current": "p-82.14",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -198,7 +198,7 @@
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
   "files/z2k-config-validator.sh": "3c4ca25d412902825a407e9af0725bca049e0cd278306c4514c12b98ca9276d4",
   "files/z2k-detect-watchdog.sh": "8dd2a50edeb1c7001c6dbe654cf0e1f120ccf2e8c9659074003fb0fba532b5bf",
-  "files/z2k-diag.sh": "87d8846ae198604c34edcdd31a979a489bc4c309ea3cd9609b9f963f2e328b76",
+  "files/z2k-diag.sh": "14c1594aa8e8c982511da9a34acd066ec8928d7f19b255d0f768f8309cff50d5",
   "files/z2k-dns-check.sh": "e568560eeb992b0e118b7422bae9ed3e240bbe91d2fc00395102e31a9db60031",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "690a1f98afad41a4fb6452c789a08c3928939bf8a96c33547d07dad0790fde00",
@@ -257,7 +257,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "931d2cb7f9346be990aaa7338546601f224efc6984e0be301bebac397f0c13b3",
+  "webpanel/www/index.html": "004e8b5144c3997bb25c45e02b969b7616a1ebe7259ef6b5e7ab85b2fe59327b",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -524,6 +524,7 @@
 {"v": "p-82.10", "type": "patch", "ts": "2026-09-05T12:03:19Z", "ref": "p-82.10", "desc": "Роутеры на MIPS и x86 наконец получают новые версии встроенных компонентов, включая клиент Telegram: до сих пор обновление их не находило и оставляло те, что были поставлены при установке.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-82.11", "type": "patch", "ts": "2026-09-05T13:34:09Z", "ref": "p-82.11", "desc": "Выключенный обход больше не оставляет за собой правила, из-за которых начало каждого соединения продолжало идти через процессор вместо аппаратного ускорителя. И новый спонсор проекта в благодарностях.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/ndm/94-z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-82.12", "type": "patch", "ts": "2026-09-05T14:33:15Z", "ref": "p-82.12", "desc": "Экран входа в панель больше не съезжает вправо: бокового меню на нём нет, и место под него больше не резервируется.", "changed_files": ["webpanel/www/index.html", "webpanel/www/style.css", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-82.13", "type": "patch", "ts": "2026-09-05T16:33:54Z", "ref": "p-82.13", "desc": "Роутеры с выключенным обходом снова обновляются: раньше обновление на них падало на перезапуске службы и каждую ночь откатывалось.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-82.13", "type": "patch", "ts": "2026-09-05T16:33:54Z", "ref": "p-82.13", "desc": "Роутеры с выключенным обходом снова обновляются: раньше обновление на них падало на перезапуске службы и каждую ночь откатывалось.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-82.14", "type": "patch", "ts": "2026-09-05T17:56:37Z", "ref": "p-82.14", "desc": "Сводка диагностики больше не объявляет поломкой рабочую связку AdGuard Home с прошивочным прокси, а вместо этого ловит устаревшие записи в нём, которые действительно ломают обход.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
