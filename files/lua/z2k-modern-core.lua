@@ -50,6 +50,40 @@ function z2k_nohost_key(desync)
     return "nohost"
 end
 
+-- Per-host rotation-bucket split for the circular rotator. Plug into bol-van's
+-- circular() via arg `hostkey=z2k_hostkey_split` (automate_host_record extension
+-- point, см. zapret-auto.lua), exactly like z2k_nohost_key above.
+--
+-- Problem: circular's stock standard_hostkey cuts the hostname to its
+-- registrable domain (arg nld=N, default 2) before keying rotation state, so
+-- updates.discord.com folds into discord.com and SHARES its autostate bucket —
+-- both rotate on one (pool,key) cell. When two siblings of the same registrable
+-- domain need DIFFERENT working legs — updates.discord.com is a Rust/rustls
+-- updater whose ~1.8 KB ClientHello a browser-tuned leg does not punch, while
+-- discord.com is Chromium — one bucket cannot satisfy both: the leg that unblocks
+-- one breaks the other.
+--
+-- z2k_hostkey_split gives each LISTED hostname its own bucket by skipping the nld
+-- cut for it (keyed on the full hostname), mirroring standard_hostkey's
+-- family_split |4/|6 suffix so bucket semantics are otherwise identical. Every
+-- hostname NOT listed keeps stock behavior via standard_hostkey — a no-op for the
+-- rest of the pool. Contract: tests/test_z2k_hostkey_split.lua.
+local Z2K_HOSTKEY_SPLIT = {
+    ["updates.discord.com"] = true,
+}
+function z2k_hostkey_split(desync)
+    local t = desync and desync.track
+    local h = t and t.hostname
+    if h and #h > 0 and not (t and t.hostname_is_ip) and Z2K_HOSTKEY_SPLIT[h] then
+        local arg = desync.arg or {}
+        if arg.family_split ~= "0" and desync.dis then
+            if desync.dis.ip6 then return h .. "|6" else return h .. "|4" end
+        end
+        return h
+    end
+    return standard_hostkey(desync)
+end
+
 local function z2k_num(v, fallback)
     local n = tonumber(v)
     if n == nil then return fallback end

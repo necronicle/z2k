@@ -709,6 +709,7 @@ jobs:
           lua5.3 tests/test_alert_detector.lua
           lua5.3 tests/test_http_classifier.lua
           lua5.3 tests/test_quic_silence_detector.lua
+          lua5.3 tests/test_z2k_hostkey_split.lua
 
   mutation:
     name: Mutation Testing

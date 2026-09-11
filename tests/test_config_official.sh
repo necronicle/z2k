@@ -155,6 +155,69 @@ INPUT4="--lua-desync=circular:key=test"
 RESULT4=$(ensure_circular_nld2 "$INPUT4")
 assert_contains "nld2: adds nld=2 to minimal circular" "nld=2" "$RESULT4"
 
+# ==============================================================================
+# TEST: ensure_circular_hostkey_split (extracted inline from
+# generate_nfqws2_opt_from_strategies). Replicated here — it is a nested function.
+# Contract: append hostkey=z2k_hostkey_split to a circular token that has no key
+# generator yet; leave an explicit hostkey= untouched; never touch non-circular
+# tokens. The lua side (z2k_hostkey_split in files/lua/z2k-modern-core.lua) is
+# covered by tests/test_z2k_hostkey_split.lua. Ordering note: this runs after
+# ensure_circular_nld2 and before ensure_circular_doc_args/in_range, which keep
+# unknown circular args ($rest), so the appended hostkey= survives to the engine.
+# ==============================================================================
+
+ensure_circular_hostkey_split() {
+    local input="$1"
+    local out="" token="" opts="" part="" has_hostkey=""
+    local old_ifs="$IFS"
+
+    for token in $input; do
+        case "$token" in
+            --lua-desync=circular:*)
+                opts="${token#--lua-desync=circular:}"
+                has_hostkey=""
+                IFS=':'
+                for part in $opts; do
+                    case "$part" in
+                        hostkey=*) has_hostkey="1" ;;
+                    esac
+                done
+                IFS="$old_ifs"
+                [ -z "$has_hostkey" ] && token="${token}:hostkey=z2k_hostkey_split"
+                ;;
+        esac
+        out="${out:+$out }$token"
+    done
+
+    IFS="$old_ifs"
+    printf '%s' "$out"
+}
+
+printf "\n--- ensure_circular_hostkey_split ---\n"
+
+# Test: adds the split key generator to a circular token that has none
+HK_IN1="--filter-tcp=443 --lua-desync=circular:fails=3:time=60:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1"
+HK_R1=$(ensure_circular_hostkey_split "$HK_IN1")
+assert_contains "hostkey_split: adds hostkey=z2k_hostkey_split" "hostkey=z2k_hostkey_split" "$HK_R1"
+assert_contains "hostkey_split: preserves key=rkn_tcp" "key=rkn_tcp" "$HK_R1"
+assert_contains "hostkey_split: preserves nld=2" "nld=2" "$HK_R1"
+assert_contains "hostkey_split: preserves non-circular tokens" "--lua-desync=fake:strategy=1" "$HK_R1"
+
+# Test: idempotent — a second pass does not append a second hostkey
+HK_R1B=$(ensure_circular_hostkey_split "$HK_R1")
+assert_eq "hostkey_split: idempotent (no double-append)" "$HK_R1" "$HK_R1B"
+
+# Test: an explicit hostkey is left untouched (e.g. discord_udp's z2k_nohost_key)
+HK_IN2="--lua-desync=circular:fails=3:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:strategy=1"
+HK_R2=$(ensure_circular_hostkey_split "$HK_IN2")
+assert_contains "hostkey_split: keeps existing z2k_nohost_key" "hostkey=z2k_nohost_key" "$HK_R2"
+assert_not_contains "hostkey_split: does not override an explicit hostkey" "z2k_hostkey_split" "$HK_R2"
+
+# Test: non-circular token unchanged
+HK_IN3="--lua-desync=fake:payload=tls_client_hello:dir=out"
+HK_R3=$(ensure_circular_hostkey_split "$HK_IN3")
+assert_eq "hostkey_split: non-circular token unchanged" "$HK_IN3" "$HK_R3"
+
 printf "\n--- Austerus mode removed (all_tcp443) ---\n"
 
 # Режим Austerusj снят 2026-08-04. Раньше здесь лежал тест, который ничего не
@@ -667,6 +730,23 @@ assert_contains     "ручной Strategy.txt: inseq=4096 поставлен"  
 assert_contains     "ручной Strategy.txt: retrans=3 поставлен"     "retrans=3"         "$_rkn_hand"
 _dups=$(printf '%s' "$_rkn_hand" | grep -o "retrans=" | wc -l | tr -d ' ')
 assert_eq "ручной Strategy.txt: retrans не задвоен" "1" "$_dups"
+
+# ── e2e: hostkey=z2k_hostkey_split доезжает до вывода реального генератора ────
+# Не инлайн-копию трансформа, а настоящий generate_nfqws2_opt_from_strategies:
+# ensure_circular_hostkey_split вешает hostkey= на rkn-circular, и он переживает
+# всю цепочку (nld2 → hostkey_split → doc_args → in_range → failure_detector),
+# т.к. каждый последующий трансформ либо сохраняет неизвестные аргументы circular,
+# либо не трогает сам токен. Разбор в комментарии у функции в config_official.sh.
+printf "\n--- e2e: hostkey_split в выводе генератора ---\n"
+OUT_HK=$(run_generator "hostkey-split" "" "_seed_tls_circulars")
+_rkn_hk=$(get_rkn_tcp_arm_line "$OUT_HK" | tr ' ' '\n' | grep -- '--lua-desync=circular:' | head -1)
+assert_contains "e2e: rkn-circular несёт hostkey=z2k_hostkey_split" "hostkey=z2k_hostkey_split" "$_rkn_hk"
+assert_contains "e2e: split на том же токене, что key=rkn_tcp" "key=rkn_tcp" "$_rkn_hk"
+_dups_hk=$(printf '%s' "$_rkn_hk" | grep -o "hostkey=" | wc -l | tr -d ' ')
+assert_eq "e2e: hostkey не задвоен" "1" "$_dups_hk"
+# Точечность: yt_tcp — чужой пул, split на него не вешается.
+_yt_hk=$(printf '%s\n' "$OUT_HK" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" | grep -F "key=yt_tcp" | head -1 | tr ' ' '\n' | grep -- '--lua-desync=circular:' | head -1)
+assert_not_contains "e2e: yt_tcp не получает split (rkn-only)" "z2k_hostkey_split" "$_yt_hk"
 
 # NFQWS2_TCP_PKT_IN — окно входящих в пакетах — 10: детектору успеха нужно
 # inseq=4096 + пакет, десять — двойной запас; прежние 50 кормили сторож обрыва.

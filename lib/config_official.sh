@@ -299,9 +299,48 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
+    # Разнесение ключа ротации для отдельных хостов rkn. Вешает
+    # hostkey=z2k_hostkey_split на circular-директиву, если генератор ключа ещё
+    # не задан. Функция (files/lua/z2k-modern-core.lua) отдаёт перечисленным в ней
+    # хостам (updates.discord.com — rustls-апдейтер, которому нужна не та нога, что
+    # браузерному discord.com) собственную ячейку ротации, а всем прочим —
+    # нетронутый сток standard_hostkey. Точечно только для rkn_tcp: это пул, куда
+    # попадает updates.discord.com. Ставится ПОСЛЕ nld2, но раньше doc_args/
+    # in_range — те сохраняют неизвестные им аргументы circular ($rest), поэтому
+    # hostkey= доедет до движка (проверяется в test_config_official.sh).
+    ensure_circular_hostkey_split() {
+        local input="$1"
+        local out="" token="" opts="" part="" has_hostkey=""
+        local old_ifs="$IFS"
+
+        set -f  # без глоба: токены могут нести *,?,[ ] из правленого Strategy.txt
+        for token in $input; do
+            case "$token" in
+                --lua-desync=circular:*)
+                    opts="${token#--lua-desync=circular:}"
+                    has_hostkey=""
+                    IFS=':'
+                    for part in $opts; do
+                        case "$part" in
+                            hostkey=*) has_hostkey="1" ;;
+                        esac
+                    done
+                    IFS="$old_ifs"
+                    [ -z "$has_hostkey" ] && token="${token}:hostkey=z2k_hostkey_split"
+                    ;;
+            esac
+            out="${out:+$out }$token"
+        done
+        set +f
+
+        IFS="$old_ifs"
+        printf '%s' "$out"
+    }
+
     youtube_tcp=$(ensure_circular_nld2 "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_nld2 "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
+    rkn_tcp=$(ensure_circular_hostkey_split "$rkn_tcp")
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
 
     # ── Окно счётчика провалов (`time=`) ─────────────────────────────────────

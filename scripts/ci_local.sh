@@ -271,7 +271,8 @@ done
 if [ -n "$LUA_BIN" ]; then
     _lua_rc=0
     for _h in tests/test_tcp16_lua.lua tests/test_alert_detector.lua \
-              tests/test_http_classifier.lua tests/test_quic_silence_detector.lua; do
+              tests/test_http_classifier.lua tests/test_quic_silence_detector.lua \
+              tests/test_z2k_hostkey_split.lua; do
         "$LUA_BIN" "$_h" || _lua_rc=1
     done
     if [ "$_lua_rc" = "0" ]; then

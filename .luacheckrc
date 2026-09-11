@@ -37,6 +37,8 @@ globals = {
     "automate_failure_counter",
     -- z2k-modern-core.lua hostkey fn (returns "nohost" for IP/no-hostname flows)
     "z2k_nohost_key",
+    -- z2k-modern-core.lua hostkey fn (gives listed hosts their own rotation bucket)
+    "z2k_hostkey_split",
     -- z2k-state-persist.lua exported API table
     "z2k_state_persist",
     -- z2k-detectors.lua internal helper, top-level so earlier detector
