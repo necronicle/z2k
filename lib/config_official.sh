@@ -340,7 +340,19 @@ generate_nfqws2_opt_from_strategies() {
     youtube_tcp=$(ensure_circular_nld2 "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_nld2 "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
-    rkn_tcp=$(ensure_circular_hostkey_split "$rkn_tcp")
+    # ГЕЙТ ПО ФАЙЛУ, КАК У ВСЕХ ОСТАЛЬНЫХ ПРОВОДОК В ЭТОЙ ФУНКЦИИ.
+    #
+    # Движок резолвит имя генератора ключа по _G и на неизвестном валится в
+    # error() НА КАЖДОМ ПАКЕТЕ профиля. Это не «ключ не разнёсся» — это профиль
+    # РКН становится пустышкой при зелёном статусе службы и без единой строчки
+    # в журнале. z2k-modern-core.lua шипуется всегда, так что сегодня гейт не
+    # стреляет; он стоит ровно на тот случай, когда файл не доехал — недокачан,
+    # снесён, не тот путь.
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-modern-core.lua" ]; then
+        rkn_tcp=$(ensure_circular_hostkey_split "$rkn_tcp")
+    else
+        echo "WARN: lua/z2k-modern-core.lua отсутствует — ключ ротации не разносится по хостам" 1>&2
+    fi
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
 
     # ── Окно счётчика провалов (`time=`) ─────────────────────────────────────
@@ -2580,6 +2592,54 @@ EOF
         rm -f "$config_file"
         config_file="$_cfg_target"
         return 1
+    fi
+
+    # ПРОВЕРКА КАНДИДАТА ДВИЖКОМ — ТОЛЬКО КОГДА В ДЕЛЕ ЕСТЬ РУЧНОЕ.
+    #
+    # Пользовательские стратегии (lists/custom-strategies/*.txt) пишет человек,
+    # и синтаксическая ошибка в них проходит все наши проверки: _z2k_file_sane
+    # ловит только двоичный мусор. Дальше конфиг подменяется, служба
+    # перезапускается, демон не стартует — и обхода нет вовсе, при том что
+    # «конфиг сгенерирован успешно». Найти это можно лишь по тому, что интернет
+    # у человека стал работать иначе.
+    #
+    # У движка для этого есть `--dry-run`: он разбирает параметры, грузит списки
+    # и блобы, но очередь не занимает — то есть безопасен и в этот момент, и
+    # вообще. Мы его уже используем в z2k-config-validator.sh и в init-скрипте
+    # (там как объяснялку постфактум, когда демон уже упал). Здесь он стоит там,
+    # где от него есть польза: ДО подмены боевого файла.
+    #
+    # Почему не всегда. Разбор грузит все хостлисты, а конфиг перегенерируется
+    # на каждый тумблер в панели — платить этим за каждое переключение незачем.
+    # Риск приносит именно рукописное содержимое: поставляемое приезжает с
+    # проверкой sha256 на каждом хопе обновления. Поэтому гейт по наличию
+    # непустых файлов в custom-strategies.
+    #
+    # Отсутствие движка или сборка без --dry-run — не повод отказывать: на этих
+    # путях (первая установка, чужая сборка) проверять нечем, и прежнее
+    # поведение не меняется.
+    _cfg_has_custom=0
+    for _cc in "${ZAPRET2_DIR:-/opt/zapret2}"/lists/custom-strategies/*.txt; do
+        [ -s "$_cc" ] && { _cfg_has_custom=1; break; }
+    done
+    if [ "$_cfg_has_custom" = "1" ]; then
+        _cfg_bin="${ZAPRET2_DIR:-/opt/zapret2}/nfq2/nfqws2"
+        if [ -x "$_cfg_bin" ] && "$_cfg_bin" --help 2>&1 | grep -q -- '--dry-run'; then
+            # NFQWS2_OPT берём из КАНДИДАТА, а не из боевого конфига.
+            _cfg_opt=$( . "$config_file" >/dev/null 2>&1; printf '%s' "$NFQWS2_OPT" )
+            # shellcheck disable=SC2086  # строка опций обязана разъехаться по словам
+            if ! _cfg_dry=$("$_cfg_bin" --dry-run --qnum=299 $_cfg_opt 2>&1); then
+                print_error "Движок отверг сгенерированный конфиг — боевой файл оставлен прежним."
+                print_error "Причина (nfqws2 --dry-run):"
+                printf '%s\n' "$_cfg_dry" \
+                    | grep -viE '^loading|^Loaded |^Running as|^github version|^self-built|^$' \
+                    | tail -n 5 | sed 's/^/    /'
+                print_error "Проверьте свои файлы в lists/custom-strategies/."
+                rm -f "$config_file"
+                config_file="$_cfg_target"
+                return 1
+            fi
+        fi
     fi
 
     # Подмена одним rename: на той же ФС это атомарно, и сорсящий init-скрипт
