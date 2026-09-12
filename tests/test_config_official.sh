@@ -155,69 +155,6 @@ INPUT4="--lua-desync=circular:key=test"
 RESULT4=$(ensure_circular_nld2 "$INPUT4")
 assert_contains "nld2: adds nld=2 to minimal circular" "nld=2" "$RESULT4"
 
-# ==============================================================================
-# TEST: ensure_circular_hostkey_split (extracted inline from
-# generate_nfqws2_opt_from_strategies). Replicated here — it is a nested function.
-# Contract: append hostkey=z2k_hostkey_split to a circular token that has no key
-# generator yet; leave an explicit hostkey= untouched; never touch non-circular
-# tokens. The lua side (z2k_hostkey_split in files/lua/z2k-modern-core.lua) is
-# covered by tests/test_z2k_hostkey_split.lua. Ordering note: this runs after
-# ensure_circular_nld2 and before ensure_circular_doc_args/in_range, which keep
-# unknown circular args ($rest), so the appended hostkey= survives to the engine.
-# ==============================================================================
-
-ensure_circular_hostkey_split() {
-    local input="$1"
-    local out="" token="" opts="" part="" has_hostkey=""
-    local old_ifs="$IFS"
-
-    for token in $input; do
-        case "$token" in
-            --lua-desync=circular:*)
-                opts="${token#--lua-desync=circular:}"
-                has_hostkey=""
-                IFS=':'
-                for part in $opts; do
-                    case "$part" in
-                        hostkey=*) has_hostkey="1" ;;
-                    esac
-                done
-                IFS="$old_ifs"
-                [ -z "$has_hostkey" ] && token="${token}:hostkey=z2k_hostkey_split"
-                ;;
-        esac
-        out="${out:+$out }$token"
-    done
-
-    IFS="$old_ifs"
-    printf '%s' "$out"
-}
-
-printf "\n--- ensure_circular_hostkey_split ---\n"
-
-# Test: adds the split key generator to a circular token that has none
-HK_IN1="--filter-tcp=443 --lua-desync=circular:fails=3:time=60:key=rkn_tcp:nld=2 --lua-desync=fake:strategy=1"
-HK_R1=$(ensure_circular_hostkey_split "$HK_IN1")
-assert_contains "hostkey_split: adds hostkey=z2k_hostkey_split" "hostkey=z2k_hostkey_split" "$HK_R1"
-assert_contains "hostkey_split: preserves key=rkn_tcp" "key=rkn_tcp" "$HK_R1"
-assert_contains "hostkey_split: preserves nld=2" "nld=2" "$HK_R1"
-assert_contains "hostkey_split: preserves non-circular tokens" "--lua-desync=fake:strategy=1" "$HK_R1"
-
-# Test: idempotent — a second pass does not append a second hostkey
-HK_R1B=$(ensure_circular_hostkey_split "$HK_R1")
-assert_eq "hostkey_split: idempotent (no double-append)" "$HK_R1" "$HK_R1B"
-
-# Test: an explicit hostkey is left untouched (e.g. discord_udp's z2k_nohost_key)
-HK_IN2="--lua-desync=circular:fails=3:key=discord_udp:nld=2:hostkey=z2k_nohost_key --lua-desync=fake:strategy=1"
-HK_R2=$(ensure_circular_hostkey_split "$HK_IN2")
-assert_contains "hostkey_split: keeps existing z2k_nohost_key" "hostkey=z2k_nohost_key" "$HK_R2"
-assert_not_contains "hostkey_split: does not override an explicit hostkey" "z2k_hostkey_split" "$HK_R2"
-
-# Test: non-circular token unchanged
-HK_IN3="--lua-desync=fake:payload=tls_client_hello:dir=out"
-HK_R3=$(ensure_circular_hostkey_split "$HK_IN3")
-assert_eq "hostkey_split: non-circular token unchanged" "$HK_IN3" "$HK_R3"
-
 printf "\n--- Austerus mode removed (all_tcp443) ---\n"
 
 # Режим Austerusj снят 2026-08-04. Раньше здесь лежал тест, который ничего не
@@ -347,10 +284,6 @@ run_generator() {
         cp "$SCRIPT_DIR/files/lua/z2k-alert.lua" "$root/lua/" 2>/dev/null || true
         cp "$SCRIPT_DIR/files/lua/z2k-quic-silence.lua" "$root/lua/" 2>/dev/null || true
     }
-    # Генератор ключа ротации (z2k_hostkey_split) — тоже резолвится по имени и
-    # тоже проводится только при наличии файла. Мок обязан повторять установку.
-    [ "${Z2K_TEST_NO_HOSTKEY_LUA:-0}" = "1" ] \
-        || cp "$SCRIPT_DIR/files/lua/z2k-modern-core.lua" "$root/lua/" 2>/dev/null || true
     [ -n "$extra_cb" ] && eval "$extra_cb \"$root\""
     ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null )
     rm -rf "$root"
@@ -701,14 +634,6 @@ assert_not_contains "yt_quic: TCP-обёртку на UDP не вешаем" "z2
 
 # Файлов модулей нет — имя функции резолвить некому, движок падал бы в error()
 # на каждом пакете профиля. Тот же гейт, что у подстановки имени 16 КБ.
-# Тот же гейт у генератора ключа: без файла модуля движок валился бы в error()
-# на каждом пакете профиля РКН, а снаружи это «обход не работает» при зелёной
-# службе.
-OUT_HK_NOLUA=$(Z2K_TEST_NO_HOSTKEY_LUA=1 run_generator "hostkey-nolua" "" "_seed_tls_circulars")
-_rkn_hk_nolua=$(get_rkn_tcp_arm_line "$OUT_HK_NOLUA" | tr ' ' '\n' | grep -- '--lua-desync=circular:' | head -1)
-assert_not_contains "без файла модуля ключ не разносится" "hostkey=" "$_rkn_hk_nolua"
-assert_contains     "без файла модуля штатный ключ на месте" "nld=2"  "$_rkn_hk_nolua"
-
 OUT_DET_NOLUA=$(Z2K_TEST_NO_DETECTOR_LUA=1 run_generator "detect-nolua" "" "_seed_tls_circulars")
 _rkn_nolua=$(get_rkn_tcp_arm_line "$OUT_DET_NOLUA" | tr ' ' '\n' | grep -- '--lua-desync=circular:' | head -1)
 assert_not_contains "без файла модуля детектор не проводится" "failure_detector=" "$_rkn_nolua"
@@ -743,23 +668,6 @@ assert_contains     "ручной Strategy.txt: retrans=3 поставлен"   
 _dups=$(printf '%s' "$_rkn_hand" | grep -o "retrans=" | wc -l | tr -d ' ')
 assert_eq "ручной Strategy.txt: retrans не задвоен" "1" "$_dups"
 
-# ── e2e: hostkey=z2k_hostkey_split доезжает до вывода реального генератора ────
-# Не инлайн-копию трансформа, а настоящий generate_nfqws2_opt_from_strategies:
-# ensure_circular_hostkey_split вешает hostkey= на rkn-circular, и он переживает
-# всю цепочку (nld2 → hostkey_split → doc_args → in_range → failure_detector),
-# т.к. каждый последующий трансформ либо сохраняет неизвестные аргументы circular,
-# либо не трогает сам токен. Разбор в комментарии у функции в config_official.sh.
-printf "\n--- e2e: hostkey_split в выводе генератора ---\n"
-OUT_HK=$(run_generator "hostkey-split" "" "_seed_tls_circulars")
-_rkn_hk=$(get_rkn_tcp_arm_line "$OUT_HK" | tr ' ' '\n' | grep -- '--lua-desync=circular:' | head -1)
-assert_contains "e2e: rkn-circular несёт hostkey=z2k_hostkey_split" "hostkey=z2k_hostkey_split" "$_rkn_hk"
-assert_contains "e2e: split на том же токене, что key=rkn_tcp" "key=rkn_tcp" "$_rkn_hk"
-_dups_hk=$(printf '%s' "$_rkn_hk" | grep -o "hostkey=" | wc -l | tr -d ' ')
-assert_eq "e2e: hostkey не задвоен" "1" "$_dups_hk"
-# Точечность: yt_tcp — чужой пул, split на него не вешается.
-_yt_hk=$(printf '%s\n' "$OUT_HK" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" | grep -F "key=yt_tcp" | head -1 | tr ' ' '\n' | grep -- '--lua-desync=circular:' | head -1)
-assert_not_contains "e2e: yt_tcp не получает split (rkn-only)" "z2k_hostkey_split" "$_yt_hk"
-
 # NFQWS2_TCP_PKT_IN — окно входящих в пакетах — 10: детектору успеха нужно
 # inseq=4096 + пакет, десять — двойной запас; прежние 50 кормили сторож обрыва.
 _root_pkt="${MOCK_DIR}/pkt-in"; rm -rf "$_root_pkt"; mkdir -p "$_root_pkt/lists"
@@ -774,72 +682,6 @@ assert_eq "Z2K_USE_MID_STREAM_DETECTOR больше не пишется" "" "$(g
 assert_eq "Z2K_SILENCE_DETECT больше не пишется"  "" "$(grep -E '^Z2K_SILENCE_DETECT=' "$_root_pkt/config" | head -1)"
 assert_eq "Z2K_SILENCE_SECONDS больше не пишется" "" "$(grep -E '^Z2K_SILENCE_SECONDS=' "$_root_pkt/config" | head -1)"
 rm -rf "$_root_pkt"
-
-# ==============================================================================
-# TEST: кандидат конфига проверяется движком ДО подмены боевого
-#
-# Рукописные стратегии человек пишет руками, и синтаксическая ошибка в них
-# проходит все наши проверки: _z2k_file_sane ловит только двоичный мусор.
-# Дальше конфиг подменяется, служба перезапускается, демон не стартует — обхода
-# нет вовсе, при «успешно сгенерировано». Поэтому кандидат прогоняется через
-# `nfqws2 --dry-run` (он разбирает параметры, но очередь не занимает), и при
-# отказе боевой файл остаётся прежним.
-#
-# Движок здесь — заглушка: настоящего бинарника роутера в прогоне нет, а
-# проверять надо нашу обвязку — что мы его зовём, читаем код возврата и при
-# отказе НЕ подменяем файл.
-# ==============================================================================
-printf "\n--- кандидат конфига проверяется движком до подмены ---\n"
-
-_dry_root="${MOCK_DIR}/dryrun"
-_mk_dry_root() {
-    rm -rf "$_dry_root"
-    mkdir -p "$_dry_root/lists/custom-strategies" "$_dry_root/nfq2" \
-             "$_dry_root/extra_strats/TCP/RKN" "$_dry_root/lua"
-    printf 'ENABLED=1\nMARKER_OLD=1\n' > "$_dry_root/config"
-    # Непустой пользовательский файл — именно он включает проверку.
-    printf -- '--filter-tcp=443 --filter-l7=tls --lua-desync=fake:blob=fake_default_tls:strategy=1\n' \
-        > "$_dry_root/lists/custom-strategies/rkn_tcp.txt"
-    printf 'example.com\n' > "$_dry_root/extra_strats/TCP/RKN/List.txt"
-    cat > "$_dry_root/nfq2/nfqws2" <<STUB
-#!/bin/sh
-case "\$1" in
-    --help) echo " --dry-run  ; verify parameters and exit"; exit 0 ;;
-esac
-echo "loading hostlist"
-echo "\$DRY_MSG"
-exit \${DRY_RC:-0}
-STUB
-    chmod +x "$_dry_root/nfq2/nfqws2"
-}
-
-# 1. Движок отвергает кандидата — боевой конфиг обязан уцелеть.
-_mk_dry_root
-_rc=0
-( DRY_RC=1 DRY_MSG="bad option --lua-desync=nonsense" ZAPRET2_DIR="$_dry_root" \
-  create_official_config "$_dry_root/config" >/dev/null 2>&1 ) || _rc=$?
-_rc_nonzero=0; [ "$_rc" != "0" ] && _rc_nonzero=1
-assert_eq "движок отверг кандидата: генерация вернула ошибку" "1" "$_rc_nonzero"
-assert_contains "движок отверг кандидата: боевой конфиг не тронут" \
-    "MARKER_OLD=1" "$(cat "$_dry_root/config" 2>/dev/null)"
-assert_eq "движок отверг кандидата: временный файл убран" "0" \
-    "$(find "$_dry_root" -name 'config.new.*' 2>/dev/null | wc -l | tr -d ' ')"
-
-# 2. Движок принял — конфиг подменяется как обычно.
-_mk_dry_root
-( DRY_RC=0 ZAPRET2_DIR="$_dry_root" create_official_config "$_dry_root/config" >/dev/null 2>&1 )
-assert_not_contains "движок принял: конфиг заменён новым" \
-    "MARKER_OLD=1" "$(cat "$_dry_root/config" 2>/dev/null)"
-
-# 3. Нет рукописных стратегий — проверку не гоняем вовсе (она не бесплатна:
-#    разбор грузит все хостлисты, а конфиг пересобирается на каждый тумблер).
-_mk_dry_root
-rm -f "$_dry_root/lists/custom-strategies/"*.txt
-( DRY_RC=1 DRY_MSG="этот отказ не должен ни на что повлиять" ZAPRET2_DIR="$_dry_root" \
-  create_official_config "$_dry_root/config" >/dev/null 2>&1 )
-assert_not_contains "без рукописных стратегий проверка не гоняется" \
-    "MARKER_OLD=1" "$(cat "$_dry_root/config" 2>/dev/null)"
-rm -rf "$_dry_root"
 
 printf "\n--- corrupt pool Strategy.txt: fail closed, keep old config (field 2026-08-06) ---\n"
 

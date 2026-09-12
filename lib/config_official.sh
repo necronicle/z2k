@@ -299,60 +299,9 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
-    # Разнесение ключа ротации для отдельных хостов rkn. Вешает
-    # hostkey=z2k_hostkey_split на circular-директиву, если генератор ключа ещё
-    # не задан. Функция (files/lua/z2k-modern-core.lua) отдаёт перечисленным в ней
-    # хостам (updates.discord.com — rustls-апдейтер, которому нужна не та нога, что
-    # браузерному discord.com) собственную ячейку ротации, а всем прочим —
-    # нетронутый сток standard_hostkey. Точечно только для rkn_tcp: это пул, куда
-    # попадает updates.discord.com. Ставится ПОСЛЕ nld2, но раньше doc_args/
-    # in_range — те сохраняют неизвестные им аргументы circular ($rest), поэтому
-    # hostkey= доедет до движка (проверяется в test_config_official.sh).
-    ensure_circular_hostkey_split() {
-        local input="$1"
-        local out="" token="" opts="" part="" has_hostkey=""
-        local old_ifs="$IFS"
-
-        set -f  # без глоба: токены могут нести *,?,[ ] из правленого Strategy.txt
-        for token in $input; do
-            case "$token" in
-                --lua-desync=circular:*)
-                    opts="${token#--lua-desync=circular:}"
-                    has_hostkey=""
-                    IFS=':'
-                    for part in $opts; do
-                        case "$part" in
-                            hostkey=*) has_hostkey="1" ;;
-                        esac
-                    done
-                    IFS="$old_ifs"
-                    [ -z "$has_hostkey" ] && token="${token}:hostkey=z2k_hostkey_split"
-                    ;;
-            esac
-            out="${out:+$out }$token"
-        done
-        set +f
-
-        IFS="$old_ifs"
-        printf '%s' "$out"
-    }
-
     youtube_tcp=$(ensure_circular_nld2 "$youtube_tcp")
     youtube_gv_tcp=$(ensure_circular_nld2 "$youtube_gv_tcp")
     rkn_tcp=$(ensure_circular_nld2 "$rkn_tcp")
-    # ГЕЙТ ПО ФАЙЛУ, КАК У ВСЕХ ОСТАЛЬНЫХ ПРОВОДОК В ЭТОЙ ФУНКЦИИ.
-    #
-    # Движок резолвит имя генератора ключа по _G и на неизвестном валится в
-    # error() НА КАЖДОМ ПАКЕТЕ профиля. Это не «ключ не разнёсся» — это профиль
-    # РКН становится пустышкой при зелёном статусе службы и без единой строчки
-    # в журнале. z2k-modern-core.lua шипуется всегда, так что сегодня гейт не
-    # стреляет; он стоит ровно на тот случай, когда файл не доехал — недокачан,
-    # снесён, не тот путь.
-    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-modern-core.lua" ]; then
-        rkn_tcp=$(ensure_circular_hostkey_split "$rkn_tcp")
-    else
-        echo "WARN: lua/z2k-modern-core.lua отсутствует — ключ ротации не разносится по хостам" 1>&2
-    fi
     quic_udp=$(ensure_circular_nld2 "$quic_udp")
 
     # ── Окно счётчика провалов (`time=`) ─────────────────────────────────────
@@ -1614,29 +1563,7 @@ generate_nfqws2_opt_from_strategies() {
         # и поштучного перебора имён здесь больше нет — механизм в ротации не
         # участвует (решение Марка 10.09.2026).
         sni_pick="--lua-desync=z2k_sni_pick:payload=tls_client_hello:dir=out:blob=z2k_ch${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
-        # ФУЛИНГ ЗДЕСЬ ОБЯЗАН БЫТЬ НЕ ТОЛЬКО tcp_ts. Мануал: «Прямым фейкам
-        # всегда необходимо искажение какой-либо информации в заголовках
-        # пакета, чтобы пейлоад не попал в серверное приложение, иначе это
-        # поломает соединение», и отдельно про саму ручку: «tcp_ts … работает
-        # только если уже есть timestamp option».
-        #
-        # А в Windows опция TCP timestamps по умолчанию ВЫКЛЮЧЕНА (в macOS,
-        # iOS, Linux и Android — включена). Для такого клиента tcp_ts не делает
-        # ничего: движок не находит опцию, пишет строчку в дебаг и идёт дальше.
-        # Здесь другого фулинга не было вовсе, то есть у половины клиентов этот
-        # фейк улетал к серверу целым — ровно случай из мануала.
-        #
-        # Замер (стенд 11.09.2026, netns с tcp_timestamps=0, сервер пишет, что
-        # до него доехало): только tcp_ts при выключенных метках — до сервера
-        # доходит ФЕЙК, ровно как без фулинга вообще; с добавленным tcp_md5 —
-        # доходит настоящее приветствие. При включённых метках добавление
-        # tcp_md5 ничего не меняет, то есть тем, у кого работает, не хуже.
-        #
-        # tcp_md5, а не badsum: badsum на стенде тоже прошёл, но линк был
-        # виртуальный, а мануал оговаривает зависимость badsum от того,
-        # проверяет ли контрольную сумму сетевая карта сервера. MD5 проверяет
-        # сам стек.
-        sni_pick="$sni_pick --lua-desync=fake:payload=tls_client_hello:dir=out:blob=z2k_ch:optional:repeats=8:tcp_ts=-1000:tcp_md5"
+        sni_pick="$sni_pick --lua-desync=fake:payload=tls_client_hello:dir=out:blob=z2k_ch:optional:repeats=8:tcp_ts=-1000"
     fi
 
     if [ -n "$rkn_circ" ]; then
@@ -1798,7 +1725,7 @@ generate_nfqws2_opt_from_strategies() {
     #                 (multisplit/syndata/fake/etc) внутри scope-нуты на
     #                 payload=http_req, так что они не сработают на
     #                 incoming replies — только detectors классифицируют.
-    http_rkn="--filter-tcp=80 $wl_excl --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=2 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:tcp_md5:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:tcp_md5:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:tcp_md5:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:tcp_md5:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
+    http_rkn="--filter-tcp=80 $wl_excl --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=http_req,empty,http_reply --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=2 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
 
     # http_rkn — тот же штатный детектор: ретрансмиссии, RST, DPI-редирект.
     # Обёртка нужна и здесь. Пул объявляется НИЖЕ блока проводки TLS-пулов, и
@@ -2592,54 +2519,6 @@ EOF
         rm -f "$config_file"
         config_file="$_cfg_target"
         return 1
-    fi
-
-    # ПРОВЕРКА КАНДИДАТА ДВИЖКОМ — ТОЛЬКО КОГДА В ДЕЛЕ ЕСТЬ РУЧНОЕ.
-    #
-    # Пользовательские стратегии (lists/custom-strategies/*.txt) пишет человек,
-    # и синтаксическая ошибка в них проходит все наши проверки: _z2k_file_sane
-    # ловит только двоичный мусор. Дальше конфиг подменяется, служба
-    # перезапускается, демон не стартует — и обхода нет вовсе, при том что
-    # «конфиг сгенерирован успешно». Найти это можно лишь по тому, что интернет
-    # у человека стал работать иначе.
-    #
-    # У движка для этого есть `--dry-run`: он разбирает параметры, грузит списки
-    # и блобы, но очередь не занимает — то есть безопасен и в этот момент, и
-    # вообще. Мы его уже используем в z2k-config-validator.sh и в init-скрипте
-    # (там как объяснялку постфактум, когда демон уже упал). Здесь он стоит там,
-    # где от него есть польза: ДО подмены боевого файла.
-    #
-    # Почему не всегда. Разбор грузит все хостлисты, а конфиг перегенерируется
-    # на каждый тумблер в панели — платить этим за каждое переключение незачем.
-    # Риск приносит именно рукописное содержимое: поставляемое приезжает с
-    # проверкой sha256 на каждом хопе обновления. Поэтому гейт по наличию
-    # непустых файлов в custom-strategies.
-    #
-    # Отсутствие движка или сборка без --dry-run — не повод отказывать: на этих
-    # путях (первая установка, чужая сборка) проверять нечем, и прежнее
-    # поведение не меняется.
-    _cfg_has_custom=0
-    for _cc in "${ZAPRET2_DIR:-/opt/zapret2}"/lists/custom-strategies/*.txt; do
-        [ -s "$_cc" ] && { _cfg_has_custom=1; break; }
-    done
-    if [ "$_cfg_has_custom" = "1" ]; then
-        _cfg_bin="${ZAPRET2_DIR:-/opt/zapret2}/nfq2/nfqws2"
-        if [ -x "$_cfg_bin" ] && "$_cfg_bin" --help 2>&1 | grep -q -- '--dry-run'; then
-            # NFQWS2_OPT берём из КАНДИДАТА, а не из боевого конфига.
-            _cfg_opt=$( . "$config_file" >/dev/null 2>&1; printf '%s' "$NFQWS2_OPT" )
-            # shellcheck disable=SC2086  # строка опций обязана разъехаться по словам
-            if ! _cfg_dry=$("$_cfg_bin" --dry-run --qnum=299 $_cfg_opt 2>&1); then
-                print_error "Движок отверг сгенерированный конфиг — боевой файл оставлен прежним."
-                print_error "Причина (nfqws2 --dry-run):"
-                printf '%s\n' "$_cfg_dry" \
-                    | grep -viE '^loading|^Loaded |^Running as|^github version|^self-built|^$' \
-                    | tail -n 5 | sed 's/^/    /'
-                print_error "Проверьте свои файлы в lists/custom-strategies/."
-                rm -f "$config_file"
-                config_file="$_cfg_target"
-                return 1
-            fi
-        fi
     fi
 
     # Подмена одним rename: на той же ФС это атомарно, и сорсящий init-скрипт
