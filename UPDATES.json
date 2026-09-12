@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 91,
-  "current": "p-84.8",
+  "seq": 92,
+  "current": "p-84.9",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -183,7 +183,7 @@
   "files/lists/youtube_ips6.txt": "d51f5e44b989b503729ae35b79cf80adf7e47ac96fde42d785e0ba6e501c28cb",
   "files/lua/z2k-alert.lua": "984c57b7627bb74fc7ad0be4709cb0d1ef562ed6f1e5dd9b70256a159adb8fa6",
   "files/lua/z2k-fooling-ext.lua": "4b5efb6672f54dbe4d04440066f06e84d92e43c8534cdfb88d136028e6d8231f",
-  "files/lua/z2k-modern-core.lua": "ae80870d644cf96a24fc21c7a71ee2453c1e9fdc99362cf0db023f8aa6047dd4",
+  "files/lua/z2k-modern-core.lua": "5f4b5312e69447b887d868be74b756d103515eca59765f9155a358bf96da08c7",
   "files/lua/z2k-quic-silence.lua": "3080b592cee163c99eb60ebc1a074fd66f5d04d822821d066a358c455e50dde3",
   "files/lua/z2k-range-rand.lua": "073c24d9133484b9f2282f1e398b5963eb577b483c1cab8c29cfd6e7bf8acd9a",
   "files/lua/z2k-state-persist.lua": "364eaecc858c004733eb5d6cf9cdf51ae31854b7dfa1d00caa8198a9ea21adaf",
@@ -215,7 +215,7 @@
   "files/z2k-warp.sh": "b77ef2caca56436d6669f001b4c8479bbe8e935c3f4c8ebe964bf047f1c7e2dd",
   "lib/auto_update.sh": "198a97bf02c4f19eb77460df70f05413fed07d2268bdaa9827ff3cc9e8773180",
   "lib/config.sh": "e08589c20e3762e5ec7019abd133efc7479c4f396d5997130d657ee393731c8f",
-  "lib/config_official.sh": "abba0837fc8bc4f1d21ea80ee08a3bb5813c9e009f7a80d1ecf3558b31401766",
+  "lib/config_official.sh": "4d186485c2a15a7f260343d8272922d8518897916b28ea65157991e7032e4cc2",
   "lib/install.sh": "0984cb30ae5577c7e2168e50d71ce9e49ba53173bba0972d7ffbc07b9b88ef5a",
   "lib/menu.sh": "74ef69e68834a1119e159458be00c2449b4a8b51035cde3b2c70c7bfaee9cdd6",
   "lib/strategies.sh": "68f7e398d9865a088d70fb6f9739c66ab6adcfce4e88c1973b128e3ceb7abbef",
@@ -239,7 +239,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "7475d651fe127bd8b9278b9db6e06d45ad86aadd81f02b5960a498b99bd5b441",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "4c99e7a21d09e578a3e894ee4ee9b92117af48fd81ab376515b1b880b1073113",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle": "4c99e7a21d09e578a3e894ee4ee9b92117af48fd81ab376515b1b880b1073113",
-  "strats_new2.txt": "f71ae797d1291ba6a63ce79e2a3f2d8bd73113c7d90cd218429a0e4a4bdd079d",
+  "strats_new2.txt": "0e5dbaa1cf1f7efbc31a43032a3aee66dfa4461ab34f229f2632c30b782836f6",
   "webpanel/cgi/actions.sh": "375b4529e56f95f212d3ea2d44199b5a6b71ce107e1cdaeec2b89a104c36d29c",
   "webpanel/cgi/api.sh": "72f0b9392440f1c788ae1a1f48e3a68a7309724c4270d2b5af62249c5699dc70",
   "webpanel/cgi/auth.sh": "08517f8892f1e3430157b223d585fa0ad05156b611511ea3ba4f6990de8a5f0a",
@@ -259,7 +259,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "611c7722c1ecc57ed703d41be08c9787e50f875ec936c67fbf4a0a050c595555",
+  "webpanel/www/index.html": "db82c6b6f57fb3ee6fa3a3c70bafe1bab01e1bb8240b94cef5c1e90fb2b30a63",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -546,6 +546,7 @@
 {"v": "p-84.5", "type": "patch", "ts": "2026-09-11T08:33:29Z", "ref": "p-84.5", "desc": "Автоподбор стратегий доведён до конца: теперь он реагирует и когда ответ сайта начался и оборвался, и когда часть запросов к сайту проходит, а часть режется — раньше в обоих случаях подбор оставался на первой стратегии.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-silence.lua", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-84.6", "type": "patch", "ts": "2026-09-11T09:32:43Z", "ref": "p-84.6", "desc": "Выключенное автообновление больше не включается само после ручного обновления из панели — настройка теперь держится. Подбор стратегий перестал бесконечно перебирать список, когда сайт не открывается по причине, не связанной с обходом: пройдя список один раз, он останавливается и снова берётся за подбор, как только сайт отвечает.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-silence.lua", "files/z2k-auto-update.sh", "files/z2k-scheduler.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-84.7", "type": "patch", "ts": "2026-09-11T10:33:58Z", "ref": "p-84.7", "desc": "Подбор стратегий вернулся к прежней схеме проверки: восстановлены поправки, которые не дают менять стратегию там, где сайт на самом деле работает — ложный сброс соединения от фильтра, потеря пакета в уже открытой странице, ответ самого сайта. Убрана проверка по молчанию сайта, добавленная накануне: она листала список до конца на доменах, которые не открываются по причинам, к обходу отношения не имеющим.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/lua/z2k-quic-silence.lua", "lib/config_official.sh", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "p-84.8", "type": "patch", "ts": "2026-09-11T21:00:09Z", "ref": "p-84.8", "desc": "Обход стал надёжнее на компьютерах с Windows: поддельный пакет, которым z2k обманывает фильтр, у них мог доходить до самого сайта и рвать соединение — теперь он гасится способом, не зависящим от операционной системы. Отдельным хостам вроде апдейтера Discord можно подобрать свою стратегию, не ломая соседние адреса того же сайта. Ошибка в пользовательских стратегиях больше не оставляет роутер без обхода: конфиг с ней не применяется, продолжает работать прежний.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-modern-core.lua", "lib/config_official.sh", "strats_new2.txt", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "restart-service"], "full_install": false}
+{"v": "p-84.8", "type": "patch", "ts": "2026-09-11T21:00:09Z", "ref": "p-84.8", "desc": "Обход стал надёжнее на компьютерах с Windows: поддельный пакет, которым z2k обманывает фильтр, у них мог доходить до самого сайта и рвать соединение — теперь он гасится способом, не зависящим от операционной системы. Отдельным хостам вроде апдейтера Discord можно подобрать свою стратегию, не ломая соседние адреса того же сайта. Ошибка в пользовательских стратегиях больше не оставляет роутер без обхода: конфиг с ней не применяется, продолжает работать прежний.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-modern-core.lua", "lib/config_official.sh", "strats_new2.txt", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "restart-service"], "full_install": false},
+{"v": "p-84.9", "type": "patch", "ts": "2026-09-12T04:10:31Z", "ref": "p-84.9", "desc": "Откат вчерашнего обновления: возвращены прежние стратегии и прежняя проверка конфига. Если после вчерашнего обновления перестали открываться сайты — это обновление вернёт всё как было.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-modern-core.lua", "lib/config_official.sh", "strats_new2.txt", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "restart-service"], "full_install": false}
   ]
 }
