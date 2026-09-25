@@ -49,6 +49,7 @@ fi
 CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
 WARP_BIN="${WARP_BIN:-/opt/sbin/z2k-warpd}"
 WARP_INIT="${WARP_INIT:-/opt/etc/init.d/S51z2k-warp}"
+WARP_NDM_HOOK="${WARP_NDM_HOOK:-/opt/etc/ndm/netfilter.d/93-z2k-warp.sh}"
 WARP_DEVICE="${WARP_DEVICE:-/opt/etc/z2k-warp/device.json}"
 WARP_STATUS="${WARP_STATUS:-/tmp/z2k-warp/status.json}"
 WARP_DOMAIN_STATUS="${WARP_DOMAIN_STATUS:-/tmp/z2k-warp/domain-status.json}"
@@ -417,6 +418,18 @@ warp_pbr_up() {
             || iptables -w -t mangle -A PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null
     done
     return 0
+}
+
+# A patch can replace the NDM hook without causing a firewall rebuild. The
+# daemon's own rule repair only runs on start, so selfheal must apply the newly
+# delivered hook when FORWARD lost either direction during an earlier rebuild.
+warp_forward_ensure() {
+    local iface; iface=$(warp_iface)
+    [ -n "$iface" ] && [ -f "$WARP_NDM_HOOK" ] || return 0
+    iptables -w -t filter -C FORWARD -o "$iface" -m mark --mark "$WARP_MARK/$WARP_MARK" -j ACCEPT 2>/dev/null \
+        && iptables -w -t filter -C FORWARD -i "$iface" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \
+        && return 0
+    type=iptables table=filter sh "$WARP_NDM_HOOK" >/dev/null 2>&1
 }
 
 warp_pbr_down() {
@@ -792,6 +805,7 @@ warp_selfheal() {
         ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_all
         warp_ipset_src_load      # MAC устройств могли появиться в neigh
         warp_pbr_up
+        warp_forward_ensure
     else
         warp_pbr_down            # fail open: напрямую лучше, чем в чёрную дыру
     fi

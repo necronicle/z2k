@@ -90,6 +90,10 @@ case "\$1" in
     status) [ -f "$SB/s51.running" ] ;;
 esac
 EOF
+cat > "$SB/bin/warp-hook" <<EOF
+#!/bin/sh
+echo "\$type \$table" >> "$SB/warp-hook.log"
+EOF
 chmod +x "$SB"/bin/*
 printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"
 printf '{"iface":"z2ktun0","id":"dev","endpoint":{"v4":"8.6.112.0","h2":"162.159.198.2"}}\n' > "$SB/etc/device.json"
@@ -99,6 +103,7 @@ W() { # запуск скрипта с окружением песочницы
     Z2K_STUB_PATH="$SB/bin" ZAPRET2_DIR="$SB/z2k" CONFIG_FILE="$SB/z2k/config" \
     WARP_BIN="$SB/sbin/z2k-warpd" WARP_INIT="$SB/bin/S51" WARP_DEVICE="$SB/etc/device.json" \
     WARP_STATUS="$SB/tmp/status.json" WARP_LISTS_DIR="$SB/z2k/lists/warp" WARP_READY_WAIT="${RW:-1}" \
+    WARP_NDM_HOOK="$SB/bin/warp-hook" \
     WARP_OP_LOCK_WAIT="${LW:-5}" \
     WARP_LOG="$SB/tmp/engine.log" \
     WARP_FETCH_STUB="$SB/bin/z2k-warpd-stub" \
@@ -247,6 +252,7 @@ assert_eq "disable: rule removed twice" "2" "$(grep -c 'rule del fwmark 0x989/0x
 printf 'GAME_WARP_ENABLED=1\n' > "$SB/z2k/config"; touch "$SB/s51.running"; clearlogs
 ready true ""; W selfheal >/dev/null 2>&1
 assert_eq "selfheal ready: route asserted" "1" "$(grep -c 'route replace default dev z2ktun0 table 989' "$SB/ip.log")"
+assert_eq "selfheal ready: missing return FORWARD rule triggers live hook" "1" "$(grep -c '^iptables filter$' "$SB/warp-hook.log")"
 clearlogs; ready false no_endpoint; W selfheal >/dev/null 2>&1
 assert_eq "selfheal dead: MARK removed (fail open)" "1" "$(grep -c -- '-D PREROUTING -m set --match-set z2k_warp dst' "$SB/ipt.log")"
 clearlogs; rm -f "$SB/s51.running"; ready true ""; W selfheal >/dev/null 2>&1

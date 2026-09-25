@@ -1,4 +1,5 @@
 #!/bin/sh
+# Delivered to this live NDM directory by the release install_map.
 # Z2K_STUB_PATH — только для тестов: каталог со стабами iptables/ipset/uname
 # встаёт перед системным PATH. В проде переменной нет.
 export PATH="${Z2K_STUB_PATH:+$Z2K_STUB_PATH:}/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin"

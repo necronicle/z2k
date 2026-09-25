@@ -1,4 +1,5 @@
 #!/bin/sh
+# Delivered to this live NDM directory by the release install_map.
 # /opt/etc/ndm/netfilter.d/91-z2k-http-tunnel-redirect.sh
 #
 # Companion to /opt/etc/init.d/S97z2k-http-tunnel. Same shape as the

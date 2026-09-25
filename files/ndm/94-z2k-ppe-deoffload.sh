@@ -1,4 +1,5 @@
 #!/bin/sh
+# Delivered to this live NDM directory by the release install_map.
 # /opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh
 #
 # Keenetic NDM hook. NDM re-runs every script here after regenerating netfilter

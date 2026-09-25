@@ -1,4 +1,5 @@
 #!/bin/sh
+# Delivered to this live NDM directory by the release install_map.
 # /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh
 #
 # Keenetic NDM hook. NDM invokes every script in this directory after

@@ -20,6 +20,12 @@ assert_eq "lua → каталог lua"        "/opt/zapret2/lua/x.lua|" "$(p fil
 assert_eq "список → две цели"        "/opt/zapret2/files/lists/a.txt|/opt/zapret2/lists/a.txt|" "$(p files/lists/a.txt)"
 assert_eq "модуль lib"               "/opt/zapret2/lib/menu.sh|" "$(p lib/menu.sh)"
 assert_eq "init.d вне ZAPRET2_DIR"   "/opt/etc/init.d/S51z2k-warp|" "$(p files/init.d/S51z2k-warp)"
+for hook in 90-z2k-tg-redirect.sh 91-z2k-http-tunnel-redirect.sh \
+            92-z2k-rt-proxy-redirect.sh 93-z2k-warp.sh \
+            94-z2k-ppe-deoffload.sh 95-z2k-scheduler-watchdog.sh; do
+    assert_eq "NDM hook $hook доставляется в исполняемый каталог" \
+        "/opt/etc/ndm/netfilter.d/$hook|" "$(p "files/ndm/$hook")"
+done
 assert_eq "статика панели"           "/opt/zapret2/www/js/app.js|" "$(p webpanel/www/js/app.js)"
 assert_eq "не деливерабл"            "" "$(p tests/test_x.sh)"
 assert_eq "бинарник — не по общему пути" "" "$(p z2k-warpd/builds/z2k-warpd-linux-arm64)"

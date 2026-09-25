@@ -94,8 +94,13 @@ z2k_install_paths() {
             # http-tunnel supervisor — same /opt/etc/init.d placement as above.
             echo "/opt/etc/init.d/S97z2k-http-tunnel"
             ;;
-        files/ndm/92-z2k-rt-proxy-redirect.sh)
-            echo "/opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh"
+        files/ndm/90-z2k-tg-redirect.sh|files/ndm/91-z2k-http-tunnel-redirect.sh|\
+        files/ndm/92-z2k-rt-proxy-redirect.sh|files/ndm/93-z2k-warp.sh|\
+        files/ndm/94-z2k-ppe-deoffload.sh|files/ndm/95-z2k-scheduler-watchdog.sh)
+            # install.sh deploys these to Entware's live NDM hook directory.
+            # The generic files/* mapping silently wrote updates to
+            # /opt/zapret2/ndm/, leaving the active hooks stale.
+            echo "/opt/etc/ndm/netfilter.d/${repo_path#files/ndm/}"
             ;;
         files/000-zapret2.sh)
             # Primary NDM netfilter.d recovery hook — install.sh copies it to

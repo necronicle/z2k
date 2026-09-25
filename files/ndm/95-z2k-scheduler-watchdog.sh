@@ -1,4 +1,5 @@
 #!/bin/sh
+# Delivered to this live NDM directory by the release install_map.
 # /opt/etc/ndm/netfilter.d/95-z2k-scheduler-watchdog.sh
 #
 # Keenetic NDM hook — reboot-independent safety net for the z2k scheduler stack.
