@@ -932,6 +932,27 @@ const SCENARIOS = {
   // готовности (до двух минут), выключить WARP было нечем. Теперь тумблер жив,
   // второе нажатие уходит на сервер сразу, а итог перебитого действия (код 3)
   // панель игнорирует — иначе он откатил бы тумблер обратно во «вкл».
+  warp_edge_status: {
+    hash: "#/warp",
+    setup() {
+      ROUTER = async (p) => {
+        if (p === "/warp/status") return { ok: true, enabled: "1", installed: true, ready: true,
+          transport: "wg", endpoint: "188.114.96.23:2408", iface: "z2ktun0", addr: "172.16.0.2",
+          entries: 1, devices: 0, error: "", mem_kb: 27136, transport_mode: "auto",
+          edge_colo: "HEL", edge_country: "FI", edge_rtt_ms: 28, edge_selection: "foreign" };
+        if (p === "/warp/games") return { ok: true, games: [] };
+        if (p === "/warp/lists") return { ok: true, lists: [] };
+        if (p === "/warp/neighbors") return { ok: true, devices: [] };
+        return { ok: true };
+      };
+    },
+    async run() {
+      await sleep(100);
+      const grid = q("#warp-status-grid");
+      check("зарубежный узел виден в статусе", /HEL/.test(grid.innerHTML) && /FI/.test(grid.innerHTML) && /28 мс/.test(grid.innerHTML), grid.innerHTML);
+    },
+  },
+
   warp_interrupt_toggle: {
     hash: "#/warp",
     setup() {
@@ -1179,7 +1200,7 @@ for scen in fastroute_not_applicable fastroute_actual stale_apply poller_gone ou
             toggles_status_failed toggles_left_page \
             autohostlist_warn autohostlist_accept autohostlist_escape \
             autohostlist_dismiss autohostlist_off other_toggle_no_warn \
-            warp_interrupt_toggle warp_interrupt_transport warp_foreign_job_blocks \
+            warp_edge_status warp_interrupt_toggle warp_interrupt_transport warp_foreign_job_blocks \
             au_hour_pick au_hour_save_failed au_hour_off; do
     out=$(run_scen "$JS" "$scen")
     printf '%s\n' "$out"

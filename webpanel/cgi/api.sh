@@ -624,6 +624,11 @@ case "$method $path" in
         printf ',"entries":%s,"devices":%s,"error":' "$(_wf entries | grep -E '^[0-9]+$' || echo 0)" "$(_wf devices | grep -E '^[0-9]+$' || echo 0)"
         json_string "$(_wf error)"
         printf ',"mem_kb":%s' "$(_wf mem | grep -E '^[0-9]+$' || echo 0)"
+		printf ',"edge_colo":'; json_string "$(_wf edge_colo)"
+		printf ',"edge_country":'; json_string "$(_wf edge_country)"
+		printf ',"edge_rtt_ms":%s' "$(_wf edge_rtt_ms | grep -E '^[0-9]+$' || echo 0)"
+		printf ',"edge_checked_at":%s' "$(_wf edge_checked_at | grep -E '^[0-9]+$' || echo 0)"
+		printf ',"edge_selection":'; json_string "$(_wf edge_selection)"
         printf ',"plan":'; json_string "$(_wf plan)"
         w_pe=false; [ "$(_wf plan_err)" = "1" ] && w_pe=true
         w_lic=false; [ "$(_wf license)" = "1" ] && w_lic=true

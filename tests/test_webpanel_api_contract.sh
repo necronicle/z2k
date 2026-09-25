@@ -207,7 +207,7 @@ WARP_SCRIPT="$SB/warp-stub.sh"; export WARP_SCRIPT
 cat > "$WARP_SCRIPT" <<'WSTUB'
 #!/bin/sh
 case "$1" in
-    status) echo 'installed=1 enabled=1 ready=1 transport=wg endpoint=8.6.112.0:2408 iface=z2ktun0 addr=172.16.0.2 entries=12 devices=2 error= mem=27136 plan=unlimited plan_err=0 license=1' ;;
+    status) echo 'installed=1 enabled=1 ready=1 transport=wg endpoint=8.6.112.0:2408 iface=z2ktun0 addr=172.16.0.2 entries=12 devices=2 error= mem=27136 plan=unlimited plan_err=0 license=1 edge_colo=FRA edge_country=DE edge_rtt_ms=28 edge_checked_at=1790337600 edge_selection=foreign' ;;
     license) cat > "$LICENSE_GOT" ;;
     ipset)  : ;;
     migrate) mkdir -p "$WARP_LISTS_DIR"; touch "$WARP_LISTS_DIR/.legacy-aggregate-purged" ;;
@@ -221,6 +221,10 @@ assert_eq "warp/status — installed из скрипта"   "true"            "$
 assert_eq "warp/status — ready"                  "true"            "$(jget "$OUT" 'd["ready"]')"
 assert_eq "warp/status — transport"              "wg"              "$(jget "$OUT" 'd["transport"]')"
 assert_eq "warp/status — endpoint"               "8.6.112.0:2408"  "$(jget "$OUT" 'd["endpoint"]')"
+assert_eq "warp/status — страна узла"            "DE"              "$(jget "$OUT" 'd["edge_country"]')"
+assert_eq "warp/status — код узла"               "FRA"             "$(jget "$OUT" 'd["edge_colo"]')"
+assert_eq "warp/status — задержка узла"          "28"              "$(jget "$OUT" 'd["edge_rtt_ms"]')"
+assert_eq "warp/status — отбор зарубежного узла" "foreign"         "$(jget "$OUT" 'd["edge_selection"]')"
 assert_eq "warp/status — iface"                  "z2ktun0"         "$(jget "$OUT" 'd["iface"]')"
 assert_eq "warp/status — devices"                "2"               "$(jget "$OUT" 'd["devices"]')"
 assert_eq "warp/status — error пустой"           ""                "$(jget "$OUT" 'd["error"]')"

@@ -83,6 +83,19 @@ func TestMemKBRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEdgeSelectionRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	w := &Writer{Path: path}
+	want := Status{Ready: true, EdgeColo: "FRA", EdgeCountry: "DE", EdgeRTTMs: 28, EdgeCheckedAt: 1790337600, EdgeSelection: "foreign"}
+	if err := w.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil || got.EdgeColo != want.EdgeColo || got.EdgeCountry != want.EdgeCountry || got.EdgeRTTMs != want.EdgeRTTMs || got.EdgeCheckedAt != want.EdgeCheckedAt || got.EdgeSelection != want.EdgeSelection {
+		t.Fatalf("edge status: %+v err=%v", got, err)
+	}
+}
+
 func TestRSSKBOnLinuxIsPositive(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("RSS читается из /proc")

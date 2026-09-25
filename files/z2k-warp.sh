@@ -66,7 +66,7 @@ WARP_DOMAINS="${WARP_DOMAINS:-/tmp/z2k-warp/domains.v1}"
 WARP_TABLE="${WARP_TABLE:-989}"
 WARP_MARK="${WARP_MARK:-0x989}"
 WARP_RULE_PREF="${WARP_RULE_PREF:-90}"
-WARP_READY_WAIT="${WARP_READY_WAIT:-120}"     # сколько enable ждёт ready, секунд
+WARP_READY_WAIT="${WARP_READY_WAIT:-180}"     # первый поиск узла до 60 с плюс обычный подъём туннеля
 WARP_LEGACY_LIST="${WARP_LEGACY_LIST:-$ZAPRET2_DIR/lists/game-warp-ips.txt}"
 # Остатки usque-эпохи — только для migrate.
 WARP_LEGACY_BIN="${WARP_LEGACY_BIN:-/opt/sbin/z2k-usque}"
@@ -829,13 +829,16 @@ warp_status() {
     domain_error=$(_json_str "$WARP_DOMAIN_STATUS" error)
     [ -f "$WARP_DOMAIN_STATUS" ] || domain_error=unavailable
     domain_error=$(printf '%s' "$domain_error" | tr ' \t\r\n' '_' | cut -c1-120)
-    printf 'installed=%s enabled=%s ready=%s transport=%s endpoint=%s iface=%s addr=%s entries=%s devices=%s error=%s mem=%s plan=%s plan_err=%s license=%s domain_active=%s domain_rules=%s domain_pairs=%s domain_error=%s\n' \
+    printf 'installed=%s enabled=%s ready=%s transport=%s endpoint=%s iface=%s addr=%s entries=%s devices=%s error=%s mem=%s plan=%s plan_err=%s license=%s domain_active=%s domain_rules=%s domain_pairs=%s domain_error=%s edge_colo=%s edge_country=%s edge_rtt_ms=%s edge_checked_at=%s edge_selection=%s\n' \
         "$installed" "${GAME_WARP_ENABLED_OVERRIDE:-$(warp_flag)}" "$ready" \
         "$(_json_str "$WARP_STATUS" transport)" "$(_json_str "$WARP_STATUS" endpoint)" \
         "$(_json_str "$WARP_STATUS" iface)" "$(_json_str "$WARP_STATUS" addr)" \
         "${entries:-0}" "${devices:-0}" "$(_json_str "$WARP_STATUS" last_error)" \
         "$(_json_raw "$WARP_STATUS" mem_kb)" "$plan" "$plan_err" "$lic" \
-        "$domain_active" "${domain_rules:-0}" "${domain_pairs:-0}" "$domain_error"
+        "$domain_active" "${domain_rules:-0}" "${domain_pairs:-0}" "$domain_error" \
+        "$(_json_str "$WARP_STATUS" edge_colo)" "$(_json_str "$WARP_STATUS" edge_country)" \
+        "$(_json_raw "$WARP_STATUS" edge_rtt_ms)" "$(_json_raw "$WARP_STATUS" edge_checked_at)" \
+        "$(_json_str "$WARP_STATUS" edge_selection)"
 }
 
 # Зачистка usque-эпохи — по уликам, а не по имени, и пакет — один раз.

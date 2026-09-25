@@ -25,18 +25,23 @@ const (
 
 // Status — содержимое status.json.
 type Status struct {
-	Ready        bool   `json:"ready"`
-	Transport    string `json:"transport"`
-	Endpoint     string `json:"endpoint"`
-	Iface        string `json:"iface"`
-	Addr         string `json:"addr"`
-	HandshakeAge int    `json:"handshake_age"` // сек; -1 = handshake не было
-	Rx           uint64 `json:"rx"`
-	Tx           uint64 `json:"tx"`
-	LastError    string `json:"last_error"`
-	LadderStep   int    `json:"ladder_step"`
-	Since        int64  `json:"since"` // unix: с какого момента текущее состояние
-	PID          int    `json:"pid"`
+	Ready         bool   `json:"ready"`
+	Transport     string `json:"transport"`
+	Endpoint      string `json:"endpoint"`
+	Iface         string `json:"iface"`
+	Addr          string `json:"addr"`
+	HandshakeAge  int    `json:"handshake_age"` // сек; -1 = handshake не было
+	Rx            uint64 `json:"rx"`
+	Tx            uint64 `json:"tx"`
+	LastError     string `json:"last_error"`
+	LadderStep    int    `json:"ladder_step"`
+	Since         int64  `json:"since"` // unix: с какого момента текущее состояние
+	PID           int    `json:"pid"`
+	EdgeColo      string `json:"edge_colo,omitempty"`
+	EdgeCountry   string `json:"edge_country,omitempty"`
+	EdgeRTTMs     int    `json:"edge_rtt_ms,omitempty"`
+	EdgeCheckedAt int64  `json:"edge_checked_at,omitempty"`
+	EdgeSelection string `json:"edge_selection,omitempty"`
 	// MemKB — RSS демона в КБ. Панель и диагностика показывают его, чтобы
 	// вопрос «почему WARP ест сто мегабайт» закрывался взглядом, а не htop
 	// (поле 2026-09-02: юзер с 118 МБ RSS, замер показал буферы по 64 КБ на пакет).

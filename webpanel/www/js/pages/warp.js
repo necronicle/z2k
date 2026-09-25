@@ -501,6 +501,11 @@ async function loadWarpStatus() {
     { label: "Транспорт", value: d.ready ? transport + (d.endpoint ? " · " + d.endpoint : "") : "—",
       kind: d.ready ? "good" : "" },
   ];
+  if (d.ready && d.transport === "wg") {
+    const edge = [d.edge_colo, d.edge_country].filter(Boolean).join(" · ");
+    const rtt = Number(d.edge_rtt_ms) > 0 ? `${Math.round(Number(d.edge_rtt_ms))} мс` : "";
+    cells.push({ label: "Узел Cloudflare", value: [edge || "география не определена", rtt].filter(Boolean).join(" · "), kind: edge ? "good" : "" });
+  }
   // Память движка — только пока он запущен. Растёт с трафиком, не со списком;
   // после правки буферов норма 20–40 МБ. Выше 96 МБ — предупреждение: на
   // роутере с 512 МБ движок убивало ровно на этой отметке (замер 2026-09-02).

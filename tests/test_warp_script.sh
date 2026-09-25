@@ -105,7 +105,7 @@ W() { # запуск скрипта с окружением песочницы
     sh "$SB/z2k/z2k-warp.sh" "$@"
 }
 flag() { sed -n 's/^GAME_WARP_ENABLED=//p' "$SB/z2k/config" | tr -d '"'; }
-ready() { printf '{"ready":%s,"transport":"wg","endpoint":"8.6.112.0:2408","iface":"z2ktun0","addr":"172.16.0.2","last_error":"%s","rx":1,"tx":1,"handshake_age":3,"pid":4242,"mem_kb":27136}\n' "$1" "$2" > "$SB/tmp/status.json"; }
+ready() { printf '{"ready":%s,"transport":"wg","endpoint":"8.6.112.0:2408","iface":"z2ktun0","addr":"172.16.0.2","last_error":"%s","rx":1,"tx":1,"handshake_age":3,"pid":4242,"mem_kb":27136,"edge_colo":"FRA","edge_country":"DE","edge_rtt_ms":28,"edge_checked_at":1790337600,"edge_selection":"foreign"}\n' "$1" "$2" > "$SB/tmp/status.json"; }
 clearlogs() { rm -f "$SB"/*.log "$SB/rules"; }   # ipt.rules — состояние, не лог: не чистим
 
 # ---------- install ----------
@@ -270,6 +270,7 @@ printf 'GAME_WARP_ENABLED=1\n' > "$SB/z2k/config"; ready true ""
 st=$(W status 2>/dev/null)
 assert_eq "status: installed/enabled/ready" "installed=1 enabled=1 ready=1" "$(printf '%s' "$st" | grep -o 'installed=[01] enabled=[01] ready=[01]')"
 assert_eq "status: transport+endpoint" "transport=wg endpoint=8.6.112.0:2408" "$(printf '%s' "$st" | grep -o 'transport=[a-z0-9]* endpoint=[0-9.:]*')"
+assert_eq "status: edge location and RTT" "edge_colo=FRA edge_country=DE edge_rtt_ms=28" "$(printf '%s' "$st" | grep -o 'edge_colo=FRA edge_country=DE edge_rtt_ms=28')"
 rm -f "$SB/tmp/status.json"
 st=$(W status 2>/dev/null)
 assert_eq "status: no status file → ready=0" "ready=0" "$(printf '%s' "$st" | grep -o 'ready=[01]')"
