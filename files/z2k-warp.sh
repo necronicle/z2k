@@ -221,9 +221,8 @@ warp_ipset_load() {
 
 
 # ---- устройства «всё в WARP» (B) ------------------------------------------------
-# devices.txt: IPv4 или MAC по строке. MAC → IP через таблицу соседей; офлайн-
-# устройство просто пропускается и подхватится следующим selfheal. Hostname —
-# нет: это DNS-слой, которого у нас нет по решению владельца.
+# devices.txt: IPv4 или MAC по строке. MAC → IP через таблицу соседей либо
+# активную запись Keenetic; офлайн-устройство пропускается до selfheal.
 warp_devices_ips() {
     [ -s "$WARP_DEVICES_FILE" ] || return 0
     # Таблица соседей — переменной, не временным файлом: каталог для файла
@@ -231,13 +230,31 @@ warp_devices_ips() {
     # весь список устройств молча терялся (ловилось CI, не глазами).
     # Одной строкой через «;»: многострочное значение в awk -v — ошибка
     # «newline in string» и у BSD awk, и у mawk.
-    local neigh
+    local neigh hotspot ndmc_bin="${WARP_NDMC:-ndmc}"
     # Только IPv4: `ip neigh` без -4 отдаёт и fe80::… с тем же MAC, запись
     # перекрывала IPv4, в restore уезжал IPv6 для hash:ip inet — и весь поток
     # отвергался, сет оставался пустым («устройств: 0» при записанном MAC).
     neigh=$(ip -4 neigh show 2>/dev/null | awk '$0 ~ /lladdr/ {for (i=1;i<=NF;i++) if ($i=="lladdr") printf "%s %s;", tolower($(i+1)), $1}')
-    awk -v neigh="$neigh" '
-    BEGIN { n = split(neigh, lines, ";"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); if (f[1] != "") mac[f[1]] = f[2] } }
+    [ -x /bin/ndmc ] && [ -z "${WARP_NDMC:-}" ] && ndmc_bin=/bin/ndmc
+    if command -v "$ndmc_bin" >/dev/null 2>&1; then
+        # The panel gets its device list from this same Keenetic database.
+        # Its active IPv4 survives gaps in the Linux neighbour cache. Never
+        # use an offline registration: its old IP may now belong to someone else.
+        hotspot=$(LD_LIBRARY_PATH= "$ndmc_bin" -c "show ip hotspot" 2>/dev/null | awk '
+        function flush() { if (active && mac != "" && ip != "") printf "%s %s;", tolower(mac), ip }
+        {
+            sub(/^[ \t]+/, ""); k=$1; sub(/^[^:]*:[ \t]*/, ""); v=$0
+            if (k == "mac:") { flush(); mac=v; ip=""; active=0 }
+            else if (k == "ip:") ip=v
+            else if (k == "active:") active=(v == "yes")
+        }
+        END { flush() }')
+    fi
+    awk -v neigh="$neigh" -v hotspot="$hotspot" '
+    BEGIN {
+        n = split(hotspot, lines, ";"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); if (f[1] != "") mac[f[1]] = f[2] }
+        n = split(neigh, lines, ";"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); if (f[1] != "") mac[f[1]] = f[2] }
+    }
     # --- z2k warp SOURCE filter (canonical; keep byte-identical in both copies) ---
     # Поле означает УСТРОЙСТВО В ЛОКАЛЬНОЙ СЕТИ, и фильтр обязан это отражать.
     # Раньше принималось всё с первым октетом 1-255 — включая 127.0.0.1 и любой
