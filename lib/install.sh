@@ -2416,7 +2416,7 @@ TMPJUNK
     # доставки (lib/release_map.sh): files/lists/ — эталон, lists/ — рабочая.
     for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt \
                   tcp16_targets.txt sni_wl_candidates.txt tcp16_nets.txt \
-                  warp-endpoints.txt youtube_ips.txt youtube_ips6.txt; do
+                  warp-endpoints.txt warp-scan-pools.txt youtube_ips.txt youtube_ips6.txt; do
         deploy_critical_file "files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 644 || true
         if [ -s "${ZAPRET2_DIR}/lists/${iplist}" ] && [ ! -s "${ZAPRET2_DIR}/files/lists/${iplist}" ]; then
             mkdir -p "${ZAPRET2_DIR}/files/lists" 2>/dev/null
