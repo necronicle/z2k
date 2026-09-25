@@ -1,11 +1,11 @@
 // Package nat — FORWARD-accept, MASQUERADE и MSS-clamp для z2ktunN.
 //
 // Интерфейс не зарегистрирован в NDM, поэтому NDM его не NAT-ит, MSS не
-// режет и — главное — не пропускает на него форвард: политика FORWARD у
-// NDM DROP, а _NDM_FORWARD принимает только свои интерфейсы (измерено: все
-// помеченные пакеты легли в policy DROP). Обратный путь покрыт правилом
-// RELATED,ESTABLISHED в начале цепочки. Делаем сами, через -A: после цепочек
-// NDM, чтобы ACL юзера продолжали действовать. Правила NDM сносит на каждом регене netfilter; их
+// режет и — главное — не пропускает на него форвард. На некоторых прошивках
+// ранний CONNNDMMARK REJECT стоит перед штатным ESTABLISHED ACCEPT: SYN-ACK
+// приходит из TUN, но до LAN не доходит. Два узких правила для помеченного
+// исходящего трафика и ответа существующего соединения вставляем в начало
+// FORWARD. Правила NDM сносит на каждом регене netfilter; их
 // возвращает хук /opt/etc/ndm/netfilter.d/93-z2k-warp.sh — той же формы,
 // что здесь. Всегда `iptables -w`: без него гонка с churn'ом NDM молча
 // роняет вставку.
@@ -43,7 +43,8 @@ type Runner func(name string, args ...string) (string, error)
 // видят mss 1240.
 func Rules(iface string, mss int) [][]string {
 	return [][]string{
-		{"filter", "FORWARD", "-o", iface, "-j", "ACCEPT"},
+		{"filter", "FORWARD", "-o", iface, "-m", "mark", "--mark", "0x989/0x989", "-j", "ACCEPT"},
+		{"filter", "FORWARD", "-i", iface, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
 		{"nat", "POSTROUTING", "-o", iface, "-j", "MASQUERADE"},
 		{"mangle", "FORWARD", "-o", iface, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"},
 		{"mangle", "FORWARD", "-i", iface, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", strconv.Itoa(mss)},
@@ -54,14 +55,22 @@ func args(op string, r []string) []string {
 	return append([]string{"-w", "-t", r[0], op, r[1]}, r[2:]...)
 }
 
+func insertArgs(r []string) []string {
+	return append([]string{"-w", "-t", r[0], "-I", r[1], "1"}, r[2:]...)
+}
+
 // Ensure ставит недостающие правила (-C || -A).
 func Ensure(run Runner, iface string, mss int) error {
 	for _, r := range Rules(iface, mss) {
 		if _, err := run("iptables", args("-C", r)...); err == nil {
 			continue
 		}
-		if out, err := run("iptables", args("-A", r)...); err != nil {
-			return fmt.Errorf("iptables -t %s -A %s: %s", r[0], r[1], strings.TrimSpace(out))
+		add := args("-A", r)
+		if r[0] == "filter" {
+			add = insertArgs(r)
+		}
+		if out, err := run("iptables", add...); err != nil {
+			return fmt.Errorf("iptables -t %s %s %s: %s", r[0], add[3], r[1], strings.TrimSpace(out))
 		}
 	}
 	return nil

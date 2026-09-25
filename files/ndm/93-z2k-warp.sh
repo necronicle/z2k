@@ -11,7 +11,7 @@ export PATH="${Z2K_STUB_PATH:+$Z2K_STUB_PATH:}/opt/sbin:/opt/bin:/opt/usr/sbin:/
 # (NDM принимает только тип OpkgTun, см. спек):
 #   mangle PREROUTING  — MARK по ipset'ам z2k_warp (dst) и z2k_warp_src (src);
 #   mangle FORWARD     — MSS-clamp на z2ktunN;
-#   filter FORWARD     — ACCEPT на z2ktunN (политика NDM — DROP на чужие интерфейсы);
+#   filter FORWARD     — узкие ACCEPT до раннего REJECT Keenetic;
 #   nat    POSTROUTING — MASQUERADE на z2ktunN.
 # Маршрут (`ip rule` / table 989) реген не трогает.
 #
@@ -102,8 +102,14 @@ case "$table" in
                 fi
             done
         done
-        ipt -t filter -C FORWARD -o "$iface" -j ACCEPT \
-            || ipt -t filter -A FORWARD -o "$iface" -j ACCEPT
+        # У некоторых Keenetic CONNNDMMARK REJECT стоит ДО штатного
+        # ESTABLISHED ACCEPT. Без этих правил SYN-ACK виден в TUN, но не
+        # возвращается клиенту. Исходящий поток обязан иметь нашу метку;
+        # из TUN пропускаем только ответ существующего соединения.
+        ipt -t filter -C FORWARD -o "$iface" -m mark --mark "$WARP_MARK/$WARP_MARK" -j ACCEPT \
+            || ipt -t filter -I FORWARD 1 -o "$iface" -m mark --mark "$WARP_MARK/$WARP_MARK" -j ACCEPT
+        ipt -t filter -C FORWARD -i "$iface" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT \
+            || ipt -t filter -I FORWARD 1 -i "$iface" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         ;;
 esac
 exit 0

@@ -285,13 +285,16 @@ func (h *harness) config() Config {
 			h.cmds = append(h.cmds, name+" "+strings.Join(args, " "))
 			if name == "iptables" && len(args) > 4 {
 				key := strings.Join(args[4:], " ")
+				if args[3] == "-I" && len(args) > 5 && args[5] == "1" {
+					key = args[4] + " " + strings.Join(args[6:], " ")
+				}
 				switch args[3] {
 				case "-C":
 					if h.rules[key] {
 						return "", nil
 					}
 					return "", errors.New("no rule")
-				case "-A":
+				case "-A", "-I":
 					h.rules[key] = true
 				case "-D":
 					delete(h.rules, key)
@@ -387,7 +390,7 @@ func TestFirstFailsSecondWorksAndRemembersLastGood(t *testing.T) {
 		t.Fatal("status.json must be removed on exit")
 	}
 	joined := strings.Join(h.cmds, "\n")
-	for _, want := range []string{"ip addr add 172.16.0.2/32 dev z2ktun0", "-A FORWARD -o z2ktun0 -j ACCEPT", "-A POSTROUTING -o z2ktun0 -j MASQUERADE", "-D POSTROUTING -o z2ktun0 -j MASQUERADE", "-D FORWARD -o z2ktun0 -j ACCEPT", "ip link set dev z2ktun0 down"} {
+	for _, want := range []string{"ip addr add 172.16.0.2/32 dev z2ktun0", "-I FORWARD 1 -o z2ktun0 -m mark --mark 0x989/0x989 -j ACCEPT", "-I FORWARD 1 -i z2ktun0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT", "-A POSTROUTING -o z2ktun0 -j MASQUERADE", "-D POSTROUTING -o z2ktun0 -j MASQUERADE", "-D FORWARD -o z2ktun0 -m mark --mark 0x989/0x989 -j ACCEPT", "-D FORWARD -i z2ktun0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT", "ip link set dev z2ktun0 down"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in\n%s", want, joined)
 		}
