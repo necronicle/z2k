@@ -287,6 +287,15 @@ export function renderCredits() {
           кто пользуется проектом.
         </p>
       </div>
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">DIDIQ Rawa</div>
+        <p class="desc">
+          Спасибо, DIDIQ Rawa, за поддержку z2k. Благодаря тебе мы можем
+          проверять изменения на живых сетях и быстрее доставлять исправления
+          тем, кто пользуется проектом каждый день.
+        </p>
+      </div>
     </div>
   `;
 }

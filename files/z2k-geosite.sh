@@ -573,13 +573,24 @@ _z2k_geosite_reject() {
 
 # Google account, translation and connectivity endpoints must not enter bypass
 # hostlists. Keep only Meet; googlevideo/googleapis are separate domains.
+# These six services must also stay out of every inclusion list, including
+# already installed lists and future upstream downloads. Match domain suffixes
+# on label boundaries so unrelated names are left alone.
 filter_google_domains() {
     awk '
+        function excluded(d, base) {
+            return d == base || (length(d) > length(base) &&
+                substr(d, length(d) - length(base), 1) == "." &&
+                substr(d, length(d) - length(base) + 1) == base)
+        }
         {
             d = tolower($1)
             sub(/\r$/, "", d)
             sub(/\.$/, "", d)
             if ((d == "google.com" || d ~ /\.google\.com$/) && d != "meet.google.com") next
+            if (excluded(d, "chatgpt.com") || excluded(d, "claude.ai") ||
+                excluded(d, "github.com") || excluded(d, "cloudflareclient.com") ||
+                excluded(d, "cloudflare-dns.com")) next
             print
         }
     ' "$1"

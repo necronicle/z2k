@@ -31,6 +31,19 @@ oauth2.googleapis.com
 evilgoogle.com
 google.com.example.org
 # google.com is a comment
+chatgpt.com
+api.chatgpt.com
+claude.ai
+assets.claude.ai
+gemini.google.com
+github.com
+api.github.com
+cloudflareclient.com
+api.cloudflareclient.com
+cloudflare-dns.com
+cloudflare-dns.com.example.org
+github.com.example.org
+notchatgpt.com
 EOF
 printf 'WWW.GOOGLE.COM\r\nwww.google.com.\n' >> "$TMP/input"
 cat > "$TMP/expected" <<'EOF'
@@ -40,6 +53,9 @@ oauth2.googleapis.com
 evilgoogle.com
 google.com.example.org
 # google.com is a comment
+cloudflare-dns.com.example.org
+github.com.example.org
+notchatgpt.com
 EOF
 filter_google_domains "$TMP/input" > "$TMP/output"
 cmp -s "$TMP/expected" "$TMP/output" && ok 'suffix boundaries, Meet, case, CRLF and separate Google domains' || bad 'domain filter'
@@ -106,6 +122,9 @@ cp "$TMP/input" "$EXTRA/TCP/RKN/List.txt"
 start_daemons >/dev/null 2>&1
 [ -f "$TMP/spawn-clean" ] && ok 'init cleans before spawning daemon' || bad 'init cleanup ordering'
 for f in "$ROOT"/files/lists/extra_strats/*/*/List.txt; do
+    # RKN is a bundled fallback, not a patch-delivered list. Its existing
+    # entries are filtered by clean-google before the daemon starts.
+    [ "$f" = "$ROOT/files/lists/extra_strats/TCP/RKN/List.txt" ] && continue
     filter_google_domains "$f" > "$TMP/output"
     cmp -s "$f" "$TMP/output" && ok "shipped list clean: ${f#"$ROOT"/}" || bad "shipped list: $f"
 done
