@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 120,
-  "current": "r-85.12",
+  "seq": 121,
+  "current": "p-85.13",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -216,7 +216,7 @@
   "files/z2k-tg-watchdog.sh": "d9b0494007a9f346ceb39dcae14d65a47f5e72247979b996e1dc2b61e84b59fa",
   "files/z2k-update-lists.sh": "e7f8c83ab5e8de256d79eb00e54b103d63d5ba3020d8d00bef8ccd2286738850",
   "files/z2k-warp-list-filter.awk": "97db4a85663e4b3a7c4943e495276f521a9ba961d8419df1059efdcceea655c5",
-  "files/z2k-warp.sh": "962d8e3d851bc2fc99f495b8c3dbbd0d738e8112cf1498ef7731700efe7b8349",
+  "files/z2k-warp.sh": "25a58d84c612ac4a58ec78303f4843e5f4bccc7f912b9bb0e89d0816c039eb3e",
   "lib/auto_update.sh": "a32d3c8e663e270278ec8604d182d7a3b2bd14303e4d76f6d0de21cfb4c33040",
   "lib/config.sh": "e1203016155fab62a7ee0351663014a1663b0dfd3cd4b5d8c5f9a2cb35813ab3",
   "lib/config_official.sh": "104a28ef075dcd6ae3488fb00fec6043156fee11f27c8694ae8d87447de206b0",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "920f3c5c3888a6f8f0d59beaaa983c06a709c530bd7a154808fb2630ef4b8f62",
+  "webpanel/www/index.html": "3b320acf25d2accb3a33d1ccd02e3ab2b64890e98de7bcd29cac76f381475fd1",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -583,6 +583,7 @@
 {"v": "p-85.9", "type": "patch", "ts": "2026-09-22T17:22:00Z", "ref": "p-85.9", "desc": "Убран экспериментальный туннель звонков Telegram, вызывавший сбои подключения. Исправлен выбор подключений при нескольких провайдерах, чтобы не захватывать трафик из других политик роутера. Добавлен поиск доменов в таблице стратегий, а история обновлений вынесена в отдельную кнопку.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/init.d/S98tg-tunnel", "files/ndm/90-z2k-tg-redirect.sh", "files/z2k-nfqueue-selfheal.sh", "files/z2k-tg-redirect.sh", "files/z2k-tg-watchdog.sh", "lib/config_official.sh", "lib/wan.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/update.js", "webpanel/www/style.css", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-85.10", "type": "patch", "ts": "2026-09-23T15:26:49Z", "ref": "p-85.10", "desc": "Для YouTube связанные адреса используют одну стратегию с сохранением ручного выбора. WARP поддерживает домены через DNS роутера. Игровые списки обновлены на более точный источник.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-modern-core.lua", "files/lua/z2k-state-persist.lua", "files/ndm/93-z2k-warp.sh", "files/z2k-update-lists.sh", "files/z2k-warp-list-filter.awk", "files/z2k-warp.sh", "lib/auto_update.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-85.11", "type": "patch", "ts": "2026-09-25T07:41:55Z", "ref": "p-85.11", "desc": "Исключили ChatGPT, Claude, Gemini, GitHub и служебные домены Cloudflare из обработки трафика. Списки очищаются сразу после установки патча. Благодарим DIDIQ Rawa за поддержку проекта.", "changed_files": ["webpanel/www/index.html", "files/lists/extra-domains.txt", "files/z2k-geosite.sh", "files/z2k-warp.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "r-85.12", "type": "reinstall", "ts": "2026-09-25T12:47:17Z", "ref": "r-85.12", "desc": "WARP автоматически выбирает проверенный узел Cloudflare вне России и показывает его в панели; при недоступности возвращается к штатной лестнице. Исправлена доставка ответов из WARP устройствам за Keenetic с ранним правилом REJECT.", "changed_files": ["webpanel/www/index.html", "files/lists/warp-scan-pools.txt", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "lib/install.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "r-85.12", "type": "reinstall", "ts": "2026-09-25T12:47:17Z", "ref": "r-85.12", "desc": "WARP автоматически выбирает проверенный узел Cloudflare вне России и показывает его в панели; при недоступности возвращается к штатной лестнице. Исправлена доставка ответов из WARP устройствам за Keenetic с ранним правилом REJECT.", "changed_files": ["webpanel/www/index.html", "files/lists/warp-scan-pools.txt", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "lib/install.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-85.13", "type": "patch", "ts": "2026-09-25T19:39:53Z", "ref": "p-85.13", "desc": "WARP: выбранные по MAC устройства получают IP из активной базы Keenetic, если записи нет в таблице соседей; полный режим снова применяется после обновления.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
