@@ -58,14 +58,10 @@ function z2k_service_hostkey(desync)
     local pool = desync.arg.key
     local video = (pool == "gv_tcp" or pool == "quic" or pool == "yt_quic" or pool == "google_tls")
         and host and (host == "googlevideo.com" or host:sub(-16) == ".googlevideo.com")
-    -- Share one TCP strategy for the YouTube site. ads.youtube.com is known to
-    -- fail independently and must not contribute to the family's failure count.
-    local site = pool == "yt_tcp" and host and host ~= "ads.youtube.com"
-        and (host == "youtube.com" or host:sub(-12) == ".youtube.com")
     local copy, arg = {}, {}
     for k, v in pairs(desync) do copy[k] = v end
     for k, v in pairs(desync.arg) do arg[k] = v end
-    arg.nld = (video or site) and "2" or "0"
+    arg.nld = video and "2" or "0"
     copy.arg = arg
     return standard_hostkey(copy)
 end

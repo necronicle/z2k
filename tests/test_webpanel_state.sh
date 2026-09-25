@@ -75,33 +75,31 @@ printf '# h\n# h2\nyt_tcp\tyoutube.com\t4\t1000\n' > "$STATE_FILE"
 : > "$STATE_FILE_FALLBACK"
 assert_eq "legacy 4-col read: strategy" "4" "$(row_field yt_tcp youtube.com 3)"
 
-printf "\n--- obsolete YouTube TCP rows are hidden while rollback data remains ---\n"
+printf "\n--- YouTube TCP rows are independent again ---\n"
 printf 'yt_tcp\tyoutube.com|4\t11\t1000\tfrozen\nyt_tcp\twww.youtube.com|4\t11\t900\tfrozen\nyt_tcp\tads.youtube.com|4\t1\t900\tauto\nquic\twww.youtube.com|4\t1\t900\tauto\n' > "$STATE_FILE"
-assert_eq "shared YouTube row is visible" "11" "$(row_field yt_tcp 'youtube.com|4' 3)"
-assert_eq "obsolete www row is hidden" "" "$(row_field yt_tcp 'www.youtube.com|4' 3)"
+assert_eq "root YouTube row is visible" "11" "$(row_field yt_tcp 'youtube.com|4' 3)"
+assert_eq "www YouTube row is visible" "11" "$(row_field yt_tcp 'www.youtube.com|4' 3)"
 assert_eq "ads stays visible" "1" "$(row_field yt_tcp 'ads.youtube.com|4' 3)"
 assert_eq "QUIC stays visible" "1" "$(row_field quic 'www.youtube.com|4' 3)"
-assert_contains "legacy row remains on disk for rollback" 'www.youtube.com|4' "$(cat "$STATE_FILE")"
 state_delete yt_tcp 'youtube.com|4'
-assert_eq "reset removes the shared row" "" "$(row_field yt_tcp 'youtube.com|4' 3)"
-assert_eq "reset removes the legacy pin too" "" "$(awk -F'\t' '$1=="yt_tcp" && $2=="www.youtube.com|4" {print $3}' "$STATE_FILE")"
+assert_eq "reset removes only the root row" "" "$(row_field yt_tcp 'youtube.com|4' 3)"
+assert_eq "reset keeps the www pin" "11" "$(row_field yt_tcp 'www.youtube.com|4' 3)"
 assert_eq "reset preserves the separate ads row" "1" "$(row_field yt_tcp 'ads.youtube.com|4' 3)"
 printf 'yt_tcp\tyoutube.com|4\t11\t1000\tfrozen\nyt_tcp\tm.youtube.com|4\t11\t900\tfrozen\nyt_tcp\tads.youtube.com|4\t1\t900\tauto\n' > "$STATE_FILE"
 printf 'youtube.com|4\n' | state_bulk delete yt_tcp >/dev/null
-assert_eq "bulk reset removes the legacy pin" "" "$(awk -F'\t' '$1=="yt_tcp" && $2=="m.youtube.com|4" {print $3}' "$STATE_FILE")"
+assert_eq "bulk reset keeps the m pin" "11" "$(row_field yt_tcp 'm.youtube.com|4' 3)"
 assert_eq "bulk reset preserves ads" "1" "$(row_field yt_tcp 'ads.youtube.com|4' 3)"
 printf 'yt_tcp\tyoutube.com|4\t3\t900\tfrozen\nyt_tcp\twww.youtube.com|4\t2\t1000\tfrozen\n' > "$STATE_FILE"
 state_set yt_tcp 'youtube.com|4' 3 auto
-assert_eq "manual unfreeze drops a conflicting legacy pin" "" "$(awk -F'\t' '$1=="yt_tcp" && $2=="www.youtube.com|4" {print $3}' "$STATE_FILE")"
+assert_eq "manual unfreeze keeps the www pin" "2" "$(row_field yt_tcp 'www.youtube.com|4' 3)"
 assert_eq "manual unfreeze keeps the chosen strategy" "3" "$(row_field yt_tcp 'youtube.com|4' 3)"
-assert_eq "manual edit outranks a read-only old pin" "1001" "$(row_field yt_tcp 'youtube.com|4' 4)"
 printf 'yt_tcp\tyoutube.com|4\t3\t900\tfrozen\nyt_tcp\tm.youtube.com|4\t2\t1000\tfrozen\n' > "$STATE_FILE"
 printf 'youtube.com|4\n' | state_bulk unfreeze yt_tcp >/dev/null
-assert_eq "bulk unfreeze drops a conflicting legacy pin" "" "$(awk -F'\t' '$1=="yt_tcp" && $2=="m.youtube.com|4" {print $3}' "$STATE_FILE")"
-assert_eq "bulk edit outranks a read-only old pin" "1001" "$(row_field yt_tcp 'youtube.com|4' 4)"
+assert_eq "bulk unfreeze keeps the m pin" "2" "$(row_field yt_tcp 'm.youtube.com|4' 3)"
+assert_eq "bulk unfreeze changes only root mode" "auto" "$(row_field yt_tcp 'youtube.com|4' 5)"
 printf 'yt_tcp\twww.youtube.com|4\t11\t900\tfrozen\n' > "$STATE_FILE"
 : > "$STATE_FILE_FALLBACK"
-assert_eq "legacy pin stays visible until a shared row exists" "11" "$(row_field yt_tcp 'www.youtube.com|4' 3)"
+assert_eq "www pin stays visible without a root row" "11" "$(row_field yt_tcp 'www.youtube.com|4' 3)"
 
 # ------------------------------------------------------------------------------
 # pools_read — считает РАЗНЫЕ strategy=N на каждый circular-ключ.
