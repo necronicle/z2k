@@ -128,6 +128,9 @@ func SetFallbackHosts(hosts []string) {
 	fallbackHosts = hosts
 }
 
+// FallbackHosts returns a copy of the effective data-file or built-in hosts.
+func FallbackHosts() []string { return append([]string(nil), fallbackHosts...) }
+
 // Режимы транспорта, выбранные человеком (z2k-warpd run --transport).
 //
 // ModeAuto — вся лестница, как было всегда. ModeWG и ModeH2 — выбор вручную:
@@ -195,6 +198,34 @@ func NewMode(ep account.Endpoint, start *account.Step, mode string) *Ladder {
 		}
 	}
 	return l
+}
+
+// NewPreferred places proven WG endpoints ahead of the ordinary ladder while
+// preserving every original step and its existing h2 fallback position.
+func NewPreferred(ep account.Endpoint, start *account.Step, mode string, preferred []account.Step) *Ladder {
+	if mode == ModeH2 || len(preferred) == 0 {
+		return NewMode(ep, start, mode)
+	}
+	base := NewMode(ep, nil, mode)
+	seen := make(map[account.Step]bool, len(preferred)+len(base.steps))
+	steps := make([]account.Step, 0, len(preferred)+len(base.steps))
+	for _, step := range preferred {
+		if step.Transport != "wg" || step.Host == "" || step.Port < 1 || step.Port > 65535 || seen[step] {
+			continue
+		}
+		seen[step] = true
+		steps = append(steps, step)
+	}
+	if len(steps) == 0 {
+		return NewMode(ep, start, mode)
+	}
+	for _, step := range base.steps {
+		if !seen[step] {
+			seen[step] = true
+			steps = append(steps, step)
+		}
+	}
+	return &Ladder{steps: steps}
 }
 
 func newAuto(ep account.Endpoint, start *account.Step) *Ladder {

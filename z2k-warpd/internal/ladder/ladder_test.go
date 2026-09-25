@@ -50,6 +50,26 @@ func TestStartsFromLastGood(t *testing.T) {
 	}
 }
 
+func TestPreferredForeignStepPrecedesLastGoodWithoutDuplicatingBase(t *testing.T) {
+	noFallback(t)
+	foreign := account.Step{Transport: "wg", Host: "188.114.96.23", Port: 2408}
+	registered := account.Step{Transport: "wg", Host: "8.6.112.0", Port: 2408}
+	l := NewPreferred(ep(854), &registered, ModeAuto, []account.Step{foreign, registered, foreign})
+	want := []account.Step{foreign, registered, {Transport: "wg", Host: "8.6.112.0", Port: 854}, {Transport: "h2", Port: 443}}
+	for i, step := range want {
+		if l.Current() != step {
+			t.Fatalf("step %d: %+v, want %+v", i, l.Current(), step)
+		}
+		if i < len(want)-1 {
+			l.Next(time.Unix(0, 0))
+		}
+	}
+	h2 := NewPreferred(ep(854), nil, ModeH2, []account.Step{foreign})
+	if h2.Len() != 1 || !h2.OnH2() {
+		t.Fatalf("manual h2 changed: %+v", h2.Current())
+	}
+}
+
 func TestUnknownLastGoodIgnored(t *testing.T) {
 	l := New(ep(854), &account.Step{Transport: "wg", Host: "8.6.112.0", Port: 9999})
 	if l.Current() != (account.Step{Transport: "wg", Host: "8.6.112.0", Port: 2408}) {

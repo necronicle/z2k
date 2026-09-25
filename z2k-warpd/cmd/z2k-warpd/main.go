@@ -30,6 +30,7 @@ import (
 
 	"github.com/necronicle/z2k/z2k-warpd/internal/account"
 	"github.com/necronicle/z2k/z2k-warpd/internal/domainroute"
+	"github.com/necronicle/z2k/z2k-warpd/internal/edgepick"
 	"github.com/necronicle/z2k/z2k-warpd/internal/engine"
 	"github.com/necronicle/z2k/z2k-warpd/internal/ladder"
 	"github.com/necronicle/z2k/z2k-warpd/internal/logrot"
@@ -54,6 +55,7 @@ const (
 	// z2k_warp. Наши эндпоинты оказались бы завёрнуты в тот самый туннель,
 	// через который к ним и идёт подключение.
 	defaultEndpoints = "/opt/zapret2/lists/warp-endpoints.txt"
+	defaultScanPools = "/opt/zapret2/lists/warp-scan-pools.txt"
 	logMax           = 256 * 1024
 	memLimit         = 48 << 20
 )
@@ -265,6 +267,7 @@ func cmdRun(args []string) int {
 	modeArg := fs.String("transport", os.Getenv("Z2K_WARP_TRANSPORT"), "auto | wg | h2 — какими транспортами ходить")
 	proxy := fs.String("proxy", os.Getenv("Z2K_WARP_VPS_PROXY"), "HTTPS-прокси (VPS-релей) для API, если напрямую заблокирован")
 	epPath := fs.String("endpoints", defaultEndpoints, "список запасных эндпоинтов")
+	poolPath := fs.String("scan-pools", defaultScanPools, "небольшой список сетей для выбора узла WARP")
 	verbose := fs.Bool("v", false, "подробный лог")
 	fs.Parse(args)
 
@@ -318,6 +321,11 @@ func cmdRun(args []string) int {
 			}
 			return nil, fmt.Errorf("unknown transport %q", step.Transport)
 		},
+	}
+	if device, err := account.Load(*devPath); err == nil {
+		pools := edgepick.ReadPools(*poolPath)
+		cfg.EdgeCandidates = edgepick.Candidates(device.Endpoint, ladder.FallbackHosts(), pools, 12, uint64(time.Now().Unix()/86400))
+		logf("edge: %d candidates from %d pools", len(cfg.EdgeCandidates), len(pools))
 	}
 	mode, modeOK := ladder.ParseMode(*modeArg)
 	if !modeOK {

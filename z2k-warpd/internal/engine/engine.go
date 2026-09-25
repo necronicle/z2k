@@ -15,6 +15,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 
 	"github.com/necronicle/z2k/z2k-warpd/internal/account"
+	"github.com/necronicle/z2k/z2k-warpd/internal/edgepick"
 	"github.com/necronicle/z2k/z2k-warpd/internal/health"
 	"github.com/necronicle/z2k/z2k-warpd/internal/ladder"
 	"github.com/necronicle/z2k/z2k-warpd/internal/nat"
@@ -39,12 +40,16 @@ type TransportFactory func(step account.Step, dev tun.Device, d *account.Device)
 
 // Config — зависимости движка.
 type Config struct {
-	DevicePath string
-	StatusPath string
-	LockPath   string        // пусто = рядом со status.json
-	ForceStep  *account.Step // --force-transport: лестница из одного шага
-	Mode       string        // --transport: ladder.ModeAuto / ModeWG / ModeH2
-	Logf       func(string, ...any)
+	DevicePath     string
+	StatusPath     string
+	LockPath       string        // пусто = рядом со status.json
+	ForceStep      *account.Step // --force-transport: лестница из одного шага
+	Mode           string        // --transport: ladder.ModeAuto / ModeWG / ModeH2
+	Logf           func(string, ...any)
+	EdgeCandidates []account.Step
+	EdgeCachePath  string
+	GeoProbe       func(context.Context, string) (edgepick.Meta, time.Duration, int, error)
+	EdgeWAN        func(string) (string, error)
 
 	Now          func() time.Time
 	Sleep        func(ctx context.Context, d time.Duration) error
@@ -86,6 +91,15 @@ func (c *Config) defaults() {
 	if c.Probe == nil {
 		c.Probe = health.TraceProbe(8 * time.Second)
 	}
+	if c.GeoProbe == nil {
+		c.GeoProbe = edgepick.Probe
+	}
+	if c.EdgeWAN == nil {
+		c.EdgeWAN = edgepick.WANFor
+	}
+	if c.EdgeCachePath == "" {
+		c.EdgeCachePath = "/opt/etc/z2k-warp/edge-cache.json"
+	}
 	if c.SwitchTunnel == nil {
 		api := &account.Client{HTTP: &http.Client{Timeout: 25 * time.Second}}
 		proxy := c.Proxy
@@ -114,13 +128,16 @@ func (c *Config) defaults() {
 
 // Engine — состояние одного запуска.
 type Engine struct {
-	cfg     Config
-	d       *account.Device
-	st      *status.Writer
-	tunDev  *tunshare.Shared
-	iface   string
-	since   time.Time
-	lastErr string // причина держится до первого успеха, а не до следующей записи
+	cfg         Config
+	d           *account.Device
+	st          *status.Writer
+	tunDev      *tunshare.Shared
+	iface       string
+	since       time.Time
+	lastErr     string // причина держится до первого успеха, а не до следующей записи
+	scanning    bool
+	currentStep account.Step
+	edges       map[account.Step]edgepick.Result
 }
 
 // Run выполняет цикл до отмены ctx. Возвращает ошибку только для
@@ -150,6 +167,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("device.json: %w", err)
 	}
 	e.d = d
+	e.scanning = cfg.ForceStep == nil && cfg.Mode != ladder.ModeH2 && len(cfg.EdgeCandidates) > 0
 
 	if err := e.bringUpTUN(); err != nil {
 		e.write(status.Status{LastError: status.ErrTunFailed})
@@ -180,13 +198,24 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		lad = ladder.NewFixed(fs)
 	} else {
-		lad = ladder.NewMode(d.Endpoint, d.LastGood, cfg.Mode)
+		verified := e.scanEdges(ctx)
+		e.scanning = false
+		e.edges = make(map[account.Step]edgepick.Result, len(verified))
+		for _, result := range verified {
+			e.edges[result.Step] = result
+		}
+		preferred := make([]account.Step, 0, len(verified))
+		for _, result := range edgepick.Rank(verified) {
+			preferred = append(preferred, result.Step)
+		}
+		lad = ladder.NewPreferred(d.Endpoint, d.LastGood, cfg.Mode, preferred)
 	}
 	mon := &health.Monitor{Probe: cfg.Probe, Doubt: 30 * time.Second, Fails: 2,
 		ProveEvery: 3 * time.Second}
 
 	for ctx.Err() == nil {
 		step := lad.Current()
+		e.currentStep = step
 		e.write(status.Status{Ready: false, Transport: step.Transport, Endpoint: ladder.Label(step),
 			Iface: e.iface, Addr: d.AddrV4, HandshakeAge: -1, LadderStep: lad.Index()})
 		tr, err := e.open(ctx, step, e.tunDev.Handle())
@@ -452,6 +481,24 @@ func (e *Engine) tearDownTUN() {
 }
 
 func (e *Engine) write(s status.Status) {
+	if s.EdgeSelection == "" {
+		if e.scanning {
+			s.EdgeSelection = "scanning"
+		} else if result, ok := e.edges[e.currentStep]; ok {
+			s.EdgeColo = result.Colo
+			s.EdgeCountry = result.Country
+			s.EdgeRTTMs = int(result.RTT / time.Millisecond)
+			s.EdgeCheckedAt = result.CheckedAt.Unix()
+			s.EdgeSelection = "unknown"
+			if result.Country == "RU" {
+				s.EdgeSelection = "domestic"
+			} else if result.Country != "" {
+				s.EdgeSelection = "foreign"
+			}
+		} else if e.currentStep.Transport != "" {
+			s.EdgeSelection = "fallback"
+		}
+	}
 	s.PID = os.Getpid()
 	s.MemKB = status.RSSKB()
 	if s.LastError == "" {
