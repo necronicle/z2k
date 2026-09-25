@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 122,
-  "current": "p-85.14",
+  "seq": 123,
+  "current": "p-85.15",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -187,10 +187,10 @@
   "files/lists/youtube_ips6.txt": "d51f5e44b989b503729ae35b79cf80adf7e47ac96fde42d785e0ba6e501c28cb",
   "files/lua/z2k-alert.lua": "b6811baa146879bd846462d241557d3cf93dcfff6d1fcc50ff24a42240ddab74",
   "files/lua/z2k-fooling-ext.lua": "4b5efb6672f54dbe4d04440066f06e84d92e43c8534cdfb88d136028e6d8231f",
-  "files/lua/z2k-modern-core.lua": "015fbf5c21a6a24b790ca72440df07b8d405d6abbd496b23f3d1727d959753db",
+  "files/lua/z2k-modern-core.lua": "35853cc5f5b8472f0fac888f046897ee362b827b7f5a4798591ffdba67840e09",
   "files/lua/z2k-quic-silence.lua": "f7a46db2cb93978fc022ba8ace8bead0fa59182281f39ec371306253b529be93",
   "files/lua/z2k-range-rand.lua": "073c24d9133484b9f2282f1e398b5963eb577b483c1cab8c29cfd6e7bf8acd9a",
-  "files/lua/z2k-state-persist.lua": "c1e85cb1dc8bc4d8ece7f821e01e415984393bfa9c23ceab2ef1eaf1f28765f8",
+  "files/lua/z2k-state-persist.lua": "70d881fdd633d9a36eb29a8f5bb184a3be06a65e2125b551b027ff136c9c42ad",
   "files/lua/z2k-tcp16.lua": "340002edff2035d1882431802cc0920b5d2faf7c733613a1051415b4816fdf9d",
   "files/ndm/90-z2k-tg-redirect.sh": "a31dfed120f3b659b8cc583ec15ab99075b35e92d33da25461aea5e9f71fa48f",
   "files/ndm/91-z2k-http-tunnel-redirect.sh": "9f0e288359a5f03a7f14c7dc0aa2c223f4a5dbb9b7b0baa695e6718b99003745",
@@ -246,7 +246,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle": "efb5e2a526d1078a4878d38f54aa050fa7107227cc0964f008eb026f11a11b39",
   "quic_strats.ini": "f5c74157344b29cd28e05d967e947c3f6c2e88ef15c211971b6cbd7e501b9836",
   "strats_new2.txt": "576ce4ffa56529a8b39cebf09e4b7249ac9c77bef211769899c4b657b9160289",
-  "webpanel/cgi/actions.sh": "ba1d990f4acd3df9fc02c1ae81d4e148172c2c217f8df35872c3729425f649b1",
+  "webpanel/cgi/actions.sh": "df7c0f0ab716ce291c60cfa00a97b5533145fe457615eadd75a15a04a9caae14",
   "webpanel/cgi/api.sh": "05760ffce2939c73dbec566810464bcf5ccfcd5aa97d19af74c1bfaa158bf688",
   "webpanel/cgi/auth.sh": "37e5597493724a6b79a0b25b5d52d42effefc221b8a1f64425de39e5beaf0c19",
   "webpanel/init.d/S96z2k-webpanel": "8dd6c8192cd680c3fbabc4827be392525a585344231cd659d3f8b10f0292a1f3",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "7008fe4fcc59e3d4f0718c3cf2fcd5b7f1cffbb3a13ff646eec48ee0e6819c3e",
+  "webpanel/www/index.html": "12617ec71113d75bf191ae364d6412ed9518f7844cd91bcd85b50b6dd60dc00b",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -585,6 +585,7 @@
 {"v": "p-85.11", "type": "patch", "ts": "2026-09-25T07:41:55Z", "ref": "p-85.11", "desc": "Исключили ChatGPT, Claude, Gemini, GitHub и служебные домены Cloudflare из обработки трафика. Списки очищаются сразу после установки патча. Благодарим DIDIQ Rawa за поддержку проекта.", "changed_files": ["webpanel/www/index.html", "files/lists/extra-domains.txt", "files/z2k-geosite.sh", "files/z2k-warp.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "r-85.12", "type": "reinstall", "ts": "2026-09-25T12:47:17Z", "ref": "r-85.12", "desc": "WARP автоматически выбирает проверенный узел Cloudflare вне России и показывает его в панели; при недоступности возвращается к штатной лестнице. Исправлена доставка ответов из WARP устройствам за Keenetic с ранним правилом REJECT.", "changed_files": ["webpanel/www/index.html", "files/lists/warp-scan-pools.txt", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "lib/install.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-85.13", "type": "patch", "ts": "2026-09-25T19:39:53Z", "ref": "p-85.13", "desc": "WARP: выбранные по MAC устройства получают IP из активной базы Keenetic, если записи нет в таблице соседей; полный режим снова применяется после обновления.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-85.14", "type": "patch", "ts": "2026-09-25T20:20:50Z", "ref": "p-85.14", "desc": "Исправлена доставка сетевых хуков Keenetic: обновления теперь заменяют действующие правила WARP и других туннелей, а WARP восстанавливает пропуск ответов после обновления firewall.", "changed_files": ["webpanel/www/index.html", "files/ndm/90-z2k-tg-redirect.sh", "files/ndm/91-z2k-http-tunnel-redirect.sh", "files/ndm/93-z2k-warp.sh", "files/ndm/94-z2k-ppe-deoffload.sh", "files/ndm/95-z2k-scheduler-watchdog.sh", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-85.14", "type": "patch", "ts": "2026-09-25T20:20:50Z", "ref": "p-85.14", "desc": "Исправлена доставка сетевых хуков Keenetic: обновления теперь заменяют действующие правила WARP и других туннелей, а WARP восстанавливает пропуск ответов после обновления firewall.", "changed_files": ["webpanel/www/index.html", "files/ndm/90-z2k-tg-redirect.sh", "files/ndm/91-z2k-http-tunnel-redirect.sh", "files/ndm/93-z2k-warp.sh", "files/ndm/94-z2k-ppe-deoffload.sh", "files/ndm/95-z2k-scheduler-watchdog.sh", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-85.15", "type": "patch", "ts": "2026-09-25T21:10:19Z", "ref": "p-85.15", "desc": "Для YouTube возвращён независимый подбор стратегии для каждого адреса; ручной выбор одного адреса больше не влияет на остальные.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-modern-core.lua", "files/lua/z2k-state-persist.lua", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
