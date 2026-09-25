@@ -1,0 +1,68 @@
+package edgepick
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestParseMetaUsesEdgeCountryNotExitCountry(t *testing.T) {
+	meta, err := parseMeta([]byte(`{"country":"RU","colo":{"iata":"FRA","cca2":"DE"}}`))
+	if err != nil || meta.Colo != "FRA" || meta.Country != "DE" {
+		t.Fatalf("meta=%+v err=%v", meta, err)
+	}
+	if _, err := parseMeta([]byte(`{"country":"RU","colo":{"iata":"DME"}}`)); err == nil {
+		t.Fatal("missing edge country was accepted")
+	}
+}
+
+func TestProbeWithClientSendsRefererAndCountsLoss(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("Referer") != "https://speed.cloudflare.com" {
+			t.Errorf("Referer=%q", r.Header.Get("Referer"))
+		}
+		if calls == 1 {
+			http.Error(w, "try again", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"country":"RU","colo":{"iata":"HEL","cca2":"FI"}}`))
+	}))
+	defer srv.Close()
+	meta, rtt, loss, err := probeWithClient(context.Background(), srv.Client(), srv.URL)
+	if err != nil || meta.Country != "FI" || meta.Colo != "HEL" || loss != 33 || rtt <= 0 || calls != 3 {
+		t.Fatalf("meta=%+v rtt=%s loss=%d calls=%d err=%v", meta, rtt, loss, calls, err)
+	}
+}
+
+func TestProbeWithClientRejectsOversizedAndInvalidResponses(t *testing.T) {
+	for _, body := range []string{strings.Repeat("x", 5000), `{"colo":{"iata":"FRA"}}`, `bad-json`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		_, _, _, err := probeWithClient(context.Background(), srv.Client(), srv.URL)
+		srv.Close()
+		if err == nil {
+			t.Fatalf("accepted response %q", body[:min(len(body), 20)])
+		}
+	}
+}
+
+func TestProbeWithClientStopsAfterCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, _, err := probeWithClient(ctx, srv.Client(), srv.URL)
+	if err == nil || time.Since(start) > time.Second {
+		t.Fatalf("probe did not stop promptly: err=%v elapsed=%s", err, time.Since(start))
+	}
+}
