@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 const (
 	metaHost = "speed.cloudflare.com"
 	metaURL  = "https://speed.cloudflare.com/meta"
+	dohURL   = "https://cloudflare-dns.com/dns-query?name=speed.cloudflare.com&type=A"
 	maxMeta  = 4096
 )
 
@@ -26,6 +28,46 @@ var errUnknownCountry = errors.New("Cloudflare edge country unknown")
 type Meta struct {
 	Colo    string
 	Country string
+}
+
+func lookupDoHWithClient(ctx context.Context, client *http.Client, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/dns-json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("DoH HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMeta+1))
+	if err != nil || len(data) > maxMeta {
+		return "", errors.New("DoH response invalid or too large")
+	}
+	var answer struct {
+		Status int `json:"Status"`
+		Answer []struct {
+			Type int    `json:"type"`
+			Data string `json:"data"`
+		} `json:"Answer"`
+	}
+	if err := json.Unmarshal(data, &answer); err != nil {
+		return "", err
+	}
+	if answer.Status != 0 {
+		return "", fmt.Errorf("DoH DNS status %d", answer.Status)
+	}
+	for _, a := range answer.Answer {
+		ip, err := netip.ParseAddr(a.Data)
+		if a.Type == 1 && err == nil && ip.Is4() && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+			return net.JoinHostPort(ip.String(), "443"), nil
+		}
+	}
+	return "", errors.New("DoH: no public IPv4 address")
 }
 
 func parseMeta(raw []byte) (Meta, error) {
@@ -101,21 +143,34 @@ func Probe(ctx context.Context, iface string) (Meta, time.Duration, int, error) 
 	resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "udp", "1.1.1.1:53")
 	}}
-	lookupCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	addresses, err := resolver.LookupIPAddr(lookupCtx, metaHost)
-	if err != nil {
-		return Meta{}, 0, 100, fmt.Errorf("edge DNS through TUN: %w", err)
-	}
 	var target string
-	for _, a := range addresses {
-		if a.IP.To4() != nil {
+	if err == nil {
+		for _, a := range addresses {
+			if a.IP.To4() == nil {
+				continue
+			}
 			target = net.JoinHostPort(a.IP.String(), "443")
 			break
 		}
 	}
 	if target == "" {
-		return Meta{}, 0, 100, errors.New("edge DNS: no IPv4 address")
+		// Some WARP edges carry HTTPS but drop UDP/53. Resolve with DoH through
+		// the same TUN, pinned to Cloudflare's IP, so DNS cannot escape via WAN.
+		dohTransport := &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, "tcp", "1.1.1.1:443")
+			},
+			TLSClientConfig: &tls.Config{ServerName: "cloudflare-dns.com"},
+		}
+		defer dohTransport.CloseIdleConnections()
+		dohClient := &http.Client{Transport: dohTransport, Timeout: 4 * time.Second}
+		target, err = lookupDoHWithClient(ctx, dohClient, dohURL)
+		if err != nil {
+			return Meta{}, 0, 100, fmt.Errorf("edge DNS through TUN: %w", err)
+		}
 	}
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

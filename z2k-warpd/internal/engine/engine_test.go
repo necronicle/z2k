@@ -51,7 +51,10 @@ func TestForeignEdgeSelectedBeforeFasterDomestic(t *testing.T) {
 	if s := readStatus(h); s.EdgeColo != "HEL" || s.EdgeCountry != "FI" || s.EdgeRTTMs != 40 || s.EdgeSelection != "foreign" {
 		t.Fatalf("selected edge status: %+v", s)
 	}
-	if got := edgepick.LoadCache(cfg.EdgeCachePath, "usb0|192.0.2.2", h.now); len(got) != 2 || got[0].Country != "RU" || got[1].Country != "FI" {
+	h.mu.Lock()
+	now := h.now
+	h.mu.Unlock()
+	if got := edgepick.LoadCache(cfg.EdgeCachePath, "usb0|192.0.2.2", now); len(got) != 2 || got[0].Country != "RU" || got[1].Country != "FI" {
 		t.Fatalf("verified cache: %+v", got)
 	}
 	cancel()
@@ -118,6 +121,46 @@ func TestForeignEdgeFailureFallsThroughToDomestic(t *testing.T) {
 	h.mu.Unlock()
 	foreignTransport.die()
 	waitFor(t, "domestic fallback ready", func() bool { s := readStatus(h); return s != nil && s.Ready && s.EdgeSelection == "domestic" })
+	cancel()
+	<-done
+}
+
+func TestUnlocatedEdgeIsNotPreferredOverLocatedDomestic(t *testing.T) {
+	h := newHarness(t, baseDevice(), map[string]bool{"wg:2408": true})
+	unknown := account.Step{Transport: "wg", Host: "8.6.112.1", Port: 2408}
+	ru := account.Step{Transport: "wg", Host: "188.114.96.23", Port: 2408}
+	cfg := h.config()
+	cfg.EdgeCandidates = []account.Step{unknown, ru}
+	cfg.EdgeCachePath = filepath.Join(h.dir, "edge-cache.json")
+	cfg.EdgeWAN = func(string) (string, error) { return "usb0|192.0.2.2", nil }
+	cfg.GeoProbe = func(context.Context, string) (edgepick.Meta, time.Duration, int, error) {
+		h.mu.Lock()
+		host := h.made[len(h.made)-1].step.Host
+		h.mu.Unlock()
+		if host == unknown.Host {
+			return edgepick.Meta{}, 0, 100, errors.New("meta HTTPS timeout")
+		}
+		return edgepick.Meta{Colo: "DME", Country: "RU"}, 20 * time.Millisecond, 0, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = Run(ctx, cfg); close(done) }()
+	waitFor(t, "located domestic ready", func() bool {
+		s := readStatus(h)
+		return s != nil && s.Ready && s.EdgeSelection == "domestic"
+	})
+	h.mu.Lock()
+	selected := h.made[len(h.made)-1].step.Host
+	h.mu.Unlock()
+	if selected != ru.Host {
+		t.Fatalf("selected unlocated endpoint %s", selected)
+	}
+	h.mu.Lock()
+	now := h.now
+	h.mu.Unlock()
+	if got := edgepick.LoadCache(cfg.EdgeCachePath, "usb0|192.0.2.2", now); len(got) != 1 || got[0].Step != ru {
+		t.Fatalf("unlocated endpoint entered preferred cache: %+v", got)
+	}
 	cancel()
 	<-done
 }

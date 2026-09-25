@@ -17,6 +17,8 @@ func (e *Engine) scanEdges(ctx context.Context) []edgepick.Result {
 	if e.cfg.Mode == ladder.ModeH2 || len(e.cfg.EdgeCandidates) == 0 {
 		return nil
 	}
+	scanCtx, cancel := context.WithTimeout(ctx, edgeScanBudget)
+	defer cancel()
 	wan, err := e.cfg.EdgeWAN(e.cfg.EdgeCandidates[0].Host)
 	if err != nil {
 		e.cfg.Logf("edge: WAN fingerprint unavailable: %v", err)
@@ -27,22 +29,14 @@ func (e *Engine) scanEdges(ctx context.Context) []edgepick.Result {
 			if hint.Country == "" || hint.Country == "RU" {
 				continue
 			}
-			result, ok := e.checkEdge(ctx, hint.Step)
+			result, ok := e.checkEdge(scanCtx, hint.Step)
 			if ok && result.Country != "" && result.Country != "RU" {
 				e.cfg.Logf("edge: cached foreign %s %s %s proved again", result.Colo, result.Country, result.Step.Host)
-				verified := []edgepick.Result{result}
-				for _, old := range cached {
-					if old.Step != result.Step {
-						verified = append(verified, old)
-					}
-				}
-				return verified
+				return []edgepick.Result{result}
 			}
 			break
 		}
 	}
-	scanCtx, cancel := context.WithTimeout(ctx, edgeScanBudget)
-	defer cancel()
 	var results []edgepick.Result
 	for _, step := range e.cfg.EdgeCandidates {
 		if scanCtx.Err() != nil {
@@ -61,7 +55,7 @@ func (e *Engine) scanEdges(ctx context.Context) []edgepick.Result {
 			e.cfg.Logf("edge: cache save failed: %v", err)
 		}
 	}
-	e.cfg.Logf("edge: checked %d candidates, %d carried WARP", len(e.cfg.EdgeCandidates), len(results))
+	e.cfg.Logf("edge: checked up to %d candidates, %d verified with location", len(e.cfg.EdgeCandidates), len(results))
 	return results
 }
 
@@ -81,11 +75,11 @@ func (e *Engine) checkEdge(ctx context.Context, step account.Step) (edgepick.Res
 	}
 	meta, rtt, loss, geoErr := e.cfg.GeoProbe(ctx, e.iface)
 	result := edgepick.Result{Step: step, RTT: rtt, LossPct: loss, CheckedAt: e.cfg.Now()}
-	if geoErr == nil {
-		result.Colo, result.Country = meta.Colo, meta.Country
-	} else {
+	if geoErr != nil || meta.Country == "" {
 		e.cfg.Logf("edge: %s location unavailable: %v", ladder.Label(step), geoErr)
+		return edgepick.Result{}, false
 	}
+	result.Colo, result.Country = meta.Colo, meta.Country
 	if wan, err := e.cfg.EdgeWAN(step.Host); err == nil {
 		result.WAN = wan
 	}

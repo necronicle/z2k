@@ -9,6 +9,33 @@ import (
 	"time"
 )
 
+func TestLookupDoHWithClientUsesOnlyARecords(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dns-query" || r.URL.Query().Get("name") != metaHost || r.URL.Query().Get("type") != "A" || r.Header.Get("Accept") != "application/dns-json" {
+			t.Errorf("unexpected DoH request: %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"Status":0,"Answer":[{"type":28,"data":"2606:4700::1"},{"type":1,"data":"162.159.140.220"}]}`))
+	}))
+	defer srv.Close()
+	got, err := lookupDoHWithClient(context.Background(), srv.Client(), srv.URL+"/dns-query?name=speed.cloudflare.com&type=A")
+	if err != nil || got != "162.159.140.220:443" {
+		t.Fatalf("target=%q err=%v", got, err)
+	}
+}
+
+func TestLookupDoHWithClientRejectsBadAnswers(t *testing.T) {
+	for _, body := range []string{`{"Status":2}`, `{"Status":0,"Answer":[{"type":1,"data":"127.0.0.1"}]}`, `{"Status":0,"Answer":[{"type":1,"data":"nonsense"}]}`, `bad-json`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		_, err := lookupDoHWithClient(context.Background(), srv.Client(), srv.URL)
+		srv.Close()
+		if err == nil {
+			t.Fatalf("accepted DoH response %q", body)
+		}
+	}
+}
+
 func TestParseMetaUsesEdgeCountryNotExitCountry(t *testing.T) {
 	meta, err := parseMeta([]byte(`{"country":"RU","colo":{"iata":"FRA","cca2":"DE"}}`))
 	if err != nil || meta.Colo != "FRA" || meta.Country != "DE" {

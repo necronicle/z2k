@@ -46,6 +46,20 @@ ssh_r 'sh /opt/zapret2/z2k-warp.sh status' | grep -q 'ready=1' || fail "не rea
 IF=$(ssh_r 'sed -n "s/.*\"iface\": *\"\(z2ktun[0-9]*\)\".*/\1/p" /opt/etc/z2k-warp/device.json')
 [ -n "$IF" ] || fail "нет iface"
 ssh_r "curl -s -m 10 --interface $IF https://1.1.1.1/cdn-cgi/trace" | grep -q '^warp=on' || fail "warp=on через $IF"
+EDGE_STATUS=$(ssh_r 'cat /tmp/z2k-warp/status.json')
+case "$EDGE_STATUS" in
+  *'"edge_selection":"foreign"'*|*'"edge_selection":"domestic"'*)
+    EDGE_COUNTRY=$(printf '%s' "$EDGE_STATUS" | sed -n 's/.*"edge_country":"\([A-Z][A-Z]\)".*/\1/p')
+    EDGE_COLO=$(printf '%s' "$EDGE_STATUS" | sed -n 's/.*"edge_colo":"\([A-Z][A-Z][A-Z]\)".*/\1/p')
+    [ -n "$EDGE_COUNTRY" ] && [ -n "$EDGE_COLO" ] || fail "нет подтверждённых данных узла"
+    META=$(ssh_r "curl -sS -m 10 --interface $IF -H 'Referer: https://speed.cloudflare.com' https://speed.cloudflare.com/meta") || fail "нет /meta через $IF"
+    printf '%s' "$META" | grep -q '"colo"' || fail "нет colo в /meta"
+    printf '%s' "$META" | grep -q "\"iata\":\"$EDGE_COLO\"" || fail "colo в статусе не совпадает с /meta"
+    printf '%s' "$META" | grep -q "\"cca2\":\"$EDGE_COUNTRY\"" || fail "страна узла в статусе не совпадает с /meta"
+    ;;
+  *'"edge_selection":"fallback"'*) echo "автовыбор не нашёл узел; проверяется штатная лестница" ;;
+  *) fail "нет результата выбора узла" ;;
+esac
 
 step "путь LAN-клиента (PREROUTING → mark → table 989 → $IF)"
 ssh_r 'ipset add z2k_warp 1.1.1.1/32 -exist'
