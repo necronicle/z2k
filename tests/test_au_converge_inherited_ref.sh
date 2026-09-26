@@ -1,11 +1,11 @@
 #!/bin/sh
-# tests/test_au_converge_inherited_ref.sh — сходимость качает с тега ЦЕЛЕВОЙ версии,
-# а не с того, что осталось в окружении от прошлой переустановки.
+# tests/test_au_converge_inherited_ref.sh — сходимость не качает с тега, который
+# остался в окружении от прошлой переустановки.
 #
 # ЧТО СЛУЧИЛОСЬ. au_apply_reinstall экспортирует Z2K_AU_TARGET_REF, а переустановка
-# перезапускает планировщик и панель прямо из своего окружения. Дальше каждый
-# ночной прогон рождается от планировщика и получает эту переменную по
-# наследству. au_apply_converge пина не ставил, и au_repo_base строила адрес по
+# перезапускает планировщик прямо из своего окружения. Дальше каждый ночной
+# прогон рождается от планировщика и получает эту переменную по наследству.
+# au_apply_converge её не сбрасывал, и au_repo_base строила адрес по
 # унаследованному тегу. Замер на роутере 25.09.2026: у z2k-scheduler.sh и lighttpd
 # в /proc/<pid>/environ стоит Z2K_AU_TARGET_REF=p-84.18 (ночная переустановка
 # 15.09), все четыре источника отдают файлы p-84.18 байт в байт, суммы ждутся от
@@ -61,22 +61,21 @@ EOF
 # Наследство от переустановки 15.09.
 Z2K_AU_TARGET_REF=p-84.18; export Z2K_AU_TARGET_REF
 
-# --- 1. манифест объявляет ref целевой версии --------------------------------
-manifest '{"v": "p-85.10", "type": "patch", "ts": "2026-09-23T15:26:49Z", "ref": "p-85.10", "changed_files": []}'
-: > "$_log"; rm -f "$SB/base"
-au_apply_converge p-85.10 >/dev/null 2>&1
-assert_eq "качаем с тега целевой версии, а не с унаследованного" \
-    "https://raw.githubusercontent.com/necronicle/z2k/p-85.10" "$(cat "$SB/base" 2>/dev/null)"
-assert_eq "пин виден в журнале" "1" \
-    "$(grep -c 'по неизменяемой ссылке p-85.10' "$_log")"
-
-# --- 2. старый манифест без ref: ветка, а не унаследованный тег -------------
-Z2K_AU_TARGET_REF=p-84.18; export Z2K_AU_TARGET_REF
-manifest '{"v": "p-85.10", "type": "patch", "ts": "2026-09-23T15:26:49Z", "changed_files": []}'
-: > "$_log"; rm -f "$SB/base"
-au_apply_converge p-85.10 >/dev/null 2>&1
-assert_eq "без ref в манифесте — ветка, наследство затёрто" \
-    "$Z2K_AU_REPO_RAW" "$(cat "$SB/base" 2>/dev/null)"
+# Сходимость ведёт себя так же, как на чистом окружении: качает из
+# Z2K_AU_REPO_RAW. Это же переопределение держит песочницу
+# scripts/rehearse_update.sh — адрес с тегом мимо него ушёл бы на GitHub.
+for _entry in \
+    '{"v": "p-85.10", "type": "patch", "ts": "2026-09-23T15:26:49Z", "ref": "p-85.10", "changed_files": []}' \
+    '{"v": "p-85.10", "type": "patch", "ts": "2026-09-23T15:26:49Z", "changed_files": []}'
+do
+    Z2K_AU_TARGET_REF=p-84.18; export Z2K_AU_TARGET_REF
+    manifest "$_entry"
+    case "$_entry" in *'"ref"'*) _what="ref в манифесте есть" ;; *) _what="ref в манифесте нет" ;; esac
+    rm -f "$SB/base"
+    au_apply_converge p-85.10 >/dev/null 2>&1
+    assert_eq "$_what: качаем из Z2K_AU_REPO_RAW, а не с унаследованного p-84.18" \
+        "$Z2K_AU_REPO_RAW" "$(cat "$SB/base" 2>/dev/null)"
+done
 
 printf '\nPASSED: %s, FAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
