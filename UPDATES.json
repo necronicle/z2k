@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 123,
-  "current": "p-85.15",
+  "seq": 124,
+  "current": "p-85.16",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -162,7 +162,7 @@
   "files/fake/tls_clienthello_vk_com.bin": "d6d63c53bc0e1d97e913a43fc4db34f6558bb807228bf6100e3b6863f0720404",
   "files/fake/tls_clienthello_www_google_com.bin": "936c2bee4cfb80aa3c426b2dcbcc834b3fbcd1adb17172959dc569c73a14275c",
   "files/fake/tls_clienthello_www_onetrust_com.bin": "4ee0870abe0a0128600b0095189987ba1d210dae8bf963bc725aff49cf922624",
-  "files/init.d/S51z2k-warp": "3d4a7abd78025dbe6e3522dae8e25d2a2ae06bd9d39536472fd8b69a3ee747e4",
+  "files/init.d/S51z2k-warp": "d9d4db0da5c134abd356a22125d7a6ad40e0d19156325ca1ab6f5cc2573f2c08",
   "files/init.d/S96z2k-rt-proxy": "428ec9db9627c1322722b42ed38646a34c05a15849ea153326dad152c777e347",
   "files/init.d/S97z2k-http-tunnel": "0b0a69b2b3670187620d5959427f77a5c582c1afdfe8b038c35b8bd72802a007",
   "files/init.d/S98tg-tunnel": "8364de59455c1f4cab5b05d0c11c46ab21903db37eebebbfa2768f86f86219ba",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "12617ec71113d75bf191ae364d6412ed9518f7844cd91bcd85b50b6dd60dc00b",
+  "webpanel/www/index.html": "6304ad5970640c7801c5cea20ca517b5f86f45b900de8682c86bfae958222cf4",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -300,16 +300,16 @@
   "z2k-detect/builds/z2k-detect-linux-mipsle": "76efc8daf1685776772819cee21fd2a79874e3ccdda5d69dcc800f4f2f15c5a6",
   "z2k-detect/builds/z2k-detect-linux-ppc64": "76d080543dd44af8084db22fe686111b7d05427b0934f332fdda6595a89e266d",
   "z2k-detect/builds/z2k-detect-linux-riscv64": "f102b3d3d6111193c7fd7669beeae5022c93611f622f7532a9accc5157b653c4",
-  "z2k-warpd/builds/z2k-warpd-linux-amd64": "a9344ef0953ba172f66331e84fd3dbe62970dd87bb575c49b1ebcb0c247d8725",
-  "z2k-warpd/builds/z2k-warpd-linux-arm": "92f3d1560862d639ecac3bba925b79346158c001f8cab2ed9e89e56a228d3f24",
-  "z2k-warpd/builds/z2k-warpd-linux-arm64": "1e51eb2cca128be801b28562cd61d4b5375d1c84fabc4d9561a5a1b5755df778",
-  "z2k-warpd/builds/z2k-warpd-linux-mips": "45715bd921b54d942760d6b59663c9cc0e70e8e83f09f758df6aabe2654b9707",
-  "z2k-warpd/builds/z2k-warpd-linux-mips64el": "a836bbae9663a9b6a54bfa46c4abb68cb69e58fb25aa0a92ae8186a360374e39",
-  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "f0b03138fe71ff477d1f42147b1cc9c506d39cac7cadeddfc23fbe0485749472",
-  "z2k-warpd/builds/z2k-warpd-linux-mipsle": "f0b03138fe71ff477d1f42147b1cc9c506d39cac7cadeddfc23fbe0485749472",
-  "z2k-warpd/builds/z2k-warpd-linux-ppc64": "28866f85552f45b73e7a50d4487ea47d9edf43ef9040c701690a50cede3e0227",
-  "z2k-warpd/builds/z2k-warpd-linux-riscv64": "6c8c5e27807ce0e64c3516fe8bb006b1303aed7bcb1a13468a7d06cbd9ee3bc6",
-  "z2k-warpd/builds/z2k-warpd-linux-x86": "b109a0666271e497c160027a3db2b98df0c2ddee34c4e7fa62657365339d5143",
+  "z2k-warpd/builds/z2k-warpd-linux-amd64": "b62e59842c2a68b7e23ee74cba6fe94403271a74bcdb91c64cd3f1278bddc78f",
+  "z2k-warpd/builds/z2k-warpd-linux-arm": "3ebf8fc3657f401e4921eb337f3a86384e50bef17301562180148c773b763943",
+  "z2k-warpd/builds/z2k-warpd-linux-arm64": "3e2ab0c8748b9a9a00c0712769e83498458fc9a539943a9fb06fe142681c247c",
+  "z2k-warpd/builds/z2k-warpd-linux-mips": "55706ff836bc94f341b4fb76793441838f4c9e41fedd88a68397ef7b78e0330b",
+  "z2k-warpd/builds/z2k-warpd-linux-mips64el": "45073c187ae48ef8e18d79163c2a5d1d8ca12798eb91ba31d99c0c8ebe481cbc",
+  "z2k-warpd/builds/z2k-warpd-linux-mipsel": "c4078886b37cd59ecc2e01a201e912bc7707791d89b72fc8091895116fbdc187",
+  "z2k-warpd/builds/z2k-warpd-linux-mipsle": "c4078886b37cd59ecc2e01a201e912bc7707791d89b72fc8091895116fbdc187",
+  "z2k-warpd/builds/z2k-warpd-linux-ppc64": "0fcf7f52bd8c4d8039db3a8f61f9b17618552265f6f830083530ff6b57b1bb83",
+  "z2k-warpd/builds/z2k-warpd-linux-riscv64": "bb47d1f442bdd60cb464fa128b638010d8409627cee271c036d347ca23734625",
+  "z2k-warpd/builds/z2k-warpd-linux-x86": "daf0703eeb4266651c800e8954bc2411d35107e80bdb04184d4b3716f8296378",
   "z2k.sh": "9f2b2d82ab5ef73c5b44f3f103d0a85896f5aaadd9fa1bacffd3800102669f3b"
   },
   "history": [
@@ -586,6 +586,7 @@
 {"v": "r-85.12", "type": "reinstall", "ts": "2026-09-25T12:47:17Z", "ref": "r-85.12", "desc": "WARP автоматически выбирает проверенный узел Cloudflare вне России и показывает его в панели; при недоступности возвращается к штатной лестнице. Исправлена доставка ответов из WARP устройствам за Keenetic с ранним правилом REJECT.", "changed_files": ["webpanel/www/index.html", "files/lists/warp-scan-pools.txt", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "lib/install.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-85.13", "type": "patch", "ts": "2026-09-25T19:39:53Z", "ref": "p-85.13", "desc": "WARP: выбранные по MAC устройства получают IP из активной базы Keenetic, если записи нет в таблице соседей; полный режим снова применяется после обновления.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-85.14", "type": "patch", "ts": "2026-09-25T20:20:50Z", "ref": "p-85.14", "desc": "Исправлена доставка сетевых хуков Keenetic: обновления теперь заменяют действующие правила WARP и других туннелей, а WARP восстанавливает пропуск ответов после обновления firewall.", "changed_files": ["webpanel/www/index.html", "files/ndm/90-z2k-tg-redirect.sh", "files/ndm/91-z2k-http-tunnel-redirect.sh", "files/ndm/93-z2k-warp.sh", "files/ndm/94-z2k-ppe-deoffload.sh", "files/ndm/95-z2k-scheduler-watchdog.sh", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-85.15", "type": "patch", "ts": "2026-09-25T21:10:19Z", "ref": "p-85.15", "desc": "Для YouTube возвращён независимый подбор стратегии для каждого адреса; ручной выбор одного адреса больше не влияет на остальные.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-modern-core.lua", "files/lua/z2k-state-persist.lua", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
+{"v": "p-85.15", "type": "patch", "ts": "2026-09-25T21:10:19Z", "ref": "p-85.15", "desc": "Для YouTube возвращён независимый подбор стратегии для каждого адреса; ручной выбор одного адреса больше не влияет на остальные.", "changed_files": ["webpanel/www/index.html", "files/lua/z2k-modern-core.lua", "files/lua/z2k-state-persist.lua", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
+{"v": "p-85.16", "type": "patch", "ts": "2026-09-26T10:21:38Z", "ref": "p-85.16", "desc": "WARP снова передаёт трафик через сети с блокировкой WG; обновление дожидается остановки старого движка и запускает новый.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
   ]
 }
