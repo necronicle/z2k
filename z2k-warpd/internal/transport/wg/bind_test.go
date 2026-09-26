@@ -6,6 +6,42 @@ import (
 	"golang.zx2c4.com/wireguard/conn"
 )
 
+// A DPI that classifies the first UDP datagram must see the AWG preamble
+// before the ordinary Cloudflare WireGuard initiation.
+func TestHandshakeSendsObfuscatedPreambleBeforeWireGuard(t *testing.T) {
+	fb := &fakeBind{}
+	b := NewReservedBind(fb, [3]byte{0x32, 0xfd, 0x2c})
+	handshake := make([]byte, 148)
+	handshake[0] = 1
+	if err := b.Send([][]byte{handshake}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(fb.sent) != 8 {
+		t.Fatalf("want one disguise, six junk packets and handshake; got %d datagrams", len(fb.sent))
+	}
+	if got := fb.sent[7]; len(got) != 148 || got[0] != 1 || got[1] != 0x32 || got[2] != 0xfd || got[3] != 0x2c {
+		t.Fatalf("WireGuard handshake changed: %x", got[:4])
+	}
+	for i, pkt := range fb.sent[:7] {
+		if len(pkt) >= 4 && pkt[0] == 1 && pkt[1] == 0x32 && pkt[2] == 0xfd && pkt[3] == 0x2c {
+			t.Fatalf("preamble packet %d resembles Cloudflare WireGuard", i)
+		}
+	}
+}
+
+func TestDataDoesNotResendObfuscationPreamble(t *testing.T) {
+	fb := &fakeBind{}
+	b := NewReservedBind(fb, [3]byte{1, 2, 3})
+	data := make([]byte, 48)
+	data[0] = 4
+	if err := b.Send([][]byte{data}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(fb.sent) != 1 || fb.sent[0][0] != 4 {
+		t.Fatalf("data packet was prefixed or replaced: %d datagrams", len(fb.sent))
+	}
+}
+
 type fakeBind struct {
 	conn.Bind
 	sent [][]byte

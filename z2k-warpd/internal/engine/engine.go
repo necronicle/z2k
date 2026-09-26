@@ -211,7 +211,7 @@ func Run(ctx context.Context, cfg Config) error {
 		lad = ladder.NewPreferred(d.Endpoint, d.LastGood, cfg.Mode, preferred)
 	}
 	mon := &health.Monitor{Probe: cfg.Probe, Doubt: 30 * time.Second, Fails: 2,
-		ProveEvery: 3 * time.Second}
+		ProveEvery: 3 * time.Second, ConfirmSuccesses: 2, CheckEvery: 20 * time.Second}
 
 	for ctx.Err() == nil {
 		step := lad.Current()

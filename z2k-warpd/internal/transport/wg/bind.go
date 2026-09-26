@@ -8,7 +8,14 @@
 // чтобы device не счёл пакет повреждённым.
 package wg
 
-import "golang.zx2c4.com/wireguard/conn"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"math/big"
+
+	"golang.zx2c4.com/wireguard/conn"
+)
 
 type reservedBind struct {
 	conn.Bind
@@ -22,12 +29,52 @@ func NewReservedBind(inner conn.Bind, reserved [3]byte) conn.Bind {
 }
 
 func (b *reservedBind) Send(bufs [][]byte, ep conn.Endpoint) error {
+	out := make([][]byte, 0, len(bufs)+7)
 	for _, p := range bufs {
+		if len(p) == 148 && p[0] == 1 {
+			preamble, err := awgPreamble()
+			if err != nil {
+				return fmt.Errorf("awg preamble: %w", err)
+			}
+			out = append(out, preamble...)
+		}
 		if len(p) >= 4 {
 			copy(p[1:4], b.r[:])
 		}
+		out = append(out, p)
 	}
-	return b.Bind.Send(bufs, ep)
+	return b.Bind.Send(out, ep)
+}
+
+// AWG-compatible initial disguise: a short DNS-looking first datagram and
+// six small random junk datagrams before each ordinary WG initiation. The
+// actual handshake and transport packets retain Cloudflare's reserved bytes.
+// This matches the default pre-handshake shape used by Warpscout's AWG mode;
+// the WARP server ignores these extra datagrams.
+func awgPreamble() ([][]byte, error) {
+	const dnsHex = "858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737"
+	dns, err := hex.DecodeString(dnsHex)
+	if err != nil {
+		return nil, err
+	}
+	first := make([]byte, 2+len(dns))
+	if _, err := rand.Read(first[:2]); err != nil {
+		return nil, err
+	}
+	copy(first[2:], dns)
+	out := [][]byte{first}
+	for range 6 {
+		n, err := rand.Int(rand.Reader, big.NewInt(41))
+		if err != nil {
+			return nil, err
+		}
+		packet := make([]byte, 10+int(n.Int64()))
+		if _, err := rand.Read(packet); err != nil {
+			return nil, err
+		}
+		out = append(out, packet)
+	}
+	return out, nil
 }
 
 func (b *reservedBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {

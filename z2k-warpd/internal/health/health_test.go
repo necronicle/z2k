@@ -244,3 +244,40 @@ func TestErrCarriesProbeFailure(t *testing.T) {
 		t.Fatalf("Err() после успеха = %v", m.Err())
 	}
 }
+
+func TestReadyRequiresTwoSpacedSuccessfulProbes(t *testing.T) {
+	calls := 0
+	m := &Monitor{Probe: func(context.Context, string) error { calls++; return nil },
+		Doubt: 30 * time.Second, Fails: 2, ProveEvery: 3 * time.Second, ConfirmSuccesses: 2}
+	t0 := time.Unix(1000, 0)
+	if v := m.Assess(context.Background(), conn(10, 10), t0, "z2ktun0"); v == Alive || m.Proven() {
+		t.Fatal("one successful request must not mark tunnel ready")
+	}
+	if v := m.Assess(context.Background(), conn(20, 20), t0.Add(time.Second), "z2ktun0"); v == Alive || calls != 1 {
+		t.Fatal("second proof must be spaced and independent")
+	}
+	if v := m.Assess(context.Background(), conn(30, 30), t0.Add(3*time.Second), "z2ktun0"); v != Alive || !m.Proven() || calls != 2 {
+		t.Fatalf("two spaced successes must prove transit: verdict=%v calls=%d", v, calls)
+	}
+}
+
+func TestGrowingRxCannotHideDeadClientTransit(t *testing.T) {
+	calls := 0
+	m := &Monitor{Probe: func(context.Context, string) error {
+		calls++
+		if calls > 1 {
+			return errors.New("TCP through tunnel timed out")
+		}
+		return nil
+	}, Doubt: 30 * time.Second, Fails: 2, CheckEvery: 10 * time.Second}
+	t0 := time.Unix(1000, 0)
+	if v := m.Assess(context.Background(), conn(10, 10), t0, "z2ktun0"); v != Alive {
+		t.Fatal(v)
+	}
+	if v := m.Assess(context.Background(), conn(20, 20), t0.Add(10*time.Second), "z2ktun0"); v == Dead {
+		t.Fatal("one failed periodic proof must not kill tunnel")
+	}
+	if v := m.Assess(context.Background(), conn(30, 30), t0.Add(20*time.Second), "z2ktun0"); v != Dead || calls != 3 {
+		t.Fatalf("growing RX hid failed transit: verdict=%v calls=%d", v, calls)
+	}
+}
