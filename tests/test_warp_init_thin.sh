@@ -148,5 +148,22 @@ for _case in "wg:wg" "h2:h2" "auto:unset" "udp:unset" "'h2':h2"; do
     sleep 1
 done
 
+# An updater calls stop and then start immediately after replacing the binary.
+# stop must not return while the old process is still finishing its TERM trap:
+# otherwise start sees it as "already running" and no new process is started.
+cat > "$SB/slow-warpd-$$" <<EOF
+#!/bin/sh
+trap 'trap "" TERM; sleep 2; echo exited > "$SB/slow-exit"; exit 0' TERM
+while :; do
+    sleep 30 & child=\$!
+    wait \$child
+done
+EOF
+chmod +x "$SB/slow-warpd-$$"
+BIN="$SB/slow-warpd-$$" PIDFILE="$SB/slow-pid" sh "$INIT" start >/dev/null 2>&1
+BIN="$SB/slow-warpd-$$" PIDFILE="$SB/slow-pid" sh "$INIT" stop >/dev/null 2>&1
+assert_eq "stop waits for old process before updater can start new binary" "yes" \
+    "$([ -f "$SB/slow-exit" ] && echo yes || echo no)"
+
 printf "\nPASSED: %d\nFAILED: %d\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ]
