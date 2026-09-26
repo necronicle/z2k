@@ -158,7 +158,7 @@ fi
 # --- 4. set_flag: запись в конфиг под замком ----------------------------------
 #
 # В конфиг пишут больше десятка тумблеров панели и меню; set_flag делает
-# grep-затем-sed -i, то есть чтение-изменение-запись без всякой защиты. Два
+# grep-затем-запись, то есть чтение-изменение-запись без всякой защиты. Два
 # одновременных переключателя — и один откатывается сам собой.
 _sf=$(awk '/^set_flag\(\)/,/^}$/' "$ROOT/lib/utils.sh")
 if printf '%s' "$_sf" | grep -q 'mkdir "\$_lk"'; then
@@ -172,6 +172,18 @@ if printf '%s' "$_sf" | grep -q 'rmdir "\$_lk"'; then
     ok "замок снимается после записи"
 else
     no "снятие замка" "rmdir" "нет — конфиг залипнет"
+fi
+printf 'Z2K_TEST_FLAG=1\n' > "$TMP/config"
+if "$SH" -c '. "$1"; set_flag Z2K_TEST_FLAG 0 "$2"' sh "$ROOT/lib/utils.sh" "$TMP/config" \
+    && [ "$(grep '^Z2K_TEST_FLAG=' "$TMP/config" | cut -d= -f2)" = "0" ]; then
+    ok "set_flag updates an existing value with BSD/GNU/BusyBox sed syntax"
+else
+    no "set_flag cross-platform update" "Z2K_TEST_FLAG=0" "$(grep '^Z2K_TEST_FLAG=' "$TMP/config")"
+fi
+if [ -z "$(find "$TMP" -name '*.z2k-backup.*' -print -quit)" ]; then
+    ok "set_flag removes its temporary backup"
+else
+    no "set_flag backup cleanup" "no backup" "$(find "$TMP" -name '*.z2k-backup.*' -print -quit)"
 fi
 
 # --- 5. WARP: снятие маркировки ищет ту же форму, что и установка -------------

@@ -213,6 +213,7 @@ case "$1" in
     license) cat > "$LICENSE_GOT" ;;
     ipset)  : ;;
     migrate) mkdir -p "$WARP_LISTS_DIR"; touch "$WARP_LISTS_DIR/.legacy-aggregate-purged" ;;
+    wdtt-sync) echo wdtt-sync >> "$SB/warp-calls" ;;
 esac
 WSTUB
 chmod +x "$WARP_SCRIPT"
@@ -234,12 +235,31 @@ assert_eq "warp/status — mem_kb из скрипта"      "27136"           "$
 assert_eq "warp/status — тип аккаунта"            "unlimited"       "$(jget "$OUT" 'd["plan"]')"
 assert_eq "warp/status — ключ сохранён"           "true"            "$(jget "$OUT" 'd["license"]')"
 assert_eq "warp/status — ошибки привязки нет"     "false"           "$(jget "$OUT" 'd["plan_error"]')"
+assert_eq "warp/status — WDTT выключен по умолчанию" "false" "$(jget "$OUT" 'd["wdtt_enabled"]')"
 
 
 assert_eq "warp/status — выбор транспорта по умолчанию автомат" "auto" "$(jget "$OUT" 'd["transport_mode"]')"
 printf 'ENABLED=1\nGAME_WARP_ENABLED=1\nZ2K_WARP_TRANSPORT=h2\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /warp/status "" | cgi_body)
 assert_eq "warp/status — выбор транспорта из конфига" "h2" "$(jget "$OUT" 'd["transport_mode"]')"
+
+# WDTT setting is a synchronous, narrowly-scoped live apply and accepts only 0/1.
+printf 'value=yes\n' > "$SB/wdtt.body"
+OUT=$(cgi POST /warp/wdtt "" "$SB/wdtt.body")
+assert_contains "warp/wdtt — чужое значение = 400" "400" "$OUT"
+printf 'value=1\n' > "$SB/wdtt.body"
+OUT=$(cgi POST /warp/wdtt "" "$SB/wdtt.body" | cgi_body)
+assert_eq "warp/wdtt — valid JSON" "1" "$(json_ok_p "$OUT")"
+assert_eq "warp/wdtt — flag saved" "1" "$(grep '^Z2K_WARP_WDTT=' "$CONFIG_FILE" | cut -d= -f2)"
+assert_eq "warp/wdtt — live sync called" "wdtt-sync" "$(tail -n1 "$SB/warp-calls")"
+OUT=$(cgi GET /warp/status "" | cgi_body)
+assert_eq "warp/status — WDTT status reflects config" "true" "$(jget "$OUT" 'd["wdtt_enabled"]')"
+printf 'value=0\n' > "$SB/wdtt.body"
+OUT=$(cgi POST /warp/wdtt "" "$SB/wdtt.body" | cgi_body)
+assert_eq "warp/wdtt — disable valid JSON" "1" "$(json_ok_p "$OUT")"
+assert_eq "warp/wdtt — disable ok" "true:" "$(jget "$OUT" 'd["ok"]'):$(jget "$OUT" 'd.get("error","")')"
+assert_eq "warp/wdtt — disable sync called" "wdtt-sync" "$(tail -n1 "$SB/warp-calls")"
+assert_eq "warp/wdtt — disable persisted" "0" "$(grep '^Z2K_WARP_WDTT=' "$CONFIG_FILE" | cut -d= -f2)"
 printf 'ENABLED=1\nGAME_WARP_ENABLED=1\nZ2K_WARP_TRANSPORT=udp"x\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /warp/status "" | cgi_body)
 assert_eq "warp/status — мусор в выборе транспорта = автомат" "auto" "$(jget "$OUT" 'd["transport_mode"]')"

@@ -78,7 +78,9 @@ set_flag() {
     # совпавший текст», а обратный слэш мог прийти из экранирования апострофа.
     _esc=$(printf '%s' "$_val" | sed 's/[&/\\]/\\&/g')
     if grep -q "^${key}=" "$file"; then
-        sed -i "s/^${key}=.*/${key}=${_esc}/" "$file"
+        local _bak="$file.z2k-backup.$$"
+        sed -i.z2k-backup.$$ "s/^${key}=.*/${key}=${_esc}/" "$file" || { rm -f "$_bak"; return 1; }
+        rm -f "$_bak"
     else
         printf '%s=%s\n' "$key" "$_val" >> "$file"
     fi
@@ -1130,6 +1132,22 @@ warp_transport_set() {
     return "$rc"
 }
 
+# Route all decapsulated WDTT client traffic through WARP. Reconcile just this
+# MARK rule immediately; do not restart the tunnel or rebuild its other PBR.
+warp_wdtt_set() {
+    local value="$1" old
+    case "$value" in 0|1) ;; *) echo "value must be 0 or 1" >&2; return 1 ;; esac
+    old=$(read_flag "Z2K_WARP_WDTT" "$CONFIG_FILE" "0")
+    set_flag "Z2K_WARP_WDTT" "$value" "$CONFIG_FILE" || return 1
+    if [ -f "$WARP_SCRIPT" ]; then
+        sh "$WARP_SCRIPT" wdtt-sync >/dev/null 2>&1 || {
+            set_flag "Z2K_WARP_WDTT" "$old" "$CONFIG_FILE"
+            echo "не удалось применить правило WDTT" >&2
+            return 1
+        }
+    fi
+}
+
 # Ключ WARP+. Панель кладёт ключ во временный файл с правами 0600, а задача
 # передаёт его скрипту через stdin и файл сразу удаляет: в строке команды
 # задачи ключ стоял бы в списке процессов и в логе, который панель показывает.
@@ -2049,7 +2067,8 @@ warp_status_info() {
     # контрактный тест требует донести его как есть.
     local st=""
     [ -f "$WARP_SCRIPT" ] && st=$(sh "$WARP_SCRIPT" status 2>/dev/null)
-    printf '%s enabled=%s\n' "$st" "$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")"
+    printf '%s enabled=%s wdtt=%s\n' "$st" "$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")" \
+        "$(read_flag "Z2K_WARP_WDTT" "$CONFIG_FILE" "0")"
 }
 
 # ---------- устройства «всё в WARP» (lists/warp/devices.txt) ----------

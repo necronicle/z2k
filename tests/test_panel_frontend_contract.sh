@@ -953,6 +953,32 @@ const SCENARIOS = {
     },
   },
 
+  warp_wdtt_toggle: {
+    hash: "#/warp",
+    setup() {
+      ROUTER = async (p, method) => {
+        if (p === "/warp/status") return { ok: true, enabled: "1", installed: true, ready: true,
+          transport: "wg", endpoint: "188.114.96.23:2408", iface: "z2ktun0", addr: "172.16.0.2",
+          entries: 1, devices: 0, error: "", mem_kb: 27136, transport_mode: "auto", wdtt_enabled: false };
+        if (p === "/warp/games") return { ok: true, games: [] };
+        if (p === "/warp/lists") return { ok: true, lists: [] };
+        if (p === "/warp/neighbors") return { ok: true, devices: [] };
+        if (p === "/warp/wdtt" && method === "POST") return { ok: true };
+        return { ok: true };
+      };
+    },
+    async run() {
+      await sleep(100);
+      const row = q("#warp-wdtt-row");
+      const box = q("#warp-wdtt-toggle");
+      check("WDTT control is available with installed WARP", row.hidden === false, "hidden=" + row.hidden);
+      check("WDTT control defaults off", box.checked === false, "checked=" + box.checked);
+      box.checked = true; box.fire("change", { target: box });
+      await sleep(80);
+      check("WDTT enable is applied through dedicated API", postedValue("/warp/wdtt") === "1", BODIES["/warp/wdtt"]);
+    },
+  },
+
   warp_interrupt_toggle: {
     hash: "#/warp",
     setup() {
@@ -1329,7 +1355,7 @@ for scen in fastroute_not_applicable fastroute_actual stale_apply poller_gone ou
             toggles_status_failed toggles_left_page \
             autohostlist_warn autohostlist_accept autohostlist_escape \
             autohostlist_dismiss autohostlist_off other_toggle_no_warn \
-            warp_edge_status warp_interrupt_toggle warp_interrupt_transport warp_foreign_job_blocks \
+            warp_edge_status warp_wdtt_toggle warp_interrupt_toggle warp_interrupt_transport warp_foreign_job_blocks \
             au_hour_pick au_hour_save_failed au_hour_off panel_session_ttl unique_strategy_set; do
     out=$(run_scen "$JS" "$scen")
     printf '%s\n' "$out"

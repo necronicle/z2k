@@ -612,7 +612,7 @@ case "$method $path" in
     "GET /warp/status")
         result=$(warp_status_info)
         _wf() { printf '%s' "$result" | sed -n "s/.*$1=\([^ ]*\).*/\1/p" | head -1; }
-        w_enabled=$(printf '%s' "$result" | sed -n 's/.*enabled=\(.*\)$/\1/p')
+        w_enabled=$(printf '%s' "$result" | sed -n 's/.*enabled=\([^ ]*\).*/\1/p')
         w_inst_j=false;  [ "$(_wf installed)" = "1" ] && w_inst_j=true
         w_ready_j=false; [ "$(_wf ready)" = "1" ] && w_ready_j=true
         json_header
@@ -642,8 +642,17 @@ case "$method $path" in
         # init-скрипт.
         w_mode=$(read_flag "Z2K_WARP_TRANSPORT" "$CONFIG_FILE" "auto")
         case "$w_mode" in wg|h2) ;; *) w_mode=auto ;; esac
-        printf ',"transport_mode":"%s"}\n' "$w_mode"
+        printf ',"transport_mode":"%s","wdtt_enabled":' "$w_mode"
+        [ "$(_wf wdtt)" = "1" ] && printf 'true}\n' || printf 'false}\n'
         exit 0
+        ;;
+
+    "POST /warp/wdtt")
+        body=$(read_body)
+        val=$(form_value "$body" "value")
+        case "$val" in 0|1) ;; *) json_fail "400 Bad Request" "value must be 0 or 1" ;; esac
+        warp_wdtt_set "$val" || json_fail "500 Internal Server Error" "apply failed"
+        json_ok
         ;;
 
     # Ключ WARP+. Проверка формы — здесь же, до файла и задачи: всё, что

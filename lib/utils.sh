@@ -399,7 +399,15 @@ set_flag() {
     done
 
     if grep -q "^${key}=" "$file"; then
-        sed -i "s/^${key}=.*/${key}=${_esc}/" "$file"
+        # BSD sed (macOS tests) requires a backup suffix after -i; GNU and
+        # BusyBox accept the same form. The lock above makes this sidecar safe.
+        local _bak="$file.z2k-backup.$$"
+        sed -i.z2k-backup.$$ "s/^${key}=.*/${key}=${_esc}/" "$file" || {
+            rm -f "$_bak"
+            rmdir "$_lk" 2>/dev/null
+            return 1
+        }
+        rm -f "$_bak"
     else
         printf '%s=%s\n' "$key" "$_val" >> "$file"
     fi

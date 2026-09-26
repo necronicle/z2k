@@ -1970,6 +1970,7 @@ create_official_config() {
     # Транспорт WARP, выбранный в панели. Та же механика пропажи, что выше:
     # без этой строки выбор сбрасывался бы в автомат любым тумблером.
     local saved_Z2K_WARP_TRANSPORT="auto"
+    local saved_Z2K_WARP_WDTT="0"
     # Час ночного автообновления (issue #60). Читается планировщиком
     # (files/z2k-scheduler.sh), ставится в панели: «Режимы» → Автообновление.
     local saved_Z2K_AU_HOUR="02"
@@ -2034,6 +2035,8 @@ create_official_config() {
         saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
         saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
         saved_Z2K_WARP_TRANSPORT=$(safe_config_read "Z2K_WARP_TRANSPORT" "$config_file" "auto")
+        saved_Z2K_WARP_WDTT=$(safe_config_read "Z2K_WARP_WDTT" "$config_file" "0")
+        case "$saved_Z2K_WARP_WDTT" in 0|1) ;; *) saved_Z2K_WARP_WDTT=0 ;; esac
         # В heredoc значение уходит без кавычек — пропускаем только известное.
         case "$saved_Z2K_WARP_TRANSPORT" in wg|h2) ;; *) saved_Z2K_WARP_TRANSPORT=auto ;; esac
         saved_Z2K_AU_HOUR=$(safe_config_read "Z2K_AU_HOUR" "$config_file" "02")
@@ -2447,6 +2450,7 @@ Z2K_FASTROUTE_OFF=${saved_Z2K_FASTROUTE_OFF}
 Z2K_PANEL_AUTH=${saved_Z2K_PANEL_AUTH}
 Z2K_AUTO_UPDATE_ENABLED=${saved_Z2K_AUTO_UPDATE_ENABLED}
 Z2K_WARP_TRANSPORT=${saved_Z2K_WARP_TRANSPORT}
+Z2K_WARP_WDTT=${saved_Z2K_WARP_WDTT}
 # Час ночного автообновления, 00..23 по времени роутера. Реальный запуск
 # позже на 0..60 минут: разброс детерминированный по хосту, чтобы флот не
 # пришёл к GitHub в одну секунду (см. z2k_host_jitter в z2k-auto-update.sh).

@@ -26,6 +26,7 @@ ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
 CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
 DEVICE_JSON="${DEVICE_JSON:-/opt/etc/z2k-warp/device.json}"
 WARP_MARK="${WARP_MARK:-0x989}"
+SYS_CLASS_NET="${SYS_CLASS_NET:-/sys/class/net}"
 
 [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] || exit 0
 
@@ -49,6 +50,13 @@ case "$table" in
             ipt -t mangle -C PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" \
                 || ipt -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK"
         done
+        # Optional routing for WDTT peers. Match the decapsulated client
+        # packets by ingress interface; the outer WDTT transport stays local.
+        if [ "$(grep -m1 '^Z2K_WARP_WDTT=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] \
+            && [ -d "$SYS_CLASS_NET/wdtt0" ]; then
+            ipt -t mangle -C PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" \
+                || ipt -t mangle -A PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK"
+        fi
         ipset list -n 2>/dev/null | awk '
             /^z2kd_/ {
                 c=substr($0,6)

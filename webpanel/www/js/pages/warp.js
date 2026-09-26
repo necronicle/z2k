@@ -151,6 +151,16 @@ export async function renderWarp() {
         </div>
         <p class="desc" id="warp-transport-hint"></p>
       </div>
+      <div class="toggle-row" id="warp-wdtt-row" hidden>
+        <div class="t-text">
+          <div class="t-name">Клиенты WDTT через WARP</div>
+          <div class="t-desc">Весь трафик клиентов WDTT будет идти через WARP, пока он включён.</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="warp-wdtt-toggle" disabled>
+          <span class="slider"></span>
+        </label>
+      </div>
       <div class="warp-plus" id="warp-plus" hidden>
         <label class="t-name" for="warp-plus-key">Ключ WARP+</label>
         <p class="desc" id="warp-plus-state"></p>
@@ -240,6 +250,7 @@ export async function renderWarp() {
   `;
   const box = $app.querySelector('[data-key="game_warp"] input');
   box.addEventListener("change", () => warpToggle(box));
+  document.getElementById("warp-wdtt-toggle").addEventListener("change", (e) => warpWdttToggle(e.target));
   document.getElementById("warp-install-btn").addEventListener("click", warpInstall);
   document.getElementById("warp-remove-btn").addEventListener("click", warpRemove);
   document.getElementById("warp-rereg-btn").addEventListener("click", warpReregister);
@@ -458,6 +469,11 @@ async function loadWarpStatus() {
 
   const transportBox = document.getElementById("warp-transport");
   if (transportBox) transportBox.hidden = !installed;
+  const wdttRow = document.getElementById("warp-wdtt-row");
+  const wdttBox = document.getElementById("warp-wdtt-toggle");
+  if (wdttRow) wdttRow.hidden = !installed;
+  if (wdttBox) wdttBox.checked = !!d.wdtt_enabled;
+  if (wdttBox) wdttBox.disabled = !installed || warpActing();
   const plusBox = document.getElementById("warp-plus");
   if (plusBox) plusBox.hidden = !installed;
   const plusState = document.getElementById("warp-plus-state");
@@ -517,6 +533,26 @@ async function loadWarpStatus() {
     const icon = statusIcon(c.kind);
     return `<div class="status-cell ${c.kind}"><div class="label">${c.label}</div><div class="value">${icon ? `<span class="status-ico">${icon}</span>` : ""}${escapeHtml(c.value)}</div></div>`;
   }).join("");
+}
+
+async function warpWdttToggle(box) {
+  const wanted = box.checked ? "1" : "0";
+  const previous = !box.checked;
+  if (warpActing() || foreignJobsActive("warp")) {
+    box.checked = previous;
+    toast("Дождитесь завершения текущей операции с WARP", "bad");
+    return;
+  }
+  box.disabled = true;
+  try {
+    await apiPost("/warp/wdtt", { value: wanted });
+    toast(wanted === "1" ? "Клиенты WDTT направлены через WARP" : "Маршрутизация WDTT через WARP выключена");
+  } catch (e) {
+    box.checked = previous;
+    toastErr("Не удалось применить: ", e);
+  } finally {
+    box.disabled = false;
+  }
 }
 
 function setWarpMode(mode) {

@@ -626,6 +626,10 @@ assert_eq "регенерация удаляет старую публикаци
 assert_eq "NFQWS2_TCP_PKT_IN=10 в конфиге" 'NFQWS2_TCP_PKT_IN="10"' "$(grep -E '^NFQWS2_TCP_PKT_IN=' "$_root_pkt/config" | head -1)"
 assert_eq "Z2K_CIRCULAR_RESET переживает регенерацию (умолчание 1)" 'Z2K_CIRCULAR_RESET=1' "$(grep -E '^Z2K_CIRCULAR_RESET=' "$_root_pkt/config" | head -1)"
 assert_eq "Discord TLS recovery defaults to enabled" 'Z2K_DISCORD_UPDATE_TLS_TIMEOUT=1' "$(grep '^Z2K_DISCORD_UPDATE_TLS_TIMEOUT=' "$_root_pkt/config")"
+assert_eq "WDTT over WARP defaults off" 'Z2K_WARP_WDTT=0' "$(grep '^Z2K_WARP_WDTT=' "$_root_pkt/config")"
+printf 'Z2K_WARP_WDTT=1\n' > "$_root_pkt/config"
+( ZAPRET2_DIR="$_root_pkt" create_official_config "$_root_pkt/config" >/dev/null 2>&1 )
+assert_eq "WDTT over WARP selection survives config regeneration" 'Z2K_WARP_WDTT=1' "$(grep '^Z2K_WARP_WDTT=' "$_root_pkt/config")"
 printf '\nZ2K_DISCORD_UPDATE_TLS_TIMEOUT=0\n' > "$_root_pkt/config"
 ( ZAPRET2_DIR="$_root_pkt" create_official_config "$_root_pkt/config" >/dev/null 2>&1 )
 assert_eq "Discord TLS opt-out survives config regeneration" 'Z2K_DISCORD_UPDATE_TLS_TIMEOUT=0' "$(grep '^Z2K_DISCORD_UPDATE_TLS_TIMEOUT=' "$_root_pkt/config")"

@@ -417,7 +417,28 @@ warp_pbr_up() {
         iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null \
             || iptables -w -t mangle -A PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null
     done
+    warp_wdtt_rule_sync
     return 0
+}
+
+# WDTT peers are decoded on wdtt0. Mark their forwarded packets only when the
+# opt-in is on and the interface exists; never mark the router's outer tunnel.
+warp_wdtt_rule_sync() {
+    local rule="-i wdtt0 -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+    if [ "$1" != "off" ] \
+        && [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] \
+        && [ "$(grep -m1 '^Z2K_WARP_WDTT=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] \
+        && [ -d "${SYS_CLASS_NET:-/sys/class/net}/wdtt0" ] && [ -n "$(warp_iface)" ]; then
+        # shellcheck disable=SC2086 # rule is a fixed, two-argument fragment
+        iptables -w -t mangle -C PREROUTING $rule 2>/dev/null \
+            || iptables -w -t mangle -A PREROUTING $rule 2>/dev/null
+    else
+        # shellcheck disable=SC2086
+        while iptables -w -t mangle -C PREROUTING $rule 2>/dev/null; do
+            # shellcheck disable=SC2086
+            iptables -w -t mangle -D PREROUTING $rule 2>/dev/null || break
+        done
+    fi
 }
 
 # A patch can replace the NDM hook without causing a firewall rebuild. The
@@ -447,6 +468,7 @@ warp_pbr_down() {
             done
         done
     done
+    warp_wdtt_rule_sync off
     warp_dns_client_sets | while read -r set client; do
         while iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null; do
             iptables -w -t mangle -D PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null || break
@@ -940,7 +962,12 @@ case "$1" in
     remove)   warp_remove ;;
     ipset)    warp_ipset_all ;;
     selfheal) warp_selfheal ;;
+    wdtt-sync)
+        # Keep this operation narrowly scoped: a settings click must not
+        # rebuild other WARP policy or restart the tunnel.
+        warp_wdtt_rule_sync
+        ;;
     status)   warp_status ;;
     migrate)  warp_lists_migrate; warp_migrate_usque ;;
-    *) echo "usage: $0 {install|enable|disable|restart|license|remove|ipset|selfheal|status|migrate}" >&2; exit 1 ;;
+    *) echo "usage: $0 {install|enable|disable|restart|license|remove|ipset|selfheal|wdtt-sync|status|migrate}" >&2; exit 1 ;;
 esac

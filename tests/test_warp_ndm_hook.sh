@@ -38,7 +38,7 @@ printf '{"iface": "z2ktun3", "id": "x"}\n' > "$SB/device.json"
 
 run() { # $1=type $2=table
     rm -f "$SB/ipt.log"
-    Z2K_STUB_PATH="$SB/bin" type="$1" table="$2" ZAPRET2_DIR="$SB/z2k" DEVICE_JSON="$SB/device.json" \
+    Z2K_STUB_PATH="$SB/bin" type="$1" table="$2" ZAPRET2_DIR="$SB/z2k" DEVICE_JSON="$SB/device.json" SYS_CLASS_NET="$SB/sys/class/net" \
         sh "$HOOK" >/dev/null 2>&1
     [ -f "$SB/ipt.log" ] || : > "$SB/ipt.log"
 }
@@ -54,6 +54,25 @@ assert_eq "mangle: MSS clamp on z2ktun3" "1" \
     "$(grep -c -- '-w -t mangle -A FORWARD -o z2ktun3 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu' "$SB/ipt.log")"
 assert_eq "mangle: no legacy --set-mark form" "0" "$(grep -c -- '--set-mark ' "$SB/ipt.log")"
 assert_eq "mangle: nothing in OUTPUT" "0" "$(grep -c -- ' OUTPUT ' "$SB/ipt.log")"
+
+# WDTT client traffic is opt-in and identified after decapsulation by its
+# ingress interface. It must not alter the router's outer WDTT transport.
+assert_eq "mangle: WDTT route is off by default" "0" "$(grep -c -- '-i wdtt0 ' "$SB/ipt.log")"
+mkdir -p "$SB/sys/class/net/wdtt0"
+printf 'GAME_WARP_ENABLED=1\nZ2K_WARP_WDTT=1\n' > "$SB/z2k/config"
+run iptables mangle
+assert_eq "mangle: WDTT client traffic marked by ingress interface" "1" \
+    "$(grep -c -- '-w -t mangle -A PREROUTING -i wdtt0 -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
+
+rmdir "$SB/sys/class/net/wdtt0"
+run iptables mangle
+assert_eq "mangle: absent wdtt0 adds no route rule" "0" "$(grep -c -- '-i wdtt0 ' "$SB/ipt.log")"
+
+mkdir -p "$SB/sys/class/net/wdtt0"
+printf 'GAME_WARP_ENABLED=0\nZ2K_WARP_WDTT=1\n' > "$SB/z2k/config"
+run iptables mangle
+assert_eq "mangle: WDTT option is inert while WARP is off" "0" "$(grep -c -- '-i wdtt0 ' "$SB/ipt.log")"
+printf 'GAME_WARP_ENABLED=1\nZ2K_WARP_WDTT=1\n' > "$SB/z2k/config"
 
 run iptables nat
 assert_eq "nat: MASQUERADE on z2ktun3" "1" "$(grep -c -- '-w -t nat -A POSTROUTING -o z2ktun3 -j MASQUERADE' "$SB/ipt.log")"
