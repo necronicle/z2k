@@ -220,10 +220,48 @@ _auth_host_allowed() {
 # ([P] → переключатель), а терминал не зависит ни от панели, ни от веб-морды
 # роутера. Это и написано человеку в тексте отказа.
 Z2K_PANEL_SESS_DIR="${Z2K_PANEL_SESS_DIR:-/tmp/z2k-panel-sessions}"
-# Два часа, а не двенадцать. Это ПРЕДЪЯВИТЕЛЬСКИЙ токен, который ходит по
-# открытому HTTP: чем дольше он живёт, тем шире окно для того, кто снял его
-# из эфира. Панелью пользуются заходами по несколько минут, а не сутками.
-Z2K_PANEL_SESS_TTL="${Z2K_PANEL_SESS_TTL:-7200}"
+Z2K_PANEL_SESS_TTL_FILE="${Z2K_PANEL_SESS_TTL_FILE:-/opt/etc/z2k/webpanel/session-ttl}"
+Z2K_PANEL_SESS_TTL_DEFAULT=86400
+
+panel_session_ttl_allowed() {
+    case "$1" in 7200|43200|86400|604800) return 0 ;; esac
+    return 1
+}
+
+# Read a small allowlisted value, never source the persistent file as shell.
+panel_session_ttl_current() {
+    local value
+    value=$(cat "$Z2K_PANEL_SESS_TTL_FILE" 2>/dev/null)
+    panel_session_ttl_allowed "$value" && { printf '%s' "$value"; return 0; }
+    printf '%s' "$Z2K_PANEL_SESS_TTL_DEFAULT"
+}
+
+panel_session_ttl_set() {
+    local value="$1" dir tmp old_umask write_rc
+    panel_session_ttl_allowed "$value" || return 2
+    dir=$(dirname "$Z2K_PANEL_SESS_TTL_FILE")
+    mkdir -p "$dir" 2>/dev/null || return 1
+    tmp=$(mktemp "$dir/.session-ttl.XXXXXX" 2>/dev/null) || return 1
+    old_umask=$(umask)
+    umask 077
+    printf '%s\n' "$value" > "$tmp"
+    write_rc=$?
+    umask "$old_umask"
+    if [ "$write_rc" != 0 ] || ! chmod 600 "$tmp" 2>/dev/null ||
+       ! mv -f "$tmp" "$Z2K_PANEL_SESS_TTL_FILE"; then
+        rm -f "$tmp" 2>/dev/null
+        return 1
+    fi
+    return 0
+}
+
+_panel_env_ttl="${Z2K_PANEL_SESS_TTL:-}"
+if panel_session_ttl_allowed "$_panel_env_ttl"; then
+    Z2K_PANEL_SESS_TTL="$_panel_env_ttl"
+else
+    Z2K_PANEL_SESS_TTL=$(panel_session_ttl_current)
+fi
+unset _panel_env_ttl
 Z2K_PANEL_CONFIG="${Z2K_PANEL_CONFIG:-/opt/zapret2/config}"
 # Адрес веб-интерфейса роутера ПОДБИРАЕТСЯ, а не задаётся константой.
 #
@@ -331,7 +369,11 @@ panel_session_valid() {
     # файл. Считать его валидным значит принять чужую подделку.
     case "$_ts" in ''|*[!0-9]*) rm -f "$_f" 2>/dev/null; return 1 ;; esac
     _age=$(( $(date +%s) - _ts ))
-    if [ "$_age" -lt 0 ] || [ "$_age" -gt "$Z2K_PANEL_SESS_TTL" ]; then
+    _sess_ttl=$(sed -n '4p' "$_f" 2>/dev/null)
+    # Session lifetime is fixed when a login succeeds. A legacy session file
+    # has no fourth line and retains the old two-hour limit.
+    panel_session_ttl_allowed "$_sess_ttl" || _sess_ttl=7200
+    if [ "$_age" -lt 0 ] || [ "$_age" -gt "$_sess_ttl" ]; then
         rm -f "$_f" 2>/dev/null
         return 1
     fi
@@ -459,7 +501,7 @@ panel_session_create() {
     # Вторая строка — логин, третья — адрес клиента: сессия привязывается к
     # тому, кто её открыл. Кука ходит по открытому HTTP, и без привязки
     # перехваченный заголовок давал бы полный вход на все 12 часов.
-    printf '%s\n%s\n%s\n' "$(date +%s)" "${1:-?}" "${REMOTE_ADDR:-?}" \
+    printf '%s\n%s\n%s\n%s\n' "$(date +%s)" "${1:-?}" "${REMOTE_ADDR:-?}" "$Z2K_PANEL_SESS_TTL" \
         > "$Z2K_PANEL_SESS_DIR/$_sid" || return 1
     chmod 600 "$Z2K_PANEL_SESS_DIR/$_sid" 2>/dev/null || true
     printf '%s' "$_sid"

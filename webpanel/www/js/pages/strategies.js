@@ -1,6 +1,7 @@
 import { openSortSheet } from "../chrome.js";
 import { apiGet, apiPost, apiPostText, errHtml, toastErr } from "../core/api.js";
 import { $app, _icons, escapeHtml, skeletonLines } from "../core/dom.js";
+import { JOB_FAIL, confirmModal, jobOutcome, jobUnresolved, openJobModal, unresolvedMsg } from "../job.js";
 import { _newLoad, _stale } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
 import { STATE_SORT_LABELS, groupDomain, saveOpenGroups, saveStateSort, setStatePools, stateOpenGroups, statePools, stateSort } from "../state-model.js";
@@ -90,6 +91,16 @@ export function strategiesShell(activeId, bodyHtml) {
 // объясняет, и таблица врала бы умолчанием.
 export async function renderState() {
   $app.innerHTML = strategiesShell("live", `
+    <section class="card unique-set-card" aria-labelledby="unique-set-title">
+      <div class="unique-set-topline"><span class="unique-set-badge">ЭКСПЕРИМЕНТАЛЬНО!!!</span></div>
+      <h3 id="unique-set-title">Уникальный набор стратегий</h3>
+      <p class="desc">Стратегии будут подобраны и применены специально для вашего провайдера.</p>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="unique-set-start" type="button">Создать уникальный набор</button>
+        <button class="btn btn-danger" id="unique-set-reset-all" type="button">Вернуть все категории к автоматике</button>
+      </div>
+      <p class="desc unique-set-status" id="unique-set-status" role="status" aria-live="polite"></p>
+    </section>
     <details class="card state-voice">
       <summary>Discord: голосовые каналы <span id="discord-voice-status">Загрузка…</span></summary>
       <p class="desc">
@@ -161,7 +172,124 @@ export async function renderState() {
     search.focus();
     resortState();
   });
+  initUniqueStrategySet();
   loadState();
+}
+
+const UNIQUE_SET_POOLS = ["yt_tcp", "gv_tcp", "quic", "rkn_tcp"];
+
+function initUniqueStrategySet() {
+  const btn = document.getElementById("unique-set-start");
+  const resetBtn = document.getElementById("unique-set-reset-all");
+  if (btn) btn.addEventListener("click", () => startUniqueStrategySet(btn));
+  if (resetBtn) resetBtn.addEventListener("click", () => resetAllStrategyPools(resetBtn));
+  loadUniqueStrategySetResult();
+}
+
+function formatUniqueSetDuration(value) {
+  const total = Number(value);
+  if (!Number.isFinite(total) || total < 0) return "";
+  const seconds = Math.floor(total);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  if (hours) return `${hours} ч ${minutes} мин`;
+  if (minutes) return `${minutes} мин ${remainder} с`;
+  return `${remainder} с`;
+}
+
+async function loadUniqueStrategySetResult() {
+  const status = document.getElementById("unique-set-status");
+  if (!status) return;
+  try {
+    const response = await apiGet("/strategy/unique-set");
+    const result = response && response.result;
+    const duration = result && result.ok && formatUniqueSetDuration(result.elapsed_seconds);
+    if (duration && !status.textContent.trim()) status.textContent = `Последний подбор занял ${duration}.`;
+  } catch (_) {
+    // A missing prior result is normal on first use; it must not disturb the page.
+  }
+}
+
+async function startUniqueStrategySet(btn) {
+  const status = document.getElementById("unique-set-status");
+  const resetBtn = document.getElementById("unique-set-reset-all");
+  btn.disabled = true;
+  if (resetBtn) resetBtn.disabled = true;
+  try {
+    const poolsData = await apiGet("/strategy/pools");
+    const custom = (poolsData.pools || []).filter(p => UNIQUE_SET_POOLS.includes(p.pool) && p.custom);
+    if (custom.length) {
+      const names = custom.map(p => p.pool).join(", ");
+      const accepted = await confirmModal(
+        "Заменить свои стратегии?",
+        `Будут заменены пользовательские пулы: ${names}. Набор задаёт стратегию каждому пулу целиком, а не только тестовым доменам. Продолжить?`,
+        "Продолжить",
+        "Отмена",
+      );
+      if (!accepted) { btn.disabled = false; if (resetBtn) resetBtn.disabled = false; return; }
+    }
+    if (status) status.textContent = "Запускаю последовательные замеры. Прогресс будет в журнале задачи.";
+    const response = await apiPost("/strategy/unique-set", {});
+    const startedAt = Date.now();
+    openJobModal("Создание уникального набора стратегий", response.job, {
+      onDone: async data => {
+        btn.disabled = false;
+        if (resetBtn) resetBtn.disabled = false;
+        const clientDuration = formatUniqueSetDuration((Date.now() - startedAt) / 1000);
+        const outcome = jobOutcome(data);
+        if (jobUnresolved(outcome)) {
+          const message = unresolvedMsg(outcome);
+          if (message) toast(message, "bad");
+          if (status) status.textContent = "Исход задачи не удалось подтвердить; проверь журнал.";
+          return;
+        }
+        if (outcome === JOB_FAIL) {
+          if (status) status.textContent = `Набор не применён. Подбор занял ${clientDuration}. Причина указана в журнале задачи.`;
+          return;
+        }
+        let duration = clientDuration;
+        try {
+          const saved = await apiGet("/strategy/unique-set");
+          const savedDuration = saved && saved.result && saved.result.ok
+            ? formatUniqueSetDuration(saved.result.elapsed_seconds) : "";
+          if (savedDuration) duration = savedDuration;
+        } catch (_) {}
+        if (status) status.textContent = `Набор применён. Подбор занял ${duration}.`;
+      },
+    });
+  } catch (error) {
+    btn.disabled = false;
+    if (resetBtn) resetBtn.disabled = false;
+    if (status) status.textContent = "Не удалось запустить набор.";
+    toastErr("Не удалось запустить набор: ", error);
+  }
+}
+
+async function resetAllStrategyPools(btn) {
+  const status = document.getElementById("unique-set-status");
+  const startBtn = document.getElementById("unique-set-start");
+  const accepted = await confirmModal(
+    "Вернуть все категории к автоматике?",
+    "Будут удалены все пользовательские стратегии во всех категориях, включая Discord. Затем z2k пересоберёт конфиг и перезапустит сервис один раз.",
+    "Вернуть автоматику",
+    "Отмена",
+  );
+  if (!accepted) return;
+
+  btn.disabled = true;
+  if (startBtn) startBtn.disabled = true;
+  if (status) status.textContent = "Возвращаю все категории к автоматике…";
+  try {
+    await apiPost("/strategy/pools/reset-all", {});
+    if (status) status.textContent = "Все категории возвращены к автоматике.";
+  } catch (error) {
+    if (status) status.textContent = "Не удалось вернуть автоматику. Проверьте сообщение об ошибке.";
+    toastErr("Не удалось вернуть автоматику: ", error);
+  } finally {
+    btn.disabled = false;
+    if (startBtn) startBtn.disabled = false;
+  }
 }
 
 // Discord-voice strategy panel — works even when no discord_udp/nohost row

@@ -3,6 +3,7 @@ package classify
 import (
 	"context"
 	"fmt"
+	"net"
 )
 
 // Свойства сперва, стратегия — из них.
@@ -177,7 +178,7 @@ func runProperties(ctx context.Context, ip4 []byte, port uint16, tr Trigger, opt
 		obs := Observation{Probe: "свойство:" + pp.name, DelayM: p.gapMS}
 		pass := 0
 		for i := 0; i < opt.Repeats; i++ {
-			ok, err := probePoison(ctx, ip4, port, tr, p, opt.Timeout)
+			ok, err := runPoisonProbe(ctx, net.IP(ip4), port, tr, p, opt)
 			res.Probes++
 			if err == nil && ok {
 				pass++
@@ -188,7 +189,9 @@ func runProperties(ctx context.Context, ip4 []byte, port uint16, tr Trigger, opt
 		got := pass == opt.Repeats
 		pp.set(&res.Props, got)
 		if got {
-			return p, true
+			if opt.acceptable(p) {
+				return p, true
+			}
 		}
 	}
 	return poison{}, false

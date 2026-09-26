@@ -54,6 +54,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -61,6 +62,31 @@ import (
 	"github.com/necronicle/z2k/z2k-detect/internal/decision"
 	"github.com/necronicle/z2k/z2k-detect/internal/prober"
 )
+
+type repeatedStringFlag []string
+
+func (f *repeatedStringFlag) String() string { return strings.Join(*f, ",") }
+func (f *repeatedStringFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
+func parseAdditionalIPv4Targets(raw []string) ([]string, error) {
+	seen := make(map[string]bool, len(raw))
+	var out []string
+	for _, value := range raw {
+		ip := net.ParseIP(value)
+		if ip == nil || ip.To4() == nil {
+			return nil, fmt.Errorf("дополнительная цель %q не является IPv4", value)
+		}
+		canonical := ip.To4().String()
+		if !seen[canonical] {
+			seen[canonical] = true
+			out = append(out, canonical)
+		}
+	}
+	return out, nil
+}
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: z2k-detect <cmd> [args]
@@ -124,6 +150,8 @@ func classifyCmd(ctx context.Context, rest []string) {
 			"legacy (1.2, телевизоры и приставки), both (искать приём под оба, 3-5 минут)")
 	jointBudget := fs.Duration("joint-budget", 0,
 		"потолок поиска приёма, общего для TLS 1.3 и 1.2; ноль — умолчание (90с, под сторож панели)")
+	var alsoTestRaw repeatedStringFlag
+	fs.Var(&alsoTestRaw, "also-test-ip", "дополнительно проверить тот же найденный приём на этом IPv4 (можно повторять)")
 	asJSON := fs.Bool("json", false, "выдать Result как JSON")
 	_ = fs.Parse(rest)
 	if fs.NArg() < 1 {
@@ -171,8 +199,12 @@ func classifyCmd(ctx context.Context, rest []string) {
 
 	// Контроль собираем всегда, когда он вообще собирается: без него вердикт
 	// «непрозрачно» склеивает два разных мира — пересборку и блок по адресу.
+	alsoTestIPs, err := parseAdditionalIPv4Targets(alsoTestRaw)
+	if err != nil {
+		fatal("classify: %v", err)
+	}
 	opts := classify.Options{Repeats: *repeats, Timeout: *timeout, Only: *only,
-		JointBudget: *jointBudget, CrossCheckTLS12: *hello == "both"}
+		JointBudget: *jointBudget, CrossCheckTLS12: *hello == "both", AlsoTestIPs: alsoTestIPs}
 	// Контроль тем же именем, что и триггер, — не контроль вовсе: если имя под
 	// блокировкой, молчать будут оба, и вердикт «режут адрес» получится из
 	// собственной ошибки ввода.

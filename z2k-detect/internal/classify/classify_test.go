@@ -115,6 +115,93 @@ func TestPrefixMatcherFindsBoundary(t *testing.T) {
 	}
 }
 
+func TestRejectedSplitCandidateDoesNotBypassCrossTargetFilter(t *testing.T) {
+	addr := fakeDPI(t, "prefix", 4)
+	opts := fastOpts()
+	opts.NoRaw = true
+	opts.accept = func(p poison) bool { return p.name != "split:1" }
+
+	res := Run(context.Background(), addr, trig(), opts)
+	if res.Verdict == VerdictPrefix || res.Strategy != "" {
+		t.Fatalf("кандидат-разрез обошёл фильтр общей матрицы: verdict=%s strategy=%q", res.Verdict, res.Strategy)
+	}
+}
+
+func TestPropertySearchContinuesAfterCandidateFailsMatrix(t *testing.T) {
+	opts := fastOpts()
+	opts.Repeats = 1
+	opts.probePoisonOverride = func(_ context.Context, _ net.IP, _ uint16, _ Trigger, p poison, _ time.Duration) (bool, error) {
+		return p.name == "seqovl-1" || p.name == "disorder", nil
+	}
+	opts.accept = func(p poison) bool { return p.name == "disorder" }
+	res := Result{}
+	hit, ok := runProperties(context.Background(), net.IPv4(192, 0, 2, 1), 443, trig(), opts, &res)
+	if !ok || hit.name != "disorder" {
+		t.Fatalf("после отказа первого общего кандидата не продолжили поиск: hit=%q ok=%v", hit.name, ok)
+	}
+	if len(res.Trace) != 2 {
+		t.Fatalf("проверено %d свойств, ожидались два: первый кандидат отклонён, второй принят", len(res.Trace))
+	}
+}
+
+func TestCommonCandidateMustPassEveryIPAndBothTLSHellos(t *testing.T) {
+	tr, err := TLSTrigger("googlevideo.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts []string
+	opts := fastOpts()
+	opts.Repeats = 2
+	opts.CrossCheckTLS12 = true
+	opts.probePoisonOverride = func(_ context.Context, ip net.IP, _ uint16, tr Trigger, p poison, _ time.Duration) (bool, error) {
+		attempts = append(attempts, ip.String()+" "+tr.Name+" "+p.name)
+		return true, nil
+	}
+	res := Result{}
+	if !verifyPoisonTargets(context.Background(), "74.125.131.99:443", tr, opts,
+		[]string{"74.125.131.104", "74.125.131.105"}, poison{name: "disorder", disorder: true}, &res) {
+		t.Fatal("candidate should pass both IPs and TLS hellos")
+	}
+	if len(attempts) != 8 {
+		t.Fatalf("probe attempts = %d, want 2 IPs × 2 TLS hellos × 2 repeats", len(attempts))
+	}
+	if res.Probes != 8 || len(res.Trace) != 4 {
+		t.Fatalf("cross-target probes/trace = %d/%d, want 8/4", res.Probes, len(res.Trace))
+	}
+	for _, want := range []string{"74.125.131.104 tls:googlevideo.com disorder", "74.125.131.105 tls:googlevideo.com disorder", "74.125.131.104 tls12:googlevideo.com disorder", "74.125.131.105 tls12:googlevideo.com disorder"} {
+		found := false
+		for _, got := range attempts {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing exact-candidate verification %q in %#v", want, attempts)
+		}
+	}
+}
+
+func TestCommonCandidateRejectedWhenAnyIPFails(t *testing.T) {
+	tr, err := TLSTrigger("googlevideo.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := fastOpts()
+	opts.Repeats = 2
+	opts.probePoisonOverride = func(_ context.Context, ip net.IP, _ uint16, _ Trigger, _ poison, _ time.Duration) (bool, error) {
+		return !ip.Equal(net.ParseIP("74.125.131.105")), nil
+	}
+	res := Result{}
+	if verifyPoisonTargets(context.Background(), "74.125.131.99:443", tr, opts,
+		[]string{"74.125.131.104", "74.125.131.105"}, poison{name: "disorder", disorder: true}, &res) {
+		t.Fatal("candidate was accepted although the last IP did not return ServerHello")
+	}
+	if len(res.Trace) != 2 || res.Trace[1].Probe != "common-ip:74.125.131.105:disorder" || res.Trace[1].Pass != 0 {
+		t.Fatalf("missing failed-IP evidence in trace: %#v", res.Trace)
+	}
+}
+
 func TestPrefixBoundaryDeeperSignature(t *testing.T) {
 	addr := fakeDPI(t, "prefix", 9)
 	res := Run(context.Background(), addr, trig(), fastOpts())

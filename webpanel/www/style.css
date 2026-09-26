@@ -1583,6 +1583,24 @@ body[data-page="login"] #app { max-width: none; }
   color: var(--text-muted);
 }
 
+.unique-set-card { border-inline-start: 3px solid var(--accent); }
+.unique-set-topline { display: flex; align-items: center; margin-bottom: 8px; }
+.unique-set-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid #b71c1c;
+  border-radius: 999px;
+  background: #c62828;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .035em;
+}
+.unique-set-card h3 { margin: 0 0 8px; }
+.unique-set-status { min-height: 0; margin: 8px 0 0; }
+.unique-set-status:empty { display: none; }
+
 .policy-help summary {
   cursor: pointer;
   color: var(--text-muted);

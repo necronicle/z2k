@@ -43,6 +43,51 @@ const TOGGLE_DEFS = [
 // врассыпную, иначе тысяча роутеров придёт к GitHub в одну секунду.
 const AU_JITTER_MIN = 60;
 
+const PANEL_SESSION_TTLS = new Set(["7200", "43200", "86400", "604800"]);
+
+async function loadPanelSessionTtl() {
+  const sel = document.getElementById("panel-session-ttl");
+  const note = document.getElementById("panel-session-ttl-note");
+  if (!sel) return;
+  try {
+    const data = await apiGet("/auth/session-ttl");
+    if (!sel.isConnected) return;
+    const value = String(data && data.seconds);
+    sel.value = PANEL_SESSION_TTLS.has(value) ? value : "86400";
+    sel.dataset.saved = sel.value;
+    sel.disabled = false;
+    if (note) note.textContent = "Настройка будет действовать после следующего входа. Текущая сессия сохранит прежний срок.";
+    if (!sel.dataset.wired) {
+      sel.dataset.wired = "1";
+      sel.addEventListener("change", () => savePanelSessionTtl(sel, note));
+    }
+  } catch (error) {
+    if (!sel.isConnected) return;
+    sel.disabled = true;
+    if (note) note.textContent = "Не удалось прочитать настройку срока сессии.";
+    toastErr("Не удалось прочитать срок сессии: ", error);
+  }
+}
+
+async function savePanelSessionTtl(sel, note) {
+  const value = sel.value;
+  const previous = sel.dataset.saved || "86400";
+  if (!PANEL_SESSION_TTLS.has(value) || value === previous) return;
+  sel.disabled = true;
+  try {
+    await apiPost("/auth/session-ttl", { seconds: value });
+    sel.dataset.saved = value;
+    if (note) note.textContent = "Срок сохранён и начнёт действовать после следующего входа; текущая сессия завершится по прежнему сроку.";
+    toast("Срок сессии изменён");
+  } catch (error) {
+    sel.value = previous;
+    if (note) note.textContent = "Не удалось сохранить срок; оставлено прежнее значение.";
+    toastErr("Не удалось сохранить срок сессии: ", error);
+  } finally {
+    if (sel.isConnected) sel.disabled = false;
+  }
+}
+
 function auWindowText(hour) {
   const h = Number(hour);
   if (!Number.isInteger(h) || h < 0 || h > 23) return "";
@@ -161,6 +206,19 @@ export async function renderToggles() {
           </label>
         </div>
       `).join("")}
+    </div>
+    <div class="card" id="panel-session-ttl-card">
+      <h3>Срок входа в веб-панель</h3>
+      <label class="field" for="panel-session-ttl">
+        <span class="field-label">Запрашивать пароль снова через</span>
+        <select class="t-sub-select" id="panel-session-ttl" disabled>
+          <option value="7200">2 часа</option>
+          <option value="43200">12 часов</option>
+          <option value="86400">24 часа</option>
+          <option value="604800">7 дней</option>
+        </select>
+      </label>
+      <p class="desc" id="panel-session-ttl-note" role="status" aria-live="polite">Загружаю настройку…</p>
     </div>
     <div class="card">
       <h3>Telegram туннель <span class="tg-state-badge" id="tg-state-badge" hidden></span></h3>
@@ -346,6 +404,7 @@ export async function renderToggles() {
   // Пока читался /status, юзер мог уйти — вешать обработчики уже некуда, а
   // querySelector вернёт null и уронит остаток функции.
   if (!onTogglesPage()) return;
+  loadPanelSessionTtl();
 
   async function tgAction(action, title) {
     const btns = [$app.querySelector("#tg-enable"), $app.querySelector("#tg-disable")];

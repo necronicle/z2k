@@ -257,6 +257,11 @@ type Options struct {
 	// фильтром перебор идёт ОДИН раз, а каждая находка тут же проверяется на
 	// втором приветствии.
 	accept func(poison) bool
+	// AlsoTestIPs — дополнительные закреплённые IPv4 для проверки ТОГО ЖЕ
+	// кандидата. Нужно для поиска общего приёма на нескольких CDN-адресах.
+	AlsoTestIPs []string
+	// probePoisonOverride заменяет сырой зонд только в unit-тестах поиска.
+	probePoisonOverride func(context.Context, net.IP, uint16, Trigger, poison, time.Duration) (bool, error)
 	// NoRaw выключает сырые зонды. Они требуют root и AF_INET/SOCK_RAW, зато
 	// только они отвечают на вопрос «чем травить пересобирающую коробку».
 	NoRaw bool
@@ -326,6 +331,19 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 		res.Verdict = VerdictFlaky
 		res.Reason = "триггер короче двух байт — резать нечего"
 		return res
+	}
+	searchOpt := opt
+	if len(opt.AlsoTestIPs) > 0 {
+		previousAccept := opt.accept
+		searchOpt.accept = func(p poison) bool {
+			if previousAccept != nil && !previousAccept(p) {
+				return false
+			}
+			if p.name == "split:1" {
+				return verifySplitTargets(ctx, addr, tr, opt, opt.AlsoTestIPs, []int{1}, &res)
+			}
+			return verifyPoisonTargets(ctx, addr, tr, opt, opt.AlsoTestIPs, p, &res)
+		}
 	}
 
 	// 1. БАЗА. Триггер целиком, одной записью. Если проходит — блокировки по
@@ -397,14 +415,14 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 		// а сервер выбросит, и смотрим, пройдёт ли после этого правда. Перебор
 		// идёт по гипотезам «чем именно они расходятся», а не по плечам.
 		if !opt.NoRaw && rawSupported() {
-			if hit, ok := sweepPoisons(ctx, addr, tr, opt, &res); ok {
+			if hit, ok := sweepPoisons(ctx, addr, tr, searchOpt, &res); ok {
 				_ = controlOK
 				res.Verdict = VerdictPoisonable
 				res.Boundary = 0
 				res.Strategy = strategyForPoison(hit)
 				noteGapLoss(&res, hit)
 				res.Reason = "поток пересобирается, но буфер травится: коробка глотает «" + hit.name + "», сервер выбрасывает"
-				crossCheckTLS12(ctx, addr, tr, opt, &res, hit.name)
+				crossCheckTLS12(ctx, addr, tr, searchOpt, &res, hit.name)
 				return res
 			}
 		}
@@ -449,12 +467,16 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 	lo, hi := 1, len(tr.Payload) // lo проходит, hi — кандидат на «уже нет»
 	last := measure(ctx, addr, tr, opt, "split", []int{len(tr.Payload) - 1}, opt.WriteGap, &res)
 	if last.pass == opt.Repeats {
-		res.Verdict = VerdictWholePacket
-		res.Reason = "проходит любой разрез — матчер требует пакет целиком"
-		res.SplitPos = 1
-		res.Strategy = strategyFor(1)
-		crossCheckTLS12(ctx, addr, tr, opt, &res, "")
-		return res
+		if !searchOpt.acceptable(poison{name: "split:1"}) {
+			res.Notes = append(res.Notes, "разрез pos=1 работает на опорном IP, но не прошёл дополнительные IP")
+		} else {
+			res.Verdict = VerdictWholePacket
+			res.Reason = "проходит любой разрез — матчер требует пакет целиком"
+			res.SplitPos = 1
+			res.Strategy = strategyFor(1)
+			crossCheckTLS12(ctx, addr, tr, searchOpt, &res, "")
+			return res
+		}
 	}
 	hi = len(tr.Payload) - 1
 	for hi-lo > 1 {
@@ -472,16 +494,140 @@ func Run(ctx context.Context, addr string, tr Trigger, opt Options) (res Result)
 		}
 	}
 
-	res.Verdict = VerdictPrefix
-	res.Boundary = hi
-	res.SplitPos = 1
-	res.Strategy = strategyFor(1)
-	res.Reason = fmt.Sprintf("префиксный матчер: сигнатура кончается на байте %d, разрез левее её ломает", hi)
-	crossCheckTLS12(ctx, addr, tr, opt, &res, "")
-	if reass {
-		res.Reason += "; при паузе " + opt.LongGap.String() + " блок возвращается — у коробки есть буфер пересборки"
+	if searchOpt.acceptable(poison{name: "split:1"}) {
+		res.Verdict = VerdictPrefix
+		res.Boundary = hi
+		res.SplitPos = 1
+		res.Strategy = strategyFor(1)
+		res.Reason = fmt.Sprintf("префиксный матчер: сигнатура кончается на байте %d, разрез левее её ломает", hi)
+		crossCheckTLS12(ctx, addr, tr, searchOpt, &res, "")
+		if reass {
+			res.Reason += "; при паузе " + opt.LongGap.String() + " блок возвращается — у коробки есть буфер пересборки"
+		}
+		return res
 	}
+	res.Notes = append(res.Notes, "разрез pos=1 работает на опорном IP, но не прошёл дополнительные IP")
+	if !opt.NoRaw && rawSupported() {
+		if hit, ok := sweepPoisons(ctx, addr, tr, searchOpt, &res); ok {
+			res.Verdict = VerdictPoisonable
+			res.Boundary = 0
+			res.Strategy = strategyForPoison(hit)
+			res.Reason = "поток пересобирается, но буфер травится: коробка глотает «" + hit.name + "», сервер выбрасывает"
+			crossCheckTLS12(ctx, addr, tr, searchOpt, &res, hit.name)
+			return res
+		}
+	}
+	res.Verdict = VerdictOpaque
+	res.Reason = "ни один найденный кандидат не прошёл все дополнительные IP"
 	return res
+}
+
+func verifySplitTargets(ctx context.Context, anchor string, tr Trigger, opt Options, targets []string, cuts []int, res *Result) bool {
+	_, port, err := net.SplitHostPort(anchor)
+	if err != nil {
+		return false
+	}
+	for _, ip := range targets {
+		if net.ParseIP(ip).To4() == nil {
+			return false
+		}
+		addr := net.JoinHostPort(ip, port)
+		if !verifySplitTarget(ctx, addr, tr, opt, cuts, res, ip) {
+			return false
+		}
+		if opt.CrossCheckTLS12 {
+			sni := triggerSNI(tr)
+			legacy, err := TLS12Trigger(sni)
+			if err != nil || !verifySplitTarget(ctx, addr, legacy, opt, cuts, res, ip) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func verifySplitTarget(ctx context.Context, addr string, tr Trigger, opt Options, cuts []int, res *Result, ip string) bool {
+	obs := Observation{Probe: "common-ip:" + ip + ":split"}
+	for i := 0; i < opt.Repeats; i++ {
+		if ctx.Err() != nil {
+			obs.Fail++
+			break
+		}
+		ok, err := once(ctx, addr, tr, opt, cuts, opt.WriteGap)
+		res.Probes++
+		if err != nil {
+			obs.Fail++
+			if obs.Err == "" {
+				obs.Err = err.Error()
+			}
+		} else if ok {
+			obs.Pass++
+		} else {
+			obs.Fail++
+		}
+	}
+	res.Trace = append(res.Trace, obs)
+	return obs.Pass == opt.Repeats
+}
+
+func verifyPoisonTargets(ctx context.Context, anchor string, tr Trigger, opt Options, targets []string, candidate poison, res *Result) bool {
+	_, portText, err := net.SplitHostPort(anchor)
+	if err != nil {
+		return false
+	}
+	var port uint16
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil || port == 0 {
+		return false
+	}
+	for _, rawIP := range targets {
+		ip := net.ParseIP(rawIP).To4()
+		if ip == nil || !verifyPoisonTarget(ctx, ip, port, tr, opt, candidate, res) {
+			return false
+		}
+		if opt.CrossCheckTLS12 {
+			legacy, err := TLS12Trigger(triggerSNI(tr))
+			if err != nil || !verifyPoisonTarget(ctx, ip, port, legacy, opt, candidate, res) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func verifyPoisonTarget(ctx context.Context, ip net.IP, port uint16, tr Trigger, opt Options, candidate poison, res *Result) bool {
+	p := candidate
+	if p.decoy == "hello" {
+		p.decoyPayload = opt.Control.Payload
+		if p.seqovlExact {
+			p.seqovl = len(opt.Control.Payload)
+		}
+	}
+	obs := Observation{Probe: "common-ip:" + ip.String() + ":" + p.name}
+	for i := 0; i < opt.Repeats; i++ {
+		if ctx.Err() != nil {
+			obs.Fail++
+			break
+		}
+		ok, err := runPoisonProbe(ctx, ip, port, tr, p, opt)
+		res.Probes++
+		if err != nil || !ok {
+			obs.Fail++
+			if err != nil && obs.Err == "" {
+				obs.Err = err.Error()
+			}
+		} else {
+			obs.Pass++
+		}
+	}
+	res.Trace = append(res.Trace, obs)
+	return obs.Pass == opt.Repeats
+}
+
+func runPoisonProbe(ctx context.Context, ip net.IP, port uint16, tr Trigger, p poison, opt Options) (bool, error) {
+	if opt.probePoisonOverride != nil {
+		return opt.probePoisonOverride(ctx, ip, port, tr, p, opt.Timeout)
+	}
+	return probePoison(ctx, ip, port, tr, p, opt.Timeout)
 }
 
 // poison — чем отравляем буфер пересборки. Смысл каждого варианта один:
@@ -782,10 +928,8 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 	// для случаев, где собранное не сработало.
 	if opt.Only == "" {
 		if hit, ok := runProperties(ctx, ip, uint16(port), tr, opt, res); ok {
-			if opt.acceptable(hit) {
-				res.Path = "свойство"
-				return hit, true
-			}
+			res.Path = "свойство"
+			return hit, true
 		}
 		for _, cand := range composeFromProps(res.Props, opt.Control.Payload) {
 			if ctx.Err() != nil {

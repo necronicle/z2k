@@ -57,6 +57,7 @@ printf '#!/bin/sh\ncase "$*" in *NOPE*) echo "unrecognized option"; exit 1 ;; es
 chmod +x "$ZD/nfq2/nfqws2"
 cat > "$ZD/lib/config_official.sh" <<'STUB'
 create_official_config() {
+  [ ! -e "${ZAPRET2_DIR}/fail-generation" ] || return 1
   d=$(cat "${ZAPRET2_DIR}/lists/custom-strategies/rkn_tcp.txt" 2>/dev/null | tr '\n' ' ')
   printf 'NFQWS2_OPT="\n--filter-tcp=443 %s\n"\n' "$d" > "$1"
 }
@@ -125,6 +126,45 @@ case "$out" in *'"pool":"yt_tcp","custom":0'*) ok "остальные пулы �
 cgi POST /strategy/pool/reset '' 'pool=rkn_tcp' >/dev/null 2>&1
 [ ! -f "$LIVE" ] && ok "возврат на авто удаляет файл" \
                  || no "возврат на авто удаляет файл" "файла нет" "остался"
+
+# --- reset all custom pools as one transaction --------------------------------
+CUSTOM="$ZD/lists/custom-strategies"
+for pool in rkn_tcp yt_tcp gv_tcp quic discord_udp; do
+    printf -- '--lua-desync=fake:tag=custom-%s\n' "$pool" > "$CUSTOM/$pool.txt"
+done
+printf 'keep me\n' > "$CUSTOM/notes.txt"
+out=$(cgi POST /strategy/pools/reset-all '' '')
+case "$out" in *'"ok":true'*) ok "сброс всех категорий возвращает успех" ;;
+    *) no "сброс всех категорий возвращает успех" '"ok":true' "$out" ;; esac
+_remaining=0
+for pool in rkn_tcp yt_tcp gv_tcp quic discord_udp; do
+    [ -e "$CUSTOM/$pool.txt" ] && _remaining=$((_remaining + 1))
+done
+[ "$_remaining" = 0 ] && ok "пользовательские переопределения всех пяти категорий удалены" \
+                       || no "пользовательские переопределения всех категорий удалены" 0 "$_remaining"
+[ -f "$CUSTOM/notes.txt" ] && ok "сброс сохраняет посторонний файл в каталоге" \
+                            || no "сброс сохраняет посторонний файл в каталоге" "на месте" "удалён"
+case "$(cat "$ZD/config")" in *custom-rkn_tcp*) no "конфиг пересобран на автоматических стратегиях" "без custom override" "остался" ;;
+    *) ok "конфиг пересобран на автоматических стратегиях" ;; esac
+
+# A failed config generation must put both user files and the exact previous
+# config back instead of leaving a half-reset router.
+printf -- '--lua-desync=fake:tag=rollback-rkn\n' > "$CUSTOM/rkn_tcp.txt"
+printf -- '--lua-desync=fake:tag=rollback-youtube\n' > "$CUSTOM/yt_tcp.txt"
+printf 'previous-config\n' > "$ZD/config"
+_before_cfg=$(shasum -a 256 "$ZD/config" | awk '{print $1}')
+: > "$ZD/fail-generation"
+out=$(cgi POST /strategy/pools/reset-all '' '')
+rm -f "$ZD/fail-generation"
+case "$out" in *'"ok":false'*) ok "ошибка генерации отклоняет сброс всех пулов" ;;
+    *) no "ошибка генерации отклоняет сброс всех пулов" '"ok":false' "$out" ;; esac
+[ -f "$CUSTOM/rkn_tcp.txt" ] && [ -f "$CUSTOM/yt_tcp.txt" ] \
+    && ok "после ошибки восстановлены пользовательские пулы" \
+    || no "после ошибки восстановлены пользовательские пулы" "оба файла" "не хватает файла"
+_after_cfg=$(shasum -a 256 "$ZD/config" | awk '{print $1}')
+[ "$_before_cfg" = "$_after_cfg" ] && ok "после ошибки побайтно восстановлен конфиг" \
+                                    || no "после ошибки побайтно восстановлен конфиг" "$_before_cfg" "$_after_cfg"
+rm -f "$CUSTOM/rkn_tcp.txt" "$CUSTOM/yt_tcp.txt" "$CUSTOM/notes.txt"
 
 # --- hostile pool names --------------------------------------------------------
 # The pool name becomes a filename.
@@ -250,7 +290,7 @@ for _fn in $(grep -oE '^[a-z_]+\(\)' "$ACTIONS" | sed 's/()//'); do
     case "$_exempt" in *" $_fn "*) continue ;; esac
     _body=$(awk "/^${_fn}\(\)/,/^}/" "$ACTIONS")
     printf '%s' "$_body" | grep -q 'regenerate_config' || continue
-    printf '%s' "$_body" | grep -q 'restart_service_if_running' \
+    printf '%s' "$_body" | grep -Eq 'restart_service_if_running|\$INIT_SCRIPT" restart' \
         || _noresta="$_noresta $_fn"
 done
 [ -z "$_noresta" ] && ok "любой обработчик, пересобирающий живой конфиг, перезапускает сервис" \

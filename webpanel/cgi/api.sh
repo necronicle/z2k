@@ -784,6 +784,35 @@ case "$method $path" in
     # разбирает его страница. Здесь ничего не интерпретируем намеренно: набор
     # полей у замера свой и меняется вместе с инструментом, а лишний слой
     # перевода только разъезжался бы с ним.
+    "GET /strategy/unique-set")
+        json_header
+        printf '{"ok":true,"result":'
+        if [ -s "${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}" ]; then
+            cat "${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}"
+        else
+            printf 'null\n'
+        fi
+        printf '}\n'
+        exit 0
+        ;;
+
+    "POST /strategy/unique-set")
+        STRATEGY_UNIQUE_LOCK_DIR="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}"
+        STRATEGY_UNIQUE_RESULT_FILE="${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}"
+        export STRATEGY_UNIQUE_LOCK_DIR STRATEGY_UNIQUE_RESULT_FILE
+        strategy_unique_set_lock_acquire || json_fail "409 Conflict" "уникальный набор уже измеряется"
+        export STRATEGY_UNIQUE_LOCK_TOKEN
+        rm -f "$STRATEGY_UNIQUE_RESULT_FILE"
+        job_id=$(svc_action_async "Создание уникального набора стратегий" "strategy_unique_set_worker")
+        if [ -z "$job_id" ]; then
+            strategy_unique_set_lock_release
+            json_fail "500 Internal Server Error" "не удалось запустить измерение"
+        fi
+        json_header
+        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
+        exit 0
+        ;;
+
     "GET /strategy/pick")
         json_header
         _pick=$(strategy_pick_last)
@@ -925,6 +954,23 @@ case "$method $path" in
             json_fail "400 Bad Request" "${s_err:-reset failed}"
         json_header
         printf '{"ok":true,"pool":'; json_string "$s_name"
+        printf '}\n'
+        exit 0
+        ;;
+
+    "POST /strategy/pools/reset-all")
+        # Share the unique-set lock so a run cannot finish after this reset and
+        # write newly measured custom pools back over the requested automation.
+        STRATEGY_UNIQUE_LOCK_DIR="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}"
+        export STRATEGY_UNIQUE_LOCK_DIR
+        strategy_unique_set_lock_acquire || json_fail "409 Conflict" "сначала дождитесь завершения уникального набора"
+        export STRATEGY_UNIQUE_LOCK_TOKEN
+        s_reset_msg=$(strategy_pool_reset_all 2>&1)
+        s_reset_rc=$?
+        strategy_unique_set_lock_release
+        [ "$s_reset_rc" = 0 ] || json_fail "500 Internal Server Error" "${s_reset_msg:-не удалось вернуть автоматику}"
+        json_header
+        printf '{"ok":true,"message":'; json_string "${s_reset_msg:-Все категории уже работают на автоматике.}"
         printf '}\n'
         exit 0
         ;;
@@ -1281,6 +1327,23 @@ case "$method $path" in
         ;;
 
     # ---------- ВХОД ПО ПАРОЛЮ ОТ РОУТЕРА ----------
+    "GET /auth/session-ttl")
+        json_header
+        printf '{"ok":true,"seconds":%s,"choices":[7200,43200,86400,604800]}\n' \
+            "$(panel_session_ttl_current)"
+        exit 0
+        ;;
+
+    "POST /auth/session-ttl")
+        body=$(read_body)
+        session_ttl=$(form_value "$body" "seconds")
+        panel_session_ttl_allowed "$session_ttl" || json_fail "400 Bad Request" "недопустимый срок сессии"
+        panel_session_ttl_set "$session_ttl" || json_fail "500 Internal Server Error" "не удалось сохранить срок сессии"
+        json_header
+        printf '{"ok":true,"seconds":%s}\n' "$session_ttl"
+        exit 0
+        ;;
+
     "GET /auth/state")
         json_header
         printf '{"ok":true,"required":%s,"signed_in":%s}\n' \

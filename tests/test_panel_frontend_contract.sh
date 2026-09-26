@@ -1161,6 +1161,135 @@ const SCENARIOS = {
       check("ничего не сохранялось", !CALLS["/update/schedule"], "запросов: " + CALLS["/update/schedule"]);
     },
   },
+
+  panel_session_ttl: {
+    hash: "#/toggles",
+    setup() {
+      let ttl = 86400;
+      let failSave = false;
+      ROUTER = async (p, method) => {
+        if (p === "/policy/status") return { ok: true, name: "nfqws", exclude: "0", exists: false };
+        if (p === "/auth/session-ttl" && method === "GET") return { ok: true, seconds: ttl };
+        if (p === "/auth/session-ttl" && method === "POST") {
+          if (failSave) return { ok: false, error: "save failed", __status: 500 };
+          ttl = Number(new URLSearchParams(BODIES[p].at(-1)).get("seconds"));
+          return { ok: true, seconds: ttl };
+        }
+        return STATUS;
+      };
+      global.failSessionTtlSave = () => { failSave = true; };
+    },
+    async run() {
+      await sleep(150);
+      const sel = q("#panel-session-ttl");
+      const panelTtlHtml = q("#app").innerHTML;
+      check("срок сессии показан в режимах", !!sel, q("#app").innerHTML.slice(0, 700));
+      check("показаны четыре разрешённых срока",
+            ["7200", "43200", "86400", "604800"].every(v => panelTtlHtml.includes(`value="${v}"`)), panelTtlHtml.match(/panel-session-ttl[\s\S]{0,500}/)?.[0]);
+      check("селектор показывает сохранённые 24 часа", sel && sel.value === "86400", sel && sel.value);
+      check("человеку объяснено, что новый срок действует после входа", /следующего входа/i.test(q("#panel-session-ttl-note").textContent), q("#panel-session-ttl-note").textContent);
+      if (!sel) return;
+      sel.value = "604800";
+      sel.fire("change");
+      await sleep(60);
+      check("семь дней отправлены серверу", (BODIES["/auth/session-ttl"] || []).some(b => new URLSearchParams(b).get("seconds") === "604800"), BODIES["/auth/session-ttl"]);
+      check("сохранение срока подтверждено", TOASTS.some(t => /сессии/i.test(t)), TOASTS.join(" | "));
+      global.failSessionTtlSave();
+      sel.value = "7200";
+      sel.fire("change");
+      await sleep(60);
+      check("ошибка записи возвращает выбранное значение", sel.value === "604800", sel.value);
+      check("об ошибке записи сообщено", TOASTS.some(t => /Не удалось сохранить срок/i.test(t)), TOASTS.join(" | "));
+    },
+  },
+
+  unique_strategy_set: {
+    hash: "#/state",
+    setup() {
+      let uniqueResultGets = 0;
+      let uniqueJobFinished = false;
+      global.finishUniqueJob = () => { uniqueJobFinished = true; };
+      ROUTER = async (p, method) => {
+        if (p === "/state") return { ok: true, entries: [], pools: {} };
+        if (p === "/strategy/unique-set" && method === "GET") {
+          uniqueResultGets++;
+          const prefix = uniqueResultGets === 1 ? "old" : "new";
+          return { ok: true, result: { ok: true,
+            pools: { yt_tcp: `${prefix}-yt`, gv_tcp: `${prefix}-gv`, quic: `${prefix}-quic`, rkn_tcp: `${prefix}-rkn <tag>` },
+            rkn: { coverage: "3/3", reason: "common result", domains: ["discord.com", "instagram.com", "rutor.org"] },
+            elapsed_seconds: 1200, service_restarted: true, needs_service_start: false,
+          } };
+        }
+        if (p === "/strategy/pools") return { ok: true, pools: [
+          { pool: "yt_tcp", custom: 1 }, { pool: "gv_tcp", custom: 0 },
+          { pool: "quic", custom: 1 }, { pool: "rkn_tcp", custom: 0 },
+        ] };
+        if (p === "/strategy/unique-set" && method === "POST") return { ok: true, job: "unique-7" };
+        if (p === "/strategy/pools/reset-all" && method === "POST") return { ok: true };
+        if (p === "/job") return uniqueJobFinished
+          ? { ok: true, status: "done", done: true, exit: 0, log: "all done" }
+          : { ok: true, status: "running", done: false, exit: null, log: "running" };
+        return STATUS;
+      };
+    },
+    async run() {
+      await sleep(120);
+      const html = q("#app").innerHTML;
+      check("экспериментальная карточка показана", /Создать уникальный набор/.test(html), html.slice(0, 500));
+      check("коротко обещает подбор специально для провайдера", /специально для вашего провайдера/i.test(html), html.slice(0, 700));
+      check("подробности этапов не загромождают карточку", !/i\.ytimg\.com|googlevideo\.com|discord\.com|rutor\.org|около 20 минут/i.test(html), html.slice(0, 900));
+      check("результаты пулов не выводятся в карточке", !/old-yt|new-yt|old-gv|new-gv|3\/3|&lt;tag&gt;/.test(html), html.slice(0, 900));
+      await sleep(60);
+      check("показывается длительность последнего подбора", /20 мин/.test(q("#unique-set-status").textContent), q("#unique-set-status").textContent);
+      check("последний результат запрашивается для длительности", CALLS["/strategy/unique-set"] === 1, CALLS["/strategy/unique-set"]);
+      check("есть только экспериментальная пометка", /ЭКСПЕРИМЕНТАЛЬНО!!!/.test(html), html.slice(0, 500));
+      check("кнопка массового возврата к автоматике показана", /unique-set-reset-all/.test(html), html.slice(0, 800));
+      q("#unique-set-start").fire("click");
+      await sleep(30);
+      const first = confirmBox();
+      check("перед заменой custom пулов открыто предупреждение", first !== null, "нет confirmation modal");
+      check("в предупреждении названы заменяемые пулы и их полный scope",
+            first !== null && /yt_tcp/.test(first.innerHTML) && /quic/.test(first.innerHTML) && /целиком/.test(first.innerHTML),
+            first && first.innerHTML);
+      if (first) q("#confirm-cancel").fire("click");
+      await sleep(30);
+      check("отмена не запускает задачу", !CALLS["/strategy/unique-set"] || CALLS["/strategy/unique-set"] === 1,
+            CALLS["/strategy/unique-set"]);
+      check("отмена не запускает подбор", !(BODIES["/strategy/unique-set"] || []).length,
+            (BODIES["/strategy/unique-set"] || []).length);
+      // The initial render GET counts once; only the accepted click may POST.
+      q("#unique-set-start").fire("click");
+      await sleep(30);
+      q("#confirm-ok").fire("click");
+      await sleep(30);
+      check("job modal открыта", document.body.children.some(c => c.className === "modal-backdrop" && c.dataset.jobId === "unique-7"), "нет job modal");
+      global.finishUniqueJob();
+      await sleep(1300);
+      check("после подтверждения ушёл ровно один POST", (BODIES["/strategy/unique-set"] || []).length === 1,
+            (BODIES["/strategy/unique-set"] || []).length);
+      check("успешный подбор показывает длительность", /20 мин/.test(q("#unique-set-status").textContent), q("#unique-set-status").textContent);
+      check("после завершения пул не дублируется под кнопкой", !/old-yt|new-yt|old-gv|new-gv|3\/3|&lt;tag&gt;/.test(q("#app").innerHTML), q("#app").innerHTML.slice(0, 900));
+      q("#unique-set-reset-all").fire("click");
+      await sleep(30);
+      const resetConfirm = confirmBox();
+      check("массовый возврат просит подтверждение", resetConfirm !== null, "нет confirmation modal");
+      check("предупреждение говорит обо всех категориях, включая голосовой пул",
+            resetConfirm !== null && /всех/.test(resetConfirm.innerHTML) && /Discord/.test(resetConfirm.innerHTML),
+            resetConfirm && resetConfirm.innerHTML);
+      if (resetConfirm) q("#confirm-cancel").fire("click");
+      await sleep(30);
+      check("отмена массового возврата ничего не отправляет", !(BODIES["/strategy/pools/reset-all"] || []).length,
+            (BODIES["/strategy/pools/reset-all"] || []).length);
+      q("#unique-set-reset-all").fire("click");
+      await sleep(30);
+      q("#confirm-ok").fire("click");
+      await sleep(60);
+      check("подтверждённый массовый возврат отправляет один запрос",
+            (BODIES["/strategy/pools/reset-all"] || []).length === 1,
+            (BODIES["/strategy/pools/reset-all"] || []).length);
+      check("успешный массовый возврат сообщает об автоматике", /автомати/i.test(q("#unique-set-status").textContent), q("#unique-set-status").textContent);
+    },
+  },
 };
 
 (async () => {
@@ -1201,7 +1330,7 @@ for scen in fastroute_not_applicable fastroute_actual stale_apply poller_gone ou
             autohostlist_warn autohostlist_accept autohostlist_escape \
             autohostlist_dismiss autohostlist_off other_toggle_no_warn \
             warp_edge_status warp_interrupt_toggle warp_interrupt_transport warp_foreign_job_blocks \
-            au_hour_pick au_hour_save_failed au_hour_off; do
+            au_hour_pick au_hour_save_failed au_hour_off panel_session_ttl unique_strategy_set; do
     out=$(run_scen "$JS" "$scen")
     printf '%s\n' "$out"
     PASS=$((PASS + $(printf '%s\n' "$out" | grep -c '^\[PASS\]')))
