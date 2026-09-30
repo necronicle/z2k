@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 127,
-  "current": "p-86.2",
+  "seq": 128,
+  "current": "r-86.3",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -217,7 +217,7 @@
   "files/z2k-update-lists.sh": "e7f8c83ab5e8de256d79eb00e54b103d63d5ba3020d8d00bef8ccd2286738850",
   "files/z2k-warp-list-filter.awk": "97db4a85663e4b3a7c4943e495276f521a9ba961d8419df1059efdcceea655c5",
   "files/z2k-warp.sh": "4f7499eb24c1b30a00910a28cb457e054f593e1b91104d41c16fa65052735d60",
-  "lib/auto_update.sh": "a32d3c8e663e270278ec8604d182d7a3b2bd14303e4d76f6d0de21cfb4c33040",
+  "lib/auto_update.sh": "f3207a68c08cd7725177fb2f7b3ae36464b265c552d11561f3d03016b180d6c2",
   "lib/config.sh": "e1203016155fab62a7ee0351663014a1663b0dfd3cd4b5d8c5f9a2cb35813ab3",
   "lib/config_official.sh": "2236cfe20c1589990f1e5f91275ef1631b8d65eda3a0bfd5b8a4feabf0eed201",
   "lib/install.sh": "4446a6cfc475979148ebd557b2068ddd1d29d88bfc3e33c3363dc28269835272",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "b6959a0ffe292af2ee6d3777ae7d045def1bd80ab7526b81c6006720bb6eba8e",
+  "webpanel/www/index.html": "55bd09113a7f7052024d009306172b2d4b474ec5375df65e41cec8cbdac7b6c2",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -590,6 +590,7 @@
 {"v": "p-85.16", "type": "patch", "ts": "2026-09-26T10:21:38Z", "ref": "p-85.16", "desc": "WARP снова передаёт трафик через сети с блокировкой WG; обновление дожидается остановки старого движка и запускает новый.", "changed_files": ["webpanel/www/index.html", "files/init.d/S51z2k-warp", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-86", "type": "patch", "ts": "2026-09-26T20:30:49Z", "ref": "p-86", "desc": "Добавлен экспериментальный подбор общего набора стратегий, показ его длительности и быстрый возврат пулов к автоматике. В настройках панели можно выбрать срок входа по паролю: 2, 12, 24 часа или 7 дней; по умолчанию 24 часа.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/toggles.js", "webpanel/www/style.css", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-86.1", "type": "patch", "ts": "2026-09-26T22:55:47Z", "ref": "p-86.1", "desc": "WARP теперь можно включить для всего трафика клиентов, подключённых через дополнительный туннель.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "lib/config_official.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "p-86.2", "type": "patch", "ts": "2026-09-30T19:57:52Z", "ref": "p-86.2", "desc": "Поддомены снова используют общую стратегию домена второго уровня. В ротаторе можно одним нажатием заморозить или разморозить все найденные записи; без поиска — все домены.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-modern-core.lua", "lib/config_official.sh", "webpanel/www/js/pages/strategies.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
+{"v": "p-86.2", "type": "patch", "ts": "2026-09-30T19:57:52Z", "ref": "p-86.2", "desc": "Поддомены снова используют общую стратегию домена второго уровня. В ротаторе можно одним нажатием заморозить или разморозить все найденные записи; без поиска — все домены.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-modern-core.lua", "lib/config_official.sh", "webpanel/www/js/pages/strategies.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
+{"v": "r-86.3", "type": "reinstall", "ts": "2026-09-30T20:43:19Z", "ref": "r-86.3", "desc": "Исправлено автообновление, которое после переустановки могло застревать на старой версии. Обновлены автоматические проверки безопасности проекта.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": true}
   ]
 }
