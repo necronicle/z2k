@@ -94,8 +94,8 @@ LISTS_DIR="$MOCK_LISTS"
 eval "$(awk '/^    ensure_circular_host_scope\(\) \{/,/^    \}/' "$SCRIPT_DIR/lib/config_official.sh")"
 INPUT="--filter-tcp=443 --lua-desync=circular:fails=3:nld=2:key=test --lua-desync=fake:strategy=1"
 RESULT=$(ensure_circular_host_scope "$INPUT")
-assert_contains "full hostname: nld=0" "nld=0" "$RESULT"
-assert_not_contains "full hostname: no broad nld=2" "nld=2" "$RESULT"
+assert_contains "second-level domains: nld=2" "nld=2" "$RESULT"
+assert_not_contains "second-level domains: no nld=0" "nld=0" "$RESULT"
 assert_contains "host scope preserves quorum" "fails=3" "$RESULT"
 INPUT="--lua-desync=circular:key=test:hostkey=z2k_nohost_key"
 RESULT=$(ensure_circular_host_scope "$INPUT")

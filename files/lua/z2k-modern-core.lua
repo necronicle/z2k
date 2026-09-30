@@ -50,18 +50,13 @@ function z2k_nohost_key(desync)
     return "nohost"
 end
 
--- Explicit service grouping, not a public-suffix heuristic. Keep independent
--- applications (including *.googleapis.com and *.co.uk) in separate records.
--- Delegate address-family and hostless fallback semantics to the native core.
+-- Share subdomains using native nld=2; preserve packet hostname, IP literals,
+-- address-family splitting and hostless fallback semantics of the native core.
 function z2k_service_hostkey(desync)
-    local host = desync.track and desync.track.hostname
-    local pool = desync.arg.key
-    local video = (pool == "gv_tcp" or pool == "quic" or pool == "yt_quic" or pool == "google_tls")
-        and host and (host == "googlevideo.com" or host:sub(-16) == ".googlevideo.com")
     local copy, arg = {}, {}
     for k, v in pairs(desync) do copy[k] = v end
     for k, v in pairs(desync.arg) do arg[k] = v end
-    arg.nld = video and "2" or "0"
+    arg.nld = "2"
     copy.arg = arg
     return standard_hostkey(copy)
 end

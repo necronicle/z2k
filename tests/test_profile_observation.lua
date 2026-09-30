@@ -75,55 +75,41 @@ H.test('Discord observer sees replies and unknown data while fakes stay within o
         end
     end
 end)
-H.test('host scope separates public suffixes and unrelated API services',function()
+H.test('all domain pools share second-level keys without mutating packet hostname',function()
     for _,key in ipairs({'rkn_tcp','yt_tcp','gv_tcp','quic'}) do
         local arg=circular_instance(key).arg
         H.eq('z2k_service_hostkey',arg.hostkey)
-        for _,host in ipairs({'youtube.co.uk','bbc.co.uk','fonts.googleapis.com','youtubei.googleapis.com'}) do
+        H.eq('2',arg.nld)
+        for host,root in pairs({['www.youtube.com']='youtube.com', ['api.discord.com']='discord.com',
+            ['rr1.googlevideo.com']='googlevideo.com', ['fonts.googleapis.com']='googleapis.com',
+            ['api.example.co.uk']='co.uk', ['googlevideo.com.example.org']='example.org'}) do
             local d=H.tcp(H.track(host),true,1,'x'); d.arg=arg
-            H.eq(host..'|4',z2k_service_hostkey(d))
-            H.eq(host,d.track.hostname); H.eq('0',arg.nld)
+            H.eq(root..'|4',z2k_service_hostkey(d)); H.eq(host,d.track.hostname)
+            d.dis.ip=nil; d.dis.ip6={}; H.eq(root..'|6',z2k_service_hostkey(d))
         end
     end
 end)
-H.test('only the explicit video CDN is grouped and families remain separate',function()
-    for _,key in ipairs({'gv_tcp','quic'}) do
-        local arg=circular_instance(key).arg
-        for _,host in ipairs({'rr1.googlevideo.com','rr2.googlevideo.com'}) do
-            local d=H.tcp(H.track(host),true,1,'x'); d.arg=arg
-            H.eq('googlevideo.com|4',z2k_service_hostkey(d))
-            d.dis.ip=nil; d.dis.ip6={}; H.eq('googlevideo.com|6',z2k_service_hostkey(d))
-        end
-        local d=H.tcp(H.track('googlevideo.com.example.org'),true,1,'x'); d.arg=arg
-        H.eq('googlevideo.com.example.org|4',z2k_service_hostkey(d))
-    end
-end)
-H.test('YouTube TCP hosts keep independent rotation records',function()
+H.test('YouTube subdomains share rotation while other domains and pools remain separate',function()
     local arg=circular_instance('yt_tcp').arg
     local function record(host,pool_arg)
         local d=H.tcp(H.track(host),true,1,'x'); d.arg=pool_arg or arg
         return z2k_service_hostkey(d),automate_host_record(d)
     end
     local root_key,root=record('youtube.com')
-    local seen={[root]=true}
-    for _,host in ipairs({'www.youtube.com','m.youtube.com','img.youtube.com','accounts.youtube.com','ads.youtube.com'}) do
-        local key,rec=record(host)
-        H.eq(host..'|4',key)
-        assert(not seen[rec],'YouTube hosts must not share failure counters')
-        seen[rec]=true
-    end
     H.eq('youtube.com|4',root_key)
+    for _,host in ipairs({'www.youtube.com','m.youtube.com','img.youtube.com','accounts.youtube.com'}) do
+        local key,rec=record(host); H.eq(root_key,key); H.eq(root,rec)
+    end
     local api_key,api=record('youtubei.googleapis.com')
-    H.eq('youtubei.googleapis.com|4',api_key)
-    assert(api~=root,'an unrelated API must retain its own counter')
-    local quic_key=record('www.youtube.com',circular_instance('quic').arg)
-    H.eq('www.youtube.com|4',quic_key)
+    H.eq('googleapis.com|4',api_key); assert(api~=root)
+    local quic_key,quic=record('www.youtube.com',circular_instance('quic').arg)
+    H.eq(root_key,quic_key); assert(quic~=root)
 end)
-H.test('a success on another API host cannot reset failures for this host',function()
+H.test('a success on another domain cannot reset this domain failures',function()
     local arg=circular_instance('yt_tcp').arg
     local d=H.tcp(H.track('youtubei.googleapis.com'),true,1,H.client,'tls_client_hello'); d.arg=arg
     local h=H.step(d); h.failure_counter=2
-    local other=H.tcp(H.track('fonts.googleapis.com'),false,1,H.hello,'tls_server_hello'); other.arg=arg; H.step(other)
+    local other=H.tcp(H.track('www.youtube.com'),false,1,H.hello,'tls_server_hello'); other.arg=arg; H.step(other)
     other=H.tcp(other.track,false,4200,'new content'); other.arg=arg; H.step(other)
     H.eq(2,h.failure_counter)
 end)
@@ -206,10 +192,10 @@ H.test('generated TLS timeout persists rotation and honors a disk freeze before 
     local h,c
     for i=1,3 do h=discord_waiting(); H.advance(11) end
     H.eq(2,h.nstrategy); H.eq(3,#H.sent)
-    H.eq(2,disk_strategy('rkn_tcp','updates.discord.com|4'))
+    H.eq(2,disk_strategy('rkn_tcp','discord.com|4'))
     h,c=discord_waiting()
     local f=assert(io.open(state_path,'w'))
-    f:write('rkn_tcp\tupdates.discord.com|4\t2\t1033\tfrozen\n'); f:close()
+    f:write('rkn_tcp\tdiscord.com|4\t2\t1033\tfrozen\n'); f:close()
     H.advance(11)
     H.eq(2,h.final); H.eq(nil,c.failure); H.eq(3,#H.sent)
 end)
@@ -229,7 +215,7 @@ end)
 H.test('generated host keys restore a frozen selection before executing a strategy',function()
     fresh_state()
     local f=assert(io.open(state_path,'w'))
-    f:write('yt_tcp\tapi.example.co.uk|4\t2\t1000\tfrozen\n')
+    f:write('yt_tcp\tco.uk|4\t2\t1000\tfrozen\n')
     f:close()
     local h=H.step(profile_initial('yt_tcp','api.example.co.uk'))
     H.eq(2,H.executed)
@@ -242,31 +228,20 @@ H.test('generated host keys restore a frozen selection before executing a strate
     H.eq(1,h.nstrategy)
     H.eq(nil,h.final)
 end)
-H.test('a frozen YouTube TCP host does not pin its siblings',function()
+H.test('a frozen domain pins its subdomains but not another pool',function()
     fresh_state()
     local f=assert(io.open(state_path,'w'))
-    f:write('yt_tcp\tyoutube.com|4\t1\t1000\tauto\n')
-    f:write('yt_tcp\twww.youtube.com|4\t2\t1000\tfrozen\talt.example\n')
+    f:write('yt_tcp\tyoutube.com|4\t2\t1000\tfrozen\talt.example\n')
     f:write('gv_tcp\tgooglevideo.com|4\t3\t1000\tfrozen\n')
     f:close()
-    local h=H.step(profile_initial('yt_tcp','www.youtube.com'))
-    H.eq(2,H.executed); H.eq(2,h.final)
-    h=H.step(profile_initial('yt_tcp','img.youtube.com'))
-    H.eq(1,H.executed); H.eq(nil,h.final)
-    H.eq(1,disk_strategy('yt_tcp','youtube.com|4'))
-    H.eq(2,disk_strategy('yt_tcp','www.youtube.com|4'))
+    for _,host in ipairs({'www.youtube.com','img.youtube.com','youtube.com'}) do
+        local h=H.step(profile_initial('yt_tcp',host))
+        H.eq(2,H.executed); H.eq(2,h.final)
+    end
+    H.eq(2,disk_strategy('yt_tcp','youtube.com|4'))
     H.eq(3,disk_strategy('gv_tcp','googlevideo.com|4'))
-end)
-H.test('conflicting frozen YouTube TCP hosts retain their own pins',function()
-    fresh_state()
-    local f=assert(io.open(state_path,'w'))
-    f:write('yt_tcp\tyoutube.com|4\t3\t900\tfrozen\n')
-    f:write('yt_tcp\twww.youtube.com|4\t2\t1000\tfrozen\n')
-    f:close()
-    local h=H.step(profile_initial('yt_tcp','www.youtube.com'))
-    H.eq(2,H.executed); H.eq(2,h.final)
-    h=H.step(profile_initial('yt_tcp','youtube.com'))
-    H.eq(3,H.executed); H.eq(3,h.final)
+    local h=H.step(profile_initial('quic','www.youtube.com'))
+    H.eq(nil,h.final)
 end)
 H.test('generated QUIC profile persists a timer rotation without another packet',function()
     fresh_state()

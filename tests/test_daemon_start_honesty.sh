@@ -56,6 +56,7 @@ ensure_traffic_debug_files() { return 0; }
 traffic_debug_prepare() { return 0; }
 traffic_debug_enable_nfqws2_log() { return 0; }
 traffic_debug_tcpdump_start() { return 0; }
+_z2k_migrate_rotator_sld() { return 0; }
 _z2k_retire_cf_extra_state() { return 0; }
 ensure_autocircular_files() { return 0; }
 custom_runner() { return 0; }
