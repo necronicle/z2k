@@ -631,6 +631,7 @@ ensure_traffic_debug_files()      { t ensure_traffic_debug_files; }
 traffic_debug_prepare()           { t traffic_debug_prepare; }
 traffic_debug_enable_nfqws2_log() { t traffic_debug_enable_nfqws2_log; }
 traffic_debug_tcpdump_start()     { t traffic_debug_tcpdump_start; }
+_z2k_migrate_rotator_sld()        { t migrate_rotator_sld; }
 ensure_autocircular_files()       { t ensure_autocircular_files; }
 standard_mode_daemons()           { t SPAWN; }
 custom_runner()                   { t "custom_runner $1"; }

@@ -116,7 +116,7 @@ export async function renderState() {
       <details class="state-help"><summary>Как управлять?</summary>
       <p class="desc">
         Для каждого домена z2k запоминает стратегию, которая на нём заработала.
-        В каждой строке:
+        Поддомены используют общую запись домена второго уровня. В каждой строке:
       </p>
       <ul class="desc" style="margin:4px 0 10px 18px;padding:0">
         <li><b>выпадающий список</b> — выбрать стратегию вручную (подбор
@@ -128,6 +128,11 @@ export async function renderState() {
         <li><b>домен со стрелкой</b> — записи его поддоменов собраны вместе;
             нажмите, чтобы раскрыть или свернуть.</li>
       </ul>
+      <p class="desc">
+        «Заморозить все» закрепляет каждую запись на её текущей стратегии.
+        Если задан поиск, кнопка действует только на найденные записи.
+        Когда все они заморожены, этой же кнопкой можно вернуть автоподбор.
+      </p>
       <p class="desc">
         Пул, которому вы задали <a href="#/strategies">свою стратегию</a>, здесь
         не появится: подбор для него выключен, а работает ровно ваша строка.
@@ -144,6 +149,7 @@ export async function renderState() {
       <div class="state-tools">
         <span id="state-search-count" role="status" aria-live="polite">Загрузка записей…</span>
         <div class="btn-row">
+          <button class="btn state-freeze-visible" id="state-freeze-visible" type="button" disabled>Заморозить все</button>
           <button class="btn" id="state-refresh">Обновить</button>
           <button class="btn btn-danger" id="state-clear-all">Удалить все записи</button>
         </div>
@@ -156,6 +162,7 @@ export async function renderState() {
   // «Обновить» button into a no-op that re-renders stale rows.
   document.getElementById("state-refresh").addEventListener("click", () => loadState());
   document.getElementById("state-clear-all").addEventListener("click", stateClearAll);
+  document.getElementById("state-freeze-visible").addEventListener("click", stateFreezeVisible);
   // Поиск — операция ВИДА, как и сортировка: весь набор уже в браузере,
   // поэтому идём через resortState (кэш), а не через loadState() с сетью.
   // На роутере /state стоит секунды, и ходить туда на каждую букву значило бы
@@ -335,6 +342,75 @@ function renderDiscordVoicePanel(entries) {
 // The network trip stays where it means something: entering the page, the
 // explicit «Обновить» button, and after an edit or delete.
 let stateCache = null;
+let stateBulkBusy = false;
+
+function visibleStateEntries(entries = stateCache || []) {
+  const query = (document.getElementById("state-search")?.value || "").trim().toLowerCase();
+  return entries.filter(e => e.host !== "nohost" &&
+    String(e.host || "").replace(/\|[46]$/, "").toLowerCase().includes(query));
+}
+
+function updateVisibleFreezeButton() {
+  const button = document.getElementById("state-freeze-visible");
+  if (!button) return;
+  const rows = visibleStateEntries();
+  const filtered = !!(document.getElementById("state-search")?.value || "").trim();
+  const frozen = rows.length > 0 && rows.every(e => e.mode === "frozen");
+  button.disabled = stateBulkBusy || !rows.length;
+  button.textContent = stateBulkBusy ? "Применяем…" :
+    `${frozen ? "Разморозить" : "Заморозить"} ${filtered ? "найденные" : "все"}${rows.length ? ` · ${rows.length}` : ""}`;
+  button.setAttribute("aria-busy", String(stateBulkBusy));
+}
+
+async function stateFreezeVisible() {
+  if (stateBulkBusy) return;
+  // Snapshot the filter result, including collapsed groups. Subsequent typing
+  // or refreshes must not change the set halfway through the operation.
+  const rows = visibleStateEntries().map(e => ({ key: e.key, host: e.host, mode: e.mode }));
+  if (!rows.length) return;
+  const action = rows.every(e => e.mode === "frozen") ? "unfreeze" : "freeze";
+  const verb = action === "freeze" ? "Заморозить" : "Разморозить";
+  const query = (document.getElementById("state-search")?.value || "").trim();
+  const scope = query ? `по поиску «${query}»` : "в таблице";
+  if (!confirm(`${verb} ${rows.length} записей ${scope}?\n\n${action === "freeze"
+    ? "Каждая запись закрепится на своей текущей стратегии."
+    : "Для этих записей продолжится автоматический подбор."}`)) return;
+  stateBulkBusy = true;
+  updateVisibleFreezeButton();
+  let done = 0;
+  try {
+    const pools = new Map();
+    for (const row of rows) {
+      if (!pools.has(row.key)) pools.set(row.key, []);
+      pools.get(row.key).push(row.host);
+    }
+    for (const [key, hosts] of pools) {
+      // Endpoint limit is 64 KiB; domain keys are ASCII. Keep request bodies
+      // comfortably below it, with one state rewrite per pool in normal use.
+      const batches = [];
+      let body = "";
+      for (const host of hosts) {
+        if (body.length + host.length + 1 > 60000) { batches.push(body); body = ""; }
+        body += host + "\n";
+      }
+      if (body) batches.push(body);
+      for (const batch of batches) {
+        const result = await apiPostText(`/state/bulk?action=${action}&key=${encodeURIComponent(key)}`, batch);
+        done += Number(result && result.done) || 0;
+      }
+    }
+    toast(`${action === "freeze" ? "Заморожено" : "Разморожено"}: ${done} из ${rows.length}`);
+  } catch (error) {
+    toastErr(`Применено ${done} из ${rows.length}. Не удалось завершить: `, error);
+  } finally {
+    await loadState();
+    // The entry guard excludes another batch until this refresh finishes.
+    // eslint-disable-next-line require-atomic-updates
+    stateBulkBusy = false;
+    updateVisibleFreezeButton();
+  }
+}
+
 
 // Группы, свёрнутые ВРУЧНУЮ во время поиска. Отдельно от stateOpenGroups и
 // намеренно не в localStorage: тот набор переживает перезагрузку страницы, и
@@ -434,6 +510,7 @@ async function loadState(useCache) {
       return { name: raw, fam: "" };
     };
     const all = entries.filter(e => e.host !== "nohost");
+    updateVisibleFreezeButton();
 
     const counter = document.getElementById("state-search-count");
     if (!all.length) {
@@ -455,9 +532,7 @@ async function loadState(useCache) {
     // теряя фокус и каретку.
     const searchEl = document.getElementById("state-search");
     const query = searchEl ? searchEl.value.trim().toLowerCase() : "";
-    const visible = query
-      ? all.filter(e => splitFamily(e.host).name.toLowerCase().includes(query))
-      : all;
+    const visible = visibleStateEntries(all);
     if (counter) counter.textContent = query
       ? `Найдено записей: ${visible.length} из ${all.length}`
       : `Записей: ${all.length}`;
@@ -807,6 +882,7 @@ async function loadState(useCache) {
     // await», но гейта не видит; то же подавление стоит и на записи кэша.
     // eslint-disable-next-line require-atomic-updates
     stateCache = null;
+    updateVisibleFreezeButton();
     const counter = document.getElementById("state-search-count");
     if (counter) counter.textContent = "Не удалось загрузить записи";
     body.innerHTML = `<p style="color:var(--bad)">${errHtml(e)}</p>`;

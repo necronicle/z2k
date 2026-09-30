@@ -275,8 +275,8 @@ generate_nfqws2_opt_from_strategies() {
     [ -z "$rkn_tcp" ] && rkn_tcp=$(_z2k_pool_default rkn_tcp)
 
 
-    # Full hostname by default; the runtime groups only the explicit video CDN.
-    # Missing optional helper falls back to full names, never public suffixes.
+    # Share rotation between subdomains using the native two-label scope.
+    # The fallback must use the same keys when the optional helper is absent.
     ensure_circular_host_scope() {
         local input="$1" out="" token="" opts="" part="" rest=""
         local old_ifs="$IFS" explicit_hostkey=""
@@ -295,7 +295,7 @@ generate_nfqws2_opt_from_strategies() {
                         esac
                     done
                     IFS="$old_ifs"
-                    token="--lua-desync=circular:${rest:+$rest:}nld=0"
+                    token="--lua-desync=circular:${rest:+$rest:}nld=2"
                     if [ -z "$explicit_hostkey" ] && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-modern-core.lua" ]; then
                         token="${token}:hostkey=z2k_service_hostkey"
                     fi
@@ -1624,7 +1624,7 @@ generate_nfqws2_opt_from_strategies() {
     local rkn_http_extras="$rkn_lists_tail"
     # Детектору нужны также продолжения HTTP-заголовков/тела (unknown).
     # Изменяющие пакеты стратегии по-прежнему ограничены исходящим http_req.
-    http_rkn="--filter-tcp=80 $wl_excl --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=all --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=0 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
+    http_rkn="--filter-tcp=80 $wl_excl --hostlist=${extra_strats_dir}/TCP/RKN/List.txt${rkn_http_extras} --in-range=-s5556 --payload=all --lua-desync=circular:fails=3:time=60:key=http_rkn:nld=2 --lua-desync=http_methodeol:payload=http_req:dir=out:strategy=1 --lua-desync=syndata:payload=http_req:dir=out:strategy=2 --lua-desync=multisplit:payload=http_req:dir=out:strategy=2 --lua-desync=hostfakesplit:payload=http_req:dir=out:ip_ttl=2:repeats=1:strategy=3 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=4 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:badsum:strategy=5 --lua-desync=fake:payload=http_req:dir=out:blob=0x0E0E0F0E:tcp_md5:strategy=6 --lua-desync=multisplit:payload=http_req:dir=out:pos=host+1:seqovl=2:strategy=6 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=7 --lua-desync=multisplit:payload=http_req:dir=out:pos=method+2:strategy=7 --lua-desync=fake:payload=http_req:dir=out:blob=fake_default_http:badsum:repeats=1:strategy=8 --lua-desync=fakedsplit:payload=http_req:dir=out:pos=method+2:ip_autottl=2,1-64:badsum:strategy=8 --in-range=x --new"
 
     # HTTP shares the same retrans/reset policy as TLS.
     http_rkn=$(ensure_circular_doc_args "$http_rkn")
