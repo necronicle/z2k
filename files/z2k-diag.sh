@@ -665,6 +665,13 @@ print_iptables() {
 # =============================================================================
 # SECTION: TG tunnel
 # =============================================================================
+# Bounded recent log window; the count describes log evidence, not live state.
+tg_connect_queue_failures() {
+    local _log="${1:-/tmp/z2k-log/tg-tunnel.log}"
+    if [ ! -r "$_log" ]; then printf '0\n'; return; fi
+    tail -n 200 "$_log" 2>/dev/null | awk '/CONNECT throttled \(timeout\)/ {n++} END {print n+0}'
+}
+
 print_tunnel() {
     printf '\n=== telegram tunnel ===\n'
     local tg_bin="/opt/sbin/tg-mtproxy-client"
@@ -1288,6 +1295,12 @@ print_health() {
             _tgset=$( (ipset list z2k_tg_dc 2>/dev/null || true) | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
             [ "${_tgset:-0}" -eq 0 ] && \
                 _add "список подсетей телеграма пуст — правила редиректа ссылаются на пустой ipset, трафик идёт мимо туннеля"
+        fi
+
+        local _tg_queue_failures
+        _tg_queue_failures=$(tg_connect_queue_failures)
+        if [ "${_tg_queue_failures:-0}" -gt 0 ]; then
+            _add "в последних 200 строках лога телеграм-туннеля $_tg_queue_failures отказов очереди CONNECT — соединения отброшены на роутере до отправки на VPS"
         fi
 
         # А ЕЩЁ ПРАВИЛА РЕДИРЕКТА. Процесс может быть живым, слушать свой порт

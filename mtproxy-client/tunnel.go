@@ -159,7 +159,7 @@ type tunnelClient struct {
 	dropped    atomic.Uint64 // отброшено соединений, пока WS не поднят
 	dropLogged atomic.Bool   // строка «WS не поднят» уже сказана — не повторяем на каждое
 	mu         sync.Mutex    // protects ws/writer replacement during reconnect
-	connectSem chan struct{} // limits concurrent in-flight CONNECTs — 6 keeps SYN rate under TG DC burst threshold
+	connectSem chan struct{} // bounds CONNECTs awaiting the relay response
 	ctx        context.Context
 	cancel     context.CancelFunc
 
@@ -1002,7 +1002,9 @@ func (tc *tunnelClient) openStream(clientConn *net.TCPConn, origIP net.IP, origP
 		log.Printf("[tunnel] stream %d: %s -> %s:%d", streamID, clientConn.RemoteAddr(), origIP, origPort)
 	}
 
-	// Rate-limit concurrent in-flight CONNECTs — TG DC throttles SYN bursts from single IP
+	// Bound in-flight requests, not TCP SYNs: the relay applies per-install,
+	// per-destination dial limits. Six global slots included the whole WSS
+	// round trip and discarded legitimate bursts before they reached the relay.
 	select {
 	case tc.connectSem <- struct{}{}:
 		stream.semHeld.Store(true)
@@ -1024,6 +1026,14 @@ func (tc *tunnelClient) openStream(clientConn *net.TCPConn, origIP net.IP, origP
 	}
 
 	// streamReadLoop starts when CONNECT_OK is received in readLoop
+}
+
+// newTunnelClient keeps production and integration tests on the same defaults.
+// 32 pending CONNECTs stay below the relay's 64-handler session limit.
+// The relay independently caps simultaneous dials per install/destination at 6.
+// Existing-stream and FD limits still bound all accepted local connections.
+func newTunnelClient(url, secret string) *tunnelClient {
+	return &tunnelClient{tunnelURL: url, tunnelSecret: secret, connectSem: make(chan struct{}, 32)}
 }
 
 // runTunnel is the entry point for tunnel mode.
@@ -1069,11 +1079,7 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tc := &tunnelClient{
-		tunnelURL:    *tunnelURL,
-		tunnelSecret: *tunnelSecret,
-		connectSem:   make(chan struct{}, 6),
-	}
+	tc := newTunnelClient(*tunnelURL, *tunnelSecret)
 	tc.ctx, tc.cancel = context.WithCancel(ctx)
 	tc.identityPath = *relayIDFile
 	tc.localMaxConnections = maxAssignedConnections

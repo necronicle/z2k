@@ -19,10 +19,11 @@ import (
 // отвергает его, если rejectV2), принимает CONNECT, отвечает CONNECT_OK с
 // окном и складывает пришедшие DATA в recv. mu защищает ws-запись.
 type fakeRelay struct {
-	t        *testing.T
-	srv      *httptest.Server
-	rejectV2 bool
-	window   uint32
+	t            *testing.T
+	srv          *httptest.Server
+	rejectV2     bool
+	window       uint32
+	connectDelay time.Duration
 
 	client   *tunnelClient // кого ждёт waitReady
 	mu       sync.Mutex
@@ -127,7 +128,12 @@ func (fr *fakeRelay) serve(ws *websocket.Conn) {
 			if fr.proto.Load() == 2 {
 				p = binary.BigEndian.AppendUint32(nil, fr.window)
 			}
-			fr.send(encodeMuxFrame(f.StreamID, muxCONNECT_OK, p))
+			reply := encodeMuxFrame(f.StreamID, muxCONNECT_OK, p)
+			if fr.connectDelay > 0 {
+				time.AfterFunc(fr.connectDelay, func() { fr.send(reply) })
+			} else {
+				fr.send(reply)
+			}
 			continue
 		}
 		fr.recv <- f
@@ -146,7 +152,7 @@ func newTestClient(t *testing.T, fr *fakeRelay) *tunnelClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tc := &tunnelClient{tunnelURL: fr.wsURL(), tunnelSecret: "x", connectSem: make(chan struct{}, 6)}
+	tc := newTunnelClient(fr.wsURL(), "x")
 	tc.ctx, tc.cancel = context.WithCancel(context.Background())
 	t.Cleanup(tc.cancel)
 	tc.identity.Store(id)
