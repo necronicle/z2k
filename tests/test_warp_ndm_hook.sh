@@ -84,8 +84,8 @@ run iptables filter
 assert_eq "filter: marked outbound before Keenetic reject" "1" "$(grep -c -- '-w -t filter -I FORWARD 1 -o z2ktun3 -m mark --mark 0x989/0x989 -j ACCEPT' "$SB/ipt.log")"
 assert_eq "filter: established return before Keenetic reject" "1" "$(grep -c -- '-w -t filter -I FORWARD 1 -i z2ktun3 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' "$SB/ipt.log")"
 assert_eq "filter: no broad appended accept" "0" "$(grep -c -- '-w -t filter -A FORWARD -o z2ktun3 -j ACCEPT' "$SB/ipt.log")"
-assert_eq "filter: LAN and WDTT forwarded DNS copied before ACCEPT" "4" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG' "$SB/ipt.log")"
-assert_eq "filter: router DNS to LAN and WDTT copied" "4" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG' "$SB/ipt.log")"
+assert_eq "filter: LAN and both WDTT modes forwarded DNS copied before ACCEPT" "6" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG' "$SB/ipt.log")"
+assert_eq "filter: router DNS to LAN and both WDTT modes copied" "6" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG' "$SB/ipt.log")"
 assert_eq "filter: nothing else" "0" "$(grep -vc -- "-t filter" "$SB/ipt.log")"
 
 run ip6tables mangle

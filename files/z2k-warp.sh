@@ -60,6 +60,7 @@ WARP_REG_RETRY="${WARP_REG_RETRY:-600}"
 WARP_REG_STAMP="${WARP_REG_STAMP:-/tmp/z2k-warp/register.stamp}"
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"
 WARP_DEVICES_FILE="${WARP_DEVICES_FILE:-$WARP_LISTS_DIR/devices.txt}"
+WARP_AWGM_DIR="${WARP_AWGM_DIR:-/opt/etc/awg-manager}"
 WARP_IPSET="${WARP_IPSET:-z2k_warp}"
 WARP_IPSET_SRC="${WARP_IPSET_SRC:-z2k_warp_src}"
 WARP_FILTER="${WARP_FILTER:-$ZAPRET2_DIR/z2k-warp-list-filter.awk}"
@@ -343,10 +344,40 @@ warp_dns_sets_destroy() {
     done
 }
 
+# Fixed standalone names plus actual server pins from AWG Manager. Never infer
+# WDTT ownership from the OpkgTun number or include client/egress tunnels.
+warp_wdtt_ifaces() {
+    local managed=""
+    if [ -e "$WARP_AWGM_DIR/proxy-instances.json" ] || [ -e "$WARP_AWGM_DIR/wdtt.json" ]; then
+        managed=$("$WARP_BIN" wdtt-ifaces --awg-dir "$WARP_AWGM_DIR") || return 1
+    fi
+    { printf '%s\n' wdtt0 wdttraw0; [ -z "$managed" ] || printf '%s\n' "$managed"; } | LC_ALL=C sort -u
+}
+
+# Discover only our DNS-copy rules, including retired AWG Manager pins. Cleanup
+# must remain possible after the manager config is removed or becomes unreadable.
+warp_dns_capture_outputs() {
+    local ch
+    for ch in OUTPUT FORWARD; do
+        iptables -w -t filter -S "$ch" 2>/dev/null
+    done | awk '
+        /--sport 53 / && /-j NFLOG / && /--nflog-group 189( |$)/ {
+            for (i=1;i<NF;i++) if ($i=="-o" && $(i+1) ~ /^[a-zA-Z][a-zA-Z0-9_.+-]*$/) print $(i+1)
+        }' | LC_ALL=C sort -u
+}
+
 # DNS copies only. NFLOG has no verdict and cannot interrupt DNS delivery.
 warp_dns_capture_up() {
-    local ch proto out
-    for out in br+ wdtt0; do
+    local ch proto out ifaces
+    ifaces=$(warp_wdtt_ifaces) || return 1
+    ifaces=$(printf '%s' "$ifaces" | tr '\n' ' ')
+    for out in $(warp_dns_capture_outputs); do
+        case " br+ $ifaces " in
+            *" $out "*) ;;
+            *) warp_dns_capture_down "$out" || return 1 ;;
+        esac
+    done
+    for out in br+ $ifaces; do
         for ch in OUTPUT FORWARD; do
             for proto in udp tcp; do
                 if [ "$ch" = FORWARD ]; then
@@ -362,8 +393,9 @@ warp_dns_capture_up() {
 }
 
 warp_dns_capture_down() {
-    local ch proto out
-    for out in br+ wdtt0; do
+    local ch proto out ifaces
+    if [ "$#" -gt 0 ]; then ifaces="$*"; else ifaces=$(warp_dns_capture_outputs); fi
+    for out in $ifaces; do
         for ch in OUTPUT FORWARD; do
             for proto in udp tcp; do
                 if [ "$ch" = FORWARD ]; then
@@ -421,16 +453,21 @@ warp_pbr_up() {
 # selection limits those matches; it must never route an entire device. Count
 # saved selections, not resolved IPs: an offline selected MAC is still selected.
 warp_policy_rules() {
+    local ifaces iface wdtt_enabled
     [ "$(warp_flag)" = 1 ] || return 0
     # Empty lists must also fence off any DNS cache awaiting observer reload.
     if ! awk 'NR>1 { found=1; exit } END { exit !found }' "$WARP_DOMAINS" 2>/dev/null \
         && ! ipset save "$WARP_IPSET" 2>/dev/null | grep -q '^add '; then
         return 0
     fi
-    if [ "$(grep -m1 '^Z2K_WARP_WDTT=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = 1 ]; then
-        printf '%s\n' "-i wdtt0 -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
-    fi
-    printf '%s\n' '-i wdtt0 -j RETURN'
+    ifaces=$(warp_wdtt_ifaces) || return 1
+    wdtt_enabled=$(grep -m1 '^Z2K_WARP_WDTT=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')
+    for iface in $ifaces; do
+        if [ "$wdtt_enabled" = 1 ]; then
+            printf '%s\n' "-i $iface -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+        fi
+        printf '%s\n' "-i $iface -j RETURN"
+    done
     if awk '{ sub(/^[ \t]+/, ""); if ($0!="" && $0!~/^#/) found=1 } END { exit !found }' "$WARP_DEVICES_FILE" 2>/dev/null; then
         printf '%s\n' "-m set --match-set $WARP_IPSET_SRC src -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
     else
@@ -440,7 +477,11 @@ warp_policy_rules() {
 
 warp_policy_chain() {
     local rules expected current rule
-    rules=$(warp_policy_rules)
+    rules=$(warp_policy_rules) || {
+        iptables -w -t mangle -F Z2K_WARP 2>/dev/null
+        _wlog "cannot determine WDTT ingress interfaces"
+        return 1
+    }
     expected=$(printf '%s\n' '-N Z2K_WARP'; [ -z "$rules" ] || printf '%s\n' "$rules" | sed 's/^/-A Z2K_WARP /')
     current=$(iptables -w -t mangle -S Z2K_WARP 2>/dev/null) || iptables -w -t mangle -N Z2K_WARP 2>/dev/null || return 1
     [ "$current" = "$expected" ] && return 0
@@ -1028,6 +1069,7 @@ case "$1" in
     remove)   warp_remove ;;
     ipset)    warp_ipset_all ;;
     selfheal) warp_selfheal ;;
+    wdtt-ifaces) warp_wdtt_ifaces ;;
     wdtt-sync|policy-sync) warp_policy_sync ;;
     status)   warp_status ;;
     migrate)  warp_lists_migrate; warp_migrate_usque ;;

@@ -38,6 +38,7 @@ import (
 	"github.com/necronicle/z2k/z2k-warpd/internal/transport"
 	"github.com/necronicle/z2k/z2k-warpd/internal/transport/h2"
 	"github.com/necronicle/z2k/z2k-warpd/internal/transport/wg"
+	"github.com/necronicle/z2k/z2k-warpd/internal/wdttingress"
 )
 
 var version = "dev"
@@ -65,6 +66,8 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
+	case "wdtt-ifaces":
+		os.Exit(cmdWDTTIfaces(os.Args[2:]))
 	case "version":
 		fmt.Println("z2k-warpd", version)
 	case "register":
@@ -81,7 +84,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: z2k-warpd register|run|license|status|version [flags]")
+	fmt.Fprintln(os.Stderr, "usage: z2k-warpd register|run|license|status|version|wdtt-ifaces [flags]")
 	os.Exit(2)
 }
 
@@ -401,6 +404,24 @@ func cmdStatus(args []string) int {
 	s, err := status.Read(*stPath)
 	if err != nil || !s.Ready {
 		return 2
+	}
+	return 0
+}
+
+// cmdWDTTIfaces only reads local interface assignments; it never starts a tunnel.
+func cmdWDTTIfaces(args []string) int {
+	fs := flag.NewFlagSet("wdtt-ifaces", flag.ContinueOnError)
+	dir := fs.String("awg-dir", "/opt/etc/awg-manager", "AWG Manager data directory")
+	if fs.Parse(args) != nil || fs.NArg() != 0 {
+		return 2
+	}
+	names, err := wdttingress.Discover(*dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, name := range names {
+		fmt.Println(name)
 	}
 	return 0
 }

@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory() as tmp:
              WARP_FILTER=str(ROOT/'files/z2k-warp-list-filter.awk'), WARP_DEVICE=str(sb/'device.json'),
              DEVICE_JSON=str(sb/'device.json'), WARP_DOMAINS=str(sb/'domains.v1'),
              WARP_STATUS=str(sb/'status.json'), SYS_CLASS_NET=str(sb/'sys'),
-             WARP_NDMC='/nonexistent', Z2K_WARP_SOURCE_ONLY='1')
+             WARP_NDMC='/nonexistent', WARP_AWGM_DIR=str(sb/'awg-manager'), Z2K_WARP_SOURCE_ONLY='1')
     def run(command):
         subprocess.run(['sh','-c','. "$ZAPRET2_DIR/z2k-warp.sh"; '+command],env=env,check=True,stdout=subprocess.DEVNULL)
     def config(devices='', wdtt=False, lists=True):
@@ -123,7 +123,7 @@ with tempfile.TemporaryDirectory() as tmp:
             return mark
         return walk('PREROUTING',initial)
     def marked(src,dst,iface):
-        return bool(mark_word(src,dst,iface) & 0x989)
+        return (mark_word(src,dst,iface) & 0x989) == 0x989
     failures=[]; passed=0
     def check(name,want,src='192.168.1.10',dst='8.8.8.8',iface='br0'):
         global passed
@@ -139,6 +139,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check('no device selection: listed DNS on LAN',True)
     check('WDTT off excludes listed DNS',False,'10.77.0.2',iface='wdtt0')
     check('WDTT off excludes static destination',False,'10.77.0.2','8.8.4.4','wdtt0')
+    check('RAW WDTT off excludes listed DNS',False,'10.77.0.2',iface='wdttraw0')
+    check('RAW WDTT off excludes static destination',False,'10.77.0.2','8.8.4.4','wdttraw0')
     config('192.168.1.10\n')
     check('selected device listed domain',True)
     check('unselected device listed domain',False,'192.168.1.11')
@@ -147,6 +149,60 @@ with tempfile.TemporaryDirectory() as tmp:
     config('192.168.1.10\n',True)
     check('WDTT on includes listed domain',True,'10.77.0.2',iface='wdtt0')
     check('WDTT on excludes unlisted destination',False,'10.77.0.2','9.9.9.9','wdtt0')
+    check('RAW WDTT on includes listed DNS',True,'10.77.0.2',iface='wdttraw0')
+    check('RAW WDTT on includes static destination',True,'10.77.0.2','8.8.4.4','wdttraw0')
+    check('RAW WDTT on excludes unlisted destination',False,'10.77.0.2','9.9.9.9','wdttraw0')
+    if os.environ.get('WARP_SCOPE_BIN'):
+        env['WARP_BIN']=os.environ['WARP_SCOPE_BIN']
+        awgm=sb/'awg-manager';awgm.mkdir()
+        store=awgm/'proxy-instances.json'
+        def managed(wg='opkgtun17',raw='opkgtun18'):
+            store.write_text(json.dumps({'version':1,'instances':[
+                {'kind':'wdtt-server','enabled':True,'wdttServer':{'wgIface':wg,'rawIface':raw}},
+                {'kind':'wdtt-client','enabled':True,'wdttClient':{'rawIface':'opkgtun19'}}]}))
+        managed()
+        config()
+        check('AWGM WG off excludes listed domain',False,'10.77.0.2',iface='opkgtun17')
+        check('AWGM RAW off excludes static destination',False,'10.77.0.2','8.8.4.4','opkgtun18')
+        config('192.168.1.10\n',True)
+        check('AWGM WG on includes listed domain',True,'10.77.0.2',iface='opkgtun17')
+        check('AWGM RAW on includes static destination',True,'10.77.0.2','8.8.4.4','opkgtun18')
+        check('AWGM RAW on excludes unlisted destination',False,'10.77.0.2','9.9.9.9','opkgtun18')
+        check('AWGM client exit does not inherit server opt-in',False,'10.77.0.2',iface='opkgtun19')
+        check('foreign OpkgTun does not inherit server opt-in',False,'10.77.0.2',iface='opkgtun20')
+        data=json.loads(state.read_text());data['tables']['filter']={'OUTPUT':[],'FORWARD':[]};state.write_text(json.dumps(data))
+        subprocess.run(['sh',str(ROOT/'files/ndm/93-z2k-warp.sh')],env=dict(env,type='iptables',table='filter',Z2K_WARP_SOURCE_ONLY=''),check=True)
+        data=json.loads(state.read_text())
+        for iface in ('wdttraw0','opkgtun17','opkgtun18'):
+            for chain in ('OUTPUT','FORWARD'):
+                rules=data['tables']['filter'][chain]
+                ok=any('-o' in r and r[r.index('-o')+1]==iface and r[r.index('-j')+1]=='NFLOG' for r in rules)
+                if ok: passed+=1; print('[PASS] DNS capture',chain,iface)
+                else: failures.append('DNS capture '+chain+' '+iface); print('[FAIL] DNS capture',chain,iface)
+        # NDM must rediscover kernel pins, never hardcode the UI's OpkgTun names.
+        data['tables']['mangle']={'PREROUTING':[],'OUTPUT':[]};state.write_text(json.dumps(data))
+        subprocess.run(['sh',str(ROOT/'files/ndm/93-z2k-warp.sh')],env=dict(env,type='iptables',table='mangle',Z2K_WARP_SOURCE_ONLY=''),check=True)
+        check('NDM restores AWGM RAW opt-in',True,'10.77.0.2',iface='opkgtun18')
+        managed('opkgtun24','opkgtun25')
+        run('warp_policy_sync')
+        check('AWGM renamed RAW ingress is discovered',True,'10.77.0.2',iface='opkgtun25')
+        check('retired AWGM pin loses WDTT opt-in',False,'10.77.0.2',iface='opkgtun18')
+        run('warp_dns_capture_up')
+        data=json.loads(state.read_text())
+        stale=any('-o' in r and r[r.index('-o')+1] in ('opkgtun17','opkgtun18') for rows in data['tables']['filter'].values() for r in rows)
+        if stale: failures.append('retired DNS capture removed');print('[FAIL] retired DNS capture removed')
+        else: passed+=1;print('[PASS] retired DNS capture removed')
+        store.write_text('{broken')
+        rc=subprocess.run(['sh','-c','. "$ZAPRET2_DIR/z2k-warp.sh"; warp_policy_sync'],env=env).returncode
+        if rc: passed+=1;print('[PASS] malformed AWGM config reports failure')
+        else: failures.append('malformed AWGM config reports failure');print('[FAIL] malformed AWGM config reports failure')
+        check('discovery failure disables stale WARP gate',False,'10.77.0.2',iface='opkgtun25')
+        run('warp_dns_capture_down')
+        data=json.loads(state.read_text())
+        remaining=any('NFLOG' in r for rows in data['tables']['filter'].values() for r in rows)
+        if remaining: failures.append('DNS teardown despite unreadable manager');print('[FAIL] DNS teardown despite unreadable manager')
+        else: passed+=1;print('[PASS] DNS teardown despite unreadable manager')
+        store.unlink()
     config('de:ad:be:ef:00:01\n')
     check('offline selection must not expand to whole LAN',False)
     config('192.168.1.10\n',True,False)
