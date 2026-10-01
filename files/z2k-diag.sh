@@ -1298,7 +1298,7 @@ print_health() {
         fi
 
         local _tg_queue_failures
-        _tg_queue_failures=$(tg_connect_queue_failures)
+        _tg_queue_failures=$(tg_connect_queue_failures /tmp/z2k-log/tg-tunnel.log)
         if [ "${_tg_queue_failures:-0}" -gt 0 ]; then
             _add "в последних 200 строках лога телеграм-туннеля $_tg_queue_failures отказов очереди CONNECT — соединения отброшены на роутере до отправки на VPS"
         fi
