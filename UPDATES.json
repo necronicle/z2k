@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 133,
-  "current": "p-86.10",
+  "seq": 134,
+  "current": "p-86.11",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -196,7 +196,7 @@
   "files/ndm/91-z2k-http-tunnel-redirect.sh": "9f0e288359a5f03a7f14c7dc0aa2c223f4a5dbb9b7b0baa695e6718b99003745",
   "files/ndm/91-z2k-ttl-bypass.sh": "337275f481555e5a261556014edbb0352b701db40919d983b8eccc3fa7d3f084",
   "files/ndm/92-z2k-rt-proxy-redirect.sh": "8092f75c2d4a878c036f5ec3c4aa23578892c09f55b0bf79484c1154986c48a7",
-  "files/ndm/93-z2k-warp.sh": "2526816f64429fac9101b86e6c1e4f2f085c3627c8458949bf31915d1218d516",
+  "files/ndm/93-z2k-warp.sh": "cd599aa5dd7932a1cc61cdb3a168e985a89d1fffd0a58d6fe388f300a486774b",
   "files/ndm/94-z2k-ppe-deoffload.sh": "22b297d4f0b173feefe49fde59a7632a97320c096bc2ddff71ac888cbc551bd8",
   "files/ndm/95-z2k-scheduler-watchdog.sh": "a52c0221570bc068eac113f5c7a39eeec1ee06aab717d931e00a5b0a6606644b",
   "files/z2k-auto-update.sh": "d10d23baa1bc9dd7cbe33c410ddd82b496a2fedcb0e4996df1c338a41c4290e6",
@@ -216,7 +216,7 @@
   "files/z2k-tg-watchdog.sh": "d9b0494007a9f346ceb39dcae14d65a47f5e72247979b996e1dc2b61e84b59fa",
   "files/z2k-update-lists.sh": "e7f8c83ab5e8de256d79eb00e54b103d63d5ba3020d8d00bef8ccd2286738850",
   "files/z2k-warp-list-filter.awk": "97db4a85663e4b3a7c4943e495276f521a9ba961d8419df1059efdcceea655c5",
-  "files/z2k-warp.sh": "edcafd4172b379f88dc502e365f02eb94d3047134e67018f3b79076809545b43",
+  "files/z2k-warp.sh": "2ee8927ff0c0428b6bfedf2dfd5cd6b20775ebefb48f48a8dea5485749d71e81",
   "lib/auto_update.sh": "f3207a68c08cd7725177fb2f7b3ae36464b265c552d11561f3d03016b180d6c2",
   "lib/config.sh": "e1203016155fab62a7ee0351663014a1663b0dfd3cd4b5d8c5f9a2cb35813ab3",
   "lib/config_official.sh": "a371188ba69e921c1c54058489253d7b593f26d893132a4fb65afa96edf14e13",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "783a8543a79d981fec3ff95917a8905ff99be88a2acd803d88e325d6961c3c25",
+  "webpanel/www/index.html": "72c500529507d80b0f4b6c4090bc53190ce082122392b8aa7f285c35aef7da1a",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -596,6 +596,7 @@
 {"v": "p-86.6", "type": "patch", "ts": "2026-10-01T12:02:55Z", "ref": "p-86.6", "desc": "Исправлена работа списков WARP: при выборе устройств списки действуют только для них, без выбора — для всей локальной сети. Переключатель WDTT отдельно управляет применением списков к его клиентам; без включённых списков трафик в WARP не идёт.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-86.7", "type": "patch", "ts": "2026-10-01T13:10:04Z", "ref": "p-86.7", "desc": "Исправлен переключатель WDTT для режима Raw-IP и серверов в AWG Manager: входные интерфейсы определяются по конфигурации сервера, независимо от номера OpkgTun. Списки WARP применяются к этим клиентам только при включённом WDTT.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-86.8", "type": "patch", "ts": "2026-10-01T15:39:10Z", "ref": "p-86.8", "desc": "Оптимизации подключения к VPS: улучшены переподключение, сохранение параметров между обновлениями и обработка большого числа соединений.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-86.10", "type": "patch", "ts": "2026-10-01T17:19:53Z", "ref": "p-86.10", "desc": "Исправлены таймауты открытия соединений Telegram при большом числе подключений. Диагностика теперь сообщает об отказах очереди туннеля.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-86.10", "type": "patch", "ts": "2026-10-01T17:19:53Z", "ref": "p-86.10", "desc": "Исправлены таймауты открытия соединений Telegram при большом числе подключений. Диагностика теперь сообщает об отказах очереди туннеля.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-86.11", "type": "patch", "ts": "2026-10-01T19:01:37Z", "ref": "p-86.11", "desc": "Исправлено применение WARP к клиентам AWG/WireGuard: выбор устройств локальной сети больше не исключает VPN-клиентов. Трафик по-прежнему направляется через WARP только для включённых списков.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
