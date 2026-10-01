@@ -186,23 +186,9 @@ else
     no "set_flag backup cleanup" "no backup" "$(find "$TMP" -name '*.z2k-backup.*' -print -quit)"
 fi
 
-# --- 5. WARP: снятие маркировки ищет ту же форму, что и установка -------------
-#
-# pbr_up ставит --set-xmark MARK/MARK, а pbr_down искал --set-mark MARK. Для
-# iptables это разные правила, -C не находил ничего, и правило маркировки
-# оставалось в mangle навсегда — каждое включение добавляло ещё одно.
-_up=$(awk '/^warp_pbr_up\(\)/,/^}$/'   "$ROOT/files/z2k-warp.sh")
-_dn=$(awk '/^warp_pbr_down\(\)/,/^}$/' "$ROOT/files/z2k-warp.sh")
-if printf '%s' "$_up" | grep -q -- '--set-xmark'; then
-    if printf '%s' "$_dn" | grep -q -- '--set-xmark'; then
-        ok "warp_pbr_down снимает ту же форму маркировки, что ставит pbr_up"
-    else
-        no "форма маркировки при снятии" "--set-xmark, как у pbr_up" \
-           "только --set-mark — правило не удаляется никогда"
-    fi
-else
-    no "pbr_up ставит --set-xmark" "--set-xmark" "форма изменилась, проверку надо пересмотреть"
-fi
+# WARP rule lifecycle is exercised by test_warp_scope.sh with installed-rule
+# state and packet fixtures, including removal of legacy direct marks. Avoid
+# the old source-text check tied to where --set-xmark happened to be written.
 
 # --- 6. Восстановление конфигурации проверяет боевую распаковку ---------------
 #

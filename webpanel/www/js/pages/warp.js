@@ -8,7 +8,7 @@ import { JOB_FAIL, _updateGlobalUILock, awaitPanelBack, foreignJobsActive, jobOu
 // (WireGuard, при полном UDP-блоке — MASQUE по TCP 443). Три действия —
 // Установить / тумблер / Удалить: без намерения юзера на роутере нет ни
 // движка, ни демона. Что идёт в туннель: адреса из списков (игровые +
-// свои) и целые устройства по IP/MAC. Всё — файлы в /opt/zapret2/lists/warp/.
+// свои), ограниченные выбранными устройствами по IP/MAC. Всё — файлы в /opt/zapret2/lists/warp/.
 let _warpLists = [];
 
 // Транспорт туннеля: автомат или выбор вручную. Порядок — от умолчания к
@@ -135,7 +135,7 @@ export async function renderWarp() {
         <div class="t-text">
           <div class="t-name">WARP-туннель</div>
           <div class="t-desc">Туннель Cloudflare для игр и сервисов, заблокированных по IP.
-            В него идут адреса из списков ниже и выбранные устройства; остальной трафик — напрямую.</div>
+            Через него идёт трафик к адресам из включённых списков. Ниже можно ограничить их выбранными устройствами.</div>
         </div>
         <label class="switch" id="warp-switch" hidden>
           <input type="checkbox" disabled>
@@ -154,7 +154,7 @@ export async function renderWarp() {
       <div class="toggle-row" id="warp-wdtt-row" hidden>
         <div class="t-text">
           <div class="t-name">Клиенты WDTT через WARP</div>
-          <div class="t-desc">Весь трафик клиентов WDTT будет идти через WARP, пока он включён.</div>
+          <div class="t-desc">Применять включённые списки к клиентам WDTT. Когда выключено, их трафик идёт напрямую.</div>
         </div>
         <label class="switch">
           <input type="checkbox" id="warp-wdtt-toggle" disabled>
@@ -197,8 +197,9 @@ export async function renderWarp() {
     </div>
     <div class="card" id="warp-devices-card" hidden>
       <h3>Устройства</h3>
-      <p class="desc">Включите устройство — и весь его трафик пойдёт через WARP, независимо от
-        списков. Удобно для консоли или телефона. <b>Применяется сразу.</b></p>
+      <p class="desc">Выберите устройства, для которых будут работать включённые списки WARP.
+        Если ни одно не выбрано, списки действуют для всей локальной сети.
+        Клиенты WDTT включаются отдельно, переключателем выше. <b>Применяется сразу.</b></p>
       <div id="warp-neighbors" class="warp-games">${skeletonBlocks(2)}</div>
       <details class="disclosure warp-manual">
         <summary>Вручную: IP или MAC по строке</summary>
@@ -221,6 +222,7 @@ export async function renderWarp() {
         <code>*.example.com</code> охватывает поддомены, но не сам <code>example.com</code>.
         Через WARP идёт трафик к адресам из включённых списков;
         включают и выключают их тумблеры в карточке выше.
+        <b>Без включённых списков трафик в WARP не идёт</b>, даже если туннель включён и устройства выбраны.
         <b>Изменения применяются сразу</b>, без перезапуска, и переживают переустановку z2k.
       </p>
       <p class="desc">Для доменов устройство должно получать обычные DNS-ответы через DNS роутера
@@ -426,7 +428,7 @@ async function loadWarpStatus() {
   if (domainState) {
     domainState.textContent = !enabled ? "Доменные правила выключены вместе с WARP."
       : d.domain_active ? `Доменные правила: ${Number(d.domain_rules) || 0}; активных пар устройство/IP: ${Number(d.domain_pairs) || 0}.`
-      : "Доменные правила сейчас недоступны; адреса и устройства продолжают работать.";
+      : "Доменные правила сейчас недоступны; правила для IPv4-адресов продолжают работать.";
   }
 
   // Три состояния раздела — из одного ответа. Не установлен: одна кнопка, без
@@ -546,7 +548,7 @@ async function warpWdttToggle(box) {
   box.disabled = true;
   try {
     await apiPost("/warp/wdtt", { value: wanted });
-    toast(wanted === "1" ? "Клиенты WDTT направлены через WARP" : "Маршрутизация WDTT через WARP выключена");
+    toast(wanted === "1" ? "Списки WARP применяются к клиентам WDTT" : "Маршрутизация WDTT через WARP выключена");
   } catch (e) {
     box.checked = previous;
     toastErr("Не удалось применить: ", e);
@@ -731,7 +733,7 @@ async function warpRemove() {
   });
 }
 
-// Устройства «всё в WARP»: text/plain, как списки адресов.
+// Устройства, для которых действуют списки WARP: text/plain, как списки адресов.
 async function loadWarpDevices() {
   const ta = document.getElementById("warp-devices");
   if (!ta) return;

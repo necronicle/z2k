@@ -44,7 +44,7 @@ func setClient(name string) (netip.Addr, bool) {
 	return ip, err == nil && ce == nil && canonical == name
 }
 func markArgs(action string, client netip.Addr, name string) []string {
-	return []string{"-w", "-t", "mangle", action, "PREROUTING", "-s", client.String() + "/32", "-m", "set", "--match-set", name, "dst", "-j", "MARK", "--set-xmark", "0x989/0x989"}
+	return []string{"-w", "-t", "mangle", action, "PREROUTING", "-s", client.String() + "/32", "-m", "set", "--match-set", name, "dst", "-j", "Z2K_WARP"}
 }
 func (s PairSet) ensureMark(client netip.Addr, name string) error {
 	if _, err := s.iptables(markArgs("-C", client, name)...); err == nil {
@@ -56,13 +56,21 @@ func (s PairSet) ensureMark(client netip.Addr, name string) error {
 	return nil
 }
 func (s PairSet) removeMark(client netip.Addr, name string) {
-	_, _ = s.iptables(markArgs("-D", client, name)...)
-	for i := 0; i < 8; i++ {
-		if _, err := s.iptables(markArgs("-C", client, name)...); err != nil {
-			break
-		}
-		if _, err := s.iptables(markArgs("-D", client, name)...); err != nil {
-			break
+	// Remove both generations before destroying the set. An upgrade can start
+	// the observer before shell selfheal has removed the old direct marks.
+	for _, target := range [][]string{{"Z2K_WARP"}, {"MARK", "--set-xmark", "0x989/0x989"}} {
+		args := markArgs("-D", client, name)
+		args = append(args[:len(args)-1], target...)
+		_, _ = s.iptables(args...)
+		for i := 0; i < 8; i++ {
+			args[3] = "-C"
+			if _, err := s.iptables(args...); err != nil {
+				break
+			}
+			args[3] = "-D"
+			if _, err := s.iptables(args...); err != nil {
+				break
+			}
 		}
 	}
 }

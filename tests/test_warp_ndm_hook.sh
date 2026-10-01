@@ -18,6 +18,8 @@ HOOK="$SCRIPT_DIR/files/ndm/93-z2k-warp.sh"
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 mkdir -p "$SB/bin" "$SB/z2k"
+cp "$SCRIPT_DIR/files/z2k-warp.sh" "$SB/z2k/z2k-warp.sh"
+printf "v1\nmyip.ru\n" > "$SB/domains.v1"
 
 # стабы: iptables пишет argv; -C отвечает «нет правила», чтобы -A дошёл. ipset — сеты есть.
 cat > "$SB/bin/iptables" <<EOF
@@ -38,40 +40,40 @@ printf '{"iface": "z2ktun3", "id": "x"}\n' > "$SB/device.json"
 
 run() { # $1=type $2=table
     rm -f "$SB/ipt.log"
-    Z2K_STUB_PATH="$SB/bin" type="$1" table="$2" ZAPRET2_DIR="$SB/z2k" DEVICE_JSON="$SB/device.json" SYS_CLASS_NET="$SB/sys/class/net" \
+    Z2K_STUB_PATH="$SB/bin" type="$1" table="$2" ZAPRET2_DIR="$SB/z2k" DEVICE_JSON="$SB/device.json" WARP_DOMAINS="$SB/domains.v1" SYS_CLASS_NET="$SB/sys/class/net" \
         sh "$HOOK" >/dev/null 2>&1
     [ -f "$SB/ipt.log" ] || : > "$SB/ipt.log"
 }
 
 run iptables mangle
 assert_eq "mangle: MARK for z2k_warp dst, xmark with mask" "1" \
-    "$(grep -c -- '-w -t mangle -A PREROUTING -m set --match-set z2k_warp dst -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
-assert_eq "mangle: MARK for z2k_warp_src src" "1" \
+    "$(grep -c -- '-w -t mangle -A PREROUTING -m set --match-set z2k_warp dst -j Z2K_WARP' "$SB/ipt.log")"
+assert_eq "mangle: no whole-device rule" "0" \
     "$(grep -c -- '-w -t mangle -A PREROUTING -m set --match-set z2k_warp_src src -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 assert_eq "mangle: MARK for client-scoped DNS set" "1" \
-    "$(grep -c -- '-w -t mangle -A PREROUTING -s 192.168.1.10/32 -m set --match-set z2kd_192.168.1.10 dst -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
+    "$(grep -c -- '-w -t mangle -A PREROUTING -s 192.168.1.10/32 -m set --match-set z2kd_192.168.1.10 dst -j Z2K_WARP' "$SB/ipt.log")"
 assert_eq "mangle: MSS clamp on z2ktun3" "1" \
     "$(grep -c -- '-w -t mangle -A FORWARD -o z2ktun3 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu' "$SB/ipt.log")"
-assert_eq "mangle: no legacy --set-mark form" "0" "$(grep -c -- '--set-mark ' "$SB/ipt.log")"
-assert_eq "mangle: nothing in OUTPUT" "0" "$(grep -c -- ' OUTPUT ' "$SB/ipt.log")"
+assert_eq "mangle: no legacy --set-mark form" "0" "$(grep -c -- '-A .*--set-mark ' "$SB/ipt.log")"
+assert_eq "mangle: nothing in OUTPUT" "0" "$(grep -c -- '-A OUTPUT ' "$SB/ipt.log")"
 
 # WDTT client traffic is opt-in and identified after decapsulation by its
 # ingress interface. It must not alter the router's outer WDTT transport.
-assert_eq "mangle: WDTT route is off by default" "0" "$(grep -c -- '-i wdtt0 ' "$SB/ipt.log")"
+assert_eq "mangle: WDTT route is off by default" "0" "$(grep -c -- '-A Z2K_WARP -i wdtt0 -j MARK ' "$SB/ipt.log")"
 mkdir -p "$SB/sys/class/net/wdtt0"
 printf 'GAME_WARP_ENABLED=1\nZ2K_WARP_WDTT=1\n' > "$SB/z2k/config"
 run iptables mangle
 assert_eq "mangle: WDTT client traffic marked by ingress interface" "1" \
-    "$(grep -c -- '-w -t mangle -A PREROUTING -i wdtt0 -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
+    "$(grep -c -- '-w -t mangle -A Z2K_WARP -i wdtt0 -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 
 rmdir "$SB/sys/class/net/wdtt0"
 run iptables mangle
-assert_eq "mangle: absent wdtt0 adds no route rule" "0" "$(grep -c -- '-i wdtt0 ' "$SB/ipt.log")"
+assert_eq "mangle: WDTT policy survives interface recreation" "1" "$(grep -c -- '-A Z2K_WARP -i wdtt0 -j MARK ' "$SB/ipt.log")"
 
 mkdir -p "$SB/sys/class/net/wdtt0"
 printf 'GAME_WARP_ENABLED=0\nZ2K_WARP_WDTT=1\n' > "$SB/z2k/config"
 run iptables mangle
-assert_eq "mangle: WDTT option is inert while WARP is off" "0" "$(grep -c -- '-i wdtt0 ' "$SB/ipt.log")"
+assert_eq "mangle: WDTT option is inert while WARP is off" "0" "$(grep -c -- '-A Z2K_WARP -i wdtt0 -j MARK ' "$SB/ipt.log")"
 printf 'GAME_WARP_ENABLED=1\nZ2K_WARP_WDTT=1\n' > "$SB/z2k/config"
 
 run iptables nat
@@ -82,8 +84,8 @@ run iptables filter
 assert_eq "filter: marked outbound before Keenetic reject" "1" "$(grep -c -- '-w -t filter -I FORWARD 1 -o z2ktun3 -m mark --mark 0x989/0x989 -j ACCEPT' "$SB/ipt.log")"
 assert_eq "filter: established return before Keenetic reject" "1" "$(grep -c -- '-w -t filter -I FORWARD 1 -i z2ktun3 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' "$SB/ipt.log")"
 assert_eq "filter: no broad appended accept" "0" "$(grep -c -- '-w -t filter -A FORWARD -o z2ktun3 -j ACCEPT' "$SB/ipt.log")"
-assert_eq "filter: established forwarded DNS copied before ACCEPT" "2" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG' "$SB/ipt.log")"
-assert_eq "filter: router DNS copied" "2" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG' "$SB/ipt.log")"
+assert_eq "filter: LAN and WDTT forwarded DNS copied before ACCEPT" "4" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG' "$SB/ipt.log")"
+assert_eq "filter: router DNS to LAN and WDTT copied" "4" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG' "$SB/ipt.log")"
 assert_eq "filter: nothing else" "0" "$(grep -vc -- "-t filter" "$SB/ipt.log")"
 
 run ip6tables mangle

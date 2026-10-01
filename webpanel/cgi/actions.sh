@@ -1132,8 +1132,8 @@ warp_transport_set() {
     return "$rc"
 }
 
-# Route all decapsulated WDTT client traffic through WARP. Reconcile just this
-# MARK rule immediately; do not restart the tunnel or rebuild its other PBR.
+# Apply destination lists to decapsulated WDTT traffic. Reconcile the shared
+# source policy immediately without restarting the tunnel.
 warp_wdtt_set() {
     local value="$1" old
     case "$value" in 0|1) ;; *) echo "value must be 0 or 1" >&2; return 1 ;; esac
@@ -1142,6 +1142,7 @@ warp_wdtt_set() {
     if [ -f "$WARP_SCRIPT" ]; then
         sh "$WARP_SCRIPT" wdtt-sync >/dev/null 2>&1 || {
             set_flag "Z2K_WARP_WDTT" "$old" "$CONFIG_FILE"
+            sh "$WARP_SCRIPT" wdtt-sync >/dev/null 2>&1 || true
             echo "не удалось применить правило WDTT" >&2
             return 1
         }
@@ -2110,7 +2111,7 @@ warp_ipset_reload_if_enabled() {
     # While OFF the set is left alone — enable does a full load anyway.
     [ "$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")" = "1" ] || return 0
     [ -f "$WARP_SCRIPT" ] || return 0
-    sh "$WARP_SCRIPT" ipset >/dev/null 2>&1 || true
+    sh "$WARP_SCRIPT" ipset >/dev/null 2>&1
 }
 
 warp_status_info() {
@@ -2124,7 +2125,7 @@ warp_status_info() {
         "$(read_flag "Z2K_WARP_WDTT" "$CONFIG_FILE" "0")"
 }
 
-# ---------- устройства «всё в WARP» (lists/warp/devices.txt) ----------
+# ---------- устройства для списков WARP (lists/warp/devices.txt) ----------
 # Строка — IPv4 или MAC; MAC нормализуется к нижнему регистру с двоеточиями.
 # Мусор отбрасывается и считается. Живой ipset пересобирается, если режим включён.
 warp_devices_read() {
@@ -2287,6 +2288,26 @@ warp_neighbors() {
     END { flush() }' | awk -F'\037' '{ gsub(/"/, "", $3); print }' OFS='\037' | sort -t "$(printf '\037')" -k5,5r -k3,3f
 }
 
+# Save and apply as one UI operation. If netfilter rejects the change,
+# restore the saved selection so a failed toggle is not applied later silently.
+warp_devices_commit() {
+    local tmp="$1" f="$WARP_LISTS_DIR/devices.txt" old="$1.old"
+    if [ -f "$f" ]; then
+        cp -p "$f" "$old" || return 1
+    else
+        : > "$old" || return 1
+    fi
+    if ! mv -f "$tmp" "$f"; then rm -f "$old"; return 1; fi
+    chmod 644 "$f"
+    if warp_ipset_reload_if_enabled; then
+        rm -f "$old"
+        return 0
+    fi
+    mv -f "$old" "$f"
+    warp_ipset_reload_if_enabled >/dev/null 2>&1 || true
+    return 1
+}
+
 # Включить/выключить устройство по MAC: строка в devices.txt добавляется или
 # убирается; ручные строки (IP, чужие MAC) не трогаются.
 warp_device_toggle() {
@@ -2304,9 +2325,7 @@ warp_device_toggle() {
         [ "$val" = "1" ] && printf '%s\n' "$mac"
         true
     } > "$tmp" || { rm -f "$tmp"; return 1; }
-    mv -f "$tmp" "$f" && chmod 644 "$f"
-    warp_ipset_reload_if_enabled
-    return 0
+    warp_devices_commit "$tmp"
 }
 
 warp_devices_save() {
@@ -2343,9 +2362,11 @@ warp_devices_save() {
         d++
     }
     END { printf "entries=%d dropped=%d\n", n, d > "/dev/stderr" }' > "$tmp" 2> "$tmp.stat" || { rm -f "$tmp" "$tmp.stat"; return 1; }
-    mv -f "$tmp" "$WARP_LISTS_DIR/devices.txt" && chmod 644 "$WARP_LISTS_DIR/devices.txt"
+    if ! warp_devices_commit "$tmp"; then
+        rm -f "$tmp" "$tmp.stat"
+        return 1
+    fi
     cat "$tmp.stat"; rm -f "$tmp.stat"
-    warp_ipset_reload_if_enabled
     return 0
 }
 

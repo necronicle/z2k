@@ -42,7 +42,7 @@ func TestPairSetWritesClientScopedDestinationAndTimeout(t *testing.T) {
 	for _, part := range []string{
 		"ipset create z2kd_192.168.1.10 hash:ip family inet timeout 3600 maxelem 8192 -exist",
 		"ipset add z2kd_192.168.1.10 8.8.8.8 timeout 20 -exist",
-		"iptables -w -t mangle -A PREROUTING -s 192.168.1.10/32 -m set --match-set z2kd_192.168.1.10 dst -j MARK --set-xmark 0x989/0x989",
+		"iptables -w -t mangle -A PREROUTING -s 192.168.1.10/32 -m set --match-set z2kd_192.168.1.10 dst -j Z2K_WARP",
 	} {
 		if !strings.Contains(string(b), part) {
 			t.Fatalf("missing %q in %s", part, b)
@@ -65,6 +65,7 @@ func TestPairSetReplacesStaleClientSets(t *testing.T) {
 	b, _ := os.ReadFile(log)
 	got := string(b)
 	for _, part := range []string{
+		"iptables -w -t mangle -D PREROUTING -s 192.168.1.99/32 -m set --match-set z2kd_192.168.1.99 dst -j Z2K_WARP",
 		"iptables -w -t mangle -D PREROUTING -s 192.168.1.99/32 -m set --match-set z2kd_192.168.1.99 dst -j MARK --set-xmark 0x989/0x989",
 		"ipset destroy z2kd_192.168.1.99",
 	} {

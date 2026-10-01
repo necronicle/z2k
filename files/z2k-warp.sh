@@ -221,7 +221,7 @@ warp_ipset_load() {
 }
 
 
-# ---- устройства «всё в WARP» (B) ------------------------------------------------
+# ---- устройства, для которых действуют списки WARP ------------------------------------------------
 # devices.txt: IPv4 или MAC по строке. MAC → IP через таблицу соседей либо
 # активную запись Keenetic; офлайн-устройство пропускается до selfheal.
 warp_devices_ips() {
@@ -287,11 +287,14 @@ warp_devices_ips() {
 
 warp_ipset_src_load() {
     local tmpset="${WARP_IPSET_SRC}_new"
-    ipset create "$WARP_IPSET_SRC" hash:ip family inet 2>/dev/null
+    ipset create "$WARP_IPSET_SRC" hash:ip family inet -exist 2>/dev/null || return 1
     ipset destroy "$tmpset" 2>/dev/null
-    ipset create "$tmpset" hash:ip family inet 2>/dev/null
-    warp_devices_ips | awk -v set="$tmpset" '{ print "add " set " " $0 " -exist" }' | ipset restore -exist 2>/dev/null
-    ipset swap "$tmpset" "$WARP_IPSET_SRC" 2>/dev/null
+    ipset create "$tmpset" hash:ip family inet 2>/dev/null || return 1
+    if ! warp_devices_ips | awk -v set="$tmpset" '{ print "add " set " " $0 " -exist" }' | ipset restore -exist 2>/dev/null \
+        || ! ipset swap "$tmpset" "$WARP_IPSET_SRC" 2>/dev/null; then
+        ipset destroy "$tmpset" 2>/dev/null
+        return 1
+    fi
     ipset destroy "$tmpset" 2>/dev/null
     return 0
 }
@@ -313,7 +316,7 @@ warp_domains_load() {
 warp_ipset_all() {
     warp_ipset_load || return 1
     warp_domains_load || return 1
-    warp_ipset_src_load
+    warp_policy_sync
 }
 
 # The target Keenetic kernel does not support hash:net,net. The observer uses
@@ -342,33 +345,37 @@ warp_dns_sets_destroy() {
 
 # DNS copies only. NFLOG has no verdict and cannot interrupt DNS delivery.
 warp_dns_capture_up() {
-    local ch proto
-    for ch in OUTPUT FORWARD; do
-        for proto in udp tcp; do
-            if [ "$ch" = FORWARD ]; then
-                iptables -w -t filter -C "$ch" -o br+ -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null \
-                    || iptables -w -t filter -I "$ch" -o br+ -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null
-            else
-                iptables -w -t filter -C "$ch" -o br+ -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null \
-                    || iptables -w -t filter -I "$ch" -o br+ -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null
-            fi
+    local ch proto out
+    for out in br+ wdtt0; do
+        for ch in OUTPUT FORWARD; do
+            for proto in udp tcp; do
+                if [ "$ch" = FORWARD ]; then
+                    iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null \
+                        || iptables -w -t filter -I "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null
+                else
+                    iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null \
+                        || iptables -w -t filter -I "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null
+                fi
+            done
         done
     done
 }
 
 warp_dns_capture_down() {
-    local ch proto
-    for ch in OUTPUT FORWARD; do
-        for proto in udp tcp; do
-            if [ "$ch" = FORWARD ]; then
-                while iptables -w -t filter -C "$ch" -o br+ -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null; do
-                    iptables -w -t filter -D "$ch" -o br+ -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null || break
-                done
-            else
-                while iptables -w -t filter -C "$ch" -o br+ -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null; do
-                    iptables -w -t filter -D "$ch" -o br+ -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null || break
-                done
-            fi
+    local ch proto out
+    for out in br+ wdtt0; do
+        for ch in OUTPUT FORWARD; do
+            for proto in udp tcp; do
+                if [ "$ch" = FORWARD ]; then
+                    while iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null; do
+                        iptables -w -t filter -D "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null || break
+                    done
+                else
+                    while iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null; do
+                        iptables -w -t filter -D "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null || break
+                    done
+                fi
+            done
         done
     done
 }
@@ -407,39 +414,107 @@ warp_pbr_up() {
     ip route replace default dev "$iface" table "$WARP_TABLE" 2>/dev/null
     ip rule show 2>/dev/null | grep -q "fwmark $WARP_MARK" \
         || ip rule add pref "$WARP_RULE_PREF" fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
-    local set
-    for set in "$WARP_IPSET dst" "$WARP_IPSET_SRC src"; do
-        # shellcheck disable=SC2086 # два аргумента, разбиение намеренно
-        iptables -w -t mangle -C PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null \
-            || iptables -w -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null
-    done
-    warp_dns_client_sets | while read -r set client; do
-        iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null \
-            || iptables -w -t mangle -A PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null
-    done
-    warp_wdtt_rule_sync
-    return 0
+    warp_policy_sync
 }
 
-# WDTT peers are decoded on wdtt0. Mark their forwarded packets only when the
-# opt-in is on and the interface exists; never mark the router's outer tunnel.
-warp_wdtt_rule_sync() {
-    local rule="-i wdtt0 -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
-    if [ "$1" != "off" ] \
-        && [ "$(grep -m1 '^GAME_WARP_ENABLED=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] \
-        && [ "$(grep -m1 '^Z2K_WARP_WDTT=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] \
-        && [ -d "${SYS_CLASS_NET:-/sys/class/net}/wdtt0" ] && [ -n "$(warp_iface)" ]; then
-        # shellcheck disable=SC2086 # rule is a fixed, two-argument fragment
-        iptables -w -t mangle -C PREROUTING $rule 2>/dev/null \
-            || iptables -w -t mangle -A PREROUTING $rule 2>/dev/null
+# Destination matches (static and DNS-observed) all enter this chain. Device
+# selection limits those matches; it must never route an entire device. Count
+# saved selections, not resolved IPs: an offline selected MAC is still selected.
+warp_policy_rules() {
+    [ "$(warp_flag)" = 1 ] || return 0
+    # Empty lists must also fence off any DNS cache awaiting observer reload.
+    if ! awk 'NR>1 { found=1; exit } END { exit !found }' "$WARP_DOMAINS" 2>/dev/null \
+        && ! ipset save "$WARP_IPSET" 2>/dev/null | grep -q '^add '; then
+        return 0
+    fi
+    if [ "$(grep -m1 '^Z2K_WARP_WDTT=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = 1 ]; then
+        printf '%s\n' "-i wdtt0 -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+    fi
+    printf '%s\n' '-i wdtt0 -j RETURN'
+    if awk '{ sub(/^[ \t]+/, ""); if ($0!="" && $0!~/^#/) found=1 } END { exit !found }' "$WARP_DEVICES_FILE" 2>/dev/null; then
+        printf '%s\n' "-m set --match-set $WARP_IPSET_SRC src -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
     else
-        # shellcheck disable=SC2086
-        while iptables -w -t mangle -C PREROUTING $rule 2>/dev/null; do
-            # shellcheck disable=SC2086
-            iptables -w -t mangle -D PREROUTING $rule 2>/dev/null || break
-        done
+        printf '%s\n' "-j MARK --set-xmark $WARP_MARK/$WARP_MARK"
     fi
 }
+
+warp_policy_chain() {
+    local rules expected current rule
+    rules=$(warp_policy_rules)
+    expected=$(printf '%s\n' '-N Z2K_WARP'; [ -z "$rules" ] || printf '%s\n' "$rules" | sed 's/^/-A Z2K_WARP /')
+    current=$(iptables -w -t mangle -S Z2K_WARP 2>/dev/null) || iptables -w -t mangle -N Z2K_WARP 2>/dev/null || return 1
+    [ "$current" = "$expected" ] && return 0
+    # Empty chain means direct routing during a settings change, never a
+    # temporary expansion to all clients. Preserve other Keenetic mark bits.
+    iptables -w -t mangle -F Z2K_WARP 2>/dev/null || return 1
+    [ -n "$rules" ] || return 0
+    printf '%s\n' "$rules" | while IFS= read -r rule; do
+        # shellcheck disable=SC2086 # generated fixed rule arguments only
+        iptables -w -t mangle -A Z2K_WARP $rule 2>/dev/null || exit 1
+    done
+}
+
+warp_policy_legacy_clear() {
+    local ch set mk
+    for ch in PREROUTING OUTPUT; do
+        for set in "$WARP_IPSET dst" "$WARP_IPSET_SRC src"; do
+            for mk in "--set-xmark $WARP_MARK/$WARP_MARK" "--set-mark $WARP_MARK"; do
+                # shellcheck disable=SC2086
+                while iptables -w -t mangle -C "$ch" -m set --match-set $set -j MARK $mk 2>/dev/null; do
+                    # shellcheck disable=SC2086
+                    iptables -w -t mangle -D "$ch" -m set --match-set $set -j MARK $mk 2>/dev/null || return 1
+                done
+            done
+        done
+    done
+    while iptables -w -t mangle -C PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null; do
+        iptables -w -t mangle -D PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null || return 1
+    done
+    warp_dns_client_sets | while read -r set client; do
+        while iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null; do
+            iptables -w -t mangle -D PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null || exit 1
+        done
+    done
+}
+
+# Shared by live list/device updates, the WDTT switch, selfheal and NDM.
+# A separate short lock serializes chain replacement without restarting WARP.
+warp_policy_sync() (
+    local lock waited=0 owner
+    lock="$(dirname "$WARP_DOMAINS")/policy.lock"
+    mkdir -p "$(dirname "$lock")" || exit 1
+    while ! mkdir "$lock" 2>/dev/null; do
+        owner=$(cat "$lock/pid" 2>/dev/null)
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null
+            continue
+        fi
+        [ "$waited" -lt 5 ] || exit 1
+        sleep 1; waited=$((waited + 1))
+    done
+    printf '%s\n' "$$" > "$lock/pid"
+    trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null' EXIT
+    trap 'exit 1' HUP INT TERM
+    # Remove direct marks before any operation that can fail: otherwise a
+    # first upgrade failure could leave a route around the new gate.
+    warp_policy_legacy_clear || exit 1
+    # Refresh source membership under the same lock as the scope rules.
+    # On failure the old set must not keep a deselected client authorized.
+    if ! warp_ipset_src_load; then
+        iptables -w -t mangle -F Z2K_WARP 2>/dev/null
+        _wlog "cannot apply WARP device selection"
+        exit 1
+    fi
+    [ "$(warp_flag)" = 1 ] || exit 0
+    warp_policy_chain || exit 1
+    [ "$(warp_flag)" = 1 ] || exit 0
+    iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null \
+        || iptables -w -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null || exit 1
+    warp_dns_client_sets | while read -r set client; do
+        iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j Z2K_WARP 2>/dev/null \
+            || iptables -w -t mangle -A PREROUTING -s "$client/32" -m set --match-set "$set" dst -j Z2K_WARP 2>/dev/null || exit 1
+    done
+)
 
 # A patch can replace the NDM hook without causing a firewall rebuild. The
 # daemon's own rule repair only runs on start, so selfheal must apply the newly
@@ -454,24 +529,16 @@ warp_forward_ensure() {
 }
 
 warp_pbr_down() {
-    # Обе формы и обе цепочки: --set-mark ставили до r-62, OUTPUT — ещё раньше;
-    # на роутерах, переживших те версии, такие правила ещё лежат.
-    local ch set mk
-    for ch in PREROUTING OUTPUT; do
-        for set in "$WARP_IPSET dst" "$WARP_IPSET_SRC src"; do
-            for mk in "--set-xmark $WARP_MARK/$WARP_MARK" "--set-mark $WARP_MARK"; do
-                # shellcheck disable=SC2086
-                while iptables -w -t mangle -C "$ch" -m set --match-set $set -j MARK $mk 2>/dev/null; do
-                    # shellcheck disable=SC2086
-                    iptables -w -t mangle -D "$ch" -m set --match-set $set -j MARK $mk 2>/dev/null || break
-                done
-            done
-        done
+    local set client
+    # Empty the gate first, including observer rules that race teardown.
+    iptables -w -t mangle -F Z2K_WARP 2>/dev/null
+    warp_policy_legacy_clear
+    while iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null; do
+        iptables -w -t mangle -D PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null || break
     done
-    warp_wdtt_rule_sync off
     warp_dns_client_sets | while read -r set client; do
-        while iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null; do
-            iptables -w -t mangle -D PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null || break
+        while iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j Z2K_WARP 2>/dev/null; do
+            iptables -w -t mangle -D PREROUTING -s "$client/32" -m set --match-set "$set" dst -j Z2K_WARP 2>/dev/null || break
         done
     done
     ip rule del fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
@@ -825,8 +892,7 @@ warp_selfheal() {
     warp_daemon_running || { warp_note_death; sh "$WARP_INIT" start >/dev/null 2>&1; return 0; }
     if warp_ready; then
         ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || warp_ipset_all
-        warp_ipset_src_load      # MAC устройств могли появиться в neigh
-        warp_pbr_up
+        warp_pbr_up || return 1
         warp_forward_ensure
     else
         warp_pbr_down            # fail open: напрямую лучше, чем в чёрную дыру
@@ -962,12 +1028,8 @@ case "$1" in
     remove)   warp_remove ;;
     ipset)    warp_ipset_all ;;
     selfheal) warp_selfheal ;;
-    wdtt-sync)
-        # Keep this operation narrowly scoped: a settings click must not
-        # rebuild other WARP policy or restart the tunnel.
-        warp_wdtt_rule_sync
-        ;;
+    wdtt-sync|policy-sync) warp_policy_sync ;;
     status)   warp_status ;;
     migrate)  warp_lists_migrate; warp_migrate_usque ;;
-    *) echo "usage: $0 {install|enable|disable|restart|license|remove|ipset|selfheal|wdtt-sync|status|migrate}" >&2; exit 1 ;;
+    *) echo "usage: $0 {install|enable|disable|restart|license|remove|ipset|selfheal|wdtt-sync|policy-sync|status|migrate}" >&2; exit 1 ;;
 esac

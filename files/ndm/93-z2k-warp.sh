@@ -39,39 +39,9 @@ ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
 # shellcheck disable=SC2154
 case "$table" in
     mangle)
-        # Только PREROUTING (трафик LAN-клиентов). НЕ OUTPUT: собственный пакет
-        # роутера, ушедший в TUN, ломает reply-path и глушит его же доступ к
-        # Cloudflare/GitHub. Форма --set-xmark с маской: --set-mark затирает
-        # весь mark-word, включая метки Keenetic.
-        for set in "z2k_warp dst" "z2k_warp_src src"; do
-            name=${set%% *}
-            ipset list -n "$name" >/dev/null 2>&1 || continue
-            # shellcheck disable=SC2086 # $set — два аргумента, разбиение намеренно
-            ipt -t mangle -C PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" \
-                || ipt -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK"
-        done
-        # Optional routing for WDTT peers. Match the decapsulated client
-        # packets by ingress interface; the outer WDTT transport stays local.
-        if [ "$(grep -m1 '^Z2K_WARP_WDTT=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 | tr -d '" ')" = "1" ] \
-            && [ -d "$SYS_CLASS_NET/wdtt0" ]; then
-            ipt -t mangle -C PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" \
-                || ipt -t mangle -A PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK"
-        fi
-        ipset list -n 2>/dev/null | awk '
-            /^z2kd_/ {
-                c=substr($0,6)
-                if (split(c,o,".") != 4) next
-                bad=0
-                for (i=1;i<=4;i++) if (o[i] !~ /^[0-9]+$/ || length(o[i])>3 || o[i]>255 ||
-                                        (length(o[i])>1 && substr(o[i],1,1)=="0")) bad=1
-                if (bad) next
-                if (!(o[1]==10 || (o[1]==172 && o[2]>=16 && o[2]<=31) ||
-                      (o[1]==192 && o[2]==168) || (o[1]==100 && o[2]>=64 && o[2]<=127))) next
-                print $0, c
-            }' | while read -r set client; do
-            ipt -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" \
-                || ipt -t mangle -A PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK"
-        done
+        # Use exactly the live policy: destination AND selected source,
+        # including DNS rules. Never resurrect pre-86.5 whole-device marks.
+        WARP_DEVICE="$DEVICE_JSON" sh "${WARP_SCRIPT:-$ZAPRET2_DIR/z2k-warp.sh}" policy-sync || exit 1
         # MSS ЗАЖИМАЕМ В ОБЕ СТОРОНЫ, и второе правило не зеркально первому.
         #
         # Замер на роутере владельца 2026-08-25, живой трафик телефона:
@@ -100,15 +70,17 @@ case "$table" in
     filter)
         # Insert before NDM's early ESTABLISHED/RELATED ACCEPT. Appending here
         # would never see most forwarded DNS replies.
-        for ch in OUTPUT FORWARD; do
-            for proto in udp tcp; do
-                if [ "$ch" = FORWARD ]; then
-                    ipt -t filter -C "$ch" -o br+ -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 \
-                        || ipt -t filter -I "$ch" -o br+ -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096
-                else
-                    ipt -t filter -C "$ch" -o br+ -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 \
-                        || ipt -t filter -I "$ch" -o br+ -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096
-                fi
+        for out in br+ wdtt0; do
+            for ch in OUTPUT FORWARD; do
+                for proto in udp tcp; do
+                    if [ "$ch" = FORWARD ]; then
+                        ipt -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 \
+                            || ipt -t filter -I "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096
+                    else
+                        ipt -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 \
+                            || ipt -t filter -I "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096
+                    fi
+                done
             done
         done
         # У некоторых Keenetic CONNNDMMARK REJECT стоит ДО штатного

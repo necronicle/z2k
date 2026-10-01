@@ -220,7 +220,7 @@ cat > "$WARP_SCRIPT" <<'WSTUB'
 case "$1" in
     status) echo 'installed=1 enabled=1 ready=1 transport=wg endpoint=8.6.112.0:2408 iface=z2ktun0 addr=172.16.0.2 entries=12 devices=2 error= mem=27136 plan=unlimited plan_err=0 license=1 edge_colo=FRA edge_country=DE edge_rtt_ms=28 edge_checked_at=1790337600 edge_selection=foreign' ;;
     license) cat > "$LICENSE_GOT" ;;
-    ipset)  : ;;
+    ipset) [ ! -f "$SB/warp-ipset.fail" ] ;;
     migrate) mkdir -p "$WARP_LISTS_DIR"; touch "$WARP_LISTS_DIR/.legacy-aggregate-purged" ;;
     wdtt-sync) echo wdtt-sync >> "$SB/warp-calls" ;;
 esac
@@ -370,6 +370,19 @@ assert_eq "warp/list/save — имя devices зарезервировано" "fa
 printf 'mac=zz&value=1\n' > "$SB/tg.body"
 OUT=$(cgi POST /warp/devices/toggle "" "$SB/tg.body" | cgi_body)
 assert_eq "warp/devices/toggle bad mac — ok:false" "false" "$(jget "$OUT" 'd["ok"]')"
+# Failed live apply must not acknowledge a setting the router did not apply.
+printf 'ENABLED=1\nGAME_WARP_ENABLED=1\n' > "$CONFIG_FILE"
+cp "$WARP_LISTS_DIR/devices.txt" "$SB/devices-before-failure"
+touch "$SB/warp-ipset.fail"
+printf 'mac=aa:bb:cc:dd:ee:ff&value=1\n' > "$SB/tg.body"
+OUT=$(cgi POST /warp/devices/toggle "" "$SB/tg.body" | cgi_body)
+assert_eq "warp/devices/toggle apply failure reported" "false" "$(jget "$OUT" 'd["ok"]')"
+assert_eq "warp/devices/toggle failure restores selection" "0" "$(cmp -s "$WARP_LISTS_DIR/devices.txt" "$SB/devices-before-failure"; echo $?)"
+printf '192.168.1.111\n' > "$SB/dev.body"
+OUT=$(cgi POST /warp/devices/save "" "$SB/dev.body" | cgi_body)
+assert_eq "warp/devices/save apply failure reported" "false" "$(jget "$OUT" 'd["ok"]')"
+assert_eq "warp/devices/save failure restores selection" "0" "$(cmp -s "$WARP_LISTS_DIR/devices.txt" "$SB/devices-before-failure"; echo $?)"
+rm -f "$SB/warp-ipset.fail"
 unset WARP_NDMC
 printf 'ENABLED=1\n' > "$CONFIG_FILE"
 
