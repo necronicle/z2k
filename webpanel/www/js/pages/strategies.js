@@ -574,6 +574,9 @@ async function loadState(useCache) {
         case "host":     av = meta.get(a).group + "\u0000" + String(a.key || "") + "\u0000" + String(a.host || "");
                          bv = meta.get(b).group + "\u0000" + String(b.key || "") + "\u0000" + String(b.host || ""); break;
         case "strategy": av = Number(a.strategy) || 0; bv = Number(b.strategy) || 0; break;
+        // По возрастанию — замороженные сверху: колонку жмут, чтобы найти
+        // именно их среди сотен строк на авторотации.
+        case "frozen":   av = a.mode === "frozen" ? 0 : 1; bv = b.mode === "frozen" ? 0 : 1; break;
         // 'age' sorts by age value (= now - ts). Asc → freshest first
         // (small age), which matches what we'd want by default when
         // a user clicks «Возраст» — "what's been moving recently".
@@ -778,7 +781,7 @@ async function loadState(useCache) {
       <div class="table-scroll">
       <table class="state-table${blocks.some(b => b.names.size >= 2) ? " sg-any" : ""}">
         <thead>
-          <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}<th>Заморозка</th>${th("age","Возраст")}</tr>
+          <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}${th("frozen","Заморозка")}${th("age","Возраст")}</tr>
         </thead>
         ${html}
       </table>

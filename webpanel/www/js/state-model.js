@@ -10,7 +10,7 @@ const STATE_SORT_KEY = "z2k-state-sort";
 
 // The labels double as the mobile sheet's option list, so the set of sortable
 // keys is declared once and cannot drift between the two controls.
-export const STATE_SORT_LABELS = { key: "Профиль", host: "Домен", strategy: "Стратегия", age: "Возраст" };
+export const STATE_SORT_LABELS = { key: "Профиль", host: "Домен", strategy: "Стратегия", frozen: "Заморозка", age: "Возраст" };
 
 function loadStateSort() {
   // Anything unrecognised falls back to the default. A stale value (a column
