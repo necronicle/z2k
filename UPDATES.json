@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 128,
-  "current": "r-86.3",
+  "seq": 129,
+  "current": "r-86.4",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -141,7 +141,7 @@
   },
   "files_sha256": {
   "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
-  "files/S99zapret2.new": "9049b33c2e2775cca370ee2418d20f3e2fb8b6124b71287f4d39ec601237532c",
+  "files/S99zapret2.new": "94532d72a242c75e53f4274558294b0caeda2188b3dbbc65ec480bc78b5a15b0",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/quic_1.bin": "f4589c57749f956bb30538197a521d7005f8b0a8723b4707e72405e51ddac50a",
@@ -219,7 +219,7 @@
   "files/z2k-warp.sh": "4f7499eb24c1b30a00910a28cb457e054f593e1b91104d41c16fa65052735d60",
   "lib/auto_update.sh": "f3207a68c08cd7725177fb2f7b3ae36464b265c552d11561f3d03016b180d6c2",
   "lib/config.sh": "e1203016155fab62a7ee0351663014a1663b0dfd3cd4b5d8c5f9a2cb35813ab3",
-  "lib/config_official.sh": "2236cfe20c1589990f1e5f91275ef1631b8d65eda3a0bfd5b8a4feabf0eed201",
+  "lib/config_official.sh": "a371188ba69e921c1c54058489253d7b593f26d893132a4fb65afa96edf14e13",
   "lib/install.sh": "4446a6cfc475979148ebd557b2068ddd1d29d88bfc3e33c3363dc28269835272",
   "lib/menu.sh": "a23e0290d46e8a184e6158507eb36c5425f550647afdf2817a2eb7bad2c6ad80",
   "lib/strategies.sh": "5c1186493aeba1581e668246e4a23b9e0d5497905015c8dec5b8458683408c2d",
@@ -246,8 +246,8 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle": "efb5e2a526d1078a4878d38f54aa050fa7107227cc0964f008eb026f11a11b39",
   "quic_strats.ini": "f5c74157344b29cd28e05d967e947c3f6c2e88ef15c211971b6cbd7e501b9836",
   "strats_new2.txt": "576ce4ffa56529a8b39cebf09e4b7249ac9c77bef211769899c4b657b9160289",
-  "webpanel/cgi/actions.sh": "790ddd37bcaebcbbd71aff1627b29cbe010dd9a856143d7d01592f0155d8f149",
-  "webpanel/cgi/api.sh": "4f713117e186352c5ec2d2fc1a5c7b6139723205ea73bb7a51c7fff584c55f1d",
+  "webpanel/cgi/actions.sh": "40388b37c834786d5db5507220d176814b455c8a2a335104496146b11ec8a201",
+  "webpanel/cgi/api.sh": "1e8794a76e6cf3543013d0199b24afac888cbc46eb510f24850485880f524d58",
   "webpanel/cgi/auth.sh": "5affbff160dff2edb198789458b75232465a2264c68a95ff7a84f787ab18ec0a",
   "webpanel/init.d/S96z2k-webpanel": "8dd6c8192cd680c3fbabc4827be392525a585344231cd659d3f8b10f0292a1f3",
   "webpanel/install.sh": "4261945565de76f5ce0cbcc2c715461c16ab9873499c831a0989e586d83da32b",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "55bd09113a7f7052024d009306172b2d4b474ec5375df65e41cec8cbdac7b6c2",
+  "webpanel/www/index.html": "a74d885475141d1ac31371f75f9834383fac8f89b9fd1aae7d4a36472cf0e8bd",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -281,11 +281,11 @@
   "webpanel/www/js/pages/diag.js": "435921bff2dd8a228222147a33dd9fe1308209a139adbccb00056dfc4869179d",
   "webpanel/www/js/pages/exclude.js": "65e3a12bcb4afb84cd8b837bb15ec7520727417d0f6a9562e89f65d939cff886",
   "webpanel/www/js/pages/extra-domains.js": "5a75a821495cc1e63d52f8d39422ef654c947d3fde83eb1b319cc5c95102d897",
-  "webpanel/www/js/pages/policy.js": "e9e1d623fef531084fad829cbedcb8df2593408ebc7f40b495e464e3a463dcd6",
+  "webpanel/www/js/pages/policy.js": "00a08c29818959e63ef8df7ca96fb8551fe7a9b0b90763c35913a16df1262b5f",
   "webpanel/www/js/pages/strategies.js": "8b9b3331e788f70ca50a8782124df49377a48f66850a45c8877eb98ea25268b4",
   "webpanel/www/js/pages/strategy-pick.js": "ea84a2f9a20e743c2fddd4dcd8d66899f8675dcc7f56332f2709a09aa44c070e",
   "webpanel/www/js/pages/telemetry.js": "3e250c7715ad46e7e5e442209fbf46ef97b282bd6d03bfa6638a09ea93acba8f",
-  "webpanel/www/js/pages/toggles.js": "7d1fc23ba1ba32394d8c264261a2fb7774e746b90566e58267f3d1fafc40f69a",
+  "webpanel/www/js/pages/toggles.js": "be465e4b0f4eca05371f3d1d40abc8abe0b2c636df952ce14e481878b4c14fce",
   "webpanel/www/js/pages/update.js": "f3ab4ab494aca562cd5e21132a37aa3d2cd866be4de0446ab58a66620ca09ac9",
   "webpanel/www/js/pages/warp.js": "b057bca8cd959c292f7efbd1d239b02f35a82b23020a1cd3466f7d82f5542047",
   "webpanel/www/js/router.js": "3bae8e6ec636585c1a1904c146262d4a384700d319e6653117d95825f5544a57",
@@ -591,6 +591,7 @@
 {"v": "p-86", "type": "patch", "ts": "2026-09-26T20:30:49Z", "ref": "p-86", "desc": "Добавлен экспериментальный подбор общего набора стратегий, показ его длительности и быстрый возврат пулов к автоматике. В настройках панели можно выбрать срок входа по паролю: 2, 12, 24 часа или 7 дней; по умолчанию 24 часа.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/cgi/auth.sh", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/toggles.js", "webpanel/www/style.css", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-86.1", "type": "patch", "ts": "2026-09-26T22:55:47Z", "ref": "p-86.1", "desc": "WARP теперь можно включить для всего трафика клиентов, подключённых через дополнительный туннель.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "lib/config_official.sh", "lib/utils.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "p-86.2", "type": "patch", "ts": "2026-09-30T19:57:52Z", "ref": "p-86.2", "desc": "Поддомены снова используют общую стратегию домена второго уровня. В ротаторе можно одним нажатием заморозить или разморозить все найденные записи; без поиска — все домены.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-modern-core.lua", "lib/config_official.sh", "webpanel/www/js/pages/strategies.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "r-86.3", "type": "reinstall", "ts": "2026-09-30T20:43:19Z", "ref": "r-86.3", "desc": "Исправлено автообновление, которое после переустановки могло застревать на старой версии. Обновлены автоматические проверки безопасности проекта.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": true}
+{"v": "r-86.3", "type": "reinstall", "ts": "2026-09-30T20:43:19Z", "ref": "r-86.3", "desc": "Исправлено автообновление, которое после переустановки могло застревать на старой версии. Обновлены автоматические проверки безопасности проекта.", "changed_files": ["webpanel/www/index.html", "lib/auto_update.sh", "UPDATES.json"], "steps": [], "full_install": true},
+{"v": "r-86.4", "type": "reinstall", "ts": "2026-10-01T07:32:50Z", "ref": "r-86.4", "desc": "В Режимах появились отдельные переключатели YouTube, RKN и Discord Voice / STUN. Отключение YouTube также отключает обход Googlevideo и QUIC, а отключение Discord Voice убирает всю штатную обработку STUN. Выбор сохраняется после обновления.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "lib/config_official.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
   ]
 }
