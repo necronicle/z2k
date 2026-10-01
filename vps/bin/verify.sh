@@ -215,7 +215,7 @@ fi
 # Релей двумя экземплярами (план 3 v2): ровно один активен, TLS-порт 8445
 # слушает релей, сертификат лежит в кеше autocert.
 printf '\n=== экземпляры релея и TLS\n'
-act=$($SSH "for i in a b; do systemctl is-active --quiet z2k-relay@\$i && printf '%s ' \$i; done")
+act=$($SSH "for i in a b; do systemctl is-active --quiet z2k-relay@\$i && printf '%s ' \$i; done; true")
 case "$(echo $act)" in
     a|b) printf '  один активен %s\n' "z2k-relay@$(echo $act)"
          if $SSH "systemctl is-enabled --quiet z2k-relay@$(echo $act)"; then
