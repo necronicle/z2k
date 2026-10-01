@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory() as tmp:
             data['sets']['z2kd_'+client]=['8.8.8.8'] if lists else []
         state.write_text(json.dumps(data))
         run('warp_pbr_up')
-    def marked(src, dst, iface):
+    def mark_word(src, dst, iface, initial=0):
         data=json.loads(state.read_text()); chains=data['tables']['mangle']
         def walk(chain,mark=0):
             for rule in chains.get(chain,[]):
@@ -114,10 +114,16 @@ with tempfile.TemporaryDirectory() as tmp:
                 if not matches: continue
                 target=rule[rule.index('-j')+1]
                 if target=='RETURN': return mark
-                if target=='MARK': mark=0x989
+                if target=='MARK':
+                    op='--set-xmark' if '--set-xmark' in rule else '--set-mark'
+                    value=rule[rule.index(op)+1].split('/')
+                    bits=int(value[0],0); mask=int(value[1],0) if len(value)>1 else 0xffffffff
+                    mark=(mark & ~mask) ^ bits if op=='--set-xmark' else (mark & ~mask) | bits
                 elif target in chains: mark=walk(target,mark)
             return mark
-        return bool(walk('PREROUTING'))
+        return walk('PREROUTING',initial)
+    def marked(src,dst,iface):
+        return bool(mark_word(src,dst,iface) & 0x989)
     failures=[]; passed=0
     def check(name,want,src='192.168.1.10',dst='8.8.8.8',iface='br0'):
         global passed
@@ -125,6 +131,11 @@ with tempfile.TemporaryDirectory() as tmp:
         if got!=want: failures.append(name); print('[FAIL]',name,'expected',want,'got',got, state.read_text())
         else: passed+=1; print('[PASS]',name)
     config()
+    got=mark_word('192.168.1.10','8.8.8.8','br0',0x80000000)
+    if got != 0x80000989:
+        failures.append('preserve Keenetic mark bits'); print('[FAIL] preserve Keenetic mark bits',hex(got))
+    else:
+        passed+=1; print('[PASS] preserve Keenetic mark bits')
     check('no device selection: listed DNS on LAN',True)
     check('WDTT off excludes listed DNS',False,'10.77.0.2',iface='wdtt0')
     check('WDTT off excludes static destination',False,'10.77.0.2','8.8.4.4','wdtt0')

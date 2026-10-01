@@ -152,12 +152,10 @@ go_mutant "probe body-byte requirement removed" \
 # Shell mutants — files/z2k-warp.sh against tests/test_warp_script.sh
 # ---------------------------------------------------------------------------
 sh_mutant() {
-    desc="$1"; from="$2"; to="$3"
+    desc="$1"; from="$2"; to="$3"; suite="${4:-test_warp_script.sh}"
     _mut_start; _id="$MUT_SEQ"; _dir="$WORK/sh.$_id"
     (
-        mkdir -p "$_dir/files" "$_dir/tests"
-        cp "$ROOT/files/z2k-warp.sh" "$_dir/files/"
-        cp "$ROOT/tests/test_warp_script.sh" "$_dir/tests/"
+        cp -R "$WORK/sh-base" "$_dir"
         if ! grep -qF "$from" "$_dir/files/z2k-warp.sh"; then
             printf 'stale\t%s (якорь не найден — мутант протух)\n' "$desc" > "$VERD/$_id"
             exit 0
@@ -168,7 +166,7 @@ path, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path, encoding='utf-8').read()
 open(path, 'w', encoding='utf-8').write(s.replace(frm, to, 1))
 PY
-        if sh "$_dir/tests/test_warp_script.sh" >/dev/null 2>&1; then
+        if sh "$_dir/tests/$suite" >/dev/null 2>&1; then
             printf 'fail\tsh: %s\n' "$desc" > "$VERD/$_id"
         else
             printf 'pass\tsh: %s\n' "$desc" > "$VERD/$_id"
@@ -179,6 +177,21 @@ PY
 _drain
 
 printf '\n=== Shell mutants (z2k-warp.sh) ===\n'
+
+# A mutant is only meaningful if the unmodified fixture passes. Copy the
+# destination parser and policy hook too; missing dependencies are not kills.
+mkdir -p "$WORK/sh-base/files/ndm" "$WORK/sh-base/tests"
+cp "$ROOT/files/z2k-warp.sh" "$ROOT/files/z2k-warp-list-filter.awk" "$WORK/sh-base/files/"
+cp "$ROOT/files/ndm/93-z2k-warp.sh" "$WORK/sh-base/files/ndm/"
+cp "$ROOT/tests/test_warp_script.sh" "$ROOT/tests/test_warp_scope.sh" "$ROOT/tests/warp_scope_test.py" "$WORK/sh-base/tests/"
+for suite in test_warp_script.sh test_warp_scope.sh; do
+    if ! sh "$WORK/sh-base/tests/$suite" > "$WORK/sh-baseline.log" 2>&1; then
+        cat "$WORK/sh-baseline.log"
+        printf 'Unmodified shell fixture failed: %s\n' "$suite" >&2
+        exit 1
+    fi
+done
+
 
 # Fail-open: мёртвый туннель обязан отпустить трафик напрямую, а не держать его в чёрной дыре.
 sh_mutant "fail-open removed (dead tunnel keeps the route)" \
@@ -204,8 +217,9 @@ sh_mutant "enable without engine leaves the flag on" \
 
 # --set-mark затирает mark-word Keenetic; форма с маской — не косметика.
 sh_mutant "MARK regresses to --set-mark (clobbers the mark word)" \
-    '            || iptables -w -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null' \
-    '            || iptables -w -t mangle -A PREROUTING -m set --match-set $set -j MARK --set-mark "$WARP_MARK" 2>/dev/null'
+    '        printf '\''%s\n'\'' "-j MARK --set-xmark $WARP_MARK/$WARP_MARK"' \
+    '        printf '\''%s\n'\'' "-j MARK --set-mark $WARP_MARK"' \
+    test_warp_scope.sh
 
 # Selfheal при выключенном режиме — no-op, иначе реген воскрешает выключенную функцию.
 sh_mutant "selfheal runs with the mode off" \
