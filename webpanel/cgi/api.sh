@@ -260,6 +260,9 @@ case "$method $path" in
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
         # UI wants positive "customd_enabled"
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
+        category_youtube=$(read_flag "Z2K_CATEGORY_YOUTUBE" "$CONFIG_FILE" "1")
+        category_rkn=$(read_flag "Z2K_CATEGORY_RKN" "$CONFIG_FILE" "1")
+        category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         stats=$(read_flag "Z2K_STATS" "$CONFIG_FILE" "1")
         # Признак «человек ещё не видел, что уходит». Панель по нему покажет
@@ -290,6 +293,9 @@ case "$method $path" in
             "${installed:-false}" "${running:-false}"
         json_string "${svc_state:-unknown}"
         printf ',"toggles":{"game_warp":';   json_string "${game_warp:-0}"
+        printf ',"category_youtube":'; json_string "$category_youtube"
+        printf ',"category_rkn":'; json_string "$category_rkn"
+        printf ',"category_discord_voice":'; json_string "$category_discord_voice"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
         printf ',"stats":';                  json_string "${stats:-1}"
@@ -350,6 +356,9 @@ case "$method $path" in
     "POST /toggle/ppe"|\
     "POST /toggle/fastroute"|\
     "POST /toggle/auto-update"|\
+    "POST /toggle/category-youtube"|\
+    "POST /toggle/category-rkn"|\
+    "POST /toggle/category-discord-voice"|\
     "POST /toggle/autohostlist")
         body=$(read_body)
         val=$(form_value "$body" "value")
@@ -359,6 +368,9 @@ case "$method $path" in
             *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
         esac
         case "$path" in
+            /toggle/category-youtube) _toggle_fn=toggle_category_youtube; _label="YouTube" ;;
+            /toggle/category-rkn) _toggle_fn=toggle_category_rkn; _label="RKN" ;;
+            /toggle/category-discord-voice) _toggle_fn=toggle_category_discord_voice; _label="Discord Voice / STUN" ;;
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;

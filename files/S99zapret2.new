@@ -209,6 +209,29 @@ existf zapret_do_firewall_nft || . "$ZAPRET_BASE/common/nft.sh" 2>/dev/null
 # Поддержка custom scripts
 . "$ZAPRET_BASE/common/custom.sh"
 
+# Keep upstream allocation order even when a bundled category is disabled.
+# The toggle stops the old configuration before changing this flag, so teardown
+# still runs for every daemon that was started under the old configuration.
+custom_runner()
+{
+    [ "$DISABLE_CUSTOM" = 1 ] && return 0
+    local n script FUNC=$1
+    shift
+    [ -d "$CUSTOM_DIR/custom.d" ] || return 0
+    for script in "$CUSTOM_DIR/custom.d/"*; do
+        [ -f "$script" ] || continue
+        unset -f "$FUNC"
+        . "$script"
+        case "${script##*/}" in
+            50-stun4all|50-discord-media)
+                [ "${Z2K_CATEGORY_DISCORD_VOICE:-1}" != 0 ] || continue ;;
+        esac
+        if existf "$FUNC"; then "$FUNC" "$@"; fi
+    done
+    return 0
+}
+
+
 # ==============================================================================
 # �������� ������������
 # ==============================================================================

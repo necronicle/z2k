@@ -1212,6 +1212,59 @@ toggle_customd() {
     fi
 }
 
+# Category changes must tear down the old custom daemons before changing flags.
+# svc_action_async supplies the existing global service-action lock.
+toggle_category() {
+    local category="$1" want="$2" backup running=0 rc=0 validator
+    case "$category" in YOUTUBE|RKN|DISCORD_VOICE) ;; *) return 1 ;; esac
+    case "$want" in 0|1) ;; *) return 1 ;; esac
+    validator="$ZAPRET2_DIR/z2k-config-validator.sh"
+    [ -f "$validator" ] || { echo "Не найден валидатор конфигурации" >&2; return 1; }
+    backup=$(mktemp "${CONFIG_FILE}.category.XXXXXX") || return 1
+    cp -p "$CONFIG_FILE" "$backup" || { rm -f "$backup"; return 1; }
+    if is_running; then
+        running=1
+        ensure_init_exec
+        if ! "$INIT_SCRIPT" stop 2>&1; then
+            "$INIT_SCRIPT" start 2>&1 || true
+            rm -f "$backup"
+            return 1
+        fi
+    fi
+    if ! set_flag "Z2K_CATEGORY_$category" "$want" "$CONFIG_FILE" || ! regenerate_config; then
+        rc=2
+    else
+        ZAPRET_BASE="$ZAPRET2_DIR" sh "$validator" "$CONFIG_FILE" || rc=$?
+    fi
+    # Validator rc=1 is a warning, rc>=2 or an unexpected failure is fatal.
+    case "$rc" in 0|1) ;; *) rc=2 ;; esac
+    if [ "$rc" != 2 ] && [ "$running" = 1 ]; then
+        if ! "$INIT_SCRIPT" start 2>&1; then
+            "$INIT_SCRIPT" stop 2>&1 || true
+            rc=2
+        fi
+    fi
+    if [ "$rc" = 2 ]; then
+        if ! cp -p "$backup" "$CONFIG_FILE"; then
+            echo "Не удалось восстановить config; резервная копия: $backup" >&2
+            return 1
+        fi
+        rm -f "$backup"
+        if [ "$running" = 1 ]; then
+            "$INIT_SCRIPT" start 2>&1 || echo "Не удалось запустить прежнюю конфигурацию" >&2
+        fi
+        echo "Изменение категории не применено; прежняя конфигурация восстановлена" >&2
+        return 1
+    fi
+    rm -f "$backup"
+    echo "Настройка категории сохранена"
+    return 0
+}
+
+toggle_category_youtube() { toggle_category YOUTUBE "$1"; }
+toggle_category_rkn() { toggle_category RKN "$1"; }
+toggle_category_discord_voice() { toggle_category DISCORD_VOICE "$1"; }
+
 toggle_dynamic_ttl() {
     # Z2K_DYNAMIC_TTL — feature flag for NDM TTL bypass injection in
     # NFQWS2_OPT. Mobile operators (МТС/Билайн) detect tethering via TTL

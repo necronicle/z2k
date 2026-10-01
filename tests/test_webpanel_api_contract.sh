@@ -187,6 +187,15 @@ printf 'ENABLED=1\nGAME_WARP_ENABLED=1\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /status "" | cgi_body)
 assert_eq "нормальный флаг читается как раньше" "1" "$(jget "$OUT" 'd["toggles"]["game_warp"]')"
 
+for category in youtube rkn discord_voice; do
+ assert_eq "category $category defaults on" "1" "$(jget "$OUT" 'd["toggles"]["category_'"$category"'"]')"
+done
+printf 'Z2K_CATEGORY_YOUTUBE=0\nZ2K_CATEGORY_RKN=0\nZ2K_CATEGORY_DISCORD_VOICE=0\n' > "$CONFIG_FILE"
+OUT=$(cgi GET /status "" | cgi_body)
+for category in youtube rkn discord_voice; do
+ assert_eq "category $category reads off" "0" "$(jget "$OUT" 'd["toggles"]["category_'"$category"'"]')"
+done
+
 printf "\n--- /policy/status, /warp/status, /debug: те же сырые %%s ---\n"
 printf 'ENABLED=1\nPOLICY_NAME=Через ВПН\nPOLICY_EXCLUDE=0"x\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /policy/status "" | cgi_body)

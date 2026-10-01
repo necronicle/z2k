@@ -268,9 +268,15 @@ case "$_rs" in *autohostlist*) ok "и перезапускает сервис" ;
 _ui_list=$(sed -n 's/.*TOGGLES_RESTART_SERVICE = {\(.*\)};.*/\1/p' "$APPJS")
 _mismatch=""
 for _fn in $(grep -oE '^toggle_[a-z_]+\(\)' "$ACTIONS" | sed 's/()//'); do
+    # Shared dispatcher is not a user-facing toggle. Its lifecycle is tested
+    # by test_category_toggle.sh, including stop-before-write and rollback.
+    [ "$_fn" = toggle_category ] && continue
     _key=${_fn#toggle_}
     _body=$(awk "/^${_fn}\(\)/,/^}/" "$ACTIONS")
-    _code=нет; printf '%s' "$_body" | grep -q 'restart_service_if_running' && _code=да
+    case "$_key" in
+        category_*) _body=$(awk '/^toggle_category\(\)/,/^}/' "$ACTIONS") ;;
+    esac
+    _code=нет; printf '%s' "$_body" | grep -Eq 'restart_service_if_running|\$INIT_SCRIPT" start' && _code=да
     _ui=нет; case "$_ui_list" in *"$_key"*) _ui=да ;; esac
     [ "$_code" = "$_ui" ] || _mismatch="$_mismatch $_key(код:$_code/UI:$_ui)"
 done
@@ -290,7 +296,7 @@ for _fn in $(grep -oE '^[a-z_]+\(\)' "$ACTIONS" | sed 's/()//'); do
     case "$_exempt" in *" $_fn "*) continue ;; esac
     _body=$(awk "/^${_fn}\(\)/,/^}/" "$ACTIONS")
     printf '%s' "$_body" | grep -q 'regenerate_config' || continue
-    printf '%s' "$_body" | grep -Eq 'restart_service_if_running|\$INIT_SCRIPT" restart' \
+    printf '%s' "$_body" | grep -Eq 'restart_service_if_running|\$INIT_SCRIPT" (restart|start)' \
         || _noresta="$_noresta $_fn"
 done
 [ -z "$_noresta" ] && ok "любой обработчик, пересобирающий живой конфиг, перезапускает сервис" \

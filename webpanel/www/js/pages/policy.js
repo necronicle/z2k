@@ -10,7 +10,7 @@ import { _activeJobs, awaitPanelBack } from "../job.js";
 // Must mirror what the backend actually does: a toggle whose handler calls
 // restart_service_if_running has to be listed here, or the user gets a silent
 // blip in the bypass with no indication it happened. Asserted in the suite.
-export const TOGGLES_RESTART_SERVICE = { customd: 1, dynamic_ttl: 1, ppe: 1, autohostlist: 1 };
+export const TOGGLES_RESTART_SERVICE = { category_youtube: 1, category_rkn: 1, category_discord_voice: 1, customd: 1, dynamic_ttl: 1, ppe: 1, autohostlist: 1 };
 
 // Автохостлист меняет принцип отбора трафика целиком, и промах движка
 // выглядит для юзера как «сайт сломался после обновления». Формулировка

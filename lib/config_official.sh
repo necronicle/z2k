@@ -27,6 +27,11 @@ generate_nfqws2_opt_from_strategies() {
     # нет: /opt/etc/zapret2 нужен был только ветке Austerus, снятой 2026-08-04.
     local extra_strats_dir="${ZAPRET2_DIR:-/opt/zapret2}/extra_strats"
     local lists_dir="${ZAPRET2_DIR:-/opt/zapret2}/lists"
+    local category_youtube category_rkn category_voice
+    category_youtube=$(safe_config_read Z2K_CATEGORY_YOUTUBE "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
+    category_rkn=$(safe_config_read Z2K_CATEGORY_RKN "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
+    category_voice=$(safe_config_read Z2K_CATEGORY_DISCORD_VOICE "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
+
 
     # Режим Austerusj (all_tcp443.conf) СНЯТ 2026-08-04. Пункт меню, которым его
     # включали, убрали ещё 2026-04-15 (96c24a9), а ветку в генераторе оставили —
@@ -1324,6 +1329,10 @@ generate_nfqws2_opt_from_strategies() {
     add_hostlist_line() {
         local list_path="$1"
         shift
+        case "$list_path" in
+            */TCP/YT/List.txt|*/TCP/YT_GV/List.txt) [ "$category_youtube" != 0 ] || return 0 ;;
+            */TCP/RKN/List.txt|*/TCP_Discord.txt) [ "$category_rkn" != 0 ] || return 0 ;;
+        esac
         if [ -s "$list_path" ]; then
             nfqws2_opt_lines="$nfqws2_opt_lines$*\\n"
         else
@@ -1341,6 +1350,14 @@ generate_nfqws2_opt_from_strategies() {
     # изменение общего условия требовало правки во всех местах сразу, и
     # промах был бы виден не в тестах, а у людей.
     local wl_excl="--hostlist-exclude=${lists_dir}/whitelist.txt"
+    # Keep disabled YouTube out of broad RKN/auto lists as well.
+    if [ "$category_youtube" = 0 ]; then
+        local excluded
+        for excluded in "$extra_strats_dir/TCP/YT/List.txt" "$extra_strats_dir/TCP/YT_GV/List.txt" "$extra_strats_dir/UDP/YT/List.txt"; do
+            [ ! -s "$excluded" ] || wl_excl="$wl_excl --hostlist-exclude=$excluded"
+        done
+    fi
+
 
     # --------------------------------------------------------------------------
     # ШАБЛОН ДВИЖКА: арсенал РКН объявляется один раз
@@ -1418,7 +1435,7 @@ generate_nfqws2_opt_from_strategies() {
     local z2k_autohostlist autohostlist_file
     z2k_autohostlist=$(safe_config_read "Z2K_AUTOHOSTLIST" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
     autohostlist_file="${ZAPRET2_DIR:-/opt/zapret2}/ipset/zapret-hosts-auto.txt"
-    if [ "$z2k_autohostlist" = "1" ]; then
+    if [ "$z2k_autohostlist" = "1" ] && [ "$category_rkn" != 0 ]; then
         # Файл обязан существовать К МОМЕНТУ СТАРТА демона: путь объявлен в
         # аргументах, а движок резолвит его при разборе и без файла не
         # стартует вовсе — это была бы не «автолист не работает», а «обход не
@@ -1580,7 +1597,18 @@ generate_nfqws2_opt_from_strategies() {
     # Порядок списков значения не имеет (движок объединяет), но ютубовский стоит
     # первым намеренно: так видно, что профиль вырос из него, а не появился из
     # ниоткуда.
-    add_hostlist_line "${extra_strats_dir}/UDP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/UDP/YT/List.txt $rkn_lists_head$rkn_lists_tail $quic_udp --new"
+    local quic_lists="" quic_anchor=""
+    if [ "$category_youtube" != 0 ] && [ -s "${extra_strats_dir}/UDP/YT/List.txt" ]; then
+        quic_anchor="${extra_strats_dir}/UDP/YT/List.txt"
+        quic_lists="--hostlist=$quic_anchor"
+    fi
+    if [ "$category_rkn" != 0 ]; then
+        quic_lists="$quic_lists $rkn_lists_head$rkn_lists_tail"
+        [ -n "$quic_anchor" ] || quic_anchor="${extra_strats_dir}/TCP/RKN/List.txt"
+    fi
+    if [ -n "$quic_anchor" ]; then
+        add_hostlist_line "$quic_anchor" "$wl_excl $quic_lists $quic_udp --new"
+    fi
 
     # Discord TCP: currently disabled for autocircular profile set.
     if [ -n "$discord_tcp_block" ]; then
@@ -1589,7 +1617,7 @@ generate_nfqws2_opt_from_strategies() {
 
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun
     # + hostkey=z2k_nohost_key for stable hostless rotation keying)
-    nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
+    [ "$category_voice" = 0 ] || nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
     # Здесь стоял webrtc_bypass — пустой профиль udp/1024-65535 × l7=stun,
     # который ничего не десинкал и служил щитом: он ловил P2P-STUN (WebRTC в
@@ -1695,7 +1723,7 @@ generate_nfqws2_opt_from_strategies() {
     # инстансы здесь были бы мёртвым грузом: детектор считает неудачи, пишет
     # имя в файл, а обходит уже rkn_tcp — файл подключён к нему хостлистом
     # выше. Заодно не дублируется 13 КБ арсенала в командной строке.
-    if [ "$z2k_autohostlist" = "1" ]; then
+    if [ "$z2k_autohostlist" = "1" ] && [ "$category_rkn" != 0 ]; then
         # Порты берём из самого rkn_tcp, а не литералом: набор задаётся в
         # lib/strategies.sh и уже расходился с копиями в других местах.
         local ah_ports
@@ -1926,6 +1954,10 @@ create_official_config() {
     fi
 
     # Сохранить пользовательские настройки из существующего конфига
+    local saved_category_youtube saved_category_rkn saved_category_voice
+    saved_category_youtube=$(safe_config_read Z2K_CATEGORY_YOUTUBE "$config_file" 1)
+    saved_category_rkn=$(safe_config_read Z2K_CATEGORY_RKN "$config_file" 1)
+    saved_category_voice=$(safe_config_read Z2K_CATEGORY_DISCORD_VOICE "$config_file" 1)
     local saved_GAME_WARP_ENABLED="0"
     local saved_TG_PROXY_USER_DISABLED="0"
     local saved_ENABLED="1"
@@ -2052,7 +2084,7 @@ create_official_config() {
 
     # Создать полный config файл
     local z2k_mode_filter=hostlist
-    [ "${saved_Z2K_AUTOHOSTLIST:-0}" = "1" ] && z2k_mode_filter=autohostlist
+    [ "${saved_Z2K_AUTOHOSTLIST:-0}" = "1" ] && [ "$saved_category_rkn" != 0 ] && z2k_mode_filter=autohostlist
 
     # Пороги детектора автохостлиста. Наружу не выставлены: их не крутит ни
     # меню, ни панель — это ручка для разбора конкретного тикета. В конфиге
@@ -2112,6 +2144,9 @@ ENABLED=${saved_ENABLED}
 # in S99zapret2), appending what it finds to the RKN list.
 MODE_FILTER=${z2k_mode_filter}
 Z2K_AUTOHOSTLIST=${saved_Z2K_AUTOHOSTLIST}
+Z2K_CATEGORY_YOUTUBE=${saved_category_youtube}
+Z2K_CATEGORY_RKN=${saved_category_rkn}
+Z2K_CATEGORY_DISCORD_VOICE=${saved_category_voice}
 
 # Пороги детектора автохостлиста. Действуют только при Z2K_AUTOHOSTLIST=1.
 # Закомментировано = значение по умолчанию самого движка (показано справа).

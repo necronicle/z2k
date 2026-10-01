@@ -6,6 +6,12 @@ import { JOB_FAIL, _updateGlobalUILock, confirmModal, jobOutcome, jobUnresolved,
 import { AUTOHOSTLIST_WARNING, TOGGLES_RESTART_SERVICE, resyncToggle } from "./policy.js";
 
 const TOGGLE_DEFS = [
+  { key: "category_youtube", name: "YouTube", category: true,
+    desc: "Обход для YouTube и Googlevideo, включая QUIC. Выключите, чтобы эти сервисы работали напрямую." },
+  { key: "category_rkn", name: "RKN", category: true,
+    desc: "Обход сайтов из списков РКН по HTTPS, HTTP и QUIC. При выключении автоподбор новых доменов также не применяется." },
+  { key: "category_discord_voice", name: "Discord Voice / STUN", category: true,
+    desc: "Обход для голосовых соединений Discord. Выключение убирает всю штатную обработку STUN, в том числе для звонков других приложений." },
   // game_warp переехал в собственный раздел «WARP» (renderWarp) вместе с
   // управлением списками адресов — здесь его больше нет.
   { key: "customd", name: "Скрипты custom.d",
@@ -161,6 +167,9 @@ async function saveAuHour(sel, note) {
 }
 
 const TOGGLE_API_NAME = {
+  category_youtube: "category-youtube",
+  category_rkn: "category-rkn",
+  category_discord_voice: "category-discord-voice",
   customd: "customd",
   dynamic_ttl: "dynamic-ttl",
   stats: "stats",
@@ -188,12 +197,8 @@ async function refreshFastroute(box) {
   }
 }
 
-export async function renderToggles() {
-  $app.innerHTML = `
-    <h1 class="page-title">Режимы</h1>
-    <div class="card">
-      <div id="toggles-error" hidden></div>
-      ${TOGGLE_DEFS.map(t => `
+function toggleRows(defs) {
+  return defs.map(t => `
         <div class="toggle-row" data-key="${t.key}">
           <div class="t-text">
             <div class="t-name">${t.name}</div>
@@ -201,11 +206,25 @@ export async function renderToggles() {
             ${t.extra || ""}
           </div>
           <label class="switch">
-            <input type="checkbox" disabled>
+            <input type="checkbox" aria-label="${t.name}" disabled>
             <span class="slider"></span>
           </label>
         </div>
-      `).join("")}
+`).join("");
+}
+
+export async function renderToggles() {
+  $app.innerHTML = `
+    <h1 class="page-title">Режимы</h1>
+    <div class="card">
+      <div id="toggles-error" hidden></div>
+      <h3>Категории обхода</h3>
+      <p class="desc">Выберите, для каких сервисов применять обход. Настройки сохраняются после обновления. Изменение кратковременно перезапускает работающий обход.</p>
+      ${toggleRows(TOGGLE_DEFS.filter(t => t.category))}
+    </div>
+    <div class="card">
+      <h3>Другие настройки</h3>
+      ${toggleRows(TOGGLE_DEFS.filter(t => !t.category))}
     </div>
     <div class="card" id="panel-session-ttl-card">
       <h3>Срок входа в веб-панель</h3>
@@ -613,6 +632,9 @@ async function toggleClick(key, box) {
     ? (wanted === "1" ? "Отключаю" : "Включаю")
     : (wanted === "1" ? "Включаю" : "Отключаю");
   const niceName = {
+    category_youtube: "YouTube",
+    category_rkn: "RKN",
+    category_discord_voice: "Discord Voice / STUN",
     customd: "custom.d",
     dynamic_ttl: "Динамический TTL",
     stats: "Сбор статистики",
