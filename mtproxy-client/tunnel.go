@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -126,6 +127,18 @@ func configureWSKeepalive(ws *websocket.Conn) {
 
 // tunnelClient manages the multiplexed WS tunnel.
 type tunnelClient struct {
+	connectMu           sync.Mutex
+	registrationMu      sync.Mutex
+	routeMu             sync.Mutex
+	route               *cachedRoute
+	routeDirty          bool
+	identityPath        string
+	dialer              *websocket.Dialer
+	connectionMu        sync.Mutex
+	connectionLimit     atomic.Int64
+	localMaxConnections int
+	fdLimit             uint64
+
 	tunnelURL    string
 	tunnelSecret string
 
@@ -318,6 +331,7 @@ func (tc *tunnelClient) identityLoop() {
 				log.Printf("[tunnel] личность недоступна (%v) — повторю попытку", err)
 			} else {
 				tc.identity.Store(id)
+				tc.loadCachedRoute(id)
 			}
 		}
 		if tc.identity.Load() != nil && tc.registerOnce() {
@@ -340,28 +354,53 @@ func (tc *tunnelClient) identityLoop() {
 }
 
 func (tc *tunnelClient) registerOnce() bool {
+	tc.registrationMu.Lock()
+	defer tc.registrationMu.Unlock()
 	id := tc.identity.Load()
 	if id == nil || tc.registerURL == "" {
 		return false
 	}
 	err := id.register(tc.registerURL, *tunnelSecret)
 	if err == nil {
+		tc.useID.Store(true)
 		return true
 	}
 	// Идентификатор занят другим ключом — повторять с тем же бесполезно, ответ
 	// не изменится никогда. Перевыпускаем личность целиком.
 	if errors.Is(err, errIdentityTaken) {
 		log.Printf("[tunnel] идентификатор %s занят другим ключом — перевыпускаю личность", id.InstallID)
-		fresh, mErr := reMintIdentity(*relayIDFile)
+		// Serialize key replacement with handshakes and assignment persistence.
+		tc.connectMu.Lock()
+		tc.routeMu.Lock()
+		path := tc.identityPath
+		if path == "" {
+			path = *relayIDFile
+		}
+		fresh, mErr := reMintIdentity(path)
+		if mErr == nil {
+			tc.useID.Store(false)
+			tc.identity.Store(fresh)
+			tc.route = nil
+			tc.routeDirty = false
+			tc.setConnectionLimit(*maxConns)
+		}
+		tc.routeMu.Unlock()
+		tc.mu.Lock()
+		active := tc.ws
+		tc.mu.Unlock()
+		tc.connectMu.Unlock()
+		if mErr == nil && active != nil {
+			active.Close()
+		}
 		if mErr != nil {
 			log.Printf("[tunnel] перевыпуск личности не удался: %v", mErr)
 			return false
 		}
-		tc.identity.Store(fresh)
 		if rErr := fresh.register(tc.registerURL, *tunnelSecret); rErr != nil {
 			log.Printf("[tunnel] регистрация новой личности не удалась: %v", rErr)
 			return false
 		}
+		tc.useID.Store(true)
 		log.Printf("[tunnel] новая личность зарегистрирована (%s)", fresh.InstallID)
 		return true
 	}
@@ -394,15 +433,7 @@ func (tc *tunnelClient) triggerReRegister() {
 	}()
 }
 
-func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
-	// БЕЗ ЗАРЕГИСТРИРОВАННОЙ ЛИЧНОСТИ НЕ ЛЕЗЕМ НА РЕЛЕЙ ВОВСЕ: релей поднят с
-	// --require-per-install и общий секрет отвергает наглухо (issue #34).
-	// Регистрацией занимается identityLoop параллельно, ему нужно только время.
-	id := tc.identity.Load()
-	if id == nil || !tc.useID.Load() {
-		return nil, errNotRegistered
-	}
-
+func (tc *tunnelClient) connectEndpoint(endpoint string, id *relayIdentity) (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		TLSClientConfig:   &tls.Config{InsecureSkipVerify: false},
 		HandshakeTimeout:  10 * time.Second,
@@ -419,23 +450,36 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 			return conn, nil
 		},
 	}
-	ws, _, err := dialer.Dial(tc.tunnelURL, http.Header{})
+	selected := &dialer
+	if tc.dialer != nil {
+		selected = tc.dialer
+	}
+	ws, response, err := selected.Dial(endpoint, http.Header{})
 	if err != nil {
-		return nil, fmt.Errorf("WS dial %s: %w", tc.tunnelURL, err)
+		if response != nil {
+			if response.Body != nil {
+				response.Body.Close()
+			}
+			if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+				return nil, errAuthRefused
+			}
+		}
+		return nil, fmt.Errorf("WS dial %s: %w", endpoint, err)
 	}
 	configureWSKeepalive(ws)
 
-	if !tc.forceV1.Load() {
+	if endpoint != tc.tunnelURL || !tc.forceV1.Load() {
 		if err := tc.handshakeV2(ws, id); err != nil {
 			ws.Close()
-			// Релей не говорит на v2 или отверг рукопожатие по протоколу —
-			// дальше ходим по v1, как до r-82. Отказ по авторизации сюда
-			// не попадает: он одинаков для обеих версий.
-			tc.forceV1.Store(true)
-			return nil, fmt.Errorf("рукопожатие v2: %w (следующая попытка — v1)", err)
+			// Only protocol incompatibility permits legacy fallback. A route or
+			// authorization refusal must never change the authentication scheme.
+			if endpoint == tc.tunnelURL && !tc.v2.Load() && tc.routeSnapshot() == nil && errors.Is(err, errHandshakeRejected) {
+				tc.forceV1.Store(true)
+			}
+			return nil, err
 		}
 		tc.v2.Store(true)
-		log.Printf("[tunnel] connected to %s (proto v2, window %d)", tc.tunnelURL, tc.window.Load())
+		log.Printf("[tunnel] connected to %s (proto v2, window %d)", endpoint, tc.window.Load())
 		return ws, nil
 	}
 
@@ -446,7 +490,7 @@ func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 		return nil, fmt.Errorf("WS auth write: %w", err)
 	}
 	tc.v2.Store(false)
-	log.Printf("[tunnel] connected to %s (proto v1)", tc.tunnelURL)
+	log.Printf("[tunnel] connected to %s (proto v1)", endpoint)
 	return ws, nil
 }
 
@@ -464,7 +508,13 @@ func (tc *tunnelClient) handshakeV2(ws *websocket.Conn, id *relayIdentity) error
 	ws.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, msg, err := ws.ReadMessage()
 	if err != nil {
-		return fmt.Errorf("нет HELLO_ACK: %w", err)
+		// Old relays close or time out on the unknown HELLO opcode. Nothing
+		// has been authenticated yet; retry their per-install v1 protocol.
+		// Explicit policy denials remain authoritative and cannot use a cache.
+		if websocket.IsCloseError(err, websocket.ClosePolicyViolation) {
+			return errAuthRefused
+		}
+		return fmt.Errorf("нет HELLO_ACK (%v): %w", err, errHandshakeRejected)
 	}
 	f, err := decodeMuxFrame(msg)
 	if err != nil || f.StreamID != 0 || f.MsgType != muxHELLO_ACK {
@@ -498,6 +548,8 @@ func (tc *tunnelClient) handshakeV2(ws *websocket.Conn, id *relayIdentity) error
 		return err
 	}
 	switch kind {
+	case infoRelayRoute:
+		return &relayRouteError{URL: text, MaxConnections: int(arg)}
 	case infoAuthOK:
 		ws.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		return nil
@@ -983,7 +1035,10 @@ func runTunnel() error {
 		return fmt.Errorf("--tunnel-secret is required in tunnel mode")
 	}
 
-	connSemaphore = make(chan struct{}, *maxConns)
+	if *maxConns < 1 || *maxConns > maxAssignedConnections {
+		return fmt.Errorf("--max-conns must be between 1 and %d", maxAssignedConnections)
+	}
+	connSemaphore = make(chan struct{}, maxAssignedConnections)
 
 	// Все слушатели биндим ДО чего-либо ещё, и любой отказ — отказ целиком.
 	// Полусерввис (1443 слушает, 1444 нет) хуже честного падения: надзиратель
@@ -1020,6 +1075,15 @@ func runTunnel() error {
 		connectSem:   make(chan struct{}, 6),
 	}
 	tc.ctx, tc.cancel = context.WithCancel(ctx)
+	tc.identityPath = *relayIDFile
+	tc.localMaxConnections = maxAssignedConnections
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "max-conns" {
+			tc.localMaxConnections = *maxConns
+		}
+	})
+	tc.fdLimit = connectionFDLimit()
+	tc.setConnectionLimit(*maxConns)
 
 	// Stage B: load/mint the per-install identity and register it in the
 	// background. Until registration succeeds the client authenticates with the
@@ -1029,6 +1093,7 @@ func runTunnel() error {
 	go tc.identityLoop()
 
 	go tc.run()
+	go tc.routeRefreshLoop()
 
 	// Wait for first WS connection before accepting TCP — prevents burst
 	// of connections hitting a not-yet-ready Worker
@@ -1152,10 +1217,9 @@ func (tc *tunnelClient) acceptLoop(ctx context.Context, ln net.Listener) error {
 			continue
 		}
 
-		select {
-		case connSemaphore <- struct{}{}:
+		if tc.acquireConnection() {
 			go tc.handleTunnelConn(tcpConn)
-		default:
+		} else {
 			if *verbose {
 				log.Printf("[tunnel] max connections reached, rejecting %s", conn.RemoteAddr())
 			}

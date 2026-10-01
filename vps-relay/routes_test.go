@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,9 +10,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -146,4 +150,59 @@ func TestTotalStreamCapConcurrentAndRelease(t *testing.T) {
 		t.Fatal("release/admission mismatch")
 	}
 	liveStreams.Store(0)
+}
+
+func TestTotalStreamCapLifecycle(t *testing.T) {
+	withInts(t, maxStreamsTotal, 2, maxStreamsPerSess, 2)
+	startFakeDC(t, echoDC)
+	dial := sessionDialFn
+	sessionDialFn = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if strings.HasSuffix(addr, ":81") {
+			return nil, errors.New("controlled dial failure")
+		}
+		return dial(ctx, network, addr)
+	}
+	url := startRelay(t)
+	id, key := testInstall(t)
+	a, _ := dialV2(t, url, id, key, "capacity")
+	b, _ := dialV2(t, url, id, key, "capacity")
+	waitCount := func(want int64) {
+		t.Helper()
+		until := time.Now().Add(time.Second)
+		for liveStreams.Load() != want && time.Now().Before(until) {
+			time.Sleep(time.Millisecond)
+		}
+		if n := liveStreams.Load(); n != want {
+			t.Fatalf("streams=%d want=%d", n, want)
+		}
+	}
+	sendFrame(t, a, 1, muxCONNECT, connectPayload(tgTarget, 81))
+	expectFrame(t, a, 1, muxCONNECT_FAIL, time.Second)
+	waitCount(0)
+	sendFrame(t, a, 1, muxCONNECT, connectPayload(tgTarget, 443))
+	expectFrame(t, a, 1, muxCONNECT_OK, time.Second)
+	// Replacement reserves then releases the previous stream exactly once.
+	sendFrame(t, a, 1, muxCONNECT, connectPayload(tgTarget, 443))
+	expectFrame(t, a, 1, muxCLOSE, time.Second)
+	expectFrame(t, a, 1, muxCONNECT_OK, time.Second)
+	waitCount(1)
+	sendFrame(t, b, 1, muxCONNECT, connectPayload(tgTarget, 443))
+	expectFrame(t, b, 1, muxCONNECT_OK, time.Second)
+	waitCount(2)
+	sendFrame(t, a, 2, muxCONNECT, connectPayload(tgTarget, 443))
+	expectFrame(t, a, 2, muxCONNECT_FAIL, time.Second)
+	// A replacement at capacity is refused without losing the existing stream.
+	sendFrame(t, a, 1, muxCONNECT, connectPayload(tgTarget, 443))
+	expectFrame(t, a, 1, muxCONNECT_FAIL, time.Second)
+	sendFrame(t, a, 1, muxDATA, []byte("still alive"))
+	if got := expectFrame(t, a, 1, muxDATA, time.Second); string(got) != "still alive" {
+		t.Fatal(string(got))
+	}
+	b.Close()
+	waitCount(1)
+	sendFrame(t, a, 2, muxCONNECT, connectPayload(tgTarget, 443))
+	expectFrame(t, a, 2, muxCONNECT_OK, time.Second)
+	waitCount(2)
+	a.Close()
+	waitCount(0)
 }

@@ -48,7 +48,7 @@ func encodeHello(build string) []byte {
 		build = build[:255]
 	}
 	b := append([]byte{protoVersion2, byte(len(build))}, build...)
-	return binary.BigEndian.AppendUint32(b, 0)
+	return binary.BigEndian.AppendUint32(b, capRelayRoute)
 }
 
 type helloAck struct {

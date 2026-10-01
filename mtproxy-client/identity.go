@@ -41,10 +41,32 @@ import (
 )
 
 type relayIdentity struct {
-	InstallID string `json:"install_id"` // 16 bytes hex (32 chars)
-	Priv      string `json:"priv"`       // base64(std) Ed25519 private key
-	Pub       string `json:"pub"`        // base64(std) Ed25519 public key
+	Route     *cachedRoute `json:"relay_route,omitempty"`
+	InstallID string       `json:"install_id"` // 16 bytes hex (32 chars)
+	Priv      string       `json:"priv"`       // base64(std) Ed25519 private key
+	Pub       string       `json:"pub"`        // base64(std) Ed25519 public key
 	priv      ed25519.PrivateKey
+}
+
+// Route metadata is disposable; malformed metadata must never replace a valid
+// installation key (and thereby orphan its server-side authorization).
+func (id *relayIdentity) UnmarshalJSON(data []byte) error {
+	type identityFields relayIdentity
+	fields := struct {
+		*identityFields
+		Route json.RawMessage `json:"relay_route"`
+	}{identityFields: (*identityFields)(id)}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	id.Route = nil
+	if len(fields.Route) > 0 && string(fields.Route) != "null" {
+		var route cachedRoute
+		if json.Unmarshal(fields.Route, &route) == nil {
+			id.Route = &route
+		}
+	}
+	return nil
 }
 
 // loadOrMintIdentity loads the identity file, minting it exactly ONCE if absent
