@@ -71,7 +71,7 @@ case "$table" in
         # Insert before NDM's early ESTABLISHED/RELATED ACCEPT. Appending here
         # would never see most forwarded DNS replies.
         wdtt_ifaces=$(sh "${WARP_SCRIPT:-$ZAPRET2_DIR/z2k-warp.sh}" wdtt-ifaces) || exit 1
-        for out in br+ $wdtt_ifaces; do
+        for out in br+ nwg+ $wdtt_ifaces; do
             for ch in OUTPUT FORWARD; do
                 for proto in udp tcp; do
                     if [ "$ch" = FORWARD ]; then

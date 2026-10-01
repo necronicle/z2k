@@ -372,12 +372,12 @@ warp_dns_capture_up() {
     ifaces=$(warp_wdtt_ifaces) || return 1
     ifaces=$(printf '%s' "$ifaces" | tr '\n' ' ')
     for out in $(warp_dns_capture_outputs); do
-        case " br+ $ifaces " in
+        case " br+ nwg+ $ifaces " in
             *" $out "*) ;;
             *) warp_dns_capture_down "$out" || return 1 ;;
         esac
     done
-    for out in br+ $ifaces; do
+    for out in br+ nwg+ $ifaces; do
         for ch in OUTPUT FORWARD; do
             for proto in udp tcp; do
                 if [ "$ch" = FORWARD ]; then
@@ -453,7 +453,7 @@ warp_pbr_up() {
 # selection limits those matches; it must never route an entire device. Count
 # saved selections, not resolved IPs: an offline selected MAC is still selected.
 warp_policy_rules() {
-    local ifaces iface wdtt_enabled
+    local ifaces iface wdtt_enabled subnet
     [ "$(warp_flag)" = 1 ] || return 0
     # Empty lists must also fence off any DNS cache awaiting observer reload.
     if ! awk 'NR>1 { found=1; exit } END { exit !found }' "$WARP_DOMAINS" 2>/dev/null \
@@ -467,6 +467,13 @@ warp_policy_rules() {
             printf '%s\n' "-i $iface -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
         fi
         printf '%s\n' "-i $iface -j RETURN"
+    done
+    # Native Keenetic WG/AWG clients enter on nwgN. Keep their private
+    # source addresses independent of LAN selection; router-originated VPN
+    # transport uses OUTPUT and never enters this destination-gated chain.
+    # WDTT ownership rules above take precedence over this policy.
+    for subnet in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10; do
+        printf '%s\n' "-i nwg+ -s $subnet -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
     done
     if awk '{ sub(/^[ \t]+/, ""); if ($0!="" && $0!~/^#/) found=1 } END { exit !found }' "$WARP_DEVICES_FILE" 2>/dev/null; then
         printf '%s\n' "-m set --match-set $WARP_IPSET_SRC src -j MARK --set-xmark $WARP_MARK/$WARP_MARK"

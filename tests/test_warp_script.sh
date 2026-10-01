@@ -139,8 +139,8 @@ assert_eq "enable: static destination enters source gate" "1" "$(grep -c -- '-A 
 assert_eq "enable: no whole-device route" "0" "$(grep -c -- '-A PREROUTING -m set --match-set z2k_warp_src src -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 assert_eq "enable: unsupported pair set not created" "0" "$(grep -c 'hash:net,net' "$SB/ipset.log")"
 assert_eq "enable: DNS client set marked only in PREROUTING" "1" "$(grep -c -- '-A PREROUTING -s 192.168.1.10/32 -m set --match-set z2kd_192.168.1.10 dst -j Z2K_WARP' "$SB/ipt.log")"
-assert_eq "enable: LAN and both WDTT modes router DNS copies to NFLOG" "6" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG --nflog-group 189 --nflog-range 4096' "$SB/ipt.log")"
-assert_eq "enable: LAN and both WDTT modes forwarded DNS copies require established flow" "6" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG --nflog-group 189' "$SB/ipt.log")"
+assert_eq "enable: LAN, native VPN and both WDTT modes router DNS copies to NFLOG" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG --nflog-group 189 --nflog-range 4096' "$SB/ipt.log")"
+assert_eq "enable: LAN, native VPN and both WDTT modes forwarded DNS copies require established flow" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG --nflog-group 189' "$SB/ipt.log")"
 assert_eq "enable: ipset loaded from user list" "1" "$(grep -c 'add z2k_warp_new 1.2.3.0/24' "$SB/ipset.log")"
 assert_eq "enable: MASQUE-эндпоинт НЕ исключается из десинка (измерено: без десинка туннель не несёт трафик)" "0" "$(grep -c 'nozapret' "$SB/ipset.log")"
 # СОЗДАВАТЬ правила в OUTPUT нельзя — это единственный способ увести пакеты
