@@ -137,6 +137,10 @@ func newAdminMux() *http.ServeMux {
 			http.Error(w, "нет доступа", http.StatusForbidden)
 			return
 		}
+		if err := loadRelayRoutes(*routesFile); err != nil {
+			http.Error(w, "invalid relay routes", http.StatusInternalServerError)
+			return
+		}
 		n, err := reg.reload()
 		if err != nil {
 			http.Error(w, "перечитать не удалось: "+err.Error(), http.StatusInternalServerError)

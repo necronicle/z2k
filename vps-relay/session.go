@@ -223,8 +223,14 @@ func (s *session) onConnect(id uint16, payload []byte) {
 		s.writer.control(s.proto().connectFail(id, rStreamLimit, "потолок стримов"))
 		return
 	}
+	if !acquireStream() {
+		s.mu.Unlock()
+		s.releaseConnectSlot()
+		emitEvent(Event{Ev: "dial_fail", SID: s.id, Install: s.relayID, Reason: "node_stream_limit", Detail: target})
+		s.writer.control(s.proto().connectFail(id, rOverloaded, "node stream capacity"))
+		return
+	}
 	s.streams[id] = st
-	liveStreams.Add(1)
 	active := int32(len(s.streams))
 	s.mu.Unlock()
 	for {

@@ -503,6 +503,13 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad pubkey", http.StatusBadRequest)
 		return
 	}
+	if *registrationClosed {
+		entry := reg.get(req.InstallID)
+		if entry == nil || entry.Pubkey != req.Pubkey {
+			http.Error(w, "registration closed", http.StatusForbidden)
+			return
+		}
+	}
 	created, ok := reg.upsert(req.InstallID, req.Pubkey)
 	if !ok {
 		// Ключ разошёлся с тем, что в реестре: у клиента перевыпустилась
@@ -715,7 +722,7 @@ func verifyPerInstallAuth(payload []byte, clientIP string) (string, bool, string
 // verifyPerInstallAuthV2 — подпись над id||ts||nonce; nonce одноразовый на
 // сессию, поэтому replay-кэш не нужен и два коннекта в одну секунду не
 // конфликтуют (спека §2.4). Возвращает ещё и код причины для INFO GOODBYE.
-func verifyPerInstallAuthV2(a authV2, nonce [16]byte) (string, bool, string, byte) {
+func verifyPerInstallIdentityV2(a authV2, nonce [16]byte) (string, bool, string, byte) {
 	if a.Nonce != nonce {
 		return a.ID, false, "nonce не совпал", rAuthFailed
 	}
@@ -732,9 +739,6 @@ func verifyPerInstallAuthV2(a authV2, nonce [16]byte) (string, bool, string, byt
 	e := reg.get(a.ID)
 	if e == nil {
 		return a.ID, false, "установка не зарегистрирована", rAuthFailed
-	}
-	if e.Revoked {
-		return a.ID, false, "установка отозвана", rRevoked
 	}
 	pub, err := base64.StdEncoding.DecodeString(e.Pubkey)
 	if err != nil || !validEd25519Pubkey(pub) {
@@ -779,4 +783,17 @@ func trimSpace(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// A route can authorize a different node without granting data access here.
+func verifyPerInstallAuthV2(a authV2, nonce [16]byte) (string, bool, string, byte) {
+	id, ok, why, code := verifyPerInstallIdentityV2(a, nonce)
+	if !ok {
+		return id, ok, why, code
+	}
+	e := reg.get(id)
+	if e == nil || e.Revoked {
+		return id, false, "установка отозвана", rRevoked
+	}
+	return id, true, "", rNormal
 }

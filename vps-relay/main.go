@@ -835,6 +835,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if err := loadRelayRoutes(*routesFile); err != nil {
+		log.Fatalf("relay routes: %v", err)
+	}
 	initRegistry(*registryPath)
 	if *requirePerInstall {
 		log.Printf("FLIP ACTIVE: --require-per-install — only registered per-install signatures accepted")

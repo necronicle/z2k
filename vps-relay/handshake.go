@@ -143,6 +143,20 @@ func (s *session) handshakeV2(p []byte) bool {
 		s.killWith("auth_rejected")
 		return false
 	}
+	// Assignment is disclosed only after proof of the registered private key.
+	// Revocation on this node remains effective: redirect never opens streams.
+	if h.Caps&capRelayRoute != 0 {
+		if id, verified, _, _ := verifyPerInstallIdentityV2(a, s.nonce); verified {
+			if route, assigned := routeFor(id); assigned {
+				s.relayID = id
+				s.writer.controlThenClose(protoV2.info(infoRelayRoute, uint32(route.MaxConnections), route.URL),
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "relay assignment"), 2*time.Second)
+				s.killWith("relay_assigned")
+				metrics.inc("relay_route_total", "")
+				return false
+			}
+		}
+	}
 	id, ok, why, code := verifyPerInstallAuthV2(a, s.nonce)
 	if !ok {
 		log.Printf("[%s] auth rejected (v2 id=%s): %s", s.id, id, why)
