@@ -1399,8 +1399,10 @@ print_health() {
             # диагностика молчит: «проблем не найдено» при полностью
             # бесполезном WARP.
             _warp_n=$(ipset list z2k_warp 2>/dev/null | awk '/^Members:/{m=1;next} m&&NF{n++} END{print n+0}')
-            if [ "${_warp_n:-0}" = "0" ]; then
-                _add "WARP поднят, но ни один список адресов не выбран — в туннель не заворачивается ничего (панель → WARP → списки игр)"
+            if [ "${_warp_n:-0}" = "0" ] \
+                && ! awk 'NR>1 { found=1; exit } END { exit !found }' /tmp/z2k-warp/domains.v1 2>/dev/null \
+                && ! awk '{ sub(/^[ \t]+/, ""); if ($0!="" && $0!~/^#/) found=1 } END { exit !found }' "${ZAPRET2_DIR}/lists/warp/devices.txt" 2>/dev/null; then
+                _add "WARP поднят, но ни один список адресов не выбран и устройства не выбраны — в туннель не заворачивается ничего (панель → WARP → списки игр)"
             fi
         fi
     fi

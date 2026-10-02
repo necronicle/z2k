@@ -449,12 +449,32 @@ warp_pbr_up() {
     warp_policy_sync
 }
 
+# Full-device mode is explicit: saved device selection and NO active list.
+# An empty/invalid active list must not silently expand to all destinations.
+warp_full_device_mode() {
+    awk '{ sub(/^[ \t]+/, ""); if ($0!="" && $0!~/^#/) found=1 } END { exit !found }' "$WARP_DEVICES_FILE" 2>/dev/null || return 1
+    # A selected but temporarily missing game list remains list mode.
+    if awk '{ sub(/^[ \t]+/, ""); if ($0!="" && $0!~/^#/) found=1 } END { exit !found }' "$WARP_ENABLED_FILE" 2>/dev/null; then return 1; fi
+    [ -z "$(warp_active_lists)" ]
+}
+
 # Destination matches (static and DNS-observed) all enter this chain. Device
-# selection limits those matches; it must never route an entire device. Count
+# selection limits those matches. Without active lists, explicit selections
+# use full-device mode instead. Count
 # saved selections, not resolved IPs: an offline selected MAC is still selected.
 warp_policy_rules() {
     local ifaces iface wdtt_enabled subnet
     [ "$(warp_flag)" = 1 ] || return 0
+    if warp_full_device_mode; then
+        ifaces=$(warp_wdtt_ifaces) || return 1
+        for iface in $ifaces; do printf '%s\n' "-i $iface -j RETURN"; done
+        # Keep router/LAN, private networks and non-unicast destinations local.
+        for subnet in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/3; do
+            printf '%s\n' "-d $subnet -j RETURN"
+        done
+        printf '%s\n' "-m set --match-set $WARP_IPSET_SRC src -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+        return 0
+    fi
     # Empty lists must also fence off any DNS cache awaiting observer reload.
     if ! awk 'NR>1 { found=1; exit } END { exit !found }' "$WARP_DOMAINS" 2>/dev/null \
         && ! ipset save "$WARP_IPSET" 2>/dev/null | grep -q '^add '; then
@@ -518,6 +538,9 @@ warp_policy_legacy_clear() {
     while iptables -w -t mangle -C PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null; do
         iptables -w -t mangle -D PREROUTING -i wdtt0 -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null || return 1
     done
+    while iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET_SRC" src -j Z2K_WARP 2>/dev/null; do
+        iptables -w -t mangle -D PREROUTING -m set --match-set "$WARP_IPSET_SRC" src -j Z2K_WARP 2>/dev/null || return 1
+    done
     warp_dns_client_sets | while read -r set client; do
         while iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null; do
             iptables -w -t mangle -D PREROUTING -s "$client/32" -m set --match-set "$set" dst -j MARK --set-xmark "$WARP_MARK/$WARP_MARK" 2>/dev/null || exit 1
@@ -556,6 +579,9 @@ warp_policy_sync() (
     [ "$(warp_flag)" = 1 ] || exit 0
     warp_policy_chain || exit 1
     [ "$(warp_flag)" = 1 ] || exit 0
+    if warp_full_device_mode; then
+        iptables -w -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET_SRC" src -j Z2K_WARP 2>/dev/null || exit 1
+    fi
     iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null \
         || iptables -w -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null || exit 1
     warp_dns_client_sets | while read -r set client; do

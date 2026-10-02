@@ -103,10 +103,10 @@ with tempfile.TemporaryDirectory() as tmp:
         def walk(chain,mark=0):
             for rule in chains.get(chain,[]):
                 matches=True
-                for flag,val in (('-s',src),('-i',iface)):
+                for flag,val in (('-s',src),('-d',dst),('-i',iface)):
                     if flag in rule:
                         wanted=rule[rule.index(flag)+1]
-                        matches &= (ipaddress.ip_address(val) in ipaddress.ip_network(wanted)) if flag=='-s' else (val.startswith(wanted[:-1]) if wanted.endswith('+') else val==wanted)
+                        matches &= (ipaddress.ip_address(val) in ipaddress.ip_network(wanted)) if flag in ('-s','-d') else (val.startswith(wanted[:-1]) if wanted.endswith('+') else val==wanted)
                 if '--match-set' in rule:
                     i=rule.index('--match-set'); name,direction=rule[i+1:i+3]
                     addr=src if direction=='src' else dst
@@ -212,8 +212,25 @@ with tempfile.TemporaryDirectory() as tmp:
     config('de:ad:be:ef:00:01\n')
     check('offline selection must not expand to whole LAN',False)
     config('192.168.1.10\n',True,False)
-    check('no lists with selected device',False,dst='9.9.9.9')
+    (sb/'lists/sites.txt').unlink()
+    run('warp_ipset_all')
+    check('no lists: full traffic for selected device',True,dst='9.9.9.9')
     check('empty lists do not route native AWG',False,'10.77.0.2','8.8.4.4','nwg0')
+    check('no lists: unselected LAN remains direct',False,'192.168.1.11','9.9.9.9')
+    check('no lists: LAN destinations remain direct',False,dst='192.168.1.1')
+    check('no lists: native VPN is not implicitly full tunneled',False,'10.77.0.2','9.9.9.9','nwg0')
+    data=json.loads(state.read_text()); data['tables']['mangle']={'PREROUTING':[],'OUTPUT':[]}; state.write_text(json.dumps(data))
+    subprocess.run(['sh',str(ROOT/'files/ndm/93-z2k-warp.sh')],env=dict(env,type='iptables',table='mangle',Z2K_WARP_SOURCE_ONLY=''),check=True)
+    check('NDM restores full-device mode',True,dst='9.9.9.9')
+    (sb/'lists/.enabled').write_text('missing-game\n')
+    run('warp_ipset_all')
+    check('missing selected list does not expand routing',False,dst='9.9.9.9')
+    (sb/'lists/.enabled').unlink()
+    run('warp_ipset_all')
+    run('warp_pbr_down')
+    check('full-device teardown routes directly',False,dst='9.9.9.9')
+    run('warp_pbr_up')
+    check('full-device re-enable restores route',True,dst='9.9.9.9')
     check('no lists with WDTT on',False,'10.77.0.2','9.9.9.9','wdtt0')
     config('',False,False)
     check('nothing selected: no WARP traffic',False)
