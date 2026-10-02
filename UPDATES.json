@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 135,
-  "current": "p-86.12",
+  "seq": 136,
+  "current": "p-86.13",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -202,7 +202,7 @@
   "files/z2k-auto-update.sh": "d10d23baa1bc9dd7cbe33c410ddd82b496a2fedcb0e4996df1c338a41c4290e6",
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
   "files/z2k-config-validator.sh": "d080e119c894c796323f90d2fcdb1134038f144dc7c73d2e5fec8d4e7539c1a7",
-  "files/z2k-diag.sh": "680425b1f465741d70cc4180908025d04a269845915201469ad9e72ce8758a79",
+  "files/z2k-diag.sh": "b0f4c1e120a414b65284ab601bf39fe69ed4890d11a09e99413613fc61ec8080",
   "files/z2k-dns-check.sh": "8248396c3289e4ae315d73aed7512ba8cb3660fe8bad04355753010a9b3722a4",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "754393c2441f56406b6c93a1471bba2f62302d3898a15439d8f9a18f7b503e92",
@@ -216,7 +216,7 @@
   "files/z2k-tg-watchdog.sh": "d9b0494007a9f346ceb39dcae14d65a47f5e72247979b996e1dc2b61e84b59fa",
   "files/z2k-update-lists.sh": "e7f8c83ab5e8de256d79eb00e54b103d63d5ba3020d8d00bef8ccd2286738850",
   "files/z2k-warp-list-filter.awk": "97db4a85663e4b3a7c4943e495276f521a9ba961d8419df1059efdcceea655c5",
-  "files/z2k-warp.sh": "2ee8927ff0c0428b6bfedf2dfd5cd6b20775ebefb48f48a8dea5485749d71e81",
+  "files/z2k-warp.sh": "858b766dc1d9ac620f2382c9ae9b4a5566f2364241dc0b1ea0bc6bae6cc000b4",
   "lib/auto_update.sh": "f3207a68c08cd7725177fb2f7b3ae36464b265c552d11561f3d03016b180d6c2",
   "lib/config.sh": "e1203016155fab62a7ee0351663014a1663b0dfd3cd4b5d8c5f9a2cb35813ab3",
   "lib/config_official.sh": "a371188ba69e921c1c54058489253d7b593f26d893132a4fb65afa96edf14e13",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "7c435cb19318adf3fcc8236a946917f14de7e3a456d6aa991fd9d34db6a9a3f1",
+  "webpanel/www/index.html": "db1b726eefc0d379606832d1aa458e93b7fa974eceb266cbb0c9a2605573d41b",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -287,7 +287,7 @@
   "webpanel/www/js/pages/telemetry.js": "3e250c7715ad46e7e5e442209fbf46ef97b282bd6d03bfa6638a09ea93acba8f",
   "webpanel/www/js/pages/toggles.js": "be465e4b0f4eca05371f3d1d40abc8abe0b2c636df952ce14e481878b4c14fce",
   "webpanel/www/js/pages/update.js": "f3ab4ab494aca562cd5e21132a37aa3d2cd866be4de0446ab58a66620ca09ac9",
-  "webpanel/www/js/pages/warp.js": "018872e275e43c04fe1318482a3878bf0e6fa142522d31fc0685d6e14c1fe4c6",
+  "webpanel/www/js/pages/warp.js": "fd025eeb3412eee6b7daa69da48a5d71a665c031cf2f4c1b265caa593b46f503",
   "webpanel/www/js/router.js": "3bae8e6ec636585c1a1904c146262d4a384700d319e6653117d95825f5544a57",
   "webpanel/www/js/state-model.js": "e26d1875dbd8b96c42457f231dad98ad2e23483700cc22e16249cc647e2017fa",
   "webpanel/www/style.css": "9921b980c067a55ab63595954dac637b5a296eba4b66726a272449d56ae9ec73",
@@ -598,6 +598,7 @@
 {"v": "p-86.8", "type": "patch", "ts": "2026-10-01T15:39:10Z", "ref": "p-86.8", "desc": "Оптимизации подключения к VPS: улучшены переподключение, сохранение параметров между обновлениями и обработка большого числа соединений.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-86.10", "type": "patch", "ts": "2026-10-01T17:19:53Z", "ref": "p-86.10", "desc": "Исправлены таймауты открытия соединений Telegram при большом числе подключений. Диагностика теперь сообщает об отказах очереди туннеля.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-86.11", "type": "patch", "ts": "2026-10-01T19:01:37Z", "ref": "p-86.11", "desc": "Исправлено применение WARP к клиентам AWG/WireGuard: выбор устройств локальной сети больше не исключает VPN-клиентов. Трафик по-прежнему направляется через WARP только для включённых списков.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-86.12", "type": "patch", "ts": "2026-10-01T20:50:10Z", "ref": "p-86.12", "desc": "В разделе «Стратегии» таблицу можно сортировать по заморозке: замороженные домены собираются наверху.", "changed_files": ["webpanel/www/index.html", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/state-model.js", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-86.12", "type": "patch", "ts": "2026-10-01T20:50:10Z", "ref": "p-86.12", "desc": "В разделе «Стратегии» таблицу можно сортировать по заморозке: замороженные домены собираются наверху.", "changed_files": ["webpanel/www/index.html", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/state-model.js", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-86.13", "type": "patch", "ts": "2026-10-02T06:39:48Z", "ref": "p-86.13", "desc": "Когда списки WARP выключены, весь IPv4-трафик выбранных устройств теперь идёт через туннель; локальные сети остаются доступны напрямую. С включёнными списками маршрутизация ограничена их адресами. Уточнены подсказки в панели и диагностика.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
