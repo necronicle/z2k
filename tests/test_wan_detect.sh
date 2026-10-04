@@ -86,7 +86,7 @@ run_capture -4
 unset Z2K_NET_CLASS
 
 # The parser accepts only default spellings, rejects annotations for other
-# tables, accepts explicit main/254, and filters lo/bridge devices.
+# tables, accepts explicit main/254, and excludes loopback while allowing a bridge with a main default.
 clear_ip
 cat > "$TMP/main4" <<'EOF'
 0.0.0.0/0 dev wan0 table main
@@ -100,8 +100,22 @@ mkdir -p "$TMP/net/br7/bridge"
 Z2K_NET_CLASS="$TMP/net"; export Z2K_NET_CLASS
 IP_4_main_FILE="$TMP/main4"; export IP_4_main_FILE
 run_capture -4
-[ "$STATUS:$RESULT" = '0:wan0 wan1' ] && ok 'default spellings and main annotations are filtered exactly' || no 'main annotations' '0:wan0 wan1' "$STATUS:$RESULT"
+[ "$STATUS:$RESULT" = '0:wan0 wan1 br7' ] && ok 'default spellings and main annotations are filtered exactly' || no 'main annotations' '0:wan0 wan1 br7' "$STATUS:$RESULT"
 unset Z2K_NET_CLASS
+
+# Field report: bridged WAN via an upstream router; policy duplicates and
+# ordinary LAN bridges must not expand the set of selected interfaces.
+clear_ip
+cat > "$TMP/main4" <<'EOF'
+default via 192.168.11.1 dev br2 table 4096 metric 1000
+default via 192.168.11.1 dev br2 table 16394 src 192.168.11.123 metric 1000
+default via 192.168.11.1 dev br2 metric 1000
+default dev lan-policy table 12000
+192.168.1.0/24 dev br0 scope link
+EOF
+IP_4_main_FILE="$TMP/main4"; export IP_4_main_FILE
+run_capture -4
+[ "$STATUS:$RESULT" = '0:br2' ] && ok 'bridged WAN main default survives policy duplicates and LAN routes' || no 'bridged WAN' '0:br2' "$STATUS:$RESULT"
 
 # ECMP works in both iproute2 layouts. A dead/linkdown hop is suppressed without
 # hiding a healthy sibling, and duplicate devices are emitted once.

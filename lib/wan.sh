@@ -6,11 +6,10 @@
 # stay outside automatic discovery; WAN_IFACE can select any device explicitly.
 # Do not query link netlink: it can hang on an unhealthy driver (issue #18).
 z2k_wan_auto_excluded() {
-    local dev="$1" sys="${Z2K_NET_CLASS:-/sys/class/net}"
-    case "$dev" in
-        lo|br[0-9]*) return 0 ;;
-    esac
-    [ ! -d "$sys/$dev/bridge" ] || return 0
+    # A bridge can be the WAN (e.g. br2 via an upstream router). Candidates
+    # already carry a live main-table default; connected LAN routes and
+    # policy-only defaults are rejected by the route parser below.
+    [ "$1" != lo ] || return 0
     return 1
 }
 
