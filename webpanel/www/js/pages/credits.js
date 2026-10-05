@@ -296,6 +296,14 @@ export function renderCredits() {
           тем, кто пользуется проектом каждый день.
         </p>
       </div>
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">GregMSK</div>
+        <p class="desc">
+          Спасибо, GregMSK, за поддержку z2k. На такие взносы живут сервер
+          Telegram-туннеля и зеркала обновлений, которыми пользуются все.
+        </p>
+      </div>
     </div>
   `;
 }
