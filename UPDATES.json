@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 137,
-  "current": "p-86.14",
+  "seq": 138,
+  "current": "p-86.15",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -221,7 +221,7 @@
   "lib/config.sh": "e1203016155fab62a7ee0351663014a1663b0dfd3cd4b5d8c5f9a2cb35813ab3",
   "lib/config_official.sh": "a371188ba69e921c1c54058489253d7b593f26d893132a4fb65afa96edf14e13",
   "lib/install.sh": "4446a6cfc475979148ebd557b2068ddd1d29d88bfc3e33c3363dc28269835272",
-  "lib/menu.sh": "a23e0290d46e8a184e6158507eb36c5425f550647afdf2817a2eb7bad2c6ad80",
+  "lib/menu.sh": "e0426324124ee190968a292adb3a89a780c4822f6047cd9906292cbde5bd3cf8",
   "lib/strategies.sh": "5c1186493aeba1581e668246e4a23b9e0d5497905015c8dec5b8458683408c2d",
   "lib/utils.sh": "a55e928342d1517f3db0e4bb8293755d70b0e81dbbfa51c50e426e413bbcb0d4",
   "lib/wan.sh": "7f66e83516031bf66ea5f185804e0c90442507d7a75c95a7bc27f6b86d639129",
@@ -265,7 +265,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "f4f074d0f4b5591e28b93dedb99e8b3cb5c4f484564fee630ff11989ba53fd91",
+  "webpanel/www/index.html": "f4d0d1cf0b825acd1fe390650fd9cda80865856599635f9b0ded7e359a744b96",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -276,7 +276,7 @@
   "webpanel/www/js/core/toast.js": "2fdf1025826a4db97484ac702ff907ef280736d3a4d2639398182b9ef4cf4b2a",
   "webpanel/www/js/core/whitelist.js": "f05e2250c94649848185f6b12e45d5fb382b3ca106a773550db1675d0e830318",
   "webpanel/www/js/job.js": "0f08852ec8202fb451a51f1d9a5745835a445e892905d4840fc4b1dbc4fab20b",
-  "webpanel/www/js/pages/credits.js": "2239a382a120d30f5f69c09aa35ac6771fb73fc8c916c9cd305768bd7321a7f1",
+  "webpanel/www/js/pages/credits.js": "34ae9efe923a8a0c57c9750c171ccbe65b316b23cff331d2f683bbcfb523e309",
   "webpanel/www/js/pages/dashboard.js": "c8dfdaff9e16cbf8adf8e93c09b6764002c2b8d5be78210179a5d4a30a569f9b",
   "webpanel/www/js/pages/diag.js": "435921bff2dd8a228222147a33dd9fe1308209a139adbccb00056dfc4869179d",
   "webpanel/www/js/pages/exclude.js": "65e3a12bcb4afb84cd8b837bb15ec7520727417d0f6a9562e89f65d939cff886",
@@ -600,6 +600,7 @@
 {"v": "p-86.11", "type": "patch", "ts": "2026-10-01T19:01:37Z", "ref": "p-86.11", "desc": "Исправлено применение WARP к клиентам AWG/WireGuard: выбор устройств локальной сети больше не исключает VPN-клиентов. Трафик по-прежнему направляется через WARP только для включённых списков.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-86.12", "type": "patch", "ts": "2026-10-01T20:50:10Z", "ref": "p-86.12", "desc": "В разделе «Стратегии» таблицу можно сортировать по заморозке: замороженные домены собираются наверху.", "changed_files": ["webpanel/www/index.html", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/state-model.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-86.13", "type": "patch", "ts": "2026-10-02T06:39:48Z", "ref": "p-86.13", "desc": "Когда списки WARP выключены, весь IPv4-трафик выбранных устройств теперь идёт через туннель; локальные сети остаются доступны напрямую. С включёнными списками маршрутизация ограничена их адресами. Уточнены подсказки в панели и диагностика.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "files/z2k-warp.sh", "webpanel/www/js/pages/warp.js", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-86.14", "type": "patch", "ts": "2026-10-04T07:56:39Z", "ref": "p-86.14", "desc": "Исправлено определение выхода в интернет через интерфейс-мост, например при подключении через другой роутер. Правила обхода и их автоматическое восстановление теперь работают в такой конфигурации.", "changed_files": ["webpanel/www/index.html", "lib/wan.sh", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-86.14", "type": "patch", "ts": "2026-10-04T07:56:39Z", "ref": "p-86.14", "desc": "Исправлено определение выхода в интернет через интерфейс-мост, например при подключении через другой роутер. Правила обхода и их автоматическое восстановление теперь работают в такой конфигурации.", "changed_files": ["webpanel/www/index.html", "lib/wan.sh", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-86.15", "type": "patch", "ts": "2026-10-05T19:08:55Z", "ref": "p-86.15", "desc": "Новый спонсор проекта — GregMSK", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
