@@ -67,14 +67,14 @@ else no "без хешей: значения расходятся" ">1 разл�
 # --- 5. контракт: cksum больше не используется, «пусто → 0» не вернулось ---
 # Запрещён ВЫЗОВ, а не упоминание: почему cksum здесь нельзя — ценный
 # комментарий, и он должен пережить этот тест. Комментарии срезаем.
-for f in files/z2k-auto-update.sh files/z2k-update-lists.sh files/z2k-stats-upload.sh; do
+for f in files/z2k-auto-update.sh files/z2k-update-lists.sh; do
     assert_eq "$(basename $f): не зовёт отсутствующий cksum" "0" \
         "$(sed 's/#.*//' "$ROOT/$f" | grep -cE '(\||^|;|\$\()[[:space:]]*cksum([[:space:]]|$)')"
 done
 assert_eq "auto-update: нет тихого «пусто → 0»" "0" "$(grep -c 'JITTER=0' "$ROOT/files/z2k-auto-update.sh")"
 
 # --- 6. ночные задачи флота расходятся: разброс есть у всех трёх ---
-for f in files/z2k-auto-update.sh files/z2k-update-lists.sh files/z2k-stats-upload.sh; do
+for f in files/z2k-auto-update.sh files/z2k-update-lists.sh; do
     assert_eq "$(basename $f): разброс применяется" "yes" \
         "$(grep -q 'z2k_host_jitter' "$ROOT/$f" && echo yes || echo no)"
 done

@@ -1968,8 +1968,6 @@ create_official_config() {
     local saved_Z2K_INJECT_TLS_MODS="0"
     local saved_Z2K_DYNAMIC_TTL="1"
     local saved_Z2K_INSTA_DNS="1"
-    local saved_Z2K_STATS="1"
-    local saved_Z2K_STATS_ACK="0"
     local saved_DISABLE_CUSTOM="1"
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
@@ -2031,15 +2029,6 @@ create_official_config() {
         saved_Z2K_AUTOHOSTLIST=$(safe_config_read "Z2K_AUTOHOSTLIST" "$config_file" "0")
         saved_Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$config_file" "1")
         saved_Z2K_INSTA_DNS=$(safe_config_read "Z2K_INSTA_DNS" "$config_file" "1")
-        # Z2K_STATS — anonymized strategy telemetry to VPS, default ON (per Mark
-        # 2026-05-30: Default ON как все фичи). Opt-out via menu/webpanel toggle
-        # sets =0; preserved across auto-update by the Z2K_ prefix rule.
-        saved_Z2K_STATS=$(safe_config_read "Z2K_STATS" "$config_file" "1")
-        # Признак «человек видел, что именно уходит». Ноль означает «ещё не
-        # показывали»: первая отправка подождёт (см. files/z2k-stats-upload.sh).
-        # У уже работающей установки ключа нет — тогда единица, заново
-        # спрашивать того, кто давно живёт с телеметрией, незачем.
-        saved_Z2K_STATS_ACK=$(safe_config_read "Z2K_STATS_ACK" "$config_file" "1")
         # DISABLE_CUSTOM — custom.d on/off (inverse: 0 = custom.d enabled). Was
         # hardcoded =1 in the generated config and NOT preserved, so enabling
         # custom.d (menu [S] / webpanel) survived only until the next config
@@ -2417,17 +2406,6 @@ Z2K_DYNAMIC_TTL=${saved_Z2K_DYNAMIC_TTL}
 # через меню [I]; установка и ежедневный рефреш их тогда не возвращают
 # (issue #39). Переживает реинсталл. «Вернуть» в [I] ставит 1.
 Z2K_INSTA_DNS=${saved_Z2K_INSTA_DNS}
-
-# Anonymous strategy telemetry to the project VPS (default 1=ON). The uploader
-# (z2k-stats-upload.sh, daily via z2k-scheduler) sends ONLY {pool, strategy,
-# dwell} per rotation slot — never the visited host/domain, never your IP /
-# provider / region, and no device identifier. Set =0 (menu/webpanel toggle) to
-# opt out. Does not affect NFQWS2_OPT / the bypass itself.
-Z2K_STATS=${saved_Z2K_STATS}
-
-# Видел ли человек, какие поля уходят. 0 = ещё нет, первая отправка ждёт;
-# 1 = экран показан (меню [C] или карточка в вебпанели) либо установка старая.
-Z2K_STATS_ACK=${saved_Z2K_STATS_ACK}
 
 # Custom.d scripts (50-stun4all / 50-discord-media — STUN desync that fixes
 # WhatsApp/Telegram voice on some networks). Default 1 = disabled (z2k's own

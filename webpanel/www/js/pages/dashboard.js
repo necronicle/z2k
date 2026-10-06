@@ -3,13 +3,11 @@ import { $app, escapeHtml, skeletonBlocks } from "../core/dom.js";
 import { refreshStatus } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
 import { JOB_FAIL, _updateGlobalUILock, awaitPanelBack, confirmTypedModal, jobOutcome, jobUnresolved, openJobModal, unresolvedMsg } from "../job.js";
-import { renderStatsNotice } from "./telemetry.js";
 import { refreshUpdateBanner } from "./update.js";
 
 export async function renderDashboard() {
   $app.innerHTML = `
     <div id="update-banner" hidden></div>
-    <div id="stats-notice" hidden></div>
     <h1 class="page-title">Дашборд</h1>
     <div class="card" id="status-card">
       <h3>Состояние</h3>
@@ -168,7 +166,6 @@ export async function renderDashboard() {
 
   refreshStatus();
   refreshUpdateBanner();
-  renderStatsNotice();
   _updateGlobalUILock();
 }
 

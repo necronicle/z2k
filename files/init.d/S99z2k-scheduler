@@ -43,7 +43,7 @@ start() {
     mkdir -p "$(dirname "$LOG")" 2>/dev/null
 
     # Respawn supervisor. The scheduler is the SOLE driver of EVERY periodic z2k
-    # task (auto-update, stats upload, list/geosite refresh, get_config, plus the
+    # task (auto-update, list/geosite refresh, get_config, plus the
     # tg-tunnel watchdog and the PPE de-offload re-assert, both ~1/min). These
     # boxes leak RAM and OOM-kill long-lived processes; the previous bare
     # `"$SCRIPT" &` left ALL periodic work dead until the next reboot if the

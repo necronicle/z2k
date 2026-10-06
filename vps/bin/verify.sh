@@ -36,7 +36,6 @@ bin/relay-recycle.sh:/opt/z2k-vps/bin/relay-recycle.sh
 config/systemd/z2k-wavecap.service:/etc/systemd/system/z2k-wavecap.service
 config/systemd/z2k-relay-recycle.service:/etc/systemd/system/z2k-relay-recycle.service
 config/systemd/z2k-relay-recycle.timer:/etc/systemd/system/z2k-relay-recycle.timer
-config/systemd/z2k-stats-collector.service:/etc/systemd/system/z2k-stats-collector.service
 config/systemd/z2k-net-tuning.service:/etc/systemd/system/z2k-net-tuning.service
 bin/net-tuning.sh:/opt/z2k-vps/bin/net-tuning.sh
 "

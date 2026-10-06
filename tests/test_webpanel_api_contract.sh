@@ -177,12 +177,12 @@ printf "\n--- /status: значение флага с кавычкой не рв
 # read_flag снимает только ОКРУЖАЮЩИЕ кавычки, так что правленный руками
 # конфиг отдаёт значение с кавычкой внутри. Раньше оно шло в "%s" как есть:
 # JSON.parse во фронте падал, и весь дашборд показывал «Ошибка».
-printf 'ENABLED=1\nGAME_WARP_ENABLED=0"x\nZ2K_PPE_DEOFFLOAD=a\\b\nZ2K_STATS=да\n' > "$CONFIG_FILE"
+printf 'ENABLED=1\nGAME_WARP_ENABLED=0"x\nZ2K_PPE_DEOFFLOAD=a\\b\nZ2K_AUTOHOSTLIST=да\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /status "" | cgi_body)
 assert_eq "тело /status — валидный JSON"      "1"    "$(json_ok_p "$OUT")"
 assert_eq "кавычка доехала экранированной"    '0"x'  "$(jget "$OUT" 'd["toggles"]["game_warp"]')"
 assert_eq "обратный слэш доехал экранированным" 'a\b' "$(jget "$OUT" 'd["toggles"]["ppe"]')"
-assert_eq "кириллица не превратилась в escape" 'да'  "$(jget "$OUT" 'd["toggles"]["stats"]')"
+assert_eq "кириллица не превратилась в escape" 'да'  "$(jget "$OUT" 'd["toggles"]["autohostlist"]')"
 printf 'ENABLED=1\nGAME_WARP_ENABLED=1\n' > "$CONFIG_FILE"
 OUT=$(cgi GET /status "" | cgi_body)
 assert_eq "нормальный флаг читается как раньше" "1" "$(jget "$OUT" 'd["toggles"]["game_warp"]')"

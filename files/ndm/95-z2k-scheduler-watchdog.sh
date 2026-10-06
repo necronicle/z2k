@@ -8,7 +8,7 @@
 # supervisor has died, bring the whole stack back up.
 #
 # WHY THIS EXISTS (field 2026-07-06): the supervisor is the SOLE driver of every
-# periodic z2k task (auto-update, stats upload, list/geosite refresh, get_config,
+# periodic z2k task (auto-update, list/geosite refresh, get_config,
 # tg-watchdog, PPE re-assert). It respawns the scheduler when the scheduler dies,
 # but nothing respawned the SUPERVISOR — S99z2k-scheduler starts it only at boot.
 # An OOM sweep (these boxes run swap=0) killed supervisor+scheduler together, so

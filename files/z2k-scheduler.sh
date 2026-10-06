@@ -13,7 +13,6 @@
 #
 # Tasks (HH:MM <command>):
 #   HH:00  z2k-auto-update.sh apply       — nightly auto-update, HH=Z2K_AU_HOUR (02)
-#   03:00  z2k-stats-upload.sh             — anonymized strategy stats -> VPS
 #   03:30  z2k-tcp16-probe.sh              — блок по объёму: сети и имя на каждую
 #   04:00  z2k-update-lists.sh             — RKN/YT hostlist refresh
 
@@ -42,6 +41,8 @@ LOG="/opt/var/log/z2k-scheduler.log"
 # Flash (persistent) state — daily-cadence keys only (fired ≤1×/day). Persisting
 # these across reboot is the point: it stops a same-day re-fire after a restart.
 STATE="${ZAPRET2_DIR}/.z2k-scheduler-state"
+# Retire the old uploader from installations upgraded from earlier releases.
+rm -f "${ZAPRET2_DIR}/z2k-stats-upload.sh" 2>/dev/null || true
 # RAM state — minute-cadence epoch keys (tg-watchdog-epoch / ppe-deoffload-epoch).
 # These are rewritten ~2×/min; keeping them on flash burned ~2880 write+rename
 # per day (flash wear). They only gate "did we already fire this minute", which
@@ -91,7 +92,7 @@ echo $$ > "$PIDFILE"
 # безвредно, но планировщик форкает около шести детей в минуту, и попадание
 # живого чужого процесса на застрявший pid уводит надзирателя в ветку «уже
 # запущен другим родителем» — а там встают ВСЕ периодические задачи разом:
-# обновление, списки, статистика, сторож туннеля, self-heal NFQUEUE и WARP.
+# обновление, списки, сторож туннеля, self-heal NFQUEUE и WARP.
 #
 # `:` не форкает, не смотрит в PATH и работает даже при отвалившемся /opt —
 # то есть ровно в том случае, когда `rm` не работает по определению. Для всех
@@ -340,8 +341,7 @@ while true; do
     now_epoch=$(date +%s)
 
     # Автообновление — в час, выбранный человеком в панели, а не в зашитые
-    # 02:00. Стоит ДО общего case: там ветки взаимоисключающие, и `*:00`
-    # перехватывал бы 03:00 у выгрузки статистики.
+    # 02:00. Стоит ДО общего case, чтобы ветка `*:00` не перехватила задачу.
     #
     # Порядок условий не косметика: au_hour читает конфиг, и проверка минут
     # перед ним оставляет этот awk ровно на ровных часах.
@@ -354,14 +354,6 @@ while true; do
     # Daily tasks — gate on date-key so each only fires once per day even
     # if our 30s tick passes through the same minute twice.
     case "$hhmm" in
-        03:00)
-            # Anonymized strategy-stats upload (gated on Z2K_STATS inside the
-            # script; silent no-op on opt-out / network failure).
-            if [ "$(last_fired_for_key stats-upload)" != "$today" ]; then
-                mark_fired stats-upload "$today"
-                run_task stats-upload "${ZAPRET2_DIR}/z2k-stats-upload.sh"
-            fi
-            ;;
         # ЕСЛИ ЛИНИЯ ТАК И НЕ ИЗМЕРЕНА — ПОВТОРЯТЬ, НЕ ДОЖИДАЯСЬ НОЧИ.
         #
         # Раньше проба запускалась только при старте службы и в 03:30. На свежей

@@ -119,14 +119,13 @@ MENU
 [Y] Diagnose domain (4-стадийная проба + рекомендация)
 [M] Динамический TTL (для мобильных операторов)
 [A] Политика доступа Keenetic (фильтр по NDM policy)
-[C] Сбор статистики стратегий (анонимно)
 [H] Аппаратный offload: per-flow исключение (нативная ротация на Keenetic)
 [L] Автохостлист (движок сам находит заблокированные домены)
 [0] Выход
 
 MENU
 
-        printf "Выберите опцию [0-5,U,R,F,E,T,W,S,P,D,I,Y,M,A,C,H,L]: "
+        printf "Выберите опцию [0-5,U,R,F,E,T,W,S,P,D,I,Y,M,A,H,L]: "
         read_input choice
 
         case "$choice" in
@@ -177,9 +176,6 @@ MENU
                 ;;
             a|A)
                 menu_policy_access
-                ;;
-            c|C)
-                menu_stats
                 ;;
             h|H)
                 menu_ppe
@@ -1315,104 +1311,6 @@ SUBMENU
                 print_info "Перезапуск сервиса..."
                 "$INIT_SCRIPT" restart
             fi
-            pause
-            ;;
-
-        b|B)
-            return 0
-            ;;
-
-        *)
-            print_error "Неверный выбор: $sub_choice"
-            pause
-            ;;
-    esac
-}
-
-# ==============================================================================
-# ПОДМЕНЮ: СБОР СТАТИСТИКИ СТРАТЕГИЙ (анонимно)
-# ==============================================================================
-
-menu_stats() {
-    clear_screen
-    print_header "Сбор статистики стратегий (анонимно)"
-
-    local config_file="${ZAPRET2_DIR}/config"
-
-    if [ ! -f "$config_file" ]; then
-        print_error "Конфиг не найден: $config_file"
-        print_info "Запустите установку сначала"
-        pause
-        return 1
-    fi
-
-    local Z2K_STATS
-    Z2K_STATS=$(safe_config_read "Z2K_STATS" "$config_file" "1")
-
-    # Экран открыт — значит человек видит, что именно уходит. Снимаем гейт
-    # первой отправки: до этого момента аплоадер молчит (см.
-    # files/z2k-stats-upload.sh). Ставим ДО показа текста, а не после выбора:
-    # согласия мы не спрашиваем, телеметрия включена по умолчанию — мы лишь
-    # обязаны показать, что она есть, прежде чем что-то уйдёт.
-    if [ "$(safe_config_read "Z2K_STATS_ACK" "$config_file" "1")" = "0" ]; then
-        set_flag Z2K_STATS_ACK 1 "$config_file" 2>/dev/null || true
-    fi
-
-    print_separator
-    print_info "Статус: $([ "$Z2K_STATS" = "0" ] && echo 'Выключен' || echo 'Включён (по умолчанию)')"
-    print_separator
-
-    cat <<'SUBMENU'
-
-Раз в сутки z2k отправляет на сервер проекта ОБЕЗЛИЧЕННЫЙ
-срез ротации: какая стратегия сейчас активна в каждом пуле
-(quic, rkn_tcp, yt_tcp ...) и как долго держится. Сводная
-по всем согласившимся помогает понять, какие стратегии реально
-работают, и двигать лучшие в начало списка.
-
-Что НЕ уходит с устройства НИКОГДА:
-  - сайты/домены, которые вы открываете;
-  - ваш IP, провайдер, регион;
-  - любой идентификатор устройства (ни серийник, ни случайный).
-Уходят только: имя пула, номер стратегии, время удержания.
-
-Важно, честно: отправка идёт БЕЗ шифрования (обычный HTTP
-на 213.176.74.63:8088). Содержимое обезличено для нас, но не
-для того, кто видит ваш канал: провайдер и его DPI замечают
-сам факт ежедневного запроса на этот адрес и названия
-стратегий в нём. Для инструмента обхода блокировок это
-заметнее, чем любое поле внутри. Не устраивает — выключите
-пунктом [2], он работает сразу.
-
-[1] Включить (по умолчанию)
-[2] Выключить (отказаться от сбора)
-[B] Назад
-
-SUBMENU
-
-    printf "Выберите опцию [1-2,B]: "
-    read_input sub_choice
-
-    case "$sub_choice" in
-        1)
-            if grep -q '^Z2K_STATS=' "$config_file"; then
-                sed -i 's/^Z2K_STATS=.*/Z2K_STATS=1/' "$config_file"
-            else
-                echo "Z2K_STATS=1" >> "$config_file"
-            fi
-            # Out-of-band telemetry flag: read fresh by z2k-stats-upload.sh each
-            # run, so no config regen / service restart is needed.
-            print_success "Сбор статистики включён"
-            pause
-            ;;
-
-        2)
-            if grep -q '^Z2K_STATS=' "$config_file"; then
-                sed -i 's/^Z2K_STATS=.*/Z2K_STATS=0/' "$config_file"
-            else
-                echo "Z2K_STATS=0" >> "$config_file"
-            fi
-            print_success "Сбор статистики выключен"
             pause
             ;;
 

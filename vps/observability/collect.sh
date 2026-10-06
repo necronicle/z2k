@@ -58,7 +58,7 @@ printf 'приём по ядрам     %s\n' "$(awk '{printf "cpu%d=%d ", NR-1, 
 
 echo
 echo "--- перезапуски служб (не должно расти само)"
-for s in nginx caddy z2k-relay z2k-stats-collector; do
+for s in nginx caddy z2k-relay; do
     printf '%-22s %s\n' "$s" "$(systemctl show "$s" -p NRestarts --value 2>/dev/null)"
 done
 REMOTE

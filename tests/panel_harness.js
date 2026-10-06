@@ -95,7 +95,7 @@ global.navigator = { clipboard: { writeText: async () => {} }, userAgent: "node"
 const FIXTURES = {
   "/status": { ok:true, installed:"r-71.1", running:true, service:"running",
     toggles:{game_warp:"0",customd:"0",dynamic_ttl:"1",
-             stats:"1",ppe:"1",auto_update:"1",autohostlist:"0"}, tunnel:{running:true} },
+ppe:"1",auto_update:"1",autohostlist:"0"}, tunnel:{running:true} },
   "/strategy/pools": { ok:true, pools:[
     {pool:"rkn_tcp",custom:0,line:""},{pool:"yt_tcp",custom:1,line:"--filter-tcp=443"},
     {pool:"gv_tcp",custom:0,line:""},{pool:"quic",custom:0,line:""}] },

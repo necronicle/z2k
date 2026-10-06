@@ -264,11 +264,6 @@ case "$method $path" in
         category_rkn=$(read_flag "Z2K_CATEGORY_RKN" "$CONFIG_FILE" "1")
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
-        stats=$(read_flag "Z2K_STATS" "$CONFIG_FILE" "1")
-        # Признак «человек ещё не видел, что уходит». Панель по нему покажет
-        # карточку с полями и адресом, и снимет гейт первой отправки —
-        # до этого аплоадер молчит (files/z2k-stats-upload.sh).
-        stats_ack=$(read_flag "Z2K_STATS_ACK" "$CONFIG_FILE" "1")
         ppe=$(read_flag "Z2K_PPE_DEOFFLOAD" "$CONFIG_FILE" "1")
         fastroute_snapshot
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
@@ -284,11 +279,8 @@ case "$method $path" in
 
         game_warp=$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")
         json_header
-        # Каждое значение флага — через json_string, а не прямым %s. read_flag
-        # снимает только ОКРУЖАЮЩИЕ кавычки, поэтому правленный руками конфиг
-        # (Z2K_STATS=0") отдаёт значение, которое рвёт строку JSON. Ломается при
-        # этом не один тумблер: фронт не разбирает ответ целиком и весь дашборд
-        # уходит в «Ошибка». Быстрый путь json_string на "0"/"1" не форкает.
+        # Каждое значение флага — через json_string, а не прямым %s. Это
+        # сохраняет валидность JSON, даже если конфиг правили вручную.
         printf '{"ok":true,"installed":%s,"running":%s,"service":' \
             "${installed:-false}" "${running:-false}"
         json_string "${svc_state:-unknown}"
@@ -298,8 +290,6 @@ case "$method $path" in
         printf ',"category_discord_voice":'; json_string "$category_discord_voice"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
-        printf ',"stats":';                  json_string "${stats:-1}"
-        printf ',"stats_ack":';              json_string "${stats_ack:-1}"
         printf ',"ppe":';                    json_string "${ppe:-1}"
         printf ',"fastroute":';              json_string "${fastroute:-0}"
         printf ',"fastroute_available":';     json_string "$fastroute_available"
@@ -337,22 +327,10 @@ case "$method $path" in
         exit 0
         ;;
 
-    # Человек увидел карточку с составом телеметрии. Снимаем гейт первой
-    # отправки — синхронно, без задачи: правка одного ключа в конфиге, ждать
-    # тут нечего, а показывать модалку прогресса ради этого было бы издевательством.
-    "POST /stats/ack")
-        set_flag Z2K_STATS_ACK 1 "$CONFIG_FILE" \
-            || json_fail "500 Internal Server Error" "не удалось записать признак"
-        json_header
-        printf '{"ok":true}\n'
-        exit 0
-        ;;
-
     # ---------- TOGGLES (async — returns job_id) ----------
     "POST /toggle/game-warp"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
-    "POST /toggle/stats"|\
     "POST /toggle/ppe"|\
     "POST /toggle/fastroute"|\
     "POST /toggle/auto-update"|\
@@ -374,7 +352,6 @@ case "$method $path" in
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
-            /toggle/stats)           _toggle_fn=toggle_stats;           _label="Сбор статистики" ;;
             /toggle/ppe)             _toggle_fn=toggle_ppe;             _label="PPE de-offload" ;;
             /toggle/fastroute)       _toggle_fn=toggle_fastroute;       _label="Программный fastpath" ;;
             /toggle/auto-update)     _toggle_fn=toggle_auto_update;     _label="Автообновление" ;;

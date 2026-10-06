@@ -1277,18 +1277,9 @@ toggle_dynamic_ttl() {
     restart_service_if_running
 }
 
-toggle_stats() {
-    # Z2K_STATS — anonymized strategy telemetry to the project VPS (default 1).
-    # Out-of-band: it does NOT affect NFQWS2_OPT and is read fresh by
-    # z2k-stats-upload.sh each daily run, so neither a config regen nor a
-    # service restart is needed — just flip the flag.
-    local want="$1"
-    set_flag "Z2K_STATS" "$want" "$CONFIG_FILE" || return 1
-}
-
 toggle_auto_update() {
     # Z2K_AUTO_UPDATE_ENABLED — nightly unattended update (default 1).
-    # Out-of-band like toggle_stats: it does not touch NFQWS2_OPT and is read
+    # Out-of-band: it does not touch NFQWS2_OPT and is read
     # fresh by z2k-auto-update.sh on each run, so no config regen and no service
     # restart. Turning it off does NOT block the "Обновить" button — that path
     # marks itself manual, so a user who opts out of automatic updates can still
@@ -1299,7 +1290,7 @@ toggle_auto_update() {
 
 toggle_autohostlist() {
     # Z2K_AUTOHOSTLIST — switches MODE_FILTER between hostlist and autohostlist
-    # (see lib/config_official.sh). Unlike toggle_stats this is NOT out-of-band:
+    # (see lib/config_official.sh). This is NOT out-of-band:
     # the mode is baked into the generated config, so the config must be
     # regenerated and the service restarted for it to mean anything.
     local want="$1"

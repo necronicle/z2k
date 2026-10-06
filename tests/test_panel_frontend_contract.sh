@@ -237,7 +237,7 @@ global.prompt = () => null;
 const STATUS = {
   ok: true, installed: "r-73", service: "active",
   toggles: { game_warp: "0", customd: "0",
-             dynamic_ttl: "1", stats: "1", ppe: "1", fastroute: "1", fastroute_available: "1", auto_update: "1", autohostlist: "0",
+             dynamic_ttl: "1", ppe: "1", fastroute: "1", fastroute_available: "1", auto_update: "1", autohostlist: "0",
              au_hour: "02" },
   tunnel: { running: false },
 };
@@ -372,13 +372,13 @@ const SCENARIOS = {
     setup() {
       ROUTER = async (p) => {
         if (p === "/job") throw new Error("Failed to fetch");
-        if (p === "/toggle/stats") return { ok: true, job: "11" };
+        if (p === "/toggle/auto-update") return { ok: true, job: "11" };
         return STATUS;
       };
     },
     async run() {
       await sleep(80);
-      const box = q('#app>[data-key="stats"]>input');
+      const box = q('#app>[data-key="auto_update"]>input');
       check("тумблер включился после успешного /status", box.disabled === false, "disabled=" + box.disabled);
       box.checked = false;
       box.fire("change");
