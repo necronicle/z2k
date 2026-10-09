@@ -58,6 +58,7 @@ show_main_menu() {
 |  TiaMax, Denis, Mega Man, TheGreatYogo,           |
 |  logistik77, b11d11, BloodKnife39, SIGogelon,     |
 |  yozh, Altaec, DIDIQ Rawa, GregMSK, Кожевников    |
+|  bootnet                                          |
 +===================================================+
 
 MENU

@@ -315,6 +315,16 @@ export function renderCredits() {
           вложился в эту выделку.
         </p>
       </div>
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">bootnet</div>
+        <p class="desc">
+          Спасибо, bootnet. Всё начинается с загрузки и держится на сети, и в
+          твоём имени есть и то и другое. Такая поддержка оплачивает узел,
+          зеркала обновлений и проверку на живом железе, то есть то, что
+          работает у всех незаметно.
+        </p>
+      </div>
     </div>
   `;
 }
