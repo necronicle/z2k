@@ -1914,7 +1914,7 @@ Z2K_DIAG_LOGS="/opt/var/log/z2k-auto-update.log /opt/var/log/z2k-scheduler.log
 /tmp/z2k-warp/warpd.log /tmp/z2k-log/z2k-rt-proxy.log /tmp/z2k-log/z2k-http-tunnel.log
 /tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-webpanel-error.log
 /tmp/z2k-log/z2k-webpanel-sup.log /tmp/z2k-log/z2k-webpanel-startcheck.log
-/tmp/z2k-log/z2k-webpanel-wait.log"
+/tmp/z2k-log/z2k-webpanel-wait.log /tmp/z2k-log/ndm-hook.log"
 
 print_logs() {
     printf '\n=== errors across all logs ===\n'
