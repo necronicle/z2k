@@ -93,6 +93,27 @@ is_nfqws2_running() {
 }
 is_nfqws2_running || exit 0
 
+# --- Софт-fastpath: держать nf_conntrack_fastnat=0 между регенами ------------
+# start_fw ставит fastnat=0 сам (z2k_conntrack_tune_start), и NDM-хук зовёт его
+# на каждый реген netfilter. Этот тик — страховка на случай, если прошивка
+# вернёт 1 БЕЗ регена: по исходникам ядра Keenetic (nf_conntrack_core.c,
+# fast_bind_reached) при fastnat=1 поток после 6 пакетов в обе стороны уходит
+# мимо всех mangle-хуков, NFQUEUE его больше не видит, ротатор слепнет.
+# Только чтение и запись одного sysctl, без start_fw и без замка. fastroute
+# здесь не трогаем: у него гейт по железу, он остаётся за start_fw.
+NF_SYSCTL_DIR="${NF_SYSCTL_DIR:-/proc/sys/net/netfilter}"
+fastnat_reassert() {
+    local _k _v
+    for _k in nf_conntrack_fastnat nf_conntrack_fastnat_xfrm; do
+        [ -w "$NF_SYSCTL_DIR/$_k" ] || continue
+        _v="$(cat "$NF_SYSCTL_DIR/$_k" 2>/dev/null)"
+        [ "$_v" = "0" ] && continue
+        echo 0 > "$NF_SYSCTL_DIR/$_k" 2>/dev/null && log "$_k был '$_v' -> 0 (возвращён без регена)"
+    done
+    return 0
+}
+fastnat_reassert
+
 # Use exactly the same main-table discovery as start_fw.
 # shellcheck source=lib/wan.sh
 . "${Z2K_WAN_LIB:-/opt/zapret2/lib/wan.sh}"

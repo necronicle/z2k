@@ -114,13 +114,14 @@ run() {  # env: NFQ, NFQ6 (def NFQ), PIDOF_OK, ROUTE_OK (v4 def 1), ROUTE6_OK (v
         Z2K_TEST_NOW_SHIFT="${Z2K_TEST_NOW_SHIFT:-}" \
         NFQWS2_PIDFILES="$TMP/run/nfqws2_*.pid $TMP/run/nfqws2.pid" \
         CONFIRM_SETTLE="${CS:-0}" \
+        NF_SYSCTL_DIR="${NF_SYSCTL_DIR:-$TMP/no-such-sysctl}" \
         sh "$SH"
 }
 count() { wc -l < "$CNT" | tr -d ' '; }
 # Hermetic: a var-assignment PREFIX on a function call persists in the shell
 # (POSIX behaviour) — e.g. `IPT_FAIL=1 run` would leak into the next test. Clear
 # every toggle so each case starts from run()'s documented defaults.
-reset() { : > "$CNT"; rm -rf "$LOCK"; rm -f "$LAST"; rm -f "$LOG" "$TMP/repaired"; unset NFQ NFQ6 RULES PIDOF_OK ROUTE_OK ROUTE6_OK ROUTE4_FAIL ROUTE6_FAIL ROUTE4_MAIN_FILE ROUTE4_DEFAULT_FILE ROUTE6_MAIN_FILE ROUTE6_DEFAULT_FILE REPAIR_MARKER IPT_FAIL MI LS CS; }
+reset() { : > "$CNT"; rm -rf "$LOCK"; rm -f "$LAST"; rm -f "$LOG" "$TMP/repaired"; unset NFQ NFQ6 RULES PIDOF_OK ROUTE_OK ROUTE6_OK ROUTE4_FAIL ROUTE6_FAIL ROUTE4_MAIN_FILE ROUTE4_DEFAULT_FILE ROUTE6_MAIN_FILE ROUTE6_DEFAULT_FILE REPAIR_MARKER IPT_FAIL MI LS CS NF_SYSCTL_DIR; }
 
 # --- 1) the bug condition: nfqws2 up, WAN up, enabled, 0 NFQUEUE -> restart_fw
 reset; NFQ=0 PIDOF_OK=1 ROUTE_OK=1 run
@@ -336,6 +337,30 @@ n=$(count); [ "$n" = 0 ] && ok 'failed IPv6 route read does not storm' || no 'fa
 printf 'ENABLED=1\nDISABLE_IPV6=1\nWAN_IFACE=eth3\nNFQWS2_PORTS_TCP=443\nNFQWS2_TCP_PKT_OUT=9\nNFQWS2_TCP_PKT_IN=10\n' > "$CFG"
 reset; RULES="POSTROUTING:tcp INPUT:tcp FORWARD:tcp" run
 n=$(count); [ "$n" = 0 ] && ok 'manual override does not demand other policy WANs' || no 'override' 0 "$n"
+
+# --- 22) fastnat: тик возвращает nf_conntrack_fastnat=0 без регена и без start_fw.
+# По исходникам ядра Keenetic при fastnat=1 поток после 6 пакетов в обе стороны
+# уходит мимо NFQUEUE; start_fw ставит 0, но только по регену. Селфхил — страховка.
+printf 'ENABLED=1\n' > "$CFG"
+SYS="$TMP/sysctl"; mkdir -p "$SYS"
+# мок iptables с раздела 19 печатает только правила из RULES — даём полный набор,
+# чтобы единственным действием тика был возврат sysctl.
+OK6="POSTROUTING:tcp POSTROUTING:udp INPUT:tcp INPUT:udp FORWARD:tcp FORWARD:udp"
+reset; printf '1\n' > "$SYS/nf_conntrack_fastnat"; printf '1\n' > "$SYS/nf_conntrack_fastnat_xfrm"
+RULES="$OK6" NF_SYSCTL_DIR="$SYS" run
+v=$(cat "$SYS/nf_conntrack_fastnat"); [ "$v" = 0 ] && ok "fastnat 1 -> 0 возвращён тиком" || no "fastnat reassert" 0 "$v"
+v=$(cat "$SYS/nf_conntrack_fastnat_xfrm"); [ "$v" = 0 ] && ok "fastnat_xfrm 1 -> 0 возвращён тиком" || no "fastnat_xfrm reassert" 0 "$v"
+grep -q 'nf_conntrack_fastnat был' "$LOG" 2>/dev/null && ok "возврат fastnat записан в журнал" || no "fastnat log" "строка" "нет"
+n=$(count); [ "$n" = 0 ] && ok "возврат fastnat не зовёт start_fw" || no "fastnat no start_fw" 0 "$n"
+# уже 0 — ни записи, ни строки в журнале
+reset; printf '0\n' > "$SYS/nf_conntrack_fastnat"; printf '0\n' > "$SYS/nf_conntrack_fastnat_xfrm"
+RULES="$OK6" NF_SYSCTL_DIR="$SYS" run
+if [ -f "$LOG" ] && grep -q fastnat "$LOG"; then no "fastnat quiet" "нет строки" "есть"; else ok "fastnat уже 0 -> тишина"; fi
+# движок выключен — ускорение пользователю нужно, sysctl не трогаем
+reset; printf '1\n' > "$SYS/nf_conntrack_fastnat"
+RULES="$OK6" PIDOF_OK=0 NF_SYSCTL_DIR="$SYS" run
+v=$(cat "$SYS/nf_conntrack_fastnat"); [ "$v" = 1 ] && ok "nfqws2 down -> fastnat не трогаем" || no "fastnat untouched when down" 1 "$v"
+reset
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
