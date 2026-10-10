@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 140,
-  "current": "p-86.17",
+  "seq": 141,
+  "current": "r-86.5",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -138,7 +138,7 @@
   "z2k.sh": ["/opt/zapret2/z2k.sh"]
   },
   "files_sha256": {
-  "files/000-zapret2.sh": "b256194eacf0f89b247cb4f4c467d552afe03ebbc4879b79308eed5f914d385d",
+  "files/000-zapret2.sh": "e716a5670e8f740304c027e63971214778493ee185263ed67bad438408e070e4",
   "files/S99zapret2.new": "94532d72a242c75e53f4274558294b0caeda2188b3dbbc65ec480bc78b5a15b0",
   "files/etc/z2k-roots.pem": "a6cf5a695274d4f36b401cc62183895af11e68b02417638a070465c77f4caf00",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
@@ -200,12 +200,12 @@
   "files/z2k-auto-update.sh": "d10d23baa1bc9dd7cbe33c410ddd82b496a2fedcb0e4996df1c338a41c4290e6",
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
   "files/z2k-config-validator.sh": "d080e119c894c796323f90d2fcdb1134038f144dc7c73d2e5fec8d4e7539c1a7",
-  "files/z2k-diag.sh": "b0f4c1e120a414b65284ab601bf39fe69ed4890d11a09e99413613fc61ec8080",
+  "files/z2k-diag.sh": "3a14a539f7b2f9cedfb7ca7718a82dbc8ce05f880afc61d3e43f9f97af07a765",
   "files/z2k-dns-check.sh": "8248396c3289e4ae315d73aed7512ba8cb3660fe8bad04355753010a9b3722a4",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "754393c2441f56406b6c93a1471bba2f62302d3898a15439d8f9a18f7b503e92",
   "files/z2k-insta-ip-refresh.sh": "ec3ef7c0504ec557a76a70d23048e8f0dd5576791fb648ba7cb8dafe11014780",
-  "files/z2k-nfqueue-selfheal.sh": "d2247aec30318b6f4c8ec1c2e3eb33cdfc14e0799978e6953a324f0e0fc2eb62",
+  "files/z2k-nfqueue-selfheal.sh": "9500edc2d195f4fa00c5ad547f4e33f0da2fa8ff6857e9321f7226cb45516cc4",
   "files/z2k-ppe-deoffload.sh": "db87ce41b7ee1de8db66dfe58d66253f53c8d8d1cd509ee3a6019306683d1a26",
   "files/z2k-scheduler.sh": "1eed50e77f0b07fa9656293b36f20c52cd4fab06732324f8a5ba6651a8399134",
   "files/z2k-tcp16-probe.sh": "371e7dca151ecf0ffd10a29d05ae07ee6815820cb3a317fc0a8ec006a192004b",
@@ -217,7 +217,7 @@
   "lib/auto_update.sh": "f3207a68c08cd7725177fb2f7b3ae36464b265c552d11561f3d03016b180d6c2",
   "lib/config.sh": "e1203016155fab62a7ee0351663014a1663b0dfd3cd4b5d8c5f9a2cb35813ab3",
   "lib/config_official.sh": "a378b9bdf9df5750c80bb049942ab7aa3660f30d9b26ca8c674c3faa3f7c88e7",
-  "lib/install.sh": "06971fa85ba6b03102b91a548ec8927848563b0c0b6f061081682a53a833f5b2",
+  "lib/install.sh": "c16665cf67b7dee8d5b37a188024d07768c15c6b67c6e969184f84b59d359e8f",
   "lib/menu.sh": "49f41c8be10b8ad5441f79dc4490a36d651f0833652dbddf4ae41e7da4d0cc38",
   "lib/strategies.sh": "5c1186493aeba1581e668246e4a23b9e0d5497905015c8dec5b8458683408c2d",
   "lib/utils.sh": "a55e928342d1517f3db0e4bb8293755d70b0e81dbbfa51c50e426e413bbcb0d4",
@@ -262,7 +262,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "18872aad4e76e35ef9142e1fac9060f233efe704277e010f00c09b366ac836f2",
+  "webpanel/www/index.html": "ff0b2d31104a55a06807ae40078233ffdf07caca9d68fac8321d55fba3c7937f",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -599,6 +599,7 @@
 {"v": "p-86.14", "type": "patch", "ts": "2026-10-04T07:56:39Z", "ref": "p-86.14", "desc": "Исправлено определение выхода в интернет через интерфейс-мост, например при подключении через другой роутер. Правила обхода и их автоматическое восстановление теперь работают в такой конфигурации.", "changed_files": ["webpanel/www/index.html", "lib/wan.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-86.15", "type": "patch", "ts": "2026-10-05T19:08:55Z", "ref": "p-86.15", "desc": "Новый спонсор проекта — GregMSK", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-86.16", "type": "patch", "ts": "2026-10-06T11:55:04Z", "ref": "p-86.16", "desc": "Новый спонсор проекта — Кожевников. Убран сбор статистики стратегий: роутер больше ничего не отправляет на сервер проекта, пункт меню [C] и переключатель в панели удалены.", "changed_files": ["webpanel/www/index.html", "files/init.d/S99z2k-scheduler", "files/ndm/95-z2k-scheduler-watchdog.sh", "files/z2k-scheduler.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/toast.js", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/dashboard.js", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "p-86.17", "type": "patch", "ts": "2026-10-09T22:46:11Z", "ref": "p-86.17", "desc": "Новый спонсор проекта — bootnet.", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-86.17", "type": "patch", "ts": "2026-10-09T22:46:11Z", "ref": "p-86.17", "desc": "Новый спонсор проекта — bootnet.", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "r-86.5", "type": "reinstall", "ts": "2026-10-10T12:08:31Z", "ref": "r-86.5", "desc": "Движок обхода обновлён до zapret2 1.0.5.2 с нашим исправлением: большой ClientHello из нескольких частей больше не зависает, если часть сегментов прошла мимо обхода — соединение продолжается с задержкой в доли секунды. Восстановление правил после пересборки сетевых правил Keenetic стало надёжнее: событие, пришедшее во время восстановления, больше не теряется (раньше обход мог молчать до минуты), а сами события пишутся в журнал для диагностики. Планировщик следит, чтобы программное ускорение NAT оставалось выключенным.", "changed_files": ["webpanel/www/index.html", "files/000-zapret2.sh", "files/z2k-diag.sh", "files/z2k-nfqueue-selfheal.sh", "lib/install.sh", "UPDATES.json"], "steps": [], "full_install": true}
   ]
 }
