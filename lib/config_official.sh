@@ -1514,6 +1514,8 @@ generate_nfqws2_opt_from_strategies() {
         # участвует (решение Марка 10.09.2026).
         sni_pick="--lua-desync=z2k_sni_pick:payload=tls_client_hello:dir=out:blob=z2k_ch${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
         sni_pick="$sni_pick --lua-desync=fake:payload=tls_client_hello:dir=out:blob=z2k_ch:optional:repeats=8:tcp_ts=-1000"
+        [ "$Z2K_DYNAMIC_TTL" != "0" ] && sni_pick=$(inject_z2k_dynamic_ttl "$sni_pick")
+        sni_pick=$(inject_z2k_range_rand "$sni_pick")
     fi
 
     if [ -n "$rkn_circ" ]; then
@@ -1656,6 +1658,8 @@ generate_nfqws2_opt_from_strategies() {
 
     # HTTP shares the same retrans/reset policy as TLS.
     http_rkn=$(ensure_circular_doc_args "$http_rkn")
+    http_rkn=$(inject_z2k_dynamic_ttl "$http_rkn")
+    http_rkn=$(inject_z2k_range_rand "$http_rkn")
     # HTTP-пул создаётся после общей проводки: подключаем обёртку здесь.
     if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-alert.lua" ]; then
         http_rkn=$(ensure_rkn_failure_detector "$http_rkn" "z2k_fail_tls_alert")

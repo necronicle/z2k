@@ -177,7 +177,7 @@ local function discord_tls_observe(desync, crec)
         local hello = desync.reasm_data or p
         if #hello < 9 or hello:byte(6) ~= 1 then return end
         local hello_length = hello:byte(7)*65536 + hello:byte(8)*256 + hello:byte(9)
-        if record_length(hello) ~= hello_length + 4 then return end
+        if #hello < hello_length + 9 or record_length(hello) ~= hello_length + 4 then return end
         local now = discord_tls_now()
         local b = h.discord_tls_budget
         if not b then b = { started=now, used=0 }; h.discord_tls_budget = b end

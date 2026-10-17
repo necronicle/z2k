@@ -820,7 +820,14 @@ subtract_googlevideo_from_yt() {
         return 1
     }
 
-    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    after=$(wc -l < "$filtered" 2>/dev/null | tr -d ' \t')
+    case "$after" in ''|*[!0-9]*) after=0 ;; esac
+    case "$before" in ''|*[!0-9]*) before=0 ;; esac
+    if [ "$after" -eq 0 ] || { [ "$before" -gt 0 ] && [ "$((after * 100 / before))" -lt 50 ]; }; then
+        log "YT subtract: результат обрублен ($before → $after строк) — список НЕ трогаем"
+        rm -f "$filtered"
+        return 1
+    fi
     removed=$((before - after))
     if [ "$removed" -gt 0 ]; then
         mv "$filtered" "$yt_target" || {
@@ -990,7 +997,14 @@ subtract_false_positive_from_rkn() {
         return 1
     }
 
-    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    after=$(wc -l < "$filtered" 2>/dev/null | tr -d ' \t')
+    case "$after" in ''|*[!0-9]*) after=0 ;; esac
+    case "$before" in ''|*[!0-9]*) before=0 ;; esac
+    if [ "$after" -eq 0 ] || { [ "$before" -gt 0 ] && [ "$((after * 100 / before))" -lt 50 ]; }; then
+        log "RKN false-positive subtract: результат обрублен ($before → $after строк) — список НЕ трогаем"
+        rm -f "$filtered" "$exclude"
+        return 1
+    fi
     removed=$((before - after))
     if [ "$removed" -gt 0 ]; then
         mv "$filtered" "$rkn_target" || {

@@ -234,6 +234,9 @@ type Options struct {
 	// зондов: одна гипотеза это две посылки, её видно в дампе целиком, и с
 	// боевым плечом её можно сверить побайтово.
 	Only string
+	// onlyPoison — конкретная гипотеза (включая кандидатов «СОБРАНО: …»,
+	// отсутствующих в poisons()) для одиночной перепроверки в findJointPoison.
+	onlyPoison *poison
 	// Skip — гипотезы, которые НЕ пробовать. Нужен поиску общего приёма для
 	// двух приветствий: находку на старом перепроверяют на новом, и если она
 	// не прошла, перебор надо продолжить со следующей, а не получить ту же.
@@ -941,7 +944,7 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 			obs := Observation{Probe: cand.name, DelayM: cand.gapMS}
 			pass := 0
 			for i := 0; i < opt.Repeats; i++ {
-				ok, err := probePoison(ctx, ip, uint16(port), tr, cand, opt.Timeout)
+				ok, err := runPoisonProbe(ctx, ip, uint16(port), tr, cand, opt)
 				res.Probes++
 				if err == nil && ok {
 					pass++
@@ -958,7 +961,11 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 		}
 	}
 
-	for _, p := range poisons() {
+	candidates := poisons()
+	if opt.onlyPoison != nil && !knownPoison(opt.onlyPoison.name) {
+		candidates = []poison{*opt.onlyPoison}
+	}
+	for _, p := range candidates {
 		if ctx.Err() != nil {
 			break
 		}
@@ -979,7 +986,7 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 					pp.seqovl = len(opt.Control.Payload)
 				}
 			}
-			ok, err := probePoison(ctx, ip, uint16(port), tr, pp, opt.Timeout)
+			ok, err := runPoisonProbe(ctx, ip, uint16(port), tr, pp, opt)
 			res.Probes++
 			switch {
 			case err != nil:

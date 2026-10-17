@@ -60,6 +60,11 @@ H.test('a wrong server sequence and a ClientHello spanning TLS records cannot ar
     d.dis.payload=CLIENT:sub(1,8)..string.char(120)..CLIENT:sub(10)
     local _,c=H.step(d); H.step(reply(d)); H.advance(11)
     H.eq(nil,c.discord_tls); H.eq(0,#H.sent)
+    d=initial()
+    d.reasm_data=nil
+    d.dis.payload=CLIENT:sub(1,60)
+    _,c=H.step(d); H.step(reply(d)); H.advance(11)
+    H.eq(nil,c.discord_tls); H.eq(0,#H.sent)
 end)
 H.test('a slow response, including one byte of a fragmented TLS record, cancels the timer',function()
     local d,h=waiting()

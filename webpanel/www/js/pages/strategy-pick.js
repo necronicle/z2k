@@ -1,9 +1,30 @@
-import { JOB_FAIL, jobOutcome, jobUnresolved, openJobModal, unresolvedMsg } from "../job.js";
-import { apiGet, apiPost, toastErr } from "../core/api.js";
+import { JOB_FAIL, confirmModal, jobOutcome, jobUnresolved, openJobModal, unresolvedMsg } from "../job.js";
+import { apiGet, apiPost, apiPostText, toastErr } from "../core/api.js";
 import { copyToClipboard } from "../core/clipboard.js";
 import { $app, escapeHtml } from "../core/dom.js";
 import { toast } from "../core/toast.js";
 import { strategiesShell } from "./strategies.js";
+
+const PICK_POOL_OPTIONS = {
+  tcp: [
+    { id: "rkn_tcp", label: "Заблокированные сайты (TCP)" },
+    { id: "yt_tcp",  label: "YouTube (TCP)" },
+    { id: "gv_tcp",  label: "YouTube видео (TCP)" },
+  ],
+  quic: [
+    { id: "quic", label: "QUIC (все сайты)" },
+  ],
+  voice: [
+    { id: "discord_udp", label: "Дискорд, голос (UDP)" },
+  ],
+};
+
+function defaultTcpPool(target) {
+  const t = String(target || "").toLowerCase();
+  if (t.includes("googlevideo.com") || t.includes("ggpht.com")) return "gv_tcp";
+  if (t.includes("youtube.com") || t.includes("ytimg.com") || t.includes("youtu.be")) return "yt_tcp";
+  return "rkn_tcp";
+}
 
 // ПОДБОР ПО ДОМЕНУ — наш аналог blockcheck.
 //
@@ -163,6 +184,44 @@ async function loadLast() {
       toast("Строка скопирована");
     });
   });
+  box.querySelectorAll(".pick-apply").forEach((btn) => {
+    btn.addEventListener("click", () => applyPickedStrategy(btn));
+  });
+}
+
+async function applyPickedStrategy(btn) {
+  const line = (btn.dataset.line || "").trim();
+  if (!line) return;
+  const row = btn.closest(".pick-actions");
+  const sel = row ? row.querySelector(".pick-pool-select") : null;
+  const pool = (sel ? sel.value : btn.dataset.pool) || "";
+  if (!pool) return;
+  const poolLabel = sel && sel.selectedOptions && sel.selectedOptions[0]
+    ? sel.selectedOptions[0].textContent
+    : (btn.dataset.poolLabel || pool);
+  const ok = await confirmModal(
+    `Применить строку к пулу «${poolLabel}»?`,
+    `Автоподбор для пула «${poolLabel}» будет выключен, и для всех его доменов начнёт работать эта строка параметров. Сервис обхода кратковременно перезапустится. Вернуть автоподбор можно в любой момент на вкладке «Свои стратегии».`,
+    "Применить",
+    "Отмена",
+  );
+  if (!ok) return;
+  btn.disabled = true;
+  if (sel) sel.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = "Применяю…";
+  try {
+    await apiPostText("/strategy/pool/save?pool=" + encodeURIComponent(pool), line);
+    toast(`Стратегия применена к пулу «${poolLabel}»`);
+  } catch (e) {
+    toastErr("Не удалось применить: ", e);
+  } finally {
+    if (btn.isConnected) {
+      btn.disabled = false;
+      btn.textContent = origText;
+      if (sel) sel.disabled = false;
+    }
+  }
 }
 
 // Замер приходит по двум протоколам сразу. Показываем оба, но НЕ двумя
@@ -200,9 +259,9 @@ function renderResult(r) {
     mixed: "TCP, современные и старые",
   }[r && r.mode] || "TCP";
   const blocks = [
-    protoBlock(tcpLabel, parts.tcp),
-    protoBlock("QUIC", parts.quic),
-    protoBlock("Голос Дискорда", parts.voice),
+    protoBlock(tcpLabel, parts.tcp, "tcp", target),
+    protoBlock("QUIC", parts.quic, "quic", target),
+    protoBlock("Голос Дискорда", parts.voice, "voice", target),
   ].filter(Boolean);
 
   const found = blocks.some((b) => b.hasLine);
@@ -220,7 +279,8 @@ function renderResult(r) {
 
   const hint = found
     ? `<p class="desc">
-         Чтобы применить строку, вставьте её на вкладке «Свои стратегии».
+         Вы можете сразу применить найденную строку к нужному пулу кнопкой выше или
+         вставить её вручную на вкладке «Свои стратегии».
          Учтите: своя строка заменяет набор плеч для всего пула целиком,
          а не только для этого домена. У TCP и QUIC пулы разные.
        </p>`
@@ -236,7 +296,7 @@ function renderResult(r) {
 }
 
 // protoBlock — один протокол: подпись и то, что по нему вышло.
-function protoBlock(name, res) {
+function protoBlock(name, res, kind = "tcp", target = "") {
   if (!res) return null;
   if (res.strategy) {
     // Предупреждение про старые устройства показываем ВСЕГДА, когда замер его
@@ -249,6 +309,14 @@ function protoBlock(name, res) {
               телевизорам, приставкам и прочему, что ходит по устаревшему TLS.
               Браузер на компьютере и телефоне она чинит.</p>`;
     }
+    const pools = PICK_POOL_OPTIONS[kind] || PICK_POOL_OPTIONS.tcp;
+    const defPool = kind === "tcp" ? defaultTcpPool(target) : pools[0].id;
+    const poolControl = pools.length > 1
+      ? `<select class="t-sub-select pick-pool-select" aria-label="Пул для применения стратегии">
+           ${pools.map(p => `<option value="${escapeHtml(p.id)}"${p.id === defPool ? " selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}
+         </select>
+         <button class="btn btn-primary pick-apply" data-line="${escapeHtml(res.strategy)}">Применить к пулу</button>`
+      : `<button class="btn btn-primary pick-apply" data-pool="${escapeHtml(pools[0].id)}" data-pool-label="${escapeHtml(pools[0].label)}" data-line="${escapeHtml(res.strategy)}">Применить к «${escapeHtml(pools[0].label)}»</button>`;
     return {
       hasLine: true,
       html: `
@@ -256,6 +324,7 @@ function protoBlock(name, res) {
         <pre class="pick-line">${escapeHtml(res.strategy)}</pre>
         <div class="pick-actions">
           <button class="btn pick-copy" data-line="${escapeHtml(res.strategy)}">Скопировать</button>
+          ${poolControl}
         </div>
         ${warn}`,
     };

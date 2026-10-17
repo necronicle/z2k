@@ -1202,6 +1202,8 @@ body[data-page="login"] #app { max-width: none; }
 }
 .pick-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-8);
   margin-bottom: var(--space-12);
 }
@@ -2087,7 +2089,7 @@ pre.log {
   color: var(--text-muted);
   cursor: pointer;
   padding: 6px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2358,10 +2360,10 @@ pre.log {
 .job-link {
   margin-top: 10px;
   padding: 8px 12px;
-  border: 1px dashed var(--muted);
+  border: 1px dashed var(--text-muted);
   border-radius: 6px;
   font-size: 13px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .job-link[hidden] { display: none; }
 

@@ -60,10 +60,17 @@ local function z2k_nets_load()
 				set[tonumber(o1) * 256 + tonumber(o2)] = a
 				cnt = cnt + 1
 			else
-				local g1, g2 = p:match("^(%x+):(%x*):")
+				local g1 = p:match("^(%x+)::")
 				if g1 then
-					set[(g1 or "") .. ":" .. (g2 or "")] = a
+					set[string.lower(g1) .. ":0"] = a
 					cnt = cnt + 1
+				else
+					local a1, a2 = p:match("^(%x+):(%x+):")
+					if a1 then
+						local n2 = a2:gsub("^0+", "")
+						set[string.lower(a1) .. ":" .. string.lower(n2 ~= "" and n2 or "0")] = a
+						cnt = cnt + 1
+					end
 				end
 			end
 		end
@@ -89,7 +96,7 @@ local function z2k_asn_of(desync)
 		if #b >= 4 then
 			local g1 = string.format("%x", b:byte(1) * 256 + b:byte(2))
 			local g2 = string.format("%x", b:byte(3) * 256 + b:byte(4))
-			return set[g1 .. ":" .. g2] or set[g1 .. ":"]
+			return set[g1 .. ":" .. g2]
 		end
 	end
 	return nil

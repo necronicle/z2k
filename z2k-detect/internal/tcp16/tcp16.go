@@ -98,11 +98,14 @@ var padPool = func() string {
 	return string(b)
 }()
 
-// Probe гоняет пробу по одной мишени. sni пустой — идём без SNI (по адресу).
+// Probe гоняет пробу по одной мишени. sni пустой — берём t.SNI из таблицы (если есть), иначе идём по адресу.
 func Probe(ctx context.Context, t Target, sni string) Result {
+	if sni == "" {
+		sni = t.SNI
+	}
 	res := Result{Target: t, SNI: sni}
 
-	d := net.Dialer{Timeout: connectTimeout}
+	d := net.Dialer{Timeout: connectTimeout, Control: markControl}
 	addr := net.JoinHostPort(t.IP, fmt.Sprint(t.Port))
 	start := time.Now()
 	raw, err := d.DialContext(ctx, "tcp", addr)

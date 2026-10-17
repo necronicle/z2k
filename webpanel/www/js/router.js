@@ -43,6 +43,7 @@ const ROUTE_TITLES = {
   whitelist:       "Исключения",
   exclude:         "Исключения",
   "extra-domains": "Доп. домены",
+  autohostlist:    "Доп. домены",
   // «Стратегии» — одна дверь, два вида внутри. Маршрут `state` остался жив
   // ради старых ссылок и закладок: он открывает ту же страницу на вкладке
   // «Автоподбор». Поэтому и заголовок у него тот же — раньше здесь
@@ -61,6 +62,7 @@ const NAV_OF_ROUTE = {
   state: "strategies",
   pick: "strategies",
   whitelist: "exclude",
+  autohostlist: "extra-domains",
 };
 
 export function navigate() {
@@ -80,6 +82,11 @@ export function navigate() {
   const pageTitle = ROUTE_TITLES[name] || "antiDPI для Keenetic";
   document.title = `${pageTitle} · Z2K`;
   closeNavMore();
+  document.querySelectorAll(".modal-backdrop:not([data-job-id])").forEach(el => {
+    const cancelBtn = el.querySelector("#confirm-cancel, #typed-cancel");
+    if (cancelBtn) cancelBtn.click();
+    else el.remove();
+  });
   $app.innerHTML = "";
   routes[name]();
 }
