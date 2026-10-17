@@ -157,7 +157,6 @@ func Run(ctx context.Context, cfg Config) error {
 	defer release()
 
 	e := &Engine{cfg: cfg, st: &status.Writer{Path: cfg.StatusPath, MinInterval: time.Second}, since: cfg.Now()}
-	defer e.st.Remove()
 
 	d, err2 := account.Load(cfg.DevicePath)
 	err = err2
@@ -174,6 +173,7 @@ func Run(ctx context.Context, cfg Config) error {
 		e.st.Flush()
 		return err
 	}
+	defer e.st.Remove()
 	defer e.tearDownTUN()
 
 	// Статус пишем СРАЗУ, ещё до первой ступени: обход лестницы занимает

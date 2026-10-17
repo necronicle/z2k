@@ -108,6 +108,7 @@ ppe:"1",auto_update:"1",autohostlist:"0"}, tunnel:{running:true} },
   "/whitelist": { ok:true, domains:["gosuslugi.ru","sberbank.ru","keenetic.link"] },
   "/exclude": { ok:true, entries:["tiandycloud.com","203.0.113.0/24","2001:db8::1"] },
   "/extra-domains": { ok:true, domains:["example.org","cdnbase.com"] },
+  "/autohostlist-domains": { ok:true, domains:["blocked.example","auto.cdn.org"] },
   "/warp/status": (process.env.Z2K_WARP_MOCK === "uninstalled")
     ? { ok:true, enabled:"0", installed:false, ready:false, transport:"", endpoint:"", iface:"", addr:"", entries:0, devices:0, error:"" }
     : { ok:true, enabled:"1", installed:true, ready:true, transport:"wg", endpoint:"8.6.112.0:2408", iface:"z2ktun0", addr:"172.16.0.2", entries:1234, devices:2, error:"" },

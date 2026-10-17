@@ -1,4 +1,4 @@
-import { apiGet, apiGetText, apiPost, apiPostText, errHtml, toastErr } from "../core/api.js";
+import { apiGet, apiGetText, apiPost, apiPostText, errHtml, errMsg, toastErr } from "../core/api.js";
 import { $app, _icons, escapeHtml, humanAgo, skeletonBlocks, skeletonLines, statusIcon } from "../core/dom.js";
 import { _newLoad, _stale } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
@@ -1008,7 +1008,7 @@ async function warpImport(e) {
     loadWarpLists();
     loadWarpStatus();
   } catch (err) {
-    toast("Ошибка импорта: " + err.message, "bad");
+    toast("Ошибка импорта: " + errMsg(err), "bad");
   } finally {
     if (btn) btn.disabled = false;
   }

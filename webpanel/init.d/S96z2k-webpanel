@@ -310,7 +310,9 @@ stop() {
     _kill_by_pidfile "$SUP_PIDFILE" "S96z2k-webpanel"
     _kill_by_pidfile "$PIDFILE" "$CONF"
     # Belt-and-suspenders: kill any lighttpd running with our config.
-    pkill -f "lighttpd.*$CONF" 2>/dev/null
+    for _p in $(pidof lighttpd 2>/dev/null); do
+        _pid_matches "$_p" "$CONF" && kill "$_p" 2>/dev/null
+    done
     echo "z2k-webpanel stopped"
 }
 

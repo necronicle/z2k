@@ -558,7 +558,7 @@ local function reconcile_external_edits(force)
       if dn and (not lw or tonumber(lw.strategy) ~= dn or lwmode ~= dmode) then
         set_live_nstrategy(askey, hostn, dn)
         if not state[askey] then state[askey] = {} end
-        state[askey][hostn] = { strategy = dn, ts = drec.ts, mode = dmode }
+        state[askey][hostn] = { strategy = dn, ts = drec.ts, mode = dmode, sni = drec.sni }
       end
     end
   end
@@ -669,6 +669,17 @@ if type(circular) == "function" then
           end
           if rec and tonumber(rec.strategy) and tonumber(rec.strategy) ~= 1 then
             hrec.nstrategy = tonumber(rec.strategy)
+            if rec.mode == "frozen" then
+              hrec.final = tonumber(rec.strategy)
+            end
+            if rec.sni then
+              hrec.z2k_sni = rec.sni
+              hrec.z2k_sni_ok = true
+            end
+            if not (state[askey] and state[askey][hostn]) then
+              if not state[askey] then state[askey] = {} end
+              state[askey][hostn] = { mode = rec.mode or "auto", sni = rec.sni }
+            end
             seed_recovered = true
           end
         end

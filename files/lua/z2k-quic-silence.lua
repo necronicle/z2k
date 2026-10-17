@@ -27,7 +27,7 @@ local function packet(p, offset, short_cid)
     local first = p:byte(offset)
     if not first then return nil end
     if first < 128 then
-        if not short_cid or #p - offset + 1 < 1 + #short_cid + 17 then return nil end
+        if not short_cid or #short_cid == 0 or #p - offset + 1 < 1 + #short_cid + 17 then return nil end
         if p:sub(offset + 1, offset + #short_cid) ~= short_cid then return nil end
         return { kind = "short" }, #p + 1
     end

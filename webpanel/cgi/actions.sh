@@ -2282,7 +2282,7 @@ warp_neighbors() {
 # Save and apply as one UI operation. If netfilter rejects the change,
 # restore the saved selection so a failed toggle is not applied later silently.
 warp_devices_commit() {
-    local tmp="$1" f="$WARP_LISTS_DIR/devices.txt" old="$1.old"
+    local tmp="$1" f="$WARP_LISTS_DIR/devices.txt" old="$1.old.$$"
     if [ -f "$f" ]; then
         cp -p "$f" "$old" || return 1
     else
@@ -2302,7 +2302,7 @@ warp_devices_commit() {
 # Включить/выключить устройство по MAC: строка в devices.txt добавляется или
 # убирается; ручные строки (IP, чужие MAC) не трогаются.
 warp_device_toggle() {
-    local mac val="$2" f="$WARP_LISTS_DIR/devices.txt" tmp
+    local mac val="$2" f="$WARP_LISTS_DIR/devices.txt" tmp rc
     mac=$(printf '%s' "$1" | tr 'A-Z-' 'a-z:')
     case "$mac" in
         ??:??:??:??:??:??) ;;
@@ -2310,19 +2310,24 @@ warp_device_toggle() {
     esac
     case "$mac" in *[!0-9a-f:]*) return 1 ;; esac
     warp_lists_ensure_dir || return 1
+    _list_lock "$f" || return 1
     tmp="$WARP_LISTS_DIR/.devices.$$"
     {
         [ -f "$f" ] && awk -v m="$mac" '{ l = tolower($0); gsub(/-/, ":", l); gsub(/^[ \t]+|[ \t]+$/, "", l); if (l != m) print }' "$f"
         [ "$val" = "1" ] && printf '%s\n' "$mac"
         true
-    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    } > "$tmp" || { rm -f "$tmp"; _list_unlock "$f"; return 1; }
     warp_devices_commit "$tmp"
+    rc=$?
+    _list_unlock "$f"
+    return $rc
 }
 
 warp_devices_save() {
     # stdin → devices.txt; stdout: "entries=N dropped=M"
     warp_lists_ensure_dir || return 1
-    local tmp="$WARP_LISTS_DIR/.devices.$$"
+    local f="$WARP_LISTS_DIR/devices.txt" tmp="$WARP_LISTS_DIR/.devices.$$"
+    _list_lock "$f" || return 1
     awk '
     # --- z2k warp SOURCE filter (canonical; keep byte-identical in both copies) ---
     # Поле означает УСТРОЙСТВО В ЛОКАЛЬНОЙ СЕТИ, и фильтр обязан это отражать.
@@ -2352,11 +2357,13 @@ warp_devices_save() {
         if (ip_ok($0)) { print $0; n++; next }
         d++
     }
-    END { printf "entries=%d dropped=%d\n", n, d > "/dev/stderr" }' > "$tmp" 2> "$tmp.stat" || { rm -f "$tmp" "$tmp.stat"; return 1; }
+    END { printf "entries=%d dropped=%d\n", n, d > "/dev/stderr" }' > "$tmp" 2> "$tmp.stat" || { rm -f "$tmp" "$tmp.stat"; _list_unlock "$f"; return 1; }
     if ! warp_devices_commit "$tmp"; then
         rm -f "$tmp" "$tmp.stat"
+        _list_unlock "$f"
         return 1
     fi
+    _list_unlock "$f"
     cat "$tmp.stat"; rm -f "$tmp.stat"
     return 0
 }
@@ -2544,6 +2551,7 @@ warp_list_save() {
     skipped=$((total - saved))
     rm -f "$raw"
 
+    _list_lock "$file" || { rm -f "$tmp"; _warp_create_abort "$mode" "$file"; echo "lock failed" >&2; return 1; }
     if [ "$mode" = "append" ]; then
         touch "$file" 2>/dev/null
         # Файл мог остаться без завершающего перевода строки (правка руками,
@@ -2551,7 +2559,7 @@ warp_list_save() {
         # в 1.2.3.45.6.7.8 — панель рапортует saved=1, а загрузчик ipset и
         # счётчик записей видят НОЛЬ валидных адресов, пропадают оба.
         _list_end_nl "$file"
-        cat "$tmp" >> "$file" || { rm -f "$tmp"; echo "write failed" >&2; return 1; }
+        cat "$tmp" >> "$file" || { rm -f "$tmp"; _list_unlock "$file"; echo "write failed" >&2; return 1; }
     else
         # Подмена целиком, а не `cat "$tmp" > "$file"`: cat СНАЧАЛА обнуляет
         # цель, и обрыв питания или ENOSPC на середине превращал список из 18k
@@ -2559,10 +2567,11 @@ warp_list_save() {
         # пустой ipset. Заявку create (noclobber выше) rename не снимает: имя не
         # освобождается ни на мгновение, оно лишь начинает указывать на новый
         # inode, и параллельный create по-прежнему упирается в занятое имя.
-        _file_replace "$file" "$tmp" || { _warp_create_abort "$mode" "$file"; echo "write failed" >&2; return 1; }
+        _file_replace "$file" "$tmp" || { _list_unlock "$file"; _warp_create_abort "$mode" "$file"; echo "write failed" >&2; return 1; }
     fi
     rm -f "$tmp"
     chmod 644 "$file" 2>/dev/null || true
+    _list_unlock "$file"
     warp_ipset_reload_if_enabled
     printf 'saved=%d saved_ip=%d saved_domain=%d skipped_invalid=%d\n' \
         "${saved:-0}" "${saved_ip:-0}" "${saved_domain:-0}" "${skipped:-0}"

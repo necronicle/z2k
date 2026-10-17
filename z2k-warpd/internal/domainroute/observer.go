@@ -233,9 +233,11 @@ func (o *Observer) Run(ctx context.Context, opts Options) error {
 			return nil
 		case now := <-tick.C:
 			apply(o.SetLocalAddresses(routerAddresses()))
+			rulesOK := false
 			if data, err := os.ReadFile(opts.DomainPath); err == nil {
 				if next, err := ParseRules(data); err == nil {
 					apply(o.ReplaceRules(next, now))
+					rulesOK = true
 				} else {
 					o.setState(false, err)
 				}
@@ -258,6 +260,12 @@ func (o *Observer) Run(ctx context.Context, opts Options) error {
 				reconcile(all)
 			} else {
 				apply(all)
+				kernelMu.Lock()
+				stillPending := needReconcile
+				kernelMu.Unlock()
+				if rulesOK && !stillPending {
+					o.setState(true, nil)
+				}
 			}
 			_ = writeStatus(opts.StatusPath, o.status())
 		}

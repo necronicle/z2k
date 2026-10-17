@@ -466,8 +466,12 @@ panel_challenge_store() {   # challenge host jarfile -> печатает бил�
     for _old in "$_dir"/*; do
         [ -f "$_old" ] || continue
         _t=$(sed -n '1p' "$_old" 2>/dev/null)
-        case "$_t" in ''|*[!0-9]*) rm -f "$_old" 2>/dev/null; continue ;; esac
-        [ $(( $(date +%s) - _t )) -gt "$Z2K_PANEL_CHAL_TTL" ] && rm -f "$_old" 2>/dev/null
+        _j=$(sed -n '3p' "$_old" 2>/dev/null)
+        case "$_t" in ''|*[!0-9]*) [ -n "$_j" ] && rm -f "$_j" 2>/dev/null; rm -f "$_old" 2>/dev/null; continue ;; esac
+        if [ $(( $(date +%s) - _t )) -gt "$Z2K_PANEL_CHAL_TTL" ]; then
+            [ -n "$_j" ] && rm -f "$_j" 2>/dev/null
+            rm -f "$_old" 2>/dev/null
+        fi
     done
     printf '%s' "$_cid"
 }
@@ -485,9 +489,16 @@ panel_challenge_use() {
     PANEL_CHAL_HOST=$(sed -n '2p' "$_f" 2>/dev/null)
     PANEL_CHAL_JAR=$(sed -n '3p' "$_f" 2>/dev/null)
     rm -f "$_f" 2>/dev/null
-    case "$_t" in ''|*[!0-9]*) return 1 ;; esac
-    [ $(( $(date +%s) - _t )) -le "$Z2K_PANEL_CHAL_TTL" ] || return 1
-    [ -n "$PANEL_CHAL_HOST" ] && [ -n "$PANEL_CHAL_JAR" ]
+    case "$_t" in ''|*[!0-9]*) panel_challenge_clear; return 1 ;; esac
+    if [ $(( $(date +%s) - _t )) -gt "$Z2K_PANEL_CHAL_TTL" ]; then
+        panel_challenge_clear
+        return 1
+    fi
+    if [ -z "$PANEL_CHAL_HOST" ] || [ -z "$PANEL_CHAL_JAR" ]; then
+        panel_challenge_clear
+        return 1
+    fi
+    return 0
 }
 
 panel_challenge_clear() {

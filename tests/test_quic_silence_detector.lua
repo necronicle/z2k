@@ -31,6 +31,11 @@ H.test('wrong CID, garbage and truncated replies cannot rearm observation',funct
     H.advance(4)
     for _,p in ipairs({'garbage',H.quic('initial','wrongcid'),H.quic('initial'):sub(1,10)}) do H.step(H.udp(d.track,false,p)) end
     H.advance(2); H.eq(true,c.failure)
+    local d0=H.udp(nil,true,H.quic('initial','destination',''),'quic_initial')
+    local _,c0=H.step(d0)
+    H.step(H.udp(d0.track,false,string.char(0x40)..string.rep('x',24)))
+    H.step(H.udp(d0.track,true,H.quic('short','serverid')))
+    H.eq(nil,c0.nocheck)
 end)
 H.test('bidirectional short traffic ends observation and resets failures',function()
     local d=H.qstart(); local h,c=H.step(d); h.failure_counter=2

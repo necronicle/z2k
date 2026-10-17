@@ -729,6 +729,21 @@ test_corrupt_custom_strategy healthy \
     "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:blob=z2k_custom_marker:strategy=1" \
     "0" "исправный пользовательский файл принимается"
 
+_seed_sni_pick() {
+    local root="$1"
+    mkdir -p "$root/state"
+    printf '1' > "$root/state/tcp16.flag"
+}
+OUT_SP=$(run_generator "sni-pick-ttl" "" "_seed_sni_pick")
+_rkn_sp=$(get_rkn_tcp_arm_line "$OUT_SP" | tr ' ' '\n' | grep -- '--lua-desync=fake:.*blob=z2k_ch' | head -1)
+assert_contains "sni_pick fake: получает fool=z2k_dynamic_ttl при Z2K_DYNAMIC_TTL=1" "fool=z2k_dynamic_ttl" "$_rkn_sp"
+assert_contains "sni_pick fake: получает рандомизацию repeats=6-10" "repeats=6-10" "$_rkn_sp"
+
+OUT_SP_NOTTL=$(run_generator "sni-pick-nottl" "Z2K_DYNAMIC_TTL=0" "_seed_sni_pick")
+_rkn_sp_nottl=$(get_rkn_tcp_arm_line "$OUT_SP_NOTTL" | tr ' ' '\n' | grep -- '--lua-desync=fake:.*blob=z2k_ch' | head -1)
+assert_not_contains "sni_pick fake: без fool=z2k_dynamic_ttl при Z2K_DYNAMIC_TTL=0" "fool=z2k_dynamic_ttl" "$_rkn_sp_nottl"
+assert_contains "sni_pick fake: сохраняет repeats=6-10 при Z2K_DYNAMIC_TTL=0" "repeats=6-10" "$_rkn_sp_nottl"
+
 rm -rf "$MOCK_DIR"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

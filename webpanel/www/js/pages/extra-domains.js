@@ -63,11 +63,12 @@ async function loadAutohostlistDomains() {
   try {
     const d = await apiGet("/autohostlist-domains");
     if (_stale("autohostDomains", seq)) return;
-    if (!d.domains.length) {
+    const domains = Array.isArray(d && d.domains) ? d.domains : [];
+    if (!domains.length) {
       list.innerHTML = `<li style="color:var(--text-muted)">(пока ничего не найдено)</li>`;
       return;
     }
-    list.innerHTML = d.domains.map(dom => `
+    list.innerHTML = domains.map(dom => `
       <li><span>${escapeHtml(dom)}</span><button class="btn-icon" title="Удалить" aria-label="Удалить ${escapeHtml(dom)}" data-del="${escapeHtml(dom)}">${_icons.close}</button></li>
     `).join("");
     list.querySelectorAll("button[data-del]").forEach(btn => {

@@ -1266,10 +1266,12 @@ z2k_ensure_user_exclude_file()
 {
 	local f="${ZAPRET_BASE}/ipset/zapret-hosts-user-exclude.txt"
 	local doc="${ZAPRET_BASE}/ipset/zapret-hosts-user-exclude.README.txt"
+	local tmp="/tmp/z2k_excl_readme.$$"
 	mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
 
-	# Документация наша, не пользовательская — обновляем всегда.
-	cat > "$doc" <<'Z2KEXCL'
+	# Документация наша, не пользовательская — обновляем только при изменении текста,
+	# чтобы не изнашивать NAND/USB-флешку при каждом вызове start_fw из NDM-хука.
+	cat > "$tmp" 2>/dev/null <<'Z2KEXCL'
 Исключения из обхода — ПО АДРЕСАТУ.
 
 Файл: zapret-hosts-user-exclude.txt (рядом с этим)
@@ -1305,6 +1307,12 @@ WebRTC) ломаются от модификации их пакетов. Впи
 
 Удобнее всего править через веб-панель: «Исключения» → «Адреса».
 Z2KEXCL
+	if [ -f "$tmp" ]; then
+		if [ ! -f "$doc" ] || ! cmp -s "$tmp" "$doc" 2>/dev/null; then
+			cp "$tmp" "$doc" 2>/dev/null || true
+		fi
+		rm -f "$tmp" 2>/dev/null
+	fi
 
 	[ -e "$f" ] && return 0
 	: > "$f" 2>/dev/null || return 0
@@ -2970,7 +2978,7 @@ status()
         if [ -f "$pidfile" ]; then
             local PID
             PID=$(cat "$pidfile")
-            if kill -0 $PID 2>/dev/null; then
+            if z2k_pid_running "$PID"; then
                 echo "nfqws2 daemon running (PID $PID)"
                 running=$((running + 1))
             else

@@ -75,12 +75,14 @@ func (s PairSet) removeMark(client netip.Addr, name string) {
 	}
 }
 func (s PairSet) Apply(changes []Change, now time.Time) error {
+	ensured := make(map[string]bool)
 	for _, ch := range changes {
 		name, err := clientSet(ch.Client)
 		if err != nil || !EligibleDestination(ch.Dest) {
 			return errors.New("invalid WARP DNS pair")
 		}
 		if ch.Delete {
+			delete(ensured, name)
 			_, _ = s.ipset("del", name, ch.Dest.String(), "-exist")
 			saved, err := s.ipset("save", name)
 			if err == nil && !strings.Contains(string(saved), "\nadd ") {
@@ -89,8 +91,10 @@ func (s PairSet) Apply(changes []Change, now time.Time) error {
 			}
 			continue
 		}
-		if out, err := s.ipset("create", name, "hash:ip", "family", "inet", "timeout", "3600", "maxelem", "8192", "-exist"); err != nil {
-			return fmt.Errorf("create WARP DNS set: %w: %s", err, out)
+		if !ensured[name] {
+			if out, err := s.ipset("create", name, "hash:ip", "family", "inet", "timeout", "3600", "maxelem", "8192", "-exist"); err != nil {
+				return fmt.Errorf("create WARP DNS set: %w: %s", err, out)
+			}
 		}
 		seconds := int(ch.Expiry.Sub(now).Seconds())
 		if ch.Expiry.After(now.Add(time.Duration(seconds) * time.Second)) {
@@ -105,8 +109,11 @@ func (s PairSet) Apply(changes []Change, now time.Time) error {
 		if out, err := s.ipset("add", name, ch.Dest.String(), "timeout", fmt.Sprint(seconds), "-exist"); err != nil {
 			return fmt.Errorf("add WARP DNS address: %w: %s", err, out)
 		}
-		if err := s.ensureMark(ch.Client, name); err != nil {
-			return err
+		if !ensured[name] {
+			if err := s.ensureMark(ch.Client, name); err != nil {
+				return err
+			}
+			ensured[name] = true
 		}
 	}
 	return nil

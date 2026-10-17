@@ -1514,6 +1514,8 @@ generate_nfqws2_opt_from_strategies() {
         # участвует (решение Марка 10.09.2026).
         sni_pick="--lua-desync=z2k_sni_pick:payload=tls_client_hello:dir=out:blob=z2k_ch${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
         sni_pick="$sni_pick --lua-desync=fake:payload=tls_client_hello:dir=out:blob=z2k_ch:optional:repeats=8:tcp_ts=-1000"
+        [ "$Z2K_DYNAMIC_TTL" != "0" ] && sni_pick=$(inject_z2k_dynamic_ttl "$sni_pick")
+        sni_pick=$(inject_z2k_range_rand "$sni_pick")
     fi
 
     if [ -n "$rkn_circ" ]; then

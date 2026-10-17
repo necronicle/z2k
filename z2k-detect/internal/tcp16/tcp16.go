@@ -102,7 +102,7 @@ var padPool = func() string {
 func Probe(ctx context.Context, t Target, sni string) Result {
 	res := Result{Target: t, SNI: sni}
 
-	d := net.Dialer{Timeout: connectTimeout}
+	d := net.Dialer{Timeout: connectTimeout, Control: markControl}
 	addr := net.JoinHostPort(t.IP, fmt.Sprint(t.Port))
 	start := time.Now()
 	raw, err := d.DialContext(ctx, "tcp", addr)

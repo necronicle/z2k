@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -487,6 +488,14 @@ func TestMissingDeviceJSON(t *testing.T) {
 	cfg := Config{DevicePath: filepath.Join(dir, "none.json"), StatusPath: filepath.Join(dir, "status.json")}
 	if err := Run(context.Background(), cfg); err == nil {
 		t.Fatal("want error")
+	}
+	b, err := os.ReadFile(cfg.StatusPath)
+	if err != nil {
+		t.Fatalf("status.json was removed on startup error: %v", err)
+	}
+	var st status.Status
+	if err := json.Unmarshal(b, &st); err != nil || st.LastError != status.ErrRegisterBlocked {
+		t.Fatalf("unexpected status after missing device.json: %+v (err=%v)", st, err)
 	}
 }
 
