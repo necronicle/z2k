@@ -230,8 +230,8 @@ panel_session_ttl_allowed() {
 
 # Read a small allowlisted value, never source the persistent file as shell.
 panel_session_ttl_current() {
-    local value
-    value=$(cat "$Z2K_PANEL_SESS_TTL_FILE" 2>/dev/null)
+    local value=""
+    [ -r "$Z2K_PANEL_SESS_TTL_FILE" ] && IFS= read -r value < "$Z2K_PANEL_SESS_TTL_FILE" 2>/dev/null
     panel_session_ttl_allowed "$value" && { printf '%s' "$value"; return 0; }
     printf '%s' "$Z2K_PANEL_SESS_TTL_DEFAULT"
 }
@@ -364,12 +364,12 @@ panel_session_valid() {
     [ -n "$_sid" ] || return 1
     _f="$Z2K_PANEL_SESS_DIR/$_sid"
     [ -f "$_f" ] || return 1
-    _ts=$(sed -n '1p' "$_f" 2>/dev/null)
+    _ts=""; _u=""; _ip=""; _sess_ttl=""
+    { IFS= read -r _ts || true; IFS= read -r _u || true; IFS= read -r _ip || true; IFS= read -r _sess_ttl || true; } < "$_f" 2>/dev/null
     # Мусор вместо метки времени — это не «сессия свежая», это испорченный
     # файл. Считать его валидным значит принять чужую подделку.
     case "$_ts" in ''|*[!0-9]*) rm -f "$_f" 2>/dev/null; return 1 ;; esac
     _age=$(( $(date +%s) - _ts ))
-    _sess_ttl=$(sed -n '4p' "$_f" 2>/dev/null)
     # Session lifetime is fixed when a login succeeds. A legacy session file
     # has no fourth line and retains the old two-hour limit.
     panel_session_ttl_allowed "$_sess_ttl" || _sess_ttl=7200
@@ -382,7 +382,6 @@ panel_session_valid() {
     # Совпадение адреса не спасает от соседа, подменившего себе адрес, — но
     # отсекает пассивное подслушивание, а это ровно тот случай, ради которого
     # пароль и вводили. Записи без адреса (старый формат) не принимаем.
-    _ip=$(sed -n '3p' "$_f" 2>/dev/null)
     [ -n "$_ip" ] || { rm -f "$_f" 2>/dev/null; return 1; }
     [ "$_ip" = "${REMOTE_ADDR:-?}" ] || return 1
     return 0
@@ -460,15 +459,16 @@ panel_challenge_store() {   # challenge host jarfile -> печатает бил�
     _dir="$Z2K_PANEL_SESS_DIR/chal"
     _panel_mkdir_private "$_dir" || return 1
     _cid=$(_panel_random_hex) || return 1
-    printf '%s\n%s\n%s\n' "$(date +%s)" "$2" "$3" > "$_dir/$_cid" || return 1
+    _now=$(date +%s)
+    printf '%s\n%s\n%s\n' "$_now" "$2" "$3" > "$_dir/$_cid" || return 1
     chmod 600 "$_dir/$_cid" 2>/dev/null || true
     # Старые билеты подчищаем здесь же: отдельного уборщика на роутере нет.
     for _old in "$_dir"/*; do
         [ -f "$_old" ] || continue
-        _t=$(sed -n '1p' "$_old" 2>/dev/null)
-        _j=$(sed -n '3p' "$_old" 2>/dev/null)
+        _t=""; _h=""; _j=""
+        { IFS= read -r _t || true; IFS= read -r _h || true; IFS= read -r _j || true; } < "$_old" 2>/dev/null
         case "$_t" in ''|*[!0-9]*) [ -n "$_j" ] && rm -f "$_j" 2>/dev/null; rm -f "$_old" 2>/dev/null; continue ;; esac
-        if [ $(( $(date +%s) - _t )) -gt "$Z2K_PANEL_CHAL_TTL" ]; then
+        if [ $(( _now - _t )) -gt "$Z2K_PANEL_CHAL_TTL" ]; then
             [ -n "$_j" ] && rm -f "$_j" 2>/dev/null
             rm -f "$_old" 2>/dev/null
         fi
@@ -485,9 +485,8 @@ panel_challenge_use() {
     [ "${#_cid}" -ge 16 ] || return 1
     _f="$Z2K_PANEL_SESS_DIR/chal/$_cid"
     [ -f "$_f" ] || return 1
-    _t=$(sed -n '1p' "$_f" 2>/dev/null)
-    PANEL_CHAL_HOST=$(sed -n '2p' "$_f" 2>/dev/null)
-    PANEL_CHAL_JAR=$(sed -n '3p' "$_f" 2>/dev/null)
+    _t=""
+    { IFS= read -r _t || true; IFS= read -r PANEL_CHAL_HOST || true; IFS= read -r PANEL_CHAL_JAR || true; } < "$_f" 2>/dev/null
     rm -f "$_f" 2>/dev/null
     case "$_t" in ''|*[!0-9]*) panel_challenge_clear; return 1 ;; esac
     if [ $(( $(date +%s) - _t )) -gt "$Z2K_PANEL_CHAL_TTL" ]; then
@@ -508,11 +507,23 @@ panel_challenge_clear() {
 
 panel_session_create() {
     _panel_mkdir_private "$Z2K_PANEL_SESS_DIR" || return 1
+    _now=$(date +%s)
+    # Просроченные и битые файлы сессий подчищаем при новом входе, чтобы не копились в tmpfs.
+    for _old in "$Z2K_PANEL_SESS_DIR"/*; do
+        [ -f "$_old" ] || continue
+        _ot=""; _ou=""; _oip=""; _ottl=""
+        { IFS= read -r _ot || true; IFS= read -r _ou || true; IFS= read -r _oip || true; IFS= read -r _ottl || true; } < "$_old" 2>/dev/null
+        case "$_ot" in ''|*[!0-9]*) rm -f "$_old" 2>/dev/null; continue ;; esac
+        panel_session_ttl_allowed "$_ottl" || _ottl=7200
+        if [ $(( _now - _ot )) -gt "$_ottl" ]; then
+            rm -f "$_old" 2>/dev/null
+        fi
+    done
     _sid=$(_panel_random_hex) || return 1
     # Вторая строка — логин, третья — адрес клиента: сессия привязывается к
     # тому, кто её открыл. Кука ходит по открытому HTTP, и без привязки
     # перехваченный заголовок давал бы полный вход на все 12 часов.
-    printf '%s\n%s\n%s\n%s\n' "$(date +%s)" "${1:-?}" "${REMOTE_ADDR:-?}" "$Z2K_PANEL_SESS_TTL" \
+    printf '%s\n%s\n%s\n%s\n' "$_now" "${1:-?}" "${REMOTE_ADDR:-?}" "$Z2K_PANEL_SESS_TTL" \
         > "$Z2K_PANEL_SESS_DIR/$_sid" || return 1
     chmod 600 "$Z2K_PANEL_SESS_DIR/$_sid" 2>/dev/null || true
     printf '%s' "$_sid"

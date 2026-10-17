@@ -2592,7 +2592,7 @@ start_fw()
     fi
 
     if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] && [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" ]; then
-        ( sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable >/dev/null 2>&1 ) &
+        ( sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" selfheal >/dev/null 2>&1 ) &
     fi
 
     return 0

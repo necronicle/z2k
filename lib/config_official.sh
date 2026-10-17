@@ -1658,6 +1658,8 @@ generate_nfqws2_opt_from_strategies() {
 
     # HTTP shares the same retrans/reset policy as TLS.
     http_rkn=$(ensure_circular_doc_args "$http_rkn")
+    http_rkn=$(inject_z2k_dynamic_ttl "$http_rkn")
+    http_rkn=$(inject_z2k_range_rand "$http_rkn")
     # HTTP-пул создаётся после общей проводки: подключаем обёртку здесь.
     if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-alert.lua" ]; then
         http_rkn=$(ensure_rkn_failure_detector "$http_rkn" "z2k_fail_tls_alert")

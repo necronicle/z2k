@@ -271,6 +271,7 @@ func findJointPoison(ctx context.Context, addr string, tr Trigger, opt Options, 
 		// свойства основного замера трогать нельзя.
 		v := opt
 		v.Only = p.name
+		v.onlyPoison = &p
 		scratch := Result{}
 		_, ok := sweepPoisons(ctx, addr, tr, v, &scratch)
 		liftTrace(res, &scratch, "tls13:")

@@ -60,6 +60,7 @@ function warpPendingUI() {
   if (_warpJob) {
     _warpPoll = setInterval(() => {
       if (!document.getElementById("warp-status-grid")) { clearInterval(_warpPoll); _warpPoll = null; return; }
+      if (typeof document.hidden === "boolean" && document.hidden) return;
       loadWarpStatus();
     }, 3000);
   }
@@ -127,6 +128,15 @@ function fmtSize(b) {
   return (b / 1048576).toFixed(1) + " МБ";
 }
 
+function filterWarpGames(query) {
+  const q = String(query || "").trim().toLowerCase();
+  document.querySelectorAll("#warp-games .toggle-row[data-game], #warp-own .toggle-row[data-own]").forEach(row => {
+    const key = (row.getAttribute("data-game") || row.getAttribute("data-own") || "").toLowerCase();
+    const label = (row.querySelector(".t-name")?.textContent || "").toLowerCase();
+    row.hidden = q.length > 0 && !key.includes(q) && !label.includes(q);
+  });
+}
+
 export async function renderWarp() {
   $app.innerHTML = `
     <h1 class="page-title">WARP</h1>
@@ -189,6 +199,10 @@ export async function renderWarp() {
         чем меньше направлений в туннеле, тем меньше на него завязано. Списки только для
         чтения; свои домены и адреса добавляйте ниже, отдельным списком.
       </p>
+      <div class="probe-row" style="margin-bottom:10px">
+        <input type="search" id="warp-games-search" placeholder="Поиск игры или сервиса (например, Steam, Roblox, Discord)…"
+               autocomplete="off" autocapitalize="none" spellcheck="false">
+      </div>
       <div id="warp-games" class="warp-games">${skeletonBlocks(3)}</div>
       <div class="warp-own" id="warp-own" hidden>
         <h4 class="warp-own-title">Свои списки</h4>
@@ -255,6 +269,10 @@ export async function renderWarp() {
   `;
   const box = $app.querySelector('[data-key="game_warp"] input');
   box.addEventListener("change", () => warpToggle(box));
+  const gamesSearch = document.getElementById("warp-games-search");
+  if (gamesSearch) {
+    gamesSearch.addEventListener("input", () => filterWarpGames(gamesSearch.value));
+  }
   document.getElementById("warp-wdtt-toggle").addEventListener("change", (e) => warpWdttToggle(e.target));
   document.getElementById("warp-install-btn").addEventListener("click", warpInstall);
   document.getElementById("warp-remove-btn").addEventListener("click", warpRemove);
@@ -329,6 +347,7 @@ async function loadWarpNeighbors() {
   host.querySelectorAll("[data-mac] input").forEach(box => {
     box.addEventListener("change", () => warpNeighborToggle(box));
   });
+  _updateGlobalUILock();
 }
 
 async function warpNeighborToggle(box) {
@@ -392,6 +411,9 @@ async function loadWarpGames() {
   host.querySelectorAll("[data-game] input").forEach(box => {
     box.addEventListener("change", () => warpGameToggle(box));
   });
+  const gamesSearch = document.getElementById("warp-games-search");
+  if (gamesSearch && gamesSearch.value) filterWarpGames(gamesSearch.value);
+  _updateGlobalUILock();
 }
 
 async function warpGameToggle(box) {
@@ -833,6 +855,7 @@ async function loadWarpLists() {
     list.querySelectorAll("button[data-del]").forEach(b => {
       b.addEventListener("click", () => warpDelete(b.dataset.del));
     });
+    _updateGlobalUILock();
   } catch (e) {
     if (_stale("warpLists", seq)) return;
     list.innerHTML = `<li style="color:var(--bad)">${errHtml(e)}</li>`;
@@ -865,6 +888,9 @@ function renderOwnToggles(lists) {
   host.querySelectorAll("[data-own] input").forEach(cb => {
     cb.addEventListener("change", () => warpOwnToggle(cb));
   });
+  const gamesSearch = document.getElementById("warp-games-search");
+  if (gamesSearch && gamesSearch.value) filterWarpGames(gamesSearch.value);
+  _updateGlobalUILock();
 }
 
 async function warpOwnToggle(box) {

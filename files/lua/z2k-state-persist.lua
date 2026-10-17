@@ -483,7 +483,7 @@ local reconcile_interval = 2   -- seconds
 -- "nohost" row therefore resets the WHOLE pool to strategy 1 — that's the only
 -- coherent semantic (there's one shared record), and "× = reset this bucket to
 -- 1" is exactly what the operator asked, so we accept the wide reset.
-local function set_live_nstrategy(askey, hostn, n)
+local function set_live_nstrategy(askey, hostn, n, sni, update_sni)
   local ah = autostate and autostate[askey]
   if not ah then return end
   for hostkey, arec in pairs(ah) do
@@ -491,6 +491,10 @@ local function set_live_nstrategy(askey, hostn, n)
       arec.nstrategy = n
       -- A manual reset to the same number is still a new attempt generation.
       arec.generation = nil
+      if update_sni then
+        arec.z2k_sni = sni
+        arec.z2k_sni_ok = (sni ~= nil) or nil
+      end
       -- Вместе со стратегией обнуляем накопленные неудачи хоста.
       --
       -- Момент, когда человек жмёт «×» или выбирает стратегию руками, — это
@@ -538,7 +542,7 @@ local function reconcile_external_edits(force)
   for askey, hosts in pairs(last_written) do
     for hostn in pairs(hosts) do
       if not (disk[askey] and disk[askey][hostn]) then
-        set_live_nstrategy(askey, hostn, 1)
+        set_live_nstrategy(askey, hostn, 1, nil, true)
         if state[askey] then state[askey][hostn] = nil end
       end
     end
@@ -555,10 +559,12 @@ local function reconcile_external_edits(force)
       -- strategy would be ignored until the strategy itself changed.
       local dmode = drec.mode or "auto"
       local lwmode = (lw and lw.mode) or "auto"
-      if dn and (not lw or tonumber(lw.strategy) ~= dn or lwmode ~= dmode) then
-        set_live_nstrategy(askey, hostn, dn)
+      local dsni = drec.sni
+      local lwsni = lw and lw.sni
+      if dn and (not lw or tonumber(lw.strategy) ~= dn or lwmode ~= dmode or lwsni ~= dsni) then
+        set_live_nstrategy(askey, hostn, dn, dsni, true)
         if not state[askey] then state[askey] = {} end
-        state[askey][hostn] = { strategy = dn, ts = drec.ts, mode = dmode, sni = drec.sni }
+        state[askey][hostn] = { strategy = dn, ts = drec.ts, mode = dmode, sni = dsni }
       end
     end
   end
@@ -734,6 +740,9 @@ if type(circular) == "function" then
         -- outgoing-initial fallback triggers a save; server-active never pins.
         if (success_event or outgoing_initial or seed_recovered) and not server_active_event then
           persist_if_changed(askey, hostn, hrec)
+        elseif seed_recovered and n_after and state[askey] and state[askey][hostn] and not state[askey][hostn].strategy then
+          state[askey][hostn].strategy = n_after
+          state[askey][hostn].ts = now_t()
         end
       end)
     end

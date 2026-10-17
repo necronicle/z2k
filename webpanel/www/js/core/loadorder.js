@@ -100,6 +100,10 @@ function syncServiceButtons(svc) {
     show(startBtn, true);
     show(restartBtn, false);
     show(stopBtn, false);
+  } else if (svc === undefined) {
+    show(startBtn, true);
+    show(restartBtn, true);
+    show(stopBtn, true);
   } else {
     show(startBtn, false);
     show(restartBtn, false);

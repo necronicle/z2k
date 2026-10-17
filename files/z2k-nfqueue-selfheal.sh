@@ -67,13 +67,18 @@ log() {
         >> "$SELFHEAL_LOG" 2>/dev/null || true
 }
 
+# Значение из конфига без кавычек (последнее присваивание побеждает, как при сорсинге).
+cfg_val() {
+    sed -n "s/^$1=//p" "$ZAPRET_CONFIG" 2>/dev/null | tail -n 1 | tr -d "\"'"
+}
+
 # --- Preconditions (cheapest first; every miss is a silent no-op) ------------
 
 # init script present + runnable
 [ -x "$INIT_SCRIPT" ] || exit 0
 
 # feature enabled by the user
-grep -q '^ENABLED=1' "$ZAPRET_CONFIG" 2>/dev/null || exit 0
+[ "$(cfg_val ENABLED)" = "1" ] || exit 0
 
 # nfqws2 actually running — else re-applying would queue traffic to a dead
 # consumer (same guard the netfilter.d hook uses).
@@ -117,7 +122,7 @@ fastnat_reassert
 # Use exactly the same main-table discovery as start_fw.
 # shellcheck source=lib/wan.sh
 . "${Z2K_WAN_LIB:-/opt/zapret2/lib/wan.sh}"
-wan_iface="$(sed -n 's/^WAN_IFACE=//p' "$ZAPRET_CONFIG" 2>/dev/null | tail -n 1 | tr -d "\"'")"
+wan_iface="$(cfg_val WAN_IFACE)"
 
 # A family (v4/v6) is BROKEN == its NFQUEUE rules are gone WHILE ITS WAN IS UP.
 # The WAN gate is essential and per-family: a family with no WAN legitimately has
@@ -136,7 +141,7 @@ wan_iface="$(sed -n 's/^WAN_IFACE=//p' "$ZAPRET_CONFIG" 2>/dev/null | tail -n 1 
 # storm. Now: -w waits for the lock instead of failing; if the dump STILL errors,
 # the table state is UNKNOWN → treat as NOT missing (return 1) rather than firing.
 nfq_missing() {   # $1 = iptables|ip6tables ; $2 = -4|-6
-    local _wan _iface _dir
+    local _wan _iface _dir _dump _n _p _c
     _wan=$(z2k_wan_ifaces "$2" "$wan_iface") || return 1
     [ -n "$_wan" ] || return 1
     # A dump that fails even WITH -w is not lock contention (that -w waits out) —
@@ -197,11 +202,6 @@ nfq_missing() {   # $1 = iptables|ip6tables ; $2 = -4|-6
     return 1
 }
 
-# Значение из конфига без кавычек (последнее присваивание побеждает, как при сорсинге).
-cfg_val() {
-    sed -n "s/^$1=//p" "$ZAPRET_CONFIG" 2>/dev/null | tail -n 1 | tr -d "\"'"
-}
-
 # Цепочки, в которых конфиг требует NFQUEUE-правило для протокола $1.
 # NFQWS2_ENABLE=0 — движок правил не ставит вовсе, ждать нечего.
 nfq_expected_chains() {
@@ -222,10 +222,10 @@ nfq_expected_chains() {
 # family, поэтому опрашивать его нельзя — иначе 0 правил < FLOOR = вечная «поломка»
 # → бесконечный re-apply на DISABLE_IPV4=1-боксе с живым v4-роутом (fix #1).
 any_family_missing() {
-    if ! grep -q '^DISABLE_IPV4=1' "$ZAPRET_CONFIG" 2>/dev/null; then
+    if [ "$(cfg_val DISABLE_IPV4)" != "1" ]; then
         nfq_missing iptables -4 && return 0
     fi
-    if ! grep -q '^DISABLE_IPV6=1' "$ZAPRET_CONFIG" 2>/dev/null \
+    if [ "$(cfg_val DISABLE_IPV6)" != "1" ] \
        && command -v ip6tables >/dev/null 2>&1; then
         nfq_missing ip6tables -6 && return 0
     fi

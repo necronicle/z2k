@@ -55,7 +55,7 @@ func (o *Observer) SetLocalAddresses(addresses []netip.Addr) []Change {
 	var changes []Change
 	for k := range o.cache.pairs {
 		if _, owned := o.local[k.dest]; owned {
-			delete(o.cache.pairs, k)
+			o.cache.deletePair(k)
 			changes = append(changes, Change{Client: k.client, Dest: k.dest, Delete: true})
 		}
 	}
