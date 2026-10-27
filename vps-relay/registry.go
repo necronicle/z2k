@@ -273,28 +273,8 @@ var (
 	regRateMu sync.Mutex
 	regRate   = map[string]*ipBucket{}
 
-	rateBlindMu   sync.Mutex
-	rateBlindLast time.Time
-	rateBlindN    int64
+	rateBlind = &blindWarn{msg: "ВНИМАНИЕ: /register видит петлевой адрес (%d запросов) — прокси не передаёт настоящий адрес клиента, ограничитель частоты отключён, иначе он запер бы весь парк"}
 )
-
-// rateBlindWarn жалуется, что настоящий адрес клиента до нас не доходит, но не
-// чаще раза в минуту — иначе на потоке в тысячу туннелей журнал захлебнётся.
-func rateBlindWarn() {
-	rateBlindMu.Lock()
-	rateBlindN++
-	n := rateBlindN
-	now := time.Now()
-	shout := now.Sub(rateBlindLast) >= time.Minute
-	if shout {
-		rateBlindLast = now
-		rateBlindN = 0
-	}
-	rateBlindMu.Unlock()
-	if shout {
-		log.Printf("ВНИМАНИЕ: /register видит петлевой адрес (%d запросов) — прокси не передаёт настоящий адрес клиента, ограничитель частоты отключён, иначе он запер бы весь парк", n)
-	}
-}
 
 func registerRateOK(ip string) bool {
 	if *registerRatePerMin <= 0 {
@@ -312,7 +292,7 @@ func registerRateOK(ip string) bool {
 	// Если адреса нет, он этой задачи не решает и решать не может, поэтому не
 	// душим, а ГРОМКО жалуемся: тихий отказ здесь уже стоил месяца простоя.
 	if ip == "" || ip == "127.0.0.1" || ip == "::1" {
-		rateBlindWarn()
+		rateBlind.warn()
 		return true
 	}
 	regRateMu.Lock()
@@ -597,28 +577,7 @@ func authIPBlind(ip string) bool {
 	return p == nil || p.IsLoopback()
 }
 
-var (
-	authBlindMu   sync.Mutex
-	authBlindLast time.Time
-	authBlindN    int
-)
-
-// authBlindWarn — не чаще раза в минуту, как rateBlindWarn.
-func authBlindWarn() {
-	authBlindMu.Lock()
-	authBlindN++
-	n := authBlindN
-	now := time.Now()
-	shout := now.Sub(authBlindLast) >= time.Minute
-	if shout {
-		authBlindLast = now
-		authBlindN = 0
-	}
-	authBlindMu.Unlock()
-	if shout {
-		log.Printf("ВНИМАНИЕ: кэш повторов видит петлевой адрес (%d кадров) — прокси не передаёт настоящий адрес клиента, дубли подписи отвергаются строго", n)
-	}
-}
+var authBlind = &blindWarn{msg: "ВНИМАНИЕ: кэш повторов видит петлевой адрес (%d кадров) — прокси не передаёт настоящий адрес клиента, дубли подписи отвергаются строго"}
 
 type authSighting struct {
 	ip string
@@ -646,7 +605,7 @@ func authReplaySeen(sig []byte, ip string) bool {
 		// весь парк сходится в один ключ. Тогда возвращаемся к строгому
 		// одноразовому кадру и жалуемся в журнал, а не принимаем всё подряд.
 		if authIPBlind(ip) {
-			authBlindWarn()
+			authBlind.warn()
 			return true
 		}
 		if e.ip != ip {

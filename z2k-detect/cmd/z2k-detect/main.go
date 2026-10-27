@@ -355,7 +355,7 @@ func probeCmd(ctx context.Context, rest []string) {
 	fmt.Printf("Domain:  %s\n", res.Domain)
 	fmt.Printf("Probe:   DNS=%s TCP=%s TLS=%s HTTP=%s  (%dms)\n",
 		okStr(&res.DNSOK), okStr(&res.TCPOK), okStr(&res.TLSOK),
-		okStrPtr(res.HTTPOK), res.LatencyMS)
+		okStr(res.HTTPOK), res.LatencyMS)
 	if len(res.ResolvedIPs) > 0 {
 		fmt.Printf("IPs:     %s\n", joinIPs(res.ResolvedIPs))
 	}
@@ -434,16 +434,6 @@ func probeCmd(ctx context.Context, rest []string) {
 }
 
 func okStr(b *bool) string {
-	if b == nil {
-		return "skip"
-	}
-	if *b {
-		return "ok"
-	}
-	return "fail"
-}
-
-func okStrPtr(b *bool) string {
 	if b == nil {
 		return "skip"
 	}
