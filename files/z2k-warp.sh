@@ -1156,6 +1156,9 @@ warp_status() {
     domain_error=$(_json_str "$WARP_DOMAIN_STATUS" error)
     [ -f "$WARP_DOMAIN_STATUS" ] || domain_error=unavailable
     domain_error=$(printf '%s' "$domain_error" | tr ' \t\r\n' '_' | cut -c1-120)
+    local last_error
+    last_error=$(_json_str "$WARP_STATUS" last_error)
+    last_error=$(printf '%s' "$last_error" | tr ' \t\r\n' '_' | cut -c1-120)
     # scope — что сейчас заворачивается: off, all (весь трафик сети),
     # devices (весь трафик выбранных устройств), lists (адреса из списков).
     local scope=lists
@@ -1167,7 +1170,7 @@ warp_status() {
         "$installed" "${GAME_WARP_ENABLED_OVERRIDE:-$(warp_flag)}" "$ready" \
         "$(_json_str "$WARP_STATUS" transport)" "$(_json_str "$WARP_STATUS" endpoint)" \
         "$(_json_str "$WARP_STATUS" iface)" "$(_json_str "$WARP_STATUS" addr)" \
-        "${entries:-0}" "${devices:-0}" "$(_json_str "$WARP_STATUS" last_error)" \
+        "${entries:-0}" "${devices:-0}" "$last_error" \
         "$(_json_raw "$WARP_STATUS" mem_kb)" "$plan" "$plan_err" "$lic" \
         "$domain_active" "${domain_rules:-0}" "${domain_pairs:-0}" "$domain_error" \
         "$(_json_str "$WARP_STATUS" edge_colo)" "$(_json_str "$WARP_STATUS" edge_country)" \

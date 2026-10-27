@@ -280,6 +280,10 @@ assert_eq "status: edge location and RTT" "edge_colo=FRA edge_country=DE edge_rt
 rm -f "$SB/tmp/status.json"
 st=$(W status 2>/dev/null)
 assert_eq "status: no status file → ready=0" "ready=0" "$(printf '%s' "$st" | grep -o 'ready=[01]')"
+ready false "handshake timeout: peer unreachable"
+st=$(W status 2>/dev/null)
+assert_eq "status: пробелы в last_error заменяются на подчёркивания" "error=handshake_timeout:_peer_unreachable" "$(printf '%s' "$st" | grep -o ' error=[^ ]*' | tr -d ' ')"
+rm -f "$SB/tmp/status.json"
 
 # ---------- весь трафик: WARP включён, ничего не выбрано ----------
 # Решение владельца 11.10.2026: включённый WARP без выбранных устройств и без

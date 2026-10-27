@@ -78,6 +78,32 @@ for f in files/z2k-auto-update.sh files/z2k-update-lists.sh; do
     assert_eq "$(basename $f): разброс применяется" "yes" \
         "$(grep -q 'z2k_host_jitter' "$ROOT/$f" && echo yes || echo no)"
 done
+assert_eq "z2k-update-lists.sh: z2k_host_jitter определён автономно (без lib/utils.sh)" "yes" \
+    "$( ( unset -f z2k_host_jitter 2>/dev/null; Z2K_UL_SOURCE_ONLY=1 . "$ROOT/files/z2k-update-lists.sh" </dev/null 2>/dev/null; command -v z2k_host_jitter >/dev/null 2>&1 && echo yes || echo no ) )"
+
+# Копия z2k_host_jitter в files/z2k-update-lists.sh обязана совпадать с
+# оригиналом в lib/utils.sh байт в байт (со снятием внешнего отступа if-блока).
+extract_jitter_fn() {
+    awk '
+        /^[[:space:]]*z2k_host_jitter\(\)[[:space:]]*\{/ {
+            in_fn = 1
+            match($0, /^[[:space:]]*/)
+            indent = RLENGTH
+        }
+        in_fn {
+            line = $0
+            if (indent > 0 && substr(line, 1, indent) ~ /^[[:space:]]+$/) {
+                line = substr(line, indent + 1)
+            }
+            print line
+            if (line == "}") exit
+        }
+    ' "$1"
+}
+_fn_utils=$(extract_jitter_fn "$ROOT/lib/utils.sh")
+_fn_ul=$(extract_jitter_fn "$ROOT/files/z2k-update-lists.sh")
+assert_eq "z2k_host_jitter: извлечён из lib/utils.sh" "yes" "$([ -n "$_fn_utils" ] && echo yes || echo no)"
+assert_eq "z2k-update-lists.sh: тело z2k_host_jitter совпадает с lib/utils.sh" "$_fn_utils" "$_fn_ul"
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

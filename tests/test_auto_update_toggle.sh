@@ -62,6 +62,7 @@ printf 'z2k-enhanced\n' > "$ROOT/.z2k-branch"
 # осталось в окружении к этому моменту, демон унесёт в себе до перезагрузки.
 # Поэтому проверяем не переменные этой оболочки, а то, что ВИДИТ ребёнок.
 cat > "$ROOT/lib/auto_update.sh" <<'STUB'
+au_log() { :; }
 au_run_apply() {
     echo "APPLY_RAN"
     sh -c 'echo "CHILD_ENV M=[${Z2K_AU_MANUAL:-нет}] J=[${Z2K_AU_NO_JITTER:-нет}]"'
@@ -103,6 +104,22 @@ case "$out" in *"отключено в настройках"*) ok "причин�
 run 'Z2K_AUTO_UPDATE_ENABLED=0' apply >/dev/null 2>&1
 [ "$?" = 0 ] && ok "пропуск завершается кодом 0, а не ошибкой" \
              || no "пропуск завершается кодом 0" "0" "$?"
+
+# Выключение тумблера во время часового ночного разброса (sleep JITTER)
+# обязано остановить обновление после пробуждения.
+cat > "$ROOT/lib/utils.sh" <<EOF
+z2k_host_jitter() { echo 15; }
+sleep() {
+    if [ "\$1" = "15" ]; then
+        printf 'Z2K_AUTO_UPDATE_ENABLED=0\n' > "$ROOT/config"
+    fi
+}
+EOF
+printf 'Z2K_AUTO_UPDATE_ENABLED=1\n' > "$ROOT/config"
+out=$(sh "$UNDER_TEST" apply 2>&1 </dev/null)
+: > "$ROOT/lib/utils.sh"
+case "$out" in *APPLY_RAN*) no "выключение тумблера во время ночного jitter останавливает apply" "без APPLY_RAN" "$out" ;;
+               *) ok "выключение тумблера во время ночного jitter останавливает apply" ;; esac
 
 # --- what "off" must NOT break ----------------------------------------------
 out=$(run 'Z2K_AUTO_UPDATE_ENABLED=0' apply 'Z2K_AU_MANUAL=1')
@@ -211,9 +228,9 @@ _c "ноль в чужом ключе не выключает обновлени
    "$(nightly 'GAME_WARP_ENABLED=0\n')"
 
 # --- the name must not collide with the env marker --------------------------
-grep -qE '^AU_OFF=\$\(awk' "$SRC" \
+grep -qE '^AU_OFF=\$\((awk|au_read_off)' "$SRC" \
     && ok "гейт читает конфиг сам, а не наследует решение" \
-    || no "гейт читает конфиг сам" "AU_OFF=$(awk ...)" "иное"
+    || no "гейт читает конфиг сам" "AU_OFF=\$(au_read_off)" "иное"
 grep -q 'Z2K_AUTO_UPDATE_ENABLED\[\[:space:\]\]\*=' "$SRC" \
     && ok "ключ конфига называется Z2K_AUTO_UPDATE_ENABLED" \
     || no "ключ конфига называется Z2K_AUTO_UPDATE_ENABLED" "полное имя" "иное"

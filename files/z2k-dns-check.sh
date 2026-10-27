@@ -572,7 +572,7 @@ $_curname|$_cur||"
         # а это и был вопрос.
         st_yt="none"
         if [ -n "$dms" ]; then
-            [ -n "$(doh_wire_a "$doh" "$YT_DOMAIN")" ] && st_yt="ok" || st_yt="empty"
+            [ -n "$(doh_wire_a "$doh" "$YT_DOMAIN" "$_sip")" ] && st_yt="ok" || st_yt="empty"
         elif [ "$up_u" = "1" ]; then
             [ -n "$(udp_a "$udp" "$YT_DOMAIN")" ] && st_yt="ok" || st_yt="empty"
         fi

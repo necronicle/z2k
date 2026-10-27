@@ -73,15 +73,19 @@ fi
 # значение — цифра. В общем читателе флагов (read_flag) так делать нельзя:
 # там же лежат имена политик и пароли, в которых и решётка, и пробел
 # законны.
-AU_OFF=$(awk '
-    /^[[:space:]]*(export[[:space:]]+)?Z2K_AUTO_UPDATE_ENABLED[[:space:]]*=/ {
-        v = $0
-        sub(/^[^=]*=/, "", v)
-        sub(/#.*$/, "", v)
-        gsub(/\r/, "", v)
-        gsub(/[[:space:]"'"'"']/, "", v)
-        if (v == "0") { print "off"; exit }
-    }' "${ZAPRET2_DIR}/config" 2>/dev/null)
+au_read_off() {
+    awk '
+        /^[[:space:]]*(export[[:space:]]+)?Z2K_AUTO_UPDATE_ENABLED[[:space:]]*=/ {
+            v = $0
+            sub(/^[^=]*=/, "", v)
+            sub(/#.*$/, "", v)
+            gsub(/\r/, "", v)
+            gsub(/[[:space:]"'"'"']/, "", v)
+            if (v == "0") { print "off"; exit }
+        }' "${ZAPRET2_DIR}/config" 2>/dev/null
+}
+
+AU_OFF=$(au_read_off)
 
 # МЕТКИ РУЧНОГО ЗАПУСКА СНИМАЕМ СРАЗУ И НАСОВСЕМ.
 #
@@ -106,18 +110,22 @@ AU_MANUAL="${Z2K_AU_MANUAL:-0}"
 AU_NO_JITTER="${Z2K_AU_NO_JITTER:-0}"
 unset Z2K_AU_MANUAL Z2K_AU_NO_JITTER
 
-if [ "$AU_OFF" = "off" ] && [ "$ACTION" = "apply" ] && [ "$AU_MANUAL" != "1" ]; then
-    echo "Автообновление отключено в настройках — плановое обновление пропущено."
-    # И СЛЕД В ЖУРНАЛЕ ОБНОВЛЕНИЙ. Раньше отказ уходил только в stdout, который
-    # ловил планировщик в свой лог, а журнал обновлений молчал — по нему нельзя
-    # было отличить «гейт сработал» от «ночь не наступала». Ровно этого следа не
-    # хватило, чтобы разобрать жалобу «выключил, а оно обновилось».
-    _au_log_file="${Z2K_AU_LOG_FILE:-/opt/var/log/z2k-auto-update.log}"
-    mkdir -p "$(dirname "$_au_log_file")" 2>/dev/null
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [auto-update] отключено в настройках — плановое обновление пропущено" \
-        >> "$_au_log_file" 2>/dev/null
-    exit 0
-fi
+au_abort_if_disabled() {
+    if [ "$AU_OFF" = "off" ] && [ "$ACTION" = "apply" ] && [ "$AU_MANUAL" != "1" ]; then
+        echo "Автообновление отключено в настройках — плановое обновление пропущено."
+        # И СЛЕД В ЖУРНАЛЕ ОБНОВЛЕНИЙ. Раньше отказ уходил только в stdout, который
+        # ловил планировщик в свой лог, а журнал обновлений молчал — по нему нельзя
+        # было отличить «гейт сработал» от «ночь не наступала». Ровно этого следа не
+        # хватило, чтобы разобрать жалобу «выключил, а оно обновилось».
+        _au_log_file="${Z2K_AU_LOG_FILE:-/opt/var/log/z2k-auto-update.log}"
+        mkdir -p "$(dirname "$_au_log_file")" 2>/dev/null
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [auto-update] отключено в настройках — плановое обновление пропущено" \
+            >> "$_au_log_file" 2>/dev/null
+        exit 0
+    fi
+}
+
+au_abort_if_disabled
 
 # Source utils.sh FIRST so the layered z2k_fetch() (raw → jsdelivr → gh-proxy →
 # ndmc DNS-override) is in scope. auto_update.sh's fetch helpers fall back to a
@@ -155,6 +163,10 @@ case "$ACTION" in
             JITTER=$(z2k_host_jitter 3600)
             au_log "ночной разброс: жду ${JITTER}с"
             sleep "$JITTER"
+            # За час ночного разброса (00..60 мин) человек мог выключить
+            # автообновление в панели или меню: перечитываем конфиг перед стартом.
+            AU_OFF=$(au_read_off)
+            au_abort_if_disabled
         fi
         au_run_apply
         ;;

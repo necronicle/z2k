@@ -99,6 +99,8 @@ assert_eq "чекер зовёт proxy_mismatch после ref_mismatch" "1" "$(
 
 # --- 3в. Каждый сервер опрашивается ПО СВОЕМУ адресу, а не через резолвер роутера
 assert_eq "DoH идёт на адрес сервера (--resolve)" "2" "$(grep -c '_resolve_set "\$1"' "$S")"
+assert_eq "DoH для youtube.com тоже передаёт адрес сервера (--resolve)" "1" \
+    "$(grep -c 'doh_wire_a "\$doh" "\$YT_DOMAIN" "\$_sip"' "$S")"
 assert_eq "DoT соединяется по адресу, имя только в SNI" "1" "$(grep -c -- '-connect "\${2:-\$1}:853" -servername "\$1"' "$S")"
 
 # --- 4. Скрипт ничего не меняет ----------------------------------------------

@@ -717,11 +717,11 @@ function z2k_quic_morph_v2(ctx, desync)
         }
     end
 
-    local ok = pcall(rawsend_dissect_ipfrag, out_dis, {
+    local ok, sent = pcall(rawsend_dissect_ipfrag, out_dis, {
         rawsend = rs,
         ipfrag = ipfrag
     })
-    if not ok then
+    if not ok or sent == false then
         return
     end
 

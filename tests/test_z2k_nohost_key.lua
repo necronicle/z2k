@@ -56,6 +56,42 @@ check(z2k_nohost_key({}) == "nohost",
 check(z2k_nohost_key(nil) == "nohost",
       "nil desync → 'nohost' (no crash)")
 
+-- z2k_quic_morph_v2: if rawsend_dissect_ipfrag returns false, do not drop the
+-- original packet (must return nil, not VERDICT_DROP).
+do
+  VERDICT_DROP = 1
+  function bitand(a) return a end
+  function direction_cutoff_opposite() end
+  function direction_check() return true end
+  function payload_check() return true end
+  function rawsend_ctx() return {} end
+  function deepcopy(t) return t end
+
+  local send_result = false
+  function rawsend_dissect_ipfrag() return send_result end
+
+  local d_fail = {
+    outgoing = true,
+    l7payload = "quic_initial",
+    dis = { udp = {}, payload = "quic" },
+    arg = { noise = "0", profile = "3" },
+    track = { lua_state = {} }
+  }
+  check(z2k_quic_morph_v2(nil, d_fail) == nil,
+        "z2k_quic_morph_v2: rawsend_dissect_ipfrag=false → nil (не подавляет оригинал)")
+
+  send_result = true
+  local d_ok = {
+    outgoing = true,
+    l7payload = "quic_initial",
+    dis = { udp = {}, payload = "quic" },
+    arg = { noise = "0", profile = "3" },
+    track = { lua_state = {} }
+  }
+  check(z2k_quic_morph_v2(nil, d_ok) == VERDICT_DROP,
+        "z2k_quic_morph_v2: rawsend_dissect_ipfrag=true → VERDICT_DROP")
+end
+
 print()
 print(string.format("Tests passed: %d / %d", PASS, PASS + FAIL))
 if FAIL > 0 then

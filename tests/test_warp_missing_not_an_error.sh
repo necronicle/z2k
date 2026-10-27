@@ -76,5 +76,27 @@ update_list "rkn-list" "https://example.invalid/list.txt" "$SB/rkn.txt" >/dev/nu
 assert_eq "после игрового цикла ошибки снова печатаются" "1" \
     "$(grep -c 'FAIL: download rkn-list' "$LOG_FILE")"
 
+# --- 4. Старый ': applied,' в коротком хвосте лога не перезапускает S99 в ночь после обновления ---
+cat > "$ZAPRET2_DIR/z2k-geosite.sh" <<'EOF'
+#!/bin/sh
+echo "[2026-10-26 02:15:00] rkn: 304 Not Modified (ETag match)"
+exit 0
+EOF
+chmod +x "$ZAPRET2_DIR/z2k-geosite.sh"
+INIT_SCRIPT="$SB/S99zapret2"
+cat > "$INIT_SCRIPT" <<EOF
+#!/bin/sh
+echo "\$1" > "$SB/restarted"
+exit 0
+EOF
+chmod +x "$INIT_SCRIPT"
+rm -f "$SB/restarted"
+printf '[2026-10-25 02:15:00] [geosite] rkn: applied, 50000 domains\n' > "$LOG_FILE"
+main >/dev/null 2>&1
+assert_eq "старый ': applied,' в логе не вызывает холостой рестарт при 304" "0" \
+    "$([ -f "$SB/restarted" ] && echo 1 || echo 0)"
+assert_eq "в лог записано unchanged (ETag match)" "1" \
+    "$(grep -c 'geosite: all assets unchanged (ETag match)' "$LOG_FILE")"
+
 printf "\nPASSED: %s\nFAILED: %s\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" = 0 ]

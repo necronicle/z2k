@@ -52,6 +52,44 @@ Z2K_VPS_GH_IP="${Z2K_VPS_GH_IP:-85.192.60.175}"
 Z2K_FETCH_VPS_CONNECT_TIMEOUT="${Z2K_FETCH_VPS_CONNECT_TIMEOUT:-8}"
 Z2K_FETCH_VPS_TRIES="${Z2K_FETCH_VPS_TRIES:-2}"
 
+# z2k_host_jitter — дословная копия из lib/utils.sh (см. развёрнутый комментарий
+# там: почему нельзя звать отсутствующий на Entware cksum и почему ни один
+# запасной путь не должен возвращать 0 всем роутерам сразу). Подключить
+# lib/utils.sh здесь нельзя: скрипт вызывается из cron автономно и не сорсит
+# модули установщика (см. шапку файла и блок z2k shared shell helpers ниже).
+# Равенство обеих копий стережёт tests/test_update_jitter.sh.
+if ! command -v z2k_host_jitter >/dev/null 2>&1; then
+    z2k_host_jitter() {
+        local max="${1:-3600}" host hex j
+        case "$max" in ''|*[!0-9]*) max=3600 ;; esac
+        [ "$max" -gt 0 ] || max=3600
+        host=$(hostname 2>/dev/null)
+        [ -n "$host" ] || host=$(cat /proc/sys/kernel/hostname 2>/dev/null)
+        host="${host}$(cat /sys/class/net/*/address 2>/dev/null | head -1)"
+        hex=""
+        if command -v md5sum >/dev/null 2>&1; then
+            hex=$(printf '%s' "$host" | md5sum 2>/dev/null | cut -c1-6)
+        fi
+        case "$hex" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) hex="" ;;
+        esac
+        if [ -z "$hex" ] && command -v sha256sum >/dev/null 2>&1; then
+            hex=$(printf '%s' "$host" | sha256sum 2>/dev/null | cut -c1-6)
+            case "$hex" in
+                [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+                *) hex="" ;;
+            esac
+        fi
+        j=""
+        [ -n "$hex" ] && j=$(( 0x$hex % max )) 2>/dev/null
+        case "$j" in
+            ''|*[!0-9]*) j=$(( ($$ + $(date +%s 2>/dev/null || echo 1)) % max )) ;;
+        esac
+        echo "$j"
+    }
+fi
+
 _z2k_vps_gh_resolve() {
     [ -n "${Z2K_VPS_GH_IP:-}" ] || return 0
     # Извлечь реальный host (между :// и первым /), чтобы жадный glob не
@@ -803,12 +841,18 @@ main() {
     # as first-install fallback via lib/install.sh step_download_domain_lists.
     if [ -x "${ZAPRET2_DIR}/z2k-geosite.sh" ]; then
         log_msg "Running z2k-geosite fetch (runetfreedom)..."
+        _geo_log_off=0
+        if [ -f "$LOG_FILE" ]; then
+            _geo_log_off=$(wc -c < "$LOG_FILE" 2>/dev/null | tr -d ' \t')
+            case "$_geo_log_off" in ''|*[!0-9]*) _geo_log_off=0 ;; esac
+        fi
         if sh "${ZAPRET2_DIR}/z2k-geosite.sh" fetch >>"$LOG_FILE" 2>&1; then
             # z2k-geosite handles atomic rename + service-safe writes;
             # count a change whenever at least one asset was applied.
-            # ETag cache makes 304-only runs a no-op, so we approximate
-            # "something changed" by checking log for "applied" markers.
-            if tail -30 "$LOG_FILE" | grep -q ': applied,'; then
+            # ETag cache makes 304-only runs a no-op; inspect only bytes
+            # appended during THIS run so a short log tail cannot pick up
+            # ": applied," from the previous night right after a list update.
+            if tail -c +"$((_geo_log_off + 1))" "$LOG_FILE" 2>/dev/null | grep -q ': applied,'; then
                 changes=$((changes + 1))
                 log_msg "geosite: applied changes detected"
             else
