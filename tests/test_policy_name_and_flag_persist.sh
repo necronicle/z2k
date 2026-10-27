@@ -83,11 +83,12 @@ else
       const m = src.match(/const NAME_BAD_RE[\s\S]*?const nameOk[^\n]*\n/);
       if (!m) { console.log("MISSING"); process.exit(0); }
       const { nameOk } = new Function(m[0] + "\n return { nameOk };")();
-      // Те же входы, что у серверной проверки выше.
-      const good = ["nfqws", "Через ВПН", "ВПН", "Policy 0", "my-policy_1",
+      // Те же входы, что у серверной проверки выше. Пустая строка валидна на
+      // обеих сторонах (policy_save и toggles.js): по ней выключается фильтр.
+      const good = ["", "nfqws", "Через ВПН", "ВПН", "Policy 0", "my-policy_1",
                     "Незарегистрированные клиенты"];
       const bad  = ["плохой\"", "зло$(id)", "a`id`", "a;rm -rf /", "обратный\\слэш",
-                    "", "Ы".repeat(33)];
+                    "Ы".repeat(33)];
       const wrong = [];
       for (const v of good) if (!nameOk(v)) wrong.push("отбито хорошее: " + v);
       for (const v of bad)  if (nameOk(v))  wrong.push("принято опасное: " + v);

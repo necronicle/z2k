@@ -805,7 +805,7 @@ subtract_googlevideo_from_yt() {
     [ -s "$yt_target" ] || return 0
 
     local before after removed filtered
-    before=$(wc -l < "$yt_target" 2>/dev/null || echo 0)
+    before=$(wc -l < "$yt_target" 2>/dev/null | tr -d ' \t')
     filtered="$TMP_DIR/yt.filtered"
 
     awk '{
@@ -820,7 +820,14 @@ subtract_googlevideo_from_yt() {
         return 1
     }
 
-    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    after=$(wc -l < "$filtered" 2>/dev/null | tr -d ' \t')
+    case "$after" in ''|*[!0-9]*) after=0 ;; esac
+    case "$before" in ''|*[!0-9]*) before=0 ;; esac
+    if [ "$after" -eq 0 ] || { [ "$before" -gt 100 ] && [ "$((after * 100 / before))" -lt 50 ]; }; then
+        log "YT subtract: результат обрублен ($before → $after строк) — список НЕ трогаем"
+        rm -f "$filtered"
+        return 1
+    fi
     removed=$((before - after))
     if [ "$removed" -gt 0 ]; then
         mv "$filtered" "$yt_target" || {
@@ -880,7 +887,7 @@ subtract_yt_from_rkn() {
     [ -s "$yt_target" ] && cat "$yt_target" >> "$exclude"
 
     local before after removed filtered
-    before=$(wc -l < "$rkn_target" 2>/dev/null || echo 0)
+    before=$(wc -l < "$rkn_target" 2>/dev/null | tr -d ' \t')
     filtered="$TMP_DIR/rkn.filtered"
 
     awk -v excl="$exclude" '
@@ -967,7 +974,7 @@ subtract_false_positive_from_rkn() {
     [ -s "$exclude" ] || { rm -f "$exclude"; return 0; }
 
     local before after removed filtered
-    before=$(wc -l < "$rkn_target" 2>/dev/null || echo 0)
+    before=$(wc -l < "$rkn_target" 2>/dev/null | tr -d ' \t')
     filtered="$TMP_DIR/rkn.false-positive.filtered"
 
     awk -v excl="$exclude" '
@@ -990,7 +997,14 @@ subtract_false_positive_from_rkn() {
         return 1
     }
 
-    after=$(wc -l < "$filtered" 2>/dev/null || echo 0)
+    after=$(wc -l < "$filtered" 2>/dev/null | tr -d ' \t')
+    case "$after" in ''|*[!0-9]*) after=0 ;; esac
+    case "$before" in ''|*[!0-9]*) before=0 ;; esac
+    if [ "$after" -eq 0 ] || { [ "$before" -gt 100 ] && [ "$((after * 100 / before))" -lt 50 ]; }; then
+        log "RKN false-positive subtract: результат обрублен ($before → $after строк) — список НЕ трогаем"
+        rm -f "$filtered" "$exclude"
+        return 1
+    fi
     removed=$((before - after))
     if [ "$removed" -gt 0 ]; then
         mv "$filtered" "$rkn_target" || {

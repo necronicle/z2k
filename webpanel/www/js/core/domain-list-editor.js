@@ -1,4 +1,4 @@
-import { apiGet, apiPostText } from "./api.js";
+import { apiGet, apiPostText, errMsg } from "./api.js";
 import { $app, _icons, escapeHtml, skeletonLines } from "./dom.js";
 import { _newLoad, _stale } from "./loadorder.js";
 import { confirmModal } from "../job.js";
@@ -141,7 +141,7 @@ async function loadWhitelist(view) {
     view.rows = whitelistRows(view.text); view.selected.clear(); view.anchor = null; view.loaded = true;
     wlError(view); wlDraw(view);
   } catch (e) {
-    if (wlCurrent(view) && !_stale(view.endpoint,seq)) { wlError(view,e.message); if(!view.loaded) wlEl(view,"wl-list").innerHTML = ""; }
+    if (wlCurrent(view) && !_stale(view.endpoint,seq)) { wlError(view,errMsg(e)); if(!view.loaded) wlEl(view,"wl-list").innerHTML = ""; }
   } finally {
     if (wlCurrent(view) && !_stale(view.endpoint,seq)) { view.busy = false; wlControls(view); }
   }
@@ -192,7 +192,7 @@ async function wlCommit(view, text, revision, remember = true) {
     await loadWhitelist(view);
     return true;
   } catch(e) {
-    if(wlCurrent(view)) wlError(view,e.message);
+    if(wlCurrent(view)) wlError(view,errMsg(e));
     return false;
   } finally {
     if(wlCurrent(view)) { view.busy = false; wlControls(view); }

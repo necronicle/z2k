@@ -224,6 +224,7 @@ function _startJobPoller(jobId, opts) {
     jobId,
     opts: opts || {},
     stopped: false,
+    inFlight: false,
     lastLog: "Запуск…",
     lastData: null,
     consecutiveErrors: 0,
@@ -253,6 +254,7 @@ function _startJobPoller(jobId, opts) {
 
   const finish = (d) => {
     state.stopped = true;
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
     _jobPollers.delete(jobId);
     _activeJobs.delete(jobId);
     _renderJobBadges();  // также дёрнет _updateGlobalUILock — кнопки разлочатся
@@ -262,7 +264,9 @@ function _startJobPoller(jobId, opts) {
   };
 
   async function tick() {
-    if (state.stopped) return;
+    if (state.stopped || state.inFlight) return;
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+    state.inFlight = true;
     try {
       const d = await apiGet("/job?id=" + encodeURIComponent(jobId));
       const recovered = state.consecutiveErrors > 0;
@@ -353,6 +357,8 @@ function _startJobPoller(jobId, opts) {
         finish({ done: true, exit: null, outcome: JOB_OFFLINE, log: state.lastLog });
         return;
       }
+    } finally {
+      state.inFlight = false;
     }
       // ПРИЗНАК ЖИЗНИ, ПОКА ПАНЕЛЬ НЕ ОТВЕЧАЕТ.
       //
@@ -375,10 +381,26 @@ function _startJobPoller(jobId, opts) {
           : "\n[панель пока не отвечает, ждём… " + secs + "с]"), false, null);
         state.lastOutageWarn = state.consecutiveErrors;
       }
-    setTimeout(tick, state.consecutiveErrors > 0 ? POLL_ERR_MS : POLL_OK_MS);
+    const hidden = typeof document !== "undefined" && document.hidden === true;
+    const nextMs = state.consecutiveErrors > 0 ? POLL_ERR_MS : (hidden ? 3000 : POLL_OK_MS);
+    state.timer = setTimeout(tick, nextMs);
   }
+  state.wake = () => {
+    if (state.stopped) return;
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+    tick();
+  };
   tick();
   return state;
+}
+
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    for (const poller of _jobPollers.values()) {
+      if (poller && typeof poller.wake === "function") poller.wake();
+    }
+  });
 }
 
 export function openJobModal(title, jobId, opts = {}) {

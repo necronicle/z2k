@@ -1,4 +1,4 @@
-import { apiGet, apiPost, errHtml, toastErr } from "../core/api.js";
+import { apiGet, apiPost, errHtml, errMsg, toastErr } from "../core/api.js";
 import { _icons, escapeHtml, humanAgo } from "../core/dom.js";
 import { refreshStatus } from "../core/loadorder.js";
 import { openJobModal } from "../job.js";
@@ -102,7 +102,7 @@ export async function refreshUpdateBanner(opts = {}) {
       });
     }
   } else if (unknown) {
-    const why = err ? escapeHtml(err.message) : "список версий не скачался";
+    const why = err ? escapeHtml(errMsg(err)) : "список версий не скачался";
     const known = installed !== "?" ? `установлена ${escapeHtml(installed)} · ` : "";
     banner.hidden = false;
     banner.className = "update-banner";

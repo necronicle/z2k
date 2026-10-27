@@ -882,7 +882,7 @@ main() {
         fi
 
         local total_lines cidr_lines
-        total_lines=$(grep -cv '^[[:space:]]*$\|^[[:space:]]*#' "$tmp" 2>/dev/null)
+        total_lines=$(grep -cvE '^[[:space:]]*(#|$)' "$tmp" 2>/dev/null)
         cidr_lines=$(grep -cE '^[[:space:]]*([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?[[:space:]]*$' "$tmp" 2>/dev/null)
         if [ -z "$total_lines" ] || [ "$total_lines" -lt 1 ]; then
             log_msg "FAIL: cf_cidrs_v4 has no content lines"
@@ -903,7 +903,7 @@ main() {
 
         if [ -f "$dest" ] && [ -s "$dest" ]; then
             local old_lines
-            old_lines=$(grep -cv '^[[:space:]]*$\|^[[:space:]]*#' "$dest" 2>/dev/null)
+            old_lines=$(grep -cvE '^[[:space:]]*(#|$)' "$dest" 2>/dev/null)
             if [ -n "$old_lines" ] && [ "$old_lines" -gt 0 ]; then
                 if [ "$((total_lines * 100 / old_lines))" -lt 50 ]; then
                     log_msg "FAIL: cf_cidrs_v4 shrunk >50% ($old_lines → $total_lines), keeping old"

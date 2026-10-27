@@ -809,5 +809,28 @@ do
         autostate["rkn_tcp"]["cur.com"].nstrategy)
 end
 
+-- T39: SEED-RECOVERY и reconcile_external_edits обязаны сохранять mode="frozen" и 6-ю колонку sni.
+do
+  fresh()
+  now = 9500
+  circular(nil, mk("rkn_tcp", "warm2.com"))
+  write_file("# h\n# h2\nrkn_tcp\twarm2.com\t1\t9500\tauto\nrkn_tcp\tfrozenpin.com\t4\t9400\tfrozen\t300.ya.ru\n")
+  circular(nil, mk("rkn_tcp", "frozenpin.com", {plan = PLAN5_R}))
+  check("T39: SEED-RECOVERY сохраняет стратегию 4", 4, row("rkn_tcp", "frozenpin.com"))
+  check("T39: SEED-RECOVERY сохраняет mode=frozen на диске", "frozen", row_mode("rkn_tcp", "frozenpin.com"))
+  check("T39: SEED-RECOVERY выставляет hrec.final=4", 4, autostate["rkn_tcp"]["frozenpin.com"].final)
+  check("T39: SEED-RECOVERY восстанавливает z2k_sni", "300.ya.ru", autostate["rkn_tcp"]["frozenpin.com"].z2k_sni)
+  -- Внешняя правка стратегии и sni через панель обновляет и state, и живой autostate:
+  write_file("# h\n# h2\nrkn_tcp\twarm2.com\t1\t9500\tauto\nrkn_tcp\tfrozenpin.com\t5\t9510\tfrozen\tmax.ru\n")
+  now = 9505
+  circular(nil, mk("rkn_tcp", "frozenpin.com", {plan = PLAN5_R}))
+  check("T39: reconcile сохраняет sni в state", "max.ru", P._state()["rkn_tcp"]["frozenpin.com"].sni)
+  check("T39: reconcile обновляет z2k_sni в живом autostate", "max.ru", autostate["rkn_tcp"]["frozenpin.com"].z2k_sni)
+  -- SEED-RECOVERY на пакете с server_active_reject не оставляет strategy=nil в state:
+  write_file("# h\n# h2\nrkn_tcp\twarm2.com\t1\t9500\tauto\nrkn_tcp\tfrozenpin.com\t5\t9510\tfrozen\tmax.ru\nrkn_tcp\tsrvrej.com\t3\t9515\tfrozen\t300.ya.ru\n")
+  circular(nil, mk("rkn_tcp", "srvrej.com", {plan = PLAN5_R, crec = { z2k_server_active_reject = true }}))
+  check("T39: SEED-RECOVERY при server_active_reject заполняет strategy в state", 3, P._state()["rkn_tcp"]["srvrej.com"].strategy)
+end
+
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
 os.exit(FAIL == 0 and 0 or 1)

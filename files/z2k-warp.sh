@@ -919,6 +919,20 @@ warp_op_begin() {
 # Всё ещё ли это действие последнее.
 warp_op_current() { [ "$(cat "$WARP_OP_FILE" 2>/dev/null)" = "$$" ]; }
 
+warp_op_end() {
+    warp_op_current && rm -f "$WARP_OP_FILE" 2>/dev/null
+    return 0
+}
+
+# Идёт ли сейчас другое действие с WARP (держит замок или ждёт готовности).
+warp_op_active() {
+    local pid
+    for pid in $(cat "$WARP_OP_LOCK/pid" "$WARP_OP_FILE" 2>/dev/null); do
+        [ -n "$pid" ] && [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null && return 0
+    done
+    return 1
+}
+
 warp_op_lock() {
     local waited=0 holder
     while ! mkdir "$WARP_OP_LOCK" 2>/dev/null; do
@@ -956,14 +970,17 @@ warp_op_superseded() {
 }
 
 warp_enable() {
+    if [ "${1:-}" = "--if-idle" ] || [ "${Z2K_WARP_IF_IDLE:-0}" = "1" ]; then
+        warp_op_active && return 0
+    fi
     warp_op_begin
     warp_op_lock || { warp_op_superseded; return 3; }
     warp_op_current || { warp_op_unlock; warp_op_superseded; return 3; }
     warp_set_flag 1
     warp_unpin_legacy
-    [ -x "$WARP_BIN" ] || { _wlog "движок не установлен — нажмите «Установить»"; warp_set_flag 0; warp_op_unlock; return 1; }
-    warp_ipset_all || { _wlog "WARP destination sets unavailable"; warp_set_flag 0; warp_op_unlock; return 1; }
-    ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || { _wlog "cannot create ipset $WARP_IPSET"; warp_set_flag 0; warp_op_unlock; return 1; }
+    [ -x "$WARP_BIN" ] || { _wlog "движок не установлен — нажмите «Установить»"; warp_set_flag 0; warp_op_unlock; warp_op_end; return 1; }
+    warp_ipset_all || { _wlog "WARP destination sets unavailable"; warp_set_flag 0; warp_op_unlock; warp_op_end; return 1; }
+    ipset list -n "$WARP_IPSET" >/dev/null 2>&1 || { _wlog "cannot create ipset $WARP_IPSET"; warp_set_flag 0; warp_op_unlock; warp_op_end; return 1; }
     warp_dns_capture_up
     warp_daemon_running || sh "$WARP_INIT" start >/dev/null 2>&1
     warp_op_unlock
@@ -978,10 +995,12 @@ warp_enable() {
     if warp_ready; then
         warp_pbr_up
         warp_op_unlock
+        warp_op_end
         _wlog "WARP ready: $(_json_str "$WARP_STATUS" transport) $(_json_str "$WARP_STATUS" endpoint)"
         return 0
     fi
     warp_op_unlock
+    warp_op_end
     # Не ready — так и говорим. Подбор плеча десинка отсюда УДАЛЁН: туннель не
     # имеет права крутить ротацию обхода ради себя, а брошенный подбор оставлял
     # хост закреплённым навсегда. Движок ищет рабочий транспорт сам, лестницей.
@@ -1006,6 +1025,7 @@ warp_disable() {
     warp_dns_sets_destroy
     warp_set_flag 0
     warp_op_unlock
+    warp_op_end
     return 0
 }
 
@@ -1020,6 +1040,7 @@ warp_restart() {
     warp_op_current || { warp_op_unlock; warp_op_superseded; return 3; }
     if [ "$(warp_flag)" != "1" ]; then
         warp_op_unlock
+        warp_op_end
         return 0
     fi
     warp_pbr_down
@@ -1215,7 +1236,7 @@ warp_migrate_usque() {
 
 case "$1" in
     install)  warp_install ;;
-    enable)   warp_enable ;;
+    enable)   shift; warp_enable "$@" ;;
     disable)  warp_disable ;;
     restart)  warp_restart ;;
     license)  warp_license ;;

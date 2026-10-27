@@ -256,7 +256,7 @@ case "$method $path" in
     "GET /status"|"GET /")
         installed=$(is_installed && echo true || echo false)
         running=$(is_running   && echo true || echo false)
-        svc_state=$(service_status_string)
+        svc_state=$(service_status_string "$running" "$installed")
         disable_cd=$(read_flag "DISABLE_CUSTOM" "$CONFIG_FILE" "1")
         # UI wants positive "customd_enabled"
         if [ "$disable_cd" = "0" ]; then customd="1"; else customd="0"; fi
@@ -266,7 +266,7 @@ case "$method $path" in
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         ppe=$(read_flag "Z2K_PPE_DEOFFLOAD" "$CONFIG_FILE" "1")
         dns_redirect=$(read_flag "Z2K_DNS_REDIRECT" "$CONFIG_FILE" "1")
-        fastroute_snapshot
+        fastroute_snapshot "$running"
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
         # Час ночного обновления. Нормализуем здесь, а не в панели: конфиг
         # правят и руками, а селектор без совпадающего варианта показал бы
@@ -604,39 +604,74 @@ case "$method $path" in
     # ---------- WARP (webpanel «WARP» section) ----------
     "GET /warp/status")
         result=$(warp_status_info)
-        _wf() { printf '%s' "$result" | sed -n "s/.*$1=\([^ ]*\).*/\1/p" | head -1; }
-        w_enabled=$(printf '%s' "$result" | sed -n 's/.*enabled=\([^ ]*\).*/\1/p')
-        w_inst_j=false;  [ "$(_wf installed)" = "1" ] && w_inst_j=true
-        w_ready_j=false; [ "$(_wf ready)" = "1" ] && w_ready_j=true
+        w_enabled=""; w_installed=""; w_ready=""; w_transport=""; w_endpoint=""
+        w_iface=""; w_addr=""; w_entries=""; w_devices=""; w_error=""; w_mem=""
+        w_edge_colo=""; w_edge_country=""; w_edge_rtt_ms=""; w_edge_checked_at=""
+        w_edge_selection=""; w_plan=""; w_plan_err=""; w_license=""
+        w_domain_active_raw=""; w_domain_rules=""; w_domain_pairs=""; w_domain_error=""
+        w_wdtt=""
+        set -f
+        for _tok in $result; do
+            case "$_tok" in
+                enabled=*)         w_enabled=${_tok#*=} ;;
+                installed=*)       w_installed=${_tok#*=} ;;
+                ready=*)           w_ready=${_tok#*=} ;;
+                transport=*)       w_transport=${_tok#*=} ;;
+                endpoint=*)        w_endpoint=${_tok#*=} ;;
+                iface=*)           w_iface=${_tok#*=} ;;
+                addr=*)            w_addr=${_tok#*=} ;;
+                entries=*)         w_entries=${_tok#*=} ;;
+                devices=*)         w_devices=${_tok#*=} ;;
+                error=*)           w_error=${_tok#*=} ;;
+                mem=*)             w_mem=${_tok#*=} ;;
+                edge_colo=*)       w_edge_colo=${_tok#*=} ;;
+                edge_country=*)    w_edge_country=${_tok#*=} ;;
+                edge_rtt_ms=*)     w_edge_rtt_ms=${_tok#*=} ;;
+                edge_checked_at=*) w_edge_checked_at=${_tok#*=} ;;
+                edge_selection=*)  w_edge_selection=${_tok#*=} ;;
+                plan=*)            w_plan=${_tok#*=} ;;
+                plan_err=*)        w_plan_err=${_tok#*=} ;;
+                license=*)         w_license=${_tok#*=} ;;
+                domain_active=*)   w_domain_active_raw=${_tok#*=} ;;
+                domain_rules=*)    w_domain_rules=${_tok#*=} ;;
+                domain_pairs=*)    w_domain_pairs=${_tok#*=} ;;
+                domain_error=*)    w_domain_error=${_tok#*=} ;;
+                wdtt=*)            w_wdtt=${_tok#*=} ;;
+            esac
+        done
+        set +f
+        _num() { case "$1" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$1" ;; esac; }
+        w_inst_j=false;  [ "$w_installed" = "1" ] && w_inst_j=true
+        w_ready_j=false; [ "$w_ready" = "1" ] && w_ready_j=true
         json_header
         printf '{"ok":true,"enabled":'; json_string "${w_enabled:-0}"
-        printf ',"installed":%s,"ready":%s,"transport":' "$w_inst_j" "$w_ready_j"; json_string "$(_wf transport)"
-        printf ',"endpoint":'; json_string "$(_wf endpoint)"
-        printf ',"iface":';    json_string "$(_wf iface)"
-        printf ',"addr":';     json_string "$(_wf addr)"
-        printf ',"entries":%s,"devices":%s,"error":' "$(_wf entries | grep -E '^[0-9]+$' || echo 0)" "$(_wf devices | grep -E '^[0-9]+$' || echo 0)"
-        json_string "$(_wf error)"
-        printf ',"mem_kb":%s' "$(_wf mem | grep -E '^[0-9]+$' || echo 0)"
-		printf ',"edge_colo":'; json_string "$(_wf edge_colo)"
-		printf ',"edge_country":'; json_string "$(_wf edge_country)"
-		printf ',"edge_rtt_ms":%s' "$(_wf edge_rtt_ms | grep -E '^[0-9]+$' || echo 0)"
-		printf ',"edge_checked_at":%s' "$(_wf edge_checked_at | grep -E '^[0-9]+$' || echo 0)"
-		printf ',"edge_selection":'; json_string "$(_wf edge_selection)"
-        printf ',"plan":'; json_string "$(_wf plan)"
-        w_pe=false; [ "$(_wf plan_err)" = "1" ] && w_pe=true
-        w_lic=false; [ "$(_wf license)" = "1" ] && w_lic=true
+        printf ',"installed":%s,"ready":%s,"transport":' "$w_inst_j" "$w_ready_j"; json_string "$w_transport"
+        printf ',"endpoint":'; json_string "$w_endpoint"
+        printf ',"iface":';    json_string "$w_iface"
+        printf ',"addr":';     json_string "$w_addr"
+        printf ',"entries":%s,"devices":%s,"error":' "$(_num "$w_entries")" "$(_num "$w_devices")"
+        json_string "$w_error"
+        printf ',"mem_kb":%s' "$(_num "$w_mem")"
+        printf ',"edge_colo":'; json_string "$w_edge_colo"
+        printf ',"edge_country":'; json_string "$w_edge_country"
+        printf ',"edge_rtt_ms":%s' "$(_num "$w_edge_rtt_ms")"
+        printf ',"edge_checked_at":%s' "$(_num "$w_edge_checked_at")"
+        printf ',"edge_selection":'; json_string "$w_edge_selection"
+        printf ',"plan":'; json_string "$w_plan"
+        w_pe=false; [ "$w_plan_err" = "1" ] && w_pe=true
+        w_lic=false; [ "$w_license" = "1" ] && w_lic=true
         printf ',"plan_error":%s,"license":%s' "$w_pe" "$w_lic"
-        w_domain_active=false; [ "$(_wf domain_active)" = "1" ] && w_domain_active=true
+        w_domain_active=false; [ "$w_domain_active_raw" = "1" ] && w_domain_active=true
         printf ',"domain_active":%s,"domain_rules":%s,"domain_pairs":%s,"domain_error":' \
-            "$w_domain_active" "$(_wf domain_rules | grep -E '^[0-9]+$' || echo 0)" "$(_wf domain_pairs | grep -E '^[0-9]+$' || echo 0)"
-        json_string "$(_wf domain_error)"
+            "$w_domain_active" "$(_num "$w_domain_rules")" "$(_num "$w_domain_pairs")"
+        json_string "$w_domain_error"
         # Выбор человека, а не то, на чём движок стоит сейчас (это transport
         # выше). Мусор в конфиге показываем автоматом — так его и прочтёт
         # init-скрипт.
         w_mode=$(read_flag "Z2K_WARP_TRANSPORT" "$CONFIG_FILE" "auto")
         case "$w_mode" in wg|h2) ;; *) w_mode=auto ;; esac
         printf ',"transport_mode":"%s","wdtt_enabled":' "$w_mode"
-        [ "$(_wf wdtt)" = "1" ] && printf 'true}\n' || printf 'false}\n'
+        [ "$w_wdtt" = "1" ] && printf 'true}\n' || printf 'false}\n'
         exit 0
         ;;
 
@@ -757,7 +792,7 @@ case "$method $path" in
         n_mac=$(form_value "$body" "mac")
         n_val=$(form_value "$body" "value")
         case "$n_val" in 0|1) ;; *) json_fail "400 Bad Request" "value must be 0 or 1" ;; esac
-        warp_device_toggle "$n_mac" "$n_val" || json_fail "400 Bad Request" "bad mac or save failed"
+        _err=$(warp_device_toggle "$n_mac" "$n_val" 2>&1) || json_fail "400 Bad Request" "${_err:-bad mac or save failed}"
         json_ok
         ;;
 
@@ -771,7 +806,12 @@ case "$method $path" in
         if [ "${CONTENT_LENGTH:-0}" -gt 2097152 ] 2>/dev/null; then
             json_fail "413 Payload Too Large" "list too large (max 2 MB)"
         fi
-        result=$(read_body_raw | warp_devices_save) || json_fail "400 Bad Request" "save failed"
+        _err_f="/tmp/z2k-wdev-err.$$"
+        result=$(read_body_raw | warp_devices_save 2>"$_err_f") || {
+            _err=$(cat "$_err_f" 2>/dev/null); rm -f "$_err_f"
+            json_fail "400 Bad Request" "${_err:-save failed}"
+        }
+        rm -f "$_err_f"
         w_n=$(printf '%s' "$result" | sed -n 's/.*entries=\([0-9]*\).*/\1/p')
         w_d=$(printf '%s' "$result" | sed -n 's/.*dropped=\([0-9]*\).*/\1/p')
         json_header
@@ -1001,7 +1041,7 @@ case "$method $path" in
             0|1) ;;
             *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
         esac
-        warp_game_toggle "$g_name" "$g_val" || json_fail "400 Bad Request" "toggle failed"
+        _err=$(warp_game_toggle "$g_name" "$g_val" 2>&1) || json_fail "400 Bad Request" "${_err:-toggle failed}"
         # Same live-apply path the list editor uses: the set is rebuilt on the
         # spot, so a switch takes effect without a restart.
         warp_ipset_reload_if_enabled
@@ -1067,12 +1107,21 @@ case "$method $path" in
         if [ "${CONTENT_LENGTH:-0}" -gt 2097152 ] 2>/dev/null; then
             json_fail "413 Payload Too Large" "list too large (max 2 MB)"
         fi
-        result=$(read_body_raw | warp_list_save "$w_name" "$w_mode") || \
-            json_fail "400 Bad Request" "save failed"
-        w_saved=$(printf '%s' "$result" | sed -n 's/.*saved=\([0-9]*\).*/\1/p')
-        w_saved_ip=$(printf '%s' "$result" | sed -n 's/.*saved_ip=\([0-9]*\).*/\1/p')
-        w_saved_domain=$(printf '%s' "$result" | sed -n 's/.*saved_domain=\([0-9]*\).*/\1/p')
-        w_inv=$(printf '%s' "$result" | sed -n 's/.*skipped_invalid=\([0-9]*\).*/\1/p')
+        _err_f="/tmp/z2k-wlist-err.$$"
+        result=$(read_body_raw | warp_list_save "$w_name" "$w_mode" 2>"$_err_f") || {
+            _err=$(cat "$_err_f" 2>/dev/null); rm -f "$_err_f"
+            json_fail "400 Bad Request" "${_err:-save failed}"
+        }
+        rm -f "$_err_f"
+        w_saved=0; w_saved_ip=0; w_saved_domain=0; w_inv=0
+        for _tok in $result; do
+            case "$_tok" in
+                saved=*)           w_saved=${_tok#saved=} ;;
+                saved_ip=*)        w_saved_ip=${_tok#saved_ip=} ;;
+                saved_domain=*)    w_saved_domain=${_tok#saved_domain=} ;;
+                skipped_invalid=*) w_inv=${_tok#skipped_invalid=} ;;
+            esac
+        done
         json_header
         printf '{"ok":true,"saved":%d,"saved_ip":%d,"saved_domain":%d,"skipped_invalid":%d}\n' \
             "${w_saved:-0}" "${w_saved_ip:-0}" "${w_saved_domain:-0}" "${w_inv:-0}"
@@ -1089,7 +1138,7 @@ case "$method $path" in
             0|1) ;;
             *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
         esac
-        warp_list_toggle "$l_name" "$l_val" || json_fail "400 Bad Request" "toggle failed"
+        _err=$(warp_list_toggle "$l_name" "$l_val" 2>&1) || json_fail "400 Bad Request" "${_err:-toggle failed}"
         warp_ipset_reload_if_enabled
         json_header
         printf '{"ok":true,"name":'; json_string "$l_name"

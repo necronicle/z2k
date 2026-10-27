@@ -216,6 +216,10 @@ function toggleRows(defs) {
 export async function renderToggles() {
   $app.innerHTML = `
     <h1 class="page-title">Режимы</h1>
+    <div class="probe-row" style="margin-bottom:14px">
+      <input type="search" id="toggles-search" placeholder="Поиск настройки по названию или описанию…"
+             autocomplete="off" autocapitalize="none" spellcheck="false">
+    </div>
     <div class="card">
       <div id="toggles-error" hidden></div>
       <h3>Категории обхода</h3>
@@ -484,6 +488,17 @@ export async function renderToggles() {
   $app.querySelector("#tg-enable").addEventListener("click", () => tgAction("enable", "Запуск Telegram туннеля"));
   $app.querySelector("#tg-disable").addEventListener("click", () => tgAction("disable", "Остановка Telegram туннеля"));
 
+  const searchInput = $app.querySelector("#toggles-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      const q = searchInput.value.trim().toLowerCase();
+      $app.querySelectorAll(".toggle-row[data-key]").forEach(row => {
+        const text = (row.textContent || "").toLowerCase();
+        row.hidden = q.length > 0 && !text.includes(q);
+      });
+    });
+  }
+
   // ----- Policy access section -----
   const nameInput = $app.querySelector("#policy-name");
   const statusEl  = $app.querySelector("#policy-status");
@@ -508,9 +523,9 @@ export async function renderToggles() {
   const NAME_BAD_RE = /["$`\\;'|\n\r]/;
   // Длина в СИМВОЛАХ, а не в кодовых единицах: '…'.length считает UTF-16, и
   // на суррогатных парах цифра разошлась бы с серверной, где считаются
-  // символы UTF-8.
+  // символы UTF-8. Пустая строка валидна: сервер по ней выключает фильтр.
   const nameLen = (v) => Array.from(v).length;
-  const nameOk  = (v) => v.length > 0 && !NAME_BAD_RE.test(v) && nameLen(v) <= 32;
+  const nameOk  = (v) => !NAME_BAD_RE.test(v) && nameLen(v) <= 32;
   const NAME_HINT = "Имя политики: до 32 символов, нельзя \" $ ` \\ ; \u0027 |";
 
   function setPolicyStatus(state, text) {
@@ -553,10 +568,9 @@ export async function renderToggles() {
       setPolicyStatus("error", NAME_HINT);
       return;
     }
-    // Запрос свежего status'а с currently-saved конфигом — input не сохранит
-    // ничего пока юзер не нажмёт «Сохранить». Если хочется live-проверки
-    // existence без save — на будущее можно добавить отдельный endpoint
-    // /policy/check?name=. Сейчас: оставляем статус до Save.
+    if (!v) {
+      setPolicyStatus("muted", "Поле пусто — нажмите «Сохранить и применить», чтобы выключить фильтр");
+    }
   });
 
   segGroup.addEventListener("click", (e) => {

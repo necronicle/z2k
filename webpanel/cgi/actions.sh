@@ -28,8 +28,12 @@ read_flag() {
     # read_flag <key> <file> [default]
     local key="$1" file="$2" def="${3:-0}"
     [ -f "$file" ] || { printf '%s' "$def"; return 0; }
-    local raw val
-    raw=$(grep "^${key}=" "$file" 2>/dev/null | head -1)
+    local line="" raw="" val=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "${key}="*) raw="$line"; break ;;
+        esac
+    done < "$file"
     if [ -z "$raw" ]; then
         printf '%s' "$def"
         return 0
@@ -39,7 +43,13 @@ read_flag() {
     # апострофа ('\'') здесь НЕЛЬЗЯ: safe_config_read из lib/utils.sh его тоже не
     # разворачивает, и панель показывала бы не то имя политики, с которым реально
     # работает сервис.
-    val=$(printf '%s' "$raw" | cut -d'=' -f2- | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//')
+    val="${raw#*=}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    val="${val#\"}"
+    val="${val%\"}"
+    val="${val#\'}"
+    val="${val%\'}"
     # An empty value (e.g. `DROP_DPI_RST=` with nothing after the equals)
     # must fall back to the default, not propagate as "" — otherwise the
     # caller's printf emits `"key":,` which breaks JSON. Caught in the wild
@@ -271,13 +281,20 @@ is_running() {
 }
 
 service_status_string() {
-    if is_running; then
+    local _run="${1:-}" _inst="${2:-}"
+    if [ -n "$_run" ]; then
+        [ "$_run" = "true" ] && { echo "active"; return 0; }
+    elif is_running; then
         echo "active"
+        return 0
+    fi
+    if [ -n "$_inst" ]; then
+        [ "$_inst" = "true" ] && { echo "stopped"; return 0; }
     elif is_installed; then
         echo "stopped"
-    else
-        echo "not_installed"
+        return 0
     fi
+    echo "not_installed"
 }
 
 # Source BOTH utils.sh (for safe_config_read and helpers) and
@@ -976,8 +993,9 @@ job_reap() {
     for f in /tmp/z2k-job-*.log; do
         [ -f "$f" ] || continue
         id=${f#/tmp/z2k-job-}; id=${id%.log}
-        # моложе часа — не трогаем в любом случае
-        find "$f" -maxdepth 0 -mmin +60 >/dev/null 2>&1 || continue
+        # моложе часа — не трогаем в любом случае (find без совпадений всё равно
+        # возвращает 0, поэтому проверяем именно непустой stdout!)
+        [ -n "$(find "$f" -maxdepth 0 -mmin +60 2>/dev/null)" ] || continue
         if [ ! -f "/tmp/z2k-job-${id}.exit" ]; then
             pid=$(cat "/tmp/z2k-job-${id}.pid" 2>/dev/null)
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -1353,19 +1371,23 @@ toggle_ppe() {
 }
 
 # UI describes the current action, never the saved start-up preference.
+# shellcheck disable=SC2120  # optional arg: GET /status in api.sh passes the running state it already computed
 fastroute_snapshot() {
-    local d="${Z2K_NF_SYSCTL:-/proc/sys/net/netfilter}" value
+    local d="${Z2K_NF_SYSCTL:-/proc/sys/net/netfilter}" value="" _run="${1:-}"
     fastroute=0
     fastroute_available=0
-    value=$(cat "$d/nf_conntrack_fastroute" 2>/dev/null)
+    [ -r "$d/nf_conntrack_fastroute" ] && IFS= read -r value < "$d/nf_conntrack_fastroute" 2>/dev/null
     case "$value" in
         0) fastroute_message='Маршрутный кэш сейчас выключен.' ;;
         1) fastroute_message='Маршрутный кэш сейчас включён.' ;;
         *) fastroute_message='Состояние маршрутного кэша недоступно.'; return ;;
     esac
+    if [ -z "$_run" ]; then
+        is_running && _run="true" || _run="false"
+    fi
     if [ -d "${Z2K_HWNAT_DIR:-/proc/driver/hw_nat}" ]; then
         fastroute_message="Не применяется: обнаружен драйвер аппаратного NAT. $fastroute_message"
-    elif ! is_running; then
+    elif [ "$_run" != "true" ]; then
         fastroute_message="Недоступно: обход остановлен. $fastroute_message"
     else
         [ "$value" = 0 ] && fastroute=1
@@ -1995,7 +2017,7 @@ autohostlist_domains_delete() {
         # тут смотреть нельзя, иначе удаление последней записи молча отменится.
         _f_rc=0
         if [ -f "$tmp" ]; then
-            mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; _f_rc=1; }
+            _file_replace "$f" "$tmp" || _f_rc=1
         else
             _f_rc=1
         fi
@@ -2301,7 +2323,7 @@ warp_neighbors() {
 # Save and apply as one UI operation. If netfilter rejects the change,
 # restore the saved selection so a failed toggle is not applied later silently.
 warp_devices_commit() {
-    local tmp="$1" f="$WARP_LISTS_DIR/devices.txt" old="$1.old"
+    local tmp="$1" f="$WARP_LISTS_DIR/devices.txt" old="$1.old.$$"
     if [ -f "$f" ]; then
         cp -p "$f" "$old" || return 1
     else
@@ -2321,7 +2343,7 @@ warp_devices_commit() {
 # Включить/выключить устройство по MAC: строка в devices.txt добавляется или
 # убирается; ручные строки (IP, чужие MAC) не трогаются.
 warp_device_toggle() {
-    local mac val="$2" f="$WARP_LISTS_DIR/devices.txt" tmp
+    local mac val="$2" f="$WARP_LISTS_DIR/devices.txt" tmp rc
     mac=$(printf '%s' "$1" | tr 'A-Z-' 'a-z:')
     case "$mac" in
         ??:??:??:??:??:??) ;;
@@ -2329,19 +2351,24 @@ warp_device_toggle() {
     esac
     case "$mac" in *[!0-9a-f:]*) return 1 ;; esac
     warp_lists_ensure_dir || return 1
+    _list_lock "$f" || return 1
     tmp="$WARP_LISTS_DIR/.devices.$$"
     {
         [ -f "$f" ] && awk -v m="$mac" '{ l = tolower($0); gsub(/-/, ":", l); gsub(/^[ \t]+|[ \t]+$/, "", l); if (l != m) print }' "$f"
         [ "$val" = "1" ] && printf '%s\n' "$mac"
         true
-    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    } > "$tmp" || { rm -f "$tmp"; _list_unlock "$f"; return 1; }
     warp_devices_commit "$tmp"
+    rc=$?
+    _list_unlock "$f"
+    return $rc
 }
 
 warp_devices_save() {
     # stdin → devices.txt; stdout: "entries=N dropped=M"
     warp_lists_ensure_dir || return 1
-    local tmp="$WARP_LISTS_DIR/.devices.$$"
+    local f="$WARP_LISTS_DIR/devices.txt" tmp="$WARP_LISTS_DIR/.devices.$$"
+    _list_lock "$f" || return 1
     awk '
     # --- z2k warp SOURCE filter (canonical; keep byte-identical in both copies) ---
     # Поле означает УСТРОЙСТВО В ЛОКАЛЬНОЙ СЕТИ, и фильтр обязан это отражать.
@@ -2371,11 +2398,13 @@ warp_devices_save() {
         if (ip_ok($0)) { print $0; n++; next }
         d++
     }
-    END { printf "entries=%d dropped=%d\n", n, d > "/dev/stderr" }' > "$tmp" 2> "$tmp.stat" || { rm -f "$tmp" "$tmp.stat"; return 1; }
+    END { printf "entries=%d dropped=%d\n", n, d > "/dev/stderr" }' > "$tmp" 2> "$tmp.stat" || { rm -f "$tmp" "$tmp.stat"; _list_unlock "$f"; return 1; }
     if ! warp_devices_commit "$tmp"; then
         rm -f "$tmp" "$tmp.stat"
+        _list_unlock "$f"
         return 1
     fi
+    _list_unlock "$f"
     cat "$tmp.stat"; rm -f "$tmp.stat"
     return 0
 }
@@ -2429,7 +2458,7 @@ warp_lists() {
     local f name entries size mtime
     for f in "$WARP_LISTS_DIR"/*.txt; do
         [ -f "$f" ] || continue
-        name=$(basename "$f" .txt)
+        name=${f##*/}; name=${name%.txt}
         [ "$name" = "devices" ] && continue   # устройства — своя карточка, не список адресов
         entries=$(_warp_destination_count "$f")
         size=$(wc -c < "$f" | tr -d ' ')
@@ -2457,8 +2486,15 @@ warp_game_enabled() {
 }
 
 _warp_destination_count() {
-    awk -v mode=save -f "$ZAPRET2_DIR/z2k-warp-list-filter.awk" "$1" 2>/dev/null \
-        | awk '$0 !~ /^#/ && NF { n++ } END { print n+0 }'
+    local _cnt _ip=0 _dom=0 _tok
+    _cnt=$(awk -v mode=count -f "$ZAPRET2_DIR/z2k-warp-list-filter.awk" "$1" 2>/dev/null)
+    for _tok in $_cnt; do
+        case "$_tok" in
+            ip=*) _ip=${_tok#ip=} ;;
+            domain=*) _dom=${_tok#domain=} ;;
+        esac
+    done
+    printf '%d\n' $(( ${_ip:-0} + ${_dom:-0} ))
 }
 
 warp_games() {
@@ -2467,7 +2503,7 @@ warp_games() {
     local f name entries
     for f in "$WARP_GAMES_DIR"/*.txt; do
         [ -f "$f" ] || continue
-        name=$(basename "$f" .txt)
+        name=${f##*/}; name=${name%.txt}
         entries=$(_warp_destination_count "$f")
         printf '%s\t%s\t%s\n' "$name" "${entries:-0}" "$(warp_game_enabled "$name" && echo 1 || echo 0)"
     done
@@ -2563,6 +2599,7 @@ warp_list_save() {
     skipped=$((total - saved))
     rm -f "$raw"
 
+    _list_lock "$file" || { rm -f "$tmp"; _warp_create_abort "$mode" "$file"; echo "lock failed" >&2; return 1; }
     if [ "$mode" = "append" ]; then
         touch "$file" 2>/dev/null
         # Файл мог остаться без завершающего перевода строки (правка руками,
@@ -2570,7 +2607,7 @@ warp_list_save() {
         # в 1.2.3.45.6.7.8 — панель рапортует saved=1, а загрузчик ipset и
         # счётчик записей видят НОЛЬ валидных адресов, пропадают оба.
         _list_end_nl "$file"
-        cat "$tmp" >> "$file" || { rm -f "$tmp"; echo "write failed" >&2; return 1; }
+        cat "$tmp" >> "$file" || { rm -f "$tmp"; _list_unlock "$file"; echo "write failed" >&2; return 1; }
     else
         # Подмена целиком, а не `cat "$tmp" > "$file"`: cat СНАЧАЛА обнуляет
         # цель, и обрыв питания или ENOSPC на середине превращал список из 18k
@@ -2578,10 +2615,11 @@ warp_list_save() {
         # пустой ipset. Заявку create (noclobber выше) rename не снимает: имя не
         # освобождается ни на мгновение, оно лишь начинает указывать на новый
         # inode, и параллельный create по-прежнему упирается в занятое имя.
-        _file_replace "$file" "$tmp" || { _warp_create_abort "$mode" "$file"; echo "write failed" >&2; return 1; }
+        _file_replace "$file" "$tmp" || { _list_unlock "$file"; _warp_create_abort "$mode" "$file"; echo "write failed" >&2; return 1; }
     fi
     rm -f "$tmp"
     chmod 644 "$file" 2>/dev/null || true
+    _list_unlock "$file"
     warp_ipset_reload_if_enabled
     printf 'saved=%d saved_ip=%d saved_domain=%d skipped_invalid=%d\n' \
         "${saved:-0}" "${saved_ip:-0}" "${saved_domain:-0}" "${skipped:-0}"

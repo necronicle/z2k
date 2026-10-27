@@ -3753,7 +3753,7 @@ run_start_fw() {   # $1 — метка для журнала
         run_start_fw "rerun $reruns/$MAX_RERUNS"
     done
     rmdir "$LOCK_DIR" 2>/dev/null
-} &
+} >/dev/null 2>&1 </dev/null &
 
 exit 0
 HOOK
