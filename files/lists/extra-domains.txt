@@ -55,3 +55,7 @@ mailsuite.com
 # объёму на 16 КБ — страница есть, выпуск не играет. Лечится подстановкой
 # имени (см. files/lua/z2k-tcp16.lua), но профиль обязан до хоста дотянуться.
 thisisdistorted.com
+# Google Meet: meet.google.com есть в списке РКН, а TURN-сервер звонков
+# (meet.turns.goog, TURN поверх TLS на 443) — нет. По сообщению пользователя
+# 27.10.2026, без этого домена Meet в Chrome через z2k работал некорректно.
+meet.turns.goog
