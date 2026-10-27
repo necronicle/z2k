@@ -19,10 +19,11 @@ func TestBlindWarnOncePerMinuteWithCount(t *testing.T) {
 			t.Fatalf("внутри минуты закричал: n=%d", n)
 		}
 	}
-	if n, shout := w.tick(t0.Add(61 * time.Second)); !shout || n != 6 {
-		t.Fatalf("через минуту: n=%d shout=%v, ожидалось 6/true", n, shout)
+	// Ровно минута — уже пора: граница включительная.
+	if n, shout := w.tick(t0.Add(60 * time.Second)); !shout || n != 6 {
+		t.Fatalf("ровно через минуту: n=%d shout=%v, ожидалось 6/true", n, shout)
 	}
-	if n, shout := w.tick(t0.Add(62 * time.Second)); shout || n != 1 {
+	if n, shout := w.tick(t0.Add(61 * time.Second)); shout || n != 1 {
 		t.Fatalf("после крика счётчик не сброшен: n=%d shout=%v", n, shout)
 	}
 }
