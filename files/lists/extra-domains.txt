@@ -1,42 +1,53 @@
-
-#
-# (cf-assets.www, dash, workers, developers, community, support, radar,
-# blog, partnerlocator, playground.ai, status, canto, и т.д.).
-# Cloudflare-инфраструктура — официально в РФ не заблокирована, но ТСПУ
-# Tapo IoT cameras — Mosline (МО) DPI режет
-# TLS handshake к их облаку. Камеры не видны наружу пока home-облако TP-Link
-# z2k extra domains — дополнения к RKN-списку из runetfreedom.
-# в default profile с одной слабой fake-стратегией. nfqws2 hostlist
-# жалуются что сайт не открывается без z2k обработки.
-# Критерий: домен НЕ покрыт runetfreedom ru-blocked, но пользователи
-# на multiplexed HTTP/2 stream'ах). Без явного матча CF-домены падают
-# недоступно.
-# Нишевые/региональные сайты от Святого отца
-# Обновляется при каждой установке z2k.
-# режет длинные TLS-потоки (16KB window_update инжект, селективный stall
-# Торренты
-# хиерархический — `cloudflare.com` покрывает все *.cloudflare.com
-bible-center.ru
-cdnbase.com
-cloudflare.com
-cloudflare.net
-cloudflare.tv
-cloudflarepartners.com
-cloudflarestatus.com
-dnsleaktest.com
-enimerosi.com
-euw1-device-cloudgateway.iot.i.tplinknbu.com
+# z2k extra domains — дополнения к RKN-списку из runetfreedom (ru-blocked).
+# Обновляется при каждой установке и обновлении z2k; строки, дописанные
+# пользователем, при обновлении сохраняются.
+# Критерий: домена нет в ru-blocked, но без обработки z2k он не открывается.
+# Пустых строк и одинаковых строк-комментариев здесь нет намеренно: при
+# обновлении файл на роутере склеивается со строками пользователя с удалением
+# повторов, и одинаковые строки схлопнулись бы в одну.
+# --- Торренты ---
 fast-torrent.ru
-katzauction.com
-mcpmarket.com
+# Статика fast-torrent.ru (CSS, JS, картинки): поток по обычному HTTP вставал
+# на ~32 КБ, и страница открывалась без стилей.
+cdnbase.com
+# NNM-Club и его CDN на Cloudflare: картинки на странице форума резались блоком
+# по объёму в общих HTTP/2-потоках.
 nnm-club.me
 nnmclub.to
 nnmstatic.win
+searchtor.to
+# --- Нишевые и региональные сайты ---
+bible-center.ru
 numista.com
 rua.gr
+enimerosi.com
+katzauction.com
+# --- По запросам пользователей: без явного добавления не открывались ---
+dnsleaktest.com
+mcpmarket.com
+# ru-board.com покрывает и поддомены (forum.ru-board.com и т.д.).
 ru-board.com
-searchtor.to
+# Добавлен по указанию владельца.
+mailsuite.com
+# --- Камеры Tapo ---
+# Провайдер Mosline (МО) режет TLS handshake к их облаку. Камеры не видны
+# снаружи, пока облако TP-Link недоступно.
 security.iot.i.tplinknbu.com
+euw1-device-cloudgateway.iot.i.tplinknbu.com
+tapo.com
+# --- Cloudflare ---
+# Cloudflare-инфраструктура официально в РФ не заблокирована, но ТСПУ режет
+# длинные TLS-потоки (16KB window_update инжект, селективный stall на
+# multiplexed HTTP/2 stream'ах). Без явного матча CF-домены падают в default
+# profile с одной слабой fake-стратегией. nfqws2 hostlist иерархический —
+# `cloudflare.com` покрывает все *.cloudflare.com (cf-assets.www, dash,
+# workers, developers, community, support, radar, blog, partnerlocator,
+# playground.ai, status, canto и т.д.).
+cloudflare.com
+cloudflare.net
+cloudflare.tv
+cloudflarestatus.com
+cloudflarepartners.com
 # SoundCloud: сайт и sndcdn.com есть в списке РКН, а музыка идёт с нового домена
 # soundcloud.cloud (playback.media-streaming — список и куски трека, assets.web —
 # ресурсы плеера), которого там нет. Без обработки поток вставал ровно на 16 КБ,
@@ -48,8 +59,6 @@ soundcloud.cloud
 # Добавлены по указанию владельца 15.09.2026.
 amazonaws.com
 cloudfront.net
-tapo.com
-mailsuite.com
 # Подкасты Apple: страница открывается с хостов Apple, а звук идёт с
 # audio.thisisdistorted.com (AS20860, Iomart). Эта сеть режет поток по
 # объёму на 16 КБ — страница есть, выпуск не играет. Лечится подстановкой
