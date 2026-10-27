@@ -15,7 +15,7 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-awk '/^_z2k_migrate_pool_renumber_v1\(\)/,/^}/' "$ROOT/files/S99zapret2.new" > "$TMP/migrate.sh"
+awk '/^_z2k_migrate_pool_renumber(_v[0-9]+)?\(\)/,/^}/' "$ROOT/files/S99zapret2.new" > "$TMP/migrate.sh"
 . "$TMP/migrate.sh"
 ZAPRET_BASE=$TMP/base
 Z2K_STATE_FALLBACK=$TMP/fallback.tsv

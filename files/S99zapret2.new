@@ -560,17 +560,20 @@ _z2k_migrate_quic_pool_key()
 # Здесь, а не шагом релиза, и до подъёма демона — по тем же причинам, что и
 # перенос ключа QUIC выше. Замок тот же; не отняли — попробуем на следующем
 # старте, отметку не ставим. Снимок до переноса остаётся рядом (.pre-renumber-v1).
-_z2k_migrate_pool_renumber_v1()
+# Общий каркас переноса номеров плеч в state.tsv: один проход по основному и
+# запасному файлу, снимок до переноса, замок, отметка «сделано». Таблицы и
+# правила переноса — у каждой версии свои (awk-программа и её -v переменные).
+#   $1 — версия (v1, v2…): имена отметки и снимка;
+#   $2 — ключи пулов, которых касается перенос (регэксп для awk);
+#   $3 — строка в журнал при фактическом переносе;
+#   остальное — аргументы awk (-v … и программа).
+_z2k_migrate_pool_renumber()
 {
+	local ver="$1" keys="$2" what="$3"; shift 3
 	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/autocircular"
-	local done_flag="${ZAPRET_BASE}/state/pool-renumber-v1.done"
+	local done_flag="${ZAPRET_BASE}/state/pool-renumber-$ver.done"
 	[ -f "$done_flag" ] && return 0
 	local fallback="${Z2K_STATE_FALLBACK:-${Z2K_AUTOCIRCULAR_FALLBACK_OVERRIDE:-/tmp}/z2k-autocircular-state.tsv}"
-	local rkn_map='1=41,2=6,3=19,4=33,5=17,6=2,7=3,8=23,9=22,10=x,11=30,12=15,13=24,14=20,15=28,16=26,17=21,18=42,19=8,20=32,21=25,22=50,23=53,24=31,25=54,26=46,27=55,28=38,29=45,30=16,31=48,32=34,33=47,34=49,35=5,36=18,37=4,38=44,39=14,40=x,41=13,42=36,43=35,44=37,45=x,46=x,47=39,48=51,49=40,50=52'
-	local yt_map='1=1,2=17,3=20,4=13,5=28,6=25,7=30,8=3,9=19,10=10,11=2,12=15,13=21,14=14,15=7,16=29,17=9,18=24,19=16,20=5,21=23,22=4'
-	local gv_map='1=3,2=25,3=7,4=17,5=6,6=31,7=5,8=12,9=4,10=11,11=32,12=28,13=13,14=1,15=8,16=22,17=18,18=19,19=16,20=20,21=14,22=9'
-	local quic_map='1=4,2=10,3=5,4=18,5=3,6=2,7=14,8=8,9=7'
-	local dv_map='1=2,2=3,3=1,4=4,5=5,6=6'
 
 	local f moved=0 skipped=0
 	for f in "$base/state.tsv" "$fallback"; do
@@ -579,38 +582,15 @@ _z2k_migrate_pool_renumber_v1()
 		# отметка на весь перенос ставится только когда оба файла отпущены, а
 		# замок на одном из них не должен на следующем старте прогнать таблицу
 		# по второму ещё раз.
-		[ -f "$f.pre-renumber-v1" ] && continue
-		awk -F'\t' '$1 ~ /^(rkn_tcp|yt_tcp|gv_tcp|google_tls|quic|discord_udp)$/ { found = 1; exit } END { exit !found }' "$f" 2>/dev/null || continue
+		[ -f "$f.pre-renumber-$ver" ] && continue
+		awk -F'\t' -v K="$keys" '$1 ~ "^(" K ")$" { found = 1; exit } END { exit !found }' "$f" 2>/dev/null || continue
 		if ( set -C; printf '%s' "$(date +%s 2>/dev/null || echo 0)" > "$f.lock" ) 2>/dev/null; then
-			if awk -F'\t' -v RKN="$rkn_map" -v YT="$yt_map" -v GV="$gv_map" -v QU="$quic_map" -v DV="$dv_map" '
-				function load(s, m,   n, a, i, kv) { n = split(s, a, ","); for (i = 1; i <= n; i++) { split(a[i], kv, "="); m[kv[1]] = kv[2] } }
-				# "" — номер вне таблицы (оставить), "x" — плечо снято (стереть строку)
-				function remap(m, n) { return (n in m) ? m[n] : "" }
-				BEGIN { OFS = "\t"; load(RKN, rkn); load(YT, yt); load(GV, gv); load(QU, qu); load(DV, dv) }
-				/^#/ || NF < 3 { print; next }
-				# Пулы TCP и QUIC: автоматическую запись стереть, замороженную перенести.
-				$1 == "rkn_tcp" { n = remap(rkn, $3 + 0) }
-				$1 == "yt_tcp" { n = remap(yt, $3 + 0) }
-				$1 == "gv_tcp" { n = remap(gv, $3 + 0) }
-				$1 == "google_tls" {
-					s = $3 + 0
-					if (s <= 22) n = remap(yt, s)
-					else { n = remap(gv, s - 22); if (n != "" && n != "x") n += 33 }
-				}
-				$1 == "quic" { n = remap(qu, $3 + 0) }
-				$1 ~ /^(rkn_tcp|yt_tcp|gv_tcp|google_tls|quic)$/ && $5 != "frozen" { n = "x" }
-				# Голос: автоматическую запись стереть, замороженную перенести.
-				$1 == "discord_udp" { n = ($5 == "frozen") ? remap(dv, $3 + 0) : "x" }
-				$1 ~ /^(rkn_tcp|yt_tcp|gv_tcp|google_tls|quic|discord_udp)$/ {
-					if (n == "x") next
-					if (n != "") $3 = n
-				}
-				{ print }' "$f" > "$f.mig" 2>/dev/null && [ -s "$f.mig" ]; then
+			if awk -F'\t' "$@" "$f" > "$f.mig" 2>/dev/null && [ -s "$f.mig" ]; then
 				chmod 644 "$f.mig" 2>/dev/null || true
 				chown nobody "$f.mig" 2>/dev/null || true
 				# Сначала снимок, потом подмена: без снимка не подменяем, иначе
 				# файл перенесён, а отметки о переносе нет.
-				cp -p "$f" "$f.pre-renumber-v1" 2>/dev/null \
+				cp -p "$f" "$f.pre-renumber-$ver" 2>/dev/null \
 					&& mv -f "$f.mig" "$f" 2>/dev/null && moved=$((moved + 1))
 			fi
 			rm -f "$f.mig" "$f.lock" 2>/dev/null
@@ -623,8 +603,61 @@ _z2k_migrate_pool_renumber_v1()
 		mkdir -p "${ZAPRET_BASE}/state" 2>/dev/null
 		: > "$done_flag" 2>/dev/null
 	fi
-	[ "$moved" = "0" ] || echo "Pool strategy numbers migrated in rotation state (rkn 55, yt/gv 33, quic 18, discord voice)"
+	[ "$moved" = "0" ] || echo "Pool strategy numbers migrated in rotation state ($what)"
 	return 0
+}
+
+# 26.10.2026: пулы TCP и QUIC выстроены по качеству, голос переведён на новый блоб.
+_z2k_migrate_pool_renumber_v1()
+{
+	local rkn_map='1=41,2=6,3=19,4=33,5=17,6=2,7=3,8=23,9=22,10=x,11=30,12=15,13=24,14=20,15=28,16=26,17=21,18=42,19=8,20=32,21=25,22=50,23=53,24=31,25=54,26=46,27=55,28=38,29=45,30=16,31=48,32=34,33=47,34=49,35=5,36=18,37=4,38=44,39=14,40=x,41=13,42=36,43=35,44=37,45=x,46=x,47=39,48=51,49=40,50=52'
+	local yt_map='1=1,2=17,3=20,4=13,5=28,6=25,7=30,8=3,9=19,10=10,11=2,12=15,13=21,14=14,15=7,16=29,17=9,18=24,19=16,20=5,21=23,22=4'
+	local gv_map='1=3,2=25,3=7,4=17,5=6,6=31,7=5,8=12,9=4,10=11,11=32,12=28,13=13,14=1,15=8,16=22,17=18,18=19,19=16,20=20,21=14,22=9'
+	local quic_map='1=4,2=10,3=5,4=18,5=3,6=2,7=14,8=8,9=7'
+	local dv_map='1=2,2=3,3=1,4=4,5=5,6=6'
+	_z2k_migrate_pool_renumber v1 'rkn_tcp|yt_tcp|gv_tcp|google_tls|quic|discord_udp' \
+		'rkn 55, yt/gv 33, quic 18, discord voice' \
+		-v RKN="$rkn_map" -v YT="$yt_map" -v GV="$gv_map" -v QU="$quic_map" -v DV="$dv_map" '
+		function load(s, m,   n, a, i, kv) { n = split(s, a, ","); for (i = 1; i <= n; i++) { split(a[i], kv, "="); m[kv[1]] = kv[2] } }
+		# "" — номер вне таблицы (оставить), "x" — плечо снято (стереть строку)
+		function remap(m, n) { return (n in m) ? m[n] : "" }
+		BEGIN { OFS = "\t"; load(RKN, rkn); load(YT, yt); load(GV, gv); load(QU, qu); load(DV, dv) }
+		/^#/ || NF < 3 { print; next }
+		# Пулы TCP и QUIC: автоматическую запись стереть, замороженную перенести.
+		$1 == "rkn_tcp" { n = remap(rkn, $3 + 0) }
+		$1 == "yt_tcp" { n = remap(yt, $3 + 0) }
+		$1 == "gv_tcp" { n = remap(gv, $3 + 0) }
+		$1 == "google_tls" {
+			s = $3 + 0
+			if (s <= 22) n = remap(yt, s)
+			else { n = remap(gv, s - 22); if (n != "" && n != "x") n += 33 }
+		}
+		$1 == "quic" { n = remap(qu, $3 + 0) }
+		$1 ~ /^(rkn_tcp|yt_tcp|gv_tcp|google_tls|quic)$/ && $5 != "frozen" { n = "x" }
+		# Голос: автоматическую запись стереть, замороженную перенести.
+		$1 == "discord_udp" { n = ($5 == "frozen") ? remap(dv, $3 + 0) : "x" }
+		$1 ~ /^(rkn_tcp|yt_tcp|gv_tcp|google_tls|quic|discord_udp)$/ {
+			if (n == "x") next
+			if (n != "") $3 = n
+		}
+		{ print }'
+}
+
+# 27.10.2026: в пул quic вторым плечом вставлен нулевой фейк с подменой Initial
+# (стенд: Cloudflare 24/25 с первого Initial), прежнее 18-е (фрагментация,
+# только Cloudflare) снято как перекрытое им. Порядок остальных плеч тот же,
+# поэтому и автоматические записи переносятся, а не стираются.
+_z2k_migrate_pool_renumber_v2()
+{
+	_z2k_migrate_pool_renumber v2 'quic' 'quic: new arm 2, arm 18 removed' '
+		BEGIN { OFS = "\t" }
+		/^#/ || NF < 3 { print; next }
+		$1 == "quic" {
+			s = $3 + 0
+			if (s == 18) next
+			if (s >= 2 && s <= 17) $3 = s + 1
+		}
+		{ print }'
 }
 
 # ПОЛЬЗОВАТЕЛЬСКИЕ СТРАТЕГИИ НА СНЯТОМ ГОЛОСОВОМ БЛОБЕ (25.10.2026).
@@ -3119,6 +3152,7 @@ start()
     _z2k_migrate_quic_pool_key
     # Перенумерация TCP-пулов 23.10.2026 — тоже строго до подъёма демона.
     _z2k_migrate_pool_renumber_v1
+    _z2k_migrate_pool_renumber_v2
     _z2k_migrate_custom_voice_blob_v1
 
     if ! start_daemons; then
