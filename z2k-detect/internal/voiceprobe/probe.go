@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 )
 
 // Verdict — что происходит с голосовым потоком.
@@ -96,7 +98,7 @@ var voiceBlobs = []struct{ name, file string }{
 func Run(ctx context.Context, opt Options) Result {
 	opt.withDefaults()
 	started := time.Now()
-	res := Result{Repeats: opt.Repeats, Marked: markSupported()}
+	res := Result{Repeats: opt.Repeats, Marked: sockmark.Supported()}
 	finish := func(v Verdict, reason string) Result {
 		res.Verdict, res.Reason = v, reason
 		res.Duration = time.Since(started).Round(time.Millisecond).String()
@@ -266,7 +268,7 @@ func measure(ctx context.Context, addr *net.UDPAddr, opt Options,
 func exchange(ctx context.Context, addr *net.UDPAddr, pkts [][]byte, tx [12]byte,
 	timeout time.Duration) (int64, bool, error) {
 
-	d := net.Dialer{Control: markControl, Timeout: timeout}
+	d := net.Dialer{Control: sockmark.Control, Timeout: timeout}
 	c, err := d.DialContext(ctx, "udp4", addr.String())
 	if err != nil {
 		return 0, false, err

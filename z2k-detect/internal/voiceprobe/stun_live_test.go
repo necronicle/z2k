@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 )
 
 // Живая проверка против настоящего сервера STUN.
@@ -31,7 +33,7 @@ func TestLiveStunAgainstPublicServer(t *testing.T) {
 		// discord_udp, и без неё зонд меряет собственный обход. Замер 04.09:
 		// без метки запрос на 20 байт уходил в провод датаграммой на 1200 —
 		// nfqws2 подставлял фальшивку.
-		d := net.Dialer{Control: markControl, Timeout: 5 * time.Second}
+		d := net.Dialer{Control: sockmark.Control, Timeout: 5 * time.Second}
 		c, err := d.Dial("udp4", srv)
 		if err != nil {
 			t.Logf("%s: не подключиться: %v", srv, err)

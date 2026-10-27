@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 )
 
 // Зонд объёма: доезжает ли ответ целиком.
@@ -62,7 +64,7 @@ func TransferProbe(ctx context.Context, addr, sni string, timeout time.Duration)
 	start := time.Now()
 	defer func() { t.DurationMS = time.Since(start).Milliseconds() }()
 
-	d := net.Dialer{Timeout: timeout, Control: markControl}
+	d := net.Dialer{Timeout: timeout, Control: sockmark.Control}
 	raw, derr := d.DialContext(ctx, "tcp", addr)
 	if derr != nil {
 		err = nil

@@ -32,6 +32,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 )
 
 // rawSupported сообщает, доступен ли сырой слой на этой сборке.
@@ -75,7 +77,7 @@ func dialRaw(ctx context.Context, dstIP net.IP, dport uint16, timeout time.Durat
 	// В правилах NFQUEUE уже есть дверь: `-m mark ! --mark 0x40000000`.
 	// Ставим эту метку на свои пакеты и выходим мимо очереди, ничего в
 	// системе не трогая.
-	_ = syscall.SetsockoptInt(sfd, syscall.SOL_SOCKET, syscall.SO_MARK, Z2KBypassMark)
+	_ = syscall.SetsockoptInt(sfd, syscall.SOL_SOCKET, syscall.SO_MARK, sockmark.Bypass)
 	if err := syscall.SetsockoptInt(sfd, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1); err != nil {
 		syscall.Close(sfd)
 		return nil, err

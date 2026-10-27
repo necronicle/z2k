@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,7 +33,7 @@ func exchangeFragmented(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
 
 	// Обычный сокет нужен, чтобы (а) получить исходный порт и адрес, (б)
 	// принять ответ: ядро отдаст его тому, кто занял пятёрку.
-	d := net.Dialer{Control: markControl}
+	d := net.Dialer{Control: sockmark.Control}
 	if spec.srcPort > 0 {
 		d.LocalAddr = &net.UDPAddr{Port: spec.srcPort}
 	}
@@ -61,7 +62,7 @@ func exchangeFragmented(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
 	defer unix.Close(raw)
 	// Без метки зонд уедет в нашу же очередь NFQUEUE и померит наш обход.
 	// Прав может не быть — тогда идём без метки, как и обычный путь.
-	if e := unix.SetsockoptInt(raw, unix.SOL_SOCKET, unix.SO_MARK, Z2KBypassMark); e != nil &&
+	if e := unix.SetsockoptInt(raw, unix.SOL_SOCKET, unix.SO_MARK, sockmark.Bypass); e != nil &&
 		!errors.Is(e, unix.EPERM) && !errors.Is(e, unix.ENOPROTOOPT) {
 		return exchangeResult{err: e}
 	}

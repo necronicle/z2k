@@ -46,12 +46,9 @@ import (
 	"sort"
 	"strings"
 	"time"
-)
 
-// Z2KBypassMark — метка, по которой правила NFQUEUE пропускают пакет мимо
-// нашего десинка. Зонд обязан ходить сырым путём: иначе он меряет не коробку
-// провайдера, а наш обход поверх неё.
-const Z2KBypassMark = 0x40000000
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
+)
 
 // Verdict — класс блокировки, опознанный по форме отклика.
 type Verdict string
@@ -298,7 +295,7 @@ func (o *Options) withDefaults() {
 			// Та же метка и на обычных сокетах: сокетные зонды (целиком,
 			// разрез, контроль) обязаны идти мимо десинка ровно так же, как
 			// сырые, иначе половина дерева меряет одно, половина другое.
-			d := net.Dialer{Control: markControl}
+			d := net.Dialer{Control: sockmark.Control}
 			return d.DialContext(ctx, "tcp", addr)
 		}
 	}

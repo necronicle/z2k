@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 	"golang.org/x/net/ipv4"
 )
 
@@ -606,7 +607,7 @@ func exchange(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
 		return exchangeFragmented(ctx, addr, spec, timeout)
 	}
 
-	d := net.Dialer{Control: markControl}
+	d := net.Dialer{Control: sockmark.Control}
 	if spec.srcPort > 0 {
 		d.LocalAddr = &net.UDPAddr{Port: spec.srcPort}
 	}

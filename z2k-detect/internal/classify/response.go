@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 )
 
 // ОТВЕТНОЕ НАПРАВЛЕНИЕ.
@@ -131,7 +133,7 @@ func respTimeout(opt Options) time.Duration {
 
 func handshake12(ctx context.Context, addr, sni string, opt Options) bool {
 	to := respTimeout(opt)
-	d := net.Dialer{Control: markControl, Timeout: to}
+	d := net.Dialer{Control: sockmark.Control, Timeout: to}
 	raw, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return false

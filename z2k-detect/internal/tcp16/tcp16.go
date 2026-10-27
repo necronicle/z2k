@@ -30,6 +30,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 )
 
 const (
@@ -132,7 +134,7 @@ func ProbeOpt(ctx context.Context, t Target, sni string, o Opts) Result {
 		minRead = o.MinReadTimeout
 	}
 
-	d := net.Dialer{Timeout: connectTimeout, Control: markControl}
+	d := net.Dialer{Timeout: connectTimeout, Control: sockmark.Control}
 	addr := net.JoinHostPort(t.IP, fmt.Sprint(t.Port))
 	start := time.Now()
 	raw, err := d.DialContext(ctx, "tcp", addr)
