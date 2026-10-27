@@ -196,6 +196,83 @@ type Observation struct {
 	Err    string `json:"err,omitempty"`
 }
 
+// note учитывает один исход зонда: ошибка — провал с первым текстом ошибки,
+// иначе удача или тихий провал.
+func (o *Observation) note(ok bool, err error) {
+	switch {
+	case err != nil:
+		o.Fail++
+		if o.Err == "" {
+			o.Err = err.Error()
+		}
+	case ok:
+		o.Pass++
+	default:
+		o.Fail++
+	}
+}
+
+// resolveV4 разбирает host:port и берёт первый адрес IPv4: сырой слой
+// работает только по нему. Проверка на входе одна на все зонды.
+func resolveV4(addr string) (net.IP, uint16, error) {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, 0, err
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return nil, 0, errors.New("classify: имя не разрешается")
+	}
+	var ip net.IP
+	for _, c := range ips {
+		if v4 := c.To4(); v4 != nil {
+			ip = v4
+			break
+		}
+	}
+	if ip == nil {
+		return nil, 0, errors.New("classify: нет адреса IPv4")
+	}
+	var port int
+	if _, e := fmt.Sscanf(portStr, "%d", &port); e != nil {
+		return nil, 0, e
+	}
+	if port <= 0 || port > 65535 {
+		return nil, 0, fmt.Errorf("classify: порт %d вне диапазона", port)
+	}
+	return ip, uint16(port), nil
+}
+
+// decoyFill — тело фальшивого сегмента: n байт набивки 0x0f, поверх которой
+// ложится приманка, если она есть (длиннее n — обрезается).
+func decoyFill(n int, decoy []byte) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = 0x0f
+	}
+	copy(b, decoy)
+	return b
+}
+
+// midSplit — где резать приветствие: по середине имени хоста, если оно
+// известно, иначе пополам; в границах [2, len-1], чтобы по обе стороны
+// оставались байты. Коробка ищет имя, и разорвано ли оно между сегментами —
+// это и есть разница между «сработало» и «нет»; боевое плечо режет на midsld.
+func midSplit(tr Trigger) int {
+	n := len(tr.Payload)
+	mid := n / 2
+	if tr.SNILen > 1 && tr.SNIOffset > 0 {
+		mid = tr.SNIOffset + tr.SNILen/2
+	}
+	if mid < 2 {
+		mid = 2
+	}
+	if mid >= n {
+		mid = n - 1
+	}
+	return mid
+}
+
 // Trigger — что шлём и как понимаем, что ответ пришёл.
 type Trigger struct {
 	// Name попадает в вердикт, чтобы было видно, чем мерили.
@@ -555,16 +632,7 @@ func verifySplitTarget(ctx context.Context, addr string, tr Trigger, opt Options
 		}
 		ok, err := once(ctx, addr, tr, opt, cuts, opt.WriteGap)
 		res.Probes++
-		if err != nil {
-			obs.Fail++
-			if obs.Err == "" {
-				obs.Err = err.Error()
-			}
-		} else if ok {
-			obs.Pass++
-		} else {
-			obs.Fail++
-		}
+		obs.note(ok, err)
 	}
 	res.Trace = append(res.Trace, obs)
 	return obs.Pass == opt.Repeats
@@ -610,14 +678,7 @@ func verifyPoisonTarget(ctx context.Context, ip net.IP, port uint16, tr Trigger,
 		}
 		ok, err := runPoisonProbe(ctx, ip, port, tr, p, opt)
 		res.Probes++
-		if err != nil || !ok {
-			obs.Fail++
-			if err != nil && obs.Err == "" {
-				obs.Err = err.Error()
-			}
-		} else {
-			obs.Pass++
-		}
+		obs.note(ok, err)
 	}
 	res.Trace = append(res.Trace, obs)
 	return obs.Pass == opt.Repeats
@@ -825,29 +886,11 @@ func poisons() []poison {
 // метки времени, размер окна. Поле 2026-08-29: 164 зонда подряд молчали, и
 // отличить «коробка держит» от «сервер не берёт мои пакеты» было нечем.
 func RawEcho(ctx context.Context, addr string, tr Trigger, timeout time.Duration) (bool, error) {
-	host, portStr, err := net.SplitHostPort(addr)
+	ip, port, err := resolveV4(addr)
 	if err != nil {
 		return false, err
 	}
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return false, errors.New("classify: имя не разрешается")
-	}
-	var ip net.IP
-	for _, c := range ips {
-		if v4 := c.To4(); v4 != nil {
-			ip = v4
-			break
-		}
-	}
-	if ip == nil {
-		return false, errors.New("classify: нет адреса IPv4")
-	}
-	var port int
-	if _, e := fmt.Sscanf(portStr, "%d", &port); e != nil {
-		return false, e
-	}
-	return probePoison(ctx, ip, uint16(port), tr, poison{name: "none"}, timeout)
+	return probePoison(ctx, ip, port, tr, poison{name: "none"}, timeout)
 }
 
 // sweepPoisons перебирает гипотезы отравления и возвращает первую сработавшую.
@@ -857,26 +900,8 @@ func RawEcho(ctx context.Context, addr string, tr Trigger, timeout time.Duration
 // последним не только по цене — сработавшее значение попутно называет хоп, на
 // котором стоит коробка, и это самостоятельная находка.
 func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res *Result) (poison, bool) {
-	host, portStr, err := net.SplitHostPort(addr)
+	ip, port, err := resolveV4(addr)
 	if err != nil {
-		return poison{}, false
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return poison{}, false
-	}
-	var ip net.IP
-	for _, cand := range ips {
-		if v4 := cand.To4(); v4 != nil {
-			ip = v4
-			break
-		}
-	}
-	if ip == nil {
-		return poison{}, false
-	}
-	var port int
-	if _, e := fmt.Sscanf(portStr, "%d", &port); e != nil || port <= 0 {
 		return poison{}, false
 	}
 
@@ -889,19 +914,9 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 	{
 		obs := Observation{Probe: "raw-selftest"}
 		for i := 0; i < opt.Repeats; i++ {
-			ok, err := probeRawHandshake(ctx, ip, uint16(port), opt.Timeout)
+			ok, err := probeRawHandshake(ctx, ip, port, opt.Timeout)
 			res.Probes++
-			switch {
-			case err != nil:
-				obs.Fail++
-				if obs.Err == "" {
-					obs.Err = err.Error()
-				}
-			case ok:
-				obs.Pass++
-			default:
-				obs.Fail++
-			}
+			obs.note(ok, err)
 		}
 		res.Trace = append(res.Trace, obs)
 		if obs.Pass == 0 {
@@ -927,7 +942,7 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 	// стратегия СОБИРАЕТСЯ. Перебор ниже остаётся, но уже запасным путём —
 	// для случаев, где собранное не сработало.
 	if opt.Only == "" {
-		if hit, ok := runProperties(ctx, ip, uint16(port), tr, opt, res); ok {
+		if hit, ok := runProperties(ctx, ip, port, tr, opt, res); ok {
 			res.Path = "свойство"
 			return hit, true
 		}
@@ -941,7 +956,7 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 			obs := Observation{Probe: cand.name, DelayM: cand.gapMS}
 			pass := 0
 			for i := 0; i < opt.Repeats; i++ {
-				ok, err := runPoisonProbe(ctx, ip, uint16(port), tr, cand, opt)
+				ok, err := runPoisonProbe(ctx, ip, port, tr, cand, opt)
 				res.Probes++
 				if err == nil && ok {
 					pass++
@@ -983,19 +998,9 @@ func sweepPoisons(ctx context.Context, addr string, tr Trigger, opt Options, res
 					pp.seqovl = len(opt.Control.Payload)
 				}
 			}
-			ok, err := runPoisonProbe(ctx, ip, uint16(port), tr, pp, opt)
+			ok, err := runPoisonProbe(ctx, ip, port, tr, pp, opt)
 			res.Probes++
-			switch {
-			case err != nil:
-				obs.Fail++
-				if obs.Err == "" {
-					obs.Err = err.Error()
-				}
-			case ok:
-				obs.Pass++
-			default:
-				obs.Fail++
-			}
+			obs.note(ok, err)
 		}
 		res.Trace = append(res.Trace, obs)
 		// Единогласие обязательно: одна случайная удача назначила бы

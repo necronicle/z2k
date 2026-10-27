@@ -515,15 +515,10 @@ func probePoison(ctx context.Context, dstIP net.IP, port uint16, tr Trigger, p p
 		// за край. Коробка, дочитывающая запись до конца, на укороченной
 		// фальшивке осталась бы ждать продолжения и приняла бы настоящие
 		// байты как это продолжение — отравление тогда не срабатывает.
-		fake := make([]byte, len(tr.Payload)*2)
-		for i := range fake {
-			fake[i] = 0x0f
-		}
-		if len(p.decoyPayload) > 0 {
-			// Коробке, разбирающей протокол, набивка не годится: она её
-			// пропустит мимо и продолжит ждать настоящее приветствие.
-			copy(fake, p.decoyPayload)
-		}
+		// Коробке, разбирающей протокол, набивка не годится: она её пропустит
+		// мимо и продолжит ждать настоящее приветствие — поэтому поверх
+		// набивки ложится приманка, когда она есть.
+		fake := decoyFill(len(tr.Payload)*2, p.decoyPayload)
 		reps := p.repeats
 		if reps < 1 {
 			reps = 1
@@ -593,10 +588,7 @@ func probePoison(ctx context.Context, dstIP net.IP, port uint16, tr Trigger, p p
 		if err := c.send(tr.Payload[:mid], tcpPSH|tcpACK, poison{}); err != nil {
 			return false, err
 		}
-		fake := make([]byte, len(tr.Payload)-mid)
-		for i := range fake {
-			fake[i] = 0x0f
-		}
+		fake := decoyFill(len(tr.Payload)-mid, nil)
 		reps := p.repeats
 		if reps < 1 {
 			reps = 1
@@ -619,17 +611,7 @@ func probePoison(ctx context.Context, dstIP net.IP, port uint16, tr Trigger, p p
 		// rkn_tcp именно такое: multisplit с seqovl И multidisorder на одном
 		// соединении. Замер 2026-08-29: три хоста, которые арсенал берёт, а
 		// мои семьдесят гипотез нет, стояли ровно на нём.
-		n := len(tr.Payload)
-		mid := n / 2
-		if tr.SNILen > 1 && tr.SNIOffset > 0 {
-			mid = tr.SNIOffset + tr.SNILen/2
-		}
-		if mid < 2 {
-			mid = 2
-		}
-		if mid >= n {
-			mid = n - 1
-		}
+		mid := midSplit(tr)
 		// Хвост уходит первым, голова — последней и внахлёст слева.
 		c.seq = base + uint32(mid)
 		if err := c.send(tr.Payload[mid:], tcpPSH|tcpACK, poison{}); err != nil {
@@ -641,13 +623,7 @@ func probePoison(ctx context.Context, dstIP net.IP, port uint16, tr Trigger, p p
 			return false, err
 		}
 		time.Sleep(12 * time.Millisecond)
-		junk := make([]byte, p.seqovl)
-		for i := range junk {
-			junk[i] = 0x0f
-		}
-		if len(p.decoyPayload) > 0 {
-			copy(junk, p.decoyPayload)
-		}
+		junk := decoyFill(p.seqovl, p.decoyPayload)
 		c.seq = base - uint32(p.seqovl)
 		if err := c.send(append(junk, tr.Payload[:1]...), tcpPSH|tcpACK, poison{}); err != nil {
 			return false, err
@@ -656,13 +632,7 @@ func probePoison(ctx context.Context, dstIP net.IP, port uint16, tr Trigger, p p
 		// Внахлёст слева: один сегмент с номером base-N, где первые N байт —
 		// приманка. Сервер подрежет левый край окна и возьмёт правду.
 		n := p.seqovl
-		junk := make([]byte, n)
-		for i := range junk {
-			junk[i] = 0x0f
-		}
-		if len(p.decoyPayload) > 0 {
-			copy(junk, p.decoyPayload)
-		}
+		junk := decoyFill(n, p.decoyPayload)
 		c.seq = base - uint32(n)
 		if err := c.send(append(junk, tr.Payload...), tcpPSH|tcpACK, poison{}); err != nil {
 			return false, err
@@ -676,20 +646,8 @@ func probePoison(ctx context.Context, dstIP net.IP, port uint16, tr Trigger, p p
 		// раньше, воспроизводит не это: коробке достаётся осмысленное начало
 		// записи, и она спокойно дожидается остального.
 		n := len(tr.Payload)
-		// РЕЖЕМ ПО ИМЕНИ, А НЕ ПО СЕРЕДИНЕ ПАКЕТА. Коробка ищет имя хоста;
-		// разорвано оно между сегментами или лежит в одном куске — это и есть
-		// разница между «сработало» и «нет». Боевое плечо режет на `midsld`,
-		// в середине домена второго уровня. Пополам — мимо: имя остаётся целым.
-		mid := n / 2
-		if tr.SNILen > 1 && tr.SNIOffset > 0 {
-			mid = tr.SNIOffset + tr.SNILen/2
-		}
-		if mid < 2 {
-			mid = 2
-		}
-		if mid >= n {
-			mid = n - 1
-		}
+		// РЕЖЕМ ПО ИМЕНИ, А НЕ ПО СЕРЕДИНЕ ПАКЕТА — см. midSplit.
+		mid := midSplit(tr)
 		type piece struct{ from, to int }
 		order := []piece{{mid, n}, {1, mid}, {0, 1}}
 		for _, pc := range order {
