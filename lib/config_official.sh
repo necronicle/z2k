@@ -1648,6 +1648,33 @@ generate_nfqws2_opt_from_strategies() {
     # + hostkey=z2k_nohost_key for stable hostless rotation keying)
     [ "$category_voice" = 0 ] || nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
 
+    # Включённые профили референсных наборов (30.10.2026), один в один.
+    #
+    # UDP: WireGuard, STUN, Discord, MTProto и неизвестный UDP на портах
+    # 590-600, 1400, 3478-3481, 5349, 19294-19344, 49152-65535 — нулевой фейк x6
+    # и фейк QUIC x6, ротация fails=2/300 с. Стоит ПОСЛЕ голоса Discord: тот же
+    # STUN/Discord на голосовых портах забирает discord_udp, сюда идёт остальное.
+    # Широкий диапазон — ровно тот случай, о котором предупреждение ниже: P2P-STUN
+    # (WebRTC) на высоких портах получит фейки этого профиля, как у первоисточника.
+    # Тумблер Z2K_UDP_MISC=0 снимает профиль.
+    local udp_misc_on
+    udp_misc_on=$(safe_config_read Z2K_UDP_MISC "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
+    if [ "$udp_misc_on" != 0 ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535 --filter-l7=wireguard,stun,discord,mtproto,unknown --out-range=<n2 --payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown --lua-desync=circular:fails=2:time=300:retrans=3:nld=2 --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2 --new\\n"
+    fi
+
+    # DNS по UDP 53: dnsclone (z2k-dnsclone.lua) шлёт клон запроса с TTL 8 — до
+    # DPI доходит, до резолвера нет; подложный ответ на клон отбрасывается,
+    # оригинал пересылается заново. Подменённые провайдером ответы на открытый
+    # DNS не доходят до клиента. Исключения — общий список z2k, как у профилей
+    # выше. Только если модуль лежит на диске: без него движок на каждом
+    # запросе упирался бы в неизвестную функцию. Тумблер Z2K_DNSCLONE=0.
+    local dnsclone_on
+    dnsclone_on=$(safe_config_read Z2K_DNSCLONE "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
+    if [ "$dnsclone_on" != 0 ] && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-dnsclone.lua" ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines$wl_excl --filter-udp=53 --in-range=-d100 --out-range=-d100 --payload=dns_query,dns_response --lua-desync=dnsclone:ttl=8:ip_id=rnd:resend=1 --new\\n"
+    fi
+
     # Здесь стоял webrtc_bypass — пустой профиль udp/1024-65535 × l7=stun,
     # который ничего не десинкал и служил щитом: он ловил P2P-STUN (WebRTC в
     # браузере, peer-to-peer голос Discord) РАНЬШЕ широкого профиля game_udp,
@@ -2209,7 +2236,8 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,5222,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-NFQWS2_PORTS_UDP="443,50000-50100,1400,3478-3481,5349,19294-19344"
+# 590-600, 49152-65535 — UDP-профиль WireGuard/неизвестного UDP, 53 — dnsclone.
+NFQWS2_PORTS_UDP="443,50000-50100,1400,3478-3481,5349,19294-19344,590-600,49152-65535,53"
 
 # Discord voice/STUN: KEEPALIVE DISABLED (empty) — по канону bol-van.
 # Раньше (2026-06-11) на discord-портах connbytes-лимит снимался (keepalive),
