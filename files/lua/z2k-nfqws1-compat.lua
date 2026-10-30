@@ -1,6 +1,6 @@
 -- z2k-nfqws1-compat.lua
 --
--- Два приёма winws/nfqws1, которых в lua-движке zapret2 нет, а в стратегиях
+-- Три приёма winws/nfqws1, которых в lua-движке zapret2 нет, а в стратегиях
 -- winws-конфигов (и перенесённых оттуда плечах) они есть. Без этого слоя плечи
 -- выглядели перенесёнными, но работали не так, как у первоисточника.
 --
@@ -19,7 +19,13 @@
 --    теми же умолчаниями, что у nfqws1; явные tcp_seq/tcp_ack в том же плече
 --    не трогаются.
 --
--- 2. hostfakesplit altorder=1 (--dpi-desync-hostfakesplit-mod=altorder=1).
+-- 2. tcp_md5_first — раскладка опций TCP фейка как у nfqws1. Тот собирает
+--    опции заново: MD5 (md5sig) первой, за ней timestamp, без NOP. Штатный
+--    tcp_md5 дописывает MD5 в конец, после timestamp. В связке
+--    tcp_md5:tcp_nop_del:tcp_ts_up:tcp_md5_first фейк совпадает с nfqws1
+--    побайтно (дифференциальный стенд двух движков, 30.10.2026).
+--
+-- 3. hostfakesplit altorder=1 (--dpi-desync-hostfakesplit-mod=altorder=1).
 --    Штатный порядок: оригинал до хоста, фейк хоста, оригинал хоста, фейк
 --    хоста, оригинал после хоста. altorder=1: оригинал до хоста, фейк хоста,
 --    оригинал ПОСЛЕ хоста, и только потом — оригинал хоста (при midhost —
@@ -29,16 +35,34 @@
 --    штатный hostfakesplit из zapret-antidpi.lua с переставленными отправками;
 --    без altorder=1 вызов уходит в штатную функцию без изменений.
 --
--- luacheck: globals apply_fooling hostfakesplit
+-- luacheck: globals apply_fooling hostfakesplit find_tcp_option TCP_KIND_MD5
 
 -- ---------------------------------------------------------------------------
 -- badseq
 -- ---------------------------------------------------------------------------
 local z2k_apply_fooling_orig = apply_fooling
 
+-- tcp_md5_first: nfqws1 собирает опции фейка заново — MD5 первой, за ней
+-- timestamp; штатный tcp_md5 дописывает MD5 в конец. Флаг ставит MD5 первой.
+local function z2k_md5_first(desync, dis)
+  local d = dis or (desync and desync.dis)
+  local opts = d and d.tcp and d.tcp.options
+  if not opts then return end
+  local i = find_tcp_option(opts, TCP_KIND_MD5)
+  if i and i > 1 then
+    table.insert(opts, 1, opts[i])
+    table.remove(opts, i + 1)
+  end
+end
+
 function apply_fooling(desync, dis, fooling_options)
   local fo = fooling_options
   if fo == nil and desync then fo = desync.arg end
+  if type(fo) == "table" and fo.tcp_md5_first and not fo.badseq then
+    local r = z2k_apply_fooling_orig(desync, dis, fooling_options)
+    z2k_md5_first(desync, dis)
+    return r
+  end
   if type(fo) ~= "table" or not fo.badseq then
     return z2k_apply_fooling_orig(desync, dis, fooling_options)
   end
@@ -56,7 +80,9 @@ function apply_fooling(desync, dis, fooling_options)
   if type(DLOG) == "function" then
     DLOG("z2k_nfqws1_compat: badseq -> tcp_seq=" .. tostring(t.tcp_seq) .. " tcp_ack=" .. tostring(t.tcp_ack))
   end
-  return z2k_apply_fooling_orig(desync, dis, t)
+  local r = z2k_apply_fooling_orig(desync, dis, t)
+  if fo.tcp_md5_first then z2k_md5_first(desync, dis) end
+  return r
 end
 
 -- ---------------------------------------------------------------------------
