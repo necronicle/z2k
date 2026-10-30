@@ -75,6 +75,11 @@ H.test('tcp_md5_first without timestamp option: MD5 padded with NOPs like nfqws1
     local d=dis_tcp(); apply_fooling(desync,d,{tcp_md5='',tcp_md5_first=true})
     H.eq(TCP_KIND_MD5..','..TCP_KIND_NOOP..','..TCP_KIND_NOOP,kinds(d))
 end)
+H.test('tcp_md5_first keeps original NOPs in the length: MD5,NOP,NOP,TS + 2 NOP',function()
+    local d=dis_ts(); apply_fooling(desync,d,{tcp_md5='',tcp_md5_first=true})
+    local N,T,K=TCP_KIND_NOOP,TCP_KIND_TS,TCP_KIND_MD5
+    H.eq(table.concat({K,N,N,T,N,N},','),kinds(d))
+end)
 H.test('tcp_md5_first: MD5+TS is 28 bytes, no padding',function()
     local d=dis_ts(); apply_fooling(desync,d,{tcp_md5='',tcp_nop_del=true,tcp_md5_first=true,tcp_ts_up=true})
     H.eq(TCP_KIND_MD5..','..TCP_KIND_TS,kinds(d))
