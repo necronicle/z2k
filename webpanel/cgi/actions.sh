@@ -2899,9 +2899,9 @@ tcp16_status_json() {
     if [ "$running" = false ] && [ -n "$started" ] && [ "${ts:-0}" -lt "$started" ] 2>/dev/null; then
         stale=true
     fi
-    # «В конфиге» — у РАБОТАЮЩЕГО движка, а не только в файле: после правки
-    # конфига без перезапуска это разные ответы.
-    grep -q -- '--lua-desync=z2k_sni_pick' "$CONFIG_FILE" 2>/dev/null && in_cfg=true
+    # Проверяем файл конфига; это не свидетельство перезагрузки движка.
+    # Старый селектор оставлен в Lua как no-op и активным обходом не считается.
+    grep -qE -- '--lua-desync=z2k_sni_fake(:|[[:space:]]|$)' "$CONFIG_FILE" 2>/dev/null && in_cfg=true
     printf '{"ok":true,"measured":'; json_string "$f"
     printf ',"age":%s' "${age:-null}"
     printf ',"nets_blocked":%s' "$(_tcp16_count "${ZAPRET2_DIR}/state/tcp16_asn.txt")"

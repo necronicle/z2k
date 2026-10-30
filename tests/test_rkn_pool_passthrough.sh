@@ -37,6 +37,29 @@ cp "$ROOT"/files/lua/*.lua "$TMP/lua/" 2>/dev/null
 OUT=$( ZAPRET2_DIR="$TMP" generate_nfqws2_opt_from_strategies 2>/dev/null )
 [ -n "$OUT" ] && ok "генератор отработал" || no "генератор отработал"
 
+want_numbered=$(printf '%s\n' "$POOL" | tr ' ' '\n' | grep -E '^--lua-desync=.*:strategy=[0-9]+$' | grep -v '^--lua-desync=circular')
+# При измеренном блоке работает ограниченный отправитель, без clone + fake.
+mkdir -p "$TMP/state"
+printf '1\n' > "$TMP/state/tcp16.flag"
+for mode in 0 1; do
+    printf 'Z2K_NFQWS2_TEMPLATES=%s\nZ2K_SNI_STALL=1\n' "$mode" > "$TMP/config"
+    measured=$( ZAPRET2_DIR="$TMP" generate_nfqws2_opt_from_strategies 2>/dev/null )
+    case "$measured" in
+        *z2k_sni_pick*|*blob=z2k_ch*) no "общий фейк остался (templates=$mode)" ;;
+        *z2k_sni_fake*) ok "компактный отправитель включён (templates=$mode)" ;;
+        *) no "отправитель отсутствует (templates=$mode)" ;;
+    esac
+    got_numbered=$(printf '%s\n' "$measured" | tr ' ' '\n' | grep -E '^--lua-desync=.*:strategy=[0-9]+$' | grep -v '^--lua-desync=circular')
+    case "
+$got_numbered
+" in
+        *"
+$want_numbered
+"*) ok "порядок и содержимое всех плеч сохранены с механизмом (templates=$mode)" ;;
+        *) no "пул изменён при включённом механизме (templates=$mode)" ;;
+    esac
+done
+
 # Экземпляры с номером стратегии: в пуле и в конфиге (профиль rkn — шаблон
 # арсенала или сам профиль; ищем токены, а не строки).
 printf '%s\n' "$POOL" | tr ' ' '\n' | grep -E '^--lua-desync=.*:strategy=[0-9]+$' | grep -v '^--lua-desync=circular' > "$TMP/want"

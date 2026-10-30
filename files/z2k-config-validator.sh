@@ -496,7 +496,7 @@ fakedsplit fakeddisorder multisplit multidisorder \
 hostfakesplit http_methodeol syndata pktmod udplen \
 rst rstack synack \
 z2k_quic_morph_v2 z2k_timing_morph z2k_ipfrag3 z2k_ipfrag3_tiny \
-tls_client_hello_clone z2k_sni_pick"
+tls_client_hello_clone z2k_sni_pick z2k_sni_fake"
 
 is_known_action() {
     _action="$1"

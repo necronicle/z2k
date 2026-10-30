@@ -70,5 +70,12 @@ case "$OUT2" in
     *)              bad "валидатор пропустил блоб, которого никто не производит" ;;
 esac
 
+sed 's/z2k_sni_pick/z2k_sni_fake/' "$SB/config" > "$SB/config.compact"
+OUT3=$(ZAPRET_BASE="$SB" sh "$VALIDATOR" "$SB/config.compact" 2>&1)
+case "$OUT3" in
+    *"Неизвестное lua-desync действие: 'z2k_sni_fake'"*) bad "компактный отправитель неизвестен валидатору" ;;
+    *) ok "компактный отправитель известен валидатору" ;;
+esac
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

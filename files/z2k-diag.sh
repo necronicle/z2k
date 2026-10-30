@@ -832,7 +832,7 @@ print_tcp16() {
 
     # Главное: доехало ли намеренное до конфига.
     local in_cfg=0
-    grep -q -- '--lua-desync=z2k_sni_pick' "${ZAPRET2_DIR}/config" 2>/dev/null && in_cfg=1
+    grep -qE -- '--lua-desync=z2k_sni_fake(:|[[:space:]]|$)' "${ZAPRET2_DIR}/config" 2>/dev/null && in_cfg=1
     printf 'в конфиге         : %s\n' "$([ "$in_cfg" = 1 ] && echo 'да' || echo 'НЕТ')"
     # Примеры печатаем ВСЕГДА, когда карта есть, — в том числе при расхождении.
     # Первая редакция показывала их только когда всё сошлось, то есть скрывала
