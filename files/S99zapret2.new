@@ -1179,6 +1179,11 @@ LUA_Z2K_FOOLING="$ZAPRET_BASE/lua/z2k-fooling-ext.lua"
 # поверх нашей.
 LUA_Z2K_NFQWS1_COMPAT="$ZAPRET_BASE/lua/z2k-nfqws1-compat.lua"
 [ -f "$LUA_Z2K_NFQWS1_COMPAT" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_NFQWS1_COMPAT"
+# z2k-fakemulti.lua (30.10.2026): действия fakemultisplit и fakemultidisorder
+# для плеч пула rkn. Нужны помощники zapret-lib/zapret-antidpi; грузится ДО
+# z2k-range-rand.lua, как и слой совместимости выше.
+LUA_Z2K_FAKEMULTI="$ZAPRET_BASE/lua/z2k-fakemulti.lua"
+[ -f "$LUA_Z2K_FAKEMULTI" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_FAKEMULTI"
 # Phase 7: z2k-range-rand.lua wraps upstream action functions (fake,
 # multisplit, fakedsplit, …) so strategies can use `repeats=2-6` style
 # range syntax on numeric args and get sticky per-flow randomised

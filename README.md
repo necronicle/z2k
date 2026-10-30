@@ -722,7 +722,8 @@ z2k/
 │   │   ├── z2k-quic-silence.lua    # детектор молчания для QUIC
 │   │   ├── z2k-modern-core.lua     # IP frag, QUIC morph, TLS shuffle, ECH
 │   │   ├── z2k-fooling-ext.lua     # Dynamic-TTL fooling hook
-│   │   ├── z2k-nfqws1-compat.lua   # badseq-фулинг и hostfakesplit altorder=1 как в winws
+│   │   ├── z2k-nfqws1-compat.lua   # badseq, MD5 первой и hostfakesplit altorder=1 как в winws
+│   │   ├── z2k-fakemulti.lua       # fakemultisplit и fakemultidisorder для пула rkn
 │   │   ├── z2k-range-rand.lua      # Randomised range injection
 │   │   └── z2k-tcp16.lua           # подстановка имени по сети (обрыв на 16 КБ), рантайм пробы
 │   ├── lists/                  # Domain & IP lists (RKN, YouTube, Telegram, WARP game IPs, extra-domains, tcp16_nets)
