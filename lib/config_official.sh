@@ -679,8 +679,9 @@ generate_nfqws2_opt_from_strategies() {
     # а в редких случаях мешает downstream примитивам — даём опт-аут.
     local Z2K_DYNAMIC_TTL
     Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    # rkn_tcp сюда не идёт: пул rkn — референсные наборы один в один
+    # (30.10.2026), динамический TTL меняет их фейки.
     if [ "$Z2K_DYNAMIC_TTL" != "0" ]; then
-        rkn_tcp=$(inject_z2k_dynamic_ttl "$rkn_tcp")
         youtube_tcp=$(inject_z2k_dynamic_ttl "$youtube_tcp")
         youtube_gv_tcp=$(inject_z2k_dynamic_ttl "$youtube_gv_tcp")
     fi
@@ -1045,7 +1046,7 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
-    rkn_tcp=$(inject_z2k_range_rand "$rkn_tcp")
+    # rkn_tcp — нет: число повторов референсного плеча меняет его пакеты.
     youtube_tcp=$(inject_z2k_range_rand "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_range_rand "$youtube_gv_tcp")
 

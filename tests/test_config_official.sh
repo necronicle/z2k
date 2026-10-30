@@ -802,6 +802,27 @@ test_corrupt_custom_strategy healthy \
     "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:blob=z2k_custom_marker:strategy=1" \
     "0" "исправный пользовательский файл принимается"
 
+printf "\n--- пул rkn доходит до конфига как есть ---\n"
+
+# Пул rkn — референсные наборы один в один (30.10.2026). Генератор не вправе
+# дописывать его плечам наши приёмы: динамический TTL фейка (fool=) и диапазон
+# повторов (repeats=N-M) меняют пакеты, и плечо перестаёт совпадать с
+# первоисточником. Пулы YouTube их получают как прежде.
+_seed_reference_rkn() {
+    local root="$1"
+    echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:blob=stun2:repeats=8:tcp_ts=-600000:tcp_ts_up:strategy=1 --lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_ts_up:strategy=2" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
+}
+OUT_REF=$(run_generator "reference-rkn" "" "_seed_reference_rkn")
+_ref_rkn=$(get_rkn_tcp_arm_line "$OUT_REF")
+_ref_yt=$(printf '%s\n' "$OUT_REF" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" | grep -F 'YT/List.txt' | grep -F 'filter-l7=tls' | head -1)
+assert_contains "rkn: фейк как в пуле" "--lua-desync=fake:blob=stun2:repeats=8:tcp_ts=-600000:tcp_ts_up:strategy=1" "$_ref_rkn"
+assert_contains "rkn: hostfakesplit как в пуле" "--lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_ts_up:strategy=2" "$_ref_rkn"
+assert_not_contains "rkn: без динамического TTL" "fool=z2k_dynamic_ttl" "$_ref_rkn"
+assert_contains "yt: динамический TTL на месте" "fool=z2k_dynamic_ttl" "$_ref_yt"
+if printf '%s' "$_ref_yt" | grep -Eq ':repeats=[0-9]+-[0-9]+'; then _yt_rr=да; else _yt_rr=нет; fi
+assert_eq "yt: диапазон повторов на месте" "да" "$_yt_rr"
+
 rm -rf "$MOCK_DIR"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
