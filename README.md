@@ -66,7 +66,7 @@ z2k — модульный установщик zapret2 для роутеров 
 
 - Установка zapret2 (openwrt-embedded релиз) без компиляции, с проверкой работоспособности `nfqws2`
 - Три TCP autocircular профиля с разными стратегиями:
-  - **RKN** — список ресурсов (TCP/TLS + HTTP) — 55 стратегий
+  - **RKN** — список ресурсов (TCP/TLS + HTTP) — 86 стратегий: референсные наборы для winws и nfqws2 один в один, без своих добавок (плечи winws переведены на nfqws2 и сверены с nfqws1 пакет в пакет)
   - **YouTube TCP** — youtube.com и связанные домены — 33 стратегии
   - **YouTube GV** — googlevideo CDN (стриминг) — 33 стратегии
 - Защита DNS: открытые DNS-запросы устройств к внешним серверам заворачиваются на резолвер роутера, подмена ответов провайдером не доходит до устройств
@@ -699,7 +699,7 @@ some-blocked-site.org
 z2k/
 ├── z2k.sh                      # Bootstrap / main installer
 ├── z2k_cleanup.sh              # Complete uninstall
-├── strats_new2.txt             # TCP strategy database (RKN 50 / YT 22 / GV 22)
+├── strats_new2.txt             # TCP strategy database (RKN 86 / YT 33 / GV 33)
 ├── quic_strats.ini             # UDP/QUIC strategy database (quic + discord_voice)
 ├── lib/                        # Core modules (загружаются z2k.sh)
 │   ├── utils.sh                # Utilities, safe_config_read, z2k_fetch с 5-layer fallback

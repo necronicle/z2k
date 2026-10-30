@@ -660,6 +660,21 @@ _z2k_migrate_pool_renumber_v2()
 		{ print }'
 }
 
+# 30.10.2026: пул rkn собран заново из референсных наборов, прежние плечи сняты
+# все. Номер в строке rkn_tcp указывает на плечо, которого больше нет, — и у
+# автоматической записи, и у замороженной, поэтому стираются обе: хост
+# подбирает плечо заново с первого. Остальные пулы не трогаются.
+_z2k_migrate_pool_renumber_v3()
+{
+	# Файл мог состоять из одних строк rkn: пустой итог каркас не примет, поэтому
+	# без единой оставшейся строки печатается заголовок (читатель его пропускает).
+	_z2k_migrate_pool_renumber v3 'rkn_tcp' 'rkn: pool rebuilt, all rows reset' '
+		/^#/ || NF < 3 { print; kept = 1; next }
+		$1 == "rkn_tcp" { next }
+		{ print; kept = 1 }
+		END { if (!kept) print "# z2k autocircular state" }'
+}
+
 # ПОЛЬЗОВАТЕЛЬСКИЕ СТРАТЕГИИ НА СНЯТОМ ГОЛОСОВОМ БЛОБЕ (25.10.2026).
 #
 # Голосовой пул переехал с quic_dbankcloud на quic_initial_steamcommunity_com, и
@@ -1365,6 +1380,17 @@ TLS_SOCHI_PARK_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_sochi_park.bin"
 
 STUN2_BLOB="$ZAPRET_BASE/files/fake/stun2.bin"
 [ -s "$STUN2_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=stun2:@$STUN2_BLOB"
+
+# Фейки референсного набора пула rkn (30.10.2026). tls_clienthello_5 (ClientHello
+# fe2cr.update.microsoft.com, 209 байт) — шаблон seqovl одного плеча.
+# fake_default_tls12 — встроенный фейк движка (fake_default_tls) с версией
+# записи TLS 0x0303 вместо 0x0301: так его видит первоисточник этих плеч, и с
+# ним они совпадают побайтно.
+TLS_5_BLOB="$ZAPRET_BASE/files/fake/tls_clienthello_5.bin"
+[ -s "$TLS_5_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=tls_clienthello_5:@$TLS_5_BLOB"
+
+FAKE_DEFAULT_TLS12_BLOB="$ZAPRET_BASE/files/fake/fake_default_tls12.bin"
+[ -s "$FAKE_DEFAULT_TLS12_BLOB" ] && NFQWS2_OPT_BASE="$NFQWS2_OPT_BASE --blob=fake_default_tls12:@$FAKE_DEFAULT_TLS12_BLOB"
 
 # RDP-пакет (47 байт, из набора файлов движка) — фейк плеча rkn 20: фейк не-TLS
 # протокола со сдвигом seq и мультиразрез, замер 25.10.2026 на линии Марка 32 из 33.
@@ -3158,6 +3184,7 @@ start()
     # Перенумерация TCP-пулов 23.10.2026 — тоже строго до подъёма демона.
     _z2k_migrate_pool_renumber_v1
     _z2k_migrate_pool_renumber_v2
+    _z2k_migrate_pool_renumber_v3
     _z2k_migrate_custom_voice_blob_v1
 
     if ! start_daemons; then
