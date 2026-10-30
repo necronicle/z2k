@@ -1422,15 +1422,6 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-fakemulti.lua"
     fi
 
-    # dnsclone для профиля DNS по UDP 53.
-    url="${GITHUB_RAW}/files/lua/z2k-dnsclone.lua"
-    output="${lua_dir}/z2k-dnsclone.lua"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/lua/z2k-dnsclone.lua"
-    else
-        die "Ошибка загрузки files/lua/z2k-dnsclone.lua"
-    fi
-
     # Phase 7: per-connection range randomisation for numeric strategy
     # args. Wraps fake/multisplit/fakedsplit/fakeddisorder/hostfakesplit
     # and resolves ranges like repeats=2-6 to sticky per-flow values.

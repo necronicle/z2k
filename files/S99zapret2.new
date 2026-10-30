@@ -1199,11 +1199,6 @@ LUA_Z2K_NFQWS1_COMPAT="$ZAPRET_BASE/lua/z2k-nfqws1-compat.lua"
 # z2k-range-rand.lua, как и слой совместимости выше.
 LUA_Z2K_FAKEMULTI="$ZAPRET_BASE/lua/z2k-fakemulti.lua"
 [ -f "$LUA_Z2K_FAKEMULTI" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_FAKEMULTI"
-# z2k-dnsclone.lua (30.10.2026): действие dnsclone профиля DNS по UDP 53.
-# Нужны помощники zapret-lib; генератор подключает профиль только при наличии
-# этого файла.
-LUA_Z2K_DNSCLONE="$ZAPRET_BASE/lua/z2k-dnsclone.lua"
-[ -f "$LUA_Z2K_DNSCLONE" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_DNSCLONE"
 # Phase 7: z2k-range-rand.lua wraps upstream action functions (fake,
 # multisplit, fakedsplit, …) so strategies can use `repeats=2-6` style
 # range syntax on numeric args and get sticky per-flow randomised

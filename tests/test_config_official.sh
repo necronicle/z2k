@@ -230,8 +230,6 @@ run_generator() {
         cp "$SCRIPT_DIR/files/lua/z2k-alert.lua" "$root/lua/" 2>/dev/null || true
         cp "$SCRIPT_DIR/files/lua/z2k-quic-silence.lua" "$root/lua/" 2>/dev/null || true
     }
-    # dnsclone проводится в конфиг только при наличии модуля — как на роутере.
-    cp "$SCRIPT_DIR/files/lua/z2k-dnsclone.lua" "$root/lua/" 2>/dev/null || true
     [ -n "$extra_cb" ] && eval "$extra_cb \"$root\""
     ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null )
     rm -rf "$root"
@@ -825,12 +823,11 @@ assert_contains "yt: динамический TTL на месте" "fool=z2k_dyn
 if printf '%s' "$_ref_yt" | grep -Eq ':repeats=[0-9]+-[0-9]+'; then _yt_rr=да; else _yt_rr=нет; fi
 assert_eq "yt: диапазон повторов на месте" "да" "$_yt_rr"
 
-printf "\n--- UDP: профиль WireGuard/неизвестного UDP и dnsclone на 53 ---\n"
+printf "\n--- UDP: профиль WireGuard/неизвестного UDP ---\n"
 
-# Включённые профили референсных наборов (30.10.2026), один в один: UDP-профиль
-# (WireGuard, STUN, Discord, MTProto, неизвестный UDP; нулевой фейк x6 и фейк
-# QUIC x6 с ротацией) и dnsclone на UDP 53 (клон запроса с TTL 8 до DPI, его
-# подложный ответ отбрасывается, оригинал пересылается заново).
+# Включённый UDP-профиль референсного набора (30.10.2026), один в один:
+# WireGuard, STUN, Discord, MTProto, неизвестный UDP; нулевой фейк x6 и фейк
+# QUIC x6 с ротацией.
 OUT_UDP=$(run_generator "udp-extra" "" "")
 _flat_udp=$(printf '%s\n' "$OUT_UDP" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk")
 _udp_misc=$(printf '%s\n' "$_flat_udp" | grep -F -- '--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535' | head -1)
@@ -841,19 +838,13 @@ assert_contains "udp: ротация" "--lua-desync=circular:fails=2:time=300:re
 assert_contains "udp: плечо 1" "--lua-desync=fake:blob=0x00000000:repeats=6:strategy=1" "$_udp_misc"
 assert_contains "udp: плечо 2" "--lua-desync=fake:blob=quic_google:repeats=6:strategy=2" "$_udp_misc"
 assert_not_contains "udp: без нашего TTL" "fool=" "$_udp_misc"
-_dns=$(printf '%s\n' "$_flat_udp" | grep -F -- '--filter-udp=53 ' | head -1)
-assert_contains "dns: dnsclone" "--lua-desync=dnsclone:ttl=8:ip_id=rnd:resend=1" "$_dns"
-assert_contains "dns: пейлоады" "--payload=dns_query,dns_response" "$_dns"
-assert_contains "dns: окна" "--in-range=-d100 --out-range=-d100" "$_dns"
 # голос Discord стоит раньше: его пакеты не уходят в широкий профиль
 _pos_voice=$(printf '%s\n' "$_flat_udp" | grep -nF 'key=discord_udp' | head -1 | cut -d: -f1)
 _pos_misc=$(printf '%s\n' "$_flat_udp" | grep -nF -- '--filter-udp=590-600' | head -1 | cut -d: -f1)
 if [ -n "$_pos_voice" ] && [ -n "$_pos_misc" ] && [ "$_pos_voice" -lt "$_pos_misc" ]; then _ord=да; else _ord=нет; fi
 assert_eq "udp: голос Discord раньше широкого профиля" "да" "$_ord"
-OUT_UDP_OFF=$(run_generator "udp-extra-off" "Z2K_UDP_MISC=0
-Z2K_DNSCLONE=0" "")
+OUT_UDP_OFF=$(run_generator "udp-extra-off" "Z2K_UDP_MISC=0" "")
 assert_not_contains "тумблер Z2K_UDP_MISC=0 снимает профиль" "49152-65535" "$OUT_UDP_OFF"
-assert_not_contains "тумблер Z2K_DNSCLONE=0 снимает dnsclone" "dnsclone" "$OUT_UDP_OFF"
 
 rm -rf "$MOCK_DIR"
 

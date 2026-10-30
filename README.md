@@ -71,7 +71,7 @@ z2k — модульный установщик zapret2 для роутеров 
   - **YouTube GV** — googlevideo CDN (стриминг) — 33 стратегии
 - Защита DNS: открытые DNS-запросы устройств к внешним серверам заворачиваются на резолвер роутера, подмена ответов провайдером не доходит до устройств
 - QUIC autocircular профили: YouTube QUIC (UDP/443) и Discord voice — с z2k morph-стратегиями (QUIC morph / timing morph)
-- UDP-профиль WireGuard / STUN / MTProto / неизвестного UDP (порты 590–600, 1400, 3478–3481, 5349, 19294–19344, 49152–65535) и dnsclone для DNS по UDP 53 — включённые профили референсных наборов один в один; тумблеры `Z2K_UDP_MISC` и `Z2K_DNSCLONE`
+- UDP-профиль WireGuard / STUN / MTProto / неизвестного UDP (порты 590–600, 1400, 3478–3481, 5349, 19294–19344, 49152–65535) — включённый профиль референсного набора один в один; тумблер `Z2K_UDP_MISC`
 - Discord профили:
   - TCP: hostlist Discord включён в RKN-профиль, включая порты медиасерверов 2053, 2083, 2087, 2096 и 8443
   - QUIC: тот же hostlist Discord включён в QUIC-профиль — картинки и вложения Discord отдаются по HTTP/3
@@ -725,7 +725,6 @@ z2k/
 │   │   ├── z2k-fooling-ext.lua     # Dynamic-TTL fooling hook
 │   │   ├── z2k-nfqws1-compat.lua   # badseq, MD5 первой и hostfakesplit altorder=1 как в winws
 │   │   ├── z2k-fakemulti.lua       # fakemultisplit и fakemultidisorder для пула rkn
-│   │   ├── z2k-dnsclone.lua        # dnsclone для профиля DNS по UDP 53
 │   │   ├── z2k-range-rand.lua      # Randomised range injection
 │   │   └── z2k-tcp16.lua           # подстановка имени по сети (обрыв на 16 КБ), рантайм пробы
 │   ├── lists/                  # Domain & IP lists (RKN, YouTube, Telegram, WARP game IPs, extra-domains, tcp16_nets)
