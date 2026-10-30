@@ -20,8 +20,8 @@
 --    не трогаются.
 --
 -- 2. tcp_md5_first — раскладка опций TCP фейка как у nfqws1. Тот собирает
---    опции заново: MD5 (md5sig) первой, за ней timestamp, без NOP. Штатный
---    tcp_md5 дописывает MD5 в конец, после timestamp. В связке
+--    опции заново: MD5 (md5sig) первой, за ней timestamp, до кратной 4 длины
+--    NOP. Штатный tcp_md5 дописывает MD5 в конец, после timestamp. В связке
 --    tcp_md5:tcp_nop_del:tcp_ts_up:tcp_md5_first фейк совпадает с nfqws1
 --    побайтно (дифференциальный стенд двух движков, 30.10.2026).
 --
@@ -35,7 +35,7 @@
 --    штатный hostfakesplit из zapret-antidpi.lua с переставленными отправками;
 --    без altorder=1 вызов уходит в штатную функцию без изменений.
 --
--- luacheck: globals apply_fooling hostfakesplit find_tcp_option TCP_KIND_MD5
+-- luacheck: globals apply_fooling hostfakesplit find_tcp_option TCP_KIND_MD5 TCP_KIND_NOOP TCP_KIND_END
 
 -- ---------------------------------------------------------------------------
 -- badseq
@@ -43,15 +43,26 @@
 local z2k_apply_fooling_orig = apply_fooling
 
 -- tcp_md5_first: nfqws1 собирает опции фейка заново — MD5 первой, за ней
--- timestamp; штатный tcp_md5 дописывает MD5 в конец. Флаг ставит MD5 первой.
+-- timestamp, до кратной 4 длины NOP в конце; штатный tcp_md5 дописывает MD5 в
+-- конец, а сборщик движка добивает длину EOL. Флаг ставит MD5 первой и
+-- добивает NOP.
 local function z2k_md5_first(desync, dis)
   local d = dis or (desync and desync.dis)
   local opts = d and d.tcp and d.tcp.options
   if not opts then return end
   local i = find_tcp_option(opts, TCP_KIND_MD5)
-  if i and i > 1 then
+  if not i then return end
+  if i > 1 then
     table.insert(opts, 1, opts[i])
     table.remove(opts, i + 1)
+  end
+  local len = 0
+  for _, o in ipairs(opts) do
+    len = len + ((o.kind == TCP_KIND_NOOP or o.kind == TCP_KIND_END) and 1 or 2 + #(o.data or ""))
+  end
+  while len % 4 ~= 0 do
+    opts[#opts + 1] = {kind = TCP_KIND_NOOP}
+    len = len + 1
   end
 end
 

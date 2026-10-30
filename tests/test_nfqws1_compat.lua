@@ -1,6 +1,6 @@
 -- tests/test_nfqws1_compat.lua — badseq и hostfakesplit altorder=1 из
 -- files/lua/z2k-nfqws1-compat.lua поверх настоящих zapret-lib/zapret-antidpi.
--- luacheck: globals brandom parse_hex TCP_KIND_NOOP TCP_KIND_TS TCP_KIND_MD5 rawsend_payload_segmented direction_cutoff_opposite instance_cutoff_shim direction_check payload_check replay_first replay_drop_set replay_drop resolve_range resolve_pos brandom_az brandom_az09 VERDICT_DROP
+-- luacheck: globals brandom parse_hex TCP_KIND_END TCP_KIND_NOOP TCP_KIND_TS TCP_KIND_MD5 rawsend_payload_segmented direction_cutoff_opposite instance_cutoff_shim direction_check payload_check replay_first replay_drop_set replay_drop resolve_range resolve_pos brandom_az brandom_az09 VERDICT_DROP
 local fork=os.getenv('Z2K_FORK_DIR') or '../zapret2-z2k-fork'
 local H=dofile(fork..'/tests/harness.lua')
 dofile(fork..'/lua/zapret-antidpi.lua')
@@ -55,7 +55,7 @@ end)
 -- tcp_md5_first: nfqws1 кладёт MD5 первой, затем timestamp, без NOP
 brandom=function(n) return string.rep('r',n) end   -- ядро: случайные байты подписи MD5
 parse_hex=function(h) return h=='' and '' or nil end   -- ядро; голый tcp_md5 приходит пустой строкой
-TCP_KIND_NOOP, TCP_KIND_TS, TCP_KIND_MD5 = 1, 8, 19   -- константы ядра (номера опций TCP)
+TCP_KIND_END, TCP_KIND_NOOP, TCP_KIND_TS, TCP_KIND_MD5 = 0, 1, 8, 19   -- константы ядра (номера опций TCP)
 local function kinds(d) local k={} for i,o in ipairs(d.tcp.options) do k[i]=o.kind end return table.concat(k,',') end
 local function dis_ts() return {ip={ip_ttl=64},tcp={th_seq=1000,th_ack=500000,th_flags=24,
     options={{kind=TCP_KIND_NOOP},{kind=TCP_KIND_NOOP},{kind=TCP_KIND_TS,data=string.rep('\0',8)}}},payload='x'} end
@@ -71,9 +71,13 @@ H.test('tcp_md5_first together with badseq',function()
     local d=dis_ts(); apply_fooling(desync,d,{badseq=true,tcp_md5='',tcp_nop_del=true,tcp_md5_first=true})
     H.eq(TCP_KIND_MD5..','..TCP_KIND_TS,kinds(d)); H.eq((1000-10000)%M,d.tcp.th_seq)
 end)
-H.test('tcp_md5_first without timestamp option: MD5 only',function()
+H.test('tcp_md5_first without timestamp option: MD5 padded with NOPs like nfqws1',function()
     local d=dis_tcp(); apply_fooling(desync,d,{tcp_md5='',tcp_md5_first=true})
-    H.eq(tostring(TCP_KIND_MD5),kinds(d))
+    H.eq(TCP_KIND_MD5..','..TCP_KIND_NOOP..','..TCP_KIND_NOOP,kinds(d))
+end)
+H.test('tcp_md5_first: MD5+TS is 28 bytes, no padding',function()
+    local d=dis_ts(); apply_fooling(desync,d,{tcp_md5='',tcp_nop_del=true,tcp_md5_first=true,tcp_ts_up=true})
+    H.eq(TCP_KIND_MD5..','..TCP_KIND_TS,kinds(d))
 end)
 
 -- hostfakesplit: стабы вокруг порядка отправки; разбор позиций хоста настоящий
