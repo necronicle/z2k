@@ -130,10 +130,10 @@ if [ -f "$ZAPRET_BASE/state/pool-renumber-v1.done" ]; then ok "marker after full
 # Таблицы в init обязаны соответствовать реальным пулам: максимум номера.
 rkn_max=$(grep 'key=rkn_tcp' "$ROOT/strats_new2.txt" | grep -o ':strategy=[0-9]*' | sed 's/.*=//' | sort -n | tail -1)
 yt_max=$(grep 'key=yt_tcp' "$ROOT/strats_new2.txt" | grep -o ':strategy=[0-9]*' | sed 's/.*=//' | sort -n | tail -1)
-# Таблица v1 переводила номера в пул rkn из 55 плеч; 30.10.2026 пул собран
-# заново (86 плеч), и все строки rkn стирает v3 — таблица v1 для rkn теперь
-# только промежуточный шаг цепочки.
-[ "$rkn_max" = 86 ] && ok "rkn pool has 86 arms" || no "rkn pool has 86 arms (got $rkn_max)"
+# Таблица v1 переводит номера в пул rkn из 55 плеч. 30.10.2026 к нему добавлены
+# два плеча референсного набора (56, 57) — номеров из таблицы это не касается,
+# в неё входят только выпущенные 1..50.
+[ "$rkn_max" = 57 ] && ok "rkn pool has 57 arms" || no "rkn pool has 57 arms (got $rkn_max)"
 [ "$yt_max" = 33 ] && ok "yt pool has 33 arms" || no "yt pool has 33 arms (got $yt_max)"
 gv_max=$(grep 'key=gv_tcp' "$ROOT/strats_new2.txt" | grep -o ':strategy=[0-9]*' | sed 's/.*=//' | sort -n | tail -1)
 [ "$gv_max" = 33 ] && ok "gv pool has 33 arms" || no "gv pool has 33 arms (got $gv_max)"
