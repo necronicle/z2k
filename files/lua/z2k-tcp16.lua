@@ -238,7 +238,7 @@ local function send_compact_sni(ctx, desync)
     -- чужой ClientHello отправлять нельзя.
     if not desync.arg.tcp_md5 then return end
     local mss = tonumber(desync.tcp_mss)
-    if not mss or not (mss > 0) then return end
+    if not mss or mss <= 0 then return end
     local name = z2k_sni_for(desync, z2k_sni_pinned())
     if not name then return end
     local base = blob(desync, "fake_default_tls")
