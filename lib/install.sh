@@ -4090,7 +4090,7 @@ step_finalize() {
         LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
     fi
     rm -f "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" \
-          "${ZAPRET2_DIR}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null || true
+          "${ZAPRET2_DIR}/lists/"*_discord_voice_hosts.txt 2>/dev/null || true
     # Снимок onetrust снят 23.10.2026 (выгорел, заменён на sferum, у нас он
     # ни одним плечом больше не упоминается). Файл на роутере
     # безвреден, но и возить мёртвый груз незачем.
@@ -5516,7 +5516,7 @@ uninstall_zapret2() {
         LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
     fi
 
-    rm -f "${ZAPRET2_DIR:-/opt/zapret2}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null || true
+    rm -f "${ZAPRET2_DIR:-/opt/zapret2}/lists/"*_discord_voice_hosts.txt 2>/dev/null || true
     rm -f /opt/etc/init.d/S96z2k-rt-proxy \
           /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
           /opt/sbin/z2k-rt-proxy \

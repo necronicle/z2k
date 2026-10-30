@@ -889,7 +889,7 @@ main() {
             changes=$((changes + 1))
         fi
     fi
-    rm -f "${ZAPRET2_DIR}/lists/flowseal_discord_voice_hosts.txt" \
+    rm -f "${ZAPRET2_DIR}/lists/"*_discord_voice_hosts.txt \
           "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" 2>/dev/null
 
     # Cloudflare canonical IPv4 CIDR list. Source: cloudflare.com/ips-v4

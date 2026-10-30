@@ -2221,11 +2221,11 @@ load_modules()
 }
 
 
-# Keenetic fix (similar to nfqws2-keenetic): ensure UDP packets processed by nfqws2
+# Keenetic fix (as other Keenetic builds do): ensure UDP packets processed by nfqws2
 # (marked with DESYNC_MARK) still get source NAT on WAN via a dedicated nat chain.
 Z2K_IPT_NAT_CHAIN="zapret2_nat"
 
-# Connmark-based exclusion (borrowed from nfqws2-keenetic):
+# Connmark-based exclusion (common Keenetic-build approach):
 # - Mark connections outside selected Keenetic policy (POLICY_NAME/POLICY_EXCLUDE) with CONNMARK exclude bit.
 # - NFQUEUE rules include "-m connmark ! --mark $Z2K_CONNMARK_EXCLUDE" so excluded flows never enter NFQUEUE.
 Z2K_CONNMARK_EXCLUDE="0x20000000/0x20000000"
@@ -2302,7 +2302,7 @@ z2k_detect_policy_mark()
 {
     Z2K_POLICY_MARK=""
 
-    # Default to nfqws2-keenetic convention. If policy doesn't exist, we process all traffic.
+    # Default to the usual Keenetic policy name. If policy doesn't exist, we process all traffic.
     POLICY_NAME="${POLICY_NAME:-nfqws}"
     POLICY_EXCLUDE="${POLICY_EXCLUDE:-0}"
 
@@ -2709,7 +2709,7 @@ z2k_rst_filter_purge()
 #  - tcp_be_liberal=1: RU DPI sends RST,ACK with a wrong ACK; strict conntrack
 #    marks it INVALID and the connbytes rule never passes it to nfqws.
 #  - checksum=0: with HW offload the NIC computes the L4 checksum, so the kernel
-#    sees a "bad" checksum -> conntrack marks INVALID (S00fix nfqws-keenetic ships).
+#    sees a "bad" checksum -> conntrack marks INVALID (other Keenetic builds ship an S00 fix).
 #  - fastnat=0: the NDM software fastpath (RTCACHE) routes flows PAST conntrack,
 #    so on an offloaded flow nfqws gets "ctrack disabled" and SKIPS every desync
 #    ("out pos ... beyond range a0-sN") -> YouTube/RKN silently NOT bypassed on
