@@ -118,7 +118,11 @@ H.test('previously unprotected TCP fakes carry an invalid checksum',function()
     -- yt/gv на 2–4 25.10.2026 (yt/gv 26 -> 29) и перестановки по качеству
     -- 26.10.2026 (yt 29 -> 24, gv 29 -> 19). rkn здесь нет: с 30.10.2026 его пул —
     -- референсные наборы один в один, своих добавок фулинга в нём не бывает.
-    for key,num in pairs({yt_tcp='24',gv_tcp='19'}) do
+    -- Номера живут в пуле и переезжают с каждой перестановкой по качеству:
+    -- 30.10.2026 пулы переставлены замером на линии владельца, yt 24 -> 38,
+    -- gv 19 -> 23. rkn здесь нет: его плечи референсного набора своих добавок
+    -- фулинга не несут.
+    for key,num in pairs({yt_tcp='38',gv_tcp='23'}) do
         local checked=false
         for _,ins in ipairs(all[key]) do
             if ins.func=='fake' and ins.arg.strategy==num then
@@ -130,9 +134,9 @@ H.test('previously unprotected TCP fakes carry an invalid checksum',function()
 end)
 -- Слоты 6 и 11 до вставки трёх плеч на 2–4 (25.10.2026) стали 9 и 14, после
 -- перестановки по качеству (26.10.2026) — 31 и 32.
--- 30.10.2026: в gv дописаны шесть плеч гугловой строки референсного набора,
--- которых у нас не было (34..39). Нумерация по-прежнему сплошная, а слоты 31 и
--- 32 — те же два близнеца, различающиеся только seqovl.
+-- 30.10.2026: в gv дописаны шесть плеч гугловой строки референсного набора, и
+-- пул переставлен по замеру. Нумерация сплошная, а близнецы, различающиеся
+-- только seqovl, переехали с 31 и 32 на 36 и 37.
 H.test('GV slot 32 is distinct while the contiguous numbering is retained',function()
     local ids,slot6,slot11,mx={},nil,nil,0
     for _,ins in ipairs(all.gv_tcp) do
@@ -140,8 +144,8 @@ H.test('GV slot 32 is distinct while the contiguous numbering is retained',funct
             local n=tonumber(ins.arg.strategy); ids[n]=true
             if n>mx then mx=n end
         end
-        if ins.func=='multisplit' and ins.arg.strategy=='31' then slot6=ins.arg end
-        if ins.func=='multisplit' and ins.arg.strategy=='32' then slot11=ins.arg end
+        if ins.func=='multisplit' and ins.arg.strategy=='36' then slot6=ins.arg end
+        if ins.func=='multisplit' and ins.arg.strategy=='37' then slot11=ins.arg end
     end
     H.eq(39,mx)
     for i=1,mx do H.eq(true,ids[i]) end
