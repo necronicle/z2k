@@ -660,6 +660,10 @@ generate_nfqws2_opt_from_strategies() {
                     case "$token" in
                         *:ip_ttl=*|*:ip6_ttl=*|*:ip_autottl=*|*:ip6_autottl=*|*:fool=*) skip="1" ;;
                     esac
+                    # Плечи гугловой строки референсного набора помечены
+                    # ip_id=zero и приведены к ней один в один: свой TTL фейка
+                    # разводит плечо с первоисточником.
+                    case "$token" in *:ip_id=zero*) skip="1" ;; esac
                     if [ -z "$skip" ]; then
                         token="${token}:fool=z2k_dynamic_ttl"
                     fi
@@ -1018,6 +1022,11 @@ generate_nfqws2_opt_from_strategies() {
                 --lua-desync=fakeddisorder:*|\
                 --lua-desync=hostfakesplit:*|\
                 --lua-desync=syndata:*)
+                    # Плечи референсного набора (ip_id=zero) — без диапазона:
+                    # число фейков у них задано первоисточником.
+                    case "$token" in
+                        *:ip_id=zero*) out="${out:+$out }$token"; continue ;;
+                    esac
                     case "$token" in
                         *:repeats=*)
                             token=$(printf '%s' "$token" | awk '
@@ -1595,10 +1604,22 @@ generate_nfqws2_opt_from_strategies() {
     # Широкий диапазон — ровно тот случай, о котором предупреждение ниже: P2P-STUN
     # (WebRTC) на высоких портах получит фейки этого профиля, как у первоисточника.
     # Тумблер Z2K_UDP_MISC=0 снимает профиль.
-    local udp_misc_on
+    # Голосовые порты и протоколы (stun, discord) идут сюда только при
+    # включённой категории голоса Discord: человек её выключил — значит ни STUN,
+    # ни Discord мы не трогаем, остаются WireGuard, MTProto и неизвестный UDP.
+    local udp_misc_on udp_misc_ports udp_misc_l7 udp_misc_payload
     udp_misc_on=$(safe_config_read Z2K_UDP_MISC "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
+    if [ "$category_voice" = 0 ]; then
+        udp_misc_ports="590-600,49152-65535"
+        udp_misc_l7="wireguard,mtproto,unknown"
+        udp_misc_payload="wireguard_initiation,wireguard_response,wireguard_cookie,mtproto_initial,unknown"
+    else
+        udp_misc_ports="590-600,1400,3478-3481,5349,19294-19344,49152-65535"
+        udp_misc_l7="wireguard,stun,discord,mtproto,unknown"
+        udp_misc_payload="wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown"
+    fi
     if [ "$udp_misc_on" != 0 ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535 --filter-l7=wireguard,stun,discord,mtproto,unknown --out-range=<n2 --payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown --lua-desync=circular:fails=2:time=300:retrans=3:nld=2 --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2 --new\\n"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=$udp_misc_ports --filter-l7=$udp_misc_l7 --out-range=<n2 --payload=$udp_misc_payload --lua-desync=circular:fails=2:time=300:retrans=3:nld=2 --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2 --new\\n"
     fi
 
     # Здесь стоял webrtc_bypass — пустой профиль udp/1024-65535 × l7=stun,

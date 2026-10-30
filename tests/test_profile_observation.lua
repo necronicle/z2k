@@ -130,15 +130,22 @@ H.test('previously unprotected TCP fakes carry an invalid checksum',function()
 end)
 -- Слоты 6 и 11 до вставки трёх плеч на 2–4 (25.10.2026) стали 9 и 14, после
 -- перестановки по качеству (26.10.2026) — 31 и 32.
-H.test('GV slot 32 is distinct while the contiguous 1..33 numbering is retained',function()
-    local ids,slot6,slot11={}
+-- 30.10.2026: в gv дописаны шесть плеч гугловой строки референсного набора,
+-- которых у нас не было (34..39). Нумерация по-прежнему сплошная, а слоты 31 и
+-- 32 — те же два близнеца, различающиеся только seqovl.
+H.test('GV slot 32 is distinct while the contiguous numbering is retained',function()
+    local ids,slot6,slot11,mx={},nil,nil,0
     for _,ins in ipairs(all.gv_tcp) do
-        if ins.arg.strategy then ids[tonumber(ins.arg.strategy)]=true end
+        if ins.arg.strategy then
+            local n=tonumber(ins.arg.strategy); ids[n]=true
+            if n>mx then mx=n end
+        end
         if ins.func=='multisplit' and ins.arg.strategy=='31' then slot6=ins.arg end
         if ins.func=='multisplit' and ins.arg.strategy=='32' then slot11=ins.arg end
     end
-    for i=1,33 do H.eq(true,ids[i]) end
-    H.eq(nil,ids[34])
+    H.eq(39,mx)
+    for i=1,mx do H.eq(true,ids[i]) end
+    H.eq(nil,ids[mx+1])
     H.eq('1',slot6.seqovl); H.eq(nil,slot11.seqovl)
     H.eq(slot6.pos,slot11.pos)
 end)

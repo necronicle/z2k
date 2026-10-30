@@ -67,8 +67,8 @@ z2k — модульный установщик zapret2 для роутеров 
 - Установка zapret2 (openwrt-embedded релиз) без компиляции, с проверкой работоспособности `nfqws2`
 - Три TCP autocircular профиля с разными стратегиями:
   - **RKN** — список ресурсов (TCP/TLS + HTTP) — 57 стратегий; плечи референсного набора для winws — один в один (переведены на nfqws2 и сверены с nfqws1 пакет в пакет)
-  - **YouTube TCP** — youtube.com и связанные домены — 33 стратегии
-  - **YouTube GV** — googlevideo CDN (стриминг) — 33 стратегии
+  - **YouTube TCP** — youtube.com и связанные домены — 41 стратегия; плечи гугловой строки референсного набора — один в один
+  - **YouTube GV** — googlevideo CDN (стриминг) — 39 стратегий; там же
 - Защита DNS: открытые DNS-запросы устройств к внешним серверам заворачиваются на резолвер роутера, подмена ответов провайдером не доходит до устройств
 - QUIC autocircular профили: YouTube QUIC (UDP/443) и Discord voice — с z2k morph-стратегиями (QUIC morph / timing morph)
 - UDP-профиль WireGuard / STUN / MTProto / неизвестного UDP (порты 590–600, 1400, 3478–3481, 5349, 19294–19344, 49152–65535) — включённый профиль референсного набора один в один; тумблер `Z2K_UDP_MISC`
@@ -700,7 +700,7 @@ some-blocked-site.org
 z2k/
 ├── z2k.sh                      # Bootstrap / main installer
 ├── z2k_cleanup.sh              # Complete uninstall
-├── strats_new2.txt             # TCP strategy database (RKN 57 / YT 33 / GV 33)
+├── strats_new2.txt             # TCP strategy database (RKN 57 / YT 41 / GV 39)
 ├── quic_strats.ini             # UDP/QUIC strategy database (quic + discord_voice)
 ├── lib/                        # Core modules (загружаются z2k.sh)
 │   ├── utils.sh                # Utilities, safe_config_read, z2k_fetch с 5-layer fallback

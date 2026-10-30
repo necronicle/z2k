@@ -134,9 +134,12 @@ yt_max=$(grep 'key=yt_tcp' "$ROOT/strats_new2.txt" | grep -o ':strategy=[0-9]*' 
 # два плеча референсного набора (56, 57) — номеров из таблицы это не касается,
 # в неё входят только выпущенные 1..50.
 [ "$rkn_max" = 57 ] && ok "rkn pool has 57 arms" || no "rkn pool has 57 arms (got $rkn_max)"
-[ "$yt_max" = 33 ] && ok "yt pool has 33 arms" || no "yt pool has 33 arms (got $yt_max)"
+# 30.10.2026: в yt и gv дописаны плечи гугловой строки референсного набора,
+# которых у нас не было (yt 34..41, gv 34..39). Таблицы v1 это не касается — в
+# неё входят только выпущенные номера.
+[ "$yt_max" = 41 ] && ok "yt pool has 41 arms" || no "yt pool has 41 arms (got $yt_max)"
 gv_max=$(grep 'key=gv_tcp' "$ROOT/strats_new2.txt" | grep -o ':strategy=[0-9]*' | sed 's/.*=//' | sort -n | tail -1)
-[ "$gv_max" = 33 ] && ok "gv pool has 33 arms" || no "gv pool has 33 arms (got $gv_max)"
+[ "$gv_max" = 39 ] && ok "gv pool has 39 arms" || no "gv pool has 39 arms (got $gv_max)"
 quic_max=$(awk '/^\[quic_autocircular\]/{a=1;next} a && /^args=/{print;exit}' "$ROOT/quic_strats.ini" | grep -o ':strategy=[0-9]*' | sed 's/.*=//' | sort -n | tail -1)
 [ "$quic_max" = 18 ] && ok "quic pool has 18 arms" || no "quic pool has 18 arms (got $quic_max)"
 
