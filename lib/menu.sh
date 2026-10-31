@@ -59,7 +59,7 @@ show_main_menu() {
 |  logistik77, b11d11, BloodKnife39, SIGogelon,     |
 |  yozh, Altaec, DIDIQ Rawa, GregMSK, Кожевников,   |
 |  bootnet, ewgen911, cmfifty, Ret80,               |
-|  Шулепов Александр                                |
+|  Шулепов Александр, Андрюшка                      |
 +===================================================+
 
 MENU
