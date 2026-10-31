@@ -79,7 +79,11 @@ func (c *Cache) Load(path string, now time.Time) error {
 		if ce != nil || de != nil || !EligibleDestination(dest) || !c.rules.Match(e.Name) || e.Expiry <= now.Unix() {
 			continue
 		}
-		if _, err := clientSet(client); err != nil {
+		if c.global {
+			if client != networkWide {
+				continue
+			}
+		} else if _, err := clientSet(client); err != nil {
 			continue
 		}
 		k := pair{client, dest}

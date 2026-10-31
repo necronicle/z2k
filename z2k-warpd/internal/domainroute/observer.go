@@ -20,11 +20,18 @@ type Status struct {
 	Skipped  uint64 `json:"skipped"`
 	Overflow uint64 `json:"overflow"`
 	Error    string `json:"error,omitempty"`
+	// Исключения: домены «никогда через WARP» и сколько их адресов в наборе.
+	ExclRules int `json:"excl_rules"`
+	ExclPairs int `json:"excl_pairs"`
 }
 
 type Options struct {
 	DomainPath, SnapshotPath, StatusPath string
 	PairSet                              PairSet
+	// Исключения. Пустой ExcludePath — выключены; отсутствующий файл — пустой
+	// список, а не ошибка: исключений у большинства нет.
+	ExcludePath, ExcludeSnapshotPath string
+	ExclSet                          ExclSet
 }
 
 var ErrObserverAlreadyRunning = errors.New("domain observer is already running")
@@ -33,6 +40,7 @@ type Observer struct {
 	mu        sync.Mutex
 	decoder   *PacketDecoder
 	cache     *Cache
+	excl      *Cache
 	local     map[netip.Addr]struct{}
 	active    bool
 	overflow  uint64
@@ -40,7 +48,8 @@ type Observer struct {
 }
 
 func NewObserver(r Rules) *Observer {
-	return &Observer{decoder: NewPacketDecoder(), cache: NewCache(r), local: make(map[netip.Addr]struct{})}
+	none, _ := ParseRules([]byte("v1\n"))
+	return &Observer{decoder: NewPacketDecoder(), cache: NewCache(r), excl: NewExclusionCache(none), local: make(map[netip.Addr]struct{})}
 }
 
 func (o *Observer) SetLocalAddresses(addresses []netip.Addr) []Change {
@@ -81,19 +90,26 @@ func routerAddresses() []netip.Addr {
 }
 
 func (o *Observer) Process(packet []byte, now time.Time) []Change {
+	include, _ := o.ProcessAll(packet, now)
+	return include
+}
+
+// ProcessAll разбирает ответ DNS один раз и отдаёт изменения обоим наборам:
+// маршрутизации в WARP и исключений.
+func (o *Observer) ProcessAll(packet []byte, now time.Time) (include, exclude []Change) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if len(packet) > maxDNSFrame+60 {
 		o.overflow++
-		return nil
+		return nil, nil
 	}
 	client, payload, transport := o.decoder.Push(packet, now)
 	if !client.IsValid() || len(payload) == 0 {
-		return nil
+		return nil, nil
 	}
 	name, answers, err := ParseReply(payload, transport)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	filtered := answers[:0]
 	for _, answer := range answers {
@@ -101,7 +117,13 @@ func (o *Observer) Process(packet []byte, now time.Time) []Change {
 			filtered = append(filtered, answer)
 		}
 	}
-	return o.cache.Observe(client, name, filtered, now)
+	return o.cache.Observe(client, name, filtered, now), o.excl.Observe(client, name, filtered, now)
+}
+
+func (o *Observer) ReplaceExclusions(r Rules, now time.Time) []Change {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.excl.ReplaceRules(r, now)
 }
 
 func (o *Observer) ReplaceRules(r Rules, now time.Time) []Change {
@@ -113,7 +135,8 @@ func (o *Observer) ReplaceRules(r Rules, now time.Time) []Change {
 func (o *Observer) status() Status {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return Status{Active: o.active, Rules: o.cache.rules.Len(), Pairs: o.cache.Len(), Skipped: o.cache.Skipped(), Overflow: o.overflow, Error: o.lastError}
+	return Status{Active: o.active, Rules: o.cache.rules.Len(), Pairs: o.cache.Len(), Skipped: o.cache.Skipped(), Overflow: o.overflow, Error: o.lastError,
+		ExclRules: o.excl.rules.Len(), ExclPairs: o.excl.Len()}
 }
 
 func (o *Observer) setState(active bool, err error) {
@@ -171,13 +194,27 @@ func (o *Observer) Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	o.ReplaceRules(rules, time.Now())
+	excl := opts.ExcludePath != ""
+	if excl {
+		if r, err := readExclusions(opts.ExcludePath); err == nil {
+			o.ReplaceExclusions(r, time.Now())
+		} else {
+			o.setState(false, err)
+		}
+	}
 	o.SetLocalAddresses(routerAddresses())
 	o.mu.Lock()
 	err = o.cache.Load(opts.SnapshotPath, time.Now())
+	if excl {
+		// Битый снимок исключений не должен мешать ни маршрутизации, ни свежему
+		// обучению: пустой кэш доучится по ответам DNS.
+		_ = o.excl.Load(opts.ExcludeSnapshotPath, time.Now())
+	}
 	o.mu.Unlock()
 	o.SetLocalAddresses(routerAddresses())
 	o.mu.Lock()
 	initial := o.cache.All(time.Now())
+	initialExcl := o.excl.All(time.Now())
 	o.mu.Unlock()
 	if err != nil {
 		// A corrupt tmpfs snapshot must not disable fresh DNS learning.
@@ -205,7 +242,37 @@ func (o *Observer) Run(ctx context.Context, opts Options) error {
 		}
 	}
 	reconcile(initial)
-	stop, err := receivePackets(ctx, func(packet []byte) { apply(o.Process(packet, time.Now())) }, func(err error) { o.setState(false, err) })
+	exclPending := false
+	applyExcl := func(changes []Change) {
+		if !excl || len(changes) == 0 {
+			return
+		}
+		kernelMu.Lock()
+		defer kernelMu.Unlock()
+		if err := opts.ExclSet.Apply(changes, time.Now()); err != nil {
+			exclPending = true
+			o.setState(false, err)
+		}
+	}
+	reconcileExcl := func(changes []Change) {
+		if !excl {
+			return
+		}
+		kernelMu.Lock()
+		defer kernelMu.Unlock()
+		if err := opts.ExclSet.ReplaceAll(changes, time.Now()); err != nil {
+			exclPending = true
+			o.setState(false, err)
+		} else {
+			exclPending = false
+		}
+	}
+	reconcileExcl(initialExcl)
+	stop, err := receivePackets(ctx, func(packet []byte) {
+		include, exclude := o.ProcessAll(packet, time.Now())
+		apply(include)
+		applyExcl(exclude)
+	}, func(err error) { o.setState(false, err) })
 	if err != nil {
 		o.setState(false, err)
 		_ = writeStatus(opts.StatusPath, o.status())
@@ -227,6 +294,9 @@ func (o *Observer) Run(ctx context.Context, opts Options) error {
 		case <-ctx.Done():
 			o.mu.Lock()
 			err := o.cache.Save(opts.SnapshotPath)
+			if excl {
+				_ = o.excl.Save(opts.ExcludeSnapshotPath)
+			}
 			o.mu.Unlock()
 			o.setState(false, err)
 			_ = writeStatus(opts.StatusPath, o.status())
@@ -242,15 +312,36 @@ func (o *Observer) Run(ctx context.Context, opts Options) error {
 			} else {
 				o.setState(false, err)
 			}
+			if excl {
+				if next, err := readExclusions(opts.ExcludePath); err == nil {
+					applyExcl(o.ReplaceExclusions(next, now))
+				} else {
+					o.setState(false, err)
+				}
+			}
 			o.mu.Lock()
 			changes := o.cache.Expire(now)
 			all := o.cache.All(now)
+			exclChanges := o.excl.Expire(now)
+			exclAll := o.excl.All(now)
 			if now.Sub(lastSave) >= 15*time.Second {
 				_ = o.cache.Save(opts.SnapshotPath)
+				if excl {
+					_ = o.excl.Save(opts.ExcludeSnapshotPath)
+				}
 				lastSave = now
 			}
 			o.mu.Unlock()
 			apply(changes)
+			applyExcl(exclChanges)
+			kernelMu.Lock()
+			exclRetry := exclPending
+			kernelMu.Unlock()
+			if exclRetry {
+				reconcileExcl(exclAll)
+			} else {
+				applyExcl(exclAll)
+			}
 			kernelMu.Lock()
 			pending := needReconcile
 			kernelMu.Unlock()
@@ -262,4 +353,17 @@ func (o *Observer) Run(ctx context.Context, opts Options) error {
 			_ = writeStatus(opts.StatusPath, o.status())
 		}
 	}
+}
+
+// readExclusions — домены-исключения. Нет файла — нет исключений: так у
+// большинства, и это не ошибка наблюдателя.
+func readExclusions(path string) (Rules, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		data, err = []byte("v1\n"), nil
+	}
+	if err != nil {
+		return Rules{}, err
+	}
+	return ParseRules(data)
 }

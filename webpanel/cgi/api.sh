@@ -235,7 +235,7 @@ panel_auth_gate
 # Крупные загрузки (списки, своя стратегия) идут через read_body_raw и свои
 # собственные потолки в мегабайтах — их это ограничение не касается.
 case "$PATH_INFO" in
-    /warp/list/save|/warp/devices/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate|/state/bulk|/whitelist/save|/extra-domains/save) ;;
+    /warp/list/save|/warp/devices/save|/warp/exclude/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate|/state/bulk|/whitelist/save|/extra-domains/save) ;;
     *)
         if [ "${CONTENT_LENGTH:-0}" -gt "$Z2K_MAX_BODY" ] 2>/dev/null; then
             json_fail "413 Payload Too Large" "запрос слишком большой"
@@ -816,6 +816,39 @@ case "$method $path" in
         w_d=$(printf '%s' "$result" | sed -n 's/.*dropped=\([0-9]*\).*/\1/p')
         json_header
         printf '{"ok":true,"entries":%d,"dropped":%d}\n' "${w_n:-0}" "${w_d:-0}"
+        exit 0
+        ;;
+
+    # Исключения WARP: адреса, подсети и домены, которые никогда не идут в
+    # туннель. text/plain, как /warp/list; ответ сохранения — как у /warp/list/save.
+    "GET /warp/exclude")
+        printf 'Content-Type: text/plain; charset=utf-8\r\n'
+        printf 'Cache-Control: no-store\r\n\r\n'
+        warp_exclude_read
+        exit 0
+        ;;
+    "POST /warp/exclude/save")
+        if [ "${CONTENT_LENGTH:-0}" -gt 2097152 ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "list too large (max 2 MB)"
+        fi
+        _err_f="/tmp/z2k-wexcl-err.$$"
+        result=$(read_body_raw | warp_exclude_save 2>"$_err_f") || {
+            _err=$(cat "$_err_f" 2>/dev/null); rm -f "$_err_f"
+            json_fail "400 Bad Request" "${_err:-save failed}"
+        }
+        rm -f "$_err_f"
+        w_saved=0; w_saved_ip=0; w_saved_domain=0; w_inv=0
+        for _tok in $result; do
+            case "$_tok" in
+                saved=*)           w_saved=${_tok#saved=} ;;
+                saved_ip=*)        w_saved_ip=${_tok#saved_ip=} ;;
+                saved_domain=*)    w_saved_domain=${_tok#saved_domain=} ;;
+                skipped_invalid=*) w_inv=${_tok#skipped_invalid=} ;;
+            esac
+        done
+        json_header
+        printf '{"ok":true,"saved":%d,"saved_ip":%d,"saved_domain":%d,"skipped_invalid":%d}\n' \
+            "${w_saved:-0}" "${w_saved_ip:-0}" "${w_saved_domain:-0}" "${w_inv:-0}"
         exit 0
         ;;
 

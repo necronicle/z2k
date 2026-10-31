@@ -60,11 +60,17 @@ WARP_REG_RETRY="${WARP_REG_RETRY:-600}"
 WARP_REG_STAMP="${WARP_REG_STAMP:-/tmp/z2k-warp/register.stamp}"
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$ZAPRET2_DIR/lists/warp}"
 WARP_DEVICES_FILE="${WARP_DEVICES_FILE:-$WARP_LISTS_DIR/devices.txt}"
+# Исключения: адреса и домены, которые НИКОГДА не идут в WARP, в любом режиме.
+# Это не список маршрутизации: он не переключает «весь трафик» в режим списков.
+WARP_EXCLUDE_FILE="${WARP_EXCLUDE_FILE:-$WARP_LISTS_DIR/exclude.txt}"
 WARP_AWGM_DIR="${WARP_AWGM_DIR:-/opt/etc/awg-manager}"
 WARP_IPSET="${WARP_IPSET:-z2k_warp}"
 WARP_IPSET_SRC="${WARP_IPSET_SRC:-z2k_warp_src}"
+WARP_IPSET_EXCL="${WARP_IPSET_EXCL:-z2k_warp_excl}"   # адреса и подсети из исключений
+WARP_IPSET_XDNS="${WARP_IPSET_XDNS:-z2k_warp_xdns}"   # адреса доменов-исключений (пишет warpd)
 WARP_FILTER="${WARP_FILTER:-$ZAPRET2_DIR/z2k-warp-list-filter.awk}"
 WARP_DOMAINS="${WARP_DOMAINS:-/tmp/z2k-warp/domains.v1}"
+WARP_DOMAINS_EXCL="${WARP_DOMAINS_EXCL:-/tmp/z2k-warp/domains-excl.v1}"
 WARP_TABLE="${WARP_TABLE:-989}"
 WARP_MARK="${WARP_MARK:-0x989}"
 WARP_RULE_PREF="${WARP_RULE_PREF:-90}"
@@ -195,6 +201,8 @@ warp_active_lists() {
         # devices.txt — список УСТРОЙСТВ (источников), он грузится в z2k_warp_src
         # отдельно; сюда, в адреса назначения, ему нельзя.
         [ "$f" = "$WARP_DEVICES_FILE" ] && continue
+        # exclude.txt — исключения, а не адреса для туннеля.
+        [ "$f" = "$WARP_EXCLUDE_FILE" ] && continue
         [ -f "$f" ] || continue
         if [ -f "$WARP_USER_OFF_FILE" ] && grep -qxF "$(basename "$f" .txt)" "$WARP_USER_OFF_FILE" 2>/dev/null; then
             continue
@@ -346,9 +354,46 @@ warp_domains_load() {
     mv -f "$tmp" "$WARP_DOMAINS"
 }
 
+# Наборы исключений. Параметры z2k_warp_xdns обязаны совпадать с теми, с
+# которыми его создаёт warpd (domainroute.ExclSet): -exist с другими параметрами
+# — ошибка, и первый же старт одного из двух упал бы.
+warp_excl_sets_ensure() {
+    ipset create "$WARP_IPSET_EXCL" hash:net family inet -exist 2>/dev/null \
+        && ipset create "$WARP_IPSET_XDNS" hash:ip family inet timeout 3600 maxelem 8192 -exist 2>/dev/null
+}
+
+# exclude.txt: адреса и подсети — в z2k_warp_excl (подмена целиком, как у
+# списков); домены — файлом наблюдателю warpd, который кладёт их адреса из
+# ответов DNS в z2k_warp_xdns. Фильтр строк тот же, что у списков.
+warp_excl_load() {
+    local tmpset="${WARP_IPSET_EXCL}_new" tmp="${WARP_DOMAINS_EXCL}.new.$$" count
+    [ -r "$WARP_FILTER" ] || { _wlog "missing WARP destination filter $WARP_FILTER"; return 1; }
+    warp_excl_sets_ensure || { _wlog "cannot create WARP exclusion sets"; return 1; }
+    ipset destroy "$tmpset" 2>/dev/null
+    ipset create "$tmpset" hash:net family inet 2>/dev/null || return 1
+    if ! { [ ! -f "$WARP_EXCLUDE_FILE" ] || awk -v mode=ipset -f "$WARP_FILTER" "$WARP_EXCLUDE_FILE"; } \
+            | awk -v set="$tmpset" '{ print "add " set " " $0 " -exist" }' | ipset restore -exist 2>/dev/null \
+        || ! ipset swap "$tmpset" "$WARP_IPSET_EXCL" 2>/dev/null; then
+        ipset destroy "$tmpset" 2>/dev/null
+        _wlog "cannot load WARP exclusions — keeping previous set"
+        return 1
+    fi
+    ipset destroy "$tmpset" 2>/dev/null
+    mkdir -p "$(dirname "$WARP_DOMAINS_EXCL")" || return 1
+    { printf 'v1\n'; [ ! -f "$WARP_EXCLUDE_FILE" ] \
+        || awk -v mode=domains -f "$WARP_FILTER" "$WARP_EXCLUDE_FILE" | LC_ALL=C sort -u; } > "$tmp" || { rm -f "$tmp"; return 1; }
+    count=$(awk 'END { print NR - 1 }' "$tmp")
+    if [ "$count" -gt 4096 ]; then
+        _wlog "too many WARP exclusion domains: $count; domain exclusions disabled, static ones kept"
+        printf 'v1\n' > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+    mv -f "$tmp" "$WARP_DOMAINS_EXCL"
+}
+
 warp_ipset_all() {
     warp_ipset_load || return 1
     warp_domains_load || return 1
+    warp_excl_load || return 1
     warp_policy_sync
 }
 
@@ -544,6 +589,11 @@ warp_all_entries() {
 warp_policy_rules() {
     local ifaces iface wdtt_enabled subnet
     [ "$(warp_flag)" = 1 ] || return 0
+    # Исключения — первыми и во всех режимах: «никогда через WARP» значит никогда,
+    # и правило, которое в одном режиме действует, а в другом молча нет, человек
+    # не отличит от поломки.
+    printf '%s\n' "-m set --match-set $WARP_IPSET_EXCL dst -j RETURN"
+    printf '%s\n' "-m set --match-set $WARP_IPSET_XDNS dst -j RETURN"
     if warp_all_traffic_mode; then
         # Entered only from LAN, WG-server clients and (opt-in) WDTT clients —
         # see warp_all_entries; never from WAN. Local destinations stay direct
@@ -601,6 +651,9 @@ warp_policy_rules() {
 
 warp_policy_chain() {
     local rules expected current rule
+    # Правило со ссылкой на несуществующий набор iptables не примет, а NDM-хук
+    # пересобирает цепочку и до загрузки списков (перезагрузка роутера).
+    warp_excl_sets_ensure || { _wlog "cannot create WARP exclusion sets"; return 1; }
     rules=$(warp_policy_rules) || {
         iptables -w -t mangle -F Z2K_WARP 2>/dev/null
         _wlog "cannot determine WDTT ingress interfaces"
@@ -1071,6 +1124,8 @@ warp_remove() {
     rm -f "$WARP_BIN" "$WARP_BIN".new.* 2>/dev/null
     ipset destroy "$WARP_IPSET" 2>/dev/null
     ipset destroy "$WARP_IPSET_SRC" 2>/dev/null
+    ipset destroy "$WARP_IPSET_EXCL" 2>/dev/null
+    ipset destroy "$WARP_IPSET_XDNS" 2>/dev/null
     _wlog "движок удалён; ключ устройства сохранён в $WARP_DEVICE"
     return 0
 }

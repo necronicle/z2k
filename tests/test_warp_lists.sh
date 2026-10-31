@@ -335,6 +335,24 @@ assert_eq ".disabled попадает в бэкап" "1" \
 assert_eq ".disabled восстанавливается" "1" \
     "$(grep -c 'cp -f "$backup_tmp/warp-lists/.disabled" "${ZAPRET2_DIR}/lists/warp/.disabled"' "$INST")"
 
+printf "\n--- исключения: lists/warp/exclude.txt ---\n"
+# Исключения — не список маршрутизации: имя зарезервировано, в общем перечне
+# списков их нет (иначе тумблер «выключить» и счётчик путали бы его со своими
+# списками), а запись проходит тот же фильтр строк, что у списков.
+warp_name_ok exclude && r=0 || r=1
+assert_eq "name 'exclude' is reserved" "1" "$r"
+printf '8.8.8.8\n' | warp_list_save exclude replace >/dev/null 2>&1 && r=0 || r=1
+assert_eq "exclude is not writable as a regular list" "1" "$r"
+OUT=$(printf 'gosuslugi.ru\n*.sberbank.ru\n95.167.0.0/16\n# банк\ngarbage line\n2a00::1\n' | warp_exclude_save)
+assert_contains "exclude save counts ip"     "saved_ip=1" "$OUT"
+assert_contains "exclude save counts domain" "saved_domain=2" "$OUT"
+assert_contains "exclude save drops junk"    "skipped_invalid=2" "$OUT"
+assert_eq "exclude file written"  "1" "$([ -f "$WARP_LISTS_DIR/exclude.txt" ] && echo 1 || echo 0)"
+assert_eq "exclude read returns saved lines" "1" "$(warp_exclude_read | grep -cx 'gosuslugi.ru')"
+assert_eq "exclude is not among routing lists" "0" "$(warp_lists | cut -f1 | grep -cx exclude)"
+rm -f "$WARP_LISTS_DIR/exclude.txt"
+assert_eq "exclude read without file is empty, not an error" "" "$(warp_exclude_read)"
+
 printf "\nPASSED: %d\nFAILED: %d\n" "$TESTS_PASSED" "$TESTS_FAILED"
 [ "$TESTS_FAILED" -eq 0 ] || exit 1
 exit 0

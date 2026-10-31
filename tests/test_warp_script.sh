@@ -363,7 +363,10 @@ assert_eq "remove: binary gone" "no" "$([ -e "$SB/sbin/z2k-warpd" ] && echo yes 
 assert_eq "remove: device.json kept" "yes" "$([ -s "$SB/etc/device.json" ] && echo yes || echo no)"
 assert_eq "remove: flag 0" "0" "$(flag)"
 assert_eq "remove: S51 stopped" "1" "$(grep -c '^stop' "$SB/s51.log")"
-assert_eq "remove: static ipsets destroyed" "2" "$(grep -c '^destroy z2k_warp' "$SB/ipset.log")"
+# Наборы z2k: списки, устройства и оба набора исключений (адреса и домены).
+for _set in z2k_warp z2k_warp_src z2k_warp_excl z2k_warp_xdns; do
+    assert_eq "remove: ipset $_set destroyed" "1" "$(grep -cx "destroy $_set" "$SB/ipset.log")"
+done
 assert_eq "remove: client DNS set destroyed" "1" "$(grep -c '^destroy z2kd_192.168.1.10' "$SB/ipset.log")"
 
 # ---------- migrate: зачистка usque — наше всегда, чужое никогда ----------

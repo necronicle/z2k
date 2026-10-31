@@ -19,15 +19,32 @@ type Cache struct {
 	rules   Rules
 	pairs   map[pair]map[string]time.Time
 	skipped uint64
+	// global — кэш исключений: адрес действует на всю сеть, поэтому пара одна
+	// на адрес (клиент — networkWide), а не на (клиент, адрес).
+	global bool
 }
 
-func NewCache(r Rules) *Cache    { return &Cache{rules: r, pairs: make(map[pair]map[string]time.Time)} }
+// networkWide — клиент пар в кэше исключений.
+var networkWide = netip.IPv4Unspecified()
+
+func NewCache(r Rules) *Cache { return &Cache{rules: r, pairs: make(map[pair]map[string]time.Time)} }
+
+// NewExclusionCache — кэш доменов-исключений: адрес, который спросил любой
+// клиент сети, идёт мимо WARP для всех.
+func NewExclusionCache(r Rules) *Cache {
+	c := NewCache(r)
+	c.global = true
+	return c
+}
 func (c *Cache) Len() int        { return len(c.pairs) }
 func (c *Cache) Skipped() uint64 { return c.skipped }
 
 func (c *Cache) Observe(client netip.Addr, name string, answers []Answer, now time.Time) []Change {
 	if _, err := clientSet(client); err != nil || !c.rules.Match(name) {
 		return nil
+	}
+	if c.global {
+		client = networkWide
 	}
 	var changes []Change
 	for _, a := range answers {

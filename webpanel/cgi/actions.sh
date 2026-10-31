@@ -2116,6 +2116,7 @@ warp_name_ok() {
         ''|.*|-*) return 1 ;;
         *[!A-Za-z0-9._-]*) return 1 ;;
         devices) return 1 ;;   # зарезервировано: список устройств, не адресов
+        exclude) return 1 ;;   # зарезервировано: исключения, своя карточка
     esac
     [ "${#1}" -le 64 ]
 }
@@ -2155,6 +2156,21 @@ warp_status_info() {
     [ -f "$WARP_SCRIPT" ] && st=$(sh "$WARP_SCRIPT" status 2>/dev/null)
     printf '%s enabled=%s wdtt=%s\n' "$st" "$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")" \
         "$(read_flag "Z2K_WARP_WDTT" "$CONFIG_FILE" "0")"
+}
+
+# ---------- исключения WARP (lists/warp/exclude.txt) ----------
+# Адреса, подсети и домены, которые НИКОГДА не идут в WARP — в любом режиме,
+# в том числе «весь трафик». Это не список маршрутизации: режим он не меняет.
+warp_exclude_read() {
+    [ -f "$WARP_LISTS_DIR/exclude.txt" ] && cat "$WARP_LISTS_DIR/exclude.txt"
+    return 0
+}
+
+warp_exclude_save() {
+    # stdin → exclude.txt; stdout как у warp_list_save.
+    warp_lists_ensure_dir
+    [ -d "$WARP_LISTS_DIR" ] || { echo "lists dir unavailable" >&2; return 1; }
+    _warp_list_write "$WARP_LISTS_DIR/exclude.txt" replace
 }
 
 # ---------- устройства для списков WARP (lists/warp/devices.txt) ----------
@@ -2460,6 +2476,7 @@ warp_lists() {
         [ -f "$f" ] || continue
         name=${f##*/}; name=${name%.txt}
         [ "$name" = "devices" ] && continue   # устройства — своя карточка, не список адресов
+        [ "$name" = "exclude" ] && continue   # исключения — своя карточка, не маршрут в WARP
         entries=$(_warp_destination_count "$f")
         size=$(wc -c < "$f" | tr -d ' ')
         # busybox: date -r (no stat -c), see update_status_string
@@ -2560,7 +2577,14 @@ warp_list_save() {
     case "$mode" in replace|append|create) ;; *) echo "invalid mode" >&2; return 1 ;; esac
     warp_lists_ensure_dir
     [ -d "$WARP_LISTS_DIR" ] || { echo "lists dir unavailable" >&2; return 1; }
-    local file="$WARP_LISTS_DIR/$name.txt"
+    _warp_list_write "$WARP_LISTS_DIR/$name.txt" "$mode"
+}
+
+# Запись списка адресов и доменов: проверка строк, замок, атомарная подмена,
+# перезагрузка наборов. Общая для своих списков и исключений — правила строк
+# у них одни и те же. stdin — текст списка; $1 — файл, $2 — replace|append|create.
+_warp_list_write() {
+    local file="$1" mode="$2"
     if [ "$mode" = "create" ]; then
         # Заявка на имя атомарна. Проверка [ -f ] и запись ниже разнесены во
         # времени на всё чтение тела, и два одновременных «создать» с одним
