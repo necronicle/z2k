@@ -1,8 +1,11 @@
 #!/bin/sh
-# tests/test_quic_pool_reference.sh — пул quic = референсные QUIC-страты один в один.
+# tests/test_quic_pool_reference.sh — пул quic: плечи-копии референсных страт
+# один в один.
 #
-# Пул собран из QUIC-страт референсного набора (UDP 443, включённые профили) без
-# собственных вариаций. Записи nfqws1 переведены на nfqws2 и сверены на
+# Пул — выпущенный набор (порядок по замеру 26.10.2026). Плечи, которые
+# повторяют QUIC-страты референсного набора, доведены до точного совпадения;
+# референсные страты, которых в пуле не было, дописаны в конец; собственные
+# плечи остаются как были. Записи nfqws1 переведены на nfqws2 и сверены на
 # дифференциальном стенде побайтно: тот же Initial (одной и двумя датаграммами)
 # даёт на проводе одинаковые пакеты у обоих движков.
 #
@@ -13,10 +16,11 @@
 #     стоит на каждом;
 #   * send не проверяет payload= сам, поэтому плечи стоят под --payload=quic_initial:
 #     под --payload=all send дублировал каждый короткий пакет потока (замер стенда).
+# Простой fake без send+drop — это родная запись nfqws2 (плечи 5 и 6), она уже
+# совпадает со своим источником.
 #
 # ЧТО ОХРАНЯЕТСЯ: состав и порядок плеч; одна копия пула (холодный старт
-# генератора берёт аварийный пул, а не свой список плеч); аварийный пул — плечо
-# набора на встроенном блобе.
+# генератора берёт аварийный пул, а не свой список плеч).
 #
 # POSIX sh.
 
@@ -33,16 +37,26 @@ HEAD='--in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:tim
 
 # Плечо на строку: инстансы без хвоста :strategy=N.
 EXPECTED=$(cat <<'ARMS'
-fake:blob=quic_google:repeats=6 send:dir=out drop:dir=out
 fake:blob=quic_google:repeats=11 send:dir=out drop:dir=out
-fake:blob=quic6:repeats=2:out_range=-n3 udplen:increment=8:pattern=0x0F0F0E0F:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
-fake:blob=fake_default_quic:repeats=6 send:dir=out drop:dir=out
-fake:blob=quic5:repeats=3:out_range=-n3 send:dir=out:ipfrag:ipfrag_pos_udp=8:out_range=-n3 drop:dir=out:out_range=-n3
-fake:blob=quic4:repeats=2:out_range=-n3 udplen:increment=4:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
+fake:payload=quic_initial:dir=out:blob=0x00:repeats=11 send:payload=quic_initial:dir=out drop:payload=quic_initial:dir=out
 fake:blob=quic4:repeats=2:out_range=-n4 udplen:increment=8:pattern=0xFEA82025:out_range=-n4 send:dir=out:out_range=-n4 drop:dir=out:out_range=-n4
-fake:blob=quic5:repeats=2:out_range=-n3 udplen:increment=25:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
+fake:blob=quic4:repeats=2:out_range=-n3 udplen:increment=4:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
+fake:payload=quic_initial:dir=out:blob=quic_google:repeats=11
+fake:payload=quic_initial:dir=out:blob=quic_google:repeats=6
+fake:payload=quic_initial:dir=out:blob=quic_google:repeats=6:ip_ttl=8
+fake:blob=quic6:repeats=2:out_range=-n3 udplen:increment=8:pattern=0x0F0F0E0F:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
 fake:blob=quic1:repeats=6:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
+fake:payload=quic_initial:dir=out:blob=quic5:repeats=6
 fake:blob=quic_google:repeats=8 send:dir=out drop:dir=out
+fake:payload=quic_initial:dir=out:blob=quic_google:repeats=6:badsum
+fake:payload=quic_initial:dir=out:blob=quic5:repeats=1
+fake:payload=quic_initial:dir=out:blob=quic5:repeats=3 send:payload=quic_initial:dir=out drop:payload=quic_initial:dir=out
+fake:blob=quic5:repeats=2:out_range=-n3 udplen:increment=25:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
+fake:payload=quic_initial:dir=out:blob=quic5:repeats=1 send:payload=quic_initial:dir=out drop:payload=quic_initial:dir=out
+fake:payload=quic_initial:dir=out:blob=quic5:badsum
+fake:blob=quic_google:repeats=6 send:dir=out drop:dir=out
+fake:blob=quic5:repeats=3:out_range=-n3 send:dir=out:ipfrag:ipfrag_pos_udp=8:out_range=-n3 drop:dir=out:out_range=-n3
+fake:blob=fake_default_quic:repeats=6 send:dir=out drop:dir=out
 ARMS
 )
 

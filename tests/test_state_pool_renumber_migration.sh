@@ -140,8 +140,8 @@ yt_max=$(grep 'key=yt_tcp' "$ROOT/strats_new2.txt" | grep -o ':strategy=[0-9]*' 
 [ "$yt_max" = 41 ] && ok "yt pool has 41 arms" || no "yt pool has 41 arms (got $yt_max)"
 gv_max=$(grep 'key=gv_tcp' "$ROOT/strats_new2.txt" | grep -o ':strategy=[0-9]*' | sed 's/.*=//' | sort -n | tail -1)
 [ "$gv_max" = 39 ] && ok "gv pool has 39 arms" || no "gv pool has 39 arms (got $gv_max)"
-# Пул quic после v1 пересобирался дважды (v2, v4); его размер против своей
-# таблицы проверяет tests/test_state_pool_renumber_v4.sh.
+# Пул quic после v1 пересобирался (v2, v4, v5); его размер против своей
+# таблицы проверяет tests/test_state_pool_renumber_v5.sh.
 
 printf 'PASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

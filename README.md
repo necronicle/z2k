@@ -593,7 +593,7 @@ some-blocked-site.org
 | `rkn_tcp` | Заблокированные сайты (TCP/TLS) | 57 |
 | `yt_tcp` | YouTube (TCP) | 41 |
 | `gv_tcp` | YouTube видео, googlevideo (TCP) | 39 |
-| `quic` | QUIC/UDP: ютуб и заблокированные сайты | 10 |
+| `quic` | QUIC/UDP: ютуб и заблокированные сайты | 20 |
 
 Профили Telegram, Discord и HTTP так не настраиваются.
 

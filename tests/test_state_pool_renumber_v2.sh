@@ -72,8 +72,8 @@ _z2k_migrate_pool_renumber_v2
 check "chain v1 then v2: old 7 -> 14 -> 15"   quic    'old7.example|4'    15
 
 # Соответствие таблицы текущему пулу здесь больше не проверяется: пул quic
-# пересобран в v4 (tests/test_state_pool_renumber_v4.sh), таблица v2 описывает
-# промежуточный пул и нужна только для цепочки v1 -> v2 -> v4.
+# пересобран в v4 и v5 (tests/test_state_pool_renumber_v5.sh), таблица v2 описывает
+# промежуточный пул и нужна только для цепочки v1 -> v2.
 
 printf 'PASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
