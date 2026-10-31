@@ -54,7 +54,10 @@ H.test('QUIC drops only outgoing Initials, never replies or later packets',funct
             for _,out in ipairs({true,false}) do
                 for _,kind in ipairs({'quic_initial','unknown'}) do
                     local d=H.udp(nil,out,'data',kind); d.arg=ins.arg; d.func_instance='drop_'..ins.arg.strategy
-                    H.eq(out and kind=='quic_initial' and VERDICT_DROP or nil,drop(nil,d))
+                    -- Фильтр --payload инстанса движок применяет до вызова функции
+                    -- (plan_instance_execute_preapplied), поэтому и здесь он первый.
+                    local v=payload_match_filter(kind,ins.payload) and drop(nil,d) or nil
+                    H.eq(out and kind=='quic_initial' and VERDICT_DROP or nil,v)
                 end
             end
         end

@@ -71,13 +71,9 @@ _z2k_migrate_pool_renumber_v1
 _z2k_migrate_pool_renumber_v2
 check "chain v1 then v2: old 7 -> 14 -> 15"   quic    'old7.example|4'    15
 
-# Таблица обязана соответствовать пулу: 18 плеч, новое второе, прежнее первое.
-ARGS=$(awk '/^\[quic_autocircular\]/{a=1;next} a && /^args=/{print;exit}' "$ROOT/quic_strats.ini")
-quic_max=$(printf '%s' "$ARGS" | grep -o ':strategy=[0-9]*' | sed 's/.*=//' | sort -n | tail -1)
-[ "$quic_max" = 18 ] && ok "quic pool has 18 arms" || no "quic pool has 18 arms (got $quic_max)"
-case "$ARGS" in *"blob=quic_google:repeats=11:strategy=1 "*"send:payload=quic_initial:dir=out:strategy=1 "*) ok "arm 1 still google x11 + send + drop" ;; *) no "arm 1 still google x11 + send + drop" ;; esac
-case "$ARGS" in *"blob=0x00:repeats=11:strategy=2 --lua-desync=send:payload=quic_initial:dir=out:strategy=2 --lua-desync=drop:payload=quic_initial:dir=out:strategy=2 "*) ok "arm 2 = zero fake x11 + send + drop" ;; *) no "arm 2 = zero fake x11 + send + drop" ;; esac
-case "$ARGS" in *"ipfrag_pos_udp=8:out_range=-n3"*) no "old arm 18 (fragmentation) removed" ;; *) ok "old arm 18 (fragmentation) removed" ;; esac
+# Соответствие таблицы текущему пулу здесь больше не проверяется: пул quic
+# пересобран в v4 (tests/test_state_pool_renumber_v4.sh), таблица v2 описывает
+# промежуточный пул и нужна только для цепочки v1 -> v2 -> v4.
 
 printf 'PASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

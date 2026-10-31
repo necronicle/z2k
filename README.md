@@ -587,10 +587,10 @@ some-blocked-site.org
 
 | Пул | Что покрывает | Стратегий в автоподборе |
 |---|---|---|
-| `rkn_tcp` | Заблокированные сайты (TCP/TLS) | 55 |
-| `yt_tcp` | YouTube (TCP) | 33 |
-| `gv_tcp` | YouTube видео, googlevideo (TCP) | 33 |
-| `quic` | QUIC/UDP: ютуб и заблокированные сайты | 18 |
+| `rkn_tcp` | Заблокированные сайты (TCP/TLS) | 57 |
+| `yt_tcp` | YouTube (TCP) | 41 |
+| `gv_tcp` | YouTube видео, googlevideo (TCP) | 39 |
+| `quic` | QUIC/UDP: ютуб и заблокированные сайты | 10 |
 
 Профили Telegram, Discord и HTTP так не настраиваются.
 
