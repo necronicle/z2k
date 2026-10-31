@@ -300,6 +300,26 @@ nfqws_cmdline() {
         _src="/proc/${_p}/cmdline"
     fi
     [ -r "$_src" ] || return 1
+    # Ядра до 4.2 отдают в /proc/PID/cmdline только первую страницу — 4096 байт.
+    # Командная строка движка на полном наборе пулов длиннее, и профили после
+    # отсечки пропадали: полевой случай 31.10.2026 (MIPS, ядро 3.4) — сводка
+    # насчитала «10 плеч в 0 пулах» и написала «в движке нет ни одного
+    # circular» при живой ротации. Отсечка ровно на странице — признак обрезки:
+    # тогда голова (общие опции движка) берётся из /proc до первого профиля, а
+    # профили — из конфига, из которого init их и передал.
+    local _len _cfg _first
+    _len=$(wc -c < "$_src" 2>/dev/null | tr -d ' ')
+    _cfg="${Z2K_DIAG_CONFIG_SRC:-${ZAPRET2_DIR:-/opt/zapret2}/config}"
+    if [ "${_len:-0}" -eq 4096 ] && [ -r "$_cfg" ]; then
+        _first=$(sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }' "$_cfg" 2>/dev/null \
+            | tr ' ' '\n' | grep -m1 -- '^--')
+        if [ -n "$_first" ]; then
+            tr '\0' '\n' < "$_src" 2>/dev/null | sed '$d' | awk -v f="$_first" '$0 == f { exit } { print }'
+            sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }' "$_cfg" 2>/dev/null \
+                | tr ' ' '\n' | grep -v '^$'
+            return 0
+        fi
+    fi
     tr '\0' '\n' < "$_src" 2>/dev/null
 }
 
@@ -1515,8 +1535,12 @@ print_platform() {
     # чего «задачи не выполняются» без единого следа в логах z2k.
     if [ -r /proc/meminfo ]; then
         printf 'memory            : %s\n' \
-            "$(awk '/^MemAvailable:/{a=$2} /^MemTotal:/{t=$2} /^SwapFree:/{sf=$2} /^SwapTotal:/{st=$2}
-                    END {printf "%d МБ свободно из %d, swap %d/%d МБ",
+            "$(awk '/^MemAvailable:/{a=$2; ha=1} /^MemFree:/{fr=$2} /^Buffers:/{bu=$2} /^Cached:/{ca=$2}
+                    /^MemTotal:/{t=$2} /^SwapFree:/{sf=$2} /^SwapTotal:/{st=$2}
+                    # MemAvailable появилась в ядре 3.14; на 3.4 её нет, и сводка
+                    # писала «0 МБ свободно». Там свободное = MemFree + Buffers + Cached.
+                    END {if (!ha) a = fr + bu + ca
+                         printf "%d МБ свободно из %d, swap %d/%d МБ",
                          a/1024, t/1024, (st-sf)/1024, st/1024}' /proc/meminfo 2>/dev/null)"
     fi
 
