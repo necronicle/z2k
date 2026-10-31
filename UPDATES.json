@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 156,
-  "current": "p-87.6",
+  "seq": 157,
+  "current": "p-87.7",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -145,7 +145,7 @@
   },
   "files_sha256": {
   "files/000-zapret2.sh": "e518233b73c49643894ca61cba82ff8fa1bbf469d93dbac48d98369f7e259d37",
-  "files/S99zapret2.new": "0563b12c17d26a8d721b683616f35f9c3dadfe3aa9e30ce93655f531221c477c",
+  "files/S99zapret2.new": "33c9edffb32e6bae39fbb3d4b8013b48cdb8b99287599ec40062ed17aad87863",
   "files/etc/z2k-roots.pem": "73e33da886473f1cf2a347fc5be8688540861abd60ac6caa0da1b84242bcdd76",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/quic_1.bin": "f4589c57749f956bb30538197a521d7005f8b0a8723b4707e72405e51ddac50a",
@@ -253,7 +253,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mips": "d854b106d7e3b004c26834d3b7f2674ec64e089d7d0fbec979021616f8436fbc",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel": "efb5e2a526d1078a4878d38f54aa050fa7107227cc0964f008eb026f11a11b39",
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle": "efb5e2a526d1078a4878d38f54aa050fa7107227cc0964f008eb026f11a11b39",
-  "quic_strats.ini": "aa1d348d6803b311d5f63421cf821bdca64efd300e98a8d0ba13d781ee0c30ff",
+  "quic_strats.ini": "1d68c8c6e14a43a1d603e2f55a77e9df48f0151100db9f74620036edc7cd50ab",
   "strats_new2.txt": "a2e16410c97e1f85f45d2fdc81f840cd3a6bc69043dadcb95e7ae7b428c0da2e",
   "webpanel/cgi/actions.sh": "6cd7be9f79407a22744c5cd981bf604afdcc99e9fc6ebab680319a356cf46f71",
   "webpanel/cgi/api.sh": "fcf05761b2a5648718816d092eed3baf6420c00ff91ba8dc14c9d27083825eb6",
@@ -274,7 +274,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "38409f2c92411990c81c665fafd3a87bd3e0bf61d4c4bc1a77adc4663b550fde",
+  "webpanel/www/index.html": "6976885de87366c25b6cd8c0b176d5a45f862b6ab4cdfdf837c64cc8a50ed6e6",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -627,6 +627,7 @@
 {"v": "p-87.3", "type": "patch", "ts": "2026-10-30T18:56:33Z", "ref": "p-87.3", "desc": "Стратегии обхода пересобраны и выстроены по качеству: для заблокированных сайтов, для YouTube и для видео YouTube отдельно. Порядок получен замером на живом роутере — по 41 цели, с проверкой «а что без обхода», и лидеры перемерены повторно. Теперь роутер начинает подбор с той стратегии, которая на замере открывала почти всё, а не с середины списка. Найденные ранее стратегии подбираются заново, закреплённые вами вручную сохраняются. Исправлен обход блокировки по объёму: на части линий он сам ломал соединения с сайтами за Cloudflare, AWS и Akamai — там, где раньше ничего не открывалось, теперь работает. Добавлен профиль для WireGuard и игрового UDP. DNS-сервер Cloudflare Zero Trust внесён в списки: у кого он прописан на роутере, интернет больше не пропадает целиком. Если вы дочитали до сюда - напишите в чате Z2K 42", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/extra-domains.txt", "files/lua/z2k-nfqws1-compat.lua", "files/lua/z2k-tcp16.lua", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-tcp16-probe.sh", "files/z2k-update-lists.sh", "lib/config_official.sh", "lib/install.sh", "strats_new2.txt", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "p-87.4", "type": "patch", "ts": "2026-10-31T08:47:30Z", "ref": "p-87.4", "desc": "Стратегии для QUIC (HTTP/3 в браузере, YouTube по UDP) пересобраны: вместо 18 вариантов — 10, и каждый повторяет исходную стратегию байт в байт, без наших переделок. Заодно исправлена ошибка, из-за которой часть прежних стратегий отправляла пакеты соединения дважды. Подбор QUIC начнётся заново; закреплённые вручную стратегии сохраняются, если такая техника осталась в наборе. Поправка к описанию p-87.3: добавленный там профиль UDP — для WireGuard и MTProto, игры он не касается.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "lib/config_official.sh", "quic_strats.ini", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "p-87.5", "type": "patch", "ts": "2026-10-31T09:27:12Z", "ref": "p-87.5", "desc": "В благодарностях появился спонсор проекта Андрюшка — спасибо за поддержку. Диагностика больше не пугает на роутерах со старым ядром: там она ошибочно писала, что автоподбор стратегий выключен и свободной памяти 0 МБ, хотя всё работало. Обновление больше не выдаёт ложное предупреждение при проверке конфига.", "changed_files": ["webpanel/www/index.html", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-87.6", "type": "patch", "ts": "2026-10-31T14:54:19Z", "ref": "p-87.6", "desc": "В WARP появились исключения: адреса, подсети и домены, которые никогда не идут через туннель — например, Госуслуги, банки и маркетплейсы, которые не открываются с иностранного адреса. Удобно, когда через WARP отправлен весь трафик сети или устройства. Карточка «Исключения» в разделе WARP, применяется сразу. Исправлен WARP с подпиской WARP+: туннель поднимался, но z2k считал его нерабочим и без конца перебирал адреса.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-87.6", "type": "patch", "ts": "2026-10-31T14:54:19Z", "ref": "p-87.6", "desc": "В WARP появились исключения: адреса, подсети и домены, которые никогда не идут через туннель — например, Госуслуги, банки и маркетплейсы, которые не открываются с иностранного адреса. Удобно, когда через WARP отправлен весь трафик сети или устройства. Карточка «Исключения» в разделе WARP, применяется сразу. Исправлен WARP с подпиской WARP+: туннель поднимался, но z2k считал его нерабочим и без конца перебирал адреса.", "changed_files": ["webpanel/www/index.html", "files/z2k-warp.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-87.7", "type": "patch", "ts": "2026-10-31T15:40:02Z", "ref": "p-87.7", "desc": "Стратегии для QUIC (HTTP/3 в браузере, YouTube по UDP) возвращены в полном составе: в прошлом обновлении часть их была убрана по ошибке. Теперь их 20 — прежние, плюс две новые, и те, что повторяют известные стратегии, совпадают с ними один в один. Найденные роутером стратегии для QUIC сохраняются.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "quic_strats.ini", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "restart-service"], "full_install": false}
   ]
 }
