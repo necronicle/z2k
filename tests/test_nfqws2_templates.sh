@@ -71,6 +71,26 @@ gen() {   # $1 — Z2K_NFQWS2_TEMPLATES, $2 — «empty-rkn» чтобы обн�
 gen 1 > "$TMP/tpl.txt"
 gen 0 > "$TMP/flat.txt"
 
+# Known excluded names must stop before either hostless UDP handler. Putting
+# an exclude hostlist on those handlers would also reject unnamed voice flows.
+for config in "$TMP/tpl.txt" "$TMP/flat.txt"; do
+    if awk '
+      /--filter-udp=1-65535 --hostlist=\/opt\/zapret2\/lists\/whitelist.txt --new/ {
+        if ($0 ~ /--lua-desync=/) exit 1
+        bypass=1
+      }
+      /key=discord_udp|--filter-l7=wireguard,stun,discord,mtproto,unknown/ {
+        handlers++
+        if (!bypass || $0 ~ /--hostlist/) exit 1
+      }
+      END { if (!bypass || handlers != 2) exit 1 }
+    ' "$config"; then
+        ok "UDP whitelist bypass precedes both hostless handlers ($config)"
+    else
+        no "UDP whitelist bypass precedes both hostless handlers" "bypass then voice/misc" "missing or unsafe"
+    fi
+done
+
 # --- 1. Один шаблон, профиль РКН его импортирует -----------------------------
 _n_tpl=$(grep -c -- '--template=z2k_rkn_arsenal' "$TMP/tpl.txt")
 _n_imp=$(grep -c -- '--import=z2k_rkn_arsenal' "$TMP/tpl.txt")

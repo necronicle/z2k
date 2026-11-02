@@ -1592,6 +1592,13 @@ generate_nfqws2_opt_from_strategies() {
         add_hostlist_line "${extra_strats_dir}/TCP_Discord.txt" "$discord_tcp_block"
     fi
 
+    # STUN/Discord can have a hostname learned by the engine's cache. Honor
+    # whitelist names before both voice and the broad UDP fallback. A separate
+    # no-action profile is essential: hostlist-exclude on a hostless handler
+    # would make that handler reject ALL flows whose hostname is unknown.
+    # Keep the file attached even when empty so live whitelist edits work.
+    nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1-65535 --hostlist=${lists_dir}/whitelist.txt --new\\n"
+
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun
     # + hostkey=z2k_nohost_key for stable hostless rotation keying)
     [ "$category_voice" = 0 ] || nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
