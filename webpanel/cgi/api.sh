@@ -507,9 +507,16 @@ case "$method $path" in
         ;;
 
     "POST /whitelist/save"|"POST /extra-domains/save")
-        case "$path" in /extra-domains/save) wl_save=extra_domains_save ;; *) wl_save=whitelist_save ;; esac
-        if [ "$path" = /extra-domains/save ] && [ "$(form_value "${QUERY_STRING:-}" mode)" = import ]; then
-            wl_save=extra_domains_import
+        wl_save=whitelist_save
+        if [ "$path" = /extra-domains/save ]; then
+            # Whole-list saves must also work with older panels that omit mode.
+            # Single-add is strict; undo restores valid previous user contents.
+            case "$(form_value "${QUERY_STRING:-}" mode)" in
+                ''|import) wl_save=extra_domains_import ;;
+                add) wl_save=extra_domains_save ;;
+                restore) wl_save=extra_domains_restore ;;
+                *) json_fail "400 Bad Request" "неизвестный режим сохранения" ;;
+            esac
         fi
         [ "${CONTENT_LENGTH:-0}" -le 1048576 ] 2>/dev/null || json_fail "413 Payload Too Large" "список больше 1 МБ"
         wl_rev=$(form_value "${QUERY_STRING:-}" revision)

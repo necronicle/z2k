@@ -73,7 +73,7 @@ export async function renderDomainList(options) {
   on("wl-clear", "click", () => wlRemove(view, true));
   on("wl-refresh", "click", () => loadWhitelist(view));
   on("wl-undo", "click", () => {
-    if (view.undo) wlCommit(view, view.undo.text, view.undo.revision, false);
+    if (view.undo) wlCommit(view, view.undo.text, view.undo.revision, false, "restore");
   });
   on("wl-add-btn", "click", () => wlAdd(view));
   on("wl-input", "keydown", e => { if(e.key === "Enter") wlAdd(view); });
@@ -152,6 +152,7 @@ function wlEdit(view, selected) {
   view.editor = { text: view.text, revision: view.revision, ids };
   wlEl(view,"wl-editor-title").textContent = selected ? `Редактирование выбранных: ${ids.size}` : "Редактирование всего списка";
   wlEl(view,"wl-editor-hint").textContent = selected ? "Замените или удалите строки ниже. Невыбранные записи останутся на месте." : "Можно выделять, удалять и заменять любой фрагмент. Строки с # — комментарии.";
+  if (view.endpoint === "/extra-domains") wlEl(view,"wl-editor-hint").textContent += " Новые домены, уже покрытые другими списками, будут пропущены; остальные сохранятся.";
   wlEl(view,"wl-editor-text").value = selected ? view.rows.filter(r => ids.has(r.id)).map(r => r.domain).join("\n") : view.text;
   wlEl(view,"wl-editor").hidden = false; wlError(view); wlControls(view);
   wlEl(view,"wl-editor-text").focus();
@@ -178,13 +179,13 @@ async function wlRemove(view, all) {
   view.busy = false; if(!wlCurrent(view)) return; wlControls(view); if(!ok) return;
   await wlCommit(view,replaceWhitelistSelection(view.text,ids,""),view.revision);
 }
-async function wlCommit(view, text, revision, remember = true, importing = false) {
+async function wlCommit(view, text, revision, remember = true, mode = "") {
   if(view.busy || !view.loaded) return false;
   if(new TextEncoder().encode(text).length > 1048576) { wlError(view,"Список больше 1 МБ. Сократите его перед сохранением."); return false; }
   const previous = view.text;
   view.busy = true; wlError(view); wlControls(view);
   try {
-    const result = await apiPostText(view.endpoint + "/save?revision=" + encodeURIComponent(revision) + (importing ? "&mode=import" : ""),text);
+    const result = await apiPostText(view.endpoint + "/save?revision=" + encodeURIComponent(revision) + (mode ? "&mode=" + encodeURIComponent(mode) : ""),text);
     if(!wlCurrent(view)) return true;
     view.undo = remember ? { text: previous, revision: result.revision } : null;
     view.editor = null; wlEl(view,"wl-editor").hidden = true;
@@ -201,7 +202,7 @@ async function wlCommit(view, text, revision, remember = true, importing = false
 async function wlAdd(view) {
   if(view.busy || view.editor || !view.loaded) return;
   const input = wlEl(view,"wl-input"); const domain = input.value.trim();
-  if(domain && await wlCommit(view,view.text + domain + "\n",view.revision)) input.value = "";
+  if(domain && await wlCommit(view,view.text + domain + "\n",view.revision,true,"add")) input.value = "";
 }
 async function wlImport(view,e) {
   const file = e.target.files && e.target.files[0]; e.target.value = "";
@@ -213,7 +214,7 @@ async function wlImport(view,e) {
     const addition = await file.text();
     if(!wlCurrent(view)) return;
     view.busy = false;
-    await wlCommit(view,text + addition,revision,true,true);
+    await wlCommit(view,text + addition,revision,true,"import");
   } catch(err) { if(wlCurrent(view)) wlError(view,"Не удалось прочитать файл: " + err.message); }
   finally { if(wlCurrent(view)) { view.busy = false; wlControls(view); } }
 }

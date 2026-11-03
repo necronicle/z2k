@@ -3845,6 +3845,9 @@ whitelist_save() { domain_list_save "$WHITELIST_FILE" "$1"; }
 extra_domains_revision() { domain_list_revision "$EXTRA_DOMAINS_FILE"; }
 extra_domains_save() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 1; }
 extra_domains_import() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 2; }
+# Undo restores the user's previous contents, including covered records. Coverage
+# is a UI redundancy check, not input validation: syntax, size and CAS still apply.
+extra_domains_restore() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 0; }
 
 # Check only newly added records; retaining/removing an existing record remains
 # possible after other lists have changed. Read each large catalogue once, not
