@@ -86,6 +86,21 @@ assert_eq "обе цели заполнены" "список|список" \
     "$(cat "$SB/zd/files/lists/t.txt" 2>/dev/null)|$(cat "$SB/zd/lists/t.txt" 2>/dev/null)"
 
 # Обрыв загрузки — отказ, дерево не тронуто.
+. "$ROOT/lib/release_map.sh"
+ZAPRET2_DIR="$SB/zd"
+printf 'shipped.example\n' > "$SB/repo/files/lists/extra-domains.txt"
+printf '# user\ncustom.example\n' > "$SB/zd/lists/extra-domains.txt"
+extra_targets=$(z2k_install_paths files/lists/extra-domains.txt | awk 'BEGIN{s=""} {printf "%s\"%s\"",s,$0;s=","}')
+cat > "$SB/extra.json" <<EOF
+{"install_map": {"files/lists/extra-domains.txt": [$extra_targets]},
+ "files_sha256": {"files/lists/extra-domains.txt": "$(sha "$SB/repo/files/lists/extra-domains.txt")"},
+ "current": "p-1"}
+EOF
+printf 'files/lists/extra-domains.txt\n' > "$SB/extra.plan"
+au_converge_apply "$SB/extra.json" "$SB/extra.plan" >/dev/null
+assert_eq "patch preserves user extras" "# user|custom.example|" "$(tr '\n' '|' < "$SB/zd/lists/extra-domains.txt")"
+assert_eq "patch updates shipped extras" "shipped.example" "$(cat "$SB/zd/files/lists/extra-domains.txt")"
+
 au_download_repo_file() { return 1; }
 printf 'цел\n' > "$SB/zd/lua/a.lua"
 printf 'files/lua/a.lua\n' > "$SB/plan4.txt"

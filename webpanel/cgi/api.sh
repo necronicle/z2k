@@ -508,14 +508,20 @@ case "$method $path" in
 
     "POST /whitelist/save"|"POST /extra-domains/save")
         case "$path" in /extra-domains/save) wl_save=extra_domains_save ;; *) wl_save=whitelist_save ;; esac
+        if [ "$path" = /extra-domains/save ] && [ "$(form_value "${QUERY_STRING:-}" mode)" = import ]; then
+            wl_save=extra_domains_import
+        fi
         [ "${CONTENT_LENGTH:-0}" -le 1048576 ] 2>/dev/null || json_fail "413 Payload Too Large" "список больше 1 МБ"
         wl_rev=$(form_value "${QUERY_STRING:-}" revision)
         wl_errfile=$(mktemp) || json_fail "500 Internal Server Error" "не удалось создать временный файл"
         if wl_result=$(read_body_raw | "$wl_save" "$wl_rev" 2>"$wl_errfile"); then
+            wl_notice=$(cat "$wl_errfile")
             rm -f "$wl_errfile"
             json_header
             printf '{"ok":true,"revision":'
             json_string "$wl_result"
+            printf ',"notice":'
+            json_string "$wl_notice"
             printf '}\n'
             exit 0
         else
@@ -859,35 +865,6 @@ case "$method $path" in
     # разбирает его страница. Здесь ничего не интерпретируем намеренно: набор
     # полей у замера свой и меняется вместе с инструментом, а лишний слой
     # перевода только разъезжался бы с ним.
-    "GET /strategy/unique-set")
-        json_header
-        printf '{"ok":true,"result":'
-        if [ -s "${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}" ]; then
-            cat "${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}"
-        else
-            printf 'null\n'
-        fi
-        printf '}\n'
-        exit 0
-        ;;
-
-    "POST /strategy/unique-set")
-        STRATEGY_UNIQUE_LOCK_DIR="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}"
-        STRATEGY_UNIQUE_RESULT_FILE="${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}"
-        export STRATEGY_UNIQUE_LOCK_DIR STRATEGY_UNIQUE_RESULT_FILE
-        strategy_unique_set_lock_acquire || json_fail "409 Conflict" "уникальный набор уже измеряется"
-        export STRATEGY_UNIQUE_LOCK_TOKEN
-        rm -f "$STRATEGY_UNIQUE_RESULT_FILE"
-        job_id=$(svc_action_async "Создание уникального набора стратегий" "strategy_unique_set_worker")
-        if [ -z "$job_id" ]; then
-            strategy_unique_set_lock_release
-            json_fail "500 Internal Server Error" "не удалось запустить измерение"
-        fi
-        json_header
-        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
-        exit 0
-        ;;
-
     "GET /strategy/pick")
         json_header
         _pick=$(strategy_pick_last)
@@ -1029,23 +1006,6 @@ case "$method $path" in
             json_fail "400 Bad Request" "${s_err:-reset failed}"
         json_header
         printf '{"ok":true,"pool":'; json_string "$s_name"
-        printf '}\n'
-        exit 0
-        ;;
-
-    "POST /strategy/pools/reset-all")
-        # Share the unique-set lock so a run cannot finish after this reset and
-        # write newly measured custom pools back over the requested automation.
-        STRATEGY_UNIQUE_LOCK_DIR="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}"
-        export STRATEGY_UNIQUE_LOCK_DIR
-        strategy_unique_set_lock_acquire || json_fail "409 Conflict" "сначала дождитесь завершения уникального набора"
-        export STRATEGY_UNIQUE_LOCK_TOKEN
-        s_reset_msg=$(strategy_pool_reset_all 2>&1)
-        s_reset_rc=$?
-        strategy_unique_set_lock_release
-        [ "$s_reset_rc" = 0 ] || json_fail "500 Internal Server Error" "${s_reset_msg:-не удалось вернуть автоматику}"
-        json_header
-        printf '{"ok":true,"message":'; json_string "${s_reset_msg:-Все категории уже работают на автоматике.}"
         printf '}\n'
         exit 0
         ;;

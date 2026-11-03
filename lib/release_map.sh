@@ -29,10 +29,10 @@ z2k_install_paths() {
             echo "${zd}/lua/${repo_path#files/lua/}"
             ;;
         files/lists/extra-domains.txt)
-            # Both shipped baseline and runtime merged copy. Caller treats
-            # these as a special case for 3-way merge.
+            # Only the shipped sample is release-owned. The convergence updater
+            # copies every mapped target verbatim, so mapping lists/ here erases
+            # user additions. Fresh installs seed it; reinstalls restore backup.
             echo "${zd}/files/lists/extra-domains.txt"
-            echo "${zd}/lists/extra-domains.txt"
             ;;
         files/lists/*.txt)
             # IP/host lists that install.sh dual-copies (files/lists/ + lists/).
@@ -176,8 +176,8 @@ z2k_install_paths() {
 # z2k_steps_for <путь в репозитории> — что выполнить после доставки (0..N строк).
 # Пусто = ничего: файл подхватывается на лету.
 #
-# Здесь же похоронены четыре прежних правила au_reinstall_required. Они не
-# требовали переустановки по существу — им просто нечем было сработать:
+# Адресные шаги заменили четыре прежних правила обязательной переустановки.
+# Те классы файлов не требовали её по существу — применить их было нечем:
 #   */builds/*         цель зависит от арки роутера → refresh-binaries
 #   config_official.sh генератор, его код не перезапускался → regen-config
 #   strategies.sh      то же плюс пересборка extra_strats/*/Strategy.txt
@@ -297,55 +297,6 @@ z2k_steps_merged() {
     rm -f "$_zsm_tmp"
     unset _zsm_tmp _zsm_f _zsm_s
     return 0
-}
-
-# ---- ПЕРЕХОДНЫЙ ГЕЙТ ---------------------------------------------------------
-# z2k_legacy_reinstall_required <путь> — «1», если СТАРЫЙ апдейтер, который
-# сейчас стоит на роутерах, доставить эту правку не может ни при каком раскладе.
-#
-# Живёт ровно до релиза, в котором на роутеры приедет исполнитель шагов: с этого
-# момента regen-config, refresh-binaries и rebuild-panel выполняются адресно, и
-# гнать полную переустановку ради генератора или бинарника больше незачем.
-# Дословный текст прежнего au_reinstall_required — вместе с историей, ради
-# которой он появился.
-z2k_legacy_reinstall_required() {
-    local repo_path="$1"
-    case "$repo_path" in
-        */builds/*)
-            # Arch-specific binaries. au_install_paths() has no target for
-            # them at all (the target depends on the router's architecture),
-            # so a patch would not deliver them — it would silently drop them
-            # from changed_files while the version number moves forward.
-            echo 1 ;;
-        lib/config_official.sh|lib/strategies.sh)
-            # Install-time generators: their code runs exactly once, during
-            # step_create_config_and_init, and the result (config,
-            # extra_strats/*/Strategy.txt) is written to disk as plain files.
-            # A patch overwrites the .sh source but does not re-run it — an
-            # already-installed router keeps the old generated output.
-            echo 1 ;;
-        lib/install.sh)
-            # Тот же класс, что и генераторы выше, и он тут отсутствовал: весь
-            # код install.sh выполняется ТОЛЬКО внутри установки (step_*,
-            # migrate_*). Патч кладёт свежий файл в ${zd}/lib/install.sh и на
-            # этом всё — ни один его шаг не переигрывается, а reinstall и вовсе
-            # качает модули заново, так что доставленная копия не участвует даже
-            # в следующей установке. Релиз, где изменился только install.sh,
-            # уезжал бы патчем: версия вперёд, installed_tag вперёд, поведение
-            # роутера ровно прежнее — авария без единой строчки в логе.
-            #
-            # ПОЧЕМУ НЕ ВЕСЬ lib/*. Остальные модули (utils, menu, config,
-            # webpanel, auto_update) z2k.sh пересобирает в память на КАЖДОМ
-            # запуске из ${zd}/lib — их правку патч доставляет по-настоящему.
-            # Загонять и их в reinstall значило бы платить полной переустановкой
-            # за однострочный фикс в меню.
-            echo 1 ;;
-        webpanel/lighttpd.conf)
-            # Templated with @PORT@/@BIND@ substitution at install time
-            # (webpanel/install.sh). A patch has no re-templating step, so it
-            # would overwrite nothing and the router keeps the stale config.
-            echo 1 ;;
-    esac
 }
 
 # z2k_steps_merged_names — то же упорядочивание, но на входе уже ИМЕНА шагов,

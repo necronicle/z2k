@@ -569,113 +569,13 @@ RAW=$(cgi_stub POST /auth/session-ttl "" "$BODYF")
 assert_eq "произвольный срок отвергается" "Status: 400 Bad Request" "$(printf '%s\n' "$RAW" | cgi_status)"
 assert_eq "отказ не меняет сохранённый срок" "604800" "$(cat "$Z2K_PANEL_SESS_TTL_FILE")"
 
-printf "\n--- /strategy/unique-set: result и блокировка фонового эксперимента ---\n"
-STRATEGY_UNIQUE_LOCK_DIR="$SB/unique-set.lock"; export STRATEGY_UNIQUE_LOCK_DIR
-STRATEGY_UNIQUE_RESULT_FILE="$SB/unique-set-result.json"; export STRATEGY_UNIQUE_RESULT_FILE
-rm -rf "$STRATEGY_UNIQUE_LOCK_DIR" "$STRATEGY_UNIQUE_RESULT_FILE"
-OUT=$(cgi GET /strategy/unique-set "" | cgi_body)
-assert_eq "без предыдущего результата отдаётся null" "null" "$(jget "$OUT" 'd["result"]')"
-
-printf '{"ok":true,"pools":{"yt_tcp":"line"}}\n' > "$STRATEGY_UNIQUE_RESULT_FILE"
-OUT=$(cgi GET /strategy/unique-set "" | cgi_body)
-assert_eq "сохранённый итог вложен как JSON" "1" "$(json_ok_p "$OUT")"
-assert_eq "GET отдаёт измеренный пул" "line" "$(jget "$OUT" 'd["result"]["pools"]["yt_tcp"]')"
-
-# Свежий lock симулирует задачу из другой вкладки. Запрос должен конфликтовать
-# и не запускать второй runner, независимо от тела запроса.
-mkdir -p "$STRATEGY_UNIQUE_LOCK_DIR"
-printf '99999999\n' > "$STRATEGY_UNIQUE_LOCK_DIR/pid"
-printf 'other-run-token\n' > "$STRATEGY_UNIQUE_LOCK_DIR/token"
-BODYF="$SB/unique-body.txt"; printf 'domain=attacker.invalid;touch %s/pwned' "$SB" > "$BODYF"
-RAW=$(cgi_stub POST /strategy/unique-set "" "$BODYF")
-OUT=$(printf '%s\n' "$RAW" | cgi_body)
-assert_eq "повторный запуск отвечает 409" "Status: 409 Conflict" "$(printf '%s\n' "$RAW" | cgi_status)"
-assert_eq "409-ответ остаётся корректным JSON" "1" "$(json_ok_p "$OUT")"
-assert_eq "lock не удалён чужим запросом" "other-run-token" "$(cat "$STRATEGY_UNIQUE_LOCK_DIR/token")"
-rm -rf "$STRATEGY_UNIQUE_LOCK_DIR"
-
-printf "\n--- /strategy/pools/reset-all: transactional reset and unique-set lock ---\n"
-CUSTOM_STRAT_DIR="$LISTS_DIR/custom-strategies"
-for pool in rkn_tcp yt_tcp gv_tcp quic discord_udp; do
-    printf -- '--lua-desync=fake:tag=%s\n' "$pool" > "$CUSTOM_STRAT_DIR/$pool.txt"
+printf "\n--- removed experimental strategy endpoints ---\n"
+for method in GET POST; do
+    RAW=$(cgi_stub "$method" /strategy/unique-set "" "")
+    assert_eq "unique-set $method is unavailable" "Status: 404 Not Found" "$(printf '%s\n' "$RAW" | cgi_status)"
 done
-: > "$Z2K_TEST_RUNNING"
-: > "$SB/restarts"
 RAW=$(cgi_stub POST /strategy/pools/reset-all "" "")
-OUT=$(printf '%s\n' "$RAW" | cgi_body)
-assert_eq "reset-all: первая строка — статус" "Status: 200 OK" "$(printf '%s\n' "$RAW" | cgi_status)"
-assert_eq "reset-all: Content-Type JSON" "application/json;" "$(printf '%s\n' "$RAW" | cgi_ctype)"
-assert_eq "reset-all: ответ валидный JSON" "1" "$(json_ok_p "$OUT")"
-assert_contains "reset-all: все категории сброшены" '"ok":true' "$OUT"
-_left=0
-for pool in rkn_tcp yt_tcp gv_tcp quic discord_udp; do
-    [ -e "$CUSTOM_STRAT_DIR/$pool.txt" ] && _left=$((_left + 1))
-done
-assert_eq "reset-all: пять пользовательских пулов удалены" "0" "$_left"
-assert_eq "reset-all: сервис перезапущен ровно один раз" "1" "$(wc -l < "$SB/restarts" | tr -d ' ')"
-
-# A reset must not race an active unique-set run: that run could otherwise
-# write its newly selected pools back immediately after this endpoint returns.
-mkdir -p "$STRATEGY_UNIQUE_LOCK_DIR"
-printf '99999999\n' > "$STRATEGY_UNIQUE_LOCK_DIR/pid"
-printf 'running-set\n' > "$STRATEGY_UNIQUE_LOCK_DIR/token"
-printf 'custom\n' > "$CUSTOM_STRAT_DIR/rkn_tcp.txt"
-RAW=$(cgi_stub POST /strategy/pools/reset-all "" "")
-OUT=$(printf '%s\n' "$RAW" | cgi_body)
-assert_eq "reset-all: конфликт при подборе = 409" "Status: 409 Conflict" "$(printf '%s\n' "$RAW" | cgi_status)"
-assert_eq "reset-all: конфликт сохраняет пулы" "1" "$(test -f "$CUSTOM_STRAT_DIR/rkn_tcp.txt" && echo 1 || echo 0)"
-assert_eq "reset-all: конфликт не удаляет чужой lock" "running-set" "$(cat "$STRATEGY_UNIQUE_LOCK_DIR/token")"
-rm -rf "$STRATEGY_UNIQUE_LOCK_DIR" "$CUSTOM_STRAT_DIR/rkn_tcp.txt"
-
-# A service restart failure must roll back the files and retry the old config;
-# otherwise the panel could report an error while silently leaving auto mode.
-printf 'custom-rkn\n' > "$CUSTOM_STRAT_DIR/rkn_tcp.txt"
-printf 'custom-discord\n' > "$CUSTOM_STRAT_DIR/discord_udp.txt"
-: > "$SB/restarts"
-Z2K_TEST_FAIL_RESTART=1; export Z2K_TEST_FAIL_RESTART
-RAW=$(cgi_stub POST /strategy/pools/reset-all "" "")
-OUT=$(printf '%s\n' "$RAW" | cgi_body)
-Z2K_TEST_FAIL_RESTART=0; export Z2K_TEST_FAIL_RESTART
-assert_eq "reset-all: неудачный рестарт возвращает 500" "Status: 500 Internal Server Error" "$(printf '%s\n' "$RAW" | cgi_status)"
-assert_eq "reset-all: неудачный рестарт восстановил RKN" "custom-rkn" "$(cat "$CUSTOM_STRAT_DIR/rkn_tcp.txt" 2>/dev/null)"
-assert_eq "reset-all: неудачный рестарт восстановил Discord" "custom-discord" "$(cat "$CUSTOM_STRAT_DIR/discord_udp.txt" 2>/dev/null)"
-assert_eq "reset-all: после rollback старый сервис перезапущен" "2" "$(wc -l < "$SB/restarts" | tr -d ' ')"
-assert_eq "reset-all: lock снят после ошибки" "0" "$(test -d "$STRATEGY_UNIQUE_LOCK_DIR" && echo 1 || echo 0)"
-rm -f "$CUSTOM_STRAT_DIR/rkn_tcp.txt" "$CUSTOM_STRAT_DIR/discord_udp.txt"
-rm -f "$Z2K_TEST_RUNNING"
-
-DETECT_STUB="$SB/z2k-detect-stub"; export Z2K_DETECT_BIN="$DETECT_STUB"
-cat > "$DETECT_STUB" <<'DETECTEOF'
-#!/bin/sh
-echo "$*" >> "$SB/detect-args.log"
-printf '{"verdict":"no_strategy"}\n'
-DETECTEOF
-chmod +x "$DETECT_STUB"
-NSLOOKUP_STUB="$SB/nslookup-stub"; export Z2K_NSLOOKUP_BIN="$NSLOOKUP_STUB"
-cat > "$NSLOOKUP_STUB" <<'DNSLOOKUPEOF'
-#!/bin/sh
-printf 'Name: %s\nAddress 1: 142.250.74.14 edge-a\nAddress 2: 142.250.74.46 edge-b\n' "$1"
-DNSLOOKUPEOF
-chmod +x "$NSLOOKUP_STUB"
-printf '{"old":"success"}\n' > "$STRATEGY_UNIQUE_RESULT_FILE"
-RAW=$(cgi_stub POST /strategy/unique-set "" "$BODYF")
-OUT=$(printf '%s\n' "$RAW" | cgi_body)
-assert_eq "POST запускает фоновую задачу" "Status: 200 OK" "$(printf '%s\n' "$RAW" | cgi_status)"
-assert_eq "ответ запуска — валидный JSON" "1" "$(json_ok_p "$OUT")"
-UNIQUE_JOB=$(jget "$OUT" 'd["job"]')
-JOB_IDS="$JOB_IDS $UNIQUE_JOB"
-OUT=$(cgi_stub GET /strategy/unique-set "" | cgi_body)
-assert_eq "старый успешный итог очищен перед новым запуском" "null" "$(jget "$OUT" 'd["result"]')"
-# Lock снимает обработчик выхода задачи, а маркер .exit обёртка пишет раньше,
-# чем подоболочка выходит. Поэтому ждём и маркер, и снятие lock: проверка
-# про утечку lock, а не про порядок в пределах миллисекунд. Под нагрузкой
-# параллельного CI окно между ними росло, и тест падал без поломки (11.10.2026).
-_wait=0
-while { [ ! -f "/tmp/z2k-job-$UNIQUE_JOB.exit" ] || [ -d "$STRATEGY_UNIQUE_LOCK_DIR" ]; } && [ "$_wait" -lt 20 ]; do sleep 1; _wait=$((_wait + 1)); done
-assert_eq "задача сняла свой lock после окончания" "0" "$([ -d "$STRATEGY_UNIQUE_LOCK_DIR" ] && echo 1 || echo 0)"
-assert_contains "runner ставит проверочные флаги перед закреплённым IP и SNI" "classify -json -hello both -sni i.ytimg.com -also-test-ip 142.250.74.46 142.250.74.14:443" "$(cat "$SB/detect-args.log" 2>/dev/null)"
-assert_contains "runner повторяет поиск со вторым IP как опорным" "classify -json -hello both -sni i.ytimg.com -also-test-ip 142.250.74.14 142.250.74.46:443" "$(cat "$SB/detect-args.log" 2>/dev/null)"
-[ ! -e "$SB/pwned" ] && assert_eq "тело запроса не исполнялось" "0" "0" || assert_eq "тело запроса не исполнялось" "0" "1"
+assert_eq "experimental reset-all is unavailable" "Status: 404 Not Found" "$(printf '%s\n' "$RAW" | cgi_status)"
 
 printf "\n--- form_value / json_escape (вырезаны из api.sh) ---\n"
 # api.sh — не библиотека: source запускает диспетчер и завершает процесс.

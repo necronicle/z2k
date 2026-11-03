@@ -178,17 +178,17 @@ async function wlRemove(view, all) {
   view.busy = false; if(!wlCurrent(view)) return; wlControls(view); if(!ok) return;
   await wlCommit(view,replaceWhitelistSelection(view.text,ids,""),view.revision);
 }
-async function wlCommit(view, text, revision, remember = true) {
+async function wlCommit(view, text, revision, remember = true, importing = false) {
   if(view.busy || !view.loaded) return false;
   if(new TextEncoder().encode(text).length > 1048576) { wlError(view,"Список больше 1 МБ. Сократите его перед сохранением."); return false; }
   const previous = view.text;
   view.busy = true; wlError(view); wlControls(view);
   try {
-    const result = await apiPostText(view.endpoint + "/save?revision=" + encodeURIComponent(revision),text);
+    const result = await apiPostText(view.endpoint + "/save?revision=" + encodeURIComponent(revision) + (importing ? "&mode=import" : ""),text);
     if(!wlCurrent(view)) return true;
     view.undo = remember ? { text: previous, revision: result.revision } : null;
     view.editor = null; wlEl(view,"wl-editor").hidden = true;
-    toast(remember ? "Список сохранён" : "Изменение отменено");
+    toast(result.notice || (remember ? "Список сохранён" : "Изменение отменено"));
     await loadWhitelist(view);
     return true;
   } catch(e) {
@@ -213,7 +213,7 @@ async function wlImport(view,e) {
     const addition = await file.text();
     if(!wlCurrent(view)) return;
     view.busy = false;
-    await wlCommit(view,text + addition,revision);
+    await wlCommit(view,text + addition,revision,true,true);
   } catch(err) { if(wlCurrent(view)) wlError(view,"Не удалось прочитать файл: " + err.message); }
   finally { if(wlCurrent(view)) { view.busy = false; wlControls(view); } }
 }
