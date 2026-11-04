@@ -128,6 +128,13 @@ assert_eq "регистрации blob=4pda больше нет" "0" \
 _ref=$(grep -ohE '(blob|seqovl_pattern|pattern|fallback)=[A-Za-z_][A-Za-z0-9_]*' \
        "$ROOT/strats_new2.txt" "$ROOT/quic_strats.ini" "$ROOT/lib/config_official.sh" 2>/dev/null \
        | sed 's/.*=//' | sort -u)
+# Замерщик z2k-detect (вкладка «Подбор по домену») предлагает человеку готовые
+# строки на файловых QUIC-блобах из своего списка: такая строка уходит в
+# пользовательскую стратегию и без регистрации блоба не загрузится. Это тоже
+# потребитель, хотя ни в одном пуле блоб может уже не стоять.
+_ref=$( { printf '%s\n' "$_ref"
+          grep -ohE '\{"[A-Za-z_][A-Za-z0-9_]*", "[^"]+\.bin"\}' "$ROOT/z2k-detect/internal/quicprobe/arms.go" 2>/dev/null \
+              | sed 's/^{"//; s/".*//'; } | sort -u)
 _reg=$(grep -ohE '\-\-blob=[A-Za-z_][A-Za-z0-9_]*:' "$ROOT/files/S99zapret2.new" 2>/dev/null \
        | sed 's/--blob=//; s/:$//' | sort -u)
 # Блоб может не иметь файла вовсе: наш Lua готовит его в рантайме и кладёт в

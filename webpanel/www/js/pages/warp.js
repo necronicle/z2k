@@ -229,6 +229,21 @@ export async function renderWarp() {
         </div>
       </details>
     </div>
+    <div class="card" id="warp-exclude-card" hidden>
+      <h3>Исключения</h3>
+      <p class="desc">Адреса, подсети и домены, которые <b>никогда не идут через WARP</b> — в любом
+        режиме, в том числе когда через WARP идёт весь трафик. Например, Госуслуги, банки и
+        маркетплейсы, которые не открываются с иностранного адреса. Один адрес, подсеть или домен
+        на строку: <code>gosuslugi.ru</code>, <code>*.sberbank.ru</code>, <code>95.167.0.0/16</code>.
+        Для доменов действуют те же условия, что у списков ниже: устройство должно получать
+        обычные DNS-ответы через роутер. <b>Применяется сразу.</b></p>
+      <textarea id="warp-exclude" class="warp-editor" spellcheck="false"
+                autocomplete="off" autocapitalize="off" autocorrect="off"
+                placeholder="gosuslugi.ru"></textarea>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn btn-primary" id="warp-exclude-save">Сохранить</button>
+      </div>
+    </div>
     <div class="card">
       <h3>Списки адресов и доменов</h3>
       <p class="desc">
@@ -239,7 +254,7 @@ export async function renderWarp() {
         Через WARP идёт трафик к адресам из включённых списков;
         включают и выключают их тумблеры в карточке выше.
         <b>Без включённых списков весь интернет-трафик выбранных устройств идёт в WARP.</b>
-        Если устройства тоже не выбраны, в WARP идёт весь интернет-трафик локальной сети. Локальные сети остаются доступны напрямую.
+        Если устройства тоже не выбраны, в WARP идёт весь интернет-трафик локальной сети. Локальные сети и исключения остаются доступны напрямую.
         <b>Изменения применяются сразу</b>, без перезапуска, и переживают переустановку z2k.
       </p>
       <p class="desc">Для доменов устройство должно получать обычные DNS-ответы через DNS роутера
@@ -286,6 +301,7 @@ export async function renderWarp() {
     if (btn) warpTransportPick(btn.dataset.mode);
   });
   document.getElementById("warp-devices-save").addEventListener("click", warpDevicesSave);
+  document.getElementById("warp-exclude-save").addEventListener("click", warpExcludeSave);
   document.getElementById("warp-new-btn").addEventListener("click", warpNewList);
   document.getElementById("warp-import-btn").addEventListener("click", () => {
     document.getElementById("warp-import-file").click();
@@ -300,6 +316,7 @@ export async function renderWarp() {
   loadWarpLists();
   loadWarpNeighbors();
   loadWarpDevices();
+  loadWarpExclude();
   _updateGlobalUILock();
 }
 
@@ -480,6 +497,7 @@ async function loadWarpStatus() {
   const reregBtn = document.getElementById("warp-rereg-btn");
   if (reregBtn) reregBtn.hidden = !installed;
   document.getElementById("warp-devices-card").hidden = false;
+  document.getElementById("warp-exclude-card").hidden = false;
 
   const box = $app.querySelector('[data-key="game_warp"] input');
   // ПОКА ДЕЙСТВИЕ ИДЁТ, ТУМБЛЕР И ВЫБОР ТРАНСПОРТА ПОКАЗЫВАЮТ НАЖАТОЕ, А НЕ
@@ -782,6 +800,38 @@ async function warpDevicesSave() {
     toast(`Сохранено: ${Number(d.entries) || 0}` + (Number(d.dropped) > 0 ? `, отброшено строк: ${d.dropped}` : ""));
     loadWarpDevices();
     loadWarpNeighbors();
+    loadWarpStatus();
+  } catch (e) {
+    toastErr("Не сохранилось: ", e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Исключения: адреса и домены, которые никогда не идут в WARP. text/plain, как
+// списки; ответ сохранения — как у своего списка.
+async function loadWarpExclude() {
+  const ta = document.getElementById("warp-exclude");
+  if (!ta) return;
+  const seq = _newLoad("warpExclude");
+  try {
+    const text = await apiGetText("/warp/exclude");
+    if (_stale("warpExclude", seq)) return;
+    ta.value = text;
+  } catch (e) {
+    if (_stale("warpExclude", seq)) return;
+    toastErr("Исключения: ", e);
+  }
+}
+
+async function warpExcludeSave() {
+  const ta = document.getElementById("warp-exclude");
+  const btn = document.getElementById("warp-exclude-save");
+  btn.disabled = true;
+  try {
+    const d = await apiPostText("/warp/exclude/save", ta.value);
+    toast(`Сохранено: ${Number(d.saved) || 0}` + (Number(d.skipped_invalid) > 0 ? `, отброшено строк: ${d.skipped_invalid}` : ""));
+    loadWarpExclude();
     loadWarpStatus();
   } catch (e) {
     toastErr("Не сохранилось: ", e);

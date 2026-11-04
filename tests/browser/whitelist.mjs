@@ -26,8 +26,10 @@ try {
  await page.locator('#wl-import-file').setInputFiles({name:'invalid.txt',mimeType:'text/plain',buffer:Buffer.from('good.example\nbad domain\n')});await idle();
  assert.equal((await state()).domains.length,4);assert.match(await page.locator('#wl-error').textContent(),/строке 7/);
  if(extra) {
-  await page.locator('#wl-import-file').setInputFiles({name:'covered.txt',mimeType:'text/plain',buffer:Buffer.from('sub.excluded.example\n')});await idle();
-  assert.equal((await state()).domains.length,4);assert.match(await page.locator('#wl-error').textContent(),/исключения/);
+  await page.locator('#wl-import-file').setInputFiles({name:'covered.txt',mimeType:'text/plain',buffer:Buffer.from('sub.excluded.example\nnew.example\nexcluded.example\n')});await idle();
+  assert.deepEqual((await state()).domains,['a.example','b.example','c.example','keep.example','new.example']);
+  assert.match(await page.locator('#toast-stack').textContent(),/Пропущено.*2/);
+  await page.locator('#wl-undo').click();await idle();assert.equal((await state()).domains.length,4);
   const r=await page.request.get(base+'/cgi-bin/api/whitelist',{headers:{'X-Z2K-Panel':'1'}});
   assert.deepEqual((await r.json()).domains,['excluded.example'],'extra-domain edits must not modify exclusions');
  }

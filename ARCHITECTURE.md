@@ -33,7 +33,7 @@ TCP поверх WebSocket — перехватывает REDIRECT'нутые с
 z2k.sh                       ← точка входа установки и меню
   ├── определяет z2k_fetch (5 слоёв, включая DoH) и print_*, confirm, …
   └── source_modules
-        └── lib/{utils,install,strategies,config,config_official,webpanel,menu,auto_update}.sh
+        └── lib/{utils,install,strategies,config,config_official,webpanel,menu,auto_update,wan}.sh
               (порядок задан переменной MODULES в z2k.sh)
 
 files/z2k-auto-update.sh     ← ночной cron, z2k.sh НЕ вызывает
@@ -78,28 +78,25 @@ chunked range-fallback), поэтому в `utils.sh` они завёрнуты 
 
 ## Установка против обновления
 
-**Критерий один: может ли патч ВОСПРОИЗВЕСТИ эффект правки.** Патч умеет ровно
-одно — положить файл по пути из `au_install_paths()` и перезапустить сервис.
-Если эффект файла производится шагом, которого у патча нет (генератор времени
-установки, шаблон времени установки, выбор архитектуры), то доставленная копия
-ничего не меняет: версия и `installed_tag` уезжают вперёд, поведение роутера
-остаётся прежним. Отсюда деление:
+Патч раскладывает файлы по адресам из `install_map` и выполняет шаги из
+`history[].steps`. И то и другое вычисляется на сборке: роутер не угадывает
+последствия по имени файла, а исполняет манифест. Поэтому генератор конфига,
+шаблон панели и архитектурно-зависимый бинарник больше не требуют полной
+переустановки сами по себе.
 
-| Что изменилось | Тип релиза |
+| Что изменилось | Действие патча |
 |---|---|
-| `files/*`, списки, lua, `webpanel/*` (кроме `lighttpd.conf`) | `patch` |
-| `lib/utils.sh`, `config.sh`, `menu.sh`, `webpanel.sh`, `auto_update.sh` | `patch` — `z2k.sh` пересобирает их в память из `${zd}/lib` на каждом запуске |
-| **`lib/install.sh`, `lib/config_official.sh`, `lib/strategies.sh`** | **`reinstall`** — их код исполняется только внутри установки |
-| **`webpanel/lighttpd.conf`** | **`reinstall`** — шаблон с подстановкой `@PORT@`/`@BIND@` |
-| **любой `*/builds/*`** | **`reinstall`** — цель зависит от архитектуры, патч разложил бы `arm64` на `mipsel` |
-| init-скрипты | `patch` — см. ниже |
+| `files/*`, списки, Lua, `webpanel/*` | доставить файл; при необходимости перезапустить службу |
+| `lib/config_official.sh` | `regen-config` → `validate-config` → `restart-service` |
+| `lib/strategies.sh`, `strats_new2.txt`, `quic_strats.ini` | `regen-strategies` → `regen-config` → `validate-config` → `restart-service` |
+| `webpanel/lighttpd.conf` | `rebuild-panel` с подстановкой `@PORT@`/`@BIND@` |
+| `*/builds/*` | `refresh-binaries` с выбором архитектуры на роутере |
+| init-скрипты | доставить на системный путь и перезапустить соответствующую службу |
 
-Эта таблица — пересказ, а не источник. Источник один: `au_reinstall_required()`
-в `lib/auto_update.sh`, и её же спрашивает `scripts/release.sh`, отказываясь
-резать `patch`, если задет reinstall-путь. Заводя файл, чей эффект производится
-шагом установки, вписывать надо туда — на текст здесь никакой гейт не смотрит
-(ровно так однажды и провалился `webpanel/lighttpd.conf`: комментарий «ship as
-reinstall» рядом с ним читать было некому).
+Таблица — краткий пересказ. Источник один: `z2k_install_paths()` и
+`z2k_steps_for()` в `lib/release_map.sh`. Новый файл, который надо доставлять
+или после которого нужно действие, вписывается туда; `scripts/release.sh` и
+`scripts/gen_file_hashes.sh` переносят эти правила в манифест.
 
 Про init-скрипты. Главный из них — `S99zapret2`: он приходит патчем из
 `files/S99zapret2.new` в `/opt/etc/init.d/S99zapret2` и перезапускается на
@@ -112,10 +109,10 @@ reinstall» рядом с ним читать было некому).
 `files/lists/rkn-false-positive.txt` дополнительно тянет немедленный
 geosite-refresh, иначе фильтр применился бы только на суточном тике планировщика.
 
-Новому init-скрипту нужны обе половины: цель в `au_install_paths` (иначе файл
-ляжет в `${zd}/init.d/` и до системы не доедет — так уже терялся r-59.9) и
-запись в `restart_set` (иначе новый файл лежит на месте, а работает старый
-процесс). Без них — только `reinstall`.
+Новому init-скрипту нужны обе половины: системный путь в `z2k_install_paths()`
+(иначе файл ляжет в `${zd}/init.d/` и до системы не доедет) и перезапуск через
+`restart-service` либо запись в `restart_set` исполнителя. Без этого новый файл
+окажется на диске, а работать продолжит старый процесс.
 
 Подробности релизного порядка — в [RELEASING.md](RELEASING.md).
 

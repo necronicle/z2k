@@ -69,7 +69,7 @@ if grep -q 'Z2K_RELEASE_FULL_INSTALL' "$REL"; then
 else
     no "полная переустановка осталась явным аварийным люком" "Z2K_RELEASE_FULL_INSTALL" "не найден"
 fi
-if grep -q 'z2k_legacy_reinstall_required' "$REL"; then
+if grep -q 'z2k_legacy_reinstall_required' "$REL" "$ROOT/lib/release_map.sh"; then
     no "старый гейт не вернулся" "гейта нет" "гейт на месте — бинарник снова стоит флоту 4.5 минуты"
 else
     ok "старый гейт не вернулся"

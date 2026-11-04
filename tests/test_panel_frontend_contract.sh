@@ -1232,90 +1232,21 @@ const SCENARIOS = {
   unique_strategy_set: {
     hash: "#/state",
     setup() {
-      let uniqueResultGets = 0;
-      let uniqueJobFinished = false;
-      global.finishUniqueJob = () => { uniqueJobFinished = true; };
-      ROUTER = async (p, method) => {
+      ROUTER = async p => {
         if (p === "/state") return { ok: true, entries: [], pools: {} };
-        if (p === "/strategy/unique-set" && method === "GET") {
-          uniqueResultGets++;
-          const prefix = uniqueResultGets === 1 ? "old" : "new";
-          return { ok: true, result: { ok: true,
-            pools: { yt_tcp: `${prefix}-yt`, gv_tcp: `${prefix}-gv`, quic: `${prefix}-quic`, rkn_tcp: `${prefix}-rkn <tag>` },
-            rkn: { coverage: "3/3", reason: "common result", domains: ["discord.com", "instagram.com", "rutor.org"] },
-            elapsed_seconds: 1200, service_restarted: true, needs_service_start: false,
-          } };
-        }
-        if (p === "/strategy/pools") return { ok: true, pools: [
-          { pool: "yt_tcp", custom: 1 }, { pool: "gv_tcp", custom: 0 },
-          { pool: "quic", custom: 1 }, { pool: "rkn_tcp", custom: 0 },
-        ] };
-        if (p === "/strategy/unique-set" && method === "POST") return { ok: true, job: "unique-7" };
-        if (p === "/strategy/pools/reset-all" && method === "POST") return { ok: true };
-        if (p === "/job") return uniqueJobFinished
-          ? { ok: true, status: "done", done: true, exit: 0, log: "all done" }
-          : { ok: true, status: "running", done: false, exit: null, log: "running" };
-        return STATUS;
+        return { ok: true };
       };
     },
     async run() {
-      await sleep(120);
+      await sleep(60);
       const html = q("#app").innerHTML;
-      check("экспериментальная карточка показана", /Создать уникальный набор/.test(html), html.slice(0, 500));
-      check("коротко обещает подбор специально для провайдера", /специально для вашего провайдера/i.test(html), html.slice(0, 700));
-      check("подробности этапов не загромождают карточку", !/i\.ytimg\.com|googlevideo\.com|discord\.com|rutor\.org|около 20 минут/i.test(html), html.slice(0, 900));
-      check("результаты пулов не выводятся в карточке", !/old-yt|new-yt|old-gv|new-gv|3\/3|&lt;tag&gt;/.test(html), html.slice(0, 900));
-      await sleep(60);
-      check("показывается длительность последнего подбора", /20 мин/.test(q("#unique-set-status").textContent), q("#unique-set-status").textContent);
-      check("последний результат запрашивается для длительности", CALLS["/strategy/unique-set"] === 1, CALLS["/strategy/unique-set"]);
-      check("есть только экспериментальная пометка", /ЭКСПЕРИМЕНТАЛЬНО!!!/.test(html), html.slice(0, 500));
-      check("кнопка массового возврата к автоматике показана", /unique-set-reset-all/.test(html), html.slice(0, 800));
-      q("#unique-set-start").fire("click");
-      await sleep(30);
-      const first = confirmBox();
-      check("перед заменой custom пулов открыто предупреждение", first !== null, "нет confirmation modal");
-      check("в предупреждении названы заменяемые пулы и их полный scope",
-            first !== null && /yt_tcp/.test(first.innerHTML) && /quic/.test(first.innerHTML) && /целиком/.test(first.innerHTML),
-            first && first.innerHTML);
-      if (first) q("#confirm-cancel").fire("click");
-      await sleep(30);
-      check("отмена не запускает задачу", !CALLS["/strategy/unique-set"] || CALLS["/strategy/unique-set"] === 1,
-            CALLS["/strategy/unique-set"]);
-      check("отмена не запускает подбор", !(BODIES["/strategy/unique-set"] || []).length,
-            (BODIES["/strategy/unique-set"] || []).length);
-      // The initial render GET counts once; only the accepted click may POST.
-      q("#unique-set-start").fire("click");
-      await sleep(30);
-      q("#confirm-ok").fire("click");
-      await sleep(30);
-      check("job modal открыта", document.body.children.some(c => c.className === "modal-backdrop" && c.dataset.jobId === "unique-7"), "нет job modal");
-      global.finishUniqueJob();
-      await sleep(1300);
-      check("после подтверждения ушёл ровно один POST", (BODIES["/strategy/unique-set"] || []).length === 1,
-            (BODIES["/strategy/unique-set"] || []).length);
-      check("успешный подбор показывает длительность", /20 мин/.test(q("#unique-set-status").textContent), q("#unique-set-status").textContent);
-      check("после завершения пул не дублируется под кнопкой", !/old-yt|new-yt|old-gv|new-gv|3\/3|&lt;tag&gt;/.test(q("#app").innerHTML), q("#app").innerHTML.slice(0, 900));
-      q("#unique-set-reset-all").fire("click");
-      await sleep(30);
-      const resetConfirm = confirmBox();
-      check("массовый возврат просит подтверждение", resetConfirm !== null, "нет confirmation modal");
-      check("предупреждение говорит обо всех категориях, включая голосовой пул",
-            resetConfirm !== null && /всех/.test(resetConfirm.innerHTML) && /Discord/.test(resetConfirm.innerHTML),
-            resetConfirm && resetConfirm.innerHTML);
-      if (resetConfirm) q("#confirm-cancel").fire("click");
-      await sleep(30);
-      check("отмена массового возврата ничего не отправляет", !(BODIES["/strategy/pools/reset-all"] || []).length,
-            (BODIES["/strategy/pools/reset-all"] || []).length);
-      q("#unique-set-reset-all").fire("click");
-      await sleep(30);
-      q("#confirm-ok").fire("click");
-      await sleep(60);
-      check("подтверждённый массовый возврат отправляет один запрос",
-            (BODIES["/strategy/pools/reset-all"] || []).length === 1,
-            (BODIES["/strategy/pools/reset-all"] || []).length);
-      check("успешный массовый возврат сообщает об автоматике", /автомати/i.test(q("#unique-set-status").textContent), q("#unique-set-status").textContent);
+      check("экспериментальная карточка удалена", !/unique-set|Уникальный набор/.test(html), html.slice(0, 800));
+      check("экспериментальный API не вызывается", !CALLS["/strategy/unique-set"], CALLS["/strategy/unique-set"]);
+      check("таблица стратегий сохранена", /Стратегии по доменам/.test(html), html.slice(0, 800));
+      check("управление голосом сохранено", /discord-voice-controls/.test(html), html.slice(0, 800));
     },
   },
+
 };
 
 (async () => {

@@ -3,7 +3,7 @@
 // Три сигнала, от дешёвого к дорогому:
 //  1. Health() транспорта каждую секунду — бесплатно. rx растёт → жив.
 //  2. tx растёт, rx стоит дольше Doubt → одна e2e-проба через TUN (GET
-//     1.1.1.1/cdn-cgi/trace с адреса туннеля, warp=on). Арбитр, не тик.
+//     1.1.1.1/cdn-cgi/trace с адреса туннеля, warp=on или plus). Арбитр, не тик.
 //  3. Fails проб подряд → Dead; дальше решает лестница.
 //
 // Простой без трафика — не смерть: если никто не шлёт, нечему и приходить.
@@ -219,9 +219,26 @@ func TraceProbe(timeout time.Duration) Prober {
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(string(body), "warp=on") {
+		if !traceViaWarp(body) {
 			return errors.New("probe: warp=off")
 		}
 		return nil
 	}
+}
+
+// traceViaWarp — прошёл ли запрос через WARP, по ответу /cdn-cgi/trace.
+//
+// Поле warp: on — бесплатный WARP, plus — WARP+ (limited, unlimited), off —
+// мимо WARP. Раньше проверялось ровно warp=on, и у аккаунта WARP+ исправный
+// туннель объявлялся мёртвым на каждой ступени лестницы — полевой случай
+// 31.10.2026 (account_type unlimited). Ответ разбирается построчно: подстрока
+// по всему телу засчитала бы чужой ключ, оканчивающийся на warp.
+func traceViaWarp(body []byte) bool {
+	for _, line := range strings.Split(string(body), "\n") {
+		switch strings.TrimSpace(line) {
+		case "warp=on", "warp=plus":
+			return true
+		}
+	}
+	return false
 }

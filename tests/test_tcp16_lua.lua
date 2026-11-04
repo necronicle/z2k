@@ -90,36 +90,20 @@ do
     is("адрес вне карты — не подставляем", nil, z2k_sni_for(v4(8, 8), "общее"))
     is("закрепление при живой карте не действует", nil, z2k_sni_for(v4(8, 8), "общее"))
 
-    -- Десинк-функция: блоб кладётся только когда имя есть, и с именем внутри.
-    -- Основной путь — КЛОН настоящего hello (решение 11.09.2026): в фейке
-    -- собранный hello человека (reasm_data), а не встроенный блоб.
-    local d = v4(91, 98); d.reasm_data = "HELLO-REASM"; d.dis.payload = "HELLO-PKT"
-    z2k_sni_pick(nil, d)
-    is("z2k_sni_pick положил клон собранного hello с именем сети и декорацией rnd,dupsid",
-        "CLONE:HELLO-REASM|sni_del=true,sni_first=300.ya.ru,sni_snt_new=0|rnd,dupsid", d.z2k_ch)
-    local d1 = v4(91, 98); d1.dis.payload = "HELLO-PKT"
-    z2k_sni_pick(nil, d1)
-    is("без сборки клонируется payload самого пакета",
-        "CLONE:HELLO-PKT|sni_del=true,sni_first=300.ya.ru,sni_snt_new=0|rnd,dupsid", d1.z2k_ch)
-    local d2 = v4(8, 8); d2.dis.payload = "HELLO-PKT"
-    z2k_sni_pick(nil, d2)
-    is("адрес вне карты — блоба нет", nil, d2.z2k_ch)
-    local d3 = v4(104, 21); d3.dis.payload = "HELLO-PKT"; d3.arg = { blob = "my_ch" }
-    z2k_sni_pick(nil, d3)
-    is("имя блоба берётся из аргументов инстанса",
-        "CLONE:HELLO-PKT|sni_del=true,sni_first=hcaptcha.com,sni_snt_new=0|rnd,dupsid", d3.my_ch)
-    -- Запасной путь: hello не разобрался (клонировщик отказал) — прежняя
-    -- подстановка имени во встроенный блоб через tls_mod, а не тишина.
-    local real_clone = tls_client_hello_mod
-    tls_client_hello_mod = function() error("not a client hello") end
-    local d4 = v4(104, 21); d4.dis.payload = "GARBAGE"; d4.arg = { blob = "my_ch", mods = "rnd", src = "fake_x" }
-    z2k_sni_pick(nil, d4)
-    is("hello не разобрался — запасной путь: встроенный блоб + tls_mod", "CH:fake_x|rnd,sni=hcaptcha.com", d4.my_ch)
-    tls_client_hello_mod = function() return nil end
-    local d5 = v4(91, 98); d5.dis.payload = "GARBAGE"
-    z2k_sni_pick(nil, d5)
-    is("клонировщик вернул nil — тот же запасной путь", "CH:fake_default_tls|rnd,dupsid,sni=300.ya.ru", d5.z2k_ch)
-    tls_client_hello_mod = real_clone
+    -- Старый конфиг ещё может вызывать селектор после обновления Lua.
+    -- optional fake обязан остаться без блоба при любой длине hello.
+    for _, size in ipairs({ 100, 1570, 4096 }) do
+        local d = v4(104, 21)
+        d.reasm_data = string.rep("x", size)
+        d.dis.payload = "FIRST-PACKET"
+        z2k_sni_pick(nil, d)
+        is("старый селектор не создаёт общий фейк, длина " .. size, nil, d.z2k_ch)
+    end
+    local custom = v4(104, 21)
+    custom.arg.blob = "custom_ch"
+    custom.custom_ch = "STALE"
+    z2k_sni_pick(nil, custom)
+    is("старый селектор убирает собственный устаревший блоб", nil, custom.custom_ch)
     restore()
 
     -- Карты имён нет вовсе: работает ручное закрепление.
@@ -208,6 +192,83 @@ do
     is("новый список сетей действует: новый адрес получил имя", "ignored.example", z2k_sni_for(v4(203, 0), nil))
     restore()
     os.remove(asnf); os.remove(netf); os.remove(snif); os.remove(verf)
+end
+
+-- Компактный отправитель: единственный пакет после окончательной подготовки.
+do
+    local real_for, real_mod = z2k_sni_for, tls_mod
+    local sent, source, opts = {}, nil, nil
+    local extra = 20 -- синтетическая длина заголовочных опций после fooling
+    local function copy(t)
+        if type(t) ~= "table" then return t end
+        local r = {}; for k, v in pairs(t) do r[k] = copy(v) end; return r
+    end
+    deepcopy = copy
+    desync_opts = function(d) return { fooling = d.arg, rawsend = { repeats = d.arg.repeats }, reconstruct = {} } end
+    apply_fooling = function(_, dis, o) dis.extra = extra; opts = o end
+    l3l4_extra_len = function(dis) return dis.extra end
+    apply_ip_id = function() end
+    rawsend_dissect = function(dis, o) sent[#sent+1] = copy(dis); return true end
+    rawsend_payload_segmented = function() error("segmented send forbidden") end
+    z2k_sni_for = function() return "hcaptcha.com" end
+    local payload = string.rep("F", 100)
+    tls_mod = function(base, mods, real)
+        source = base
+        is("имя из карты передано в TLS-шаблон", "rnd,dupsid,sni=hcaptcha.com", mods)
+        return payload
+    end
+    local function d(mss)
+        local t = v4(104, 21)
+        t.dis.payload = "ORIGINAL"; t.dis.tcp.th_seq = 1
+        t.reasm_data = string.rep("R", 4096)
+        t.tcp_mss = mss
+        t.arg = { tcp_md5 = "", tcp_ts = "-1000", repeats = "8" }
+        return t
+    end
+    local t = d(120)
+    local verdict = z2k_sni_fake(nil, t)
+    is("фейк отправлен одним пакетом на точной границе MSS", 1, #sent)
+    is("исходник фейка — встроенный шаблон", "CH:fake_default_tls", source)
+    is("отправлен результат TLS-модификации", payload, sent[1] and sent[1].payload)
+    is("настоящие данные не изменены", "ORIGINAL", t.dis.payload)
+    is("настоящий пакет не дропается", nil, verdict)
+    is("MD5 входит в подготовку заголовков", "", opts and opts.tcp_md5)
+    z2k_sni_fake(nil, d(119))
+    is("размер после добавления TCP-опций превысил MSS — пропуск", 1, #sent)
+    z2k_sni_fake(nil, d(nil))
+    is("MSS неизвестен — пропуск", 1, #sent)
+    local unsafe = d(120); unsafe.arg.tcp_md5 = nil
+    z2k_sni_fake(nil, unsafe)
+    is("без защиты MD5 отправки нет", 1, #sent)
+    z2k_sni_for = function() return nil end
+    z2k_sni_fake(nil, d(120))
+    is("нет имени — нет отправки", 1, #sent)
+    z2k_sni_for = function() return "hcaptcha.com" end
+    tls_mod = function() return nil end
+    z2k_sni_fake(nil, d(120))
+    is("ошибка TLS-шаблона — нет отправки", 1, #sent)
+    tls_mod = function() error("bad TLS") end
+    is("ошибка подготовки не ломает плечо", true, pcall(z2k_sni_fake, nil, d(120)))
+    tls_mod = function() return payload end
+    local old_replay, old_direction = replay_first, direction_check
+    replay_first = function() return false end
+    z2k_sni_fake(nil, d(120))
+    is("не первая replay-часть — пропуск", 1, #sent)
+    replay_first = old_replay
+    direction_check = function() return false end
+    z2k_sni_fake(nil, d(120))
+    is("входящий пакет — пропуск", 1, #sent)
+    direction_check = old_direction
+    local six = d(120); six.dis.ip = nil; six.dis.ip6 = v6(0x2606, 0x4700).dis.ip6
+    z2k_sni_fake(nil, six)
+    is("IPv6 отправляется с тем же ограничением MSS", 2, #sent)
+    extra = 28
+    z2k_sni_fake(nil, six)
+    is("расширенные IPv6/TCP заголовки уменьшают бюджет", 2, #sent)
+    extra = 20
+    rawsend_dissect = function() error("send failed") end
+    is("ошибка отправки не ломает плечо", true, pcall(z2k_sni_fake, nil, d(120)))
+    z2k_sni_for, tls_mod = real_for, real_mod
 end
 
 -- ----- файл не даёт ничего лишнего --------------------------------------------

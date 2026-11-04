@@ -64,10 +64,10 @@ for f in "$EXTRA/TCP/RKN/List.txt" "$EXTRA/TCP/YT/List.txt" "$EXTRA/TCP/YT_GV/Li
 done
 for f in whitelist.txt sni_wl_candidates.txt; do cp "$TMP/input" "$ZAPRET2_DIR/lists/$f"; done
 ZAPRET2_DIR="$ZAPRET2_DIR" sh "$GEO" clean-google >/dev/null 2>&1 || bad 'offline command exit'
-for f in "$EXTRA"/*/*/List.txt "$ZAPRET2_DIR/lists/extra-domains.txt" "$ZAPRET2_DIR/lists/autohostlist-domains.txt"; do
+for f in "$EXTRA"/*/*/List.txt "$ZAPRET2_DIR/lists/autohostlist-domains.txt"; do
     cmp -s "$TMP/expected" "$f" && ok "offline cleanup: ${f#"$ZAPRET2_DIR"/}" || bad "offline cleanup: $f"
 done
-for f in whitelist.txt sni_wl_candidates.txt; do
+for f in whitelist.txt sni_wl_candidates.txt extra-domains.txt; do
     cmp -s "$TMP/input" "$ZAPRET2_DIR/lists/$f" && ok "untouched: $f" || bad "untouched: $f"
 done
 clean_google_domains && cmp -s "$TMP/expected" "$EXTRA/TCP/RKN/List.txt" && ok 'cleanup is idempotent' || bad 'idempotence'

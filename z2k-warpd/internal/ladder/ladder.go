@@ -288,7 +288,7 @@ func newAuto(ep account.Endpoint, start *account.Step) *Ladder {
 	//
 	// ОБОСНОВАНИЕ БЫЛО НЕГОДНЫМ, и это стоило поля. Ловушка закрыта монитором
 	// живости ЗАДОЛГО до этого: health.TraceProbe гонит пробу в интерфейс через
-	// SO_BINDTODEVICE (не просто адресом источника) и требует в ответе warp=on,
+	// SO_BINDTODEVICE (не просто адресом источника) и требует в ответе warp=on или plus,
 	// а два провала подряд означают Dead — см. TestTwoProbeFailuresAreDead.
 	// Чёрная дыра живёт до полуминуты, потом лестница идёт дальше и срабатывает
 	// fail-open.

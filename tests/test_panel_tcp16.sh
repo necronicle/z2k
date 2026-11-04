@@ -41,7 +41,7 @@ printf '24940\t300.ya.ru\n' > "$ZAPRET2_DIR/state/tcp16_sni.txt"
 printf 'a.example\nb.example\nc.example\n' > "$ZAPRET2_DIR/lists/sni_wl_candidates.txt"
 printf '1\n' > "$ZAPRET2_DIR/state/tcp16.flag"
 printf '%s\n' "$(( $(date +%s) - 7200 ))" > "$ZAPRET2_DIR/state/tcp16.flag.ts"
-printf 'NFQWS2_OPT="--lua-desync=z2k_sni_pick:payload=tls_client_hello"\n' > "$CONFIG_FILE"
+printf 'NFQWS2_OPT="--lua-desync=z2k_sni_fake:payload=tls_client_hello"\n' > "$CONFIG_FILE"
 J=$(tcp16_status_json)
 case "$J" in *'"measured":"1"'*) ok "блок найден — measured=1" ;; *) no "measured=1" '"measured":"1"' "$J" ;; esac
 case "$J" in *'"nets_blocked":2'*) ok "сети с блоком считаются без комментариев" ;; *) no "nets_blocked" 2 "$J" ;; esac
@@ -50,6 +50,10 @@ case "$J" in *'"candidates":3'*) ok "кандидатов — 3" ;; *) no "candi
 case "$J" in *'"in_config":true'*) ok "механизм в конфиге виден" ;; *) no "in_config" true "$J" ;; esac
 _age=$(printf '%s' "$J" | sed -n 's/.*"age":\([0-9]*\).*/\1/p')
 if [ -n "$_age" ] && [ "$_age" -ge 7200 ] && [ "$_age" -lt 7260 ]; then ok "давность замера в секундах"; else no "age" "~7200" "$_age"; fi
+
+printf '%s\n' '--lua-desync=z2k_sni_pick:blob=z2k_ch' > "$CONFIG_FILE"
+J=$(tcp16_status_json)
+case "$J" in *'"in_config":false'*) ok "старый селектор не объявлен работающим обходом" ;; *) no "старый селектор" false "$J" ;; esac
 
 printf '0\n' > "$ZAPRET2_DIR/state/tcp16.flag"
 : > "$CONFIG_FILE"

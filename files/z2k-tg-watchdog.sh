@@ -267,15 +267,14 @@ if [ -r "$TG_REDIR_LIB" ]; then
     . "$TG_REDIR_LIB"
     z2k_tg_udp_down
     if ! z2k_tg_rule_present PREROUTING || ! z2k_tg_rule_present OUTPUT; then
-        logger -t tg-watchdog "REDIRECT rules missing — re-inserting (ipset, -w) + flushing conntrack"
+        logger -t tg-watchdog "REDIRECT rules missing — re-inserting (ipset, -w)"
         z2k_tg_remove_legacy_rules
         z2k_tg_ensure_rules
-        # Flush stale conntrack for ALL Telegram DC CIDRs. Without this,
-        # Android Telegram holds dead direct-to-DC connections via the kernel
-        # conntrack table and new packets follow those stale entries BYPASSING
-        # the freshly restored REDIRECT — dead for minutes until conntrack
-        # expires. conntrack -D is idempotent.
-        z2k_tg_flush_conntrack
+        # Keep existing NAT mappings: deleting all DC flows interrupts live
+        # Telegram sessions too. Repair rules for new connections only.
+    else
+        # NDM can replace IPv6 filter rules independently of IPv4 NAT.
+        z2k_tg_ensure_rules6 || true
     fi
 fi
 
@@ -283,7 +282,9 @@ fi
 #    core.telegram.org resolves into 149.154.0.0/16, which our PREROUTING
 #    REDIRECT bounces to 127.0.0.1:1443 → tg-mtproxy-client → VPS relay →
 #    Telegram. Successful TLS + HTTP response = full path is healthy.
-if curl --connect-timeout 8 --max-time 15 -sf -o /dev/null \
+# HTTP 4xx/5xx still prove that TLS and the transport worked. Do not tear
+# down every Telegram stream just because the probe website returned an error.
+if curl --connect-timeout 8 --max-time 15 -s -o /dev/null \
         --resolve "core.telegram.org:443:$PROBE_RESOLVE_IP" \
         "$PROBE_URL" 2>/dev/null; then
     echo 0 > "$STATE"

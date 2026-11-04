@@ -660,6 +660,74 @@ _z2k_migrate_pool_renumber_v2()
 		{ print }'
 }
 
+# 30.10.2026: все три TCP-пула переставлены по замеру на линии владельца
+# (контроль без обхода 0 с двух концов, лидеры перемерены отдельно).
+# Автоматические записи СТИРАЮТСЯ: номер, подобранный в прежнем порядке, — это
+# не лучшее плечо для хоста, а след прежнего перебора; хост начинает подбор с
+# первого, теперь действительно лучшего. Замороженные человеком переносятся по
+# таблицам — это его выбор техники, и он сохраняется. Часть слотов при этом
+# сменила содержимое: плечи референсного набора приведены к нему один в один,
+# то есть техника та же, а параметры — как в первоисточнике.
+#
+# Таблицы полные: номер выпущенного пула -> номер нового. Слоты, которых в
+# выпущенном пуле не было (новые плечи в конце), ни одному старому номеру не
+# соответствуют и в таблицах не встречаются. Ключ google_tls — слитый профиль
+# yt+gv: в нём yt шли как 1..33, gv как 33+n; каждая половина переносится своей
+# таблицей, а gv сдвигается на новый размер yt (41).
+_z2k_migrate_pool_renumber_v3()
+{
+	local rkn_map='1=36,2=37,3=16,4=18,5=41,6=42,7=30,8=43,9=3,10=17,11=38,12=14,13=45,14=19,15=25,16=34,17=44,18=20,19=7,20=21,21=2,22=8,23=22,24=28,25=6,26=27,27=4,28=1,29=15,30=5,31=11,32=9,33=31,34=32,35=39,36=40,37=35,38=23,39=24,40=47,41=10,42=26,43=12,44=29,45=50,46=54,47=55,48=46,49=33,50=56,51=57,52=53,53=48,54=49,55=51,56=13,57=52'
+	local yt_map='1=5,2=4,3=9,4=16,5=8,6=1,7=10,8=6,9=14,10=17,11=31,12=29,13=18,14=19,15=25,16=13,17=7,18=24,19=15,20=27,21=11,22=20,23=28,24=38,25=32,26=2,27=39,28=33,29=30,30=40,31=34,32=35,33=36,34=21,35=41,36=12,37=37,38=3,39=22,40=26,41=23'
+	local gv_map='1=31,2=10,3=7,4=13,5=19,6=2,7=20,8=11,9=29,10=27,11=30,12=21,13=28,14=25,15=32,16=22,17=3,18=14,19=23,20=16,21=4,22=17,23=18,24=1,25=24,26=26,27=33,28=8,29=34,30=35,31=36,32=37,33=38,34=12,35=5,36=39,37=15,38=9,39=6'
+	_z2k_migrate_pool_renumber v3 'rkn_tcp|yt_tcp|gv_tcp|google_tls' \
+		'rkn 57, yt 41, gv 39 — порядок по замеру' \
+		-v RKN="$rkn_map" -v YT="$yt_map" -v GV="$gv_map" -v YTSIZE=41 '
+		function load(s, m,   n, a, i, kv) { n = split(s, a, ","); for (i = 1; i <= n; i++) { split(a[i], kv, "="); m[kv[1]] = kv[2] } }
+		# "" — номера нет в таблице, оставить как есть
+		function remap(m, n) { return (n in m) ? m[n] : "" }
+		BEGIN { OFS = "	"; load(RKN, rkn); load(YT, yt); load(GV, gv) }
+		/^#/ || NF < 3 { print; next }
+		$1 == "rkn_tcp" { n = remap(rkn, $3 + 0) }
+		$1 == "yt_tcp" { n = remap(yt, $3 + 0) }
+		$1 == "gv_tcp" { n = remap(gv, $3 + 0) }
+		$1 == "google_tls" {
+			s = $3 + 0
+			if (s <= 33) n = remap(yt, s)
+			else { n = remap(gv, s - 33); if (n != "") n += YTSIZE }
+		}
+		$1 ~ /^(rkn_tcp|yt_tcp|gv_tcp|google_tls)$/ && $5 != "frozen" { next }
+		$1 ~ /^(rkn_tcp|yt_tcp|gv_tcp|google_tls)$/ { if (n != "") $3 = n }
+		{ print }'
+}
+
+# 31.10.2026: пул quic — выпущенный набор на 18 плеч, плечи-копии референсных
+# страт доведены до точного совпадения, две недостающие дописаны в конец (20).
+# p-87.4 по ошибке сократил пул до 10 референсных плеч, и его миграция (v4)
+# перевела состояние в нумерацию 1..10, стерев автоматические записи. Здесь:
+#   * роутер прошёл v4 — номера 1..10 переносятся на места тех же техник в
+#     новом пуле; все десять есть, поэтому НИЧЕГО не стирается, и
+#     автоматические записи тоже переезжают — техника та же;
+#   * роутер v4 не проходил (p-87.4 до него не доехал, свежая установка) —
+#     состояние в нумерации выпущенного пула, а она совпадает с новой 1..18:
+#     переносить нечего, ставится только отметка.
+# v4 больше не вызывается: на таком роутере она стерла бы то, что совпадает.
+_z2k_migrate_pool_renumber_v5()
+{
+	if [ ! -f "${ZAPRET_BASE}/state/pool-renumber-v4.done" ]; then
+		mkdir -p "${ZAPRET_BASE}/state" 2>/dev/null
+		: > "${ZAPRET_BASE}/state/pool-renumber-v5.done" 2>/dev/null
+		return 0
+	fi
+	local quic_map='1=18,2=1,3=8,4=20,5=19,6=4,7=3,8=15,9=9,10=11'
+	_z2k_migrate_pool_renumber v5 'quic' 'quic 20 — выпущенный пул, копии референсных страт один в один' \
+		-v QU="$quic_map" '
+		function load(s, m,   n, a, i, kv) { n = split(s, a, ","); for (i = 1; i <= n; i++) { split(a[i], kv, "="); m[kv[1]] = kv[2] } }
+		BEGIN { OFS = "\t"; load(QU, qu) }
+		/^#/ || NF < 3 { print; next }
+		$1 == "quic" && (($3 + 0) in qu) { $3 = qu[$3 + 0] }
+		{ print }'
+}
+
 # ПОЛЬЗОВАТЕЛЬСКИЕ СТРАТЕГИИ НА СНЯТОМ ГОЛОСОВОМ БЛОБЕ (25.10.2026).
 #
 # Голосовой пул переехал с quic_dbankcloud на quic_initial_steamcommunity_com, и
@@ -1524,71 +1592,6 @@ Z2KEXCL
 	return 0
 }
 
-# Список файлов, покрытие которыми делает запись в extra-domains бессмысленной.
-# Тот же набор, что у панели (webpanel/cgi/actions.sh, _domain_lists_catalog) —
-# расхождение здесь означало бы, что панель запрещает добавить домен, а чистка
-# его не трогает, или наоборот. Тест сверяет оба списка.
-z2k_covering_lists()
-{
-	printf '%s\n' \
-		"${ZAPRET_BASE}/lists/whitelist.txt" \
-		"${ZAPRET_BASE}/extra_strats/TCP/RKN/List.txt" \
-		"${ZAPRET_BASE}/extra_strats/TCP/YT/List.txt" \
-		"${ZAPRET_BASE}/extra_strats/TCP/YT_GV/List.txt" \
-		"${ZAPRET_BASE}/extra_strats/UDP/YT/List.txt" \
-		"${ZAPRET_BASE}/extra_strats/TCP_Discord.txt" \
-		"${ZAPRET_BASE}/lists/autohostlist-domains.txt"
-}
-
-# Убрать из «доп доменов» то, что уже покрыто другими списками.
-#
-# Панель такие записи больше не принимает, но у людей они уже лежат: до этой
-# правки добавить можно было что угодно, и в extra-domains оседали домены,
-# которые и так в РКН-списке. Толку от них ноль, а человек уверен, что настроил.
-#
-# Покрытием считается сам домен ИЛИ любой его родитель — хостлисты матчат
-# поддомены, поэтому при наличии example.com запись www.example.com избыточна.
-z2k_prune_extra_domains()
-{
-	local f="${ZAPRET_BASE}/lists/extra-domains.txt"
-	local have tmp removed list
-	[ -s "$f" ] || return 0
-
-	have="/tmp/z2k_cov.$$"
-	: > "$have"
-	while IFS= read -r list; do
-		[ -n "$list" ] && [ -s "$list" ] || continue
-		grep -vE '^[[:space:]]*(#|$)' "$list" 2>/dev/null >> "$have"
-	done <<COVER
-$(z2k_covering_lists)
-COVER
-	if [ ! -s "$have" ]; then
-		rm -f "$have" 2>/dev/null
-		return 0
-	fi
-
-	tmp="/tmp/z2k_extra.$$"
-	# Первый файл — множество покрытых имён; для каждой строки extra-domains
-	# проверяем её саму и всех родителей.
-	awk 'NR==FNR { c[$0]=1; next }
-	     { s=$0; sub(/#.*/,"",s); gsub(/[ \t\r]/,"",s)
-	       if (s == "") next
-	       keep=1; n=split(s,a,".")
-	       for (i=1; i<=n-1; i++) { p=a[i]; for (j=i+1;j<=n;j++) p=p "." a[j]; if (p in c) { keep=0; break } }
-	       if (keep) print s }' "$have" "$f" > "$tmp" 2>/dev/null
-
-	# Считаем ДО подмены и только по непустым записям, иначе «удалено 0»
-	# печаталось бы на каждом старте у всех.
-	removed=$(( $(grep -vcE '^[[:space:]]*(#|$)' "$f" 2>/dev/null || echo 0) - $(grep -cvE '^$' "$tmp" 2>/dev/null || echo 0) ))
-	if [ "${removed:-0}" -gt 0 ] && mv -f "$tmp" "$f" 2>/dev/null; then
-		echo "extra-domains: removed $removed domain(s) already covered by other lists"
-	else
-		rm -f "$tmp" 2>/dev/null
-	fi
-	rm -f "$have" 2>/dev/null
-	return 0
-}
-
 # Засев пользовательских адресов в живые сеты при старте.
 #
 # Это ЕДИНСТВЕННЫЙ читатель файла, кроме панели (см. комментарий у
@@ -2221,11 +2224,11 @@ load_modules()
 }
 
 
-# Keenetic fix (similar to nfqws2-keenetic): ensure UDP packets processed by nfqws2
+# Keenetic fix (as other Keenetic builds do): ensure UDP packets processed by nfqws2
 # (marked with DESYNC_MARK) still get source NAT on WAN via a dedicated nat chain.
 Z2K_IPT_NAT_CHAIN="zapret2_nat"
 
-# Connmark-based exclusion (borrowed from nfqws2-keenetic):
+# Connmark-based exclusion (common Keenetic-build approach):
 # - Mark connections outside selected Keenetic policy (POLICY_NAME/POLICY_EXCLUDE) with CONNMARK exclude bit.
 # - NFQUEUE rules include "-m connmark ! --mark $Z2K_CONNMARK_EXCLUDE" so excluded flows never enter NFQUEUE.
 Z2K_CONNMARK_EXCLUDE="0x20000000/0x20000000"
@@ -2302,7 +2305,7 @@ z2k_detect_policy_mark()
 {
     Z2K_POLICY_MARK=""
 
-    # Default to nfqws2-keenetic convention. If policy doesn't exist, we process all traffic.
+    # Default to the usual Keenetic policy name. If policy doesn't exist, we process all traffic.
     POLICY_NAME="${POLICY_NAME:-nfqws}"
     POLICY_EXCLUDE="${POLICY_EXCLUDE:-0}"
 
@@ -2709,7 +2712,7 @@ z2k_rst_filter_purge()
 #  - tcp_be_liberal=1: RU DPI sends RST,ACK with a wrong ACK; strict conntrack
 #    marks it INVALID and the connbytes rule never passes it to nfqws.
 #  - checksum=0: with HW offload the NIC computes the L4 checksum, so the kernel
-#    sees a "bad" checksum -> conntrack marks INVALID (S00fix nfqws-keenetic ships).
+#    sees a "bad" checksum -> conntrack marks INVALID (other Keenetic builds ship an S00 fix).
 #  - fastnat=0: the NDM software fastpath (RTCACHE) routes flows PAST conntrack,
 #    so on an offloaded flow nfqws gets "ctrack disabled" and SKIPS every desync
 #    ("out pos ... beyond range a0-sN") -> YouTube/RKN silently NOT bypassed on
@@ -2801,7 +2804,6 @@ start_fw()
     # После apply_firewall: сеты к этому моменту созданы апстримом, а `-exist`
     # делает вызов безопасным и когда их ещё нет.
     z2k_ensure_user_exclude_file
-    z2k_prune_extra_domains
     z2k_seed_local_exclusions
     z2k_seed_user_exclusions
     z2k_policy_connmark_start
@@ -3153,6 +3155,8 @@ start()
     # Перенумерация TCP-пулов 23.10.2026 — тоже строго до подъёма демона.
     _z2k_migrate_pool_renumber_v1
     _z2k_migrate_pool_renumber_v2
+    _z2k_migrate_pool_renumber_v3
+    _z2k_migrate_pool_renumber_v5
     _z2k_migrate_custom_voice_blob_v1
 
     if ! start_daemons; then

@@ -48,12 +48,16 @@ esac
 case "$OUT" in *"300.ya.ru"*) ok "видно, какой сети какое имя досталось" ;; *) bad "карта имён не показана" ;; esac
 
 # --- 4. Механизм в конфиге — расхождения быть не должно ---------------------
-printf 'NFQWS2_OPT="--filter-tcp=443 --lua-desync=z2k_sni_pick:blob=z2k_ch"\n' > "$SB/config"
+printf 'NFQWS2_OPT="--filter-tcp=443 --lua-desync=z2k_sni_fake:tcp_md5"\n' > "$SB/config"
 OUT=$(sect)
 case "$OUT" in
     *"РАСХОЖДЕНИЕ"*) bad "расхождение показано там, где всё сошлось" ;;
     *) ok "когда всё сошлось, тревоги нет" ;;
 esac
+
+printf 'NFQWS2_OPT="--lua-desync=z2k_sni_pick:blob=z2k_ch"\n' > "$SB/config"
+OUT=$(sect)
+case "$OUT" in *"РАСХОЖДЕНИЕ"*) ok "старый селектор не считается активным" ;; *) bad "старый селектор объявлен активным" ;; esac
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

@@ -169,7 +169,7 @@ grep -q 'create_official_config' "$PROBE" \
 # сервера доезжает фейк. Поэтому на этой строке обязан быть и фулинг, не
 # зависящий от клиента. md5 отсюда однажды уже пропал при сплошном откате
 # релиза (97527dc8) — сторожим, чтобы не пропал снова.
-_sp_line=$(grep -- 'blob=z2k_ch:optional' "$DIR/lib/config_official.sh" | head -1)
+_sp_line=$(grep -- 'sni_pick="--lua-desync=z2k_sni_fake:' "$DIR/lib/config_official.sh" | head -1)
 case "$_sp_line" in
     *:tcp_md5*) ok "у фейка есть фулинг, не зависящий от клиента (tcp_md5)" ;;
     *) bad "фейк обхода 16 КБ глушится только клиентозависимым фулингом: $_sp_line" ;;
