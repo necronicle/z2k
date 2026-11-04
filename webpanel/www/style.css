@@ -284,7 +284,8 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  background: var(--bg);
+  /* Safari tints the web app title bar from the body color; keep the page fill separate. */
+  background: linear-gradient(var(--bg), var(--bg)) var(--bg-card);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 15px;
