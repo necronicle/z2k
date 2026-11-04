@@ -683,7 +683,7 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 				}
 				return up, br
 			}
-			up.Close()
+			abortTunnel(up)
 			// This failure concerns the target; preserve the shared live set.
 		}
 		tries++
@@ -719,12 +719,12 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 // sent it anything yet, so the caller can simply replay the same ClientHello into a
 // different upstream.
 func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) bool {
-	return verifyFirstByteUntil(ip, up, br, hello, time.Now().Add(*firstByteTO))
+	return verifyFirstByteUntil(ip, up, br, hello, time.Time{})
 }
 
 func stageDeadline(overall time.Time, limit time.Duration) time.Time {
 	stage := time.Now().Add(limit)
-	if overall.Before(stage) {
+	if !overall.IsZero() && overall.Before(stage) {
 		return overall
 	}
 	return stage
@@ -893,12 +893,24 @@ func routableUnicast(ip net.IP) bool {
 // (its buffered bytes are load-bearing for the up->client splice).
 // The `reachable` return separates two very different failures. reachable=false
 // means we could not reach the proxy at all (TCP refused, SYN dropped, TLS
-// failed) - a conclusive death, and the dominant signature of an RU-blocked node,
+// failed with a full per-node budget), and the dominant signature of an RU-blocked node,
 // so it is worth evicting from the ring immediately. reachable=true with ok=false
 // means the node ANSWERED and refused the CONNECT (502/503 from a healthy but
-// overloaded proxy); evicting on that would throw away good nodes under load.
+// overloaded proxy), or the request budget expired before a fair probe could
+// complete; neither justifies global eviction.
 func openTunnel(ip, target string) (conn net.Conn, rd *bufio.Reader, ok bool, reachable bool) {
-	return openTunnelUntil(ip, target, time.Now().Add(*dialTO))
+	return openTunnelUntil(ip, target, time.Time{})
+}
+
+// abortTunnel closes failed attempts without TLS close_notify: tls.Conn.Close
+// may set its own five-second write deadline after our request budget expired.
+// Established tunnels retain their ordinary graceful close in handle.
+func abortTunnel(conn net.Conn) {
+	if tc, ok := conn.(*tls.Conn); ok {
+		tc.NetConn().Close()
+		return
+	}
+	conn.Close()
 }
 
 func openTunnelUntil(ip, target string, overall time.Time) (conn net.Conn, rd *bufio.Reader, ok bool, reachable bool) {
@@ -911,11 +923,17 @@ func openTunnelUntil(ip, target string, overall time.Time) (conn net.Conn, rd *b
 		if *verbose {
 			log.Printf("[rt-proxy] dial upstream %s failed: %v", ip, err)
 		}
+		// A shortened request budget is not a fair per-node reachability test.
+		// Keep definitive failures (e.g. refused connections) eligible for demotion.
+		var ne net.Error
+		if !overall.IsZero() && deadline.Equal(overall) && !time.Now().Before(overall) && errors.As(err, &ne) && ne.Timeout() {
+			return nil, nil, false, true
+		}
 		return nil, nil, false, false
 	}
 	up.SetDeadline(deadline)
 	if _, err := fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", target, target); err != nil {
-		up.Close()
+		abortTunnel(up)
 		return nil, nil, false, true
 	}
 	// Sized for the LARGEST Peek verifyFirstByte can ask for, which is two
@@ -931,14 +949,14 @@ func openTunnelUntil(ip, target string, overall time.Time) (conn net.Conn, rd *b
 		if *verbose {
 			log.Printf("[rt-proxy] CONNECT %s via %s rejected: %q", target, ip, strings.TrimSpace(status))
 		}
-		up.Close()
+		abortTunnel(up)
 		return nil, nil, false, true // it answered; not a reachability failure
 	}
 	// drain the rest of the CONNECT response headers (up to blank line)
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
-			up.Close()
+			abortTunnel(up)
 			return nil, nil, false, true
 		}
 		if line == "\r\n" || line == "\n" {

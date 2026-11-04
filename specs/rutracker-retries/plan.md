@@ -17,14 +17,14 @@ R1-R6 from spec apply. No production writes or release. Keep existing routing an
 ## Task 1: distinct retries and health isolation
 Files: rt-proxy/main.go, rt-proxy/dialupstream_test.go, new rt-proxy/retry_isolation_test.go.
 Interfaces: pool.pickUntried(tried map[string]bool) string; pick() compatibility wrapper. Existing dialUpstream public signature retained.
-- [ ] Import reproductions; add reorder, exhaustion and target-isolation baseline tests; run and observe intended failures.
-- [ ] Implement atomic selection with local tried set; remove target-flight demotion; preserve bounded transport demotion. Replace old tests asserting target-driven demotion with new health-isolation contract.
-- [ ] Run module tests with race detector; commit.
+- [x] Import reproductions; add reorder, exhaustion and target-isolation baseline tests; run and observe intended failures.
+- [x] Implement atomic selection with local tried set; remove target-flight demotion; preserve bounded transport demotion. Replace old tests asserting target-driven demotion with new health-isolation contract.
+- [x] Run module tests with race detector; commit.
 
 ## Task 2: bounded network operations and verification
 Files: rt-proxy/main.go, rt-proxy/dialupstream_test.go, new rt-proxy/retry_deadline_test.go; shipped rt-proxy binaries.
 Interfaces: openTunnelUntil(ip,target string,deadline time.Time); verifyFirstByteUntil(ip string,up net.Conn,br *bufio.Reader,hello []byte,deadline time.Time). Existing wrappers preserve direct call sites and independent fallback budget. Adapt I/O seams/test helper to deadlines.
-- [ ] Real socket tests: stalled CONNECT response, stalled hello write, no server flight; RED before implementation. Expired deadline starts no I/O.
-- [ ] Pass absolute deadlines; cap existing stage budgets; clear deadline on successful handoff. Run all module race tests and vet.
-- [ ] Build all five architectures and mipsle alias per build-matrix.tsv. Verify reproducibility and full shell suite; do not regenerate/publish a new release.
-- [ ] Independent whole-branch review; fix important findings with RED→GREEN tests; commit final code and evidence.
+- [x] Real socket tests: stalled CONNECT response, stalled hello write, no server flight; RED before implementation. Expired deadline starts no I/O.
+- [x] Pass absolute deadlines; cap existing stage budgets; clear deadline on successful handoff. Run all module race tests and vet.
+- [x] Build all five architectures and mipsle alias per build-matrix.tsv. Verify reproducibility and full shell suite; do not regenerate/publish a new release.
+- [x] Independent whole-branch review; fix important findings with RED→GREEN tests; commit final code and evidence.

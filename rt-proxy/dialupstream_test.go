@@ -149,8 +149,8 @@ func TestDialUpstream_RetryLoopRespectsThePickWaitBudget(t *testing.T) {
 	}
 }
 
-// max-tries must still cap the attempts when the budget is generous.
-func TestDialUpstream_StopsAtMaxTries(t *testing.T) {
+// Exhausting distinct candidates must stop even with attempts and time left.
+func TestDialUpstream_StopsAtCandidateExhaustion(t *testing.T) {
 	attempts := 0
 	withTunnelStubs(t,
 		func(ip, _ string) (net.Conn, *bufio.Reader, bool, bool) {
