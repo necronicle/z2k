@@ -624,8 +624,8 @@ func dialProxyDeadline(ip string, deadline time.Time) (net.Conn, error) {
 // Returns (nil, nil) if nothing works within the budget (genuine all-dead pool).
 // Seams: dialUpstream is otherwise untestable because both helpers do real I/O.
 // It had no tests at all, which is where both defects below survived.
-var openTunnelFn = openTunnel
-var verifyFirstByteFn = verifyFirstByte
+var openTunnelFn = openTunnelUntil
+var verifyFirstByteFn = verifyFirstByteUntil
 
 func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 	target := sni + ":443"
@@ -667,7 +667,7 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 			continue
 		}
 		tried[ip] = true
-		up, br, ok, reachable := openTunnelFn(ip, target)
+		up, br, ok, reachable := openTunnelFn(ip, target, deadline)
 		if !reachable {
 			// Could not reach it at all. Do not leave it in the ring for the rest of
 			// the health interval: round-robin would keep handing it out, burning the
@@ -677,7 +677,7 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 		}
 		if ok {
 			// Do not hand the client a tunnel that has not proven it carries data.
-			if verifyFirstByteFn(ip, up, br, hello) {
+			if verifyFirstByteFn(ip, up, br, hello, deadline) {
 				if *verbose {
 					log.Printf("[rt-proxy] tunnel %s via %s", target, ip)
 				}
@@ -719,12 +719,29 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 // sent it anything yet, so the caller can simply replay the same ClientHello into a
 // different upstream.
 func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) bool {
+	return verifyFirstByteUntil(ip, up, br, hello, time.Now().Add(*firstByteTO))
+}
+
+func stageDeadline(overall time.Time, limit time.Duration) time.Time {
+	stage := time.Now().Add(limit)
+	if overall.Before(stage) {
+		return overall
+	}
+	return stage
+}
+
+func verifyFirstByteUntil(ip string, up net.Conn, br *bufio.Reader, hello []byte, overall time.Time) bool {
+	deadline := stageDeadline(overall, *firstByteTO)
+	if !time.Now().Before(deadline) {
+		return false
+	}
+	// Bound both the write and the read: a non-reading peer can stall Write.
+	up.SetDeadline(deadline)
+	defer up.SetDeadline(time.Time{})
 	if _, err := up.Write(hello); err != nil {
 		log.Printf("[rt-proxy] %s: ClientHello write failed: %v — trying another", ip, err)
 		return false
 	}
-	up.SetReadDeadline(time.Now().Add(*firstByteTO))
-	defer up.SetReadDeadline(time.Time{})
 	// TLS record header: type(1) version(2) length(2).
 	hdr, err := br.Peek(5)
 	if err != nil {
@@ -881,15 +898,26 @@ func routableUnicast(ip net.IP) bool {
 // means the node ANSWERED and refused the CONNECT (502/503 from a healthy but
 // overloaded proxy); evicting on that would throw away good nodes under load.
 func openTunnel(ip, target string) (conn net.Conn, rd *bufio.Reader, ok bool, reachable bool) {
-	up, err := dialProxyDeadline(ip, time.Now().Add(*dialTO))
+	return openTunnelUntil(ip, target, time.Now().Add(*dialTO))
+}
+
+func openTunnelUntil(ip, target string, overall time.Time) (conn net.Conn, rd *bufio.Reader, ok bool, reachable bool) {
+	deadline := stageDeadline(overall, *dialTO)
+	if !time.Now().Before(deadline) {
+		return nil, nil, false, true
+	}
+	up, err := dialProxyDeadline(ip, deadline)
 	if err != nil {
 		if *verbose {
 			log.Printf("[rt-proxy] dial upstream %s failed: %v", ip, err)
 		}
 		return nil, nil, false, false
 	}
-	up.SetDeadline(time.Now().Add(*dialTO))
-	fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", target, target)
+	up.SetDeadline(deadline)
+	if _, err := fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n\r\n", target, target); err != nil {
+		up.Close()
+		return nil, nil, false, true
+	}
 	// Sized for the LARGEST Peek verifyFirstByte can ask for, which is two
 	// maximum-size TLS records plus both 5-byte headers:
 	//     5 + 16384 + 5 + 16384 = 32778 bytes
@@ -909,7 +937,11 @@ func openTunnel(ip, target string) (conn net.Conn, rd *bufio.Reader, ok bool, re
 	// drain the rest of the CONNECT response headers (up to blank line)
 	for {
 		line, err := br.ReadString('\n')
-		if err != nil || line == "\r\n" || line == "\n" {
+		if err != nil {
+			up.Close()
+			return nil, nil, false, true
+		}
+		if line == "\r\n" || line == "\n" {
 			break
 		}
 	}

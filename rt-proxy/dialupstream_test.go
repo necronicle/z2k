@@ -28,7 +28,10 @@ func withTunnelStubs(t *testing.T,
 	verify func(ip string, up net.Conn, br *bufio.Reader, hello []byte) bool) {
 	t.Helper()
 	po, pv := openTunnelFn, verifyFirstByteFn
-	openTunnelFn, verifyFirstByteFn = open, verify
+	openTunnelFn = func(ip, target string, _ time.Time) (net.Conn, *bufio.Reader, bool, bool) { return open(ip, target) }
+	verifyFirstByteFn = func(ip string, up net.Conn, br *bufio.Reader, hello []byte, _ time.Time) bool {
+		return verify(ip, up, br, hello)
+	}
 	t.Cleanup(func() { openTunnelFn, verifyFirstByteFn = po, pv })
 }
 
@@ -83,8 +86,7 @@ func TestDialUpstream_NodeThatAnswersNon200IsNotDemoted(t *testing.T) {
 	}
 }
 
-// The pre-existing contract must survive the change: a node that opens a tunnel
-// but never delivers the server flight is still demoted, and its connection closed.
+// A failed target flight closes this tunnel but preserves shared proxy health.
 func TestDialUpstream_FirstByteFailurePreservesPoolAndCloses(t *testing.T) {
 	var conn *stubConn
 	withTunnelStubs(t,
@@ -263,11 +265,7 @@ func (c *recordingConn) SetDeadline(time.Time) error     { return nil }
 // Read back from the production constant so this can never drift from the code.
 const bufSizeForTest = bufSize
 
-// A DEAD TARGET must not strip the pool. Reproduced on the owner's router: one
-// request for a dead hostname demoted four healthy upstreams in a row and then
-// dropped the request, degrading rutracker.org for every other client until the
-// next 90 s probe. Neither failure mode can tell a broken NODE from a dead
-// TARGET, so the blast radius is capped instead: at most one demotion per request.
+// A failed target must preserve all nodes for other destinations.
 func TestDialUpstream_DeadTargetPreservesAllNodes(t *testing.T) {
 	withTunnelStubs(t,
 		func(ip, _ string) (net.Conn, *bufio.Reader, bool, bool) {
