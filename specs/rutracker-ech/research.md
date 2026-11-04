@@ -57,3 +57,15 @@ Sources:
 - https://developers.cloudflare.com/ssl/edge-certificates/ech/ (network operators section)
 - https://storage.googleapis.com/docs.help.keenetic.com/cli/4.1/en/cli_manual_kn-2410.pdf (section 3.61, ip name-server, printed pp. 365–366)
 - https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6
+
+## Chrome follow-up
+
+Fetched Chromium main `net/socket/ssl_connect_job.cc` on 2026-11-04. Its DoSSLConnect path loads ECHConfigList from endpoint DNS metadata and, if nonempty, asserts `SSLSocketParams::DIRECT`; the adjacent comment explicitly says other connection types do not support ECH. This independently supports the distinction between an explicit browser HTTPS proxy and transparent router interception. Chromium issue 546370261 reports the same limitation; a Chromium developer confirms it is known. This does not prove all extension users never encounter other failures.
+
+The known official Chrome extension ID is fddjpichkajmnkjhcmpbbjdmmcodnkej. The Google CRX update endpoint again returned HTTP 204 / zero bytes. Therefore its currently distributed code/version was not inspected; the unofficial Chromium port found on GitHub is not substituted as evidence of the official binary. Raw fetched Chromium sources are in `/Library/Zapret2/artifacts/rutracker-chrome-20261104/`.
+
+Sources:
+- https://chromium.googlesource.com/chromium/src/+/main/net/socket/ssl_connect_job.cc
+- https://issues.chromium.org/issues/546370261
+
+An explicit PAC/HTTPS proxy configuration for the browser is a closer architectural match to the extension, but requires client-side proxy configuration; publishing a PAC file on a router alone does not make every browser use it. Transparent operation without client configuration still needs the scoped DNS compatibility work described above, or an independently validated ECH-capable transport.
