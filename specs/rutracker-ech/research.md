@@ -69,3 +69,19 @@ Sources:
 - https://issues.chromium.org/issues/546370261
 
 An explicit PAC/HTTPS proxy configuration for the browser is a closer architectural match to the extension, but requires client-side proxy configuration; publishing a PAC file on a router alone does not make every browser use it. Transparent operation without client configuration still needs the scoped DNS compatibility work described above, or an independently validated ECH-capable transport.
+
+## Full-pool falsification check (2026-11-04, 18:24 UTC snapshot)
+
+The owner challenged whether the proxy already supports the desired path and the earlier test was incomplete. Expanded the read-only spike to all 9 IPv4 nodes returned for ps1.blockme.site, with a single saved DNS/ECH snapshot and identical Go 1.25.13 client. Explicitly set outer ALPN http/1.1 (matching production); parse the CONNECT response using net/http; retain buffered bytes; bound each operation. Inner certificate verification remains enabled. Record ECH acceptance, certificate names/fingerprint, stage-specific errors, exact CONNECT target, timestamps and configuration hash.
+
+Positive controls: connect directly to BOTH advertised public RuTracker IPs (104.21.32.39 and 172.67.182.196) using that ECH configuration. Both succeeded with ECHAccepted=true, verified certificate and HTTP 200, from both the owner's machine and VPS 85.192.60.175. Thus the ECH client/configuration demonstrably works.
+
+From the VPS, ordinary TLS through all 9 proxy nodes returned verified HTTP 200. ECH through CONNECT rutracker.org:443 returned the same wrong-public-name certificate on 8 nodes; the ninth initially timed out during CONNECT, then returned the same certificate-name failure on the targeted retry. All 9 therefore reproduced the ECH mismatch. All 27 alternative ECH connections (9 nodes × CONNECT cloudflare-ech.com or either public IP) received CONNECT 200 and then EOF at inner TLS.
+
+From the owner's machine: both direct ECH controls passed; 5/9 ordinary proxy requests returned HTTP 200, other attempts had transport failures. No proxied ECH success. Transport failures are not interpreted as evidence of ECH rejection.
+
+The public CF endpoint's leaf SHA256 was 4a98323fe1c8a6d9e44fa9fa5081f6bcdb389e533002798190729e1f45e3c23d; the proxy path's leaf was afb6436c75d36fa32de9d6696deee6923eec955f9e046540ff234453b8897ab9. This establishes different observed TLS endpoints; it does not expose or prove the proxy operator's internal routing configuration.
+
+Conclusion: the previously suggested ECH path does not work through the currently discovered ps1.blockme.site IPv4 pool with these valid CONNECT targets. This is stronger than the earlier three-node observation, but is not a claim about unknown proxy services/options or an unavailable current Chrome extension binary. No DNS-filter or VPS-routing implementation follows automatically from this result.
+
+Artifacts: /Library/Zapret2/artifacts/rutracker-ech-audit-20261104/{matrix.go,snapshot.json,local.jsonl,vps.jsonl,retry-snapshot.json,vps-retry.jsonl}. 47 cases per location plus 3 targeted retry cases. Remote probe used a unique temporary directory and at most 3 simultaneous connections; it made no service/configuration changes and its temporary files were removed afterward.
