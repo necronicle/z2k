@@ -1002,6 +1002,11 @@ main() {
             log_msg "WARN: insta-ip refresh exited non-zero"
     fi
 
+    if [ -x "${ZAPRET2_DIR}/z2k-redirector-ip-refresh.sh" ]; then
+        sh "${ZAPRET2_DIR}/z2k-redirector-ip-refresh.sh" >/dev/null 2>&1 || \
+            log_msg "WARN: redirector-ip refresh failed"
+    fi
+
     log_msg "--- Update lists finished ---"
 }
 

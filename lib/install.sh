@@ -858,6 +858,7 @@ libnfnetlink
 libcap
 zlib
 curl
+flock
 unzip
 iptables
 xtables-addons_legacy
@@ -2273,7 +2274,7 @@ TMPJUNK
     # installs (r-18). Every tool here is load-bearing, so every tool gets the
     # same treatment: WORK_DIR if present, network if not, and a loud line if
     # neither worked instead of a silent stale file.
-    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-warp.sh z2k-dns-check.sh z2k-tcp16-probe.sh; do
+    for tool_script in z2k-config-validator.sh z2k-update-lists.sh z2k-diag.sh z2k-geosite.sh z2k-auto-update.sh z2k-warp.sh z2k-dns-check.sh z2k-tcp16-probe.sh z2k-redirector-ip-refresh.sh; do
         if deploy_critical_file "files/${tool_script}" "${ZAPRET2_DIR}/${tool_script}" 755; then
             print_info "Установлен: ${tool_script}"
         else
@@ -2410,7 +2411,7 @@ TMPJUNK
     # нет tcp16_targets.txt, и кнопка «Пробить 16 КБ» отвечала «нет списка
     # мишеней — отложено, код 2». Кладём обе копии, как ждёт карта
     # доставки (lib/release_map.sh): files/lists/ — эталон, lists/ — рабочая.
-    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt \
+    for iplist in telegram_ips.txt ipset-exclude.txt cf_extra_check_ips.txt rkn-false-positive.txt meta-ranges.txt google-ranges.txt \
                   tcp16_targets.txt sni_wl_candidates.txt tcp16_nets.txt \
                   warp-endpoints.txt warp-scan-pools.txt youtube_ips.txt youtube_ips6.txt; do
         deploy_critical_file "files/lists/${iplist}" "${ZAPRET2_DIR}/lists/${iplist}" 644 || true
@@ -4563,6 +4564,10 @@ step_finalize() {
         print_info "Адреса Instagram/WhatsApp обновляются в фоне (журнал: /tmp/z2k-log/z2k-insta-refresh.log)"
     fi
 
+    if [ -x "${ZAPRET2_DIR}/z2k-redirector-ip-refresh.sh" ]; then
+        ( trap "" HUP; sh "${ZAPRET2_DIR}/z2k-redirector-ip-refresh.sh" ) </dev/null >/dev/null 2>&1 &
+    fi
+
     # Save local z2k entrypoint for future runs without curl. Use
     # z2k_fetch so the install final step also benefits from the
     # raw → jsdelivr → gh-proxy → ndmc-DNS fallback chain.
@@ -5486,6 +5491,7 @@ uninstall_zapret2() {
         fi
         [ -n "$_pin_hosts" ] || _pin_hosts="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com 4pda.to www.4pda.to s.4pda.to"
 
+        _pin_hosts="$_pin_hosts redirector.googlevideo.com"
         _running=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
         for _ph in $_pin_hosts; do
             # Совпадение по имени ТОЧНОЕ: подстрока зацепила бы чужое

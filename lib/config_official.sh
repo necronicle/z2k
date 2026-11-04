@@ -1979,6 +1979,7 @@ create_official_config() {
     local saved_Z2K_INJECT_TLS_MODS="0"
     local saved_Z2K_DYNAMIC_TTL="1"
     local saved_Z2K_INSTA_DNS="1"
+    local saved_Z2K_REDIRECTOR_DNS="1"
     local saved_DISABLE_CUSTOM="1"
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
@@ -2042,6 +2043,7 @@ create_official_config() {
         saved_Z2K_AUTOHOSTLIST=$(safe_config_read "Z2K_AUTOHOSTLIST" "$config_file" "0")
         saved_Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "$config_file" "1")
         saved_Z2K_INSTA_DNS=$(safe_config_read "Z2K_INSTA_DNS" "$config_file" "1")
+        saved_Z2K_REDIRECTOR_DNS=$(safe_config_read "Z2K_REDIRECTOR_DNS" "$config_file" "1")
         # DISABLE_CUSTOM — custom.d on/off (inverse: 0 = custom.d enabled). Was
         # hardcoded =1 in the generated config and NOT preserved, so enabling
         # custom.d (menu [S] / webpanel) survived only until the next config
@@ -2429,6 +2431,10 @@ Z2K_DYNAMIC_TTL=${saved_Z2K_DYNAMIC_TTL}
 # через меню [I]; установка и ежедневный рефреш их тогда не возвращают
 # (issue #39). Переживает реинсталл. «Вернуть» в [I] ставит 1.
 Z2K_INSTA_DNS=${saved_Z2K_INSTA_DNS}
+
+# Alternative redirector.googlevideo.com DNS from VPS; no proxy or HTTP probe.
+# 0 stops automatic refresh and preserves existing records.
+Z2K_REDIRECTOR_DNS=${saved_Z2K_REDIRECTOR_DNS}
 
 # Custom.d scripts (50-stun4all / 50-discord-media — STUN desync that fixes
 # WhatsApp/Telegram voice on some networks). Default 1 = disabled (z2k's own

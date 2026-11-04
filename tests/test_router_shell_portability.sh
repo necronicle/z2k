@@ -130,6 +130,9 @@ for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" -name '
     [ -f "$f" ] || continue
     case "$f" in *test_router_shell_portability.sh) continue ;; esac
     for c in $ABSENT; do
+        # The redirector refresher provisions the Entware flock package and
+        # checks command availability before use; it is not a BusyBox applet.
+        case "$f:$c" in */files/z2k-redirector-ip-refresh.sh:flock) continue ;; esac
         # Вызов команды: начало строки, пайп, ;, &&, ( или $( — и сразу имя.
         # Так `--connect-timeout` и `$timeout` под запрет не попадают.
         hits=$(grep -nE "(^|[|;&(]|\\\$\()[[:space:]]*${c}[[:space:]]" "$f" 2>/dev/null \

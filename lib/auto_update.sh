@@ -1205,6 +1205,14 @@ au_run_steps() {
             return "$rc"
         fi
     done
+    # Old updaters load this delivered function before their health check.
+    # The worker waits for their success marker; rollback never advances it.
+    local redirector_refresh="${ZAPRET2_DIR:-/opt/zapret2}/z2k-redirector-ip-refresh.sh"
+    local redirector_tag_file="${Z2K_AU_INSTALLED_TAG_FILE:-${ZAPRET2_DIR:-/opt/zapret2}/.z2k-installed-tag}"
+    if [ -x "$redirector_refresh" ] && [ -n "${target_tag:-}" ] &&
+       [ "$(cat "$redirector_tag_file" 2>/dev/null)" != "$target_tag" ]; then
+        ( trap "" HUP; sh "$redirector_refresh" --after-update "$target_tag" "$redirector_tag_file" ) </dev/null >/dev/null 2>&1 &
+    fi
     return 0
 }
 

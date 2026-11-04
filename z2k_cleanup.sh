@@ -429,7 +429,7 @@ if command -v ndmc >/dev/null 2>&1; then
 
     _pin_removed=0
     _running=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
-    for _h in $_pin_hosts; do
+    for _h in $_pin_hosts redirector.googlevideo.com; do
         # Точное совпадение по имени: подстрока зацепила бы чужие домены.
         _lines=$(printf '%s\n' "$_running" | awk -v h="$_h" '$1=="ip" && $2=="host" && $3==h {print}')
         [ -n "$_lines" ] || continue

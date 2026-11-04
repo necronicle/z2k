@@ -581,7 +581,7 @@ var instaSuffixes = []string{".instagram.com", ".cdninstagram.com", ".whatsapp.c
 
 func isInstaHost(h string) bool {
 	h = strings.ToLower(strings.TrimSuffix(h, "."))
-	if instaApex[h] {
+	if h == "redirector.googlevideo.com" || instaApex[h] {
 		return true
 	}
 	for _, suf := range instaSuffixes {
@@ -608,41 +608,75 @@ var publicResolvers = []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"}
 // выбор, а не выбрать за него: отсюда, из Европы, «живой» и «живой из РФ» это
 // разные вещи, и решить это здесь нельзя в принципе.
 func resolveV4Union(parent context.Context, host string) []string {
+	return collectResolveV4(parent, host, func(ctx context.Context, host, addr string) ([]string, error) {
+		if addr == "" {
+			return net.DefaultResolver.LookupHost(ctx, host)
+		}
+		res := &net.Resolver{PreferGo: true, Dial: func(c context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(c, network, addr)
+		}}
+		return res.LookupHost(ctx, host)
+	})
+}
+
+// Redirector needs the full candidate pool: short client probes produced false
+// negatives in the field. Meta keeps its existing eight-address policy.
+func collectResolveV4(parent context.Context, host string, lookup func(context.Context, string, string) ([]string, error)) []string {
 	ctx, cancel := context.WithTimeout(parent, 6*time.Second)
 	defer cancel()
-
+	redirector := strings.EqualFold(strings.TrimSuffix(host, "."), "redirector.googlevideo.com")
+	limit := 8
+	if redirector {
+		limit = 32
+	}
+	sources := append([]string{""}, publicResolvers...)
+	answers := make([][]string, len(sources))
+	if redirector {
+		type answer struct {
+			index int
+			ips   []string
+		}
+		results := make(chan answer, len(sources))
+		for i, addr := range sources {
+			go func(i int, addr string) {
+				ips, err := lookup(ctx, host, addr)
+				if err != nil {
+					ips = nil
+				}
+				results <- answer{i, ips}
+			}(i, addr)
+		}
+	collect:
+		for range sources {
+			select {
+			case result := <-results:
+				answers[result.index] = result.ips
+			case <-ctx.Done():
+				break collect
+			}
+		}
+	}
 	seen := map[string]bool{}
-	out := make([]string, 0, 8)
-	add := func(ips []string) {
-		for _, ip := range ips {
-			if strings.Contains(ip, ":") || seen[ip] {
+	out := make([]string, 0, limit)
+	for i, addr := range sources {
+		ips := answers[i]
+		if !redirector {
+			ips, _ = lookup(ctx, host, addr)
+		}
+		for _, value := range ips {
+			ip := net.ParseIP(value)
+			if ip == nil || ip.To4() == nil {
 				continue
 			}
-			seen[ip] = true
-			out = append(out, ip)
+			value = ip.To4().String()
+			if !seen[value] && len(out) < limit {
+				seen[value] = true
+				out = append(out, value)
+			}
 		}
-	}
-
-	if ips, err := net.DefaultResolver.LookupHost(ctx, host); err == nil {
-		add(ips)
-	}
-	for _, rs := range publicResolvers {
-		addr := rs
-		res := &net.Resolver{
-			PreferGo: true,
-			Dial: func(c context.Context, network, _ string) (net.Conn, error) {
-				return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(c, network, addr)
-			},
-		}
-		if ips, err := res.LookupHost(ctx, host); err == nil {
-			add(ips)
-		}
-		if len(out) >= 8 {
+		if len(out) >= limit {
 			break
 		}
-	}
-	if len(out) > 8 {
-		out = out[:8]
 	}
 	return out
 }
