@@ -58,7 +58,7 @@ EOF
 cat > "$Z/lib/config_official.sh" <<EOF
 create_official_config() {
     if [ "\$(cat "$Z/state/tcp16.flag" 2>/dev/null)" = "1" ] && [ ! -f "$SB/gen_off" ]; then
-        printf 'NFQWS2_OPT="--lua-desync=z2k_sni_pick:x"\n' > "\$1"
+        printf 'NFQWS2_OPT="--lua-desync=z2k_sni_fake:x"\n' > "\$1"
     else
         printf 'NFQWS2_OPT="--lua-desync=fake"\n' > "\$1"
     fi
@@ -112,8 +112,14 @@ eq "временной карты не осталось" "absent" "$([ -f "$Z/st
 eq "отрицательный кэш: только 300" "300" "$(cut -f1 "$Z/state/tcp16_noname.txt" | tr '\n' ' ' | sed 's/ $//')"
 eq "версия карт для рантайма записана" "present" "$([ -s "$Z/state/tcp16.ver" ] && echo present || echo absent)"
 eq "отметка завершения записана" "present" "$([ -s "$Z/state/tcp16.flag.ts" ] && echo present || echo absent)"
-eq "механизм попал в конфиг" "1" "$(grep -c z2k_sni_pick "$Z/config")"
+eq "механизм попал в конфиг" "1" "$(grep -c z2k_sni_fake "$Z/config")"
 eq "замок снят" "absent" "$([ -d "$SB/lock" ] && echo present || echo absent)"
+
+# Миграция старого селектора: прежняя строка не равна новому отправителю.
+printf 'NFQWS2_OPT="--lua-desync=z2k_sni_pick:blob=z2k_ch"\n' > "$Z/config"
+run >/dev/null
+eq "старый селектор заменён компактным отправителем" "1" "$(grep -c z2k_sni_fake "$Z/config")"
+eq "старый селектор удалён" "0" "$(grep -c z2k_sni_pick "$Z/config")"
 
 # --- 4. второй прогон: 300 в свежем кэше — хвост не нужен, конфиг не трогаем
 : > "$SB/calls"; : > "$SB/gen.log"
@@ -129,14 +135,14 @@ reset; echo 1 > "$SB/s1.rc"; printf '100\n' > "$SB/s1.asn"
 printf '100\tgood.example\n' > "$SB/scanA.out"; touch "$SB/gen_off"
 rc=$(run)
 eq "выключатель: выход 0" "0" "$rc"
-eq "выключатель: механизма в конфиге нет и подмены не было" "0" "$(grep -c z2k_sni_pick "$Z/config")"
+eq "выключатель: механизма в конфиге нет и подмены не было" "0" "$(grep -c z2k_sni_fake "$Z/config")"
 grep -q "пересборка не нужна" "$SB/out.txt" && ok "выключатель: пересборка признана ненужной" || no "выключатель: пересборка не нужна" message absent
 
 # --- 6. валидатор отказал — работающий конфиг не трогаем
 reset; echo 1 > "$SB/s1.rc"; printf '100\n' > "$SB/s1.asn"
 printf '100\tgood.example\n' > "$SB/scanA.out"; touch "$SB/val_fail"
 run >/dev/null
-eq "валидатор отказал: механизма в работающем конфиге нет" "0" "$(grep -c z2k_sni_pick "$Z/config")"
+eq "валидатор отказал: механизма в работающем конфиге нет" "0" "$(grep -c z2k_sni_fake "$Z/config")"
 eq "валидатор отказал: временного конфига не осталось" "0" "$(find "$Z" -name 'config.tcp16.*' | grep -c .)"
 
 # --- 7. замок: живой владелец — второй прогон не идёт

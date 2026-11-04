@@ -54,7 +54,10 @@ H.test('QUIC drops only outgoing Initials, never replies or later packets',funct
             for _,out in ipairs({true,false}) do
                 for _,kind in ipairs({'quic_initial','unknown'}) do
                     local d=H.udp(nil,out,'data',kind); d.arg=ins.arg; d.func_instance='drop_'..ins.arg.strategy
-                    H.eq(out and kind=='quic_initial' and VERDICT_DROP or nil,drop(nil,d))
+                    -- Фильтр --payload инстанса движок применяет до вызова функции
+                    -- (plan_instance_execute_preapplied), поэтому и здесь он первый.
+                    local v=payload_match_filter(kind,ins.payload) and drop(nil,d) or nil
+                    H.eq(out and kind=='quic_initial' and VERDICT_DROP or nil,v)
                 end
             end
         end
@@ -114,10 +117,15 @@ H.test('a success on another domain cannot reset this domain failures',function(
     H.eq(2,h.failure_counter)
 end)
 H.test('previously unprotected TCP fakes carry an invalid checksum',function()
-    -- Номера после перенумерации 23.10.2026 (rkn 38 -> 46, yt/gv 18 -> 26),
-    -- вставки трёх плеч yt/gv на 2–4 25.10.2026 (yt/gv 26 -> 29) и
-    -- перестановки по качеству 26.10.2026 (rkn 46 -> 44, yt 29 -> 24, gv 29 -> 19).
-    for key,num in pairs({rkn_tcp='44',yt_tcp='24',gv_tcp='19'}) do
+    -- Номера после перенумерации 23.10.2026 (yt/gv 18 -> 26), вставки трёх плеч
+    -- yt/gv на 2–4 25.10.2026 (yt/gv 26 -> 29) и перестановки по качеству
+    -- 26.10.2026 (yt 29 -> 24, gv 29 -> 19). rkn здесь нет: с 30.10.2026 его пул —
+    -- референсные наборы один в один, своих добавок фулинга в нём не бывает.
+    -- Номера живут в пуле и переезжают с каждой перестановкой по качеству:
+    -- 30.10.2026 пулы переставлены замером на линии владельца, yt 24 -> 38,
+    -- gv 19 -> 23. rkn здесь нет: его плечи референсного набора своих добавок
+    -- фулинга не несут.
+    for key,num in pairs({yt_tcp='38',gv_tcp='23'}) do
         local checked=false
         for _,ins in ipairs(all[key]) do
             if ins.func=='fake' and ins.arg.strategy==num then
@@ -129,15 +137,22 @@ H.test('previously unprotected TCP fakes carry an invalid checksum',function()
 end)
 -- Слоты 6 и 11 до вставки трёх плеч на 2–4 (25.10.2026) стали 9 и 14, после
 -- перестановки по качеству (26.10.2026) — 31 и 32.
-H.test('GV slot 32 is distinct while the contiguous 1..33 numbering is retained',function()
-    local ids,slot6,slot11={}
+-- 30.10.2026: в gv дописаны шесть плеч гугловой строки референсного набора, и
+-- пул переставлен по замеру. Нумерация сплошная, а близнецы, различающиеся
+-- только seqovl, переехали с 31 и 32 на 36 и 37.
+H.test('GV slot 32 is distinct while the contiguous numbering is retained',function()
+    local ids,slot6,slot11,mx={},nil,nil,0
     for _,ins in ipairs(all.gv_tcp) do
-        if ins.arg.strategy then ids[tonumber(ins.arg.strategy)]=true end
-        if ins.func=='multisplit' and ins.arg.strategy=='31' then slot6=ins.arg end
-        if ins.func=='multisplit' and ins.arg.strategy=='32' then slot11=ins.arg end
+        if ins.arg.strategy then
+            local n=tonumber(ins.arg.strategy); ids[n]=true
+            if n>mx then mx=n end
+        end
+        if ins.func=='multisplit' and ins.arg.strategy=='36' then slot6=ins.arg end
+        if ins.func=='multisplit' and ins.arg.strategy=='37' then slot11=ins.arg end
     end
-    for i=1,33 do H.eq(true,ids[i]) end
-    H.eq(nil,ids[34])
+    H.eq(39,mx)
+    for i=1,mx do H.eq(true,ids[i]) end
+    H.eq(nil,ids[mx+1])
     H.eq('1',slot6.seqovl); H.eq(nil,slot11.seqovl)
     H.eq(slot6.pos,slot11.pos)
 end)

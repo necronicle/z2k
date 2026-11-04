@@ -686,112 +686,6 @@ strategy_config_lock_release() {
     STRATEGY_CONFIG_LOCK_HELD=
 }
 
-_strategy_pool_restore_batch() {
-    local live_dir="$1" txn="$2" pool tmp had rc=0
-    for pool in yt_tcp gv_tcp quic rkn_tcp; do
-        tmp="$live_dir/.$pool.txt.rollback.$$"
-        if [ -f "$txn/backup/$pool.present" ]; then
-            cp -p "$txn/backup/$pool.txt" "$tmp" && mv -f "$tmp" "$live_dir/$pool.txt" || rc=1
-        else
-            rm -f "$live_dir/$pool.txt" || rc=1
-        fi
-        rm -f "$tmp"
-    done
-    tmp="$CONFIG_FILE.z2k-rollback.$$"
-    if [ -f "$txn/backup/config.present" ]; then
-        cp -p "$txn/backup/config" "$tmp" && mv -f "$tmp" "$CONFIG_FILE" || rc=1
-    else
-        rm -f "$CONFIG_FILE" || rc=1
-    fi
-    rm -f "$tmp"
-    return "$rc"
-}
-
-_strategy_pool_save_batch_locked() {
-    local staged="$1" txn="$2" live_dir="$CUSTOM_STRAT_DIR" original_dir="$CUSTOM_STRAT_DIR"
-    local pool f base tmp
-    for pool in yt_tcp gv_tcp quic rkn_tcp; do
-        [ -s "$staged/$pool.txt" ] || { echo "нет кандидатной строки для $pool" >&2; return 1; }
-    done
-    mkdir -p "$txn/backup" "$txn/candidate-custom" "$live_dir" || return 1
-
-    # Validate every proposed pool against a shadow containing all four new
-    # lines plus every unrelated custom pool currently on the router.
-    for f in "$live_dir"/*.txt; do
-        [ -f "$f" ] || continue
-        base=${f##*/}; pool=${base%.txt}
-        case "$pool" in yt_tcp|gv_tcp|quic|rkn_tcp) continue ;; esac
-        cp -p "$f" "$txn/candidate-custom/$base" || return 1
-    done
-    for pool in yt_tcp gv_tcp quic rkn_tcp; do
-        cp "$staged/$pool.txt" "$txn/candidate-custom/$pool.txt" || return 1
-    done
-    for pool in yt_tcp gv_tcp quic rkn_tcp; do
-        CUSTOM_STRAT_DIR="$txn/candidate-custom"
-        if ! strategy_validate "$pool" < "$txn/candidate-custom/$pool.txt"; then
-            CUSTOM_STRAT_DIR="$original_dir"
-            echo "общая проверка набора отклонила пул $pool" >&2
-            return 1
-        fi
-    done
-    CUSTOM_STRAT_DIR="$original_dir"
-
-    # Snapshot every target and the generated config before the first write.
-    for pool in yt_tcp gv_tcp quic rkn_tcp; do
-        if [ -f "$live_dir/$pool.txt" ]; then
-            cp -p "$live_dir/$pool.txt" "$txn/backup/$pool.txt" || return 1
-            : > "$txn/backup/$pool.present"
-        fi
-    done
-    if [ -f "$CONFIG_FILE" ]; then
-        cp -p "$CONFIG_FILE" "$txn/backup/config" || return 1
-        : > "$txn/backup/config.present"
-    fi
-
-    for pool in yt_tcp gv_tcp quic rkn_tcp; do
-        tmp="$live_dir/.$pool.txt.unique.$$"
-        cp "$staged/$pool.txt" "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$live_dir/$pool.txt" || {
-            rm -f "$tmp"
-            if _strategy_pool_restore_batch "$live_dir" "$txn"; then
-                echo "не удалось установить пул $pool; старые файлы восстановлены" >&2
-            else
-                echo "ОШИБКА: не удалось полностью восстановить файлы после сбоя записи $pool" >&2
-            fi
-            return 1
-        }
-    done
-
-    if ! regenerate_config; then
-        _strategy_pool_restore_batch "$live_dir" "$txn" || echo "ОШИБКА: восстановление config не удалось" >&2
-        echo "не удалось регенерировать config; старые файлы восстановлены" >&2
-        return 1
-    fi
-
-    if is_running; then
-        ensure_init_exec
-        if ! "$INIT_SCRIPT" restart 2>&1; then
-            _strategy_pool_restore_batch "$live_dir" "$txn" || echo "ОШИБКА: восстановление файлов не удалось" >&2
-            ensure_init_exec
-            "$INIT_SCRIPT" restart 2>&1 || echo "ОШИБКА: сервис не поднялся на восстановленном config" >&2
-            echo "перезапуск с новым набором не удался; выполнен откат" >&2
-            return 1
-        fi
-        echo "Сервис перезапущен один раз с новым набором."
-    else
-        echo "Сервис остановлен: пулы и config сохранены, запусти сервис для применения."
-    fi
-    return 0
-}
-
-strategy_pool_save_batch() {
-    local staged="$1" txn="$2" rc
-    strategy_config_lock_acquire || { echo "не удалось захватить блокировку стратегий" >&2; return 1; }
-    _strategy_pool_save_batch_locked "$staged" "$txn"
-    rc=$?
-    strategy_config_lock_release
-    return "$rc"
-}
-
 # Save only what validates. A rejected line leaves the previous state exactly as
 # it was — silently falling back to the shipped strategy would leave the user
 # convinced their own is running.
@@ -837,103 +731,6 @@ strategy_pool_reset() {
     _strategy_pool_reset_locked "$1"
     rc=$?
     strategy_config_lock_release
-    return "$rc"
-}
-
-_strategy_pool_restore_all() {
-    local txn="$1" pool live_dir="$CUSTOM_STRAT_DIR" tmp rc=0
-    mkdir -p "$live_dir" 2>/dev/null || return 1
-    for pool in $STRATEGY_POOLS; do
-        tmp="$live_dir/.$pool.txt.rollback.$$"
-        if [ -f "$txn/backup/$pool.present" ]; then
-            cp -p "$txn/backup/$pool.txt" "$tmp" && mv -f "$tmp" "$live_dir/$pool.txt" || rc=1
-        else
-            rm -f "$live_dir/$pool.txt" || rc=1
-        fi
-        rm -f "$tmp"
-    done
-    tmp="$CONFIG_FILE.z2k-rollback.$$"
-    if [ -f "$txn/backup/config.present" ]; then
-        cp -p "$txn/backup/config" "$tmp" && mv -f "$tmp" "$CONFIG_FILE" || rc=1
-    else
-        rm -f "$CONFIG_FILE" || rc=1
-    fi
-    rm -f "$tmp"
-    return "$rc"
-}
-
-_strategy_pool_reset_all_locked() {
-    local txn="$1" pool found=0 live_dir="$CUSTOM_STRAT_DIR"
-    mkdir -p "$txn/backup" "$live_dir" || return 1
-    for pool in $STRATEGY_POOLS; do
-        if [ -f "$live_dir/$pool.txt" ]; then
-            found=1
-            cp -p "$live_dir/$pool.txt" "$txn/backup/$pool.txt" || return 1
-            : > "$txn/backup/$pool.present"
-        fi
-    done
-    [ "$found" = 1 ] || { echo "Все категории уже работают на автоматике."; return 0; }
-    if [ -f "$CONFIG_FILE" ]; then
-        cp -p "$CONFIG_FILE" "$txn/backup/config" || return 1
-        : > "$txn/backup/config.present"
-    fi
-
-    for pool in $STRATEGY_POOLS; do
-        rm -f "$live_dir/$pool.txt" || {
-            if ! _strategy_pool_restore_all "$txn"; then
-                STRATEGY_RESET_RECOVERY_REQUIRED=1
-                echo "ОШИБКА: восстановление пулов после сбоя удаления не удалось" >&2
-            fi
-            return 1
-        }
-    done
-    if ! regenerate_config; then
-        if ! _strategy_pool_restore_all "$txn"; then
-            STRATEGY_RESET_RECOVERY_REQUIRED=1
-            echo "ОШИБКА: восстановление пулов и конфига после ошибки генерации не удалось" >&2
-        else
-            echo "не удалось пересобрать конфиг; пользовательские стратегии восстановлены" >&2
-        fi
-        return 1
-    fi
-
-    if is_running; then
-        ensure_init_exec
-        if ! "$INIT_SCRIPT" restart 2>&1; then
-            if ! _strategy_pool_restore_all "$txn"; then
-                STRATEGY_RESET_RECOVERY_REQUIRED=1
-                echo "ОШИБКА: восстановление пулов после ошибки перезапуска не удалось" >&2
-            else
-                echo "перезапуск на автоматике не удался; прежние стратегии восстановлены" >&2
-            fi
-            ensure_init_exec
-            "$INIT_SCRIPT" restart 2>&1 || echo "ОШИБКА: сервис не поднялся на восстановленном конфиге" >&2
-            return 1
-        fi
-        echo "Все категории возвращены на автоматику; сервис перезапущен один раз."
-    else
-        echo "Все категории возвращены на автоматику; сервис остановлен, запуск не требовался."
-    fi
-    return 0
-}
-
-strategy_pool_reset_all() {
-    local txn rc
-    strategy_config_lock_acquire || { echo "не удалось захватить блокировку стратегий" >&2; return 1; }
-    STRATEGY_RESET_RECOVERY_REQUIRED=0
-    txn=$(mktemp -d /tmp/z2k-strategy-reset-all.XXXXXX) || {
-        strategy_config_lock_release
-        echo "не удалось создать резервную копию стратегий" >&2
-        return 1
-    }
-    _strategy_pool_reset_all_locked "$txn"
-    rc=$?
-    strategy_config_lock_release
-    if [ "$rc" = 0 ]; then
-        rm -rf "$txn"
-    elif [ "$STRATEGY_RESET_RECOVERY_REQUIRED" != 1 ]; then
-        rm -rf "$txn"
-    fi
     return "$rc"
 }
 
@@ -2116,6 +1913,7 @@ warp_name_ok() {
         ''|.*|-*) return 1 ;;
         *[!A-Za-z0-9._-]*) return 1 ;;
         devices) return 1 ;;   # зарезервировано: список устройств, не адресов
+        exclude) return 1 ;;   # зарезервировано: исключения, своя карточка
     esac
     [ "${#1}" -le 64 ]
 }
@@ -2155,6 +1953,21 @@ warp_status_info() {
     [ -f "$WARP_SCRIPT" ] && st=$(sh "$WARP_SCRIPT" status 2>/dev/null)
     printf '%s enabled=%s wdtt=%s\n' "$st" "$(read_flag "GAME_WARP_ENABLED" "$CONFIG_FILE" "0")" \
         "$(read_flag "Z2K_WARP_WDTT" "$CONFIG_FILE" "0")"
+}
+
+# ---------- исключения WARP (lists/warp/exclude.txt) ----------
+# Адреса, подсети и домены, которые НИКОГДА не идут в WARP — в любом режиме,
+# в том числе «весь трафик». Это не список маршрутизации: режим он не меняет.
+warp_exclude_read() {
+    [ -f "$WARP_LISTS_DIR/exclude.txt" ] && cat "$WARP_LISTS_DIR/exclude.txt"
+    return 0
+}
+
+warp_exclude_save() {
+    # stdin → exclude.txt; stdout как у warp_list_save.
+    warp_lists_ensure_dir
+    [ -d "$WARP_LISTS_DIR" ] || { echo "lists dir unavailable" >&2; return 1; }
+    _warp_list_write "$WARP_LISTS_DIR/exclude.txt" replace
 }
 
 # ---------- устройства для списков WARP (lists/warp/devices.txt) ----------
@@ -2460,6 +2273,7 @@ warp_lists() {
         [ -f "$f" ] || continue
         name=${f##*/}; name=${name%.txt}
         [ "$name" = "devices" ] && continue   # устройства — своя карточка, не список адресов
+        [ "$name" = "exclude" ] && continue   # исключения — своя карточка, не маршрут в WARP
         entries=$(_warp_destination_count "$f")
         size=$(wc -c < "$f" | tr -d ' ')
         # busybox: date -r (no stat -c), see update_status_string
@@ -2560,7 +2374,14 @@ warp_list_save() {
     case "$mode" in replace|append|create) ;; *) echo "invalid mode" >&2; return 1 ;; esac
     warp_lists_ensure_dir
     [ -d "$WARP_LISTS_DIR" ] || { echo "lists dir unavailable" >&2; return 1; }
-    local file="$WARP_LISTS_DIR/$name.txt"
+    _warp_list_write "$WARP_LISTS_DIR/$name.txt" "$mode"
+}
+
+# Запись списка адресов и доменов: проверка строк, замок, атомарная подмена,
+# перезагрузка наборов. Общая для своих списков и исключений — правила строк
+# у них одни и те же. stdin — текст списка; $1 — файл, $2 — replace|append|create.
+_warp_list_write() {
+    local file="$1" mode="$2"
     if [ "$mode" = "create" ]; then
         # Заявка на имя атомарна. Проверка [ -f ] и запись ниже разнесены во
         # времени на всё чтение тела, и два одновременных «создать» с одним
@@ -2899,9 +2720,9 @@ tcp16_status_json() {
     if [ "$running" = false ] && [ -n "$started" ] && [ "${ts:-0}" -lt "$started" ] 2>/dev/null; then
         stale=true
     fi
-    # «В конфиге» — у РАБОТАЮЩЕГО движка, а не только в файле: после правки
-    # конфига без перезапуска это разные ответы.
-    grep -q -- '--lua-desync=z2k_sni_pick' "$CONFIG_FILE" 2>/dev/null && in_cfg=true
+    # Проверяем файл конфига; это не свидетельство перезагрузки движка.
+    # Старый селектор оставлен в Lua как no-op и активным обходом не считается.
+    grep -qE -- '--lua-desync=z2k_sni_fake(:|[[:space:]]|$)' "$CONFIG_FILE" 2>/dev/null && in_cfg=true
     printf '{"ok":true,"measured":'; json_string "$f"
     printf ',"age":%s' "${age:-null}"
     printf ',"nets_blocked":%s' "$(_tcp16_count "${ZAPRET2_DIR}/state/tcp16_asn.txt")"
@@ -3749,6 +3570,12 @@ STRATEGY_PICK_OUT="${STRATEGY_PICK_OUT:-/tmp/z2k-strategy-pick.json}"
 # ЖУРНАЛ НЕ ДОЛЖЕН МОЛЧАТЬ. С -json на stdout уходит только итоговый JSON, а
 # человек смотрит в журнал задачи, чтобы понять, что работа идёт. Поэтому
 # отбиваем такт сами.
+strategy_pick_ipv4_valid() {
+    awk -F. 'NF != 4 { exit 1 } { for (i=1; i<=4; i++) if ($i !~ /^[0-9]+$/ || $i > 255 || ($i != "0" && $i ~ /^0/)) exit 1 } END { if (NF != 4) exit 1 }' <<EOF
+$1
+EOF
+}
+
 strategy_pick_run() {
     local domain="$1" mode="${2:-tcp13}" pinned_ip="${3:-}" also_test_ips="${4:-}" extra_ip target_addr
     # Прочерк — это «домена нет», его ставит вызывающий, чтобы позиция
@@ -3773,13 +3600,13 @@ strategy_pick_run() {
         echo "не указан домен" >&2; return 2
     fi
     if [ -n "$pinned_ip" ]; then
-        strategy_unique_set_ipv4_valid "$pinned_ip" || { echo "некорректный IPv4 для замера" >&2; return 2; }
+        strategy_pick_ipv4_valid "$pinned_ip" || { echo "некорректный IPv4 для замера" >&2; return 2; }
         [ "$mode" = tcp13 ] || [ "$mode" = tcp12 ] || [ "$mode" = mixed ] || {
             echo "закреплённый IP поддерживается только для TCP" >&2; return 2;
         }
     fi
     for extra_ip in $also_test_ips; do
-        strategy_unique_set_ipv4_valid "$extra_ip" || { echo "некорректный дополнительный IPv4 для замера" >&2; return 2; }
+        strategy_pick_ipv4_valid "$extra_ip" || { echo "некорректный дополнительный IPv4 для замера" >&2; return 2; }
     done
     [ -x "$bin" ] || { echo "модуль замера не установлен" >&2; return 3; }
 
@@ -3926,223 +3753,6 @@ strategy_pick_last() {
     [ -s "$STRATEGY_PICK_OUT" ] && cat "$STRATEGY_PICK_OUT"
 }
 
-# Пакетный эксперимент «уникальный набор». Все параметры здесь заданы
-# сервером: caller не может подставить домен, режим, имя пула или shell-команду.
-strategy_unique_set_strategy() {
-    # Ответ z2k-detect вкладывается в компактный JSON strategy_pick_run. Берём
-    # только первое поле стратегии и отвергаем экранированные значения.
-    sed -n 's/.*"strategy"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' "$1" | head -n 1
-}
-
-strategy_unique_set_normalize() {
-    awk '{$1=$1; print}'
-}
-
-strategy_unique_set_ipv4_valid() {
-    awk -F. 'NF != 4 { exit 1 } { for (i=1; i<=4; i++) if ($i !~ /^[0-9]+$/ || $i > 255 || ($i != "0" && $i ~ /^0/)) exit 1 } END { if (NF != 4) exit 1 }' <<EOF
-$1
-EOF
-}
-
-strategy_unique_set_parse_ips() {
-    awk '
-        function valid(ip, a, n, i) {
-            n = split(ip, a, "."); if (n != 4) return 0
-            for (i = 1; i <= 4; i++) {
-                if (a[i] !~ /^[0-9]+$/ || a[i] + 0 > 255 || (a[i] != "0" && a[i] ~ /^0/)) return 0
-            }
-            return ip != "127.0.0.1" && ip != "0.0.0.0"
-        }
-        {
-            for (i = 1; i <= NF; i++) {
-                if ($i == "Address" && $(i+1) ~ /^[0-9]+:$/) {
-                    ip = $(i+2)
-                    if (valid(ip) && !seen[ip]++) { print ip; count++; if (count == 2) exit }
-                }
-            }
-        }
-    '
-}
-
-strategy_unique_set_ips() {
-    local domain="$1" resolver="${Z2K_NSLOOKUP_BIN:-nslookup}" output
-    command -v "$resolver" >/dev/null 2>&1 || { echo "nslookup не найден" >&2; return 1; }
-    output=$("$resolver" "$domain" 2>/dev/null) || { echo "DNS-резолв $domain завершился ошибкой" >&2; return 1; }
-    printf '%s\n' "$output" | strategy_unique_set_parse_ips
-}
-
-strategy_unique_set_measure() {
-    local domain="$1" mode="$2" out="$3" pinned_ip="${4:-}" also_test_ips="${5:-}" previous_out="${STRATEGY_PICK_OUT:-}" rc
-    STRATEGY_PICK_OUT="$out"
-    strategy_pick_run "$domain" "$mode" "$pinned_ip" "$also_test_ips"
-    rc=$?
-    STRATEGY_PICK_OUT="$previous_out"
-    [ "$rc" = 0 ] || return "$rc"
-    [ -s "$out" ] || { echo "замер $domain не создал результат" >&2; return 1; }
-    return 0
-}
-
-strategy_unique_set_lock_acquire() {
-    local dir="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}" owner n=0
-    while ! mkdir "$dir" 2>/dev/null; do
-        owner=$(cat "$dir/pid" 2>/dev/null)
-        if [ -n "$(find "$dir" -maxdepth 0 -mmin +120 2>/dev/null)" ] &&
-           { [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; }; then
-            rm -rf "$dir" 2>/dev/null
-            continue
-        fi
-        return 1
-    done
-    STRATEGY_UNIQUE_LOCK_TOKEN="$(date +%s)-$$"
-    printf '%s\n' "$$" > "$dir/pid"
-    printf '%s\n' "$STRATEGY_UNIQUE_LOCK_TOKEN" > "$dir/token"
-    return 0
-}
-
-strategy_unique_set_lock_release() {
-    local dir="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}" token
-    token=$(cat "$dir/token" 2>/dev/null)
-    [ -n "${STRATEGY_UNIQUE_LOCK_TOKEN:-}" ] && [ "$token" = "$STRATEGY_UNIQUE_LOCK_TOKEN" ] && rm -rf "$dir"
-}
-
-strategy_unique_set_result_write() {
-    local staged="$1" coverage="$2" reason="$3" elapsed="$4" restarted="$5"
-    local result="${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}" tmp
-    tmp="$result.$$"
-    {
-        printf '{"ok":true,"pools":{'
-        for pool in yt_tcp gv_tcp quic rkn_tcp; do
-            [ "$pool" = yt_tcp ] || printf ','
-            printf '"%s":' "$pool"
-            json_string "$(cat "$staged/$pool.txt")"
-        done
-        printf '},"rkn":{"coverage":'; json_string "$coverage"
-        printf ',"strategy":'; json_string "$(cat "$staged/rkn_tcp.txt")"
-        printf ',"reason":'; json_string "$reason"
-        printf ',"domains":["discord.com","instagram.com","rutor.org"]}'
-        printf ',"elapsed_seconds":%s,"service_restarted":%s,"needs_service_start":%s}\n' \
-            "$elapsed" "$restarted" "$([ "$restarted" = true ] && echo false || echo true)"
-    } > "$tmp" || { rm -f "$tmp"; return 1; }
-    UNIQUE_SET_RESULT_TMP="$tmp"
-    return 0
-}
-
-strategy_unique_set_stage() {
-    local domain="$1" mode="$2" name="$3" pool="$4" json
-    json="$UNIQUE_SET_DIR/$name.json"
-    local found complete
-    echo "Этап: $domain ($mode) → $pool"
-    strategy_unique_set_measure "$domain" "$mode" "$json" || return $?
-    found=$(strategy_unique_set_strategy "$json")
-    [ -n "$found" ] || { echo "Для $domain стратегия не найдена" >&2; return 20; }
-    case "$found" in
-        *'"'*|*'\\'*) echo "В выводе для $domain небезопасная строка стратегии" >&2; return 1 ;;
-    esac
-    complete=$(printf '%s\n' "$found" | strategy_complete_line "$pool") || return 1
-    [ -n "$complete" ] || { echo "Не удалось собрать профиль пула $pool" >&2; return 1; }
-    printf '%s\n' "$complete" > "$UNIQUE_SET_DIR/$pool.txt" || return 1
-    echo "Найдена стратегия: $found"
-}
-
-strategy_unique_set_stage_multi_ip() {
-    local domain="$1" mode="$2" name="$3" pool="$4" ips anchor additional found complete out attempt=0
-    ips=$(strategy_unique_set_ips "$domain") || return 1
-    [ "$(printf '%s\n' "$ips" | awk 'NF {n++} END {print n+0}')" = 2 ] || {
-        echo "$domain: нужны два разных IPv4-адреса DNS для проверки, найдено меньше двух" >&2; return 1;
-    }
-    found=""
-    while IFS= read -r anchor; do
-        [ -n "$anchor" ] || continue
-        attempt=$((attempt + 1))
-        additional=$(printf '%s\n' "$ips" | awk -v anchor="$anchor" '$0 != anchor && NF { if (out != "") out=out " "; out=out $0 } END { print out }')
-        out="$UNIQUE_SET_DIR/$name-common-$attempt.json"
-        echo "Этап: $domain ($mode), ищу от $anchor и проверяю кандидаты на всех адресах"
-        strategy_unique_set_measure "$domain" "$mode" "$out" "$anchor" "$additional" || {
-            echo "$domain: общий замер на $anchor не завершился; пул $pool не будет применён" >&2; return 1;
-        }
-        found=$(strategy_unique_set_normalize < "$out" | strategy_unique_set_strategy /dev/stdin)
-        [ -z "$found" ] || break
-    done <<EOF
-$ips
-EOF
-    [ -n "$found" ] || { echo "$domain: общий кандидат не найден ни с одного IP; пул $pool не будет применён" >&2; return 1; }
-    case "$found" in *'"'*|*'\'*) echo "небезопасная строка стратегии для $domain" >&2; return 1 ;; esac
-    complete=$(printf '%s\n' "$found" | strategy_complete_line "$pool") || return 1
-    [ -n "$complete" ] || { echo "Не удалось собрать профиль пула $pool" >&2; return 1; }
-    printf '%s\n' "$complete" > "$UNIQUE_SET_DIR/$pool.txt" || return 1
-    echo "Общий кандидат для $domain прошёл всю проверочную матрицу: $found"
-}
-
-strategy_unique_set_run() {
-    local previous_out="${STRATEGY_PICK_OUT:-}" started ended discord instagram rutor selected coverage reason rc
-    local own_dir=0
-    if [ -z "${UNIQUE_SET_DIR:-}" ]; then
-        UNIQUE_SET_DIR="/tmp/z2k-unique-set.$$"
-        own_dir=1
-    fi
-    UNIQUE_SET_OWN_DIR="$own_dir"
-    rm -rf "$UNIQUE_SET_DIR" 2>/dev/null
-    mkdir -p "$UNIQUE_SET_DIR" || { echo "Не удалось создать рабочий каталог" >&2; return 1; }
-    STRATEGY_PICK_OUT="$previous_out"
-    started=$(date +%s)
-
-    strategy_unique_set_stage_multi_ip i.ytimg.com mixed stage-youtube yt_tcp || return 1
-    strategy_unique_set_stage_multi_ip googlevideo.com mixed stage-googlevideo gv_tcp || return 1
-    strategy_unique_set_stage instagram.com quic stage-instagram-quic quic || return 1
-    # RKN TCP is compared only on the modern TLS 1.3 hello. The legacy hello
-    # can select a different strategy and is outside this experiment's target.
-    strategy_unique_set_stage discord.com tcp13 stage-discord rkn_tcp || return 1
-    strategy_unique_set_stage instagram.com tcp13 stage-instagram-tcp rkn_tcp || {
-        rc=$?; [ "$rc" = 20 ] || return "$rc"
-    }
-    strategy_unique_set_stage rutor.org tcp13 stage-rutor rkn_tcp || {
-        rc=$?; [ "$rc" = 20 ] || return "$rc"
-    }
-
-    discord=$(strategy_unique_set_normalize < "$UNIQUE_SET_DIR/stage-discord.json" | strategy_unique_set_strategy /dev/stdin)
-    instagram=$(strategy_unique_set_strategy "$UNIQUE_SET_DIR/stage-instagram-tcp.json" 2>/dev/null | strategy_unique_set_normalize)
-    rutor=$(strategy_unique_set_strategy "$UNIQUE_SET_DIR/stage-rutor.json" 2>/dev/null | strategy_unique_set_normalize)
-    # Discord is mandatory; the two other RKN probes are informative and may
-    # fail, in which case the measured Discord result remains the fallback.
-    [ -n "$discord" ] || { echo "Discord-стратегия обязательна для RKN-пула" >&2; return 1; }
-    discord=$(printf '%s' "$discord" | strategy_unique_set_normalize)
-    selected="$discord"
-    coverage=Discord-fallback
-    reason="Discord-fallback: нет общего первого найденного приёма"
-    if [ -n "$instagram" ] && [ -n "$rutor" ] && [ "$discord" = "$instagram" ] && [ "$discord" = "$rutor" ]; then
-        coverage=3/3
-        reason="общая строка первых найденных приёмов"
-    fi
-    echo "RKN: $coverage; $reason"
-    printf '%s\n' "$selected" | strategy_complete_line rkn_tcp > "$UNIQUE_SET_DIR/rkn_tcp.txt" || return 1
-
-    local service_restarted=false
-    is_running && service_restarted=true
-    echo "Проверяю и применяю все четыре пула одним набором…"
-    strategy_pool_save_batch "$UNIQUE_SET_DIR" "$UNIQUE_SET_DIR/transaction" || { rm -f "${UNIQUE_SET_RESULT_TMP:-}"; return $?; }
-    ended=$(date +%s)
-    strategy_unique_set_result_write "$UNIQUE_SET_DIR" "$coverage" "$reason" "$((ended - started))" "$service_restarted" || {
-        echo "Набор применён, но не удалось собрать итоговый отчёт" >&2; return 1;
-    }
-    mv -f "$UNIQUE_SET_RESULT_TMP" "${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}" || {
-        echo "набор применён, но не удалось сохранить итоговый отчёт" >&2; return 1;
-    }
-    echo "Набор применён за $((ended - started)) с."
-    [ "$own_dir" = 0 ] || rm -rf "$UNIQUE_SET_DIR"
-    return 0
-}
-
-strategy_unique_set_worker() {
-    trap 'strategy_unique_set_worker_cleanup' 0
-    strategy_unique_set_run
-}
-
-strategy_unique_set_worker_cleanup() {
-    [ "${UNIQUE_SET_OWN_DIR:-0}" = 1 ] && rm -rf "${UNIQUE_SET_DIR:-}" 2>/dev/null
-    rm -f "${UNIQUE_SET_RESULT_TMP:-}" 2>/dev/null
-    strategy_unique_set_lock_release
-}
-
 # Удаление z2k целиком, фоновой задачей.
 #
 # ОТЛИЧИЕ ОТ ВСЕХ ОСТАЛЬНЫХ ЗАДАЧ, И ОНО ГЛАВНОЕ: панель, из которой задачу
@@ -4223,8 +3833,8 @@ domain_list_save() (
         echo 'Список уже изменён в другой вкладке. Скопируйте свой текст и обновите список перед повторным сохранением.' >&2
         exit 3
     }
-    if [ "$check_coverage" = 1 ]; then
-        _extra_domains_validate_file "$tmp" "$target" || exit 2
+    if [ "$check_coverage" != 0 ]; then
+        _extra_domains_validate_file "$tmp" "$target" "$check_coverage" || exit 2
     fi
     chmod 644 "$tmp" && mv -f "$tmp" "$target" || { echo 'Не удалось сохранить список.' >&2; exit 1; }
     domain_list_revision "$target"
@@ -4234,33 +3844,46 @@ whitelist_revision() { domain_list_revision "$WHITELIST_FILE"; }
 whitelist_save() { domain_list_save "$WHITELIST_FILE" "$1"; }
 extra_domains_revision() { domain_list_revision "$EXTRA_DOMAINS_FILE"; }
 extra_domains_save() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 1; }
+extra_domains_import() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 2; }
+# Undo restores the user's previous contents, including covered records. Coverage
+# is a UI redundancy check, not input validation: syntax, size and CAS still apply.
+extra_domains_restore() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 0; }
 
 # Check only newly added records; retaining/removing an existing record remains
 # possible after other lists have changed. Read each large catalogue once, not
 # once per imported domain. The target list lock is already held by the caller.
 _extra_domains_validate_file() {
-    local candidate="$1" old="$2" label path
+    local candidate="$1" old="$2" mode="${3:-1}" label path filtered before after skipped=0
     [ -f "$old" ] || old=/dev/null
     while IFS='|' read -r label path; do
         [ -s "$path" ] || continue
-        LC_ALL=C awk -v old="$old" -v covered="$path" -v label="$label" '
-            { sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); $0=tolower($0) }
+        filtered=$(mktemp "${candidate}.coverage.XXXXXX") || return 1
+        if ! LC_ALL=C awk -v old="$old" -v covered="$path" -v label="$label" -v mode="$mode" '
+            { original=$0; sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); $0=tolower($0) }
             FILENAME==old {previous[$0]=1; next}
             FILENAME==covered {if($0!="" && $0 !~ /^#/) have[$0]=1; next}
-            $0=="" || $0 ~ /^#/ || previous[$0] {next}
+            $0=="" || $0 ~ /^#/ || previous[$0] {print original; next}
             {
                 domain=$0; suffix=domain
                 while(index(suffix,".")) {
                     if(have[suffix]) {
+                        if(mode==2) next
                         printf "Домен %s уже покрыт записью %s в списке «%s». Список не изменён.\n", domain,suffix,label > "/dev/stderr"
                         exit 2
                     }
                     sub(/^[^.]+\./,"",suffix)
                 }
+                print original
             }
-        ' "$old" "$path" "$candidate" || return 2
+        ' "$old" "$path" "$candidate" > "$filtered"; then
+            rm -f "$filtered"; return 2
+        fi
+        before=$(wc -l < "$candidate"); after=$(wc -l < "$filtered")
+        skipped=$((skipped + before - after))
+        mv -f "$filtered" "$candidate" || { rm -f "$filtered"; return 1; }
     done <<CATALOG
 $(_domain_lists_catalog)
 CATALOG
+    [ "$skipped" -eq 0 ] || printf 'Пропущено доменов, уже покрытых другими списками: %s.\n' "$skipped" >&2
     return 0
 }

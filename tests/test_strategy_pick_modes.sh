@@ -26,7 +26,7 @@ export ZAPRET2_DIR="$SB/z2k"
 export STRATEGY_PICK_OUT="$SB/out.json"
 export Z2K_DETECT_BIN="$SB/bin/z2k-detect"
 export ARGLOG="$SB/args.log"
-eval "$(awk '/^strategy_pick_run\(\)/,/^}/; /^strategy_unique_set_ipv4_valid\(\)/,/^}/' "$ROOT/webpanel/cgi/actions.sh")"
+eval "$(awk '/^strategy_pick_run\(\)/,/^}/; /^strategy_pick_ipv4_valid\(\)/,/^}/' "$ROOT/webpanel/cgi/actions.sh")"
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '[OK]   %s\n' "$1"; }
@@ -48,6 +48,9 @@ check tcp12 example.com "-hello legacy" '"tcp":{'
 check mixed example.com "-hello both"   '"tcp":{'
 check quic  example.com "quic -json"    '"quic":{'
 check voice ""          "voice -json"   '"voice":{'
+
+strategy_pick_ipv4_valid 142.250.74.14 && ok 'IPv4 для замера валидируется' || bad 'корректный IPv4 отвергнут'
+strategy_pick_ipv4_valid 999.1.1.1 && bad 'некорректный IPv4 принят' || ok 'некорректный IPv4 отклонён'
 
 : > "$ARGLOG"; rm -f "$STRATEGY_PICK_OUT"
 strategy_pick_run googlevideo.com mixed 74.125.131.99 74.125.131.104 >/dev/null 2>&1

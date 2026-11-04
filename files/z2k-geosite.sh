@@ -598,12 +598,11 @@ filter_google_domains() {
 
 # Also run offline, before daemon startup: a 304 or failed download must not
 # preserve bad entries from an older installation. Only inclusion lists belong
-# here, never exclusions, fake SNI candidates or strategy files.
+# here, never user extra-domains, exclusions, fake SNI candidates or strategies.
 clean_google_domains() {
     local list tmp failed=0
     for list in "$EXTRA"/*/*/List.txt "$EXTRA/TCP/RKN/Discord.txt" \
                 "$EXTRA/TCP_Discord.txt" \
-                "$ZAPRET2_DIR/lists/extra-domains.txt" \
                 "$ZAPRET2_DIR/lists/autohostlist-domains.txt"; do
         [ -f "$list" ] || continue
         tmp=$(mktemp "${list}.google.XXXXXX") || { failed=1; continue; }

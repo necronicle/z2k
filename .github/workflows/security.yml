@@ -92,7 +92,7 @@ jobs:
       # Аудит самих workflows: незапиненные экшены, инжекции через ${{ }},
       # утечки credentials из checkout, избыточные permissions. Workflows —
       # код с доступом к каналу доставки на роутеры, ревьюится как код.
-      - uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
 
   gitleaks:
     name: gitleaks (secret scan)
@@ -153,7 +153,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -170,6 +170,6 @@ jobs:
           done
           exit $rc
 
-      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: "/language:${{ matrix.language }}"

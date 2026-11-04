@@ -46,6 +46,19 @@ with tempfile.TemporaryDirectory() as td:
   for blocked in ['excluded.example','sub.excluded.example']:
    assert save(rev(),blocked+'\n').returncode==2,'covered domain must be rejected'
    assert p.read_bytes()==before
+  rkn=pathlib.Path(td)/'extra_strats/TCP/RKN/List.txt'
+  rkn.parent.mkdir(parents=True)
+  rkn.write_text('covered.example\n')
+  p.write_text('# user comment\nsub.covered.example\nkept.example\n')
+  body=p.read_text()+'excluded.example\nsub.excluded.example\ncovered.example\nnew.example\nNEW.EXAMPLE\nother.example\n'
+  r=call("extra_domains_import '"+rev()+"'",body)
+  assert r.returncode==0,r.stderr
+  assert p.read_text()=='# user comment\nsub.covered.example\nkept.example\nnew.example\nother.example\n',p.read_text()
+  assert '3' in r.stderr,'report skipped coverage records'
+  previous=p.read_bytes()
+  r=call("extra_domains_import '"+rev()+"'",p.read_text()+'excluded.example\nbad domain\n')
+  assert r.returncode==2 and p.read_bytes()==previous,'invalid import must remain atomic'
+  assert call("extra_domains_import '"+r0+"'",'new.example\n').returncode==3
   assert (pathlib.Path(td)/'whitelist.txt').read_text()=='excluded.example\n','whitelist must be untouched'
  print('PASS: atomic bulk save, normalization, validation, clear, undo, concurrent conflict, limits and permissions')
 PY

@@ -802,6 +802,70 @@ test_corrupt_custom_strategy healthy \
     "--filter-tcp=443 --filter-l7=tls --lua-desync=fake:blob=z2k_custom_marker:strategy=1" \
     "0" "исправный пользовательский файл принимается"
 
+printf "\n--- пул rkn доходит до конфига как есть ---\n"
+
+# Пул rkn — референсные наборы один в один (30.10.2026). Генератор не вправе
+# дописывать его плечам наши приёмы: динамический TTL фейка (fool=) и диапазон
+# повторов (repeats=N-M) меняют пакеты, и плечо перестаёт совпадать с
+# первоисточником. Пулы YouTube их получают как прежде.
+_seed_reference_rkn() {
+    local root="$1"
+    # Плечо гугловой строки референсного набора: помечено ip_id=zero.
+    echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=yt_tcp --lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls:repeats=6:strategy=1 --lua-desync=fake:payload=tls_client_hello:dir=out:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-600000:tcp_ts_up:ip_id=zero:strategy=2" \
+        > "$root/extra_strats/TCP/YT/Strategy.txt"
+    echo "--filter-tcp=443 --filter-l7=tls --payload=tls_client_hello --lua-desync=circular:fails=3:time=60:key=rkn_tcp --lua-desync=fake:blob=stun2:repeats=8:tcp_ts=-600000:tcp_ts_up:strategy=1 --lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_ts_up:strategy=2" \
+        > "$root/extra_strats/TCP/RKN/Strategy.txt"
+}
+OUT_REF=$(run_generator "reference-rkn" "" "_seed_reference_rkn")
+_ref_rkn=$(get_rkn_tcp_arm_line "$OUT_REF")
+_ref_yt=$(printf '%s\n' "$OUT_REF" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" | grep -F 'YT/List.txt' | grep -F 'filter-l7=tls' | head -1)
+assert_contains "rkn: фейк как в пуле" "--lua-desync=fake:blob=stun2:repeats=8:tcp_ts=-600000:tcp_ts_up:strategy=1" "$_ref_rkn"
+assert_contains "rkn: hostfakesplit как в пуле" "--lua-desync=hostfakesplit:host=ozon.ru:repeats=4:tcp_ts=-600000:tcp_ts_up:strategy=2" "$_ref_rkn"
+assert_not_contains "rkn: без динамического TTL" "fool=z2k_dynamic_ttl" "$_ref_rkn"
+assert_contains "yt: динамический TTL на месте" "fool=z2k_dynamic_ttl" "$_ref_yt"
+if printf '%s' "$_ref_yt" | grep -Eq ':repeats=[0-9]+-[0-9]+'; then _yt_rr=да; else _yt_rr=нет; fi
+assert_eq "yt: диапазон повторов на месте" "да" "$_yt_rr"
+
+# Плечи гугловой строки референсного набора помечены ip_id=zero и обязаны дойти
+# до конфига без наших добавок: динамический TTL меняет TTL фейка, а диапазон
+# повторов — их число, и плечо перестаёт совпадать с первоисточником. Прочие
+# плечи yt/gv добавки получают как прежде (проверено выше).
+_ref_zero=$(printf '%s\n' "$_ref_yt" | tr ' ' '\n' | grep -F ':ip_id=zero' | head -1)
+assert_contains "yt: в конфиге есть плечо с ip_id=zero" "ip_id=zero" "$_ref_zero"
+assert_not_contains "yt: плечо с ip_id=zero без динамического TTL" "fool=" "$_ref_zero"
+if printf '%s' "$_ref_zero" | grep -Eq ':repeats=[0-9]+-[0-9]+'; then _zr=диапазон; else _zr=точно; fi
+assert_eq "yt: плечо с ip_id=zero без диапазона повторов" "точно" "$_zr"
+
+printf "\n--- UDP: профиль WireGuard/неизвестного UDP ---\n"
+
+# Включённый UDP-профиль референсного набора (30.10.2026), один в один:
+# WireGuard, STUN, Discord, MTProto, неизвестный UDP; нулевой фейк x6 и фейк
+# QUIC x6 с ротацией.
+OUT_UDP=$(run_generator "udp-extra" "" "")
+_flat_udp=$(printf '%s\n' "$OUT_UDP" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk")
+_udp_misc=$(printf '%s\n' "$_flat_udp" | grep -F -- '--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535' | head -1)
+assert_contains "udp: фильтр протоколов" "--filter-l7=wireguard,stun,discord,mtproto,unknown" "$_udp_misc"
+assert_contains "udp: окно" "--out-range=<n2" "$_udp_misc"
+assert_contains "udp: пейлоады" "--payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown" "$_udp_misc"
+assert_contains "udp: ротация" "--lua-desync=circular:fails=2:time=300:retrans=3:nld=2" "$_udp_misc"
+assert_contains "udp: плечо 1" "--lua-desync=fake:blob=0x00000000:repeats=6:strategy=1" "$_udp_misc"
+assert_contains "udp: плечо 2" "--lua-desync=fake:blob=quic_google:repeats=6:strategy=2" "$_udp_misc"
+assert_not_contains "udp: без нашего TTL" "fool=" "$_udp_misc"
+# голос Discord стоит раньше: его пакеты не уходят в широкий профиль
+_pos_voice=$(printf '%s\n' "$_flat_udp" | grep -nF 'key=discord_udp' | head -1 | cut -d: -f1)
+_pos_misc=$(printf '%s\n' "$_flat_udp" | grep -nF -- '--filter-udp=590-600' | head -1 | cut -d: -f1)
+if [ -n "$_pos_voice" ] && [ -n "$_pos_misc" ] && [ "$_pos_voice" -lt "$_pos_misc" ]; then _ord=да; else _ord=нет; fi
+assert_eq "udp: голос Discord раньше широкого профиля" "да" "$_ord"
+# Голос выключен: профиль остаётся, но без STUN и Discord.
+OUT_UDP_NOVOICE=$(run_generator "udp-novoice" "Z2K_CATEGORY_DISCORD_VOICE=0" "")
+_nv=$(printf '%s\n' "$OUT_UDP_NOVOICE" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" | grep -F -- '--filter-udp=590-600' | head -1)
+assert_contains "голос off: профиль UDP на месте" "--filter-l7=wireguard,mtproto,unknown" "$_nv"
+assert_not_contains "голос off: без STUN и Discord" "stun" "$_nv"
+assert_not_contains "голос off: без голосовых портов" "3478-3481" "$_nv"
+
+OUT_UDP_OFF=$(run_generator "udp-extra-off" "Z2K_UDP_MISC=0" "")
+assert_not_contains "тумблер Z2K_UDP_MISC=0 снимает профиль" "49152-65535" "$OUT_UDP_OFF"
+
 rm -rf "$MOCK_DIR"
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

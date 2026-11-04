@@ -165,10 +165,11 @@ generate_nfqws2_opt_from_strategies() {
     fi
     _cs=$(z2k_custom_strategy rkn_tcp) && [ -n "$_cs" ] && rkn_tcp="$_cs"
 
-    # QUIC autocircular fallback (13 strategies). Proven fake-blob escalation
-    # first; experimental z2k morphs demoted to the tail (slots 11-13). This inline is
-    # only the cold-start default — extra_strats/UDP/YT/Strategy.txt (from quic_strats.ini)
-    # overrides it on any real install (see below). key=quic stable key; nld=2 cuts CDN churn.
+    # QUIC autocircular. Пул живёт в одном месте — quic_strats.ini, откуда
+    # установка кладёт extra_strats/UDP/YT/Strategy.txt (читается ниже). Без
+    # этого файла (холодный старт, обрыв установки) берётся аварийный пул —
+    # плечо того же набора на встроенном блобе, а не своя копия пула.
+    # key=quic stable key; nld=2 cuts CDN churn.
     #
     # ПУЛ ОБЩИЙ, А НЕ ЮТУБОВСКИЙ (16.09.2026). Раньше QUIC обходился только на
     # доменах ютуба, и заблокированные сайты по HTTP/3 не обрабатывались НИ ОДНИМ
@@ -195,7 +196,7 @@ generate_nfqws2_opt_from_strategies() {
     # срабатываний. Значение измерено, поэтому держим его, а не умолчание.
     # Оба порога обязаны лежать ниже окна перехвата NFQWS2_UDP_PKT_IN/OUT —
     # см. комментарий там же. Same change mirrored in quic_strats.ini.
-    quic_udp="--filter-udp=443 --filter-l7=quic --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=5:key=quic:nld=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=3:ip_autottl=-2,3-20:strategy=1 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=1 --lua-desync=drop:payload=quic_initial:dir=out:strategy=1 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=4:ip_autottl=-2,3-20:strategy=2 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3_tiny:ipfrag_pos_udp=8:ipfrag_pos2=32:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=2 --lua-desync=drop:payload=quic_initial:dir=out:strategy=2 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic_rutracker:repeats=6:strategy=3 --lua-desync=send:payload=quic_initial:dir=out:ipfrag=z2k_ipfrag3:ipfrag_pos_udp=16:ipfrag_pos2=48:ipfrag_overlap12=8:ipfrag_overlap23=8:ipfrag_disorder:ipfrag_next2=255:strategy=3 --lua-desync=drop:payload=quic_initial:dir=out:strategy=3 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=6:ip_autottl=-2,3-20:strategy=4 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=6:payload=all:ip_autottl=-2,3-20:strategy=5 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=16:strategy=5 --lua-desync=drop:payload=quic_initial:dir=out:strategy=5 --lua-desync=udplen:payload=quic_initial:dir=out:increment=4:strategy=6 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=6 --lua-desync=udplen:payload=quic_initial:dir=out:increment=8:pattern=0xFEA82025:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=quic5:repeats=2:strategy=7 --lua-desync=fake:payload=quic_initial:dir=out:blob=0x00000000000000000000000000000000:repeats=2:payload=all:strategy=8 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=8:strategy=8 --lua-desync=drop:payload=quic_initial:dir=out:strategy=8 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=11:ip_autottl=-2,3-20:strategy=9 --lua-desync=send:payload=quic_initial:dir=out:ipfrag:ipfrag_pos_udp=24:strategy=9 --lua-desync=drop:payload=quic_initial:dir=out:strategy=9 --lua-desync=fake:payload=quic_initial:dir=out:blob=fake_default_quic:repeats=3:strategy=10 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:noise=2:pad_min=12:pad_max=72:strategy=11 --lua-desync=z2k_quic_morph_v2:payload=quic_initial:dir=out:packets=2:profile=2:noise=2:pad_min=8:pad_max=64:ipfrag_pos_udp=16:ipfrag_pos2=56:ipfrag_overlap12=16:ipfrag_overlap23=8:strategy=12 --lua-desync=z2k_timing_morph:payload=quic_initial:dir=out:packets=2:chance=85:fakes=2:pad_min=12:pad_max=72:strategy=13"
+    quic_udp=$(z2k_emergency_quic_pool)
 
     # If category strategy files exist, prefer them over hardcoded QUIC defaults.
     # Имя файла сменилось вместе с ключом пула. Старый lists/custom-strategies/
@@ -660,6 +661,10 @@ generate_nfqws2_opt_from_strategies() {
                     case "$token" in
                         *:ip_ttl=*|*:ip6_ttl=*|*:ip_autottl=*|*:ip6_autottl=*|*:fool=*) skip="1" ;;
                     esac
+                    # Плечи гугловой строки референсного набора помечены
+                    # ip_id=zero и приведены к ней один в один: свой TTL фейка
+                    # разводит плечо с первоисточником.
+                    case "$token" in *:ip_id=zero*) skip="1" ;; esac
                     if [ -z "$skip" ]; then
                         token="${token}:fool=z2k_dynamic_ttl"
                     fi
@@ -679,8 +684,9 @@ generate_nfqws2_opt_from_strategies() {
     # а в редких случаях мешает downstream примитивам — даём опт-аут.
     local Z2K_DYNAMIC_TTL
     Z2K_DYNAMIC_TTL=$(safe_config_read "Z2K_DYNAMIC_TTL" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    # rkn_tcp сюда не идёт: пул rkn — референсные наборы один в один
+    # (30.10.2026), динамический TTL меняет их фейки.
     if [ "$Z2K_DYNAMIC_TTL" != "0" ]; then
-        rkn_tcp=$(inject_z2k_dynamic_ttl "$rkn_tcp")
         youtube_tcp=$(inject_z2k_dynamic_ttl "$youtube_tcp")
         youtube_gv_tcp=$(inject_z2k_dynamic_ttl "$youtube_gv_tcp")
     fi
@@ -1017,6 +1023,11 @@ generate_nfqws2_opt_from_strategies() {
                 --lua-desync=fakeddisorder:*|\
                 --lua-desync=hostfakesplit:*|\
                 --lua-desync=syndata:*)
+                    # Плечи референсного набора (ip_id=zero) — без диапазона:
+                    # число фейков у них задано первоисточником.
+                    case "$token" in
+                        *:ip_id=zero*) out="${out:+$out }$token"; continue ;;
+                    esac
                     case "$token" in
                         *:repeats=*)
                             token=$(printf '%s' "$token" | awk '
@@ -1045,7 +1056,7 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
-    rkn_tcp=$(inject_z2k_range_rand "$rkn_tcp")
+    # rkn_tcp — нет: число повторов референсного плеча меняет его пакеты.
     youtube_tcp=$(inject_z2k_range_rand "$youtube_tcp")
     youtube_gv_tcp=$(inject_z2k_range_rand "$youtube_gv_tcp")
 
@@ -1453,34 +1464,9 @@ generate_nfqws2_opt_from_strategies() {
     local rkn_hostlists="$rkn_lists_head"
     [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
     rkn_hostlists="$rkn_hostlists$rkn_lists_tail"
-    # ПОДСТАНОВКА ПОДОБРАННОГО ИМЕНИ В ФЕЙКОВЫЙ ClientHello.
-    #
-    # Лечит класс блокировки, который ротатор не берёт в принципе: рукопожатие
-    # проходит, а поток встаёт на 12-24 КБ. Замер на роутере владельца:
-    # hetzner.com отдавал ровно 15994 байта; тот же хост с фейком, несущим чужое
-    # имя из белого списка провайдера, — 163654 за 0.5 с. Несущая часть — ИМЯ, а
-    # не разрез: результат одинаков и с hostfakesplit, и с multisplit:seqovl=1.
-    #
-    # Имя подставляется В РАНТАЙМЕ (files/lua/z2k-tcp16.lua) по карте
-    # «сеть → имя», которую готовит проба (z2k-tcp16-probe.sh). Перебора на
-    # трафике человека нет, в ротации механизм не участвует.
-    #
-    # ДВЕ СТРОКИ, И ОБЕ ДО circular, БЕЗ strategy=N. Инстанс без этого аргумента
-    # circular не вызывает вовсе — его исполняет линейный оркестратор. Значит имя
-    # подставляется на ЛЮБОМ плече, а разрез продолжает ротироваться штатно.
-    # Имя и разрез — разные оси, сваливать их в одно плечо неверно.
-    #
-    # Сами не отправляем: селектор только готовит блоб, шлёт ШТАТНЫЙ fake. Так
-    # ttl, badsum, tcp_ts и repeats остаются в ведении движка, а `optional` даёт
-    # тихий пропуск, пока имя не подобрано — у тех, кто на этот класс не
-    # наткнулся, не происходит ничего.
-    #
-    # key и nld копируются из circular: возьми селектор другой ключ — он читал бы
-    # не ту запись хоста, в которую пишет детектор.
-    #
-    # Считается ДО развилки «шаблон / плоская форма»: аварийный выключатель
-    # шаблонов (Z2K_NFQWS2_TEMPLATES=0) не должен заодно выключать обход по
-    # объёму. В плоской форме тот же блок вставляется перед circular вручную.
+    # Независимый обход объёмного блока. Имя берётся из измеренной карты,
+    # компактный отправитель ограничивает окончательный пакет бюджетом MSS.
+    # Плечи пула не меняются, собранный ClientHello в фейк не копируется.
     local Z2K_SNI_STALL sni_pick="" _sp_circ="" _t2
     Z2K_SNI_STALL=$(safe_config_read "Z2K_SNI_STALL" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
     if [ -n "$rkn_circ" ]; then
@@ -1490,49 +1476,12 @@ generate_nfqws2_opt_from_strategies() {
             case "$_t2" in --lua-desync=circular:*) _sp_circ="$_t2"; break ;; esac
         done
     fi
-    # ГЕЙТ ПО ИЗМЕРЕННОЙ ЛИНИИ, А НЕ ПО ДОГАДКЕ.
-    #
-    # Механизм осмыслен только там, где блокировка по объёму соединения есть.
-    # Определять её по поведению чужого потока — источник ложных срабатываний:
-    # горизонт видимости движка меряется в ПАКЕТАХ, и здоровая крупная
-    # загрузка неотличима от обрыва (замер 30.08.2026: instagram отдал 404 КБ,
-    # видно 17 КБ). Поэтому линию мерит отдельная проба по курируемым мишеням
-    # (z2k-tcp16-probe.sh, метод замера накачкой объёма), а сюда приходит
-    # готовый ответ.
-    #
-    # Файла нет — значит не мерили, и механизм выключен. Это единственное
-    # умолчание, при котором человек без этого блока не получает ничего.
     local _sp_flag=""
     [ -r "${ZAPRET2_DIR:-/opt/zapret2}/state/tcp16.flag" ] &&
         _sp_flag=$(cat "${ZAPRET2_DIR:-/opt/zapret2}/state/tcp16.flag" 2>/dev/null)
     if [ "$Z2K_SNI_STALL" = "1" ] && [ "$_sp_flag" = "1" ] && [ -n "$_sp_circ" ] \
        && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-tcp16.lua" ]; then
-        local _sp_k _sp_n
-        _sp_k=$(printf '%s' "$_sp_circ" | sed -n 's/.*:\(key=[a-z_]*\).*/\1/p')
-        _sp_n=$(printf '%s' "$_sp_circ" | sed -n 's/.*:\(nld=[0-9]*\).*/\1/p')
-        # Подстановка имени — чистый рантайм карты «сеть → имя» из
-        # state/tcp16_sni.txt (её готовит проба): z2k_sni_pick подбирает blob
-        # z2k_ch по AS адресата, следующий fake его отправляет. Сторожа обрыва
-        # и поштучного перебора имён здесь больше нет — механизм в ротации не
-        # участвует (решение Марка 10.09.2026).
-        sni_pick="--lua-desync=z2k_sni_pick:payload=tls_client_hello:dir=out:blob=z2k_ch${_sp_k:+:$_sp_k}${_sp_n:+:$_sp_n}"
-        # ФУЛИНГ ФЕЙКА — ДВА, И ВТОРОЙ НЕ ЗАВИСИТ ОТ КЛИЕНТА.
-        #
-        # Фейк обязан умереть по дороге: он несёт ЧУЖОЕ имя, и если доедет до
-        # сервера — сломает рукопожатие тому самому человеку, которому мы
-        # помогаем. Одного tcp_ts мало: по мануалу движка он работает, только
-        # когда timestamp option в пакете УЖЕ есть, а в Windows она выключена
-        # по умолчанию. Замер 12.09.2026 (стенд с tcp_timestamps=0): только
-        # tcp_ts — до сервера доехал ФЕЙК; tcp_ts + tcp_md5 — доехало
-        # настоящее. Контроль на роутере владельца показал, что md5 ничего не
-        # портит там, где метки есть.
-        #
-        # md5 здесь уже стоял в p-84.8 и пропал при СПЛОШНОМ откате содержимого
-        # к p-84.7 (97527dc8) — откатывали весь релиз по жалобам, причину в
-        # md5 никто не искал, а в остальных 22 фейках арсенала он с тех пор
-        # живёт. Возвращён по ревью 25.10.2026; инвариант сторожит
-        # tests/test_tcp16_chain_wiring.sh.
-        sni_pick="$sni_pick --lua-desync=fake:payload=tls_client_hello:dir=out:blob=z2k_ch:optional:repeats=8:tcp_ts=-1000:tcp_md5"
+        sni_pick="--lua-desync=z2k_sni_fake:payload=tls_client_hello:dir=out:repeats=8:tcp_ts=-1000:tcp_md5"
     fi
 
     if [ -n "$rkn_circ" ]; then
@@ -1643,9 +1592,43 @@ generate_nfqws2_opt_from_strategies() {
         add_hostlist_line "${extra_strats_dir}/TCP_Discord.txt" "$discord_tcp_block"
     fi
 
+    # STUN/Discord can have a hostname learned by the engine's cache. Honor
+    # whitelist names before both voice and the broad UDP fallback. A separate
+    # no-action profile is essential: hostlist-exclude on a hostless handler
+    # would make that handler reject ALL flows whose hostname is unknown.
+    # Keep the file attached even when empty so live whitelist edits work.
+    nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=1-65535 --hostlist=${lists_dir}/whitelist.txt --new\\n"
+
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun
     # + hostkey=z2k_nohost_key for stable hostless rotation keying)
     [ "$category_voice" = 0 ] || nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
+
+    # Включённые профили референсных наборов (30.10.2026), один в один.
+    #
+    # UDP: WireGuard, STUN, Discord, MTProto и неизвестный UDP на портах
+    # 590-600, 1400, 3478-3481, 5349, 19294-19344, 49152-65535 — нулевой фейк x6
+    # и фейк QUIC x6, ротация fails=2/300 с. Стоит ПОСЛЕ голоса Discord: тот же
+    # STUN/Discord на голосовых портах забирает discord_udp, сюда идёт остальное.
+    # Широкий диапазон — ровно тот случай, о котором предупреждение ниже: P2P-STUN
+    # (WebRTC) на высоких портах получит фейки этого профиля, как у первоисточника.
+    # Тумблер Z2K_UDP_MISC=0 снимает профиль.
+    # Голосовые порты и протоколы (stun, discord) идут сюда только при
+    # включённой категории голоса Discord: человек её выключил — значит ни STUN,
+    # ни Discord мы не трогаем, остаются WireGuard, MTProto и неизвестный UDP.
+    local udp_misc_on udp_misc_ports udp_misc_l7 udp_misc_payload
+    udp_misc_on=$(safe_config_read Z2K_UDP_MISC "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
+    if [ "$category_voice" = 0 ]; then
+        udp_misc_ports="590-600,49152-65535"
+        udp_misc_l7="wireguard,mtproto,unknown"
+        udp_misc_payload="wireguard_initiation,wireguard_response,wireguard_cookie,mtproto_initial,unknown"
+    else
+        udp_misc_ports="590-600,1400,3478-3481,5349,19294-19344,49152-65535"
+        udp_misc_l7="wireguard,stun,discord,mtproto,unknown"
+        udp_misc_payload="wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown"
+    fi
+    if [ "$udp_misc_on" != 0 ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=$udp_misc_ports --filter-l7=$udp_misc_l7 --out-range=<n2 --payload=$udp_misc_payload --lua-desync=circular:fails=2:time=300:retrans=3:nld=2 --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2 --new\\n"
+    fi
 
     # Здесь стоял webrtc_bypass — пустой профиль udp/1024-65535 × l7=stun,
     # который ничего не десинкал и служил щитом: он ловил P2P-STUN (WebRTC в
@@ -2208,7 +2191,8 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,5222,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-NFQWS2_PORTS_UDP="443,50000-50100,1400,3478-3481,5349,19294-19344"
+# 590-600, 49152-65535 — UDP-профиль WireGuard/неизвестного UDP.
+NFQWS2_PORTS_UDP="443,50000-50100,1400,3478-3481,5349,19294-19344,590-600,49152-65535"
 
 # Discord voice/STUN: KEEPALIVE DISABLED (empty) — по канону bol-van.
 # Раньше (2026-06-11) на discord-портах connbytes-лимит снимался (keepalive),

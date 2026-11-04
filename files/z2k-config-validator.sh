@@ -492,11 +492,11 @@ check_blob_references() {
 # конфигурацию ошибочной: человек с корректной стратегией получал предупреждение
 # о «неизвестном действии» и шёл искать несуществующую опечатку.
 KNOWN_LUA_DESYNC_ACTIONS="fake send drop circular \
-fakedsplit fakeddisorder multisplit multidisorder \
+fakedsplit fakeddisorder multisplit multidisorder multidisorder_legacy \
 hostfakesplit http_methodeol syndata pktmod udplen \
 rst rstack synack \
 z2k_quic_morph_v2 z2k_timing_morph z2k_ipfrag3 z2k_ipfrag3_tiny \
-tls_client_hello_clone z2k_sni_pick"
+tls_client_hello_clone z2k_sni_pick z2k_sni_fake"
 
 is_known_action() {
     _action="$1"

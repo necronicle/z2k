@@ -308,8 +308,11 @@ reconcile_config() {
             command -v create_official_config >/dev/null 2>&1 || exit 1
             create_official_config "$_tmpcfg" >/dev/null 2>&1
         ); then
+        # Различаем поколения: старый селектор отключён в Lua, поэтому
+        # наличие любой строки механизма не означает, что конфиг актуален.
         _have=0; grep -q -- "--lua-desync=z2k_sni_pick" "$CONFIG" 2>/dev/null && _have=1
-        _new=0; grep -q -- "--lua-desync=z2k_sni_pick" "$_tmpcfg" 2>/dev/null && _new=1
+        grep -q -- "--lua-desync=z2k_sni_fake" "$CONFIG" 2>/dev/null && _have=2
+        _new=0; grep -q -- "--lua-desync=z2k_sni_fake" "$_tmpcfg" 2>/dev/null && _new=2
         if [ "$_have" = "$_new" ]; then
             echo "механизм в конфиге: $_have — пересборка не нужна"
         elif [ -r "$ZAPRET2_DIR/z2k-config-validator.sh" ] \

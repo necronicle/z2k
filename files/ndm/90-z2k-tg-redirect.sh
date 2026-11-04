@@ -40,6 +40,8 @@ LIB="/opt/zapret2/z2k-tg-redirect.sh"
 
 z2k_tg_remove_legacy_rules   # migrate off pre-ipset per-CIDR rules (cheap no-op after first run)
 z2k_tg_ensure_rules          # ipset + 2 REDIRECT rules, -w-locked, verify-retry
-z2k_tg_flush_conntrack       # smartphones pick up the restored path immediately
+# Keep established NAT mappings, including live Telegram streams. NDM calls
+# this hook even when the redirect rules are already present; flushing all
+# Telegram conntrack entries here turns unrelated network events into outages.
 
 exit 0

@@ -356,6 +356,9 @@ func cmdRun(args []string) int {
 	options := domainroute.Options{
 		DomainPath: "/tmp/z2k-warp/domains.v1", SnapshotPath: "/tmp/z2k-warp/domain-pairs.v1",
 		StatusPath: "/tmp/z2k-warp/domain-status.json", PairSet: domainroute.PairSet{},
+		// Исключения из lists/warp/exclude.txt; файл пишет z2k-warp.sh warp_excl_load.
+		ExcludePath: "/tmp/z2k-warp/domains-excl.v1", ExcludeSnapshotPath: "/tmp/z2k-warp/domain-excl-pairs.v1",
+		ExclSet: domainroute.ExclSet{},
 	}
 	if err := runEngineAndObserver(ctx, func(c context.Context) error { return engine.Run(c, cfg) }, func(c context.Context) error { return observer.Run(c, options) }); err != nil {
 		// Другой экземпляр уже держит туннель — это нормальный исход гонки

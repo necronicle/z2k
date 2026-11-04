@@ -83,6 +83,7 @@ with tempfile.TemporaryDirectory() as tmp:
              ZAPRET2_DIR=str(sb), CONFIG_FILE=str(sb/'config'), WARP_LISTS_DIR=str(sb/'lists'),
              WARP_FILTER=str(ROOT/'files/z2k-warp-list-filter.awk'), WARP_DEVICE=str(sb/'device.json'),
              DEVICE_JSON=str(sb/'device.json'), WARP_DOMAINS=str(sb/'domains.v1'),
+             WARP_DOMAINS_EXCL=str(sb/'domains-excl.v1'),
              WARP_STATUS=str(sb/'status.json'), SYS_CLASS_NET=str(sb/'sys'),
              WARP_NDMC='/nonexistent', WARP_AWGM_DIR=str(sb/'awg-manager'), Z2K_WARP_SOURCE_ONLY='1')
     def run(command):
@@ -286,5 +287,38 @@ with tempfile.TemporaryDirectory() as tmp:
         passed+=1; print('[PASS] source swap failure reported')
     check('failed source swap cannot retain deselected client',False)
     check('failed upgrade source swap removes legacy bypass',False,'192.168.1.11','8.8.4.4')
+    # ИСКЛЮЧЕНИЯ: lists/warp/exclude.txt — «никогда через WARP» в любом режиме.
+    # Адреса и подсети идут в z2k_warp_excl, домены — наблюдателю warpd, который
+    # кладёт их адреса в общий z2k_warp_xdns (здесь его результат подставлен).
+    def observed_exclusion(*ips):
+        data=json.loads(state.read_text()); data['sets']['z2k_warp_xdns']=list(ips); state.write_text(json.dumps(data))
+    def no_lists(devices):
+        # Пустой включённый список — режим списков, поэтому sites.txt убираем совсем.
+        config(devices,False,False); (sb/'lists/sites.txt').unlink(); run('warp_ipset_all')
+    (sb/'lists/exclude.txt').write_text('9.9.9.0/24\ngosuslugi.ru\n')
+    no_lists('')
+    observed_exclusion('5.5.5.5')
+    check('exclude list alone keeps whole-network mode',True,dst='1.1.1.1')
+    check('whole network: excluded subnet goes direct',False,dst='9.9.9.9')
+    check('whole network: excluded domain address goes direct',False,dst='5.5.5.5')
+    check('whole network: LAN client of another segment still excluded',False,'192.168.1.11','9.9.9.9')
+    excl_domains=(sb/'domains-excl.v1').read_text().split()
+    if excl_domains==['v1','gosuslugi.ru']: passed+=1; print('[PASS] excluded domains handed to observer')
+    else: failures.append('excluded domains handed to observer'); print('[FAIL] excluded domains handed to observer',excl_domains)
+    incl_domains=(sb/'domains.v1').read_text().split()
+    if 'gosuslugi.ru' not in incl_domains: passed+=1; print('[PASS] exclude list is not a routing list')
+    else: failures.append('exclude list is not a routing list'); print('[FAIL] exclude list is not a routing list',incl_domains)
+    no_lists('192.168.1.10\n')
+    observed_exclusion('5.5.5.5')
+    check('selected device: unexcluded traffic via WARP',True,dst='1.1.1.1')
+    check('selected device: excluded subnet goes direct',False,dst='9.9.9.9')
+    check('selected device: excluded domain address goes direct',False,dst='5.5.5.5')
+    (sb/'lists/exclude.txt').write_text('8.8.4.4\n')
+    config()
+    check('lists mode: listed but excluded address goes direct',False,dst='8.8.4.4')
+    check('lists mode: listed domain address still via WARP',True)
+    (sb/'lists/exclude.txt').unlink()
+    no_lists('')
+    check('exclusions removed: subnet back in WARP',True,dst='9.9.9.9')
     print('\nPASSED:',passed,'\nFAILED:',len(failures))
     sys.exit(bool(failures))

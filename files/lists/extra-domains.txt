@@ -48,6 +48,11 @@ cloudflare.net
 cloudflare.tv
 cloudflarestatus.com
 cloudflarepartners.com
+# Cloudflare Zero Trust: DoH-сервер шлюза (<id>.cloudflare-gateway.com) — у
+# тех, кто ставит его DNS-прокси роутера. Провайдер рвёт его ClientHello, и без
+# обработки z2k у роутера пропадает DNS целиком (30.10.2026 на роутере
+# владельца: DoH rc=28 на каждый запрос, все имена в тайм-аут).
+cloudflare-gateway.com
 # SoundCloud: сайт и sndcdn.com есть в списке РКН, а музыка идёт с нового домена
 # soundcloud.cloud (playback.media-streaming — список и куски трека, assets.web —
 # ресурсы плеера), которого там нет. Без обработки поток вставал ровно на 16 КБ,

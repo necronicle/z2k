@@ -235,7 +235,7 @@ panel_auth_gate
 # Крупные загрузки (списки, своя стратегия) идут через read_body_raw и свои
 # собственные потолки в мегабайтах — их это ограничение не касается.
 case "$PATH_INFO" in
-    /warp/list/save|/warp/devices/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate|/state/bulk|/whitelist/save|/extra-domains/save) ;;
+    /warp/list/save|/warp/devices/save|/warp/exclude/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate|/state/bulk|/whitelist/save|/extra-domains/save) ;;
     *)
         if [ "${CONTENT_LENGTH:-0}" -gt "$Z2K_MAX_BODY" ] 2>/dev/null; then
             json_fail "413 Payload Too Large" "запрос слишком большой"
@@ -507,15 +507,28 @@ case "$method $path" in
         ;;
 
     "POST /whitelist/save"|"POST /extra-domains/save")
-        case "$path" in /extra-domains/save) wl_save=extra_domains_save ;; *) wl_save=whitelist_save ;; esac
+        wl_save=whitelist_save
+        if [ "$path" = /extra-domains/save ]; then
+            # Whole-list saves must also work with older panels that omit mode.
+            # Single-add is strict; undo restores valid previous user contents.
+            case "$(form_value "${QUERY_STRING:-}" mode)" in
+                ''|import) wl_save=extra_domains_import ;;
+                add) wl_save=extra_domains_save ;;
+                restore) wl_save=extra_domains_restore ;;
+                *) json_fail "400 Bad Request" "неизвестный режим сохранения" ;;
+            esac
+        fi
         [ "${CONTENT_LENGTH:-0}" -le 1048576 ] 2>/dev/null || json_fail "413 Payload Too Large" "список больше 1 МБ"
         wl_rev=$(form_value "${QUERY_STRING:-}" revision)
         wl_errfile=$(mktemp) || json_fail "500 Internal Server Error" "не удалось создать временный файл"
         if wl_result=$(read_body_raw | "$wl_save" "$wl_rev" 2>"$wl_errfile"); then
+            wl_notice=$(cat "$wl_errfile")
             rm -f "$wl_errfile"
             json_header
             printf '{"ok":true,"revision":'
             json_string "$wl_result"
+            printf ',"notice":'
+            json_string "$wl_notice"
             printf '}\n'
             exit 0
         else
@@ -819,6 +832,39 @@ case "$method $path" in
         exit 0
         ;;
 
+    # Исключения WARP: адреса, подсети и домены, которые никогда не идут в
+    # туннель. text/plain, как /warp/list; ответ сохранения — как у /warp/list/save.
+    "GET /warp/exclude")
+        printf 'Content-Type: text/plain; charset=utf-8\r\n'
+        printf 'Cache-Control: no-store\r\n\r\n'
+        warp_exclude_read
+        exit 0
+        ;;
+    "POST /warp/exclude/save")
+        if [ "${CONTENT_LENGTH:-0}" -gt 2097152 ] 2>/dev/null; then
+            json_fail "413 Payload Too Large" "list too large (max 2 MB)"
+        fi
+        _err_f="/tmp/z2k-wexcl-err.$$"
+        result=$(read_body_raw | warp_exclude_save 2>"$_err_f") || {
+            _err=$(cat "$_err_f" 2>/dev/null); rm -f "$_err_f"
+            json_fail "400 Bad Request" "${_err:-save failed}"
+        }
+        rm -f "$_err_f"
+        w_saved=0; w_saved_ip=0; w_saved_domain=0; w_inv=0
+        for _tok in $result; do
+            case "$_tok" in
+                saved=*)           w_saved=${_tok#saved=} ;;
+                saved_ip=*)        w_saved_ip=${_tok#saved_ip=} ;;
+                saved_domain=*)    w_saved_domain=${_tok#saved_domain=} ;;
+                skipped_invalid=*) w_inv=${_tok#skipped_invalid=} ;;
+            esac
+        done
+        json_header
+        printf '{"ok":true,"saved":%d,"saved_ip":%d,"saved_domain":%d,"skipped_invalid":%d}\n' \
+            "${w_saved:-0}" "${w_saved_ip:-0}" "${w_saved_domain:-0}" "${w_inv:-0}"
+        exit 0
+        ;;
+
     # Upstream per-game lists: name, entry count, and whether they are switched
     # on. Read-only by design — editing them is meaningless, the next refresh
     # overwrites the file.
@@ -826,35 +872,6 @@ case "$method $path" in
     # разбирает его страница. Здесь ничего не интерпретируем намеренно: набор
     # полей у замера свой и меняется вместе с инструментом, а лишний слой
     # перевода только разъезжался бы с ним.
-    "GET /strategy/unique-set")
-        json_header
-        printf '{"ok":true,"result":'
-        if [ -s "${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}" ]; then
-            cat "${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}"
-        else
-            printf 'null\n'
-        fi
-        printf '}\n'
-        exit 0
-        ;;
-
-    "POST /strategy/unique-set")
-        STRATEGY_UNIQUE_LOCK_DIR="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}"
-        STRATEGY_UNIQUE_RESULT_FILE="${STRATEGY_UNIQUE_RESULT_FILE:-/tmp/z2k-unique-set-result.json}"
-        export STRATEGY_UNIQUE_LOCK_DIR STRATEGY_UNIQUE_RESULT_FILE
-        strategy_unique_set_lock_acquire || json_fail "409 Conflict" "уникальный набор уже измеряется"
-        export STRATEGY_UNIQUE_LOCK_TOKEN
-        rm -f "$STRATEGY_UNIQUE_RESULT_FILE"
-        job_id=$(svc_action_async "Создание уникального набора стратегий" "strategy_unique_set_worker")
-        if [ -z "$job_id" ]; then
-            strategy_unique_set_lock_release
-            json_fail "500 Internal Server Error" "не удалось запустить измерение"
-        fi
-        json_header
-        printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'
-        exit 0
-        ;;
-
     "GET /strategy/pick")
         json_header
         _pick=$(strategy_pick_last)
@@ -996,23 +1013,6 @@ case "$method $path" in
             json_fail "400 Bad Request" "${s_err:-reset failed}"
         json_header
         printf '{"ok":true,"pool":'; json_string "$s_name"
-        printf '}\n'
-        exit 0
-        ;;
-
-    "POST /strategy/pools/reset-all")
-        # Share the unique-set lock so a run cannot finish after this reset and
-        # write newly measured custom pools back over the requested automation.
-        STRATEGY_UNIQUE_LOCK_DIR="${STRATEGY_UNIQUE_LOCK_DIR:-/tmp/z2k-unique-set.lock}"
-        export STRATEGY_UNIQUE_LOCK_DIR
-        strategy_unique_set_lock_acquire || json_fail "409 Conflict" "сначала дождитесь завершения уникального набора"
-        export STRATEGY_UNIQUE_LOCK_TOKEN
-        s_reset_msg=$(strategy_pool_reset_all 2>&1)
-        s_reset_rc=$?
-        strategy_unique_set_lock_release
-        [ "$s_reset_rc" = 0 ] || json_fail "500 Internal Server Error" "${s_reset_msg:-не удалось вернуть автоматику}"
-        json_header
-        printf '{"ok":true,"message":'; json_string "${s_reset_msg:-Все категории уже работают на автоматике.}"
         printf '}\n'
         exit 0
         ;;

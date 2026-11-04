@@ -2421,31 +2421,15 @@ TMPJUNK
     done
 
     # extra-domains.txt: preserve user-added lines across reinstall.
-    # Юзеры пишут свои домены через `echo >> extra-domains.txt`. Cтарый
-    # /opt/zapret2 уже снесён выше (rm -rf "$ZAPRET2_DIR"), поэтому
-    # diff'имся не против установленного файла, а против бекапа в
-    # $backup_tmp/extra-domains.txt — он сделан до rm. Без этого fallback
-    # на $installed логика просто не находила ничего пользовательского
-    # (файл равен shipped) и тихо теряла домены.
-    if [ -f "${WORK_DIR}/files/lists/extra-domains.txt" ]; then
-        local shipped="${WORK_DIR}/files/lists/extra-domains.txt"
-        local installed="${ZAPRET2_DIR}/lists/extra-domains.txt"
-        local user_extras=""
-        if [ -f "$backup_tmp/extra-domains.txt" ]; then
-            # Строки которые есть в backup'е, но НЕТ в shipped — пользовательские.
-            user_extras=$(grep -vxFf "$shipped" "$backup_tmp/extra-domains.txt" 2>/dev/null \
-                | grep -vE '^#|^$' \
-                | grep -vE '^# === user-added')
-        fi
-        cp -f "$shipped" "$installed" 2>/dev/null || true
-        if [ -n "$user_extras" ]; then
-            {
-                echo ""
-                echo "# === user-added (preserved across reinstall) ==="
-                printf '%s\n' "$user_extras"
-            } >> "$installed"
-            print_info "Сохранены пользовательские записи в extra-domains.txt ($(printf '%s\n' "$user_extras" | wc -l | tr -d ' ') строк)"
-        fi
+    # The backup is user-owned, including comments and an explicitly empty
+    # list. Restore it even when the updater uses an empty WORK_DIR.
+    if [ -f "$backup_tmp/extra-domains.txt" ]; then
+        cp -f "$backup_tmp/extra-domains.txt" "${ZAPRET2_DIR}/lists/extra-domains.txt" &&
+            chmod 644 "${ZAPRET2_DIR}/lists/extra-domains.txt" ||
+            die "Не удалось восстановить пользовательские дополнительные домены."
+    else
+        deploy_critical_file "files/lists/extra-domains.txt" "${ZAPRET2_DIR}/lists/extra-domains.txt" 644 ||
+            die "Не удалось установить список дополнительных доменов."
     fi
 
     # WARP-списки (lists/warp/) — восстановление user-owned каталога из бэкапа.
@@ -4090,7 +4074,7 @@ step_finalize() {
         LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
     fi
     rm -f "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" \
-          "${ZAPRET2_DIR}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null || true
+          "${ZAPRET2_DIR}/lists/"*_discord_voice_hosts.txt 2>/dev/null || true
     # Снимок onetrust снят 23.10.2026 (выгорел, заменён на sferum, у нас он
     # ни одним плечом больше не упоминается). Файл на роутере
     # безвреден, но и возить мёртвый груз незачем.
@@ -5516,7 +5500,7 @@ uninstall_zapret2() {
         LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
     fi
 
-    rm -f "${ZAPRET2_DIR:-/opt/zapret2}/lists/flowseal_discord_voice_hosts.txt" 2>/dev/null || true
+    rm -f "${ZAPRET2_DIR:-/opt/zapret2}/lists/"*_discord_voice_hosts.txt 2>/dev/null || true
     rm -f /opt/etc/init.d/S96z2k-rt-proxy \
           /opt/etc/ndm/netfilter.d/92-z2k-rt-proxy-redirect.sh \
           /opt/sbin/z2k-rt-proxy \
