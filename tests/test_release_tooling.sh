@@ -258,6 +258,20 @@ git tag -d p-9999.2 >/dev/null 2>&1 || true
 git reset -q --hard "$_p4_before" 2>/dev/null || true
 git push -q -f origin "HEAD:refs/heads/z2k-enhanced" 2>/dev/null || true
 
+# A sibling rt-proxy binary in the shared builds directory must not require
+# the Telegram build secret or force a Telegram version-only rebuild.
+_rt_before=$(git rev-parse HEAD)
+printf 'rt-fixture\n' >> mtproxy-client/builds/z2k-rt-proxy-linux-amd64
+git add mtproxy-client/builds/z2k-rt-proxy-linux-amd64
+git commit -q -m "test: rt-proxy artifact only"
+out=$(env -u Z2K_TUNNEL_SECRET sh scripts/release.sh p-9999.21 patch "test: rt-proxy only" 2>&1); rc=$?
+case "$out" in
+    *"Z2K_TUNNEL_SECRET"*) no "rt-proxy-only release does not require Telegram secret" "independent artifact" "Telegram gate" ;;
+    *) ok "rt-proxy-only release does not require Telegram secret" ;;
+esac
+git tag -d p-9999.21 >/dev/null 2>&1 || true
+git reset -q --hard "$_rt_before"
+
 # --- property 5: mtproxy-client без Z2K_TUNNEL_SECRET не пересобрать и не свериться
 #
 # builds/mtproxy-client/* нельзя пересобрать байт-в-байт без настоящего

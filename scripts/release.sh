@@ -281,8 +281,12 @@ fi
 # требовал секрет туннеля там, где пересобирать нечего, и это не мелкое
 # неудобство: единственный способ пройти — задать боевой секрет ради
 # пересборки, которая заведомо ничего не изменит.
+# builds/ is shared by several independent modules. Only the Telegram client
+# artifacts use its injected secret/version; rt-proxy and other siblings are
+# verified by their own reproducibility checks. Keep all source and matrix edits.
 _mtproxy_changed=$(git diff --name-only "$PREV_REF"..HEAD \
     | grep -E '^mtproxy-client/|^build-matrix\.tsv$' \
+    | awk '$0 !~ /^mtproxy-client\/builds\// || $0 ~ /^mtproxy-client\/builds\/tg-mtproxy-client-/' \
     | grep -vE '_test\.go$' || true)
 if [ -n "$_mtproxy_changed" ]; then
     [ -n "${Z2K_TUNNEL_SECRET:-}" ] || die "mtproxy-client ($(printf '%s' "$_mtproxy_changed" | tr '\n' ' ')) изменился, но Z2K_TUNNEL_SECRET не задан —
