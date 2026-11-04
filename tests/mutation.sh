@@ -140,8 +140,8 @@ go_mutant "demote() made a no-op" \
 
 # A pool that hands out the same node defeats the whole retry design.
 go_mutant "pick() pinned to the first node" \
-    'return p.live[p.rr%uint64(len(p.live))]' \
-    'return p.live[0]'
+    'ip := p.live[p.rr%uint64(len(p.live))]' \
+    'ip := p.live[0]'
 
 # The probe must pull real body bytes; dropping that is how stalling nodes got back in.
 go_mutant "probe body-byte requirement removed" \

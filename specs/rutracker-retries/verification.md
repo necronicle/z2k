@@ -38,3 +38,18 @@ The shell suite uses a temporary locally generated and signed integrity manifest
 ## Limits and remaining work
 
 This verifies the reproduced retry/health/deadline defects, not every possible reason for intermittent RuTracker access. ECH hidden-host routing through the shared sentinel remains outside scope, as does the availability of third-party proxy nodes. Publication and live rollout require a separate release task; shipped release metadata intentionally stays at the published baseline.
+
+
+## Release candidate follow-up (2026-11-04)
+
+Candidate p-87.14 was rejected by CI run 41889004576: the mutation harness
+still matched the old pick() return statement after selection moved into
+pickUntried(). Updated the anchor without weakening the injected defect.
+The focused Go 1.25.13 check with selection pinned to the first node fails
+TestPoolPick_RoundRobinsOverAllLiveNodes with map[a:30], as intended;
+the original code passes the same check.
+
+The candidate manifest was reverted in a4e11016 before preparing p-87.15.
+GitHub tag protection rejected deletion of p-87.14 (GH013); the rejected
+candidate tag remains and must not be treated as a published release or
+reused. The published channel remained p-87.13. No protection was bypassed.
