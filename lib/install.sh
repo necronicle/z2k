@@ -2123,6 +2123,8 @@ TMPJUNK
 
     print_info "Копирование дополнительных файлов..."
 
+    deploy_critical_file "common/ipt.sh" "${ZAPRET2_DIR}/common/ipt.sh" 644 || return 1
+
     # Скопировать strats_new2.txt если есть в z2k репозитории
     if [ -f "${WORK_DIR}/strats_new2.txt" ]; then
         cp -f "${WORK_DIR}/strats_new2.txt" "${ZAPRET2_DIR}/" || \

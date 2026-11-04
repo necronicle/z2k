@@ -25,6 +25,9 @@ z2k_install_paths() {
             # туда данными в манифесте, а не кодом. Мёртвый файл в /opt/zapret2/lib
             # стоил бы одной лишней загадки при следующем разборе.
             : ;;
+        common/ipt.sh)
+            echo "${zd}/common/ipt.sh"
+            ;;
         files/lua/*)
             echo "${zd}/lua/${repo_path#files/lua/}"
             ;;
