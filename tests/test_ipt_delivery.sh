@@ -17,11 +17,29 @@ eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$2" "$3"; fi; }
 eq 'patch map targets the live common/ipt.sh' '/opt/zapret2/common/ipt.sh' "$(ZAPRET2_DIR=/opt/zapret2 z2k_install_paths common/ipt.sh)"
 eq 'shell override needs no automatic service restart' '' "$(z2k_steps_for common/ipt.sh)"
 
+# The override replaces the whole fork file, so any later fork change outside
+# the transaction helpers would be silently reverted on routers. Outside the
+# helper block both files must match; once the fork carries the same helpers
+# (it has _ipt_locked), the whole file must match. CI checks out z2k-master.
+outside_helpers() {
+    awk '/^# z2k: an existence check/ || /^ipt\(\)$/ { skip=1 }
+         /^is_ipt_flow_offload_avail\(\)$/ { skip=0 }
+         !skip' "$1"
+}
 if [ -f "$FORK/common/ipt.sh" ]; then
-    if cmp -s "$ROOT/common/ipt.sh" "$FORK/common/ipt.sh"; then same=yes; else same=no; fi
-    eq 'shipped and fork helper files are byte-identical' yes "$same"
+    outside_helpers "$ROOT/common/ipt.sh" > "$TMP/ours"
+    outside_helpers "$FORK/common/ipt.sh" > "$TMP/fork"
+    if cmp -s "$TMP/ours" "$TMP/fork"; then same=yes; else same=no; fi
+    eq 'override matches the fork outside the transaction helpers' yes "$same"
+    lines=$(wc -l < "$TMP/ours" | tr -d ' ')
+    [ "$lines" -gt 300 ] && ok "helper-block cut keeps the rest of the file ($lines lines)" || \
+        no 'helper-block cut keeps the rest of the file' '>300' "$lines"
+    if grep -q '^_ipt_locked()' "$FORK/common/ipt.sh"; then
+        if cmp -s "$ROOT/common/ipt.sh" "$FORK/common/ipt.sh"; then same=yes; else same=no; fi
+        eq 'fork with the fix and override are byte-identical' yes "$same"
+    fi
 else
-    SKIP=$((SKIP + 1)); printf '[SKIP] fork byte comparison (set Z2K_FORK_DIR)\n'
+    SKIP=$((SKIP + 1)); printf '[SKIP] fork comparison (set Z2K_FORK_DIR)\n'
 fi
 
 # Exercise the real installer deployment helper with no network fallback.

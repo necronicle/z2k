@@ -42,7 +42,7 @@ BAD=""
 # Наборы сюда ВХОДЯТ наравне с боевым кодом: тест, зовущий od -An, на роутере
 # не падает — он молча получает пустую строку и краснеет, ничего не проверив
 # (так было в test_webpanel_actions_fixes).
-for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" -name '*.sh' 2>/dev/null) \
+for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" "$ROOT/common" -name '*.sh' 2>/dev/null) \
          "$ROOT/z2k.sh" "$ROOT/z2k_cleanup.sh" "$ROOT/files/S99zapret2.new"; do
     [ -f "$f" ] || continue
     case "$f" in *test_router_shell_portability.sh) continue ;; esac
@@ -124,7 +124,7 @@ BADCMD=""
 # Наборы входят наравне с боевым кодом: отсутствующая команда в тесте не
 # падает громко — она отдаёт пустоту, и проверка молча становится
 # декоративной (так `comm -23` делал сторож ключей конфига).
-for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" -name '*.sh' 2>/dev/null) \
+for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" "$ROOT/common" -name '*.sh' 2>/dev/null) \
          $(find "$ROOT/files/init.d" "$ROOT/files/ndm" -type f 2>/dev/null) \
          "$ROOT/z2k.sh" "$ROOT/z2k_cleanup.sh" "$ROOT/files/S99zapret2.new"; do
     [ -f "$f" ] || continue
@@ -133,6 +133,9 @@ for f in $(find "$ROOT/lib" "$ROOT/files" "$ROOT/webpanel" "$ROOT/tests" -name '
         # The redirector refresher provisions the Entware flock package and
         # checks command availability before use; it is not a BusyBox applet.
         case "$f:$c" in */files/z2k-redirector-ip-refresh.sh:flock) continue ;; esac
+        # common/ipt.sh runs flock only after `command -v flock` and otherwise
+        # applies rules unserialised; its suite brings its own flock double.
+        case "$f:$c" in */common/ipt.sh:flock|*/tests/test_ipt_transactions.sh:flock) continue ;; esac
         # Вызов команды: начало строки, пайп, ;, &&, ( или $( — и сразу имя.
         # Так `--connect-timeout` и `$timeout` под запрет не попадают.
         hits=$(grep -nE "(^|[|;&(]|\\\$\()[[:space:]]*${c}[[:space:]]" "$f" 2>/dev/null \

@@ -20,9 +20,11 @@
 
 ## Phase 4 — Verification and review gate
 
-- [ ] T007 Run focused and full suites, syntax/lint, applicable mutation tests, and local delivery rehearsal; preserve exact logs.
-- [ ] T008 Obtain independent whole-change review; fix any Critical/Important findings with TDD and rerun the suite.
-- [ ] T009 Save `IMPLEMENTATION-REPORT.md` with findings, commits, evidence, release mapping, and limitations. Do not push/tag/publish; await Codex follow-up.
+- [x] T007 Independent review found two blocking defects in the mkdir/PID lock (reclamation race, `set -e` leak).
+- [x] T008 Replace the lock with a kernel `flock` (fork c87d46c); extend the suite (process death, dead-holder contenders, `set -e`, descriptor 8, no-`flock`, BusyBox poll); RED against original and e8257f3, GREEN on macOS sh/bash/dash, Ubuntu dash + util-linux flock, Alpine BusyBox ash + BusyBox flock.
+- [x] T009 Delivery: compare the override with the published r0 archive; fork comparison safe for CI's `z2k-master` checkout; portability lint covers `common/`.
+- [x] T010 Run focused and full suites, lint, old-updater rehearsal and fresh-install deployment against a temporary candidate signed with a throwaway key; preserve logs.
+- [x] T011 Save `IMPLEMENTATION-REPORT.md`. Do not push/tag/publish; await independent review.
 
 ## Dependencies
 

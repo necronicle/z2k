@@ -3,82 +3,121 @@ IPSET_EXCLUDE="-m set ! --match-set nozapret"
 IPSET_EXCLUDE6="-m set ! --match-set nozapret6"
 IPSET_PORTS_NAME=zport
 
-_ipt_lock()
+# z2k: an existence check followed by an insert/append/delete is two iptables
+# runs. -w only queues each run behind the xtables lock; without it a busy lock
+# makes -C fail with status 4, which the old "-C || -I" read as "absent" and
+# answered with a duplicate. Only status 1 means absent now; any other check
+# failure is returned without mutating.
+#
+# A second, z2k-only kernel flock makes the check+mutation pair atomic between
+# z2k processes (service commands, NDM hook, self-heal). The kernel drops it
+# when the descriptor closes, including on SIGTERM/SIGKILL, so there is no
+# owner bookkeeping and nothing to reclaim. It is never the xtables lock file:
+# the iptables -w runs inside the pair take that one. The lock file is never
+# unlinked so all waiters share one inode. Descriptor 8 is opened only around
+# one transaction by a compound redirection, which saves and restores any
+# descriptor 8 the caller already had.
+#
+# flock is an Entware package declared by the installer; installs that predate
+# it run the pair unserialised (still with -w and strict statuses) rather than
+# losing firewall rules.
+_ipt_flock_wait()
 {
-	local lock="${Z2K_IPT_LOCK:-/tmp/zapret2-iptables.lock}" owner waited=0
-	while ! mkdir "$lock" 2>/dev/null; do
-		owner="$(cat "$lock/pid" 2>/dev/null)"
-		case "$owner" in
-			''|*[!0-9]*) ;;
-			*)
-				if ! kill -0 "$owner" 2>/dev/null; then
-					rm -f "$lock/pid" 2>/dev/null && rmdir "$lock" 2>/dev/null
-					continue
-				fi
-				;;
-		esac
-		[ "$waited" -lt "${Z2K_IPT_LOCK_TIMEOUT:-30}" ] || return 1
+	local waited=0 timeout="${Z2K_IPT_LOCK_TIMEOUT:-30}"
+	flock -n 8 2>/dev/null && return 0
+	[ -n "$_Z2K_IPT_FLOCK_W" ] || {
+		# util-linux flock bounds the wait itself; BusyBox flock has no -w
+		if flock --help 2>&1 | grep -q -- '--timeout'; then
+			_Z2K_IPT_FLOCK_W=1
+		else
+			_Z2K_IPT_FLOCK_W=0
+		fi
+	}
+	[ "$_Z2K_IPT_FLOCK_W" = 1 ] && {
+		flock -w "$timeout" 8 2>/dev/null
+		return
+	}
+	while [ "$waited" -lt "$timeout" ]; do
 		sleep 1
+		flock -n 8 2>/dev/null && return 0
 		waited=$((waited + 1))
 	done
-	echo $$ > "$lock/pid" 2>/dev/null || {
-		rmdir "$lock" 2>/dev/null
-		return 1
-	}
+	return 1
 }
-_ipt_unlock()
+_ipt_locked()
 {
-	local lock="${Z2K_IPT_LOCK:-/tmp/zapret2-iptables.lock}"
-	rm -f "$lock/pid" 2>/dev/null
-	rmdir "$lock" 2>/dev/null
+	# $@ - transaction function and its arguments
+	local _ipt_tx_rc=
+	if command -v flock >/dev/null 2>&1; then
+		{
+			if _ipt_flock_wait; then
+				if "$@"; then _ipt_tx_rc=0; else _ipt_tx_rc=$?; fi
+			else
+				# a live z2k transaction still holds the lock: fail closed
+				_ipt_tx_rc=4
+			fi
+		} 8>>"${Z2K_IPT_LOCK:-/tmp/zapret2-ipt.flock}" || :
+	fi
+	# no flock, or the lock file could not be opened
+	[ -n "$_ipt_tx_rc" ] || if "$@"; then _ipt_tx_rc=0; else _ipt_tx_rc=$?; fi
+	return "$_ipt_tx_rc"
+}
+_ipt_cmd()
+{
+	# $1 - 4|6, $2 - iptables operation, $3.. - rule
+	local fam="$1" op="$2"
+	shift 2
+	if [ "$fam" = 6 ]; then
+		ip6tables -w "$op" "$@"
+	else
+		iptables $FW_EXTRA_PRE -w "$op" "$@" $FW_EXTRA_POST
+	fi
+}
+_ipt_add()
+{
+	# $1 - 4|6, $2 - -I|-A, $3.. - rule
+	local fam="$1" op="$2" rc
+	shift 2
+	if _ipt_cmd "$fam" -C "$@" >/dev/null 2>/dev/null; then
+		return 0
+	else
+		rc=$?
+	fi
+	[ "$rc" = 1 ] || return "$rc"
+	_ipt_cmd "$fam" "$op" "$@"
+}
+_ipt_del()
+{
+	# $1 - 4|6, $2.. - rule. Removes every exact copy; 1 if there was none.
+	local fam="$1" rc deleted=0
+	shift
+	while :; do
+		if _ipt_cmd "$fam" -C "$@" >/dev/null 2>/dev/null; then
+			:
+		else
+			rc=$?
+			[ "$rc" = 1 ] && [ "$deleted" = 1 ] && return 0
+			return "$rc"
+		fi
+		if _ipt_cmd "$fam" -D "$@"; then
+			deleted=1
+		else
+			return $?
+		fi
+	done
 }
 
 ipt()
 {
-	local rc
-	_ipt_lock || return 1
-	iptables $FW_EXTRA_PRE -w -C "$@" $FW_EXTRA_POST >/dev/null 2>/dev/null
-	rc=$?
-	case "$rc" in
-		0) ;;
-		1) iptables $FW_EXTRA_PRE -w -I "$@" $FW_EXTRA_POST; rc=$? ;;
-	esac
-	_ipt_unlock
-	return "$rc"
+	_ipt_locked _ipt_add 4 -I "$@"
 }
 ipta()
 {
-	local rc
-	_ipt_lock || return 1
-	iptables $FW_EXTRA_PRE -w -C "$@" $FW_EXTRA_POST >/dev/null 2>/dev/null
-	rc=$?
-	case "$rc" in
-		0) ;;
-		1) iptables $FW_EXTRA_PRE -w -A "$@" $FW_EXTRA_POST; rc=$? ;;
-	esac
-	_ipt_unlock
-	return "$rc"
+	_ipt_locked _ipt_add 4 -A "$@"
 }
 ipt_del()
 {
-	local rc deleted=0
-	_ipt_lock || return 1
-	while :; do
-		iptables $FW_EXTRA_PRE -w -C "$@" $FW_EXTRA_POST >/dev/null 2>/dev/null
-		rc=$?
-		case "$rc" in
-			0)
-				iptables $FW_EXTRA_PRE -w -D "$@" $FW_EXTRA_POST
-				rc=$?
-				[ "$rc" = 0 ] || break
-				deleted=1
-				;;
-			1) [ "$deleted" = 0 ] || rc=0; break ;;
-			*) break ;;
-		esac
-	done
-	_ipt_unlock
-	return "$rc"
+	_ipt_locked _ipt_del 4 "$@"
 }
 ipt_add_del()
 {
@@ -90,50 +129,15 @@ ipta_add_del()
 }
 ipt6()
 {
-	local rc
-	_ipt_lock || return 1
-	ip6tables -w -C "$@" >/dev/null 2>/dev/null
-	rc=$?
-	case "$rc" in
-		0) ;;
-		1) ip6tables -w -I "$@"; rc=$? ;;
-	esac
-	_ipt_unlock
-	return "$rc"
+	_ipt_locked _ipt_add 6 -I "$@"
 }
 ipt6a()
 {
-	local rc
-	_ipt_lock || return 1
-	ip6tables -w -C "$@" >/dev/null 2>/dev/null
-	rc=$?
-	case "$rc" in
-		0) ;;
-		1) ip6tables -w -A "$@"; rc=$? ;;
-	esac
-	_ipt_unlock
-	return "$rc"
+	_ipt_locked _ipt_add 6 -A "$@"
 }
 ipt6_del()
 {
-	local rc deleted=0
-	_ipt_lock || return 1
-	while :; do
-		ip6tables -w -C "$@" >/dev/null 2>/dev/null
-		rc=$?
-		case "$rc" in
-			0)
-				ip6tables -w -D "$@"
-				rc=$?
-				[ "$rc" = 0 ] || break
-				deleted=1
-				;;
-			1) [ "$deleted" = 0 ] || rc=0; break ;;
-			*) break ;;
-		esac
-	done
-	_ipt_unlock
-	return "$rc"
+	_ipt_locked _ipt_del 6 "$@"
 }
 ipt6_add_del()
 {

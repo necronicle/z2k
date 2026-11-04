@@ -4,7 +4,7 @@
 
 **Goal:** Stop z2k's IPv4/IPv6 helpers from turning lock contention or concurrent checks into duplicate rules, and make the shell fix deliverable without binary or service changes.
 
-**Architecture:** Keep the existing public helper signatures in the fork's `common/ipt.sh`; add `-w`, explicit status handling, and a separate bounded transaction lock. Ship the identical file from z2k over the existing signed patch mechanism and deploy it after fork extraction on fresh installs. Drain duplicates only through explicit deletion.
+**Architecture:** Keep the existing public helper signatures in the fork's `common/ipt.sh`; add `-w`, explicit status handling, and a separate bounded kernel `flock` transaction lock (amended 2026-11-05, see below). Ship the identical file from z2k over the existing signed patch mechanism and deploy it after fork extraction on fresh installs. Drain duplicates only through explicit deletion.
 
 **Tech Stack:** POSIX shell/BusyBox ash, deterministic shell mocks, Spec Kit Markdown, existing z2k release-map/update rehearsal tooling.
 
@@ -15,7 +15,7 @@
 - No push, tag, publication, live network/service/firewall mutation, or unrelated feature changes in phase one.
 - Preserve `FW_EXTRA_PRE`/`FW_EXTRA_POST`, `"$@"`, `-I` versus `-A`, both families, and add-only recovery.
 - Never broadly flush rules, delete unrelated rules, or restart a service merely to clean duplicates.
-- No new dependency or engine binary rebuild; use existing shell/update tooling.
+- No new dependency or engine binary rebuild; use existing shell/update tooling. `flock` is an existing installer dependency (lib/install.sh, since p-87.13); it is used when present and never installed by the helpers.
 - Official Spec Kit templates were read from installed `specify_cli/core_pack/templates`; existing specs are preserved and the project is not reinitialized.
 
 ## Review Focus
@@ -75,4 +75,19 @@
 - [ ] **Step 1: Run final verification.** Run both transaction suites, relevant self-heal/hook/delivery tests, shellcheck, `sh tests/run_all.sh`, and mutation testing if the existing harness covers the affected shell file. Save full logs and inspect summaries.
 - [ ] **Step 2: Exercise delivery end-to-end locally.** Use the existing rehearsal/map mechanisms with the candidate file; Expected: an old tree gains the exact new `common/ipt.sh`, with no service restart or binary churn.
 - [ ] **Step 3: Independent whole-change review.** Give a fresh reviewer both diffs, spec, plan, tests, RED/GREEN logs, and review focus. Fix Critical/Important findings once via RED/GREEN; defer Minor findings explicitly.
-- [ ] **Step 4: Save report and stop before publication.** Record exact worktrees/commits, commands/results/log paths, release files and likely `p-87.16` subject to revalidation, limitations, and review verdict. Expected: ready for Codex review, not released.
+- [ ] **Step 4: Save report and stop before publication.** Record exact worktrees/commits, commands/results/log paths, release files and likely `p-87.16` subject to revalidation, limitations, and review verdict. Expected: ready for independent review, not released.
+
+---
+
+## Amendment 2026-11-05 — kernel flock instead of mkdir/PID lock
+
+Independent review rejected Task 1's lock (non-exclusive dead-owner reclamation; `set -e` leak). Superseding design, implemented in fork commit `c87d46c` and z2k follow-up commit:
+
+- `_ipt_locked` opens `/tmp/zapret2-ipt.flock` on descriptor 8 with a compound redirection `{ …; } 8>>file || :` scoped to one transaction. The caller's descriptor 8 is saved/restored by the shell; the kernel releases the lock on close or process death. The file is never unlinked.
+- `_ipt_flock_wait`: `flock -n` fast path; then `flock -w $Z2K_IPT_LOCK_TIMEOUT` if `flock --help` advertises `--timeout` (util-linux, Entware), else a one-second `flock -n` poll (BusyBox). Timeout → status 4, no iptables call.
+- `_ipt_add`/`_ipt_del` capture every status in `if …; then …; else rc=$?; fi`; only status 1 means absent; deletion drains exact copies and returns 1 only if none existed.
+- No `flock` or unopenable lock path → same transaction without serialisation (still `-w`, strict statuses); no package provisioning in the helpers.
+- Delivery test compares the override to the fork outside the helper block, and fully once the fork contains `_ipt_locked`. CI checks out fork `z2k-master`, so this stays green before and after the fork branch is merged.
+- Portability lint now scans `common/`; `common/ipt.sh` and its suite are exempt for `flock` only.
+
+Review focus replacing the Task 1 items above: holder death and lock release, two contenders after a dead holder, `set -e`, caller descriptors, the no-`flock` fleet share, BusyBox polling latency, and the lock file in world-writable `/tmp` (single-user router; same class as the existing `/tmp/zapret2-restart-fw.lock`).
