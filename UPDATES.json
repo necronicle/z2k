@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 161,
-  "current": "p-87.11",
+  "seq": 162,
+  "current": "p-87.12",
   "install_map": {
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
@@ -274,8 +274,8 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "9da2a57e417440e7374367ea50c5b329fdae375c50f6cef55303f0e74fdca394",
-  "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
+  "webpanel/www/index.html": "9d98bebe64b74761508c7f26a795f3bad875467e286419888446dbb888b0d7fd",
+  "webpanel/www/js/chrome.js": "4a887fea77d86e09fcd64687dfe91f88413e64196686ac553f70165c605af7e3",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
   "webpanel/www/js/core/clipboard.js": "161aebf7108acd08250acd93b5c5008f428cbb45d89edf303c069f5747bb0c13",
@@ -298,7 +298,7 @@
   "webpanel/www/js/pages/warp.js": "43b1ac3b423ed21ad059e7e391a159427ad324977e1b8e2e774d26da261180ca",
   "webpanel/www/js/router.js": "865a158cff37e0fb2591f7d23f72a6c20be520d438dc8152abf294bf9d931a15",
   "webpanel/www/js/state-model.js": "e26d1875dbd8b96c42457f231dad98ad2e23483700cc22e16249cc647e2017fa",
-  "webpanel/www/style.css": "15f483482e6fe6cd95356baa67f7f740f701984b8711fa505d8e9533f3717370",
+  "webpanel/www/style.css": "cdf6849bed470678f57f5935c72183e5a3cae4703cf8dac9ce50c7ef911220e5",
   "z2k-detect/builds/z2k-detect-linux-386": "4228711291a54b64b8f4fb733dbac394691e1953670bee4f1100aae6b64973a0",
   "z2k-detect/builds/z2k-detect-linux-amd64": "9be59c09b54c2e603e256da60f2208c68120478f2c157a4e2ddc4190d19ec917",
   "z2k-detect/builds/z2k-detect-linux-arm": "1dd308c507f1ac0d145caabd97c4194a000d3e05de35fc71854646e09aaba109",
@@ -632,6 +632,7 @@
 {"v": "p-87.8", "type": "patch", "ts": "2026-11-02T17:28:49Z", "ref": "p-87.8", "desc": "Исправлены доменные исключения для звонков и другого UDP-трафика: если z2k определил имя домена, исключение теперь учитывается и в голосовых профилях.", "changed_files": ["webpanel/www/index.html", "lib/config_official.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "p-87.9", "type": "patch", "ts": "2026-11-02T19:31:20Z", "ref": "p-87.9", "desc": "Устранены причины лишних переподключений Telegram: восстановление правил сохраняет работающие соединения, исправлено восстановление IPv6-правил и исключены перезапуски из-за HTTP-ошибок проверочного сайта.", "changed_files": ["webpanel/www/index.html", "files/ndm/90-z2k-tg-redirect.sh", "files/z2k-tg-watchdog.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-87.10", "type": "patch", "ts": "2026-11-03T11:39:20Z", "ref": "p-87.10", "desc": "Пользовательские «Доп. домены» больше не удаляются при обновлении, переустановке и запуске службы. Импорт из файла пропускает уже покрытые другими списками домены и добавляет остальные. Из панели убран экспериментальный подбор общего набора стратегий, а благодарности в README стали компактнее.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-geosite.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/domain-list-editor.js", "webpanel/www/js/pages/strategies.js", "webpanel/www/style.css", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
-{"v": "p-87.11", "type": "patch", "ts": "2026-11-03T19:58:21Z", "ref": "p-87.11", "desc": "Массовое редактирование и импорт дополнительных доменов пропускают уже покрытые записи и сохраняют остальные, в том числе при частичном совпадении списков. Отмена удаления восстанавливает прежние записи, даже если они уже покрыты другим списком.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/domain-list-editor.js", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-87.11", "type": "patch", "ts": "2026-11-03T19:58:21Z", "ref": "p-87.11", "desc": "Массовое редактирование и импорт дополнительных доменов пропускают уже покрытые записи и сохраняют остальные, в том числе при частичном совпадении списков. Отмена удаления восстанавливает прежние записи, даже если они уже покрыты другим списком.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/domain-list-editor.js", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-87.12", "type": "patch", "ts": "2026-11-04T08:08:21Z", "ref": "p-87.12", "desc": "Исправлены цвет верхней панели при открытии веб-панели как отдельного приложения и разделитель бокового меню. Обновлены инструменты автоматической проверки проекта.", "changed_files": ["webpanel/www/index.html", "webpanel/www/js/chrome.js", "webpanel/www/style.css", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
