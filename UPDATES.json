@@ -1,9 +1,10 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 164,
-  "current": "p-87.15",
+  "seq": 165,
+  "current": "p-87.16",
   "install_map": {
+  "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
   "files/S99zapret2.new": ["/opt/etc/init.d/S99zapret2"],
   "files/etc/z2k-roots.pem": ["/opt/zapret2/etc/z2k-roots.pem"],
@@ -146,6 +147,7 @@
   "z2k.sh": ["/opt/zapret2/z2k.sh"]
   },
   "files_sha256": {
+  "common/ipt.sh": "0530b043dbb52e544715193e6cbad84e50155d5b1c451a5e26f0b2de7c3f2f62",
   "files/000-zapret2.sh": "e518233b73c49643894ca61cba82ff8fa1bbf469d93dbac48d98369f7e259d37",
   "files/S99zapret2.new": "712eeeb5fa450bf44752bf0c4137ceab6110f3bfff7da1165579902afedd481a",
   "files/etc/z2k-roots.pem": "73e33da886473f1cf2a347fc5be8688540861abd60ac6caa0da1b84242bcdd76",
@@ -214,7 +216,7 @@
   "files/z2k-auto-update.sh": "0aa7dfb57e49869d1f4cd5fa40a40768bdb401b5adc32f5b81dba6061408d1d3",
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
   "files/z2k-config-validator.sh": "05f7854a5771262eabdfd89ef3866c836c75d3d864dc0292c67cc34fdaa906a8",
-  "files/z2k-diag.sh": "a7fd77e7813558e9fb045fd157706da5457bd4bd402aafed688c60ca07a259df",
+  "files/z2k-diag.sh": "e8a22b155bc024c7236499ad669ff4b908c622c24b85ed2585c6e006a070c591",
   "files/z2k-dns-check.sh": "bcf31ce1cf24123d0824c971a2da7d3b9773faaaf4097bfd9c5ede48283ece7f",
   "files/z2k-dns-redirect.sh": "2c9dc42b8dd71ec8665c9f225386682a1dc7eae8317d1de119a27e824bd45c80",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
@@ -230,10 +232,10 @@
   "files/z2k-update-lists.sh": "8e5b7b141071643fa36c8b1c0f48d12db3ea03ad89cc84c9f2903c1051c91f5e",
   "files/z2k-warp-list-filter.awk": "97db4a85663e4b3a7c4943e495276f521a9ba961d8419df1059efdcceea655c5",
   "files/z2k-warp.sh": "040a7d064accb791a594e0c6a81ed094aab3adc113722839507b84fd1bd427ae",
-  "lib/auto_update.sh": "734b90dabce3fa9340b7c39a1e847d6b4fe6c107861ca501f19bc262684b7d71",
+  "lib/auto_update.sh": "1be422799a300f3f2bc3d3ddd1a4a3c7253bf1a9046e4daedbdce172a019969c",
   "lib/config.sh": "664e4c8f4af167f6b86ff1ff25c6143e515d86ad28302f3bed3d830d106c91e5",
   "lib/config_official.sh": "5f73529b3f43c995eadb3bbf61e7691643229db29178db2c9d5cb185b7bc1433",
-  "lib/install.sh": "4559dc53c456c4890b3c04cd67e00d8d43f74f4b862aa8df8efc0f69aea88706",
+  "lib/install.sh": "4ff712d0a7c5a8b0c50f785272d64b6e456b0b2c68dc983119f1f7a1e8f6c092",
   "lib/menu.sh": "3537dfe084696d7f08aa2b20f2ec65d2a3553242e48285e4074635b9b3151dbd",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
   "lib/utils.sh": "bc2c7c79734b4851cfdfcf89f4dd0b2c5637250b424c5961cbb7ce4223e7c312",
@@ -278,7 +280,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "d95e5537bb8f4c73bcedcd0d2ea0b0a65fe92a48d24158be0cdff30ef6378d9a",
+  "webpanel/www/index.html": "1621d764d5d9b583f03699b60ac1e9d68e5e4202e991e5182cb08f0f8ab30cad",
   "webpanel/www/js/chrome.js": "4a887fea77d86e09fcd64687dfe91f88413e64196686ac553f70165c605af7e3",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -639,6 +641,7 @@
 {"v": "p-87.11", "type": "patch", "ts": "2026-11-03T19:58:21Z", "ref": "p-87.11", "desc": "Массовое редактирование и импорт дополнительных доменов пропускают уже покрытые записи и сохраняют остальные, в том числе при частичном совпадении списков. Отмена удаления восстанавливает прежние записи, даже если они уже покрыты другим списком.", "changed_files": ["webpanel/www/index.html", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/core/domain-list-editor.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-87.12", "type": "patch", "ts": "2026-11-04T08:08:21Z", "ref": "p-87.12", "desc": "Исправлены цвет верхней панели при открытии веб-панели как отдельного приложения и разделитель бокового меню. Обновлены инструменты автоматической проверки проекта.", "changed_files": ["webpanel/www/index.html", "webpanel/www/js/chrome.js", "webpanel/www/style.css", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-87.13", "type": "patch", "ts": "2026-11-04T14:30:34Z", "ref": "p-87.13", "desc": "Адреса redirector.googlevideo.com теперь автоматически обновляются через DNS на VPS при установке, после обновления и ночью. Остальные домены Googlevideo не меняются; при ошибке сохраняются прежние записи. Спасибо новому спонсору Marshmalick!", "changed_files": ["webpanel/www/index.html", "files/lists/google-ranges.txt", "files/z2k-redirector-ip-refresh.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "p-87.15", "type": "patch", "ts": "2026-11-04T18:47:10Z", "ref": "p-87.15", "desc": "RuTracker: исправлены повторные подключения и обработка тайм-аутов прокси.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/z2k-rt-proxy-linux-amd64", "mtproxy-client/builds/z2k-rt-proxy-linux-arm", "mtproxy-client/builds/z2k-rt-proxy-linux-arm64", "mtproxy-client/builds/z2k-rt-proxy-linux-mips", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-87.15", "type": "patch", "ts": "2026-11-04T18:47:10Z", "ref": "p-87.15", "desc": "RuTracker: исправлены повторные подключения и обработка тайм-аутов прокси.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/z2k-rt-proxy-linux-amd64", "mtproxy-client/builds/z2k-rt-proxy-linux-arm", "mtproxy-client/builds/z2k-rt-proxy-linux-arm64", "mtproxy-client/builds/z2k-rt-proxy-linux-mips", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-87.16", "type": "patch", "ts": "2026-11-04T23:52:03Z", "ref": "p-87.16", "desc": "Улучшена защита от дублирования правил iptables.", "changed_files": ["webpanel/www/index.html", "common/ipt.sh", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
