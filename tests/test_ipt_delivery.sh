@@ -59,7 +59,8 @@ if cmp -s "$ROOT/common/ipt.sh" "$TMP/target/common/ipt.sh"; then deployed=yes; 
 eq 'fresh-install target contains the exact shipped bytes' yes "$deployed"
 
 # Verify step_build_zapret2 actually wires that helper after fork extraction.
-step_body=$(type step_build_zapret2 2>/dev/null)
+# From the file, not `type`: dash prints only "is a shell function".
+step_body=$(awk '/^step_build_zapret2\(\)/{f=1} f{print} f&&/^}/{exit}' "$ROOT/lib/install.sh")
 case "$step_body" in
     *'deploy_critical_file "common/ipt.sh" "${ZAPRET2_DIR}/common/ipt.sh" 644'*) wired=yes ;;
     *) wired=no ;;
