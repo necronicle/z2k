@@ -85,7 +85,7 @@ func TestDialUpstream_NodeThatAnswersNon200IsNotDemoted(t *testing.T) {
 
 // The pre-existing contract must survive the change: a node that opens a tunnel
 // but never delivers the server flight is still demoted, and its connection closed.
-func TestDialUpstream_FirstByteFailureStillDemotesAndCloses(t *testing.T) {
+func TestDialUpstream_FirstByteFailurePreservesPoolAndCloses(t *testing.T) {
 	var conn *stubConn
 	withTunnelStubs(t,
 		func(ip, _ string) (net.Conn, *bufio.Reader, bool, bool) {
@@ -104,8 +104,8 @@ func TestDialUpstream_FirstByteFailureStillDemotesAndCloses(t *testing.T) {
 	if up != nil {
 		t.Fatal("a tunnel that never proved itself must not be handed to the client")
 	}
-	if got := liveSet(p); len(got) != 0 {
-		t.Fatalf("node failing verifyFirstByte must be demoted, got %v", got)
+	if got := liveSet(p); len(got) != 1 {
+		t.Fatalf("target failure must preserve the shared pool, got %v", got)
 	}
 	if conn == nil || !conn.closed {
 		t.Error("the rejected tunnel was not closed — fd leak")
@@ -165,8 +165,8 @@ func TestDialUpstream_StopsAtMaxTries(t *testing.T) {
 	if up, _ := dialUpstream(p, "rutracker.org", []byte("hello")); up != nil {
 		t.Fatal("expected no tunnel")
 	}
-	if attempts != 3 {
-		t.Fatalf("want exactly max-tries=3 attempts, got %d", attempts)
+	if attempts != 2 {
+		t.Fatalf("want each of 2 available IPs once, got %d", attempts)
 	}
 }
 
@@ -268,7 +268,7 @@ const bufSizeForTest = bufSize
 // dropped the request, degrading rutracker.org for every other client until the
 // next 90 s probe. Neither failure mode can tell a broken NODE from a dead
 // TARGET, so the blast radius is capped instead: at most one demotion per request.
-func TestDialUpstream_DeadTargetDemotesAtMostOneNode(t *testing.T) {
+func TestDialUpstream_DeadTargetPreservesAllNodes(t *testing.T) {
 	withTunnelStubs(t,
 		func(ip, _ string) (net.Conn, *bufio.Reader, bool, bool) {
 			c, br := newStubTunnel()
@@ -285,8 +285,8 @@ func TestDialUpstream_DeadTargetDemotesAtMostOneNode(t *testing.T) {
 		t.Fatal("a dead target must not yield a tunnel")
 	}
 	got := liveSet(p)
-	if len(got) != 3 {
-		t.Fatalf("a dead target must cost exactly ONE node, not %d: pool went 4 -> %d (%v)",
+	if len(got) != 4 {
+		t.Fatalf("a dead target must cost ZERO nodes, not %d: pool went 4 -> %d (%v)",
 			4-len(got), len(got), got)
 	}
 }
@@ -317,11 +317,14 @@ func TestDialUpstream_OneBadNodeAmongGoodOnesStillLeavesTheRing(t *testing.T) {
 	bad := "203.0.113.1"
 	withTunnelStubs(t,
 		func(ip, _ string) (net.Conn, *bufio.Reader, bool, bool) {
+			if ip == bad {
+				return nil, nil, false, false
+			}
 			c, br := newStubTunnel()
 			return c, br, true, true
 		},
 		func(ip string, _ net.Conn, _ *bufio.Reader, _ []byte) bool {
-			return ip != bad // only the bad node fails
+			return true
 		})
 
 	oldTries, oldWait := *maxTries, *pickWaitTO

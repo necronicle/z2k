@@ -176,23 +176,27 @@ type pool struct {
 	rr   uint64   // round-robin cursor
 }
 
-func (p *pool) pick() string {
+func (p *pool) pick() string { return p.pickUntried(nil) }
+
+// Selection and cursor advance are atomic; request-owned exclusions survive
+// other clients advancing the cursor and health checks reordering the pool.
+func (p *pool) pickUntried(tried map[string]bool) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.live) == 0 {
-		return ""
+	for range p.live {
+		p.rr++
+		ip := p.live[p.rr%uint64(len(p.live))]
+		if !tried[ip] {
+			return ip
+		}
 	}
-	p.rr++
-	return p.live[p.rr%uint64(len(p.live))]
+	return ""
 }
 
-// demote drops ip from the live set the moment it fails on REAL traffic, without
-// waiting for the next health cycle. The health probe is a snapshot up to
-// health-interval old, and a node can pass it and stall a minute later — that gap is
-// what made RuTracker "work, then not work, then work again": pick() round-robins, so
-// whether a page loaded depended purely on which node the cursor handed you. A node
-// that just proved itself dead must leave the ring immediately; probeAll will let it
-// back in when it genuinely recovers.
+// demote removes a proxy after a target-independent transport failure.
+// A CONNECT refusal or missing target TLS flight must not call this: those
+// failures cannot establish that the proxy is broken for other destinations.
+// Periodic end-to-end probes remain authoritative for target-serving health.
 func (p *pool) demote(ip string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -627,24 +631,15 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 	target := sni + ":443"
 	deadline := time.Now().Add(*pickWaitTO)
 	tries := 0
-	// Blast-radius cap on demotion: AT MOST ONE node may leave the ring per client
-	// request. Observed on the owner's router (2026-07-26): a single request for a
-	// dead hostname demoted four healthy upstreams in a row -
-	//   "accepted CONNECT but sent no server flight (EOF) - demoting" x4
-	//   "no usable upstream proxy IP, dropping rutracker.cc"
-	// - because neither failure mode can tell "this NODE is broken" from "this
-	// TARGET is dead": the EOF arrives from the far end and the middleman is
-	// punished for it. Half the pool then disappears until the next 90 s probe and
-	// rutracker.org degrades FOR EVERYONE because one client asked for a dead host.
-	// Capping at one keeps the original guarantee (a genuinely dead node still
-	// leaves the ring on the first request that touches it, and the next request
-	// removes the next one) while making a dead target cost one node instead of
-	// maxTries.
+	// Only failures before CONNECT identify an unreachable proxy. Refused
+	// targets and missing server flights cannot distinguish a dead target from
+	// a bad proxy; only the independent health probe may demote those nodes.
+	tried := make(map[string]bool)
 	demotedHere := false
 	demoteOnce := func(ip, why string) {
 		if demotedHere {
 			log.Printf("[rt-proxy] %s also failed via %s (%s) — NOT demoting further this request; "+
-				"looks like the target, not the pool", target, ip, why)
+				"transport-demotion cap reached", target, ip, why)
 			return
 		}
 		p.demote(ip)
@@ -659,11 +654,19 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 		if !time.Now().Before(deadline) {
 			return nil, nil
 		}
-		ip := p.pick()
+		ip := p.pickUntried(tried)
 		if ip == "" {
-			time.Sleep(250 * time.Millisecond)
+			if len(tried) != 0 {
+				return nil, nil
+			}
+			pause := 250 * time.Millisecond
+			if left := time.Until(deadline); left < pause {
+				pause = left
+			}
+			time.Sleep(pause)
 			continue
 		}
+		tried[ip] = true
 		up, br, ok, reachable := openTunnelFn(ip, target)
 		if !reachable {
 			// Could not reach it at all. Do not leave it in the ring for the rest of
@@ -681,7 +684,7 @@ func dialUpstream(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
 				return up, br
 			}
 			up.Close()
-			demoteOnce(ip, "no server flight")
+			// This failure concerns the target; preserve the shared live set.
 		}
 		tries++
 		if tries >= *maxTries {
@@ -728,21 +731,21 @@ func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) boo
 		// Neutral wording on purpose: this function now also guards the DIRECT
 		// path, where no CONNECT ever happens. Saying "accepted CONNECT" there
 		// sent field triage looking for a tunnel that was never opened.
-		log.Printf("[rt-proxy] %s sent no server flight within %s (%v) — demoting, trying another",
+		log.Printf("[rt-proxy] %s sent no server flight within %s (%v) — trying another",
 			ip, *firstByteTO, err)
 		return false
 	}
 	if hdr[0] != 0x16 { // handshake
-		log.Printf("[rt-proxy] %s answered with a non-handshake record (type 0x%02x) — demoting, trying another", ip, hdr[0])
+		log.Printf("[rt-proxy] %s answered with a non-handshake record (type 0x%02x) — trying another", ip, hdr[0])
 		return false
 	}
 	n := int(hdr[3])<<8 | int(hdr[4])
 	if n <= 0 || n > 16384 { // RFC 8446 max TLSPlaintext fragment
-		log.Printf("[rt-proxy] %s answered with an implausible record length %d — demoting, trying another", ip, n)
+		log.Printf("[rt-proxy] %s answered with an implausible record length %d — trying another", ip, n)
 		return false
 	}
 	if _, err := br.Peek(5 + n); err != nil {
-		log.Printf("[rt-proxy] %s stalled mid-record (%d of %d bytes) within %s (%v) — demoting, trying another",
+		log.Printf("[rt-proxy] %s stalled mid-record (%d of %d bytes) within %s (%v) — trying another",
 			ip, br.Buffered(), 5+n, *firstByteTO, err)
 		return false
 	}
@@ -763,24 +766,24 @@ func verifyFirstByte(ip string, up net.Conn, br *bufio.Reader, hello []byte) boo
 	off := 5 + n
 	hdr2, err := br.Peek(off + 5)
 	if err != nil {
-		log.Printf("[rt-proxy] %s sent only the first record and stalled within %s (%v) — demoting, trying another",
+		log.Printf("[rt-proxy] %s sent only the first record and stalled within %s (%v) — trying another",
 			ip, *firstByteTO, err)
 		return false
 	}
 	switch hdr2[off] {
 	case 0x14, 0x16, 0x17: // ChangeCipherSpec, handshake, application_data — a flight continuing
 	default:
-		log.Printf("[rt-proxy] %s followed the ServerHello with record type 0x%02x — demoting, trying another",
+		log.Printf("[rt-proxy] %s followed the ServerHello with record type 0x%02x — trying another",
 			ip, hdr2[off])
 		return false
 	}
 	n2 := int(hdr2[off+3])<<8 | int(hdr2[off+4])
 	if n2 < 0 || n2 > 16384 {
-		log.Printf("[rt-proxy] %s second record has an implausible length %d — demoting, trying another", ip, n2)
+		log.Printf("[rt-proxy] %s second record has an implausible length %d — trying another", ip, n2)
 		return false
 	}
 	if _, err := br.Peek(off + 5 + n2); err != nil {
-		log.Printf("[rt-proxy] %s stalled inside its second record within %s (%v) — demoting, trying another",
+		log.Printf("[rt-proxy] %s stalled inside its second record within %s (%v) — trying another",
 			ip, *firstByteTO, err)
 		return false
 	}
