@@ -24,6 +24,7 @@
 - [x] T008 Replace the lock with a kernel `flock` (fork c87d46c); extend the suite (process death, dead-holder contenders, `set -e`, descriptor 8, no-`flock`, BusyBox poll); RED against original and e8257f3, GREEN on macOS sh/bash/dash, Ubuntu dash + util-linux flock, Alpine BusyBox ash + BusyBox flock.
 - [x] T009 Delivery: compare the override with the published r0 archive; fork comparison safe for CI's `z2k-master` checkout; portability lint covers `common/`.
 - [x] T010 Run focused and full suites, lint, old-updater rehearsal and fresh-install deployment against a temporary candidate signed with a throwaway key; preserve logs.
+- [x] T011a Review follow-up: provision `flock` after committed patch updates independent of the redirector (`au_provision_flock`), log degraded protection, diag line; RED/GREEN with published p-87.12/p-87.15 updaters.
 - [x] T011 Save `IMPLEMENTATION-REPORT.md`. Do not push/tag/publish; await independent review.
 
 ## Dependencies

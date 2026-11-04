@@ -636,6 +636,12 @@ print_iptables() {
     : "${tg_ipset6_n:=0}"
     printf 'NFQUEUE исходящие : %s  (postrouting, ожидается 2)\n' "$nfq_mangle"
     printf 'NFQUEUE входящие  : %s  (input+forward, ожидается 4 — без них не работает автоподбор стратегий)\n' "$nfq_in"
+    # common/ipt.sh ставит правила по очереди только при наличии flock.
+    if command -v flock >/dev/null 2>&1 || [ -x /opt/bin/flock ]; then
+        printf 'Очередь правил    : flock есть\n'
+    else
+        printf 'Очередь правил    : flock НЕТ — одновременный запуск может задвоить правила (opkg install flock)\n'
+    fi
     # Ожидание зависит от того, включён ли туннель. Выключив телеграм руками,
     # человек штатно остаётся без этих правил — и читал про себя «expected 1»,
     # то есть отчёт о неисправности там, где всё как он и просил.

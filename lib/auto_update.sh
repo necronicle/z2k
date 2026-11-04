@@ -1192,6 +1192,35 @@ au_step_human() {
     esac
 }
 
+# au_provision_flock <тег> <файл-отметка> — поставить пакет flock, если его нет.
+#
+# common/ipt.sh ставит пару «проверка + добавление правила» под kernel flock,
+# когда есть команда flock; без неё правила ставятся как раньше, но без
+# очереди между процессами (служба, хук NDM, самовосстановление). Установщик
+# требует пакет с p-87.13, а роутерам, поставленным раньше, его привозит
+# только это: после обновления, независимо от прочих настроек.
+#
+# Ждём ту же отметку успеха, что и обновитель DNS редиректора: в откат пакеты
+# не ставим. Пакет только добавляется — работающее ничего не теряет, а неудача
+# пишется в журнал прямо, а не прячется. rc: 0 — обновление закоммичено,
+# 1 — отметки не дождались (откат или сбой).
+au_provision_flock() {
+    local attempts=0
+    while [ "$(cat "$2" 2>/dev/null)" != "$1" ]; do
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 60 ] || return 1
+        sleep 5
+    done
+    PATH="/opt/sbin:/opt/bin:${PATH:-/sbin:/usr/sbin:/bin:/usr/bin}"
+    command -v flock >/dev/null 2>&1 && return 0
+    if opkg install flock >/dev/null 2>&1 && command -v flock >/dev/null 2>&1; then
+        au_log "flock установлен: правила iptables ставятся по очереди"
+    else
+        au_log "ВНИМАНИЕ: пакет flock не установился — правила iptables ставятся без очереди между процессами, повторы при одновременном запуске возможны; повтор при следующем обновлении или вручную: opkg install flock"
+    fi
+    return 0
+}
+
 # au_run_steps <шаг>… — по порядку, до первой осечки. Останов, а не «идём
 # дальше и надеемся»: провал валидации обязан отменить перезапуск.
 au_run_steps() {
@@ -1209,9 +1238,15 @@ au_run_steps() {
     # The worker waits for their success marker; rollback never advances it.
     local redirector_refresh="${ZAPRET2_DIR:-/opt/zapret2}/z2k-redirector-ip-refresh.sh"
     local redirector_tag_file="${Z2K_AU_INSTALLED_TAG_FILE:-${ZAPRET2_DIR:-/opt/zapret2}/.z2k-installed-tag}"
-    if [ -x "$redirector_refresh" ] && [ -n "${target_tag:-}" ] &&
+    # flock first and in the same worker: the refresher may run opkg too, and
+    # two opkg at once fail on its lock.
+    if [ -n "${target_tag:-}" ] &&
        [ "$(cat "$redirector_tag_file" 2>/dev/null)" != "$target_tag" ]; then
-        ( trap "" HUP; sh "$redirector_refresh" --after-update "$target_tag" "$redirector_tag_file" ) </dev/null >/dev/null 2>&1 &
+        ( trap "" HUP
+          au_provision_flock "$target_tag" "$redirector_tag_file" || exit 0
+          [ -x "$redirector_refresh" ] || exit 0
+          sh "$redirector_refresh" --after-update "$target_tag" "$redirector_tag_file"
+        ) </dev/null >/dev/null 2>&1 &
     fi
     return 0
 }

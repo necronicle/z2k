@@ -51,6 +51,7 @@ Already accumulated copies are not cleaned by an update or add-only recovery. Wh
 - **FR-004**: Lock acquisition MUST fail closed after a bounded wait (`Z2K_IPT_LOCK_TIMEOUT`, default 30 s) and MUST NOT remove or steal any lock.
 - **FR-004a**: Without `flock`, helpers MUST still apply rules (unserialised, with `-w` and strict statuses) and MUST NOT install packages.
 - **FR-004b**: Helpers MUST be safe under `set -e` and MUST preserve the caller's file descriptors.
+- **FR-004c**: Patch updates MUST provision `flock` on installs lacking it after the update is committed, independent of optional features, with no restart and no package work during rollback; failure MUST be logged as degraded protection and visible in diagnostics.
 - **FR-005**: Existing add-only recovery MUST NOT become restart/teardown and MUST NOT clean duplicates implicitly.
 - **FR-006**: Explicit deletion MUST drain exact duplicate copies while preserving unrelated rules and the insertion/append semantics of additions.
 - **FR-007**: z2k MUST ship `common/ipt.sh` through the signed patch map and deploy it on fresh install; the fork MUST carry the same fix for future engine releases.
@@ -68,7 +69,7 @@ Already accumulated copies are not cleaned by an update or add-only recovery. Wh
 ## Assumptions
 
 - Target iptables supports `-w`, as already required by shipped z2k recovery and NDM code; no non-waiting fallback is safe for this bug.
-- `flock` is the Entware util-linux package listed in `lib/install.sh` `step_install_dependencies` since e55116a3 (p-87.13). Existing installs get it from `z2k-redirector-ip-refresh.sh`, which installs it on demand (it runs after every update and from list updates when the redirector DNS feature applies). Until then, those installs run without serialisation.
+- `flock` is the Entware util-linux package listed in `lib/install.sh` `step_install_dependencies` since e55116a3 (p-87.13). Older patch installs get it from the post-commit worker in `au_run_steps` (`au_provision_flock`), which the published old updater runs from the delivered `lib/auto_update.sh` after the success marker, whatever the redirector settings. If `opkg install flock` fails, the update stays committed, the log says protection is degraded, and `z2k-diag` shows «Очередь правил: flock НЕТ»; the next update tries again.
 - Check status 1 is the command's normal rule-absence result. Other statuses are errors; no localized stderr parsing is used.
 - Exact duplicates are drained only when the existing explicit deletion path runs. Phase one does not perform active cleanup on working installations.
 - The owner explicitly opted out of design questions and requested autonomous inline execution followed by independent review.
@@ -87,3 +88,7 @@ The first implementation (fork e8257f3) used an mkdir lock with dead-PID reclama
 2. A bare `iptables -C` followed by `rc=$?` aborts a `set -e` caller before insert and unlock: `set -e caller survives absent-then-existing rules (want=reached got=)`.
 
 Resolution: the kernel `flock` design in FR-003/FR-004/FR-004a/FR-004b. RED against the original helpers: `claude-red-original.log` (36 failures); GREEN: `claude-green-*.log`.
+
+### Amendment 2026-11-05 (2) — flock delivery to old installs
+
+The independent review found that the redirector refresher exits before its own flock provisioning when `Z2K_REDIRECTOR_DNS=0`, ndmc is absent, etc., so it cannot be the delivery path. FR-004c adds a dedicated post-commit provisioning step in the existing `au_run_steps` worker; the refresher now runs after it in the same worker, so two `opkg` never contend. Evidence: `tests/test_flock_update_provisioning.sh` with published p-87.12 and p-87.15 updaters, redirector off and flock hidden (RED `claude-red-flock-provisioning.log`, GREEN `claude-green-flock-provisioning.log`).

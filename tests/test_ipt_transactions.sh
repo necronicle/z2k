@@ -442,6 +442,8 @@ reset
 mkdir "$TMP/lockdir"
 (Z2K_IPT_LOCK="$TMP/lockdir"; ipt INPUT -p tcp --dport 443 -j NFQUEUE) 2>/dev/null
 eq 'unopenable lock path still applies the rule once' '0 1' "$? $(count4 "$RULE4")"
+out=$(Z2K_IPT_LOCK="$TMP/lockdir" sh -e -c '. "$1"; ipt6 INPUT -p tcp --dport 443 -j NFQUEUE; echo reached' sh "$IPT_SH" 2>/dev/null)
+eq 'set -e caller survives an unopenable lock path' 'reached 1' "$out $(count6 "$RULE6")"
 
 # --- deletion ----------------------------------------------------------------
 reset
