@@ -27,9 +27,9 @@ no() { FAIL=$((FAIL+1)); printf '[FAIL] %s\n' "$1"; }
 
 [ -f "$CLEAN" ] || { printf '[FAIL] нет %s\n' "$CLEAN"; exit 1; }
 
-# Чужие файлы: их зачистка трогать НЕ должна.
-#   /opt/etc/opkg.conf.z2k-bak — копия ЧУЖОГО opkg.conf перед правкой зеркала.
-KEEP='/opt/etc/opkg.conf.z2k-bak'
+# Пути, которые зачистка оставляет намеренно. Сейчас пусто: ключ WARP лежит внутри
+# каталога, которым зачистка управляет, а бэкапы удаляются все.
+KEEP=''
 
 # Пути, которые наш код создаёт вне /opt/zapret2. Собираются из исходников, а
 # не переписываются сюда руками: иначе тест устареет ровно так же, как список в
@@ -85,24 +85,18 @@ for must in /opt/etc/z2k /opt/etc/z2k-warp /opt/var/log/z2k-auto-update.log /opt
     fi
 done
 
-# Чужой файл не трогаем — иначе человек лишится своей же резервной копии.
-if grep -qF -- "opkg.conf.z2k-bak" "$CLEAN"; then
-    # Упоминание допустимо только в комментарии «не трогаем».
-    _ctx=$(grep -n "opkg.conf.z2k-bak" "$CLEAN" | head -1)
-    case "$_ctx" in
-        *"#"*) ok "резервная копия opkg.conf упомянута как неприкосновенная" ;;
-        *)     no "резервная копия чужого opkg.conf удаляется зачисткой: $_ctx" ;;
-    esac
+# Все бэкапы наши и уходят. Рабочий opkg.conf при этом остаётся как есть.
+if grep -qF -- "/opt/etc/opkg.conf.z2k-bak" "$CLEAN" && grep -qF -- "/opt/etc/opkg.conf.backup" "$CLEAN"; then
+    ok "зачистка удаляет бэкапы opkg.conf"
 else
-    ok "резервная копия opkg.conf зачисткой не трогается"
+    no "зачистка оставляет бэкапы opkg.conf"
 fi
 
-# Возврат штатного lighttpd: аварийный путь обязан делать то же, что основное
-# удаление, иначе человек остаётся с выключенным навсегда веб-сервером.
+# Судьбу штатного lighttpd решает общая функция, см. test_uninstall_restores_router.sh.
 if grep -q 'disabled-by-z2k' "$CLEAN"; then
-    ok "зачистка возвращает штатный lighttpd"
+    ok "зачистка разбирается со штатным lighttpd"
 else
-    no "зачистка возвращает штатный lighttpd"
+    no "зачистка разбирается со штатным lighttpd"
 fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"

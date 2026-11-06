@@ -1,24 +1,19 @@
 #!/bin/sh
-# z2k_cleanup.sh — полная зачистка zapret / zapret2 / nfqws / nfqws2
+# z2k_cleanup.sh — полная зачистка z2k
 # Для экстренных случаев: зависшие процессы, остатки после удаления и т.д.
 #
-# ВНИМАНИЕ: Этот скрипт удаляет ВСЁ связанное с zapret и zapret2:
-#   - Процессы nfqws / nfqws2 (kill -9)
-#   - Init-скрипты S99zapret / S99zapret2
-#   - Netfilter хуки
-#   - Iptables цепочки и правила zapret/zapret2
-#   - Директории /opt/zapret и /opt/zapret2 (ПОЛНОСТЬЮ)
-#   - Временные файлы
-#   - Telegram-туннель: tg-mtproxy-client, S98tg-tunnel, NDM redirect hook,
-#     watchdog + cron-запись, iptables NAT REDIRECT на :1443, /opt/sbin бинарник
-#   - Вспомогательный туннель S97z2k-http-tunnel + его NDM hook
+# Удаляет ВСЁ наше и не трогает чужое: чужой zapret в /opt/zapret, его службы, nfqws и
+# очереди NFQUEUE остаются на месте. После зачистки остаётся только ключ WARP
+# /opt/etc/z2k-warp/device.json, чтобы не регистрировать устройство заново.
 #
 # Использование:
 #   sh -c 'tmp=/tmp/z2k_cleanup.sh; rm -f "$tmp"; for url in "https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh" "https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k_cleanup.sh" "https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh"; do echo "[i] Пробую: $url" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$tmp"; then exec sh "$tmp"; fi; done; echo "[FAIL] Не удалось скачать z2k_cleanup.sh ни с одного зеркала" >&2; exit 1'
 #   или
 #   sh z2k_cleanup.sh
 
-set -e
+# БЕЗ set -e, ОСОЗНАННО. Скрипт запускают, когда уже что-то сломано, и именно тогда
+# команды отказывают: ndmc не отвечает, интерфейс занят. Под set -e первый такой
+# отказ обрывал зачистку на середине, и она оставляла больше, чем было до неё.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,22 +25,369 @@ log_warn()  { printf "${YELLOW}[!]${NC} %s\n" "$1"; }
 log_error() { printf "${RED}[X]${NC} %s\n" "$1"; }
 log_skip()  { printf "    %s\n" "$1"; }
 
+# z2k:shared:restore_stock_lighttpd:begin
+# Вернуть штатный lighttpd, если его выключала установка панели.
+#
+# НА 80-Й ПОРТ НЕ ВОЗВРАЩАЕМ. Панель ставит пакет lighttpd, а он приносит свой
+# автозапуск со стоковым конфигом: server.port там нет, значит 0.0.0.0:80. Этот
+# порт принадлежит nginx прошивки. Возврат такого файла при следующей загрузке
+# роняет веб-интерфейс роутера (журнал с поля 01.09.2026: «bind() to
+# 192.168.1.1:80 failed», «Service: "Nginx": unexpectedly stopped»). Правило то же,
+# что в _stock_init_verdict при установке. Такой lighttpd поставили мы ради панели,
+# поэтому он уходит вместе с пакетом. Если opkg не справился, файл остаётся выключенным
+# и напечатана команда для возврата.
+#
+# Этот блок одинаков во всех путях удаления, сверяет tests/test_uninstall_restores_router.sh.
+_z2k_restore_stock_lighttpd() {
+    local _idir _cdir _dis _base _f _p _sport _pkgs
+    _idir="${Z2K_INITD_DIR:-/opt/etc/init.d}"
+    _cdir="${Z2K_LIGHTTPD_CONF_DIR:-/opt/etc/lighttpd}"
+    for _dis in "$_idir"/.S*lighttpd.disabled-by-z2k; do
+        [ -e "$_dis" ] || continue
+        _base="${_dis##*/}"; _base="${_base#.}"; _base="${_base%.disabled-by-z2k}"
+        _sport=""
+        for _f in "$_cdir/lighttpd.conf" "$_cdir"/conf.d/*.conf; do
+            [ -f "$_f" ] || continue
+            # Дополнительный сокет на 80-м занимает порт при любом server.port.
+            if grep -Eq '^[[:space:]]*\$SERVER\["socket"\][^#]*:80"' "$_f"; then _sport=80; break; fi
+            _p=$(sed -n 's/^[[:space:]]*server\.port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$_f" | head -1)
+            if [ -n "$_p" ] && [ -z "$_sport" ]; then _sport="$_p"; fi
+        done
+        [ -n "$_sport" ] || _sport=80
+        if [ "$_sport" = "80" ]; then
+            # Такой lighttpd работать не мог, его принёс пакет ради панели. Снимаем
+            # пакет целиком, иначе выключенный файл и пакет остаются мусором.
+            _pkgs=""
+            if command -v opkg >/dev/null 2>&1; then
+                _pkgs=$(opkg list-installed 2>/dev/null | awk '$1 ~ /^lighttpd(-mod-.*)?$/ {print $1}' | sort -r)
+                # shellcheck disable=SC2086  # список пакетов: разбиение намеренно
+                [ -z "$_pkgs" ] || opkg remove $_pkgs </dev/null >/dev/null 2>&1
+                _pkgs=$(opkg list-installed 2>/dev/null | awk '$1 == "lighttpd" {print $1}')
+            fi
+            if [ -z "$_pkgs" ] && command -v opkg >/dev/null 2>&1; then
+                rm -f "$_dis"
+                rm -rf "$_cdir" /opt/var/log/lighttpd 2>/dev/null
+                echo "[i] Удалён пакет lighttpd, поставленный для панели"
+            else
+                echo "[!] Штатный $_base не возвращён: порт 80 занят веб-интерфейсом роутера."
+                echo "    Если он нужен, смените server.port и выполните: mv '$_dis' '$_idir/$_base'"
+            fi
+        elif [ -e "$_idir/$_base" ]; then
+            echo "[!] Не возвращаю $_base: файл с таким именем уже есть"
+        elif mv "$_dis" "$_idir/$_base" 2>/dev/null; then
+            echo "[i] Возвращён штатный init: $_base"
+        else
+            echo "[!] Не удалось вернуть $_dis: перенесите вручную"
+        fi
+    done
+    return 0
+}
+# z2k:shared:restore_stock_lighttpd:end
+
+# z2k:shared:remove_our_ip_hosts:begin
+# Снять записи ip host, которые писали мы. Они в конфиге роутера и переживают
+# перезагрузку: снёс z2k, а WhatsApp продолжает ходить через наш узел.
+#
+# Узел снимаем ПО АДРЕСУ, а не по списку имён: всё, что указывает на него, поставили
+# мы, а список имён отстаёт от жизни. Discord и GitHub по адресу не определить, их
+# снимаем по закрытому списку имён: Discord-пины сняты с поставки, а записи на GitHub
+# писал снятый слой скачивания. Чужих записей тут быть не должно.
+# Записи, которые ведёт d2k, не наши: он хранит их точным списком.
+_z2k_not_d2k_pins() {
+    local _m="${Z2K_D2K_PINS:-/opt/d2k/state/instagram-ip-hosts.tsv}"
+    if [ -s "$_m" ]; then
+        awk 'NR == FNR { d[$1 " " $2] = 1; next } !(($3 " " $4) in d)' "$_m" -
+    else
+        cat
+    fi
+}
+
+_z2k_our_ip_hosts() {
+    printf '%s\n' "$1" | awk '
+        $1 == "ip" && $2 == "host" {
+            n = tolower($3); a = $4
+            if (a == "85.192.60.175" || a == "213.176.74.63" || a == "79.137.196.7") print
+            else if (a == "2.58.104.1" && n !~ /cloudflare/) print
+            else if (n ~ /^finland[0-9]+\.discord\.media$/) print
+            else if (n == "github.com" || n == "api.github.com" || n == "codeload.github.com" ||
+                     n == "raw.githubusercontent.com" || n == "objects.githubusercontent.com" ||
+                     n == "release-assets.githubusercontent.com" || n == "gist.githubusercontent.com" ||
+                     n == "cdn.jsdelivr.net" || n == "gh-proxy.com") print
+        }' | _z2k_not_d2k_pins
+}
+
+# Каждую снятую запись называем: удаление по адресу задело бы и запись, которую
+# человек сам направил на наш узел, и он должен это увидеть.
+_z2k_remove_our_ip_hosts() {
+    command -v ndmc >/dev/null 2>&1 || return 0
+    local _cfg _line
+    _cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null) || return 0
+    _z2k_our_ip_hosts "$_cfg" | while IFS= read -r _line; do
+        if LD_LIBRARY_PATH= ndmc -c "no $_line" >/dev/null 2>&1; then
+            echo "[i] Снята запись: $_line"
+        fi
+    done
+    LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1 || true
+    return 0
+}
+
+# Итоговая проверка: 0 — наших записей нет. Иначе печатает, что осталось.
+_z2k_ip_hosts_clean() {
+    command -v ndmc >/dev/null 2>&1 || return 0
+    local _cfg _left
+    if ! _cfg=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null); then
+        echo "[!] Не удалось прочитать конфиг роутера: записи ip host не проверены."
+        echo "    Посмотрите: ndmc -c 'show running-config' | grep 'ip host'"
+        return 1
+    fi
+    _left=$(_z2k_our_ip_hosts "$_cfg")
+    [ -z "$_left" ] && return 0
+    echo "[!] В конфиге роутера остались наши записи ip host:"
+    printf '%s\n' "$_left" | sed 's/^/    /'
+    return 1
+}
+# z2k:shared:remove_our_ip_hosts:end
+
+# z2k:shared:restore_kernel_tuning:begin
+# Вернуть то, что служба меняла в ядре. Обычно это уже сделал S99 stop, но его могло
+# не быть, он мог упасть, а работавшие сторожа могли успеть применить настройки
+# обратно, пока удаление шло. Поэтому вызываем ПОСЛЕ снятия планировщика и хуков.
+#
+# fastroute возвращаем там же, где его гасит S99: нет драйвера аппаратного NAT и
+# тумблер Z2K_FASTROUTE_OFF не запрещает. $1 — значение этого тумблера.
+#
+# Режим /sys/kernel/fastnat/mode меняет установщик. Прежнее значение возвращаем,
+# только если оно сохранено: выдумывать чужую настройку нельзя.
+_z2k_restore_kernel_tuning() {
+    local _d _v
+    _d="${Z2K_NF_SYSCTL:-/proc/sys/net/netfilter}"
+    [ -w "$_d/nf_conntrack_tcp_be_liberal" ] && echo 0 > "$_d/nf_conntrack_tcp_be_liberal" 2>/dev/null
+    [ -w "$_d/nf_conntrack_checksum" ] && echo 1 > "$_d/nf_conntrack_checksum" 2>/dev/null
+    [ -w "$_d/nf_conntrack_fastnat" ] && echo 1 > "$_d/nf_conntrack_fastnat" 2>/dev/null
+    [ -w "$_d/nf_conntrack_fastnat_xfrm" ] && echo 1 > "$_d/nf_conntrack_fastnat_xfrm" 2>/dev/null
+    if [ -w "$_d/nf_conntrack_fastroute" ] && [ "${1:-1}" != "0" ] \
+       && [ ! -d "${Z2K_HWNAT_DIR:-/proc/driver/hw_nat}" ]; then
+        echo 1 > "$_d/nf_conntrack_fastroute" 2>/dev/null
+    fi
+    if [ -r "${Z2K_FASTNAT_ORIG:-/opt/etc/z2k/fastnat-mode.orig}" ]; then
+        _v=$(cat "${Z2K_FASTNAT_ORIG:-/opt/etc/z2k/fastnat-mode.orig}" 2>/dev/null)
+        case "$_v" in
+            ''|*[!0-9]*) rm -f "${Z2K_FASTNAT_ORIG:-/opt/etc/z2k/fastnat-mode.orig}" 2>/dev/null ;;
+            *) if [ -w "${Z2K_FASTNAT_MODE:-/sys/kernel/fastnat/mode}" ] \
+                  && echo "$_v" > "${Z2K_FASTNAT_MODE:-/sys/kernel/fastnat/mode}" 2>/dev/null; then
+                   rm -f "${Z2K_FASTNAT_ORIG:-/opt/etc/z2k/fastnat-mode.orig}" 2>/dev/null
+               fi ;;
+        esac
+    fi
+    return 0
+}
+# z2k:shared:restore_kernel_tuning:end
+
+# z2k:shared:own_processes:begin
+# Гасим только свои процессы: то же имя может быть у чужой установки. Свой — тот,
+# чей бинарник или командная строка указывают на /opt/zapret2.
+_z2k_our_pids() { # <имя>
+    local _p _e _c _all
+    _all=$(pidof "$1" 2>/dev/null)
+    [ -n "$_all" ] || _all=$(ps w 2>/dev/null | awk -v n="$1" '$0 ~ "/" n "( |$)" {print $1}')
+    for _p in $_all; do
+        _e=$(readlink "/proc/$_p/exe" 2>/dev/null)
+        _c=$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)
+        case "$_e $_c" in
+            */opt/zapret2/*) echo "$_p" ;;
+        esac
+    done
+    return 0
+}
+
+_z2k_kill_ours() { # <имя>
+    local _p
+    for _p in $(_z2k_our_pids "$1"); do
+        kill -9 "$_p" 2>/dev/null
+    done
+    return 0
+}
+# z2k:shared:own_processes:end
+
+# z2k:shared:own_rules:begin
+# Подметание оставшихся правил: только наша очередь NFQUEUE и то, где в правиле есть
+# z2k. Чужая очередь не наша, даже если правило выглядит похоже. Вызывать, пока
+# конфиг на месте: в нём номер очереди.
+_z2k_sweep_our_rules() {
+    local _q _tool _t _ch _r
+    _q=$(sed -n 's/^QNUM=//p' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | tail -n 1 | tr -d "\"'")
+    case "$_q" in ''|*[!0-9]*) _q=200 ;; esac
+    for _tool in iptables ip6tables; do
+        command -v "$_tool" >/dev/null 2>&1 || continue
+        for _t in mangle nat raw filter; do
+            for _ch in PREROUTING INPUT FORWARD OUTPUT POSTROUTING; do
+                "$_tool" -w -t "$_t" -S "$_ch" 2>/dev/null \
+                    | grep -E -- "--queue-num $_q( |\$)|z2k" | sed 's/^-A /-D /' \
+                    | while IFS= read -r _r; do
+                        # shellcheck disable=SC2086  # строка правила: разбиение намеренно
+                        "$_tool" -w -t "$_t" $_r 2>/dev/null
+                    done
+            done
+        done
+    done
+    return 0
+}
+
+# После снятия правил: набор, на который ссылается правило, не удалить. Имена
+# nozapret, zapret и ipban общие с исходным проектом: при чужой установке в
+# /opt/zapret они её, такие не трогаем.
+_z2k_destroy_our_ipsets() {
+    local _s
+    for _s in $(ipset list -n 2>/dev/null); do
+        case "$_s" in
+            z2k*|Z2K*) ipset destroy "$_s" 2>/dev/null ;;
+            nozapret|nozapret6|zapret|zapret6|ipban|ipban6)
+                [ -d /opt/zapret ] || ipset destroy "$_s" 2>/dev/null ;;
+        esac
+    done
+    return 0
+}
+# z2k:shared:own_rules:end
+
+# z2k:shared:warp_finish:begin
+# Интерфейс WARP удаляем за собой: движок мог упасть и оставить его. Ключ устройства
+# единственное, что переживает удаление: повторная установка не должна заново
+# регистрировать устройство у Cloudflare.
+_z2k_warp_finish() {
+    local _i _t _tuns _d _f
+    killall -9 z2k-warpd 2>/dev/null
+    _i=0
+    while [ "$_i" -lt 3 ]; do
+        _tuns=$(ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \(z2ktun[0-9]*\)[:@].*/\1/p')
+        [ -n "$_tuns" ] || break
+        for _t in $_tuns; do
+            ip link set "$_t" down 2>/dev/null
+            ip link delete "$_t" 2>/dev/null || ip tuntap del dev "$_t" mode tun 2>/dev/null
+        done
+        _i=$((_i + 1))
+        sleep 1
+    done
+    _d=/opt/etc/z2k-warp
+    if [ -d "$_d" ]; then
+        for _f in "$_d"/* "$_d"/.[!.]*; do
+            [ -e "$_f" ] || continue
+            [ "${_f##*/}" = "device.json" ] || rm -rf "$_f"
+        done
+        rmdir "$_d" 2>/dev/null
+    fi
+    return 0
+}
+# z2k:shared:warp_finish:end
+
+# z2k:shared:purge_leftovers:begin
+# Всё наше, что лежит вне дерева: копии, бэкапы, журналы, настройки, пометки. Звать
+# последним. Журнал идущей задачи панели и сам скрипт зачистки в /tmp не трогаем:
+# это оперативка, а журнал единственный след того, как прошло удаление.
+_z2k_purge_leftovers() {
+    local _f
+    rm -rf /opt/z2k-rollback /opt/z2k-upgrade-backup /opt/z2k-work /opt/zapret2.old.* \
+           /opt/etc/z2k /opt/etc/zapret2 2>/dev/null
+    rm -f /opt/etc/opkg.conf.backup /opt/etc/opkg.conf.z2k-bak \
+          /opt/etc/.z2k-* /opt/var/log/z2k-* \
+          /opt/etc/init.d/S99zapret2.* /opt/etc/init.d/S*z2k* /opt/etc/ndm/netfilter.d/*z2k* \
+          /opt/sbin/*.z2kbak /opt/sbin/z2k-usque \
+          /opt/sbin/tg-mtproxy-client.new.* /opt/sbin/z2k-detect.new.* \
+          /opt/sbin/z2k-warpd.new.* /opt/sbin/z2k-rt-proxy.new.* \
+          /opt/etc/init.d/S97tg-mtproxy \
+          /opt/etc/init.d/*.z2k-au.* /opt/etc/ndm/netfilter.d/*.z2k-au.* /opt/sbin/*.z2k-au.* \
+          /opt/sbin/tg-mtproxy-client.rb.* /opt/sbin/z2k-detect.rb.* \
+          /opt/sbin/z2k-warpd.rb.* /opt/sbin/z2k-rt-proxy.rb.* 2>/dev/null
+    # Обычный файл с таким именем чужой: установщик его и сам не перезаписывает.
+    [ -L /opt/bin/z2k ] && rm -f /opt/bin/z2k
+    # Ссылки на библиотеки, которые создаёт установка. Только если это именно они.
+    for _f in libmnl.so:libmnl.so.0 libnetfilter_queue.so:libnetfilter_queue.so.1 libnfnetlink.so:libnfnetlink.so.0; do
+        if [ -L "/opt/lib/${_f%%:*}" ] && [ "$(readlink "/opt/lib/${_f%%:*}")" = "${_f##*:}" ]; then
+            rm -f "/opt/lib/${_f%%:*}"
+        fi
+    done
+    for _f in /tmp/z2k* /tmp/.z2k* /tmp/zapret2* /tmp/nfqws2* /tmp/tg-crash.log /tmp/tg-tunnel-watchdog.* \
+              /var/run/z2k* /var/run/tg-tunnel.pid /var/run/nfqws2*; do
+        [ -e "$_f" ] || continue
+        case "$_f" in
+            /tmp/z2k-job-*|/tmp/z2k_cleanup*) ;;
+            *) rm -rf "$_f" ;;
+        esac
+    done
+    return 0
+}
+
+# Пакеты, которые поставила именно наша установка: она записала их при установке.
+# Пакет, нужный другим, opkg снять откажется, и это правильно. curl не трогаем:
+# без него не выполнить однострочник повторной установки. Звать, пока жив /opt/etc/z2k.
+_z2k_remove_our_packages() {
+    local _list="${Z2K_INSTALLED_PKGS:-/opt/etc/z2k/installed-packages}" _p
+    [ -r "$_list" ] || return 0
+    command -v opkg >/dev/null 2>&1 || return 0
+    for _p in $(awk '{a[NR]=$1} END {for (i = NR; i > 0; i--) print a[i]}' "$_list"); do
+        case "$_p" in ''|curl|*[!A-Za-z0-9._+-]*) continue ;; esac
+        if opkg remove --autoremove "$_p" </dev/null >/dev/null 2>&1; then
+            echo "[i] Удалён пакет: $_p"
+        else
+            echo "[!] Пакет $_p оставлен: он нужен другим программам"
+        fi
+    done
+    return 0
+}
+# z2k:shared:purge_leftovers:end
+
+# z2k:shared:warp_routing_sweep:begin
+# Маршрутизация WARP, если z2k-warp.sh уже не отработал: без неё метка, правило и
+# цепочка висят до перезагрузки, а ipset нельзя удалить, потому что он занят.
+# Трафик при этом не теряется: таблица пустеет вместе с интерфейсом и пакет идёт
+# дальше по обычным правилам.
+_z2k_warp_routing_sweep() {
+    local _spec _t _ch _r
+    ip rule del fwmark 0x989/0x989 table 989 2>/dev/null
+    ip rule del fwmark 0x989 table 989 2>/dev/null
+    ip route flush table 989 2>/dev/null
+    # Смотрим через -S: обычный вывод iptables -L -n не показывает интерфейсы, и правила
+    # z2ktunN в нём не найти. Метка 0x989, захват DNS (группа 189) и интерфейс — наши.
+    for _spec in mangle:PREROUTING mangle:FORWARD mangle:OUTPUT \
+                 filter:FORWARD filter:OUTPUT filter:INPUT nat:POSTROUTING; do
+        _t="${_spec%%:*}"; _ch="${_spec##*:}"
+        iptables -w -t "$_t" -S "$_ch" 2>/dev/null \
+            | grep -E -- '-j Z2K_WARP|z2ktun[0-9]|--nflog-group 189( |$)|--mark 0x989(/|$| )' | sed 's/^-A /-D /' \
+            | while IFS= read -r _r; do
+                # shellcheck disable=SC2086  # строка правила: разбиение намеренно
+                iptables -w -t "$_t" $_r 2>/dev/null
+            done
+    done
+    iptables -w -t mangle -F Z2K_WARP 2>/dev/null
+    iptables -w -t mangle -X Z2K_WARP 2>/dev/null
+    return 0
+}
+# z2k:shared:warp_routing_sweep:end
+
 echo ""
 echo "============================================"
-echo "  z2k_cleanup — полная зачистка zapret(2)"
+echo "  z2k_cleanup — полная зачистка z2k"
 echo "============================================"
 echo ""
-log_warn "ВНИМАНИЕ: Будут удалены ВСЕ файлы zapret и zapret2!"
-log_warn "Директории /opt/zapret и /opt/zapret2 будут удалены полностью."
+log_warn "ВНИМАНИЕ: будут удалены все файлы z2k, включая бэкапы и настройки."
+log_warn "Останется только ключ WARP. Чужие программы не затрагиваются."
 echo ""
 
 # ==========================================
 # 1. Остановка init-скриптов (мягкая попытка)
 # ==========================================
 
+# WARP снимаем ДО остановки его движка, как в основном удалении: правило и метка
+# ведут в интерфейс, который исчезнет вместе с процессом. S51 stop гасит только
+# движок, маршрутизацию он не трогает. Ключ устройства ниже удаляется отдельно.
+if [ -r /opt/zapret2/z2k-warp.sh ]; then
+    log_info "Снятие маршрутизации WARP..."
+    # stdin закрыт: скрипт запускают через `curl | sh`, и остаток скрипта читается оттуда же.
+    sh /opt/zapret2/z2k-warp.sh remove </dev/null >/dev/null 2>&1
+fi
+
 log_info "Попытка мягкой остановки через init-скрипты..."
 
-for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
+for init in /opt/etc/init.d/S99zapret2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
             /opt/etc/init.d/S96z2k-webpanel \
@@ -70,8 +412,7 @@ log_info "Удаление init-скриптов..."
 # отставало от жизни: после полной очистки на роутере оставались S96z2k-webpanel,
 # S98z2k-detect и S02z2k-tcp-tuning (поле, 16.09.2026). Имена наших служб все
 # начинаются с z2k, поэтому шаблон закрывает и те, что появятся позже.
-for init in /opt/etc/init.d/S99zapret2 /opt/etc/init.d/S99zapret \
-            /opt/etc/init.d/S99nfqws   /opt/etc/init.d/S99nfqws2 \
+for init in /opt/etc/init.d/S99zapret2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
             /opt/etc/init.d/S96z2k-webpanel \
@@ -95,8 +436,6 @@ done
 log_info "Удаление netfilter хуков..."
 
 for hook in /opt/etc/ndm/netfilter.d/000-zapret2.sh \
-            /opt/etc/ndm/netfilter.d/000-zapret.sh \
-            /opt/etc/ndm/netfilter.d/*zapret* \
             /opt/etc/ndm/netfilter.d/89-z2k-dns-redirect.sh \
             /opt/etc/ndm/netfilter.d/*z2k-dns* \
             /opt/etc/ndm/netfilter.d/90-z2k-tg-redirect.sh \
@@ -120,36 +459,31 @@ done
 # 4. Убийство всех процессов nfqws / nfqws2
 # ==========================================
 
-log_info "Поиск и завершение процессов nfqws / nfqws2..."
+log_info "Завершение своих процессов..."
 
 killed=0
-# Осиротевший туннельный интерфейс WARP (демон упал без cleanup)
-for _tun in $(ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \(z2ktun[0-9]*\)[:@].*/\1/p'); do
-    ip link set "$_tun" down 2>/dev/null
-    ip tuntap del dev "$_tun" mode tun 2>/dev/null
+# Планировщик и фоновые писатели: init-скрипта могло не быть, а живой планировщик
+# вернул бы обратно и правила, и настройки ядра.
+# Идущее автообновление гасим тоже: иначе оно вернёт удалённое из снимка отката.
+for _pat in 'S99z2k-scheduler' 'z2k-scheduler\.sh' 'z2k-auto-update' 'z2k-detect' 'lighttpd.*zapret2'; do
+    _spids=$(ps w 2>/dev/null | grep -E "$_pat" | grep -v grep | awk '{print $1}')
+    # shellcheck disable=SC2086  # список pid'ов — разбиение намеренно
+    [ -n "$_spids" ] && kill -9 $_spids 2>/dev/null
 done
-for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-warpd; do
-    pids=$(pidof "$proc_name" 2>/dev/null || true)
-    if [ -n "$pids" ]; then
-        for pid in $pids; do
-            log_warn "  Убиваю $proc_name (PID $pid)"
-            kill -9 "$pid" 2>/dev/null || true
-            killed=$((killed + 1))
-        done
+# nfqws2 и tpws могут принадлежать чужой установке, остальные имена только наши.
+_z2k_kill_ours nfqws2
+_z2k_kill_ours nfqws
+_z2k_kill_ours tpws
+for proc_name in tg-mtproxy-client z2k-rt-proxy z2k-warpd; do
+    if pidof "$proc_name" >/dev/null 2>&1; then
+        killall -9 "$proc_name" 2>/dev/null
+        killed=$((killed + 1))
     fi
 done
 
-# Дополнительный поиск через ps (на случай если pidof не нашёл)
-for proc_name in nfqws2 nfqws tg-mtproxy-client z2k-rt-proxy z2k-warpd; do
-    ps_pids=$(ps w 2>/dev/null | awk -v name="$proc_name" '$0 ~ "/"name"( |$)" || $0 ~ " "name"( |$)" {print $1}' || true)
-    if [ -n "$ps_pids" ]; then
-        for pid in $ps_pids; do
-            log_warn "  Убиваю $proc_name (PID $pid, найден через ps)"
-            kill -9 "$pid" 2>/dev/null || true
-            killed=$((killed + 1))
-        done
-    fi
-done
+_z2k_warp_routing_sweep
+
+_z2k_warp_finish
 
 if [ "$killed" -eq 0 ]; then
     log_skip "Запущенных процессов nfqws/nfqws2/tg-mtproxy-client не найдено"
@@ -161,10 +495,10 @@ fi
 # 5. Очистка iptables правил и цепочек
 # ==========================================
 
-log_info "Очистка iptables правил zapret/zapret2..."
+log_info "Очистка своих правил iptables..."
 
-# Список известных цепочек zapret/zapret2
-chains_mangle="ZAPRET ZAPRET2 z2k_connmark"
+# Наши цепочки
+chains_mangle="ZAPRET2 z2k_connmark"
 chains_nat="z2k_masq_fix zapret2_nat"
 chains_raw="z2k_dpi_rst"
 
@@ -206,16 +540,7 @@ for chain in $chains_raw; do
     iptables -t raw -X "$chain" 2>/dev/null && log_info "  Удалена raw/$chain"
 done
 
-# Поиск и удаление любых оставшихся правил с упоминанием nfqws/zapret
-for table in mangle nat raw filter; do
-    # Ищем правила с nfqueue (nfqws использует NFQUEUE target)
-    rule_nums=$(iptables -t "$table" -L POSTROUTING --line-numbers -n 2>/dev/null \
-        | grep -i "NFQUEUE\|zapret\|nfqws\|z2k" | awk '{print $1}' | sort -rn || true)
-    for num in $rule_nums; do
-        iptables -t "$table" -D POSTROUTING "$num" 2>/dev/null && \
-            log_info "  Удалено правило POSTROUTING #$num из $table"
-    done
-done
+_z2k_sweep_our_rules
 
 # ==========================================
 # 5a. Telegram-туннель: NAT REDIRECT правила
@@ -292,7 +617,7 @@ ipset destroy z2k_tpws6 2>/dev/null && log_info "  Удалён ipset z2k_tpws6"
 rm -rf /opt/zapret2/tpws /opt/zapret2/z2k-tpws.sh /opt/zapret2/z2k-tpws-watchdog.sh \
        /opt/zapret2/lists/youtube_ips.txt /opt/zapret2/lists/youtube_ips6.txt \
        /var/run/z2k-tpws.pid 2>/dev/null
-killall -9 tpws 2>/dev/null || true
+_z2k_kill_ours tpws
 if [ "$tpws_rules_removed" -gt 0 ]; then
     log_info "  Снято правил tpws: $tpws_rules_removed"
 else
@@ -305,18 +630,24 @@ fi
 
 log_info "Удаление iptables правил per-flow PPE de-offload..."
 ppe_rules_removed=0
-ppe_args="-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE"
-for ppe_c in FORWARD PREROUTING; do
-    while iptables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do
-        iptables -w -t mangle -D "$ppe_c" $ppe_args 2>/dev/null || break
-        ppe_rules_removed=$((ppe_rules_removed + 1))
-    done
-    if command -v ip6tables >/dev/null 2>&1; then
-        while ip6tables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do
-            ip6tables -w -t mangle -D "$ppe_c" $ppe_args 2>/dev/null || break
+# Текущее правило, прежнее (без порта 5222) и правило QUIC. Пока тут стоял только
+# прежний вариант, текущее не снималось и поток оставался мимо ускорителя.
+for ppe_args in "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE" \
+                "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE" \
+                "-p udp --dport 443 -m connskip --connskip 30 -j PPE" \
+                "-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j PPE"; do
+    for ppe_c in FORWARD PREROUTING; do
+        while iptables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do
+            iptables -w -t mangle -D "$ppe_c" $ppe_args 2>/dev/null || break
             ppe_rules_removed=$((ppe_rules_removed + 1))
         done
-    fi
+        if command -v ip6tables >/dev/null 2>&1; then
+            while ip6tables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do
+                ip6tables -w -t mangle -D "$ppe_c" $ppe_args 2>/dev/null || break
+                ppe_rules_removed=$((ppe_rules_removed + 1))
+            done
+        fi
+    done
 done
 rm -f /opt/zapret2/z2k-ppe-deoffload.sh 2>/dev/null
 if [ "$ppe_rules_removed" -gt 0 ]; then
@@ -431,7 +762,7 @@ if command -v ndmc >/dev/null 2>&1; then
     _running=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
     for _h in $_pin_hosts redirector.googlevideo.com; do
         # Точное совпадение по имени: подстрока зацепила бы чужие домены.
-        _lines=$(printf '%s\n' "$_running" | awk -v h="$_h" '$1=="ip" && $2=="host" && $3==h {print}')
+        _lines=$(printf '%s\n' "$_running" | awk -v h="$_h" '$1=="ip" && $2=="host" && $3==h {print}' | _z2k_not_d2k_pins)
         [ -n "$_lines" ] || continue
         _IFS_save="$IFS"
         IFS='
@@ -453,6 +784,10 @@ if command -v ndmc >/dev/null 2>&1; then
         log_skip "DNS-пинов Instagram/WhatsApp/4pda не найдено"
     fi
 fi
+
+# Записи релея (→ наш узел), голоса Discord и GitHub. Этого блока здесь не было:
+# после «полной» зачистки WhatsApp оставался прибит к нашему узлу навсегда.
+_z2k_remove_our_ip_hosts
 
 # Бинарь и его init-скрипт (директории /opt/zapret2 сносятся ниже, но /opt/sbin — нет).
 # z2k-detect и z2k-warpd лежат там же и так же не уходят с деревом: их забыли
@@ -491,21 +826,22 @@ if [ -f /opt/etc/crontab ]; then
     fi
 fi
 
-# Re-enable Vixie cron's init script — z2k disabled it during install
-# (chmod -x). Cron itself is not ours to remove; restore it so the user
-# has it available for unrelated needs.
-if [ -f /opt/etc/init.d/S10cron ] && [ ! -x /opt/etc/init.d/S10cron ]; then
-    chmod +x /opt/etc/init.d/S10cron 2>/dev/null \
-        && log_info "  Восстановлен autostart cron-демона (/opt/etc/init.d/S10cron +x)"
-fi
-
 # ==========================================
 # 6. Удаление директорий
 # ==========================================
 
-log_info "Удаление директорий zapret/zapret2..."
+# Сетевые параметры: S99 мог не отработать. Планировщик и хуки уже сняты, вернуть их
+# обратно некому. Конфиг читаем сейчас, ниже он удаляется.
+while iptables -w -t mangle -C _NDM_POSTROUTING_TTL -m mark --mark 0x40000000/0x40000000 -j RETURN 2>/dev/null; do
+    iptables -w -t mangle -D _NDM_POSTROUTING_TTL -m mark --mark 0x40000000/0x40000000 -j RETURN 2>/dev/null || break
+done
+_z2k_restore_kernel_tuning "$(sed -n 's/^Z2K_FASTROUTE_OFF=//p' /opt/zapret2/config 2>/dev/null | tail -n 1 | tr -d "\"'")"
 
-for dir in /opt/zapret2 /opt/zapret; do
+_z2k_destroy_our_ipsets
+
+log_info "Удаление своих каталогов..."
+
+for dir in /opt/zapret2 /opt/z2k-rollback /opt/z2k-upgrade-backup /opt/etc/zapret2 /opt/zapret2.old.*; do
     if [ -d "$dir" ]; then
         rm -rf "$dir"
         log_info "  Удалена: $dir"
@@ -526,24 +862,10 @@ fi
 
 log_info "Очистка временных файлов..."
 
-# ЧТО УХОДИТ ВМЕСТЕ С ДЕРЕВОМ, А ЧТО ЛЕЖИТ ОТДЕЛЬНО.
-#
-# Часть нашего состояния живёт ВНЕ /opt/zapret2 и переживает переустановку
-# намеренно: адрес и порт панели (/opt/etc/z2k/webpanel), доверенный ключ
-# релизов (/opt/etc/z2k/.trust) и регистрация WARP у Cloudflare
-# (/opt/etc/z2k-warp). Для обновления это правильно — иначе человек каждый раз
-# заново ищет панель и жжёт регистрацию. Но ЭТОТ скрипт называется полной
-# зачисткой, и «полная» обязана значить полную: после него на роутере не должно
-# остаться ни настроек, ни регистрации, ни журналов.
-#
-# Отличие от кнопки «Удалить» в панели сознательное: она сносит обход, но
-# регистрацию WARP бережёт (перерегистрация у Cloudflare не бесплатна и
-# ограничена по частоте). Здесь — сносим.
-#
-# НЕ ТРОГАЕМ /opt/etc/opkg.conf.z2k-bak: это резервная копия ЧУЖОГО файла,
-# сделанная перед правкой зеркала Entware. Удалять чужую резервную копию мы не
-# вправе — человек может по ней восстановиться.
-for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
+# ЧТО УХОДИТ ВМЕСТЕ С ДЕРЕВОМ, А ЧТО ЛЕЖИТ ОТДЕЛЬНО. Настройки панели и журналы живут
+# вне /opt/zapret2 и уходят здесь. Ключ WARP остаётся, см. _z2k_warp_finish.
+_z2k_remove_our_packages
+for tmpdir in /tmp/z2k /tmp/zapret2 \
               /tmp/z2k-log/tg-tunnel.log /tmp/tg-tunnel-watchdog.state \
               /var/run/tg-tunnel.pid \
               /tmp/z2k-log/z2k-http-tunnel.log /var/run/z2k-http-tunnel.pid \
@@ -560,7 +882,6 @@ for tmpdir in /tmp/z2k /tmp/zapret /tmp/zapret2 /tmp/blockcheck* \
               /tmp/z2k-tcp16-probe.log \
               /opt/bin/z2k \
               /opt/etc/z2k \
-              /opt/etc/z2k-warp \
               /opt/etc/.z2k-rkn-fp.list /opt/etc/.z2k-rkn-fp.sha256 \
               /opt/etc/.z2k-instagram-purge-2026-05-28.done; do
     if [ -e "$tmpdir" ]; then
@@ -573,19 +894,8 @@ done
 # 8. Очистка ipset (если остались)
 # ==========================================
 
-log_info "Очистка ipset..."
-
-for setname in zapret zapret2 z2k; do
-    if ipset list "$setname" >/dev/null 2>&1; then
-        ipset destroy "$setname" 2>/dev/null && log_info "  Удалён ipset: $setname"
-    fi
-done
-
-# Поиск ipset с zapret в имени
-ipset_list=$(ipset list -n 2>/dev/null | grep -i "zapret\|z2k" || true)
-for setname in $ipset_list; do
-    ipset destroy "$setname" 2>/dev/null && log_info "  Удалён ipset: $setname"
-done
+log_info "Очистка оставшегося..."
+_z2k_purge_leftovers
 
 # ==========================================
 # 9. Финальная проверка
@@ -595,11 +905,10 @@ echo ""
 log_info "=== Финальная проверка ==="
 
 # Проверка процессов
-remaining=$(ps w 2>/dev/null | awk '$0 ~ "/nfqws[2]?( |$)" || $0 ~ " nfqws[2]?( |$)"' | wc -l)
-if [ "$remaining" -gt 0 ]; then
-    log_error "Остались запущенные процессы nfqws! Проверьте: ps | grep nfqws"
+if [ -n "$(_z2k_our_pids nfqws2)" ]; then
+    log_error "Остался запущенный nfqws2! Проверьте: ps | grep nfqws2"
 else
-    log_info "Процессы nfqws/nfqws2: не найдены"
+    log_info "Свой процесс nfqws2: не найден"
 fi
 
 if pgrep -f "tg-mtproxy-client" >/dev/null 2>&1; then
@@ -609,7 +918,7 @@ else
 fi
 
 # Проверка директорий
-for dir in /opt/zapret /opt/zapret2; do
+for dir in /opt/zapret2; do
     if [ -d "$dir" ]; then
         log_error "Директория всё ещё существует: $dir"
     else
@@ -618,7 +927,7 @@ for dir in /opt/zapret /opt/zapret2; do
 done
 
 # Проверка init-скриптов
-for init in /opt/etc/init.d/S99zapret /opt/etc/init.d/S99zapret2 \
+for init in /opt/etc/init.d/S99zapret2 \
             /opt/etc/init.d/S97z2k-http-tunnel \
             /opt/etc/init.d/S96z2k-rt-proxy \
             /opt/etc/init.d/S51z2k-warp \
@@ -644,23 +953,32 @@ fi
 # аварийного скрипта, оставался с выключенным навсегда штатным lighttpd и без
 # единого следа почему. Ровно эта жалоба пришла с поля 30.08.2026.
 #
-# Чужой файл не затираем: имя занято — значит человек что-то сделал сам.
-for _dis in /opt/etc/init.d/.S*lighttpd.disabled-by-z2k; do
-    [ -e "$_dis" ] || continue
-    _base="${_dis##*/}"; _base="${_base#.}"; _base="${_base%.disabled-by-z2k}"
-    if [ -e "${_dis%/*}/$_base" ]; then
-        log_warn "Не возвращаю $_base — файл с таким именем уже есть"
-    elif mv "$_dis" "${_dis%/*}/$_base" 2>/dev/null; then
-        log_info "Возвращён штатный init: $_base"
-    else
-        log_warn "Не удалось вернуть $_dis — перенесите вручную"
-    fi
-done
+# Чужой файл не затираем, а на порт 80 не возвращаем (см. саму функцию).
+_z2k_restore_stock_lighttpd
+
+_cleanup_incomplete=0
+_z2k_ip_hosts_clean || _cleanup_incomplete=1
+if ip -o link show 2>/dev/null | grep -q 'z2ktun[0-9]'; then
+    log_error "Остался интерфейс WARP z2ktun: исчезнет после перезагрузки роутера."
+    _cleanup_incomplete=1
+fi
 
 echo ""
 echo "============================================"
+if [ "$_cleanup_incomplete" = 1 ]; then
+    log_warn "Зачистка завершена не полностью: см. сообщения выше."
+fi
 log_info "Зачистка завершена."
+if [ -f /opt/etc/z2k-warp/device.json ]; then
+    log_info "Оставлен только ключ WARP: /opt/etc/z2k-warp/device.json"
+fi
+log_info "Параметры TCP (буферы, BBR) вернутся к заводским после перезагрузки роутера."
 log_info "Для переустановки z2k:"
 echo "  sh -c 'tmp=/tmp/z2k.sh; rm -f \"\$tmp\"; for url in \"https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh\" \"https://cdn.jsdelivr.net/gh/necronicle/z2k@z2k-enhanced/z2k.sh\" \"https://gh-proxy.com/https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh\"; do echo \"[i] Пробую: \$url\" >&2; if curl -fsSL --connect-timeout 10 --max-time 180 \"\$url\" -o \"\$tmp\"; then exec sh \"\$tmp\"; fi; done; echo \"[FAIL] Не удалось скачать z2k.sh ни с одного зеркала\" >&2; exit 1'"
 echo "============================================"
 echo ""
+
+# Сам скрипт, если его скачали во временный файл: оболочка уже держит его открытым.
+case "$0" in
+    /tmp/z2k_cleanup*) rm -f "$0" ;;
+esac

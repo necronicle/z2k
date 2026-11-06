@@ -45,10 +45,16 @@ for input in '' 'http://z2kwarp:z2kW4rpR3g2026@213.176.74.63:8119' 'http://custo
 printf '[PASS] stock endpoint migration, custom preservation, idempotency, WARP runtime defaults\n'
 
 # Execute the uninstall relay-pin block with a mock ndmc: both stock IPs removed.
-ndmc() { printf '%s\n' "$2" >> "$SB/ndmc.log"; }
+ndmc() {
+    case "$2" in
+        "show running-config") printf 'ip host g.whatsapp.net 213.176.74.63\nip host g.whatsapp.net 85.192.60.175\n' ;;
+        *) printf '%s\n' "$2" >> "$SB/ndmc.log" ;;
+    esac
+}
 export SB
-sed -n '/^    # Clear the WhatsApp/,/^    # Clear the Discord/p' "$ROOT/lib/install.sh" > "$SB/unpin.sh"
+sed -n '/^# z2k:shared:remove_our_ip_hosts:begin/,/^# z2k:shared:remove_our_ip_hosts:end/p' "$ROOT/lib/install.sh" > "$SB/unpin.sh"
 . "$SB/unpin.sh"
+_z2k_remove_our_ip_hosts
 grep -q '^no ip host g.whatsapp.net 213.176.74.63$' "$SB/ndmc.log"
 grep -q '^no ip host g.whatsapp.net 85.192.60.175$' "$SB/ndmc.log"
 printf '[PASS] uninstall removes old and new stock relay pins\n'

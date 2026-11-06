@@ -4,7 +4,7 @@
 # Leaves no trace: stops the service (including the respawn supervisor and
 # the boot-time waiter), removes init.d script, pidfiles, www content and
 # webpanel/ directory — and restores the stock lighttpd init that
-# install.sh disabled.
+# install.sh disabled, unless it would take port 80 from the router's own UI.
 
 set -eu
 
@@ -14,6 +14,65 @@ INIT_DST="/opt/etc/init.d/S96z2k-webpanel"
 PIDFILE="/var/run/z2k-webpanel.pid"
 SUP_PIDFILE="/var/run/z2k-webpanel-sup.pid"
 WAIT_PIDFILE="/var/run/z2k-webpanel-wait.pid"
+
+# z2k:shared:restore_stock_lighttpd:begin
+# Вернуть штатный lighttpd, если его выключала установка панели.
+#
+# НА 80-Й ПОРТ НЕ ВОЗВРАЩАЕМ. Панель ставит пакет lighttpd, а он приносит свой
+# автозапуск со стоковым конфигом: server.port там нет, значит 0.0.0.0:80. Этот
+# порт принадлежит nginx прошивки. Возврат такого файла при следующей загрузке
+# роняет веб-интерфейс роутера (журнал с поля 01.09.2026: «bind() to
+# 192.168.1.1:80 failed», «Service: "Nginx": unexpectedly stopped»). Правило то же,
+# что в _stock_init_verdict при установке. Такой lighttpd поставили мы ради панели,
+# поэтому он уходит вместе с пакетом. Если opkg не справился, файл остаётся выключенным
+# и напечатана команда для возврата.
+#
+# Этот блок одинаков во всех путях удаления, сверяет tests/test_uninstall_restores_router.sh.
+_z2k_restore_stock_lighttpd() {
+    local _idir _cdir _dis _base _f _p _sport _pkgs
+    _idir="${Z2K_INITD_DIR:-/opt/etc/init.d}"
+    _cdir="${Z2K_LIGHTTPD_CONF_DIR:-/opt/etc/lighttpd}"
+    for _dis in "$_idir"/.S*lighttpd.disabled-by-z2k; do
+        [ -e "$_dis" ] || continue
+        _base="${_dis##*/}"; _base="${_base#.}"; _base="${_base%.disabled-by-z2k}"
+        _sport=""
+        for _f in "$_cdir/lighttpd.conf" "$_cdir"/conf.d/*.conf; do
+            [ -f "$_f" ] || continue
+            # Дополнительный сокет на 80-м занимает порт при любом server.port.
+            if grep -Eq '^[[:space:]]*\$SERVER\["socket"\][^#]*:80"' "$_f"; then _sport=80; break; fi
+            _p=$(sed -n 's/^[[:space:]]*server\.port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$_f" | head -1)
+            if [ -n "$_p" ] && [ -z "$_sport" ]; then _sport="$_p"; fi
+        done
+        [ -n "$_sport" ] || _sport=80
+        if [ "$_sport" = "80" ]; then
+            # Такой lighttpd работать не мог, его принёс пакет ради панели. Снимаем
+            # пакет целиком, иначе выключенный файл и пакет остаются мусором.
+            _pkgs=""
+            if command -v opkg >/dev/null 2>&1; then
+                _pkgs=$(opkg list-installed 2>/dev/null | awk '$1 ~ /^lighttpd(-mod-.*)?$/ {print $1}' | sort -r)
+                # shellcheck disable=SC2086  # список пакетов: разбиение намеренно
+                [ -z "$_pkgs" ] || opkg remove $_pkgs </dev/null >/dev/null 2>&1
+                _pkgs=$(opkg list-installed 2>/dev/null | awk '$1 == "lighttpd" {print $1}')
+            fi
+            if [ -z "$_pkgs" ] && command -v opkg >/dev/null 2>&1; then
+                rm -f "$_dis"
+                rm -rf "$_cdir" /opt/var/log/lighttpd 2>/dev/null
+                echo "[i] Удалён пакет lighttpd, поставленный для панели"
+            else
+                echo "[!] Штатный $_base не возвращён: порт 80 занят веб-интерфейсом роутера."
+                echo "    Если он нужен, смените server.port и выполните: mv '$_dis' '$_idir/$_base'"
+            fi
+        elif [ -e "$_idir/$_base" ]; then
+            echo "[!] Не возвращаю $_base: файл с таким именем уже есть"
+        elif mv "$_dis" "$_idir/$_base" 2>/dev/null; then
+            echo "[i] Возвращён штатный init: $_base"
+        else
+            echo "[!] Не удалось вернуть $_dis: перенесите вручную"
+        fi
+    done
+    return 0
+}
+# z2k:shared:restore_stock_lighttpd:end
 
 echo "[1/5] Stopping panel"
 if [ -x "$INIT_DST" ]; then
@@ -29,8 +88,11 @@ fi
 _kill_matching() {
     for _p in $(pgrep -f "$1" 2>/dev/null); do
         [ "$_p" = "$$" ] && continue
-        kill "$_p" 2>/dev/null
+        # Процесс мог уйти между pgrep и kill, в том числе сама подоболочка с pgrep.
+        # Под set -e это обрывало бы удаление панели на первом шаге.
+        kill "$_p" 2>/dev/null || true
     done
+    return 0
 }
 _kill_matching "$INIT_DST"
 _kill_matching "lighttpd.*$WEBPANEL_DIR"
@@ -40,22 +102,7 @@ echo "[2/5] Removing init.d script"
 rm -f "$INIT_DST"
 
 echo "[3/5] Restoring stock lighttpd init (if we disabled one)"
-# install.sh отключает конфликтующий штатный S*lighttpd переименованием в
-# .<имя>.disabled-by-z2k. «Leaves no trace» обязан вернуть его обратно —
-# иначе штатный lighttpd юзера остаётся выключенным навсегда.
-for _d in /opt/etc/init.d/.S*lighttpd.disabled-by-z2k; do
-    [ -e "$_d" ] || continue
-    _b="${_d##*/}"
-    _b="${_b#.}"
-    _b="${_b%.disabled-by-z2k}"
-    if [ -e "${_d%/*}/$_b" ]; then
-        echo "  NOT restoring $_d — ${_d%/*}/$_b already exists" >&2
-    elif mv "$_d" "${_d%/*}/$_b" 2>/dev/null; then
-        echo "  restored ${_d%/*}/$_b"
-    else
-        echo "  could not restore $_d — move it back manually" >&2
-    fi
-done
+_z2k_restore_stock_lighttpd
 
 echo "[4/5] Removing www, webpanel dirs and log artifacts"
 # .new/.old — staging/backup атомарной установки, могли остаться от

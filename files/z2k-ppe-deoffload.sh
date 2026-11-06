@@ -174,17 +174,18 @@ z2k_ppe_ensure_rules() {
     z2k_ppe_rule_present_pre4 && z2k_ppe_rule_present_fwd4
 }
 
-# Remove the rules (loops in case of duplicates). v4 + v6.
+# Remove the rules (loops in case of duplicates). v4 + v6. `|| break`: если правило
+# видно, а снять его нельзя, цикл не должен вешать остановку и удаление навсегда.
 z2k_ppe_remove_rules() {
-    while z2k_ppe_rule_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_args; done
-    while z2k_ppe_rule_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_args; done
-    while z2k_ppe_udp_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_udp_args; done
-    while z2k_ppe_udp_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_udp_args; done
+    while z2k_ppe_rule_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_args || break; done
+    while z2k_ppe_rule_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_args || break; done
+    while z2k_ppe_udp_present_pre4; do _z2k_ppe_ipt -t mangle -D PREROUTING $_z2k_ppe_udp_args || break; done
+    while z2k_ppe_udp_present_fwd4; do _z2k_ppe_ipt -t mangle -D FORWARD    $_z2k_ppe_udp_args || break; done
     if command -v ip6tables >/dev/null 2>&1; then
-        while z2k_ppe_rule_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_args; done
-        while z2k_ppe_rule_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_args; done
-        while z2k_ppe_udp_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_udp_args; done
-        while z2k_ppe_udp_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_udp_args; done
+        while z2k_ppe_rule_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_args || break; done
+        while z2k_ppe_rule_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_args || break; done
+        while z2k_ppe_udp_present_pre6; do _z2k_ppe_ipt6 -t mangle -D PREROUTING $_z2k_ppe_udp_args || break; done
+        while z2k_ppe_udp_present_fwd6; do _z2k_ppe_ipt6 -t mangle -D FORWARD    $_z2k_ppe_udp_args || break; done
     fi
     return 0
 }
