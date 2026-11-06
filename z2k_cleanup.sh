@@ -291,12 +291,12 @@ _z2k_purge_leftovers() {
           /opt/etc/.z2k-* /opt/var/log/z2k-* \
           /opt/etc/init.d/S99zapret2.* /opt/etc/init.d/S*z2k* /opt/etc/ndm/netfilter.d/*z2k* \
           /opt/sbin/*.z2kbak /opt/sbin/z2k-usque \
-          /opt/sbin/tg-mtproxy-client.new.* /opt/sbin/z2k-detect.new.* \
-          /opt/sbin/z2k-warpd.new.* /opt/sbin/z2k-rt-proxy.new.* \
           /opt/etc/init.d/S97tg-mtproxy \
-          /opt/etc/init.d/*.z2k-au.* /opt/etc/ndm/netfilter.d/*.z2k-au.* /opt/sbin/*.z2k-au.* \
-          /opt/sbin/tg-mtproxy-client.rb.* /opt/sbin/z2k-detect.rb.* \
-          /opt/sbin/z2k-warpd.rb.* /opt/sbin/z2k-rt-proxy.rb.* 2>/dev/null
+          /opt/etc/init.d/*.z2k-au.* /opt/etc/ndm/netfilter.d/*.z2k-au.* /opt/sbin/*.z2k-au.* 2>/dev/null
+    # Незавершённые подмены бинарников от оборванных обновлений и откатов.
+    for _f in tg-mtproxy-client z2k-detect z2k-warpd z2k-rt-proxy; do
+        rm -f "/opt/sbin/$_f.new."* "/opt/sbin/$_f.rb."* 2>/dev/null
+    done
     # Обычный файл с таким именем чужой: установщик его и сам не перезаписывает.
     [ -L /opt/bin/z2k ] && rm -f /opt/bin/z2k
     # Ссылки на библиотеки, которые создаёт установка. Только если это именно они.
@@ -794,7 +794,6 @@ _z2k_remove_our_ip_hosts
 # внести, и после деинсталляции на флешке оставалось 12 МБ мёртвых бинарников.
 for _f in /opt/sbin/z2k-rt-proxy /opt/sbin/z2k-rt-proxy.z2kbak \
           /opt/sbin/z2k-detect /opt/sbin/z2k-warpd \
-          /opt/sbin/z2k-usque \
           /opt/sbin/z2k-detect.new.* /opt/sbin/z2k-warpd.new.* \
           /opt/sbin/z2k-rt-proxy.new.*; do
     [ -f "$_f" ] && rm -f "$_f" && log_info "  Удалён $_f"
@@ -918,13 +917,11 @@ else
 fi
 
 # Проверка директорий
-for dir in /opt/zapret2; do
-    if [ -d "$dir" ]; then
-        log_error "Директория всё ещё существует: $dir"
-    else
-        log_info "Директория удалена: $dir"
-    fi
-done
+if [ -d /opt/zapret2 ]; then
+    log_error "Директория всё ещё существует: /opt/zapret2"
+else
+    log_info "Директория удалена: /opt/zapret2"
+fi
 
 # Проверка init-скриптов
 for init in /opt/etc/init.d/S99zapret2 \

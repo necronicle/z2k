@@ -5530,12 +5530,12 @@ _z2k_purge_leftovers() {
           /opt/etc/.z2k-* /opt/var/log/z2k-* \
           /opt/etc/init.d/S99zapret2.* /opt/etc/init.d/S*z2k* /opt/etc/ndm/netfilter.d/*z2k* \
           /opt/sbin/*.z2kbak /opt/sbin/z2k-usque \
-          /opt/sbin/tg-mtproxy-client.new.* /opt/sbin/z2k-detect.new.* \
-          /opt/sbin/z2k-warpd.new.* /opt/sbin/z2k-rt-proxy.new.* \
           /opt/etc/init.d/S97tg-mtproxy \
-          /opt/etc/init.d/*.z2k-au.* /opt/etc/ndm/netfilter.d/*.z2k-au.* /opt/sbin/*.z2k-au.* \
-          /opt/sbin/tg-mtproxy-client.rb.* /opt/sbin/z2k-detect.rb.* \
-          /opt/sbin/z2k-warpd.rb.* /opt/sbin/z2k-rt-proxy.rb.* 2>/dev/null
+          /opt/etc/init.d/*.z2k-au.* /opt/etc/ndm/netfilter.d/*.z2k-au.* /opt/sbin/*.z2k-au.* 2>/dev/null
+    # Незавершённые подмены бинарников от оборванных обновлений и откатов.
+    for _f in tg-mtproxy-client z2k-detect z2k-warpd z2k-rt-proxy; do
+        rm -f "/opt/sbin/$_f.new."* "/opt/sbin/$_f.rb."* 2>/dev/null
+    done
     # Обычный файл с таким именем чужой: установщик его и сам не перезаписывает.
     [ -L /opt/bin/z2k ] && rm -f /opt/bin/z2k
     # Ссылки на библиотеки, которые создаёт установка. Только если это именно они.
@@ -5924,16 +5924,12 @@ uninstall_zapret2() {
           /opt/etc/ndm/netfilter.d/89-z2k-dns-redirect.sh \
           /opt/sbin/tg-mtproxy-client \
           /opt/sbin/z2k-detect /opt/sbin/z2k-warpd \
-          /opt/sbin/z2k-usque /opt/sbin/z2k-rt-proxy.z2kbak \
+          /opt/sbin/z2k-rt-proxy.z2kbak \
           /opt/etc/init.d/S97tg-mtproxy \
           /var/run/tg-tunnel.pid \
           /tmp/z2k-log/tg-tunnel.log \
           /tmp/tg-tunnel-watchdog.state \
           /tmp/tg-crash.log 2>/dev/null || true
-    # Незавершённые подмены бинарников от оборванных обновлений.
-    for _b in tg-mtproxy-client z2k-detect z2k-warpd z2k-rt-proxy; do
-        rm -f "/opt/sbin/$_b.new."* 2>/dev/null
-    done
     # Задачи в cron от старых версий: они звали бы уже удалённые файлы.
     if command -v crontab >/dev/null 2>&1 \
        && crontab -l 2>/dev/null | grep -qE "tg-tunnel-watchdog|S97tg-mtproxy|z2k-auto-update|z2k-update-lists|z2k-classify-drift|z2k-nightly-probe|ipset/get_config|z2k-scheduler"; then
@@ -6021,12 +6017,10 @@ uninstall_zapret2() {
         print_warning "Остался интерфейс WARP z2ktun: исчезнет после перезагрузки роутера"
         _leftover=$((_leftover + 1))
     fi
-    for _dir in /opt/zapret2; do
-        if [ -d "$_dir" ]; then
-            print_warning "Осталась директория: $_dir"
-            _leftover=$((_leftover + 1))
-        fi
-    done
+    if [ -d /opt/zapret2 ]; then
+        print_warning "Осталась директория: /opt/zapret2"
+        _leftover=$((_leftover + 1))
+    fi
     # Записи в конфиге роутера переживают перезагрузку, поэтому без их проверки
     # говорить «полностью удалён» нельзя.
     _z2k_ip_hosts_clean || _leftover=$((_leftover + 1))
