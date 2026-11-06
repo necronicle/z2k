@@ -78,7 +78,7 @@ var (
 	probeBytes     = flag.Int("probe-bytes", 8192, "body bytes an upstream must actually deliver to count as live")
 	maxClients     = flag.Int("max-clients", 128, "ceiling on concurrent client connections; further connections are refused immediately rather than queued")
 	directFallback = flag.Bool("direct-fallback", true, "when no upstream can serve the target, resolve it ourselves and connect DIRECTLY instead of dropping the client")
-	directHosts    = flag.String("direct-fallback-hosts", "rutracker.org,rutracker.wiki,rutracker.cc,t-ru.org", "comma-separated suffixes eligible for the direct fallback — NOT a general escape hatch, see dialDirect")
+	directHosts    = flag.String("direct-fallback-hosts", "rutracker.org,rutracker.wiki,rutracker.cc,t-ru.org,"+echPublicName, "comma-separated suffixes eligible for the direct fallback — NOT a general escape hatch, see dialDirect")
 	resolveTO      = flag.Duration("resolve-timeout", 5*time.Second, "DNS budget PER RESOLVER (not shared: a blocked direct resolver must not starve the system-resolver fallback)")
 	verbose        = flag.Bool("v", false, "verbose logging")
 )
@@ -865,6 +865,44 @@ var directLookup = func(ctx context.Context, host string) ([]string, error) {
 	return directResolver().LookupHost(ctx, host)
 }
 
+// echPublicName is the outer SNI a browser sends when it reaches a pinned Cloudflare
+// domain with Encrypted Client Hello. The real name is encrypted, so this is all the
+// bridge can see.
+const echPublicName = "cloudflare-ech.com"
+
+// Seam: the direct path does real I/O on port 443.
+var dialDirectFn = dialDirect
+
+// connectTarget picks the route out for one client connection.
+//
+// ECH GOES STRAIGHT TO CLOUDFLARE. The upstream pool cannot carry it: measured on all
+// 9 nodes on 2026-11-04, CONNECT to the public name or the edge IP returns 200 and then
+// EOF, and CONNECT to the real name reaches a certificate that does not cover the public
+// name. Asking the pool only costs the client --first-byte-timeout per node. Any
+// address of the public name serves every pinned domain (measured 2026-11-06), and the
+// bridge relays the bytes untouched, so end-to-end TLS stays between browser and site.
+func connectTarget(p *pool, sni string, hello []byte) (net.Conn, *bufio.Reader) {
+	if *directFallback && strings.EqualFold(strings.TrimSuffix(sni, "."), echPublicName) {
+		return dialDirectFn(sni, hello)
+	}
+	// dialUpstream replays the ClientHello itself and only returns a tunnel that has
+	// already answered with real bytes, retrying other nodes as needed — so by here the
+	// upstream is proven, not merely connected.
+	up, br := dialUpstream(p, sni, hello)
+	if up == nil && *directFallback {
+		// FAIL OPEN, the one thing the official RuTracker extension gets better
+		// than we did. Its PAC returns DIRECT for anything it cannot proxy; our
+		// DNS pin turns the same situation into a dead end, because the name is
+		// hijacked to a sentinel and the only route out was the upstream. Measured:
+		// rutracker.cc (no upstream A record at all) and www.rutracker.org (blockme
+		// serves the apex but not www) were hard 000s purely because they were
+		// pinned. main.go used to claim a direct fallback was "not constructible
+		// because the destination is a fake sentinel" — untrue: we hold the SNI.
+		up, br = dialDirectFn(sni, hello)
+	}
+	return up, br
+}
+
 // directHostAllowed matches the SNI against --direct-fallback-hosts, exactly or as
 // a dot-anchored suffix, so "cc.rutracker.org.evil.tld" cannot slip through.
 func directHostAllowed(sni string) bool {
@@ -991,21 +1029,7 @@ func handle(client net.Conn, p *pool) {
 		return
 	}
 
-	// dialUpstream replays the ClientHello itself and only returns a tunnel that has
-	// already answered with real bytes, retrying other nodes as needed — so by here the
-	// upstream is proven, not merely connected.
-	up, br := dialUpstream(p, sni, hello)
-	if up == nil && *directFallback {
-		// FAIL OPEN, the one thing the official RuTracker extension gets better
-		// than we did. Its PAC returns DIRECT for anything it cannot proxy; our
-		// DNS pin turns the same situation into a dead end, because the name is
-		// hijacked to a sentinel and the only route out was the upstream. Measured:
-		// rutracker.cc (no upstream A record at all) and www.rutracker.org (blockme
-		// serves the apex but not www) were hard 000s purely because they were
-		// pinned. main.go used to claim a direct fallback was "not constructible
-		// because the destination is a fake sentinel" — untrue: we hold the SNI.
-		up, br = dialDirect(sni, hello)
-	}
+	up, br := connectTarget(p, sni, hello)
 	if up == nil {
 		log.Printf("[rt-proxy] no usable upstream proxy IP, dropping %s", sni)
 		return

@@ -85,3 +85,11 @@ The public CF endpoint's leaf SHA256 was 4a98323fe1c8a6d9e44fa9fa5081f6bcdb389e5
 Conclusion: the previously suggested ECH path does not work through the currently discovered ps1.blockme.site IPv4 pool with these valid CONNECT targets. This is stronger than the earlier three-node observation, but is not a claim about unknown proxy services/options or an unavailable current Chrome extension binary. No DNS-filter or VPS-routing implementation follows automatically from this result.
 
 Artifacts: /Library/Zapret2/artifacts/rutracker-ech-audit-20261104/{matrix.go,snapshot.json,local.jsonl,vps.jsonl,retry-snapshot.json,vps-retry.jsonl}. 47 cases per location plus 3 targeted retry cases. Remote probe used a unique temporary directory and at most 3 simultaneous connections; it made no service/configuration changes and its temporary files were removed afterward.
+
+## Решение (2026-11-07)
+
+DNS-вариант из раздела «Implementation direction» не принят: роутер не занимается подменой DNS. Вместо него `rt-proxy` отправляет внешнее имя `cloudflare-ech.com` сразу напрямую, минуя пул (`connectTarget` в `rt-proxy/main.go`).
+
+Основание — замер 2026-11-06 21:16 UTC с машины владельца через роутер владельца: пять закреплённых доменов на адресах своих записей, адресах `rutracker.org` и адресах `cloudflare-ech.com` дали ECHAccepted=true и проверенный сертификат в 36 случаях из 36. Настоящий ECH-клиент через собранный прокси получил HTTP 200 и 97 КБ от `rutracker.org`.
+
+С роутера, на котором проблема воспроизводилась, запрос к `cloudflare-ech.com` без ECH ответил HTTP 301. Браузером на таком роутере правка до выпуска не проверялась. При установленном d2k исходящие сокеты прокси получают метку и обходят движок, так что прямой путь там идёт без обхода.
