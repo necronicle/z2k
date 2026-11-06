@@ -107,7 +107,15 @@ esac
 exit 0
 N
 printf '#!/bin/sh\nexit 0\n' > /stub/conntrack
-cp /stub/conntrack /stub/crontab
+cat > /stub/crontab <<'N'
+#!/bin/sh
+case "$1" in
+  -l) [ -f /state/cron-fail ] && exit 1; cat /state/cron ;;
+  -) cat > /state/cron ;;
+esac
+exit 0
+N
+printf '5 5 * * * /root/my-job\n6 6 * * * /opt/zapret/ipset/get_config.sh\n7 7 * * * /opt/zapret2/z2k-auto-update.sh\n' > /state/cron
 cat > /opt/bin/opkg <<'N'
 #!/bin/sh
 case "$1" in
@@ -122,6 +130,13 @@ esac
 exit 0
 N
 printf 'dropbear\nlighttpd\nlighttpd-mod-cgi\nipset\nflock\ncurl\n' > /state/pkgs
+mkdir -p /opt/lib/opkg
+cat > /stub/killall <<'N'
+#!/bin/sh
+for n in "$@"; do :; done
+for p in $(ps w | awk -v n="$n" '$0 ~ "/" n "( |$)" && !/awk/ {print $1}'); do kill -9 "$p" 2>/dev/null; done
+exit 0
+N
 # BusyBox pidof ищет по имени процесса, а наши подставные процессы — скрипты.
 cat > /stub/pidof <<'N'
 #!/bin/sh
@@ -140,7 +155,12 @@ printf 'sleep 1000\n' > /opt/zapret2/nfq2/nfqws2
 mkdir -p /opt/zapret /opt/other
 echo keep > /opt/zapret/keep
 printf 'sleep 1000\n' > /opt/other/nfqws2; cp /opt/other/nfqws2 /opt/other/nfqws; cp /opt/other/nfqws2 /opt/other/tpws
-sh /opt/zapret2/nfq2/nfqws2 & sh /opt/other/nfqws2 & sh /opt/other/nfqws & sh /opt/other/tpws &
+sh /opt/zapret2/nfq2/nfqws2 &
+sh /opt/other/tpws &
+# В сценарии no-foreign чужого движка нет: своё снимается целиком.
+if [ "$SCEN" != no-foreign ]; then
+    sh /opt/other/nfqws2 & sh /opt/other/nfqws &
+fi
 printf 'ENABLED=1\nINIT_APPLY_FW=1\nZ2K_FASTROUTE_OFF=1\n' > /opt/zapret2/config
 cp /src/files/ndm/* /src/files/000-zapret2.sh /opt/etc/ndm/netfilter.d/
 for s in S02z2k-tcp-tuning S51z2k-warp S96z2k-rt-proxy S96z2k-webpanel S97z2k-http-tunnel S98tg-tunnel S98z2k-detect S99z2k-scheduler S99zapret2; do
@@ -149,17 +169,28 @@ done
 for s in S99zapret S99nfqws S10cron; do printf '#!/bin/sh\n' > /opt/etc/init.d/$s; done
 chmod +x /opt/etc/init.d/S99zapret /opt/etc/init.d/S99nfqws; chmod -x /opt/etc/init.d/S10cron
 echo foreign > /opt/etc/ndm/netfilter.d/50-zapret.sh
-touch /opt/etc/opkg.conf /opt/etc/opkg.conf.backup /opt/etc/opkg.conf.z2k-bak
+printf 'src/gz entware http://entware.diversion.ch/x\n' > /opt/etc/opkg.conf
+printf 'src/gz entware http://bin.entware.net/x\n' > /opt/etc/opkg.conf.backup
+[ "$SCEN" = own-backup ] && printf 'мой бэкап\n' > /opt/etc/opkg.conf.backup
+touch /opt/etc/opkg.conf.z2k-bak
+sleep 1000 & echo $! > /var/run/nfqws2_foreign.pid
+echo 99999 > /var/run/nfqws2_dead.pid
+touch /tmp/nfqws2-foreign.log /tmp/zapret2-foreign.log
+ln -s /opt/other/z2k-foreign /opt/bin/z2k-other
+printf '0 6 * * * /opt/zapret/ipset/get_config.sh\n1 6 * * * /opt/zapret2/ipset/get_config.sh\n' > /opt/etc/crontab
 touch /opt/etc/init.d/S99zapret2.backup.1 /opt/sbin/foreign-tool
 touch /opt/sbin/z2k-warpd.rb.7 /opt/sbin/foreign.rb.7 /opt/etc/init.d/S99zapret2.z2k-au.5
-mkdir -p /opt/lib; touch /opt/lib/libmnl.so.0 /opt/lib/foreign.so; ln -s libmnl.so.0 /opt/lib/libmnl.so
+mkdir -p /opt/lib; touch /opt/lib/libmnl.so.0 /opt/lib/foreign.so; ln -s libmnl.so.0 /opt/lib/libmnl.so; ln -s libnfnetlink.so.0 /opt/lib/libnfnetlink.so
 touch /tmp/z2k-job-1.log /tmp/.z2k-scheduler-state /tmp/z2k-dns-check.json /var/run/z2k-x.pid /tmp/foreign.tmp
-printf 'ipset\nflock\ncurl\n' > /opt/etc/z2k/installed-packages
-echo extra > /opt/etc/z2k-warp/cache.json
+echo extra > /opt/etc/z2k-warp/edge-cache.json; echo k > /opt/etc/z2k-warp/license; echo a > /opt/etc/z2k-warp/account.json
 mkdir -p /opt/z2k-work; echo w > /opt/z2k-work/w
-printf '#!/bin/sh\n' > /opt/etc/init.d/.S80lighttpd.disabled-by-z2k
+printf '#!/bin/sh\nENABLED=yes\n' > /opt/etc/init.d/.S80lighttpd.disabled-by-z2k
 chmod +x /opt/etc/init.d/.S80lighttpd.disabled-by-z2k
 printf 'server.document-root = "/opt/share/www"\n' > /opt/etc/lighttpd/lighttpd.conf
+{
+    echo 'Package: lighttpd'; echo 'Conffiles:'
+    echo " /opt/etc/lighttpd/lighttpd.conf $(sha256sum /opt/etc/lighttpd/lighttpd.conf | cut -d' ' -f1)"; echo
+} > /opt/lib/opkg/status
 for b in tg-mtproxy-client z2k-rt-proxy z2k-rt-proxy.z2kbak z2k-detect z2k-warpd z2k-usque z2k-warpd.new.123; do echo x > /opt/sbin/$b; done
 echo '{}' > /opt/etc/z2k-warp/device.json; echo 8088 > /opt/etc/z2k/webpanel/port; echo k > /opt/etc/z2k/.trust/pinned
 for f in z2k-scheduler.log z2k-auto-update.log z2k-auto-update.log.old z2k-detect-watchdog.log; do echo l > /opt/var/log/$f; done
@@ -178,13 +209,14 @@ ip host g.whatsapp.net 85.192.60.175
 ip host mmg.whatsapp.net 85.192.60.175
 ip host mmg.whatsapp.net 79.137.196.7
 ip host finland10001.discord.media 162.159.1.1
+ip host github.com 140.82.121.3
 ip host example.com 9.9.9.9
 R
-printf 'z2k_tg_dc\nz2k_lan4\nforeign_set\n' > /state/ipsets
+printf 'z2k_tg_dc\nz2k_lan4\nzport_tcp\nzport_udp\nforeign_set\n' > /state/ipsets
 [ -d /opt/zapret ] && echo nozapret >> /state/ipsets
 case "$SCEN" in
   fail-one-pin) echo "ip host instagram.com 157.240.9.174" > /state/fail-no ;;
-  fail-show) touch /state/fail-show ;;
+  fail-show) touch /state/fail-show /state/cron-fail ;;
   no-foreign) rm -rf /opt/zapret; echo nozapret >> /state/ipsets ;;
   tun-busy) touch /state/tun /state/tun-busy ;;
 esac
@@ -199,31 +231,72 @@ clean_out=$(sed 's/\x1b\[[0-9;]*m//g' /state/out.log)
 fails=0
 want() { if eval "$2"; then :; else echo "  [FAIL] $1"; fails=$((fails+1)); fi; }
 want "код возврата 0 (получен $rc)" '[ "$rc" = 0 ]'
-want "веб-интерфейс: S80lighttpd не возвращён" '[ ! -e /opt/etc/init.d/S80lighttpd ]'
-want "чужая запись цела" 'grep -q "^ip host example.com" /state/running || [ -f /state/fail-show ]'
+want "S80lighttpd возвращён выключенным" '[ -f /opt/etc/init.d/S80lighttpd ] && grep -q "^ENABLED=no" /opt/etc/init.d/S80lighttpd && [ ! -e /opt/etc/init.d/.S80lighttpd.disabled-by-z2k ]'
+want "пакеты и конфиг lighttpd не тронуты" 'grep -qx lighttpd /state/pkgs && [ -f /opt/etc/lighttpd/lighttpd.conf ]'
+want "чужие записи целы" 'grep -q "^ip host example.com" /state/running && grep -q "^ip host github.com" /state/running && grep -q "^ip host finland10001" /state/running'
 want "чужой ipset цел" 'grep -qx foreign_set /state/ipsets'
-want "наши ipset снесены" '! grep -q z2k /state/ipsets'
-if [ "$SCEN" = no-foreign ]; then
+want "наши ipset снесены" '! grep -qE "z2k|zport_" /state/ipsets'
+if [ "$PATH_KIND" = cleanup ]; then
+    want "зачистка: zapret и его ipset сняты" '! grep -qx nozapret /state/ipsets && [ ! -e /opt/zapret ]'
+    want "зачистка: все хуки zapret сняты" '[ -z "$(ls /opt/etc/ndm/netfilter.d)" ]'
+elif [ "$SCEN" = no-foreign ]; then
     want "без чужого zapret общий nozapret снят" '! grep -qx nozapret /state/ipsets'
+    want "хуки сняты, чужой цел" '[ "$(ls /opt/etc/ndm/netfilter.d)" = "50-zapret.sh" ]'
 else
     want "чужой zapret: общий nozapret и каталог целы" 'grep -qx nozapret /state/ipsets && [ -f /opt/zapret/keep ]'
+    want "хуки сняты, чужой цел" '[ "$(ls /opt/etc/ndm/netfilter.d)" = "50-zapret.sh" ]'
 fi
-want "хуки сняты, чужой цел" '[ "$(ls /opt/etc/ndm/netfilter.d)" = "50-zapret.sh" ]'
-want "службы сняты, чужие целы" '[ "$(ls -A /opt/etc/init.d | tr "\n" " ")" = "S10cron S99nfqws S99zapret " ]'
-want "S10cron не тронут" '[ ! -x /opt/etc/init.d/S10cron ]'
+_keep_init="S10cron S80lighttpd S99nfqws S99zapret "
+[ "$PATH_KIND" = cleanup ] && _keep_init="S10cron S80lighttpd "
+want "службы сняты, оставлено ожидаемое: $_keep_init" '[ "$(ls -A /opt/etc/init.d | tr "\n" " ")" = "$_keep_init" ]'
+if [ "$PATH_KIND" = cleanup ]; then
+    want "зачистка вернула автозапуск cron" '[ -x /opt/etc/init.d/S10cron ]'
+else
+    want "S10cron не тронут" '[ ! -x /opt/etc/init.d/S10cron ]'
+fi
 want "свой nfqws2 убит" '! ps w | grep -q "[s]h /opt/zapret2/nfq2/nfqws2"'
-want "чужие nfqws, nfqws2 и tpws живы" '[ "$(ps w | grep -c "[s]h /opt/other/")" = 3 ]'
-want "ключ WARP сохранён, остальное там снято" '[ -f /opt/etc/z2k-warp/device.json ] && [ "$(ls -A /opt/etc/z2k-warp)" = device.json ]'
-want "бэкапы и настройки сняты" '[ ! -e /opt/etc/opkg.conf.backup ] && [ ! -e /opt/etc/opkg.conf.z2k-bak ] && [ -e /opt/etc/opkg.conf ] && [ ! -e /opt/etc/z2k ] && [ ! -d /opt/z2k-work ]'
-want "ссылка на библиотеку снята, чужая библиотека цела" '[ ! -L /opt/lib/libmnl.so ] && [ -e /opt/lib/foreign.so ]'
-want "пакеты: наши и lighttpd сняты, curl и чужой целы" '[ "$(tr "\n" " " < /state/pkgs)" = "dropbear curl " ]'
+if [ "$PATH_KIND" = cleanup ]; then
+    want "зачистка: все nfqws, nfqws2 и tpws погашены" '[ "$(ps w | grep -c "[s]h /opt/other/")" = 0 ]'
+elif [ "$SCEN" = no-foreign ]; then
+    want "чужой tpws жив" '[ "$(ps w | grep -c "[s]h /opt/other/")" = 1 ]'
+else
+    want "чужие nfqws, nfqws2 и tpws живы" '[ "$(ps w | grep -c "[s]h /opt/other/")" = 3 ]'
+fi
+if [ "$PATH_KIND" = cleanup ]; then
+    want "зачистка: ключ WARP снят" '[ ! -e /opt/etc/z2k-warp ]'
+else
+    want "ключ WARP сохранён, остальное там снято" '[ "$(ls -A /opt/etc/z2k-warp | tr "\n" " ")" = "device.json license " ]'
+fi
+if [ "$SCEN" = own-backup ]; then
+    want "свой opkg.conf.backup цел" '[ -e /opt/etc/opkg.conf.backup ]'
+else
+    want "зеркало opkg возвращено, копия снята" '[ ! -e /opt/etc/opkg.conf.backup ] && grep -q bin.entware.net /opt/etc/opkg.conf'
+fi
+want "бэкапы и настройки сняты" '[ ! -e /opt/etc/opkg.conf.z2k-bak ] && [ -e /opt/etc/opkg.conf ] && [ ! -e /opt/etc/z2k ] && [ ! -d /opt/z2k-work ]'
+want "pid-файлы nfqws2 не тронуты: имя общее" '[ -e /var/run/nfqws2_foreign.pid ] && [ -e /var/run/nfqws2_dead.pid ]'
+want "чужие временные файлы и ссылка целы" '[ -e /tmp/nfqws2-foreign.log ] && [ -e /tmp/zapret2-foreign.log ] && [ -L /opt/bin/z2k-other ]'
+want "cron: чужая задача цела, наша снята" 'grep -q "/opt/zapret/ipset/get_config" /opt/etc/crontab && ! grep -q "/opt/zapret2/ipset/get_config" /opt/etc/crontab'
+want "наши ссылки сняты, чужая библиотека цела" '[ ! -L /opt/lib/libmnl.so ] && [ ! -L /opt/lib/libnfnetlink.so ] && [ -e /opt/lib/foreign.so ]'
+want "пакеты не тронуты" '[ "$(tr "\n" " " < /state/pkgs)" = "dropbear lighttpd lighttpd-mod-cgi ipset flock curl " ]'
 want "временные файлы сняты, журнал задачи и чужое целы" '[ ! -e /tmp/.z2k-scheduler-state ] && [ ! -e /tmp/z2k-dns-check.json ] && [ ! -e /var/run/z2k-x.pid ] && [ -e /tmp/z2k-job-1.log ] && [ -e /tmp/foreign.tmp ]'
 if [ "$SCEN" != tun-busy ]; then
     want "интерфейс WARP удалён" '[ ! -e /state/tun ]'
 fi
 want "дерево снято" '[ ! -d /opt/zapret2 ] && [ ! -d /opt/zapret2.old.111 ] && [ ! -d /opt/z2k-rollback ] && [ ! -d /opt/z2k-upgrade-backup ]'
 want "WARP: правило маршрутизации снято" 'grep -q "ip rule del fwmark 0x989" /state/ip.log'
-want "наши правила iptables сняты, чужие остались" '[ "$(sort /state/rules | tr "\n" ";")" = "filter FORWARD -o eth3 -j ACCEPT;mangle POSTROUTING -p tcp -j NFQUEUE --queue-num 300 --queue-bypass;nat PREROUTING -p tcp --dport 8080 -j REDIRECT --to-port 80;" ]'
+if [ "$PATH_KIND" = cleanup ]; then
+    want "зачистка: все очереди сняты, посторонние правила целы" '[ "$(sort /state/rules | tr "\n" ";")" = "filter FORWARD -o eth3 -j ACCEPT;nat PREROUTING -p tcp --dport 8080 -j REDIRECT --to-port 80;" ]'
+elif [ "$SCEN" = no-foreign ]; then
+    want "наши правила сняты, чужие остались" '[ "$(sort /state/rules | tr "\n" ";")" = "filter FORWARD -o eth3 -j ACCEPT;mangle POSTROUTING -p tcp -j NFQUEUE --queue-num 300 --queue-bypass;nat PREROUTING -p tcp --dport 8080 -j REDIRECT --to-port 80;" ]'
+else
+    # Чужой движок работает: очередь 200 и правило метки могут быть его.
+    want "при живом чужом движке его возможные правила целы" '[ "$(sort /state/rules | tr "\n" ";")" = "filter FORWARD -o eth3 -j ACCEPT;mangle POSTROUTING -p tcp -j NFQUEUE --queue-num 200 --queue-bypass;mangle POSTROUTING -p tcp -j NFQUEUE --queue-num 300 --queue-bypass;mangle _NDM_POSTROUTING_TTL -m mark --mark 0x40000000/0x40000000 -j RETURN;nat PREROUTING -p tcp --dport 8080 -j REDIRECT --to-port 80;" ]'
+fi
+if [ "$SCEN" = fail-show ]; then
+    want "сбой чтения crontab не стёр задачи" '[ "$(wc -l < /state/cron)" = 3 ]'
+else
+    want "crontab: наша задача снята, чужие целы" '[ "$(tr "\n" ";" < /state/cron)" = "5 5 * * * /root/my-job;6 6 * * * /opt/zapret/ipset/get_config.sh;" ]'
+fi
 want "конфигурация снята" '[ ! -d /opt/etc/zapret2 ]'
 want "бинарники сняты, чужие целы" '[ "$(ls /opt/sbin | tr "\n" " ")" = "foreign-tool foreign.rb.7 " ]'
 want "журналы сняты" '[ -z "$(ls /opt/var/log)" ]'
@@ -236,17 +309,17 @@ if [ "$SCEN" = tun-busy ]; then
 fi
 if [ ! -f /state/fail-show ]; then
     if [ "$SCEN" = fail-one-pin ]; then
-        want "снято всё, кроме сбойной записи" '[ "$(grep -vc -e example.com -e "ip host instagram.com" /state/running)" = 0 ]'
+        want "снято всё, кроме сбойной записи" '[ "$(grep -vc -e example.com -e github.com -e finland -e "ip host instagram.com" /state/running)" = 0 ]'
     else
-        want "записи ip host сняты" '[ "$(grep -vc example.com /state/running)" = 0 ]'
+        want "записи ip host сняты" '[ "$(grep -vc -e example.com -e github.com -e finland /state/running)" = 0 ]'
     fi
 fi
-[ "$fails" = 0 ] && echo "[PASS] $PATH_KIND/$SCEN" || { echo "[FAIL] $PATH_KIND/$SCEN"; grep -v example.com /state/running | sed 's/^/    остался пин: /' | head -5; tail -3 /state/out.log | cut -c1-120 | sed 's/^/    /'; exit 1; }
+[ "$fails" = 0 ] && echo "[PASS] $PATH_KIND/$SCEN" || { echo "[FAIL] $PATH_KIND/$SCEN"; grep -v -e example.com -e github.com -e finland /state/running | sed 's/^/    остался пин: /' | head -5; tail -3 /state/out.log | cut -c1-120 | sed 's/^/    /'; exit 1; }
 EOF
 
 fail=0
 for c in "main normal" "main no-foreign" "main fail-one-pin" "main fail-show" "main tun-busy" \
-         "cleanup no-foreign" \
+         "main own-backup" "cleanup no-foreign" \
          "cleanup normal" "cleanup fail-one-pin" "cleanup fail-show" "cleanup tun-busy"; do
     # shellcheck disable=SC2086  # два аргумента — разбиение намеренно
     tar -cf - -C "$tmp" . | docker run --rm -i --network none "$IMAGE" sh -c "mkdir /src && tar -xf - -C /src && sh /src/inner.sh $c" || fail=1

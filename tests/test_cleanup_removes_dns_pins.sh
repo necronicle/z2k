@@ -78,7 +78,7 @@ block=$(awk '/^# DNS-пины остальных доменов/,/^# Бинар�
 [ -n "$block" ] || { bad "не нашёл блок удаления пинов в деинсталляторе"; echo; echo "PASSED: $PASS"; echo "FAILED: $FAIL"; exit 1; }
 
 PATH="$tmp/bin:$PATH" NDMC_LOG="$tmp/ndmc.log" ZAPRET2_DIR="$tmp/opt" \
-    sh -c "log_info() { :; }; log_skip() { :; }; _z2k_not_d2k_pins() { cat; }; $block" >/dev/null 2>&1
+    sh -c "log_info() { :; }; log_skip() { :; }; _z2k_not_d2k_pins() { cat; }; _z2k_cfg_flag() { :; }; $block" >/dev/null 2>&1
 
 missed=""
 for h in $hosts; do

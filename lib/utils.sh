@@ -189,17 +189,6 @@ z2k_opkg() {
     return "$_rc"
 }
 
-# Запомнить пакеты, которые поставила именно наша установка: удаление снимет их и не
-# тронет те, что стояли до нас. Сбой записи установке не мешает.
-z2k_pkg_record() {
-    local _list="${Z2K_INSTALLED_PKGS:-/opt/etc/z2k/installed-packages}" _p
-    mkdir -p "${_list%/*}" 2>/dev/null || return 0
-    for _p in "$@"; do
-        grep -qxF "$_p" "$_list" 2>/dev/null || printf '%s\n' "$_p" >> "$_list" 2>/dev/null
-    done
-    return 0
-}
-
 # Файлы конфигурации
 STRATEGIES_CONF="${CONFIG_DIR}/strategies.conf"
 CURRENT_STRATEGY_FILE="${CONFIG_DIR}/current_strategy"

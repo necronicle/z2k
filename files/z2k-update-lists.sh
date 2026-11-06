@@ -869,26 +869,6 @@ main() {
 
 
 
-    # Discord-voice DNS pinning REMOVED (p-57.3). The old feature wrote ~200
-    # finland*.discord.media `ip host` records — 78% of Keenetic's 256 static-DNS
-    # ceiling — all pointing at one CF edge, for marginal gain (the packet-level
-    # desync already carries Discord voice). That bloat starved every other pin
-    # (fresh Instagram IPs, the github-raw self-heal) into silent "limit exceeded".
-    # One-time cleanup: strip any leftover finland pins, drop the orphaned script +
-    # list. Idempotent — a no-op once a router is clean, so it's safe every run.
-    if command -v ndmc >/dev/null 2>&1; then
-        _dvp_old=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-            | awk '/^ip host/ && $3 ~ /^finland[0-9]+\.discord\.media$/ {print $3" "$4}')
-        if [ -n "$_dvp_old" ]; then
-            printf '%s\n' "$_dvp_old" | while read -r _dv_h _dv_ip; do
-                [ -n "$_dv_h" ] && [ -n "$_dv_ip" ] && \
-                    LD_LIBRARY_PATH= ndmc -c "no ip host $_dv_h $_dv_ip" >/dev/null 2>&1
-            done
-            LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1
-            log_msg "OK: removed $(printf '%s\n' "$_dvp_old" | grep -c .) legacy Discord-voice DNS pins (feature removed)"
-            changes=$((changes + 1))
-        fi
-    fi
     rm -f "${ZAPRET2_DIR}/lists/"*_discord_voice_hosts.txt \
           "${ZAPRET2_DIR}/z2k-discord-voice-pin.sh" 2>/dev/null
 

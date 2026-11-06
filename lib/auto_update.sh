@@ -1214,7 +1214,6 @@ au_provision_flock() {
     PATH="/opt/sbin:/opt/bin:${PATH:-/sbin:/usr/sbin:/bin:/usr/bin}"
     command -v flock >/dev/null 2>&1 && return 0
     if opkg install flock >/dev/null 2>&1 && command -v flock >/dev/null 2>&1; then
-        command -v z2k_pkg_record >/dev/null 2>&1 && z2k_pkg_record flock
         au_log "flock установлен: правила iptables ставятся по очереди"
     else
         au_log "ВНИМАНИЕ: пакет flock не установился — правила iptables ставятся без очереди между процессами, повторы при одновременном запуске возможны; повтор при следующем обновлении или вручную: opkg install flock"

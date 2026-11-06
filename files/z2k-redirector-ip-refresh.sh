@@ -26,10 +26,6 @@ command -v openssl >/dev/null 2>&1 || exit 1
 if ! command -v flock >/dev/null 2>&1; then
     opkg install flock >/dev/null 2>&1 || exit 1
     command -v flock >/dev/null 2>&1 || exit 1
-    # Запись для удаления: этот пакет поставили мы.
-    mkdir -p /opt/etc/z2k 2>/dev/null \
-        && { grep -qxF flock /opt/etc/z2k/installed-packages 2>/dev/null \
-             || echo flock >> /opt/etc/z2k/installed-packages; } 2>/dev/null
 fi
 umask 077
 # Never unlink the kernel lockfile: waiters must share the same inode.
