@@ -17,7 +17,7 @@
 > **Dkarloff - SEO отец** · **KIBERPANK** · **olmer2002** · **TiaMax** · **Denis** · **Mega Man**<br>
 > **TheGreatYogo** · **logistik77** · **b11d11** · **BloodKnife39** · **SIGogelon** · **yozh**<br>
 > **Altaec** · **DIDIQ Rawa** · **GregMSK** · **Кожевников** · **bootnet** · **ewgen911**<br>
-> **cmfifty** · **Ret80** · **Шулепов Александр** · **Андрюшка** · **Marshmalick**<br>
+> **cmfifty** · **Ret80** · **Шулепов Александр** · **Андрюшка** · **Marshmalick** · **Mustang**<br>
 
 **Windows:** если на iPhone или Mac сайты открываются, а на компьютере с Windows висят — [включите метки времени TCP одной командой](#4-windows-если-сайты-висят-и-не-открываются).
 
