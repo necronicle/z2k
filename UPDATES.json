@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 167,
-  "current": "p-87.18",
+  "seq": 168,
+  "current": "p-87.19",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -236,7 +236,7 @@
   "lib/config.sh": "664e4c8f4af167f6b86ff1ff25c6143e515d86ad28302f3bed3d830d106c91e5",
   "lib/config_official.sh": "5f73529b3f43c995eadb3bbf61e7691643229db29178db2c9d5cb185b7bc1433",
   "lib/install.sh": "f08564113c418c1f47da913ce5a3e40c00fdf4ffc0a824450c84a9f5f094c412",
-  "lib/menu.sh": "3537dfe084696d7f08aa2b20f2ec65d2a3553242e48285e4074635b9b3151dbd",
+  "lib/menu.sh": "7cee06d45e2aa2ecc05ba738fa962cc1c21fbb29d85b4a6a789744899b812a3e",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
   "lib/utils.sh": "bc2c7c79734b4851cfdfcf89f4dd0b2c5637250b424c5961cbb7ce4223e7c312",
   "lib/wan.sh": "7f66e83516031bf66ea5f185804e0c90442507d7a75c95a7bc27f6b86d639129",
@@ -280,7 +280,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "367d8c3e31ed50f4e72aeb45d4c6d3f8eb4bb802913b3a917556e1d165443975",
+  "webpanel/www/index.html": "1136fd514977388024fff9117f28e51ca94dedab2ad8f14cac7e8ff90e62cd61",
   "webpanel/www/js/chrome.js": "4a887fea77d86e09fcd64687dfe91f88413e64196686ac553f70165c605af7e3",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -291,7 +291,7 @@
   "webpanel/www/js/core/toast.js": "21b8373e69aeff39e6fa2ac5f2427899786506a50ba1937da60d9ec16c6e3bf0",
   "webpanel/www/js/core/whitelist.js": "f05e2250c94649848185f6b12e45d5fb382b3ca106a773550db1675d0e830318",
   "webpanel/www/js/job.js": "b56b81ae5415563cd4789923849a480b99cfd3dfcf9cb21c3447f258c30330be",
-  "webpanel/www/js/pages/credits.js": "89bdc0f8909a7ce085f3e09db1a6b739f163cecea817a18aa87557566196c4a1",
+  "webpanel/www/js/pages/credits.js": "7b6e44697ff7013288a6332342ff7d5c6455f05b13de941d159b423a69971e49",
   "webpanel/www/js/pages/dashboard.js": "4eff0ff0a6e031515974c4402fcfb2fb280c1327ed3bf931644a30d9816d6ae9",
   "webpanel/www/js/pages/diag.js": "435921bff2dd8a228222147a33dd9fe1308209a139adbccb00056dfc4869179d",
   "webpanel/www/js/pages/exclude.js": "65e3a12bcb4afb84cd8b837bb15ec7520727417d0f6a9562e89f65d939cff886",
@@ -644,6 +644,7 @@
 {"v": "p-87.15", "type": "patch", "ts": "2026-11-04T18:47:10Z", "ref": "p-87.15", "desc": "RuTracker: исправлены повторные подключения и обработка тайм-аутов прокси.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/z2k-rt-proxy-linux-amd64", "mtproxy-client/builds/z2k-rt-proxy-linux-arm", "mtproxy-client/builds/z2k-rt-proxy-linux-arm64", "mtproxy-client/builds/z2k-rt-proxy-linux-mips", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-87.16", "type": "patch", "ts": "2026-11-04T23:52:03Z", "ref": "p-87.16", "desc": "Улучшена защита от дублирования правил iptables.", "changed_files": ["webpanel/www/index.html", "common/ipt.sh", "files/z2k-diag.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-87.17", "type": "patch", "ts": "2026-11-06T07:03:06Z", "ref": "p-87.17", "desc": "Удаление z2k теперь убирает за собой всё: службы, правила, записи в DNS роутера, интерфейс WARP, резервные копии, журналы и поставленные пакеты. Остаётся только ключ WARP, а чужие программы и их настройки не затрагиваются. После удаления больше не ломается веб-интерфейс роутера.", "changed_files": ["webpanel/www/index.html", "files/z2k-ppe-deoffload.sh", "files/z2k-redirector-ip-refresh.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "lib/webpanel.sh", "webpanel/uninstall.sh", "webpanel/www/js/pages/dashboard.js", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-87.18", "type": "patch", "ts": "2026-11-06T09:54:10Z", "ref": "p-87.18", "desc": "Удаление z2k теперь возвращает роутер в исходное состояние и не трогает чужое: чужие программы, их правила и записи в DNS остаются на месте. Сохраняется только ключ WARP. Установка на чистый роутер больше не удаляет записи DNS, поставленные вами. Отдельный скрипт полной зачистки снова убирает всё связанное с zapret, включая ключ WARP.", "changed_files": ["webpanel/www/index.html", "files/z2k-redirector-ip-refresh.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "lib/webpanel.sh", "webpanel/uninstall.sh", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-87.18", "type": "patch", "ts": "2026-11-06T09:54:10Z", "ref": "p-87.18", "desc": "Удаление z2k теперь возвращает роутер в исходное состояние и не трогает чужое: чужие программы, их правила и записи в DNS остаются на месте. Сохраняется только ключ WARP. Установка на чистый роутер больше не удаляет записи DNS, поставленные вами. Отдельный скрипт полной зачистки снова убирает всё связанное с zapret, включая ключ WARP.", "changed_files": ["webpanel/www/index.html", "files/z2k-redirector-ip-refresh.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "lib/webpanel.sh", "webpanel/uninstall.sh", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-87.19", "type": "patch", "ts": "2026-11-06T15:30:55Z", "ref": "p-87.19", "desc": "Новый спонсор проекта — Mustang. Спасибо за поддержку!", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
