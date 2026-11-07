@@ -265,9 +265,7 @@ case "$method $path" in
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
         gv_preflight=$(read_flag "Z2K_GV_PREFLIGHT" "$CONFIG_FILE" "1")
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
-        ppe=$(read_flag "Z2K_PPE_DEOFFLOAD" "$CONFIG_FILE" "1")
         dns_redirect=$(read_flag "Z2K_DNS_REDIRECT" "$CONFIG_FILE" "1")
-        fastroute_snapshot "$running"
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
         # Час ночного обновления. Нормализуем здесь, а не в панели: конфиг
         # правят и руками, а селектор без совпадающего варианта показал бы
@@ -293,10 +291,6 @@ case "$method $path" in
         printf ',"gv_preflight":'; json_string "${gv_preflight:-1}"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
-        printf ',"ppe":';                    json_string "${ppe:-1}"
-        printf ',"fastroute":';              json_string "${fastroute:-0}"
-        printf ',"fastroute_available":';     json_string "$fastroute_available"
-        printf ',"fastroute_status":';        json_string "$fastroute_message"
         printf ',"dns_redirect":';           json_string "${dns_redirect:-1}"
         printf ',"auto_update":';            json_string "${auto_update:-1}"
         printf ',"au_hour":';                json_string "${au_hour:-02}"
@@ -335,8 +329,6 @@ case "$method $path" in
     "POST /toggle/game-warp"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
-    "POST /toggle/ppe"|\
-    "POST /toggle/fastroute"|\
     "POST /toggle/dns-redirect"|\
     "POST /toggle/auto-update"|\
     "POST /toggle/category-youtube"|\
@@ -359,8 +351,6 @@ case "$method $path" in
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
-            /toggle/ppe)             _toggle_fn=toggle_ppe;             _label="PPE de-offload" ;;
-            /toggle/fastroute)       _toggle_fn=toggle_fastroute;       _label="Программный fastpath" ;;
             /toggle/dns-redirect)    _toggle_fn=toggle_dns_redirect;    _label="Защита DNS" ;;
             /toggle/auto-update)     _toggle_fn=toggle_auto_update;     _label="Автообновление" ;;
             /toggle/autohostlist)    _toggle_fn=toggle_autohostlist;    _label="Автохостлист" ;;

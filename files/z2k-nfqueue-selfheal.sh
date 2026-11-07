@@ -155,8 +155,7 @@ is_nfqws2_running || exit 0
 # вернёт 1 БЕЗ регена: по исходникам ядра Keenetic (nf_conntrack_core.c,
 # fast_bind_reached) при fastnat=1 поток после 6 пакетов в обе стороны уходит
 # мимо всех mangle-хуков, NFQUEUE его больше не видит, ротатор слепнет.
-# Только чтение и запись одного sysctl, без start_fw и без замка. fastroute
-# здесь не трогаем: у него гейт по железу, он остаётся за start_fw.
+# Только чтение и запись одного sysctl, без start_fw и без замка.
 NF_SYSCTL_DIR="${NF_SYSCTL_DIR:-/proc/sys/net/netfilter}"
 fastnat_reassert() {
     local _k _v

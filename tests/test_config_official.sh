@@ -442,12 +442,11 @@ assert_contains "reinstall: DISABLE_IPV6=1 recovered from .old backup (hand-disa
 DI6_OUT=$(test_disable_ipv6_reinstall "old0" "0")
 assert_contains "reinstall: DISABLE_IPV6=0 recovered from .old backup (not re-autodetected)" "DISABLE_IPV6=0" "$DI6_OUT"
 
-printf "\n--- Z2K_PPE_DEOFFLOAD: webpanel offload toggle persists across regen ---\n"
+printf "\n--- PPE-разгрузка: ключа TCP больше нет, ключ QUIC переживает regen ---\n"
 
-# Regression: the Keenetic per-flow hardware-offload exclusion toggle
-# (Z2K_PPE_DEOFFLOAD) was NOT in the config-preserve pattern, so toggle_ppe's own
-# regenerate_config wiped the key -> the NDM hook re-added the de-offload rules ->
-# the webpanel switch silently reverted after a regen/reboot. Must survive now.
+# Тумблер TCP-разгрузки убран 07.11.2026: ускоритель остаётся включённым в обоих
+# положениях, и выключение лишь прятало от обхода повторы. Старый ключ, в том
+# числе выключенный, после regen исчезает; ручной ключ QUIC сохраняется.
 test_ppe_deoffload() {
     local tag="$1" file_line="$2"
     local root="${MOCK_DIR}/ppe-$tag"
@@ -463,15 +462,16 @@ test_ppe_deoffload() {
         > "$root/extra_strats/TCP/RKN/Strategy.txt"
     { echo "ENABLED=1"; if [ -n "$file_line" ]; then echo "$file_line"; fi; } > "$root/config"
     ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
-    grep -E '^Z2K_PPE_DEOFFLOAD=' "$root/config" | head -1
+    grep -E '^Z2K_PPE_DEOFFLOAD(_QUIC)?=' "$root/config"
     rm -rf "$root"
 }
 
 PPE_OUT=$(test_ppe_deoffload "off" "Z2K_PPE_DEOFFLOAD=0")
-assert_contains "Z2K_PPE_DEOFFLOAD=0 survives regen (webpanel toggle no longer reverts)" "Z2K_PPE_DEOFFLOAD=0" "$PPE_OUT"
+assert_eq "старый Z2K_PPE_DEOFFLOAD=0 не переносится" "0" "$(printf '%s\n' "$PPE_OUT" | grep -c '^Z2K_PPE_DEOFFLOAD=')"
+assert_contains "ключ QUIC по умолчанию =1" "Z2K_PPE_DEOFFLOAD_QUIC=1" "$PPE_OUT"
 
-PPE_OUT=$(test_ppe_deoffload "absent" "")
-assert_contains "Z2K_PPE_DEOFFLOAD absent -> emits default =1" "Z2K_PPE_DEOFFLOAD=1" "$PPE_OUT"
+PPE_OUT=$(test_ppe_deoffload "quic0" "Z2K_PPE_DEOFFLOAD_QUIC=0")
+assert_contains "ручной Z2K_PPE_DEOFFLOAD_QUIC=0 переживает regen" "Z2K_PPE_DEOFFLOAD_QUIC=0" "$PPE_OUT"
 
 printf "\n--- Z2K_DNS_REDIRECT: защита DNS — флаг переживает regen ---\n"
 

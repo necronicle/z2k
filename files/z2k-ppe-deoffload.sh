@@ -92,13 +92,6 @@ _z2k_ppe_purge_legacy_game() {
     return 0
 }
 
-# Has the user explicitly disabled the layer? (default ON)
-z2k_ppe_user_disabled() {
-    [ -f "$PPE_CONFIG_FILE" ] || return 1
-    [ "$(awk -F= '/^Z2K_PPE_DEOFFLOAD=/{gsub(/[" ]/,"",$2);print $2;exit}' "$PPE_CONFIG_FILE" 2>/dev/null)" = "0" ] && return 0
-    return 1
-}
-
 # Also de-offload the QUIC (UDP/443) handshake? (default ON; off only if =0).
 # This restores the QUIC response so the QUIC `circular` can rotate like the
 # TCP pools — needed for YouTube/Apple-TV login over HTTP/3 on offload routers.
@@ -155,7 +148,6 @@ z2k_ppe_ensure_rules() {
     # exist either, so the purge has nothing to do and shouldn't burn syscalls looking.
     z2k_ppe_available || return 1
     _z2k_ppe_purge_legacy_game
-    z2k_ppe_user_disabled && return 1
     z2k_ppe_rule_present_pre4 || _z2k_ppe_ipt -t mangle -I PREROUTING $_z2k_ppe_args
     z2k_ppe_rule_present_fwd4 || _z2k_ppe_ipt -t mangle -I FORWARD    $_z2k_ppe_args
     if z2k_ppe_v6_ok; then

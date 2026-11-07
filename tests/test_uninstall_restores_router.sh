@@ -135,20 +135,20 @@ _z2k_ip_hosts_clean" >/dev/null 2>&1; then bad "непрочитанный ко�
 
 # --- Ускорители --------------------------------------------------------------
 KFN=$(extract "$INSTALL" restore_kernel_tuning)
-kernel_case() { # <имя> <есть hw_nat: 0|1> <тумблер> <ожидаемый fastroute>
+kernel_case() { # <имя> <есть hw_nat: 0|1> <ожидаемый fastroute>
     _k="$tmp/k-$1"; mkdir -p "$_k/nf" "$_k/bin"
     [ "$2" = 1 ] && mkdir -p "$_k/hw_nat"
     for _v in fastnat fastnat_xfrm fastroute checksum; do echo 0 > "$_k/nf/nf_conntrack_$_v"; done
     echo 1 > "$_k/nf/nf_conntrack_tcp_be_liberal"; echo 0 > "$_k/mode"
     printf '#!/bin/sh\nexit 1\n' > "$_k/bin/pidof"; chmod +x "$_k/bin/pidof"
     PATH="$_k/bin:$PATH" Z2K_NF_SYSCTL="$_k/nf" Z2K_HWNAT_DIR="$_k/hw_nat" Z2K_FASTNAT_MODE="$_k/mode" sh -c "$KFN
-_z2k_restore_kernel_tuning '$3'" >/dev/null 2>&1
+_z2k_restore_kernel_tuning" >/dev/null 2>&1
     _got="$(cat "$_k/nf/nf_conntrack_fastnat") $(cat "$_k/nf/nf_conntrack_fastnat_xfrm") $(cat "$_k/mode") $(cat "$_k/nf/nf_conntrack_tcp_be_liberal") $(cat "$_k/nf/nf_conntrack_checksum") $(cat "$_k/nf/nf_conntrack_fastroute")"
-    [ "$_got" = "1 1 1 0 1 $4" ] && ok "ускорители/$1: включены" || bad "ускорители/$1: [$_got]"
+    [ "$_got" = "1 1 1 0 1 $3" ] && ok "ускорители/$1: включены" || bad "ускорители/$1: [$_got]"
 }
-kernel_case no-hwnat 0 1 1
-kernel_case hwnat 1 1 0
-kernel_case toggle-off 0 0 0
+# fastroute=0 оставили версии до p-87.21 на платах без драйвера аппаратного NAT.
+kernel_case no-hwnat 0 1
+kernel_case hwnat 1 0
 
 # --- WARP: сметание правил ----------------------------------------------------
 WFN=$(extract "$INSTALL" warp_routing_sweep)

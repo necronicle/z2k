@@ -148,8 +148,8 @@ _z2k_ip_hosts_clean() {
 # Обычно это уже сделал S99 stop, но его могло не быть, он мог упасть, а работавшие сторожа
 # могли применить настройки обратно. Поэтому вызываем ПОСЛЕ снятия планировщика и хуков.
 #
-# fastroute возвращаем там же, где его гасит S99: нет драйвера аппаратного NAT и
-# тумблер Z2K_FASTROUTE_OFF не запрещает. $1 — значение этого тумблера.
+# fastroute гасили версии до p-87.21 там, где нет драйвера аппаратного NAT;
+# там же возвращаем заводскую единицу.
 _z2k_restore_kernel_tuning() {
     local _d _m
     _d="${Z2K_NF_SYSCTL:-/proc/sys/net/netfilter}"
@@ -164,7 +164,7 @@ _z2k_restore_kernel_tuning() {
         [ -w "$_m" ] && echo 1 > "$_m" 2>/dev/null
     fi
     [ -w "$_d/nf_conntrack_fastnat_xfrm" ] && echo 1 > "$_d/nf_conntrack_fastnat_xfrm" 2>/dev/null
-    if [ -w "$_d/nf_conntrack_fastroute" ] && [ "${1:-1}" != "0" ] \
+    if [ -w "$_d/nf_conntrack_fastroute" ] \
        && [ ! -d "${Z2K_HWNAT_DIR:-/proc/driver/hw_nat}" ]; then
         echo 1 > "$_d/nf_conntrack_fastroute" 2>/dev/null
     fi
@@ -792,7 +792,7 @@ fi
 while iptables -w -t mangle -C _NDM_POSTROUTING_TTL -m mark --mark 0x40000000/0x40000000 -j RETURN 2>/dev/null; do
     iptables -w -t mangle -D _NDM_POSTROUTING_TTL -m mark --mark 0x40000000/0x40000000 -j RETURN 2>/dev/null || break
 done
-_z2k_restore_kernel_tuning "$(sed -n 's/^Z2K_FASTROUTE_OFF=//p' /opt/zapret2/config 2>/dev/null | tail -n 1 | tr -d "\"'")"
+_z2k_restore_kernel_tuning
 
 # Ipset: после снятия правил, иначе занятый набор не удалить.
 log_info "Очистка ipset..."

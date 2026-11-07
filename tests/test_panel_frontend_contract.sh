@@ -237,7 +237,7 @@ global.prompt = () => null;
 const STATUS = {
   ok: true, installed: "r-73", service: "active",
   toggles: { game_warp: "0", customd: "0",
-             dynamic_ttl: "1", ppe: "1", fastroute: "1", fastroute_available: "1", dns_redirect: "1", auto_update: "1", autohostlist: "0",
+             dynamic_ttl: "1", dns_redirect: "1", auto_update: "1", autohostlist: "0",
              au_hour: "02" },
   tunnel: { running: false },
 };
@@ -341,32 +341,6 @@ const SCENARIOS = {
 
   // Связь с панелью пропала на середине переключения. Ничего в конфиге не
   // откатывалось — значит «вернул как было» это ложь.
-  fastroute_not_applicable: {
-    hash: "#/toggles",
-    setup() {
-      STATUS.toggles.fastroute = "0";
-      STATUS.toggles.fastroute_available = "0";
-      STATUS.toggles.fastroute_status = "Не применяется: обнаружен драйвер аппаратного NAT.";
-      ROUTER = async () => STATUS;
-    },
-    async run() {
-      await sleep(80);
-      const box = q('#app>[data-key="fastroute"]>input');
-      check("hardware NAT: тумблер выключен", box.checked === false, "checked=" + box.checked);
-      check("hardware NAT: тумблер недоступен", box.disabled === true, "disabled=" + box.disabled);
-      check("причина недоступности показана", q("#fastroute-status").textContent.includes("Не применяется"), q("#fastroute-status").textContent);
-    },
-  },
-  fastroute_actual: {
-    hash: "#/toggles",
-    setup() { ROUTER = async () => STATUS; },
-    async run() {
-      await sleep(80);
-      const box = q('#app>[data-key="fastroute"]>input');
-      check("без hardware NAT: отключение кэша показано включённым", box.checked === true, "checked=" + box.checked);
-      check("применимый тумблер доступен", box.disabled === false, "disabled=" + box.disabled);
-    },
-  },
   outage: {
     hash: "#/toggles",
     setup() {
@@ -1280,7 +1254,7 @@ run_scen() {
 }
 
 # Счётчики внутри while-пайпа теряются (subshell), поэтому считаем по выводу.
-for scen in fastroute_not_applicable fastroute_actual stale_apply poller_gone outage job_refused state_race state_resort_race \
+for scen in stale_apply poller_gone outage job_refused state_race state_resort_race \
             update_check_failed update_history_modal update_history_empty update_history_failed \
             update_whats_new \
             toggles_status_failed toggles_left_page \

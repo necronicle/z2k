@@ -28,11 +28,6 @@ const TOGGLE_DEFS = [
   // говорили, что там понятнее; там и было правильно.
   { key: "dynamic_ttl", name: "Динамический TTL",
     desc: "Пакеты-обманки, которыми z2k пробивает блокировку, по умолчанию уходят с одним и тем же счётчиком переходов. У настоящих пакетов с вашего роутера он другой — и по этому расхождению обманку несложно отличить от обычного трафика. Опция подгоняет счётчик под настоящий, и обманка перестаёт выделяться. Выключайте в одном случае: если на роутере включён TTL-fix Keenetic для раздачи мобильного интернета. Там счётчик всё равно переписывает прошивка, наша правка до провода не доживает и только тратит процессор." },
-  { key: "ppe", name: "Аппаратный offload: per-flow исключение",
-    desc: "На Keenetic (MediaTek) аппаратный ускоритель уводит поток в железо после первого пакета, и роутер не видит повторные ClientHello — стратегия залипает для блокировок без RST (mailsuite и т.п.). Эта опция держит окно рукопожатия на CPU только для нужных портов (родной firmware-механизм -j PPE), поэтому подбор стратегии снова работает, а общий трафик остаётся ускоренным. Работает только на совместимых Keenetic. Выключите, чтобы вернуть прежнее поведение." },
-  { key: "fastroute", name: "Отключение программного fastpath",
-    desc: "Включено — маршрутный кэш отключён, чтобы обход видел повторы и сбросы соединений. Выключено — кэш включён. Доступно при работающем обходе на роутерах без драйвера аппаратного NAT.",
-    extra: '<div class="t-desc" id="fastroute-status" role="status"></div>' },
   { key: "dns_redirect", name: "Защита DNS",
     desc: "Провайдер подменяет ответы обычного, незашифрованного DNS на заблокированные имена: вместо адреса сайта приходит адрес его заглушки, причём к любому внешнему серверу, даже к 8.8.8.8. Включено — запросы устройств к внешним DNS-серверам заворачиваются на резолвер роутера, который ходит к своему серверу как настроен в Keenetic (лучше всего — DNS over TLS или HTTPS). Устройства, уже спрашивающие DNS у роутера, и серверы DNS внутри вашей сети не затрагиваются." },
   { key: "autohostlist", name: "Автохостлист",
@@ -178,30 +173,10 @@ const TOGGLE_API_NAME = {
   gv_preflight: "gv-preflight",
   customd: "customd",
   dynamic_ttl: "dynamic-ttl",
-  ppe: "ppe",
-  fastroute: "fastroute",
   dns_redirect: "dns-redirect",
   auto_update: "auto-update",
   autohostlist: "autohostlist",
 };
-
-function syncFastroute(box, toggles) {
-  box.checked = toggles.fastroute === "1";
-  setLockAware(box, toggles.fastroute_available !== "1");
-  const state = $app.querySelector("#fastroute-status");
-  if (state) state.textContent = toggles.fastroute_status || "Состояние маршрутного кэша недоступно.";
-}
-
-async function refreshFastroute(box) {
-  setLockAware(box, true);
-  try {
-    const s = await apiGet("/status");
-    if (box.isConnected) syncFastroute(box, s.toggles);
-  } catch (_) {
-    const state = $app.querySelector("#fastroute-status");
-    if (state) state.textContent = "Не удалось проверить состояние маршрутного кэша.";
-  }
-}
 
 // Без категории YouTube профиля googlevideo нет, и включённый тумблер обещал бы
 // то, чего не происходит. Само значение при этом хранится и вернётся вместе с ней.
@@ -414,8 +389,7 @@ export async function renderToggles() {
       const box = row.querySelector("input");
       if (t.key === "auto_update") auBox = box;
       box.checked = s.toggles[t.key] === "1";
-      if (t.key === "fastroute") syncFastroute(box, s.toggles);
-      else setLockAware(box, false);
+      setLockAware(box, false);
       // Повторная загрузка не должна вешать второй обработчик: два POST'а
       // на один клик — два конкурентных рестарта сервиса.
       if (!box.dataset.wired) {
@@ -662,9 +636,7 @@ async function toggleClick(key, box) {
   sw.classList.add("loading");
   box.disabled = true; // блок UI до завершения, не даём кликать ещё
   const restarts = TOGGLES_RESTART_SERVICE[key] === 1;
-  const verb = key === "fastroute"
-    ? (wanted === "1" ? "Отключаю" : "Включаю")
-    : (wanted === "1" ? "Включаю" : "Отключаю");
+  const verb = wanted === "1" ? "Включаю" : "Отключаю";
   const niceName = {
     category_youtube: "YouTube",
     category_rkn: "RKN",
@@ -672,8 +644,6 @@ async function toggleClick(key, box) {
     gv_preflight: "пробное соединение",
     customd: "custom.d",
     dynamic_ttl: "Динамический TTL",
-    ppe: "PPE de-offload",
-    fastroute: "Маршрутный кэш",
     auto_update: "Автообновление",
     autohostlist: "Автохостлист",
   }[key] || key;
@@ -686,7 +656,6 @@ async function toggleClick(key, box) {
     box.disabled = false;
     sw.classList.remove("loading");
     toastErr("Ошибка: ", e);
-    if (key === "fastroute") refreshFastroute(box);
     return;
   }
   // Backend async — открываем модалку с live-логом. Состояние switch'а
@@ -706,20 +675,19 @@ async function toggleClick(key, box) {
         // Toggle failed — revert checkbox чтобы UI отражал реальное
         // состояние (старое значение сохранилось в config).
         box.checked = !box.checked;
-        toast(key === "fastroute" ? "Не удалось применить настройку — проверьте состояние кэша и журнал" : "Не получилось — вернул как было", "bad");
+        toast("Не получилось — вернул как было", "bad");
       } else if (jobUnresolved(outcome)) {
         // Итог неизвестен: в конфиге ничего не откатывалось, поэтому не
         // трогаем чекбокс и не обещаем, что вернули как было.
         const m = unresolvedMsg(outcome);
         if (m) toast(m, "bad");
-        if (key !== "fastroute") resyncToggle(key, box);
+        resyncToggle(key, box);
       } else {
-        toast(key === "fastroute" ? (wanted === "1" ? "Маршрутный кэш отключён" : "Маршрутный кэш включён") : (wanted === "1" ? "Включено" : "Выключено"));
+        toast(wanted === "1" ? "Включено" : "Выключено");
       }
       // Чекбокс мог вернуться в прежнее положение (провал или resync) —
       // строка с временем обязана поехать за ним.
       if (key === "auto_update") auHourSync(box);
-      if (key === "fastroute") refreshFastroute(box);
       if (key === "category_youtube") syncGvPreflight(box.checked);
       if (restarts && !jobUnresolved(outcome)) setTimeout(refreshStatus, 500);
     },

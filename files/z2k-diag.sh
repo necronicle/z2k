@@ -245,7 +245,7 @@ print_version_host() {
 
     # Плата по device-tree против hw_id из NDM: у настоящего Keenetic совпадают,
     # у портированной прошивки (keeneticported: Cudy, Xiaomi, Netis) образ одной
-    # модели, а представляется другой. Там нет аппаратного NAT, и важен fastroute.
+    # модели, а представляется другой. Аппаратного NAT там нет.
     local _dt _hw
     _dt=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null | grep -o 'KN-[0-9]*' | head -1)
     _hw=$(LD_LIBRARY_PATH= ndmc -c "show version" 2>/dev/null | sed -n 's/^[[:space:]]*hw_id:[[:space:]]*//p' | head -1 | tr -d '\r ')
@@ -254,12 +254,7 @@ print_version_host() {
     elif [ -n "$_dt" ]; then
         printf 'прошивка          : штатная (%s)\n' "$_dt"
     fi
-    if [ -r /proc/sys/net/netfilter/nf_conntrack_fastroute ]; then
-        printf 'аппаратный NAT    : %s, fastroute=%s, флаг Z2K_FASTROUTE_OFF=%s (1 = гасить fastroute там, где железа нет)\n' \
-            "$([ -d /proc/driver/hw_nat ] && echo есть || echo НЕТ)" \
-            "$(cat /proc/sys/net/netfilter/nf_conntrack_fastroute 2>/dev/null)" \
-            "$(grep '^Z2K_FASTROUTE_OFF=' "${ZAPRET2_DIR}/config" 2>/dev/null | tail -1 | cut -d= -f2 | tr -dc 0-9 | grep . || echo 1)"
-    fi
+    printf 'аппаратный NAT    : %s\n' "$([ -d /proc/driver/hw_nat ] && echo есть || echo нет)"
 
     local nfqws_bin="${ZAPRET2_DIR}/nfq2/nfqws2"
     local nfqws_ver
@@ -1262,16 +1257,6 @@ print_health() {
     if [ -r /proc/sys/net/netfilter/nf_conntrack_fastnat ]; then
         [ "$(cat /proc/sys/net/netfilter/nf_conntrack_fastnat 2>/dev/null)" = "1" ] && \
             _add "fastnat=1 — трафик идёт мимо conntrack, стратегии не применяются"
-    fi
-
-    # Портированная прошивка без аппаратного NAT: программный маршрутный кэш
-    # (fastroute) уводит поток после рукопожатия, ротатор не видит отказов.
-    # Сервис гасит его при старте (S99, z2k_conntrack_tune_start); единица при
-    # живом движке значит, что этого не случилось.
-    if [ -r /proc/sys/net/netfilter/nf_conntrack_fastroute ] && [ ! -d /proc/driver/hw_nat ] \
-        && [ "$(grep '^Z2K_FASTROUTE_OFF=' "${ZAPRET2_DIR}/config" 2>/dev/null | tail -1 | cut -d= -f2 | tr -dc 0-9)" != "0" ]; then
-        [ "$(cat /proc/sys/net/netfilter/nf_conntrack_fastroute 2>/dev/null)" = "1" ] && pidof nfqws2 >/dev/null 2>&1 && \
-            _add "нет аппаратного NAT и fastroute=1 — программный fastpath уводит поток после рукопожатия, ротатор не видит отказов (нужен перезапуск сервиса)"
     fi
 
     # PID движка ищем ОДИН раз на всю сводку: ниже он нужен четырежды, а pgrep —

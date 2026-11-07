@@ -28,8 +28,7 @@ LIB="/opt/zapret2/z2k-ppe-deoffload.sh"
 [ -r "$LIB" ] || exit 0
 . "$LIB"
 
-# Respect explicit user disable + no-op on boxes without the firmware PPE target.
-z2k_ppe_user_disabled && exit 0
+# No-op on boxes without the firmware PPE target.
 z2k_ppe_available || exit 0
 
 # Живому nfqws2 — да, остановленному обходу — нет. Разгрузка снимает поток с

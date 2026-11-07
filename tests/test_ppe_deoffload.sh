@@ -94,19 +94,12 @@ assert_has "remove drops v4 udp FORWARD"    "$CALLS" 'v4 .*-t mangle -D FORWARD 
 assert_has "remove drops v4 udp PREROUTING" "$CALLS" 'v4 .*-t mangle -D PREROUTING -p udp --dport 443 .* -j PPE'
 unset REMOVE
 
-# ---- gates: user-disable + target availability ----
-# user disabled -> ensure no-ops (returns 1)
+# ---- старый ключ выключения больше не действует (тумблер убран 07.11.2026) ----
 printf 'Z2K_PPE_DEOFFLOAD=0\n' > "$PPE_CONFIG_FILE"
-if z2k_ppe_user_disabled; then TESTS_PASSED=$((TESTS_PASSED+1)); printf "[PASS] user_disabled true on flag=0\n"
-else TESTS_FAILED=$((TESTS_FAILED+1)); printf "[FAIL] user_disabled should be true on flag=0\n"; fi
 : > "$CALLS"
 z2k_ppe_ensure_rules >/dev/null 2>&1
-assert_hasnt "no rules inserted when user-disabled" "$CALLS" '-I '
-
-# flag absent -> default ON (not disabled)
+assert_has "Z2K_PPE_DEOFFLOAD=0 не мешает поставить правила" "$CALLS" 'v4 .*-t mangle -I FORWARD -p tcp -m multiport .* -j PPE'
 : > "$PPE_CONFIG_FILE"
-if z2k_ppe_user_disabled; then TESTS_FAILED=$((TESTS_FAILED+1)); printf "[FAIL] default should be enabled\n"
-else TESTS_PASSED=$((TESTS_PASSED+1)); printf "[PASS] default enabled when flag absent\n"; fi
 
 # ---- QUIC sub-gate: Z2K_PPE_DEOFFLOAD_QUIC=0 -> TCP rules but NO udp rules ----
 printf 'Z2K_PPE_DEOFFLOAD_QUIC=0\n' > "$PPE_CONFIG_FILE"

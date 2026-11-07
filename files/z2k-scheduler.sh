@@ -502,7 +502,7 @@ while true; do
             mark_fired_in "$TMP_STATE" ppe-deoffload-epoch "$now_epoch"
             ( pidof nfqws2 >/dev/null 2>&1 || exit 0
               . "${ZAPRET2_DIR}/z2k-ppe-deoffload.sh"
-              z2k_ppe_user_disabled || z2k_ppe_ensure_rules ) >/dev/null 2>&1 &
+              z2k_ppe_ensure_rules ) >/dev/null 2>&1 &
         fi
     fi
 

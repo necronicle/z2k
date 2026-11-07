@@ -619,7 +619,7 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$out"
     }
 
-    # PPE-разгрузка (Z2K_PPE_DEOFFLOAD, правило файрвола в S99) остаётся как
+    # PPE-разгрузка (правило файрвола в S99) остаётся как
     # есть: она не детектор, а видимость — снимает поток с аппаратного NAT,
     # чтобы штатный детектор вообще видел ретрансмиссии. Планку retrans к ней
     # больше не привязываем: она задаётся выше, по документации.
@@ -2042,12 +2042,10 @@ create_official_config() {
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
-    local saved_Z2K_PPE_DEOFFLOAD="1"
     local saved_Z2K_DNS_REDIRECT="1"
     local saved_Z2K_SNI_STALL="1"
     local saved_Z2K_GV_PREFLIGHT="1"
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
-    local saved_Z2K_FASTROUTE_OFF="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
     # без пароля, и регенерация конфига не должна его однажды включить.
     #
@@ -2115,18 +2113,10 @@ create_official_config() {
         # POLICY_EXCLUDE=1 в config'е — preserve'им через reinstall.
         saved_POLICY_NAME=$(safe_config_read "POLICY_NAME" "$config_file" "nfqws")
         saved_POLICY_EXCLUDE=$(safe_config_read "POLICY_EXCLUDE" "$config_file" "0")
-        # Z2K_PPE_DEOFFLOAD(_QUIC) — Keenetic per-flow hardware-offload exclusion
-        # toggles (webpanel toggle_ppe). Default 1=ON. Were NOT preserved, so the
-        # toggle's own regenerate_config wiped the key → NDM hook 94 re-added the
-        # de-offload rules → the webpanel switch silently reverted after a regen /
-        # reboot. Now preserved like the other knobs (same class as DISABLE_CUSTOM
-        # and the r-56.6 DISABLE_IPV6 fix).
-        saved_Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "$config_file" "1")
+        # Z2K_PPE_DEOFFLOAD_QUIC — разгрузка QUIC-рукопожатия от аппаратного
+        # ускорителя Keenetic, ручной ключ (по умолчанию 1). TCP-разгрузка своего
+        # ключа больше не имеет: работает всегда, где прошивка её умеет.
         saved_Z2K_PPE_DEOFFLOAD_QUIC=$(safe_config_read "Z2K_PPE_DEOFFLOAD_QUIC" "$config_file" "1")
-        # Z2K_FASTROUTE_OFF — гасить программный fastpath там, где нет аппаратного
-        # NAT (S99 z2k_fastroute_wanted, панель toggle_fastroute). Тот же класс.
-        saved_Z2K_FASTROUTE_OFF=$(safe_config_read "Z2K_FASTROUTE_OFF" "$config_file" "1")
-        case "$saved_Z2K_FASTROUTE_OFF" in 0|1) ;; *) saved_Z2K_FASTROUTE_OFF=1 ;; esac
         # Z2K_DNS_REDIRECT — заворот открытого DNS из LAN на резолвер роутера
         # (S99 _z2k_dns_redirect_apply, хук 89, панель toggle_dns_redirect). Тот же класс.
         saved_Z2K_DNS_REDIRECT=$(safe_config_read "Z2K_DNS_REDIRECT" "$config_file" "1")
@@ -2544,17 +2534,9 @@ Z2K_NFQWS2_TEMPLATES=${saved_Z2K_NFQWS2_TEMPLATES}
 POLICY_NAME='${_pn_q}'
 POLICY_EXCLUDE='${_pe_q}'
 
-# Keenetic per-flow hardware-offload exclusion (PPE de-offload). Default 1=ON.
-# Webpanel toggle (toggle_ppe) sets Z2K_PPE_DEOFFLOAD=0; emitted here with the
-# preserved value so a regen (the toggle's own regenerate_config, another toggle,
-# or an auto-update reinstall) no longer wipes the key and lets the NDM hook
-# silently re-enable de-offload after the user turned it off.
-Z2K_PPE_DEOFFLOAD=${saved_Z2K_PPE_DEOFFLOAD}
+# Разгрузка QUIC-рукопожатия от аппаратного ускорителя Keenetic (первые пакеты
+# соединения идут мимо ускорителя, чтобы обход видел ответ). 0 — только TCP.
 Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
-# Программный fastpath (nf_conntrack_fastroute) гасится на старте сервиса только
-# там, где нет драйвера аппаратного NAT (портированная KeeneticOS на Cudy и
-# т.п.). 0 — не трогать никогда. Тумблер в панели, «Режимы».
-Z2K_FASTROUTE_OFF=${saved_Z2K_FASTROUTE_OFF}
 # Защита открытого DNS: незашифрованные запросы из LAN к внешним серверам
 # заворачиваются на резолвер роутера (nat REDIRECT :53), иначе провайдер
 # подменяет ответы на заблокированные имена. 0 — не заворачивать. Тумблер в панели.

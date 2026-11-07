@@ -4352,8 +4352,7 @@ step_finalize() {
 
     # Per-flow PPE de-offload layer (Keenetic MediaTek): keeps the handshake
     # window of bypass-port flows on the CPU slow-path so nfqws2 sees the CH
-    # retransmits and the circular rotator can advance (paired with retrans=1,
-    # set by config_official.sh when Z2K_PPE_DEOFFLOAD!=0). No-ops cleanly on
+    # retransmits and the circular rotator can advance. Always on; no-ops cleanly on
     # boxes without the firmware `-j PPE` target. Soft deploy (additive).
     deploy_critical_file "files/z2k-ppe-deoffload.sh"            "/opt/zapret2/z2k-ppe-deoffload.sh" || print_warning "ppe: shared-lib deploy failed (per-flow de-offload disabled)"
     deploy_critical_file "files/ndm/94-z2k-ppe-deoffload.sh"     "/opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh" || print_warning "ppe: NDM hook deploy failed"
@@ -4444,16 +4443,13 @@ step_finalize() {
     fi
 
     # Per-flow PPE de-offload: chmod the NDM hook +x and apply the rules now
-    # (the scheduler + NDM hook keep them re-asserted). Respect Z2K_PPE_DEOFFLOAD=0.
+    # (the scheduler + NDM hook keep them re-asserted). Always on where the
+    # firmware has the target: global acceleration stays enabled either way.
     if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
         chmod +x /opt/etc/ndm/netfilter.d/94-z2k-ppe-deoffload.sh 2>/dev/null || true
-        _ppe_off=$(awk -F= '/^Z2K_PPE_DEOFFLOAD=/{gsub(/[" ]/,"",$2);print $2;exit}' /opt/zapret2/config 2>/dev/null)
         # shellcheck disable=SC1091
         . /opt/zapret2/z2k-ppe-deoffload.sh
-        if [ "$_ppe_off" = "0" ]; then
-            z2k_ppe_remove_rules >/dev/null 2>&1 || true
-            print_info "per-flow PPE de-offload отключён пользователем (Z2K_PPE_DEOFFLOAD=0)"
-        elif z2k_ppe_available; then
+        if z2k_ppe_available; then
             z2k_ppe_ensure_rules >/dev/null 2>&1 && print_success "per-flow PPE de-offload активирован (nfqws2 видит ретрансмиты → ротация)" || print_info "per-flow PPE de-offload: правила будут доставлены планировщиком"
         else
             print_info "per-flow PPE de-offload: firmware PPE target недоступен (не Keenetic MediaTek) — пропуск"
@@ -4865,7 +4861,7 @@ run_full_install() {
     if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
         # shellcheck disable=SC1091
         . /opt/zapret2/z2k-ppe-deoffload.sh
-        z2k_ppe_user_disabled || z2k_ppe_ensure_rules >/dev/null 2>&1 || true
+        z2k_ppe_ensure_rules >/dev/null 2>&1 || true
     fi
 
     print_separator
@@ -5369,8 +5365,8 @@ _z2k_ip_hosts_clean() {
 # Обычно это уже сделал S99 stop, но его могло не быть, он мог упасть, а работавшие сторожа
 # могли применить настройки обратно. Поэтому вызываем ПОСЛЕ снятия планировщика и хуков.
 #
-# fastroute возвращаем там же, где его гасит S99: нет драйвера аппаратного NAT и
-# тумблер Z2K_FASTROUTE_OFF не запрещает. $1 — значение этого тумблера.
+# fastroute гасили версии до p-87.21 там, где нет драйвера аппаратного NAT;
+# там же возвращаем заводскую единицу.
 _z2k_restore_kernel_tuning() {
     local _d _m
     _d="${Z2K_NF_SYSCTL:-/proc/sys/net/netfilter}"
@@ -5385,7 +5381,7 @@ _z2k_restore_kernel_tuning() {
         [ -w "$_m" ] && echo 1 > "$_m" 2>/dev/null
     fi
     [ -w "$_d/nf_conntrack_fastnat_xfrm" ] && echo 1 > "$_d/nf_conntrack_fastnat_xfrm" 2>/dev/null
-    if [ -w "$_d/nf_conntrack_fastroute" ] && [ "${1:-1}" != "0" ] \
+    if [ -w "$_d/nf_conntrack_fastroute" ] \
        && [ ! -d "${Z2K_HWNAT_DIR:-/proc/driver/hw_nat}" ]; then
         echo 1 > "$_d/nf_conntrack_fastroute" 2>/dev/null
     fi
@@ -5925,8 +5921,7 @@ uninstall_zapret2() {
     _z2k_destroy_our_ipsets
 
     # Сетевые параметры: планировщика и хуков уже нет, вернуть их обратно некому.
-    # Конфиг читаем сейчас, ниже он удаляется вместе с деревом.
-    _z2k_restore_kernel_tuning "$(sed -n 's/^Z2K_FASTROUTE_OFF=//p' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | tail -n 1 | tr -d "\"'")"
+    _z2k_restore_kernel_tuning
 
     # Удалить zapret2 и снапшот отката. Чужой /opt/zapret не наш. Снапшот лежит рядом с
     # деревом, а не внутри, поэтому сам он с деревом не уходит — без явного

@@ -161,7 +161,7 @@ sh /opt/other/tpws &
 if [ "$SCEN" != no-foreign ]; then
     sh /opt/other/nfqws2 & sh /opt/other/nfqws &
 fi
-printf 'ENABLED=1\nINIT_APPLY_FW=1\nZ2K_FASTROUTE_OFF=1\n' > /opt/zapret2/config
+printf 'ENABLED=1\nINIT_APPLY_FW=1\n' > /opt/zapret2/config
 cp /src/files/ndm/* /src/files/000-zapret2.sh /opt/etc/ndm/netfilter.d/
 for s in S02z2k-tcp-tuning S51z2k-warp S96z2k-rt-proxy S96z2k-webpanel S97z2k-http-tunnel S98tg-tunnel S98z2k-detect S99z2k-scheduler S99zapret2; do
     printf '#!/bin/sh\nexit 0\n' > /opt/etc/init.d/$s; chmod +x /opt/etc/init.d/$s

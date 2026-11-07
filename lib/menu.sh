@@ -122,7 +122,6 @@ MENU
 [Y] Diagnose domain (4-стадийная проба + рекомендация)
 [M] Динамический TTL (для мобильных операторов)
 [A] Политика доступа Keenetic (фильтр по NDM policy)
-[H] Аппаратный offload: per-flow исключение (нативная ротация на Keenetic)
 [L] Автохостлист (движок сам находит заблокированные домены)
 [0] Выход
 
@@ -180,10 +179,6 @@ MENU
             a|A)
                 menu_policy_access
                 ;;
-            h|H)
-                menu_ppe
-                ;;
-
             l|L)
                 menu_autohostlist
                 ;;
@@ -1140,7 +1135,7 @@ SUBMENU
 }
 
 # ==============================================================================
-# ПОДМЕНЮ: АППАРАТНЫЙ OFFLOAD — per-flow исключение (Keenetic MediaTek PPE)
+# ПОДМЕНЮ: АВТОХОСТЛИСТ
 # ==============================================================================
 menu_autohostlist() {
     clear_screen
@@ -1228,104 +1223,6 @@ SUBMENU
             ;;
     esac
     return 0
-}
-
-menu_ppe() {
-    clear_screen
-    print_header "Аппаратный offload: per-flow исключение"
-
-    local config_file="${ZAPRET2_DIR}/config"
-
-    if [ ! -f "$config_file" ]; then
-        print_error "Конфиг не найден: $config_file"
-        print_info "Запустите установку сначала"
-        pause
-        return 1
-    fi
-
-    local Z2K_PPE_DEOFFLOAD _ppe_avail _ppe_rules
-    Z2K_PPE_DEOFFLOAD=$(safe_config_read "Z2K_PPE_DEOFFLOAD" "$config_file" "1")
-    _ppe_avail="нет (не Keenetic MediaTek)"
-    grep -qx "PPE" /proc/net/ip_tables_targets 2>/dev/null && _ppe_avail="да (firmware PPE target)"
-    _ppe_rules=$(iptables -t mangle -S 2>/dev/null | grep -c "connskip.*-j PPE")
-
-    print_separator
-    print_info "Флаг: $([ "$Z2K_PPE_DEOFFLOAD" = "0" ] && echo 'Выключен' || echo 'Включен (по умолчанию)')   Поддержка: $_ppe_avail   Активных правил: ${_ppe_rules:-0}"
-    print_separator
-
-    cat <<'SUBMENU'
-
-На Keenetic (MediaTek) аппаратный ускоритель (PPE) уводит поток в
-железо после первого пакета — и nfqws2 НЕ видит ретрансмиты
-ClientHello, поэтому ротатор не может уйти со сломанной стратегии
-для silent-drop блокировок (mailsuite, flibusta и т.п.).
-
-Эта опция вешает родной firmware-таргет -j PPE на окно
-рукопожатия bypass-портов: первые ~30 пакетов каждого соединения
-остаются на CPU (nfqws2 их видит -> ротация работает), а основной
-поток дальше снова идёт через аппаратное ускорение. Глобальное
-ускорение НЕ выключается. В паре с этим circular переводится на
-retrans=1 (иначе одинаковые CH-ретрансмиты не считаются провалом).
-
-[1] Включить (по умолчанию)
-[2] Выключить (вернуть retrans=2, снять правила — старое поведение)
-[B] Назад
-
-SUBMENU
-
-    printf "Выберите опцию [1-2,B]: "
-    read_input sub_choice
-
-    case "$sub_choice" in
-        1)
-            if grep -q '^Z2K_PPE_DEOFFLOAD=' "$config_file"; then
-                sed -i 's/^Z2K_PPE_DEOFFLOAD=.*/Z2K_PPE_DEOFFLOAD=1/' "$config_file"
-            else
-                echo "Z2K_PPE_DEOFFLOAD=1" >> "$config_file"
-            fi
-            print_success "Per-flow PPE de-offload включён"
-            print_info "Пересоздание конфига (circular -> retrans=1)..."
-            create_official_config "/opt/zapret2/config"
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-            fi
-            if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
-                ( . /opt/zapret2/z2k-ppe-deoffload.sh && z2k_ppe_ensure_rules ) >/dev/null 2>&1 \
-                    && print_success "Правила de-offload применены" \
-                    || print_warning "firmware PPE target недоступен — на этом роутере опция неактивна"
-            fi
-            pause
-            ;;
-
-        2)
-            if grep -q '^Z2K_PPE_DEOFFLOAD=' "$config_file"; then
-                sed -i 's/^Z2K_PPE_DEOFFLOAD=.*/Z2K_PPE_DEOFFLOAD=0/' "$config_file"
-            else
-                echo "Z2K_PPE_DEOFFLOAD=0" >> "$config_file"
-            fi
-            print_success "Per-flow PPE de-offload выключен"
-            if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
-                ( . /opt/zapret2/z2k-ppe-deoffload.sh && z2k_ppe_remove_rules ) >/dev/null 2>&1 || true
-            fi
-            print_info "Пересоздание конфига (circular -> retrans=2)..."
-            create_official_config "/opt/zapret2/config"
-            if is_zapret2_running; then
-                print_info "Перезапуск сервиса..."
-                "$INIT_SCRIPT" restart
-            fi
-            pause
-            ;;
-
-        b|B)
-            return 0
-            ;;
-
-        *)
-            print_error "Неверный выбор: $sub_choice"
-            pause
-            ;;
-    esac
 }
 
 # ==============================================================================

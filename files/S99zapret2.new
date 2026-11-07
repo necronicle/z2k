@@ -2748,32 +2748,24 @@ z2k_rst_filter_purge()
 Z2K_NF_SYSCTL="${Z2K_NF_SYSCTL:-/proc/sys/net/netfilter}"
 Z2K_HWNAT_DIR="${Z2K_HWNAT_DIR:-/proc/driver/hw_nat}"
 
-# ПРОГРАММНЫЙ FASTPATH БЕЗ АППАРАТНОГО NAT (18.09.2026).
-#
-# На Keenetic с железным NAT (MediaTek PPE, /proc/driver/hw_nat) поток после
-# рукопожатия забирает железо, а программный маршрутный кэш nf_conntrack_fastroute
-# при fastnat=0 пакетов не крадёт: короткие потоки видны все (замер 17.09.2026,
-# KN-1811). Но есть платы, где драйвера аппаратного NAT нет вовсе — в первую
-# очередь портированная KeeneticOS на чужом железе (проект keeneticported: Cudy
-# WR3000/WBR3000UAX на MT7981, образ KN-3811; там только mt7986_eth с очередями,
-# ни /proc/driver/hw_nat, ни hnat). Там fastroute — единственный fastpath, и он
-# уводит поток сразу после рукопожатия: движок видит ClientHello и кладёт
-# десинк, а ретрансмиссии и RST идут мимо netfilter. Ротатор отказов не видит,
-# всё стоит на стратегии 1, «не работает ничего, кроме ютуба». Четыре жалобы с
-# одной платы; fastroute=0 руками на прошитом Cudy WR3000U — обход заработал.
-#
-# Поэтому: нет каталога драйвера — гасим fastroute вместе с fastnat. Где железо
-# есть, не трогаем: там он безвреден, а маршрутный кэш экономит процессор.
-# Тумблер Z2K_FASTROUTE_OFF в конфиге (по умолчанию 1): 0 — не трогать никогда.
-z2k_no_hwnat()
+# МАРШРУТНЫЙ КЭШ (nf_conntrack_fastroute). С 18.09 по 07.11.2026 мы гасили его на
+# старте там, где нет драйвера аппаратного NAT (портированная KeeneticOS на Cudy),
+# считая, что он прячет от обхода повторы и сбросы. Это было заблуждение:
+# причина жалоб была в другом. Теперь кэш не трогаем, а заводскую единицу,
+# снятую прежними версиями, возвращаем один раз — по маркеру, чтобы не
+# перетирать то, что человек выставит руками потом.
+z2k_fastroute_retire_once()
 {
-    [ ! -d "$Z2K_HWNAT_DIR" ]
-}
-
-z2k_fastroute_wanted()
-{
-    [ "${Z2K_FASTROUTE_OFF:-1}" != "0" ] || return 1
-    z2k_no_hwnat
+    local d="$Z2K_NF_SYSCTL" mark="${ZAPRET2_DIR:-/opt/zapret2}/state/fastroute-retired.done"
+    [ -f "$mark" ] && return 0
+    if [ ! -d "$Z2K_HWNAT_DIR" ] && [ -w "$d/nf_conntrack_fastroute" ] \
+       && [ "$(cat "$d/nf_conntrack_fastroute" 2>/dev/null)" = "0" ]; then
+        echo 1 > "$d/nf_conntrack_fastroute" 2>/dev/null \
+            && echo "fastroute=1: маршрутный кэш возвращён в заводское состояние"
+    fi
+    mkdir -p "${mark%/*}" 2>/dev/null
+    touch "$mark" 2>/dev/null
+    return 0
 }
 
 z2k_conntrack_tune_start()
@@ -2783,10 +2775,7 @@ z2k_conntrack_tune_start()
     [ -w "$d/nf_conntrack_checksum" ] && echo 0 > "$d/nf_conntrack_checksum" 2>/dev/null
     [ -w "$d/nf_conntrack_fastnat" ] && echo 0 > "$d/nf_conntrack_fastnat" 2>/dev/null
     [ -w "$d/nf_conntrack_fastnat_xfrm" ] && echo 0 > "$d/nf_conntrack_fastnat_xfrm" 2>/dev/null
-    if [ -w "$d/nf_conntrack_fastroute" ] && z2k_fastroute_wanted; then
-        echo 0 > "$d/nf_conntrack_fastroute" 2>/dev/null \
-            && echo "fastroute=0: аппаратного NAT нет, программный fastpath выключен (Z2K_FASTROUTE_OFF=0 отменяет)"
-    fi
+    z2k_fastroute_retire_once
     return 0
 }
 
@@ -2797,10 +2786,6 @@ z2k_conntrack_tune_stop()
     [ -w "$d/nf_conntrack_checksum" ] && echo 1 > "$d/nf_conntrack_checksum" 2>/dev/null
     [ -w "$d/nf_conntrack_fastnat" ] && echo 1 > "$d/nf_conntrack_fastnat" 2>/dev/null
     [ -w "$d/nf_conntrack_fastnat_xfrm" ] && echo 1 > "$d/nf_conntrack_fastnat_xfrm" 2>/dev/null
-    # Заводское значение возвращаем только там, где сами его меняли.
-    if [ -w "$d/nf_conntrack_fastroute" ] && z2k_fastroute_wanted; then
-        echo 1 > "$d/nf_conntrack_fastroute" 2>/dev/null
-    fi
     return 0
 }
 
@@ -2842,7 +2827,7 @@ start_fw()
     # ещё в железе — ровно те первые пакеты, ради которых разгрузка и заведена.
     if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-ppe-deoffload.sh" ]; then
         ( . "${ZAPRET2_DIR:-/opt/zapret2}/z2k-ppe-deoffload.sh"
-          z2k_ppe_user_disabled || z2k_ppe_ensure_rules ) >/dev/null 2>&1
+          z2k_ppe_ensure_rules ) >/dev/null 2>&1
     fi
 
     if [ "$(grep -m1 '^GAME_WARP_ENABLED=' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' ')" = "1" ] && [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" ]; then
