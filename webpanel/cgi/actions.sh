@@ -1093,7 +1093,7 @@ toggle_dynamic_ttl() {
 }
 
 toggle_gv_preflight() {
-    # Z2K_GV_PREFLIGHT — пробное соединение в профиле googlevideo (default 1).
+    # Z2K_GV_PREFLIGHT — пробное соединение в профиле googlevideo (пока по умолчанию 0).
     # Инстанс вписывает генератор, а правило NAT ставит S99 по собранному конфигу,
     # поэтому нужны и пересборка, и перезапуск.
     local want="$1"

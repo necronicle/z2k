@@ -1558,7 +1558,7 @@ generate_nfqws2_opt_from_strategies() {
         printf '%s' "$_out"
     }
     local Z2K_GV_PREFLIGHT Z2K_PREFLIGHT_STEP=""
-    Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
     # Файл проверяем на существование так же, как у z2k_sni_pick: инстанс,
     # чьей функции нет в движке, валит его в error() на каждом пакете профиля.
     if [ "$Z2K_GV_PREFLIGHT" = "1" ] \
@@ -2070,7 +2070,7 @@ create_official_config() {
     local saved_POLICY_EXCLUDE="0"
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
     local saved_Z2K_SNI_STALL="1"
-    local saved_Z2K_GV_PREFLIGHT="1"
+    local saved_Z2K_GV_PREFLIGHT=""
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
     # без пароля, и регенерация конфига не должна его однажды включить.
@@ -2153,8 +2153,12 @@ create_official_config() {
         # (правило NAT для повторного SYN). Ключ обязан быть и здесь, и в
         # heredoc ниже, иначе выключение исчезало бы при первой перегенерации —
         # ровно так однажды терялся Z2K_SNI_STALL.
-        saved_Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "$config_file" "1")
-        case "$saved_Z2K_GV_PREFLIGHT" in 0|1) ;; *) saved_Z2K_GV_PREFLIGHT=1 ;; esac
+        #
+        # Умолчание сейчас 0 (проба у тестеров), а позже станет 1. Поэтому ключ
+        # пишем, только если человек сам переключил тумблер: записанный за него
+        # 0 пережил бы смену умолчания, и шаг не включился бы ни у кого.
+        saved_Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "$config_file" "")
+        case "$saved_Z2K_GV_PREFLIGHT" in 0|1|"") ;; *) saved_Z2K_GV_PREFLIGHT="" ;; esac
         saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
         saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
         saved_Z2K_WARP_TRANSPORT=$(safe_config_read "Z2K_WARP_TRANSPORT" "$config_file" "auto")
@@ -2467,6 +2471,8 @@ CONFIG
             _z2k_persist_raw="${Z2K_RELEASE_BRANCH:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}" ;;
     esac
 
+    local _gv_preflight_line="# Z2K_GV_PREFLIGHT не задан: действует умолчание версии"
+    [ -n "$saved_Z2K_GV_PREFLIGHT" ] && _gv_preflight_line="Z2K_GV_PREFLIGHT=${saved_Z2K_GV_PREFLIGHT}"
     cat >> "$config_file" <<EOF
 
 # Game WARP mode — route game-server ipset through Cloudflare WARP (usque/MASQUE);
@@ -2566,9 +2572,10 @@ Z2K_SNI_STALL=${saved_Z2K_SNI_STALL}
 # (lua/z2k-preflight.lua). Лечит адреса, которые режутся по ответу сервера:
 # соединение встаёт, а ServerHello не приходит, и плечи там не помогают. Платой
 # идёт 1-2 секунды на КАЖДОЕ новое соединение с googlevideo, в том числе там, где
-# блока нет. 0 — выключить. Тумблер в панели, «Режимы»: при ручной правке нужна
-# ещё пересборка конфига, одного перезапуска мало.
-Z2K_GV_PREFLIGHT=${saved_Z2K_GV_PREFLIGHT}
+# блока нет. Пока ключа нет — выключено (умолчание версии). 1 — включить.
+# Тумблер в панели, «Режимы»: при ручной правке нужна ещё пересборка конфига,
+# одного перезапуска мало.
+${_gv_preflight_line}
 Z2K_PANEL_AUTH=${saved_Z2K_PANEL_AUTH}
 Z2K_AUTO_UPDATE_ENABLED=${saved_Z2K_AUTO_UPDATE_ENABLED}
 Z2K_WARP_TRANSPORT=${saved_Z2K_WARP_TRANSPORT}

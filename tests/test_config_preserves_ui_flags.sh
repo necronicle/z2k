@@ -70,7 +70,11 @@ fi
 missing_emit=""
 while IFS= read -r key; do
     [ -n "$key" ] || continue
-    grep -qE "^${key}=" "$GEN" || missing_emit="$missing_emit $key"
+    # Второй законный вид — строка собирается заранее и выводится только при
+    # заданном ключе (Z2K_GV_PREFLIGHT: умолчание версии в конфиг не пишется).
+    grep -qE "^${key}=" "$GEN" \
+        || grep -qF "=\"${key}=\${saved_${key}}\"" "$GEN" \
+        || missing_emit="$missing_emit $key"
 done < "$tmp/written"
 if [ -z "$missing_emit" ]; then
     ok "каждый сохранённый флаг выводится обратно в конфиг"

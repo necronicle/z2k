@@ -263,7 +263,7 @@ case "$method $path" in
         category_youtube=$(read_flag "Z2K_CATEGORY_YOUTUBE" "$CONFIG_FILE" "1")
         category_rkn=$(read_flag "Z2K_CATEGORY_RKN" "$CONFIG_FILE" "1")
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
-        gv_preflight=$(read_flag "Z2K_GV_PREFLIGHT" "$CONFIG_FILE" "1")
+        gv_preflight=$(read_flag "Z2K_GV_PREFLIGHT" "$CONFIG_FILE" "0")
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
         # Час ночного обновления. Нормализуем здесь, а не в панели: конфиг
@@ -287,7 +287,7 @@ case "$method $path" in
         printf ',"category_youtube":'; json_string "$category_youtube"
         printf ',"category_rkn":'; json_string "$category_rkn"
         printf ',"category_discord_voice":'; json_string "$category_discord_voice"
-        printf ',"gv_preflight":'; json_string "${gv_preflight:-1}"
+        printf ',"gv_preflight":'; json_string "${gv_preflight:-0}"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
         printf ',"auto_update":';            json_string "${auto_update:-1}"

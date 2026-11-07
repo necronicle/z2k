@@ -548,10 +548,14 @@ test_gv_preflight_flag() {
 }
 GVPF_OUT=$(test_gv_preflight_flag "off" "Z2K_GV_PREFLIGHT=0")
 assert_contains "Z2K_GV_PREFLIGHT=0 survives regen" "Z2K_GV_PREFLIGHT=0" "$GVPF_OUT"
+GVPF_OUT=$(test_gv_preflight_flag "on" "Z2K_GV_PREFLIGHT=1")
+assert_contains "Z2K_GV_PREFLIGHT=1 survives regen" "Z2K_GV_PREFLIGHT=1" "$GVPF_OUT"
+# Умолчание не записывается за человека: иначе смена умолчания в следующей
+# версии не дошла бы до тех, кто тумблер не трогал.
 GVPF_OUT=$(test_gv_preflight_flag "absent" "")
-assert_contains "Z2K_GV_PREFLIGHT absent -> emits default =1" "Z2K_GV_PREFLIGHT=1" "$GVPF_OUT"
+assert_eq "Z2K_GV_PREFLIGHT absent -> ключ не пишется" "" "$GVPF_OUT"
 GVPF_OUT=$(test_gv_preflight_flag "junk" "Z2K_GV_PREFLIGHT=maybe")
-assert_contains "Z2K_GV_PREFLIGHT junk -> normalised to 1" "Z2K_GV_PREFLIGHT=1" "$GVPF_OUT"
+assert_eq "Z2K_GV_PREFLIGHT junk -> ключ не пишется" "" "$GVPF_OUT"
 
 printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
 

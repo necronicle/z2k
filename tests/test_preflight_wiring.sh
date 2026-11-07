@@ -177,7 +177,7 @@ gen() { # $1 - тег, $2 - строка конфига, $3 - 1, если lua-ф
     rm -rf "$root"
 }
 
-OPT_ON=$(gen on "" 1)
+OPT_ON=$(gen on "Z2K_GV_PREFLIGHT=1" 1)
 GV_LINE=$(printf '%s\n' "$OPT_ON" \
     | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" | grep -F 'key=gv_tcp' | head -1)
 YT_LINE=$(printf '%s\n' "$OPT_ON" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" \
@@ -219,12 +219,17 @@ for _p in "yt_tcp:$YT_LINE" "rkn_tcp:$RKN_LINE" "quic:$QUIC_LINE"; do
 done
 
 # --- 5. Выключатель и отсутствующий файл ------------------------------------
+# Умолчание этой версии — выключено: без ключа шага в конфиге нет.
+OPT_ABSENT=$(gen absent "" 1)
+has "z2k_preflight" "$OPT_ABSENT" \
+    && bad "без ключа шаг встал (умолчание должно быть выключено)" \
+    || ok "без ключа шага нет: по умолчанию выключено"
 OPT_OFF=$(gen off "Z2K_GV_PREFLIGHT=0" 1)
 has "z2k_preflight" "$OPT_OFF" \
     && bad "Z2K_GV_PREFLIGHT=0 не убрал шаг из конфига" \
     || ok "Z2K_GV_PREFLIGHT=0 убирает шаг из конфига"
 
-OPT_NOFILE=$(gen nofile "" 0)
+OPT_NOFILE=$(gen nofile "Z2K_GV_PREFLIGHT=1" 0)
 has "z2k_preflight" "$OPT_NOFILE" \
     && bad "шаг объявлен, хотя lua-файла на диске нет — движок упадёт в error()" \
     || ok "без lua-файла шаг в конфиг не попадает"
