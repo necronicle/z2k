@@ -872,19 +872,19 @@ print_tcp16() {
     fi
 }
 
-# Пробное соединение (googlevideo). Три звена, и каждое ломает
+# Видео YouTube: обход по ответу сервера (googlevideo). Три звена, и каждое ломает
 # механизм молча: выключатель, инстанс в профиле и правило NAT для повторного
 # SYN. Печатаем все три: расхождение между ними — сразу диагноз, а не повод
 # просить у человека ещё один лог.
 print_preflight() {
-    printf '\n=== пробное соединение (googlevideo) ===\n'
+    printf '\n=== видео YouTube: обход по ответу сервера (googlevideo) ===\n'
     local cfg="${ZAPRET2_DIR}/config"
     local lua="${ZAPRET2_DIR}/lua/z2k-preflight.lua"
     local flag; flag=$(sed -n 's/^Z2K_GV_PREFLIGHT=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
     case "$flag" in
         0) printf 'выключатель       : ВЫКЛЮЧЕН (Z2K_GV_PREFLIGHT=0)\n' ;;
         1) printf 'выключатель       : включён\n' ;;
-        *) printf 'выключатель       : ключа нет — по умолчанию выключен\n' ;;
+        *) printf 'выключатель       : ключа нет — по умолчанию включён\n' ;;
     esac
     if [ -f "$lua" ]; then
         printf 'файл механизма    : есть\n'

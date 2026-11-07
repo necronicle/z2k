@@ -14,8 +14,8 @@ const TOGGLE_DEFS = [
     desc: "Голос Discord и STUN, в том числе в звонках других приложений." },
   // Отдельной карточкой под категориями: это не сервис, который можно выбрать, а
   // приём внутри YouTube, и без категории YouTube ему не к чему применяться.
-  { key: "gv_preflight", name: "Пробное соединение", video: true,
-    desc: "Помогает, если ролики YouTube не запускаются. Перед каждым новым соединением с видео роутер открывает пробное, поэтому старт занимает на 1–2 секунды дольше. Только IPv4.",
+  { key: "gv_preflight", name: "Видео YouTube: обход по ответу сервера", video: true,
+    desc: "Помогает, когда часть роликов YouTube не начинается: провайдер режет их по ответу сервера. Роутер сначала сам проходит проверку отдельным соединением и только потом отдаёт соединение устройству, поэтому видео стартует на 1–2 секунды позже. Только IPv4.",
     extra: '<div class="t-desc" id="gv-preflight-note" hidden>Недоступно: обход YouTube выключен.</div>' },
   // game_warp переехал в собственный раздел «WARP» (renderWarp) вместе с
   // управлением списками адресов — здесь его больше нет.
@@ -638,7 +638,7 @@ async function toggleClick(key, box) {
     category_youtube: "YouTube",
     category_rkn: "RKN",
     category_discord_voice: "Discord Voice / STUN",
-    gv_preflight: "пробное соединение",
+    gv_preflight: "обход по ответу сервера для видео YouTube",
     customd: "custom.d",
     dynamic_ttl: "Динамический TTL",
     auto_update: "Автообновление",
