@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 170,
-  "current": "p-87.21",
+  "seq": 171,
+  "current": "r-87.22",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -233,7 +233,7 @@
   "lib/auto_update.sh": "1be422799a300f3f2bc3d3ddd1a4a3c7253bf1a9046e4daedbdce172a019969c",
   "lib/config.sh": "664e4c8f4af167f6b86ff1ff25c6143e515d86ad28302f3bed3d830d106c91e5",
   "lib/config_official.sh": "25a0a95e7b5f6f8af2bed8be572ff7874243d88c48ceca55d5013baa5e220b6b",
-  "lib/install.sh": "c240d5caaa8a1f44a7b69ff1c37fba41b20384b08c0653f943e198424520d1ef",
+  "lib/install.sh": "420be603c9a542fc06de61f48f72ab6224bca652591dc330eb1d5eb1f73c1c89",
   "lib/menu.sh": "9ab6c27d70fbbc654c085fab046b3a975780c815dc6364e3d4fab76846e75815",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
   "lib/utils.sh": "bc2c7c79734b4851cfdfcf89f4dd0b2c5637250b424c5961cbb7ce4223e7c312",
@@ -259,7 +259,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle": "3a11e2e5fc374fcbb6e50e85b4d13ad88bfc3c891de47c8c6f5429231964ed19",
   "quic_strats.ini": "1d68c8c6e14a43a1d603e2f55a77e9df48f0151100db9f74620036edc7cd50ab",
   "strats_new2.txt": "a2e16410c97e1f85f45d2fdc81f840cd3a6bc69043dadcb95e7ae7b428c0da2e",
-  "webpanel/cgi/actions.sh": "f3dadf07a9ec11fb68387aefc66b0e107479c21ce4d002b03b9f6bb15b81b37f",
+  "webpanel/cgi/actions.sh": "1dd64775f140b03a5e1142bcb6652c2a4d2565c2f81d851da92074e08103239a",
   "webpanel/cgi/api.sh": "a27426fedb47196cf3a90699d2f81ae1e78bbd940247c634ee9a0a46c80f60aa",
   "webpanel/cgi/auth.sh": "9cefb201ed8ffc5812a565d0f6c15ada404dba7e182bc7b61191423359af74c9",
   "webpanel/init.d/S96z2k-webpanel": "d0e5cdba270fb973c3fba396e548b657e406f2aa9f8c84cf0bef58385dcb3bb5",
@@ -278,7 +278,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "9a0fcc8b5be95a25af1d7e3c13bcb5c7560a86eb210cf22b5e04ceb3ff494338",
+  "webpanel/www/index.html": "cff6500aed559b7a35a5934fa59fff21b2decace82066f475fb39ef9951c7ba8",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -292,8 +292,8 @@
   "webpanel/www/js/pages/credits.js": "7b6e44697ff7013288a6332342ff7d5c6455f05b13de941d159b423a69971e49",
   "webpanel/www/js/pages/dashboard.js": "4eff0ff0a6e031515974c4402fcfb2fb280c1327ed3bf931644a30d9816d6ae9",
   "webpanel/www/js/pages/diag.js": "54a7173733d94afc284215eb306e296a63458e12be80c8d95a94d05d38324b8c",
-  "webpanel/www/js/pages/exclude.js": "65e3a12bcb4afb84cd8b837bb15ec7520727417d0f6a9562e89f65d939cff886",
-  "webpanel/www/js/pages/extra-domains.js": "ae83615a677ccaa642b8d267006cbdb4f71eac3eab03ff809616ec2381d6cd77",
+  "webpanel/www/js/pages/exclude.js": "aea5eb43aa4e3759fcdd7356b88dd016a2e8bf1160de2c624555147ca412fadd",
+  "webpanel/www/js/pages/extra-domains.js": "0f83983aec64f0f43b6b434824bcebbe4674ada30ac80436d06c35b0df44eea3",
   "webpanel/www/js/pages/policy.js": "dfbe1a578ca492f8356ff56e9ca8cf0a9f9c9f82fc077cfce8b77c1917b7f04b",
   "webpanel/www/js/pages/strategies.js": "98bcae815bb75bc0421b1d4ba5c5d779d97361fe5131ad15e674a513320a8491",
   "webpanel/www/js/pages/strategy-pick.js": "ea84a2f9a20e743c2fddd4dcd8d66899f8675dcc7f56332f2709a09aa44c070e",
@@ -645,6 +645,7 @@
 {"v": "p-87.18", "type": "patch", "ts": "2026-11-06T09:54:10Z", "ref": "p-87.18", "desc": "Удаление z2k теперь возвращает роутер в исходное состояние и не трогает чужое: чужие программы, их правила и записи в DNS остаются на месте. Сохраняется только ключ WARP. Установка на чистый роутер больше не удаляет записи DNS, поставленные вами. Отдельный скрипт полной зачистки снова убирает всё связанное с zapret, включая ключ WARP.", "changed_files": ["webpanel/www/index.html", "files/z2k-redirector-ip-refresh.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "lib/utils.sh", "lib/webpanel.sh", "webpanel/uninstall.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-87.19", "type": "patch", "ts": "2026-11-06T15:30:55Z", "ref": "p-87.19", "desc": "Новый спонсор проекта — Mustang. Спасибо за поддержку!", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-87.20", "type": "patch", "ts": "2026-11-06T21:32:33Z", "ref": "p-87.20", "desc": "RuTracker теперь открывается и в браузерах, которые скрывают адрес сайта при подключении.", "changed_files": ["webpanel/www/index.html", "mtproxy-client/builds/z2k-rt-proxy-linux-amd64", "mtproxy-client/builds/z2k-rt-proxy-linux-arm", "mtproxy-client/builds/z2k-rt-proxy-linux-arm64", "mtproxy-client/builds/z2k-rt-proxy-linux-mips", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsel", "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-87.21", "type": "patch", "ts": "2026-11-07T11:45:03Z", "ref": "p-87.21", "desc": "Для видео YouTube, которое на части серверов не начинается, появилось пробное соединение. Пока оно выключено, включить можно тумблером «Пробное соединение» в разделе «Режимы». Свои DNS-серверы вида dot:имя теперь сохраняются в проверке DNS. Из панели убраны лишние настройки, включая «Защиту DNS», которая без зашифрованного DNS на роутере не работала.", "changed_files": ["files/S99zapret2.new", "files/lua/z2k-preflight.lua", "files/ndm/94-z2k-ppe-deoffload.sh", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-nfqueue-selfheal.sh", "files/z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/index.html", "webpanel/www/js/chrome.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
+{"v": "p-87.21", "type": "patch", "ts": "2026-11-07T11:45:03Z", "ref": "p-87.21", "desc": "Для видео YouTube, которое на части серверов не начинается, появилось пробное соединение. Пока оно выключено, включить можно тумблером «Пробное соединение» в разделе «Режимы». Свои DNS-серверы вида dot:имя теперь сохраняются в проверке DNS. Из панели убраны лишние настройки, включая «Защиту DNS», которая без зашифрованного DNS на роутере не работала.", "changed_files": ["files/S99zapret2.new", "files/lua/z2k-preflight.lua", "files/ndm/94-z2k-ppe-deoffload.sh", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-nfqueue-selfheal.sh", "files/z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/index.html", "webpanel/www/js/chrome.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
+{"v": "r-87.22", "type": "reinstall", "ts": "2026-11-07T12:29:17Z", "ref": "r-87.22", "desc": "Обход обновлён до новой версии движка zapret2 1.0.7 с исправлениями. В своих доменах и исключениях можно убрать отдельный поддомен строкой с восклицательным знаком, например !mail.example.com. Обновление переустанавливает z2k и занимает несколько минут, настройки сохраняются.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/exclude.js", "webpanel/www/js/pages/extra-domains.js", "UPDATES.json"], "steps": [], "full_install": true}
   ]
 }
