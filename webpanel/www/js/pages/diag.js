@@ -160,9 +160,9 @@ export async function renderDiag() {
       <div class="dns-own">
         <label for="dns-own-text">Свои серверы</label>
         <textarea id="dns-own-text" spellcheck="false" autocapitalize="none"
-                  placeholder="1.1.1.2&#10;https://dns.example.org/dns-query"></textarea>
+                  placeholder="1.1.1.2&#10;https://dns.example.org/dns-query&#10;dot:dns.example.org"></textarea>
         <p class="desc" style="margin:6px 0 10px">
-          По одному в строке: адрес для обычного DNS или ссылка для DoH.
+          По одному в строке: адрес для обычного DNS, ссылка для DoH или dot:имя для DoT.
           Проверяются вместе с остальными.
         </p>
         <button class="btn" id="dns-own-save">Сохранить</button>
@@ -403,7 +403,7 @@ async function dnsOwnSave() {
     toast("Сохранено");
     if (r && r.saved) {
       const dropped = /dropped=(\d+)/.exec(r.saved);
-      if (dropped && dropped[1] !== "0") toast(`Строк отброшено: ${dropped[1]} — не адрес и не ссылка`, "bad");
+      if (dropped && dropped[1] !== "0") toast(`Строк отброшено: ${dropped[1]} — не адрес, не ссылка и не dot:имя`, "bad");
     }
   } catch (e) {
     toastErr("Не сохранилось: ", e);

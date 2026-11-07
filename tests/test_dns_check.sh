@@ -287,6 +287,26 @@ printf '1.2.3.4' | sh -c "DNS_CHECK_OWN=$_ow/one.txt; $_save; dns_check_own_save
 assert_eq "один сервер без Enter сохраняется" "1.2.3.4" "$(cat "$_ow/one.txt" 2>/dev/null | tr -d '\n')"
 printf '1.2.3.4\n8.8.8.8' | sh -c "DNS_CHECK_OWN=$_ow/two.txt; $_save; dns_check_own_save" >/dev/null 2>&1
 assert_eq "и оба, когда их два" "2" "$(awk 'END {print NR+0}' "$_ow/two.txt" 2>/dev/null)"
+
+# ── Свои DoT-серверы сохраняются из панели (issue #80) ──────────────────────
+#
+# z2k-dns-check.sh понимает `dot:ИМЯ`, а сохранение отбрасывало такую строку как
+# «не адрес», и каждое «Сохранить» стирало дописанное руками.
+_res=$(printf 'https://x.cloudflare-gateway.com/dns-query\ndot:x.cloudflare-gateway.com\ndot:1.1.1.1' \
+    | sh -c "DNS_CHECK_OWN=$_ow/dot.txt; $_save; dns_check_own_save" 2>/dev/null)
+assert_eq "dot:имя сохраняется рядом с DoH" "dot:x.cloudflare-gateway.com" "$(grep '^dot:x' "$_ow/dot.txt" 2>/dev/null)"
+assert_eq "dot:адрес тоже"                  "dot:1.1.1.1" "$(grep '^dot:1' "$_ow/dot.txt" 2>/dev/null)"
+assert_eq "отброшенных нет"                 "entries=3 dropped=0" "$_res"
+_res=$(printf 'dot:\ndot:localhost\ndot:-x.example.org\ndot:.example.org\ndot:example.org.\ndot:a..example.org\ndot:a|b.example.org\ndot:a;b.example.org' \
+    | sh -c "DNS_CHECK_OWN=$_ow/bad.txt; $_save; dns_check_own_save" 2>/dev/null)
+assert_eq "кривые dot: отброшены все" "entries=0 dropped=8" "$_res"
+assert_eq "и в файл не попали"        "0" "$(awk 'END {print NR+0}' "$_ow/bad.txt" 2>/dev/null)"
+# Сохранённая строка разбирается проверкой как DoT-сервер, а не как обычный.
+D_CHECK="$ROOT/files/z2k-dns-check.sh"
+assert_eq "проверка разбирает dot: в поле DoT" "1" \
+    "$(grep -c 'dot:\*) servers="\$servers' "$D_CHECK")"
+assert_eq "подсказка в панели называет DoT" "1" \
+    "$(grep -c 'dot:имя для DoT' "$ROOT/webpanel/www/js/pages/diag.js")"
 rm -rf "$_ow"
 
 # ── Шапка называет столько путей, сколько проверяет ─────────────────────────
