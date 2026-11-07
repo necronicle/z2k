@@ -51,11 +51,6 @@ function _applyTheme() {
   } else {
     document.documentElement.removeAttribute("data-theme");
   }
-  const themeColor = document.querySelector('meta[name="theme-color"]');
-  const topbar = document.querySelector(".topbar");
-  if (themeColor && topbar) {
-    themeColor.content = getComputedStyle(topbar).backgroundColor;
-  }
   // Sync button aria-pressed.
   document.querySelectorAll("[data-theme-btn]").forEach(b => {
     b.setAttribute("aria-pressed", String(b.dataset.themeBtn === mode));

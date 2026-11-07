@@ -284,8 +284,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  /* Safari tints the web app title bar from the body color; keep the page fill separate. */
-  background: linear-gradient(var(--bg), var(--bg)) var(--bg-card);
+  background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 15px;
@@ -358,7 +357,6 @@ body {
   width: var(--sidebar-w);
   background: var(--bg-card);
   border-right: 1px solid var(--border);
-  border-image: linear-gradient(transparent var(--topbar-h), var(--border) var(--topbar-h)) 0 1;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -698,7 +696,6 @@ body[data-sidebar="collapsed"] { padding-left: var(--sidebar-w-collapsed); }
     max-width: 85vw;
     border-right: 0;
     border-left: 1px solid var(--border);
-    border-image: none;
     box-shadow: var(--shadow-lg);
     transform: translateX(100%);
     transition: transform var(--dur-large) var(--ease-emphasized);
