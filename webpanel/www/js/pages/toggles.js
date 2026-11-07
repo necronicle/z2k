@@ -16,7 +16,12 @@ const TOGGLE_DEFS = [
   // приём внутри YouTube, и без категории YouTube ему не к чему применяться.
   { key: "gv_preflight", name: "Видео YouTube: обход по ответу сервера", video: true,
     desc: "Помогает, когда часть роликов YouTube не начинается: провайдер режет их по ответу сервера. Роутер сначала сам проходит проверку отдельным соединением и только потом отдаёт соединение устройству, поэтому видео стартует на 1–2 секунды позже. Только IPv4.",
-    extra: '<div class="t-desc" id="gv-preflight-note" hidden>Недоступно: обход YouTube выключен.</div>' },
+    extra: '<div class="t-desc yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>' },
+  { key: "yt_quic_off", name: "YouTube без QUIC", video: true,
+    desc: "Включите, если видео YouTube подолгу висит на старте. Роутер не пускает YouTube по QUIC, и браузер сразу идёт обычным соединением, где работает обход видео.",
+    extra: '<div class="t-desc yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>' },
+  { key: "quic_off", name: "Весь QUIC через TCP",
+    desc: "Роутер не пускает QUIC ни к одному сайту, и браузеры с приложениями переходят на обычное соединение. Для тех, у кого провайдер режет QUIC везде. Сайты из исключений не затрагиваются." },
   // game_warp переехал в собственный раздел «WARP» (renderWarp) вместе с
   // управлением списками адресов — здесь его больше нет.
   { key: "customd", name: "Скрипты custom.d",
@@ -169,20 +174,24 @@ const TOGGLE_API_NAME = {
   category_rkn: "category-rkn",
   category_discord_voice: "category-discord-voice",
   gv_preflight: "gv-preflight",
+  yt_quic_off: "yt-quic-off",
+  quic_off: "quic-off",
   customd: "customd",
   dynamic_ttl: "dynamic-ttl",
   auto_update: "auto-update",
   autohostlist: "autohostlist",
 };
 
-// Без категории YouTube профиля googlevideo нет, и включённый тумблер обещал бы
+// Без категории YouTube профилей YouTube нет, и включённый тумблер обещал бы
 // то, чего не происходит. Само значение при этом хранится и вернётся вместе с ней.
 function syncGvPreflight(youtubeOn) {
-  const row = $app.querySelector('[data-key="gv_preflight"]');
-  if (!row) return;
-  setLockAware(row.querySelector("input"), !youtubeOn);
-  const note = row.querySelector("#gv-preflight-note");
-  if (note) note.hidden = youtubeOn;
+  for (const key of ["gv_preflight", "yt_quic_off"]) {
+    const row = $app.querySelector(`[data-key="${key}"]`);
+    if (!row) continue;
+    setLockAware(row.querySelector("input"), !youtubeOn);
+    const note = row.querySelector(".yt-off-note");
+    if (note) note.hidden = youtubeOn;
+  }
 }
 
 function toggleRows(defs) {
@@ -639,6 +648,8 @@ async function toggleClick(key, box) {
     category_rkn: "RKN",
     category_discord_voice: "Discord Voice / STUN",
     gv_preflight: "обход по ответу сервера для видео YouTube",
+    yt_quic_off: "YouTube без QUIC",
+    quic_off: "весь QUIC через TCP",
     customd: "custom.d",
     dynamic_ttl: "Динамический TTL",
     auto_update: "Автообновление",

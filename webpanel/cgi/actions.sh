@@ -1092,6 +1092,25 @@ toggle_dynamic_ttl() {
     restart_service_if_running
 }
 
+toggle_yt_quic_off() {
+    # Z2K_YT_QUIC_OFF — QUIC к YouTube не пропускается (по умолчанию 0).
+    # Профиль вписывает генератор, поэтому пересборка и перезапуск.
+    local want="$1"
+    case "$want" in 0|1) ;; *) return 1 ;; esac
+    set_flag "Z2K_YT_QUIC_OFF" "$want" "$CONFIG_FILE" || return 1
+    regenerate_config || return 1
+    restart_service_if_running
+}
+
+toggle_quic_off() {
+    # Z2K_QUIC_OFF — весь QUIC не пропускается, кроме исключений (по умолчанию 0).
+    local want="$1"
+    case "$want" in 0|1) ;; *) return 1 ;; esac
+    set_flag "Z2K_QUIC_OFF" "$want" "$CONFIG_FILE" || return 1
+    regenerate_config || return 1
+    restart_service_if_running
+}
+
 toggle_gv_preflight() {
     # Z2K_GV_PREFLIGHT — обход по ответу сервера в профиле googlevideo (по умолчанию 1).
     # Инстанс вписывает генератор, а правило NAT ставит S99 по собранному конфигу,

@@ -1631,6 +1631,24 @@ generate_nfqws2_opt_from_strategies() {
     # Порядок списков значения не имеет (движок объединяет), но ютубовский стоит
     # первым намеренно: так видно, что профиль вырос из него, а не появился из
     # ниоткуда.
+    # QUIC мимо обхода: тумблеры «YouTube без QUIC» (Z2K_YT_QUIC_OFF) и «Весь
+    # QUIC через TCP» (Z2K_QUIC_OFF). Где QUIC провайдер режет, браузер ждёт
+    # ответа, прежде чем перейти на TCP, и ролик висит на старте. Здесь Initial
+    # не уходит вовсе, рукопожатие не начинается, и браузер сразу идёт по TCP, где
+    # работают плечи и обход видео. Профиль стоит ПЕРЕД профилем QUIC: движок
+    # берёт первый подходящий. Исключения (whitelist, выключенный YouTube) не
+    # трогаем — wl_excl. Оба по умолчанию выключены.
+    local quic_off yt_quic_off
+    quic_off=$(safe_config_read "Z2K_QUIC_OFF" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+    yt_quic_off=$(safe_config_read "Z2K_YT_QUIC_OFF" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
+    local quic_drop="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=drop --new"
+    if [ "$quic_off" = "1" ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines$wl_excl $quic_drop\\n"
+    elif [ "$yt_quic_off" = "1" ] && [ "$category_youtube" != 0 ] \
+         && [ -s "${extra_strats_dir}/UDP/YT/List.txt" ]; then
+        nfqws2_opt_lines="$nfqws2_opt_lines$wl_excl --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_drop\\n"
+    fi
+
     local quic_lists="" quic_anchor=""
     if [ "$category_youtube" != 0 ] && [ -s "${extra_strats_dir}/UDP/YT/List.txt" ]; then
         quic_anchor="${extra_strats_dir}/UDP/YT/List.txt"
@@ -2071,6 +2089,7 @@ create_official_config() {
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
     local saved_Z2K_SNI_STALL="1"
     local saved_Z2K_GV_PREFLIGHT=""
+    local saved_Z2K_QUIC_OFF="" saved_Z2K_YT_QUIC_OFF=""
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
     # без пароля, и регенерация конфига не должна его однажды включить.
@@ -2159,6 +2178,12 @@ create_official_config() {
         # не трогал: записанное за человека значение пережило бы любую смену.
         saved_Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "$config_file" "")
         case "$saved_Z2K_GV_PREFLIGHT" in 0|1|"") ;; *) saved_Z2K_GV_PREFLIGHT="" ;; esac
+        # Тумблеры QUIC — по той же схеме: ключ пишется, только если человек
+        # переключил его сам, иначе действует умолчание версии.
+        saved_Z2K_QUIC_OFF=$(safe_config_read "Z2K_QUIC_OFF" "$config_file" "")
+        case "$saved_Z2K_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_QUIC_OFF="" ;; esac
+        saved_Z2K_YT_QUIC_OFF=$(safe_config_read "Z2K_YT_QUIC_OFF" "$config_file" "")
+        case "$saved_Z2K_YT_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_YT_QUIC_OFF="" ;; esac
         saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
         saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
         saved_Z2K_WARP_TRANSPORT=$(safe_config_read "Z2K_WARP_TRANSPORT" "$config_file" "auto")
@@ -2473,6 +2498,10 @@ CONFIG
 
     local _gv_preflight_line="# Z2K_GV_PREFLIGHT не задан: действует умолчание версии"
     [ -n "$saved_Z2K_GV_PREFLIGHT" ] && _gv_preflight_line="Z2K_GV_PREFLIGHT=${saved_Z2K_GV_PREFLIGHT}"
+    local _quic_off_line="# Z2K_QUIC_OFF не задан: действует умолчание версии"
+    [ -n "$saved_Z2K_QUIC_OFF" ] && _quic_off_line="Z2K_QUIC_OFF=${saved_Z2K_QUIC_OFF}"
+    local _yt_quic_off_line="# Z2K_YT_QUIC_OFF не задан: действует умолчание версии"
+    [ -n "$saved_Z2K_YT_QUIC_OFF" ] && _yt_quic_off_line="Z2K_YT_QUIC_OFF=${saved_Z2K_YT_QUIC_OFF}"
     cat >> "$config_file" <<EOF
 
 # Game WARP mode — route game-server ipset through Cloudflare WARP (usque/MASQUE);
@@ -2576,6 +2605,12 @@ Z2K_SNI_STALL=${saved_Z2K_SNI_STALL}
 # Тумблер в панели, «Режимы»: при ручной правке нужна ещё пересборка конфига,
 # одного перезапуска мало.
 ${_gv_preflight_line}
+# QUIC мимо обхода: Initial не пропускается, браузер сразу идёт по TCP.
+# Z2K_YT_QUIC_OFF=1 — только YouTube («YouTube без QUIC»), Z2K_QUIC_OFF=1 — весь
+# QUIC («Весь QUIC через TCP»). Пока ключа нет — выключено (умолчание версии).
+# Тумблеры в панели, «Режимы»; при ручной правке нужна пересборка конфига.
+${_yt_quic_off_line}
+${_quic_off_line}
 Z2K_PANEL_AUTH=${saved_Z2K_PANEL_AUTH}
 Z2K_AUTO_UPDATE_ENABLED=${saved_Z2K_AUTO_UPDATE_ENABLED}
 Z2K_WARP_TRANSPORT=${saved_Z2K_WARP_TRANSPORT}
