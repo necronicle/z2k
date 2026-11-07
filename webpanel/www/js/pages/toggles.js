@@ -7,11 +7,16 @@ import { AUTOHOSTLIST_WARNING, TOGGLES_RESTART_SERVICE, resyncToggle } from "./p
 
 const TOGGLE_DEFS = [
   { key: "category_youtube", name: "YouTube", category: true,
-    desc: "Обход для YouTube и Googlevideo, включая QUIC. Выключите, чтобы эти сервисы работали напрямую." },
+    desc: "YouTube и Googlevideo, включая QUIC." },
   { key: "category_rkn", name: "RKN", category: true,
-    desc: "Обход сайтов из списков РКН по HTTPS, HTTP и QUIC. При выключении автоподбор новых доменов также не применяется." },
+    desc: "Сайты из списков РКН и автоподбор новых доменов." },
   { key: "category_discord_voice", name: "Discord Voice / STUN", category: true,
-    desc: "Обход для голосовых соединений Discord. Выключение убирает всю штатную обработку STUN, в том числе для звонков других приложений." },
+    desc: "Голос Discord и STUN, в том числе в звонках других приложений." },
+  // Отдельной карточкой под категориями: это не сервис, который можно выбрать, а
+  // приём внутри YouTube, и без категории YouTube ему не к чему применяться.
+  { key: "gv_preflight", name: "Пробное соединение", video: true,
+    desc: "Помогает, если ролики YouTube не запускаются. Перед каждым новым соединением с видео роутер открывает пробное, поэтому старт занимает на 1–2 секунды дольше. Только IPv4.",
+    extra: '<div class="t-desc" id="gv-preflight-note" hidden>Недоступно: обход YouTube выключен.</div>' },
   // game_warp переехал в собственный раздел «WARP» (renderWarp) вместе с
   // управлением списками адресов — здесь его больше нет.
   { key: "customd", name: "Скрипты custom.d",
@@ -170,6 +175,7 @@ const TOGGLE_API_NAME = {
   category_youtube: "category-youtube",
   category_rkn: "category-rkn",
   category_discord_voice: "category-discord-voice",
+  gv_preflight: "gv-preflight",
   customd: "customd",
   dynamic_ttl: "dynamic-ttl",
   ppe: "ppe",
@@ -197,6 +203,16 @@ async function refreshFastroute(box) {
   }
 }
 
+// Без категории YouTube профиля googlevideo нет, и включённый тумблер обещал бы
+// то, чего не происходит. Само значение при этом хранится и вернётся вместе с ней.
+function syncGvPreflight(youtubeOn) {
+  const row = $app.querySelector('[data-key="gv_preflight"]');
+  if (!row) return;
+  setLockAware(row.querySelector("input"), !youtubeOn);
+  const note = row.querySelector("#gv-preflight-note");
+  if (note) note.hidden = youtubeOn;
+}
+
 function toggleRows(defs) {
   return defs.map(t => `
         <div class="toggle-row" data-key="${t.key}">
@@ -217,18 +233,21 @@ export async function renderToggles() {
   $app.innerHTML = `
     <h1 class="page-title">Режимы</h1>
     <div class="probe-row" style="margin-bottom:14px">
-      <input type="search" id="toggles-search" placeholder="Поиск настройки по названию или описанию…"
+      <input type="search" id="toggles-search" placeholder="Поиск по настройкам"
              autocomplete="off" autocapitalize="none" spellcheck="false">
     </div>
-    <div class="card">
+    <div class="card card-compact">
       <div id="toggles-error" hidden></div>
       <h3>Категории обхода</h3>
-      <p class="desc">Выберите, для каких сервисов применять обход. Настройки сохраняются после обновления. Изменение кратковременно перезапускает работающий обход.</p>
+      <p class="desc">Изменение кратковременно перезапускает работающий обход.</p>
       ${toggleRows(TOGGLE_DEFS.filter(t => t.category))}
+    </div>
+    <div class="card card-compact">
+      ${toggleRows(TOGGLE_DEFS.filter(t => t.video))}
     </div>
     <div class="card">
       <h3>Другие настройки</h3>
-      ${toggleRows(TOGGLE_DEFS.filter(t => !t.category))}
+      ${toggleRows(TOGGLE_DEFS.filter(t => !t.category && !t.video))}
     </div>
     <div class="card" id="panel-session-ttl-card">
       <h3>Срок входа в веб-панель</h3>
@@ -411,6 +430,7 @@ export async function renderToggles() {
       }
     });
     wireAuHour(s.toggles && s.toggles.au_hour, auBox);
+    syncGvPreflight(s.toggles.category_youtube === "1");
     // TG-tunnel state pill + button enable/disable matching reality.
     const tgRunning = s.tunnel && s.tunnel.running === true;
     badge.hidden = false;
@@ -649,6 +669,7 @@ async function toggleClick(key, box) {
     category_youtube: "YouTube",
     category_rkn: "RKN",
     category_discord_voice: "Discord Voice / STUN",
+    gv_preflight: "пробное соединение",
     customd: "custom.d",
     dynamic_ttl: "Динамический TTL",
     ppe: "PPE de-offload",
@@ -699,6 +720,7 @@ async function toggleClick(key, box) {
       // строка с временем обязана поехать за ним.
       if (key === "auto_update") auHourSync(box);
       if (key === "fastroute") refreshFastroute(box);
+      if (key === "category_youtube") syncGvPreflight(box.checked);
       if (restarts && !jobUnresolved(outcome)) setTimeout(refreshStatus, 500);
     },
   });

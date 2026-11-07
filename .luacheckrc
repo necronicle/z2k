@@ -13,6 +13,10 @@ globals = {
     -- потому что движок ищет десинк-функцию по имени в _G, а закрепление и
     -- выбор имени бьёт напрямую юнит-тест.
     "z2k_sni_pick", "z2k_sni_pinned", "z2k_sni_for", "z2k_sni_fake",
+    -- Проверка DPI отдельным соединением (files/lua/z2k-preflight.lua).
+    -- Десинк-функцию движок ищет по имени в _G, а таблица состояний глобальна,
+    -- потому что переживает повторную загрузку файла и бьётся юнит-тестом.
+    "z2k_preflight", "z2k_pf_flows",
     -- Поправки к штатному детектору неудач (files/lua/z2k-alert.lua) и
     -- детектор молчания QUIC (files/lua/z2k-quic-silence.lua). Движок ищет и
     -- детектор, и таймер-функцию по имени в _G.
@@ -89,8 +93,16 @@ read_globals = {
     "dissect_url",
     "dissect_nld",
     "find_tcp_option",
+    "bu8",
     "bu16",
     "bu32",
+    -- Арифметика номеров TCP и сравнение с учётом переполнения (zapret-lib.lua):
+    -- нужны шагу z2k-preflight.lua, который ведёт пробное соединение сам.
+    "u32",
+    "u32add",
+    "seq_ge",
+    -- Отмена инстансов дальше по профилю на время пробы (nfqws2 core).
+    "execution_plan_cancel",
 
     -- nfqws2 detectors
     "standard_failure_detector",
@@ -157,6 +169,9 @@ read_globals = {
     "TLS_EXT_ALPN",
     "TLS_EXT_SUPPORTED_GROUPS",
     "TCP_KIND_TS",
+    "TCP_KIND_MSS",
+    "TCP_KIND_SCALE",
+    "TCP_KIND_NOOP",
 
     -- TCP flag bits (zapret-lib.lua)
     "TH_FIN",

@@ -263,6 +263,7 @@ case "$method $path" in
         category_youtube=$(read_flag "Z2K_CATEGORY_YOUTUBE" "$CONFIG_FILE" "1")
         category_rkn=$(read_flag "Z2K_CATEGORY_RKN" "$CONFIG_FILE" "1")
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
+        gv_preflight=$(read_flag "Z2K_GV_PREFLIGHT" "$CONFIG_FILE" "1")
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         ppe=$(read_flag "Z2K_PPE_DEOFFLOAD" "$CONFIG_FILE" "1")
         dns_redirect=$(read_flag "Z2K_DNS_REDIRECT" "$CONFIG_FILE" "1")
@@ -289,6 +290,7 @@ case "$method $path" in
         printf ',"category_youtube":'; json_string "$category_youtube"
         printf ',"category_rkn":'; json_string "$category_rkn"
         printf ',"category_discord_voice":'; json_string "$category_discord_voice"
+        printf ',"gv_preflight":'; json_string "${gv_preflight:-1}"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
         printf ',"ppe":';                    json_string "${ppe:-1}"
@@ -340,6 +342,7 @@ case "$method $path" in
     "POST /toggle/category-youtube"|\
     "POST /toggle/category-rkn"|\
     "POST /toggle/category-discord-voice"|\
+    "POST /toggle/gv-preflight"|\
     "POST /toggle/autohostlist")
         body=$(read_body)
         val=$(form_value "$body" "value")
@@ -352,6 +355,7 @@ case "$method $path" in
             /toggle/category-youtube) _toggle_fn=toggle_category_youtube; _label="YouTube" ;;
             /toggle/category-rkn) _toggle_fn=toggle_category_rkn; _label="RKN" ;;
             /toggle/category-discord-voice) _toggle_fn=toggle_category_discord_voice; _label="Discord Voice / STUN" ;;
+            /toggle/gv-preflight)    _toggle_fn=toggle_gv_preflight;    _label="Пробное соединение" ;;
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;

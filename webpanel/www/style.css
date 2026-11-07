@@ -1111,7 +1111,7 @@ body[data-page="login"] #app { max-width: none; }
   flex-wrap: wrap;
   margin-bottom: var(--space-12);
 }
-.probe-row input[type="text"] { flex: 1 1 240px; min-width: 0; }
+.probe-row input[type="text"], .probe-row input[type="search"] { flex: 1 1 240px; min-width: 0; }
 
 .probe-report { margin-top: var(--space-12); }
 .probe-stages {
@@ -1399,6 +1399,27 @@ body[data-page="login"] #app { max-width: none; }
 .card > .toggle-row + .toggle-row { padding-top: 12px; }
 .card > .toggle-row:last-child { padding-bottom: 0; }
 .toggle-row .t-text { flex: 1; min-width: 0; }
+/* Плотные строки: название и описание в одну линию, общая колонка названий.
+   Специфичность выше правил .card > .toggle-row выше по файлу. */
+.card.card-compact > .toggle-row { padding: 6px 0; }
+.card.card-compact > .toggle-row + .toggle-row { padding-top: 6px; }
+.card.card-compact > .toggle-row:first-child { padding-top: 0; }
+.card.card-compact > .toggle-row:last-child { padding-bottom: 0; }
+.card.card-compact > h3 { margin-bottom: 2px; }
+.card.card-compact > .desc { margin-bottom: 6px; }
+.card-compact .t-text {
+  display: grid;
+  grid-template-columns: 12em minmax(0, 1fr);
+  column-gap: var(--space-12);
+  align-items: baseline;
+}
+.card-compact .t-name { margin-bottom: 0; }
+.card-compact .t-desc { grid-column: 2; max-width: 68ch; }
+.card-compact .t-name + .t-desc { grid-column: auto; }
+.card-compact .t-desc[hidden] { display: none; }
+@media (max-width: 600px) {
+  .card-compact .t-text { display: block; }
+}
 .toggle-row .t-name { font-weight: 600; margin-bottom: 2px; }
 /* Описание режима — такой же длинный текст, как .card .desc, и норма длины
    строки к нему относится ровно так же: на широком мониторе строка доходила
@@ -1761,7 +1782,7 @@ ol.steps > li::marker,
 .tcp16-state.bad  .tcp16-text { color: var(--bad); }
 
 /* ---------- FORMS ---------- */
-input[type=text], input[type=password] {
+input[type=text], input[type=password], input[type=search] {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
@@ -1772,7 +1793,7 @@ input[type=text], input[type=password] {
   width: 100%;
   max-width: 320px;
 }
-input[type=text]:focus, input[type=password]:focus {
+input[type=text]:focus, input[type=password]:focus, input[type=search]:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
   border-color: var(--accent);

@@ -1092,6 +1092,17 @@ toggle_dynamic_ttl() {
     restart_service_if_running
 }
 
+toggle_gv_preflight() {
+    # Z2K_GV_PREFLIGHT — пробное соединение в профиле googlevideo (default 1).
+    # Инстанс вписывает генератор, а правило NAT ставит S99 по собранному конфигу,
+    # поэтому нужны и пересборка, и перезапуск.
+    local want="$1"
+    case "$want" in 0|1) ;; *) return 1 ;; esac
+    set_flag "Z2K_GV_PREFLIGHT" "$want" "$CONFIG_FILE" || return 1
+    regenerate_config || return 1
+    restart_service_if_running
+}
+
 toggle_dns_redirect() {
     # Z2K_DNS_REDIRECT — заворот открытого DNS из LAN на резолвер роутера
     # (default 1). Не входит в NFQWS2_OPT: правила nat ставятся/снимаются сразу

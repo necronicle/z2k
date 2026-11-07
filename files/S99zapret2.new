@@ -1220,6 +1220,14 @@ LUA_Z2K_QUIC_SILENCE="$ZAPRET_BASE/lua/z2k-quic-silence.lua"
 # в error на каждом пакете.
 LUA_Z2K_TCP16="$ZAPRET_BASE/lua/z2k-tcp16.lua"
 [ -f "$LUA_Z2K_TCP16" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_TCP16"
+#
+# z2k-preflight.lua — проверка DPI отдельным соединением в профиле googlevideo:
+# адреса, которые режутся по ОТВЕТУ сервера, плечами не лечатся вовсе. В ротации
+# не участвует. Грузится ПОСЛЕ zapret-lib.lua и zapret-antidpi.lua (нужны blob,
+# tls_mod, resolve_multi_pos); файл проверяем на существование — без него
+# инстанс z2k_preflight в профиле валил бы движок в error на каждом пакете.
+LUA_Z2K_PREFLIGHT="$ZAPRET_BASE/lua/z2k-preflight.lua"
+[ -f "$LUA_Z2K_PREFLIGHT" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_PREFLIGHT"
 # z2k-silence.lua — детектор «сервер молчит», жил здесь 11.09.2026 (p-84.4 …
 # p-84.6) и снят в тот же день: он ловил класс блока, который штатным признакам
 # не виден (сервер подтверждает ClientHello и молчит), но платой была ротация
@@ -2664,6 +2672,22 @@ z2k_udp_masquerade_fix_start()
     for iface in $wan; do
         iptablesw -t nat -A "$Z2K_IPT_NAT_CHAIN" -o "$iface" -m mark --mark "$mark_processed" -p udp -j MASQUERADE
     done
+
+    # TCP :443 в той же цепочке — для пробного соединения (lua/z2k-preflight.lua).
+    # После пробы движок сам отправляет исходный SYN клиента. Conntrack считает его
+    # новым соединением, и без MASQUERADE он ушёл бы с адресом из локальной сети.
+    # Таблица nat видит только новые соединения, поэтому фейки плеч в рамках уже
+    # установленных соединений правило не затрагивает.
+    #
+    # Условие — шаг в СОБРАННОМ конфиге, а не значение Z2K_GV_PREFLIGHT: флаг,
+    # изменённый без пересборки, снял бы правило при живом шаге.
+    case "$NFQWS2_OPT" in
+        *--lua-desync=z2k_preflight*)
+            for iface in $wan; do
+                iptablesw -t nat -A "$Z2K_IPT_NAT_CHAIN" -o "$iface" -m mark --mark "$mark_processed" -p tcp --dport 443 -j MASQUERADE
+            done
+            ;;
+    esac
 }
 
 z2k_udp_masquerade_fix_stop()

@@ -1363,6 +1363,18 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-tcp16.lua"
     fi
 
+    # z2k-preflight.lua — проверка DPI отдельным соединением в профиле
+    # googlevideo. Профиль ссылается на функцию по имени (z2k_preflight),
+    # поэтому файл обязан приехать вместе с конфигом: без него движок падает
+    # в error() на каждом пакете профиля.
+    url="${GITHUB_RAW}/files/lua/z2k-preflight.lua"
+    output="${lua_dir}/z2k-preflight.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-preflight.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-preflight.lua"
+    fi
+
     # z2k-alert.lua и z2k-quic-silence.lua — поправки к штатному детектору
     # неудач и детектор молчания QUIC. Профили ссылаются на функции по имени
     # (failure_detector=z2k_fail_tls_alert / z2k_fail_quic_silence), поэтому

@@ -877,6 +877,47 @@ print_tcp16() {
     fi
 }
 
+# Пробное соединение (googlevideo). Три звена, и каждое ломает
+# механизм молча: выключатель, инстанс в профиле и правило NAT для повторного
+# SYN. Печатаем все три: расхождение между ними — сразу диагноз, а не повод
+# просить у человека ещё один лог.
+print_preflight() {
+    printf '\n=== пробное соединение (googlevideo) ===\n'
+    local cfg="${ZAPRET2_DIR}/config"
+    local lua="${ZAPRET2_DIR}/lua/z2k-preflight.lua"
+    local flag; flag=$(sed -n 's/^Z2K_GV_PREFLIGHT=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    case "$flag" in
+        0) printf 'выключатель       : ВЫКЛЮЧЕН (Z2K_GV_PREFLIGHT=0)\n' ;;
+        1) printf 'выключатель       : включён\n' ;;
+        *) printf 'выключатель       : ключа нет — считается включённым\n' ;;
+    esac
+    if [ -f "$lua" ]; then
+        printf 'файл механизма    : есть\n'
+    else
+        printf 'файл механизма    : ФАЙЛА НЕТ (%s) — обновление не доставило\n' "$lua"
+    fi
+    local in_cfg=0 in_nat=0
+    grep -qE -- '--lua-desync=z2k_preflight(:|[[:space:]]|$)' "$cfg" 2>/dev/null && in_cfg=1
+    printf 'в конфиге         : %s\n' "$([ "$in_cfg" = 1 ] && echo 'да' || echo 'НЕТ')"
+    # Правило ставит S99 на старте, а без него повторный SYN уходит с локальным адресом.
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -w -t nat -S 2>/dev/null \
+            | grep -qE -- '-p tcp .*--dport 443 -j MASQUERADE' && in_nat=1
+        printf 'правило NAT       : %s\n' "$([ "$in_nat" = 1 ] && echo 'есть' || echo 'НЕТ')"
+    else
+        printf 'правило NAT       : не проверено (нет iptables)\n'
+    fi
+    if [ "$in_cfg" = "1" ] && [ "$in_nat" = "0" ] && command -v iptables >/dev/null 2>&1; then
+        printf 'вердикт           : РАСХОЖДЕНИЕ — шаг в конфиге есть, а правила NAT нет.\n'
+        printf '                    Повторный SYN уйдёт с локальным адресом, и видео\n'
+        printf '                    встанет. Лечится перезапуском службы.\n'
+    elif [ "$flag" != "0" ] && [ "$in_cfg" = "0" ] && [ -f "$lua" ]; then
+        printf 'вердикт           : РАСХОЖДЕНИЕ — файл есть и выключатель включён,\n'
+        printf '                    а шага в конфиге нет: конфиг собран раньше файла.\n'
+        printf '                    Лечится пересборкой конфига и перезапуском службы.\n'
+    fi
+}
+
 # Число записей в каталоге (0, если его нет). Глоб, а не `ls | grep -c`.
 _diag_dir_entries() {
     set -- "$1"/*
@@ -2193,6 +2234,7 @@ case "$MODE" in
         print_tunnel
         print_warp
         print_tcp16
+        print_preflight
         print_rotator
         print_logs
         printf '\n=== end of diag ===\n'

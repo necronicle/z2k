@@ -1516,6 +1516,56 @@ generate_nfqws2_opt_from_strategies() {
     # Legacy Z2K_CF_EXTRA_CHECK values are intentionally ignored. TCP16 uses
     # the measured-line gate and z2k_sni_pick above, independently of this.
 
+    # Проверка DPI отдельным соединением перед настоящим (lua/z2k-preflight.lua).
+    #
+    # Зачем отдельный шаг. С конца октября 2026 часть зарубежных адресов
+    # googlevideo режется ПО ОТВЕТУ СЕРВЕРА: соединение встаёт, ClientHello
+    # уходит, ServerHello не приходит. Плечи тут бессильны — подделывать и
+    # расщеплять нечего, DPI смотрит не на запрос клиента. Движок проходит
+    # проверку своим соединением и отдаёт клиенту чистое; плечи остаются на
+    # своих местах и работают после передачи, потому что блок по ИМЕНИ
+    # (например play.google.com) шаг не снимает.
+    #
+    # Значения — те, с которыми шаг прошёл проверку на живой линии 06–07.11.2026
+    # (19 из 19 соединений с ответом сервера, медиана передачи клиенту 0,42 с).
+    # На одной линии: подбор на других не проводился.
+    #
+    # Шаг ставится ПЕРВЫМ инстансом профиля и ДО его позиционных --in-range/
+    # --out-range: своего окна перехвата (a/a — весь поток) ему нужно ровно на
+    # время пробы, а дальше идут родные диапазоны пула, и ротатор с плечами
+    # получает их неизменными.
+    inject_z2k_preflight() {
+        local _t _out="" _done=0
+        # Выключатель или отсутствующий файл: строка профиля остаётся ровно
+        # такой, какой была до появления шага.
+        [ -n "$Z2K_PREFLIGHT_STEP" ] || { printf '%s' "$1"; return 0; }
+        set -f
+        for _t in $1; do
+            if [ "$_done" = "0" ]; then
+                case "$_t" in
+                    --in-range=*|--out-range=*|--payload=*|--lua-desync=*)
+                        _out="${_out:+$_out }$Z2K_PREFLIGHT_STEP"
+                        _done=1
+                        ;;
+                esac
+            fi
+            _out="${_out:+$_out }$_t"
+        done
+        set +f
+        # Профиль без единого позиционного аргумента: шаг всё равно обязан
+        # попасть в строку, иначе выключатель включён, а механизма нет.
+        [ "$_done" = "1" ] || _out="${_out:+$_out }$Z2K_PREFLIGHT_STEP"
+        printf '%s' "$_out"
+    }
+    local Z2K_GV_PREFLIGHT Z2K_PREFLIGHT_STEP=""
+    Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    # Файл проверяем на существование так же, как у z2k_sni_pick: инстанс,
+    # чьей функции нет в движке, валит его в error() на каждом пакете профиля.
+    if [ "$Z2K_GV_PREFLIGHT" = "1" ] \
+       && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-preflight.lua" ]; then
+        Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4"
+    fi
+
     # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls
     # profile. Hostlist triggers OR — hostlist=YT/List.txt ∪ hostlist-domains=
     # googlevideo.com (confirmed by hostlist.c:262-281). Circular pins per-SLD
@@ -1557,6 +1607,14 @@ generate_nfqws2_opt_from_strategies() {
         # YouTube GV — dedicated hostlist (extra_strats/TCP/YT_GV/List.txt,
         # содержит apex googlevideo.com → match всех поддоменов: rr1-rr9,
         # manifest, и т.д.). Расширяется добавлением строк в файл.
+        #
+        # Проверка DPI отдельным соединением (lua/z2k-preflight.lua) — ТОЛЬКО
+        # здесь. Класс блока свой: адрес режется по ОТВЕТУ сервера, плечи на него
+        # не действуют (все 39 плеч пула дали 0 на таких адресах, замер
+        # 06.11.2026). В merge-режиме (Z2K_REFACTOR_PHASE3=1) шага нет: там
+        # googlevideo живёт одним профилем с остальным ютубом, и шаг применялся
+        # бы к именам, которым он не нужен.
+        youtube_gv_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
         add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
     fi
 
@@ -1987,6 +2045,7 @@ create_official_config() {
     local saved_Z2K_PPE_DEOFFLOAD="1"
     local saved_Z2K_DNS_REDIRECT="1"
     local saved_Z2K_SNI_STALL="1"
+    local saved_Z2K_GV_PREFLIGHT="1"
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     local saved_Z2K_FASTROUTE_OFF="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
@@ -2077,6 +2136,13 @@ create_official_config() {
         # исчезал при первой же пересборке (ревью 25.10.2026).
         saved_Z2K_SNI_STALL=$(safe_config_read "Z2K_SNI_STALL" "$config_file" "1")
         case "$saved_Z2K_SNI_STALL" in 0|1) ;; *) saved_Z2K_SNI_STALL=1 ;; esac
+        # Z2K_GV_PREFLIGHT — выключатель проверки DPI отдельным соединением. Его
+        # читают ДВА места: генератор (инстанс в профиле googlevideo) и S99
+        # (правило NAT для повторного SYN). Ключ обязан быть и здесь, и в
+        # heredoc ниже, иначе выключение исчезало бы при первой перегенерации —
+        # ровно так однажды терялся Z2K_SNI_STALL.
+        saved_Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "$config_file" "1")
+        case "$saved_Z2K_GV_PREFLIGHT" in 0|1) ;; *) saved_Z2K_GV_PREFLIGHT=1 ;; esac
         saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
         saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
         saved_Z2K_WARP_TRANSPORT=$(safe_config_read "Z2K_WARP_TRANSPORT" "$config_file" "auto")
@@ -2496,6 +2562,13 @@ Z2K_DNS_REDIRECT=${saved_Z2K_DNS_REDIRECT}
 # Обход обрыва на 16 КБ (подстановка белого имени по сети, см. state/tcp16_*).
 # 0 — выключить механизм, даже если проба нашла блок.
 Z2K_SNI_STALL=${saved_Z2K_SNI_STALL}
+# Пробное соединение перед настоящим, только googlevideo и только IPv4
+# (lua/z2k-preflight.lua). Лечит адреса, которые режутся по ответу сервера:
+# соединение встаёт, а ServerHello не приходит, и плечи там не помогают. Платой
+# идёт 1-2 секунды на КАЖДОЕ новое соединение с googlevideo, в том числе там, где
+# блока нет. 0 — выключить. Тумблер в панели, «Режимы»: при ручной правке нужна
+# ещё пересборка конфига, одного перезапуска мало.
+Z2K_GV_PREFLIGHT=${saved_Z2K_GV_PREFLIGHT}
 Z2K_PANEL_AUTH=${saved_Z2K_PANEL_AUTH}
 Z2K_AUTO_UPDATE_ENABLED=${saved_Z2K_AUTO_UPDATE_ENABLED}
 Z2K_WARP_TRANSPORT=${saved_Z2K_WARP_TRANSPORT}
