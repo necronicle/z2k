@@ -1103,25 +1103,6 @@ toggle_gv_preflight() {
     restart_service_if_running
 }
 
-toggle_dns_redirect() {
-    # Z2K_DNS_REDIRECT — заворот открытого DNS из LAN на резолвер роутера
-    # (default 1). Не входит в NFQWS2_OPT: правила nat ставятся/снимаются сразу
-    # библиотекой /opt/zapret2/z2k-dns-redirect.sh, regen и рестарт не нужны.
-    # Флаг сохраняем первым: хук NDM и S99 читают именно его.
-    local want="$1"
-    case "$want" in 0|1) ;; *) return 1 ;; esac
-    set_flag "Z2K_DNS_REDIRECT" "$want" "$CONFIG_FILE" || return 1
-    [ -r "${Z2K_DNS_REDIRECT_LIB:-/opt/zapret2/z2k-dns-redirect.sh}" ] || return 0
-    if [ "$want" = "1" ]; then
-        ( . "${Z2K_DNS_REDIRECT_LIB:-/opt/zapret2/z2k-dns-redirect.sh}" && z2k_dns_ensure_rules ) || {
-            echo "Правила не поставлены: резолвер роутера не слушает порт 53, не отвечает или iptables занят. Флаг сохранён; когда резолвер ответит, правила вернёт ежеминутная проверка." >&2
-            return 1
-        }
-    else
-        ( . "${Z2K_DNS_REDIRECT_LIB:-/opt/zapret2/z2k-dns-redirect.sh}" && z2k_dns_remove_rules && z2k_dns_reset_health ) >/dev/null 2>&1
-    fi
-}
-
 toggle_auto_update() {
     # Z2K_AUTO_UPDATE_ENABLED — nightly unattended update (default 1).
     # Out-of-band: it does not touch NFQWS2_OPT and is read

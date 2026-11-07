@@ -1862,6 +1862,33 @@ z2k_reply_pkt_cap() {
     echo 10
 }
 
+# Снять «Защиту DNS» (25.10–07.11.2026): заворот UDP/TCP 53 из LAN на резолвер
+# роутера. Подмену она снимала только там, где сам роутер ходит наружу через
+# DoT/DoH, а у остальных лишь обещала защиту, поэтому убрана целиком. Патч
+# удалённые файлы с роутера не убирает, а оставшийся хук NDM 89 возвращал бы
+# правила после каждого регена, — поэтому снимаем здесь: генератор отрабатывает и
+# при обновлении (regen-config), и при установке. Сначала хук, потом правила.
+z2k_retire_dns_redirect() {
+    local zd="${ZAPRET2_DIR:-/opt/zapret2}" prefix _p _n
+    prefix=${zd%/*}
+    rm -f "$prefix/etc/ndm/netfilter.d/89-z2k-dns-redirect.sh" \
+        "$zd/z2k-dns-redirect.sh" "$zd/files/z2k-dns-redirect.sh" \
+        "$zd/files/ndm/89-z2k-dns-redirect.sh" 2>/dev/null
+    if command -v iptables >/dev/null 2>&1; then
+        for _p in udp tcp; do
+            _n=0
+            while [ "$_n" -lt 20 ] && iptables -w -t nat -C PREROUTING -p "$_p" --dport 53 -m set --match-set z2k_lan4 src -m set ! --match-set z2k_lan4 dst -j REDIRECT --to-ports 53 2>/dev/null; do
+                iptables -w -t nat -D PREROUTING -p "$_p" --dport 53 -m set --match-set z2k_lan4 src -m set ! --match-set z2k_lan4 dst -j REDIRECT --to-ports 53 2>/dev/null || break
+                _n=$((_n + 1))
+            done
+        done
+    fi
+    command -v ipset >/dev/null 2>&1 && ipset destroy z2k_lan4 2>/dev/null
+    rm -f "${Z2K_DNS_STATE_DIR:-/tmp}/z2k-dns-redirect.down" \
+        "${Z2K_DNS_STATE_DIR:-/tmp}/z2k-dns-redirect.hc" 2>/dev/null
+    return 0
+}
+
 # Retire the experimental discovery daemon, not the on-demand probe binary.
 # Its only publication target was discovered-domains.txt; do not subtract
 # matching names from user lists, where their provenance cannot be inferred.
@@ -2042,7 +2069,6 @@ create_official_config() {
     local saved_POLICY_NAME="nfqws"
     local saved_POLICY_EXCLUDE="0"
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
-    local saved_Z2K_DNS_REDIRECT="1"
     local saved_Z2K_SNI_STALL="1"
     local saved_Z2K_GV_PREFLIGHT="1"
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
@@ -2117,10 +2143,6 @@ create_official_config() {
         # ускорителя Keenetic, ручной ключ (по умолчанию 1). TCP-разгрузка своего
         # ключа больше не имеет: работает всегда, где прошивка её умеет.
         saved_Z2K_PPE_DEOFFLOAD_QUIC=$(safe_config_read "Z2K_PPE_DEOFFLOAD_QUIC" "$config_file" "1")
-        # Z2K_DNS_REDIRECT — заворот открытого DNS из LAN на резолвер роутера
-        # (S99 _z2k_dns_redirect_apply, хук 89, панель toggle_dns_redirect). Тот же класс.
-        saved_Z2K_DNS_REDIRECT=$(safe_config_read "Z2K_DNS_REDIRECT" "$config_file" "1")
-        case "$saved_Z2K_DNS_REDIRECT" in 0|1) ;; *) saved_Z2K_DNS_REDIRECT=1 ;; esac
         # Z2K_SNI_STALL — выключатель обхода обрыва на 16 КБ (генератор, блок
         # sni_pick). Раньше его не было ни здесь, ни в heredoc: выключатель
         # исчезал при первой же пересборке (ревью 25.10.2026).
@@ -2537,10 +2559,6 @@ POLICY_EXCLUDE='${_pe_q}'
 # Разгрузка QUIC-рукопожатия от аппаратного ускорителя Keenetic (первые пакеты
 # соединения идут мимо ускорителя, чтобы обход видел ответ). 0 — только TCP.
 Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
-# Защита открытого DNS: незашифрованные запросы из LAN к внешним серверам
-# заворачиваются на резолвер роутера (nat REDIRECT :53), иначе провайдер
-# подменяет ответы на заблокированные имена. 0 — не заворачивать. Тумблер в панели.
-Z2K_DNS_REDIRECT=${saved_Z2K_DNS_REDIRECT}
 # Обход обрыва на 16 КБ (подстановка белого имени по сети, см. state/tcp16_*).
 # 0 — выключить механизм, даже если проба нашла блок.
 Z2K_SNI_STALL=${saved_Z2K_SNI_STALL}
@@ -2594,6 +2612,7 @@ EOF
     config_file="$_cfg_target"
 
     z2k_retire_discovery || { print_error "Не удалось удалить старую автодетекцию"; return 1; }
+    z2k_retire_dns_redirect
 
     print_success "Config файл создан: $config_file"
     return 0

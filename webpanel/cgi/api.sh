@@ -265,7 +265,6 @@ case "$method $path" in
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
         gv_preflight=$(read_flag "Z2K_GV_PREFLIGHT" "$CONFIG_FILE" "1")
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
-        dns_redirect=$(read_flag "Z2K_DNS_REDIRECT" "$CONFIG_FILE" "1")
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
         # Час ночного обновления. Нормализуем здесь, а не в панели: конфиг
         # правят и руками, а селектор без совпадающего варианта показал бы
@@ -291,7 +290,6 @@ case "$method $path" in
         printf ',"gv_preflight":'; json_string "${gv_preflight:-1}"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
-        printf ',"dns_redirect":';           json_string "${dns_redirect:-1}"
         printf ',"auto_update":';            json_string "${auto_update:-1}"
         printf ',"au_hour":';                json_string "${au_hour:-02}"
         printf ',"autohostlist":';           json_string "${autohostlist:-0}"
@@ -329,7 +327,6 @@ case "$method $path" in
     "POST /toggle/game-warp"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
-    "POST /toggle/dns-redirect"|\
     "POST /toggle/auto-update"|\
     "POST /toggle/category-youtube"|\
     "POST /toggle/category-rkn"|\
@@ -351,7 +348,6 @@ case "$method $path" in
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;
             /toggle/customd)         _toggle_fn=toggle_customd;         _label="custom.d" ;;
             /toggle/dynamic-ttl)     _toggle_fn=toggle_dynamic_ttl;     _label="Динамический TTL" ;;
-            /toggle/dns-redirect)    _toggle_fn=toggle_dns_redirect;    _label="Защита DNS" ;;
             /toggle/auto-update)     _toggle_fn=toggle_auto_update;     _label="Автообновление" ;;
             /toggle/autohostlist)    _toggle_fn=toggle_autohostlist;    _label="Автохостлист" ;;
         esac

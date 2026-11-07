@@ -4302,9 +4302,6 @@ step_finalize() {
     # Shared TG-redirect helper lib (ipset + -w-locked rules) — must land
     # before the init script / NDM hook / watchdog that source it.
     deploy_critical_file "files/z2k-tg-redirect.sh"              "/opt/zapret2/z2k-tg-redirect.sh" || return 1
-    # Защита открытого DNS: библиотека правил (её зовут S99, хук NDM и панель) и хук.
-    deploy_critical_file "files/z2k-dns-redirect.sh"             "/opt/zapret2/z2k-dns-redirect.sh" || return 1
-    deploy_critical_file "files/ndm/89-z2k-dns-redirect.sh"       "/opt/etc/ndm/netfilter.d/89-z2k-dns-redirect.sh" || return 1
     # TLS anchors for the relay, deployed BEFORE the init that exports SSL_CERT_FILE.
     # Go uses the system trust store and some Keenetic firmwares carry no ISRG root at
     # all, which kills the tunnel with "certificate signed by unknown authority" until

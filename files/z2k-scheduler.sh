@@ -523,19 +523,6 @@ while true; do
         fi
     fi
 
-    # Защита DNS: раз в минуту проверить, что резолвер роутера отвечает, и
-    # приостановить заворот, пока он мёртв (z2k_dns_watch в z2k-dns-redirect.sh).
-    # Без этого умерший апстрим резолвера оставлял без DNS всю сеть, включая
-    # устройства со своим сервером.
-    if [ -r "${ZAPRET2_DIR}/z2k-dns-redirect.sh" ]; then
-        last_dns=$(last_fired_in "$TMP_STATE" dns-watch-epoch)
-        case "$last_dns" in ''|*[!0-9]*) last_dns=0 ;; esac
-        if [ "$((now_epoch - last_dns))" -ge 55 ]; then
-            mark_fired_in "$TMP_STATE" dns-watch-epoch "$now_epoch"
-            ( . "${ZAPRET2_DIR}/z2k-dns-redirect.sh" && z2k_dns_watch ) >/dev/null 2>&1 &
-        fi
-    fi
-
     # WARP: selfheal каждые 25 с — ставит/снимает маршрут по status.json
     # движка z2k-warpd (fail open: мёртвый туннель = трафик напрямую, а не в
     # чёрную дыру) и поднимает демон, если он не запущен. No-op при

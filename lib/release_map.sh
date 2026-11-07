@@ -97,7 +97,6 @@ z2k_install_paths() {
             # http-tunnel supervisor — same /opt/etc/init.d placement as above.
             echo "/opt/etc/init.d/S97z2k-http-tunnel"
             ;;
-        files/ndm/89-z2k-dns-redirect.sh|\
         files/ndm/90-z2k-tg-redirect.sh|files/ndm/91-z2k-http-tunnel-redirect.sh|\
         files/ndm/92-z2k-rt-proxy-redirect.sh|files/ndm/93-z2k-warp.sh|\
         files/ndm/94-z2k-ppe-deoffload.sh|files/ndm/95-z2k-scheduler-watchdog.sh)
@@ -202,9 +201,6 @@ z2k_steps_for() {
         webpanel/lighttpd.conf)
             echo rebuild-panel ;;
         files/lua/*|files/S99zapret2.new|files/fake/*|files/extra_strats/*)
-            echo restart-service ;;
-        # Защита DNS: правила ставит S99 start, значит новый код применяется рестартом.
-        files/z2k-dns-redirect.sh|files/ndm/89-z2k-dns-redirect.sh)
             echo restart-service ;;
         # Планировщик и всё, что он запускает по расписанию.
         #

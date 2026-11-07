@@ -521,7 +521,7 @@ for cidr in $TG_CIDRS; do
     done
 done
 # Destroy the ipset itself — NDM doesn't touch ipsets, so it would linger.
-# Защита DNS: два правила REDIRECT :53 (udp/tcp) по ipset LAN-подсетей.
+# Защита DNS (убрана в p-87.21; у старых установок): два правила REDIRECT :53 по ipset LAN.
 for _p in udp tcp; do
     while iptables -w -t nat -C PREROUTING -p "$_p" --dport 53 -m set --match-set z2k_lan4 src -m set ! --match-set z2k_lan4 dst -j REDIRECT --to-ports 53 2>/dev/null; do
         iptables -w -t nat -D PREROUTING -p "$_p" --dport 53 -m set --match-set z2k_lan4 src -m set ! --match-set z2k_lan4 dst -j REDIRECT --to-ports 53 2>/dev/null || break

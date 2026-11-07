@@ -1233,23 +1233,6 @@ download_init_script() {
         print_warning "Не удалось загрузить files/init.d/S98tg-tunnel (TG tunnel не будет автостартовать после ребута)"
     fi
 
-    # Защита открытого DNS: библиотека правил + хук NDM, возвращающий их после регена.
-    url="${GITHUB_RAW}/files/z2k-dns-redirect.sh"
-    output="${files_dir}/z2k-dns-redirect.sh"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/z2k-dns-redirect.sh"
-    else
-        print_warning "Не удалось загрузить files/z2k-dns-redirect.sh (защита DNS не включится)"
-    fi
-    mkdir -p "${files_dir}/ndm"
-    url="${GITHUB_RAW}/files/ndm/89-z2k-dns-redirect.sh"
-    output="${files_dir}/ndm/89-z2k-dns-redirect.sh"
-    if z2k_fetch "$url" "$output"; then
-        print_success "Загружено: files/ndm/89-z2k-dns-redirect.sh"
-    else
-        print_warning "Не удалось загрузить ndm hook защиты DNS (правила не будут возвращаться после регена NDM)"
-    fi
-
     # Keenetic NDM netfilter.d hook for auto-restoring TG REDIRECT rules.
     mkdir -p "${files_dir}/ndm"
     url="${GITHUB_RAW}/files/ndm/90-z2k-tg-redirect.sh"

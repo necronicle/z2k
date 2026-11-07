@@ -473,11 +473,10 @@ assert_contains "ключ QUIC по умолчанию =1" "Z2K_PPE_DEOFFLOAD_QU
 PPE_OUT=$(test_ppe_deoffload "quic0" "Z2K_PPE_DEOFFLOAD_QUIC=0")
 assert_contains "ручной Z2K_PPE_DEOFFLOAD_QUIC=0 переживает regen" "Z2K_PPE_DEOFFLOAD_QUIC=0" "$PPE_OUT"
 
-printf "\n--- Z2K_DNS_REDIRECT: защита DNS — флаг переживает regen ---\n"
+printf "\n--- Z2K_DNS_REDIRECT: Защита DNS убрана — ключ после regen исчезает ---\n"
 
-# Заворот открытого DNS (S99 _z2k_dns_redirect_apply, хук 89, панель
-# toggle_dns_redirect) читает флаг из конфига; regen обязан его сохранять, иначе
-# выключенная в панели защита вернётся после любой пересборки конфига.
+# Защита DNS убрана 07.11.2026 (см. z2k_retire_dns_redirect): ключ, в том числе
+# выключенный, после пересборки не переносится.
 test_dns_redirect_flag() {
     local tag="$1" file_line="$2"
     local root="${MOCK_DIR}/dnsr-$tag"
@@ -497,11 +496,9 @@ test_dns_redirect_flag() {
     rm -rf "$root"
 }
 DNSR_OUT=$(test_dns_redirect_flag "off" "Z2K_DNS_REDIRECT=0")
-assert_contains "Z2K_DNS_REDIRECT=0 survives regen" "Z2K_DNS_REDIRECT=0" "$DNSR_OUT"
-DNSR_OUT=$(test_dns_redirect_flag "absent" "")
-assert_contains "Z2K_DNS_REDIRECT absent -> emits default =1" "Z2K_DNS_REDIRECT=1" "$DNSR_OUT"
-DNSR_OUT=$(test_dns_redirect_flag "junk" "Z2K_DNS_REDIRECT=maybe")
-assert_contains "Z2K_DNS_REDIRECT junk -> normalised to 1" "Z2K_DNS_REDIRECT=1" "$DNSR_OUT"
+assert_eq "Z2K_DNS_REDIRECT=0 не переносится" "" "$DNSR_OUT"
+DNSR_OUT=$(test_dns_redirect_flag "on" "Z2K_DNS_REDIRECT=1")
+assert_eq "Z2K_DNS_REDIRECT=1 не переносится" "" "$DNSR_OUT"
 
 # Выключатель обхода обрыва на 16 КБ: пересборка обязана его сохранять (ревью
 # 25.10.2026 — его не было ни в saved_*, ни в heredoc, и он исчезал).
