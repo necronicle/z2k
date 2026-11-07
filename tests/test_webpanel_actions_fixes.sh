@@ -837,5 +837,26 @@ fi
     || no "свежая чужая тень не тронута" "каталог на месте" "снесён"
 rm -rf "$ORPH" "$ORPH_NEW"
 
+# ===========================================================================
+printf '\n--- исключения «!» в своих доменах и в исключениях (движок 1.0.7) ---\n'
+# Движок с 1.0.7 читает «!домен» как исключение внутри списка. Панель раньше
+# отклоняла такую строку как некорректный домен.
+printf 'covered.example.net\n' > "$ZD/lists/bang-covered.txt"
+printf 'old.example.com\n' > "$ED"
+_rev=$(act 'extra_domains_revision' 2>/dev/null)
+act "printf 'Example.org\n!Mail.Example.org\n!mail.example.org\n!sub.covered.example.net\nold.example.com\n' | extra_domains_save $_rev" >/dev/null 2>&1 && _rc=0 || _rc=1
+[ "$_rc" = 0 ] && ok "extra-domains: строки с ! сохраняются" || no "extra-domains: сохранение с !" "rc=0" "rc=$_rc"
+[ "$(grep -c '^!mail.example.org$' "$ED")" = 1 ] && ok "extra-domains: «!» приведён к нижнему регистру и без дублей" \
+    || no "extra-domains: «!mail.example.org» один раз" 1 "$(grep -c '^!mail.example.org$' "$ED")"
+grep -qx 'example.org' "$ED" && ok "extra-domains: обычный домен рядом сохранён" || no "extra-domains: example.org" есть нет
+_rev=$(act 'extra_domains_revision' 2>/dev/null)
+for _bad in '!' '!!x.com' '!-bad.com' '!a b.com'; do
+    act "printf '%s\n' '$_bad' | extra_domains_save $_rev" >/dev/null 2>&1 && _rc=0 || _rc=1
+    [ "$_rc" = 1 ] && ok "extra-domains: «${_bad}» отклонён" || no "extra-domains: «${_bad}» отклонён" "rc!=0" "rc=0"
+done
+_rev=$(act 'whitelist_revision' 2>/dev/null)
+act "printf 'vk.com\n!api.vk.com\n' | whitelist_save $_rev" >/dev/null 2>&1 && _rc=0 || _rc=1
+[ "$_rc" = 0 ] && grep -qx '!api.vk.com' "$WL" && ok "исключения: строка с ! сохраняется" || no "исключения: !api.vk.com" сохранена "rc=$_rc"
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

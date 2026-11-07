@@ -3716,10 +3716,14 @@ domain_list_save() (
             sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "")
             if($0=="" || substr($0,1,1)=="#") {print line; next}
             d=tolower($0); valid=1
+            # «!» в начале — исключение внутри этого же списка (движок с 1.0.7):
+            # example.com и !mail.example.com — весь домен, кроме почты.
+            neg=""; if(substr(d,1,1)=="!") {neg="!"; d=substr(d,2)}
             if(length(d)>253 || d !~ /^[a-z0-9.-]+$/ || d ~ /^[0-9.]+$/) valid=0
             n=split(d,labels,".")
             for(i=1;i<=n;i++) if(length(labels[i])<1 || length(labels[i])>63 || labels[i] ~ /^-/ || labels[i] ~ /-$/) valid=0
             if(!valid) {printf "Некорректный домен в строке %d. Укажите имя сайта без адреса, протокола и пути.\n", NR > "/dev/stderr"; bad=1; next}
+            d=neg d
             if(!seen[d]++) print d
         }
         END {exit bad ? 2 : 0}
@@ -3761,6 +3765,8 @@ _extra_domains_validate_file() {
             FILENAME==old {previous[$0]=1; next}
             FILENAME==covered {if($0!="" && $0 !~ /^#/) have[$0]=1; next}
             $0=="" || $0 ~ /^#/ || previous[$0] {print original; next}
+            # Исключение «!» ничего не добавляет, покрывать его нечем.
+            $0 ~ /^!/ {print original; next}
             {
                 domain=$0; suffix=domain
                 while(index(suffix,".")) {

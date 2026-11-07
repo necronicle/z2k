@@ -157,7 +157,7 @@ export async function renderExcludeDomains() {
     endpoint: "/whitelist",
     shell: html => excludeShell("domains", html),
     title: "Не трогать эти сайты",
-    description: 'z2k пропускает эти сайты без обработки. <code>example.com</code> включает все его поддомены. Для IP-адресов используйте вкладку <a href="#/exclude">«Адреса»</a>.',
+    description: 'z2k пропускает эти сайты без обработки. <code>example.com</code> включает все его поддомены, <code>!api.example.com</code> оставляет поддомен в обработке. Для IP-адресов используйте вкладку <a href="#/exclude">«Адреса»</a>.',
     deleteHint: "Эти сайты перестанут исключаться из обработки z2k.",
   });
 }
