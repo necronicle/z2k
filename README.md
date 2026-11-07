@@ -18,6 +18,7 @@
 > **TheGreatYogo** · **logistik77** · **b11d11** · **BloodKnife39** · **SIGogelon** · **yozh**<br>
 > **Altaec** · **DIDIQ Rawa** · **GregMSK** · **Кожевников** · **bootnet** · **ewgen911**<br>
 > **cmfifty** · **Ret80** · **Шулепов Александр** · **Андрюшка** · **Marshmalick** · **Mustang**<br>
+> **Роман Борисович**<br>
 
 **Windows:** если на iPhone или Mac сайты открываются, а на компьютере с Windows висят — [включите метки времени TCP одной командой](#4-windows-если-сайты-висят-и-не-открываются).
 
