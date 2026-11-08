@@ -543,19 +543,19 @@ test_gv_preflight_flag() {
         > "$root/extra_strats/TCP/RKN/Strategy.txt"
     { echo "ENABLED=1"; if [ -n "$file_line" ]; then echo "$file_line"; fi; } > "$root/config"
     ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
-    grep -E '^Z2K_GV_PREFLIGHT=' "$root/config" | head -1
+    grep -E '^Z2K_GV_SERVER_REPLY=' "$root/config" | head -1
     rm -rf "$root"
 }
-GVPF_OUT=$(test_gv_preflight_flag "off" "Z2K_GV_PREFLIGHT=0")
-assert_contains "Z2K_GV_PREFLIGHT=0 survives regen" "Z2K_GV_PREFLIGHT=0" "$GVPF_OUT"
-GVPF_OUT=$(test_gv_preflight_flag "on" "Z2K_GV_PREFLIGHT=1")
-assert_contains "Z2K_GV_PREFLIGHT=1 survives regen" "Z2K_GV_PREFLIGHT=1" "$GVPF_OUT"
+GVPF_OUT=$(test_gv_preflight_flag "off" "Z2K_GV_SERVER_REPLY=0")
+assert_contains "Z2K_GV_SERVER_REPLY=0 survives regen" "Z2K_GV_SERVER_REPLY=0" "$GVPF_OUT"
+GVPF_OUT=$(test_gv_preflight_flag "on" "Z2K_GV_SERVER_REPLY=1")
+assert_contains "Z2K_GV_SERVER_REPLY=1 survives regen" "Z2K_GV_SERVER_REPLY=1" "$GVPF_OUT"
 # Умолчание не записывается за человека: иначе смена умолчания в следующей
 # версии не дошла бы до тех, кто тумблер не трогал.
 GVPF_OUT=$(test_gv_preflight_flag "absent" "")
-assert_eq "Z2K_GV_PREFLIGHT absent -> ключ не пишется" "" "$GVPF_OUT"
-GVPF_OUT=$(test_gv_preflight_flag "junk" "Z2K_GV_PREFLIGHT=maybe")
-assert_eq "Z2K_GV_PREFLIGHT junk -> ключ не пишется" "" "$GVPF_OUT"
+assert_eq "Z2K_GV_SERVER_REPLY absent -> ключ не пишется" "" "$GVPF_OUT"
+GVPF_OUT=$(test_gv_preflight_flag "junk" "Z2K_GV_SERVER_REPLY=maybe")
+assert_eq "Z2K_GV_SERVER_REPLY junk -> ключ не пишется" "" "$GVPF_OUT"
 
 printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
 

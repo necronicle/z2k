@@ -1112,12 +1112,12 @@ toggle_quic_off() {
 }
 
 toggle_gv_preflight() {
-    # Z2K_GV_PREFLIGHT — обход по ответу сервера в профиле googlevideo (по умолчанию 1).
+    # Z2K_GV_SERVER_REPLY — обход по ответу сервера в профиле googlevideo (по умолчанию 1).
     # Инстанс вписывает генератор, а правило NAT ставит S99 по собранному конфигу,
     # поэтому нужны и пересборка, и перезапуск.
     local want="$1"
     case "$want" in 0|1) ;; *) return 1 ;; esac
-    set_flag "Z2K_GV_PREFLIGHT" "$want" "$CONFIG_FILE" || return 1
+    set_flag "Z2K_GV_SERVER_REPLY" "$want" "$CONFIG_FILE" || return 1
     regenerate_config || return 1
     restart_service_if_running
 }

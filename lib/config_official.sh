@@ -1557,11 +1557,11 @@ generate_nfqws2_opt_from_strategies() {
         [ "$_done" = "1" ] || _out="${_out:+$_out }$Z2K_PREFLIGHT_STEP"
         printf '%s' "$_out"
     }
-    local Z2K_GV_PREFLIGHT Z2K_PREFLIGHT_STEP=""
-    Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    local Z2K_GV_SERVER_REPLY Z2K_PREFLIGHT_STEP=""
+    Z2K_GV_SERVER_REPLY=$(safe_config_read "Z2K_GV_SERVER_REPLY" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
     # Файл проверяем на существование так же, как у z2k_sni_pick: инстанс,
     # чьей функции нет в движке, валит его в error() на каждом пакете профиля.
-    if [ "$Z2K_GV_PREFLIGHT" = "1" ] \
+    if [ "$Z2K_GV_SERVER_REPLY" = "1" ] \
        && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-preflight.lua" ]; then
         Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4"
     fi
@@ -2088,7 +2088,7 @@ create_official_config() {
     local saved_POLICY_EXCLUDE="0"
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
     local saved_Z2K_SNI_STALL="1"
-    local saved_Z2K_GV_PREFLIGHT=""
+    local saved_Z2K_GV_SERVER_REPLY=""
     local saved_Z2K_QUIC_OFF="" saved_Z2K_YT_QUIC_OFF=""
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
@@ -2167,7 +2167,7 @@ create_official_config() {
         # исчезал при первой же пересборке (ревью 25.10.2026).
         saved_Z2K_SNI_STALL=$(safe_config_read "Z2K_SNI_STALL" "$config_file" "1")
         case "$saved_Z2K_SNI_STALL" in 0|1) ;; *) saved_Z2K_SNI_STALL=1 ;; esac
-        # Z2K_GV_PREFLIGHT — выключатель проверки DPI отдельным соединением. Его
+        # Z2K_GV_SERVER_REPLY — выключатель проверки DPI отдельным соединением. Его
         # читают ДВА места: генератор (инстанс в профиле googlevideo) и S99
         # (правило NAT для повторного SYN). Ключ обязан быть и здесь, и в
         # heredoc ниже, иначе выключение исчезало бы при первой перегенерации —
@@ -2176,8 +2176,12 @@ create_official_config() {
         # Ключ пишем, только если человек сам переключил тумблер. Иначе действует
         # умолчание версии (сейчас 1), и его смена доходит до всех, кто тумблер
         # не трогал: записанное за человека значение пережило бы любую смену.
-        saved_Z2K_GV_PREFLIGHT=$(safe_config_read "Z2K_GV_PREFLIGHT" "$config_file" "")
-        case "$saved_Z2K_GV_PREFLIGHT" in 0|1|"") ;; *) saved_Z2K_GV_PREFLIGHT="" ;; esac
+        #
+        # До p-87.24 ключ назывался Z2K_GV_PREFLIGHT. Его не читаем намеренно
+        # (решение Марка 08.11.2026): обход включается у всех, в том числе там,
+        # где был записан 0. Пересборка старый ключ просто не переносит.
+        saved_Z2K_GV_SERVER_REPLY=$(safe_config_read "Z2K_GV_SERVER_REPLY" "$config_file" "")
+        case "$saved_Z2K_GV_SERVER_REPLY" in 0|1|"") ;; *) saved_Z2K_GV_SERVER_REPLY="" ;; esac
         # Тумблеры QUIC — по той же схеме: ключ пишется, только если человек
         # переключил его сам, иначе действует умолчание версии.
         saved_Z2K_QUIC_OFF=$(safe_config_read "Z2K_QUIC_OFF" "$config_file" "")
@@ -2496,8 +2500,8 @@ CONFIG
             _z2k_persist_raw="${Z2K_RELEASE_BRANCH:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}" ;;
     esac
 
-    local _gv_preflight_line="# Z2K_GV_PREFLIGHT не задан: действует умолчание версии"
-    [ -n "$saved_Z2K_GV_PREFLIGHT" ] && _gv_preflight_line="Z2K_GV_PREFLIGHT=${saved_Z2K_GV_PREFLIGHT}"
+    local _gv_preflight_line="# Z2K_GV_SERVER_REPLY не задан: действует умолчание версии"
+    [ -n "$saved_Z2K_GV_SERVER_REPLY" ] && _gv_preflight_line="Z2K_GV_SERVER_REPLY=${saved_Z2K_GV_SERVER_REPLY}"
     local _quic_off_line="# Z2K_QUIC_OFF не задан: действует умолчание версии"
     [ -n "$saved_Z2K_QUIC_OFF" ] && _quic_off_line="Z2K_QUIC_OFF=${saved_Z2K_QUIC_OFF}"
     local _yt_quic_off_line="# Z2K_YT_QUIC_OFF не задан: действует умолчание версии"

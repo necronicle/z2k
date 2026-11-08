@@ -1474,6 +1474,13 @@ step_build_zapret2() {
                 cp -a "$_rescued/$_item" "$ZAPRET2_DIR/$_item" 2>/dev/null \
                     && print_info "  восстановлено: $_item"
             done
+            # Отметки миграций — поштучно и вместе с state.tsv, см. бэкап ниже.
+            for _item in "$_rescued/state/"*.done; do
+                [ -f "$_item" ] || continue
+                [ -e "$ZAPRET2_DIR/state/${_item##*/}" ] && continue
+                mkdir -p "$ZAPRET2_DIR/state" 2>/dev/null
+                cp -a "$_item" "$ZAPRET2_DIR/state/" 2>/dev/null
+            done
         fi
     fi
 
@@ -1636,6 +1643,14 @@ step_build_zapret2() {
         # warn и продолжаем, не блокируя установку ради cache.
         z2k_backup_file "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" state.tsv || \
             print_warning "Не удалось сохранить state.tsv — стратегии переподберутся автоматически после установки."
+        # Отметки выполненных миграций (state/*.done) едут ВМЕСТЕ с state.tsv.
+        # Без них init на первом старте повторял перенумерацию пулов по уже
+        # перенесённому файлу: автоматические записи стирались, замороженные
+        # уезжали на чужие плечи. Так прошли r-87.22 и p-87.23 (08.11.2026).
+        if [ -d "$ZAPRET2_DIR/state" ]; then
+            mkdir -p "$backup_tmp/state-done" 2>/dev/null
+            cp -f "$ZAPRET2_DIR/state/"*.done "$backup_tmp/state-done/" 2>/dev/null || true
+        fi
         # Порядок здесь несущий: дешёвое и незаменимое — раньше объёмного и
         # восстановимого. Ниже лежит перенос geosite-целей: около 2,5 МБ по
         # умолчанию и около 26 МБ на роутере, выбравшем ru-blocked-all. Пока он
@@ -2748,6 +2763,13 @@ TMPJUNK
         elif z2k_restore_file state.tsv "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv"; then
             chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
             print_success "Стратегии autocircular восстановлены"
+        fi
+        # Отметки миграций — при любом исходе выше: и с перенесённым state.tsv
+        # (он уже в текущей нумерации), и со сброшенным (пустому нечего
+        # переносить). Без них init прогнал бы миграции по готовому файлу.
+        if [ -d "$backup_tmp/state-done" ]; then
+            mkdir -p "$ZAPRET2_DIR/state" 2>/dev/null
+            cp -f "$backup_tmp/state-done/"*.done "$ZAPRET2_DIR/state/" 2>/dev/null || true
         fi
 
         # Per-install relay identity (Stage B) — restore the device's minted keypair

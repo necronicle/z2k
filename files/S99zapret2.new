@@ -767,6 +767,66 @@ _z2k_migrate_custom_voice_blob_v1()
 	return 0
 }
 
+# ВОЗВРАТ СТРАТЕГИЙ ПОСЛЕ ПОВТОРНОЙ ПЕРЕНУМЕРАЦИИ (08.11.2026).
+#
+# Переустановка откладывала старое дерево и переносила state.tsv, но не отметки
+# state/*.done. На первом старте миграции v1..v3 шли ПОВТОРНО по уже
+# перенесённому файлу: автоматические записи стирались, замороженные уезжали на
+# чужие плечи (12 -> 15 -> 25). Так прошли r-87.22 и ночной переход p-87.21 ->
+# p-87.23 через неё. Перенос отметок починен в lib/install.sh, здесь — возврат
+# для тех, у кого это уже случилось.
+#
+# Источник — снимок, который сама v1 оставила перед повтором
+# (state.tsv.pre-renumber-v1): это состояние ровно до порчи. Признак повтора —
+# отметка v1 моложе выпуска r-87.22: законно v1 в эти дни проходит только у
+# роутеров, не обновлявшихся с конца октября.
+#
+# Правила слияния:
+#   * замороженная запись снимка возвращается, если текущая с тем же временем
+#     записи тоже заморожена — её трогала только миграция, не человек;
+#   * запись снимка, которой сейчас нет, возвращается;
+#   * остальное (подобранное заново, переключённое человеком) остаётся.
+_z2k_restore_state_after_rerun_v1()
+{
+	local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/autocircular"
+	local done_flag="${ZAPRET_BASE}/state/rerun-restore-v1.done"
+	[ -f "$done_flag" ] && return 0
+	local f="$base/state.tsv" snap="$base/state.tsv.pre-renumber-v1"
+	local v1="${ZAPRET_BASE}/state/pool-renumber-v1.done" t
+	_rr_mark() { mkdir -p "${ZAPRET_BASE}/state" 2>/dev/null; : > "$done_flag" 2>/dev/null; }
+	if [ ! -s "$snap" ] || [ ! -f "$v1" ] || [ ! -f "$f" ]; then _rr_mark; return 0; fi
+	t=$(date -r "$v1" +%s 2>/dev/null)
+	case "$t" in ''|*[!0-9]*) _rr_mark; return 0 ;; esac
+	# 2026-11-07T12:29:17Z — выпуск r-87.22.
+	[ "$t" -ge 1794054557 ] || { _rr_mark; return 0; }
+	( set -C; printf '%s' "$(date +%s 2>/dev/null || echo 0)" > "$f.lock" ) 2>/dev/null || return 0
+	if awk -F'\t' 'BEGIN { OFS = "\t" }
+		NR == FNR {
+			if ($0 ~ /^#/ || NF < 3) next
+			k = $1 SUBSEP $2; snap[k] = $0; sts[k] = $4; smode[k] = $5; order[++n] = k
+			next
+		}
+		$0 ~ /^#/ || NF < 3 { print; next }
+		{
+			k = $1 SUBSEP $2; seen[k] = 1
+			if ((k in snap) && smode[k] == "frozen" && $5 == "frozen" && $4 == sts[k]) { print snap[k]; back++; next }
+			print
+		}
+		END {
+			for (i = 1; i <= n; i++) if (!(order[i] in seen)) { print snap[order[i]]; back++ }
+			print back + 0 > "/dev/stderr"
+		}' "$snap" "$f" > "$f.mig" 2>"$f.cnt" && [ -s "$f.mig" ]; then
+		chmod 644 "$f.mig" 2>/dev/null || true
+		chown nobody "$f.mig" 2>/dev/null || true
+		cp -p "$f" "$f.pre-rerun-restore-v1" 2>/dev/null \
+			&& mv -f "$f.mig" "$f" 2>/dev/null \
+			&& echo "Rotation state restored after repeated renumbering ($(cat "$f.cnt" 2>/dev/null) row(s))" \
+			&& _rr_mark
+	fi
+	rm -f "$f.mig" "$f.cnt" "$f.lock" 2>/dev/null
+	return 0
+}
+
 # 86.2: subdomains share the native nld=2 rotation record. Run before nfqws2
 # starts, under the same lock as the panel. Keep an original backup for rollback.
 _z2k_migrate_rotator_sld()
@@ -2655,7 +2715,7 @@ z2k_udp_masquerade_fix_start()
     # Таблица nat видит только новые соединения, поэтому фейки плеч в рамках уже
     # установленных соединений правило не затрагивает.
     #
-    # Условие — шаг в СОБРАННОМ конфиге, а не значение Z2K_GV_PREFLIGHT: флаг,
+    # Условие — шаг в СОБРАННОМ конфиге, а не значение Z2K_GV_SERVER_REPLY: флаг,
     # изменённый без пересборки, снял бы правило при живом шаге.
     case "$NFQWS2_OPT" in
         *--lua-desync=z2k_preflight*)
@@ -3143,6 +3203,7 @@ start()
     _z2k_migrate_pool_renumber_v3
     _z2k_migrate_pool_renumber_v5
     _z2k_migrate_custom_voice_blob_v1
+    _z2k_restore_state_after_rerun_v1
 
     if ! start_daemons; then
         echo "ERROR: zapret2 service NOT started — обход не работает"
