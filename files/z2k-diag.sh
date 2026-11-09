@@ -913,6 +913,43 @@ print_preflight() {
     fi
 }
 
+# Видео YouTube: подмена адреса (служба z2k-detect gvsub). Звенья: выключатель,
+# служба, очередь для ответов DNS, цепочки первыми в PREROUTING. Плюс сами
+# подмены из файла состояния службы — какие адреса сейчас плохие и куда идут.
+print_gvsub() {
+    printf '\n=== видео YouTube: подмена адреса (googlevideo) ===\n'
+    local cfg="${ZAPRET2_DIR}/config" st=/tmp/z2k-gvsub.json pidf=/var/run/z2k-gvsub.pid
+    local flag; flag=$(sed -n 's/^Z2K_GV_SUBST=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    case "$flag" in
+        0) printf 'выключатель       : ВЫКЛЮЧЕН (Z2K_GV_SUBST=0)\n' ;;
+        1) printf 'выключатель       : включён\n' ;;
+        *) printf 'выключатель       : ключа нет — по умолчанию включён\n' ;;
+    esac
+    if /opt/sbin/z2k-detect 2>&1 | grep -q gvsub; then
+        printf 'служба в бинарнике: есть\n'
+    else
+        printf 'служба в бинарнике: НЕТ — z2k-detect старый, подмена не работает\n'
+    fi
+    local pid; pid=$(cat "$pidf" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        printf 'служба            : работает (PID %s)\n' "$pid"
+    else
+        printf 'служба            : НЕ РАБОТАЕТ\n'
+    fi
+    if command -v iptables >/dev/null 2>&1; then
+        local q=НЕТ pre=НЕТ
+        iptables -w -t mangle -S OUTPUT 2>/dev/null | grep -q -- '--queue-num 210' && q=есть
+        [ "$(iptables -w -t nat -S PREROUTING 2>/dev/null | sed -n 2p)" = "-A PREROUTING -j Z2K_GVSUB" ] && pre=первой
+        printf 'очередь DNS       : %s\n' "$q"
+        printf 'цепочка в nat     : %s\n' "$pre"
+    fi
+    if [ -f "$st" ]; then
+        printf 'состояние службы  :\n'
+        sed 's/^/    /' "$st"
+    fi
+    tail -n 20 /tmp/z2k-log/gvsub.log 2>/dev/null | sed 's/^/    журнал: /'
+}
+
 # Число записей в каталоге (0, если его нет). Глоб, а не `ls | grep -c`.
 _diag_dir_entries() {
     set -- "$1"/*
@@ -2220,6 +2257,7 @@ case "$MODE" in
         print_warp
         print_tcp16
         print_preflight
+        print_gvsub
         print_rotator
         print_logs
         printf '\n=== end of diag ===\n'

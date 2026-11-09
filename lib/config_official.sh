@@ -1563,7 +1563,10 @@ generate_nfqws2_opt_from_strategies() {
     # чьей функции нет в движке, валит его в error() на каждом пакете профиля.
     if [ "$Z2K_GV_SERVER_REPLY" = "1" ] \
        && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-preflight.lua" ]; then
-        Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4"
+        # v6 — шаг и на IPv6. init снимает его при старте, если увидит NAT
+        # для IPv6 (S99zapret2, z2k_preflight_v6_gate): за NAT повторный SYN
+        # ушёл бы с внутренним адресом.
+        Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4:v6"
     fi
 
     # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls
@@ -1615,6 +1618,19 @@ generate_nfqws2_opt_from_strategies() {
         # googlevideo живёт одним профилем с остальным ютубом, и шаг применялся
         # бы к именам, которым он не нужен.
         youtube_gv_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
+        # Тот же профиль по адресам из ответов DNS (служба подмены пишет их в
+        # файл до того, как отпустить ответ; движок перечитывает файл сам).
+        # Имя хоста движок узнаёт только из самого соединения, и первое
+        # соединение к новому адресу шло мимо профиля — без пробы: плохой
+        # сервер молчал, браузер ждал ~2,5 с и уходил на другой (Safari,
+        # шортс 11,8 с, 10.11.2026). Стоит ПЕРЕД профилем по списку имён.
+        # Без $wl_excl: любой hostlist, включая exclude, при неизвестном
+        # имени отвергает профиль до IpsetCheck (nfq2/desync.c:269).
+        # Цена: whitelist не действует на первый SYN к адресу googlevideo
+        # из файла; на ClientHello профиль выбирается заново по имени.
+        if [ -n "$Z2K_PREFLIGHT_STEP" ] && [ "$(safe_config_read "Z2K_GV_SUBST" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")" != "0" ]; then
+            add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--ipset=/tmp/z2k-gv-ips.txt $youtube_gv_tcp --new"
+        fi
         add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
     fi
 
@@ -2088,7 +2104,7 @@ create_official_config() {
     local saved_POLICY_EXCLUDE="0"
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
     local saved_Z2K_SNI_STALL="1"
-    local saved_Z2K_GV_SERVER_REPLY=""
+    local saved_Z2K_GV_SERVER_REPLY="" saved_Z2K_GV_SUBST=""
     local saved_Z2K_QUIC_OFF="" saved_Z2K_YT_QUIC_OFF=""
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
@@ -2182,6 +2198,10 @@ create_official_config() {
         # где был записан 0. Пересборка старый ключ просто не переносит.
         saved_Z2K_GV_SERVER_REPLY=$(safe_config_read "Z2K_GV_SERVER_REPLY" "$config_file" "")
         case "$saved_Z2K_GV_SERVER_REPLY" in 0|1|"") ;; *) saved_Z2K_GV_SERVER_REPLY="" ;; esac
+        # Z2K_GV_SUBST — подмена плохих адресов googlevideo (читает только S99).
+        # Схема та же: пишем, только если человек переключил тумблер сам.
+        saved_Z2K_GV_SUBST=$(safe_config_read "Z2K_GV_SUBST" "$config_file" "")
+        case "$saved_Z2K_GV_SUBST" in 0|1|"") ;; *) saved_Z2K_GV_SUBST="" ;; esac
         # Тумблеры QUIC — по той же схеме: ключ пишется, только если человек
         # переключил его сам, иначе действует умолчание версии.
         saved_Z2K_QUIC_OFF=$(safe_config_read "Z2K_QUIC_OFF" "$config_file" "")
@@ -2502,6 +2522,8 @@ CONFIG
 
     local _gv_preflight_line="# Z2K_GV_SERVER_REPLY не задан: действует умолчание версии"
     [ -n "$saved_Z2K_GV_SERVER_REPLY" ] && _gv_preflight_line="Z2K_GV_SERVER_REPLY=${saved_Z2K_GV_SERVER_REPLY}"
+    local _gv_subst_line="# Z2K_GV_SUBST не задан: действует умолчание версии"
+    [ -n "$saved_Z2K_GV_SUBST" ] && _gv_subst_line="Z2K_GV_SUBST=${saved_Z2K_GV_SUBST}"
     local _quic_off_line="# Z2K_QUIC_OFF не задан: действует умолчание версии"
     [ -n "$saved_Z2K_QUIC_OFF" ] && _quic_off_line="Z2K_QUIC_OFF=${saved_Z2K_QUIC_OFF}"
     local _yt_quic_off_line="# Z2K_YT_QUIC_OFF не задан: действует умолчание версии"
@@ -2602,13 +2624,18 @@ Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
 # 0 — выключить механизм, даже если проба нашла блок.
 Z2K_SNI_STALL=${saved_Z2K_SNI_STALL}
 # «Видео YouTube: обход по ответу сервера»: пробное соединение перед настоящим, только
-# googlevideo и только IPv4 (lua/z2k-preflight.lua). Лечит адреса, которые режутся
+# googlevideo; на IPv6 — там, где он без NAT (lua/z2k-preflight.lua). Лечит адреса, которые режутся
 # по ответу сервера: соединение встаёт, а ServerHello не приходит, и плечи там не
 # помогают. Платой идёт 1-2 секунды на КАЖДОЕ новое соединение с googlevideo, в
 # том числе там, где блока нет. Пока ключа нет — включено (умолчание версии). 0 — выключить.
 # Тумблер в панели, «Режимы»: при ручной правке нужна ещё пересборка конфига,
 # одного перезапуска мало.
 ${_gv_preflight_line}
+# «Видео YouTube: подмена адреса»: плохой адрес googlevideo переадресуется на
+# рабочий соседний того же кэша (служба z2k-detect gvsub). Адрес проверяется
+# при ответе DNS устройству, ответ придерживается до проверки. Пока ключа нет —
+# включено (умолчание версии). 0 — выключить; при ручной правке — перезапуск.
+${_gv_subst_line}
 # QUIC мимо обхода: Initial не пропускается, браузер сразу идёт по TCP.
 # Z2K_YT_QUIC_OFF=1 — только YouTube («YouTube без QUIC»), Z2K_QUIC_OFF=1 — весь
 # QUIC («Весь QUIC через TCP»). Пока ключа нет — выключено (умолчание версии).

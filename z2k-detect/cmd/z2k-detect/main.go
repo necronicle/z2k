@@ -60,6 +60,7 @@ import (
 
 	"github.com/necronicle/z2k/z2k-detect/internal/classify"
 	"github.com/necronicle/z2k/z2k-detect/internal/decision"
+	"github.com/necronicle/z2k/z2k-detect/internal/gvsub"
 	"github.com/necronicle/z2k/z2k-detect/internal/prober"
 )
 
@@ -97,7 +98,8 @@ commands:
   quic <domain>             то же для QUIC/UDP: чем режут датаграммы
   voice                     голос Дискорда; адрес берётся из ИДУЩЕГО разговора
   tcp16 [-asn N] [-scan F]  проба на блок по объёму соединения; -scan ищет проходящее имя
-  dnsms -server IP           время обычного UDP-запроса к DNS, в миллисекундах`)
+  dnsms -server IP           время обычного UDP-запроса к DNS, в миллисекундах
+  gvsub [-queue N]           служба: подмена плохих адресов googlevideo соседними`)
 }
 
 func main() {
@@ -126,6 +128,8 @@ func main() {
 		tcp16Cmd(ctx, args[1:])
 	case "dnsms":
 		dnsmsCmd(ctx, args[1:])
+	case "gvsub":
+		gvsubCmd(ctx, args[1:])
 	default:
 		fatal("unknown command: %s", args[0])
 	}
@@ -457,4 +461,25 @@ func joinIPs(ips []string) string {
 func fatal(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", a...)
 	os.Exit(1)
+}
+
+// gvsubCmd — служба подмены плохих адресов googlevideo (см. internal/gvsub).
+// Запускает её init-скрипт z2k; правила очереди и цепочки ставит он же.
+func gvsubCmd(ctx context.Context, rest []string) {
+	fs := flag.NewFlagSet("gvsub", flag.ExitOnError)
+	queue := fs.Uint("queue", 210, "очередь NFQUEUE с ответами DNS")
+	status := fs.String("status", "/tmp/z2k-gvsub.json", "файл состояния для панели и диагностики")
+	ct := fs.String("conntrack", "/proc/net/nf_conntrack", "таблица conntrack")
+	no6 := fs.Bool("no-ipv6", false, "IPv6 выключен в z2k: ip6tables не трогать")
+	owner := fs.String("owner", "/opt/etc/init.d/S99zapret2", "init-скрипт; служба уходит, если он её не знает")
+	conf := fs.String("config", "/opt/zapret2/config", "конфиг z2k; Z2K_GV_SUBST=0 — служба уходит")
+	ips := fs.String("ipfile", "", "список адресов googlevideo из ответов DNS для профиля движка (--ipset)")
+	_ = fs.Parse(rest)
+	if *queue > 65535 {
+		fatal("gvsub: номер очереди вне диапазона")
+	}
+	if err := gvsub.Run(ctx, gvsub.Config{Queue: uint16(*queue), StatusPath: *status, Conntrack: *ct,
+		NoIPv6: *no6, Owner: *owner, ConfigPath: *conf, IPFile: *ips}); err != nil {
+		fatal("gvsub: %v", err)
+	}
 }

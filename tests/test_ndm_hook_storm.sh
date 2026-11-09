@@ -55,7 +55,7 @@ run_hook() {  # $1 HOOK_SETTLE  $2 FAKE_NFQ  $3 REARM_PENDING  $4 MAX_RERUNS
         INIT_SCRIPT="$INIT" ZAPRET_CONFIG="$TMP/config" FAKE_NFQ="${2:-0}" \
         REARM_PENDING="${3:-}" PENDING="$PEND" HOOK_LOG="$LOG" \
         LOCK_DIR="$LOCK" LAST_RUN="$LAST" HOOK_SETTLE="${1:-0}" MAX_RERUNS="${4:-3}" \
-        sh "$HOOK"
+        GVSUB_PID="$TMP/gvsub.pid" sh "$HOOK"
 }
 # Хук уходит в фон и отпускает замок последним действием: ждём именно замок,
 # а не фиксированные секунды (на медленном раннере они и рвали проверки).
@@ -132,6 +132,19 @@ reset
 HOOK_LOG='' table=mangle type=iptables PATH="$BIN:$PATH" INIT_SCRIPT="$INIT" ZAPRET_CONFIG="$TMP/config" \
     PENDING="$PEND" LOCK_DIR="$LOCK" LAST_RUN="$LAST" HOOK_SETTLE=0 sh "$HOOK"; settle
 [ ! -f "$LOG" ] && [ "$(count)" = "1" ] && ok "empty HOOK_LOG: run happens, nothing written" || no "journal off" "run+no file" "$(count)/$([ -f "$LOG" ] && echo file || echo nofile)"
+
+# --- 8) служба подмены получает SIGHUP сразу, до замка и HOOK_SETTLE ----------
+# Keenetic сносит цепочку подмен вместе с таблицей; ждать settle и start_fw —
+# ~6 с без подмен (сбор 10.11.2026). Даже при занятом замке сигнал уходит.
+reset; mkdir "$LOCK"
+GOT="$TMP/gvsub.hup"; rm -f "$GOT"
+sh -c 'trap "echo hup >> \"$1\"" HUP; while :; do sleep 1; done' _ "$GOT" &
+GV=$!; echo "$GV" > "$TMP/gvsub.pid"
+sleep 1
+run_hook 5
+_i=0; while [ ! -s "$GOT" ] && [ "$_i" -lt 30 ]; do sleep 1; _i=$((_i+1)); done
+[ -s "$GOT" ] && ok "служба подмены получает SIGHUP сразу (замок занят, settle 5 с)" || no "gvsub HUP" "hup" "none"
+kill "$GV" 2>/dev/null; rm -f "$TMP/gvsub.pid"; rm -rf "$LOCK"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

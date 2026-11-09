@@ -3655,6 +3655,13 @@ is_nfqws2_running() {
 }
 is_nfqws2_running || exit 0
 
+# Подмена адресов googlevideo (служба z2k-detect gvsub): Keenetic пересобирает
+# таблицу целиком, и цепочка подмен пропадает вместе с ней. Сигнал службе —
+# сразу, а не после HOOK_SETTLE и start_fw: каркас и подмены она ставит сама
+# (сбор 10.11.2026: без этого подмены не действовали ~6 с раз в 30 минут).
+GVSUB_PID="${GVSUB_PID:-/var/run/z2k-gvsub.pid}"
+[ -f "$GVSUB_PID" ] && kill -HUP "$(cat "$GVSUB_PID" 2>/dev/null)" 2>/dev/null
+
 # --- Журнал событий NDM -------------------------------------------------------
 # Одна строка на событие, в tmpfs (/tmp — RAM, не флешка). Планировщик режет
 # каждый файл в /tmp/z2k-log до 1000 строк (rotate_all_logs), NDM даёт ~280
@@ -5444,11 +5451,17 @@ _z2k_foreign_engine() {
 # Подметание оставшихся правил: то, где в правиле есть z2k, и наша очередь NFQUEUE, если
 # она не может быть чужой. Вызывать, пока конфиг на месте: в нём номер очереди.
 _z2k_sweep_our_rules() {
-    local _q _tool _t _ch _r _pat
+    local _q _tool _t _ch _r _pat _p
+    # Служба подмены адресов googlevideo (z2k-detect gvsub) — до правил: она
+    # держит очередь ответов DNS (210) и при живом процессе вернула бы каркас.
+    _p=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
+    [ -n "$_p" ] && kill "$_p" 2>/dev/null
+    rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json
     _q=$(sed -n 's/^QNUM=//p' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | tail -n 1 | tr -d "\"'")
     case "$_q" in ''|*[!0-9]*) _q=200 ;; esac
-    _pat="z2k"
-    _z2k_foreign_engine || _pat="--queue-num $_q( |\$)|z2k"
+    # Z2K_GVSUB — цепочки подмены; очередь 210 — ответы DNS для неё.
+    _pat="z2k|Z2K_GVSUB|--queue-num 210( |\$)"
+    _z2k_foreign_engine || _pat="--queue-num $_q( |\$)|$_pat"
     for _tool in iptables ip6tables; do
         command -v "$_tool" >/dev/null 2>&1 || continue
         for _t in mangle nat raw filter; do
@@ -5460,6 +5473,13 @@ _z2k_sweep_our_rules() {
                         "$_tool" -w -t "$_t" $_r 2>/dev/null
                     done
             done
+            # 10.11.2026: после удаления службы отказ QUIC остаться не должен.
+            if [ "$_t" = filter ]; then
+                "$_tool" -w -t filter -F Z2K_GVSUB_Q 2>/dev/null
+                "$_tool" -w -t filter -X Z2K_GVSUB_Q 2>/dev/null
+            fi
+            "$_tool" -w -t "$_t" -F Z2K_GVSUB 2>/dev/null
+            "$_tool" -w -t "$_t" -X Z2K_GVSUB 2>/dev/null
         done
     done
     return 0

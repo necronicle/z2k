@@ -103,7 +103,7 @@ local function dis_in(flags, seq, ack, payload, options)
             th_ack = ack, th_win = 65535, options = options or {}},
         payload = payload or ""}
 end
-local function out(dis, arg) return z2k_preflight(nil, {dis = dis, outgoing = true, arg = arg or {}}) end
+local function out(dis, arg) return z2k_preflight(nil, {dis = dis, outgoing = true, ifout = "ppp0", arg = arg or {}}) end
 local function inc(dis, arg) return z2k_preflight(nil, {dis = dis, outgoing = false, arg = arg or {}}) end
 
 -- Доводит соединение до состояния «ждём ответ сервера».
@@ -263,6 +263,51 @@ do
         out(dis_out(TH_PUSH + TH_ACK, 555, "data")))
     is("середина соединения: инстанс отдан дальше", 1, cutoff)
     is("середина соединения: проба не начата", nil, next(z2k_pf_flows))
+
+    -- Очередь на входе (mangle PREROUTING) — так идут соединения, которые
+    -- служба подмены переадресовала на рабочий адрес: выходного интерфейса
+    -- ещё нет, и проба им не нужна.
+    reset_flows()
+    reset_calls()
+    is("SYN из очереди на входе шаг не берёт", nil,
+        z2k_preflight(nil, {dis = dis_out(TH_SYN, ISN), outgoing = true, arg = {}}))
+    is("очередь на входе: инстанс отдан дальше", 1, cutoff)
+    is("очередь на входе: проба не начата", nil, next(z2k_pf_flows))
+end
+
+
+-- ----- 10. IPv6 с разрешением init: полный цикл пробы ----------------------
+do
+    reset_flows()
+    reset_calls()
+    local C6 = "\42\3" .. string.rep("\0", 13) .. "\1"
+    local S6 = "\42\0\20\80\64\5\0\2" .. string.rep("\0", 7) .. "\7"
+    local function o6(flags, seq, payload)
+        return {ip6 = {ip6_src = C6, ip6_dst = S6, ip6_flow = 5},
+            tcp = {th_sport = SPORT, th_dport = 443, th_flags = flags, th_seq = seq,
+                th_ack = 0, th_win = 65535, options = {}}, payload = payload or ""}
+    end
+    local function i6(flags, seq, ack, payload)
+        return {ip6 = {ip6_src = S6, ip6_dst = C6, ip6_flow = 9},
+            tcp = {th_sport = 443, th_dport = SPORT, th_flags = flags, th_seq = seq,
+                th_ack = ack, th_win = 65535, options = {}}, payload = payload or ""}
+    end
+    local a = {v6 = true}
+    local syn = o6(TH_SYN, ISN)
+    is("IPv6 с v6: пробный SYN", VERDICT_MODIFY,
+        z2k_preflight(nil, {dis = syn, outgoing = true, ifout = "ppp0", arg = a}))
+    is("IPv6 с v6: окно пробы 1", 1, syn.tcp.th_win)
+    is("IPv6 с v6: SYN,ACK сервера забран", VERDICT_DROP,
+        z2k_preflight(nil, {dis = i6(TH_SYN + TH_ACK, 5000, ISN + 1), outgoing = false, arg = a}))
+    local probe = sent[#sent]
+    is("IPv6: пакеты пробы идут по IPv6", true, probe.ip6 ~= nil and probe.ip == nil)
+    for n = 1, 2 do
+        z2k_preflight(nil, {dis = i6(TH_PUSH + TH_ACK, 5001 + n, ISN + 1, "ab"), outgoing = false, arg = a})
+    end
+    local last = sent[#sent]
+    is("IPv6: после кусков ответа — исходный SYN клиента", TH_SYN, last.tcp.th_flags)
+    local st = select(2, next(z2k_pf_flows))
+    is("IPv6: адрес в журнале записан как IPv6", "2a00:1450:4005:2:0:0:0:7", st.ip)
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))

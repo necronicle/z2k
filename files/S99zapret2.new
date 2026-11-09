@@ -2025,6 +2025,31 @@ do_nfqws()
     [ "$1" = 0 ] || { shift; run_nfqws "$@"; }
 }
 
+# Шаг z2k_preflight на IPv6 (аргумент v6) работает только там, где IPv6 идёт
+# без NAT: повторный SYN пробы движок отправляет сам, и за NAT он ушёл бы с
+# внутренним адресом устройства. У Keenetic адреса устройств по умолчанию
+# маршрутизируются как есть; если же в nat для IPv6 есть правило подмены
+# адреса — снимаем v6 со строки движка, IPv4 это не трогает.
+#
+# Штатное правило Keenetic `NETMAP ... ! --match-set _NDM_W6P_<wan> src`
+# подменой не считается: оно переводит только адреса НЕ из публичного
+# префикса провайдера, а устройства с настоящими адресами идут мимо него
+# (роутер Марка, 09.11.2026).
+z2k_preflight_v6_gate()
+{
+    case "$NFQWS2_OPT" in
+        *z2k_preflight*:v6*) ;;
+        *) return 0 ;;
+    esac
+    if [ "$DISABLE_IPV6" != "1" ] && \
+       ! ip6tables -t nat -S 2>/dev/null | grep -E -- '-j (MASQUERADE|SNAT|NETMAP)' \
+            | grep -qv -- '! --match-set _NDM_W6P'; then
+        return 0
+    fi
+    NFQWS2_OPT=$(printf '%s' "$NFQWS2_OPT" | sed 's/\(z2k_preflight:[^ ]*\):v6/\1/g')
+    echo "z2k_preflight: IPv6 за NAT или выключен — шаг только для IPv4"
+}
+
 stop_daemon_by_pidfile()
 {
     # $1 - pidfile path
@@ -2142,6 +2167,12 @@ start_daemons()
             return 1
         }
     fi
+
+    z2k_preflight_v6_gate
+    # Файл адресов для --ipset профиля googlevideo должен быть до старта
+    # движка (/tmp чистится перезагрузкой); наполняет его служба подмены.
+    [ -f "$Z2K_GVSUB_IPS" ] || : > "$Z2K_GVSUB_IPS"
+    chmod 644 "$Z2K_GVSUB_IPS" 2>/dev/null
 
     # Использовать функции из common/linux_daemons.sh
     # standard_mode_daemons вызывает do_nfqws
@@ -2794,6 +2825,143 @@ z2k_udp_masquerade_fix_stop()
     iptablesw -t nat -F "$Z2K_IPT_NAT_CHAIN"
     iptablesw -t nat -X "$Z2K_IPT_NAT_CHAIN"
 }
+
+# ==============================================================================
+# ПОДМЕНА ПЛОХИХ АДРЕСОВ GOOGLEVIDEO (z2k-detect gvsub)
+# ==============================================================================
+#
+# Часть адресов googlevideo режется по ответу сервера, а соседний адрес того
+# же кэша отдаёт то же видео. Служба `z2k-detect gvsub` проверяет адреса из
+# ответов DNS (ответ устройству придерживается до проверки, чтобы первое же
+# соединение шло на рабочий адрес), из conntrack и по таймеру, и для плохих
+# ставит переадресацию на рабочего соседа. Здесь — только каркас: цепочки
+# Z2K_GVSUB первыми в nat/mangle PREROUTING, очередь для ответов DNS и сама
+# служба. Строки подмен в цепочках ставит и снимает служба.
+#
+# Ответы DNS идут из ndnproxy роутера устройствам через OUTPUT. В очередь
+# попадают только ответы, где встречается слово googlevideo (-m string), и с
+# --queue-bypass: нет службы — ответы идут мимо, DNS не ломается.
+Z2K_GVSUB_BIN="${Z2K_GVSUB_BIN:-/opt/sbin/z2k-detect}"
+Z2K_GVSUB_QUEUE=210
+Z2K_GVSUB_CHAIN=Z2K_GVSUB
+Z2K_GVSUB_PID=/var/run/z2k-gvsub.pid
+Z2K_GVSUB_LOG=/tmp/z2k-log/gvsub.log
+Z2K_GVSUB_STATUS=/tmp/z2k-gvsub.json
+# Адреса googlevideo из ответов DNS для профиля движка (--ipset в профиле
+# googlevideo, lib/config_official.sh). Путь тот же, что в генераторе.
+Z2K_GVSUB_IPS=/tmp/z2k-gv-ips.txt
+
+# Включено ли: флаг (по умолчанию да), iptables, бинарник с командой gvsub
+# (у старого z2k-detect её нет — тогда тихо ничего не делаем).
+z2k_gvsub_enabled()
+{
+    [ "${Z2K_GV_SUBST:-1}" = "1" ] || return 1
+    [ "$FWTYPE" = "iptables" ] || return 1
+    [ -x "$Z2K_GVSUB_BIN" ] || return 1
+    "$Z2K_GVSUB_BIN" 2>&1 | grep -q "gvsub" || return 1
+    return 0
+}
+
+z2k_gvsub_dns_rule()
+{
+    # $1 — iptablesw|ip6tablesw, $2 — -C|-I|-D
+    # ! -o lo: ответы на собственные запросы службы (имена машин кластера
+    # googlevideo) идут через lo и придерживаться не должны.
+    if [ "$2" = "-I" ]; then
+        "$1" -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo \
+            -j NFQUEUE --queue-num "$Z2K_GVSUB_QUEUE" --queue-bypass
+    else
+        "$1" -t mangle "$2" OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo \
+            -j NFQUEUE --queue-num "$Z2K_GVSUB_QUEUE" --queue-bypass
+    fi
+}
+
+z2k_gvsub_fw_start()
+{
+    z2k_gvsub_enabled || { z2k_gvsub_fw_stop; return 0; }
+    grep -qw string /proc/net/ip_tables_matches 2>/dev/null || z2k_insmod_fw xt_string || true
+    local T t alive=0
+    [ -f "$Z2K_GVSUB_PID" ] && kill -0 "$(cat "$Z2K_GVSUB_PID")" 2>/dev/null && alive=1
+    for T in iptablesw ip6tablesw; do
+        [ "$T" = ip6tablesw ] && [ "$DISABLE_IPV6" = "1" ] && continue
+        for t in nat mangle; do
+            # Живой службе цепочку не чистить: хук NDM зовёт start_fw раз в
+            # 30 мин, и очистка снимала все подмены на 1–3 с до SIGHUP
+            # (сбор 10.11.2026). Без службы строки в ней бесхозные — чистим.
+            if ! "$T" -t "$t" -N "$Z2K_GVSUB_CHAIN" 2>/dev/null && [ "$alive" = 0 ]; then
+                "$T" -t "$t" -F "$Z2K_GVSUB_CHAIN"
+            fi
+            # Первыми: подменённые соединения обрабатываются движком ДО
+            # переадресации (см. internal/gvsub/rules.go в z2k-detect).
+            # Уже первая — не трогаем: снятие крючка тоже окно без подмен.
+            [ "$("$T" -t "$t" -S PREROUTING 2>/dev/null | sed -n 2p)" = "-A PREROUTING -j $Z2K_GVSUB_CHAIN" ] && continue
+            while "$T" -t "$t" -D PREROUTING -j "$Z2K_GVSUB_CHAIN" 2>/dev/null; do :; done
+            "$T" -t "$t" -I PREROUTING 1 -j "$Z2K_GVSUB_CHAIN"
+        done
+        z2k_gvsub_dns_rule "$T" -C 2>/dev/null || z2k_gvsub_dns_rule "$T" -I
+    done
+    # Служба ставит свои подмены заново (повтор идемпотентен): цепочка могла
+    # быть пересоздана пустой или вычищена перестройкой таблиц Keenetic.
+    [ -f "$Z2K_GVSUB_PID" ] && kill -HUP "$(cat "$Z2K_GVSUB_PID")" 2>/dev/null
+    return 0
+}
+
+z2k_gvsub_fw_stop()
+{
+    local T t
+    for T in iptablesw ip6tablesw; do
+        [ "$T" = ip6tablesw ] && [ "$DISABLE_IPV6" = "1" ] && continue
+        # 10.11.2026: отказ QUIC не должен переживать остановку службы.
+        while "$T" -t filter -D FORWARD -j Z2K_GVSUB_Q 2>/dev/null; do :; done
+        "$T" -t filter -F Z2K_GVSUB_Q 2>/dev/null
+        "$T" -t filter -X Z2K_GVSUB_Q 2>/dev/null
+        while z2k_gvsub_dns_rule "$T" -D 2>/dev/null; do :; done
+        for t in nat mangle; do
+            while "$T" -t "$t" -D PREROUTING -j "$Z2K_GVSUB_CHAIN" 2>/dev/null; do :; done
+            "$T" -t "$t" -F "$Z2K_GVSUB_CHAIN" 2>/dev/null
+            "$T" -t "$t" -X "$Z2K_GVSUB_CHAIN" 2>/dev/null
+        done
+    done
+    return 0
+}
+
+z2k_gvsub_start()
+{
+    z2k_gvsub_enabled || return 0
+    z2k_gvsub_stop
+    mkdir -p "${Z2K_GVSUB_LOG%/*}" 2>/dev/null
+    # Журнал в /tmp (tmpfs): при старте обрезаем, чтобы не копился.
+    : > "$Z2K_GVSUB_LOG" 2>/dev/null
+    local _no6=""
+    [ "$DISABLE_IPV6" = "1" ] && _no6="-no-ipv6"
+    # Каркас (цепочки, очередь DNS) служба держит и сама: хук NDM чинит правила
+    # z2k только по пропаже очереди в mangle, а nat Keenetic перестраивает и
+    # отдельно (ночь на 10.11.2026). Если init её больше не знает или
+    # Z2K_GV_SUBST=0 — уходит и снимает каркас за собой.
+    # shellcheck disable=SC2086  # пустой $_no6 — нет аргумента
+    "$Z2K_GVSUB_BIN" gvsub -queue "$Z2K_GVSUB_QUEUE" -status "$Z2K_GVSUB_STATUS" $_no6 \
+        -owner "$0" -config "${ZAPRET2_DIR:-/opt/zapret2}/config" -ipfile "$Z2K_GVSUB_IPS" \
+        >>"$Z2K_GVSUB_LOG" 2>&1 </dev/null &
+    echo $! > "$Z2K_GVSUB_PID"
+    echo "gvsub: подмена адресов googlevideo запущена (PID $!)"
+}
+
+z2k_gvsub_stop()
+{
+    local pid i=0
+    [ -f "$Z2K_GVSUB_PID" ] || return 0
+    pid=$(cat "$Z2K_GVSUB_PID" 2>/dev/null)
+    rm -f "$Z2K_GVSUB_PID"
+    [ -n "$pid" ] || return 0
+    kill "$pid" 2>/dev/null || return 0
+    # Служба отпускает придержанные ответы DNS и снимает свои подмены сама;
+    # выходит за ~1 с (таймаут чтения очереди).
+    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 5 ]; do sleep 1; i=$((i+1)); done
+    kill -9 "$pid" 2>/dev/null
+    # Файл состояния не удаляем: из него служба при следующем запуске берёт
+    # адреса, которые устройства держат в своём кэше DNS (10.11.2026).
+    return 0
+}
 # ==============================================================================
 # СНЯТИЕ СТАРОГО RST-ФИЛЬТРА (DROP_DPI_RST) — только уборка, ставить нечего.
 #
@@ -2926,6 +3094,10 @@ start_fw()
         ( sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-warp.sh" enable --if-idle >/dev/null 2>&1 ) &
     fi
 
+    # Последним: цепочки подмены обязаны стоять ПЕРВЫМИ в PREROUTING, а
+    # PPE-разгрузка выше вставляет свои правила в начало mangle.
+    z2k_gvsub_fw_start
+
     return 0
 }
 
@@ -2939,6 +3111,7 @@ stop_fw()
     z2k_rst_filter_purge
     # Использовать официальную функцию
     z2k_connmark_init
+    z2k_gvsub_fw_stop
     z2k_udp_masquerade_fix_stop
     z2k_policy_connmark_stop
     z2k_conntrack_tune_stop
@@ -3273,6 +3446,8 @@ start()
     # блокировку на живой службе, а не на поднимающейся.
     _z2k_scheduler_sync
 
+    z2k_gvsub_start
+
     echo "zapret2 service started"
     return 0
 }
@@ -3283,6 +3458,9 @@ stop()
 
     traffic_debug_tcpdump_stop
     # Orchestrator stop removed: upstream daemon удалён 2026-05-07.
+
+    # Раньше остальных: служба отпускает придержанные ответы DNS и снимает подмены.
+    z2k_gvsub_stop
 
     # 1. Остановить daemon процессы
     stop_daemons

@@ -480,6 +480,13 @@ for chain in $chains_raw; do
     iptables -t raw -X "$chain" 2>/dev/null && log_info "  Удалена raw/$chain"
 done
 
+# Служба подмены адресов googlevideo (z2k-detect gvsub): сначала процесс — живой
+# он вернул бы свой каркас, — потом её цепочки Z2K_GVSUB. Крючки на них и очередь
+# ответов DNS снимает подметание ниже (в них есть Z2K и NFQUEUE).
+_gvsub_pid=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
+[ -n "$_gvsub_pid" ] && kill "$_gvsub_pid" 2>/dev/null && log_info "  Остановлена служба подмены адресов"
+rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json
+
 # Поиск и удаление любых оставшихся правил с упоминанием nfqws/zapret в базовых цепочках.
 # Через -S: так правило снимается целиком и не зависит от номеров строк.
 for fw_tool in iptables ip6tables; do
@@ -494,6 +501,13 @@ for fw_tool in iptables ip6tables; do
                         && log_info "  Удалено правило $parent из $table ($fw_tool)"
                 done
         done
+        # 10.11.2026: после удаления службы отказ QUIC остаться не должен.
+        if [ "$table" = filter ]; then
+            "$fw_tool" -w -t filter -F Z2K_GVSUB_Q 2>/dev/null
+            "$fw_tool" -w -t filter -X Z2K_GVSUB_Q 2>/dev/null
+        fi
+        "$fw_tool" -w -t "$table" -F Z2K_GVSUB 2>/dev/null
+        "$fw_tool" -w -t "$table" -X Z2K_GVSUB 2>/dev/null && log_info "  Удалена $table/Z2K_GVSUB ($fw_tool)"
     done
 done
 

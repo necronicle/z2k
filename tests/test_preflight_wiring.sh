@@ -210,6 +210,34 @@ else
     bad "в сгенерированном конфиге нет профиля googlevideo"
 fi
 
+# --- 4б. Профиль по адресам из ответов DNS ------------------------------------
+# Первое соединение к новому адресу движок не знает по имени: профиль по
+# --ipset (файл пишет служба подмены) ведёт его через пробу. Обязан стоять
+# ПЕРЕД профилем по списку имён и нести тот же шаг (10.11.2026).
+FLAT_ON=$(printf '%s\n' "$OPT_ON" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk")
+IPSET_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- '--ipset=/tmp/z2k-gv-ips.txt' | head -1 | cut -d: -f1)
+HOST_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- 'YT_GV/List.txt' | grep -v -F -- '--ipset=' | head -1 | cut -d: -f1)
+IPSET_LINE=$(printf '%s\n' "$FLAT_ON" | grep -F -- '--ipset=/tmp/z2k-gv-ips.txt' | head -1)
+if [ -n "$IPSET_N" ]; then
+    has "--hostlist" "$IPSET_LINE" \
+        && bad "в профиле по адресам есть hostlist (включая exclude): $IPSET_LINE" \
+        || ok "профиль по адресам без --hostlist и --hostlist-exclude"
+    has "--lua-desync=z2k_preflight:" "$IPSET_LINE" && has "key=gv_tcp" "$IPSET_LINE" \
+        && ok "профиль по адресам несёт шаг и ротатор googlevideo" \
+        || bad "в профиле по адресам нет шага или ротатора: $IPSET_LINE"
+    [ -n "$HOST_N" ] && [ "$IPSET_N" -lt "$HOST_N" ] \
+        && ok "профиль по адресам стоит перед профилем по именам" \
+        || bad "профиль по адресам после профиля по именам ($IPSET_N / $HOST_N)"
+else
+    bad "нет профиля googlevideo по адресам из ответов DNS"
+fi
+has "--ipset=/tmp/z2k-gv-ips.txt" "$(gen nosub "Z2K_GV_SUBST=0" 1)" \
+    && bad "служба подмены выключена, а профиль по адресам остался" \
+    || ok "Z2K_GV_SUBST=0 — профиля по адресам нет (файл некому наполнять)"
+has "--ipset=/tmp/z2k-gv-ips.txt" "$(gen nostep "Z2K_GV_SERVER_REPLY=0" 1)" \
+    && bad "шаг выключен, а профиль по адресам остался" \
+    || ok "без шага профиля по адресам нет"
+
 for _p in "yt_tcp:$YT_LINE" "rkn_tcp:$RKN_LINE" "quic:$QUIC_LINE"; do
     _name=${_p%%:*}; _line=${_p#*:}
     [ -n "$_line" ] || continue

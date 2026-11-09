@@ -1122,6 +1122,16 @@ toggle_gv_preflight() {
     restart_service_if_running
 }
 
+toggle_gv_subst() {
+    # Z2K_GV_SUBST — подмена плохих адресов googlevideo (служба z2k-detect gvsub,
+    # по умолчанию 1). Строку движка не меняет: цепочки, очередь DNS и службу
+    # ставит S99 при старте, поэтому пересборка не нужна, нужен перезапуск.
+    local want="$1"
+    case "$want" in 0|1) ;; *) return 1 ;; esac
+    set_flag "Z2K_GV_SUBST" "$want" "$CONFIG_FILE" || return 1
+    restart_service_if_running
+}
+
 toggle_auto_update() {
     # Z2K_AUTO_UPDATE_ENABLED — nightly unattended update (default 1).
     # Out-of-band: it does not touch NFQWS2_OPT and is read

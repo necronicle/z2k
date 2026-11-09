@@ -15,7 +15,10 @@ const TOGGLE_DEFS = [
   // Отдельной карточкой под категориями: это не сервис, который можно выбрать, а
   // приём внутри YouTube, и без категории YouTube ему не к чему применяться.
   { key: "gv_preflight", name: "Видео YouTube: обход по ответу сервера", video: true,
-    desc: "Помогает, когда часть роликов YouTube не начинается: провайдер режет их по ответу сервера. Роутер сначала сам проходит проверку отдельным соединением и только потом отдаёт соединение устройству, поэтому видео стартует на 1–2 секунды позже. Только IPv4.",
+    desc: "Помогает, когда часть роликов YouTube не начинается: провайдер режет их по ответу сервера. Роутер сначала сам проходит проверку отдельным соединением и только потом отдаёт соединение устройству, поэтому видео стартует на 1–2 секунды позже.",
+    extra: '<div class="t-desc yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>' },
+  { key: "gv_subst", name: "Видео YouTube: подмена адреса", video: true,
+    desc: "Если сервер с видео YouTube не отвечает, роутер отправляет соединение на соседний сервер того же кэша: он отдаёт то же видео и без задержки. Адрес роутер проверяет, когда устройство спрашивает имя сервера, поэтому уже первое соединение идёт на рабочий. Ответ на такой запрос приходит на 0,3–1,5 секунды позже, не чаще раза в минуту на адрес. Работает для устройств, которые берут DNS у роутера; для остальных остаётся обход по ответу сервера.",
     extra: '<div class="t-desc yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>' },
   { key: "yt_quic_off", name: "YouTube без QUIC", video: true,
     desc: "Включите, если видео YouTube подолгу висит на старте. Роутер не пускает YouTube по QUIC, и браузер сразу идёт обычным соединением, где работает обход видео.",
@@ -174,6 +177,7 @@ const TOGGLE_API_NAME = {
   category_rkn: "category-rkn",
   category_discord_voice: "category-discord-voice",
   gv_preflight: "gv-preflight",
+  gv_subst: "gv-subst",
   yt_quic_off: "yt-quic-off",
   quic_off: "quic-off",
   customd: "customd",
@@ -185,7 +189,7 @@ const TOGGLE_API_NAME = {
 // Без категории YouTube профилей YouTube нет, и включённый тумблер обещал бы
 // то, чего не происходит. Само значение при этом хранится и вернётся вместе с ней.
 function syncGvPreflight(youtubeOn) {
-  for (const key of ["gv_preflight", "yt_quic_off"]) {
+  for (const key of ["gv_preflight", "gv_subst", "yt_quic_off"]) {
     const row = $app.querySelector(`[data-key="${key}"]`);
     if (!row) continue;
     setLockAware(row.querySelector("input"), !youtubeOn);
@@ -648,6 +652,7 @@ async function toggleClick(key, box) {
     category_rkn: "RKN",
     category_discord_voice: "Discord Voice / STUN",
     gv_preflight: "обход по ответу сервера для видео YouTube",
+    gv_subst: "подмену адреса для видео YouTube",
     yt_quic_off: "YouTube без QUIC",
     quic_off: "весь QUIC через TCP",
     customd: "custom.d",

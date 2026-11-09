@@ -20,10 +20,14 @@
 -- приходится только начало ответа, а не весь ServerHello с сертификатом.
 -- Клиент пробного соединения не видит, он просто получает SYN,ACK на 1-2 секунды позже.
 --
--- ТОЛЬКО IPv4 И ТОЛЬКО TCP: пробное соединение ставит движок, а повторный
--- исходный SYN выходит с меткой движка и получает NAT отдельным правилом
--- (S99zapret2, z2k_udp_masquerade_fix_start). Для IPv6 правила нет, для QUIC
--- приём неприменим вовсе — ни окна, ни RST с повторным SYN там нет.
+-- ТОЛЬКО TCP: пробное соединение ставит движок, а повторный исходный SYN
+-- выходит с меткой движка. На IPv4 он получает NAT отдельным правилом
+-- (S99zapret2, z2k_udp_masquerade_fix_start). IPv6 — только с аргументом v6:
+-- его ставит init там, где IPv6 идёт без NAT (у Keenetic адреса устройств
+-- маршрутизируются как есть), и повторный SYN уходит с настоящим адресом
+-- устройства без всяких правил. Блок по ответу сервера есть и на IPv6 (замер
+-- 09.11.2026: 2a00:1450:4005:2::7 — TCP есть, TLS нет). Для QUIC приём
+-- неприменим вовсе — ни окна, ни RST с повторным SYN там нет.
 --
 -- Стоит в профиле googlevideo ПЕРЕД ротатором. На SYN профиль выбирается по
 -- имени из --ipcache-hostname, поэтому самое первое соединение с новым адресом
@@ -44,12 +48,23 @@
 -- arg: sni - имя в пробном ClientHello
 -- arg: keepts - оставить опции клиента и вести timestamp
 -- arg: timeout - через сколько секунд сдаться на повторе SYN клиента (по умолчанию 3)
+-- arg: v6 - работать и на IPv6 (только там, где IPv6 без NAT)
 
 z2k_pf_flows = z2k_pf_flows or {}
 local flows = z2k_pf_flows
 
 local function ip_text(raw)
+	if #raw == 16 then
+		local g = {}
+		for i = 1, 16, 2 do g[#g + 1] = string.format("%x", string.byte(raw, i) * 256 + string.byte(raw, i + 1)) end
+		return table.concat(g, ":")
+	end
 	return string.format("%d.%d.%d.%d", string.byte(raw, 1, 4))
+end
+
+local function src_dst(dis)
+	if dis.ip then return dis.ip.ip_src, dis.ip.ip_dst end
+	return dis.ip6.ip6_src, dis.ip6.ip6_dst
 end
 
 local function log(st, text)
@@ -64,10 +79,11 @@ end
 
 local function flow_key(dis, outgoing)
 	local tcp = dis.tcp
+	local src, dst = src_dst(dis)
 	if outgoing then
-		return dis.ip.ip_src..dis.ip.ip_dst..tcp.th_sport..":"..tcp.th_dport
+		return src..dst..tcp.th_sport..":"..tcp.th_dport
 	end
-	return dis.ip.ip_dst..dis.ip.ip_src..tcp.th_dport..":"..tcp.th_sport
+	return dst..src..tcp.th_dport..":"..tcp.th_sport
 end
 
 -- Пробный SYN: своё окно и только MSS с масштабом, без timestamp.
@@ -100,8 +116,12 @@ local function make_packet(st, flags, seq, ack, payload)
 	dis.tcp.th_seq = seq
 	dis.tcp.th_ack = ack
 	dis.tcp.th_win = st.wsize
-	st.ip_id = bitand(st.ip_id + 1, 0xFFFF)
-	dis.ip.ip_id = st.ip_id
+	-- Разный IP ID у пакетов обязателен: с одинаковым плохой адрес молчит
+	-- (стенд 06.11). У IPv6 такого поля нет.
+	if dis.ip then
+		st.ip_id = bitand(st.ip_id + 1, 0xFFFF)
+		dis.ip.ip_id = st.ip_id
+	end
 	dis.tcp.options = {}
 	if st.ts_val then
 		dis.tcp.options = {
@@ -169,7 +189,7 @@ local function step(ctx, desync)
 				end
 				st = {
 					stage = "probe_syn", t = now, isn = tcp.th_seq, orig = deepcopy(dis),
-					ip = ip_text(dis.ip.ip_dst), port = tcp.th_sport,
+					ip = ip_text(select(2, src_dst(dis))), port = tcp.th_sport,
 					ifout = desync.ifout, fwmark = desync.fwmark, hello = hello,
 					wsize = tonumber(desync.arg.wsize) or 1,
 					pieces_need = tonumber(desync.arg.pieces) or 2,
@@ -177,7 +197,7 @@ local function step(ctx, desync)
 					timeout = tonumber(desync.arg.timeout) or 3,
 					open = tonumber(desync.arg.open),
 					openwin = tonumber(desync.arg.openwin) or 65535,
-					pieces = 0, bytes = 0, ip_id = dis.ip.ip_id, resets = 0,
+					pieces = 0, bytes = 0, ip_id = dis.ip and dis.ip.ip_id or 0, resets = 0,
 				}
 				flows[key] = st
 				make_probe_syn(dis, desync.arg)
@@ -278,8 +298,18 @@ end
 
 function z2k_preflight(ctx, desync)
 	local dis = desync.dis
-	-- Не IPv4 TCP: повторный SYN уйдёт без NAT, поэтому не вмешиваемся вовсе.
-	if not dis.tcp or not dis.ip then
+	-- Не TCP, или IPv6 там, где init не разрешил (IPv6 за NAT): повторный SYN
+	-- ушёл бы без NAT, поэтому не вмешиваемся вовсе.
+	if not dis.tcp or not (dis.ip or (dis.ip6 and desync.arg.v6)) then
+		instance_cutoff_shim(ctx, desync)
+		return
+	end
+	-- Исходящий пакет без выходного интерфейса пришёл из очереди на ВХОДЕ
+	-- (mangle PREROUTING): так z2k обрабатывает соединения, которые служба
+	-- подмены (z2k-detect gvsub) переадресует на рабочий соседний адрес. Адрес
+	-- уже рабочий, проба ему не нужна, а её повторный SYN под переадресацией
+	-- рвёт соединение (стенд 09.11.2026).
+	if desync.outgoing and not desync.ifout then
 		instance_cutoff_shim(ctx, desync)
 		return
 	end
