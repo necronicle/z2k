@@ -976,6 +976,21 @@ get_arch() {
     echo "$arch"
 }
 
+# Убить процессы по имени без killall: в Entware он — ссылка на busybox, и она
+# бывает потеряна, а `killall … 2>/dev/null` тогда молча ничего не делает.
+# Ищем через /proc/<pid>/comm (ядро хранит там до 15 символов имени).
+# $1 — имя, $2 — сигнал (по умолчанию TERM).
+z2k_kill_by_name() {
+    local _want="$1" _sig="${2:-TERM}" _p _c
+    [ "${#_want}" -gt 15 ] && _want=$(printf '%.15s' "$_want")
+    for _p in "${Z2K_PROC:-/proc}"/[0-9]*; do
+        _c=
+        read -r _c 2>/dev/null < "$_p/comm" || continue
+        [ "$_c" = "$_want" ] && kill "-$_sig" "${_p##*/}" 2>/dev/null
+    done
+    return 0
+}
+
 # Проверка, установлен ли zapret2
 is_zapret2_installed() {
     [ -d "$ZAPRET2_DIR" ] && [ -x "${ZAPRET2_DIR}/nfq2/nfqws2" ]

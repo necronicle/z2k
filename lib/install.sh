@@ -5487,8 +5487,13 @@ _z2k_destroy_our_ipsets() {
 # device.json и license с ключом WARP+, чтобы повторная установка не регистрировала
 # устройство заново. Вся остальная служебка уходит.
 _z2k_warp_finish() {
-    local _i _t _tuns _d _f
-    killall -9 z2k-warpd 2>/dev/null
+    local _i _t _tuns _d _f _c
+    # Не killall: его может не быть (ссылка busybox потеряна).
+    for _f in /proc/[0-9]*; do
+        _c=
+        read -r _c 2>/dev/null < "$_f/comm" || continue
+        [ "$_c" = z2k-warpd ] && kill -9 "${_f#/proc/}" 2>/dev/null
+    done
     _i=0
     while [ "$_i" -lt 3 ]; do
         _tuns=$(ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \(z2ktun[0-9]*\)[:@].*/\1/p')
@@ -5794,7 +5799,7 @@ uninstall_zapret2() {
           /opt/sbin/z2k-rt-proxy \
           /var/run/z2k-rt-proxy.pid \
           /tmp/z2k-log/z2k-rt-proxy.log 2>/dev/null || true
-    killall -9 z2k-rt-proxy 2>/dev/null || true
+    z2k_kill_by_name z2k-rt-proxy KILL
 
     # WARP: `remove` снимает маршрут, останавливает движок, удаляет бинарь и
     # ipset'ы (ДО общей зачистки ipset'ов ниже — иначе «set in use»). device.json
@@ -5848,7 +5853,7 @@ uninstall_zapret2() {
         print_info "Остановка Telegram tunnel..."
         /opt/etc/init.d/S98tg-tunnel stop >/dev/null 2>&1 || true
     fi
-    killall -9 tg-mtproxy-client 2>/dev/null || true
+    z2k_kill_by_name tg-mtproxy-client KILL
     # Drop the current ipset-based REDIRECT rules FIRST so the `ipset destroy`
     # further down (it matches names containing "z2k" → catches z2k_tg_dc)
     # doesn't fail with "set in use".

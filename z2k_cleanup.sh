@@ -177,8 +177,13 @@ _z2k_restore_kernel_tuning() {
 # device.json и license с ключом WARP+, чтобы повторная установка не регистрировала
 # устройство заново. Вся остальная служебка уходит.
 _z2k_warp_finish() {
-    local _i _t _tuns _d _f
-    killall -9 z2k-warpd 2>/dev/null
+    local _i _t _tuns _d _f _c
+    # Не killall: его может не быть (ссылка busybox потеряна).
+    for _f in /proc/[0-9]*; do
+        _c=
+        read -r _c 2>/dev/null < "$_f/comm" || continue
+        [ "$_c" = z2k-warpd ] && kill -9 "${_f#/proc/}" 2>/dev/null
+    done
     _i=0
     while [ "$_i" -lt 3 ]; do
         _tuns=$(ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \(z2ktun[0-9]*\)[:@].*/\1/p')

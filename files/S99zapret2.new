@@ -139,6 +139,52 @@ z2k_wait_gone()
     return 1
 }
 
+# Процессы по имени без killall/pidof: только /proc и встроенные команды
+# оболочки. В Entware эти команды — ссылки на busybox, и у части людей ссылки
+# пропадают; тогда `killall nfqws2 2>/dev/null` молча ничего не делал, старый
+# демон держал очередь, новый падал с nfq_create_queue(): Operation not
+# permitted, а автообновление откатывалось. Ядро хранит в comm не больше 15
+# символов имени.
+z2k_pids_by_comm()
+{
+    local want="$1" root="${Z2K_PROC:-/proc}" p c
+    [ "${#want}" -gt 15 ] && want=$(printf '%.15s' "$want")
+    for p in "$root"/[0-9]*; do
+        c=
+        read -r c 2>/dev/null < "$p/comm" || continue
+        [ "$c" = "$want" ] && echo "${p##*/}"
+    done
+    return 0
+}
+
+# Entware раскладывает команды busybox ссылками в /opt/bin. Если ссылки нет,
+# а busybox команду умеет и другой такой команды в системе нет, — возвращаем
+# ссылку. Печатает имена восстановленных. Копия в z2k.sh (там до загрузки
+# модулей) — менять вместе.
+z2k_restore_busybox_links()
+{
+    local bb="${Z2K_BUSYBOX:-/opt/bin/busybox}" list name d found nl='
+'
+    [ -x "$bb" ] || return 0
+    list=$("$bb" --list 2>/dev/null) || return 0
+    for name in awk sed grep egrep fgrep cut tr sort uniq head tail wc xargs \
+                find killall pidof pgrep readlink sha256sum md5sum mktemp stat \
+                tar gzip gunzip zcat cmp diff seq basename dirname expr usleep \
+                logger nslookup tee touch; do
+        case "$nl$list$nl" in *"$nl$name$nl"*) ;; *) continue ;; esac
+        found=
+        for d in "${bb%/*}" ${Z2K_BIN_DIRS:-/opt/bin /opt/sbin /opt/usr/bin /opt/usr/sbin /bin /sbin /usr/bin /usr/sbin}; do
+            [ -e "$d/$name" ] && { found=1; break; }
+        done
+        [ -n "$found" ] && continue
+        # Существующее не перезаписываем никогда: там может стоять GNU-версия
+        # из альтернатив opkg. Убираем только битую ссылку.
+        [ -L "${bb%/*}/$name" ] && rm -f "${bb%/*}/$name"
+        ln -s "$bb" "${bb%/*}/$name" 2>/dev/null && echo "$name"
+    done
+    return 0
+}
+
 # Positive readiness for nfqws2: its NFQUEUE is bound. One line per bound queue
 # in /proc/net/netfilter/nfnetlink_queue, first field = queue number. Replaces a
 # flat `sleep 1` that verified nothing and outlasted the daemon's entire init
@@ -2008,8 +2054,18 @@ stop_all_nfqws()
         [ -f "$pidfile" ] && stop_daemon_by_pidfile "$pidfile"
     done
 
-    # Fallback: killall если что-то осталось
-    killall nfqws2 2>/dev/null
+    # Демоны без PID-файла (сирота от прерванного запуска или переустановки)
+    # держат очередь, и новый запуск на ней падает. Ищем их через /proc, а не
+    # killall: его может не быть.
+    local _left _p
+    _left=$(z2k_pids_by_comm nfqws2)
+    if [ -n "$_left" ]; then
+        echo "Stopping nfqws2 without pidfile: PID" $_left
+        for _p in $_left; do kill "$_p" 2>/dev/null; done
+        for _p in $_left; do
+            z2k_wait_gone "$_p" 3 || kill -9 "$_p" 2>/dev/null
+        done
+    fi
 
     # �������� ��� PID �����
     rm -f $PIDDIR/nfqws2_*.pid 2>/dev/null
@@ -3286,6 +3342,14 @@ status()
 # ==============================================================================
 # MAIN
 # ==============================================================================
+
+case "$1" in
+    start|stop|restart)
+        for _bl in $(z2k_restore_busybox_links); do
+            echo "Restored missing command: $_bl (busybox)"
+        done
+        ;;
+esac
 
 case "$1" in
     start)

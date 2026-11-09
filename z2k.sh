@@ -1004,6 +1004,34 @@ z2k_map_arch_to_bin_arch() {
     esac
 }
 
+# Entware раскладывает команды busybox ссылками в /opt/bin. Если ссылки нет,
+# а busybox команду умеет и другой такой команды в системе нет, — возвращаем
+# ссылку. Печатает имена восстановленных. Копия функции из
+# files/S99zapret2.new: здесь модули ещё не загружены — менять вместе.
+z2k_restore_busybox_links()
+{
+    local bb="${Z2K_BUSYBOX:-/opt/bin/busybox}" list name d found nl='
+'
+    [ -x "$bb" ] || return 0
+    list=$("$bb" --list 2>/dev/null) || return 0
+    for name in awk sed grep egrep fgrep cut tr sort uniq head tail wc xargs \
+                find killall pidof pgrep readlink sha256sum md5sum mktemp stat \
+                tar gzip gunzip zcat cmp diff seq basename dirname expr usleep \
+                logger nslookup tee touch; do
+        case "$nl$list$nl" in *"$nl$name$nl"*) ;; *) continue ;; esac
+        found=
+        for d in "${bb%/*}" ${Z2K_BIN_DIRS:-/opt/bin /opt/sbin /opt/usr/bin /opt/usr/sbin /bin /sbin /usr/bin /usr/sbin}; do
+            [ -e "$d/$name" ] && { found=1; break; }
+        done
+        [ -n "$found" ] && continue
+        # Существующее не перезаписываем никогда: там может стоять GNU-версия
+        # из альтернатив opkg. Убираем только битую ссылку.
+        [ -L "${bb%/*}/$name" ] && rm -f "${bb%/*}/$name"
+        ln -s "$bb" "${bb%/*}/$name" 2>/dev/null && echo "$name"
+    done
+    return 0
+}
+
 check_environment() {
     print_info "Проверка окружения..."
 
@@ -1011,6 +1039,17 @@ check_environment() {
     if [ ! -d "/opt" ] || [ ! -x "/opt/bin/opkg" ]; then
         die "Entware не установлен! Установите Entware перед запуском z2k."
     fi
+
+    # Без ссылок busybox (awk, sed, killall…) установка обрывалась на первой
+    # же строке с awk, без объяснений.
+    local _bl _miss=""
+    for _bl in $(z2k_restore_busybox_links); do
+        print_info "Восстановлена пропавшая команда $_bl (ссылка на busybox)"
+    done
+    for _bl in awk sed grep; do
+        command -v "$_bl" >/dev/null 2>&1 || _miss="$_miss $_bl"
+    done
+    [ -z "$_miss" ] || die "В системе нет команд:$_miss. Выполните: opkg update && opkg install busybox — и запустите установку снова."
 
     # Проверка curl
     if ! command -v curl >/dev/null 2>&1; then

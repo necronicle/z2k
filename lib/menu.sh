@@ -1402,7 +1402,7 @@ SUBMENU
                     [ -x "/opt/etc/init.d/S97z2k-http-tunnel" ] && \
                         /opt/etc/init.d/S97z2k-http-tunnel restart >/dev/null 2>&1
                 else
-                    killall tg-mtproxy-client 2>/dev/null || true
+                    z2k_kill_by_name tg-mtproxy-client
                     sleep 1
                     # CWE-59: root-owned 0700 log dir
                     # CWE-59: /tmp/z2k-log должен быть чистым root-owned каталогом. symlink /
@@ -1457,7 +1457,7 @@ SUBMENU
                     [ -x "/opt/etc/init.d/S97z2k-http-tunnel" ] && \
                         /opt/etc/init.d/S97z2k-http-tunnel stop >/dev/null 2>&1
                 else
-                    killall tg-mtproxy-client 2>/dev/null || true
+                    z2k_kill_by_name tg-mtproxy-client
                     for cidr in 149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24; do
                         while iptables -t nat -C PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null; do
                             iptables -t nat -D PREROUTING -d "$cidr" -p tcp --dport 443 -j REDIRECT --to-port 1443 2>/dev/null || break

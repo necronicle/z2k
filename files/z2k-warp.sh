@@ -1270,7 +1270,15 @@ warp_migrate_usque() {
             ;;
     esac
     # Класс 1 — всегда.
-    [ -e "$WARP_LEGACY_BIN" ] && killall z2k-usque 2>/dev/null
+    if [ -e "$WARP_LEGACY_BIN" ]; then
+        # Не killall: его может не быть (ссылка busybox потеряна).
+        local _lp _lc
+        for _lp in /proc/[0-9]*; do
+            _lc=
+            read -r _lc 2>/dev/null < "$_lp/comm" || continue
+            [ "$_lc" = z2k-usque ] && kill "${_lp#/proc/}" 2>/dev/null
+        done
+    fi
     rm -f "$WARP_LEGACY_BIN" 2>/dev/null
     rm -f "$WARP_LEGACY_DIR/session.conf" "$WARP_LEGACY_DIR/session.conf.prev" "$WARP_LEGACY_DIR/session.alt.conf" \
           "$WARP_LEGACY_DIR/iface" "$WARP_LEGACY_DIR/addr" 2>/dev/null
