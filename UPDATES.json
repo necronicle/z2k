@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 173,
-  "current": "p-87.24",
+  "seq": 174,
+  "current": "p-87.25",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -148,7 +148,7 @@
   "files_sha256": {
   "common/ipt.sh": "0530b043dbb52e544715193e6cbad84e50155d5b1c451a5e26f0b2de7c3f2f62",
   "files/000-zapret2.sh": "e518233b73c49643894ca61cba82ff8fa1bbf469d93dbac48d98369f7e259d37",
-  "files/S99zapret2.new": "ff2d6e88da2a824710738285ed0a1b6247e82d1c1170a0f69a8d75b056ede7de",
+  "files/S99zapret2.new": "3772092b360a2e0433c39cea1182ded20f8bb7188c4800870529861a798e0814",
   "files/etc/z2k-roots.pem": "73e33da886473f1cf2a347fc5be8688540861abd60ac6caa0da1b84242bcdd76",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/quic_1.bin": "f4589c57749f956bb30538197a521d7005f8b0a8723b4707e72405e51ddac50a",
@@ -229,14 +229,14 @@
   "files/z2k-tg-watchdog.sh": "fcf666b9266058615ac995f44648f6ebbf5b17a45d78484972a101880ae29282",
   "files/z2k-update-lists.sh": "906a457ce327c7c141c6cd3a2d43fdf7a412ebc74a2f42ecf825dc953956c4e5",
   "files/z2k-warp-list-filter.awk": "97db4a85663e4b3a7c4943e495276f521a9ba961d8419df1059efdcceea655c5",
-  "files/z2k-warp.sh": "040a7d064accb791a594e0c6a81ed094aab3adc113722839507b84fd1bd427ae",
+  "files/z2k-warp.sh": "53ff6546505286cb81f203915e8c7a83e9ac2217ea037615ea0cd8978c4f3e98",
   "lib/auto_update.sh": "1be422799a300f3f2bc3d3ddd1a4a3c7253bf1a9046e4daedbdce172a019969c",
   "lib/config.sh": "664e4c8f4af167f6b86ff1ff25c6143e515d86ad28302f3bed3d830d106c91e5",
   "lib/config_official.sh": "1f639c5318cda85d540e94ac6da07a6f0a3d1e6763a5a6ecd51fb6d4b180f78a",
-  "lib/install.sh": "ea61338dec8f27086f26f6c4ab2d3908e978291a41ca17b5b78d51f303849795",
-  "lib/menu.sh": "ad223497433e4d6729c5a357e6a5a581da50ae4ddc59362383fd06af10769b33",
+  "lib/install.sh": "b0facd682a56391fd277da600d57694502f69c3a3d49fbe2002710ea1c4859c9",
+  "lib/menu.sh": "9ff6cc076d6046be12b8c817cbfb3b1a262bfdf85591781bf31b58402ec76ee4",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
-  "lib/utils.sh": "bc2c7c79734b4851cfdfcf89f4dd0b2c5637250b424c5961cbb7ce4223e7c312",
+  "lib/utils.sh": "a7fbfcfb5935f3571b1849e7a60c2dc5f65479fdc65e8208e98d18c6d6a8aff4",
   "lib/wan.sh": "7f66e83516031bf66ea5f185804e0c90442507d7a75c95a7bc27f6b86d639129",
   "lib/webpanel.sh": "40abf5316c8e6e5ea85f204e504a78925a651f71755965ecb8ea1d9d8ec41ece",
   "mtproxy-client/builds/tg-mtproxy-client-linux-386": "503892a099948aae0cc8e50d88e99b6626db8249f1e3d515485d06216086dfe3",
@@ -278,7 +278,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "50e208646fcc03640d8926eaca55865adf3342bb75c52036dd260ed6463f62dd",
+  "webpanel/www/index.html": "608daa93dad28ef15347143871f48f32f07983ab1d5d8e4d676ab003eae3b337",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -322,7 +322,7 @@
   "z2k-warpd/builds/z2k-warpd-linux-ppc64": "823e8fd670debf50f14ebd116153570763518843ea55bb873e5fddacb3093e8b",
   "z2k-warpd/builds/z2k-warpd-linux-riscv64": "2f386af5b60fbd339add4344270fa9e19ef2176e64ac05e12eae782b26be5fa9",
   "z2k-warpd/builds/z2k-warpd-linux-x86": "8187562f7bd7c9b85cc261dd64ff91b03e0ee2679f86253a2feac7522582462f",
-  "z2k.sh": "b4841dfcd9a5826cb2b9727ee230148b8521588506f398b45403cc2a88e0cc84"
+  "z2k.sh": "708fc1c7c84a1c2d61fbcf96a7b9c385b2fccf75c9f0154e2123edf496ef6b08"
   },
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
@@ -648,6 +648,7 @@
 {"v": "p-87.21", "type": "patch", "ts": "2026-11-07T11:45:03Z", "ref": "p-87.21", "desc": "Для видео YouTube, которое на части серверов не начинается, появилось пробное соединение. Пока оно выключено, включить можно тумблером «Пробное соединение» в разделе «Режимы». Свои DNS-серверы вида dot:имя теперь сохраняются в проверке DNS. Из панели убраны лишние настройки, включая «Защиту DNS», которая без зашифрованного DNS на роутере не работала.", "changed_files": ["files/S99zapret2.new", "files/lua/z2k-preflight.lua", "files/ndm/94-z2k-ppe-deoffload.sh", "files/z2k-config-validator.sh", "files/z2k-diag.sh", "files/z2k-nfqueue-selfheal.sh", "files/z2k-ppe-deoffload.sh", "files/z2k-scheduler.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/index.html", "webpanel/www/js/chrome.js", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "webpanel/www/style.css", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "r-87.22", "type": "reinstall", "ts": "2026-11-07T12:29:17Z", "ref": "r-87.22", "desc": "Обход обновлён до новой версии движка zapret2 1.0.7 с исправлениями. В своих доменах и исключениях можно убрать отдельный поддомен строкой с восклицательным знаком, например !mail.example.com. Обновление переустанавливает z2k и занимает несколько минут, настройки сохраняются.", "changed_files": ["webpanel/www/index.html", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/exclude.js", "webpanel/www/js/pages/extra-domains.js", "UPDATES.json"], "steps": [], "full_install": true},
 {"v": "p-87.23", "type": "patch", "ts": "2026-11-07T21:00:03Z", "ref": "p-87.23", "desc": "Обход для видео YouTube, которое на части серверов не начинается, теперь включён у всех: это тумблер «Видео YouTube: обход по ответу сервера» в разделе «Режимы», и у тех, кто выключил его сам, он останется выключенным. Если видео подолгу висит на старте, там же можно включить «YouTube без QUIC» или «Весь QUIC через TCP», и браузер сразу пойдёт обычным соединением. В благодарностях новый спонсор проекта — Роман Борисович.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/config_official.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "p-87.24", "type": "patch", "ts": "2026-11-08T10:39:04Z", "ref": "p-87.24", "desc": "Обход «Видео YouTube: обход по ответу сервера» теперь включён у всех; если выключить его после обновления, он останется выключенным. Подобранные стратегии больше не сбрасываются при обновлении с переустановкой, а у тех, у кого после прошлого обновления они сбросились, вернутся.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-diag.sh", "lib/config_official.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
+{"v": "p-87.24", "type": "patch", "ts": "2026-11-08T10:39:04Z", "ref": "p-87.24", "desc": "Обход «Видео YouTube: обход по ответу сервера» теперь включён у всех; если выключить его после обновления, он останется выключенным. Подобранные стратегии больше не сбрасываются при обновлении с переустановкой, а у тех, у кого после прошлого обновления они сбросились, вернутся.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-diag.sh", "lib/config_official.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
+{"v": "p-87.25", "type": "patch", "ts": "2026-11-09T12:56:47Z", "ref": "p-87.25", "desc": "Исправлено: на части роутеров перезапуск обхода не проходил, и из-за этого обновление каждый раз откатывалось. Установка больше не обрывается на «Проверке окружения», если в системе пропали стандартные команды.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-warp.sh", "lib/install.sh", "lib/menu.sh", "lib/utils.sh", "z2k.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false}
   ]
 }
