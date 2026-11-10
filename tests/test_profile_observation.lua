@@ -1,4 +1,8 @@
 local H=dofile('tests/lib/detector_harness.lua')
+-- C address formatter; host_ip and standard_hostkey remain the real engine Lua.
+-- luacheck: globals ntop VERDICT_DROP instance_cutoff
+-- luacheck: read globals payload_match_filter drop
+ntop=function(addr) return addr end
 local fork=os.getenv('Z2K_FORK_DIR') or '../zapret2-z2k-fork'
 dofile(fork..'/lua/zapret-antidpi.lua')
 dofile('files/lua/z2k-modern-core.lua')
@@ -184,6 +188,65 @@ local function profile_initial(key,host)
     d.arg=circular_instance(key).arg
     return d
 end
+H.test('GV nameless SYN and ServerHello create neither live nor persisted IP records',function()
+    fresh_state()
+    for _,kind in ipairs({'missing','empty','ip'}) do
+        for _,family in ipairs({4,6}) do
+            local d=profile_initial('gv_tcp','unused.example')
+            d.target=family==6 and {ip6='2001:db8::1'} or {ip='192.0.2.1'}
+            d.track.hostname=kind=='ip' and '192.0.2.1' or (kind=='empty' and '' or nil)
+            d.track.hostname_is_ip=kind=='ip'
+            if family==6 then d.dis.ip=nil; d.dis.ip6={} end
+            d.dis.payload=''; d.dis.tcp.th_flags=TH_SYN; d.l7payload='unknown'
+            H.eq(nil,H.step(d))
+            d.outgoing=false; d.l7payload='tls_server_hello'; d.dis.payload=H.hello
+            H.eq(nil,H.step(d))
+            H.eq(nil,autostate.gv_tcp)
+            P.flush()
+            H.eq(nil,P._state().gv_tcp)
+            local f=io.open(state_path)
+            if f then local text=f:read('*a'); f:close(); assert(not text:find('gv_tcp',1,true)) end
+            -- The same connection becomes eligible as soon as SNI is learned.
+            d.track.hostname='c.youtube.com'; d.track.hostname_is_ip=false
+            d.outgoing=true; d.l7payload='tls_client_hello'; d.dis.payload=H.client
+            H.eq(1,H.step(d).nstrategy)
+            P.flush()
+            H.eq(1,disk_strategy('gv_tcp','youtube.com|'..family))
+            fresh_state(); autostate={}
+        end
+    end
+end)
+H.test('GV service buckets rotate and persist independently in both families',function()
+    fresh_state()
+    for _,host in ipairs({'rr1.googlevideo.com','c.youtube.com'}) do
+        for _,family in ipairs({4,6}) do
+            local d=profile_initial('gv_tcp',host)
+            if family==6 then d.dis.ip=nil; d.dis.ip6={} end
+            local h=H.step(d)
+            local root=host=='c.youtube.com' and 'youtube.com' or 'googlevideo.com'
+            H.eq(root..'|'..family,z2k_service_hostkey(d))
+            -- Real circular, three failed connections, native quorum => arm 2.
+            for _=1,3 do
+                circular_report_failure(h,{host_record=h,generation=h.generation,nstrategy=h.nstrategy},d.arg)
+            end
+            H.eq(2,H.step(d).nstrategy)
+            P.flush()
+            H.eq(2,disk_strategy('gv_tcp',root..'|'..family))
+        end
+    end
+end)
+H.test('other nameless service pools retain native IP fallback',function()
+    fresh_state()
+    for _,key in ipairs({'rkn_tcp','yt_tcp','http_rkn','quic'}) do
+        local d=profile_initial(key,'unused.example'); d.track.hostname=nil
+        d.target={ip='192.0.2.1'}
+        local expected=standard_hostkey(d)
+        assert(expected)
+        H.eq(expected,z2k_service_hostkey(d))
+        H.eq(1,H.step(d).nstrategy)
+        P.flush(); H.eq(1,disk_strategy(key,expected))
+    end
+end)
 H.test('generated RKN profile wires the TLS timeout and its opt-out',function()
     local arg=circular_instance('rkn_tcp').arg
     H.eq('1',arg.discord_tls_timeout)

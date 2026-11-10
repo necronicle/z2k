@@ -53,6 +53,16 @@ end
 -- Share subdomains using native nld=2; preserve packet hostname, IP literals,
 -- address-family splitting and hostless fallback semantics of the native core.
 function z2k_service_hostkey(desync)
+    -- gv_tcp selects its service bucket only after SNI is known. A SYN or a
+    -- nameless ServerHello must not create an unrelated IP bucket (including
+    -- through persistence's pre-circular lookup). Other pools retain IP keys
+    -- for protocols/flows that can legitimately stay nameless, e.g. ECH.
+    if desync.arg.key == "gv_tcp" then
+        local t = desync.track
+        if not t or not t.hostname or t.hostname == "" or t.hostname_is_ip then
+            return nil
+        end
+    end
     local copy, arg = {}, {}
     for k, v in pairs(desync) do copy[k] = v end
     for k, v in pairs(desync.arg) do arg[k] = v end

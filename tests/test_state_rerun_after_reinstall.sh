@@ -43,7 +43,7 @@ fi
 for fn in _z2k_migrate_quic_pool_key _z2k_migrate_pool_renumber \
           _z2k_migrate_pool_renumber_v1 _z2k_migrate_pool_renumber_v2 \
           _z2k_migrate_pool_renumber_v3 _z2k_migrate_pool_renumber_v5 \
-          _z2k_restore_state_after_rerun_v1; do
+          _z2k_restore_state_after_rerun_v1 _z2k_migrate_gv_named_state_v1; do
     awk "/^$fn\\(\\)/{p=1} p{print} p&&/^}/{exit}" "$INIT"
 done > "$TMP/init.sh"
 grep -q '^_z2k_restore_state_after_rerun_v1()' "$TMP/init.sh" \
@@ -76,7 +76,10 @@ restore_rr() { # $1 - корень
 OLD="$TMP/old"; NEW="$TMP/new"; BK="$TMP/bk"
 mkdir -p "$OLD/extra_strats/cache/autocircular" "$OLD/state" "$NEW" "$BK"
 STATE_SAMPLE > "$OLD/extra_strats/cache/autocircular/state.tsv"
-for v in quic-pool-key pool-renumber-v1 pool-renumber-v2 pool-renumber-v3 pool-renumber-v5; do
+# A row added after the one-shot cleanup must survive reinstalls: replaying
+# the GV migration would remove it, proving marker transfer matters here too.
+row gv_tcp "post-migration.example|4" 1 1794000005 auto >> "$OLD/extra_strats/cache/autocircular/state.tsv"
+for v in quic-pool-key pool-renumber-v1 pool-renumber-v2 pool-renumber-v3 pool-renumber-v5 gv-named-state-v1; do
     : > "$OLD/state/$v.done"
 done
 ( ZAPRET2_DIR="$OLD"; backup_tmp="$BK"; . "$TMP/backup.sh" ) >/dev/null 2>&1
@@ -84,8 +87,11 @@ mkdir -p "$NEW/extra_strats/cache/autocircular"
 cp "$OLD/extra_strats/cache/autocircular/state.tsv" "$NEW/extra_strats/cache/autocircular/state.tsv"
 ( ZAPRET2_DIR="$NEW"; backup_tmp="$BK"; . "$TMP/restore.sh" ) >/dev/null 2>&1
 N=$(ls "$NEW/state/"*.done 2>/dev/null | wc -l | tr -d ' ')
-[ "$N" = 5 ] && ok "все отметки миграций пережили переустановку" || bad "отметок после переустановки: $N из 5"
+[ "$N" = 6 ] && ok "все отметки миграций пережили переустановку" || bad "отметок после переустановки: $N из 6"
 migrate "$NEW"
+( . "$TMP/init.sh"
+  ZAPRET_BASE="$NEW"; EXTRA_STRATS_DIR="$NEW/extra_strats"; Z2K_STATE_FALLBACK="$NEW/none.tsv"
+  _z2k_migrate_gv_named_state_v1 )
 if cmp -s "$OLD/extra_strats/cache/autocircular/state.tsv" "$NEW/extra_strats/cache/autocircular/state.tsv"; then
     ok "после переустановки миграции state.tsv не трогают"
 else
