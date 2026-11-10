@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 176,
-  "current": "p-87.28",
+  "seq": 177,
+  "current": "p-87.29",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -148,7 +148,7 @@
   "files_sha256": {
   "common/ipt.sh": "0530b043dbb52e544715193e6cbad84e50155d5b1c451a5e26f0b2de7c3f2f62",
   "files/000-zapret2.sh": "cf605b8cbb24efaa58f5225dc7ef5264178515e0593dece1b688a6c3c4e2cfe0",
-  "files/S99zapret2.new": "0a112e69483e12e5e5d58d9313b8008f29ea268806a588f9931533accaeac873",
+  "files/S99zapret2.new": "fe53267e87fe86b2c4ff55b0d29c6f7c281bbcbc54cfa07f2897c38f2a10f286",
   "files/etc/z2k-roots.pem": "73e33da886473f1cf2a347fc5be8688540861abd60ac6caa0da1b84242bcdd76",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/quic_1.bin": "f4589c57749f956bb30538197a521d7005f8b0a8723b4707e72405e51ddac50a",
@@ -232,7 +232,7 @@
   "files/z2k-warp.sh": "53ff6546505286cb81f203915e8c7a83e9ac2217ea037615ea0cd8978c4f3e98",
   "lib/auto_update.sh": "1be422799a300f3f2bc3d3ddd1a4a3c7253bf1a9046e4daedbdce172a019969c",
   "lib/config.sh": "664e4c8f4af167f6b86ff1ff25c6143e515d86ad28302f3bed3d830d106c91e5",
-  "lib/config_official.sh": "7c0d26ff81aab933286fe68acfd0294061279dd669417b88ccd2ff0dcdced2e5",
+  "lib/config_official.sh": "aab26d4dd9c66e2d65f00533c5b7ef32b2f892d4cdf7400807ecad391690f1f3",
   "lib/install.sh": "442c7535d1ea06ea0a14ef6345a1110f59385f1d522baa6c16d3d5c239498c49",
   "lib/menu.sh": "9ff6cc076d6046be12b8c817cbfb3b1a262bfdf85591781bf31b58402ec76ee4",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
@@ -278,7 +278,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "159a3cabbc8e4f469f6eddc6cab047161c99b6fbfc1751f1c4ac260de68f0ace",
+  "webpanel/www/index.html": "045077eace75de1ba18f0c34f4df63f2534de4e6a0e1c783b83af11e8538f68b",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -295,13 +295,13 @@
   "webpanel/www/js/pages/exclude.js": "aea5eb43aa4e3759fcdd7356b88dd016a2e8bf1160de2c624555147ca412fadd",
   "webpanel/www/js/pages/extra-domains.js": "0f83983aec64f0f43b6b434824bcebbe4674ada30ac80436d06c35b0df44eea3",
   "webpanel/www/js/pages/policy.js": "d1cdad102aa057d75308e00a75dfbcd1bb6d6dccea462435bdf5f911040ff5ab",
-  "webpanel/www/js/pages/strategies.js": "98bcae815bb75bc0421b1d4ba5c5d779d97361fe5131ad15e674a513320a8491",
+  "webpanel/www/js/pages/strategies.js": "1b29177095c2a3434910fb28c2dcbeb7ae0ffbc5964107cda7ae7489a8bbfc5c",
   "webpanel/www/js/pages/strategy-pick.js": "ea84a2f9a20e743c2fddd4dcd8d66899f8675dcc7f56332f2709a09aa44c070e",
   "webpanel/www/js/pages/toggles.js": "6f2e2eceda10eb82bed6097e344aebf98e6d05e74c05072a91a9c40404265dc7",
   "webpanel/www/js/pages/update.js": "889eec2ea9cd54237ac4be9241877364b9ae2f225ddc512d6b632a749aee06bc",
   "webpanel/www/js/pages/warp.js": "43b1ac3b423ed21ad059e7e391a159427ad324977e1b8e2e774d26da261180ca",
   "webpanel/www/js/router.js": "865a158cff37e0fb2591f7d23f72a6c20be520d438dc8152abf294bf9d931a15",
-  "webpanel/www/js/state-model.js": "e26d1875dbd8b96c42457f231dad98ad2e23483700cc22e16249cc647e2017fa",
+  "webpanel/www/js/state-model.js": "e948a0fb5ed4a4b606c85179f96727eb0f7c92b5dc6e1976831d340f16957b2a",
   "webpanel/www/style.css": "8a04da1daa0abc085c46795c7d004d6601460eee918e58db94f6c1a75f50aa32",
   "z2k-detect/builds/z2k-detect-linux-386": "9ad2a8fc5c116818eec0b4fa9cd0022f59d7cf2f48aa657769c4ace9c0b99c3b",
   "z2k-detect/builds/z2k-detect-linux-amd64": "490f6c9f9ddb96df2ffd2a209d2742b1628d4282938ae5086c212144625e7a78",
@@ -651,6 +651,7 @@
 {"v": "p-87.24", "type": "patch", "ts": "2026-11-08T10:39:04Z", "ref": "p-87.24", "desc": "Обход «Видео YouTube: обход по ответу сервера» теперь включён у всех; если выключить его после обновления, он останется выключенным. Подобранные стратегии больше не сбрасываются при обновлении с переустановкой, а у тех, у кого после прошлого обновления они сбросились, вернутся.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-diag.sh", "lib/config_official.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
 {"v": "p-87.25", "type": "patch", "ts": "2026-11-09T12:56:47Z", "ref": "p-87.25", "desc": "Исправлено: на части роутеров перезапуск обхода не проходил, и из-за этого обновление каждый раз откатывалось. Установка больше не обрывается на «Проверке окружения», если в системе пропали стандартные команды.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-warp.sh", "lib/install.sh", "lib/menu.sh", "lib/utils.sh", "z2k.sh", "UPDATES.json"], "steps": ["restart-service"], "full_install": false},
 {"v": "p-87.26", "type": "patch", "ts": "2026-11-10T18:04:34Z", "ref": "p-87.26", "desc": "Telegram быстрее загружает медиа и стабильнее работает на нескольких устройствах одновременно. Улучшено распределение подключений; старые клиенты продолжают работать.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-87.28", "type": "patch", "ts": "2026-11-10T20:51:04Z", "ref": "p-87.28", "desc": "Видео YouTube реже зависает и быстрее стартует: если сервер видео заблокирован, роутер переводит соединение на соседний рабочий, а где соседа нет — открывает видео пробным соединением, теперь и по IPv6. Оба тумблера, «Видео YouTube: обход по ответу сервера» и «Видео YouTube: подмена адреса» в разделе «Режимы», после обновления включены у всех. Проверка DNS в диагностике больше не помечает честные серверы как подменённые.", "changed_files": ["webpanel/www/index.html", "files/000-zapret2.sh", "files/S99zapret2.new", "files/lua/z2k-preflight.lua", "files/z2k-diag.sh", "files/z2k-dns-check.sh", "lib/config_official.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false}
+{"v": "p-87.28", "type": "patch", "ts": "2026-11-10T20:51:04Z", "ref": "p-87.28", "desc": "Видео YouTube реже зависает и быстрее стартует: если сервер видео заблокирован, роутер переводит соединение на соседний рабочий, а где соседа нет — открывает видео пробным соединением, теперь и по IPv6. Оба тумблера, «Видео YouTube: обход по ответу сервера» и «Видео YouTube: подмена адреса» в разделе «Режимы», после обновления включены у всех. Проверка DNS в диагностике больше не помечает честные серверы как подменённые.", "changed_files": ["webpanel/www/index.html", "files/000-zapret2.sh", "files/S99zapret2.new", "files/lua/z2k-preflight.lua", "files/z2k-diag.sh", "files/z2k-dns-check.sh", "lib/config_official.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/diag.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/toggles.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
+{"v": "p-87.29", "type": "patch", "ts": "2026-11-10T21:29:23Z", "ref": "p-87.29", "desc": "Исправлено: обновление p-87.28 не устанавливалось и откатывалось, теперь всё из него доезжает. Видео YouTube реже зависает и быстрее стартует: с заблокированного сервера видео роутер переводит соединение на соседний рабочий, а где соседа нет, открывает видео пробным соединением, теперь и по IPv6; оба тумблера видео YouTube в разделе «Режимы» включены у всех. Проверка DNS больше не помечает честные серверы как подменённые, а сортировка по возрасту в «Стратегиях» работает правильно.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "lib/config_official.sh", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/state-model.js", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
   ]
 }
