@@ -1772,7 +1772,7 @@ print_dns_check_snapshot() {
         printf 'dns check         : не запускался (панель → Диагностика → проверка DNS)\n'
         return 0
     fi
-    local _ts _age _agestr _n _w _sp _si _cur
+    local _ts _age _agestr _n _w _sp _si _cur _mi _un _hi _pm _pu _pt _pl _ph _pp
     _ts=$(sed -n 's/.*"ts":\([0-9]*\).*/\1/p' "$_snap" | head -1)
     if [ -n "$_ts" ]; then
         _age=$(( $(date +%s) - _ts ))
@@ -1784,17 +1784,35 @@ print_dns_check_snapshot() {
     _w=$(grep -o '"verdict":"works"' "$_snap" | wc -l | tr -d ' ')
     _sp=$(grep -o '"verdict":"spoof"' "$_snap" | wc -l | tr -d ' ')
     _si=$(grep -o '"verdict":"silent"' "$_snap" | wc -l | tr -d ' ')
+    _mi=$(grep -o '"verdict":"mismatch"' "$_snap" | wc -l | tr -d ' ')
+    _un=$(grep -o '"verdict":"unknown"' "$_snap" | wc -l | tr -d ' ')
+    _hi=$(grep -o '"verdict":"hijack"' "$_snap" | wc -l | tr -d ' ')
     # Строка про резолвер роутера — то, чем пользуются клиенты.
     _cur=$(tr ',' '\n' < "$_snap" | awk '/"name":"Резолвер роутера/ {f=1} f && /"udp":"/ {sub(/.*"udp":"/, ""); sub(/".*/, ""); print; exit}')
     case "$_cur" in
         proxy) _cur="резолвер роутера отдаёт свои прокси вместо сайтов" ;;
         spoof) _cur="резолвер роутера подменяет ответы" ;;
-        works) _cur="резолвер роутера честен" ;;
-        silent) _cur="резолвер роутера не ответил" ;;
+        works) _cur="у резолвера роутера признаков подмены нет" ;;
+        mismatch) _cur="ответы резолвера роутера расходятся" ;;
+        unknown) _cur="для резолвера роутера недостаточно данных" ;;
+        unverified) _cur="TLS резолвера роутера не проверен" ;;
+        limited) _cur="у резолвера роутера проверен только контрольный запрос TLS" ;;
+        hijack) _cur="запросы к резолверу роутера перехвачены" ;;
+        silent) _cur="резолвер роутера: нет ответа или ошибка транспорта" ;;
         *) _cur="резолвер роутера не проверялся" ;;
     esac
-    printf 'dns check         : снимок %s — серверов %s: честно %s, подмена %s, молчат %s; %s' \
-        "$_agestr" "$_n" "$_w" "$_sp" "$_si" "$_cur"
+    printf 'dns check         : снимок %s — серверов %s: без признаков подмены %s, подмена %s, без ответа %s, расхождение %s, недостаточно данных %s, перехват %s; %s' \
+        "$_agestr" "$_n" "$_w" "$_sp" "$_si" "$_mi" "$_un" "$_hi" "$_cur"
+    # Общий verdict выбирает лучший путь. Отдельные расхождения и
+    # ограничения TLS всё равно показываем, чтобы они не исчезали из сводки.
+    _pp=$(grep -oE '"(udp|doh|dot)":"proxy"' "$_snap" | wc -l | tr -d ' ')
+    _pm=$(grep -oE '"(udp|doh|dot)":"mismatch"' "$_snap" | wc -l | tr -d ' ')
+    _pu=$(grep -oE '"(udp|doh|dot)":"unknown"' "$_snap" | wc -l | tr -d ' ')
+    _pt=$(grep -oE '"(udp|doh|dot)":"unverified"' "$_snap" | wc -l | tr -d ' ')
+    _pl=$(grep -oE '"(udp|doh|dot)":"limited"' "$_snap" | wc -l | tr -d ' ')
+    _ph=$(grep -oE '"(udp|doh|dot)":"hijack"' "$_snap" | wc -l | tr -d ' ')
+    printf '; пути: расхождение %s, недостаточно данных %s, TLS не проверен %s, TLS только контроль %s, перехват %s, свой прокси вместо сайта %s' \
+        "$_pm" "$_pu" "$_pt" "$_pl" "$_ph" "$_pp"
     if [ "$_age" -gt 172800 ]; then printf ' — СНИМОК УСТАРЕЛ, перезапустите проверку в панели'
     elif [ "$_si" -gt 0 ] && [ "$_si" = "$_n" ]; then printf ' — молчат все разом: в тот момент у роутера не было связи, это не про серверы'
     fi

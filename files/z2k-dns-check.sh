@@ -1,62 +1,7 @@
 #!/bin/sh
-# z2k-dns-check.sh — кто из DNS-серверов доступен с этого роутера и кто отвечает
-# честно.
-#
-# ЗАЧЕМ ОТДЕЛЬНЫЙ ТЕСТ. Обычная проверка «сервер отвечает / не отвечает» на
-# российских сетях бесполезна: перехваченный UDP 53 отвечает БЫСТРЕЕ всех — он
-# же рядом, — и в таблице задержек выглядит лучшим. При этом он врёт. Поэтому
-# меряем не доступность, а правдивость.
-#
-# ТРИ СОСТОЯНИЯ:
-#   works   — ответил, и ответы похожи на настоящие
-#   spoof   — ответил, но отдаёт заглушку провайдера
-#   silent  — не ответил за таймаут
-#
-# КАК ОПОЗНАЁТСЯ ЗАГЛУШКА, БЕЗ ЭТАЛОНА И БЕЗ СПИСКА ЗАГЛУШЕК.
-# Спрашиваем несколько НЕСВЯЗАННЫХ заблокированных доменов. Они не могут жить
-# на одном адресе: у rutor.info и flibusta.is нет общего хостинга. Значит адрес,
-# пришедший в ответ на два и более РАЗНЫХ домена, — не сайт, а подстановка.
-#
-# Считаем повторы В ПРЕДЕЛАХ ОДНОГО СЕРВЕРА, а не по всем сразу. Иначе
-# настоящий адрес сайта, который честно вернули семь серверов, повторяется семь
-# раз и объявляется заглушкой — проверено на живом роутере, именно так и вышло
-# с первой версии. Подмена — свойство конкретного резолвера, и мерить её надо
-# по его собственным ответам.
-#
-# ЗАДЕРЖКА. Для DoH её даёт curl, точно. Для DoT — счётчик опросов того же
-# обмена, шаг 10 мс. Для UDP меряет `dig`, а без него — наш z2k-detect dnsms, и он
-# печатает время сам.
-#
-# Своими руками UDP-запрос из ash не послать: busybox nc собран без -u, socat
-# нет, /dev/udp — это bash. Время самого nslookup мерить бесполезно, замер на
-# роутере: 460 мс против настоящих 28, потому что busybox на каждый адрес
-# ответа делает ещё и ОБРАТНЫЙ запрос. Врать на порядок хуже, чем промолчать:
-# по этим числам выбирают сервер.
-#
-# Поэтому: есть dig — печатаем точное число, нет — как раньше, «отвечает» и
-# счёт честных ответов. Стоимость замера 0.7 с на семь серверов, и платим её
-# только за тех, кто уже ответил: у молчащего dig ждал бы свой таймаут.
-#
-# Число это не косметика. Перехваченный UDP отвечает БЫСТРЕЕ настоящего
-# сервера — подозрительно низкая задержка рядом с честным DoH и есть признак
-# подмены, тот же, что описан ниже.
-#
-# ДВА ПРИЗНАКА ПЕРЕХВАТА, потому что перехват бывает двух видов.
-#
-#   1. Заворот. Спрашиваем 192.0.2.1 — адрес из диапазона, зарезервированного
-#      RFC 5737 под документацию: DNS там нет и быть не может. Пришёл ответ —
-#      запросы уводят на чужой резолвер. Ложных срабатываний нет по построению.
-#
-#   2. Правка ответа на пути. Заворота нет, сервер отвечает сам — но ответ
-#      подменяют по дороге. Признак: ОДНА И ТА ЖЕ заглушка приходит от разных
-#      независимых серверов. Cloudflare и Яндекс не могут договориться отдавать
-#      общий адрес для четырёх чужих доменов; значит правит тот, кто между.
-#      Замер на роутере владельца 2026-08-24: rutor.info, flibusta.is, rezka.ag
-#      и shikimori.one с ЛЮБОГО публичного сервера по UDP приходили на
-#      188.186.154.79, при этом канарейка молчала — то есть один этот признак
-#      поймал бы ровно ничего.
-#
-# Ничего не меняет: только спрашивает и печатает. Результат — в tmpfs.
+# Проверка DNS: доступность, согласованность UDP с собственным DoH и заглушки.
+# Разные адреса CDN не доказывают подмену. TLS удостоверяет источник ответа,
+# но не отсутствие фильтрации самим оператором. Результаты сохраняются в tmpfs.
 set -u
 
 ZAPRET2_DIR="${ZAPRET2_DIR:-/opt/zapret2}"
@@ -65,18 +10,12 @@ TIMEOUT="${Z2K_DNS_TIMEOUT:-5}"
 OWN_LIST="${Z2K_DNS_OWN:-$ZAPRET2_DIR/lists/dns-check.txt}"
 CURRENT_ADDR=""
 
-# Мишени: несвязанные домены, заблокированные в РФ. Именно НЕСВЯЗАННЫЕ — на
-# этом держится вывод заглушки. Общий хостинг сломал бы правило «повторился →
-# подстановка».
+# Несвязанные цели для повторов заглушки. shikimori.one оставлен: варианты
+# CDN дают только расхождение с собственным DoH, никогда сами по себе spoof.
 TARGETS="${Z2K_DNS_TARGETS:-rutor.info flibusta.is rezka.ag shikimori.one}"
-# Домены, которые «умные» DNS-сервисы (xbox-dns.ru и подобные) подменяют на
-# СВОИ прокси-адреса: на каждый домен свой адрес, повторов нет, по заглушке не
-# ловится. Ловится только сверкой с тем, что о домене говорят шифрованные
-# пути других операторов (ref_mismatch). Найдено 11.09.2026 на роутере
-# владельца: api.github.com → 87.228.47.198 (Selectel) от резолвера роутера,
-# а «resolve check» и чекер писали «честно».
+# Прокси-цели из реального случая xbox-dns.ru (997c09c1).
 PROXY_TARGETS="${Z2K_DNS_PROXY_TARGETS:-api.github.com www.notion.so}"
-# Контрольный домен: он не блокируется, и по нему видно, что сервер вообще жив.
+# Контроль показывает доступность, но не заменяет ответы целевых доменов.
 CONTROL="${Z2K_DNS_CONTROL:-example.com}"
 # Отдельная мишень: имя, которое человеку нужнее всего.
 #
@@ -110,11 +49,13 @@ ControlD|76.76.2.0|https://freedns.controld.com/p0|p0.freedns.controld.com"
 # интересуют только адреса ответа, иначе адрес сервера попал бы в статистику
 # повторов и был бы объявлен заглушкой.
 udp_a() {
-    # Адрес — ТРЕТЬЕ поле, а не последнее. busybox печатает
-    #   Address 2: 188.186.154.79 188x186x154x79.static.example.ru
-    # и $NF даёт обратное имя вместо адреса — на живом роутере это давало ноль
-    # разобранных ответов у всех серверов сразу.
-    nslookup "$2" "$1" 2>/dev/null | awk '
+    _ua=$(nslookup "$2" "$1" 2>/dev/null); _ur=$?
+    # nslookup может завершиться ошибкой на NXDOMAIN: это ответ без A,
+    # в отличие от таймаута. Не выдаём ошибку транспорта за пустой ответ.
+    if [ "$_ur" -ne 0 ]; then
+        case "$_ua" in *NXDOMAIN*|*SERVFAIL*|*REFUSED*|*NOTIMP*|*FORMERR*|*"No answer"*|*"No data"*) ;; *) return 1 ;; esac
+    fi
+    printf '%s\n' "$_ua" | awk '
         /^Name:/ { inans = 1; next }
         inans && /^Address/ {
             ip = $3
@@ -164,7 +105,7 @@ udp_ms() {
 
 # _wire_query ДОМЕН — двоичный DNS-запрос A-записи (RFC 1035 §4.1).
 _wire_query() {
-    printf '\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+    printf '\253\315\001\000\000\001\000\000\000\000\000\000'
     _q="$1"
     while [ -n "$_q" ]; do
         case "$_q" in
@@ -173,28 +114,11 @@ _wire_query() {
         esac
         printf "\\$(printf '%03o' "${#_lbl}")%s" "$_lbl"
     done
-    printf '\x00\x00\x01\x00\x01'
+    printf '\000\000\001\000\001'
 }
 
-# doh_wire_a URL ДОМЕН — адреса A по ДВОИЧНОМУ DoH (RFC 8484).
-#
-# ПОЧЕМУ НЕ JSON. Сначала адреса читались из JSON-API запросом
-# «?name=ДОМЕН&type=A». Он есть далеко не у всех и почти нигде не лежит на
-# /dns-query: Google держит его на /resolve, AdGuard на /resolve, Quad9 на
-# отдельном порту, у Яндекса его нет вовсе. На живом роутере пять серверов из
-# семи отвечали на такой запрос кодом 400 — а проверка молча получала пустой
-# список адресов и записывала серверу «DoH честно». Это была неправда: честным
-# он считался за то, что ЖИВ, а не за то, что ответил верно. Провод же обязан
-# работать у любого DoH-сервера по стандарту, и работает: проверено на всех
-# семи.
-# _resolve_arg URL IP — `--resolve host:port:IP` для curl, если IP задан.
-#
-# БЕЗ ЭТОГО ЧЕКЕР МЕРИЛ САМ СЕБЯ. Имя из URL DoH (cloudflare-dns.com,
-# dns.google…) curl резолвил через резолвер РОУТЕРА, и когда тот лежал,
-# все семь DoH разом получали «не ответил» — снимок 05.09.2026 на роутере
-# владельца ровно такой. Один сломанный резолвер писался результатом всем
-# серверам. Адрес каждого сервера мы и так знаем (поле udp), поэтому идём
-# к нему напрямую, а имя оставляем только для SNI и сертификата.
+# Закрепляем IP DoH, сохраняя имя URL для SNI и проверки сертификата.
+# Используется стандартный двоичный DNS over HTTPS, без отключения TLS-проверки.
 _resolve_set() {   # _resolve_set URL IP -> _RIP пуст, если адреса нет
     _RIP=""; _RH=""; _RP=443
     [ -n "${2:-}" ] || return 0
@@ -209,492 +133,402 @@ doh_wire_a() {
     [ -n "$_wq" ] || return 1
     _wf="/tmp/.z2k-dns-wa.$$"
     _resolve_set "$1" "${3:-}"
-    _wc=$(curl -s -o "$_wf" --max-time "$TIMEOUT" -w '%{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
-          -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null)
+    _wc=$(curl -q -s -o "$_wf" --max-time "$TIMEOUT" -w '%{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
+          -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null) || { rm -f "$_wf"; return 1; }
     [ "$_wc" = "200" ] || { rm -f "$_wf"; return 1; }
-    hexdump -v -e '1/1 "%d "' "$_wf" 2>/dev/null | awk '
-    # ИМЯ В ОТВЕТЕ ПОЧТИ ВСЕГДА УКАЗАТЕЛЬ (RFC 1035 §4.1.4): два байта со
-    # старшими битами 11, и НУЛЕВОГО байта за ними НЕТ. Съев его как «конец
-    # имени», разбор уезжает на байт и дальше читает мусор — молча, без ошибки
-    # и без единого адреса на выходе. Ровно так и было при первом прогоне.
-    function skipname(p,   done) {
-        done = 0
-        while (p <= n && !done) {
-            if (b[p] >= 192) { p += 2; done = 1 }
-            else if (b[p] == 0) { p += 1; done = 1 }
-            else p += b[p] + 1
-        }
-        return p
-    }
-    {
-        n = 0
-        for (i = 1; i <= NF; i++) { v = $i + 0; if (v < 0) v += 256; b[++n] = v }
-        if (n < 12) exit
-        an = b[7] * 256 + b[8]
-        p = skipname(13) + 4
-        for (k = 0; k < an && p + 9 <= n; k++) {
-            p = skipname(p)
-            t = b[p] * 256 + b[p+1]; p += 8
-            rl = b[p] * 256 + b[p+1]; p += 2
-            if (t == 1 && rl == 4) print b[p] "." b[p+1] "." b[p+2] "." b[p+3]
-            p += rl
-        }
-    }'
+    dns_file_a "$_wf"
+    _wr=$?
     rm -f "$_wf"
+    return "$_wr"
 }
 
-# doh_wire_ms URL — жив ли сервер по DoH и за сколько миллисекунд.
-#
-# Запрос — заранее собранный пакет «example.com A», в base64url без набивки,
-# как требует RFC 8484 §4.1. Разбирать ответ целиком не нужно: достаточно
-# ANCOUNT из заголовка (байты 7-8) — он больше нуля, значит сервер ответил
-# по существу, а не отдал пустой отказ.
+# Разбираем весь DNS-пакет, отвергаем обрыв и чужой формат. Успешный ответ
+# без A (включая DNS-отказ) отличается кодом возврата от ошибки транспорта.
+dns_file_a() {
+    hexdump -v -e '1/1 "%u "' "$1" 2>/dev/null | awk '
+    function skipname(p,   len) {
+        while (p <= n) {
+            len=b[p]
+            if (len >= 192) return (p+1 <= n ? p+2 : n+1)
+            if (len == 0) return p+1
+            if (len > 63) return n+1
+            p += len+1
+        }
+        return n+1
+    }
+    {
+        parsed=1; n=NF; for(i=1;i<=n;i++) b[i]=$i+0
+        if(n<12 || b[1]!=171 || b[2]!=205 || b[3]<128 || int(b[3]/2)%2) exit 1
+        q=b[5]*256+b[6]; an=b[7]*256+b[8]; p=13
+        if(q!=1) exit 1
+        p=skipname(p)+4; if(p>n+1) exit 1
+        out=""
+        for(k=0;k<an;k++) {
+            p=skipname(p); if(p+9>n) exit 1
+            t=b[p]*256+b[p+1]; c=b[p+2]*256+b[p+3]
+            rl=b[p+8]*256+b[p+9]; p+=10
+            if(p+rl>n+1) exit 1
+            if(t==1 && c==1 && rl==4) out=out b[p] "." b[p+1] "." b[p+2] "." b[p+3] "\n"
+            p+=rl
+        }
+        if(b[4]%16==0) printf "%s",out
+    }
+    END {if(!parsed) exit 1}'
+}
+
+# Задержка контрольного DoH-запроса; успех требует проверенного HTTPS и A.
 doh_wire_ms() {
-    _wq=$(printf '\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01' \
+    _wq=$(printf '\253\315\001\000\000\001\000\000\000\000\000\000\007example\003com\000\000\001\000\001' \
           | base64 2>/dev/null | tr -d '=\n' | tr '+/' '-_')
     [ -n "$_wq" ] || return 1
     _wf="/tmp/.z2k-dns-wire.$$"
     _resolve_set "$1" "${2:-}"
-    _wt=$(curl -s -o "$_wf" --max-time "$TIMEOUT" -w '%{time_total} %{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
-          -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null)
+    _wt=$(curl -q -s -o "$_wf" --max-time "$TIMEOUT" -w '%{time_total} %{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
+          -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null) || { rm -f "$_wf"; return 1; }
     case "$_wt" in
         *" 200") ;;
         *) rm -f "$_wf"; return 1 ;;
     esac
-    _an=$(hexdump -n 8 -e '8/1 "%d "' "$_wf" 2>/dev/null \
-          | awk '{ h = $7; l = $8; if (h < 0) h += 256; if (l < 0) l += 256; print h * 256 + l }')
+    _ma=$(dns_file_a "$_wf"); _mr=$?
     rm -f "$_wf"
-    [ -n "$_an" ] && [ "$_an" -gt 0 ] || return 1
+    [ "$_mr" = 0 ] && [ -n "$_ma" ] || return 1
     printf '%s' "${_wt%% *}" | awk '{printf "%d", $1 * 1000}'
 }
 
-# dot_alive ХОСТ — отвечает ли сервер по DoT (DNS over TLS, порт 853).
-#
-# Третий путь и третий формат провода. DoT — тот же двоичный DNS, что и в RFC
-# 8484, но внутри голого TLS и с ДВУХБАЙТНОЙ длиной впереди (RFC 7858 §3.3):
-# соединение потоковое, и без длины получатель не знает, где кончается запрос.
-#
-# Клиента для DoT на роутере нет, поэтому говорим сами: openssl s_client даёт
-# TLS-канал, запрос уходит в stdin, ответ читаем из stdout. Проверяем ANCOUNT
-# заголовка (байты 9-10 с учётом префикса длины) — больше нуля значит ответ по
-# существу.
-#
-# ОГРАНИЧЕНИЕ ПО ВРЕМЕНИ РУКАМИ. `timeout` на этих сборках busybox нет
-# (проверено), а s_client сам не выходит: он ждёт данных, пока не закроют
-# соединение. Поэтому фоном плюс опрос файла — иначе один молчащий сервер
-# вешает всю проверку насмерть.
-#
-# ОПРОС ПО 10 МС, А НЕ ПО СЕКУНДЕ — И ОН ЖЕ ДАЁТ ВРЕМЯ.
-#
-# Сначала здесь было написано «время у DoT не показываем, потому что нечем
-# засечь»: дробного sleep у busybox нет, `timeout` отсутствует, `date +%s%N`
-# печатает literal %N (всё проверено на роутере). Правда — но это про
-# посекундный опрос, а не про измерение.
-#
-# usleep на Entware есть (/opt/bin/usleep), и с шагом 10 мс счётчик опросов САМ
-# становится измерением: ответ на десятом обороте — сто миллисекунд. Меряется
-# при этом полный обмен — TCP, TLS и сам запрос, — а не одно рукопожатие.
-#
-# Пробовал мерить отдельным `curl` к порту 853 (он отдаёт time_appconnect с
-# точностью до микросекунд). Замер на роутере: прогон вырос с 30 до 53 секунд —
-# лишнее соединение на каждый сервер, а у молчащего это весь таймаут. Плата за
-# точность, которая никому не нужна: разница между серверами здесь в десятки
-# миллисекунд, и шага в 10 мс для выбора хватает с запасом.
-#
-# Там, где usleep нет, остаётся посекундный шаг и время не показывается: соврать
-# на порядок хуже, чем промолчать.
+# DoT (RFC 7858): DNS-фрейм с двухбайтовой длиной внутри проверенного TLS.
+# Ожидание ограничено вручную: timeout и дробного sleep у BusyBox может не быть.
+# usleep даёт шаг 10 мс; без него время не публикуем.
 dot_alive() {
-    command -v openssl >/dev/null 2>&1 || return 1
+    DOT_ADDRESSES=""
+    command -v openssl >/dev/null 2>&1 || return 2
+    _dh=$(openssl s_client -help 2>&1)
+    _nameflag=-verify_hostname; _sni="$1"
+    case "$1" in
+        *[!0-9.]*|'') ;;
+        *) _nameflag=-verify_ip; _sni="" ;;
+    esac
+    for _flag in -verify_return_error "$_nameflag" -servername; do
+        case "$_dh" in *"$_flag"*) ;; *) return 2 ;; esac
+    done
     _df="/tmp/.z2k-dns-dot.$$"
     rm -f "$_df"
-    printf '\x00\x1d\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01' \
-        | openssl s_client -quiet -verify_quiet -connect "${2:-$1}:853" -servername "$1" >"$_df" 2>/dev/null &
+    printf '\000\035\253\315\001\000\000\001\000\000\000\000\000\000\007example\003com\000\000\001\000\001' \
+        | openssl s_client -quiet -verify_return_error "$_nameflag" "$1" \
+            -connect "${2:-$1}:853" ${_sni:+-servername} ${_sni:+"$_sni"} >"$_df" 2>/dev/null &
     _dpid=$!
     _fine=1
     command -v usleep >/dev/null 2>&1 || _fine=0
     _w=0
     if [ "$_fine" = 1 ]; then _lim=$((TIMEOUT * 100)); else _lim="$TIMEOUT"; fi
     while [ "$_w" -lt "$_lim" ]; do
-        [ -s "$_df" ] && break
+        # Ждём весь фрейм, а не первый байт TCP. Проверка TLS предшествует
+        # выдаче прикладных данных s_client благодаря verify_return_error.
+        if [ -s "$_df" ]; then
+            _complete=$(hexdump -v -e '1/1 "%u "' "$_df" 2>/dev/null | awk '{print (NF>=14 && NF>=2+$1*256+$2)?1:0}')
+            [ "$_complete" = 1 ] && break
+        fi
+        kill -0 "$_dpid" 2>/dev/null || break
         if [ "$_fine" = 1 ]; then usleep 10000; else sleep 1; fi
         _w=$((_w + 1))
     done
-    # Счётчик оборотов и есть время: шаг 10 мс. Наружу отдаём через DOT_MS,
-    # потому что возвращаемым кодом функция уже говорит про живость.
     if [ "$_fine" = 1 ]; then DOT_MS=$((_w * 10)); else DOT_MS=""; fi
-    kill "$_dpid" 2>/dev/null
-    wait "$_dpid" 2>/dev/null
-    _an=$(hexdump -n 10 -e '10/1 "%d "' "$_df" 2>/dev/null \
-          | awk '{ h = $9; l = $10; if (h < 0) h += 256; if (l < 0) l += 256; print h * 256 + l }')
-    rm -f "$_df"
-    [ -n "$_an" ] && [ "$_an" -gt 0 ] || return 1
-    return 0
-}
-
-# ref_mismatch ВХОД ВЫХОД — расхождения с эталоном.
-# --- ЭТАЛОН: СВЕРКА С СОГЛАСИЕМ ШИФРОВАННЫХ ПУТЕЙ ------------------------
-#
-# Признак «адрес повторился на двух несвязанных доменах» ловит только
-# ленивую подмену — одну заглушку на всё. Провайдер, отдающий на каждый
-# домен СВОЙ адрес, для него невидим: повторов нет.
-#
-# Поэтому второй, независимый признак: сравнение с тем, о чём договорились
-# шифрованные пути. Внутри HTTPS ответ не переписать, не сломав шифрование,
-# поэтому DoH разных операторов сходятся — на роутере владельца все семь
-# дали ровно один и тот же адрес на каждый из четырёх доменов. Эталоном
-# считаем адрес, названный НЕ МЕНЕЕ ЧЕМ ДВУМЯ операторами: один может
-# ошибиться или отдать свой региональный, двое независимо — нет.
-#
-# Домены без такого согласия из сверки выпадают: у сайта на CDN адреса
-# законно разные, и молчаливо звать это подменой хуже, чем не проверить.
-ref_mismatch() {
-    awk -F'\037' '
-        $2 == "d" { votes[$3 "\037" $4]++ }
-        { line[NR] = $0 }
-        END {
-            for (k in votes) if (votes[k] >= 2) { split(k, f, "\037"); ok[f[1] "\037" f[2]] = 1; ref[f[1]] = 1 }
-            for (i = 1; i <= NR; i++) {
-                split(line[i], c, "\037")
-                if (!(c[3] in ref)) continue
-                if (!((c[3] "\037" c[4]) in ok)) bad[c[1] "\037" c[2]]++
-            }
-            for (k in bad) { split(k, f, "\037"); print f[1] "\037" f[2] "\037" bad[k] }
-        }' "$1" > "$2"
-}
-
-# proxy_mismatch — подмена «умным» DNS: на каждый домен свой адрес, заглушки
-# нет, и с согласием других серверов такой домен сверять нельзя — у сайтов на
-# CDN адреса законно разные (Яндекс и Quad9 отдают свои региональные, и по
-# согласию они выглядели бы подменой). Признак другой: api.github.com и
-# www.notion.so не могут жить в ОДНОЙ сети /24 — у них разные хостеры. Если
-# один сервер на два разных таких домена отвечает адресами из одного /24, он
-# отдаёт свои прокси. Замер 11.09.2026: xbox-dns.ru — 87.228.47.198 и .199.
-proxy_mismatch() {
-    awk -F'\037' '
-        $2 == "pu" || $2 == "pd" {
-            split($4, o, "."); net = o[1] "." o[2] "." o[3]
-            key = $1 "\037" $2 "\037" net
-            if (!((key "\037" $3) in seen)) { seen[key "\037" $3] = 1; doms[key]++ }
-        }
-        END {
-            for (k in doms) if (doms[k] >= 2) { split(k, f, "\037"); print f[1] "\037" f[2] "\037" doms[k] }
-        }' "$1" >> "$2"
+    kill "$_dpid" 2>/dev/null || :
+    wait "$_dpid" 2>/dev/null || :
+    # Клиент мог закрыться после последнего опроса и успеть записать ответ.
+    _complete=$(hexdump -v -e '1/1 "%u "' "$_df" 2>/dev/null | awk '{print (NF>=14 && NF>=2+$1*256+$2)?1:0}')
+    # Проверяем DNS-заголовок и A в полном ответе контрольного запроса.
+    dd if="$_df" of="$_df.dns" bs=1 skip=2 2>/dev/null
+    _da=$(dns_file_a "$_df.dns"); _dr=$?
+    rm -f "$_df" "$_df.dns"
+    if [ "$_complete" = 1 ] && [ "$_dr" = 0 ]; then
+        DOT_ADDRESSES=$(printf '%s\n' "$_da" | sort -u | tr '\n' ',' | sed 's/,$//')
+        [ -n "$_da" ] || return 3
+    fi
+    [ "$_complete" = 1 ] && [ "$_dr" = 0 ] && [ -n "$_da" ]
 }
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 _say() {
     case "$1" in
-        works)  printf 'честно' ;;
-        spoof)  printf 'ответ подменён' ;;
-        proxy)  printf 'свой прокси вместо сайта' ;;
+        works) printf 'признаков подмены нет' ;;
+        proxy) printf 'свой прокси вместо сайта' ;;
+        spoof) printf 'ответ подменён (заглушка)' ;;
         hijack) printf 'перехвачено на пути' ;;
-        silent) printf 'не ответил' ;;
-        *)      printf 'не проверялся' ;;
+        mismatch) printf 'ответы расходятся' ;;
+        unknown) printf 'недостаточно данных' ;;
+        unverified) printf 'TLS не проверен' ;;
+        limited) printf 'TLS проверен, только контрольный запрос' ;;
+        silent) printf 'нет ответа или ошибка транспорта' ;;
+        *) printf 'не проверялся' ;;
     esac
 }
 
-# --- сбор ---------------------------------------------------------------------
+current_resolver() {
+    sed -n 's/^nameserver[[:space:]]*\([0-9.]*\).*/\1/p' /etc/resolv.conf 2>/dev/null | head -1
+}
+
+# Запись: сервер, путь, домен, исход, множество A, оператор, назначение. Неизвестные
+# собственные адреса не считаем независимыми операторами межсерверного сигнала.
+observe() {
+    _or=0
+    if [ "$2" = u ]; then _oa=$(udp_a "$3" "$4") || _or=$?
+    else _oa=$(doh_wire_a "$3" "$4" "$5") || _or=$?; fi
+    _oa=$(printf '%s\n' "$_oa" | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print}' | sort -u | tr '\n' ',' | sed 's/,$//')
+    if [ "$_or" != 0 ]; then _os=error; _oa=""
+    elif [ -n "$_oa" ]; then _os=addresses
+    else _os=no_a; fi
+    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\n' "$1" "$2" "$4" "$_os" "$_oa" "$6" "${7:-target}" >> "$_ans"
+}
+
+# Полные множества точных IP. Сравнение с другими операторами — диагностика,
+# оно не обвиняет DoH и не расширяет эталон одним голосом. Повтор IP считается
+# по разным доменам внутри одного пути; общий перехват — только по UDP разных
+# известных операторов. Сохраняем происхождение каждого наблюдения в JSON.
+classify() {
+    awk -F'\037' -v canary="$intercept" -v cur="$CURRENT_ADDR" -v proxy_targets="$PROXY_TARGETS" '
+    function overlap(a,b,   x,y,i,j,n,m) {
+        n=split(a,x,","); m=split(b,y,",")
+        for(i=1;i<=n;i++) for(j=1;j<=m;j++) if(x[i]!="" && x[i]==y[j]) return 1
+        return 0
+    }
+    BEGIN {
+        nproxy=split(proxy_targets,pt,/ +/)
+        for(pi=1;pi<=nproxy;pi++) if(pt[pi]!="") proxy_domains[pt[pi]]=1
+    }
+    $7=="proxy" {
+        key=$1 SUBSEP $2
+        proxy_addr[key SUBSEP $3]=$5; op[$1]=$6
+        if($2=="d" && $4=="addresses" && $6!="") refs[$1 SUBSEP $3]=$5
+        next
+    }
+    $7!="target" {next}
+    {
+        key=$1 SUBSEP $2; paths[key]=1; domains[$3]=1
+        state[key SUBSEP $3]=$4; addr[key SUBSEP $3]=$5; op[$1]=$6
+        total[key]++
+        if($4!="error") replies[key]++
+        if($4=="addresses") {
+            count[key]++; n=split($5,ips,",")
+            for(i=1;i<=n;i++) {
+                k=key SUBSEP ips[i]
+                if(!seen[k SUBSEP $3]++) hits[k]++
+                if($2=="d" && $6!="" && !votes[$3 SUBSEP ips[i] SUBSEP $6]++) agree[$3 SUBSEP ips[i]]++
+            }
+        }
+    }
+    END {
+        for(k in hits) if(hits[k]>=2) {
+            split(k,f,SUBSEP); key=f[1] SUBSEP f[2]; stub[key]+=hits[k]
+            if(f[2]=="u" && op[f[1]]!="" && !orig[f[3] SUBSEP op[f[1]]]++) operators[f[3]]++
+        }
+        common=""
+        for(ip in operators) if(operators[ip]>=2) {
+            if(common=="" || ip<common) common=ip
+            for(k in hits) {
+                split(k,f,SUBSEP)
+                if(f[2]=="u" && f[3]==ip && hits[k]>=2) shared[f[1]]=1
+            }
+        }
+        print "meta" FS common
+        for(key in paths) {
+            split(key,f,SUBSEP); name=f[1]; path=f[2]; diff=0; missing=0
+            for(d in domains) {
+                k=key SUBSEP d; cmp="unavailable"
+                if(state[k]=="addresses") {
+                    other=name SUBSEP "d" SUBSEP d
+                    if(path=="u" && ((name SUBSEP "d") in paths)) {
+                        if(state[other]=="addresses") {
+                            cmp=overlap(addr[k],addr[other])?"overlap":"different"
+                            if(cmp=="different") diff++
+                        } else missing++
+                    } else if(path=="u") {
+                        n=split(addr[k],ips,","); matched=0; reference=0
+                        for(v in agree) {split(v,a,SUBSEP); if(a[1]==d && agree[v]>=2) reference=1}
+                        for(i=1;i<=n;i++) if(agree[d SUBSEP ips[i]]>=2) matched=1
+                        if(matched) cmp="consensus"
+                        else if(reference) {cmp="different"; diff++}
+                        else missing++
+                    } else cmp="tls"
+                } else missing++
+                print "comparison" FS name FS path FS d FS cmp
+            }
+            st="works"
+            if(!replies[key]) st="silent"
+            else if(count[key]<total[key] || missing) st="unknown"
+            if(diff) st="mismatch"
+            # Все адреса всех прокси-целей должны лежать в ОДНОМ /24.
+            # Совпадение хотя бы одного точного IP с любым чужим проверенным
+            # DoH снимает обвинение. Для каждой цели нужен свой DoH-образец.
+            net=""; candidate=1; checked=0; matched=0; enough=1
+            for(d in proxy_domains) {
+                addresses=proxy_addr[key SUBSEP d]
+                if(addresses=="") {candidate=0; continue}
+                checked++; n=split(addresses,ips,",")
+                for(i=1;i<=n;i++) {
+                    split(ips[i],oct,"."); subnet=oct[1] "." oct[2] "." oct[3]
+                    if(net=="") net=subnet
+                    else if(net!=subnet) candidate=0
+                }
+                reference=0
+                for(r in refs) {
+                    split(r,a,SUBSEP)
+                    if(a[2]!=d || a[1]==name || (op[name]!="" && op[a[1]]==op[name])) continue
+                    reference=1
+                    if(overlap(addresses,refs[r])) matched=1
+                }
+                if(!reference) enough=0
+            }
+            if(candidate && checked>=2 && !matched) st=enough?"proxy":"unknown"
+            if(stub[key]) st="spoof"
+            # Одна общая заглушка не обвиняет все остальные UDP-пути.
+            if(path=="u" && name!=cur && replies[key] && (canary || shared[name])) st="hijack"
+            print "state" FS name FS path FS st FS count[key]+0 FS total[key]+0 FS stub[key]+0
+        }
+    }' "$_ans" > "$_classified"
+}
 
 main() {
+    _work=$(mktemp -d /tmp/.z2k-dns.XXXXXX) || return 1
+    _ans="$_work/answers"; _classified="$_work/classified"; _rows="$_work/rows"
+    : > "$_ans"; : > "$_rows"
     _tmp="${OUT}.new.$$"
-    _rows="/tmp/.z2k-dns-rows.$$"
-    _allstubs="/tmp/.z2k-dns-stubs.$$"
-    # Все ответы всех серверов: сервер, путь, домен, адрес. Из них строится
-    # эталон — см. второй проход.
-    _ans="/tmp/.z2k-dns-ans.$$"
-    _mis="/tmp/.z2k-dns-mis.$$"
-    : > "$_rows"; : > "$_allstubs"; : > "$_ans"; : > "$_mis"
-    trap 'rm -f "$_rows" "$_allstubs" "$_ans" "$_mis" "$_tmp" /tmp/.z2k-dns-udp.$$ /tmp/.z2k-dns-doh.$$ /tmp/.z2k-dns-wire.$$ /tmp/.z2k-dns-wa.$$ /tmp/.z2k-dns-dot.$$' EXIT INT TERM
-
-    # ТРЕМЯ, А НЕ ДВУМЯ. Здесь было написано «двумя путями» — про обычный и
-    # DoH, — а строки отчёта ниже печатают ещё и DoT. Человек читает шапку,
-    # потом видит третью колонку и справедливо спрашивает, откуда она.
-    printf 'Проверяю серверы имён. Каждый спрашиваем тремя путями:\n' >&2
-    printf 'обычным DNS на порту 53, шифрованным DoH внутри HTTPS\n' >&2
-    printf 'и шифрованным DoT внутри TLS на порту 853.\n' >&2
-    printf 'Заблокированный сервер молчит до конца таймаута — это норма.\n\n' >&2
-
-    # Канарейка. Отвечать здесь некому — ответ означает перехват.
-    # Заворот UDP 53: ответила канарейка (резолвера там нет) — значит запрос к
-    # ЛЮБОМУ серверу по порту 53 отвечает кто-то другой, и столбец «обычный
-    # DNS» у публичных серверов — это не они. Раньше их ответы всё равно
-    # оценивались как «честно/подменён», и вся таблица менялась вместе с
-    # DNS самого роутера: сменил свой резолвер — «подменились» все, вернул —
-    # все «честны» (Марк, 11.09.2026). Кто заворачивает: роутер (перехват DNS
-    # прошивки — REDIRECT порта 53 в nat) или кто-то на пути.
-    # Кто именно — без правил файрвола (скрипт ничего в системе не трогает и
-    # не читает): если канарейке ответили тем же адресом, что и резолвер
-    # роутера на тот же домен, заворот на роутере; иначе — на пути.
+    trap 'rm -rf "$_work"; rm -f "$_tmp" /tmp/.z2k-dns-wa.$$ /tmp/.z2k-dns-wire.$$ /tmp/.z2k-dns-dot.$$ /tmp/.z2k-dns-dot.$$.dns' EXIT
+    trap 'exit 1' INT TERM
+    printf 'Проверяю DNS тремя путями: UDP, DoH внутри HTTPS, DoT внутри TLS.\n' >&2
     intercept=0; intercept_by=""
-    _ca=$(udp_a "$CANARY" "$CONTROL" | head -1)
-    if [ -n "$_ca" ]; then
-        intercept=1
-        _rt=$(udp_a 127.0.0.1 "$CONTROL" | head -1)
-        if [ -n "$_rt" ] && [ "$_rt" = "$_ca" ]; then intercept_by="router"; else intercept_by="path"; fi
-    fi
-
-    # Свои серверы человека — вровень с нашими.
+    observe "$CANARY" u "$CANARY" "$CONTROL" "" "" canary
+    if [ "$_os" = addresses ]; then intercept=1; intercept_by="path"; fi
+    # Совпадение с 127.0.0.1 не локализует перехват: оба запроса могли уйти
+    # одному вышестоящему резолверу. Без правил маршрутизации место неизвестно.
     servers="$DEFAULT_SERVERS"
-    # Прокси-канарейки (api.github.com, www.notion.so) гоняем только по СВОИМ
-    # серверам человека и резолверу роутера: «умный» DNS живёт там, куда роутер
-    # ходит сам, а Cloudflare/Google свои прокси не подставляют. На семи
-    # публичных это стоило +35 с на проверку (62 с против 27) и ничего не
-    # находило.
-    proxy_names=""
     if [ -s "$OWN_LIST" ]; then
-        while IFS= read -r line; do
+        while IFS= read -r line || [ -n "$line" ]; do
             line=$(printf '%s' "$line" | tr -d ' \t\r')
-            case "$line" in ''|'#'*) continue ;; esac
-            # Имя сервера — его собственный адрес. «свой» в таблице не
-            # говорит человеку ничего: их может быть несколько, и понять,
-            # который из них подменяет, по слову «свой» невозможно.
-            # Три поля всегда: имя|udp|doh. У ссылки поле udp ПУСТОЕ — иначе
-            # адрес уезжает в колонку обычного DNS, обычный запрос уходит на
-            # «https://...», ничего не отвечает, и живой сервер числится
-            # молчащим. Проверено на роутере владельца.
             case "$line" in
+                ''|'#'*) continue ;;
                 https://*) servers="$servers
-$line||$line|"; proxy_names="$proxy_names|$line|" ;;
+$line||$line|" ;;
                 dot:*) servers="$servers
-${line#dot:}|||${line#dot:}"; proxy_names="$proxy_names|${line#dot:}|" ;;
+${line#dot:}|||${line#dot:}" ;;
                 *) servers="$servers
-$line|$line||"; proxy_names="$proxy_names|$line|" ;;
+$line|$line||" ;;
             esac
         done < "$OWN_LIST"
     fi
-
-    # Резолвер, которым роутер пользуется прямо сейчас. Ему и достаётся
-    # большинство запросов, поэтому он проверяется наравне с публичными.
-    # Резолвер, которым роутер пользуется прямо сейчас. Называем его адресом,
-    # а не словом: «Ваш роутер сейчас» не объясняет, что именно проверено, и
-    # рядом со сводкой про перехват читается как «роутер врёт», хотя проверялся
-    # он отдельно и может быть как раз честным. Отдельный флаг current=1
-    # позволяет панели сказать про него прямо.
-    _cur=$(sed -n 's/^nameserver[[:space:]]*\([0-9.]*\).*/\1/p' /etc/resolv.conf 2>/dev/null | head -1)
+    _cur=$(current_resolver); CURRENT_ADDR=""
     if [ -n "$_cur" ]; then
-        # Имя человеческое, адрес рядом. Голый «127.0.0.1» в списке публичных
-        # серверов не объясняет ничего: человек видит незнакомый адрес и
-        # спрашивает, откуда он взялся. А это резолвер самого роутера — тот, к
-        # которому по умолчанию ходят ВСЕ устройства в доме, и проверять его
-        # важнее всех остальных.
         case "$_cur" in
-            127.*) _curname="Резолвер роутера ($_cur)" ;;
-            *)     _curname="Ваш DNS ($_cur)" ;;
+            127.*) CURRENT_ADDR="Резолвер роутера ($_cur)" ;;
+            *) CURRENT_ADDR="Ваш DNS ($_cur)" ;;
         esac
         servers="$servers
-$_curname|$_cur||"
-        CURRENT_ADDR="$_curname"
-        proxy_names="$proxy_names|$_curname|"
+$CURRENT_ADDR|$_cur||"
     fi
-
     printf '%s\n' "$servers" | while IFS='|' read -r name udp doh dot; do
-        [ -n "${name:-}" ] || continue
-        up=0; up_u=0; n_ok=0; n_all=0; dms=""; tms=""; ums=""
-        st_u="none"; st_d="none"; st_t="none"; st_yt="none"
-        # Ответы по каждому пути КОПИМ ОТДЕЛЬНО. Иначе вердикт один на двоих,
-        # и человек не знает, что именно у него сломано: обычный DNS, DoH или
-        # оба. Подменяют почти всегда только обычный — в этом и весь смысл
-        # шифрованного, так что смешивать их значит прятать главный вывод.
-        _own="/tmp/.z2k-dns-udp.$$"; : > "$_own"
-        _ownd="/tmp/.z2k-dns-doh.$$"; : > "$_ownd"
-
-        if [ -n "${udp:-}" ] && [ -n "$(udp_a "$udp" "$CONTROL")" ]; then
-            up=1; up_u=1
-            # Меряем ТОЛЬКО того, кто уже ответил: у молчащего dig отсидел бы
-            # свой таймаут, и проверка выросла бы на две секунды за каждого.
-            ums=$(udp_ms "$udp" "$CONTROL")
-            for d in $TARGETS; do
-                n_all=$((n_all + 1))
-                a=$(udp_a "$udp" "$d")
-                if [ -n "$a" ]; then
-                    n_ok=$((n_ok + 1))
-                    # По одному адресу на домен: если сайт живёт на пяти
-                    # адресах, пять его же адресов не должны выглядеть повтором.
-                    a=$(printf '%s\n' $a | head -1)
-                    printf '%s\n' "$a" >> "$_own"
-                    printf '%s\037u\037%s\037%s\n' "$name" "$d" "$a" >> "$_ans"
-                fi
-            done
-            # Прокси-канарейки: в счёт заглушек не идут (адрес у каждой свой),
-            # только в сверку с шифрованными путями других серверов.
-            case "$proxy_names" in *"|$name|"*)
-                for d in $PROXY_TARGETS; do
-                    a=$(udp_a "$udp" "$d" | head -1)
-                    [ -n "$a" ] && printf '%s\037pu\037%s\037%s\n' "$name" "$d" "$a" >> "$_ans"
-                done ;;
+        [ -n "$name" ] || continue
+        _op=""
+        # Только встроенные записи имеют известную независимость операторов.
+        if printf '%s\n' "$DEFAULT_SERVERS" | grep -F -x -q "$name|$udp|$doh|$dot"; then _op="$name"; fi
+        _sip=""; case "$udp" in ''|*[!0-9.]*) ;; *) _sip="$udp" ;; esac
+        ums=""; dms=""; tms=""; st_t=none; st_yt=none
+        for d in $TARGETS; do
+            [ -z "$udp" ] || observe "$name" u "$udp" "$d" "" "$_op"
+            [ -z "$doh" ] || observe "$name" d "$doh" "$d" "$_sip" "$_op"
+        done
+        for d in $PROXY_TARGETS; do
+            [ -z "$udp" ] || observe "$name" u "$udp" "$d" "" "$_op" proxy
+            [ -z "$doh" ] || observe "$name" d "$doh" "$d" "$_sip" "$_op" proxy
+        done
+        if [ -n "$udp" ]; then
+            observe "$name" u "$udp" "$CONTROL" "" "$_op" control
+            [ "$_os" != addresses ] || ums=$(udp_ms "$udp" "$CONTROL")
+        fi
+        if [ -n "$doh" ]; then
+            observe "$name" d "$doh" "$CONTROL" "$_sip" "$_op" control
+            [ "$_os" != addresses ] || dms=$(doh_wire_ms "$doh" "$_sip") || dms=""
+        fi
+        if [ -n "$dot" ]; then
+            DOT_MS=""; DOT_ADDRESSES=""; _tr=0
+            dot_alive "$dot" "$_sip" || _tr=$?
+            case "$_tr" in
+                0) st_t=limited; tms="$DOT_MS"; _to=addresses ;;
+                2) st_t=unverified; _to=unverified ;;
+                3) st_t=unknown; _to=no_a ;;
+                *) st_t=silent; _to=error ;;
             esac
+            printf '%s\037t\037example.com\037%s\037%s\037%s\037control\n' "$name" "$_to" "$DOT_ADDRESSES" "$_op" >> "$_ans"
         fi
-        # Адрес сервера для DoH/DoT — из поля udp, если это IPv4: тогда curl и
-        # openssl идут к серверу напрямую, минуя резолвер роутера.
-        _sip=""
-        case "${udp:-}" in ''|*[!0-9.]*) ;; *) _sip="$udp" ;; esac
-
-        if [ -n "${doh:-}" ]; then
-            dms=$(doh_wire_ms "$doh" "$_sip")
-            if [ -n "$dms" ]; then
-                up=1
-                for d in $TARGETS; do
-                    a=$(doh_wire_a "$doh" "$d" "$_sip")
-                    if [ -n "$a" ]; then
-                        a=$(printf '%s\n' $a | head -1)
-                        printf '%s\n' "$a" >> "$_ownd"
-                        printf '%s\037d\037%s\037%s\n' "$name" "$d" "$a" >> "$_ans"
-                    fi
-                done
-                case "$proxy_names" in *"|$name|"*)
-                    for d in $PROXY_TARGETS; do
-                        a=$(doh_wire_a "$doh" "$d" "$_sip" | head -1)
-                        [ -n "$a" ] && printf '%s\037pd\037%s\037%s\n' "$name" "$d" "$a" >> "$_ans"
-                    done ;;
-                esac
-            fi
+        # Ошибка транспорта не означает, что сервис отказал в A-записи.
+        if [ -n "$doh" ]; then
+            observe "$name" d "$doh" "$YT_DOMAIN" "$_sip" "$_op" youtube
+        else _os=error; fi
+        if [ "$_os" = error ] && [ -n "$udp" ]; then
+            observe "$name" u "$udp" "$YT_DOMAIN" "" "$_op" youtube
         fi
-
-        # Заглушка ЭТОГО сервера: адрес, пришедший на два и более разных домена.
-        if [ -n "${dot:-}" ]; then
-            DOT_MS=""
-            if dot_alive "$dot" "$_sip"; then
-                up=1
-                # Живость доказана ответом с ANCOUNT>0, время — счётчиком
-                # опросов того же обмена. Отдельного соединения нет.
-                tms="${DOT_MS:-ok}"
-            fi
-        fi
-
-        # Отдаёт ли этот сервер адрес для ютуба.
-        #
-        # СПРАШИВАЕМ ШИФРОВАННЫМ ПУТЁМ, ЕСЛИ ОН ЕСТЬ. Сначала спрашивали
-        # обычным — и на линии владельца Google получал ярлык «адреса для
-        # youtube.com не отдаёт». Google его отдаёт: не отдавал перехватчик,
-        # сидящий на порту 53. Ярлык обвинял сервер в чужой работе. Внутри
-        # HTTPS вмешаться нельзя, поэтому ответ оттуда — ответ САМОГО сервера,
-        # а это и был вопрос.
-        st_yt="none"
-        if [ -n "$dms" ]; then
-            [ -n "$(doh_wire_a "$doh" "$YT_DOMAIN" "$_sip")" ] && st_yt="ok" || st_yt="empty"
-        elif [ "$up_u" = "1" ]; then
-            [ -n "$(udp_a "$udp" "$YT_DOMAIN")" ] && st_yt="ok" || st_yt="empty"
-        fi
-
-        _stub_u=$(sort "$_own"  | uniq -c | awk '$1 >= 2 {n += $1} END {print n + 0}')
-        _stub_d=$(sort "$_ownd" | uniq -c | awk '$1 >= 2 {n += $1} END {print n + 0}')
-        stub_hits=$((_stub_u + _stub_d))
-        # Заглушки этого сервера кладём в общий котёл: если один адрес всплывёт
-        # у разных серверов, правят на пути, а не на сервере.
-        sort "$_own"  | uniq -c | awk '$1 >= 2 {print $2}' >> "$_allstubs"
-        sort "$_ownd" | uniq -c | awk '$1 >= 2 {print $2}' >> "$_allstubs"
-
-        # Состояние КАЖДОГО пути отдельно: none — не проверяли (адреса нет),
-        # silent — не ответил, spoof — ответил подменой, works — честно.
-        if [ -z "${udp:-}" ]; then st_u="none"
-        elif [ "$up_u" = "0" ]; then st_u="silent"
-        elif [ "$_stub_u" -gt 0 ]; then st_u="spoof"
-        else st_u="works"; fi
-        if [ -z "${doh:-}" ]; then st_d="none"
-        elif [ -z "$dms" ]; then st_d="silent"
-        elif [ "$_stub_d" -gt 0 ]; then st_d="spoof"
-        else st_d="works"; fi
-        # DoT читаем только на живость: адреса из его ответа не разбираем, и
-        # подмену внутри TLS всё равно не сделать, не сломав шифрование.
-        if [ -z "${dot:-}" ]; then st_t="none"
-        elif [ -z "$tms" ]; then st_t="silent"
-        else st_t="works"; fi
-        rm -f "$_own" "$_ownd"
-        # Разделитель \037, не таб: таб — IFS-пробельный, и `read` схлопывает
-        # подряд идущие. У сервера без DoH пустых полей два, и всё съезжает.
-        # Строка прогресса — в stderr, по мере готовности каждого сервера.
-        # Двадцать секунд молчания в журнале задачи человек читает как
-        # «зависло»: он не видит ни что проверяется, ни сколько осталось.
-        # Предварительная строка сразу — иначе минута тишины (Марк, 11.09).
-        # Итог после сверки печатается ниже отдельно, и только там он верен.
+        case "$_os" in addresses) st_yt=ok ;; no_a) st_yt=empty ;; esac
+        printf '%s\037%s\037%s\037%s\037%s\037%s\n' "$name" "$ums" "$dms" "$st_t" "$tms" "$st_yt" >> "$_rows"
         printf '  %-32s опрошен: обычный %s, DoH %s, DoT %s\n' "$name" \
-            "$([ "$st_u" = none ] && printf '—' || { [ "$up_u" = 1 ] && printf 'ответил' || printf 'молчит'; })" \
-            "$([ "$st_d" = none ] && printf '—' || { [ -n "$dms" ] && printf '%s мс' "$dms" || printf 'молчит'; })" \
-            "$([ "$st_t" = none ] && printf '—' || { [ -n "$tms" ] && printf 'ок' || printf 'молчит'; })" >&2
-
-        printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
-            "$name" "${up:-0}" "${dms:-}" "$n_ok" "$n_all" "$stub_hits" \
-            "$st_u" "$st_d" "$st_t" "${st_yt:-none}" "${tms:-}" "${ums:-}" >> "$_rows"
+            "$([ -z "$udp" ] && printf '—' || { [ -n "$ums" ] && printf '%s мс' "$ums" || printf 'опрошен'; })" \
+            "$([ -z "$doh" ] && printf '—' || { [ -n "$dms" ] && printf '%s мс' "$dms" || printf 'опрошен'; })" \
+            "$(_say "$st_t")" >&2
     done
-
-    ref_mismatch "$_ans" "$_mis"
-    proxy_mismatch "$_ans" "$_mis"
     printf '\nСверка ответов между серверами — итог:\n' >&2
-
-    # --- вывод ---
+    classify
+    onpath=$(awk -F'\037' '$1=="meta" {print $2}' "$_classified")
+    if [ -n "$onpath" ]; then intercept=1; intercept_by=path; fi
     {
-        # Признак 2: заглушка, общая для двух и более разных серверов.
-        onpath=$(sort "$_allstubs" | uniq -c | awk '$1 >= 2 {print $2; exit}')
-        # Общая заглушка у разных серверов — правка ответов на пути: UDP-ответы
-        # публичных серверов тоже не их, столбец получает «перехвачено».
-        if [ -n "$onpath" ]; then intercept=1; [ -n "$intercept_by" ] || intercept_by="path"; fi
-        printf '{"ts":%s,"intercept":%s,"intercept_by":"%s","stub":"%s","servers":[' \
-            "$(date +%s)" "$intercept" "$intercept_by" "$(json_escape "${onpath:-}")"
+        printf '{"ts":%s,"intercept":%s,"intercept_by":"%s","stub":"%s","servers":[' "$(date +%s)" "$intercept" "$intercept_by" "$onpath"
         first=1
-        while IFS="$(printf '\037')" read -r name up dms n_ok n_all stub_hits st_u st_d st_t st_yt tms ums; do
-            [ -n "${name:-}" ] || continue
-            # Вердикт сервера — по ЛУЧШЕМУ пути, а не по худшему.
-            #
-            # У Quad9 обычный ответ переписывают в дороге, а DoH доходит целым.
-            # По худшему пути он попадал в «ответы подменяются» — и строка сама
-            # себе противоречила: в группе «подменяются» стояло «DOH честно».
-            # Человеку важно одно: есть ли у этого сервера путь, которым можно
-            # пользоваться. Если есть — сервер годен, а каким именно путём,
-            # написано в самой строке.
-            # Сервер, чей ответ разошёлся с эталоном, честным быть не может —
-            # даже если повторов у него нет и первый признак промолчал.
-            # Прокси-подмена — отдельное состояние: человек видит не «подменён»
-            # вообще, а «этот DNS отдаёт свои прокси-адреса вместо сайтов».
-            _mu=$(awk -F"$(printf '\037')" -v n="$name" '$1 == n && $2 == "u" { s += $3 } END { print s + 0 }' "$_mis")
-            _md=$(awk -F"$(printf '\037')" -v n="$name" '$1 == n && $2 == "d" { s += $3 } END { print s + 0 }' "$_mis")
-            _pu=$(awk -F"$(printf '\037')" -v n="$name" '$1 == n && $2 == "pu" { s += $3 } END { print s + 0 }' "$_mis")
-            _pd=$(awk -F"$(printf '\037')" -v n="$name" '$1 == n && $2 == "pd" { s += $3 } END { print s + 0 }' "$_mis")
-            [ "${_mu:-0}" -gt 0 ] && [ "$st_u" = "works" ] && st_u="spoof"
-            [ "${_md:-0}" -gt 0 ] && [ "$st_d" = "works" ] && st_d="spoof"
-            [ "${_pu:-0}" -gt 0 ] && [ "$st_u" = "works" ] && st_u="proxy"
-            [ "${_pd:-0}" -gt 0 ] && [ "$st_d" = "works" ] && st_d="proxy"
-            # Заворот: по UDP ответил не этот сервер. Оценивать нечего, кроме
-            # резолвера самого роутера — к нему запрос и должен был попасть.
-            if [ "$intercept" = "1" ] && [ "$st_u" != "none" ] && [ "$st_u" != "silent" ] \
-               && [ "$name" != "${CURRENT_ADDR:-}" ]; then
-                st_u="hijack"
-            fi
-
-            if [ "$st_u" = "works" ] || [ "$st_d" = "works" ] || [ "$st_t" = "works" ]; then
-                verdict="works"
-            elif [ "$st_u" = "spoof" ] || [ "$st_d" = "spoof" ] || [ "$st_u" = "proxy" ] || [ "$st_d" = "proxy" ]; then
-                verdict="spoof"
-            elif [ "$st_u" = "hijack" ]; then
-                verdict="hijack"
-            else
-                verdict="silent"
-            fi
-            case "$st_yt" in empty) _yt=", youtube.com: адреса нет" ;; *) _yt="" ;; esac
-            printf '  %-32s обычный: %s, DoH: %s, DoT: %s%s\n' \
-                "$name" "$(_say "$st_u")" "$(_say "$st_d")" "$(_say "$st_t")" "$_yt" >&2
-            [ "$first" = 1 ] || printf ','
-            first=0
-            _is_cur=0
-            [ -n "${CURRENT_ADDR:-}" ] && [ "$name" = "$CURRENT_ADDR" ] && _is_cur=1
-            # «ok» без числа означает, что канал жив, а время не измерилось.
-            case "${tms:-}" in ''|*[!0-9]*) _tms=null ;; *) _tms="$tms" ;; esac
-            # Пусто = dig не установлен, мерить было нечем. Панель тогда
-            # показывает строку как раньше, без числа.
-            case "${ums:-}" in ''|*[!0-9]*) _ums=null ;; *) _ums="$ums" ;; esac
+        while IFS="$(printf '\037')" read -r name ums dms st_t tms st_yt; do
+            st_u=none; st_d=none; n_ok=0; n_all=0; stub_hits=0
+            _states=$(awk -F'\037' -v n="$name" '$1=="state" && $2==n {print $3 "|" $4 "|" $5 "|" $6 "|" $7}' "$_classified")
+            while IFS='|' read -r path st count total stub; do
+                case "$path" in
+                    u) st_u="$st"; n_ok="$count"; n_all="$total" ;;
+                    d) st_d="$st" ;;
+                esac
+                stub_hits=$((stub_hits + ${stub:-0}))
+            done <<EOF
+$_states
+EOF
+            verdict=silent
+            for st in "$st_u" "$st_d" "$st_t"; do
+                case "$st" in unknown|unverified|limited) verdict=unknown ;; esac
+            done
+            for severity in mismatch hijack spoof; do
+                for st in "$st_u" "$st_d"; do
+                    [ "$st" != proxy ] || st=spoof
+                    [ "$st" != "$severity" ] || verdict="$severity"
+                done
+            done
+            if [ "$st_u" = works ] || [ "$st_d" = works ]; then verdict=works; fi
+            _yt=""; [ "$st_yt" != empty ] || _yt=", youtube.com: адреса нет"
+            printf '  %s: UDP %s; DoH %s; DoT %s%s\n' "$name" "$(_say "$st_u")" "$(_say "$st_d")" "$(_say "$st_t")" "$_yt" >&2
+            [ "$first" = 1 ] || printf ','; first=0
+            _is_cur=0; [ "$name" != "$CURRENT_ADDR" ] || _is_cur=1
+            case "$ums" in ''|*[!0-9]*) ums=null ;; esac
+            case "$dms" in ''|*[!0-9]*) dms=null ;; esac
+            case "$tms" in ''|*[!0-9]*) tms=null ;; esac
             printf '{"name":"%s","udp":"%s","udp_ms":%s,"doh":"%s","doh_ms":%s,"dot":"%s","dot_ms":%s,"yt":"%s","ok":%s,"total":%s,"stub":%s,"current":%s,"verdict":"%s"}' \
-                "$(json_escape "$name")" "${st_u:-none}" "$_ums" "${st_d:-none}" "${dms:-null}" \
-                "${st_t:-none}" "$_tms" "${st_yt:-none}" \
-                "${n_ok:-0}" "${n_all:-0}" "${stub_hits:-0}" "$_is_cur" "$verdict"
+                "$(json_escape "$name")" "$st_u" "$ums" "$st_d" "$dms" "$st_t" "$tms" "$st_yt" "$n_ok" "$n_all" "$stub_hits" "$_is_cur" "$verdict"
         done < "$_rows"
+        printf '],"observations":['
+        first=1
+        while IFS="$(printf '\037')" read -r name path domain outcome addresses operator purpose; do
+            [ "$first" = 1 ] || printf ','; first=0
+            comparison=$(awk -F'\037' -v n="$name" -v p="$path" -v d="$domain" '$1=="comparison" && $2==n && $3==p && $4==d {print $5}' "$_classified")
+            [ "$purpose" = target ] || comparison="$purpose"
+            printf '{"server":"%s","operator":"%s","path":"%s","domain":"%s","outcome":"%s","purpose":"%s","addresses":[' "$(json_escape "$name")" "$(json_escape "$operator")" "$path" "$domain" "$outcome" "$purpose"
+            printf '%s' "$addresses" | awk -F, '{for(i=1;i<=NF;i++) {if(i>1)printf ","; printf "\"%s\"",$i}}'
+            printf '],"comparison":"%s"}' "$comparison"
+        done < "$_ans"
         printf ']}\n'
     } > "$_tmp"
-
     mv -f "$_tmp" "$OUT"
     printf '\nГотово.\n' >&2
     cat "$OUT"
 }
 
-# Тесты подключают файл как библиотеку: sh не даёт проверить разбор ответа и
-# сверку с эталоном, не выходя в сеть, если запуск зашит намертво.
-[ "${Z2K_DNS_LIB:-}" = "1" ] || main "$@"
+# Подключение в тестах без сетевого запуска.
+[ "${Z2K_DNS_LIB:-}" = 1 ] || main "$@"

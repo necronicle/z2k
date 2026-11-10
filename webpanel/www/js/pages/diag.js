@@ -267,16 +267,19 @@ async function loadDiag() {
 // цел, и вывод «включите DoH» читается прямо из структуры, а не из сносок.
 
 const DNS_STATE = {
-  works: { cls: "good", label: "честно" },
+  works: { cls: "good", label: "признаков подмены нет" },
   spoof: { cls: "bad", label: "ответ подменён" },
-  // «Умный» DNS (xbox-dns.ru и подобные): на каждый сайт свой прокси-адрес,
-  // заглушки нет, и без этого состояния он выглядел бы честным.
+  // «Умный» DNS отдаёт свои прокси вместо адресов сайтов.
   proxy: { cls: "bad", label: "свой прокси вместо сайта" },
   // Порт 53 завёрнут (роутером или кем-то на пути): отвечает не этот сервер,
   // и оценивать его ответ бессмысленно — иначе вся таблица ходила бы вслед за
   // DNS самого роутера.
   hijack: { cls: "warn", label: "перехвачено на пути" },
-  silent: { cls: "warn", label: "не ответил" },
+  mismatch: { cls: "warn", label: "ответы расходятся" },
+  unknown: { cls: "warn", label: "недостаточно данных" },
+  unverified: { cls: "warn", label: "TLS не проверен" },
+  limited: { cls: "warn", label: "TLS проверен, только контрольный запрос" },
+  silent: { cls: "warn", label: "нет ответа или ошибка транспорта" },
 };
 
 function dnsPathGroup(title, sub, list, openIt) {
@@ -284,20 +287,24 @@ function dnsPathGroup(title, sub, list, openIt) {
   const bad = list.filter(x => x.state === "spoof" || x.state === "proxy").length;
   const mute = list.filter(x => x.state === "silent").length;
   const ok = list.filter(x => x.state === "works").length;
+  const uncertain = list.filter(x => ["mismatch", "unknown", "unverified", "limited"].includes(x.state)).length;
+  const hijacked = list.filter(x => x.state === "hijack").length;
 
   // Состояние группы — по её содержимому: если целых нет вовсе, путь мёртв.
-  const cls = ok === 0 ? (bad ? "bad" : "warn") : bad ? "bad" : "good";
+  const cls = bad ? "bad" : (uncertain || hijacked || mute || !ok) ? "warn" : "good";
   const tally = [
-    ok ? `${ok} целых` : "",
+    ok ? `${ok} без признаков подмены` : "",
     bad ? `${bad} подменено` : "",
     mute ? `${mute} без ответа` : "",
+    uncertain ? `${uncertain} требуют уточнения` : "",
+    hijacked ? `${hijacked} перехвачено` : "",
   ].filter(Boolean).join(" · ");
 
   const rows = list.map(x => {
     const st = DNS_STATE[x.state] || DNS_STATE.silent;
     const ms = x.ms != null ? ` <span class="dns-metric">${x.ms} мс</span>` : "";
     const tag = x.current ? ` <span class="dns-cur">используется сейчас</span>` : "";
-    // Отдельная пометка: сервер жив и честен, но адреса для ютуба не даёт.
+    // Отдельная пометка об ответе без A для видео.
     // Снаружи это выглядит как «интернет есть, а видео не открывается», и по
     // состоянию пути такое не видно — путь-то в порядке.
     const yt = x.yt === "empty" ? ` <span class="dns-yt">нет адреса для youtube.com</span>` : "";
@@ -344,13 +351,13 @@ function renderDnsResult(d) {
   // сколько подменено. Свой резолвер помечен прямо в строке, ютуб — ярлыком у
   // имени. Единственный факт, которого больше нигде не было, — адрес заглушки;
   // он переехал в подпись группы обычного DNS, где и объясняет её состояние.
-  const who = d.intercept_by === "router" ? "роутером (перехват DNS прошивки)" : "на пути к серверам";
+  const who = "на пути к серверам (место не установлено)";
   const stubTail = d.stub ? ` · заглушка ${escapeHtml(d.stub)}` : "";
-  const stubNote = (d.intercept ? `порт 53 завёрнут ${who} — ответы не от серверов` : "порт 53, без шифрования") + stubTail;
+  const stubNote = (d.intercept ? `обнаружен перехват порта 53 ${who}` : "порт 53, без шифрования") + stubTail;
   host.innerHTML = `
     ${dnsPathGroup("Обычный DNS", stubNote, plain, false)}
     ${dnsPathGroup("Шифрованный DoH", "запрос внутри HTTPS", doh, false)}
-    ${dnsPathGroup("Шифрованный DoT", "запрос внутри TLS, порт 853", dot, false)}`;
+    ${dnsPathGroup("Шифрованный DoT", "TLS, порт 853; проверяется только контрольный запрос", dot, false)}`;
 }
 
 async function loadDnsLast() {

@@ -1,286 +1,16 @@
 #!/bin/sh
-# tests/test_dns_check.sh — проверка DNS меряет правдивость, а не скорость.
-#
-# ПОЧЕМУ НЕ ХВАТАЕТ «ОТВЕЧАЕТ / НЕ ОТВЕЧАЕТ». На российских сетях перехваченный
-# UDP 53 отвечает БЫСТРЕЕ всех — он же рядом, — и в таблице задержек выглядит
-# лучшим сервером. При этом он врёт. Замер на роутере владельца 2026-08-24:
-# rutor.info, flibusta.is, rezka.ag и shikimori.one с ЛЮБОГО публичного сервера
-# по UDP приходили на один адрес 188.186.154.79. Общего хостинга у них нет.
-#
-# Здесь сторожатся три решения, каждое куплено ошибкой в первой версии.
-PASS=0; FAIL=0
-ok() { PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"; }
-no() { FAIL=$((FAIL+1)); printf '[FAIL] %s (want=%s got=%s)\n' "$1" "$2" "$3"; }
-assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$2" "$3"; fi; }
+# Выполняем настоящий сбор и классификацию; сеть заменена сохранёнными ответами.
+set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 S="$ROOT/files/z2k-dns-check.sh"
-SB=$(mktemp -d) || exit 1; trap 'rm -rf "$SB"' EXIT
-
-assert_eq "скрипт на месте" "1" "$([ -f "$S" ] && echo 1 || echo 0)"
-sh -n "$S" 2>/dev/null && ok "синтаксис POSIX sh" || no "синтаксис" "разбирается" "ошибка"
-
-# --- 1. Адрес берётся ТРЕТЬИМ полем, а не последним --------------------------
-#
-# busybox печатает `Address 2: 188.186.154.79 188x186x154x79.static.example.ru`,
-# и $NF даёт обратное ИМЯ вместо адреса. С $NF на живом роутере разобралось
-# ноль ответов у всех серверов сразу, и все получили вердикт «работает».
-assert_eq "адрес разбирается из третьего поля" "1" "$(grep -c 'ip = \$3' "$S")"
-_sample='Server:    1.1.1.1
-Address 1: 1.1.1.1 one.one.one.one
-
-Name:      rutor.info
-Address 1: 2a01:54e0:fb00::301
-Address 2: 188.186.154.79 188x186x154x79.static.example.ru'
-_got=$(printf '%s\n' "$_sample" | awk '
-    /^Name:/ { inans = 1; next }
-    inans && /^Address/ { ip = $3; if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print ip }' | tr '\n' ' ')
-assert_eq "из ответа берётся адрес, а не обратное имя" "188.186.154.79 " "$_got"
-assert_eq "адрес самого резолвера в ответ не попадает" "0" \
-    "$(printf '%s\n' "$_sample" | awk '/^Name:/{a=1;next} a&&/^Address/{if($3=="1.1.1.1")print}' | wc -l | tr -d ' ')"
-
-# --- 2. Заглушка считается ВНУТРИ одного сервера ------------------------------
-#
-# Сначала повторы считались по всем серверам сразу — и настоящий адрес сайта,
-# честно возвращённый семью серверами, повторялся семь раз и объявлялся
-# заглушкой. Подмена — свойство конкретного резолвера.
-if grep -q 'Считаем повторы В ПРЕДЕЛАХ ОДНОГО СЕРВЕРА' "$S"; then
-    ok "правило про один сервер записано в коде"
-else
-    no "правило про один сервер" "объяснение на месте" "нет"
-fi
-stub_of() { printf '%s\n' "$@" | sort | uniq -c | awk '$1 >= 2 {n += $1} END {print n + 0}'; }
-assert_eq "четыре домена на один адрес — подмена" "4" \
-    "$(stub_of 188.186.154.79 188.186.154.79 188.186.154.79 188.186.154.79)"
-assert_eq "четыре разных адреса — честно"        "0" \
-    "$(stub_of 1.2.3.4 5.6.7.8 9.10.11.12 13.14.15.16)"
-assert_eq "два из четырёх совпали — подмена частичная" "2" \
-    "$(stub_of 1.2.3.4 5.6.7.8 9.9.9.9 9.9.9.9)"
-
-# --- 3. Два признака перехвата, а не один ------------------------------------
-#
-# Канарейка ловит заворот на чужой резолвер. Правку ответа на пути она не
-# ловит вовсе: на роутере владельца она молчала, а подмена была у всех семи
-# серверов. Второй признак — общая заглушка у РАЗНЫХ серверов.
-if grep -q '^CANARY=' "$S" && grep -q '192\.0\.2\.1' "$S"; then
-    ok "канарейка из RFC 5737"
-else
-    no "канарейка из RFC 5737" "адрес 192.0.2.1 объявлен" "нет"
-fi
-assert_eq "признак подмены на пути есть" "1" "$(grep -c 'onpath=' "$S")"
-_shared() { printf '%s\n' "$@" | sort | uniq -c | awk '$1 >= 2 {print $2; exit}'; }
-assert_eq "одна заглушка у двух серверов — правят на пути" "188.186.154.79" \
-    "$(_shared 188.186.154.79 188.186.154.79 10.0.0.1)"
-assert_eq "у каждого своя — на пути не правят" "" "$(_shared 10.0.0.1 10.0.0.2)"
-
-# --- 3б. Подмена «умным» DNS: свой прокси на каждый домен ------------------
-#
-# xbox-dns.ru на роутере владельца (11.09.2026): api.github.com → 87.228.47.198,
-# www.notion.so → 87.228.47.199, заглушки нет, повторов нет, согласие по
-# домену не годится (CDN). Признак — два разных домена в одном /24.
-_US=$(printf '\037'); _pans="$SB/pans"; _pmis="$SB/pmis"; : > "$_pmis"
-{
-  printf 'XBOX%spu%sapi.github.com%s87.228.47.198\n' "$_US" "$_US" "$_US"
-  printf 'XBOX%spu%swww.notion.so%s87.228.47.199\n'  "$_US" "$_US" "$_US"
-  printf 'CF%spd%sapi.github.com%s140.82.121.5\n'    "$_US" "$_US" "$_US"
-  printf 'CF%spd%swww.notion.so%s208.103.161.16\n'   "$_US" "$_US" "$_US"
-  printf 'YA%spd%sapi.github.com%s140.82.121.3\n'    "$_US" "$_US" "$_US"
-} > "$_pans"
-Z2K_DNS_LIB=1 . "$S"; proxy_mismatch "$_pans" "$_pmis"
-assert_eq "два домена в одном /24 — прокси-подмена" "XBOX" "$(cut -d"$_US" -f1 "$_pmis" | sort -u | tr '\n' ' ' | sed 's/ $//')"
-assert_eq "разные хостеры у разных серверов — не подмена" "0" "$(grep -c '^CF\|^YA' "$_pmis")"
-assert_eq "прокси-подмена — своё состояние proxy в JSON" "2" "$(grep -c 'st_[ud]="proxy"' "$S")"
-assert_eq "панель знает состояние proxy" "1" "$(grep -c 'proxy: { cls: "bad"' "$ROOT/webpanel/www/js/pages/diag.js")"
-assert_eq "строка человеку печатается ПОСЛЕ сверки" "1" "$(awk '/proxy_mismatch "\$_ans" "\$_mis"/{f=1} f && /_say "\$st_u"/{print "1"; exit}' "$S")"
-assert_eq "заворот UDP: публичные серверы получают hijack, а не оценку чужого ответа" "1" "$(grep -c 'st_u="hijack"' "$S")"
-assert_eq "резолвер роутера при завороте оценивается как раньше" "1" "$(grep -c '"$name" != "${CURRENT_ADDR:-}"' "$S")"
-assert_eq "в JSON есть, кто заворачивает" "1" "$(grep -c '"intercept_by":"%s"' "$S")"
-assert_eq "панель знает состояние hijack" "1" "$(grep -c 'hijack: { cls: "warn"' "$ROOT/webpanel/www/js/pages/diag.js")"
-assert_eq "чекер зовёт proxy_mismatch после ref_mismatch" "1" "$(grep -c '^    proxy_mismatch "\$_ans" "\$_mis"' "$S")"
-
-# --- 3в. Каждый сервер опрашивается ПО СВОЕМУ адресу, а не через резолвер роутера
-assert_eq "DoH идёт на адрес сервера (--resolve)" "2" "$(grep -c '_resolve_set "\$1"' "$S")"
-assert_eq "DoH для youtube.com тоже передаёт адрес сервера (--resolve)" "1" \
-    "$(grep -c 'doh_wire_a "\$doh" "\$YT_DOMAIN" "\$_sip"' "$S")"
-assert_eq "DoT соединяется по адресу, имя только в SNI" "1" "$(grep -c -- '-connect "\${2:-\$1}:853" -servername "\$1"' "$S")"
-
-# --- 4. Скрипт ничего не меняет ----------------------------------------------
-# Диагностика обязана быть безопасной: её запускают, когда и так всё плохо.
-for _bad in 'iptables ' 'ipset ' 'ndmc ' 'restart' '/opt/etc/init.d'; do
-    if grep -qE "^[^#]*$_bad" "$S"; then
-        no "не трогает систему ($_bad)" "нет вызова" "есть"
-    else
-        ok "не трогает систему ($_bad)"
-    fi
-done
-assert_eq "пишет только в tmpfs" "1" "$(grep -c 'OUT:-/tmp/' "$S")"
-
-# --- 5. Свои серверы человека -------------------------------------------------
-assert_eq "свой список читается" "1" "$(grep -c 'OWN_LIST' "$S" | awk '{print ($1>0)?1:0}')"
-assert_eq "список живёт в lists/ (переживает обновление)" "1" \
-    "$(grep -c 'lists/dns-check.txt' "$S")"
-
-# --- 6. Мусор в своём списке отбраковывается ---------------------------------
-A="$ROOT/webpanel/cgi/actions.sh"
-assert_eq "сохранение своих есть" "1" "$(grep -c '^dns_check_own_save()' "$A")"
-assert_eq "запуск задачей, а не в запросе" "1" \
-    "$(grep -c 'svc_action_async "Проверка DNS"' "$ROOT/webpanel/cgi/api.sh")"
-
-# --- 7. Карточка в диагностике -----------------------------------------------
-D="$ROOT/webpanel/www/js/pages/diag.js"
-assert_eq "карточка есть"                "1" "$(grep -c 'id="dns-run"' "$D")"
-# Группируем по ПУТИ, а не по серверу: иначе заголовок группы спорит со строкой
-# внутри неё — «доходят целыми» напротив «ответ подменён» у того же Quad9.
-assert_eq "три группы путей" "3" "$(grep -c 'dnsPathGroup(' "$D" | awk '{print ($1>=4)?3:0}')"
-assert_eq "группа DoT названа" "1" "$(grep -c '"Шифрованный DoT", "запрос внутри TLS' "$D")"
-# DoT без миллисекунд: ожидание опрашивается посекундно (дробного sleep на
-# busybox нет, timeout отсутствует), и «1000 мс» у сервера, отвечающего за 30,
-# не бесполезно, а вредно — по нему выберут худший.
-# У DoT ВРЕМЯ ЕСТЬ. Сначала его не показывали вовсе — «нечем засечь»: дробного
-# sleep у busybox нет, timeout отсутствует, date +%s%N печатает literal %N. Всё
-# это правда и всё это про ПОСЕКУНДНЫЙ ОПРОС. usleep на Entware есть, и с шагом
-# 10 мс счётчик опросов сам становится измерением полного обмена — без единого
-# лишнего соединения.
-#
-# Отдельным curl к порту 853 мерить пробовали: прогон вырос с 30 до 53 секунд,
-# потому что у молчащего сервера это весь таймаут. Замер на роутере.
-assert_eq "у DoT есть время"        "1" "$(grep -c 'state: s.dot, ms: s.dot_ms' "$D")"
-assert_eq "время даёт сам опрос"    "1" "$(grep -c 'DOT_MS=$((_w \* 10))' "$S")"
-assert_eq "шаг опроса 10 мс"        "1" "$(grep -c 'usleep 10000' "$S")"
-assert_eq "без usleep время не показываем" "1" \
-    "$(grep -c 'DOT_MS=""; fi' "$S")"
-# В комментарии time_appconnect упомянут намеренно — там записано, что этот
-# путь пробовали и отвергли по замеру. Проверяем КОД, а не пояснение.
-assert_eq "лишнего соединения нет"  "0" \
-    "$(grep -v '^ *#' "$S" | grep -c 'time_appconnect')"
-assert_eq "dot_ms доезжает до панели" "1" "$(grep -c '\"dot_ms\":%s' "$S")"
-assert_eq "DoT говорит по проводу с префиксом длины (RFC 7858)" "1" "$(grep -c 'RFC 7858' "$S")"
-assert_eq "ожидание ограничено руками, timeout нет" "1" "$(grep -c 'ОГРАНИЧЕНИЕ ПО ВРЕМЕНИ РУКАМИ' "$S")"
-assert_eq "группа обычного пути названа" "1" "$(grep -c 'порт 53, без шифрования' "$D")"
-# Все три группы свёрнуты. Развёрнутые по умолчанию, они вываливали три десятка
-# строк на человека, который зашёл посмотреть один вердикт; кому нужны детали,
-# тот раскроет.
-assert_eq "по умолчанию всё свёрнуто" "3" "$(grep -c 'dnsPathGroup(.*, false)' "$D")"
-assert_eq "группа шифрованного пути названа" "1" "$(grep -c '"Шифрованный DoH", "запрос внутри HTTPS"' "$D")"
-# Заголовок сводки — про ЧЕЛОВЕКА, а не про явление в сети. Красная тревога
-# «обычный DNS подменяют» рядом с «менять ничего не нужно» не даёт понять,
-# беда у тебя или нет: состояние блока обязано следовать состоянию ТВОЕГО
-# резолвера, всё остальное — пояснения под ним.
-# Сводного блока в карточке нет намеренно: он повторял заголовки групп
-# («N целых · M подменено»), пометку своего резолвера в строке и ярлык ютуба.
-# Единственный факт, которого больше нигде не было, — адрес заглушки; он
-# обязан остаться, но в подписи группы обычного DNS.
-assert_eq "сводного блока нет"           "0" "$(grep -c 'dns-summary\|dns-facts' "$D")"
-assert_eq "заглушка не потерялась"       "1" "$(grep -c 'заглушка \${escapeHtml(d.stub)}' "$D")"
-assert_eq "и уехала в подпись группы"    "1" "$(grep -c 'dnsPathGroup("Обычный DNS", stubNote' "$D")"
-# Обвинение по адресу: подменяет не сервер, а путь. «Quad9 подменяет» —
-# неправда, Quad9 по DoH отвечает безупречно, переписывают его ответ на порту 53.
-# Человек, прочитавший «сервер подменяет», пойдёт менять сервер вместо пути.
-assert_eq "не обвиняем сервер в подмене" "0" "$(grep -c '"подменяет"' "$D")"
-assert_eq "говорим про ответ, а не про сервер" "1" \
-    "$(grep -c 'label: "ответ подменён"' "$D")"
-# Карточка стоит ПОСЛЕ проверки домена и ДО сводки: оба верхних блока отвечают
-# на «почему не открывается», сводка — для пересылки в чат.
-_pos_probe=$(grep -n 'Проверка домена' "$D" | head -1 | cut -d: -f1)
-_pos_dns=$(grep -n '<h3>Проверка DNS</h3>' "$D" | head -1 | cut -d: -f1)
-_pos_sum=$(grep -n 'Сводка z2k-diag' "$D" | head -1 | cut -d: -f1)
-if [ "$_pos_probe" -lt "$_pos_dns" ] && [ "$_pos_dns" -lt "$_pos_sum" ]; then
-    ok "порядок карточек: домен → DNS → сводка"
-else
-    no "порядок карточек" "домен < DNS < сводка" "$_pos_probe/$_pos_dns/$_pos_sum"
-fi
-
-# --- 8. Доставка на роутеры ---------------------------------------------------
-# Файл без цели в карте не приезжает вовсе, а без установки — не исполняется.
-_t=$(sh -c ". '$ROOT/lib/release_map.sh'; ZAPRET2_DIR=/opt/zapret2 z2k_install_paths files/z2k-dns-check.sh")
-assert_eq "есть цель доставки" "/opt/zapret2/z2k-dns-check.sh" "$_t"
-assert_eq "ставится установщиком с правом на запуск" "1" \
-    "$(grep -c 'z2k-warp.sh z2k-dns-check.sh' "$ROOT/lib/install.sh")"
-
-# --- 9. Вердикт сервера не спорит с его же строкой ---------------------------
-#
-# Вердикт считался по ХУДШЕМУ пути, и Quad9 — у которого обычный ответ
-# переписывают в дороге, а DoH доходит целым — попадал в «ответы подменяются».
-# Строка при этом говорила «DOH честно». Группа и её содержимое противоречили
-# друг другу, и человек не знал, чему верить.
-#
-# Правило: сервер годен, если ХОТЬ ОДИН путь доходит целым. Каким именно —
-# написано в самой строке.
-verdict_of() {
-    _u="$1"; _d="$2"
-    if [ "$_u" = "works" ] || [ "$_d" = "works" ]; then printf 'works'
-    elif [ "$_u" = "spoof" ] || [ "$_d" = "spoof" ]; then printf 'spoof'
-    else printf 'silent'; fi
+SB=$(mktemp -d) || exit 1
+trap 'rm -rf "$SB"' EXIT INT TERM
+PASS=0; FAIL=0
+assert_eq() {
+    if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '[PASS] %s\n' "$1"
+    else FAIL=$((FAIL+1)); printf '[FAIL] %s: ожидалось %s, получено %s\n' "$1" "$2" "$3"; fi
 }
-assert_eq "обычный подменён, DoH цел — сервером можно пользоваться" "works" "$(verdict_of spoof works)"
-assert_eq "оба пути подменены — нельзя"                            "spoof" "$(verdict_of spoof spoof)"
-assert_eq "подменён единственный проверенный путь — нельзя"        "spoof" "$(verdict_of spoof none)"
-assert_eq "оба молчат — не ответил"                                "silent" "$(verdict_of silent silent)"
-assert_eq "не проверялся ни один путь — не ответил"                "silent" "$(verdict_of none none)"
-assert_eq "только DoH и он цел"                                    "works" "$(verdict_of none works)"
-assert_eq "правило записано в коде" "1" "$(grep -c "по ЛУЧШЕМУ пути" "$S")"
-
-
-
-# ── Сверка с эталоном (второй признак подмены) ───────────────────────────────
-#
-# Первый признак — повтор одного адреса на несвязанных доменах — слеп к
-# провайдеру, который на каждый домен отдаёт СВОЙ адрес. Здесь проверяется, что
-# такой случай ловится сравнением с согласием шифрованных путей, а домены без
-# согласия (CDN) в сверку не попадают вовсе.
-US=$(printf '\037')
-_work=$(mktemp -d)
-trap 'rm -rf "$SB" "$_work"' EXIT
-_ans="$_work/ans"; _mis="$_work/mis"
-Z2K_DNS_LIB=1 . "$S"
-
-# Три оператора по DoH согласны, четвёртый по обычному пути отдаёт своё —
-# каждый раз РАЗНОЕ, так что повторов нет и первый признак молчит.
-{
-  printf 'CF%sd%srutor.info%s1.1.1.1\n'   "$US" "$US" "$US"
-  printf 'GO%sd%srutor.info%s1.1.1.1\n'   "$US" "$US" "$US"
-  printf 'CF%sd%sflibusta.is%s2.2.2.2\n'  "$US" "$US" "$US"
-  printf 'GO%sd%sflibusta.is%s2.2.2.2\n'  "$US" "$US" "$US"
-  printf 'ISP%su%srutor.info%s9.9.9.1\n'  "$US" "$US" "$US"
-  printf 'ISP%su%sflibusta.is%s9.9.9.2\n' "$US" "$US" "$US"
-  printf 'OK%su%srutor.info%s1.1.1.1\n'   "$US" "$US" "$US"
-} > "$_ans"
-ref_mismatch "$_ans" "$_mis"
-assert_eq "уникальная подмена поймана"  "2" "$(awk -F"$US" '$1=="ISP" && $2=="u" {print $3}' "$_mis")"
-assert_eq "честный сервер не задет"     ""  "$(awk -F"$US" '$1=="OK"  {print $3}' "$_mis")"
-assert_eq "эталонные операторы чисты"   ""  "$(awk -F"$US" '$1=="CF" {print $3}' "$_mis")"
-
-# Домен без согласия эталона (у каждого свой адрес — так живёт CDN) обязан
-# выпасть из сверки: назвать это подменой значит соврать.
-{
-  printf 'CF%sd%scdn.example%s10.0.0.1\n' "$US" "$US" "$US"
-  printf 'GO%sd%scdn.example%s10.0.0.2\n' "$US" "$US" "$US"
-  printf 'ISP%su%scdn.example%s10.0.0.9\n' "$US" "$US" "$US"
-} > "$_ans"
-ref_mismatch "$_ans" "$_mis"
-assert_eq "домен без согласия пропущен" "" "$(cat "$_mis")"
-
-# ── Разбор двоичного ответа (RFC 8484) ───────────────────────────────────────
-assert_eq "адреса читаются по проводу, не из JSON" "1" "$(grep -c 'doh_wire_a()' "$S")"
-assert_eq "JSON-API выкинут"                       "0" "$(grep -c 'application/dns-json' "$S")"
-assert_eq "указатель сжатия имени учтён"           "1" "$(grep -c 'function skipname' "$S")"
-assert_eq "ютуб спрашиваем честным путём"          "1" "$(grep -c 'ответ САМОГО сервера' "$S")"
-assert_eq "у Яндекса есть DoH"                     "1" "$(grep -c 'Яндекс|77.88.8.8|https://' "$S")"
-assert_eq "у NextDNS есть обычный путь"            "1" "$(grep -c 'NextDNS|45.90.28.0|' "$S")"
-assert_eq "у ControlD есть DoH"                    "1" "$(grep -c 'ControlD|76.76.2.0|https://' "$S")"
-
-# ── Свои серверы сохраняются целиком ────────────────────────────────────────
-#
-# Из поля: «пишет всё ок, но при рефреше — пусто». Тело POST приходит через
-# $(read_body), а подстановка срезает хвостовой перевод строки; `read` на
-# незавершённой строке возвращает ненулевой код, и цикл кончается ДО её
-# обработки. Вписал один сервер, не нажав Enter — сохранилось НОЛЬ записей, а
-# форма честно сказала «Сохранено», потому что провала не было.
 A="$ROOT/webpanel/cgi/actions.sh"
-# Ищем В САМОЙ функции: приём законно встречается в actions.sh и в других
-# местах, и счёт по всему файлу проверял бы чужой код.
-assert_eq "последняя строка не теряется" "1" \
-    "$(sed -n '/^dns_check_own_save/,/^}/p' "$A" | grep -c 'read -r line || \[ -n "$line" \]')"
-
 _ow=$(mktemp -d)
 _save=$(sed -n '/^dns_check_own_save/,/^}/p' "$A")
 printf '1.2.3.4' | sh -c "DNS_CHECK_OWN=$_ow/one.txt; $_save; dns_check_own_save" >/dev/null 2>&1
@@ -301,63 +31,304 @@ _res=$(printf 'dot:\ndot:localhost\ndot:-x.example.org\ndot:.example.org\ndot:ex
     | sh -c "DNS_CHECK_OWN=$_ow/bad.txt; $_save; dns_check_own_save" 2>/dev/null)
 assert_eq "кривые dot: отброшены все" "entries=0 dropped=8" "$_res"
 assert_eq "и в файл не попали"        "0" "$(awk 'END {print NR+0}' "$_ow/bad.txt" 2>/dev/null)"
-# Сохранённая строка разбирается проверкой как DoT-сервер, а не как обычный.
-D_CHECK="$ROOT/files/z2k-dns-check.sh"
-assert_eq "проверка разбирает dot: в поле DoT" "1" \
-    "$(grep -c 'dot:\*) servers="\$servers' "$D_CHECK")"
-assert_eq "подсказка в панели называет DoT" "1" \
-    "$(grep -c 'dot:имя для DoT' "$ROOT/webpanel/www/js/pages/diag.js")"
-rm -rf "$_ow"
 
-# ── Шапка называет столько путей, сколько проверяет ─────────────────────────
-#
-# Было «двумя путями» при трёх проверяемых: человек читает шапку, потом видит
-# третью колонку и справедливо спрашивает, откуда она.
-assert_eq "шапка говорит про три пути" "1" "$(grep -c 'тремя путями' "$S")"
-assert_eq "и называет DoT"             "1" "$(grep -c 'DoT внутри TLS' "$S")"
-# Оговорки «без времени ответа» в подписи больше нет — время появилось.
-assert_eq "оговорка про отсутствие времени убрана" "0" "$(grep -c 'без времени ответа' "$D")"
+run_fixture() (
+    Z2K_DNS_LIB=1 . "$S"
+    OUT="$SB/$1.json"; OWN_LIST="$SB/absent"
+    FIXTURE="$2"; SCENARIO="$1"
+    if [ "$SCENARIO" = duplicate_default ]; then
+        DEFAULT_SERVERS="$DEFAULT_SERVERS
+$(printf '%s\n' "$DEFAULT_SERVERS" | head -1)"
+    fi
+    current_resolver() { printf '127.0.0.1'; }
+    lookup() {
+        _lv=$(awk -F'|' -v n="$1" -v d="$2" -v p="$3" '$1==n && $2==d {print (p=="u"?$3:$4)}' "$FIXTURE")
+        [ "$_lv" != '!error' ] || return 1
+        printf '%s' "$_lv" | tr ',' '\n'
+    }
+    server_name() {
+        printf '%s\n' "$DEFAULT_SERVERS" | awk -F'|' -v s="$1" '$2==s || $3==s {print $1; exit}'
+    }
+    udp_a() {
+        if [ "$1" = "$CANARY" ]; then
+            [ "$SCENARIO" = canary ] || return 1
+            printf '93.184.216.34\n'; return 0
+        fi
+        case "$2" in example.com|youtube.com) printf '93.184.216.34\n'; return 0 ;; esac
+        if [ "$1" = 127.0.0.1 ]; then lookup router "$2" u
+        else lookup "$(server_name "$1")" "$2" u; fi
+    }
+    doh_wire_a() {
+        case "$2" in example.com|youtube.com) printf '93.184.216.34\n'; return 0 ;; esac
+        lookup "$(server_name "$1")" "$2" d
+    }
+    udp_ms() { printf 10; }
+    doh_wire_ms() { printf 20; }
+    dot_alive() {
+        if [ "$SCENARIO" = limited ]; then DOT_MS=15; DOT_ADDRESSES=93.184.216.34; return 0; fi
+        return 2
+    }
+    main >"$SB/$1.stdout" 2>"$SB/$1.log"
+)
+run_fixture owner "$ROOT/tests/fixtures/dns-check/owner.tsv"
+run_fixture user "$ROOT/tests/fixtures/dns-check/user.tsv"
+python3 - "$SB" <<'PYTEST'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+o=json.loads((p/'owner.json').read_text()); u=json.loads((p/'user.json').read_text())
+assert o['intercept']==1 and o['stub']=='188.186.146.208', o
+for s in o['servers']:
+    if s.get('current'): assert s['udp']=='works', s
+    else:
+        assert s['udp']=='hijack', s
+        assert s['doh']==('unknown' if s['name']=='NextDNS' else 'works'), s
+for s in u['servers']:
+    assert s['udp']=='works' and s['doh'] in ('works','none'), s
+assert not u['intercept'], u
+# В замере отсутствуют контроль, канарейка и DoT; их исходы заданы явно.
+# Сценарий пользователя дополняет описанные CDN-пары адресами остальных целей.
+obs=o['observations']
+x=[x for x in obs if x['server']=='ControlD' and x['domain']=='shikimori.one']
+assert len(x)==2 and x[0]['addresses']==x[1]['addresses'], x
+assert all(x['comparison']=='overlap' for x in x if x['path']=='u'), x
+print('[PASS] оба набора, обратный порядок и согласованность ControlD')
+PYTEST
+assert_eq "оба набора данных" 0 "$?"
+# Мутации одних и тех же сохранённых ответов испытывают настоящий main.
+python3 - "$ROOT/tests/fixtures/dns-check/user.tsv" "$SB" <<'PYCASES'
+from pathlib import Path
+import sys
+rows=[x.split('|') for x in Path(sys.argv[1]).read_text().splitlines()]
+p=Path(sys.argv[2])
+for case in ('timeout','empty','mismatch','nearby','stub_doh','single_operator','one_vote','partial','one_domain','hidden_stub'):
+    result=[]
+    for n,d,u,h in rows:
+        if n=='Cloudflare':
+            if case=='timeout': u=h='!error'
+            if case=='empty': u=h=''
+            if case=='partial' and d=='rutor.info': u='!error'
+            if case=='mismatch': u={'rutor.info':'193.46.255.30','flibusta.is':'179.43.150.84','rezka.ag':'179.43.189.163','shikimori.one':'188.114.96.77'}[d]
+            if case=='nearby':
+                u='193.46.255.30'
+                if d=='rutor.info': h='193.46.255.29'
+            if case=='single_operator': u='203.0.113.99'; h='203.0.113.99'
+            if case=='stub_doh': h='203.0.113.99'
+            if case=='hidden_stub': u=u+',203.0.113.99'
+            if case=='one_domain' and d=='rutor.info': u='193.46.255.29,193.46.255.29'
+        if case=='one_vote':
+            if n=='Cloudflare': h='203.0.113.'+str(['rutor.info','flibusta.is','rezka.ag','shikimori.one'].index(d)+10)
+            if n=='router': u='203.0.113.'+str(['rutor.info','flibusta.is','rezka.ag','shikimori.one'].index(d)+10)
+        result.append('|'.join((n,d,u,h)))
+    (p/(case+'.tsv')).write_text('\n'.join(result)+'\n')
+PYCASES
+for scenario in timeout empty mismatch nearby stub_doh single_operator one_vote partial one_domain hidden_stub; do
+    run_fixture "$scenario" "$SB/$scenario.tsv"
+done
+run_fixture canary "$ROOT/tests/fixtures/dns-check/user.tsv"
+run_fixture duplicate_default "$SB/single_operator.tsv"
+run_fixture limited "$SB/timeout.tsv"
+python3 - "$SB" <<'PYCHECK'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+def load(c): return json.loads((p/(c+'.json')).read_text())
+def cf(c): return next(s for s in load(c)['servers'] if s['name']=='Cloudflare')
+assert cf('timeout')['udp']=='silent' and cf('timeout')['doh']=='silent'
+assert cf('empty')['udp']=='unknown' and cf('empty')['doh']=='unknown'
+assert cf('partial')['udp']=='unknown'
+assert cf('mismatch')['udp']=='mismatch' and cf('mismatch')['doh']=='works'
+assert cf('nearby')['udp']=='spoof', cf('nearby')
+assert not load('nearby')['intercept']
+assert cf('stub_doh')['doh']=='spoof' and not load('stub_doh')['intercept']
+assert cf('single_operator')['udp']=='spoof' and cf('single_operator')['doh']=='spoof'
+assert not load('duplicate_default')['intercept'], 'повтор одного оператора не даёт общий перехват'
+assert cf('limited')['dot']=='limited' and cf('limited')['verdict']=='unknown', cf('limited')
+assert cf('hidden_stub')['udp']=='spoof', cf('hidden_stub')
+assert not load('single_operator')['intercept'], 'два протокола одного оператора не дают общий перехват'
+assert cf('one_domain')['udp']=='works', cf('one_domain')
+r=next(s for s in load('one_vote')['servers'] if s['current'])
+assert r['udp']=='mismatch', r
+c=load('canary')
+assert c['intercept']==1 and c['intercept_by']=='path'
+assert next(s for s in c['servers'] if s['current'])['udp']=='works'
+for case,outcome in [('timeout','error'),('empty','no_a')]:
+    assert all(x['outcome']==outcome for x in load(case)['observations'] if x['server']=='Cloudflare' and x['purpose']=='target')
+print('[PASS] ошибки, пустые ответы, расхождения, /24, происхождение и канарейка')
+PYCHECK
+assert_eq "пограничные сценарии" 0 "$?"
 
-# ── Задержка обычного DNS ────────────────────────────────────────────────────
-#
-# ЗАЧЕМ. У DoH и DoT время показывалось, у обычных серверов — нет, и человек
-# не мог их сравнить. Своими руками UDP-запрос с роутера не послать (busybox nc
-# без -u, socat нет, /dev/udp — это bash), а время nslookup врёт на порядок:
-# замер на роутере дал 460 мс против настоящих 28, потому что busybox делает
-# ОБРАТНЫЙ запрос на каждый адрес ответа. Единственный честный источник — dig.
-#
-# Проверяем: измеритель существует, берёт число у dig, не повторяет запрос и
-# молчит там, где dig не установлен.
-assert_eq "измеритель задержки UDP есть"        "1" "$(grep -c '^udp_ms()' "$S")"
-assert_eq "источник времени — dig"              "1" \
-    "$(sed -n '/^udp_ms()/,/^}/p' "$S" | grep -c 'Query time')"
-# +tries=1 обязателен: по умолчанию dig повторяет трижды и печатает время
-# ПОСЛЕДНЕЙ попытки — потерянный пакет выглядел бы быстрым сервером.
-assert_eq "запрос не повторяется"               "1" \
-    "$(sed -n '/^udp_ms()/,/^}/p' "$S" | grep -c '+tries=1')"
-assert_eq "нет dig — молчим, а не выдумываем"   "1" \
-    "$(sed -n '/^udp_ms()/,/^}/p' "$S" | grep -c 'command -v dig')"
+# Прокси-цели: настоящий main, все IP, каждый путь и чужой оператор.
+python3 - "$ROOT/tests/fixtures/dns-check/user.tsv" "$SB" <<'PYPROXY'
+from pathlib import Path
+import sys
+base=Path(sys.argv[1]).read_text(); out=Path(sys.argv[2])
+names=list(dict.fromkeys(row.split('|')[0] for row in base.splitlines()))
+for case in ('xbox','cdn','no_doh','partial_doh','own_only','full_overlap','multi_network','near_ip','proxy_doh'):
+    rows=[]
+    for name in names:
+        for domain,ip,ref in [('api.github.com','87.228.47.198','140.82.121.6'),('www.notion.so','87.228.47.199','162.159.128.61')]:
+            u=h=ref
+            if name=='router': u=ip
+            if case=='cdn':
+                u='104.18.1.'+('1' if domain=='api.github.com' else '2')
+                h='104.18.9.8,'+u
+            if case=='no_doh' or (case=='partial_doh' and domain=='www.notion.so'): h='!error'
+            if case=='own_only':
+                h=ip if name=='Cloudflare' else '!error'
+                if name=='Cloudflare': u=ip
+            if case=='full_overlap' and name=='router': u=ip+','+ref
+            if case=='multi_network' and name=='router' and domain=='www.notion.so': u+=',203.0.113.1'
+            if case=='near_ip': h='87.228.47.200' if domain=='api.github.com' else '87.228.47.201'
+            if case=='proxy_doh' and name=='Cloudflare': u=h=ip
+            rows.append('|'.join((name,domain,u,h)))
+    (out/(case+'.tsv')).write_text(base+'\n'.join(rows)+'\n')
+PYPROXY
+for scenario in xbox cdn no_doh partial_doh own_only full_overlap multi_network near_ip proxy_doh; do
+    run_fixture "$scenario" "$SB/$scenario.tsv"
+done
+python3 - "$SB" <<'PYPROXYCHECK'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+def load(c): return json.loads((p/(c+'.json')).read_text())
+def server(c,name): return next(s for s in load(c)['servers'] if s['name']==name)
+def router(c): return next(s for s in load(c)['servers'] if s['current'])
+assert router('xbox')['udp']=='proxy' and router('xbox')['verdict']=='spoof'
+assert router('xbox')['stub']==0, router('xbox')
+assert router('cdn')['udp']=='works', router('cdn')
+for case in ('no_doh','partial_doh'):
+    assert router(case)['udp']=='unknown' and router(case)['verdict']=='unknown', router(case)
+assert server('own_only','Cloudflare')['udp']=='unknown', 'свой DoH не независимый образец'
+assert server('own_only','Cloudflare')['doh']=='unknown'
+for case in ('full_overlap','multi_network'):
+    assert router(case)['udp']!='proxy', router(case)
+assert router('near_ip')['udp']=='proxy', 'одинаковый /24 образца не равен совпадению точного IP'
+cf=server('proxy_doh','Cloudflare')
+assert cf['udp']=='proxy' and cf['doh']=='proxy' and cf['verdict']=='spoof', cf
+obs=[x for x in load('xbox')['observations'] if x['purpose']=='proxy']
+assert {x['domain'] for x in obs}=={'api.github.com','www.notion.so'}
+assert 'свой прокси вместо сайта' in (p/'xbox.log').read_text()
+print('[PASS] xbox, CDN, отсутствие DoH, полные множества, точные IP и независимость операторов')
+PYPROXYCHECK
+assert_eq "обнаружение прокси в main" 0 "$?"
 
-# Разбор именно того формата, который печатает dig на роутере.
-_digline=';; Query time: 28 msec'
-assert_eq "число вынимается из строки dig" "28" \
-    "$(printf '%s\n' "$_digline" | sed -n 's/^;; Query time: \([0-9][0-9]*\) msec.*/\1/p')"
-# Строку без числа разбор обязан пропустить, а не отдать мусор.
-assert_eq "чужая строка не даёт числа" "" \
-    "$(printf '%s\n' ';; SERVER: 77.88.8.8#53' | sed -n 's/^;; Query time: \([0-9][0-9]*\) msec.*/\1/p')"
+# Транспортные примитивы выполняются без main и без внешней сети.
+(
+    Z2K_DNS_LIB=1 . "$S"
+    nslookup() {
+        printf 'Server: 1.1.1.1\nAddress 1: 1.1.1.1 resolver\nName: target\nAddress 1: 192.0.2.4 reverse.name\nAddress 2: 192.0.2.5 other.name\n'
+    }
+    [ "$(udp_a 1.1.1.1 target | tr '\n' ',')" = '192.0.2.4,192.0.2.5,' ] || exit 1
+    nslookup() { printf 'connection timed out'; return 1; }
+    udp_a 1.1.1.1 target && exit 1
+    nslookup() { printf 'NXDOMAIN'; return 1; }
+    udp_a 1.1.1.1 target || exit 1
+    nslookup() { printf 'SERVFAIL'; return 1; }
+    udp_a 1.1.1.1 target || exit 1
+    dig() { printf '%s\n' "$*" > "$SB/dig-args"; printf ';; Query time: 28 msec\n'; }
+    [ "$(udp_ms 1.1.1.1 example.com)" = 28 ] || exit 1
+    grep -F -q '+tries=1' "$SB/dig-args" || exit 1
+    _wire_query example.com > "$SB/query"
+)
+assert_eq "примитив UDP и POSIX-пакет" 0 "$?"
+python3 - "$SB" <<'PYWIRE'
+import struct,sys
+from pathlib import Path
+p=Path(sys.argv[1]); q=b'\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01'
+assert (p/'query').read_bytes()==q
+answer=b'\xab\xcd\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00'+q[12:]
+for ip in [b'\xc0\x00\x02\x04',b'\xc0\x00\x02\x05']:
+    answer+=b'\xc0\x0c'+struct.pack('!HHIH',1,1,60,4)+ip
+(p/'wire').write_bytes(answer)
+(p/'no-a').write_bytes(b'\xab\xcd\x81\x83\x00\x01\x00\x00\x00\x00\x00\x00'+q[12:])
+(p/'truncated').write_bytes(answer[:-1]); (p/'zero').write_bytes(b'')
+(p/'dot-wire').write_bytes(struct.pack('!H',len(answer))+answer)
+no_a=(p/'no-a').read_bytes(); (p/'dot-no-a').write_bytes(struct.pack('!H',len(no_a))+no_a)
+PYWIRE
+assert_eq "пакет запроса соответствует DNS" 0 "$?"
+(
+    Z2K_DNS_LIB=1 . "$S"
+    [ "$(dns_file_a "$SB/wire" | tr '\n' ',')" = '192.0.2.4,192.0.2.5,' ] || exit 1
+    dns_file_a "$SB/no-a" || exit 1
+    dns_file_a "$SB/truncated" && exit 1
+    dns_file_a "$SB/zero" && exit 1
+    curl() {
+        _out=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in -o) shift; _out="$1" ;; esac
+            shift
+        done
+        cp "$SB/wire" "$_out"
+        printf '%s' "$HTTP_CODE"
+        return "$CURL_RC"
+    }
+    HTTP_CODE=200; CURL_RC=0
+    [ "$(doh_wire_a https://dns.example/dns-query example.com)" = "$(dns_file_a "$SB/wire")" ] || exit 1
+    HTTP_CODE=500
+    doh_wire_a https://dns.example/dns-query example.com && exit 1
+    HTTP_CODE=200; CURL_RC=60
+    doh_wire_a https://dns.example/dns-query example.com && exit 1
+    exit 0
+)
+assert_eq "двоичный DoH, DNS-отказ, обрыв, HTTP и TLS ошибки" 0 "$?"
 
-# Платим только за тех, кто ответил: у молчащего dig отсидел бы свой таймаут.
-assert_eq "молчащий сервер не измеряется" "1" \
-    "$(grep -c 'ums=$(udp_ms' "$S")"
-assert_eq "измерение внутри ветки ответившего" "1" \
-    "$(awk '/if \[ -n "\$\{udp:-\}" \] && \[ -n "\$\(udp_a/{f=1} f && /ums=\$\(udp_ms/{print 1; exit}' "$S")"
+(
+    Z2K_DNS_LIB=1 . "$S"
+    TIMEOUT=1
+    openssl() {
+        if [ "$2" = -help ]; then
+            [ "$TLS_MODE" != unsupported ] && printf '%s' '-verify_return_error -verify_hostname -verify_ip -servername'
+            return 0
+        fi
+        printf '%s\n' "$*" > "$SB/tls-args"
+        if [ "$TLS_MODE" = no_a ]; then cat "$SB/dot-no-a"; return 0; fi
+        [ "$TLS_MODE" = valid ] || return 1
+        cat "$SB/dot-wire"
+    }
+    TLS_MODE=unsupported; rc=0; dot_alive dns.example 1.1.1.1 || rc=$?
+    [ "$rc" = 2 ] || exit 1
+    TLS_MODE=badcert; rc=0; dot_alive dns.example 1.1.1.1 || rc=$?
+    [ "$rc" = 1 ] || exit 1
+    TLS_MODE=no_a; rc=0; dot_alive dns.example 1.1.1.1 || rc=$?
+    [ "$rc" = 3 ] || exit 1
+    TLS_MODE=valid; dot_alive dns.example 1.1.1.1 || exit 1
+    # Проверяем фактический вызов TLS-клиента, не наличие строки в исходнике.
+    for flag in '-verify_return_error' '-verify_hostname dns.example' '-servername dns.example' '-connect 1.1.1.1:853'; do
+        grep -F -q -- "$flag" "$SB/tls-args" || exit 1
+    done
+    dot_alive 1.1.1.1 || exit 1
+    grep -F -q -- '-verify_ip 1.1.1.1' "$SB/tls-args" || exit 1
+    if grep -F -q -- '-servername' "$SB/tls-args"; then exit 1; fi
+)
+assert_eq "DoT: проверка цепочки/имени, ошибка сертификата и старый клиент" 0 "$?"
 
-# Поле доезжает до панели.
-assert_eq "поле udp_ms есть в JSON"     "1" "$(grep -c '"udp_ms":%s' "$S")"
-assert_eq "пустое значение уходит как null" "1" "$(grep -c '_ums=null' "$S")"
-assert_eq "панель читает udp_ms"        "1" "$(grep -c 'ms: s.udp_ms' "$D")"
-assert_eq "прежней заглушки ms: null у обычных нет" "0" \
-    "$(grep -c 'state: s.udp, ms: null' "$D")"
+# Текстовая сводка читает тот же JSON и не прячет состояния отдельных путей.
+_snapshot=$(sed -n '/^print_dns_check_snapshot()/,/^}/p' "$ROOT/files/z2k-diag.sh")
+_text=$(Z2K_DIAG_DNS_CHECK_JSON="$SB/owner.json" dash -c "$_snapshot; print_dns_check_snapshot")
+case "$_text" in
+    *'без признаков подмены 7'*'недостаточно данных 1'*'TLS не проверен 7'*'перехват 7'*) _rc=0 ;;
+    *) _rc=1; printf '%s\n' "$_text" ;;
+esac
+assert_eq "сводка сохраняет ограничения путей" 0 "$_rc"
+_text=$(Z2K_DIAG_DNS_CHECK_JSON="$SB/mismatch.json" dash -c "$_snapshot; print_dns_check_snapshot")
+case "$_text" in *'пути: расхождение 1'*) _rc=0 ;; *) _rc=1 ;; esac
+assert_eq "сводка показывает расхождение при общем works" 0 "$_rc"
 
+_text=$(Z2K_DIAG_DNS_CHECK_JSON="$SB/xbox.json" dash -c "$_snapshot; print_dns_check_snapshot")
+case "$_text" in *'свой прокси вместо сайта 1'*) _rc=0 ;; *) _rc=1 ;; esac
+assert_eq "сводка показывает свой прокси вместо сайта" 0 "$_rc"
+# Старый снимок не содержит observations и использует прежний verdict=spoof.
+printf '%s\n' '{"ts":1,"servers":[{"name":"Резолвер роутера (127.0.0.1)","udp":"proxy","verdict":"spoof"}]}' > "$SB/legacy.json"
+_text=$(Z2K_DIAG_DNS_CHECK_JSON="$SB/legacy.json" dash -c "$_snapshot; print_dns_check_snapshot")
+case "$_text" in *'подмена 1'*'свой прокси вместо сайта 1'*) _rc=0 ;; *) _rc=1 ;; esac
+assert_eq "сводка читает старый снимок proxy" 0 "$_rc"
+
+if command -v node >/dev/null 2>&1; then
+    node "$ROOT/tests/test_dns_panel.cjs"
+    assert_eq "панель: состояния и группировка" 0 "$?"
+else
+    printf '[SKIP] панель DNS: нет node; в CI проверяется\n'
+fi
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

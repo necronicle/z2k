@@ -429,6 +429,10 @@ jobs:
           # проверка вырождается в skip, то есть в отсутствие защиты.
           fetch-depth: 0
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
       - name: mkdir is atomic (lock primitive)
         # Наши замки — `mkdir каталог`: кто создал, тот владеет. Если mkdir
         # раннера не атомарен (uutils на ubuntu 26.04), тесты замков падают
