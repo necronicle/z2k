@@ -148,6 +148,18 @@ start() {
             wss://213.176.74.63.nip.io/ws) _ru="wss://85.192.60.175.nip.io/ws" ;;
         esac
         [ -n "$_ru" ] && TUNNEL_FLAGS="$TUNNEL_FLAGS --tunnel-url=$_ru"
+        # Optional session limit; dedicated data sessions are the binary default.
+        _iso=$(awk -F= '/^TG_RELAY_SESSIONS=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
+        case "$_iso" in
+            [1-9]|[1-5][0-9]|6[0-4])
+                # Source-only cherry-picks may precede the release binary rebuild.
+                if "$BIN" -h 2>&1 | grep -q -- '-relay-sessions'; then
+                    TUNNEL_FLAGS="$TUNNEL_FLAGS --relay-sessions=$_iso"
+                fi
+                ;;
+            "") ;;
+            *) echo "Invalid TG_RELAY_SESSIONS; using default session limit" ;;
+        esac
     fi
     _sup_gen="$(date +%s 2>/dev/null || echo 0).$$"
     echo "$_sup_gen" > "$GENFILE" 2>/dev/null

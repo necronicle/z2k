@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -42,6 +43,7 @@ func withMemEvents(t *testing.T) *memEvents {
 // автонастройка tcp_rmem/tcp_wmem на loopback молча вбирает несколько МБ, и
 // очередь релея не растёт, хотя клиент не читает ничего (GitHub CI, 02.09.2026).
 var testSmallSockBufs atomic.Bool
+var testTLSLoad atomic.Bool
 
 func smallSocketBuffers(t *testing.T) {
 	t.Helper()
@@ -71,7 +73,11 @@ func startRelay(t *testing.T) string {
 	if testSmallSockBufs.Load() {
 		srv.Listener = smallBufListener{srv.Listener}
 	}
-	srv.Start()
+	if testTLSLoad.Load() {
+		srv.StartTLS()
+	} else {
+		srv.Start()
+	}
 	t.Cleanup(func() {
 		cancel()
 		srv.Close()
@@ -194,6 +200,9 @@ func expectFrame(t *testing.T, ws *websocket.Conn, sid uint16, mt byte, timeout 
 func dialWS(t *testing.T, url string) *websocket.Conn {
 	t.Helper()
 	d := *websocket.DefaultDialer
+	if testTLSLoad.Load() {
+		d.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 	if testSmallSockBufs.Load() {
 		d.NetDial = func(network, addr string) (net.Conn, error) {
 			c, err := net.Dial(network, addr)

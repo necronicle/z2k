@@ -17,7 +17,31 @@ import (
 //	ulimit -n 20000; go test -tags load -run TestLoad_3000Sessions -count=1 -v .
 //
 // Требования: heap на сессию ≤ 120 КБ, p95 кадра ≤ 5 мс.
-func TestLoad_3000Sessions(t *testing.T) {
+func TestLoad_3000Sessions(t *testing.T) { loadSessionShape(t, 3000, 3) }
+
+func TestLoad_10000DedicatedTLS(t *testing.T) {
+	testTLSLoad.Store(true)
+	defer testTLSLoad.Store(false)
+	withInts(t, maxSessions, 12000)
+	loadSessionShape(t, 10000, 1)
+}
+
+func TestLoad_8000DedicatedTLS(t *testing.T) {
+	testTLSLoad.Store(true)
+	defer testTLSLoad.Store(false)
+	withInts(t, maxSessions, 10000)
+	loadSessionShape(t, 8000, 1)
+}
+
+func TestLoad_2000PooledSessions(t *testing.T) { loadSessionShape(t, 2000, 4) }
+
+// Local synthetic capacity test; excludes TLS termination and kernel memory.
+func TestLoad_8000DedicatedSessions(t *testing.T) {
+	withInts(t, maxSessions, 10000)
+	loadSessionShape(t, 8000, 1)
+}
+
+func loadSessionShape(t *testing.T, N int, streamsPerSession uint16) {
 	// Поддельный DC с маленьким буфером: 9000 соединений с 64 КБ каждое —
 	// это память стенда, а не релея.
 	startFakeDC(t, func(c net.Conn) {
@@ -45,11 +69,15 @@ func TestLoad_3000Sessions(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	const N = 3000
 	conns := make([]*websocket.Conn, 0, N)
+	t.Cleanup(func() {
+		for _, ws := range conns {
+			ws.Close()
+		}
+	})
 	for i := 0; i < N; i++ {
 		ws, _ := dialV2(t, url, id, priv, "load")
-		for sid := uint16(1); sid <= 3; sid++ {
+		for sid := uint16(1); sid <= streamsPerSession; sid++ {
 			sendFrame(t, ws, sid, muxCONNECT, connectPayload(tgTarget, 443))
 			expectFrame(t, ws, sid, muxCONNECT_OK, 5*time.Second)
 		}
@@ -58,7 +86,7 @@ func TestLoad_3000Sessions(t *testing.T) {
 	runtime.GC()
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
-	perSession := (after.HeapInuse - before.HeapInuse) / N
+	perSession := (after.HeapInuse - before.HeapInuse) / uint64(N)
 	t.Logf("сессий %d, стримов %d, heap на сессию: %d КБ (в т.ч. поддельный клиент в том же процессе)", N, liveStreams.Load(), perSession/1024)
 	if perSession > 120*1024 {
 		t.Fatalf("heap на сессию %d КБ > 120 КБ", perSession/1024)

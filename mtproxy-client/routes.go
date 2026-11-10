@@ -192,6 +192,11 @@ func (tc *tunnelClient) acquireConnection() bool {
 func (tc *tunnelClient) connectTunnelWS() (*websocket.Conn, error) {
 	tc.connectMu.Lock()
 	defer tc.connectMu.Unlock()
+	return tc.connectTunnelWSLocked()
+}
+
+// Caller owns connectMu, including the identity snapshot after authentication.
+func (tc *tunnelClient) connectTunnelWSLocked() (*websocket.Conn, error) {
 	id := tc.identity.Load()
 	if id == nil || !tc.useID.Load() {
 		return nil, errNotRegistered

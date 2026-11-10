@@ -127,17 +127,23 @@ func configureWSKeepalive(ws *websocket.Conn) {
 
 // tunnelClient manages the multiplexed WS tunnel.
 type tunnelClient struct {
-	connectMu           sync.Mutex
-	registrationMu      sync.Mutex
-	routeMu             sync.Mutex
-	route               *cachedRoute
-	routeDirty          bool
-	identityPath        string
-	dialer              *websocket.Dialer
-	connectionMu        sync.Mutex
-	connectionLimit     atomic.Int64
-	localMaxConnections int
-	fdLimit             uint64
+	isolated              bool
+	isolation             *isolationBudget
+	isolatedDials         chan struct{}
+	authenticatedIdentity atomic.Pointer[relayIdentity]
+	discoveryWake         chan struct{}
+	serverSessions        atomic.Int64
+	connectMu             sync.Mutex
+	registrationMu        sync.Mutex
+	routeMu               sync.Mutex
+	route                 *cachedRoute
+	routeDirty            bool
+	identityPath          string
+	dialer                *websocket.Dialer
+	connectionMu          sync.Mutex
+	connectionLimit       atomic.Int64
+	localMaxConnections   int
+	fdLimit               uint64
 
 	tunnelURL    string
 	tunnelSecret string
@@ -232,7 +238,16 @@ func (s *tunnelStream) close() {
 				w.WriteMessage(websocket.BinaryMessage, frame)
 			}
 		}
-		// Release connection semaphore
+		// In isolated mode close the transport before admitting a replacement.
+		if s.client.isolated {
+			s.client.cancel()
+			s.client.mu.Lock()
+			ws := s.client.ws
+			s.client.mu.Unlock()
+			if ws != nil {
+				ws.Close()
+			}
+		}
 		<-connSemaphore
 	})
 }
@@ -495,6 +510,7 @@ func (tc *tunnelClient) connectEndpoint(endpoint string, id *relayIdentity) (*we
 }
 
 var errHandshakeRejected = errors.New("relay rejected v2 handshake")
+var errRelayBusy = errors.New("relay session capacity exhausted")
 
 // handshakeV2: HELLO → HELLO_ACK(nonce, время сервера) → AUTHID v2 → INFO
 // AUTH_OK. Любой другой ответ или тишина в 10 с — ошибка; вызывающий уходит
@@ -551,12 +567,20 @@ func (tc *tunnelClient) handshakeV2(ws *websocket.Conn, id *relayIdentity) error
 	case infoRelayRoute:
 		return &relayRouteError{URL: text, MaxConnections: int(arg)}
 	case infoAuthOK:
+		limit, err := decodeSessionBudget(text)
+		if err != nil {
+			return err
+		}
+		tc.serverSessions.Store(int64(limit))
 		ws.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		return nil
 	case infoClockSkew:
 		log.Printf("[tunnel] релей: часы разошлись на %d с — поправка применена", int32(arg))
 		return fmt.Errorf("часы: %w", errHandshakeRejected)
 	case infoGoodbye:
+		if byte(arg) == 11 {
+			return errRelayBusy
+		}
 		log.Printf("[tunnel] релей отказал: %s %s", reasonName(byte(arg)), text)
 		if byte(arg) == rProtocol {
 			return errHandshakeRejected
@@ -753,7 +777,8 @@ func (tc *tunnelClient) streamReadLoop(stream *tunnelStream) {
 	}
 }
 
-// run manages the persistent WS connection with auto-reconnect.
+// run is retained for legacy protocol regression tests. Production uses
+// runDiscovery plus dedicated data sessions, never this shared data loop.
 func (tc *tunnelClient) run() {
 	consecutiveFails := 0
 
@@ -946,7 +971,7 @@ func (tc *tunnelClient) handleTunnelConn(clientConn *net.TCPConn) {
 		return
 	}
 
-	tc.openStream(clientConn, origIP, origPort)
+	tc.handleIsolated(clientConn, origIP, origPort)
 }
 
 // openStream — часть handleTunnelConn после определения адресата: выделяет
@@ -1033,11 +1058,14 @@ func (tc *tunnelClient) openStream(clientConn *net.TCPConn, origIP net.IP, origP
 // The relay independently caps simultaneous dials per install/destination at 6.
 // Existing-stream and FD limits still bound all accepted local connections.
 func newTunnelClient(url, secret string) *tunnelClient {
-	return &tunnelClient{tunnelURL: url, tunnelSecret: secret, connectSem: make(chan struct{}, 32)}
+	return &tunnelClient{tunnelURL: url, tunnelSecret: secret, connectSem: make(chan struct{}, 32), discoveryWake: make(chan struct{}, 1), isolatedDials: make(chan struct{}, 4)}
 }
 
 // runTunnel is the entry point for tunnel mode.
 func runTunnel() error {
+	if *relaySessions < 1 || *relaySessions > 64 {
+		return fmt.Errorf("--relay-sessions must be between 1 and 64")
+	}
 	if *tunnelURL == "" {
 		return fmt.Errorf("--tunnel-url is required in tunnel mode")
 	}
@@ -1082,6 +1110,7 @@ func runTunnel() error {
 	tc := newTunnelClient(*tunnelURL, *tunnelSecret)
 	tc.ctx, tc.cancel = context.WithCancel(ctx)
 	tc.identityPath = *relayIDFile
+	tc.isolation = newIsolationBudget(*relaySessions)
 	tc.localMaxConnections = maxAssignedConnections
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "max-conns" {
@@ -1091,23 +1120,17 @@ func runTunnel() error {
 	tc.fdLimit = connectionFDLimit()
 	tc.setConnectionLimit(*maxConns)
 
-	// Stage B: load/mint the per-install identity and register it in the
-	// background. Until registration succeeds the client authenticates with the
-	// shared secret (dual-accepted by the relay), so a relay without /register or
-	// a transient registration failure never blocks the tunnel.
+	// Enrollment and route persistence have one owner. Data admission waits for
+	// successful personal authentication; there is no shared-secret downgrade.
 	tc.registerURL = deriveRegisterURL(*tunnelURL)
 	go tc.identityLoop()
 
-	go tc.run()
-	go tc.routeRefreshLoop()
+	go tc.runDiscovery()
 
 	// Wait for first WS connection before accepting TCP — prevents burst
 	// of connections hitting a not-yet-ready Worker
 	for i := 0; i < 100; i++ {
-		tc.mu.Lock()
-		w := tc.writer
-		tc.mu.Unlock()
-		if w != nil {
+		if tc.discoveryReady() {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -1125,14 +1148,11 @@ func runTunnel() error {
 			case <-tc.ctx.Done():
 				return
 			case <-t.C:
-				tc.mu.Lock()
-				w := tc.writer
-				tc.mu.Unlock()
-				if w != nil {
+				if tc.discoveryReady() {
 					continue
 				}
 				if n := tc.dropped.Swap(0); n > 0 {
-					log.Printf("[tunnel] WS всё ещё не поднят; за минуту отброшено соединений: %d", n)
+					log.Printf("[tunnel] авторизация/маршрут ещё не готовы; за минуту отброшено соединений: %d", n)
 				}
 			}
 		}

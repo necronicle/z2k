@@ -124,6 +124,7 @@ func (s *session) handshakeV2(p []byte) bool {
 		s.killWith("internal")
 		return false
 	}
+	s.clientCaps = h.Caps
 	ack := helloAck{Ver: protoVersion2, ServerUnix: time.Now().Unix(), Nonce: s.nonce,
 		MinBuild: *minBuild, DefaultWindow: uint32(*defaultWindow)}
 	s.writer.control(encodeFrame(0, muxHELLO_ACK, encodeHelloAck(ack)))

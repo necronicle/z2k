@@ -20,13 +20,14 @@ import (
 var sessionDialFn dialAttemptFunc = (&net.Dialer{}).DialContext
 
 type session struct {
-	id       string
-	relayID  string
-	clientIP string
-	prV      atomic.Pointer[protoHolder] // читают горутины стримов и drain
-	build    string
-	ws       *websocket.Conn
-	started  time.Time
+	id         string
+	relayID    string
+	clientIP   string
+	prV        atomic.Pointer[protoHolder] // читают горутины стримов и drain
+	build      string
+	clientCaps uint32
+	ws         *websocket.Conn
+	started    time.Time
 
 	dialCtx    context.Context
 	dialCancel context.CancelFunc
@@ -96,7 +97,7 @@ func (s *session) run() {
 		}()
 	}
 	log.Printf("[%s] authenticated (proto=%s id=%s build=%q)", s.id, s.proto().name(), s.relayID, s.build)
-	if f := s.proto().info(infoAuthOK, uint32(*maxStreamsPerSess), ""); f != nil {
+	if f := s.proto().info(infoAuthOK, uint32(*maxStreamsPerSess), sessionBudgetText(s.clientCaps, *perInstallMaxSessions)); f != nil {
 		s.writer.control(f)
 	}
 	// Часы роутера врут больше допуска: вход разрешён (в v2 от повтора
@@ -384,3 +385,11 @@ var (
 	dialThrottle *dialLimiter
 	stats        = &dialStats{}
 )
+
+func sessionBudgetText(caps uint32, limit int) string {
+	if caps&2 == 0 {
+		return ""
+	}
+	// Zero means unlimited on the server; the client still has its local ceiling.
+	return fmt.Sprintf(`{"session_limit":%d}`, limit)
+}
