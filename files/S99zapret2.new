@@ -2171,8 +2171,14 @@ start_daemons()
     z2k_preflight_v6_gate
     # Файл адресов для --ipset профиля googlevideo должен быть до старта
     # движка (/tmp чистится перезагрузкой); наполняет его служба подмены.
-    [ -f "$Z2K_GVSUB_IPS" ] || : > "$Z2K_GVSUB_IPS"
-    chmod 644 "$Z2K_GVSUB_IPS" 2>/dev/null
+    # 10.11.2026, ci_local: ошибка перенаправления у спецвстроенной ':'
+    # завершает sh; изолируем её, чтобы пустой/недоступный путь не сорвал запуск.
+    if [ -n "$Z2K_GVSUB_IPS" ]; then
+        (
+            [ -f "$Z2K_GVSUB_IPS" ] || : > "$Z2K_GVSUB_IPS"
+            chmod 644 "$Z2K_GVSUB_IPS"
+        ) 2>/dev/null || :
+    fi
 
     # Использовать функции из common/linux_daemons.sh
     # standard_mode_daemons вызывает do_nfqws

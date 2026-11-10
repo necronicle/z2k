@@ -623,6 +623,7 @@ cat > "$TMP/c_start.sh" <<'EOF'
 TRACE="$TMP/trace.log"; : > "$TRACE"
 t() { printf '%s\n' "$1" >> "$TRACE"; }
 ENABLED=1; INIT_APPLY_FW=1
+Z2K_GVSUB_IPS="${2-}"
 load_modules()                    { t load_modules; }
 start_fw()                        { t start_fw; }
 ensure_autohostlist_files()       { t ensure_autohostlist_files; }
@@ -662,6 +663,23 @@ for verb in start start_daemons restart_daemons; do
     else
         no "$verb: the post-spawn repair pass still runs after the spawn (INVARIANT)" "spawn<repair" "spawn=$s repair=$r"
     fi
+done
+
+# 10.11.2026, ci_local: a failed ':' redirection must not terminate the shell
+# before SPAWN. Use invalid parents so this also fails reliably when run as root.
+: > "$TMP/gvsub-not-a-directory"
+for verb in start start_daemons restart_daemons; do
+    for path_case in empty missing-parent not-a-directory; do
+        case "$path_case" in
+            empty) ips= ;;
+            missing-parent) ips="$TMP/gvsub-missing/ips" ;;
+            not-a-directory) ips="$TMP/gvsub-not-a-directory/ips" ;;
+        esac
+        tr_out=$(sh "$TMP/c_start.sh" "$verb" "$ips" 2>&1 | tail -1)
+        s=$(idx "$tr_out" SPAWN)
+        [ -n "$s" ] && ok "$verb: reaches SPAWN with $path_case Z2K_GVSUB_IPS" \
+            || no "$verb: reaches SPAWN with $path_case Z2K_GVSUB_IPS" SPAWN "$tr_out"
+    done
 done
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
