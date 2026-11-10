@@ -1,0 +1,35 @@
+{
+  "host": "45.146.90.136",
+  "purpose": "Dedicated customer relay only; no community traffic",
+  "status": "proposed_not_applied",
+  "observed_at_utc": "2026-11-10T17:48:18Z",
+  "observed": {
+    "vcpus": 4,
+    "memory_total_kib": 4015408,
+    "memory_available_kib": 3610400,
+    "relay_rss_kib": 64324,
+    "live_installations": 2,
+    "authenticated_sessions": 2,
+    "telegram_streams": 604,
+    "per_install_max_sessions": 2,
+    "max_streams_per_session": 4096
+  },
+  "proposed_relay_flags": {
+    "max-sessions": 4096,
+    "per-install-max-sessions": 1024,
+    "max-streams-per-session": 4096
+  },
+  "retain_memory_limits": {
+    "GOMEMLIMIT": "1500MiB",
+    "MemoryHigh": "1800M",
+    "MemoryMax": "2200M",
+    "MemorySwapMax": "0"
+  },
+  "client_rollout_ready": false,
+  "blockers": [
+    "Current new client hard-caps local sessions at64; dedicated installations need a separately validated higher ceiling",
+    "Check whether downstream device addresses remain distinct before applying per-source-IP cap16",
+    "Validate load and peak bandwidth on this node; main-node synthetic tests are only sizing evidence",
+    "Verify new customer-network connectivity, snapshot config and review nightly recycle before relay deployment"
+  ]
+}
