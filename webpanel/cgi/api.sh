@@ -263,7 +263,7 @@ case "$method $path" in
         category_youtube=$(read_flag "Z2K_CATEGORY_YOUTUBE" "$CONFIG_FILE" "1")
         category_rkn=$(read_flag "Z2K_CATEGORY_RKN" "$CONFIG_FILE" "1")
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
-        gv_preflight=$(read_flag "Z2K_GV_SERVER_REPLY" "$CONFIG_FILE" "1")
+        gv_preflight=$(read_flag "Z2K_GV_SERVER_REPLY2" "$CONFIG_FILE" "1")
         gv_subst=$(read_flag "Z2K_GV_SUBST" "$CONFIG_FILE" "1")
         yt_quic_off=$(read_flag "Z2K_YT_QUIC_OFF" "$CONFIG_FILE" "0")
         quic_off=$(read_flag "Z2K_QUIC_OFF" "$CONFIG_FILE" "0")

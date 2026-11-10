@@ -1557,11 +1557,11 @@ generate_nfqws2_opt_from_strategies() {
         [ "$_done" = "1" ] || _out="${_out:+$_out }$Z2K_PREFLIGHT_STEP"
         printf '%s' "$_out"
     }
-    local Z2K_GV_SERVER_REPLY Z2K_PREFLIGHT_STEP=""
-    Z2K_GV_SERVER_REPLY=$(safe_config_read "Z2K_GV_SERVER_REPLY" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    local Z2K_GV_SERVER_REPLY2 Z2K_PREFLIGHT_STEP=""
+    Z2K_GV_SERVER_REPLY2=$(safe_config_read "Z2K_GV_SERVER_REPLY2" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
     # Файл проверяем на существование так же, как у z2k_sni_pick: инстанс,
     # чьей функции нет в движке, валит его в error() на каждом пакете профиля.
-    if [ "$Z2K_GV_SERVER_REPLY" = "1" ] \
+    if [ "$Z2K_GV_SERVER_REPLY2" = "1" ] \
        && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-preflight.lua" ]; then
         # v6 — шаг и на IPv6. init снимает его при старте, если увидит NAT
         # для IPv6 (S99zapret2, z2k_preflight_v6_gate): за NAT повторный SYN
@@ -2109,7 +2109,7 @@ create_official_config() {
     local saved_POLICY_EXCLUDE="0"
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
     local saved_Z2K_SNI_STALL="1"
-    local saved_Z2K_GV_SERVER_REPLY="" saved_Z2K_GV_SUBST=""
+    local saved_Z2K_GV_SERVER_REPLY2="" saved_Z2K_GV_SUBST=""
     local saved_Z2K_QUIC_OFF="" saved_Z2K_YT_QUIC_OFF=""
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
@@ -2188,22 +2188,19 @@ create_official_config() {
         # исчезал при первой же пересборке (ревью 25.10.2026).
         saved_Z2K_SNI_STALL=$(safe_config_read "Z2K_SNI_STALL" "$config_file" "1")
         case "$saved_Z2K_SNI_STALL" in 0|1) ;; *) saved_Z2K_SNI_STALL=1 ;; esac
-        # Z2K_GV_SERVER_REPLY — выключатель проверки DPI отдельным соединением. Его
-        # читают ДВА места: генератор (инстанс в профиле googlevideo) и S99
-        # (правило NAT для повторного SYN). Ключ обязан быть и здесь, и в
-        # heredoc ниже, иначе выключение исчезало бы при первой перегенерации —
-        # ровно так однажды терялся Z2K_SNI_STALL.
+        # Z2K_GV_SERVER_REPLY2 — выключатель пробы в профиле googlevideo.
+        # S99 ставит правило NAT по наличию шага в собранном NFQWS2_OPT.
+        # Ключ обязан сохраняться здесь и выводиться ниже: после обновления
+        # новый выбор человека не должен теряться при пересборке.
+        # Пишем только явно выбранное значение, иначе действует умолчание 1.
         #
-        # Ключ пишем, только если человек сам переключил тумблер. Иначе действует
-        # умолчание версии (сейчас 1), и его смена доходит до всех, кто тумблер
-        # не трогал: записанное за человека значение пережило бы любую смену.
-        #
-        # До p-87.24 ключ назывался Z2K_GV_PREFLIGHT. Его не читаем намеренно
-        # (решение Марка 08.11.2026): обход включается у всех, в том числе там,
-        # где был записан 0. Пересборка старый ключ просто не переносит.
-        saved_Z2K_GV_SERVER_REPLY=$(safe_config_read "Z2K_GV_SERVER_REPLY" "$config_file" "")
-        case "$saved_Z2K_GV_SERVER_REPLY" in 0|1|"") ;; *) saved_Z2K_GV_SERVER_REPLY="" ;; esac
-        # Z2K_GV_SUBST — подмена плохих адресов googlevideo (читает только S99).
+        # p-87.27: Z2K_GV_SERVER_REPLY и прежний Z2K_GV_PREFLIGHT намеренно
+        # не читаем и не переносим. Новое поколение ключа включает обход
+        # один раз у всех, включая тех, кто раньше сохранял 0.
+        saved_Z2K_GV_SERVER_REPLY2=$(safe_config_read "Z2K_GV_SERVER_REPLY2" "$config_file" "")
+        case "$saved_Z2K_GV_SERVER_REPLY2" in 0|1|"") ;; *) saved_Z2K_GV_SERVER_REPLY2="" ;; esac
+        # Z2K_GV_SUBST — подмена адресов googlevideo (генератор, S99, gvsub).
+        # До p-87.27 не публиковался: новое имя не нужно, умолчание уже 1.
         # Схема та же: пишем, только если человек переключил тумблер сам.
         saved_Z2K_GV_SUBST=$(safe_config_read "Z2K_GV_SUBST" "$config_file" "")
         case "$saved_Z2K_GV_SUBST" in 0|1|"") ;; *) saved_Z2K_GV_SUBST="" ;; esac
@@ -2525,8 +2522,8 @@ CONFIG
             _z2k_persist_raw="${Z2K_RELEASE_BRANCH:-https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced}" ;;
     esac
 
-    local _gv_preflight_line="# Z2K_GV_SERVER_REPLY не задан: действует умолчание версии"
-    [ -n "$saved_Z2K_GV_SERVER_REPLY" ] && _gv_preflight_line="Z2K_GV_SERVER_REPLY=${saved_Z2K_GV_SERVER_REPLY}"
+    local _gv_preflight_line="# Z2K_GV_SERVER_REPLY2 не задан: действует умолчание версии"
+    [ -n "$saved_Z2K_GV_SERVER_REPLY2" ] && _gv_preflight_line="Z2K_GV_SERVER_REPLY2=${saved_Z2K_GV_SERVER_REPLY2}"
     local _gv_subst_line="# Z2K_GV_SUBST не задан: действует умолчание версии"
     [ -n "$saved_Z2K_GV_SUBST" ] && _gv_subst_line="Z2K_GV_SUBST=${saved_Z2K_GV_SUBST}"
     local _quic_off_line="# Z2K_QUIC_OFF не задан: действует умолчание версии"

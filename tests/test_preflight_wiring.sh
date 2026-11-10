@@ -76,7 +76,7 @@ fi
 NAT_FN=$(awk '/^z2k_udp_masquerade_fix_start\(\)/{p=1} p{print} p&&/^}/{exit}' "$S99")
 if [ -n "$NAT_FN" ]; then
     nat_rules() {
-        NFQWS2_OPT="$1" Z2K_GV_SERVER_REPLY="$2" sh -c '
+        NFQWS2_OPT="$1" Z2K_GV_SERVER_REPLY2="$2" sh -c '
             z2k_fw_is_iptables() { return 0; }
             exists() { return 0; }
             get_wan_ifaces4() { printf "ppp0"; }
@@ -127,7 +127,7 @@ if [ -n "$TGFN" ]; then
         ' "$1"
     }
     run_toggle 0 0 && _rc=0 || _rc=1
-    [ "$_rc" = 0 ] && [ "$(tr '\n' ' ' < "$CALLS")" = "flag:Z2K_GV_SERVER_REPLY=0 regen restart " ] \
+    [ "$_rc" = 0 ] && [ "$(tr '\n' ' ' < "$CALLS")" = "flag:Z2K_GV_SERVER_REPLY2=0 regen restart " ] \
         && ok "тумблер: флаг, пересборка, перезапуск по порядку" \
         || bad "тумблер: rc=$_rc, вызовы: $(tr '\n' ' ' < "$CALLS")"
     : > "$CALLS"
@@ -158,7 +158,7 @@ grep -q '"POST /toggle/gv-preflight"' "$ROOT/webpanel/cgi/api.sh" \
 . "$ROOT/lib/utils.sh" 2>/dev/null
 . "$ROOT/lib/config_official.sh" 2>/dev/null
 
-gen() { # $1 - тег, $2 - строка конфига, $3 - 1, если lua-файл лежит на диске
+gen() { # $1 - тег, $2 - строка конфига, $3 - наличие lua, $4 - полная регенерация
     local root="$TMP/gen-$1"
     rm -rf "$root"
     mkdir -p "$root/extra_strats/TCP/YT" "$root/extra_strats/TCP/YT_GV" \
@@ -173,11 +173,16 @@ gen() { # $1 - тег, $2 - строка конфига, $3 - 1, если lua-ф
         > "$root/extra_strats/TCP/RKN/Strategy.txt"
     { echo "ENABLED=1"; [ -n "$2" ] && echo "$2"; } > "$root/config"
     [ "$3" = "1" ] && cp "$LUA_FILE" "$root/lua/z2k-preflight.lua"
-    ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null )
+    if [ "${4:-0}" = 1 ]; then
+        ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 ) || return 1
+        cat "$root/config"
+    else
+        ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null )
+    fi
     rm -rf "$root"
 }
 
-OPT_ON=$(gen on "Z2K_GV_SERVER_REPLY=1" 1)
+OPT_ON=$(gen on "Z2K_GV_SERVER_REPLY2=1" 1)
 GV_LINE=$(printf '%s\n' "$OPT_ON" \
     | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" | grep -F 'key=gv_tcp' | head -1)
 YT_LINE=$(printf '%s\n' "$OPT_ON" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" \
@@ -240,7 +245,7 @@ fi
 has "--ipset=/tmp/z2k-gv-ips.txt" "$(gen nosub "Z2K_GV_SUBST=0" 1)" \
     && bad "служба подмены выключена, а профиль по адресам остался" \
     || ok "Z2K_GV_SUBST=0 — профиля по адресам нет (файл некому наполнять)"
-has "--ipset=/tmp/z2k-gv-ips.txt" "$(gen nostep "Z2K_GV_SERVER_REPLY=0" 1)" \
+has "--ipset=/tmp/z2k-gv-ips.txt" "$(gen nostep "Z2K_GV_SERVER_REPLY2=0" 1)" \
     && bad "шаг выключен, а профиль по адресам остался" \
     || ok "без шага профиля по адресам нет"
 
@@ -258,29 +263,48 @@ OPT_ABSENT=$(gen absent "" 1)
 has "z2k_preflight" "$OPT_ABSENT" \
     && ok "без ключа шаг есть: по умолчанию включено" \
     || bad "без ключа шага нет (умолчание должно быть включено)"
-OPT_OFF=$(gen off "Z2K_GV_SERVER_REPLY=0" 1)
+OPT_OFF=$(gen off "Z2K_GV_SERVER_REPLY2=0" 1)
 has "z2k_preflight" "$OPT_OFF" \
-    && bad "Z2K_GV_SERVER_REPLY=0 не убрал шаг из конфига" \
-    || ok "Z2K_GV_SERVER_REPLY=0 убирает шаг из конфига"
+    && bad "Z2K_GV_SERVER_REPLY2=0 не убрал шаг из конфига" \
+    || ok "Z2K_GV_SERVER_REPLY2=0 убирает шаг из конфига"
 # Разовое включение у всех (p-87.24): прежний ключ Z2K_GV_PREFLIGHT=0 шаг не убирает.
 OPT_OLD0=$(gen old0 "Z2K_GV_PREFLIGHT=0" 1)
 has "z2k_preflight" "$OPT_OLD0" \
     && ok "старый Z2K_GV_PREFLIGHT=0 не выключает: включено у всех" \
     || bad "старый Z2K_GV_PREFLIGHT=0 всё ещё выключает шаг"
-_rg="$TMP/regen-old0"; rm -rf "$_rg"; mkdir -p "$_rg"
-printf 'ENABLED=1\nZ2K_GV_PREFLIGHT=0\n' > "$_rg/config"
-( ZAPRET2_DIR="$_rg" create_official_config "$_rg/config" >/dev/null 2>&1 )
-grep -Eq '^Z2K_GV_(PREFLIGHT|SERVER_REPLY)=' "$_rg/config" \
-    && bad "пересборка перенесла старый ноль: $(grep -E '^Z2K_GV_' "$_rg/config")" \
-    || ok "пересборка старый ключ не переносит, действует умолчание"
-printf 'ENABLED=1\nZ2K_GV_SERVER_REPLY=0\n' > "$_rg/config"
-( ZAPRET2_DIR="$_rg" create_official_config "$_rg/config" >/dev/null 2>&1 )
-grep -q '^Z2K_GV_SERVER_REPLY=0$' "$_rg/config" \
-    && ok "выключение после обновления сохраняется (больше принудительно не включаем)" \
-    || bad "Z2K_GV_SERVER_REPLY=0 потерян при пересборке"
-rm -rf "$_rg"
+# Исполняем полную регенерацию, включая сборку NFQWS2_OPT и запись флагов.
+for _old in Z2K_GV_PREFLIGHT Z2K_GV_SERVER_REPLY; do
+    REGEN=$(gen "regen-$_old" "$_old=0" 1 1) || bad "ошибка регенерации $_old"
+    has "--lua-desync=z2k_preflight:" "$REGEN" \
+        && ok "регенерация $_old=0: проба включена" \
+        || bad "регенерация $_old=0: проба выключена"
+    printf '%s\n' "$REGEN" | grep -Eq '^Z2K_GV_(PREFLIGHT|SERVER_REPLY)=' \
+        && bad "регенерация перенесла устаревший ключ $_old" \
+        || ok "регенерация удаляет устаревшие ключи"
+    has "Z2K_GV_SERVER_REPLY2=0" "$REGEN" \
+        && bad "регенерация перенесла старый ноль в новый ключ" \
+        || ok "новый ключ не выключен старым нулём"
+done
+for _want in 0 1; do
+    # Старые нули не должны перебивать новый осознанный выбор.
+    REGEN=$(gen "regen-new$_want" "Z2K_GV_SERVER_REPLY2=$_want
+Z2K_GV_SERVER_REPLY=0
+Z2K_GV_PREFLIGHT=0" 1 1) || bad "ошибка регенерации нового ключа =$_want"
+    printf '%s\n' "$REGEN" | grep -q "^Z2K_GV_SERVER_REPLY2=$_want$" \
+        && ok "новый ключ =$_want сохраняется при регенерации" \
+        || bad "регенерация потеряла новый ключ =$_want"
+    if [ "$_want" = 0 ]; then
+        has "--lua-desync=z2k_preflight:" "$REGEN" \
+            && bad "новый ноль не убрал пробу из NFQWS2_OPT" \
+            || ok "новый ноль убирает пробу из NFQWS2_OPT"
+    else
+        has "--lua-desync=z2k_preflight:" "$REGEN" \
+            && ok "новая единица включает пробу в NFQWS2_OPT" \
+            || bad "новая единица не включила пробу"
+    fi
+done
 
-OPT_NOFILE=$(gen nofile "Z2K_GV_SERVER_REPLY=1" 0)
+OPT_NOFILE=$(gen nofile "Z2K_GV_SERVER_REPLY2=1" 0)
 has "z2k_preflight" "$OPT_NOFILE" \
     && bad "шаг объявлен, хотя lua-файла на диске нет — движок упадёт в error()" \
     || ok "без lua-файла шаг в конфиг не попадает"

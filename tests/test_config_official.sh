@@ -526,8 +526,8 @@ SNIS_OUT=$(test_sni_stall_flag "absent" "")
 assert_contains "Z2K_SNI_STALL absent -> emits default =1" "Z2K_SNI_STALL=1" "$SNIS_OUT"
 
 # Выключатель проверки DPI отдельным соединением (googlevideo). Тот же класс
-# ошибки: ключ читают генератор и S99, и без строки в heredoc выключение
-# пропадало бы при первой же пересборке конфига.
+# ошибки: без сохранения ключа и строки в конфиге выключение
+# пропадало бы при первой же пересборке.
 test_gv_preflight_flag() {
     local tag="$1" file_line="$2"
     local root="${MOCK_DIR}/gvpf-$tag"
@@ -543,19 +543,19 @@ test_gv_preflight_flag() {
         > "$root/extra_strats/TCP/RKN/Strategy.txt"
     { echo "ENABLED=1"; if [ -n "$file_line" ]; then echo "$file_line"; fi; } > "$root/config"
     ( ZAPRET2_DIR="$root" create_official_config "$root/config" >/dev/null 2>&1 )
-    grep -E '^Z2K_GV_SERVER_REPLY=' "$root/config" | head -1
+    grep -E '^Z2K_GV_SERVER_REPLY2=' "$root/config" | head -1
     rm -rf "$root"
 }
-GVPF_OUT=$(test_gv_preflight_flag "off" "Z2K_GV_SERVER_REPLY=0")
-assert_contains "Z2K_GV_SERVER_REPLY=0 survives regen" "Z2K_GV_SERVER_REPLY=0" "$GVPF_OUT"
-GVPF_OUT=$(test_gv_preflight_flag "on" "Z2K_GV_SERVER_REPLY=1")
-assert_contains "Z2K_GV_SERVER_REPLY=1 survives regen" "Z2K_GV_SERVER_REPLY=1" "$GVPF_OUT"
+GVPF_OUT=$(test_gv_preflight_flag "off" "Z2K_GV_SERVER_REPLY2=0")
+assert_contains "Z2K_GV_SERVER_REPLY2=0 survives regen" "Z2K_GV_SERVER_REPLY2=0" "$GVPF_OUT"
+GVPF_OUT=$(test_gv_preflight_flag "on" "Z2K_GV_SERVER_REPLY2=1")
+assert_contains "Z2K_GV_SERVER_REPLY2=1 survives regen" "Z2K_GV_SERVER_REPLY2=1" "$GVPF_OUT"
 # Умолчание не записывается за человека: иначе смена умолчания в следующей
 # версии не дошла бы до тех, кто тумблер не трогал.
 GVPF_OUT=$(test_gv_preflight_flag "absent" "")
-assert_eq "Z2K_GV_SERVER_REPLY absent -> ключ не пишется" "" "$GVPF_OUT"
-GVPF_OUT=$(test_gv_preflight_flag "junk" "Z2K_GV_SERVER_REPLY=maybe")
-assert_eq "Z2K_GV_SERVER_REPLY junk -> ключ не пишется" "" "$GVPF_OUT"
+assert_eq "Z2K_GV_SERVER_REPLY2 absent -> ключ не пишется" "" "$GVPF_OUT"
+GVPF_OUT=$(test_gv_preflight_flag "junk" "Z2K_GV_SERVER_REPLY2=maybe")
+assert_eq "Z2K_GV_SERVER_REPLY2 junk -> ключ не пишется" "" "$GVPF_OUT"
 
 printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
 

@@ -71,7 +71,7 @@ missing_emit=""
 while IFS= read -r key; do
     [ -n "$key" ] || continue
     # Второй законный вид — строка собирается заранее и выводится только при
-    # заданном ключе (Z2K_GV_SERVER_REPLY: умолчание версии в конфиг не пишется).
+    # заданном ключе (Z2K_GV_SERVER_REPLY2: умолчание версии в конфиг не пишется).
     grep -qE "^${key}=" "$GEN" \
         || grep -qF "=\"${key}=\${saved_${key}}\"" "$GEN" \
         || missing_emit="$missing_emit $key"

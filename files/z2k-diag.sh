@@ -880,9 +880,9 @@ print_preflight() {
     printf '\n=== видео YouTube: обход по ответу сервера (googlevideo) ===\n'
     local cfg="${ZAPRET2_DIR}/config"
     local lua="${ZAPRET2_DIR}/lua/z2k-preflight.lua"
-    local flag; flag=$(sed -n 's/^Z2K_GV_SERVER_REPLY=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    local flag; flag=$(sed -n 's/^Z2K_GV_SERVER_REPLY2=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
     case "$flag" in
-        0) printf 'выключатель       : ВЫКЛЮЧЕН (Z2K_GV_SERVER_REPLY=0)\n' ;;
+        0) printf 'выключатель       : ВЫКЛЮЧЕН (Z2K_GV_SERVER_REPLY2=0)\n' ;;
         1) printf 'выключатель       : включён\n' ;;
         *) printf 'выключатель       : ключа нет — по умолчанию включён\n' ;;
     esac
