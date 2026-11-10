@@ -110,6 +110,18 @@ local function make_probe_syn(dis, arg)
 	dis.tcp.th_win = wsize
 end
 
+-- 10.11.2026, 58976 (PAWS): повтор SYN меняет базу TS, но orig нужен
+-- неизменным для передачи клиенту. ECR позволяет выбрать подтверждённый SYN.
+local function remember_syn_ts(st, dis, arg)
+	if not arg.keepts then return end
+	local i = find_tcp_option(dis.tcp.options, TCP_KIND_TS)
+	if i then
+		st.syn_ts = u32(string.sub(dis.tcp.options[i].data, 1, 4))
+		st.syn_timestamps = st.syn_timestamps or {}
+		st.syn_timestamps[st.syn_ts] = true
+	end
+end
+
 local function make_packet(st, flags, seq, ack, payload)
 	local dis = deepcopy(st.orig)
 	dis.tcp.th_flags = flags
@@ -128,6 +140,7 @@ local function make_packet(st, flags, seq, ack, payload)
 			{kind = TCP_KIND_NOOP}, {kind = TCP_KIND_NOOP},
 			{kind = TCP_KIND_TS, data = bu32(st.ts_val)..bu32(st.ts_ecr)},
 		}
+		st.ts_val = u32add(st.ts_val, 1)
 	end
 	dis.payload = payload or ""
 	return dis
@@ -141,23 +154,44 @@ end
 
 local function send_probe_hello(st)
 	local data = st.hello
-	local pos = resolve_multi_pos(data, "tls_client_hello", st.pos)
-	delete_pos_1(pos)
-	pos[#pos + 1] = #data + 1
 	local base = u32add(st.isn, 1)
-	local parts = {}
-	local from = 1
-	for _, p in ipairs(pos) do
-		parts[#parts + 1] = {from = from, to = p - 1}
-		from = p
+	local parts = st.hello_parts
+	if not parts then
+		local pos = resolve_multi_pos(data, "tls_client_hello", st.pos)
+		delete_pos_1(pos)
+		pos[#pos + 1] = #data + 1
+		parts = {}
+		local from = 1
+		for _, p in ipairs(pos) do
+			parts[#parts + 1] = {from = from, to = p - 1}
+			from = p
+		end
+		st.hello_parts = parts
 	end
+	-- 10.11.2026, 58983 (SACK 133:678): хвост получен, начало не
+	-- подтверждено. Без разбора SACK повторяем от cumulative ACK, сохраняя
+	-- исходные границы и обратный порядок частей, включая при частичном ACK.
+	local confirmed = u32add(st.cli_acked, -base)
 	for i = #parts, 1, -1 do
 		local part = parts[i]
-		send(st, make_packet(st, TH_PUSH + TH_ACK, u32add(base, part.from - 1), st.srv_next,
-			string.sub(data, part.from, part.to)))
+		local first = math.max(part.from, confirmed + 1)
+		if first <= part.to then
+			send(st, make_packet(st, TH_PUSH + TH_ACK, u32add(base, first - 1), st.srv_next,
+				string.sub(data, first, part.to)))
+		end
 	end
 	st.cli_next = u32add(base, #data)
 	log(st, "sent hello "..#data.." bytes in "..#parts.." parts")
+end
+
+local function retry_probe(st, syn_ack)
+	-- 10.11.2026: общий бюджет для дублей ACK, SYN-ACK и SYN клиента, иначе каждый
+	-- ответ сервера мог бы запустить новый поток повторов. Timeout не продлеваем.
+	if st.retries >= 2 then return end
+	st.retries = st.retries + 1
+	st.dup_acks = 0
+	send(st, make_packet(st, TH_ACK, syn_ack and u32add(st.isn, 1) or st.cli_next, st.srv_next))
+	send_probe_hello(st)
 end
 
 local function teardown(st)
@@ -200,6 +234,7 @@ local function step(ctx, desync)
 					pieces = 0, bytes = 0, ip_id = dis.ip and dis.ip.ip_id or 0, resets = 0,
 				}
 				flows[key] = st
+				remember_syn_ts(st, dis, desync.arg)
 				make_probe_syn(dis, desync.arg)
 				log(st, "probe SYN")
 				return VERDICT_MODIFY
@@ -216,9 +251,15 @@ local function step(ctx, desync)
 			if st.stage == "resyn" then return VERDICT_PASS end
 			-- Пробный SYN потерян: повтор клиента становится новым пробным SYN.
 			if st.stage == "probe_syn" then
+				remember_syn_ts(st, dis, desync.arg)
 				make_probe_syn(dis, desync.arg)
 				log(st, "probe SYN retransmit")
 				return VERDICT_MODIFY
+			end
+			-- SYN macOS служит таймером потери ClientHello. После полного ACK
+			-- ждём ответ сервера в малом окне, не расходуя бюджет повторов.
+			if st.stage == "probe_data" and st.cli_acked ~= st.cli_next then
+				retry_probe(st, false)
 			end
 			log(st, "client SYN retransmit dropped")
 			return VERDICT_DROP
@@ -256,13 +297,16 @@ local function step(ctx, desync)
 	end
 
 	if st.stage == "probe_syn" then
-		if syn and ack then
+		if syn and ack and tcp.th_ack == u32add(st.isn, 1) then
+			st.srv_isn = tcp.th_seq
 			st.srv_next = u32add(tcp.th_seq, 1)
+			st.cli_acked = u32add(st.isn, 1)
+			st.retries, st.dup_acks = 0, 0
 			if desync.arg.keepts then
-				local c = find_tcp_option(st.orig.tcp.options, TCP_KIND_TS)
 				local s = find_tcp_option(tcp.options, TCP_KIND_TS)
-				if c and s then
-					st.ts_val = u32add(u32(string.sub(st.orig.tcp.options[c].data, 1, 4)), 1)
+				if st.syn_ts and s then
+					local echo = u32(string.sub(tcp.options[s].data, 5, 8))
+					st.ts_val = u32add(st.syn_timestamps[echo] and echo or st.syn_ts, 1)
 					st.ts_ecr = u32(string.sub(tcp.options[s].data, 1, 4))
 				end
 			end
@@ -275,16 +319,41 @@ local function step(ctx, desync)
 
 	if st.stage == "probe_data" then
 		local len = #dis.payload
+		if st.ts_val then
+			local s = find_tcp_option(tcp.options, TCP_KIND_TS)
+			if s then
+				local value = u32(string.sub(tcp.options[s].data, 1, 4))
+				if seq_ge(value, st.ts_ecr) then st.ts_ecr = value end
+			end
+		end
+		if syn then
+			if ack and tcp.th_seq == st.srv_isn and tcp.th_ack == u32add(st.isn, 1) then
+				retry_probe(st, true)
+			end
+			return VERDICT_DROP
+		end
+		if ack and seq_ge(tcp.th_ack, st.cli_acked) and seq_ge(st.cli_next, tcp.th_ack) then
+			if tcp.th_ack ~= st.cli_acked then
+				st.cli_acked, st.dup_acks = tcp.th_ack, 0
+			elseif len == 0 and st.cli_acked ~= st.cli_next then
+				st.dup_acks = st.dup_acks + 1
+				if st.dup_acks == 3 then retry_probe(st, false) end
+			end
+		end
 		if len > 0 then
 			local edge = u32add(tcp.th_seq, len)
-			if seq_ge(edge, st.srv_next) then st.srv_next = edge end
+			-- 10.11.2026: повторы считались частями, а ACK мог подтвердить
+			-- неполученное. srv_next — первый байт за непрерывным диапазоном;
+			-- дыру восстанавливает сервер, на повторы и пакеты за ней — прежний ACK.
+			if not seq_ge(st.srv_next, tcp.th_seq) or not seq_ge(edge, st.srv_next) or edge == st.srv_next then
+				send(st, make_packet(st, TH_ACK, st.cli_next, st.srv_next))
+				return VERDICT_DROP
+			end
+			len = u32add(edge, -st.srv_next)
+			st.srv_next = edge
 			st.pieces = st.pieces + 1
 			st.bytes = st.bytes + len
 			log(st, "server piece "..len.." bytes")
-			if st.ts_val then
-				local s = find_tcp_option(tcp.options, TCP_KIND_TS)
-				if s then st.ts_ecr = u32(string.sub(tcp.options[s].data, 1, 4)) end
-			end
 			if st.pieces >= st.pieces_need then
 				teardown(st)
 			else

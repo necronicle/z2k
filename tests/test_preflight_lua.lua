@@ -45,7 +45,7 @@ end
 u32add = function(a, b) return (a + b) % 4294967296 end
 u32 = function(s) return (string.byte(s, 1) * 16777216) + (string.byte(s, 2) * 65536)
     + (string.byte(s, 3) * 256) + string.byte(s, 4) end
-seq_ge = function(a, b) return a >= b end
+seq_ge = function(a, b) return u32add(a, -b) < 2147483648 end
 bu8 = function(v) return string.char(v % 256) end
 bu32 = function(v)
     local b = {}
@@ -152,6 +152,207 @@ do
     is("второй кусок имеет меньший seq, чем первый отправленный", true, b.tcp.th_seq < a.tcp.th_seq)
 end
 
+-- ----- 3b. Ограниченное восстановление (10.11.2026, 58976 / 58983) ---------
+-- Фильтр позволяет отдельно проверить падение каждого сценария на старом Lua.
+local function recovery_case(name, run)
+    if not os.getenv("PF_RECOVERY_CASE") or os.getenv("PF_RECOVERY_CASE") == name then
+        run()
+    end
+end
+local function ts_options(value, echo)
+    return {{kind = TCP_KIND_TS, data = bu32(value) .. bu32(echo or 0)}}
+end
+local function packet_ts(packet)
+    local i = packet and find_tcp_option(packet.tcp.options, TCP_KIND_TS)
+    return i and u32(packet.tcp.options[i].data:sub(1, 4))
+end
+
+recovery_case("timestamp", function()
+    local arg = {keepts = true}
+    start_probe(arg)
+    out(dis_out(TH_SYN, ISN, nil, ts_options(1111)), arg)
+    reset_calls()
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1, nil, ts_options(9000, 1111)), arg)
+    is("58976: ACK от TS повторного SYN", 1112, packet_ts(sent[1]))
+    local previous = 1111
+    for _, packet in ipairs(sent) do
+        local value = packet_ts(packet)
+        is("58976: TS не откатывается", true, value ~= nil and seq_ge(value, previous))
+        previous = value or previous
+    end
+    reset_calls()
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1, nil, ts_options(9001, 111)), arg)
+    is("58976: повтор SYN-ACK восстановлен", 3, #sent)
+    for _, packet in ipairs(sent) do
+        local value = packet_ts(packet)
+        is("58976: старый ecr не откатывает TS", true, value ~= nil and seq_ge(value, previous))
+        previous = value or previous
+    end
+    -- Задержавшийся SYN-ACK может подтверждать первый SYN, а не последний.
+    start_probe(arg)
+    out(dis_out(TH_SYN, ISN, nil, ts_options(1111)), arg)
+    reset_calls()
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1, nil, ts_options(9000, 111)), arg)
+    is("TS именно подтверждённого SYN", 112, packet_ts(sent[1]))
+end)
+
+recovery_case("stalled_ack", function()
+    start_probe({})
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    local initial = deepcopy(sent)
+    local base = ISN + 1
+    reset_calls()
+    -- Чужие ACK вне отправленного диапазона не должны вызывать восстановление.
+    for _ = 1, 4 do
+        inc(dis_in(TH_ACK, 5001, base - 1))
+        inc(dis_in(TH_ACK, 5001, base + 10000))
+    end
+    for _ = 1, 2 do inc(dis_in(TH_ACK, 5001, base)) end
+    is("58983: до третьего дубля нет отправок", 0, #sent)
+    inc(dis_in(TH_ACK, 5001, base))
+    is("58983: третий дубль повторяет ACK и части", 3, #sent)
+    for n, packet in ipairs(sent) do
+        local expected_seq = n == 1 and initial[2].tcp.th_seq + #initial[2].payload or initial[n].tcp.th_seq
+        is("58983: прежний порядок и seq " .. n, expected_seq, packet.tcp.th_seq)
+        is("58983: прежние байты " .. n, initial[n].payload, packet.payload)
+        is("58983: прежний порт " .. n, SPORT, packet.tcp.th_sport)
+        is("без keepts нет TS " .. n, nil, packet_ts(packet))
+    end
+    -- ACK в середине первой части: повторить её хвост, вторую целиком.
+    reset_calls()
+    inc(dis_in(TH_ACK, 5001, base + 2))
+    for _ = 1, 2 do inc(dis_in(TH_ACK, 5001, base + 2)) end
+    is("продвижение ACK сбрасывает дубли", 0, #sent)
+    inc(dis_in(TH_ACK, 5001, base + 2))
+    is("частичный ACK: ACK и две оставшиеся части", 3, #sent)
+    is("хвостовая часть сохраняется", initial[2].payload, sent[2] and sent[2].payload)
+    is("подтверждённое начало не повторяется", initial[3].payload:sub(3), sent[3] and sent[3].payload)
+    is("seq с подтверждённого места", base + 2, sent[3] and sent[3].tcp.th_seq)
+    reset_flows()
+    reset_calls()
+    local wrap_isn = 4294967290
+    out(dis_out(TH_SYN, wrap_isn))
+    inc(dis_in(TH_SYN + TH_ACK, 5000, u32add(wrap_isn, 1)))
+    local hello = sent[3].payload .. sent[2].payload
+    reset_calls()
+    inc(dis_in(TH_ACK, 5001, 2))
+    for _ = 1, 3 do inc(dis_in(TH_ACK, 5001, 2)) end
+    is("wrap ACK: сохранены обе оставшиеся части", 3, #sent)
+    is("wrap ACK: повтор с подтверждённого байта", 2, sent[3] and sent[3].tcp.th_seq)
+    local remaining = sent[3] and sent[2] and sent[3].payload .. sent[2].payload
+    is("wrap ACK: точные неподтверждённые байты", hello:sub(8), remaining)
+end)
+
+recovery_case("client_syn_stalled", function()
+    start_probe({})
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    local initial = deepcopy(sent)
+    local st = select(2, next(z2k_pf_flows))
+    local started = st.t
+    reset_calls()
+    -- 58983: один ACK с SACK хвоста, затем молчание до повтора SYN macOS.
+    -- SACK не разбирается: повторяем все части от cumulative ACK.
+    inc(dis_in(TH_ACK, 5001, ISN + 1, nil,
+        {{kind = 5, data = bu32(ISN + 133) .. bu32(ISN + 678)}}))
+    is("58983: один дубль ACK не вызывает отправок", 0, #sent)
+    is("58983: повтор SYN остаётся в drop", VERDICT_DROP, out(dis_out(TH_SYN, ISN)))
+    is("58983: SYN повторяет ACK и обе части", 3, #sent)
+    for n = 2, 3 do
+        is("58983 SYN: seq части " .. n, initial[n].tcp.th_seq, sent[n] and sent[n].tcp.th_seq)
+        is("58983 SYN: байты части " .. n, initial[n].payload, sent[n] and sent[n].payload)
+    end
+    is("58983 SYN: seq ACK", st.cli_next, sent[1] and sent[1].tcp.th_seq)
+    reset_calls()
+    inc(dis_in(TH_ACK, 5001, ISN + 3))
+    out(dis_out(TH_SYN, ISN))
+    is("SYN после частичного ACK: ACK и две части", 3, #sent)
+    is("SYN после частичного ACK: хвост первой части", initial[3].payload:sub(3), sent[3] and sent[3].payload)
+    is("SYN после частичного ACK: seq от подтверждения", ISN + 3, sent[3] and sent[3].tcp.th_seq)
+    reset_calls()
+    out(dis_out(TH_SYN, ISN))
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    for _ = 1, 3 do inc(dis_in(TH_ACK, 5001, ISN + 3)) end
+    is("SYN, SYN-ACK и ACK делят бюджет два", 0, #sent)
+    is("SYN не продлевает timeout", started, st.t)
+end)
+
+recovery_case("client_syn_confirmed", function()
+    start_probe({})
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    local st = select(2, next(z2k_pf_flows))
+    reset_calls()
+    -- Сначала убеждаемся, что триггер работает; после полного ACK он молчит,
+    -- хотя в бюджете ещё остался один повтор.
+    out(dis_out(TH_SYN, ISN))
+    is("до полного ACK: SYN вызывает повтор", 3, #sent)
+    reset_calls()
+    inc(dis_in(TH_ACK, 5001, st.cli_next))
+    local retries = st.retries
+    for _ = 1, 3 do
+        is("полный ACK: повтор SYN дропается", VERDICT_DROP, out(dis_out(TH_SYN, ISN)))
+    end
+    is("полный ACK: повтор SYN без отправок", 0, #sent)
+    is("полный ACK: бюджет не расходуется", retries, st.retries)
+    is("полный ACK: ждём ответ в probe_data", "probe_data", st.stage)
+end)
+
+recovery_case("retry_budget", function()
+    start_probe({})
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    local started = select(2, next(z2k_pf_flows)).t
+    reset_calls()
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    is("первый повтор по SYN-ACK", 3, #sent)
+    for _ = 1, 3 do inc(dis_in(TH_ACK, 5001, ISN + 1)) end
+    is("второй повтор по дублям ACK", 6, #sent)
+    for _ = 1, 15 do
+        inc(dis_in(TH_ACK, 5001, ISN + 1))
+        inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    end
+    is("общий предел два при смешанных триггерах", 6, #sent)
+    inc(dis_in(TH_ACK, 5001, ISN + 2))
+    for _ = 1, 6 do inc(dis_in(TH_ACK, 5001, ISN + 2)) end
+    is("новый ACK не возобновляет бюджет", 6, #sent)
+    is("повторы не продлевают timeout", started, select(2, next(z2k_pf_flows)).t)
+end)
+
+recovery_case("success", function()
+    local arg = {pieces = 2}
+    start_probe(arg)
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1), arg)
+    local edge = sent[2].tcp.th_seq + #sent[2].payload
+    local split = sent[2].tcp.th_seq
+    reset_calls()
+    -- Подтверждена первая часть: повтор SYN-ACK должен повторить только вторую.
+    inc(dis_in(TH_ACK, 5001, split), arg)
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1), arg)
+    is("успех: восстановление началось", 2, #sent)
+    is("успех: повтор только неподтверждённой части", split, sent[2] and sent[2].tcp.th_seq)
+    is("повтор SYN-ACK: завершающий ACK рукопожатия", ISN + 1, sent[1] and sent[1].tcp.th_seq)
+    reset_calls()
+    for _ = 1, 8 do inc(dis_in(TH_ACK, 5001, edge), arg) end
+    is("успех: полный cumulative ACK не вызывает повторов", 0, #sent)
+    inc(dis_in(TH_ACK, 5001, edge, "ab"), arg)
+    is("успех: только обычный ACK данных", 1, #sent)
+    inc(dis_in(TH_ACK, 5003, edge, "cd"), arg)
+    is("успех: только RST и исходный SYN при завершении", 3, #sent)
+    reset_calls()
+    inc(dis_in(TH_SYN + TH_ACK, 7000, ISN + 1), arg)
+    inc(dis_in(TH_ACK, 7001, edge), arg)
+    is("успех: после handover отправок нет", 0, #sent)
+    -- Обычная удачная проба вообще не нуждается в восстановлении.
+    start_probe(arg)
+    reset_calls()
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1), arg)
+    is("обычный успех: только начальные ACK и части", 3, #sent)
+    edge = sent[2].tcp.th_seq + #sent[2].payload
+    reset_calls()
+    for _ = 1, 6 do inc(dis_in(TH_ACK, 5001, edge), arg) end
+    inc(dis_in(TH_ACK, 5001, edge, "ab"), arg)
+    inc(dis_in(TH_ACK, 5003, edge, "cd"), arg)
+    is("обычный успех: ACK, RST и SYN без повторов", 3, #sent)
+end)
+
 -- ----- 4. Ответ сервера: кусками до порога, потом RST и исходный SYN --------
 do
     start_probe({pieces = 2})
@@ -168,6 +369,75 @@ do
     is("вторым — исходный SYN клиента", TH_SYN, sent[2].tcp.th_flags)
     is("исходный SYN с исходным номером", ISN, sent[2].tcp.th_seq)
     is("исходный SYN с окном клиента", 65535, sent[2].tcp.th_win)
+end
+
+-- ----- 4b. Только новые байты непрерывного диапазона продвигают пробу ------
+-- Каждая строка: seq, payload, ожидаемые srv_next, pieces, bytes.
+local function check_reply_sequence(name, server_isn, packets)
+    local arg = {pieces = 3, open = 2}
+    start_probe(arg)
+    inc(dis_in(TH_SYN + TH_ACK, server_isn, ISN + 1), arg)
+    local st = select(2, next(z2k_pf_flows))
+    for n, packet in ipairs(packets) do
+        reset_calls()
+        local label = name .. ": пакет " .. n
+        is(label .. " скрыт от клиента", VERDICT_DROP,
+            inc(dis_in(TH_ACK, packet[1], 1, packet[2]), arg))
+        is(label .. " srv_next", packet[3], st.srv_next)
+        is(label .. " pieces", packet[4], st.pieces)
+        is(label .. " bytes", packet[5], st.bytes)
+        if packet[4] < arg.pieces then
+            is(label .. " проба продолжается", "probe_data", st.stage)
+            is(label .. " один ACK", 1, #sent)
+            is(label .. " флаг ACK", TH_ACK, sent[1] and sent[1].tcp.th_flags)
+            is(label .. " ACK непрерывного диапазона", packet[3], sent[1] and sent[1].tcp.th_ack)
+            is(label .. " окно по новым частям", packet[4] < arg.open and 1 or 65535, st.wsize)
+        else
+            is(label .. " порог достигнут", "resyn", st.stage)
+            is(label .. " RST и исходный SYN", 2, #sent)
+            is(label .. " RST", TH_RST, sent[1] and sent[1].tcp.th_flags)
+            is(label .. " исходный SYN", TH_SYN, sent[2] and sent[2].tcp.th_flags)
+        end
+    end
+end
+
+do
+    check_reply_sequence("дубликат", 5000, {
+        {5001, "ab", 5003, 1, 2},
+        {5001, "ab", 5003, 1, 2},
+        {5000, "x", 5003, 1, 2},
+        {5003, "cd", 5005, 2, 4},
+        {5005, "ef", 5007, 3, 6},
+    })
+end
+
+do
+    check_reply_sequence("перекрытие", 5000, {
+        {5001, "abcd", 5005, 1, 4},
+        {5003, "cdef", 5007, 2, 6},
+        {5007, "gh", 5009, 3, 8},
+    })
+end
+
+do
+    check_reply_sequence("дыра", 5000, {
+        {5003, "cd", 5001, 0, 0},
+        {5001, "ab", 5003, 1, 2},
+        {5005, "ef", 5003, 1, 2},
+        {5003, "cd", 5005, 2, 4},
+        -- Пакет за дырой не буферизуется: сервер должен повторить его.
+        {5005, "ef", 5007, 3, 6},
+    })
+end
+
+do
+    check_reply_sequence("wrap", 4294967292, {
+        {4294967293, "ab", 4294967295, 1, 2},
+        {4294967294, "bcde", 2, 2, 5},
+        {4294967295, "cde", 2, 2, 5},
+        {4, "hi", 2, 2, 5},
+        {2, "fg", 4, 3, 7},
+    })
 end
 
 -- ----- 5. Передача клиенту: плечи после неё РАБОТАЮТ ------------------------
@@ -302,7 +572,7 @@ do
     local probe = sent[#sent]
     is("IPv6: пакеты пробы идут по IPv6", true, probe.ip6 ~= nil and probe.ip == nil)
     for n = 1, 2 do
-        z2k_preflight(nil, {dis = i6(TH_PUSH + TH_ACK, 5001 + n, ISN + 1, "ab"), outgoing = false, arg = a})
+        z2k_preflight(nil, {dis = i6(TH_PUSH + TH_ACK, 5001 + (n - 1) * 2, ISN + 1, "ab"), outgoing = false, arg = a})
     end
     local last = sent[#sent]
     is("IPv6: после кусков ответа — исходный SYN клиента", TH_SYN, last.tcp.th_flags)
