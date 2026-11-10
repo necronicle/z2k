@@ -138,7 +138,7 @@ HOOK_LOG='' table=mangle type=iptables PATH="$BIN:$PATH" INIT_SCRIPT="$INIT" ZAP
 # ~6 с без подмен (сбор 10.11.2026). Даже при занятом замке сигнал уходит.
 reset; mkdir "$LOCK"
 GOT="$TMP/gvsub.hup"; rm -f "$GOT"
-sh -c 'trap "echo hup >> \"$1\"" HUP; while :; do sleep 1; done' _ "$GOT" &
+GOT="$GOT" sh -c 'trap '\''echo hup >> "$GOT"'\'' HUP; while :; do sleep 1; done' &
 GV=$!; echo "$GV" > "$TMP/gvsub.pid"
 sleep 1
 run_hook 5
