@@ -23,3 +23,13 @@
 - [x] R7: exact-address live exclusion and persistence through user-exclusion file.
 - [x] R7: verify source regression, new TLS and Telegram canaries; commit incident follow-up.
 - [ ] Release gate: newer Googlevideo IP profile must fail closed when its dynamic IP file is empty; exact relay exclusion alone does not fix other destinations.
+
+## Release execution
+- [x] Public baseline and Telegram-only diff; published release documentation.
+- [x] Dedicated quota regression RED->GREEN; keep community per-device bound.
+- [x] Local suites/race checks and independent review.
+- [x] All Telegram architecture builds and final ARM64 five-DC canary.
+- [x] VPS private backups and configuration proposals.
+- [ ] Sequential server rollout, old/new compatibility and fleet return.
+- [ ] Signed p-87.26 manifest/tag; atomic staging push; CI/publish.
+- [ ] Public delivery verification and owner router native update path.

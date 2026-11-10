@@ -96,3 +96,21 @@ include lists as unrestricted. z2k_preflight emits the observed synthetic SYN.
 That profile exists in newer concurrent main-worktree work, not this feature
 branch. The exact VPS exclusion protects relay traffic but is not a general
 fix for the empty-list profile. Keep general fail-closed correction as a release gate.
+
+## Release p-87.26 preparation
+Published GitHub RELEASING.md read in full after fresh fetch. Public base5565bc13.
+Current branch z2k-staging. Temporary release/tg-p87-26 removed at owner's request.
+Other working tree /Library/Zapret2/z2k retains b8c48c51 and all its ongoing edits
+in detached HEAD; no files overwritten. No force push is required.
+265 local suites:5228 passed,0 failed,6 skipped (BSD sed and five unrelated
+rt-proxy reproducibility checks). Client race41.542s; relay race4.603s.
+Fresh reviewer found no blocker. Nonblocking: server unlimited quota0 remains
+conservative fallback48; configured servers use finite64/1024, so unaffected.
+Client binaries rebuilt with pinned Go1.25.13, versionp-87.26 and production
+credential. Binary drift8/8; final ARM64 binary validates resPQ against fiveDCs.
+Old capabilities1 and new3 both authenticate on old main relay and carry two
+sequential useful Telegram upstream streams over WSS. TLS verification used
+modern OpenSSL via router SSH forwarding because macOS system Python3.9 TLS
+misclassifies numeric-prefix SNI. No TLS verification was disabled in the probe.
+Dedicated registration remains closed; failed probe registration made no registry
+entry. Existing live customer identities will provide the post-deploy check.
