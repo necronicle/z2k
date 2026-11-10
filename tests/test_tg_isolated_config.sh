@@ -1,7 +1,7 @@
 #!/bin/sh
 # Exercise the actual supervisor option block with new/old binaries and bad config.
 set -eu
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 awk '/# Optional session limit; dedicated/{copy=1} copy{print} copy && /esac/{exit}' "$ROOT/files/init.d/S98tg-tunnel" | sed "s|/opt/zapret2/config|$TMP/config|g" > "$TMP/block"
