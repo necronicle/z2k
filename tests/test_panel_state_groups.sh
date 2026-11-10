@@ -490,6 +490,40 @@ const SC = {
   },
 };
 
+for (const dir of ["asc", "desc"]) {
+  SC["age_" + dir] = {
+    setup() {
+      Date.now = () => 2000000000000;
+      localStorage.setItem("z2k-state-sort", JSON.stringify({ key: "age", dir }));
+      const row = (host, age) => ({ key: "rkn_tcp", host, strategy: 1,
+        ts: age === null ? 0 : 2000000000 - age, mode: "auto" });
+      ENTRIES.splice(0, ENTRIES.length,
+        row("pair.net|4", 1440), row("pair.net|6", 86400),
+        row("solo.org|4", 1560), row("hours.org|4", 7200), row("days.org|4", 172800),
+        row("a.group.com|4", 120), row("b.group.com|6", 259200), row("c.group.com|4", null),
+        row("missing.org|4", null), row("a.empty.com|4", null), row("b.empty.com|6", null));
+    },
+    async run() {
+      const html = sel("#state-body").innerHTML;
+      const top = [], members = [];
+      for (const match of html.matchAll(/<tr([^>]*)>([\s\S]*?)<\/tr>/g)) {
+        const age = (match[2].match(/class="state-age">([^<]*)</) || [])[1];
+        if (age === undefined) continue;
+        (match[1].includes("sg-member") ? members : top).push(age);
+      }
+      const want = dir === "asc" ? ["2м", "24м", "26м", "2ч", "1д", "2д", "—", "—"]
+        : ["2д", "1д", "2ч", "26м", "24м", "2м", "—", "—"];
+      check("возраст " + dir + ": показанный верхний уровень упорядочен",
+        JSON.stringify(top) === JSON.stringify(want), JSON.stringify(top));
+      const group = html.match(/data-group="rkn_tcp\|group.com">([\s\S]*?)<\/tbody>/);
+      const groupAges = group ? [...group[1].matchAll(/class="state-age">([^<]*)</g)].map(x => x[1]) : [];
+      check("возраст " + dir + ": заголовок freshest, участники и пустые",
+        JSON.stringify(groupAges) === JSON.stringify(dir === "asc" ? ["2м", "2м", "3д", "—"] : ["2м", "3д", "2м", "—"]), JSON.stringify(groupAges));
+      check("возраст " + dir + ": строки не потеряны", members.length === 5, members.length);
+    },
+  };
+}
+
 (async () => {
   const s = SC[SCEN];
   s.setup();
@@ -513,7 +547,7 @@ run_scen() {
         esac
     done
 }
-for scen in render tiebreak remembered toggle search coldtype errorstale; do
+for scen in render tiebreak remembered toggle search coldtype errorstale age_asc age_desc; do
     out=$(run_scen "$JS" "$scen")
     printf '%s\n' "$out"
     PASS=$((PASS + $(printf '%s\n' "$out" | grep -c '^\[PASS\]')))

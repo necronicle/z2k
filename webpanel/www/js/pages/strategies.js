@@ -3,7 +3,7 @@ import { apiGet, apiPost, apiPostText, errHtml, toastErr } from "../core/api.js"
 import { $app, _icons, escapeHtml, skeletonLines } from "../core/dom.js";
 import { _newLoad, _stale } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
-import { STATE_SORT_LABELS, groupDomain, saveOpenGroups, saveStateSort, setStatePools, stateOpenGroups, statePools, stateSort } from "../state-model.js";
+import { STATE_SORT_LABELS, buildStateBlocks, stateAge, groupDomain, saveOpenGroups, saveStateSort, setStatePools, stateOpenGroups, statePools, stateSort } from "../state-model.js";
 
 // Разделитель СОСТАВНОГО ключа группы («пул<sep>домен»).
 //
@@ -430,49 +430,18 @@ async function loadState(useCache) {
       const hf = splitFamily(e.host);
       const dom = groupDomain(hf.name);
       return [e, { name: hf.name, fam: hf.fam, group: dom,
-                   gkey: String(e.key || "") + GKEY_SEP + dom }];
+                   gkey: String(e.key || "") + GKEY_SEP + dom, age: stateAge(e.ts, nowSec) }];
     }));
-    // Sort a shallow copy — never mutate the cached server response.
-    const sorted = visible.slice().sort((a, b) => {
-      let av, bv;
-      switch (stateSort.key) {
-        case "key":      av = String(a.key  || ""); bv = String(b.key  || ""); break;
-        // По домену — сперва по родителю, потом по полному имени. Иначе группа
-        // вставала бы туда, где по алфавиту её первый поддомен: apple.com
-        // оказывался у «api.», discord.media — у «c-arn04».
-        // Домен — первым, пул — вторым: иначе колонка «Домен» незаметно
-        // сортирует по профилю, а группы одного домена из разных пулов
-        // разъезжаются по разным концам таблицы.
-        case "host":     av = meta.get(a).group + "\u0000" + String(a.key || "") + "\u0000" + String(a.host || "");
-                         bv = meta.get(b).group + "\u0000" + String(b.key || "") + "\u0000" + String(b.host || ""); break;
-        case "strategy": av = Number(a.strategy) || 0; bv = Number(b.strategy) || 0; break;
-        // По возрастанию — замороженные сверху: колонку жмут, чтобы найти
-        // именно их среди сотен строк на авторотации.
-        case "frozen":   av = a.mode === "frozen" ? 0 : 1; bv = b.mode === "frozen" ? 0 : 1; break;
-        // 'age' sorts by age value (= now - ts). Asc → freshest first
-        // (small age), which matches what we'd want by default when
-        // a user clicks «Возраст» — "what's been moving recently".
-        case "age":      av = nowSec - (Number(a.ts) || 0); bv = nowSec - (Number(b.ts) || 0); break;
-        default:         return 0;
-      }
-      if (av < bv) return stateSort.dir === "asc" ? -1 : 1;
-      if (av > bv) return stateSort.dir === "asc" ?  1 : -1;
-      // Равные по выбранной колонке — по домену. Без этого внутри одного
-      // профиля строки шли в порядке файла, и группы перемешивались с
-      // одиночными строками случайно; v4 и v6 одного хоста разъезжались.
-      const ah = meta.get(a).group + "\u0000" + String(a.key || "") + "\u0000" + String(a.host || "");
-      const bh = meta.get(b).group + "\u0000" + String(b.key || "") + "\u0000" + String(b.host || "");
-      return ah < bh ? -1 : ah > bh ? 1 : 0;
-    });
+    const blocks = buildStateBlocks(visible, meta);
 
-    const fmtAge = (age) => age < 60 ? age + "с" :
+    const fmtAge = (age) => age === null ? "—" : age < 60 ? age + "с" :
                             age < 3600 ? Math.floor(age / 60) + "м" :
                             age < 86400 ? Math.floor(age / 3600) + "ч" :
                             Math.floor(age / 86400) + "д";
 
     const rowHtml = (e, inGroup) => {
       const m = meta.get(e);
-      const ageStr = fmtAge(nowSec - Number(e.ts || 0));
+      const ageStr = fmtAge(m.age);
       const frozen = e.mode === "frozen";
       // Pool size from the live nfqws2 cmdline; fall back to the row's own
       // strategy so a stale/larger pinned value still appears in the dropdown.
@@ -526,24 +495,6 @@ async function loadState(useCache) {
       `;
     };
 
-    // Группа встаёт туда, где в текущей сортировке оказалась её первая строка,
-    // и внутри держит тот же порядок. Так сортировка по возрасту поднимает
-    // наверх группу со свежей записью, а по стратегии — группу, где подбор
-    // ушёл дальше всех, и сводка в заголовке говорит ровно об этой строке.
-    const blocks = [];
-    const byGroup = new Map();
-    for (const e of sorted) {
-      const m = meta.get(e);
-      let b = byGroup.get(m.gkey);
-      if (!b) {
-        b = { group: m.group, gkey: m.gkey, pool: String(e.key || ""), rows: [], names: new Set() };
-        byGroup.set(m.gkey, b);
-        blocks.push(b);
-      }
-      b.rows.push(e);
-      b.names.add(m.name);
-    }
-
     const plural = (n, one, few, many) => {
       const d = n % 10, h = n % 100;
       if (d === 1 && h !== 11) return one;
@@ -579,7 +530,6 @@ async function loadState(useCache) {
       // иначе разморозить. Отдельной кнопки «разморозить» нет: состояние видно
       // в той же ячейке, и две кнопки на одно состояние путают.
       const groupFrozen = nFrozen === n && n > 0;
-      const freshest = Math.min(...b.rows.map(e => nowSec - Number(e.ts || 0)));
       const countText = `${n} ${plural(n, "запись", "записи", "записей")}`;
       // ВО ВРЕМЯ ПОИСКА В ГРУППЕ ВИДНЫ ТОЛЬКО СОВПАВШИЕ СТРОКИ, и пакетные
       // кнопки действуют ровно на них — они забирают строки из нарисованного
@@ -618,7 +568,7 @@ async function loadState(useCache) {
               ${nFrozen
                 ? `<span class="sg-frozen">${nFrozen === n && whole ? "все" : `${nFrozen} из ${n}`}</span>`
                 : ""}</td>
-            <td data-label="Возраст" class="state-age">${fmtAge(freshest)}</td>
+            <td data-label="Возраст" class="state-age">${fmtAge(b.age)}</td>
           </tr>
           ${b.rows.map(e => rowHtml(e, true)).join("")}
         </tbody>

@@ -102,3 +102,92 @@ export function saveOpenGroups() {
   const all = Array.from(stateOpenGroups);
   try { localStorage.setItem(STATE_OPEN_KEY, JSON.stringify(all.slice(-STATE_OPEN_MAX))); } catch (_) {}
 }
+
+// A missing timestamp is not a very old record. Keep that distinction through
+// sorting and rendering; zero is the backend's absent-time sentinel.
+export function stateAge(ts, nowSec) {
+  const timestamp = Number(ts);
+  return Number.isFinite(timestamp) && timestamp > 0 ? nowSec - timestamp : null;
+}
+
+// Sort members first, then assemble the visible table blocks. Metadata carries
+// the exact age in seconds also consumed by the page formatter.
+export function buildStateBlocks(entries, meta) {
+  // Sort a shallow copy — never mutate the cached server response.
+  const sorted = entries.slice().sort((a, b) => {
+    let av, bv;
+    switch (stateSort.key) {
+      case "key":      av = String(a.key  || ""); bv = String(b.key  || ""); break;
+      // По домену — сперва по родителю, потом по полному имени. Иначе группа
+      // вставала бы туда, где по алфавиту её первый поддомен: apple.com
+      // оказывался у «api.», discord.media — у «c-arn04».
+      // Домен — первым, пул — вторым: иначе колонка «Домен» незаметно
+      // сортирует по профилю, а группы одного домена из разных пулов
+      // разъезжаются по разным концам таблицы.
+      case "host":     av = meta.get(a).group + "\u0000" + String(a.key || "") + "\u0000" + String(a.host || "");
+                       bv = meta.get(b).group + "\u0000" + String(b.key || "") + "\u0000" + String(b.host || ""); break;
+      case "strategy": av = Number(a.strategy) || 0; bv = Number(b.strategy) || 0; break;
+      // По возрастанию — замороженные сверху: колонку жмут, чтобы найти
+      // именно их среди сотен строк на авторотации.
+      case "frozen":   av = a.mode === "frozen" ? 0 : 1; bv = b.mode === "frozen" ? 0 : 1; break;
+      // 'age' sorts by age value (= now - ts). Asc → freshest first
+      // (small age), which matches what we'd want by default when
+      // a user clicks «Возраст» — "what's been moving recently".
+      case "age":
+        av = meta.get(a).age; bv = meta.get(b).age;
+        // Unknown ages stay last regardless of direction.
+        if (av === null || bv === null) {
+          if (av !== bv) return av === null ? 1 : -1;
+        }
+        break;
+      default:         return 0;
+    }
+    if (av < bv) return stateSort.dir === "asc" ? -1 : 1;
+    if (av > bv) return stateSort.dir === "asc" ?  1 : -1;
+    // Равные по выбранной колонке — по домену. Без этого внутри одного
+    // профиля строки шли в порядке файла, и группы перемешивались с
+    // одиночными строками случайно; v4 и v6 одного хоста разъезжались.
+    const ah = meta.get(a).group + "\u0000" + String(a.key || "") + "\u0000" + String(a.host || "");
+    const bh = meta.get(b).group + "\u0000" + String(b.key || "") + "\u0000" + String(b.host || "");
+    return ah < bh ? -1 : ah > bh ? 1 : 0;
+  });
+
+  const blocks = [];
+  const byGroup = new Map();
+  for (const e of sorted) {
+    const m = meta.get(e);
+    let b = byGroup.get(m.gkey);
+    if (!b) {
+      b = { group: m.group, gkey: m.gkey, pool: String(e.key || ""), rows: [], names: new Set() };
+      byGroup.set(m.gkey, b);
+      blocks.push(b);
+    }
+    b.rows.push(e);
+    b.names.add(m.name);
+  }
+
+  for (const b of blocks) {
+    b.age = null;
+    for (const e of b.rows) {
+      const age = meta.get(e).age;
+      if (age !== null && (b.age === null || age < b.age)) b.age = age;
+    }
+  }
+  if (stateSort.key !== "age") return blocks;
+
+  // Only different names get a group header. A v4/v6 pair of ONE name
+  // renders as loose rows, so keeping it atomic would pull an old row next
+  // to its fresh sibling and break the displayed age order even in asc.
+  const ageBlocks = blocks.flatMap(b => b.names.size >= 2 ? [b] : b.rows.map(e => ({
+    ...b, rows: [e], age: meta.get(e).age,
+  })));
+  // The group displays its freshest member in either direction. Sorting by
+  // the first member instead would use the oldest age in desc.
+  return ageBlocks.sort((a, b) => {
+    if (a.age === null || b.age === null) {
+      if (a.age !== b.age) return a.age === null ? 1 : -1;
+      return 0;
+    }
+    return stateSort.dir === "asc" ? a.age - b.age : b.age - a.age;
+  });
+}
