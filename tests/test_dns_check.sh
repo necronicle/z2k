@@ -259,6 +259,81 @@ assert_eq "эталонные операторы чисты"   ""  "$(awk -F"$US
 ref_mismatch "$_ans" "$_mis"
 assert_eq "домен без согласия пропущен" "" "$(cat "$_mis")"
 
+# ── CDN: разные резолверы получают разные НАСТОЯЩИЕ адреса ──────────────────
+#
+# Замер 07–10.11.2026, семь серверов, UDP и DoH совпали у каждого. Старая
+# сверка (точный первый адрес, эталон от двух голосов) метила Google, Quad9,
+# AdGuard и ControlD подменой из-за одного shikimori.one за Cloudflare.
+# Данные ниже — те самые ответы, порядок адресов как пришёл.
+_row() { # _row СЕРВЕР ПУТЬ ДОМЕН АДРЕС...
+    _rs="$1"; _rp="$2"; _rd="$3"; shift 3
+    for _ra in "$@"; do printf '%s%s%s%s%s%s%s\n' "$_rs" "$US" "$_rp" "$US" "$_rd" "$US" "$_ra"; done
+}
+_real() {
+    for _s in CF GO Q9 AG YA ND CD; do
+        for _p in u d; do
+            [ "$_s$_p" = "NDd" ] && continue      # NextDNS по DoH молчал
+            _row "$_s" "$_p" rutor.info  193.46.255.29
+            _row "$_s" "$_p" flibusta.is 179.43.150.83
+            _row "$_s" "$_p" rezka.ag    179.43.189.162
+        done
+    done
+    _row CF u shikimori.one 104.21.30.148 172.67.173.45
+    _row CF d shikimori.one 172.67.173.45 104.21.30.148
+    _row GO u shikimori.one 188.114.97.1 188.114.96.1
+    _row GO d shikimori.one 188.114.96.1 188.114.97.1
+    _row Q9 u shikimori.one 188.114.97.0 188.114.96.0
+    _row Q9 d shikimori.one 188.114.97.1 188.114.96.1
+    _row AG u shikimori.one 188.114.96.0 188.114.97.0
+    _row AG d shikimori.one 188.114.97.0 188.114.96.0
+    _row YA u shikimori.one 172.67.173.45 104.21.30.148
+    _row YA d shikimori.one 172.67.173.45 104.21.30.148
+    _row ND u shikimori.one 104.21.30.148 172.67.173.45
+    _row CD u shikimori.one 188.114.97.11 188.114.96.11
+    _row CD d shikimori.one 188.114.97.11 188.114.96.11
+    # Резолвер роутера: DoH у него нет, сверяется с чужими шифрованными.
+    _row RT u rutor.info    193.46.255.29
+    _row RT u shikimori.one 188.114.96.1 188.114.97.1
+}
+_real > "$_ans"
+ref_mismatch "$_ans" "$_mis"
+assert_eq "CDN: живой замер без единой ложной подмены" "" "$(cat "$_mis")"
+
+# Тот же замер, но открытый путь к Google правят в дороге — на каждый домен
+# свой адрес, повторов нет. Шифрованный путь Google при этом цел.
+{ _real | grep -v "^GO${US}u${US}"
+  _row GO u rutor.info    203.0.113.10
+  _row GO u flibusta.is   203.0.113.77
+  _row GO u rezka.ag      198.51.100.5
+  _row GO u shikimori.one 198.51.100.9
+} > "$_ans"
+ref_mismatch "$_ans" "$_mis"
+assert_eq "подмена открытого пути ловится на всех доменах" "4" "$(awk -F"$US" '$1=="GO" && $2=="u" {print $3}' "$_mis")"
+assert_eq "шифрованный путь того же сервера чист"          ""  "$(awk -F"$US" '$1=="GO" && $2=="d" {print $3}' "$_mis")"
+assert_eq "остальные серверы не задеты"                    "1" "$(wc -l < "$_mis" | tr -d ' ')"
+
+# «Умный» DNS врёт и по DoH. Где остальные единогласны — ловится; на домене,
+# где они сами разошлись (CDN), молчим.
+{ _real
+  _row SM d rutor.info    87.228.47.198
+  _row SM d shikimori.one 87.228.47.199
+} > "$_ans"
+ref_mismatch "$_ans" "$_mis"
+assert_eq "лгущий DoH пойман там, где остальные единогласны" "1" "$(awk -F"$US" '$1=="SM" && $2=="d" {print $3}' "$_mis")"
+assert_eq "и больше никто"                                   "1" "$(wc -l < "$_mis" | tr -d ' ')"
+
+# Порядок адресов и соседний адрес той же сети /24 — не расхождение.
+{ _row A d x.example 192.0.2.10 192.0.2.20
+  _row B d x.example 192.0.2.20 192.0.2.10
+  _row C u x.example 192.0.2.99
+} > "$_ans"
+ref_mismatch "$_ans" "$_mis"
+assert_eq "порядок и /24 не дают расхождения" "" "$(cat "$_mis")"
+
+# В сверку уходят все адреса ответа, а не первый.
+assert_eq "все адреса UDP идут в сверку" "1" "$(grep -c "037u.037%s.037%s.n' \"\$name\" \"\$d\" \"\$_a1\"" "$S")"
+assert_eq "все адреса DoH идут в сверку" "1" "$(grep -c "037d.037%s.037%s.n' \"\$name\" \"\$d\" \"\$_a1\"" "$S")"
+
 # ── Разбор двоичного ответа (RFC 8484) ───────────────────────────────────────
 assert_eq "адреса читаются по проводу, не из JSON" "1" "$(grep -c 'doh_wire_a()' "$S")"
 assert_eq "JSON-API выкинут"                       "0" "$(grep -c 'application/dns-json' "$S")"
