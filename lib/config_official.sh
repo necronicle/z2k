@@ -1628,8 +1628,11 @@ generate_nfqws2_opt_from_strategies() {
         # шортс 11,8 с, 10.11.2026). Стоит ПЕРЕД профилем по списку имён.
         # Без $wl_excl: любой hostlist, включая exclude, при неизвестном
         # имени отвергает профиль до IpsetCheck (nfq2/desync.c:269).
-        # Цена: whitelist не действует на первый SYN к адресу googlevideo
-        # из файла; на ClientHello профиль выбирается заново по имени.
+        # При сохранённом IP повторный поиск на ClientHello снова выбирает A:
+        # whitelist профиля B его не исключит. Поэтому gvsub проверяет whitelist
+        # по имени DNS-вопроса до публикации IP и подмены. Уже опубликованные
+        # адреса сохраняются до перезагрузки: удаление может оборвать пробу A.
+        # Новый whitelist не отменяет их охват A (в том числе при общих IP).
         if [ -n "$Z2K_PREFLIGHT_STEP" ] && [ "$(safe_config_read "Z2K_GV_SUBST" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")" != "0" ]; then
             add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--ipset=/tmp/z2k-gv-ips.txt $youtube_gv_tcp --new"
         fi

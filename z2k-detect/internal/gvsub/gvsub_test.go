@@ -1030,7 +1030,7 @@ func TestIPFileWrittenBeforeRelease(t *testing.T) {
 	s, _, _, c := newSvc()
 	s.IPFile = t.TempDir() + "/gv-ips.txt"
 	other := netip.MustParseAddr("2a00:1450:4001::9")
-	s.OnDNS(gvName, []netip.Addr{bad, other})
+	done := s.OnDNS(gvName, []netip.Addr{bad, other})
 	b, err := os.ReadFile(s.IPFile)
 	if err != nil {
 		t.Fatal(err)
@@ -1038,12 +1038,19 @@ func TestIPFileWrittenBeforeRelease(t *testing.T) {
 	if got := string(b); got != ipFileSentinels+"2a00:1450:4001::9\n74.125.110.70\n" {
 		t.Fatalf("список %q", got)
 	}
-	// Брошенный адрес уходит из списка на уборке.
+	wait(t, done)
+	// Брошенный адрес уходит из known, но остаётся в опубликованном наборе.
 	c.add(IdleDrop + time.Minute)
-	s.OnDNS(gvName, []netip.Addr{bad})
+	wait(t, s.OnDNS(gvName, []netip.Addr{bad}))
 	s.Tick()
+	s.mu.Lock()
+	_, retained := s.known[other]
+	s.mu.Unlock()
+	if retained {
+		t.Fatal("IdleDrop не удалил адрес из known")
+	}
 	b, _ = os.ReadFile(s.IPFile)
-	if got := string(b); got != ipFileSentinels+"74.125.110.70\n" {
+	if got := string(b); got != ipFileSentinels+"2a00:1450:4001::9\n74.125.110.70\n" {
 		t.Fatalf("после уборки список %q", got)
 	}
 }

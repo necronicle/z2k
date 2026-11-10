@@ -474,12 +474,13 @@ func gvsubCmd(ctx context.Context, rest []string) {
 	owner := fs.String("owner", "/opt/etc/init.d/S99zapret2", "init-скрипт; служба уходит, если он её не знает")
 	conf := fs.String("config", "/opt/zapret2/config", "конфиг z2k; Z2K_GV_SUBST=0 — служба уходит")
 	ips := fs.String("ipfile", "", "список адресов googlevideo из ответов DNS для профиля движка (--ipset)")
+	whitelist := fs.String("whitelist", "", "список исключённых имён: без публикации IP и подмены")
 	_ = fs.Parse(rest)
 	if *queue > 65535 {
 		fatal("gvsub: номер очереди вне диапазона")
 	}
 	if err := gvsub.Run(ctx, gvsub.Config{Queue: uint16(*queue), StatusPath: *status, Conntrack: *ct,
-		NoIPv6: *no6, Owner: *owner, ConfigPath: *conf, IPFile: *ips}); err != nil {
+		NoIPv6: *no6, Owner: *owner, ConfigPath: *conf, IPFile: *ips, Whitelist: *whitelist}); err != nil {
 		fatal("gvsub: %v", err)
 	}
 }

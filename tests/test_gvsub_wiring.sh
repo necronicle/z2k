@@ -219,5 +219,34 @@ CLEAN=$(awk '/^for fw_tool in iptables ip6tables; do/{p=1} p{print} p&&/^done$/{
 ( PATH="$TMP/sw:$PATH"; export SWLOG; log_info() { :; }; eval "$CLEAN" )
 check_quic_cleanup "$(cat "$SWLOG")" cleanup
 
+# --- 9. Реальный запуск функции init: путь whitelist доходит отдельным аргументом.
+fn z2k_gvsub_start > "$TMP/start.sh"
+cat > "$TMP/capture" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$@" > "$GVSUB_ARGS"
+STUB
+chmod +x "$TMP/capture"
+for root in default "$TMP/custom root"; do
+    ( . "$TMP/start.sh"
+      z2k_gvsub_enabled() { return 0; }
+      z2k_gvsub_stop() { :; }
+      Z2K_GVSUB_BIN="$TMP/capture"
+      Z2K_GVSUB_QUEUE=210
+      Z2K_GVSUB_LOG="$TMP/start.log"
+      Z2K_GVSUB_STATUS="$TMP/status"
+      Z2K_GVSUB_PID="$TMP/start.pid"
+      Z2K_GVSUB_IPS="$TMP/ips"
+      DISABLE_IPV6=0
+      GVSUB_ARGS="$TMP/args"; export GVSUB_ARGS
+      if [ "$root" = default ]; then unset ZAPRET2_DIR; else ZAPRET2_DIR="$root"; fi
+      z2k_gvsub_start >/dev/null
+      wait "$(cat "$Z2K_GVSUB_PID")" )
+    want="$root/lists/whitelist.txt"
+    [ "$root" != default ] || want=/opt/zapret2/lists/whitelist.txt
+    got=$(awk 'p {print; exit} $0 == "-whitelist" {p=1}' "$TMP/args")
+    [ "$got" = "$want" ] && ok "start gvsub передаёт -whitelist: $root" \
+        || bad "start gvsub: whitelist '$got', нужен '$want'"
+done
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

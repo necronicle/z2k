@@ -28,7 +28,8 @@ type Config struct {
 	Owner      string
 	ConfigPath string
 	// IPFile — адреса googlevideo из ответов DNS, для профиля движка с --ipset.
-	IPFile string
+	IPFile    string
+	Whitelist string // путь к hostlist исключений, перечитывается при изменении
 }
 
 // wanted — нужна ли ещё служба.
@@ -80,7 +81,7 @@ func Run(parent context.Context, cfg Config) error {
 	rules := IPTables{Queue: strconv.Itoa(int(cfg.Queue)), NoV6: cfg.NoIPv6}
 	var localMu sync.Mutex
 	local := localAddrs()
-	svc := &Service{Checker: NetChecker{}, Rules: rules, Resolver: &DNSResolver{}, StatusPath: cfg.StatusPath, IPFile: cfg.IPFile, Kill: func(f Flow) error {
+	svc := &Service{Checker: NetChecker{}, Rules: rules, Resolver: &DNSResolver{}, StatusPath: cfg.StatusPath, IPFile: cfg.IPFile, Whitelist: cfg.Whitelist, Kill: func(f Flow) error {
 		// Сначала правило сброса, потом удаление записи: повтор клиента
 		// идёт уже мимо быстрого пути и получает RST.
 		if err := rules.Reset(f); err != nil {

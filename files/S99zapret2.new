@@ -2970,6 +2970,7 @@ z2k_gvsub_start()
     # shellcheck disable=SC2086  # пустой $_no6 — нет аргумента
     "$Z2K_GVSUB_BIN" gvsub -queue "$Z2K_GVSUB_QUEUE" -status "$Z2K_GVSUB_STATUS" $_no6 \
         -owner "$0" -config "${ZAPRET2_DIR:-/opt/zapret2}/config" -ipfile "$Z2K_GVSUB_IPS" \
+        -whitelist "${ZAPRET2_DIR:-/opt/zapret2}/lists/whitelist.txt" \
         >>"$Z2K_GVSUB_LOG" 2>&1 </dev/null &
     echo $! > "$Z2K_GVSUB_PID"
     echo "gvsub: подмена адресов googlevideo запущена (PID $!)"

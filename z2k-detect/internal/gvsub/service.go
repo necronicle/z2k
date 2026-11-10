@@ -13,6 +13,7 @@ package gvsub
 // наоборот), поэтому вердикт живёт недолго и перепроверяется.
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"log"
@@ -96,6 +97,9 @@ type Service struct {
 	// 11,8 с). Файл пишется ДО того, как отпустить ответ DNS, а движок
 	// перечитывает его при изменении сам.
 	IPFile string
+	// Whitelist — исключённые имена: не публикуем адреса и не ставим подмены.
+	Whitelist string
+	whitelist whitelist
 	// Local — адрес самого роутера. Его соединения детектор не считает: это
 	// проверки самой службы, и без фильтра каждая проверка плохого адреса
 	// оставляла в conntrack «зависшее соединение», детектор запускал проверку
@@ -105,14 +109,15 @@ type Service struct {
 	// подмены, браузер держит минутами и ждёт ответа на нём (10.11.2026).
 	Kill func(Flow) error
 
-	mu       sync.Mutex
-	known    map[netip.Addr]*entry
-	maps     map[netip.Addr]*mapping
-	inflight map[netip.Addr]chan struct{}
-	pending  map[string]time.Time // детектор: соединение без ответа с первого опроса
-	killed   map[string]time.Time // сброшенные соединения: второй раз не трогаем
-	stall    map[string]stallMark // зависшие до подмены: счётчики прошлого опроса
-	closed   bool                 // Shutdown: фоновые проверки подмен не ставят
+	mu        sync.Mutex
+	published map[netip.Addr]struct{} // накопительный набор для IPFile, под mu
+	known     map[netip.Addr]*entry
+	maps      map[netip.Addr]*mapping
+	inflight  map[netip.Addr]chan struct{}
+	pending   map[string]time.Time // детектор: соединение без ответа с первого опроса
+	killed    map[string]time.Time // сброшенные соединения: второй раз не трогаем
+	stall     map[string]stallMark // зависшие до подмены: счётчики прошлого опроса
+	closed    bool                 // Shutdown: фоновые проверки подмен не ставят
 
 	ipmu    sync.Mutex          // запись IPFile
 	ipLast  string              // что записано в IPFile
@@ -134,6 +139,9 @@ func (s *Service) init() {
 		s.stall = map[string]stallMark{}
 		s.deadCluster = map[string]time.Time{}
 	}
+	if s.published == nil {
+		s.published = map[netip.Addr]struct{}{}
+	}
 	if s.Now == nil {
 		s.Now = time.Now
 	}
@@ -143,11 +151,19 @@ func (s *Service) init() {
 // когда все непроверенные адреса проверены и подмены поставлены. Свежие
 // вердикты не придерживают ответ.
 func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
+	if s.whitelisted(name) {
+		// Уже опубликованные адреса не удаляем: поток A может ждать ответ пробы.
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+
 	s.mu.Lock()
 	s.init()
 	now := s.Now()
 	var waits []chan struct{}
 	for _, a := range addrs {
+		s.published[a] = struct{}{}
 		e := s.known[a]
 		if e == nil {
 			e = &entry{}
@@ -662,6 +678,23 @@ type knownAddr struct {
 // и видео стояло (10.11.2026). Вердикты не берутся — адреса проверяются
 // заново на первом тике.
 func (s *Service) Restore() int {
+	// Движок может жить дольше службы: не сужаем его набор при рестарте,
+	// даже если status отсутствует или повреждён. Заглушки не входят в published.
+	s.mu.Lock()
+	s.init()
+	if f, err := os.Open(s.IPFile); err == nil {
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			if a, err := netip.ParseAddr(strings.TrimSpace(sc.Text())); err == nil && !a.IsUnspecified() {
+				s.published[a] = struct{}{}
+			}
+		}
+		if err := sc.Err(); err != nil {
+			log.Printf("gvsub: чтение списка адресов: %v", err)
+		}
+		f.Close()
+	}
+	s.mu.Unlock()
 	if s.StatusPath == "" {
 		return 0
 	}
@@ -685,6 +718,7 @@ func (s *Service) Restore() int {
 		}
 		if s.known[a] == nil {
 			s.known[a] = &entry{seen: k.Seen, name: k.Name}
+			s.published[a] = struct{}{}
 			n++
 		}
 	}
@@ -726,9 +760,10 @@ func (s *Service) writeStatus() {
 // Неопределённые адреса не бывают реальными назначениями HTTPS.
 const ipFileSentinels = "0.0.0.0/32\n::/128\n"
 
-// writeIPs записывает адреса в ходу в IPFile, если набор изменился. Набор не
-// чистится по вердикту: пробу движок применяет к любому адресу googlevideo, и
-// на рабочем она стоит лишь задержки, а «рабочий» адрес может испортиться.
+// writeIPs публикует накопительный набор, независимо от known и подмен.
+// Удаление IP до ServerHello может увести поток из A и оборвать пробу.
+// Поэтому не удаляем даже после IdleDrop или добавления имени в whitelist.
+// Предела нет: ожидаются сотни адресов за аптайм; /tmp сбрасывает перезагрузка.
 func (s *Service) writeIPs() {
 	if s.IPFile == "" {
 		return
@@ -736,8 +771,8 @@ func (s *Service) writeIPs() {
 	s.ipmu.Lock()
 	defer s.ipmu.Unlock()
 	s.mu.Lock()
-	list := make([]string, 0, len(s.known))
-	for a := range s.known {
+	list := make([]string, 0, len(s.published))
+	for a := range s.published {
 		list = append(list, a.String())
 	}
 	s.mu.Unlock()
