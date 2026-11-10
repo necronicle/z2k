@@ -88,6 +88,8 @@ for fam in 4 6; do
     has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass" "$C" \
         && ok "IPv$fam: очередь ответов DNS с --queue-bypass (без службы DNS не ломается)" \
         || bad "IPv$fam: нет очереди ответов DNS"
+    has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |016307796f757475626503636f6d00| -j NFQUEUE --queue-num 210 --queue-bypass" "$C" \
+        && ok "IPv$fam: очередь DNS c.youtube.com" || bad "IPv$fam: нет очереди DNS c.youtube.com"
 done
 has "kill -HUP 4242" "$C" && ok "после пересоздания цепочек служба получает SIGHUP" || bad "служба не узнаёт о пустых цепочках"
 has "kill -HUP 4242" "$CK" && ok "повторный start_fw тоже шлёт SIGHUP (строки могла вычистить перестройка)" || bad "повторный start_fw без SIGHUP"
@@ -103,6 +105,10 @@ fw_stop_calls() {
       z2k_gvsub_fw_stop )
 }
 STOP=$(fw_stop_calls 0)
+for fam in 4 6; do
+    has "$fam -t mangle -D OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |016307796f757475626503636f6d00|" "$STOP" \
+        && ok "IPv$fam stop: очередь c.youtube.com снята" || bad "IPv$fam stop: очередь c.youtube.com осталась"
+done
 for fam in 4 6; do
     for cmd in '-D FORWARD -j Z2K_GVSUB_Q' '-F Z2K_GVSUB_Q' '-X Z2K_GVSUB_Q'; do
         has "$fam -t filter $cmd" "$STOP" && ok "IPv$fam stop: $cmd" || bad "IPv$fam stop не снял $cmd"

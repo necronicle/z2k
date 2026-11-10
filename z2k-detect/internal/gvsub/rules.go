@@ -90,14 +90,21 @@ func (r IPTables) bins() []string {
 
 // dnsRule — очередь ответов DNS роутера устройствам (те же аргументы, что в
 // S99zapret2, z2k_gvsub_dns_rule).
-func (r IPTables) dnsRule() []string {
+// DNS wire suffix: c.youtube.com, including label lengths and root terminator.
+const cacheDNSHex = "|016307796f757475626503636f6d00|"
+
+func (r IPTables) dnsRule(cache bool) []string {
 	q := r.Queue
 	if q == "" {
 		q = "210"
 	}
 	// ! -o lo: ответы на собственные запросы службы (имена машин кластера)
 	// идут через lo и придерживаться не должны.
-	return []string{"!", "-o", "lo", "-p", "udp", "--sport", "53", "-m", "string", "--algo", "bm", "--string", "googlevideo",
+	match, value := "--string", "googlevideo"
+	if cache {
+		match, value = "--hex-string", cacheDNSHex
+	}
+	return []string{"!", "-o", "lo", "-p", "udp", "--sport", "53", "-m", "string", "--algo", "bm", match, value,
 		"-j", "NFQUEUE", "--queue-num", q, "--queue-bypass"}
 }
 
@@ -140,11 +147,13 @@ func (r IPTables) Ensure() (bool, error) {
 				firstErr = err
 			}
 		}
-		check := append([]string{"-w", "-t", "mangle", "-C", "OUTPUT"}, r.dnsRule()...)
-		if r.run(bin, check...) != nil {
-			ins := append([]string{"-w", "-t", "mangle", "-I", "OUTPUT", "1"}, r.dnsRule()...)
-			if err := r.run(bin, ins...); err != nil && firstErr == nil {
-				firstErr = err
+		for _, cache := range []bool{false, true} {
+			check := append([]string{"-w", "-t", "mangle", "-C", "OUTPUT"}, r.dnsRule(cache)...)
+			if r.run(bin, check...) != nil {
+				ins := append([]string{"-w", "-t", "mangle", "-I", "OUTPUT", "1"}, r.dnsRule(cache)...)
+				if err := r.run(bin, ins...); err != nil && firstErr == nil {
+					firstErr = err
+				}
 			}
 		}
 	}
@@ -154,8 +163,10 @@ func (r IPTables) Ensure() (bool, error) {
 // Teardown — каркас целиком: очередь DNS, крючки и цепочки.
 func (r IPTables) Teardown() {
 	for _, bin := range r.bins() {
-		del := append([]string{"-w", "-t", "mangle", "-D", "OUTPUT"}, r.dnsRule()...)
-		for i := 0; i < 8 && r.run(bin, del...) == nil; i++ {
+		for _, cache := range []bool{false, true} {
+			del := append([]string{"-w", "-t", "mangle", "-D", "OUTPUT"}, r.dnsRule(cache)...)
+			for i := 0; i < 8 && r.run(bin, del...) == nil; i++ {
+			}
 		}
 		for _, h := range chainHooks {
 			t, parent, chain := h.table, h.parent, h.chain

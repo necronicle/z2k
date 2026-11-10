@@ -800,6 +800,25 @@ apply_new_list() {
 # Run unconditionally after fetch (even on 304/cached) so the on-disk
 # list stays clean if upstream adds googlevideo entries later.
 subtract_googlevideo_from_yt() {
+    # GV is shipped, not fetched from geosite. Upgrade also on 304/offline runs.
+    # Preserve local additions; publish atomically and signal update-lists restart.
+    local gv_target="$EXTRA/TCP/YT_GV/List.txt" gv_filtered="$TMP_DIR/gv.filtered" domain
+    mkdir -p "$EXTRA/TCP/YT_GV" || return 1
+    if [ -f "$gv_target" ]; then
+        cat "$gv_target" > "$gv_filtered" || return 1
+    else
+        : > "$gv_filtered" || return 1
+    fi
+    printf '\n' >> "$gv_filtered" || return 1
+    for domain in googlevideo.com c.youtube.com; do
+        grep -qixF "$domain" "$gv_filtered" || printf '%s\n' "$domain" >> "$gv_filtered"
+    done
+    sed '/^$/d' "$gv_filtered" > "$TMP_DIR/gv.ready" || return 1
+    if [ ! -f "$gv_target" ] || ! cmp -s "$gv_target" "$TMP_DIR/gv.ready"; then
+        mv "$TMP_DIR/gv.ready" "$gv_target" || return 1
+        log "YT_GV: applied, ensured video cache suffixes"
+    fi
+    rm -f "$gv_filtered" "$TMP_DIR/gv.ready"
     local yt_target="$EXTRA/TCP/YT/List.txt"
     [ -s "$yt_target" ] || return 0
 
@@ -812,6 +831,7 @@ subtract_googlevideo_from_yt() {
         sub(/\r$/, "", d)
         if (d == "googlevideo.com") next
         if (d ~ /\.googlevideo\.com$/) next
+        if (tolower(d) ~ /(^|\.)c\.youtube\.com\.?$/) next
         print d
     }' "$yt_target" > "$filtered" || {
         log "YT subtract: awk failed, keeping original list"
@@ -833,10 +853,10 @@ subtract_googlevideo_from_yt() {
             log "YT subtract: rename failed"
             return 1
         }
-        log "YT: removed $removed googlevideo overlap(s) ($before → $after lines) — gv_tcp profile gets these via YT_GV/List.txt"
+        log "YT: applied, removed $removed googlevideo/c.youtube.com overlap(s) ($before → $after lines) — gv_tcp profile gets these via YT_GV/List.txt"
     else
         rm -f "$filtered"
-        log "YT: no googlevideo overlaps in upstream youtube.txt"
+        log "YT: no googlevideo/c.youtube.com overlaps in upstream youtube.txt"
     fi
     return 0
 }
@@ -864,7 +884,7 @@ inject_yt_login_domains() {
 #
 # runetfreedom's ru-blocked / ru-blocked-all lists include YouTube and
 # googlevideo domains. config_official.sh chains profiles as
-# RKN TCP → YouTube TCP → YouTube GV → QUIC YT, and nfqws2 is first-match-
+# RKN TCP → YouTube GV → YouTube TCP → QUIC YT, and nfqws2 is first-match-
 # wins, so any overlapping domain gets the generic RKN strategy instead of
 # the dedicated YT/GV one. We strip YT + googlevideo entries from the RKN
 # list after all assets are written so each domain reaches exactly the
@@ -873,8 +893,8 @@ inject_yt_login_domains() {
 # Matching is suffix-aware: if the YT list contains "youtube.com",
 # "m.youtube.com" in RKN is dropped too (nfqws2 hostlist does suffix
 # matching, so leaving the child entry in RKN would also be caught by
-# RKN first). googlevideo.com is hard-coded because YT GV uses
-# --hostlist-domains=googlevideo.com instead of a file.
+# RKN first). Video cache suffixes are explicit so cleanup also works when
+# the dedicated shipped GV list has not yet been upgraded.
 subtract_yt_from_rkn() {
     local rkn_target="$EXTRA/TCP/RKN/List.txt"
     local yt_target="$EXTRA/TCP/YT/List.txt"
@@ -902,6 +922,7 @@ subtract_yt_from_rkn() {
             sub(/\r$/, "", d)
             if (d == "googlevideo.com") next
             if (d ~ /\.googlevideo\.com$/) next
+            if (tolower(d) ~ /(^|\.)c\.youtube\.com\.?$/) next
             tmp = d
             if (tmp in ex) next
             while (sub(/^[^.]*\./, "", tmp)) {
@@ -937,10 +958,10 @@ subtract_yt_from_rkn() {
             log "RKN subtract: rename failed"
             return 1
         }
-        log "RKN: removed $removed YT/googlevideo overlaps ($before → $after lines)"
+        log "RKN: removed $removed YT/googlevideo/c.youtube.com overlaps ($before → $after lines)"
     else
         rm -f "$filtered"
-        log "RKN: no YT/googlevideo overlaps found"
+        log "RKN: no YT/googlevideo/c.youtube.com overlaps found"
     fi
     return 0
 }
@@ -1225,7 +1246,7 @@ fetch_all() {
     # Includes 304/offline runs and old static or learned inclusion lists.
     clean_google_domains || return 1
 
-    # Strip YT + googlevideo overlaps from RKN list (enhanced branch only).
+    # Strip YT + googlevideo/c.youtube.com overlaps from RKN list (enhanced branch only).
     # Runs unconditionally — even on all-304 runs an older on-disk RKN list
     # may still carry overlaps from a time before this step existed, or from
     # newly-added entries in the YT list.

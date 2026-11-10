@@ -1641,10 +1641,8 @@ generate_nfqws2_opt_from_strategies() {
         merged_google_tls="$merged_google_tls $gv_strategies_only"
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
     else
-        # YouTube TCP
-        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
         # YouTube GV — dedicated hostlist (extra_strats/TCP/YT_GV/List.txt,
-        # содержит apex googlevideo.com → match всех поддоменов: rr1-rr9,
+        # содержит googlevideo.com и c.youtube.com → match поддоменов: rr1-rr9,
         # manifest, и т.д.). Расширяется добавлением строк в файл.
         #
         # Проверка DPI отдельным соединением (lua/z2k-preflight.lua) — ТОЛЬКО
@@ -1680,7 +1678,10 @@ generate_nfqws2_opt_from_strategies() {
                 echo "WARNING: cannot prepare gvsub ipset $Z2K_GVSUB_IPS; skipping IP profile" >&2
             fi
         fi
-        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
+        # First match wins: c.youtube.com is nested under YT's youtube.com.
+        # Inline suffix also covers existing installations with an old GV list.
+        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist-domains=c.youtube.com $youtube_gv_tcp --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
     fi
 
     # QUIC — общий профиль: ютуб плюс весь набор списков РКН и список Discord.
@@ -2432,7 +2433,7 @@ NFQWS2_UDP_PKT_IN="${Z2K_UDP_PKT_IN}"
 # ==============================================================================
 # This section is auto-generated from z2k strategy database
 # Each --new separator creates independent profile with own filters and strategy
-# Order: RKN TCP → YouTube TCP → YouTube GV → QUIC YT → Discord UDP → HTTP RKN → Catch-all TCP
+# Order: RKN TCP → YouTube GV → YouTube TCP → QUIC YT → Discord UDP → HTTP RKN → Catch-all TCP
 # Profiles use explicit hostlists from z2k list files without placeholder expansion.
 # This avoids mixing with global hostlists from MODE_FILTER.
 CONFIG

@@ -25,9 +25,9 @@ import (
 // 10.11 у кластеров было 5 и 17 машин; запас сверху.
 const MaxMachines = 24
 
-var clusterRe = regexp.MustCompile(`^rr([0-9]+)(?:---|\.)(sn-[a-z0-9-]+)\.googlevideo\.com$`)
+var clusterRe = regexp.MustCompile(`^rr([0-9]+)(?:---|\.)(sn-[a-z0-9-]+)\.(?:googlevideo\.com|c\.youtube\.com)$`)
 
-// ParseCluster — кластер и номер машины из имени googlevideo.
+// ParseCluster — логический кластер и машина в googlevideo.com/c.youtube.com.
 func ParseCluster(name string) (cluster string, machine int, ok bool) {
 	m := clusterRe.FindStringSubmatch(strings.TrimSuffix(strings.ToLower(name), "."))
 	if m == nil {
@@ -37,7 +37,16 @@ func ParseCluster(name string) (cluster string, machine int, ok bool) {
 	return m[2], n, true
 }
 
-// Resolver — адреса машин кластера.
+// siblingKey keeps the logical sn-X cluster but isolates DNS families.
+// A shared IP in a capture does not guarantee identical DNS answers forever.
+func siblingKey(name, cluster string) string {
+	if strings.HasSuffix(strings.TrimSuffix(strings.ToLower(name), "."), ".c.youtube.com") {
+		return cluster + "/c.youtube.com"
+	}
+	return cluster
+}
+
+// Resolver — адреса машин кластера (ключ siblingKey, с семейством имён).
 type Resolver interface {
 	Siblings(ctx context.Context, cluster string, v6 bool) []netip.Addr
 }
@@ -47,6 +56,8 @@ type Resolver interface {
 // придерживала бы собственные запросы.
 type DNSResolver struct {
 	Server string // адрес:порт; пусто — 127.0.0.1:53
+
+	lookup func(context.Context, string, string) ([]netip.Addr, error) // DNS boundary in tests
 
 	mu    sync.Mutex
 	cache map[string]cachedSiblings
@@ -83,9 +94,17 @@ func (r *DNSResolver) Siblings(ctx context.Context, cluster string, v6 bool) []n
 		var d net.Dialer
 		return d.DialContext(ctx, network, server)
 	}}
+	domain := Suffix
+	if c, family, ok := strings.Cut(cluster, "/"); ok {
+		cluster, domain = c, family
+	}
 	network := "ip4"
 	if v6 {
 		network = "ip6"
+	}
+	lookup := r.lookup
+	if lookup == nil {
+		lookup = res.LookupNetIP
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -95,7 +114,7 @@ func (r *DNSResolver) Siblings(ctx context.Context, cluster string, v6 bool) []n
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ips, err := res.LookupNetIP(ctx, network, "rr"+strconv.Itoa(i)+"---"+cluster+".googlevideo.com")
+			ips, err := lookup(ctx, network, "rr"+strconv.Itoa(i)+"---"+cluster+"."+domain)
 			if err == nil && len(ips) > 0 {
 				found[i-1] = ips[0].Unmap()
 			}

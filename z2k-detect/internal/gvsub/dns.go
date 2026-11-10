@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Suffix — имена, для которых работает подмена.
+// Suffix — исходное семейство видеокэша; rr-кэши c.youtube.com см. IsTarget.
 const Suffix = "googlevideo.com"
 
 var errShort = errors.New("короткий пакет")
@@ -84,10 +84,15 @@ func readName(msg []byte, off int) (string, int, error) {
 	return "", 0, errors.New("петля сжатия")
 }
 
-// IsTarget — относится ли имя к googlevideo.
+// IsTarget — googlevideo или rr-кэш в c.youtube.com.
 func IsTarget(name string) bool {
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
-	return name == Suffix || strings.HasSuffix(name, "."+Suffix)
+	if name == Suffix || strings.HasSuffix(name, "."+Suffix) {
+		return true
+	}
+	// c.youtube.com may reach the queue by suffix; only rr cache names act.
+	_, _, ok := ParseCluster(name)
+	return ok
 }
 
 // Answer — что нашлось в ответе.

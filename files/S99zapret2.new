@@ -2830,15 +2830,16 @@ z2k_udp_masquerade_fix_stop()
 #
 # Часть адресов googlevideo режется по ответу сервера, а соседний адрес того
 # же кэша отдаёт то же видео. Служба `z2k-detect gvsub` проверяет адреса из
-# ответов DNS (ответ устройству придерживается до проверки, чтобы первое же
-# соединение шло на рабочий адрес), из conntrack и по таймеру, и для плохих
+# ответов DNS (IPFile публикуется до отпускания ответа, проверка идёт в фоне),
+# из conntrack и по таймеру, и для плохих
 # ставит переадресацию на рабочего соседа. Здесь — только каркас: цепочки
 # Z2K_GVSUB первыми в nat/mangle PREROUTING, очередь для ответов DNS и сама
 # служба. Строки подмен в цепочках ставит и снимает служба.
 #
 # Ответы DNS идут из ndnproxy роутера устройствам через OUTPUT. В очередь
-# попадают только ответы, где встречается слово googlevideo (-m string), и с
-# --queue-bypass: нет службы — ответы идут мимо, DNS не ломается.
+# попадают ответы с googlevideo или DNS-суффиксом c.youtube.com (-m string).
+# Go отбрасывает нерелевантные имена c.youtube.com сразу. --queue-bypass:
+# нет службы — ответы идут мимо, DNS не ломается.
 Z2K_GVSUB_BIN="${Z2K_GVSUB_BIN:-/opt/sbin/z2k-detect}"
 Z2K_GVSUB_QUEUE=210
 Z2K_GVSUB_CHAIN=Z2K_GVSUB
@@ -2896,11 +2897,16 @@ z2k_gvsub_dns_rule()
     # $1 — iptablesw|ip6tablesw, $2 — -C|-I|-D
     # ! -o lo: ответы на собственные запросы службы (имена машин кластера
     # googlevideo) идут через lo и придерживаться не должны.
+    local match=--string value=googlevideo
+    if [ "${3:-}" = cache ]; then
+        match=--hex-string
+        value='|016307796f757475626503636f6d00|'
+    fi
     if [ "$2" = "-I" ]; then
-        "$1" -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo \
+        "$1" -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm "$match" "$value" \
             -j NFQUEUE --queue-num "$Z2K_GVSUB_QUEUE" --queue-bypass
     else
-        "$1" -t mangle "$2" OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo \
+        "$1" -t mangle "$2" OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm "$match" "$value" \
             -j NFQUEUE --queue-num "$Z2K_GVSUB_QUEUE" --queue-bypass
     fi
 }
@@ -2928,6 +2934,7 @@ z2k_gvsub_fw_start()
             "$T" -t "$t" -I PREROUTING 1 -j "$Z2K_GVSUB_CHAIN"
         done
         z2k_gvsub_dns_rule "$T" -C 2>/dev/null || z2k_gvsub_dns_rule "$T" -I
+        z2k_gvsub_dns_rule "$T" -C cache 2>/dev/null || z2k_gvsub_dns_rule "$T" -I cache
     done
     # Служба ставит свои подмены заново (повтор идемпотентен): цепочка могла
     # быть пересоздана пустой или вычищена перестройкой таблиц Keenetic.
@@ -2945,6 +2952,7 @@ z2k_gvsub_fw_stop()
         "$T" -t filter -F Z2K_GVSUB_Q 2>/dev/null
         "$T" -t filter -X Z2K_GVSUB_Q 2>/dev/null
         while z2k_gvsub_dns_rule "$T" -D 2>/dev/null; do :; done
+        while z2k_gvsub_dns_rule "$T" -D cache 2>/dev/null; do :; done
         for t in nat mangle; do
             while "$T" -t "$t" -D PREROUTING -j "$Z2K_GVSUB_CHAIN" 2>/dev/null; do :; done
             "$T" -t "$t" -F "$Z2K_GVSUB_CHAIN" 2>/dev/null

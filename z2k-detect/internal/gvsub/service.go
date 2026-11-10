@@ -151,7 +151,7 @@ func (s *Service) init() {
 // когда все непроверенные адреса проверены и подмены поставлены. Свежие
 // вердикты не придерживают ответ.
 func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
-	if s.whitelisted(name) {
+	if !IsTarget(name) || s.whitelisted(name) {
 		// Уже опубликованные адреса не удаляем: поток A может ждать ответ пробы.
 		done := make(chan struct{})
 		close(done)
@@ -422,7 +422,7 @@ func (s *Service) search(bad netip.Addr, name string) (netip.Addr, <-chan []neti
 	// подмена уже поставлена и resolve вернулся.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*HoldMax)
 	var cands []netip.Addr
-	for _, a := range s.Resolver.Siblings(ctx, cluster, bad.Is6()) {
+	for _, a := range s.Resolver.Siblings(ctx, siblingKey(name, cluster), bad.Is6()) {
 		if a != bad && a.Is6() == bad.Is6() {
 			cands = append(cands, a)
 		}
