@@ -3,6 +3,7 @@ package gvsub
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -257,9 +258,10 @@ func TestRulesAddIdempotent(t *testing.T) {
 // --- служба ------------------------------------------------------------------------
 
 type fakeNet struct {
-	mu    sync.Mutex
-	state map[string]Verdict
-	calls int
+	mu      sync.Mutex
+	state   map[string]Verdict
+	calls   int
+	checked []netip.Addr
 }
 
 func (f *fakeNet) set(a string, v Verdict) { f.mu.Lock(); f.state[a] = v; f.mu.Unlock() }
@@ -267,6 +269,7 @@ func (f *fakeNet) Check(_ context.Context, a netip.Addr) Verdict {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.checked = append(f.checked, a)
 	if v, ok := f.state[a.String()]; ok {
 		return v
 	}
@@ -529,10 +532,29 @@ func TestMappingKeptWhileInUse(t *testing.T) {
 // поднимается из файла состояния и проверяется заново.
 func TestRestoreAfterRestart(t *testing.T) {
 	dir := t.TempDir()
+	// Правило появляется раньше завершения resolve и записи status.
+	// Ждём именно новый снимок, чтобы фон не писал после удаления TempDir.
+	waitStatus := func(s *Service) {
+		t.Helper()
+		waitFor(t, func() bool {
+			b, err := os.ReadFile(s.StatusPath)
+			var st statusFile
+			return err == nil && json.Unmarshal(b, &st) == nil &&
+				st.Updated.Equal(s.Now()) && len(st.Mappings) == 1
+		}, "снимок состояния после проверки не записан")
+	}
+	tick := func(s *Service) {
+		// Сначала завершаем синхронную запись Tick; затем resolve запишет
+		// снимок с подменой. Два писателя одного status.tmp не пересекаются.
+		gate := make(chan struct{})
+		s.Checker = gatedNet{inner: s.Checker, gate: gate}
+		s.Tick()
+		close(gate)
+	}
 	s, _, _, _ := newSvc()
 	s.StatusPath = dir + "/st.json"
 	wait(t, s.OnDNS(gvName, []netip.Addr{bad}))
-	s.writeStatus()
+	waitStatus(s)
 	// Свой снимок для s4: s2 переписывает файл состояния в фоне.
 	snap, err := os.ReadFile(s.StatusPath)
 	if err != nil {
@@ -548,8 +570,9 @@ func TestRestoreAfterRestart(t *testing.T) {
 	if n := s2.Restore(); n != 1 {
 		t.Fatalf("поднято %d адресов, ждали 1", n)
 	}
-	s2.Tick()
+	tick(s2)
 	waitFor(t, func() bool { g, _ := r2.get("74.125.110.70"); return goodSet[g] }, "после перезапуска подмена не встала")
+	waitStatus(s2)
 
 	// Адрес видели 45 мин назад: подмена у него ещё жила бы (IdleDrop),
 	// значит и после перезапуска должна встать.
@@ -559,8 +582,9 @@ func TestRestoreAfterRestart(t *testing.T) {
 	if n := s4.Restore(); n != 1 {
 		t.Fatalf("поднято %d адресов, ждали 1", n)
 	}
-	s4.Tick()
+	tick(s4)
 	waitFor(t, func() bool { g, _ := r4.get("74.125.110.70"); return goodSet[g] }, "адрес старше ActiveFor после перезапуска остался без подмены")
+	waitStatus(s4)
 
 	s3, _, _, c3 := newSvc()
 	s3.StatusPath = s.StatusPath

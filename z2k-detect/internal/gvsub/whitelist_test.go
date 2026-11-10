@@ -2,11 +2,20 @@ package gvsub
 
 import (
 	"compress/gzip"
+	"context"
 	"net/netip"
 	"os"
 	"testing"
 	"time"
 )
+
+// Разные кластеры позволяют отличить проверки нового адреса и его соседей
+// от досчёта запасных для уже опубликованного bad.
+type whitelistResolver map[string][]netip.Addr
+
+func (r whitelistResolver) Siblings(_ context.Context, cluster string, _ bool) []netip.Addr {
+	return r[cluster]
+}
 
 func putWhitelist(t *testing.T, path, body string) {
 	t.Helper()
@@ -37,40 +46,48 @@ func TestWhitelistDNS(t *testing.T) {
 
 func TestWhitelistReload(t *testing.T) {
 	s, n, r, _ := newSvc()
+	const otherName = "rr1---sn-list.googlevideo.com"
+	other := netip.MustParseAddr("74.125.110.71")
+	neighbors := []netip.Addr{netip.MustParseAddr("74.125.110.72"), netip.MustParseAddr("74.125.110.73")}
+	s.Resolver = whitelistResolver{
+		"sn-test": {netip.MustParseAddr("74.125.110.38"), netip.MustParseAddr("74.125.110.39"), netip.MustParseAddr("74.125.110.102")},
+		"sn-list": neighbors,
+	}
+	for _, a := range neighbors {
+		n.set(a.String(), Good)
+	}
 	s.IPFile, s.Whitelist = t.TempDir()+"/ips", t.TempDir()+"/whitelist"
 	// Отсутствующий файл — пустой список.
 	wait(t, s.OnDNS(gvName, []netip.Addr{bad}))
 	if r.adds == 0 {
 		t.Fatal("нет подмены без whitelist")
 	}
-	n.mu.Lock()
-	calls := n.calls
-	n.mu.Unlock()
-	putWhitelist(t, s.Whitelist, gvName+"\n")
+	putWhitelist(t, s.Whitelist, otherName+"\n")
 	// После добавления имени его новые адреса не публикуются; старый остаётся.
-	other := netip.MustParseAddr("74.125.110.71")
-	wait(t, s.OnDNS(gvName, []netip.Addr{other}))
+	wait(t, s.OnDNS(otherName, []netip.Addr{other}))
 	got, _ := os.ReadFile(s.IPFile)
 	if string(got) != ipFileSentinels+bad.String()+"\n" {
 		t.Fatalf("изменился опубликованный набор: %q", got)
 	}
 	n.mu.Lock()
-	after := n.calls
+	checked := append([]netip.Addr(nil), n.checked...)
 	n.mu.Unlock()
-	if after != calls {
-		t.Fatal("новый whitelisted адрес проверен")
+	for _, a := range checked {
+		if a == other || a == neighbors[0] || a == neighbors[1] {
+			t.Fatalf("whitelisted адрес или его сосед проверен: %s", a)
+		}
 	}
 	// Только mtime: размер прежний, имя теперь не совпадает.
 	st, err := os.Stat(s.Whitelist)
 	if err != nil {
 		t.Fatal(err)
 	}
-	putWhitelist(t, s.Whitelist, "xx1---sn-test.googlevideo.com\n")
+	putWhitelist(t, s.Whitelist, "xx1---sn-list.googlevideo.com\n")
 	stamp := st.ModTime().Add(2 * time.Second)
 	if err := os.Chtimes(s.Whitelist, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	wait(t, s.OnDNS(gvName, []netip.Addr{other}))
+	wait(t, s.OnDNS(otherName, []netip.Addr{other}))
 	if _, ok := s.known[other]; !ok {
 		t.Fatal("mtime не подхвачен")
 	}
@@ -80,14 +97,14 @@ func TestWhitelistReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := netip.MustParseAddr("74.125.110.200")
-	wait(t, s.OnDNS(gvName, []netip.Addr{fresh}))
+	wait(t, s.OnDNS(otherName, []netip.Addr{fresh}))
 	if _, ok := s.known[fresh]; ok {
 		t.Fatal("размер не подхвачен")
 	}
 	if err := os.Remove(s.Whitelist); err != nil {
 		t.Fatal(err)
 	}
-	wait(t, s.OnDNS(gvName, []netip.Addr{fresh}))
+	wait(t, s.OnDNS(otherName, []netip.Addr{fresh}))
 	if _, ok := s.known[fresh]; !ok {
 		t.Fatal("удаление файла не подхвачено")
 	}
