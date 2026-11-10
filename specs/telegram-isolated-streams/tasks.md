@@ -18,3 +18,8 @@
 - [x] Final verification and independent review; single replacement commit artifact prepared (R6).
 - [ ] Future release: rebuild release artifacts, prepare server capacity, publish
   client update and observe fleet/user traffic. Not claimed by a source commit.
+
+- [x] R7: reproduce new-connection failure with healthy existing WSS; isolate nfqws interference.
+- [x] R7: exact-address live exclusion and persistence through user-exclusion file.
+- [x] R7: verify source regression, new TLS and Telegram canaries; commit incident follow-up.
+- [ ] Release gate: newer Googlevideo IP profile must fail closed when its dynamic IP file is empty; exact relay exclusion alone does not fix other destinations.

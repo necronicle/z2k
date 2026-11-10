@@ -117,6 +117,22 @@ else
     bad "засев идемпотентен (-exist)" "повторный старт будет сыпать ошибками"
 fi
 
+# Native TLS to the owned relay must bypass nfqws, including after reseeding.
+(
+    exists() { command -v "$1" >/dev/null 2>&1; }
+    eval "$seed_vars"
+    eval "$(grep '^Z2K_RELAY_EXCLUDE4=' "$INIT")"
+    eval "$seed"
+    DISABLE_IPV4=0 DISABLE_IPV6=0
+    z2k_seed_local_exclusions >/dev/null
+)
+if grep -qF 'add nozapret 85.192.60.175 -exist' "$IPSET_LOG"; then
+    ok "own relay native TLS excluded during firewall seed"
+else
+    bad "own relay native TLS excluded during firewall seed" "relay missing from nozapret"
+fi
+: > "$IPSET_LOG"
+
 # --- 3. Пользовательский файл исключений создаётся --------------------------
 if grep -q 'z2k_ensure_user_exclude_file' "$INIT"; then
     ok "пользовательский файл исключений создаётся при старте"

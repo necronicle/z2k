@@ -36,3 +36,5 @@
 Из административного API нельзя достоверно получить полную архитектурную/версионную
 перепись живого парка. Для этого нужны контрольные устройства и данные доставки;
 один общий HTTP200 или нагрузочный тест не является проверкой всего парка.
+
+- [ ] Integrate the relay exclusion follow-up and fix empty dynamic Googlevideo IP lists before release: live empty --ipset profile was unrestricted and interfered with VPS TLS. Validate an unrelated HTTPS destination remains untouched.

@@ -37,3 +37,5 @@ Prepare max-sessions10000 for the main VPS only after validating10000 TLS sessio
 Do not silently apply unrelated nginx drift. Release must rebuild client binaries
 and prepare relay capacity before fleet update; a commit or cherry-pick is not rollout. Client binaries are included at the
 current manifest version; a version bump requires the normal release rebuild.
+
+Incident follow-up: seed the exact owned relay address alongside mandatory local exclusions. On the live router, persist it through the existing user-exclusion loader without replacing the init script or restarting services. Regression-test the actual seed function.

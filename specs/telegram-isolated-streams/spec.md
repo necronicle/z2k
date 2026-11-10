@@ -29,3 +29,6 @@ and custom endpoints stay intact. A server limiting an installation to one sessi
 can support only one isolated flow concurrently; its operator must increase that
 quota to serve multiple simultaneous independent flows. This physical constraint
 cannot be hidden by returning to shared transport.
+
+## R7: native relay connectivity
+The owned relay 85.192.60.175 must bypass nfqws desynchronization on every firewall seed. Preserve existing sessions and user exclusions. Do not exclude shared CDN ranges. Validate new TLS connections from the affected router, not only VPS health.

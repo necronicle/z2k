@@ -78,3 +78,21 @@ regressions passed independently with race detection. Shell regressions:12 stabi
 17 TLS roots,17 watchdog,11 pair gating,7 single-process,8 binary-drift checks PASS,
 plus config-limit/old-binary compatibility checks. Final release artifacts include
 all9 architectures and3 name aliases, built from the verified source with Go1.25.13.
+
+## 2026-11-10 20:22–20:30 MSK: router desync incident (R7)
+New VPS:443 connections timed out while the existing stock WSS stayed up.
+Paired captures showed a synthetic SYN window1 and probe payload. Adding only
+85.192.60.175 to nozapret immediately restored HTTPS200; no relay restart.
+The exact address is persisted in the router user-exclusion file; invoking the
+existing user-seed function loaded1IPv4 successfully. Five new MTProto canaries
+through the original phone listener15443 validated resPQ nonces (586–1420ms).
+Owner confirmed “Снова быстро, как в эксперименте”.
+Source seed regression failed before the fix and passes after it: local exclusions
+42/42, no upstream ipset job4/4, shell syntax and diff whitespace checks pass.
+
+Further cause: live Googlevideo IP profile uses /tmp/z2k-gv-ips.txt without a
+hostlist; that file is empty. nfq2/ipset.c IpsetCheck_ explicitly treats all-empty
+include lists as unrestricted. z2k_preflight emits the observed synthetic SYN.
+That profile exists in newer concurrent main-worktree work, not this feature
+branch. The exact VPS exclusion protects relay traffic but is not a general
+fix for the empty-list profile. Keep general fail-closed correction as a release gate.
