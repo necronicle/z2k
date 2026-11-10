@@ -1566,7 +1566,9 @@ generate_nfqws2_opt_from_strategies() {
         # v6 — шаг и на IPv6. init снимает его при старте, если увидит NAT
         # для IPv6 (S99zapret2, z2k_preflight_v6_gate): за NAT повторный SYN
         # ушёл бы с внутренним адресом.
-        Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4:v6"
+        # ntc.party #1374 (Pavel4e5), 10.11.2026: разрезки в способе нет.
+        # Обрыв начала в 58983 был на разрезанной пробе; посылаем ClientHello целиком.
+        Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pos=none:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4:v6"
     fi
 
     # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls

@@ -62,7 +62,7 @@ function deepcopy(t)
     for k, v in pairs(t) do c[k] = deepcopy(v) end
     return c
 end
--- Пробный ClientHello: содержимое не важно, важна длина и то, что он резан.
+-- Пробный ClientHello: содержимое не важно, проверяем байты и границы сегментов.
 function blob(_, name) return "CH(" .. name .. ")" .. string.rep("x", 60) end
 function tls_mod(base, mods) return base .. "|" .. mods end
 -- Ядро отдаёт позиции разреза; шаг обязан выкинуть позицию 1 и дописать конец.
@@ -150,6 +150,27 @@ do
     local a, b = sent[2], sent[3]
     is("куски hello непустые", true, #a.payload > 0 and #b.payload > 0)
     is("второй кусок имеет меньший seq, чем первый отправленный", true, b.tcp.th_seq < a.tcp.th_seq)
+end
+
+-- Целая проба по ntc.party #1374; повторы используют тот же путь отправки.
+do
+    local arg = {pos = "none"}
+    start_probe(arg)
+    reset_calls()
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1), arg)
+    local _, st = next(z2k_pf_flows)
+    is("pos=none: ACK и один сегмент ClientHello", 2, #sent)
+    is("pos=none: отдельный ACK без данных", "", sent[1] and sent[1].payload)
+    is("pos=none: целый ClientHello", st.hello, sent[2] and sent[2].payload)
+    is("pos=none: seq начала ClientHello", ISN + 1, sent[2] and sent[2].tcp.th_seq)
+    for _, confirmed in ipairs({0, 7}) do
+        if confirmed > 0 then inc(dis_in(TH_ACK, 5001, ISN + 1 + confirmed), arg) end
+        reset_calls()
+        is("pos=none: повтор SYN скрыт", VERDICT_DROP, out(dis_out(TH_SYN, ISN), arg))
+        is("pos=none: повтор ACK и одного сегмента", 2, #sent)
+        is("pos=none: точные неподтверждённые байты", st.hello:sub(confirmed + 1), sent[2] and sent[2].payload)
+        is("pos=none: seq неподтверждённого начала", ISN + 1 + confirmed, sent[2] and sent[2].tcp.th_seq)
+    end
 end
 
 -- ----- 3b. Ограниченное восстановление (10.11.2026, 58976 / 58983) ---------
@@ -452,6 +473,35 @@ do
     reset_calls()
     is("данные клиента после передачи идут мимо шага", nil, out(dis_out(TH_PUSH + TH_ACK, ISN + 1, "hello"), {pieces = 1}))
     is("после передачи плечи НЕ отменены и на данных", 0, cancelled)
+end
+
+-- 61167: поздний SYN после handover не должен снова отбирать соединение.
+do
+    local arg = {pieces = 1}
+    start_probe(arg)
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1), arg)
+    inc(dis_in(TH_ACK, 5001, ISN + 1, "ab"), arg)
+    inc(dis_in(TH_SYN + TH_ACK, 7000, ISN + 1), arg)
+    local key, st = next(z2k_pf_flows)
+    for _, age in ipairs({0, st.timeout + 1}) do
+        st.t = os.time() - age
+        reset_calls()
+        local syn = dis_out(TH_SYN, ISN)
+        is("61167: поздний SYN пропущен", VERDICT_PASS, out(syn, arg))
+        is("61167: окно позднего SYN сохранено", 65535, syn.tcp.th_win)
+        is("61167: состояние не заменено", st, z2k_pf_flows[key])
+        is("61167: стадия остаётся done", "done", z2k_pf_flows[key].stage)
+        is("61167: нет отправок", 0, #sent)
+        is("61167: плечи продолжают работать", 0, cancelled)
+    end
+    reset_calls()
+    local syn = dis_out(TH_SYN, ISN + 100)
+    is("новый ISN после done запускает пробу", VERDICT_MODIFY, out(syn, arg))
+    is("новый ISN: состояние заменено", false, st == z2k_pf_flows[key])
+    is("новый ISN: сохранён новый номер", ISN + 100, z2k_pf_flows[key].isn)
+    is("новый ISN: стадия probe_syn", "probe_syn", z2k_pf_flows[key].stage)
+    is("новый ISN: пробное окно", 1, syn.tcp.th_win)
+    is("новый ISN: плечи отменены", 1, cancelled)
 end
 
 -- ----- 6. Сервер помнит пробу: отвечаем RST и повторяем исходный SYN --------

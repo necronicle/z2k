@@ -11,7 +11,7 @@
 --
 -- Клиент  --SYN-->  [движок] --SYN(окно 1:1)-->  сервер
 --                   [движок] <--SYN,ACK--        сервер    клиент его не видит
---                   [движок] --ACK, ClientHello кусками--> сервер
+--                   [движок] --ACK, ClientHello-->         сервер
 --                   [движок] <--первые байты ответа--      сервер
 --                   [движок] --RST, исходный SYN-->        сервер
 -- Клиент  <--SYN,ACK-------- [движок] <--SYN,ACK-- сервер  дальше без вмешательства
@@ -43,7 +43,7 @@
 -- arg: open - после скольких кусков расширить окно, чтобы ответ пришёл быстрее
 -- arg: openwin - окно после расширения (по умолчанию 65535)
 -- arg: wsize, scale - окно пробного соединения (по умолчанию 1 и 1)
--- arg: pos - разрез пробного ClientHello (по умолчанию 1,midsld)
+-- arg: pos - разрез пробного ClientHello (по умолчанию 1,midsld; none — целиком)
 -- arg: blob - пробный ClientHello (по умолчанию fake_default_tls)
 -- arg: sni - имя в пробном ClientHello
 -- arg: keepts - оставить опции клиента и вести timestamp
@@ -157,7 +157,7 @@ local function send_probe_hello(st)
 	local base = u32add(st.isn, 1)
 	local parts = st.hello_parts
 	if not parts then
-		local pos = resolve_multi_pos(data, "tls_client_hello", st.pos)
+		local pos = st.pos == "none" and {} or resolve_multi_pos(data, "tls_client_hello", st.pos)
 		delete_pos_1(pos)
 		pos[#pos + 1] = #data + 1
 		parts = {}
@@ -213,7 +213,10 @@ local function step(ctx, desync)
 
 	if desync.outgoing then
 		if syn and not ack then
-			if not st or st.stage == "done" or st.isn ~= tcp.th_seq then
+			-- 61167: запоздалый SYN с тем же ISN после handover — всё ещё
+			-- соединение клиента. Не начинаем пробу и не применяем её timeout.
+			if st and st.stage == "done" and st.isn == tcp.th_seq then return VERDICT_PASS end
+			if not st or st.isn ~= tcp.th_seq then
 				sweep(now)
 				local hello = blob(desync, desync.arg.blob or "fake_default_tls")
 				if desync.arg.sni then

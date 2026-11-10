@@ -188,6 +188,9 @@ QUIC_LINE=$(printf '%s\n' "$OPT_ON" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk
     | grep -F 'key=quic' | head -1)
 
 if [ -n "$GV_LINE" ]; then
+    has "--lua-desync=z2k_preflight:pos=none:" "$GV_LINE" \
+        && ok "проба googlevideo отправляет целый ClientHello (#1374)" \
+        || bad "проба googlevideo режет ClientHello: $GV_LINE"
     has "--lua-desync=z2k_preflight:" "$GV_LINE" \
         && ok "шаг попал в профиль googlevideo" \
         || bad "шага нет в профиле googlevideo: $GV_LINE"
@@ -219,6 +222,9 @@ IPSET_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- '--ipset=/tmp/z2k-gv-ips.txt'
 HOST_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- 'YT_GV/List.txt' | grep -v -F -- '--ipset=' | head -1 | cut -d: -f1)
 IPSET_LINE=$(printf '%s\n' "$FLAT_ON" | grep -F -- '--ipset=/tmp/z2k-gv-ips.txt' | head -1)
 if [ -n "$IPSET_N" ]; then
+    has "--lua-desync=z2k_preflight:pos=none:" "$IPSET_LINE" \
+        && ok "проба по адресам отправляет целый ClientHello (#1374)" \
+        || bad "проба по адресам режет ClientHello: $IPSET_LINE"
     has "--hostlist" "$IPSET_LINE" \
         && bad "в профиле по адресам есть hostlist (включая exclude): $IPSET_LINE" \
         || ok "профиль по адресам без --hostlist и --hostlist-exclude"
