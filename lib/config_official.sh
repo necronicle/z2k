@@ -1723,8 +1723,17 @@ generate_nfqws2_opt_from_strategies() {
         udp_misc_l7="wireguard,stun,discord,mtproto,unknown"
         udp_misc_payload="wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown"
     fi
+    # Как у discord_udp: circular видит оба направления и все payload, а fake
+    # остаётся под прежним <n2 (только первый исходящий) и фильтром payload.
+    # NFQUEUE: connbytes 0:8 в каждую сторону (common/ipt.sh), то есть доступны
+    # первые 8 out и 8 in. В zapret-auto.lua провал: out>=udp_out, in<=udp_in;
+    # успех: in>udp_in. Сохраняем штатный udp_out=4 (4<=8), udp_in=0 даёт
+    # провал на четвёртом out без ответа и успех уже на первом in (1<=8).
+    # Единственный out без ответа вердикта не даёт: у штатного UDP-детектора
+    # нет таймера. Lua fake по умолчанию payload_check=known: unknown/empty
+    # не получают фейков, даже если включены в профильный --payload.
     if [ "$udp_misc_on" != 0 ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=$udp_misc_ports --filter-l7=$udp_misc_l7 --out-range=<n2 --payload=$udp_misc_payload --lua-desync=circular:fails=2:time=300:retrans=3:nld=2 --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2 --new\\n"
+        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=$udp_misc_ports --filter-l7=$udp_misc_l7 --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=2:time=300:retrans=3:nld=2:udp_in=0:udp_out=4 --in-range=x --out-range=<n2 --payload=$udp_misc_payload --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2 --new\\n"
     fi
 
     # Здесь стоял webrtc_bypass — пустой профиль udp/1024-65535 × l7=stun,
@@ -2370,6 +2379,7 @@ NFQWS2_TCP_PKT_IN="${nfqws2_tcp_pkt_in}"
 # Инвариант, который обязан держаться: окно > порога детектора.
 #   quic      udp_in=1 udp_out=5   -> нужно >=6, ставим 8
 #   discord   udp_in=1 udp_out=4   -> нужно >=5, ставим 8
+#   udp misc  udp_in=0 udp_out=4   -> успех на in=1, провал на out=4; окно 8/8
 NFQWS2_UDP_PKT_OUT="${Z2K_UDP_PKT_OUT}"
 NFQWS2_UDP_PKT_IN="${Z2K_UDP_PKT_IN}"
 

@@ -874,12 +874,16 @@ OUT_UDP=$(run_generator "udp-extra" "" "")
 _flat_udp=$(printf '%s\n' "$OUT_UDP" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk")
 _udp_misc=$(printf '%s\n' "$_flat_udp" | grep -F -- '--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535' | head -1)
 assert_contains "udp: фильтр протоколов" "--filter-l7=wireguard,stun,discord,mtproto,unknown" "$_udp_misc"
-assert_contains "udp: окно" "--out-range=<n2" "$_udp_misc"
+assert_contains "udp: circular видит оба направления и любой ответ" "--in-range=a --out-range=a --payload=all --lua-desync=circular:" "$_udp_misc"
+assert_contains "udp: прежние окна fake после circular" ":udp_in=0:udp_out=4 --in-range=x --out-range=<n2 --payload=" "$_udp_misc"
 assert_contains "udp: пейлоады" "--payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown" "$_udp_misc"
-assert_contains "udp: ротация" "--lua-desync=circular:fails=2:time=300:retrans=3:nld=2" "$_udp_misc"
+assert_contains "udp: ротация" "--lua-desync=circular:fails=2:time=300:retrans=3:nld=2:udp_in=0:udp_out=4" "$_udp_misc"
 assert_contains "udp: плечо 1" "--lua-desync=fake:blob=0x00000000:repeats=6:strategy=1" "$_udp_misc"
 assert_contains "udp: плечо 2" "--lua-desync=fake:blob=quic_google:repeats=6:strategy=2" "$_udp_misc"
 assert_not_contains "udp: без нашего TTL" "fool=" "$_udp_misc"
+# Полная проверка 1:1 хвоста: обвязка окон новая, оба плеча без добавок.
+_udp_arms=${_udp_misc#*--lua-desync=fake:}
+assert_eq "udp: оба плеча 1:1 с референсом" "blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2" "$_udp_arms"
 # голос Discord стоит раньше: его пакеты не уходят в широкий профиль
 _pos_voice=$(printf '%s\n' "$_flat_udp" | grep -nF 'key=discord_udp' | head -1 | cut -d: -f1)
 _pos_misc=$(printf '%s\n' "$_flat_udp" | grep -nF -- '--filter-udp=590-600' | head -1 | cut -d: -f1)
