@@ -14,18 +14,19 @@ import (
 // The primary tunnel retains sole ownership of enrollment and route persistence.
 // Every data flow has its own bounded session; no shared data transport fallback.
 type isolationBudget struct {
-	mu         sync.Mutex
-	active     int
-	limit      int
-	localLimit int
-	next       time.Time
-	byDevice   map[string]int
-	waiting    map[string]int
-	order      []string
+	mu          sync.Mutex
+	active      int
+	limit       int
+	localLimit  int
+	deviceLimit int
+	next        time.Time
+	byDevice    map[string]int
+	waiting     map[string]int
+	order       []string
 }
 
 func newIsolationBudget(limit int) *isolationBudget {
-	return &isolationBudget{limit: limit, localLimit: limit, byDevice: map[string]int{}, waiting: map[string]int{}}
+	return &isolationBudget{limit: limit, localLimit: limit, deviceLimit: 16, byDevice: map[string]int{}, waiting: map[string]int{}}
 }
 func (b *isolationBudget) setServerLimit(server int) {
 	b.mu.Lock()
@@ -43,6 +44,12 @@ func (b *isolationBudget) setServerLimit(server int) {
 		limit = remote
 	}
 	b.limit = limit
+	b.deviceLimit = 16
+	// A higher authenticated quota identifies a dedicated installation, which
+	// may aggregate downstream users behind one visible source address.
+	if server > 64 {
+		b.deviceLimit = limit
+	}
 }
 func (b *isolationBudget) enqueue(device string) {
 	b.mu.Lock()
@@ -76,13 +83,13 @@ func (b *isolationBudget) acquireFor(now time.Time, device string) bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.active >= b.limit || now.Before(b.next) || b.byDevice[device] >= 16 {
+	if b.active >= b.limit || now.Before(b.next) || b.byDevice[device] >= b.deviceLimit {
 		return false
 	}
 	if device != "" {
 		chosen := ""
 		for _, d := range b.order {
-			if b.byDevice[d] < 16 {
+			if b.byDevice[d] < b.deviceLimit {
 				chosen = d
 				break
 			}
@@ -374,7 +381,7 @@ func (b *isolationBudget) releaseProbe() { b.mu.Lock(); b.active--; b.mu.Unlock(
 func (b *isolationBudget) full(device string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.active >= b.limit || b.byDevice[device] >= 16
+	return b.active >= b.limit || b.byDevice[device] >= b.deviceLimit
 }
 
 func (b *isolationBudget) authenticated() { b.mu.Lock(); b.next = time.Time{}; b.mu.Unlock() }

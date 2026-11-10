@@ -269,7 +269,7 @@ func TestIsolationPreservesPrimaryPolicy(t *testing.T) {
 }
 
 func TestDedicatedTransportDefault(t *testing.T) {
-	if flag.Lookup("relay-sessions").DefValue != "64" {
+	if flag.Lookup("relay-sessions").DefValue != "1024" {
 		t.Fatal("dedicated session default changed")
 	}
 }
@@ -572,4 +572,38 @@ func TestTransientHandshakeFailureKeepsOtherAdmissionsReady(t *testing.T) {
 		t.Fatal("one transport failure paused unrelated new flows")
 	}
 	tc.isolation.release()
+}
+
+func TestDedicatedQuotaDoesNotTreatAggregatedGatewayAsOnePhone(t *testing.T) {
+	b := newIsolationBudget(1024)
+	b.setServerLimit(1024)
+	now := time.Now()
+	for i := 0; i < 604; i++ {
+		if !b.acquireFor(now, "") {
+			t.Fatalf("dedicated gateway stopped at %d flows", i)
+		}
+	}
+	if b.limit != 1023 {
+		t.Fatalf("quota headroom: %d", b.limit)
+	}
+}
+
+func TestCommunityQuotaKeepsPerDeviceLimitWithLargerLocalCeiling(t *testing.T) {
+	b := newIsolationBudget(1024)
+	b.setServerLimit(64)
+	if b.limit != 63 {
+		t.Fatalf("community quota: %d", b.limit)
+	}
+	for i := 0; i < 16; i++ {
+		if !b.acquireFor(time.Now(), "") {
+			t.Fatal(i)
+		}
+	}
+	if b.acquireFor(time.Now(), "") {
+		t.Fatal("community device exceeded16")
+	}
+	b.setServerLimit(0)
+	if b.limit != 48 {
+		t.Fatal("legacy fallback increased")
+	}
 }

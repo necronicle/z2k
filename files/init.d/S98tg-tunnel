@@ -79,7 +79,24 @@ cdn_rules_del() {
 TG_REDIR_LIB="/opt/zapret2/z2k-tg-redirect.sh"
 [ -r "$TG_REDIR_LIB" ] && . "$TG_REDIR_LIB"
 
+# Persist owned relay exclusions through the existing firewall seed loader.
+# Do not restart the DPI service for a Telegram-only update.
+exclude_owned_relays() {
+    _excl="${TG_EXCLUDE_FILE:-/opt/zapret2/ipset/zapret-hosts-user-exclude.txt}"
+    mkdir -p "$(dirname "$_excl")" || return 1
+    touch "$_excl" || return 1
+    for _relay_ip in 85.192.60.175 45.146.90.136; do
+        grep -qFx "$_relay_ip" "$_excl" || printf '\n%s\n' "$_relay_ip" >> "$_excl"
+        if command -v ipset >/dev/null 2>&1; then
+            ipset create nozapret hash:net -exist 2>/dev/null
+            ipset add nozapret "$_relay_ip" -exist 2>/dev/null
+        fi
+    done
+    return 0
+}
+
 start() {
+    exclude_owned_relays || return 1
     z2k_tg_udp_down
     [ -x "$BIN" ] || exit 0
     # Honor TG_PROXY_USER_DISABLED — if user explicitly stopped the tunnel
@@ -151,7 +168,7 @@ start() {
         # Optional session limit; dedicated data sessions are the binary default.
         _iso=$(awk -F= '/^TG_RELAY_SESSIONS=/ {gsub(/[" ]/,"",$2); print $2; exit}' /opt/zapret2/config)
         case "$_iso" in
-            [1-9]|[1-5][0-9]|6[0-4])
+            [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|10[01][0-9]|102[0-4])
                 # Source-only cherry-picks may precede the release binary rebuild.
                 if "$BIN" -h 2>&1 | grep -q -- '-relay-sessions'; then
                     TUNNEL_FLAGS="$TUNNEL_FLAGS --relay-sessions=$_iso"

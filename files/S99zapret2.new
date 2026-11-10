@@ -1610,17 +1610,13 @@ create_ipset()
 Z2K_LOCAL_EXCLUDE4="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16 224.0.0.0/4 255.255.255.255"
 Z2K_LOCAL_EXCLUDE6="::1/128 fc00::/7 fe80::/10 ff00::/8"
 
-# Own relay uses native TLS. Desync broke new connections while old WSS survived
-# on 2026-11-10. Exclude only this owned address, never shared CDN ranges.
-Z2K_RELAY_EXCLUDE4="85.192.60.175"
-
 z2k_seed_local_exclusions()
 {
 	exists ipset || return 0
 	local net
 	if [ "$DISABLE_IPV4" != "1" ]; then
 		ipset create nozapret hash:net -exist 2>/dev/null
-		for net in $Z2K_LOCAL_EXCLUDE4 $Z2K_RELAY_EXCLUDE4; do
+		for net in $Z2K_LOCAL_EXCLUDE4; do
 			ipset add nozapret "$net" -exist 2>/dev/null
 		done
 	fi
@@ -1630,7 +1626,7 @@ z2k_seed_local_exclusions()
 			ipset add nozapret6 "$net" -exist 2>/dev/null
 		done
 	fi
-	echo "Local ranges and own relay excluded from desync (nozapret)"
+	echo "Local address ranges excluded from desync (nozapret)"
 	return 0
 }
 

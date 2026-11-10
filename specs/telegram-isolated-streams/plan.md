@@ -39,3 +39,24 @@ and prepare relay capacity before fleet update; a commit or cherry-pick is not r
 current manifest version; a version bump requires the normal release rebuild.
 
 Incident follow-up: seed the exact owned relay address alongside mandatory local exclusions. On the live router, persist it through the existing user-exclusion loader without replacing the init script or restarting services. Regression-test the actual seed function.
+
+## Authorized Telegram-only release p-87.26 (2026-11-10)
+Owner explicitly authorizes publication and both relay deployments, including
+previously authorized experiment reconnects. Release worktree starts at published
+5565bc13; cherry-pick only Telegram commits, excluding newer unrelated local work.
+Ruling: deliver own relay exclusions via S98 and the existing user-exclusion seed
+file instead of replacing S99; avoids a DPI service restart and preserves other work.
+Ruling: local safety ceiling1024 with authenticated server quota (community64 =>63,
+legacy unknown=>48). Server quota>64 permits an aggregated dedicated gateway to
+use its granted allowance without the household16-per-source cap. This is bounded
+by local/FD/session limits; separate downstream identities are not inferred.
+Dedicated relay4096 total/1024 per installation; retain old4096 streams/session.
+Main relay10000 total/64 per installation; preserve its existing stream limit.
+No simultaneous writers to the live registry. Prove new external connections before
+an explicitly authorized restart; preserve rollback, identities and nginx config.
+
+Release tasks: quota regression and old/new protocol tests; rebuild only Telegram
+client architectures plus relay; final review; router candidate; sequential VPS
+upgrade and old/new live canaries; signed patch/tag; atomic staging push; CI/publish
+and public signature/hash verification; observe fleets and record remaining hardware
+coverage limitations honestly. Publishing is not proof every client has updated.

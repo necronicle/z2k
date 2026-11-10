@@ -24,7 +24,7 @@ var defaultTunnelSecret = ""
 var buildVersion = "dev"
 
 var (
-	relaySessions = flag.Int("relay-sessions", 64, "Local ceiling for dedicated relay sessions (1..64); server quota also applies")
+	relaySessions = flag.Int("relay-sessions", 1024, "Local safety ceiling for relay sessions (1..1024); authenticated server quota controls actual allowance")
 	listenAddrs   listenList
 	tunnelURL     = flag.String("tunnel-url", "wss://85.192.60.175.nip.io/ws", "Tunnel relay WebSocket URL")
 	tunnelSecret  = flag.String("tunnel-secret", defaultTunnelSecret, "Shared secret for tunnel auth (build-injected; override with --tunnel-secret)")

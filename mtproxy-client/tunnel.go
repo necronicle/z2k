@@ -1063,8 +1063,8 @@ func newTunnelClient(url, secret string) *tunnelClient {
 
 // runTunnel is the entry point for tunnel mode.
 func runTunnel() error {
-	if *relaySessions < 1 || *relaySessions > 64 {
-		return fmt.Errorf("--relay-sessions must be between 1 and 64")
+	if *relaySessions < 1 || *relaySessions > 1024 {
+		return fmt.Errorf("--relay-sessions must be between 1 and 1024")
 	}
 	if *tunnelURL == "" {
 		return fmt.Errorf("--tunnel-url is required in tunnel mode")
