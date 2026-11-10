@@ -21,7 +21,8 @@ cmp "$TMP/want" "$Z2K_GVSUB_IPS"
 # Правильный список сохраняет inode и содержимое при повторном вызове.
 ln "$Z2K_GVSUB_IPS" "$TMP/original"
 z2k_gvsub_ensure_ipfile
-[ "$Z2K_GVSUB_IPS" -ef "$TMP/original" ]
+# -ef не POSIX: сравниваем номера inode.
+[ "$(ls -i "$Z2K_GVSUB_IPS" | awk '{print $1}')" = "$(ls -i "$TMP/original" | awk '{print $1}')" ]
 cmp "$TMP/want" "$Z2K_GVSUB_IPS"
 # Только одна заглушка — тоже требует починки; адрес сохраняется.
 printf '0.0.0.0/32\n1.1.1.1\n' > "$Z2K_GVSUB_IPS"
