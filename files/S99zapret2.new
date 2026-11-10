@@ -2169,16 +2169,8 @@ start_daemons()
     fi
 
     z2k_preflight_v6_gate
-    # Файл адресов для --ipset профиля googlevideo должен быть до старта
-    # движка (/tmp чистится перезагрузкой); наполняет его служба подмены.
-    # 10.11.2026, ci_local: ошибка перенаправления у спецвстроенной ':'
-    # завершает sh; изолируем её, чтобы пустой/недоступный путь не сорвал запуск.
-    if [ -n "$Z2K_GVSUB_IPS" ]; then
-        (
-            [ -f "$Z2K_GVSUB_IPS" ] || : > "$Z2K_GVSUB_IPS"
-            chmod 644 "$Z2K_GVSUB_IPS"
-        ) 2>/dev/null || :
-    fi
+    # До любого запуска движка: RegisterIpset требует существующий файл.
+    z2k_gvsub_ensure_ipfile
 
     # Использовать функции из common/linux_daemons.sh
     # standard_mode_daemons вызывает do_nfqws
@@ -2856,6 +2848,37 @@ Z2K_GVSUB_STATUS=/tmp/z2k-gvsub.json
 # Адреса googlevideo из ответов DNS для профиля движка (--ipset в профиле
 # googlevideo, lib/config_official.sh). Путь тот же, что в генераторе.
 Z2K_GVSUB_IPS=/tmp/z2k-gv-ips.txt
+
+# Пустой include-ipset движок считает совпадением со всеми адресами.
+# Неопределённые адреса /32 и /128 не бывают реальными назначениями HTTPS.
+z2k_gvsub_ip_sentinels()
+{
+    printf '%s\n' '0.0.0.0/32' '::/128'
+}
+
+z2k_gvsub_ensure_ipfile()
+{
+    [ -n "$Z2K_GVSUB_IPS" ] || return 0
+    # Ошибка записи не должна завершать sh (гарантия 815603e9).
+    (
+        local tmp sentinel complete=1
+        while IFS= read -r sentinel; do
+            grep -qxF "$sentinel" "$Z2K_GVSUB_IPS" 2>/dev/null || complete=0
+        done <<EOF_SENTINELS
+$(z2k_gvsub_ip_sentinels)
+EOF_SENTINELS
+        [ "$complete" = 1 ] && exit 0
+        tmp=$(mktemp "${Z2K_GVSUB_IPS}.XXXXXX") || exit 1
+        # Старые адреса сохраняем; движок видит только целый снимок.
+        if { z2k_gvsub_ip_sentinels &&
+             { [ ! -f "$Z2K_GVSUB_IPS" ] || cat "$Z2K_GVSUB_IPS"; }
+           } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$Z2K_GVSUB_IPS"; then
+            exit 0
+        fi
+        rm -f "$tmp"
+        exit 1
+    ) 2>/dev/null || :
+}
 
 # Включено ли: флаг (по умолчанию да), iptables, бинарник с командой gvsub
 # (у старого z2k-detect её нет — тогда тихо ничего не делаем).

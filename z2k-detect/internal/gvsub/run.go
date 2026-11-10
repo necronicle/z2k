@@ -103,7 +103,10 @@ func Run(parent context.Context, cfg Config) error {
 		}
 	}()
 	log.Printf("gvsub: очередь %d, слушаю ответы DNS", cfg.Queue)
-	if n := svc.Restore(); n > 0 {
+	n := svc.Restore()
+	// Первый снимок, включая пустой known, публикуем до освобождения DNS.
+	svc.writeIPs()
+	if n > 0 {
 		log.Printf("gvsub: из прошлого запуска %d адресов в ходу, проверяю", n)
 		go svc.Tick()
 	}

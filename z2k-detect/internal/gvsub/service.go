@@ -722,6 +722,10 @@ func (s *Service) writeStatus() {
 	}
 }
 
+// Пустой include-ipset движок считает совпадением со всеми адресами.
+// Неопределённые адреса не бывают реальными назначениями HTTPS.
+const ipFileSentinels = "0.0.0.0/32\n::/128\n"
+
 // writeIPs записывает адреса в ходу в IPFile, если набор изменился. Набор не
 // чистится по вердикту: пробу движок применяет к любому адресу googlevideo, и
 // на рабочем она стоит лишь задержки, а «рабочий» адрес может испортиться.
@@ -729,6 +733,8 @@ func (s *Service) writeIPs() {
 	if s.IPFile == "" {
 		return
 	}
+	s.ipmu.Lock()
+	defer s.ipmu.Unlock()
 	s.mu.Lock()
 	list := make([]string, 0, len(s.known))
 	for a := range s.known {
@@ -736,11 +742,15 @@ func (s *Service) writeIPs() {
 	}
 	s.mu.Unlock()
 	sort.Strings(list)
-	body := strings.Join(list, "\n") + "\n"
-	s.ipmu.Lock()
-	defer s.ipmu.Unlock()
+	body := ipFileSentinels
+	if len(list) > 0 {
+		body += strings.Join(list, "\n") + "\n"
+	}
 	if body == s.ipLast {
-		return
+		// Файл могли удалить или обрезать снаружи: восстанавливаем снимок.
+		if b, err := os.ReadFile(s.IPFile); err == nil && string(b) == body {
+			return
+		}
 	}
 	tmp := s.IPFile + ".tmp"
 	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {

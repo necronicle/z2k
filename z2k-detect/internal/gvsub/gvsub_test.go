@@ -1035,7 +1035,7 @@ func TestIPFileWrittenBeforeRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(b); got != "2a00:1450:4001::9\n74.125.110.70\n" {
+	if got := string(b); got != ipFileSentinels+"2a00:1450:4001::9\n74.125.110.70\n" {
 		t.Fatalf("список %q", got)
 	}
 	// Брошенный адрес уходит из списка на уборке.
@@ -1043,7 +1043,7 @@ func TestIPFileWrittenBeforeRelease(t *testing.T) {
 	s.OnDNS(gvName, []netip.Addr{bad})
 	s.Tick()
 	b, _ = os.ReadFile(s.IPFile)
-	if got := string(b); got != "74.125.110.70\n" {
+	if got := string(b); got != ipFileSentinels+"74.125.110.70\n" {
 		t.Fatalf("после уборки список %q", got)
 	}
 }

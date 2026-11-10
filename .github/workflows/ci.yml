@@ -448,7 +448,9 @@ jobs:
         # test_tcp16_lua.sh гоняет lua-харнесс. Без lua набор молча
         # пропускает его (штатная деградация для разработчика без lua) — то
         # есть в CI проверка тихо исчезает.
-        run: sudo apt-get update && sudo apt-get install -y lua5.3
+        # test_gvsub_ipset_filter.sh собирает C-стенд из исходников форка:
+        # pkg-config находит заголовки LuaJIT, gzip.c требует zlib и -lz.
+        run: sudo apt-get update && sudo apt-get install -y lua5.3 libluajit-5.1-dev zlib1g-dev pkg-config
 
       # Форк движка нужен test_contains_differential.sh: он сверяет НАШУ
       # реализацию contains() с апстримной из common/base.sh. Без этого

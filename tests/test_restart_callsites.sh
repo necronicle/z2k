@@ -616,7 +616,7 @@ el=$(val "$out" elapsed)
 # The removed duplicate must not have cost coverage: ensure_autocircular_files
 # still has to run BEFORE the daemon is spawned on every path that spawns one.
 FNS_START="$TMP/fns_start.sh"
-load_fns "$FNS_START" start start_daemons stop_daemons restart_daemons
+load_fns "$FNS_START" start start_daemons stop_daemons restart_daemons restart z2k_gvsub_ensure_ipfile z2k_gvsub_ip_sentinels
 export FNS_START
 cat > "$TMP/c_start.sh" <<'EOF'
 . "$FNS_START"
@@ -634,7 +634,14 @@ traffic_debug_enable_nfqws2_log() { t traffic_debug_enable_nfqws2_log; }
 traffic_debug_tcpdump_start()     { t traffic_debug_tcpdump_start; }
 _z2k_migrate_rotator_sld()        { t migrate_rotator_sld; }
 ensure_autocircular_files()       { t ensure_autocircular_files; }
-standard_mode_daemons()           { t SPAWN; }
+standard_mode_daemons() {
+    if [ -n "$Z2K_GVSUB_IPS" ] &&
+       grep -qxF '0.0.0.0/32' "$Z2K_GVSUB_IPS" 2>/dev/null &&
+       grep -qxF '::/128' "$Z2K_GVSUB_IPS" 2>/dev/null; then
+        t IPS_READY
+    fi
+    t SPAWN
+}
 custom_runner()                   { t "custom_runner $1"; }
 stop_all_nfqws()                  { t stop_all_nfqws; }
 repair_autocircular_files_after_daemon_start() { t repair; }
@@ -663,6 +670,29 @@ for verb in start start_daemons restart_daemons; do
     else
         no "$verb: the post-spawn repair pass still runs after the spawn (INVARIANT)" "spawn<repair" "spawn=$s repair=$r"
     fi
+done
+
+# Исполняем все пути запуска: к моменту SPAWN файл уже безопасен.
+for verb in start start_daemons restart restart_daemons; do
+    for state in missing empty legacy; do
+        ips="$TMP/gvsub-start-ips"
+        rm -f "$ips"
+        case "$state" in
+            empty) : > "$ips" ;;
+            legacy) printf '1.1.1.1\n' > "$ips" ;;
+        esac
+        tr_out=$(sh "$TMP/c_start.sh" "$verb" "$ips" 2>&1 | tail -1)
+        e=$(idx "$tr_out" IPS_READY); s=$(idx "$tr_out" SPAWN)
+        if [ -n "$e" ] && [ -n "$s" ] && [ "$e" -lt "$s" ]; then
+            ok "$verb: $state ipset contains sentinels before SPAWN"
+        else
+            no "$verb: $state ipset contains sentinels before SPAWN" "ready<spawn" "$tr_out"
+        fi
+        if [ "$state" = legacy ]; then
+            grep -qxF '1.1.1.1' "$ips" && ok "$verb: preserves legacy IP" \
+                || no "$verb: preserves legacy IP" '1.1.1.1' "$(cat "$ips")"
+        fi
+    done
 done
 
 # 10.11.2026, ci_local: a failed ':' redirection must not terminate the shell
