@@ -95,6 +95,25 @@ assert_eq "отметка версии сдвинулась" "1" "$(printf '%s\n
 assert_eq "время между строками напечатано" "1" "$(printf '%s\n' "$out" | grep -c 'самая длинная пауза')"
 assert_eq "ни одного нарушенного утверждения" "0" "$(printf '%s\n' "$out" | grep -c '^\[FAIL\]')"
 
+# ── Реальный генератор кандидата до validate/S99 ─────────────────────────────
+mkdir -p "$SB/cand/lib" "$SB/cand/files/lua"
+cp "$ROOT/lib/utils.sh" "$ROOT/lib/config_official.sh" "$SB/cand/lib/"
+cp "$ROOT/files/lua/z2k-preflight.lua" "$SB/cand/files/lua/"
+out=$(dash "$ENGINE" --prev "$SB/prev" --candidate "$SB/cand" \
+      --from p-1 --to p-2 --updater candidate 2>&1)
+rc=$?
+assert_eq "репетиция с настоящим генератором проходит" "0" "$rc"
+assert_eq "репетиция проверила отсутствующий ipset до validate/S99" "1" \
+    "$(printf '%s\n' "$out" | grep -c '^PASS: create_official_config prepares missing ipset')"
+# Мутация именно ошибки p-87.28: убрать подготовку файла при генерации.
+sed '/^            z2k_gvsub_ensure_ipfile$/d' "$SB/cand/lib/config_official.sh" > "$SB/broken-generator"
+cp "$SB/broken-generator" "$SB/cand/lib/config_official.sh"
+out=$(dash "$ENGINE" --prev "$SB/prev" --candidate "$SB/cand" \
+      --from p-1 --to p-2 --updater candidate 2>&1)
+rc=$?
+assert_eq "репетиция отвергает генератор без подготовки ipset" "1" "$rc"
+rm -rf "$SB/cand/lib" "$SB/cand/files/lua/z2k-preflight.lua"
+
 # ── Обрыв посреди доставки ───────────────────────────────────────────────────
 #
 # Обрыв — не «а вдруг»: ровно так выглядит потеря связи, и именно в этом окне

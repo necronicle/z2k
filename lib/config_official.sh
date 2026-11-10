@@ -10,6 +10,40 @@
 Z2K_UDP_PKT_OUT="8"
 Z2K_UDP_PKT_IN="8"
 
+# Init должен работать и без lib/ (в том числе во время обновления), а
+# генератор загружают из WORK_DIR/lib или /opt/zapret2/lib. Держим функции
+# самодостаточными; tests/test_gvsub_ipfile.sh сверяет обе копии и Go.
+# Пустой include-ipset движок считает совпадением со всеми адресами.
+# Неопределённые адреса /32 и /128 не бывают реальными назначениями HTTPS.
+z2k_gvsub_ip_sentinels()
+{
+    printf '%s\n' '0.0.0.0/32' '::/128'
+}
+
+z2k_gvsub_ensure_ipfile()
+{
+    [ -n "$Z2K_GVSUB_IPS" ] || return 0
+    # Ошибка записи не должна завершать sh (гарантия 815603e9).
+    (
+        local tmp sentinel complete=1
+        while IFS= read -r sentinel; do
+            grep -qxF "$sentinel" "$Z2K_GVSUB_IPS" 2>/dev/null || complete=0
+        done <<EOF_SENTINELS
+$(z2k_gvsub_ip_sentinels)
+EOF_SENTINELS
+        [ "$complete" = 1 ] && exit 0
+        tmp=$(mktemp "${Z2K_GVSUB_IPS}.XXXXXX") || exit 1
+        # Старые адреса сохраняем; движок видит только целый снимок.
+        if { z2k_gvsub_ip_sentinels &&
+             { [ ! -f "$Z2K_GVSUB_IPS" ] || cat "$Z2K_GVSUB_IPS"; }
+           } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$Z2K_GVSUB_IPS"; then
+            exit 0
+        fi
+        rm -f "$tmp"
+        exit 1
+    ) 2>/dev/null || :
+}
+
 # ==============================================================================
 # ГЕНЕРАЦИЯ NFQWS2_OPT ИЗ СТРАТЕГИЙ Z2K
 # ==============================================================================
@@ -1634,7 +1668,17 @@ generate_nfqws2_opt_from_strategies() {
         # адреса сохраняются до перезагрузки: удаление может оборвать пробу A.
         # Новый whitelist не отменяет их охват A (в том числе при общих IP).
         if [ -n "$Z2K_PREFLIGHT_STEP" ] && [ "$(safe_config_read "Z2K_GV_SUBST" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")" != "0" ]; then
-            add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--ipset=/tmp/z2k-gv-ips.txt $youtube_gv_tcp --new"
+            # validate-config идёт ДО S99 start, а после reboot /tmp пуст.
+            # Подготовить файл при самой генерации, до публикации --ipset.
+            local Z2K_GVSUB_IPS="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
+            z2k_gvsub_ensure_ipfile
+            if [ -f "$Z2K_GVSUB_IPS" ] && [ -s "$Z2K_GVSUB_IPS" ] && [ -r "$Z2K_GVSUB_IPS" ]; then
+                add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--ipset=$Z2K_GVSUB_IPS $youtube_gv_tcp --new"
+            else
+                # Как в 815603e9: ошибка /tmp не убивает генерацию. Профиль
+                # по hostlist ниже остаётся; не публикуем нерабочий ipset.
+                echo "WARNING: cannot prepare gvsub ipset $Z2K_GVSUB_IPS; skipping IP profile" >&2
+            fi
         fi
         add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
     fi

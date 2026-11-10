@@ -2847,7 +2847,7 @@ Z2K_GVSUB_LOG=/tmp/z2k-log/gvsub.log
 Z2K_GVSUB_STATUS=/tmp/z2k-gvsub.json
 # Адреса googlevideo из ответов DNS для профиля движка (--ipset в профиле
 # googlevideo, lib/config_official.sh). Путь тот же, что в генераторе.
-Z2K_GVSUB_IPS=/tmp/z2k-gv-ips.txt
+Z2K_GVSUB_IPS=${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}
 
 # Пустой include-ipset движок считает совпадением со всеми адресами.
 # Неопределённые адреса /32 и /128 не бывают реальными назначениями HTTPS.
