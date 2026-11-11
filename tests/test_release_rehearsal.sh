@@ -72,7 +72,7 @@ mk_fixture() {
   "files/etc/z2k-update-pub.pem": "$(z2k_sha "$_c/files/etc/z2k-update-pub.pem")"
   },
   "history": [
-{"v": "p-2", "type": "patch", "ref": "HEAD", "steps": ["restart-service"], "changed_files": []},
+{"v": "p-2", "type": "patch", "ref": "p-2", "steps": ["restart-service"], "changed_files": []},
 {"v": "p-1", "type": "patch", "ref": "HEAD", "changed_files": []}
   ]
 }
@@ -94,6 +94,76 @@ assert_eq "шаги те и в том порядке"   "1" "$(printf '%s\n' "$o
 assert_eq "отметка версии сдвинулась" "1" "$(printf '%s\n' "$out" | grep -c '^\[OK\] отметка версии')"
 assert_eq "время между строками напечатано" "1" "$(printf '%s\n' "$out" | grep -c 'самая длинная пауза')"
 assert_eq "ни одного нарушенного утверждения" "0" "$(printf '%s\n' "$out" | grep -c '^\[FAIL\]')"
+
+# ── Тег будущего релиза и совместимость с веткой ─────────────────────────────
+# Без отображения ref новый апдейтер уйдёт на GitHub вместо кандидата.
+# ref нарочно отличается от --to: источник определяется манифестом.
+mkdir -p "$SB/prev/lib"
+cp "$ROOT/lib/auto_update.sh" "$ROOT/lib/utils.sh" "$SB/prev/lib/"
+for mode in tagged branch; do
+    mk_fixture "$SB/prev" "$SB/cand"
+    if [ "$mode" = tagged ]; then
+        sed 's/"ref": "p-2"/"ref": "future-p-2"/' "$SB/cand/UPDATES.json" > "$SB/manifest"
+    else
+        sed 's/, "ref": "p-2"//' "$SB/cand/UPDATES.json" > "$SB/manifest"
+    fi
+    cp "$SB/manifest" "$SB/cand/UPDATES.json"
+    for updater in prev candidate; do
+        out=$(dash "$ENGINE" --prev "$SB/prev" --candidate "$SB/cand" \
+              --from p-1 --to p-2 --updater "$updater" 2>&1)
+        rc=$?
+        [ "$rc" -eq 0 ] || printf '%s\n' "$out"
+        assert_eq "$mode/$updater: репетиция проходит" "0" "$rc"
+        assert_eq "$mode/$updater: строгая сходимость" "1" \
+            "$(printf '%s\n' "$out" | grep -c '^\[OK\] сходимость')"
+    done
+done
+# Старый апдейтер всегда берёт ветку даже с ref в новом манифесте.
+mk_fixture "$SB/prev" "$SB/cand"
+printf '\nau_repo_base() { printf "%%s" "$Z2K_AU_REPO_RAW"; }\n' >> "$SB/prev/lib/auto_update.sh"
+out=$(dash "$ENGINE" --prev "$SB/prev" --candidate "$SB/cand" \
+      --from p-1 --to p-2 --updater prev 2>&1)
+assert_eq "prev с прежней доставкой по ветке: репетиция проходит" "0" "$?"
+rm -rf "$SB/prev/lib"
+
+# Манифест сохраняет прежний SHA. Транспорт обязан отклонить чужие байты,
+# а итоговая сверка — остаться красной даже после отката.
+printf 'повреждено\n' >> "$SB/cand/files/lua/a.lua"
+out=$(dash "$ENGINE" --prev "$SB/prev" --candidate "$SB/cand" \
+      --from p-1 --to p-2 --updater candidate 2>&1)
+rc=$?
+assert_eq "испорченный кандидат отвергнут" "1" "$rc"
+assert_eq "несовпадение с манифестом остаётся провалом" "1" \
+    "$(printf '%s\n' "$out" | grep -c '^\[FAIL\] сходимость')"
+mk_fixture "$SB/prev" "$SB/cand"
+
+# ── Доставка самого апдейтера: перечитывание не теряет счётчик шагов ──────────
+mkdir -p "$SB/prev/lib" "$SB/cand/lib"
+cp "$ROOT/lib/auto_update.sh" "$ROOT/lib/utils.sh" "$SB/prev/lib/"
+cp "$ROOT/lib/auto_update.sh" "$ROOT/lib/utils.sh" "$SB/cand/lib/"
+printf '\n# candidate for reload regression\n' >> "$SB/cand/lib/auto_update.sh"
+python3 - "$SB/cand/UPDATES.json" "$(z2k_sha "$SB/cand/lib/auto_update.sh")" <<'PYJSON'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+s = s.replace('"install_map": {', '"install_map": {\n  "lib/auto_update.sh": ["/opt/zapret2/lib/auto_update.sh"],')
+s = s.replace('"files_sha256": {', '"files_sha256": {\n  "lib/auto_update.sh": "' + sys.argv[2] + '",')
+p.write_text(s)
+PYJSON
+for updater in prev candidate; do
+    out=$(dash "$ENGINE" --prev "$SB/prev" --candidate "$SB/cand" \
+          --from p-1 --to p-2 --updater "$updater" 2>&1)
+    rc=$?
+    [ "$rc" -eq 0 ] || printf '%s\n' "$out"
+    assert_eq "reload/$updater: репетиция проходит" "0" "$rc"
+    assert_eq "reload/$updater: шаг вызван в объявленном порядке" "1" \
+        "$(printf '%s\n' "$out" | grep -c '^\[OK\] шаги')"
+    assert_eq "reload/$updater: доставленный код совпал с SHA" "1" \
+        "$(printf '%s\n' "$out" | grep -c '^\[OK\] сходимость')"
+done
+rm -rf "$SB/prev/lib" "$SB/cand/lib"
+mk_fixture "$SB/prev" "$SB/cand"
 
 # ── Реальный генератор кандидата до validate/S99 ─────────────────────────────
 mkdir -p "$SB/cand/lib" "$SB/cand/files/lua"
@@ -122,6 +192,7 @@ rm -rf "$SB/cand/lib" "$SB/cand/files/lua/z2k-preflight.lua"
 out2=$(sh "$ENGINE" --prev "$SB/prev" --candidate "$SB/cand" \
        --from p-1 --to p-2 --updater candidate --interrupt-after 1 2>&1)
 rc2=$?
+[ "$rc2" -eq 0 ] || printf '%s\n' "$out2"
 assert_eq "обрыв: утверждения выполнены"   "0" "$rc2"
 assert_eq "обрыв распознан как провал"     "1" "$(printf '%s\n' "$out2" | grep -c '^\[OK\] обрыв распознан')"
 assert_eq "дерево вернулось как было"      "1" "$(printf '%s\n' "$out2" | grep -c '^\[OK\] откат')"

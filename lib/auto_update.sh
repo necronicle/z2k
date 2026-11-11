@@ -413,12 +413,12 @@ au_repo_base() {
 }
 
 # au_manifest_file_sha MANIFEST REPO_PATH -> expected sha256 of that file at
-# HEAD, empty when the manifest carries no digest for it.
+# the manifest's release, empty when the manifest carries no digest for it.
 #
 # The map lives at the top level of UPDATES.json (see scripts/gen_file_hashes.sh)
-# rather than per-history-entry because we always download from branch HEAD:
-# the right expectation is "what HEAD holds", not "what some entry in the window
-# shipped". Manifests published before this existed simply have no map, and
+# rather than per-history-entry: delivery converges to the release described by
+# this manifest, using its target ref when available, not intermediate entries
+# in the update window. Manifests published before this existed have no map, and
 # every lookup returns empty — verification is skipped, behaviour unchanged.
 #
 # `tr -d '\n'` first: the map is pretty-printed one pair per line, and folding
@@ -2385,14 +2385,14 @@ au_apply_converge() {
     local plan="$Z2K_AU_TMP_DIR/converge.plan"
     local rc _ac_self
 
-    # Сходимость ref не ставит, а значит, и чужой принимать не должна.
-    # au_repo_base берёт Z2K_AU_TARGET_REF из ОКРУЖЕНИЯ, а переустановка его
-    # экспортирует и перезапускает планировщик из своего окружения — дальше
-    # каждый ночной прогон получает ref прошлой переустановки по наследству.
-    # Роутер, переустановленный ночью на p-84.18, с 16.09 качал все файлы с тега
-    # p-84.18 при суммах от новой версии: «не совпало» на всех четырёх
-    # источниках и откат, девять ночей подряд.
+    # Отбрасываем ref прошлой переустановки, унаследованный от планировщика,
+    # и закрепляем доставку на версии УЖЕ скачанного манифеста. Ветка может
+    # сдвинуться во время обновления, а ожидаемые суммы остаются прежними.
+    # Ref держим и для повторов, и для шагов в перечитанном коде (бинарники).
+    # Старый манифест без ref сохраняет прежнюю доставку с Z2K_AU_REPO_RAW.
     unset Z2K_AU_TARGET_REF
+    Z2K_AU_TARGET_REF=$(au_manifest_ref "$manifest" "$target_tag")
+    export Z2K_AU_TARGET_REF
 
     au_converge_plan "$manifest" > "$plan"
     # Не `grep -c . || echo 0`: на пустом файле grep печатает 0 И возвращает 1,

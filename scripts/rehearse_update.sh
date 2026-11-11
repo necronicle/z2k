@@ -104,8 +104,7 @@ inherited() {
 }
 
 WORK=$(mktemp -d) || exit 2
-SRV=""
-cleanup() { [ -n "$SRV" ] && kill "$SRV" 2>/dev/null; rm -rf "$WORK"; }
+cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 
 SBOX="$WORK/root"
@@ -125,7 +124,7 @@ awk -v sb="$SBOX" '
         line = $0; out = ""
         while (match(line, /"\/[^"]*"/)) {
             out = out substr(line, 1, RSTART) sb substr(line, RSTART + 1, RLENGTH - 1)
-            line = substr(line, RSTART + RLENGTH - 1)
+            line = substr(line, RSTART + RLENGTH)
         }
         print out line; next
     }
@@ -165,45 +164,52 @@ _snap "$SBOX" > "$BEFORE" 2>/dev/null || _snap_bsd "$SBOX" > "$BEFORE"
 
 # --- Локальный источник --------------------------------------------------------
 #
-# Адрес не похож на raw.githubusercontent.com, поэтому зеркала и VPS-слой не
-# задействуются, а сам загрузчик и sha-гейт работают настоящие.
-PORT=$(awk 'BEGIN { srand(); printf "%d", 20000 + int(rand() * 20000) }' </dev/null)
+# Сетевой транспорт подменён на curl file://, как в тестах апдейтера.
+# au_repo_base/au_manifest_ref и SHA-гейт остаются настоящими. Ветка и ref
+# целевой записи отдают одно дерево кандидата: будущего тега ещё нет на GitHub.
+# Неизвестные URL отвергаются — наружу репетиция за файлами не ходит.
+REPO_BASE="https://raw.githubusercontent.com/necronicle/z2k"
+BRANCH=$(python3 - "$CANDSB/UPDATES.json" <<'PYJSON'
+import json, sys
+print(json.load(open(sys.argv[1])).get('branch', 'z2k-enhanced'))
+PYJSON
+) || exit 2
+TARGET_REF=$(python3 - "$CANDSB/UPDATES.json" "$TO" <<'PYJSON'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+print(next((entry.get('ref', '') for entry in manifest.get('history', [])
+            if entry.get('v') == sys.argv[2]), ''))
+PYJSON
+) || exit 2
 
-if [ "$INTERRUPT" -gt 0 ]; then
-    # Обрыв — остановка сервера после N отданных файлов. Это ровно потеря связи
-    # посреди обновления, и он ДЕТЕРМИНИРОВАН: N задаётся, а не ловится на удачу.
-    # Манифест не считаем: он приходит первым и до доставки, обрывать на нём
-    # значит проверять не то.
-    cat > "$WORK/srv.py" <<'PY'
-import functools, http.server, os, sys
-limit = int(sys.argv[1]); served = 0
-class H(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        global served
-        if self.path.endswith('.json') or self.path.endswith('.sig'):
-            return super().do_GET()
-        served += 1
-        if served > limit:
-            os._exit(0)
-        return super().do_GET()
-    def log_message(self, *a):
-        pass
-http.server.HTTPServer(('127.0.0.1', int(sys.argv[2])),
-                       functools.partial(H, directory=sys.argv[3])).serve_forever()
-PY
-    python3 "$WORK/srv.py" "$INTERRUPT" "$PORT" "$CANDSB" >/dev/null 2>&1 &
-    SRV=$!
-else
-    ( cd "$CANDSB" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 ) &
-    SRV=$!
-fi
-
-_w=0
-while [ "$_w" -lt 50 ]; do
-    curl -fsS -o /dev/null "http://127.0.0.1:$PORT/UPDATES.json" 2>/dev/null && break
-    _w=$((_w + 1)); sleep 1
-done
-[ "$_w" -lt 50 ] || { printf 'локальный источник не поднялся\n' >&2; exit 2; }
+cat > "$WORK/transport.sh" <<'TRANSPORT'
+z2k_fetch() {
+    local url="$1" dest="$2" path count
+    url=${url%%\?*}
+    case "$url" in
+        "$REPO_BASE/$BRANCH/"*) path=${url#"$REPO_BASE/$BRANCH/"} ;;
+        "$REPO_BASE/$TARGET_REF/"*)
+            [ -n "$TARGET_REF" ] || return 1
+            path=${url#"$REPO_BASE/$TARGET_REF/"} ;;
+        *) printf 'неизвестный URL репетиции: %s\n' "$url" >&2; return 1 ;;
+    esac
+    case "/$path/" in */../*|*/./*) return 1 ;; esac
+    # Манифест и подпись не считаем. После обрыва не проходят и повторы,
+    # включая перезапрос с кеш-бастером: источник остаётся недоступным.
+    case "$path" in
+        *.json|*.sig) ;;
+        *)
+            count=$(cat "$WORK/served" 2>/dev/null) || count=0
+            count=$((count + 1))
+            printf '%s\n' "$count" > "$WORK/served"
+            if [ "$INTERRUPT" -gt 0 ] && [ "$count" -gt "$INTERRUPT" ]; then
+                return 1
+            fi ;;
+    esac
+    command curl -fsSL "file://$CANDSB/$path" -o "$dest" || return 1
+    _z2k_verify_fetched "$dest" "$url"
+}
+TRANSPORT
 
 # --- Прогон ---------------------------------------------------------------------
 STEPS="$WORK/steps.log"
@@ -225,15 +231,27 @@ ZAPRET2_DIR="$BASE"; export ZAPRET2_DIR
 Z2K_AU_TMP_DIR="$WORK/tmp"; export Z2K_AU_TMP_DIR
 Z2K_AU_LOG_FILE="$LOG"; export Z2K_AU_LOG_FILE
 Z2K_AU_INSTALLED_TAG_FILE="$BASE/.z2k-installed-tag"; export Z2K_AU_INSTALLED_TAG_FILE
-Z2K_AU_REPO_RAW="http://127.0.0.1:$PORT"; export Z2K_AU_REPO_RAW
-Z2K_AU_MANIFEST_URL="http://127.0.0.1:$PORT/UPDATES.json"; export Z2K_AU_MANIFEST_URL
-GITHUB_RAW="http://127.0.0.1:$PORT"; export GITHUB_RAW
+Z2K_AU_REPO_RAW="$REPO_BASE/$BRANCH"; export Z2K_AU_REPO_RAW
+Z2K_AU_MANIFEST_URL="$REPO_BASE/$BRANCH/UPDATES.json"; export Z2K_AU_MANIFEST_URL
+GITHUB_RAW="$REPO_BASE/$BRANCH"; export GITHUB_RAW
 mkdir -p "\$Z2K_AU_TMP_DIR"
 cp "$CANDSB/UPDATES.json" "\$Z2K_AU_TMP_DIR/UPDATES.json"
 . "$LIBDIR/utils.sh"
+WORK="$WORK"; CANDSB="$CANDSB"; INTERRUPT="$INTERRUPT"
+REPO_BASE="$REPO_BASE"; BRANCH="$BRANCH"; TARGET_REF="$TARGET_REF"
+. "$WORK/transport.sh"
+# Доставленный auto_update.sh перечитывается в подоболочке перед шагами.
+# POSIX alias перехватывает только сорсинг, возвращая счётчик ПОСЛЕ него:
+# иначе новый au_run_step затрёт подмену и полезет запускать сервисы роутера.
+# Файл на диске не меняем — его байты обязаны пройти итоговую SHA-сверку.
+rehearse_source() {
+    command . "\$@" || return \$?
+    au_run_step() { printf '%s\n' "\$1" >> "$STEPS"; return 0; }
+    # Фоновая установка пакетов/обновление DNS тоже требуют живого роутера.
+    au_provision_flock() { return 1; }
+}
+alias .='rehearse_source'
 Z2K_AU_SOURCE_ONLY=1 . "$LIBDIR/auto_update.sh"
-# Шаги подменяем счётчиком: проверяется вызов и его порядок, а не результат.
-au_run_step() { printf '%s\n' "\$1" >> "$STEPS"; return 0; }
 # Проверка живости смотрит на СИСТЕМУ — работает ли nfqws2, парсятся ли
 # установленные скрипты, отвечает ли github. В песочнице системы нет вовсе, и
 # без подмены она валится, запускает откат и портит замер: в журнал уезжают
