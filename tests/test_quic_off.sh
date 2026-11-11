@@ -108,8 +108,8 @@ regen() { # $1 - тег, $2 - строка конфига; печатает ст
 R=$(regen on-yt "Z2K_YT_QUIC_OFF=1"); has "Z2K_YT_QUIC_OFF=1" "$R" && ok "Z2K_YT_QUIC_OFF=1 переживает пересборку" || bad "Z2K_YT_QUIC_OFF=1 потерян: [$R]"
 R=$(regen off-yt "Z2K_YT_QUIC_OFF=0"); has "Z2K_YT_QUIC_OFF=0" "$R" && ok "Z2K_YT_QUIC_OFF=0 переживает пересборку" || bad "Z2K_YT_QUIC_OFF=0 потерян: [$R]"
 R=$(regen on-all "Z2K_QUIC_OFF=1"); has "Z2K_QUIC_OFF=1" "$R" && ok "Z2K_QUIC_OFF=1 переживает пересборку" || bad "Z2K_QUIC_OFF=1 потерян: [$R]"
-R=$(regen absent ""); [ -z "$R" ] && ok "без ключей пересборка их не пишет (умолчание версии)" || bad "пересборка записала ключи: [$R]"
-R=$(regen junk "Z2K_QUIC_OFF=maybe"); [ -z "$R" ] && ok "мусорное значение не сохраняется" || bad "мусор сохранён: [$R]"
+R=$(regen absent ""); has "Z2K_YT_QUIC_OFF=0" "$R" && has "Z2K_QUIC_OFF=0" "$R" && ok "отсутствующие ключи фиксируются по прежнему умолчанию 0" || bad "умолчания не зафиксированы: [$R]"
+R=$(regen junk "Z2K_QUIC_OFF=maybe"); has "Z2K_QUIC_OFF=maybe" "$R" && ok "существующий ключ не меняется при обновлении" || bad "существующий ключ изменён: [$R]"
 
 # --- 5. Панель: тумблеры ставят флаг, пересобирают и перезапускают -------------
 ACT="$ROOT/webpanel/cgi/actions.sh"

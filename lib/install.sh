@@ -1511,6 +1511,9 @@ step_build_zapret2() {
         # скопировать не удалось — abort, иначе commit (delete old) безвозвратно
         # потеряет настройки (Codex 2026-05-28). На /opt место есть почти
         # всегда, но проверяем явно.
+        # Freeze effective defaults BEFORE backup and replacement of the old tree.
+        z2k_migrate_toggle_values "$ZAPRET2_DIR/config" || \
+            die "Не удалось сохранить эффективные значения тумблеров"
         z2k_backup_file "$ZAPRET2_DIR/config" config || \
             die "Не удалось сохранить config в бэкап — установка прервана до удаления текущей, чтобы не потерять ваши настройки."
         # Whitelist (пользовательские исключения) — невосстановимый user-data,

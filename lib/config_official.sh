@@ -2017,10 +2017,224 @@ z2k_retire_discovery() {
         "$zd/files/lists/discovered-domains.txt" || return 1
 }
 
+# Toggle registry: key, fresh default, disabled value (inverse switches use 1).
+# Add future switches HERE only, never to the immutable legacy snapshot below.
+z2k_toggle_defaults() {
+    cat <<'Z2K_TOGGLES'
+ENABLED 1 0
+DISABLE_CUSTOM 1 1
+DISABLE_IPV6 1 1
+POLICY_EXCLUDE 0 0
+GAME_WARP_ENABLED 0 0
+TG_PROXY_USER_DISABLED 0 1
+Z2K_CATEGORY_YOUTUBE 1 0
+Z2K_CATEGORY_RKN 1 0
+Z2K_CATEGORY_DISCORD_VOICE 1 0
+Z2K_CIRCULAR_RESET 1 0
+Z2K_DISCORD_UPDATE_TLS_TIMEOUT 1 0
+Z2K_INJECT_TLS_MODS 0 0
+Z2K_PADENCAP 1 0
+Z2K_NFQWS2_TEMPLATES 1 0
+Z2K_DYNAMIC_TTL 1 0
+Z2K_INSTA_DNS 1 0
+Z2K_REDIRECTOR_DNS 1 0
+Z2K_SNI_STALL 1 0
+Z2K_GV_SERVER_REPLY2 1 0
+Z2K_GV_SUBST 1 0
+Z2K_QUIC_OFF 0 0
+Z2K_YT_QUIC_OFF 0 0
+Z2K_PPE_DEOFFLOAD_QUIC 1 0
+Z2K_PANEL_AUTH 0 0
+Z2K_AUTO_UPDATE_ENABLED 1 0
+Z2K_AUTOHOSTLIST 0 0
+Z2K_WARP_WDTT 0 0
+Z2K_UDP_MISC 1 0
+Z2K_REFACTOR_PHASE3 0 0
+Z2K_TOGGLES
+}
+
+# Immutable effective defaults of the release preceding the preservation policy.
+# Never add future toggles here: absence means the old version had no feature.
+z2k_legacy_toggle_defaults() {
+    cat <<'Z2K_LEGACY'
+ENABLED 0
+DISABLE_CUSTOM 0
+DISABLE_IPV6 0
+POLICY_EXCLUDE 0
+GAME_WARP_ENABLED 0
+TG_PROXY_USER_DISABLED 0
+Z2K_CATEGORY_YOUTUBE 1
+Z2K_CATEGORY_RKN 1
+Z2K_CATEGORY_DISCORD_VOICE 1
+Z2K_CIRCULAR_RESET 1
+Z2K_DISCORD_UPDATE_TLS_TIMEOUT 1
+Z2K_INJECT_TLS_MODS 0
+Z2K_PADENCAP 1
+Z2K_NFQWS2_TEMPLATES 1
+Z2K_DYNAMIC_TTL 1
+Z2K_INSTA_DNS 1
+Z2K_REDIRECTOR_DNS 1
+Z2K_SNI_STALL 1
+Z2K_GV_SERVER_REPLY2 1
+Z2K_GV_SUBST 1
+Z2K_QUIC_OFF 0
+Z2K_YT_QUIC_OFF 0
+Z2K_PPE_DEOFFLOAD_QUIC 1
+Z2K_PANEL_AUTH 0
+Z2K_AUTO_UPDATE_ENABLED 1
+Z2K_AUTOHOSTLIST 0
+Z2K_WARP_WDTT 0
+Z2K_UDP_MISC 1
+Z2K_REFACTOR_PHASE3 0
+Z2K_LEGACY
+}
+
+# Bootstrap from the installed pre-policy generator when it is still present.
+# No eval/source of old code: read literal 0/1 fallbacks only. Unknown old
+# Z2K switches were not features of that version and must start disabled.
+z2k_prior_toggle_default() {
+    local cfg="$1" key="$2" fallback="$3" off="$4" old value base known=0
+    # S99 reads these directly: unset ENABLED is disabled; unset DISABLE_*
+    # is not equal to 1. Generator fresh defaults are not runtime defaults.
+    case "$key" in ENABLED|DISABLE_CUSTOM|DISABLE_IPV6) printf '%s' "$fallback"; return ;; esac
+    base=$(dirname "$cfg")
+    old="$base/lib/config_official.sh"
+    if [ -f "$old" ] && ! grep -q '^z2k_toggle_defaults()' "$old"; then
+        # Some old generators did not preserve a switch even though its actual
+        # consumer (updater, CGI, init or DNS refresher) already supported it.
+        for old in "$base/lib/config_official.sh" "$base/lib/"*.sh \
+                   "$base/"*.sh "$base/webpanel/cgi/"*.sh \
+                   "${base%/*}/etc/init.d/S99zapret2"; do
+            [ -f "$old" ] || continue
+            grep -q "$key" "$old" || continue
+            known=1
+            value=$(awk -v key="$key" '
+                /safe_config_read|read_flag/ && index($0,key) && $0 !~ /^[ \t]*#/ {
+                    if (match($0, /[ \t]+"?[01]"?\)/)) {
+                        v=substr($0,RSTART,RLENGTH); gsub(/[^01]/,"",v); print v; exit
+                    }
+                }
+            ' "$old")
+            case "$value" in 0|1) printf '%s' "$value"; return ;; esac
+        done
+        if [ "$known" = 0 ]; then
+            case "$key" in Z2K_*) printf '%s' "$off"; return ;; esac
+        fi
+    fi
+    printf '%s' "$fallback"
+}
+
+# Materialize only missing keys, before generating options or backing up config.
+# The .done ledger is also the inventory for subsequent versions. New entries
+# absent from that inventory are OFF, irrespective of their fresh defaults.
+z2k_migrate_toggle_values() {
+    local cfg="$1" state="${2:-$(dirname "$1")/state}"
+    local marker="$state/toggle-values-v1.done" tmp key def off value prior reply_generation=-1 reply_default=1 reply_key tag
+    [ -f "$cfg" ] || return 0
+    mkdir -p "$state" || return 1
+    tmp="${cfg}.toggles.$$"
+    cp -p "$cfg" "$tmp" || return 1
+    # Preserve the switch that was effective in the SOURCE release, not stale
+    # aliases intentionally ignored by that release. p-87.21..23 defaulted to
+    # OFF, p-87.24 renamed to SERVER_REPLY (ON), p-87.27 to SERVER_REPLY2 (ON).
+    prior="$(dirname "$cfg")/lib/config_official.sh"
+    if grep -q 'safe_config_read "Z2K_GV_SERVER_REPLY2"' "$prior" 2>/dev/null; then reply_generation=2
+    elif grep -q 'safe_config_read "Z2K_GV_SERVER_REPLY"' "$prior" 2>/dev/null; then reply_generation=1
+    elif grep -q 'safe_config_read "Z2K_GV_PREFLIGHT"' "$prior" 2>/dev/null; then reply_generation=0
+    fi
+    # A patch can have replaced the source library before this gate runs.
+    tag=$(cat "$(dirname "$cfg")/.z2k-installed-tag" 2>/dev/null) || tag=""
+    if [ -n "$tag" ]; then
+        reply_generation=$(printf '%s\n' "$tag" | awk -v fallback="$reply_generation" '
+            /^[pr]-[0-9]+[.][0-9]+$/ {
+                sub(/^[pr]-/, ""); split($0,v,"."); found=1
+                if (v[1]<87 || (v[1]==87 && v[2]<21)) print -2
+                else if (v[1]==87 && v[2]<24) print 0
+                else if (v[1]==87 && v[2]<27) print 1
+                else print 2
+            }
+            END { if (!found) print fallback }
+        ')
+    fi
+    if ! grep -q '^Z2K_GV_SERVER_REPLY2=' "$cfg"; then
+        value=""
+        case "$reply_generation" in
+            -2) value=0 ;; # feature did not exist
+            0|1)
+                reply_key=Z2K_GV_PREFLIGHT; reply_default=0
+                [ "$reply_generation" = 0 ] || { reply_key=Z2K_GV_SERVER_REPLY; reply_default=1; }
+                reply_default=$(z2k_prior_toggle_default "$cfg" "$reply_key" "$reply_default" "$reply_default")
+                value=$(safe_config_read "$reply_key" "$cfg" "$reply_default")
+                case "$value" in 0|1) ;; *) value=0 ;; esac
+                ;;
+            -1) # untagged config-only recovery: newest explicit alias wins
+                for prior in Z2K_GV_SERVER_REPLY Z2K_GV_PREFLIGHT; do
+                    value=$(safe_config_read "$prior" "$cfg" "")
+                    case "$value" in 0|1) break ;; *) value="" ;; esac
+                done
+                ;;
+        esac
+        [ -z "$value" ] || printf '\nZ2K_GV_SERVER_REPLY2=%s\n' "$value" >> "$tmp" || return 1
+    fi
+    while read -r key def off; do
+        grep -q "^${key}=" "$tmp" && continue
+        if [ -f "$marker" ]; then
+            value=$(safe_config_read "$key" "$marker" "$off")
+        else
+            value=$(z2k_legacy_toggle_defaults | awk -v k="$key" '$1==k {print $2; exit}')
+            [ -n "$value" ] || value="$off"
+            value=$(z2k_prior_toggle_default "$cfg" "$key" "$value" "$off")
+        fi
+        if [ "$key" = DISABLE_IPV6 ]; then
+            # Reinstall can expose a partial config before the old-tree restore.
+            # shellcheck disable=SC2045,SC2046
+            for prior in "${Z2K_OLD_TREE_BACKUP:-/nonexistent}/config" $(ls -dt "$(dirname "$cfg")".old.*/config 2>/dev/null); do
+                [ -f "$prior" ] || continue
+                value=$(safe_config_read "$key" "$prior" "$value")
+                break
+            done
+        fi
+        printf '\n%s=%s\n' "$key" "$value" >> "$tmp" || return 1
+    done <<Z2K_REGISTRY
+$(z2k_toggle_defaults)
+Z2K_REGISTRY
+    if cmp -s "$tmp" "$cfg"; then rm -f "$tmp"; else
+        mv -f "$tmp" "$cfg" || return 1
+    fi
+    z2k_record_toggle_values "$cfg" "$state"
+}
+
+z2k_record_toggle_values() {
+    local cfg="$1" state="$2" key def off value tmp
+    mkdir -p "$state" || return 1
+    tmp="$state/toggle-values-v1.done.tmp.$$"
+    : > "$tmp" || return 1
+    while read -r key def off; do
+        # Snapshot VERSION defaults, never the user's explicit selection.
+        # If a key is later absent, its effective value was the old runtime
+        # fallback, not the last 0/1 the user wrote before removing that key.
+        value="$def"
+        case "$key" in ENABLED|DISABLE_CUSTOM|DISABLE_IPV6) value=0 ;; esac
+        printf '%s=%s\n' "$key" "$value" >> "$tmp" || return 1
+    done <<Z2K_REGISTRY
+$(z2k_toggle_defaults)
+Z2K_REGISTRY
+    # Do not rewrite a completed migration on every boot/regen.
+    if cmp -s "$tmp" "$state/toggle-values-v1.done"; then rm -f "$tmp"; else
+        mv -f "$tmp" "$state/toggle-values-v1.done" || return 1
+    fi
+}
+
 create_official_config() {
     # $1 - путь к config файлу (обычно /opt/zapret2/config)
 
     local config_file="${1:-/opt/zapret2/config}"
+
+    local _toggle_existing=0
+    if [ -f "$config_file" ]; then
+        _toggle_existing=1
+        z2k_migrate_toggle_values "$config_file" || return 1
+    fi
 
     print_info "Создание официального config файла: $config_file"
 
@@ -2248,20 +2462,15 @@ create_official_config() {
         # S99 ставит правило NAT по наличию шага в собранном NFQWS2_OPT.
         # Ключ обязан сохраняться здесь и выводиться ниже: после обновления
         # новый выбор человека не должен теряться при пересборке.
-        # Пишем только явно выбранное значение, иначе действует умолчание 1.
-        #
-        # p-87.27: Z2K_GV_SERVER_REPLY и прежний Z2K_GV_PREFLIGHT намеренно
-        # не читаем и не переносим. Новое поколение ключа включает обход
-        # один раз у всех, включая тех, кто раньше сохранял 0.
+        # Missing values were frozen by z2k_migrate_toggle_values above.
         saved_Z2K_GV_SERVER_REPLY2=$(safe_config_read "Z2K_GV_SERVER_REPLY2" "$config_file" "")
         case "$saved_Z2K_GV_SERVER_REPLY2" in 0|1|"") ;; *) saved_Z2K_GV_SERVER_REPLY2="" ;; esac
         # Z2K_GV_SUBST — подмена адресов googlevideo (генератор, S99, gvsub).
         # До p-87.27 не публиковался: новое имя не нужно, умолчание уже 1.
-        # Схема та же: пишем, только если человек переключил тумблер сам.
+        # Отсутствующее значение уже зафиксировано миграцией выше.
         saved_Z2K_GV_SUBST=$(safe_config_read "Z2K_GV_SUBST" "$config_file" "")
         case "$saved_Z2K_GV_SUBST" in 0|1|"") ;; *) saved_Z2K_GV_SUBST="" ;; esac
-        # Тумблеры QUIC — по той же схеме: ключ пишется, только если человек
-        # переключил его сам, иначе действует умолчание версии.
+        # Тумблеры QUIC сохраняются тем же механизмом.
         saved_Z2K_QUIC_OFF=$(safe_config_read "Z2K_QUIC_OFF" "$config_file" "")
         case "$saved_Z2K_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_QUIC_OFF="" ;; esac
         saved_Z2K_YT_QUIC_OFF=$(safe_config_read "Z2K_YT_QUIC_OFF" "$config_file" "")
@@ -2727,6 +2936,33 @@ EOF
         return 1
     fi
 
+    # Preserve every registered switch, including future additions not yet
+    # represented by the static heredoc. Existing values win byte-for-byte.
+    local _toggle_key _toggle_def _toggle_off _toggle_line
+    while read -r _toggle_key _toggle_def _toggle_off; do
+        # IPv6 has its own explicit env > config > prior-tree precedence.
+        [ "$_toggle_key" != DISABLE_IPV6 ] || continue
+        _toggle_line=""
+        if [ "$_toggle_existing" = 1 ]; then
+            _toggle_line=$(grep -m1 "^${_toggle_key}=" "$_cfg_target")
+        elif ! grep -q "^${_toggle_key}=" "$config_file"; then
+            _toggle_line="${_toggle_key}=${_toggle_def}"
+        fi
+        [ -n "$_toggle_line" ] || continue
+        if grep -q "^${_toggle_key}=" "$config_file"; then
+            awk -v key="$_toggle_key" '
+                NR==FNR { if ($0 ~ "^" key "=" && !found) { line=$0; found=1 }; next }
+                $0 ~ "^" key "=" { print line; next }
+                { print }
+            ' "$_cfg_target" "$config_file" > "${config_file}.keep" || return 1
+            mv -f "${config_file}.keep" "$config_file" || return 1
+        else
+            printf '%s\n' "$_toggle_line" >> "$config_file" || return 1
+        fi
+    done <<Z2K_REGISTRY
+$(z2k_toggle_defaults)
+Z2K_REGISTRY
+
     # Relay/proxy overrides are optional and are not emitted by the template.
     # Preserve them across regeneration, including custom reseller endpoints.
     if [ -f "$_cfg_target" ]; then
@@ -2742,6 +2978,7 @@ EOF
         return 1
     fi
     config_file="$_cfg_target"
+    z2k_record_toggle_values "$config_file" "$(dirname "$config_file")/state" || return 1
 
     z2k_retire_discovery || { print_error "Не удалось удалить старую автодетекцию"; return 1; }
     z2k_retire_dns_redirect

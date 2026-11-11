@@ -175,7 +175,7 @@ printf 'ENABLED=1\nZ2K_GV_SUBST=0\n' > "$_rg/config"
 grep -q '^Z2K_GV_SUBST=0$' "$_rg/config" && ok "Z2K_GV_SUBST=0 переживает пересборку" || bad "выключение подмены потеряно при пересборке"
 printf 'ENABLED=1\n' > "$_rg/config"
 ( ZAPRET2_DIR="$_rg" create_official_config "$_rg/config" >/dev/null 2>&1 )
-grep -q '^Z2K_GV_SUBST=' "$_rg/config" && bad "пересборка записала ключ за человека" || ok "без ключа пересборка его не пишет — действует умолчание"
+grep -q '^Z2K_GV_SUBST=1$' "$_rg/config" && ok "отсутствующий ключ фиксируется по прежнему умолчанию 1" || bad "пересборка не зафиксировала прежнее умолчание подмены"
 
 # --- 6. Панель ------------------------------------------------------------------------
 TG=$(awk '/^toggle_gv_subst\(\)/{p=1} p{print} p&&/^}/{exit}' "$ROOT/webpanel/cgi/actions.sh")

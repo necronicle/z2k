@@ -720,6 +720,20 @@ au_gen_libs_source() {
     return 1
 }
 
+# Load the delivered registry in isolation, including patches with no regen.
+# The old updater already dispatches au_run_steps from delivered code, so this
+# gate also applies to the first transition onto the preservation policy.
+au_freeze_toggle_values() {
+    (
+        local zd="${ZAPRET2_DIR:-/opt/zapret2}"
+        [ -f "$zd/config" ] && [ -f "$zd/lib/config_official.sh" ] || exit 0
+        [ ! -f "$zd/lib/utils.sh" ] || . "$zd/lib/utils.sh" || exit 1
+        . "$zd/lib/config_official.sh" || exit 1
+        command -v z2k_migrate_toggle_values >/dev/null 2>&1 || exit 0
+        z2k_migrate_toggle_values "$zd/config"
+    )
+}
+
 au_step_regen_strategies() {
     au_gen_libs_source || { au_log "regen-strategies: нет генераторов в ${ZAPRET2_DIR}/lib"; return 1; }
     command -v create_default_strategy_files >/dev/null 2>&1 || {
@@ -1224,6 +1238,7 @@ au_provision_flock() {
 # au_run_steps <шаг>… — по порядку, до первой осечки. Останов, а не «идём
 # дальше и надеемся»: провал валидации обязан отменить перезапуск.
 au_run_steps() {
+    au_freeze_toggle_values || return 1
     local s rc
     for s in "$@"; do
         au_log "шаг: $(au_step_human "$s")"
@@ -1367,39 +1382,48 @@ EOF
 au_save_feature_flags() {
     local out="$1"
     local config_file="${ZAPRET2_DIR:-/opt/zapret2}/config"
+    mkdir -p "$(dirname "$out")" || return 1
+    : > "$out" || return 1
     [ -f "$config_file" ] || return 0
-    grep -E '^Z2K_[A-Z0-9_]+=' "$config_file" > "$out" 2>/dev/null || true
+    # The currently installed module knows the OLD version's defaults.
+    if ! command -v z2k_migrate_toggle_values >/dev/null 2>&1; then
+        [ ! -f "${ZAPRET2_DIR:-/opt/zapret2}/lib/config_official.sh" ] ||
+            . "${ZAPRET2_DIR:-/opt/zapret2}/lib/config_official.sh" || return 1
+    fi
+    if command -v z2k_migrate_toggle_values >/dev/null 2>&1; then
+        z2k_migrate_toggle_values "$config_file" || return 1
+    fi
+    grep -E '^(Z2K_[A-Z0-9_]+|GAME_WARP_ENABLED|TG_PROXY_USER_DISABLED|POLICY_NAME|POLICY_EXCLUDE|DISABLE_IPV6|DISABLE_CUSTOM|ENABLED)=' "$config_file" > "$out" 2>/dev/null || true
     if [ -s "$out" ]; then
         au_log "saved $(wc -l < "$out") feature flags"
     fi
     return 0
 }
 
-# Reapply Z2K_* feature flags from backup over the active config.
-# Only flags that already exist in the new config are replaced; new-config
-# defaults stand for absent (deprecated) flags.
+# Reapply saved user keys, including keys absent from the new template.
 au_reapply_feature_flags() {
     local backup="$1"
-    local config_file="${ZAPRET2_DIR:-/opt/zapret2}/config"
+    local config_file="${ZAPRET2_DIR:-/opt/zapret2}/config" tmp
     [ -f "$backup" ] && [ -s "$backup" ] || return 0
     [ -f "$config_file" ] || return 1
-
-    local applied=0 skipped=0
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        local flag_name="${line%%=*}"
-        if grep -q "^${flag_name}=" "$config_file"; then
-            # escape & and / for sed
-            local escaped
-            escaped=$(printf '%s\n' "$line" | sed 's/[&/\\]/\\&/g')
-            sed -i "s|^${flag_name}=.*|${escaped}|" "$config_file"
-            applied=$((applied + 1))
-        else
-            skipped=$((skipped + 1))
-        fi
-    done < "$backup"
-    au_log "feature flags reapplied: $applied set, $skipped skipped (deprecated)"
-    return 0
+    tmp="${config_file}.flags.$$"
+    cp -p "$config_file" "$tmp" || return 1
+    if ! awk '
+        NR==FNR {
+            key=$0; sub(/=.*/, "", key)
+            if (!(key in saved)) order[++n]=key
+            saved[key]=$0; next
+        }
+        {
+            key=$0; sub(/=.*/, "", key)
+            if (key in saved) { print saved[key]; seen[key]=1 } else print
+        }
+        END { for (i=1;i<=n;i++) if (!(order[i] in seen)) print saved[order[i]] }
+    ' "$backup" "$config_file" > "$tmp"; then
+        rm -f "$tmp"; return 1
+    fi
+    mv -f "$tmp" "$config_file" || return 1
+    au_log "user flags reapplied (including absent template keys)"
 }
 
 # ------------------------------------------------ карта путей — на сборке ---
@@ -1701,7 +1725,7 @@ au_apply_patch() {
     rm -rf "$Z2K_AU_TMP_DIR/dl"
     mkdir -p "$Z2K_AU_TMP_DIR/dl"
     local saved_flags="$Z2K_AU_TMP_DIR/feature-flags.backup"
-    au_save_feature_flags "$saved_flags"
+    au_save_feature_flags "$saved_flags" || return 1
 
     # 1) download all files first to staging — atomic-ish: if any download
     # fails, we abort before touching live files.
@@ -1852,7 +1876,8 @@ EOF
 
     # 3) reapply feature flags (config might have been replaced if it was
     # in changed_files). For pure lua/list patches this is a no-op.
-    au_reapply_feature_flags "$saved_flags"
+    au_reapply_feature_flags "$saved_flags" || return 1
+    au_freeze_toggle_values || return 1
 
     # 4) write installed tag
     #
@@ -1976,7 +2001,7 @@ au_apply_reinstall() {
         || au_log "в манифесте нет ref для $target_tag — переустановка с ветки"
     local saved_flags="$Z2K_AU_TMP_DIR/feature-flags.backup"
     local reinstall_script="$Z2K_AU_TMP_DIR/z2k-reinstall.sh"
-    au_save_feature_flags "$saved_flags"
+    au_save_feature_flags "$saved_flags" || return 1
 
     mkdir -p "$Z2K_AU_TMP_DIR"
     if ! au_download_reinstall_script "$reinstall_script"; then
@@ -2404,11 +2429,15 @@ au_apply_converge() {
     if [ "$n" -eq 0 ] && [ -z "$*" ]; then
         # Дерево уже совпадает с манифестом и делать нечего. Это штатный исход
         # повторного прогона, а не ошибка: сходимость идемпотентна.
+        au_freeze_toggle_values || return 1
         au_log "дерево совпадает с манифестом — только отметка версии"
         au_write_installed_tag "$target_tag" || {
             au_log "ВНИМАНИЕ: тег не записался — обновления встанут"; return 1; }
         return 0
     fi
+
+    local saved_flags="$Z2K_AU_TMP_DIR/converge-flags.backup"
+    au_save_feature_flags "$saved_flags" || return 1
 
     au_log "нужно обновить файлов: $n"
     au_snapshot_for_patch "$(tr '\n' ' ' < "$plan")" || {
@@ -2456,6 +2485,7 @@ au_apply_converge() {
     fi
     printf '0\n' > "$_ac_fails_file" 2>/dev/null || true
 
+    au_reapply_feature_flags "$saved_flags" || return 1
     au_prune_orphans
 
     # ШАГИ ИСПОЛНЯЕТ ДОСТАВЛЕННЫЙ КОД, А НЕ ТОТ, С КОТОРОГО НАЧАЛИ.
