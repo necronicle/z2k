@@ -119,10 +119,12 @@ type Service struct {
 	stall     map[string]stallMark // зависшие до подмены: счётчики прошлого опроса
 	closed    bool                 // Shutdown: фоновые проверки подмен не ставят
 
-	ipmu    sync.Mutex          // запись IPFile
-	ipLast  string              // что записано в IPFile
-	qmu     sync.Mutex          // строки отказа QUIC: применяются вне mu
-	quicSet map[netip.Addr]bool // где отказ QUIC стоит (под qmu)
+	ipmu     sync.Mutex          // запись IPFile
+	ipLast   string              // что записано в IPFile
+	statusMu sync.Mutex          // снимок и атомарная запись StatusPath
+	qmu      sync.Mutex          // строки отказа QUIC: применяются вне mu
+	quicSet  map[netip.Addr]bool // где отказ QUIC стоит (под qmu)
+	tcpSet   map[netip.Addr]bool // отказы кэшу провайдера (под qmu)
 	// Кластер, где в прошлый поиск рабочих машин не нашлось: второй плохой
 	// адрес того же кластера не ищет заново (иначе ответ DNS по нему ждал
 	// весь поиск — 2,1 с на роутере Марка).
@@ -162,7 +164,9 @@ func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
 	s.init()
 	now := s.Now()
 	var waits []chan struct{}
+	hasProvider := false
 	for _, a := range addrs {
+		hasProvider = hasProvider || providerCache(name, a)
 		s.published[a] = struct{}{}
 		e := s.known[a]
 		if e == nil {
@@ -180,6 +184,11 @@ func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
 	}
 	s.mu.Unlock()
 	s.writeIPs()
+	if hasProvider {
+		// Install before releasing DNS. A TLS probe cannot detect the measured
+		// /videoplayback stall, so these addresses never enter sibling search.
+		s.syncQUIC(false)
+	}
 	done := make(chan struct{})
 	go func() {
 		for _, w := range waits {
@@ -225,6 +234,11 @@ func (s *Service) pausedLocked(a netip.Addr, e *entry) bool {
 
 // startLocked запускает проверку адреса или присоединяется к идущей.
 func (s *Service) startLocked(a netip.Addr) chan struct{} {
+	if e := s.known[a]; e != nil && providerCache(e.name, a) {
+		ch := make(chan struct{})
+		close(ch)
+		return ch // provider caches are rejected, never DNATed
+	}
 	if ch, ok := s.inflight[a]; ok {
 		return ch
 	}
@@ -282,23 +296,34 @@ func (s *Service) resolve(a netip.Addr) {
 	}
 }
 
-// syncQUIC приводит строки отказа QUIC к вердиктам: Bad — отказ, остальное
-// и убранные адреса — без отказа. iptables — вне s.mu: под ней служба
+// syncQUIC приводит адресные отказы к состоянию: Bad Google — только QUIC;
+// кэш провайдера при свежем Good Google — TCP и QUIC, иначе разрешён.
+// Убранные адреса — без отказа. iptables — вне s.mu: под ней служба
 // принимает ответы DNS и опрашивает conntrack, а одна команда на роутере идёт
 // 50–100 мс. Желаемое берётся под s.mu, применяется под своей блокировкой;
 // запоздалый вызов просто приводит к тому же состоянию (10.11.2026).
-// reset — цепочку пересоздали пустой: забыть, что стояло.
+// reset — повторно проверить наличие строк. Сохраняем учёт старых адресов:
+// HUP может прийти и без очистки filter, а Good уже мог истечь.
 func (s *Service) syncQUIC(reset bool) {
 	s.qmu.Lock()
 	defer s.qmu.Unlock()
-	if reset || s.quicSet == nil {
+	if s.quicSet == nil {
 		s.quicSet = map[netip.Addr]bool{}
+	}
+	if s.tcpSet == nil {
+		s.tcpSet = map[netip.Addr]bool{}
 	}
 	s.mu.Lock()
 	want := map[netip.Addr]bool{}
+	wantTCP := map[netip.Addr]bool{}
 	if !s.closed {
+		ready := s.providerReadyLocked()
 		for a, e := range s.known {
-			if e.verdict == Bad {
+			if providerCache(e.name, a) {
+				if ready[a.Is6()] {
+					want[a], wantTCP[a] = true, true
+				}
+			} else if e.verdict == Bad {
 				want[a] = true
 			}
 		}
@@ -320,6 +345,24 @@ func (s *Service) syncQUIC(reset bool) {
 				continue
 			}
 			delete(s.quicSet, a)
+		}
+	}
+	for a := range wantTCP {
+		if !s.tcpSet[a] || reset {
+			if err := s.Rules.RejectTCP(a); err != nil {
+				log.Printf("gvsub: отказ TCP кэшу провайдера %s: %v", a, err)
+				continue
+			}
+			s.tcpSet[a] = true
+		}
+	}
+	for a := range s.tcpSet {
+		if !wantTCP[a] {
+			if err := s.Rules.AllowTCP(a); err != nil {
+				log.Printf("gvsub: снять отказ TCP кэшу провайдера %s: %v", a, err)
+				continue
+			}
+			delete(s.tcpSet, a)
 		}
 	}
 }
@@ -488,6 +531,9 @@ func (s *Service) OnConntrack(flows []Flow) {
 			continue
 		}
 		e.seen = now
+		if providerCache(e.name, f.Dst) {
+			continue
+		}
 		if !f.Stuck {
 			continue
 		}
@@ -660,8 +706,9 @@ type statusFile struct {
 		Good  string    `json:"good"`
 		Since time.Time `json:"since"`
 	} `json:"mappings"`
-	Known int `json:"known"`
-	Bad   int `json:"bad_seen"`
+	Known            int `json:"known"`
+	Bad              int `json:"bad_seen"`
+	ProviderRejected int `json:"provider_rejected"`
 	// Адреса в ходу — для Restore после перезапуска службы.
 	Addrs []knownAddr `json:"addrs,omitempty"`
 }
@@ -729,10 +776,18 @@ func (s *Service) writeStatus() {
 	if s.StatusPath == "" {
 		return
 	}
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.qmu.Lock()
 	s.mu.Lock()
 	var st statusFile
 	st.Updated = s.Now()
 	st.Known = len(s.known)
+	for a := range s.tcpSet {
+		if s.quicSet[a] {
+			st.ProviderRejected++
+		}
+	}
 	for a, e := range s.known {
 		if e.verdict == Bad {
 			st.Bad++
@@ -747,6 +802,7 @@ func (s *Service) writeStatus() {
 		}{a.String(), m.Good.String(), m.Since})
 	}
 	s.mu.Unlock()
+	s.qmu.Unlock()
 	sort.Slice(st.Mappings, func(i, j int) bool { return st.Mappings[i].Bad < st.Mappings[j].Bad })
 	sort.Slice(st.Addrs, func(i, j int) bool { return st.Addrs[i].Addr < st.Addrs[j].Addr })
 	b, _ := json.MarshalIndent(st, "", "  ")

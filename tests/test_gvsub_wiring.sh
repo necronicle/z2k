@@ -56,6 +56,7 @@ fw_calls() { # $1 — DISABLE_IPV6, $2 — 1: служба запущена
       ipt() { echo "$@" >> "$CALLS"; shift
           case "$*" in
               *" -N "*) [ "$EXISTS" = 1 ] && return 1 ;;
+              *"-S FORWARD"*) [ "$EXISTS" = 1 ] && printf '%s\n' "-P FORWARD ACCEPT" "-A FORWARD -j Z2K_GVSUB_Q" ;;
               *"-S PREROUTING"*) [ "$EXISTS" = 1 ] && printf '%s\n' "-P PREROUTING ACCEPT" "-A PREROUTING -j Z2K_GVSUB" ;;
               *" -C "*|*" -D "*) return 1 ;;
           esac; return 0; }
@@ -85,6 +86,12 @@ for fam in 4 6; do
         has "$fam -t $t -F Z2K_GVSUB" "$CD" && ok "IPv$fam $t: без службы бесхозные подмены вычищаются" \
             || bad "IPv$fam $t: без службы подмены остались в цепочке"
     done
+    for cmd in '-N Z2K_GVSUB_Q' '-I FORWARD 1 -j Z2K_GVSUB_Q'; do
+        has "$fam -t filter $cmd" "$C" && ok "IPv$fam start: $cmd" || bad "IPv$fam start: нет $cmd"
+    done
+    has "$fam -t filter -F Z2K_GVSUB_Q" "$CK" && bad "живой службе очистили filter" || ok "IPv$fam: filter живой службы сохранён"
+    has "$fam -t filter -D FORWARD" "$CK" && bad "первый filter hook переставлен" || ok "IPv$fam: первый filter hook сохранён"
+    has "$fam -t filter -F Z2K_GVSUB_Q" "$CD" && ok "IPv$fam: бесхозные отказы вычищены" || bad "бесхозные отказы остались"
     has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass" "$C" \
         && ok "IPv$fam: очередь ответов DNS с --queue-bypass (без службы DNS не ломается)" \
         || bad "IPv$fam: нет очереди ответов DNS"
@@ -265,6 +272,22 @@ for root in default "$TMP/custom root"; do
     [ "$got" = "$want" ] && ok "start gvsub передаёт -whitelist: $root" \
         || bad "start gvsub: whitelist '$got', нужен '$want'"
 done
+
+# Диагностика исполняет свой настоящий print_gvsub с изолированными путями.
+awk '$0 == "print_gvsub() {" {p=1} p{print} p&&/^}/{exit}' "$ROOT/files/z2k-diag.sh" \
+    | sed -e "s|/tmp/z2k-gvsub.json|$TMP/diag.json|g" \
+          -e "s|/var/run/z2k-gvsub.pid|$TMP/diag.pid|g" \
+          -e 's|/opt/sbin/z2k-detect|detect_mock|g' > "$TMP/diag.sh"
+# В боевом JSON поле находится на отдельной строке (MarshalIndent).
+printf '  "provider_rejected": 2,\n' > "$TMP/diag.json"
+DIAG=$( . "$TMP/diag.sh"
+    ZAPRET2_DIR="$TMP"
+    detect_mock() { echo gvsub; }
+    iptables() { return 1; }
+    print_gvsub )
+has 'кэш провайдера    : отклоняется адресов 2' "$DIAG" \
+    && ok 'диагностика показывает число отклоняемых адресов' \
+    || bad 'диагностика потеряла число отклоняемых адресов'
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
