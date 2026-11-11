@@ -1,7 +1,0 @@
-files/S99zapret2.new	/opt/etc/init.d/S99zapret2
-files/z2k-geosite.sh	/opt/zapret2/z2k-geosite.sh
-files/lua/z2k-state-persist.lua	/opt/zapret2/lua/z2k-state-persist.lua
-files/lists/extra_strats/TCP/YT/List.txt	/opt/zapret2/files/lists/extra_strats/TCP/YT/List.txt
-files/lists/extra_strats/TCP/YT/List.txt	/opt/zapret2/lists/extra_strats/TCP/YT/List.txt
-files/lists/extra_strats/UDP/YT/List.txt	/opt/zapret2/files/lists/extra_strats/UDP/YT/List.txt
-files/lists/extra_strats/UDP/YT/List.txt	/opt/zapret2/lists/extra_strats/UDP/YT/List.txt

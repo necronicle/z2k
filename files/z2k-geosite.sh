@@ -573,8 +573,8 @@ _z2k_geosite_reject() {
 
 # Google account, translation and connectivity endpoints must not enter bypass
 # hostlists. Keep only Meet; googlevideo/googleapis are separate domains.
-# Google downloads (gvt1.com) and these services must stay out of inclusion
-# lists, including already installed lists and future upstream downloads. Match domain suffixes
+# These six services must also stay out of every inclusion list, including
+# already installed lists and future upstream downloads. Match domain suffixes
 # on label boundaries so unrelated names are left alone.
 filter_google_domains() {
     awk '
@@ -590,7 +590,7 @@ filter_google_domains() {
             if ((d == "google.com" || d ~ /\.google\.com$/) && d != "meet.google.com") next
             if (excluded(d, "chatgpt.com") || excluded(d, "claude.ai") ||
                 excluded(d, "github.com") || excluded(d, "cloudflareclient.com") ||
-                excluded(d, "cloudflare-dns.com") || excluded(d, "gvt1.com")) next
+                excluded(d, "cloudflare-dns.com")) next
             print
         }
     ' "$1"
@@ -601,12 +601,9 @@ filter_google_domains() {
 # here, never user extra-domains, exclusions, fake SNI candidates or strategies.
 clean_google_domains() {
     local list tmp failed=0
-    for list in "$EXTRA"/*/*/List.txt "$EXTRA"/*/*/List.txt.shipped \
-                "$ZAPRET2_DIR/files/lists/extra_strats"/*/*/List.txt \
-                "$ZAPRET2_DIR/lists/extra_strats"/*/*/List.txt "$EXTRA/TCP/RKN/Discord.txt" \
+    for list in "$EXTRA"/*/*/List.txt "$EXTRA/TCP/RKN/Discord.txt" \
                 "$EXTRA/TCP_Discord.txt" \
-                "$ZAPRET2_DIR/lists/autohostlist-domains.txt" \
-                "$ZAPRET2_DIR/ipset/zapret-hosts-auto.txt"; do
+                "$ZAPRET2_DIR/lists/autohostlist-domains.txt"; do
         [ -f "$list" ] || continue
         tmp=$(mktemp "${list}.google.XXXXXX") || { failed=1; continue; }
         if ! filter_google_domains "$list" > "$tmp"; then

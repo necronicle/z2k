@@ -45,11 +45,7 @@ local function normalize_hostkey_for_state(hostkey)
   local s = tostring(hostkey)
   if s == "" then return nil end
   s = s:gsub("%.$", "")       -- strip trailing dot
-  s = string.lower(s)
-  -- Do not reload or save retired Google download strategies from old state.
-  local domain = s:gsub("|[46]$", ""):gsub("%.$", "")
-  if domain == "gvt1.com" or domain:match("%.gvt1%.com$") then return nil end
-  return s
+  return string.lower(s)
 end
 
 local function can_read_file(path)
@@ -384,7 +380,6 @@ local function clear_persisted(askey, hostn)
 end
 
 local function persist_if_changed(askey, hostn, hrec)
-  hostn = normalize_hostkey_for_state(hostn)
   if not askey or not hostn or not hrec or not hrec.nstrategy then return false end
   local n = tonumber(hrec.nstrategy)
   if not n or n < 1 then return false end
