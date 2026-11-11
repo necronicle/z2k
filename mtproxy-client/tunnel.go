@@ -448,7 +448,21 @@ func (tc *tunnelClient) triggerReRegister() {
 	}()
 }
 
-func (tc *tunnelClient) connectEndpoint(endpoint string, id *relayIdentity) (*websocket.Conn, error) {
+func (tc *tunnelClient) connectEndpoint(endpoint string, id *relayIdentity) (connected *websocket.Conn, connectErr error) {
+	if tc.isolated && tc.isolation != nil {
+		// Recheck AFTER obtaining one of the four handshake slots: queued
+		// workers must not dial past a failure observed while they waited.
+		if tc.isolation.coolingDown() {
+			return nil, errRelayCooldown
+		}
+		defer func() {
+			if connectErr != nil {
+				tc.isolation.failed()
+			} else {
+				tc.isolation.authenticated()
+			}
+		}()
+	}
 	dialer := websocket.Dialer{
 		TLSClientConfig:   &tls.Config{InsecureSkipVerify: false},
 		HandshakeTimeout:  10 * time.Second,
@@ -511,6 +525,7 @@ func (tc *tunnelClient) connectEndpoint(endpoint string, id *relayIdentity) (*we
 
 var errHandshakeRejected = errors.New("relay rejected v2 handshake")
 var errRelayBusy = errors.New("relay session capacity exhausted")
+var errRelayCooldown = errors.New("relay reconnect cooldown")
 
 // handshakeV2: HELLO → HELLO_ACK(nonce, время сервера) → AUTHID v2 → INFO
 // AUTH_OK. Любой другой ответ или тишина в 10 с — ошибка; вызывающий уходит

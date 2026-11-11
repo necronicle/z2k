@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -540,7 +543,7 @@ func TestHandshakeGateAllowsBurstAndBoundsConcurrency(t *testing.T) {
 	}
 }
 
-func TestTransientHandshakeFailureKeepsOtherAdmissionsReady(t *testing.T) {
+func TestTransientHandshakeFailurePausesNewAdmissions(t *testing.T) {
 	if connSemaphore == nil {
 		connSemaphore = make(chan struct{}, 4096)
 	}
@@ -568,10 +571,10 @@ func TestTransientHandshakeFailureKeepsOtherAdmissionsReady(t *testing.T) {
 		t.Fatal("failed flow did not close")
 	}
 	child, _ := tc.reserveIsolated("")
-	if child == nil {
-		t.Fatal("one transport failure paused unrelated new flows")
+	if child != nil {
+		tc.isolation.release()
+		t.Fatal("transport failure did not pause new relay attempts")
 	}
-	tc.isolation.release()
 }
 
 func TestDedicatedQuotaDoesNotTreatAggregatedGatewayAsOnePhone(t *testing.T) {
@@ -605,5 +608,144 @@ func TestCommunityQuotaKeepsSourceReserveWithLargerLocalCeiling(t *testing.T) {
 	b.setServerLimit(0)
 	if b.limit != 48 || b.deviceLimit != 32 {
 		t.Fatal("legacy fallback increased")
+	}
+}
+
+// Advance the admission clock, not wall time; exercise the real budget.
+func TestRelayFailureBackoffGrowsAndCaps(t *testing.T) {
+	b := newIsolationBudget(8)
+	for i, seconds := range []int{3, 6, 12, 24, 48, 96, 120, 120, 120} {
+		before := time.Now()
+		b.failed()
+		after := time.Now()
+		b.mu.Lock()
+		next := b.next
+		b.mu.Unlock()
+		lo := time.Duration(float64(time.Duration(seconds)*time.Second) * 0.7)
+		hi := min(time.Duration(float64(time.Duration(seconds)*time.Second)*1.3), 120*time.Second)
+		if next.Before(before.Add(lo)) || next.After(after.Add(hi)) {
+			t.Fatalf("failure %d: delay %s outside [%s, %s]", i+1, next.Sub(before), lo, hi)
+		}
+		if b.acquire(before) {
+			t.Fatal("cooldown admitted a dial")
+		}
+		if !b.acquire(next) {
+			t.Fatal("cooldown did not expire")
+		}
+		b.release()
+	}
+}
+func TestRelaySuccessResetsFailureBackoff(t *testing.T) {
+	b := newIsolationBudget(8)
+	for i := 0; i < 8; i++ {
+		b.failed()
+	}
+	b.authenticated()
+	if !b.acquire(time.Now()) || !b.acquire(time.Now()) {
+		t.Fatal("success left artificial pacing")
+	}
+	b.release()
+	b.release()
+	before := time.Now()
+	b.failed()
+	b.mu.Lock()
+	next := b.next
+	b.mu.Unlock()
+	if next.Before(before.Add(2100*time.Millisecond)) || next.After(time.Now().Add(3900*time.Millisecond)) {
+		t.Fatalf("first failure after success did not reset: %s", next.Sub(before))
+	}
+}
+func TestDiscoveryProbeRespectsRelayCooldown(t *testing.T) {
+	b := newIsolationBudget(8)
+	b.failed()
+	if b.reserveProbe() {
+		b.releaseProbe()
+		t.Fatal("discovery bypassed failed dial cooldown")
+	}
+	b.authenticated()
+	if !b.reserveProbe() {
+		t.Fatal("success did not restore discovery")
+	}
+	b.releaseProbe()
+}
+
+func TestRelayDialFailuresApplyBackoff(t *testing.T) {
+	tc := newTunnelClient("ws://relay.invalid/ws", "")
+	tc.isolated = true
+	tc.isolation = newIsolationBudget(8)
+	tc.dialer = &websocket.Dialer{NetDial: func(string, string) (net.Conn, error) { return nil, io.EOF }}
+	for i, seconds := range []int{3, 6, 12, 24, 48, 96, 120, 120} {
+		tc.isolation.mu.Lock()
+		tc.isolation.next = time.Time{}
+		tc.isolation.mu.Unlock()
+		before := time.Now()
+		if _, err := tc.connectEndpoint(tc.tunnelURL, nil); err == nil {
+			t.Fatal("failed dial succeeded")
+		}
+		tc.isolation.mu.Lock()
+		next := tc.isolation.next
+		tc.isolation.mu.Unlock()
+		lo := time.Duration(float64(time.Duration(seconds)*time.Second) * 0.7)
+		hi := min(time.Duration(float64(time.Duration(seconds)*time.Second)*1.3), 120*time.Second)
+		if next.Before(before.Add(lo)) || next.After(time.Now().Add(hi)) {
+			t.Fatalf("dial failure %d: retry delay %s outside [%s, %s]", i+1, next.Sub(before), lo, hi)
+		}
+		tc.dialer.NetDial = func(string, string) (net.Conn, error) { t.Error("dial bypassed cooldown"); return nil, io.EOF }
+		tc.connectEndpoint(tc.tunnelURL, nil)
+		tc.dialer.NetDial = func(string, string) (net.Conn, error) { return nil, io.EOF }
+	}
+}
+
+// A real WS upgrade over net.Pipe exercises success without binding a port.
+func TestIsolatedSuccessfulDialResetsBackoffWithoutPacing(t *testing.T) {
+	tc := newTunnelClient("ws://relay.invalid/ws", "")
+	tc.isolated = true
+	tc.forceV1.Store(true)
+	tc.isolation = newIsolationBudget(8)
+	id, err := loadOrMintIdentity(t.TempDir() + "/id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		tc.isolation.failed()
+	}
+	// Expire the cooldown so the next attempt may discover recovery.
+	tc.isolation.mu.Lock()
+	tc.isolation.next = time.Now().Add(-time.Second)
+	tc.isolation.mu.Unlock()
+	tc.dialer = &websocket.Dialer{NetDial: func(string, string) (net.Conn, error) {
+		client, peer := net.Pipe()
+		go func() {
+			defer peer.Close()
+			peer.SetDeadline(time.Now().Add(time.Second))
+			req, err := http.ReadRequest(bufio.NewReader(peer))
+			if err != nil {
+				return
+			}
+			sum := sha1.Sum([]byte(req.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+			io.WriteString(peer, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "+base64.StdEncoding.EncodeToString(sum[:])+"\r\n\r\n")
+			io.Copy(io.Discard, peer)
+		}()
+		return client, nil
+	}}
+	start := time.Now()
+	for i := 0; i < 4; i++ {
+		ws, err := tc.connectEndpoint(tc.tunnelURL, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ws.Close()
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("healthy relay suffered artificial pacing")
+	}
+	tc.dialer.NetDial = func(string, string) (net.Conn, error) { return nil, io.EOF }
+	before := time.Now()
+	tc.connectEndpoint(tc.tunnelURL, id)
+	tc.isolation.mu.Lock()
+	next := tc.isolation.next
+	tc.isolation.mu.Unlock()
+	if next.Before(before.Add(2100*time.Millisecond)) || next.After(time.Now().Add(3900*time.Millisecond)) {
+		t.Fatalf("successful dial did not reset failure series: %s", next.Sub(before))
 	}
 }

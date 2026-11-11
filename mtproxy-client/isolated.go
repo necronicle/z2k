@@ -21,6 +21,7 @@ type isolationBudget struct {
 	localLimit  int
 	deviceLimit int
 	next        time.Time
+	retryDelay  time.Duration
 	byDevice    map[string]int
 	waiting     map[string]int
 	order       []string
@@ -128,7 +129,16 @@ func (b *isolationBudget) release(devices ...string) {
 }
 func (b *isolationBudget) failed() {
 	b.mu.Lock()
-	b.next = time.Now().Add(30 * time.Second)
+	// Reuse the primary tunnel's backoffFor bounds (3s initial, 120s max)
+	// and jitter (+/-30%). Double after each failed dial/handshake; cap the
+	// actual pause too, so jitter cannot exceed the existing 120s ceiling.
+	ceiling := backoffFor(10)
+	if b.retryDelay == 0 {
+		b.retryDelay = backoffFor(1)
+	} else {
+		b.retryDelay = min(2*b.retryDelay, ceiling)
+	}
+	b.next = time.Now().Add(min(jitter(b.retryDelay), ceiling))
 	b.mu.Unlock()
 }
 
@@ -157,6 +167,7 @@ func (tc *tunnelClient) reserveIsolated(device string) (*tunnelClient, *relayIde
 	child := newTunnelClient(endpoint, "")
 	child.forceV1.Store(tc.forceV1.Load())
 	child.isolatedDials = tc.isolatedDials
+	child.isolation = tc.isolation
 	return child, id
 }
 
@@ -189,9 +200,6 @@ func (tc *tunnelClient) handleIsolated(conn *net.TCPConn, ip net.IP, port int) {
 			}
 			defer tc.isolation.release(device)
 			child.serveIsolated(tc.ctx, conn, id, ip, port, func(err error) {
-				if errors.Is(err, errAuthRefused) {
-					tc.isolation.failed()
-				}
 				select {
 				case tc.discoveryWake <- struct{}{}:
 				default:
@@ -325,8 +333,11 @@ func (tc *tunnelClient) runDiscovery() {
 			tc.authenticatedIdentity.Store(id)
 			tc.isolation.setServerLimit(int(tc.serverSessions.Load()))
 			tc.isolation.authenticated()
-		} else if errors.Is(err, errAuthRefused) {
-			tc.authenticatedIdentity.Store(nil)
+		} else {
+			tc.isolation.failed()
+			if errors.Is(err, errAuthRefused) {
+				tc.authenticatedIdentity.Store(nil)
+			}
 		}
 		tc.connectMu.Unlock()
 		tc.isolation.releaseProbe()
@@ -373,7 +384,7 @@ func (tc *tunnelClient) runDiscovery() {
 func (b *isolationBudget) reserveProbe() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.active >= b.limit {
+	if b.active >= b.limit || time.Now().Before(b.next) {
 		return false
 	}
 	b.active++
@@ -401,4 +412,15 @@ func (b *isolationBudget) capacityReason(device string) string {
 	return fmt.Sprintf("reason=%s source_active=%d source_limit=%d active=%d limit=%d", reason, b.byDevice[device], b.deviceLimit, b.active, b.limit)
 }
 
-func (b *isolationBudget) authenticated() { b.mu.Lock(); b.next = time.Time{}; b.mu.Unlock() }
+func (b *isolationBudget) authenticated() {
+	b.mu.Lock()
+	b.next = time.Time{}
+	b.retryDelay = 0
+	b.mu.Unlock()
+}
+
+func (b *isolationBudget) coolingDown() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return time.Now().Before(b.next)
+}
