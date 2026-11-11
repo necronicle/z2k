@@ -181,9 +181,13 @@ jobs:
         # Without lua here, the wrapper would skip silently (per its
         # graceful-skip semantics for local devs without lua).
         run: |
+          # Replace the systemd-resolved symlink: apt must use these resolvers directly.
+          sudo rm -f /etc/resolv.conf
+          printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf
+          getent hosts archive.ubuntu.com
           sudo find /etc/apt -maxdepth 2 -type f \( -name sources.list -o -name '*.sources' -o -name apt-mirrors.txt -o -name apt-security-mirrors.txt \) -exec sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' {} +
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y shellcheck lua5.3; then
+            if sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 install -y shellcheck lua5.3; then
               break
             fi
             [ "$attempt" -lt 3 ] || exit 1
@@ -464,9 +468,13 @@ jobs:
         # pkg-config находит заголовки LuaJIT, gzip.c требует zlib и -lz,
         # sec.h на Linux — заголовки libcap.
         run: |
+          # Replace the systemd-resolved symlink: apt must use these resolvers directly.
+          sudo rm -f /etc/resolv.conf
+          printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf
+          getent hosts archive.ubuntu.com
           sudo find /etc/apt -maxdepth 2 -type f \( -name sources.list -o -name '*.sources' -o -name apt-mirrors.txt -o -name apt-security-mirrors.txt \) -exec sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' {} +
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y lua5.3 libluajit-5.1-dev zlib1g-dev libcap-dev pkg-config; then
+            if sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 install -y lua5.3 libluajit-5.1-dev zlib1g-dev libcap-dev pkg-config; then
               break
             fi
             [ "$attempt" -lt 3 ] || exit 1
@@ -742,9 +750,13 @@ jobs:
 
       - name: Install luarocks, lua, luacheck
         run: |
+          # Replace the systemd-resolved symlink: apt must use these resolvers directly.
+          sudo rm -f /etc/resolv.conf
+          printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf
+          getent hosts archive.ubuntu.com
           sudo find /etc/apt -maxdepth 2 -type f \( -name sources.list -o -name '*.sources' -o -name apt-mirrors.txt -o -name apt-security-mirrors.txt \) -exec sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' {} +
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y luarocks lua5.3 liblua5.3-dev; then
+            if sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 install -y luarocks lua5.3 liblua5.3-dev; then
               break
             fi
             [ "$attempt" -lt 3 ] || exit 1
