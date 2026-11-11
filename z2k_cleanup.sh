@@ -717,6 +717,11 @@ fi
 # Строку из running-config подставляем в `no <строка>` целиком: у ndmc удаление
 # принимает те же аргументы, что и добавление, а IP в записи может быть любым
 # (их переписывает ежедневное обновление).
+if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-agh-sync.sh" ]; then
+    sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-agh-sync.sh" remove || {
+        log_warn "AGH: не удалось снять свои rewrites; продолжаем удаление; см. agh-sync/last-result"
+    }
+fi
 if command -v ndmc >/dev/null 2>&1; then
     _refresh_sh="${ZAPRET2_DIR:-/opt/zapret2}/z2k-insta-ip-refresh.sh"
     _pin_hosts=""

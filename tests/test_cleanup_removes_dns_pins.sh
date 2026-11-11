@@ -61,6 +61,10 @@ cp "$REFRESH" "$tmp/opt/z2k-insta-ip-refresh.sh"
         echo "    echo 'ip host $h 1.2.3.4'"
         echo "    echo 'ip host $h 5.6.7.8'"
     done
+    # VPS WhatsApp names may also contain user-owned addresses.
+    for h in whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net; do
+        echo "    echo 'ip host $h 9.9.9.9'"
+    done
     # чужие записи, которых трогать нельзя
     echo "    echo 'ip host example.com 9.9.9.9'"
     echo "    echo 'ip host not-4pda.to 9.9.9.9'"
@@ -103,7 +107,7 @@ fi
 # --- 3. Чужое не трогаем ------------------------------------------------------
 # Совпадение по имени должно быть точным: not-4pda.to содержит 4pda.to как
 # подстроку, и подстрочный поиск снёс бы чужую запись.
-if grep -q 'example.com\|not-4pda' "$tmp/ndmc.log"; then
+if grep -q 'example.com\|not-4pda\|whatsapp.*9.9.9.9' "$tmp/ndmc.log"; then
     bad "деинсталлятор трогает чужие записи:"
     grep 'example.com\|not-4pda' "$tmp/ndmc.log" | head -3
 else
@@ -123,6 +127,17 @@ case "$_un" in
     *'$3==h'*|*'$3 == h'*) ok "обычное удаление сверяет имя точно, не подстрокой" ;;
     *) bad "в обычном удалении нет точного совпадения по имени — снесёт чужое" ;;
 esac
+
+# Execute the menu uninstall DNS block too; user WA addresses must survive.
+block=$(printf '%s\n' "$_un" | awk '/    # Записи Instagram и WhatsApp/,/    rm -f .*lists/ {if($0 !~ /    rm -f .*lists/) print}')
+: > "$tmp/ndmc.log"
+PATH="$tmp/bin:$PATH" NDMC_LOG="$tmp/ndmc.log" ZAPRET2_DIR="$tmp/opt" \
+    sh -c "_z2k_cfg_flag() { :; }; _z2k_not_d2k_pins() { cat; }; $block" >/dev/null 2>&1
+if grep -q 'whatsapp.*9.9.9.9' "$tmp/ndmc.log"; then
+    bad "обычное удаление снимает пользовательские WA-записи"
+else
+    ok "оба пути удаления сохраняют пользовательские записи 9 VPS WA-имён"
+fi
 
 # --- 5. Миграция снимает пины 4pda, которые прошил r-77.2 --------------------
 # Домен убран из HOSTS 19.08.2026 (блок по адресу продержался несколько часов),

@@ -346,6 +346,10 @@ menu_instagram_dns() {
         if [ "$removed" -gt 0 ]; then
             # Решение юзера — в конфиг: обновление и рефреш записи не вернут (issue #39).
             set_flag "Z2K_INSTA_DNS" "0" "${ZAPRET2_DIR}/config" 2>/dev/null
+            if [ -r "${ZAPRET2_DIR}/z2k-agh-sync.sh" ]; then
+                sh "${ZAPRET2_DIR}/z2k-agh-sync.sh" sync || \
+                    print_warning "AGH: синхронизация не выполнена; см. agh-sync/last-result"
+            fi
             if LD_LIBRARY_PATH= ndmc -c "system configuration save" >/dev/null 2>&1; then
                 print_success "Убрано: $removed (конфиг сохранён; обновления их не вернут)"
             else

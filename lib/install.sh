@@ -1506,6 +1506,11 @@ step_build_zapret2() {
         if ! mkdir -p "$backup_tmp"; then
             die "Не удалось создать каталог бэкапа ${backup_tmp} — установка прервана БЕЗ удаления текущей (нет места на /opt?). Ваши настройки не тронуты."
         fi
+        # Ownership is user state too: losing it would orphan AGH rewrites.
+        if [ -d "$ZAPRET2_DIR/agh-sync" ]; then
+            [ ! -d "$ZAPRET2_DIR/agh-sync/lock" ] || die "AGH sync выполняется; повторите установку после завершения"
+            cp -pR "$ZAPRET2_DIR/agh-sync" "$backup_tmp/agh-sync" || die "Не удалось сохранить AGH ownership"
+        fi
         # Config (содержит GAME_WARP_ENABLED, POLICY_* и др.) — critical
         # user state. Backup идёт ДО mv старого дерева; если config есть, но
         # скопировать не удалось — abort, иначе commit (delete old) безвозвратно
@@ -3873,6 +3878,9 @@ step_finalize() {
     # would affect Z2K_DYNAMIC_TTL and other flags that gate later
     # actions in step_finalize.
     # =====================================================================
+    if [ -d "$Z2K_UPGRADE_BACKUP/agh-sync" ] && [ ! -d "$ZAPRET2_DIR/agh-sync" ]; then
+        cp -pR "$Z2K_UPGRADE_BACKUP/agh-sync" "$ZAPRET2_DIR/agh-sync" || return 1
+    fi
     local backup_tmp_early="$Z2K_UPGRADE_BACKUP"
     if [ "$Z2K_AUTO_UPDATE" = "1" ] && [ -f "$backup_tmp_early/config" ] && [ -f "$ZAPRET2_DIR/config" ]; then
         local _flag_backup_early="$backup_tmp_early/feature-flags-late.txt"
@@ -4065,6 +4073,8 @@ step_finalize() {
     # роутере уже есть и рабочие. Поэтому — фоном, после того как установка
     # объявлена завершённой.
     deploy_critical_file "files/z2k-insta-ip-refresh.sh" "${ZAPRET2_DIR}/z2k-insta-ip-refresh.sh" || true
+    deploy_critical_file "files/z2k-agh-sync.sh" "${ZAPRET2_DIR}/z2k-agh-sync.sh" || true
+    deploy_critical_file "files/z2k-agh-rewrites.awk" "${ZAPRET2_DIR}/z2k-agh-rewrites.awk" || true
 
     # Same idea for the WARP game lists: a fresh install goes nowhere near the
     # auto-updater, so without this the first thing a new user sees on the WARP
@@ -5655,6 +5665,12 @@ uninstall_zapret2() {
     elif ! confirm "Вы уверены? Это действие необратимо!" "N"; then
         print_info "Удаление отменено"
         return 0
+    fi
+
+    if [ -r "${ZAPRET2_DIR:-/opt/zapret2}/z2k-agh-sync.sh" ]; then
+        sh "${ZAPRET2_DIR:-/opt/zapret2}/z2k-agh-sync.sh" remove || {
+            print_warning "AGH: не удалось снять свои rewrites; продолжаем удаление; см. agh-sync/last-result"
+        }
     fi
 
     # СБОЙ ОДНОЙ КОМАНДЫ НЕ ДОЛЖЕН ОБРЫВАТЬ УДАЛЕНИЕ. z2k.sh идёт под set -e, а здесь

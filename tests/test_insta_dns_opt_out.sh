@@ -25,6 +25,19 @@ I="$ROOT/lib/install.sh"
 assert_eq "install: прошивка гейтится флагом" "yes" \
     "$(grep -B6 'z2k_instagram_dns_add_fallback$' "$I" | grep -q 'Z2K_INSTA_DNS' && echo yes || echo no)"
 
+# The independent VPS WhatsApp block must still run with Instagram disabled.
+block=$(awk '/    # upgrades any stale/ {relay=1}
+    relay && /    # Telegram transparent proxy/ {relay=0}
+    relay {print}' "$I")
+mkdir -p "$SB/relay-bin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SB/relay.log"\n' > "$SB/relay-bin/ndmc"
+chmod +x "$SB/relay-bin/ndmc"
+export SB
+PATH="$SB/relay-bin:$PATH" sh -c "safe_config_read() { echo 0; }; print_success() { :; }; print_info() { :; }; relay_test() { $block
+}; relay_test"
+assert_eq "install: Instagram opt-out сохраняет мобильный WA" "9" \
+    "$(grep -c -- '-c ip host .* 85.192.60.175$' "$SB/relay.log" || true)"
+
 # --- 3. refresh: при Z2K_INSTA_DNS=0 выходит до ndmc ---
 R="$ROOT/files/z2k-insta-ip-refresh.sh"
 mkdir -p "$SB/bin" "$SB/z2k"

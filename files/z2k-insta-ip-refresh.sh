@@ -41,6 +41,17 @@ fi
 mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
 CONFIG="${CONFIG_FILE:-/opt/zapret2/config}"
+agh_sync_on_exit() {
+    _agh_dir="${ZAPRET2_DIR:-$(dirname "$CONFIG")}"
+    if [ -r "$_agh_dir/z2k-agh-sync.sh" ]; then
+        ZAPRET2_DIR="$_agh_dir" sh "$_agh_dir/z2k-agh-sync.sh" sync || \
+            log "AGH sync failed (see agh-sync/last-result)"
+    fi
+    if [ "${Z2K_AGH_LOCK_PARENT:-}" = "$$" ]; then rm -rf "$_agh_state/lock"; fi
+}
+trap agh_sync_on_exit EXIT
+trap 'exit 1' HUP INT TERM
+
 RELAY_URL="https://85.192.60.175.nip.io/resolve"
 # АДРЕС РЕЛЕЯ БЕРЁМ ИЗ ИМЕНИ, А НЕ У РЕЗОЛВЕРА.
 # nip.io — wildcard-DNS: ответ по определению равен первым четырём меткам хоста.
@@ -114,6 +125,21 @@ if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt 65536 ]; then
 fi
 
 log "=== refresh start ==="
+# Share the synchronizer lock across ndmc updates, including the exit sync.
+_agh_state="${Z2K_AGH_STATE_DIR:-${ZAPRET2_DIR:-$(dirname "$CONFIG")}/agh-sync}"
+if [ -r "${ZAPRET2_DIR:-$(dirname "$CONFIG")}/z2k-agh-sync.sh" ]; then
+    mkdir -p "$_agh_state" || exit 1
+    if ! mkdir "$_agh_state/lock" 2>/dev/null; then
+        _agh_oldpid=$(cat "$_agh_state/lock/pid" 2>/dev/null)
+        case "$_agh_oldpid" in ''|*[!0-9]*) log "AGH lock busy"; exit 1;; esac
+        kill -0 "$_agh_oldpid" 2>/dev/null && { log "AGH lock busy"; exit 1; }
+        rm -f "$_agh_state/lock/pid"
+        rmdir "$_agh_state/lock" 2>/dev/null && mkdir "$_agh_state/lock" || exit 1
+    fi
+    printf '%s\n' "$$" > "$_agh_state/lock/pid"
+    Z2K_AGH_LOCK_PARENT=$$
+    export Z2K_AGH_LOCK_PARENT
+fi
 
 # 1. Explicit user disable wins.
 #    Z2K_INSTA_DNS=0 — юзер убрал статические записи через меню [I] (issue #39).
