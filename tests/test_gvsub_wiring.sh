@@ -90,6 +90,11 @@ for fam in 4 6; do
         || bad "IPv$fam: нет очереди ответов DNS"
     has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |016307796f757475626503636f6d00| -j NFQUEUE --queue-num 210 --queue-bypass" "$C" \
         && ok "IPv$fam: очередь DNS c.youtube.com" || bad "IPv$fam: нет очереди DNS c.youtube.com"
+    if has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |046776743103636f6d00| -j NFQUEUE --queue-num 210 --queue-bypass" "$C"; then
+        ok "IPv$fam: очередь DNS gvt1.com"
+    else
+        bad "IPv$fam: нет очереди DNS gvt1.com"
+    fi
 done
 has "kill -HUP 4242" "$C" && ok "после пересоздания цепочек служба получает SIGHUP" || bad "служба не узнаёт о пустых цепочках"
 has "kill -HUP 4242" "$CK" && ok "повторный start_fw тоже шлёт SIGHUP (строки могла вычистить перестройка)" || bad "повторный start_fw без SIGHUP"
@@ -108,6 +113,13 @@ STOP=$(fw_stop_calls 0)
 for fam in 4 6; do
     has "$fam -t mangle -D OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |016307796f757475626503636f6d00|" "$STOP" \
         && ok "IPv$fam stop: очередь c.youtube.com снята" || bad "IPv$fam stop: очередь c.youtube.com осталась"
+done
+for fam in 4 6; do
+    if has "$fam -t mangle -D OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |046776743103636f6d00|" "$STOP"; then
+        ok "IPv$fam stop: очередь gvt1.com снята"
+    else
+        bad "IPv$fam stop: очередь gvt1.com осталась"
+    fi
 done
 for fam in 4 6; do
     for cmd in '-D FORWARD -j Z2K_GVSUB_Q' '-F Z2K_GVSUB_Q' '-X Z2K_GVSUB_Q'; do

@@ -224,7 +224,7 @@ fi
 # ПЕРЕД профилем по списку имён и нести тот же шаг (10.11.2026).
 FLAT_ON=$(printf '%s\n' "$OPT_ON" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk")
 IPSET_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- '--ipset=/tmp/z2k-gv-ips.txt' | head -1 | cut -d: -f1)
-HOST_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- 'YT_GV/List.txt' | grep -v -F -- '--ipset=' | head -1 | cut -d: -f1)
+HOST_N=$(printf '%s\n' "$FLAT_ON" | grep -n -E -- '(^|[[:space:]])--hostlist=[^[:space:]]*/YT_GV/List[.]txt([[:space:]]|$)' | grep -v -F -- '--ipset=' | head -1 | cut -d: -f1)
 IPSET_LINE=$(printf '%s\n' "$FLAT_ON" | grep -F -- '--ipset=/tmp/z2k-gv-ips.txt' | head -1)
 if [ -n "$IPSET_N" ]; then
     has "--lua-desync=z2k_preflight:pos=none:" "$IPSET_LINE" \

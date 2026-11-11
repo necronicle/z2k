@@ -810,7 +810,7 @@ subtract_googlevideo_from_yt() {
         : > "$gv_filtered" || return 1
     fi
     printf '\n' >> "$gv_filtered" || return 1
-    for domain in googlevideo.com c.youtube.com; do
+    for domain in googlevideo.com c.youtube.com gvt1.com; do
         grep -qixF "$domain" "$gv_filtered" || printf '%s\n' "$domain" >> "$gv_filtered"
     done
     sed '/^$/d' "$gv_filtered" > "$TMP_DIR/gv.ready" || return 1
@@ -831,7 +831,7 @@ subtract_googlevideo_from_yt() {
         sub(/\r$/, "", d)
         if (d == "googlevideo.com") next
         if (d ~ /\.googlevideo\.com$/) next
-        if (tolower(d) ~ /(^|\.)c\.youtube\.com\.?$/) next
+        if (tolower(d) ~ /(^|\.)(c\.youtube\.com|gvt1\.com)\.?$/) next
         print d
     }' "$yt_target" > "$filtered" || {
         log "YT subtract: awk failed, keeping original list"
@@ -853,10 +853,10 @@ subtract_googlevideo_from_yt() {
             log "YT subtract: rename failed"
             return 1
         }
-        log "YT: applied, removed $removed googlevideo/c.youtube.com overlap(s) ($before → $after lines) — gv_tcp profile gets these via YT_GV/List.txt"
+        log "YT: applied, removed $removed googlevideo/c.youtube.com/gvt1.com overlap(s) ($before → $after lines) — gv_tcp profile gets these via YT_GV/List.txt"
     else
         rm -f "$filtered"
-        log "YT: no googlevideo/c.youtube.com overlaps in upstream youtube.txt"
+        log "YT: no googlevideo/c.youtube.com/gvt1.com overlaps in upstream youtube.txt"
     fi
     return 0
 }
@@ -922,7 +922,7 @@ subtract_yt_from_rkn() {
             sub(/\r$/, "", d)
             if (d == "googlevideo.com") next
             if (d ~ /\.googlevideo\.com$/) next
-            if (tolower(d) ~ /(^|\.)c\.youtube\.com\.?$/) next
+            if (tolower(d) ~ /(^|\.)(c\.youtube\.com|gvt1\.com)\.?$/) next
             tmp = d
             if (tmp in ex) next
             while (sub(/^[^.]*\./, "", tmp)) {
@@ -958,10 +958,10 @@ subtract_yt_from_rkn() {
             log "RKN subtract: rename failed"
             return 1
         }
-        log "RKN: removed $removed YT/googlevideo/c.youtube.com overlaps ($before → $after lines)"
+        log "RKN: removed $removed YT/googlevideo/c.youtube.com/gvt1.com overlaps ($before → $after lines)"
     else
         rm -f "$filtered"
-        log "RKN: no YT/googlevideo/c.youtube.com overlaps found"
+        log "RKN: no YT/googlevideo/c.youtube.com/gvt1.com overlaps found"
     fi
     return 0
 }
@@ -1246,7 +1246,7 @@ fetch_all() {
     # Includes 304/offline runs and old static or learned inclusion lists.
     clean_google_domains || return 1
 
-    # Strip YT + googlevideo/c.youtube.com overlaps from RKN list (enhanced branch only).
+    # Strip YT + googlevideo/c.youtube.com/gvt1.com overlaps from RKN list (enhanced branch only).
     # Runs unconditionally — even on all-304 runs an older on-disk RKN list
     # may still carry overlaps from a time before this step existed, or from
     # newly-added entries in the YT list.
