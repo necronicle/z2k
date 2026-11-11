@@ -273,21 +273,5 @@ for root in default "$TMP/custom root"; do
         || bad "start gvsub: whitelist '$got', нужен '$want'"
 done
 
-# Диагностика исполняет свой настоящий print_gvsub с изолированными путями.
-awk '$0 == "print_gvsub() {" {p=1} p{print} p&&/^}/{exit}' "$ROOT/files/z2k-diag.sh" \
-    | sed -e "s|/tmp/z2k-gvsub.json|$TMP/diag.json|g" \
-          -e "s|/var/run/z2k-gvsub.pid|$TMP/diag.pid|g" \
-          -e 's|/opt/sbin/z2k-detect|detect_mock|g' > "$TMP/diag.sh"
-# В боевом JSON поле находится на отдельной строке (MarshalIndent).
-printf '  "provider_rejected": 2,\n' > "$TMP/diag.json"
-DIAG=$( . "$TMP/diag.sh"
-    ZAPRET2_DIR="$TMP"
-    detect_mock() { echo gvsub; }
-    iptables() { return 1; }
-    print_gvsub )
-has 'кэш провайдера    : отклоняется адресов 2' "$DIAG" \
-    && ok 'диагностика показывает число отклоняемых адресов' \
-    || bad 'диагностика потеряла число отклоняемых адресов'
-
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

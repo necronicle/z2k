@@ -38,8 +38,6 @@ type Rules interface {
 	Del(bad, good netip.Addr) error
 	RejectQUIC(addr netip.Addr) error
 	AllowQUIC(addr netip.Addr) error
-	RejectTCP(addr netip.Addr) error
-	AllowTCP(addr netip.Addr) error
 	// 10.11.2026: Ensure держит цепочки первыми в PREROUTING/FORWARD, чтобы
 	// ранние правила не обходили подмену и отказ QUIC; держит очередь DNS.
 	// true — цепочки пересозданы пустыми, подмены и отказы надо вернуть.
@@ -257,20 +255,11 @@ func (r IPTables) Del(bad, good netip.Addr) error { return r.apply("-D", bad, go
 // 10.11.2026: DNAT меняет адрес до FORWARD, поэтому сосед продолжает получать
 // QUIC, а неподменённый Bad сразу получает отказ и браузер переходит на TCP.
 func (r IPTables) quic(op string, addr netip.Addr) error {
-	return r.reject443(op, addr, "udp")
-}
-
-// The shared FORWARD chain covers LAN clients, never the router's own probes
-// (OUTPUT). Provider cache destinations have no DNAT mapping.
-func (r IPTables) reject443(op string, addr netip.Addr, proto string) error {
 	bin, reject := "iptables", "icmp-port-unreachable"
 	if addr.Is6() {
 		bin, reject = "ip6tables", "icmp6-port-unreachable"
 	}
-	if proto == "tcp" {
-		reject = "tcp-reset"
-	}
-	rule := []string{"-d", addr.String(), "-p", proto, "--dport", "443", "-j", "REJECT", "--reject-with", reject}
+	rule := []string{"-d", addr.String(), "-p", "udp", "--dport", "443", "-j", "REJECT", "--reject-with", reject}
 	check := append([]string{"-w", "-t", "filter", "-C", QUICChain}, rule...)
 	exists := r.run(bin, check...) == nil
 	if op == "-A" && exists || op == "-D" && !exists {
@@ -281,8 +270,6 @@ func (r IPTables) reject443(op string, addr netip.Addr, proto string) error {
 
 func (r IPTables) RejectQUIC(addr netip.Addr) error { return r.quic("-A", addr) }
 func (r IPTables) AllowQUIC(addr netip.Addr) error  { return r.quic("-D", addr) }
-func (r IPTables) RejectTCP(addr netip.Addr) error  { return r.reject443("-A", addr, "tcp") }
-func (r IPTables) AllowTCP(addr netip.Addr) error   { return r.reject443("-D", addr, "tcp") }
 
 // ResetHold — сколько держится правило сброса одного соединения: клиент
 // повторяет неподтверждённые данные через 1, 2, 4 с, и повтор должен попасть

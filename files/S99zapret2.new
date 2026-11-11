@@ -3034,8 +3034,8 @@ z2k_gvsub_fw_start()
             while "$T" -t "$t" -D PREROUTING -j "$Z2K_GVSUB_CHAIN" 2>/dev/null; do :; done
             "$T" -t "$t" -I PREROUTING 1 -j "$Z2K_GVSUB_CHAIN"
         done
-        # Общая цепочка отказов: QUIC плохих Google-узлов и TCP/UDP кэша
-        # провайдера. Только FORWARD: собственные проверки службы не режем.
+        # Цепочка адресных отказов QUIC плохих Google-узлов.
+        # Только FORWARD: собственные проверки службы не режем.
         if ! "$T" -t filter -N Z2K_GVSUB_Q 2>/dev/null && [ "$alive" = 0 ]; then
             "$T" -t filter -F Z2K_GVSUB_Q
         fi
@@ -3058,7 +3058,7 @@ z2k_gvsub_fw_stop()
     local T t
     for T in iptablesw ip6tablesw; do
         [ "$T" = ip6tablesw ] && [ "$DISABLE_IPV6" = "1" ] && continue
-        # Отказы QUIC и TCP кэшу провайдера не переживают остановку службы.
+        # Адресные отказы QUIC не переживают остановку службы.
         while "$T" -t filter -D FORWARD -j Z2K_GVSUB_Q 2>/dev/null; do :; done
         "$T" -t filter -F Z2K_GVSUB_Q 2>/dev/null
         "$T" -t filter -X Z2K_GVSUB_Q 2>/dev/null

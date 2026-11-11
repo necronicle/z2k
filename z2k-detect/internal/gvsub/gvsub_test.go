@@ -277,14 +277,13 @@ func (f *fakeNet) Check(_ context.Context, a netip.Addr) Verdict {
 }
 
 type fakeRules struct {
-	mu          sync.Mutex
-	set         map[string]string
-	rejected    map[netip.Addr]bool
-	tcpRejected map[netip.Addr]bool
-	adds        int
-	recreate    bool // следующий Ensure сообщит, что цепочки пересозданы пустыми
-	ensures     int
-	teardowns   int
+	mu        sync.Mutex
+	set       map[string]string
+	rejected  map[netip.Addr]bool
+	adds      int
+	recreate  bool // следующий Ensure сообщит, что цепочки пересозданы пустыми
+	ensures   int
+	teardowns int
 }
 
 func (r *fakeRules) Ensure() (bool, error) {
@@ -294,7 +293,6 @@ func (r *fakeRules) Ensure() (bool, error) {
 	if r.recreate {
 		r.recreate = false
 		r.set = map[string]string{} // цепочки пустые
-		r.tcpRejected = nil
 		r.rejected = map[netip.Addr]bool{}
 		return true, nil
 	}
@@ -337,27 +335,6 @@ func (r *fakeRules) rejects(a netip.Addr) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.rejected[a]
-}
-
-func (r *fakeRules) RejectTCP(a netip.Addr) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.tcpRejected == nil {
-		r.tcpRejected = map[netip.Addr]bool{}
-	}
-	r.tcpRejected[a] = true
-	return nil
-}
-func (r *fakeRules) AllowTCP(a netip.Addr) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.tcpRejected, a)
-	return nil
-}
-func (r *fakeRules) rejectsTCP(a netip.Addr) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.tcpRejected[a]
 }
 
 type clock struct {

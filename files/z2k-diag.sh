@@ -944,9 +944,6 @@ print_gvsub() {
         printf 'цепочка в nat     : %s\n' "$pre"
     fi
     if [ -f "$st" ]; then
-        local rejected
-        rejected=$(sed -n 's/^[[:space:]]*"provider_rejected":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$st")
-        printf 'кэш провайдера    : отклоняется адресов %s\n' "${rejected:-неизвестно}"
         printf 'состояние службы  :\n'
         sed 's/^/    /' "$st"
     fi

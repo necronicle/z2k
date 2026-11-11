@@ -25,7 +25,7 @@ import (
 // 10.11 у кластеров было 5 и 17 машин; запас сверху.
 const MaxMachines = 24
 
-var clusterRe = regexp.MustCompile(`^r{1,2}([0-9]+)(?:---|\.)(sn-[a-z0-9-]+)\.(?:googlevideo\.com|c\.youtube\.com|gvt1\.com)$`)
+var clusterRe = regexp.MustCompile(`^rr([0-9]+)(?:---|\.)(sn-[a-z0-9-]+)\.(?:googlevideo\.com|c\.youtube\.com|gvt1\.com)$`)
 
 // ParseCluster — логический кластер и машина в googlevideo.com/c.youtube.com/gvt1.com.
 func ParseCluster(name string) (cluster string, machine int, ok bool) {
