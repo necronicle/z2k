@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -25,8 +26,15 @@ type isolationBudget struct {
 	order       []string
 }
 
+// Keep the existing 16-slot source allowance as headroom for other sources.
+// A source behind NAT may borrow up to total-16: 32 of the legacy 48 slots,
+// 47 of a server quota of 64 minus its existing one-slot headroom, or 1007
+// with the local ceiling/server quota of 1024. Small totals retain the old
+// allowance; the independent total budget still bounds actual admissions.
+const isolationSourceReserve = 16
+
 func newIsolationBudget(limit int) *isolationBudget {
-	return &isolationBudget{limit: limit, localLimit: limit, deviceLimit: 16, byDevice: map[string]int{}, waiting: map[string]int{}}
+	return &isolationBudget{limit: limit, localLimit: limit, deviceLimit: max(isolationSourceReserve, limit-isolationSourceReserve), byDevice: map[string]int{}, waiting: map[string]int{}}
 }
 func (b *isolationBudget) setServerLimit(server int) {
 	b.mu.Lock()
@@ -44,12 +52,7 @@ func (b *isolationBudget) setServerLimit(server int) {
 		limit = remote
 	}
 	b.limit = limit
-	b.deviceLimit = 16
-	// A higher authenticated quota identifies a dedicated installation, which
-	// may aggregate downstream users behind one visible source address.
-	if server > 64 {
-		b.deviceLimit = limit
-	}
+	b.deviceLimit = max(isolationSourceReserve, limit-isolationSourceReserve)
 }
 func (b *isolationBudget) enqueue(device string) {
 	b.mu.Lock()
@@ -158,7 +161,7 @@ func (tc *tunnelClient) reserveIsolated(device string) (*tunnelClient, *relayIde
 }
 
 func (tc *tunnelClient) handleIsolated(conn *net.TCPConn, ip net.IP, port int) {
-	device, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	device := isolationDevice(conn.RemoteAddr().(*net.TCPAddr))
 	admitted := false
 	started := time.Now()
 	tc.isolation.enqueue(device)
@@ -199,9 +202,9 @@ func (tc *tunnelClient) handleIsolated(conn *net.TCPConn, ip net.IP, port int) {
 		// Preserve the successful experiment's fail-fast capacity behavior.
 		// Accepting a socket and withholding its first bytes for45s makes
 		// Telegram wait on a dead connection instead of retrying immediately.
-		if tc.isolation.full(device) {
+		if capacity := tc.isolation.capacityReason(device); capacity != "" {
 			if *verbose {
-				log.Printf("[isolated] capacity full; refusing %s after %s", conn.RemoteAddr(), time.Since(started))
+				log.Printf("[isolated] capacity full; refusing %s after %s source=%s %s", conn.RemoteAddr(), time.Since(started), device, capacity)
 			}
 			conn.Close()
 			<-connSemaphore
@@ -378,10 +381,24 @@ func (b *isolationBudget) reserveProbe() bool {
 }
 func (b *isolationBudget) releaseProbe() { b.mu.Lock(); b.active--; b.mu.Unlock() }
 
-func (b *isolationBudget) full(device string) bool {
+// isolationDevice identifies a visible source IP, not necessarily a physical
+// device. REDIRECT changes the destination only. Neither SO_ORIGINAL_DST nor
+// ARP can recover individual devices hidden behind an upstream NAT/proxy.
+// IP.String canonicalizes IPv4 and IPv4-mapped addresses; ports never enter the key.
+func isolationDevice(addr *net.TCPAddr) string { return addr.IP.String() }
+
+func (b *isolationBudget) capacityReason(device string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.active >= b.limit || b.byDevice[device] >= b.deviceLimit
+	reason := ""
+	if b.active >= b.limit {
+		reason = "total"
+	} else if b.byDevice[device] >= b.deviceLimit {
+		reason = "source"
+	} else {
+		return ""
+	}
+	return fmt.Sprintf("reason=%s source_active=%d source_limit=%d active=%d limit=%d", reason, b.byDevice[device], b.deviceLimit, b.active, b.limit)
 }
 
 func (b *isolationBudget) authenticated() { b.mu.Lock(); b.next = time.Time{}; b.mu.Unlock() }

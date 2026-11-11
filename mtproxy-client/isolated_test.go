@@ -339,7 +339,7 @@ func TestDeviceFairnessAndServerBudget(t *testing.T) {
 		t.Fatal("server headroom missing")
 	}
 	now := time.Now()
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 48; i++ {
 		b.enqueue("phone")
 	}
 	b.enqueue("pc")
@@ -353,13 +353,13 @@ func TestDeviceFairnessAndServerBudget(t *testing.T) {
 	if !b.acquireFor(now.Add(time.Second), "pc") || !b.acquireFor(now.Add(2*time.Second), "phone2") {
 		t.Fatal("devices starved")
 	}
-	for i := 1; i < 16; i++ {
+	for i := 1; i < 47; i++ {
 		if !b.acquireFor(now.Add(time.Duration(i+2)*time.Second), "phone") {
 			t.Fatal("device admitted too few")
 		}
 	}
 	if b.acquireFor(now.Add(time.Minute), "phone") {
-		t.Fatal("one device exceeded16")
+		t.Fatal("one device consumed reserved headroom")
 	}
 	b.enqueue("pc2")
 	if !b.acquireFor(now.Add(time.Minute), "pc2") {
@@ -369,7 +369,7 @@ func TestDeviceFairnessAndServerBudget(t *testing.T) {
 	if b.limit != 1 || b.acquireFor(now.Add(2*time.Minute), "phone") {
 		t.Fatal("small server budget bypassed")
 	}
-	if b.active != 19 {
+	if b.active != 50 {
 		t.Fatal("changing quota must not evict existing flows")
 	}
 }
@@ -588,22 +588,22 @@ func TestDedicatedQuotaDoesNotTreatAggregatedGatewayAsOnePhone(t *testing.T) {
 	}
 }
 
-func TestCommunityQuotaKeepsPerDeviceLimitWithLargerLocalCeiling(t *testing.T) {
+func TestCommunityQuotaKeepsSourceReserveWithLargerLocalCeiling(t *testing.T) {
 	b := newIsolationBudget(1024)
 	b.setServerLimit(64)
 	if b.limit != 63 {
 		t.Fatalf("community quota: %d", b.limit)
 	}
-	for i := 0; i < 16; i++ {
+	for i := 0; i < 47; i++ {
 		if !b.acquireFor(time.Now(), "") {
 			t.Fatal(i)
 		}
 	}
 	if b.acquireFor(time.Now(), "") {
-		t.Fatal("community device exceeded16")
+		t.Fatal("community source consumed reserved headroom")
 	}
 	b.setServerLimit(0)
-	if b.limit != 48 {
+	if b.limit != 48 || b.deviceLimit != 32 {
 		t.Fatal("legacy fallback increased")
 	}
 }
