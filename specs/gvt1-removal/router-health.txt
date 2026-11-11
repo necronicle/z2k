@@ -1,0 +1,18 @@
+DELIVERY_MD5_OK 7/7
+REMOVAL /opt/zapret2/files/lists/extra_strats/TCP/YT/List.txt: 1 -> 0
+REMOVAL /opt/zapret2/files/lists/extra_strats/UDP/YT/List.txt: 1 -> 0
+REMOVAL /opt/zapret2/extra_strats/TCP/RKN/List.txt: 1 -> 0
+REMOVAL /opt/zapret2/extra_strats/TCP/YT/List.txt: 1 -> 0
+REMOVAL /opt/zapret2/extra_strats/TCP/YT/List.txt.shipped: 1 -> 0
+REMOVAL /opt/zapret2/extra_strats/UDP/YT/List.txt.shipped: 1 -> 0
+REMOVAL /opt/zapret2/extra_strats/cache/autocircular/state.tsv: 7 -> 0
+REMOVAL /opt/zapret2/extra_strats/cache/autocircular/state.tsv.pre-gv-named-v1: 4 -> 0
+LIST_GREP_EMPTY
+STATE_AND_SNAPSHOT_GREP_EMPTY
+MIGRATION_DONE
+SNAPSHOT_OTHER_ROWS_PRESERVED
+NFQWS2_PID 17028
+17068 root     1204m S    /opt/sbin/z2k-detect gvsub -queue 210 -status /tmp/z2k-gvsub.json -owner /opt/etc/init.d/S99zapret2 -conf
+2026/11/11 18:40:52 [tunnel] stream 2 CONNECT_OK
+2026/11/11 18:40:56 [tunnel] stream 2 CONNECT_OK
+READY 2026-11-11 21:41:05 MSK
