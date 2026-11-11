@@ -2173,69 +2173,6 @@ _z2k_migrate_gv_named_state_v1()
     mkdir -p "$ZAPRET_BASE/state" && : > "$marker"
 }
 
-# v2 repairs v1-marked installations too. Reapply on every start: reinstall /
-# rollback can restore state and its done markers together. Clean active
-# migration snapshots as well, especially the pre-renumber-v1 restore source.
-_z2k_migrate_gv_named_state_v2()
-{
-    local base="${EXTRA_STRATS_DIR:-$ZAPRET_BASE/extra_strats}/cache/autocircular"
-    local fallback="${Z2K_STATE_FALLBACK:-${Z2K_AUTOCIRCULAR_FALLBACK_OVERRIDE:-/tmp}/z2k-autocircular-state.tsv}"
-    local marker="$ZAPRET_BASE/state/gv-named-state-v2.done"
-    local pidfile pid f tmp now stamp failed=0
-    # A lock only serializes disk writes; it cannot stop an old Lua runtime
-    # from creating another IP record after the lock has been released.
-    for pidfile in "${PIDDIR:-/var/run}"/nfqws2_*.pid; do
-        [ -f "$pidfile" ] || continue
-        pid=$(cat "$pidfile" 2>/dev/null)
-        case "$pid" in ''|*[!0-9]*) continue ;; esac
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "GV state cleanup requires nfqws2 to be stopped first" >&2
-            return 1
-        fi
-    done
-    # Include orphan processes without pidfiles, as stop_all_nfqws does.
-    if [ -n "$(z2k_pids_by_comm nfqws2)" ]; then
-        echo "GV state cleanup requires orphan nfqws2 to be stopped first" >&2
-        return 1
-    fi
-    for f in "$base/state.tsv" "$fallback" "$base/state.tsv".pre-* "$fallback".pre-*; do
-        [ -f "$f" ] || continue
-        now=$(date +%s)
-        if [ -f "$f.lock" ]; then
-            stamp=$(cat "$f.lock" 2>/dev/null)
-            # Match SLD migration's grace period for a writer between create
-            # and timestamp write; abandoned malformed locks must self-heal.
-            case "$stamp" in
-                ''|*[!0-9]*)
-                    sleep 1
-                    stamp=$(cat "$f.lock" 2>/dev/null)
-                    case "$stamp" in ''|*[!0-9]*) rm -f "$f.lock" || return 1 ;; esac
-                    ;;
-            esac
-            case "$stamp" in
-                ''|*[!0-9]*) ;;
-                *) if [ "$stamp" -gt "$((now + 10))" ] || [ "$((now - stamp))" -gt 10 ]; then
-                       rm -f "$f.lock" || return 1
-                   fi ;;
-            esac
-        fi
-        if ( set -C; printf '%s' "$now" > "$f.lock" ) 2>/dev/null; then
-            tmp=$(mktemp "$f.gv-named-v2.XXXXXX") || { rm -f "$f.lock"; return 1; }
-            # No dirty backup: every active pre-* snapshot is a potential
-            # restore source. Preserve metadata and all retained rows exactly.
-            if cp -p "$f" "$tmp" && awk -F '\t' '
-                $1=="gv_tcp" && ($5=="auto" || $5=="") &&
-                $2 !~ /^(googlevideo[.]com|youtube[.]com|gvt1[.]com)\|[46]$/ {next}
-                {print}
-            ' "$f" > "$tmp" && mv -f "$tmp" "$f"; then :
-            else failed=1; fi
-            rm -f "$tmp" "$f.lock"
-        else failed=1; fi
-    done
-    [ "$failed" = 0 ] || return 1
-    mkdir -p "$ZAPRET_BASE/state" && : > "$marker"
-}
-
 start_daemons()
 {
     echo "Starting zapret2 daemons"
@@ -2246,7 +2183,7 @@ start_daemons()
         echo "ERROR: не удалось перенести state на домены второго уровня; запуск остановлен. Повторите перезапуск сервиса."
         return 1
     }
-    _z2k_migrate_gv_named_state_v2 || {
+    _z2k_migrate_gv_named_state_v1 || {
         echo "ERROR: не удалось очистить gv_tcp state; запуск остановлен. Повторите перезапуск сервиса."
         return 1
     }
@@ -2935,8 +2872,8 @@ z2k_udp_masquerade_fix_stop()
 # служба. Строки подмен в цепочках ставит и снимает служба.
 #
 # Ответы DNS идут из ndnproxy роутера устройствам через OUTPUT. В очередь
-# попадают ответы с googlevideo или DNS-суффиксом c.youtube.com/gvt1.com (-m string).
-# Go отбрасывает некэшевые имена c.youtube.com/gvt1.com сразу. --queue-bypass:
+# попадают ответы с googlevideo или DNS-суффиксом c.youtube.com (-m string).
+# Go отбрасывает нерелевантные имена c.youtube.com сразу. --queue-bypass:
 # нет службы — ответы идут мимо, DNS не ломается.
 Z2K_GVSUB_BIN="${Z2K_GVSUB_BIN:-/opt/sbin/z2k-detect}"
 Z2K_GVSUB_QUEUE=210
@@ -2999,9 +2936,6 @@ z2k_gvsub_dns_rule()
     if [ "${3:-}" = cache ]; then
         match=--hex-string
         value='|016307796f757475626503636f6d00|'
-    elif [ "${3:-}" = gvt1 ]; then
-        match=--hex-string
-        value='|046776743103636f6d00|'
     fi
     if [ "$2" = "-I" ]; then
         "$1" -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm "$match" "$value" \
@@ -3034,20 +2968,10 @@ z2k_gvsub_fw_start()
             while "$T" -t "$t" -D PREROUTING -j "$Z2K_GVSUB_CHAIN" 2>/dev/null; do :; done
             "$T" -t "$t" -I PREROUTING 1 -j "$Z2K_GVSUB_CHAIN"
         done
-        # Цепочка адресных отказов QUIC плохих Google-узлов.
-        # Только FORWARD: собственные проверки службы не режем.
-        if ! "$T" -t filter -N Z2K_GVSUB_Q 2>/dev/null && [ "$alive" = 0 ]; then
-            "$T" -t filter -F Z2K_GVSUB_Q
-        fi
-        if [ "$("$T" -t filter -S FORWARD 2>/dev/null | sed -n 2p)" != "-A FORWARD -j Z2K_GVSUB_Q" ]; then
-            while "$T" -t filter -D FORWARD -j Z2K_GVSUB_Q 2>/dev/null; do :; done
-            "$T" -t filter -I FORWARD 1 -j Z2K_GVSUB_Q
-        fi
         z2k_gvsub_dns_rule "$T" -C 2>/dev/null || z2k_gvsub_dns_rule "$T" -I
         z2k_gvsub_dns_rule "$T" -C cache 2>/dev/null || z2k_gvsub_dns_rule "$T" -I cache
-        z2k_gvsub_dns_rule "$T" -C gvt1 2>/dev/null || z2k_gvsub_dns_rule "$T" -I gvt1
     done
-    # Служба ставит подмены и адресные отказы заново (идемпотентно): цепочка могла
+    # Служба ставит свои подмены заново (повтор идемпотентен): цепочка могла
     # быть пересоздана пустой или вычищена перестройкой таблиц Keenetic.
     [ -f "$Z2K_GVSUB_PID" ] && kill -HUP "$(cat "$Z2K_GVSUB_PID")" 2>/dev/null
     return 0
@@ -3058,13 +2982,12 @@ z2k_gvsub_fw_stop()
     local T t
     for T in iptablesw ip6tablesw; do
         [ "$T" = ip6tablesw ] && [ "$DISABLE_IPV6" = "1" ] && continue
-        # Адресные отказы QUIC не переживают остановку службы.
+        # 10.11.2026: отказ QUIC не должен переживать остановку службы.
         while "$T" -t filter -D FORWARD -j Z2K_GVSUB_Q 2>/dev/null; do :; done
         "$T" -t filter -F Z2K_GVSUB_Q 2>/dev/null
         "$T" -t filter -X Z2K_GVSUB_Q 2>/dev/null
         while z2k_gvsub_dns_rule "$T" -D 2>/dev/null; do :; done
         while z2k_gvsub_dns_rule "$T" -D cache 2>/dev/null; do :; done
-        while z2k_gvsub_dns_rule "$T" -D gvt1 2>/dev/null; do :; done
         for t in nat mangle; do
             while "$T" -t "$t" -D PREROUTING -j "$Z2K_GVSUB_CHAIN" 2>/dev/null; do :; done
             "$T" -t "$t" -F "$Z2K_GVSUB_CHAIN" 2>/dev/null

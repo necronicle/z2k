@@ -1495,9 +1495,7 @@ generate_nfqws2_opt_from_strategies() {
     fi
     # Единственное отличие TLS-профиля: Discord-домены живут на 443 и на 80-м
     # порту не встречаются.
-    # GV suffixes must bypass broad RKN lists, including stale installs and autohostlists.
-    local gv_excl="--hostlist-exclude=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist-exclude-domains=c.youtube.com,gvt1.com"
-    local rkn_hostlists="$gv_excl $rkn_lists_head"
+    local rkn_hostlists="$rkn_lists_head"
     [ -s "${extra_strats_dir}/TCP_Discord.txt" ] && rkn_hostlists="$rkn_hostlists --hostlist=${extra_strats_dir}/TCP_Discord.txt"
     rkn_hostlists="$rkn_hostlists$rkn_lists_tail"
     # Независимый обход объёмного блока. Имя берётся из измеренной карты,
@@ -1644,7 +1642,7 @@ generate_nfqws2_opt_from_strategies() {
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
     else
         # YouTube GV — dedicated hostlist (extra_strats/TCP/YT_GV/List.txt,
-        # содержит googlevideo.com, c.youtube.com и gvt1.com → match поддоменов: rr1-rr9,
+        # содержит googlevideo.com и c.youtube.com → match поддоменов: rr1-rr9,
         # manifest, и т.д.). Расширяется добавлением строк в файл.
         #
         # Проверка DPI отдельным соединением (lua/z2k-preflight.lua) — ТОЛЬКО
@@ -1680,10 +1678,10 @@ generate_nfqws2_opt_from_strategies() {
                 echo "WARNING: cannot prepare gvsub ipset $Z2K_GVSUB_IPS; skipping IP profile" >&2
             fi
         fi
-        # First match wins: GV precedes YT and is excluded from broad RKN/YT lists.
+        # First match wins: c.youtube.com is nested under YT's youtube.com.
         # Inline suffix also covers existing installations with an old GV list.
-        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist-domains=c.youtube.com,gvt1.com $youtube_gv_tcp --new"
-        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl $gv_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist-domains=c.youtube.com $youtube_gv_tcp --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
     fi
 
     # QUIC — общий профиль: ютуб плюс весь набор списков РКН и список Discord.

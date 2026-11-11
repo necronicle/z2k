@@ -92,11 +92,9 @@ case "$_last" in
 esac
 
 # --- 3. Профили YouTube и GV не изменились -----------------------------------
-# Маркер — включающий --hostlist: тот же файл стоит и в --hostlist-exclude
-# профиля РКН (gv-домены вычтены из него), а РКН тумблер менять обязан.
 for _marker in 'TCP/YT/List.txt' 'TCP/YT_GV/List.txt'; do
-    _a=$(printf '%s\n' "$OFF" | grep -E -- "--hostlist=[^ ]*$_marker" | head -1)
-    _b=$(printf '%s\n' "$ON"  | grep -E -- "--hostlist=[^ ]*$_marker" | head -1)
+    _a=$(printf '%s\n' "$OFF" | grep -F "$_marker" | head -1)
+    _b=$(printf '%s\n' "$ON"  | grep -F "$_marker" | head -1)
     if [ -n "$_a" ] && [ "$_a" = "$_b" ]; then
         ok "профиль с $_marker не тронут включением тумблера"
     else

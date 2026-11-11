@@ -25,9 +25,9 @@ import (
 // 10.11 у кластеров было 5 и 17 машин; запас сверху.
 const MaxMachines = 24
 
-var clusterRe = regexp.MustCompile(`^rr([0-9]+)(?:---|\.)(sn-[a-z0-9-]+)\.(?:googlevideo\.com|c\.youtube\.com|gvt1\.com)$`)
+var clusterRe = regexp.MustCompile(`^rr([0-9]+)(?:---|\.)(sn-[a-z0-9-]+)\.(?:googlevideo\.com|c\.youtube\.com)$`)
 
-// ParseCluster — логический кластер и машина в googlevideo.com/c.youtube.com/gvt1.com.
+// ParseCluster — логический кластер и машина в googlevideo.com/c.youtube.com.
 func ParseCluster(name string) (cluster string, machine int, ok bool) {
 	m := clusterRe.FindStringSubmatch(strings.TrimSuffix(strings.ToLower(name), "."))
 	if m == nil {
@@ -40,11 +40,8 @@ func ParseCluster(name string) (cluster string, machine int, ok bool) {
 // siblingKey keeps the logical sn-X cluster but isolates DNS families.
 // A shared IP in a capture does not guarantee identical DNS answers forever.
 func siblingKey(name, cluster string) string {
-	name = strings.TrimSuffix(strings.ToLower(name), ".")
-	for _, suffix := range []string{"c.youtube.com", "gvt1.com"} {
-		if strings.HasSuffix(name, "."+suffix) {
-			return cluster + "/" + suffix
-		}
+	if strings.HasSuffix(strings.TrimSuffix(strings.ToLower(name), "."), ".c.youtube.com") {
+		return cluster + "/c.youtube.com"
 	}
 	return cluster
 }

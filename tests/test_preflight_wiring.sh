@@ -224,7 +224,7 @@ fi
 # ПЕРЕД профилем по списку имён и нести тот же шаг (10.11.2026).
 FLAT_ON=$(printf '%s\n' "$OPT_ON" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk")
 IPSET_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- '--ipset=/tmp/z2k-gv-ips.txt' | head -1 | cut -d: -f1)
-HOST_N=$(printf '%s\n' "$FLAT_ON" | grep -n -E -- '(^|[[:space:]])--hostlist=[^[:space:]]*/YT_GV/List[.]txt([[:space:]]|$)' | grep -v -F -- '--ipset=' | head -1 | cut -d: -f1)
+HOST_N=$(printf '%s\n' "$FLAT_ON" | grep -n -F -- 'YT_GV/List.txt' | grep -v -F -- '--ipset=' | head -1 | cut -d: -f1)
 IPSET_LINE=$(printf '%s\n' "$FLAT_ON" | grep -F -- '--ipset=/tmp/z2k-gv-ips.txt' | head -1)
 if [ -n "$IPSET_N" ]; then
     has "--lua-desync=z2k_preflight:pos=none:" "$IPSET_LINE" \
@@ -267,19 +267,23 @@ OPT_OFF=$(gen off "Z2K_GV_SERVER_REPLY2=0" 1)
 has "z2k_preflight" "$OPT_OFF" \
     && bad "Z2K_GV_SERVER_REPLY2=0 не убрал шаг из конфига" \
     || ok "Z2K_GV_SERVER_REPLY2=0 убирает шаг из конфига"
-# Owner policy 11.11.2026: renames preserve the previous explicit choice.
-# The raw generator reads the current name; full regeneration migrates aliases.
+# Разовое включение у всех (p-87.24): прежний ключ Z2K_GV_PREFLIGHT=0 шаг не убирает.
+OPT_OLD0=$(gen old0 "Z2K_GV_PREFLIGHT=0" 1)
+has "z2k_preflight" "$OPT_OLD0" \
+    && ok "старый Z2K_GV_PREFLIGHT=0 не выключает: включено у всех" \
+    || bad "старый Z2K_GV_PREFLIGHT=0 всё ещё выключает шаг"
+# Исполняем полную регенерацию, включая сборку NFQWS2_OPT и запись флагов.
 for _old in Z2K_GV_PREFLIGHT Z2K_GV_SERVER_REPLY; do
     REGEN=$(gen "regen-$_old" "$_old=0" 1 1) || bad "ошибка регенерации $_old"
     has "--lua-desync=z2k_preflight:" "$REGEN" \
-        && bad "регенерация $_old=0 включила пробу" \
-        || ok "регенерация $_old=0 сохраняет выключение"
+        && ok "регенерация $_old=0: проба включена" \
+        || bad "регенерация $_old=0: проба выключена"
     printf '%s\n' "$REGEN" | grep -Eq '^Z2K_GV_(PREFLIGHT|SERVER_REPLY)=' \
         && bad "регенерация перенесла устаревший ключ $_old" \
         || ok "регенерация удаляет устаревшие ключи"
     has "Z2K_GV_SERVER_REPLY2=0" "$REGEN" \
-        && ok "старый ноль перенесён в новый ключ" \
-        || bad "регенерация потеряла старый ноль"
+        && bad "регенерация перенесла старый ноль в новый ключ" \
+        || ok "новый ключ не выключен старым нулём"
 done
 for _want in 0 1; do
     # Старые нули не должны перебивать новый осознанный выбор.

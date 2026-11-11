@@ -56,7 +56,6 @@ fw_calls() { # $1 — DISABLE_IPV6, $2 — 1: служба запущена
       ipt() { echo "$@" >> "$CALLS"; shift
           case "$*" in
               *" -N "*) [ "$EXISTS" = 1 ] && return 1 ;;
-              *"-S FORWARD"*) [ "$EXISTS" = 1 ] && printf '%s\n' "-P FORWARD ACCEPT" "-A FORWARD -j Z2K_GVSUB_Q" ;;
               *"-S PREROUTING"*) [ "$EXISTS" = 1 ] && printf '%s\n' "-P PREROUTING ACCEPT" "-A PREROUTING -j Z2K_GVSUB" ;;
               *" -C "*|*" -D "*) return 1 ;;
           esac; return 0; }
@@ -86,22 +85,11 @@ for fam in 4 6; do
         has "$fam -t $t -F Z2K_GVSUB" "$CD" && ok "IPv$fam $t: без службы бесхозные подмены вычищаются" \
             || bad "IPv$fam $t: без службы подмены остались в цепочке"
     done
-    for cmd in '-N Z2K_GVSUB_Q' '-I FORWARD 1 -j Z2K_GVSUB_Q'; do
-        has "$fam -t filter $cmd" "$C" && ok "IPv$fam start: $cmd" || bad "IPv$fam start: нет $cmd"
-    done
-    has "$fam -t filter -F Z2K_GVSUB_Q" "$CK" && bad "живой службе очистили filter" || ok "IPv$fam: filter живой службы сохранён"
-    has "$fam -t filter -D FORWARD" "$CK" && bad "первый filter hook переставлен" || ok "IPv$fam: первый filter hook сохранён"
-    has "$fam -t filter -F Z2K_GVSUB_Q" "$CD" && ok "IPv$fam: бесхозные отказы вычищены" || bad "бесхозные отказы остались"
     has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass" "$C" \
         && ok "IPv$fam: очередь ответов DNS с --queue-bypass (без службы DNS не ломается)" \
         || bad "IPv$fam: нет очереди ответов DNS"
     has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |016307796f757475626503636f6d00| -j NFQUEUE --queue-num 210 --queue-bypass" "$C" \
         && ok "IPv$fam: очередь DNS c.youtube.com" || bad "IPv$fam: нет очереди DNS c.youtube.com"
-    if has "$fam -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |046776743103636f6d00| -j NFQUEUE --queue-num 210 --queue-bypass" "$C"; then
-        ok "IPv$fam: очередь DNS gvt1.com"
-    else
-        bad "IPv$fam: нет очереди DNS gvt1.com"
-    fi
 done
 has "kill -HUP 4242" "$C" && ok "после пересоздания цепочек служба получает SIGHUP" || bad "служба не узнаёт о пустых цепочках"
 has "kill -HUP 4242" "$CK" && ok "повторный start_fw тоже шлёт SIGHUP (строки могла вычистить перестройка)" || bad "повторный start_fw без SIGHUP"
@@ -120,13 +108,6 @@ STOP=$(fw_stop_calls 0)
 for fam in 4 6; do
     has "$fam -t mangle -D OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |016307796f757475626503636f6d00|" "$STOP" \
         && ok "IPv$fam stop: очередь c.youtube.com снята" || bad "IPv$fam stop: очередь c.youtube.com осталась"
-done
-for fam in 4 6; do
-    if has "$fam -t mangle -D OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm --hex-string |046776743103636f6d00|" "$STOP"; then
-        ok "IPv$fam stop: очередь gvt1.com снята"
-    else
-        bad "IPv$fam stop: очередь gvt1.com осталась"
-    fi
 done
 for fam in 4 6; do
     for cmd in '-D FORWARD -j Z2K_GVSUB_Q' '-F Z2K_GVSUB_Q' '-X Z2K_GVSUB_Q'; do
@@ -175,7 +156,7 @@ printf 'ENABLED=1\nZ2K_GV_SUBST=0\n' > "$_rg/config"
 grep -q '^Z2K_GV_SUBST=0$' "$_rg/config" && ok "Z2K_GV_SUBST=0 переживает пересборку" || bad "выключение подмены потеряно при пересборке"
 printf 'ENABLED=1\n' > "$_rg/config"
 ( ZAPRET2_DIR="$_rg" create_official_config "$_rg/config" >/dev/null 2>&1 )
-grep -q '^Z2K_GV_SUBST=1$' "$_rg/config" && ok "отсутствующий ключ фиксируется по прежнему умолчанию 1" || bad "пересборка не зафиксировала прежнее умолчание подмены"
+grep -q '^Z2K_GV_SUBST=' "$_rg/config" && bad "пересборка записала ключ за человека" || ok "без ключа пересборка его не пишет — действует умолчание"
 
 # --- 6. Панель ------------------------------------------------------------------------
 TG=$(awk '/^toggle_gv_subst\(\)/{p=1} p{print} p&&/^}/{exit}' "$ROOT/webpanel/cgi/actions.sh")

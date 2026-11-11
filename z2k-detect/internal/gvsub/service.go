@@ -119,11 +119,10 @@ type Service struct {
 	stall     map[string]stallMark // зависшие до подмены: счётчики прошлого опроса
 	closed    bool                 // Shutdown: фоновые проверки подмен не ставят
 
-	ipmu     sync.Mutex          // запись IPFile
-	statusMu sync.Mutex          // serialize atomic status writes
-	ipLast   string              // что записано в IPFile
-	qmu      sync.Mutex          // строки отказа QUIC: применяются вне mu
-	quicSet  map[netip.Addr]bool // где отказ QUIC стоит (под qmu)
+	ipmu    sync.Mutex          // запись IPFile
+	ipLast  string              // что записано в IPFile
+	qmu     sync.Mutex          // строки отказа QUIC: применяются вне mu
+	quicSet map[netip.Addr]bool // где отказ QUIC стоит (под qmu)
 	// Кластер, где в прошлый поиск рабочих машин не нашлось: второй плохой
 	// адрес того же кластера не ищет заново (иначе ответ DNS по нему ждал
 	// весь поиск — 2,1 с на роутере Марка).
@@ -233,12 +232,11 @@ func (s *Service) startLocked(a netip.Addr) chan struct{} {
 	s.inflight[a] = ch
 	go func() {
 		s.resolve(a)
-		// Persist status before releasing DNS waiters and their resources.
-		s.writeStatus()
 		s.mu.Lock()
 		delete(s.inflight, a)
 		s.mu.Unlock()
 		close(ch)
+		s.writeStatus()
 	}()
 	return ch
 }
@@ -289,11 +287,11 @@ func (s *Service) resolve(a netip.Addr) {
 // принимает ответы DNS и опрашивает conntrack, а одна команда на роутере идёт
 // 50–100 мс. Желаемое берётся под s.mu, применяется под своей блокировкой;
 // запоздалый вызов просто приводит к тому же состоянию (10.11.2026).
-// reset — проверить наличие правил заново, сохраняя учёт для снятия старых.
+// reset — цепочку пересоздали пустой: забыть, что стояло.
 func (s *Service) syncQUIC(reset bool) {
 	s.qmu.Lock()
 	defer s.qmu.Unlock()
-	if s.quicSet == nil {
+	if reset || s.quicSet == nil {
 		s.quicSet = map[netip.Addr]bool{}
 	}
 	s.mu.Lock()
@@ -731,8 +729,6 @@ func (s *Service) writeStatus() {
 	if s.StatusPath == "" {
 		return
 	}
-	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
 	s.mu.Lock()
 	var st statusFile
 	st.Updated = s.Now()

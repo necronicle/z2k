@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Suffix — исходное семейство видеокэша; rr-кэши c.youtube.com/gvt1.com см. IsTarget.
+// Suffix — исходное семейство видеокэша; rr-кэши c.youtube.com см. IsTarget.
 const Suffix = "googlevideo.com"
 
 var errShort = errors.New("короткий пакет")
@@ -84,13 +84,13 @@ func readName(msg []byte, off int) (string, int, error) {
 	return "", 0, errors.New("петля сжатия")
 }
 
-// IsTarget — googlevideo или rr-кэш в c.youtube.com/gvt1.com.
+// IsTarget — googlevideo или rr-кэш в c.youtube.com.
 func IsTarget(name string) bool {
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
 	if name == Suffix || strings.HasSuffix(name, "."+Suffix) {
 		return true
 	}
-	// c.youtube.com/gvt1.com may reach the queue by suffix; only rr cache names act.
+	// c.youtube.com may reach the queue by suffix; only rr cache names act.
 	_, _, ok := ParseCluster(name)
 	return ok
 }

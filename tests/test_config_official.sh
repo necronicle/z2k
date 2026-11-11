@@ -550,11 +550,12 @@ GVPF_OUT=$(test_gv_preflight_flag "off" "Z2K_GV_SERVER_REPLY2=0")
 assert_contains "Z2K_GV_SERVER_REPLY2=0 survives regen" "Z2K_GV_SERVER_REPLY2=0" "$GVPF_OUT"
 GVPF_OUT=$(test_gv_preflight_flag "on" "Z2K_GV_SERVER_REPLY2=1")
 assert_contains "Z2K_GV_SERVER_REPLY2=1 survives regen" "Z2K_GV_SERVER_REPLY2=1" "$GVPF_OUT"
-# Отсутствующий ключ фиксируется: будущая смена умолчания не меняет выбор.
+# Умолчание не записывается за человека: иначе смена умолчания в следующей
+# версии не дошла бы до тех, кто тумблер не трогал.
 GVPF_OUT=$(test_gv_preflight_flag "absent" "")
-assert_eq "Z2K_GV_SERVER_REPLY2 absent -> frozen =1" "Z2K_GV_SERVER_REPLY2=1" "$GVPF_OUT"
+assert_eq "Z2K_GV_SERVER_REPLY2 absent -> ключ не пишется" "" "$GVPF_OUT"
 GVPF_OUT=$(test_gv_preflight_flag "junk" "Z2K_GV_SERVER_REPLY2=maybe")
-assert_eq "Z2K_GV_SERVER_REPLY2 junk -> existing key untouched" "Z2K_GV_SERVER_REPLY2=maybe" "$GVPF_OUT"
+assert_eq "Z2K_GV_SERVER_REPLY2 junk -> ключ не пишется" "" "$GVPF_OUT"
 
 printf "\n--- Z2K_PADENCAP: padencap autoinjector flag ---\n"
 
