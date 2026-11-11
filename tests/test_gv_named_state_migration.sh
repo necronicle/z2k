@@ -41,6 +41,7 @@ cmp "$TMP/original" "$STATE"
 # Exercise startup's failure gate before either daemon mode can be spawned.
 awk '/^start_daemons\(\)/,/^}/' "$ROOT/files/S99zapret2.new" > "$TMP/start.sh"
 . "$TMP/start.sh"
+_z2k_migrate_gv_named_state_v2() { _z2k_migrate_gv_named_state_v1; }
 z2k_daemon_fail_reset() { :; }
 ensure_autocircular_files() { :; }
 _z2k_migrate_rotator_sld() { :; }

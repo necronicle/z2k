@@ -101,6 +101,18 @@ local function choose_state_file_for_write()
   return nil
 end
 
+-- Apply the GV named-state invariant at every import (primary, fallback,
+-- reconcile, write merge, seed recovery), including restored archival backups.
+-- Operator freezes remain valid even for an IP or an unrelated domain.
+local function keep_named_state(askey, host, mode)
+  if askey ~= "gv_tcp" or (mode ~= nil and mode ~= "" and mode ~= "auto") then
+    return true
+  end
+  return host:match("^googlevideo%.com|[46]$") ~= nil
+      or host:match("^youtube%.com|[46]$") ~= nil
+      or host:match("^gvt1%.com|[46]$") ~= nil
+end
+
 -- Merge a TSV file's rows into dest (last-newer-ts wins per host).
 local function merge_state_file_into(path, dest)
   if not path or not dest then return end
@@ -116,7 +128,7 @@ local function merge_state_file_into(path, dest)
         local n = tonumber(strat)
         if n and n >= 1 then
           local hn = normalize_hostkey_for_state(host)
-          if hn then
+          if hn and keep_named_state(askey, hn, mode) then
             if not dest[askey] then dest[askey] = {} end
             local tsn = tonumber(ts) or 0
             local m = (mode ~= nil and mode ~= "") and mode or "auto"
@@ -401,6 +413,7 @@ local function persist_if_changed(askey, hostn, hrec)
   -- persists its strategy. (For a frozen row the freeze gate forces nstrategy back
   -- to the pinned value, so prev==n and we return above before reaching here.)
   local mode = (state[askey] and state[askey][hostn] and state[askey][hostn].mode) or "auto"
+  if not keep_named_state(askey, hostn, mode) then return false end
   if not state[askey] then state[askey] = {} end
   state[askey][hostn] = { strategy = n, ts = now_t(), mode = mode, sni = sni }
   write_state()
