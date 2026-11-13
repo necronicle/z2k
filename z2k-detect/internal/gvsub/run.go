@@ -1,16 +1,12 @@
 package gvsub
 
 import (
-	"bufio"
 	"context"
 	"log"
-	"net"
-	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -19,12 +15,11 @@ import (
 type Config struct {
 	Queue      uint16 // очередь с ответами DNS
 	StatusPath string
-	Conntrack  string // /proc/net/nf_conntrack
-	NoIPv6     bool   // IPv6 выключен в z2k
+	NoIPv6     bool // IPv6 выключен в z2k
 	// Owner — init-скрипт, который запускает службу, и ConfigPath — конфиг z2k.
 	// Служба уходит сама и снимает свой каркас, если init её больше не знает
 	// (ночное обновление 10.11.2026 вернуло init без неё, а служба осталась
-	// держать ответы DNS) или подмена выключена в конфиге.
+	// держать ответы DNS) или обход по ответу сервера выключен в конфиге.
 	Owner      string
 	ConfigPath string
 	// IPFile — адреса googlevideo из ответов DNS, для профиля движка с --ipset.
@@ -41,36 +36,13 @@ func wanted(cfg Config) bool {
 		}
 	}
 	if cfg.ConfigPath != "" {
-		if f, err := os.Open(cfg.ConfigPath); err == nil {
-			v := ""
-			sc := bufio.NewScanner(f)
-			for sc.Scan() {
-				if rest, ok := strings.CutPrefix(sc.Text(), "Z2K_GV_SUBST="); ok {
-					v = strings.Trim(strings.TrimSpace(rest), `"'`)
-				}
-			}
-			f.Close()
-			if v == "0" {
-				return false
-			}
-		}
+		return serverReplyConfigured(cfg.ConfigPath)
 	}
+
 	return true
 }
 
-// localAddrs — адреса самого роутера.
-func localAddrs() map[netip.Addr]bool {
-	m := map[netip.Addr]bool{}
-	addrs, _ := net.InterfaceAddrs()
-	for _, a := range addrs {
-		if p, err := netip.ParsePrefix(a.String()); err == nil {
-			m[p.Addr()] = true
-		}
-	}
-	return m
-}
-
-// Run работает до отмены ctx. При выходе снимает свои подмены.
+// Run работает до отмены ctx. При выходе снимает свои правила.
 func Run(parent context.Context, cfg Config) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -79,22 +51,15 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 	rules := IPTables{Queue: strconv.Itoa(int(cfg.Queue)), NoV6: cfg.NoIPv6}
-	var localMu sync.Mutex
-	local := localAddrs()
-	svc := &Service{Checker: NetChecker{}, Rules: rules, Resolver: &DNSResolver{}, StatusPath: cfg.StatusPath, IPFile: cfg.IPFile, Whitelist: cfg.Whitelist, Kill: func(f Flow) error {
-		// Сначала правило сброса, потом удаление записи: повтор клиента
-		// идёт уже мимо быстрого пути и получает RST.
-		if err := rules.Reset(f); err != nil {
-			return err
-		}
-		return DeleteFlow(f)
-	},
-		Local: func(a netip.Addr) bool { localMu.Lock(); defer localMu.Unlock(); return local[a] }}
+	svc := &Service{Checker: NetChecker{}, Rules: rules, StatusPath: cfg.StatusPath, IPFile: cfg.IPFile, Whitelist: cfg.Whitelist}
+	// Remove obsolete hooks before accepting DNS after an upgrade.
+	rules.Teardown()
+
 	if _, err := rules.Ensure(); err != nil {
 		log.Printf("gvsub: каркас правил: %v", err)
 	}
 	orphan := false
-	// Порядок выхода: закрыть очередь, снять подмены. Ответы DNS не
+	// Порядок выхода: закрыть очередь, снять правила. Ответы DNS не
 	// придерживаются, ждать нечего.
 	defer func() {
 		q.Close()
@@ -106,6 +71,7 @@ func Run(parent context.Context, cfg Config) error {
 	log.Printf("gvsub: очередь %d, слушаю ответы DNS", cfg.Queue)
 	n := svc.Restore()
 	// Первый снимок, включая пустой known, публикуем до освобождения DNS.
+	svc.writeNeutral()
 	svc.writeIPs()
 	if n > 0 {
 		log.Printf("gvsub: из прошлого запуска %d адресов в ходу, проверяю", n)
@@ -117,23 +83,12 @@ func Run(parent context.Context, cfg Config) error {
 	defer signal.Stop(hup)
 
 	go func() {
-		poll := time.NewTicker(PollEvery)
 		recheck := time.NewTicker(RecheckEvery)
-		defer poll.Stop()
 		defer recheck.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-poll.C:
-				l := localAddrs()
-				localMu.Lock()
-				local = l
-				localMu.Unlock()
-				if f, err := os.Open(cfg.Conntrack); err == nil {
-					svc.OnConntrack(ParseConntrack(f))
-					f.Close()
-				}
 			case <-recheck.C:
 				if !wanted(cfg) {
 					log.Printf("gvsub: init или конфиг службу больше не ведут — снимаю правила и выхожу")
@@ -144,11 +99,11 @@ func Run(parent context.Context, cfg Config) error {
 				svc.Tick()
 			case <-hup:
 				// Хук NDM шлёт сигнал сразу после пересборки таблицы, когда
-				// цепочки может ещё не быть: сначала каркас, потом подмены.
+				// цепочки может ещё не быть: сначала каркас, потом правила.
 				if _, err := rules.Ensure(); err != nil {
 					log.Printf("gvsub: каркас правил: %v", err)
 				}
-				svc.Reapply()
+				svc.writeNeutral()
 			}
 		}
 	}()
@@ -162,7 +117,7 @@ func Run(parent context.Context, cfg Config) error {
 				return nil
 			}
 			// Разовая ошибка приёма не повод уходить: без службы ответы DNS
-			// идут мимо (--queue-bypass), но и подмены перестают обновляться.
+			// идут мимо (--queue-bypass), но и правила перестают обновляться.
 			fails++
 			if fails > 100 {
 				return err
@@ -178,11 +133,7 @@ func Run(parent context.Context, cfg Config) error {
 				_ = q.Accept(p.ID)
 				continue
 			}
-			// Ответ не придерживается: проверка и подмена идут в фоне. Придержка
-			// стоила каждому новому серверу видео до 2 с (проверка + поиск
-			// соседа), Mac повторял запрос через 1 с, и шортс открывался ~10 с
-			// (сбор 10.11.2026). Первое соединение к плохому адресу без подмены
-			// ведёт проба z2k, следующие идут уже на соседа.
+			// IP-файл опубликован синхронно; проверка готовности идёт в фоне.
 			svc.OnDNS(ans.Name, ans.Addrs)
 			_ = q.Accept(p.ID)
 		}

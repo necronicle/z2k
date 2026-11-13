@@ -79,15 +79,15 @@ for config in "$TMP/tpl.txt" "$TMP/flat.txt"; do
         if ($0 ~ /--lua-desync=/) exit 1
         bypass=1
       }
-      /key=discord_udp|--filter-l7=wireguard,stun,discord,mtproto,unknown/ {
+      /key=discord_udp/ {
         handlers++
         if (!bypass || $0 ~ /--hostlist/) exit 1
       }
-      END { if (!bypass || handlers != 2) exit 1 }
+      END { if (!bypass || handlers != 1) exit 1 }
     ' "$config"; then
-        ok "UDP whitelist bypass precedes both hostless handlers ($config)"
+        ok "UDP whitelist bypass precedes the hostless voice handler ($config)"
     else
-        no "UDP whitelist bypass precedes both hostless handlers" "bypass then voice/misc" "missing or unsafe"
+        no "UDP whitelist bypass precedes the hostless voice handler" "bypass then voice" "missing or unsafe"
     fi
 done
 

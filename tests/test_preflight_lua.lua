@@ -1,6 +1,6 @@
 -- tests/test_preflight_lua.lua — проверка DPI отдельным соединением
 -- (files/lua/z2k-preflight.lua): конечный автомат пробы целиком.
--- luacheck: globals DLOG bitand u32 u32add seq_ge bu8 bu32 find_tcp_option deepcopy blob tls_mod resolve_multi_pos delete_pos_1 rawsend_dissect instance_cutoff_shim execution_plan_cancel VERDICT_DROP VERDICT_PASS VERDICT_MODIFY TH_FIN TH_SYN TH_RST TH_PUSH TH_ACK TCP_KIND_NOOP TCP_KIND_MSS TCP_KIND_SCALE TCP_KIND_TS z2k_pf_flows z2k_preflight
+-- luacheck: globals DLOG bitand u32 u32add seq_ge bu8 bu32 find_tcp_option deepcopy blob tls_mod resolve_multi_pos delete_pos_1 rawsend_dissect instance_cutoff_shim execution_plan_cancel VERDICT_DROP VERDICT_PASS VERDICT_MODIFY TH_FIN TH_SYN TH_RST TH_PUSH TH_ACK TCP_KIND_NOOP TCP_KIND_MSS TCP_KIND_SCALE TCP_KIND_TS z2k_pf_flows z2k_preflight timer_set timer_del z2k_preflight_syn_timer
 -- luacheck: ignore 122
 --
 -- Запуск: lua tests/test_preflight_lua.lua
@@ -152,7 +152,7 @@ do
     is("второй кусок имеет меньший seq, чем первый отправленный", true, b.tcp.th_seq < a.tcp.th_seq)
 end
 
--- Целая проба по ntc.party #1374; повторы используют тот же путь отправки.
+-- Целая проба; повторы используют тот же путь отправки.
 do
     local arg = {pos = "none"}
     start_probe(arg)
@@ -628,6 +628,123 @@ do
     is("IPv6: после кусков ответа — исходный SYN клиента", TH_SYN, last.tcp.th_flags)
     local st = select(2, next(z2k_pf_flows))
     is("IPv6: адрес в журнале записан как IPv6", "2a00:1450:4005:2:0:0:0:7", st.ip)
+end
+
+-- DNS-observed provider must bypass preflight even if ipcache selected the
+-- hostlist profile on SYN. The same neutral file is published before DNS release.
+do
+    reset_flows()
+    reset_calls()
+    local syn = dis_out(TH_SYN, ISN)
+    local dst = syn.ip.ip_dst
+    local key = dst:gsub(".", function(b) return string.format("%02x", b:byte()) end)
+    local path = os.tmpname()
+    local f = assert(io.open(path, "w")); f:write("provider " .. key .. "\n"); f:close()
+    is("provider SYN skips preflight", nil,
+        z2k_preflight(nil, {dis=syn, outgoing=true, ifout="ppp0", arg={provider_state=path}}))
+    is("provider SYN unchanged", 65535, syn.tcp.th_win)
+    is("provider SYN has no probe state", nil, next(z2k_pf_flows))
+    os.remove(path)
+end
+
+-- Task 129: виртуальные таймеры; сетевых замеров здесь нет.
+do
+    local timers = {}
+    timer_set = function(name, callback, delay, oneshot, data)
+        is("timer delay is 60 ms", 60, delay)
+        is("timer repeats", false, oneshot)
+        timers[name] = {callback = callback, data = data, oneshot = oneshot}
+    end
+    timer_del = function(name) timers[name] = nil end
+    local function tick()
+        local name, event = next(timers)
+        if not event then no("pending SYN timer", true, false); return end
+        if event.oneshot then timers[name] = nil end
+        if type(_G[event.callback]) ~= "function" then no("timer callback exists", true, false); return end
+        _G[event.callback](name, event.data)
+    end
+    local function begin(arg)
+        timers = {}
+        start_probe(arg)
+        inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1), arg)
+        reset_calls()
+        inc(dis_in(TH_ACK, 5001, ISN + 1, "ab"), arg)
+        return select(2, next(z2k_pf_flows))
+    end
+    local st = begin({})
+    is("default: teardown after first piece", "resyn", st.stage)
+    is("teardown sends only RST immediately", 1, #sent)
+    is("teardown first packet is RST", TH_RST, sent[1] and sent[1].tcp.th_flags)
+    tick()
+    is("timer sends original SYN", TH_SYN, sent[2] and sent[2].tcp.th_flags)
+    is("timer preserves client window", 65535, sent[2] and sent[2].tcp.th_win)
+    is("timer preserves client ISN", ISN, sent[2] and sent[2].tcp.th_seq)
+    is("client retransmit passes in resyn", VERDICT_PASS, out(dis_out(TH_SYN, ISN)))
+    local name, pending = next(timers)
+    inc(dis_in(TH_SYN + TH_ACK, 7000, ISN + 1))
+    is("handover removes timer", nil, next(timers))
+    reset_calls()
+    if pending and type(_G[pending.callback]) == "function" then _G[pending.callback](name, pending.data) end
+    is("late callback after handover sends nothing", 0, #sent)
+
+    begin({pieces = 1})
+    reset_calls()
+    inc(dis_in(TH_ACK, 5003, 777))
+    is("stale ACK sends only RST now", 1, #sent)
+    is("stale RST uses server ACK", 777, sent[1] and sent[1].tcp.th_seq)
+    local count = 0
+    for _ in pairs(timers) do count = count + 1 end
+    is("stale ACK keeps one timer", 1, count)
+    tick()
+    is("stale ACK SYN is deferred", TH_SYN, sent[2] and sent[2].tcp.th_flags)
+    -- Stale ACK does not renew the six-send budget.
+    inc(dis_in(TH_ACK, 5003, 778))
+    for _ = 1, 5 do tick() end
+    is("six timer SYNs plus two RSTs", 8, #sent)
+    is("six-send limit removes timer", nil, next(timers))
+    inc(dis_in(TH_ACK, 5003, 779))
+    is("stale ACK cannot restart exhausted timer", nil, next(timers))
+
+    timers = {}
+    start_probe({})
+    reset_calls()
+    inc(dis_in(TH_RST, 5000, 0))
+    is("server RST does not send SYN immediately", 0, #sent)
+    tick()
+    is("server RST schedules SYN", TH_SYN, sent[1] and sent[1].tcp.th_flags)
+
+    for _, cleanup in ipairs({"timeout", "replace", "sweep"}) do
+        st = begin({pieces = 1})
+        name, pending = next(timers)
+        if cleanup == "timeout" then
+            st.t = os.time() - st.timeout
+            out(dis_out(TH_SYN, ISN))
+        elseif cleanup == "replace" then
+            out(dis_out(TH_SYN, ISN + 1))
+        else
+            st.t = os.time() - 61
+            local other = dis_out(TH_SYN, ISN)
+            other.tcp.th_sport = SPORT + 1
+            out(other)
+        end
+        is(cleanup .. " removes timer", nil, next(timers))
+        reset_calls()
+        if pending and type(_G[pending.callback]) == "function" then _G[pending.callback](name, pending.data) end
+        is(cleanup .. " stale callback sends nothing", 0, #sent)
+    end
+
+    timers = {}
+    start_probe({pieces = 6})
+    inc(dis_in(TH_SYN + TH_ACK, 5000, ISN + 1))
+    reset_calls()
+    for i = 1, 5 do inc(dis_in(TH_ACK, 4999 + i * 2, ISN + 1, "ab")) end
+    is("pieces=6 waits through five pieces", "probe_data", select(2, next(z2k_pf_flows)).stage)
+    is("pieces=6 has no SYN timer yet", nil, next(timers))
+    inc(dis_in(TH_ACK, 5011, ISN + 1, "ab"))
+    is("pieces=6 tears down at six", "resyn", select(2, next(z2k_pf_flows)).stage)
+    is("pieces=6 arms SYN timer", true, next(timers) ~= nil)
+    timer_set, timer_del = nil, nil
+    reset_flows()
 end
 
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))

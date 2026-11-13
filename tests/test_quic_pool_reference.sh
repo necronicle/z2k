@@ -43,7 +43,7 @@ fake:blob=quic4:repeats=2:out_range=-n4 udplen:increment=8:pattern=0xFEA82025:ou
 fake:blob=quic4:repeats=2:out_range=-n3 udplen:increment=4:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
 fake:payload=quic_initial:dir=out:blob=quic_google:repeats=11
 fake:payload=quic_initial:dir=out:blob=quic_google:repeats=6
-fake:payload=quic_initial:dir=out:blob=quic_google:repeats=6:ip_ttl=8
+fake:payload=quic_initial:dir=out:blob=quic_google:repeats=6:ip_ttl=8:ip6_ttl=8
 fake:blob=quic6:repeats=2:out_range=-n3 udplen:increment=8:pattern=0x0F0F0E0F:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
 fake:blob=quic1:repeats=6:out_range=-n3 send:dir=out:out_range=-n3 drop:dir=out:out_range=-n3
 fake:payload=quic_initial:dir=out:blob=quic5:repeats=6

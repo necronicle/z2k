@@ -109,7 +109,10 @@ ZAPRET_BASE="$ZAPRET2_DIR"
 cp "$GEO" "$ZAPRET_BASE/z2k-geosite.sh"
 eval "$(sed -n '/^start_daemons()/,/^}/p' "$ROOT/files/S99zapret2.new")"
 z2k_daemon_fail_reset() { :; }
+_z2k_migrate_broad_udp_removal_v1() { return 0; }
+_z2k_cleanup_retired_role() { :; }
 ensure_autocircular_files() { :; }
+stop_all_nfqws() { :; }
 _z2k_migrate_rotator_sld() { return 0; }
 _z2k_migrate_gv_named_state_v1() { return 0; }
 _z2k_retire_cf_extra_state() { :; }

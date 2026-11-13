@@ -56,9 +56,12 @@ ensure_traffic_debug_files() { return 0; }
 traffic_debug_prepare() { return 0; }
 traffic_debug_enable_nfqws2_log() { return 0; }
 traffic_debug_tcpdump_start() { return 0; }
+stop_all_nfqws() { :; }
 _z2k_migrate_rotator_sld() { return 0; }
 _z2k_migrate_gv_named_state_v1() { return 0; }
 _z2k_retire_cf_extra_state() { return 0; }
+_z2k_migrate_broad_udp_removal_v1() { return 0; }
+_z2k_cleanup_retired_role() { :; }
 ensure_autocircular_files() { return 0; }
 custom_runner() { return 0; }
 repair_autocircular_files_after_daemon_start() { return 0; }

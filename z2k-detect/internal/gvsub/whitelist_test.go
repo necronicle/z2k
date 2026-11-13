@@ -2,20 +2,12 @@ package gvsub
 
 import (
 	"compress/gzip"
-	"context"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
-
-// Разные кластеры позволяют отличить проверки нового адреса и его соседей
-// от досчёта запасных для уже опубликованного bad.
-type whitelistResolver map[string][]netip.Addr
-
-func (r whitelistResolver) Siblings(_ context.Context, cluster string, _ bool) []netip.Addr {
-	return r[cluster]
-}
 
 func putWhitelist(t *testing.T, path, body string) {
 	t.Helper()
@@ -45,22 +37,14 @@ func TestWhitelistDNS(t *testing.T) {
 }
 
 func TestWhitelistReload(t *testing.T) {
-	s, n, r, _ := newSvc()
+	s, n, _, _ := newSvc()
 	const otherName = "rr1---sn-list.googlevideo.com"
 	other := netip.MustParseAddr("74.125.110.71")
-	neighbors := []netip.Addr{netip.MustParseAddr("74.125.110.72"), netip.MustParseAddr("74.125.110.73")}
-	s.Resolver = whitelistResolver{
-		"sn-test": {netip.MustParseAddr("74.125.110.38"), netip.MustParseAddr("74.125.110.39"), netip.MustParseAddr("74.125.110.102")},
-		"sn-list": neighbors,
-	}
-	for _, a := range neighbors {
-		n.set(a.String(), Good)
-	}
 	s.IPFile, s.Whitelist = t.TempDir()+"/ips", t.TempDir()+"/whitelist"
 	// Отсутствующий файл — пустой список.
 	wait(t, s.OnDNS(gvName, []netip.Addr{bad}))
-	if r.adds == 0 {
-		t.Fatal("нет подмены без whitelist")
+	if n.calls == 0 {
+		t.Fatal("нет проверки наблюдаемого адреса")
 	}
 	putWhitelist(t, s.Whitelist, otherName+"\n")
 	// После добавления имени его новые адреса не публикуются; старый остаётся.
@@ -73,7 +57,7 @@ func TestWhitelistReload(t *testing.T) {
 	checked := append([]netip.Addr(nil), n.checked...)
 	n.mu.Unlock()
 	for _, a := range checked {
-		if a == other || a == neighbors[0] || a == neighbors[1] {
+		if a == other {
 			t.Fatalf("whitelisted адрес или его сосед проверен: %s", a)
 		}
 	}
@@ -169,7 +153,7 @@ func TestWhitelistCNAMEQuestion(t *testing.T) {
 				if len(got) != 0 || r.adds != 0 {
 					t.Fatal("ответ для whitelist-вопроса затронут")
 				}
-			} else if r.adds == 0 {
+			} else if !strings.Contains(string(got), bad.String()) {
 				t.Fatal("CNAME ошибочно заменил имя вопроса при проверке whitelist")
 			}
 		})

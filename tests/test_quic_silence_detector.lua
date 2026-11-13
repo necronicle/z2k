@@ -101,4 +101,69 @@ H.test('configured capture limit is honored; success on the last packet wins',fu
     H.step(H.udp(d.track,true,H.quic('short','serverid'),nil,8,1))
     H.eq(nil,c.neutral); H.eq(true,c.nocheck); H.advance(20); H.eq(nil,h.failure_counter)
 end)
+local real_open, neutral = io.open, ''
+io.open=function(path, ...)
+    if path == '/tmp/z2k-gvsub.json.neutral' then
+        local text=neutral
+        return {lines=function() return text:gmatch('[^\n]+') end, close=function() end}
+    end
+    return real_open(path, ...)
+end
+local reset=H.reset
+H.reset=function() reset(); neutral='' end
+local function remote(d)
+    d.dis.ip.ip_dst=string.char(74,125,110,70)
+    return d
+end
+for _,kind in ipairs({'bad','reject'}) do
+    H.test(kind..' at start is neutral without a timer',function()
+        neutral=kind..' 4a7d6e46\n'
+        local h,c=H.step(remote(H.qstart()))
+        H.eq(true,c.neutral); H.advance(20); H.eq(nil,c.failure); H.eq(nil,h.failure_counter)
+    end)
+    H.test(kind..' added after Initial is neutral before async callback',function()
+        local h,c=H.step(remote(H.qstart())); h.failure_counter=1
+        neutral=kind..' 4a7d6e46\n'; H.advance(6)
+        H.eq(true,c.neutral); H.eq(nil,c.failure); H.eq(1,h.failure_counter)
+    end)
+end
+H.test('Bad gv_tcp is neutral before native retransmission failure',function()
+    local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key='gv_tcp'
+    local h,c=H.step(d); h.failure_counter=1
+    neutral='bad 4a7d6e46\n'
+    H.step(d); H.step(d)
+    H.eq(true,c.neutral); H.eq(nil,c.failure); H.eq(1,h.failure_counter)
+end)
+H.test('QUIC ICMP cannot turn conntrack incoming counters into success',function()
+    local d=remote(H.qstart()); local h,c=H.step(d)
+    local icmp=H.udp(d.track,false,'',nil,1,3); icmp.dis.udp=nil; icmp.dis.icmp={}
+    H.step(icmp); H.eq(nil,c.nocheck)
+    H.advance(6); H.eq(true,c.failure); H.eq(1,h.failure_counter)
+end)
+H.test('Bad IPv6 uses network bytes independent of textual spelling',function()
+    local d=H.qstart(); d.dis.ip=nil
+    d.dis.ip6={ip6_dst=string.char(0x20,1,0x0d,0xb8)..string.rep('\0',11)..'\1'}
+    neutral='bad 20010db8000000000000000000000001\n'
+    local _,c=H.step(d); H.eq(true,c.neutral)
+end)
+H.test('local QUIC reject does not neutralize TCP',function()
+    neutral='reject 4a7d6e46\n'
+    local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key='gv_tcp'
+    local _,c=H.step(d); H.step(d); H.step(d)
+    H.eq(nil,c.neutral); H.eq(true,c.failure)
+end)
+H.test('queued callback cannot revive neutral attempt after veto disappears',function()
+    local d=remote(H.qstart()); local h,c=H.step(d)
+    local data
+    for _,t in pairs(H.timers) do data=t.data end
+    neutral='bad 4a7d6e46\n'; H.advance(6); neutral=''
+    z2k_quic_silence_timer('',data)
+    H.eq(true,c.neutral); H.eq(nil,h.failure_counter)
+end)
+H.test('ICMP source never replaces the remote transport endpoint',function()
+    local c={}
+    z2k_gvsub_neutral({dis={ip={ip_src=string.char(10,0,0,1)},icmp={}},outgoing=false},c)
+    H.eq(nil,c.gvsub_remote)
+end)
+io.open=real_open
 H.finish()

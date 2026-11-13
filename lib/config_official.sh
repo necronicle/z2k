@@ -1600,11 +1600,39 @@ generate_nfqws2_opt_from_strategies() {
         # v6 — шаг и на IPv6. init снимает его при старте, если увидит NAT
         # для IPv6 (S99zapret2, z2k_preflight_v6_gate): за NAT повторный SYN
         # ушёл бы с внутренним адресом.
-        # ntc.party #1374 (Pavel4e5), 10.11.2026: разрезки в способе нет.
         # Обрыв начала в 58983 был на разрезанной пробе; посылаем ClientHello целиком.
-        Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pos=none:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4:v6"
+        Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pos=none:pieces=1:keepts:sni=www.google.com:timeout=4:v6"
     fi
 
+    # DNS addresses identify Google video/Play in either profile layout.
+    local gv_ip_tcp
+    gv_ip_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
+        # Тот же профиль по адресам из ответов DNS (служба DNS-наблюдения пишет их в
+        # файл до того, как отпустить ответ; движок перечитывает файл сам).
+        # Имя хоста движок узнаёт только из самого соединения, и первое
+        # соединение к новому адресу шло мимо профиля — без пробы: плохой
+        # сервер молчал, браузер ждал ~2,5 с и уходил на другой (Safari,
+        # шортс 11,8 с, 10.11.2026). Стоит ПЕРЕД профилем по списку имён.
+        # Без $wl_excl: любой hostlist, включая exclude, при неизвестном
+        # имени отвергает профиль до IpsetCheck (nfq2/desync.c:269).
+        # При сохранённом IP повторный поиск на ClientHello снова выбирает A:
+        # whitelist профиля B его не исключит. Поэтому gvsub проверяет whitelist
+        # по имени DNS-вопроса до публикации IP. Уже опубликованные
+        # адреса сохраняются до перезагрузки: удаление может оборвать пробу A.
+        # Новый whitelist не отменяет их охват A (в том числе при общих IP).
+        if [ -n "$Z2K_PREFLIGHT_STEP" ]; then
+            # validate-config идёт ДО S99 start, а после reboot /tmp пуст.
+            # Подготовить файл при самой генерации, до публикации --ipset.
+            local Z2K_GVSUB_IPS="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
+            z2k_gvsub_ensure_ipfile
+            if [ -f "$Z2K_GVSUB_IPS" ] && [ -s "$Z2K_GVSUB_IPS" ] && [ -r "$Z2K_GVSUB_IPS" ]; then
+                add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--ipset=$Z2K_GVSUB_IPS $gv_ip_tcp --new"
+            else
+                # Как в 815603e9: ошибка /tmp не убивает генерацию. Профиль
+                # по hostlist ниже остаётся; не публикуем нерабочий ipset.
+                echo "WARNING: cannot prepare gvsub ipset $Z2K_GVSUB_IPS; skipping IP profile" >&2
+            fi
+        fi
     # Phase 3 merge: YouTube + googlevideo collapsed to a single google_tls
     # profile. Hostlist triggers OR — hostlist=YT/List.txt ∪ hostlist-domains=
     # googlevideo.com (confirmed by hostlist.c:262-281). Circular pins per-SLD
@@ -1652,32 +1680,6 @@ generate_nfqws2_opt_from_strategies() {
         # googlevideo живёт одним профилем с остальным ютубом, и шаг применялся
         # бы к именам, которым он не нужен.
         youtube_gv_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
-        # Тот же профиль по адресам из ответов DNS (служба подмены пишет их в
-        # файл до того, как отпустить ответ; движок перечитывает файл сам).
-        # Имя хоста движок узнаёт только из самого соединения, и первое
-        # соединение к новому адресу шло мимо профиля — без пробы: плохой
-        # сервер молчал, браузер ждал ~2,5 с и уходил на другой (Safari,
-        # шортс 11,8 с, 10.11.2026). Стоит ПЕРЕД профилем по списку имён.
-        # Без $wl_excl: любой hostlist, включая exclude, при неизвестном
-        # имени отвергает профиль до IpsetCheck (nfq2/desync.c:269).
-        # При сохранённом IP повторный поиск на ClientHello снова выбирает A:
-        # whitelist профиля B его не исключит. Поэтому gvsub проверяет whitelist
-        # по имени DNS-вопроса до публикации IP и подмены. Уже опубликованные
-        # адреса сохраняются до перезагрузки: удаление может оборвать пробу A.
-        # Новый whitelist не отменяет их охват A (в том числе при общих IP).
-        if [ -n "$Z2K_PREFLIGHT_STEP" ] && [ "$(safe_config_read "Z2K_GV_SUBST" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")" != "0" ]; then
-            # validate-config идёт ДО S99 start, а после reboot /tmp пуст.
-            # Подготовить файл при самой генерации, до публикации --ipset.
-            local Z2K_GVSUB_IPS="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
-            z2k_gvsub_ensure_ipfile
-            if [ -f "$Z2K_GVSUB_IPS" ] && [ -s "$Z2K_GVSUB_IPS" ] && [ -r "$Z2K_GVSUB_IPS" ]; then
-                add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--ipset=$Z2K_GVSUB_IPS $youtube_gv_tcp --new"
-            else
-                # Как в 815603e9: ошибка /tmp не убивает генерацию. Профиль
-                # по hostlist ниже остаётся; не публикуем нерабочий ipset.
-                echo "WARNING: cannot prepare gvsub ipset $Z2K_GVSUB_IPS; skipping IP profile" >&2
-            fi
-        fi
         # First match wins: c.youtube.com is nested under YT's youtube.com.
         # Inline suffix also covers existing installations with an old GV list.
         add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist-domains=c.youtube.com $youtube_gv_tcp --new"
@@ -1735,7 +1737,7 @@ generate_nfqws2_opt_from_strategies() {
     fi
 
     # STUN/Discord can have a hostname learned by the engine's cache. Honor
-    # whitelist names before both voice and the broad UDP fallback. A separate
+    # whitelist names before the voice profile. A separate
     # no-action profile is essential: hostlist-exclude on a hostless handler
     # would make that handler reject ALL flows whose hostname is unknown.
     # Keep the file attached even when empty so live whitelist edits work.
@@ -1744,42 +1746,6 @@ generate_nfqws2_opt_from_strategies() {
     # Discord UDP (no hostlist - STUN has no hostname, uses filter-l7=discord,stun
     # + hostkey=z2k_nohost_key for stable hostless rotation keying)
     [ "$category_voice" = 0 ] || nfqws2_opt_lines="$nfqws2_opt_lines$discord_udp --new\\n"
-
-    # Включённые профили референсных наборов (30.10.2026), один в один.
-    #
-    # UDP: WireGuard, STUN, Discord, MTProto и неизвестный UDP на портах
-    # 590-600, 1400, 3478-3481, 5349, 19294-19344, 49152-65535 — нулевой фейк x6
-    # и фейк QUIC x6, ротация fails=2/300 с. Стоит ПОСЛЕ голоса Discord: тот же
-    # STUN/Discord на голосовых портах забирает discord_udp, сюда идёт остальное.
-    # Широкий диапазон — ровно тот случай, о котором предупреждение ниже: P2P-STUN
-    # (WebRTC) на высоких портах получит фейки этого профиля, как у первоисточника.
-    # Тумблер Z2K_UDP_MISC=0 снимает профиль.
-    # Голосовые порты и протоколы (stun, discord) идут сюда только при
-    # включённой категории голоса Discord: человек её выключил — значит ни STUN,
-    # ни Discord мы не трогаем, остаются WireGuard, MTProto и неизвестный UDP.
-    local udp_misc_on udp_misc_ports udp_misc_l7 udp_misc_payload
-    udp_misc_on=$(safe_config_read Z2K_UDP_MISC "${ZAPRET2_DIR:-/opt/zapret2}/config" 1)
-    if [ "$category_voice" = 0 ]; then
-        udp_misc_ports="590-600,49152-65535"
-        udp_misc_l7="wireguard,mtproto,unknown"
-        udp_misc_payload="wireguard_initiation,wireguard_response,wireguard_cookie,mtproto_initial,unknown"
-    else
-        udp_misc_ports="590-600,1400,3478-3481,5349,19294-19344,49152-65535"
-        udp_misc_l7="wireguard,stun,discord,mtproto,unknown"
-        udp_misc_payload="wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown"
-    fi
-    # Как у discord_udp: circular видит оба направления и все payload, а fake
-    # остаётся под прежним <n2 (только первый исходящий) и фильтром payload.
-    # NFQUEUE: connbytes 0:8 в каждую сторону (common/ipt.sh), то есть доступны
-    # первые 8 out и 8 in. В zapret-auto.lua провал: out>=udp_out, in<=udp_in;
-    # успех: in>udp_in. Сохраняем штатный udp_out=4 (4<=8), udp_in=0 даёт
-    # провал на четвёртом out без ответа и успех уже на первом in (1<=8).
-    # Единственный out без ответа вердикта не даёт: у штатного UDP-детектора
-    # нет таймера. Lua fake по умолчанию payload_check=known: unknown/empty
-    # не получают фейков, даже если включены в профильный --payload.
-    if [ "$udp_misc_on" != 0 ]; then
-        nfqws2_opt_lines="$nfqws2_opt_lines--filter-udp=$udp_misc_ports --filter-l7=$udp_misc_l7 --in-range=a --out-range=a --payload=all --lua-desync=circular:fails=2:time=300:retrans=3:nld=2:udp_in=0:udp_out=4 --in-range=x --out-range=<n2 --payload=$udp_misc_payload --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2 --new\\n"
-    fi
 
     # Здесь стоял webrtc_bypass — пустой профиль udp/1024-65535 × l7=stun,
     # который ничего не десинкал и служил щитом: он ловил P2P-STUN (WebRTC в
@@ -1976,7 +1942,9 @@ z2k_retire_dns_redirect() {
             done
         done
     fi
-    command -v ipset >/dev/null 2>&1 && ipset destroy z2k_lan4 2>/dev/null
+    # Best-effort retirement: an already removed set makes ipset return 1.
+    # Regen also runs under set -e; still remove watchdog marks on a repeat.
+    command -v ipset >/dev/null 2>&1 && ipset destroy z2k_lan4 2>/dev/null || :
     rm -f "${Z2K_DNS_STATE_DIR:-/tmp}/z2k-dns-redirect.down" \
         "${Z2K_DNS_STATE_DIR:-/tmp}/z2k-dns-redirect.hc" 2>/dev/null
     return 0
@@ -2038,7 +2006,6 @@ Z2K_INSTA_DNS 1 0
 Z2K_REDIRECTOR_DNS 1 0
 Z2K_SNI_STALL 1 0
 Z2K_GV_SERVER_REPLY2 1 0
-Z2K_GV_SUBST 1 0
 Z2K_QUIC_OFF 0 0
 Z2K_YT_QUIC_OFF 0 0
 Z2K_PPE_DEOFFLOAD_QUIC 1 0
@@ -2046,7 +2013,6 @@ Z2K_PANEL_AUTH 0 0
 Z2K_AUTO_UPDATE_ENABLED 1 0
 Z2K_AUTOHOSTLIST 0 0
 Z2K_WARP_WDTT 0 0
-Z2K_UDP_MISC 1 0
 Z2K_REFACTOR_PHASE3 0 0
 Z2K_TOGGLES
 }
@@ -2074,7 +2040,6 @@ Z2K_INSTA_DNS 1
 Z2K_REDIRECTOR_DNS 1
 Z2K_SNI_STALL 1
 Z2K_GV_SERVER_REPLY2 1
-Z2K_GV_SUBST 1
 Z2K_QUIC_OFF 0
 Z2K_YT_QUIC_OFF 0
 Z2K_PPE_DEOFFLOAD_QUIC 1
@@ -2082,7 +2047,6 @@ Z2K_PANEL_AUTH 0
 Z2K_AUTO_UPDATE_ENABLED 1
 Z2K_AUTOHOSTLIST 0
 Z2K_WARP_WDTT 0
-Z2K_UDP_MISC 1
 Z2K_REFACTOR_PHASE3 0
 Z2K_LEGACY
 }
@@ -2377,7 +2341,7 @@ create_official_config() {
     local saved_POLICY_EXCLUDE="0"
     local _pn_q="" _pe_q=""   # те же значения, экранированные под одинарные кавычки
     local saved_Z2K_SNI_STALL="1"
-    local saved_Z2K_GV_SERVER_REPLY2="" saved_Z2K_GV_SUBST=""
+    local saved_Z2K_GV_SERVER_REPLY2="" saved_Z2K_PROVIDER_CACHE=""
     local saved_Z2K_QUIC_OFF="" saved_Z2K_YT_QUIC_OFF=""
     local saved_Z2K_PPE_DEOFFLOAD_QUIC="1"
     # Вход в панель по паролю. Умолчание 0 — выключено; панель годами ставили
@@ -2463,11 +2427,9 @@ create_official_config() {
         # Missing values were frozen by z2k_migrate_toggle_values above.
         saved_Z2K_GV_SERVER_REPLY2=$(safe_config_read "Z2K_GV_SERVER_REPLY2" "$config_file" "")
         case "$saved_Z2K_GV_SERVER_REPLY2" in 0|1|"") ;; *) saved_Z2K_GV_SERVER_REPLY2="" ;; esac
-        # Z2K_GV_SUBST — подмена адресов googlevideo (генератор, S99, gvsub).
-        # До p-87.27 не публиковался: новое имя не нужно, умолчание уже 1.
-        # Отсутствующее значение уже зафиксировано миграцией выше.
-        saved_Z2K_GV_SUBST=$(safe_config_read "Z2K_GV_SUBST" "$config_file" "")
-        case "$saved_Z2K_GV_SUBST" in 0|1|"") ;; *) saved_Z2K_GV_SUBST="" ;; esac
+        # Compatibility only: preserve an existing inert key, never create a toggle.
+        saved_Z2K_PROVIDER_CACHE=$(safe_config_read "Z2K_PROVIDER_CACHE" "$config_file" "")
+        case "$saved_Z2K_PROVIDER_CACHE" in 0|1) ;; *) saved_Z2K_PROVIDER_CACHE="" ;; esac
         # Тумблеры QUIC сохраняются тем же механизмом.
         saved_Z2K_QUIC_OFF=$(safe_config_read "Z2K_QUIC_OFF" "$config_file" "")
         case "$saved_Z2K_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_QUIC_OFF="" ;; esac
@@ -2589,8 +2551,7 @@ NFQWS2_ENABLE=1
 NFQWS2_PORTS_TCP="80,443,2053,2083,2087,2096,5222,8443"
 
 # UDP ports to process (will be filtered by --filter-udp in NFQWS2_OPT)
-# 590-600, 49152-65535 — UDP-профиль WireGuard/неизвестного UDP.
-NFQWS2_PORTS_UDP="443,50000-50100,1400,3478-3481,5349,19294-19344,590-600,49152-65535"
+NFQWS2_PORTS_UDP="443,50000-50100,1400,3478-3481,5349,19294-19344"
 
 # Discord voice/STUN: KEEPALIVE DISABLED (empty) — по канону bol-van.
 # Раньше (2026-06-11) на discord-портах connbytes-лимит снимался (keepalive),
@@ -2633,7 +2594,6 @@ NFQWS2_TCP_PKT_IN="${nfqws2_tcp_pkt_in}"
 # Инвариант, который обязан держаться: окно > порога детектора.
 #   quic      udp_in=1 udp_out=5   -> нужно >=6, ставим 8
 #   discord   udp_in=1 udp_out=4   -> нужно >=5, ставим 8
-#   udp misc  udp_in=0 udp_out=4   -> успех на in=1, провал на out=4; окно 8/8
 NFQWS2_UDP_PKT_OUT="${Z2K_UDP_PKT_OUT}"
 NFQWS2_UDP_PKT_IN="${Z2K_UDP_PKT_IN}"
 
@@ -2788,8 +2748,6 @@ CONFIG
 
     local _gv_preflight_line="# Z2K_GV_SERVER_REPLY2 не задан: действует умолчание версии"
     [ -n "$saved_Z2K_GV_SERVER_REPLY2" ] && _gv_preflight_line="Z2K_GV_SERVER_REPLY2=${saved_Z2K_GV_SERVER_REPLY2}"
-    local _gv_subst_line="# Z2K_GV_SUBST не задан: действует умолчание версии"
-    [ -n "$saved_Z2K_GV_SUBST" ] && _gv_subst_line="Z2K_GV_SUBST=${saved_Z2K_GV_SUBST}"
     local _quic_off_line="# Z2K_QUIC_OFF не задан: действует умолчание версии"
     [ -n "$saved_Z2K_QUIC_OFF" ] && _quic_off_line="Z2K_QUIC_OFF=${saved_Z2K_QUIC_OFF}"
     local _yt_quic_off_line="# Z2K_YT_QUIC_OFF не задан: действует умолчание версии"
@@ -2890,18 +2848,14 @@ Z2K_PPE_DEOFFLOAD_QUIC=${saved_Z2K_PPE_DEOFFLOAD_QUIC}
 # 0 — выключить механизм, даже если проба нашла блок.
 Z2K_SNI_STALL=${saved_Z2K_SNI_STALL}
 # «Видео YouTube: обход по ответу сервера»: пробное соединение перед настоящим, только
-# googlevideo; на IPv6 — там, где он без NAT (lua/z2k-preflight.lua). Лечит адреса, которые режутся
+# googlevideo и загрузки Google Play (gvt1); на IPv6 — там, где он без NAT (lua/z2k-preflight.lua). Лечит адреса, которые режутся
 # по ответу сервера: соединение встаёт, а ServerHello не приходит, и плечи там не
-# помогают. Платой идёт 1-2 секунды на КАЖДОЕ новое соединение с googlevideo, в
+# помогают. Соединение с узлом Google начинается примерно на полсекунды позже; в
 # том числе там, где блока нет. Пока ключа нет — включено (умолчание версии). 0 — выключить.
 # Тумблер в панели, «Режимы»: при ручной правке нужна ещё пересборка конфига,
 # одного перезапуска мало.
 ${_gv_preflight_line}
-# «Видео YouTube: подмена адреса»: плохой адрес googlevideo переадресуется на
-# рабочий соседний того же кэша (служба z2k-detect gvsub). Адрес проверяется
-# при ответе DNS устройству, ответ придерживается до проверки. Пока ключа нет —
-# включено (умолчание версии). 0 — выключить; при ручной правке — перезапуск.
-${_gv_subst_line}
+${saved_Z2K_PROVIDER_CACHE:+Z2K_PROVIDER_CACHE=$saved_Z2K_PROVIDER_CACHE}
 # QUIC мимо обхода: Initial не пропускается, браузер сразу идёт по TCP.
 # Z2K_YT_QUIC_OFF=1 — только YouTube («YouTube без QUIC»), Z2K_QUIC_OFF=1 — весь
 # QUIC («Весь QUIC через TCP»). Пока ключа нет — выключено (умолчание версии).

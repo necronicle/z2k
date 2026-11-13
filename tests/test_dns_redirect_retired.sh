@@ -35,6 +35,9 @@ IPT
 cat > "$TMP/bin/ipset" <<'IPS'
 #!/bin/sh
 echo "$*" >> "$STATE/ipset.log"
+# Real ipset returns 1 when a previous regen already removed the set.
+[ ! -e "$STATE/set-gone" ] || exit 1
+: > "$STATE/set-gone"
 IPS
 chmod +x "$TMP/bin/iptables" "$TMP/bin/ipset"
 
@@ -47,7 +50,7 @@ for f in "$ROOT/etc/ndm/netfilter.d/89-z2k-dns-redirect.sh" "$ZD/z2k-dns-redirec
 : > "$TMP/run/z2k-dns-redirect.down"; echo "1 0" > "$TMP/run/z2k-dns-redirect.hc"
 echo 2 > "$ST/udp"; echo 1 > "$ST/tcp"
 
-run() { PATH="$TMP/bin:$PATH" STATE="$ST" ZAPRET2_DIR="$ZD" Z2K_DNS_STATE_DIR="$TMP/run" sh -c ". \"$FN\"; z2k_retire_dns_redirect"; }
+run() { PATH="$TMP/bin:$PATH" STATE="$ST" ZAPRET2_DIR="$ZD" Z2K_DNS_STATE_DIR="$TMP/run" sh -eu -c ". \"$FN\"; z2k_retire_dns_redirect"; }
 run; rc=$?
 [ "$rc" = 0 ] && ok "возвращает 0" || no "код" 0 "$rc"
 [ ! -e "$ROOT/etc/ndm/netfilter.d/89-z2k-dns-redirect.sh" ] && ok "хук NDM 89 удалён" || no "хук 89" absent present
@@ -58,9 +61,13 @@ run; rc=$?
 grep -q '^destroy z2k_lan4$' "$ST/ipset.log" && ok "ipset z2k_lan4 удалён" || no "ipset" destroy "$(cat "$ST/ipset.log")"
 [ ! -e "$TMP/run/z2k-dns-redirect.down" ] && [ ! -e "$TMP/run/z2k-dns-redirect.hc" ] && ok "отметки сторожа удалены" || no "отметки" absent present
 
-# Повторный прогон на чистом роутере ничего не ломает.
+# Повторный прогон под set -eu, как установщик: набора уже нет,
+# но уборка должна дойти до отметок сторожа и вернуть успех.
+: > "$TMP/run/z2k-dns-redirect.down"
+: > "$TMP/run/z2k-dns-redirect.hc"
 run; rc=$?
-[ "$rc" = 0 ] && ok "повторный прогон возвращает 0" || no "повтор" 0 "$rc"
+[ "$rc" = 0 ] && ok "повторный прогон под set -eu возвращает 0" || no "повтор set -eu" 0 "$rc"
+[ ! -e "$TMP/run/z2k-dns-redirect.down" ] && [ ! -e "$TMP/run/z2k-dns-redirect.hc" ] && ok "отсутствующий ipset не прерывает уборку отметок" || no "отметки после отсутствующего ipset" absent present
 
 # Без iptables и ipset (macOS, CI без прав) — тоже 0.
 mkdir -p "$TMP/empty"

@@ -1122,16 +1122,6 @@ toggle_gv_preflight() {
     restart_service_if_running
 }
 
-toggle_gv_subst() {
-    # Z2K_GV_SUBST — подмена плохих адресов googlevideo (служба z2k-detect gvsub,
-    # по умолчанию 1). Строку движка не меняет: цепочки, очередь DNS и службу
-    # ставит S99 при старте, поэтому пересборка не нужна, нужен перезапуск.
-    local want="$1"
-    case "$want" in 0|1) ;; *) return 1 ;; esac
-    set_flag "Z2K_GV_SUBST" "$want" "$CONFIG_FILE" || return 1
-    restart_service_if_running
-}
-
 toggle_auto_update() {
     # Z2K_AUTO_UPDATE_ENABLED — nightly unattended update (default 1).
     # Out-of-band: it does not touch NFQWS2_OPT and is read
@@ -2693,7 +2683,7 @@ state_read() {
     [ -f "$STATE_FILE" ] && pf="$STATE_FILE"
     [ -f "$STATE_FILE_FALLBACK" ] && ff="$STATE_FILE_FALLBACK"
     [ -z "$pf" ] && [ -z "$ff" ] && return 0
-    awk -F'\t' '!/^#/ && NF>=3 {
+    awk -F'\t' '!/^#/ && NF>=3 && $1 != "udp_misc" && $1 !~ /^circular_[0-9]+_[0-9]+$/ {
         k=$1 FS $2; t=($4=="")?0:$4+0
         if (!(k in seen) || t>=ts[k]) { ts[k]=t; seen[k]=1; row[k]=$0 }
     } END { for (k in row) print row[k] }' $pf $ff 2>/dev/null
@@ -3023,7 +3013,8 @@ pools_read() {
                 }
             }
         }
-        for (k in cnt) print k "\t" cnt[k]
+        for (k in cnt)
+            if (k != "udp_misc" && k !~ /^circular_[0-9]+_[0-9]+$/) print k "\t" cnt[k]
     }'
 }
 

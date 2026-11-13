@@ -533,6 +533,8 @@ cat > "$TMP/c_repair.sh" <<'EOF'
 . "$FNS_REPAIR"
 LOG="$TMP/ensure.log"; : > "$LOG"
 _z2k_retire_cf_extra_state() { return 0; }
+_z2k_migrate_broad_udp_removal_v1() { return 0; }
+_z2k_cleanup_retired_role() { :; }
 ensure_autocircular_files() { printf 'pass\n' >> "$LOG"; }
 t0=$(date +%s)
 repair_autocircular_files_after_daemon_start; rc=$?
@@ -634,6 +636,8 @@ traffic_debug_enable_nfqws2_log() { t traffic_debug_enable_nfqws2_log; }
 traffic_debug_tcpdump_start()     { t traffic_debug_tcpdump_start; }
 _z2k_migrate_rotator_sld()        { t migrate_rotator_sld; }
 _z2k_migrate_gv_named_state_v1()  { t migrate_gv_named_state; }
+_z2k_migrate_broad_udp_removal_v1() { return 0; }
+_z2k_cleanup_retired_role() { :; }
 ensure_autocircular_files()       { t ensure_autocircular_files; }
 standard_mode_daemons() {
     if [ -n "$Z2K_GVSUB_IPS" ] &&

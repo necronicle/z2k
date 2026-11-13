@@ -283,7 +283,7 @@ fi
 # built in, lsmod lists nothing, and the old code warned for every one of them.
 rm -rf "${TMP:?}/lib"; mkdir -p "$TMP/proc/net/netfilter"
 : > "$TMP/modprobe.calls"; : > "$TMP/insmod.calls"; : > "$TMP/lsmod.out"
-printf 'multiport\nconnbytes\nconnmark\n' > "$TMP/proc/net/ip_tables_matches"
+printf 'multiport\nconntrack\nconnbytes\nconnmark\n' > "$TMP/proc/net/ip_tables_matches"
 printf 'NFQUEUE\nCONNMARK\n'              > "$TMP/proc/net/ip_tables_targets"
 : > "$TMP/proc/net/netfilter/nfnetlink_queue"
 out=$( . "$TMP/lib2.sh"; PATH="$BIN:$PATH"; load_modules 2>&1 )
@@ -302,7 +302,7 @@ n=$(grep -c . "$TMP/modprobe.calls" 2>/dev/null); n=${n:-0}
 # there, which is precisely why it warned about modules that were present.
 rm -rf "${TMP:?}/lib"
 : > "$TMP/modprobe.calls"; : > "$TMP/insmod.calls"; : > "$TMP/lsmod.out"
-printf 'multiport\nconnbytes\nconnmark\n' > "$TMP/proc/net/ip_tables_matches"
+printf 'multiport\nconntrack\nconnbytes\nconnmark\n' > "$TMP/proc/net/ip_tables_matches"
 printf 'NFQUEUE\nCONNMARK\n'              > "$TMP/proc/net/ip_tables_targets"
 out=$( . "$TMP/lib2.sh"; PATH="$BIN:$PATH"; load_modules 2>&1 )
 case "$out" in
@@ -333,7 +333,7 @@ grep -q 'modinfo nfnetlink_queue' "$INIT" \
     || ok "the nfnetlink_queue gate no longer depends on modinfo"
 rm -rf "${TMP:?}/lib"
 : > "$TMP/lsmod.out"
-printf 'multiport\nconnbytes\nconnmark\n' > "$TMP/proc/net/ip_tables_matches"
+printf 'multiport\nconntrack\nconnbytes\nconnmark\n' > "$TMP/proc/net/ip_tables_matches"
 printf 'NFQUEUE\nCONNMARK\n'              > "$TMP/proc/net/ip_tables_targets"
 rm -f "$TMP/proc/net/netfilter/nfnetlink_queue"
 out=$( . "$TMP/lib2.sh"; PATH="$BIN:$PATH"; load_modules >/dev/null 2>&1; echo "rc=$?" )

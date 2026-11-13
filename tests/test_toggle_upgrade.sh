@@ -30,9 +30,9 @@ legacy_pairs='ENABLED:0 DISABLE_CUSTOM:0 DISABLE_IPV6:0 POLICY_EXCLUDE:0 GAME_WA
 Z2K_CATEGORY_YOUTUBE:1 Z2K_CATEGORY_RKN:1 Z2K_CATEGORY_DISCORD_VOICE:1
 Z2K_CIRCULAR_RESET:1 Z2K_DISCORD_UPDATE_TLS_TIMEOUT:1 Z2K_INJECT_TLS_MODS:0
 Z2K_PADENCAP:1 Z2K_NFQWS2_TEMPLATES:1 Z2K_DYNAMIC_TTL:1 Z2K_INSTA_DNS:1
-Z2K_REDIRECTOR_DNS:1 Z2K_SNI_STALL:1 Z2K_GV_SERVER_REPLY2:1 Z2K_GV_SUBST:1
+Z2K_REDIRECTOR_DNS:1 Z2K_SNI_STALL:1 Z2K_GV_SERVER_REPLY2:1
 Z2K_QUIC_OFF:0 Z2K_YT_QUIC_OFF:0 Z2K_PPE_DEOFFLOAD_QUIC:1 Z2K_PANEL_AUTH:0
-Z2K_AUTO_UPDATE_ENABLED:1 Z2K_AUTOHOSTLIST:0 Z2K_WARP_WDTT:0 Z2K_UDP_MISC:1 Z2K_REFACTOR_PHASE3:0'
+Z2K_AUTO_UPDATE_ENABLED:1 Z2K_AUTOHOSTLIST:0 Z2K_WARP_WDTT:0 Z2K_REFACTOR_PHASE3:0'
 for pair in $legacy_pairs; do
     key=${pair%:*}; want=${pair#*:}
     check "missing key freezes old default $key" "$want" "$(safe_config_read "$key" "$ZAPRET2_DIR/config" missing)"
@@ -45,8 +45,10 @@ for want in 0 1; do
             printf '%s=%s\n' "$key" "$want"
         done > "$ZAPRET2_DIR/config"
     fi
+    printf 'Z2K_UDP_MISC=%s\n' "$want" >> "$ZAPRET2_DIR/config"
     regen
-    for key in $(printf '%s\n' "$registry" | awk '{print $1}') Z2K_GV_SERVER_REPLY2 Z2K_DYNAMIC_TTL Z2K_UDP_MISC Z2K_REFACTOR_PHASE3; do
+    ! grep -q 'key=udp_misc\|--filter-udp=590-600' "$ZAPRET2_DIR/config"
+    for key in $(printf '%s\n' "$registry" | awk '{print $1}') Z2K_GV_SERVER_REPLY2 Z2K_DYNAMIC_TTL Z2K_REFACTOR_PHASE3; do
         check "explicit $key=$want" "$want" "$(safe_config_read "$key" "$ZAPRET2_DIR/config" missing)"
     done
     cp "$ZAPRET2_DIR/config" "$TMP/before"
@@ -93,7 +95,6 @@ printf 'old=$(safe_config_read "Z2K_DYNAMIC_TTL" "$cfg" "0")\n' > "$ZAPRET2_DIR/
 printf '# old config\n' > "$ZAPRET2_DIR/config"
 regen
 check 'old source default wins over current default' 0 "$(safe_config_read Z2K_DYNAMIC_TTL "$ZAPRET2_DIR/config" missing)"
-check 'feature absent from old source stays off' 0 "$(safe_config_read Z2K_GV_SUBST "$ZAPRET2_DIR/config" missing)"
 router old-external-source
 mkdir -p "$ZAPRET2_DIR/lib"
 printf '# old generator without auto-update preservation\n' > "$ZAPRET2_DIR/lib/config_official.sh"

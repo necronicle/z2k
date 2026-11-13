@@ -216,9 +216,14 @@ function renderDiscordVoicePanel(entries) {
 let stateCache = null;
 let stateBulkBusy = false;
 
+// Positional rotators and the broad UDP pool are internal, including cached rows.
+function hiddenStrategyPool(key) {
+  return key === "udp_misc" || /^circular_[0-9]+_[0-9]+$/.test(String(key || ""));
+}
+
 function visibleStateEntries(entries = stateCache || []) {
   const query = (document.getElementById("state-search")?.value || "").trim().toLowerCase();
-  return entries.filter(e => e.host !== "nohost" &&
+  return entries.filter(e => !hiddenStrategyPool(e.key) && e.host !== "nohost" &&
     String(e.host || "").replace(/\|[46]$/, "").toLowerCase().includes(query));
 }
 
@@ -340,8 +345,9 @@ async function loadState(useCache) {
       // удалённая строка «воскресала» сразу после тоста «Удалено», а
       // последующие пересортировки шли уже по мусорному кэшу.
       if (_stale("state", seq)) return;
-      setStatePools(poolsResp && poolsResp.pools);
-      entries = d.entries || [];
+      setStatePools(Object.fromEntries(Object.entries((poolsResp && poolsResp.pools) || {})
+        .filter(([key]) => !hiddenStrategyPool(key))));
+      entries = (d.entries || []).filter(e => !hiddenStrategyPool(e.key));
       // Гонку закрывает метка _stale несколькими строками выше: ответ,
       // обогнанный более свежим, до этого места не доходит. Линтер видит
       // «запись после await», но гейта не видит.
@@ -381,7 +387,7 @@ async function loadState(useCache) {
       if (tail === "6") return { name: raw.slice(0, cut), fam: "IPv6" };
       return { name: raw, fam: "" };
     };
-    const all = entries.filter(e => e.host !== "nohost");
+    const all = entries.filter(e => !hiddenStrategyPool(e.key) && e.host !== "nohost");
     updateVisibleFreezeButton();
 
     const counter = document.getElementById("state-search-count");

@@ -156,7 +156,7 @@ for _key in rkn_tcp yt_tcp gv_tcp; do
         continue
     fi
     _gated=$(printf '%s' "$_prof" | tr ' ' '\n' | awk '
-        /^--payload=/       { if (!seen_circular) gated = 1 }
+        /^--payload=/       { if (!seen_circular && $0 != "--payload=all") gated = 1 }
         /^--lua-desync=circular:/ { seen_circular = 1 }
         END { print gated + 0 }')
     if [ "$_gated" = "0" ]; then

@@ -182,6 +182,20 @@ gen() { # $1 - тег, $2 - строка конфига, $3 - наличие lua
     rm -rf "$root"
 }
 
+# Task 129: release mapping and actual regeneration of an installed old step.
+# shellcheck disable=SC1091
+. "$ROOT/lib/release_map.sh"
+STEPS=$(z2k_steps_for lib/config_official.sh)
+has "regen-config" "$STEPS" && ok "generator update schedules regen-config" \
+    || bad "generator update omitted regen-config"
+REGEN=$(gen task129 'Z2K_GV_SERVER_REPLY2=1
+NFQWS2_OPT="--filter-tcp=443 --lua-desync=z2k_preflight:pos=none:pieces=6:open=2:openwin=32:keepts:sni=www.google.com:timeout=4:v6"' 1 1) \
+    || bad "old step regeneration failed"
+has "z2k_preflight:pos=none:pieces=1:keepts:sni=www.google.com:timeout=4:v6" "$REGEN" \
+    && ok "regeneration installs one-piece step" || bad "new step absent after regeneration"
+has "pieces=6:open=2:openwin=32" "$REGEN" \
+    && bad "regeneration retained old step" || ok "regeneration removed old step"
+
 OPT_ON=$(gen on "Z2K_GV_SERVER_REPLY2=1" 1)
 GV_LINE=$(printf '%s\n' "$OPT_ON" \
     | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk" | grep -F 'key=gv_tcp' | head -1)
@@ -194,7 +208,7 @@ QUIC_LINE=$(printf '%s\n' "$OPT_ON" | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk
 
 if [ -n "$GV_LINE" ]; then
     has "--lua-desync=z2k_preflight:pos=none:" "$GV_LINE" \
-        && ok "проба googlevideo отправляет целый ClientHello (#1374)" \
+        && ok "проба googlevideo отправляет целый ClientHello" \
         || bad "проба googlevideo режет ClientHello: $GV_LINE"
     has "--lua-desync=z2k_preflight:" "$GV_LINE" \
         && ok "шаг попал в профиль googlevideo" \
@@ -243,8 +257,8 @@ else
     bad "нет профиля googlevideo по адресам из ответов DNS"
 fi
 has "--ipset=/tmp/z2k-gv-ips.txt" "$(gen nosub "Z2K_GV_SUBST=0" 1)" \
-    && bad "служба подмены выключена, а профиль по адресам остался" \
-    || ok "Z2K_GV_SUBST=0 — профиля по адресам нет (файл некому наполнять)"
+    && ok "старый ключ не отключает профиль preflight" \
+    || bad "старый ключ отключил нужный профиль"
 has "--ipset=/tmp/z2k-gv-ips.txt" "$(gen nostep "Z2K_GV_SERVER_REPLY2=0" 1)" \
     && bad "шаг выключен, а профиль по адресам остался" \
     || ok "без шага профиля по адресам нет"

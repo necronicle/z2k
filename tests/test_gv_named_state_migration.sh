@@ -42,12 +42,18 @@ cmp "$TMP/original" "$STATE"
 awk '/^start_daemons\(\)/,/^}/' "$ROOT/files/S99zapret2.new" > "$TMP/start.sh"
 . "$TMP/start.sh"
 z2k_daemon_fail_reset() { :; }
+stop_all_nfqws() { :; }
+_z2k_migrate_broad_udp_removal_v1() { :; }
+_z2k_cleanup_retired_role() { :; }
 ensure_autocircular_files() { :; }
 _z2k_migrate_rotator_sld() { :; }
 standard_mode_daemons() { touch "$TMP/started"; }
 custom_runner() { touch "$TMP/started"; }
+eval "$(awk '/^_z2k_migrate_gv_named_state_v1\(\)/,/^}/' "$ROOT/files/S99zapret2.new" | sed 's/^_z2k_migrate_gv_named_state_v1()/_z2k_migrate_gv_named_state_v1_actual()/')"
+_z2k_migrate_gv_named_state_v1() { touch "$TMP/gate-reached"; _z2k_migrate_gv_named_state_v1_actual; }
 if start_daemons; then echo '[FAIL] startup accepted migration failure'; exit 1; fi
 [ ! -e "$TMP/started" ]
+[ -f "$TMP/gate-reached" ]
 rm "$STATE.lock"
 # A held fallback lock allows partial progress, never a completion marker.
 cp "$TMP/original" "$Z2K_STATE_FALLBACK"

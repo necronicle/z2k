@@ -264,7 +264,6 @@ case "$method $path" in
         category_rkn=$(read_flag "Z2K_CATEGORY_RKN" "$CONFIG_FILE" "1")
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
         gv_preflight=$(read_flag "Z2K_GV_SERVER_REPLY2" "$CONFIG_FILE" "1")
-        gv_subst=$(read_flag "Z2K_GV_SUBST" "$CONFIG_FILE" "1")
         yt_quic_off=$(read_flag "Z2K_YT_QUIC_OFF" "$CONFIG_FILE" "0")
         quic_off=$(read_flag "Z2K_QUIC_OFF" "$CONFIG_FILE" "0")
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
@@ -291,7 +290,6 @@ case "$method $path" in
         printf ',"category_rkn":'; json_string "$category_rkn"
         printf ',"category_discord_voice":'; json_string "$category_discord_voice"
         printf ',"gv_preflight":'; json_string "${gv_preflight:-1}"
-        printf ',"gv_subst":'; json_string "${gv_subst:-1}"
         printf ',"yt_quic_off":'; json_string "${yt_quic_off:-0}"
         printf ',"quic_off":'; json_string "${quic_off:-0}"
         printf ',"customd":';                json_string "${customd:-0}"
@@ -338,7 +336,6 @@ case "$method $path" in
     "POST /toggle/category-rkn"|\
     "POST /toggle/category-discord-voice"|\
     "POST /toggle/gv-preflight"|\
-    "POST /toggle/gv-subst"|\
     "POST /toggle/yt-quic-off"|\
     "POST /toggle/quic-off"|\
     "POST /toggle/autohostlist")
@@ -354,7 +351,6 @@ case "$method $path" in
             /toggle/category-rkn) _toggle_fn=toggle_category_rkn; _label="RKN" ;;
             /toggle/category-discord-voice) _toggle_fn=toggle_category_discord_voice; _label="Discord Voice / STUN" ;;
             /toggle/gv-preflight)    _toggle_fn=toggle_gv_preflight;    _label="Видео YouTube: обход по ответу сервера" ;;
-            /toggle/gv-subst)        _toggle_fn=toggle_gv_subst;        _label="Видео YouTube: подмена адреса" ;;
             /toggle/yt-quic-off)     _toggle_fn=toggle_yt_quic_off;     _label="YouTube без QUIC" ;;
             /toggle/quic-off)        _toggle_fn=toggle_quic_off;        _label="Весь QUIC через TCP" ;;
             /toggle/game-warp)       _toggle_fn=toggle_game_warp;       _label="WARP-туннель" ;;

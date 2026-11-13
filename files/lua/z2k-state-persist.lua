@@ -116,7 +116,7 @@ local function merge_state_file_into(path, dest)
         local n = tonumber(strat)
         if n and n >= 1 then
           local hn = normalize_hostkey_for_state(host)
-          if hn then
+          if hn and askey then
             if not dest[askey] then dest[askey] = {} end
             local tsn = tonumber(ts) or 0
             local m = (mode ~= nil and mode ~= "") and mode or "auto"

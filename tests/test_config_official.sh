@@ -718,9 +718,12 @@ assert_eq "ручной Strategy.txt: retrans не задвоен" "1" "$_dups"
 # NFQWS2_TCP_PKT_IN — окно входящих в пакетах — 10: детектору успеха нужно
 # inseq=4096 + пакет, десять — двойной запас; прежние 50 кормили сторож обрыва.
 _root_pkt="${MOCK_DIR}/pkt-in"; rm -rf "$_root_pkt"; mkdir -p "$_root_pkt/lists"
-printf 'ENABLED=1\nZ2K_DISCOVER=1\n' > "$_root_pkt/config"
+printf 'ENABLED=1\nZ2K_DISCOVER=1\nZ2K_LAN_IFACES=br0\nNFQWS2_OPT="--lua-desync=z2k_client_guard"\n' > "$_root_pkt/config"
 printf 'www.google.com\n' > "$_root_pkt/lists/discovered-domains.txt"
 ( ZAPRET2_DIR="$_root_pkt" create_official_config "$_root_pkt/config" >/dev/null 2>&1 )
+assert_not_contains "regen удаляет снятый guard" "z2k_client_guard" "$(cat "$_root_pkt/config")"
+assert_not_contains "regen удаляет снятый LAN override" "Z2K_LAN_IFACES" "$(cat "$_root_pkt/config")"
+assert_not_contains "regen не загружает снятый lua" "z2k-client-role.lua" "$(cat "$_root_pkt/config")"
 assert_not_contains "снятая автодетекция не сохраняется в конфиге" "Z2K_DISCOVER=" "$(cat "$_root_pkt/config")"
 assert_not_contains "discovered не подключается ни к одному профилю" "discovered-domains.txt" "$(cat "$_root_pkt/config")"
 assert_eq "регенерация удаляет старую публикацию" "no" "$([ -e "$_root_pkt/lists/discovered-domains.txt" ] && echo yes || echo no)"
@@ -864,39 +867,11 @@ assert_not_contains "yt: плечо с ip_id=zero без динамическо�
 if printf '%s' "$_ref_zero" | grep -Eq ':repeats=[0-9]+-[0-9]+'; then _zr=диапазон; else _zr=точно; fi
 assert_eq "yt: плечо с ip_id=zero без диапазона повторов" "точно" "$_zr"
 
-printf "\n--- UDP: профиль WireGuard/неизвестного UDP ---\n"
-
-# Включённый UDP-профиль референсного набора (30.10.2026), один в один:
-# WireGuard, STUN, Discord, MTProto, неизвестный UDP; нулевой фейк x6 и фейк
-# QUIC x6 с ротацией.
-OUT_UDP=$(run_generator "udp-extra" "" "")
-_flat_udp=$(printf '%s\n' "$OUT_UDP" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk")
-_udp_misc=$(printf '%s\n' "$_flat_udp" | grep -F -- '--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535' | head -1)
-assert_contains "udp: фильтр протоколов" "--filter-l7=wireguard,stun,discord,mtproto,unknown" "$_udp_misc"
-assert_contains "udp: circular видит оба направления и любой ответ" "--in-range=a --out-range=a --payload=all --lua-desync=circular:" "$_udp_misc"
-assert_contains "udp: прежние окна fake после circular" ":udp_in=0:udp_out=4 --in-range=x --out-range=<n2 --payload=" "$_udp_misc"
-assert_contains "udp: пейлоады" "--payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown" "$_udp_misc"
-assert_contains "udp: ротация" "--lua-desync=circular:fails=2:time=300:retrans=3:nld=2:udp_in=0:udp_out=4" "$_udp_misc"
-assert_contains "udp: плечо 1" "--lua-desync=fake:blob=0x00000000:repeats=6:strategy=1" "$_udp_misc"
-assert_contains "udp: плечо 2" "--lua-desync=fake:blob=quic_google:repeats=6:strategy=2" "$_udp_misc"
-assert_not_contains "udp: без нашего TTL" "fool=" "$_udp_misc"
-# Полная проверка 1:1 хвоста: обвязка окон новая, оба плеча без добавок.
-_udp_arms=${_udp_misc#*--lua-desync=fake:}
-assert_eq "udp: оба плеча 1:1 с референсом" "blob=0x00000000:repeats=6:strategy=1 --lua-desync=fake:blob=quic_google:repeats=6:strategy=2" "$_udp_arms"
-# голос Discord стоит раньше: его пакеты не уходят в широкий профиль
-_pos_voice=$(printf '%s\n' "$_flat_udp" | grep -nF 'key=discord_udp' | head -1 | cut -d: -f1)
-_pos_misc=$(printf '%s\n' "$_flat_udp" | grep -nF -- '--filter-udp=590-600' | head -1 | cut -d: -f1)
-if [ -n "$_pos_voice" ] && [ -n "$_pos_misc" ] && [ "$_pos_voice" -lt "$_pos_misc" ]; then _ord=да; else _ord=нет; fi
-assert_eq "udp: голос Discord раньше широкого профиля" "да" "$_ord"
-# Голос выключен: профиль остаётся, но без STUN и Discord.
-OUT_UDP_NOVOICE=$(run_generator "udp-novoice" "Z2K_CATEGORY_DISCORD_VOICE=0" "")
-_nv=$(printf '%s\n' "$OUT_UDP_NOVOICE" | awk -f "$SCRIPT_DIR/tests/lib/nfqws2_flatten.awk" | grep -F -- '--filter-udp=590-600' | head -1)
-assert_contains "голос off: профиль UDP на месте" "--filter-l7=wireguard,mtproto,unknown" "$_nv"
-assert_not_contains "голос off: без STUN и Discord" "stun" "$_nv"
-assert_not_contains "голос off: без голосовых портов" "3478-3481" "$_nv"
-
-OUT_UDP_OFF=$(run_generator "udp-extra-off" "Z2K_UDP_MISC=0" "")
-assert_not_contains "тумблер Z2K_UDP_MISC=0 снимает профиль" "49152-65535" "$OUT_UDP_OFF"
+for old_toggle in 0 1 ignored; do
+    OUT_UDP=$(run_generator "udp-retired-$old_toggle" "Z2K_UDP_MISC=$old_toggle" "")
+    assert_not_contains "retired broad UDP ($old_toggle)" "key=udp_misc" "$OUT_UDP"
+    assert_not_contains "retired broad ports ($old_toggle)" "49152-65535" "$OUT_UDP"
+done
 
 rm -rf "$MOCK_DIR"
 

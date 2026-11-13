@@ -329,6 +329,8 @@ end
 
 function z2k_fail_tls_alert(desync, crec)
     if not crec or not desync.dis or not desync.dis.tcp then return false end
+    if desync.arg.key == "gv_tcp" and type(z2k_gvsub_neutral) == "function"
+        and z2k_gvsub_neutral(desync, crec) then return false, "neutral" end
     local p, flags = desync.dis.payload or "", desync.dis.tcp.th_flags
     if desync.outgoing then
         first_request(desync, crec)

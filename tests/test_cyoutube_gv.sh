@@ -17,7 +17,7 @@ printf 'youtube.com\ngooglevideo.com\n' > "$EXTRA/UDP/YT/List.txt"
 # shellcheck disable=SC1091
 . "$ROOT/lib/config_official.sh"
 Z2K_GVSUB_IPS="$TMP/ips"; export Z2K_GVSUB_IPS
-printf 'ENABLED=1\nZ2K_GV_SERVER_REPLY2=1\nZ2K_GV_SUBST=1\nZ2K_REFACTOR_PHASE3=0\n' > "$ZAPRET2_DIR/config"
+printf 'ENABLED=1\nZ2K_GV_SERVER_REPLY2=1\nZ2K_REFACTOR_PHASE3=0\n' > "$ZAPRET2_DIR/config"
 create_official_config "$ZAPRET2_DIR/config" > "$TMP/generate.log" 2>&1
 # Inspect actual generated profiles and apply domain suffix rules in order.
 cat > "$TMP/check_profiles.py" <<'PY'
@@ -87,6 +87,6 @@ Z2K_GVSUB_QUEUE=210
 capture() { printf '%s\n' "$*"; }
 for op in -C -I -D; do
     got=$(z2k_gvsub_dns_rule capture "$op" cache)
-    case "$got" in *'! -o lo -p udp --sport 53 -m string --algo bm --hex-string |016307796f757475626503636f6d00| -j NFQUEUE --queue-num 210 --queue-bypass') :;; *) echo "FAIL: $got"; exit 1;; esac
+    case "$got" in *'! -o lo -p udp --sport 53 -m string --algo bm --icase --hex-string |016307796f757475626503636f6d00| -j NFQUEUE --queue-num 210 --queue-bypass') :;; *) echo "FAIL: $got"; exit 1;; esac
 done
 echo 'PASS: init DNS cache rule check/insert/delete'

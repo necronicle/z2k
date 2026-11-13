@@ -1499,7 +1499,7 @@ step_build_zapret2() {
     fi
 
     # Сохранить пользовательские данные перед удалением
-    local backup_tmp="$Z2K_UPGRADE_BACKUP"
+    local backup_tmp="$Z2K_UPGRADE_BACKUP" _role_file
     rm -rf "$backup_tmp"
     if [ -d "$ZAPRET2_DIR" ]; then
         print_info "Сохранение пользовательских настроек..."
@@ -1657,7 +1657,11 @@ step_build_zapret2() {
         # уезжали на чужие плечи. Так прошли r-87.22 и p-87.23 (08.11.2026).
         if [ -d "$ZAPRET2_DIR/state" ]; then
             mkdir -p "$backup_tmp/state-done" 2>/dev/null
-            cp -f "$ZAPRET2_DIR/state/"*.done "$backup_tmp/state-done/" 2>/dev/null || true
+            for _done_file in "$ZAPRET2_DIR/state/"*.done; do
+                [ -f "$_done_file" ] || continue
+                case "${_done_file##*/}" in client-role-*) continue ;; esac
+                cp -f "$_done_file" "$backup_tmp/state-done/" || return 1
+            done
         fi
         # Порядок здесь несущий: дешёвое и незаменимое — раньше объёмного и
         # восстановимого. Ниже лежит перенос geosite-целей: около 2,5 МБ по
@@ -2772,6 +2776,7 @@ TMPJUNK
             chown nobody "$ZAPRET2_DIR/extra_strats/cache/autocircular/state.tsv" 2>/dev/null || true
             print_success "Стратегии autocircular восстановлены"
         fi
+        # Retired intermediate-build artifacts are not restored.
         # Отметки миграций — при любом исходе выше: и с перенесённым state.tsv
         # (он уже в текущей нумерации), и со сброшенным (пустому нечего
         # переносить). Без них init прогнал бы миграции по готовому файлу.
@@ -3663,10 +3668,9 @@ is_nfqws2_running() {
 }
 is_nfqws2_running || exit 0
 
-# Подмена адресов googlevideo (служба z2k-detect gvsub): Keenetic пересобирает
-# таблицу целиком, и цепочка подмен пропадает вместе с ней. Сигнал службе —
-# сразу, а не после HOOK_SETTLE и start_fw: каркас и подмены она ставит сама
-# (сбор 10.11.2026: без этого подмены не действовали ~6 с раз в 30 минут).
+# DNS-наблюдение YouTube/Play (служба z2k-detect gvsub): Keenetic пересобирает
+# таблицы целиком. Сигнал службе восстанавливает DNS-очередь сразу,
+# до HOOK_SETTLE и start_fw; повторная установка правил идемпотентна.
 GVSUB_PID="${GVSUB_PID:-/var/run/z2k-gvsub.pid}"
 [ -f "$GVSUB_PID" ] && kill -HUP "$(cat "$GVSUB_PID" 2>/dev/null)" 2>/dev/null
 
@@ -5465,7 +5469,7 @@ _z2k_foreign_engine() {
 # она не может быть чужой. Вызывать, пока конфиг на месте: в нём номер очереди.
 _z2k_sweep_our_rules() {
     local _q _tool _t _ch _r _pat _p
-    # Служба подмены адресов googlevideo (z2k-detect gvsub) — до правил: она
+    # Служба DNS-наблюдения YouTube/Play (z2k-detect gvsub) — до правил: она
     # держит очередь ответов DNS (210) и при живом процессе вернула бы каркас.
     _p=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
     [ -n "$_p" ] && kill "$_p" 2>/dev/null

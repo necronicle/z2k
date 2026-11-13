@@ -832,5 +832,29 @@ do
   check("T39: SEED-RECOVERY при server_active_reject заполняет strategy в state", 3, P._state()["rkn_tcp"]["srvrej.com"].strategy)
 end
 
+-- Intermediate builds wrote origin after an optional empty SNI. Preserve rows
+-- and operator fields, but write only the six supported columns on next flush.
+do
+  fresh()
+  write_file("rkn_tcp\tlegacy-a.example\t2\t100\tfrozen\t\tclient-policy-v2\n" ..
+             "quic\tlegacy-b.example|6\t3\t101\tauto\tproof.example\tlan-origin-v1\n")
+  circular(nil, mk("rkn_tcp", "new.example"))
+  check("T128: seven-column empty SNI row retained", 2, row("rkn_tcp", "legacy-a.example"))
+  check("T128: seven-column named SNI row retained", 3, row("quic", "legacy-b.example|6"))
+  local f = assert(io.open(STATE_FILE, "r"))
+  for line in f:lines() do
+    if line:sub(1, 1) ~= "#" then
+      local _, tabs = line:gsub("\t", "")
+      check("T128: writer has six columns", 5, tabs)
+      if line:match("^rkn_tcp\tlegacy%-a") then
+        check("T128: frozen mode retained", true, line:find("\tfrozen\t", 1, true) ~= nil)
+      elseif line:match("^quic\tlegacy%-b") then
+        check("T128: SNI retained", true, line:find("proof.example", 1, true) ~= nil)
+      end
+    end
+  end
+  f:close()
+end
+
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
 os.exit(FAIL == 0 and 0 or 1)

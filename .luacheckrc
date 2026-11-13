@@ -16,13 +16,13 @@ globals = {
     -- Проверка DPI отдельным соединением (files/lua/z2k-preflight.lua).
     -- Десинк-функцию движок ищет по имени в _G, а таблица состояний глобальна,
     -- потому что переживает повторную загрузку файла и бьётся юнит-тестом.
-    "z2k_preflight", "z2k_pf_flows",
+    "z2k_preflight", "z2k_pf_flows", "z2k_preflight_syn_timer",
     -- Поправки к штатному детектору неудач (files/lua/z2k-alert.lua) и
     -- детектор молчания QUIC (files/lua/z2k-quic-silence.lua). Движок ищет и
     -- детектор, и таймер-функцию по имени в _G.
     "z2k_fail_tls_alert",
     "z2k_discord_tls_timer",
-    "z2k_fail_quic_silence", "z2k_quic_silence_timer",
+    "z2k_gvsub_neutral", "z2k_fail_quic_silence", "z2k_quic_silence_timer",
     -- HTTP-bypass primitives (z2k-http-strats.lua, ALFiX port)
     "z2k_timing_morph",
     "z2k_quic_morph_v2",

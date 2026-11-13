@@ -45,10 +45,9 @@ is_nfqws2_running() {
 }
 is_nfqws2_running || exit 0
 
-# Подмена адресов googlevideo (служба z2k-detect gvsub): Keenetic пересобирает
-# таблицу целиком, и цепочка подмен пропадает вместе с ней. Сигнал службе —
-# сразу, а не после HOOK_SETTLE и start_fw: каркас и подмены она ставит сама
-# (сбор 10.11.2026: без этого подмены не действовали ~6 с раз в 30 минут).
+# DNS-наблюдение YouTube/Play (служба z2k-detect gvsub): Keenetic пересобирает
+# таблицы целиком. Сигнал службе восстанавливает DNS-очередь сразу,
+# до HOOK_SETTLE и start_fw; повторная установка правил идемпотентна.
 GVSUB_PID="${GVSUB_PID:-/var/run/z2k-gvsub.pid}"
 [ -f "$GVSUB_PID" ] && kill -HUP "$(cat "$GVSUB_PID" 2>/dev/null)" 2>/dev/null
 

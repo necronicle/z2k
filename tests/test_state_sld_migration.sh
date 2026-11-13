@@ -29,14 +29,20 @@ if _z2k_migrate_rotator_sld; then echo '[FAIL] ignored state lock'; exit 1; fi
 [ ! -e "$ZAPRET_BASE/state/domain-sld-v1.done" ]
 cmp "$TMP/once" "$STATE"
 # Exercise the real startup order: preparation must not erase the panel lock,
-# and a failed migration must not launch either standard or custom daemons.
+# A failed SLD migration must not launch either daemon.
 awk '/^ensure_autocircular_files\(\)/,/^}/; /^start_daemons\(\)/,/^}/' "$ROOT/files/S99zapret2.new" > "$TMP/start.sh"
 . "$TMP/start.sh"
 z2k_daemon_fail_reset() { :; }
+stop_all_nfqws() { :; }
+_z2k_migrate_broad_udp_removal_v1() { :; }
+_z2k_cleanup_retired_role() { :; }
 standard_mode_daemons() { touch "$TMP/started"; }
 custom_runner() { touch "$TMP/started"; }
+eval "$(awk '/^_z2k_migrate_rotator_sld\(\)/,/^}/' "$ROOT/files/S99zapret2.new" | sed 's/^_z2k_migrate_rotator_sld()/_z2k_migrate_rotator_sld_actual()/')"
+_z2k_migrate_rotator_sld() { touch "$TMP/gate-reached"; _z2k_migrate_rotator_sld_actual; }
 if start_daemons; then echo '[FAIL] startup accepted failed migration'; exit 1; fi
 [ ! -e "$TMP/started" ]
+[ -f "$TMP/gate-reached" ]
 [ -f "$STATE.lock" ]
 cmp "$TMP/once" "$STATE"
 # A stale timestamp can be recovered; a running old daemon cannot be migrated.

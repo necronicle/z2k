@@ -19,6 +19,3 @@ func OpenQueue(num uint16) (*Queue, error) {
 func (q *Queue) Read(buf []byte) ([]Packet, error) { return nil, errors.New("нет очереди") }
 func (q *Queue) Accept(id uint32) error            { return nil }
 func (q *Queue) Close() error                      { return nil }
-
-// DeleteFlow вне Linux не нужен.
-func DeleteFlow(f Flow) error { return errors.New("conntrack есть только в Linux") }

@@ -9,6 +9,32 @@ local WAIT_MS, MAX_MS = 5000, 15000
 local POOLS = { quic = true, yt_quic = true, gv_quic = true }
 local serial = 0
 
+-- gvsub publishes only Bad and installed local QUIC rejects. Read at decision
+-- boundaries: retaining an allow cache would miss a reject installed mid-flow.
+function z2k_gvsub_neutral(desync, crec)
+    local dis = desync.dis or {}
+    local ip = (dis.udp or dis.tcp) and (dis.ip6 or dis.ip)
+    local addr = ip and (desync.outgoing and (ip.ip6_dst or ip.ip_dst)
+        or (ip.ip6_src or ip.ip_src))
+    crec.gvsub_remote = crec.gvsub_remote or addr
+    local f = io.open("/tmp/z2k-gvsub.json.neutral", "r")
+    if not f then return false end
+    local keys = {}
+    for _, a in pairs({ current=addr, original=crec.gvsub_remote }) do
+        keys[(a:gsub(".", function(b) return string.format("%02x", b:byte()) end))] = true
+    end
+    local neutral = false
+    for line in f:lines() do
+        local kind, key = line:match("^(%a+) (%x+)$")
+        if keys[key] and (kind == "bad" or kind == "reject" and dis.udp) then
+            neutral = true
+            break
+        end
+    end
+    f:close()
+    return neutral
+end
+
 local function now_ms()
     return (type(clock_getfloattime) == "function" and clock_getfloattime() or os.time()) * 1000
 end
@@ -82,11 +108,26 @@ end
 
 function z2k_quic_silence_timer(_name, data)
     if not data or not data.crec or not data.hrec then return end
+    local c = data.crec
+    if c.nocheck then return end
+    if z2k_gvsub_neutral({dis={udp={}}, outgoing=true}, c) then
+        if c.quic_observation then cancel(c.quic_observation) end
+        c.neutral, c.nocheck = true, true
+        return
+    end
     -- Core validates the generation, terminal result and explicit final pin.
     circular_report_failure(data.hrec, data.crec, data.arg or {})
 end
 
 function z2k_fail_quic_silence(desync, crec)
+    if POOLS[desync.arg.key] and z2k_gvsub_neutral(desync, crec) then
+        if crec.quic_observation then cancel(crec.quic_observation) end
+        return false, "neutral"
+    end
+    -- RELATED ICMP is not a UDP reply, even when conntrack counts it inbound.
+    if POOLS[desync.arg.key] and desync.dis and not desync.dis.udp then
+        return false, "pending"
+    end
     if not desync.dis or not desync.dis.udp or not POOLS[desync.arg.key]
         or type(circular_report_failure) ~= "function" then
         return standard_failure_detector(desync, crec)

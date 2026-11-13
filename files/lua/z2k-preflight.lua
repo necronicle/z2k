@@ -13,12 +13,13 @@
 --                   [движок] <--SYN,ACK--        сервер    клиент его не видит
 --                   [движок] --ACK, ClientHello-->         сервер
 --                   [движок] <--первые байты ответа--      сервер
---                   [движок] --RST, исходный SYN-->        сервер
+--                   [движок] --RST-->                     сервер
+--                   [таймер через 60 мс] --исходный SYN--> сервер
 -- Клиент  <--SYN,ACK-------- [движок] <--SYN,ACK-- сервер  дальше без вмешательства
 --
--- Окно 1:1 нужно, чтобы ответ сервера приходил маленькими кусками: ждать
--- приходится только начало ответа, а не весь ServerHello с сертификатом.
--- Клиент пробного соединения не видит, он просто получает SYN,ACK на 1-2 секунды позже.
+-- Окно 1:1: первый сегмент ответа — 2 байта. Ждём 1 кусок ответа,
+-- затем RST и передача клиенту с отложенными повторами SYN до SYN,ACK.
+-- Клиент пробного соединения не видит: SYN,ACK приходит примерно на полсекунды позже.
 --
 -- ТОЛЬКО TCP: пробное соединение ставит движок, а повторный исходный SYN
 -- выходит с меткой движка. На IPv4 он получает NAT отдельным правилом
@@ -39,7 +40,7 @@
 -- Состояние лежит в общей таблице, а не в track.lua_state: повторный SYN
 -- сбрасывает запись conntrack движка вместе с lua_state.
 --
--- arg: pieces - сколько кусков ответа сервера дождаться (по умолчанию 2)
+-- arg: pieces - сколько кусков ответа сервера дождаться (по умолчанию 1)
 -- arg: open - после скольких кусков расширить окно, чтобы ответ пришёл быстрее
 -- arg: openwin - окно после расширения (по умолчанию 65535)
 -- arg: wsize, scale - окно пробного соединения (по умолчанию 1 и 1)
@@ -52,6 +53,16 @@
 
 z2k_pf_flows = z2k_pf_flows or {}
 local flows = z2k_pf_flows
+
+-- Замер на WAN роутера 13.11.2026: SYN после RST через 60 мс с повторами
+-- устраняет ожидание повтора от устройства. Бюджет общий для всей передачи.
+local RESYN_DELAY_MS = 60
+local RESYN_MAX_SENDS = 6
+
+local function cancel_syn_timer(st)
+	if st.timer and type(timer_del) == "function" then timer_del(st.timer) end
+	st.timer = nil
+end
 
 local function ip_text(raw)
 	if #raw == 16 then
@@ -73,7 +84,10 @@ end
 
 local function sweep(now)
 	for k, st in pairs(flows) do
-		if now - st.t > 60 then flows[k] = nil end
+		if now - st.t > 60 then
+			cancel_syn_timer(st)
+			flows[k] = nil
+		end
 	end
 end
 
@@ -194,11 +208,31 @@ local function retry_probe(st, syn_ack)
 	send_probe_hello(st)
 end
 
+local function schedule_syn(st)
+	cancel_syn_timer(st)
+	if type(timer_set) ~= "function" then
+		-- Совместимость со старым движком: прежняя немедленная передача.
+		send(st, st.orig)
+		return
+	end
+	if (st.syn_sends or 0) >= RESYN_MAX_SENDS then return end
+	st.timer = "z2k_pf_syn_"..st.key:gsub(".", function(b) return string.format("%02x", b:byte()) end)
+	-- Один периодический таймер: callback не пересоздаёт его во время срабатывания.
+	timer_set(st.timer, "z2k_preflight_syn_timer", RESYN_DELAY_MS, false, st)
+end
+
+function z2k_preflight_syn_timer(name, st)
+	if not st or st.timer ~= name or flows[st.key] ~= st or st.stage ~= "resyn" then return end
+	send(st, st.orig)
+	st.syn_sends = (st.syn_sends or 0) + 1
+	if st.syn_sends >= RESYN_MAX_SENDS then cancel_syn_timer(st) end
+end
+
 local function teardown(st)
 	send(st, make_packet(st, TH_RST, st.cli_next, 0))
-	send(st, st.orig)
 	st.stage = "resyn"
-	log(st, "reset after "..st.pieces.." pieces, "..st.bytes.." bytes, original SYN sent")
+	schedule_syn(st)
+	log(st, "reset after "..st.pieces.." pieces, "..st.bytes.." bytes, original SYN scheduled")
 end
 
 local function step(ctx, desync)
@@ -217,6 +251,7 @@ local function step(ctx, desync)
 			-- соединение клиента. Не начинаем пробу и не применяем её timeout.
 			if st and st.stage == "done" and st.isn == tcp.th_seq then return VERDICT_PASS end
 			if not st or st.isn ~= tcp.th_seq then
+				if st then cancel_syn_timer(st) end
 				sweep(now)
 				local hello = blob(desync, desync.arg.blob or "fake_default_tls")
 				if desync.arg.sni then
@@ -225,11 +260,11 @@ local function step(ctx, desync)
 					hello = tls_mod(hello, "rnd")
 				end
 				st = {
-					stage = "probe_syn", t = now, isn = tcp.th_seq, orig = deepcopy(dis),
+					key = key, stage = "probe_syn", t = now, isn = tcp.th_seq, orig = deepcopy(dis),
 					ip = ip_text(select(2, src_dst(dis))), port = tcp.th_sport,
 					ifout = desync.ifout, fwmark = desync.fwmark, hello = hello,
 					wsize = tonumber(desync.arg.wsize) or 1,
-					pieces_need = tonumber(desync.arg.pieces) or 2,
+					pieces_need = tonumber(desync.arg.pieces) or 1,
 					pos = desync.arg.pos or "1,midsld",
 					timeout = tonumber(desync.arg.timeout) or 3,
 					open = tonumber(desync.arg.open),
@@ -246,6 +281,7 @@ local function step(ctx, desync)
 				log(st, "timeout, giving up")
 				-- Сервер не должен держать пробное соединение с тем же портом.
 				if st.cli_next then send(st, make_packet(st, TH_RST, st.cli_next, 0)) end
+				cancel_syn_timer(st)
 				st.stage = "done"
 				st.gave_up = true
 				return VERDICT_PASS
@@ -278,6 +314,7 @@ local function step(ctx, desync)
 
 	if st.stage == "resyn" then
 		if syn and ack and tcp.th_ack == u32add(st.isn, 1) then
+			cancel_syn_timer(st)
 			st.stage = "done"
 			log(st, "handover to client")
 			return VERDICT_PASS
@@ -286,7 +323,7 @@ local function step(ctx, desync)
 		if not syn and ack and not rst and st.resets < 5 then
 			st.resets = st.resets + 1
 			send(st, make_packet(st, TH_RST, tcp.th_ack, 0))
-			send(st, st.orig)
+			schedule_syn(st)
 			log(st, "stale ack, reset "..st.resets)
 		end
 		return VERDICT_DROP
@@ -295,7 +332,7 @@ local function step(ctx, desync)
 	if rst then
 		log(st, "server RST during probe")
 		st.stage = "resyn"
-		send(st, st.orig)
+		schedule_syn(st)
 		return VERDICT_DROP
 	end
 
@@ -368,6 +405,23 @@ local function step(ctx, desync)
 	end
 end
 
+-- DNS-observed provider destinations answer directly. Hostname caching can
+-- select this profile on SYN even though the provider is absent from IPFile.
+local function provider_destination(dis, path)
+    local ip = dis.ip6 or dis.ip
+    local dst = ip and (ip.ip6_dst or ip.ip_dst)
+    if not dst then return false end
+    local key = dst:gsub(".", function(b) return string.format("%02x", b:byte()) end)
+    local f = io.open(path or "/tmp/z2k-gvsub.json.neutral", "r")
+    if not f then return false end
+    local found = false
+    for line in f:lines() do
+        if line == "provider " .. key then found = true; break end
+    end
+    f:close()
+    return found
+end
+
 function z2k_preflight(ctx, desync)
 	local dis = desync.dis
 	-- Не TCP, или IPv6 там, где init не разрешил (IPv6 за NAT): повторный SYN
@@ -376,17 +430,17 @@ function z2k_preflight(ctx, desync)
 		instance_cutoff_shim(ctx, desync)
 		return
 	end
-	-- Исходящий пакет без выходного интерфейса пришёл из очереди на ВХОДЕ
-	-- (mangle PREROUTING): так z2k обрабатывает соединения, которые служба
-	-- подмены (z2k-detect gvsub) переадресует на рабочий соседний адрес. Адрес
-	-- уже рабочий, проба ему не нужна, а её повторный SYN под переадресацией
-	-- рвёт соединение (стенд 09.11.2026).
+	-- Packets received on the input queue have no output route yet.
 	if desync.outgoing and not desync.ifout then
 		instance_cutoff_shim(ctx, desync)
 		return
 	end
 	local st = flows[flow_key(dis, desync.outgoing)]
 	local syn_only = bitand(dis.tcp.th_flags, TH_SYN) ~= 0 and bitand(dis.tcp.th_flags, TH_ACK) == 0
+    if not st and syn_only and desync.outgoing and provider_destination(dis, desync.arg.provider_state) then
+        instance_cutoff_shim(ctx, desync)
+        return
+    end
 	-- Профиль получил управление не с начала: имя стало известно только сейчас,
 	-- SYN прошёл мимо нас, и начинать пробу посреди соединения нечем.
 	if not st and not (syn_only and desync.outgoing) then

@@ -423,6 +423,17 @@ create_base_config() {
 # Whitelist - домены исключенные из обработки zapret2
 # Сервисы, которые могут работать некорректно с DPI bypass
 
+# === OpenAI / ChatGPT ===
+# Суффиксы включают поддомены web, desktop, mobile, API и WebSocket.
+# https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps
+chatgpt.com
+openai.com
+oaistatic.com
+oaiusercontent.com
+oaistatsig.com
+cdn.openaimerge.com
+sora.com
+
 # === Госуслуги РФ ===
 gosuslugi.ru
 esia.gosuslugi.ru

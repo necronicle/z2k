@@ -4,7 +4,6 @@ import (
 	"net/netip"
 	"os"
 	"testing"
-	"time"
 )
 
 func TestWriteIPsSentinels(t *testing.T) {
@@ -81,26 +80,5 @@ func TestIPFileRestoreUnion(t *testing.T) {
 				t.Fatal("старый опубликованный адрес попал в known")
 			}
 		})
-	}
-}
-
-func TestIPFileIdleDropMapping(t *testing.T) {
-	s, _, r, c := newSvc()
-	s.IPFile = t.TempDir() + "/ips"
-	wait(t, s.OnDNS(gvName, []netip.Addr{bad}))
-	if len(s.Mappings()) == 0 {
-		t.Fatal("не поставлена исходная подмена")
-	}
-	c.add(IdleDrop + time.Second)
-	s.Tick()
-	s.mu.Lock()
-	_, known := s.known[bad]
-	s.mu.Unlock()
-	if known || len(s.Mappings()) != 0 || r.rejects(bad) {
-		t.Fatal("IdleDrop не убрал known/подмену/QUIC")
-	}
-	got, err := os.ReadFile(s.IPFile)
-	if err != nil || string(got) != ipFileSentinels+bad.String()+"\n" {
-		t.Fatalf("IdleDrop сузил IPFile: %q, %v", got, err)
 	}
 }
