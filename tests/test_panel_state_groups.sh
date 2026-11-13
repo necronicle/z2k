@@ -74,7 +74,7 @@ const cases = [
   ["bbc.co.uk",                  "bbc.co.uk"],
   ["www.mos.msk.ru",             "mos.msk.ru"],
   ["x.t.co",                     "t.co"],
-  ["rr2---sn-xguxaxjvh-8vbs.gvt1.com", "gvt1.com"],
+  ["rr2---sn-example-node.gvt1.com", "gvt1.com"],
   ["1.2.3.4",                    "1.2.3.4"],
   ["2a00:1450::200e",            "2a00:1450::200e"],
   ["localhost",                  "localhost"],

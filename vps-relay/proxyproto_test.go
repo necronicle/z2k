@@ -11,9 +11,9 @@ import (
 )
 
 func TestProxyHeaderV1(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("PROXY TCP4 46.146.27.195 213.176.74.63 53694 443\r\nGET"))
+	r := bufio.NewReader(strings.NewReader("PROXY TCP4 192.0.2.195 203.0.113.63 53694 443\r\nGET"))
 	a, err := parseProxyHeader(r)
-	if err != nil || a == nil || a.String() != "46.146.27.195:53694" {
+	if err != nil || a == nil || a.String() != "192.0.2.195:53694" {
 		t.Fatalf("v1: %v %v", a, err)
 	}
 	rest, _ := r.Peek(3)
@@ -31,13 +31,13 @@ func TestProxyHeaderV2(t *testing.T) {
 	b.WriteByte(0x21) // v2, PROXY
 	b.WriteByte(0x11) // TCP over IPv4
 	_ = binary.Write(&b, binary.BigEndian, uint16(12))
-	b.Write([]byte{88, 87, 93, 11, 213, 176, 74, 63})
+	b.Write([]byte{198, 51, 100, 11, 203, 0, 113, 63})
 	_ = binary.Write(&b, binary.BigEndian, uint16(57082))
 	_ = binary.Write(&b, binary.BigEndian, uint16(443))
 	b.WriteString("payload")
 	r := bufio.NewReader(&b)
 	a, err := parseProxyHeader(r)
-	if err != nil || a == nil || a.String() != "88.87.93.11:57082" {
+	if err != nil || a == nil || a.String() != "198.51.100.11:57082" {
 		t.Fatalf("v2: %v %v", a, err)
 	}
 	rest, _ := r.Peek(7)

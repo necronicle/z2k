@@ -17,11 +17,11 @@ func TestFindVoiceTargetsPicksLiveCall(t *testing.T) {
 	// Строки: голосовой поток с 900 пакетами, второй голосовой послабее,
 	// обычный QUIC на 443 (не голос), поток на приватный адрес (не наружу),
 	// и TCP (не наш протокол).
-	content := `ipv4     2 udp      17 29 src=192.168.1.67 dst=66.22.196.1 sport=51234 dport=50012 packets=900 bytes=120000 src=66.22.196.1 dst=88.87.93.11 sport=50012 dport=51234 packets=880 bytes=110000 mark=0 use=1
-ipv4     2 udp      17 29 src=192.168.1.67 dst=66.22.197.9 sport=51235 dport=3478 packets=12 bytes=1400 src=66.22.197.9 dst=88.87.93.11 sport=3478 dport=51235 packets=10 bytes=1200 mark=0 use=1
-ipv4     2 udp      17 29 src=192.168.1.67 dst=142.251.1.1 sport=51236 dport=443 packets=500 bytes=60000 mark=0 use=1
-ipv4     2 udp      17 29 src=192.168.1.67 dst=192.168.1.90 sport=51237 dport=50020 packets=99 bytes=9000 mark=0 use=1
-ipv4     2 tcp      6 431999 ESTABLISHED src=192.168.1.67 dst=1.2.3.4 sport=40000 dport=50010 packets=5 bytes=500 mark=0 use=1
+	content := `ipv4     2 udp      17 29 src=10.23.0.10 dst=66.22.196.1 sport=51234 dport=50012 packets=900 bytes=120000 src=66.22.196.1 dst=203.0.113.11 sport=50012 dport=51234 packets=880 bytes=110000 mark=0 use=1
+ipv4     2 udp      17 29 src=10.23.0.10 dst=66.22.197.9 sport=51235 dport=3478 packets=12 bytes=1400 src=66.22.197.9 dst=203.0.113.11 sport=3478 dport=51235 packets=10 bytes=1200 mark=0 use=1
+ipv4     2 udp      17 29 src=10.23.0.10 dst=142.251.1.1 sport=51236 dport=443 packets=500 bytes=60000 mark=0 use=1
+ipv4     2 udp      17 29 src=10.23.0.10 dst=10.23.0.20 sport=51237 dport=50020 packets=99 bytes=9000 mark=0 use=1
+ipv4     2 tcp      6 431999 ESTABLISHED src=10.23.0.10 dst=1.2.3.4 sport=40000 dport=50010 packets=5 bytes=500 mark=0 use=1
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)

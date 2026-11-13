@@ -56,7 +56,7 @@ class MonitorTest(unittest.TestCase):
         self.assertNotIn('mass_close', result['alerts'])
 
     def test_target_failure_not_diluted_by_fleet_success(self):
-        events = [{'ts_epoch': 995, 'ev': 'dial_fail', 'reason': 'dial_error', 'detail': '91.105.192.100:443', 'install': str(i % 5)} for i in range(20)]
+        events = [{'ts_epoch': 995, 'ev': 'dial_fail', 'reason': 'dial_error', 'detail': '203.0.113.100:443', 'install': str(i % 5)} for i in range(20)]
         result = m.evaluate(1000, snapshot(99999999), events, {})
         self.assertIn('dial_target', result['alerts'])
         self.assertEqual(result['dial_targets'][0]['installs'], 5)
@@ -66,8 +66,8 @@ class MonitorTest(unittest.TestCase):
         self.assertEqual(m.evaluate(1000, snapshot(), events, {})['alerts'], {})
 
     def test_live_socket_rates_do_not_use_closed_session_totals(self):
-        before = m.socket_counters('0 0 10.0.0.1:443 198.51.100.1:80 ino:7\n bbr bytes_sent:100 bytes_received:20\n')
-        after = m.socket_counters('0 0 10.0.0.1:443 198.51.100.1:80 ino:7\n bbr bytes_sent:1100 bytes_received:520\n0 0 10.0.0.1:443 198.51.100.2:80 ino:8\n bbr bytes_sent:999999 bytes_received:9999\n')
+        before = m.socket_counters('0 0 192.0.2.1:443 198.51.100.1:80 ino:7\n bbr bytes_sent:100 bytes_received:20\n')
+        after = m.socket_counters('0 0 192.0.2.1:443 198.51.100.1:80 ino:7\n bbr bytes_sent:1100 bytes_received:520\n0 0 192.0.2.1:443 198.51.100.2:80 ino:8\n bbr bytes_sent:999999 bytes_received:9999\n')
         result = m.socket_rates(after, before, 10)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['peer'], '198.51.100.1')

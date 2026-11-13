@@ -1,5 +1,5 @@
 #!/bin/sh
-# Execute the shipped migration on the owner's out30 sample, without live state.
+# Execute the shipped migration on an anonymized mixed IPv4/IPv6 fixture, without live state.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)

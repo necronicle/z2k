@@ -49,7 +49,7 @@ mk_ip '3: br0: <BROADCAST> mtu 1500
     inet 192.168.1.1/24 brd 192.168.1.255 scope global br0
 4: br1: <BROADCAST> mtu 1500
     inet 10.1.30.1/24 brd 10.1.30.255 scope global br1' \
-'1.1.1.1 dev ppp0  src 88.87.93.11 '
+'1.1.1.1 dev ppp0  src 203.0.113.11 '
 assert_eq "при публичном WAN берём мост" "192.168.1.1" "$(lan_ip)"
 
 # --- Туннель WARP не должен побеждать мост ----------------------------------
@@ -57,7 +57,7 @@ mk_ip '5: z2ktun0: <POINTOPOINT> mtu 1280
     inet 172.16.0.2/32 scope global z2ktun0
 6: br0: <BROADCAST> mtu 1500
     inet 192.168.1.1/24 brd 192.168.1.255 scope global br0' \
-'1.1.1.1 dev ppp0  src 88.87.93.11 '
+'1.1.1.1 dev ppp0  src 203.0.113.11 '
 assert_eq "туннель не выдаётся за домашнюю сеть" "192.168.1.1" "$(lan_ip)"
 
 # --- Домашней сети не нашлось: не врём, а говорим прямо ----------------------

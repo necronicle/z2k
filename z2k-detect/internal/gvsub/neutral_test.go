@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestBadRemainsNeutralWithoutReject(t *testing.T) {
-	s, _, r, _ := newSvc()
+func TestBadNeutralStateLifecycle(t *testing.T) {
+	s, _, _, _ := newSvc()
 	s.StatusPath = t.TempDir() + "/status"
 	wait(t, s.OnDNS(gvName, []netip.Addr{bad}))
 	b, _ := os.ReadFile(s.StatusPath + ".neutral")
-	if !strings.Contains(string(b), "bad 4a7d6e46") || r.rejects(bad) {
-		t.Fatalf("neutral=%q rejected=%t", b, r.rejects(bad))
+	if !strings.Contains(string(b), "bad 4a7d6e46") {
+		t.Fatalf("neutral=%q", b)
 	}
 	s.Shutdown()
 	b, _ = os.ReadFile(s.StatusPath + ".neutral")

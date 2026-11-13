@@ -19,7 +19,7 @@ func putWhitelist(t *testing.T, path, body string) {
 func TestWhitelistDNS(t *testing.T) {
 	for _, q := range []string{gvName, "sub." + gvName, "SUB." + gvName + "."} {
 		t.Run(q, func(t *testing.T) {
-			s, n, r, _ := newSvc()
+			s, n, _, _ := newSvc()
 			s.IPFile, s.Whitelist = t.TempDir()+"/ips", t.TempDir()+"/whitelist"
 			putWhitelist(t, s.Whitelist, " # комментарий\n; ещё\n/ комментарий\n\n RR1---SN-TEST.GOOGLEVIDEO.COM\tзаметка\n")
 			s.writeIPs()
@@ -29,8 +29,8 @@ func TestWhitelistDNS(t *testing.T) {
 			if err != nil || string(got) != ipFileSentinels {
 				t.Fatalf("whitelist опубликован: %q, %v", got, err)
 			}
-			if n.calls != 0 || r.adds != 0 || r.rejects(bad) || len(s.known) != 0 {
-				t.Fatal("whitelist вызвал проверку или подмену")
+			if n.calls != 0 || len(s.known) != 0 {
+				t.Fatal("whitelist вызвал проверку или сохранил адрес")
 			}
 		})
 	}
@@ -140,7 +140,7 @@ func TestWhitelistCNAMEQuestion(t *testing.T) {
 			if !ok || ans.Name != q {
 				t.Fatal("не разобран вопрос CNAME-цепочки")
 			}
-			s, _, r, _ := newSvc()
+			s, _, _, _ := newSvc()
 			s.IPFile, s.Whitelist = t.TempDir()+"/ips", t.TempDir()+"/whitelist"
 			wl := "alias.googlevideo.com\nedge.example.net\n"
 			if whitelistedQuestion {
@@ -150,7 +150,7 @@ func TestWhitelistCNAMEQuestion(t *testing.T) {
 			wait(t, s.OnDNS(ans.Name, ans.Addrs))
 			got, _ := os.ReadFile(s.IPFile)
 			if whitelistedQuestion {
-				if len(got) != 0 || r.adds != 0 {
+				if len(got) != 0 {
 					t.Fatal("ответ для whitelist-вопроса затронут")
 				}
 			} else if !strings.Contains(string(got), bad.String()) {

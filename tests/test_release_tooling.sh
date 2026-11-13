@@ -87,7 +87,12 @@ fi
 # untracked, и модуль, добавленный этой же правкой (lib/release_map.sh), в клон
 # не попадал: release.sh падал на sourcing, а тест списывал это на свои гейты и
 # показывал четыре осмысленных на вид отказа вместо одной настоящей причины.
-for f in $(git -C "$HERE" diff --name-only HEAD 2>/dev/null; git -C "$HERE" ls-files --others --exclude-standard 2>/dev/null); do
+# Exclude local agent state, and apply deletions so retired tests cannot reappear.
+for f in $(git -C "$HERE" diff --name-only HEAD -- . ':(exclude).serena' 2>/dev/null; git -C "$HERE" ls-files --others --exclude-standard -- . ':(exclude).serena' 2>/dev/null); do
+    if [ ! -e "$HERE/$f" ]; then
+        rm -f "$TMP/clone/$f"
+        continue
+    fi
     [ -f "$HERE/$f" ] || continue
     mkdir -p "$TMP/clone/$(dirname "$f")"
     cp -f "$HERE/$f" "$TMP/clone/$f"

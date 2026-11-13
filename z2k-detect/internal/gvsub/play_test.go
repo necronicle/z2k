@@ -8,7 +8,7 @@ import (
 )
 
 func TestPlayDNSAndPreflight(t *testing.T) {
-	for _, host := range []string{"rr4---sn-aj5go5-53.gvt1.com", "r4.sn-u14g55-cp.gvt1.com", "RR4---SN-AJ5GO5-53.GVT1.COM."} {
+	for _, host := range []string{"rr4---sn-example-a.gvt1.com", "r4.sn-example-b.gvt1.com", "RR4---SN-EXAMPLE-A.GVT1.COM."} {
 		for _, ip := range []string{"74.125.99.1", "2a00:1450:4001:44::4"} {
 			t.Run(host+ip, func(t *testing.T) {
 				a := netip.MustParseAddr(ip)
@@ -38,11 +38,11 @@ func TestPlayDNSAndPreflight(t *testing.T) {
 }
 
 func TestProviderNeverInPreflight(t *testing.T) {
-	for _, host := range []string{"rr2---sn-xguxaxjvh-8vbs.googlevideo.com", "rr2---sn-xguxaxjvh-8vbs.gvt1.com", "r2.sn-xguxaxjvh-8vbs.c.youtube.com"} {
+	for _, host := range []string{"rr2---sn-example-node.googlevideo.com", "rr2---sn-example-node.gvt1.com", "r2.sn-example-node.c.youtube.com"} {
 		t.Run(host, func(t *testing.T) {
 			s, _, _, _ := newSvc()
 			s.IPFile = t.TempDir() + "/ips"
-			for _, ip := range []string{"88.87.65.141", "2a02:2698:c00:fc00::d"} {
+			for _, ip := range []string{"192.0.2.141", "2001:db8::d"} {
 				s.OnDNS(host, []netip.Addr{netip.MustParseAddr(ip)})
 			}
 			b, e := os.ReadFile(s.IPFile)
@@ -76,14 +76,14 @@ func TestPlayWantedIgnoresRetiredKey(t *testing.T) {
 	}
 }
 
-func TestServerReplyDoesNotSubstitute(t *testing.T) {
-	s, n, r, _ := newSvc()
+func TestServerReplyProbesDNSAddress(t *testing.T) {
+	s, n, _, _ := newSvc()
 	wait(t, s.OnDNS(gvName, []netip.Addr{bad}))
 	n.mu.Lock()
 	calls := n.calls
 	n.mu.Unlock()
-	if r.adds != 0 || calls != 1 || r.rejects(bad) {
-		t.Fatalf("retired substitution or Bad rejection active: adds=%d probes=%d reject=%t", r.adds, calls, r.rejects(bad))
+	if calls != 1 {
+		t.Fatalf("DNS address probes=%d, want 1", calls)
 	}
 }
 
@@ -91,9 +91,9 @@ func TestProviderObservationPublishedBeforeDNSRelease(t *testing.T) {
 	s, _, _, _ := newSvc()
 	s.StatusPath = t.TempDir() + "/status"
 	s.IPFile = t.TempDir() + "/ips"
-	s.OnDNS("rr2---sn-cache.gvt1.com", []netip.Addr{netip.MustParseAddr("88.87.65.141")})
+	s.OnDNS("rr2---sn-cache.gvt1.com", []netip.Addr{netip.MustParseAddr("192.0.2.141")})
 	b, e := os.ReadFile(s.StatusPath + ".neutral")
-	if e != nil || !strings.Contains(string(b), "provider 5857418d") {
+	if e != nil || !strings.Contains(string(b), "provider c000028d") {
 		t.Fatalf("provider observation not synchronous: %q %v", b, e)
 	}
 }

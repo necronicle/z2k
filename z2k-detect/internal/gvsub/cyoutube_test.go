@@ -8,17 +8,17 @@ import (
 )
 
 func TestCYouTubeNamesAndDNS(t *testing.T) {
-	for _, q := range []string{"rr1---sn-4g5e6nss.c.youtube.com", "RR17.SN-4G5E6NSS.C.YOUTUBE.COM."} {
+	for _, q := range []string{"rr1---sn-example-a.c.youtube.com", "RR17.SN-EXAMPLE-A.C.YOUTUBE.COM."} {
 		c, n, ok := ParseCluster(q)
-		if !ok || c != "sn-4g5e6nss" || n < 1 {
+		if !ok || c != "sn-example-a" || n < 1 {
 			t.Fatalf("cluster %s: %s/%d/%v", q, c, n, ok)
 		}
-		gc, _, _ := ParseCluster("rr1---sn-4g5e6nss.googlevideo.com")
+		gc, _, _ := ParseCluster("rr1---sn-example-a.googlevideo.com")
 		if c != gc {
 			t.Fatal("different logical cluster")
 		}
 		for _, wrap := range []func([]byte) []byte{ipv4udp, ipv6udp} {
-			msg := dnsReply(strings.TrimSuffix(q, "."), rr{5, name("rr1.sn-4g5e6nss.c.youtube.com")}, rr{1, []byte{173, 194, 182, 198}}, rr{28, netip.MustParseAddr("2a00:1450:4001:5e::6").AsSlice()})
+			msg := dnsReply(strings.TrimSuffix(q, "."), rr{5, name("rr1.sn-example-a.c.youtube.com")}, rr{1, []byte{173, 194, 182, 198}}, rr{28, netip.MustParseAddr("2a00:1450:4001:5e::6").AsSlice()})
 			a, ok := ParseReply(wrap(msg))
 			if !ok || len(a.Addrs) != 2 {
 				t.Fatalf("DNS %s: %+v/%v", q, a, ok)

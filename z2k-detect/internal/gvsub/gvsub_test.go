@@ -62,8 +62,8 @@ func ipv6udp(payload []byte) []byte {
 }
 
 func TestParseReplyGooglevideo(t *testing.T) {
-	msg := dnsReply("rr1---sn-i5heen7z.googlevideo.com",
-		rr{5, name("rr1.sn-i5heen7z.googlevideo.com")},
+	msg := dnsReply("rr1---sn-example-a.googlevideo.com",
+		rr{5, name("rr1.sn-example-a.googlevideo.com")},
 		rr{1, []byte{74, 125, 110, 70}},
 		rr{28, netip.MustParseAddr("2a00:1450:4005:2::7").AsSlice()},
 	)
@@ -110,12 +110,12 @@ func TestParseReplyIgnoresOthers(t *testing.T) {
 
 func TestParseCluster(t *testing.T) {
 	for name, want := range map[string]string{
-		"rr1---sn-n8v7kn7z.googlevideo.com":   "sn-n8v7kn7z/1",
-		"rr17.sn-n8v7kn7z.googlevideo.com.":   "sn-n8v7kn7z/17",
-		"RR3---SN-OJ5HN5-5A.googlevideo.com":  "sn-oj5hn5-5a/3",
-		"redirector.googlevideo.com":          "",
-		"manifest.googlevideo.com":            "",
-		"rr1---sn-n8v7kn7z.googlevideo.com.x": "",
+		"rr1---sn-example-b.googlevideo.com":   "sn-example-b/1",
+		"rr17.sn-example-b.googlevideo.com.":   "sn-example-b/17",
+		"RR3---SN-EXAMPLE-C.googlevideo.com":   "sn-example-c/3",
+		"redirector.googlevideo.com":           "",
+		"manifest.googlevideo.com":             "",
+		"rr1---sn-example-b.googlevideo.com.x": "",
 	} {
 		c, n, ok := ParseCluster(name)
 		got := ""
@@ -135,7 +135,6 @@ type fakeNet struct {
 	checked []netip.Addr
 }
 
-func (f *fakeNet) set(a string, v Verdict) { f.mu.Lock(); f.state[a] = v; f.mu.Unlock() }
 func (f *fakeNet) Check(_ context.Context, a netip.Addr) Verdict {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -147,74 +146,18 @@ func (f *fakeNet) Check(_ context.Context, a netip.Addr) Verdict {
 	return Dead
 }
 
-type fakeRules struct {
-	mu        sync.Mutex
-	set       map[string]string
-	rejected  map[netip.Addr]bool
-	adds      int
-	recreate  bool // следующий Ensure сообщит, что цепочки пересозданы пустыми
-	ensures   int
-	teardowns int
-}
+// The service only manages the DNS interception lifecycle.
+type fakeRules struct{}
 
-func (r *fakeRules) Ensure() (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.ensures++
-	if r.recreate {
-		r.recreate = false
-		r.set = map[string]string{} // тестовый счётчик
-		r.rejected = map[netip.Addr]bool{}
-		return true, nil
-	}
-	return false, nil
-}
-func (r *fakeRules) Teardown() { r.mu.Lock(); r.teardowns++; r.mu.Unlock() }
-
-func (r *fakeRules) Add(b, g netip.Addr) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.set[b.String()] = g.String()
-	r.adds++
-	return nil
-}
-func (r *fakeRules) Del(b, g netip.Addr) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.set[b.String()] == g.String() {
-		delete(r.set, b.String())
-	}
-	return nil
-}
-
-func (r *fakeRules) RejectQUIC(a netip.Addr) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.rejected == nil {
-		r.rejected = map[netip.Addr]bool{}
-	}
-	r.rejected[a] = true
-	return nil
-}
-func (r *fakeRules) AllowQUIC(a netip.Addr) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.rejected, a)
-	return nil
-}
-func (r *fakeRules) rejects(a netip.Addr) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.rejected[a]
-}
+func (r *fakeRules) Ensure() (bool, error) { return false, nil }
+func (r *fakeRules) Teardown()             {}
 
 type clock struct {
 	mu sync.Mutex
 	t  time.Time
 }
 
-func (c *clock) now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
-func (c *clock) add(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
+func (c *clock) now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
 
 const gvName = "rr1---sn-test.googlevideo.com"
 
@@ -222,7 +165,7 @@ var bad = netip.MustParseAddr("74.125.110.70")
 
 func newSvc() (*Service, *fakeNet, *fakeRules, *clock) {
 	n := &fakeNet{state: map[string]Verdict{"74.125.110.70": Bad, "74.125.110.38": Good}}
-	r := &fakeRules{set: map[string]string{}}
+	r := &fakeRules{}
 	c := &clock{t: time.Date(2026, 11, 9, 20, 0, 0, 0, time.UTC)}
 	return &Service{Checker: n, Rules: r, Now: c.now}, n, r, c
 }

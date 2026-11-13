@@ -8,8 +8,8 @@ import (
 )
 
 const asnFixture = "1.0.0.0\t1.0.0.255\t13335\tUS\tCLOUDFLARENET\n" +
-	"46.146.0.0\t46.146.255.255\t35807\tRU\tAS-SKYNET-SPB\n" +
-	"88.87.64.0\t88.87.95.255\t39435\tRU\tEVOLGOGRAD-AS\n"
+	"192.0.2.0\t192.0.2.255\t64496\tRU\tEXAMPLE-AS-A\n" +
+	"198.51.100.0\t198.51.100.255\t64497\tRU\tEXAMPLE-AS-B\n"
 
 func TestASNTable_Lookup(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "ip2asn-v4.tsv")
@@ -21,9 +21,9 @@ func TestASNTable_Lookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]uint32{
-		"46.146.27.195": 35807,
-		"88.87.93.11":   39435,
-		"88.87.96.1":    0, // за верхней границей
+		"192.0.2.195":   64496,
+		"198.51.100.11": 64497,
+		"203.0.113.1":   0, // за верхней границей
 		"9.9.9.9":       0,
 		"1.0.0.7":       13335,
 	}
@@ -36,7 +36,7 @@ func TestASNTable_Lookup(t *testing.T) {
 
 func TestASNLookup_DisabledReturnsZero(t *testing.T) {
 	asnTab.Store(nil)
-	if got := asnLookup("46.146.27.195"); got != 0 {
+	if got := asnLookup("192.0.2.195"); got != 0 {
 		t.Fatalf("без таблицы ожидался 0, получено %d", got)
 	}
 }

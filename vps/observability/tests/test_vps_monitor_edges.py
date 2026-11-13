@@ -34,14 +34,14 @@ class Parsers(unittest.TestCase):
         self.assertEqual(m.tcp_ext_counters('TcpExt: ListenDrops X\nTcpExt: 4 9\n'), {'ListenDrops': 4})
 
     def test_socket_header_needs_two_numeric_queues_and_inode(self):
-        text = ('0 0 10.0.0.1:443 198.51.100.7:5 ino:3 sk:1\n'
+        text = ('0 0 192.0.2.1:443 198.51.100.7:5 ino:3 sk:1\n'
                 '7 cubic wscale:7,7 rto:204 bytes_sent:11 bytes_received:22\n'
-                '0 x 10.0.0.1:443 198.51.100.8:5 ino:4\n'
+                '0 x 192.0.2.1:443 198.51.100.8:5 ino:4\n'
                 ' bytes_sent:99\n'
-                '0 0 10.0.0.1:443 198.51.100.9:5 ino:5\n')
+                '0 0 192.0.2.1:443 198.51.100.9:5 ino:5\n')
         result = m.socket_counters(text)
-        self.assertEqual(result['10.0.0.1:443/198.51.100.7:5/3'], {'peer': '198.51.100.7', 'sent': 99, 'received': 22})
-        self.assertEqual(result['10.0.0.1:443/198.51.100.9:5/5'], {'peer': '198.51.100.9', 'sent': 0, 'received': 0})
+        self.assertEqual(result['192.0.2.1:443/198.51.100.7:5/3'], {'peer': '198.51.100.7', 'sent': 99, 'received': 22})
+        self.assertEqual(result['192.0.2.1:443/198.51.100.9:5/5'], {'peer': '198.51.100.9', 'sent': 0, 'received': 0})
         self.assertEqual(len(result), 2)
 
     def test_read_events_uses_today_and_yesterday_and_gz_fallback(self):
@@ -243,8 +243,8 @@ class Edges(unittest.TestCase):
         self.assertEqual(m.covered_seconds([dict(start=0, end=100), dict(start=10, end=20)]), 100)
 
     def test_socket_header_needs_numeric_first_field(self):
-        text = '0 0 10.0.0.1:443 198.51.100.7:5 ino:3\nx 0 10.0.0.1:443 198.51.100.8:5 ino:4\n bytes_sent:5\n'
-        self.assertEqual(m.socket_counters(text), {'10.0.0.1:443/198.51.100.7:5/3': {'peer': '198.51.100.7', 'sent': 5, 'received': 0}})
+        text = '0 0 192.0.2.1:443 198.51.100.7:5 ino:3\nx 0 192.0.2.1:443 198.51.100.8:5 ino:4\n bytes_sent:5\n'
+        self.assertEqual(m.socket_counters(text), {'192.0.2.1:443/198.51.100.7:5/3': {'peer': '198.51.100.7', 'sent': 5, 'received': 0}})
 
 
 class External(unittest.TestCase):
@@ -260,8 +260,8 @@ class External(unittest.TestCase):
 
     def test_traffic_snapshot_rates_against_previous_sockets(self):
         from unittest.mock import patch
-        out = '0 0 10.0.0.1:443 198.51.100.7:5 ino:3\n bytes_sent:2000000 bytes_received:1000000\n'
-        prev = {'time': NOW - 8, 'traffic': {'sockets': {'10.0.0.1:443/198.51.100.7:5/3': {'peer': '198.51.100.7', 'sent': 0, 'received': 0}}}}
+        out = '0 0 192.0.2.1:443 198.51.100.7:5 ino:3\n bytes_sent:2000000 bytes_received:1000000\n'
+        prev = {'time': NOW - 8, 'traffic': {'sockets': {'192.0.2.1:443/198.51.100.7:5/3': {'peer': '198.51.100.7', 'sent': 0, 'received': 0}}}}
         done = m.subprocess.CompletedProcess([], 0, stdout=out)
         with patch.object(m.subprocess, 'run', return_value=done) as run:
             snap = m.traffic_snapshot(NOW, prev)
