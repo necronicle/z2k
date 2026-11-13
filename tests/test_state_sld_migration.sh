@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2218 # the function is sourced from S99zapret2 above; the wrapper below only replaces it later
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
