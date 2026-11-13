@@ -60,7 +60,7 @@ show_main_menu() {
 |  yozh, Altaec, DIDIQ Rawa, GregMSK, Кожевников,   |
 |  bootnet, ewgen911, cmfifty, Ret80,               |
 |  Шулепов Александр, Андрюшка, Marshmalick,        |
-|  Mustang, Роман Борисович                         |
+|  Mustang, Роман Борисович, zelenewruan            |
 +===================================================+
 
 MENU
