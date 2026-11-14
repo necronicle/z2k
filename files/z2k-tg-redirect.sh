@@ -48,6 +48,57 @@ Z2K_TG_CIDRS6="2001:67c:4e8::/48 2001:b28:f23c::/47 2001:b28:f23f::/48 2a0a:f280
 _z2k_tg_ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
 _z2k_tg_ipt6() { ip6tables -w "$@" 2>/dev/null || ip6tables "$@" 2>/dev/null; }
 
+# Собственные релеи z2k. Соединения САМОГО роутера с ними (туннель Telegram,
+# /resolve) обход не трогает: 10.11.2026 проба движка на SYN рвала новые
+# соединения туннеля. Исключаем их меткой движка 0x40000000 в mangle OUTPUT —
+# правило очереди в POSTROUTING пакеты с ней пропускает, — а НЕ адресом в
+# nozapret, как было с p-87.26 по p-88.2: на этот же адрес роутер уводит домены
+# WhatsApp устройств сети (ip host), и исключение по адресу лишило их обхода —
+# DPI резал их по имени (15.11.2026: static/mmg.whatsapp.net через VPS висели до
+# таймаута, без исключения — ответ за 0,3 с). Пакеты устройств идут через
+# FORWARD и метку не получают.
+Z2K_OWNED_RELAYS="85.192.60.175 45.146.90.136"
+Z2K_OWNED_RELAY_MARK="0x40000000/0x40000000"
+
+z2k_owned_relay_rule_present() {
+    _z2k_tg_ipt -t mangle -C OUTPUT -d "$1" -j MARK --set-xmark "$Z2K_OWNED_RELAY_MARK"
+}
+
+z2k_owned_relays_ensure() {
+    for _r in $Z2K_OWNED_RELAYS; do
+        z2k_owned_relay_rule_present "$_r" \
+            || _z2k_tg_ipt -t mangle -I OUTPUT 1 -d "$_r" -j MARK --set-xmark "$Z2K_OWNED_RELAY_MARK" \
+            || return 1
+    done
+    return 0
+}
+
+z2k_owned_relays_remove() {
+    for _r in $Z2K_OWNED_RELAYS; do
+        _i=0
+        while [ "$_i" -lt 8 ] && z2k_owned_relay_rule_present "$_r"; do
+            _z2k_tg_ipt -t mangle -D OUTPUT -d "$_r" -j MARK --set-xmark "$Z2K_OWNED_RELAY_MARK" || break
+            _i=$((_i + 1))
+        done
+    done
+    return 0
+}
+
+# Прежняя форма исключения (p-87.26…p-88.2): адрес в файле исключений и в
+# nozapret. Снимаем только свои строки: чужие записи файла не трогаем. Сначала
+# файл — иначе перезапуск обхода вернул бы адрес в набор из файла.
+z2k_owned_relays_unexclude_legacy() {
+    _excl="${TG_EXCLUDE_FILE:-/opt/zapret2/ipset/zapret-hosts-user-exclude.txt}"
+    for _r in $Z2K_OWNED_RELAYS; do
+        if [ -f "$_excl" ] && grep -qFx "$_r" "$_excl" 2>/dev/null; then
+            grep -vFx "$_r" "$_excl" > "$_excl.z2k.$$" 2>/dev/null && cat "$_excl.z2k.$$" > "$_excl"
+            rm -f "$_excl.z2k.$$"
+        fi
+        command -v ipset >/dev/null 2>&1 && ipset del nozapret "$_r" -exist 2>/dev/null
+    done
+    return 0
+}
+
 # Ensure the ipset exists and holds the current DC CIDR list (idempotent;
 # ipset survives NDM wipes so this is usually a no-op after first run).
 z2k_tg_ensure_ipset() {

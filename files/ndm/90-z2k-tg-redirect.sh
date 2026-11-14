@@ -8,7 +8,7 @@
 # Telegram-DC REDIRECT here.
 #
 # NDM passes two env vars:  type (iptables|ip6tables), table (filter|nat|...).
-# We only care about iptables + nat.
+# We only care about iptables nat (redirect) and mangle (own-relay mark).
 #
 # The actual rule logic lives in the shared lib so the hook, the watchdog and
 # the S98 init script install the identical (ipset-based, -w-locked) rule
@@ -19,7 +19,7 @@
 export PATH=/opt/sbin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin
 
 [ "$type" = "ip6tables" ] && exit 0
-[ "$table" = "nat" ] || exit 0
+case "$table" in nat|mangle) ;; *) exit 0 ;; esac
 
 # Respect explicit user disable (backstop for a stale process during upgrade).
 CONFIG_FILE="/opt/zapret2/config"
@@ -37,6 +37,13 @@ pidof tg-mtproxy-client >/dev/null 2>&1 || exit 0
 LIB="/opt/zapret2/z2k-tg-redirect.sh"
 [ -r "$LIB" ] || exit 0   # graceful: watchdog/S98 cover if the lib is missing
 . "$LIB"
+
+# mangle: метка соединений самого роутера со своими релеями (мимо обхода),
+# см. z2k_owned_relays_ensure. Реген mangle сносит её вместе с прочим.
+if [ "$table" = "mangle" ]; then
+    if command -v z2k_owned_relays_ensure >/dev/null 2>&1; then z2k_owned_relays_ensure || true; fi
+    exit 0
+fi
 
 z2k_tg_remove_legacy_rules   # migrate off pre-ipset per-CIDR rules (cheap no-op after first run)
 z2k_tg_ensure_rules          # ipset + 2 REDIRECT rules, -w-locked, verify-retry

@@ -79,24 +79,13 @@ cdn_rules_del() {
 TG_REDIR_LIB="/opt/zapret2/z2k-tg-redirect.sh"
 [ -r "$TG_REDIR_LIB" ] && . "$TG_REDIR_LIB"
 
-# Persist owned relay exclusions through the existing firewall seed loader.
-# Do not restart the DPI service for a Telegram-only update.
-exclude_owned_relays() {
-    _excl="${TG_EXCLUDE_FILE:-/opt/zapret2/ipset/zapret-hosts-user-exclude.txt}"
-    mkdir -p "$(dirname "$_excl")" || return 1
-    touch "$_excl" || return 1
-    for _relay_ip in 85.192.60.175 45.146.90.136; do
-        grep -qFx "$_relay_ip" "$_excl" || printf '\n%s\n' "$_relay_ip" >> "$_excl"
-        if command -v ipset >/dev/null 2>&1; then
-            ipset create nozapret hash:net -exist 2>/dev/null
-            ipset add nozapret "$_relay_ip" -exist 2>/dev/null
-        fi
-    done
-    return 0
-}
-
 start() {
-    exclude_owned_relays || return 1
+    # Свои релеи — мимо обхода только для соединений самого роутера (см.
+    # z2k_owned_relays_ensure). Сбой не останавливает туннель.
+    if command -v z2k_owned_relays_ensure >/dev/null 2>&1; then
+        z2k_owned_relays_unexclude_legacy
+        z2k_owned_relays_ensure || echo "WARNING: owned relay mark not installed"
+    fi
     z2k_tg_udp_down
     [ -x "$BIN" ] || exit 0
     # Honor TG_PROXY_USER_DISABLED — if user explicitly stopped the tunnel
@@ -278,6 +267,7 @@ stop() {
     done
     # Idempotent removal: drop every matching copy of the rule from both chains.
     z2k_tg_remove_rules          # remove the ipset REDIRECT rules
+    if command -v z2k_owned_relays_remove >/dev/null 2>&1; then z2k_owned_relays_remove; fi
     z2k_tg_remove_legacy_rules   # and any stale pre-ipset per-CIDR rules
 }
 

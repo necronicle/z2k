@@ -553,6 +553,13 @@ for cidr in $TG_CIDRS; do
         done
     done
 done
+# Метка соединений роутера со своими релеями (mangle OUTPUT, с p-88.3).
+for _relay in 85.192.60.175 45.146.90.136; do
+    while iptables -w -t mangle -C OUTPUT -d "$_relay" -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null; do
+        iptables -w -t mangle -D OUTPUT -d "$_relay" -j MARK --set-xmark 0x40000000/0x40000000 2>/dev/null || break
+        tg_rules_removed=$((tg_rules_removed + 1))
+    done
+done
 # Destroy the ipset itself — NDM doesn't touch ipsets, so it would linger.
 # Защита DNS (убрана в p-87.21; у старых установок): два правила REDIRECT :53 по ipset LAN.
 for _p in udp tcp; do

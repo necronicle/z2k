@@ -276,6 +276,9 @@ if [ -r "$TG_REDIR_LIB" ]; then
         # NDM can replace IPv6 filter rules independently of IPv4 NAT.
         z2k_tg_ensure_rules6 || true
     fi
+    # Метка соединений роутера со своими релеями живёт в mangle, который NDM
+    # пересобирает отдельно от nat.
+    if command -v z2k_owned_relays_ensure >/dev/null 2>&1; then z2k_owned_relays_ensure || true; fi
 fi
 
 # 2) Active end-to-end probe through the tunnel.
