@@ -68,6 +68,13 @@ WARP_IPSET="${WARP_IPSET:-z2k_warp}"
 WARP_IPSET_SRC="${WARP_IPSET_SRC:-z2k_warp_src}"
 WARP_IPSET_EXCL="${WARP_IPSET_EXCL:-z2k_warp_excl}"   # адреса и подсети из исключений
 WARP_IPSET_XDNS="${WARP_IPSET_XDNS:-z2k_warp_xdns}"   # адреса доменов-исключений (пишет warpd)
+# IPv6 (см. раздел IPv6): адреса из списков, MAC выбранных устройств, исключения,
+# адреса доменов-исключений (пишет warpd), свои сети роутера.
+WARP_IPSET6="${WARP_IPSET6:-z2k_warp6}"
+WARP_IPSET_SRC6="${WARP_IPSET_SRC6:-z2k_warp_src6}"
+WARP_IPSET_EXCL6="${WARP_IPSET_EXCL6:-z2k_warp_excl6}"
+WARP_IPSET_XDNS6="${WARP_IPSET_XDNS6:-z2k_warp_xdns6}"
+WARP_IPSET_LAN6="${WARP_IPSET_LAN6:-z2k_warp_lan6}"
 WARP_FILTER="${WARP_FILTER:-$ZAPRET2_DIR/z2k-warp-list-filter.awk}"
 WARP_DOMAINS="${WARP_DOMAINS:-/tmp/z2k-warp/domains.v1}"
 WARP_DOMAINS_EXCL="${WARP_DOMAINS_EXCL:-/tmp/z2k-warp/domains-excl.v1}"
@@ -394,6 +401,10 @@ warp_ipset_all() {
     warp_ipset_load || return 1
     warp_domains_load || return 1
     warp_excl_load || return 1
+    # IPv6-записи списков и исключений. Сбой здесь не мешает IPv4.
+    if warp_ip6_ok; then
+        { warp_sets6_ensure && warp_ipset6_load && warp_excl6_load; } || _wlog "IPv6: адреса из списков не загружены"
+    fi
     warp_policy_sync
 }
 
@@ -419,6 +430,9 @@ warp_dns_sets_destroy() {
     warp_dns_client_sets | while read -r set client; do
         ipset destroy "$set" 2>/dev/null
     done
+    warp_dns_client_sets6 | while read -r set; do
+        ipset destroy "$set" 2>/dev/null
+    done
 }
 
 # Fixed standalone names plus actual server pins from AWG Manager. Never infer
@@ -431,21 +445,68 @@ warp_wdtt_ifaces() {
     { printf '%s\n' wdtt0 wdttraw0; [ -z "$managed" ] || printf '%s\n' "$managed"; } | LC_ALL=C sort -u
 }
 
-# Discover only our DNS-copy rules, including retired AWG Manager pins. Cleanup
-# must remain possible after the manager config is removed or becomes unreadable.
+# Копии ответов DNS снимаем в обоих семействах. Устройства с IPv6 (macOS, iOS,
+# Android) спрашивают DNS роутера по IPv6, и A-записи тоже: замер 14.11 на Mac —
+# все запросы к fe80::…:53 роутера, ни одного к 192.168.1.1. Пока копии были
+# только в iptables, наблюдатель этих ответов не видел, и домены в списках и
+# исключениях WARP у таких устройств не действовали вовсе. Нет ip6tables или
+# IPv6 в ядре — работаем как раньше, только по IPv4.
+WARP_IP6TABLES="${WARP_IP6TABLES:-ip6tables}"
+warp_dns_capture_tools() {
+    printf '%s\n' iptables
+    "$WARP_IP6TABLES" -w -t filter -S OUTPUT >/dev/null 2>&1 && printf '%s\n' "$WARP_IP6TABLES"
+    return 0
+}
+
+# Ответы DNS для устройств идут в очередь 189: warpd отпускает ответ, когда
+# его адреса уже в наборах. С копией (NFLOG) устройство успевало открыть
+# соединение раньше: захват 14.11 — SYN через 3 мс после ответа, адрес в
+# наборе позже, и первое соединение к исключению уходило в WARP и висело.
+# --queue-bypass: warpd не слушает — ответ идёт дальше, как без правила.
+# Дольше 0,5 с warpd ответ не держит (domainroute/hold.go). ACCEPT очереди
+# завершает цепочку filter для ответа — как штатный ESTABLISHED ACCEPT NDM.
+# Ядро без NFQUEUE — копия NFLOG, как было, без придерживания.
+WARP_DNS_QUEUE="NFQUEUE --queue-num 189 --queue-bypass"
+WARP_DNS_COPY="NFLOG --nflog-group 189 --nflog-range 4096"
+
+# Снять правило со всеми копиями: -D, пока -C его находит, но не больше 8
+# раз — неверный ответ -C (сломанный бинарь, заглушка в тестах) не должен
+# вешать selfheal навсегда.
+_warp_rule_purge() {
+    local ipt="$1" t="$2" ch="$3" i=0
+    shift 3
+    while [ "$i" -lt 8 ] && "$ipt" -w -t "$t" -C "$ch" "$@" 2>/dev/null; do
+        "$ipt" -w -t "$t" -D "$ch" "$@" 2>/dev/null || break
+        i=$((i + 1))
+    done
+}
+
+# Совпадение правила ответа DNS: цепочка, выход, протокол.
+warp_dns_match() {
+    if [ "$1" = FORWARD ]; then
+        printf '%s\n' "-o $2 -p $3 --sport 53 -m conntrack --ctstate ESTABLISHED"
+    else
+        printf '%s\n' "-o $2 -p $3 --sport 53"
+    fi
+}
+
+# Discover only our DNS rules (queue or copy), including retired AWG Manager
+# pins. Cleanup must remain possible after the manager config is removed or
+# becomes unreadable.
 warp_dns_capture_outputs() {
-    local ch
-    for ch in OUTPUT FORWARD; do
-        iptables -w -t filter -S "$ch" 2>/dev/null
+    local ch ipt
+    for ipt in $(warp_dns_capture_tools); do
+        for ch in OUTPUT FORWARD; do
+            "$ipt" -w -t filter -S "$ch" 2>/dev/null
+        done
     done | awk '
-        /--sport 53 / && /-j NFLOG / && /--nflog-group 189( |$)/ {
+        /--sport 53 / && ((/-j NFLOG / && /--nflog-group 189( |$)/) || (/-j NFQUEUE / && /--queue-num 189( |$)/)) {
             for (i=1;i<NF;i++) if ($i=="-o" && $(i+1) ~ /^[a-zA-Z][a-zA-Z0-9_.+-]*$/) print $(i+1)
         }' | LC_ALL=C sort -u
 }
 
-# DNS copies only. NFLOG has no verdict and cannot interrupt DNS delivery.
 warp_dns_capture_up() {
-    local ch proto out ifaces
+    local ch proto out ifaces ipt m
     ifaces=$(warp_wdtt_ifaces) || return 1
     ifaces=$(printf '%s' "$ifaces" | tr '\n' ' ')
     for out in $(warp_dns_capture_outputs); do
@@ -454,36 +515,40 @@ warp_dns_capture_up() {
             *) warp_dns_capture_down "$out" || return 1 ;;
         esac
     done
-    for out in br+ nwg+ $ifaces; do
-        for ch in OUTPUT FORWARD; do
-            for proto in udp tcp; do
-                if [ "$ch" = FORWARD ]; then
-                    iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null \
-                        || iptables -w -t filter -I "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null
-                else
-                    iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null \
-                        || iptables -w -t filter -I "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null
-                fi
+    for ipt in $(warp_dns_capture_tools); do
+        for out in br+ nwg+ $ifaces; do
+            for ch in OUTPUT FORWARD; do
+                for proto in udp tcp; do
+                    m=$(warp_dns_match "$ch" "$out" "$proto")
+                    # shellcheck disable=SC2086 # fixed generated rule arguments
+                    if "$ipt" -w -t filter -C "$ch" $m -j $WARP_DNS_QUEUE 2>/dev/null \
+                        || "$ipt" -w -t filter -I "$ch" $m -j $WARP_DNS_QUEUE 2>/dev/null; then
+                        # Очередь стоит — копия того же ответа не нужна.
+                        # shellcheck disable=SC2086 # fixed generated rule arguments
+                        _warp_rule_purge "$ipt" filter "$ch" $m -j $WARP_DNS_COPY
+                    else
+                        "$ipt" -w -t filter -C "$ch" $m -j $WARP_DNS_COPY 2>/dev/null \
+                            || "$ipt" -w -t filter -I "$ch" $m -j $WARP_DNS_COPY 2>/dev/null
+                    fi
+                done
             done
         done
     done
 }
 
 warp_dns_capture_down() {
-    local ch proto out ifaces
+    local ch proto out ifaces ipt m target
     if [ "$#" -gt 0 ]; then ifaces="$*"; else ifaces=$(warp_dns_capture_outputs); fi
-    for out in $ifaces; do
-        for ch in OUTPUT FORWARD; do
-            for proto in udp tcp; do
-                if [ "$ch" = FORWARD ]; then
-                    while iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null; do
-                        iptables -w -t filter -D "$ch" -o "$out" -p "$proto" --sport 53 -m conntrack --ctstate ESTABLISHED -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null || break
+    for ipt in $(warp_dns_capture_tools); do
+        for out in $ifaces; do
+            for ch in OUTPUT FORWARD; do
+                for proto in udp tcp; do
+                    m=$(warp_dns_match "$ch" "$out" "$proto")
+                    for target in "$WARP_DNS_QUEUE" "$WARP_DNS_COPY"; do
+                        # shellcheck disable=SC2086 # fixed generated rule arguments
+                        _warp_rule_purge "$ipt" filter "$ch" $m -j $target
                     done
-                else
-                    while iptables -w -t filter -C "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null; do
-                        iptables -w -t filter -D "$ch" -o "$out" -p "$proto" --sport 53 -j NFLOG --nflog-group 189 --nflog-range 4096 2>/dev/null || break
-                    done
-                fi
+                done
             done
         done
     done
@@ -582,6 +647,81 @@ warp_all_entries() {
     fi
 }
 
+# СОЕДИНЕНИЕ ДЕРЖИТ МАРШРУТ. Путь решает первый пакет, дальше соединение
+# идёт тем же путём. Метка ставилась на каждый пакет, и соединение меняло путь
+# на ходу: захват 14.11 — рукопожатие через WARP, адрес лёг в исключения, и
+# ClientHello того же соединения ушёл в ppp0 с другим адресом отправителя;
+# сервер его не знает, соединение висит. Так же рвались сессии через WARP,
+# когда истекал адрес домена в наборе, и прямые — когда адрес в набор попадал.
+#
+# Через WARP шло то соединение, у которого ответный адрес — адрес туннеля
+# (addr_v4 из device.json, от транспорта не зависит; MASQUERADE на z2ktunN).
+# ! -i туннеля: ответы из туннеля метить нельзя — их маршрут обратно в LAN.
+# Правила стоят первыми, раньше исключений: начатое через WARP соединение к
+# только что исключённому адресу доживает через WARP, а не обрывается.
+warp_tunnel_addr() {
+    local addr; addr=$(_json_str "$WARP_DEVICE" addr_v4)
+    case "$addr" in ''|*[!0-9.]*) return 0 ;; esac
+    printf '%s\n' "$addr"
+}
+
+# Совпадение «пакет соединения, начатого через WARP». Пусто — адреса или
+# интерфейса нет, правил не ставим. Адрес — с /32: iptables 1.4.21 печатает
+# --ctrepldst без маски, но -C и -D с адресом без маски правила не находят
+# (проверено на роутере 14.11). Сравнивая с выводом -S, маску убираем
+# (warp_ct_unmask), снимая по выводу -S — возвращаем (warp_ct_mask).
+# Адрес бывает и в конце строки — у входа в цепочку без « -j Z2K_WARP».
+warp_ct_unmask() {
+    sed -e 's#--ctrepldst \([0-9.]*\)/32\( \)#--ctrepldst \1\2#' -e 's#--ctrepldst \([0-9.]*\)/32$#--ctrepldst \1#' \
+        -e 's#--ctrepldst \([0-9a-f:]*\)/128\( \)#--ctrepldst \1\2#' -e 's#--ctrepldst \([0-9a-f:]*\)/128$#--ctrepldst \1#'
+}
+warp_ct_mask() {
+    sed -e 's#--ctrepldst \([0-9.]*\)\( \)#--ctrepldst \1/32\2#' -e 's#--ctrepldst \([0-9.]*\)$#--ctrepldst \1/32#' \
+        -e 's#--ctrepldst \([0-9a-f:]*:[0-9a-f:]*\)\( \)#--ctrepldst \1/128\2#' -e 's#--ctrepldst \([0-9a-f:]*:[0-9a-f:]*\)$#--ctrepldst \1/128#'
+}
+
+warp_sticky_match() {
+    local iface addr
+    iface=$(warp_iface); addr=$(warp_tunnel_addr)
+    [ -n "$iface" ] && [ -n "$addr" ] || return 0
+    printf '%s\n' "! -i $iface -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst $addr/32"
+}
+
+warp_sticky_rules() {
+    local m; m=$(warp_sticky_match)
+    [ -n "$m" ] || return 0
+    printf '%s\n' "$m -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+    printf '%s\n' "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN"
+}
+
+# Вход в цепочку для соединений через WARP, у которых пропал свой вход:
+# истёк адрес домена в наборе, сняли устройство, выключили список.
+warp_sticky_entry_sync() {
+    local want r
+    want=$(warp_sticky_match)
+    iptables -w -t mangle -S PREROUTING 2>/dev/null \
+        | sed -n 's/^-A PREROUTING \(.*--ctrepldst .* -j Z2K_WARP\)$/\1/p' | warp_ct_mask \
+        | while IFS= read -r r; do
+            [ -n "$want" ] && [ "$r" = "$want -j Z2K_WARP" ] && continue
+            # shellcheck disable=SC2086 # rule printed by iptables -S
+            iptables -w -t mangle -D PREROUTING $r 2>/dev/null
+        done
+    [ -n "$want" ] || return 0
+    # shellcheck disable=SC2086 # fixed generated match arguments
+    iptables -w -t mangle -C PREROUTING $want -j Z2K_WARP 2>/dev/null \
+        || iptables -w -t mangle -A PREROUTING $want -j Z2K_WARP 2>/dev/null
+}
+
+warp_sticky_entry_clear() {
+    local r
+    iptables -w -t mangle -S PREROUTING 2>/dev/null \
+        | sed -n 's/^-A PREROUTING \(.*--ctrepldst .* -j Z2K_WARP\)$/\1/p' | warp_ct_mask \
+        | while IFS= read -r r; do
+            # shellcheck disable=SC2086 # rule printed by iptables -S
+            iptables -w -t mangle -D PREROUTING $r 2>/dev/null
+        done
+}
+
 # Destination matches (static and DNS-observed) all enter this chain. Device
 # selection limits those matches. Without active lists, explicit selections
 # use full-device mode instead. Count
@@ -589,7 +729,8 @@ warp_all_entries() {
 warp_policy_rules() {
     local ifaces iface wdtt_enabled subnet
     [ "$(warp_flag)" = 1 ] || return 0
-    # Исключения — первыми и во всех режимах: «никогда через WARP» значит никогда,
+    warp_sticky_rules
+    # Исключения — первыми после правил соединения и во всех режимах: «никогда через WARP» значит никогда,
     # и правило, которое в одном режиме действует, а в другом молча нет, человек
     # не отличит от поломки.
     printf '%s\n' "-m set --match-set $WARP_IPSET_EXCL dst -j RETURN"
@@ -639,8 +780,12 @@ warp_policy_rules() {
     # source addresses independent of LAN selection; router-originated VPN
     # transport uses OUTPUT and never enters this destination-gated chain.
     # WDTT ownership rules above take precedence over this policy.
+    # Источник раньше интерфейса — в том порядке, в котором правило печатает
+    # iptables -S: иначе сверка в warp_policy_chain не сходилась никогда, и
+    # цепочку пересобирали на каждой синхронизации (раз в минуту), с окном,
+    # когда она пуста.
     for subnet in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10; do
-        printf '%s\n' "-i nwg+ -s $subnet -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+        printf '%s\n' "-s $subnet -i nwg+ -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
     done
     if awk '{ sub(/^[ \t]+/, ""); if ($0!="" && $0!~/^#/) found=1 } END { exit !found }' "$WARP_DEVICES_FILE" 2>/dev/null; then
         printf '%s\n' "-m set --match-set $WARP_IPSET_SRC src -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
@@ -659,7 +804,7 @@ warp_policy_chain() {
         _wlog "cannot determine WDTT ingress interfaces"
         return 1
     }
-    expected=$(printf '%s\n' '-N Z2K_WARP'; [ -z "$rules" ] || printf '%s\n' "$rules" | sed 's/^/-A Z2K_WARP /')
+    expected=$(printf '%s\n' '-N Z2K_WARP'; [ -z "$rules" ] || printf '%s\n' "$rules" | sed 's/^/-A Z2K_WARP /' | warp_ct_unmask)
     current=$(iptables -w -t mangle -S Z2K_WARP 2>/dev/null) || iptables -w -t mangle -N Z2K_WARP 2>/dev/null || return 1
     [ "$current" = "$expected" ] && return 0
     # Empty chain means direct routing during a settings change, never a
@@ -750,11 +895,303 @@ warp_policy_sync() (
     fi
     iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null \
         || iptables -w -t mangle -A PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null || exit 1
+    warp_sticky_entry_sync || exit 1
     warp_dns_client_sets | while read -r set client; do
         iptables -w -t mangle -C PREROUTING -s "$client/32" -m set --match-set "$set" dst -j Z2K_WARP 2>/dev/null \
             || iptables -w -t mangle -A PREROUTING -s "$client/32" -m set --match-set "$set" dst -j Z2K_WARP 2>/dev/null || exit 1
-    done
+    done || exit 1
+    warp_policy6_sync || _wlog "IPv6: маршрутизация не применена"
 )
+
+# ---- IPv6 -------------------------------------------------------------------------
+# WARP даёт аккаунту один IPv6-адрес /128 (addr_v6 в device.json). Движок
+# ставит его на туннель вместе с NAT66 и сам доказывает пробой, что ступень
+# возит IPv6: в status.json адрес (addr6) лежит, только пока проба проходит.
+# Маршрутизация та же, что у IPv4: метка в цепочке Z2K_WARP таблицы mangle
+# ip6tables, ip -6 rule по метке в таблицу 989 с маршрутом в туннель.
+#
+# Без этого устройство в сети с IPv6 открывало сайты с адресом IPv6 по IPv6
+# напрямую, мимо WARP, во всех режимах (замер 14.11 на Mac: устройство «весь
+# трафик через WARP» и домен из списка — оба напрямую по IPv6).
+#
+# Устройства в IPv6 отбираются по MAC: временные IPv6-адреса меняются. Туннель
+# не возит IPv6 (ступень, транспорт) — IPv6 устройств идёт напрямую, как раньше.
+ipt6() { "$WARP_IP6TABLES" -w "$@"; }
+warp_ip6_ok() { "$WARP_IP6TABLES" -w -t mangle -S PREROUTING >/dev/null 2>&1; }
+warp_v6_ready() { warp_ip6_ok && [ -n "$(_json_str "$WARP_STATUS" addr6)" ]; }
+
+# IPv6-адрес на туннеле — из статуса движка, а не из device.json: у ключей
+# WireGuard и MASQUE адреса разные, и движок ставит адрес текущего ключа.
+# В нижнем регистре — так его печатает ip6tables -S.
+warp_tunnel_addr6() {
+    local addr; addr=$(_json_str "$WARP_STATUS" addr6)
+    case "$addr" in ''|*[!0-9a-fA-F:]*) return 0 ;; *:*) printf '%s\n' "$addr" | tr 'A-F' 'a-f' ;; esac
+}
+
+warp_sets6_ensure() {
+    ipset create "$WARP_IPSET6" hash:net family inet6 -exist 2>/dev/null \
+        && ipset create "$WARP_IPSET_SRC6" hash:mac -exist 2>/dev/null \
+        && ipset create "$WARP_IPSET_EXCL6" hash:net family inet6 -exist 2>/dev/null \
+        && ipset create "$WARP_IPSET_XDNS6" hash:ip family inet6 timeout 3600 maxelem 8192 -exist 2>/dev/null \
+        && ipset create "$WARP_IPSET_LAN6" hash:net family inet6 -exist 2>/dev/null
+}
+
+# Набор целиком из stdin (по строке на запись): временный набор и swap, как у
+# IPv4 — неразобранная строка не оставляет живой набор пустым.
+_warp_set_load() {
+    local set="$1" tmp="${1}_new"
+    shift
+    ipset create "$set" "$@" -exist 2>/dev/null || return 1
+    ipset destroy "$tmp" 2>/dev/null
+    ipset create "$tmp" "$@" 2>/dev/null || return 1
+    if awk -v set="$tmp" 'NF { print "add " set " " $1 " -exist" }' | ipset restore -exist 2>/dev/null \
+        && ipset swap "$tmp" "$set" 2>/dev/null; then
+        ipset destroy "$tmp" 2>/dev/null
+        return 0
+    fi
+    ipset destroy "$tmp" 2>/dev/null
+    return 1
+}
+
+warp_ipset6_load() {
+    [ -r "$WARP_FILTER" ] || return 1
+    warp_active_lists | while IFS= read -r _wl; do cat "$_wl" 2>/dev/null; done \
+        | awk -v mode=ipset6 -f "$WARP_FILTER" | _warp_set_load "$WARP_IPSET6" hash:net family inet6
+}
+
+warp_excl6_load() {
+    [ -r "$WARP_FILTER" ] || return 1
+    { [ ! -f "$WARP_EXCLUDE_FILE" ] || awk -v mode=ipset6 -f "$WARP_FILTER" "$WARP_EXCLUDE_FILE"; } \
+        | _warp_set_load "$WARP_IPSET_EXCL6" hash:net family inet6
+}
+
+# MAC выбранных устройств: строка MAC — как есть, строка IPv4 — MAC по таблице
+# соседей или активной записи Keenetic. Офлайн-устройство без MAC пропускается
+# до следующей синхронизации (selfheal).
+warp_devices_macs() {
+    [ -s "$WARP_DEVICES_FILE" ] || return 0
+    local pairs ndmc_bin="${WARP_NDMC:-ndmc}"
+    pairs=$(ip -4 neigh show 2>/dev/null | awk '$0 ~ /lladdr/ {for (i=1;i<=NF;i++) if ($i=="lladdr") printf "%s %s;", $1, tolower($(i+1))}')
+    [ -x /bin/ndmc ] && [ -z "${WARP_NDMC:-}" ] && ndmc_bin=/bin/ndmc
+    if command -v "$ndmc_bin" >/dev/null 2>&1; then
+        pairs="$pairs$(LD_LIBRARY_PATH='' "$ndmc_bin" -c "show ip hotspot" 2>/dev/null | awk '
+        function flush() { if (active && mac != "" && ip != "") printf "%s %s;", ip, tolower(mac) }
+        {
+            sub(/^[ \t]+/, ""); k=$1; sub(/^[^:]*:[ \t]*/, ""); v=$0
+            if (k == "mac:") { flush(); mac=v; ip=""; active=0 }
+            else if (k == "ip:") ip=v
+            else if (k == "active:") active=(v == "yes")
+        }
+        END { flush() }')"
+    fi
+    awk -v pairs="$pairs" '
+    BEGIN { n = split(pairs, l, ";"); for (i = 1; i <= n; i++) { split(l[i], f, " "); if (f[1] != "") mac[f[1]] = f[2] } }
+    {
+        sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
+        if ($0 == "" || $0 ~ /^#/) next
+        s = tolower($0); gsub(/-/, ":", s)
+        if (s ~ /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/) { print s; next }
+        if (($0 in mac) && mac[$0] ~ /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/) print mac[$0]
+    }' "$WARP_DEVICES_FILE" | LC_ALL=C sort -u
+}
+
+# Свои сети роутера в IPv6 — префиксы адресов всех интерфейсов, кроме выходов в
+# интернет (у них маршрут по умолчанию), туннеля и lo. Их адресаты идут
+# напрямую в любом режиме, как частные сети в IPv4. Префикс выдаёт провайдер,
+# он меняется — поэтому набор, а не правило с адресом.
+warp_lan6_prefixes() {
+    local wan
+    wan=$(ip -6 route show table all 2>/dev/null \
+        | awk '$1 == "default" { for (i = 2; i < NF; i++) if ($i == "dev") print $(i+1) }' | LC_ALL=C sort -u | tr '\n' ' ')
+    ip -6 addr show 2>/dev/null | awk -v wan=" $wan " '
+        /^[0-9]+: / { dev = $2; sub(/:$/, "", dev); sub(/@.*/, "", dev); next }
+        $1 == "inet6" && / scope global/ {
+            if (dev == "lo" || dev ~ /^z2ktun[0-9]+$/ || index(wan, " " dev " ")) next
+            print $2
+        }'
+}
+
+# Правила цепочки Z2K_WARP в IPv6 — те же режимы, что у IPv4
+# (warp_policy_rules), со своими наборами.
+warp_policy6_rules() {
+    local ifaces iface wdtt_enabled m
+    m=$(warp_sticky6_match)
+    if [ -n "$m" ]; then
+        printf '%s\n' "$m -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+        printf '%s\n' "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN"
+    fi
+    printf '%s\n' "-m set --match-set $WARP_IPSET_EXCL6 dst -j RETURN"
+    printf '%s\n' "-m set --match-set $WARP_IPSET_XDNS6 dst -j RETURN"
+    # Не интернет (link-local, ULA, multicast, loopback) и свои сети — напрямую.
+    printf '%s\n' "! -d 2000::/3 -j RETURN"
+    printf '%s\n' "-m set --match-set $WARP_IPSET_LAN6 dst -j RETURN"
+    if warp_all_traffic_mode; then
+        ifaces=$(warp_wdtt_ifaces) || return 1
+        wdtt_enabled=$(warp_wdtt_flag)
+        for iface in $ifaces; do
+            [ "$wdtt_enabled" = 1 ] && printf '%s\n' "-i $iface -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+            printf '%s\n' "-i $iface -j RETURN"
+        done
+        printf '%s\n' "-j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+        return 0
+    fi
+    if warp_full_device_mode; then
+        ifaces=$(warp_wdtt_ifaces) || return 1
+        for iface in $ifaces; do printf '%s\n' "-i $iface -j RETURN"; done
+        printf '%s\n' "-m set --match-set $WARP_IPSET_SRC6 src -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+        return 0
+    fi
+    if ! awk 'NR>1 { found=1; exit } END { exit !found }' "$WARP_DOMAINS" 2>/dev/null \
+        && ! ipset save "$WARP_IPSET6" 2>/dev/null | grep -q '^add '; then
+        return 0
+    fi
+    ifaces=$(warp_wdtt_ifaces) || return 1
+    wdtt_enabled=$(warp_wdtt_flag)
+    for iface in $ifaces; do
+        [ "$wdtt_enabled" = 1 ] && printf '%s\n' "-i $iface -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+        printf '%s\n' "-i $iface -j RETURN"
+    done
+    # Клиенты WG-сервера Keenetic с частными (ULA) адресами — как в IPv4.
+    printf '%s\n' "-s fc00::/7 -i nwg+ -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+    if _warp_has_entries "$WARP_DEVICES_FILE"; then
+        printf '%s\n' "-m set --match-set $WARP_IPSET_SRC6 src -j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+    else
+        printf '%s\n' "-j MARK --set-xmark $WARP_MARK/$WARP_MARK"
+    fi
+}
+
+warp_sticky6_match() {
+    local iface addr
+    iface=$(warp_iface); addr=$(warp_tunnel_addr6)
+    [ -n "$iface" ] && [ -n "$addr" ] || return 0
+    printf '%s\n' "! -i $iface -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst $addr/128"
+}
+
+# Входы в цепочку из PREROUTING. Запись — в порядке, в котором их печатает
+# ip6tables -S (источник раньше интерфейса): по ней отличаем свои входы.
+warp_policy6_entries() {
+    local m iface ifaces
+    m=$(warp_sticky6_match)
+    [ -z "$m" ] || printf '%s\n' "$m"
+    if warp_all_traffic_mode; then
+        printf '%s\n' "-i br+" "-s fc00::/7 -i nwg+"
+        if [ "$(warp_wdtt_flag)" = 1 ]; then
+            ifaces=$(warp_wdtt_ifaces 2>/dev/null) || ifaces="wdtt0 wdttraw0"
+            for iface in $ifaces; do printf '%s\n' "-i $iface"; done
+        fi
+    elif warp_full_device_mode; then
+        printf '%s\n' "-m set --match-set $WARP_IPSET_SRC6 src"
+    fi
+    printf '%s\n' "-m set --match-set $WARP_IPSET6 dst"
+}
+
+warp_policy6_chain() {
+    local rules expected current rule
+    rules=$(warp_policy6_rules) || { ipt6 -t mangle -F Z2K_WARP 2>/dev/null; return 1; }
+    expected=$(printf '%s\n' '-N Z2K_WARP'; [ -z "$rules" ] || printf '%s\n' "$rules" | sed 's/^/-A Z2K_WARP /' | warp_ct_unmask)
+    current=$(ipt6 -t mangle -S Z2K_WARP 2>/dev/null) || ipt6 -t mangle -N Z2K_WARP 2>/dev/null || return 1
+    [ "$current" = "$expected" ] && return 0
+    ipt6 -t mangle -F Z2K_WARP 2>/dev/null || return 1
+    [ -n "$rules" ] || return 0
+    printf '%s\n' "$rules" | while IFS= read -r rule; do
+        # shellcheck disable=SC2086 # generated fixed rule arguments only
+        ipt6 -t mangle -A Z2K_WARP $rule 2>/dev/null || exit 1
+    done
+}
+
+# Наши входы в PREROUTING, кроме правил устройств, которые ставит warpd
+# (--match-set z2kd6_…): ими он управляет сам.
+_warp_entries6_current() {
+    ipt6 -t mangle -S PREROUTING 2>/dev/null \
+        | sed -n 's/^-A PREROUTING \(.*\) -j Z2K_WARP$/\1/p' | grep -v -- '--match-set z2kd6_'
+}
+
+warp_policy6_entries_sync() {
+    local want r
+    want=$(warp_policy6_entries | warp_ct_unmask)
+    _warp_entries6_current | while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        printf '%s\n' "$want" | grep -qxF -- "$r" && continue
+        r=$(printf '%s\n' "$r" | warp_ct_mask)
+        # shellcheck disable=SC2086 # rule printed by ip6tables -S
+        ipt6 -t mangle -D PREROUTING $r -j Z2K_WARP 2>/dev/null
+    done
+    warp_policy6_entries | while IFS= read -r r; do
+        # shellcheck disable=SC2086 # fixed generated match arguments
+        ipt6 -t mangle -C PREROUTING $r -j Z2K_WARP 2>/dev/null \
+            || ipt6 -t mangle -A PREROUTING $r -j Z2K_WARP 2>/dev/null || exit 1
+    done
+}
+
+warp_route6_up() {
+    ip -6 route replace default dev "$1" table "$WARP_TABLE" 2>/dev/null || return 1
+    ip -6 rule show 2>/dev/null | grep -q "fwmark $WARP_MARK" \
+        || ip -6 rule add pref "$WARP_RULE_PREF" fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
+}
+
+warp_route6_down() {
+    local i=0
+    while [ "$i" -lt 8 ] && ip -6 rule del fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null; do i=$((i + 1)); done
+    ip -6 route flush table "$WARP_TABLE" 2>/dev/null
+    return 0
+}
+
+# IPv6 напрямую: метки сняты, маршрут снят. Цепочка остаётся пустой: в неё
+# прыгают правила устройств, которые ставит warpd, и пустая цепочка — это
+# «никуда не уводить», а не ошибка вставки.
+warp_policy6_down() {
+    warp_route6_down
+    warp_ip6_ok || return 0
+    ipt6 -t mangle -F Z2K_WARP 2>/dev/null
+    _warp_entries6_current | while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        r=$(printf '%s\n' "$r" | warp_ct_mask)
+        # shellcheck disable=SC2086 # rule printed by ip6tables -S
+        ipt6 -t mangle -D PREROUTING $r -j Z2K_WARP 2>/dev/null
+    done
+    return 0
+}
+
+# Правила устройств от warpd — только при выключении: без них цепочка не
+# нужна, и наборы z2kd6_ можно уничтожить.
+warp_policy6_clear() {
+    warp_policy6_down
+    warp_ip6_ok || return 0
+    ipt6 -t mangle -S PREROUTING 2>/dev/null | sed -n 's/^-A PREROUTING \(.* -j Z2K_WARP\)$/\1/p' \
+        | while IFS= read -r r; do
+            r=$(printf '%s\n' "$r" | warp_ct_mask)
+            # shellcheck disable=SC2086 # rule printed by ip6tables -S
+            ipt6 -t mangle -D PREROUTING $r 2>/dev/null
+        done
+    ipt6 -t mangle -X Z2K_WARP 2>/dev/null
+    return 0
+}
+
+warp_policy6_sync() {
+    local iface
+    warp_ip6_ok || return 0
+    warp_sets6_ensure || { warp_policy6_down; _wlog "IPv6: наборы не созданы"; return 1; }
+    ipt6 -t mangle -S Z2K_WARP >/dev/null 2>&1 || ipt6 -t mangle -N Z2K_WARP 2>/dev/null
+    iface=$(warp_iface)
+    if [ -z "$iface" ] || ! warp_v6_ready || [ "$(warp_flag)" != 1 ]; then
+        warp_policy6_down
+        return 0
+    fi
+    if ! warp_devices_macs | _warp_set_load "$WARP_IPSET_SRC6" hash:mac; then
+        warp_policy6_down
+        _wlog "IPv6: выбор устройств не применён"
+        return 1
+    fi
+    warp_lan6_prefixes | _warp_set_load "$WARP_IPSET_LAN6" hash:net family inet6 \
+        || { warp_policy6_down; _wlog "IPv6: свои сети не определены"; return 1; }
+    warp_policy6_chain || { warp_policy6_down; return 1; }
+    warp_policy6_entries_sync || return 1
+    warp_route6_up "$iface"
+}
+
+warp_dns_client_sets6() {
+    ipset list -n 2>/dev/null | awk '/^z2kd6_[0-9.]+$/'
+}
 
 # A patch can replace the NDM hook without causing a firewall rebuild. The
 # daemon's own rule repair only runs on start, so selfheal must apply the newly
@@ -773,6 +1210,7 @@ warp_pbr_down() {
     # Empty the gate first, including observer rules that race teardown.
     iptables -w -t mangle -F Z2K_WARP 2>/dev/null
     warp_policy_legacy_clear
+    warp_sticky_entry_clear
     while iptables -w -t mangle -C PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null; do
         iptables -w -t mangle -D PREROUTING -m set --match-set "$WARP_IPSET" dst -j Z2K_WARP 2>/dev/null || break
     done
@@ -784,6 +1222,7 @@ warp_pbr_down() {
     ip rule del fwmark "$WARP_MARK/$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
     ip rule del fwmark "$WARP_MARK" table "$WARP_TABLE" 2>/dev/null
     ip route flush table "$WARP_TABLE" 2>/dev/null
+    warp_policy6_down
 }
 
 # ---- установка / удаление -------------------------------------------------------
@@ -1075,6 +1514,7 @@ warp_disable() {
     # The observer may have learned a last answer during stop; remove any
     # client rule it added after the first fail-open teardown.
     warp_pbr_down
+    warp_policy6_clear
     warp_dns_sets_destroy
     warp_set_flag 0
     warp_op_unlock
@@ -1126,6 +1566,9 @@ warp_remove() {
     ipset destroy "$WARP_IPSET_SRC" 2>/dev/null
     ipset destroy "$WARP_IPSET_EXCL" 2>/dev/null
     ipset destroy "$WARP_IPSET_XDNS" 2>/dev/null
+    for _s6 in "$WARP_IPSET6" "$WARP_IPSET_SRC6" "$WARP_IPSET_EXCL6" "$WARP_IPSET_XDNS6" "$WARP_IPSET_LAN6"; do
+        ipset destroy "$_s6" 2>/dev/null
+    done
     _wlog "движок удалён; ключ устройства сохранён в $WARP_DEVICE"
     return 0
 }
@@ -1221,7 +1664,10 @@ warp_status() {
     elif warp_all_traffic_mode; then scope=all
     elif warp_full_device_mode; then scope=devices
     fi
-    printf 'installed=%s enabled=%s ready=%s transport=%s endpoint=%s iface=%s addr=%s entries=%s devices=%s error=%s mem=%s plan=%s plan_err=%s license=%s domain_active=%s domain_rules=%s domain_pairs=%s domain_error=%s edge_colo=%s edge_country=%s edge_rtt_ms=%s edge_checked_at=%s edge_selection=%s scope=%s\n' \
+    # ipv6=1 — туннель возит IPv6 и IPv6 устройств уходит в него.
+    local ipv6=0
+    warp_v6_ready && ipv6=1
+    printf 'installed=%s enabled=%s ready=%s transport=%s endpoint=%s iface=%s addr=%s entries=%s devices=%s error=%s mem=%s plan=%s plan_err=%s license=%s domain_active=%s domain_rules=%s domain_pairs=%s domain_error=%s edge_colo=%s edge_country=%s edge_rtt_ms=%s edge_checked_at=%s edge_selection=%s scope=%s ipv6=%s\n' \
         "$installed" "${GAME_WARP_ENABLED_OVERRIDE:-$(warp_flag)}" "$ready" \
         "$(_json_str "$WARP_STATUS" transport)" "$(_json_str "$WARP_STATUS" endpoint)" \
         "$(_json_str "$WARP_STATUS" iface)" "$(_json_str "$WARP_STATUS" addr)" \
@@ -1230,7 +1676,7 @@ warp_status() {
         "$domain_active" "${domain_rules:-0}" "${domain_pairs:-0}" "$domain_error" \
         "$(_json_str "$WARP_STATUS" edge_colo)" "$(_json_str "$WARP_STATUS" edge_country)" \
         "$(_json_raw "$WARP_STATUS" edge_rtt_ms)" "$(_json_raw "$WARP_STATUS" edge_checked_at)" \
-        "$(_json_str "$WARP_STATUS" edge_selection)" "$scope"
+        "$(_json_str "$WARP_STATUS" edge_selection)" "$scope" "$ipv6"
 }
 
 # Зачистка usque-эпохи — по уликам, а не по имени, и пакет — один раз.

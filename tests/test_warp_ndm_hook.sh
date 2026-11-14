@@ -25,6 +25,8 @@ printf "v1\nmyip.ru\n" > "$SB/domains.v1"
 cat > "$SB/bin/iptables" <<EOF
 #!/bin/sh
 echo "\$*" >> "$SB/ipt.log"
+# Файл noqueue — «ядро без NFQUEUE»: правило очереди не встаёт.
+case "\$*" in *NFQUEUE*) [ -f "$SB/noqueue" ] && exit 1 ;; esac
 case "\$*" in *" -C "*) exit 1 ;; esac
 exit 0
 EOF
@@ -33,7 +35,13 @@ cat > "$SB/bin/ipset" <<'EOF'
 if [ "$1 $2" = 'list -n' ] && [ -z "$3" ]; then echo z2kd_192.168.1.10; fi
 exit 0
 EOF
-chmod +x "$SB/bin/iptables" "$SB/bin/ipset"
+cat > "$SB/bin/ip6tables" <<EOF
+#!/bin/sh
+echo "ip6 \$*" >> "$SB/ipt.log"
+case "\$*" in *" -C "*) exit 1 ;; esac
+exit 0
+EOF
+chmod +x "$SB/bin/iptables" "$SB/bin/ip6tables" "$SB/bin/ipset"
 
 printf 'GAME_WARP_ENABLED=1\n' > "$SB/z2k/config"
 printf '{"iface": "z2ktun3", "id": "x"}\n' > "$SB/device.json"
@@ -52,6 +60,14 @@ assert_eq "mangle: no whole-device rule" "0" \
     "$(grep -c -- '-w -t mangle -A PREROUTING -m set --match-set z2k_warp_src src -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 assert_eq "mangle: MARK for client-scoped DNS set" "1" \
     "$(grep -c -- '-w -t mangle -A PREROUTING -s 192.168.1.10/32 -m set --match-set z2kd_192.168.1.10 dst -j Z2K_WARP' "$SB/ipt.log")"
+# Соединение держит маршрут: реген возвращает и вход для соединений через WARP.
+printf '{"iface": "z2ktun3", "id": "x", "addr_v4": "172.16.0.2"}\n' > "$SB/device.json"
+run iptables mangle
+assert_eq "mangle: WARP flows keep their mark" "1" \
+    "$(grep -c -- '-w -t mangle -A Z2K_WARP ! -i z2ktun3 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 172.16.0.2/32 -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
+assert_eq "mangle: entry for WARP flows restored" "1" \
+    "$(grep -c -- '-w -t mangle -A PREROUTING ! -i z2ktun3 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 172.16.0.2/32 -j Z2K_WARP' "$SB/ipt.log")"
+printf '{"iface": "z2ktun3", "id": "x"}\n' > "$SB/device.json"
 assert_eq "mangle: MSS clamp on z2ktun3" "1" \
     "$(grep -c -- '-w -t mangle -A FORWARD -o z2ktun3 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu' "$SB/ipt.log")"
 assert_eq "mangle: no legacy --set-mark form" "0" "$(grep -c -- '-A .*--set-mark ' "$SB/ipt.log")"
@@ -84,12 +100,42 @@ run iptables filter
 assert_eq "filter: marked outbound before Keenetic reject" "1" "$(grep -c -- '-w -t filter -I FORWARD 1 -o z2ktun3 -m mark --mark 0x989/0x989 -j ACCEPT' "$SB/ipt.log")"
 assert_eq "filter: established return before Keenetic reject" "1" "$(grep -c -- '-w -t filter -I FORWARD 1 -i z2ktun3 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' "$SB/ipt.log")"
 assert_eq "filter: no broad appended accept" "0" "$(grep -c -- '-w -t filter -A FORWARD -o z2ktun3 -j ACCEPT' "$SB/ipt.log")"
-assert_eq "filter: LAN, native VPN and both WDTT modes forwarded DNS copied before ACCEPT" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG' "$SB/ipt.log")"
-assert_eq "filter: router DNS to LAN, native VPN and both WDTT modes copied" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG' "$SB/ipt.log")"
+assert_eq "filter: LAN, native VPN and both WDTT modes forwarded DNS queued before ACCEPT" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt.log")"
+assert_eq "filter: router DNS to LAN, native VPN and both WDTT modes queued" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt.log")"
+assert_eq "filter: no NFLOG copy next to the queue" "0" "$(grep -c -- '-I .*-j NFLOG' "$SB/ipt.log")"
 assert_eq "filter: nothing else" "0" "$(grep -vc -- "-t filter" "$SB/ipt.log")"
 
+assert_eq "filter: iptables rebuild leaves ip6tables alone" "0" "$(grep -c '^ip6 ' "$SB/ipt.log")"
+touch "$SB/noqueue"
+run iptables filter
+assert_eq "filter, no NFQUEUE: forwarded DNS copied" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG --nflog-group 189' "$SB/ipt.log")"
+assert_eq "filter, no NFQUEUE: router DNS copied" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG --nflog-group 189' "$SB/ipt.log")"
+rm -f "$SB/noqueue"
+
+# Устройства с IPv6 спрашивают DNS роутера по IPv6: реген ip6tables обязан
+# вернуть ту же очередь DNS, и только её — туннель, метки и NAT в IPv4.
+run ip6tables filter
+assert_eq "ip6tables filter: router DNS queue restored" "8" "$(grep -c -- '^ip6 -w -t filter -I OUTPUT .*--sport 53.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt.log")"
+assert_eq "ip6tables filter: forwarded DNS queue restored" "8" "$(grep -c -- '^ip6 -w -t filter -I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt.log")"
+assert_eq "ip6tables filter: no tunnel accept rules without IPv6" "0" "$(grep -c -- 'z2ktun' "$SB/ipt.log")"
+assert_eq "ip6tables filter: iptables untouched" "0" "$(grep -vc '^ip6 ' "$SB/ipt.log")"
 run ip6tables mangle
-assert_eq "ip6tables: nothing" "0" "$(wc -l < "$SB/ipt.log" | tr -d ' ')"
+assert_eq "ip6tables mangle: nothing" "0" "$(wc -l < "$SB/ipt.log" | tr -d ' ')"
+run ip6tables nat
+assert_eq "ip6tables nat: nothing" "0" "$(wc -l < "$SB/ipt.log" | tr -d ' ')"
+
+# У аккаунта есть IPv6 — реген ip6tables возвращает то же, что в IPv4: NAT66,
+# MSS по MTU туннеля минус 60, узкие ACCEPT и цепочку (policy-sync).
+printf '{"iface": "z2ktun3", "id": "x", "addr_v6": "2606:4700:110:8a36::1"}\n' > "$SB/device.json"
+run ip6tables nat
+assert_eq "ip6tables nat: NAT66 on z2ktun3" "1" "$(grep -c -- '^ip6 -w -t nat -A POSTROUTING -o z2ktun3 -j MASQUERADE' "$SB/ipt.log")"
+run ip6tables mangle
+assert_eq "ip6tables mangle: MSS both ways" "1 1" "$(grep -c -- '^ip6 -w -t mangle -A FORWARD -o z2ktun3 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu' "$SB/ipt.log") $(grep -c -- '^ip6 -w -t mangle -A FORWARD -i z2ktun3 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220' "$SB/ipt.log")"
+assert_eq "ip6tables mangle: policy synced" "yes" "$(grep -q -- '^ip6 -w -t mangle -S' "$SB/ipt.log" && echo yes || echo no)"
+run ip6tables filter
+assert_eq "ip6tables filter: tunnel accepts before NDM rules" "1 1" "$(grep -c -- '^ip6 -w -t filter -I FORWARD 1 -o z2ktun3 -m mark --mark 0x989/0x989 -j ACCEPT' "$SB/ipt.log") $(grep -c -- '^ip6 -w -t filter -I FORWARD 1 -i z2ktun3 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' "$SB/ipt.log")"
+assert_eq "ip6tables filter: DNS queue too" "8" "$(grep -c -- '^ip6 -w -t filter -I OUTPUT .*--sport 53.*-j NFQUEUE' "$SB/ipt.log")"
+printf '{"iface": "z2ktun3", "id": "x"}\n' > "$SB/device.json"
 
 printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"
 run iptables mangle

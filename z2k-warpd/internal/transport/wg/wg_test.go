@@ -40,6 +40,7 @@ func TestIpcConfig(t *testing.T) {
 		"public_key=6e65ce0be17517110c17d77288ad87e7fd5252dcc7d09b95a39d61db03df832a\n",
 		"endpoint=8.6.112.0:2408\n",
 		"allowed_ip=0.0.0.0/0\n",
+		"allowed_ip=::/0\n",
 		"persistent_keepalive_interval=25\n",
 	} {
 		if !contains(cfg, want) {

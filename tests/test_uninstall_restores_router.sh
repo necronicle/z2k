@@ -157,21 +157,46 @@ cat > "$tmp/w/iptables" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$W_LOG"
 case "$*" in
-  *"-S PREROUTING"*) echo '-A PREROUTING -m set --match-set z2k_warp dst -j Z2K_WARP'; echo '-A PREROUTING -p tcp -j NOT_OURS' ;;
-  *"-t filter -S FORWARD"*) echo '-A FORWARD -o z2ktun0 -j ACCEPT'; echo '-A FORWARD -o eth3 -j ACCEPT' ;;
-  *"-t filter -S OUTPUT"*) echo '-A OUTPUT -j NFLOG --nflog-group 189'; echo '-A OUTPUT -j NFLOG --nflog-group 1890' ;;
+  *"-S PREROUTING"*) echo '-A PREROUTING -m set --match-set z2k_warp dst -j Z2K_WARP'; echo '-A PREROUTING ! -i z2ktun0 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 172.16.0.2 -j Z2K_WARP'; echo '-A PREROUTING -p tcp -j NOT_OURS' ;;
+  *"-t filter -S FORWARD"*) echo '-A FORWARD -o z2ktun0 -j ACCEPT'; echo '-A FORWARD -o eth3 -j ACCEPT'; echo '-A FORWARD -p udp -j NFQUEUE --queue-num 200 --queue-bypass' ;;
+  *"-t filter -S OUTPUT"*) echo '-A OUTPUT -j NFLOG --nflog-group 189'; echo '-A OUTPUT -j NFLOG --nflog-group 1890'; echo '-A OUTPUT -o br+ -p udp -m udp --sport 53 -j NFQUEUE --queue-num 189 --queue-bypass' ;;
 esac
 exit 0
 EOF
-printf '#!/bin/sh\necho "ip $*" >> "$W_LOG"\nexit 0\n' > "$tmp/w/ip"; chmod +x "$tmp/w/iptables" "$tmp/w/ip"
+cat > "$tmp/w/ip6tables" <<'EOF'
+#!/bin/sh
+echo "ip6 $*" >> "$W_LOG"
+case "$*" in
+  *"-t filter -S OUTPUT"*) echo '-A OUTPUT -o br+ -p udp -m udp --sport 53 -j NFLOG --nflog-group 189'; echo '-A OUTPUT -j NFLOG --nflog-group 1890'; echo '-A OUTPUT -o br+ -p tcp -m tcp --sport 53 -j NFQUEUE --queue-num 189 --queue-bypass' ;;
+  *"-t filter -S FORWARD"*) echo '-A FORWARD -o br+ -j ACCEPT'; echo '-A FORWARD -o z2ktun0 -m mark --mark 0x989/0x989 -j ACCEPT' ;;
+  *"-t mangle -S PREROUTING"*) echo '-A PREROUTING -m set --match-set z2k_warp_src6 src -j Z2K_WARP'; echo '-A PREROUTING ! -i z2ktun0 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 2606:4700:110:8a36::1 -j Z2K_WARP'; echo '-A PREROUTING -m mac --mac-source AA:BB:CC:DD:EE:01 -m set --match-set z2kd6_192.168.1.10 dst -j Z2K_WARP'; echo '-A PREROUTING -j Z2K_GVIDLE' ;;
+  *"-t nat -S POSTROUTING"*) echo '-A POSTROUTING -o z2ktun0 -j MASQUERADE'; echo '-A POSTROUTING -j _NDM_POSTROUTING' ;;
+esac
+exit 0
+EOF
+printf '#!/bin/sh\necho "ip $*" >> "$W_LOG"\nexit 0\n' > "$tmp/w/ip"; chmod +x "$tmp/w/iptables" "$tmp/w/ip6tables" "$tmp/w/ip"
 : > "$tmp/w.log"
 PATH="$tmp/w:$PATH" W_LOG="$tmp/w.log" sh -c "$WFN
 _z2k_warp_routing_sweep" >/dev/null 2>&1
 for _w in 'ip rule del fwmark 0x989/0x989 table 989' 'ip route flush table 989' '-D PREROUTING -m set --match-set z2k_warp dst -j Z2K_WARP' \
-          '-D FORWARD -o z2ktun0 -j ACCEPT' '-D OUTPUT -j NFLOG --nflog-group 189' '-t mangle -X Z2K_WARP'; do
+          '-D FORWARD -o z2ktun0 -j ACCEPT' '-D OUTPUT -j NFLOG --nflog-group 189' '-t mangle -X Z2K_WARP' \
+          '-D PREROUTING ! -i z2ktun0 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 172.16.0.2/32 -j Z2K_WARP' \
+          '-D OUTPUT -o br+ -p udp -m udp --sport 53 -j NFQUEUE --queue-num 189 --queue-bypass'; do
     grep -qF -- "$_w" "$tmp/w.log" && ok "WARP: $_w" || bad "WARP: нет [$_w]"
 done
-grep -qE -- '-D .*(NOT_OURS|eth3|group 1890)' "$tmp/w.log" && bad "WARP: снято чужое" || ok "WARP: чужое не тронуто"
+grep -qF -- 'ip6 -w -t filter -D OUTPUT -o br+ -p udp -m udp --sport 53 -j NFLOG --nflog-group 189' "$tmp/w.log" \
+    && ok "WARP: копии DNS в ip6tables сняты" || bad "WARP: копии DNS в ip6tables остались"
+grep -qF -- 'ip6 -w -t filter -D OUTPUT -o br+ -p tcp -m tcp --sport 53 -j NFQUEUE --queue-num 189 --queue-bypass' "$tmp/w.log" \
+    && ok "WARP: очередь DNS в ip6tables снята" || bad "WARP: очередь DNS в ip6tables осталась"
+for _w in 'ip6 -w -t mangle -D PREROUTING -m set --match-set z2k_warp_src6 src -j Z2K_WARP' \
+          'ip6 -w -t mangle -D PREROUTING ! -i z2ktun0 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 2606:4700:110:8a36::1/128 -j Z2K_WARP' \
+          'ip6 -w -t mangle -D PREROUTING -m mac --mac-source AA:BB:CC:DD:EE:01 -m set --match-set z2kd6_192.168.1.10 dst -j Z2K_WARP' \
+          'ip6 -w -t nat -D POSTROUTING -o z2ktun0 -j MASQUERADE' \
+          'ip6 -w -t filter -D FORWARD -o z2ktun0 -m mark --mark 0x989/0x989 -j ACCEPT' \
+          'ip6 -w -t mangle -X Z2K_WARP' 'ip -6 rule del fwmark 0x989/0x989 table 989' 'ip -6 rule del table 990' 'ip -6 route flush table 990'; do
+    grep -qF -- "$_w" "$tmp/w.log" && ok "WARP IPv6: $_w" || bad "WARP IPv6: нет [$_w]"
+done
+grep -qE -- '-D .*(NOT_OURS|eth3|group 1890|-o br\+ -j ACCEPT|queue-num 200|Z2K_GVIDLE|_NDM_POSTROUTING)' "$tmp/w.log" && bad "WARP: снято чужое" || ok "WARP: чужое не тронуто"
 # Снимать маршрут надо до остановки движка: S51 stop его не снимает.
 _wl=$(grep -n 'z2k-warp.sh remove' "$CLEANUP" | head -1 | cut -d: -f1)
 _sl=$(grep -n 'Попытка мягкой остановки' "$CLEANUP" | head -1 | cut -d: -f1)

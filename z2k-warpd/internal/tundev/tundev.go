@@ -9,6 +9,7 @@ package tundev
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"strings"
 
@@ -63,6 +64,63 @@ func Configure(run Runner, name, addrV4 string, mtu int) error {
 		return fmt.Errorf("ip link set up: %s", firstLine(out, err))
 	}
 	return nil
+}
+
+// ConfigureV6 — IPv6-адрес аккаунта (/128) на туннеле: с ним WARP несёт и
+// IPv6-трафик устройств. Адрес «уже есть» — не ошибка. Пустой адрес — IPv6
+// у аккаунта нет, ничего не делаем.
+func ConfigureV6(run Runner, name, addrV6 string) error {
+	if addrV6 == "" {
+		return nil
+	}
+	ip, err := netip.ParseAddr(addrV6)
+	if err != nil || !ip.Is6() || ip.Is4In6() {
+		return fmt.Errorf("bad IPv6 address %q", addrV6)
+	}
+	if out, err := run("ip", "-6", "addr", "add", ip.String()+"/128", "dev", name); err != nil {
+		if !strings.Contains(out, "File exists") {
+			return fmt.Errorf("ip -6 addr add: %s", firstLine(out, err))
+		}
+	}
+	return nil
+}
+
+// RemoveV6 снимает прежний IPv6-адрес: у ключей WireGuard и MASQUE адреса
+// разные, и при смене ключа старый на туннеле — чужой для Cloudflare.
+func RemoveV6(run Runner, name, addrV6 string) {
+	_, _ = run("ip", "-6", "addr", "del", addrV6+"/128", "dev", name)
+}
+
+// Проба IPv6 идёт с адреса аккаунта по своей таблице: маршрута в туннель у
+// роутера нет, а таблица 989 — маршрутизация устройств, её снимает скрипт,
+// когда туннель не готов, то есть ровно тогда, когда IPv6 и надо проверить.
+const (
+	ProbeTable6    = "990"
+	probeRulePref6 = "89"
+)
+
+// RouteV6 — маршрут пробы IPv6: пакеты с адреса аккаунта уходят в туннель.
+// Чужой трафик правило не задевает: с этим адресом источника ходит только
+// сам движок (трафик устройств получает его уже после маршрутизации, NAT66).
+func RouteV6(run Runner, name, addrV6 string) error {
+	UnrouteV6(run, addrV6)
+	if out, err := run("ip", "-6", "route", "replace", "default", "dev", name, "table", ProbeTable6); err != nil {
+		return fmt.Errorf("ip -6 route: %s", firstLine(out, err))
+	}
+	if out, err := run("ip", "-6", "rule", "add", "pref", probeRulePref6, "from", addrV6+"/128", "table", ProbeTable6); err != nil {
+		return fmt.Errorf("ip -6 rule: %s", firstLine(out, err))
+	}
+	return nil
+}
+
+// UnrouteV6 снимает правило и таблицу пробы; отсутствие — не ошибка.
+func UnrouteV6(run Runner, addrV6 string) {
+	for i := 0; i < 8; i++ {
+		if _, err := run("ip", "-6", "rule", "del", "pref", probeRulePref6, "from", addrV6+"/128", "table", ProbeTable6); err != nil {
+			break
+		}
+	}
+	_, _ = run("ip", "-6", "route", "flush", "table", ProbeTable6)
 }
 
 // Teardown опускает линк; само устройство исчезает при закрытии TUN.

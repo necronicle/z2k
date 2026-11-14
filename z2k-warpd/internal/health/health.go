@@ -194,36 +194,57 @@ func (m *Monitor) probe(ctx context.Context, now time.Time, src string) Verdict 
 // Адресом, не именем: DNS-сбой не должен выглядеть смертью туннеля.
 func TraceProbe(timeout time.Duration) Prober {
 	return func(ctx context.Context, iface string) error {
-		if iface == "" {
-			return errors.New("probe: no interface")
-		}
-		d := &net.Dialer{Timeout: timeout, Control: bindToDevice(iface)}
-		c := &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				DialContext:       d.DialContext,
-				TLSClientConfig:   &tls.Config{ServerName: "one.one.one.one"},
-				DisableKeepAlives: true,
-			},
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", "https://1.1.1.1/cdn-cgi/trace", nil)
-		if err != nil {
-			return err
-		}
-		resp, err := c.Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		if err != nil {
-			return err
-		}
-		if !traceViaWarp(body) {
-			return errors.New("probe: warp=off")
-		}
-		return nil
+		return trace(ctx, timeout, iface, nil, "https://1.1.1.1/cdn-cgi/trace")
 	}
+}
+
+// Prober6 — сквозная проверка IPv6 через туннель iface с адреса src.
+type Prober6 func(ctx context.Context, iface, src string) error
+
+// TraceProbe6 — тот же /cdn-cgi/trace, но по IPv6 и с IPv6-адреса аккаунта:
+// туннель, который возит IPv4, не обязан возить IPv6 (транспорт, ступень).
+// Адрес источника обязателен: по нему ядро уводит пробу в туннель (правило
+// tundev.RouteV6), маршрута по умолчанию в туннель у роутера нет.
+func TraceProbe6(timeout time.Duration) Prober6 {
+	return func(ctx context.Context, iface, src string) error {
+		ip := net.ParseIP(src)
+		if ip == nil || ip.To4() != nil {
+			return errors.New("probe6: no IPv6 source")
+		}
+		return trace(ctx, timeout, iface, &net.TCPAddr{IP: ip}, "https://[2606:4700:4700::1111]/cdn-cgi/trace")
+	}
+}
+
+func trace(ctx context.Context, timeout time.Duration, iface string, local net.Addr, url string) error {
+	if iface == "" {
+		return errors.New("probe: no interface")
+	}
+	d := &net.Dialer{Timeout: timeout, Control: bindToDevice(iface), LocalAddr: local}
+	c := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:       d.DialContext,
+			TLSClientConfig:   &tls.Config{ServerName: "one.one.one.one"},
+			DisableKeepAlives: true,
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return err
+	}
+	if !traceViaWarp(body) {
+		return errors.New("probe: warp=off")
+	}
+	return nil
 }
 
 // traceViaWarp — прошёл ли запрос через WARP, по ответу /cdn-cgi/trace.

@@ -57,6 +57,8 @@ type Config struct {
 	CreateTUN    func(name string, mtu int) (tun.Device, error)
 	Run          tundev.Runner
 	Probe        health.Prober
+	// Probe6 — сквозная проверка IPv6 через туннель (адрес аккаунта).
+	Probe6       health.Prober6
 	SwitchTunnel func(ctx context.Context, d *account.Device, tunnel string) error
 	// Proxy — VPS-релей для API, если напрямую заблокирован (как у register).
 	Proxy string
@@ -90,6 +92,9 @@ func (c *Config) defaults() {
 	}
 	if c.Probe == nil {
 		c.Probe = health.TraceProbe(8 * time.Second)
+	}
+	if c.Probe6 == nil {
+		c.Probe6 = health.TraceProbe6(8 * time.Second)
 	}
 	if c.GeoProbe == nil {
 		c.GeoProbe = edgepick.Probe
@@ -128,11 +133,19 @@ func (c *Config) defaults() {
 
 // Engine — состояние одного запуска.
 type Engine struct {
-	cfg         Config
-	d           *account.Device
-	st          *status.Writer
-	tunDev      *tunshare.Shared
-	iface       string
+	cfg    Config
+	d      *account.Device
+	st     *status.Writer
+	tunDev *tunshare.Shared
+	iface  string
+	// addr6 — IPv6-адрес аккаунта, поставленный на туннель; пусто — IPv6 нет.
+	addr6 string
+	// IPv6 через туннель: доказан ли пробой, провалы подряд, время пробы.
+	// Своё состояние, отдельно от IPv4: ступень может возить один и не возить
+	// другой, и тогда IPv6 устройств идёт напрямую, а не в никуда.
+	v6ok        bool
+	v6fails     int
+	v6at        time.Time
 	since       time.Time
 	lastErr     string // причина держится до первого успеха, а не до следующей записи
 	scanning    bool
@@ -189,6 +202,16 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Logf("nat: %v", err)
 	}
 	defer nat.Remove(nat.Runner(cfg.Run), e.iface, MTU-40)
+	// IPv6: 40 байт заголовка IPv6 и 20 TCP. Без правил IPv6 устройствам не
+	// включаем: адрес в статус не попадёт, и скрипт IPv6 в туннель не уведёт.
+	if e.addr6 != "" {
+		if err := nat.Ensure6(nat.Runner(cfg.Run), e.iface, MTU-60); err != nil {
+			cfg.Logf("nat6: %v — только IPv4", err)
+			tundev.UnrouteV6(cfg.Run, e.addr6)
+			e.addr6 = ""
+		}
+	}
+	defer nat.Remove6(nat.Runner(cfg.Run), e.iface, MTU-60)
 
 	var lad *ladder.Ladder
 	if cfg.ForceStep != nil {
@@ -347,6 +370,14 @@ func (e *Engine) openOnce(ctx context.Context, step account.Step, dev tun.Device
 			e.cfg.Logf("device.json: %v", err)
 		}
 	}
+	// Адрес IPv6 — свой у каждого ключа: туннель обязан нести адрес того
+	// ключа, с которым открываемся (замер 14.11: после возврата с MASQUE на
+	// WireGuard на туннеле остался адрес MASQUE, и IPv6 не проходил).
+	// Проба WireGuard из-под MASQUE открывается на пустом TUN — живой туннель
+	// она не трогает.
+	if _, probe := dev.(*nullTun); !probe {
+		e.syncAddr6()
+	}
 	tr, err := e.cfg.NewTransport(step, dev, e.d)
 	if err != nil {
 		return nil, err
@@ -366,10 +397,16 @@ func (e *Engine) openOnce(ctx context.Context, step account.Step, dev tun.Device
 func (e *Engine) serve(ctx context.Context, tr transport.Transport, step account.Step, lad *ladder.Ladder, mon *health.Monitor) bool {
 	lastUp := e.cfg.Now()
 	committed := false
+	// IPv6 доказывается заново на каждой сессии: новая ступень его может не
+	// возить.
+	e.v6ok, e.v6fails, e.v6at = false, 0, time.Time{}
 	for {
 		now := e.cfg.Now()
 		h := tr.Health()
 		v := mon.Assess(ctx, h, now, e.iface)
+		if v != health.Dead && mon.Proven() {
+			e.checkV6(ctx, now, mon)
+		}
 		// ГОТОВНОСТЬ — ТОЛЬКО ДОКАЗАННАЯ. Раньше здесь стояло просто
 		// «не мёртв», и туннель объявлялся готовым, едва встала сессия.
 		// В поле это выглядело так: ready=true, transport=h2, tx=314319 при
@@ -386,6 +423,7 @@ func (e *Engine) serve(ctx context.Context, tr transport.Transport, step account
 			Endpoint:     tr.Endpoint(),
 			Iface:        e.iface,
 			Addr:         e.d.AddrV4,
+			Addr6:        e.readyAddr6(),
 			HandshakeAge: h.HandshakeAge(now),
 			Rx:           h.Rx,
 			Tx:           h.Tx,
@@ -429,6 +467,71 @@ func (e *Engine) serve(ctx context.Context, tr transport.Transport, step account
 	}
 }
 
+// checkV6 — проба IPv6 через туннель с тем же шагом, что повторная проба
+// IPv4 (CheckEvery), и тем же числом провалов до отказа (Fails).
+func (e *Engine) checkV6(ctx context.Context, now time.Time, mon *health.Monitor) {
+	if e.addr6 == "" || (!e.v6at.IsZero() && now.Sub(e.v6at) < mon.CheckEvery) {
+		return
+	}
+	e.v6at = now
+	err := e.cfg.Probe6(ctx, e.iface, e.addr6)
+	if err == nil {
+		if !e.v6ok {
+			e.cfg.Logf("ipv6: туннель возит IPv6 (%s)", e.addr6)
+		}
+		e.v6ok, e.v6fails = true, 0
+		return
+	}
+	e.v6fails++
+	if e.v6ok && e.v6fails >= mon.Fails {
+		e.v6ok = false
+		e.cfg.Logf("ipv6: туннель перестал возить IPv6 (%v) — IPv6 устройств напрямую", err)
+	} else if !e.v6ok && e.v6fails == 1 {
+		e.cfg.Logf("ipv6: туннель не возит IPv6 (%v) — IPv6 устройств напрямую", err)
+	}
+}
+
+// syncAddr6 ставит на туннель IPv6-адрес текущего ключа, если он сменился:
+// снимает прежний адрес и маршрут пробы, ставит новые и доказывает IPv6
+// заново. Пустой адрес у ключа — IPv6 нет.
+func (e *Engine) syncAddr6() {
+	if e.iface == "" || e.d.AddrV6 == e.addr6 {
+		return
+	}
+	if old := e.addr6; old != "" {
+		tundev.UnrouteV6(e.cfg.Run, old)
+		tundev.RemoveV6(e.cfg.Run, e.iface, old)
+	}
+	e.addr6 = ""
+	e.v6ok, e.v6fails, e.v6at = false, 0, time.Time{}
+	if e.d.AddrV6 == "" {
+		return
+	}
+	if err := tundev.ConfigureV6(e.cfg.Run, e.iface, e.d.AddrV6); err != nil {
+		e.cfg.Logf("tun: %s ipv6: %v — только IPv4", e.iface, err)
+		return
+	}
+	if err := tundev.RouteV6(e.cfg.Run, e.iface, e.d.AddrV6); err != nil {
+		e.cfg.Logf("tun: %s ipv6: %v — только IPv4", e.iface, err)
+		return
+	}
+	if err := nat.Ensure6(nat.Runner(e.cfg.Run), e.iface, MTU-60); err != nil {
+		e.cfg.Logf("nat6: %v — только IPv4", err)
+		tundev.UnrouteV6(e.cfg.Run, e.d.AddrV6)
+		return
+	}
+	e.addr6 = e.d.AddrV6
+	e.cfg.Logf("tun: %s ipv6 %s/128", e.iface, e.addr6)
+}
+
+// readyAddr6 — адрес для статуса: только доказанный IPv6.
+func (e *Engine) readyAddr6() string {
+	if e.v6ok {
+		return e.addr6
+	}
+	return ""
+}
+
 // wgReachable пробует WG-handshake на пустом TUN. Ключ на время пробы
 // переключается на WG и возвращается на MASQUE при провале.
 func (e *Engine) wgReachable(ctx context.Context) bool {
@@ -439,6 +542,7 @@ func (e *Engine) wgReachable(ctx context.Context) bool {
 		if e.d.Tunnel != account.TunnelMasque {
 			if err := e.cfg.SwitchTunnel(ctx, e.d, account.TunnelMasque); err == nil {
 				_ = e.d.Save(e.cfg.DevicePath)
+				e.syncAddr6()
 			}
 		}
 		return false
@@ -460,6 +564,17 @@ func (e *Engine) bringUpTUN() error {
 		dev.Close()
 		return fmt.Errorf("tun %s: %w", name, err)
 	}
+	// IPv6 необязателен: без него туннель несёт только IPv4, как раньше.
+	e.addr6 = ""
+	if e.d.AddrV6 != "" {
+		if err := tundev.ConfigureV6(e.cfg.Run, name, e.d.AddrV6); err != nil {
+			e.cfg.Logf("tun: %s ipv6: %v — только IPv4", name, err)
+		} else if err := tundev.RouteV6(e.cfg.Run, name, e.d.AddrV6); err != nil {
+			e.cfg.Logf("tun: %s ipv6: %v — только IPv4", name, err)
+		} else {
+			e.addr6 = e.d.AddrV6
+		}
+	}
 	e.tunDev, e.iface = tunshare.New(dev, MTU, tunOffset), name
 	if e.d.Iface != name {
 		e.d.Iface = name
@@ -474,6 +589,9 @@ func (e *Engine) bringUpTUN() error {
 func (e *Engine) tearDownTUN() {
 	if e.tunDev == nil {
 		return
+	}
+	if e.addr6 != "" {
+		tundev.UnrouteV6(e.cfg.Run, e.addr6)
 	}
 	tundev.Teardown(e.cfg.Run, e.iface)
 	e.tunDev.Close()

@@ -620,7 +620,7 @@ case "$method $path" in
         w_edge_colo=""; w_edge_country=""; w_edge_rtt_ms=""; w_edge_checked_at=""
         w_edge_selection=""; w_plan=""; w_plan_err=""; w_license=""
         w_domain_active_raw=""; w_domain_rules=""; w_domain_pairs=""; w_domain_error=""
-        w_wdtt=""
+        w_wdtt=""; w_ipv6=""
         set -f
         for _tok in $result; do
             case "$_tok" in
@@ -648,6 +648,7 @@ case "$method $path" in
                 domain_pairs=*)    w_domain_pairs=${_tok#*=} ;;
                 domain_error=*)    w_domain_error=${_tok#*=} ;;
                 wdtt=*)            w_wdtt=${_tok#*=} ;;
+                ipv6=*)            w_ipv6=${_tok#*=} ;;
             esac
         done
         set +f
@@ -676,6 +677,9 @@ case "$method $path" in
         printf ',"domain_active":%s,"domain_rules":%s,"domain_pairs":%s,"domain_error":' \
             "$w_domain_active" "$(_num "$w_domain_rules")" "$(_num "$w_domain_pairs")"
         json_string "$w_domain_error"
+        # IPv6 устройств идёт в WARP, только пока туннель его возит.
+        w_ipv6_j=false; [ "$w_ipv6" = "1" ] && w_ipv6_j=true
+        printf ',"ipv6":%s' "$w_ipv6_j"
         # Выбор человека, а не то, на чём движок стоит сейчас (это transport
         # выше). Мусор в конфиге показываем автоматом — так его и прочтёт
         # init-скрипт.

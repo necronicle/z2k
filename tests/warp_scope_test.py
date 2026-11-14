@@ -15,10 +15,11 @@ from pathlib import Path
 p=Path(os.environ['NETFILTER_STATE'])
 s=json.loads(p.read_text())
 a=sys.argv[1:]; rc=0; out=[]
-if Path(sys.argv[0]).name == 'iptables':
+if Path(sys.argv[0]).name in ('iptables','ip6tables'):
     if a[0]=='-w': a=a[1:]
     table=a[1]; op=a[2]; chain=a[3]; rule=a[4:]
-    chains=s['tables'].setdefault(table,{})
+    family='tables6' if Path(sys.argv[0]).name=='ip6tables' else 'tables'
+    chains=s.setdefault(family,{}).setdefault(table,{})
     if op=='-N':
         if chain in chains: rc=1
         else: chains[chain]=[]
@@ -35,7 +36,7 @@ if Path(sys.argv[0]).name == 'iptables':
     elif op in ('-A','-I'):
         if '-j' in rule:
             target=rule[rule.index('-j')+1]
-            if target not in ('MARK','RETURN','TCPMSS','ACCEPT','MASQUERADE','NFLOG') and target not in chains: rc=1
+            if target not in ('MARK','RETURN','TCPMSS','ACCEPT','MASQUERADE','NFLOG','NFQUEUE') and target not in chains: rc=1
         if not rc:
             if op=='-I':
                 if rule[0].isdigit(): rule=rule[1:]
@@ -62,7 +63,7 @@ elif Path(sys.argv[0]).name == 'ip':
 # Read-only commands run in pipelines concurrently; they must not overwrite
 # another command's mutation (unlike the real kernel, a JSON file is not atomic).
 readonly = (Path(sys.argv[0]).name == 'ip' or
-            (Path(sys.argv[0]).name == 'iptables' and op in ('-C','-S')) or
+            (Path(sys.argv[0]).name in ('iptables','ip6tables') and op in ('-C','-S')) or
             (Path(sys.argv[0]).name == 'ipset' and op in ('list','save')))
 if not readonly: p.write_text(json.dumps(s))
 print('\n'.join(out)) if out else None
@@ -71,11 +72,12 @@ sys.exit(rc)
 
 with tempfile.TemporaryDirectory() as tmp:
     sb=Path(tmp); (sb/'bin').mkdir(); (sb/'lists').mkdir(); (sb/'sys/wdtt0').mkdir(parents=True)
-    for name in ('iptables','ipset','ip'):
+    for name in ('iptables','ip6tables','ipset','ip'):
         f=sb/'bin'/name; f.write_text(ADAPTER); f.chmod(0o755)
     state=sb/'state.json'
     def reset():
-        state.write_text(json.dumps({'tables':{'mangle':{'PREROUTING':[],'OUTPUT':[]}},'sets':{}}))
+        state.write_text(json.dumps({'tables':{'mangle':{'PREROUTING':[],'OUTPUT':[]}},
+                                     'tables6':{'filter':{'OUTPUT':[],'FORWARD':[]}},'sets':{}}))
     reset()
     (sb/'z2k-warp.sh').write_text((ROOT/'files/z2k-warp.sh').read_text())
     (sb/'device.json').write_text('{"iface":"z2ktun0"}')
@@ -183,7 +185,7 @@ with tempfile.TemporaryDirectory() as tmp:
         for iface in ('wdttraw0','opkgtun17','opkgtun18'):
             for chain in ('OUTPUT','FORWARD'):
                 rules=data['tables']['filter'][chain]
-                ok=any('-o' in r and r[r.index('-o')+1]==iface and r[r.index('-j')+1]=='NFLOG' for r in rules)
+                ok=any('-o' in r and r[r.index('-o')+1]==iface and r[r.index('-j')+1]=='NFQUEUE' for r in rules)
                 if ok: passed+=1; print('[PASS] DNS capture',chain,iface)
                 else: failures.append('DNS capture '+chain+' '+iface); print('[FAIL] DNS capture',chain,iface)
         # NDM must rediscover kernel pins, never hardcode the UI's OpkgTun names.
@@ -196,6 +198,13 @@ with tempfile.TemporaryDirectory() as tmp:
         check('retired AWGM pin loses WDTT opt-in',False,'10.77.0.2',iface='opkgtun18')
         run('warp_dns_capture_up')
         data=json.loads(state.read_text())
+        # Устройства с IPv6 спрашивают DNS роутера по IPv6: очередь и в ip6tables.
+        for chain in ('OUTPUT','FORWARD'):
+            rules=data['tables6']['filter'][chain]
+            ok=sum('NFQUEUE' in r and r[r.index('-o')+1]=='opkgtun25' for r in rules)==2 and \
+               not any(r[r.index('-o')+1] in ('opkgtun17','opkgtun18') for r in rules)
+            if ok: passed+=1; print('[PASS] IPv6 DNS capture follows WDTT pins',chain)
+            else: failures.append('IPv6 DNS capture '+chain); print('[FAIL] IPv6 DNS capture follows WDTT pins',chain)
         stale=any('-o' in r and r[r.index('-o')+1] in ('opkgtun17','opkgtun18') for rows in data['tables']['filter'].values() for r in rows)
         if stale: failures.append('retired DNS capture removed');print('[FAIL] retired DNS capture removed')
         else: passed+=1;print('[PASS] retired DNS capture removed')
@@ -206,7 +215,7 @@ with tempfile.TemporaryDirectory() as tmp:
         check('discovery failure disables stale WARP gate',False,'10.77.0.2',iface='opkgtun25')
         run('warp_dns_capture_down')
         data=json.loads(state.read_text())
-        remaining=any('NFLOG' in r for rows in data['tables']['filter'].values() for r in rows)
+        remaining=any('NFLOG' in r or 'NFQUEUE' in r for t in ('tables','tables6') for rows in data[t]['filter'].values() for r in rows)
         if remaining: failures.append('DNS teardown despite unreadable manager');print('[FAIL] DNS teardown despite unreadable manager')
         else: passed+=1;print('[PASS] DNS teardown despite unreadable manager')
         store.unlink()
@@ -245,7 +254,7 @@ with tempfile.TemporaryDirectory() as tmp:
     data=json.loads(state.read_text())
     for chain in ('OUTPUT','FORWARD'):
         rules=data['tables']['filter'][chain]
-        ok=sum('-o' in r and r[r.index('-o')+1]=='nwg+' and 'NFLOG' in r for r in rules)==2
+        ok=sum('-o' in r and r[r.index('-o')+1]=='nwg+' and 'NFQUEUE' in r for r in rules)==2
         if ok: passed+=1; print('[PASS] native VPN DNS capture',chain)
         else: failures.append('native VPN DNS capture '+chain); print('[FAIL] native VPN DNS capture',chain)
     ok=not any('MARK' in r for r in data['tables']['mangle']['OUTPUT'])

@@ -25,27 +25,46 @@ type PacketDecoder struct{ flows map[tcpFlow]tcpState }
 func NewPacketDecoder() *PacketDecoder { return &PacketDecoder{flows: make(map[tcpFlow]tcpState)} }
 
 func (d *PacketDecoder) Push(packet []byte, now time.Time) (netip.Addr, []byte, Transport) {
-	if len(packet) < 20 || packet[0]>>4 != 4 {
+	var src, dst netip.Addr
+	var proto byte
+	var data []byte
+	switch {
+	case len(packet) >= 20 && packet[0]>>4 == 4:
+		ihl := int(packet[0]&15) * 4
+		if ihl < 20 || len(packet) < ihl {
+			return netip.Addr{}, nil, TransportUDP
+		}
+		length := int(binary.BigEndian.Uint16(packet[2:4]))
+		if length != len(packet) || packet[6]&0x3f != 0 || packet[7] != 0 {
+			return netip.Addr{}, nil, TransportUDP
+		}
+		src = netip.AddrFrom4([4]byte(packet[12:16]))
+		dst = netip.AddrFrom4([4]byte(packet[16:20]))
+		if !dst.IsPrivate() && !carrierNAT.Contains(dst) {
+			return netip.Addr{}, nil, TransportUDP
+		}
+		proto, data = packet[9], packet[ihl:]
+	case len(packet) >= 40 && packet[0]>>4 == 6:
+		// Устройства с IPv6 (macOS, iOS, Android) спрашивают DNS роутера по
+		// IPv6 — и A-записи тоже. Ответ DNS заголовков расширения не несёт;
+		// со следующим заголовком не UDP/TCP (в том числе фрагмент) пакет
+		// не наш.
+		if int(binary.BigEndian.Uint16(packet[4:6]))+40 != len(packet) {
+			return netip.Addr{}, nil, TransportUDP
+		}
+		src = netip.AddrFrom16([16]byte(packet[8:24]))
+		dst = netip.AddrFrom16([16]byte(packet[24:40]))
+		if !lanClient6(dst) {
+			return netip.Addr{}, nil, TransportUDP
+		}
+		proto, data = packet[6], packet[40:]
+	default:
 		return netip.Addr{}, nil, TransportUDP
 	}
-	ihl := int(packet[0]&15) * 4
-	if ihl < 20 || len(packet) < ihl {
-		return netip.Addr{}, nil, TransportUDP
-	}
-	length := int(binary.BigEndian.Uint16(packet[2:4]))
-	if length != len(packet) || packet[6]&0x3f != 0 || packet[7] != 0 {
-		return netip.Addr{}, nil, TransportUDP
-	}
-	src := netip.AddrFrom4([4]byte(packet[12:16]))
-	dst := netip.AddrFrom4([4]byte(packet[16:20]))
-	if !dst.IsPrivate() && !carrierNAT.Contains(dst) {
-		return netip.Addr{}, nil, TransportUDP
-	}
-	data := packet[ihl:]
 	if len(data) < 8 || binary.BigEndian.Uint16(data[:2]) != 53 {
 		return netip.Addr{}, nil, TransportUDP
 	}
-	switch packet[9] {
+	switch proto {
 	case 17:
 		ulen := int(binary.BigEndian.Uint16(data[4:6]))
 		if ulen < 8 || ulen != len(data) {

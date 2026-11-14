@@ -24,6 +24,13 @@ type Cache struct {
 	global bool
 }
 
+// lanClient6 — устройство локальной сети, спросившее DNS по IPv6: адрес
+// канального уровня, ULA или глобальный из префикса сети (захват DNS стоит
+// только на выходах в локальную сеть).
+func lanClient6(ip netip.Addr) bool {
+	return ip.Is6() && !ip.Is4In6() && (ip.IsLinkLocalUnicast() || ip.IsGlobalUnicast())
+}
+
 // networkWide — клиент пар в кэше исключений.
 var networkWide = netip.IPv4Unspecified()
 
@@ -40,10 +47,14 @@ func (c *Cache) Len() int        { return len(c.pairs) }
 func (c *Cache) Skipped() uint64 { return c.skipped }
 
 func (c *Cache) Observe(client netip.Addr, name string, answers []Answer, now time.Time) []Change {
-	if _, err := clientSet(client); err != nil || !c.rules.Match(name) {
+	if !c.rules.Match(name) {
+		return nil
+	}
+	if _, err := clientSet(client); err != nil && !(c.global && lanClient6(client)) {
 		return nil
 	}
 	if c.global {
+		// Исключению IPv4 устройства не нужен: годится и спросившее по IPv6.
 		client = networkWide
 	}
 	var changes []Change

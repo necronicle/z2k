@@ -155,6 +155,6 @@ func ipcConfig(privB64, peerB64, host string, port int) (string, error) {
 	if host == "" || port <= 0 {
 		return "", errors.New("no endpoint")
 	}
-	return fmt.Sprintf("private_key=%s\nreplace_peers=true\npublic_key=%s\nendpoint=%s:%d\nallowed_ip=0.0.0.0/0\npersistent_keepalive_interval=%d\n",
+	return fmt.Sprintf("private_key=%s\nreplace_peers=true\npublic_key=%s\nendpoint=%s:%d\nallowed_ip=0.0.0.0/0\nallowed_ip=::/0\npersistent_keepalive_interval=%d\n",
 		hex.EncodeToString(priv), hex.EncodeToString(peer), host, port, keepalive), nil
 }

@@ -101,14 +101,17 @@ rm -rf "$WARP_LISTS_DIR"
 warp_lists_ensure_dir
 
 printf "\n--- warp_list_save: sanitize + counts ---\n"
-OUT=$(printf '9.9.9.9\r\n172.16.0.0/12\n# note\n\n999.1.1.1\n2a00:1450::1\n1.2.3.4/33\ngarbage\n8.8.8.8\n' | warp_list_save test replace)
-assert_contains "2 routable lines saved"   "saved=2"           "$OUT"
+# Глобальный IPv6 — маршрутизируемая строка (WARP возит IPv6); локальный
+# (fe80::, ULA) — мусор, как частный IPv4.
+OUT=$(printf '9.9.9.9\r\n172.16.0.0/12\n# note\n\n999.1.1.1\n2a00:1450::1\nfe80::1\n1.2.3.4/33\ngarbage\n8.8.8.8\n' | warp_list_save test replace)
+assert_contains "3 routable lines saved"   "saved=3"           "$OUT"
 assert_contains "5 junk lines skipped"     "skipped_invalid=5" "$OUT"
 CONTENT=$(cat "$WARP_LISTS_DIR/test.txt")
 assert_contains     "CRLF entry kept (CR stripped)" "9.9.9.9"   "$CONTENT"
 assert_contains     "comment preserved"             "# note"    "$CONTENT"
 assert_not_contains "bad octet filtered"            "999"       "$CONTENT"
-assert_not_contains "IPv6 filtered"                 "2a00"      "$CONTENT"
+assert_contains     "global IPv6 kept"              "2a00:1450::1" "$CONTENT"
+assert_not_contains "link-local IPv6 filtered"      "fe80"      "$CONTENT"
 assert_not_contains "prefix>32 filtered"            "/33"       "$CONTENT"
 CR_COUNT=$(tr -cd '\r' < "$WARP_LISTS_DIR/test.txt" | wc -c | tr -d ' ')
 assert_eq "no CR bytes in stored file" "0" "$CR_COUNT"
@@ -343,8 +346,8 @@ warp_name_ok exclude && r=0 || r=1
 assert_eq "name 'exclude' is reserved" "1" "$r"
 printf '8.8.8.8\n' | warp_list_save exclude replace >/dev/null 2>&1 && r=0 || r=1
 assert_eq "exclude is not writable as a regular list" "1" "$r"
-OUT=$(printf 'gosuslugi.ru\n*.sberbank.ru\n95.167.0.0/16\n# банк\ngarbage line\n2a00::1\n' | warp_exclude_save)
-assert_contains "exclude save counts ip"     "saved_ip=1" "$OUT"
+OUT=$(printf 'gosuslugi.ru\n*.sberbank.ru\n95.167.0.0/16\n# банк\ngarbage line\n2a00::1\nfd00::1\n' | warp_exclude_save)
+assert_contains "exclude save counts ip"     "saved_ip=2" "$OUT"
 assert_contains "exclude save counts domain" "saved_domain=2" "$OUT"
 assert_contains "exclude save drops junk"    "skipped_invalid=2" "$OUT"
 assert_eq "exclude file written"  "1" "$([ -f "$WARP_LISTS_DIR/exclude.txt" ] && echo 1 || echo 0)"

@@ -266,24 +266,38 @@ _z2k_purge_leftovers() {
 # Трафик при этом не теряется: таблица пустеет вместе с интерфейсом и пакет идёт
 # дальше по обычным правилам.
 _z2k_warp_routing_sweep() {
-    local _spec _t _ch _r
+    local _spec _t _ch _r _ipt _i
     ip rule del fwmark 0x989/0x989 table 989 2>/dev/null
     ip rule del fwmark 0x989 table 989 2>/dev/null
     ip route flush table 989 2>/dev/null
+    # IPv6: та же метка и таблица 989, плюс таблица 990 пробы IPv6 движка.
+    _i=0
+    while [ "$_i" -lt 8 ] && ip -6 rule del fwmark 0x989/0x989 table 989 2>/dev/null; do _i=$((_i + 1)); done
+    _i=0
+    while [ "$_i" -lt 8 ] && ip -6 rule del table 990 2>/dev/null; do _i=$((_i + 1)); done
+    ip -6 route flush table 989 2>/dev/null
+    ip -6 route flush table 990 2>/dev/null
     # Смотрим через -S: обычный вывод iptables -L -n не показывает интерфейсы, и правила
-    # z2ktunN в нём не найти. Метка 0x989, захват DNS (группа 189) и интерфейс — наши.
-    for _spec in mangle:PREROUTING mangle:FORWARD mangle:OUTPUT \
-                 filter:FORWARD filter:OUTPUT filter:INPUT nat:POSTROUTING; do
-        _t="${_spec%%:*}"; _ch="${_spec##*:}"
-        iptables -w -t "$_t" -S "$_ch" 2>/dev/null \
-            | grep -E -- '-j Z2K_WARP|z2ktun[0-9]|--nflog-group 189( |$)|--mark 0x989(/|$| )' | sed 's/^-A /-D /' \
-            | while IFS= read -r _r; do
-                # shellcheck disable=SC2086  # строка правила: разбиение намеренно
-                iptables -w -t "$_t" $_r 2>/dev/null
-            done
+    # z2ktunN в нём не найти. Метка 0x989, захват DNS (группа и очередь 189),
+    # интерфейс и цепочка — наши; в ip6tables то же самое (NAT66, метки IPv6).
+    # --ctrepldst -S печатает без маски, а -D без неё правило не находит
+    # (iptables 1.4.21): маску возвращаем.
+    for _ipt in iptables ip6tables; do
+        for _spec in mangle:PREROUTING mangle:FORWARD mangle:OUTPUT \
+                     filter:FORWARD filter:OUTPUT filter:INPUT nat:POSTROUTING; do
+            _t="${_spec%%:*}"; _ch="${_spec##*:}"
+            "$_ipt" -w -t "$_t" -S "$_ch" 2>/dev/null \
+                | grep -E -- '-j Z2K_WARP|z2ktun[0-9]|--nflog-group 189( |$)|--queue-num 189( |$)|--mark 0x989(/|$| )' \
+                | sed -e 's/^-A /-D /' -e 's#--ctrepldst \([0-9.]*\) #--ctrepldst \1/32 #' \
+                      -e 's#--ctrepldst \([0-9a-f:]*:[0-9a-f:]*\) #--ctrepldst \1/128 #' \
+                | while IFS= read -r _r; do
+                    # shellcheck disable=SC2086  # строка правила: разбиение намеренно
+                    "$_ipt" -w -t "$_t" $_r 2>/dev/null
+                done
+        done
+        "$_ipt" -w -t mangle -F Z2K_WARP 2>/dev/null
+        "$_ipt" -w -t mangle -X Z2K_WARP 2>/dev/null
     done
-    iptables -w -t mangle -F Z2K_WARP 2>/dev/null
-    iptables -w -t mangle -X Z2K_WARP 2>/dev/null
     return 0
 }
 # z2k:shared:warp_routing_sweep:end

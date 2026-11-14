@@ -46,6 +46,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 a="${a# }"; op="${a%% *}"; rest="${a#* }"
+# Как iptables 1.4.21: --ctrepldst хранится и печатается без маски /32.
+rest=$(printf '%s\n' "$rest" | sed 's#--ctrepldst \([0-9.]*\)/32 #--ctrepldst \1 #')
 R=/state/rules
 case "$a" in
   *"-L "*)
@@ -83,6 +85,8 @@ mangle POSTROUTING -p tcp -j NFQUEUE --queue-num 300 --queue-bypass
 filter FORWARD -o z2ktun0 -m mark --mark 0x989/0x989 -j ACCEPT
 filter FORWARD -i z2ktun0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 filter OUTPUT -o ppp0 -p udp --sport 53 -j NFLOG --nflog-group 189
+filter OUTPUT -o br+ -p udp --sport 53 -j NFQUEUE --queue-num 189 --queue-bypass
+mangle PREROUTING ! -i z2ktun0 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 172.16.0.2 -j Z2K_WARP
 nat POSTROUTING -o z2ktun0 -j MASQUERADE
 mangle FORWARD -o z2ktun0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 mangle PREROUTING -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE

@@ -25,11 +25,14 @@ const (
 
 // Status — содержимое status.json.
 type Status struct {
-	Ready         bool   `json:"ready"`
-	Transport     string `json:"transport"`
-	Endpoint      string `json:"endpoint"`
-	Iface         string `json:"iface"`
-	Addr          string `json:"addr"`
+	Ready     bool   `json:"ready"`
+	Transport string `json:"transport"`
+	Endpoint  string `json:"endpoint"`
+	Iface     string `json:"iface"`
+	Addr      string `json:"addr"`
+	// Addr6 — IPv6-адрес аккаунта, только пока проба доказала, что туннель
+	// возит IPv6. Пусто — IPv6 устройств в туннель не уводить.
+	Addr6         string `json:"addr6,omitempty"`
 	HandshakeAge  int    `json:"handshake_age"` // сек; -1 = handshake не было
 	Rx            uint64 `json:"rx"`
 	Tx            uint64 `json:"tx"`

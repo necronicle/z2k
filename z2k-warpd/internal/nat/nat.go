@@ -51,6 +51,11 @@ func Rules(iface string, mss int) [][]string {
 	}
 }
 
+// Rules6 — то же для IPv6: WARP даёт аккаунту один адрес /128, поэтому
+// устройства выходят через NAT66 (MASQUERADE), как на OpenWrt и MikroTik.
+// mss6 — MTU туннеля минус 40 байт IPv6 и 20 TCP.
+func Rules6(iface string, mss6 int) [][]string { return Rules(iface, mss6) }
+
 func args(op string, r []string) []string {
 	return append([]string{"-w", "-t", r[0], op, r[1]}, r[2:]...)
 }
@@ -61,16 +66,25 @@ func insertArgs(r []string) []string {
 
 // Ensure ставит недостающие правила (-C || -A).
 func Ensure(run Runner, iface string, mss int) error {
-	for _, r := range Rules(iface, mss) {
-		if _, err := run("iptables", args("-C", r)...); err == nil {
+	return ensure(run, "iptables", Rules(iface, mss))
+}
+
+// Ensure6 — правила IPv6 (ip6tables).
+func Ensure6(run Runner, iface string, mss6 int) error {
+	return ensure(run, "ip6tables", Rules6(iface, mss6))
+}
+
+func ensure(run Runner, bin string, rules [][]string) error {
+	for _, r := range rules {
+		if _, err := run(bin, args("-C", r)...); err == nil {
 			continue
 		}
 		add := args("-A", r)
 		if r[0] == "filter" {
 			add = insertArgs(r)
 		}
-		if out, err := run("iptables", add...); err != nil {
-			return fmt.Errorf("iptables -t %s %s %s: %s", r[0], add[3], r[1], strings.TrimSpace(out))
+		if out, err := run(bin, add...); err != nil {
+			return fmt.Errorf("%s -t %s %s %s: %s", bin, r[0], add[3], r[1], strings.TrimSpace(out))
 		}
 	}
 	return nil
@@ -78,12 +92,21 @@ func Ensure(run Runner, iface string, mss int) error {
 
 // Remove удаляет правила, пока -C их находит (дубликаты от старых запусков).
 func Remove(run Runner, iface string, mss int) error {
-	for _, r := range Rules(iface, mss) {
+	return remove(run, "iptables", Rules(iface, mss))
+}
+
+// Remove6 — то же для IPv6.
+func Remove6(run Runner, iface string, mss6 int) error {
+	return remove(run, "ip6tables", Rules6(iface, mss6))
+}
+
+func remove(run Runner, bin string, rules [][]string) error {
+	for _, r := range rules {
 		for i := 0; i < 16; i++ {
-			if _, err := run("iptables", args("-C", r)...); err != nil {
+			if _, err := run(bin, args("-C", r)...); err != nil {
 				break
 			}
-			if _, err := run("iptables", args("-D", r)...); err != nil {
+			if _, err := run(bin, args("-D", r)...); err != nil {
 				break
 			}
 		}

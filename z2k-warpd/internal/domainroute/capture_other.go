@@ -8,5 +8,5 @@ import (
 )
 
 func receivePackets(context.Context, func([]byte), func(error)) (func(), error) {
-	return nil, errors.New("NFLOG requires Linux")
+	return nil, errors.New("DNS capture requires Linux")
 }

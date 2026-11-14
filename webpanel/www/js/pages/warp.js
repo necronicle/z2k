@@ -247,8 +247,8 @@ export async function renderWarp() {
     <div class="card">
       <h3>Списки адресов и доменов</h3>
       <p class="desc">
-        Каждый список — текстовый файл: один IPv4-адрес, CIDR-подсеть или домен на строку
-        (<code>8.8.8.8</code>, <code>8.8.8.0/24</code>, <code>example.com</code> или
+        Каждый список — текстовый файл: один адрес IPv4 или IPv6, подсеть или домен на строку
+        (<code>8.8.8.8</code>, <code>8.8.8.0/24</code>, <code>2606:4700::/32</code>, <code>example.com</code> или
         <code>*.example.com</code>; строки с <code>#</code> — комментарии).
         <code>*.example.com</code> охватывает поддомены, но не сам <code>example.com</code>.
         Через WARP идёт трафик к адресам из включённых списков;
@@ -258,7 +258,7 @@ export async function renderWarp() {
         <b>Изменения применяются сразу</b>, без перезапуска, и переживают переустановку z2k.
       </p>
       <p class="desc">Для доменов устройство должно получать обычные DNS-ответы через DNS роутера
-        или через роутер. DoH/DoT и IPv6 здесь не перехватываются; международные имена вводите
+        или через роутер, по IPv4 или IPv6. DoH/DoT здесь не перехватываются; международные имена вводите
         в ASCII/Punycode. Если несколько сайтов делят один IP, другое соединение этого же
         устройства к нему тоже может пройти через WARP.</p>
       <p class="desc" id="warp-domain-state"></p>
@@ -271,8 +271,8 @@ export async function renderWarp() {
     </div>
     <div class="card" id="warp-editor-card" hidden>
       <h3 id="warp-editor-title"></h3>
-      <p class="desc">Один IPv4-адрес, подсеть или домен на строку. IPv6 и невалидные строки
-        отбрасываются; после сохранения покажем их количество.</p>
+      <p class="desc">Один адрес IPv4 или IPv6, подсеть или домен на строку. Локальные адреса и
+        невалидные строки отбрасываются; после сохранения покажем их количество.</p>
       <textarea id="warp-editor" class="warp-editor" spellcheck="false"
                 autocomplete="off" autocapitalize="off" autocorrect="off"
                 placeholder="203.0.113.0/24"></textarea>
@@ -469,8 +469,9 @@ async function loadWarpStatus() {
   const domainState = document.getElementById("warp-domain-state");
   if (domainState) {
     domainState.textContent = !enabled ? "Доменные правила выключены вместе с WARP."
-      : d.domain_active ? `Доменные правила: ${Number(d.domain_rules) || 0}; активных пар устройство/IP: ${Number(d.domain_pairs) || 0}.`
-      : "Доменные правила сейчас недоступны; правила для IPv4-адресов продолжают работать.";
+      : (d.domain_active ? `Доменные правила: ${Number(d.domain_rules) || 0}; активных пар устройство/IP: ${Number(d.domain_pairs) || 0}.`
+        : "Доменные правила сейчас недоступны; правила для адресов продолжают работать.")
+        + (d.ready ? (d.ipv6 ? " IPv6 идёт через WARP." : " IPv6 сейчас идёт напрямую: туннель его не возит.") : "");
   }
 
   // Три состояния раздела — из одного ответа. Не установлен: одна кнопка, без

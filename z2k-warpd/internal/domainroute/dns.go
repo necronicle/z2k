@@ -32,11 +32,28 @@ var excluded = []netip.Prefix{
 	netip.MustParsePrefix("224.0.0.0/4"), netip.MustParsePrefix("240.0.0.0/4"),
 }
 
+// IPv6: только глобальный юникаст 2000::/3 — то, что вообще уходит в интернет;
+// из него — без адресов документации, бенчмарков, Teredo и 6to4 (последние два
+// — туннели поверх IPv4 к узлам, а не сами узлы).
+var global6 = netip.MustParsePrefix("2000::/3")
+var excluded6 = []netip.Prefix{
+	netip.MustParsePrefix("2001::/32"), netip.MustParsePrefix("2001:2::/48"),
+	netip.MustParsePrefix("2001:db8::/32"), netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+}
+
 func EligibleDestination(ip netip.Addr) bool {
-	if !ip.Is4() || !ip.IsGlobalUnicast() {
+	if ip.Is4In6() || !ip.IsGlobalUnicast() {
 		return false
 	}
-	for _, p := range excluded {
+	list := excluded
+	if ip.Is6() {
+		if !global6.Contains(ip) {
+			return false
+		}
+		list = excluded6
+	}
+	for _, p := range list {
 		if p.Contains(ip) {
 			return false
 		}
@@ -62,8 +79,8 @@ func ParseReply(packet []byte, transport Transport) (string, []Answer, error) {
 		return "", nil, errors.New("not a complete DNS answer")
 	}
 	q := msg.Questions[0]
-	if q.Type != dnsmessage.TypeA || q.Class != dnsmessage.ClassINET {
-		return "", nil, errors.New("not an A question")
+	if (q.Type != dnsmessage.TypeA && q.Type != dnsmessage.TypeAAAA) || q.Class != dnsmessage.ClassINET {
+		return "", nil, errors.New("not an A or AAAA question")
 	}
 	question := strings.ToLower(strings.TrimSuffix(q.Name.String(), "."))
 	type edge struct {
@@ -80,7 +97,7 @@ func ParseReply(packet []byte, transport Transport) (string, []Answer, error) {
 		switch body := rr.Body.(type) {
 		case *dnsmessage.CNAMEResource:
 			cnames[name] = append(cnames[name], edge{strings.ToLower(strings.TrimSuffix(body.CNAME.String(), ".")), rr.Header.TTL})
-		case *dnsmessage.AResource:
+		case *dnsmessage.AResource, *dnsmessage.AAAAResource:
 			addresses[name] = append(addresses[name], rr)
 		}
 	}
@@ -92,8 +109,13 @@ func ParseReply(packet []byte, transport Transport) (string, []Answer, error) {
 		}
 		seen[name] = true
 		for _, rr := range addresses[name] {
-			body := rr.Body.(*dnsmessage.AResource)
-			ip := netip.AddrFrom4(body.A)
+			var ip netip.Addr
+			switch body := rr.Body.(type) {
+			case *dnsmessage.AResource:
+				ip = netip.AddrFrom4(body.A)
+			case *dnsmessage.AAAAResource:
+				ip = netip.AddrFrom16(body.AAAA)
+			}
 			seconds := min(ttl, rr.Header.TTL, 3600)
 			if seconds == 0 || !EligibleDestination(ip) {
 				continue

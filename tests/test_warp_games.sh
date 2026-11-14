@@ -121,12 +121,13 @@ update_warp_game_list >/dev/null 2>&1
 assert_eq "new source cache reused on next refresh" "Steam=1" "$(grep '^Steam=' "$CACHE_SEEN" | sed -n '2p')"
 
 printf "\n--- refresh: the address filter applies to upstream data too ---\n"
-printf '10.0.0.1\n127.0.0.1\n192.168.1.1\n172.16.0.5\n0.0.0.0/0\n3.0.0.0/8\n8.8.8.8\n2a00:1450::1\n' > "$SB/up/Steam.txt"
+printf '10.0.0.1\n127.0.0.1\n192.168.1.1\n172.16.0.5\n0.0.0.0/0\n3.0.0.0/8\n8.8.8.8\n2a00:1450::1\nfe80::1\nfd00::1\n' > "$SB/up/Steam.txt"
 write_index Steam
 update_warp_game_list >/dev/null 2>&1
-# 3.0.0.0/8 остаётся: это Amazon, а не мусор. Отсеиваются только
-# нероутируемые и служебные.
-assert_eq "остаются только маршрутизируемые" "3.0.0.0/8,8.8.8.8," "$(setof "$GDIR/Steam.txt")"
+# 3.0.0.0/8 остаётся: это Amazon, а не мусор. Глобальный IPv6 тоже остаётся:
+# WARP возит IPv6. Отсеиваются только нероутируемые и служебные, в том числе
+# локальные IPv6 (fe80::, ULA).
+assert_eq "остаются только маршрутизируемые" "2a00:1450::1,3.0.0.0/8,8.8.8.8," "$(setof "$GDIR/Steam.txt")"
 printf 'Example.COM\n*.game.example\n10.0.0.1\n' > "$SB/up/Steam.txt"
 update_warp_game_list >/dev/null 2>&1
 assert_eq "upstream domains survive and normalize" '*.game.example,example.com,' "$(setof "$GDIR/Steam.txt")"

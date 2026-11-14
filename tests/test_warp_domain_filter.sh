@@ -29,6 +29,28 @@ got=$(printf '%s\n' "$input" | awk -v mode=ipset -f "$filter")
 [ "$got" = '1.2.3.4/24' ] || { printf 'ipset mismatch\n%s\n' "$got"; exit 1; }
 got=$(printf '%s\n' "$input" | awk -v mode=count -f "$filter")
 [ "$got" = 'ip=1 domain=3 invalid=5' ] || { printf 'count mismatch\n%s\n' "$got"; exit 1; }
+# IPv6: в маршруты — только интернет (2000::/3) без служебных диапазонов; в
+# наборы IPv4 и IPv6 — каждый своим режимом.
+input6='2606:4700::6810:B9F1
+2a00:1450:4010::/48
+2001:db8::1
+2001:0:4136::1
+2002:c000::1
+3fff::1
+fd00::1
+fe80::1
+::1
+2606::4700::1
+2606:4700::/129
+1.2.3.4'
+got=$(printf '%s\n' "$input6" | awk -v mode=ipset6 -f "$filter")
+want='2606:4700::6810:b9f1
+2a00:1450:4010::/48'
+[ "$got" = "$want" ] || { printf 'ipset6 mismatch\n%s\n' "$got"; exit 1; }
+got=$(printf '%s\n' "$input6" | awk -v mode=ipset -f "$filter")
+[ "$got" = '1.2.3.4' ] || { printf 'ipset must stay IPv4-only\n%s\n' "$got"; exit 1; }
+got=$(printf '%s\n' "$input6" | awk -v mode=count -f "$filter")
+[ "$got" = 'ip=3 domain=0 invalid=9' ] || { printf 'count6 mismatch\n%s\n' "$got"; exit 1; }
 sb=$(mktemp -d)
 trap 'rm -rf "$sb"' EXIT
 export ZAPRET2_DIR="$sb/zapret2" WARP_LISTS_DIR="$sb/zapret2/lists/warp"

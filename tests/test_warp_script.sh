@@ -32,11 +32,33 @@ cp "$SCRIPT_DIR/files/z2k-warp-list-filter.awk" "$SB/z2k/z2k-warp-list-filter.aw
 cat > "$SB/bin/iptables" <<EOF
 #!/bin/sh
 echo "\$*" >> "$SB/ipt.log"
-rule=\$(echo "\$*" | sed 's/ -[ACD] / /')
+rule=\$(echo "\$*" | sed 's/ -[ACDI] / /')
+# Файл noqueue — «ядро без NFQUEUE»: правило очереди не встаёт.
+case "\$*" in *NFQUEUE*) [ -f "$SB/noqueue" ] && exit 1 ;; esac
 case "\$*" in
     *" -C "*) grep -qxF -- "\$rule" "$SB/ipt.rules" 2>/dev/null; exit \$? ;;
     *" -A "*|*" -I "*) echo "\$rule" >> "$SB/ipt.rules" ;;
     *" -D "*) grep -vxF -- "\$rule" "$SB/ipt.rules" > "$SB/ipt.rules.n" 2>/dev/null; mv -f "$SB/ipt.rules.n" "$SB/ipt.rules" ;;
+    # Как iptables 1.4.21: --ctrepldst печатается без маски.
+    "-w -t "*" -S "*) set -- \$*; sed -n "s/^-w -t \$3 \$5 /-A \$5 /p" "$SB/ipt.rules" 2>/dev/null | sed 's#--ctrepldst \([0-9.]*\)/32 #--ctrepldst \1 #' ;;
+esac
+exit 0
+EOF
+# ip6tables — та же память в своих файлах. Файл no6 — «IPv6 в ядре нет»:
+# любая команда падает, скрипт обязан тогда работать только по IPv4.
+cat > "$SB/bin/ip6tables" <<EOF
+#!/bin/sh
+[ -f "$SB/no6" ] && exit 1
+echo "\$*" >> "$SB/ipt6.log"
+rule=\$(echo "\$*" | sed 's/ -[ACDI] / /')
+case "\$*" in *NFQUEUE*) [ -f "$SB/noqueue" ] && exit 1 ;; esac
+case "\$*" in
+    *" -C "*) grep -qxF -- "\$rule" "$SB/ipt6.rules" 2>/dev/null; exit \$? ;;
+    *" -A "*|*" -I "*) echo "\$rule" >> "$SB/ipt6.rules" ;;
+    *" -D "*) grep -vxF -- "\$rule" "$SB/ipt6.rules" > "$SB/ipt6.rules.n" 2>/dev/null; mv -f "$SB/ipt6.rules.n" "$SB/ipt6.rules" ;;
+    *" -F "*) set -- \$*; grep -v "^-w -t \$3 \$5 " "$SB/ipt6.rules" > "$SB/ipt6.rules.n" 2>/dev/null; mv -f "$SB/ipt6.rules.n" "$SB/ipt6.rules" ;;
+    # Как ip6tables 1.4.21: --ctrepldst печатается без маски.
+    "-w -t "*" -S "*) set -- \$*; [ "\$5" = Z2K_WARP ] && echo "-N Z2K_WARP"; sed -n "s/^-w -t \$3 \$5 /-A \$5 /p" "$SB/ipt6.rules" 2>/dev/null | sed 's#--ctrepldst \([0-9a-f:]*\)/128 #--ctrepldst \1 #' ;;
 esac
 exit 0
 EOF
@@ -47,7 +69,7 @@ case "\$*" in
     "rule show"*) cat "$SB/rules" 2>/dev/null ;;
     "rule add"*) echo "\$*" >> "$SB/rules" ;;
     "rule del"*) : > "$SB/rules" ;;
-    "neigh show"*) cat "$SB/neigh" 2>/dev/null ;;
+    *"neigh show"*) cat "$SB/neigh" 2>/dev/null ;;
 esac
 exit 0
 EOF
@@ -57,7 +79,7 @@ echo "\$*" >> "$SB/ipset.log"
 case "\$1" in
     restore) cat >> "$SB/ipset.log" ;;
     list)
-        [ "\$2" = -n ] && [ -z "\$3" ] && { [ -f "$SB/client-set" ] && echo z2kd_192.168.1.10; exit 0; }
+        [ "\$2" = -n ] && [ -z "\$3" ] && { [ -f "$SB/client-set" ] && echo z2kd_192.168.1.10; [ -f "$SB/client-set6" ] && echo z2kd6_192.168.1.10; exit 0; }
         case "\$*" in *z2k_warp*|*nozapret*) echo "Members:"; exit 0 ;; esac
         exit 1 ;;
 esac
@@ -139,8 +161,18 @@ assert_eq "enable: static destination enters source gate" "1" "$(grep -c -- '-A 
 assert_eq "enable: no whole-device route" "0" "$(grep -c -- '-A PREROUTING -m set --match-set z2k_warp_src src -j MARK --set-xmark 0x989/0x989' "$SB/ipt.log")"
 assert_eq "enable: unsupported pair set not created" "0" "$(grep -c 'hash:net,net' "$SB/ipset.log")"
 assert_eq "enable: DNS client set marked only in PREROUTING" "1" "$(grep -c -- '-A PREROUTING -s 192.168.1.10/32 -m set --match-set z2kd_192.168.1.10 dst -j Z2K_WARP' "$SB/ipt.log")"
-assert_eq "enable: LAN, native VPN and both WDTT modes router DNS copies to NFLOG" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG --nflog-group 189 --nflog-range 4096' "$SB/ipt.log")"
-assert_eq "enable: LAN, native VPN and both WDTT modes forwarded DNS copies require established flow" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG --nflog-group 189' "$SB/ipt.log")"
+# Ответы DNS — в очередь 189 с обходом: warpd отпускает ответ, когда адреса
+# уже в наборах, а без warpd ответ идёт мимо очереди.
+assert_eq "enable: LAN, native VPN and both WDTT modes router DNS queued" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt.log")"
+assert_eq "enable: LAN, native VPN and both WDTT modes forwarded DNS queued for established flow" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt.log")"
+assert_eq "enable: no NFLOG copy next to the queue" "0" "$(grep -c -- '-I .*-j NFLOG' "$SB/ipt.log")"
+# Устройства с IPv6 спрашивают DNS роутера по IPv6 (замер 14.11 на Mac):
+# те же копии обязаны стоять и в ip6tables, иначе домены не работают.
+assert_eq "enable: router DNS over IPv6 queued" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt6.log")"
+assert_eq "enable: forwarded DNS over IPv6 queued" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt6.log")"
+# Туннель не доказал IPv6 (в status.json нет addr6): в ip6tables ни метки, ни
+# входа, ни NAT — IPv6 устройств идёт напрямую.
+assert_eq "enable: no IPv6 routing without a proven IPv6 tunnel" "0" "$(grep -c -- '-t mangle -[AI] \|-t nat -[AI] \|z2ktun' "$SB/ipt6.log")"
 assert_eq "enable: ipset loaded from user list" "1" "$(grep -c 'add z2k_warp_new 1.2.3.0/24' "$SB/ipset.log")"
 assert_eq "enable: MASQUE-эндпоинт НЕ исключается из десинка (измерено: без десинка туннель не несёт трафик)" "0" "$(grep -c 'nozapret' "$SB/ipset.log")"
 # СОЗДАВАТЬ правила в OUTPUT нельзя — это единственный способ увести пакеты
@@ -245,8 +277,116 @@ assert_eq "disable: S51 stop" "1" "$(grep -c '^stop' "$SB/s51.log")"
 assert_eq "disable: flag 0" "0" "$(flag)"
 assert_eq "disable: destination gate detached" "1" "$(grep -c -- '-D PREROUTING -m set --match-set z2k_warp dst -j Z2K_WARP' "$SB/ipt.log")"
 assert_eq "disable: legacy --set-mark form checked twice" "2" "$(grep -c -- '-C PREROUTING -m set --match-set z2k_warp dst -j MARK --set-mark 0x989' "$SB/ipt.log")"
-assert_eq "disable: table 989 flushed twice" "2" "$(grep -c 'route flush table 989' "$SB/ip.log")"
-assert_eq "disable: rule removed twice" "2" "$(grep -c 'rule del fwmark 0x989/0x989 table 989' "$SB/ip.log")"
+assert_eq "disable: table 989 flushed twice" "2" "$(grep -c '^route flush table 989' "$SB/ip.log")"
+assert_eq "disable: rule removed twice" "2" "$(grep -c '^rule del fwmark 0x989/0x989 table 989' "$SB/ip.log")"
+assert_eq "disable: IPv6 table 989 flushed" "yes" "$(grep -q '^-6 route flush table 989' "$SB/ip.log" && echo yes || echo no)"
+
+# ---------- без IPv6 в ядре ----------
+# Нет ip6tables или IPv6 — WARP работает как раньше, только по IPv4.
+printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"; rm -f "$SB/ipt6.rules"; touch "$SB/no6"
+ready true ""; clearlogs
+rc=0; W enable >/dev/null 2>&1 || rc=$?
+assert_eq "no IPv6: enable still succeeds" "0" "$rc"
+assert_eq "no IPv6: IPv4 DNS still queued" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFQUEUE' "$SB/ipt.log")"
+assert_eq "no IPv6: nothing written to ip6tables" "no" "$([ -s "$SB/ipt6.log" ] && echo yes || echo no)"
+rm -f "$SB/no6"
+W disable >/dev/null 2>&1
+
+# ---------- ядро без NFQUEUE ----------
+# Очередь не встаёт — копия NFLOG, как до придерживания: обучение без
+# задержки ответа лучше, чем никакого.
+printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"; rm -f "$SB/ipt.rules" "$SB/ipt6.rules"; touch "$SB/noqueue"
+ready true ""; clearlogs
+rc=0; W enable >/dev/null 2>&1 || rc=$?
+assert_eq "no NFQUEUE: enable still succeeds" "0" "$rc"
+assert_eq "no NFQUEUE: router DNS copied to NFLOG" "8" "$(grep -c -- '-I OUTPUT .*--sport 53.*-j NFLOG --nflog-group 189 --nflog-range 4096' "$SB/ipt.log")"
+assert_eq "no NFQUEUE: forwarded DNS copied to NFLOG" "8" "$(grep -c -- '-I FORWARD .*--sport 53.*--ctstate ESTABLISHED.*-j NFLOG --nflog-group 189' "$SB/ipt.log")"
+rm -f "$SB/noqueue"
+# Обновление: копии прошлой версии уступают место очереди, а не стоят рядом.
+clearlogs; W enable >/dev/null 2>&1
+assert_eq "upgrade: old NFLOG copies removed" "0" "$(grep -c -- 'NFLOG' "$SB/ipt.rules")"
+assert_eq "upgrade: queue placed instead" "16" "$(grep -c -- '--sport 53.*-j NFQUEUE --queue-num 189 --queue-bypass' "$SB/ipt.rules")"
+W disable >/dev/null 2>&1
+assert_eq "disable: DNS queue removed" "0" "$(grep -c -- 'NFQUEUE\|NFLOG' "$SB/ipt.rules")"
+
+# ---------- соединение держит маршрут ----------
+# Путь решает первый пакет: пакеты соединения через WARP (ответный адрес —
+# адрес туннеля) остаются в WARP, прочие установленные — мимо, и это раньше
+# исключений. Вход в цепочку для них — свой: свой вход соединения мог пропасть.
+printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"; rm -f "$SB/ipt.rules"
+printf '{"iface":"z2ktun0","id":"dev","addr_v4":"172.16.0.2","endpoint":{"v4":"8.6.112.0","h2":"162.159.198.2"}}\n' > "$SB/etc/device.json"
+ready true ""; clearlogs; W enable >/dev/null 2>&1
+STICKY='! -i z2ktun0 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 172.16.0.2/32'
+assert_eq "sticky: WARP flow keeps its mark" "yes" "$(grep -qxF -- "-w -t mangle Z2K_WARP $STICKY -j MARK --set-xmark 0x989/0x989" "$SB/ipt.rules" && echo yes || echo no)"
+assert_eq "sticky: other established flows keep their path" "yes" "$(grep -qxF -- '-w -t mangle Z2K_WARP -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN' "$SB/ipt.rules" && echo yes || echo no)"
+_st=$(grep -nxF -- '-w -t mangle Z2K_WARP -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN' "$SB/ipt.rules" | head -1 | cut -d: -f1)
+_ex=$(grep -nxF -- '-w -t mangle Z2K_WARP -m set --match-set z2k_warp_excl dst -j RETURN' "$SB/ipt.rules" | head -1 | cut -d: -f1)
+assert_eq "sticky: decided before exclusions" "yes" "$([ -n "$_st" ] && [ -n "$_ex" ] && [ "$_st" -lt "$_ex" ] && echo yes || echo no)"
+assert_eq "sticky: own entry into the chain" "1" "$(grep -cxF -- "-w -t mangle PREROUTING $STICKY -j Z2K_WARP" "$SB/ipt.rules")"
+W policy-sync >/dev/null 2>&1
+assert_eq "sticky: entry not duplicated by sync" "1" "$(grep -cxF -- "-w -t mangle PREROUTING $STICKY -j Z2K_WARP" "$SB/ipt.rules")"
+# Новый адрес туннеля (перерегистрация) — старый вход уходит.
+printf '{"iface":"z2ktun0","id":"dev","addr_v4":"172.16.0.3","endpoint":{"v4":"8.6.112.0","h2":"162.159.198.2"}}\n' > "$SB/etc/device.json"
+W policy-sync >/dev/null 2>&1
+assert_eq "sticky: stale address entry replaced" "0 1" "$(grep -c -- '--ctrepldst 172.16.0.2/32 -j Z2K_WARP' "$SB/ipt.rules") $(grep -c -- '--ctrepldst 172.16.0.3/32 -j Z2K_WARP' "$SB/ipt.rules")"
+W disable >/dev/null 2>&1
+assert_eq "sticky: entry removed on disable" "0" "$(grep -c -- 'PREROUTING .*--ctrepldst' "$SB/ipt.rules")"
+printf '{"iface":"z2ktun0","id":"dev","endpoint":{"v4":"8.6.112.0","h2":"162.159.198.2"}}\n' > "$SB/etc/device.json"
+rm -f "$SB/ipt.rules"
+
+# ---------- IPv6 через туннель ----------
+# Движок доказал IPv6 (addr6 в status.json) — IPv6 устройств уходит в туннель
+# теми же режимами, что IPv4: своя цепочка в ip6tables, устройства по MAC,
+# ip -6 rule в таблицу 989. Нет addr6 — всё IPv6 напрямую.
+ready6() { printf '{"ready":true,"transport":"wg","endpoint":"8.6.112.0:2408","iface":"z2ktun0","addr":"172.16.0.2","addr6":"2606:4700:110:8a36::1","last_error":"","rx":1,"tx":1,"handshake_age":3,"pid":4242}\n' > "$SB/tmp/status.json"; }
+has6() { grep -qxF -- "$1" "$SB/ipt6.rules" && echo yes || echo no; }
+printf 'GAME_WARP_ENABLED=0\n' > "$SB/z2k/config"; rm -f "$SB/ipt.rules" "$SB/ipt6.rules"
+printf '{"iface":"z2ktun0","id":"dev","addr_v4":"172.16.0.2","addr_v6":"2606:4700:110:8a36::1","endpoint":{"v4":"8.6.112.0","h2":"162.159.198.2"}}\n' > "$SB/etc/device.json"
+mv "$SB/z2k/lists/warp/my.txt" "$SB/my.txt.keep"
+printf '192.168.1.10\n' > "$SB/z2k/lists/warp/devices.txt"
+printf '192.168.1.10 dev br0 lladdr AA:BB:CC:DD:EE:01 REACHABLE\n' > "$SB/neigh"
+ready6; clearlogs; W enable >/dev/null 2>&1
+S6='! -i z2ktun0 -m conntrack --ctstate RELATED,ESTABLISHED --ctrepldst 2606:4700:110:8a36::1/128'
+assert_eq "ipv6 device: WARP flow keeps its mark" "yes" "$(has6 "-w -t mangle Z2K_WARP $S6 -j MARK --set-xmark 0x989/0x989")"
+assert_eq "ipv6 device: exclusions first" "yes yes" "$(has6 '-w -t mangle Z2K_WARP -m set --match-set z2k_warp_excl6 dst -j RETURN') $(has6 '-w -t mangle Z2K_WARP -m set --match-set z2k_warp_xdns6 dst -j RETURN')"
+assert_eq "ipv6 device: non-internet and own networks direct" "yes yes" "$(has6 '-w -t mangle Z2K_WARP ! -d 2000::/3 -j RETURN') $(has6 '-w -t mangle Z2K_WARP -m set --match-set z2k_warp_lan6 dst -j RETURN')"
+assert_eq "ipv6 device: device marked by MAC" "yes" "$(has6 '-w -t mangle Z2K_WARP -m set --match-set z2k_warp_src6 src -j MARK --set-xmark 0x989/0x989')"
+assert_eq "ipv6 device: entries" "yes yes yes" "$(has6 '-w -t mangle PREROUTING -m set --match-set z2k_warp_src6 src -j Z2K_WARP') $(has6 '-w -t mangle PREROUTING -m set --match-set z2k_warp6 dst -j Z2K_WARP') $(has6 "-w -t mangle PREROUTING $S6 -j Z2K_WARP")"
+assert_eq "ipv6 device: device MAC loaded" "yes" "$(grep -q 'add z2k_warp_src6_new aa:bb:cc:dd:ee:01' "$SB/ipset.log" && echo yes || echo no)"
+assert_eq "ipv6 device: route in table 989" "yes yes" "$(grep -q '^-6 route replace default dev z2ktun0 table 989' "$SB/ip.log" && echo yes || echo no) $(grep -q '^-6 rule add pref 90 fwmark 0x989/0x989 table 989' "$SB/ip.log" && echo yes || echo no)"
+assert_eq "ipv6 sync: sticky entry kept, not re-added" "0" "$(clearlogs; W policy-sync >/dev/null 2>&1; grep -c -- '-D PREROUTING .*ctrepldst' "$SB/ipt6.log")"
+assert_eq "ipv6 device: status says ipv6=1" "1" "$(W status 2>/dev/null | grep -c ' ipv6=1')"
+# Синхронизация не плодит входы и не пересобирает цепочку.
+clearlogs; W policy-sync >/dev/null 2>&1
+assert_eq "ipv6 sync: entries not duplicated" "1" "$(grep -cxF -- '-w -t mangle PREROUTING -m set --match-set z2k_warp_src6 src -j Z2K_WARP' "$SB/ipt6.rules")"
+assert_eq "ipv6 sync: chain not rebuilt" "0" "$(grep -c -- '-t mangle -F Z2K_WARP' "$SB/ipt6.log")"
+# Туннель перестал возить IPv6 — метки и маршрут IPv6 снимаются, IPv4 цел.
+ready true ""; clearlogs; W policy-sync >/dev/null 2>&1
+assert_eq "ipv6 lost: entries removed" "0" "$(grep -c -- 'PREROUTING .*-j Z2K_WARP' "$SB/ipt6.rules")"
+assert_eq "ipv6 lost: chain emptied" "0" "$(grep -c -- '^-w -t mangle Z2K_WARP ' "$SB/ipt6.rules")"
+assert_eq "ipv6 lost: rule removed" "yes" "$(grep -q '^-6 rule del fwmark 0x989/0x989 table 989' "$SB/ip.log" && echo yes || echo no)"
+assert_eq "ipv6 lost: IPv4 device routing intact" "1" "$(grep -cxF -- '-w -t mangle PREROUTING -m set --match-set z2k_warp_src src -j Z2K_WARP' "$SB/ipt.rules")"
+# Весь трафик сети: входы с LAN и клиентов WG-сервера с ULA.
+rm -f "$SB/z2k/lists/warp/devices.txt"; ready6; clearlogs; W policy-sync >/dev/null 2>&1
+assert_eq "ipv6 all: LAN and native VPN entries" "yes yes" "$(has6 '-w -t mangle PREROUTING -i br+ -j Z2K_WARP') $(has6 '-w -t mangle PREROUTING -s fc00::/7 -i nwg+ -j Z2K_WARP')"
+assert_eq "ipv6 all: device entry gone" "0" "$(grep -c -- 'z2k_warp_src6 src -j Z2K_WARP' "$SB/ipt6.rules")"
+# Списки: IPv6-адреса из списка и исключений — в свои наборы.
+printf '2a00:1450::/32\nexample.com\n' > "$SB/z2k/lists/warp/my.txt"
+printf '2a02:6b8::/32\n' > "$SB/z2k/lists/warp/exclude.txt"
+clearlogs; W ipset >/dev/null 2>&1
+assert_eq "ipv6 lists: list address loaded" "1" "$(grep -c 'add z2k_warp6_new 2a00:1450::/32' "$SB/ipset.log")"
+assert_eq "ipv6 lists: exclusion loaded" "1" "$(grep -c 'add z2k_warp_excl6_new 2a02:6b8::/32' "$SB/ipset.log")"
+assert_eq "ipv6 lists: not in IPv4 set" "0" "$(grep -c 'add z2k_warp_new 2a00' "$SB/ipset.log")"
+assert_eq "ipv6 lists: whole-network entry gone" "0" "$(grep -c -- 'PREROUTING -i br+ -j Z2K_WARP' "$SB/ipt6.rules")"
+# Выключение: и правила устройств от warpd, и цепочка, и наборы z2kd6_.
+echo '-w -t mangle PREROUTING -m mac --mac-source AA:BB:CC:DD:EE:01 -m set --match-set z2kd6_192.168.1.10 dst -j Z2K_WARP' >> "$SB/ipt6.rules"
+touch "$SB/client-set6"; clearlogs; W disable >/dev/null 2>&1
+assert_eq "ipv6 disable: every jump removed" "0" "$(grep -c -- '-j Z2K_WARP' "$SB/ipt6.rules")"
+assert_eq "ipv6 disable: chain deleted" "1" "$(grep -c -- '-t mangle -X Z2K_WARP' "$SB/ipt6.log")"
+assert_eq "ipv6 disable: warpd IPv6 set destroyed" "1" "$(grep -c '^destroy z2kd6_192.168.1.10' "$SB/ipset.log")"
+rm -f "$SB/client-set6" "$SB/neigh" "$SB/z2k/lists/warp/exclude.txt" "$SB/ipt6.rules" "$SB/ipt.rules"
+mv "$SB/my.txt.keep" "$SB/z2k/lists/warp/my.txt"
+printf '{"iface":"z2ktun0","id":"dev","endpoint":{"v4":"8.6.112.0","h2":"162.159.198.2"}}\n' > "$SB/etc/device.json"
 
 # ---------- selfheal ----------
 printf 'GAME_WARP_ENABLED=1\n' > "$SB/z2k/config"; touch "$SB/s51.running"; clearlogs

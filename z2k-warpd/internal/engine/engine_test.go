@@ -284,10 +284,10 @@ func (h *harness) config() Config {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			h.cmds = append(h.cmds, name+" "+strings.Join(args, " "))
-			if name == "iptables" && len(args) > 4 {
-				key := strings.Join(args[4:], " ")
+			if (name == "iptables" || name == "ip6tables") && len(args) > 4 {
+				key := name + " " + strings.Join(args[4:], " ")
 				if args[3] == "-I" && len(args) > 5 && args[5] == "1" {
-					key = args[4] + " " + strings.Join(args[6:], " ")
+					key = name + " " + args[4] + " " + strings.Join(args[6:], " ")
 				}
 				switch args[3] {
 				case "-C":
@@ -703,6 +703,117 @@ func TestModeWGNeverFallsToH2(t *testing.T) {
 	for _, m := range h.made {
 		if m.step.Transport == "h2" {
 			t.Fatalf("режим WireGuard открыл h2")
+		}
+	}
+}
+
+// IPv6 через туннель: адрес аккаунта на интерфейсе, свой маршрут пробы, NAT66;
+// в статус адрес попадает только по пройденной пробе IPv6, а провал пробы
+// оставляет IPv4 готовым — IPv6 устройств тогда идёт напрямую.
+func TestIPv6CarriedOnlyWhenProven(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		probe error
+		want  string
+	}{
+		{"proven", nil, "2606:4700:110:8a36::1"},
+		{"refused", errors.New("probe6: timeout"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := baseDevice()
+			d.AddrV6 = "2606:4700:110:8a36::1"
+			h := newHarness(t, d, map[string]bool{"wg:854": true})
+			cfg := h.config()
+			var src string
+			cfg.Probe6 = func(_ context.Context, iface, s string) error {
+				h.mu.Lock()
+				src = s
+				h.mu.Unlock()
+				return tc.probe
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { Run(ctx, cfg); close(done) }()
+			waitFor(t, "ready", func() bool { s := readStatus(h); return s != nil && s.Ready })
+			waitFor(t, "ipv6 probed", func() bool { h.mu.Lock(); defer h.mu.Unlock(); return src != "" })
+			// Статус пишется на каждом тике: ждём запись после пробы.
+			waitFor(t, "addr6 in status", func() bool { s := readStatus(h); return s != nil && s.Ready && s.Addr6 == tc.want })
+			cancel()
+			<-done
+			if src != d.AddrV6 {
+				t.Fatalf("probe source %q", src)
+			}
+			joined := strings.Join(h.cmds, "\n")
+			for _, want := range []string{
+				"ip -6 addr add 2606:4700:110:8a36::1/128 dev z2ktun0",
+				"ip -6 route replace default dev z2ktun0 table 990",
+				"ip -6 rule add pref 89 from 2606:4700:110:8a36::1/128 table 990",
+				"ip6tables -w -t nat -A POSTROUTING -o z2ktun0 -j MASQUERADE",
+				"ip6tables -w -t mangle -A FORWARD -i z2ktun0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220",
+				"ip6tables -w -t nat -D POSTROUTING -o z2ktun0 -j MASQUERADE",
+				"ip -6 rule del pref 89 from 2606:4700:110:8a36::1/128 table 990",
+			} {
+				if !strings.Contains(joined, want) {
+					t.Fatalf("missing %q in\n%s", want, joined)
+				}
+			}
+		})
+	}
+}
+
+// Аккаунт без IPv6 — ни одной команды IPv6.
+func TestNoIPv6AddressNoIPv6Setup(t *testing.T) {
+	h := newHarness(t, baseDevice(), map[string]bool{"wg:854": true})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Run(ctx, h.config()); close(done) }()
+	waitFor(t, "ready", func() bool { s := readStatus(h); return s != nil && s.Ready })
+	cancel()
+	<-done
+	for _, c := range h.cmds {
+		if strings.HasPrefix(c, "ip -6 addr") || strings.HasPrefix(c, "ip -6 rule add") || strings.Contains(c, "ip6tables -w -t nat -A") {
+			t.Fatalf("IPv6 setup without an IPv6 address: %s", c)
+		}
+	}
+}
+
+// У ключей WireGuard и MASQUE разные IPv6-адреса. Смена ключа обязана сменить
+// адрес на туннеле и маршрут пробы — иначе пакеты уходят со старого адреса и
+// Cloudflare их не принимает (замер 14.11).
+func TestIPv6AddressFollowsKeySwitch(t *testing.T) {
+	d := baseDevice()
+	d.Tunnel = account.TunnelMasque
+	d.AddrV6 = "2606:4700:110:aaaa::1"
+	h := newHarness(t, d, map[string]bool{"wg:854": true})
+	cfg := h.config()
+	base := cfg.SwitchTunnel
+	cfg.SwitchTunnel = func(ctx context.Context, d *account.Device, tunnel string) error {
+		if tunnel == account.TunnelWG {
+			d.AddrV6 = "2606:4700:110:bbbb::1"
+		}
+		return base(ctx, d, tunnel)
+	}
+	cfg.Probe6 = func(_ context.Context, _, src string) error {
+		if src != "2606:4700:110:bbbb::1" {
+			return errors.New("stale source")
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Run(ctx, cfg); close(done) }()
+	waitFor(t, "IPv6 of the new key", func() bool { s := readStatus(h); return s != nil && s.Ready && s.Addr6 == "2606:4700:110:bbbb::1" })
+	cancel()
+	<-done
+	joined := strings.Join(h.cmds, "\n")
+	for _, want := range []string{
+		"ip -6 addr del 2606:4700:110:aaaa::1/128 dev z2ktun0",
+		"ip -6 rule del pref 89 from 2606:4700:110:aaaa::1/128 table 990",
+		"ip -6 addr add 2606:4700:110:bbbb::1/128 dev z2ktun0",
+		"ip -6 rule add pref 89 from 2606:4700:110:bbbb::1/128 table 990",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in\n%s", want, joined)
 		}
 	}
 }

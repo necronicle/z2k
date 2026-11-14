@@ -27,8 +27,9 @@ HOOK="$ROOT/files/ndm/93-z2k-warp.sh"
 
 assert_eq "движок зажимает НА пути в туннель"  "1" "$(grep -c '"-o", iface.*clamp-mss-to-pmtu' "$GO")"
 assert_eq "движок зажимает И на пути из него"  "1" "$(grep -c '"-i", iface.*set-mss' "$GO")"
-assert_eq "хук зажимает на пути в туннель"     "2" "$(grep -c -- '-o "$iface".*clamp-mss-to-pmtu' "$HOOK")"
-assert_eq "хук зажимает и на пути из него"     "2" "$(grep -c -- '-i "$iface".*set-mss' "$HOOK")"
+# По два правила (-C и -A) на каждое семейство: IPv4 и IPv6.
+assert_eq "хук зажимает на пути в туннель"     "4" "$(grep -c -- '-o "$iface".*clamp-mss-to-pmtu' "$HOOK")"
+assert_eq "хук зажимает и на пути из него"     "4" "$(grep -c -- '-i "$iface".*set-mss' "$HOOK")"
 
 # Зеркалить первое правило нельзя: обратный SYN-ACK уходит через мост с MTU
 # 1500, и clamp-mss-to-pmtu дал бы там 1460 — то есть ничего.
@@ -44,6 +45,10 @@ assert_eq "MTU туннеля читается"     "1280" "$MTU"
 # же числом, которым ставили, иначе оно останется висеть после выключения.
 assert_eq "движок считает MSS от MTU" "2"   "$(grep -c 'MTU-40' "$ROOT/z2k-warpd/internal/engine/engine.go")"
 assert_eq "хук вписывает то же число" "2"   "$(grep -c -- "--set-mss $((MTU - 40))" "$HOOK")"
+# IPv6: заголовок 40 байт вместо 20 — MSS на 20 меньше. В движке трижды:
+# при старте, при смене адреса вместе с ключом и при снятии.
+assert_eq "движок считает MSS IPv6 от MTU" "3" "$(grep -c 'MTU-60' "$ROOT/z2k-warpd/internal/engine/engine.go")"
+assert_eq "хук вписывает то же число для IPv6" "2" "$(grep -c -- "--set-mss $((MTU - 60))" "$HOOK")"
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
