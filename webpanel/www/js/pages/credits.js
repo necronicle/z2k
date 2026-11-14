@@ -427,6 +427,17 @@ export function renderCredits() {
           проверку делом.
         </p>
       </div>
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">Den</div>
+        <p class="desc">
+          Den, спасибо тебе за поддержку z2k. Ты помогаешь оплачивать серверы и
+          зеркала обновлений, готовить новые версии и проверять их на настоящих
+          роутерах Keenetic. За каждой версией стоит работа, и твой вклад
+          помогает её продолжать. Спасибо, что поддерживаешь проект — для нас
+          это много значит.
+        </p>
+      </div>
     </div>
   `;
 }
