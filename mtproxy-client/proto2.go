@@ -2,9 +2,7 @@ package main
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // Протокол v2 (спека §2.2): зеркало vps-relay/wire.go. Кадр тот же —
@@ -50,7 +48,7 @@ func encodeHello(build string) []byte {
 		build = build[:255]
 	}
 	b := append([]byte{protoVersion2, byte(len(build))}, build...)
-	return binary.BigEndian.AppendUint32(b, capRelayRoute|2)
+	return binary.BigEndian.AppendUint32(b, capRelayRoute)
 }
 
 type helloAck struct {
@@ -107,22 +105,4 @@ func decodeInfo(p []byte) (kind byte, arg uint32, text string, err error) {
 		return 0, 0, "", fmt.Errorf("INFO короче 5 байт")
 	}
 	return p[0], binary.BigEndian.Uint32(p[1:5]), string(p[5:]), nil
-}
-
-// AUTH_OK text extension is sent only to clients advertising capability bit 2.
-// The existing arg retains its original meaning: streams per session.
-func decodeSessionBudget(text string) (int, error) {
-	if !strings.HasPrefix(text, `{"session_limit":`) {
-		return 0, nil
-	}
-	var limits struct {
-		Sessions int `json:"session_limit"`
-	}
-	if err := json.Unmarshal([]byte(text), &limits); err != nil {
-		return 0, fmt.Errorf("invalid session budget: %w", err)
-	}
-	if limits.Sessions < 0 || limits.Sessions > maxAssignedConnections {
-		return 0, fmt.Errorf("invalid session limit")
-	}
-	return limits.Sessions, nil
 }

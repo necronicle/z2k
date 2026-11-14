@@ -24,14 +24,13 @@ var defaultTunnelSecret = ""
 var buildVersion = "dev"
 
 var (
-	relaySessions = flag.Int("relay-sessions", 1024, "Local safety ceiling for relay sessions (1..1024); authenticated server quota controls actual allowance")
-	listenAddrs   listenList
-	tunnelURL     = flag.String("tunnel-url", "wss://85.192.60.175.nip.io/ws", "Tunnel relay WebSocket URL")
-	tunnelSecret  = flag.String("tunnel-secret", defaultTunnelSecret, "Shared secret for tunnel auth (build-injected; override with --tunnel-secret)")
-	verbose       = flag.Bool("v", false, "Verbose logging")
-	connTimeout   = flag.Duration("timeout", 15*time.Minute, "Idle connection timeout")
-	maxConns      = flag.Int("max-conns", 1024, "Maximum concurrent connections")
-	relayIDFile   = flag.String("relay-id-file", "/opt/zapret2/.z2k-relay-id", "per-install identity file (Stage B)")
+	listenAddrs  listenList
+	tunnelURL    = flag.String("tunnel-url", "wss://85.192.60.175.nip.io/ws", "Tunnel relay WebSocket URL")
+	tunnelSecret = flag.String("tunnel-secret", defaultTunnelSecret, "Shared secret for tunnel auth (build-injected; override with --tunnel-secret)")
+	verbose      = flag.Bool("v", false, "Verbose logging")
+	connTimeout  = flag.Duration("timeout", 15*time.Minute, "Idle connection timeout")
+	maxConns     = flag.Int("max-conns", 1024, "Maximum concurrent connections")
+	relayIDFile  = flag.String("relay-id-file", "/opt/zapret2/.z2k-relay-id", "per-install identity file (Stage B)")
 )
 
 // connSemaphore limits concurrent connections
