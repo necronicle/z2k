@@ -94,5 +94,38 @@ case "$out" in
     *) bad "мёртвая морда не распознана: [$out]" ;;
 esac
 
+# --- 6. running-config запрашивается у ndmc один раз за прогон ----------------
+cat > "$SB/bin/ndmc" <<'STUB'
+#!/bin/sh
+echo "call" >> "$NDM_CALLS"
+cat "$NDM_CONF" 2>/dev/null
+STUB
+chmod +x "$SB/bin/ndmc"
+mkdir -p "$SB/zp"
+printf 'HOSTS="instagram.com"\n' > "$SB/zp/z2k-insta-ip-refresh.sh"
+awk '/^insta_pinned\(\)/,/^}/' "$ROOT/files/z2k-diag.sh" > "$SB/insta.sh"
+printf 'ip http port 8080\nip host instagram.com 85.192.60.175\n' > "$SB/ndm.conf"
+printf '%s\n' "$NS_NDM_8080" > "$SB/ns.out"
+: > "$SB/ndm.calls"
+out=$(env PATH="$SB/bin:$PATH" ZAPRET2_DIR="$SB/zp" NDM_CONF="$SB/ndm.conf" \
+    NDM_CALLS="$SB/ndm.calls" NETSTAT_OUT="$SB/ns.out" \
+    "${Z2K_TEST_SH:-sh}" -c ". '$SB/insta.sh'; . '$SB/blk.sh'; insta_pinned" 2>/dev/null)
+calls=$(wc -l < "$SB/ndm.calls" | tr -d ' ')
+[ "$calls" = "1" ] && ok "ndmc running-config вызван ровно один раз ($calls)" \
+                   || bad "ndmc вызван $calls раз вместо 1"
+case "$out" in
+    *'порт вебморды     : 8080'*'instagram.com	85.192.60.175'*) ok "оба потребителя получили данные из кэша running-config" ;;
+    *) bad "потеряны данные при кэшировании running-config: [$out]" ;;
+esac
+
+# --- 7. Снимок DNS узнаёт текущий резолвер по current:1 («Ваш DNS (...)») -----
+awk '/^print_dns_check_snapshot\(\)/,/^}/' "$ROOT/files/z2k-diag.sh" > "$SB/snap.sh"
+printf '%s\n' '{"ts":1,"servers":[{"name":"Cloudflare","udp":"works","current":0,"verdict":"works"},{"name":"Ваш DNS (192.168.1.1)","udp":"proxy","current":1,"verdict":"spoof"}],"observations":[]}' > "$SB/cur_proxy.json"
+out=$(env Z2K_DIAG_DNS_CHECK_JSON="$SB/cur_proxy.json" "${Z2K_TEST_SH:-sh}" -c ". '$SB/snap.sh'; print_dns_check_snapshot")
+case "$out" in
+    *'резолвер роутера отдаёт свои прокси вместо сайтов'*) ok "снимок узнаёт внешний системный DNS по current:1" ;;
+    *) bad "снимок потерял статус Ваш DNS с current:1: [$out]" ;;
+esac
+
 printf '\nPASSED: %s\nFAILED: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

@@ -29,9 +29,11 @@ read_flag() {
     local key="$1" file="$2" def="${3:-0}"
     [ -f "$file" ] || { printf '%s' "$def"; return 0; }
     local line="" raw="" val=""
+    # При дубликатах ключа в config побеждает последняя строка — так же, как
+    # при исполнении `. "$ZAPRET_CONFIG"` в init-скрипте и safe_read в диагностике.
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
-            "${key}="*) raw="$line"; break ;;
+            "${key}="*) raw="$line" ;;
         esac
     done < "$file"
     if [ -z "$raw" ]; then

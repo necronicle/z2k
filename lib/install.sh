@@ -5473,11 +5473,12 @@ _z2k_sweep_our_rules() {
     # держит очередь ответов DNS (210) и при живом процессе вернула бы каркас.
     _p=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
     [ -n "$_p" ] && kill "$_p" 2>/dev/null
-    rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json
+    rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt
     _q=$(sed -n 's/^QNUM=//p' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | tail -n 1 | tr -d "\"'")
     case "$_q" in ''|*[!0-9]*) _q=200 ;; esac
-    # Z2K_GVSUB — цепочки подмены; очередь 210 — ответы DNS для неё.
-    _pat="z2k|Z2K_GVSUB|--queue-num 210( |\$)"
+    # Z2K_GVSUB — цепочки подмены; Z2K_MSS — ограничение входящего MSS (p-88.1,
+    # прыжок ставится без комментария z2k); очередь 210 — ответы DNS для gvsub.
+    _pat="z2k|Z2K_GVSUB|Z2K_MSS|--queue-num 210( |\$)"
     _z2k_foreign_engine || _pat="--queue-num $_q( |\$)|$_pat"
     for _tool in iptables ip6tables; do
         command -v "$_tool" >/dev/null 2>&1 || continue
@@ -5490,6 +5491,10 @@ _z2k_sweep_our_rules() {
                         "$_tool" -w -t "$_t" $_r 2>/dev/null
                     done
             done
+            if [ "$_t" = mangle ]; then
+                "$_tool" -w -t mangle -F Z2K_MSS 2>/dev/null
+                "$_tool" -w -t mangle -X Z2K_MSS 2>/dev/null
+            fi
             # 10.11.2026: после удаления службы отказ QUIC остаться не должен.
             if [ "$_t" = filter ]; then
                 "$_tool" -w -t filter -F Z2K_GVSUB_Q 2>/dev/null
